@@ -22,6 +22,7 @@ import { interfaceVariantAtom } from '@/atoms/theme'
 import { settingsOpenAtom } from '@/atoms/settings-tab'
 import { WindowControls } from '@/components/WindowControls'
 import { SettingsPanel } from '@/components/settings/SettingsPanel'
+import { SearchDialog } from './SearchDialog'
 import { detectIsWindows, WINDOW_CONTROLS_INSET_RIGHT } from '@/lib/platform'
 import { cn } from '@/lib/utils'
 import { workingHistorySelectionAtom } from '@/atoms/working-atoms'
@@ -181,6 +182,7 @@ export function AppShell({ contextValue }: AppShellProps): React.ReactElement {
 
       {/* Windows 自定义窗口控制按钮（最小化/最大化/关闭） */}
       <WindowControls />
+      <SearchDialog />
 
       <div className="shell-bg relative h-screen w-screen overflow-hidden bg-gradient-to-br from-zinc-50 to-zinc-100 dark:from-zinc-950 dark:to-zinc-900">
         <div className={cn('flex h-full w-full', settingsOpen && 'hidden')} aria-hidden={settingsOpen}>

@@ -1,4 +1,7 @@
 import { Menu, shell, BrowserWindow } from 'electron'
+import { createCopisHelpSubmenu } from './menu-template'
+
+export { COPIS_GITHUB_REPOSITORY_URL } from './menu-template'
 
 export function createApplicationMenu(): Menu {
   const isMac = process.platform === 'darwin'
@@ -119,14 +122,7 @@ export function createApplicationMenu(): Menu {
     {
       label: '帮助',
       role: 'help' as const,
-      submenu: [
-        {
-          label: '了解更多',
-          click: async () => {
-            await shell.openExternal('https://github.com/yourusername/proma')
-          },
-        },
-      ],
+      submenu: createCopisHelpSubmenu((url) => shell.openExternal(url)),
     },
   ]
 

@@ -4,6 +4,8 @@ import {
   ChevronDown,
   ChevronRight,
   CircleUserRound,
+  Blocks,
+  CalendarClock,
   Cloud,
   FolderOpen,
   HardDrive,
@@ -14,6 +16,7 @@ import {
   PanelLeftOpen,
   Plus,
   RefreshCw,
+  Search,
   Sparkles,
 } from 'lucide-react'
 import { toast } from 'sonner'
@@ -29,9 +32,11 @@ import {
 } from '@/atoms/agent-atoms'
 import { appModeAtom } from '@/atoms/app-mode'
 import { activeViewAtom } from '@/atoms/active-view'
-import { workingHistorySelectionAtom } from '@/atoms/working-atoms'
+import { searchDialogOpenAtom } from '@/atoms/search-atoms'
+import { workingEventsAtom, workingHistorySelectionAtom } from '@/atoms/working-atoms'
 import { useCreateSession } from '@/hooks/useCreateSession'
 import { useOpenSession } from '@/hooks/useOpenSession'
+import { deriveWorkingRunState } from '@/lib/working-run-state'
 
 interface CopisWorkingSidebarProps {
   width: number
@@ -44,6 +49,16 @@ function getWorkspaceLabel(workspace: WorkingWorkspace): string {
 
 function getSessionLabel(session: WorkingSessionSummary): string {
   return session.title?.trim() || session.finalText?.trim().slice(0, 42) || session.runId
+}
+
+function getRunStatusLabel(status: ReturnType<typeof deriveWorkingRunState>['status']): string {
+  switch (status) {
+    case 'running': return '运行中'
+    case 'completed': return '已完成'
+    case 'failed': return '运行失败'
+    case 'stopped': return '已停止'
+    default: return '本地 Agent 可用'
+  }
 }
 
 export function CopisWorkingSidebar({ width, noTransition = false }: CopisWorkingSidebarProps): React.ReactElement {
@@ -68,7 +83,9 @@ export function CopisWorkingSidebar({ width, noTransition = false }: CopisWorkin
   const setCurrentWorkspaceId = useSetAtom(currentAgentWorkspaceIdAtom)
   const setAppMode = useSetAtom(appModeAtom)
   const setActiveView = useSetAtom(activeViewAtom)
+  const setSearchDialogOpen = useSetAtom(searchDialogOpenAtom)
   const setWorkingHistorySelection = useSetAtom(workingHistorySelectionAtom)
+  const workingEvents = useAtomValue(workingEventsAtom)
   const { createAgent } = useCreateSession()
   const openSession = useOpenSession()
 
@@ -214,6 +231,11 @@ export function CopisWorkingSidebar({ width, noTransition = false }: CopisWorkin
     .sort((a, b) => b.updatedAt - a.updatedAt)
     .slice(0, 40)
 
+  const currentWorkingRun = React.useMemo(
+    () => deriveWorkingRunState(currentSessionId ? workingEvents.get(currentSessionId) ?? [] : []),
+    [currentSessionId, workingEvents],
+  )
+
   if (collapsed) {
     return (
       <aside className="flex h-full w-14 flex-col items-center rounded-xl border border-border/70 bg-sidebar/95 py-3 shadow-sm">
@@ -229,6 +251,19 @@ export function CopisWorkingSidebar({ width, noTransition = false }: CopisWorkin
             </button>
           </TooltipTrigger>
           <TooltipContent side="right">展开侧栏</TooltipContent>
+        </Tooltip>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <button
+              type="button"
+              aria-label="搜索 Working 会话"
+              className="titlebar-no-drag rounded-lg p-2 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+              onClick={() => setSearchDialogOpen(true)}
+            >
+              <Search size={17} />
+            </button>
+          </TooltipTrigger>
+          <TooltipContent side="right">搜索</TooltipContent>
         </Tooltip>
         <Sparkles className="mt-5 text-primary" size={18} />
         <div className="mt-auto flex flex-col items-center gap-2">
@@ -273,6 +308,41 @@ export function CopisWorkingSidebar({ width, noTransition = false }: CopisWorkin
       </header>
 
       <div className="min-h-0 flex-1 overflow-y-auto px-3 py-3">
+        <nav className="mb-5 space-y-1" aria-label="Working 菜单">
+          <button
+            type="button"
+            className="titlebar-no-drag flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[13px] text-muted-foreground transition-colors hover:bg-accent/70 hover:text-foreground"
+            onClick={() => setSearchDialogOpen(true)}
+          >
+            <Search size={15} className="shrink-0" />
+            <span>搜索</span>
+          </button>
+          <button
+            type="button"
+            className="titlebar-no-drag flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[13px] text-muted-foreground transition-colors hover:bg-accent/70 hover:text-foreground"
+            onClick={() => {
+              setWorkingHistorySelection(null)
+              setAppMode('agent')
+              setActiveView('planning')
+            }}
+          >
+            <CalendarClock size={15} className="shrink-0" />
+            <span>任务 / 日程</span>
+          </button>
+          <button
+            type="button"
+            className="titlebar-no-drag flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[13px] text-muted-foreground transition-colors hover:bg-accent/70 hover:text-foreground"
+            onClick={() => {
+              setWorkingHistorySelection(null)
+              setAppMode('agent')
+              setActiveView('agent-skills')
+            }}
+          >
+            <Blocks size={15} className="shrink-0" />
+            <span>技能</span>
+          </button>
+        </nav>
+
         <section>
           <div className="mb-2 flex items-center justify-between px-1">
             <span className="text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground">本地工作区</span>
@@ -452,6 +522,19 @@ export function CopisWorkingSidebar({ width, noTransition = false }: CopisWorkin
             </TooltipTrigger>
             <TooltipContent side="right">刷新 Working 数据</TooltipContent>
           </Tooltip>
+        </div>
+        <div className="mt-2 flex items-center gap-2 px-1 text-[10px] text-muted-foreground" role="status" aria-live="polite">
+          <span
+            className={cn(
+              'h-1.5 w-1.5 shrink-0 rounded-full',
+              currentWorkingRun.status === 'running' && 'animate-pulse bg-amber-500',
+              currentWorkingRun.status === 'failed' && 'bg-destructive',
+              currentWorkingRun.status === 'completed' && 'bg-emerald-500',
+              currentWorkingRun.status === 'stopped' && 'bg-slate-400',
+              currentWorkingRun.status === 'idle' && 'bg-muted-foreground/40',
+            )}
+          />
+          <span className="truncate">{getRunStatusLabel(currentWorkingRun.status)}</span>
         </div>
       </footer>
     </aside>

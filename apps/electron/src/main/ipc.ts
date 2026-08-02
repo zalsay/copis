@@ -326,7 +326,7 @@ import { getDingTalkConfig, saveDingTalkConfig, getDecryptedClientSecret, getDin
 import { dingtalkBridgeManager } from './lib/dingtalk-bridge-manager'
 import { getWeChatConfig } from './lib/wechat-config'
 import { wechatBridge } from './lib/wechat-bridge'
-import { getWorkingApiClient } from './lib/working-api-client'
+import { getWorkingApiClient } from './lib/working-api-service'
 import type { WorkingLoginInput, WorkingWorkspaceInput } from '@proma/shared'
 
 /** 文件浏览器中需要隐藏的系统文件 */

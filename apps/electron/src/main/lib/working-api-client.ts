@@ -8,14 +8,14 @@ import type {
   WorkingWorkspace,
   WorkingWorkspaceInput,
 } from '@proma/shared'
-import { getWorkingTokenStore, type WorkingTokenStore } from './working-auth-store'
+import type { WorkingTokenStore } from './working-auth-store'
 
 export const DEFAULT_COPIS_BACKEND_URL = 'http://127.0.0.1:9000/module/edu-api'
 
 export interface WorkingApiClientOptions {
   baseUrl?: string
   fetchImpl?: (input: string, init?: RequestInit) => Promise<Response>
-  tokenStore?: WorkingTokenStore
+  tokenStore: WorkingTokenStore
 }
 
 export class WorkingApiError extends Error {
@@ -127,10 +127,10 @@ export class WorkingApiClient {
   private readonly fetchImpl: (input: string, init?: RequestInit) => Promise<Response>
   private readonly tokenStore: WorkingTokenStore
 
-  constructor(options: WorkingApiClientOptions = {}) {
+  constructor(options: WorkingApiClientOptions) {
     this.baseUrl = resolveBackendUrl(options.baseUrl)
     this.fetchImpl = options.fetchImpl ?? ((input, init) => fetch(input, init))
-    this.tokenStore = options.tokenStore ?? getWorkingTokenStore()
+    this.tokenStore = options.tokenStore
   }
 
   getToken(): string | null {
@@ -264,15 +264,4 @@ export class WorkingApiClient {
     }
     return unwrapData<T>(payload)
   }
-}
-
-let workingApiClient: WorkingApiClient | null = null
-
-export function getWorkingApiClient(): WorkingApiClient {
-  if (!workingApiClient) workingApiClient = new WorkingApiClient()
-  return workingApiClient
-}
-
-export function resetWorkingApiClientForTests(): void {
-  workingApiClient = null
 }

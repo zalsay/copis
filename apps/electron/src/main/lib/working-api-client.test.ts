@@ -1,30 +1,10 @@
-import { beforeAll, describe, expect, mock, test } from 'bun:test'
-
-mock.module('electron', () => ({
-  safeStorage: {
-    isEncryptionAvailable: () => false,
-    encryptString: (value: string) => Buffer.from(value),
-    decryptString: (value: Buffer) => value.toString('utf8'),
-  },
-  app: {
-    isPackaged: true,
-    getPath: () => '/tmp/copis-test',
-  },
-}))
+import { describe, expect, test } from 'bun:test'
+import { WorkingApiClient, WorkingApiError } from './working-api-client'
 
 interface FakeStore {
   token: string | null
   user: import('@proma/shared').WorkingUser | null
 }
-
-let WorkingApiClient: typeof import('./working-api-client').WorkingApiClient
-let WorkingApiError: typeof import('./working-api-client').WorkingApiError
-
-beforeAll(async () => {
-  const module = await import('./working-api-client')
-  WorkingApiClient = module.WorkingApiClient
-  WorkingApiError = module.WorkingApiError
-})
 
 function createStore(initialToken: string | null = null): FakeStore & import('./working-auth-store').WorkingTokenStore {
   const state: FakeStore = { token: initialToken, user: null }
