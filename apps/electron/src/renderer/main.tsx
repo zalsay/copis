@@ -372,10 +372,10 @@ function UpdaterInitializer(): null {
     toast.custom((toastId) => (
       <div className="w-[344px] max-w-[calc(100vw-32px)] rounded-xl bg-background/95 p-3 text-foreground shadow-[0_12px_32px_rgba(0,0,0,0.14)] ring-1 ring-black/5 backdrop-blur-xl dark:ring-white/10">
         <div className="flex items-center gap-2.5">
-          <img src={PromaLogo} alt="Proma" className="size-8 rounded-lg" />
+          <img src={PromaLogo} alt="Copis" className="size-8 rounded-lg" />
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-1.5 text-sm leading-5">
-              <span className="font-semibold tracking-tight">Proma 更新已下载</span>
+              <span className="font-semibold tracking-tight">Copis 更新已下载</span>
               <span className="text-xs text-primary">{versionLabel}</span>
             </div>
             <p className="text-xs leading-4 text-muted-foreground">所有 Agent 完成后即可自动安装。</p>
@@ -393,7 +393,7 @@ function UpdaterInitializer(): null {
             <button
               type="button"
               className="flex h-7 items-center gap-1 rounded-md px-2 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground active:scale-[0.96]"
-              onClick={() => { void window.electronAPI.openExternal('https://proma.cool/changelog') }}
+              onClick={() => { void window.electronAPI.openExternal('https://github.com/zalsay/copis/releases') }}
             >
               查看更新
               <ArrowUpRight size={13} />

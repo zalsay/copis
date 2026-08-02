@@ -12,11 +12,11 @@ import type {
 /** GitHub API 基础 URL */
 const GITHUB_API_BASE = 'https://api.github.com'
 
-/** GitHub 仓库配置（从 electron-builder.yml） */
+/** Copis GitHub 仓库配置（需与 electron-builder.yml 的 publish 配置保持一致） */
 const GITHUB_REPO = {
-  owner: 'ErlichLiu',
-  repo: 'Proma',
-}
+  owner: 'zalsay',
+  repo: 'copis',
+} as const
 
 /** Release 缓存 */
 interface ReleaseCache {
@@ -54,7 +54,7 @@ async function fetchFromGitHub<T>(endpoint: string): Promise<T> {
   const response = await fetch(url, {
     headers: {
       'Accept': 'application/vnd.github+json',
-      'User-Agent': 'Proma-Desktop-App',
+      'User-Agent': 'Copis-Desktop-App',
     },
   })
 
