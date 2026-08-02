@@ -340,6 +340,8 @@ export function createAgentSession(
     agentRuntime,
     // 新会话继承已持久化的全局思考偏好，之后仍可按会话单独调整。
     reasoningLevel: defaultThinkingLevel,
+    // Copis Working 默认使用快速模式；用户可按会话切换到专家模式。
+    workingMode: 'fast',
     createdAt: now,
     updatedAt: now,
   }
@@ -522,7 +524,7 @@ export function getAgentSessionSDKMessages(id: string): SDKMessage[] {
  */
 export function updateAgentSessionMeta(
   id: string,
-  updates: Partial<Pick<AgentSessionMeta, 'title' | 'channelId' | 'modelId' | 'sdkSessionId' | 'piSessionFile' | 'piEntryBindings' | 'agentRuntime' | 'codexFastMode' | 'reasoningLevel' | 'openAIThinkingLevel' | 'workspaceId' | 'pinned' | 'starred' | 'archived' | 'attachedDirectories' | 'attachedFiles' | 'forkSourceDir' | 'forkSourceSdkSessionId' | 'resumeAtMessageUuid' | 'stoppedByUser' | 'permissionMode' | 'completedButUnconfirmed' | 'sourceAutomationId' | 'automationGraduated' | 'parentSessionId' | 'rootSessionId' | 'sourceDelegationId' | 'delegationRole' | 'delegationStatus' | 'delegationDepth' | 'delegationGoal'>>,
+  updates: Partial<Pick<AgentSessionMeta, 'title' | 'channelId' | 'modelId' | 'sdkSessionId' | 'piSessionFile' | 'piEntryBindings' | 'agentRuntime' | 'codexFastMode' | 'workingMode' | 'reasoningLevel' | 'openAIThinkingLevel' | 'workspaceId' | 'pinned' | 'starred' | 'archived' | 'attachedDirectories' | 'attachedFiles' | 'forkSourceDir' | 'forkSourceSdkSessionId' | 'resumeAtMessageUuid' | 'stoppedByUser' | 'permissionMode' | 'completedButUnconfirmed' | 'sourceAutomationId' | 'automationGraduated' | 'parentSessionId' | 'rootSessionId' | 'sourceDelegationId' | 'delegationRole' | 'delegationStatus' | 'delegationDepth' | 'delegationGoal'>>,
 ): AgentSessionMeta {
   const index = readIndex()
   const idx = index.sessions.findIndex((s) => s.id === id)
@@ -901,11 +903,13 @@ export async function forkAgentSession(input: ForkSessionInput): Promise<AgentSe
     sdkSessionId: forkResult.sessionId,
     forkSourceDir: sourceDir,
     forkSourceSdkSessionId: forkSourceSdkSessionId,
+    workingMode: sourceMeta.workingMode ?? 'fast',
   })
   // 同步返回值（updateAgentSessionMeta 已写入磁盘，这里让调用方拿到最新值）
   newMeta.sdkSessionId = forkResult.sessionId
   newMeta.forkSourceDir = sourceDir
   newMeta.forkSourceSdkSessionId = forkSourceSdkSessionId
+  newMeta.workingMode = sourceMeta.workingMode ?? 'fast'
 
   // 4.4 计算 fork 目标的 Agent cwd 与 sidecar 工作台目录。
   const destDir = resolveAgentCwd(workspace, newMeta.id, newMeta.agentCwdMode)
@@ -1013,10 +1017,12 @@ async function forkPiAgentSession(sourceMeta: AgentSessionMeta, input: ForkSessi
       piSessionFile,
       piEntryBindings: { ...(sourceMeta.piEntryBindings ?? {}) },
       forkSourceDir: sourceDir,
+      workingMode: sourceMeta.workingMode ?? 'fast',
     })
     newMeta.sdkSessionId = forkedManager.getSessionId()
     newMeta.piSessionFile = piSessionFile
     newMeta.piEntryBindings = { ...(sourceMeta.piEntryBindings ?? {}) }
+    newMeta.workingMode = sourceMeta.workingMode ?? 'fast'
 
     if (sourceWorkbenchDir && destWorkbenchDir) copyForkWorkspaceFiles(sourceWorkbenchDir, destWorkbenchDir)
     await copyForkStoredSDKMessages({

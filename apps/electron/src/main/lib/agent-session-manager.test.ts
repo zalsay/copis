@@ -185,6 +185,8 @@ describe('Agent 会话 runtime 元数据', () => {
       expect(manager.getAgentSessionMeta(claudeRuntimeSession.id)?.agentRuntime).toBe('claude')
       expect(defaultRuntimeSession.reasoningLevel).toBe('medium')
       expect(claudeRuntimeSession.reasoningLevel).toBe('medium')
+      expect(defaultRuntimeSession.workingMode).toBe('fast')
+      expect(claudeRuntimeSession.workingMode).toBe('fast')
       expect(manager.getAgentSessionMeta(defaultRuntimeSession.id)?.reasoningLevel).toBe('medium')
       expect(manager.getAgentSessionMeta(claudeRuntimeSession.id)?.reasoningLevel).toBe('medium')
     } finally {
@@ -225,6 +227,15 @@ describe('Agent 会话 runtime 元数据', () => {
 
     expect(updated.reasoningLevel).toBe('xhigh')
     expect(manager.getAgentSessionMeta(session.id)).toMatchObject({ reasoningLevel: 'xhigh' })
+  })
+
+  test('Given session settings When updating Working mode Then persists expert mode per session', () => {
+    const session = manager.createAgentSession('Working 会话', undefined, undefined, undefined, 'pi')
+
+    const updated = manager.updateAgentSessionMeta(session.id, { workingMode: 'expert' })
+
+    expect(updated.workingMode).toBe('expert')
+    expect(manager.getAgentSessionMeta(session.id)).toMatchObject({ workingMode: 'expert' })
   })
 
   test('Given a session When star state is updated Then it persists without changing freshness or archive state', () => {

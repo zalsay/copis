@@ -1,4 +1,5 @@
 import type { ProviderType } from './channel'
+import type { WorkingMode } from './working'
 
 /**
  * Agent 相关类型定义
@@ -656,6 +657,8 @@ export interface AgentSessionMeta {
   agentRuntime?: import('./agent-provider').AgentRuntime
   /** ChatGPT Codex Fast Mode 开关；仅 Pi + ChatGPT OAuth 的受支持模型实际生效。 */
   codexFastMode?: boolean
+  /** Copis Working fast/expert 模式；用于本地 Agent 的运行上下文。 */
+  workingMode?: WorkingMode
   /** 本会话的推理深度；未设置时兼容旧版全局思考设置。 */
   reasoningLevel?: AgentThinkingLevel
   /** @deprecated 使用 reasoningLevel；保留以读取历史会话数据。 */
@@ -1031,6 +1034,8 @@ export interface AgentSendInput {
   mentionedTodoIds?: string[]
   /** 用户通过日程引用 mention 指定的日程 ID 列表 */
   mentionedCalendarEventIds?: string[]
+  /** 当前 Copis Working 模式；本地 Agent 不通过远程 Working Agent 执行。 */
+  workingMode?: WorkingMode
   /** 渲染进程生成的流式开始时间戳，主进程原样回传到 STREAM_COMPLETE，确保竞态保护比较的是同一个值 */
   startedAt?: number
   /** 用户点击错误消息的重试时，指向本轮开始前应删除的错误 UUID。 */
@@ -1700,6 +1705,8 @@ export const AGENT_IPC_CHANNELS = {
   UPDATE_SESSION_AGENT_RUNTIME: 'agent:update-session-agent-runtime',
   /** 切换指定会话的 ChatGPT Codex Fast Mode（下一轮 Pi 请求生效） */
   UPDATE_SESSION_CODEX_FAST_MODE: 'agent:update-session-codex-fast-mode',
+  /** 切换指定会话的 Copis Working 模式（下一轮 Agent 请求生效） */
+  UPDATE_SESSION_WORKING_MODE: 'agent:update-session-working-mode',
   /** 查询 Pi catalog 或专属 profile 支持的会话级推理档位 */
   GET_PI_REASONING_CAPABILITY: 'agent:get-pi-reasoning-capability',
   /** 更新指定会话的推理深度（下一轮 Pi 请求生效） */

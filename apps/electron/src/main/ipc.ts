@@ -9,7 +9,7 @@ import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'nod
 import { existsSync, realpathSync, rmSync, readFileSync, writeFileSync, mkdirSync, statSync } from 'node:fs'
 import { writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, CHAT_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, INSTALLER_IPC_CHANNELS, PROXY_IPC_CHANNELS, GITHUB_RELEASE_IPC_CHANNELS, SYSTEM_PROMPT_IPC_CHANNELS, CHAT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, WECHAT_IPC_CHANNELS, AUTOMATION_IPC_CHANNELS, PLANNING_IPC_CHANNELS, PLANNING_CONFLICT_ERROR, WORKING_IPC_CHANNELS, isPromaPermissionMode, normalizePathForCompare } from '@proma/shared'
+import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, CHAT_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, INSTALLER_IPC_CHANNELS, PROXY_IPC_CHANNELS, GITHUB_RELEASE_IPC_CHANNELS, SYSTEM_PROMPT_IPC_CHANNELS, CHAT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, WECHAT_IPC_CHANNELS, AUTOMATION_IPC_CHANNELS, PLANNING_IPC_CHANNELS, PLANNING_CONFLICT_ERROR, WORKING_IPC_CHANNELS, isPromaPermissionMode, isWorkingMode, normalizePathForCompare } from '@proma/shared'
 import { USER_PROFILE_IPC_CHANNELS, SETTINGS_IPC_CHANNELS, SCRATCH_PAD_IPC_CHANNELS, QUICK_TASK_IPC_CHANNELS, VOICE_DICTATION_IPC_CHANNELS, APP_ICON_IPC_CHANNELS, DOCK_BADGE_IPC_CHANNELS, STORAGE_IPC_CHANNELS } from '../types'
 import type {
   QuickTaskSubmitInput,
@@ -2648,6 +2648,23 @@ export function registerIpcHandlers(): void {
         throw new Error('Agent 正在运行，完成后再切换快速模式')
       }
       return updateAgentSessionMeta(sessionId, { codexFastMode: enabled })
+    }
+  )
+
+  // 切换 Copis Working 模式；当前运行仍使用启动时的模式，下一轮生效。
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.UPDATE_SESSION_WORKING_MODE,
+    async (_, sessionId: string, mode: unknown): Promise<AgentSessionMeta> => {
+      if (!isWorkingMode(mode)) {
+        throw new Error(`无效的 Working 模式: ${String(mode)}`)
+      }
+      if (!getAgentSessionMeta(sessionId)) {
+        throw new Error(`Agent 会话不存在: ${sessionId}`)
+      }
+      if (isAgentSessionActive(sessionId)) {
+        throw new Error('Agent 正在运行，完成后再切换 Working 模式')
+      }
+      return updateAgentSessionMeta(sessionId, { workingMode: mode })
     }
   )
 

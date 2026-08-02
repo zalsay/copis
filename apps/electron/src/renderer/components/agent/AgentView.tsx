@@ -116,7 +116,7 @@ import { AgentSessionProvider } from '@/contexts/session-context'
 import { draftSessionIdsAtom } from '@/atoms/draft-session-atoms'
 import { sendWithCmdEnterAtom } from '@/atoms/shortcut-atoms'
 import { useOpenPreview } from '@/components/diff/preview-opener'
-import type { AgentRuntime, AgentSendInput, AgentPendingFile, AgentThinkingLevel, FileDialogLargeFile, FileDialogResult, ModelOption, ReasoningCapability, SDKMessage, SDKUserMessage, ProviderType } from '@proma/shared'
+import type { AgentRuntime, AgentSendInput, AgentPendingFile, AgentThinkingLevel, FileDialogLargeFile, FileDialogResult, ModelOption, ReasoningCapability, SDKMessage, SDKUserMessage, ProviderType, WorkingMode } from '@proma/shared'
 import { inferAgentSdkContextWindow, inferContextWindow, inferReasoningTransport, isCodexFastModeSupportedModel, MAX_ATTACHMENT_SIZE, normalizeReasoningCapabilityLevel, normalizeReasoningLevel, resolveReasoningCapability, resolveReasoningProfile } from '@proma/shared'
 import { fileToBase64, formatFileNames, getFileParentPath } from '@/lib/file-utils'
 import { getFilePanelDragData, INSERT_FILE_MENTION_EVENT, type FilePanelDragItem } from '@/lib/file-panel-drag'
@@ -533,6 +533,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
     () => sessions.find((s) => s.id === sessionId),
     [sessions, sessionId],
   )
+  const workingMode: WorkingMode = sessionMeta?.workingMode === 'expert' ? 'expert' : 'fast'
   const sessionMetaChannelId = sessionMeta?.channelId
   const sessionMetaModelId = sessionMeta?.modelId
   const hasSessionMeta = Boolean(sessionMeta)
@@ -1100,6 +1101,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
         channelId,
         modelId: agentModelId || undefined,
         agentRuntime: sessionAgentRuntime,
+        workingMode,
         workspaceId: currentWorkspaceId || undefined,
         startedAt: streamStartedAt,
         permissionModeOverride: permissionMode,
@@ -1131,6 +1133,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
     sessionAgentRuntime,
     sessionId,
     setStreamingStates,
+    workingMode,
   ])
 
   const sendPlainTextAgentMessage = React.useCallback(async (
@@ -1377,6 +1380,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
         channelId: snapshot.channelId,
         modelId: snapshot.modelId,
         agentRuntime: sessionAgentRuntime,
+        workingMode,
         workspaceId: snapshot.workspaceId,
         startedAt: streamStartedAt,
         permissionModeOverride: permissionMode,
@@ -1398,7 +1402,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
         })
       })
     })
-  }, [messagesLoaded, pendingPrompt, sessionId, agentChannelId, agentModelId, sessionAgentRuntime, agentChannelProvider, currentWorkspaceId, streaming, setPendingPrompt, setStreamingStates, permissionMode, attachedDirs, attachedFileDirectories])
+  }, [messagesLoaded, pendingPrompt, sessionId, agentChannelId, agentModelId, sessionAgentRuntime, workingMode, agentChannelProvider, currentWorkspaceId, streaming, setPendingPrompt, setStreamingStates, permissionMode, attachedDirs, attachedFileDirectories])
   // ===== 附件处理 =====
 
   /** 为文件生成唯一文件名（避免粘贴多张图片时文件名重复导致覆盖） */
@@ -2155,6 +2159,24 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
     }
   }, [backgroundWaiting, codexFastModeEnabled, isCodexFastModeAvailable, sessionId, sessionMeta, setAgentSessions, streaming])
 
+  const handleWorkingModeChange = React.useCallback(async (nextMode: WorkingMode): Promise<void> => {
+    if (nextMode === workingMode || streaming || backgroundWaiting || !sessionMeta) return
+
+    const previousSessionMeta = sessionMeta
+    setAgentSessions((prev) => prev.map((item) => (
+      item.id === sessionId ? { ...item, workingMode: nextMode, updatedAt: Date.now() } : item
+    )))
+
+    try {
+      const updated = await window.electronAPI.updateSessionWorkingMode(sessionId, nextMode)
+      setAgentSessions((prev) => prev.map((item) => item.id === sessionId ? updated : item))
+    } catch (error) {
+      console.error('[AgentView] 切换 Working 模式失败:', error)
+      setAgentSessions((prev) => prev.map((item) => item.id === sessionId ? previousSessionMeta : item))
+      toast.error('Working 模式切换失败', { description: getErrorMessage(error) })
+    }
+  }, [backgroundWaiting, sessionId, sessionMeta, setAgentSessions, streaming, workingMode])
+
   const updateReasoningLevel = React.useCallback(async (thinkingLevel: AgentThinkingLevel): Promise<void> => {
     if (!isSessionThinkingAvailable || !sessionMeta) return
 
@@ -2385,6 +2407,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
       workspaceId: currentWorkspaceId || undefined,
       startedAt: streamStartedAt,
       permissionModeOverride: permissionMode,
+      workingMode,
       ...(additionalDirectoriesForRun.size > 0 && { additionalDirectories: Array.from(additionalDirectoriesForRun) }),
       ...(mentions.mentionedSkills.length > 0 && { mentionedSkills: mentions.mentionedSkills }),
       ...(mentions.mentionedMcpServers.length > 0 && { mentionedMcpServers: mentions.mentionedMcpServers }),
@@ -2411,7 +2434,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
         return map
       })
     })
-  }, [inputContent, createBaseAdditionalDirectories, preparePendingFilesForSend, restoreQueuedAttachmentsToPending, sessionId, agentChannelId, agentModelId, sessionAgentRuntime, agentChannelProvider, currentWorkspaceId, streaming, backgroundWaiting, suggestion, hasAvailableModel, store, consumeQuotedSelection, setStreamingStates, setAgentStreamErrors, setPromptSuggestions, setInputContent, setLiveMessagesMap, permissionMode, messagesLoaded, setQueuedMessages, setQuotedSelectionMap, sendPlainTextAgentMessage])
+  }, [inputContent, createBaseAdditionalDirectories, preparePendingFilesForSend, restoreQueuedAttachmentsToPending, sessionId, agentChannelId, agentModelId, sessionAgentRuntime, workingMode, agentChannelProvider, currentWorkspaceId, streaming, backgroundWaiting, suggestion, hasAvailableModel, store, consumeQuotedSelection, setStreamingStates, setAgentStreamErrors, setPromptSuggestions, setInputContent, setLiveMessagesMap, permissionMode, messagesLoaded, setQueuedMessages, setQuotedSelectionMap, sendPlainTextAgentMessage])
 
   /** 停止生成 */
   const handleStop = React.useCallback((): void => {
@@ -2488,6 +2511,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
       channelId: agentChannelId,
       modelId: agentModelId || undefined,
       agentRuntime: sessionAgentRuntime,
+      workingMode,
       workspaceId: currentWorkspaceId || undefined,
       startedAt: streamStartedAt,
       permissionModeOverride: permissionMode,
@@ -2510,7 +2534,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
         return map
       })
     })
-  }, [sessionId, agentChannelId, agentModelId, sessionAgentRuntime, currentWorkspaceId, streaming, setStreamingStates, store, permissionMode])
+  }, [sessionId, agentChannelId, agentModelId, sessionAgentRuntime, workingMode, currentWorkspaceId, streaming, setStreamingStates, store, permissionMode])
 
   /** 复制错误信息到剪贴板 */
   const handleCopyError = React.useCallback(async (): Promise<void> => {
@@ -2610,12 +2634,13 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
       channelId: agentChannelId,
       modelId: agentModelId || undefined,
       agentRuntime: sessionAgentRuntime,
+      workingMode,
       workspaceId: currentWorkspaceId || undefined,
       startedAt: streamStartedAt,
       permissionModeOverride: permissionMode,
       ...(retryOfErrorUuid && { retryOfErrorUuid }),
     }).catch(console.error)
-  }, [persistedSDKMessages, sessionId, agentChannelId, agentModelId, sessionAgentRuntime, agentChannelProvider, currentWorkspaceId, streaming, setAgentStreamErrors, setStreamingStates, setMessagesCache, permissionMode])
+  }, [persistedSDKMessages, sessionId, agentChannelId, agentModelId, sessionAgentRuntime, workingMode, agentChannelProvider, currentWorkspaceId, streaming, setAgentStreamErrors, setStreamingStates, setMessagesCache, permissionMode])
 
   /** 在新对话继续：创建新会话 + 切换 tab + 使用 &session 引用旧会话 */
   const handleRetryInNewSession = React.useCallback(async (): Promise<void> => {
@@ -2653,6 +2678,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
         channelId: agentChannelId,
         modelId: agentModelId || undefined,
         agentRuntime: sessionAgentRuntime,
+        workingMode,
         workspaceId: currentWorkspaceId || undefined,
         mentionedSessionIds: [sessionId],
         startedAt: streamStartedAt,
@@ -2661,7 +2687,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
     } catch (error) {
       console.error('[AgentView] 在新会话中重试失败:', error)
     }
-  }, [sessionId, agentChannelId, agentModelId, sessionAgentRuntime, currentWorkspaceId, openSession, setAgentSessions, setStreamingStates, permissionMode])
+  }, [sessionId, agentChannelId, agentModelId, sessionAgentRuntime, workingMode, currentWorkspaceId, openSession, setAgentSessions, setStreamingStates, permissionMode])
 
   /** 分叉会话：从指定消息处创建新会话并自动切换 */
   const handleFork = React.useCallback(async (upToMessageUuid: string): Promise<void> => {
@@ -2908,6 +2934,35 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
   const canSend = messagesLoaded && (streaming || !messagesRefreshing) && (hasTextInput || pendingFiles.length > 0 || !!suggestion) && agentChannelId !== null && hasAvailableModel && (!streaming || hasTextInput)
 
   const inputToolbarItems = React.useMemo<ToolbarItem[]>(() => [
+    {
+      key: 'working-mode',
+      node: (
+        <div className="flex h-8 items-center gap-0.5 rounded-md bg-muted/40 p-0.5" role="group" aria-label="Working 模式">
+          {(['fast', 'expert'] as const).map((mode) => {
+            const selected = workingMode === mode
+            return (
+              <Button
+                key={mode}
+                type="button"
+                variant="ghost"
+                className={cn(
+                  'h-7 gap-1 rounded px-2 text-xs font-medium transition-colors',
+                  selected ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground',
+                )}
+                onClick={() => { void handleWorkingModeChange(mode) }}
+                disabled={streaming || backgroundWaiting}
+                aria-label={mode === 'fast' ? '快速模式' : '专家模式'}
+                aria-pressed={selected}
+                title={mode === 'fast' ? '快速模式' : '专家模式'}
+              >
+                {mode === 'fast' ? <Sparkles className="size-3.5" /> : <Brain className="size-3.5" />}
+                {mode === 'fast' ? '快速' : '专家'}
+              </Button>
+            )
+          })}
+        </div>
+      ),
+    },
     ...(isCodexFastModeAvailable ? [{
       key: 'codex-fast-mode',
       node: (
@@ -2995,6 +3050,8 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
   ], [
     planQuotaChannelId,
     planQuotaChannelUpdatedAt,
+    workingMode,
+    handleWorkingModeChange,
     isCodexFastModeAvailable,
     codexFastModeEnabled,
     handleCodexFastModeChange,

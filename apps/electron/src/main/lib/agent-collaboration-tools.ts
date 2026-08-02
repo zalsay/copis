@@ -670,6 +670,7 @@ function startDelegation(
     delegationDepth: (parent?.delegationDepth ?? 0) + 1,
     delegationGoal: goal,
     permissionMode,
+    workingMode: parent?.workingMode ?? 'fast',
   })
 
   const record: DelegationRecord = {
@@ -706,6 +707,7 @@ function startDelegation(
       modelId: effectiveModelId,
       workspaceId: ctx.workspaceId,
       permissionModeOverride: permissionMode,
+      workingMode: parent?.workingMode ?? 'fast',
       triggeredBy: 'delegation',
       startedAt: record.startedAt,
     },

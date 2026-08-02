@@ -68,4 +68,32 @@ describe('项目与会话工作台提示词', () => {
     expect(context).toContain('项目: 示例项目')
     expect(context).not.toContain('工作区: 示例项目')
   })
+
+  test('Given fast Working 模式 When 构建系统提示词 Then 约束为快速执行语义', () => {
+    const prompt = buildSystemPrompt({
+      agentRuntime: 'pi',
+      sessionId: 'session-fast',
+      permissionMode: 'bypassPermissions',
+      workingMode: 'fast',
+    })
+
+    expect(prompt).toContain('## Working 快速模式')
+    expect(prompt).toContain('对应原 Working 的 `fast` 语义')
+    expect(prompt).toContain('不调用远程 Working Agent')
+    expect(prompt).not.toContain('## Working 专家模式')
+  })
+
+  test('Given expert Working 模式 When 构建系统提示词 Then 约束为专家执行语义', () => {
+    const prompt = buildSystemPrompt({
+      agentRuntime: 'pi',
+      sessionId: 'session-expert',
+      permissionMode: 'bypassPermissions',
+      workingMode: 'expert',
+    })
+
+    expect(prompt).toContain('## Working 专家模式')
+    expect(prompt).toContain('对应原 Working 的 `export` 语义')
+    expect(prompt).toContain('做实际验证')
+    expect(prompt).not.toContain('## Working 快速模式')
+  })
 })

@@ -506,6 +506,9 @@ export interface ElectronAPI {
   /** 切换当前会话的 ChatGPT Codex Fast Mode */
   updateSessionCodexFastMode: (sessionId: string, enabled: boolean) => Promise<AgentSessionMeta>
 
+  /** 切换当前会话的 Copis Working 模式 */
+  updateSessionWorkingMode: (sessionId: string, mode: import('@proma/shared').WorkingMode) => Promise<AgentSessionMeta>
+
   /** 查询 Pi catalog 或专属 profile 支持的会话级推理档位 */
   getPiReasoningCapability: (channelId: string, modelId: string) => Promise<import('@proma/shared').ReasoningCapability | undefined>
 
@@ -1658,6 +1661,10 @@ const electronAPI: ElectronAPI = {
 
   updateSessionCodexFastMode: (sessionId: string, enabled: boolean) => {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.UPDATE_SESSION_CODEX_FAST_MODE, sessionId, enabled)
+  },
+
+  updateSessionWorkingMode: (sessionId: string, mode: import('@proma/shared').WorkingMode) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.UPDATE_SESSION_WORKING_MODE, sessionId, mode)
   },
 
   getPiReasoningCapability: (channelId: string, modelId: string) => {

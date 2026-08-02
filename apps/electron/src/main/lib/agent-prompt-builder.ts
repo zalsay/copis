@@ -9,7 +9,7 @@
  * - 动态 per-message 上下文（buildDynamicContext）：注入到用户消息前，每次实时读取磁盘
  */
 
-import type { AgentRuntime, PromaPermissionMode } from '@proma/shared'
+import { normalizeWorkingMode, type AgentRuntime, type PromaPermissionMode, type WorkingMode } from '@proma/shared'
 import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { getUserProfile } from './user-profile-service'
@@ -42,6 +42,8 @@ interface SystemPromptContext {
   collaborationAvailable?: boolean
   /** 当前 Agent 实际运行的模型；Pi 用它在委派时显式透传默认模型 */
   currentModelId?: string
+  /** Copis Working 的 fast/expert 运行语义。 */
+  workingMode?: WorkingMode
 }
 
 function buildWorkspacePromptPaths(workspaceSlug: string, sessionId: string, agentCwd?: string) {
@@ -95,6 +97,7 @@ export function buildSystemPrompt(ctx: SystemPromptContext): string {
     : undefined
   const sessionContextDir = workspacePaths?.sessionContextDir ?? '.context'
   const workspaceContextDir = workspacePaths?.workspaceContextDir ?? '.context'
+  const workingMode = normalizeWorkingMode(ctx.workingMode)
 
   const sections: string[] = []
 
@@ -129,6 +132,22 @@ export function buildSystemPrompt(ctx: SystemPromptContext): string {
 - **提醒只服务明确时点**：用户提出“提醒我”且有具体时点时，创建关联提醒；提醒到期后用户可以完成 Todo、推迟或确认关闭。不要用 Automation 替代个人提醒。
 - **透明但不打断**：完成一次重要的创建、更新或完成操作后，在回复中简短说明；不要为了例行读取反复向用户报告。`)
   }
+
+  sections.push(workingMode === 'expert'
+    ? `## Working 专家模式
+
+当前 Copis Working 模式为专家模式（对应原 Working 的 \`export\` 语义）。本次运行仍使用用户选择的本地 Pi 模型，不调用远程 Working Agent，也不上传本地工作区文件。
+
+- 先拆解任务和关键约束，再执行必要的工具操作。
+- 对重要结论、文件修改和外部影响做实际验证；遇到不确定点时优先检查事实。
+- 任务复杂时可以使用可见任务追踪和协作能力，但不要为了形式增加无关步骤。`
+    : `## Working 快速模式
+
+当前 Copis Working 模式为快速模式（对应原 Working 的 \`fast\` 语义）。本次运行仍使用用户选择的本地 Pi 模型，不调用远程 Working Agent，也不上传本地工作区文件。
+
+- 优先直接处理用户目标，减少不必要的探索和往返。
+- 保留完成任务所需的必要检查；不要用未经验证的猜测代替结果。
+- 只有任务确实需要拆解或协作时，才创建可见任务或派生会话。`)
 
   // 工具使用指南（复用常量）
   sections.push(TOOL_USAGE_GUIDELINES)

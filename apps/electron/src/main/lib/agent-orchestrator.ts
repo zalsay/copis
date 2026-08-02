@@ -20,7 +20,7 @@ import { join, dirname } from 'node:path'
 import { accessSync, constants, existsSync, mkdirSync, realpathSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { app } from 'electron'
-import type { AgentRuntime, AgentSendInput, AgentMessage, AgentGenerateTitleInput, AgentProviderAdapter, AgentSessionMeta, CodexOAuthCredentials, XaiOAuthCredentials, TypedError, RetryAttempt, SDKMessage, SDKAssistantMessage, AgentStreamPayload, RewindSessionResult, ProviderType } from '@proma/shared'
+import { normalizeWorkingMode, type AgentRuntime, type AgentSendInput, type AgentMessage, type AgentGenerateTitleInput, type AgentProviderAdapter, type AgentSessionMeta, type CodexOAuthCredentials, type XaiOAuthCredentials, type TypedError, type RetryAttempt, type SDKMessage, type SDKAssistantMessage, type AgentStreamPayload, type RewindSessionResult, type ProviderType } from '@proma/shared'
 import {
   PROMA_DEFAULT_PERMISSION_MODE,
   PROMA_PERMISSION_MODE_CONFIG,
@@ -912,6 +912,16 @@ export class AgentOrchestrator {
     const streamStartedAt = input.startedAt ?? Date.now()
     let userMessagePersisted = false
     let sessionMeta = getAgentSessionMeta(sessionId)
+    const workingMode = normalizeWorkingMode(input.workingMode ?? sessionMeta?.workingMode)
+
+    // 兼容旧会话和非 UI 触发路径：首次运行时把实际使用的模式补回会话索引。
+    if (sessionMeta && sessionMeta.workingMode !== workingMode) {
+      try {
+        sessionMeta = updateAgentSessionMeta(sessionId, { workingMode })
+      } catch (error) {
+        console.warn(`[Agent 编排] 保存 Working 模式失败: sessionId=${sessionId}`, error)
+      }
+    }
 
     const persistInitialUserMessage = (): void => {
       if (userMessagePersisted) return
@@ -1722,6 +1732,7 @@ export class AgentOrchestrator {
         permissionMode: initialPermissionMode,
         collaborationAvailable,
         currentModelId: selectedModelId,
+        workingMode,
       }) + (automationContext ? `\n\n## 定时任务执行上下文\n\n${automationContext}` : '')
       const startAutoTitleGeneration = (): void => {
         if (titleGenerationStarted) return

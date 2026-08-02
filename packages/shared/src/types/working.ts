@@ -63,6 +63,19 @@ export interface WorkingSessionHistory {
   [key: string]: unknown
 }
 
+/** Working Composer 的执行模式。远程 Working 使用 fast/export 别名；Copis 本地运行保留同一语义。 */
+export type WorkingMode = 'fast' | 'expert'
+
+export const WORKING_MODES = ['fast', 'expert'] as const satisfies readonly WorkingMode[]
+
+export function isWorkingMode(value: unknown): value is WorkingMode {
+  return value === 'fast' || value === 'expert'
+}
+
+export function normalizeWorkingMode(value: unknown): WorkingMode {
+  return value === 'expert' ? 'expert' : 'fast'
+}
+
 /**
  * Copis Working 对本地 Agent 运行暴露的稳定事件契约。
  *
