@@ -24,6 +24,7 @@ import { WindowControls } from '@/components/WindowControls'
 import { SettingsPanel } from '@/components/settings/SettingsPanel'
 import { detectIsWindows, WINDOW_CONTROLS_INSET_RIGHT } from '@/lib/platform'
 import { cn } from '@/lib/utils'
+import { workingHistorySelectionAtom } from '@/atoms/working-atoms'
 
 const MIN_RIGHT_PANEL_WIDTH = 300
 const MAX_RIGHT_PANEL_WIDTH = 560
@@ -55,7 +56,8 @@ export function AppShell({ contextValue }: AppShellProps): React.ReactElement {
   const isClassic = interfaceVariant === 'classic'
   // 定时任务表单打开时隐藏右侧文件面板，让中间区域扩展到全宽（表单内含自己的右栏配置）
   const activeView = useAtomValue(activeViewAtom)
-  const showRightPanel = appMode === 'agent' && !!currentSessionId && !automationForm.open && activeView !== 'planning' && activeView !== 'agent-skills'
+  const workingHistorySelection = useAtomValue(workingHistorySelectionAtom)
+  const showRightPanel = appMode === 'agent' && !!currentSessionId && !workingHistorySelection && !automationForm.open && activeView !== 'planning' && activeView !== 'agent-skills'
   const isWindows = React.useMemo(() => detectIsWindows(), [])
 
   // 左侧边栏可拖拽宽度

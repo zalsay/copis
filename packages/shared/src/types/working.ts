@@ -63,6 +63,80 @@ export interface WorkingSessionHistory {
   [key: string]: unknown
 }
 
+/**
+ * Copis Working 对本地 Agent 运行暴露的稳定事件契约。
+ *
+ * Pi/Proma 的底层 SDK 事件不直接成为 Working UI 的业务协议，主进程或
+ * renderer 适配层统一映射到以下事件，便于历史回放和实时运行复用同一套语义。
+ */
+export type WorkingEvent =
+  | {
+    type: 'run_started'
+    sessionId: string
+    runId?: string
+    startedAt: number
+    model?: string
+  }
+  | {
+    type: 'message_delta'
+    sessionId: string
+    role: 'user' | 'assistant'
+    text: string
+    messageId?: string
+  }
+  | {
+    type: 'tool_call'
+    sessionId: string
+    toolUseId: string
+    toolName: string
+    input: Record<string, unknown>
+    parentToolUseId?: string
+  }
+  | {
+    type: 'tool_result'
+    sessionId: string
+    toolUseId: string
+    result: string
+    isError: boolean
+  }
+  | {
+    type: 'file_change'
+    sessionId: string
+    toolUseId?: string
+    path: string
+    operation?: string
+    content?: string
+    diff?: string
+  }
+  | {
+    type: 'patch'
+    sessionId: string
+    patchId?: string
+    summary?: string
+    files: Array<{ path: string; content?: string; diff?: string }>
+  }
+  | {
+    type: 'todo'
+    sessionId: string
+    toolUseId?: string
+    todos: unknown[]
+  }
+  | {
+    type: 'run_completed'
+    sessionId: string
+    stopReason?: string
+  }
+  | {
+    type: 'run_failed'
+    sessionId: string
+    error: string
+  }
+  | {
+    type: 'run_stopped'
+    sessionId: string
+    reason?: string
+  }
+
 export interface WorkingSkill {
   slug: string
   name: string

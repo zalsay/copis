@@ -53,3 +53,8 @@ export {
   isPersistableSDKSystemMessage,
   type SDKCompactStatus,
 } from './agent-system-message'
+export {
+  adaptWorkingStreamComplete,
+  adaptWorkingStreamError,
+  adaptWorkingStreamEvent,
+} from './working-event-adapter'

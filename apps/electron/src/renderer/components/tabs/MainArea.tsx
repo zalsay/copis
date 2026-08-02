@@ -31,6 +31,8 @@ import { automationFormAtom } from '@/atoms/automation-atoms'
 import { activeViewAtom } from '@/atoms/active-view'
 import { interfaceVariantAtom } from '@/atoms/theme'
 import { cn } from '@/lib/utils'
+import { workingHistorySelectionAtom } from '@/atoms/working-atoms'
+import { WorkingSessionHistoryView } from '@/components/working/WorkingSessionHistoryView'
 
 export function MainArea(): React.ReactElement {
   // 记录每个会话上次停留的视图（对话 / 预览），供切回时重建预览 Tab
@@ -42,6 +44,7 @@ export function MainArea(): React.ReactElement {
   const activeTab = useAtomValue(activeTabAtom)
   const automationFormOpen = useAtomValue(automationFormAtom).open
   const activeView = useAtomValue(activeViewAtom)
+  const workingHistorySelection = useAtomValue(workingHistorySelectionAtom)
   const interfaceVariant = useAtomValue(interfaceVariantAtom)
   const isClassic = interfaceVariant === 'classic'
   const store = useStore()
@@ -221,7 +224,9 @@ export function MainArea(): React.ReactElement {
             className={cn('flex flex-col min-w-0 h-full relative', showPreview && 'mr-0.5')}
             style={leftFlexStyle}
           >
-            {activeView === 'planning' ? (
+            {workingHistorySelection ? (
+              <WorkingSessionHistoryView />
+            ) : activeView === 'planning' ? (
               automationFormOpen ? (
                 // 自动化设置页：与任务/日程同层级替换中间区，不经过 TabBar。
                 <AutomationFormView />

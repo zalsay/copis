@@ -29,6 +29,7 @@ import {
 } from '@/atoms/agent-atoms'
 import { appModeAtom } from '@/atoms/app-mode'
 import { activeViewAtom } from '@/atoms/active-view'
+import { workingHistorySelectionAtom } from '@/atoms/working-atoms'
 import { useCreateSession } from '@/hooks/useCreateSession'
 import { useOpenSession } from '@/hooks/useOpenSession'
 
@@ -67,6 +68,7 @@ export function CopisWorkingSidebar({ width, noTransition = false }: CopisWorkin
   const setCurrentWorkspaceId = useSetAtom(currentAgentWorkspaceIdAtom)
   const setAppMode = useSetAtom(appModeAtom)
   const setActiveView = useSetAtom(activeViewAtom)
+  const setWorkingHistorySelection = useSetAtom(workingHistorySelectionAtom)
   const { createAgent } = useCreateSession()
   const openSession = useOpenSession()
 
@@ -80,6 +82,7 @@ export function CopisWorkingSidebar({ width, noTransition = false }: CopisWorkin
         setRemoteWorkspaces([])
         setRemoteSessions([])
         setSkillsCount(0)
+        setWorkingHistorySelection(null)
         return
       }
 
@@ -97,7 +100,7 @@ export function CopisWorkingSidebar({ width, noTransition = false }: CopisWorkin
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [setWorkingHistorySelection])
 
   React.useEffect(() => {
     void loadWorkingData()
@@ -138,6 +141,7 @@ export function CopisWorkingSidebar({ width, noTransition = false }: CopisWorkin
       setRemoteWorkspaces([])
       setRemoteSessions([])
       setSkillsCount(0)
+      setWorkingHistorySelection(null)
     } catch (error) {
       toast.error(error instanceof Error ? error.message : '退出 Working 失败')
     } finally {
@@ -146,6 +150,7 @@ export function CopisWorkingSidebar({ width, noTransition = false }: CopisWorkin
   }
 
   const selectLocalWorkspace = (workspaceId: string): void => {
+    setWorkingHistorySelection(null)
     setCurrentWorkspaceId(workspaceId)
     setAppMode('agent')
     setActiveView('conversations')
@@ -157,6 +162,7 @@ export function CopisWorkingSidebar({ width, noTransition = false }: CopisWorkin
 
   const createLocalWorkspace = async (): Promise<void> => {
     try {
+      setWorkingHistorySelection(null)
       const selected = await window.electronAPI.openFolderDialog()
       if (!selected) return
       const project = await window.electronAPI.createAgentProject({
@@ -192,8 +198,15 @@ export function CopisWorkingSidebar({ width, noTransition = false }: CopisWorkin
   }
 
   const handleNewSession = async (): Promise<void> => {
+    setWorkingHistorySelection(null)
     const sessionId = await createAgent()
     if (!sessionId) toast.error('新建 Agent 会话失败')
+  }
+
+  const selectWorkingSession = (session: WorkingSessionSummary): void => {
+    setWorkingHistorySelection({ session })
+    setAppMode('agent')
+    setActiveView('conversations')
   }
 
   const activeLocalSessions = localSessions
@@ -329,7 +342,10 @@ export function CopisWorkingSidebar({ width, noTransition = false }: CopisWorkin
                     ? 'bg-accent text-foreground'
                     : 'text-muted-foreground hover:bg-accent/70 hover:text-foreground',
                 )}
-                onClick={() => openSession('agent', session.id, session.title)}
+                onClick={() => {
+                  setWorkingHistorySelection(null)
+                  openSession('agent', session.id, session.title)
+                }}
               >
                 <CircleUserRound size={14} className="shrink-0 opacity-60" />
                 <span className="min-w-0 flex-1 truncate">{session.title || '未命名会话'}</span>
@@ -357,10 +373,15 @@ export function CopisWorkingSidebar({ width, noTransition = false }: CopisWorkin
               ))}
               {remoteWorkspaces.length === 0 && <div className="px-2.5 py-2 text-xs text-muted-foreground">暂无云端工作区</div>}
               {remoteSessions.slice(0, 8).map((session) => (
-                <div key={session.runId} className="rounded-lg bg-muted/40 px-2.5 py-2 text-xs text-muted-foreground">
+                <button
+                  type="button"
+                  key={session.runId}
+                  className="titlebar-no-drag w-full rounded-lg bg-muted/40 px-2.5 py-2 text-left text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                  onClick={() => selectWorkingSession(session)}
+                >
                   <div className="truncate text-foreground/80">{getSessionLabel(session)}</div>
                   {session.status && <div className="mt-0.5 truncate text-[10px]">{session.status}</div>}
-                </div>
+                </button>
               ))}
             </div>
           )}

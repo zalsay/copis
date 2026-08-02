@@ -71,6 +71,8 @@ import {
 } from '@/lib/agent-completion-presence'
 import { getPlanModeChangeFromToolName, updatePlanModeSessionSet } from '@/lib/agent-plan-mode'
 import { buildTodoAgentPrompt } from '@/lib/todo-agent-prompt'
+import { appendWorkingEvents, workingEventsAtom } from '@/atoms/working-atoms'
+import { adaptWorkingStreamComplete, adaptWorkingStreamError, adaptWorkingStreamEvent } from '@proma/shared'
 
 /** 触发右侧文件浏览器自动定位的写入类工具集合 */
 const WRITE_TOOLS = new Set(['Write', 'Edit', 'MultiEdit', 'NotebookEdit', 'Update'])
@@ -699,6 +701,12 @@ export function useGlobalAgentListeners(): void {
         unstable_batchedUpdates(() => {
         const { sessionId, payload } = streamEvent
 
+        store.set(workingEventsAtom, (previous) => appendWorkingEvents(
+          previous,
+          sessionId,
+          adaptWorkingStreamEvent(streamEvent),
+        ))
+
         if (payload.kind === 'proma_event' && payload.event.type === 'external_run_started') {
           activateExternalAgentRun(payload.event)
         }
@@ -1075,6 +1083,11 @@ export function useGlobalAgentListeners(): void {
       (data: AgentStreamCompletePayload) => {
         console.log(`[FLASH-DEBUG] STREAM_COMPLETE for session=${data.sessionId.slice(0, 8)}, stoppedByUser=${data.stoppedByUser}, resultSubtype=${data.resultSubtype}`)
         unstable_batchedUpdates(() => {
+        store.set(workingEventsAtom, (previous) => appendWorkingEvents(
+          previous,
+          data.sessionId,
+          [adaptWorkingStreamComplete(data)],
+        ))
         // 后台任务等待态：turn 主体结束但仍有后台任务在飞行，UI 进入"空闲可输入"。
         // 不发"任务已完成"通知（任务并未真正完成）、不清后台任务列表、不重载消息——
         // 等后台任务完成时 Agent 会自动唤醒续轮。
@@ -1262,6 +1275,12 @@ export function useGlobalAgentListeners(): void {
       (data: { sessionId: string; error: string }) => {
         unstable_batchedUpdates(() => {
         console.error('[GlobalAgentListeners] 流式错误:', data.error)
+
+        store.set(workingEventsAtom, (previous) => appendWorkingEvents(
+          previous,
+          data.sessionId,
+          [adaptWorkingStreamError(data.sessionId, data.error)],
+        ))
 
         // 存储错误消息
         store.set(agentStreamErrorsAtom, (prev) => {
