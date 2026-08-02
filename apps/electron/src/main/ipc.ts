@@ -9,7 +9,7 @@ import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'nod
 import { existsSync, realpathSync, rmSync, readFileSync, writeFileSync, mkdirSync, statSync } from 'node:fs'
 import { writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, CHAT_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, INSTALLER_IPC_CHANNELS, PROXY_IPC_CHANNELS, GITHUB_RELEASE_IPC_CHANNELS, SYSTEM_PROMPT_IPC_CHANNELS, CHAT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, WECHAT_IPC_CHANNELS, AUTOMATION_IPC_CHANNELS, PLANNING_IPC_CHANNELS, PLANNING_CONFLICT_ERROR, isPromaPermissionMode, normalizePathForCompare } from '@proma/shared'
+import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, CHAT_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, INSTALLER_IPC_CHANNELS, PROXY_IPC_CHANNELS, GITHUB_RELEASE_IPC_CHANNELS, SYSTEM_PROMPT_IPC_CHANNELS, CHAT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, WECHAT_IPC_CHANNELS, AUTOMATION_IPC_CHANNELS, PLANNING_IPC_CHANNELS, PLANNING_CONFLICT_ERROR, WORKING_IPC_CHANNELS, isPromaPermissionMode, normalizePathForCompare } from '@proma/shared'
 import { USER_PROFILE_IPC_CHANNELS, SETTINGS_IPC_CHANNELS, SCRATCH_PAD_IPC_CHANNELS, QUICK_TASK_IPC_CHANNELS, VOICE_DICTATION_IPC_CHANNELS, APP_ICON_IPC_CHANNELS, DOCK_BADGE_IPC_CHANNELS, STORAGE_IPC_CHANNELS } from '../types'
 import type {
   QuickTaskSubmitInput,
@@ -139,7 +139,8 @@ import type {
 import type { UserProfile, AppSettings } from '../types'
 import { getRuntimeStatus, getGitRepoStatus, reinitializeRuntime } from './lib/runtime-init'
 import { getUnstagedChanges, getFileDiff, getUntrackedContent, revertFile, getDiffContents, listWorktrees, getWorktreeChanges, getMainRepoRoot } from './lib/git-diff-service'
-import { registerPromaFilePath } from './lib/local-file-protocol'
+import { registerCopisFilePath } from './lib/local-file-protocol'
+import { isPathWithinAuthorizedRoots, realpathOrResolve } from './lib/file-access-policy'
 import { registerUpdaterIpc } from './lib/updater/updater-ipc'
 import {
   listChannels,
@@ -325,9 +326,12 @@ import { getDingTalkConfig, saveDingTalkConfig, getDecryptedClientSecret, getDin
 import { dingtalkBridgeManager } from './lib/dingtalk-bridge-manager'
 import { getWeChatConfig } from './lib/wechat-config'
 import { wechatBridge } from './lib/wechat-bridge'
+import { getWorkingApiClient } from './lib/working-api-client'
+import type { WorkingLoginInput, WorkingWorkspaceInput } from '@proma/shared'
 
 /** 文件浏览器中需要隐藏的系统文件 */
 const HIDDEN_FS_ENTRIES = new Set(['.DS_Store', 'Thumbs.db'])
+const MAX_DIRECTORY_ENTRIES = 2000
 
 /** 已知编辑器应用名称白名单（macOS） */
 const KNOWN_EDITORS = [
@@ -342,18 +346,10 @@ const KNOWN_EDITORS = [
  * 虽然 renderer 不可信，但附加目录功能本身就允许用户授权 workspaces 外的路径访问。
  * 攻击者需要先控制 renderer 才能伪造 basePaths，此时已有更大的攻击面。
  */
-function realpathOrResolve(path: string): string {
-  try {
-    return realpathSync(resolve(path))
-  } catch {
-    return resolve(path)
-  }
-}
-
 function getAuthorizedRoots(options?: FileAccessOptions): string[] {
   const roots: string[] = [
     getAgentWorkspacesDir(),
-    join(tmpdir(), 'proma-preview'),
+    join(tmpdir(), 'copis-preview'),
   ]
 
   const workspaceSlugs = new Set<string>()
@@ -385,24 +381,8 @@ function getAuthorizedRoots(options?: FileAccessOptions): string[] {
   return roots
 }
 
-function isUnderRoot(resolvedPath: string, root: string): boolean {
-  const resolvedRoot = realpathOrResolve(root)
-  const relativePath = relative(resolvedRoot, resolvedPath)
-  return relativePath === '' || (
-    relativePath !== '..'
-    && !relativePath.startsWith(`..${sep}`)
-    && !isAbsolute(relativePath)
-  )
-}
-
 function isPathAllowed(filePath: string, options?: FileAccessOptions): boolean {
-  let resolved: string
-  try {
-    resolved = realpathSync(resolve(filePath))
-  } catch {
-    return false
-  }
-  return getAuthorizedRoots(options).some((root) => isUnderRoot(resolved, root))
+  return isPathWithinAuthorizedRoots(filePath, getAuthorizedRoots(options))
 }
 
 function normalizeFileAccessOptions(value?: FileAccessOptions | string[]): FileAccessOptions | undefined {
@@ -905,6 +885,68 @@ function releaseDirectoryWatcherIfUnreferenced(dirPath: string): void {
 
 export function registerIpcHandlers(): void {
   console.log('[IPC] 正在注册 IPC 处理器...')
+
+  // ===== Copis Working 后端（仅账号与业务元数据） =====
+
+  ipcMain.handle(WORKING_IPC_CHANNELS.GET_CONFIG, async () => ({
+    backendUrl: getWorkingApiClient().baseUrl,
+  }))
+
+  ipcMain.handle(WORKING_IPC_CHANNELS.GET_AUTH_STATE, async () => {
+    const client = getWorkingApiClient()
+    return {
+      authenticated: Boolean(client.getToken()),
+      user: client.getCachedUser(),
+      backendUrl: client.baseUrl,
+    }
+  })
+
+  ipcMain.handle(WORKING_IPC_CHANNELS.LOGIN, async (_, input: WorkingLoginInput) => {
+    if (!input || typeof input !== 'object' || typeof input.email !== 'string' || typeof input.password !== 'string') {
+      throw new Error('登录参数不正确')
+    }
+    const client = getWorkingApiClient()
+    const result = await client.login(input)
+    return {
+      authenticated: true,
+      user: result.user ?? client.getCachedUser(),
+      backendUrl: client.baseUrl,
+    }
+  })
+
+  ipcMain.handle(WORKING_IPC_CHANNELS.LOGOUT, async () => {
+    const client = getWorkingApiClient()
+    client.logout()
+    return { authenticated: false, user: null, backendUrl: client.baseUrl }
+  })
+
+  ipcMain.handle(WORKING_IPC_CHANNELS.GET_CURRENT_USER, async () => {
+    return getWorkingApiClient().getCurrentUser()
+  })
+
+  ipcMain.handle(WORKING_IPC_CHANNELS.LIST_WORKSPACES, async () => {
+    return getWorkingApiClient().listWorkspaces()
+  })
+
+  ipcMain.handle(WORKING_IPC_CHANNELS.SAVE_WORKSPACE, async (_, input: WorkingWorkspaceInput) => {
+    if (!input || typeof input !== 'object' || typeof input.workspacePath !== 'string') {
+      throw new Error('工作区参数不正确')
+    }
+    return getWorkingApiClient().saveWorkspace(input)
+  })
+
+  ipcMain.handle(WORKING_IPC_CHANNELS.LIST_SESSIONS, async () => {
+    return getWorkingApiClient().listSessions()
+  })
+
+  ipcMain.handle(WORKING_IPC_CHANNELS.GET_SESSION_HISTORY, async (_, runId: string, sessionId?: string) => {
+    if (typeof runId !== 'string') throw new Error('runId 参数不正确')
+    return getWorkingApiClient().getSessionHistory(runId, sessionId)
+  })
+
+  ipcMain.handle(WORKING_IPC_CHANNELS.LIST_SKILLS, async () => {
+    return getWorkingApiClient().listSkills()
+  })
 
   // ===== 运行时相关 =====
 
@@ -3107,7 +3149,7 @@ export function registerIpcHandlers(): void {
         return a.name.localeCompare(b.name)
       })
 
-      return entries
+      return entries.slice(0, MAX_DIRECTORY_ENTRIES)
     }
   )
 
@@ -3159,7 +3201,7 @@ export function registerIpcHandlers(): void {
       const { existsSync, mkdirSync } = await import('node:fs')
       const { writeFile } = await import('node:fs/promises')
 
-      const tmpDir = join(tmpdir(), 'proma-preview')
+      const tmpDir = join(tmpdir(), 'copis-preview')
       if (!existsSync(tmpDir)) {
         mkdirSync(tmpDir, { recursive: true })
       }
@@ -3248,7 +3290,8 @@ export function registerIpcHandlers(): void {
       const { resolveAndReadFile, resolveFilePath } = await import('./lib/file-preview-service')
       const options = normalizeFileAccessOptions(access)
       const resolved = resolveFilePath(filePath, getPreviewCandidateBasePaths(options))
-      if (!resolved) {
+      if (!resolved || !isPathAllowed(resolved, options)) {
+        console.warn('[IPC] file:resolve-and-read 拒绝越界路径:', resolved ?? filePath)
         return null
       }
       const result = resolveAndReadFile(resolved)
@@ -3282,11 +3325,14 @@ export function registerIpcHandlers(): void {
       const { resolveFilePath } = await import('./lib/file-preview-service')
       const options = normalizeFileAccessOptions(access)
       const result = resolveFilePath(filePath, getPreviewCandidateBasePaths(options))
-      if (!result) return null
-      // registerPromaFilePath 对目录路径会抛「不是文件」。渲染端（如悬浮预览解析 markdown
+      if (!result || !isPathAllowed(result, options)) {
+        console.warn('[IPC] file:resolve-path 拒绝越界路径:', result ?? filePath)
+        return null
+      }
+      // registerCopisFilePath 对目录路径会抛「不是文件」。渲染端（如悬浮预览解析 markdown
       // 链接）可能传入目录路径，此处优雅降级为 null，而不是让异常冒泡成未捕获的 handler 错误。
       try {
-        return { url: registerPromaFilePath(result) }
+        return { url: registerCopisFilePath(result) }
       } catch (err) {
         console.warn('[IPC] file:resolve-path 无法注册为文件，跳过:', result, err instanceof Error ? err.message : err)
         return null
@@ -3301,7 +3347,8 @@ export function registerIpcHandlers(): void {
       const { preparePdfPreview, resolveFilePath } = await import('./lib/file-preview-service')
       const options = normalizeFileAccessOptions(access)
       const resolved = resolveFilePath(filePath, getPreviewCandidateBasePaths(options))
-      if (!resolved) {
+      if (!resolved || !isPathAllowed(resolved, options)) {
+        console.warn('[IPC] file:prepare-pdf-preview 拒绝越界路径:', resolved ?? filePath)
         return null
       }
       const result = await preparePdfPreview(resolved)
@@ -3316,7 +3363,8 @@ export function registerIpcHandlers(): void {
       const { convertDocxToHtml, resolveFilePath } = await import('./lib/file-preview-service')
       const options = normalizeFileAccessOptions(access)
       const resolved = resolveFilePath(filePath, getPreviewCandidateBasePaths(options))
-      if (!resolved) {
+      if (!resolved || !isPathAllowed(resolved, options)) {
+        console.warn('[IPC] file:docx-to-html 拒绝越界路径:', resolved ?? filePath)
         return null
       }
       const result = await convertDocxToHtml(resolved)
@@ -3331,7 +3379,8 @@ export function registerIpcHandlers(): void {
       const { convertOfficeToHtml, resolveFilePath } = await import('./lib/file-preview-service')
       const options = normalizeFileAccessOptions(access)
       const resolved = resolveFilePath(filePath, getPreviewCandidateBasePaths(options))
-      if (!resolved) {
+      if (!resolved || !isPathAllowed(resolved, options)) {
+        console.warn('[IPC] file:office-to-html 拒绝越界路径:', resolved ?? filePath)
         return null
       }
       return convertOfficeToHtml(resolved)
@@ -3346,9 +3395,13 @@ export function registerIpcHandlers(): void {
       const { resolveFilePath } = await import('./lib/file-preview-service')
       const options = normalizeFileAccessOptions(access)
       const resolved = resolveFilePath(filePath, getPreviewCandidateBasePaths(options))
-      if (!resolved) return null
+      if (!resolved || !isPathAllowed(resolved, options)) {
+        console.warn('[IPC] file:read-binary-base64 拒绝越界路径:', resolved ?? filePath)
+        return null
+      }
       const st = statSync(resolved)
-      if (maxSize && st.size > maxSize) return null
+      const maxAllowedSize = Math.min(maxSize ?? 50 * 1024 * 1024, 50 * 1024 * 1024)
+      if (st.size > maxAllowedSize) return null
       return readFileSync(resolved).toString('base64')
     }
   )
@@ -3430,7 +3483,7 @@ export function registerIpcHandlers(): void {
         return a.name.localeCompare(b.name)
       })
 
-      return entries
+      return entries.slice(0, MAX_DIRECTORY_ENTRIES)
     }
   )
 
@@ -3600,10 +3653,11 @@ export function registerIpcHandlers(): void {
         useAbsPath: boolean,
         source: 'session' | 'workspace',
       ): void {
-        if (depth > 10) return
+        if (depth > 10 || target.length >= BROWSE_LIMIT_PER_GROUP) return
         try {
           const items = readdirSync(dir, { withFileTypes: true })
           for (const item of items) {
+            if (target.length >= BROWSE_LIMIT_PER_GROUP) break
             if (ignoreFiles.has(item.name)) continue
             if (item.isDirectory() && ignoreDirs.has(item.name)) continue
 
@@ -4588,7 +4642,7 @@ export function registerIpcHandlers(): void {
     const result = await dialog.showOpenDialog({
       title: '选择迁移文件',
       filters: [
-        { name: 'Proma 迁移文件', extensions: ['proma-backup', 'proma-share'] },
+        { name: 'Copis 迁移文件', extensions: ['copis-backup', 'copis-share', 'proma-backup', 'proma-share'] },
         { name: '所有文件', extensions: ['*'] },
       ],
       properties: ['openFile'],
@@ -4598,13 +4652,13 @@ export function registerIpcHandlers(): void {
 
   ipcMain.handle('migration:saveFileDialog', async (_, mode: string) => {
     const { dialog } = await import('electron')
-    const ext = mode === 'personal' ? 'proma-backup' : 'proma-share'
-    const defaultName = `proma-migration-${new Date().toISOString().slice(0, 10)}.${ext}`
+    const ext = mode === 'personal' ? 'copis-backup' : 'copis-share'
+    const defaultName = `copis-migration-${new Date().toISOString().slice(0, 10)}.${ext}`
     const result = await dialog.showSaveDialog({
       title: '保存迁移文件',
       defaultPath: defaultName,
       filters: [
-        { name: mode === 'personal' ? 'Proma 个人备份' : 'Proma 分享包', extensions: [ext] },
+        { name: mode === 'personal' ? 'Copis 个人备份' : 'Copis 分享包', extensions: [ext] },
       ],
     })
     return result.canceled ? null : result.filePath

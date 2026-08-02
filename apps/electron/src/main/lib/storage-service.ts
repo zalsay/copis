@@ -459,12 +459,16 @@ async function calcAttachmentsCategory(): Promise<StorageCategory> {
 }
 
 async function calcTempFilesCategory(): Promise<StorageCategory> {
-  const previewDir = join(tmpdir(), 'proma-preview')
+  const previewDirs = [join(tmpdir(), 'copis-preview'), join(tmpdir(), 'proma-preview')]
   const installerDir = join(app.getPath('temp'), 'proma-installers')
-  const [preview, installer] = await Promise.all([
-    getDirSize(previewDir),
+  const [previews, installer] = await Promise.all([
+    Promise.all(previewDirs.map((dir) => getDirSize(dir))),
     getDirSize(installerDir),
   ])
+  const preview = previews.reduce(
+    (total, current) => ({ bytes: total.bytes + current.bytes, count: total.count + current.count }),
+    { bytes: 0, count: 0 },
+  )
   return {
     label: '临时预览/安装文件',
     key: 'temp-files',
@@ -498,16 +502,18 @@ export async function cleanupTempFiles(): Promise<CleanupResult> {
   let freedBytes = 0, deletedCount = 0
   const errors: string[] = []
 
-  const previewDir = join(tmpdir(), 'proma-preview')
-  if (existsSync(previewDir)) {
-    try {
-      const files = await fsPromises.readdir(previewDir)
-      for (const file of files) {
-        const freed = safeUnlink(join(previewDir, file))
-        if (freed > 0) { freedBytes += freed; deletedCount++ }
+  const previewDirs = [join(tmpdir(), 'copis-preview'), join(tmpdir(), 'proma-preview')]
+  for (const previewDir of previewDirs) {
+    if (existsSync(previewDir)) {
+      try {
+        const files = await fsPromises.readdir(previewDir)
+        for (const file of files) {
+          const freed = safeUnlink(join(previewDir, file))
+          if (freed > 0) { freedBytes += freed; deletedCount++ }
+        }
+      } catch (e) {
+        errors.push(`清理预览文件失败: ${e}`)
       }
-    } catch (e) {
-      errors.push(`清理预览文件失败: ${e}`)
     }
   }
 

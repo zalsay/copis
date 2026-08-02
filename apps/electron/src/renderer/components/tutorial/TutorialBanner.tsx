@@ -11,7 +11,7 @@ import * as React from 'react'
 import { useAtom, useSetAtom } from 'jotai'
 import { GraduationCap, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import { tabsAtom, activeTabIdAtom, openTab, TUTORIAL_TAB_ID } from '@/atoms/tab-atoms'
+import { tabsAtom, activeTabIdAtom, openTab, TUTORIAL_TAB_ID, TUTORIAL_TAB_TITLE } from '@/atoms/tab-atoms'
 
 export function TutorialBanner(): React.ReactElement | null {
   const [visible, setVisible] = React.useState(false)
@@ -37,7 +37,7 @@ export function TutorialBanner(): React.ReactElement | null {
   }
 
   const handleLearnNow = async () => {
-    const result = openTab(tabs, { type: 'tutorial', sessionId: TUTORIAL_TAB_ID, title: 'Proma 使用教程' })
+    const result = openTab(tabs, { type: 'tutorial', sessionId: TUTORIAL_TAB_ID, title: TUTORIAL_TAB_TITLE })
     setTabs(result.tabs)
     setActiveTabId(result.activeTabId)
     await handleDismiss()
@@ -73,8 +73,8 @@ export function TutorialBanner(): React.ReactElement | null {
             <GraduationCap size={20} className="text-primary" />
           </div>
           <div>
-            <h3 className="text-sm font-semibold text-foreground">Proma 使用教程</h3>
-            <p className="text-xs text-muted-foreground mt-0.5">了解 Proma 的全部功能和使用技巧</p>
+            <h3 className="text-sm font-semibold text-foreground">Copis 使用教程</h3>
+            <p className="text-xs text-muted-foreground mt-0.5">了解 Copis 的全部功能和使用技巧</p>
           </div>
         </div>
 

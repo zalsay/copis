@@ -248,14 +248,14 @@ export function MigrationSettings(): React.ReactElement {
                 active={exportMode === 'personal'}
                 onClick={() => setExportMode('personal')}
                 title="个人备份"
-                subtitle=".proma-backup"
+                subtitle=".copis-backup"
                 description="完整备份所有数据，含 API Key，用于换机迁移"
               />
               <ModeCard
                 active={exportMode === 'share'}
                 onClick={() => setExportMode('share')}
                 title="团队分发"
-                subtitle=".proma-share"
+                subtitle=".copis-share"
                 description="自选组件，凭据自动剥离，分享给同事"
               />
             </div>
@@ -474,7 +474,7 @@ export function MigrationSettings(): React.ReactElement {
       {/* ── 导入区块 ──────────────────────────────── */}
       <SettingsSection
         title="导入备份"
-        description="从备份文件导入数据，支持 .proma-backup 和 .proma-share 格式"
+        description="从备份文件导入数据，支持 .copis-backup 和 .copis-share；也兼容旧版 .proma 文件"
       >
         <button
           onClick={() => setMigrationImportDialogOpen(true)}

@@ -1,5 +1,5 @@
 import * as React from 'react'
-import { useAtom, useStore } from 'jotai'
+import { useAtom, useAtomValue, useSetAtom, useStore } from 'jotai'
 import { AppShell } from './components/app-shell/AppShell'
 import { OnboardingView } from './components/onboarding/OnboardingView'
 import { TutorialBanner } from './components/tutorial/TutorialBanner'
@@ -10,7 +10,14 @@ import { ShortcutGuideDialog } from './components/shortcuts/ShortcutGuideDialog'
 import { PlanningReminderRail } from './components/planning/PlanningReminderRail'
 import { conversationsAtom } from './atoms/chat-atoms'
 import { environmentCheckDialogOpenAtom } from './atoms/environment'
-import { tabsAtom, activeTabIdAtom, openTab, TUTORIAL_TAB_ID } from './atoms/tab-atoms'
+import { tabsAtom, activeTabIdAtom, openTab, TUTORIAL_TAB_ID, TUTORIAL_TAB_TITLE } from './atoms/tab-atoms'
+import { appModeAtom } from './atoms/app-mode'
+import {
+  agentSessionsAtom,
+  agentSettingsReadyAtom,
+  currentAgentSessionIdAtom,
+  currentAgentWorkspaceIdAtom,
+} from './atoms/agent-atoms'
 import type { AppShellContextType } from './contexts/AppShellContext'
 
 export default function App(): React.ReactElement {
@@ -46,7 +53,7 @@ export default function App(): React.ReactElement {
 
     if (openTutorial) {
       const tabs = store.get(tabsAtom)
-      const result = openTab(tabs, { type: 'tutorial', sessionId: TUTORIAL_TAB_ID, title: 'Proma 使用教程' })
+      const result = openTab(tabs, { type: 'tutorial', sessionId: TUTORIAL_TAB_ID, title: TUTORIAL_TAB_TITLE })
       store.set(tabsAtom, result.tabs)
       store.set(activeTabIdAtom, result.activeTabId)
       return
@@ -100,6 +107,7 @@ export default function App(): React.ReactElement {
   // 显示主界面
   return (
     <TooltipProvider delayDuration={200}>
+      <CopisStartupInitializer />
       <AppShell contextValue={contextValue} />
       <PlanningReminderRail />
       <ShortcutGuideDialog />
@@ -108,6 +116,64 @@ export default function App(): React.ReactElement {
       <MigrationImportDialog />
     </TooltipProvider>
   )
+}
+
+/**
+ * Copis 默认直接进入本地 Agent。
+ * 只复用已有 Agent 会话和工作区 API，不创建第二套运行时。
+ */
+function CopisStartupInitializer(): null {
+  const store = useStore()
+  const agentSettingsReady = useAtomValue(agentSettingsReadyAtom)
+  const setAgentSessions = useSetAtom(agentSessionsAtom)
+  const setAppMode = useSetAtom(appModeAtom)
+  const setCurrentAgentSessionId = useSetAtom(currentAgentSessionIdAtom)
+  const setCurrentAgentWorkspaceId = useSetAtom(currentAgentWorkspaceIdAtom)
+  const startedRef = React.useRef(false)
+
+  React.useEffect(() => {
+    if (!agentSettingsReady || startedRef.current) return
+    startedRef.current = true
+
+    const initialize = async (): Promise<void> => {
+      const sessions = await window.electronAPI.listAgentSessions()
+      setAgentSessions(sessions)
+
+      const existingAgentTab = store.get(tabsAtom).find((tab) => tab.type === 'agent')
+      if (existingAgentTab) {
+        setAppMode('agent')
+        setCurrentAgentSessionId(existingAgentTab.sessionId)
+        store.set(activeTabIdAtom, existingAgentTab.id)
+        return
+      }
+
+      const workspaceId = store.get(currentAgentWorkspaceIdAtom) ?? undefined
+      const session = sessions.find((item) => !item.archived && (!workspaceId || item.workspaceId === workspaceId))
+        ?? sessions.find((item) => !item.archived)
+      const activeSession = session ?? await window.electronAPI.createAgentSession(undefined, undefined, workspaceId)
+      const nextWorkspaceId = activeSession.workspaceId ?? workspaceId
+      if (nextWorkspaceId) {
+        setCurrentAgentWorkspaceId(nextWorkspaceId)
+        void window.electronAPI.updateSettings({ agentWorkspaceId: nextWorkspaceId }).catch(console.error)
+      }
+      setAppMode('agent')
+      setCurrentAgentSessionId(activeSession.id)
+      const result = openTab(store.get(tabsAtom), {
+        type: 'agent',
+        sessionId: activeSession.id,
+        title: activeSession.title,
+      })
+      store.set(tabsAtom, result.tabs)
+      store.set(activeTabIdAtom, result.activeTabId)
+    }
+
+    void initialize().catch((error) => {
+      startedRef.current = false
+      console.error('[Copis] 默认 Agent 初始化失败:', error)
+    })
+  }, [agentSettingsReady, setAgentSessions, setAppMode, setCurrentAgentSessionId, setCurrentAgentWorkspaceId, store])
+
+  return null
 }
 
 /**

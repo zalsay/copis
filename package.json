@@ -1,7 +1,7 @@
 {
-  "name": "proma",
+  "name": "copis",
   "version": "0.1.0",
-  "description": "The next gen ai software with general agents",
+  "description": "Copis Working desktop client",
   "type": "module",
   "private": true,
   "workspaces": [

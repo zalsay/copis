@@ -1,7 +1,7 @@
 {
   "name": "@proma/electron",
   "version": "0.16.7",
-  "description": "Proma next gen ai software with general agents - Electron App",
+  "description": "Copis Working desktop client - Electron App",
   "main": "dist/main.cjs",
   "author": {
     "name": "ErlichLiu",

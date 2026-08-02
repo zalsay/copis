@@ -49,7 +49,7 @@ export function OnboardingView({ onComplete }: OnboardingViewProps) {
       {step === 'welcome' && (
         <>
           <div className="mb-12 text-center">
-            <h1 className="text-4xl font-bold mb-4">欢迎使用 Proma</h1>
+            <h1 className="text-4xl font-bold mb-4">欢迎使用 Copis</h1>
             <p className="text-lg text-muted-foreground">
               下一代桌面 AI 软件，让通用 Agent 触手可及
             </p>
@@ -67,13 +67,13 @@ export function OnboardingView({ onComplete }: OnboardingViewProps) {
                 <div className="flex-1">
                   <h3 className="text-sm font-semibold text-foreground">查看使用教程</h3>
                   <p className="text-xs text-muted-foreground mt-0.5">
-                    了解 Proma 的全部功能和使用技巧
+                    了解 Copis 的全部功能和使用技巧
                   </p>
                 </div>
               </button>
 
               <p className="text-sm text-muted-foreground pt-2">
-                自己或身边的人已经在用 Proma？直接导入现有配置
+                自己或身边的人已经在用 Copis？直接导入现有配置
               </p>
 
               <div className="grid grid-cols-2 gap-3">
@@ -90,7 +90,7 @@ export function OnboardingView({ onComplete }: OnboardingViewProps) {
                       导入自己其他设备上的配置
                       <br/>
                       <br/>
-                      需要先在原设备上导出 .proma-backup 文件，再双击导入即可
+                      需要先在原设备上导出 .copis-backup 文件，再双击导入即可
                     </p>
                   </div>
                 </button>
@@ -107,7 +107,7 @@ export function OnboardingView({ onComplete }: OnboardingViewProps) {
                       从同事或团队成员处导入环境
                       <br/>
                       <br/>
-                      需要先导出 .proma-share 文件，再双击导入即可
+                      需要先导出 .copis-share 文件，再双击导入即可
                     </p>
                   </div>
                 </button>
@@ -138,7 +138,7 @@ export function OnboardingView({ onComplete }: OnboardingViewProps) {
           <div className="mb-6 text-center">
             <h2 className="text-2xl font-semibold mb-2">先检查一下环境</h2>
             <p className="text-sm text-muted-foreground">
-              Proma 在 Windows 上需要 Git Bash 或 WSL 才能执行命令
+              Copis 在 Windows 上需要 Git Bash 或 WSL 才能执行命令
             </p>
           </div>
 

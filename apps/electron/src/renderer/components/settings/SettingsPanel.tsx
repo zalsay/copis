@@ -40,7 +40,7 @@ import { appModeAtom } from "@/atoms/app-mode";
 import { activeViewAtom } from "@/atoms/active-view";
 import { automationFormAtom } from "@/atoms/automation-atoms";
 import { hasUpdateAtom } from "@/atoms/updater";
-import { tabsAtom, activeTabIdAtom, openTab, TUTORIAL_TAB_ID } from "@/atoms/tab-atoms";
+import { tabsAtom, activeTabIdAtom, openTab, TUTORIAL_TAB_ID, TUTORIAL_TAB_TITLE } from "@/atoms/tab-atoms";
 import { hasEnvironmentIssuesAtom } from "@/atoms/environment";
 import {
   AlertDialog,
@@ -207,7 +207,7 @@ export function SettingsPanel({
   /** 切换标签页时检测是否有未保存内容，tutorial 特殊处理：打开 New Tab 并关闭设置 */
   const handleTabChange = (tabId: SettingsTab): void => {
     if (tabId === 'tutorial') {
-      const result = openTab(mainTabs, { type: 'tutorial', sessionId: TUTORIAL_TAB_ID, title: 'Proma 使用教程' })
+      const result = openTab(mainTabs, { type: 'tutorial', sessionId: TUTORIAL_TAB_ID, title: TUTORIAL_TAB_TITLE })
       setMainTabs(result.tabs)
       setMainActiveTabId(result.activeTabId)
       // Skills/Automations 会全屏覆盖 TabContent；打开教程时先清理表单并回到会话视图。

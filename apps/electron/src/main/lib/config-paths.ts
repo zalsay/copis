@@ -1,8 +1,8 @@
 /**
  * 配置路径工具
  *
- * 管理 Proma 应用的本地配置文件路径。
- * 所有用户配置存储在 ~/.proma/ 目录下。
+ * 管理 Copis 应用的本地配置文件路径。
+ * 所有 Copis 用户配置存储在 ~/.copis/ 目录下。
  */
 
 import { join, basename } from 'node:path'
@@ -13,28 +13,36 @@ import { rmSyncWithRetry } from './fs-retry'
 /**
  * 获取配置目录名称
  *
- * 开发模式下返回 '.proma-dev'，正式版本返回 '.proma'。
+ * 开发模式下返回 '.copis-dev'，正式版本返回 '.copis'。
  *
  * 检测优先级：
- * 1. PROMA_DEV=1 环境变量（显式覆盖）
+ * 1. COPIS_DEV 环境变量（显式覆盖）
  * 2. Electron app.isPackaged（未打包 = 开发模式）
- * 3. 兜底 '.proma'
+ * 3. 兜底 '.copis'
  */
 let _configDirName: string | undefined
 
 export function getConfigDirName(): string {
   if (_configDirName === undefined) {
-    if (process.env.PROMA_DEV === '1') {
+    if (process.env.COPIS_DEV === '1') {
+      _configDirName = '.copis-dev'
+    } else if (process.env.COPIS_DEV === '0') {
+      _configDirName = '.copis'
+    } else if (process.env.PROMA_DEV === '1') {
+      // 仅保留测试和旧版开发脚本的兼容开关，不影响 Copis 默认目录。
       _configDirName = '.proma-dev'
+    } else if (process.env.PROMA_DEV === '0') {
+      // 旧版测试会显式指定 PROMA_DEV=0，并写入旧目录。
+      _configDirName = '.proma'
     } else {
       try {
         const { app } = require('electron')
-        _configDirName = app.isPackaged ? '.proma' : '.proma-dev'
+        _configDirName = app.isPackaged ? '.copis' : '.copis-dev'
       } catch {
-        _configDirName = '.proma'
+        _configDirName = '.copis'
       }
     }
-    const mode = _configDirName === '.proma-dev' ? '开发模式' : '正式版本'
+    const mode = _configDirName.endsWith('-dev') ? '开发模式' : '正式版本'
     console.log(`[配置] 配置目录: ~/${_configDirName}/（${mode}）`)
   }
   return _configDirName
@@ -43,7 +51,7 @@ export function getConfigDirName(): string {
 /**
  * 获取配置目录路径
  *
- * 开发模式返回 ~/.proma-dev/，正式版本返回 ~/.proma/。
+ * 开发模式返回 ~/.copis-dev/，正式版本返回 ~/.copis/。
  * 如果目录不存在则自动创建。
  */
 export function getConfigDir(): string {
@@ -156,6 +164,11 @@ export function resolveAttachmentPath(localPath: string): string {
  */
 export function getSettingsPath(): string {
   return join(getConfigDir(), 'settings.json')
+}
+
+/** Copis Working 认证信息路径；token 在写入前由 main process 加密。 */
+export function getWorkingAuthPath(): string {
+  return join(getConfigDir(), 'working-auth.json')
 }
 
 /**

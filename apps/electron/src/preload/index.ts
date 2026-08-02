@@ -6,7 +6,7 @@
  */
 
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
-import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, CHAT_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, INSTALLER_IPC_CHANNELS, PROXY_IPC_CHANNELS, GITHUB_RELEASE_IPC_CHANNELS, SYSTEM_PROMPT_IPC_CHANNELS, CHAT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, WECHAT_IPC_CHANNELS, AUTOMATION_IPC_CHANNELS, PLANNING_IPC_CHANNELS, AGENT_ISLAND_IPC_CHANNELS } from '@proma/shared'
+import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, CHAT_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, INSTALLER_IPC_CHANNELS, PROXY_IPC_CHANNELS, GITHUB_RELEASE_IPC_CHANNELS, SYSTEM_PROMPT_IPC_CHANNELS, CHAT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, WECHAT_IPC_CHANNELS, AUTOMATION_IPC_CHANNELS, PLANNING_IPC_CHANNELS, AGENT_ISLAND_IPC_CHANNELS, WORKING_IPC_CHANNELS } from '@proma/shared'
 import { USER_PROFILE_IPC_CHANNELS, SETTINGS_IPC_CHANNELS, SCRATCH_PAD_IPC_CHANNELS, APP_ICON_IPC_CHANNELS, DOCK_BADGE_IPC_CHANNELS, STORAGE_IPC_CHANNELS } from '../types'
 import type {
   RuntimeStatus,
@@ -136,6 +136,15 @@ import type {
   UpdatePlanningGroupInput,
   SnoozePlanningReminderInput,
   AgentIslandWindowSnapshot,
+  WorkingAuthState,
+  WorkingClientConfig,
+  WorkingLoginInput,
+  WorkingSessionHistory,
+  WorkingSessionSummary,
+  WorkingSkill,
+  WorkingUser,
+  WorkingWorkspace,
+  WorkingWorkspaceInput,
 } from '@proma/shared'
 import type {
   UserProfile,
@@ -225,6 +234,18 @@ export interface ElectronAPI {
   windowIsMaximized: () => Promise<boolean>
   /** 订阅窗口最大化/还原事件 */
   onWindowResize: (callback: () => void) => () => void
+
+  // ===== Copis Working 后端（不暴露 token） =====
+  getWorkingConfig: () => Promise<WorkingClientConfig>
+  getWorkingAuthState: () => Promise<WorkingAuthState>
+  loginWorking: (input: WorkingLoginInput) => Promise<WorkingAuthState>
+  logoutWorking: () => Promise<WorkingAuthState>
+  getWorkingCurrentUser: () => Promise<WorkingUser>
+  listWorkingWorkspaces: () => Promise<WorkingWorkspace[]>
+  saveWorkingWorkspace: (input: WorkingWorkspaceInput) => Promise<WorkingWorkspace>
+  listWorkingSessions: () => Promise<WorkingSessionSummary[]>
+  getWorkingSessionHistory: (runId: string, sessionId?: string) => Promise<WorkingSessionHistory>
+  listWorkingSkills: () => Promise<WorkingSkill[]>
 
   // ===== 渠道管理相关 =====
 
@@ -1112,7 +1133,7 @@ export interface ElectronAPI {
   migrationParseImportFile: (filePath: string) => Promise<unknown>
   /** 确认导入 */
   migrationConfirmImport: (options: unknown) => Promise<{ success: boolean }>
-  /** 打开文件选择对话框（选择 .proma-backup 或 .proma-share） */
+  /** 打开文件选择对话框（选择 .copis-backup/.copis-share，也兼容旧版 .proma 文件） */
   migrationOpenFileDialog: () => Promise<string | null>
   /** 打开文件保存对话框（选择导出路径） */
   migrationSaveFileDialog: (mode: string) => Promise<string | null>
@@ -1288,6 +1309,18 @@ const electronAPI: ElectronAPI = {
     window.addEventListener('resize', handler)
     return () => window.removeEventListener('resize', handler)
   },
+
+  // Copis Working 后端
+  getWorkingConfig: () => ipcRenderer.invoke(WORKING_IPC_CHANNELS.GET_CONFIG),
+  getWorkingAuthState: () => ipcRenderer.invoke(WORKING_IPC_CHANNELS.GET_AUTH_STATE),
+  loginWorking: (input: WorkingLoginInput) => ipcRenderer.invoke(WORKING_IPC_CHANNELS.LOGIN, input),
+  logoutWorking: () => ipcRenderer.invoke(WORKING_IPC_CHANNELS.LOGOUT),
+  getWorkingCurrentUser: () => ipcRenderer.invoke(WORKING_IPC_CHANNELS.GET_CURRENT_USER),
+  listWorkingWorkspaces: () => ipcRenderer.invoke(WORKING_IPC_CHANNELS.LIST_WORKSPACES),
+  saveWorkingWorkspace: (input: WorkingWorkspaceInput) => ipcRenderer.invoke(WORKING_IPC_CHANNELS.SAVE_WORKSPACE, input),
+  listWorkingSessions: () => ipcRenderer.invoke(WORKING_IPC_CHANNELS.LIST_SESSIONS),
+  getWorkingSessionHistory: (runId: string, sessionId?: string) => ipcRenderer.invoke(WORKING_IPC_CHANNELS.GET_SESSION_HISTORY, runId, sessionId),
+  listWorkingSkills: () => ipcRenderer.invoke(WORKING_IPC_CHANNELS.LIST_SKILLS),
 
   // 渠道管理
   listChannels: () => {
