@@ -16,6 +16,7 @@ import {
   getAgentWorkspacesIndexPath,
   getAgentWorkspacesDir,
   getAgentWorkspacePath,
+  getDefaultProjectRootPath,
   getWorkspaceMcpPath,
   getWorkspaceSkillsDir,
   getWorkspaceFilesDir,
@@ -482,17 +483,33 @@ export function deleteAgentWorkspace(id: string): void {
   console.log(`[Agent 工作区] 已删除工作区: ${removed.name} (slug: ${removed.slug})`)
 }
 
-/** 确保默认工作区存在，首次启动时自动创建（slug: default） */
+/** 确保默认项目的本地根目录存在且可读写。 */
+function ensureDefaultProjectRootPath(): string {
+  const projectRootPath = getDefaultProjectRootPath()
+  mkdirSync(projectRootPath, { recursive: true })
+
+  const status = getLocalProjectRootStatus(projectRootPath)
+  if (status !== 'available') {
+    throw new Error(`默认项目目录不可用: ${projectRootPath}（${status ?? 'unknown'}）`)
+  }
+
+  return realpathSync(resolve(projectRootPath))
+}
+
+/** 确保默认工作区存在，首次启动时自动创建（slug: default）。 */
 export function ensureDefaultWorkspace(): AgentWorkspace {
   const index = readIndex()
   let defaultWs = index.workspaces.find((w) => w.slug === 'default')
 
   if (!defaultWs) {
     const now = Date.now()
+    const projectRootPath = ensureDefaultProjectRootPath()
     defaultWs = {
       id: randomUUID(),
       name: '默认项目',
       slug: 'default',
+      projectRootPath,
+      allowWorkspaceWrite: true,
       createdAt: now,
       updatedAt: now,
     }
@@ -506,8 +523,29 @@ export function ensureDefaultWorkspace(): AgentWorkspace {
 
     console.log('[Agent 工作区] 已创建默认项目')
   } else {
-    // 迁移兼容：确保已有默认工作区包含 plugin manifest
+    let needsWrite = false
+
+    // 旧版本默认项目没有本地项目根，迁移到用户文稿下的 Copis 目录。
+    // 已经重新关联过其他目录的用户配置保持不变。
+    if (!defaultWs.projectRootPath) {
+      defaultWs.projectRootPath = ensureDefaultProjectRootPath()
+      needsWrite = true
+    }
+
+    // 默认项目明确允许 Agent 直接写入项目根，避免新会话退回计划模式。
+    if (defaultWs.allowWorkspaceWrite !== true) {
+      defaultWs.allowWorkspaceWrite = true
+      needsWrite = true
+    }
+
+    // 迁移兼容：确保已有默认工作区包含 plugin manifest。
     ensurePluginManifest(defaultWs.slug, defaultWs.name)
+
+    if (needsWrite) {
+      defaultWs.updatedAt = Date.now()
+      writeIndex(index)
+      console.log(`[Agent 工作区] 已迁移默认项目: ${defaultWs.projectRootPath}`)
+    }
   }
 
   return defaultWs

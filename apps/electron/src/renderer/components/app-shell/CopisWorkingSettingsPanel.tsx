@@ -1,5 +1,5 @@
 import * as React from 'react'
-import { useAtom } from 'jotai'
+import { useAtom, useSetAtom } from 'jotai'
 import {
   ArrowLeft,
   Clipboard,
@@ -7,6 +7,7 @@ import {
   ClipboardList,
   Crown,
   Gem,
+  GraduationCap,
   LogOut,
   MessageSquare,
   RefreshCw,
@@ -18,6 +19,7 @@ import type {
   WorkingSettingsSnapshot,
 } from '@proma/shared'
 import { workingAuthStateAtom } from '@/atoms/working-atoms'
+import { tabsAtom, activeTabIdAtom, openTab, TUTORIAL_TAB_ID, TUTORIAL_TAB_TITLE } from '@/atoms/tab-atoms'
 import { CopisWorkingMessageSettingsPanel } from './CopisWorkingMessageSettingsPanel'
 import { CopisWorkingOrdersPanel } from './CopisWorkingOrdersPanel'
 import './CopisWorkingSettingsPanel.css'
@@ -28,6 +30,8 @@ interface CopisWorkingSettingsPanelProps {
 
 export function CopisWorkingSettingsPanel({ onClose }: CopisWorkingSettingsPanelProps): React.ReactElement {
   const [authState, setAuthState] = useAtom(workingAuthStateAtom)
+  const [tabs, setTabs] = useAtom(tabsAtom)
+  const setActiveTabId = useSetAtom(activeTabIdAtom)
   const [settings, setSettings] = React.useState<WorkingSettingsSnapshot | null>(null)
   const [activeSection, setActiveSection] = React.useState<'settings' | 'orders' | 'messages'>('settings')
   const [loading, setLoading] = React.useState(true)
@@ -132,6 +136,13 @@ export function CopisWorkingSettingsPanel({ onClose }: CopisWorkingSettingsPanel
     }
   }
 
+  const handleOpenTutorial = (): void => {
+    const result = openTab(tabs, { type: 'tutorial', sessionId: TUTORIAL_TAB_ID, title: TUTORIAL_TAB_TITLE })
+    setTabs(result.tabs)
+    setActiveTabId(result.activeTabId)
+    onClose()
+  }
+
   return (
     <div className="copis-working-settings-view">
       <div className="copis-working-settings-shell">
@@ -140,6 +151,10 @@ export function CopisWorkingSettingsPanel({ onClose }: CopisWorkingSettingsPanel
             <button type="button" className="copis-working-settings-nav-button" onClick={onClose}>
               <ArrowLeft aria-hidden="true" />
               <span>返回对话</span>
+            </button>
+            <button type="button" className="copis-working-settings-nav-button" onClick={handleOpenTutorial}>
+              <GraduationCap aria-hidden="true" />
+              <span>查看使用教程</span>
             </button>
             <button type="button" className={`copis-working-settings-nav-button ${activeSection === 'settings' ? 'active' : ''}`} onClick={() => setActiveSection('settings')}>
               <UserRound aria-hidden="true" />

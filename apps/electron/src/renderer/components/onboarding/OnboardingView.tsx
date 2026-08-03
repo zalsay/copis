@@ -9,13 +9,12 @@
  */
 
 import { useMemo, useState } from 'react'
-import { useAtomValue, useSetAtom } from 'jotai'
-import { GraduationCap, ChevronRight, ChevronLeft, HardDriveDownload, Users } from 'lucide-react'
+import { useAtomValue } from 'jotai'
+import { GraduationCap, ChevronRight, ChevronLeft } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { EnvironmentCheckPanel } from '@/components/environment/EnvironmentCheckPanel'
 import { isShellEnvironmentOkAtom } from '@/atoms/environment'
 import { detectIsWindows } from '@/lib/platform'
-import { migrationImportDialogOpenAtom } from '@/atoms/migration-atoms'
 
 interface OnboardingViewProps {
   onComplete: (openTutorial?: boolean) => void
@@ -25,7 +24,6 @@ export function OnboardingView({ onComplete }: OnboardingViewProps) {
   const [step, setStep] = useState<'welcome' | 'environment'>('welcome')
   const isWindows = useMemo(() => detectIsWindows(), [])
   const shellOk = useAtomValue(isShellEnvironmentOkAtom)
-  const setMigrationImportDialogOpen = useSetAtom(migrationImportDialogOpenAtom)
 
   const handleFinish = async (openTutorial?: boolean) => {
     await window.electronAPI.updateSettings({ onboardingCompleted: true })
@@ -38,10 +36,6 @@ export function OnboardingView({ onComplete }: OnboardingViewProps) {
     } else {
       handleFinish()
     }
-  }
-
-  const handleOpenMigration = () => {
-    setMigrationImportDialogOpen(true)
   }
 
   return (
@@ -72,46 +66,6 @@ export function OnboardingView({ onComplete }: OnboardingViewProps) {
                 </div>
               </button>
 
-              <p className="text-sm text-muted-foreground pt-2">
-                自己或身边的人已经在用 Copis？直接导入现有配置
-              </p>
-
-              <div className="grid grid-cols-2 gap-3">
-                <button
-                  onClick={handleOpenMigration}
-                  className="rounded-xl bg-gradient-to-r from-primary/5 via-primary/10 to-primary/5 border border-primary/15 p-4 flex items-center gap-3 hover:from-primary/10 hover:via-primary/15 hover:to-primary/10 transition-colors text-left"
-                >
-                  <div className="w-10 h-10 rounded-xl bg-primary/10 flex items-center justify-center flex-shrink-0">
-                    <HardDriveDownload size={20} className="text-primary" />
-                  </div>
-                  <div className="flex-1">
-                    <h3 className="text-sm font-semibold text-foreground">从其他设备迁移</h3>
-                    <p className="text-xs text-muted-foreground mt-0.5">
-                      导入自己其他设备上的配置
-                      <br/>
-                      <br/>
-                      需要先在原设备上导出 .copis-backup 文件，再双击导入即可
-                    </p>
-                  </div>
-                </button>
-                <button
-                  onClick={handleOpenMigration}
-                  className="rounded-xl bg-gradient-to-r from-primary/5 via-primary/10 to-primary/5 border border-primary/15 p-4 flex items-center gap-3 hover:from-primary/10 hover:via-primary/15 hover:to-primary/10 transition-colors text-left"
-                >
-                  <div className="w-10 h-10 rounded-xl bg-primary/10 flex items-center justify-center flex-shrink-0">
-                    <Users size={20} className="text-primary" />
-                  </div>
-                  <div className="flex-1">
-                    <h3 className="text-sm font-semibold text-foreground">导入其他用户的配置</h3>
-                    <p className="text-xs text-muted-foreground mt-0.5">
-                      从同事或团队成员处导入环境
-                      <br/>
-                      <br/>
-                      需要先导出 .copis-share 文件，再双击导入即可
-                    </p>
-                  </div>
-                </button>
-              </div>
             </div>
           </div>
 

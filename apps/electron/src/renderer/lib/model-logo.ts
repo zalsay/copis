@@ -112,6 +112,8 @@ import XiaomiLogo from '@/assets/models/xiaomi.png'
 // Proma
 import PromaLogo from '@/assets/models/proma.png'
 import CopisLogo from '@/assets/models/copis.png'
+// Composer 与网页首页页签使用的 macOS Template Logo。
+import CopisTemplateLogo from '../../../resources/proma-logos/iconTemplate@2x.png'
 
 // Cohere
 import CohereLogo from '@/assets/models/cohere.png'
@@ -399,4 +401,4 @@ export function resolveModelProvider(modelId: string, channels: import('@proma/s
 }
 
 /** 默认模型图标 */
-export { CopisLogo, DefaultLogo, PromaLogo }
+export { CopisLogo, CopisTemplateLogo, DefaultLogo, PromaLogo }

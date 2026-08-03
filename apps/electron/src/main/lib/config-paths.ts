@@ -10,6 +10,14 @@ import { mkdirSync, existsSync, cpSync, rmSync, readdirSync, readFileSync } from
 import { homedir } from 'node:os'
 import { rmSyncWithRetry } from './fs-retry'
 
+interface ElectronAppPathProvider {
+  getPath?: (name: 'documents') => string
+}
+
+interface ElectronModuleWithApp {
+  app?: ElectronAppPathProvider
+}
+
 /**
  * 获取配置目录名称
  *
@@ -63,6 +71,26 @@ export function getConfigDir(): string {
   }
 
   return configDir
+}
+
+/**
+ * 获取默认 Agent 项目路径。
+ *
+ * 优先使用 Electron 的系统文稿目录，普通 Node/Bun 测试环境回退到
+ * `~/Documents`，保证开发模式与打包模式都指向用户可直接访问的项目目录。
+ */
+export function getDefaultProjectRootPath(): string {
+  let documentsDir = join(homedir(), 'Documents')
+
+  try {
+    const electron = require('electron') as ElectronModuleWithApp
+    const platformDocumentsDir = electron.app?.getPath?.('documents')
+    if (platformDocumentsDir) documentsDir = platformDocumentsDir
+  } catch {
+    // 普通测试/脚本环境没有 Electron，使用稳定的系统约定路径。
+  }
+
+  return join(documentsDir, 'Copis')
 }
 
 /**

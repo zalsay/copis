@@ -62,3 +62,6 @@ export * from './agent-island'
 
 // Copis Working 客户端相关类型
 export * from './working'
+
+// 内嵌 Chromium 网页页签相关类型
+export * from './web'

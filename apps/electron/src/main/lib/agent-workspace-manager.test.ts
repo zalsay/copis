@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, mock, test } from 'bun:test'
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import * as os from 'node:os'
 import { join } from 'node:path'
 
@@ -15,7 +15,9 @@ const originalPromaDev = process.env.PROMA_DEV
 mock.module('electron', () => ({
   app: {
     isPackaged: true,
-    getPath: () => join(process.env.HOME ?? tempHome, 'Library', 'Application Support'),
+    getPath: (name?: string) => name === 'documents'
+      ? join(process.env.HOME ?? tempHome, 'Documents')
+      : join(process.env.HOME ?? tempHome, 'Library', 'Application Support'),
   },
   safeStorage: {
     isEncryptionAvailable: () => false,
@@ -90,10 +92,42 @@ describe('Agent 工作区 MCP 配置', () => {
 })
 
 describe('项目术语迁移', () => {
-  test('Given 新安装 When 创建默认项目 Then 使用项目名称', () => {
+  test('Given 新安装 When 创建默认项目 Then 绑定文稿目录并允许 Agent 写入', () => {
     const workspace = manager.ensureDefaultWorkspace()
+    const expectedProjectRootPath = realpathSync(join(tempHome, 'Documents', 'Copis'))
 
     expect(workspace.name).toBe('默认项目')
+    expect(workspace.projectRootPath).toBe(expectedProjectRootPath)
+    expect(existsSync(workspace.projectRootPath!)).toBe(true)
+    expect(workspace.allowWorkspaceWrite).toBe(true)
+    expect(manager.getAgentWorkspaceWritableRoot(workspace)).toBe(expectedProjectRootPath)
+  })
+
+  test('Given 旧版本默认项目缺少本地根目录 When 启动迁移 Then 补齐默认路径和写入权限', () => {
+    const legacyWorkspace = {
+      id: 'legacy-default-id',
+      name: '默认项目',
+      slug: 'default',
+      createdAt: 1,
+      updatedAt: 1,
+    }
+    writeFileSync(
+      configPaths.getAgentWorkspacesIndexPath(),
+      JSON.stringify({ version: 2, workspaces: [legacyWorkspace] }),
+      'utf-8',
+    )
+
+    const workspace = manager.ensureDefaultWorkspace()
+    const expectedProjectRootPath = realpathSync(join(tempHome, 'Documents', 'Copis'))
+    const persisted = JSON.parse(readFileSync(configPaths.getAgentWorkspacesIndexPath(), 'utf-8')) as {
+      workspaces: Array<{ id: string; projectRootPath?: string; allowWorkspaceWrite?: boolean }>
+    }
+
+    expect(workspace.id).toBe('legacy-default-id')
+    expect(workspace.projectRootPath).toBe(expectedProjectRootPath)
+    expect(workspace.allowWorkspaceWrite).toBe(true)
+    expect(persisted.workspaces[0]?.projectRootPath).toBe(expectedProjectRootPath)
+    expect(persisted.workspaces[0]?.allowWorkspaceWrite).toBe(true)
   })
 })
 

@@ -91,13 +91,14 @@ import { startHttpApiServer, stopHttpApiServer } from './lib/http-api-server'
 import { createTray, destroyTray, getTray } from './tray'
 import { initializeRuntime } from './lib/runtime-init'
 import { seedDefaultSkills } from './lib/config-paths'
-import { upgradeDefaultSkillsInWorkspaces } from './lib/agent-workspace-manager'
+import { ensureDefaultWorkspace, upgradeDefaultSkillsInWorkspaces } from './lib/agent-workspace-manager'
 import { hasActiveAgentSessions, stopAllAgents, killOrphanedClaudeSubprocesses } from './lib/agent-service'
 import { disposePiMcpConnections } from './lib/adapters/pi-mcp-tools'
 import { markRunningDelegationsAsInterrupted } from './lib/agent-session-manager'
 import { stopAllGenerations } from './lib/chat-service'
 import { configureUpdater, initAutoUpdater, cleanupUpdater } from './lib/updater/auto-updater'
 import { startWorkspaceWatcher, stopWorkspaceWatcher } from './lib/workspace-watcher'
+import { disposeWebTabs, setWebTabHostWindow } from './lib/web-tab-manager'
 import { startChatToolsWatcher, stopChatToolsWatcher } from './lib/chat-tools-watcher'
 import { getIsQuitting, setQuitting } from './lib/app-lifecycle'
 import {
@@ -384,7 +385,7 @@ function createWindow(): void {
   const titleBarOptions = isMac
     ? {
         titleBarStyle: 'hiddenInset' as const,
-        trafficLightPosition: { x: 18, y: 18 },
+        trafficLightPosition: { x: 18, y: 10 },
         vibrancy: 'under-window' as const,
         visualEffectState: 'followWindow' as const,
       }
@@ -411,6 +412,7 @@ function createWindow(): void {
     },
     ...titleBarOptions,
   })
+  setWebTabHostWindow(mainWindow)
   installWindowsZoomInFallback(mainWindow)
 
   // Load the renderer
@@ -499,6 +501,7 @@ function createWindow(): void {
   }
 
   mainWindow.on('closed', () => {
+    disposeWebTabs()
     mainWindow = null
   })
 }
@@ -545,6 +548,15 @@ async function bootstrap(): Promise<void> {
 
   // 同步默认 Skills 模板到 ~/.copis/default-skills/
   safeRun('seedDefaultSkills', seedDefaultSkills)
+
+  // 确保默认 Agent 项目绑定到用户文稿下的 Copis 目录，并允许 Agent 写入。
+  // 同时固定新会话的默认项目，避免渲染进程只依赖工作区列表顺序。
+  safeRun('ensureDefaultWorkspace', () => {
+    const defaultWorkspace = ensureDefaultWorkspace()
+    if (getSettings().agentWorkspaceId !== defaultWorkspace.id) {
+      updateSettings({ agentWorkspaceId: defaultWorkspace.id })
+    }
+  })
 
   // 升级所有工作区中版本过旧的默认 Skills
   safeRun('upgradeDefaultSkillsInWorkspaces', upgradeDefaultSkillsInWorkspaces)
@@ -723,6 +735,7 @@ app.on('window-all-closed', () => {
 app.on('before-quit', () => {
   // 标记正在退出，让 close 事件不再阻止关闭
   setQuitting()
+  disposeWebTabs()
 
   // 关闭本地 HTTP API，避免开发重启时残留端口占用。
   stopHttpApiServer().catch((error: unknown) => {

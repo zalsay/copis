@@ -27,6 +27,8 @@ import { SearchDialog } from './SearchDialog'
 import { detectIsWindows, WINDOW_CONTROLS_INSET_RIGHT } from '@/lib/platform'
 import { cn } from '@/lib/utils'
 import { workingHistorySelectionAtom, workingSettingsOpenAtom } from '@/atoms/working-atoms'
+import { activeWebTabIdAtom } from '@/atoms/web-tabs'
+import { WebBrowserSurface, WebTabBar } from '@/components/web-browser'
 
 const MIN_RIGHT_PANEL_WIDTH = 300
 const MAX_RIGHT_PANEL_WIDTH = 560
@@ -63,6 +65,7 @@ export function AppShell({ contextValue }: AppShellProps): React.ReactElement {
   const workingHistorySelection = useAtomValue(workingHistorySelectionAtom)
   const showRightPanel = appMode === 'agent' && !!currentSessionId && !workingHistorySelection && !automationForm.open && activeView !== 'planning' && activeView !== 'agent-skills'
   const isWindows = React.useMemo(() => detectIsWindows(), [])
+  const activeWebTabId = useAtomValue(activeWebTabIdAtom)
 
   // 左侧边栏可拖拽宽度
   const [leftSidebarWidth, setLeftSidebarWidth] = useAtom(leftSidebarWidthAtom)
@@ -187,8 +190,16 @@ export function AppShell({ contextValue }: AppShellProps): React.ReactElement {
       <WindowControls />
       <SearchDialog />
 
-      <div className="shell-bg relative h-screen w-screen overflow-hidden bg-gradient-to-br from-zinc-50 to-zinc-100 dark:from-zinc-950 dark:to-zinc-900">
-        <div className={cn('flex h-full w-full', (settingsOpen || workingSettingsOpen) && 'hidden')} aria-hidden={settingsOpen || workingSettingsOpen}>
+      <div className="shell-bg relative flex h-screen w-screen flex-col overflow-hidden bg-gradient-to-br from-zinc-50 to-zinc-100 dark:from-zinc-950 dark:to-zinc-900">
+        <WebTabBar />
+        <div className="relative min-h-0 flex-1">
+          <div
+            className={cn(
+              'absolute inset-0 flex h-full w-full',
+              (settingsOpen || workingSettingsOpen || activeWebTabId) && 'invisible pointer-events-none',
+            )}
+            aria-hidden={settingsOpen || workingSettingsOpen || !!activeWebTabId}
+          >
             {/* 左侧边栏：可折叠，可拖拽调整宽度 */}
             <div className={cn(isClassic ? 'p-2 pr-0' : '', 'relative z-[60] crt-sidebar')}>
               <CopisWorkingSidebar width={clampedLeftSidebarWidth} noTransition={isDraggingLeftSidebar} />
@@ -239,17 +250,19 @@ export function AppShell({ contextValue }: AppShellProps): React.ReactElement {
                 <RightSidePanel width={clampedRightPanelWidth} />
               </div>
             )}
+          </div>
+          {activeWebTabId && <WebBrowserSurface />}
+          {settingsOpen && (
+            <div className="absolute inset-0 z-[60]">
+              <SettingsPanel onClose={() => setSettingsOpen(false)} />
+            </div>
+          )}
+          {workingSettingsOpen && (
+            <div className="absolute inset-0 z-[60]">
+              <CopisWorkingSettingsPanel onClose={() => setWorkingSettingsOpen(false)} />
+            </div>
+          )}
         </div>
-        {settingsOpen && (
-          <div className="absolute inset-0 z-[60]">
-            <SettingsPanel onClose={() => setSettingsOpen(false)} />
-          </div>
-        )}
-        {workingSettingsOpen && (
-          <div className="absolute inset-0 z-[60]">
-            <CopisWorkingSettingsPanel onClose={() => setWorkingSettingsOpen(false)} />
-          </div>
-        )}
       </div>
     </AppShellProvider>
   )

@@ -105,6 +105,40 @@ function createHttpMethods(): Record<string, HttpMethod> {
     // ===== 应用设置 =====
     getSettings: () => request('/api/settings'),
     updateSettings: (args) => request('/api/settings', 'PATCH', getArgument(args, 0)),
+    getTutorialContent: async () => {
+      const result = await request<{ content: string | null }>('/api/tutorial')
+      return result.content
+    },
+
+    // ===== Agent 默认项目 =====
+    listAgentWorkspaces: () => request('/api/agent/workspaces'),
+    listAgentSessions: () => request('/api/agent/sessions'),
+    clearAgentCompletionState: (args) => {
+      const sessionId = encodeURIComponent(getArgument<string>(args, 0))
+      return request(`/api/agent/sessions/${sessionId}/clear-completion-state`, 'POST')
+    },
+    createAgentSession: (args) => request('/api/agent/sessions', 'POST', {
+      ...(getArgument<string | undefined>(args, 0) ? { title: getArgument<string>(args, 0) } : {}),
+      ...(getArgument<string | undefined>(args, 2) ? { workspaceId: getArgument<string>(args, 2) } : {}),
+      ...(getArgument<string | undefined>(args, 3) ? { modelId: getArgument<string>(args, 3) } : {}),
+    }),
+    getAgentSessionSDKMessages: (args) => {
+      const sessionId = encodeURIComponent(getArgument<string>(args, 0))
+      return request(`/api/agent/sessions/${sessionId}/messages`)
+        .then((result) => isRecord(result) && Array.isArray(result.messages) ? result.messages : [])
+    },
+    sendAgentMessage: (args) => {
+      const input = getArgument<{ sessionId: string; userMessage: string; modelId?: string }>(args, 0)
+      const sessionId = encodeURIComponent(input.sessionId)
+      return request(`/api/agent/sessions/${sessionId}/messages`, 'POST', {
+        userMessage: input.userMessage,
+        ...(input.modelId ? { modelId: input.modelId } : {}),
+      })
+    },
+    stopAgent: (args) => {
+      const sessionId = encodeURIComponent(getArgument<string>(args, 0))
+      return request(`/api/agent/sessions/${sessionId}/stop`, 'POST')
+    },
 
     // ===== 浏览器可替代的系统能力 =====
     getSystemTheme: () => Promise.resolve(window.matchMedia('(prefers-color-scheme: dark)').matches),
@@ -170,15 +204,34 @@ function createAgentIslandFallback(): Record<string, unknown> {
   })
 }
 
+function createWebTabsFallback(): Record<string, unknown> {
+  const emptySnapshot = (): { tabs: never[]; activeTabId: null } => ({ tabs: [], activeTabId: null })
+  return {
+    list: () => Promise.resolve(emptySnapshot()),
+    create: () => Promise.reject(new Error('浏览器模式不支持内嵌 Chromium 页签')),
+    activate: () => Promise.resolve(emptySnapshot()),
+    close: () => Promise.resolve(emptySnapshot()),
+    navigate: () => Promise.reject(new Error('浏览器模式不支持内嵌 Chromium 页签')),
+    updateBounds: () => Promise.resolve(),
+    goBack: () => Promise.resolve(emptySnapshot()),
+    goForward: () => Promise.resolve(emptySnapshot()),
+    reload: () => Promise.resolve(emptySnapshot()),
+    sendCdpCommand: () => Promise.reject(new Error('浏览器模式不支持 CDP')),
+    onChanged: (_callback: unknown) => () => {},
+  }
+}
+
 function createHttpApiBridge(): Window['electronAPI'] {
   const methods = createHttpMethods()
   const agentIsland = createAgentIslandFallback()
+  const webTabs = createWebTabsFallback()
 
   const bridge = new Proxy<Record<string, unknown>>({}, {
     get: (_target, property: string | symbol) => {
       if (typeof property !== 'string' || property === 'then') return undefined
       if (property === 'updater') return undefined
       if (property === 'agentIsland') return agentIsland
+      if (property === 'webTabs') return webTabs
       if (property === 'updateSettingsSync') return () => false
       if (property === 'saveScratchPadSync') return () => true
       if (property === 'loadScratchPad') return () => Promise.resolve('')

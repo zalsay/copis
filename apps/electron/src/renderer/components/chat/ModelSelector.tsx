@@ -31,7 +31,7 @@ import {
 } from '@/atoms/chat-atoms'
 import { useConversationModelOptional } from '@/hooks/useConversationSettings'
 import { useConversationIdOptional } from '@/contexts/session-context'
-import { CopisLogo, getModelLogo, getChannelLogo, DefaultLogo } from '@/lib/model-logo'
+import { CopisTemplateLogo, getModelLogo, getChannelLogo, DefaultLogo } from '@/lib/model-logo'
 import { cn } from '@/lib/utils'
 import type { Channel, ModelOption, ProviderType } from '@proma/shared'
 import { ChannelPlanQuotaBadge } from './ChannelPlanQuotaBadge'
@@ -95,7 +95,9 @@ interface ModelSelectorProps {
   onModelSelect?: (option: ModelOption) => void
   /** 触发按钮是否显示「渠道 · 模型」（默认只显示模型名） */
   showChannelInTrigger?: boolean
-  /** composer 触发按钮是否使用 Copis 品牌 Logo */
+  /** 触发按钮中覆盖渠道显示名，不影响选择弹窗中的完整渠道名 */
+  triggerChannelName?: string
+  /** 是否在触发器和下拉列表中统一使用 Copis 品牌 Logo */
   useCopisLogo?: boolean
   /** 不在此选择器中显示的供应商（例如 Chat 暂不支持的协议） */
   excludedProviders?: readonly ProviderType[]
@@ -110,6 +112,7 @@ export function ModelSelector({
   externalSelectedModel,
   onModelSelect,
   showChannelInTrigger = false,
+  triggerChannelName,
   useCopisLogo = false,
   excludedProviders,
   useSharedOpenState = false,
@@ -276,7 +279,7 @@ export function ModelSelector({
           >
             {displayModelInfo ? (
               <img
-                src={useCopisLogo ? CopisLogo : getModelLogo(displayModelInfo.modelId, displayModelInfo.provider)}
+                src={useCopisLogo ? CopisTemplateLogo : getModelLogo(displayModelInfo.modelId, displayModelInfo.provider)}
                 alt={useCopisLogo ? 'Copis' : displayModelInfo.modelName}
                 className="size-4 rounded object-cover"
               />
@@ -285,13 +288,15 @@ export function ModelSelector({
             )}
             <span className="max-w-[200px] truncate">
               {displayModelInfo
-                ? (showChannelInTrigger ? `${displayModelInfo.channelName} · ${displayModelInfo.modelName}` : displayModelInfo.modelName)
+                ? (showChannelInTrigger
+                  ? `${triggerChannelName ?? displayModelInfo.channelName} · ${displayModelInfo.modelName}`
+                  : displayModelInfo.modelName)
                 : '选择模型'}
             </span>
             <ChevronDown className="size-3" />
           </button>
         </TooltipTrigger>
-        <TooltipContent side="top">渠道：{displayModelInfo?.channelName}</TooltipContent>
+        <TooltipContent side="top">渠道：{triggerChannelName ?? displayModelInfo?.channelName}</TooltipContent>
       </Tooltip>
 
       {/* 模型选择 Dialog */}
@@ -334,7 +339,7 @@ export function ModelSelector({
                     {/* 供应商标题行 - 灰色背景 */}
                     <div className="flex items-center gap-2 px-4 py-2 bg-muted/50 border-b border-border/30">
                       <img
-                        src={channel ? getChannelLogo(channel) : DefaultLogo}
+                        src={useCopisLogo ? CopisTemplateLogo : channel ? getChannelLogo(channel) : DefaultLogo}
                         alt={first.channelName}
                         className="size-5 rounded object-cover"
                       />
@@ -370,7 +375,7 @@ export function ModelSelector({
                           )}
                         >
                           <img
-                            src={getModelLogo(option.modelId, option.provider)}
+                            src={useCopisLogo ? CopisTemplateLogo : getModelLogo(option.modelId, option.provider)}
                             alt={option.modelName}
                             className="size-5 rounded object-cover flex-shrink-0"
                           />

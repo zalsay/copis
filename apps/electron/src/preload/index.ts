@@ -6,7 +6,7 @@
  */
 
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
-import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, CHAT_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, INSTALLER_IPC_CHANNELS, PROXY_IPC_CHANNELS, GITHUB_RELEASE_IPC_CHANNELS, SYSTEM_PROMPT_IPC_CHANNELS, CHAT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, WECHAT_IPC_CHANNELS, AUTOMATION_IPC_CHANNELS, PLANNING_IPC_CHANNELS, AGENT_ISLAND_IPC_CHANNELS, WORKING_IPC_CHANNELS } from '@proma/shared'
+import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, CHAT_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, INSTALLER_IPC_CHANNELS, PROXY_IPC_CHANNELS, GITHUB_RELEASE_IPC_CHANNELS, SYSTEM_PROMPT_IPC_CHANNELS, CHAT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, WECHAT_IPC_CHANNELS, AUTOMATION_IPC_CHANNELS, PLANNING_IPC_CHANNELS, AGENT_ISLAND_IPC_CHANNELS, WORKING_IPC_CHANNELS, WEB_IPC_CHANNELS } from '@proma/shared'
 import { USER_PROFILE_IPC_CHANNELS, SETTINGS_IPC_CHANNELS, SCRATCH_PAD_IPC_CHANNELS, APP_ICON_IPC_CHANNELS, DOCK_BADGE_IPC_CHANNELS, STORAGE_IPC_CHANNELS } from '../types'
 import type {
   RuntimeStatus,
@@ -155,6 +155,11 @@ import type {
   WorkingSkill,
   WorkingUser,
   WorkingVerifyPasswordResetCodeInput,
+  CreateWebTabInput,
+  NavigateWebTabInput,
+  SendWebTabCdpCommandInput,
+  UpdateWebTabBoundsInput,
+  WebTabsSnapshot,
   WorkingWorkspace,
   WorkingWorkspaceInput,
 } from '@proma/shared'
@@ -233,6 +238,32 @@ export interface ElectronAPI {
   openExternal: (url: string) => Promise<void>
   /** 在系统剪贴板中写入纯文本 */
   writeClipboardText: (text: string) => Promise<void>
+
+  // ===== 内嵌 Chromium 网页页签 =====
+  webTabs: {
+    /** 获取网页页签快照。 */
+    list: () => Promise<WebTabsSnapshot>
+    /** 创建并默认激活网页页签。 */
+    create: (input?: CreateWebTabInput) => Promise<WebTabsSnapshot>
+    /** 激活网页页签，传 null 返回 Copis 首页。 */
+    activate: (tabId: string | null) => Promise<WebTabsSnapshot>
+    /** 关闭网页页签。 */
+    close: (tabId: string) => Promise<WebTabsSnapshot>
+    /** 导航到网页地址。 */
+    navigate: (input: NavigateWebTabInput) => Promise<WebTabsSnapshot>
+    /** 同步网页原生视图尺寸。 */
+    updateBounds: (input: UpdateWebTabBoundsInput) => Promise<void>
+    /** 网页后退。 */
+    goBack: (tabId: string) => Promise<WebTabsSnapshot>
+    /** 网页前进。 */
+    goForward: (tabId: string) => Promise<WebTabsSnapshot>
+    /** 刷新网页。 */
+    reload: (tabId: string) => Promise<WebTabsSnapshot>
+    /** 发送 CDP 命令。 */
+    sendCdpCommand: (input: SendWebTabCdpCommandInput) => Promise<unknown>
+    /** 订阅主进程推送的网页页签状态。 */
+    onChanged: (callback: (snapshot: WebTabsSnapshot) => void) => () => void
+  }
 
   // ===== 窗口控制（Windows 自定义标题栏）=====
 
@@ -1310,6 +1341,25 @@ const electronAPI: ElectronAPI = {
 
   writeClipboardText: (text: string) => {
     return ipcRenderer.invoke(IPC_CHANNELS.WRITE_CLIPBOARD_TEXT, text)
+  },
+
+  // 内嵌 Chromium 网页页签
+  webTabs: {
+    list: () => ipcRenderer.invoke(WEB_IPC_CHANNELS.LIST) as Promise<WebTabsSnapshot>,
+    create: (input?: CreateWebTabInput) => ipcRenderer.invoke(WEB_IPC_CHANNELS.CREATE, input) as Promise<WebTabsSnapshot>,
+    activate: (tabId: string | null) => ipcRenderer.invoke(WEB_IPC_CHANNELS.ACTIVATE, tabId) as Promise<WebTabsSnapshot>,
+    close: (tabId: string) => ipcRenderer.invoke(WEB_IPC_CHANNELS.CLOSE, tabId) as Promise<WebTabsSnapshot>,
+    navigate: (input: NavigateWebTabInput) => ipcRenderer.invoke(WEB_IPC_CHANNELS.NAVIGATE, input) as Promise<WebTabsSnapshot>,
+    updateBounds: (input: UpdateWebTabBoundsInput) => ipcRenderer.invoke(WEB_IPC_CHANNELS.UPDATE_BOUNDS, input) as Promise<void>,
+    goBack: (tabId: string) => ipcRenderer.invoke(WEB_IPC_CHANNELS.GO_BACK, tabId) as Promise<WebTabsSnapshot>,
+    goForward: (tabId: string) => ipcRenderer.invoke(WEB_IPC_CHANNELS.GO_FORWARD, tabId) as Promise<WebTabsSnapshot>,
+    reload: (tabId: string) => ipcRenderer.invoke(WEB_IPC_CHANNELS.RELOAD, tabId) as Promise<WebTabsSnapshot>,
+    sendCdpCommand: (input: SendWebTabCdpCommandInput) => ipcRenderer.invoke(WEB_IPC_CHANNELS.SEND_CDP_COMMAND, input) as Promise<unknown>,
+    onChanged: (callback: (snapshot: WebTabsSnapshot) => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, snapshot: WebTabsSnapshot): void => callback(snapshot)
+      ipcRenderer.on(WEB_IPC_CHANNELS.STATE_CHANGED, listener)
+      return () => { ipcRenderer.removeListener(WEB_IPC_CHANNELS.STATE_CHANGED, listener) }
+    },
   },
 
   // 窗口控制

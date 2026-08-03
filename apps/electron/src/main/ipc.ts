@@ -9,7 +9,7 @@ import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'nod
 import { existsSync, realpathSync, rmSync, readFileSync, writeFileSync, mkdirSync, statSync } from 'node:fs'
 import { writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, CHAT_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, INSTALLER_IPC_CHANNELS, PROXY_IPC_CHANNELS, GITHUB_RELEASE_IPC_CHANNELS, SYSTEM_PROMPT_IPC_CHANNELS, CHAT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, WECHAT_IPC_CHANNELS, AUTOMATION_IPC_CHANNELS, PLANNING_IPC_CHANNELS, PLANNING_CONFLICT_ERROR, WORKING_IPC_CHANNELS, COPIS_WORKING_CHANNEL_ID, isPromaPermissionMode, isWorkingMode, normalizePathForCompare } from '@proma/shared'
+import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, CHAT_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, INSTALLER_IPC_CHANNELS, PROXY_IPC_CHANNELS, GITHUB_RELEASE_IPC_CHANNELS, SYSTEM_PROMPT_IPC_CHANNELS, CHAT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, WECHAT_IPC_CHANNELS, AUTOMATION_IPC_CHANNELS, PLANNING_IPC_CHANNELS, PLANNING_CONFLICT_ERROR, WORKING_IPC_CHANNELS, WEB_IPC_CHANNELS, COPIS_WORKING_CHANNEL_ID, isPromaPermissionMode, isWorkingMode, normalizePathForCompare } from '@proma/shared'
 import { USER_PROFILE_IPC_CHANNELS, SETTINGS_IPC_CHANNELS, SCRATCH_PAD_IPC_CHANNELS, QUICK_TASK_IPC_CHANNELS, VOICE_DICTATION_IPC_CHANNELS, APP_ICON_IPC_CHANNELS, DOCK_BADGE_IPC_CHANNELS, STORAGE_IPC_CHANNELS } from '../types'
 import type {
   QuickTaskSubmitInput,
@@ -137,6 +137,10 @@ import type {
   SnoozePlanningReminderInput,
   WorkingFeedbackInput,
   WorkingReceiveChannel,
+  CreateWebTabInput,
+  NavigateWebTabInput,
+  SendWebTabCdpCommandInput,
+  UpdateWebTabBoundsInput,
 } from '@proma/shared'
 import type { UserProfile, AppSettings } from '../types'
 import { getRuntimeStatus, getGitRepoStatus, reinitializeRuntime } from './lib/runtime-init'
@@ -189,6 +193,18 @@ import { getSettings, updateSettings } from './lib/settings-service'
 import { refreshAgentIslandConfiguration } from './lib/agent-island-service'
 import { setBuiltinMcpUserEnabled } from './lib/builtin-mcp/settings'
 import { setDockBadgeCount } from './lib/dock-badge-service'
+import {
+  activateWebTab,
+  closeWebTab,
+  createWebTab,
+  goBackWebTab,
+  goForwardWebTab,
+  listWebTabs,
+  navigateWebTab,
+  reloadWebTab,
+  sendWebTabCdpCommand,
+  updateWebTabBounds,
+} from './lib/web-tab-manager'
 
 import { checkEnvironment } from './lib/environment-checker'
 import { fetchInstallerManifest, findInstallerSource } from './lib/installer-manifest'
@@ -894,6 +910,18 @@ function releaseDirectoryWatcherIfUnreferenced(dirPath: string): void {
 
 export function registerIpcHandlers(): void {
   console.log('[IPC] 正在注册 IPC 处理器...')
+
+  // ===== 内嵌 Chromium 网页页签 =====
+  ipcMain.handle(WEB_IPC_CHANNELS.LIST, () => listWebTabs())
+  ipcMain.handle(WEB_IPC_CHANNELS.CREATE, (_event, input?: CreateWebTabInput) => createWebTab(input))
+  ipcMain.handle(WEB_IPC_CHANNELS.ACTIVATE, (_event, tabId: string | null) => activateWebTab(tabId))
+  ipcMain.handle(WEB_IPC_CHANNELS.CLOSE, (_event, tabId: string) => closeWebTab(tabId))
+  ipcMain.handle(WEB_IPC_CHANNELS.NAVIGATE, (_event, input: NavigateWebTabInput) => navigateWebTab(input))
+  ipcMain.handle(WEB_IPC_CHANNELS.UPDATE_BOUNDS, (_event, input: UpdateWebTabBoundsInput) => updateWebTabBounds(input))
+  ipcMain.handle(WEB_IPC_CHANNELS.GO_BACK, (_event, tabId: string) => goBackWebTab(tabId))
+  ipcMain.handle(WEB_IPC_CHANNELS.GO_FORWARD, (_event, tabId: string) => goForwardWebTab(tabId))
+  ipcMain.handle(WEB_IPC_CHANNELS.RELOAD, (_event, tabId: string) => reloadWebTab(tabId))
+  ipcMain.handle(WEB_IPC_CHANNELS.SEND_CDP_COMMAND, (_event, input: SendWebTabCdpCommandInput) => sendWebTabCdpCommand(input))
 
   // ===== Copis Working 后端（仅账号与业务元数据） =====
 

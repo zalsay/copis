@@ -1000,6 +1000,44 @@
   background-color: hsl(var(--tab-surface) / 0.42);
 }
 
+/* 网页标签：激活态底部使用 Chrome 式反向圆角，与标签栏平滑衔接。 */
+.web-tab-shape {
+  position: relative;
+  z-index: 1;
+  isolation: isolate;
+  border-radius: 8px 8px 0 0;
+}
+
+.web-tab-shape[aria-current='page'] {
+  z-index: 2;
+}
+
+.web-tab-shape[aria-current='page']::before,
+.web-tab-shape[aria-current='page']::after {
+  position: absolute;
+  bottom: 0;
+  z-index: 0;
+  width: 12px;
+  height: 12px;
+  content: '';
+  pointer-events: none;
+}
+
+.web-tab-shape[aria-current='page']::before {
+  left: -12px;
+  background: radial-gradient(circle at top left, transparent 12px, hsl(var(--muted)) 12.5px);
+}
+
+.web-tab-shape[aria-current='page']::after {
+  right: -12px;
+  background: radial-gradient(circle at top right, transparent 12px, hsl(var(--muted)) 12.5px);
+}
+
+.web-tab-shape > * {
+  position: relative;
+  z-index: 1;
+}
+
 [data-input-mode] > div:first-child {
   background-color: hsl(var(--input-surface)) !important;
 }

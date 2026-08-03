@@ -75,7 +75,7 @@ function TutorialTabContent(): React.ReactElement {
   React.useEffect(() => {
     window.electronAPI.getTutorialContent()
       .then((result) => {
-        if (result === null) {
+        if (typeof result !== 'string' || !result.trim()) {
           setLoadState('error')
           return
         }

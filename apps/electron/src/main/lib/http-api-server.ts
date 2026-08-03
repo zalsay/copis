@@ -2,9 +2,20 @@ import { createServer } from 'node:http'
 import type { IncomingMessage, Server, ServerResponse } from 'node:http'
 import type { WorkingApiClient } from './working-api-client'
 import { getWorkingApiClient } from './working-api-service'
+import { getTutorialContent } from './tutorial-service'
 import { getSettings, updateSettings } from './settings-service'
 import type { AppSettings } from '../../types'
+import {
+  COPIS_WORKING_CHANNEL_ID,
+  COPIS_WORKING_EXPERT_MODEL_ID,
+  COPIS_WORKING_FAST_MODEL_ID,
+} from '@proma/shared'
 import type {
+  AgentMessage,
+  AgentSendInput,
+  AgentSessionMeta,
+  AgentWorkspace,
+  SDKMessage,
   WorkingFeedbackInput,
   WorkingLoginInput,
   WorkingPasswordResetInput,
@@ -52,6 +63,32 @@ interface HttpApiDependencies {
   getWorkingClient: () => WorkingApiFacade
   getAppSettings: () => AppSettings
   updateAppSettings: (updates: Partial<AppSettings>) => AppSettings
+  getAgentApi?: () => Promise<AgentHttpFacade>
+}
+
+interface AgentHttpFacade {
+  ensureDefaultWorkspace: () => AgentWorkspace
+  listAgentWorkspaces: () => AgentWorkspace[]
+  listAgentSessions: () => AgentSessionMeta[]
+  getAgentSessionMeta: (id: string) => AgentSessionMeta | undefined
+  clearAgentCompletionState: (id: string) => AgentSessionMeta
+  createAgentSession: (
+    title?: string,
+    channelId?: string,
+    workspaceId?: string,
+    modelId?: string,
+    agentRuntime?: 'claude' | 'pi',
+  ) => AgentSessionMeta
+  getAgentSessionSDKMessages: (id: string) => SDKMessage[]
+  runAgentHeadless: (
+    input: AgentSendInput,
+    callbacks: {
+      onError: (error: string) => void
+      onComplete: (messages?: AgentMessage[]) => void
+      onTitleUpdated: (title: string) => void
+    },
+  ) => Promise<void>
+  stopAgent: (sessionId: string) => void
 }
 
 const defaultDependencies: HttpApiDependencies = {
@@ -59,6 +96,41 @@ const defaultDependencies: HttpApiDependencies = {
   getAppSettings: getSettings,
   updateAppSettings: updateSettings,
 }
+
+let defaultAgentApiPromise: Promise<AgentHttpFacade> | null = null
+
+/** 延迟加载 Agent 服务，避免仅访问健康检查时初始化 Electron Agent 运行时。 */
+function getDefaultAgentApi(): Promise<AgentHttpFacade> {
+  if (!defaultAgentApiPromise) {
+    defaultAgentApiPromise = Promise.all([
+      import('./agent-service'),
+      import('./agent-session-manager'),
+      import('./agent-workspace-manager'),
+    ]).then(([agentService, sessionManager, workspaceManager]) => ({
+      ensureDefaultWorkspace: workspaceManager.ensureDefaultWorkspace,
+      listAgentWorkspaces: workspaceManager.listAgentWorkspaces,
+      listAgentSessions: sessionManager.listAgentSessions,
+      getAgentSessionMeta: sessionManager.getAgentSessionMeta,
+      clearAgentCompletionState: (id: string) => {
+        const current = sessionManager.getAgentSessionMeta(id)
+        if (!current) throw new Error(`Agent session not found: ${id}`)
+        const updates: Partial<AgentSessionMeta> = {}
+        if (current.manualWorking) updates.manualWorking = false
+        if (current.completedButUnconfirmed) updates.completedButUnconfirmed = false
+        return Object.keys(updates).length > 0
+          ? sessionManager.updateAgentSessionMeta(id, updates)
+          : current
+      },
+      createAgentSession: sessionManager.createAgentSession,
+      getAgentSessionSDKMessages: sessionManager.getAgentSessionSDKMessages,
+      runAgentHeadless: agentService.runAgentHeadless,
+      stopAgent: agentService.stopAgent,
+    }))
+  }
+  return defaultAgentApiPromise
+}
+
+defaultDependencies.getAgentApi = getDefaultAgentApi
 
 class HttpApiRequestError extends Error {
   readonly status: number
@@ -223,6 +295,160 @@ function makeAuthState(client: WorkingApiFacade): {
     user: client.getCachedUser(),
     backendUrl: client.baseUrl,
   }
+}
+
+function getAgentApi(dependencies: HttpApiDependencies): Promise<AgentHttpFacade> {
+  return dependencies.getAgentApi?.() ?? getDefaultAgentApi()
+}
+
+function getRequiredAgentSession(api: AgentHttpFacade, sessionId: string): AgentSessionMeta {
+  const session = api.getAgentSessionMeta(sessionId)
+  if (!session) {
+    throw new HttpApiRequestError('Agent 会话不存在', 404, 'agent_session_not_found')
+  }
+  return session
+}
+
+async function handleAgentRequest(
+  request: IncomingMessage,
+  url: URL,
+  segments: string[],
+  dependencies: HttpApiDependencies,
+): Promise<{ status: number; body: unknown }> {
+  const api = await getAgentApi(dependencies)
+  const method = request.method ?? 'GET'
+  const body = method === 'GET' || method === 'DELETE' ? undefined : await readJsonBody(request)
+  const bodyRecord = body === undefined ? undefined : requireRecord(body)
+  const resource = segments[2]
+  const action = segments[3]
+  const sessionAction = segments[4]
+
+  if (resource === 'bootstrap' && method === 'GET') {
+    const defaultWorkspace = api.ensureDefaultWorkspace()
+    const workspaces = api.listAgentWorkspaces()
+    const settings = dependencies.getAppSettings()
+    const workspace = workspaces.find((item) => item.id === settings.agentWorkspaceId) ?? defaultWorkspace
+    return {
+      status: 200,
+      body: {
+        workspace,
+        workspaces,
+        channelId: COPIS_WORKING_CHANNEL_ID,
+        modelId: COPIS_WORKING_FAST_MODEL_ID,
+        allowWorkspaceWrite: workspace.allowWorkspaceWrite === true,
+      },
+    }
+  }
+
+  if (resource === 'workspaces' && method === 'GET') {
+    api.ensureDefaultWorkspace()
+    return { status: 200, body: api.listAgentWorkspaces() }
+  }
+
+  if (resource === 'sessions' && action === undefined && method === 'GET') {
+    return { status: 200, body: api.listAgentSessions() }
+  }
+
+  if (resource === 'sessions' && action === undefined && method === 'POST') {
+    const defaultWorkspace = api.ensureDefaultWorkspace()
+    const workspaceId = optionalString(bodyRecord ?? {}, 'workspaceId') ?? defaultWorkspace.id
+    const workspace = api.listAgentWorkspaces().find((item) => item.id === workspaceId)
+    if (!workspace) {
+      throw new HttpApiRequestError('Agent 项目不存在', 404, 'agent_workspace_not_found')
+    }
+
+    const requestedModelId = optionalString(bodyRecord ?? {}, 'modelId')
+    const modelId = requestedModelId === COPIS_WORKING_EXPERT_MODEL_ID
+      ? COPIS_WORKING_EXPERT_MODEL_ID
+      : COPIS_WORKING_FAST_MODEL_ID
+    const session = api.createAgentSession(
+      optionalString(bodyRecord ?? {}, 'title'),
+      COPIS_WORKING_CHANNEL_ID,
+      workspace.id,
+      modelId,
+      'pi',
+    )
+    return { status: 201, body: session }
+  }
+
+  if (resource !== 'sessions' || action === undefined) {
+    throw new HttpApiRequestError('Agent API 路径不存在', 404, 'not_found')
+  }
+
+  const sessionId = decodePathSegment(action)
+  const session = getRequiredAgentSession(api, sessionId)
+
+  if (sessionAction === 'messages' && method === 'GET') {
+    return {
+      status: 200,
+      body: {
+        session,
+        messages: api.getAgentSessionSDKMessages(sessionId),
+      },
+    }
+  }
+
+  if (sessionAction === 'clear-completion-state' && method === 'POST') {
+    return { status: 200, body: api.clearAgentCompletionState(sessionId) }
+  }
+
+  if (sessionAction === 'messages' && method === 'POST') {
+    const userMessage = requireString(bodyRecord ?? {}, 'userMessage', 'Agent 消息不能为空')
+    const startedAt = Date.now()
+    let runError: string | undefined
+    const requestedModelId = optionalString(bodyRecord ?? {}, 'modelId')
+    const modelId = requestedModelId === COPIS_WORKING_EXPERT_MODEL_ID
+      ? COPIS_WORKING_EXPERT_MODEL_ID
+      : requestedModelId === COPIS_WORKING_FAST_MODEL_ID
+        ? COPIS_WORKING_FAST_MODEL_ID
+        : session.modelId ?? COPIS_WORKING_FAST_MODEL_ID
+    const workingMode = modelId === COPIS_WORKING_EXPERT_MODEL_ID ? 'expert' : 'fast'
+
+    const input: AgentSendInput = {
+      sessionId,
+      userMessage,
+      rawUserMessage: userMessage,
+      channelId: session.channelId ?? COPIS_WORKING_CHANNEL_ID,
+      modelId,
+      agentRuntime: 'pi',
+      workspaceId: session.workspaceId,
+      workingMode,
+      permissionModeOverride: 'bypassPermissions',
+      startedAt,
+      triggeredBy: 'user',
+    }
+
+    await api.runAgentHeadless(input, {
+      onError: (error) => {
+        runError = error
+      },
+      onComplete: () => {
+        // 完整消息从本地 JSONL 重新读取，确保响应与桌面端历史回放一致。
+      },
+      onTitleUpdated: () => {
+        // 标题更新由 Agent 会话索引持久化处理。
+      },
+    })
+
+    if (runError) {
+      throw new HttpApiRequestError(runError, 422, 'agent_run_failed')
+    }
+
+    return {
+      status: 200,
+      body: {
+        session: api.getAgentSessionMeta(sessionId),
+        messages: api.getAgentSessionSDKMessages(sessionId),
+      },
+    }
+  }
+
+  if (sessionAction === 'stop' && method === 'POST') {
+    api.stopAgent(sessionId)
+    return { status: 204, body: undefined }
+  }
+
+  throw new HttpApiRequestError('Agent API 路径不存在', 404, 'not_found')
 }
 
 async function handleWorkingRequest(
@@ -435,12 +661,21 @@ async function handleRequest(
       return
     }
 
+    if (url.pathname === '/api/tutorial' && request.method === 'GET') {
+      sendJson(response, 200, { content: getTutorialContent() }, origin)
+      return
+    }
+
     const segments = url.pathname.split('/').filter(Boolean)
-    if (segments[0] !== 'api' || segments[1] !== 'working') {
+    if (segments[0] !== 'api') {
       throw new HttpApiRequestError('HTTP API 路径不存在', 404, 'not_found')
     }
 
-    const result = await handleWorkingRequest(request, url, segments, dependencies)
+    const result = segments[1] === 'agent'
+      ? await handleAgentRequest(request, url, segments, dependencies)
+      : segments[1] === 'working'
+        ? await handleWorkingRequest(request, url, segments, dependencies)
+        : (() => { throw new HttpApiRequestError('HTTP API 路径不存在', 404, 'not_found') })()
     if (result.status === 204) {
       sendEmpty(response, 204, origin)
     } else {
