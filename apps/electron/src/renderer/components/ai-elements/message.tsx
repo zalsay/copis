@@ -6,7 +6,7 @@
  *
  * 包含：
  * - Message — 根容器，`from` 属性区分 user/assistant
- * - MessageHeader — 头像 + 模型名
+ * - MessageHeader — 头像
  * - MessageContent — 内容区域
  * - MessageActions — 操作按钮容器
  * - MessageAction — 单个操作按钮（可选 Tooltip）
@@ -51,13 +51,13 @@ interface MessageProps extends HTMLAttributes<HTMLDivElement> {
   from: MessageRole
 }
 
-/** 消息根容器，user 自动右对齐 */
+/** 消息根容器，user 消息自动靠右 */
 export function Message({ className, from, ...props }: MessageProps): React.ReactElement {
   return (
     <div
       className={cn(
-        'message-item group flex w-full flex-col gap-0.5 rounded-[10px] px-2.5 py-2.5',
-        from === 'user' ? 'is-user' : 'is-assistant',
+        'relative message-item group flex w-full flex-col gap-0.5 rounded-[10px] px-2.5 py-2.5',
+        from === 'user' ? 'is-user items-end' : 'is-assistant',
         className
       )}
       {...props}
@@ -65,22 +65,16 @@ export function Message({ className, from, ...props }: MessageProps): React.Reac
   )
 }
 
-// ===== MessageHeader 头像 + 模型名 =====
+// ===== MessageHeader 头像 =====
 
 interface MessageHeaderProps extends HTMLAttributes<HTMLDivElement> {
-  /** 模型名称 */
-  model?: string
   /** 头像元素 */
   logo?: ReactNode
-  /** 消息时间戳 */
-  time?: string
 }
 
-/** 消息头部（user 时自动隐藏） */
+/** 消息头像，与正文保持同一行的垂直位置 */
 export function MessageHeader({
-  model,
   logo,
-  time,
   className,
   children,
   ...props
@@ -88,8 +82,8 @@ export function MessageHeader({
   return (
     <div
       className={cn(
-        'flex items-start gap-2.5 mb-2.5',
-        'group-[.is-user]:hidden',
+        'absolute left-2.5 top-2.5 flex items-start gap-2.5',
+        'group-[.is-user]:left-auto group-[.is-user]:right-2.5',
         className
       )}
       {...props}
@@ -99,10 +93,6 @@ export function MessageHeader({
           {logo}
         </div>
       )}
-      <div className="flex flex-col justify-between h-[35px]">
-        {model && <span className="text-sm font-semibold text-foreground/60 leading-none">{model}</span>}
-        {time && <span className="message-time text-[10px] text-foreground/[0.38] leading-none">{time}</span>}
-      </div>
       {children}
     </div>
   )
@@ -114,7 +104,7 @@ type MessageContentProps = HTMLAttributes<HTMLDivElement>
 
 /**
  * 消息内容区域
- * - user 消息：pl-[46px] 与头像对齐 + 浅色气泡背景
+ * - user 消息：内容靠右对齐 + 浅色气泡背景
  * - assistant 消息：pl-[46px] 与头像对齐
  */
 export function MessageContent({
@@ -126,7 +116,7 @@ export function MessageContent({
     <div
       className={cn(
         'flex max-w-full min-w-0 flex-col gap-2 overflow-hidden pl-[46px]',
-        'group-[.is-user]:text-foreground group-[.is-user]:items-start',
+        'group-[.is-user]:w-full group-[.is-user]:pl-0 group-[.is-user]:text-foreground group-[.is-user]:items-end',
         'group-[.is-assistant]:w-full group-[.is-assistant]:text-foreground',
         className
       )}
@@ -151,6 +141,7 @@ export function MessageActions({
     <div
       className={cn(
         'flex items-center gap-2.5 text-muted-foreground/60 hover:text-muted-foreground/90 transition-colors duration-200',
+        'group-[.is-user]:pl-0 group-[.is-user]:justify-end',
         className
       )}
       {...props}

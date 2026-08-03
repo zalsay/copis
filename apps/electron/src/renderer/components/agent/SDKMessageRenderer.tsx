@@ -46,14 +46,12 @@ import {
   UserMessageContent,
   TurnFileMapProvider,
 } from '@/components/ai-elements/message'
-import { UserAvatar } from '@/components/chat/UserAvatar'
 import { CopyButton } from '@/components/chat/CopyButton'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { formatMessageTime } from '@/components/chat/ChatMessageItem'
-import { CopisLogo, resolveModelDisplayName } from '@/lib/model-logo'
-import { userProfileAtom } from '@/atoms/user-profile'
-import { channelsAtom, modelSelectorOpenAtom } from '@/atoms/chat-atoms'
+import { CopisLogo } from '@/lib/model-logo'
+import { modelSelectorOpenAtom } from '@/atoms/chat-atoms'
 import { agentSessionPendingFilesAtom, agentSessionsAtom, agentWorkspacesAtom } from '@/atoms/agent-atoms'
 import { activeSessionIdAtom } from '@/atoms/tab-atoms'
 import { automationsAtom, automationFormAtom, automationToDraft } from '@/atoms/automation-atoms'
@@ -391,7 +389,6 @@ export interface AssistantTurnRendererProps {
 }
 
 export function AssistantTurnRenderer({ turn, allMessages, basePath, onFork, onRewind, onCreateTodo, onRetry, onRetryInNewSession, onCompact, onRelinkProjectRoot, onRestoreProjectRoot, isStreaming, stoppedByUser, sessionModelId }: AssistantTurnRendererProps): React.ReactElement | null {
-  const channels = useAtomValue(channelsAtom)
   // 收集所有 assistant 消息的内容块，保留 parent_tool_use_id 关联
   interface EnrichedBlock {
     block: SDKContentBlock
@@ -528,8 +525,6 @@ export function AssistantTurnRenderer({ turn, allMessages, basePath, onFork, onR
   return (
     <Message from="assistant">
       <MessageHeader
-        model={turn.model ? resolveModelDisplayName(turn.model, channels) : undefined}
-        time={turn.createdAt ? formatMessageTime(turn.createdAt) : undefined}
         logo={<AssistantLogo />}
       />
       <MessageContent>
@@ -590,6 +585,11 @@ export function AssistantTurnRenderer({ turn, allMessages, basePath, onFork, onR
         return (
           <MessageActions className="pl-[46px] mt-0.5 min-h-[28px] justify-start">
             {hasDuration && <DurationBadge durationMs={durationMs!} usage={usage} />}
+            {turn.createdAt && (
+              <span className="message-time text-xs text-foreground/[0.38] leading-none tabular-nums">
+                {formatMessageTime(turn.createdAt)}
+              </span>
+            )}
             {textContent && <CopyButton content={textContent} />}
             {textContent && onCreateTodo && (
               <MessageAction tooltip="标记为 Todo" onClick={() => onCreateTodo(textContent)}>
@@ -627,7 +627,6 @@ export function SDKMessageRenderer({
   showHeader = true,
   sessionModelId,
 }: SDKMessageRendererProps): React.ReactElement | null {
-  const channels = useAtomValue(channelsAtom)
   const msgType = message.type
 
   // assistant 消息：遍历内容块渲染
@@ -662,9 +661,6 @@ export function SDKMessageRenderer({
       return null
     }
 
-    const model = aMsg._channelModelId || aMsg.message?.model || sessionModelId
-    const meta = extractMeta(message)
-
     // 检测是否有主要内容（text 块）
     const hasTextContent = blocks.some(
       (b) => b.type === 'text' && 'text' in b && !!(b as { text: string }).text
@@ -674,8 +670,6 @@ export function SDKMessageRenderer({
       <Message from="assistant">
         {showHeader && (
           <MessageHeader
-            model={model ? resolveModelDisplayName(model, channels) : undefined}
-            time={meta.createdAt ? formatMessageTime(meta.createdAt) : undefined}
             logo={<AssistantLogo />}
           />
         )}
@@ -915,7 +909,6 @@ function ScheduledRunBadge(): React.ReactElement {
 }
 
 function UserInputMessage({ message }: { message: SDKUserMessage }): React.ReactElement {
-  const userProfile = useAtomValue(userProfileAtom)
   const rawText = extractUserText(message) ?? ''
   const isScheduledRun = rawText.includes(SCHEDULED_RUN_MARKER)
   const { files: attachedFiles, quotes, text } = parseAttachedFiles(stripScheduledRunMarker(rawText))
@@ -979,23 +972,8 @@ function UserInputMessage({ message }: { message: SDKUserMessage }): React.React
 
   return (
     <Message from="user">
-      <div className="flex items-start gap-2.5 mb-2.5">
-        <UserAvatar avatar={userProfile.avatar} size={35} />
-        <div className="flex flex-col justify-between h-[35px]">
-          <span className="text-sm font-semibold text-foreground/60 leading-none">{userProfile.userName}</span>
-          {(meta.createdAt || isScheduledRun) && (
-            <span className="flex items-center gap-2 leading-none">
-              {meta.createdAt && (
-                <span className="message-time text-[10px] text-foreground/[0.38]">{formatMessageTime(meta.createdAt)}</span>
-              )}
-              {isScheduledRun && (
-                <ScheduledRunBadge />
-              )}
-            </span>
-          )}
-        </div>
-      </div>
       <MessageContent>
+        {isScheduledRun && <ScheduledRunBadge />}
         {/* 引用文件 Chip */}
         {quotes.length > 0 && (
           <div className="flex flex-wrap gap-1.5 mb-2">
@@ -1041,6 +1019,11 @@ function UserInputMessage({ message }: { message: SDKUserMessage }): React.React
       {text && (
         <MessageActions className="pl-[46px] mt-0.5">
           <CopyButton content={text} />
+          {meta.createdAt && (
+            <span className="message-time text-xs text-foreground/[0.38] leading-none tabular-nums">
+              {formatMessageTime(meta.createdAt)}
+            </span>
+          )}
         </MessageActions>
       )}
     </Message>
@@ -1325,8 +1308,6 @@ function ErrorMessage({ message, onRetry, onRetryInNewSession, onCompact, onReli
   return (
     <Message from="assistant">
       <MessageHeader
-        model={undefined}
-        time={meta.createdAt ? formatMessageTime(meta.createdAt) : undefined}
         logo={
           <div className="size-[35px] rounded-[25%] bg-destructive/10 flex items-center justify-center">
             <AlertTriangle size={18} className="text-destructive" />
@@ -1346,6 +1327,11 @@ function ErrorMessage({ message, onRetry, onRetryInNewSession, onCompact, onReli
       </MessageContent>
       <MessageActions className="pl-[46px] mt-0.5">
         <CopyButton content={copyText} />
+        {meta.createdAt && (
+          <span className="message-time text-xs text-foreground/[0.38] leading-none tabular-nums">
+            {formatMessageTime(meta.createdAt)}
+          </span>
+        )}
       </MessageActions>
     </Message>
   )

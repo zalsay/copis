@@ -23,11 +23,9 @@ import { ScrollMinimap } from '@/components/ai-elements/scroll-minimap'
 import type { MinimapItem } from '@/components/ai-elements/scroll-minimap'
 import { StickyUserMessage } from '@/components/ai-elements/sticky-user-message'
 import { useSmoothStream } from '@proma/ui'
-import { formatMessageTime } from '@/components/chat/ChatMessageItem'
-import { CopisLogo, resolveModelDisplayName } from '@/lib/model-logo'
+import { CopisLogo } from '@/lib/model-logo'
 import { userProfileAtom } from '@/atoms/user-profile'
 import { tabMinimapCacheAtom } from '@/atoms/tab-atoms'
-import { channelsAtom } from '@/atoms/chat-atoms'
 import { ScrollPositionManager } from '@/hooks/useScrollPositionMemory'
 import { cn } from '@/lib/utils'
 import { Spinner } from '@/components/ui/spinner'
@@ -450,7 +448,7 @@ export function DurationBadge({ durationMs, usage }: { durationMs: number; usage
   return (
     <Tooltip>
       <TooltipTrigger asChild>
-        <span className="text-[15px] tabular-nums font-light cursor-default">
+        <span className="text-xs tabular-nums font-light leading-none cursor-default">
           {formatDuration(durationMs)}
         </span>
       </TooltipTrigger>
@@ -491,7 +489,6 @@ function AgentRunningIndicator({ startedAt }: { startedAt?: number }): React.Rea
 export function AgentMessages({ sessionId, sessionModelId, messagesLoaded, persistedSDKMessages, streaming, streamState, liveMessages, sessionPath, attachedDirs, stoppedByUser, onRetry, onRetryInNewSession, onRelinkProjectRoot, onRestoreProjectRoot, onFork, onRewind, onCreateTodo, onCompact }: AgentMessagesProps): React.ReactElement {
   const userProfile = useAtomValue(userProfileAtom)
   const setMinimapCache = useSetAtom(tabMinimapCacheAtom)
-  const channels = useAtomValue(channelsAtom)
   const historySelectionRootRef = React.useRef<HTMLDivElement>(null)
   /** 淡入控制：切换会话时先隐藏，等布局完成后再显示。 */
   const [ready, setReady] = React.useState(false)
@@ -533,8 +530,6 @@ export function AgentMessages({ sessionId, sessionModelId, messagesLoaded, persi
 
   // 从 streamState 属性中计算派生值
   const streamingContent = streamState?.content ?? ''
-  const streamingModelId = streamState?.model || sessionModelId
-  const agentStreamingModel = streamingModelId ? resolveModelDisplayName(streamingModelId, channels) : undefined
   const retrying = streamState?.retrying
   const startedAt = streamState?.startedAt
 
@@ -769,8 +764,6 @@ export function AgentMessages({ sessionId, sessionModelId, messagesLoaded, persi
               {!hasLiveAssistantContent && !suppressAgentRunning && (streaming || smoothContent || retrying) && (
                 <Message from="assistant">
                   <MessageHeader
-                    model={agentStreamingModel}
-                    time={formatMessageTime(Date.now())}
                     logo={<AssistantLogo />}
                   />
                   <MessageContent>

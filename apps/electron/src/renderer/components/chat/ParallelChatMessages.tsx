@@ -12,7 +12,7 @@
 import { Fragment, useMemo, useRef, useEffect } from 'react'
 import { useAtomValue } from 'jotai'
 import { Loader2 } from 'lucide-react'
-import { ChatMessageItem, formatMessageTime } from './ChatMessageItem'
+import { ChatMessageItem } from './ChatMessageItem'
 import type { InlineEditSubmitPayload } from './ChatMessageItem'
 import { ContextDivider } from '@/components/ai-elements/context-divider'
 import {
@@ -205,8 +205,6 @@ function MessageColumn({
         {side === 'assistant' && (streaming || streamingContent || streamingReasoning) && (
           <Message from="assistant">
             <MessageHeader
-              model={streamingModel ?? undefined}
-              time={formatMessageTime(Date.now())}
               logo={
                 <img
                   src={getModelLogo(streamingModel ?? '', resolveModelProvider(streamingModel ?? '', channels))}

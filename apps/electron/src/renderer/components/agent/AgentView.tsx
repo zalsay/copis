@@ -2750,7 +2750,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
 
         {/* 输入区域 — 交互横幅显示时隐藏，由横幅替代 */}
         {!hasBannerOverlay && (
-        <div className={cn('px-2.5 pb-2.5 md:px-[18px] md:pb-[18px]', isNewConversation && 'copis-agent-new-session-input')} data-input-mode="agent">
+        <div className={cn('mx-auto w-full max-w-[760px] px-2.5 pb-2.5 md:px-[18px] md:pb-[18px]', isNewConversation && 'copis-agent-new-session-input')} data-input-mode="agent">
           <div
             className={cn(
               'rounded-[17px] border-[0.5px] border-border bg-background/70 backdrop-blur-sm transition-all duration-200',

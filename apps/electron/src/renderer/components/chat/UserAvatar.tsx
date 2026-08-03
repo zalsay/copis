@@ -14,6 +14,8 @@ import { cn } from '@/lib/utils'
 interface UserAvatarProps {
   /** 头像内容（emoji 字符串 或 data:image/* URL） */
   avatar: string
+  /** 昵称，用于非图片头像显示首字 */
+  name?: string
   /** 尺寸（像素），默认 35 */
   size?: number
   className?: string
@@ -25,13 +27,19 @@ function isImageUrl(avatar: string): boolean {
   return avatar.startsWith('data:image') || avatar.startsWith('http')
 }
 
+function getNameInitial(name: string): string {
+  return Array.from(name.trim())[0] ?? ''
+}
+
 export function UserAvatar({
   avatar,
+  name,
   size = 35,
   className,
   onClick,
 }: UserAvatarProps): React.ReactElement {
   const fontSize = Math.round(size * 0.5)
+  const nameInitial = name ? getNameInitial(name) : ''
 
   if (isImageUrl(avatar)) {
     return (
@@ -58,14 +66,16 @@ export function UserAvatar({
     <div
       className={cn(
         'shrink-0 flex items-center justify-center rounded-[20%]',
-        'bg-foreground/[0.04] dark:bg-foreground/[0.08] border-[0.5px] border-foreground/10',
+        nameInitial
+          ? 'bg-violet-600 text-white dark:bg-violet-500 border-[0.5px] border-violet-300/50'
+          : 'bg-foreground/[0.04] dark:bg-foreground/[0.08] border-[0.5px] border-foreground/10',
         onClick && 'cursor-pointer hover:opacity-80 transition-opacity',
         className
       )}
       style={{ width: size, height: size, fontSize }}
       onClick={onClick}
     >
-      {avatar}
+      {nameInitial || avatar}
     </div>
   )
 }

@@ -33,9 +33,7 @@ import { CopyButton } from './CopyButton'
 import { MigrateToAgentButton } from './MigrateToAgentButton'
 import { DeleteMessageDialog } from './DeleteMessageDialog'
 import { InlineEditForm } from './InlineEditForm'
-import { UserAvatar } from './UserAvatar'
-import { getModelLogo, resolveModelDisplayName, resolveModelProvider } from '@/lib/model-logo'
-import { userProfileAtom } from '@/atoms/user-profile'
+import { getModelLogo, resolveModelProvider } from '@/lib/model-logo'
 import { channelsAtom } from '@/atoms/chat-atoms'
 import type { ChatMessage } from '@proma/shared'
 import type { InlineEditSubmitPayload } from './InlineEditForm'
@@ -133,7 +131,6 @@ export const ChatMessageItem = React.memo(function ChatMessageItem({
 }: ChatMessageItemProps): React.ReactElement {
   const [deleteDialogOpen, setDeleteDialogOpen] = React.useState(false)
   const [isDeleting, setIsDeleting] = React.useState(false)
-  const userProfile = useAtomValue(userProfileAtom)
   const channels = useAtomValue(channelsAtom)
   const parsedUserContent = React.useMemo(
     () => message.role === 'user' ? parseQuotedMessageContent(message.content) : { quotes: [], text: message.content },
@@ -164,11 +161,9 @@ export const ChatMessageItem = React.memo(function ChatMessageItem({
   return (
     <>
       <Message from={messageFrom}>
-        {/* assistant 头像 + 模型名 + 时间 */}
+        {/* assistant 头像 */}
         {message.role === 'assistant' && (
           <MessageHeader
-            model={message.model ? resolveModelDisplayName(message.model, channels) : undefined}
-            time={formatMessageTime(message.createdAt)}
             logo={
               <img
                 src={getModelLogo(message.model ?? '', resolveModelProvider(message.model ?? '', channels))}
@@ -177,17 +172,6 @@ export const ChatMessageItem = React.memo(function ChatMessageItem({
               />
             }
           />
-        )}
-
-        {/* user 头像 + 用户名 + 时间 */}
-        {message.role === 'user' && (
-          <div className="flex items-start gap-2.5 mb-2.5">
-            <UserAvatar avatar={userProfile.avatar} size={35} />
-            <div className="flex flex-col justify-between h-[35px]">
-              <span className="text-sm font-semibold text-foreground/60 leading-none">{userProfile.userName}</span>
-              <span className="message-time text-[10px] text-foreground/[0.38] leading-none">{formatMessageTime(message.createdAt)}</span>
-            </div>
-          </div>
         )}
 
         <MessageContent className={isInlineEditing ? 'w-full' : undefined}>
@@ -306,6 +290,9 @@ export const ChatMessageItem = React.memo(function ChatMessageItem({
             {message.role === 'assistant' && message.stopped && !message.error && (
               <span className="text-[11px] text-foreground/40 ml-1">（已中止）</span>
             )}
+            <span className="message-time text-xs text-foreground/[0.38] leading-none tabular-nums">
+              {formatMessageTime(message.createdAt)}
+            </span>
           </MessageActions>
         )}
       </Message>

@@ -16,7 +16,7 @@ import * as React from 'react'
 import { useAtomValue, useSetAtom } from 'jotai'
 import { Loader2 } from 'lucide-react'
 import { WelcomeEmptyState } from '@/components/welcome/WelcomeEmptyState'
-import { ChatMessageItem, formatMessageTime } from './ChatMessageItem'
+import { ChatMessageItem } from './ChatMessageItem'
 import type { InlineEditSubmitPayload } from './ChatMessageItem'
 import { ChatToolActivityIndicator } from './ChatToolActivityIndicator'
 import { ParallelChatMessages } from './ParallelChatMessages'
@@ -238,10 +238,6 @@ export function ChatMessages({
   const transitioning = needsInstant || transitioningCooldown
 
   // 缓存 streaming MessageHeader 的 props，避免每帧 re-render 导致闪烁
-  const streamingTime = React.useMemo(
-    () => formatMessageTime(startedAt ?? Date.now()),
-    [startedAt]
-  )
   const streamingLogo = React.useMemo(
     () => (
       <img
@@ -407,8 +403,6 @@ export function ChatMessages({
             {(streaming || smoothContent || smoothReasoning) && (
               <Message from="assistant">
                 <MessageHeader
-                  model={streamingModel ?? undefined}
-                  time={streamingTime}
                   logo={streamingLogo}
                 />
                 <MessageContent>
