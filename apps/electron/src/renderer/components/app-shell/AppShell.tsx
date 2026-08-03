@@ -22,10 +22,11 @@ import { interfaceVariantAtom } from '@/atoms/theme'
 import { settingsOpenAtom } from '@/atoms/settings-tab'
 import { WindowControls } from '@/components/WindowControls'
 import { SettingsPanel } from '@/components/settings/SettingsPanel'
+import { CopisWorkingSettingsPanel } from './CopisWorkingSettingsPanel'
 import { SearchDialog } from './SearchDialog'
 import { detectIsWindows, WINDOW_CONTROLS_INSET_RIGHT } from '@/lib/platform'
 import { cn } from '@/lib/utils'
-import { workingHistorySelectionAtom } from '@/atoms/working-atoms'
+import { workingHistorySelectionAtom, workingSettingsOpenAtom } from '@/atoms/working-atoms'
 
 const MIN_RIGHT_PANEL_WIDTH = 300
 const MAX_RIGHT_PANEL_WIDTH = 560
@@ -54,6 +55,8 @@ export function AppShell({ contextValue }: AppShellProps): React.ReactElement {
   const interfaceVariant = useAtomValue(interfaceVariantAtom)
   const settingsOpen = useAtomValue(settingsOpenAtom)
   const setSettingsOpen = useSetAtom(settingsOpenAtom)
+  const workingSettingsOpen = useAtomValue(workingSettingsOpenAtom)
+  const setWorkingSettingsOpen = useSetAtom(workingSettingsOpenAtom)
   const isClassic = interfaceVariant === 'classic'
   // 定时任务表单打开时隐藏右侧文件面板，让中间区域扩展到全宽（表单内含自己的右栏配置）
   const activeView = useAtomValue(activeViewAtom)
@@ -185,7 +188,7 @@ export function AppShell({ contextValue }: AppShellProps): React.ReactElement {
       <SearchDialog />
 
       <div className="shell-bg relative h-screen w-screen overflow-hidden bg-gradient-to-br from-zinc-50 to-zinc-100 dark:from-zinc-950 dark:to-zinc-900">
-        <div className={cn('flex h-full w-full', settingsOpen && 'hidden')} aria-hidden={settingsOpen}>
+        <div className={cn('flex h-full w-full', (settingsOpen || workingSettingsOpen) && 'hidden')} aria-hidden={settingsOpen || workingSettingsOpen}>
             {/* 左侧边栏：可折叠，可拖拽调整宽度 */}
             <div className={cn(isClassic ? 'p-2 pr-0' : '', 'relative z-[60] crt-sidebar')}>
               <CopisWorkingSidebar width={clampedLeftSidebarWidth} noTransition={isDraggingLeftSidebar} />
@@ -240,6 +243,11 @@ export function AppShell({ contextValue }: AppShellProps): React.ReactElement {
         {settingsOpen && (
           <div className="absolute inset-0 z-[60]">
             <SettingsPanel onClose={() => setSettingsOpen(false)} />
+          </div>
+        )}
+        {workingSettingsOpen && (
+          <div className="absolute inset-0 z-[60]">
+            <CopisWorkingSettingsPanel onClose={() => setWorkingSettingsOpen(false)} />
           </div>
         )}
       </div>

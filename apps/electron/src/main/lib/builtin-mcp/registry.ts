@@ -21,6 +21,7 @@ export interface BuiltinMcpInjectContext {
   workspaceId?: string
   workspaceSlug?: string
   agentCwd?: string
+  workspaceWriteRoot?: string
   permissionMode?: PromaPermissionMode
   triggeredBy?: 'user' | 'automation' | 'delegation'
   sessionMeta?: AgentSessionMeta
@@ -41,6 +42,7 @@ export async function injectBuiltinMcpServers(ctx: BuiltinMcpInjectContext): Pro
       ctx.mcpServers,
       ctx.sessionId,
       ctx.agentCwd,
+      ctx.workspaceWriteRoot,
     ))
   }
 

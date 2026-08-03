@@ -13,7 +13,7 @@ import { normalizeWorkingMode, type AgentRuntime, type PromaPermissionMode, type
 import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { getUserProfile } from './user-profile-service'
-import { getAgentWorkspaceBySlug, getProjectFilesPath, getWorkspaceMcpConfig } from './agent-workspace-manager'
+import { getAgentWorkspaceBySlug, getAgentWorkspaceWritableRoot, getProjectFilesPath, getWorkspaceMcpConfig } from './agent-workspace-manager'
 import { getConfigDirName } from './config-paths'
 import { buildGitAttributionPromptSection, isGitAttributionEnabled } from './agent-git-attribution'
 import { getSettings } from './settings-service'
@@ -37,6 +37,8 @@ interface SystemPromptContext {
   sessionId: string
   /** 当前会话的实际 cwd；历史会话可能仍使用私有会话工作台。 */
   agentCwd?: string
+  /** 当前工作区允许 Agent 写入的根目录。 */
+  workspaceWriteRoot?: string
   permissionMode: PromaPermissionMode
   /** 当前会话是否已注入 Proma collaboration 工具 */
   collaborationAvailable?: boolean
@@ -50,9 +52,13 @@ function buildWorkspacePromptPaths(workspaceSlug: string, sessionId: string, age
   const configDirName = getConfigDirName()
   const workspaceRoot = join(homedir(), configDirName, 'agent-workspaces', workspaceSlug)
   const sessionDir = join(workspaceRoot, sessionId)
+  const workspace = getAgentWorkspaceBySlug(workspaceSlug)
   const projectRoot = getProjectFilesPath(workspaceSlug)
+  const workspaceWriteRoot = workspace
+    ? getAgentWorkspaceWritableRoot(workspace)
+    : projectRoot
   const effectiveAgentCwd = agentCwd ?? projectRoot
-  const isLocalProject = Boolean(getAgentWorkspaceBySlug(workspaceSlug)?.projectRootPath)
+  const isLocalProject = Boolean(workspace?.projectRootPath)
   const autoMemoryDir = join(workspaceRoot, '.claude', 'memory')
 
   return {
@@ -61,6 +67,8 @@ function buildWorkspacePromptPaths(workspaceSlug: string, sessionId: string, age
     sessionContextDir: join(sessionDir, '.context'),
     claudeSessionSettingsPath: join(sessionDir, '.claude', 'settings.json'),
     projectRoot,
+    workspaceWriteRoot,
+    workspaceWriteRestricted: workspace?.allowWorkspaceWrite === false,
     workspaceContextDir: join(projectRoot, '.context'),
     agentCwd: effectiveAgentCwd,
     isProjectCwd: resolve(effectiveAgentCwd) === resolve(projectRoot),
@@ -97,6 +105,8 @@ export function buildSystemPrompt(ctx: SystemPromptContext): string {
     : undefined
   const sessionContextDir = workspacePaths?.sessionContextDir ?? '.context'
   const workspaceContextDir = workspacePaths?.workspaceContextDir ?? '.context'
+  const workspaceWriteRoot = ctx.workspaceWriteRoot ?? workspacePaths?.workspaceWriteRoot
+  const workspaceWriteRestricted = workspacePaths?.workspaceWriteRestricted ?? false
   const workingMode = normalizeWorkingMode(ctx.workingMode)
 
   const sections: string[] = []
@@ -136,14 +146,14 @@ export function buildSystemPrompt(ctx: SystemPromptContext): string {
   sections.push(workingMode === 'expert'
     ? `## Working 专家模式
 
-当前 Copis Working 模式为专家模式（对应原 Working 的 \`export\` 语义）。本次运行仍使用用户选择的本地 Pi 模型，不调用远程 Working Agent，也不上传本地工作区文件。
+当前 Copis Working 模式为专家模式（对应 edu-api 的 \`export\` alias）。本次运行在本地执行工具和文件操作，模型请求直接发送到 edu-api 的 Working Responses 接口，不调用远程 Working Agent，也不上传本地工作区文件。
 
 - 先拆解任务和关键约束，再执行必要的工具操作。
 - 对重要结论、文件修改和外部影响做实际验证；遇到不确定点时优先检查事实。
 - 任务复杂时可以使用可见任务追踪和协作能力，但不要为了形式增加无关步骤。`
     : `## Working 快速模式
 
-当前 Copis Working 模式为快速模式（对应原 Working 的 \`fast\` 语义）。本次运行仍使用用户选择的本地 Pi 模型，不调用远程 Working Agent，也不上传本地工作区文件。
+当前 Copis Working 模式为快速模式（对应 edu-api 的 \`fast\` alias）。本次运行在本地执行工具和文件操作，模型请求直接发送到 edu-api 的 Working Responses 接口，不调用远程 Working Agent，也不上传本地工作区文件。
 
 - 优先直接处理用户目标，减少不必要的探索和往返。
 - 保留完成任务所需的必要检查；不要用未经验证的猜测代替结果。
@@ -188,7 +198,8 @@ Proma 提供内置 \`collaboration\` 工具，用来创建真实可见、可追�
 
 - 项目名称: ${ctx.workspaceName}
 - Proma 工作区目录: ${workspacePaths?.workspaceRoot}（存放 MCP、Skills、Proma CLAUDE.md 与 Memory 等配置）
-- 项目根目录: ${workspacePaths?.projectRoot}（${workspacePaths?.isLocalProject ? '用户选择的本地原始文件夹' : 'Proma 托管的空白项目目录'}）
+- 项目根目录: ${workspacePaths?.projectRoot}（${workspacePaths?.isLocalProject ? '用户选择的本地原始文件夹' : 'Copis 托管的空白项目目录'}）
+- Agent 可写目录: ${workspaceWriteRoot}${workspaceWriteRestricted ? '（原始项目根只读，工作区产出只能写入此目录）' : '（已允许直接写入项目根）'}
 - 会话工作台目录: ${workspacePaths?.sessionDir}（存放当前会话的私有临时文件与会话级 Context）
 ${agentRuntime === 'claude' ? `- Claude 会话 sidecar: ${workspacePaths?.claudeSessionSettingsPath}（Proma 托管的运行时配置，不是项目文件或记忆；不要修改）
 ` : ''}- 实际工作目录（cwd）: ${workspacePaths?.agentCwd}（${workspacePaths?.isProjectCwd ? '当前会话直接在项目根目录中工作' : '当前会话仍使用私有会话工作台，不等同于项目根目录'}；以每条消息的 \`<working_directory>\` 为准）
@@ -210,7 +221,7 @@ ${agentRuntime === 'claude' ? `- Claude 会话 sidecar: ${workspacePaths?.claude
 - 跨会话有参考价值的内容（调研报告、架构分析等） → 项目级 Context 的绝对路径
 - 用户明确指定了位置时，按用户要求
 - 新会话开始时，**两个目录都要检查**以恢复完整上下文
-- 本地项目根目录中的改动会直接写入用户的原始文件；不要把它当作可随意清理的临时目录`)
+- ${workspaceWriteRestricted ? '本地项目根目录保持只读，工作区产出只能写入上方 Agent 可写目录；' : '本地项目根目录中的改动会直接写入用户的原始文件；'}不要把项目根当作可随意清理的临时目录`)
   }
 
   // 自主执行与最小澄清策略

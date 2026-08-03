@@ -11,6 +11,7 @@ import type { AgentSessionMeta, AgentEvent, AgentWorkspace, AgentPendingFile, Re
 import { PROMA_DEFAULT_PERMISSION_MODE } from '@proma/shared'
 import { calculateDockBadgeCount, countPendingRequests } from '@/lib/dock-badge-count'
 import type { AgentQueuedMessage } from '@/lib/agent-message-queue'
+import { sanitizeAgentSessions } from '@/lib/agent-session-list'
 
 /** 活动状态 */
 export type ActivityStatus = 'pending' | 'running' | 'completed' | 'error' | 'backgrounded'
@@ -271,7 +272,20 @@ export interface AgentPendingPrompt {
 
 // ===== Atoms =====
 
-export const agentSessionsAtom = atom<AgentSessionMeta[]>([])
+type AgentSessionsUpdate = AgentSessionMeta[] | ((previous: AgentSessionMeta[]) => AgentSessionMeta[])
+
+const rawAgentSessionsAtom = atom<AgentSessionMeta[]>([])
+
+/** Agent 会话列表统一经过边界归一化，防止 HTTP/IPC 异常响应污染全局状态。 */
+export const agentSessionsAtom = atom<AgentSessionMeta[], [AgentSessionsUpdate], void>(
+  (get) => get(rawAgentSessionsAtom),
+  (get, set, update) => {
+    const next = typeof update === 'function'
+      ? update(get(rawAgentSessionsAtom))
+      : update
+    set(rawAgentSessionsAtom, sanitizeAgentSessions(next))
+  },
+)
 export const agentWorkspacesAtom = atom<AgentWorkspace[]>([])
 export const currentAgentWorkspaceIdAtom = atom<string | null>(null)
 /** 侧栏「自动任务」合成项目组在项目列表中的位置索引（默认 0 = 最靠前；从 settings.json 加载） */

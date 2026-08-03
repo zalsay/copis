@@ -32,7 +32,8 @@ export function PlanningReminderRail({ playSound = true }: { playSound?: boolean
 
   const load = React.useCallback(async () => {
     try {
-      setReminders(await window.electronAPI.listActivePlanningReminders())
+      const nextReminders = await window.electronAPI.listActivePlanningReminders()
+      setReminders(Array.isArray(nextReminders) ? nextReminders : [])
     } catch (error) {
       console.error('[任务/日程] 加载常驻提醒失败:', error)
     }

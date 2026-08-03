@@ -12,7 +12,7 @@
  */
 
 import * as React from 'react'
-import { Bot, Loader2, AlertTriangle, FileText, FileImage, Download, Split, Undo2, RotateCw, Plus, Minimize2, Wrench, Settings, Cpu, ExternalLink, Quote, Clock, FolderInput, FolderPlus, ListTodo } from 'lucide-react'
+import { Loader2, AlertTriangle, FileText, FileImage, Download, Split, Undo2, RotateCw, Plus, Minimize2, Wrench, Settings, Cpu, ExternalLink, Quote, Clock, FolderInput, FolderPlus, ListTodo } from 'lucide-react'
 import { useAtomValue, useSetAtom } from 'jotai'
 import { cn } from '@/lib/utils'
 import { ImageLightbox, type LightboxImage } from '@/components/ui/image-lightbox'
@@ -51,7 +51,7 @@ import { CopyButton } from '@/components/chat/CopyButton'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { formatMessageTime } from '@/components/chat/ChatMessageItem'
-import { getModelLogo, resolveModelDisplayName, resolveModelProvider } from '@/lib/model-logo'
+import { CopisLogo, resolveModelDisplayName } from '@/lib/model-logo'
 import { userProfileAtom } from '@/atoms/user-profile'
 import { channelsAtom, modelSelectorOpenAtom } from '@/atoms/chat-atoms'
 import { agentSessionPendingFilesAtom, agentSessionsAtom, agentWorkspacesAtom } from '@/atoms/agent-atoms'
@@ -269,21 +269,13 @@ function extractToolResultForTask(message: SDKUserMessage, resultBlock: SDKToolR
 
 // ===== 助手头像 =====
 
-function AssistantLogo({ model }: { model?: string }): React.ReactElement {
-  const channels = useAtomValue(channelsAtom)
-  if (model) {
-    return (
-      <img
-        src={getModelLogo(model, resolveModelProvider(model, channels))}
-        alt={model}
-        className="size-[35px] rounded-[25%] object-cover"
-      />
-    )
-  }
+function AssistantLogo(): React.ReactElement {
   return (
-    <div className="size-[35px] rounded-[25%] bg-primary/10 flex items-center justify-center">
-      <Bot size={18} className="text-primary" />
-    </div>
+    <img
+      src={CopisLogo}
+      alt="Copis Agent"
+      className="size-[35px] rounded-[25%] object-cover"
+    />
   )
 }
 
@@ -538,7 +530,7 @@ export function AssistantTurnRenderer({ turn, allMessages, basePath, onFork, onR
       <MessageHeader
         model={turn.model ? resolveModelDisplayName(turn.model, channels) : undefined}
         time={turn.createdAt ? formatMessageTime(turn.createdAt) : undefined}
-        logo={<AssistantLogo model={turn.model} />}
+        logo={<AssistantLogo />}
       />
       <MessageContent>
         <TurnFileMapProvider map={turnFileMap}>
@@ -684,7 +676,7 @@ export function SDKMessageRenderer({
           <MessageHeader
             model={model ? resolveModelDisplayName(model, channels) : undefined}
             time={meta.createdAt ? formatMessageTime(meta.createdAt) : undefined}
-            logo={<AssistantLogo model={model} />}
+            logo={<AssistantLogo />}
           />
         )}
         <MessageContent>

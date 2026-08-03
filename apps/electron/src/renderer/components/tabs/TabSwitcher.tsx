@@ -36,6 +36,7 @@ import {
 } from '@/atoms/agent-atoms'
 import type { SessionIndicatorStatus } from '@/atoms/agent-atoms'
 import { draftSessionIdsAtom } from '@/atoms/draft-session-atoms'
+import { sanitizeAgentSessions } from '@/lib/agent-session-list'
 import { Bot, GitBranch, MessageSquare } from 'lucide-react'
 
 type SwitchSectionId = 'collaboration' | 'recent'
@@ -99,6 +100,7 @@ export function TabSwitcher(): ReactElement | null {
 
   const switcherModel = useMemo<SwitcherModel>(() => {
     const workspaceNameById = new Map(agentWorkspaces.map((workspace) => [workspace.id, workspace.name]))
+    const validAgentSessions = sanitizeAgentSessions(agentSessions)
 
     const buildAgentCandidate = (session: AgentSessionMeta): SwitchCandidate => {
       const status = agentIndicatorMap.get(session.id)
@@ -125,7 +127,7 @@ export function TabSwitcher(): ReactElement | null {
         status: streamingConversationIds.has(conversation.id) ? 'running' : 'idle',
       }))
 
-    const agentCandidates = agentSessions
+    const agentCandidates = validAgentSessions
       .filter((session) => !session.archived && !draftSessionIds.has(session.id))
       .map(buildAgentCandidate)
 
@@ -133,13 +135,13 @@ export function TabSwitcher(): ReactElement | null {
 
     const candidateById = new Map(allCandidates.map((candidate) => [candidate.id, candidate]))
     const activeAgentSession = activeSessionId
-      ? agentSessions.find((session) => session.id === activeSessionId)
+      ? validAgentSessions.find((session) => session.id === activeSessionId)
       : undefined
     const relatedParentSessionId = activeAgentSession?.parentSessionId ?? activeAgentSession?.id
     const relatedDelegationIds = new Set<string>()
     if (activeAgentSession && relatedParentSessionId) {
       relatedDelegationIds.add(relatedParentSessionId)
-      for (const session of agentSessions) {
+      for (const session of validAgentSessions) {
         if (session.parentSessionId === relatedParentSessionId) {
           relatedDelegationIds.add(session.id)
         }

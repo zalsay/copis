@@ -43,6 +43,7 @@ import {
   dockBadgeCountAtom,
   unviewedCompletedSessionIdsAtom,
 } from './atoms/agent-atoms'
+import { workingClientConfigAtom } from './atoms/working-atoms'
 import { updateStatusAtom, initializeUpdater } from './atoms/updater'
 import { automationsAtom } from './atoms/automation-atoms'
 import { calendarEventsAtom, calendarPlanningGroupsAtom, planningTagsAtom, todoPlanningGroupsAtom, todosAtom } from './atoms/planning-atoms'
@@ -65,13 +66,17 @@ import {
 } from './atoms/markdown-font-size'
 import { useGlobalAgentListeners } from './hooks/useGlobalAgentListeners'
 import { useGlobalChatListeners } from './hooks/useGlobalChatListeners'
-import { tabsAtom, activeTabIdAtom, ensureScratchPadTab, getPersistableTabState, scratchPadContentAtom, scratchPadLoadedAtom, SCRATCH_PAD_ID } from './atoms/tab-atoms'
+import { tabsAtom, activeTabIdAtom, getPersistableTabState } from './atoms/tab-atoms'
 import type { TabItem } from './atoms/tab-atoms'
 import { chatToolsAtom } from './atoms/chat-tool-atoms'
 import { feishuBotStatesAtom } from './atoms/feishu-atoms'
 import { dingtalkBotStatesAtom } from './atoms/dingtalk-atoms'
 import { currentConversationIdAtom, channelsAtom, channelsLoadedAtom, selectedModelAtom } from './atoms/chat-atoms'
 import { appModeAtom } from './atoms/app-mode'
+import {
+  COPIS_WORKING_CHANNEL_ID,
+  COPIS_WORKING_FAST_MODEL_ID,
+} from '@proma/shared'
 import type { FeishuBotBridgeState, FeishuBridgeState, DingTalkBotBridgeState, DingTalkBridgeState } from '@proma/shared'
 import { Toaster } from './components/ui/sonner'
 import { toast } from 'sonner'
@@ -82,14 +87,17 @@ import { showCapabilityChangeToasts } from './lib/capabilities-toast'
 import { GlobalShortcuts } from './components/shortcuts/GlobalShortcuts'
 import { VoiceDictationApp } from './components/voice-dictation/VoiceDictationApp'
 import { TabSwitcher } from './components/tabs/TabSwitcher'
-import { htmlToMarkdown, markdownToHtml } from './lib/markdown-rich-text'
 import { getEnabledClaudeAgentChannelIds } from './lib/agent-channel-selection'
 import { PromaLogo } from './lib/model-logo'
 import { initShortcutRegistry, updateShortcutOverrides } from './lib/shortcut-registry'
+import { installHttpApiBridge } from './lib/http-api-bridge'
 import './styles/globals.css'
 import 'katex/dist/katex.min.css'
 
 // ===== 窗口类型检测 =====
+// 普通浏览器没有 Electron Preload，改用本地 HTTP API 兼容层；Electron 环境保持原有 IPC。
+installHttpApiBridge()
+
 const isQuickTaskWindow = new URLSearchParams(window.location.search).get('window') === 'quick-task'
 const isVoiceDictationIndicatorWindow = new URLSearchParams(window.location.search).get('window') === 'voice-dictation-indicator'
 const isDetachedPreviewWindow = new URLSearchParams(window.location.search).get('window') === 'detached-preview'
@@ -183,6 +191,7 @@ function AgentSettingsInitializer(): null {
   const setMaxBudget = useSetAtom(agentMaxBudgetUsdAtom)
   const setMaxTurns = useSetAtom(agentMaxTurnsAtom)
   const setAutomationGroupOrder = useSetAtom(automationGroupOrderAtom)
+  const setWorkingClientConfig = useSetAtom(workingClientConfigAtom)
 
   const setAgentSettingsReady = useSetAtom(agentSettingsReadyAtom)
   const setChannels = useSetAtom(channelsAtom)
@@ -203,10 +212,12 @@ function AgentSettingsInitializer(): null {
     Promise.all([
       window.electronAPI.listChannels(),
       window.electronAPI.getSettings(),
-    ]).then(([channels, settings]) => {
-      // 缓存渠道列表
+      window.electronAPI.getWorkingConfig(),
+    ]).then(([channels, settings, workingConfig]) => {
+      // 渠道列表供 Chat 使用；Copis Working 虚拟渠道只在 Agent 视图中追加。
       setChannels(channels)
       setChannelsLoaded(true)
+      setWorkingClientConfig(workingConfig)
 
       const channelIds = new Set(channels.map((c) => c.id))
 
@@ -217,7 +228,8 @@ function AgentSettingsInitializer(): null {
         store.set(selectedModelAtom, null)
       }
 
-      const defaultAgentRuntime = settings.agentRuntime ?? 'pi'
+      // Copis Working 的本地 Agent 固定使用 Pi；模型推理统一经过 edu-api。
+      const defaultAgentRuntime = 'pi' as const
       setAgentRuntime(defaultAgentRuntime)
 
       // 渠道的启用状态是唯一开关：启动时也必须从实际渠道派生 Claude 白名单，
@@ -225,28 +237,23 @@ function AgentSettingsInitializer(): null {
       const claudeChannelIds = getEnabledClaudeAgentChannelIds(channels)
       setAgentChannelIds(claudeChannelIds)
 
-      const selectedChannel = settings.agentChannelId
-        ? channels.find((channel) => channel.id === settings.agentChannelId)
-        : undefined
-      const selectedChannelIsUsable = selectedChannel?.enabled
-        && (defaultAgentRuntime === 'pi' || claudeChannelIds.includes(selectedChannel.id))
-
       const updates: Parameters<typeof window.electronAPI.updateSettings>[0] = {}
       const storedClaudeChannelIds = settings.agentChannelIds ?? []
       const whitelistChanged = claudeChannelIds.length !== storedClaudeChannelIds.length
         || claudeChannelIds.some((id, index) => id !== storedClaudeChannelIds[index])
       if (whitelistChanged) updates.agentChannelIds = claudeChannelIds
 
-      // 验证并加载 Agent 默认渠道/模型。Claude runtime 不能恢复到 Pi 专用或已禁用渠道。
-      if (settings.agentChannelId && selectedChannelIsUsable) {
-        setAgentChannelId(settings.agentChannelId)
-        if (settings.agentModelId) setAgentModelId(settings.agentModelId)
-      } else if (settings.agentChannelId) {
-        console.warn('[AgentSettings] agentChannelId 指向当前 Core 不可用的渠道，清除')
-        setAgentChannelId(null)
-        setAgentModelId(null)
-        updates.agentChannelId = undefined
-        updates.agentModelId = undefined
+      // Working Agent 不使用用户渠道；fast/export 由 edu-api 服务端 alias 解析。
+      setAgentChannelId(COPIS_WORKING_CHANNEL_ID)
+      setAgentModelId(COPIS_WORKING_FAST_MODEL_ID)
+      if (
+        settings.agentChannelId !== COPIS_WORKING_CHANNEL_ID
+        || settings.agentModelId !== COPIS_WORKING_FAST_MODEL_ID
+        || settings.agentRuntime !== defaultAgentRuntime
+      ) {
+        updates.agentChannelId = COPIS_WORKING_CHANNEL_ID
+        updates.agentModelId = COPIS_WORKING_FAST_MODEL_ID
+        updates.agentRuntime = defaultAgentRuntime
       }
 
       if (Object.keys(updates).length > 0) {
@@ -288,7 +295,7 @@ function AgentSettingsInitializer(): null {
       console.error(err)
       setAgentSettingsReady(true) // 即使出错也标记就绪，避免永远阻塞
     })
-  }, [setAgentChannelId, setAgentModelId, setAgentChannelIds, setAgentRuntime, setAgentWorkspaces, setCurrentWorkspaceId, setThinking, setEffort, setMaxBudget, setMaxTurns, setAutomationGroupOrder, setChannels, setChannelsLoaded, setAgentSettingsReady])
+  }, [setAgentChannelId, setAgentModelId, setAgentChannelIds, setAgentRuntime, setAgentWorkspaces, setCurrentWorkspaceId, setThinking, setEffort, setMaxBudget, setMaxTurns, setAutomationGroupOrder, setWorkingClientConfig, setChannels, setChannelsLoaded, setAgentSettingsReady])
 
   // 工作区切换时重置能力缓存，预加载基线
   useEffect(() => {
@@ -593,8 +600,8 @@ function DockBadgeInitializer(): null {
   useEffect(() => {
     const clearActiveSessionBadge = (): void => {
       if (!document.hasFocus() || !activeAgentSessionId) return
-      // 以实际激活的 Agent/预览 Tab 为准。Scratch Pad 会保留 currentAgentSessionId，
-      // 不能仅据此把后台会话误判为已查看。
+      // 以实际激活的 Agent/预览 Tab 为准，不能仅据 currentAgentSessionId
+      // 把后台会话误判为已查看。
       void window.electronAPI.agentIsland.markSessionViewed(activeAgentSessionId).catch(console.error)
       setUnviewedCompleted((prev) => {
         if (!prev.has(activeAgentSessionId)) return prev
@@ -845,25 +852,25 @@ function TabStatePersistenceInitializer(): null {
 
   // 启动恢复：读取 settings.tabState + 校验会话有效性
   useEffect(() => {
+    // 兼容旧版本曾持久化的 Scratch 模式值。
+    const persistedMode = store.get(appModeAtom) as string
+    if (persistedMode !== 'chat' && persistedMode !== 'agent') {
+      store.set(appModeAtom, 'agent')
+    }
+
     Promise.all([
       window.electronAPI.getSettings(),
       window.electronAPI.listConversations(),
       window.electronAPI.listAgentSessions(),
     ]).then(([settings, conversations, agentSessions]) => {
       const tabState = settings.tabState
-      if (!tabState?.tabs?.length) {
-        restoredRef.current = true
-        return
-      }
-
-      // 构建有效 sessionId 集合
       const validSessionIds = new Set([
         ...conversations.map((c) => c.id),
         ...agentSessions.map((s) => s.id),
       ])
 
-      // 过滤 diff 类型 Tab（不持久化），同时过滤掉已被删除的会话
-      const validTabs = tabState.tabs.filter(
+      // 过滤旧版 Scratch/Preview 入口，只恢复真实 Chat/Agent 会话。
+      const validTabs = tabState?.tabs?.filter(
         (t): t is TabItem =>
           typeof t === 'object' &&
           t !== null &&
@@ -873,17 +880,38 @@ function TabStatePersistenceInitializer(): null {
           'title' in t &&
           (t.type === 'chat' || t.type === 'agent') &&
           validSessionIds.has(t.sessionId),
+      ) ?? []
+
+      // 旧配置没有可恢复 Tab 时，优先进入上次工作区中的最近 Agent 会话。
+      const sortByUpdatedAt = <T extends { updatedAt: number }>(items: T[]): T[] =>
+        [...items].sort((a, b) => b.updatedAt - a.updatedAt)
+      const preferredAgentSessions = sortByUpdatedAt(
+        agentSessions.filter((session) =>
+          !session.archived && (!settings.agentWorkspaceId || session.workspaceId === settings.agentWorkspaceId)
+        ),
       )
-      if (validTabs.length === 0) {
+      const recentAgentSession = preferredAgentSessions[0] ?? sortByUpdatedAt(
+        agentSessions.filter((session) => !session.archived),
+      )[0]
+      const recentConversation = sortByUpdatedAt(
+        conversations.filter((conversation) => !conversation.archived),
+      )[0]
+      const fallbackTab: TabItem | null = recentAgentSession
+        ? { id: recentAgentSession.id, type: 'agent', sessionId: recentAgentSession.id, title: recentAgentSession.title }
+        : recentConversation
+          ? { id: recentConversation.id, type: 'chat', sessionId: recentConversation.id, title: recentConversation.title }
+          : null
+      const tabsToRestore = validTabs.length > 0 ? validTabs : fallbackTab ? [fallbackTab] : []
+      if (tabsToRestore.length === 0) {
         restoredRef.current = true
         return
       }
 
-      const validTabIds = new Set(validTabs.map((t) => t.id))
+      const validTabIds = new Set(tabsToRestore.map((t) => t.id))
 
       // 恢复 activeTabId（校验有效性）
       let restoredActiveTabId: string | null = null
-      if (tabState.activeTabId && validTabIds.has(tabState.activeTabId)) {
+      if (tabState?.activeTabId && validTabIds.has(tabState.activeTabId)) {
         restoredActiveTabId = tabState.activeTabId
       } else {
         // 向后兼容：从旧版 splitLayout 结构中恢复原焦点面板的 activeTabId
@@ -891,26 +919,28 @@ function TabStatePersistenceInitializer(): null {
         if (legacyId && validTabIds.has(legacyId)) {
           restoredActiveTabId = legacyId
         } else {
-          restoredActiveTabId = validTabs[0]?.id ?? null
+          restoredActiveTabId = tabsToRestore[0]?.id ?? null
         }
       }
 
-      const activeTab = validTabs.find((t) => t.id === restoredActiveTabId) ?? validTabs[0] ?? null
-      store.set(tabsAtom, ensureScratchPadTab(activeTab ? [activeTab] : []))
-      store.set(activeTabIdAtom, restoredActiveTabId)
+      const activeTab = tabsToRestore.find((t) => t.id === restoredActiveTabId) ?? tabsToRestore[0] ?? null
+      store.set(tabsAtom, tabsToRestore)
+      store.set(activeTabIdAtom, activeTab?.id ?? null)
 
-      // 同步 appMode 和 currentSessionId
-      if (activeTab) {
-        if (activeTab.type === 'chat') {
-          store.set(appModeAtom, 'chat')
-          store.set(currentConversationIdAtom, activeTab.sessionId)
-        } else {
-          store.set(appModeAtom, 'agent')
-          store.set(currentAgentSessionIdAtom, activeTab.sessionId)
-        }
+      // 同步模式、当前会话和工作区，确保启动后直接回到上次会话工作区。
+      if (activeTab?.type === 'chat') {
+        store.set(appModeAtom, 'chat')
+        store.set(currentConversationIdAtom, activeTab.sessionId)
+        store.set(currentAgentSessionIdAtom, null)
+      } else if (activeTab?.type === 'agent') {
+        store.set(appModeAtom, 'agent')
+        store.set(currentConversationIdAtom, null)
+        store.set(currentAgentSessionIdAtom, activeTab.sessionId)
+        const session = agentSessions.find((item) => item.id === activeTab.sessionId)
+        if (session?.workspaceId) store.set(currentAgentWorkspaceIdAtom, session.workspaceId)
       }
 
-      console.log(`[TabRestore] 已恢复当前会话入口，历史标签 ${validTabs.length} 个已收敛到左侧列表`)
+      console.log(`[TabRestore] 已恢复当前会话入口，历史标签 ${tabsToRestore.length} 个已收敛到左侧列表`)
     }).catch((err) => console.error('[TabRestore] 恢复标签页失败:', err))
       .finally(() => { restoredRef.current = true })
   }, [store])
@@ -962,110 +992,6 @@ function TabStatePersistenceInitializer(): null {
       if (timer) clearTimeout(timer)
       window.removeEventListener('beforeunload', handleBeforeUnload)
     }
-  }, [store])
-
-  return null
-}
-
-/**
- * Scratch Pad 初始化和持久化组件
- *
- * 启动时注入 scratch tab 到 tabsAtom 首位，
- * 从磁盘加载 scratch-pad.md 内容，自动保存到磁盘。
- */
-function ScratchPadPersistence(): null {
-  const store = useStore()
-  const loadedRef = useRef(false)
-  const saveTimerRef = useRef<ReturnType<typeof setTimeout>>()
-
-  // 启动：加载文件内容、注入 scratch tab、恢复激活状态
-  useEffect(() => {
-    const init = async (): Promise<void> => {
-      try {
-        // 加载 scratch-pad.md 内容（磁盘存的是 markdown，转为 HTML 给编辑器用）
-        const [settings, loadedMd] = await Promise.all([
-          window.electronAPI.getSettings(),
-          window.electronAPI.loadScratchPad ? window.electronAPI.loadScratchPad() : Promise.resolve(''),
-        ])
-
-        const loadedHtml = loadedMd ? markdownToHtml(loadedMd) : ''
-        store.set(scratchPadContentAtom, loadedHtml)
-        store.set(scratchPadLoadedAtom, true)
-
-        // 将 scratch tab 注入首位
-        const currentTabs = store.get(tabsAtom)
-        const newTabs = ensureScratchPadTab(currentTabs)
-
-        // 如果 tabs 数组变了（新增了 scratch tab），写入 store
-        if (newTabs.length > currentTabs.length || newTabs[0]?.id !== currentTabs[0]?.id) {
-          store.set(tabsAtom, newTabs)
-        }
-
-        // 恢复 scratch 激活状态：如果上次关闭时在 scratch 页，则激活它
-        // 不改变 appMode，保留原有的 chat/agent 侧边栏状态
-        if (settings.scratchPadActive) {
-          store.set(activeTabIdAtom, SCRATCH_PAD_ID)
-        }
-
-        console.log('[ScratchPad] 初始化完成，已加载内容:', !!loadedMd)
-      } catch (err) {
-        console.error('[ScratchPad] 初始化失败:', err)
-      } finally {
-        loadedRef.current = true
-      }
-    }
-
-    init()
-  }, [store])
-
-  // 自动保存：监听 scratchPadContentAtom 变化，防抖写入磁盘
-  useEffect(() => {
-    const save = (): void => {
-      const html = store.get(scratchPadContentAtom)
-      if (window.electronAPI.saveScratchPad) {
-        const md = htmlToMarkdown(html)
-        window.electronAPI.saveScratchPad(md).then((ok) => {
-          if (!ok) console.error('[ScratchPad] 保存失败')
-        }).catch(console.error)
-      }
-    }
-
-    const debouncedSave = (): void => {
-      if (!loadedRef.current) return
-      if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
-      saveTimerRef.current = setTimeout(save, 500)
-    }
-
-    const unsub = store.sub(scratchPadContentAtom, debouncedSave)
-
-    // beforeunload 时同步写入
-    const handleBeforeUnload = (): void => {
-      if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
-      const html = store.get(scratchPadContentAtom)
-      if (window.electronAPI.saveScratchPadSync) {
-        const md = htmlToMarkdown(html)
-        window.electronAPI.saveScratchPadSync(md)
-      }
-    }
-    window.addEventListener('beforeunload', handleBeforeUnload)
-
-    return () => {
-      unsub()
-      if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
-      window.removeEventListener('beforeunload', handleBeforeUnload)
-    }
-  }, [store])
-
-  // 监听 activeTabIdAtom 变化，持久化 scratchPadActive 到 settings
-  useEffect(() => {
-    const unsub = store.sub(activeTabIdAtom, () => {
-      const activeTabId = store.get(activeTabIdAtom)
-      const isScratchActive = activeTabId === SCRATCH_PAD_ID
-      window.electronAPI.updateSettings({
-        scratchPadActive: isScratchActive,
-      }).catch(() => {})
-    })
-    return unsub
   }, [store])
 
   return null
@@ -1143,7 +1069,6 @@ if (isQuickTaskWindow) {
       <FeishuInitializer />
       <DingTalkInitializer />
       <TabStatePersistenceInitializer />
-      <ScratchPadPersistence />
       <VoiceDictationApp embedded />
       <GlobalShortcuts />
       <TabSwitcher />

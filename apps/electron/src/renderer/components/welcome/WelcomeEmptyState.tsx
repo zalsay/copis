@@ -9,9 +9,10 @@
 
 import * as React from 'react'
 import { useAtomValue, useAtom } from 'jotai'
-import { Lightbulb, MessageSquare, Bot, StickyNote } from 'lucide-react'
+import { Lightbulb, MessageSquare, Bot } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { userProfileAtom } from '@/atoms/user-profile'
+import { workingAuthStateAtom } from '@/atoms/working-atoms'
 import { appModeAtom, type AppMode } from '@/atoms/app-mode'
 import { themeStyleAtom } from '@/atoms/theme'
 import { getRandomTip, getPlatform, type Tip } from '@/lib/tips'
@@ -28,11 +29,11 @@ function getGreeting(hour: number): string {
 const MODE_CONFIG: Record<AppMode, { icon: React.ReactNode; label: string }> = {
   chat: { icon: <MessageSquare size={15} />, label: 'Chat' },
   agent: { icon: <Bot size={15} />, label: 'Agent' },
-  scratch: { icon: <StickyNote size={15} />, label: 'Scratch Pad' },
 }
 
 export function WelcomeEmptyState(): React.ReactElement {
   const userProfile = useAtomValue(userProfileAtom)
+  const workingAuthState = useAtomValue(workingAuthStateAtom)
   const [mode, setMode] = useAtom(appModeAtom)
   const themeStyle = useAtomValue(themeStyleAtom)
 
@@ -41,7 +42,7 @@ export function WelcomeEmptyState(): React.ReactElement {
 
   const hour = new Date().getHours()
   const greeting = getGreeting(hour)
-  const displayName = userProfile.userName || '用户'
+  const displayName = workingAuthState?.user?.nickname?.trim() || userProfile.userName || '用户'
 
   // 森息晨光主题下选中按钮使用主色
   const selectedColor = themeStyle === 'forest-light' ? '#4a7858' : undefined

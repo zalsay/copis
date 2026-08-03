@@ -111,6 +111,7 @@ import XiaomiLogo from '@/assets/models/xiaomi.png'
 
 // Proma
 import PromaLogo from '@/assets/models/proma.png'
+import CopisLogo from '@/assets/models/copis.png'
 
 // Cohere
 import CohereLogo from '@/assets/models/cohere.png'
@@ -398,4 +399,4 @@ export function resolveModelProvider(modelId: string, channels: import('@proma/s
 }
 
 /** 默认模型图标 */
-export { DefaultLogo, PromaLogo }
+export { CopisLogo, DefaultLogo, PromaLogo }

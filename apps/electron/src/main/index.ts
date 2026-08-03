@@ -87,6 +87,7 @@ for (const key of Object.keys(process.env)) {
 
 import { createApplicationMenu } from './menu'
 import { registerIpcHandlers } from './ipc'
+import { startHttpApiServer, stopHttpApiServer } from './lib/http-api-server'
 import { createTray, destroyTray, getTray } from './tray'
 import { initializeRuntime } from './lib/runtime-init'
 import { seedDefaultSkills } from './lib/config-paths'
@@ -363,7 +364,7 @@ function saveMainWindowState(): void {
 
 function isDevServerNavigation(url: string): boolean {
   try {
-    return new URL(url).origin === 'http://127.0.0.1:5173'
+    return new URL(url).origin === 'http://127.0.0.1:5174'
   } catch {
     return false
   }
@@ -415,7 +416,7 @@ function createWindow(): void {
   // Load the renderer
   const isDev = !app.isPackaged
   if (isDev) {
-    mainWindow.loadURL('http://127.0.0.1:5173')
+    mainWindow.loadURL('http://127.0.0.1:5174')
     mainWindow.webContents.openDevTools()
   } else {
     mainWindow.loadFile(join(__dirname, 'renderer', 'index.html'))
@@ -528,6 +529,9 @@ app.whenReady().then(bootstrap).catch(handleBootstrapFailure)
  * 单点失败不应阻止窗口和托盘的创建（用户至少要能看到界面）。
  */
 async function bootstrap(): Promise<void> {
+  // HTTP API 不依赖运行时检测，提前启动，确保浏览器端可以尽快连接。
+  safeRun('startHttpApiServer', startHttpApiServer)
+
   // 初始化兼容层版本号（供复用的 Pi/Proma 运行时使用）
   setPromaVersion(app.getVersion())
 
@@ -719,6 +723,11 @@ app.on('window-all-closed', () => {
 app.on('before-quit', () => {
   // 标记正在退出，让 close 事件不再阻止关闭
   setQuitting()
+
+  // 关闭本地 HTTP API，避免开发重启时残留端口占用。
+  stopHttpApiServer().catch((error: unknown) => {
+    console.error('[HTTP API] 关闭失败:', error)
+  })
 
   // 中止所有活跃的 Agent 和 Chat 子进程
   stopAllAgents()

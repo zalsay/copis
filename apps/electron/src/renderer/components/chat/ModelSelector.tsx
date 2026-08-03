@@ -31,7 +31,7 @@ import {
 } from '@/atoms/chat-atoms'
 import { useConversationModelOptional } from '@/hooks/useConversationSettings'
 import { useConversationIdOptional } from '@/contexts/session-context'
-import { getModelLogo, getChannelLogo, DefaultLogo } from '@/lib/model-logo'
+import { CopisLogo, getModelLogo, getChannelLogo, DefaultLogo } from '@/lib/model-logo'
 import { cn } from '@/lib/utils'
 import type { Channel, ModelOption, ProviderType } from '@proma/shared'
 import { ChannelPlanQuotaBadge } from './ChannelPlanQuotaBadge'
@@ -85,6 +85,8 @@ function groupByChannel(options: ModelOption[]): Map<string, ModelOption[]> {
 interface ModelSelectorProps {
   /** 仅显示此渠道的模型 */
   filterChannelId?: string
+  /** 仅供 Agent 等专用场景追加的内存渠道，不会写入全局渠道配置。 */
+  additionalChannels?: Channel[]
   /** 仅显示这些渠道的模型（多渠道过滤） */
   filterChannelIds?: string[]
   /** 外部选中模型（不传则用内部 selectedModelAtom） */
@@ -93,6 +95,8 @@ interface ModelSelectorProps {
   onModelSelect?: (option: ModelOption) => void
   /** 触发按钮是否显示「渠道 · 模型」（默认只显示模型名） */
   showChannelInTrigger?: boolean
+  /** composer 触发按钮是否使用 Copis 品牌 Logo */
+  useCopisLogo?: boolean
   /** 不在此选择器中显示的供应商（例如 Chat 暂不支持的协议） */
   excludedProviders?: readonly ProviderType[]
   /** 是否使用全局 modelSelectorOpenAtom 控制打开状态（用于外部拉起，如错误提示按钮） */
@@ -101,10 +105,12 @@ interface ModelSelectorProps {
 
 export function ModelSelector({
   filterChannelId,
+  additionalChannels,
   filterChannelIds,
   externalSelectedModel,
   onModelSelect,
   showChannelInTrigger = false,
+  useCopisLogo = false,
   excludedProviders,
   useSharedOpenState = false,
 }: ModelSelectorProps = {}): React.ReactElement {
@@ -132,9 +138,16 @@ export function ModelSelector({
     }
   }, [open, setChannels])
 
+  const availableChannels = React.useMemo(() => {
+    if (!additionalChannels || additionalChannels.length === 0) return channels
+    const byId = new Map(channels.map((channel) => [channel.id, channel]))
+    for (const channel of additionalChannels) byId.set(channel.id, channel)
+    return [...byId.values()]
+  }, [additionalChannels, channels])
+
   const modelOptions = React.useMemo(
-    () => buildModelOptions(channels, filterChannelId, filterChannelIds, excludedProviders),
-    [channels, filterChannelId, filterChannelIds, excludedProviders],
+    () => buildModelOptions(availableChannels, filterChannelId, filterChannelIds, excludedProviders),
+    [availableChannels, filterChannelId, filterChannelIds, excludedProviders],
   )
   const grouped = React.useMemo(() => groupByChannel(modelOptions), [modelOptions])
 
@@ -263,8 +276,8 @@ export function ModelSelector({
           >
             {displayModelInfo ? (
               <img
-                src={getModelLogo(displayModelInfo.modelId, displayModelInfo.provider)}
-                alt={displayModelInfo.modelName}
+                src={useCopisLogo ? CopisLogo : getModelLogo(displayModelInfo.modelId, displayModelInfo.provider)}
+                alt={useCopisLogo ? 'Copis' : displayModelInfo.modelName}
                 className="size-4 rounded object-cover"
               />
             ) : (

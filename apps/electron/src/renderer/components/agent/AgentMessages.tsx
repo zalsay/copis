@@ -7,7 +7,7 @@
 
 import * as React from 'react'
 import { useAtomValue, useSetAtom } from 'jotai'
-import { Bot, RotateCw, AlertTriangle, CheckCircle2, Ban, ChevronDown, ChevronRight } from 'lucide-react'
+import { RotateCw, AlertTriangle, CheckCircle2, Ban, ChevronDown, ChevronRight } from 'lucide-react'
 import { WelcomeEmptyState } from '@/components/welcome/WelcomeEmptyState'
 import {
   Message,
@@ -24,7 +24,7 @@ import type { MinimapItem } from '@/components/ai-elements/scroll-minimap'
 import { StickyUserMessage } from '@/components/ai-elements/sticky-user-message'
 import { useSmoothStream } from '@proma/ui'
 import { formatMessageTime } from '@/components/chat/ChatMessageItem'
-import { getModelLogo, resolveModelDisplayName, resolveModelProvider } from '@/lib/model-logo'
+import { CopisLogo, resolveModelDisplayName } from '@/lib/model-logo'
 import { userProfileAtom } from '@/atoms/user-profile'
 import { tabMinimapCacheAtom } from '@/atoms/tab-atoms'
 import { channelsAtom } from '@/atoms/chat-atoms'
@@ -210,21 +210,13 @@ function EmptyState(): React.ReactElement {
   return <WelcomeEmptyState />
 }
 
-function AssistantLogo({ model }: { model?: string }): React.ReactElement {
-  const channels = useAtomValue(channelsAtom)
-  if (model) {
-    return (
-      <img
-        src={getModelLogo(model, resolveModelProvider(model, channels))}
-        alt={model}
-        className="size-[35px] rounded-[25%] object-cover"
-      />
-    )
-  }
+function AssistantLogo(): React.ReactElement {
   return (
-    <div className="size-[35px] rounded-[25%] bg-primary/10 flex items-center justify-center">
-      <Bot size={18} className="text-primary" />
-    </div>
+    <img
+      src={CopisLogo}
+      alt="Copis Agent"
+      className="size-[35px] rounded-[25%] object-cover"
+    />
   )
 }
 
@@ -779,7 +771,7 @@ export function AgentMessages({ sessionId, sessionModelId, messagesLoaded, persi
                   <MessageHeader
                     model={agentStreamingModel}
                     time={formatMessageTime(Date.now())}
-                    logo={<AssistantLogo model={streamingModelId} />}
+                    logo={<AssistantLogo />}
                   />
                   <MessageContent>
                     {retrying && <RetryingNotice retrying={retrying} />}

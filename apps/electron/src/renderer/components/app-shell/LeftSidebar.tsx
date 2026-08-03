@@ -1336,8 +1336,8 @@ export function LeftSidebar({ width, noTransition }: LeftSidebarProps): React.Re
   }, [])
 
   const canDeleteWorkspace = React.useCallback(
-    (workspace: AgentWorkspace): boolean => workspace.slug !== 'default' && workspaces.length > 1,
-    [workspaces.length],
+    (workspace: AgentWorkspace): boolean => workspace.slug !== 'default',
+    [],
   )
 
   /** 请求删除项目（弹出二次确认框） */
@@ -1352,7 +1352,7 @@ export function LeftSidebar({ width, noTransition }: LeftSidebarProps): React.Re
     if (!workspaceId || !workspace) return
 
     if (!canDeleteWorkspace(workspace)) {
-      toast.error(workspace.slug === 'default' ? '默认项目不能删除' : '至少需要保留一个项目')
+      toast.error('默认项目不能删除')
       setPendingDeleteWorkspaceId(null)
       return
     }
@@ -1432,9 +1432,7 @@ export function LeftSidebar({ width, noTransition }: LeftSidebarProps): React.Re
       if (workspaceId === currentWorkspaceId) {
         const fallback = remainingWorkspaces.find((item) => item.slug === 'default') ?? remainingWorkspaces[0] ?? null
         setCurrentWorkspaceId(fallback?.id ?? null)
-        if (fallback) {
-          window.electronAPI.updateSettings({ agentWorkspaceId: fallback.id }).catch(console.error)
-        }
+        window.electronAPI.updateSettings({ agentWorkspaceId: fallback?.id }).catch(console.error)
       }
 
       toast.success('项目已删除', {

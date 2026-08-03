@@ -24,8 +24,15 @@ export default defineConfig({
     // Chromium can resolve localhost to IPv4 while Vite binds only ::1 on macOS.
     // Use the same explicit IPv4 loopback address as Electron's dev windows.
     host: '127.0.0.1',
-    port: 5173,
+    port: 5174,
     strictPort: true, // 确保使用指定端口，如被占用则报错
     open: false,
+    // 浏览器 Renderer 通过同源地址访问，避免浏览器环境与 Electron 主进程的回环地址不一致。
+    proxy: {
+      '/api': {
+        target: 'http://127.0.0.1:51730',
+        changeOrigin: false,
+      },
+    },
   },
 })

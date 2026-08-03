@@ -23,6 +23,7 @@ import {
   getSdkConfigDir,
 } from './config-paths'
 import {
+  ensureAgentWorkspaceWritableRoot,
   getAgentWorkspace,
   getProjectFilesPath,
   getWorkspaceAutoMemoryDir,
@@ -328,6 +329,7 @@ export function createAgentSession(
   const now = Date.now()
 
   const settings = getSettings()
+  const workspaceWritePermission = workspaceId ? getAgentWorkspace(workspaceId)?.allowWorkspaceWrite : undefined
   const defaultThinkingLevel = settings.defaultOpenAIThinkingLevel
     ?? resolvePiThinkingLevel(settings, undefined, 'openai-codex')
   const meta: AgentSessionMeta = {
@@ -342,8 +344,14 @@ export function createAgentSession(
     reasoningLevel: defaultThinkingLevel,
     // Copis Working 默认使用快速模式；用户可按会话切换到专家模式。
     workingMode: 'fast',
+    ...(workspaceWritePermission === false ? { permissionMode: 'plan' as const } : {}),
     createdAt: now,
     updatedAt: now,
+  }
+
+  if (workspaceId && workspaceWritePermission === false) {
+    const workspace = getAgentWorkspace(workspaceId)
+    if (workspace) ensureAgentWorkspaceWritableRoot(workspace)
   }
 
   index.sessions.push(meta)
@@ -363,7 +371,7 @@ export function createAgentSession(
         ensureClaudeSessionSettings(workspaceId, meta.id)
       }
 
-      // .context 是 Proma 的会话工作台，本地项目同样需要。
+      // .context 是 Copis 的会话工作台，本地项目同样需要。
       const contextDir = join(sessionDir, '.context')
       if (!existsSync(contextDir)) mkdirSync(contextDir, { recursive: true })
     }

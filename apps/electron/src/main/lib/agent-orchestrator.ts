@@ -16,11 +16,11 @@
 
 import { randomUUID } from 'node:crypto'
 import { homedir } from 'node:os'
-import { join, dirname } from 'node:path'
+import { join, dirname, isAbsolute, relative, resolve } from 'node:path'
 import { accessSync, constants, existsSync, mkdirSync, realpathSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { app } from 'electron'
-import { normalizeWorkingMode, type AgentRuntime, type AgentSendInput, type AgentMessage, type AgentGenerateTitleInput, type AgentProviderAdapter, type AgentSessionMeta, type CodexOAuthCredentials, type XaiOAuthCredentials, type TypedError, type RetryAttempt, type SDKMessage, type SDKAssistantMessage, type AgentStreamPayload, type RewindSessionResult, type ProviderType } from '@proma/shared'
+import { COPIS_WORKING_CHANNEL_ID, createCopisWorkingChannel, normalizeWorkingMode, type AgentRuntime, type AgentSendInput, type AgentMessage, type AgentGenerateTitleInput, type AgentProviderAdapter, type AgentSessionMeta, type CodexOAuthCredentials, type XaiOAuthCredentials, type TypedError, type RetryAttempt, type SDKMessage, type SDKAssistantMessage, type AgentStreamPayload, type RewindSessionResult, type ProviderType, workingModeToModelId } from '@proma/shared'
 import {
   PROMA_DEFAULT_PERMISSION_MODE,
   PROMA_PERMISSION_MODE_CONFIG,
@@ -49,8 +49,10 @@ import pkg from '../../../package.json' with { type: 'json' }
 import { getFetchFn } from './proxy-fetch'
 import { getEffectiveProxyUrl } from './proxy-settings-service'
 import { appendSDKMessages, updateAgentSessionMeta, getAgentSessionMeta, getAgentSessionMessages, truncateSDKMessages, removeSDKErrorMessage, resolveUserUuidFromSDK, rewindFilesFromSnapshot, rewindPiAgentSession, ensureClaudeSessionSettings, resolveAgentCwd, getAgentCwdMode } from './agent-session-manager'
-import { getAgentWorkspace, getLocalProjectRootStatus, getProjectFilesPath, getWorkspaceMcpConfig, ensurePluginManifest, getWorkspaceAutoMemoryDir, getWorkspaceAttachedDirectories, getWorkspaceAttachedFiles } from './agent-workspace-manager'
+import { ensureAgentWorkspaceWritableRoot, getAgentWorkspace, getAgentWorkspaceWritableRoot, getLocalProjectRootStatus, getProjectFilesPath, getWorkspaceMcpConfig, ensurePluginManifest, getWorkspaceAutoMemoryDir, getWorkspaceAttachedDirectories, getWorkspaceAttachedFiles } from './agent-workspace-manager'
+import { getWorkingApiClient } from './working-api-service'
 import { getAgentWorkspacePath, getAgentSessionWorkspacePath, getConfigDir, getSdkConfigDir, getWorkspaceSkillsDir } from './config-paths'
+import { isPathWithinRootsAllowMissing } from './file-access-policy'
 import { getRuntimeStatus } from './runtime-init'
 import { getSettings } from './settings-service'
 import { buildSystemPrompt, buildDynamicContext } from './agent-prompt-builder'
@@ -372,16 +374,23 @@ function escapePromptXml(value: string): string {
     .replace(/>/g, '&gt;')
 }
 
-function buildPiAdditionalDirectoriesPrompt(directories: string[]): string {
+function buildPiAdditionalDirectoriesPrompt(
+  directories: string[],
+  workspaceWriteRoot?: string,
+): string {
   if (directories.length === 0) return ''
   const directoryLines = directories
     .map((dir, index) => `  <directory index="${index + 1}">${escapePromptXml(dir)}</directory>`)
     .join('\n')
+  const writeInstruction = workspaceWriteRoot
+    ? `工作区原始目录保持只读；需要创建或修改工作区文件时，只能写入 ${workspaceWriteRoot}。`
+    : '这些目录的读写权限仍受当前会话权限模式约束。'
   return `
 
 <attached_directories>
-这些目录已由 Proma 授权给当前会话，和当前工作目录同属于用户允许访问的范围。
-如需读取或修改这些目录中的内容，请直接使用绝对路径，不要先复制到当前工作目录。
+这些目录已由 Copis 授权给当前会话，可用于读取用户明确授权的文件。
+${writeInstruction}
+如需读取这些目录中的内容，请直接使用绝对路径，不要先复制到当前工作目录。
 ${directoryLines}
 </attached_directories>`
 }
@@ -459,6 +468,7 @@ export class AgentOrchestrator {
     provider: ProviderType,
     modelId: string | undefined,
     proxyUrl: string | undefined,
+    skipAnthropicAuth = false,
   ): AgentRuntimeEnv {
     const DEFAULT_ANTHROPIC_URL = 'https://api.anthropic.com'
 
@@ -503,12 +513,11 @@ export class AgentOrchestrator {
       PROMA_NOWLEDGE_MEM_ENABLED: '0',
     }
 
-    // 认证方式按 provider 分支
-    // - Coding Plan / Token Plan：只认 Bearer，通过 ANTHROPIC_CUSTOM_HEADERS 注入 Proma UA
-    // - MiniMax Coding Plan：Claude Code 场景使用 Bearer（ANTHROPIC_AUTH_TOKEN）
-    // - 通过 ANTHROPIC_AUTH_TOKEN 让 SDK 发 Authorization: Bearer
-    // - 其它：ANTHROPIC_API_KEY（SDK 内部会同时带上 x-api-key 和 Bearer）
-    applyAgentSdkAuthEnv(sdkEnv, provider, apiKey, getPromaUserAgent(pkg.version))
+    // 认证方式按 provider 分支。Working Responses 请求由 Pi 直接携带用户 JWT，
+    // 不把 JWT 注入 ANTHROPIC_* 环境变量，避免 shell 工具或 Claude 子进程看到它。
+    if (!skipAnthropicAuth) {
+      applyAgentSdkAuthEnv(sdkEnv, provider, apiKey, getPromaUserAgent(pkg.version))
+    }
     if (provider === 'minimax') {
       sdkEnv.API_TIMEOUT_MS = '3000000'
       sdkEnv.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC = '1'
@@ -520,9 +529,9 @@ export class AgentOrchestrator {
       sdkEnv.API_TIMEOUT_MS = '300000' // 5 分钟
     }
 
-    // 显式控制 ANTHROPIC_BASE_URL：仅在用户配置了自定义 Base URL 时注入
-    // 使用统一的 normalizeAnthropicBaseUrlForSdk 规范化，SDK 内部会自动拼接 /v1/messages
-    if (baseUrl && baseUrl !== DEFAULT_ANTHROPIC_URL) {
+    // 显式控制 ANTHROPIC_BASE_URL：仅在用户配置了自定义 Base URL 时注入。
+    // Working 请求不使用 Claude SDK，不能把 Responses 地址伪装成 Anthropic 地址。
+    if (!skipAnthropicAuth && baseUrl && baseUrl !== DEFAULT_ANTHROPIC_URL) {
       sdkEnv.ANTHROPIC_BASE_URL = normalizeAnthropicBaseUrlForSdk(baseUrl)
     }
 
@@ -620,7 +629,9 @@ export class AgentOrchestrator {
     // 同时保留 listChannels 自身的错误边界：解析失败时按“无渠道”处理并返回 null。
     let channel: import('@proma/shared').Channel | undefined
     try {
-      channel = listChannels().find((c) => c.id === channelId)
+      channel = channelId === COPIS_WORKING_CHANNEL_ID
+        ? createCopisWorkingChannel(getWorkingApiClient().baseUrl)
+        : listChannels().find((c) => c.id === channelId)
     } catch (error) {
       console.warn('[Agent 标题生成] 渠道解析失败:', error)
       return null
@@ -667,7 +678,10 @@ export class AgentOrchestrator {
     }
 
     try {
-      const apiKey = await resolveChannelRuntimeApiKey(channelId)
+      const apiKey = channelId === COPIS_WORKING_CHANNEL_ID
+        ? await getWorkingApiClient().getValidToken()
+        : await resolveChannelRuntimeApiKey(channelId)
+      if (!apiKey) return createFallbackTitle(userMessage)
       const providerAdapter = getAdapter(channel.provider)
       const request = providerAdapter.buildTitleRequest({
         baseUrl: channel.baseUrl,
@@ -1064,8 +1078,12 @@ export class AgentOrchestrator {
       }
     }
 
-    // 2. 获取渠道信息并解密 API Key
-    const channel = getChannelById(channelId)
+    // 2. 获取渠道信息并解密 API Key。Working 渠道是内存虚拟渠道，
+    // Pi 直接将用户 JWT 发送给 edu-api Responses proxy。
+    const workingClient = channelId === COPIS_WORKING_CHANNEL_ID ? getWorkingApiClient() : undefined
+    const channel = workingClient
+      ? createCopisWorkingChannel(workingClient.baseUrl)
+      : getChannelById(channelId)
     if (!channel) {
       reportPreflightError({
         code: 'channel_not_found',
@@ -1082,27 +1100,62 @@ export class AgentOrchestrator {
     let apiKey: string
     let codexOAuthCredentials: CodexOAuthCredentials | undefined
     let xaiOAuthCredentials: XaiOAuthCredentials | undefined
-    try {
-      // 订阅 OAuth 渠道必须保留完整凭据给 Pi runtime，才能在执行中按真实 expires
-      // 自动刷新；其余渠道只需解密 API Key。
-      if (channel.provider === 'openai-codex') {
-        codexOAuthCredentials = await resolveCodexOAuthCredentials(channelId)
-        apiKey = codexOAuthCredentials.access
-      } else if (channel.provider === 'xai') {
-        xaiOAuthCredentials = await resolveXaiOAuthCredentials(channelId)
-        apiKey = xaiOAuthCredentials.access
-      } else {
-        apiKey = decryptApiKey(channelId)
-      }
-    } catch (err) {
-      if (channel.provider === 'openai-codex' || channel.provider === 'xai') {
-        const isXai = channel.provider === 'xai'
+    if (workingClient) {
+      try {
+        apiKey = (await workingClient.getValidToken()) ?? ''
+      } catch (error) {
         reportPreflightError({
-          code: 'expired_oauth_token',
-          title: isXai ? 'xAI 登录已失效' : 'ChatGPT 登录已失效',
-          message: isXai
-            ? '无法刷新 xAI 登录凭据，登录可能已过期或被撤销。请在设置中重新登录 xAI。'
-            : '无法刷新 ChatGPT 登录凭据，登录可能已过期或被撤销。请在设置中重新登录 ChatGPT。',
+          code: 'token_expired',
+          title: 'Copis Working 登录已失效',
+          message: error instanceof Error ? error.message : '无法刷新 Copis Working 登录状态，请重新登录。',
+          actions: [],
+          canRetry: false,
+        })
+        return
+      }
+      if (!apiKey) {
+        reportPreflightError({
+          code: 'working_auth_required',
+          title: '请先登录 Copis Working',
+          message: '本地 Agent 的模型请求需要使用 Copis Working 账号登录 edu-api。',
+          actions: [],
+          canRetry: false,
+        })
+        return
+      }
+    } else {
+      try {
+        // 订阅 OAuth 渠道必须保留完整凭据给 Pi runtime，才能在执行中按真实 expires
+        // 自动刷新；其余渠道只需解密 API Key。
+        if (channel.provider === 'openai-codex') {
+          codexOAuthCredentials = await resolveCodexOAuthCredentials(channelId)
+          apiKey = codexOAuthCredentials.access
+        } else if (channel.provider === 'xai') {
+          xaiOAuthCredentials = await resolveXaiOAuthCredentials(channelId)
+          apiKey = xaiOAuthCredentials.access
+        } else {
+          apiKey = decryptApiKey(channelId)
+        }
+      } catch (err) {
+        if (channel.provider === 'openai-codex' || channel.provider === 'xai') {
+          const isXai = channel.provider === 'xai'
+          reportPreflightError({
+            code: 'expired_oauth_token',
+            title: isXai ? 'xAI 登录已失效' : 'ChatGPT 登录已失效',
+            message: isXai
+              ? '无法刷新 xAI 登录凭据，登录可能已过期或被撤销。请在设置中重新登录 xAI。'
+              : '无法刷新 ChatGPT 登录凭据，登录可能已过期或被撤销。请在设置中重新登录 ChatGPT。',
+            actions: [
+              { key: 's', label: '打开渠道设置', action: 'open_channel_settings' },
+            ],
+            canRetry: false,
+          })
+          return
+        }
+        reportPreflightError({
+          code: 'api_key_decrypt_failed',
+          title: 'API Key 解密失败',
+          message: '无法解密此渠道的 API Key，可能是系统密钥环异常。请到设置中重新填写 API Key。',
           actions: [
             { key: 's', label: '打开渠道设置', action: 'open_channel_settings' },
           ],
@@ -1110,26 +1163,27 @@ export class AgentOrchestrator {
         })
         return
       }
-      reportPreflightError({
-        code: 'api_key_decrypt_failed',
-        title: 'API Key 解密失败',
-        message: '无法解密此渠道的 API Key，可能是系统密钥环异常。请到设置中重新填写 API Key。',
-        actions: [
-          { key: 's', label: '打开渠道设置', action: 'open_channel_settings' },
-        ],
-        canRetry: false,
-      })
-      return
     }
 
     const appSettings = getSettings()
-    // 历史会话缺失 runtime 时按 Claude 兼容；新会话创建时已持久化其默认 runtime。
+    // Working Agent 始终使用 Pi；其它历史渠道保持原有 runtime 语义。
     const previousAgentRuntime = normalizeAgentRuntime(sessionMeta?.agentRuntime ?? 'claude')
-    const agentRuntime = normalizeAgentRuntime(inputAgentRuntime ?? sessionMeta?.agentRuntime ?? 'claude')
-    if (!sessionMeta?.agentRuntime || previousAgentRuntime !== agentRuntime) {
+    const agentRuntime = workingClient
+      ? 'pi'
+      : normalizeAgentRuntime(inputAgentRuntime ?? sessionMeta?.agentRuntime ?? 'claude')
+    const workingModelId = workingClient ? workingModeToModelId(workingMode) : undefined
+    const needsWorkingSessionMigration = Boolean(
+      workingClient && (
+        sessionMeta?.channelId !== COPIS_WORKING_CHANNEL_ID
+        || sessionMeta.modelId !== workingModelId
+        || sessionMeta.agentRuntime !== 'pi'
+      ),
+    )
+    if (!sessionMeta?.agentRuntime || previousAgentRuntime !== agentRuntime || needsWorkingSessionMigration) {
       try {
         sessionMeta = updateAgentSessionMeta(sessionId, {
           agentRuntime,
+          ...(workingClient && { channelId: COPIS_WORKING_CHANNEL_ID, modelId: workingModelId }),
           ...(previousAgentRuntime !== agentRuntime ? { sdkSessionId: undefined } : {}),
         })
       } catch {
@@ -1215,10 +1269,12 @@ export class AgentOrchestrator {
     delete process.env.ANTHROPIC_BASE_URL
     delete process.env.ANTHROPIC_CUSTOM_HEADERS
     delete process.env.CLAUDE_CODE_MAX_OUTPUT_TOKENS
-    applyAgentSdkAuthEnv(process.env, channel.provider, apiKey, getPromaUserAgent(pkg.version))
-    // 使用与 buildSdkEnv 相同的规范化逻辑，确保 process.env 和 sdkEnv 中的 URL 一致
-    if (channel.baseUrl && channel.baseUrl !== 'https://api.anthropic.com') {
-      process.env.ANTHROPIC_BASE_URL = normalizeAnthropicBaseUrlForSdk(channel.baseUrl)
+    if (!workingClient) {
+      applyAgentSdkAuthEnv(process.env, channel.provider, apiKey, getPromaUserAgent(pkg.version))
+      // 使用与 buildSdkEnv 相同的规范化逻辑，确保 process.env 和 sdkEnv 中的 URL 一致
+      if (channel.baseUrl && channel.baseUrl !== 'https://api.anthropic.com') {
+        process.env.ANTHROPIC_BASE_URL = normalizeAnthropicBaseUrlForSdk(channel.baseUrl)
+      }
     }
 
     const proxyUrl = await getEffectiveProxyUrl()
@@ -1226,8 +1282,9 @@ export class AgentOrchestrator {
       apiKey,
       channel.baseUrl,
       channel.provider,
-      modelId || DEFAULT_MODEL_ID,
+      workingModelId ?? modelId ?? DEFAULT_MODEL_ID,
       proxyUrl,
+      Boolean(workingClient),
     )
     const sdkEnv = runtimeEnv.env
 
@@ -1248,7 +1305,7 @@ export class AgentOrchestrator {
     // 5. 状态初始化
     const accumulatedMessages: SDKMessage[] = []
     // 委派子会话必须继承当前实际运行的模型；未显式传入时与 runtime 的默认值保持一致。
-    const selectedModelId = modelId || DEFAULT_MODEL_ID
+    const selectedModelId = workingModelId ?? modelId ?? DEFAULT_MODEL_ID
     let resolvedModel = selectedModelId
     let titleGenerationStarted = false
     /** 捕获到的 SDK session ID（用于 resume / recovery） */
@@ -1256,6 +1313,8 @@ export class AgentOrchestrator {
     let agentCwd: string | undefined
     let workspaceSlug: string | undefined
     let workspace: import('@proma/shared').AgentWorkspace | undefined
+    let workspaceWriteRoot: string | undefined
+    let workspaceWriteRestricted = false
 
     try {
       const sdk = agentRuntime === 'claude' ? await import('@anthropic-ai/claude-agent-sdk') : undefined
@@ -1293,7 +1352,7 @@ export class AgentOrchestrator {
       }
 
       console.log(
-        `[Agent 编排] 启动 ${agentRuntime} runtime — ${cliPath ? `binary: ${cliPath}, ` : ''}模型: ${modelId || DEFAULT_MODEL_ID}, resume: ${existingSdkSessionId ?? '无'}`,
+        `[Agent 编排] 启动 ${agentRuntime} runtime — ${cliPath ? `binary: ${cliPath}, ` : ''}模型: ${selectedModelId}, resume: ${existingSdkSessionId ?? '无'}`,
       )
 
       // 确定 Agent 工作目录
@@ -1308,6 +1367,10 @@ export class AgentOrchestrator {
         agentCwd = resolveAgentCwd(ws, sessionId, sessionMeta?.agentCwdMode) ?? homedir()
         workspaceSlug = ws.slug
         workspace = ws
+        workspaceWriteRestricted = ws.allowWorkspaceWrite === false
+        workspaceWriteRoot = workspaceWriteRestricted
+          ? ensureAgentWorkspaceWritableRoot(ws)
+          : getAgentWorkspaceWritableRoot(ws)
         sdkEnv.PROMA_WORKSPACE_DIR = getAgentWorkspacePath(ws.slug)
         sdkEnv.PROMA_WORKSPACE_SLUG = ws.slug
         sdkEnv.PROMA_NOWLEDGE_MEM_ENABLED = getWorkspaceMcpConfig(ws.slug).servers['nowledge-mem']?.enabled ? '1' : '0'
@@ -1361,6 +1424,7 @@ export class AgentOrchestrator {
           workspaceId,
           workspaceSlug,
           agentCwd,
+          workspaceWriteRoot,
           permissionMode: permissionModeOverride ?? sessionMeta?.permissionMode ?? PROMA_DEFAULT_PERMISSION_MODE,
           triggeredBy: input.triggeredBy,
           sessionMeta,
@@ -1477,6 +1541,21 @@ export class AgentOrchestrator {
       const getPermissionMode = (): PromaPermissionMode =>
         this.sessionPermissionModes.get(sessionId) ?? initialPermissionMode
 
+      const restrictedWriteRoots = workspaceWriteRestricted && workspaceWriteRoot && workspaceSlug
+        ? [workspaceWriteRoot, getAgentSessionWorkspacePath(workspaceSlug, sessionId)]
+        : []
+      const resolveToolFilePath = (filePath: string): string => {
+        const baseDir = agentCwd ?? process.cwd()
+        return isAbsolute(filePath) ? resolve(filePath) : resolve(baseDir, filePath)
+      }
+      const isRestrictedWritePathAllowed = (filePath: string): boolean => {
+        if (!workspaceWriteRestricted || restrictedWriteRoots.length === 0) return true
+        return isPathWithinRootsAllowMissing(resolveToolFilePath(filePath), restrictedWriteRoots)
+      }
+      const restrictedWriteDeniedMessage = workspaceWriteRoot
+        ? `当前工作区原始目录只读，Agent 只能写入 ${workspaceWriteRoot}。`
+        : '当前工作区原始目录只读，Agent 只能写入 Copis 受控目录。'
+
       // ExitPlanMode 拦截器：plan 模式下走 UI 审批流程
       const handleExitPlanMode = (toolInput: Record<string, unknown>, signal: AbortSignal): Promise<ExitPlanPermissionResult> => {
         return exitPlanService.handleExitPlanMode(
@@ -1510,8 +1589,10 @@ export class AgentOrchestrator {
         if (/\bgit\s+(commit|push|checkout\s+-[bB]|branch\s+-[mMdD]|merge\b|rebase\b|reset\b|stash\s+(drop|pop)\b|add\b|apply\b|cherry-pick\b)/.test(command)) return false
         // 进程控制
         if (/\b(kill|killall|pkill)\s/.test(command)) return false
-        // 脚本执行（具有潜在副作用，如 node script.js / python main.py）
-        if (/\b(node|python[23]?|ruby|perl|php)\s+[^-]/.test(command)) return false
+        // 脚本执行（具有潜在副作用，即使使用 -c 也可能写文件）
+        if (/\b(node|python[23]?|ruby|perl|php)\b/.test(command)) return false
+        // 常见的隐式写入工具
+        if (/\b(tee|dd|install)\b/.test(command)) return false
         return true
       }
 
@@ -1584,6 +1665,24 @@ export class AgentOrchestrator {
                 `The content for Write tool (~${estimatedTokens} estimated tokens, ${input.content.length} chars) is too large and may be truncated. ` +
                 `Please split the write into smaller sequential steps: write the first portion of the file now, then use Edit tool to append remaining sections incrementally.`,
             }
+          }
+        }
+
+        // ── Copis 受控写入目录 ──
+        // 原始项目根可以继续用于读取，但任何 Agent 文件写入都必须落在
+        // copis/ 或 Copis 私有会话工作台，不能因退出计划模式而扩大范围。
+        if (workspaceWriteRestricted && (toolName === 'Write' || toolName === 'Edit' || toolName === 'MultiEdit')) {
+          const filePath = typeof input.file_path === 'string'
+            ? input.file_path
+            : typeof input.path === 'string' ? input.path : ''
+          if (!isRestrictedWritePathAllowed(filePath)) {
+            return { behavior: 'deny' as const, message: restrictedWriteDeniedMessage }
+          }
+        }
+        if (workspaceWriteRestricted && toolName === 'Bash') {
+          const command = typeof input.command === 'string' ? input.command : ''
+          if (!isBashCommandReadOnly(command)) {
+            return { behavior: 'deny' as const, message: `${restrictedWriteDeniedMessage} Bash 写操作请改用 Write/Edit 写入 copis/。` }
           }
         }
 
@@ -1729,6 +1828,7 @@ export class AgentOrchestrator {
         workspaceSlug,
         sessionId,
         agentCwd,
+        workspaceWriteRoot,
         permissionMode: initialPermissionMode,
         collaborationAvailable,
         currentModelId: selectedModelId,
@@ -1776,7 +1876,7 @@ export class AgentOrchestrator {
         this.eventBus.emit(sessionId, { kind: 'proma_event', event: { type: 'model_resolved', model: resolvedModel } })
       }
       const handleContextWindow = (cw: number): void => {
-        const inferredWindow = inferAgentSdkContextWindow(modelId, channel.provider)
+        const inferredWindow = inferAgentSdkContextWindow(selectedModelId, channel.provider)
         const contextWindow = Math.max(cw, inferredWindow ?? 0) || cw
         console.log(`[Agent 编排] 缓存 contextWindow: ${contextWindow}`)
         // result 消息里的真实 contextWindow 透传到 renderer，
@@ -1810,7 +1910,7 @@ export class AgentOrchestrator {
         ...(maxTurns != null && { maxTurns }),
         permissionMode: initialPermissionMode,
         canUseTool,
-        systemPrompt: systemPromptAppend + buildPiAdditionalDirectoriesPrompt(allAdditionalDirectories),
+        systemPrompt: systemPromptAppend + buildPiAdditionalDirectoriesPrompt(allAdditionalDirectories, workspaceWriteRestricted ? workspaceWriteRoot : undefined),
         resumeSessionId: existingSdkSessionId,
         piAgentDir: getSdkConfigDir(),
         piSessionDir: join(getSdkConfigDir(), 'sessions'),
@@ -2183,7 +2283,7 @@ export class AgentOrchestrator {
                 const hasPiPartialOutput = agentRuntime === 'pi' && hasPiAssistantTextContent(assistantMsg)
                 if (hasPiPartialOutput) {
                   const partialOutput = stripPiAssistantError(assistantMsg)
-                  if (modelId) partialOutput._channelModelId = modelId
+                  partialOutput._channelModelId = selectedModelId
                   partialOutput._channelProvider = channel.provider
                   accumulatedMessages.push(partialOutput)
                   // Reuse the Pi UUID to replace the latest partial frame with normal markdown output.
@@ -2205,7 +2305,7 @@ export class AgentOrchestrator {
                   },
                   parent_tool_use_id: null,
                   uuid: randomUUID(),
-                  _channelModelId: modelId,
+                  _channelModelId: selectedModelId,
                   _channelProvider: channel.provider,
                   error: { message: typedError.message, errorType: typedError.code },
                   _createdAt: Date.now(),
@@ -2251,16 +2351,12 @@ export class AgentOrchestrator {
                 } else {
                   // 为结果消息注入渠道信息，确保持久化后能按 Agent SDK 运行窗口计算压缩阈值
                   if (msg.type === 'result') {
-                    if (modelId) {
-                      (msg as Record<string, unknown>)._channelModelId = modelId
-                    }
+                    (msg as Record<string, unknown>)._channelModelId = selectedModelId
                     ;(msg as Record<string, unknown>)._channelProvider = channel.provider
                   }
                   // 为 assistant 消息注入渠道信息，确保持久化后能正确匹配模型显示名与 Agent SDK 窗口
                   if (msg.type === 'assistant') {
-                    if (modelId) {
-                      (msg as Record<string, unknown>)._channelModelId = modelId
-                    }
+                    (msg as Record<string, unknown>)._channelModelId = selectedModelId
                     ;(msg as Record<string, unknown>)._channelProvider = channel.provider
                   }
                   accumulatedMessages.push(msg)

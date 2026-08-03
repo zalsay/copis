@@ -188,7 +188,7 @@ function buildGeminiRequest(
 async function callGeminiAndBuildResult(
   prompt: string,
   sessionId: string,
-  options: { aspectRatio?: string; imageSize?: string; referenceImagePaths?: string[]; cwd?: string; numberOfImages?: number },
+  options: { aspectRatio?: string; imageSize?: string; referenceImagePaths?: string[]; cwd?: string; outputCwd?: string; numberOfImages?: number },
 ): Promise<McpToolResult> {
   const credentials = getToolCredentials('nano-banana')
   const baseUrl = credentials.baseUrl?.trim() || DEFAULT_BASE_URL
@@ -266,10 +266,11 @@ async function callGeminiAndBuildResult(
         data: part.inlineData.data,
       })
 
-      // 同时保存到 Agent 工作 session 目录（供 Agent 直接引用）
-      if (options.cwd) {
+      // 同时保存到 Agent 允许写入的目录（供 Agent 直接引用）
+      const outputCwd = options.outputCwd ?? options.cwd
+      if (outputCwd) {
         try {
-          const imgDir = join(options.cwd, 'generated-images')
+          const imgDir = join(outputCwd, 'generated-images')
           mkdirSync(imgDir, { recursive: true })
           const workspacePath = join(imgDir, filename)
           writeFileSync(workspacePath, Buffer.from(part.inlineData.data, 'base64'))
@@ -330,6 +331,7 @@ export async function injectNanoBananaMcpServer(
   mcpServers: Record<string, Record<string, unknown>>,
   sessionId: string,
   agentCwd?: string,
+  workspaceWriteRoot?: string,
 ): Promise<void> {
   // 检查工具是否启用且有凭据
   const toolState = getToolState('nano-banana')
@@ -360,6 +362,7 @@ export async function injectNanoBananaMcpServer(
               imageSize: args.imageSize,
               referenceImagePaths: args.referenceImagePaths,
               cwd: agentCwd,
+              outputCwd: workspaceWriteRoot ?? agentCwd,
               numberOfImages: args.numberOfImages,
             })
           } catch (error) {

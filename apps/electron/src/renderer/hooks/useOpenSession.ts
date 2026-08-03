@@ -101,10 +101,6 @@ export function useOpenSession(): OpenSessionFn {
             agentWorkspaceId: session.workspaceId,
           }).catch(console.error)
         }
-      } else {
-        setAppMode('scratch')
-        setCurrentConversationId(null)
-        setCurrentAgentSessionId(null)
       }
     },
     [tabs, setTabs, setActiveTabId, setAutomationForm, setActiveView, setAppMode, setCurrentConversationId, setCurrentAgentSessionId, agentSessions, setCurrentAgentWorkspaceId, setUnviewedCompleted, settingsOpen, channelFormDirty, setSettingsOpen, setPendingSessionNavigation],

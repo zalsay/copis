@@ -16,7 +16,7 @@ const previewIdBySignature = new Map<string, string>()
 
 function isDevServerNavigation(url: string): boolean {
   try {
-    return new URL(url).origin === 'http://127.0.0.1:5173'
+    return new URL(url).origin === 'http://127.0.0.1:5174'
   } catch {
     return false
   }
@@ -118,7 +118,7 @@ export function openDetachedPreviewWindow(
 
   const isDev = !app.isPackaged
   if (isDev) {
-    win.loadURL(`http://127.0.0.1:5173?window=detached-preview&previewId=${encodeURIComponent(id)}`)
+    win.loadURL(`http://127.0.0.1:5174?window=detached-preview&previewId=${encodeURIComponent(id)}`)
   } else {
     win.loadFile(join(__dirname, 'renderer', 'index.html'), {
       query: { window: 'detached-preview', previewId: id },

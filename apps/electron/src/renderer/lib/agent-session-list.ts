@@ -1,5 +1,21 @@
 import type { AgentSessionMeta } from '@proma/shared'
 
+/** 校验来自 IPC/HTTP 边界的 Agent 会话元数据，避免无效项进入全局列表。 */
+export function isAgentSessionMeta(value: unknown): value is AgentSessionMeta {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false
+  const record = value as Record<string, unknown>
+  return typeof record.id === 'string'
+    && record.id.length > 0
+    && typeof record.title === 'string'
+    && typeof record.createdAt === 'number'
+    && typeof record.updatedAt === 'number'
+}
+
+/** 将不可信的列表响应归一化为可安全消费的 Agent 会话列表。 */
+export function sanitizeAgentSessions(value: unknown): AgentSessionMeta[] {
+  return Array.isArray(value) ? value.filter(isAgentSessionMeta) : []
+}
+
 interface AgentSessionTreeLike {
   session: Pick<AgentSessionMeta, 'id'>
   childSessions: readonly Pick<AgentSessionMeta, 'id'>[]

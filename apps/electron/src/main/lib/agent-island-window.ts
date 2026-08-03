@@ -83,7 +83,7 @@ export function createAgentIslandWindow(): BrowserWindow | null {
 
   const isDev = !app.isPackaged
   if (isDev) {
-    void agentIslandWindow.loadURL(`http://127.0.0.1:5173?window=agent-island&platform=${process.platform}`)
+    void agentIslandWindow.loadURL(`http://127.0.0.1:5174?window=agent-island&platform=${process.platform}`)
   } else {
     void agentIslandWindow.loadFile(join(__dirname, 'renderer', 'index.html'), {
       query: { window: 'agent-island', platform: process.platform },

@@ -7,23 +7,20 @@ import { EnvironmentCheckDialog } from './components/environment/EnvironmentChec
 import { MigrationImportDialog } from './components/migration/MigrationImportDialog'
 import { TooltipProvider } from './components/ui/tooltip'
 import { ShortcutGuideDialog } from './components/shortcuts/ShortcutGuideDialog'
+import { CopisWorkingLoginDialog } from './components/app-shell/CopisWorkingLoginDialog'
 import { PlanningReminderRail } from './components/planning/PlanningReminderRail'
 import { conversationsAtom } from './atoms/chat-atoms'
 import { environmentCheckDialogOpenAtom } from './atoms/environment'
 import { tabsAtom, activeTabIdAtom, openTab, TUTORIAL_TAB_ID, TUTORIAL_TAB_TITLE } from './atoms/tab-atoms'
-import { appModeAtom } from './atoms/app-mode'
-import {
-  agentSessionsAtom,
-  agentSettingsReadyAtom,
-  currentAgentSessionIdAtom,
-  currentAgentWorkspaceIdAtom,
-} from './atoms/agent-atoms'
+import { workingAuthStateAtom } from './atoms/working-atoms'
 import type { AppShellContextType } from './contexts/AppShellContext'
 
 export default function App(): React.ReactElement {
   // 应用级初始化状态。
 
   const store = useStore()
+  const workingAuthState = useAtomValue(workingAuthStateAtom)
+  const setWorkingAuthState = useSetAtom(workingAuthStateAtom)
   const [isLoading, setIsLoading] = React.useState(true)
   const [showOnboarding, setShowOnboarding] = React.useState(false)
 
@@ -33,7 +30,11 @@ export default function App(): React.ReactElement {
   React.useEffect(() => {
     const initialize = async () => {
       try {
-        const settings = await window.electronAPI.getSettings()
+        const [settings, authState] = await Promise.all([
+          window.electronAPI.getSettings(),
+          window.electronAPI.getWorkingAuthState(),
+        ])
+        setWorkingAuthState(authState)
         if (!settings.onboardingCompleted) {
           setShowOnboarding(true)
         }
@@ -45,7 +46,7 @@ export default function App(): React.ReactElement {
     }
 
     initialize()
-  }, [])
+  }, [setWorkingAuthState])
 
   // 完成 onboarding 回调：创建欢迎对话，可选打开教程 Tab
   const handleOnboardingComplete = async (openTutorial?: boolean) => {
@@ -91,6 +92,19 @@ export default function App(): React.ReactElement {
     )
   }
 
+  // 未登录时不挂载主界面，避免在认证完成前创建本地 Agent 会话或进入工作区。
+  if (!workingAuthState?.authenticated) {
+    return (
+      <TooltipProvider delayDuration={200}>
+        <CopisWorkingLoginDialog
+          dismissible={false}
+          onClose={() => {}}
+          onAuthenticated={setWorkingAuthState}
+        />
+      </TooltipProvider>
+    )
+  }
+
   // 显示 onboarding 界面
   if (showOnboarding) {
     return (
@@ -107,7 +121,6 @@ export default function App(): React.ReactElement {
   // 显示主界面
   return (
     <TooltipProvider delayDuration={200}>
-      <CopisStartupInitializer />
       <AppShell contextValue={contextValue} />
       <PlanningReminderRail />
       <ShortcutGuideDialog />
@@ -116,64 +129,6 @@ export default function App(): React.ReactElement {
       <MigrationImportDialog />
     </TooltipProvider>
   )
-}
-
-/**
- * Copis 默认直接进入本地 Agent。
- * 只复用已有 Agent 会话和工作区 API，不创建第二套运行时。
- */
-function CopisStartupInitializer(): null {
-  const store = useStore()
-  const agentSettingsReady = useAtomValue(agentSettingsReadyAtom)
-  const setAgentSessions = useSetAtom(agentSessionsAtom)
-  const setAppMode = useSetAtom(appModeAtom)
-  const setCurrentAgentSessionId = useSetAtom(currentAgentSessionIdAtom)
-  const setCurrentAgentWorkspaceId = useSetAtom(currentAgentWorkspaceIdAtom)
-  const startedRef = React.useRef(false)
-
-  React.useEffect(() => {
-    if (!agentSettingsReady || startedRef.current) return
-    startedRef.current = true
-
-    const initialize = async (): Promise<void> => {
-      const sessions = await window.electronAPI.listAgentSessions()
-      setAgentSessions(sessions)
-
-      const existingAgentTab = store.get(tabsAtom).find((tab) => tab.type === 'agent')
-      if (existingAgentTab) {
-        setAppMode('agent')
-        setCurrentAgentSessionId(existingAgentTab.sessionId)
-        store.set(activeTabIdAtom, existingAgentTab.id)
-        return
-      }
-
-      const workspaceId = store.get(currentAgentWorkspaceIdAtom) ?? undefined
-      const session = sessions.find((item) => !item.archived && (!workspaceId || item.workspaceId === workspaceId))
-        ?? sessions.find((item) => !item.archived)
-      const activeSession = session ?? await window.electronAPI.createAgentSession(undefined, undefined, workspaceId)
-      const nextWorkspaceId = activeSession.workspaceId ?? workspaceId
-      if (nextWorkspaceId) {
-        setCurrentAgentWorkspaceId(nextWorkspaceId)
-        void window.electronAPI.updateSettings({ agentWorkspaceId: nextWorkspaceId }).catch(console.error)
-      }
-      setAppMode('agent')
-      setCurrentAgentSessionId(activeSession.id)
-      const result = openTab(store.get(tabsAtom), {
-        type: 'agent',
-        sessionId: activeSession.id,
-        title: activeSession.title,
-      })
-      store.set(tabsAtom, result.tabs)
-      store.set(activeTabIdAtom, result.activeTabId)
-    }
-
-    void initialize().catch((error) => {
-      startedRef.current = false
-      console.error('[Copis] 默认 Agent 初始化失败:', error)
-    })
-  }, [agentSettingsReady, setAgentSessions, setAppMode, setCurrentAgentSessionId, setCurrentAgentWorkspaceId, store])
-
-  return null
 }
 
 /**

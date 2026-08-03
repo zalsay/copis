@@ -4,7 +4,7 @@
  * 被 TabBar（×按钮/中键）和 GlobalShortcuts（Cmd+W）共用，
  *
  * 关键行为：
- * - 关闭当前会话入口只回到 Scratch Pad，不停止后台 Agent
+ * - 关闭当前会话入口后显示剩余会话，不停止后台 Agent
  * - 运行中或阻塞中的会话继续通过左侧状态 indicator 恢复
  * - idle 状态的 Agent 会话在用户主动关闭 Tab 时清除完成提醒状态
  * - 真正删除/归档时由侧边栏路径负责清理 per-session 状态

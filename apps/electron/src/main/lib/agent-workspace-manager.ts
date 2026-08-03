@@ -11,7 +11,7 @@ import type { Dirent } from 'node:fs'
 import { rmSyncWithRetry, renameWithRetry } from './fs-retry'
 import { writeJsonFileAtomic, readJsonFileSafe } from './safe-file'
 import { randomUUID } from 'node:crypto'
-import { join, resolve, relative, isAbsolute, dirname, basename } from 'node:path'
+import { join, resolve, relative, isAbsolute, dirname, basename, sep } from 'node:path'
 import {
   getAgentWorkspacesIndexPath,
   getAgentWorkspacesDir,
@@ -216,10 +216,50 @@ export function getAgentWorkspaceBySlug(slug: string): AgentWorkspace | undefine
 
 /**
  * 返回项目文件根。本地目录项目直接使用用户选择的目录；空白项目继续
- * 使用 Proma 托管的 workspace-files/，以保持历史项目完全兼容。
+ * 使用 Copis 托管的 workspace-files/，以保持历史项目完全兼容。
  */
 export function getProjectFilesPath(workspaceSlug: string): string {
   return getAgentWorkspaceBySlug(workspaceSlug)?.projectRootPath ?? getWorkspaceFilesDir(workspaceSlug)
+}
+
+/** 未授权直接修改原始目录时，Agent 的受控输出目录名称。 */
+export const COPIS_WORKSPACE_WRITE_DIR = 'copis'
+
+/**
+ * 返回工作区允许 Agent 写入的根目录。
+ *
+ * 未勾选“允许 Agent 写入工作区目录”时，原始项目根保持只读，写入范围
+ * 收敛到项目根下的 copis/；Copis 托管项目也使用 workspace-files/copis/。
+ */
+export function getAgentWorkspaceWritableRoot(
+  workspace: Pick<AgentWorkspace, 'slug' | 'projectRootPath' | 'allowWorkspaceWrite'>,
+): string {
+  const projectRoot = workspace.projectRootPath ?? getWorkspaceFilesDir(workspace.slug)
+  return workspace.allowWorkspaceWrite === false
+    ? join(projectRoot, COPIS_WORKSPACE_WRITE_DIR)
+    : projectRoot
+}
+
+/** 确保受控写入目录存在，并返回其路径。 */
+export function ensureAgentWorkspaceWritableRoot(
+  workspace: Pick<AgentWorkspace, 'slug' | 'projectRootPath' | 'allowWorkspaceWrite'>,
+): string {
+  const projectRoot = workspace.projectRootPath ?? getWorkspaceFilesDir(workspace.slug)
+  const writableRoot = getAgentWorkspaceWritableRoot(workspace)
+  if (workspace.allowWorkspaceWrite === false) {
+    mkdirSync(writableRoot, { recursive: true })
+    const projectRootReal = realpathSync(resolve(projectRoot))
+    const writableRootReal = realpathSync(resolve(writableRoot))
+    const relativeWritableRoot = relative(projectRootReal, writableRootReal)
+    if (
+      relativeWritableRoot === '..'
+      || relativeWritableRoot.startsWith(`..${sep}`)
+      || isAbsolute(relativeWritableRoot)
+    ) {
+      throw new Error(`Copis 受控写入目录不能指向项目根之外: ${writableRoot}`)
+    }
+  }
+  return writableRoot
 }
 
 /** 将 ~/.proma/default-skills/ 的内容逐个复制到工作区 skills/ 目录 */
@@ -253,8 +293,8 @@ function copyDefaultSkills(workspaceSlug: string, options: { throwOnError?: bool
 }
 
 export function createAgentWorkspace(input: string | CreateAgentWorkspaceInput): AgentWorkspace {
-  const { name, projectRootPath } = typeof input === 'string'
-    ? { name: input, projectRootPath: undefined }
+  const { name, projectRootPath, allowWorkspaceWrite } = typeof input === 'string'
+    ? { name: input, projectRootPath: undefined, allowWorkspaceWrite: undefined }
     : input
   const index = readIndex()
 
@@ -283,11 +323,15 @@ export function createAgentWorkspace(input: string | CreateAgentWorkspaceInput):
     }
   }
 
+  const effectiveAllowWorkspaceWrite = normalizedProjectRootPath
+    ? allowWorkspaceWrite ?? false
+    : allowWorkspaceWrite
   const workspace: AgentWorkspace = {
     id: randomUUID(),
     name,
     slug,
     projectRootPath: normalizedProjectRootPath,
+    ...(effectiveAllowWorkspaceWrite !== undefined ? { allowWorkspaceWrite: effectiveAllowWorkspaceWrite } : {}),
     createdAt: now,
     updatedAt: now,
   }
@@ -411,9 +455,6 @@ export function deleteAgentWorkspace(id: string): void {
   const target = index.workspaces[idx]!
   if (target.slug === 'default') {
     throw new Error('默认项目不能删除')
-  }
-  if (index.workspaces.length <= 1) {
-    throw new Error('至少需要保留一个项目')
   }
 
   const workspacesRoot = resolve(getAgentWorkspacesDir())

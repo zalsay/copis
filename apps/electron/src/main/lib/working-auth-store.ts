@@ -7,14 +7,17 @@ import { writeJsonFileAtomic } from './safe-file'
 interface PersistedWorkingAuth {
   token?: string
   tokenEncoding?: 'safe-storage' | 'plain'
+  refreshToken?: string
+  refreshTokenEncoding?: 'safe-storage' | 'plain'
   user?: WorkingUser | null
   updatedAt?: number
 }
 
 export interface WorkingTokenStore {
   getToken(): string | null
+  getRefreshToken(): string | null
   getUser(): WorkingUser | null
-  save(token: string, user?: WorkingUser | null): void
+  save(token: string, user?: WorkingUser | null, refreshToken?: string | null): void
   clear(): void
 }
 
@@ -58,12 +61,24 @@ export function createWorkingTokenStore(): WorkingTokenStore {
       const persisted = readPersistedAuth()
       return decryptToken(persisted.token ?? '', persisted.tokenEncoding)
     },
+    getRefreshToken: () => {
+      const persisted = readPersistedAuth()
+      return decryptToken(persisted.refreshToken ?? '', persisted.refreshTokenEncoding)
+    },
     getUser: () => readPersistedAuth().user ?? null,
-    save: (token, user = null) => {
+    save: (token, user = null, refreshToken) => {
+      const persisted = readPersistedAuth()
+      const previousRefreshToken = decryptToken(persisted.refreshToken ?? '', persisted.refreshTokenEncoding)
+      const nextRefreshToken = refreshToken === undefined ? previousRefreshToken : refreshToken
       const encrypted = encryptToken(token)
+      const refreshEncrypted = nextRefreshToken ? encryptToken(nextRefreshToken) : null
       writeJsonFileAtomic(getWorkingAuthPath(), {
         token: encrypted.value,
         tokenEncoding: encrypted.encoding,
+        ...(refreshEncrypted && {
+          refreshToken: refreshEncrypted.value,
+          refreshTokenEncoding: refreshEncrypted.encoding,
+        }),
         user,
         updatedAt: Date.now(),
       })

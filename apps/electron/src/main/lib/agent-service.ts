@@ -34,7 +34,7 @@ import { RuntimeRoutingAgentAdapter } from './adapters/runtime-routing-agent-ada
 import { AgentEventBus } from './agent-event-bus'
 import { AgentOrchestrator } from './agent-orchestrator'
 import { getAgentSessionWorkspacePath } from './config-paths'
-import { getAgentWorkspaceBySlug, getLocalProjectRootStatus, getProjectFilesPath } from './agent-workspace-manager'
+import { getAgentWorkspaceBySlug, getAgentWorkspaceWritableRoot, getLocalProjectRootStatus } from './agent-workspace-manager'
 import { getAgentSessionMeta, updateAgentSessionMeta } from './agent-session-manager'
 import { setAgentStopper, setHeadlessAgentRunner } from './agent-headless-runner-registry'
 import { getHeadlessAgentRunTarget } from './agent-headless-run-target'
@@ -489,9 +489,9 @@ function resolveSafeWorkspaceFilePath(workspaceRoot: string, filename: string): 
 }
 
 /**
- * 保存文件到项目文件根目录
+ * 保存文件到 Agent 允许写入的工作区目录。
  *
- * 空白项目写入 Proma 托管的 workspace-files/；本地目录项目直接写入用户选择的原始目录。
+ * 空白项目使用 Copis 托管目录；未授权原始目录写入时，文件保存到项目根下的 copis/。
  */
 export function saveFilesToWorkspaceFiles(input: AgentSaveWorkspaceFilesInput): AgentSavedFile[] {
   const workspace = getAgentWorkspaceBySlug(input.workspaceSlug)
@@ -511,7 +511,10 @@ export function saveFilesToWorkspaceFiles(input: AgentSaveWorkspaceFilesInput): 
     }
   }
 
-  const wsFilesDir = workspace.projectRootPath ?? getProjectFilesPath(input.workspaceSlug)
+  const wsFilesDir = getAgentWorkspaceWritableRoot(workspace)
+  if (workspace.allowWorkspaceWrite === false) {
+    mkdirSync(wsFilesDir, { recursive: true })
+  }
   const files = input.files.map((file) => ({
     file,
     initialTargetPath: resolveSafeWorkspaceFilePath(wsFilesDir, file.filename),

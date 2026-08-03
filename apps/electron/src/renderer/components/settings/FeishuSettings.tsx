@@ -9,7 +9,7 @@
 import * as React from 'react'
 import { useAtomValue, useSetAtom } from 'jotai'
 import { toast } from 'sonner'
-import { Loader2, CheckCircle2, XCircle, ExternalLink, Users, User, Trash2, RefreshCw, Copy, Check, Power, PowerOff, Plus, ChevronRight, PlayCircle, QrCode, MessageSquare, AlertTriangle, Archive, ArchiveRestore, Search } from 'lucide-react'
+import { Loader2, CheckCircle2, XCircle, Users, User, Trash2, RefreshCw, Copy, Check, Power, PowerOff, Plus, ChevronRight, PlayCircle, QrCode, Archive, ArchiveRestore, Search } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import {
@@ -56,7 +56,7 @@ import {
   type FeishuBindingTypeFilter,
   type FeishuBindingViewMode,
 } from '@/lib/feishu-bindings'
-import type { AgentSessionMeta, AgentWorkspace, FeishuTestResult, FeishuChatBinding, FeishuBotConfig, FeishuBotBridgeState, FeishuRegisterAppQRCode, FeishuRegisterAppStatus, FeishuSessionMirrorSettings, FeishuSessionSyncMode } from '@proma/shared'
+import type { AgentSessionMeta, AgentWorkspace, FeishuTestResult, FeishuChatBinding, FeishuBotConfig, FeishuBotBridgeState, FeishuRegisterAppQRCode, FeishuRegisterAppStatus } from '@proma/shared'
 
 // ===== 常量 =====
 
@@ -75,32 +75,6 @@ const STATUS_CONFIG = {
   error: { color: 'bg-red-500', label: '连接错误' },
 } as const
 
-
-/** 飞书批量权限配置 JSON（用于一键复制粘贴到飞书开放平台） */
-const FEISHU_SCOPES_JSON = JSON.stringify({
-  scopes: {
-    tenant: [
-      'contact:contact.base:readonly',
-      'drive:drive',
-      'im:chat',
-      'im:chat.announcement:write_only',
-      'im:chat.managers:write_only',
-      'im:chat.members:read',
-      'im:chat.members:write_only',
-      'im:chat.tabs:write_only',
-      'im:chat.top_notice:write_only',
-      'im:message',
-      'im:message.group_at_msg:readonly',
-      'im:message.group_msg',
-      'im:message.p2p_msg:readonly',
-      'im:message.reactions:write_only',
-      'im:message:send_as_bot',
-      'im:resource',
-      'wiki:wiki',
-    ],
-    user: [],
-  },
-}, null, 2)
 
 /**
  * 视频教程入口配置。
@@ -229,103 +203,6 @@ function FeishuTutorialVideo(): React.ReactElement | null {
 }
 
 // ===== 工具组件 =====
-
-/** 安全地用系统浏览器打开链接 */
-function openLink(url: string): void {
-  window.electronAPI.openExternal(url)
-}
-
-/** 可点击的外部链接组件 */
-function Link({ href, children }: { href: string; children: React.ReactNode }): React.ReactElement {
-  return (
-    <button
-      type="button"
-      className="inline-flex items-center gap-1 text-primary hover:underline cursor-pointer"
-      onClick={() => openLink(href)}
-    >
-      {children}
-      <ExternalLink className="size-3 flex-shrink-0" />
-    </button>
-  )
-}
-
-// ===== 权限配置步骤组件 =====
-
-/** 权限列表展示 + 一键复制批量权限 JSON */
-function PermissionsStep(): React.ReactElement {
-  const [copied, setCopied] = React.useState(false)
-  const [expanded, setExpanded] = React.useState(false)
-
-  const handleCopy = React.useCallback(() => {
-    copyTextToClipboard(FEISHU_SCOPES_JSON).then(() => {
-      setCopied(true)
-      toast.success('权限配置已复制到剪贴板')
-      setTimeout(() => setCopied(false), 2000)
-    }).catch(() => {
-      toast.error('复制失败')
-    })
-  }, [])
-
-  return (
-    <div className="space-y-2">
-      <div className="flex items-center gap-2">
-        <span className="flex-shrink-0 w-5 h-5 rounded-full bg-primary/10 text-primary text-xs font-semibold flex items-center justify-center">4</span>
-        <span className="font-medium text-foreground">配置权限</span>
-      </div>
-      <div className="pl-7 space-y-3 text-muted-foreground">
-        <p>
-          进入「权限管理」页面，点击下方按钮复制权限配置 JSON，
-          在飞书开放平台点击右上角「<span className="text-foreground font-medium">批量开通权限</span>」按钮，把 JSON 粘贴进去即可一次性添加所有权限。
-        </p>
-
-        {/* 主操作：一键复制按钮（更显眼） */}
-        <Button
-          size="default"
-          onClick={handleCopy}
-          className={cn(
-            'gap-2 transition-all',
-            copied && 'bg-green-600 hover:bg-green-600 text-white'
-          )}
-        >
-          {copied ? <Check size={16} /> : <Copy size={16} />}
-          <span className="font-medium">{copied ? '已复制到剪贴板' : '一键复制权限配置 JSON'}</span>
-        </Button>
-
-        {/* 次要：展开查看每个权限对应的能力 */}
-        <button
-          type="button"
-          className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
-          onClick={() => setExpanded(!expanded)}
-        >
-          <ChevronRight size={14} className={cn('transition-transform duration-200', expanded && 'rotate-90')} />
-          <span>{expanded ? '收起权限明细' : '查看每个权限的作用'}</span>
-        </button>
-        {expanded && (
-          <div className="bg-muted/50 rounded-md p-3 font-mono text-xs space-y-0.5 animate-in fade-in-0 slide-in-from-top-1 duration-200">
-            <div><span className="text-foreground/70">im:message</span> — 获取与发送单聊、群组消息</div>
-            <div><span className="text-foreground/70">im:message:send_as_bot</span> — 以机器人身份发送消息</div>
-            <div><span className="text-foreground/70">im:message.p2p_msg:readonly</span> — 接收用户发给机器人的单聊消息</div>
-            <div><span className="text-foreground/70">im:message.group_at_msg:readonly</span> — 接收群聊中 @机器人 的消息</div>
-            <div><span className="text-foreground/70">im:message.group_msg</span> — 接收群聊所有用户消息（配合 im:chat 实现仅你和 Bot 的群免 @ 续聊、群聊上下文）</div>
-            <div><span className="text-foreground/70">im:message.reactions:write_only</span> — 为消息添加状态表情（如⌨️/✅），让用户感知 Bot 正在处理 / 已完成</div>
-            <div><span className="text-foreground/70">im:chat</span> — 创建群 + 读取/更新群基础信息（群名、简介、真人数量等；免 @ 续聊靠它判断群里只有你和 Bot）</div>
-            <div><span className="text-foreground/70">im:chat.members:read</span> — 获取群成员列表（支持 @某人）</div>
-            <div><span className="text-foreground/70">im:chat.members:write_only</span> — 添加 / 移除群成员（Bot 主动拉人入群）</div>
-            <div><span className="text-foreground/70">im:chat.managers:write_only</span> — 指定 / 移除群管理员</div>
-            <div><span className="text-foreground/70">im:chat.announcement:write_only</span> — 更新群公告（把任务进度挂到公告里）</div>
-            <div><span className="text-foreground/70">im:chat.tabs:write_only</span> — 操作群会话标签页</div>
-            <div><span className="text-foreground/70">im:chat.top_notice:write_only</span> — 设置群置顶消息</div>
-            <div><span className="text-foreground/70">im:resource</span> — 获取消息中的资源文件（图片、文档等）</div>
-            <div><span className="text-foreground/70">contact:contact.base:readonly</span> — 获取用户基本信息（群聊发送者名称）</div>
-            <div><span className="text-foreground/70">drive:drive</span> — 云文档评论 @Bot 时读取与回复（支持文档协作场景）</div>
-            <div><span className="text-foreground/70">wiki:wiki</span> — 解析知识库链接的真实文档（@Bot 在 wiki 文档评论时使用）</div>
-          </div>
-        )}
-      </div>
-    </div>
-  )
-}
-
 // ===== 飞书 CLI 预置 Prompt =====
 
 const FEISHU_CLI_PROMPT = `请帮我配置飞书 CLI 开发环境，按以下步骤执行：
@@ -1045,155 +922,6 @@ function defaultBotName(index: number): string {
   return `飞书助手 ${index + 1}`
 }
 
-// ===== Session 镜像设置 =====
-
-const SESSION_SYNC_LABELS: Record<FeishuSessionSyncMode, string> = {
-  off: '关闭',
-  stream: '实时同步到飞书群',
-}
-
-function normalizeSessionMirrorSettings(settings: FeishuSessionMirrorSettings | undefined): FeishuSessionMirrorSettings {
-  return settings?.mode === 'stream'
-    ? { mode: 'stream', botId: settings.botId }
-    : { mode: 'off' }
-}
-
-function SessionMirrorSection({ bots }: { bots: FeishuBotConfig[] }): React.ReactElement {
-  const [settings, setSettings] = React.useState<FeishuSessionMirrorSettings>({ mode: 'off' })
-  const [bindings, setBindings] = React.useState<FeishuChatBinding[]>([])
-  const enabledBots = React.useMemo(
-    () => bots.filter((bot) => bot.enabled && bot.appId),
-    [bots],
-  )
-  const selectedBot = React.useMemo(
-    () => enabledBots.find((bot) => bot.id === settings.botId),
-    [enabledBots, settings.botId],
-  )
-  const selectedBotHasBinding = React.useMemo(
-    () => Boolean(settings.botId && bindings.some((binding) =>
-      !binding.archived && binding.botId === settings.botId && binding.userId && binding.userId !== 'unknown'
-    )),
-    [bindings, settings.botId],
-  )
-  const showBotBindingWarning = settings.mode === 'stream' && Boolean(settings.botId) && !selectedBotHasBinding
-
-  React.useEffect(() => {
-    window.electronAPI.getSettings()
-      .then((appSettings) => {
-        setSettings(normalizeSessionMirrorSettings(appSettings.feishuSessionMirror))
-      })
-      .catch(() => {})
-
-    window.electronAPI.listFeishuBindings()
-      .then(setBindings)
-      .catch(() => {})
-  }, [])
-
-  const saveSettings = React.useCallback(async (next: FeishuSessionMirrorSettings) => {
-    setSettings(next)
-    try {
-      await window.electronAPI.updateSettings({ feishuSessionMirror: next })
-      toast.success('飞书 Session 镜像设置已更新')
-    } catch {
-      toast.error('保存飞书 Session 镜像设置失败')
-    }
-  }, [])
-
-  const handleModeChange = React.useCallback((value: string) => {
-    const mode = value as FeishuSessionSyncMode
-    const fallbackBotId = settings.botId ?? enabledBots[0]?.id
-    const next: FeishuSessionMirrorSettings = mode === 'stream'
-      ? { mode, botId: fallbackBotId }
-      : { mode, botId: settings.botId }
-    saveSettings(next).catch(() => {})
-  }, [enabledBots, saveSettings, settings.botId])
-
-  const handleBotChange = React.useCallback((botId: string) => {
-    saveSettings({ ...settings, botId }).catch(() => {})
-  }, [saveSettings, settings])
-
-  return (
-    <SettingsSection
-      title="同步到飞书"
-      description="开启后，每个新的 Proma Agent Session 会创建一个仅包含你和指定 Bot 的飞书群，并把输出同步到群内卡片，同时默认阻止电脑自动休眠，方便你脱离电脑在飞书上继续完成工作。"
-    >
-      <SettingsCard divided={false}>
-        <div className="px-4 py-4 space-y-4">
-          <div className="grid gap-3 md:grid-cols-[180px_1fr] md:items-center">
-            <div className="text-sm font-medium text-foreground">同步方式</div>
-            <Select value={settings.mode} onValueChange={handleModeChange}>
-              <SelectTrigger className="h-9">
-                <SelectValue>{SESSION_SYNC_LABELS[settings.mode]}</SelectValue>
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="off">关闭</SelectItem>
-                <SelectItem value="stream">实时同步到飞书群</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-
-          <div className="grid gap-3 md:grid-cols-[180px_1fr] md:items-center">
-            <div className="text-sm font-medium text-foreground">同步 Bot</div>
-            <Select
-              value={settings.botId ?? ''}
-              onValueChange={handleBotChange}
-              disabled={enabledBots.length === 0}
-            >
-              <SelectTrigger className="h-9">
-                <SelectValue placeholder={enabledBots.length === 0 ? '先启用一个 Bot' : '选择同步 Bot'} />
-              </SelectTrigger>
-              <SelectContent>
-                {enabledBots.map((bot) => (
-                  <SelectItem key={bot.id} value={bot.id}>{bot.name}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-
-          <div className="flex items-start gap-2 rounded-lg bg-blue-500/10 px-3 py-3 text-xs text-blue-700 dark:text-blue-300">
-            <MessageSquare size={15} className="mt-0.5 flex-shrink-0" />
-            <div className="leading-relaxed">
-              实时同步模式下，一个 Proma Session 对应一个飞书群。即使配置了多个 Bot，也只会使用这里选中的 Bot，避免同一 Session 被多个 Bot 重复建群或拆散上下文。
-            </div>
-          </div>
-
-          <div className="flex items-start gap-2 rounded-lg bg-amber-500/10 px-3 py-3 text-xs text-amber-800 dark:text-amber-300">
-            <AlertTriangle size={15} className="mt-0.5 flex-shrink-0" />
-            <div className="space-y-1 leading-relaxed">
-              <div className="font-medium text-amber-900 dark:text-amber-200">想在仅你和 Bot 的群里不 @Bot 也能继续发送消息，需要额外申请两个权限。</div>
-              <div>
-                请在飞书开放平台为同步 Bot 申请并发布以下权限：
-              </div>
-              <div className="flex flex-col gap-1 pl-1">
-                <div>
-                  <code className="rounded bg-amber-500/15 px-1 py-0.5 text-[11px] text-amber-900 dark:text-amber-100">im:message.group_msg</code>
-                  {' '}— 接收群聊中所有用户消息（否则飞书不会把非 @ 的群消息推送给 Proma）
-                </div>
-                <div>
-                  <code className="rounded bg-amber-500/15 px-1 py-0.5 text-[11px] text-amber-900 dark:text-amber-100">im:chat</code>
-                  {' '}— 读取群基础信息以判断群里只有你和 Bot（缺少时无法识别 2 人群，仍需 @Bot）
-                </div>
-              </div>
-              <div>
-                两者都审核通过并发布后才会生效；任一缺失或审核未过时，仍需要在群里 @Bot 才能触发 Agent。一键复制的权限配置里已包含这两项，单独手动添加时请勿遗漏。
-              </div>
-            </div>
-          </div>
-
-          {showBotBindingWarning && (
-            <div className="flex items-start gap-2 rounded-lg bg-amber-500/10 px-3 py-3 text-xs text-amber-800 dark:text-amber-300">
-              <AlertTriangle size={15} className="mt-0.5 flex-shrink-0" />
-              <div className="leading-relaxed">
-                当前同步 Bot 还没有历史聊天绑定。通过 Proma「扫码创建」的 Bot 已保存扫码账号的当前组织身份，可直接为新 Session 建群；手动填写 App ID/Secret 添加的 Bot，请先在飞书里向「{selectedBot?.name ?? '该 Bot'}」发送一条消息，让 Proma 记录当前组织的 open_id。
-              </div>
-            </div>
-          )}
-        </div>
-      </SettingsCard>
-    </SettingsSection>
-  )
-}
-
 // ===== 单个 Bot 配置卡片 =====
 
 interface BotConfigCardProps {
@@ -1574,124 +1302,6 @@ function FeishuConfigTab(): React.ReactElement {
             ))}
           </div>
         )}
-      </SettingsSection>
-
-      <SessionMirrorSection bots={bots} />
-
-      {/* 手动创建飞书 Bot 引导 */}
-      <SettingsSection
-        title="手动创建飞书 Bot"
-        description="首次使用？按以下步骤在飞书开放平台创建机器人应用"
-      >
-        <SettingsCard divided={false}>
-          <div className="px-4 py-4 space-y-5 text-sm">
-            {/* 步骤 1 */}
-            <div className="space-y-1.5">
-              <div className="flex items-center gap-2">
-                <span className="flex-shrink-0 w-5 h-5 rounded-full bg-primary/10 text-primary text-xs font-semibold flex items-center justify-center">1</span>
-                <span className="font-medium text-foreground">创建自建应用</span>
-              </div>
-              <p className="pl-7 text-muted-foreground">
-                前往{' '}
-                <Link href="https://open.feishu.cn/app">飞书开放平台</Link>
-                {' '}（海外版：
-                <Link href="https://open.larksuite.com/app">Lark 开放平台</Link>
-                ），点击「创建自建应用」并填写名称描述。
-              </p>
-            </div>
-
-            {/* 步骤 2 */}
-            <div className="space-y-1.5">
-              <div className="flex items-center gap-2">
-                <span className="flex-shrink-0 w-5 h-5 rounded-full bg-primary/10 text-primary text-xs font-semibold flex items-center justify-center">2</span>
-                <span className="font-medium text-foreground">获取凭证</span>
-              </div>
-              <p className="pl-7 text-muted-foreground">
-                进入详情页，在「凭证与基础信息」中找到{' '}
-                <span className="text-foreground font-medium">App ID</span> 和{' '}
-                <span className="text-foreground font-medium">App Secret</span>，
-                复制到上方的配置表单。
-              </p>
-            </div>
-
-            {/* 步骤 3 */}
-            <div className="space-y-1.5">
-              <div className="flex items-center gap-2">
-                <span className="flex-shrink-0 w-5 h-5 rounded-full bg-primary/10 text-primary text-xs font-semibold flex items-center justify-center">3</span>
-                <span className="font-medium text-foreground">启用机器人能力</span>
-              </div>
-              <p className="pl-7 text-muted-foreground">
-                进入「添加应用能力」页面，启用「机器人」能力。
-                这样应用才能接收和发送飞书消息。
-              </p>
-            </div>
-
-            {/* 步骤 4 */}
-            <PermissionsStep />
-
-            {/* 步骤 5 */}
-            <div className="space-y-1.5">
-              <div className="flex items-center gap-2">
-                <span className="flex-shrink-0 w-5 h-5 rounded-full bg-primary/10 text-primary text-xs font-semibold flex items-center justify-center">5</span>
-                <span className="font-medium text-foreground">配置事件订阅（关键步骤）</span>
-              </div>
-              <div className="pl-7 space-y-2 text-muted-foreground">
-                <p>
-                  进入「事件与回调」页面，分别完成下面两项配置：
-                </p>
-                <div className="space-y-1.5">
-                  <div className="text-foreground/80 font-medium text-xs">① 事件订阅</div>
-                  <ol className="list-decimal pl-4 space-y-1">
-                    <li>
-                      订阅方式选择{' '}
-                      <span className="text-foreground font-medium">「使用长连接接收事件」</span>
-                      （而非 Webhook，无需公网 IP）
-                    </li>
-                    <li>
-                      添加事件{' '}
-                      <code className="bg-muted/50 px-1.5 py-0.5 rounded text-xs text-foreground/80">im.message.receive_v1</code>
-                      {' '}（接收消息）
-                    </li>
-                  </ol>
-                </div>
-                <div className="space-y-1.5">
-                  <div className="text-foreground/80 font-medium text-xs">② 回调配置</div>
-                  <ol className="list-decimal pl-4 space-y-1">
-                    <li>
-                      回调方式同样选择{' '}
-                      <span className="text-foreground font-medium">「使用长连接接收回调」</span>
-                    </li>
-                    <li>
-                      添加回调{' '}
-                      <code className="bg-muted/50 px-1.5 py-0.5 rounded text-xs text-foreground/80">card.action.trigger</code>
-                      {' '}（卡片按钮回调，Proma 的流式卡片交互依赖此项）
-                    </li>
-                  </ol>
-                </div>
-              </div>
-            </div>
-
-            {/* 步骤 6 */}
-            <div className="space-y-1.5">
-              <div className="flex items-center gap-2">
-                <span className="flex-shrink-0 w-5 h-5 rounded-full bg-primary/10 text-primary text-xs font-semibold flex items-center justify-center">6</span>
-                <span className="font-medium text-foreground">发布应用</span>
-              </div>
-              <p className="pl-7 text-muted-foreground">
-                进入「版本管理与发布」→ 创建版本 → 提交审核。
-                需要企业管理员在{' '}
-                <Link href="https://feishu.cn/admin">管理后台</Link>
-                {' '}审核通过后，机器人才能正常使用。
-              </p>
-            </div>
-
-            {/* 提示 */}
-            <div className="pl-7 p-3 rounded-lg bg-amber-500/10 text-amber-700 dark:text-amber-400 text-xs">
-              版本审核通过并发布后，在飞书中搜索机器人名称添加到聊天，
-              即可通过飞书向 Proma Agent 发送指令。
-            </div>
-          </div>
-        </SettingsCard>
       </SettingsSection>
 
       {/* 飞书 CLI 配置引导 */}

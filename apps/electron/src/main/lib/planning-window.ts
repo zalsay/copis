@@ -60,7 +60,7 @@ function ensureWindowOnScreen(win: BrowserWindow): void {
 
 function isDevServerNavigation(url: string): boolean {
   try {
-    return new URL(url).origin === 'http://127.0.0.1:5173'
+    return new URL(url).origin === 'http://127.0.0.1:5174'
   } catch {
     return false
   }
@@ -109,7 +109,7 @@ function createPlanningWindow(): BrowserWindow {
 
   const isDev = !app.isPackaged
   if (isDev) {
-    void win.loadURL('http://127.0.0.1:5173?window=planning')
+    void win.loadURL('http://127.0.0.1:5174?window=planning')
   } else {
     void win.loadFile(join(__dirname, 'renderer', 'index.html'), { query: { window: 'planning' } })
   }

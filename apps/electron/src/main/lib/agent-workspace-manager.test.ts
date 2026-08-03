@@ -98,11 +98,44 @@ describe('项目术语迁移', () => {
 })
 
 describe('Agent 工作区创建', () => {
+  test('Given 创建时未授权写入 When 解析 Agent 写入根 Then 只允许项目下的 copis 目录', () => {
+    const projectRootPath = join(tempHome, 'source-project')
+    mkdirSync(projectRootPath, { recursive: true })
+    const workspace = manager.createAgentWorkspace({
+      name: '只读项目',
+      projectRootPath,
+      allowWorkspaceWrite: false,
+    })
+
+    expect(workspace.allowWorkspaceWrite).toBe(false)
+    const expectedWritableRoot = join(workspace.projectRootPath!, 'copis')
+    expect(manager.getAgentWorkspaceWritableRoot(workspace)).toBe(expectedWritableRoot)
+    expect(manager.ensureAgentWorkspaceWritableRoot(workspace)).toBe(expectedWritableRoot)
+    expect(existsSync(expectedWritableRoot)).toBe(true)
+  })
+
+  test('Given 本地项目未传写入选项 When 创建工作区 Then 默认使用 copis 受控写入目录', () => {
+    const projectRootPath = join(tempHome, 'default-readonly-project')
+    mkdirSync(projectRootPath, { recursive: true })
+    const workspace = manager.createAgentWorkspace({ name: '默认只读项目', projectRootPath })
+
+    expect(workspace.allowWorkspaceWrite).toBe(false)
+    expect(manager.getAgentWorkspaceWritableRoot(workspace)).toBe(join(workspace.projectRootPath!, 'copis'))
+  })
+
   test('Given 项目名称是 Windows 保留设备名 When 创建工作区 Then slug 避免直接使用保留名', () => {
     const workspace = manager.createAgentWorkspace('CON')
 
     expect(workspace.slug).toBe('workspace-con')
     expect(existsSync(configPaths.getAgentWorkspacePath(workspace.slug))).toBe(true)
+  })
+
+  test('Given 只有一个普通工作区 When 删除工作区 Then 允许项目列表为空', () => {
+    const workspace = manager.createAgentWorkspace('唯一项目')
+
+    manager.deleteAgentWorkspace(workspace.id)
+
+    expect(manager.listAgentWorkspaces()).toEqual([])
   })
 
   test('Given 默认 Skill 包含 blocklist 目录 When 创建工作区 Then 初始化 Skills 时跳过高风险目录', () => {

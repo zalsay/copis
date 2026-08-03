@@ -5,6 +5,8 @@ import {
   replaceAgentSessionInFreshnessOrder,
   upsertAgentSession,
   mergeFetchedAgentSessions,
+  isAgentSessionMeta,
+  sanitizeAgentSessions,
 } from './agent-session-list'
 
 function makeSession(
@@ -20,6 +22,18 @@ function makeSession(
     ...extra,
   }
 }
+
+describe('Agent 会话边界校验', () => {
+  test('Given 创建接口返回 undefined When 校验 Then 拒绝无效会话', () => {
+    expect(isAgentSessionMeta(undefined)).toBe(false)
+    expect(isAgentSessionMeta({ id: 'session-1', title: '缺少时间' })).toBe(false)
+  })
+
+  test('Given 列表包含 undefined When 归一化 Then 只保留完整会话', () => {
+    const valid = makeSession('valid', 1)
+    expect(sanitizeAgentSessions([undefined, valid, null, { id: 'broken' }])).toEqual([valid])
+  })
+})
 
 describe('sortAgentSessionsByUpdatedAtDesc', () => {
   test('Given 乱序会话 When 排序 Then 按 updatedAt 降序', () => {

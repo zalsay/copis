@@ -1,16 +1,36 @@
 import type {
+  WorkingCheckInResult,
+  WorkingFeedbackInput,
+  WorkingFeedbackResult,
+  WorkingInvitedUser,
+  WorkingLedgerEntry,
   WorkingLoginInput,
   WorkingLoginResult,
+  WorkingOrder,
+  WorkingOrdersPage,
+  WorkingPasswordResetInput,
+  WorkingPasswordResetVerificationResult,
+  WorkingRegisterInput,
+  WorkingSendVerificationCodeInput,
   WorkingSessionHistory,
+  WorkingVerifyPasswordResetCodeInput,
+  WorkingReceiveChannel,
+  WorkingReceiveChannelSettings,
   WorkingSessionSummary,
+  WorkingSettingsSnapshot,
   WorkingSkill,
   WorkingUser,
+  WorkingVipStatus,
+  WorkingWalletMember,
   WorkingWorkspace,
   WorkingWorkspaceInput,
 } from '@proma/shared'
 import type { WorkingTokenStore } from './working-auth-store'
 
 export const DEFAULT_COPIS_BACKEND_URL = 'http://127.0.0.1:9000/module/edu-api'
+
+const WORKING_TOKEN_REFRESH_BUFFER_MS = 5 * 60 * 1000
+const WORKING_REFRESH_RETRY_DELAY_MS = 60 * 1000
 
 export interface WorkingApiClientOptions {
   baseUrl?: string
@@ -69,6 +89,93 @@ function errorMessage(payload: unknown, fallback: string): { message: string; co
   return { message, code }
 }
 
+function firstDefined(item: Record<string, unknown>, keys: readonly string[]): unknown {
+  for (const key of keys) {
+    if (item[key] !== undefined && item[key] !== null) return item[key]
+  }
+  return undefined
+}
+
+function normalizeIdentifier(value: unknown): number | string | undefined {
+  if (typeof value === 'number' && Number.isFinite(value)) return value
+  if (typeof value === 'string' && value.trim()) return value.trim()
+  return undefined
+}
+
+function normalizeWorkingUser(value: unknown, fallback: Partial<WorkingUser> = {}): WorkingUser | null {
+  const item = isRecord(value) ? value : {}
+  const id = normalizeIdentifier(firstDefined(item, ['id', 'ID', 'user_id', 'userId'])) ?? fallback.id
+  if (id === undefined || id === null || (typeof id === 'string' && !id.trim())) return null
+
+  const user: WorkingUser = { id }
+  const userId = normalizeIdentifier(firstDefined(item, ['user_id', 'userId', 'id', 'ID'])) ?? fallback.userId
+  if (userId !== undefined) user.userId = userId
+
+  const email = firstDefined(item, ['email', 'Email']) ?? fallback.email
+  if (typeof email === 'string' && email.trim()) user.email = email.trim()
+  const nickname = firstDefined(item, ['nickname', 'Nickname']) ?? fallback.nickname
+  if (typeof nickname === 'string' && nickname.trim()) user.nickname = nickname.trim()
+
+  const accountType = firstDefined(item, ['account_type', 'accountType', 'AccountType']) ?? fallback.accountType ?? fallback.account_type
+  if (typeof accountType === 'string' && accountType.trim()) {
+    user.accountType = accountType.trim()
+    user.account_type = accountType.trim()
+  }
+  const role = firstDefined(item, ['role', 'Role']) ?? fallback.role
+  if (typeof role === 'string' && role.trim()) user.role = role.trim()
+
+  const isAdmin = firstDefined(item, ['is_admin', 'isAdmin', 'IsAdmin']) ?? fallback.isAdmin
+  if (typeof isAdmin === 'boolean') user.isAdmin = isAdmin
+  const tokens = firstDefined(item, ['tokens', 'Tokens']) ?? fallback.tokens
+  if (typeof tokens === 'number' && Number.isFinite(tokens)) user.tokens = tokens
+  const isVip = firstDefined(item, ['is_vip', 'isVip', 'IsVIP']) ?? fallback.isVip
+  if (typeof isVip === 'boolean') user.isVip = isVip
+  const vipExpiresAt = firstDefined(item, ['vip_expires_at', 'vipExpiresAt', 'VIPExpiresAt']) ?? fallback.vipExpiresAt
+  if (vipExpiresAt === null || typeof vipExpiresAt === 'string') user.vipExpiresAt = vipExpiresAt
+  const mustChangePassword = firstDefined(item, ['must_change_password', 'mustChangePassword', 'MustChangePassword']) ?? fallback.mustChangePassword
+  if (typeof mustChangePassword === 'boolean') user.mustChangePassword = mustChangePassword
+  const createdAt = firstDefined(item, ['created_at', 'createdAt', 'CreatedAt']) ?? fallback.createdAt
+  if (typeof createdAt === 'string') user.createdAt = createdAt
+  const updatedAt = firstDefined(item, ['updated_at', 'updatedAt', 'UpdatedAt']) ?? fallback.updatedAt
+  if (typeof updatedAt === 'string') user.updatedAt = updatedAt
+
+  return user
+}
+
+function getJwtExpiryMs(token: string): number | null {
+  const encodedPayload = token.split('.')[1]
+  if (!encodedPayload) return null
+  try {
+    const payload = JSON.parse(Buffer.from(encodedPayload, 'base64url').toString('utf8')) as unknown
+    if (!isRecord(payload) || typeof payload.exp !== 'number' || !Number.isFinite(payload.exp)) return null
+    return payload.exp * 1000
+  } catch {
+    return null
+  }
+}
+
+function normalizeWorkingLoginResult(value: unknown): WorkingLoginResult {
+  const item = isRecord(value) ? value : {}
+  const token = firstDefined(item, ['token', 'access_token', 'accessToken'])
+  const refreshToken = firstDefined(item, ['refresh_token', 'refreshToken'])
+  const userId = normalizeIdentifier(firstDefined(item, ['user_id', 'userId', 'id', 'ID']))
+  const isAdmin = firstDefined(item, ['is_admin', 'isAdmin', 'IsAdmin'])
+  const accountType = firstDefined(item, ['account_type', 'accountType', 'AccountType'])
+  const role = firstDefined(item, ['role', 'Role'])
+  const mustChangePassword = firstDefined(item, ['must_change_password', 'mustChangePassword', 'MustChangePassword'])
+  const user = normalizeWorkingUser(item.user)
+  return {
+    token: typeof token === 'string' ? token : '',
+    ...(typeof refreshToken === 'string' && refreshToken ? { refreshToken } : {}),
+    ...(userId !== undefined ? { userId } : {}),
+    ...(typeof isAdmin === 'boolean' ? { isAdmin } : {}),
+    ...(typeof accountType === 'string' ? { accountType } : {}),
+    ...(typeof role === 'string' ? { role } : {}),
+    ...(typeof mustChangePassword === 'boolean' ? { mustChangePassword } : {}),
+    ...(user ? { user } : {}),
+  }
+}
+
 function normalizeWorkspace(value: unknown): WorkingWorkspace {
   const item = (value && typeof value === 'object' ? value : {}) as Record<string, unknown>
   return {
@@ -122,26 +229,162 @@ function normalizeSkill(value: unknown): WorkingSkill {
   }
 }
 
+function normalizeNumber(value: unknown, fallback = 0): number {
+  if (typeof value === 'number' && Number.isFinite(value)) return value
+  if (typeof value === 'string' && value.trim()) {
+    const parsed = Number(value)
+    if (Number.isFinite(parsed)) return parsed
+  }
+  return fallback
+}
+
+function normalizeVip(value: unknown): WorkingVipStatus | null {
+  if (!isRecord(value)) return null
+  return {
+    isVip: Boolean(value.is_vip ?? value.isVip),
+    vipExpiresAt: value.vip_expires_at == null && value.vipExpiresAt == null
+      ? undefined
+      : String(value.vip_expires_at ?? value.vipExpiresAt),
+    tokens: normalizeNumber(value.tokens),
+    diamonds: normalizeNumber(value.diamonds ?? value.tokens),
+    upgradeAvailable: typeof (value.upgrade_available ?? value.upgradeAvailable) === 'boolean'
+      ? Boolean(value.upgrade_available ?? value.upgradeAvailable)
+      : undefined,
+    upgradeAmount: value.upgrade_amount == null && value.upgradeAmount == null
+      ? undefined
+      : String(value.upgrade_amount ?? value.upgradeAmount),
+    upgradeAmountCents: normalizeNumber(value.upgrade_amount_cents ?? value.upgradeAmountCents),
+    upgradeBonusDiamonds: normalizeNumber(value.upgrade_bonus_diamonds ?? value.upgradeBonusDiamonds),
+    upgradeDays: normalizeNumber(value.upgrade_days ?? value.upgradeDays, 30),
+    quotaBytes: normalizeNumber(value.quota_bytes ?? value.quotaBytes),
+    quotaLabel: String(value.quota_label ?? value.quotaLabel ?? '500M'),
+  }
+}
+
+function normalizeInvitedUser(value: unknown): WorkingInvitedUser {
+  const item = isRecord(value) ? value : {}
+  return {
+    id: normalizeIdentifier(item.id) ?? '',
+    email: String(item.email ?? ''),
+    nickname: String(item.nickname ?? ''),
+    createdAt: item.created_at == null && item.createdAt == null ? undefined : String(item.created_at ?? item.createdAt),
+    tokens: normalizeNumber(item.tokens),
+  }
+}
+
+function normalizeWalletMember(value: unknown): WorkingWalletMember {
+  const item = isRecord(value) ? value : {}
+  return {
+    userId: normalizeIdentifier(item.user_id ?? item.userId) ?? '',
+    role: item.role == null ? undefined : String(item.role),
+    displayName: item.display_name == null && item.displayName == null ? undefined : String(item.display_name ?? item.displayName),
+    email: item.email == null ? undefined : String(item.email),
+    tokens: normalizeNumber(item.tokens),
+  }
+}
+
+function normalizeLedgerEntry(value: unknown): WorkingLedgerEntry {
+  const item = isRecord(value) ? value : {}
+  return {
+    id: normalizeIdentifier(item.id) ?? '',
+    payerUserId: normalizeIdentifier(item.payer_user_id ?? item.payerUserId) ?? '',
+    beneficiaryUserId: normalizeIdentifier(item.beneficiary_user_id ?? item.beneficiaryUserId),
+    amountTokens: normalizeNumber(item.amount_tokens ?? item.amountTokens),
+    type: String(item.type ?? ''),
+    sourceType: item.source_type == null && item.sourceType == null ? undefined : String(item.source_type ?? item.sourceType),
+    memo: item.memo == null ? undefined : String(item.memo),
+    deductionMultiplier: normalizeNumber(item.deduction_multiplier ?? item.deductionMultiplier),
+    payerBalanceAfter: normalizeNumber(item.payer_balance_after ?? item.payerBalanceAfter),
+    payeeBalanceAfter: normalizeNumber(item.payee_balance_after ?? item.payeeBalanceAfter),
+    createdAt: item.created_at == null && item.createdAt == null ? undefined : String(item.created_at ?? item.createdAt),
+  }
+}
+
+function normalizeReceiveChannel(value: unknown): WorkingReceiveChannelSettings | null {
+  if (!isRecord(value)) return null
+  const channel = value.channel === 'feishu' ? 'feishu' : 'weixin'
+  return {
+    channel,
+    weixinBound: Boolean(value.weixin_bound ?? value.weixinBound),
+    feishuBound: Boolean(value.feishu_bound ?? value.feishuBound),
+  }
+}
+
+function normalizeOrder(value: unknown): WorkingOrder {
+  const item = isRecord(value) ? value : {}
+  const orderType = String(item.order_type ?? item.orderType ?? 'diamond_recharge')
+  return {
+    id: normalizeIdentifier(item.id) ?? '',
+    outTradeNo: String(item.out_trade_no ?? item.outTradeNo ?? ''),
+    orderType,
+    title: String(item.title ?? ''),
+    amount: String(item.amount ?? '0'),
+    currency: String(item.currency ?? 'CNY'),
+    diamonds: normalizeNumber(item.diamonds),
+    vipDays: normalizeNumber(item.vip_days ?? item.vipDays),
+    method: String(item.method ?? ''),
+    status: String(item.status ?? 'failed'),
+    createdAt: item.created_at == null && item.createdAt == null ? undefined : String(item.created_at ?? item.createdAt),
+  }
+}
+
 export class WorkingApiClient {
   readonly baseUrl: string
   private readonly fetchImpl: (input: string, init?: RequestInit) => Promise<Response>
   private readonly tokenStore: WorkingTokenStore
+  private refreshTimer: ReturnType<typeof setTimeout> | null = null
+  private refreshPromise: Promise<string> | null = null
 
   constructor(options: WorkingApiClientOptions) {
     this.baseUrl = resolveBackendUrl(options.baseUrl)
     this.fetchImpl = options.fetchImpl ?? ((input, init) => fetch(input, init))
     this.tokenStore = options.tokenStore
+    this.scheduleAutomaticRefresh()
   }
 
   getToken(): string | null {
     return this.tokenStore.getToken()
   }
 
+  async getValidToken(): Promise<string | null> {
+    const token = this.tokenStore.getToken()
+    if (!token) return null
+
+    const expiresAt = getJwtExpiryMs(token)
+    const shouldRefresh = expiresAt !== null && expiresAt - Date.now() <= WORKING_TOKEN_REFRESH_BUFFER_MS
+    if (!shouldRefresh || !this.tokenStore.getRefreshToken()) return token
+
+    try {
+      return await this.refreshAccessToken()
+    } catch (error) {
+      if (error instanceof WorkingApiError && error.status === 401) {
+        this.clearAuth()
+        throw error
+      }
+      // 网络短暂异常时，只要旧 token 尚未过期，继续使用它完成本次请求。
+      if (expiresAt > Date.now()) {
+        console.warn('[Copis Working] 自动刷新 token 失败，将暂时使用现有 token:', error)
+        return token
+      }
+      throw error
+    }
+  }
+
   getCachedUser(): WorkingUser | null {
-    return this.tokenStore.getUser()
+    const rawUser = this.tokenStore.getUser()
+    const user = normalizeWorkingUser(rawUser)
+    if (!user) return null
+
+    // 清理旧版本可能把后端 User 原对象（含 Password hash）写入认证文件的情况。
+    const hasSensitiveFields = isRecord(rawUser)
+      && Object.keys(rawUser).some((key) => /password|secret|credential/i.test(key))
+    const token = this.tokenStore.getToken()
+    if (token && hasSensitiveFields) this.tokenStore.save(token, user)
+    return user
   }
 
   clearAuth(): void {
+    this.stopAutomaticRefresh()
     this.tokenStore.clear()
   }
 
@@ -149,41 +392,241 @@ export class WorkingApiClient {
     const email = input.email.trim()
     if (!email || !input.password) throw new Error('请输入邮箱和密码')
 
-    const result = await this.request<WorkingLoginResult>('/api/auth/login', {
+    const rawResult = await this.request<unknown>('/api/auth/login', {
       method: 'POST',
       auth: false,
       body: JSON.stringify({ email, password: input.password }),
     })
+    const result = normalizeWorkingLoginResult(rawResult)
     if (!result || typeof result.token !== 'string' || result.token.length === 0) {
-      throw new WorkingApiError('登录响应缺少 token', 200, 'invalid_login_response', result)
+      throw new WorkingApiError('登录响应缺少 token', 200, 'invalid_login_response', rawResult)
     }
 
-    this.tokenStore.save(result.token, result.user ?? null)
+    const loginUser = result.user || result.userId !== undefined
+      ? normalizeWorkingUser(result.user, {
+        id: result.userId,
+        email,
+        isAdmin: result.isAdmin,
+        accountType: result.accountType,
+        role: result.role,
+        mustChangePassword: result.mustChangePassword,
+      })
+      : null
+    this.tokenStore.save(result.token, loginUser, result.refreshToken ?? null)
+    this.scheduleAutomaticRefresh()
     try {
-      const user = await this.getCurrentUser()
+      const currentUser = await this.getCurrentUser()
+      const user = normalizeWorkingUser(currentUser, loginUser ?? {}) ?? currentUser
+      this.tokenStore.save(result.token, user)
+      this.scheduleAutomaticRefresh()
       return { ...result, user }
     } catch (error) {
       if (error instanceof WorkingApiError && error.status === 401) {
-        this.tokenStore.clear()
+        this.clearAuth()
         throw error
       }
-      this.tokenStore.save(result.token, result.user ?? null)
-      return result
+      this.tokenStore.save(result.token, loginUser)
+      this.scheduleAutomaticRefresh()
+      return { ...result, ...(loginUser ? { user: loginUser } : {}) }
     }
   }
 
+  async refreshAccessToken(): Promise<string> {
+    if (this.refreshPromise) return this.refreshPromise
+    this.refreshPromise = this.performRefreshAccessToken().finally(() => {
+      this.refreshPromise = null
+    })
+    return this.refreshPromise
+  }
+
+  private async performRefreshAccessToken(): Promise<string> {
+    const refreshToken = this.tokenStore.getRefreshToken()
+    if (!refreshToken) throw new WorkingApiError('登录状态缺少 refresh token', 401, 'missing_refresh_token')
+
+    try {
+      const rawResult = await this.request<unknown>('/api/auth/refresh', {
+        method: 'POST',
+        auth: false,
+        body: JSON.stringify({ refresh_token: refreshToken }),
+      })
+      const result = normalizeWorkingLoginResult(rawResult)
+      if (!result.token) {
+        throw new WorkingApiError('刷新响应缺少 token', 200, 'invalid_refresh_response', rawResult)
+      }
+      this.tokenStore.save(result.token, this.tokenStore.getUser(), result.refreshToken ?? refreshToken)
+      this.scheduleAutomaticRefresh()
+      return result.token
+    } catch (error) {
+      if (error instanceof WorkingApiError && error.status === 401) this.clearAuth()
+      throw error
+    }
+  }
+
+  async register(input: WorkingRegisterInput): Promise<WorkingUser | null> {
+    const email = input.email.trim().toLowerCase()
+    if (!email || !input.password) throw new Error('请输入邮箱和密码')
+    const data = await this.request<unknown>('/api/auth/register', {
+      method: 'POST',
+      auth: false,
+      body: JSON.stringify({
+        email,
+        password: input.password,
+        nickname: input.nickname?.trim() ?? '',
+        invitationCode: input.invitationCode?.trim() ?? '',
+        verificationCode: input.verificationCode?.trim() ?? '',
+      }),
+    })
+    return normalizeWorkingUser(data, { email })
+  }
+
+  async sendVerificationCode(input: WorkingSendVerificationCodeInput): Promise<void> {
+    const email = input.email.trim().toLowerCase()
+    if (!email) throw new Error('请输入邮箱地址')
+    await this.request('/api/auth/send-code', {
+      method: 'POST',
+      auth: false,
+      body: JSON.stringify({ email, ...(input.purpose ? { purpose: input.purpose } : {}) }),
+    })
+  }
+
+  async verifyPasswordResetCode(input: WorkingVerifyPasswordResetCodeInput): Promise<WorkingPasswordResetVerificationResult> {
+    const data = await this.request<unknown>('/api/auth/verify-code', {
+      method: 'POST',
+      auth: false,
+      body: JSON.stringify({ email: input.email.trim().toLowerCase(), code: input.code.trim(), purpose: 'password_reset' }),
+    })
+    const item = isRecord(data) ? data : {}
+    const resetToken = item.reset_token ?? item.resetToken
+    if (typeof resetToken !== 'string' || !resetToken) {
+      throw new WorkingApiError('验证码响应缺少重置凭证', 200, 'invalid_reset_response', data)
+    }
+    return { resetToken }
+  }
+
+  async resetPassword(input: WorkingPasswordResetInput): Promise<void> {
+    await this.request('/api/auth/password/reset', {
+      method: 'POST',
+      auth: false,
+      body: JSON.stringify({
+        email: input.email.trim().toLowerCase(),
+        reset_token: input.resetToken,
+        password: input.password,
+      }),
+    })
+  }
+
   logout(): void {
-    this.tokenStore.clear()
+    this.clearAuth()
   }
 
   async getCurrentUser(): Promise<WorkingUser> {
-    const user = await this.request<WorkingUser>('/api/users/me')
-    if (!user || (typeof user !== 'object')) {
-      throw new WorkingApiError('当前账号响应格式不正确', 200, 'invalid_user_response', user)
+    const rawUser = await this.request<unknown>('/api/users/me')
+    const user = normalizeWorkingUser(rawUser)
+    if (!user) {
+      throw new WorkingApiError('当前账号响应格式不正确', 200, 'invalid_user_response', rawUser)
     }
     const token = this.tokenStore.getToken()
     if (token) this.tokenStore.save(token, user)
     return user
+  }
+
+  async getSettingsSnapshot(): Promise<WorkingSettingsSnapshot> {
+    const mePayload = await this.request<unknown>('/api/users/me', { unwrap: false })
+    const meItem = isRecord(mePayload) && isRecord(mePayload.data) ? mePayload.data : mePayload
+    const user = normalizeWorkingUser(meItem)
+    if (!user) {
+      throw new WorkingApiError('当前账号响应格式不正确', 200, 'invalid_user_response', mePayload)
+    }
+
+    const meEnvelope = isRecord(mePayload) ? mePayload : {}
+    const [invitedResult, walletResult, ledgerResult, inviteResult, receiveChannelResult] = await Promise.allSettled([
+      this.request<unknown>('/api/users/invited'),
+      this.request<unknown>('/api/family/wallet'),
+      this.request<unknown>('/api/users/billing-ledger'),
+      this.request<unknown>('/api/users/invite-code', { method: 'POST', body: JSON.stringify({}), unwrap: false }),
+      this.request<unknown>('/api/working/receive-channel'),
+    ])
+
+    const invitedUsers = invitedResult.status === 'fulfilled' && Array.isArray(invitedResult.value)
+      ? invitedResult.value.map(normalizeInvitedUser)
+      : []
+    const wallet = walletResult.status === 'fulfilled' && isRecord(walletResult.value) ? walletResult.value : {}
+    const members = Array.isArray(wallet.members) ? wallet.members.map(normalizeWalletMember) : []
+    const familyLedger = Array.isArray(wallet.ledger) ? wallet.ledger.map(normalizeLedgerEntry) : []
+    const billingLedger = ledgerResult.status === 'fulfilled' && Array.isArray(ledgerResult.value)
+      ? ledgerResult.value.map(normalizeLedgerEntry)
+      : []
+    const invitePayload = inviteResult.status === 'fulfilled' && isRecord(inviteResult.value) ? inviteResult.value : {}
+    const inviteData = isRecord(invitePayload.data) ? invitePayload.data : {}
+    const receiveChannel = receiveChannelResult.status === 'fulfilled'
+      ? normalizeReceiveChannel(receiveChannelResult.value)
+      : null
+    const vip = normalizeVip(meEnvelope.vip)
+    const token = this.tokenStore.getToken()
+    if (token) this.tokenStore.save(token, user)
+
+    return {
+      user,
+      hasCheckedIn: Boolean(meEnvelope.has_checked_in ?? meEnvelope.hasCheckedIn),
+      vip,
+      invitedUsers,
+      inviteCode: typeof (inviteData.Code ?? inviteData.code) === 'string'
+        ? String(inviteData.Code ?? inviteData.code)
+        : undefined,
+      inviteLink: typeof invitePayload.invite_link === 'string' ? invitePayload.invite_link : undefined,
+      members,
+      ledger: billingLedger.length > 0 ? billingLedger : familyLedger,
+      receiveChannel,
+    }
+  }
+
+  async checkIn(): Promise<WorkingCheckInResult> {
+    const data = await this.request<unknown>('/api/users/checkin', {
+      method: 'POST',
+      body: JSON.stringify({}),
+    })
+    const item = isRecord(data) ? data : {}
+    const tokens = normalizeNumber(item.tokens, NaN)
+    const reward = normalizeNumber(item.reward, NaN)
+    if (!Number.isFinite(tokens) || !Number.isFinite(reward)) {
+      throw new WorkingApiError('签到响应格式不正确', 200, 'invalid_checkin_response', data)
+    }
+    return { tokens, reward }
+  }
+
+  async setReceiveChannel(channel: WorkingReceiveChannel): Promise<WorkingReceiveChannelSettings> {
+    const data = await this.request<unknown>('/api/working/receive-channel', {
+      method: 'PUT',
+      body: JSON.stringify({ channel }),
+    })
+    const settings = normalizeReceiveChannel(data)
+    if (!settings) {
+      throw new WorkingApiError('消息接收方式响应格式不正确', 200, 'invalid_receive_channel_response', data)
+    }
+    return settings
+  }
+
+  async listOrders(page = 1, pageSize = 20): Promise<WorkingOrdersPage> {
+    const safePage = Math.max(1, Math.floor(page))
+    const safePageSize = Math.min(50, Math.max(1, Math.floor(pageSize)))
+    const data = await this.request<unknown>(`/api/users/orders?page=${safePage}&page_size=${safePageSize}`)
+    const item = isRecord(data) ? data : {}
+    const rawPagination = isRecord(item.pagination) ? item.pagination : {}
+    return {
+      items: Array.isArray(item.items) ? item.items.map(normalizeOrder) : [],
+      pagination: {
+        page: normalizeNumber(rawPagination.page, safePage),
+        pageSize: normalizeNumber(rawPagination.page_size ?? rawPagination.pageSize, safePageSize),
+        total: normalizeNumber(rawPagination.total),
+        totalPages: normalizeNumber(rawPagination.total_pages ?? rawPagination.totalPages),
+      },
+    }
+  }
+
+  async deleteOrder(orderId: number | string): Promise<void> {
+    const value = String(orderId).trim()
+    if (!value) throw new Error('订单 ID 不能为空')
+    await this.request<unknown>(`/api/users/orders/${encodeURIComponent(value)}`, { method: 'DELETE' })
   }
 
   async listWorkspaces(): Promise<WorkingWorkspace[]> {
@@ -201,7 +644,7 @@ export class WorkingApiClient {
         workspace_path: workspacePath,
         pc_id: input.pcId?.trim() ?? '',
         workspace_type: input.workspaceType ?? 'local',
-        allow_workspace_write: input.allowWorkspaceWrite ?? true,
+        allow_workspace_write: input.allowWorkspaceWrite ?? false,
       }),
     })
     return normalizeWorkspace(data)
@@ -227,13 +670,79 @@ export class WorkingApiClient {
     return data.map(normalizeSkill)
   }
 
-  private async request<T>(path: string, options: RequestInit & { auth?: boolean } = {}): Promise<T> {
-    const { auth = true, ...requestInit } = options
+  async createFeedback(input: WorkingFeedbackInput): Promise<WorkingFeedbackResult> {
+    const data = await this.request<unknown>('/api/feedback/', {
+      method: 'POST',
+      body: JSON.stringify({
+        page_key: input.pageKey,
+        topic_key: input.topicKey ?? '',
+        module_hint: input.moduleHint ?? '',
+        feedback_type: input.feedbackType,
+        severity: input.severity,
+        title: input.title.trim(),
+        description: input.description.trim(),
+        route: input.route,
+        browser: input.browser ?? {},
+        runtime_context: input.runtimeContext ?? {},
+        page_state: input.pageState ?? {},
+        client_logs: input.clientLogs ?? [],
+        attachments: (input.attachments ?? []).map((attachment) => ({
+          type: attachment.type,
+          cos_key: attachment.cosKey,
+          file_name: attachment.fileName,
+          mime_type: attachment.mimeType,
+          size_bytes: attachment.sizeBytes,
+        })),
+      }),
+    })
+    const item = isRecord(data) ? data : {}
+    const id = normalizeIdentifier(item.id)
+    if (id === undefined) {
+      throw new WorkingApiError('反馈响应格式不正确', 200, 'invalid_feedback_response', data)
+    }
+    return {
+      id,
+      status: typeof item.status === 'string' ? item.status : 'submitted',
+      message: typeof item.message === 'string' ? item.message : '反馈已提交。',
+    }
+  }
+
+  private scheduleAutomaticRefresh(retryDelayMs?: number): void {
+    this.stopAutomaticRefresh()
+    const token = this.tokenStore.getToken()
+    if (!token || !this.tokenStore.getRefreshToken()) return
+
+    const expiresAt = getJwtExpiryMs(token)
+    if (expiresAt === null) return
+    const delay = retryDelayMs ?? Math.max(0, expiresAt - Date.now() - WORKING_TOKEN_REFRESH_BUFFER_MS)
+    this.refreshTimer = setTimeout(() => {
+      this.refreshTimer = null
+      void this.refreshAccessToken().catch((error) => {
+        if (error instanceof WorkingApiError && error.status === 401) return
+        console.warn('[Copis Working] 定时刷新 token 失败，将在稍后重试:', error)
+        this.scheduleAutomaticRefresh(WORKING_REFRESH_RETRY_DELAY_MS)
+      })
+    }, delay)
+  }
+
+  private stopAutomaticRefresh(): void {
+    if (this.refreshTimer !== null) {
+      clearTimeout(this.refreshTimer)
+      this.refreshTimer = null
+    }
+  }
+
+  private async request<T>(
+    path: string,
+    options: RequestInit & { auth?: boolean; unwrap?: boolean } = {},
+    retryOnUnauthorized = true,
+  ): Promise<T> {
+    const { auth = true, unwrap = true, ...requestInit } = options
     const headers = new Headers(requestInit.headers)
     headers.set('Accept', 'application/json')
     if (requestInit.body !== undefined) headers.set('Content-Type', 'application/json')
     if (auth) {
-      const token = this.tokenStore.getToken()
+      const token = await this.getValidToken()
       if (!token) throw new WorkingApiError('请先登录 Copis Working', 401, 'unauthorized')
       headers.set('Authorization', `Bearer ${token}`)
     }
@@ -258,10 +767,19 @@ export class WorkingApiClient {
       }
     }
     if (!response.ok) {
-      if (response.status === 401) this.tokenStore.clear()
+      if (response.status === 401 && auth && retryOnUnauthorized && this.tokenStore.getRefreshToken()) {
+        try {
+          await this.refreshAccessToken()
+          return this.request(path, options, false)
+        } catch (error) {
+          if (error instanceof WorkingApiError && error.status === 401) this.clearAuth()
+          throw error
+        }
+      }
+      if (response.status === 401 && auth) this.clearAuth()
       const detail = errorMessage(payload, `Working 后端请求失败（HTTP ${response.status}）`)
       throw new WorkingApiError(detail.message, response.status, detail.code, payload)
     }
-    return unwrapData<T>(payload)
+    return unwrap ? unwrapData<T>(payload) : payload as T
   }
 }

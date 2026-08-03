@@ -137,12 +137,24 @@ import type {
   SnoozePlanningReminderInput,
   AgentIslandWindowSnapshot,
   WorkingAuthState,
+  WorkingCheckInResult,
   WorkingClientConfig,
+  WorkingFeedbackInput,
+  WorkingFeedbackResult,
+  WorkingReceiveChannel,
+  WorkingReceiveChannelSettings,
+  WorkingSettingsSnapshot,
   WorkingLoginInput,
+  WorkingOrdersPage,
+  WorkingPasswordResetInput,
+  WorkingPasswordResetVerificationResult,
+  WorkingRegisterInput,
+  WorkingSendVerificationCodeInput,
   WorkingSessionHistory,
   WorkingSessionSummary,
   WorkingSkill,
   WorkingUser,
+  WorkingVerifyPasswordResetCodeInput,
   WorkingWorkspace,
   WorkingWorkspaceInput,
 } from '@proma/shared'
@@ -239,6 +251,10 @@ export interface ElectronAPI {
   getWorkingConfig: () => Promise<WorkingClientConfig>
   getWorkingAuthState: () => Promise<WorkingAuthState>
   loginWorking: (input: WorkingLoginInput) => Promise<WorkingAuthState>
+  registerWorking: (input: WorkingRegisterInput) => Promise<WorkingUser | null>
+  sendWorkingVerificationCode: (input: WorkingSendVerificationCodeInput) => Promise<void>
+  verifyWorkingPasswordResetCode: (input: WorkingVerifyPasswordResetCodeInput) => Promise<WorkingPasswordResetVerificationResult>
+  resetWorkingPassword: (input: WorkingPasswordResetInput) => Promise<void>
   logoutWorking: () => Promise<WorkingAuthState>
   getWorkingCurrentUser: () => Promise<WorkingUser>
   listWorkingWorkspaces: () => Promise<WorkingWorkspace[]>
@@ -246,6 +262,12 @@ export interface ElectronAPI {
   listWorkingSessions: () => Promise<WorkingSessionSummary[]>
   getWorkingSessionHistory: (runId: string, sessionId?: string) => Promise<WorkingSessionHistory>
   listWorkingSkills: () => Promise<WorkingSkill[]>
+  createWorkingFeedback: (input: WorkingFeedbackInput) => Promise<WorkingFeedbackResult>
+  getWorkingSettingsSnapshot: () => Promise<WorkingSettingsSnapshot>
+  checkInWorking: () => Promise<WorkingCheckInResult>
+  setWorkingReceiveChannel: (channel: WorkingReceiveChannel) => Promise<WorkingReceiveChannelSettings>
+  listWorkingOrders: (page?: number, pageSize?: number) => Promise<WorkingOrdersPage>
+  deleteWorkingOrder: (orderId: number | string) => Promise<void>
 
   // ===== 渠道管理相关 =====
 
@@ -1317,6 +1339,10 @@ const electronAPI: ElectronAPI = {
   getWorkingConfig: () => ipcRenderer.invoke(WORKING_IPC_CHANNELS.GET_CONFIG),
   getWorkingAuthState: () => ipcRenderer.invoke(WORKING_IPC_CHANNELS.GET_AUTH_STATE),
   loginWorking: (input: WorkingLoginInput) => ipcRenderer.invoke(WORKING_IPC_CHANNELS.LOGIN, input),
+  registerWorking: (input: WorkingRegisterInput) => ipcRenderer.invoke(WORKING_IPC_CHANNELS.REGISTER, input),
+  sendWorkingVerificationCode: (input: WorkingSendVerificationCodeInput) => ipcRenderer.invoke(WORKING_IPC_CHANNELS.SEND_VERIFICATION_CODE, input),
+  verifyWorkingPasswordResetCode: (input: WorkingVerifyPasswordResetCodeInput) => ipcRenderer.invoke(WORKING_IPC_CHANNELS.VERIFY_PASSWORD_RESET_CODE, input),
+  resetWorkingPassword: (input: WorkingPasswordResetInput) => ipcRenderer.invoke(WORKING_IPC_CHANNELS.RESET_PASSWORD, input),
   logoutWorking: () => ipcRenderer.invoke(WORKING_IPC_CHANNELS.LOGOUT),
   getWorkingCurrentUser: () => ipcRenderer.invoke(WORKING_IPC_CHANNELS.GET_CURRENT_USER),
   listWorkingWorkspaces: () => ipcRenderer.invoke(WORKING_IPC_CHANNELS.LIST_WORKSPACES),
@@ -1324,6 +1350,12 @@ const electronAPI: ElectronAPI = {
   listWorkingSessions: () => ipcRenderer.invoke(WORKING_IPC_CHANNELS.LIST_SESSIONS),
   getWorkingSessionHistory: (runId: string, sessionId?: string) => ipcRenderer.invoke(WORKING_IPC_CHANNELS.GET_SESSION_HISTORY, runId, sessionId),
   listWorkingSkills: () => ipcRenderer.invoke(WORKING_IPC_CHANNELS.LIST_SKILLS),
+  createWorkingFeedback: (input: WorkingFeedbackInput) => ipcRenderer.invoke(WORKING_IPC_CHANNELS.CREATE_FEEDBACK, input),
+  getWorkingSettingsSnapshot: () => ipcRenderer.invoke(WORKING_IPC_CHANNELS.GET_SETTINGS_SNAPSHOT),
+  checkInWorking: () => ipcRenderer.invoke(WORKING_IPC_CHANNELS.CHECK_IN),
+  setWorkingReceiveChannel: (channel: WorkingReceiveChannel) => ipcRenderer.invoke(WORKING_IPC_CHANNELS.SET_RECEIVE_CHANNEL, channel),
+  listWorkingOrders: (page?: number, pageSize?: number) => ipcRenderer.invoke(WORKING_IPC_CHANNELS.LIST_ORDERS, page, pageSize),
+  deleteWorkingOrder: (orderId: number | string) => ipcRenderer.invoke(WORKING_IPC_CHANNELS.DELETE_ORDER, orderId),
 
   // 渠道管理
   listChannels: () => {

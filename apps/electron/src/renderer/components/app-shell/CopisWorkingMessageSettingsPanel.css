@@ -1,0 +1,120 @@
+.copis-working-message-settings {
+  width: min(1120px, 100%);
+  min-height: 0;
+  margin: 0 auto;
+  display: flex;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  border-radius: 8px;
+  background: #202020;
+}
+
+.copis-working-message-platforms {
+  width: 156px;
+  min-width: 156px;
+  padding: 12px 8px;
+  border-right: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.copis-working-message-platform {
+  width: 100%;
+  min-height: 48px;
+  padding: 6px 8px;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: #a8a8b0;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 650;
+  text-align: left;
+  cursor: pointer;
+}
+
+.copis-working-message-platform:hover,
+.copis-working-message-platform.active {
+  background: rgba(255, 255, 255, 0.08);
+  color: #ffffff;
+}
+
+.copis-working-message-platform img {
+  width: 28px;
+  height: 28px;
+  flex: 0 0 28px;
+  object-fit: contain;
+  border-radius: 7px;
+}
+
+.copis-working-message-platform span:nth-child(2) {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.copis-working-message-status-dot {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 7px;
+  border-radius: 50%;
+  background: #777780;
+}
+
+.copis-working-message-status-dot.connected {
+  background: #4ade80;
+}
+
+.copis-working-message-status-dot.connecting {
+  background: #facc15;
+  animation: copis-working-message-pulse 1.2s ease-in-out infinite;
+}
+
+.copis-working-message-status-dot.error {
+  background: #f87171;
+}
+
+@keyframes copis-working-message-pulse {
+  50% { opacity: 0.42; }
+}
+
+.copis-working-message-content {
+  min-width: 0;
+  min-height: 0;
+  flex: 1;
+  overflow: auto;
+  padding: 24px;
+}
+
+@media (max-width: 720px) {
+  .copis-working-message-settings {
+    display: block;
+    overflow: visible;
+  }
+
+  .copis-working-message-platforms {
+    width: auto;
+    min-width: 0;
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    border-right: 0;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  }
+
+  .copis-working-message-platform {
+    justify-content: center;
+    padding: 6px;
+  }
+
+  .copis-working-message-platform span:nth-child(2) {
+    flex: 0 0 auto;
+  }
+
+  .copis-working-message-content {
+    overflow: visible;
+    padding: 18px 14px;
+  }
+}

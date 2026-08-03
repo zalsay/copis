@@ -27,10 +27,9 @@ import {
   currentAgentWorkspaceIdAtom,
   unviewedCompletedSessionIdsAtom,
 } from '@/atoms/agent-atoms'
-import { appModeAtom } from '@/atoms/app-mode'
 import { automationFormAtom } from '@/atoms/automation-atoms'
+import { appModeAtom } from '@/atoms/app-mode'
 import { tearOffPreviewToSplit } from '@/components/diff/preview-opener'
-import { tearOffScratchToSplit } from '@/components/scratch-pad/scratch-pad-opener'
 import { Button } from '@/components/ui/button'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { TabBarItem } from './TabBarItem'
@@ -39,6 +38,7 @@ import { detectIsWindows, WINDOW_CONTROLS_INSET_RIGHT, WINDOW_CONTROLS_PADDING_R
 import { registerShortcut } from '@/lib/shortcut-registry'
 import { cn } from '@/lib/utils'
 import { shortcutGuideOpenAtom } from '@/atoms/shortcut-guide'
+import { sanitizeAgentSessions } from '@/lib/agent-session-list'
 
 export function TabBar(): React.ReactElement {
   const tabs = useAtomValue(tabsAtom)
@@ -46,22 +46,22 @@ export function TabBar(): React.ReactElement {
   const indicatorMap = useAtomValue(tabIndicatorMapAtom)
 
   // Tab 切换时同步 sidebar 状态
-  const appMode = useAtomValue(appModeAtom)
   const setAppMode = useSetAtom(appModeAtom)
   const setCurrentConversationId = useSetAtom(currentConversationIdAtom)
   const setCurrentAgentSessionId = useSetAtom(currentAgentSessionIdAtom)
   const agentSessions = useAtomValue(agentSessionsAtom)
   const agentWorkspaces = useAtomValue(agentWorkspacesAtom)
+  const validAgentSessions = sanitizeAgentSessions(agentSessions)
   const setCurrentAgentWorkspaceId = useSetAtom(currentAgentWorkspaceIdAtom)
   const setUnviewedCompleted = useSetAtom(unviewedCompletedSessionIdsAtom)
   const setAutomationForm = useSetAtom(automationFormAtom)
 
-  // 统一关闭逻辑：关闭当前会话入口并回到 Scratch Pad，不停止后台 Agent
+  // 统一关闭逻辑：关闭当前会话入口，不停止后台 Agent
   const { requestClose } = useCloseTab()
   const store = useStore()
 
   /**
-   * Tear-off：把 preview/scratch Tab 拖出 TabBar 时，转成 Agent 右侧分屏。
+   * Tear-off：把 preview Tab 拖出 TabBar 时，转成 Agent 右侧分屏。
    * preview 公共实现在 preview-opener.ts，PreviewTabContent 顶栏切换按钮共用同一份逻辑。
    */
   const handleTearOff = React.useCallback((tabId: string) => {
@@ -70,15 +70,12 @@ export function TabBar(): React.ReactElement {
       tearOffPreviewToSplit(store, tabId)
       return
     }
-    if (tab?.type === 'scratch') {
-      tearOffScratchToSplit(store)
-    }
   }, [store, tabs])
 
   const workspaceNameBySessionId = React.useMemo(() => {
     const workspaceNameMap = new Map(agentWorkspaces.map((workspace) => [workspace.id, workspace.name]))
     const sessionWorkspaceNameMap = new Map<string, string>()
-    for (const session of agentSessions) {
+    for (const session of validAgentSessions) {
       if (!session.workspaceId) continue
       const workspaceName = workspaceNameMap.get(session.workspaceId)
       if (workspaceName) sessionWorkspaceNameMap.set(session.id, workspaceName)
@@ -88,7 +85,7 @@ export function TabBar(): React.ReactElement {
 
   const automationSessionIds = React.useMemo(() => {
     const ids = new Set<string>()
-    for (const s of agentSessions) {
+    for (const s of validAgentSessions) {
       if (s.sourceAutomationId && !s.sourceDelegationId) ids.add(s.id)
     }
     return ids
@@ -96,7 +93,7 @@ export function TabBar(): React.ReactElement {
 
   const delegationSessionIds = React.useMemo(() => {
     const ids = new Set<string>()
-    for (const s of agentSessions) {
+    for (const s of validAgentSessions) {
       if (s.sourceDelegationId) ids.add(s.id)
     }
     return ids
@@ -133,20 +130,18 @@ export function TabBar(): React.ReactElement {
         return next
       })
 
-      const session = agentSessions.find((s) => s.id === tab.sessionId)
+      const session = validAgentSessions.find((s) => s.id === tab.sessionId)
       if (session?.workspaceId) {
         setCurrentAgentWorkspaceId(session.workspaceId)
         window.electronAPI.updateSettings({
           agentWorkspaceId: session.workspaceId,
         }).catch(console.error)
       }
-    } else if (tab.type === 'scratch' || tab.type === 'tutorial') {
+    } else if (tab.type === 'tutorial') {
       setCurrentConversationId(null)
-      if (appMode !== 'agent') {
-        setCurrentAgentSessionId(null)
-      }
+      setCurrentAgentSessionId(null)
     }
-  }, [setActiveTabId, setAutomationForm, tabs, agentSessions, appMode, setAppMode, setCurrentConversationId, setCurrentAgentSessionId, setCurrentAgentWorkspaceId, setUnviewedCompleted])
+  }, [setActiveTabId, setAutomationForm, tabs, validAgentSessions, setAppMode, setCurrentConversationId, setCurrentAgentSessionId, setCurrentAgentWorkspaceId, setUnviewedCompleted])
 
   const handleDragStart = React.useCallback((tabId: string, e: React.PointerEvent) => {
     if (e.button !== 0) return // 只处理左键
@@ -254,14 +249,14 @@ function TabBarInner({
   // 整条 TabBar 容器 ref，用于拖拽 tear-off 时检测鼠标是否离开 TabBar 区域
   const barRef = React.useRef<HTMLDivElement>(null)
 
-  // 拖出 TabBar 区域时给出视觉提示（preview/scratch Tab 可 tear-off）
+  // 拖出 TabBar 区域时给出视觉提示（preview Tab 可 tear-off）
   const [tearingOff, setTearingOff] = React.useState<string | null>(null)
 
-  // 拦截外层 handleDragStart：若拖出 TabBar 区域且是 preview/scratch Tab，触发 tear-off
+  // 拦截外层 handleDragStart：若拖出 TabBar 区域且是 preview Tab，触发 tear-off
   const handleDragStartWithTearOff = React.useCallback((tabId: string, e: React.PointerEvent) => {
     const tab = tabs.find((t) => t.id === tabId)
-    // 仅 preview / scratch Tab 支持拖出转分屏
-    if (!tab || (tab.type !== 'preview' && tab.type !== 'scratch')) {
+    // 仅 preview Tab 支持拖出转分屏
+    if (!tab || tab.type !== 'preview') {
       onDragStart(tabId, e)
       return
     }

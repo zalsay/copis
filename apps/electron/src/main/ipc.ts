@@ -9,7 +9,7 @@ import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'nod
 import { existsSync, realpathSync, rmSync, readFileSync, writeFileSync, mkdirSync, statSync } from 'node:fs'
 import { writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, CHAT_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, INSTALLER_IPC_CHANNELS, PROXY_IPC_CHANNELS, GITHUB_RELEASE_IPC_CHANNELS, SYSTEM_PROMPT_IPC_CHANNELS, CHAT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, WECHAT_IPC_CHANNELS, AUTOMATION_IPC_CHANNELS, PLANNING_IPC_CHANNELS, PLANNING_CONFLICT_ERROR, WORKING_IPC_CHANNELS, isPromaPermissionMode, isWorkingMode, normalizePathForCompare } from '@proma/shared'
+import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, CHAT_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, INSTALLER_IPC_CHANNELS, PROXY_IPC_CHANNELS, GITHUB_RELEASE_IPC_CHANNELS, SYSTEM_PROMPT_IPC_CHANNELS, CHAT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, WECHAT_IPC_CHANNELS, AUTOMATION_IPC_CHANNELS, PLANNING_IPC_CHANNELS, PLANNING_CONFLICT_ERROR, WORKING_IPC_CHANNELS, COPIS_WORKING_CHANNEL_ID, isPromaPermissionMode, isWorkingMode, normalizePathForCompare } from '@proma/shared'
 import { USER_PROFILE_IPC_CHANNELS, SETTINGS_IPC_CHANNELS, SCRATCH_PAD_IPC_CHANNELS, QUICK_TASK_IPC_CHANNELS, VOICE_DICTATION_IPC_CHANNELS, APP_ICON_IPC_CHANNELS, DOCK_BADGE_IPC_CHANNELS, STORAGE_IPC_CHANNELS } from '../types'
 import type {
   QuickTaskSubmitInput,
@@ -135,12 +135,15 @@ import type {
   CreatePlanningGroupInput,
   UpdatePlanningGroupInput,
   SnoozePlanningReminderInput,
+  WorkingFeedbackInput,
+  WorkingReceiveChannel,
 } from '@proma/shared'
 import type { UserProfile, AppSettings } from '../types'
 import { getRuntimeStatus, getGitRepoStatus, reinitializeRuntime } from './lib/runtime-init'
 import { getUnstagedChanges, getFileDiff, getUntrackedContent, revertFile, getDiffContents, listWorktrees, getWorktreeChanges, getMainRepoRoot } from './lib/git-diff-service'
 import { registerCopisFilePath } from './lib/local-file-protocol'
 import { isPathWithinAuthorizedRoots, realpathOrResolve } from './lib/file-access-policy'
+import { shouldShowProjectFileTreeEntry } from './lib/file-tree-filter'
 import { registerUpdaterIpc } from './lib/updater/updater-ipc'
 import {
   listChannels,
@@ -255,7 +258,6 @@ import {
   restoreAgentWorkspaceProjectRoot,
   deleteAgentWorkspace,
   reorderAgentWorkspaces,
-  ensureDefaultWorkspace,
   getWorkspaceMcpConfig,
   saveWorkspaceMcpConfig,
   getAllWorkspaceSkills,
@@ -327,7 +329,14 @@ import { dingtalkBridgeManager } from './lib/dingtalk-bridge-manager'
 import { getWeChatConfig } from './lib/wechat-config'
 import { wechatBridge } from './lib/wechat-bridge'
 import { getWorkingApiClient } from './lib/working-api-service'
-import type { WorkingLoginInput, WorkingWorkspaceInput } from '@proma/shared'
+import type {
+  WorkingLoginInput,
+  WorkingPasswordResetInput,
+  WorkingRegisterInput,
+  WorkingSendVerificationCodeInput,
+  WorkingVerifyPasswordResetCodeInput,
+  WorkingWorkspaceInput,
+} from '@proma/shared'
 
 /** 文件浏览器中需要隐藏的系统文件 */
 const HIDDEN_FS_ENTRIES = new Set(['.DS_Store', 'Thumbs.db'])
@@ -914,6 +923,34 @@ export function registerIpcHandlers(): void {
     }
   })
 
+  ipcMain.handle(WORKING_IPC_CHANNELS.REGISTER, async (_, input: WorkingRegisterInput) => {
+    if (!input || typeof input !== 'object' || typeof input.email !== 'string' || typeof input.password !== 'string') {
+      throw new Error('注册参数不正确')
+    }
+    return getWorkingApiClient().register(input)
+  })
+
+  ipcMain.handle(WORKING_IPC_CHANNELS.SEND_VERIFICATION_CODE, async (_, input: WorkingSendVerificationCodeInput) => {
+    if (!input || typeof input !== 'object' || typeof input.email !== 'string') {
+      throw new Error('验证码参数不正确')
+    }
+    return getWorkingApiClient().sendVerificationCode(input)
+  })
+
+  ipcMain.handle(WORKING_IPC_CHANNELS.VERIFY_PASSWORD_RESET_CODE, async (_, input: WorkingVerifyPasswordResetCodeInput) => {
+    if (!input || typeof input !== 'object' || typeof input.email !== 'string' || typeof input.code !== 'string') {
+      throw new Error('验证码参数不正确')
+    }
+    return getWorkingApiClient().verifyPasswordResetCode(input)
+  })
+
+  ipcMain.handle(WORKING_IPC_CHANNELS.RESET_PASSWORD, async (_, input: WorkingPasswordResetInput) => {
+    if (!input || typeof input !== 'object' || typeof input.email !== 'string' || typeof input.resetToken !== 'string' || typeof input.password !== 'string') {
+      throw new Error('密码重置参数不正确')
+    }
+    return getWorkingApiClient().resetPassword(input)
+  })
+
   ipcMain.handle(WORKING_IPC_CHANNELS.LOGOUT, async () => {
     const client = getWorkingApiClient()
     client.logout()
@@ -946,6 +983,37 @@ export function registerIpcHandlers(): void {
 
   ipcMain.handle(WORKING_IPC_CHANNELS.LIST_SKILLS, async () => {
     return getWorkingApiClient().listSkills()
+  })
+
+  ipcMain.handle(WORKING_IPC_CHANNELS.CREATE_FEEDBACK, async (_, input: WorkingFeedbackInput) => {
+    if (!input || typeof input !== 'object' || typeof input.title !== 'string' || typeof input.description !== 'string') {
+      throw new Error('反馈参数不正确')
+    }
+    return getWorkingApiClient().createFeedback(input)
+  })
+
+  ipcMain.handle(WORKING_IPC_CHANNELS.GET_SETTINGS_SNAPSHOT, async () => {
+    return getWorkingApiClient().getSettingsSnapshot()
+  })
+
+  ipcMain.handle(WORKING_IPC_CHANNELS.CHECK_IN, async () => {
+    return getWorkingApiClient().checkIn()
+  })
+
+  ipcMain.handle(WORKING_IPC_CHANNELS.SET_RECEIVE_CHANNEL, async (_, channel: WorkingReceiveChannel) => {
+    if (channel !== 'weixin' && channel !== 'feishu') throw new Error('消息接收方式不正确')
+    return getWorkingApiClient().setReceiveChannel(channel)
+  })
+
+  ipcMain.handle(WORKING_IPC_CHANNELS.LIST_ORDERS, async (_, page?: number, pageSize?: number) => {
+    return getWorkingApiClient().listOrders(page, pageSize)
+  })
+
+  ipcMain.handle(WORKING_IPC_CHANNELS.DELETE_ORDER, async (_, orderId: number | string) => {
+    if ((typeof orderId !== 'number' && typeof orderId !== 'string') || !String(orderId).trim()) {
+      throw new Error('订单 ID 不正确')
+    }
+    return getWorkingApiClient().deleteOrder(orderId)
   })
 
   // ===== 运行时相关 =====
@@ -2157,9 +2225,6 @@ export function registerIpcHandlers(): void {
 
   // ===== Agent 工作区管理相关 =====
 
-  // 确保默认工作区存在
-  ensureDefaultWorkspace()
-
   // 获取 Agent 工作区列表
   ipcMain.handle(
     AGENT_IPC_CHANNELS.LIST_WORKSPACES,
@@ -2251,9 +2316,6 @@ export function registerIpcHandlers(): void {
       // 否则会先把绑定数据删光、再由 deleteAgentWorkspace 抛错，造成数据丢失与状态不一致
       if (deletingWorkspace.slug === 'default') {
         throw new Error('默认项目不能删除')
-      }
-      if (listAgentWorkspaces().length <= 1) {
-        throw new Error('至少需要保留一个项目')
       }
 
       const affectedSessionIds = listAgentSessions()
@@ -2672,6 +2734,9 @@ export function registerIpcHandlers(): void {
     AGENT_IPC_CHANNELS.GET_PI_REASONING_CAPABILITY,
     async (_, channelId: string, modelId: string) => {
       if (!channelId || !modelId) return undefined
+      if (channelId === COPIS_WORKING_CHANNEL_ID) {
+        return resolvePiReasoningCapability('openai-responses', modelId)
+      }
       const channel = getChannelById(channelId)
       if (!channel) return undefined
       return resolvePiReasoningCapability(channel.provider, modelId)
@@ -3146,8 +3211,9 @@ export function registerIpcHandlers(): void {
 
       for (const item of items) {
         if (HIDDEN_FS_ENTRIES.has(item.name)) continue
-        const fullPath = resolve(safePath, item.name)
         const isDirectory = item.isDirectory()
+        if (!shouldShowProjectFileTreeEntry(item.name, isDirectory)) continue
+        const fullPath = resolve(safePath, item.name)
         const size = isDirectory ? undefined : statSync(fullPath).size
         entries.push({
           name: item.name,
@@ -3346,9 +3412,10 @@ export function registerIpcHandlers(): void {
         console.warn('[IPC] file:resolve-path 拒绝越界路径:', result ?? filePath)
         return null
       }
-      // registerCopisFilePath 对目录路径会抛「不是文件」。渲染端（如悬浮预览解析 markdown
-      // 链接）可能传入目录路径，此处优雅降级为 null，而不是让异常冒泡成未捕获的 handler 错误。
+      // 路径识别基于文本形态时，目录也可能被当作绝对文件路径传入。
+      // 该接口只返回可预览文件的 URL，目录直接跳过，不进入文件注册流程。
       try {
+        if (!statSync(result).isFile()) return null
         return { url: registerCopisFilePath(result) }
       } catch (err) {
         console.warn('[IPC] file:resolve-path 无法注册为文件，跳过:', result, err instanceof Error ? err.message : err)

@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { isPathWithinAuthorizedRoots } from './file-access-policy'
+import { isPathWithinAuthorizedRoots, isPathWithinRootsAllowMissing } from './file-access-policy'
 
 describe('file access policy', () => {
   test('keeps traversal and sibling-prefix paths outside the workspace', () => {
@@ -48,6 +48,23 @@ describe('file access policy', () => {
 
     try {
       expect(isPathWithinAuthorizedRoots(join(linkedRoot, 'inside.txt'), [linkedRoot])).toBe(true)
+    } finally {
+      rmSync(base, { recursive: true, force: true })
+    }
+  })
+
+  test('checks new files through existing symlink parents', () => {
+    const base = mkdtempSync(join(tmpdir(), 'copis-access-missing-'))
+    const root = join(base, 'workspace')
+    const outside = join(base, 'outside')
+    mkdirSync(join(root, 'copis'), { recursive: true })
+    mkdirSync(outside)
+    symlinkSync(outside, join(root, 'linked'))
+
+    try {
+      expect(isPathWithinRootsAllowMissing(join(root, 'new.txt'), [root])).toBe(true)
+      expect(isPathWithinRootsAllowMissing(join(root, 'linked', 'new.txt'), [root])).toBe(false)
+      expect(isPathWithinRootsAllowMissing(join(root, 'copis', 'new.txt'), [join(root, 'copis')])).toBe(true)
     } finally {
       rmSync(base, { recursive: true, force: true })
     }

@@ -19,6 +19,14 @@ import { activeViewAtom } from '@/atoms/active-view'
 import { promptConfigAtom, selectedPromptIdAtom } from '@/atoms/system-prompt-atoms'
 import { draftSessionIdsAtom } from '@/atoms/draft-session-atoms'
 import { useOpenSession } from './useOpenSession'
+import { isAgentSessionMeta, sanitizeAgentSessions } from '@/lib/agent-session-list'
+import { isHttpApiBridgeActive } from '@/lib/http-api-bridge'
+
+function isSessionMeta(value: unknown): value is { id: string; title: string } {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false
+  const record = value as Record<string, unknown>
+  return typeof record.id === 'string' && record.id.length > 0 && typeof record.title === 'string'
+}
 
 interface CreateSessionOptions {
   /** 标记为草稿会话（不在侧边栏显示，发送首条消息后自动取消） */
@@ -27,6 +35,8 @@ interface CreateSessionOptions {
   channelId?: string
   /** 覆盖默认模型 ID（仅 Agent 会话） */
   modelId?: string
+  /** 覆盖当前工作区 ID（仅 Agent 会话） */
+  workspaceId?: string
 }
 
 interface CreateSessionActions {
@@ -54,12 +64,14 @@ export function useCreateSession(): CreateSessionActions {
   const currentWorkspaceId = useAtomValue(currentAgentWorkspaceIdAtom)
 
   const createChat = async (options?: CreateSessionOptions): Promise<string | undefined> => {
+    if (isHttpApiBridgeActive()) return undefined
     try {
       const meta = await window.electronAPI.createConversation(
         undefined,
         selectedModel?.modelId,
         selectedModel?.channelId,
       )
+      if (!isSessionMeta(meta)) throw new Error('创建 Chat 对话未返回有效会话')
       setConversations((prev) => [meta, ...prev])
       openSession('chat', meta.id, meta.title)
       setActiveView('conversations')
@@ -77,14 +89,16 @@ export function useCreateSession(): CreateSessionActions {
   }
 
   const createAgent = async (options?: CreateSessionOptions): Promise<string | undefined> => {
+    if (isHttpApiBridgeActive()) return undefined
     try {
       const meta = await window.electronAPI.createAgentSession(
         undefined,
         options?.channelId ?? agentChannelId ?? undefined,
-        currentWorkspaceId || undefined,
+        options?.workspaceId ?? currentWorkspaceId ?? undefined,
         options?.modelId ?? agentModelId ?? undefined,
       )
-      setAgentSessions((prev) => [meta, ...prev])
+      if (!isAgentSessionMeta(meta)) throw new Error('创建 Agent 会话未返回有效会话')
+      setAgentSessions((prev) => [meta, ...sanitizeAgentSessions(prev)])
       openSession('agent', meta.id, meta.title)
       setActiveView('conversations')
       if (options?.draft) {
@@ -92,6 +106,8 @@ export function useCreateSession(): CreateSessionActions {
       }
       return meta.id
     } catch (error) {
+      // 浏览器模式的兼容层可能不提供本地 Agent 创建能力；清理此前可能残留的无效条目。
+      setAgentSessions((prev) => sanitizeAgentSessions(prev))
       console.error('[创建会话] 创建 Agent 会话失败:', error)
       return undefined
     }

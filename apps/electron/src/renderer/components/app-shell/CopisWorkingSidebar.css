@@ -1,0 +1,611 @@
+.copis-working-sidebar {
+  box-sizing: border-box;
+  min-height: 100%;
+  height: 100%;
+  padding: 12px 12px 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  background: #202020;
+  color: #eeeeee;
+  border-radius: 0;
+}
+
+.copis-working-sidebar.transition-width {
+  transition: width 200ms ease;
+}
+
+.copis-working-sidebar.collapsed {
+  width: 56px;
+  min-height: 100%;
+  height: 100%;
+  align-items: center;
+  padding: 12px 0;
+  border-radius: 0;
+}
+
+.copis-working-sidebar-icon-button {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: #a8a8b0;
+  cursor: pointer;
+}
+
+.copis-working-sidebar-icon-button:hover,
+.copis-working-sidebar-icon-button:focus-visible {
+  background: rgba(255, 255, 255, 0.08);
+  color: #eeeeee;
+}
+
+.copis-working-sidebar-icon-button svg {
+  width: 16px;
+  height: 16px;
+}
+
+.copis-working-sidebar.collapsed .copis-working-sidebar-icon-button {
+  flex: 0 0 auto;
+}
+
+.copis-working-sidebar-collapsed-mark {
+  width: 18px;
+  height: 18px;
+  margin-top: 20px;
+  color: #c8a7ff;
+}
+
+.copis-working-sidebar-session-count {
+  margin-top: auto;
+  color: #8f8f99;
+  font-size: 10px;
+}
+
+.copis-working-sidebar-body {
+  min-height: 0;
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.2) transparent;
+}
+
+.copis-working-sidebar-nav,
+.copis-working-project-section,
+.copis-working-project-list,
+.copis-working-conversation-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.copis-working-sidebar-nav {
+  gap: 2px;
+}
+
+.copis-working-menu-button,
+.copis-working-project-row,
+.copis-working-conversation-row,
+.copis-working-sidebar-muted,
+.copis-working-sidebar-account {
+  width: 100%;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  color: #eeeeee;
+  text-align: left;
+  cursor: pointer;
+}
+
+.copis-working-menu-button {
+  min-height: 31px;
+  padding: 5px 8px;
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  border-radius: 7px;
+  font-size: 14px;
+  font-weight: 520;
+  line-height: 1.25;
+}
+
+.copis-working-menu-button:hover,
+.copis-working-menu-button:focus-visible,
+.copis-working-conversation-row:hover,
+.copis-working-conversation-row:focus-visible,
+.copis-working-sidebar-muted:hover,
+.copis-working-sidebar-muted:focus-visible,
+.copis-working-sidebar-account:hover,
+.copis-working-sidebar-account:focus-visible {
+  background: rgba(255, 255, 255, 0.07);
+  outline: 0;
+}
+
+.copis-working-menu-button svg,
+.copis-working-project-row svg,
+.copis-working-conversation-row svg {
+  width: 15px;
+  height: 15px;
+  color: #d6d6dd;
+}
+
+.copis-working-project-section {
+  min-height: 0;
+  gap: 6px;
+}
+
+.copis-working-project-heading {
+  min-height: 24px;
+  padding: 0 8px 6px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: #8f8f99;
+  font-size: 13px;
+  font-weight: 650;
+  line-height: 1.2;
+}
+
+.copis-working-project-refresh {
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #a8a8b0;
+  cursor: pointer;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.copis-working-project-heading:hover .copis-working-project-refresh,
+.copis-working-project-refresh:focus-visible,
+.copis-working-project-refresh.refreshing {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.copis-working-project-refresh:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.07);
+  color: #eeeeee;
+}
+
+.copis-working-project-refresh:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.copis-working-project-refresh.refreshing svg {
+  animation: copis-working-spin 0.9s linear infinite;
+}
+
+.copis-working-project-refresh svg {
+  width: 14px;
+  height: 14px;
+}
+
+.copis-working-project-list {
+  min-height: 0;
+  overflow: auto;
+  gap: 10px;
+}
+
+.copis-working-project-group,
+.copis-working-conversation-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.copis-working-project-group {
+  gap: 2px;
+}
+
+.copis-working-project-row {
+  min-height: 31px;
+  padding: 4px 2px 4px 8px;
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  border-radius: 7px;
+}
+
+.copis-working-project-row.active {
+  color: #ffffff;
+}
+
+.copis-working-project-row.active > .copis-working-project-main > svg {
+  color: #ffffff;
+}
+
+.copis-working-project-main {
+  min-width: 0;
+  flex: 1 1 auto;
+  align-self: stretch;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+}
+
+.copis-working-project-main > svg {
+  width: 15px;
+  height: 15px;
+  flex: 0 0 15px;
+}
+
+.copis-working-project-main > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.copis-working-project-main > small {
+  flex: 0 0 auto;
+  color: #8f8f99;
+  font-size: 10px;
+  font-weight: 520;
+}
+
+.copis-working-project-collapse,
+.copis-working-project-menu-trigger,
+.copis-working-project-new-task {
+  width: 22px;
+  height: 22px;
+  flex: 0 0 22px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #a8a8b0;
+  cursor: pointer;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.copis-working-project-row:hover .copis-working-project-collapse,
+.copis-working-project-row:hover .copis-working-project-menu-trigger,
+.copis-working-project-row:hover .copis-working-project-new-task,
+.copis-working-project-row:focus-within .copis-working-project-collapse,
+.copis-working-project-row:focus-within .copis-working-project-menu-trigger,
+.copis-working-project-row:focus-within .copis-working-project-new-task,
+.copis-working-project-row.menu-open .copis-working-project-collapse,
+.copis-working-project-row.menu-open .copis-working-project-menu-trigger,
+.copis-working-project-row.menu-open .copis-working-project-new-task {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.copis-working-project-collapse:hover,
+.copis-working-project-menu-trigger:hover,
+.copis-working-project-new-task:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: #eeeeee;
+}
+
+.copis-working-project-collapse svg,
+.copis-working-project-menu-trigger svg,
+.copis-working-project-new-task svg {
+  width: 15px;
+  height: 15px;
+}
+
+.copis-working-project-menu {
+  position: absolute;
+  z-index: 100;
+  top: 30px;
+  right: 8px;
+  min-width: 118px;
+  padding: 4px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  background: #2f2f2f;
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.28);
+}
+
+.copis-working-project-menu button {
+  width: 100%;
+  min-height: 30px;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #ffb4a8;
+  text-align: left;
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.copis-working-project-menu button:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.copis-working-project-menu button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.copis-working-conversation-list {
+  gap: 1px;
+  padding-left: 18px;
+}
+
+.copis-working-conversation-row {
+  min-height: 29px;
+  padding: 4px 8px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  border-radius: 7px;
+  font-size: 13px;
+  font-weight: 520;
+  line-height: 1.25;
+}
+
+.copis-working-conversation-row.active {
+  background: rgba(255, 255, 255, 0.055);
+}
+
+.copis-working-conversation-row > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.copis-working-conversation-row small {
+  color: #96969f;
+  font-size: 12px;
+  font-weight: 520;
+  white-space: nowrap;
+}
+
+.copis-working-conversation-row svg.loading {
+  color: #bfc0c8;
+  animation: copis-working-spin 0.9s linear infinite;
+}
+
+.copis-working-conversation-row svg.completed {
+  color: #42d17a;
+}
+
+.copis-working-conversation-empty,
+.copis-working-conversation-toggle,
+.copis-working-sidebar-muted {
+  min-height: 28px;
+  padding: 4px 8px;
+  border-radius: 7px;
+  color: #a8a8b0;
+  text-align: left;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 520;
+}
+
+.copis-working-conversation-empty,
+.copis-working-conversation-toggle {
+  padding-left: 8px;
+}
+
+.copis-working-conversation-empty:hover,
+.copis-working-conversation-toggle:hover {
+  color: #eeeeee;
+}
+
+.copis-working-project-loading {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 0 8px;
+  color: #a8a8b0;
+  font-size: 12px;
+  font-weight: 620;
+}
+
+.copis-working-project-loading > div {
+  min-height: 24px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.copis-working-project-loading svg {
+  width: 14px;
+  height: 14px;
+  animation: copis-working-spin 0.9s linear infinite;
+}
+
+.copis-working-project-loading > span {
+  height: 10px;
+  width: 72%;
+  border-radius: 4px;
+  background: linear-gradient(90deg, #2d2d2f 20%, #3a3a3e 48%, #2d2d2f 76%);
+  background-size: 220% 100%;
+  animation: copis-working-shimmer 1.25s ease-in-out infinite;
+}
+
+.copis-working-project-loading > span + span {
+  width: 56%;
+}
+
+.copis-working-sidebar-muted {
+  padding-left: 8px;
+  color: #8f8f99;
+}
+
+.copis-working-sidebar-footer {
+  margin-top: auto;
+  padding: 8px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.copis-working-sidebar-account {
+  min-height: 48px;
+  padding: 7px 8px;
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  border-radius: 7px;
+}
+
+.copis-working-sidebar-account.with-balance {
+  grid-template-columns: 32px minmax(0, 1fr) auto;
+}
+
+.copis-working-account-mark {
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: #2b2137;
+  color: #c8a7ff;
+}
+
+.copis-working-account-mark svg {
+  width: 16px;
+  height: 16px;
+}
+
+.copis-working-sidebar-account strong,
+.copis-working-sidebar-account small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.copis-working-sidebar-account strong {
+  color: #f1f1f3;
+  font-size: 14px;
+  line-height: 1.2;
+}
+
+.copis-working-sidebar-account small {
+  color: #92929b;
+  font-size: 12px;
+  line-height: 1.2;
+}
+
+.copis-working-account-copy {
+  min-width: 0;
+}
+
+.copis-working-account-balance {
+  min-width: 0;
+  max-width: 82px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 3px;
+  color: #f5d66b;
+  font-size: 12px;
+  font-weight: 650;
+  line-height: 1;
+}
+
+.copis-working-account-balance svg {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
+}
+
+.copis-working-account-balance b {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: inherit;
+}
+
+.copis-working-settings-row {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 30px;
+  align-items: center;
+  gap: 2px;
+}
+
+.copis-working-settings-row .copis-working-sidebar-account {
+  width: 100%;
+}
+
+.copis-working-logout {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: #92929b;
+  cursor: pointer;
+}
+
+.copis-working-logout:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.08);
+  color: #eeeeee;
+}
+
+.copis-working-logout:disabled {
+  cursor: wait;
+  opacity: 0.55;
+}
+
+.copis-working-logout svg {
+  width: 15px;
+  height: 15px;
+}
+
+@keyframes copis-working-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes copis-working-shimmer {
+  from {
+    background-position: 180% 0;
+  }
+
+  to {
+    background-position: -40% 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .copis-working-sidebar.transition-width,
+  .copis-working-project-loading > span,
+  .copis-working-project-refresh.refreshing svg,
+  .copis-working-project-loading svg,
+  .copis-working-conversation-row svg.loading {
+    animation: none;
+    transition: none;
+  }
+}

@@ -1,0 +1,223 @@
+.copis-working-feedback-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 110;
+  display: grid;
+  place-items: center;
+  padding: 18px;
+  background: rgba(0, 0, 0, 0.48);
+}
+
+.copis-working-feedback-modal {
+  width: min(560px, calc(100vw - 24px));
+  max-height: calc(100dvh - 24px);
+  overflow: auto;
+  padding: 20px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 12px;
+  background: #202020;
+  color: #f4f4f5;
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.44);
+}
+
+.copis-working-feedback-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 20px;
+}
+
+.copis-working-feedback-header h2 {
+  margin: 0;
+  font-size: 19px;
+  font-weight: 700;
+  line-height: 1.3;
+}
+
+.copis-working-feedback-header p {
+  margin: 6px 0 0;
+  color: #9f9fa8;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.copis-working-feedback-header button {
+  width: 32px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  padding: 0;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.05);
+  color: #bdbdc5;
+  cursor: pointer;
+}
+
+.copis-working-feedback-header button:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.1);
+  color: #ffffff;
+}
+
+.copis-working-feedback-header button:disabled,
+.copis-working-feedback-actions button:disabled,
+.copis-working-feedback-field input:disabled,
+.copis-working-feedback-field textarea:disabled,
+.copis-working-feedback-select-wrap select:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.copis-working-feedback-header button svg {
+  width: 17px;
+  height: 17px;
+}
+
+.copis-working-feedback-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.copis-working-feedback-modal label {
+  min-width: 0;
+  display: grid;
+  gap: 7px;
+  color: #d8d8de;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.copis-working-feedback-field {
+  margin-top: 14px;
+}
+
+.copis-working-feedback-modal input,
+.copis-working-feedback-modal textarea,
+.copis-working-feedback-select-wrap {
+  width: 100%;
+  box-sizing: border-box;
+  border: 1px solid rgba(255, 255, 255, 0.13);
+  border-radius: 7px;
+  background: #292929;
+  color: #f4f4f5;
+  font: inherit;
+  font-size: 14px;
+}
+
+.copis-working-feedback-modal input,
+.copis-working-feedback-modal textarea {
+  padding: 10px 11px;
+}
+
+.copis-working-feedback-modal input {
+  min-height: 42px;
+}
+
+.copis-working-feedback-modal textarea {
+  min-height: 140px;
+  resize: vertical;
+  line-height: 1.5;
+}
+
+.copis-working-feedback-modal input::placeholder,
+.copis-working-feedback-modal textarea::placeholder {
+  color: #777780;
+}
+
+.copis-working-feedback-modal input:focus,
+.copis-working-feedback-modal textarea:focus,
+.copis-working-feedback-select-wrap:focus-within {
+  border-color: rgba(200, 167, 255, 0.78);
+  outline: 0;
+  box-shadow: 0 0 0 3px rgba(200, 167, 255, 0.12);
+}
+
+.copis-working-feedback-select-wrap {
+  position: relative;
+  min-height: 42px;
+  display: flex;
+  align-items: center;
+}
+
+.copis-working-feedback-select-wrap select {
+  width: 100%;
+  min-height: 40px;
+  appearance: none;
+  padding: 0 34px 0 11px;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.copis-working-feedback-select-wrap svg {
+  position: absolute;
+  right: 10px;
+  width: 16px;
+  height: 16px;
+  pointer-events: none;
+  color: #a9a9b2;
+}
+
+.copis-working-feedback-message {
+  margin-top: 14px;
+  padding: 10px 11px;
+  border-radius: 7px;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.copis-working-feedback-message.error {
+  background: rgba(239, 68, 68, 0.14);
+  color: #f2a4a4;
+}
+
+.copis-working-feedback-message.success {
+  background: rgba(74, 222, 128, 0.12);
+  color: #9ae6b4;
+}
+
+.copis-working-feedback-actions {
+  margin-top: 20px;
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.copis-working-feedback-actions button {
+  min-height: 36px;
+  padding: 0 13px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 7px;
+  background: #292929;
+  color: #eeeeef;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.copis-working-feedback-actions button:last-child {
+  border-color: transparent;
+  background: #c8a7ff;
+  color: #20162c;
+}
+
+.copis-working-feedback-actions button:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
+
+@media (max-width: 560px) {
+  .copis-working-feedback-modal {
+    padding: 16px;
+  }
+
+  .copis-working-feedback-grid {
+    grid-template-columns: 1fr;
+  }
+}

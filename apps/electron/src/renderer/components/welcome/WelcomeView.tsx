@@ -17,6 +17,8 @@ import { currentAgentWorkspaceIdAtom, agentSettingsReadyAtom } from '@/atoms/age
 import { tabsAtom, activeTabIdAtom, openTab } from '@/atoms/tab-atoms'
 import { draftSessionIdsAtom } from '@/atoms/draft-session-atoms'
 import { useCreateSession } from '@/hooks/useCreateSession'
+import { isHttpApiBridgeActive } from '@/lib/http-api-bridge'
+import { WelcomeEmptyState } from './WelcomeEmptyState'
 
 export function WelcomeView(): React.ReactElement {
   const mode = useAtomValue(appModeAtom)
@@ -50,6 +52,8 @@ export function WelcomeView(): React.ReactElement {
   }
 
   React.useEffect(() => {
+    // 普通浏览器只连接 Working/设置 HTTP API，不具备本地会话创建能力。
+    if (isHttpApiBridgeActive()) return
     // 如果已经为当前模式初始化过，则跳过
     if (initRef.current === mode) return
     // Agent 模式需等待 settings 就绪（workspaceId 等异步加载完成）
@@ -150,6 +154,8 @@ export function WelcomeView(): React.ReactElement {
       }).catch(console.error)
     }
   }, [mode, agentSettingsReady])
+
+  if (isHttpApiBridgeActive()) return <WelcomeEmptyState />
 
   // 短暂的过渡状态（通常几十毫秒内就会被 TabContent 替换）
   return (

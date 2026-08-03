@@ -25,6 +25,8 @@ export interface AgentWorkspace {
    * workspace-files/ 目录；设置后，项目文件直接指向该原始目录。
    */
   projectRootPath?: string
+  /** 创建工作区时是否允许 Agent 直接写入项目根目录。 */
+  allowWorkspaceWrite?: boolean
   /** 本地项目根目录的运行时状态；Proma 托管项目不设置此字段。 */
   projectRootStatus?: LocalProjectRootStatus
   /** 创建时间戳 */
@@ -39,6 +41,8 @@ export interface CreateAgentWorkspaceInput {
   name: string
   /** 可选的用户本地项目根目录 */
   projectRootPath?: string
+  /** 是否允许 Agent 直接写入用户选择的项目根目录。 */
+  allowWorkspaceWrite?: boolean
 }
 
 /** 创建项目后自动生成的首个 Agent 会话。 */
@@ -380,6 +384,7 @@ export type SDKMessage =
 export type ErrorCode =
   | 'invalid_api_key'
   | 'invalid_credentials'
+  | 'working_auth_required'
   | 'response_too_large'
   | 'expired_oauth_token'
   | 'token_expired'

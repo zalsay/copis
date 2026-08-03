@@ -9,7 +9,7 @@
 import * as React from 'react'
 import { createPortal } from 'react-dom'
 import { useAtomValue } from 'jotai'
-import { FileText, StickyNote, X, Clock, GitBranch } from 'lucide-react'
+import { FileText, X, Clock, GitBranch } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import type { TabType, TabMinimapItem } from '@/atoms/tab-atoms'
 import type { SessionIndicatorStatus } from '@/atoms/agent-atoms'
@@ -88,8 +88,6 @@ export function TabBarItem({
   }, [])
 
   const handleMouseDown = (e: React.MouseEvent): void => {
-    // Scratch Pad 不可中键关闭
-    if (type === 'scratch') return
     if (e.button === 1) {
       e.preventDefault()
       onMiddleClick()
@@ -101,46 +99,10 @@ export function TabBarItem({
     onClose()
   }
 
-  const isScratch = type === 'scratch'
   const showAgentSpinner = type === 'agent' && isStreaming === 'running'
   const previewItems = minimapCache.get(id) ?? []
   // 当前 active Tab 不显示预览面板
   const showPreview = isHovered && !isActive
-
-  // Scratch Pad 是固定草稿入口
-  if (isScratch) {
-    return (
-      <div
-        className="relative flex-shrink-0 titlebar-no-drag"
-        onMouseEnter={onHoverEnter}
-        onMouseLeave={onHoverLeave}
-      >
-        <button
-          ref={buttonRef}
-          type="button"
-          className={cn(
-            'group relative flex items-center justify-center gap-1.5 min-w-[82px] px-3 h-[34px]',
-            isClassic ? 'rounded-t-lg' : 'rounded-none',
-            'text-xs transition-colors select-none cursor-pointer',
-            'border-t border-l border-r border-transparent',
-            isActive
-              ? isClassic
-                ? 'bg-content-area text-foreground border-border/50'
-                : 'app-tab-active text-foreground border-border/80'
-              : isClassic
-                ? 'text-muted-foreground hover:text-foreground hover:bg-muted/50'
-                : 'app-tab-inactive text-muted-foreground hover:text-foreground',
-          )}
-          onClick={onActivate}
-          onMouseDown={handleMouseDown}
-          onPointerDown={onDragStart}
-        >
-          <StickyNote className="size-3.5" />
-          <span className="truncate">草稿</span>
-        </button>
-      </div>
-    )
-  }
 
   return (
     <div
@@ -191,8 +153,6 @@ export function TabBarItem({
           </span>
         )}
 
-        {/* 关闭按钮（scratch 类型不显示） */}
-        {!isScratch && (
         <span
           role="button"
           tabIndex={-1}
@@ -208,7 +168,6 @@ export function TabBarItem({
         >
           <X className="size-2.5" />
         </span>
-        )}
 
       </button>
 
