@@ -1,7 +1,7 @@
 /**
  * Pi Agent 消息兼容层。
  *
- * 主进程和渲染层仍使用 Claude SDK 兼容的 SDKMessage 协议；本模块集中处理
+ * 主进程和渲染层继续使用统一的 SDKMessage 协议；本模块集中处理
  * Pi AgentMessage 与 SDKMessage 之间的形状转换，避免 session 编排代码混入 UI 协议细节。
  */
 
@@ -205,8 +205,8 @@ function usageFromAssistant(message: AssistantMessage): {
 
 // 说明：本函数产出的消息 parent_tool_use_id 恒为 null。Pi 的事件模型（AgentEvent）不存在
 // 子代理/sidechain 概念，AgentMessage 也无父子关联字段，故 pi 会话的所有消息都是主线。
-// 渲染层（SDKMessageRenderer 的 childBlocksMap/agentToolIds 分组）不是死代码：迁移前用旧
-// claude-sdk 持久化的历史会话 JSONL 里子代理消息带非空 parent_tool_use_id，打开老会话时仍
+// 渲染层（SDKMessageRenderer 的 childBlocksMap/agentToolIds 分组）不是死代码：旧
+// runtime 持久化的历史会话 JSONL 里子代理消息带非空 parent_tool_use_id，打开老会话时仍
 // 依赖该逻辑正确嵌套显示，不可删除。
 export function convertPiMessage(
   message: AgentMessage,

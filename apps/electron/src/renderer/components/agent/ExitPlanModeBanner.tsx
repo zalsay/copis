@@ -1,7 +1,7 @@
 /**
  * ExitPlanModeBanner — Agent ExitPlanMode 计划审批横幅
  *
- * 仿照 Claude Code 的计划审批 UI，提供 3 个选项：
+ * Agent 计划审批 UI，提供 3 个选项：
  * 1. 批准并完全自动执行 — 切换到 bypassPermissions
  * 2. 拒绝计划 — deny
  * 3. 提供反馈 — 自由输入修改意见

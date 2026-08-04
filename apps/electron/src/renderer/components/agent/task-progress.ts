@@ -5,7 +5,7 @@ export const TASK_TOOL_NAMES = new Set(['TaskCreate', 'TaskUpdate'])
 
 export type TaskItemStatus = 'pending' | 'in_progress' | 'completed' | 'blocked' | 'cancelled' | 'error' | 'deleted'
 
-/** Claude SDK 与 Pi 兼容任务工具共用的终态集合。 */
+/** Agent 任务工具共用的终态集合。 */
 export function isTerminalTaskStatus(status: TaskItemStatus): boolean {
   return status === 'completed' || status === 'cancelled' || status === 'error' || status === 'deleted'
 }

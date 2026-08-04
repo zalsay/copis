@@ -28,9 +28,7 @@ import type {
   AgentExternalRunSource,
   AgentMessage,
 } from '@copis/shared'
-import { ClaudeAgentAdapter, scanAndKillOrphanedClaudeSubprocesses } from './adapters/claude-agent-adapter'
 import { PiAgentAdapter, cleanupPiRuntimeResources } from './adapters/pi-agent-adapter'
-import { RuntimeRoutingAgentAdapter } from './adapters/runtime-routing-agent-adapter'
 import { AgentEventBus } from './agent-event-bus'
 import { AgentOrchestrator } from './agent-orchestrator'
 import { getAgentSessionWorkspacePath } from './config-paths'
@@ -43,10 +41,7 @@ import { sendAgentStreamComplete } from './agent-completion-payload'
 // ===== 实例创建 =====
 
 const eventBus = new AgentEventBus()
-const adapter = new RuntimeRoutingAgentAdapter({
-  claude: new ClaudeAgentAdapter(),
-  pi: new PiAgentAdapter(),
-})
+const adapter = new PiAgentAdapter()
 const orchestrator = new AgentOrchestrator(adapter, eventBus)
 
 /** 导出 EventBus 供飞书 Bridge 等外部服务订阅事件 */
@@ -361,14 +356,8 @@ export function stopAllAgents(): void {
   orchestrator.stopAll()
 }
 
-/**
- * 退出前最后兜底：扫描并强杀所有孤儿 claude-agent-sdk 子进程
- *
- * 必须在 stopAllAgents() 之后调用。针对 pidMap 未覆盖、dispose 漏杀等极端场景。
- * 同步执行，不 await，确保 before-quit 能在 Electron 超时前完成。
- */
-export function killOrphanedClaudeSubprocesses(): void {
-  scanAndKillOrphanedClaudeSubprocesses()
+/** 退出前清理 Pi runtime 资源。 */
+export function cleanupAgentRuntimeResources(): void {
   cleanupPiRuntimeResources()
 }
 

@@ -17,7 +17,7 @@ Copis 是一个本地优先的 AI 桌面应用，把多模型 Chat、通用 Agen
 ## 现在能做什么
 
 - **Chat 模式**：多模型对话、附件解析、图片输入、Markdown / Mermaid / KaTeX / 代码高亮、并排对话、系统提示词、上下文管理。
-- **Agent 模式**：内置 Claude Agent SDK 与 Pi Agent SDK 两套运行时；支持工作区隔离、权限模式、文件操作、长任务流式输出、计划确认和用户追问。Claude 是默认内核，Pi 可在实验性设置中开启。
+- **Agent 模式**：基于 Pi Agent SDK 的统一运行时；支持工作区隔离、权限模式、文件操作、长任务流式输出、计划确认和用户追问。可通过 Pi 调用 Anthropic、Claude、OpenAI、Google 及兼容渠道的模型。
 - **协作与任务**：复杂任务可拆分为可追踪的协作子 Agent / Task，并在消息流中展示调用过程和结果。
 - **Skills、MCP 与项目根目录**：每个 Copis 项目独立配置 Skills 与 MCP Server。项目文件可使用用户选择的本地项目根目录，也可使用 Copis 托管的空白项目目录；本地项目配置不会被自动导入。
 - **远程机器人**：支持飞书 / Lark 机器人桥接，并已提供钉钉、微信桥接入口，用手机或群聊触发本机 Agent 工作流。
@@ -56,8 +56,8 @@ Copis 是一个本地优先的 AI 桌面应用，把多模型 Chat、通用 Agen
 1. 打开 Copis，先完成环境检查。Agent 模式依赖本机基础环境，尤其是 Git、Node.js / Bun 以及可用的 Shell。
 2. 进入 **设置 > 渠道**，添加至少一个 AI 供应商渠道，填写 Base URL、API Key 和模型列表。
 3. Chat 模式可以使用 OpenAI、Anthropic、Google 或 OpenAI 兼容协议的渠道。
-4. 默认的 Claude Agent Runtime 需要 Anthropic 或 Anthropic 兼容协议渠道，例如 Anthropic、DeepSeek、Kimi API、Kimi Coding Plan。
-5. Agent 输入框下方可直接切换 Claude / Pi 内核；Pi 可使用任意已启用的模型渠道。
+4. 默认的 Pi Agent Runtime 可使用已启用的模型渠道，包括 Anthropic、DeepSeek、Kimi API、Kimi Coding Plan、OpenAI、Google 及兼容端点。
+5. Agent 输入框下方可直接选择模型和执行设置；Pi 会根据渠道协议连接对应模型。
 6. 进入 **设置 > Agent**，选择默认 Agent 渠道、模型和工作区。
 7. 如需记忆、联网搜索、飞书 / 钉钉 / 微信桥接，在设置页对应 Tab 中继续配置。
 
@@ -114,21 +114,18 @@ Copis 支持豆包的流式语音输入功能，并且支持在 Copis 内使用�
 
 ## Agent 运行时与模型渠道
 
-Copis 的 Agent 模式提供两套可切换的内核：
+Copis 的 Agent 模式统一使用 Pi Agent Runtime，基于 `@earendil-works/pi-coding-agent`、`pi-agent-core` 和 `pi-ai`，将 Copis 的已启用渠道动态注册为 Pi provider；支持 OpenAI Chat Completions / Responses、Google Generative AI、Anthropic Messages 及其兼容端点。
 
-- **Claude Agent Runtime（默认）**：基于 `@anthropic-ai/claude-agent-sdk`，使用 Anthropic Messages API 或兼容端点。
-- **Pi Agent Runtime**：基于 `@earendil-works/pi-coding-agent`、`pi-agent-core` 和 `pi-ai`，将 Copis 的已启用渠道动态注册为 Pi provider；支持 OpenAI Chat Completions / Responses、Google Generative AI、Anthropic Messages 及其兼容端点。
+| 渠道类型 | Chat | Pi Agent |
+| --- | --- | --- |
+| Anthropic / Anthropic 兼容 | 支持 | 支持 |
+| DeepSeek、Kimi API / Coding Plan、智谱 Coding Plan、MiniMax、小米 MiMo 等 Anthropic 协议渠道 | 支持 | 支持 |
+| OpenAI、OpenAI Responses、Google、智谱 AI、豆包、通义千问 | 支持 | 支持 |
+| OpenAI 兼容自定义端点 | 支持 | 支持 |
+| ChatGPT 订阅（Codex OAuth） | — | 支持 |
+| xAI 订阅（Grok OAuth） | — | 支持 |
 
-| 渠道类型 | Chat | Claude Agent | Pi Agent |
-| --- | --- | --- | --- |
-| Anthropic / Anthropic 兼容 | 支持 | 支持 | 支持 |
-| DeepSeek、Kimi API / Coding Plan、智谱 Coding Plan、MiniMax、小米 MiMo 等 Anthropic 协议渠道 | 支持 | 支持 | 支持 |
-| OpenAI、OpenAI Responses、Google、智谱 AI、豆包、通义千问 | 支持 | 暂不支持 | 支持 |
-| OpenAI 兼容自定义端点 | 支持 | 暂不支持 | 支持 |
-| ChatGPT 订阅（Codex OAuth） | — | 支持 | 支持 |
-| xAI 订阅（Grok OAuth） | — | — | 支持 |
-
-> Pi Runtime 可在每个 Agent 会话的输入框下方直接切换；切换会开启新的底层 SDK 会话，但不会删除 Copis 中已保存的消息。Pi 会桥接工作区 Skills、用户 MCP Server，以及 Copis 内置的 Automation / Collaboration 工具；不同模型供应商对工具调用、推理和上下文长度的支持仍可能不同。
+> Pi Runtime 会为每个 Agent 会话管理底层 session，但不会删除 Copis 中已保存的消息。Pi 会桥接工作区 Skills、用户 MCP Server，以及 Copis 内置的 Automation / Collaboration 工具；不同模型供应商对工具调用、推理和上下文长度的支持仍可能不同。
 
 > **Kimi Coding Plan 用户须知**：Copis 已获得 Kimi 官方白名单支持，使用 Copis 连接 Kimi Coding Plan 不会触发第三方客户端封号策略，可放心使用。
 
@@ -221,7 +218,7 @@ bun run dist:fast
 | 层级 | 技术 |
 | --- | --- |
 | 运行时 | Bun |
-| 桌面框架 | Electron 39 |
+| 桌面框架 | Electron 43.2.0 |
 | 前端 | React 18 + TypeScript |
 | 状态管理 | Jotai |
 | 样式 | Tailwind CSS + Radix UI |
@@ -230,7 +227,7 @@ bun run dist:fast
 | 代码高亮 | Shiki |
 | 构建 | Vite + esbuild |
 | 分发 | electron-builder |
-| Agent Runtime | Claude: `@anthropic-ai/claude-agent-sdk@0.3.201`；Pi: `@earendil-works/pi-* @0.80.3` |
+| Agent Runtime | Pi: `@earendil-works/pi-coding-agent`、`pi-agent-core`、`pi-ai` `@0.82.1` |
 
 ## 架构概览
 
@@ -245,8 +242,8 @@ shared 类型和 IPC 常量
 
 主进程服务集中在 `apps/electron/src/main/lib/`：
 
-- `agent-orchestrator.ts`：Agent 编排、运行时路由、环境变量、SDK 调用、事件流、错误处理。
-- `adapters/claude-agent-adapter.ts` / `adapters/pi-agent-adapter.ts`：Claude 与 Pi 运行时适配；`runtime-routing-agent-adapter.ts` 依据会话内核路由。
+- `agent-orchestrator.ts`：Agent 编排、Pi runtime、环境变量、SDK 调用、事件流、错误处理。
+- `adapters/pi-agent-adapter.ts`：Pi runtime 适配，将 Pi 消息、工具和 session artifact 接入 Copis 统一会话协议。
 - `agent-session-manager.ts`：Agent 会话索引和 JSONL 消息持久化。
 - `agent-workspace-manager.ts`：Copis 工作区、项目根目录、MCP 与 Skills 管理。
 - `chat-service.ts`：Chat 流式调用、Provider Adapter、工具活动。
@@ -259,18 +256,17 @@ shared 类型和 IPC 常量
 
 ## 打包注意事项
 
-Claude 与 Pi 运行时都在主进程中作为 esbuild external 依赖运行。`apps/electron` 的打包脚本会在 `electron-builder` 前执行 `bun run sync:runtime-deps`，把下列依赖及其运行时闭包复制到应用目录：
+Pi runtime 在主进程中作为 esbuild external 依赖运行。`apps/electron` 的打包脚本会在 `electron-builder` 前执行 `bun run sync:runtime-deps`，把下列依赖及其运行时闭包复制到应用目录：
 
-- `@anthropic-ai/claude-agent-sdk`（包含按平台分发的 Claude native binary）
 - `@earendil-works/pi-coding-agent`、`pi-agent-core`、`pi-ai`
 - Pi 运行时所需的原生模块和 `pdfjs-dist`
 
 修改打包配置时，请确认：
 
-- `build:main` / `watch:main` 仍将两套 Agent SDK 标记为 external。
+- `build:main` / `watch:main` 将 Pi runtime 依赖标记为 external。
 - `scripts/sync-runtime-deps.ts` 的 external runtime 清单与实际依赖一致。
-- `electron-builder.yml` 保留 Claude binary 与 Pi native addon 的 `asarUnpack` 规则。
-- 在目标平台测试 `bun run dist:fast` 后，分别验证 Claude 与 Pi（若已启用）可以启动、调用工具和恢复会话。
+- `electron-builder.yml` 保留 Pi native addon 的 `asarUnpack` 规则。
+- 在目标平台测试 `bun run dist:fast` 后，验证 Pi 可以启动、调用工具和恢复会话。
 
 更完整的工程约定见 [AGENTS.md](./AGENTS.md)。
 

@@ -94,7 +94,7 @@ export function automationToDraft(a: Automation): AutomationDraft {
     dayOfMonth: a.dayOfMonth,
     scheduledAt: a.scheduledAt,
     maxRuns: a.maxRuns,
-    agentRuntime: a.agentRuntime ?? 'claude',
+    agentRuntime: a.agentRuntime ?? 'pi',
     channelId: a.channelId,
     modelId: a.modelId,
     workspaceId: a.workspaceId,
@@ -127,4 +127,3 @@ export const AUTOMATION_WEEKDAY_OPTIONS = [
   { label: '周六', value: 6 },
   { label: '周日', value: 0 },
 ] as const
-

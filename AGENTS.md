@@ -40,26 +40,26 @@ copis-v2/
 
 ### 包职责详解
 
-#### @copis/shared (v0.1.20)
+#### @copis/shared (v0.1.52)
 - **导出模块**：`./types`、`./config`、`./utils`、`./constants/permission-rules`
 - **关键类型**：`AgentMessage`、`ChatMessage`、`Channel`、`PermissionRequest`、`FeishuConfig`
 - **依赖**：无运行时依赖（仅 TypeScript）
 
-#### @copis/core (v0.2.9)
+#### @copis/core (v0.2.17)
 - **导出模块**：`./providers`、`./highlight`、`./types`、`./utils`
 - **关键功能**：Provider 适配器注册表、代码高亮（Shiki）
 - **依赖**：`@copis/shared`、`shiki`
-- **Peer 依赖**：`@anthropic-ai/Codex-agent-sdk`、`@anthropic-ai/sdk`、`@modelcontextprotocol/sdk`
+- **Peer 依赖**：`@anthropic-ai/sdk`、`@modelcontextprotocol/sdk`
 
-#### @copis/ui (v0.1.6)
+#### @copis/ui (v0.1.10)
 - **关键组件**：共享 React UI 组件库
 - **依赖**：`@copis/core`、`beautiful-mermaid`、`mermaid`、`shiki`
 - **Peer 依赖**：`react@^18.3.0`、`react-dom@^18.3.0`
 
-#### @copis/electron (v0.10.7)
+#### @copis/electron (v0.16.13)
 - **职责**：Electron 桌面应用主体，集成所有包
 - **关键依赖**：
-  - `@anthropic-ai/Codex-agent-sdk@0.2.120` - Agent SDK
+  - `@earendil-works/pi-coding-agent@0.82.1`、`pi-agent-core@0.82.1`、`pi-ai@0.82.1` - Pi Agent runtime
   - `@larksuiteoapi/node-sdk` - 飞书集成
   - Radix UI、TipTap、Tailwind CSS
   - 文件解析：`pdf-parse`、`officeparser`、`word-extractor`
@@ -135,7 +135,7 @@ bun run generate:icons    # 生成应用图标
 | **构建工具** | Vite | 6.0.3 |
 | **打包工具** | esbuild | 0.24.0+ |
 | **分发工具** | Electron Builder | 25.1.8 |
-| **Agent SDK** | @anthropic-ai/Codex-agent-sdk | 0.2.120 |
+| **Pi Agent SDK** | `@earendil-works/pi-coding-agent`、`pi-agent-core`、`pi-ai` | 0.82.1 |
 | **飞书 SDK** | @larksuiteoapi/node-sdk | 最新 |
 
 ## 核心架构
@@ -170,7 +170,7 @@ bun run generate:icons    # 生成应用图标
 
 | 服务 | 职责 |
 |------|------|
-| `agent-orchestrator.ts` | Agent 核心编排层（71KB）：并发守卫、渠道查找、环境变量构建、SDK 路径解析、消息持久化、事件流处理、错误处理、自动标题生成 |
+| `agent-orchestrator.ts` | Agent 核心编排层：并发守卫、渠道查找、Pi runtime 环境构建、消息持久化、事件流处理、错误处理、自动标题生成 |
 | `agent-session-manager.ts` | Agent 会话管理：SDK 消息持久化、会话元数据 CRUD、JSONL 存储 |
 | `agent-prompt-builder.ts` | Agent 系统提示词构建（18KB）：动态上下文构建、内置 Agent 构建、工作区上下文注入 |
 | `agent-permission-service.ts` | Agent 权限管理：工具权限检查、权限模式管理 |
@@ -338,8 +338,8 @@ bun test apps/electron/src/main/lib/web-tab-session-service.test.ts
 │       └── {uuid}.ext
 ├── user-profile.json       # 用户档案 { userName, avatar }
 ├── settings.json           # 应用设置 { themeMode }
-└── sdk-config/             # Agent SDK 配置目录
-    └── projects/           # SDK 项目配置
+└── sdk-config/             # Pi Agent session artifact 配置目录
+    └── sessions/           # Pi session JSONL 文件
 ```
 
 **关键设计**：
@@ -349,56 +349,32 @@ bun test apps/electron/src/main/lib/web-tab-session-service.test.ts
 
 ## 构建工具
 
-- **主进程/Preload**：esbuild (`--bundle --platform=node --format=cjs --external:electron --external:@anthropic-ai/Codex-agent-sdk`)
+- **主进程/Preload**：esbuild (`--bundle --platform=node --format=cjs --external:electron --external:@earendil-works/pi-coding-agent --external:@earendil-works/pi-agent-core --external:@earendil-works/pi-ai`)
 - **渲染进程**：Vite + React 插件 + Tailwind CSS + HMR
 - **开发热重载**：渲染进程 Vite HMR 即时生效；主进程/Preload 通过 electronmon 监听 dist 文件变化自动重启
 - **打包分发**：electron-builder（配置见 `electron-builder.yml`）
 
 ### 重要：打包配置注意事项
 
-**Agent SDK 打包要求（必须遵守）：**
-- `@anthropic-ai/Codex-agent-sdk` 必须使用 `--external` 参数排除在 esbuild 打包之外
-- **0.2.113+ 架构变化**：SDK 主包已不再携带 JS CLI 入口（`cli.js`）和 `vendor/ripgrep/`，改为按平台分发 native binary（`Codex` / `Codex.exe`，单文件 214-252 MB），通过 `optionalDependencies` 安装到 `@anthropic-ai/Codex-agent-sdk-{platform}-{arch}/` 子包
-- `apps/electron/package.json` 必须显式声明当前 CI 矩阵覆盖的平台子包为 `optionalDependencies`（darwin-arm64 / darwin-x64 / win32-x64），否则 bun workspace 不会把它们链接到 `apps/electron/node_modules/`
-- `electron-builder.yml` 的 `files` 配置要同时包含主包和所有平台子包：
-  ```yaml
-  files:
-    - dist/**/*
-    - package.json
-    - node_modules/@anthropic-ai/Codex-agent-sdk/**/*
-    - node_modules/@anthropic-ai/Codex-agent-sdk-darwin-arm64/**/*
-    - node_modules/@anthropic-ai/Codex-agent-sdk-darwin-x64/**/*
-    - node_modules/@anthropic-ai/Codex-agent-sdk-win32-x64/**/*
-    - "!node_modules/@copis/**"
-  ```
-- SDK 主包和同级平台子包会被复制到 `app/node_modules/@anthropic-ai/`，Node.js 的模块解析能从 `app/dist/main.cjs` 找到
-- `agent-orchestrator.ts` 中 `resolveSDKCliPath()` 解析到 SDK 主包入口后，沿 `..` 到 `@anthropic-ai/` 同级目录，再拼 `Codex-agent-sdk-${platform}-${arch}/{Codex|Codex.exe}` 得到 binary 路径
+**Pi Agent runtime 打包要求（必须遵守）：**
+- `@earendil-works/pi-coding-agent`、`pi-agent-core` 和 `pi-ai` 必须使用 `--external` 参数排除在 esbuild 打包之外。
+- `apps/electron/scripts/sync-runtime-deps.ts` 的 `EXTERNAL_RUNTIME_PACKAGES` 必须与 `build:main`、`build:agent-rpc-worker` 的 external 清单一致，并递归复制 Pi runtime 的依赖闭包。
+- `pdfjs-dist`、`sharp` 及其运行时依赖也由同步脚本复制到 `apps/electron/node_modules/`。
+- `electron-builder.yml` 使用 `files: node_modules/**/*` 包含同步后的 external 依赖，并排除 workspace 包和构建期依赖。
+- `asarUnpack` 必须覆盖 Pi 的 native addon、`sharp`/`@img` 以及其他运行时要求文件；不要重新引入已移除的旧 runtime 平台 binary 规则。
 
-**跨平台打包限制：**
-- optionalDependencies 的平台子包由包管理器按 `os`/`cpu` 字段筛选：Apple Silicon runner 只会装 darwin-arm64，不会装 darwin-x64（cpu 不匹配）
-- 因此当前 CI（macos-latest + windows-latest）**不支持在单个 macOS runner 上同时打 arm64 + x64 DMG**
-- 若要发布 darwin-x64 版本，需要在 macos-13（x64 runner）单独跑一次构建
-- Windows runner 默认 x64，打 win32-x64 正常
-
-**不使用 extraResources 放 binary 的原因：**
-- `extraResources` 会将文件复制到 `Contents/Resources/` 目录，路径与 node_modules 解析不一致
-- 直接使用 `files` 配置让 Node.js 的模块解析能正确找到 SDK
-
-**修改打包配置时的检查清单：**
-1. ✅ 确认 SDK 在 esbuild 中使用 `--external` 参数
-2. ✅ 确认 SDK 主包 + 所有目标平台子包都在 `files` 配置中
-3. ✅ 确认 `apps/electron/package.json` 的 `optionalDependencies` 列出了所有目标平台子包
-4. ✅ `bun install` 后验证 `apps/electron/node_modules/@anthropic-ai/Codex-agent-sdk-{platform}-{arch}/` symlink 存在且 binary 可执行
-5. ✅ 本地测试打包后的应用 Agent 功能（`CSC_IDENTITY_AUTO_DISCOVERY=false bun run dist:fast`）
+**跨平台打包检查：**
+- Pi 的原生依赖按当前平台安装和同步；在目标平台分别执行构建，不能用单个平台的 `node_modules` 代替其他平台产物。
+- 修改 external 依赖后，先运行 `bun run sync:runtime-deps`，再执行 `bun run dist:fast` 或对应平台的 `dist:*` 命令。
+- 本地测试打包后的应用 Agent 功能，确认 Pi 可以启动、调用工具、恢复 session，并检查产物中没有已移除的旧 runtime binary 或包。
 
 **其他依赖的打包策略：**
-- **原则**：只有 `electron` 和 `@anthropic-ai/Codex-agent-sdk` 需要标记为 `--external`
-- `electron`：由 Electron 运行时提供，必须 external
-- `@anthropic-ai/Codex-agent-sdk`：有特殊打包要求（含 214 MB native binary），必须 external + 在 files 中包含主包和平台子包
-- **所有其他依赖**（如 `electron-updater`、`undici`、`chokidar` 等）：应该让 esbuild 打包进 `main.cjs`
-  - ✅ 优点：避免遗漏子依赖，简化 electron-builder 配置
-  - ❌ 如果标记为 external：必须在 `electron-builder.yml` 的 `files` 中手动列出所有子依赖
-- **常见错误**：将普通 npm 包标记为 external 但忘记在 `files` 中包含，导致打包后找不到模块（如 `Cannot find module 'universalify'`）
+- `electron` 由 Electron 运行时提供，必须 external。
+- Pi runtime、`pdfjs-dist`、`sharp` 属于主进程 external 运行时依赖，必须由同步脚本复制并由 electron-builder 打包。
+- **所有其他依赖**（如 `electron-updater`、`undici`、`chokidar` 等）应该让 esbuild 打包进 `main.cjs`。
+  - ✅ 优点：避免遗漏子依赖，简化 electron-builder 配置。
+  - ❌ 如果标记为 external：必须在 `electron-builder.yml` 的 `files` 中手动列出所有子依赖。
+- **常见错误**：将普通 npm 包标记为 external 但忘记在 `files` 中包含，导致打包后找不到模块（如 `Cannot find module 'universalify'`）。
 
 ## 代码风格
 
@@ -428,18 +404,18 @@ bun test apps/electron/src/main/lib/web-tab-session-service.test.ts
 
 **新增 Skill 不需要先注入 default-skills 目录的旧版本**——`upgradeDefaultSkillsInWorkspaces` 会通过"目标缺失即注入"路径让所有老工作区自动获得。
 
-## Agent SDK 集成架构
+## Pi Agent SDK 集成架构
 
-基于 `@anthropic-ai/Codex-agent-sdk@0.2.120` 实现 Agent 模式，与 Chat 模式并行。
+Copis 的 Agent 模式基于 `@earendil-works/pi-coding-agent@0.82.1`、`pi-agent-core@0.82.1` 和 `pi-ai@0.82.1`，与 Chat 模式共享 Provider 配置，但由 Pi 负责 Agent session、工具调用、推理和上下文压缩。
 
 ### 核心流程
 
 ```
-用户输入 → agent-orchestrator.ts (SDK 编排)
+用户输入 → agent-orchestrator.ts (Pi 编排)
   ↓
-SDK query() → SDKMessage 流
+Pi AgentSession → Pi AgentMessage / AgentSessionEvent 流
   ↓
-convertSDKMessage() → AgentEvent[]
+pi-message-adapter.ts → 统一 SDKMessage / AgentEvent 协议
   ↓
 webContents.send() → IPC 推送
   ↓
@@ -450,55 +426,32 @@ React UI 更新
 
 ### 关键组件
 
-#### agent-orchestrator.ts（核心编排层，71KB）
-- **并发守卫**：同一会话不允许并行请求
-- **渠道管理**：查找渠道 + API Key 解密
-- **环境构建**：环境变量 + SDK 路径解析
-- **消息持久化**：SDK 消息存储到 JSONL
-- **事件流处理**：文本累积 + 工具调用解析
-- **错误处理**：SDK 错误映射 + 重试逻辑
-- **自动标题**：首次对话自动生成标题
+#### agent-orchestrator.ts
+- **并发守卫**：同一会话不允许并行请求。
+- **渠道管理**：查找渠道、解密 API Key、动态构建 Pi provider。
+- **运行环境**：构建 Pi shell、代理、CLI 和工作区环境。
+- **消息持久化**：将统一消息和 Pi session artifact 保存到 JSONL。
+- **事件流处理**：累积文本、工具调用、重试和上下文压缩事件。
+- **错误处理**：统一映射网络、供应商、上下文和权限错误。
 
-#### agent-prompt-builder.ts（提示词构建，18KB）
-- **系统提示词生成**：基于工作区配置
-- **动态上下文构建**：注入工作区信息
-- **内置 Agent 构建**：预定义 Agent 配置
+#### pi-agent-adapter.ts
+- **Pi session**：创建、恢复、中断、分叉和回退 Pi AgentSession。
+- **工具桥接**：接入 Pi 原生工具、MCP 工具、Skills 和 Copis 权限策略。
+- **模型兼容**：按 ProviderType 动态构建 Anthropic、OpenAI、Google 及兼容模型。
 
-#### agent-permission-service.ts（权限管理）
-- **工具权限检查**：基于权限规则
-- **权限模式管理**：safe / ask / allow-all
+#### agent-prompt-builder.ts / agent-permission-service.ts
+- **系统提示词**：注入工作区、项目根目录、Skills、MCP 和记忆上下文。
+- **权限模式**：基于权限规则执行 safe / ask / allow-all。
 
 ### 关键设计
 
-- **SDK 调用**：`sdk.query({ prompt, options: { apiKey, model, permissionMode, cwd, abortController } })`
-- **事件转换**：`convertSDKMessage()`（`@copis/shared`）将 SDK 原始消息转为统一的 `AgentEvent` 类型
-- **工具匹配**：`packages/shared/src/agent/tool-matching.ts` — 无状态 `ToolIndex` + `extractToolStarts` / `extractToolResults` 解析工具调用
-- **状态管理**：`applyAgentEvent()` 纯函数更新 `AgentStreamState`，支持流式增量更新
-- **全局 IPC 监听**：`useGlobalAgentListeners`（`renderer/hooks/`）在 `main.tsx` 顶层挂载，通过 `useStore()` 直接操作 atoms，永不销毁。确保页面切换（如设置页）时流式输出、权限请求不丢失
-- **权限请求排队**：权限/AskUser 请求按 sessionId 入队到 Map atoms（`allPendingPermissionRequestsAtom` / `allPendingAskUserRequestsAtom`），不区分当前/后台会话，SDK Promise 等待用户回来响应
-- **工作区隔离**：每个工作区独立的 MCP Server 配置和 cwd，Agent 会话按工作区过滤
-
-### SDK 版本升级注意事项
-
-**`@anthropic-ai/Codex-agent-sdk` 0.2.113+ `options.env` 语义为"替换"**
-
-- SDK 将 `options.env` **替换** 传递给子进程（0.2.111/0.2.112 短暂改为叠加，0.2.113 恢复替换）
-- 如果传 `env` 时只给 `ANTHROPIC_*` 相关变量，子进程会丢失 `PATH` / `HOME` / `SHELL` 等关键变量，导致 SDK 调用 `npx` / `git` 等命令失败
-- **正确做法**：`agent-orchestrator.ts` 的 `buildSdkEnv()` 末尾显式 `{ ...cleanEnv, ...customEnv }` 合并 `process.env`，再剥离不希望泄漏的 `ANTHROPIC_*` 变量
-- **修改 `buildSdkEnv()` 时的检查清单**：
-  1. ✅ 基于 `process.env` 合并，保证 PATH / HOME / SHELL 等继承到子进程
-  2. ✅ 过滤掉不希望泄漏的 `ANTHROPIC_AUTH_TOKEN`、`ANTHROPIC_CUSTOM_HEADERS`、`ANTHROPIC_MODEL` 等
-  3. ✅ 新增的 SDK 识别的环境变量必须显式加入 `sdkEnv`
-- 若未来升级到后续大版本导致语义再次变化，需重新评估本加固逻辑
-
-**关键 Breaking Changes（升级参考）**：
-- `0.2.91`: `sandbox.failIfUnavailable` 默认从 `false` 变为 `true`（目前项目未使用 sandbox 选项）
-- `0.2.111`: `options.env` 从"替换"变为"叠加"
-- `0.2.113`:
-  - `options.env` 回退为"替换"
-  - **SDK 包结构重构**：删除 `cli.js`，改为平台 native binary（通过 `@anthropic-ai/Codex-agent-sdk-{platform}-{arch}` optionalDependency 分发），ripgrep 编译进 binary
-  - 详见上方"打包配置注意事项"段落
-- `0.2.120`: `query()` 省略 `settingSources` 时默认加载所有来源（Copis 已显式传 `['user', 'project']`，不受影响）
+- **Pi 调用**：`PiAgentAdapter` 将 `AgentQueryInput` 转换为 Pi `AgentSession` 查询选项。
+- **事件转换**：`pi-message-adapter.ts` 将 Pi 消息转换为 `SDKMessage` 和统一 `AgentEvent` 类型。
+- **工具匹配**：`packages/shared/src/agent/tool-matching.ts` 使用无状态 `ToolIndex` 解析工具调用。
+- **状态管理**：`applyAgentEvent()` 纯函数更新 `AgentStreamState`，支持流式增量更新。
+- **全局 IPC 监听**：`useGlobalAgentListeners` 在 `main.tsx` 顶层挂载，确保页面切换时流式输出、权限请求和后台任务不丢失。
+- **权限请求排队**：权限/AskUser 请求按 sessionId 入队到 Map atoms，SDK Promise 等待用户回来响应。
+- **工作区隔离**：每个工作区拥有独立的 MCP、Skills、cwd 和 Pi session artifact。
 
 ### 共享类型（`@copis/shared`）
 
@@ -515,7 +468,7 @@ React UI 更新
 
 - **会话管理**：收件箱/归档工作流
 - **权限模式**：safe / ask / allow-all
-- **Agent SDK**：@anthropic-ai/Codex-agent-sdk（[v1 文档](https://platform.Codex.com/docs/en/agent-sdk/typescript)、[v2 文档](https://platform.Codex.com/docs/en/agent-sdk/typescript-v2-preview)）
+- **Agent SDK**：`@earendil-works/pi-coding-agent`、`pi-agent-core`、`pi-ai`
 - **MCP 集成**：Model Context Protocol 用于外部
 - **凭证存储**：AES-256-GCM 加密
 - **配置位置**：`~/.copis/`（类似 `~/.craft-agent/`）
@@ -525,7 +478,7 @@ React UI 更新
 ### 已实现功能
 
 - ✅ **多 Provider 支持**：Anthropic、OpenAI、DeepSeek、Kimi、智谱、MiniMax、豆包、通义千问、Google、自定义端点
-- ✅ **Agent SDK 集成**：基于 Codex Agent SDK 的完整 Agent 模式
+- ✅ **Pi Agent 集成**：基于 Pi Agent SDK 的完整 Agent 模式
 - ✅ **飞书集成**：消息同步、任务通知、OAuth 认证（68KB 核心服务）
 - ✅ **工作区管理**：多工作区隔离、MCP Server 配置、Skills 管理
 - ✅ **权限系统**：工具权限检查、用户确认流程

@@ -893,7 +893,7 @@ function cacheNull(key: string): null {
 }
 
 function isAgentRuntime(value: unknown): value is AgentRuntime {
-  return value === 'claude' || value === 'pi'
+  return value === 'pi'
 }
 
 /**
@@ -2808,17 +2808,12 @@ export function registerIpcHandlers(): void {
         throw new Error(`Agent 会话不存在: ${sessionId}`)
       }
 
-      // 当前运行持有其启动时的 runtime；此处只更新会话的下一轮配置。
-
-      // 历史会话缺失 runtime 时按 Claude 处理，避免将 Claude SDK 会话 ID 交给 Pi 恢复。
-      const previousRuntime: AgentRuntime = isAgentRuntime(current.agentRuntime) ? current.agentRuntime : 'claude'
       const updates: Partial<Pick<AgentSessionMeta, 'agentRuntime' | 'sdkSessionId' | 'piSessionFile' | 'piEntryBindings'>> = {
         agentRuntime: runtime,
       }
-      if (previousRuntime !== runtime) {
-        // 两套 runtime 的会话 artifact 不可互用；下一轮从 Copis 已持久化的转录恢复。
+      // 旧版本可能留下 Claude session ID，但没有 Pi artifact；不能把它交给 Pi resume。
+      if (!current.piSessionFile && current.sdkSessionId) {
         updates.sdkSessionId = undefined
-        updates.piSessionFile = undefined
         updates.piEntryBindings = undefined
       }
 
@@ -5083,16 +5078,10 @@ export function registerIpcHandlers(): void {
 
   const validateAutomationRuntimePolicy = (
     input: Partial<CreateAutomationInput | UpdateAutomationInput>,
-    existing?: Automation,
   ): void => {
-    // 更新历史任务时，缺失的持久化 runtime 仍按 Claude 解释；仅新建任务使用 Pi 默认值。
-    const finalRuntime: AgentRuntime = input.agentRuntime ?? existing?.agentRuntime ?? (existing ? 'claude' : 'pi')
-    const finalChannelId = input.channelId !== undefined ? input.channelId : existing?.channelId
-    if (finalRuntime === 'claude' && finalChannelId) {
-      const agentChannelIds = getSettings().agentChannelIds ?? []
-      if (!agentChannelIds.includes(finalChannelId)) {
-        throw new Error('Claude Agent 内核只能使用已启用的 Agent 兼容渠道')
-      }
+    // Agent runtime 已统一为 Pi；旧任务会在读取索引时迁移。
+    if (input.agentRuntime !== undefined && input.agentRuntime !== 'pi') {
+      throw new Error('仅支持 Pi Agent runtime')
     }
   }
 
@@ -5156,7 +5145,7 @@ export function registerIpcHandlers(): void {
       const existing = getAutomation(input.id)
       if (!existing) return undefined
       validateAutomationFields(input)
-      validateAutomationRuntimePolicy(input, existing)
+      validateAutomationRuntimePolicy(input)
       validateAutomationScheduleComplete(input, existing)
       const a = updateAutomation(input)
       broadcastAutomationsChanged()

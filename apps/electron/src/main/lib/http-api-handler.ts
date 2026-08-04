@@ -23,6 +23,7 @@ import {
 } from '@copis/shared'
 import type {
   AgentMessage,
+  AgentRuntime,
   AgentSendInput,
   AgentSessionMeta,
   AgentWorkspace,
@@ -103,7 +104,7 @@ export interface AgentHttpFacade {
     channelId?: string,
     workspaceId?: string,
     modelId?: string,
-    agentRuntime?: 'claude' | 'pi',
+    agentRuntime?: AgentRuntime,
   ) => AgentSessionMeta
   getAgentSessionSDKMessages: (id: string) => SDKMessage[]
   runAgentHeadless: (

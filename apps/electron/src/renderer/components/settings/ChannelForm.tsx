@@ -32,7 +32,6 @@ import { Input } from '@/components/ui/input'
 import {
   PROVIDER_DEFAULT_URLS,
   PROVIDER_LABELS,
-  isAgentCompatibleProvider,
   parseZhipuTeamCredentials,
   parseCodexCredentials,
   parseXaiCredentials,
@@ -76,7 +75,6 @@ interface ChannelFormProps {
   /** 编辑模式下传入已有渠道，创建模式传 null */
   channel: Channel | null
   onSaved: (channel?: Channel) => void
-  onAgentEligibilityChange?: (channel: Channel, eligible: boolean) => void | Promise<void>
   onCancel: () => void
 }
 
@@ -199,11 +197,7 @@ function buildZhipuTeamSecret(secret: ZhipuTeamSecretForm): string {
 /** auto-save 防抖延迟 */
 const AUTO_SAVE_DELAY = 600
 
-function isAgentEligibleChannel(channel: Pick<Channel, 'provider' | 'enabled'>): boolean {
-  return channel.enabled && isAgentCompatibleProvider(channel.provider)
-}
-
-export function ChannelForm({ channel, onSaved, onAgentEligibilityChange, onCancel }: ChannelFormProps): React.ReactElement {
+export function ChannelForm({ channel, onSaved, onCancel }: ChannelFormProps): React.ReactElement {
   const isEdit = channel !== null
 
   // 表单状态
@@ -241,12 +235,7 @@ export function ChannelForm({ channel, onSaved, onAgentEligibilityChange, onCanc
   const [xaiDeviceCode, setXaiDeviceCode] = React.useState<XaiOAuthDeviceCode | null>(null)
 
   const setChannelFormDirty = useSetAtom(channelFormDirtyAtom)
-  const lastAgentEligibleRef = React.useRef(channel ? isAgentEligibleChannel(channel) : false)
   const xaiLoggingInRef = React.useRef(false)
-
-  React.useEffect(() => {
-    lastAgentEligibleRef.current = channel ? isAgentEligibleChannel(channel) : false
-  }, [channel])
 
   React.useEffect(() => {
     xaiLoggingInRef.current = xaiLoggingIn
@@ -319,7 +308,7 @@ export function ChannelForm({ channel, onSaved, onAgentEligibilityChange, onCanc
   ) => {
     if (!isEdit || !channel) return
     try {
-      const savedChannel = await window.electronAPI.updateChannel(channel.id, {
+      await window.electronAPI.updateChannel(channel.id, {
         name: currentName,
         provider: currentProvider,
         baseUrl: currentBaseUrl,
@@ -327,17 +316,12 @@ export function ChannelForm({ channel, onSaved, onAgentEligibilityChange, onCanc
         models: currentModels,
         enabled: currentEnabled,
       })
-      const eligible = isAgentEligibleChannel(savedChannel)
-      if (eligible !== lastAgentEligibleRef.current) {
-        lastAgentEligibleRef.current = eligible
-        await onAgentEligibilityChange?.(savedChannel, eligible)
-      }
       toast.success('已保存', { id: 'auto-save-success' })
     } catch (error) {
       console.error('[模型配置表单] auto-save 失败:', error)
       toast.error('自动保存失败，请检查后手动重试', { id: 'auto-save-error' })
     }
-  }, [isEdit, channel, onAgentEligibilityChange])
+  }, [isEdit, channel])
 
   /** 触发防抖 auto-save */
   const scheduleAutoSave = React.useCallback((
@@ -550,9 +534,6 @@ export function ChannelForm({ channel, onSaved, onAgentEligibilityChange, onCanc
           enabled,
         }
         const saved = await window.electronAPI.createChannel(input)
-        if (isAgentEligibleChannel(saved)) {
-          await onAgentEligibilityChange?.(saved, true)
-        }
         toast.success('ChatGPT 渠道已创建')
         onSaved(saved)
       }
@@ -607,11 +588,6 @@ export function ChannelForm({ channel, onSaved, onAgentEligibilityChange, onCanc
           models: savedModels,
           enabled,
         })
-        const eligible = isAgentEligibleChannel(saved)
-        if (eligible !== lastAgentEligibleRef.current) {
-          lastAgentEligibleRef.current = eligible
-          await onAgentEligibilityChange?.(saved, eligible)
-        }
         toast.success('xAI 登录成功')
       } else {
         const input: ChannelCreateInput = {
@@ -623,9 +599,6 @@ export function ChannelForm({ channel, onSaved, onAgentEligibilityChange, onCanc
           enabled,
         }
         const saved = await window.electronAPI.createChannel(input)
-        if (isAgentEligibleChannel(saved)) {
-          await onAgentEligibilityChange?.(saved, true)
-        }
         toast.success('xAI 渠道已创建')
         onSaved(saved)
       }
@@ -737,9 +710,6 @@ export function ChannelForm({ channel, onSaved, onAgentEligibilityChange, onCanc
         enabled,
       }
       const savedChannel = await window.electronAPI.createChannel(input)
-      if (isAgentEligibleChannel(savedChannel)) {
-        await onAgentEligibilityChange?.(savedChannel, true)
-      }
       toast.success('渠道创建成功')
       return savedChannel
     } catch (error) {
@@ -749,7 +719,7 @@ export function ChannelForm({ channel, onSaved, onAgentEligibilityChange, onCanc
     } finally {
       setSaving(false)
     }
-  }, [name, provider, baseUrl, effectiveApiKey, hasRequiredSecret, models, enabled, onAgentEligibilityChange])
+  }, [name, provider, baseUrl, effectiveApiKey, hasRequiredSecret, models, enabled])
 
   /** 显示第三方 Base URL 风险确认。 */
   const requestBaseUrlRiskAcknowledgement = (action: 'auto-save' | 'create' | 'fetch' | 'save-and-close' | 'test' | null): void => {

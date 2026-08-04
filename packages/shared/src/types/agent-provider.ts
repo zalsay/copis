@@ -2,13 +2,13 @@
  * Agent Provider 适配器接口
  *
  * 定义 Copis 自己的 Agent 接口层，让底层 SDK 可替换。
- * 当前实现：ClaudeAgentAdapter / PiAgentAdapter 双 runtime。
+ * 当前实现：统一使用 Pi Agent runtime。
  */
 
 import type { SDKMessage } from './agent'
 
-/** Agent runtime 实现 */
-export type AgentRuntime = 'claude' | 'pi'
+/** Agent runtime 实现。历史数据中的旧 runtime 值会在读取时归一化为 Pi。 */
+export type AgentRuntime = 'pi'
 
 /** SDK 用户消息（队列消息注入用，匹配 SDK SDKUserMessage 结构） */
 export interface SDKUserMessageInput {

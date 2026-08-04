@@ -207,7 +207,7 @@ export type InterfaceVariant = 'classic' | 'modern'
 /** 默认界面风格 */
 export const DEFAULT_INTERFACE_VARIANT: InterfaceVariant = 'modern'
 
-/** 新建 Agent 会话与自动任务的默认 runtime。历史持久化记录缺失 runtime 时仍按 Claude 兼容。 */
+/** 新建 Agent 会话与自动任务的默认 runtime。历史持久化记录会在读取时归一化为 Pi。 */
 export const DEFAULT_AGENT_RUNTIME: AgentRuntime = 'pi'
 
 /** Markdown 预览字号档位 */
@@ -244,11 +244,9 @@ export interface AppSettings {
   agentChannelId?: string
   /** Agent 默认模型 ID */
   agentModelId?: string
-  /** Claude Agent 可用渠道 ID 列表（由渠道启用状态与协议兼容性派生） */
-  agentChannelIds?: string[]
   /** Agent 当前工作区 ID */
   agentWorkspaceId?: string
-  /** 新 Agent 会话默认使用的 runtime；历史会话缺省仍按 claude 兼容。 */
+  /** 新 Agent 会话默认使用的 runtime。 */
   agentRuntime?: AgentRuntime
   /** Windows 上 Agent Bash 工具的运行环境；默认自动选择 Git Bash，WSL 需用户显式启用。 */
   windowsShellPreference?: WindowsShellPreference
@@ -317,7 +315,7 @@ export interface AppSettings {
   /**
    * Agent 代创建 git commit / PR 时是否附加 Copis 推广标识。
    * 默认 true：commit trailer `Made-with: Copis`，PR body 末尾含 https://copis.cool 与 https://github.com/copis-ai/Copis。
-   * 关闭后不注入任何 Copis 归因，并覆盖 Claude SDK 默认 Co-Authored-By。
+   * 关闭后不注入任何 Copis 归因，并覆盖 Agent runtime 默认 Co-Authored-By。
    */
   gitAttributionEnabled?: boolean
   /** Agent 灵动岛偏好（macOS 刘海屏优先，其他平台使用 Electron 降级体验）。 */

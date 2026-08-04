@@ -33,7 +33,6 @@ const CASE_INSENSITIVE_MERGE_KEYS = new Set([
   'all_proxy',
   'no_proxy',
   'copis_cli',
-  'claude_code_shell',
   'shell',
   'copis_windows_shell',
   'copis_wsl_distro',
@@ -128,7 +127,6 @@ function collectWindowsShellEnv(
   if (shellKind === 'wsl' && shellStatus?.wsl.available) {
     const wslCommand = getWslCommandPath(processEnv, pathExists)
     env.COPIS_WINDOWS_SHELL = 'wsl'
-    env.CLAUDE_CODE_SHELL = wslCommand
     env.SHELL = wslCommand
     if (shellStatus.wsl.defaultDistro) {
       env.COPIS_WSL_DISTRO = shellStatus.wsl.defaultDistro
@@ -144,7 +142,6 @@ function collectWindowsShellEnv(
   if (shellKind === 'git-bash' && shellStatus?.gitBash.path) {
     const shellPath = shellStatus.gitBash.path
     env.COPIS_WINDOWS_SHELL = 'git-bash'
-    env.CLAUDE_CODE_SHELL = shellPath
     env.SHELL = shellPath
     return {
       env,

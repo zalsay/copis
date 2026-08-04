@@ -11,7 +11,6 @@ let contextPrompt: AgentSessionContextPrompt
 let tempHome: string
 const originalHome = process.env.HOME
 const originalCopisDev = process.env.COPIS_DEV
-const originalClaudeConfigDir = process.env.CLAUDE_CONFIG_DIR
 
 mock.module('electron', () => ({
   app: {
@@ -47,12 +46,6 @@ function writeAgentSessionJsonl(sessionId: string, rows: string[]): void {
   const dir = join(tempHome, '.copis', 'agent-sessions')
   mkdirSync(dir, { recursive: true })
   writeFileSync(join(dir, `${sessionId}.jsonl`), jsonl(rows), 'utf-8')
-}
-
-function writeSdkSessionJsonl(sdkSessionId: string, rows: string[]): void {
-  const dir = join(tempHome, '.copis', 'sdk-config', 'projects', 'test-project')
-  mkdirSync(dir, { recursive: true })
-  writeFileSync(join(dir, `${sdkSessionId}.jsonl`), jsonl(rows), 'utf-8')
 }
 
 function writeAgentSessionsIndex(sessions: Array<{
@@ -93,7 +86,6 @@ beforeAll(async () => {
   tempHome = mkdtempSync(join(os.tmpdir(), 'copis-agent-session-manager-'))
   process.env.HOME = tempHome
   process.env.COPIS_DEV = '0'
-  delete process.env.CLAUDE_CONFIG_DIR
   manager = await import('./agent-session-manager')
   contextPrompt = await import('./agent-session-context-prompt')
 })
@@ -108,11 +100,6 @@ afterAll(() => {
     delete process.env.COPIS_DEV
   } else {
     process.env.COPIS_DEV = originalCopisDev
-  }
-  if (originalClaudeConfigDir === undefined) {
-    delete process.env.CLAUDE_CONFIG_DIR
-  } else {
-    process.env.CLAUDE_CONFIG_DIR = originalClaudeConfigDir
   }
   rmSync(tempHome, { recursive: true, force: true })
 })
@@ -130,30 +117,6 @@ describe('Agent 会话 JSONL 读取', () => {
     expect(messages.map((message) => message.type)).toEqual(['user', 'assistant'])
   })
 
-  test('Given SDK rewind JSONL 存在损坏行 When 从快照恢复文件 Then 严格失败避免误报成功', () => {
-    const cwd = join(tempHome, 'workspace')
-    mkdirSync(cwd, { recursive: true })
-    writeSdkSessionJsonl('sdk-session-with-bad-line', [
-      JSON.stringify({ type: 'user', uuid: 'user-1', message: { content: [{ type: 'text', text: '修改文件' }] } }),
-      '{ 这不是合法 JSON',
-      JSON.stringify({
-        type: 'file-history-snapshot',
-        isSnapshotUpdate: false,
-        snapshot: {
-          messageId: 'user-1',
-          trackedFileBackups: {
-            'a.txt': { backupFileName: null },
-          },
-        },
-      }),
-    ])
-
-    const result = manager.rewindFilesFromSnapshot('sdk-session-with-bad-line', 'user-1', cwd)
-
-    expect(result.canRewind).toBe(false)
-    expect(result.error).toContain('JSONL 第 2 行解析失败')
-  })
-
   test('Given 会话 JSONL 存在损坏行 When 截断 SDKMessage Then 抛错避免重写不完整历史', () => {
     writeAgentSessionJsonl('session-truncate-bad-line', [
       JSON.stringify({ type: 'assistant', uuid: 'assistant-1', message: { content: [{ type: 'text', text: '完成' }] } }),
@@ -166,7 +129,7 @@ describe('Agent 会话 JSONL 读取', () => {
 })
 
 describe('Agent 会话 runtime 元数据', () => {
-  test('Given 已保存 OpenAI medium 默认值 When 新建 Pi 或 Claude 会话 Then 默认并持久化 medium', () => {
+  test('Given 已保存 OpenAI medium 默认值 When 新建 Pi 会话 Then 默认并持久化 medium', () => {
     const settingsPath = join(tempHome, '.copis', 'settings.json')
     mkdirSync(join(tempHome, '.copis'), { recursive: true })
     writeFileSync(settingsPath, JSON.stringify({
@@ -177,18 +140,12 @@ describe('Agent 会话 runtime 元数据', () => {
 
     try {
       const defaultRuntimeSession = manager.createAgentSession('默认内核会话')
-      const claudeRuntimeSession = manager.createAgentSession('Claude 内核会话', undefined, undefined, undefined, 'claude')
 
       expect(defaultRuntimeSession.agentRuntime).toBe('pi')
-      expect(claudeRuntimeSession.agentRuntime).toBe('claude')
       expect(manager.getAgentSessionMeta(defaultRuntimeSession.id)?.agentRuntime).toBe('pi')
-      expect(manager.getAgentSessionMeta(claudeRuntimeSession.id)?.agentRuntime).toBe('claude')
       expect(defaultRuntimeSession.reasoningLevel).toBe('medium')
-      expect(claudeRuntimeSession.reasoningLevel).toBe('medium')
       expect(defaultRuntimeSession.workingMode).toBe('fast')
-      expect(claudeRuntimeSession.workingMode).toBe('fast')
       expect(manager.getAgentSessionMeta(defaultRuntimeSession.id)?.reasoningLevel).toBe('medium')
-      expect(manager.getAgentSessionMeta(claudeRuntimeSession.id)?.reasoningLevel).toBe('medium')
     } finally {
       rmSync(settingsPath, { force: true })
     }

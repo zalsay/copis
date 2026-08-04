@@ -89,7 +89,7 @@ export interface Automation {
    * 与 scheduleType 正交——任意循环模式都可叠加；once 模式语义上等价于 maxRuns=1。
    */
   maxRuns?: number
-  /** 本任务运行时使用的 Agent runtime；新任务默认 pi，历史任务缺省仍按 claude 兼容。 */
+  /** 本任务运行时使用的 Agent runtime；当前仅支持 Pi。 */
   agentRuntime?: import('./agent-provider').AgentRuntime
   /** AI 渠道 ID */
   channelId: string

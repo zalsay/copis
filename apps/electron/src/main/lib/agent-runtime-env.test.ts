@@ -50,7 +50,6 @@ describe('Agent Windows Shell 运行环境', () => {
       shellPath: gitBash.path,
       env: {
         COPIS_WINDOWS_SHELL: 'git-bash',
-        CLAUDE_CODE_SHELL: gitBash.path,
       },
     })
   })
@@ -71,7 +70,6 @@ describe('Agent Windows Shell 运行环境', () => {
       env: {
         COPIS_WINDOWS_SHELL: 'wsl',
         COPIS_WSL_DISTRO: 'Ubuntu-24.04',
-        CLAUDE_CODE_SHELL: 'wsl.exe',
       },
     })
   })

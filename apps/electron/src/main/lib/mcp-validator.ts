@@ -1,11 +1,11 @@
 /**
  * MCP 服务器验证器
  *
- * 在将 MCP 服务器配置传递给 Agent SDK 之前，验证其可用性：
+ * 在将 MCP 服务器配置传递给 Pi Agent 之前，验证其可用性：
  * - stdio 类型：检查命令是否存在
  * - http/sse 类型：可选地 ping URL
  *
- * 避免配置错误的 MCP 服务器导致整个 Agent SDK 无法启动。
+ * 避免配置错误的 MCP 服务器导致 Agent 无法启动。
  */
 
 import { existsSync } from 'node:fs'

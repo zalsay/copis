@@ -114,7 +114,7 @@ import {
   COPIS_WORKING_CHANNEL_ID,
   COPIS_WORKING_EXPERT_MODEL_ID,
   createCopisWorkingChannel,
-  inferAgentSdkContextWindow,
+  inferAgentContextWindow,
   inferContextWindow,
   isCodexFastModeSupportedModel,
   MAX_ATTACHMENT_SIZE,
@@ -171,12 +171,9 @@ function createUserSDKMessage(text: string, uuid?: string, createdAt = Date.now(
 
 function resolveRunContextWindow(
   modelId: string | undefined,
-  provider: ProviderType | undefined,
   previous: number | undefined,
 ): number | undefined {
-  return provider
-    ? inferAgentSdkContextWindow(modelId, provider) ?? previous
-    : inferContextWindow(modelId) ?? previous
+  return inferAgentContextWindow(modelId) ?? inferContextWindow(modelId) ?? previous
 }
 
 interface SDKMessageRecord {
@@ -1041,7 +1038,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
           model: snapshot.modelId,
           startedAt: streamStartedAt,
           inputTokens: existing?.inputTokens,
-          contextWindow: resolveRunContextWindow(snapshot.modelId, agentChannelProvider, existing?.contextWindow),
+          contextWindow: resolveRunContextWindow(snapshot.modelId, existing?.contextWindow),
         })
         return map
       })
@@ -1985,7 +1982,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
         model: agentModelId || undefined,
         startedAt: streamStartedAt,
         inputTokens: existing?.inputTokens,
-        contextWindow: resolveRunContextWindow(agentModelId || undefined, agentChannelProvider, existing?.contextWindow),
+        contextWindow: resolveRunContextWindow(agentModelId || undefined, existing?.contextWindow),
       })
       return map
     })
@@ -2225,7 +2222,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
         model: agentModelId || undefined,
         startedAt: streamStartedAt,
         inputTokens: existing?.inputTokens,
-        contextWindow: resolveRunContextWindow(agentModelId || undefined, agentChannelProvider, existing?.contextWindow),
+        contextWindow: resolveRunContextWindow(agentModelId || undefined, existing?.contextWindow),
       })
       return map
     })
@@ -2592,7 +2589,6 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
           cacheCreationTokens={contextStatus.cacheCreationTokens}
           contextWindow={contextStatus.contextWindow}
           isEstimated={contextStatus.contextUsageIsEstimated === true}
-          isPiRuntime={sessionAgentRuntime === 'pi'}
           isCompacting={contextStatus.isCompacting}
           isProcessing={streaming}
           sessionId={sessionId}

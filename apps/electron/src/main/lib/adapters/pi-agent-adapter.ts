@@ -1131,7 +1131,7 @@ function buildCopisProductToolDefinitions(sdk: PiSdk, canUseTool: PiAgentQueryOp
     sdk.defineTool({
       name: 'TodoRead',
       label: '读取待办',
-      description: '读取当前 turn 的任务列表。兼容 Claude SDK 的 TodoRead。',
+      description: '读取当前 turn 的任务列表。',
       promptSnippet: '读取当前待办列表。',
       parameters: Type.Object({}),
       async execute() {
@@ -2135,8 +2135,7 @@ export class PiAgentAdapter implements AgentProviderAdapter {
 }
 
 export function cleanupPiRuntimeResources(): void {
-  // Pi 是 in-process runtime，旧 Claude SDK 时代那个持久化的 native `claude` CLI 子进程已不存在，
-  // 因此不再需要旧的 before-quit 孤儿扫描（它当年只按命令行匹配 'claude-agent-sdk'）。
+  // Pi 是 in-process runtime，不需要额外扫描外部 Agent 子进程。
   //
   // Pi 的 bash 工具确实会 spawn 子进程，但它以 detached 独立进程组启动，abort()/timeout 时由
   // pi 内部 killProcessTree（SIGTERM + 5s SIGKILL）级联杀整个进程组；adapter.dispose()/abort()

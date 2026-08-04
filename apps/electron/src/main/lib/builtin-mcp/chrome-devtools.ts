@@ -2,9 +2,8 @@
  * Chrome DevTools MCP builtin server.
  *
  * This is a lightweight stdio MCP entry backed by the npm package
- * `chrome-devtools-mcp`. Claude runtime receives it through native mcpServers;
- * Pi runtime uses the existing Pi MCP bridge to convert the server tools into
- * Pi customTools.
+ * `chrome-devtools-mcp`. Pi runtime uses the existing Pi MCP bridge to convert
+ * the server tools into Pi customTools.
  */
 
 import { getBuiltinMcpName } from './baseline'

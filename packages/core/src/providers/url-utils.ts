@@ -117,9 +117,9 @@ export function normalizeVersionedAnthropicBaseUrl(baseUrl: string): string {
 }
 
 /**
- * 规范化 Anthropic Base URL（用于 Agent SDK 环境变量 ANTHROPIC_BASE_URL）
+ * 规范化 Anthropic Base URL（用于 Pi Anthropic runtime）
  *
- * SDK 内部会自动拼接 /v1/messages，所以这里需要去除用户误填的路径后缀，
+ * runtime 内部会自动拼接 /v1/messages，所以这里需要去除用户误填的路径后缀，
  * 只保留根路径。
  *
  * 例如：
@@ -215,7 +215,7 @@ export function resolveOpenAIModelsUrl(baseUrl: string): string {
  *
  * DeepSeek / Kimi 等以 `/anthropic` 为协议根路径的供应商，实际端点仍位于
  * `/anthropic/v1/messages`，因此统一走 normalizeVersionedAnthropicBaseUrl 按需补 `/v1`
- * （已含版本路径如 `/coding/v1` 的不会重复追加），与 Agent SDK 自动拼接 /v1/messages 的行为保持一致。
+ * （已含版本路径如 `/coding/v1` 的不会重复追加），与 Pi runtime 自动拼接 /v1/messages 的行为保持一致。
  */
 export function normalizeAnthropicProviderUrl(baseUrl: string, provider: ProviderType): string {
   if (
@@ -284,7 +284,7 @@ export function resolveAnthropicModelsUrl(baseUrl: string, provider: ProviderTyp
  *
  * 幂等保证：空值、非这两类 provider、以及已经是完整端点的值都原样返回，可安全重复执行。
  *
- * 注意：anthropic-compatible 渠道的 baseUrl 同时被 Agent SDK 路径
+ * 注意：anthropic-compatible 渠道的 baseUrl 同时被 Pi runtime 路径
  * （normalizeAnthropicBaseUrlForSdk）消费，该函数会剥除 /v\d+/messages 后缀，
  * 因此迁移成完整 /v1/messages 端点后 SDK 路径仍能还原出与升级前一致的根地址，互不影响。
  */

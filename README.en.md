@@ -11,7 +11,7 @@ It is not just another chat box. Copis is meant to become a long-lived Agent wor
 ## What Copis Can Do
 
 - **Chat mode**: multi-model conversations, attachments, image input, Markdown / Mermaid / KaTeX / code highlighting, parallel conversations, system prompts, and context controls.
-- **Agent mode**: two built-in runtimes—Claude Agent SDK and Pi Agent SDK—with workspace isolation, permission modes, file operations, streaming output, plan confirmation, and ask-user interactions. Claude is the default; switch runtimes below the Agent input.
+- **Agent mode**: a unified Pi Agent SDK runtime with workspace isolation, permission modes, file operations, streaming output, plan confirmation, and ask-user interactions. Pi can call Anthropic, Claude, OpenAI, Google, and compatible model channels.
 - **Collaboration and tasks**: complex work can be split into traceable collaboration agents and tasks, with calls and results shown in the message stream.
 - **Skills, MCP, and project roots**: each Copis project manages its own Skills and MCP servers. Project files can use a user-selected local project root or a Copis-managed blank-project directory; local project configuration is not imported automatically.
 - **Remote bots**: Lark / Feishu bot bridging is supported, with DingTalk and WeChat bridge entry points also present in the app.
@@ -50,8 +50,8 @@ If your organization plans to deploy Copis for hundreds or thousands of employee
 1. Open Copis and finish the environment check. Agent mode depends on local tooling, especially Git, Node.js / Bun, and a usable shell.
 2. Go to **Settings > Channels**, add at least one AI provider channel, and fill in Base URL, API Key, and model list.
 3. Chat mode can use OpenAI, Anthropic, Google, or OpenAI-compatible channels.
-4. The default Claude Agent Runtime requires an Anthropic or Anthropic-compatible channel, such as Anthropic, DeepSeek, Kimi API, or Kimi Coding Plan.
-5. Switch Claude / Pi directly below the Agent input. Pi can use any enabled model channel.
+4. The default Pi Agent Runtime supports enabled model channels such as Anthropic, DeepSeek, Kimi API, Kimi Coding Plan, OpenAI, Google, and compatible endpoints.
+5. Select the model and execution settings below the Agent input; Pi connects to the selected channel using its protocol.
 6. Go to **Settings > Agent** and choose the default Agent channel, model, and workspace.
 7. Configure memory, web search, or Feishu / DingTalk / WeChat bridges from their corresponding settings tabs if needed.
 
@@ -110,20 +110,17 @@ Copis supports Doubao-powered streaming voice input, both inside Copis and acros
 
 ## Agent Runtimes and Providers
 
-Copis provides two switchable Agent runtimes:
+Copis uses a single Pi Agent Runtime, powered by `@earendil-works/pi-coding-agent`, `pi-agent-core`, and `pi-ai`. It dynamically registers enabled Copis channels as Pi providers and supports OpenAI Chat Completions / Responses, Google Generative AI, Anthropic Messages, and compatible endpoints.
 
-- **Claude Agent Runtime (default)**: powered by `@anthropic-ai/claude-agent-sdk` and using the Anthropic Messages API or compatible endpoints.
-- **Pi Agent Runtime**: powered by `@earendil-works/pi-coding-agent`, `pi-agent-core`, and `pi-ai`. It dynamically registers enabled Copis channels as Pi providers and supports OpenAI Chat Completions / Responses, Google Generative AI, Anthropic Messages, and compatible endpoints.
+| Channel type | Chat | Pi Agent |
+| --- | --- | --- |
+| Anthropic / Anthropic-compatible | Supported | Supported |
+| Anthropic-protocol channels such as DeepSeek, Kimi API / Coding Plan, Zhipu Coding Plan, MiniMax, and Xiaomi MiMo | Supported | Supported |
+| OpenAI, OpenAI Responses, Google, Zhipu AI, Doubao, and Qwen | Supported | Supported |
+| Custom OpenAI-compatible endpoints | Supported | Supported |
+| ChatGPT subscription (Codex OAuth) | — | Supported |
 
-| Channel type | Chat | Claude Agent | Pi Agent |
-| --- | --- | --- | --- |
-| Anthropic / Anthropic-compatible | Supported | Supported | Supported |
-| Anthropic-protocol channels such as DeepSeek, Kimi API / Coding Plan, Zhipu Coding Plan, MiniMax, and Xiaomi MiMo | Supported | Supported | Supported |
-| OpenAI, OpenAI Responses, Google, Zhipu AI, Doubao, and Qwen | Supported | Not yet | Supported |
-| Custom OpenAI-compatible endpoints | Supported | Not yet | Supported |
-| ChatGPT subscription (Codex OAuth) | — | Supported | Supported |
-
-> Pi Runtime can be switched directly below the input of each Agent session. Switching starts a new underlying SDK session but does not delete Copis's saved messages. Pi bridges workspace Skills, user-configured MCP servers, and Copis's built-in Automation / Collaboration tools. Tool calling, reasoning, and context capabilities still vary by model provider.
+> Pi Runtime manages the underlying session for each Agent conversation without deleting Copis's saved messages. Pi bridges workspace Skills, user-configured MCP servers, and Copis's built-in Automation / Collaboration tools. Tool calling, reasoning, and context capabilities still vary by model provider.
 
 > **Kimi Coding Plan users**: Copis is officially whitelisted by Kimi. Using Copis with your Kimi Coding Plan subscription will not trigger any third-party client ban policy.
 
@@ -216,7 +213,7 @@ bun run dist:fast
 | Layer | Technology |
 | --- | --- |
 | Runtime | Bun |
-| Desktop | Electron 39 |
+| Desktop | Electron 43.2.0 |
 | Frontend | React 18 + TypeScript |
 | State | Jotai |
 | Styling | Tailwind CSS + Radix UI |
@@ -225,7 +222,7 @@ bun run dist:fast
 | Code highlighting | Shiki |
 | Build | Vite + esbuild |
 | Distribution | electron-builder |
-| Agent runtimes | Claude: `@anthropic-ai/claude-agent-sdk@0.3.201`; Pi: `@earendil-works/pi-* @0.80.3` |
+| Agent runtime | Pi: `@earendil-works/pi-coding-agent`, `pi-agent-core`, and `pi-ai` `@0.82.1` |
 
 ## Architecture
 
@@ -240,8 +237,8 @@ shared types and IPC constants
 
 Main-process services live in `apps/electron/src/main/lib/`:
 
-- `agent-orchestrator.ts`: Agent orchestration, runtime routing, environment variables, SDK calls, event streams, and error handling.
-- `adapters/claude-agent-adapter.ts` / `adapters/pi-agent-adapter.ts`: runtime adapters for Claude and Pi; `runtime-routing-agent-adapter.ts` routes each session to its selected runtime.
+- `agent-orchestrator.ts`: Agent orchestration, Pi runtime, environment variables, SDK calls, event streams, and error handling.
+- `adapters/pi-agent-adapter.ts`: the Pi runtime adapter that bridges Pi messages, tools, and session artifacts into Copis's unified session protocol.
 - `agent-session-manager.ts`: Agent session index and JSONL message persistence.
 - `agent-workspace-manager.ts`: Copis workspaces, project roots, MCP, and Skills.
 - `chat-service.ts`: Chat streaming, Provider Adapters, tool activity.
@@ -254,18 +251,17 @@ Renderer state is managed with Jotai. Key atoms live in `apps/electron/src/rende
 
 ## Packaging Notes
 
-Both Agent runtimes run as esbuild external dependencies in the main process. Before invoking `electron-builder`, the Electron packaging scripts run `bun run sync:runtime-deps` to copy these runtime dependency closures into the app directory:
+The Pi runtime runs as esbuild external dependencies in the main process. Before invoking `electron-builder`, the Electron packaging scripts run `bun run sync:runtime-deps` to copy these runtime dependency closures into the app directory:
 
-- `@anthropic-ai/claude-agent-sdk` (including the platform-specific Claude native binary)
 - `@earendil-works/pi-coding-agent`, `pi-agent-core`, and `pi-ai`
 - Pi runtime native modules and `pdfjs-dist`
 
 When changing packaging, verify that:
 
-- `build:main` / `watch:main` keep both Agent SDKs external.
+- `build:main` / `watch:main` keep the Pi runtime dependencies external.
 - `scripts/sync-runtime-deps.ts` stays aligned with the external runtime dependency list.
-- `electron-builder.yml` retains the `asarUnpack` rules for the Claude binary and Pi native add-ons.
-- After `bun run dist:fast` on a target platform, both Claude and Pi (when enabled) can start, call tools, and resume sessions.
+- `electron-builder.yml` retains the `asarUnpack` rules for Pi native add-ons.
+- After `bun run dist:fast` on a target platform, verify that Pi can start, call tools, and resume sessions.
 
 See [AGENTS.md](./AGENTS.md) for the full engineering conventions.
 

@@ -796,10 +796,9 @@ export function getAgentSessionWorkspacePath(workspaceSlug: string, sessionId: s
 }
 
 /**
- * 获取 SDK 隔离配置目录路径
+ * 获取 Agent SDK 配置目录路径
  *
- * 用于设置 CLAUDE_CONFIG_DIR 环境变量，让 SDK 读取独立的配置文件，
- * 而不是用户的 ~/.claude.json，实现 Copis 与 Claude Code CLI 的配置隔离。
+ * 用于保存 Pi session artifact 与运行时配置，避免与用户环境中的配置混用。
  *
  * 如果目录不存在则自动创建。
  *

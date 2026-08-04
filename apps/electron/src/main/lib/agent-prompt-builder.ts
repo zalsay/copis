@@ -4,8 +4,7 @@
  * 负责构建 Agent 的完整系统提示词和每条消息的动态上下文。
  *
  * 设计策略：
- * - 静态 system prompt（buildSystemPrompt）：追加到 claude_code preset 之后的自定义系统提示词
- *   preset 提供基础环境信息（platform/shell/OS/git/model 等），本模块追加 Copis 特有的指令
+ * - 静态 system prompt（buildSystemPrompt）：追加 Copis 特有的行为和工作区指令
  * - 动态 per-message 上下文（buildDynamicContext）：注入到用户消息前，每次实时读取磁盘
  */
 
@@ -64,7 +63,6 @@ function buildWorkspacePromptPaths(workspaceSlug: string, sessionId: string, age
     workspaceRoot,
     sessionDir,
     sessionContextDir: join(sessionDir, '.context'),
-    claudeSessionSettingsPath: join(sessionDir, '.claude', 'settings.json'),
     projectRoot,
     workspaceWriteRoot,
     workspaceWriteRestricted: workspace?.allowWorkspaceWrite === false,
@@ -82,17 +80,16 @@ function buildWorkspacePromptPaths(workspaceSlug: string, sessionId: string, age
 /**
  * 构建完整的系统提示词
  *
- * 构建追加到 claude_code preset 之后的自定义系统提示词。
+ * 构建 Copis Agent 的自定义系统提示词。
  *
- * claude_code preset 提供：环境信息（platform/shell/OS）、git 状态、模型信息、知识截止日期、currentDate 等。
  * 本函数追加：Copis Agent 角色定义、工具使用指南、子 Agent 委派策略、工作区信息、记忆系统等。
  * 工具（Read/Write/Edit/Bash 等）由 SDK 独立注册，不受 systemPrompt 影响。
  */
 export function buildSystemPrompt(ctx: SystemPromptContext): string {
   const profile = getUserProfile()
   const userName = profile.userName || '用户'
-  const agentRuntime = ctx.agentRuntime ?? 'claude'
-  const runtimeName = agentRuntime === 'pi' ? 'Pi Agent SDK' : 'Claude Agent SDK'
+  const agentRuntime = ctx.agentRuntime ?? 'pi'
+  const runtimeName = 'Pi Agent SDK'
   const currentModelId = ctx.currentModelId?.trim()
   const piDelegationModelInstruction = currentModelId
     ? `**派生子会话的模型**：当前 Agent 选择的模型 ID 是 \`${currentModelId}\`。调用 collaboration 派生子会话时，如果用户没有明确指定目标模型，必须在工具参数中显式传入 \`modelId: "${currentModelId}"\`，复用当前模型；不要自行从可用模型中挑选。只有用户明确要求其他模型时，才先查询可用模型并传入其指定的 \`modelId\`。`
@@ -121,14 +118,13 @@ export function buildSystemPrompt(ctx: SystemPromptContext): string {
 - 使用 Copis 暴露给你的 Read、Write、Edit、Bash、Grep、Glob、LS、Skill 和产品工具完成任务
 - 调用 \`write\` 时必须在同一次调用中同时提供 \`path\` 和完整的字符串 \`content\`；不要只提供路径。需要创建空文件时显式传入 \`content: ""\`
 - 遵循本提示词中的项目、Copis 工作区、权限、计划模式、Context 和知识维护规则
-- 不要假设当前处于 Claude Code CLI 原生运行环境，也不要依赖只存在于 Claude runtime 的内置配置
 - 当 Copis 提供附加目录时，可以按提示中的绝对路径直接访问这些用户授权范围
 - **默认直接执行**：工具调用不是向用户索要许可。目标已足够明确时，立即用工具推进；不要因低风险、可验证或可回滚的操作反复请求确认。完成后报告结果与关键假设。
 - ${piDelegationModelInstruction}
 
 ## 任务/日程工作流（仅 Pi）
 
-本运行时拥有 Pi 专属的本地任务/日程工具（名称以 \`mcp__planning__\` 开头）；Claude runtime 不拥有这些工具。将它作为持续的个人工作记忆和执行状态，而不是只有用户点名“Todo”时才使用的功能。
+本运行时拥有 Pi 专属的本地任务/日程工具（名称以 \`mcp__planning__\` 开头）。将它作为持续的个人工作记忆和执行状态，而不是只有用户点名“Todo”时才使用的功能。
 
 - **适度读取，而非机械轮询**：先判断读取任务/日程是否会改变本轮决策、避免遗漏承诺、或帮助恢复工作上下文。需要规划、承诺交付、询问今天/近期安排、讨论截止时间、恢复多步骤工作、或准备结束一个包含行动项的对话时，主动查询开放 Todo；涉及时间安排时，同时查询相关时间范围的日程。纯闲聊、纯知识问答、代码解释和不含后续行动的讨论不查询。查询必须带合适的状态、时间范围或 limit，禁止无界读取。
 - **创建前去重与分组（强制）**：每次调用 \`create_todo\` 前，必须先调用 \`list_todos({ status: 'open', limit: 100 })\` 和 \`list_groups\`。先检查是否已有相同或实质重叠的开放 Todo：有则更新/关联既有 Todo，不重复创建；无则优先选用语义匹配的现有 Todo 分组，只有没有合适分组时才创建为不分组。用户明确要求新分组时才创建 Todo 分组。创建日程时必须绑定当前工作区或用户明确指定的工作区，不创建日程分组。
@@ -194,15 +190,14 @@ Copis 提供内置 \`collaboration\` 工具，用来创建真实可见、可追�
     sections.push(`## 项目
 
 - 项目名称: ${ctx.workspaceName}
-- Copis 工作区目录: ${workspacePaths?.workspaceRoot}（存放 MCP、Skills、Copis CLAUDE.md 与运行时配置）
+- Copis 工作区目录: ${workspacePaths?.workspaceRoot}（存放 MCP、Skills、Copis 工作区指令与 Memory 等配置）
 - 项目根目录: ${workspacePaths?.projectRoot}（${workspacePaths?.isLocalProject ? '用户选择的本地原始文件夹' : 'Copis 托管的空白项目目录'}）
 - Agent 可写目录: ${workspaceWriteRoot}${workspaceWriteRestricted ? '（原始项目根只读，工作区产出只能写入此目录）' : '（已允许直接写入项目根）'}
 - 会话工作台目录: ${workspacePaths?.sessionDir}（存放当前会话的私有临时文件与会话级 Context）
-${agentRuntime === 'claude' ? `- Claude 会话 sidecar: ${workspacePaths?.claudeSessionSettingsPath}（Copis 托管的运行时配置，不是项目文件或记忆；不要修改）
-` : ''}- 实际工作目录（cwd）: ${workspacePaths?.agentCwd}（${workspacePaths?.isProjectCwd ? '当前会话直接在项目根目录中工作' : '当前会话仍使用私有会话工作台，不等同于项目根目录'}；以每条消息的 \`<working_directory>\` 为准）
+- 实际工作目录（cwd）: ${workspacePaths?.agentCwd}（${workspacePaths?.isProjectCwd ? '当前会话直接在项目根目录中工作' : '当前会话仍使用私有会话工作台，不等同于项目根目录'}；以每条消息的 \`<working_directory>\` 为准）
 - Copis 工作区 CLAUDE.md: ${workspacePaths?.claudeMd}
 - Copis Memory: 通过受控的结构化能力访问，不暴露本地存储路径
-- SDK 隔离配置目录: ${workspacePaths?.sdkConfigDir}（用于 Copis 与 Claude Code CLI 的 SDK 配置隔离；不要把它当作 Copis 工作区的长期记忆目录）
+- Pi session 配置目录: ${workspacePaths?.sdkConfigDir}（用于保存 Pi session artifact；不要把它当作 Copis 工作区的长期记忆目录）
 - Copis 工作区 MCP 配置: ${workspacePaths?.mcpConfig}（顶层 key 是 \`servers\`）
 - Copis 工作区 Skills 目录: ${workspacePaths?.skillsDir}/（Copis 只从此目录加载 skill；npx skills add 等外部命令安装到 .agents/skills/ 不会被加载，需手动 mv 到此目录）
 
@@ -211,6 +206,8 @@ ${agentRuntime === 'claude' ? `- Claude 会话 sidecar: ${workspacePaths?.claude
 存在两个 \`.context/\` 目录，用途不同：
 - **会话级** \`${sessionContextDir}\`：当前会话的临时工作台，存放本次任务的 todo.md、plan/、临时笔记等
 - **项目级** \`${workspaceContextDir}\`：跨会话共享的持久文档，存放长期 note.md、项目级知识等；本地项目时位于用户项目根目录下
+
+项目根与 cwd 不一定相同：新会话通常在项目根目录运行，历史会话可能仍在会话工作台运行，始终以“实际工作目录”和每条消息的 \`<working_directory>\` 为准。
 
 选择写入哪个目录时：
 - 只与当前任务相关的内容 → 会话级 Context 的绝对路径

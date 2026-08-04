@@ -10,7 +10,7 @@ import {
   CODEX_GPT_54_MINI_CONTEXT_WINDOW,
   CODEX_GPT_56_CONTEXT_WINDOW,
   extractZhipuCodingTeamApiToken,
-  inferAgentSdkContextWindow,
+  inferAgentContextWindow,
   inferCodexAlignedGPT5ContextWindow,
   resolveReasoningCapability,
   resolveReasoningProfile,
@@ -436,7 +436,7 @@ export async function resolvePiImageInputCapability(
   provider: ProviderType,
   modelId: string | undefined,
 ): Promise<'supported' | 'unsupported' | 'unknown'> {
-  const resolvedModelId = stripAgentSdkContextSuffix(modelId)
+  const resolvedModelId = stripAgentContextSuffix(modelId)
   if (!resolvedModelId) return 'unknown'
   const catalogModel = await findPiCatalogModel(provider, resolvedModelId)
   if (!catalogModel) return 'unknown'
@@ -453,7 +453,7 @@ export async function resolvePiReasoningCapability(
   provider: ProviderType,
   modelId: string | undefined,
 ): Promise<ReasoningCapability | undefined> {
-  const resolvedModelId = stripAgentSdkContextSuffix(modelId)
+  const resolvedModelId = stripAgentContextSuffix(modelId)
   const profile = resolveReasoningProfile({
     modelId: resolvedModelId,
     transport: provider === 'openai-codex' || provider === 'xai'
@@ -480,7 +480,7 @@ async function resolvePiModelDefaults(input: PiAgentQueryOptions): Promise<PiMod
   const isVolcengineGlm52 = (input.provider === 'doubao' || input.provider === 'ark-coding-plan')
     && input.model?.toLowerCase() === 'glm-5.2'
   const catalogContextWindow = catalogModel?.contextWindow ?? DEFAULT_CONTEXT_WINDOW
-  const inferredContextWindow = inferAgentSdkContextWindow(input.model, input.provider) ?? DEFAULT_CONTEXT_WINDOW
+  const inferredContextWindow = inferAgentContextWindow(input.model) ?? DEFAULT_CONTEXT_WINDOW
   return {
     reasoning: catalogModel?.reasoning ?? true,
     thinkingLevelMap: providerSpecificCapabilities?.thinkingLevelMap
@@ -544,7 +544,7 @@ function shouldUseRuntimeApiKey(provider: ProviderType): boolean {
  * 智谱团队版（zhipu-coding-team）的凭据是复合串（形如
  * `apiKey=xxx; bigmodel_organization=yyy; bigmodel_project=zzz`），
  * 必须先提取其中的 apiKey，否则整串会被塞进 `Authorization: Bearer` 头导致 401。
- * 与 Claude runtime 的 applyAgentSdkAuthEnv 保持一致。
+ * 与 Pi provider 的认证约定保持一致。
  */
 export function resolvePiApiKey(provider: ProviderType, apiKey: string): string {
   return provider === 'zhipu-coding-team' ? extractZhipuCodingTeamApiToken(apiKey) : apiKey
@@ -553,11 +553,11 @@ export function resolvePiApiKey(provider: ProviderType, apiKey: string): string 
 /**
  * 剥离模型 ID 上的 `[1m]` 扩展上下文后缀。
  *
- * `[1m]` 是 Claude Agent SDK 专用的扩展上下文变体，pi runtime 及其对接的
- * 端点（智谱等）并不识别，带后缀会被判为「模型不存在」（智谱 1211）。
+ * `[1m]` 是 Anthropic 模型的扩展上下文变体，Pi 对接的端点（智谱等）并不识别，
+ * 带后缀会被判为「模型不存在」（智谱 1211）。
  * pi 模式统一剥离该后缀，保证注册与请求使用干净的模型 ID。
  */
-export function stripAgentSdkContextSuffix(modelId: string | undefined): string | undefined {
+export function stripAgentContextSuffix(modelId: string | undefined): string | undefined {
   return modelId?.replace(/\[1m\]$/i, '')
 }
 
@@ -617,7 +617,7 @@ export async function buildCodexModel(sdk: PiSdk, input: CodexModelInput) {
     allowModelNetwork: false,
   })
 
-  const resolvedModelId = stripAgentSdkContextSuffix(input.model)
+  const resolvedModelId = stripAgentContextSuffix(input.model)
   const codexModels = await getCodexCatalogModels()
   const model = (resolvedModelId ? modelRuntime.getModel('openai-codex', resolvedModelId) : undefined)
     ?? (resolvedModelId ? findCatalogModelById(codexModels, resolvedModelId) : undefined)
@@ -657,7 +657,7 @@ export async function buildXaiModel(sdk: PiSdk, input: XaiModelInput) {
     ),
     allowModelNetwork: false,
   })
-  const resolvedModelId = stripAgentSdkContextSuffix(input.model)
+  const resolvedModelId = stripAgentContextSuffix(input.model)
   const xaiModels = await getXaiCatalogModels()
   const model = (resolvedModelId ? modelRuntime.getModel('xai', resolvedModelId) : undefined)
     ?? (resolvedModelId ? findCatalogModelById(xaiModels, resolvedModelId) : undefined)
@@ -683,7 +683,7 @@ export async function buildModel(sdk: PiSdk, input: PiAgentQueryOptions) {
   const providerName = `copis-${input.provider}-${input.sessionId}`
   const resolvedApiKey = resolvePiApiKey(input.provider, input.apiKey)
   // pi runtime 统一剥离 `[1m]` 后缀：无论上游从哪条路径传入，注册与查找都用干净 ID。
-  const resolvedModelId = stripAgentSdkContextSuffix(input.model)
+  const resolvedModelId = stripAgentContextSuffix(input.model)
   const modelRuntime = await sdk.ModelRuntime.create({ allowModelNetwork: false })
   const api = normalizePiApi(input.provider)
   const modelDefaults = await resolvePiModelDefaults({ ...input, model: resolvedModelId })

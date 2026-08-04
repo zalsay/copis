@@ -100,34 +100,11 @@ export const PROVIDER_LABELS: Record<ProviderType, string> = {
 }
 
 /**
- * 支持 Claude Agent Core 的供应商类型
+ * 支持 Agent Core 的供应商类型
  *
- * Claude Agent SDK 通过 Anthropic 兼容协议调用 `/v1/messages` 端点，
+ * Pi Agent 通过 Anthropic 兼容协议调用 `/v1/messages` 端点，
  * 因此所有 Anthropic 协议兼容的供应商都可以用于 Agent。
  */
-export const AGENT_COMPATIBLE_PROVIDERS: ReadonlySet<ProviderType> = new Set<ProviderType>([
-  'anthropic',
-  'anthropic-compatible',
-  'deepseek',
-  'kimi-api',
-  'kimi-coding',
-  'zhipu-coding',
-  'zhipu-coding-team',
-  'ark-coding-plan',
-  'minimax',
-  'xiaomi',
-  'xiaomi-token-plan',
-  'qwen-anthropic',
-  'qwen-token-plan',
-])
-
-/**
- * 判断供应商是否兼容 Claude Agent Core
- */
-export function isAgentCompatibleProvider(provider: ProviderType): boolean {
-  return AGENT_COMPATIBLE_PROVIDERS.has(provider)
-}
-
 export interface ZhipuTeamCredentials {
   apiKey: string
   organization?: string

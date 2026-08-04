@@ -39,7 +39,10 @@ export function getSettings(): AppSettings {
 
   try {
     const raw = readFileSync(filePath, 'utf-8')
-    const data = JSON.parse(raw) as Partial<AppSettings> & { experimentalAgentRuntimeSwitchEnabled?: boolean }
+    const data = JSON.parse(raw) as Partial<AppSettings> & {
+      experimentalAgentRuntimeSwitchEnabled?: boolean
+      agentRuntime?: unknown
+    }
     // Pi runtime 已默认可用；读取时清理旧版本遗留的实验开关。
     const { experimentalAgentRuntimeSwitchEnabled: _legacyRuntimeSwitch, ...settings } = data
     return {
@@ -54,7 +57,7 @@ export function getSettings(): AppSettings {
       feishuSessionMirror: data.feishuSessionMirror ?? { mode: 'off' },
       visionRelay: data.visionRelay ?? { enabled: false },
       builtinMcpDisabledIds: settings.builtinMcpDisabledIds ?? [],
-      agentRuntime: settings.agentRuntime ?? DEFAULT_AGENT_RUNTIME,
+      agentRuntime: data.agentRuntime === 'pi' ? 'pi' : DEFAULT_AGENT_RUNTIME,
       windowsShellPreference: settings.windowsShellPreference ?? 'auto',
       agentThinking: settings.agentThinking ?? { type: 'adaptive' },
       // 缺省 true：老配置文件未写该字段时保持推广默认开启

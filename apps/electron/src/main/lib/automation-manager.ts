@@ -40,6 +40,10 @@ const INDEX_VERSION = 2
 function migrateLegacyFields(data: AutomationsIndex): boolean {
   let changed = false
   for (const a of data.automations) {
+    if (a.agentRuntime !== 'pi') {
+      a.agentRuntime = 'pi'
+      changed = true
+    }
     if ((a.sessionMode as string | undefined) === 'new') {
       a.sessionMode = 'daily'
       changed = true
@@ -100,7 +104,7 @@ function readIndex(): AutomationsIndex {
   cachedIndex = data
   if (migrated) {
     writeIndex(data)
-    console.log('[定时任务] 索引已迁移至最新版本（sessionMode: new → daily，permissionMode: auto → bypassPermissions）')
+    console.log('[定时任务] 索引已迁移至最新版本（旧 runtime → pi，sessionMode: new → daily，permissionMode: auto → bypassPermissions）')
   }
   return cachedIndex
 }
@@ -272,7 +276,7 @@ export function createAutomation(input: CreateAutomationInput): Automation {
     dayOfMonth: input.dayOfMonth,
     scheduledAt: input.scheduledAt,
     maxRuns: normalizeMaxRuns(input.maxRuns),
-    // 新建任务未指定 runtime 时默认 Pi；已有历史任务的缺省值由读取/调度路径继续按 Claude 处理。
+    // 新建任务固定使用 Pi；历史任务在读取索引时已完成归一化。
     agentRuntime: input.agentRuntime ?? 'pi',
     channelId: input.channelId,
     modelId: input.modelId,

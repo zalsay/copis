@@ -56,8 +56,8 @@ export interface CreateAgentProjectResult {
 /**
  * 思考模式配置
  *
- * 控制 Claude 的推理/思考行为：
- * - adaptive: Claude 自行决定何时以及思考多少（Opus 4.6+ 默认）
+ * 控制 Anthropic 模型的推理/思考行为：
+ * - adaptive: 模型自行决定何时以及思考多少（Opus 4.6+ 默认）
  * - enabled: 固定思考 Token 预算（旧模型）
  * - disabled: 不使用扩展思考
  */
@@ -77,7 +77,7 @@ export type ThinkingConfig =
  */
 export type AgentEffort = 'low' | 'medium' | 'high' | 'max'
 
-/** Agent 思考等级（用于 Pi runtime；Claude runtime 继续使用 ThinkingConfig/AgentEffort） */
+/** Agent 思考等级（由 Pi runtime 统一执行）。 */
 export type AgentThinkingLevel = 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'
 
 // Model-specific reasoning profiles and level normalization live in reasoning-profile.ts.
@@ -232,7 +232,7 @@ export interface SDKAssistantMessage {
   isReplay?: boolean
   /** 渠道配置的模型 ID，持久化/流式期间注入，用于正确匹配模型显示名 */
   _channelModelId?: string
-  /** 渠道 provider，用于按 Agent SDK 实际运行窗口计算压缩阈值 */
+  /** 渠道 provider，用于按 Agent runtime 实际运行窗口计算压缩阈值 */
   _channelProvider?: ProviderType
 }
 
@@ -271,9 +271,9 @@ export interface SDKResultMessage {
   background_tasks?: SDKBackgroundTaskSummary[]
   session_crons?: SDKSessionCronSummary[]
   session_id?: string
-  /** 渠道配置的模型 ID，用于缺失 modelUsage.contextWindow 时按 Agent SDK 运行窗口兜底 */
+  /** 渠道配置的模型 ID，用于缺失 modelUsage.contextWindow 时按 Agent runtime 运行窗口兜底 */
   _channelModelId?: string
-  /** 渠道 provider，用于按 Agent SDK 实际运行窗口计算压缩阈值 */
+  /** 渠道 provider，用于按 Agent runtime 实际运行窗口计算压缩阈值 */
   _channelProvider?: ProviderType
 }
 
@@ -308,7 +308,7 @@ export interface SDKSystemMessage {
   [key: string]: unknown
 }
 
-/** SDK thinking token 估算消息（Claude Agent SDK 0.3.156+） */
+/** Agent SDK thinking token 估算消息。 */
 export interface SDKThinkingTokensMessage {
   type: 'system'
   subtype: 'thinking_tokens'
@@ -410,7 +410,6 @@ export type ErrorCode =
   | 'agent_provider_not_supported'
   | 'agent_model_unavailable'
   | 'api_key_decrypt_failed'
-  | 'claude_binary_not_found'
   | 'agent_runtime_not_found'
   | 'workspace_not_found'
   | 'local_project_root_unavailable'
@@ -660,7 +659,7 @@ export interface AgentSessionMeta {
   piSessionFile?: string
   /** Copis assistant UI UUID 到 Pi 树状 session entry ID 的持久映射。 */
   piEntryBindings?: Record<string, string>
-  /** 当前会话使用的 Agent runtime；历史会话缺省为 claude */
+  /** 当前会话使用的 Agent runtime；历史会话会在读取时归一化为 Pi。 */
   agentRuntime?: import('./agent-provider').AgentRuntime
   /** ChatGPT Codex Fast Mode 开关；仅 Pi + ChatGPT OAuth 的受支持模型实际生效。 */
   codexFastMode?: boolean
@@ -1386,7 +1385,7 @@ export type CopisPermissionMode = typeof COPIS_PERMISSION_MODES[number]
 export const COPIS_DEFAULT_PERMISSION_MODE: CopisPermissionMode = 'bypassPermissions'
 
 export interface CopisPermissionModeConfig {
-  /** 对应 Claude Agent SDK 的 permissionMode */
+  /** 对应 Pi Agent 的 permissionMode */
   sdkMode: CopisPermissionMode
   label: string
   description: string

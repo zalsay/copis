@@ -8,7 +8,7 @@
 import { existsSync, statSync, unlinkSync } from 'node:fs'
 import { rmSyncWithRetry } from './fs-retry'
 import { promises as fsPromises } from 'node:fs'
-import { join, basename, relative, isAbsolute } from 'node:path'
+import { join, basename, relative, isAbsolute, sep } from 'node:path'
 import { tmpdir } from 'node:os'
 import { app } from 'electron'
 import {
@@ -268,99 +268,46 @@ async function calcAgentSessionsCategory(): Promise<StorageCategory> {
 async function calcSdkConfigCategory(): Promise<StorageCategory> {
   const sdkDir = getSdkConfigDir()
   const activeSdkIds = getActiveSdkSessionIds()
-  let bytes = 0, count = 0, orphanBytes = 0, orphanCount = 0
+  const total = await getDirSize(sdkDir)
+  let orphanBytes = 0
+  let orphanCount = 0
   const orphanItems: StorageOrphanItem[] = []
   let orphanItemsTruncated = false
 
-  const projectsDir = join(sdkDir, 'projects')
-  if (existsSync(projectsDir)) {
+  // Pi session artifact 以 {sessionId}.jsonl 保存；仅把无法关联到现有会话的 artifact 标记为孤儿。
+  const sessionsDir = join(sdkDir, 'sessions')
+  if (existsSync(sessionsDir)) {
     try {
-      const hashDirs = await fsPromises.readdir(projectsDir)
-      for (const hashDir of hashDirs) {
-        const projPath = join(projectsDir, hashDir)
+      const files = await fsPromises.readdir(sessionsDir)
+      for (const file of files) {
+        if (!file.endsWith('.jsonl')) continue
+        const fullPath = join(sessionsDir, file)
         try {
-          if (!(await fsPromises.lstat(projPath)).isDirectory()) continue
-          const files = await fsPromises.readdir(projPath)
-          for (const file of files) {
-            if (!file.endsWith('.jsonl')) continue
-            const fullPath = join(projPath, file)
-            try {
-              const stat = await fsPromises.stat(fullPath)
-              const sdkId = basename(file, '.jsonl')
-              bytes += stat.size
-              count++
-              if (!activeSdkIds.has(sdkId)) {
-                orphanBytes += stat.size
-                orphanCount++
-                orphanItemsTruncated = addOrphanItem(orphanItems, {
-                  kind: 'file',
-                  path: displayStoragePath(fullPath),
-                  bytes: stat.size,
-                  count: 1,
-                }) || orphanItemsTruncated
-              }
-            } catch { /* skip */ }
-          }
-        } catch { /* skip */ }
-      }
-    } catch { /* skip */ }
-  }
-
-  const fileHistoryDir = join(sdkDir, 'file-history')
-  if (existsSync(fileHistoryDir)) {
-    try {
-      const sdkIds = await fsPromises.readdir(fileHistoryDir)
-      for (const sdkId of sdkIds) {
-        const histPath = join(fileHistoryDir, sdkId)
-        try {
-          if (!(await fsPromises.lstat(histPath)).isDirectory()) continue
-          const sub = await getDirSize(histPath)
-          bytes += sub.bytes
-          count += sub.count
-          if (!activeSdkIds.has(sdkId)) {
-            orphanBytes += sub.bytes
-            orphanCount += sub.count
-            orphanItemsTruncated = addOrphanItem(orphanItems, {
-              kind: 'directory',
-              path: displayStoragePath(histPath),
-              bytes: sub.bytes,
-              count: sub.count,
-            }) || orphanItemsTruncated
-          }
-        } catch { /* skip */ }
-      }
-    } catch { /* skip */ }
-  }
-
-  // sdk-config 其他子目录（sessions, backups 等）
-  if (existsSync(sdkDir)) {
-    try {
-      const entries = await fsPromises.readdir(sdkDir)
-      for (const entry of entries) {
-        if (entry === 'projects' || entry === 'file-history') continue
-        const fullPath = join(sdkDir, entry)
-        try {
-          const stat = await fsPromises.lstat(fullPath)
-          if (stat.isDirectory()) {
-            const sub = await getDirSize(fullPath)
-            bytes += sub.bytes
-            count += sub.count
-          } else {
-            bytes += stat.size
-            count++
-          }
+          const stat = await fsPromises.stat(fullPath)
+          if (activeSdkIds.has(basename(file, '.jsonl'))) continue
+          orphanBytes += stat.size
+          orphanCount++
+          orphanItemsTruncated = addOrphanItem(orphanItems, {
+            kind: 'file',
+            path: displayStoragePath(fullPath),
+            bytes: stat.size,
+            count: 1,
+          }) || orphanItemsTruncated
         } catch { /* skip */ }
       }
     } catch { /* skip */ }
   }
 
   return {
-    label: 'SDK 会话数据',
+    label: 'Pi Agent 会话数据',
     key: 'sdk-config',
-    bytes, count,
+    bytes: total.bytes,
+    count: total.count,
     hasOrphans: orphanCount > 0,
-    orphanBytes, orphanCount,
-    orphanItems, orphanItemsTruncated,
+    orphanBytes,
+    orphanCount,
+    orphanItems,
+    orphanItemsTruncated,
   }
 }
 
@@ -573,55 +520,27 @@ async function cleanupOrphanAgentSessions(): Promise<CleanupResult> {
 }
 
 async function cleanupOrphanSdkConfig(): Promise<CleanupResult> {
-  const sdkDir = getSdkConfigDir()
+  const sessionsDir = join(getSdkConfigDir(), 'sessions')
   const activeSdkIds = getActiveSdkSessionIds()
-  let freedBytes = 0, deletedCount = 0
+  let freedBytes = 0
+  let deletedCount = 0
   const errors: string[] = []
 
-  const projectsDir = join(sdkDir, 'projects')
-  if (existsSync(projectsDir)) {
-    try {
-      const hashDirs = await fsPromises.readdir(projectsDir)
-      for (const hashDir of hashDirs) {
-        const projPath = join(projectsDir, hashDir)
-        try {
-          if (!(await fsPromises.lstat(projPath)).isDirectory()) continue
-          const files = await fsPromises.readdir(projPath)
-          for (const file of files) {
-            if (!file.endsWith('.jsonl')) continue
-            const sdkId = basename(file, '.jsonl')
-            if (activeSdkIds.has(sdkId)) continue
-            const freed = safeUnlink(join(projPath, file))
-            if (freed > 0) { freedBytes += freed; deletedCount++ }
-          }
-          // 若目录为空则删除
-          const remaining = await fsPromises.readdir(projPath)
-          if (remaining.length === 0) {
-            rmSyncWithRetry(projPath, { recursive: true, force: true })
-          }
-        } catch { /* skip */ }
-      }
-    } catch (e) {
-      errors.push(`清理孤儿 SDK projects 失败: ${e}`)
-    }
-  }
+  if (!existsSync(sessionsDir)) return { freedBytes, deletedCount, errors }
 
-  const fileHistoryDir = join(sdkDir, 'file-history')
-  if (existsSync(fileHistoryDir)) {
-    try {
-      const sdkIds = await fsPromises.readdir(fileHistoryDir)
-      for (const sdkId of sdkIds) {
-        if (activeSdkIds.has(sdkId)) continue
-        const histPath = join(fileHistoryDir, sdkId)
-        try {
-          if (!(await fsPromises.lstat(histPath)).isDirectory()) continue
-          const freed = await safeRmDir(histPath)
-          if (freed > 0) { freedBytes += freed; deletedCount++ }
-        } catch { /* skip */ }
+  try {
+    const files = await fsPromises.readdir(sessionsDir)
+    for (const file of files) {
+      if (!file.endsWith('.jsonl')) continue
+      if (activeSdkIds.has(basename(file, '.jsonl'))) continue
+      const freed = safeUnlink(join(sessionsDir, file))
+      if (freed > 0) {
+        freedBytes += freed
+        deletedCount++
       }
-    } catch (e) {
-      errors.push(`清理孤儿 file-history 失败: ${e}`)
     }
+  } catch (error) {
+    errors.push(`清理孤儿 Pi session artifact 失败: ${error}`)
   }
 
   return { freedBytes, deletedCount, errors }
@@ -665,7 +584,6 @@ async function cleanupOrphanWorkspaces(): Promise<CleanupResult> {
 function cleanupArchivedSessions(beforeDays: number): CleanupResult {
   const cutoff = Date.now() - beforeDays * 24 * 60 * 60 * 1000
   const sessions = listAgentSessions()
-  const sdkDir = getSdkConfigDir()
   let freedBytes = 0, deletedCount = 0
   const errors: string[] = []
 
@@ -679,14 +597,15 @@ function cleanupArchivedSessions(beforeDays: number): CleanupResult {
       if (freed > 0) { freedBytes += freed; deletedCount++ }
     }
 
-    // 清理 SDK file-history（同步删除，safeRmDir 的同步路径）
-    if (session.sdkSessionId) {
-      const histDir = join(sdkDir, 'file-history', session.sdkSessionId)
-      if (existsSync(histDir)) {
-        try {
-          rmSyncWithRetry(histDir, { recursive: true, force: true })
-          deletedCount++
-        } catch { /* skip */ }
+    // 清理归档会话对应的 Pi session artifact，只允许删除 sdk-config 目录内的文件。
+    if (session.piSessionFile) {
+      const artifactRelativePath = relative(getSdkConfigDir(), session.piSessionFile)
+      const isInsideSdkDir = artifactRelativePath !== '..'
+        && !artifactRelativePath.startsWith('..' + sep)
+        && !isAbsolute(artifactRelativePath)
+      if (isInsideSdkDir && existsSync(session.piSessionFile)) {
+        const freed = safeUnlink(session.piSessionFile)
+        if (freed > 0) { freedBytes += freed; deletedCount++ }
       }
     }
   }
