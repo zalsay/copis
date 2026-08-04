@@ -240,6 +240,27 @@ export interface WorkingSkill {
   [key: string]: unknown
 }
 
+/** Working 专家技能市场列表项；安装状态是账号级状态。 */
+export interface WorkingExpertSkillMarketItem {
+  id: number | string
+  slug: string
+  name: string
+  description: string
+  category: string
+  accent: string
+  version: string
+  installed: boolean
+  installedAt?: string
+  sourceProvider: string
+  sourceSlug?: string
+  packageSize?: number
+  syncStatus: string
+  hasOverview?: boolean
+  /** 当前 Copis 工作区是否已经落地该市场 Skill。 */
+  localInstalled?: boolean
+  localVersion?: string
+}
+
 export interface WorkingAuthState {
   authenticated: boolean
   user: WorkingUser | null

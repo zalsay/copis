@@ -10,6 +10,11 @@ import {
   prepareAgentRpcRun,
 } from './agent-rpc-service'
 import { parseWorkerFrame } from './agent-rpc-protocol'
+import {
+  installWorkingExpertSkill,
+  listWorkingExpertSkillMarketForWorkspace,
+  uninstallWorkingExpertSkill,
+} from './working-skill-market-service'
 import type { AppSettings } from '../../types'
 import {
   COPIS_WORKING_CHANNEL_ID,
@@ -22,7 +27,9 @@ import type {
   AgentSessionMeta,
   AgentWorkspace,
   SDKMessage,
+  SkillMeta,
   WorkingFeedbackInput,
+  WorkingExpertSkillMarketItem,
   WorkingLoginInput,
   WorkingPasswordResetInput,
   WorkingRegisterInput,
@@ -45,6 +52,12 @@ export interface HttpApiRequest {
 export interface HttpApiResponse {
   readonly status: number
   readonly body?: unknown
+}
+
+export interface SkillMarketHttpFacade {
+  listForWorkspace: (workspaceSlug: string) => Promise<WorkingExpertSkillMarketItem[]>
+  install: (workspaceSlug: string, skillId: number | string) => Promise<SkillMeta>
+  uninstall: (workspaceSlug: string, skillId: number | string) => Promise<void>
 }
 
 interface WorkingApiFacade {
@@ -76,6 +89,7 @@ export interface HttpApiDependencies {
   getAppSettings: () => AppSettings
   updateAppSettings: (updates: Partial<AppSettings>) => AppSettings
   getAgentApi?: () => Promise<AgentHttpFacade>
+  getSkillMarketApi?: () => SkillMarketHttpFacade
 }
 
 export interface AgentHttpFacade {
@@ -107,6 +121,11 @@ const defaultDependencies: HttpApiDependencies = {
   getWorkingClient: getWorkingApiClient,
   getAppSettings: getSettings,
   updateAppSettings: updateSettings,
+  getSkillMarketApi: () => ({
+    listForWorkspace: listWorkingExpertSkillMarketForWorkspace,
+    install: installWorkingExpertSkill,
+    uninstall: uninstallWorkingExpertSkill,
+  }),
 }
 
 let defaultAgentApiPromise: Promise<AgentHttpFacade> | null = null
@@ -243,6 +262,14 @@ function makeAuthState(client: WorkingApiFacade): {
 
 function getAgentApi(dependencies: HttpApiDependencies): Promise<AgentHttpFacade> {
   return dependencies.getAgentApi?.() ?? getDefaultAgentApi()
+}
+
+function getSkillMarketApi(dependencies: HttpApiDependencies): SkillMarketHttpFacade {
+  return dependencies.getSkillMarketApi?.() ?? {
+    listForWorkspace: listWorkingExpertSkillMarketForWorkspace,
+    install: installWorkingExpertSkill,
+    uninstall: uninstallWorkingExpertSkill,
+  }
 }
 
 function getRequiredAgentSession(api: AgentHttpFacade, sessionId: string): AgentSessionMeta {
@@ -525,6 +552,34 @@ async function handleWorkingRequest(
 
   if (resource === 'skills' && method === 'GET') {
     return { status: 200, body: await client.listSkills() }
+  }
+
+  if (resource === 'skill-market') {
+    const marketApi = getSkillMarketApi(dependencies)
+    const workspaceSlug = (bodyRecord ? optionalString(bodyRecord, 'workspaceSlug') : undefined)
+      ?? optionalString({ workspaceSlug: url.searchParams.get('workspaceSlug') }, 'workspaceSlug')
+
+    if (method === 'GET' && action === undefined) {
+      if (!workspaceSlug) {
+        throw new HttpApiRequestError('工作区 slug 不能为空', 400, 'invalid_workspace_slug')
+      }
+      return { status: 200, body: await marketApi.listForWorkspace(workspaceSlug) }
+    }
+
+    if ((method === 'POST' || method === 'DELETE') && action !== undefined && segments[4] === 'install') {
+      if (!workspaceSlug) {
+        throw new HttpApiRequestError('工作区 slug 不能为空', 400, 'invalid_workspace_slug')
+      }
+      const skillId = decodePathSegment(action)
+      if (!skillId.trim()) {
+        throw new HttpApiRequestError('技能市场 ID 不能为空', 400, 'invalid_skill_id')
+      }
+      if (method === 'POST') {
+        return { status: 200, body: await marketApi.install(workspaceSlug, skillId) }
+      }
+      await marketApi.uninstall(workspaceSlug, skillId)
+      return { status: 204 }
+    }
   }
 
   if (resource === 'feedback' && method === 'POST') {

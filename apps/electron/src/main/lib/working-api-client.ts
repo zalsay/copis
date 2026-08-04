@@ -2,6 +2,7 @@ import type {
   WorkingCheckInResult,
   WorkingFeedbackInput,
   WorkingFeedbackResult,
+  WorkingExpertSkillMarketItem,
   WorkingInvitedUser,
   WorkingLedgerEntry,
   WorkingLoginInput,
@@ -226,6 +227,40 @@ function normalizeSkill(value: unknown): WorkingSkill {
     downloadUrl: item.download_url == null && item.downloadUrl == null ? undefined : String(item.download_url ?? item.downloadUrl),
     sha256: item.sha256 == null ? undefined : String(item.sha256),
     size: typeof item.size === 'number' ? item.size : undefined,
+  }
+}
+
+function normalizeExpertSkillMarketItem(value: unknown): WorkingExpertSkillMarketItem {
+  const item = isRecord(value) ? value : {}
+  return {
+    id: normalizeIdentifier(firstDefined(item, ['id', 'ID'])) ?? '',
+    slug: String(item.slug ?? ''),
+    name: String(item.name ?? item.slug ?? ''),
+    description: String(item.description ?? ''),
+    category: String(item.category ?? '通用'),
+    accent: String(item.accent ?? 'blue'),
+    version: String(item.version ?? '1.0.0'),
+    installed: Boolean(item.installed),
+    ...(item.installed_at == null && item.installedAt == null
+      ? {}
+      : { installedAt: String(item.installed_at ?? item.installedAt) }),
+    sourceProvider: String(item.source_provider ?? item.sourceProvider ?? 'platform'),
+    ...(item.source_slug == null && item.sourceSlug == null
+      ? {}
+      : { sourceSlug: String(item.source_slug ?? item.sourceSlug) }),
+    ...(item.package_size == null && item.packageSize == null
+      ? {}
+      : { packageSize: normalizeNumber(item.package_size ?? item.packageSize) }),
+    syncStatus: String(item.sync_status ?? item.syncStatus ?? 'ready'),
+    ...(typeof (item.has_overview ?? item.hasOverview) === 'boolean'
+      ? { hasOverview: Boolean(item.has_overview ?? item.hasOverview) }
+      : {}),
+    ...(typeof item.local_installed === 'boolean' || typeof item.localInstalled === 'boolean'
+      ? { localInstalled: Boolean(item.local_installed ?? item.localInstalled) }
+      : {}),
+    ...(item.local_version == null && item.localVersion == null
+      ? {}
+      : { localVersion: String(item.local_version ?? item.localVersion) }),
   }
 }
 
@@ -668,6 +703,32 @@ export class WorkingApiClient {
     const data = await this.request<unknown>('/api/working/expert-skills/runtime')
     if (!Array.isArray(data)) throw new WorkingApiError('技能响应格式不正确', 200, 'invalid_skills_response', data)
     return data.map(normalizeSkill)
+  }
+
+  async listExpertSkillMarket(): Promise<WorkingExpertSkillMarketItem[]> {
+    const data = await this.request<unknown>('/api/working/expert-skills')
+    if (!Array.isArray(data)) {
+      throw new WorkingApiError('技能市场响应格式不正确', 200, 'invalid_skill_market_response', data)
+    }
+    return data.map(normalizeExpertSkillMarketItem)
+  }
+
+  async installExpertSkill(id: number | string): Promise<WorkingExpertSkillMarketItem> {
+    const value = String(id).trim()
+    if (!value) throw new Error('技能市场 ID 不能为空')
+    const data = await this.request<unknown>(`/api/working/expert-skills/${encodeURIComponent(value)}/install`, {
+      method: 'POST',
+      body: JSON.stringify({}),
+    })
+    return normalizeExpertSkillMarketItem(data)
+  }
+
+  async uninstallExpertSkill(id: number | string): Promise<void> {
+    const value = String(id).trim()
+    if (!value) throw new Error('技能市场 ID 不能为空')
+    await this.request<unknown>(`/api/working/expert-skills/${encodeURIComponent(value)}/install`, {
+      method: 'DELETE',
+    })
   }
 
   async createFeedback(input: WorkingFeedbackInput): Promise<WorkingFeedbackResult> {

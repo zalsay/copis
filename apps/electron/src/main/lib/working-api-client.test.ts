@@ -128,6 +128,38 @@ describe('Copis Working API client', () => {
     expect(calls.at(-1)).toBe('https://backend.example.test/api/working/sessions/run%2F1/history?session_id=session%20with%20space')
   })
 
+  test('loads, installs, and uninstalls expert Skills through the Working market endpoints', async () => {
+    const calls: Array<{ url: string; method: string; body?: string }> = []
+    const client = new WorkingApiClient({
+      baseUrl: 'https://backend.example.test',
+      tokenStore: createStore('market-token'),
+      fetchImpl: async (url, init) => {
+        calls.push({ url, method: init?.method ?? 'GET', ...(init?.body === undefined ? {} : { body: String(init.body) }) })
+        if (url.endsWith('/api/working/expert-skills')) {
+          return jsonResponse({ data: [{ id: 12, slug: 'weekly-report', name: '周报', source_provider: 'skillhub', sync_status: 'ready', installed: false }] })
+        }
+        if (url.endsWith('/api/working/expert-skills/12/install') && init?.method === 'POST') {
+          return jsonResponse({ data: { id: 12, slug: 'weekly-report', name: '周报', installed: true } })
+        }
+        if (url.endsWith('/api/working/expert-skills/12/install') && init?.method === 'DELETE') {
+          return new Response(null, { status: 204 })
+        }
+        throw new Error(`unexpected request: ${url}`)
+      },
+    })
+
+    await expect(client.listExpertSkillMarket()).resolves.toEqual([
+      expect.objectContaining({ id: 12, slug: 'weekly-report', sourceProvider: 'skillhub', installed: false }),
+    ])
+    await expect(client.installExpertSkill(12)).resolves.toEqual(expect.objectContaining({ id: 12, installed: true }))
+    await expect(client.uninstallExpertSkill(12)).resolves.toBeUndefined()
+    expect(calls).toEqual([
+      { url: 'https://backend.example.test/api/working/expert-skills', method: 'GET' },
+      { url: 'https://backend.example.test/api/working/expert-skills/12/install', method: 'POST', body: '{}' },
+      { url: 'https://backend.example.test/api/working/expert-skills/12/install', method: 'DELETE' },
+    ])
+  })
+
   test('uses read-only workspace writes by default when saving a Working workspace', async () => {
     let requestBody = ''
     const client = new WorkingApiClient({

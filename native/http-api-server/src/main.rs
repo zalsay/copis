@@ -410,7 +410,9 @@ fn handle_connection(
 }
 
 fn is_allowed_origin(origin: &str) -> bool {
-    matches!(origin, "http://127.0.0.1:5174" | "http://localhost:5174")
+    // 打包后的 Electron renderer 使用 file://，Chromium 会发送 Origin: null。
+    // 服务只监听 127.0.0.1，因此允许该来源不会扩大到远程站点。
+    matches!(origin, "null" | "http://127.0.0.1:5174" | "http://localhost:5174")
 }
 
 fn send_json_response(stream: &mut TcpStream, status: u16, body: &str, origin: Option<&str>) {
@@ -848,7 +850,8 @@ mod tests {
     }
 
     #[test]
-    fn only_allows_vite_origins() {
+    fn allows_vite_and_packaged_electron_origins() {
+        assert!(is_allowed_origin("null"));
         assert!(is_allowed_origin("http://127.0.0.1:5174"));
         assert!(is_allowed_origin("http://localhost:5174"));
         assert!(!is_allowed_origin("http://example.com"));

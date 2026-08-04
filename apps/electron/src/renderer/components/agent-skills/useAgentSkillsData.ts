@@ -1,7 +1,8 @@
 /**
  * useAgentSkillsData — Agent 技能视图的数据层
  *
- * 封装当前工作区 Skills / MCP 的加载与增删改逻辑（IPC 调用），
+ * 封装当前工作区 Skills / MCP 的加载与增删改逻辑；市场 Skill 的账号同步
+ * 通过 Rust HTTP API，普通本地 Skill 继续使用已有本地能力接口。
  * 供「Agent 技能」全屏视图复用。所有写操作后会 bump
  * workspaceCapabilitiesVersionAtom，通知侧边栏等订阅方刷新。
  */
@@ -15,6 +16,7 @@ import {
   workspaceCapabilitiesVersionAtom,
 } from '@/atoms/agent-atoms'
 import type { BuiltinMcpServerSummary, SkillMeta, WorkspaceCapabilities, WorkspaceMcpConfig } from '@copis/shared'
+import { installWorkingSkill, uninstallWorkingSkill } from '@/lib/working-skill-market-api'
 
 export interface AgentSkillsData {
   /** 当前工作区（未选中时为 null） */
@@ -104,7 +106,12 @@ export function useAgentSkillsData(): AgentSkillsData {
 
   const deleteSkill = React.useCallback(async (slug: string, name: string): Promise<boolean> => {
     try {
-      await window.electronAPI.deleteWorkspaceSkill(workspaceSlug, slug)
+      const skill = skills.find((item) => item.slug === slug)
+      if (skill?.marketSource) {
+        await uninstallWorkingSkill(workspaceSlug, skill.marketSource.id)
+      } else {
+        await window.electronAPI.deleteWorkspaceSkill(workspaceSlug, slug)
+      }
       setSkills((prev) => prev.filter((s) => s.slug !== slug))
       bumpCapabilitiesVersion((v) => v + 1)
       toast.success(`已删除 Skill：${name}`)
@@ -114,12 +121,19 @@ export function useAgentSkillsData(): AgentSkillsData {
       toast.error('删除 Skill 失败')
       return false
     }
-  }, [workspaceSlug, bumpCapabilitiesVersion])
+  }, [workspaceSlug, skills, bumpCapabilitiesVersion])
 
   const updateSkill = React.useCallback(async (slug: string) => {
     if (!workspaceSlug || updatingSkill) return
     setUpdatingSkill(slug)
     try {
+      const currentSkill = skills.find((item) => item.slug === slug)
+      if (currentSkill?.marketSource) {
+        await installWorkingSkill(workspaceSlug, currentSkill.marketSource.id)
+        bumpCapabilitiesVersion((v) => v + 1)
+        toast.success(`已同步更新 Skill：${currentSkill.name}`)
+        return
+      }
       const updated = await window.electronAPI.updateSkillFromSource(workspaceSlug, slug)
       setSkills((prev) => prev.map((s) => (s.slug === slug ? updated : s)))
       bumpCapabilitiesVersion((v) => v + 1)
@@ -131,7 +145,7 @@ export function useAgentSkillsData(): AgentSkillsData {
     } finally {
       setUpdatingSkill(null)
     }
-  }, [workspaceSlug, updatingSkill, bumpCapabilitiesVersion])
+  }, [workspaceSlug, skills, updatingSkill, bumpCapabilitiesVersion])
 
   const toggleMcp = React.useCallback(async (name: string, enabled: boolean) => {
     try {

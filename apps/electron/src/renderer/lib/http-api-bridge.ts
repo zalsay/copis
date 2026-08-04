@@ -185,8 +185,16 @@ const OBJECT_DEFAULTS: Record<string, unknown> = {
   getDingTalkStatus: { status: 'disconnected' },
   getWeChatStatus: { status: 'disconnected' },
   getPendingRequests: { permissions: [], askUsers: [], exitPlans: [] },
-  getWorkspaceCapabilities: { mcpServers: [], builtinMcpServers: [], skills: [], memory: { directory: '', memoryMdExists: false, fileCount: 0, totalSize: 0 } },
-  getWorkspaceMcpConfig: { mcpServers: [] },
+  getWorkspaceCapabilities: {
+    mcpServers: [],
+    builtinMcpServers: [],
+    skills: [],
+    memory: {
+      claudeMd: { exists: false, path: '', size: 0 },
+      autoMemory: { directory: '', memoryMdExists: false, fileCount: 0, totalSize: 0 },
+    },
+  },
+  getWorkspaceMcpConfig: { servers: {} },
   getUserProfile: { userName: '用户', avatar: '' },
   getRuntimeStatus: null,
   checkEnvironment: null,

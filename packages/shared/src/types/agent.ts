@@ -916,6 +916,15 @@ export interface SkillImportSource {
   sourceVersion: string     // 导入时源 Skill 的 version，无则 '0.0.0'
 }
 
+/** 从 Working 专家技能市场安装的 Skill 来源元数据。 */
+export interface SkillMarketSource {
+  id: number | string
+  slug: string
+  version: string
+  sourceProvider: string
+  installedAt: string        // ISO 8601
+}
+
 /** 工作区 Skill 元数据 */
 export interface SkillMeta {
   slug: string
@@ -928,6 +937,8 @@ export interface SkillMeta {
   enabled: boolean
   /** 如果此 Skill 是从其他工作区导入的，则携带来源信息 */
   importSource?: SkillImportSource
+  /** 如果此 Skill 来自 Working 专家技能市场，则携带市场来源信息 */
+  marketSource?: SkillMarketSource
   /** 是否有可用更新（源 Skill 版本 > importSource.sourceVersion） */
   hasUpdate?: boolean
 }

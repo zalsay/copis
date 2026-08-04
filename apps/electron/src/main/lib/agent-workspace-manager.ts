@@ -32,7 +32,7 @@ import { findAllGitRoots, normalizeGitRoot } from './git-diff-service'
 import { listBuiltinMcpServers } from './builtin-mcp/catalog'
 import { RESERVED_BUILTIN_KEYS } from './builtin-mcp/baseline'
 import { inferMcpTransportType, normalizeMcpTransportType } from '@copis/shared'
-import type { AgentWorkspace, CreateAgentWorkspaceInput, LocalProjectRootStatus, WorkspaceMcpConfig, SkillMeta, SkillImportSource, OtherWorkspaceSkillsGroup, WorkspaceCapabilities, SkillFileNode, SkillFileContent, WorkspaceMemorySummary } from '@copis/shared'
+import type { AgentWorkspace, CreateAgentWorkspaceInput, LocalProjectRootStatus, WorkspaceMcpConfig, SkillMeta, SkillImportSource, SkillMarketSource, OtherWorkspaceSkillsGroup, WorkspaceCapabilities, SkillFileNode, SkillFileContent, WorkspaceMemorySummary } from '@copis/shared'
 
 interface AgentWorkspacesIndex {
   version: number
@@ -940,6 +940,9 @@ function scanSkillsInDir(dir: string, enabled: boolean): SkillMeta[] {
           }
         }
 
+        const marketSource = readSkillMarketSource(join(dir, entry.name))
+        if (marketSource) meta.marketSource = marketSource
+
         skills.push(meta)
       } catch {
         console.warn(`[Agent 工作区] 解析 Skill 失败: ${entry.name}`)
@@ -1141,6 +1144,7 @@ export function updateSkillFromSource(
 // ===== Skill 来源追踪 helpers =====
 
 const SOURCE_META_FILE = '.source.json'
+export const MARKET_SOURCE_META_FILE = '.market.json'
 
 function readSkillImportSource(skillDir: string): SkillImportSource | undefined {
   const p = join(skillDir, SOURCE_META_FILE)
@@ -1154,6 +1158,32 @@ function readSkillImportSource(skillDir: string): SkillImportSource | undefined 
 
 function writeSkillImportSource(skillDir: string, source: SkillImportSource): void {
   writeFileSync(join(skillDir, SOURCE_META_FILE), JSON.stringify(source, null, 2), 'utf-8')
+}
+
+/** 读取市场安装标记；标记损坏时按普通本地 Skill 处理，避免阻塞整个工作区加载。 */
+export function readSkillMarketSource(skillDir: string): SkillMarketSource | undefined {
+  const filePath = join(skillDir, MARKET_SOURCE_META_FILE)
+  if (!existsSync(filePath)) return undefined
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(filePath, 'utf-8'))
+    if (!parsed || typeof parsed !== 'object') return undefined
+    const value = parsed as Record<string, unknown>
+    const id = value.id
+    if ((typeof id !== 'string' && typeof id !== 'number') || !String(id).trim()) return undefined
+    const slug = typeof value.slug === 'string' ? value.slug.trim() : ''
+    const version = typeof value.version === 'string' ? value.version.trim() : ''
+    const sourceProvider = typeof value.sourceProvider === 'string' ? value.sourceProvider.trim() : ''
+    const installedAt = typeof value.installedAt === 'string' ? value.installedAt.trim() : ''
+    if (!slug || !version || !sourceProvider || !installedAt) return undefined
+    return { id, slug, version, sourceProvider, installedAt }
+  } catch {
+    return undefined
+  }
+}
+
+/** 写入市场来源标记，供市场安装服务在原子替换后记录来源。 */
+export function writeSkillMarketSource(skillDir: string, source: SkillMarketSource): void {
+  writeFileSync(join(skillDir, MARKET_SOURCE_META_FILE), `${JSON.stringify(source, null, 2)}\n`, { encoding: 'utf-8', mode: 0o600 })
 }
 
 /** 解析 Skill 所在目录（active 或 inactive），不存在则返回 null */
