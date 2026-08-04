@@ -6,7 +6,7 @@ import SwiftUI
 private let expandedBottomCornerRadius: CGFloat = 32
 private let expandedBottomCornerClearance: CGFloat = 32
 
-// Proma macOS Agent Island native host.
+// Copis macOS Agent Island native host.
 // JSON Lines stdin/stdout protocol: TypeScript owns product state; this process only
 // owns AppKit geometry, rendering and constrained pointer intents.
 
@@ -417,10 +417,10 @@ struct CompactIslandView: View {
 
   private var compactLabel: String {
     if let session = primarySession {
-      return "Proma · \(phaseText(session.phase))"
+      return "Copis · \(phaseText(session.phase))"
     }
     if snapshot.state.idleDashboard {
-      return snapshot.state.recentSessions.isEmpty ? "Proma · 额度概览" : "Proma · 最近会话"
+      return snapshot.state.recentSessions.isEmpty ? "Copis · 额度概览" : "Copis · 最近会话"
     }
     return planningIndicator?.label ?? "工作提醒"
   }
@@ -493,9 +493,9 @@ struct ExpandedIslandView: View {
 
   private var headerEyebrow: String {
     switch primaryPhase {
-    case "needs-interaction": return "PROMA · HANDOFF"
-    case .some: return "PROMA · AGENT"
-    case .none: return "PROMA · REMINDER"
+    case "needs-interaction": return "COPIS · HANDOFF"
+    case .some: return "COPIS · AGENT"
+    case .none: return "COPIS · REMINDER"
     }
   }
 
@@ -530,7 +530,7 @@ struct ExpandedIslandView: View {
             Spacer()
             Button(action: { action("open-main", [:]) }) {
               HStack(spacing: 5) {
-                Text("打开 Proma")
+                Text("打开 Copis")
                 Image(systemName: "arrow.up.right")
               }
               .font(.system(size: 10, weight: .semibold))
@@ -866,7 +866,7 @@ func emitIntent(_ name: String, _ values: [String: Any]) {
 
 @main
 @MainActor
-struct PromaAgentIslandHost {
+struct CopisAgentIslandHost {
   static func main() {
     let app = NSApplication.shared
     app.setActivationPolicy(.accessory)

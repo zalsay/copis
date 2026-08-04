@@ -1,6 +1,6 @@
 {
-  "name": "@proma/electron",
-  "version": "0.16.9",
+  "name": "@copis/electron",
+  "version": "0.16.11",
   "description": "Copis Working desktop client - Electron App",
   "main": "dist/main.cjs",
   "author": {
@@ -14,11 +14,13 @@
     "dev:split": "bash scripts/dev-split.sh",
     "dev:vite": "vite dev",
     "dev:kill": "bun run scripts/dev-kill.ts",
-    "dev:electron": "bun run dev:kill && bun run build:http-api-server && bun run build:main && bun run build:preload && bun run build:resources && bun run scripts/sleep.ts 2 && concurrently -k -n main,preload,app -c yellow,magenta,cyan \"bun run watch:main\" \"bun run watch:preload\" \"bunx electronmon .\"",
+    "dev:electron": "bun run dev:kill && bun run build:http-api-server && bun run build:main && bun run build:preload && bun run build:agent-rpc-worker && bun run build:resources && bun run scripts/sleep.ts 2 && concurrently -k -n main,preload,worker,app -c yellow,magenta,green,cyan \"bun run watch:main\" \"bun run watch:preload\" \"bun run watch:agent-rpc-worker\" \"bunx electronmon .\"",
     "build:main": "esbuild src/main/index.ts --bundle --platform=node --format=cjs --outfile=dist/main.cjs --external:electron --external:sharp --external:@anthropic-ai/claude-agent-sdk --external:@earendil-works/pi-coding-agent --external:@earendil-works/pi-agent-core --external:@earendil-works/pi-ai",
     "build:preload": "esbuild src/preload/index.ts --bundle --platform=node --format=cjs --outfile=dist/preload.cjs --external:electron",
+    "build:agent-rpc-worker": "esbuild src/main/pi-rpc-worker.ts --bundle --platform=node --format=cjs --outfile=dist/pi-rpc-worker.cjs --external:electron --external:@earendil-works/pi-coding-agent --external:@earendil-works/pi-agent-core --external:@earendil-works/pi-ai",
     "watch:main": "esbuild src/main/index.ts --bundle --platform=node --format=cjs --outfile=dist/main.cjs --external:electron --external:sharp --external:@anthropic-ai/claude-agent-sdk --external:@earendil-works/pi-coding-agent --external:@earendil-works/pi-agent-core --external:@earendil-works/pi-ai --watch=forever",
     "watch:preload": "esbuild src/preload/index.ts --bundle --platform=node --format=cjs --outfile=dist/preload.cjs --external:electron --watch=forever",
+    "watch:agent-rpc-worker": "esbuild src/main/pi-rpc-worker.ts --bundle --platform=node --format=cjs --outfile=dist/pi-rpc-worker.cjs --external:electron --external:@earendil-works/pi-coding-agent --external:@earendil-works/pi-agent-core --external:@earendil-works/pi-ai --watch=forever",
     "build:renderer": "vite build",
     "build:resources": "cp -r resources dist/ 2>/dev/null || true",
     "build:http-api-server": "bun run scripts/build-http-api-server.ts",
@@ -27,7 +29,7 @@
     "build:cli": "bun run scripts/build-cli.ts",
     "sync:runtime-deps": "bun run scripts/sync-runtime-deps.ts",
     "sync:runtime-deps:dev": "bun run scripts/sync-runtime-deps.ts --no-clean",
-    "build": "bun run build:http-api-server && bun run build:main && bun run build:preload && bun run build:renderer && bun run build:cli && bun run build:agent-island-native && bun run build:resources",
+    "build": "bun run build:http-api-server && bun run build:main && bun run build:preload && bun run build:agent-rpc-worker && bun run build:renderer && bun run build:cli && bun run build:agent-island-native && bun run build:resources",
     "start": "bun run build && bunx electron .",
     "typecheck": "tsc --noEmit",
     "generate:icons": "cd resources && ./generate-icons.sh",
@@ -68,10 +70,10 @@
     "@emoji-mart/data": "^1.2.1",
     "@emoji-mart/react": "^1.1.1",
     "@larksuiteoapi/node-sdk": "^1.65.0",
-    "@proma/core": "workspace:*",
-    "@proma/session-core": "workspace:*",
-    "@proma/shared": "workspace:*",
-    "@proma/ui": "workspace:*",
+    "@copis/core": "workspace:*",
+    "@copis/session-core": "workspace:*",
+    "@copis/shared": "workspace:*",
+    "@copis/ui": "workspace:*",
     "@radix-ui/react-alert-dialog": "^1.1.15",
     "@radix-ui/react-collapsible": "^1.1.12",
     "@radix-ui/react-context-menu": "^2.2.16",
@@ -169,5 +171,5 @@
   "build": {
     "extends": "electron-builder.yml"
   },
-  "proma": {}
+  "copis": {}
 }

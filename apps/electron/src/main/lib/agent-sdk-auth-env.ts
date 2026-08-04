@@ -1,4 +1,4 @@
-import { extractZhipuCodingTeamApiToken, type ProviderType } from '@proma/shared'
+import { extractZhipuCodingTeamApiToken, type ProviderType } from '@copis/shared'
 
 export function usesAgentSdkBearerWithUserAgent(provider: ProviderType): boolean {
   return provider === 'kimi-coding'

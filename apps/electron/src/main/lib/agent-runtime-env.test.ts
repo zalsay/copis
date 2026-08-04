@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import type { GitBashStatus, RuntimeStatus, ShellEnvironmentStatus, WslStatus } from '@proma/shared'
+import type { GitBashStatus, RuntimeStatus, ShellEnvironmentStatus, WslStatus } from '@copis/shared'
 import { buildAgentRuntimeEnv, mergeRuntimeEnv } from './agent-runtime-env'
 
 function runtimeStatus(shell: ShellEnvironmentStatus): RuntimeStatus {
@@ -24,6 +24,19 @@ const wsl: WslStatus = {
 const bothShells = runtimeStatus({ gitBash, wsl, recommended: 'git-bash' })
 
 describe('Agent Windows Shell 运行环境', () => {
+  test('Given 新版 Copis CLI 路径 When 构建子进程环境 Then 同时提供旧版 CLI 兼容别名', () => {
+    const result = buildAgentRuntimeEnv({
+      bundledCliPath: '/Applications/Copis.app/Contents/Resources/bin/copis',
+      platform: 'darwin',
+      processEnv: {},
+    })
+
+    expect(result.env).toMatchObject({
+      COPIS_CLI: '/Applications/Copis.app/Contents/Resources/bin/copis',
+      PROMA_CLI: '/Applications/Copis.app/Contents/Resources/bin/copis',
+    })
+  })
+
   test('Given Git Bash 与 WSL 均可用 When 使用默认策略 Then 优先使用 Git Bash', () => {
     const result = buildAgentRuntimeEnv({
       bundledCliPath: '',
@@ -36,7 +49,7 @@ describe('Agent Windows Shell 运行环境', () => {
       shellKind: 'git-bash',
       shellPath: gitBash.path,
       env: {
-        PROMA_WINDOWS_SHELL: 'git-bash',
+        COPIS_WINDOWS_SHELL: 'git-bash',
         CLAUDE_CODE_SHELL: gitBash.path,
       },
     })
@@ -56,8 +69,8 @@ describe('Agent Windows Shell 运行环境', () => {
       wslCommand: 'wsl.exe',
       wslDistro: 'Ubuntu-24.04',
       env: {
-        PROMA_WINDOWS_SHELL: 'wsl',
-        PROMA_WSL_DISTRO: 'Ubuntu-24.04',
+        COPIS_WINDOWS_SHELL: 'wsl',
+        COPIS_WSL_DISTRO: 'Ubuntu-24.04',
         CLAUDE_CODE_SHELL: 'wsl.exe',
       },
     })
@@ -83,9 +96,9 @@ describe('Agent Windows Shell 运行环境', () => {
   test('Given Windows Path 大小写不同 When 合并运行环境 Then 仅保留覆盖后的 PATH', () => {
     const result = mergeRuntimeEnv(
       { Path: 'C:\\Windows\\System32' },
-      { PATH: 'C:\\Proma;C:\\Windows\\System32' },
+      { PATH: 'C:\\Copis;C:\\Windows\\System32' },
     )
 
-    expect(result).toEqual({ PATH: 'C:\\Proma;C:\\Windows\\System32' })
+    expect(result).toEqual({ PATH: 'C:\\Copis;C:\\Windows\\System32' })
   })
 })

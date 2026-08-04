@@ -1,7 +1,7 @@
 /**
  * 语音输入会话路由
  *
- * Proma 前台时，听写状态内嵌在底部输入工具栏。
+ * Copis 前台时，听写状态内嵌在底部输入工具栏。
  * 外部应用前台时，显示无焦点、无转写文本的轻量状态条，避免用户失去听写反馈。
  */
 
@@ -24,11 +24,11 @@ let indicatorTranscript = ''
 let voiceIndicatorWindow: BrowserWindow | null = null
 
 interface VoiceDictationToggleOptions {
-  targetIsProma?: boolean
+  targetIsCopis?: boolean
 }
 
 /**
- * 保留原导出以兼容启动流程；Proma 内部听写不再创建独立窗口。
+ * 保留原导出以兼容启动流程；Copis 内部听写不再创建独立窗口。
  */
 export function createVoiceDictationWindow(): void {
   const mainWindow = getMainWindow()
@@ -53,9 +53,9 @@ export function toggleVoiceDictationWindow(options: VoiceDictationToggleOptions 
     return
   }
 
-  captureVoiceDictationTarget(options.targetIsProma)
+  captureVoiceDictationTarget(options.targetIsCopis)
   voiceDictationActive = true
-  usesExternalIndicator = options.targetIsProma !== true
+  usesExternalIndicator = options.targetIsCopis !== true
   indicatorState = 'recording'
   indicatorVolume = 0
   indicatorTranscript = ''

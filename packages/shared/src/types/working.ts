@@ -157,7 +157,7 @@ export function createCopisWorkingChannel(backendUrl: string, now = 0): Channel 
 /**
  * Copis Working 对本地 Agent 运行暴露的稳定事件契约。
  *
- * Pi/Proma 的底层 SDK 事件不直接成为 Working UI 的业务协议，主进程或
+ * Pi/Copis 的底层 SDK 事件不直接成为 Working UI 的业务协议，主进程或
  * renderer 适配层统一映射到以下事件，便于历史回放和实时运行复用同一套语义。
  */
 export type WorkingEvent =

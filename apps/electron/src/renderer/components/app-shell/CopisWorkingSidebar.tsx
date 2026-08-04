@@ -22,7 +22,7 @@ import {
   UsersRound,
 } from 'lucide-react'
 import { toast } from 'sonner'
-import type { AgentWorkspace } from '@proma/shared'
+import type { AgentWorkspace } from '@copis/shared'
 import { cn } from '@/lib/utils'
 import { sidebarCollapsedAtom } from '@/atoms/tab-atoms'
 import {
@@ -36,6 +36,7 @@ import {
 import { appModeAtom } from '@/atoms/app-mode'
 import { activeViewAtom } from '@/atoms/active-view'
 import { searchDialogOpenAtom } from '@/atoms/search-atoms'
+import { planningTabAtom } from '@/atoms/planning-atoms'
 import { workingAuthStateAtom, workingHistorySelectionAtom, workingSettingsOpenAtom } from '@/atoms/working-atoms'
 import { useCreateSession } from '@/hooks/useCreateSession'
 import { useOpenSession } from '@/hooks/useOpenSession'
@@ -85,6 +86,7 @@ export function CopisWorkingSidebar({ width, noTransition = false }: CopisWorkin
   const setCurrentWorkspaceId = useSetAtom(currentAgentWorkspaceIdAtom)
   const setAppMode = useSetAtom(appModeAtom)
   const setActiveView = useSetAtom(activeViewAtom)
+  const setPlanningTab = useSetAtom(planningTabAtom)
   const setWorkingSettingsOpen = useSetAtom(workingSettingsOpenAtom)
   const setSearchDialogOpen = useSetAtom(searchDialogOpenAtom)
   const setWorkingHistorySelection = useSetAtom(workingHistorySelectionAtom)
@@ -285,7 +287,7 @@ export function CopisWorkingSidebar({ width, noTransition = false }: CopisWorkin
             <Search aria-hidden="true" />
             <span>搜索</span>
           </button>
-          <button type="button" className="copis-working-menu-button" onClick={() => { setWorkingHistorySelection(null); setAppMode('agent'); setActiveView('planning') }}>
+          <button type="button" className="copis-working-menu-button" onClick={() => { setWorkingHistorySelection(null); setAppMode('agent'); setPlanningTab('schedule'); setActiveView('planning') }}>
             <CalendarClock aria-hidden="true" />
             <span>日程表</span>
           </button>

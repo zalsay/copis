@@ -1,7 +1,7 @@
 /**
  * 文本输出服务
  *
- * 语音输入完成后优先写入 Proma 输入框，否则尝试写入当前光标位置。
+ * 语音输入完成后优先写入 Copis 输入框，否则尝试写入当前光标位置。
  */
 
 import { BrowserWindow, clipboard } from 'electron'
@@ -15,20 +15,20 @@ import type {
 import { getMainWindow } from '../index'
 import { pasteTextAtCurrentCursor } from './text-insertion-service'
 
-let targetWasPromaInput = false
+let targetWasCopisInput = false
 let activePreviewSessionId: string | null = null
 let closedPreviewSessionId: string | null = null
 
-/** 在显示语音浮窗前记录目标是否为 Proma 主窗口。 */
-export function captureVoiceDictationTarget(forcePromaInput?: boolean): boolean {
+/** 在显示语音浮窗前记录目标是否为 Copis 主窗口。 */
+export function captureVoiceDictationTarget(forceCopisInput?: boolean): boolean {
   const mainWindow = getMainWindow()
-  targetWasPromaInput = forcePromaInput ?? BrowserWindow.getFocusedWindow() === mainWindow
-  return targetWasPromaInput
+  targetWasCopisInput = forceCopisInput ?? BrowserWindow.getFocusedWindow() === mainWindow
+  return targetWasCopisInput
 }
 
-function shouldWriteToPromaInput(settings: VoiceDictationSettings): boolean {
-  return settings.outputMode === 'proma-input' ||
-    (settings.outputMode === 'auto' && targetWasPromaInput)
+function shouldWriteToCopisInput(settings: VoiceDictationSettings): boolean {
+  return settings.outputMode === 'copis-input' ||
+    (settings.outputMode === 'auto' && targetWasCopisInput)
 }
 
 function sendTextEvent(channel: string, event: VoiceDictationTextEvent): boolean {
@@ -39,7 +39,7 @@ function sendTextEvent(channel: string, event: VoiceDictationTextEvent): boolean
 }
 
 /**
- * 将 ASR 的最新完整结果预览到 Proma 输入框。
+ * 将 ASR 的最新完整结果预览到 Copis 输入框。
  * 外部应用只在结束时一次性写入，避免连续粘贴打断用户输入。
  */
 export function previewVoiceDictationText(
@@ -47,14 +47,14 @@ export function previewVoiceDictationText(
   settings: VoiceDictationSettings,
 ): void {
   const text = input.text.trim()
-  if (!text || !shouldWriteToPromaInput(settings)) return
+  if (!text || !shouldWriteToCopisInput(settings)) return
   if (input.sessionId === closedPreviewSessionId) return
   if (activePreviewSessionId && activePreviewSessionId !== input.sessionId) return
   activePreviewSessionId = input.sessionId
   sendTextEvent(VOICE_DICTATION_IPC_CHANNELS.PREVIEW_TEXT, { ...input, text })
 }
 
-/** 取消录音时撤销尚未提交到 Proma 输入框的临时组合文本。 */
+/** 取消录音时撤销尚未提交到 Copis 输入框的临时组合文本。 */
 export function clearVoiceDictationPreview(sessionId: string): void {
   if (activePreviewSessionId === sessionId) {
     activePreviewSessionId = null
@@ -73,13 +73,13 @@ export async function commitVoiceDictationText(
   }
 
   const hasActivePreview = activePreviewSessionId === input.sessionId
-  if ((hasActivePreview || shouldWriteToPromaInput(settings)) && sendTextEvent(VOICE_DICTATION_IPC_CHANNELS.INSERT_TEXT, {
+  if ((hasActivePreview || shouldWriteToCopisInput(settings)) && sendTextEvent(VOICE_DICTATION_IPC_CHANNELS.INSERT_TEXT, {
     sessionId: input.sessionId,
     text: trimmed,
   })) {
     activePreviewSessionId = null
     closedPreviewSessionId = input.sessionId
-    return { mode: 'proma-input', success: true, message: '已写入 Proma 输入框' }
+    return { mode: 'copis-input', success: true, message: '已写入 Copis 输入框' }
   }
 
   if (settings.outputMode === 'auto') {

@@ -1,6 +1,6 @@
 import * as React from 'react'
 import { ChevronLeft, ChevronRight, Loader2, QrCode, RefreshCw, Trash2 } from 'lucide-react'
-import type { WorkingOrder, WorkingOrdersPagination } from '@proma/shared'
+import type { WorkingOrder, WorkingOrdersPagination } from '@copis/shared'
 import './CopisWorkingOrdersPanel.css'
 
 const EMPTY_PAGINATION: WorkingOrdersPagination = {

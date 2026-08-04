@@ -16,11 +16,11 @@ import { FeishuSettings } from './FeishuSettings'
 import { DingTalkSettings } from './DingTalkSettings'
 import { WeChatSettings } from './WeChatSettings'
 import { BotDefaultSettings } from './BotDefaultSettings'
-import { PromaLogoSettings } from './PromaLogoSettings'
+import { CopisLogoSettings } from './CopisLogoSettings'
 import feishuLogo from '@/assets/bots/feishu.png'
 import dingtalkLogo from '@/assets/bots/dingding.png'
 import wechatLogo from '@/assets/bots/wechat.png'
-import promaLogo from '@/assets/models/proma.png'
+import copisLogo from '@/assets/models/copis.png'
 
 // ===== 类型 =====
 
@@ -68,7 +68,7 @@ const PLATFORMS: readonly BotPlatformDef[] = [
   {
     id: 'logos',
     name: '品牌素材',
-    iconSrc: promaLogo,
+    iconSrc: copisLogo,
     iconBgClass: 'bg-muted',
   },
 ] as const
@@ -171,7 +171,7 @@ function renderPlatformPanel(id: BotPlatformId): React.ReactElement {
     case 'defaults':
       return <BotDefaultSettings />
     case 'logos':
-      return <PromaLogoSettings />
+      return <CopisLogoSettings />
   }
 }
 

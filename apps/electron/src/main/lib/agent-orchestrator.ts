@@ -20,10 +20,10 @@ import { join, dirname, isAbsolute, relative, resolve } from 'node:path'
 import { accessSync, constants, existsSync, mkdirSync, realpathSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { app } from 'electron'
-import { COPIS_WORKING_CHANNEL_ID, createCopisWorkingChannel, normalizeWorkingMode, type AgentRuntime, type AgentSendInput, type AgentMessage, type AgentGenerateTitleInput, type AgentProviderAdapter, type AgentSessionMeta, type CodexOAuthCredentials, type XaiOAuthCredentials, type TypedError, type RetryAttempt, type SDKMessage, type SDKAssistantMessage, type AgentStreamPayload, type RewindSessionResult, type ProviderType, workingModeToModelId } from '@proma/shared'
+import { COPIS_WORKING_CHANNEL_ID, createCopisWorkingChannel, normalizeWorkingMode, type AgentRuntime, type AgentSendInput, type AgentMessage, type AgentGenerateTitleInput, type AgentProviderAdapter, type AgentSessionMeta, type CodexOAuthCredentials, type XaiOAuthCredentials, type TypedError, type RetryAttempt, type SDKMessage, type SDKAssistantMessage, type AgentStreamPayload, type RewindSessionResult, type ProviderType, workingModeToModelId } from '@copis/shared'
 import {
-  PROMA_DEFAULT_PERMISSION_MODE,
-  PROMA_PERMISSION_MODE_CONFIG,
+  COPIS_DEFAULT_PERMISSION_MODE,
+  COPIS_PERMISSION_MODE_CONFIG,
   THINKING_SIGNATURE_ERROR_CODE,
   THINKING_SIGNATURE_ERROR_MESSAGE,
   THINKING_SIGNATURE_ERROR_TITLE,
@@ -35,8 +35,8 @@ import {
   resolveAgentSdkModelId,
   resolveReasoningProfile,
   isAgentCompatibleProvider,
-} from '@proma/shared'
-import type { PromaPermissionMode, AskUserRequest, ExitPlanModeRequest, SDKSystemMessage } from '@proma/shared'
+} from '@copis/shared'
+import type { CopisPermissionMode, AskUserRequest, ExitPlanModeRequest, SDKSystemMessage } from '@copis/shared'
 import type { ClaudeAgentQueryOptions } from './adapters/claude-agent-adapter'
 import { getClaudeSettingSourcesForWorkspace, isPromptTooLongError, isThinkingSignatureError, friendlyErrorMessage, mapSDKErrorToTypedError, extractErrorDetails, shouldKeepChannelOpen } from './adapters/claude-agent-adapter'
 import type { PiAgentQueryOptions } from './adapters/pi-agent-adapter'
@@ -44,7 +44,7 @@ import { getPiAssistantErrorDetails, hasPiAssistantTextContent, stripPiAssistant
 import { isTransientNetworkError, isMalformedResponseError, isSessionNotFoundError } from './error-patterns'
 import { AgentEventBus } from './agent-event-bus'
 import { decryptApiKey, getChannelById, listChannels, persistCodexOAuthCredentials, persistXaiOAuthCredentials, resolveChannelRuntimeApiKey, resolveCodexOAuthCredentials, resolveXaiOAuthCredentials } from './channel-manager'
-import { getAdapter, fetchTitle, normalizeAnthropicBaseUrlForSdk, getPromaUserAgent } from '@proma/core'
+import { getAdapter, fetchTitle, normalizeAnthropicBaseUrlForSdk, getCopisUserAgent } from '@copis/core'
 import pkg from '../../../package.json' with { type: 'json' }
 import { getFetchFn } from './proxy-fetch'
 import { getEffectiveProxyUrl } from './proxy-settings-service'
@@ -63,7 +63,7 @@ import type { PermissionResult, CanUseToolOptions } from './agent-permission-ser
 import { resolvePlanningDeletionPermission } from './planning-permission-policy'
 import { askUserService } from './agent-ask-user-service'
 import { exitPlanService, type ExitPlanPermissionResult } from './agent-exit-plan-service'
-import { removePromaAutoCompactSettings } from './agent-auto-compact-settings'
+import { removeCopisAutoCompactSettings } from './agent-auto-compact-settings'
 import { applyClaudeSdkAttributionSettings, isGitAttributionEnabled } from './agent-git-attribution'
 import { validateToolInput } from './agent-tool-input-validator'
 import { estimateTokenCount, WRITE_CONTENT_TOKEN_THRESHOLD } from './agent-tool-token-estimator'
@@ -108,8 +108,8 @@ type RecoverableAgentQueryOptions = {
 
 // ===== 工具函数 =====
 
-function sdkPermissionModeForPromaMode(mode: PromaPermissionMode): PromaPermissionMode {
-  return PROMA_PERMISSION_MODE_CONFIG[mode].sdkMode
+function sdkPermissionModeForCopisMode(mode: CopisPermissionMode): CopisPermissionMode {
+  return COPIS_PERMISSION_MODE_CONFIG[mode].sdkMode
 }
 
 function normalizeAgentRuntime(value: unknown): AgentRuntime {
@@ -259,7 +259,7 @@ function getRetryDelayMs(attempt: number, elapsedRetryDelayMs: number): number {
  * 再沿父目录 `@anthropic-ai/` 找到同级的平台子包。
  *
  * 多种策略降级：createRequire → 全局 require → cwd/node_modules 手动查找
- * 打包环境下：asar 内的路径需要转换为 asar.unpacked 路径（即便 Proma 当前 `asar: false`
+ * 打包环境下：asar 内的路径需要转换为 asar.unpacked 路径（即便 Copis 当前 `asar: false`
  * 兜底不伤人）。
  */
 function resolveSDKCliPath(): string {
@@ -399,7 +399,7 @@ const LOCAL_PROJECT_ROOT_UNAVAILABLE_CODE = 'local_project_root_unavailable'
 
 function createLocalProjectRootUnavailableError(projectRootPath: string, status?: string): Error {
   const error = new Error(
-    `本地项目根目录不可用: 本地项目根目录不存在或无法访问：${projectRootPath}。请在 Proma 中重新选择项目文件夹。`,
+    `本地项目根目录不可用: 本地项目根目录不存在或无法访问：${projectRootPath}。请在 Copis 中重新选择项目文件夹。`,
   ) as Error & { code?: string; details?: string[] }
   error.code = LOCAL_PROJECT_ROOT_UNAVAILABLE_CODE
   error.details = status ? [`目录状态: ${status}`] : undefined
@@ -437,7 +437,7 @@ export class AgentOrchestrator {
   private stoppedBySessions = new Set<string>()
 
   /** 运行中会话的当前权限模式（支持运行时动态切换） */
-  private sessionPermissionModes = new Map<string, PromaPermissionMode>()
+  private sessionPermissionModes = new Map<string, CopisPermissionMode>()
 
   constructor(adapter: AgentProviderAdapter, eventBus: AgentEventBus) {
     this.adapter = adapter
@@ -499,7 +499,7 @@ export class AgentOrchestrator {
       // 禁用 Tool Search：Claude 模型连接第一方 Anthropic API 时，SDK CLI 会自动启用
       // Tool Search（optimistic 模式），将外部 MCP 工具标记为 deferred 而非 eager 注册，
       // 导致 HTTP MCP 服务器（如 Nowledge Mem）的工具无法直接调用。
-      // Proma 自行管理工具呈现和 MCP 连接，不依赖此机制。
+      // Copis 自行管理工具呈现和 MCP 连接，不依赖此机制。
       ENABLE_TOOL_SEARCH: 'false',
       // 禁用 attribution block：SDK 默认会在 system prompt 最前面注入一段
       // 文本（含客户端版本号与基于会话内容计算的指纹），且每次请求都变化。
@@ -508,15 +508,17 @@ export class AgentOrchestrator {
       CLAUDE_CODE_ATTRIBUTION_HEADER: '0',
       // 配置隔离：让 SDK 使用独立的配置目录，不读取用户的 ~/.claude.json
       CLAUDE_CONFIG_DIR: getSdkConfigDir(),
-      // Proma 的全局配置目录与当前项目状态，供 Claude Hooks 等受控子进程使用。
+      // Copis 的全局配置目录与当前项目状态，供 Claude Hooks 等受控子进程使用。
+      COPIS_HOME: getConfigDir(),
       PROMA_HOME: getConfigDir(),
+      COPIS_NOWLEDGE_MEM_ENABLED: '0',
       PROMA_NOWLEDGE_MEM_ENABLED: '0',
     }
 
     // 认证方式按 provider 分支。Working Responses 请求由 Pi 直接携带用户 JWT，
     // 不把 JWT 注入 ANTHROPIC_* 环境变量，避免 shell 工具或 Claude 子进程看到它。
     if (!skipAnthropicAuth) {
-      applyAgentSdkAuthEnv(sdkEnv, provider, apiKey, getPromaUserAgent(pkg.version))
+      applyAgentSdkAuthEnv(sdkEnv, provider, apiKey, getCopisUserAgent(pkg.version))
     }
     if (provider === 'minimax') {
       sdkEnv.API_TIMEOUT_MS = '3000000'
@@ -627,7 +629,7 @@ export class AgentOrchestrator {
 
     // 渠道信息在异常路径也要用于判断是否应用 OpenCode Go 本地兜底，因此提前解析；
     // 同时保留 listChannels 自身的错误边界：解析失败时按“无渠道”处理并返回 null。
-    let channel: import('@proma/shared').Channel | undefined
+    let channel: import('@copis/shared').Channel | undefined
     try {
       channel = channelId === COPIS_WORKING_CHANNEL_ID
         ? createCopisWorkingChannel(getWorkingApiClient().baseUrl)
@@ -1044,7 +1046,7 @@ export class AgentOrchestrator {
         reportPreflightError({
           code: 'local_project_root_unavailable',
           title: '本地项目根目录不可用',
-          message: `本地项目根目录不存在或无法访问：${workspace.projectRootPath}。请在 Proma 中重新选择项目文件夹。`,
+          message: `本地项目根目录不存在或无法访问：${workspace.projectRootPath}。请在 Copis 中重新选择项目文件夹。`,
           details: [`目录状态: ${projectRootStatus}`],
           actions: [],
           canRetry: false,
@@ -1270,7 +1272,7 @@ export class AgentOrchestrator {
     delete process.env.ANTHROPIC_CUSTOM_HEADERS
     delete process.env.CLAUDE_CODE_MAX_OUTPUT_TOKENS
     if (!workingClient) {
-      applyAgentSdkAuthEnv(process.env, channel.provider, apiKey, getPromaUserAgent(pkg.version))
+      applyAgentSdkAuthEnv(process.env, channel.provider, apiKey, getCopisUserAgent(pkg.version))
       // 使用与 buildSdkEnv 相同的规范化逻辑，确保 process.env 和 sdkEnv 中的 URL 一致
       if (channel.baseUrl && channel.baseUrl !== 'https://api.anthropic.com') {
         process.env.ANTHROPIC_BASE_URL = normalizeAnthropicBaseUrlForSdk(channel.baseUrl)
@@ -1300,7 +1302,7 @@ export class AgentOrchestrator {
       console.log(`[Agent 编排] 检测到回退 resume: resumeSessionAt=${rewindResumeAt}`)
     }
 
-    console.log(`[Agent 编排] Resume 状态: sdkSessionId=${existingSdkSessionId || '无'}, proma sessionId=${sessionId}`)
+    console.log(`[Agent 编排] Resume 状态: sdkSessionId=${existingSdkSessionId || '无'}, copis sessionId=${sessionId}`)
 
     // 5. 状态初始化
     const accumulatedMessages: SDKMessage[] = []
@@ -1312,7 +1314,7 @@ export class AgentOrchestrator {
     let capturedSdkSessionId = existingSdkSessionId
     let agentCwd: string | undefined
     let workspaceSlug: string | undefined
-    let workspace: import('@proma/shared').AgentWorkspace | undefined
+    let workspace: import('@copis/shared').AgentWorkspace | undefined
     let workspaceWriteRoot: string | undefined
     let workspaceWriteRestricted = false
 
@@ -1371,9 +1373,12 @@ export class AgentOrchestrator {
         workspaceWriteRoot = workspaceWriteRestricted
           ? ensureAgentWorkspaceWritableRoot(ws)
           : getAgentWorkspaceWritableRoot(ws)
-        sdkEnv.PROMA_WORKSPACE_DIR = getAgentWorkspacePath(ws.slug)
-        sdkEnv.PROMA_WORKSPACE_SLUG = ws.slug
-        sdkEnv.PROMA_NOWLEDGE_MEM_ENABLED = getWorkspaceMcpConfig(ws.slug).servers['nowledge-mem']?.enabled ? '1' : '0'
+        sdkEnv.COPIS_WORKSPACE_DIR = getAgentWorkspacePath(ws.slug)
+        sdkEnv.PROMA_WORKSPACE_DIR = sdkEnv.COPIS_WORKSPACE_DIR
+        sdkEnv.COPIS_WORKSPACE_SLUG = ws.slug
+        sdkEnv.PROMA_WORKSPACE_SLUG = sdkEnv.COPIS_WORKSPACE_SLUG
+        sdkEnv.COPIS_NOWLEDGE_MEM_ENABLED = getWorkspaceMcpConfig(ws.slug).servers['nowledge-mem']?.enabled ? '1' : '0'
+        sdkEnv.PROMA_NOWLEDGE_MEM_ENABLED = sdkEnv.COPIS_NOWLEDGE_MEM_ENABLED
         console.log(`[Agent 编排] 使用 ${getAgentCwdMode(sessionMeta)} cwd: ${agentCwd} (${ws.name}/${sessionId})`)
 
         if (agentRuntime === 'claude') {
@@ -1399,7 +1404,7 @@ export class AgentOrchestrator {
 
       // 9.6 直接信任已保存的 sdkSessionId，跳过 listSessions 预验证
       // 原因：listSessions({ dir }) 基于 cwd 路径哈希查找，但 session 级别的 cwd
-      // （如 ~/.proma/agent-workspaces/workspace-xxx/sessionId）与 SDK 内部存储的路径哈希可能不匹配，
+      // （如 ~/.copis/agent-workspaces/workspace-xxx/sessionId）与 SDK 内部存储的路径哈希可能不匹配，
       // 导致 listSessions 始终返回 0 个会话，误杀有效的 resume。
       // SDK 本身会优雅处理无效的 resume ID（回退为新会话），无需预验证。
       if (existingSdkSessionId) {
@@ -1425,7 +1430,7 @@ export class AgentOrchestrator {
           workspaceSlug,
           agentCwd,
           workspaceWriteRoot,
-          permissionMode: permissionModeOverride ?? sessionMeta?.permissionMode ?? PROMA_DEFAULT_PERMISSION_MODE,
+          permissionMode: permissionModeOverride ?? sessionMeta?.permissionMode ?? COPIS_DEFAULT_PERMISSION_MODE,
           triggeredBy: input.triggeredBy,
           sessionMeta,
         })
@@ -1439,7 +1444,7 @@ export class AgentOrchestrator {
             workspaceId,
             workspaceSlug,
             allowedRoots: allAdditionalDirectories,
-            permissionMode: permissionModeOverride ?? sessionMeta?.permissionMode ?? PROMA_DEFAULT_PERMISSION_MODE,
+            permissionMode: permissionModeOverride ?? sessionMeta?.permissionMode ?? COPIS_DEFAULT_PERMISSION_MODE,
             triggeredBy: input.triggeredBy,
           })
           piBuiltinTools = result.tools
@@ -1454,7 +1459,7 @@ export class AgentOrchestrator {
       }
 
       // Pi SDK 没有 Claude Agent SDK 的 mcpServers 参数；Claude 路径保持原生 MCP 不变，
-      // Pi 路径由 Proma 主进程连接用户 MCP server，并转换为 Pi customTools。
+      // Pi 路径由 Copis 主进程连接用户 MCP server，并转换为 Pi customTools。
       if (agentRuntime === 'pi' && Object.keys(mcpServers).length > 0) {
         try {
           piMcpTools = await buildPiMcpTools(mcpServers)
@@ -1481,7 +1486,7 @@ export class AgentOrchestrator {
         const toolLines: string[] = ['用户在消息中明确引用了以下工具，请在本次回复中主动调用：']
         for (const slug of mentionedSkills ?? []) {
           const qualifiedName = workspaceSlug
-            ? `proma-workspace-${workspaceSlug}:${slug}`
+            ? `copis-workspace-${workspaceSlug}:${slug}`
             : slug
           toolLines.push(`- Skill: ${qualifiedName}（请立即调用此 Skill）`)
         }
@@ -1518,27 +1523,27 @@ export class AgentOrchestrator {
 
       // 12. 读取应用设置并确定权限模式
       // 权限模式只属于当前 session；新会话默认完全自动模式。
-      const initialPermissionMode: PromaPermissionMode = permissionModeOverride
-        ?? PROMA_DEFAULT_PERMISSION_MODE
+      const initialPermissionMode: CopisPermissionMode = permissionModeOverride
+        ?? COPIS_DEFAULT_PERMISSION_MODE
       // 注册到 Map，支持运行中动态切换
       this.sessionPermissionModes.set(sessionId, initialPermissionMode)
       console.log(`[Agent 编排] 权限模式: ${initialPermissionMode}${permissionModeOverride ? '（外部覆盖）' : ''}`)
 
       const emitPlanModeChanged = (active: boolean, source: 'initial' | 'tool' | 'permission'): void => {
         this.eventBus.emit(sessionId, {
-          kind: 'proma_event',
+          kind: 'copis_event',
           event: { type: 'plan_mode_changed', sessionId, active, source },
         })
       }
 
       // 当初始模式为 plan 时，通知渲染进程展示计划模式 UI（如「Agent 正在规划」横幅）
       if (initialPermissionMode === 'plan') {
-        this.eventBus.emit(sessionId, { kind: 'proma_event', event: { type: 'enter_plan_mode', sessionId } })
+        this.eventBus.emit(sessionId, { kind: 'copis_event', event: { type: 'enter_plan_mode', sessionId } })
         emitPlanModeChanged(true, 'initial')
       }
 
       /** 读取当前会话的实时权限模式（支持运行中切换） */
-      const getPermissionMode = (): PromaPermissionMode =>
+      const getPermissionMode = (): CopisPermissionMode =>
         this.sessionPermissionModes.get(sessionId) ?? initialPermissionMode
 
       const restrictedWriteRoots = workspaceWriteRestricted && workspaceWriteRoot && workspaceSlug
@@ -1563,7 +1568,7 @@ export class AgentOrchestrator {
           toolInput,
           signal,
           (request: ExitPlanModeRequest) => {
-            this.eventBus.emit(sessionId, { kind: 'proma_event', event: { type: 'exit_plan_mode_request', request } })
+            this.eventBus.emit(sessionId, { kind: 'copis_event', event: { type: 'exit_plan_mode_request', request } })
           },
         )
       }
@@ -1707,7 +1712,7 @@ export class AgentOrchestrator {
             emitPlanModeChanged(false, 'permission')
             // 同步通知 SDK 侧切换权限模式
             if (this.adapter.setPermissionMode) {
-              this.adapter.setPermissionMode(sessionId, sdkPermissionModeForPromaMode(result.targetMode)).catch((err: unknown) => {
+              this.adapter.setPermissionMode(sessionId, sdkPermissionModeForCopisMode(result.targetMode)).catch((err: unknown) => {
                 console.warn(`[Agent 编排] SDK 权限模式切换失败:`, err)
               })
             }
@@ -1719,7 +1724,7 @@ export class AgentOrchestrator {
         if (toolName === 'EnterPlanMode') {
           planModeEntered = true
           emitPlanModeChanged(true, 'tool')
-          this.eventBus.emit(sessionId, { kind: 'proma_event', event: { type: 'enter_plan_mode', sessionId } })
+          this.eventBus.emit(sessionId, { kind: 'copis_event', event: { type: 'enter_plan_mode', sessionId } })
           return { behavior: 'allow' as const, updatedInput: input }
         }
 
@@ -1728,7 +1733,7 @@ export class AgentOrchestrator {
           return askUserService.handleAskUserQuestion(
             sessionId, input, options.signal,
             (request: AskUserRequest) => {
-              this.eventBus.emit(sessionId, { kind: 'proma_event', event: { type: 'ask_user_request', request } })
+              this.eventBus.emit(sessionId, { kind: 'copis_event', event: { type: 'ask_user_request', request } })
             },
           )
         }
@@ -1755,7 +1760,7 @@ export class AgentOrchestrator {
         }
         if (planningDeletionPermission === 'require-single-approval') {
           return permissionService.requestSingleApproval(sessionId, toolName, input, options, (request) => {
-            this.eventBus.emit(sessionId, { kind: 'proma_event', event: { type: 'permission_request', request } })
+            this.eventBus.emit(sessionId, { kind: 'copis_event', event: { type: 'permission_request', request } })
           })
         }
 
@@ -1873,7 +1878,7 @@ export class AgentOrchestrator {
         // `[1m]` 是 SDK 内部上下文变体，不应泄漏到标题生成或用户可见的模型名。
         resolvedModel = model.replace(/\[1m\]$/i, '')
         console.log(`[Agent 编排] SDK 确认模型: ${resolvedModel}`)
-        this.eventBus.emit(sessionId, { kind: 'proma_event', event: { type: 'model_resolved', model: resolvedModel } })
+        this.eventBus.emit(sessionId, { kind: 'copis_event', event: { type: 'model_resolved', model: resolvedModel } })
       }
       const handleContextWindow = (cw: number): void => {
         const inferredWindow = inferAgentSdkContextWindow(selectedModelId, channel.provider)
@@ -1882,12 +1887,12 @@ export class AgentOrchestrator {
         // result 消息里的真实 contextWindow 透传到 renderer，
         // 覆盖流式过程中按模型名推断的 fallback 值（智谱等端点会把 [1m] 等后缀剥掉，导致 fallback 不准）
         this.eventBus.emit(sessionId, {
-          kind: 'proma_event',
+          kind: 'copis_event',
           event: { type: 'context_window', contextWindow },
         })
       }
       const piCustomTools = [...piBuiltinTools, ...piMcpTools]
-      // Claude 会话统一使用 Proma sidecar settings，不加载项目根 .claude。
+      // Claude 会话统一使用 Copis sidecar settings，不加载项目根 .claude。
       const claudeSettingsFilePath = agentRuntime === 'claude' && workspaceId
         ? ensureClaudeSessionSettings(workspaceId, sessionId)
         : undefined
@@ -1956,7 +1961,7 @@ export class AgentOrchestrator {
         onContextWindow: handleContextWindow,
         retryRunStartedAt: streamStartedAt,
         onRetry: (retry) => {
-          this.eventBus.emit(sessionId, { kind: 'proma_event', event: { type: 'retry', ...retry } })
+          this.eventBus.emit(sessionId, { kind: 'copis_event', event: { type: 'retry', ...retry } })
         },
       } : {
         agentRuntime: 'claude',
@@ -1971,7 +1976,7 @@ export class AgentOrchestrator {
         sdkCliPath: cliPath!,
         env: sdkEnv,
         ...(maxTurns != null && { maxTurns }),
-        sdkPermissionMode: sdkPermissionModeForPromaMode(initialPermissionMode),
+        sdkPermissionMode: sdkPermissionModeForCopisMode(initialPermissionMode),
         // permissionMode 负责表达 plan/bypassPermissions。
         // 当提供 canUseTool 回调时这里必须为 false，否则 CLI 同时收到
         // --allow-dangerously-skip-permissions 和 --permission-prompt-tool stdio
@@ -1981,7 +1986,7 @@ export class AgentOrchestrator {
         allowDangerouslySkipPermissions: !canUseTool,
         canUseTool,
         // claude_code preset 提供基础环境信息（platform/shell/OS/git/model/知识截止日期等）
-        // buildSystemPrompt 追加 Proma 特有指令（角色定义、子 Agent 委派策略、工作区信息等）
+        // buildSystemPrompt 追加 Copis 特有指令（角色定义、子 Agent 委派策略、工作区信息等）
         systemPrompt: {
           type: 'preset',
           preset: 'claude_code',
@@ -2005,8 +2010,8 @@ export class AgentOrchestrator {
         ...(appSettings.agentMaxBudgetUsd != null && appSettings.agentMaxBudgetUsd > 0 && {
           maxBudgetUsd: appSettings.agentMaxBudgetUsd,
         }),
-        // Proma 统一使用 collaboration 派生子会话承载子 Agent 委派，避免 SDK 临时
-        // Agent/Task 与 Proma 会话体系分裂。
+        // Copis 统一使用 collaboration 派生子会话承载子 Agent 委派，避免 SDK 临时
+        // Agent/Task 与 Copis 会话体系分裂。
         disallowedTools: ['Agent', 'Task'],
         onStderr: (data: string) => {
           stderrChunks.push(data)
@@ -2073,11 +2078,11 @@ export class AgentOrchestrator {
             // 前 RETRY_VISIBILITY_THRESHOLD 次重试静默进行，避免偶发瞬时波动频繁惊扰用户
             if (retryAttempt > RETRY_VISIBILITY_THRESHOLD) {
               this.eventBus.emit(sessionId, {
-                kind: 'proma_event',
+                kind: 'copis_event',
                 event: { type: 'retry', status: 'starting', attempt: retryAttempt, maxAttempts: MAX_AUTO_RETRIES, delaySeconds: delaySec, reason: lastRetryableError ?? '未知错误' },
               })
               this.eventBus.emit(sessionId, {
-                kind: 'proma_event',
+                kind: 'copis_event',
                 event: { type: 'retry', status: 'attempt', attemptData },
               })
             }
@@ -2164,7 +2169,7 @@ export class AgentOrchestrator {
               const sub = msg.type === 'system' ? (msg as { subtype?: string }).subtype : undefined
               if (msg.type === 'assistant' || msg.type === 'user' || sub === 'task_started' || sub === 'task_progress') {
                 awaitingBackgroundWake = false
-                this.eventBus.emit(sessionId, { kind: 'proma_event', event: { type: 'run_resumed', sessionId } })
+                this.eventBus.emit(sessionId, { kind: 'copis_event', event: { type: 'run_resumed', sessionId } })
               }
             }
 
@@ -2209,7 +2214,7 @@ export class AgentOrchestrator {
                 }
 
                 // Thinking signature 不兼容：通常由跨模型 resume 触发。
-                // 先自动清除 SDK resume 关系，改用 Proma 已持久化上下文重跑一次；再失败才展示用户提示。
+                // 先自动清除 SDK resume 关系，改用 Copis 已持久化上下文重跑一次；再失败才展示用户提示。
                 if (
                   typedError.code === THINKING_SIGNATURE_ERROR_CODE &&
                   canTryThinkingSignatureRecovery(attempt)
@@ -2237,7 +2242,7 @@ export class AgentOrchestrator {
                 }
 
                 // 上下文过长：旧 SDK session 已经处于不可继续的超限状态。
-                // 自动清除 resume 指针，改用 Proma 最近历史回填重跑一次；用于飞书/自动任务等无人值守入口自恢复。
+                // 自动清除 resume 指针，改用 Copis 最近历史回填重跑一次；用于飞书/自动任务等无人值守入口自恢复。
                 if (
                   typedError.code === 'prompt_too_long' &&
                   canTryPromptTooLongRecovery(attempt)
@@ -2321,7 +2326,7 @@ export class AgentOrchestrator {
                 // 如果之前有可见重试记录，发送 retry_failed
                 if (retryAttemptsScheduled > RETRY_VISIBILITY_THRESHOLD && lastRetryableError) {
                   this.eventBus.emit(sessionId, {
-                    kind: 'proma_event',
+                    kind: 'copis_event',
                     event: { type: 'retry', status: 'failed', attemptData: { attempt: retryAttemptsScheduled, timestamp: Date.now(), reason: lastRetryableError, errorMessage: typedError.message, delaySeconds: 0 } },
                   })
                 }
@@ -2472,7 +2477,7 @@ export class AgentOrchestrator {
 
           // 正常完成 — 如果之前有可见重试，发送 retry_cleared
           if (!wasStoppedByUser && retryAttemptsScheduled > RETRY_VISIBILITY_THRESHOLD) {
-            this.eventBus.emit(sessionId, { kind: 'proma_event', event: { type: 'retry', status: 'cleared' } })
+            this.eventBus.emit(sessionId, { kind: 'copis_event', event: { type: 'retry', status: 'cleared' } })
             console.log(`[Agent 编排] 重试成功，已在第 ${attempt} 次尝试后恢复`)
           }
           retrySucceeded = true
@@ -2548,7 +2553,7 @@ export class AgentOrchestrator {
             continue  // 进入下一次 retry 循环
           }
 
-          // 上下文过长：清除超限 resume 指针，用 Proma 历史回填自动恢复一次。
+          // 上下文过长：清除超限 resume 指针，用 Copis 历史回填自动恢复一次。
           if (catchLooksPromptTooLong && canTryPromptTooLongRecovery(attempt)) {
             promptTooLongRecoveryAttempted = true
             invisibleRecoveryAttempts += 1
@@ -2694,7 +2699,7 @@ export class AgentOrchestrator {
           // 如果之前有可见重试记录，发送 retry_failed
           if (retryAttemptsScheduled > RETRY_VISIBILITY_THRESHOLD && lastRetryableError) {
             this.eventBus.emit(sessionId, {
-              kind: 'proma_event',
+              kind: 'copis_event',
               event: { type: 'retry', status: 'failed', attemptData: { attempt: retryAttemptsScheduled, timestamp: Date.now(), reason: lastRetryableError, errorMessage: userFacingError, delaySeconds: 0 } },
             })
           }
@@ -2705,7 +2710,7 @@ export class AgentOrchestrator {
           // 此终止分支只会被「非 session-not-found」的错误命中（session 失效已在上文
           // isSessionNotFoundError 分支单独处理并切到恢复模式）。网络断连、服务端 5xx、
           // 未知错误都不代表 SDK 会话本身失效——其完整历史 JSONL 仍保存在
-          // ~/.proma/sdk-config/projects/.../{sdkSessionId}.jsonl 中，依旧可 resume。
+          // ~/.copis/sdk-config/projects/.../{sdkSessionId}.jsonl 中，依旧可 resume。
           // 此前这里对 `!apiError`（如普通断连解析不出状态码）一律清除指针，导致下一轮
           // 退化为「仅回填最近 N 条」的冷启动，上下文从满载骤降（#903）。
           if (existingSdkSessionId) {
@@ -2725,7 +2730,7 @@ export class AgentOrchestrator {
         // 仅当重试曾经对用户可见时才发送 retry_failed 事件
         if (retryAttemptsScheduled > RETRY_VISIBILITY_THRESHOLD) {
           this.eventBus.emit(sessionId, {
-            kind: 'proma_event',
+            kind: 'copis_event',
             event: { type: 'retry', status: 'failed', attemptData: { attempt: retryAttemptsScheduled || MAX_AUTO_RETRIES, timestamp: Date.now(), reason: lastRetryableError, errorMessage: retryFailureMessage, delaySeconds: 0 } },
           })
         }
@@ -2810,19 +2815,19 @@ export class AgentOrchestrator {
   /**
    * 运行中动态切换会话的权限模式
    *
-   * 同时更新 Proma 侧（canUseTool 闭包读取的 Map）和 SDK 侧（query.setPermissionMode）。
+   * 同时更新 Copis 侧（canUseTool 闭包读取的 Map）和 SDK 侧（query.setPermissionMode）。
    * 典型场景：用户在 Agent 运行中通过 PermissionModeSelector 切换模式。
    */
-  async updateSessionPermissionMode(sessionId: string, mode: PromaPermissionMode): Promise<void> {
+  async updateSessionPermissionMode(sessionId: string, mode: CopisPermissionMode): Promise<void> {
     if (!this.activeSessions.has(sessionId)) return
     this.sessionPermissionModes.set(sessionId, mode)
     this.eventBus.emit(sessionId, {
-      kind: 'proma_event',
+      kind: 'copis_event',
       event: { type: 'plan_mode_changed', sessionId, active: mode === 'plan', source: 'permission' },
     })
     // 同步通知 SDK 侧
     if (this.adapter.setPermissionMode) {
-      await this.adapter.setPermissionMode(sessionId, sdkPermissionModeForPromaMode(mode))
+      await this.adapter.setPermissionMode(sessionId, sdkPermissionModeForCopisMode(mode))
     }
     console.log(`[Agent 编排] 运行中权限模式已切换: sessionId=${sessionId}, mode=${mode}`)
   }
@@ -2833,7 +2838,7 @@ export class AgentOrchestrator {
    * 回退会话到指定消息点
    *
    * 1. 直接从 SDK JSONL 的 file-history-snapshot 恢复文件到目标时刻的状态
-   * 2. 截断 Proma JSONL 到 assistantMessageUuid（inclusive）
+   * 2. 截断 Copis JSONL 到 assistantMessageUuid（inclusive）
    * 3. 记录 resumeAtMessageUuid，下次发消息时 SDK 从该点分支继续
    *
    * 文件恢复通过解析 SDK JSONL 中的快照完成，无需运行中的 Query。
@@ -2914,7 +2919,7 @@ export class AgentOrchestrator {
       fileRewindResult = { canRewind: false, error: '无法从 SDK session 中解析 user message UUID' }
     }
 
-    // 2. 截断 Proma JSONL
+    // 2. 截断 Copis JSONL
     const kept = truncateSDKMessages(sessionId, assistantMessageUuid)
 
     // 3. 记录 resumeAtMessageUuid，下次发消息时 SDK 从此点继续
@@ -2986,7 +2991,7 @@ export class AgentOrchestrator {
       const toolLines: string[] = ['用户在消息中明确引用了以下工具，请在本次回复中主动调用：']
       for (const slug of mentionedSkills ?? []) {
         const qualifiedName = workspaceSlug
-          ? `proma-workspace-${workspaceSlug}:${slug}`
+          ? `copis-workspace-${workspaceSlug}:${slug}`
           : slug
         toolLines.push(`- Skill: ${qualifiedName}（请立即调用此 Skill）`)
       }

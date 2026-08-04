@@ -8,17 +8,17 @@
 
 import * as React from 'react'
 import { useAtom, useAtomValue, useSetAtom } from 'jotai'
-import { Zap, Map as MapIcon } from 'lucide-react'
+import { Bot, Map as MapIcon } from 'lucide-react'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { Button } from '@/components/ui/button'
 import { agentPermissionModeMapAtom, agentDefaultPermissionModeAtom, sessionPersistedPermissionModeAtom, sessionExistsAtom, agentPlanModeSessionsAtom } from '@/atoms/agent-atoms'
-import type { PromaPermissionMode } from '@proma/shared'
-import { PROMA_PERMISSION_MODE_CONFIG, PROMA_PERMISSION_MODE_ORDER } from '@proma/shared'
+import type { CopisPermissionMode } from '@copis/shared'
+import { COPIS_PERMISSION_MODE_CONFIG, COPIS_PERMISSION_MODE_ORDER } from '@copis/shared'
 import { getDisplayedPermissionMode, updatePlanModeSessionSet } from '@/lib/agent-plan-mode'
 import { inputToolbarButtonClass } from '@/components/ai-elements/input-toolbar-styles'
 
-const MODE_ICONS: Record<PromaPermissionMode, React.ComponentType<{ className?: string }>> = {
-  bypassPermissions: Zap,
+const MODE_ICONS: Record<CopisPermissionMode, React.ComponentType<{ className?: string }>> = {
+  bypassPermissions: Bot,
   plan: MapIcon,
 }
 
@@ -44,7 +44,7 @@ export function PermissionModeSelector({ sessionId }: PermissionModeSelectorProp
   React.useEffect(() => {
     if (!sessionExistsInList) return
 
-    setModeMap((prev: Map<string, PromaPermissionMode>) => {
+    setModeMap((prev: Map<string, CopisPermissionMode>) => {
       if (prev.has(sessionId)) return prev
       const next = new Map(prev)
       next.set(sessionId, persistedSessionMode ?? defaultMode)
@@ -54,14 +54,14 @@ export function PermissionModeSelector({ sessionId }: PermissionModeSelectorProp
 
   /** 循环切换模式 */
   const cycleMode = React.useCallback(async () => {
-    const currentIndex = PROMA_PERMISSION_MODE_ORDER.indexOf(displayMode)
-    const nextIndex = (currentIndex + 1) % PROMA_PERMISSION_MODE_ORDER.length
-    const nextMode = PROMA_PERMISSION_MODE_ORDER[nextIndex]!
+    const currentIndex = COPIS_PERMISSION_MODE_ORDER.indexOf(displayMode)
+    const nextIndex = (currentIndex + 1) % COPIS_PERMISSION_MODE_ORDER.length
+    const nextMode = COPIS_PERMISSION_MODE_ORDER[nextIndex]!
     const prevMode = mode
     const prevPlanModeActive = planModeActive
 
     // 乐观更新当前 session 的模式
-    setModeMap((prev: Map<string, PromaPermissionMode>) => {
+    setModeMap((prev: Map<string, CopisPermissionMode>) => {
       const next = new Map(prev)
       next.set(sessionId, nextMode)
       return next
@@ -75,7 +75,7 @@ export function PermissionModeSelector({ sessionId }: PermissionModeSelectorProp
       await window.electronAPI.updateSessionPermissionMode(sessionId, nextMode)
     } catch (error) {
       console.error('[PermissionModeSelector] 运行中切换权限模式失败，回滚 UI:', error)
-      setModeMap((prev: Map<string, PromaPermissionMode>) => {
+      setModeMap((prev: Map<string, CopisPermissionMode>) => {
         const next = new Map(prev)
         next.set(sessionId, prevMode)
         return next
@@ -86,7 +86,7 @@ export function PermissionModeSelector({ sessionId }: PermissionModeSelectorProp
     }
   }, [displayMode, mode, planModeActive, sessionId, setModeMap, setPlanModeSessions])
 
-  const config = PROMA_PERMISSION_MODE_CONFIG[displayMode]
+  const config = COPIS_PERMISSION_MODE_CONFIG[displayMode]
   const Icon = MODE_ICONS[displayMode]
 
   return (

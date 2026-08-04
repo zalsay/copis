@@ -1,12 +1,21 @@
 import type { WorkingApiClient } from './working-api-client'
 import { getWorkingApiClient } from './working-api-service'
 import { getSettings, updateSettings } from './settings-service'
+import {
+  finalizeAgentRpcRun,
+  parseAgentRpcInput,
+  persistAgentRpcCredential,
+  persistAgentRpcMessage,
+  persistAgentRpcMeta,
+  prepareAgentRpcRun,
+} from './agent-rpc-service'
+import { parseWorkerFrame } from './agent-rpc-protocol'
 import type { AppSettings } from '../../types'
 import {
   COPIS_WORKING_CHANNEL_ID,
   COPIS_WORKING_EXPERT_MODEL_ID,
   COPIS_WORKING_FAST_MODEL_ID,
-} from '@proma/shared'
+} from '@copis/shared'
 import type {
   AgentMessage,
   AgentSendInput,
@@ -21,7 +30,7 @@ import type {
   WorkingVerifyPasswordResetCodeInput,
   WorkingWorkspaceInput,
   WorkingReceiveChannel,
-} from '@proma/shared'
+} from '@copis/shared'
 
 export const HTTP_API_HOST = '127.0.0.1'
 export const HTTP_API_PORT = 51730
@@ -560,6 +569,61 @@ async function handleWorkingRequest(
   throw new HttpApiRequestError('Working API 路径不存在', 404, 'not_found')
 }
 
+async function handleAgentRpcInternalRequest(
+  request: HttpApiRequest,
+  segments: string[],
+): Promise<HttpApiResponse> {
+  if (request.method !== 'POST') {
+    throw new HttpApiRequestError('Agent RPC 内部接口只支持 POST', 405, 'method_not_allowed')
+  }
+  const body = await readJsonBody(request)
+  const bodyRecord = requireRecord(body)
+  const action = segments[3]
+
+  if (action === 'prepare') {
+    return { status: 200, body: await prepareAgentRpcRun(parseAgentRpcInput(bodyRecord)) }
+  }
+
+  if (action === 'message') {
+    const sessionId = requireString(bodyRecord, 'sessionId')
+    const message = bodyRecord.message
+    if (!isRecord(message)) throw new HttpApiRequestError('SDK 消息参数不正确', 400, 'invalid_request')
+    persistAgentRpcMessage(sessionId, message as unknown as SDKMessage)
+    return { status: 204 }
+  }
+
+  if (action === 'meta') {
+    const frame = parseWorkerFrame(JSON.stringify(bodyRecord))
+    if (!frame || frame.type !== 'meta') {
+      throw new HttpApiRequestError('Agent RPC 元数据帧不正确', 400, 'invalid_request')
+    }
+    persistAgentRpcMeta(frame)
+    return { status: 204 }
+  }
+
+  if (action === 'credential') {
+    const frame = parseWorkerFrame(JSON.stringify(bodyRecord))
+    if (!frame || frame.type !== 'credential') {
+      throw new HttpApiRequestError('Agent RPC 凭据帧不正确', 400, 'invalid_request')
+    }
+    persistAgentRpcCredential(frame)
+    return { status: 204 }
+  }
+
+  if (action === 'complete') {
+    const sessionId = requireString(bodyRecord, 'sessionId')
+    if (typeof bodyRecord.stoppedByUser !== 'boolean') {
+      throw new HttpApiRequestError('Agent RPC 完成状态不正确', 400, 'invalid_request')
+    }
+    return {
+      status: 200,
+      body: finalizeAgentRpcRun({ sessionId, stoppedByUser: bodyRecord.stoppedByUser }),
+    }
+  }
+
+  throw new HttpApiRequestError('Agent RPC 内部接口不存在', 404, 'not_found')
+}
+
 export async function handleHttpApiRequest(
   request: HttpApiRequest,
   dependencies: HttpApiDependencies = defaultDependencies,
@@ -603,6 +667,9 @@ export async function handleHttpApiRequest(
       throw new HttpApiRequestError('HTTP API 路径不存在', 404, 'not_found')
     }
 
+    if (segments[1] === 'internal' && segments[2] === 'agent') {
+      return await handleAgentRpcInternalRequest(request, segments)
+    }
     if (segments[1] === 'agent') {
       return await handleAgentRequest(request, url, segments, dependencies)
     }

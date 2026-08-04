@@ -7,7 +7,7 @@
 import type {
   GitHubRelease,
   GitHubReleaseListOptions,
-} from '@proma/shared'
+} from '@copis/shared'
 
 /** GitHub API 基础 URL */
 const GITHUB_API_BASE = 'https://api.github.com'

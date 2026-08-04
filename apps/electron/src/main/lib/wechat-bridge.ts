@@ -6,7 +6,7 @@
  * - HTTP 长轮询接收消息
  * - 发送消息/输入状态
  *
- * 消息路由到 Proma Agent，回复通过 iLink API 发送。
+ * 消息路由到 Copis Agent，回复通过 iLink API 发送。
  */
 
 import { BrowserWindow } from 'electron'
@@ -15,10 +15,10 @@ import type {
   WeChatCredentials,
   WeChatIncomingMessage,
   WeChatMessageItem,
-} from '@proma/shared'
-import { WECHAT_IPC_CHANNELS, WECHAT_ITEM_TYPE, WECHAT_MESSAGE_TYPE, WECHAT_MESSAGE_STATE } from '@proma/shared'
+} from '@copis/shared'
+import { WECHAT_IPC_CHANNELS, WECHAT_ITEM_TYPE, WECHAT_MESSAGE_TYPE, WECHAT_MESSAGE_STATE } from '@copis/shared'
 import { getDecryptedCredentials, saveWeChatCredentials, clearWeChatCredentials, getWeChatConfig, updateWeChatDefaultWorkspace } from './wechat-config'
-import { getWeChatBindingsPath, getWeChatSyncPath } from './config-paths'
+import { getWeChatBindingsPath, getWeChatContextTokensPath, getWeChatSyncPath } from './config-paths'
 import { BridgeCommandHandler, type BridgeAttachment } from './bridge-command-handler'
 import { createJsonBridgeChatBindingStore } from './bridge-binding-store'
 import { inferImageMediaType, saveImageToSession, saveFileToSession, inferExtension, MAX_IMAGE_SIZE } from './bridge-attachment-utils'
@@ -192,7 +192,7 @@ class ILinkClient {
       msg: {
         from_user_id: this.botId,
         to_user_id: toUserId,
-        client_id: `proma_${Date.now()}`,
+        client_id: `copis_${Date.now()}`,
         message_type: WECHAT_MESSAGE_TYPE.BOT,
         message_state: WECHAT_MESSAGE_STATE.FINISH,
         item_list: items,
@@ -387,6 +387,8 @@ class WeChatBridge {
   private polling = false
   private pendingImages = new Map<string, { images: WeChatImageAttachment[]; createdAt: number }>()
   private pendingFiles = new Map<string, { files: WeChatFileAttachment[]; createdAt: number }>()
+  /** chatId → 最近一次收到的 context_token；微信主动消息必须复用该令牌。 */
+  private lastContextTokens = new Map<string, string>()
   private static readonly PENDING_IMAGES_TTL = 10 * 60 * 1000 // 10 minutes
   private static readonly PENDING_IMAGES_MAX = 15
   private static readonly PENDING_FILES_MAX = 15
@@ -418,6 +420,21 @@ class WeChatBridge {
   /** 获取当前状态 */
   getStatus(): WeChatBridgeState {
     return { ...this.state }
+  }
+
+  /** 获取当前有效的微信聊天绑定，供工作区级主动提醒使用。 */
+  listBindings(): ReturnType<BridgeCommandHandler['listBindings']> {
+    return this.commandHandler.listBindings()
+  }
+
+  /** 主动向指定微信聊天发送提醒文本。 */
+  async sendTextToChat(chatId: string, text: string): Promise<void> {
+    if (!this.client) throw new Error('微信 Bridge 未连接')
+    const contextToken = this.lastContextTokens.get(chatId)
+    if (!contextToken) throw new Error('该微信聊天尚未收到可用于主动发送的 context_token')
+    const MAX_LEN = 4000
+    const chunks = text.length <= MAX_LEN ? [text] : text.match(new RegExp(`.{1,${MAX_LEN}}`, 'gs')) ?? [text]
+    for (const chunk of chunks) await this.client.sendText(chatId, chunk, contextToken)
   }
 
   /** 在删除项目时清理指向其会话的聊天绑定。 */
@@ -454,6 +471,8 @@ class WeChatBridge {
 
       // 3. 保存凭证
       saveWeChatCredentials(creds)
+      this.lastContextTokens.clear()
+      this.saveContextTokens()
       console.log('[微信 Bridge] 登录成功，凭证已保存')
 
       // 4. 启动长轮询
@@ -491,6 +510,7 @@ class WeChatBridge {
     }
     this.pendingImages.clear()
     this.pendingFiles.clear()
+    this.lastContextTokens.clear()
     this.updateStatus({ status: 'disconnected', qrCodeData: undefined })
     console.log('[微信 Bridge] 已停止')
   }
@@ -499,6 +519,8 @@ class WeChatBridge {
   logout(): void {
     this.stop()
     clearWeChatCredentials()
+    this.lastContextTokens.clear()
+    this.saveContextTokens()
     this.getUpdatesBuf = ''
     this.saveSyncBuf()
     console.log('[微信 Bridge] 已登出')
@@ -580,6 +602,7 @@ class WeChatBridge {
     this.client = new ILinkClient(creds)
     this.pollAbortController = new AbortController()
     this.loadSyncBuf()
+    this.loadContextTokens()
 
     // 订阅 Agent EventBus 接收 Agent 回复
     this.commandHandler.subscribe()
@@ -706,6 +729,10 @@ class WeChatBridge {
 
     const chatId = msg.from_user_id
     const contextToken = msg.context_token
+    if (contextToken) {
+      this.lastContextTokens.set(chatId, contextToken)
+      this.saveContextTokens()
+    }
 
     // 纯粹的空消息
     if (!text.trim() && imageItems.length === 0 && fileItems.length === 0) return
@@ -845,7 +872,7 @@ class WeChatBridge {
     // 确保 binding 存在，保存媒体到会话目录
     const binding = this.commandHandler.ensureBinding(chatId)
     if (!binding) {
-      await this.client.sendText(chatId, '请先在 Proma 设置中选择 Agent 渠道。', contextToken)
+      await this.client.sendText(chatId, '请先在 Copis 设置中选择 Agent 渠道。', contextToken)
       return
     }
     const workspace = binding.workspaceId ? getAgentWorkspace(binding.workspaceId) : undefined
@@ -885,6 +912,28 @@ class WeChatBridge {
   }
 
   // ===== 同步游标持久化 =====
+
+  private loadContextTokens(): void {
+    const contextPath = getWeChatContextTokensPath()
+    if (!existsSync(contextPath)) return
+    try {
+      const parsed = JSON.parse(readFileSync(contextPath, 'utf-8')) as unknown
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return
+      for (const [chatId, token] of Object.entries(parsed as Record<string, unknown>)) {
+        if (typeof token === 'string' && token) this.lastContextTokens.set(chatId, token)
+      }
+    } catch (error) {
+      console.warn('[微信 Bridge] 加载主动消息令牌失败:', redactSensitiveLogValue(error))
+    }
+  }
+
+  private saveContextTokens(): void {
+    try {
+      writeFileSync(getWeChatContextTokensPath(), JSON.stringify(Object.fromEntries(this.lastContextTokens)), 'utf-8')
+    } catch (error) {
+      console.warn('[微信 Bridge] 保存主动消息令牌失败:', redactSensitiveLogValue(error))
+    }
+  }
 
   private loadSyncBuf(): void {
     const syncPath = getWeChatSyncPath()

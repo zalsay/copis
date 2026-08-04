@@ -1,7 +1,7 @@
 import * as React from 'react'
 import { useAtomValue, useSetAtom } from 'jotai'
 import { Globe2, LoaderCircle, Plus, X } from 'lucide-react'
-import type { WebTabsSnapshot } from '@proma/shared'
+import type { WebTabsSnapshot } from '@copis/shared'
 import { activeWebTabIdAtom, webTabsAtom } from '@/atoms/web-tabs'
 import { cn } from '@/lib/utils'
 import { detectIsMac, detectIsWindows, WINDOW_CONTROLS_PADDING_RIGHT } from '@/lib/platform'
@@ -140,6 +140,28 @@ function WebHomeTab({ active, onClick }: { active: boolean; onClick: () => void 
   )
 }
 
+function WebTabIcon({ tab }: { tab: WebTabsSnapshot['tabs'][number] }): React.ReactElement {
+  const [failedFavicon, setFailedFavicon] = React.useState<string | null>(null)
+
+  React.useEffect(() => {
+    setFailedFavicon(null)
+  }, [tab.faviconUrl])
+
+  if (!tab.faviconUrl || failedFavicon === tab.faviconUrl) {
+    return <Globe2 className="size-3.5 shrink-0" />
+  }
+
+  return (
+    <img
+      src={tab.faviconUrl}
+      alt=""
+      aria-hidden="true"
+      className="size-3.5 shrink-0 rounded-sm object-contain"
+      onError={() => setFailedFavicon(tab.faviconUrl)}
+    />
+  )
+}
+
 function WebTabItem({
   tab,
   active,
@@ -172,7 +194,7 @@ function WebTabItem({
       {tab.isLoading ? (
         <LoaderCircle className="size-3.5 shrink-0 animate-spin text-primary" />
       ) : (
-        <Globe2 className="size-3.5 shrink-0" />
+        <WebTabIcon tab={tab} />
       )}
       <span className="min-w-0 flex-1 truncate text-left">{tab.title || '新标签页'}</span>
       <span

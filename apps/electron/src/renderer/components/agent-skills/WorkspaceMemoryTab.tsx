@@ -2,7 +2,7 @@ import * as React from 'react'
 import { useSetAtom } from 'jotai'
 import { toast } from 'sonner'
 import { BookOpen, Brain, ChevronDown, ChevronRight, Code2, Eye, FileText, FolderOpen, Loader2, RefreshCw, Save, Sparkles } from 'lucide-react'
-import type { SkillFileNode, WorkspaceMemorySummary } from '@proma/shared'
+import type { SkillFileNode, WorkspaceMemorySummary } from '@copis/shared'
 import { Button } from '@/components/ui/button'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { SettingsCard } from '@/components/settings/primitives'
@@ -46,22 +46,22 @@ function buildWorkspaceMemoryInitPrompt(historyRange: MemoryHistoryRange): strin
         ? '用户已在界面中明确选择“全部”历史；历史很多时仍优先最新、最有代表性且实际完成工作的会话，避免把临时过程写入长期记忆。'
         : `用户已在界面中明确将范围扩大到${rangeLabel}；本次只在该范围内处理。若仍需要更早历史，请在最终回复中说明理由并建议用户进一步扩大范围。`
 
-  return `请为当前项目初始化并沉淀长期记忆。这里的“项目”指系统提示中的“项目根目录”及其关联的 Agent 工作会话；不要把 Proma 工作区笼统当作项目。
+  return `请为当前项目初始化并沉淀长期记忆。这里的“项目”指系统提示中的“项目根目录”及其关联的 Agent 工作会话；不要把 Copis 工作区笼统当作项目。
 
 处理范围：
 1. 默认读取当前项目最近 1 个月的 Agent 工作会话，优先近期、最有代表性且用户实际完成工作的会话。证据不足时要明确说明，不得编造。只有用户通过界面明确选择更大范围时，才可处理超过 1 个月的会话。
 2. ${rangeGuidance}
 
 路径与职责边界：
-- 系统提示中的“Proma 工作区目录”是 Proma 管理配置与隔离资料的位置，存放 MCP、Skills、Proma 管理的 CLAUDE.md 与 Auto Memory；它不是用户项目根目录。必须按系统提示给出的绝对路径操作，不得猜测或替换路径。
+- 系统提示中的“Copis 工作区目录”是 Copis 管理配置与隔离资料的位置，存放 MCP、Skills、Copis 管理的 CLAUDE.md 与 Auto Memory；它不是用户项目根目录。必须按系统提示给出的绝对路径操作，不得猜测或替换路径。
 - “项目根目录”是用户项目资料的边界，并不一定等于实际 cwd：新会话通常从项目根目录运行，历史会话可能仍从会话工作台运行。允许从项目级 Context 及明确关联的长期项目资料读取证据；不要自动读取、创建或修改项目根内的 \`.claude/\`、\`CLAUDE.md\`、MCP 或 Skills 配置，除非用户明确要求。
 - 系统提示中的“会话工作台目录”及其 \`.context/\` 是当前会话的 sidecar/workbench：仅承载本次任务的 todo、plan、临时笔记和中间结论，不应作为项目级长期记忆的写入位置。绝不读取、创建或修改其中的 \`.claude/settings.json\`。
 - 系统提示中的“项目级 Context”与项目级长期资料用于跨会话保留调研、架构分析和项目知识。先区分它们与会话级临时产物，再决定可作为长期记忆证据的内容。
 
 沉淀目标：
 1. 从允许读取的会话和 Context 中提炼稳定的项目知识：项目结构、常用命令、架构边界、可靠决策、踩坑经验、用户偏好，以及未来 Agent 必须注意的事项。不要把聊天流水账、单次调试过程或当前任务的临时产物当作长期知识。
-2. 只更新系统提示明确给出的“Proma 工作区 CLAUDE.md”绝对路径。这里是 Proma 管理的项目指令文件；内容仅限稳定、跨会话有效的项目规则、入口和工作方法，不得混入临时调试、聊天记录或长篇资料。
-3. 只更新系统提示明确给出的“Proma 工作区 Auto Memory 目录”中的 \`MEMORY.md\`、必要的主题文件和 \`user-profile.md\`，不要在其他目录创建记忆文件。\`MEMORY.md\` 保持简短的主题索引与路由，主题细节拆分到主题文件。
+2. 只更新系统提示明确给出的“Copis 工作区 CLAUDE.md”绝对路径。这里是 Copis 管理的项目指令文件；内容仅限稳定、跨会话有效的项目规则、入口和工作方法，不得混入临时调试、聊天记录或长篇资料。
+3. 只更新系统提示明确给出的“Copis 工作区 Auto Memory 目录”中的 \`MEMORY.md\`、必要的主题文件和 \`user-profile.md\`，不要在其他目录创建记忆文件。\`MEMORY.md\` 保持简短的主题索引与路由，主题细节拆分到主题文件。
 4. \`user-profile.md\` 是持续迭代的用户画像：基于现有内容增量合并，条目化且可追溯地记录有充分证据的角色与技术背景、稳定协作偏好、反复出现的关注点、工具链倾向和明确的“下次请这样做”要求。只出现一次或证据不足的信号标为“待确认”，不要当作稳定结论。
 
 写入规则：
@@ -411,7 +411,7 @@ export function WorkspaceMemoryTab({ workspaceSlug, search }: WorkspaceMemoryTab
         <MemoryStatCard
           icon={<BookOpen size={18} />}
           title="项目指令"
-          subtitle="Proma 工作区 CLAUDE.md"
+          subtitle="Copis 工作区 CLAUDE.md"
           value={summary.claudeMd.exists ? formatBytes(summary.claudeMd.size) : '尚未创建'}
           detail={`更新于 ${formatTime(summary.claudeMd.updatedAt)}`}
           active={selected?.kind === 'claude'}
@@ -433,7 +433,7 @@ export function WorkspaceMemoryTab({ workspaceSlug, search }: WorkspaceMemoryTab
           <div className="min-w-0">
             <div className="text-sm font-medium text-foreground">从历史会话生成项目记忆</div>
             <div className="mt-1 text-xs leading-relaxed text-muted-foreground">
-              新建一个 Agent 会话，读取当前项目{historyRangeLabel}的工作会话，沉淀并更新 Proma 工作区中的 CLAUDE.md 与 auto memory 文件。
+              新建一个 Agent 会话，读取当前项目{historyRangeLabel}的工作会话，沉淀并更新 Copis 工作区中的 CLAUDE.md 与 auto memory 文件。
             </div>
           </div>
           <div className="flex shrink-0 items-center gap-2">
@@ -480,7 +480,7 @@ export function WorkspaceMemoryTab({ workspaceSlug, search }: WorkspaceMemoryTab
                 active={selected?.kind === 'claude'}
                 icon={<FileText size={14} />}
                 label="CLAUDE.md"
-                meta="Proma 工作区项目指令"
+                meta="Copis 工作区项目指令"
                 onClick={() => void openClaude(summary)}
               />
               <div className="mt-3 px-2 pb-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground/70">

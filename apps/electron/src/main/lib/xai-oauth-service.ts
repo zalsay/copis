@@ -7,7 +7,7 @@
  */
 
 import { shell } from 'electron'
-import type { XaiOAuthCredentials, XaiOAuthDeviceCode } from '@proma/shared'
+import type { XaiOAuthCredentials, XaiOAuthDeviceCode } from '@copis/shared'
 
 type PiSdk = typeof import('@earendil-works/pi-coding-agent')
 type OAuthCredential = XaiOAuthCredentials & { type: 'oauth'; [key: string]: unknown }

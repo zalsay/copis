@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import type { SDKAssistantMessage, SDKMessage, SDKUserMessage } from '@proma/shared'
+import type { SDKAssistantMessage, SDKMessage, SDKUserMessage } from '@copis/shared'
 import { parseWorkingSessionHistory } from './working-history-parser'
 
 function isAssistant(message: SDKMessage): message is SDKAssistantMessage {
@@ -20,7 +20,7 @@ function toolNames(messages: SDKMessage[]): string[] {
 }
 
 describe('Working 历史 JSONL 解析', () => {
-  test('将消息、工具、文件变更、Patch 和 Todo 转换为 Proma SDK 消息', () => {
+  test('将消息、工具、文件变更、Patch 和 Todo 转换为 Copis SDK 消息', () => {
     const jsonl = [
       JSON.stringify({ type: 'session_meta', payload: { session_id: 'working-session-1' } }),
       JSON.stringify({ type: 'event_msg', timestamp: '2026-08-01T00:00:00Z', payload: { type: 'user_message', message: '整理周报' } }),

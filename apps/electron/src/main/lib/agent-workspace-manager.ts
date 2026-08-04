@@ -2,8 +2,8 @@
  * Agent 工作区管理器
  *
  * 负责 Agent 工作区的 CRUD 操作。
- * - 工作区索引：~/.proma/agent-workspaces.json（轻量元数据）
- * - 工作区目录：~/.proma/agent-workspaces/{slug}/（Agent 的 cwd）
+ * - 工作区索引：~/.copis/agent-workspaces.json（轻量元数据）
+ * - 工作区目录：~/.copis/agent-workspaces/{slug}/（Agent 的 cwd）
  */
 
 import { readFileSync, writeFileSync, existsSync, readdirSync, cpSync, mkdirSync, statSync, openSync, readSync, closeSync, realpathSync, accessSync, constants } from 'node:fs'
@@ -23,14 +23,16 @@ import {
   getInactiveSkillsDir,
   getDefaultSkillsDir,
   parseSkillVersion,
+  DEFAULT_SKILL_SLUG_ALIASES,
+  migrateLegacySkillSlugDirectory,
   RETIRED_DEFAULT_SKILL_SLUGS,
   isRetiredDefaultSkill,
 } from './config-paths'
 import { findAllGitRoots, normalizeGitRoot } from './git-diff-service'
 import { listBuiltinMcpServers } from './builtin-mcp/catalog'
 import { RESERVED_BUILTIN_KEYS } from './builtin-mcp/baseline'
-import { inferMcpTransportType, normalizeMcpTransportType } from '@proma/shared'
-import type { AgentWorkspace, CreateAgentWorkspaceInput, LocalProjectRootStatus, WorkspaceMcpConfig, SkillMeta, SkillImportSource, OtherWorkspaceSkillsGroup, WorkspaceCapabilities, SkillFileNode, SkillFileContent, WorkspaceMemorySummary } from '@proma/shared'
+import { inferMcpTransportType, normalizeMcpTransportType } from '@copis/shared'
+import type { AgentWorkspace, CreateAgentWorkspaceInput, LocalProjectRootStatus, WorkspaceMcpConfig, SkillMeta, SkillImportSource, OtherWorkspaceSkillsGroup, WorkspaceCapabilities, SkillFileNode, SkillFileContent, WorkspaceMemorySummary } from '@copis/shared'
 
 interface AgentWorkspacesIndex {
   version: number
@@ -263,7 +265,7 @@ export function ensureAgentWorkspaceWritableRoot(
   return writableRoot
 }
 
-/** 将 ~/.proma/default-skills/ 的内容逐个复制到工作区 skills/ 目录 */
+/** 将 ~/.copis/default-skills/ 的内容逐个复制到工作区 skills/ 目录 */
 function copyDefaultSkills(workspaceSlug: string, options: { throwOnError?: boolean } = {}): void {
   const defaultDir = getDefaultSkillsDir()
   const targetDir = getWorkspaceSkillsDir(workspaceSlug)
@@ -575,6 +577,16 @@ function removeRetiredDefaultSkillsFromWorkspace(workspace: AgentWorkspace): voi
   }
 }
 
+/** 将已有工作区中的第一方默认 Skill 旧 slug 迁移到当前 slug。 */
+function migrateLegacyDefaultSkillSlugsInWorkspace(workspace: AgentWorkspace): void {
+  const skillDirs = [getWorkspaceSkillsDir(workspace.slug), getInactiveSkillsDir(workspace.slug)]
+  for (const skillDir of skillDirs) {
+    for (const alias of DEFAULT_SKILL_SLUG_ALIASES) {
+      migrateLegacySkillSlugDirectory(skillDir, alias.legacy, alias.canonical)
+    }
+  }
+}
+
 /**
  * 同步默认 Skills 到所有工作区。规则：
  * - 缺失：注入到 skills/（active），让升级后新增的内置 Skill 对老用户立即可用
@@ -608,6 +620,7 @@ export function upgradeDefaultSkillsInWorkspaces(): void {
   const index = readIndex()
 
   for (const workspace of index.workspaces) {
+    migrateLegacyDefaultSkillSlugsInWorkspace(workspace)
     removeRetiredDefaultSkillsFromWorkspace(workspace)
     if (defaultSkills.size === 0) continue
 
@@ -725,7 +738,7 @@ export function ensurePluginManifest(workspaceSlug: string, workspaceName: strin
   }
 
   const manifest = {
-    name: `proma-workspace-${workspaceSlug}`,
+    name: `copis-workspace-${workspaceSlug}`,
     version: '1.0.0',
   }
 
@@ -939,7 +952,7 @@ function scanSkillsInDir(dir: string, enabled: boolean): SkillMeta[] {
   return skills
 }
 
-/** 获取默认 Skills 的 slug 列表（来自 ~/.proma/default-skills/） */
+/** 获取默认 Skills 的 slug 列表（来自 ~/.copis/default-skills/） */
 export function getDefaultSkillSlugs(): string[] {
   const dir = getDefaultSkillsDir()
   if (!existsSync(dir)) return []
@@ -1619,7 +1632,7 @@ function isNewerVersion(a: string, b: string): boolean {
 interface WorkspaceConfig {
   attachedDirectories?: string[]
   attachedFiles?: string[]
-  worktreeRepos?: import('@proma/shared').WorkspaceWorktreeRepo[]
+  worktreeRepos?: import('@copis/shared').WorkspaceWorktreeRepo[]
 }
 
 function getWorkspaceConfigPath(workspaceSlug: string): string {
@@ -1727,11 +1740,11 @@ export function detachWorkspaceFile(workspaceSlug: string, filePath: string): st
  * 静默找不到 worktree）。同时保留 config 中仍然存在的手动配置项（如不在附加
  * 目录内的额外仓库），并自动过滤掉路径已不存在的陈旧条目。
  */
-export async function getWorktreeRepos(workspaceSlug: string): Promise<import('@proma/shared').WorkspaceWorktreeRepo[]> {
+export async function getWorktreeRepos(workspaceSlug: string): Promise<import('@copis/shared').WorkspaceWorktreeRepo[]> {
   const config = readWorkspaceConfig(workspaceSlug)
 
   // repoPath 归一化后去重
-  const byPath = new Map<string, import('@proma/shared').WorkspaceWorktreeRepo>()
+  const byPath = new Map<string, import('@copis/shared').WorkspaceWorktreeRepo>()
 
   // 1. 从附加目录自动探测 git 仓库根
   const attachedDirs = config.attachedDirectories ?? []
@@ -1765,7 +1778,7 @@ export async function getWorktreeRepos(workspaceSlug: string): Promise<import('@
   return Array.from(byPath.values()).sort((a, b) => (a.priority ?? 99) - (b.priority ?? 99))
 }
 
-export function addWorktreeRepo(workspaceSlug: string, repo: import('@proma/shared').WorkspaceWorktreeRepo): import('@proma/shared').WorkspaceWorktreeRepo[] {
+export function addWorktreeRepo(workspaceSlug: string, repo: import('@copis/shared').WorkspaceWorktreeRepo): import('@copis/shared').WorkspaceWorktreeRepo[] {
   const config = readWorkspaceConfig(workspaceSlug)
   const existing = config.worktreeRepos ?? []
 
@@ -1779,7 +1792,7 @@ export function addWorktreeRepo(workspaceSlug: string, repo: import('@proma/shar
   return updated
 }
 
-export function removeWorktreeRepo(workspaceSlug: string, repoPath: string): import('@proma/shared').WorkspaceWorktreeRepo[] {
+export function removeWorktreeRepo(workspaceSlug: string, repoPath: string): import('@copis/shared').WorkspaceWorktreeRepo[] {
   const config = readWorkspaceConfig(workspaceSlug)
   const existing = config.worktreeRepos ?? []
   const updated = existing.filter((r) => r.repoPath !== repoPath)

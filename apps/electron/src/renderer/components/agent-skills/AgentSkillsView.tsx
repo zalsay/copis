@@ -27,7 +27,7 @@ import { settingsOpenAtom, settingsTabAtom, toolSettingsFocusAtom, type ToolSett
 import { useProjectActions } from '@/hooks/useProjectActions'
 import { useCreateSession } from '@/hooks/useCreateSession'
 import { LocalProjectBadge } from '@/components/agent/LocalProjectBadge'
-import type { BuiltinMcpServerSummary, McpServerEntry, SkillMeta } from '@proma/shared'
+import type { BuiltinMcpServerSummary, McpServerEntry, SkillMeta } from '@copis/shared'
 import { useAgentSkillsData } from './useAgentSkillsData'
 import { SkillCard } from './SkillCard'
 import { McpCard } from './McpCard'
@@ -51,7 +51,7 @@ function buildSkillClassificationPrompt(input: {
     })
     .join('\n')
 
-  return `请帮我整理当前项目在 Proma 工作区中保存的 Skills 的分组。
+  return `请帮我整理当前项目在 Copis 工作区中保存的 Skills 的分组。
 
 项目：${input.workspaceName || '当前项目'}
 Skills 目录：${input.skillsDir}
@@ -173,7 +173,7 @@ export function AgentSkillsView(): React.ReactElement {
   const handleClassifySkills = React.useCallback(async (): Promise<void> => {
     if (classifyingSkills) return
     if (!data.skillsDir) {
-      toast.error('无法定位当前项目的 Proma 工作区 Skills 目录')
+      toast.error('无法定位当前项目的 Copis 工作区 Skills 目录')
       return
     }
     setClassifyingSkills(true)
@@ -511,7 +511,7 @@ function SkillsTab({
   onUpdate,
 }: SkillsTabProps): React.ReactElement {
   if (total === 0) {
-    return <EmptyState icon={<Blocks className="size-8 text-foreground/30" />} title="暂无 Skill" hint="可以在 Agent 模式下让 Proma 帮你联网查找并安装 Skill，或从其他项目导入。" />
+    return <EmptyState icon={<Blocks className="size-8 text-foreground/30" />} title="暂无 Skill" hint="可以在 Agent 模式下让 Copis 帮你联网查找并安装 Skill，或从其他项目导入。" />
   }
   if (customSkills.length === 0 && builtinSkills.length === 0) {
     return <EmptyState icon={<Search className="size-8 text-foreground/30" />} title="没有匹配的 Skill" hint="试试更换搜索关键词。" />
@@ -528,7 +528,7 @@ function SkillsTab({
         <SkillSection title="我的 Skills" skills={customSkills} isBuiltin={isBuiltin} updatingSkill={updatingSkill} onOpen={onOpen} onToggle={onToggle} onUpdate={onUpdate} />
       )}
       {builtinSkills.length > 0 && (
-        <SkillSection title="PROMA 内置" skills={builtinSkills} isBuiltin={isBuiltin} updatingSkill={updatingSkill} onOpen={onOpen} onToggle={onToggle} onUpdate={onUpdate} />
+        <SkillSection title="COPIS 内置" skills={builtinSkills} isBuiltin={isBuiltin} updatingSkill={updatingSkill} onOpen={onOpen} onToggle={onToggle} onUpdate={onUpdate} />
       )}
     </div>
   )
@@ -620,7 +620,7 @@ function McpTab({ userEntries, builtinServers, total, onOpen, onOpenBuiltin, onT
       <EmptyState
         icon={<Plus className="size-8 text-foreground/30" />}
         title="还没有 MCP 服务器"
-        hint="点击右上角「添加服务器」开始，或在 Agent 模式下让 Proma 帮你查找并配置。"
+        hint="点击右上角「添加服务器」开始，或在 Agent 模式下让 Copis 帮你查找并配置。"
         action={
           <button
             type="button"
@@ -656,19 +656,19 @@ function McpTab({ userEntries, builtinServers, total, onOpen, onOpenBuiltin, onT
       )}
 
       {builtinServers.length > 0 && (
-        <McpSection title="Proma 内置" count={builtinServers.length}>
+        <McpSection title="Copis 内置" count={builtinServers.length}>
           {builtinServers.map((server) => (
             <McpCard
               key={server.id}
               name={server.displayName}
               entry={{
                 type: 'stdio',
-                command: 'Proma 运行时注入',
+                command: 'Copis 运行时注入',
                 enabled: server.enabled,
                 isBuiltin: true,
               }}
               description={server.description}
-              targetLabel={server.availabilityReason ?? 'Proma 运行时注入'}
+              targetLabel={server.availabilityReason ?? 'Copis 运行时注入'}
               statusLabel={getBuiltinMcpStatus(server).label}
               statusTone={getBuiltinMcpStatus(server).tone}
               readOnly

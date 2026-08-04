@@ -46,7 +46,7 @@ import {
 import { workingClientConfigAtom } from './atoms/working-atoms'
 import { updateStatusAtom, initializeUpdater } from './atoms/updater'
 import { automationsAtom } from './atoms/automation-atoms'
-import { calendarEventsAtom, calendarPlanningGroupsAtom, planningTagsAtom, todoPlanningGroupsAtom, todosAtom } from './atoms/planning-atoms'
+import { calendarEventsAtom, planningTagsAtom, todoPlanningGroupsAtom, todosAtom } from './atoms/planning-atoms'
 import {
   notificationsEnabledAtom,
   notificationSoundEnabledAtom,
@@ -76,13 +76,13 @@ import { appModeAtom } from './atoms/app-mode'
 import {
   COPIS_WORKING_CHANNEL_ID,
   COPIS_WORKING_FAST_MODEL_ID,
-} from '@proma/shared'
-import type { FeishuBotBridgeState, FeishuBridgeState, DingTalkBotBridgeState, DingTalkBridgeState } from '@proma/shared'
+} from '@copis/shared'
+import type { FeishuBotBridgeState, FeishuBridgeState, DingTalkBotBridgeState, DingTalkBridgeState } from '@copis/shared'
 import { Toaster } from './components/ui/sonner'
 import { toast } from 'sonner'
 import { ArrowUpRight } from 'lucide-react'
-import { diffCapabilities } from '@proma/shared'
-import type { WorkspaceCapabilities } from '@proma/shared'
+import { diffCapabilities } from '@copis/shared'
+import type { WorkspaceCapabilities } from '@copis/shared'
 import { showCapabilityChangeToasts } from './lib/capabilities-toast'
 import { GlobalShortcuts } from './components/shortcuts/GlobalShortcuts'
 import { VoiceDictationApp } from './components/voice-dictation/VoiceDictationApp'
@@ -103,11 +103,12 @@ const isVoiceDictationIndicatorWindow = new URLSearchParams(window.location.sear
 const isDetachedPreviewWindow = new URLSearchParams(window.location.search).get('window') === 'detached-preview'
 const isPlanningWindow = new URLSearchParams(window.location.search).get('window') === 'planning'
 const isAgentIslandWindow = new URLSearchParams(window.location.search).get('window') === 'agent-island'
-const isMainWindow = !isQuickTaskWindow && !isVoiceDictationIndicatorWindow && !isDetachedPreviewWindow && !isPlanningWindow && !isAgentIslandWindow
+const isWebBookmarksWindow = new URLSearchParams(window.location.search).get('window') === 'web-bookmarks'
+const isMainWindow = !isQuickTaskWindow && !isVoiceDictationIndicatorWindow && !isDetachedPreviewWindow && !isPlanningWindow && !isAgentIslandWindow && !isWebBookmarksWindow
 
 // 主窗口和独立规划窗口均由内部面板管理滚动，避免页面本身出现第二层滚动。
 if (isMainWindow || isPlanningWindow) {
-  document.documentElement.classList.add('proma-main-window')
+  document.documentElement.classList.add('copis-main-window')
 }
 
 /**
@@ -486,12 +487,11 @@ function PlanningInitializer(): null {
   const setTodos = useSetAtom(todosAtom)
   const setCalendarEvents = useSetAtom(calendarEventsAtom)
   const setTodoGroups = useSetAtom(todoPlanningGroupsAtom)
-  const setCalendarGroups = useSetAtom(calendarPlanningGroupsAtom)
   const setTags = useSetAtom(planningTagsAtom)
 
   useEffect(() => {
     let disposed = false
-    const latestRequest = { todos: 0, calendarEvents: 0, todoGroups: 0, calendarGroups: 0, tags: 0 }
+    const latestRequest = { todos: 0, calendarEvents: 0, todoGroups: 0, tags: 0 }
     const loadTodos = (): void => {
       const requestId = ++latestRequest.todos
       void window.electronAPI.listTodos().then((todos) => {
@@ -510,12 +510,6 @@ function PlanningInitializer(): null {
         if (!disposed && requestId === latestRequest.todoGroups) setTodoGroups(groups)
       }).catch((error: unknown) => console.error('[任务/日程] 加载 Todo 分组失败:', error))
     }
-    const loadCalendarGroups = (): void => {
-      const requestId = ++latestRequest.calendarGroups
-      void window.electronAPI.listPlanningGroups('calendar').then((groups) => {
-        if (!disposed && requestId === latestRequest.calendarGroups) setCalendarGroups(groups)
-      }).catch((error: unknown) => console.error('[任务/日程] 加载日程分组失败:', error))
-    }
     const loadTags = (): void => {
       const requestId = ++latestRequest.tags
       void window.electronAPI.listPlanningTags().then((tags) => {
@@ -527,13 +521,12 @@ function PlanningInitializer(): null {
       if (includes('todos')) loadTodos()
       if (includes('calendar_events')) loadCalendarEvents()
       if (includes('todo_groups')) loadTodoGroups()
-      if (includes('calendar_groups')) loadCalendarGroups()
       if (includes('tags')) loadTags()
     }
     load()
     const unsubscribe = window.electronAPI.onPlanningChanged((change) => load(change.resources))
     return () => { disposed = true; unsubscribe() }
-  }, [setCalendarEvents, setCalendarGroups, setTags, setTodoGroups, setTodos])
+  }, [setCalendarEvents, setTags, setTodoGroups, setTodos])
 
   return null
 }
@@ -1047,6 +1040,15 @@ if (isQuickTaskWindow) {
       <React.StrictMode>
         <ThemeInitializer />
         <AgentIslandApp />
+      </React.StrictMode>
+    )
+  })
+} else if (isWebBookmarksWindow) {
+  import('./components/web-browser/WebBookmarksWindowApp').then(({ WebBookmarksWindowApp }) => {
+    ReactDOM.createRoot(document.getElementById('root')!).render(
+      <React.StrictMode>
+        <ThemeInitializer />
+        <WebBookmarksWindowApp />
       </React.StrictMode>
     )
   })

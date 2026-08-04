@@ -10,7 +10,7 @@ let manager: AgentSessionManager
 let contextPrompt: AgentSessionContextPrompt
 let tempHome: string
 const originalHome = process.env.HOME
-const originalPromaDev = process.env.PROMA_DEV
+const originalCopisDev = process.env.COPIS_DEV
 const originalClaudeConfigDir = process.env.CLAUDE_CONFIG_DIR
 
 mock.module('electron', () => ({
@@ -44,13 +44,13 @@ function jsonl(rows: string[]): string {
 }
 
 function writeAgentSessionJsonl(sessionId: string, rows: string[]): void {
-  const dir = join(tempHome, '.proma', 'agent-sessions')
+  const dir = join(tempHome, '.copis', 'agent-sessions')
   mkdirSync(dir, { recursive: true })
   writeFileSync(join(dir, `${sessionId}.jsonl`), jsonl(rows), 'utf-8')
 }
 
 function writeSdkSessionJsonl(sdkSessionId: string, rows: string[]): void {
-  const dir = join(tempHome, '.proma', 'sdk-config', 'projects', 'test-project')
+  const dir = join(tempHome, '.copis', 'sdk-config', 'projects', 'test-project')
   mkdirSync(dir, { recursive: true })
   writeFileSync(join(dir, `${sdkSessionId}.jsonl`), jsonl(rows), 'utf-8')
 }
@@ -62,7 +62,7 @@ function writeAgentSessionsIndex(sessions: Array<{
   createdAt: number
   updatedAt: number
 }>): void {
-  const dir = join(tempHome, '.proma')
+  const dir = join(tempHome, '.copis')
   mkdirSync(dir, { recursive: true })
   writeFileSync(join(dir, 'agent-sessions.json'), JSON.stringify({ version: 1, sessions }), 'utf-8')
 }
@@ -74,7 +74,7 @@ function writeAgentWorkspacesIndex(workspaces: Array<{
   createdAt: number
   updatedAt: number
 }>): void {
-  const dir = join(tempHome, '.proma')
+  const dir = join(tempHome, '.copis')
   mkdirSync(dir, { recursive: true })
   writeFileSync(join(dir, 'agent-workspaces.json'), JSON.stringify({ version: 2, workspaces }), 'utf-8')
 }
@@ -90,9 +90,9 @@ function createIndexedSessions(count: number) {
 }
 
 beforeAll(async () => {
-  tempHome = mkdtempSync(join(os.tmpdir(), 'proma-agent-session-manager-'))
+  tempHome = mkdtempSync(join(os.tmpdir(), 'copis-agent-session-manager-'))
   process.env.HOME = tempHome
-  process.env.PROMA_DEV = '0'
+  process.env.COPIS_DEV = '0'
   delete process.env.CLAUDE_CONFIG_DIR
   manager = await import('./agent-session-manager')
   contextPrompt = await import('./agent-session-context-prompt')
@@ -104,10 +104,10 @@ afterAll(() => {
   } else {
     process.env.HOME = originalHome
   }
-  if (originalPromaDev === undefined) {
-    delete process.env.PROMA_DEV
+  if (originalCopisDev === undefined) {
+    delete process.env.COPIS_DEV
   } else {
-    process.env.PROMA_DEV = originalPromaDev
+    process.env.COPIS_DEV = originalCopisDev
   }
   if (originalClaudeConfigDir === undefined) {
     delete process.env.CLAUDE_CONFIG_DIR
@@ -167,8 +167,8 @@ describe('Agent 会话 JSONL 读取', () => {
 
 describe('Agent 会话 runtime 元数据', () => {
   test('Given 已保存 OpenAI medium 默认值 When 新建 Pi 或 Claude 会话 Then 默认并持久化 medium', () => {
-    const settingsPath = join(tempHome, '.proma', 'settings.json')
-    mkdirSync(join(tempHome, '.proma'), { recursive: true })
+    const settingsPath = join(tempHome, '.copis', 'settings.json')
+    mkdirSync(join(tempHome, '.copis'), { recursive: true })
     writeFileSync(settingsPath, JSON.stringify({
       agentThinking: { type: 'adaptive' },
       agentEffort: 'max',
@@ -195,10 +195,10 @@ describe('Agent 会话 runtime 元数据', () => {
   })
 
   test('Given 新安装用户保存关闭思考 When 连续新建会话 Then 不被旧版迁移改回 high', () => {
-    const settingsPath = join(tempHome, '.proma', 'settings.json')
-    const indexPath = join(tempHome, '.proma', 'agent-sessions.json')
+    const settingsPath = join(tempHome, '.copis', 'settings.json')
+    const indexPath = join(tempHome, '.copis', 'agent-sessions.json')
     const indexBackupPath = `${indexPath}.bak`
-    mkdirSync(join(tempHome, '.proma'), { recursive: true })
+    mkdirSync(join(tempHome, '.copis'), { recursive: true })
     rmSync(indexPath, { force: true })
     rmSync(indexBackupPath, { force: true })
     writeFileSync(settingsPath, JSON.stringify({

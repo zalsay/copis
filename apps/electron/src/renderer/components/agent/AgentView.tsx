@@ -26,7 +26,6 @@ import { PermissionBanner } from './PermissionBanner'
 import { PermissionModeSelector } from './PermissionModeSelector'
 import { AskUserBanner } from './AskUserBanner'
 import { ExitPlanModeBanner } from './ExitPlanModeBanner'
-import { PlanModeDashedBorder } from './PlanModeDashedBorder'
 import { ModelSelector } from '@/components/chat/ModelSelector'
 import { AttachmentPreviewItem } from '@/components/chat/AttachmentPreviewItem'
 import { QuotedSelectionChip } from '@/components/diff/QuotedSelectionChip'
@@ -109,7 +108,7 @@ import { AgentSessionProvider } from '@/contexts/session-context'
 import { draftSessionIdsAtom } from '@/atoms/draft-session-atoms'
 import { sendWithCmdEnterAtom } from '@/atoms/shortcut-atoms'
 import { useOpenPreview } from '@/components/diff/preview-opener'
-import type { AgentRuntime, AgentSendInput, AgentPendingFile, FileDialogLargeFile, FileDialogResult, ModelOption, SDKMessage, SDKUserMessage, ProviderType, WorkingMode } from '@proma/shared'
+import type { AgentRuntime, AgentSendInput, AgentPendingFile, FileDialogLargeFile, FileDialogResult, ModelOption, SDKMessage, SDKUserMessage, ProviderType, WorkingMode } from '@copis/shared'
 import './AgentView.css'
 import {
   COPIS_WORKING_CHANNEL_ID,
@@ -120,7 +119,7 @@ import {
   isCodexFastModeSupportedModel,
   MAX_ATTACHMENT_SIZE,
   workingModeToModelId,
-} from '@proma/shared'
+} from '@copis/shared'
 import { fileToBase64, formatFileNames, getFileParentPath } from '@/lib/file-utils'
 import { getFilePanelDragData, INSERT_FILE_MENTION_EVENT, type FilePanelDragItem } from '@/lib/file-panel-drag'
 import { buildQuotedSelectionBlock } from '@/lib/quoted-selection'
@@ -1838,7 +1837,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
     const additionalDirectoriesForRun = createBaseAdditionalDirectories()
 
     if (streaming) {
-      // Agent 正在输出时，用户消息默认进入 Proma 托管队列，不打断当前 turn。
+      // Agent 正在输出时，用户消息默认进入 Copis 托管队列，不打断当前 turn。
       const attachmentContext = pendingFilesSnapshot.length > 0
         ? await preparePendingFilesForSend(pendingFilesSnapshot, additionalDirectoriesForRun)
         : null
@@ -2072,7 +2071,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
     const localUuid = crypto.randomUUID()
 
     // 1. 立即注入合成用户消息（/compact 气泡立刻可见，与普通发送路径一致）
-    const syntheticMsg: import('@proma/shared').SDKMessage = {
+    const syntheticMsg: import('@copis/shared').SDKMessage = {
       type: 'user',
       uuid: localUuid,
       message: {
@@ -2080,7 +2079,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
       },
       parent_tool_use_id: null,
       _createdAt: streamStartedAt,
-    } as unknown as import('@proma/shared').SDKMessage
+    } as unknown as import('@copis/shared').SDKMessage
 
     store.set(liveMessagesMapAtom, (prev) => {
       const map = new Map(prev)
@@ -2387,8 +2386,8 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
     const handler = (): void => {
       if (streaming) handleStop()
     }
-    window.addEventListener('proma:stop-generation', handler)
-    return () => window.removeEventListener('proma:stop-generation', handler)
+    window.addEventListener('copis:stop-generation', handler)
+    return () => window.removeEventListener('copis:stop-generation', handler)
   }, [streaming, handleStop])
 
   // 监听快捷键系统分发的 focus-input 事件（Cmd+L）
@@ -2397,8 +2396,8 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
       const proseMirror = document.querySelector('[data-input-mode="agent"] .ProseMirror') as HTMLElement | null
       proseMirror?.focus()
     }
-    window.addEventListener('proma:focus-input', handler)
-    return () => window.removeEventListener('proma:focus-input', handler)
+    window.addEventListener('copis:focus-input', handler)
+    return () => window.removeEventListener('copis:focus-input', handler)
   }, [])
 
   // 监听文件面板三点菜单「引用到 Agent」事件：在输入框插入 @file 引用
@@ -2754,14 +2753,13 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
           <div
             className={cn(
               'rounded-[17px] border-[0.5px] border-border bg-background/70 backdrop-blur-sm transition-all duration-200',
-              (isPlanMode || isPermissionPlanMode) && !isDragOver && 'plan-mode-border',
+              (isPlanMode || isPermissionPlanMode) && !isDragOver && 'plan-mode-input',
               isDragOver && 'border-[2px] border-dashed border-[#2ecc71] bg-[#2ecc71]/[0.03]'
             )}
             onDragOver={handleDragOver}
             onDragLeave={handleDragLeave}
             onDrop={handleDrop}
           >
-            {(isPlanMode || isPermissionPlanMode) && !isDragOver && <PlanModeDashedBorder />}
             {/* 无 Agent 渠道或无可用模型提示 */}
             {(!agentChannelId || !hasAvailableModel) && (
               <div className="flex items-center gap-2 px-4 py-2 text-sm text-amber-600 dark:text-amber-400">

@@ -2,7 +2,7 @@
  * Pi Runtime 用户 MCP 工具桥接层
  *
  * Claude runtime 继续使用 Claude Agent SDK 原生 mcpServers；Pi SDK 当前没有等价
- * mcpServers 参数，因此 Proma 在主进程连接用户配置的 MCP server，并把 MCP tools
+ * mcpServers 参数，因此 Copis 在主进程连接用户配置的 MCP server，并把 MCP tools
  * 映射成 Pi customTools。
  */
 
@@ -258,7 +258,7 @@ class PiMcpClientManager {
     const transport = createTransport(serverName, config)
     if (!transport) throw new Error(`无法创建 MCP transport: ${serverName}`)
 
-    const client = new Client({ name: 'proma-pi-agent-mcp-bridge', version: '0.1.0' }, { capabilities: {} })
+    const client = new Client({ name: 'copis-pi-agent-mcp-bridge', version: '0.1.0' }, { capabilities: {} })
     await client.connect(transport, { timeout: getTimeoutMs(config) })
 
     const previousOnError = transport.onerror
@@ -297,7 +297,7 @@ function createPiMcpToolDefinition(binding: McpToolBinding): ToolDefinition {
 }
 
 /**
- * 将 Proma 已构建的 MCP server 配置转换为 Pi customTools。
+ * 将 Copis 已构建的 MCP server 配置转换为 Pi customTools。
  *
  * 注意：本函数仅供 Pi runtime 使用；Claude runtime 仍直接把 mcpServers 交给
  * Claude Agent SDK，不经过这里。

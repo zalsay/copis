@@ -12,7 +12,7 @@ import type {
   AgentIslandPlanQuotaSnapshot,
   AgentIslandSessionSnapshot,
   AgentIslandWindowSnapshot,
-} from '@proma/shared'
+} from '@copis/shared'
 import './agent-island.css'
 
 const SURFACE_TRANSITION_MS = 180
@@ -66,11 +66,11 @@ function formatTime(timestamp: number | undefined, allDay = false): string {
 
 function getHeaderCopy(phase: AgentIslandPhase | undefined): { eyebrow: string; title: string } {
   switch (phase) {
-    case 'needs-interaction': return { eyebrow: 'PROMA · HANDOFF', title: '需要你接手' }
-    case 'running': return { eyebrow: 'PROMA · AGENT', title: '正在执行' }
-    case 'completed': return { eyebrow: 'PROMA · AGENT', title: '任务已完成' }
-    case 'error': return { eyebrow: 'PROMA · AGENT', title: '执行需要关注' }
-    default: return { eyebrow: 'PROMA · REMINDER', title: '即将开始' }
+    case 'needs-interaction': return { eyebrow: 'COPIS · HANDOFF', title: '需要你接手' }
+    case 'running': return { eyebrow: 'COPIS · AGENT', title: '正在执行' }
+    case 'completed': return { eyebrow: 'COPIS · AGENT', title: '任务已完成' }
+    case 'error': return { eyebrow: 'COPIS · AGENT', title: '执行需要关注' }
+    default: return { eyebrow: 'COPIS · REMINDER', title: '即将开始' }
   }
 }
 
@@ -231,9 +231,9 @@ export function AgentIslandApp(): React.ReactElement {
   const primarySession = state.sessions[0]
   const planningIndicator = getPlanningIndicator(snapshot)
   const compactLabel = primarySession
-    ? `Proma · ${PHASE_LABEL[primarySession.phase]}`
+    ? `Copis · ${PHASE_LABEL[primarySession.phase]}`
     : state.idleDashboard
-      ? state.recentSessions.length === 0 ? 'Proma · 额度概览' : 'Proma · 最近会话'
+      ? state.recentSessions.length === 0 ? 'Copis · 额度概览' : 'Copis · 最近会话'
       : planningIndicator?.label ?? '工作提醒'
   const displayedSessions = state.idleDashboard ? state.recentSessions : state.sessions
   const header = getHeaderCopy(primarySession?.phase)
@@ -256,7 +256,7 @@ export function AgentIslandApp(): React.ReactElement {
                 <strong>{header.title}</strong>
               </button>
               <button className="island-open-button" type="button" onClick={openMain}>
-                打开 Proma <ArrowUpRight size={13} aria-hidden="true" />
+                打开 Copis <ArrowUpRight size={13} aria-hidden="true" />
               </button>
             </header>
           ) : (

@@ -7,21 +7,31 @@
 
 import { BrowserWindow, shell, WebContentsView } from 'electron'
 import { randomUUID } from 'node:crypto'
-import { WEB_IPC_CHANNELS } from '@proma/shared'
+import { join } from 'node:path'
+import { WEB_IPC_CHANNELS } from '@copis/shared'
+import { getPersistedWebTabs, savePersistedWebTabs } from './web-tab-session-service'
 import type {
   CreateWebTabInput,
   NavigateWebTabInput,
+  OpenWebBookmarksWindowInput,
+  ResizeWebBookmarksWindowInput,
   SendWebTabCdpCommandInput,
   UpdateWebTabBoundsInput,
   WebTabBounds,
   WebTabState,
   WebTabsSnapshot,
-} from '@proma/shared'
+} from '@copis/shared'
 
 interface WebTabRecord {
   state: WebTabState
   view: WebContentsView
   bounds: WebTabBounds
+}
+
+interface BookmarksWindowState {
+  anchorBounds: WebTabBounds
+  width: number
+  height: number
 }
 
 const DEFAULT_URL = 'about:blank'
@@ -30,6 +40,10 @@ const SEARCH_URL = 'https://www.google.com/search?q='
 
 let hostWindow: BrowserWindow | null = null
 let activeTabId: string | null = null
+let isRestoringPersistedTabs = false
+let isDisposingWebTabs = false
+let bookmarksWindow: BrowserWindow | null = null
+let bookmarksWindowState: BookmarksWindowState | null = null
 const records = new Map<string, WebTabRecord>()
 
 function isHostAvailable(): boolean {
@@ -44,6 +58,16 @@ function getFallbackTitle(url: string): string {
   } catch {
     return '网页'
   }
+}
+
+function selectFaviconUrl(favicons: string[]): string | null {
+  for (const favicon of favicons) {
+    const normalized = favicon.trim()
+    if (/^https?:\/\//i.test(normalized) || /^data:image\//i.test(normalized)) {
+      return normalized
+    }
+  }
+  return null
 }
 
 function isAllowedWebUrl(url: string): boolean {
@@ -91,14 +115,63 @@ function getSnapshot(): WebTabsSnapshot {
   }
 }
 
+function persistTabs(): void {
+  if (isRestoringPersistedTabs || isDisposingWebTabs) return
+
+  const snapshot = getSnapshot()
+  const activeTabIndex = snapshot.activeTabId === null
+    ? null
+    : snapshot.tabs.findIndex((tab) => tab.id === snapshot.activeTabId)
+  try {
+    savePersistedWebTabs({
+      tabs: snapshot.tabs.map((tab) => ({ url: tab.url })),
+      activeTabIndex: activeTabIndex !== null && activeTabIndex >= 0 ? activeTabIndex : null,
+    })
+  } catch (error) {
+    console.error('[网页页签] 更新恢复状态失败:', error)
+  }
+}
+
+function restorePersistedWebTabs(): void {
+  const session = getPersistedWebTabs()
+  if (session.tabs.length === 0) return
+
+  const restoredTabIds: string[] = []
+  activeTabId = null
+  isRestoringPersistedTabs = true
+  try {
+    for (const tab of session.tabs) {
+      const existingIds = new Set(records.keys())
+      try {
+        createWebTab({ url: tab.url, activate: false })
+        const restoredId = Array.from(records.keys()).find((id) => !existingIds.has(id))
+        if (restoredId) restoredTabIds.push(restoredId)
+      } catch (error) {
+        console.warn(`[网页页签] 恢复地址失败: ${tab.url}`, error)
+      }
+    }
+  } finally {
+    isRestoringPersistedTabs = false
+  }
+
+  if (session.activeTabIndex === null) {
+    activeTabId = null
+  } else {
+    activeTabId = restoredTabIds[session.activeTabIndex] ?? restoredTabIds[0] ?? null
+  }
+  applyActiveView()
+  persistTabs()
+  console.log(`[网页页签] 已恢复 ${restoredTabIds.length} 个网页页签`)
+}
+
 function emitSnapshot(): void {
   if (!isHostAvailable()) return
   hostWindow!.webContents.send(WEB_IPC_CHANNELS.STATE_CHANGED, getSnapshot())
 }
 
-function refreshState(record: WebTabRecord, updates?: Partial<WebTabState>): void {
-  const contents = record.view.webContents
-  if (contents.isDestroyed()) return
+function refreshState(record: WebTabRecord | undefined, updates?: Partial<WebTabState>): void {
+  const contents = record?.view?.webContents
+  if (!record || !contents || contents.isDestroyed()) return
 
   record.state = {
     ...record.state,
@@ -108,6 +181,7 @@ function refreshState(record: WebTabRecord, updates?: Partial<WebTabState>): voi
     canGoForward: contents.canGoForward(),
     ...updates,
   }
+  persistTabs()
   emitSnapshot()
 }
 
@@ -152,15 +226,19 @@ function installWebContentsHandlers(record: WebTabRecord): void {
   const contents = record.view.webContents
 
   contents.on('did-start-loading', () => {
-    refreshState(record, { isLoading: true })
+    refreshState(record, { isLoading: true, faviconUrl: null })
   })
 
   contents.on('did-stop-loading', () => {
     refreshState(record, { isLoading: false })
   })
 
+  contents.on('page-favicon-updated', (_event, favicons) => {
+    refreshState(record, { faviconUrl: selectFaviconUrl(favicons) })
+  })
+
   contents.on('did-navigate', (_event, url) => {
-    refreshState(record, { url, isLoading: false, title: getFallbackTitle(url) })
+    refreshState(record, { url, isLoading: false, title: getFallbackTitle(url), faviconUrl: null })
   })
 
   contents.on('did-navigate-in-page', (_event, url, isMainFrame) => {
@@ -178,17 +256,19 @@ function installWebContentsHandlers(record: WebTabRecord): void {
       url: validatedURL || record.state.url,
       title: errorDescription || '网页加载失败',
       isLoading: false,
+      faviconUrl: null,
     })
   })
 
   contents.on('render-process-gone', () => {
-    refreshState(record, { title: '网页进程已退出', isLoading: false })
+    refreshState(record, { title: '网页进程已退出', isLoading: false, faviconUrl: null })
   })
 
   contents.on('destroyed', () => {
     if (records.get(record.state.id) !== record) return
     records.delete(record.state.id)
     if (activeTabId === record.state.id) activeTabId = null
+    persistTabs()
     emitSnapshot()
   })
 
@@ -228,36 +308,177 @@ export function setWebTabHostWindow(window: BrowserWindow): void {
   for (const record of records.values()) {
     hostWindow.contentView.addChildView(record.view)
   }
+  if (records.size === 0) restorePersistedWebTabs()
   applyActiveView()
+}
+
+const DEFAULT_BOOKMARKS_WINDOW_WIDTH = 384
+const DEFAULT_BOOKMARKS_WINDOW_HEIGHT = 480
+
+function positionBookmarksWindow(): void {
+  if (!bookmarksWindow || bookmarksWindow.isDestroyed() || !bookmarksWindowState || !isHostAvailable()) return
+
+  const hostBounds = hostWindow!.getContentBounds()
+  const { anchorBounds, width, height } = bookmarksWindowState
+  const anchorX = hostBounds.x + anchorBounds.x
+  const anchorY = hostBounds.y + anchorBounds.y + anchorBounds.height
+  const maxX = hostBounds.x + Math.max(0, hostBounds.width - width)
+  const x = Math.max(hostBounds.x, Math.min(anchorX, maxX))
+  const contentBottom = hostBounds.y + hostBounds.height
+  const y = anchorY + height <= contentBottom
+    ? anchorY
+    : Math.max(hostBounds.y, anchorY - height)
+
+  bookmarksWindow.setContentBounds({ x: Math.round(x), y: Math.round(y), width, height })
+}
+
+/** 打开原生收藏夹浮层，确保它显示在 WebContentsView 之上。 */
+export function openWebBookmarksWindow(input: OpenWebBookmarksWindowInput): void {
+  if (!isHostAvailable()) return
+  const { bounds } = input
+  if (![bounds.x, bounds.y, bounds.width, bounds.height].every(Number.isFinite)) return
+
+  const nextState: BookmarksWindowState = {
+    anchorBounds: {
+      x: Math.round(bounds.x),
+      y: Math.round(bounds.y),
+      width: Math.max(0, Math.round(bounds.width)),
+      height: Math.max(0, Math.round(bounds.height)),
+    },
+    width: bookmarksWindowState?.width ?? DEFAULT_BOOKMARKS_WINDOW_WIDTH,
+    height: bookmarksWindowState?.height ?? DEFAULT_BOOKMARKS_WINDOW_HEIGHT,
+  }
+
+  if (bookmarksWindow && !bookmarksWindow.isDestroyed()) {
+    bookmarksWindowState = nextState
+    positionBookmarksWindow()
+    bookmarksWindow.show()
+    bookmarksWindow.focus()
+    return
+  }
+
+  const rendererUrl = hostWindow!.webContents.getURL()
+  if (!rendererUrl) return
+
+  const window = new BrowserWindow({
+    parent: hostWindow!,
+    show: false,
+    frame: false,
+    transparent: true,
+    resizable: false,
+    movable: false,
+    minimizable: false,
+    maximizable: false,
+    skipTaskbar: true,
+    hasShadow: true,
+    useContentSize: true,
+    width: nextState.width,
+    height: nextState.height,
+    webPreferences: {
+      preload: join(__dirname, 'preload.cjs'),
+      contextIsolation: true,
+      nodeIntegration: false,
+    },
+  })
+  bookmarksWindow = window
+  bookmarksWindowState = nextState
+
+  const reposition = (): void => positionBookmarksWindow()
+  hostWindow!.on('resize', reposition)
+  hostWindow!.on('move', reposition)
+  window.on('closed', () => {
+    hostWindow?.removeListener('resize', reposition)
+    hostWindow?.removeListener('move', reposition)
+    if (bookmarksWindow === window) {
+      bookmarksWindow = null
+      bookmarksWindowState = null
+    }
+  })
+  window.on('blur', () => {
+    setTimeout(() => {
+      if (!window.isDestroyed() && !window.isFocused()) closeWebBookmarksWindow()
+    }, 0)
+  })
+
+  positionBookmarksWindow()
+  window.once('ready-to-show', () => {
+    if (window.isDestroyed()) return
+    positionBookmarksWindow()
+    window.show()
+    window.focus()
+  })
+  void window.loadURL((() => {
+    try {
+      const url = new URL(rendererUrl)
+      url.searchParams.set('window', 'web-bookmarks')
+      return url.toString()
+    } catch {
+      return rendererUrl
+    }
+  })()).catch((error: unknown) => {
+    console.error('[网页收藏夹] 浮层窗口加载失败:', error)
+    closeWebBookmarksWindow()
+  })
+}
+
+/** 调整原生收藏夹浮层尺寸，避免透明窗口拦截窗口外的网页点击。 */
+export function resizeWebBookmarksWindow(input: ResizeWebBookmarksWindowInput): void {
+  if (!bookmarksWindow || bookmarksWindow.isDestroyed() || !bookmarksWindowState) return
+  if (![input.width, input.height].every(Number.isFinite)) return
+
+  bookmarksWindowState = {
+    ...bookmarksWindowState,
+    width: Math.min(640, Math.max(320, Math.ceil(input.width))),
+    height: Math.min(760, Math.max(180, Math.ceil(input.height))),
+  }
+  positionBookmarksWindow()
+}
+
+/** 关闭原生收藏夹浮层。 */
+export function closeWebBookmarksWindow(): void {
+  const window = bookmarksWindow
+  bookmarksWindow = null
+  bookmarksWindowState = null
+  if (window && !window.isDestroyed()) window.close()
+}
+
+/** 保存当前网页页签，供应用退出前调用。 */
+export function saveWebTabsSession(): void {
+  persistTabs()
 }
 
 /** 释放所有网页页签及原生视图。 */
 export function disposeWebTabs(): void {
+  closeWebBookmarksWindow()
   const currentHost = hostWindow
   hostWindow = null
   activeTabId = null
 
-  for (const record of records.values()) {
-    try {
-      if (currentHost && !currentHost.isDestroyed()) {
-        currentHost.contentView.removeChildView(record.view)
+  try {
+    for (const record of records.values()) {
+      try {
+        if (currentHost && !currentHost.isDestroyed()) {
+          currentHost.contentView.removeChildView(record.view)
+        }
+      } catch {
+        // 窗口销毁过程中移除子视图可能已经由 Electron 自动完成。
       }
-    } catch {
-      // 窗口销毁过程中移除子视图可能已经由 Electron 自动完成。
-    }
 
-    try {
-      const cdp = record.view.webContents.debugger
-      if (cdp.isAttached()) cdp.detach()
-    } catch {
-      // 网页进程可能已经退出，忽略清理阶段错误。
-    }
+      try {
+        const cdp = record.view.webContents.debugger
+        if (cdp.isAttached()) cdp.detach()
+      } catch {
+        // 网页进程可能已经退出，忽略清理阶段错误。
+      }
 
-    if (!record.view.webContents.isDestroyed()) {
-      record.view.webContents.close({ waitForBeforeUnload: false })
+      if (!record.view.webContents.isDestroyed()) {
+        record.view.webContents.close({ waitForBeforeUnload: false })
+      }
     }
+  } finally {
+    records.clear()
+    isDisposingWebTabs = false
   }
-  records.clear()
 }
 
 /** 获取当前网页页签快照。 */
@@ -286,6 +507,7 @@ export function createWebTab(input: CreateWebTabInput = {}): WebTabsSnapshot {
       title: getFallbackTitle(url),
       url,
       isLoading: url !== DEFAULT_URL,
+      faviconUrl: null,
       canGoBack: false,
       canGoForward: false,
       cdpAttached: false,
@@ -301,6 +523,7 @@ export function createWebTab(input: CreateWebTabInput = {}): WebTabsSnapshot {
   attachCdp(record)
 
   if (input.activate !== false) activeTabId = id
+  persistTabs()
   applyActiveView()
   emitSnapshot()
 
@@ -320,6 +543,7 @@ export function activateWebTab(tabId: string | null): WebTabsSnapshot {
     throw new Error('网页页签不存在')
   }
   activeTabId = tabId
+  persistTabs()
   applyActiveView()
   emitSnapshot()
   return getSnapshot()
@@ -353,6 +577,7 @@ export function closeWebTab(tabId: string): WebTabsSnapshot {
   }
 
   if (!record.view.webContents.isDestroyed()) record.view.webContents.close({ waitForBeforeUnload: false })
+  persistTabs()
   applyActiveView()
   emitSnapshot()
   return getSnapshot()
@@ -369,9 +594,11 @@ export function navigateWebTab(input: NavigateWebTabInput): WebTabsSnapshot {
     url,
     title: getFallbackTitle(url),
     isLoading: url !== DEFAULT_URL,
+    faviconUrl: null,
     canGoBack: record.view.webContents.canGoBack(),
     canGoForward: record.view.webContents.canGoForward(),
   }
+  persistTabs()
   emitSnapshot()
 
   void record.view.webContents.loadURL(url).catch((error: unknown) => {

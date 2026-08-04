@@ -174,7 +174,10 @@ function adaptSdkMessage(sessionId: string, message: SDKMessage): WorkingEvent[]
   return events
 }
 
-function adaptPromaEvent(sessionId: string, event: Extract<AgentStreamPayload, { kind: 'proma_event' }>['event']): WorkingEvent[] {
+function adaptCopisEvent(
+  sessionId: string,
+  event: Extract<AgentStreamPayload, { kind: 'copis_event' | 'proma_event' }>['event'],
+): WorkingEvent[] {
   switch (event.type) {
     case 'external_run_started':
       return [{
@@ -218,11 +221,11 @@ function adaptLegacyEvent(sessionId: string, event: AgentEvent): WorkingEvent[] 
   }
 }
 
-/** 将当前 Proma IPC 流映射为方案中的 Working 事件。 */
+/** 将当前 Copis IPC 流映射为方案中的 Working 事件。 */
 export function adaptWorkingStreamEvent(streamEvent: Pick<AgentStreamEvent, 'sessionId' | 'payload' | 'event'>): WorkingEvent[] {
   const events = streamEvent.payload.kind === 'sdk_message'
     ? adaptSdkMessage(streamEvent.sessionId, streamEvent.payload.message)
-    : adaptPromaEvent(streamEvent.sessionId, streamEvent.payload.event)
+    : adaptCopisEvent(streamEvent.sessionId, streamEvent.payload.event)
   return streamEvent.event ? [...events, ...adaptLegacyEvent(streamEvent.sessionId, streamEvent.event)] : events
 }
 

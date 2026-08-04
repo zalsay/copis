@@ -14,7 +14,7 @@ import { dirname, isAbsolute, join, relative, resolve, sep, win32 } from 'node:p
 import { accessSync, constants, existsSync, mkdirSync, writeFileSync } from 'node:fs'
 import { BrowserWindow } from 'electron'
 import type { WebContents } from 'electron'
-import { AGENT_IPC_CHANNELS, MAX_ATTACHMENT_SIZE } from '@proma/shared'
+import { AGENT_IPC_CHANNELS, MAX_ATTACHMENT_SIZE } from '@copis/shared'
 import type {
   AgentSendInput,
   AgentGenerateTitleInput,
@@ -24,10 +24,10 @@ import type {
   AgentStreamEvent,
   AgentStreamPayload,
   AgentQueueMessageInput,
-  PromaPermissionMode,
+  CopisPermissionMode,
   AgentExternalRunSource,
   AgentMessage,
-} from '@proma/shared'
+} from '@copis/shared'
 import { ClaudeAgentAdapter, scanAndKillOrphanedClaudeSubprocesses } from './adapters/claude-agent-adapter'
 import { PiAgentAdapter, cleanupPiRuntimeResources } from './adapters/pi-agent-adapter'
 import { RuntimeRoutingAgentAdapter } from './adapters/runtime-routing-agent-adapter'
@@ -149,7 +149,7 @@ export async function runAgent(
         updateAgentSessionMeta(input.sessionId, { automationGraduated: true })
         // 向渲染进程发送毕业事件，触发 toast 提示
         eventBus.emit(input.sessionId, {
-          kind: 'proma_event',
+          kind: 'copis_event',
           event: { type: 'automation_graduated' },
         })
       }
@@ -179,7 +179,7 @@ export async function runAgent(
       },
       onTitleUpdated: (title) => {
         eventBus.emit(input.sessionId, {
-          kind: 'proma_event',
+          kind: 'copis_event',
           event: { type: 'title_updated', title },
         })
         if (!webContents.isDestroyed()) {
@@ -269,7 +269,7 @@ export async function runAgentHeadless(
       onTitleUpdated: (title) => {
         callbacks.onTitleUpdated(title)
         eventBus.emit(runInput.sessionId, {
-          kind: 'proma_event',
+          kind: 'copis_event',
           event: { type: 'title_updated', title },
         })
         // 同步到渲染进程
@@ -283,7 +283,7 @@ export async function runAgentHeadless(
       onRunStarted: ({ startedAt: persistedStartedAt }) => {
         const session = getAgentSessionMeta(runInput.sessionId)
         eventBus.emit(runInput.sessionId, {
-          kind: 'proma_event',
+          kind: 'copis_event',
           event: {
             type: 'external_run_started',
             source: callbacks.source ?? 'bridge',
@@ -340,7 +340,7 @@ setAgentStopper(stopAgent)
 export async function rewindAgentSession(
   sessionId: string,
   assistantMessageUuid: string,
-): Promise<import('@proma/shared').RewindSessionResult> {
+): Promise<import('@copis/shared').RewindSessionResult> {
   return orchestrator.rewindSession(sessionId, assistantMessageUuid)
 }
 
@@ -375,9 +375,9 @@ export function killOrphanedClaudeSubprocesses(): void {
 /**
  * 运行中动态切换会话的权限模式
  *
- * 同时更新 Proma 侧（canUseTool 动态读取）和 SDK 侧（query.setPermissionMode）。
+ * 同时更新 Copis 侧（canUseTool 动态读取）和 SDK 侧（query.setPermissionMode）。
  */
-export async function updateAgentPermissionMode(sessionId: string, mode: PromaPermissionMode): Promise<void> {
+export async function updateAgentPermissionMode(sessionId: string, mode: CopisPermissionMode): Promise<void> {
   await orchestrator.updateSessionPermissionMode(sessionId, mode)
 }
 
@@ -461,7 +461,7 @@ const LOCAL_PROJECT_ROOT_UNAVAILABLE_CODE = 'local_project_root_unavailable'
 
 function createLocalProjectRootUnavailableError(projectRootPath: string, status?: string): Error {
   const error = new Error(
-    `本地项目根目录不可用: 本地项目根目录不存在或无法访问：${projectRootPath}。请在 Proma 中重新选择项目文件夹。`,
+    `本地项目根目录不可用: 本地项目根目录不存在或无法访问：${projectRootPath}。请在 Copis 中重新选择项目文件夹。`,
   ) as Error & { code?: string; details?: string[] }
   error.code = LOCAL_PROJECT_ROOT_UNAVAILABLE_CODE
   error.details = status ? [`目录状态: ${status}`] : undefined

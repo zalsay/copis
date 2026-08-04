@@ -16,8 +16,8 @@ import { useStickToBottomContext } from 'use-stick-to-bottom'
 import { useAtomValue } from 'jotai'
 import { userProfileAtom } from '@/atoms/user-profile'
 import { stickyUserMessageEnabledAtom } from '@/atoms/ui-preferences'
-import { MessageResponse, remarkMentions } from './message'
-import type { RemarkPluginFn } from './message'
+import { MessageResponse } from './message'
+import { remarkMentions, type RemarkPluginFn } from './message-markdown'
 import { cn } from '@/lib/utils'
 
 /** 悬浮条专用 remark 插件（仅 mention，不保留换行） */

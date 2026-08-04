@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
-import type { ProviderType } from '@proma/shared'
+import type { ProviderType } from '@copis/shared'
 import { AnthropicAdapter } from './anthropic-adapter.ts'
-import { setPromaVersion } from './user-agent.ts'
+import { setCopisVersion } from './user-agent.ts'
 
 function buildRequest(provider: ProviderType, apiKey = 'test-key') {
   const adapter = new AnthropicAdapter(provider)
@@ -32,29 +32,29 @@ describe('AnthropicAdapter headers', () => {
     expect(request.headers['User-Agent']).toBeUndefined()
   })
 
-  test('xiaomi token plan keeps bearer authentication with Proma User-Agent', () => {
-    setPromaVersion('9.9.9')
+  test('xiaomi token plan keeps bearer authentication with Copis User-Agent', () => {
+    setCopisVersion('9.9.9')
 
     const request = buildRequest('xiaomi-token-plan')
 
     expect(request.headers.Authorization).toBe('Bearer test-key')
-    expect(request.headers['User-Agent']).toBe('Proma/9.9.9 (+https://github.com/ErlichLiu/Proma)')
+    expect(request.headers['User-Agent']).toBe('Copis/9.9.9 (+https://github.com/ErlichLiu/Copis)')
     expect(request.headers['api-key']).toBeUndefined()
   })
 
-  test('qwen token plan uses the complete Anthropic endpoint with bearer authentication and Proma User-Agent', () => {
-    setPromaVersion('9.9.9')
+  test('qwen token plan uses the complete Anthropic endpoint with bearer authentication and Copis User-Agent', () => {
+    setCopisVersion('9.9.9')
 
     const request = buildRequest('qwen-token-plan')
 
     expect(request.url).toBe('https://token-plan.cn-beijing.maas.aliyuncs.com/apps/anthropic/v1/messages')
     expect(request.headers.Authorization).toBe('Bearer test-key')
-    expect(request.headers['User-Agent']).toBe('Proma/9.9.9 (+https://github.com/ErlichLiu/Proma)')
+    expect(request.headers['User-Agent']).toBe('Copis/9.9.9 (+https://github.com/ErlichLiu/Copis)')
     expect(request.headers['x-api-key']).toBeUndefined()
   })
 
   test('zhipu team plan uses apiKey from JSON for model calls', () => {
-    setPromaVersion('9.9.9')
+    setCopisVersion('9.9.9')
 
     const request = buildRequest(
       'zhipu-coding-team',
@@ -62,7 +62,7 @@ describe('AnthropicAdapter headers', () => {
     )
 
     expect(request.headers.Authorization).toBe('Bearer model-key')
-    expect(request.headers['User-Agent']).toBe('Proma/9.9.9 (+https://github.com/ErlichLiu/Proma)')
+    expect(request.headers['User-Agent']).toBe('Copis/9.9.9 (+https://github.com/ErlichLiu/Copis)')
     expect(request.headers['api-key']).toBeUndefined()
   })
 })

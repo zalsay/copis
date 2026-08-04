@@ -66,6 +66,16 @@ function resolveBinaryPath(): string | undefined {
   return undefined
 }
 
+function resolvePiRpcWorkerPath(): string | undefined {
+  const candidates = app.isPackaged
+    ? [join(__dirname, 'pi-rpc-worker.cjs')]
+    : [
+      join(__dirname, 'pi-rpc-worker.cjs'),
+      resolve(__dirname, '../../..', 'apps/electron/dist/pi-rpc-worker.cjs'),
+    ]
+  return candidates.find((candidate) => existsSync(candidate))
+}
+
 function parseBridgeRequest(line: string): RustBridgeRequest | undefined {
   const fields = line.split('\t')
   if (fields.length !== 4) return undefined
@@ -140,6 +150,11 @@ export function startHttpApiServer(): void {
     return
   }
 
+  const workerPath = resolvePiRpcWorkerPath()
+  if (!workerPath) {
+    console.warn('[HTTP API] 找不到 Pi RPC worker，将暂时只提供非 Agent HTTP API。请先运行 bun run build:agent-rpc-worker。')
+  }
+
   stopping = false
   responseWriteChain = Promise.resolve()
   let child: ChildProcessWithoutNullStreams
@@ -148,6 +163,11 @@ export function startHttpApiServer(): void {
       stdio: ['pipe', 'pipe', 'pipe'],
       detached: false,
       windowsHide: true,
+      env: {
+        ...process.env,
+        COPIS_PI_RPC_RUNTIME: process.execPath,
+        ...(workerPath ? { COPIS_PI_RPC_WORKER: workerPath } : {}),
+      },
     })
   } catch (error) {
     console.error('[HTTP API] Rust 二进制启动失败:', error)
@@ -187,7 +207,7 @@ export function startHttpApiServer(): void {
     }
   })
 
-  console.log(`[HTTP API] Rust 服务已启动：http://${HTTP_API_HOST}:${HTTP_API_PORT}`)
+  console.log(`[HTTP API] Rust 服务已启动：http://${HTTP_API_HOST}:${HTTP_API_PORT}${workerPath ? `，Pi worker: ${workerPath}` : ''}`)
 }
 
 export function stopHttpApiServer(): Promise<void> {

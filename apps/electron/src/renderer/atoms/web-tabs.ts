@@ -1,5 +1,5 @@
 import { atom } from 'jotai'
-import type { WebTabState } from '@proma/shared'
+import type { WebTabState } from '@copis/shared'
 
 /** 主进程维护的网页页签状态。 */
 export const webTabsAtom = atom<WebTabState[]>([])

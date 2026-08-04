@@ -13,8 +13,8 @@ import type {
   AutomationPermissionMode,
   AutomationSessionMode,
   AgentRuntime,
-} from '@proma/shared'
-import { AUTOMATION_DEFAULT_PERMISSION_MODE, AUTOMATION_DEFAULT_SESSION_MODE } from '@proma/shared'
+} from '@copis/shared'
+import { AUTOMATION_DEFAULT_PERMISSION_MODE, AUTOMATION_DEFAULT_SESSION_MODE } from '@copis/shared'
 
 /** 全部定时任务列表 */
 export const automationsAtom = atom<Automation[]>([])

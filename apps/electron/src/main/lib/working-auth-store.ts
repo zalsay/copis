@@ -1,6 +1,6 @@
 import { existsSync, readFileSync, unlinkSync } from 'node:fs'
 import { safeStorage } from 'electron'
-import type { WorkingUser } from '@proma/shared'
+import type { WorkingUser } from '@copis/shared'
 import { getWorkingAuthPath } from './config-paths'
 import { writeJsonFileAtomic } from './safe-file'
 

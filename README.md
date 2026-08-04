@@ -1,59 +1,59 @@
-# Proma
+# Copis
 
-Proma 是一个本地优先的 AI 桌面应用，把多模型 Chat、通用 Agent、工作区、Skills、MCP、远程机器人和记忆能力放在同一个开源客户端里。
+Copis 是一个本地优先的 AI 桌面应用，把多模型 Chat、通用 Agent、工作区、Skills、MCP、远程机器人和记忆能力放在同一个开源客户端里。
 
 它不是只面向闲聊的聊天框，而是一个可以长期沉淀个人工作流的 Agent 工作台：简单问题用 Chat，复杂任务交给 Agent，数据和配置尽量留在本地。
 
-![Proma 海报](https://img.erlich.fun/personal-blog/uPic/pb.png)
+![Copis 海报](https://img.erlich.fun/personal-blog/uPic/pb.png)
 
 <video width="560" controls>
-  <source src="https://img.erlich.fun/personal-blog/uPic/%E7%AE%80%E5%8D%95%E4%BB%8B%E7%BB%8D%20Proma.mp4" type="video/mp4">
+  <source src="https://img.erlich.fun/personal-blog/uPic/%E7%AE%80%E5%8D%95%E4%BB%8B%E7%BB%8D%20Copis.mp4" type="video/mp4">
 </video>
 
-[English README](./README.en.md) | [新手教程](./tutorial/tutorial.md) | [下载开源版](https://github.com/ErlichLiu/Proma/releases) | [下载商业版](https://proma.cool/download)
+[English README](./README.en.md) | [新手教程](./tutorial/tutorial.md) | [下载开源版](https://github.com/ErlichLiu/Copis/releases) | [下载商业版](https://copis.cool/download)
 
-> **最新思考 ｜ 2026 Q2–Q3**：[勇敢地解决真实的问题 — Proactive · 个人注意力 · 团队协作](./proma-thinking/proma-2026-q2-q3-thinking.md) ｜ 往期思考：[2026 Q1](./proma-thinking/proma-2026-q1-thinking.md)
+> **最新思考 ｜ 2026 Q2–Q3**：[勇敢地解决真实的问题 — Proactive · 个人注意力 · 团队协作](./copis-thinking/copis-2026-q2-q3-thinking.md) ｜ 往期思考：[2026 Q1](./copis-thinking/copis-2026-q1-thinking.md)
 
 ## 现在能做什么
 
 - **Chat 模式**：多模型对话、附件解析、图片输入、Markdown / Mermaid / KaTeX / 代码高亮、并排对话、系统提示词、上下文管理。
 - **Agent 模式**：内置 Claude Agent SDK 与 Pi Agent SDK 两套运行时；支持工作区隔离、权限模式、文件操作、长任务流式输出、计划确认和用户追问。Claude 是默认内核，Pi 可在实验性设置中开启。
 - **协作与任务**：复杂任务可拆分为可追踪的协作子 Agent / Task，并在消息流中展示调用过程和结果。
-- **Skills、MCP 与项目根目录**：每个 Proma 项目独立配置 Skills 与 MCP Server。项目文件可使用用户选择的本地项目根目录，也可使用 Proma 托管的空白项目目录；本地项目配置不会被自动导入。
+- **Skills、MCP 与项目根目录**：每个 Copis 项目独立配置 Skills 与 MCP Server。项目文件可使用用户选择的本地项目根目录，也可使用 Copis 托管的空白项目目录；本地项目配置不会被自动导入。
 - **远程机器人**：支持飞书 / Lark 机器人桥接，并已提供钉钉、微信桥接入口，用手机或群聊触发本机 Agent 工作流。
 - **记忆与工具**：Chat 和 Agent 可共享记忆能力，并支持联网搜索、内置 Chat 工具、Agent 推荐等辅助能力。
-- **本地优先**：会话、工作区、附件、配置、Skills 等默认存储在 `~/.proma/`，使用 JSON / JSONL 文件组织，不依赖本地数据库。
+- **本地优先**：会话、工作区、附件、配置、Skills 等默认存储在 `~/.copis/`，使用 JSON / JSONL 文件组织，不依赖本地数据库。
 - **桌面体验**：自动更新、代理设置、文件预览、全局快捷键、快速任务窗口、语音输入、亮色 / 暗色 / 跟随系统主题。
 
 ## 快速开始
 
 ### 下载安装
 
-从 [GitHub Releases](https://github.com/ErlichLiu/Proma/releases) 下载开源版本，提供 macOS Apple Silicon、macOS Intel 和 Windows 安装包。
+从 [GitHub Releases](https://github.com/ErlichLiu/Copis/releases) 下载开源版本，提供 macOS Apple Silicon、macOS Intel 和 Windows 安装包。
 
-开源版可独立使用，并支持自行配置 AI 供应商渠道。如果你更希望使用 Proma 提供的内置模型渠道和订阅方案，也可以按需了解 [Proma 商业版](https://proma.cool/download)。两个版本面向不同的使用偏好，你可以自由选择适合自己的版本。
+开源版可独立使用，并支持自行配置 AI 供应商渠道。如果你更希望使用 Copis 提供的内置模型渠道和订阅方案，也可以按需了解 [Copis 商业版](https://copis.cool/download)。两个版本面向不同的使用偏好，你可以自由选择适合自己的版本。
 
 | 对比项 | 开源版 | 商业版 |
 | --- | --- | --- |
-| 核心桌面能力 | 完整的 Proma 桌面体验，可自由配置工作流 | 保留同样的核心桌面体验 |
-| 模型渠道 | 自行添加和管理 AI 供应商渠道与 API Key | 登录后可使用 Proma 官方内置模型渠道，也仍可自行配置第三方渠道 |
-| 模型价格 | 按所选供应商的规则和价格使用 | 精选模型提供 Proma Cloud 专属优惠，部分模型最高可低至官方参考价 2 折 |
-| Agent 安全与稳定 | 需自行评估供应商的安全、协议兼容与稳定性；使用第三方中转站时也需自行判断额外的信任与数据处理风险 | 使用 Proma Cloud 官方托管链路，提供统一的安全与稳定性保障、Agent 协议兼容和模型健康监控，减少不透明第三方中转带来的不确定性 |
-| 联网与内嵌 AI 能力 | 按需自行配置搜索、生图等服务及对应 API Key | 提供更完整的 Proma Cloud 联网与内嵌能力，包括 WebSearch，以及 GPT Image 2 生图和编辑 |
-| 对外 API 与服务 | 主要使用你自行配置的供应商 API | 可创建独立、可设额度上限的 Proma Cloud API Key，将 LLM、工具和多模态能力接入自己的应用或服务 |
+| 核心桌面能力 | 完整的 Copis 桌面体验，可自由配置工作流 | 保留同样的核心桌面体验 |
+| 模型渠道 | 自行添加和管理 AI 供应商渠道与 API Key | 登录后可使用 Copis 官方内置模型渠道，也仍可自行配置第三方渠道 |
+| 模型价格 | 按所选供应商的规则和价格使用 | 精选模型提供 Copis Cloud 专属优惠，部分模型最高可低至官方参考价 2 折 |
+| Agent 安全与稳定 | 需自行评估供应商的安全、协议兼容与稳定性；使用第三方中转站时也需自行判断额外的信任与数据处理风险 | 使用 Copis Cloud 官方托管链路，提供统一的安全与稳定性保障、Agent 协议兼容和模型健康监控，减少不透明第三方中转带来的不确定性 |
+| 联网与内嵌 AI 能力 | 按需自行配置搜索、生图等服务及对应 API Key | 提供更完整的 Copis Cloud 联网与内嵌能力，包括 WebSearch，以及 GPT Image 2 生图和编辑 |
+| 对外 API 与服务 | 主要使用你自行配置的供应商 API | 可创建独立、可设额度上限的 Copis Cloud API Key，将 LLM、工具和多模态能力接入自己的应用或服务 |
 | 团队额度管理 | 需自行搭建成员、额度分配与用量管理机制 | 团队管理员可向成员分配或回收共享团队额度，支持按月自动分配，并查看成员用量与额度流水 |
 | 订阅与用量 | 自行管理供应商账号、余额与用量 | 在应用内管理订阅与余额，并查看模型、Agent 和工具的用量明细 |
-| 从开源版切换 | — | 直接覆盖安装即可，继续使用已有的本地 Proma 数据 |
+| 从开源版切换 | — | 直接覆盖安装即可，继续使用已有的本地 Copis 数据 |
 
 > 可用模型、价格和权益会随时间调整，以应用内当期展示为准。
 
 ### 企业版与商业授权
 
-如果你的组织计划面向数百至数千名员工规模部署 Proma，可以采购企业版授权；我们也可围绕实际部署需求提供范围明确的轻量定制服务。欢迎通过微信联系：`geekthings`。
+如果你的组织计划面向数百至数千名员工规模部署 Copis，可以采购企业版授权；我们也可围绕实际部署需求提供范围明确的轻量定制服务。欢迎通过微信联系：`geekthings`。
 
 ### 首次配置
 
-1. 打开 Proma，先完成环境检查。Agent 模式依赖本机基础环境，尤其是 Git、Node.js / Bun 以及可用的 Shell。
+1. 打开 Copis，先完成环境检查。Agent 模式依赖本机基础环境，尤其是 Git、Node.js / Bun 以及可用的 Shell。
 2. 进入 **设置 > 渠道**，添加至少一个 AI 供应商渠道，填写 Base URL、API Key 和模型列表。
 3. Chat 模式可以使用 OpenAI、Anthropic、Google 或 OpenAI 兼容协议的渠道。
 4. 默认的 Claude Agent Runtime 需要 Anthropic 或 Anthropic 兼容协议渠道，例如 Anthropic、DeepSeek、Kimi API、Kimi Coding Plan。
@@ -85,39 +85,39 @@ Proma 是一个本地优先的 AI 桌面应用，把多模型 Chat、通用 Agen
 
 用 Chat 处理轻量但真实的分析任务：整理读者关注点、生成对比表，并把首屏文案快速定稿。
 
-![Proma Chat 快速分析](./docs/assets/screenshots/proma-chat-demo.png)
+![Copis Chat 快速分析](./docs/assets/screenshots/copis-chat-demo.png)
 
 ### Agent 工作台
 
 Agent 在项目根目录与会话工作台中读取文件、推进任务、输出表格化结论，并把可复用文件保留在右侧文件面板中。
 
-![Proma Agent 工作台](./docs/assets/screenshots/proma-agent-demo.png)
+![Copis Agent 工作台](./docs/assets/screenshots/copis-agent-demo.png)
 
 ### Skills
 
 每个工作区都可以沉淀专属 Skills。截图中的 `feedback-synthesis` 用于把用户反馈、访谈记录和 issue 聚合成主题、证据与优先级建议。
 
-![Proma 工作区 Skills](./docs/assets/screenshots/proma-skills-demo.png)
+![Copis 工作区 Skills](./docs/assets/screenshots/copis-skills-demo.png)
 
 ### Skills & MCP
 
 同一个工作区可以管理 stdio / HTTP MCP Server，按需启用或关闭，让 Agent 在不同项目里获得不同的外部上下文。
 
-![Proma MCP 配置](./docs/assets/screenshots/proma-mcp-demo.png)
+![Copis MCP 配置](./docs/assets/screenshots/copis-mcp-demo.png)
 
 ### 流式语音输入(支持全局输入)
-Proma 支持豆包的流式语音输入功能，并且支持在 Proma 内使用和 Proma 外部使用：
-- Proma 内部使用：Ctrl + ` 触发识别，再次按下结束自动输入到 Proma 内对应的输入框
-- Proma 外部使用：Ctrl + ` 触发识别，再次按下结束自动输入到当前的光标所在处，如无光标则默认写入到剪贴板
+Copis 支持豆包的流式语音输入功能，并且支持在 Copis 内使用和 Copis 外部使用：
+- Copis 内部使用：Ctrl + ` 触发识别，再次按下结束自动输入到 Copis 内对应的输入框
+- Copis 外部使用：Ctrl + ` 触发识别，再次按下结束自动输入到当前的光标所在处，如无光标则默认写入到剪贴板
 - 
-![Proma 语音输入](./docs/assets/screenshots/proma-typeless-input.png)
+![Copis 语音输入](./docs/assets/screenshots/copis-typeless-input.png)
 
 ## Agent 运行时与模型渠道
 
-Proma 的 Agent 模式提供两套可切换的内核：
+Copis 的 Agent 模式提供两套可切换的内核：
 
 - **Claude Agent Runtime（默认）**：基于 `@anthropic-ai/claude-agent-sdk`，使用 Anthropic Messages API 或兼容端点。
-- **Pi Agent Runtime**：基于 `@earendil-works/pi-coding-agent`、`pi-agent-core` 和 `pi-ai`，将 Proma 的已启用渠道动态注册为 Pi provider；支持 OpenAI Chat Completions / Responses、Google Generative AI、Anthropic Messages 及其兼容端点。
+- **Pi Agent Runtime**：基于 `@earendil-works/pi-coding-agent`、`pi-agent-core` 和 `pi-ai`，将 Copis 的已启用渠道动态注册为 Pi provider；支持 OpenAI Chat Completions / Responses、Google Generative AI、Anthropic Messages 及其兼容端点。
 
 | 渠道类型 | Chat | Claude Agent | Pi Agent |
 | --- | --- | --- | --- |
@@ -128,16 +128,16 @@ Proma 的 Agent 模式提供两套可切换的内核：
 | ChatGPT 订阅（Codex OAuth） | — | 支持 | 支持 |
 | xAI 订阅（Grok OAuth） | — | — | 支持 |
 
-> Pi Runtime 可在每个 Agent 会话的输入框下方直接切换；切换会开启新的底层 SDK 会话，但不会删除 Proma 中已保存的消息。Pi 会桥接工作区 Skills、用户 MCP Server，以及 Proma 内置的 Automation / Collaboration 工具；不同模型供应商对工具调用、推理和上下文长度的支持仍可能不同。
+> Pi Runtime 可在每个 Agent 会话的输入框下方直接切换；切换会开启新的底层 SDK 会话，但不会删除 Copis 中已保存的消息。Pi 会桥接工作区 Skills、用户 MCP Server，以及 Copis 内置的 Automation / Collaboration 工具；不同模型供应商对工具调用、推理和上下文长度的支持仍可能不同。
 
-> **Kimi Coding Plan 用户须知**：Proma 已获得 Kimi 官方白名单支持，使用 Proma 连接 Kimi Coding Plan 不会触发第三方客户端封号策略，可放心使用。
+> **Kimi Coding Plan 用户须知**：Copis 已获得 Kimi 官方白名单支持，使用 Copis 连接 Kimi Coding Plan 不会触发第三方客户端封号策略，可放心使用。
 
 ## 本地数据
 
-Proma 采用本地文件存储，方便备份、迁移和排查问题。
+Copis 采用本地文件存储，方便备份、迁移和排查问题。
 
 ```text
-~/.proma/
+~/.copis/
 ├── channels.json
 ├── conversations.json
 ├── conversations/
@@ -147,7 +147,7 @@ Proma 采用本地文件存储，方便备份、迁移和排查问题。
 │   └── {session-id}.jsonl
 ├── agent-workspaces/
 │   └── {workspace-slug}/
-│       ├── workspace-files/ # 仅空白项目使用的 Proma 托管项目根
+│       ├── workspace-files/ # 仅空白项目使用的 Copis 托管项目根
 │       ├── mcp.json
 │       └── skills/
 ├── attachments/
@@ -156,14 +156,14 @@ Proma 采用本地文件存储，方便备份、迁移和排查问题。
 └── sdk-config/
 ```
 
-API Key 会通过 Electron `safeStorage` 加密后写入 `channels.json`。Proma 不使用本地数据库，核心数据结构以 JSON 配置和 JSONL 追加日志为主。
+API Key 会通过 Electron `safeStorage` 加密后写入 `channels.json`。Copis 不使用本地数据库，核心数据结构以 JSON 配置和 JSONL 追加日志为主。
 
 ## 开发
 
-Proma 是 Bun workspace monorepo。
+Copis 是 Bun workspace monorepo。
 
 ```text
-proma-v2/
+copis-v2/
 ├── packages/
 │   ├── shared/     # 共享类型、IPC 常量、配置、工具函数
 │   ├── core/       # Provider Adapter、SSE、代码高亮
@@ -176,10 +176,10 @@ proma-v2/
 
 | 包 | 版本 | 职责 |
 | --- | --- | --- |
-| `@proma/electron` | `0.15.0` | Electron 桌面应用 |
-| `@proma/shared` | `0.1.42` | 共享类型、IPC 常量、配置和工具 |
-| `@proma/core` | `0.2.15` | Provider Adapter、SSE、Shiki 高亮 |
-| `@proma/ui` | `0.1.9` | 共享 React UI 组件 |
+| `@copis/electron` | `0.15.0` | Electron 桌面应用 |
+| `@copis/shared` | `0.1.42` | 共享类型、IPC 常量、配置和工具 |
+| `@copis/core` | `0.2.15` | Provider Adapter、SSE、Shiki 高亮 |
+| `@copis/ui` | `0.1.9` | 共享 React UI 组件 |
 
 常用命令：
 
@@ -234,7 +234,7 @@ bun run dist:fast
 
 ## 架构概览
 
-Proma 的核心通信路径是：
+Copis 的核心通信路径是：
 
 ```text
 shared 类型和 IPC 常量
@@ -248,7 +248,7 @@ shared 类型和 IPC 常量
 - `agent-orchestrator.ts`：Agent 编排、运行时路由、环境变量、SDK 调用、事件流、错误处理。
 - `adapters/claude-agent-adapter.ts` / `adapters/pi-agent-adapter.ts`：Claude 与 Pi 运行时适配；`runtime-routing-agent-adapter.ts` 依据会话内核路由。
 - `agent-session-manager.ts`：Agent 会话索引和 JSONL 消息持久化。
-- `agent-workspace-manager.ts`：Proma 工作区、项目根目录、MCP 与 Skills 管理。
+- `agent-workspace-manager.ts`：Copis 工作区、项目根目录、MCP 与 Skills 管理。
 - `chat-service.ts`：Chat 流式调用、Provider Adapter、工具活动。
 - `conversation-manager.ts`：Chat 会话索引和消息存储。
 - `channel-manager.ts`：渠道 CRUD、API Key 加密、连接测试、模型获取。
@@ -294,11 +294,11 @@ Claude 与 Pi 运行时都在主进程中作为 esbuild external 依赖运行。
 
 ## Star History
 
-<a href="https://www.star-history.com/?repos=proma-ai%2Fproma&type=date&legend=top-left">
+<a href="https://www.star-history.com/?repos=copis-ai%2Fcopis&type=date&legend=top-left">
  <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=proma-ai/proma&type=date&theme=dark&legend=top-left&sealed_token=0cHFGjNPPe5hd2uxpF1cy35N2kYGSIEnTvyIbHlGjkrrtH9rnKcBMkqA8wDWltJIlPRKFZoYyPjXItri9HhQXE1TM1rwdIe91fqTqXVcPwK6OMzGEJ9yNw" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=proma-ai/proma&type=date&legend=top-left&sealed_token=0cHFGjNPPe5hd2uxpF1cy35N2kYGSIEnTvyIbHlGjkrrtH9rnKcBMkqA8wDWltJIlPRKFZoYyPjXItri9HhQXE1TM1rwdIe91fqTqXVcPwK6OMzGEJ9yNw" />
-   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=proma-ai/proma&type=date&legend=top-left&sealed_token=0cHFGjNPPe5hd2uxpF1cy35N2kYGSIEnTvyIbHlGjkrrtH9rnKcBMkqA8wDWltJIlPRKFZoYyPjXItri9HhQXE1TM1rwdIe91fqTqXVcPwK6OMzGEJ9yNw" />
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=copis-ai/copis&type=date&theme=dark&legend=top-left&sealed_token=0cHFGjNPPe5hd2uxpF1cy35N2kYGSIEnTvyIbHlGjkrrtH9rnKcBMkqA8wDWltJIlPRKFZoYyPjXItri9HhQXE1TM1rwdIe91fqTqXVcPwK6OMzGEJ9yNw" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=copis-ai/copis&type=date&legend=top-left&sealed_token=0cHFGjNPPe5hd2uxpF1cy35N2kYGSIEnTvyIbHlGjkrrtH9rnKcBMkqA8wDWltJIlPRKFZoYyPjXItri9HhQXE1TM1rwdIe91fqTqXVcPwK6OMzGEJ9yNw" />
+   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=copis-ai/copis&type=date&legend=top-left&sealed_token=0cHFGjNPPe5hd2uxpF1cy35N2kYGSIEnTvyIbHlGjkrrtH9rnKcBMkqA8wDWltJIlPRKFZoYyPjXItri9HhQXE1TM1rwdIe91fqTqXVcPwK6OMzGEJ9yNw" />
  </picture>
 </a>
 
@@ -313,12 +313,12 @@ Claude 与 Pi 运行时都在主进程中作为 esbuild external 依赖运行。
 
 ## 许可证
 
-Proma 社区版采用 [GNU Affero General Public License v3.0（AGPL-3.0）](./LICENSE) 开源，完整条款见根目录 `LICENSE` 文件。
+Copis 社区版采用 [GNU Affero General Public License v3.0（AGPL-3.0）](./LICENSE) 开源，完整条款见根目录 `LICENSE` 文件。
 
 **个人 / 非商业使用**：自由使用、修改、分发，仅需遵守 AGPL-3.0 条款。
 
 **商业使用**：在完全遵守 AGPL-3.0 条款的前提下允许进行商业使用，包括但不限于：以源代码或修改后的形式分发软件、通过网络对外提供服务时必须公开完整修改源码（含网络交互层）、衍生作品须以 AGPL-3.0 继续授权。
 
-**商业授权（豁免 AGPL-3.0 义务）**：如果你希望将 Proma 集成到闭源产品、对外提供 SaaS 服务但不想公开衍生代码，或有其他无法满足 AGPL-3.0 条款的商业场景，请通过邮件联系获取商业许可：[erlichliu@gmail.com](mailto:erlichliu@gmail.com)。
+**商业授权（豁免 AGPL-3.0 义务）**：如果你希望将 Copis 集成到闭源产品、对外提供 SaaS 服务但不想公开衍生代码，或有其他无法满足 AGPL-3.0 条款的商业场景，请通过邮件联系获取商业许可：[erlichliu@gmail.com](mailto:erlichliu@gmail.com)。
 
 向本项目提交 Pull Request 即视为同意将贡献以 AGPL-3.0 及未来商业许可形式授权给项目维护者。

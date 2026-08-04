@@ -1,16 +1,16 @@
-const PROMA_REPO_URL = 'https://github.com/ErlichLiu/Proma'
+const COPIS_REPO_URL = 'https://github.com/ErlichLiu/Copis'
 
-let _promaVersion = '0.0.0'
+let _copisVersion = '0.0.0'
 
-export function setPromaVersion(version: string): void {
-  _promaVersion = version
+export function setCopisVersion(version: string): void {
+  _copisVersion = version
 }
 
-export function getPromaVersion(): string {
-  return _promaVersion
+export function getCopisVersion(): string {
+  return _copisVersion
 }
 
-export function getPromaUserAgent(version?: string): string {
-  const v = version ?? _promaVersion
-  return `Proma/${v} (+${PROMA_REPO_URL})`
+export function getCopisUserAgent(version?: string): string {
+  const v = version ?? _copisVersion
+  return `Copis/${v} (+${COPIS_REPO_URL})`
 }

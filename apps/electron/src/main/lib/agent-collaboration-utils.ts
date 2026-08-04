@@ -5,15 +5,15 @@
  */
 
 import {
-  PROMA_DEFAULT_PERMISSION_MODE,
+  COPIS_DEFAULT_PERMISSION_MODE,
   type AgentDelegationRole,
   type AgentDelegationStatus,
   type AgentRuntime,
   type AgentSessionMeta,
-  type PromaPermissionMode,
-} from '@proma/shared'
+  type CopisPermissionMode,
+} from '@copis/shared'
 
-const PERMISSION_RANK: Record<PromaPermissionMode, number> = {
+const PERMISSION_RANK: Record<CopisPermissionMode, number> = {
   plan: 0,
   bypassPermissions: 1,
 }
@@ -60,21 +60,21 @@ export interface RecoveredDelegationState {
   title: string
   role: AgentDelegationRole
   goal: string
-  permissionMode: PromaPermissionMode
+  permissionMode: CopisPermissionMode
   status: AgentDelegationStatus
   startedAt: number
   completedAt?: number
 }
 
 export function resolveDelegationPermissionMode(
-  parentMode: PromaPermissionMode | undefined,
-  requestedMode: PromaPermissionMode | undefined,
+  parentMode: CopisPermissionMode | undefined,
+  requestedMode: CopisPermissionMode | undefined,
   agentRuntime?: AgentRuntime,
-): PromaPermissionMode {
+): CopisPermissionMode {
   // Pi 子会话目前不支持 Plan 模式下的完整工具集，固定直接执行。
   if (agentRuntime === 'pi') return 'bypassPermissions'
 
-  const parent = parentMode ?? PROMA_DEFAULT_PERMISSION_MODE
+  const parent = parentMode ?? COPIS_DEFAULT_PERMISSION_MODE
   const requested = requestedMode ?? parent
   return PERMISSION_RANK[requested] <= PERMISSION_RANK[parent] ? requested : parent
 }
@@ -83,7 +83,7 @@ export function buildRecoveredDelegationState(input: {
   parentSessionId: string
   delegationId: string
   session: AgentSessionMeta
-  fallbackPermissionMode?: PromaPermissionMode
+  fallbackPermissionMode?: CopisPermissionMode
 }): RecoveredDelegationState {
   const persistedStatus = input.session.delegationStatus
   // 从持久化记录恢复但不在 live Map 中，说明当前进程并没有这个委派在跑。
@@ -99,7 +99,7 @@ export function buildRecoveredDelegationState(input: {
     title: input.session.title,
     role: input.session.delegationRole ?? 'custom',
     goal: input.session.delegationGoal ?? '',
-    permissionMode: input.session.permissionMode ?? input.fallbackPermissionMode ?? PROMA_DEFAULT_PERMISSION_MODE,
+    permissionMode: input.session.permissionMode ?? input.fallbackPermissionMode ?? COPIS_DEFAULT_PERMISSION_MODE,
     status,
     startedAt: input.session.createdAt,
     completedAt: persistedStatus ? input.session.updatedAt : undefined,
@@ -114,7 +114,7 @@ export function buildDelegationPrompt(input: {
   expectedOutput?: string
 }): string {
   const expectedOutput = input.expectedOutput?.trim()
-  return `你是 Proma 协作子 Agent。你由父 Agent 会话 ${input.parentSessionId} 委派创建，委派 ID 为 ${input.delegationId}。
+  return `你是 Copis 协作子 Agent。你由父 Agent 会话 ${input.parentSessionId} 委派创建，委派 ID 为 ${input.delegationId}。
 
 ## 工作边界
 

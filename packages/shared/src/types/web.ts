@@ -10,6 +10,8 @@ export interface WebTabState {
   title: string
   /** 当前主框架 URL。 */
   url: string
+  /** 网页 favicon 地址；没有可用 favicon 时为 null。 */
+  faviconUrl: string | null
   /** 是否正在加载。 */
   isLoading: boolean
   /** 是否可以后退。 */
@@ -24,6 +26,48 @@ export interface WebTabState {
 export interface WebTabsSnapshot {
   tabs: WebTabState[]
   activeTabId: string | null
+}
+
+/** 单个网页收藏分组。 */
+export interface WebBookmarkGroup {
+  id: string
+  name: string
+  createdAt: number
+}
+
+/** 单个网页收藏。 */
+export interface WebBookmark {
+  id: string
+  title: string
+  url: string
+  createdAt: number
+  /** 所属分组；null 表示未分组。 */
+  groupId: string | null
+}
+
+/** 网页收藏夹快照。 */
+export interface WebBookmarksSnapshot {
+  groups: WebBookmarkGroup[]
+  bookmarks: WebBookmark[]
+}
+
+/** 保存网页收藏的参数。 */
+export interface SaveWebBookmarkInput {
+  title: string
+  url: string
+  /** 未传时保留已有收藏的分组；null 表示移动到未分组。 */
+  groupId?: string | null
+}
+
+/** 创建网页收藏分组的参数。 */
+export interface CreateWebBookmarkGroupInput {
+  name: string
+}
+
+/** 重命名网页收藏分组的参数。 */
+export interface RenameWebBookmarkGroupInput {
+  groupId: string
+  name: string
 }
 
 /** 创建网页页签的参数。 */
@@ -54,6 +98,17 @@ export interface UpdateWebTabBoundsInput {
   bounds: WebTabBounds
 }
 
+/** 打开收藏夹浮层窗口的参数。 */
+export interface OpenWebBookmarksWindowInput {
+  bounds: WebTabBounds
+}
+
+/** 调整收藏夹浮层窗口尺寸的参数。 */
+export interface ResizeWebBookmarksWindowInput {
+  width: number
+  height: number
+}
+
 /** 发送 CDP 命令的参数。 */
 export interface SendWebTabCdpCommandInput {
   tabId: string
@@ -69,11 +124,20 @@ export const WEB_IPC_CHANNELS = {
   CLOSE: 'web-tabs:close',
   NAVIGATE: 'web-tabs:navigate',
   UPDATE_BOUNDS: 'web-tabs:update-bounds',
+  BOOKMARKS_WINDOW_OPEN: 'web-bookmarks:window-open',
+  BOOKMARKS_WINDOW_CLOSE: 'web-bookmarks:window-close',
+  BOOKMARKS_WINDOW_RESIZE: 'web-bookmarks:window-resize',
   GO_BACK: 'web-tabs:go-back',
   GO_FORWARD: 'web-tabs:go-forward',
   RELOAD: 'web-tabs:reload',
   SEND_CDP_COMMAND: 'web-tabs:send-cdp-command',
   STATE_CHANGED: 'web-tabs:state-changed',
+  BOOKMARKS_LIST: 'web-bookmarks:list',
+  BOOKMARKS_SAVE: 'web-bookmarks:save',
+  BOOKMARKS_REMOVE: 'web-bookmarks:remove',
+  BOOKMARK_GROUP_CREATE: 'web-bookmarks:group-create',
+  BOOKMARK_GROUP_RENAME: 'web-bookmarks:group-rename',
+  BOOKMARK_GROUP_REMOVE: 'web-bookmarks:group-remove',
 } as const
 
 /** 网页页签 IPC 通道类型。 */

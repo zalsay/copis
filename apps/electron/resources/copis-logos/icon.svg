@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<svg width="32" height="32" viewBox="354 345 536 536" xmlns="http://www.w3.org/2000/svg">
+<svg width="32" height="32" viewBox="302 293 640 640" xmlns="http://www.w3.org/2000/svg">
   <defs>
     <!-- 托盘图标使用透明背景；黑色源背景转换为透明度，白色标志保留为模板色。 -->
     <filter id="copis-template" color-interpolation-filters="sRGB">

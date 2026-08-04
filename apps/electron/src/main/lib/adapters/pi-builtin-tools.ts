@@ -11,11 +11,11 @@
 import { Type } from 'typebox'
 import type { ToolDefinition } from '@earendil-works/pi-coding-agent'
 import type { AgentToolResult } from '@earendil-works/pi-agent-core'
-import type { AgentRuntime, PromaPermissionMode } from '@proma/shared'
+import type { AgentRuntime, CopisPermissionMode } from '@copis/shared'
 import type {
   CreateAutomationInput,
   UpdateAutomationInput,
-} from '@proma/shared'
+} from '@copis/shared'
 import {
   createAutomation,
   deleteAutomation,
@@ -80,7 +80,7 @@ export interface PiBuiltinToolsContext {
   workspaceSlug?: string
   /** 图片外发前必须校验在这些已授权目录内。 */
   allowedRoots?: string[]
-  permissionMode?: PromaPermissionMode
+  permissionMode?: CopisPermissionMode
   triggeredBy?: 'user' | 'automation' | 'delegation'
 }
 
@@ -134,7 +134,7 @@ function buildWebTools(sdk: PiSdk): ToolDefinition[] {
     sdk.defineTool({
       name: 'WebSearch',
       label: '搜索网页',
-      description: 'Search the web for up-to-date information through Proma\'s Tavily integration. Use for current events, recent data, facts that may be stale, or when the user explicitly asks to search.',
+      description: 'Search the web for up-to-date information through Copis\'s Tavily integration. Use for current events, recent data, facts that may be stale, or when the user explicitly asks to search.',
       promptSnippet: 'WebSearch: search the web for current information and cite source URLs in the final answer.',
       parameters: Type.Object({
         query: Type.String({ description: 'Search query. Keep it concise and avoid including private local file contents, API keys, tokens, or secrets.' }),
@@ -161,7 +161,7 @@ function buildWebTools(sdk: PiSdk): ToolDefinition[] {
     sdk.defineTool({
       name: 'WebFetch',
       label: '抓取网页',
-      description: 'Fetch and extract readable Markdown content from a URL through Proma\'s Tavily integration. Use after WebSearch or when the user gives a URL and asks to inspect page content.',
+      description: 'Fetch and extract readable Markdown content from a URL through Copis\'s Tavily integration. Use after WebSearch or when the user gives a URL and asks to inspect page content.',
       promptSnippet: 'WebFetch: fetch readable webpage content by URL. Use it to inspect source pages and cite URLs.',
       parameters: Type.Object({
         url: Type.String({ description: 'HTTP/HTTPS URL to fetch.' }),
@@ -201,7 +201,7 @@ interface AutomationSummary {
   [key: string]: unknown
 }
 
-function summarizeAutomation(a: import('@proma/shared').Automation, includeHistory: boolean): AutomationSummary {
+function summarizeAutomation(a: import('@copis/shared').Automation, includeHistory: boolean): AutomationSummary {
   return {
     id: a.id,
     name: a.name,
@@ -284,7 +284,7 @@ function buildAutomationTools(sdk: PiSdk, ctx: PiBuiltinToolsContext): ToolDefin
     sdk.defineTool({
       name: 'mcp__automation__list_automations',
       label: '列出定时任务',
-      description: '列出 Proma 持久化定时任务。用于查看已有长期反复任务、判断是否需要新建任务、检查运行状态和最近失败情况。',
+      description: '列出 Copis 持久化定时任务。用于查看已有长期反复任务、判断是否需要新建任务、检查运行状态和最近失败情况。',
       parameters: Type.Object({
         active: Type.Optional(Type.Boolean({ description: '只列出启用或暂停任务；不传则列出全部' })),
         includeHistory: Type.Optional(Type.Boolean({ description: '是否包含运行历史，默认 false' })),
@@ -300,7 +300,7 @@ function buildAutomationTools(sdk: PiSdk, ctx: PiBuiltinToolsContext): ToolDefin
     sdk.defineTool({
       name: 'mcp__automation__get_automation',
       label: '查看定时任务',
-      description: '读取单个 Proma 定时任务详情和运行记录。定时任务自动执行中可以省略 id 来读取当前任务，用于自检和自迭代。',
+      description: '读取单个 Copis 定时任务详情和运行记录。定时任务自动执行中可以省略 id 来读取当前任务，用于自检和自迭代。',
       parameters: Type.Object({
         id: Type.Optional(Type.String({ description: '定时任务 ID；定时任务自动执行中可省略以读取当前任务' })),
       }),
@@ -316,7 +316,7 @@ function buildAutomationTools(sdk: PiSdk, ctx: PiBuiltinToolsContext): ToolDefin
     sdk.defineTool({
       name: 'mcp__automation__create_automation',
       label: '创建定时任务',
-      description: '创建 Proma 持久化定时任务。适合无人值守、有稳定价值的场景。纯提醒/闹钟、需要用户实时参与判断、或现在就该做完即终结的事不要创建。',
+      description: '创建 Copis 持久化定时任务。适合无人值守、有稳定价值的场景。纯提醒/闹钟、需要用户实时参与判断、或现在就该做完即终结的事不要创建。',
       parameters: Type.Object({
         name: Type.String({ description: '任务名，简短说明长期反复执行的目标' }),
         prompt: Type.String({ description: '每次触发时发送给 Agent 的完整自然语言指令' }),
@@ -384,7 +384,7 @@ function buildAutomationTools(sdk: PiSdk, ctx: PiBuiltinToolsContext): ToolDefin
     sdk.defineTool({
       name: 'mcp__automation__update_automation',
       label: '修改定时任务',
-      description: '修改 Proma 定时任务，包括名称、执行提示词、频率和启用状态。定时任务自动执行中可以省略 id 来修改当前任务。',
+      description: '修改 Copis 定时任务，包括名称、执行提示词、频率和启用状态。定时任务自动执行中可以省略 id 来修改当前任务。',
       parameters: Type.Object({
         id: Type.Optional(Type.String({ description: '定时任务 ID；定时任务自动执行中可省略以更新当前任务' })),
         name: Type.Optional(Type.String({ description: '新的任务名' })),
@@ -443,7 +443,7 @@ function buildAutomationTools(sdk: PiSdk, ctx: PiBuiltinToolsContext): ToolDefin
     sdk.defineTool({
       name: 'mcp__automation__delete_automation',
       label: '删除定时任务',
-      description: '删除 Proma 定时任务。只在用户明确要求删除，或任务已经长期无价值且用户确认后使用。',
+      description: '删除 Copis 定时任务。只在用户明确要求删除，或任务已经长期无价值且用户确认后使用。',
       parameters: Type.Object({
         id: Type.String({ description: '要删除的定时任务 ID' }),
       }),
@@ -457,7 +457,7 @@ function buildAutomationTools(sdk: PiSdk, ctx: PiBuiltinToolsContext): ToolDefin
     sdk.defineTool({
       name: 'mcp__automation__run_automation_now',
       label: '立即运行定时任务',
-      description: '立即运行 Proma 定时任务。用于用户要求马上验证，或修改任务后需要试跑一次。',
+      description: '立即运行 Copis 定时任务。用于用户要求马上验证，或修改任务后需要试跑一次。',
       parameters: Type.Object({
         id: Type.Optional(Type.String({ description: '要立即运行的定时任务 ID；定时任务自动执行中可省略以运行当前任务' })),
       }),
@@ -481,13 +481,18 @@ function buildPlanningTools(sdk: PiSdk, ctx: PiBuiltinToolsContext): ToolDefinit
   const optionalPlanningFields = {
     notes: Type.Optional(Type.String({ description: '补充说明' })),
     workspaceId: Type.Optional(Type.String({ description: '所属工作区 ID；不传默认当前工作区' })),
-    groupId: Type.Optional(Type.String({ description: '可选分组 ID；必须来自该对象对应范围的 list_groups 查询结果' })),
+    groupId: Type.Optional(Type.String({ description: '可选 Todo 分组 ID；必须来自 list_groups 查询结果' })),
     tagIds: Type.Optional(Type.Array(Type.String(), { description: '可选标签 ID 列表；会整体替换该对象现有标签' })),
+  }
+  const optionalCalendarFields = {
+    notes: Type.Optional(Type.String({ description: '补充说明' })),
+    workspaceId: Type.Optional(Type.String({ description: '绑定的工作区 ID；不传默认当前工作区' })),
+    tagIds: Type.Optional(Type.Array(Type.String(), { description: '可选标签 ID 列表；会整体替换该日程现有标签' })),
   }
   return [
     sdk.defineTool({
       name: 'mcp__planning__list_todos', label: '列出 Todo',
-      description: '列出 Proma 本地 Todo。适合在安排工作、检查今天待办、维护任务状态前使用。仅 Pi Agent 可用。',
+      description: '列出 Copis 本地 Todo。适合在安排工作、检查今天待办、维护任务状态前使用。仅 Pi Agent 可用。',
       parameters: Type.Object({
         status: Type.Optional(Type.Union([Type.Literal('open'), Type.Literal('completed')])),
         dueBefore: Type.Optional(Type.Number({ description: '仅返回此截止时间之前的 Todo，Unix 毫秒时间戳' })),
@@ -511,7 +516,7 @@ function buildPlanningTools(sdk: PiSdk, ctx: PiBuiltinToolsContext): ToolDefinit
     }),
     sdk.defineTool({
       name: 'mcp__planning__create_todo', label: '创建 Todo',
-      description: '创建 Proma 本地 Todo。调用前必须先用 list_todos(status=open) 检查重复，并用 list_groups({ scope: todo }) 查询并优先复用 Todo 分组；用户明确提出待办，或可合理确定下一步时使用。未传 dueAt 时默认当天结束前；仅 Pi Agent 可用。',
+      description: '创建 Copis 本地 Todo。调用前必须先用 list_todos(status=open) 检查重复，并用 list_groups 查询并优先复用 Todo 分组；用户明确提出待办，或可合理确定下一步时使用。未传 dueAt 时默认当天结束前；仅 Pi Agent 可用。',
       parameters: Type.Object({ title: Type.String(), ...optionalPlanningFields, priority: Type.Optional(Type.Union([Type.Literal('low'), Type.Literal('medium'), Type.Literal('high')])), dueAt: Type.Optional(Type.Number({ description: '截止时间 Unix 毫秒时间戳' })) }),
       async execute(_id: string, params: unknown) {
         const args = params as Record<string, unknown>
@@ -571,7 +576,7 @@ function buildPlanningTools(sdk: PiSdk, ctx: PiBuiltinToolsContext): ToolDefinit
     }),
     sdk.defineTool({
       name: 'mcp__planning__list_calendar_events', label: '列出日程',
-      description: '列出 Proma 本地日程。用于查看指定时间范围的安排。仅 Pi Agent 可用。',
+      description: '列出 Copis 本地日程。用于查看指定时间范围的安排。仅 Pi Agent 可用。',
       parameters: Type.Object({
         startAt: Type.Optional(Type.Number({ description: '查询范围起点，Unix 毫秒时间戳' })),
         endAt: Type.Optional(Type.Number({ description: '查询范围终点，Unix 毫秒时间戳' })),
@@ -595,11 +600,13 @@ function buildPlanningTools(sdk: PiSdk, ctx: PiBuiltinToolsContext): ToolDefinit
     }),
     sdk.defineTool({
       name: 'mcp__planning__create_calendar_event', label: '创建日程',
-      description: '创建 Proma 本地日程。分组必须来自 list_groups({ scope: calendar })；用户明确提供时间安排时使用。仅 Pi Agent 可用。',
-      parameters: Type.Object({ title: Type.String(), startAt: Type.Number({ description: '开始时间 Unix 毫秒时间戳' }), endAt: Type.Optional(Type.Number()), allDay: Type.Optional(Type.Boolean()), ...optionalPlanningFields, todoId: Type.Optional(Type.String()) }),
+      description: '创建 Copis 本地日程，并绑定到目标工作区；用户明确提供时间安排时使用。仅 Pi Agent 可用。',
+      parameters: Type.Object({ title: Type.String(), startAt: Type.Number({ description: '开始时间 Unix 毫秒时间戳' }), endAt: Type.Optional(Type.Number()), allDay: Type.Optional(Type.Boolean()), ...optionalCalendarFields, todoId: Type.Optional(Type.String()) }),
       async execute(_id: string, params: unknown) {
         const args = params as Record<string, unknown>
-        const event = createCalendarEvent({ title: assertNonBlank(args.title as string, 'title'), startAt: args.startAt as number, endAt: args.endAt as number | undefined, allDay: args.allDay as boolean | undefined, notes: args.notes as string | undefined, groupId: args.groupId as string | undefined, tagIds: args.tagIds as string[] | undefined, workspaceId: (args.workspaceId as string | undefined) ?? ctx.workspaceId, todoId: args.todoId as string | undefined })
+        const workspaceId = (args.workspaceId as string | undefined) ?? ctx.workspaceId
+        if (!workspaceId) throw new Error('日程必须绑定工作区')
+        const event = createCalendarEvent({ title: assertNonBlank(args.title as string, 'title'), startAt: args.startAt as number, endAt: args.endAt as number | undefined, allDay: args.allDay as boolean | undefined, notes: args.notes as string | undefined, tagIds: args.tagIds as string[] | undefined, workspaceId, todoId: args.todoId as string | undefined })
         broadcastPlanningChanged(['calendar_events', 'reminders'])
         broadcastPlanningAgentOperation({ sessionId: ctx.sessionId, target: 'calendar_event', action: 'created', title: event.title })
         return jsonToolResult({ event })
@@ -608,10 +615,11 @@ function buildPlanningTools(sdk: PiSdk, ctx: PiBuiltinToolsContext): ToolDefinit
     sdk.defineTool({
       name: 'mcp__planning__update_calendar_event', label: '更新日程',
       description: '更新日程时间或内容。仅 Pi Agent 可用。',
-      parameters: Type.Object({ id: Type.String(), title: Type.Optional(Type.String()), notes: Type.Optional(Type.String()), startAt: Type.Optional(Type.Number()), endAt: Type.Optional(Type.Union([Type.Number(), Type.Null()])), allDay: Type.Optional(Type.Boolean()), groupId: Type.Optional(Type.Union([Type.String(), Type.Null()])), tagIds: Type.Optional(Type.Array(Type.String())), todoId: Type.Optional(Type.Union([Type.String(), Type.Null()])) }),
+      parameters: Type.Object({ id: Type.String(), title: Type.Optional(Type.String()), notes: Type.Optional(Type.String()), startAt: Type.Optional(Type.Number()), endAt: Type.Optional(Type.Union([Type.Number(), Type.Null()])), allDay: Type.Optional(Type.Boolean()), workspaceId: Type.Optional(Type.Union([Type.String(), Type.Null()])), tagIds: Type.Optional(Type.Array(Type.String())), todoId: Type.Optional(Type.Union([Type.String(), Type.Null()])) }),
       async execute(_id: string, params: unknown) {
         const args = params as Record<string, unknown>
-        const event = updateCalendarEvent({ id: assertNonBlank(args.id as string, 'id'), title: args.title as string | undefined, notes: args.notes as string | undefined, startAt: args.startAt as number | undefined, endAt: args.endAt as number | null | undefined, allDay: args.allDay as boolean | undefined, groupId: args.groupId as string | null | undefined, tagIds: args.tagIds as string[] | undefined, todoId: args.todoId as string | null | undefined })
+        if (args.workspaceId === null) throw new Error('日程必须绑定工作区')
+        const event = updateCalendarEvent({ id: assertNonBlank(args.id as string, 'id'), title: args.title as string | undefined, notes: args.notes as string | undefined, startAt: args.startAt as number | undefined, endAt: args.endAt as number | null | undefined, allDay: args.allDay as boolean | undefined, workspaceId: args.workspaceId as string | undefined, tagIds: args.tagIds as string[] | undefined, todoId: args.todoId as string | null | undefined })
         if (!event) throw new Error('日程不存在')
         broadcastPlanningChanged(['calendar_events', 'reminders'])
         broadcastPlanningAgentOperation({ sessionId: ctx.sessionId, target: 'calendar_event', action: 'updated', title: event.title })
@@ -620,7 +628,7 @@ function buildPlanningTools(sdk: PiSdk, ctx: PiBuiltinToolsContext): ToolDefinit
     }),
     sdk.defineTool({
       name: 'mcp__planning__delete_calendar_event', label: '删除日程',
-      description: '删除 Proma 本地日程。只在用户明确要求删除时使用。仅 Pi Agent 可用。',
+      description: '删除 Copis 本地日程。只在用户明确要求删除时使用。仅 Pi Agent 可用。',
       parameters: Type.Object({ id: Type.String() }),
       async execute(_id: string, params: unknown) {
         assertPlanningDeleteAllowed(ctx)
@@ -635,44 +643,41 @@ function buildPlanningTools(sdk: PiSdk, ctx: PiBuiltinToolsContext): ToolDefinit
       },
     }),
     sdk.defineTool({
-      name: 'mcp__planning__list_groups', label: '列出分组',
-      description: '列出指定范围的 Todo 或日程分组。创建或归入分组前优先调用，以复用该范围内的现有分组。仅 Pi Agent 可用。',
-      parameters: Type.Object({ scope: Type.Union([Type.Literal('todo'), Type.Literal('calendar')]) }),
-      async execute(_id: string, params: unknown) {
-        const scope = (params as { scope: 'todo' | 'calendar' }).scope
-        return jsonToolResult({ groups: listPlanningGroups(scope) })
+      name: 'mcp__planning__list_groups', label: '列出 Todo 分组',
+      description: '列出 Todo 分组。创建或归入 Todo 分组前优先调用，以复用现有分组。仅 Pi Agent 可用。',
+      parameters: Type.Object({}),
+      async execute() {
+        return jsonToolResult({ groups: listPlanningGroups('todo') })
       },
     }),
     sdk.defineTool({
-      name: 'mcp__planning__create_group', label: '创建分组',
-      description: '创建 Todo 或日程范围内的独立分组。只在用户明确提出新分组或该范围内现有分组不适用时使用。仅 Pi Agent 可用。',
-      parameters: Type.Object({ scope: Type.Union([Type.Literal('todo'), Type.Literal('calendar')]), name: Type.String(), color: Type.Optional(Type.String()), sortOrder: Type.Optional(Type.Number()) }),
+      name: 'mcp__planning__create_group', label: '创建 Todo 分组',
+      description: '创建 Todo 分组。只在用户明确提出新分组或现有分组不适用时使用。仅 Pi Agent 可用。',
+      parameters: Type.Object({ name: Type.String(), color: Type.Optional(Type.String()), sortOrder: Type.Optional(Type.Number()) }),
       async execute(_id: string, params: unknown) {
-        const args = params as { scope: 'todo' | 'calendar'; name: string; color?: string; sortOrder?: number }
-        const group = createPlanningGroup({ scope: args.scope, name: assertNonBlank(args.name, 'name'), color: args.color, sortOrder: args.sortOrder })
-        broadcastPlanningChanged(args.scope === 'todo' ? ['todo_groups', 'todos', 'reminders'] : ['calendar_groups', 'calendar_events', 'reminders']); return jsonToolResult({ group })
+        const args = params as { name: string; color?: string; sortOrder?: number }
+        const group = createPlanningGroup({ scope: 'todo', name: assertNonBlank(args.name, 'name'), color: args.color, sortOrder: args.sortOrder })
+        broadcastPlanningChanged(['todo_groups', 'todos', 'reminders']); return jsonToolResult({ group })
       },
     }),
     sdk.defineTool({
-      name: 'mcp__planning__update_group', label: '更新分组',
-      description: '更新指定范围内的分组，不能借此移动分组范围。仅 Pi Agent 可用。',
-      parameters: Type.Object({ id: Type.String(), scope: Type.Union([Type.Literal('todo'), Type.Literal('calendar')]), name: Type.Optional(Type.String()), color: Type.Optional(Type.Union([Type.String(), Type.Null()])), sortOrder: Type.Optional(Type.Number()) }),
+      name: 'mcp__planning__update_group', label: '更新 Todo 分组',
+      description: '更新 Todo 分组。仅 Pi Agent 可用。',
+      parameters: Type.Object({ id: Type.String(), name: Type.Optional(Type.String()), color: Type.Optional(Type.Union([Type.String(), Type.Null()])), sortOrder: Type.Optional(Type.Number()) }),
       async execute(_id: string, params: unknown) {
         const args = params as Record<string, unknown>
-        const scope = args.scope as 'todo' | 'calendar'
-        const group = updatePlanningGroup({ id: assertNonBlank(args.id as string, 'id'), scope, name: args.name as string | undefined, color: args.color as string | null | undefined, sortOrder: args.sortOrder as number | undefined })
-        if (!group) throw new Error('分组不存在'); broadcastPlanningChanged(scope === 'todo' ? ['todo_groups', 'todos', 'reminders'] : ['calendar_groups', 'calendar_events', 'reminders']); return jsonToolResult({ group })
+        const group = updatePlanningGroup({ id: assertNonBlank(args.id as string, 'id'), scope: 'todo', name: args.name as string | undefined, color: args.color as string | null | undefined, sortOrder: args.sortOrder as number | undefined })
+        if (!group) throw new Error('分组不存在'); broadcastPlanningChanged(['todo_groups', 'todos', 'reminders']); return jsonToolResult({ group })
       },
     }),
     sdk.defineTool({
-      name: 'mcp__planning__delete_group', label: '删除分组',
-      description: '删除指定范围内的分组，并仅清除该范围关联对象的分组字段。只在用户明确要求删除时使用。仅 Pi Agent 可用。',
-      parameters: Type.Object({ id: Type.String(), scope: Type.Union([Type.Literal('todo'), Type.Literal('calendar')]) }),
+      name: 'mcp__planning__delete_group', label: '删除 Todo 分组',
+      description: '删除 Todo 分组，并清除 Todo 关联的分组字段。只在用户明确要求删除时使用。仅 Pi Agent 可用。',
+      parameters: Type.Object({ id: Type.String() }),
       async execute(_id: string, params: unknown) {
         assertPlanningDeleteAllowed(ctx)
-        const args = params as { id: string; scope: 'todo' | 'calendar' }
-        const deleted = deletePlanningGroup(args.scope, assertNonBlank(args.id, 'id'))
-        if (deleted) broadcastPlanningChanged(args.scope === 'todo' ? ['todo_groups', 'todos', 'reminders'] : ['calendar_groups', 'calendar_events', 'reminders'])
+        const deleted = deletePlanningGroup('todo', assertNonBlank((params as { id: string }).id, 'id'))
+        if (deleted) broadcastPlanningChanged(['todo_groups', 'todos', 'reminders'])
         return jsonToolResult({ deleted })
       },
     }),
@@ -773,17 +778,17 @@ function buildVisionRelayTools(sdk: PiSdk, ctx: PiBuiltinToolsContext): ToolDefi
 // ===== Collaboration 工具（占位，下阶段实现） =====
 
 // collaboration 逻辑较重（涉及子会话生命周期管理、EventBus 订阅、BlockedEvent 冒泡），
-// 需要独立桥接文件。当前阶段先确保 automation 和 proma-cloud 可用。
+// 需要独立桥接文件。当前阶段先确保 automation 和 copis-cloud 可用。
 // TODO: 从 agent-collaboration-tools.ts 提取核心逻辑到 service 层，再桥接到 Pi。
 
-// ===== Proma Cloud 工具 =====
+// ===== Copis Cloud 工具 =====
 
-function buildPromaCloudTools(sdk: PiSdk, _ctx: PiBuiltinToolsContext): ToolDefinition[] {
-  // proma-cloud MCP 工具（get_credentials / create_app_key）通常由 Proma 的
+function buildCopisCloudTools(sdk: PiSdk, _ctx: PiBuiltinToolsContext): ToolDefinition[] {
+  // copis-cloud MCP 工具（get_credentials / create_app_key）通常由 Copis 的
   // 内置 MCP server 进程独立提供（非 SDK in-process），Pi adapter 在 orchestrator
   // 构建 mcpServers 后通过 customTools 或 MCP stdio 通道访问。
-  // 如果 proma-cloud 是 SDK in-process MCP，需要在此桥接：
-  // 当前实现中 proma-cloud 走的是外部 MCP（不在 injectBuiltinMcpServers 内），
+  // 如果 copis-cloud 是 SDK in-process MCP，需要在此桥接：
+  // 当前实现中 copis-cloud 走的是外部 MCP（不在 injectBuiltinMcpServers 内），
   // 所以 Pi runtime 需要通过 MCP stdio transport 独立连接，不在这里注册。
   return []
 }
@@ -855,7 +860,7 @@ export async function buildPiBuiltinTools(
 
   // nano-banana 当前走外部 MCP stdio，不需要 in-process 桥接
 
-  const cloudTools = buildPromaCloudTools(sdk, ctx)
+  const cloudTools = buildCopisCloudTools(sdk, ctx)
   tools.push(...cloudTools)
 
   return { tools, collaborationAvailable }

@@ -12,7 +12,7 @@ import { CalendarDays, ListTodo, MessageSquareText, Sparkles, Server } from 'luc
 import { MentionList } from './MentionList'
 import type { MentionListRef } from './MentionList'
 import { createLatestSuggestionRequestGuard, createMentionPopup, positionPopup, isSuggestionTriggerPresent, shouldSuppressEscTrigger, shouldClearEscSuppressionOnExit, type EscSuppressedTrigger } from './mention-popup-utils'
-import type { AgentSessionReferenceSearchResult } from '@proma/shared'
+import type { AgentSessionReferenceSearchResult } from '@copis/shared'
 import {
   buildPlanningReferenceItems,
   filterPlanningReferenceItems,

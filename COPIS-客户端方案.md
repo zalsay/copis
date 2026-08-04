@@ -10,7 +10,7 @@
 
 基础项目：
 
-    /Users/sisu/Documents/dev/Proma
+    /Users/sisu/Documents/dev/Copis
 
 后端项目：
 
@@ -18,16 +18,16 @@
 
 ## 2. 总体结论
 
-Copis 直接以 Proma 项目作为 Electron 客户端基础，在 Proma 的应用、渲染器、主进程、Pi SDK 和构建系统之上改造成 Working 专用产品。
+Copis 直接以 Copis 项目作为 Electron 客户端基础，在 Copis 的应用、渲染器、主进程、Pi SDK 和构建系统之上改造成 Working 专用产品。
 
-不在 ai-education/frontend 中新增 Electron 页面，也不在 Proma 中维护第二套独立 Electron 构建链路。
+不在 ai-education/frontend 中新增 Electron 页面，也不在 Copis 中维护第二套独立 Electron 构建链路。
 
 Copis 的界面组成如下：
 
-- Proma 负责整体应用壳层。
+- Copis 负责整体应用壳层。
 - 左侧菜单保留当前 Working 的简单版本。
-- 中间对话区域直接复用 Proma 的 Conversation UI。
-- 右侧文件区域直接复用 Proma 的 File Panel/UI。
+- 中间对话区域直接复用 Copis 的 Conversation UI。
+- 右侧文件区域直接复用 Copis 的 File Panel/UI。
 - Working 只补充业务数据、运行状态、工作区和技能等领域逻辑。
 
 ai-education 继续负责后端服务和现有 Web/Tauri 客户端。Copis 是独立的 Electron 产品，使用同一套后端业务接口，但不改变现有 Tauri 本地文件行为。
@@ -36,14 +36,14 @@ ai-education 继续负责后端服务和现有 Web/Tauri 客户端。Copis 是�
 
 ~~~~mermaid
 flowchart LR
-  A["Copis Electron Renderer"] --> B["Proma AppShell"]
+  A["Copis Electron Renderer"] --> B["Copis AppShell"]
   B --> C["Working 简单左侧菜单"]
-  B --> D["Proma 对话区域"]
-  B --> E["Proma 右侧文件区域"]
-  D --> F["Proma Preload IPC"]
+  B --> D["Copis 对话区域"]
+  B --> E["Copis 右侧文件区域"]
+  D --> F["Copis Preload IPC"]
   E --> F
   F --> G["Electron Main Process"]
-  G --> H["Proma Pi 本地 SDK"]
+  G --> H["Copis Pi 本地 SDK"]
   G --> I["本地工作区文件服务"]
   G --> J["ai-education 本机后端"]
 ~~~~
@@ -52,11 +52,11 @@ flowchart LR
 
 | 模块 | Copis 中的职责 |
 | --- | --- |
-| Proma AppShell | 应用布局、主题、窗口级交互和基础导航 |
+| Copis AppShell | 应用布局、主题、窗口级交互和基础导航 |
 | Working 左侧菜单 | Working 当前的简单菜单内容和入口 |
-| Proma 对话区域 | 消息展示、Composer、滚动、对话交互和基础操作 |
-| Proma 右侧文件区域 | 文件列表、文件预览、文件选择和面板状态 |
-| Proma Pi SDK | 本地 Agent 执行、工具调用和模型流式事件 |
+| Copis 对话区域 | 消息展示、Composer、滚动、对话交互和基础操作 |
+| Copis 右侧文件区域 | 文件列表、文件预览、文件选择和面板状态 |
+| Copis Pi SDK | 本地 Agent 执行、工具调用和模型流式事件 |
 | Electron main/preload | IPC、文件访问、Agent 生命周期和后端请求 |
 | ai-education 后端 | 账号、工作区、会话历史、技能和业务数据 |
 | 本地文件系统 | Copis 默认的工作区和文件数据来源 |
@@ -65,7 +65,7 @@ flowchart LR
 
 ### 4.1 应用壳层
 
-直接沿用 Proma 的：
+直接沿用 Copis 的：
 
 - AppShell
 - 顶部应用栏
@@ -74,24 +74,24 @@ flowchart LR
 - Dialog、Popover、Settings 等基础组件
 - classic theme 的颜色、间距、字体和交互状态
 
-不再把当前 Working 的整体 Working.css 作为全局样式迁移到 Copis，避免覆盖 Proma 的组件系统。
+不再把当前 Working 的整体 Working.css 作为全局样式迁移到 Copis，避免覆盖 Copis 的组件系统。
 
 ### 4.2 左侧菜单
 
 左侧菜单保持当前 Working 的简单版本：
 
 - 菜单项目、层级和业务入口以当前 Working 为准。
-- 菜单容器、折叠行为、宽度、选中态和主题能力复用 Proma 的侧栏代码。
-- 只替换菜单内容和 Working 相关状态，不引入 Proma 当前不需要的复杂菜单。
+- 菜单容器、折叠行为、宽度、选中态和主题能力复用 Copis 的侧栏代码。
+- 只替换菜单内容和 Working 相关状态，不引入 Copis 当前不需要的复杂菜单。
 - 菜单点击后仍由 Copis 的 Working 路由或状态切换控制主内容区域。
 
-目标是保留 Working 的简单操作路径，同时让菜单在 Proma 壳层中拥有一致的尺寸、主题和交互行为。
+目标是保留 Working 的简单操作路径，同时让菜单在 Copis 壳层中拥有一致的尺寸、主题和交互行为。
 
 ### 4.3 中间对话区域
 
-中间区域直接复用 Proma 的对话区域，不重新实现 Working 专属聊天布局。
+中间区域直接复用 Copis 的对话区域，不重新实现 Working 专属聊天布局。
 
-Working 需要提供适配层，将以下数据接入 Proma 对话组件：
+Working 需要提供适配层，将以下数据接入 Copis 对话组件：
 
 - Working 会话和消息历史
 - Pi 本地 Agent 的流式文本
@@ -99,11 +99,11 @@ Working 需要提供适配层，将以下数据接入 Proma 对话组件：
 - Patch、Todo、文件变更和运行状态
 - 停止、失败、完成和重试状态
 
-Proma 对话区域保留视觉和交互实现，Working 只负责数据源和业务动作。
+Copis 对话区域保留视觉和交互实现，Working 只负责数据源和业务动作。
 
 ### 4.4 右侧文件区域
 
-右侧区域直接复用 Proma 的文件区域代码，但文件数据源改为 Copis 本地文件服务。
+右侧区域直接复用 Copis 的文件区域代码，但文件数据源改为 Copis 本地文件服务。
 
 文件区域需要支持：
 
@@ -114,7 +114,7 @@ Proma 对话区域保留视觉和交互实现，Working 只负责数据源和业
 - Patch 或文件差异展示
 - 与当前会话关联的本地文件状态
 
-不将右侧文件区域连接到 COS。Proma 的文件 UI 与文件存储实现必须通过 provider/service 接口隔离，Copis 使用 LocalFileProvider。
+不将右侧文件区域连接到 COS。Copis 的文件 UI 与文件存储实现必须通过 provider/service 接口隔离，Copis 使用 LocalFileProvider。
 
 ## 5. Agent 方案
 
@@ -122,11 +122,11 @@ Proma 对话区域保留视觉和交互实现，Working 只负责数据源和业
 
 Agent 只在 Copis Electron main process 中运行：
 
-    Renderer -> Preload IPC -> Main Process -> Proma Pi Local SDK
+    Renderer -> Preload IPC -> Main Process -> Copis Pi Local SDK
 
 renderer 不直接引入 Pi SDK，也不直接使用 Node 文件系统。
 
-优先复用 Proma 已有的 Agent service、Pi 初始化、模型配置和事件处理逻辑，只为 Working 增加运行上下文和事件适配，不重复实现另一套 Pi 生命周期。
+优先复用 Copis 已有的 Agent service、Pi 初始化、模型配置和事件处理逻辑，只为 Working 增加运行上下文和事件适配，不重复实现另一套 Pi 生命周期。
 
 ### 5.2 运行上下文
 
@@ -223,19 +223,19 @@ Copis 目录作为独立产品仓库，目标 remote 为：
 
     origin = git@github.com:zalsay/copis.git
 
-Proma 原仓库作为后续同步用的 upstream。正式实施前需要确认 Proma 的官方 remote 和许可证，确保派生、修改和分发方式符合许可要求。
+Copis 原仓库作为后续同步用的 upstream。正式实施前需要确认 Copis 的官方 remote 和许可证，确保派生、修改和分发方式符合许可要求。
 
-推荐保留 Proma 历史，不使用 Git submodule。这样 Copis 可以直接使用和修改 Proma 的 Electron 源码，同时仍能定期同步 Proma 上游更新。
+推荐保留 Copis 历史，不使用 Git submodule。这样 Copis 可以直接使用和修改 Copis 的 Electron 源码，同时仍能定期同步 Copis 上游更新。
 
 推荐分支职责：
 
 - main：Copis 可发布代码
 - codex/*：功能开发和迁移
-- proma-sync/*：同步 Proma 上游时的临时分支
+- copis-sync/*：同步 Copis 上游时的临时分支
 
 ### 8.2 Electron 构建
 
-继续使用 Proma 现有：
+继续使用 Copis 现有：
 
 - Bun workspace
 - Vite renderer 构建
@@ -261,32 +261,32 @@ Copis 需要独立配置：
 
 ### 阶段一：Copis 基线
 
-- 以 Proma 稳定版本建立 Copis 仓库基线。
+- 以 Copis 稳定版本建立 Copis 仓库基线。
 - 设置 Copis GitHub remote。
-- 确认 Proma upstream 和许可证。
+- 确认 Copis upstream 和许可证。
 - 确认 Copis 产品配置和本机后端地址。
 
-### 阶段二：Proma 壳层产品化
+### 阶段二：Copis 壳层产品化
 
 - 将应用身份切换为 Copis。
-- 保留 Proma Electron 启动、开发和打包流程。
+- 保留 Copis Electron 启动、开发和打包流程。
 - 建立 Copis 独立 userData、日志和配置边界。
 
 ### 阶段三：Working 菜单迁移
 
-- 使用 Proma 侧栏代码承载当前 Working 简单菜单。
+- 使用 Copis 侧栏代码承载当前 Working 简单菜单。
 - 迁移菜单状态、入口和工作区切换行为。
 - 不迁移 Working 的整体页面壳层。
 
 ### 阶段四：对话和文件区域接入
 
-- 复用 Proma Conversation UI。
-- 复用 Proma 右侧 File Panel。
-- 将 Working 会话、消息、运行事件和本地文件 provider 接入 Proma 组件。
+- 复用 Copis Conversation UI。
+- 复用 Copis 右侧 File Panel。
+- 将 Working 会话、消息、运行事件和本地文件 provider 接入 Copis 组件。
 
 ### 阶段五：本地 Agent 和后端
 
-- 复用 Proma Pi Agent service。
+- 复用 Copis Pi Agent service。
 - 接入本地工作区和文件 IPC。
 - 接入 ai-education 本机后端的账号、工作区、会话和历史接口。
 - 完成本地运行、停止、失败恢复和重试。
@@ -302,19 +302,19 @@ Copis 需要独立配置：
 
 ## 10. 验收标准
 
-- Copis 使用 Proma 的 Electron 壳层和构建系统。
+- Copis 使用 Copis 的 Electron 壳层和构建系统。
 - 产品名称、窗口标题和安装包身份均为 Copis。
 - 左侧菜单是当前 Working 的简单版本。
-- 中间对话区域复用 Proma。
-- 右侧文件区域复用 Proma。
-- Agent 使用 Proma Pi 本地 SDK。
+- 中间对话区域复用 Copis。
+- 右侧文件区域复用 Copis。
+- Agent 使用 Copis Pi 本地 SDK。
 - 本地工作区文件不自动上传 COS。
 - Copis 可以连接本机运行的 ai-education 后端。
 - 后端地址可以在后续部署时切换。
-- Proma 对话区域能够显示 Working 消息、工具调用、Patch、Todo 和运行错误。
+- Copis 对话区域能够显示 Working 消息、工具调用、Patch、Todo 和运行错误。
 - 失败后 Composer 可以继续使用并直接重试。
 - 原 ai-education Web/Tauri 客户端不受影响。
-- Copis 可以复用 Proma 原有 Electron 构建和打包流程。
+- Copis 可以复用 Copis 原有 Electron 构建和打包流程。
 
 ## 11. 当前不做的事项
 
@@ -323,6 +323,6 @@ Copis 需要独立配置：
 - 不把 Copis 的本地 Agent 改成远程 working-agent-service。
 - 不默认接入 COS。
 - 不自动同步整个本地工作区到后端。
-- 不重写 Proma 对话区域。
-- 不重写 Proma 右侧文件区域。
+- 不重写 Copis 对话区域。
+- 不重写 Copis 右侧文件区域。
 - 不创建第二套 Electron 构建链路。

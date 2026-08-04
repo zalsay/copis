@@ -46,6 +46,14 @@
   background-color: rgba(46, 204, 113, 0.03) !important;
 }
 
+.copis-agent-session [data-input-mode="agent"] > div:first-child.plan-mode-input {
+  background-color: rgb(43 33 55 / 0.70) !important;
+}
+
+:root.ui-modern.dark:not(.theme-terminal-dark) .copis-agent-session [data-input-mode="agent"] > div:first-child.plan-mode-input {
+  background-color: rgb(43 33 55 / 0.70) !important;
+}
+
 @media (max-width: 720px) {
   .copis-agent-session.new-conversation .copis-agent-new-session-hero {
     top: calc(50% - 130px);

@@ -16,13 +16,13 @@ import type {
   AgentDefinition,
   JsonSchemaOutputFormat,
   SDKMessage,
-  PromaPermissionMode,
-} from '@proma/shared'
+  CopisPermissionMode,
+} from '@copis/shared'
 import {
   THINKING_SIGNATURE_ERROR_MESSAGE,
   THINKING_SIGNATURE_ERROR_TITLE,
   isThinkingSignatureError as matchesThinkingSignatureError,
-} from '@proma/shared'
+} from '@copis/shared'
 import type { CanUseToolOptions, PermissionResult } from '../agent-permission-service'
 import { TRANSIENT_NETWORK_PATTERN, isMalformedResponseError } from '../error-patterns'
 import { spawn as spawnChild, execFileSync } from 'node:child_process'
@@ -33,13 +33,13 @@ type SDKQuery = ReturnType<typeof import('@anthropic-ai/claude-agent-sdk').query
 /** SDK 用户消息类型 */
 type SDKUserMessage = import('@anthropic-ai/claude-agent-sdk').SDKUserMessage
 
-/** Claude SDK 可读取的 settings 层级。Proma 只启用隔离的 user 层。 */
+/** Claude SDK 可读取的 settings 层级。Copis 只启用隔离的 user 层。 */
 export type ClaudeSettingSource = 'user'
 
 /**
  * 解析 Claude SDK 的 settings 来源。
  *
- * 未显式指定时同样只读取 CLAUDE_CONFIG_DIR 指向的 Proma 隔离配置，
+ * 未显式指定时同样只读取 CLAUDE_CONFIG_DIR 指向的 Copis 隔离配置，
  * 不读取项目根中的 .claude 或 CLAUDE.md。
  */
 export function resolveClaudeSettingSources(
@@ -49,7 +49,7 @@ export function resolveClaudeSettingSources(
 }
 
 /**
- * 所有项目均从 Proma 隔离配置读取 Claude SDK settings。
+ * 所有项目均从 Copis 隔离配置读取 Claude SDK settings。
  * 会话 sidecar 通过 `settings` 文件显式传入，不依赖 project source。
  */
 export function getClaudeSettingSourcesForWorkspace(): ClaudeSettingSource[] {
@@ -144,8 +144,8 @@ export interface ClaudeAgentQueryOptions extends AgentQueryInput {
   env: Record<string, string | undefined>
   /** 最大轮次（undefined = SDK 默认） */
   maxTurns?: number
-  /** SDK 权限模式（Proma 当前三种模式直接映射 SDK 原生模式） */
-  sdkPermissionMode: PromaPermissionMode
+  /** SDK 权限模式（Copis 当前三种模式直接映射 SDK 原生模式） */
+  sdkPermissionMode: CopisPermissionMode
   /** 是否跳过权限检查 */
   allowDangerouslySkipPermissions: boolean
   /** 自定义权限处理器（匹配 SDK CanUseTool 签名） */
@@ -164,7 +164,7 @@ export interface ClaudeAgentQueryOptions extends AgentQueryInput {
   resumeSessionAt?: string
   /** MCP 服务器配置 */
   mcpServers?: Record<string, unknown>
-  /** 仅使用 Proma 显式传入的 MCP 配置，避免 SDK 从其它来源发现额外 MCP */
+  /** 仅使用 Copis 显式传入的 MCP 配置，避免 SDK 从其它来源发现额外 MCP */
   strictMcpConfig?: boolean
   /** 插件配置 */
   plugins?: Array<{ type: 'local'; path: string; skipMcpDiscovery?: boolean }>
@@ -205,9 +205,9 @@ export interface ClaudeAgentQueryOptions extends AgentQueryInput {
   sdkSessionId?: string
   /** 附加的外部目录（SDK additionalDirectories） */
   additionalDirectories?: string[]
-  /** Proma 管理的会话级 settings.json；通过 SDK flag settings 显式加载。 */
+  /** Copis 管理的会话级 settings.json；通过 SDK flag settings 显式加载。 */
   settingsFilePath?: string
-  /** Claude SDK settings 来源。省略时仅读取 Proma 隔离的 user 配置。 */
+  /** Claude SDK settings 来源。省略时仅读取 Copis 隔离的 user 配置。 */
   settingSources?: readonly ClaudeSettingSource[]
 }
 
@@ -219,7 +219,7 @@ export interface ClaudeAgentQueryOptions extends AgentQueryInput {
 const FRIENDLY_ERROR_MESSAGES: Array<{ pattern: RegExp; message: string }> = [
   {
     pattern: /not logged in|please run \/login/i,
-    message: '请检查是否选择了正确的 Proma 供应渠道和模型',
+    message: '请检查是否选择了正确的 Copis 供应渠道和模型',
   },
   {
     pattern: /validation error/i,
@@ -500,7 +500,7 @@ export function mapSDKErrorToTypedError(
 
   // “未选择正确渠道/模型”场景：友好化后的文案已固定，无法登录多半是渠道或模型配置有误，
   // 引导用户直接重新选择模型，而非跳转设置页面
-  const isInvalidChannelOrModel = /请检查是否选择了正确的 Proma 供应渠道和模型/.test(mapped.message)
+  const isInvalidChannelOrModel = /请检查是否选择了正确的 Copis 供应渠道和模型/.test(mapped.message)
 
   return {
     code: mapped.code,
@@ -779,7 +779,7 @@ export class ClaudeAgentAdapter implements AgentProviderAdapter {
         abortController: controller,
         env: options.env,
         systemPrompt: options.systemPrompt,
-        // 所有项目仅加载 Proma 隔离的 user 配置；会话 sidecar 由下方 settings 显式传入。
+        // 所有项目仅加载 Copis 隔离的 user 配置；会话 sidecar 由下方 settings 显式传入。
         settingSources: resolveClaudeSettingSources(options.settingSources),
         // 外置会话配置作为 SDK flag settings 加载，优先级高于文件系统来源。
         ...(options.settingsFilePath && { settings: options.settingsFilePath }),

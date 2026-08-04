@@ -1,12 +1,14 @@
 import * as React from 'react'
 import { useAtom, useAtomValue, useSetAtom } from 'jotai'
-import { BellRing, Check, ListTodo, X } from 'lucide-react'
+import { BellRing, MessageCircle, X } from 'lucide-react'
 import { toast } from 'sonner'
-import type { ActivePlanningReminder } from '@proma/shared'
-import { activePlanningRemindersAtom, planningSelectedTodoIdAtom, planningTabAtom } from '@/atoms/planning-atoms'
+import type { ActivePlanningReminder } from '@copis/shared'
+import { activePlanningRemindersAtom } from '@/atoms/planning-atoms'
+import { agentChannelIdAtom, agentModelIdAtom, agentSessionsAtom, agentWorkspacesAtom, currentAgentWorkspaceIdAtom } from '@/atoms/agent-atoms'
 import { activeViewAtom } from '@/atoms/active-view'
 import { notificationsEnabledAtom, notificationSoundEnabledAtom, notificationSoundsAtom, playNotificationSoundForType } from '@/atoms/notifications'
 import { Button } from '@/components/ui/button'
+import { useOpenSession } from '@/hooks/useOpenSession'
 
 function formatTriggerTime(timestamp: number): string {
   return new Intl.DateTimeFormat('zh-CN', {
@@ -24,8 +26,12 @@ function mergeReminders(current: ActivePlanningReminder[], incoming: ActivePlann
 export function PlanningReminderRail({ playSound = true }: { playSound?: boolean } = {}): React.ReactElement | null {
   const [reminders, setReminders] = useAtom(activePlanningRemindersAtom)
   const setActiveView = useSetAtom(activeViewAtom)
-  const setPlanningTab = useSetAtom(planningTabAtom)
-  const setSelectedTodoId = useSetAtom(planningSelectedTodoIdAtom)
+  const setAgentSessions = useSetAtom(agentSessionsAtom)
+  const setCurrentWorkspaceId = useSetAtom(currentAgentWorkspaceIdAtom)
+  const agentWorkspaces = useAtomValue(agentWorkspacesAtom)
+  const agentChannelId = useAtomValue(agentChannelIdAtom)
+  const agentModelId = useAtomValue(agentModelIdAtom)
+  const openSession = useOpenSession()
   const notificationsEnabled = useAtomValue(notificationsEnabledAtom)
   const soundEnabled = useAtomValue(notificationSoundEnabledAtom)
   const sounds = useAtomValue(notificationSoundsAtom)
@@ -61,19 +67,34 @@ export function PlanningReminderRail({ playSound = true }: { playSound?: boolean
       toast.error('确认提醒失败')
     }
   }
-  const completeTodo = async (reminder: ActivePlanningReminder) => {
+  const openWorkspaceConversation = async (reminder: ActivePlanningReminder): Promise<void> => {
+    if (!reminder.workspaceId) {
+      toast.error('该提醒没有绑定工作区')
+      return
+    }
+    const workspace = agentWorkspaces.find((item) => item.id === reminder.workspaceId)
+    if (!workspace) {
+      toast.error('绑定的工作区已不可用')
+      return
+    }
     try {
-      await window.electronAPI.updateTodo({ id: reminder.targetId, status: 'completed' })
+      const session = await window.electronAPI.createAgentSession(
+        `提醒：${reminder.targetTitle}`,
+        agentChannelId ?? undefined,
+        workspace.id,
+        agentModelId ?? undefined,
+      )
+      setAgentSessions((current) => [session, ...current])
+      setCurrentWorkspaceId(workspace.id)
+      window.electronAPI.updateSettings({ agentWorkspaceId: workspace.id }).catch(console.error)
+      openSession('agent', session.id, session.title)
+      setActiveView('conversations')
     } catch (error) {
-      console.error('[任务/日程] 完成 Todo 失败:', error)
-      toast.error('完成 Todo 失败')
+      console.error('[任务/日程] 打开提醒会话失败:', error)
+      toast.error('打开提醒会话失败')
     }
   }
-  const openTodo = (reminder: ActivePlanningReminder): void => {
-    setPlanningTab('todos')
-    setSelectedTodoId(reminder.targetId)
-    setActiveView('planning')
-  }
+
   const snooze = async (id: string, minutes: number) => {
     try {
       await window.electronAPI.snoozePlanningReminder({ id, minutes })
@@ -86,7 +107,7 @@ export function PlanningReminderRail({ playSound = true }: { playSound?: boolean
   if (reminders.length === 0) return null
 
   return (
-    <aside className="fixed bottom-4 right-4 z-[100] flex w-[min(380px,calc(100vw-2rem))] flex-col-reverse gap-2" aria-live="polite">
+    <aside className="fixed right-4 top-16 z-[100] flex w-[min(380px,calc(100vw-2rem))] flex-col gap-2" aria-live="polite">
       {reminders.slice(0, 3).map((reminder) => {
         return (
           <section key={reminder.id} className="bg-background shadow-lg">
@@ -98,8 +119,8 @@ export function PlanningReminderRail({ playSound = true }: { playSound?: boolean
                   <span className="shrink-0 text-xs text-muted-foreground">{formatTriggerTime(reminder.snoozedUntil ?? reminder.triggerAt)}</span>
                 </div>
                 <div className="mt-1 flex flex-wrap gap-1.5 text-xs text-muted-foreground">
-                  <span>{reminder.targetType === 'todo' ? 'Todo' : '日程'}</span>
-                  {reminder.group && <span>{reminder.group.name}</span>}
+                  <span>{reminder.targetType === 'todo' ? '任务提醒' : '日程'}</span>
+                  {reminder.workspaceId && <span>{agentWorkspaces.find((workspace) => workspace.id === reminder.workspaceId)?.name ?? '工作区不可用'}</span>}
                   {reminder.tags.map((tag) => <span key={tag.id}>#{tag.name}</span>)}
                 </div>
               </div>
@@ -108,15 +129,10 @@ export function PlanningReminderRail({ playSound = true }: { playSound?: boolean
               </Button>
             </div>
             <div className="flex flex-wrap items-center gap-1 bg-muted/20 px-3 py-2">
-              {reminder.targetType === 'todo' && (
-                <>
-                  <Button variant="secondary" size="sm" className="h-7" onClick={() => openTodo(reminder)}>
-                    <ListTodo className="mr-1 h-3.5 w-3.5" />查看 Todo
-                  </Button>
-                  <Button variant="secondary" size="sm" className="h-7" onClick={() => void completeTodo(reminder)}>
-                    <Check className="mr-1 h-3.5 w-3.5" />完成
-                  </Button>
-                </>
+              {reminder.workspaceId && (
+                <Button variant="secondary" size="sm" className="h-7" onClick={() => void openWorkspaceConversation(reminder)}>
+                  <MessageCircle className="mr-1 h-3.5 w-3.5" />进入对话
+                </Button>
               )}
               {[5, 10, 30, 60].map((minutes) => (
                 <Button key={minutes} variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={() => void snooze(reminder.id, minutes)}>

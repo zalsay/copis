@@ -6,7 +6,7 @@ import type {
   SDKSystemMessage,
   SDKToolResultBlock,
   SDKUserMessage,
-} from '@proma/shared'
+} from '@copis/shared'
 
 export type WorkingHistoryStatus = 'idle' | 'running' | 'completed' | 'failed' | 'stopped'
 
@@ -486,7 +486,7 @@ class WorkingHistoryParser {
   }
 }
 
-/** 解析 Working 后端返回的 Codex JSONL，并转换成 Proma Agent 可直接渲染的 SDKMessage。 */
+/** 解析 Working 后端返回的 Codex JSONL，并转换成 Copis Agent 可直接渲染的 SDKMessage。 */
 export function parseWorkingSessionHistory(jsonl: string | undefined): WorkingHistoryParseResult {
   const parser = new WorkingHistoryParser()
   const lines = (jsonl ?? '').split(/\r?\n/)

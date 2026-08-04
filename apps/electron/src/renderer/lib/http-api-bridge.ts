@@ -1,4 +1,7 @@
-// 浏览器模式走 Vite 同源代理，代理目标仍是主进程的 127.0.0.1:51730。
+// 浏览器模式的普通 API 走 Vite 代理；Agent 流式请求直接连接 Rust SSE 服务。
+import type { AgentStreamCompletePayload, AgentStreamEvent, AgentSendInput } from '@copis/shared'
+import { agentHttpStreamClient } from './agent-http-stream'
+
 const HTTP_API_BASE_URL = ''
 const HTTP_API_STARTUP_RETRY_COUNT = 60
 const HTTP_API_STARTUP_RETRY_DELAY_MS = 500
@@ -128,16 +131,10 @@ function createHttpMethods(): Record<string, HttpMethod> {
         .then((result) => isRecord(result) && Array.isArray(result.messages) ? result.messages : [])
     },
     sendAgentMessage: (args) => {
-      const input = getArgument<{ sessionId: string; userMessage: string; modelId?: string }>(args, 0)
-      const sessionId = encodeURIComponent(input.sessionId)
-      return request(`/api/agent/sessions/${sessionId}/messages`, 'POST', {
-        userMessage: input.userMessage,
-        ...(input.modelId ? { modelId: input.modelId } : {}),
-      })
+      return agentHttpStreamClient.send(getArgument<AgentSendInput>(args, 0))
     },
     stopAgent: (args) => {
-      const sessionId = encodeURIComponent(getArgument<string>(args, 0))
-      return request(`/api/agent/sessions/${sessionId}/stop`, 'POST')
+      return agentHttpStreamClient.stop(getArgument<string>(args, 0))
     },
 
     // ===== 浏览器可替代的系统能力 =====
@@ -213,10 +210,19 @@ function createWebTabsFallback(): Record<string, unknown> {
     close: () => Promise.resolve(emptySnapshot()),
     navigate: () => Promise.reject(new Error('浏览器模式不支持内嵌 Chromium 页签')),
     updateBounds: () => Promise.resolve(),
+    bookmarksOpen: () => Promise.resolve(),
+    bookmarksClose: () => Promise.resolve(),
+    bookmarksResize: () => Promise.resolve(),
     goBack: () => Promise.resolve(emptySnapshot()),
     goForward: () => Promise.resolve(emptySnapshot()),
     reload: () => Promise.resolve(emptySnapshot()),
     sendCdpCommand: () => Promise.reject(new Error('浏览器模式不支持 CDP')),
+    bookmarksList: () => Promise.resolve({ groups: [], bookmarks: [] }),
+    bookmarksSave: () => Promise.reject(new Error('浏览器模式不支持网页收藏')),
+    bookmarksRemove: () => Promise.reject(new Error('浏览器模式不支持网页收藏')),
+    bookmarksGroupCreate: () => Promise.reject(new Error('浏览器模式不支持网页收藏分组')),
+    bookmarksGroupRename: () => Promise.reject(new Error('浏览器模式不支持网页收藏分组')),
+    bookmarksGroupRemove: () => Promise.reject(new Error('浏览器模式不支持网页收藏分组')),
     onChanged: (_callback: unknown) => () => {},
   }
 }
@@ -239,6 +245,18 @@ function createHttpApiBridge(): Window['electronAPI'] {
       if (property === 'openFolderDialog') return () => Promise.resolve(null)
       if (property === 'openFileDialog') return () => Promise.resolve({ files: [] })
       if (property === 'openFileOrFolderDialog') return () => Promise.resolve({ files: [], directories: [] })
+      if (property === 'onAgentStreamEvent') {
+        return (callback: (event: AgentStreamEvent) => void) => agentHttpStreamClient.onEvent(callback)
+      }
+      if (property === 'onAgentStreamComplete') {
+        return (callback: (event: AgentStreamCompletePayload) => void) => agentHttpStreamClient.onComplete(callback)
+      }
+      if (property === 'onAgentStreamError') {
+        return (callback: (event: { sessionId: string; error: string }) => void) => agentHttpStreamClient.onError(callback)
+      }
+      if (property === 'onAgentTitleUpdated') {
+        return (callback: (event: { sessionId: string; title: string }) => void) => agentHttpStreamClient.onTitleUpdated(callback)
+      }
       if (property.startsWith('on')) return (_callback: unknown) => () => {}
 
       const method = methods[property]

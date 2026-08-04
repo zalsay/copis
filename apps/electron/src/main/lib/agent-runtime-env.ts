@@ -1,6 +1,6 @@
 import { existsSync } from 'node:fs'
 import { delimiter, dirname, join, win32 } from 'node:path'
-import type { RuntimeStatus, WindowsShellPreference } from '@proma/shared'
+import type { RuntimeStatus, WindowsShellPreference } from '@copis/shared'
 import { getBundledCliPath } from './config-paths'
 import { selectWindowsShell, type WindowsShellKind } from './windows-shell-selection'
 
@@ -32,11 +32,11 @@ const CASE_INSENSITIVE_MERGE_KEYS = new Set([
   'https_proxy',
   'all_proxy',
   'no_proxy',
-  'proma_cli',
+  'copis_cli',
   'claude_code_shell',
   'shell',
-  'proma_windows_shell',
-  'proma_wsl_distro',
+  'copis_windows_shell',
+  'copis_wsl_distro',
 ])
 
 function getCaseInsensitiveEnvValue(env: NodeJS.ProcessEnv, key: string): string | undefined {
@@ -127,11 +127,11 @@ function collectWindowsShellEnv(
 
   if (shellKind === 'wsl' && shellStatus?.wsl.available) {
     const wslCommand = getWslCommandPath(processEnv, pathExists)
-    env.PROMA_WINDOWS_SHELL = 'wsl'
+    env.COPIS_WINDOWS_SHELL = 'wsl'
     env.CLAUDE_CODE_SHELL = wslCommand
     env.SHELL = wslCommand
     if (shellStatus.wsl.defaultDistro) {
-      env.PROMA_WSL_DISTRO = shellStatus.wsl.defaultDistro
+      env.COPIS_WSL_DISTRO = shellStatus.wsl.defaultDistro
     }
     return {
       env,
@@ -143,7 +143,7 @@ function collectWindowsShellEnv(
 
   if (shellKind === 'git-bash' && shellStatus?.gitBash.path) {
     const shellPath = shellStatus.gitBash.path
-    env.PROMA_WINDOWS_SHELL = 'git-bash'
+    env.COPIS_WINDOWS_SHELL = 'git-bash'
     env.CLAUDE_CODE_SHELL = shellPath
     env.SHELL = shellPath
     return {
@@ -154,6 +154,15 @@ function collectWindowsShellEnv(
   }
 
   return { env }
+}
+
+/** 为旧版 Skill 保留环境变量别名，新代码统一使用 COPIS_*。 */
+function addLegacyEnvironmentAliases(env: Record<string, string>): Record<string, string> {
+  const aliases = { ...env }
+  if (env.COPIS_CLI) aliases.PROMA_CLI = env.COPIS_CLI
+  if (env.COPIS_WINDOWS_SHELL) aliases.PROMA_WINDOWS_SHELL = env.COPIS_WINDOWS_SHELL
+  if (env.COPIS_WSL_DISTRO) aliases.PROMA_WSL_DISTRO = env.COPIS_WSL_DISTRO
+  return aliases
 }
 
 export function mergeRuntimeEnv(
@@ -191,7 +200,7 @@ export function buildAgentRuntimeEnv(options: BuildAgentRuntimeEnvOptions = {}):
   const env: Record<string, string> = {}
 
   if (bundledCliPath) {
-    env.PROMA_CLI = bundledCliPath
+    env.COPIS_CLI = bundledCliPath
   }
 
   const pathKey = getPathKey(processEnv)
@@ -216,7 +225,7 @@ export function buildAgentRuntimeEnv(options: BuildAgentRuntimeEnvOptions = {}):
     )
     Object.assign(env, shellRuntimeEnv.env)
     return {
-      env,
+      env: addLegacyEnvironmentAliases(env),
       ...(shellRuntimeEnv.shellKind && { shellKind: shellRuntimeEnv.shellKind }),
       ...(shellRuntimeEnv.shellPath && { shellPath: shellRuntimeEnv.shellPath }),
       ...(shellRuntimeEnv.wslCommand && { wslCommand: shellRuntimeEnv.wslCommand }),
@@ -224,5 +233,5 @@ export function buildAgentRuntimeEnv(options: BuildAgentRuntimeEnvOptions = {}):
     }
   }
 
-  return { env }
+  return { env: addLegacyEnvironmentAliases(env) }
 }

@@ -9,7 +9,8 @@ import { BrowserWindow, Notification } from 'electron'
 import { claimDuePlanningReminders } from './planning-manager'
 import { getSettings } from './settings-service'
 import { broadcastPlanningChanged, broadcastPlanningRemindersDue } from './planning-events'
-import type { ActivePlanningReminder } from '@proma/shared'
+import { notifyPlanningReminders } from './planning-reminder-notifier'
+import type { ActivePlanningReminder } from '@copis/shared'
 
 const POLL_INTERVAL_MS = 30_000
 let timer: ReturnType<typeof setInterval> | null = null
@@ -41,6 +42,9 @@ function checkDueReminders(): void {
     if (reminders.length > 0) {
       for (const reminder of reminders) showPlanningSystemNotification(reminder)
       broadcastPlanningRemindersDue(reminders)
+      void notifyPlanningReminders(reminders).catch((error) => {
+        console.error('[任务/日程] 外部提醒发送失败:', error)
+      })
       broadcastPlanningChanged(['reminders'])
     }
   } catch (error) {

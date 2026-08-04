@@ -4,7 +4,7 @@
  * 主题模式、IPC 通道等设置相关定义。
  */
 
-import type { AgentRuntime, EnvironmentCheckResult, ThinkingConfig, AgentEffort, AgentThinkingLevel, FeishuSessionMirrorSettings, WindowsShellPreference } from '@proma/shared'
+import type { AgentRuntime, EnvironmentCheckResult, ThinkingConfig, AgentEffort, AgentThinkingLevel, FeishuSessionMirrorSettings, WindowsShellPreference } from '@copis/shared'
 
 /** 通知音场景类型 */
 export type NotificationSoundType = 'taskComplete' | 'permissionRequest' | 'exitPlanMode' | 'planningReminder'
@@ -31,7 +31,7 @@ export type VoiceDictationProvider = 'doubao'
 export type VoiceDictationEndpointMode = 'async' | 'duplex'
 
 /** 语音输入输出方式 */
-export type VoiceDictationOutputMode = 'auto' | 'clipboard' | 'proma-input'
+export type VoiceDictationOutputMode = 'auto' | 'clipboard' | 'copis-input'
 
 /** 语音输入浮窗位置 */
 export interface VoiceDictationWindowPosition {
@@ -112,7 +112,7 @@ export interface VoiceDictationAudioChunkInput {
   data: ArrayBuffer
 }
 
-/** 将当前识别结果作为 Proma 输入框中的临时组合文本预览。 */
+/** 将当前识别结果作为 Copis 输入框中的临时组合文本预览。 */
 export interface VoiceDictationPreviewInput {
   sessionId: string
   text: string
@@ -145,7 +145,7 @@ export interface VoiceDictationResizeInput {
 
 /** 输出语音输入文本结果 */
 export interface VoiceDictationCommitResult {
-  mode: 'proma-input' | 'cursor' | 'clipboard'
+  mode: 'copis-input' | 'cursor' | 'clipboard'
   success: boolean
   message: string
 }
@@ -302,22 +302,22 @@ export interface AppSettings {
   appIconVariant?: string
   /** 语音输入设置（Access Token 以加密态存储，由专用服务解密后返回渲染进程） */
   voiceDictation?: VoiceDictationPersistedSettings
-  /** 飞书 Session 镜像设置：每个 Proma Session 可创建一个仅包含用户与指定 Bot 的飞书群 */
+  /** 飞书 Session 镜像设置：每个 Copis Session 可创建一个仅包含用户与指定 Bot 的飞书群 */
   feishuSessionMirror?: FeishuSessionMirrorSettings
   /** 无视觉输入能力 Agent 的视觉助手路由 */
   visionRelay?: VisionRelaySettings
-  /** 用户手动关闭的 Proma 内置 MCP ID 列表（针对默认开启的内置 MCP） */
+  /** 用户手动关闭的 Copis 内置 MCP ID 列表（针对默认开启的内置 MCP） */
   builtinMcpDisabledIds?: string[]
-  /** 用户手动开启的 Proma 内置 MCP ID 列表（针对默认关闭的内置 MCP，如 nano-banana、mem） */
+  /** 用户手动开启的 Copis 内置 MCP ID 列表（针对默认关闭的内置 MCP，如 nano-banana、mem） */
   builtinMcpEnabledIds?: string[]
-  /** 启动时自动清理临时文件（proma-preview、proma-installers），默认 true */
+  /** 启动时自动清理临时文件（copis-preview、copis-installers），默认 true */
   autoCleanupTempOnStart?: boolean
   /** 自动清理 N 天前已归档会话的 SDK 数据（0 = 禁用，默认 0） */
   autoCleanupArchivedDays?: number
   /**
-   * Agent 代创建 git commit / PR 时是否附加 Proma 推广标识。
-   * 默认 true：commit trailer `Made-with: Proma`，PR body 末尾含 https://proma.cool 与 https://github.com/proma-ai/Proma。
-   * 关闭后不注入任何 Proma 归因，并覆盖 Claude SDK 默认 Co-Authored-By。
+   * Agent 代创建 git commit / PR 时是否附加 Copis 推广标识。
+   * 默认 true：commit trailer `Made-with: Copis`，PR body 末尾含 https://copis.cool 与 https://github.com/copis-ai/Copis。
+   * 关闭后不注入任何 Copis 归因，并覆盖 Claude SDK 默认 Co-Authored-By。
    */
   gitAttributionEnabled?: boolean
   /** Agent 灵动岛偏好（macOS 刘海屏优先，其他平台使用 Electron 降级体验）。 */
@@ -414,7 +414,7 @@ export const VOICE_DICTATION_IPC_CHANNELS = {
   STOP: 'voice-dictation:stop',
   /** 取消语音输入会话 */
   CANCEL: 'voice-dictation:cancel',
-  /** 同步 Proma 输入框中的临时识别文本 */
+  /** 同步 Copis 输入框中的临时识别文本 */
   PREVIEW: 'voice-dictation:preview',
   /** 输出最终文本 */
   COMMIT: 'voice-dictation:commit',

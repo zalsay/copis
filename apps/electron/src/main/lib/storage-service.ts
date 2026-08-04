@@ -460,12 +460,19 @@ async function calcAttachmentsCategory(): Promise<StorageCategory> {
 
 async function calcTempFilesCategory(): Promise<StorageCategory> {
   const previewDirs = [join(tmpdir(), 'copis-preview'), join(tmpdir(), 'proma-preview')]
-  const installerDir = join(app.getPath('temp'), 'proma-installers')
-  const [previews, installer] = await Promise.all([
+  const installerDirs = [
+    join(app.getPath('temp'), 'copis-installers'),
+    join(app.getPath('temp'), 'proma-installers'),
+  ]
+  const [previews, installers] = await Promise.all([
     Promise.all(previewDirs.map((dir) => getDirSize(dir))),
-    getDirSize(installerDir),
+    Promise.all(installerDirs.map((dir) => getDirSize(dir))),
   ])
   const preview = previews.reduce(
+    (total, current) => ({ bytes: total.bytes + current.bytes, count: total.count + current.count }),
+    { bytes: 0, count: 0 },
+  )
+  const installer = installers.reduce(
     (total, current) => ({ bytes: total.bytes + current.bytes, count: total.count + current.count }),
     { bytes: 0, count: 0 },
   )
@@ -517,16 +524,21 @@ export async function cleanupTempFiles(): Promise<CleanupResult> {
     }
   }
 
-  const installerDir = join(app.getPath('temp'), 'proma-installers')
-  if (existsSync(installerDir)) {
-    try {
-      const files = await fsPromises.readdir(installerDir)
-      for (const file of files) {
-        const freed = safeUnlink(join(installerDir, file))
-        if (freed > 0) { freedBytes += freed; deletedCount++ }
+  const installerDirs = [
+    join(app.getPath('temp'), 'copis-installers'),
+    join(app.getPath('temp'), 'proma-installers'),
+  ]
+  for (const installerDir of installerDirs) {
+    if (existsSync(installerDir)) {
+      try {
+        const files = await fsPromises.readdir(installerDir)
+        for (const file of files) {
+          const freed = safeUnlink(join(installerDir, file))
+          if (freed > 0) { freedBytes += freed; deletedCount++ }
+        }
+      } catch (e) {
+        errors.push(`清理安装文件失败: ${e}`)
       }
-    } catch (e) {
-      errors.push(`清理安装文件失败: ${e}`)
     }
   }
 

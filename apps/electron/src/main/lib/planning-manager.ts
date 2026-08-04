@@ -1,14 +1,15 @@
 /**
  * 任务/日程 SQLite 数据层。
  *
- * Todo 和日程是独立表；分组按 Todo / 日程隔离，标签与提醒在同一 planning.db 内通过关系表连接。
+ * Todo 和日程是独立表；Todo 分组继续使用独立范围，日程历史分组表保留兼容，标签与提醒在同一 planning.db 内通过关系表连接。
  */
 
 import { randomUUID } from 'node:crypto'
-import { PLANNING_CONFLICT_ERROR } from '@proma/shared'
+import { PLANNING_CONFLICT_ERROR } from '@copis/shared'
 import type {
   ActivePlanningReminder,
   CalendarEvent,
+  CalendarEventStatus,
   CalendarEventListQuery,
   CreateCalendarEventInput,
   CreatePlanningGroupInput,
@@ -28,7 +29,7 @@ import type {
   UpdatePlanningGroupInput,
   UpdatePlanningTagInput,
   UpdateTodoInput,
-} from '@proma/shared'
+} from '@copis/shared'
 import { getPlanningDatabasePath } from './config-paths'
 
 interface SqliteStatement {
@@ -46,7 +47,7 @@ type TodoRow = {
 }
 type CalendarEventRow = {
   id: string; title: string; notes: string | null; start_at: number; end_at: number | null; all_day: number
-  calendar_group_id: string | null; workspace_id: string | null; todo_id: string | null
+  calendar_group_id: string | null; workspace_id: string | null; todo_id: string | null; status: CalendarEventStatus; completed_at: number | null
   created_at: number; updated_at: number
 }
 type GroupRow = { id: string; name: string; color: string | null; sort_order: number; created_at: number; updated_at: number }
@@ -100,7 +101,8 @@ function getDatabase(): SqliteDatabase {
     CREATE TABLE IF NOT EXISTS calendar_events (
       id TEXT PRIMARY KEY, title TEXT NOT NULL CHECK(length(title) BETWEEN 1 AND 500), notes TEXT, start_at INTEGER NOT NULL, end_at INTEGER,
       all_day INTEGER NOT NULL DEFAULT 0 CHECK(all_day IN (0, 1)), calendar_group_id TEXT REFERENCES calendar_groups(id) ON DELETE SET NULL,
-      workspace_id TEXT, todo_id TEXT REFERENCES todos(id) ON DELETE SET NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
+      workspace_id TEXT, todo_id TEXT REFERENCES todos(id) ON DELETE SET NULL, status TEXT NOT NULL DEFAULT 'pending', completed_at INTEGER,
+      created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
       CHECK(end_at IS NULL OR end_at >= start_at)
     );
     CREATE TABLE IF NOT EXISTS todo_tags (
@@ -114,7 +116,7 @@ function getDatabase(): SqliteDatabase {
     CREATE TABLE IF NOT EXISTS planning_reminders (
       id TEXT PRIMARY KEY, target_type TEXT NOT NULL CHECK(target_type IN ('todo', 'calendar_event')), target_id TEXT NOT NULL,
       trigger_at INTEGER NOT NULL, snoozed_until INTEGER, status TEXT NOT NULL CHECK(status IN ('pending', 'acknowledged', 'completed')),
-      origin TEXT NOT NULL DEFAULT 'manual' CHECK(origin IN ('manual', 'todo_due_at')),
+      origin TEXT NOT NULL DEFAULT 'manual' CHECK(origin IN ('manual', 'todo_due_at', 'calendar_start_at')),
       acknowledged_at INTEGER, last_notified_at INTEGER, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
     );
     CREATE TABLE IF NOT EXISTS todo_session_links (
@@ -125,6 +127,27 @@ function getDatabase(): SqliteDatabase {
       PRIMARY KEY(todo_id, session_id)
     );
   `)
+  const calendarColumns = new Set((db.prepare('PRAGMA table_info(calendar_events)').all() as Array<{ name: string }>).map((column) => column.name))
+  if (!calendarColumns.has('status')) db.exec("ALTER TABLE calendar_events ADD COLUMN status TEXT NOT NULL DEFAULT 'pending'")
+  if (!calendarColumns.has('completed_at')) db.exec('ALTER TABLE calendar_events ADD COLUMN completed_at INTEGER')
+  const reminderSchema = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='planning_reminders'").get() as { sql?: string } | undefined
+  if (reminderSchema?.sql && !reminderSchema.sql.includes("'calendar_start_at'")) {
+    db.exec(`
+      DROP INDEX IF EXISTS planning_reminders_due_idx;
+      DROP INDEX IF EXISTS planning_reminders_target_idx;
+      ALTER TABLE planning_reminders RENAME TO planning_reminders_legacy;
+      CREATE TABLE planning_reminders (
+        id TEXT PRIMARY KEY, target_type TEXT NOT NULL CHECK(target_type IN ('todo', 'calendar_event')), target_id TEXT NOT NULL,
+        trigger_at INTEGER NOT NULL, snoozed_until INTEGER, status TEXT NOT NULL CHECK(status IN ('pending', 'acknowledged', 'completed')),
+        origin TEXT NOT NULL DEFAULT 'manual' CHECK(origin IN ('manual', 'todo_due_at', 'calendar_start_at')),
+        acknowledged_at INTEGER, last_notified_at INTEGER, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
+      );
+      INSERT INTO planning_reminders (id,target_type,target_id,trigger_at,snoozed_until,status,origin,acknowledged_at,last_notified_at,created_at,updated_at)
+      SELECT id,target_type,target_id,trigger_at,snoozed_until,status,origin,acknowledged_at,last_notified_at,created_at,updated_at
+      FROM planning_reminders_legacy;
+      DROP TABLE planning_reminders_legacy;
+    `)
+  }
   db.exec(`
     CREATE INDEX IF NOT EXISTS todos_status_due_at_idx ON todos(status, due_at);
     CREATE INDEX IF NOT EXISTS todos_group_id_idx ON todos(group_id);
@@ -263,18 +286,27 @@ function hydrateCalendarEvents(rows: CalendarEventRow[]): CalendarEvent[] {
   const groups = groupsById(rows.map((row) => row.calendar_group_id), 'calendar')
   const tags = tagsByTarget('calendar_event', ids)
   const reminders = remindersByTarget('calendar_event', ids)
-  return rows.map((row) => ({
-    id: row.id, title: row.title, notes: row.notes ?? undefined, startAt: row.start_at, endAt: row.end_at ?? undefined,
-    allDay: row.all_day === 1, groupId: row.calendar_group_id ?? undefined, group: row.calendar_group_id ? groups.get(row.calendar_group_id) : undefined,
-    tags: tags.get(row.id) ?? [], reminders: reminders.get(row.id) ?? [], workspaceId: row.workspace_id ?? undefined,
-    todoId: row.todo_id ?? undefined, createdAt: row.created_at, updatedAt: row.updated_at,
-  }))
+  return rows.map((row) => {
+    const eventReminders = reminders.get(row.id) ?? []
+    return {
+      id: row.id, title: row.title, notes: row.notes ?? undefined, startAt: row.start_at, endAt: row.end_at ?? undefined,
+      allDay: row.all_day === 1, status: row.status, completedAt: row.completed_at ?? undefined, reminderEnabled: eventReminders.some((reminder) => reminder.origin === 'calendar_start_at'), groupId: row.calendar_group_id ?? undefined, group: row.calendar_group_id ? groups.get(row.calendar_group_id) : undefined,
+      tags: tags.get(row.id) ?? [], reminders: eventReminders, workspaceId: row.workspace_id ?? undefined,
+      todoId: row.todo_id ?? undefined, createdAt: row.created_at, updatedAt: row.updated_at,
+    }
+  })
 }
 function todoFromRow(row: TodoRow): Todo {
   return { id: row.id, title: row.title, notes: row.notes ?? undefined, status: row.status, priority: row.priority, dueAt: row.due_at ?? undefined, groupId: row.group_id ?? undefined, group: getPlanningGroup(row.group_id, 'todo'), tags: getTags('todo', row.id), reminders: getReminders('todo', row.id), sessionLinks: getTodoSessionLinks(row.id), workspaceId: row.workspace_id ?? undefined, createdAt: row.created_at, updatedAt: row.updated_at, completedAt: row.completed_at ?? undefined }
 }
 function calendarEventFromRow(row: CalendarEventRow): CalendarEvent {
-  return { id: row.id, title: row.title, notes: row.notes ?? undefined, startAt: row.start_at, endAt: row.end_at ?? undefined, allDay: row.all_day === 1, groupId: row.calendar_group_id ?? undefined, group: getPlanningGroup(row.calendar_group_id, 'calendar'), tags: getTags('calendar_event', row.id), reminders: getReminders('calendar_event', row.id), workspaceId: row.workspace_id ?? undefined, todoId: row.todo_id ?? undefined, createdAt: row.created_at, updatedAt: row.updated_at }
+  const reminders = getReminders('calendar_event', row.id)
+  return { id: row.id, title: row.title, notes: row.notes ?? undefined, startAt: row.start_at, endAt: row.end_at ?? undefined, allDay: row.all_day === 1, status: row.status, completedAt: row.completed_at ?? undefined, reminderEnabled: reminders.some((reminder) => reminder.origin === 'calendar_start_at'), groupId: row.calendar_group_id ?? undefined, group: getPlanningGroup(row.calendar_group_id, 'calendar'), tags: getTags('calendar_event', row.id), reminders, workspaceId: row.workspace_id ?? undefined, todoId: row.todo_id ?? undefined, createdAt: row.created_at, updatedAt: row.updated_at }
+}
+function assertCalendarEventStatus(status: CalendarEventStatus | undefined): CalendarEventStatus {
+  if (status === undefined) return 'pending'
+  if (status === 'pending' || status === 'in_progress' || status === 'completed' || status === 'expired') return status
+  throw new Error('日程 status 非法')
 }
 function assertTagIdsExist(tagIds: string[]): string[] {
   const unique = [...new Set(tagIds)]
@@ -297,6 +329,22 @@ function assertReminderInputs(inputs: { triggerAt: number }[]): void {
 function createReminders(targetType: PlanningReminderTargetType, targetId: string, inputs: { triggerAt: number }[], origin: PlanningReminderOrigin = 'manual'): void {
   assertReminderInputs(inputs)
   for (const input of inputs) createPlanningReminderWithOrigin({ targetType, targetId, triggerAt: input.triggerAt }, origin)
+}
+
+function syncCalendarStartReminder(eventId: string, startAt: number, enabled: boolean, now: number, startAtChanged = false): void {
+  const db = getDatabase()
+  const automatic = getReminders('calendar_event', eventId).find((reminder) => reminder.origin === 'calendar_start_at')
+  if (!enabled) {
+    db.prepare(`DELETE FROM planning_reminders WHERE target_type='calendar_event' AND target_id=:eventId AND origin='calendar_start_at'`).run({ eventId })
+    return
+  }
+  if (!automatic) {
+    createReminders('calendar_event', eventId, [{ triggerAt: startAt }], 'calendar_start_at')
+    return
+  }
+  if (startAtChanged) {
+    db.prepare(`UPDATE planning_reminders SET trigger_at=:triggerAt,snoozed_until=NULL,status='pending',acknowledged_at=NULL,last_notified_at=NULL,updated_at=:now WHERE id=:id`).run({ id: automatic.id, triggerAt: startAt, now })
+  }
 }
 
 /** 仅同步未推迟的自动 Todo 提醒；手动提醒与用户主动推迟的提醒绝不覆盖。 */
@@ -455,20 +503,29 @@ export function createCalendarEvent(input: CreateCalendarEventInput): CalendarEv
   assertTimestamp(input.endAt, 'endAt')
   if (input.endAt && input.endAt < input.startAt) throw new Error('日程 endAt 不能早于 startAt')
   if (input.reminders) assertReminderInputs(input.reminders)
+  if (input.reminderEnabled !== undefined && typeof input.reminderEnabled !== 'boolean') throw new Error('日程 reminderEnabled 非法')
   if (input.tagIds) assertTagIdsExist(input.tagIds)
   const now = Date.now()
+  const status = assertCalendarEventStatus(input.status)
   const event = {
     id: randomUUID(), title: assertTitle(input.title, '日程'), notes: input.notes?.trim() || undefined,
     startAt: input.startAt, endAt: input.endAt, allDay: input.allDay ?? false, groupId: input.groupId,
-    workspaceId: input.workspaceId || undefined, todoId: input.todoId || undefined, createdAt: now, updatedAt: now,
+    workspaceId: input.workspaceId || undefined, todoId: input.todoId || undefined, status, completedAt: status === 'completed' ? now : undefined, reminderEnabled: input.reminderEnabled ?? false, createdAt: now, updatedAt: now,
   }
   if (event.groupId && !getPlanningGroup(event.groupId, 'calendar')) throw new Error('日程分组不存在')
   withPlanningTransaction(() => {
-    getDatabase().prepare(`INSERT INTO calendar_events (id,title,notes,start_at,end_at,all_day,calendar_group_id,workspace_id,todo_id,created_at,updated_at) VALUES (:id,:title,:notes,:startAt,:endAt,:allDay,:groupId,:workspaceId,:todoId,:createdAt,:updatedAt)`).run({ id: event.id, title: event.title, notes: event.notes ?? null, startAt: event.startAt, endAt: event.endAt ?? null, allDay: event.allDay ? 1 : 0, groupId: event.groupId ?? null, workspaceId: event.workspaceId ?? null, todoId: event.todoId ?? null, createdAt: event.createdAt, updatedAt: event.updatedAt })
+    getDatabase().prepare(`INSERT INTO calendar_events (id,title,notes,start_at,end_at,all_day,calendar_group_id,workspace_id,todo_id,status,completed_at,created_at,updated_at) VALUES (:id,:title,:notes,:startAt,:endAt,:allDay,:groupId,:workspaceId,:todoId,:status,:completedAt,:createdAt,:updatedAt)`).run({ id: event.id, title: event.title, notes: event.notes ?? null, startAt: event.startAt, endAt: event.endAt ?? null, allDay: event.allDay ? 1 : 0, groupId: event.groupId ?? null, workspaceId: event.workspaceId ?? null, todoId: event.todoId ?? null, status: event.status, completedAt: event.completedAt ?? null, createdAt: event.createdAt, updatedAt: event.updatedAt })
     if (input.tagIds !== undefined) replaceTags('calendar_event', event.id, input.tagIds)
     if (input.reminders) createReminders('calendar_event', event.id, input.reminders)
+    if (input.reminderEnabled) syncCalendarStartReminder(event.id, event.startAt, true, now)
   })
-  return getCalendarEvent(event.id)!
+  const saved = getCalendarEvent(event.id)
+  return saved ?? {
+    ...event,
+    group: event.groupId ? getPlanningGroup(event.groupId, 'calendar') : undefined,
+    tags: getTags('calendar_event', event.id),
+    reminders: getReminders('calendar_event', event.id),
+  }
 }
 export function updateCalendarEvent(input: UpdateCalendarEventInput): CalendarEvent | undefined {
   const old = getCalendarEvent(input.id)
@@ -477,7 +534,10 @@ export function updateCalendarEvent(input: UpdateCalendarEventInput): CalendarEv
   if (input.expectedUpdatedAt !== undefined && input.expectedUpdatedAt !== old.updatedAt) throw new Error(PLANNING_CONFLICT_ERROR)
   if (input.startAt !== undefined) assertTimestamp(input.startAt, 'startAt')
   if (input.endAt !== undefined && input.endAt !== null) assertTimestamp(input.endAt, 'endAt')
+  if (input.reminderEnabled !== undefined && typeof input.reminderEnabled !== 'boolean') throw new Error('日程 reminderEnabled 非法')
   if (input.tagIds !== undefined) assertTagIdsExist(input.tagIds)
+  const nextStatus = input.status === undefined ? (old.status ?? 'pending') : assertCalendarEventStatus(input.status)
+  const completedAt = nextStatus === 'completed' ? (old.completedAt ?? Date.now()) : undefined
   const updated = {
     ...old,
     title: input.title === undefined ? old.title : assertTitle(input.title, '日程'),
@@ -485,6 +545,8 @@ export function updateCalendarEvent(input: UpdateCalendarEventInput): CalendarEv
     startAt: input.startAt ?? old.startAt,
     endAt: input.endAt === undefined ? old.endAt : input.endAt ?? undefined,
     allDay: input.allDay ?? old.allDay,
+    status: nextStatus,
+    completedAt,
     groupId: input.groupId === undefined ? old.groupId : input.groupId ?? undefined,
     workspaceId: input.workspaceId === undefined ? old.workspaceId : input.workspaceId ?? undefined,
     todoId: input.todoId === undefined ? old.todoId : input.todoId ?? undefined,
@@ -493,11 +555,12 @@ export function updateCalendarEvent(input: UpdateCalendarEventInput): CalendarEv
   if (updated.endAt && updated.endAt < updated.startAt) throw new Error('日程 endAt 不能早于 startAt')
   if (updated.groupId && !getPlanningGroup(updated.groupId, 'calendar')) throw new Error('日程分组不存在')
   withPlanningTransaction(() => {
-    const params: Record<string, unknown> = { id: updated.id, title: updated.title, notes: updated.notes ?? null, startAt: updated.startAt, endAt: updated.endAt ?? null, allDay: updated.allDay ? 1 : 0, groupId: updated.groupId ?? null, workspaceId: updated.workspaceId ?? null, todoId: updated.todoId ?? null, updatedAt: updated.updatedAt }
+    const params: Record<string, unknown> = { id: updated.id, title: updated.title, notes: updated.notes ?? null, startAt: updated.startAt, endAt: updated.endAt ?? null, allDay: updated.allDay ? 1 : 0, groupId: updated.groupId ?? null, workspaceId: updated.workspaceId ?? null, todoId: updated.todoId ?? null, status: updated.status, completedAt: updated.completedAt ?? null, updatedAt: updated.updatedAt }
     if (input.expectedUpdatedAt !== undefined) params.expectedUpdatedAt = input.expectedUpdatedAt
-    const result = getDatabase().prepare(`UPDATE calendar_events SET title=:title,notes=:notes,start_at=:startAt,end_at=:endAt,all_day=:allDay,calendar_group_id=:groupId,workspace_id=:workspaceId,todo_id=:todoId,updated_at=:updatedAt WHERE id=:id${input.expectedUpdatedAt === undefined ? '' : ' AND updated_at=:expectedUpdatedAt'}`).run(params) as { changes?: number }
+    const result = getDatabase().prepare(`UPDATE calendar_events SET title=:title,notes=:notes,start_at=:startAt,end_at=:endAt,all_day=:allDay,calendar_group_id=:groupId,workspace_id=:workspaceId,todo_id=:todoId,status=:status,completed_at=:completedAt,updated_at=:updatedAt WHERE id=:id${input.expectedUpdatedAt === undefined ? '' : ' AND updated_at=:expectedUpdatedAt'}`).run(params) as { changes?: number }
     if ((result.changes ?? 0) === 0) throw new Error(PLANNING_CONFLICT_ERROR)
     if (input.tagIds !== undefined) replaceTags('calendar_event', old.id, input.tagIds)
+    if (input.reminderEnabled !== undefined) syncCalendarStartReminder(old.id, updated.startAt, input.reminderEnabled, updated.updatedAt, input.startAt !== undefined && input.startAt !== old.startAt)
   })
   return getCalendarEvent(old.id)
 }
@@ -542,12 +605,20 @@ export function snoozePlanningReminder(id: string, minutes: number): PlanningRem
 function getReminder(id: string): PlanningReminder | undefined { const row = getDatabase().prepare('SELECT * FROM planning_reminders WHERE id=:id').get({ id }) as ReminderRow | undefined; return row ? reminderFromRow(row) : undefined }
 export function listActivePlanningReminders(): ActivePlanningReminder[] {
   const rows = getDatabase().prepare(`SELECT * FROM planning_reminders WHERE status='pending' AND COALESCE(snoozed_until,trigger_at) <= :now ORDER BY COALESCE(snoozed_until,trigger_at)`).all({ now: Date.now() }) as ReminderRow[]
-  return rows.flatMap((row): ActivePlanningReminder[] => { const target = row.target_type === 'todo' ? getTodo(row.target_id) : getCalendarEvent(row.target_id); if (!target) return []; return [{ ...reminderFromRow(row), targetTitle: target.title, group: target.group, tags: target.tags }] })
+  return rows.flatMap((row): ActivePlanningReminder[] => {
+    const target = row.target_type === 'todo' ? getTodo(row.target_id) : getCalendarEvent(row.target_id)
+    if (!target) return []
+    return [{ ...reminderFromRow(row), targetTitle: target.title, workspaceId: target.workspaceId, group: target.group, tags: target.tags }]
+  })
 }
 /** 返回新增到期提醒并标记已通知，避免每个 30 秒轮询周期重复播放声音。 */
 export function claimDuePlanningReminders(now = Date.now()): ActivePlanningReminder[] {
   const rows = getDatabase().prepare(`SELECT * FROM planning_reminders WHERE status='pending' AND COALESCE(snoozed_until,trigger_at) <= :now AND last_notified_at IS NULL ORDER BY COALESCE(snoozed_until,trigger_at)`).all({ now }) as ReminderRow[]
   const result: ActivePlanningReminder[] = []
-  for (const row of rows) { getDatabase().prepare('UPDATE planning_reminders SET last_notified_at=:now,updated_at=:now WHERE id=:id').run({ id: row.id, now }); const target = row.target_type === 'todo' ? getTodo(row.target_id) : getCalendarEvent(row.target_id); if (target) result.push({ ...reminderFromRow({ ...row, last_notified_at: now, updated_at: now }), targetTitle: target.title, group: target.group, tags: target.tags }) }
+  for (const row of rows) {
+    getDatabase().prepare('UPDATE planning_reminders SET last_notified_at=:now,updated_at=:now WHERE id=:id').run({ id: row.id, now })
+    const target = row.target_type === 'todo' ? getTodo(row.target_id) : getCalendarEvent(row.target_id)
+    if (target) result.push({ ...reminderFromRow({ ...row, last_notified_at: now, updated_at: now }), targetTitle: target.title, workspaceId: target.workspaceId, group: target.group, tags: target.tags })
+  }
   return result
 }

@@ -1,5 +1,5 @@
 import { atom } from 'jotai'
-import type { WorkingAuthState, WorkingClientConfig, WorkingEvent, WorkingSessionSummary } from '@proma/shared'
+import type { WorkingAuthState, WorkingClientConfig, WorkingEvent, WorkingSessionSummary } from '@copis/shared'
 
 /** 主窗口认证状态；认证凭证仍只由主进程持有。 */
 export const workingAuthStateAtom = atom<WorkingAuthState | null>(null)

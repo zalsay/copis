@@ -7,13 +7,13 @@
 import * as React from 'react'
 import { useAtomValue } from 'jotai'
 import { CornerDownLeft, Loader2, Paperclip, Square, Zap } from 'lucide-react'
-import type { AgentSessionMeta, AgentWorkspace, ModelOption, SDKMessage, WorkingMode } from '@proma/shared'
+import type { AgentSessionMeta, AgentWorkspace, ModelOption, SDKMessage, WorkingMode } from '@copis/shared'
 import {
   COPIS_WORKING_CHANNEL_ID,
   COPIS_WORKING_EXPERT_MODEL_ID,
   createCopisWorkingChannel,
   workingModeToModelId,
-} from '@proma/shared'
+} from '@copis/shared'
 import { workingClientConfigAtom } from '@/atoms/working-atoms'
 import { ModelSelector } from '@/components/chat/ModelSelector'
 import { RichTextInput } from '@/components/ai-elements/rich-text-input'

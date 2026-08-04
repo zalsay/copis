@@ -1,12 +1,13 @@
 import * as React from 'react'
 import { useAtomValue, useSetAtom } from 'jotai'
 import { ArrowLeft, ArrowRight, ExternalLink, Globe2, RotateCw, ShieldCheck } from 'lucide-react'
-import type { WebTabsSnapshot } from '@proma/shared'
+import type { WebTabsSnapshot } from '@copis/shared'
 import { activeWebTabAtom, activeWebTabIdAtom, webTabsAtom } from '@/atoms/web-tabs'
 import { Button } from '@/components/ui/button'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
 import { toast } from 'sonner'
+import { WebBookmarksPopover } from './WebBookmarksPopover'
 
 function applySnapshot(
   snapshot: WebTabsSnapshot,
@@ -99,22 +100,34 @@ export function WebBrowserSurface(): React.ReactElement {
     })
   }, [activeTab])
 
+  const handleBookmarkNavigate = React.useCallback(async (url: string): Promise<void> => {
+    if (!activeTabId) return
+    try {
+      apply(await window.electronAPI.webTabs.navigate({ tabId: activeTabId, url }))
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : '打开收藏失败'
+      toast.error(message)
+    }
+  }, [activeTabId, apply])
+
   if (!activeTab) {
     return <div className="hidden" aria-hidden="true" />
   }
 
   return (
     <div className="absolute inset-0 flex min-h-0 flex-col overflow-hidden bg-content-area text-foreground">
-      <div className="titlebar-no-drag flex h-11 shrink-0 items-center gap-1 border-b border-border/60 bg-content-area px-2">
+      <div className="titlebar-no-drag flex h-11 shrink-0 items-center gap-1 border-b border-border/60 bg-muted px-2">
         <BrowserToolbarButton label="后退" disabled={!activeTab.canGoBack} onClick={() => void handleBack()}>
           <ArrowLeft className="size-4 text-foreground" strokeWidth={2} />
         </BrowserToolbarButton>
         <BrowserToolbarButton label="前进" disabled={!activeTab.canGoForward} onClick={() => void handleForward()}>
           <ArrowRight className="size-4 text-foreground" strokeWidth={2} />
         </BrowserToolbarButton>
-        <BrowserToolbarButton label="刷新" onClick={() => void handleReload()}>
+        <BrowserToolbarButton label="刷新" showTooltip={false} onClick={() => void handleReload()}>
           <RotateCw className={cn('size-3 text-foreground', activeTab.isLoading && 'animate-spin')} strokeWidth={2} />
         </BrowserToolbarButton>
+
+        <WebBookmarksPopover activeTab={activeTab} onNavigate={handleBookmarkNavigate} />
 
         <form className="ml-1 flex min-w-0 flex-1 items-center" onSubmit={(event) => void handleNavigate(event)}>
           <div className="flex h-8 min-w-0 flex-1 items-center gap-2 rounded-md border border-border/70 bg-input-surface px-3 shadow-xs focus-within:border-primary/50 focus-within:ring-2 focus-within:ring-ring/20">
@@ -157,27 +170,35 @@ export function WebBrowserSurface(): React.ReactElement {
 function BrowserToolbarButton({
   label,
   disabled = false,
+  showTooltip = true,
   onClick,
   children,
 }: {
   label: string
   disabled?: boolean
+  showTooltip?: boolean
   onClick: () => void
   children: React.ReactNode
 }): React.ReactElement {
+  const button = (
+    <Button
+      type="button"
+      variant="ghost"
+      size="icon-sm"
+      aria-label={label}
+      disabled={disabled}
+      onClick={onClick}
+    >
+      {children}
+    </Button>
+  )
+
+  if (!showTooltip) return button
+
   return (
     <Tooltip>
       <TooltipTrigger asChild>
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon-sm"
-          aria-label={label}
-          disabled={disabled}
-          onClick={onClick}
-        >
-          {children}
-        </Button>
+        {button}
       </TooltipTrigger>
       <TooltipContent side="bottom">{label}</TooltipContent>
     </Tooltip>

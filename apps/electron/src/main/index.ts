@@ -98,7 +98,7 @@ import { markRunningDelegationsAsInterrupted } from './lib/agent-session-manager
 import { stopAllGenerations } from './lib/chat-service'
 import { configureUpdater, initAutoUpdater, cleanupUpdater } from './lib/updater/auto-updater'
 import { startWorkspaceWatcher, stopWorkspaceWatcher } from './lib/workspace-watcher'
-import { disposeWebTabs, setWebTabHostWindow } from './lib/web-tab-manager'
+import { disposeWebTabs, saveWebTabsSession, setWebTabHostWindow } from './lib/web-tab-manager'
 import { startChatToolsWatcher, stopChatToolsWatcher } from './lib/chat-tools-watcher'
 import { getIsQuitting, setQuitting } from './lib/app-lifecycle'
 import {
@@ -131,7 +131,7 @@ import {
   shouldSuppressVoiceDictationActivate,
 } from './lib/voice-dictation-window'
 import { registerGlobalShortcut, unregisterAllGlobalShortcuts } from './lib/global-shortcut-service'
-import { setPromaVersion } from '@proma/core'
+import { setCopisVersion } from '@copis/core'
 import { TRAY_IPC_CHANNELS } from '../types'
 
 const MIGRATION_IPC_OPEN = 'migration:open-import-file'
@@ -535,8 +535,8 @@ async function bootstrap(): Promise<void> {
   // HTTP API 不依赖运行时检测，提前启动，确保浏览器端可以尽快连接。
   safeRun('startHttpApiServer', startHttpApiServer)
 
-  // 初始化兼容层版本号（供复用的 Pi/Proma 运行时使用）
-  setPromaVersion(app.getVersion())
+  // 初始化兼容层版本号（供复用的 Pi/Copis 运行时使用）
+  setCopisVersion(app.getVersion())
 
   // 注册自定义协议 copis-file:// 用于内联预览本地文件。
   // 协议只接受主进程签发的 opaque token，不解析 renderer 提供的绝对路径。
@@ -647,7 +647,7 @@ async function bootstrap(): Promise<void> {
   )
   safeRun('registerGlobalShortcut:voice-dictation', () =>
     registerGlobalShortcut('voice-dictation', () => {
-      toggleVoiceDictationWindow({ targetIsProma: mainWindow?.isFocused() === true })
+      toggleVoiceDictationWindow({ targetIsCopis: mainWindow?.isFocused() === true })
     }),
   )
 
@@ -735,6 +735,8 @@ app.on('window-all-closed', () => {
 app.on('before-quit', () => {
   // 标记正在退出，让 close 事件不再阻止关闭
   setQuitting()
+  // 先保存网页页签恢复状态，再释放原生 WebContentsView。
+  saveWebTabsSession()
   disposeWebTabs()
 
   // 关闭本地 HTTP API，避免开发重启时残留端口占用。

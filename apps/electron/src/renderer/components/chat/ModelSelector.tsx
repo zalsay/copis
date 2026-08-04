@@ -6,6 +6,7 @@
  * - 按渠道分组，灰色背景供应商标题行
  * - 选中项左侧绿色竖条高亮
  * - 触发按钮：模型 logo + 模型名 + Chevron
+ * - 模型选项构建逻辑独立，保持组件的 Fast Refresh 边界稳定
  */
 
 import * as React from 'react'
@@ -37,40 +38,10 @@ import {
   COPIS_WORKING_CHANNEL_ID,
   COPIS_WORKING_EXPERT_MODEL_ID,
   COPIS_WORKING_FAST_MODEL_ID,
-} from '@proma/shared'
-import type { Channel, ModelOption, ProviderType } from '@proma/shared'
+} from '@copis/shared'
+import type { Channel, ModelOption, ProviderType } from '@copis/shared'
 import { ChannelPlanQuotaBadge } from './ChannelPlanQuotaBadge'
-
-/** 从渠道列表构建扁平化的模型选项 */
-export function buildModelOptions(
-  channels: Channel[],
-  filterChannelId?: string,
-  filterChannelIds?: string[],
-  excludedProviders?: readonly ProviderType[],
-): ModelOption[] {
-  const options: ModelOption[] = []
-
-  for (const channel of channels) {
-    if (!channel.enabled) continue
-    if (filterChannelId && channel.id !== filterChannelId) continue
-    if (filterChannelIds && !filterChannelIds.includes(channel.id)) continue
-    if (excludedProviders?.includes(channel.provider)) continue
-
-    for (const model of channel.models) {
-      if (!model.enabled) continue
-
-      options.push({
-        channelId: channel.id,
-        channelName: channel.name,
-        modelId: model.id,
-        modelName: model.name,
-        provider: channel.provider,
-      })
-    }
-  }
-
-  return options
-}
+import { buildModelOptions } from './model-selector-utils'
 
 /** 按渠道分组模型选项 */
 function groupByChannel(options: ModelOption[]): Map<string, ModelOption[]> {
