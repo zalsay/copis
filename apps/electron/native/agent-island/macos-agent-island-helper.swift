@@ -769,7 +769,7 @@ final class IslandController {
       object: nil,
       queue: .main
     ) { [weak self] _ in
-      Task { @MainActor in self?.refreshForDisplayChange() }
+      Task { @MainActor [weak self] in self?.refreshForDisplayChange() }
     }
   }
 
