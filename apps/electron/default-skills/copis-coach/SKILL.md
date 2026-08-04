@@ -1,7 +1,7 @@
 ---
 name: copis-coach
 description: Copis 使用顾问，主动把用户在 Copis/Agent/Skill/Chat 工具/项目里的摩擦、疑惑、重复解释和低效流程，转成更顺手的使用方式或合适的知识维护动作。触发要积极：用户表达不满、困惑、重复提醒、"为什么没用/不会自动/又要我说"、"算了，我自己来"、"你上次不是说..."、"你又忘了"、"以后都这样/能不能记住/少让我选/下次自动"、询问 Copis 怎么用更好、某事能不能固化、该用 Agent 还是 Chat 工具、有没有现成 Skill、Skill 为什么没触发、想优化已有 Skill description、想减少步骤/降低认知负担/让 Copis 更懂自己的偏好时，都应触发。即使用户没有明确说"创建 Skill"，只要出现可复用流程、长期偏好、模式选择、能力发现、已有能力没命中、用户体验摩擦或产品心智模型偏差，也先用本 Skill 判断。Coach 不直接替下游干活；它负责诊断真实痛点，按 CLAUDE.md / Memory / Skills / 会话级 Context / 项目级 Context 五层知识架构检查已有沉淀，主动设计最小维护方案或路由到 skill-creator/find-skills/tool-builder/automation，并在方案不合适时直接挑战用户。普通一次性任务不打断，但只要有"以后还会遇到"或"Copis 应该更懂我"的信号，就宁可触发后判断不沉淀，也不要错过。
-version: "1.0.8"
+version: "1.0.9"
 ---
 
 # Copis Coach
@@ -140,7 +140,7 @@ Copis 给用户提供的核心能力：
 **先看证据再问**：
 
 - 翻当前会话历史——用户是否已经重复过同样的要求？是否刚刚确认了解决、否定、状态变化或长期偏好？
-- 按需搜索系统提示给出的 Copis 工作区 CLAUDE.md、Auto Memory 与 Skills，以及会话级 Context、项目级 Context 和相关本地文档——是否其实已有相关沉淀但没被使用？
+- 按需搜索系统提示给出的 Copis 工作区 CLAUDE.md、Copis Memory 与 Skills，以及会话级 Context、项目级 Context 和相关本地文档——是否其实已有相关沉淀但没被使用？
 - 证据足够就直接进入 Step 2，**不要为了凑流程而问**。
 - 证据不足时，问**一个**最关键的判别题，3-4 个选项。
 
@@ -158,7 +158,7 @@ Copis 给用户提供的核心能力：
 
 **L1 快速扫描**（<5 次文件读取，适用所有场景）：
 1. 读系统提示给出的 Copis 工作区 CLAUDE.md 前 30 行和目录结构
-2. 读系统提示给出的 Copis 工作区 Auto Memory 索引（**MEMORY.md 只放主题索引和路由，每条最多 1-2 句摘要；详细内容一律拆到同目录或子目录下的主题文件**）
+2. 用 `memory_recall` 搜索相关 Copis Memory，必要时用 `memory_read` 读取完整条目；不要把 Memory 当作文件树读取
 3. 列 Copis 工作区 `skills/` 目录下的 Skill 名列表
 
 **L2 深入搜索**（L1 发现线索或信号涉及已知沉淀时）：
@@ -221,7 +221,7 @@ Copis 给用户提供的核心能力：
 >
 > - **层级**：Memory（不是 CLAUDE.md / Skill）
 > - **原因**：你刚刚确认 `...`，这会影响以后类似问题的判断
-> - **改动**：在 `.claude/memory/...md` 修订 1 条旧结论，并保留来源说明
+> - **改动**：用 `memory_rewrite` 修订 1 条旧结论，携带当前 `expectedRevision` 并保留来源说明
 > - **不做**：不创建 Skill，因为这不是重复流程
 >
 > 你确认后我就更新；如果只是这次情况，我就不沉淀。"
@@ -344,7 +344,7 @@ Copis 给用户提供的核心能力：
    > "对不起，确实不该重复提醒你。这条偏好值得写入长期记忆，方案我想好了：
    >
    > - **层级**：Memory
-   > - **文件**：`.claude/memory/user-profile.md`（如果已有类似条目就修订，不重复追加）
+   > - **改动**：用 `memory_recall` 查找已有偏好条目；有则用 `memory_rewrite` 修订，没有则用 `memory_capture` 创建
    > - **内容**：用户稳定偏好：默认不要在回复、代码注释、commit message、PR 描述里使用 emoji，除非当次明确要求。
    > - **不做**：不创建 Skill，因为这不是重复流程。
    >

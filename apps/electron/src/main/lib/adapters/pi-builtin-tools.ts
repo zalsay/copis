@@ -11,7 +11,14 @@
 import { Type } from 'typebox'
 import type { ToolDefinition } from '@earendil-works/pi-coding-agent'
 import type { AgentToolResult } from '@earendil-works/pi-agent-core'
-import type { AgentRuntime, CopisPermissionMode } from '@copis/shared'
+import type {
+  AgentRuntime,
+  CopisPermissionMode,
+  MemoryCaptureResponse,
+  MemoryEntry,
+  MemoryKind,
+  MemoryRecallResponse,
+} from '@copis/shared'
 import type {
   CreateAutomationInput,
   UpdateAutomationInput,
@@ -96,6 +103,221 @@ function textToolResult(text: string, details?: unknown): AgentToolResult<unknow
     content: [{ type: 'text', text }],
     details,
   } as AgentToolResult<unknown>
+}
+
+// ===== Copis Memory 工具 =====
+
+const MEMORY_API_BASE_URL = 'http://127.0.0.1:51730'
+
+interface MemoryApiErrorPayload {
+  error?: unknown
+  code?: unknown
+  current?: unknown
+}
+
+interface MemoryApiRequestOptions {
+  method?: 'GET' | 'POST' | 'PATCH'
+  body?: unknown
+  signal?: AbortSignal
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function isMemoryKind(value: unknown): value is MemoryKind {
+  return value === 'fact'
+    || value === 'preference'
+    || value === 'decision'
+    || value === 'project'
+    || value === 'scratch'
+}
+
+function optionalString(value: unknown, field: string): string | undefined {
+  if (value === undefined) return undefined
+  if (typeof value !== 'string') throw new Error(`${field} 必须是字符串`)
+  return assertNonBlank(value, field)
+}
+
+function memoryTags(value: unknown): string[] | undefined {
+  if (value === undefined) return undefined
+  if (!Array.isArray(value)) throw new Error('tags 必须是字符串数组')
+  return [...new Set(value.map((tag) => {
+    if (typeof tag !== 'string') throw new Error('tags 必须是字符串数组')
+    return tag.trim()
+  }).filter(Boolean))]
+}
+
+function memoryWorkspaceQuery(workspaceSlug?: string): string {
+  return workspaceSlug ? `?workspaceSlug=${encodeURIComponent(workspaceSlug)}` : ''
+}
+
+function memoryEntryPath(id: string, suffix: string, workspaceSlug?: string): string {
+  return `/api/memory/${encodeURIComponent(id)}${suffix}${memoryWorkspaceQuery(workspaceSlug)}`
+}
+
+async function requestMemoryApi<T>(
+  path: string,
+  options: MemoryApiRequestOptions = {},
+): Promise<T> {
+  const response = await fetch(`${MEMORY_API_BASE_URL}${path}`, {
+    method: options.method ?? 'GET',
+    headers: {
+      Accept: 'application/json',
+      ...(options.body === undefined ? {} : { 'Content-Type': 'application/json' }),
+    },
+    ...(options.body === undefined ? {} : { body: JSON.stringify(options.body) }),
+    signal: options.signal,
+  })
+  const text = await response.text()
+  let payload: unknown
+  if (text) {
+    try {
+      payload = JSON.parse(text) as unknown
+    } catch {
+      payload = text
+    }
+  }
+  if (!response.ok) {
+    const errorPayload = isRecord(payload) ? payload as MemoryApiErrorPayload : undefined
+    const message = typeof errorPayload?.error === 'string'
+      ? errorPayload.error
+      : `Memory API 请求失败（${response.status}）`
+    const code = typeof errorPayload?.code === 'string' ? errorPayload.code : 'memory_api_error'
+    const current = errorPayload?.current
+    const currentText = current === undefined ? '' : `\n当前记录：${JSON.stringify(current)}`
+    throw new Error(`${message} [${code}]${currentText}`)
+  }
+  return payload as T
+}
+
+function buildMemoryTools(sdk: PiSdk, ctx: PiBuiltinToolsContext): ToolDefinition[] {
+  const kindSchema = Type.Union([
+    Type.Literal('fact'),
+    Type.Literal('preference'),
+    Type.Literal('decision'),
+    Type.Literal('project'),
+    Type.Literal('scratch'),
+  ])
+
+  return [
+    sdk.defineTool({
+      name: 'memory_recall',
+      label: '检索记忆',
+      description: '检索当前可见的 Copis 长期记忆。工作区会同时看到用户记忆和当前工作区记忆；没有工作区时只看到用户记忆。先检索，再按需读取完整内容。',
+      parameters: Type.Object({
+        query: Type.String({ description: '要检索的事实、偏好、决策或项目经验关键词' }),
+        limit: Type.Optional(Type.Number({ description: '返回数量，默认 8，最大 8' })),
+      }),
+      async execute(_toolCallId: string, params: unknown, signal?: AbortSignal) {
+        const args = params as { query?: unknown; limit?: unknown }
+        const query = assertNonBlank(typeof args.query === 'string' ? args.query : undefined, 'query')
+        const limit = args.limit === undefined ? undefined : args.limit
+        if (limit !== undefined && (!isFiniteInt(limit) || limit < 1 || limit > 8)) {
+          throw new Error('limit 必须是 1 到 8 之间的整数')
+        }
+        const response = await requestMemoryApi<MemoryRecallResponse>('/api/memory/recall', {
+          method: 'POST',
+          body: {
+            ...(ctx.workspaceSlug ? { workspaceSlug: ctx.workspaceSlug } : {}),
+            query,
+            ...(limit === undefined ? {} : { limit }),
+          },
+          signal,
+        })
+        return jsonToolResult(response)
+      },
+    }),
+    sdk.defineTool({
+      name: 'memory_read',
+      label: '读取记忆',
+      description: '读取一条已经通过 memory_recall 得到的当前可见 Copis 记忆的完整内容。不能读取其他工作区的记忆。',
+      parameters: Type.Object({
+        id: Type.String({ description: 'memory_recall 返回的记忆 ID' }),
+      }),
+      async execute(_toolCallId: string, params: unknown, signal?: AbortSignal) {
+        const rawId = (params as { id?: unknown }).id
+        const id = assertNonBlank(typeof rawId === 'string' ? rawId : undefined, 'id')
+        const entry = await requestMemoryApi<MemoryEntry>(memoryEntryPath(id, '/read', ctx.workspaceSlug), { signal })
+        return jsonToolResult({ entry })
+      },
+    }),
+    sdk.defineTool({
+      name: 'memory_capture',
+      label: '记录记忆',
+      description: '把稳定、可复用且有足够证据的经验记录到当前工作区。scope 固定为当前工作区，不能写入其他工作区；没有工作区时不可写入。',
+      parameters: Type.Object({
+        title: Type.String({ description: '简短的记忆标题' }),
+        content: Type.String({ description: '稳定、可复用的事实、偏好、决策或项目经验' }),
+        kind: kindSchema,
+        tags: Type.Optional(Type.Array(Type.String(), { description: '用于后续检索的标签' })),
+      }),
+      async execute(_toolCallId: string, params: unknown, signal?: AbortSignal) {
+        if (!ctx.workspaceSlug) throw new Error('当前没有工作区，不能写入工作区记忆')
+        const args = params as { title?: unknown; content?: unknown; kind?: unknown; tags?: unknown }
+        const kind = args.kind
+        if (!isMemoryKind(kind)) throw new Error('kind 参数不正确')
+        const tags = memoryTags(args.tags)
+        const response = await requestMemoryApi<MemoryCaptureResponse>('/api/memory/capture', {
+          method: 'POST',
+          body: {
+            workspaceSlug: ctx.workspaceSlug,
+            title: assertNonBlank(typeof args.title === 'string' ? args.title : undefined, 'title'),
+            content: assertNonBlank(typeof args.content === 'string' ? args.content : undefined, 'content'),
+            kind,
+            ...(tags === undefined ? {} : { tags }),
+          },
+          signal,
+        })
+        return jsonToolResult(response)
+      },
+    }),
+    sdk.defineTool({
+      name: 'memory_rewrite',
+      label: '修订记忆',
+      description: '修订当前工作区可见的 Copis 记忆。必须携带 memory_read 得到的 expectedRevision；发生冲突时先读取当前记录再重新判断，不能追加相反条目。',
+      parameters: Type.Object({
+        id: Type.String({ description: '要修订的记忆 ID' }),
+        title: Type.Optional(Type.String({ description: '新的标题' })),
+        content: Type.Optional(Type.String({ description: '新的记忆内容' })),
+        tags: Type.Optional(Type.Array(Type.String(), { description: '新的标签数组；传空数组可清空标签' })),
+        expectedRevision: Type.Number({ description: 'memory_read 返回的当前 revision' }),
+      }),
+      async execute(_toolCallId: string, params: unknown, signal?: AbortSignal) {
+        if (!ctx.workspaceSlug) throw new Error('当前没有工作区，不能修订工作区记忆')
+        const args = params as {
+          id?: unknown
+          title?: unknown
+          content?: unknown
+          tags?: unknown
+          expectedRevision?: unknown
+        }
+        const expectedRevision = args.expectedRevision
+        if (!isFiniteInt(expectedRevision) || expectedRevision < 1) {
+          throw new Error('expectedRevision 必须是正整数')
+        }
+        const title = optionalString(args.title, 'title')
+        const content = optionalString(args.content, 'content')
+        const tags = memoryTags(args.tags)
+        if (title === undefined && content === undefined && tags === undefined) {
+          throw new Error('至少提供 title、content 或 tags 之一')
+        }
+        const id = assertNonBlank(typeof args.id === 'string' ? args.id : undefined, 'id')
+        const entry = await requestMemoryApi<MemoryEntry>(memoryEntryPath(id, '/rewrite'), {
+          method: 'PATCH',
+          body: {
+            workspaceSlug: ctx.workspaceSlug,
+            ...(title === undefined ? {} : { title }),
+            ...(content === undefined ? {} : { content }),
+            ...(tags === undefined ? {} : { tags }),
+            expectedRevision,
+          },
+          signal,
+        })
+        return jsonToolResult({ entry })
+      },
+    }),
+  ] as unknown as ToolDefinition[]
 }
 
 // ===== Web 工具 =====
@@ -820,6 +1042,13 @@ export async function buildPiBuiltinTools(
     } catch (error) {
       console.error('[Pi 桥接] 注入 automation 工具失败:', error)
     }
+  }
+
+  // Copis Memory 始终作为 Pi 的受控本地工具启用，工具不会暴露 scope 或 workspace 参数。
+  try {
+    tools.push(...buildMemoryTools(sdk, ctx))
+  } catch (error) {
+    console.error('[Pi 桥接] 注入 Copis Memory 工具失败:', error)
   }
 
   // 任务/日程是 Pi native customTools，Claude runtime 不经此入口，因此天然隔离。

@@ -3,6 +3,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { chmodSync, existsSync } from 'node:fs'
 import { createInterface } from 'node:readline'
 import { join, resolve } from 'node:path'
+import { getConfigDir } from './config-paths'
 import {
   handleHttpApiRequest,
   HTTP_API_HOST,
@@ -165,6 +166,7 @@ export function startHttpApiServer(): void {
       windowsHide: true,
       env: {
         ...process.env,
+        COPIS_MEMORY_DIR: join(getConfigDir(), 'memory'),
         COPIS_PI_RPC_RUNTIME: process.execPath,
         ...(workerPath ? { COPIS_PI_RPC_WORKER: workerPath } : {}),
       },

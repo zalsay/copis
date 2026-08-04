@@ -5,12 +5,13 @@
  * - conversations: 对话视图（Chat/Agent 模式内容）
  * - planning: 任务、日程与定时任务统一视图
  * - agent-skills: Agent 技能（Skills/MCP）全屏管理视图
+ * - memory: Copis Memory 长期记忆管理视图
  */
 
 import { atom } from 'jotai'
 
-export type ActiveView = 'conversations' | 'planning' | 'agent-skills'
-export type AgentSkillsCapabilityTab = 'skills' | 'mcp' | 'memory'
+export type ActiveView = 'conversations' | 'planning' | 'agent-skills' | 'memory'
+export type AgentSkillsCapabilityTab = 'skills' | 'mcp'
 
 /** 当前活跃视图（不持久化，每次启动默认显示对话） */
 export const activeViewAtom = atom<ActiveView>('conversations')

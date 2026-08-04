@@ -64,7 +64,6 @@ import type {
   SkillMeta,
   SkillFileContent,
   WorkspaceCapabilities,
-  WorkspaceMemorySummary,
   FileEntry,
   FileSearchResult,
   EnvironmentCheckResult,
@@ -311,12 +310,6 @@ import {
   createSkillEntry,
   deleteSkillEntry,
   renameSkillEntry,
-  getWorkspaceMemorySummary,
-  readWorkspaceClaudeMd,
-  writeWorkspaceClaudeMd,
-  listWorkspaceAutoMemoryFiles,
-  readWorkspaceAutoMemoryFile,
-  writeWorkspaceAutoMemoryFile,
   getWorkspaceAttachedDirectories,
   getWorkspaceAttachedFiles,
   attachWorkspaceDirectory,
@@ -2622,50 +2615,6 @@ export function registerIpcHandlers(): void {
     AGENT_IPC_CHANNELS.RENAME_SKILL_ENTRY,
     async (_, workspaceSlug: string, skillSlug: string, fromRelative: string, toRelative: string): Promise<void> => {
       renameSkillEntry(workspaceSlug, skillSlug, fromRelative, toRelative)
-    }
-  )
-
-  // ===== 工作区记忆文件管理 =====
-
-  ipcMain.handle(
-    AGENT_IPC_CHANNELS.GET_WORKSPACE_MEMORY_SUMMARY,
-    async (_, workspaceSlug: string): Promise<WorkspaceMemorySummary> => {
-      return getWorkspaceMemorySummary(workspaceSlug)
-    }
-  )
-
-  ipcMain.handle(
-    AGENT_IPC_CHANNELS.READ_WORKSPACE_CLAUDE_MD,
-    async (_, workspaceSlug: string): Promise<SkillFileContent> => {
-      return readWorkspaceClaudeMd(workspaceSlug)
-    }
-  )
-
-  ipcMain.handle(
-    AGENT_IPC_CHANNELS.WRITE_WORKSPACE_CLAUDE_MD,
-    async (_, workspaceSlug: string, content: string): Promise<void> => {
-      writeWorkspaceClaudeMd(workspaceSlug, content)
-    }
-  )
-
-  ipcMain.handle(
-    AGENT_IPC_CHANNELS.LIST_WORKSPACE_AUTO_MEMORY_FILES,
-    async (_, workspaceSlug: string) => {
-      return listWorkspaceAutoMemoryFiles(workspaceSlug)
-    }
-  )
-
-  ipcMain.handle(
-    AGENT_IPC_CHANNELS.READ_WORKSPACE_AUTO_MEMORY_FILE,
-    async (_, workspaceSlug: string, relativePath: string): Promise<SkillFileContent> => {
-      return readWorkspaceAutoMemoryFile(workspaceSlug, relativePath)
-    }
-  )
-
-  ipcMain.handle(
-    AGENT_IPC_CHANNELS.WRITE_WORKSPACE_AUTO_MEMORY_FILE,
-    async (_, workspaceSlug: string, relativePath: string, content: string): Promise<void> => {
-      writeWorkspaceAutoMemoryFile(workspaceSlug, relativePath, content)
     }
   )
 

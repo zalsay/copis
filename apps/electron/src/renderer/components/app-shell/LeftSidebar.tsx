@@ -11,7 +11,7 @@
 import * as React from 'react'
 import { useAtom, useSetAtom, useAtomValue, useStore } from 'jotai'
 import { toast } from 'sonner'
-import { Pin, PinOff, Star, Settings, Plus, Trash2, Pencil, PanelLeftClose, PanelLeftOpen, ArrowRightLeft, Search, Archive, ArchiveRestore, ArrowLeft, Bot, MessageSquare, MoreHorizontal, FolderOpen, FolderInput, FolderPlus, GripVertical, Clock, AlarmClock, ChevronRight, Blocks, GitBranch, Download, Loader2, RotateCw } from 'lucide-react'
+import { Pin, PinOff, Star, Settings, Plus, Trash2, Pencil, PanelLeftClose, PanelLeftOpen, ArrowRightLeft, Search, Archive, ArchiveRestore, ArrowLeft, Bot, MessageSquare, MoreHorizontal, FolderOpen, FolderInput, FolderPlus, GripVertical, Clock, AlarmClock, ChevronRight, Blocks, BookOpen, GitBranch, Download, Loader2, RotateCw } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip'
 import { ModeSwitcher } from './ModeSwitcher'
@@ -296,6 +296,34 @@ function SkillsSidebarEntry({ count, updateCount, active, onClick }: SkillsSideb
         )}
       >
         {formatAutomationCount(count)}
+      </span>
+    </button>
+  )
+}
+
+interface MemorySidebarEntryProps {
+  active: boolean
+  onClick: () => void
+}
+
+function MemorySidebarEntry({ active, onClick }: MemorySidebarEntryProps): React.ReactElement {
+  return (
+    <button
+      type="button"
+      aria-label="记忆"
+      onClick={onClick}
+      className={cn(
+        'group w-full flex items-center px-3 py-2 rounded-md text-[13px] transition-colors duration-100 titlebar-no-drag',
+        active
+          ? 'bg-accent-foreground/[0.10] text-foreground shadow-[0_1px_2px_0_rgba(0,0,0,0.05)]'
+          : 'text-foreground/60 hover:bg-accent-foreground/[0.08] hover:text-foreground',
+      )}
+    >
+      <span className="flex items-center gap-3 min-w-0">
+        <span className={cn('flex-shrink-0 w-[18px] h-[18px]', active ? 'text-accent-foreground' : 'text-foreground/45')}>
+          <BookOpen size={16} className="block" />
+        </span>
+        <span className="truncate">记忆</span>
       </span>
     </button>
   )
@@ -1065,6 +1093,16 @@ export function LeftSidebar({ width, noTransition }: LeftSidebarProps): React.Re
     }
     setActiveView('agent-skills')
   }, [activeView, setActiveView])
+
+  /** 打开/关闭独立 Memory 视图；入口与 Chat/Agent 模式无关。 */
+  const handleOpenMemory = React.useCallback((): void => {
+    if (activeView === 'memory') {
+      setActiveView('conversations')
+      return
+    }
+    setAutomationForm({ open: false, draft: null })
+    setActiveView('memory')
+  }, [activeView, setActiveView, setAutomationForm])
 
   /** 打开当前工作区的 MCP 管理页 */
   const handleOpenMcpManagement = React.useCallback((): void => {
@@ -2576,6 +2614,25 @@ export function LeftSidebar({ width, noTransition }: LeftSidebarProps): React.Re
             </TooltipContent>
           </Tooltip>
 
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                type="button"
+                aria-label="记忆"
+                onClick={handleOpenMemory}
+                className={cn(
+                  'relative size-10 flex items-center justify-center rounded-[12px] transition-colors titlebar-no-drag border',
+                  activeView === 'memory'
+                    ? 'border-primary/80 bg-primary text-primary-foreground shadow-sm'
+                    : 'border-border/45 bg-foreground/[0.025] text-foreground/45 hover:border-border/70 hover:bg-foreground/[0.045] hover:text-primary',
+                )}
+              >
+                <BookOpen size={16} />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="right">记忆</TooltipContent>
+          </Tooltip>
+
           {mode === 'agent' && (
             <Tooltip>
               <TooltipTrigger asChild>
@@ -2720,6 +2777,11 @@ export function LeftSidebar({ width, noTransition }: LeftSidebarProps): React.Re
           active={activeView === 'planning'}
           onClick={handleOpenAutomations}
         />
+      </div>
+
+      {/* 独立 Memory 入口：不依赖当前模式。 */}
+      <div className="px-3 pb-0.5">
+        <MemorySidebarEntry active={activeView === 'memory'} onClick={handleOpenMemory} />
       </div>
 
       {/* Agent 技能入口：Skills / MCP 能力中心，仅 Agent 模式可见 */}

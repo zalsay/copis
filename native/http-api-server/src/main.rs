@@ -1,17 +1,24 @@
 use std::collections::HashMap;
 use std::io::{self, BufRead, BufReader, BufWriter, Read, Write};
 use std::net::{Shutdown, TcpListener, TcpStream};
+use std::path::PathBuf;
 use std::process;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 
+mod memory;
 mod pi_rpc;
 
+use memory::{
+    MemoryCaptureInput, MemoryError, MemoryKind, MemoryRestoreInput, MemoryRewriteInput,
+    MemoryScope, MemoryStore, DEFAULT_LIST_LIMIT, DEFAULT_RECALL_LIMIT,
+};
 use pi_rpc::{
     agent_session_id, is_agent_messages_route, is_agent_stop_route, parse_worker_frame,
     sse_headers_with_origin, PiWorkerManager,
 };
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::{json, Value};
 
 const HOST: &str = "127.0.0.1";
@@ -254,6 +261,376 @@ fn read_chunked_body(reader: &mut BufferedReader) -> Result<Vec<u8>, RequestErro
     Ok(body)
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AgentMemoryRecallRequest {
+    workspace_slug: Option<String>,
+    query: String,
+    limit: Option<usize>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AgentMemoryCaptureRequest {
+    workspace_slug: String,
+    kind: MemoryKind,
+    title: String,
+    content: String,
+    #[serde(default)]
+    tags: Vec<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AgentMemoryRewriteRequest {
+    workspace_slug: String,
+    title: Option<String>,
+    content: Option<String>,
+    tags: Option<Vec<String>>,
+    expected_revision: u64,
+}
+
+fn handle_memory_route(
+    stream: &mut TcpStream,
+    request: &HttpRequest,
+    origin: Option<&str>,
+    store: &MemoryStore,
+) {
+    let (path, _) = request
+        .target
+        .split_once('?')
+        .unwrap_or((request.target.as_str(), ""));
+    let query = match parse_query_parameters(&request.target) {
+        Ok(query) => query,
+        Err(message) => {
+            send_memory_bad_request(stream, &message, origin);
+            return;
+        }
+    };
+
+    if request.method == "GET" && path == "/api/memory" {
+        let workspace_slug = query.get("workspaceSlug").map(String::as_str);
+        let options = match parse_memory_list_options(&query) {
+            Ok(options) => options,
+            Err(error) => {
+                send_memory_error(stream, error, origin);
+                return;
+            }
+        };
+        let result = store.list(
+            workspace_slug,
+            query.get("q").map(String::as_str),
+            options.0,
+            options.1,
+            options.2,
+            options.3,
+        );
+        send_memory_result(stream, result, origin);
+        return;
+    }
+
+    if request.method == "POST" && path == "/api/memory" {
+        let input = match parse_memory_body::<MemoryCaptureInput>(request) {
+            Ok(input) => input,
+            Err(error) => {
+                send_memory_error(stream, error, origin);
+                return;
+            }
+        };
+        send_memory_result(stream, store.capture(input), origin);
+        return;
+    }
+
+    let parts = match memory_path_parts(path) {
+        Ok(parts) => parts,
+        Err(message) => {
+            send_memory_bad_request(stream, &message, origin);
+            return;
+        }
+    };
+
+    if request.method == "GET" && parts.as_slice() == ["stats"] {
+        let result = store.stats(query.get("workspaceSlug").map(String::as_str));
+        send_memory_result(stream, result, origin);
+        return;
+    }
+
+    if request.method == "POST" && parts.as_slice() == ["recall"] {
+        let input = match parse_memory_body::<AgentMemoryRecallRequest>(request) {
+            Ok(input) => input,
+            Err(error) => {
+                send_memory_error(stream, error, origin);
+                return;
+            }
+        };
+        let result = store.recall(
+            input.workspace_slug.as_deref(),
+            &input.query,
+            input.limit.unwrap_or(DEFAULT_RECALL_LIMIT),
+        );
+        send_memory_result(stream, result, origin);
+        return;
+    }
+
+    if request.method == "POST" && parts.as_slice() == ["capture"] {
+        let input = match parse_memory_body::<AgentMemoryCaptureRequest>(request) {
+            Ok(input) => input,
+            Err(error) => {
+                send_memory_error(stream, error, origin);
+                return;
+            }
+        };
+        let input = MemoryCaptureInput {
+            workspace_slug: Some(input.workspace_slug),
+            scope: MemoryScope::Workspace,
+            kind: input.kind,
+            title: input.title,
+            content: input.content,
+            tags: input.tags,
+            source: memory::MemorySource::Agent,
+        };
+        send_memory_result(stream, store.capture(input), origin);
+        return;
+    }
+
+    if parts.len() < 1 {
+        send_memory_not_found(stream, origin);
+        return;
+    }
+    let id = &parts[0];
+    let workspace_slug = query.get("workspaceSlug").map(String::as_str);
+
+    if parts.len() == 1 && request.method == "GET" {
+        send_memory_result(stream, store.get(id, workspace_slug), origin);
+        return;
+    }
+
+    if parts.len() == 2 && parts[0] == *id && parts[1] == "read" && request.method == "GET" {
+        send_memory_result(stream, store.get(id, workspace_slug), origin);
+        return;
+    }
+
+    if parts.len() == 2 && parts[0] == *id && parts[1] == "history" && request.method == "GET" {
+        let result = store
+            .history(id, workspace_slug)
+            .map(|revisions| json!({ "revisions": revisions }));
+        send_memory_result(stream, result, origin);
+        return;
+    }
+
+    if parts.len() == 2 && parts[0] == *id && parts[1] == "rewrite" && request.method == "PATCH" {
+        let input = match parse_memory_body::<AgentMemoryRewriteRequest>(request) {
+            Ok(input) => input,
+            Err(error) => {
+                send_memory_error(stream, error, origin);
+                return;
+            }
+        };
+        let input = MemoryRewriteInput {
+            workspace_slug: Some(input.workspace_slug),
+            title: input.title,
+            content: input.content,
+            kind: None,
+            tags: input.tags,
+            expected_revision: input.expected_revision,
+        };
+        send_memory_result(stream, store.rewrite(id, input), origin);
+        return;
+    }
+
+    if parts.len() == 2 && parts[0] == *id && parts[1] == "restore" && request.method == "POST" {
+        let input = match parse_memory_body::<MemoryRestoreInput>(request) {
+            Ok(input) => input,
+            Err(error) => {
+                send_memory_error(stream, error, origin);
+                return;
+            }
+        };
+        send_memory_result(stream, store.restore(id, input), origin);
+        return;
+    }
+
+    if parts.len() == 1 && request.method == "PATCH" {
+        let input = match parse_memory_body::<MemoryRewriteInput>(request) {
+            Ok(input) => input,
+            Err(error) => {
+                send_memory_error(stream, error, origin);
+                return;
+            }
+        };
+        send_memory_result(stream, store.rewrite(id, input), origin);
+        return;
+    }
+
+    if parts.len() == 1 && request.method == "DELETE" {
+        send_memory_result(stream, store.archive(id, workspace_slug), origin);
+        return;
+    }
+
+    send_memory_not_found(stream, origin);
+}
+
+fn parse_memory_body<T: DeserializeOwned>(request: &HttpRequest) -> Result<T, MemoryError> {
+    serde_json::from_slice(&request.body)
+        .map_err(|_| MemoryError::Validation("请求体不是有效的 Memory JSON".to_string()))
+}
+
+fn memory_path_parts(path: &str) -> Result<Vec<String>, String> {
+    let prefix = "/api/memory/";
+    let Some(rest) = path.strip_prefix(prefix) else {
+        return Err("Memory 路径不正确".to_string());
+    };
+    if rest.is_empty() {
+        return Err("Memory 路径不正确".to_string());
+    }
+    rest.split('/')
+        .map(|part| decode_url_component(part, false))
+        .collect()
+}
+
+fn parse_query_parameters(target: &str) -> Result<HashMap<String, String>, String> {
+    let Some((_, query)) = target.split_once('?') else {
+        return Ok(HashMap::new());
+    };
+    let mut parameters = HashMap::new();
+    for pair in query.split('&').filter(|pair| !pair.is_empty()) {
+        let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
+        parameters.insert(
+            decode_url_component(key, true)?,
+            decode_url_component(value, true)?,
+        );
+    }
+    Ok(parameters)
+}
+
+fn decode_url_component(value: &str, plus_as_space: bool) -> Result<String, String> {
+    let bytes = value.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'%' if index + 2 < bytes.len() => {
+                let high =
+                    hex_digit(bytes[index + 1]).ok_or_else(|| "URL 参数编码不正确".to_string())?;
+                let low =
+                    hex_digit(bytes[index + 2]).ok_or_else(|| "URL 参数编码不正确".to_string())?;
+                decoded.push((high << 4) | low);
+                index += 3;
+            }
+            b'%' => return Err("URL 参数编码不正确".to_string()),
+            b'+' if plus_as_space => {
+                decoded.push(b' ');
+                index += 1;
+            }
+            byte => {
+                decoded.push(byte);
+                index += 1;
+            }
+        }
+    }
+    String::from_utf8(decoded).map_err(|_| "URL 参数不是有效 UTF-8".to_string())
+}
+
+fn parse_memory_list_options(
+    query: &HashMap<String, String>,
+) -> Result<(Option<MemoryScope>, Option<MemoryKind>, bool, usize), MemoryError> {
+    let scope = match query.get("scope").map(String::as_str) {
+        None => None,
+        Some("user") => Some(MemoryScope::User),
+        Some("workspace") => Some(MemoryScope::Workspace),
+        Some(_) => return Err(MemoryError::Validation("scope 参数不正确".to_string())),
+    };
+    let kind = match query.get("kind").map(String::as_str) {
+        None => None,
+        Some("fact") => Some(MemoryKind::Fact),
+        Some("preference") => Some(MemoryKind::Preference),
+        Some("decision") => Some(MemoryKind::Decision),
+        Some("project") => Some(MemoryKind::Project),
+        Some("scratch") => Some(MemoryKind::Scratch),
+        Some(_) => return Err(MemoryError::Validation("kind 参数不正确".to_string())),
+    };
+    let include_archived = match query.get("includeArchived").map(String::as_str) {
+        None => false,
+        Some("true") | Some("1") => true,
+        Some("false") | Some("0") => false,
+        Some(_) => {
+            return Err(MemoryError::Validation(
+                "includeArchived 参数不正确".to_string(),
+            ))
+        }
+    };
+    let limit = match query.get("limit") {
+        None => DEFAULT_LIST_LIMIT,
+        Some(value) => value
+            .parse::<usize>()
+            .map_err(|_| MemoryError::Validation("limit 参数不正确".to_string()))?,
+    };
+    Ok((scope, kind, include_archived, limit))
+}
+
+fn send_memory_result<T: Serialize>(
+    stream: &mut TcpStream,
+    result: Result<T, MemoryError>,
+    origin: Option<&str>,
+) {
+    match result {
+        Ok(value) => match serde_json::to_string(&value) {
+            Ok(body) => send_json_response(stream, 200, &body, origin),
+            Err(error) => {
+                send_memory_error(stream, MemoryError::Storage(error.to_string()), origin)
+            }
+        },
+        Err(error) => send_memory_error(stream, error, origin),
+    }
+}
+
+fn send_memory_error(stream: &mut TcpStream, error: MemoryError, origin: Option<&str>) {
+    let (status, code, body) = match error {
+        MemoryError::Validation(message) => (
+            400,
+            "invalid_memory_request",
+            json!({ "error": message, "code": "invalid_memory_request" }),
+        ),
+        MemoryError::NotFound => (
+            404,
+            "memory_not_found",
+            json!({ "error": "记忆条目不存在或不在当前可见范围", "code": "memory_not_found" }),
+        ),
+        MemoryError::Conflict(entry) => (
+            409,
+            "revision_conflict",
+            json!({ "error": "记忆 revision 冲突", "code": "revision_conflict", "current": entry }),
+        ),
+        MemoryError::Storage(message) => (
+            500,
+            "memory_storage_error",
+            json!({ "error": message, "code": "memory_storage_error" }),
+        ),
+    };
+    let body = serde_json::to_string(&body)
+        .unwrap_or_else(|_| format!(r#"{{"error":"Memory {}","code":"{}"}}"#, status, code));
+    send_json_response(stream, status, &body, origin);
+}
+
+fn send_memory_bad_request(stream: &mut TcpStream, message: &str, origin: Option<&str>) {
+    send_json_response(
+        stream,
+        400,
+        &serde_json::to_string(&json!({ "error": message, "code": "invalid_memory_request" }))
+            .unwrap(),
+        origin,
+    );
+}
+
+fn send_memory_not_found(stream: &mut TcpStream, origin: Option<&str>) {
+    send_json_response(
+        stream,
+        404,
+        r#"{"error":"Memory 路由不存在","code":"memory_route_not_found"}"#,
+        origin,
+    );
+}
+
 fn read_bridge_responses(bridge: Arc<Bridge>) {
     let stdin = io::stdin();
     let reader = BufReader::new(stdin.lock());
@@ -290,6 +667,7 @@ fn handle_connection(
     mut stream: TcpStream,
     bridge: Arc<Bridge>,
     workers: Arc<PiWorkerManager>,
+    memory_store: Arc<MemoryStore>,
 ) {
     let request = match read_http_request(&mut stream) {
         Ok(request) => request,
@@ -343,6 +721,12 @@ fn handle_connection(
             r#"{"ok":true,"service":"copis-http-api","port":51730}"#,
             origin,
         );
+        let _ = stream.shutdown(Shutdown::Both);
+        return;
+    }
+
+    if path == "/api/memory" || path.starts_with("/api/memory/") {
+        handle_memory_route(&mut stream, &request, origin, &memory_store);
         let _ = stream.shutdown(Shutdown::Both);
         return;
     }
@@ -412,7 +796,10 @@ fn handle_connection(
 fn is_allowed_origin(origin: &str) -> bool {
     // 打包后的 Electron renderer 使用 file://，Chromium 会发送 Origin: null。
     // 服务只监听 127.0.0.1，因此允许该来源不会扩大到远程站点。
-    matches!(origin, "null" | "http://127.0.0.1:5174" | "http://localhost:5174")
+    matches!(
+        origin,
+        "null" | "http://127.0.0.1:5174" | "http://localhost:5174"
+    )
 }
 
 fn send_json_response(stream: &mut TcpStream, status: u16, body: &str, origin: Option<&str>) {
@@ -440,16 +827,16 @@ fn handle_agent_stream(
     let prepare_body = match build_prepare_body(request, &session_id) {
         Ok(body) => body,
         Err(error) => {
-            let body = format!(r#"{{"error":"{}","code":"invalid_request"}}"#, escape_json_string(&error));
+            let body = format!(
+                r#"{{"error":"{}","code":"invalid_request"}}"#,
+                escape_json_string(&error)
+            );
             send_json_response(stream, 400, &body, origin);
             return;
         }
     };
-    let prepared = match send_internal_request(
-        &bridge,
-        "/api/internal/agent/prepare",
-        prepare_body,
-    ) {
+    let prepared = match send_internal_request(&bridge, "/api/internal/agent/prepare", prepare_body)
+    {
         Ok(response) if (200..300).contains(&response.status) => response,
         Ok(response) => {
             send_bridge_response(stream, response, origin);
@@ -466,7 +853,11 @@ fn handle_agent_stream(
             return;
         }
     };
-    let config = match prepared.body.as_deref().and_then(|body| serde_json::from_str::<Value>(body).ok()) {
+    let config = match prepared
+        .body
+        .as_deref()
+        .and_then(|body| serde_json::from_str::<Value>(body).ok())
+    {
         Some(config) => config,
         None => {
             send_json_response(
@@ -483,7 +874,10 @@ fn handle_agent_stream(
         Ok(worker) => worker,
         Err(error) => {
             eprintln!("[HTTP API] {}", error);
-            let body = format!(r#"{{"error":"{}","code":"pi_worker_unavailable"}}"#, escape_json_string(&error));
+            let body = format!(
+                r#"{{"error":"{}","code":"pi_worker_unavailable"}}"#,
+                escape_json_string(&error)
+            );
             send_json_response(stream, 503, &body, origin);
             return;
         }
@@ -522,12 +916,16 @@ fn handle_agent_stream(
                 let _ = send_sse_frame(stream, &frame);
             }
             Some("meta") => {
-                if let Err(error) = persist_worker_frame(&bridge, "/api/internal/agent/meta", &frame) {
+                if let Err(error) =
+                    persist_worker_frame(&bridge, "/api/internal/agent/meta", &frame)
+                {
                     eprintln!("[HTTP API] Agent session 元数据持久化失败: {}", error);
                 }
             }
             Some("credential") => {
-                if let Err(error) = persist_worker_frame(&bridge, "/api/internal/agent/credential", &frame) {
+                if let Err(error) =
+                    persist_worker_frame(&bridge, "/api/internal/agent/credential", &frame)
+                {
                     eprintln!("[HTTP API] Agent OAuth 凭据持久化失败: {}", error);
                 }
             }
@@ -583,7 +981,10 @@ fn build_prepare_body(request: &HttpRequest, session_id: &str) -> Result<Vec<u8>
     let object = value
         .as_object_mut()
         .ok_or_else(|| "请求体必须是 JSON 对象".to_string())?;
-    object.insert("sessionId".to_string(), Value::String(session_id.to_string()));
+    object.insert(
+        "sessionId".to_string(),
+        Value::String(session_id.to_string()),
+    );
     serde_json::to_vec(&value).map_err(|error| format!("请求体序列化失败: {}", error))
 }
 
@@ -602,7 +1003,11 @@ fn send_internal_request(
 
 fn persist_worker_event(bridge: &Arc<Bridge>, frame: &Value) -> Result<(), String> {
     let payload = frame.get("payload").and_then(Value::as_object);
-    if payload.and_then(|value| value.get("kind")).and_then(Value::as_str) != Some("sdk_message") {
+    if payload
+        .and_then(|value| value.get("kind"))
+        .and_then(Value::as_str)
+        != Some("sdk_message")
+    {
         return Ok(());
     }
     let message = payload.and_then(|value| value.get("message"));
@@ -626,11 +1031,16 @@ fn persist_worker_event(bridge: &Arc<Bridge>, frame: &Value) -> Result<(), Strin
         .ok_or_else(|| "Agent SDK 消息缺少 sessionId".to_string())?;
     let body = serde_json::to_vec(&json!({ "sessionId": session_id, "message": message }))
         .map_err(|error| format!("Agent SDK 消息序列化失败: {}", error))?;
-    ensure_internal_success(send_internal_request(bridge, "/api/internal/agent/message", body)?)
+    ensure_internal_success(send_internal_request(
+        bridge,
+        "/api/internal/agent/message",
+        body,
+    )?)
 }
 
 fn persist_worker_frame(bridge: &Arc<Bridge>, target: &str, frame: &Value) -> Result<(), String> {
-    let body = serde_json::to_vec(frame).map_err(|error| format!("Agent RPC 帧序列化失败: {}", error))?;
+    let body =
+        serde_json::to_vec(frame).map_err(|error| format!("Agent RPC 帧序列化失败: {}", error))?;
     ensure_internal_success(send_internal_request(bridge, target, body)?)
 }
 
@@ -666,7 +1076,11 @@ fn ensure_internal_success_with_body(response: BridgeResponse) -> Result<Option<
         .body
         .as_deref()
         .and_then(|body| serde_json::from_str::<Value>(body).ok())
-        .and_then(|body| body.get("title").and_then(Value::as_str).map(str::to_string));
+        .and_then(|body| {
+            body.get("title")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        });
     Ok(title)
 }
 
@@ -686,7 +1100,8 @@ fn send_sse_frame(stream: &mut TcpStream, frame: &Value) -> io::Result<()> {
 }
 
 fn escape_json_string(value: &str) -> String {
-    serde_json::to_string(value).unwrap_or_else(|_| "\"请求失败\"".to_string())
+    serde_json::to_string(value)
+        .unwrap_or_else(|_| "\"请求失败\"".to_string())
         .trim_matches('"')
         .to_string()
 }
@@ -778,6 +1193,19 @@ fn hex_digit(value: u8) -> Option<u8> {
     }
 }
 
+fn resolve_memory_directory() -> PathBuf {
+    if let Ok(directory) = std::env::var("COPIS_MEMORY_DIR") {
+        if !directory.trim().is_empty() {
+            return PathBuf::from(directory);
+        }
+    }
+
+    let home = std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .unwrap_or_else(|_| ".".to_string());
+    PathBuf::from(home).join(".copis").join("memory")
+}
+
 fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
     if needle.is_empty() {
         return Some(0);
@@ -798,6 +1226,13 @@ fn main() {
 
     let bridge = Arc::new(Bridge::new());
     let workers = Arc::new(PiWorkerManager::new());
+    let memory_store = match MemoryStore::open(resolve_memory_directory()) {
+        Ok(store) => Arc::new(store),
+        Err(error) => {
+            eprintln!("[HTTP API] Memory 存储初始化失败: {}", error);
+            process::exit(1);
+        }
+    };
     let response_bridge = Arc::clone(&bridge);
     thread::spawn(move || read_bridge_responses(response_bridge));
 
@@ -807,7 +1242,15 @@ fn main() {
             Ok(stream) => {
                 let connection_bridge = Arc::clone(&bridge);
                 let connection_workers = Arc::clone(&workers);
-                thread::spawn(move || handle_connection(stream, connection_bridge, connection_workers));
+                let connection_memory = Arc::clone(&memory_store);
+                thread::spawn(move || {
+                    handle_connection(
+                        stream,
+                        connection_bridge,
+                        connection_workers,
+                        connection_memory,
+                    )
+                });
             }
             Err(error) => {
                 eprintln!("[HTTP API] 接受连接失败: {}", error);
@@ -818,11 +1261,11 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::{decode_hex, encode_hex, find_subslice, is_allowed_origin};
     use super::pi_rpc::{
         format_sse_event, is_agent_messages_route, is_agent_stop_route, parse_worker_frame,
         sse_headers,
     };
+    use super::{decode_hex, encode_hex, find_subslice, is_allowed_origin};
 
     #[test]
     fn hex_round_trip_supports_utf8() {
@@ -904,8 +1347,8 @@ mod tests {
 
     #[test]
     fn parses_worker_jsonl_frames_without_accepting_non_objects() {
-        let frame = parse_worker_frame(r#"{"type":"event","sessionId":"s1"}"#)
-            .expect("valid worker frame");
+        let frame =
+            parse_worker_frame(r#"{"type":"event","sessionId":"s1"}"#).expect("valid worker frame");
         assert_eq!(frame["type"], "event");
         assert!(parse_worker_frame("[]").is_none());
         assert!(parse_worker_frame("not-json").is_none());

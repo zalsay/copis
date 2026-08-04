@@ -2,6 +2,7 @@ import * as React from 'react'
 import { useAtom, useAtomValue, useSetAtom } from 'jotai'
 import {
   CalendarClock,
+  BookOpen,
   ChevronDown,
   ChevronRight,
   CircleCheck,
@@ -81,6 +82,7 @@ export function CopisWorkingSidebar({ width, noTransition = false }: CopisWorkin
   const setLocalWorkspaces = useSetAtom(agentWorkspacesAtom)
   const currentWorkspaceId = useAtomValue(currentAgentWorkspaceIdAtom)
   const currentSessionId = useAtomValue(currentAgentSessionIdAtom)
+  const activeView = useAtomValue(activeViewAtom)
   const agentSettingsReady = useAtomValue(agentSettingsReadyAtom)
   const streamingStates = useAtomValue(agentStreamingStatesAtom)
   const setCurrentWorkspaceId = useSetAtom(currentAgentWorkspaceIdAtom)
@@ -215,6 +217,11 @@ export function CopisWorkingSidebar({ width, noTransition = false }: CopisWorkin
     if (!sessionId) toast.error('新建 Agent 会话失败')
   }
 
+  const handleOpenMemory = (): void => {
+    setWorkingHistorySelection(null)
+    setActiveView('memory')
+  }
+
   const handleRemoveWorkspace = async (workspaceId: string): Promise<void> => {
     const workspace = localWorkspaces.find((item) => item.id === workspaceId)
     if (!workspace || workspace.slug === 'default') {
@@ -269,6 +276,14 @@ export function CopisWorkingSidebar({ width, noTransition = false }: CopisWorkin
         <button type="button" className="copis-working-sidebar-icon-button" aria-label="搜索" onClick={() => setSearchDialogOpen(true)}>
           <Search aria-hidden="true" />
         </button>
+        <button
+          type="button"
+          className={cn('copis-working-sidebar-icon-button', activeView === 'memory' && 'active')}
+          aria-label="记忆"
+          onClick={handleOpenMemory}
+        >
+          <BookOpen aria-hidden="true" />
+        </button>
         <Sparkles className="copis-working-sidebar-collapsed-mark" aria-hidden="true" />
         <span className="copis-working-sidebar-session-count">{activeSessionCount}</span>
       </aside>
@@ -290,6 +305,10 @@ export function CopisWorkingSidebar({ width, noTransition = false }: CopisWorkin
           <button type="button" className="copis-working-menu-button" onClick={() => { setWorkingHistorySelection(null); setAppMode('agent'); setPlanningTab('schedule'); setActiveView('planning') }}>
             <CalendarClock aria-hidden="true" />
             <span>日程表</span>
+          </button>
+          <button type="button" className={cn('copis-working-menu-button', activeView === 'memory' && 'active')} onClick={handleOpenMemory}>
+            <BookOpen aria-hidden="true" />
+            <span>记忆</span>
           </button>
           <button type="button" className="copis-working-menu-button" onClick={() => { setWorkingHistorySelection(null); setAppMode('agent'); setActiveView('agent-skills') }}>
             <UsersRound aria-hidden="true" />

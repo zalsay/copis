@@ -23,6 +23,7 @@ import { TabContent } from './TabContent'
 import { AutomationFormView } from '@/components/automation/AutomationFormView'
 import { PlanningView } from '@/components/planning/PlanningView'
 import { AgentSkillsView } from '@/components/agent-skills/AgentSkillsView'
+import { MemoryView } from '@/components/memory/MemoryView'
 import { automationFormAtom } from '@/atoms/automation-atoms'
 import { activeViewAtom } from '@/atoms/active-view'
 import { interfaceVariantAtom } from '@/atoms/theme'
@@ -164,7 +165,7 @@ export function MainArea(): React.ReactElement {
             className={cn('flex flex-col min-w-0 h-full relative', showPreview && 'mr-0.5')}
             style={leftFlexStyle}
           >
-            {workingHistorySelection ? (
+            {activeView === 'conversations' && workingHistorySelection ? (
               <WorkingSessionHistoryView />
             ) : activeView === 'planning' ? (
               automationFormOpen ? (
@@ -176,6 +177,9 @@ export function MainArea(): React.ReactElement {
             ) : activeView === 'agent-skills' ? (
               // Agent 技能视图：全屏取代 TabBar + TabContent
               <AgentSkillsView />
+            ) : activeView === 'memory' ? (
+              // Copis Memory：独立于 Chat/Agent 模式的长期记忆视图。
+              <MemoryView />
             ) : (
               <>
                 <TabBar />

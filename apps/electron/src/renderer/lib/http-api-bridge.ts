@@ -175,7 +175,6 @@ const ARRAY_DEFAULT_METHODS = new Set([
   'searchAgentSessionMessages',
   'searchAgentSessionReferences',
   'listSkillFiles',
-  'listWorkspaceAutoMemoryFiles',
 ])
 
 const OBJECT_DEFAULTS: Record<string, unknown> = {
@@ -189,10 +188,6 @@ const OBJECT_DEFAULTS: Record<string, unknown> = {
     mcpServers: [],
     builtinMcpServers: [],
     skills: [],
-    memory: {
-      claudeMd: { exists: false, path: '', size: 0 },
-      autoMemory: { directory: '', memoryMdExists: false, fileCount: 0, totalSize: 0 },
-    },
   },
   getWorkspaceMcpConfig: { servers: {} },
   getUserProfile: { userName: '用户', avatar: '' },

@@ -65,3 +65,6 @@ export * from './working'
 
 // 内嵌 Chromium 网页页签相关类型
 export * from './web'
+
+// Copis Memory 长期记忆相关类型
+export * from './memory'

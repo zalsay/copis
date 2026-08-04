@@ -63,7 +63,6 @@ import type {
   SkillMeta,
   OtherWorkspaceSkillsGroup,
   WorkspaceCapabilities,
-  WorkspaceMemorySummary,
   FileEntry,
   FileSearchResult,
   EnvironmentCheckResult,
@@ -741,24 +740,6 @@ export interface ElectronAPI {
 
   /** 重命名/移动 Skill 目录下的文件或目录 */
   renameSkillEntry: (workspaceSlug: string, skillSlug: string, fromRelative: string, toRelative: string) => Promise<void>
-
-  /** 获取工作区记忆摘要 */
-  getWorkspaceMemorySummary: (workspaceSlug: string) => Promise<WorkspaceMemorySummary>
-
-  /** 读取工作区 CLAUDE.md */
-  readWorkspaceClaudeMd: (workspaceSlug: string) => Promise<import('@copis/shared').SkillFileContent>
-
-  /** 写入工作区 CLAUDE.md */
-  writeWorkspaceClaudeMd: (workspaceSlug: string, content: string) => Promise<void>
-
-  /** 列出工作区 auto memory 文件树 */
-  listWorkspaceAutoMemoryFiles: (workspaceSlug: string) => Promise<import('@copis/shared').SkillFileNode[]>
-
-  /** 读取工作区 auto memory 文件 */
-  readWorkspaceAutoMemoryFile: (workspaceSlug: string, relativePath: string) => Promise<import('@copis/shared').SkillFileContent>
-
-  /** 写入工作区 auto memory 文件 */
-  writeWorkspaceAutoMemoryFile: (workspaceSlug: string, relativePath: string, content: string) => Promise<void>
 
   /** 订阅 Agent 流式事件（返回清理函数） */
   onAgentStreamEvent: (callback: (event: AgentStreamEvent) => void) => () => void
@@ -2000,30 +1981,6 @@ const electronAPI: ElectronAPI = {
 
   renameSkillEntry: (workspaceSlug: string, skillSlug: string, fromRelative: string, toRelative: string) => {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.RENAME_SKILL_ENTRY, workspaceSlug, skillSlug, fromRelative, toRelative)
-  },
-
-  getWorkspaceMemorySummary: (workspaceSlug: string) => {
-    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.GET_WORKSPACE_MEMORY_SUMMARY, workspaceSlug)
-  },
-
-  readWorkspaceClaudeMd: (workspaceSlug: string) => {
-    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.READ_WORKSPACE_CLAUDE_MD, workspaceSlug)
-  },
-
-  writeWorkspaceClaudeMd: (workspaceSlug: string, content: string) => {
-    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.WRITE_WORKSPACE_CLAUDE_MD, workspaceSlug, content)
-  },
-
-  listWorkspaceAutoMemoryFiles: (workspaceSlug: string) => {
-    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.LIST_WORKSPACE_AUTO_MEMORY_FILES, workspaceSlug)
-  },
-
-  readWorkspaceAutoMemoryFile: (workspaceSlug: string, relativePath: string) => {
-    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.READ_WORKSPACE_AUTO_MEMORY_FILE, workspaceSlug, relativePath)
-  },
-
-  writeWorkspaceAutoMemoryFile: (workspaceSlug: string, relativePath: string, content: string) => {
-    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.WRITE_WORKSPACE_AUTO_MEMORY_FILE, workspaceSlug, relativePath, content)
   },
 
   onAgentStreamEvent: (callback: (event: AgentStreamEvent) => void) => {

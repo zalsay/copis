@@ -80,6 +80,14 @@ import {
   installPiRequestProxyFetch,
   runWithPiRequestProxy,
 } from './pi-request-proxy'
+import {
+  calculatePiContextTokens,
+  hasPiMemoryOrganizationSinceLatestCompaction,
+  PI_MEMORY_ORGANIZATION_CUSTOM_TYPE,
+  PI_MEMORY_ORGANIZATION_PROMPT,
+  PI_MEMORY_ORGANIZATION_THRESHOLD_TOKENS,
+  shouldStartPiMemoryOrganization,
+} from './pi-memory-organization'
 
 type PiSdk = typeof import('@earendil-works/pi-coding-agent')
 type BashOperations = import('@earendil-works/pi-coding-agent').BashOperations
@@ -92,6 +100,12 @@ const PI_NATIVE_RETRY_BASE_DELAY_MS = 1_000
 const PI_NATIVE_MAX_TOTAL_DELAY_MS = 5 * 60_000
 const PI_NATIVE_RETRY_JITTER_RATIO = 0.2
 const MAX_AUTOMATIC_COMPACTION_CONTINUATIONS = 20
+const PI_MEMORY_ORGANIZATION_TOOL_NAMES = new Set([
+  'memory_recall',
+  'memory_read',
+  'memory_capture',
+  'memory_rewrite',
+])
 
 /** Pi SDK 查询选项（扩展通用 AgentQueryInput） */
 export interface PiAgentQueryOptions extends AgentQueryInput {
@@ -1552,6 +1566,119 @@ export class PiAgentAdapter implements AgentProviderAdapter {
       // message_end 发生在 Pi 落盘前；保留对象身份，待 prompt 完成后从
       // SessionManager entries 精确取得 Pi entry ID，绝不按文本猜测。
       const finalAssistantUuids = new Map<AssistantMessage, string>()
+      let memoryOrganizationScheduled = false
+      let memoryOrganizationActive = false
+      let memoryOrganizationCompleted = false
+      let memoryOrganizationFailed = false
+      let memoryOrganizationContextTokens: number | undefined
+      let memoryOrganizationOriginalResult: SDKMessage | undefined
+      let memoryOrganizationCompactionRequested = false
+
+      const resetMemoryOrganizationState = (): void => {
+        memoryOrganizationScheduled = false
+        memoryOrganizationActive = false
+        memoryOrganizationCompleted = false
+        memoryOrganizationFailed = false
+        memoryOrganizationContextTokens = undefined
+        memoryOrganizationOriginalResult = undefined
+        memoryOrganizationCompactionRequested = false
+      }
+
+      const failMemoryOrganization = (error: unknown): void => {
+        memoryOrganizationScheduled = false
+        memoryOrganizationActive = false
+        memoryOrganizationCompleted = false
+        memoryOrganizationFailed = true
+        const detail = error instanceof Error ? error.message : String(error)
+        console.warn(`[Pi 记忆整理] 内部整理未完成，将继续原始任务: ${detail}`)
+      }
+
+      const finishMemoryOrganization = (): void => {
+        try {
+          sessionManager.appendCustomEntry(PI_MEMORY_ORGANIZATION_CUSTOM_TYPE, {
+            thresholdTokens: memoryOrganizationContextTokens,
+            completedAt: new Date().toISOString(),
+          })
+        } catch (error) {
+          failMemoryOrganization(error)
+          return
+        }
+
+        memoryOrganizationScheduled = false
+        memoryOrganizationActive = false
+        memoryOrganizationCompleted = true
+        compactContextRequested = true
+        memoryOrganizationCompactionRequested = true
+        console.log(
+          `[Pi 记忆整理] 已完成长期记忆整理${memoryOrganizationContextTokens ? `（${memoryOrganizationContextTokens} tokens）` : ''}，准备压缩上下文`,
+        )
+      }
+
+      // 自动维护回合只允许访问 Copis Memory，避免模型误判而执行原任务工具。
+      const previousBeforeToolCall = session.agent.beforeToolCall
+      session.agent.beforeToolCall = async (context, signal) => {
+        const previousResult = await previousBeforeToolCall?.(context, signal)
+        if (!memoryOrganizationActive || PI_MEMORY_ORGANIZATION_TOOL_NAMES.has(context.toolCall.name)) {
+          return previousResult
+        }
+        return previousResult ?? {
+          block: true,
+          reason: '自动整理长期记忆期间仅允许调用 Copis Memory 工具。',
+        }
+      }
+
+      const previousPrepareNextTurnWithContext = session.agent.prepareNextTurnWithContext
+      session.agent.prepareNextTurnWithContext = async (context, signal) => {
+        const previousSnapshot = await previousPrepareNextTurnWithContext?.(context, signal)
+
+        if (memoryOrganizationActive) {
+          const message = context.message
+          const hasToolCall = message.role === 'assistant'
+            && message.content.some((block) => block.type === 'toolCall')
+          if (
+            message.role === 'assistant'
+            && context.toolResults.length === 0
+            && !hasToolCall
+            && message.stopReason === 'stop'
+          ) {
+            finishMemoryOrganization()
+          } else if (
+            message.role === 'assistant'
+            && (message.stopReason === 'error' || message.stopReason === 'aborted')
+          ) {
+            failMemoryOrganization(message.errorMessage ?? `整理回合以 ${message.stopReason} 结束`)
+          }
+          return previousSnapshot
+        }
+
+        if (
+          !memoryOrganizationScheduled
+          && !memoryOrganizationCompleted
+          && !memoryOrganizationFailed
+          && !active.abortRequested
+          && !signal?.aborted
+          && !runtimeGuard.shouldStopBeforeNextTurn()
+        ) {
+          const contextTokens = calculatePiContextTokens(context.message)
+          const shouldOrganize = shouldStartPiMemoryOrganization({
+            message: context.message,
+            toolResultCount: context.toolResults.length,
+            thresholdCrossed: contextTokens !== undefined && contextTokens > PI_MEMORY_ORGANIZATION_THRESHOLD_TOKENS,
+            alreadyOrganizedSinceCompaction: hasPiMemoryOrganizationSinceLatestCompaction(sessionManager.getBranch()),
+            organizationScheduled: memoryOrganizationScheduled,
+          })
+
+          if (shouldOrganize) {
+            memoryOrganizationScheduled = true
+            memoryOrganizationContextTokens = contextTokens
+            console.log(
+              `[Pi 记忆整理] 上下文超过 ${PI_MEMORY_ORGANIZATION_THRESHOLD_TOKENS} tokens，已安排隐藏整理回合`,
+            )
+          }
+        }
+
+        return previousSnapshot
+      }
 
       const persistPiEntryBindings = (): void => {
         const bindings: Record<string, string> = {}
@@ -1583,6 +1710,7 @@ export class PiAgentAdapter implements AgentProviderAdapter {
             case 'message_update': {
               if (!isAssistantPiMessage(event.message)) break
               lastPartialAssistant = event.message
+              if (memoryOrganizationActive) break
               // Pi 的 partial 是累计全文。合并为最多 20fps 的最新帧，避免每 token 都在
               // main → IPC → renderer 路径重复复制整段消息；message_end 始终立即透传。
               partialAssistantCoalescer?.schedule({ message: event.message, uuid: assistantUuidFor() })
@@ -1591,7 +1719,7 @@ export class PiAgentAdapter implements AgentProviderAdapter {
             case 'message_end': {
               partialAssistantCoalescer?.flush()
               if (active.interrupting && isAbortedAssistantMessage(event.message)) {
-                if (lastPartialAssistant) {
+                if (!memoryOrganizationActive && lastPartialAssistant) {
                   const converted = convertPiMessage(lastPartialAssistant, session.sessionId, input.model, {
                     final: true,
                     uuid: assistantUuidFor(),
@@ -1602,6 +1730,22 @@ export class PiAgentAdapter implements AgentProviderAdapter {
                 break
               }
               const isAssistant = isAssistantPiMessage(event.message)
+              if (memoryOrganizationActive) {
+                if (isAssistant && (event.message as AssistantMessage).stopReason === 'error') {
+                  // native retry 的终态由 agent_end 统一处理；这里不把隐藏维护错误透传给上游。
+                  const assistantUuid = assistantUuidFor()
+                  retryTerminalGate.defer({
+                    assistantMessage: event.message as AssistantMessage,
+                    sdkMessage: convertPiMessage(event.message, session.sessionId, input.model, {
+                      final: true,
+                      uuid: assistantUuid,
+                    }) as SDKMessage,
+                    assistantUuid,
+                  })
+                }
+                if (isAssistant) resetAssistantStream()
+                break
+              }
               const assistantUuid = isAssistant ? assistantUuidFor() : undefined
               const converted = convertPiMessage(event.message, session.sessionId, input.model, {
                 final: true,
@@ -1641,15 +1785,22 @@ export class PiAgentAdapter implements AgentProviderAdapter {
                 break
               }
               if (terminalRetryError) {
-                finalAssistantUuids.set(terminalRetryError.assistantMessage, terminalRetryError.assistantUuid)
-                runtimeGuard.recordMessage(terminalRetryError.assistantMessage)
-                queue.push(terminalRetryError.sdkMessage)
+                if (memoryOrganizationActive) {
+                  failMemoryOrganization(terminalRetryError.assistantMessage.errorMessage ?? '整理回合重试耗尽')
+                } else {
+                  finalAssistantUuids.set(terminalRetryError.assistantMessage, terminalRetryError.assistantUuid)
+                  runtimeGuard.recordMessage(terminalRetryError.assistantMessage)
+                  queue.push(terminalRetryError.sdkMessage)
+                }
                 resetAssistantStream()
+              }
+              if (memoryOrganizationActive) {
+                failMemoryOrganization('整理回合未能正常完成')
               }
               // Pi can start auto-compaction after agent_end but before session.prompt()
               // resolves. Defer the terminal result until then, otherwise the orchestrator's
               // result-drain timeout may dispose the session and abort compaction.
-              pendingTerminalResult = convertResultMessage(
+              pendingTerminalResult = memoryOrganizationOriginalResult ?? convertResultMessage(
                 event.messages,
                 session.sessionId,
                 runtimeGuard.getResultOverride(event.messages),
@@ -1661,6 +1812,7 @@ export class PiAgentAdapter implements AgentProviderAdapter {
               for (const retry of mapPiNativeRetryEvent(event, { runStartedAt: retryRunStartedAt })) input.onRetry?.(retry)
               break
             case 'tool_execution_update':
+              if (memoryOrganizationActive) break
               queue.push({
                 type: 'tool_progress',
                 session_id: session.sessionId,
@@ -1786,27 +1938,66 @@ export class PiAgentAdapter implements AgentProviderAdapter {
               currentInterrupt?.resolveAccepted()
               await session.prompt(prompt, { source: 'rpc' })
               persistPiEntryBindings()
+              if (memoryOrganizationScheduled && !active.abortRequested) {
+                // 等原始 prompt（以及用户已经排队的消息）完全收束后再启动维护回合，
+                // 确保记忆整理和后续上下文压缩不会拦截用户的 queued message。
+                memoryOrganizationOriginalResult = pendingTerminalResult
+                memoryOrganizationScheduled = false
+                memoryOrganizationActive = true
+                try {
+                  await session.sendCustomMessage({
+                    customType: PI_MEMORY_ORGANIZATION_CUSTOM_TYPE,
+                    content: PI_MEMORY_ORGANIZATION_PROMPT,
+                    display: false,
+                    details: { thresholdTokens: memoryOrganizationContextTokens },
+                  }, { triggerTurn: true })
+                  console.log('[Pi 记忆整理] 已启动隐藏整理回合')
+                } catch (error) {
+                  failMemoryOrganization(error)
+                }
+              }
+              if (memoryOrganizationFailed) {
+                const fallbackResult = memoryOrganizationOriginalResult
+                if (!active.abortRequested && fallbackResult) {
+                  pendingTerminalResult = fallbackResult
+                }
+                resetMemoryOrganizationState()
+              }
               if (compactContextRequested) {
+                const automaticMemoryCompaction = memoryOrganizationCompactionRequested
+                const fallbackResult = memoryOrganizationOriginalResult
+                let compactionCompleted = false
                 try {
                   await compactCurrentSessionAfterTurn(session, (message) => queue.push(message))
+                  compactionCompleted = true
                 } catch (error) {
                   // 用户在压缩期间停止时，Pi 会取消 summarization；这是正常中止而不是运行错误。
                   if (active.abortRequested) return
-                  throw error
+                  if (automaticMemoryCompaction) {
+                    // 记忆整理是 best-effort 维护；压缩失败时仍交付原始任务结果。
+                    if (fallbackResult) pendingTerminalResult = fallbackResult
+                    compactContextRequested = false
+                    resetMemoryOrganizationState()
+                  } else {
+                    throw error
+                  }
                 }
-                compactContextRequested = false
-                const continuation = planPiCompactionContinuation({
-                  continuationCount: automaticCompactionContinuations,
-                  abortRequested: active.abortRequested,
-                  runtimeLimitReached: runtimeGuard.shouldStopBeforeNextTurn(),
-                })
-                if (continuation.shouldContinue) {
-                  automaticCompactionContinuations += 1
-                  pendingCompactionContinuation = appendOutputFormatInstruction(continuation.prompt, input.outputFormat)
-                  // 当前终态仅表示为执行压缩而结束的内部 loop，不应让上层把原任务视为完成。
-                  pendingTerminalResult = undefined
-                } else if (continuation.reason === 'continuation_limit') {
-                  pendingTerminalResult = createCompactionContinuationLimitResult(session.sessionId)
+                if (compactionCompleted) {
+                  compactContextRequested = false
+                  if (automaticMemoryCompaction) resetMemoryOrganizationState()
+                  const continuation = planPiCompactionContinuation({
+                    continuationCount: automaticCompactionContinuations,
+                    abortRequested: active.abortRequested,
+                    runtimeLimitReached: runtimeGuard.shouldStopBeforeNextTurn(),
+                  })
+                  if (continuation.shouldContinue) {
+                    automaticCompactionContinuations += 1
+                    pendingCompactionContinuation = appendOutputFormatInstruction(continuation.prompt, input.outputFormat)
+                    // 当前终态仅表示为执行压缩而结束的内部 loop，不应让上层把原任务视为完成。
+                    pendingTerminalResult = undefined
+                  } else if (continuation.reason === 'continuation_limit') {
+                    pendingTerminalResult = createCompactionContinuationLimitResult(session.sessionId)
+                  }
                 }
               }
               if (pendingTerminalResult) {

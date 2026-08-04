@@ -49,7 +49,7 @@ import pkg from '../../../package.json' with { type: 'json' }
 import { getFetchFn } from './proxy-fetch'
 import { getEffectiveProxyUrl } from './proxy-settings-service'
 import { appendSDKMessages, updateAgentSessionMeta, getAgentSessionMeta, getAgentSessionMessages, truncateSDKMessages, removeSDKErrorMessage, resolveUserUuidFromSDK, rewindFilesFromSnapshot, rewindPiAgentSession, ensureClaudeSessionSettings, resolveAgentCwd, getAgentCwdMode } from './agent-session-manager'
-import { ensureAgentWorkspaceWritableRoot, getAgentWorkspace, getAgentWorkspaceWritableRoot, getLocalProjectRootStatus, getProjectFilesPath, getWorkspaceMcpConfig, ensurePluginManifest, getWorkspaceAutoMemoryDir, getWorkspaceAttachedDirectories, getWorkspaceAttachedFiles } from './agent-workspace-manager'
+import { ensureAgentWorkspaceWritableRoot, getAgentWorkspace, getAgentWorkspaceWritableRoot, getLocalProjectRootStatus, getProjectFilesPath, getWorkspaceMcpConfig, ensurePluginManifest, getWorkspaceAttachedDirectories, getWorkspaceAttachedFiles } from './agent-workspace-manager'
 import { getWorkingApiClient } from './working-api-service'
 import { getAgentWorkspacePath, getAgentSessionWorkspacePath, getConfigDir, getSdkConfigDir, getWorkspaceSkillsDir } from './config-paths'
 import { isPathWithinRootsAllowMissing } from './file-access-policy'

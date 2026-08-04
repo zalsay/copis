@@ -44,6 +44,11 @@
   color: #eeeeee;
 }
 
+.copis-working-sidebar-icon-button.active {
+  background: rgba(255, 255, 255, 0.12);
+  color: #ffffff;
+}
+
 .copis-working-sidebar-icon-button svg {
   width: 16px;
   height: 16px;
@@ -126,6 +131,11 @@
 .copis-working-sidebar-account:focus-visible {
   background: rgba(255, 255, 255, 0.07);
   outline: 0;
+}
+
+.copis-working-menu-button.active {
+  background: rgba(255, 255, 255, 0.1);
+  color: #ffffff;
 }
 
 .copis-working-menu-button svg,

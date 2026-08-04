@@ -26,7 +26,6 @@ import {
   ensureAgentWorkspaceWritableRoot,
   getAgentWorkspace,
   getProjectFilesPath,
-  getWorkspaceAutoMemoryDir,
   listAgentWorkspaces,
 } from './agent-workspace-manager'
 import { resolvePiThinkingLevel } from './agent-thinking-level'
@@ -293,9 +292,9 @@ export function ensureClaudeSessionSettings(workspaceId: string, sessionId: stri
     sdkSettings.skipWebFetchPreflight = true
     needsWrite = true
   }
-  const autoMemoryDirectory = getWorkspaceAutoMemoryDir(workspace.slug)
-  if (sdkSettings.autoMemoryDirectory !== autoMemoryDirectory) {
-    sdkSettings.autoMemoryDirectory = autoMemoryDirectory
+  // 清理旧版本 sidecar 中的 Auto Memory 路径，但保留其他 Claude 兼容配置。
+  if ('autoMemoryDirectory' in sdkSettings) {
+    delete sdkSettings.autoMemoryDirectory
     needsWrite = true
   }
   if (removeCopisAutoCompactSettings(sdkSettings)) {

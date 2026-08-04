@@ -59,7 +59,6 @@ function buildWorkspacePromptPaths(workspaceSlug: string, sessionId: string, age
     : projectRoot
   const effectiveAgentCwd = agentCwd ?? projectRoot
   const isLocalProject = Boolean(workspace?.projectRootPath)
-  const autoMemoryDir = join(workspaceRoot, '.claude', 'memory')
 
   return {
     workspaceRoot,
@@ -76,8 +75,6 @@ function buildWorkspacePromptPaths(workspaceSlug: string, sessionId: string, age
     mcpConfig: join(workspaceRoot, 'mcp.json'),
     skillsDir: join(workspaceRoot, 'skills'),
     claudeMd: join(workspaceRoot, 'CLAUDE.md'),
-    autoMemoryDir,
-    autoMemoryIndex: join(autoMemoryDir, 'MEMORY.md'),
     sdkConfigDir: join(homedir(), configDirName, 'sdk-config'),
   }
 }
@@ -197,15 +194,14 @@ Copis 提供内置 \`collaboration\` 工具，用来创建真实可见、可追�
     sections.push(`## 项目
 
 - 项目名称: ${ctx.workspaceName}
-- Copis 工作区目录: ${workspacePaths?.workspaceRoot}（存放 MCP、Skills、Copis CLAUDE.md 与 Memory 等配置）
+- Copis 工作区目录: ${workspacePaths?.workspaceRoot}（存放 MCP、Skills、Copis CLAUDE.md 与运行时配置）
 - 项目根目录: ${workspacePaths?.projectRoot}（${workspacePaths?.isLocalProject ? '用户选择的本地原始文件夹' : 'Copis 托管的空白项目目录'}）
 - Agent 可写目录: ${workspaceWriteRoot}${workspaceWriteRestricted ? '（原始项目根只读，工作区产出只能写入此目录）' : '（已允许直接写入项目根）'}
 - 会话工作台目录: ${workspacePaths?.sessionDir}（存放当前会话的私有临时文件与会话级 Context）
 ${agentRuntime === 'claude' ? `- Claude 会话 sidecar: ${workspacePaths?.claudeSessionSettingsPath}（Copis 托管的运行时配置，不是项目文件或记忆；不要修改）
 ` : ''}- 实际工作目录（cwd）: ${workspacePaths?.agentCwd}（${workspacePaths?.isProjectCwd ? '当前会话直接在项目根目录中工作' : '当前会话仍使用私有会话工作台，不等同于项目根目录'}；以每条消息的 \`<working_directory>\` 为准）
 - Copis 工作区 CLAUDE.md: ${workspacePaths?.claudeMd}
-- Copis 工作区 Auto Memory 目录: ${workspacePaths?.autoMemoryDir}
-- Copis 工作区 Auto Memory 索引: ${workspacePaths?.autoMemoryIndex}
+- Copis Memory: 通过受控的结构化能力访问，不暴露本地存储路径
 - SDK 隔离配置目录: ${workspacePaths?.sdkConfigDir}（用于 Copis 与 Claude Code CLI 的 SDK 配置隔离；不要把它当作 Copis 工作区的长期记忆目录）
 - Copis 工作区 MCP 配置: ${workspacePaths?.mcpConfig}（顶层 key 是 \`servers\`）
 - Copis 工作区 Skills 目录: ${workspacePaths?.skillsDir}/（Copis 只从此目录加载 skill；npx skills add 等外部命令安装到 .agents/skills/ 不会被加载，需手动 mv 到此目录）
@@ -252,7 +248,7 @@ ${agentRuntime === 'claude' ? `- Claude 会话 sidecar: ${workspacePaths?.claude
   // Copis 知识维护架构
   sections.push(`## Copis 知识维护架构
 
-**核心原则：CLAUDE.md 约束行为，Memory 改善判断，Skills 固化流程，Context 承载当前任务、项目资料与本地文档（证据和长内容放项目级 Context / 本地文档，不在 CLAUDE.md 或 Memory 中堆砌正文）。**
+**核心原则：CLAUDE.md 约束行为，Copis Memory 改善判断，Skills 固化流程，Context 承载当前任务、项目资料与本地文档（证据和长内容放项目级 Context / 本地文档，不在 CLAUDE.md 或 Memory 中堆砌正文）。**
 
 长期知识维护遵循五步：按需搜索 → 分类判断 → 提出维护建议 → 小幅创建/更新 → 在后续任务中验证效果。不要把所有信息都塞进同一个文件，也不要为了"显得完整"而重写已有沉淀。
 
@@ -263,16 +259,14 @@ ${agentRuntime === 'claude' ? `- Claude 会话 sidecar: ${workspacePaths?.claude
 - **不适合写入**：临时调试过程、一次性偏好、长篇调研正文、从代码中显而易见的内容
 - **维护要求**：保持精炼（<200 行），发现已有内容不准确时小幅修订或标注过时，避免追加冲突结论
 
-### SDK auto memory — 自动记忆（用户可审计）
+### Copis Memory — 结构化长期记忆
 
-Claude Agent SDK 可能会维护 Copis 工作区 Auto Memory 文件，目录由 Copis 显式指向 Copis 工作区目录的 \`.claude/memory/\`${workspacePaths ? `（\`${workspacePaths.autoMemoryDir}\`）` : ''}：
-- **用途**：沉淀跨会话学习到的经验、用户偏好、误判纠正、问题状态变化和易错点
-- **入口文件**：${workspacePaths ? `\`${workspacePaths.autoMemoryIndex}\`` : '`.claude/memory/MEMORY.md`'} 只放主题索引和路由；详细内容拆到同目录或子目录下的主题文件
-- **路径边界**：会话工作台目录是 \`${workspacePaths?.sessionDir ?? '当前会话目录'}\`；${agentRuntime === 'claude' ? `Claude runtime 的 \`${workspacePaths?.claudeSessionSettingsPath ?? '.claude/settings.json'}\` 是 Copis 托管的 sidecar 配置，不是项目文件或记忆，绝不要修改。` : ''}项目根与 cwd 不一定相同：新会话通常在项目根目录运行，历史会话可能仍在会话工作台运行，始终以“实际工作目录”和每条消息的 \`<working_directory>\` 为准。本地项目根是用户原始目录，Copis 托管项目根是共享的项目文件根。不要自动读取、创建或修改项目根中的 \`.claude/\`、\`CLAUDE.md\`、MCP 或 Skills 配置。无论哪种情况，\`./.claude/memory/\` 都不是 Copis 工作区 Auto Memory；除非用户明确要求，不要在会话工作台或本地项目根目录下创建或更新 \`.claude/memory/\`
-- **使用要求**：不要把它当聊天流水账；只有明确重复出现、用户明确要求记住，或删掉后未来 Agent 明显会犯错的稳定经验才写入
-- **会话内维护**：当用户确认问题已解决、否定先前判断、说明问题仍存在/加重，或明确表达长期偏好时，判断是否应更新 memory；纠正旧记忆时应修订或标注旧结论，而不是只追加冲突新结论
-- **弱信号处理**：一次性偏好、临时过程和证据不足的判断，不要直接写入 auto memory；可在最终回复中建议用户确认后再沉淀
-- **用户可见**：这些文件会在 Copis 的 Agent 能力中心展示，内容必须清晰、可读、可维护
+Copis Memory 由本地 Rust 服务管理，保存跨会话仍然有价值的稳定事实、用户偏好、决策和项目经验。它不是聊天流水账，也不是当前会话的工作台。
+- **工具工作流（Pi）**：先用 \`memory_recall\` 搜索，再用 \`memory_read\` 读取必要的完整内容；只有稳定、可复用且有足够证据的信息才调用 \`memory_capture\`
+- **修订而不是冲突追加**：已有结论被纠正、状态发生变化或内容需要补充时，使用 \`memory_rewrite\` 并携带检索到的 \`expectedRevision\`；发生 revision 冲突时先读取当前记录再判断
+- **范围边界**：当前工作区只能看到 user memory 和当前 workspace memory；工具不接受任意 workspace、scope、文件路径或本地存储目录参数。没有工作区时只能读取 user memory，不能写入 workspace memory
+- **分类**：跨项目的稳定偏好或用户事实属于 user memory；项目规则和架构经验属于当前 workspace memory；重复流程应做成 Skill；当前任务状态、长文档和证据放入 .context 或项目文档
+- **弱信号处理**：一次性偏好、临时过程和证据不足的判断不要直接写入；可以在最终回复中建议用户确认后再沉淀
 
 ### Skills — 可复用流程
 
@@ -286,7 +280,7 @@ Skills 用来固化可复用的流程、决策树和 SOP（"以后遇到类似�
 | 场景 | 处理方式 |
 |------|---------|
 | 项目硬规则、架构边界、常用命令、入口索引 | → 小幅更新 CLAUDE.md |
-| 用户偏好、误判纠正、问题解决/未解决/加重、跨会话经验 | → 必要时小幅更新 .claude/memory/MEMORY.md 或主题文件 |
+| 用户偏好、误判纠正、问题解决/未解决/加重、跨会话经验 | → 必要时用 memory_capture 或 memory_rewrite 更新 Copis Memory |
 | 重复流程、固定检查清单、可复用工作方式 | → 搜索/创建/更新 Skill |
 | 当前任务的临时计划、进度、交接和中间结论 | → 写入会话级 Context（\`${sessionContextDir}\`） |
 | 跨会话可复用的调研、方案对比、代码分析、长 checklist | → 写入项目级 Context（\`${workspaceContextDir}\`）或项目文档，并在 CLAUDE.md/Memory/Skill 中只保留入口 |
@@ -294,7 +288,7 @@ Skills 用来固化可复用的流程、决策树和 SOP（"以后遇到类似�
 | 简单问答、一次性修改 | → 直接回复，不写文件 |
 | 执行计划 | → 写入 \`${sessionContextDir}/plan/\` 目录 |
 
-维护这些长期文件前，先按需搜索当前会话、会话级 Context、项目级 Context、CLAUDE.md、auto memory 索引和 Skills 元数据；涉及长期副作用时，优先提出简短维护建议，让用户知道会改哪里、为什么改、下次会怎样。`)
+维护这些长期知识前，先按需搜索当前会话、会话级 Context、项目级 Context、CLAUDE.md、Copis Memory 和 Skills 元数据；涉及长期副作用时，优先提出简短维护建议，让用户知道会改哪里、为什么改、下次会怎样。`)
 
   // Git / PR 推广标识（默认开启，设置可关）
   const gitAttributionEnabled = isGitAttributionEnabled(getSettings().gitAttributionEnabled)
@@ -305,10 +299,10 @@ Skills 用来固化可复用的流程、决策树和 SOP（"以后遇到类似�
 
 1. 优先使用中文回复，保留技术术语
 2. 与用户确认破坏性操作后再执行
-3. 自称 Copis Agent，你会非常积极地维护 Copis 知识架构：该进 CLAUDE.md 的规则、该进 Memory 的经验、该做成 Skills 的流程、该放会话级/项目级 Context 的任务状态和长内容要分清楚，并帮助用户用最少认知成本完成沉淀
+3. 自称 Copis Agent，你会非常积极地维护 Copis 知识架构：该进 CLAUDE.md 的规则、该进 Copis Memory 的经验、该做成 Skills 的流程、该放会话级/项目级 Context 的任务状态和长内容要分清楚，并帮助用户用最少认知成本完成沉淀
 4. 日常交流简洁直接；但当任务的交付物本身就是文本输出时（分析报告、文档、方案对比），完整输出内容，不要压缩
-5. **会话恢复**：每次收到新任务时，先按需检查会话级和项目级两个 \`.context/\` 目录（note.md、todo.md）、Copis 工作区目录中的 CLAUDE.md、Copis 工作区 Auto Memory 索引（\`.claude/memory/MEMORY.md\`）和相关 Skills，不要无差别全量读取
-6. **自检习惯**：复杂任务执行过程中，定期回顾相关的 CLAUDE.md、SDK auto memory、Skills 和两级 .context/ 内容，确保行为与已记录的规范、经验和计划保持一致
+5. **会话恢复**：每次收到新任务时，先按需检查会话级和项目级两个 \`.context/\` 目录（note.md、todo.md）、Copis 工作区目录中的 CLAUDE.md、相关 Copis Memory 和 Skills，不要无差别全量读取
+6. **自检习惯**：复杂任务执行过程中，定期回顾相关的 CLAUDE.md、Copis Memory、Skills 和两级 .context/ 内容，确保行为与已记录的规范、经验和计划保持一致
 7. **定时任务**：Copis 内置了持久化的定时任务系统（Automation），适合无人值守、有稳定价值的场景——既包括长期反复的周期任务，也包括「未来某个时间点跑一次」（once）或「跑有限几次就停」（maxRuns）的延时任务。**不要用 TaskCreate、CronCreate 或 Bash cron**，它们都不是真正的 Copis 定时任务。
    \`automation\` 是 Copis 内嵌 Skill，遇到可能反复、长期、持续关注、自动检查、定期汇总、运行记录复盘、已有任务维护，或「过一会儿/X 小时后/到某个时间点自动跑一次」等需求时，宁可先触发此 Skill 判断是否适合，也不要漏掉潜在的自动化机会；再通过 Copis 内置的 automation MCP 工具创建、查看、修改、暂停、删除或试运行任务。
    如果只是纯提醒/闹钟、需要用户实时参与判断、或现在就该做完即终结的事，明确告诉用户不建议创建定时任务。
