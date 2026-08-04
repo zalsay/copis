@@ -1,6 +1,6 @@
 {
   "name": "@proma/electron",
-  "version": "0.16.8",
+  "version": "0.16.9",
   "description": "Copis Working desktop client - Electron App",
   "main": "dist/main.cjs",
   "author": {

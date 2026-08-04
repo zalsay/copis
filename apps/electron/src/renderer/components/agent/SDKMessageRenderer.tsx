@@ -12,7 +12,7 @@
  */
 
 import * as React from 'react'
-import { Loader2, AlertTriangle, FileText, FileImage, Download, Split, Undo2, RotateCw, Plus, Minimize2, Wrench, Settings, Cpu, ExternalLink, Quote, Clock, FolderInput, FolderPlus, ListTodo } from 'lucide-react'
+import { Loader2, AlertTriangle, FileText, FileImage, Download, RotateCw, Plus, Minimize2, Wrench, Settings, Cpu, ExternalLink, Quote, Clock, FolderInput, FolderPlus, ListTodo } from 'lucide-react'
 import { useAtomValue, useSetAtom } from 'jotai'
 import { cn } from '@/lib/utils'
 import { ImageLightbox, type LightboxImage } from '@/components/ui/image-lightbox'
@@ -572,14 +572,7 @@ export function AssistantTurnRenderer({ turn, allMessages, basePath, onFork, onR
           .filter((b) => b.type === 'text' && 'text' in b)
           .map((b) => (b as { text: string }).text)
           .join('\n\n')
-        // 仅取主线 assistant 消息的 uuid 作为 fork/rewind 截断点。
-        // SDK forkSession 内部会过滤掉 sidechain（parent_tool_use_id 非空的子代理消息），
-        // 若把子代理 uuid 传过去会触发 "Message <uuid> not found in session" 错误。
-        const mainlineAssistants = turn.assistantMessages.filter((m) => !m.parent_tool_use_id)
-        const lastUuid = mainlineAssistants.length > 0
-          ? mainlineAssistants[mainlineAssistants.length - 1]?.uuid
-          : undefined
-        const hasActions = !!(textContent || (onFork && lastUuid) || (onRewind && lastUuid))
+        const hasActions = !!textContent
         const hasDuration = durationMs != null
         if (!hasDuration && !hasActions && !showStoppedBadge) return null
         return (
@@ -594,16 +587,6 @@ export function AssistantTurnRenderer({ turn, allMessages, basePath, onFork, onR
             {textContent && onCreateTodo && (
               <MessageAction tooltip="标记为 Todo" onClick={() => onCreateTodo(textContent)}>
                 <ListTodo className="size-3.5" />
-              </MessageAction>
-            )}
-            {onFork && lastUuid && (
-              <MessageAction tooltip="按当前模型从此处分叉" onClick={() => onFork(lastUuid)}>
-                <Split className="size-3.5" />
-              </MessageAction>
-            )}
-            {onRewind && lastUuid && (
-              <MessageAction tooltip="回退到此处" onClick={() => onRewind(lastUuid)}>
-                <Undo2 className="size-3.5" />
               </MessageAction>
             )}
             {showStoppedBadge && (

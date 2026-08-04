@@ -10,7 +10,7 @@
 
 import * as React from 'react'
 import { useAtom, useAtomValue, useSetAtom } from 'jotai'
-import { ChevronDown, Cpu, Search } from 'lucide-react'
+import { Brain, ChevronDown, Cpu, Search, Zap } from 'lucide-react'
 import {
   Dialog,
   DialogContent,
@@ -33,6 +33,11 @@ import { useConversationModelOptional } from '@/hooks/useConversationSettings'
 import { useConversationIdOptional } from '@/contexts/session-context'
 import { CopisTemplateLogo, getModelLogo, getChannelLogo, DefaultLogo } from '@/lib/model-logo'
 import { cn } from '@/lib/utils'
+import {
+  COPIS_WORKING_CHANNEL_ID,
+  COPIS_WORKING_EXPERT_MODEL_ID,
+  COPIS_WORKING_FAST_MODEL_ID,
+} from '@proma/shared'
 import type { Channel, ModelOption, ProviderType } from '@proma/shared'
 import { ChannelPlanQuotaBadge } from './ChannelPlanQuotaBadge'
 
@@ -79,6 +84,29 @@ function groupByChannel(options: ModelOption[]): Map<string, ModelOption[]> {
   }
 
   return groups
+}
+
+function getModelDescription(option: Pick<ModelOption, 'channelId' | 'modelId'>): string | undefined {
+  if (option.channelId !== COPIS_WORKING_CHANNEL_ID) return undefined
+  if (option.modelId === COPIS_WORKING_FAST_MODEL_ID) return '速度快，思考能力一般'
+  if (option.modelId === COPIS_WORKING_EXPERT_MODEL_ID) return '知识面广，深度思考，消耗更多钻石'
+  return undefined
+}
+
+function renderModelIcon(option: ModelOption, useCopisLogo: boolean, className: string): React.ReactElement {
+  if (option.channelId === COPIS_WORKING_CHANNEL_ID && option.modelId === COPIS_WORKING_FAST_MODEL_ID) {
+    return <Zap aria-hidden="true" className={cn(className, 'text-amber-400')} />
+  }
+  if (option.channelId === COPIS_WORKING_CHANNEL_ID && option.modelId === COPIS_WORKING_EXPERT_MODEL_ID) {
+    return <Brain aria-hidden="true" className={cn(className, 'text-violet-400')} />
+  }
+  return (
+    <img
+      src={useCopisLogo ? CopisTemplateLogo : getModelLogo(option.modelId, option.provider)}
+      alt={option.modelName}
+      className={cn(className, 'rounded object-cover')}
+    />
+  )
 }
 
 /** ModelSelector 可选属性 */
@@ -165,6 +193,7 @@ export function ModelSelector({
       const matchedOptions = options.filter(
         (o) =>
           o.modelName.toLowerCase().includes(query) ||
+          getModelDescription(o)?.toLowerCase().includes(query) ||
           o.channelName.toLowerCase().includes(query)
       )
       if (matchedOptions.length > 0) {
@@ -278,11 +307,7 @@ export function ModelSelector({
             className="model-selector-trigger flex items-center gap-1.5 rounded-md px-2 py-1 text-xs text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
           >
             {displayModelInfo ? (
-              <img
-                src={useCopisLogo ? CopisTemplateLogo : getModelLogo(displayModelInfo.modelId, displayModelInfo.provider)}
-                alt={useCopisLogo ? 'Copis' : displayModelInfo.modelName}
-                className="size-4 rounded object-cover"
-              />
+              renderModelIcon(displayModelInfo, useCopisLogo, 'size-4 shrink-0')
             ) : (
               <Cpu className="size-3.5" />
             )}
@@ -351,6 +376,7 @@ export function ModelSelector({
 
                     {/* 该渠道下的模型列表 */}
                     {options.map((option) => {
+                      const modelDescription = getModelDescription(option)
                       const isSelected =
                         selectedModel?.channelId === option.channelId &&
                         selectedModel?.modelId === option.modelId
@@ -374,16 +400,13 @@ export function ModelSelector({
                             isSelected && 'bg-foreground/10 border-l-3 border-l-primary'
                           )}
                         >
-                          <img
-                            src={useCopisLogo ? CopisTemplateLogo : getModelLogo(option.modelId, option.provider)}
-                            alt={option.modelName}
-                            className="size-5 rounded object-cover flex-shrink-0"
-                          />
+                          {renderModelIcon(option, useCopisLogo, 'size-5 flex-shrink-0')}
                           <span className={cn(
                             'flex-1 text-sm truncate',
                             isSelected ? 'font-medium text-foreground' : 'text-foreground/80'
                           )}>
                             {option.modelName}
+                            {modelDescription ? `(${modelDescription})` : ''}
                           </span>
                         </button>
                       )

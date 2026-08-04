@@ -27,6 +27,7 @@ describe('Working 模式契约', () => {
     const channel = createCopisWorkingChannel('http://127.0.0.1:9000/module/edu-api/')
 
     expect(channel.id).toBe(COPIS_WORKING_CHANNEL_ID)
+    expect(channel.name).toBe('内置模型')
     expect(channel.provider).toBe('openai-responses')
     expect(channel.baseUrl).toBe('http://127.0.0.1:9000/module/edu-api/api/internal/working-model/v1')
     expect(channel.apiKey).toBe('')

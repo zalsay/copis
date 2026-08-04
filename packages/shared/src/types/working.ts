@@ -138,7 +138,7 @@ export function createCopisWorkingChannel(backendUrl: string, now = 0): Channel 
 
   return {
     id: COPIS_WORKING_CHANNEL_ID,
-    name: 'Copis Working',
+    name: '内置模型',
     provider: 'openai-responses',
     baseUrl: `${baseUrl}${COPIS_WORKING_MODEL_ENDPOINT_PATH}`,
     apiKey: '',
