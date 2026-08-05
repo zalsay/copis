@@ -21,6 +21,7 @@ import {
   hasEnvironmentIssuesAtom,
 } from '@/atoms/environment'
 import { EnvironmentCheckCard } from '@/components/environment/EnvironmentCheckCard'
+import { FunctionalModulesCard } from './FunctionalModulesCard'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { ReleaseNotesViewer } from './ReleaseNotesViewer'
@@ -536,6 +537,9 @@ export function AboutSettings(): React.ReactElement {
 
       {/* 环境检测卡片 */}
       <EnvironmentCard />
+
+      {/* 可独立安装的功能模块 */}
+      <FunctionalModulesCard />
 
       {/* Shell 环境卡片（仅 Windows） */}
       <ShellEnvironmentCard />

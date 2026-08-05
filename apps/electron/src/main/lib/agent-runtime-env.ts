@@ -19,6 +19,7 @@ export interface BuildAgentRuntimeEnvOptions {
   runtimeStatus?: RuntimeStatus | null
   windowsShellPreference?: WindowsShellPreference
   bundledCliPath?: string
+  officeCliPath?: string
   processEnv?: NodeJS.ProcessEnv
   platform?: NodeJS.Platform
   pathDelimiter?: string
@@ -196,17 +197,19 @@ export function buildAgentRuntimeEnv(options: BuildAgentRuntimeEnvOptions = {}):
   const bundledCliPath = options.bundledCliPath ?? getBundledCliPath()
   const env: Record<string, string> = {}
 
-  if (bundledCliPath) {
-    env.COPIS_CLI = bundledCliPath
-  }
+  if (bundledCliPath) env.COPIS_CLI = bundledCliPath
+  if (options.officeCliPath) env.COPIS_OFFICECLI = options.officeCliPath
 
   const pathKey = getPathKey(processEnv)
-  const enhancedPath = prependPathEntry(
-    processEnv[pathKey],
-    bundledCliPath ? dirnameForPlatform(bundledCliPath, platform) : undefined,
-    pathDelimiter,
-    platform,
-  )
+  let enhancedPath = processEnv[pathKey]
+  for (const binaryPath of [bundledCliPath, options.officeCliPath]) {
+    enhancedPath = prependPathEntry(
+      enhancedPath,
+      binaryPath ? dirnameForPlatform(binaryPath, platform) : undefined,
+      pathDelimiter,
+      platform,
+    )
+  }
   if (enhancedPath) {
     env[pathKey] = enhancedPath
   }

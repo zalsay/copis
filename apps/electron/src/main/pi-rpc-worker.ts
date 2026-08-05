@@ -8,6 +8,7 @@ import {
   type PiWorkerRunConfig,
 } from './lib/agent-rpc-protocol'
 import { attachAgentRunDuration } from './lib/agent-rpc-duration'
+import { createMemoryMaintenanceRunner, MemoryMaintenanceService } from './lib/adapters/pi-memory-maintenance'
 
 interface ActiveWorkerRun {
   sessionId: string
@@ -85,6 +86,7 @@ async function runWorker(config: PiWorkerRunConfig): Promise<void> {
   const runStartedAt = config.query.retryRunStartedAt ?? Date.now()
   const { PiAgentAdapter } = await import('./lib/adapters/pi-agent-adapter')
   const adapter = new PiAgentAdapter()
+  const memoryMaintenance = new MemoryMaintenanceService()
   const run: ActiveWorkerRun = {
     sessionId: config.sessionId,
     adapter,
@@ -119,6 +121,21 @@ async function runWorker(config: PiWorkerRunConfig): Promise<void> {
     onRetry: (retry) => {
       emitCopisEvent(config.sessionId, { type: 'retry', ...retry })
     },
+    ...(config.query.workspaceSlug && config.query.memoryPolicy === 'writable'
+      ? {
+        memoryMaintenanceRunner: createMemoryMaintenanceRunner({
+          service: memoryMaintenance,
+          workspaceSlug: config.query.workspaceSlug,
+          policy: config.query.memoryPolicy,
+          provider: config.query.provider,
+          baseUrl: config.query.baseUrl,
+          apiKey: config.query.apiKey,
+          modelId: config.query.model ?? 'default',
+          proxyUrl: config.query.proxyUrl,
+          force: true,
+        }),
+      }
+      : {}),
     ...(config.query.codexOAuthCredentials
       ? {
         onCodexOAuthCredentialsRefreshed: (credentials) => {

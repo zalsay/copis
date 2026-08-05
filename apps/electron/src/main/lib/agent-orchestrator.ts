@@ -42,13 +42,14 @@ import { getAdapter, fetchTitle } from '@copis/core'
 import { getFetchFn } from './proxy-fetch'
 import { getEffectiveProxyUrl } from './proxy-settings-service'
 import { appendSDKMessages, updateAgentSessionMeta, getAgentSessionMeta, getAgentSessionMessages, truncateSDKMessages, removeSDKErrorMessage, rewindPiAgentSession, resolveAgentCwd, getAgentCwdMode } from './agent-session-manager'
-import { ensureAgentWorkspaceWritableRoot, getAgentWorkspace, getAgentWorkspaceWritableRoot, getLocalProjectRootStatus, getProjectFilesPath, getWorkspaceMcpConfig, getWorkspaceAttachedDirectories, getWorkspaceAttachedFiles } from './agent-workspace-manager'
+import { ensureAgentWorkspaceContextDir, ensureAgentWorkspaceWritableRoot, getAgentWorkspace, getAgentWorkspaceWritableRoot, getLocalProjectRootStatus, getProjectFilesPath, getWorkspaceMcpConfig, getWorkspaceAttachedDirectories, getWorkspaceAttachedFiles } from './agent-workspace-manager'
 import { getWorkingApiClient } from './working-api-service'
 import { getAgentWorkspacePath, getAgentSessionWorkspacePath, getSdkConfigDir, getWorkspaceSkillsDir } from './config-paths'
 import { isPathWithinRootsAllowMissing } from './file-access-policy'
 import { getRuntimeStatus } from './runtime-init'
 import { getSettings } from './settings-service'
 import { buildSystemPrompt, buildDynamicContext } from './agent-prompt-builder'
+import { appendMemoryContext } from './memory-context-builder'
 import { MAX_CONTEXT_MESSAGES, buildContextPrompt, buildRecoveryPrompt, buildReferencedSessionsPrompt } from './agent-session-context-prompt'
 import { buildReferencedPlanningPrompt } from './planning-reference-context'
 import { permissionService } from './agent-permission-service'
@@ -62,7 +63,10 @@ import { injectChromeDevtoolsMcpServer } from './builtin-mcp/chrome-devtools'
 import { isBuiltinMcpUserEnabled } from './builtin-mcp/settings'
 import { buildPiBuiltinTools } from './adapters/pi-builtin-tools'
 import { buildPiMcpTools } from './adapters/pi-mcp-tools'
+import { MemoryAutoCapture, extractMemoryFactsWithProvider } from './adapters/pi-memory-auto-capture'
+import { createMemoryMaintenanceRunner, sharedMemoryMaintenanceService, MemoryMaintenanceService } from './adapters/pi-memory-maintenance'
 import { buildAgentRuntimeEnv, type AgentRuntimeEnv } from './agent-runtime-env'
+import { getFunctionalModulePath } from './functional-module-manager'
 import { isVisibleRunMessage } from './agent-run-message-visibility'
 import { resolvePiThinkingLevel } from './agent-thinking-level'
 import { resolvePiReasoningCapability } from './adapters/pi-model-registry'
@@ -104,6 +108,14 @@ const EMPTY_RESPONSE_RESULT_SUBTYPE = 'empty_response'
 
 function errorMessageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
+}
+
+function lastAssistantReply(messages: AgentMessage[]): string | undefined {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index]
+    if (message?.role === 'assistant' && message.content.trim()) return message.content.trim()
+  }
+  return undefined
 }
 
 function isMissingActiveQueueChannelError(error: unknown): boolean {
@@ -348,10 +360,14 @@ export class AgentOrchestrator {
 
   /** 运行中会话的当前权限模式（支持运行时动态切换） */
   private sessionPermissionModes = new Map<string, CopisPermissionMode>()
+  private memoryAutoCapture: MemoryAutoCapture
+  private memoryMaintenance: MemoryMaintenanceService
 
   constructor(adapter: AgentProviderAdapter, eventBus: AgentEventBus) {
     this.adapter = adapter
     this.eventBus = eventBus
+    this.memoryAutoCapture = new MemoryAutoCapture()
+    this.memoryMaintenance = sharedMemoryMaintenanceService
   }
 
   /**
@@ -377,6 +393,7 @@ export class AgentOrchestrator {
       proxyUrl,
       runtimeStatus: getRuntimeStatus(),
       windowsShellPreference: getSettings().windowsShellPreference,
+      officeCliPath: getFunctionalModulePath('officecli'),
       processEnv,
     })
 
@@ -1109,6 +1126,7 @@ export class AgentOrchestrator {
         workspaceWriteRoot = workspaceWriteRestricted
           ? ensureAgentWorkspaceWritableRoot(ws)
           : getAgentWorkspaceWritableRoot(ws)
+        ensureAgentWorkspaceContextDir(ws)
         console.log(`[Agent 编排] 使用 ${getAgentCwdMode(sessionMeta)} cwd: ${agentCwd} (${ws.name}/${sessionId})`)
 
         if (existingSdkSessionId) {
@@ -1154,6 +1172,7 @@ export class AgentOrchestrator {
         workspaceSlug,
         allowedRoots: allAdditionalDirectories,
         permissionMode: permissionModeOverride ?? sessionMeta?.permissionMode ?? COPIS_DEFAULT_PERMISSION_MODE,
+        memoryPolicy: workspace?.memoryPolicy ?? appSettings.defaultMemoryPolicy ?? 'writable',
         triggeredBy: input.triggeredBy,
       })
       piBuiltinTools = builtinMcpResult.tools
@@ -1212,9 +1231,16 @@ export class AgentOrchestrator {
         console.log(`[Agent 编排] 注入 referenced_planning: ${mentionedTodoIds?.length ?? 0} todos, ${mentionedCalendarEventIds?.length ?? 0} calendar events`)
       }
 
-      const contextualMessage = `${dynamicCtx}\n\n${enrichedMessage}`
-
       const isCompactCommand = userMessage.trim() === '/compact'
+      const memoryPolicy = workspace?.memoryPolicy ?? appSettings.defaultMemoryPolicy ?? 'writable'
+      const baseContextualMessage = `${dynamicCtx}\n\n${enrichedMessage}`
+      const contextualMessage = isCompactCommand
+        ? baseContextualMessage
+        : await appendMemoryContext(baseContextualMessage, {
+          workspaceSlug,
+          userMessage: enrichedMessage,
+          policy: memoryPolicy,
+        })
       const finalPrompt = isCompactCommand
         ? '/compact'
         : existingSdkSessionId
@@ -1544,6 +1570,7 @@ export class AgentOrchestrator {
         collaborationAvailable,
         currentModelId: selectedModelId,
         workingMode,
+        memoryPolicy,
       }) + (automationContext ? `\n\n## 定时任务执行上下文\n\n${automationContext}` : '')
       const startAutoTitleGeneration = (): void => {
         if (titleGenerationStarted) return
@@ -1598,6 +1625,32 @@ export class AgentOrchestrator {
         })
       }
       const piCustomTools = [...piBuiltinTools, ...piMcpTools]
+      const memoryTokenMaintenanceRunner = workspaceSlug && memoryPolicy === 'writable'
+        ? createMemoryMaintenanceRunner({
+          service: this.memoryMaintenance,
+          workspaceSlug,
+          policy: memoryPolicy,
+          provider: channel.provider,
+          baseUrl: channel.baseUrl,
+          apiKey,
+          modelId: selectedModelId,
+          proxyUrl,
+          force: true,
+        })
+        : undefined
+      const memoryCaptureMaintenanceRunner = workspaceSlug && memoryPolicy === 'writable'
+        ? createMemoryMaintenanceRunner({
+          service: this.memoryMaintenance,
+          workspaceSlug,
+          policy: memoryPolicy,
+          provider: channel.provider,
+          baseUrl: channel.baseUrl,
+          apiKey,
+          modelId: selectedModelId,
+          proxyUrl,
+          force: false,
+        })
+        : undefined
       const queryOptions: PiAgentQueryOptions = {
         agentRuntime: 'pi',
         sessionId,
@@ -1621,6 +1674,9 @@ export class AgentOrchestrator {
         ...(allAdditionalDirectories.length > 0 && { additionalDirectories: allAdditionalDirectories }),
         ...(workspaceSlug ? { additionalSkillPaths: [getWorkspaceSkillsDir(workspaceSlug)] } : {}),
         ...(mentionedSkills?.length ? { skillMentions: mentionedSkills } : {}),
+        ...(workspaceSlug ? { workspaceSlug } : {}),
+        memoryPolicy,
+        ...(memoryTokenMaintenanceRunner ? { memoryMaintenanceRunner: memoryTokenMaintenanceRunner } : {}),
         ...(isCompactCommand ? { compactRequest: true } : {}),
         ...(sessionMeta?.codexFastMode && channel.provider === 'openai-codex' ? { codexFastMode: true } : {}),
         ...(codexOAuthCredentials && {
@@ -2143,6 +2199,37 @@ export class AgentOrchestrator {
             console.log(`[Agent 编排] Plan 模式：已注入计划确认建议`)
           }
 
+          // 只有成功且未中断的可见用户回合才进入自动捕获 burst；/compact、visible/off
+          // 策略以及自动维护回合均不会通过这里绕过 Memory 权限。
+          const assistantReply = lastAssistantReply(getAgentSessionMessages(sessionId))
+          if (
+            !wasStoppedByUser
+            && !isCompactCommand
+            && memoryPolicy === 'writable'
+            && workspaceSlug
+            && assistantReply
+          ) {
+            void this.memoryAutoCapture.onTurnEnd({
+              sessionId,
+              workspaceSlug,
+              userInput: userMessage,
+              assistantReply,
+              autonomous: input.triggeredBy === 'automation' || input.triggeredBy === 'delegation',
+              memoryPolicy,
+              extractor: (turns) => extractMemoryFactsWithProvider({
+                provider: channel.provider,
+                baseUrl: channel.baseUrl,
+                apiKey,
+                modelId: selectedModelId,
+                proxyUrl,
+                turns,
+              }),
+              ...(memoryCaptureMaintenanceRunner ? { maintenanceRunner: memoryCaptureMaintenanceRunner } : {}),
+            }).catch((error) => {
+              console.warn('[Memory] 自动捕获调度失败:', error)
+            })
+          }
+
           // 发送完成信号
           completeRun(getAgentSessionMessages(sessionId), { stoppedByUser: wasStoppedByUser, startedAt: streamStartedAt, resultSubtype: capturedResultSubtype, resultErrors: capturedResultErrors })
 
@@ -2412,6 +2499,7 @@ export class AgentOrchestrator {
     this.sessionPermissionModes.delete(sessionId)
     this.stoppedBySessions.add(sessionId)
     this.queuedMessageUuids.delete(sessionId)
+    this.memoryAutoCapture.dispose(sessionId)
     this.adapter.abort(sessionId)
     console.log(`[Agent 编排] 已中止会话: ${sessionId}`)
   }
@@ -2532,6 +2620,7 @@ export class AgentOrchestrator {
     this.activeSessions.clear()
     this.sessionPermissionModes.clear()
     this.queuedMessageUuids.clear()
+    this.memoryAutoCapture.disposeAll()
   }
 
   // ===== 队列消息管理 =====

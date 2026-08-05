@@ -11,8 +11,9 @@ mod memory;
 mod pi_rpc;
 
 use memory::{
-    MemoryCaptureInput, MemoryError, MemoryKind, MemoryRestoreInput, MemoryRewriteInput,
-    MemoryScope, MemoryStore, DEFAULT_LIST_LIMIT, DEFAULT_RECALL_LIMIT,
+    MemoryCaptureBatchInput, MemoryCaptureInput, MemoryContextInput, MemoryError, MemoryKind,
+    MemoryMaintenanceApplyInput, MemoryRestoreInput, MemoryRewriteInput, MemoryScope, MemoryStore,
+    DEFAULT_LIST_LIMIT, DEFAULT_RECALL_LIMIT,
 };
 use pi_rpc::{
     agent_session_id, is_agent_messages_route, is_agent_stop_route, parse_worker_frame,
@@ -22,7 +23,7 @@ use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::{json, Value};
 
 const HOST: &str = "127.0.0.1";
-const PORT: u16 = 51730;
+const DEFAULT_PORT: u16 = 51730;
 const MAX_REQUEST_BODY_BYTES: usize = 2 * 1024 * 1024;
 const MAX_HEADER_BYTES: usize = 64 * 1024;
 const MAX_LINE_BYTES: usize = 64 * 1024;
@@ -372,6 +373,55 @@ fn handle_memory_route(
         return;
     }
 
+    if request.method == "POST" && parts.as_slice() == ["context"] {
+        let input = match parse_memory_body::<MemoryContextInput>(request) {
+            Ok(input) => input,
+            Err(error) => {
+                send_memory_error(stream, error, origin);
+                return;
+            }
+        };
+        send_memory_result(stream, store.context(input), origin);
+        return;
+    }
+
+    if request.method == "POST" && parts.as_slice() == ["capture-batch"] {
+        let input = match parse_memory_body::<MemoryCaptureBatchInput>(request) {
+            Ok(input) => input,
+            Err(error) => {
+                send_memory_error(stream, error, origin);
+                return;
+            }
+        };
+        send_memory_result(stream, store.capture_batch(input), origin);
+        return;
+    }
+
+    if request.method == "GET" && parts.as_slice() == ["maintenance"] {
+        let Some(workspace_slug) = query.get("workspaceSlug") else {
+            send_memory_error(
+                stream,
+                MemoryError::Validation("workspaceSlug 参数不正确".to_string()),
+                origin,
+            );
+            return;
+        };
+        send_memory_result(stream, store.maintenance_state(workspace_slug), origin);
+        return;
+    }
+
+    if request.method == "POST" && parts.as_slice() == ["maintenance", "apply"] {
+        let input = match parse_memory_body::<MemoryMaintenanceApplyInput>(request) {
+            Ok(input) => input,
+            Err(error) => {
+                send_memory_error(stream, error, origin);
+                return;
+            }
+        };
+        send_memory_result(stream, store.apply_maintenance(input), origin);
+        return;
+    }
+
     if request.method == "POST" && parts.as_slice() == ["capture"] {
         let input = match parse_memory_body::<AgentMemoryCaptureRequest>(request) {
             Ok(input) => input,
@@ -601,6 +651,11 @@ fn send_memory_error(stream: &mut TcpStream, error: MemoryError, origin: Option<
             "revision_conflict",
             json!({ "error": "记忆 revision 冲突", "code": "revision_conflict", "current": entry }),
         ),
+        MemoryError::MaintenanceConflict(state) => (
+            409,
+            "maintenance_conflict",
+            json!({ "error": "记忆维护状态已变化", "code": "maintenance_conflict", "current": state }),
+        ),
         MemoryError::Storage(message) => (
             500,
             "memory_storage_error",
@@ -715,12 +770,13 @@ fn handle_connection(
         .next()
         .unwrap_or(request.target.as_str());
     if request.method == "GET" && path == "/api/health" {
-        send_json_response(
-            &mut stream,
-            200,
-            r#"{"ok":true,"service":"copis-http-api","port":51730}"#,
-            origin,
+        let memory_available = memory_store.integrity_check().is_ok();
+        let health_body = format!(
+            r#"{{"ok":true,"service":"copis-http-api","port":{},"memory":{{"available":{},"backend":"sqlite","schemaVersion":1}}}}"#,
+            configured_port(),
+            memory_available,
         );
+        send_json_response(&mut stream, 200, &health_body, origin);
         let _ = stream.shutdown(Shutdown::Both);
         return;
     }
@@ -1053,11 +1109,24 @@ fn finalize_worker_run(bridge: &Arc<Bridge>, frame: &Value) -> Result<Option<Str
         .get("stoppedByUser")
         .and_then(Value::as_bool)
         .unwrap_or(false);
-    let body = serde_json::to_vec(&json!({
+    let mut body = json!({
         "sessionId": session_id,
         "stoppedByUser": stopped_by_user,
-    }))
-    .map_err(|error| format!("Agent 完成帧序列化失败: {}", error))?;
+    });
+    if let Some(result_subtype) = frame.get("resultSubtype").and_then(Value::as_str) {
+        body["resultSubtype"] = Value::String(result_subtype.to_string());
+    }
+    if let Some(result_errors) = frame.get("resultErrors").and_then(Value::as_array) {
+        body["resultErrors"] = Value::Array(
+            result_errors
+                .iter()
+                .filter_map(Value::as_str)
+                .map(|value| Value::String(value.to_string()))
+                .collect(),
+        );
+    }
+    let body = serde_json::to_vec(&body)
+        .map_err(|error| format!("Agent 完成帧序列化失败: {}", error))?;
     let response = send_internal_request(bridge, "/api/internal/agent/complete", body)?;
     ensure_internal_success_with_body(response)
 }
@@ -1215,11 +1284,20 @@ fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
         .position(|window| window == needle)
 }
 
+fn configured_port() -> u16 {
+    std::env::var("COPIS_HTTP_API_PORT")
+        .ok()
+        .and_then(|value| value.parse::<u16>().ok())
+        .filter(|port| *port > 0)
+        .unwrap_or(DEFAULT_PORT)
+}
+
 fn main() {
-    let listener = match TcpListener::bind((HOST, PORT)) {
+    let port = configured_port();
+    let listener = match TcpListener::bind((HOST, port)) {
         Ok(listener) => listener,
         Err(error) => {
-            eprintln!("[HTTP API] 无法监听 {}:{}: {}", HOST, PORT, error);
+            eprintln!("[HTTP API] 无法监听 {}:{}: {}", HOST, port, error);
             process::exit(1);
         }
     };
@@ -1236,7 +1314,7 @@ fn main() {
     let response_bridge = Arc::clone(&bridge);
     thread::spawn(move || read_bridge_responses(response_bridge));
 
-    eprintln!("[HTTP API] Rust 服务监听 http://{}:{}", HOST, PORT);
+    eprintln!("[HTTP API] Rust 服务监听 http://{}:{}", HOST, port);
     for stream in listener.incoming() {
         match stream {
             Ok(stream) => {

@@ -5,7 +5,7 @@ import { createInterface, type Interface } from 'node:readline'
 import { join, resolve } from 'node:path'
 import {
   COPIS_HTTP_API_HOST,
-  COPIS_HTTP_API_PRODUCTION_PORT,
+  resolveCopisHttpApiPort,
 } from '@copis/shared/config'
 import type {
   FunctionalModuleArchitecture,
@@ -32,7 +32,10 @@ import {
 } from './http-api-handler'
 
 export const HTTP_API_HOST = COPIS_HTTP_API_HOST
-export const HTTP_API_PORT = COPIS_HTTP_API_PRODUCTION_PORT
+export const HTTP_API_PORT = resolveCopisHttpApiPort({
+  configuredPort: process.env.COPIS_HTTP_API_PORT,
+  isPackaged: app.isPackaged === true,
+})
 
 const RUST_HTTP_API_BINARY = 'copis-http-api-server'
 const HEALTH_POLL_INTERVAL_MS = 100

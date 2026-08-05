@@ -1,6 +1,7 @@
 // 浏览器模式的普通 API 走 Vite 代理；Agent 流式请求直接连接 Rust SSE 服务。
 import type { AgentStreamCompletePayload, AgentStreamEvent, AgentSendInput } from '@copis/shared'
-import { agentHttpStreamClient } from './agent-http-stream'
+import { agentHttpStreamClient, configureAgentHttpApiBaseUrl } from './agent-http-stream'
+import { RENDERER_HTTP_API_BASE_URL, RENDERER_HTTP_API_PORT } from './http-api-base-url'
 
 const HTTP_API_BASE_URL = ''
 const HTTP_API_STARTUP_RETRY_COUNT = 60
@@ -283,7 +284,8 @@ function createHttpApiBridge(): Window['electronAPI'] {
 export function installHttpApiBridge(): void {
   const runtimeWindow = window as unknown as { electronAPI?: Window['electronAPI'] }
   if (runtimeWindow.electronAPI) return
+  configureAgentHttpApiBaseUrl(RENDERER_HTTP_API_BASE_URL)
   runtimeWindow.electronAPI = createHttpApiBridge()
   httpApiBridgeActive = true
-  console.info('[HTTP API] 浏览器模式已连接：通过 Vite /api 代理访问 51730')
+  console.info(`[HTTP API] 浏览器模式已连接：通过 Vite /api 代理访问 ${RENDERER_HTTP_API_PORT}`)
 }

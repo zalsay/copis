@@ -4,9 +4,20 @@ import type {
   AgentStreamEvent,
   AgentStreamPayload,
 } from '@copis/shared'
+import {
+  COPIS_HTTP_API_HOST,
+  COPIS_HTTP_API_PRODUCTION_PORT,
+} from '@copis/shared/config'
 import { parseAgentSseData, type AgentRpcWorkerFrame } from '../../main/lib/agent-rpc-protocol'
 
-const AGENT_HTTP_BASE_URL = 'http://127.0.0.1:51730'
+function resolveInitialAgentHttpApiBaseUrl(): string {
+  const configuredPort = typeof process !== 'undefined' ? process.env.COPIS_HTTP_API_PORT : undefined
+  const parsedPort = Number(configuredPort?.trim())
+  const port = Number.isInteger(parsedPort) && parsedPort >= 1 && parsedPort <= 65535
+    ? parsedPort
+    : COPIS_HTTP_API_PRODUCTION_PORT
+  return `http://${COPIS_HTTP_API_HOST}:${port}`
+}
 
 type AgentEventListener = (event: AgentStreamEvent) => void
 type AgentCompleteListener = (event: AgentStreamCompletePayload) => void
@@ -37,6 +48,7 @@ function isAgentPayload(value: unknown): value is AgentStreamPayload {
 }
 
 export class AgentHttpStreamClient {
+  private baseUrl = resolveInitialAgentHttpApiBaseUrl()
   private readonly eventListeners = new Set<AgentEventListener>()
   private readonly completeListeners = new Set<AgentCompleteListener>()
   private readonly errorListeners = new Set<AgentErrorListener>()
@@ -62,9 +74,13 @@ export class AgentHttpStreamClient {
     return () => this.titleListeners.delete(listener)
   }
 
+  setBaseUrl(baseUrl: string): void {
+    this.baseUrl = baseUrl.replace(/\/$/, '')
+  }
+
   async send(input: AgentSendInput): Promise<void> {
     const response = await fetch(
-      `${AGENT_HTTP_BASE_URL}/api/agent/sessions/${encodeURIComponent(input.sessionId)}/messages`,
+      `${this.baseUrl}/api/agent/sessions/${encodeURIComponent(input.sessionId)}/messages`,
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },
@@ -103,7 +119,7 @@ export class AgentHttpStreamClient {
 
   async stop(sessionId: string): Promise<void> {
     const response = await fetch(
-      `${AGENT_HTTP_BASE_URL}/api/agent/sessions/${encodeURIComponent(sessionId)}/stop`,
+      `${this.baseUrl}/api/agent/sessions/${encodeURIComponent(sessionId)}/stop`,
       { method: 'POST', headers: { Accept: 'application/json' } },
     )
     if (!response.ok) throw new Error(await readErrorMessage(response))
@@ -143,3 +159,7 @@ export class AgentHttpStreamClient {
 }
 
 export const agentHttpStreamClient = new AgentHttpStreamClient()
+
+export function configureAgentHttpApiBaseUrl(baseUrl: string): void {
+  agentHttpStreamClient.setBaseUrl(baseUrl)
+}

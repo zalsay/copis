@@ -1,7 +1,7 @@
 import { EventEmitter } from 'node:events'
 import { PassThrough } from 'node:stream'
 import type { SpawnOptions } from 'node:child_process'
-import { afterEach, describe, expect, test, mock } from 'bun:test'
+import { afterAll, afterEach, describe, expect, test, mock } from 'bun:test'
 import { createHash } from 'node:crypto'
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -18,7 +18,7 @@ import {
 
 mock.module('electron', () => ({
   app: {
-    isPackaged: true,
+    isPackaged: false,
     getPath: () => '/tmp/copis-http-api-runtime-test',
   },
   BrowserWindow: class {},
@@ -36,6 +36,9 @@ mock.module('electron', () => ({
     decryptString: (value: Buffer) => value.toString('utf8'),
   },
 }))
+
+const previousHttpApiPort = process.env.COPIS_HTTP_API_PORT
+process.env.COPIS_HTTP_API_PORT = '51740'
 
 const {
   startHttpApiServer,
@@ -70,6 +73,11 @@ const tempRoots: string[] = []
 afterEach(async () => {
   await stopHttpApiServer(5)
   while (tempRoots.length > 0) rmSync(tempRoots.pop()!, { recursive: true, force: true })
+})
+
+afterAll(() => {
+  if (previousHttpApiPort === undefined) delete process.env.COPIS_HTTP_API_PORT
+  else process.env.COPIS_HTTP_API_PORT = previousHttpApiPort
 })
 
 function createRoot(): string {
@@ -154,7 +162,7 @@ function fetchFixture(
 }
 
 describe('Rust HTTP API 功能模块生命周期', () => {
-  test('active Rust API 从功能模块版本目录启动并使用正式端口', async () => {
+  test('active Rust API 从功能模块版本目录启动并使用开发端口', async () => {
     const root = createRoot()
     const packageInfo = rustPackage('0.1.0', 'old-rust-api')
     const activePath = await activateRustVersion(root, packageInfo, 'old-rust-api')
@@ -164,10 +172,10 @@ describe('Rust HTTP API 功能模块生命周期', () => {
 
     expect(records).toHaveLength(1)
     expect(records[0]?.file).toBe(activePath)
-    expect(records[0]?.options.env?.COPIS_HTTP_API_PORT).toBe('51730')
+    expect(records[0]?.options.env?.COPIS_HTTP_API_PORT).toBe('51740')
   })
 
-  test('候选版本健康检查通过后切换 active 和正式进程', async () => {
+  test('候选版本健康检查通过后切换 active 和开发进程', async () => {
     const root = createRoot()
     const oldPackage = rustPackage('0.1.0', 'old-rust-api')
     await activateRustVersion(root, oldPackage, 'old-rust-api')
@@ -192,8 +200,8 @@ describe('Rust HTTP API 功能模块生命周期', () => {
     expect(updated).toBe(true)
     expect(active?.version).toBe('0.2.0')
     expect(records).toHaveLength(3)
-    expect(records[1]?.options.env?.COPIS_HTTP_API_PORT).toBe('51731')
-    expect(records[2]?.options.env?.COPIS_HTTP_API_PORT).toBe('51730')
+    expect(records[1]?.options.env?.COPIS_HTTP_API_PORT).toBe('51741')
+    expect(records[2]?.options.env?.COPIS_HTTP_API_PORT).toBe('51740')
     expect(records[0]?.child.killed).toBe(true)
   })
 
@@ -212,7 +220,7 @@ describe('Rust HTTP API 功能模块生命周期', () => {
       arch: 'arm64',
       clientVersion: '0.16.17',
       spawnImpl: spawnFixture(records),
-      fetchImpl: fetchFixture(manifestFor('0.2.0', 'new-rust-api'), 'new-rust-api', (port) => port !== '51731'),
+      fetchImpl: fetchFixture(manifestFor('0.2.0', 'new-rust-api'), 'new-rust-api', (port) => port !== '51741'),
       healthTimeoutMs: 50,
       stopTimeoutMs: 5,
     })
@@ -225,7 +233,7 @@ describe('Rust HTTP API 功能模块生命周期', () => {
     expect(records[1]?.child.killed).toBe(true)
   })
 
-  test('正式端口健康检查失败时恢复旧 active 并重启旧进程', async () => {
+  test('开发端口健康检查失败时恢复旧 active 并重启旧进程', async () => {
     const root = createRoot()
     const oldPackage = rustPackage('0.1.0', 'old-rust-api')
     await activateRustVersion(root, oldPackage, 'old-rust-api')
@@ -244,7 +252,7 @@ describe('Rust HTTP API 功能模块生命周期', () => {
       fetchImpl: fetchFixture(
         manifestFor('0.2.0', 'new-rust-api'),
         'new-rust-api',
-        (port) => port === '51731' || (port === '51730' && formalProbeCount++ > 0),
+        (port) => port === '51741' || (port === '51740' && formalProbeCount++ > 0),
       ),
       healthTimeoutMs: 50,
       stopTimeoutMs: 5,
@@ -255,7 +263,7 @@ describe('Rust HTTP API 功能模块生命周期', () => {
     expect(active?.version).toBe('0.1.0')
     expect(records).toHaveLength(4)
     expect(records[2]?.child.killed).toBe(true)
-    expect(records[3]?.options.env?.COPIS_HTTP_API_PORT).toBe('51730')
+    expect(records[3]?.options.env?.COPIS_HTTP_API_PORT).toBe('51740')
     expect(readFileSync(active?.path ?? '', 'utf8')).toBe('old-rust-api')
   })
 })

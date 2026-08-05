@@ -1,6 +1,7 @@
 import type { WorkingExpertSkillMarketItem } from '@copis/shared'
+import { RENDERER_HTTP_API_BASE_URL } from './http-api-base-url'
 
-const WORKING_HTTP_API_URL = 'http://127.0.0.1:51730'
+const WORKING_HTTP_API_URL = RENDERER_HTTP_API_BASE_URL
 const STARTUP_RETRY_COUNT = 20
 const STARTUP_RETRY_DELAY_MS = 300
 

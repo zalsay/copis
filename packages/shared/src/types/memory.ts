@@ -6,7 +6,19 @@ export type MemoryKind = 'fact' | 'preference' | 'decision' | 'project' | 'scrat
 
 export type MemorySource = 'agent' | 'user' | 'import'
 
-export type MemoryOperation = 'capture' | 'rewrite' | 'restore' | 'archive'
+export type MemoryOperation = 'capture' | 'rewrite' | 'restore' | 'archive' | 'promote' | 'consolidate'
+
+export type MemoryPolicy = 'off' | 'visible' | 'writable'
+
+export const DEFAULT_MEMORY_POLICY: MemoryPolicy = 'writable'
+
+export function normalizeMemoryPolicy(value: unknown, fallback: MemoryPolicy = DEFAULT_MEMORY_POLICY): MemoryPolicy {
+  return value === 'off' || value === 'visible' || value === 'writable' ? value : fallback
+}
+
+export function normalizeOptionalMemoryPolicy(value: unknown): MemoryPolicy | undefined {
+  return value === 'off' || value === 'visible' || value === 'writable' ? value : undefined
+}
 
 export interface MemoryEntry {
   id: string
@@ -19,8 +31,10 @@ export interface MemoryEntry {
   source: MemorySource
   createdAt: number
   updatedAt: number
+  capturedAt: number
   revision: number
   archived: boolean
+  expiresAt?: number
 }
 
 export interface MemoryRevision {
@@ -29,6 +43,7 @@ export interface MemoryRevision {
   operation: MemoryOperation
   snapshot: MemoryEntry
   createdAt: number
+  author?: string
 }
 
 export type MemoryScopeFilter = MemoryScope | 'all'
@@ -96,4 +111,58 @@ export interface MemoryRecallResponse {
   entries: MemoryRecallItem[]
   total: number
   limit: number
+}
+
+export interface MemoryRecallInput {
+  workspaceSlug?: string
+  query: string
+  limit?: number
+}
+
+export interface MemoryContextInput {
+  workspaceSlug?: string
+  query?: string
+  maxChars?: number
+}
+
+export interface MemoryContextResponse {
+  text: string
+  entries: MemoryRecallItem[]
+  generatedAt: number
+}
+
+export interface MemoryCaptureBatchInput {
+  workspaceSlug: string
+  items: Array<Pick<MemoryCaptureInput, 'kind' | 'title' | 'content' | 'tags'>>
+}
+
+export interface MemoryCaptureBatchResponse {
+  entries: MemoryEntry[]
+  added: number
+  deduplicated: number
+}
+
+export type MemoryMaintenanceAction =
+  | { operation: 'promote'; id: string; expectedRevision: number; kind: Exclude<MemoryKind, 'scratch'> }
+  | { operation: 'rewrite'; id: string; expectedRevision: number; title?: string; content?: string; tags?: string[]; kind?: MemoryKind }
+  | { operation: 'archive'; id: string; expectedRevision: number }
+  | { operation: 'capture'; kind: Exclude<MemoryKind, 'scratch'>; title: string; content: string; tags: string[] }
+
+export interface MemoryMaintenanceApplyInput {
+  workspaceSlug: string
+  expectedCaptureCount: number
+  actions: MemoryMaintenanceAction[]
+}
+
+export interface MemoryMaintenanceState {
+  workspaceSlug: string
+  captureCount: number
+  lastConsolidatedCaptureCount: number
+  lastPromotedAt?: number
+  lastCleanupAt?: number
+}
+
+export interface MemoryMaintenanceApplyResponse {
+  entries: MemoryEntry[]
+  state: MemoryMaintenanceState
 }

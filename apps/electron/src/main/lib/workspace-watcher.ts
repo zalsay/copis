@@ -3,7 +3,7 @@
  *
  * 使用 fs.watch 递归监听 ~/.copis/agent-workspaces/ 目录，
  * 根据变化的文件路径区分事件类型：
- * - mcp.json / skills/ 变化 → 推送 CAPABILITIES_CHANGED（侧边栏刷新）
+ * - mcp.json / .agents/skills/ 变化 → 推送 CAPABILITIES_CHANGED（侧边栏刷新）
  * - 其他文件变化 → 推送 WORKSPACE_FILES_CHANGED（文件浏览器刷新）
  *
  * 同时支持监听附加目录（外部路径），变化时统一推送 WORKSPACE_FILES_CHANGED。
@@ -162,7 +162,7 @@ export function startWorkspaceWatcher(win: BrowserWindow): void {
     watcher = watch(watchDir, { recursive: true }, (_eventType, filename) => {
       if (!filename || win.isDestroyed()) return
 
-      // filename 格式: {slug}/mcp.json 或 {slug}/skills/xxx/SKILL.md 或 {slug}/{sessionId}/file.txt
+      // filename 格式: {slug}/mcp.json、{slug}/.agents/skills/xxx/SKILL.md 或 {slug}/{sessionId}/file.txt
       const normalizedFilename = filename.replace(/\\/g, '/')
 
       // 跳过 node_modules / .next 等高频变动目录，防止大规模工作区触发 IPC 事件风暴
@@ -177,7 +177,8 @@ export function startWorkspaceWatcher(win: BrowserWindow): void {
 
       const isCapabilitiesChange =
         normalizedFilename.endsWith('/mcp.json') ||
-        normalizedFilename.includes('/skills/')
+        normalizedFilename.includes('/.agents/skills/') ||
+        normalizedFilename.includes('/.agents/skills-inactive/')
 
       if (isCapabilitiesChange) {
         // MCP/Skills 变化 → 通知侧边栏刷新

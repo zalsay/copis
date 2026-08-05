@@ -3,6 +3,8 @@ import type {
   MemoryEntry,
   MemoryKind,
   MemoryKindFilter,
+  MemoryMaintenanceState,
+  MemoryPolicy,
   MemoryRevision,
   MemoryScope,
   MemoryScopeFilter,
@@ -42,3 +44,6 @@ export const memoryHistoryLoadingAtom = atom(false)
 export const memorySavingAtom = atom(false)
 export const memoryRefreshTokenAtom = atom(0)
 export const memoryConflictAtom = atom<MemoryConflictState | null>(null)
+export const memoryPolicyAtom = atom<MemoryPolicy>('writable')
+export const memoryDefaultPolicyAtom = atom<MemoryPolicy>('writable')
+export const memoryMaintenanceStateAtom = atom<MemoryMaintenanceState | null>(null)

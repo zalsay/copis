@@ -2,7 +2,14 @@ import { describe, expect, test } from 'bun:test'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { migrateLegacyConfigDirectory, migrateLegacySkillSlugDirectory, resolveConfigDirName } from './config-paths'
+import {
+  DEFAULT_SKILL_SLUG_ALIASES,
+  RETIRED_DEFAULT_SKILL_SLUGS,
+  isRetiredDefaultSkill,
+  migrateLegacyConfigDirectory,
+  migrateLegacySkillSlugDirectory,
+  resolveConfigDirName,
+} from './config-paths'
 
 describe('Electron 配置目录改名迁移', () => {
   test('Given COPIS_DEV=1 When 解析配置目录 Then 使用新的开发目录', () => {
@@ -64,5 +71,22 @@ describe('Electron 配置目录改名迁移', () => {
     } finally {
       rmSync(home, { recursive: true, force: true })
     }
+  })
+
+  test('Given 已下线的默认 Skill When 判断内置状态 Then 旧名和当前名都不再属于内置', () => {
+    expect(RETIRED_DEFAULT_SKILL_SLUGS).toEqual(expect.arrayContaining([
+      'agent-collaboration',
+      'guizang-ppt-skill',
+      'tool-builder',
+      'docx',
+      'pptx',
+      'xlsx',
+      'copis-coach',
+      'proma-coach',
+    ]))
+    expect(DEFAULT_SKILL_SLUG_ALIASES).toContainEqual({ legacy: 'proma-coach', canonical: 'copis-coach' })
+    expect(isRetiredDefaultSkill('copis-coach')).toBe(true)
+    expect(isRetiredDefaultSkill('proma-coach')).toBe(true)
+    expect(isRetiredDefaultSkill('automation')).toBe(false)
   })
 })

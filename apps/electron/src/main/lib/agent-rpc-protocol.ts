@@ -2,6 +2,7 @@ import type {
   AgentStreamPayload,
   AgentThinkingLevel,
   CopisPermissionMode,
+  MemoryPolicy,
   CodexOAuthCredentials,
   ProviderType,
   SDKMessage,
@@ -29,6 +30,8 @@ export interface PiWorkerQueryConfig {
   maxBudgetUsd?: number
   additionalDirectories?: string[]
   additionalSkillPaths?: string[]
+  workspaceSlug?: string
+  memoryPolicy?: MemoryPolicy
   proxyUrl?: string
   transport?: 'sse' | 'websocket' | 'websocket-cached'
   httpIdleTimeoutMs?: number

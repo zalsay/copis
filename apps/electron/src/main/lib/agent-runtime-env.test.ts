@@ -99,4 +99,18 @@ describe('Agent Windows Shell 运行环境', () => {
 
     expect(result).toEqual({ PATH: 'C:\\Copis;C:\\Windows\\System32' })
   })
+
+  test('Given OfficeCLI 功能模块已安装 When 构建 Agent 环境 Then 注入模块命令和 PATH', () => {
+    const result = buildAgentRuntimeEnv({
+      bundledCliPath: '',
+      officeCliPath: '/Users/test/.copis/modules/versions/officecli/1.0.143/bin/officecli',
+      platform: 'darwin',
+      processEnv: {},
+    } as Parameters<typeof buildAgentRuntimeEnv>[0])
+
+    expect(result.env).toMatchObject({
+      COPIS_OFFICECLI: '/Users/test/.copis/modules/versions/officecli/1.0.143/bin/officecli',
+      PATH: '/Users/test/.copis/modules/versions/officecli/1.0.143/bin',
+    })
+  })
 })

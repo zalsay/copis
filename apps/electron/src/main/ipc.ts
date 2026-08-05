@@ -9,7 +9,7 @@ import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'nod
 import { existsSync, realpathSync, rmSync, readFileSync, writeFileSync, mkdirSync, statSync } from 'node:fs'
 import { writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, CHAT_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, INSTALLER_IPC_CHANNELS, PROXY_IPC_CHANNELS, GITHUB_RELEASE_IPC_CHANNELS, SYSTEM_PROMPT_IPC_CHANNELS, CHAT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, WECHAT_IPC_CHANNELS, AUTOMATION_IPC_CHANNELS, PLANNING_IPC_CHANNELS, PLANNING_CONFLICT_ERROR, WORKING_IPC_CHANNELS, WEB_IPC_CHANNELS, COPIS_WORKING_CHANNEL_ID, isCopisPermissionMode, isWorkingMode, normalizePathForCompare } from '@copis/shared'
+import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, CHAT_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, INSTALLER_IPC_CHANNELS, FUNCTIONAL_MODULE_IPC_CHANNELS, PROXY_IPC_CHANNELS, GITHUB_RELEASE_IPC_CHANNELS, SYSTEM_PROMPT_IPC_CHANNELS, CHAT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, WECHAT_IPC_CHANNELS, AUTOMATION_IPC_CHANNELS, PLANNING_IPC_CHANNELS, PLANNING_CONFLICT_ERROR, WORKING_IPC_CHANNELS, WEB_IPC_CHANNELS, COPIS_WORKING_CHANNEL_ID, isCopisPermissionMode, isWorkingMode, normalizePathForCompare } from '@copis/shared'
 import { USER_PROFILE_IPC_CHANNELS, SETTINGS_IPC_CHANNELS, SCRATCH_PAD_IPC_CHANNELS, QUICK_TASK_IPC_CHANNELS, VOICE_DICTATION_IPC_CHANNELS, APP_ICON_IPC_CHANNELS, DOCK_BADGE_IPC_CHANNELS, STORAGE_IPC_CHANNELS } from '../types'
 import type {
   QuickTaskSubmitInput,
@@ -70,6 +70,8 @@ import type {
   InstallerManifest,
   InstallerDownloadRequest,
   InstallerDownloadResult,
+  FunctionalModuleInstallInput,
+  FunctionalModuleStatus,
   ProxyConfig,
   SystemProxyDetectResult,
   GitHubRelease,
@@ -229,6 +231,11 @@ import {
   downloadInstaller,
   launchInstaller,
 } from './lib/installer-downloader'
+import {
+  checkFunctionalModule,
+  getFunctionalModuleStatuses,
+  installFunctionalModule,
+} from './lib/functional-module-manager'
 import { getProxySettings, saveProxySettings } from './lib/proxy-settings-service'
 import { detectSystemProxy } from './lib/system-proxy-detector'
 import {
@@ -2076,6 +2083,38 @@ export function registerIpcHandlers(): void {
     }
   )
 
+  // ===== Copis 功能模块相关 =====
+
+  ipcMain.handle(
+    FUNCTIONAL_MODULE_IPC_CHANNELS.LIST,
+    async (): Promise<FunctionalModuleStatus[]> => getFunctionalModuleStatuses(),
+  )
+
+  ipcMain.handle(
+    FUNCTIONAL_MODULE_IPC_CHANNELS.CHECK,
+    async (_event, name: string): Promise<FunctionalModuleStatus> => {
+      if (typeof name !== 'string' || !name.trim()) throw new Error('功能模块名称不正确')
+      return checkFunctionalModule(name)
+    },
+  )
+
+  ipcMain.handle(
+    FUNCTIONAL_MODULE_IPC_CHANNELS.INSTALL,
+    async (event, input: FunctionalModuleInstallInput): Promise<FunctionalModuleStatus> => {
+      if (!input || typeof input.name !== 'string' || !input.name.trim()) {
+        throw new Error('功能模块安装参数不正确')
+      }
+      const window = BrowserWindow.fromWebContents(event.sender)
+      return installFunctionalModule(input, {
+        onProgress: (payload) => {
+          if (window && !window.isDestroyed()) {
+            window.webContents.send(FUNCTIONAL_MODULE_IPC_CHANNELS.PROGRESS, payload)
+          }
+        },
+      })
+    },
+  )
+
   // ===== 代理配置相关 =====
 
   // 获取代理配置
@@ -2357,7 +2396,7 @@ export function registerIpcHandlers(): void {
   // 更新 Agent 工作区
   ipcMain.handle(
     AGENT_IPC_CHANNELS.UPDATE_WORKSPACE,
-    async (_, id: string, updates: { name: string }): Promise<AgentWorkspace> => {
+    async (_, id: string, updates: { name?: string; memoryPolicy?: import('@copis/shared').MemoryPolicy }): Promise<AgentWorkspace> => {
       return updateAgentWorkspace(id, updates)
     }
   )

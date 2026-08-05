@@ -8,6 +8,8 @@ const OPERATION_LABELS: Record<MemoryRevision['operation'], string> = {
   rewrite: '编辑',
   restore: '恢复',
   archive: '归档',
+  promote: '提升为长期记忆',
+  consolidate: '整理',
 }
 
 interface MemoryHistoryProps {

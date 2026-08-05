@@ -31,8 +31,8 @@ import {
 import { findAllGitRoots, normalizeGitRoot } from './git-diff-service'
 import { listBuiltinMcpServers } from './builtin-mcp/catalog'
 import { RESERVED_BUILTIN_KEYS } from './builtin-mcp/baseline'
-import { inferMcpTransportType, normalizeMcpTransportType } from '@copis/shared'
-import type { AgentWorkspace, CreateAgentWorkspaceInput, LocalProjectRootStatus, WorkspaceMcpConfig, SkillMeta, SkillImportSource, SkillMarketSource, OtherWorkspaceSkillsGroup, WorkspaceCapabilities, SkillFileNode, SkillFileContent } from '@copis/shared'
+import { inferMcpTransportType, normalizeMcpTransportType, normalizeOptionalMemoryPolicy } from '@copis/shared'
+import type { AgentWorkspace, CreateAgentWorkspaceInput, LocalProjectRootStatus, MemoryPolicy, WorkspaceMcpConfig, SkillMeta, SkillImportSource, SkillMarketSource, OtherWorkspaceSkillsGroup, WorkspaceCapabilities, SkillFileNode, SkillFileContent } from '@copis/shared'
 
 interface AgentWorkspacesIndex {
   version: number
@@ -75,7 +75,17 @@ function readIndex(): AgentWorkspacesIndex {
     if ((data.version ?? 1) < INDEX_VERSION) {
       migrateIndex(data)
     }
-    return data
+    return {
+      ...data,
+      workspaces: data.workspaces.map((workspace) => {
+        const { memoryPolicy: rawMemoryPolicy, ...rest } = workspace
+        const memoryPolicy = normalizeOptionalMemoryPolicy(rawMemoryPolicy)
+        return {
+          ...rest,
+          ...(memoryPolicy ? { memoryPolicy } : {}),
+        }
+      }),
+    }
   }
 
   return { version: INDEX_VERSION, workspaces: [] }
@@ -94,7 +104,7 @@ function migrateIndex(index: AgentWorkspacesIndex): void {
   console.log(`[Agent 工作区] 索引已迁移: v${oldVersion} → v${INDEX_VERSION}`)
 }
 
-/** v1→v2 迁移：将 skills-inactive/skill-creator 移到 skills/ */
+/** v1→v2 迁移：将 .agents/skills-inactive/skill-creator 移到 .agents/skills/ */
 function activateSkillCreatorInAllWorkspaces(index: AgentWorkspacesIndex): void {
   for (const workspace of index.workspaces) {
     const activeDir = getWorkspaceSkillsDir(workspace.slug)
@@ -265,7 +275,30 @@ export function ensureAgentWorkspaceWritableRoot(
   return writableRoot
 }
 
-/** 将 ~/.copis/default-skills/ 的内容逐个复制到工作区 skills/ 目录 */
+/** 返回工作区项目级 Context 目录；只读项目使用受控写入根，避免修改原始目录。 */
+export function getAgentWorkspaceContextDir(
+  workspace: Pick<AgentWorkspace, 'slug' | 'projectRootPath' | 'allowWorkspaceWrite'>,
+): string {
+  return join(getAgentWorkspaceWritableRoot(workspace), '.context')
+}
+
+/** 确保工作区项目级 Context 存在；项目根不可用时跳过，避免意外重建本地项目。 */
+export function ensureAgentWorkspaceContextDir(
+  workspace: Pick<AgentWorkspace, 'slug' | 'projectRootPath' | 'allowWorkspaceWrite'>,
+): string | undefined {
+  if (workspace.projectRootPath && getLocalProjectRootStatus(workspace.projectRootPath) !== 'available') {
+    return undefined
+  }
+
+  const contextDir = getAgentWorkspaceContextDir(workspace)
+  if (workspace.allowWorkspaceWrite === false) {
+    ensureAgentWorkspaceWritableRoot(workspace)
+  }
+  mkdirSync(contextDir, { recursive: true })
+  return contextDir
+}
+
+/** 将 ~/.copis/default-skills/ 的内容逐个复制到工作区 .agents/skills/ 目录 */
 function copyDefaultSkills(workspaceSlug: string, options: { throwOnError?: boolean } = {}): void {
   const defaultDir = getDefaultSkillsDir()
   const targetDir = getWorkspaceSkillsDir(workspaceSlug)
@@ -296,8 +329,8 @@ function copyDefaultSkills(workspaceSlug: string, options: { throwOnError?: bool
 }
 
 export function createAgentWorkspace(input: string | CreateAgentWorkspaceInput): AgentWorkspace {
-  const { name, projectRootPath, allowWorkspaceWrite } = typeof input === 'string'
-    ? { name: input, projectRootPath: undefined, allowWorkspaceWrite: undefined }
+  const { name, projectRootPath, allowWorkspaceWrite, memoryPolicy } = typeof input === 'string'
+    ? { name: input, projectRootPath: undefined, allowWorkspaceWrite: undefined, memoryPolicy: undefined }
     : input
   const index = readIndex()
 
@@ -335,6 +368,7 @@ export function createAgentWorkspace(input: string | CreateAgentWorkspaceInput):
     slug,
     projectRootPath: normalizedProjectRootPath,
     ...(effectiveAllowWorkspaceWrite !== undefined ? { allowWorkspaceWrite: effectiveAllowWorkspaceWrite } : {}),
+    ...(memoryPolicy !== undefined ? { memoryPolicy } : {}),
     createdAt: now,
     updatedAt: now,
   }
@@ -367,7 +401,7 @@ export function createAgentWorkspace(input: string | CreateAgentWorkspaceInput):
 /** 更新工作区名称（slug 和目录不变） */
 export function updateAgentWorkspace(
   id: string,
-  updates: { name: string },
+  updates: { name?: string; memoryPolicy?: MemoryPolicy },
 ): AgentWorkspace {
   const index = readIndex()
   const idx = index.workspaces.findIndex((w) => w.id === id)
@@ -378,14 +412,20 @@ export function updateAgentWorkspace(
 
   const existing = index.workspaces[idx]!
 
-  const duplicate = index.workspaces.find((w) => w.id !== id && w.name === updates.name)
+  if (updates.name === undefined && updates.memoryPolicy === undefined) {
+    throw new Error('至少提供一个需要更新的工作区字段')
+  }
+
+  const name = updates.name?.trim() || existing.name
+  const duplicate = index.workspaces.find((w) => w.id !== id && w.name === name)
   if (duplicate) {
-    throw new Error(`项目名称「${updates.name}」已存在`)
+    throw new Error(`项目名称「${name}」已存在`)
   }
 
   const updated: AgentWorkspace = {
     ...existing,
-    name: updates.name,
+    name,
+    ...(updates.memoryPolicy !== undefined ? { memoryPolicy: updates.memoryPolicy } : {}),
     updatedAt: Date.now(),
   }
 
@@ -584,7 +624,7 @@ function migrateLegacyDefaultSkillSlugsInWorkspace(workspace: AgentWorkspace): v
 
 /**
  * 同步默认 Skills 到所有工作区。规则：
- * - 缺失：注入到 skills/（active），让升级后新增的内置 Skill 对老用户立即可用
+ * - 缺失：注入到 .agents/skills/（active），让升级后新增的内置 Skill 对老用户立即可用
  * - 已存在（active 或 inactive）：比较 SKILL.md 的 version，bundled 更新时才覆盖
  *   （保留用户停用决定 — 在 inactive 的依然在 inactive；同时避免每次启动
  *    全量 cpSync 4MB+ 文件阻塞主进程）
@@ -782,7 +822,7 @@ export function saveWorkspaceMcpConfig(workspaceSlug: string, config: WorkspaceM
 
 // ===== Skill 目录扫描 =====
 
-/** 扫描工作区活跃 Skills，仅返回 skills/ 下的 Skill */
+/** 扫描工作区活跃 Skills，仅返回 .agents/skills/ 下的 Skill */
 export function getWorkspaceSkills(workspaceSlug: string): SkillMeta[] {
   return scanSkillsInDir(getWorkspaceSkillsDir(workspaceSlug), true)
 }
@@ -933,7 +973,7 @@ export function getDefaultSkillSlugs(): string[] {
 
   try {
     return readdirSync(dir, { withFileTypes: true })
-      .filter((entry) => entry.isDirectory())
+      .filter((entry) => entry.isDirectory() && !isRetiredDefaultSkill(entry.name))
       .map((entry) => entry.name)
   } catch {
     return []
@@ -947,7 +987,7 @@ export function getAllWorkspaceSkills(workspaceSlug: string): SkillMeta[] {
   return [...activeSkills, ...inactiveSkills]
 }
 
-/** 在 skills/ 和 skills-inactive/ 之间移动来切换启用/禁用 */
+/** 在 .agents/skills/ 和 .agents/skills-inactive/ 之间移动来切换启用/禁用 */
 export function toggleWorkspaceSkill(workspaceSlug: string, skillSlug: string, enabled: boolean): void {
   const activeDir = getWorkspaceSkillsDir(workspaceSlug)
   const inactiveDir = getInactiveSkillsDir(workspaceSlug)
@@ -1046,7 +1086,7 @@ export function importSkillFromWorkspace(
  * 从源工作区同步更新已导入的 Skill（覆盖更新）。
  *
  * - 源不存在：抛出错误，不修改目标
- * - 本地已禁用（skills-inactive）：在 inactive 目录中原地更新，保留 enabled 状态
+ * - 本地已禁用（.agents/skills-inactive）：在 inactive 目录中原地更新，保留 enabled 状态
  */
 export function updateSkillFromSource(
   targetSlug: string,

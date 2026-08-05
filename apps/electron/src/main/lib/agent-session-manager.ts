@@ -24,6 +24,7 @@ import {
 } from './config-paths'
 import {
   ensureAgentWorkspaceWritableRoot,
+  ensureAgentWorkspaceContextDir,
   getAgentWorkspace,
   getProjectFilesPath,
   listAgentWorkspaces,
@@ -320,6 +321,9 @@ export function createAgentSession(
       // .context 是 Copis 的会话工作台，本地项目同样需要。
       const contextDir = join(sessionDir, '.context')
       if (!existsSync(contextDir)) mkdirSync(contextDir, { recursive: true })
+
+      // Pi 新会话默认在项目根 cwd 工作，项目级 Context 也必须先存在。
+      ensureAgentWorkspaceContextDir(ws)
     }
   }
 

@@ -34,6 +34,9 @@ export * from './environment'
 // 第三方安装包（Git、Node.js 等）相关类型
 export * from './installer'
 
+// 可独立安装和更新的 Copis 功能模块
+export * from './functional-module'
+
 // GitHub Release 相关类型
 export * from './github'
 

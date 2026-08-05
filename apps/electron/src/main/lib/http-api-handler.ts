@@ -1,3 +1,4 @@
+import { app } from 'electron'
 import type { WorkingApiClient } from './working-api-client'
 import { getWorkingApiClient } from './working-api-service'
 import { getSettings, updateSettings } from './settings-service'
@@ -21,6 +22,7 @@ import {
   COPIS_WORKING_EXPERT_MODEL_ID,
   COPIS_WORKING_FAST_MODEL_ID,
 } from '@copis/shared'
+import { resolveCopisHttpApiPort } from '@copis/shared/config'
 import type {
   AgentMessage,
   AgentRuntime,
@@ -41,7 +43,10 @@ import type {
 } from '@copis/shared'
 
 export const HTTP_API_HOST = '127.0.0.1'
-export const HTTP_API_PORT = 51730
+export const HTTP_API_PORT = resolveCopisHttpApiPort({
+  configuredPort: process.env.COPIS_HTTP_API_PORT,
+  isPackaged: app.isPackaged === true,
+})
 export const MAX_REQUEST_BODY_BYTES = 2 * 1024 * 1024
 
 export interface HttpApiRequest {
@@ -671,9 +676,18 @@ async function handleAgentRpcInternalRequest(
     if (typeof bodyRecord.stoppedByUser !== 'boolean') {
       throw new HttpApiRequestError('Agent RPC 完成状态不正确', 400, 'invalid_request')
     }
+    const resultSubtype = typeof bodyRecord.resultSubtype === 'string' ? bodyRecord.resultSubtype : undefined
+    const resultErrors = Array.isArray(bodyRecord.resultErrors)
+      ? bodyRecord.resultErrors.filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+      : undefined
     return {
       status: 200,
-      body: finalizeAgentRpcRun({ sessionId, stoppedByUser: bodyRecord.stoppedByUser }),
+      body: finalizeAgentRpcRun({
+        sessionId,
+        stoppedByUser: bodyRecord.stoppedByUser,
+        ...(resultSubtype ? { resultSubtype } : {}),
+        ...(resultErrors && resultErrors.length > 0 ? { resultErrors } : {}),
+      }),
     }
   }
 

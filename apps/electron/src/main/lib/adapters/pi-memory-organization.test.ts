@@ -5,6 +5,7 @@ import {
   calculatePiContextTokens,
   hasPiMemoryOrganizationSinceLatestCompaction,
   PI_MEMORY_ORGANIZATION_THRESHOLD_TOKENS,
+  shouldUsePiMemoryMaintenanceQueue,
   shouldStartPiMemoryOrganization,
 } from './pi-memory-organization'
 
@@ -52,6 +53,12 @@ function compactionEntry(id: string): SessionEntry {
 }
 
 describe('Pi 自动记忆整理阈值', () => {
+  test('Given可写策略且提供 maintenance runner When达到阈值 Then允许由队列执行整理', () => {
+    expect(shouldUsePiMemoryMaintenanceQueue({ memoryPolicy: 'writable', hasRunner: true })).toBe(true)
+    expect(shouldUsePiMemoryMaintenanceQueue({ memoryPolicy: 'visible', hasRunner: true })).toBe(false)
+    expect(shouldUsePiMemoryMaintenanceQueue({ memoryPolicy: 'writable', hasRunner: false })).toBe(false)
+  })
+
   test('Given usage.totalTokens 缺失 When 使用分项 usage Then 使用 Pi 兼容的回退计算', () => {
     const message = assistantMessage({
       usage: {

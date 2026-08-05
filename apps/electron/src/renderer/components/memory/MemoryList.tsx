@@ -11,6 +11,12 @@ const KIND_LABELS: Record<MemoryEntry['kind'], string> = {
   scratch: '草稿',
 }
 
+const SOURCE_LABELS: Record<MemoryEntry['source'], string> = {
+  agent: 'Agent',
+  user: '用户',
+  import: '导入',
+}
+
 function formatUpdatedAt(timestamp: number): string {
   return new Intl.DateTimeFormat('zh-CN', {
     month: 'short',
@@ -68,6 +74,8 @@ export function MemoryList({ entries, selectedId, loading, query, onSelect }: Me
                   <span>{entry.scope === 'user' ? '用户' : '工作区'}</span>
                   <span aria-hidden="true">·</span>
                   <span>{KIND_LABELS[entry.kind]}</span>
+                  <span aria-hidden="true">·</span>
+                  <span>{SOURCE_LABELS[entry.source]}</span>
                   {entry.archived && (
                     <>
                       <span aria-hidden="true">·</span>

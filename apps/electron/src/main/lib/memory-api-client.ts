@@ -1,0 +1,173 @@
+import { app } from 'electron'
+import type {
+  MemoryCaptureBatchInput,
+  MemoryCaptureBatchResponse,
+  MemoryCaptureResponse,
+  MemoryContextInput,
+  MemoryContextResponse,
+  MemoryEntry,
+  MemoryMaintenanceApplyInput,
+  MemoryMaintenanceApplyResponse,
+  MemoryMaintenanceState,
+  MemoryListResponse,
+  MemoryRecallInput,
+  MemoryRecallResponse,
+} from '@copis/shared'
+import { resolveCopisHttpApiPort } from '@copis/shared/config'
+
+const MEMORY_API_BASE_URL = `http://127.0.0.1:${resolveCopisHttpApiPort({
+  configuredPort: process.env.COPIS_HTTP_API_PORT,
+  isPackaged: app.isPackaged === true,
+})}`
+
+export interface MemoryAgentCaptureInput {
+  workspaceSlug: string
+  kind: MemoryCaptureResponse['entry']['kind']
+  title: string
+  content: string
+  tags?: string[]
+}
+
+export interface MemoryAgentRewriteInput {
+  workspaceSlug: string
+  title?: string
+  content?: string
+  tags?: string[]
+  expectedRevision: number
+}
+
+export interface MemoryAgentListInput {
+  workspaceSlug?: string
+  includeArchived?: boolean
+  limit?: number
+}
+
+interface MemoryApiErrorPayload {
+  error?: unknown
+  code?: unknown
+  current?: unknown
+}
+
+export class MemoryApiClientError extends Error {
+  readonly status: number
+  readonly code: string
+  readonly payload: unknown
+  readonly current?: MemoryEntry
+
+  constructor(message: string, status: number, code: string, payload: unknown) {
+    super(message)
+    this.name = 'MemoryApiClientError'
+    this.status = status
+    this.code = code
+    this.payload = payload
+    const current = isRecord(payload) && isMemoryEntry(payload.current) ? payload.current : undefined
+    if (current) this.current = current
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function isMemoryEntry(value: unknown): value is MemoryEntry {
+  return isRecord(value)
+    && typeof value.id === 'string'
+    && typeof value.revision === 'number'
+    && typeof value.content === 'string'
+}
+
+async function readPayload(response: Response): Promise<unknown> {
+  const text = await response.text()
+  if (!text) return undefined
+  try {
+    return JSON.parse(text) as unknown
+  } catch {
+    return text
+  }
+}
+
+async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  let response: Response
+  try {
+    response = await fetch(`${MEMORY_API_BASE_URL}${path}`, init)
+  } catch (error) {
+    throw new MemoryApiClientError(
+      error instanceof Error ? error.message : 'Memory API 服务不可用',
+      503,
+      'memory_service_unavailable',
+      undefined,
+    )
+  }
+
+  const payload = await readPayload(response)
+  if (response.ok) return payload as T
+
+  const errorPayload = isRecord(payload) ? payload as MemoryApiErrorPayload : undefined
+  const message = typeof errorPayload?.error === 'string'
+    ? errorPayload.error
+    : `Memory API 请求失败（${response.status}）`
+  const code = typeof errorPayload?.code === 'string' ? errorPayload.code : 'memory_api_error'
+  throw new MemoryApiClientError(message, response.status, code, payload)
+}
+
+function jsonRequest<T>(path: string, body: unknown, signal?: AbortSignal): Promise<T> {
+  return request<T>(path, {
+    method: 'POST',
+    headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+    signal,
+  })
+}
+
+function memoryEntryPath(id: string, suffix: string, workspaceSlug?: string): string {
+  const query = workspaceSlug ? `?workspaceSlug=${encodeURIComponent(workspaceSlug)}` : ''
+  return `/api/memory/${encodeURIComponent(id)}${suffix}${query}`
+}
+
+export const memoryApiClient = {
+  list(input: MemoryAgentListInput = {}, signal?: AbortSignal): Promise<MemoryListResponse> {
+    const query = new URLSearchParams()
+    if (input.workspaceSlug) query.set('workspaceSlug', input.workspaceSlug)
+    if (input.includeArchived) query.set('includeArchived', 'true')
+    if (input.limit !== undefined) query.set('limit', String(input.limit))
+    const encoded = query.toString()
+    return request<MemoryListResponse>(`/api/memory${encoded ? `?${encoded}` : ''}`, { signal })
+  },
+
+  context(input: MemoryContextInput, signal?: AbortSignal): Promise<MemoryContextResponse> {
+    return jsonRequest<MemoryContextResponse>('/api/memory/context', input, signal)
+  },
+
+  recall(input: MemoryRecallInput, signal?: AbortSignal): Promise<MemoryRecallResponse> {
+    return jsonRequest<MemoryRecallResponse>('/api/memory/recall', input, signal)
+  },
+
+  read(id: string, workspaceSlug?: string, signal?: AbortSignal): Promise<MemoryEntry> {
+    return request<MemoryEntry>(memoryEntryPath(id, '/read', workspaceSlug), { signal })
+  },
+
+  capture(input: MemoryAgentCaptureInput, signal?: AbortSignal): Promise<MemoryCaptureResponse> {
+    return jsonRequest<MemoryCaptureResponse>('/api/memory/capture', input, signal)
+  },
+
+  captureBatch(input: MemoryCaptureBatchInput, signal?: AbortSignal): Promise<MemoryCaptureBatchResponse> {
+    return jsonRequest<MemoryCaptureBatchResponse>('/api/memory/capture-batch', input, signal)
+  },
+
+  rewrite(id: string, input: MemoryAgentRewriteInput, signal?: AbortSignal): Promise<MemoryEntry> {
+    return request<MemoryEntry>(memoryEntryPath(id, '/rewrite'), {
+      method: 'PATCH',
+      headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+      body: JSON.stringify(input),
+      signal,
+    })
+  },
+
+  maintenanceState(workspaceSlug: string, signal?: AbortSignal): Promise<MemoryMaintenanceState> {
+    return request<MemoryMaintenanceState>(`/api/memory/maintenance?workspaceSlug=${encodeURIComponent(workspaceSlug)}`, { signal })
+  },
+
+  applyMaintenance(input: MemoryMaintenanceApplyInput, signal?: AbortSignal): Promise<MemoryMaintenanceApplyResponse> {
+    return jsonRequest<MemoryMaintenanceApplyResponse>('/api/memory/maintenance/apply', input, signal)
+  },
+}

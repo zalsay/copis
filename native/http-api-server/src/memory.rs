@@ -1,8 +1,8 @@
+use rusqlite::{params, params_from_iter, types::Value, Connection, OptionalExtension, Row, Transaction, TransactionBehavior};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use std::fmt;
-use std::fs::{self, File};
-use std::io::{self, Write};
-use std::path::{Path, PathBuf};
+use std::fs;
+use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -11,22 +11,75 @@ pub const DEFAULT_LIST_LIMIT: usize = 20;
 pub const MAX_LIST_LIMIT: usize = 50;
 pub const DEFAULT_RECALL_LIMIT: usize = 8;
 pub const MAX_RECALL_LIMIT: usize = 8;
+pub const DEFAULT_CONTEXT_MAX_CHARS: usize = 6_000;
+pub const MAX_CONTEXT_MAX_CHARS: usize = 12_000;
+pub const SCRATCH_RETENTION_MS: u64 = 14 * 24 * 60 * 60 * 1_000;
+pub const SCRATCH_CONTEXT_WINDOW_MS: u64 = 2 * 24 * 60 * 60 * 1_000;
 
+const SCHEMA_VERSION: i64 = 1;
 const MAX_TITLE_BYTES: usize = 512;
 const MAX_CONTENT_BYTES: usize = 256 * 1024;
 const MAX_TAGS: usize = 32;
 const MAX_TAG_BYTES: usize = 128;
+const ENTRY_COLUMNS: &str = "id, scope, workspace_slug, kind, title, content, tags_json, source, created_at, updated_at, captured_at, revision, archived, expires_at";
+const SCHEMA_SQL: &str = r#"
+CREATE TABLE IF NOT EXISTS memory_entries (
+  id TEXT PRIMARY KEY,
+  scope TEXT NOT NULL CHECK (scope IN ('user', 'workspace')),
+  workspace_slug TEXT,
+  kind TEXT NOT NULL CHECK (kind IN ('fact', 'preference', 'decision', 'project', 'scratch')),
+  title TEXT NOT NULL,
+  content TEXT NOT NULL,
+  tags_json TEXT NOT NULL DEFAULT '[]',
+  source TEXT NOT NULL CHECK (source IN ('agent', 'user', 'import')),
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  captured_at INTEGER NOT NULL,
+  revision INTEGER NOT NULL CHECK (revision > 0),
+  archived INTEGER NOT NULL DEFAULT 0 CHECK (archived IN (0, 1)),
+  expires_at INTEGER,
+  CHECK (
+    (scope = 'user' AND workspace_slug IS NULL)
+    OR (scope = 'workspace' AND workspace_slug IS NOT NULL)
+  )
+);
+CREATE INDEX IF NOT EXISTS memory_entries_visible_idx
+  ON memory_entries(scope, workspace_slug, archived, updated_at DESC);
+CREATE INDEX IF NOT EXISTS memory_entries_scratch_retention_idx
+  ON memory_entries(kind, captured_at, archived);
+CREATE TABLE IF NOT EXISTS memory_revisions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  memory_id TEXT NOT NULL REFERENCES memory_entries(id) ON DELETE RESTRICT,
+  revision INTEGER NOT NULL CHECK (revision > 0),
+  operation TEXT NOT NULL CHECK (operation IN ('capture', 'rewrite', 'restore', 'archive', 'promote', 'consolidate')),
+  snapshot_json TEXT NOT NULL,
+  author TEXT,
+  created_at INTEGER NOT NULL,
+  UNIQUE(memory_id, revision)
+);
+CREATE INDEX IF NOT EXISTS memory_revisions_memory_idx
+  ON memory_revisions(memory_id, revision DESC);
+CREATE TABLE IF NOT EXISTS memory_maintenance_state (
+  scope_key TEXT PRIMARY KEY,
+  capture_count INTEGER NOT NULL DEFAULT 0,
+  last_consolidated_capture_count INTEGER NOT NULL DEFAULT 0,
+  last_promoted_at INTEGER,
+  last_cleanup_at INTEGER,
+  legacy_imported_at INTEGER,
+  updated_at INTEGER NOT NULL
+);
+"#;
 
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 
-#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum MemoryScope {
     User,
     Workspace,
 }
 
-#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum MemoryKind {
     Fact,
@@ -36,7 +89,7 @@ pub enum MemoryKind {
     Scratch,
 }
 
-#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum MemorySource {
     Agent,
@@ -44,13 +97,15 @@ pub enum MemorySource {
     Import,
 }
 
-#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum MemoryOperation {
     Capture,
     Rewrite,
     Restore,
     Archive,
+    Promote,
+    Consolidate,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -67,8 +122,12 @@ pub struct MemoryEntry {
     pub source: MemorySource,
     pub created_at: u64,
     pub updated_at: u64,
+    #[serde(default)]
+    pub captured_at: u64,
     pub revision: u64,
     pub archived: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expires_at: Option<u64>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -79,6 +138,8 @@ pub struct MemoryRevision {
     pub operation: MemoryOperation,
     pub snapshot: MemoryEntry,
     pub created_at: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub author: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -112,11 +173,44 @@ pub struct MemoryRestoreInput {
     pub revision: u64,
 }
 
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MemoryContextInput {
+    pub workspace_slug: Option<String>,
+    pub query: Option<String>,
+    pub max_chars: Option<usize>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MemoryCaptureBatchItem {
+    pub kind: MemoryKind,
+    pub title: String,
+    pub content: String,
+    #[serde(default)]
+    pub tags: Vec<String>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MemoryCaptureBatchInput {
+    pub workspace_slug: String,
+    pub items: Vec<MemoryCaptureBatchItem>,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MemoryCaptureResponse {
     pub entry: MemoryEntry,
     pub deduplicated: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MemoryCaptureBatchResponse {
+    pub entries: Vec<MemoryEntry>,
+    pub added: usize,
+    pub deduplicated: usize,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -158,11 +252,78 @@ pub struct MemoryRecallResponse {
     pub limit: usize,
 }
 
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MemoryContextResponse {
+    pub text: String,
+    pub entries: Vec<MemoryRecallItem>,
+    pub generated_at: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MemoryMaintenanceState {
+    pub workspace_slug: String,
+    pub capture_count: u64,
+    pub last_consolidated_capture_count: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_promoted_at: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_cleanup_at: Option<u64>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(tag = "operation", rename_all = "camelCase")]
+pub enum MemoryMaintenanceAction {
+    Promote {
+        id: String,
+        #[serde(rename = "expectedRevision")]
+        expected_revision: u64,
+        kind: MemoryKind,
+    },
+    Rewrite {
+        id: String,
+        #[serde(rename = "expectedRevision")]
+        expected_revision: u64,
+        title: Option<String>,
+        content: Option<String>,
+        tags: Option<Vec<String>>,
+        kind: Option<MemoryKind>,
+    },
+    Archive {
+        id: String,
+        #[serde(rename = "expectedRevision")]
+        expected_revision: u64,
+    },
+    Capture {
+        kind: MemoryKind,
+        title: String,
+        content: String,
+        tags: Vec<String>,
+    },
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MemoryMaintenanceApplyInput {
+    pub workspace_slug: String,
+    pub expected_capture_count: u64,
+    pub actions: Vec<MemoryMaintenanceAction>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MemoryMaintenanceApplyResponse {
+    pub entries: Vec<MemoryEntry>,
+    pub state: MemoryMaintenanceState,
+}
+
 #[derive(Clone, Debug)]
 pub enum MemoryError {
     Validation(String),
     NotFound,
     Conflict(MemoryEntry),
+    MaintenanceConflict(MemoryMaintenanceState),
     Storage(String),
 }
 
@@ -174,76 +335,142 @@ impl fmt::Display for MemoryError {
             Self::Conflict(entry) => {
                 write!(formatter, "记忆 revision 冲突（当前为 {}）", entry.revision)
             }
+            Self::MaintenanceConflict(state) => write!(
+                formatter,
+                "记忆维护状态冲突（当前 captureCount 为 {}）",
+                state.capture_count
+            ),
             Self::Storage(message) => formatter.write_str(message),
         }
     }
 }
 
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
-struct MemoryState {
-    entries: Vec<MemoryEntry>,
-    revisions: Vec<MemoryRevision>,
-}
-
 pub struct MemoryStore {
-    directory: PathBuf,
-    state: Mutex<MemoryState>,
+    connection: Mutex<Connection>,
 }
 
 impl MemoryStore {
     pub fn open(directory: impl AsRef<Path>) -> Result<Self, MemoryError> {
         let directory = directory.as_ref().to_path_buf();
         fs::create_dir_all(&directory).map_err(storage_error)?;
-        let entries = read_json_file::<Vec<MemoryEntry>>(&directory.join("entries.json"))?
-            .unwrap_or_default();
-        let revisions = read_json_lines::<MemoryRevision>(&directory.join("revisions.jsonl"))?;
+        let database_path = directory.join("memory.db");
+        let mut connection = Connection::open(&database_path).map_err(storage_error)?;
+        connection.busy_timeout(std::time::Duration::from_secs(5)).map_err(storage_error)?;
+        connection
+            .execute_batch(
+                "PRAGMA foreign_keys = ON;
+                 PRAGMA journal_mode = WAL;
+                 PRAGMA synchronous = NORMAL;
+                 PRAGMA busy_timeout = 5000;",
+            )
+            .map_err(storage_error)?;
+        initialize_database(&mut connection, &directory)?;
         Ok(Self {
-            directory,
-            state: Mutex::new(MemoryState { entries, revisions }),
+            connection: Mutex::new(connection),
         })
+    }
+
+    pub fn integrity_check(&self) -> Result<(), MemoryError> {
+        let connection = self.lock_connection()?;
+        let result: String = connection
+            .pragma_query_value(None, "integrity_check", |row| row.get(0))
+            .map_err(storage_error)?;
+        if result == "ok" {
+            Ok(())
+        } else {
+            Err(MemoryError::Storage(format!("SQLite integrity_check 失败: {}", result)))
+        }
     }
 
     pub fn capture(&self, input: MemoryCaptureInput) -> Result<MemoryCaptureResponse, MemoryError> {
         let input = normalize_capture_input(input)?;
-        let mut state = self.lock_state()?;
-        let normalized_content = normalize_for_match(&input.content);
-        if let Some(entry) = state.entries.iter().find(|entry| {
-            !entry.archived
-                && same_scope(entry, &input.scope, input.workspace_slug.as_deref())
-                && normalize_for_match(&entry.content) == normalized_content
-        }) {
+        let mut connection = self.lock_connection_mut()?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(storage_error)?;
+        if let Some(entry) = find_duplicate(&transaction, &input)? {
+            transaction.commit().map_err(storage_error)?;
             return Ok(MemoryCaptureResponse {
-                entry: entry.clone(),
+                entry,
                 deduplicated: true,
             });
         }
 
-        let now = now_millis();
-        let entry = MemoryEntry {
-            id: format!("memory-{}-{}", now, NEXT_ID.fetch_add(1, Ordering::Relaxed)),
-            scope: input.scope,
-            workspace_slug: input.workspace_slug,
-            kind: input.kind,
-            title: input.title,
-            content: input.content,
-            tags: input.tags,
-            source: input.source,
-            created_at: now,
-            updated_at: now,
-            revision: 1,
-            archived: false,
-        };
-        let previous = state.clone();
-        state.entries.push(entry.clone());
-        push_revision(&mut state, &entry, MemoryOperation::Capture);
-        if let Err(error) = self.persist_state(&state) {
-            *state = previous;
-            return Err(error);
-        }
-
+        let entry = new_entry(
+            input.scope,
+            input.workspace_slug,
+            input.kind,
+            input.title,
+            input.content,
+            input.tags,
+            input.source,
+        );
+        insert_entry(&transaction, &entry)?;
+        insert_revision(&transaction, &entry, MemoryOperation::Capture, None)?;
+        increment_capture_count_if_scratch(&transaction, &entry)?;
+        transaction.commit().map_err(storage_error)?;
         Ok(MemoryCaptureResponse {
             entry,
             deduplicated: false,
+        })
+    }
+
+    pub fn capture_batch(
+        &self,
+        input: MemoryCaptureBatchInput,
+    ) -> Result<MemoryCaptureBatchResponse, MemoryError> {
+        let workspace_slug = normalize_workspace_slug(Some(input.workspace_slug))?
+            .ok_or_else(|| MemoryError::Validation("workspaceSlug 参数不正确".to_string()))?;
+        if input.items.is_empty() {
+            return Err(MemoryError::Validation("items 不能为空".to_string()));
+        }
+        if input.items.len() > MAX_LIST_LIMIT {
+            return Err(MemoryError::Validation("items 数量过多".to_string()));
+        }
+
+        let mut connection = self.lock_connection_mut()?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(storage_error)?;
+        let mut entries = Vec::with_capacity(input.items.len());
+        let mut added = 0;
+        let mut deduplicated = 0;
+        for item in input.items {
+            let normalized = MemoryCaptureInput {
+                workspace_slug: Some(workspace_slug.clone()),
+                scope: MemoryScope::Workspace,
+                kind: item.kind,
+                title: item.title,
+                content: item.content,
+                tags: item.tags,
+                source: MemorySource::Agent,
+            };
+            let normalized = normalize_capture_input(normalized)?;
+            if let Some(existing) = find_duplicate(&transaction, &normalized)? {
+                deduplicated += 1;
+                entries.push(existing);
+                continue;
+            }
+            let entry = new_entry(
+                normalized.scope,
+                normalized.workspace_slug,
+                normalized.kind,
+                normalized.title,
+                normalized.content,
+                normalized.tags,
+                normalized.source,
+            );
+            insert_entry(&transaction, &entry)?;
+            insert_revision(&transaction, &entry, MemoryOperation::Capture, None)?;
+            increment_capture_count_if_scratch(&transaction, &entry)?;
+            added += 1;
+            entries.push(entry);
+        }
+        transaction.commit().map_err(storage_error)?;
+        Ok(MemoryCaptureBatchResponse {
+            entries,
+            added,
+            deduplicated,
         })
     }
 
@@ -265,22 +492,42 @@ impl MemoryStore {
             ));
         }
 
-        let state = self.lock_state()?;
-        let mut entries: Vec<MemoryEntry> = state
-            .entries
-            .iter()
-            .filter(|entry| is_visible(entry, workspace_slug))
-            .filter(|entry| include_archived || !entry.archived)
-            .filter(|entry| scope.as_ref().is_none_or(|value| &entry.scope == value))
-            .filter(|entry| kind.as_ref().is_none_or(|value| &entry.kind == value))
-            .filter(|entry| {
-                query
-                    .as_deref()
-                    .is_none_or(|value| matches_query(entry, value))
-            })
-            .cloned()
-            .collect();
-        entries.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
+        let connection = self.lock_connection()?;
+        let mut sql = format!("SELECT {} FROM memory_entries WHERE 1=1", ENTRY_COLUMNS);
+        let mut values = Vec::<Value>::new();
+        if let Some(workspace_slug) = workspace_slug {
+            sql.push_str(" AND (scope = 'user' OR (scope = 'workspace' AND workspace_slug = ?))");
+            values.push(Value::Text(workspace_slug.to_string()));
+        } else {
+            sql.push_str(" AND scope = 'user'");
+        }
+        if !include_archived {
+            sql.push_str(" AND archived = 0");
+        }
+        if let Some(scope) = scope {
+            sql.push_str(" AND scope = ?");
+            values.push(Value::Text(scope_name(scope).to_string()));
+        }
+        if let Some(kind) = kind {
+            sql.push_str(" AND kind = ?");
+            values.push(Value::Text(kind_name(kind).to_string()));
+        }
+        sql.push_str(" ORDER BY updated_at DESC, id DESC");
+
+        let mut statement = connection.prepare(&sql).map_err(storage_error)?;
+        let rows = statement
+            .query_map(params_from_iter(values), entry_from_row)
+            .map_err(storage_error)?;
+        let mut entries = Vec::new();
+        for row in rows {
+            let entry = row.map_err(storage_error)?;
+            if query
+                .as_deref()
+                .is_none_or(|value| matches_query(&entry, value))
+            {
+                entries.push(entry);
+            }
+        }
         let total = entries.len();
         entries.truncate(limit);
         Ok(MemoryListResponse {
@@ -308,15 +555,73 @@ impl MemoryStore {
         })
     }
 
+    pub fn context(
+        &self,
+        input: MemoryContextInput,
+    ) -> Result<MemoryContextResponse, MemoryError> {
+        validate_workspace_context(input.workspace_slug.as_deref())?;
+        let max_chars = input.max_chars.unwrap_or(DEFAULT_CONTEXT_MAX_CHARS);
+        if max_chars == 0 || max_chars > MAX_CONTEXT_MAX_CHARS {
+            return Err(MemoryError::Validation(format!(
+                "maxChars 必须在 1 到 {} 之间",
+                MAX_CONTEXT_MAX_CHARS
+            )));
+        }
+        let query = input.query.as_deref().map(normalize_query).transpose()?;
+        let list = self.list(
+            input.workspace_slug.as_deref(),
+            query.as_deref(),
+            None,
+            None,
+            false,
+            MAX_LIST_LIMIT,
+        )?;
+        let now = now_millis();
+        let mut entries: Vec<MemoryEntry> = list
+            .entries
+            .into_iter()
+            .filter(|entry| {
+                entry.kind != MemoryKind::Scratch
+                    || now.saturating_sub(entry.captured_at) <= SCRATCH_CONTEXT_WINDOW_MS
+            })
+            .collect();
+        entries.sort_by_key(|entry| {
+            (
+                entry.kind == MemoryKind::Scratch,
+                std::cmp::Reverse(entry.updated_at),
+            )
+        });
+
+        let mut text = String::new();
+        let mut included = Vec::new();
+        for entry in entries {
+            let line = format!(
+                "- [{}] {}: {}",
+                kind_name(entry.kind),
+                entry.title,
+                normalize_for_display(&entry.content),
+            );
+            let next_len = text.chars().count() + line.chars().count() + usize::from(!text.is_empty());
+            if next_len > max_chars {
+                break;
+            }
+            if !text.is_empty() {
+                text.push('\n');
+            }
+            text.push_str(&line);
+            included.push(to_recall_item(&entry));
+        }
+        Ok(MemoryContextResponse {
+            text,
+            entries: included,
+            generated_at: now,
+        })
+    }
+
     pub fn get(&self, id: &str, workspace_slug: Option<&str>) -> Result<MemoryEntry, MemoryError> {
         validate_workspace_context(workspace_slug)?;
-        let state = self.lock_state()?;
-        state
-            .entries
-            .iter()
-            .find(|entry| entry.id == id && is_visible(entry, workspace_slug))
-            .cloned()
-            .ok_or(MemoryError::NotFound)
+        let connection = self.lock_connection()?;
+        query_entry(&connection, id, workspace_slug, true)?.ok_or(MemoryError::NotFound)
     }
 
     pub fn rewrite(&self, id: &str, input: MemoryRewriteInput) -> Result<MemoryEntry, MemoryError> {
@@ -330,27 +635,21 @@ impl MemoryStore {
                 "至少提供一个需要修改的字段".to_string(),
             ));
         }
-        let title = input.title.map(|value| validate_title(value)).transpose()?;
-        let content = input
-            .content
-            .map(|value| validate_content(value))
-            .transpose()?;
+        let title = input.title.map(validate_title).transpose()?;
+        let content = input.content.map(validate_content).transpose()?;
         let tags = input.tags.map(validate_tags).transpose()?;
-        let mut state = self.lock_state()?;
-        let index = state
-            .entries
-            .iter()
-            .position(|entry| entry.id == id && is_visible(entry, input.workspace_slug.as_deref()))
+        let mut connection = self.lock_connection_mut()?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(storage_error)?;
+        let mut entry = query_entry_transaction(&transaction, id, input.workspace_slug.as_deref(), true)?
             .ok_or(MemoryError::NotFound)?;
-        if state.entries[index].archived {
+        if entry.archived {
             return Err(MemoryError::NotFound);
         }
-        if state.entries[index].revision != input.expected_revision {
-            return Err(MemoryError::Conflict(state.entries[index].clone()));
+        if entry.revision != input.expected_revision {
+            return Err(MemoryError::Conflict(entry));
         }
-
-        let previous = state.clone();
-        let entry = &mut state.entries[index];
         if let Some(title) = title {
             entry.title = title;
         }
@@ -359,19 +658,17 @@ impl MemoryStore {
         }
         if let Some(kind) = input.kind {
             entry.kind = kind;
+            entry.expires_at = expires_at_for(kind, entry.captured_at);
         }
         if let Some(tags) = tags {
             entry.tags = tags;
         }
         entry.updated_at = now_millis();
         entry.revision += 1;
-        let updated = entry.clone();
-        push_revision(&mut state, &updated, MemoryOperation::Rewrite);
-        if let Err(error) = self.persist_state(&state) {
-            *state = previous;
-            return Err(error);
-        }
-        Ok(updated)
+        update_entry(&transaction, &entry)?;
+        insert_revision(&transaction, &entry, MemoryOperation::Rewrite, None)?;
+        transaction.commit().map_err(storage_error)?;
+        Ok(entry)
     }
 
     pub fn archive(
@@ -380,28 +677,22 @@ impl MemoryStore {
         workspace_slug: Option<&str>,
     ) -> Result<MemoryEntry, MemoryError> {
         validate_workspace_context(workspace_slug)?;
-        let mut state = self.lock_state()?;
-        let index = state
-            .entries
-            .iter()
-            .position(|entry| entry.id == id && is_visible(entry, workspace_slug))
+        let mut connection = self.lock_connection_mut()?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(storage_error)?;
+        let mut entry = query_entry_transaction(&transaction, id, workspace_slug, true)?
             .ok_or(MemoryError::NotFound)?;
-        if state.entries[index].archived {
+        if entry.archived {
             return Err(MemoryError::NotFound);
         }
-
-        let previous = state.clone();
-        let entry = &mut state.entries[index];
         entry.archived = true;
         entry.updated_at = now_millis();
         entry.revision += 1;
-        let archived = entry.clone();
-        push_revision(&mut state, &archived, MemoryOperation::Archive);
-        if let Err(error) = self.persist_state(&state) {
-            *state = previous;
-            return Err(error);
-        }
-        Ok(archived)
+        update_entry(&transaction, &entry)?;
+        insert_revision(&transaction, &entry, MemoryOperation::Archive, None)?;
+        transaction.commit().map_err(storage_error)?;
+        Ok(entry)
     }
 
     pub fn history(
@@ -410,15 +701,17 @@ impl MemoryStore {
         workspace_slug: Option<&str>,
     ) -> Result<Vec<MemoryRevision>, MemoryError> {
         let entry = self.get(id, workspace_slug)?;
-        let state = self.lock_state()?;
-        let mut revisions: Vec<MemoryRevision> = state
-            .revisions
-            .iter()
-            .filter(|revision| revision.memory_id == entry.id)
-            .cloned()
-            .collect();
-        revisions.sort_by(|left, right| right.revision.cmp(&left.revision));
-        Ok(revisions)
+        let connection = self.lock_connection()?;
+        let mut statement = connection
+            .prepare(
+                "SELECT memory_id, revision, operation, snapshot_json, author, created_at
+                 FROM memory_revisions WHERE memory_id = ? ORDER BY revision DESC",
+            )
+            .map_err(storage_error)?;
+        let rows = statement
+            .query_map(params![entry.id], revision_from_row)
+            .map_err(storage_error)?;
+        rows.map(|row| row.map_err(storage_error)).collect()
     }
 
     pub fn restore(&self, id: &str, input: MemoryRestoreInput) -> Result<MemoryEntry, MemoryError> {
@@ -426,52 +719,47 @@ impl MemoryStore {
         if input.revision == 0 {
             return Err(MemoryError::Validation("revision 必须大于 0".to_string()));
         }
-        let mut state = self.lock_state()?;
-        let index = state
-            .entries
-            .iter()
-            .position(|entry| entry.id == id && is_visible(entry, input.workspace_slug.as_deref()))
+        let mut connection = self.lock_connection_mut()?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(storage_error)?;
+        let mut entry = query_entry_transaction(&transaction, id, input.workspace_slug.as_deref(), true)?
             .ok_or(MemoryError::NotFound)?;
-        let snapshot = state
-            .revisions
-            .iter()
-            .find(|revision| revision.memory_id == id && revision.revision == input.revision)
-            .map(|revision| revision.snapshot.clone())
-            .ok_or(MemoryError::NotFound)?;
+        let snapshot = transaction
+            .query_row(
+                "SELECT snapshot_json FROM memory_revisions WHERE memory_id = ? AND revision = ?",
+                params![id, input.revision as i64],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(storage_error)?
+            .ok_or(MemoryError::NotFound)
+            .and_then(|value| serde_json::from_str::<MemoryEntry>(&value).map_err(storage_error))?;
 
-        let previous = state.clone();
-        let current_revision = state.entries[index].revision;
-        let entry = &mut state.entries[index];
         entry.kind = snapshot.kind;
         entry.title = snapshot.title;
         entry.content = snapshot.content;
         entry.tags = snapshot.tags;
         entry.source = snapshot.source;
         entry.archived = false;
+        entry.expires_at = expires_at_for(entry.kind, entry.captured_at);
         entry.updated_at = now_millis();
-        entry.revision = current_revision + 1;
-        let restored = entry.clone();
-        push_revision(&mut state, &restored, MemoryOperation::Restore);
-        if let Err(error) = self.persist_state(&state) {
-            *state = previous;
-            return Err(error);
-        }
-        Ok(restored)
+        entry.revision += 1;
+        update_entry(&transaction, &entry)?;
+        insert_revision(&transaction, &entry, MemoryOperation::Restore, None)?;
+        transaction.commit().map_err(storage_error)?;
+        Ok(entry)
     }
 
     pub fn stats(&self, workspace_slug: Option<&str>) -> Result<MemoryStats, MemoryError> {
         validate_workspace_context(workspace_slug)?;
-        let state = self.lock_state()?;
+        let entries = self.list(workspace_slug, None, None, None, true, MAX_LIST_LIMIT)?;
         let mut stats = MemoryStats {
             user_count: 0,
             workspace_count: 0,
             archived_count: 0,
         };
-        for entry in state
-            .entries
-            .iter()
-            .filter(|entry| is_visible(entry, workspace_slug))
-        {
+        for entry in entries.entries {
             if entry.archived {
                 stats.archived_count += 1;
             } else if entry.scope == MemoryScope::User {
@@ -483,33 +771,735 @@ impl MemoryStore {
         Ok(stats)
     }
 
-    fn lock_state(&self) -> Result<std::sync::MutexGuard<'_, MemoryState>, MemoryError> {
-        self.state
+    pub fn maintenance_state(&self, workspace_slug: &str) -> Result<MemoryMaintenanceState, MemoryError> {
+        let workspace_slug = normalize_workspace_slug(Some(workspace_slug.to_string()))?
+            .ok_or_else(|| MemoryError::Validation("workspaceSlug 参数不正确".to_string()))?;
+        let connection = self.lock_connection()?;
+        read_maintenance_state_connection(&connection, &workspace_slug)
+    }
+
+    pub fn apply_maintenance(
+        &self,
+        input: MemoryMaintenanceApplyInput,
+    ) -> Result<MemoryMaintenanceApplyResponse, MemoryError> {
+        let workspace_slug = normalize_workspace_slug(Some(input.workspace_slug))?
+            .ok_or_else(|| MemoryError::Validation("workspaceSlug 参数不正确".to_string()))?;
+        if input.actions.len() > MAX_LIST_LIMIT {
+            return Err(MemoryError::Validation("维护 actions 数量过多".to_string()));
+        }
+
+        let mut connection = self.lock_connection_mut()?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(storage_error)?;
+        let current_state = read_maintenance_state_transaction(&transaction, &workspace_slug)?;
+        if current_state.capture_count != input.expected_capture_count {
+            return Err(MemoryError::MaintenanceConflict(current_state));
+        }
+
+        let mut affected = Vec::new();
+        for action in input.actions {
+            match action {
+                MemoryMaintenanceAction::Promote {
+                    id,
+                    expected_revision,
+                    kind,
+                } => {
+                    if kind == MemoryKind::Scratch {
+                        return Err(MemoryError::Validation(
+                            "promotion 不能将条目提升为 scratch".to_string(),
+                        ));
+                    }
+                    let mut entry = maintenance_entry(&transaction, &id, &workspace_slug)?;
+                    check_revision(&entry, expected_revision)?;
+                    entry.kind = kind;
+                    entry.expires_at = None;
+                    entry.updated_at = now_millis();
+                    entry.revision += 1;
+                    update_entry(&transaction, &entry)?;
+                    insert_revision(&transaction, &entry, MemoryOperation::Promote, Some("system"))?;
+                    affected.push(entry);
+                }
+                MemoryMaintenanceAction::Rewrite {
+                    id,
+                    expected_revision,
+                    title,
+                    content,
+                    tags,
+                    kind,
+                } => {
+                    if title.is_none() && content.is_none() && tags.is_none() && kind.is_none() {
+                        return Err(MemoryError::Validation(
+                            "维护 rewrite 至少需要一个字段".to_string(),
+                        ));
+                    }
+                    let title = title.map(validate_title).transpose()?;
+                    let content = content.map(validate_content).transpose()?;
+                    let tags = tags.map(validate_tags).transpose()?;
+                    let mut entry = maintenance_entry(&transaction, &id, &workspace_slug)?;
+                    check_revision(&entry, expected_revision)?;
+                    if let Some(title) = title {
+                        entry.title = title;
+                    }
+                    if let Some(content) = content {
+                        entry.content = content;
+                    }
+                    if let Some(tags) = tags {
+                        entry.tags = tags;
+                    }
+                    if let Some(kind) = kind {
+                        entry.kind = kind;
+                        entry.expires_at = expires_at_for(kind, entry.captured_at);
+                    }
+                    entry.updated_at = now_millis();
+                    entry.revision += 1;
+                    update_entry(&transaction, &entry)?;
+                    insert_revision(&transaction, &entry, MemoryOperation::Consolidate, Some("system"))?;
+                    affected.push(entry);
+                }
+                MemoryMaintenanceAction::Archive {
+                    id,
+                    expected_revision,
+                } => {
+                    let mut entry = maintenance_entry(&transaction, &id, &workspace_slug)?;
+                    check_revision(&entry, expected_revision)?;
+                    entry.archived = true;
+                    entry.updated_at = now_millis();
+                    entry.revision += 1;
+                    update_entry(&transaction, &entry)?;
+                    insert_revision(&transaction, &entry, MemoryOperation::Archive, Some("system"))?;
+                    affected.push(entry);
+                }
+                MemoryMaintenanceAction::Capture {
+                    kind,
+                    title,
+                    content,
+                    tags,
+                } => {
+                    if kind == MemoryKind::Scratch {
+                        return Err(MemoryError::Validation(
+                            "维护 capture 不能创建 scratch，请使用 capture-batch".to_string(),
+                        ));
+                    }
+                    let input = normalize_capture_input(MemoryCaptureInput {
+                        workspace_slug: Some(workspace_slug.clone()),
+                        scope: MemoryScope::Workspace,
+                        kind,
+                        title,
+                        content,
+                        tags,
+                        source: MemorySource::Agent,
+                    })?;
+                    if let Some(existing) = find_duplicate(&transaction, &input)? {
+                        affected.push(existing);
+                        continue;
+                    }
+                    let entry = new_entry(
+                        input.scope,
+                        input.workspace_slug,
+                        input.kind,
+                        input.title,
+                        input.content,
+                        input.tags,
+                        input.source,
+                    );
+                    insert_entry(&transaction, &entry)?;
+                    insert_revision(&transaction, &entry, MemoryOperation::Consolidate, Some("system"))?;
+                    affected.push(entry);
+                }
+            }
+        }
+
+        let now = now_millis();
+        let expired = expired_scratch_entries(&transaction, &workspace_slug, now)?;
+        for mut entry in expired {
+            entry.archived = true;
+            entry.updated_at = now;
+            entry.revision += 1;
+            update_entry(&transaction, &entry)?;
+            insert_revision(&transaction, &entry, MemoryOperation::Archive, Some("system"))?;
+            affected.push(entry);
+        }
+
+        let scope_key = workspace_scope_key(&workspace_slug);
+        transaction
+            .execute(
+                "UPDATE memory_maintenance_state SET last_consolidated_capture_count = ?,
+                 last_promoted_at = ?, last_cleanup_at = ?, updated_at = ? WHERE scope_key = ?",
+                params![
+                    input.expected_capture_count as i64,
+                    now as i64,
+                    now as i64,
+                    now as i64,
+                    scope_key,
+                ],
+            )
+            .map_err(storage_error)?;
+        transaction.commit().map_err(storage_error)?;
+        drop(connection);
+
+        let state = self.maintenance_state(&workspace_slug)?;
+        Ok(MemoryMaintenanceApplyResponse { entries: affected, state })
+    }
+
+    fn lock_connection(&self) -> Result<std::sync::MutexGuard<'_, Connection>, MemoryError> {
+        self.connection
             .lock()
             .map_err(|_| MemoryError::Storage("记忆存储锁已损坏".to_string()))
     }
 
-    fn persist_state(&self, state: &MemoryState) -> Result<(), MemoryError> {
-        let entries = serde_json::to_vec_pretty(&state.entries).map_err(storage_error)?;
-        let revisions = state
-            .revisions
-            .iter()
-            .map(serde_json::to_string)
-            .collect::<Result<Vec<_>, _>>()
-            .map(|lines| {
-                if lines.is_empty() {
-                    String::new()
-                } else {
-                    format!("{}\n", lines.join("\n"))
-                }
-            })
-            .map_err(storage_error)?;
-        write_atomic(&self.directory.join("entries.json"), &entries).map_err(storage_error)?;
-        write_atomic(
-            self.directory.join("revisions.jsonl").as_path(),
-            revisions.as_bytes(),
+    fn lock_connection_mut(&self) -> Result<std::sync::MutexGuard<'_, Connection>, MemoryError> {
+        self.lock_connection()
+    }
+}
+
+fn initialize_database(connection: &mut Connection, directory: &Path) -> Result<(), MemoryError> {
+    let version: i64 = connection
+        .pragma_query_value(None, "user_version", |row| row.get(0))
+        .map_err(storage_error)?;
+    if version > SCHEMA_VERSION {
+        return Err(MemoryError::Storage(format!(
+            "Memory SQLite schema 版本 {} 高于当前版本 {}",
+            version, SCHEMA_VERSION
+        )));
+    }
+
+    let transaction = connection
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(storage_error)?;
+    transaction.execute_batch(SCHEMA_SQL).map_err(storage_error)?;
+    let existing_count: i64 = transaction
+        .query_row("SELECT COUNT(*) FROM memory_entries", [], |row| row.get(0))
+        .map_err(storage_error)?;
+    let imported_at: Option<i64> = transaction
+        .query_row(
+            "SELECT legacy_imported_at FROM memory_maintenance_state WHERE scope_key = '__global__'",
+            [],
+            |row| row.get(0),
         )
-        .map_err(storage_error)
+        .optional()
+        .map_err(storage_error)?
+        .flatten();
+
+    if existing_count == 0 && imported_at.is_none() {
+        let legacy_entries = read_json_file::<Vec<MemoryEntry>>(&directory.join("entries.json"))?
+            .unwrap_or_default();
+        let legacy_revisions = read_json_lines::<MemoryRevision>(&directory.join("revisions.jsonl"))?;
+        let now = now_millis();
+        for mut entry in legacy_entries {
+            normalize_legacy_entry(&mut entry, now);
+            insert_entry(&transaction, &entry)?;
+        }
+        for mut revision in legacy_revisions {
+            normalize_legacy_entry(&mut revision.snapshot, now);
+            insert_revision_record(&transaction, &revision)?;
+        }
+    }
+
+    let now = now_millis();
+    transaction
+        .execute(
+            "INSERT INTO memory_maintenance_state
+             (scope_key, capture_count, last_consolidated_capture_count, legacy_imported_at, updated_at)
+             VALUES ('__global__', 0, 0, ?, ?)
+             ON CONFLICT(scope_key) DO UPDATE SET
+               legacy_imported_at = COALESCE(memory_maintenance_state.legacy_imported_at, excluded.legacy_imported_at),
+               updated_at = excluded.updated_at",
+            params![now as i64, now as i64],
+        )
+        .map_err(storage_error)?;
+    transaction
+        .pragma_update(None, "user_version", SCHEMA_VERSION)
+        .map_err(storage_error)?;
+    transaction.commit().map_err(storage_error)
+}
+
+fn normalize_legacy_entry(entry: &mut MemoryEntry, now: u64) {
+    if entry.captured_at == 0 {
+        entry.captured_at = if entry.created_at > 0 { entry.created_at } else { now };
+    }
+    if entry.expires_at.is_none() {
+        entry.expires_at = expires_at_for(entry.kind, entry.captured_at);
+    }
+}
+
+fn new_entry(
+    scope: MemoryScope,
+    workspace_slug: Option<String>,
+    kind: MemoryKind,
+    title: String,
+    content: String,
+    tags: Vec<String>,
+    source: MemorySource,
+) -> MemoryEntry {
+    let now = now_millis();
+    MemoryEntry {
+        id: format!("memory-{}-{}", now, NEXT_ID.fetch_add(1, Ordering::Relaxed)),
+        scope,
+        workspace_slug,
+        kind,
+        title,
+        content,
+        tags,
+        source,
+        created_at: now,
+        updated_at: now,
+        captured_at: now,
+        revision: 1,
+        archived: false,
+        expires_at: expires_at_for(kind, now),
+    }
+}
+
+fn insert_entry(transaction: &Transaction<'_>, entry: &MemoryEntry) -> Result<(), MemoryError> {
+    let tags_json = serde_json::to_string(&entry.tags).map_err(storage_error)?;
+    transaction
+        .execute(
+            &format!(
+                "INSERT INTO memory_entries ({}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                ENTRY_COLUMNS
+            ),
+            params![
+                entry.id,
+                scope_name(entry.scope),
+                entry.workspace_slug,
+                kind_name(entry.kind),
+                entry.title,
+                entry.content,
+                tags_json,
+                source_name(entry.source),
+                entry.created_at as i64,
+                entry.updated_at as i64,
+                entry.captured_at as i64,
+                entry.revision as i64,
+                i64::from(entry.archived),
+                entry.expires_at.map(|value| value as i64),
+            ],
+        )
+        .map_err(storage_error)?;
+    Ok(())
+}
+
+fn update_entry(transaction: &Transaction<'_>, entry: &MemoryEntry) -> Result<(), MemoryError> {
+    let tags_json = serde_json::to_string(&entry.tags).map_err(storage_error)?;
+    transaction
+        .execute(
+            "UPDATE memory_entries SET scope = ?, workspace_slug = ?, kind = ?, title = ?, content = ?,
+             tags_json = ?, source = ?, created_at = ?, updated_at = ?, captured_at = ?, revision = ?,
+             archived = ?, expires_at = ? WHERE id = ?",
+            params![
+                scope_name(entry.scope),
+                entry.workspace_slug,
+                kind_name(entry.kind),
+                entry.title,
+                entry.content,
+                tags_json,
+                source_name(entry.source),
+                entry.created_at as i64,
+                entry.updated_at as i64,
+                entry.captured_at as i64,
+                entry.revision as i64,
+                i64::from(entry.archived),
+                entry.expires_at.map(|value| value as i64),
+                entry.id,
+            ],
+        )
+        .map_err(storage_error)?;
+    Ok(())
+}
+
+fn insert_revision(
+    transaction: &Transaction<'_>,
+    entry: &MemoryEntry,
+    operation: MemoryOperation,
+    author: Option<&str>,
+) -> Result<(), MemoryError> {
+    let snapshot_json = serde_json::to_string(entry).map_err(storage_error)?;
+    transaction
+        .execute(
+            "INSERT INTO memory_revisions (memory_id, revision, operation, snapshot_json, author, created_at)
+             VALUES (?, ?, ?, ?, ?, ?)",
+            params![
+                entry.id,
+                entry.revision as i64,
+                operation_name(operation),
+                snapshot_json,
+                author,
+                now_millis() as i64,
+            ],
+        )
+        .map_err(storage_error)?;
+    Ok(())
+}
+
+fn insert_revision_record(
+    transaction: &Transaction<'_>,
+    revision: &MemoryRevision,
+) -> Result<(), MemoryError> {
+    let snapshot_json = serde_json::to_string(&revision.snapshot).map_err(storage_error)?;
+    transaction
+        .execute(
+            "INSERT INTO memory_revisions (memory_id, revision, operation, snapshot_json, author, created_at)
+             VALUES (?, ?, ?, ?, ?, ?)",
+            params![
+                revision.memory_id,
+                revision.revision as i64,
+                operation_name(revision.operation),
+                snapshot_json,
+                revision.author,
+                revision.created_at as i64,
+            ],
+        )
+        .map_err(storage_error)?;
+    Ok(())
+}
+
+fn read_maintenance_state_connection(
+    connection: &Connection,
+    workspace_slug: &str,
+) -> Result<MemoryMaintenanceState, MemoryError> {
+    let scope_key = workspace_scope_key(workspace_slug);
+    let row = connection
+        .query_row(
+            "SELECT capture_count, last_consolidated_capture_count, last_promoted_at, last_cleanup_at
+             FROM memory_maintenance_state WHERE scope_key = ?",
+            params![scope_key],
+            maintenance_state_row,
+        )
+        .optional()
+        .map_err(storage_error)?
+        .unwrap_or((0, 0, None, None));
+    Ok(memory_maintenance_state(workspace_slug, row))
+}
+
+fn read_maintenance_state_transaction(
+    transaction: &Transaction<'_>,
+    workspace_slug: &str,
+) -> Result<MemoryMaintenanceState, MemoryError> {
+    let scope_key = workspace_scope_key(workspace_slug);
+    let row = transaction
+        .query_row(
+            "SELECT capture_count, last_consolidated_capture_count, last_promoted_at, last_cleanup_at
+             FROM memory_maintenance_state WHERE scope_key = ?",
+            params![scope_key],
+            maintenance_state_row,
+        )
+        .optional()
+        .map_err(storage_error)?
+        .unwrap_or((0, 0, None, None));
+    Ok(memory_maintenance_state(workspace_slug, row))
+}
+
+fn maintenance_state_row(row: &Row<'_>) -> rusqlite::Result<(u64, u64, Option<u64>, Option<u64>)> {
+    Ok((
+        row.get::<_, i64>(0)? as u64,
+        row.get::<_, i64>(1)? as u64,
+        row.get::<_, Option<i64>>(2)?.map(|value| value as u64),
+        row.get::<_, Option<i64>>(3)?.map(|value| value as u64),
+    ))
+}
+
+fn memory_maintenance_state(
+    workspace_slug: &str,
+    row: (u64, u64, Option<u64>, Option<u64>),
+) -> MemoryMaintenanceState {
+    MemoryMaintenanceState {
+        workspace_slug: workspace_slug.to_string(),
+        capture_count: row.0,
+        last_consolidated_capture_count: row.1,
+        last_promoted_at: row.2,
+        last_cleanup_at: row.3,
+    }
+}
+
+fn maintenance_entry(
+    transaction: &Transaction<'_>,
+    id: &str,
+    workspace_slug: &str,
+) -> Result<MemoryEntry, MemoryError> {
+    let entry = query_entry_from_transaction(transaction, id, Some(workspace_slug), true)?
+        .ok_or(MemoryError::NotFound)?;
+    if entry.scope != MemoryScope::Workspace || entry.workspace_slug.as_deref() != Some(workspace_slug) {
+        return Err(MemoryError::NotFound);
+    }
+    Ok(entry)
+}
+
+fn check_revision(entry: &MemoryEntry, expected_revision: u64) -> Result<(), MemoryError> {
+    if entry.archived {
+        return Err(MemoryError::NotFound);
+    }
+    if entry.revision != expected_revision {
+        return Err(MemoryError::Conflict(entry.clone()));
+    }
+    Ok(())
+}
+
+fn expired_scratch_entries(
+    transaction: &Transaction<'_>,
+    workspace_slug: &str,
+    now: u64,
+) -> Result<Vec<MemoryEntry>, MemoryError> {
+    let mut statement = transaction
+        .prepare(&format!(
+            "SELECT {} FROM memory_entries
+             WHERE scope = 'workspace' AND workspace_slug = ? AND kind = 'scratch'
+               AND archived = 0 AND expires_at IS NOT NULL AND expires_at <= ?",
+            ENTRY_COLUMNS
+        ))
+        .map_err(storage_error)?;
+    let rows = statement
+        .query_map(params![workspace_slug, now as i64], entry_from_row)
+        .map_err(storage_error)?;
+    rows.map(|row| row.map_err(storage_error)).collect()
+}
+
+fn increment_capture_count_if_scratch(
+    transaction: &Transaction<'_>,
+    entry: &MemoryEntry,
+) -> Result<(), MemoryError> {
+    if entry.kind != MemoryKind::Scratch {
+        return Ok(());
+    }
+    let scope_key = match entry.scope {
+        MemoryScope::User => "user".to_string(),
+        MemoryScope::Workspace => workspace_scope_key(
+            entry
+                .workspace_slug
+                .as_deref()
+                .ok_or_else(|| MemoryError::Validation("workspaceSlug 参数不正确".to_string()))?,
+        ),
+    };
+    let now = now_millis() as i64;
+    transaction
+        .execute(
+            "INSERT INTO memory_maintenance_state
+             (scope_key, capture_count, last_consolidated_capture_count, updated_at)
+             VALUES (?, 1, 0, ?)
+             ON CONFLICT(scope_key) DO UPDATE SET
+               capture_count = memory_maintenance_state.capture_count + 1,
+               updated_at = excluded.updated_at",
+            params![scope_key, now],
+        )
+        .map_err(storage_error)?;
+    Ok(())
+}
+
+fn find_duplicate(
+    transaction: &Transaction<'_>,
+    input: &MemoryCaptureInput,
+) -> Result<Option<MemoryEntry>, MemoryError> {
+    let mut statement = transaction
+        .prepare(&format!(
+            "SELECT {} FROM memory_entries
+             WHERE archived = 0 AND scope = ? AND workspace_slug IS ?
+             ORDER BY updated_at DESC",
+            ENTRY_COLUMNS
+        ))
+        .map_err(storage_error)?;
+    let rows = statement
+        .query_map(
+            params![scope_name(input.scope), input.workspace_slug.as_deref()],
+            entry_from_row,
+        )
+        .map_err(storage_error)?;
+    let normalized_content = normalize_for_match(&input.content);
+    for row in rows {
+        let entry = row.map_err(storage_error)?;
+        if normalize_for_match(&entry.content) == normalized_content {
+            return Ok(Some(entry));
+        }
+    }
+    Ok(None)
+}
+
+fn query_entry(
+    connection: &Connection,
+    id: &str,
+    workspace_slug: Option<&str>,
+    include_archived: bool,
+) -> Result<Option<MemoryEntry>, MemoryError> {
+    query_entry_from_connection(connection, id, workspace_slug, include_archived)
+}
+
+fn query_entry_transaction(
+    transaction: &Transaction<'_>,
+    id: &str,
+    workspace_slug: Option<&str>,
+    include_archived: bool,
+) -> Result<Option<MemoryEntry>, MemoryError> {
+    query_entry_from_transaction(transaction, id, workspace_slug, include_archived)
+}
+
+fn query_entry_from_connection(
+    connection: &Connection,
+    id: &str,
+    workspace_slug: Option<&str>,
+    include_archived: bool,
+) -> Result<Option<MemoryEntry>, MemoryError> {
+    let mut sql = format!("SELECT {} FROM memory_entries WHERE id = ?", ENTRY_COLUMNS);
+    if let Some(workspace_slug) = workspace_slug {
+        sql.push_str(" AND (scope = 'user' OR (scope = 'workspace' AND workspace_slug = ?))");
+        if !include_archived {
+            sql.push_str(" AND archived = 0");
+        }
+        connection
+            .query_row(&sql, params![id, workspace_slug], entry_from_row)
+            .optional()
+            .map_err(storage_error)
+    } else {
+        sql.push_str(" AND scope = 'user'");
+        if !include_archived {
+            sql.push_str(" AND archived = 0");
+        }
+        connection
+            .query_row(&sql, params![id], entry_from_row)
+            .optional()
+            .map_err(storage_error)
+    }
+}
+
+fn query_entry_from_transaction(
+    transaction: &Transaction<'_>,
+    id: &str,
+    workspace_slug: Option<&str>,
+    include_archived: bool,
+) -> Result<Option<MemoryEntry>, MemoryError> {
+    let mut sql = format!("SELECT {} FROM memory_entries WHERE id = ?", ENTRY_COLUMNS);
+    if let Some(workspace_slug) = workspace_slug {
+        sql.push_str(" AND (scope = 'user' OR (scope = 'workspace' AND workspace_slug = ?))");
+        if !include_archived {
+            sql.push_str(" AND archived = 0");
+        }
+        transaction
+            .query_row(&sql, params![id, workspace_slug], entry_from_row)
+            .optional()
+            .map_err(storage_error)
+    } else {
+        sql.push_str(" AND scope = 'user'");
+        if !include_archived {
+            sql.push_str(" AND archived = 0");
+        }
+        transaction
+            .query_row(&sql, params![id], entry_from_row)
+            .optional()
+            .map_err(storage_error)
+    }
+}
+
+fn entry_from_row(row: &Row<'_>) -> rusqlite::Result<MemoryEntry> {
+    let scope = parse_scope(&row.get::<_, String>(1)?)?;
+    let kind = parse_kind(&row.get::<_, String>(3)?)?;
+    let source = parse_source(&row.get::<_, String>(7)?)?;
+    let tags_json: String = row.get(6)?;
+    let archived: i64 = row.get(12)?;
+    Ok(MemoryEntry {
+        id: row.get(0)?,
+        scope,
+        workspace_slug: row.get(2)?,
+        kind,
+        title: row.get(4)?,
+        content: row.get(5)?,
+        tags: serde_json::from_str(&tags_json).map_err(|error| rusqlite::Error::FromSqlConversionFailure(6, rusqlite::types::Type::Text, Box::new(error)))?,
+        source,
+        created_at: row.get::<_, i64>(8)? as u64,
+        updated_at: row.get::<_, i64>(9)? as u64,
+        captured_at: row.get::<_, i64>(10)? as u64,
+        revision: row.get::<_, i64>(11)? as u64,
+        archived: archived != 0,
+        expires_at: row.get::<_, Option<i64>>(13)?.map(|value| value as u64),
+    })
+}
+
+fn revision_from_row(row: &Row<'_>) -> rusqlite::Result<MemoryRevision> {
+    let operation = parse_operation(&row.get::<_, String>(2)?)?;
+    let snapshot_json: String = row.get(3)?;
+    let snapshot = serde_json::from_str(&snapshot_json).map_err(|error| {
+        rusqlite::Error::FromSqlConversionFailure(3, rusqlite::types::Type::Text, Box::new(error))
+    })?;
+    Ok(MemoryRevision {
+        memory_id: row.get(0)?,
+        revision: row.get::<_, i64>(1)? as u64,
+        operation,
+        snapshot,
+        author: row.get(4)?,
+        created_at: row.get::<_, i64>(5)? as u64,
+    })
+}
+
+fn parse_scope(value: &str) -> rusqlite::Result<MemoryScope> {
+    match value {
+        "user" => Ok(MemoryScope::User),
+        "workspace" => Ok(MemoryScope::Workspace),
+        _ => Err(rusqlite::Error::InvalidColumnType(1, "scope".to_string(), rusqlite::types::Type::Text)),
+    }
+}
+
+fn parse_kind(value: &str) -> rusqlite::Result<MemoryKind> {
+    match value {
+        "fact" => Ok(MemoryKind::Fact),
+        "preference" => Ok(MemoryKind::Preference),
+        "decision" => Ok(MemoryKind::Decision),
+        "project" => Ok(MemoryKind::Project),
+        "scratch" => Ok(MemoryKind::Scratch),
+        _ => Err(rusqlite::Error::InvalidColumnType(3, "kind".to_string(), rusqlite::types::Type::Text)),
+    }
+}
+
+fn parse_source(value: &str) -> rusqlite::Result<MemorySource> {
+    match value {
+        "agent" => Ok(MemorySource::Agent),
+        "user" => Ok(MemorySource::User),
+        "import" => Ok(MemorySource::Import),
+        _ => Err(rusqlite::Error::InvalidColumnType(7, "source".to_string(), rusqlite::types::Type::Text)),
+    }
+}
+
+fn parse_operation(value: &str) -> rusqlite::Result<MemoryOperation> {
+    match value {
+        "capture" => Ok(MemoryOperation::Capture),
+        "rewrite" => Ok(MemoryOperation::Rewrite),
+        "restore" => Ok(MemoryOperation::Restore),
+        "archive" => Ok(MemoryOperation::Archive),
+        "promote" => Ok(MemoryOperation::Promote),
+        "consolidate" => Ok(MemoryOperation::Consolidate),
+        _ => Err(rusqlite::Error::InvalidColumnType(2, "operation".to_string(), rusqlite::types::Type::Text)),
+    }
+}
+
+fn scope_name(scope: MemoryScope) -> &'static str {
+    match scope {
+        MemoryScope::User => "user",
+        MemoryScope::Workspace => "workspace",
+    }
+}
+
+fn kind_name(kind: MemoryKind) -> &'static str {
+    match kind {
+        MemoryKind::Fact => "fact",
+        MemoryKind::Preference => "preference",
+        MemoryKind::Decision => "decision",
+        MemoryKind::Project => "project",
+        MemoryKind::Scratch => "scratch",
+    }
+}
+
+fn source_name(source: MemorySource) -> &'static str {
+    match source {
+        MemorySource::Agent => "agent",
+        MemorySource::User => "user",
+        MemorySource::Import => "import",
+    }
+}
+
+fn operation_name(operation: MemoryOperation) -> &'static str {
+    match operation {
+        MemoryOperation::Capture => "capture",
+        MemoryOperation::Rewrite => "rewrite",
+        MemoryOperation::Restore => "restore",
+        MemoryOperation::Archive => "archive",
+        MemoryOperation::Promote => "promote",
+        MemoryOperation::Consolidate => "consolidate",
     }
 }
 
@@ -624,6 +1614,10 @@ fn normalize_for_match(value: &str) -> String {
         .to_lowercase()
 }
 
+fn normalize_for_display(value: &str) -> String {
+    value.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
 fn matches_query(entry: &MemoryEntry, query: &str) -> bool {
     let haystack = normalize_for_match(&format!(
         "{} {} {}",
@@ -632,17 +1626,6 @@ fn matches_query(entry: &MemoryEntry, query: &str) -> bool {
         entry.tags.join(" ")
     ));
     query.split_whitespace().all(|word| haystack.contains(word))
-}
-
-fn same_scope(entry: &MemoryEntry, scope: &MemoryScope, workspace_slug: Option<&str>) -> bool {
-    &entry.scope == scope && entry.workspace_slug.as_deref() == workspace_slug
-}
-
-fn is_visible(entry: &MemoryEntry, workspace_slug: Option<&str>) -> bool {
-    match entry.scope {
-        MemoryScope::User => true,
-        MemoryScope::Workspace => entry.workspace_slug.as_deref() == workspace_slug,
-    }
 }
 
 fn to_recall_item(entry: &MemoryEntry) -> MemoryRecallItem {
@@ -656,9 +1639,9 @@ fn to_recall_item(entry: &MemoryEntry) -> MemoryRecallItem {
         .collect();
     MemoryRecallItem {
         id: entry.id.clone(),
-        scope: entry.scope.clone(),
+        scope: entry.scope,
         workspace_slug: entry.workspace_slug.clone(),
-        kind: entry.kind.clone(),
+        kind: entry.kind,
         title: entry.title.clone(),
         excerpt,
         tags: entry.tags.clone(),
@@ -667,14 +1650,12 @@ fn to_recall_item(entry: &MemoryEntry) -> MemoryRecallItem {
     }
 }
 
-fn push_revision(state: &mut MemoryState, entry: &MemoryEntry, operation: MemoryOperation) {
-    state.revisions.push(MemoryRevision {
-        memory_id: entry.id.clone(),
-        revision: entry.revision,
-        operation,
-        snapshot: entry.clone(),
-        created_at: now_millis(),
-    });
+fn workspace_scope_key(workspace_slug: &str) -> String {
+    format!("workspace:{}", workspace_slug)
+}
+
+fn expires_at_for(kind: MemoryKind, captured_at: u64) -> Option<u64> {
+    (kind == MemoryKind::Scratch).then_some(captured_at.saturating_add(SCRATCH_RETENTION_MS))
 }
 
 fn read_json_file<T: DeserializeOwned>(path: &Path) -> Result<Option<T>, MemoryError> {
@@ -685,9 +1666,7 @@ fn read_json_file<T: DeserializeOwned>(path: &Path) -> Result<Option<T>, MemoryE
     if content.trim().is_empty() {
         return Ok(None);
     }
-    serde_json::from_str(&content)
-        .map(Some)
-        .map_err(storage_error)
+    serde_json::from_str(&content).map(Some).map_err(storage_error)
 }
 
 fn read_json_lines<T: DeserializeOwned>(path: &Path) -> Result<Vec<T>, MemoryError> {
@@ -700,31 +1679,6 @@ fn read_json_lines<T: DeserializeOwned>(path: &Path) -> Result<Vec<T>, MemoryErr
         .filter(|line| !line.trim().is_empty())
         .map(|line| serde_json::from_str(line).map_err(storage_error))
         .collect()
-}
-
-fn write_atomic(path: &Path, content: &[u8]) -> io::Result<()> {
-    let temp_path = path.with_extension(format!(
-        "tmp-{}-{}",
-        std::process::id(),
-        NEXT_ID.fetch_add(1, Ordering::Relaxed)
-    ));
-    let write_result = (|| {
-        let mut file = File::create(&temp_path)?;
-        file.write_all(content)?;
-        file.sync_all()?;
-        match fs::rename(&temp_path, path) {
-            Ok(()) => Ok(()),
-            Err(error) if path.exists() => {
-                fs::remove_file(path)?;
-                fs::rename(&temp_path, path).map_err(|_| error)
-            }
-            Err(error) => Err(error),
-        }
-    })();
-    if write_result.is_err() {
-        let _ = fs::remove_file(&temp_path);
-    }
-    write_result
 }
 
 fn storage_error(error: impl fmt::Display) -> MemoryError {
@@ -742,6 +1696,7 @@ fn now_millis() -> u64 {
 mod tests {
     use super::*;
     use std::fs;
+    use std::path::PathBuf;
 
     struct TestDirectory(PathBuf);
 
@@ -789,42 +1744,48 @@ mod tests {
     }
 
     #[test]
+    fn maintenance_action_accepts_camel_case_wire_fields() {
+        let input: MemoryMaintenanceApplyInput = serde_json::from_str(
+            r#"{
+              "workspaceSlug":"project-a",
+              "expectedCaptureCount":1,
+              "actions":[{
+                "operation":"promote",
+                "id":"memory-1",
+                "expectedRevision":1,
+                "kind":"project"
+              }]
+            }"#,
+        )
+        .unwrap();
+
+        assert!(matches!(input.actions.first(), Some(MemoryMaintenanceAction::Promote { expected_revision: 1, .. })));
+    }
+
+    #[test]
     fn empty_notebook_capture_persists_entries_with_revision_one() {
         let directory = TestDirectory::new();
         let store = MemoryStore::open(&directory.0).unwrap();
-        let result = store
-            .capture(workspace_capture("project-a", "Rust API"))
-            .unwrap();
+        let result = store.capture(workspace_capture("project-a", "Rust API")).unwrap();
 
         assert_eq!(result.entry.revision, 1);
-        let entries: Vec<MemoryEntry> =
-            serde_json::from_str(&fs::read_to_string(directory.0.join("entries.json")).unwrap())
-                .unwrap();
-        assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0].id, result.entry.id);
+        assert!(directory.0.join("memory.db").exists());
+        assert!(!directory.0.join("entries.json").exists());
+        store.integrity_check().unwrap();
+        let reopened = MemoryStore::open(&directory.0).unwrap();
+        assert_eq!(reopened.get(&result.entry.id, Some("project-a")).unwrap(), result.entry);
     }
 
     #[test]
     fn 同_scope_规范化内容只保留一个_active_entry() {
         let directory = TestDirectory::new();
         let store = MemoryStore::open(&directory.0).unwrap();
-        let first = store
-            .capture(workspace_capture("project-a", "稳定   事实"))
-            .unwrap();
-        let second = store
-            .capture(workspace_capture("project-a", "稳定 事实"))
-            .unwrap();
+        let first = store.capture(workspace_capture("project-a", "稳定   事实")).unwrap();
+        let second = store.capture(workspace_capture("project-a", "稳定 事实")).unwrap();
 
         assert_eq!(first.entry.id, second.entry.id);
         assert!(second.deduplicated);
-        assert_eq!(
-            store
-                .list(Some("project-a"), None, None, None, false, 20)
-                .unwrap()
-                .entries
-                .len(),
-            1
-        );
+        assert_eq!(store.list(Some("project-a"), None, None, None, false, 20).unwrap().entries.len(), 1);
     }
 
     #[test]
@@ -832,21 +1793,11 @@ mod tests {
         let directory = TestDirectory::new();
         let store = MemoryStore::open(&directory.0).unwrap();
         let user = store.capture(user_capture("用户习惯")).unwrap();
-        let a = store
-            .capture(workspace_capture("project-a", "A 的经验"))
-            .unwrap();
-        let b = store
-            .capture(workspace_capture("project-b", "B 的经验"))
-            .unwrap();
+        let a = store.capture(workspace_capture("project-a", "A 的经验")).unwrap();
+        let b = store.capture(workspace_capture("project-b", "B 的经验")).unwrap();
 
-        let a_entries = store
-            .list(Some("project-a"), None, None, None, false, 20)
-            .unwrap()
-            .entries;
-        let b_entries = store
-            .list(Some("project-b"), None, None, None, false, 20)
-            .unwrap()
-            .entries;
+        let a_entries = store.list(Some("project-a"), None, None, None, false, 20).unwrap().entries;
+        let b_entries = store.list(Some("project-b"), None, None, None, false, 20).unwrap().entries;
         assert!(a_entries.iter().any(|entry| entry.id == user.entry.id));
         assert!(a_entries.iter().any(|entry| entry.id == a.entry.id));
         assert!(!a_entries.iter().any(|entry| entry.id == b.entry.id));
@@ -864,30 +1815,11 @@ mod tests {
             store.capture(input).unwrap();
         }
 
-        assert_eq!(
-            store
-                .list(None, Some("可检索"), None, None, false, 2)
-                .unwrap()
-                .entries
-                .len(),
-            2
-        );
-        assert!(matches!(
-            store.list(None, Some(""), None, None, false, 2),
-            Err(MemoryError::Validation(_))
-        ));
-        assert!(matches!(
-            store.list(None, Some("可检索"), None, None, false, 51),
-            Err(MemoryError::Validation(_))
-        ));
-        assert!(matches!(
-            store.recall(None, "", 8),
-            Err(MemoryError::Validation(_))
-        ));
-        assert!(matches!(
-            store.recall(None, "可检索", 9),
-            Err(MemoryError::Validation(_))
-        ));
+        assert_eq!(store.list(None, Some("可检索"), None, None, false, 2).unwrap().entries.len(), 2);
+        assert!(matches!(store.list(None, Some(""), None, None, false, 2), Err(MemoryError::Validation(_))));
+        assert!(matches!(store.list(None, Some("可检索"), None, None, false, 51), Err(MemoryError::Validation(_))));
+        assert!(matches!(store.recall(None, "", 8), Err(MemoryError::Validation(_))));
+        assert!(matches!(store.recall(None, "可检索", 9), Err(MemoryError::Validation(_))));
     }
 
     #[test]
@@ -899,7 +1831,7 @@ mod tests {
             &captured.entry.id,
             MemoryRewriteInput {
                 workspace_slug: None,
-                title: Some("不应覆盖".to_string()),
+                title: Some("新标题".to_string()),
                 content: None,
                 kind: None,
                 tags: None,
@@ -907,10 +1839,17 @@ mod tests {
             },
         );
         assert!(matches!(result, Err(MemoryError::Conflict(_))));
-        assert_eq!(
-            store.get(&captured.entry.id, None).unwrap().title,
-            "用户偏好"
-        );
+        assert_eq!(store.get(&captured.entry.id, None).unwrap(), captured.entry);
+    }
+
+    #[test]
+    fn archived_entries_are_hidden_unless_requested() {
+        let directory = TestDirectory::new();
+        let store = MemoryStore::open(&directory.0).unwrap();
+        let captured = store.capture(user_capture("需要归档")).unwrap();
+        store.archive(&captured.entry.id, None).unwrap();
+        assert!(store.list(None, None, None, None, false, 20).unwrap().entries.is_empty());
+        assert_eq!(store.list(None, None, None, None, true, 20).unwrap().entries.len(), 1);
     }
 
     #[test]
@@ -918,7 +1857,7 @@ mod tests {
         let directory = TestDirectory::new();
         let store = MemoryStore::open(&directory.0).unwrap();
         let captured = store.capture(user_capture("第一版")).unwrap();
-        let rewritten = store
+        let updated = store
             .rewrite(
                 &captured.entry.id,
                 MemoryRewriteInput {
@@ -931,54 +1870,157 @@ mod tests {
                 },
             )
             .unwrap();
-        let restored = store
-            .restore(
-                &captured.entry.id,
-                MemoryRestoreInput {
-                    workspace_slug: None,
-                    revision: 1,
-                },
-            )
-            .unwrap();
-
-        assert_eq!(rewritten.revision, 2);
-        assert_eq!(restored.revision, 3);
+        let restored = store.restore(&updated.id, MemoryRestoreInput { workspace_slug: None, revision: 1 }).unwrap();
         assert_eq!(restored.content, "第一版");
-        assert_eq!(store.history(&captured.entry.id, None).unwrap().len(), 3);
+        assert_eq!(restored.revision, 3);
+        assert_eq!(store.history(&restored.id, None).unwrap().len(), 3);
     }
 
     #[test]
-    fn archived_entries_are_hidden_unless_requested() {
+    fn 自动_capture_batch进入scratch并产生maintenance计数() {
         let directory = TestDirectory::new();
         let store = MemoryStore::open(&directory.0).unwrap();
-        let captured = store.capture(user_capture("待归档")).unwrap();
-        store.archive(&captured.entry.id, None).unwrap();
-
-        assert!(store
-            .list(None, None, None, None, false, 20)
-            .unwrap()
-            .entries
-            .is_empty());
-        let archived = store
-            .list(None, None, None, None, true, 20)
-            .unwrap()
-            .entries;
-        assert_eq!(archived.len(), 1);
-        assert!(archived[0].archived);
+        let response = store
+            .capture_batch(MemoryCaptureBatchInput {
+                workspace_slug: "project-a".to_string(),
+                items: vec![MemoryCaptureBatchItem {
+                    kind: MemoryKind::Scratch,
+                    title: "短期事实".to_string(),
+                    content: "当前正在处理迁移".to_string(),
+                    tags: Vec::new(),
+                }],
+            })
+            .unwrap();
+        assert_eq!(response.added, 1);
+        assert_eq!(store.maintenance_state("project-a").unwrap().capture_count, 1);
+        assert!(store.context(MemoryContextInput { workspace_slug: Some("project-a".to_string()), query: None, max_chars: Some(1000) }).unwrap().text.contains("当前正在处理"));
     }
 
     #[test]
-    fn 重新打开同一目录可以恢复_entries和_revisions() {
+    fn maintenance_revision冲突时整个事务回滚且marker不前进() {
         let directory = TestDirectory::new();
         let store = MemoryStore::open(&directory.0).unwrap();
-        let captured = store.capture(user_capture("重启后仍在")).unwrap();
+        let batch = store
+            .capture_batch(MemoryCaptureBatchInput {
+                workspace_slug: "project-a".to_string(),
+                items: vec![
+                    MemoryCaptureBatchItem {
+                        kind: MemoryKind::Scratch,
+                        title: "第一条".to_string(),
+                        content: "第一条临时事实".to_string(),
+                        tags: Vec::new(),
+                    },
+                    MemoryCaptureBatchItem {
+                        kind: MemoryKind::Scratch,
+                        title: "第二条".to_string(),
+                        content: "第二条临时事实".to_string(),
+                        tags: Vec::new(),
+                    },
+                ],
+            })
+            .unwrap();
+        let first = &batch.entries[0];
+        let second = &batch.entries[1];
+        let result = store.apply_maintenance(MemoryMaintenanceApplyInput {
+            workspace_slug: "project-a".to_string(),
+            expected_capture_count: 2,
+            actions: vec![
+                MemoryMaintenanceAction::Promote {
+                    id: first.id.clone(),
+                    expected_revision: first.revision,
+                    kind: MemoryKind::Project,
+                },
+                MemoryMaintenanceAction::Archive {
+                    id: second.id.clone(),
+                    expected_revision: 0,
+                },
+            ],
+        });
+
+        assert!(matches!(result, Err(MemoryError::Conflict(_))));
+        assert_eq!(store.get(&first.id, Some("project-a")).unwrap().kind, MemoryKind::Scratch);
+        assert_eq!(store.get(&first.id, Some("project-a")).unwrap().revision, 1);
+        assert!(!store.get(&second.id, Some("project-a")).unwrap().archived);
+        let state = store.maintenance_state("project-a").unwrap();
+        assert_eq!(state.last_consolidated_capture_count, 0);
+    }
+
+    #[test]
+    fn maintenance会归档超过14天的scratch并保留revision历史() {
+        let directory = TestDirectory::new();
+        let store = MemoryStore::open(&directory.0).unwrap();
+        let captured = store
+            .capture_batch(MemoryCaptureBatchInput {
+                workspace_slug: "project-a".to_string(),
+                items: vec![MemoryCaptureBatchItem {
+                    kind: MemoryKind::Scratch,
+                    title: "过期状态".to_string(),
+                    content: "应当被清理".to_string(),
+                    tags: Vec::new(),
+                }],
+            })
+            .unwrap();
+        let old_captured_at = now_millis().saturating_sub(SCRATCH_RETENTION_MS + 1);
+        {
+            let connection = store.connection.lock().unwrap();
+            connection
+                .execute(
+                    "UPDATE memory_entries SET captured_at = ?, expires_at = ? WHERE id = ?",
+                    params![old_captured_at as i64, old_captured_at as i64, captured.entries[0].id],
+                )
+                .unwrap();
+        }
+
+        let response = store
+            .apply_maintenance(MemoryMaintenanceApplyInput {
+                workspace_slug: "project-a".to_string(),
+                expected_capture_count: 1,
+                actions: Vec::new(),
+            })
+            .unwrap();
+        assert!(response.entries.iter().any(|entry| entry.archived));
+        let archived = store.get(&captured.entries[0].id, Some("project-a")).unwrap();
+        assert!(archived.archived);
+        assert_eq!(archived.revision, 2);
+        assert_eq!(store.history(&archived.id, Some("project-a")).unwrap().len(), 2);
+        assert!(store.maintenance_state("project-a").unwrap().last_cleanup_at.is_some());
+    }
+
+    #[test]
+    fn 首次启动导入旧json但成功后不再双写() {
+        let directory = TestDirectory::new();
+        let entry = MemoryEntry {
+            id: "legacy-1".to_string(),
+            scope: MemoryScope::User,
+            workspace_slug: None,
+            kind: MemoryKind::Fact,
+            title: "旧事实".to_string(),
+            content: "旧文件内容".to_string(),
+            tags: vec!["legacy".to_string()],
+            source: MemorySource::Import,
+            created_at: 10,
+            updated_at: 10,
+            captured_at: 0,
+            revision: 1,
+            archived: false,
+            expires_at: None,
+        };
+        let revision = MemoryRevision {
+            memory_id: entry.id.clone(),
+            revision: 1,
+            operation: MemoryOperation::Capture,
+            snapshot: entry.clone(),
+            created_at: 10,
+            author: None,
+        };
+        fs::write(directory.0.join("entries.json"), serde_json::to_string(&vec![entry.clone()]).unwrap()).unwrap();
+        fs::write(directory.0.join("revisions.jsonl"), format!("{}\n", serde_json::to_string(&revision).unwrap())).unwrap();
+        let before = fs::read_to_string(directory.0.join("entries.json")).unwrap();
+        let store = MemoryStore::open(&directory.0).unwrap();
+        assert_eq!(store.get("legacy-1", None).unwrap().content, "旧文件内容");
         drop(store);
-
         let reopened = MemoryStore::open(&directory.0).unwrap();
-        assert_eq!(
-            reopened.get(&captured.entry.id, None).unwrap().content,
-            "重启后仍在"
-        );
-        assert_eq!(reopened.history(&captured.entry.id, None).unwrap().len(), 1);
+        assert_eq!(reopened.history("legacy-1", None).unwrap().len(), 1);
+        assert_eq!(fs::read_to_string(directory.0.join("entries.json")).unwrap(), before);
     }
 }

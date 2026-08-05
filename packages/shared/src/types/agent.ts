@@ -1,5 +1,6 @@
 import type { ProviderType } from './channel'
 import type { WorkingMode } from './working'
+import type { MemoryPolicy } from './memory'
 
 /**
  * Agent 相关类型定义
@@ -27,6 +28,8 @@ export interface AgentWorkspace {
   projectRootPath?: string
   /** 创建工作区时是否允许 Agent 直接写入项目根目录。 */
   allowWorkspaceWrite?: boolean
+  /** Agent 对 Copis Memory 的可见/可写策略。 */
+  memoryPolicy?: MemoryPolicy
   /** 本地项目根目录的运行时状态；Copis 托管项目不设置此字段。 */
   projectRootStatus?: LocalProjectRootStatus
   /** 创建时间戳 */
@@ -43,6 +46,8 @@ export interface CreateAgentWorkspaceInput {
   projectRootPath?: string
   /** 是否允许 Agent 直接写入用户选择的项目根目录。 */
   allowWorkspaceWrite?: boolean
+  /** 新工作区的 Memory 策略。 */
+  memoryPolicy?: MemoryPolicy
 }
 
 /** 创建项目后自动生成的首个 Agent 会话。 */

@@ -253,12 +253,24 @@ export function AppShell({ contextValue }: AppShellProps): React.ReactElement {
           </div>
           {activeWebTabId && <WebBrowserSurface />}
           {settingsOpen && (
-            <div className="absolute inset-0 z-[60]">
+            <div
+              className={cn(
+                'absolute inset-0 z-[60]',
+                activeWebTabId && 'invisible pointer-events-none',
+              )}
+              aria-hidden={!!activeWebTabId}
+            >
               <SettingsPanel onClose={() => setSettingsOpen(false)} />
             </div>
           )}
           {workingSettingsOpen && (
-            <div className="absolute inset-0 z-[60]">
+            <div
+              className={cn(
+                'absolute inset-0 z-[60]',
+                activeWebTabId && 'invisible pointer-events-none',
+              )}
+              aria-hidden={!!activeWebTabId}
+            >
               <CopisWorkingSettingsPanel onClose={() => setWorkingSettingsOpen(false)} />
             </div>
           )}

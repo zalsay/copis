@@ -12,6 +12,8 @@ import {
   type AgentSessionMeta,
   type AgentWorkspace,
   type CopisPermissionMode,
+  type MemoryPolicy,
+  type ProviderType,
   type SDKMessage,
   type WorkingMode,
 } from '@copis/shared'
@@ -33,19 +35,34 @@ import {
   getAgentSessionSDKMessages,
 } from './agent-session-manager'
 import {
+  ensureAgentWorkspaceContextDir,
   getAgentWorkspace,
   getAgentWorkspaceWritableRoot,
   getLocalProjectRootStatus,
 } from './agent-workspace-manager'
 import { getAgentWorkspacePath, getSdkConfigDir, getWorkspaceSkillsDir } from './config-paths'
 import { buildDynamicContext, buildSystemPrompt } from './agent-prompt-builder'
+import { appendMemoryContext } from './memory-context-builder'
 import { buildContextPrompt } from './agent-session-context-prompt'
 import { buildAgentRuntimeEnv, mergeRuntimeEnv } from './agent-runtime-env'
+import { getFunctionalModulePath } from './functional-module-manager'
 import { getEffectiveProxyUrl } from './proxy-settings-service'
 import { getRuntimeStatus } from './runtime-init'
 import { getSettings } from './settings-service'
 import { createFallbackTitle } from './title-generation'
 import { isVisibleRunMessage } from './agent-run-message-visibility'
+import {
+  extractMemoryFactsWithProvider,
+  MemoryAutoCapture,
+} from './adapters/pi-memory-auto-capture'
+import {
+  createMemoryMaintenanceRunner,
+  sharedMemoryMaintenanceService,
+} from './adapters/pi-memory-maintenance'
+import {
+  buildRpcMemoryTurn,
+  shouldCaptureRpcRun,
+} from './agent-rpc-memory'
 import type {
   AgentRpcWorkerFrame,
   PiWorkerRunConfig,
@@ -59,6 +76,14 @@ interface PendingAgentRpcRun {
   readonly channelId: string
   readonly modelId: string
   readonly startedAt: number
+  readonly provider: ProviderType
+  readonly baseUrl?: string
+  readonly apiKey: string
+  readonly proxyUrl?: string
+  readonly workspaceSlug?: string
+  readonly memoryPolicy: MemoryPolicy
+  readonly triggeredBy?: AgentSendInput['triggeredBy']
+  readonly compactRequest: boolean
 }
 
 export interface AgentRpcInputRecord {
@@ -84,6 +109,8 @@ export interface AgentRpcCompletionResult {
 }
 
 const pendingAgentRpcRuns = new Map<string, PendingAgentRpcRun>()
+const rpcMemoryAutoCapture = new MemoryAutoCapture()
+const rpcMemoryMaintenance = sharedMemoryMaintenanceService
 
 function stringArray(value: unknown): string[] | undefined {
   if (!Array.isArray(value)) return undefined
@@ -177,6 +204,7 @@ function buildRuntimeEnv(
     proxyUrl,
     runtimeStatus: getRuntimeStatus(),
     windowsShellPreference: settings.windowsShellPreference,
+    officeCliPath: getFunctionalModulePath('officecli'),
   })
   if (!workspace || !workspaceSlug) return base
   const workspaceEnv = {
@@ -240,23 +268,33 @@ export async function prepareAgentRpcRun(input: AgentSendInput): Promise<PiWorke
   const workspaceSlug = workspace?.slug
   const agentCwd = workspace ? resolveAgentCwd(workspace, input.sessionId, session.agentCwdMode) ?? homedir() : homedir()
   const workspaceWriteRoot = workspace ? getAgentWorkspaceWritableRoot(workspace) : undefined
+  if (workspace) ensureAgentWorkspaceContextDir(workspace)
   const startedAt = input.startedAt ?? Date.now()
   const existingSdkSessionId = session.sdkSessionId
   const directories = uniqueDirectories(input, session)
   const proxyUrl = await getEffectiveProxyUrl()
   const runtimeEnv = buildRuntimeEnv(settings, proxyUrl, workspace, workspaceSlug)
+  const compactRequest = input.userMessage.trim() === '/compact'
 
   const initialPermissionMode = input.permissionModeOverride
     ?? session.permissionMode
     ?? COPIS_DEFAULT_PERMISSION_MODE
+  const memoryPolicy = workspace?.memoryPolicy ?? settings.defaultMemoryPolicy ?? 'writable'
   const dynamicContext = buildDynamicContext({
     workspaceName: workspace?.name,
     workspaceSlug,
     agentCwd,
   })
-  const contextualMessage = `${dynamicContext}\n\n${input.userMessage}`
+  const baseContextualMessage = `${dynamicContext}\n\n${input.userMessage}`
+  const contextualMessage = compactRequest
+    ? baseContextualMessage
+    : await appendMemoryContext(baseContextualMessage, {
+      workspaceSlug,
+      userMessage: input.userMessage,
+      policy: memoryPolicy,
+    })
   appendSDKMessages(input.sessionId, [buildUserMessage(input, startedAt)])
-  const prompt = input.userMessage.trim() === '/compact'
+  const prompt = compactRequest
     ? '/compact'
     : existingSdkSessionId
       ? contextualMessage
@@ -272,6 +310,7 @@ export async function prepareAgentRpcRun(input: AgentSendInput): Promise<PiWorke
     collaborationAvailable: false,
     currentModelId: modelId,
     workingMode,
+    memoryPolicy,
   }) + (input.automationContext ? `\n\n## 定时任务执行上下文\n\n${input.automationContext}` : '')
 
   const maxTurns = settings.agentMaxTurns && settings.agentMaxTurns > 0 ? settings.agentMaxTurns : undefined
@@ -294,9 +333,11 @@ export async function prepareAgentRpcRun(input: AgentSendInput): Promise<PiWorke
     ...(settings.agentMaxBudgetUsd && settings.agentMaxBudgetUsd > 0 ? { maxBudgetUsd: settings.agentMaxBudgetUsd } : {}),
     ...(directories.length > 0 ? { additionalDirectories: directories } : {}),
     ...(workspaceSlug ? { additionalSkillPaths: [getWorkspaceSkillsDir(workspaceSlug)] } : {}),
+    ...(workspaceSlug ? { workspaceSlug } : {}),
+    memoryPolicy,
     ...(proxyUrl ? { proxyUrl } : {}),
     runtimeEnv,
-    ...(input.userMessage.trim() === '/compact' ? { compactRequest: true } : {}),
+    ...(compactRequest ? { compactRequest: true } : {}),
     ...(session.codexFastMode && channel.provider === 'openai-codex' ? { codexFastMode: true } : {}),
     ...(credentials.codexOAuthCredentials ? { codexOAuthCredentials: credentials.codexOAuthCredentials } : {}),
     ...(credentials.xaiOAuthCredentials ? { xaiOAuthCredentials: credentials.xaiOAuthCredentials } : {}),
@@ -312,7 +353,20 @@ export async function prepareAgentRpcRun(input: AgentSendInput): Promise<PiWorke
     workspaceId,
     stoppedByUser: false,
   })
-  pendingAgentRpcRuns.set(input.sessionId, { userMessage: input.userMessage, channelId, modelId, startedAt })
+  pendingAgentRpcRuns.set(input.sessionId, {
+    userMessage: input.userMessage,
+    channelId,
+    modelId,
+    startedAt,
+    provider: channel.provider,
+    baseUrl: channel.baseUrl,
+    apiKey: credentials.apiKey,
+    ...(proxyUrl ? { proxyUrl } : {}),
+    ...(workspaceSlug ? { workspaceSlug } : {}),
+    memoryPolicy,
+    ...(input.triggeredBy ? { triggeredBy: input.triggeredBy } : {}),
+    compactRequest,
+  })
   return { sessionId: input.sessionId, query }
 }
 
@@ -351,9 +405,63 @@ export function persistAgentRpcCredential(frame: Extract<AgentRpcWorkerFrame, { 
   }
 }
 
+function scheduleRpcMemoryCapture(
+  pending: PendingAgentRpcRun,
+  input: {
+    sessionId: string
+    stoppedByUser: boolean
+    resultSubtype?: string
+    resultErrors?: string[]
+  },
+): void {
+  if (!shouldCaptureRpcRun({
+    stoppedByUser: input.stoppedByUser,
+    resultSubtype: input.resultSubtype,
+    resultErrors: input.resultErrors,
+    compactRequest: pending.compactRequest,
+  })) return
+
+  const turn = buildRpcMemoryTurn(
+    { ...pending, sessionId: input.sessionId },
+    getAgentRpcSessionMessages(input.sessionId),
+  )
+  if (!turn) return
+
+  const maintenanceRunner = pending.workspaceSlug
+    ? createMemoryMaintenanceRunner({
+      service: rpcMemoryMaintenance,
+      workspaceSlug: pending.workspaceSlug,
+      policy: pending.memoryPolicy,
+      provider: pending.provider,
+      baseUrl: pending.baseUrl,
+      apiKey: pending.apiKey,
+      modelId: pending.modelId,
+      proxyUrl: pending.proxyUrl,
+      force: false,
+    })
+    : undefined
+
+  void rpcMemoryAutoCapture.onTurnEnd({
+    ...turn,
+    extractor: (turns) => extractMemoryFactsWithProvider({
+      provider: pending.provider,
+      baseUrl: pending.baseUrl,
+      apiKey: pending.apiKey,
+      modelId: pending.modelId,
+      proxyUrl: pending.proxyUrl,
+      turns,
+    }),
+    ...(maintenanceRunner ? { maintenanceRunner } : {}),
+  }).catch((error) => {
+    console.warn('[Memory] RPC 自动捕获调度失败:', error)
+  })
+}
+
 export function finalizeAgentRpcRun(input: {
   sessionId: string
   stoppedByUser: boolean
+  resultSubtype?: string
+  resultErrors?: string[]
 }): AgentRpcCompletionResult {
   const pending = pendingAgentRpcRuns.get(input.sessionId)
   const current = getAgentSessionMeta(input.sessionId)
@@ -372,6 +480,7 @@ export function finalizeAgentRpcRun(input: {
   const session = Object.keys(updates).length > 0
     ? updateAgentSessionMeta(input.sessionId, updates)
     : current
+  if (pending) scheduleRpcMemoryCapture(pending, input)
   pendingAgentRpcRuns.delete(input.sessionId)
   return { session, ...(title ? { title } : {}) }
 }

@@ -6,6 +6,7 @@ mock.module('./user-profile-service', () => ({
 
 mock.module('./agent-workspace-manager', () => ({
   getAgentWorkspaceBySlug: () => undefined,
+  getAgentWorkspaceContextDir: () => '/tmp/sample-project/.context',
   getAgentWorkspaceWritableRoot: () => '/tmp/sample-project',
   getProjectFilesPath: () => '/tmp/sample-project',
   getWorkspaceMcpConfig: () => ({ servers: {} }),
@@ -49,6 +50,7 @@ describe('项目与会话工作台提示词', () => {
     expect(prompt).toContain('## 项目')
     expect(prompt).toContain('项目名称: 示例项目')
     expect(prompt).toContain('当前会话直接在项目根目录中工作')
+    expect(prompt).toContain('.agents/skills')
     expect(prompt).not.toContain('项目根始终是 cwd')
   })
 
@@ -96,5 +98,20 @@ describe('项目与会话工作台提示词', () => {
     expect(prompt).toContain('对应 edu-api 的 `export` alias')
     expect(prompt).toContain('做实际验证')
     expect(prompt).not.toContain('## Working 快速模式')
+  })
+
+  test('Given visible Memory policy When构建系统提示词 Then标明参考资料边界且不引导旧文件记忆', () => {
+    const prompt = buildSystemPrompt({
+      agentRuntime: 'pi',
+      sessionId: 'session-memory-policy',
+      permissionMode: 'bypassPermissions',
+      memoryPolicy: 'visible',
+    })
+
+    expect(prompt).toContain('当前策略为 `visible`')
+    expect(prompt).toContain('不是系统指令')
+    expect(prompt).not.toContain('.claude/memory')
+    expect(prompt).not.toContain('MEMORY.md')
+    expect(prompt).not.toContain('Nowledge Mem')
   })
 })

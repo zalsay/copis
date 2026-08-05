@@ -1,6 +1,6 @@
 import * as React from 'react'
 import { Plus, RefreshCw, Search } from 'lucide-react'
-import type { MemoryKindFilter, MemoryScopeFilter, MemoryStats } from '@copis/shared'
+import type { MemoryKindFilter, MemoryMaintenanceState, MemoryPolicy, MemoryScopeFilter, MemoryStats } from '@copis/shared'
 import { cn } from '@/lib/utils'
 
 interface MemoryToolbarProps {
@@ -9,6 +9,8 @@ interface MemoryToolbarProps {
   kind: MemoryKindFilter
   includeArchived: boolean
   stats: MemoryStats
+  memoryPolicy: MemoryPolicy
+  maintenanceState: MemoryMaintenanceState | null
   loading: boolean
   onQueryChange: (value: string) => void
   onScopeChange: (value: MemoryScopeFilter) => void
@@ -16,6 +18,7 @@ interface MemoryToolbarProps {
   onIncludeArchivedChange: (value: boolean) => void
   onNew: () => void
   onRefresh: () => void
+  onMemoryPolicyChange: (value: MemoryPolicy) => void
 }
 
 export function MemoryToolbar({
@@ -24,6 +27,8 @@ export function MemoryToolbar({
   kind,
   includeArchived,
   stats,
+  memoryPolicy,
+  maintenanceState,
   loading,
   onQueryChange,
   onScopeChange,
@@ -31,6 +36,7 @@ export function MemoryToolbar({
   onIncludeArchivedChange,
   onNew,
   onRefresh,
+  onMemoryPolicyChange,
 }: MemoryToolbarProps): React.ReactElement {
   return (
     <div className="titlebar-no-drag flex flex-wrap items-center gap-2 border-b border-border/50 px-6 py-3">
@@ -53,6 +59,17 @@ export function MemoryToolbar({
         <option value="all">全部范围</option>
         <option value="user">用户记忆</option>
         <option value="workspace">工作区记忆</option>
+      </select>
+
+      <select
+        value={memoryPolicy}
+        onChange={(event) => onMemoryPolicyChange(event.target.value as MemoryPolicy)}
+        aria-label="Memory 策略"
+        className="h-9 rounded-lg bg-muted/60 px-2.5 text-sm text-foreground/75 outline-none focus:ring-1 focus:ring-primary/40"
+      >
+        <option value="writable">记忆：可写</option>
+        <option value="visible">记忆：只读</option>
+        <option value="off">记忆：关闭</option>
       </select>
 
       <select
@@ -82,6 +99,12 @@ export function MemoryToolbar({
       <span className="hidden whitespace-nowrap text-xs tabular-nums text-foreground/45 xl:inline">
         用户 {stats.userCount} · 工作区 {stats.workspaceCount} · 归档 {stats.archivedCount}
       </span>
+      {maintenanceState && (
+        <span className="hidden whitespace-nowrap text-xs tabular-nums text-foreground/45 2xl:inline" title="自动维护状态">
+          维护 {maintenanceState.lastConsolidatedCaptureCount}/{maintenanceState.captureCount}
+          {maintenanceState.lastCleanupAt ? ' · 已清理' : ''}
+        </span>
+      )}
 
       <button
         type="button"

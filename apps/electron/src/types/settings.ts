@@ -4,7 +4,7 @@
  * 主题模式、IPC 通道等设置相关定义。
  */
 
-import type { AgentRuntime, EnvironmentCheckResult, ThinkingConfig, AgentEffort, AgentThinkingLevel, FeishuSessionMirrorSettings, WindowsShellPreference } from '@copis/shared'
+import type { AgentRuntime, EnvironmentCheckResult, ThinkingConfig, AgentEffort, AgentThinkingLevel, FeishuSessionMirrorSettings, WindowsShellPreference, MemoryPolicy } from '@copis/shared'
 
 /** 通知音场景类型 */
 export type NotificationSoundType = 'taskComplete' | 'permissionRequest' | 'exitPlanMode' | 'planningReminder'
@@ -210,6 +210,9 @@ export const DEFAULT_INTERFACE_VARIANT: InterfaceVariant = 'modern'
 /** 新建 Agent 会话与自动任务的默认 runtime。历史持久化记录会在读取时归一化为 Pi。 */
 export const DEFAULT_AGENT_RUNTIME: AgentRuntime = 'pi'
 
+/** Agent 默认的 Copis Memory 策略。缺失字段的旧配置按可写兼容。 */
+export const DEFAULT_MEMORY_POLICY: MemoryPolicy = 'writable'
+
 /** Markdown 预览字号档位 */
 export type MarkdownFontSize = 'small' | 'medium' | 'large'
 
@@ -248,6 +251,8 @@ export interface AppSettings {
   agentWorkspaceId?: string
   /** 新 Agent 会话默认使用的 runtime。 */
   agentRuntime?: AgentRuntime
+  /** Agent 默认的 Copis Memory 策略；工作区策略优先。 */
+  defaultMemoryPolicy?: MemoryPolicy
   /** Windows 上 Agent Bash 工具的运行环境；默认自动选择 Git Bash，WSL 需用户显式启用。 */
   windowsShellPreference?: WindowsShellPreference
   /** 侧栏「自动任务」合成项目组在项目列表中的位置索引（默认 0 = 最靠前；可拖拽调整） */

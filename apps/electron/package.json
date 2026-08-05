@@ -1,6 +1,6 @@
 {
   "name": "@copis/electron",
-  "version": "0.16.18",
+  "version": "0.0.1",
   "description": "Copis Working desktop client - Electron App",
   "main": "dist/main.cjs",
   "author": {
@@ -24,8 +24,6 @@
     "build:renderer": "vite build",
     "build:resources": "cp -r resources dist/ 2>/dev/null || true",
     "build:http-api-server": "bun run scripts/build-http-api-server.ts",
-    "build:functional-module-manifest": "bun run scripts/build-functional-module-manifest.ts",
-    "publish:functional-modules": "bun run scripts/publish-functional-modules.ts",
     "build:agent-island-native": "bun run scripts/build-agent-island-native.ts",
     "build:agent-island-native:dev": "bun run scripts/build-agent-island-native.ts --allow-fallback",
     "build:cli": "bun run scripts/build-cli.ts",
@@ -120,7 +118,6 @@
     "clsx": "^2.1.1",
     "cmdk": "^1.1.1",
     "concurrently": "^9.2.1",
-    "cos-nodejs-sdk-v5": "3.0.0",
     "dingtalk-stream-sdk-nodejs": "^2.0.4",
     "electron": "^43.2.0",
     "electron-builder": "^25.1.8",

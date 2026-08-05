@@ -1,7 +1,7 @@
 import * as React from 'react'
 import { useAtom, useAtomValue, useSetAtom } from 'jotai'
 import { BookOpen, Loader2 } from 'lucide-react'
-import type { MemoryEntry, MemoryRevision } from '@copis/shared'
+import type { MemoryEntry, MemoryPolicy, MemoryRevision } from '@copis/shared'
 import {
   memoryConflictAtom,
   memoryDirtyAtom,
@@ -19,6 +19,9 @@ import {
   memoryScopeFilterAtom,
   memorySelectedIdAtom,
   memoryStatsAtom,
+  memoryDefaultPolicyAtom,
+  memoryMaintenanceStateAtom,
+  memoryPolicyAtom,
   memoryWorkspaceSlugAtom,
   type MemoryDraft,
 } from '@/atoms/memory-atoms'
@@ -59,9 +62,10 @@ function entryWorkspaceSlug(entry: MemoryEntry, workspaceSlug: string | null): s
 }
 
 export function MemoryView(): React.ReactElement {
-  const workspaces = useAtomValue(agentWorkspacesAtom)
+  const [workspaces, setWorkspaces] = useAtom(agentWorkspacesAtom)
   const currentWorkspaceId = useAtomValue(currentAgentWorkspaceIdAtom)
-  const workspaceSlug = workspaces.find((workspace) => workspace.id === currentWorkspaceId)?.slug ?? null
+  const currentWorkspace = workspaces.find((workspace) => workspace.id === currentWorkspaceId)
+  const workspaceSlug = currentWorkspace?.slug ?? null
 
   const [memoryWorkspaceSlug, setMemoryWorkspaceSlug] = useAtom(memoryWorkspaceSlugAtom)
   const [scope, setScope] = useAtom(memoryScopeFilterAtom)
@@ -70,6 +74,9 @@ export function MemoryView(): React.ReactElement {
   const [query, setQuery] = useAtom(memoryQueryAtom)
   const [entries, setEntries] = useAtom(memoryEntriesAtom)
   const [stats, setStats] = useAtom(memoryStatsAtom)
+  const [memoryPolicy, setMemoryPolicy] = useAtom(memoryPolicyAtom)
+  const [defaultMemoryPolicy, setDefaultMemoryPolicy] = useAtom(memoryDefaultPolicyAtom)
+  const [maintenanceState, setMaintenanceState] = useAtom(memoryMaintenanceStateAtom)
   const [selectedId, setSelectedId] = useAtom(memorySelectedIdAtom)
   const [history, setHistory] = useAtom(memoryHistoryAtom)
   const [draft, setDraft] = useAtom(memoryDraftAtom)
@@ -91,7 +98,17 @@ export function MemoryView(): React.ReactElement {
     setHistory([])
     setEditorMode('view')
     setConflict(null)
-  }, [setDraft, setEditorMode, setHistory, setMemoryWorkspaceSlug, setSelectedId, setConflict, workspaceSlug])
+    setMemoryPolicy(currentWorkspace?.memoryPolicy ?? defaultMemoryPolicy)
+    setMaintenanceState(null)
+  }, [currentWorkspace?.memoryPolicy, defaultMemoryPolicy, setDraft, setEditorMode, setHistory, setMemoryPolicy, setMemoryWorkspaceSlug, setSelectedId, setConflict, setMaintenanceState, workspaceSlug])
+
+  React.useEffect(() => {
+    void window.electronAPI.getSettings().then((settings) => {
+      const policy = settings.defaultMemoryPolicy ?? 'writable'
+      setDefaultMemoryPolicy(policy)
+      if (!currentWorkspace) setMemoryPolicy(policy)
+    }).catch((error) => console.warn('[Memory] 读取默认策略失败:', error))
+  }, [currentWorkspace, setDefaultMemoryPolicy, setMemoryPolicy])
 
   const loadHistory = React.useCallback(async (entry: MemoryEntry): Promise<void> => {
     setHistoryLoading(true)
@@ -110,7 +127,7 @@ export function MemoryView(): React.ReactElement {
   const loadData = React.useCallback(async (): Promise<void> => {
     setListLoading(true)
     try {
-      const [list, nextStats] = await Promise.all([
+      const [list, nextStats, nextMaintenance] = await Promise.all([
         memoryApi.list({
           workspaceSlug: memoryWorkspaceSlug ?? undefined,
           query,
@@ -120,21 +137,40 @@ export function MemoryView(): React.ReactElement {
           limit: 50,
         }),
         memoryApi.stats(memoryWorkspaceSlug ?? undefined),
+        memoryWorkspaceSlug ? memoryApi.maintenanceState(memoryWorkspaceSlug) : Promise.resolve(null),
       ])
       setEntries(list.entries)
       setStats(nextStats)
+      setMaintenanceState(nextMaintenance)
     } catch (error) {
       console.error('[Memory] 加载记忆列表失败:', error)
       toast.error(error instanceof Error ? error.message : '加载记忆列表失败')
     } finally {
       setListLoading(false)
     }
-  }, [includeArchived, kind, memoryWorkspaceSlug, query, scope, setEntries, setListLoading, setStats])
+  }, [includeArchived, kind, memoryWorkspaceSlug, query, scope, setEntries, setListLoading, setMaintenanceState, setStats])
 
   React.useEffect(() => {
     const timer = window.setTimeout(() => { void loadData() }, query.trim() ? 220 : 0)
     return () => window.clearTimeout(timer)
   }, [loadData, query, refreshToken])
+
+  const handleMemoryPolicyChange = React.useCallback(async (nextPolicy: MemoryPolicy): Promise<void> => {
+    try {
+      if (currentWorkspaceId && currentWorkspace) {
+        const updated = await window.electronAPI.updateAgentWorkspace(currentWorkspaceId, { memoryPolicy: nextPolicy })
+        setWorkspaces((items) => items.map((item) => item.id === updated.id ? updated : item))
+      } else {
+        const updated = await window.electronAPI.updateSettings({ defaultMemoryPolicy: nextPolicy })
+        setDefaultMemoryPolicy(updated.defaultMemoryPolicy ?? 'writable')
+      }
+      setMemoryPolicy(nextPolicy)
+      setRefreshToken((value) => value + 1)
+      toast.success('Memory 策略已更新')
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : '更新 Memory 策略失败')
+    }
+  }, [currentWorkspace, currentWorkspaceId, setDefaultMemoryPolicy, setMemoryPolicy, setRefreshToken, setWorkspaces])
 
   const selectEntry = React.useCallback((entry: MemoryEntry): void => {
     setSelectedId(entry.id)
@@ -308,6 +344,8 @@ export function MemoryView(): React.ReactElement {
         kind={kind}
         includeArchived={includeArchived}
         stats={stats}
+        memoryPolicy={memoryPolicy}
+        maintenanceState={maintenanceState}
         loading={listLoading}
         onQueryChange={setQuery}
         onScopeChange={setScope}
@@ -315,6 +353,7 @@ export function MemoryView(): React.ReactElement {
         onIncludeArchivedChange={setIncludeArchived}
         onNew={handleNew}
         onRefresh={() => setRefreshToken((value) => value + 1)}
+        onMemoryPolicyChange={(value) => { void handleMemoryPolicyChange(value) }}
       />
 
       <div className="flex min-h-0 flex-1">

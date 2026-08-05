@@ -84,6 +84,7 @@ const MAX_ORPHAN_ITEM_PREVIEW = 80
 
 const WORKSPACE_METADATA_DIRS = new Set([
   'workspace-files',
+  '.agents',
   'skills',
   'skills-inactive',
   '.claude',

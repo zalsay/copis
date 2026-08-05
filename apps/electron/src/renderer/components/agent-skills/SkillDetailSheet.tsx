@@ -246,7 +246,7 @@ function SkillDetailBody({
                 </>
               )}
               <MetaRow label="数据源" value={sourceLabel} />
-              <MetaRow label="位置" value={`skills/${skill.slug}`} />
+              <MetaRow label="位置" value={`.agents/skills/${skill.slug}`} />
             </SettingsCard>
           </div>
 

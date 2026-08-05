@@ -14,10 +14,12 @@ fi
 
 # 与 ai-education/frontend/.env.development 保持一致，也允许本地临时覆盖。
 export COPIS_BACKEND_URL="${COPIS_BACKEND_URL:-https://edu-api.meetlife.com.cn:9001}"
+# 开发 Rust API 使用独立端口，避免连接到正式 App 的 51730 服务。
+export COPIS_HTTP_API_PORT="${COPIS_HTTP_API_PORT:-51740}"
 
 echo "[Copis] 启动 Electron dev"
 echo "[Copis] COPIS_BACKEND_URL=${COPIS_BACKEND_URL}"
 echo "[Copis] Vite=http://127.0.0.1:5174"
-echo "[Copis] HTTP API=http://127.0.0.1:51730"
+echo "[Copis] HTTP API=http://127.0.0.1:${COPIS_HTTP_API_PORT}"
 
 exec bun run dev

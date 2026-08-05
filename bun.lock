@@ -13,6 +13,7 @@
         "@types/node": "^20.0.0",
         "@types/react": "^18.3.0",
         "@types/react-dom": "^18.3.0",
+        "cos-nodejs-sdk-v5": "3.0.0",
         "dompurify": "^3.4.2",
         "typescript": "^5.0.0",
       },
@@ -36,7 +37,7 @@
     },
     "apps/electron": {
       "name": "@copis/electron",
-      "version": "0.16.18",
+      "version": "0.0.1",
       "dependencies": {
         "@anthropic-ai/sdk": "^0.93.0",
         "@earendil-works/pi-agent-core": "0.82.1",
@@ -113,7 +114,6 @@
         "clsx": "^2.1.1",
         "cmdk": "^1.1.1",
         "concurrently": "^9.2.1",
-        "cos-nodejs-sdk-v5": "3.0.0",
         "dingtalk-stream-sdk-nodejs": "^2.0.4",
         "electron": "^43.2.0",
         "electron-builder": "^25.1.8",

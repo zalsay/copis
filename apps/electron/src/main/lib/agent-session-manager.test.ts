@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, mock, test } from 'bun:test'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import * as os from 'node:os'
 import { join } from 'node:path'
 
@@ -64,6 +64,8 @@ function writeAgentWorkspacesIndex(workspaces: Array<{
   id: string
   name: string
   slug: string
+  projectRootPath?: string
+  allowWorkspaceWrite?: boolean
   createdAt: number
   updatedAt: number
 }>): void {
@@ -129,6 +131,32 @@ describe('Agent 会话 JSONL 读取', () => {
 })
 
 describe('Agent 会话 runtime 元数据', () => {
+  test('Given Pi 会话运行在项目 cwd When 创建会话 Then 初始化项目级和会话级 .context', () => {
+    const projectRootPath = join(tempHome, 'context-project')
+    mkdirSync(projectRootPath, { recursive: true })
+    writeAgentWorkspacesIndex([{
+      id: 'context-workspace',
+      name: 'Context 项目',
+      slug: 'context-workspace',
+      projectRootPath,
+      allowWorkspaceWrite: true,
+      createdAt: 1,
+      updatedAt: 1,
+    }])
+
+    const session = manager.createAgentSession(
+      'Context 会话',
+      undefined,
+      'context-workspace',
+      undefined,
+      'pi',
+      'project',
+    )
+
+    expect(existsSync(join(projectRootPath, '.context'))).toBe(true)
+    expect(existsSync(join(tempHome, '.copis', 'agent-workspaces', 'context-workspace', session.id, '.context'))).toBe(true)
+  })
+
   test('Given 已保存 OpenAI medium 默认值 When 新建 Pi 会话 Then 默认并持久化 medium', () => {
     const settingsPath = join(tempHome, '.copis', 'settings.json')
     mkdirSync(join(tempHome, '.copis'), { recursive: true })

@@ -132,6 +132,51 @@ describe('项目术语迁移', () => {
 })
 
 describe('Agent 工作区创建', () => {
+  test('Given索引中存在未知 Memory policy When读取工作区 Then按继承默认策略处理而不传播非法值', () => {
+    const workspace = {
+      id: 'policy-workspace',
+      name: '策略项目',
+      slug: 'policy-project',
+      memoryPolicy: 'unknown',
+      createdAt: 1,
+      updatedAt: 1,
+    }
+    writeFileSync(
+      configPaths.getAgentWorkspacesIndexPath(),
+      JSON.stringify({ version: 2, workspaces: [workspace] }),
+      'utf-8',
+    )
+
+    expect(manager.getAgentWorkspace('policy-workspace')?.memoryPolicy).toBeUndefined()
+  })
+
+  test('Given 新工作区 When 解析 Skills 目录 Then 使用标准 .agents/skills 路径', () => {
+    const workspace = manager.createAgentWorkspace('标准 Skills 项目')
+
+    expect(configPaths.getWorkspaceSkillsDir(workspace.slug)).toBe(
+      join(tempHome, '.copis', 'agent-workspaces', workspace.slug, '.agents', 'skills'),
+    )
+  })
+
+  test('Given 旧版 skills 目录存在 When 解析 Skills 目录 Then 迁移到 .agents/skills 并保留内容', () => {
+    const workspaceRoot = configPaths.getAgentWorkspacePath('legacy-skills')
+    const legacySkillDir = join(workspaceRoot, 'skills', 'legacy-skill')
+    const legacyInactiveSkillDir = join(workspaceRoot, 'skills-inactive', 'disabled-skill')
+    mkdirSync(legacySkillDir, { recursive: true })
+    mkdirSync(legacyInactiveSkillDir, { recursive: true })
+    writeFileSync(join(legacySkillDir, 'SKILL.md'), '---\nname: legacy-skill\n---\n', 'utf-8')
+    writeFileSync(join(legacyInactiveSkillDir, 'SKILL.md'), '---\nname: disabled-skill\n---\n', 'utf-8')
+
+    const skillsDir = configPaths.getWorkspaceSkillsDir('legacy-skills')
+    const inactiveSkillsDir = configPaths.getInactiveSkillsDir('legacy-skills')
+
+    expect(skillsDir).toBe(join(workspaceRoot, '.agents', 'skills'))
+    expect(existsSync(join(skillsDir, 'legacy-skill', 'SKILL.md'))).toBe(true)
+    expect(existsSync(join(inactiveSkillsDir, 'disabled-skill', 'SKILL.md'))).toBe(true)
+    expect(existsSync(join(workspaceRoot, 'skills'))).toBe(false)
+    expect(existsSync(join(workspaceRoot, 'skills-inactive'))).toBe(false)
+  })
+
   test('Given 创建时未授权写入 When 解析 Agent 写入根 Then 只允许项目下的 copis 目录', () => {
     const projectRootPath = join(tempHome, 'source-project')
     mkdirSync(projectRootPath, { recursive: true })
@@ -146,6 +191,20 @@ describe('Agent 工作区创建', () => {
     expect(manager.getAgentWorkspaceWritableRoot(workspace)).toBe(expectedWritableRoot)
     expect(manager.ensureAgentWorkspaceWritableRoot(workspace)).toBe(expectedWritableRoot)
     expect(existsSync(expectedWritableRoot)).toBe(true)
+  })
+
+  test('Given 本地项目不允许直接写入 When 初始化项目级 Context Then 写入 copis/.context', () => {
+    const projectRootPath = join(tempHome, 'readonly-context-project')
+    mkdirSync(projectRootPath, { recursive: true })
+    const workspace = manager.createAgentWorkspace({ name: '只读 Context 项目', projectRootPath, allowWorkspaceWrite: false })
+
+    const contextDir = manager.ensureAgentWorkspaceContextDir(workspace)
+
+    expect(contextDir).toBe(join(workspace.projectRootPath!, 'copis', '.context'))
+    expect(contextDir).toBeDefined()
+    if (!contextDir) throw new Error('项目级 Context 路径未初始化')
+    expect(existsSync(contextDir)).toBe(true)
+    expect(existsSync(join(projectRootPath, '.context'))).toBe(false)
   })
 
   test('Given 本地项目未传写入选项 When 创建工作区 Then 默认使用 copis 受控写入目录', () => {

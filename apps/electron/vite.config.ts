@@ -2,6 +2,9 @@ import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import { resolve } from 'path'
 import pkg from './package.json' with { type: 'json' }
+import { COPIS_HTTP_API_DEVELOPMENT_PORT } from '@copis/shared/config'
+
+const httpApiPort = process.env.COPIS_HTTP_API_PORT?.trim() || String(COPIS_HTTP_API_DEVELOPMENT_PORT)
 
 export default defineConfig({
   plugins: [react()],
@@ -30,7 +33,7 @@ export default defineConfig({
     // 浏览器 Renderer 通过同源地址访问，避免浏览器环境与 Electron 主进程的回环地址不一致。
     proxy: {
       '/api': {
-        target: 'http://127.0.0.1:51730',
+        target: `http://127.0.0.1:${httpApiPort}`,
         changeOrigin: false,
       },
     },

@@ -158,7 +158,6 @@ export function AgentSkillsView(): React.ReactElement {
 
   const configureBuiltinMcp = React.useCallback((serverId: string): void => {
     const focusMap: Partial<Record<string, ToolSettingsFocus>> = {
-      mem: 'memory',
       'nano-banana': 'nano-banana',
     }
     const focus = focusMap[serverId]
@@ -475,7 +474,7 @@ export function AgentSkillsView(): React.ReactElement {
       <SkillMarketDialog
         open={showMarket}
         onOpenChange={setShowMarket}
-        workspaceSlug={data.workspaceSlug}
+        workspaces={workspaces}
         onChanged={() => bumpCapabilities((v) => v + 1)}
       />
     </div>

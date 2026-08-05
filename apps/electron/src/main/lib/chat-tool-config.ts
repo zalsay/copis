@@ -2,8 +2,7 @@
  * Chat 工具配置服务
  *
  * 管理 ~/.copis/chat-tools.json 的读写。
- * 存储工具开关状态和非记忆工具的凭据。
- * 记忆凭据保留在 memory.json（Chat + Agent 共用）。
+ * 存储工具开关状态、凭据和自定义工具定义。
  */
 
 import { readFileSync, writeFileSync, existsSync } from 'node:fs'
@@ -13,7 +12,6 @@ import type { ChatToolsFileConfig, ChatToolState, ChatToolMeta } from '@copis/sh
 /** 默认配置 */
 const DEFAULT_CONFIG: ChatToolsFileConfig = {
   toolStates: {
-    memory: { enabled: true },
     'agent-mode-recommend': { enabled: true },
     'web-search': { enabled: false },
     'nano-banana': { enabled: false },

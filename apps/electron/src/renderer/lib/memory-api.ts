@@ -1,10 +1,15 @@
 import type {
   MemoryCaptureInput,
+  MemoryCaptureBatchInput,
+  MemoryCaptureBatchResponse,
   MemoryCaptureResponse,
+  MemoryContextInput,
+  MemoryContextResponse,
   MemoryEntry,
   MemoryHistoryResponse,
   MemoryKindFilter,
   MemoryListResponse,
+  MemoryMaintenanceState,
   MemoryRecallResponse,
   MemoryRevision,
   MemoryRewriteInput,
@@ -12,8 +17,9 @@ import type {
   MemoryScopeFilter,
   MemoryStats,
 } from '@copis/shared'
+import { RENDERER_HTTP_API_BASE_URL } from './http-api-base-url'
 
-const MEMORY_API_BASE_URL = 'http://127.0.0.1:51730'
+const MEMORY_API_BASE_URL = RENDERER_HTTP_API_BASE_URL
 const STARTUP_RETRY_COUNT = 20
 const STARTUP_RETRY_DELAY_MS = 300
 
@@ -170,5 +176,23 @@ export const memoryApi = {
       method: 'POST',
       body: JSON.stringify(options),
     })
+  },
+
+  context(input: MemoryContextInput): Promise<MemoryContextResponse> {
+    return request<MemoryContextResponse>('/api/memory/context', {
+      method: 'POST',
+      body: JSON.stringify(input),
+    })
+  },
+
+  captureBatch(input: MemoryCaptureBatchInput): Promise<MemoryCaptureBatchResponse> {
+    return request<MemoryCaptureBatchResponse>('/api/memory/capture-batch', {
+      method: 'POST',
+      body: JSON.stringify(input),
+    })
+  },
+
+  maintenanceState(workspaceSlug: string): Promise<MemoryMaintenanceState> {
+    return request<MemoryMaintenanceState>(`/api/memory/maintenance?workspaceSlug=${encodeURIComponent(workspaceSlug)}`)
   },
 }

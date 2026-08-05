@@ -87,7 +87,7 @@ for (const key of Object.keys(process.env)) {
 
 import { createApplicationMenu } from './menu'
 import { registerIpcHandlers } from './ipc'
-import { startHttpApiServer, stopHttpApiServer } from './lib/http-api-server'
+import { ensureHttpApiServer, stopHttpApiServer } from './lib/http-api-server'
 import { createTray, destroyTray, getTray } from './tray'
 import { initializeRuntime } from './lib/runtime-init'
 import { seedDefaultSkills } from './lib/config-paths'
@@ -532,11 +532,13 @@ app.whenReady().then(bootstrap).catch(handleBootstrapFailure)
  * 单点失败不应阻止窗口和托盘的创建（用户至少要能看到界面）。
  */
 async function bootstrap(): Promise<void> {
-  // HTTP API 不依赖运行时检测，提前启动，确保浏览器端可以尽快连接。
-  safeRun('startHttpApiServer', startHttpApiServer)
-
   // 初始化兼容层版本号（供复用的 Pi/Copis 运行时使用）
-  setCopisVersion(app.getVersion())
+  const copisVersion = app.getVersion()
+  process.env.COPIS_VERSION = copisVersion
+  setCopisVersion(copisVersion)
+
+  // HTTP API 由 Electron 统一确保 active 模块和进程生命周期；网络安装失败不阻断 UI 启动。
+  void safeAwait('ensureHttpApiServer', () => ensureHttpApiServer())
 
   // 注册自定义协议 copis-file:// 用于内联预览本地文件。
   // 协议只接受主进程签发的 opaque token，不解析 renderer 提供的绝对路径。

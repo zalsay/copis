@@ -74,6 +74,54 @@ export function migrateLegacySkillSlugDirectory(parentDir: string, legacySlug: s
   }
 }
 
+/** 将工作区顶层旧 Skill 目录迁移到标准 .agents 目录，迁移过程幂等且不覆盖新目录。 */
+function migrateLegacyWorkspaceSkillDirectories(workspaceDir: string): void {
+  const agentsDir = join(workspaceDir, '.agents')
+  const layouts = [
+    { legacyName: 'skills', canonicalName: 'skills' },
+    { legacyName: 'skills-inactive', canonicalName: 'skills-inactive' },
+  ]
+
+  for (const layout of layouts) {
+    const legacyDir = join(workspaceDir, layout.legacyName)
+    const canonicalDir = join(agentsDir, layout.canonicalName)
+    if (!existsSync(legacyDir)) continue
+
+    try {
+      if (!existsSync(canonicalDir)) {
+        mkdirSync(agentsDir, { recursive: true })
+        renameSync(legacyDir, canonicalDir)
+        console.log(`[配置] 已将工作区 Skill 目录迁移到 ${canonicalDir}`)
+        continue
+      }
+
+      for (const entry of readdirSync(legacyDir, { withFileTypes: true })) {
+        const legacyEntry = join(legacyDir, entry.name)
+        const canonicalEntry = join(canonicalDir, entry.name)
+        if (existsSync(canonicalEntry)) continue
+
+        try {
+          renameSync(legacyEntry, canonicalEntry)
+        } catch (error) {
+          try {
+            cpSync(legacyEntry, canonicalEntry, { recursive: true, errorOnExist: true, force: false })
+            rmSyncWithRetry(legacyEntry, { recursive: true, force: true })
+          } catch (copyError) {
+            throw new Error(`迁移工作区 Skill 失败: ${legacyEntry} -> ${canonicalEntry}`, { cause: copyError })
+          }
+          console.warn(`[配置] 工作区 Skill 无法直接重命名，已复制迁移: ${legacyEntry} -> ${canonicalEntry}`, error)
+        }
+      }
+
+      if (readdirSync(legacyDir).length === 0) {
+        rmSyncWithRetry(legacyDir, { recursive: true, force: true })
+      }
+    } catch (error) {
+      console.warn(`[配置] 迁移工作区 Skill 目录失败，保留旧目录: ${legacyDir}`, error)
+    }
+  }
+}
+
 /**
  * 获取配置目录名称
  *
@@ -406,10 +454,12 @@ export function getWorkspaceMcpPath(slug: string): string {
  * 如果目录不存在则自动创建。
  *
  * @param slug 工作区 slug
- * @returns ~/.copis/agent-workspaces/{slug}/skills/
+ * @returns ~/.copis/agent-workspaces/{slug}/.agents/skills/
  */
 export function getWorkspaceSkillsDir(slug: string): string {
-  const dir = join(getAgentWorkspacePath(slug), 'skills')
+  const workspaceDir = getAgentWorkspacePath(slug)
+  migrateLegacyWorkspaceSkillDirectories(workspaceDir)
+  const dir = join(workspaceDir, '.agents', 'skills')
 
   if (!existsSync(dir)) {
     mkdirSync(dir, { recursive: true })
@@ -471,10 +521,12 @@ export function resolveAgentSessionWorkspacePath(slug: string, sessionId: string
  * 如果目录不存在则自动创建。
  *
  * @param slug 工作区 slug
- * @returns ~/.copis/agent-workspaces/{slug}/skills-inactive/
+ * @returns ~/.copis/agent-workspaces/{slug}/.agents/skills-inactive/
  */
 export function getInactiveSkillsDir(slug: string): string {
-  const dir = join(getAgentWorkspacePath(slug), 'skills-inactive')
+  const workspaceDir = getAgentWorkspacePath(slug)
+  migrateLegacyWorkspaceSkillDirectories(workspaceDir)
+  const dir = join(workspaceDir, '.agents', 'skills-inactive')
 
   if (!existsSync(dir)) {
     mkdirSync(dir, { recursive: true })
@@ -486,7 +538,7 @@ export function getInactiveSkillsDir(slug: string): string {
 /**
  * 获取默认 Skills 模板目录路径
  *
- * 新建工作区时自动复制此目录的内容到工作区 skills/ 下。
+ * 新建工作区时自动复制此目录的内容到工作区 .agents/skills/ 下。
  *
  * @returns ~/.copis/default-skills/
  */
@@ -497,6 +549,18 @@ export function getDefaultSkillsDir(): string {
     mkdirSync(dir, { recursive: true })
   }
 
+  return dir
+}
+
+/**
+ * 获取可独立安装的功能模块根目录。
+ *
+ * 模块按名称和 sha256 缓存，并通过 active.json 选择当前版本，避免更新时覆盖正在运行的组件。
+ * @returns ~/.copis/modules/
+ */
+export function getFunctionalModulesDir(): string {
+  const dir = join(getConfigDir(), 'modules')
+  if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
   return dir
 }
 
@@ -568,6 +632,14 @@ function compareSemver(a: string, b: string): number {
  */
 export const RETIRED_DEFAULT_SKILL_SLUGS: readonly string[] = [
   'brainstorming',
+  'agent-collaboration',
+  'guizang-ppt-skill',
+  'tool-builder',
+  'docx',
+  'pptx',
+  'xlsx',
+  'copis-coach',
+  'proma-coach',
 ]
 
 /** 第一方默认 Skill 的历史 slug 到当前 slug 的兼容映射。 */
@@ -648,7 +720,7 @@ export function seedDefaultSkills(): void {
     const entries = readdirSync(bundledDir, { withFileTypes: true })
 
     for (const entry of entries) {
-      if (!entry.isDirectory()) continue
+      if (!entry.isDirectory() || isRetiredDefaultSkill(entry.name)) continue
 
       const source = join(bundledDir, entry.name)
       const target = join(userDir, entry.name)

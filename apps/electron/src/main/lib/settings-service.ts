@@ -7,8 +7,9 @@
 
 import { readFileSync, writeFileSync, existsSync } from 'node:fs'
 import { getSettingsPath } from './config-paths'
-import { DEFAULT_AGENT_RUNTIME, DEFAULT_INTERFACE_VARIANT, DEFAULT_THEME_MODE } from '../../types'
+import { DEFAULT_AGENT_RUNTIME, DEFAULT_INTERFACE_VARIANT, DEFAULT_MEMORY_POLICY, DEFAULT_THEME_MODE } from '../../types'
 import type { AppSettings } from '../../types'
+import { normalizeMemoryPolicy } from '@copis/shared'
 
 /**
  * 获取应用设置
@@ -31,6 +32,7 @@ export function getSettings(): AppSettings {
       visionRelay: { enabled: false },
       builtinMcpDisabledIds: [],
       agentRuntime: DEFAULT_AGENT_RUNTIME,
+      defaultMemoryPolicy: DEFAULT_MEMORY_POLICY,
       windowsShellPreference: 'auto',
       agentThinking: { type: 'adaptive' },
       gitAttributionEnabled: true,
@@ -58,6 +60,7 @@ export function getSettings(): AppSettings {
       visionRelay: data.visionRelay ?? { enabled: false },
       builtinMcpDisabledIds: settings.builtinMcpDisabledIds ?? [],
       agentRuntime: data.agentRuntime === 'pi' ? 'pi' : DEFAULT_AGENT_RUNTIME,
+      defaultMemoryPolicy: normalizeMemoryPolicy(data.defaultMemoryPolicy),
       windowsShellPreference: settings.windowsShellPreference ?? 'auto',
       agentThinking: settings.agentThinking ?? { type: 'adaptive' },
       // 缺省 true：老配置文件未写该字段时保持推广默认开启
@@ -77,6 +80,7 @@ export function getSettings(): AppSettings {
       visionRelay: { enabled: false },
       builtinMcpDisabledIds: [],
       agentRuntime: DEFAULT_AGENT_RUNTIME,
+      defaultMemoryPolicy: DEFAULT_MEMORY_POLICY,
       windowsShellPreference: 'auto',
       agentThinking: { type: 'adaptive' },
       gitAttributionEnabled: true,

@@ -6,7 +6,7 @@
  */
 
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
-import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, CHAT_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, INSTALLER_IPC_CHANNELS, PROXY_IPC_CHANNELS, GITHUB_RELEASE_IPC_CHANNELS, SYSTEM_PROMPT_IPC_CHANNELS, CHAT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, WECHAT_IPC_CHANNELS, AUTOMATION_IPC_CHANNELS, PLANNING_IPC_CHANNELS, AGENT_ISLAND_IPC_CHANNELS, WORKING_IPC_CHANNELS, WEB_IPC_CHANNELS } from '@copis/shared'
+import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, CHAT_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, INSTALLER_IPC_CHANNELS, FUNCTIONAL_MODULE_IPC_CHANNELS, PROXY_IPC_CHANNELS, GITHUB_RELEASE_IPC_CHANNELS, SYSTEM_PROMPT_IPC_CHANNELS, CHAT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, WECHAT_IPC_CHANNELS, AUTOMATION_IPC_CHANNELS, PLANNING_IPC_CHANNELS, AGENT_ISLAND_IPC_CHANNELS, WORKING_IPC_CHANNELS, WEB_IPC_CHANNELS } from '@copis/shared'
 import { USER_PROFILE_IPC_CHANNELS, SETTINGS_IPC_CHANNELS, SCRATCH_PAD_IPC_CHANNELS, APP_ICON_IPC_CHANNELS, DOCK_BADGE_IPC_CHANNELS, STORAGE_IPC_CHANNELS } from '../types'
 import { agentHttpStreamClient } from '../renderer/lib/agent-http-stream'
 import type {
@@ -70,6 +70,10 @@ import type {
   InstallerDownloadRequest,
   InstallerDownloadResult,
   InstallerProgressPayload,
+  FunctionalModuleInstallInput,
+  FunctionalModuleName,
+  FunctionalModuleProgressPayload,
+  FunctionalModuleStatus,
   ProxyConfig,
   SystemProxyDetectResult,
   GitHubRelease,
@@ -535,6 +539,22 @@ export interface ElectronAPI {
     callback: (payload: InstallerProgressPayload) => void,
   ) => () => void
 
+  // ===== Copis 功能模块相关 =====
+
+  /** 获取当前已安装的功能模块状态 */
+  listFunctionalModules: () => Promise<FunctionalModuleStatus[]>
+
+  /** 查询指定功能模块的最新版本 */
+  checkFunctionalModule: (name: FunctionalModuleName) => Promise<FunctionalModuleStatus>
+
+  /** 下载、校验并激活指定功能模块 */
+  installFunctionalModule: (input: FunctionalModuleInstallInput) => Promise<FunctionalModuleStatus>
+
+  /** 订阅功能模块安装进度，返回取消订阅函数 */
+  onFunctionalModuleProgress: (
+    callback: (payload: FunctionalModuleProgressPayload) => void,
+  ) => () => void
+
   // ===== 代理配置相关 =====
 
   /** 获取代理配置 */
@@ -662,7 +682,7 @@ export interface ElectronAPI {
   createAgentProject: (input: CreateAgentWorkspaceInput, channelId?: string, modelId?: string) => Promise<CreateAgentProjectResult>
 
   /** 更新 Agent 工作区 */
-  updateAgentWorkspace: (id: string, updates: { name: string }) => Promise<AgentWorkspace>
+  updateAgentWorkspace: (id: string, updates: { name?: string; memoryPolicy?: import('@copis/shared').MemoryPolicy }) => Promise<AgentWorkspace>
 
   /** 将本地项目关联到一个已存在的目录，保留项目和会话。 */
   relinkAgentWorkspaceProjectRoot: (id: string, projectRootPath: string) => Promise<AgentWorkspace>
@@ -1691,6 +1711,22 @@ const electronAPI: ElectronAPI = {
     return () => ipcRenderer.off(INSTALLER_IPC_CHANNELS.PROGRESS, listener)
   },
 
+  // Copis 功能模块
+  listFunctionalModules: () => {
+    return ipcRenderer.invoke(FUNCTIONAL_MODULE_IPC_CHANNELS.LIST)
+  },
+  checkFunctionalModule: (name: FunctionalModuleName) => {
+    return ipcRenderer.invoke(FUNCTIONAL_MODULE_IPC_CHANNELS.CHECK, name)
+  },
+  installFunctionalModule: (input: FunctionalModuleInstallInput) => {
+    return ipcRenderer.invoke(FUNCTIONAL_MODULE_IPC_CHANNELS.INSTALL, input)
+  },
+  onFunctionalModuleProgress: (callback: (payload: FunctionalModuleProgressPayload) => void) => {
+    const listener = (_: unknown, payload: FunctionalModuleProgressPayload) => callback(payload)
+    ipcRenderer.on(FUNCTIONAL_MODULE_IPC_CHANNELS.PROGRESS, listener)
+    return () => ipcRenderer.off(FUNCTIONAL_MODULE_IPC_CHANNELS.PROGRESS, listener)
+  },
+
   // 代理配置
   getProxySettings: () => {
     return ipcRenderer.invoke(PROXY_IPC_CHANNELS.GET_SETTINGS)
@@ -1860,7 +1896,7 @@ const electronAPI: ElectronAPI = {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.CREATE_PROJECT, input, channelId, modelId)
   },
 
-  updateAgentWorkspace: (id: string, updates: { name: string }) => {
+  updateAgentWorkspace: (id: string, updates: { name?: string; memoryPolicy?: import('@copis/shared').MemoryPolicy }) => {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.UPDATE_WORKSPACE, id, updates)
   },
 
