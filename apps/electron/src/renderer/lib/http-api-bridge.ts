@@ -226,6 +226,8 @@ function createWebTabsFallback(): Record<string, unknown> {
     bookmarksGroupCreate: () => Promise.reject(new Error('浏览器模式不支持网页收藏分组')),
     bookmarksGroupRename: () => Promise.reject(new Error('浏览器模式不支持网页收藏分组')),
     bookmarksGroupRemove: () => Promise.reject(new Error('浏览器模式不支持网页收藏分组')),
+    getProjectAssociation: () => Promise.resolve(null),
+    saveProjectAssociation: () => Promise.reject(new Error('浏览器模式不支持网页项目关联')),
     onChanged: (_callback: unknown) => () => {},
   }
 }

@@ -1,15 +1,25 @@
 import * as React from 'react'
 import { Check, CircleStop, Play, X } from 'lucide-react'
 import type { BrowserWorkflowVersion } from '@copis/shared'
-import { useAtom } from 'jotai'
+import { useAtom, useAtomValue, useSetAtom } from 'jotai'
+import { agentSessionsAtom, agentWorkspacesAtom } from '@/atoms/agent-atoms'
 import { browserWorkflowDraftAtom, browserWorkflowStatusAtom } from '@/atoms/browser-agent'
 import { AgentConversationSurface } from '@/components/agent/AgentConversationSurface'
 import { Button } from '@/components/ui/button'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import { cn } from '@/lib/utils'
 import { toast } from 'sonner'
 
 interface BrowserAgentPanelProps {
   sessionId: string
+  tabId: string
+  pageUrl: string
   tabTitle: string
   channelId: string | null
   modelId: string | undefined
@@ -29,11 +39,19 @@ function draftOrigins(draft: BrowserWorkflowVersion): string[] {
   return [...origins]
 }
 
-export function BrowserAgentPanel({ sessionId, tabTitle, channelId, modelId, workspaceId, width, onClose }: BrowserAgentPanelProps): React.ReactElement {
+export function BrowserAgentPanel({ sessionId, tabId, pageUrl, tabTitle, channelId, modelId, workspaceId, width, onClose }: BrowserAgentPanelProps): React.ReactElement {
   const [status, setStatus] = useAtom(browserWorkflowStatusAtom)
   const [draft, setDraft] = useAtom(browserWorkflowDraftAtom)
+  const setAgentSessions = useSetAtom(agentSessionsAtom)
+  const workspaces = useAtomValue(agentWorkspacesAtom)
   const [isActionPending, setIsActionPending] = React.useState(false)
   const [unattendedAllowed, setUnattendedAllowed] = React.useState(false)
+  const defaultWorkspaceId = workspaces.find((workspace) => workspace.slug === 'default')?.id ?? workspaces[0]?.id ?? ''
+  const [selectedProjectId, setSelectedProjectId] = React.useState(workspaceId ?? defaultWorkspaceId)
+
+  React.useEffect(() => {
+    setSelectedProjectId(workspaceId ?? defaultWorkspaceId)
+  }, [defaultWorkspaceId, workspaceId])
 
   React.useEffect(() => {
     let active = true
@@ -67,6 +85,40 @@ export function BrowserAgentPanel({ sessionId, tabTitle, channelId, modelId, wor
     }
   }, [sessionId, setDraft, status.state])
 
+  const changeProject = React.useCallback(async (nextProjectId: string): Promise<void> => {
+    if (!nextProjectId || nextProjectId === selectedProjectId) return
+    const nextProject = workspaces.find((workspace) => workspace.id === nextProjectId)
+    if (!nextProject) return
+
+    const previousProjectId = selectedProjectId
+    setSelectedProjectId(nextProjectId)
+    setIsActionPending(true)
+    try {
+      await window.electronAPI.moveAgentSessionToWorkspace({
+        sessionId,
+        targetWorkspaceId: nextProjectId,
+      })
+      setAgentSessions((sessions) => sessions.map((session) => (
+        session.id === sessionId ? { ...session, workspaceId: nextProjectId, sdkSessionId: undefined } : session
+      )))
+      await window.electronAPI.browserWorkflow.bindContext(sessionId, { tabId })
+      if (pageUrl !== 'about:blank') {
+        await window.electronAPI.webTabs.saveProjectAssociation({
+          url: pageUrl,
+          workspaceId: nextProjectId,
+        })
+      }
+      toast.success(`当前页面已关联到项目「${nextProject.name}」`)
+    } catch (error) {
+      setSelectedProjectId(previousProjectId)
+      toast.error(error instanceof Error ? error.message : '切换网页 Agent 项目失败')
+    } finally {
+      setIsActionPending(false)
+    }
+  }, [pageUrl, selectedProjectId, sessionId, setAgentSessions, tabId, workspaces])
+
+  const projectSelectionLocked = isActionPending || (status.state !== 'idle' && status.state !== 'error')
+
   const requestRecording = React.useCallback(async (): Promise<void> => {
     if (!channelId) {
       toast.error('请先配置 Agent 渠道')
@@ -79,7 +131,7 @@ export function BrowserAgentPanel({ sessionId, tabTitle, channelId, modelId, wor
         userMessage: '记录我接下来的操作',
         channelId,
         modelId,
-        workspaceId: workspaceId ?? undefined,
+        workspaceId: selectedProjectId || workspaceId || undefined,
         agentRuntime: 'pi',
         triggeredBy: 'user',
       })
@@ -88,7 +140,7 @@ export function BrowserAgentPanel({ sessionId, tabTitle, channelId, modelId, wor
     } finally {
       setIsActionPending(false)
     }
-  }, [channelId, modelId, sessionId, workspaceId])
+  }, [channelId, modelId, selectedProjectId, sessionId, workspaceId])
 
   const stopRun = React.useCallback(async (): Promise<void> => {
     setIsActionPending(true)
@@ -151,7 +203,18 @@ export function BrowserAgentPanel({ sessionId, tabTitle, channelId, modelId, wor
     <aside style={{ width }} className="flex h-full min-w-[320px] max-w-[560px] shrink-0 flex-col border-l border-border/70 bg-background shadow-[-8px_0_24px_rgba(15,23,42,0.08)]">
       <header className="flex h-11 shrink-0 items-center gap-2 border-b border-border/60 px-3">
         <div className="min-w-0 flex-1">
-          <div className="truncate text-xs font-semibold text-foreground">Copis 网页 Agent</div>
+          <Select value={selectedProjectId} onValueChange={(value) => void changeProject(value)} disabled={projectSelectionLocked || workspaces.length === 0}>
+            <SelectTrigger aria-label="选择网页 Agent 项目" className="h-7 max-w-[220px] border-0 bg-transparent px-1 text-xs font-semibold shadow-none hover:bg-accent/50 focus:bg-accent/50">
+              <SelectValue placeholder="选择项目" />
+            </SelectTrigger>
+            <SelectContent align="start">
+              {workspaces.map((workspace) => (
+                <SelectItem key={workspace.id} value={workspace.id}>
+                  {workspace.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
           <div className="truncate text-[10px] text-muted-foreground">当前页面：{tabTitle || '网页'}</div>
         </div>
         <div className="flex items-center gap-1">

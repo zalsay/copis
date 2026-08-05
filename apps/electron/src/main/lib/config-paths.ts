@@ -323,6 +323,11 @@ export function getWebBookmarksPath(): string {
   return join(getConfigDir(), 'web-bookmarks.json')
 }
 
+/** 获取网页页签与 Agent 项目关联配置路径。 */
+export function getWebProjectAssociationsPath(): string {
+  return join(getConfigDir(), 'web-project-associations.json')
+}
+
 /** 获取网页页签会话配置路径。 */
 export function getWebTabsPath(): string {
   return join(getConfigDir(), 'web-tabs.json')

@@ -49,6 +49,22 @@ export interface WebBookmarksSnapshot {
   bookmarks: WebBookmark[]
 }
 
+/** 页面与 Agent 项目的持久化关联。 */
+export interface WebPageProjectAssociation {
+  /** 规范化后的 HTTP(S) 页面地址。 */
+  url: string
+  /** AgentWorkspace ID。 */
+  workspaceId: string
+  /** 最近一次关联时间戳。 */
+  updatedAt: number
+}
+
+/** 保存页面与 Agent 项目关联的参数。 */
+export interface SaveWebPageProjectAssociationInput {
+  url: string
+  workspaceId: string
+}
+
 /** 保存网页收藏的参数。 */
 export interface SaveWebBookmarkInput {
   title: string
@@ -130,6 +146,8 @@ export const WEB_IPC_CHANNELS = {
   BOOKMARK_GROUP_CREATE: 'web-bookmarks:group-create',
   BOOKMARK_GROUP_RENAME: 'web-bookmarks:group-rename',
   BOOKMARK_GROUP_REMOVE: 'web-bookmarks:group-remove',
+  PROJECT_ASSOCIATION_GET: 'web-tabs:project-association-get',
+  PROJECT_ASSOCIATION_SAVE: 'web-tabs:project-association-save',
 } as const
 
 /** 网页页签 IPC 通道类型。 */

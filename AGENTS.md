@@ -504,5 +504,5 @@ React UI 更新
 - Rust 本地 HTTP API 是录制操作 JSONL 的文件事实源：`~/.copis(-dev)/agent-workspaces/{workspace}/browser-recordings/{recordingId}.jsonl`。Electron 通过内部 token 调用 start/event/finish/cancel/content 端点，事件按链路串行追加。
 - 停止录制后，Pi 工具 `BrowserWorkflowRecordingGet` 将脱敏 JSONL 标记为 untrusted browser data 提供给 Agent；Agent 通过 `BrowserWorkflowDraft` 总结步骤、变量、Origin 和人工检查点，主进程重新校验后才允许用户批准保存。
 - Renderer 的停止操作只结束采集并触发同一 Pi session 读取 JSONL，不直接接收或编译原始录制内容。
-- `browserWorkflowEnabled` 默认开启；显式设置为 `false` 可关闭。Browser Agent 通过共享 `AgentConversationSurface` 的 `browser` variant 渲染，不直接挂载完整 `AgentView`。
+- `browserWorkflowEnabled` 默认开启；开发模式始终开启，打包版显式设置为 `false` 可关闭。Browser Agent 通过共享 `AgentConversationSurface` 的 `browser` variant 渲染，不直接挂载完整 `AgentView`。
 - 真实 Runner 回放命令为 `bun run --filter='@copis/electron' test:browser-workflow:e2e`；harness 使用临时 HOME、userData 和本地 HTTP fixture，覆盖跨 Origin iframe、popup、React controlled input、Locator 歧义与 CDP detach/resume，并在退出时清理临时目录。

@@ -4,7 +4,7 @@ import { ArrowLeft, ArrowRight, ExternalLink, Globe2, RotateCw, ShieldCheck } fr
 import type { WebTabsSnapshot } from '@copis/shared'
 import { browserAgentPanelOpenAtom, browserAgentPanelWidthAtom, browserAgentSessionIdAtom, browserWorkflowStatusAtom } from '@/atoms/browser-agent'
 import { activeWebTabAtom, activeWebTabIdAtom, webTabsAtom } from '@/atoms/web-tabs'
-import { agentChannelIdAtom, agentModelIdAtom, agentSessionsAtom, currentAgentWorkspaceIdAtom } from '@/atoms/agent-atoms'
+import { agentChannelIdAtom, agentModelIdAtom, agentSessionsAtom, agentWorkspacesAtom, currentAgentWorkspaceIdAtom } from '@/atoms/agent-atoms'
 import { draftSessionIdsAtom } from '@/atoms/draft-session-atoms'
 import { Button } from '@/components/ui/button'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
@@ -30,6 +30,7 @@ export function WebBrowserSurface(): React.ReactElement {
   const setActiveTabId = useSetAtom(activeWebTabIdAtom)
   const agentChannelId = useAtomValue(agentChannelIdAtom)
   const agentModelId = useAtomValue(agentModelIdAtom)
+  const agentWorkspaces = useAtomValue(agentWorkspacesAtom)
   const currentWorkspaceId = useAtomValue(currentAgentWorkspaceIdAtom)
   const agentSessions = useAtomValue(agentSessionsAtom)
   const setAgentSessions = useSetAtom(agentSessionsAtom)
@@ -142,16 +143,24 @@ export function WebBrowserSurface(): React.ReactElement {
   }, [activeTab])
 
   const handleOpenBrowserAgent = React.useCallback(async (): Promise<void> => {
-    if (!browserWorkflowEnabled || !activeTabId) return
+    if (!browserWorkflowEnabled || !activeTabId || !activeTab) return
     if (browserAgentSessionId) {
       setBrowserAgentPanelOpen(true)
       return
     }
     try {
+      const association = await window.electronAPI.webTabs.getProjectAssociation(activeTab.url)
+      const associatedWorkspace = association
+        ? agentWorkspaces.find((workspace) => workspace.id === association.workspaceId)
+        : undefined
+      const defaultWorkspace = agentWorkspaces.find((workspace) => workspace.slug === 'default') ?? agentWorkspaces[0]
+      const workspaceId = associatedWorkspace?.id ?? defaultWorkspace?.id ?? currentWorkspaceId
+      if (!workspaceId) throw new Error('没有可用的 Agent 项目')
+
       const session = await window.electronAPI.createAgentSession(
         '网页 Browser Agent',
         agentChannelId ?? undefined,
-        currentWorkspaceId ?? undefined,
+        workspaceId,
         agentModelId ?? undefined,
       )
       await window.electronAPI.browserWorkflow.bindContext(session.id, { tabId: activeTabId })
@@ -168,7 +177,7 @@ export function WebBrowserSurface(): React.ReactElement {
       const message = error instanceof Error ? error.message : '无法打开网页 Agent'
       toast.error(message)
     }
-  }, [activeTabId, agentChannelId, agentModelId, browserAgentSessionId, browserWorkflowEnabled, currentWorkspaceId, setAgentSessions, setDraftSessionIds, setBrowserAgentPanelOpen, setBrowserAgentSessionId, setBrowserWorkflowStatus])
+  }, [activeTabId, activeTab?.url, agentChannelId, agentModelId, agentWorkspaces, browserAgentSessionId, browserWorkflowEnabled, currentWorkspaceId, setAgentSessions, setDraftSessionIds, setBrowserAgentPanelOpen, setBrowserAgentSessionId, setBrowserWorkflowStatus])
 
   const handleCloseBrowserAgent = React.useCallback((): void => {
     setBrowserAgentPanelOpen(false)
@@ -187,6 +196,14 @@ export function WebBrowserSurface(): React.ReactElement {
     window.addEventListener('pointermove', handleMove)
     window.addEventListener('pointerup', handleUp, { once: true })
   }, [setBrowserAgentPanelWidth])
+
+  React.useEffect(() => {
+    const workspaceId = browserAgentSession?.workspaceId
+    if (!browserAgentSessionId || !workspaceId || !activeTab?.url || activeTab.url === 'about:blank') return
+    void window.electronAPI.webTabs.saveProjectAssociation({ url: activeTab.url, workspaceId }).catch((error) => {
+      console.error('[网页项目关联] 保存当前页面关联失败:', error)
+    })
+  }, [activeTab?.url, browserAgentSession?.workspaceId, browserAgentSessionId])
 
   React.useEffect(() => {
     if (!browserAgentSessionId || !activeTabId) return
@@ -283,7 +300,7 @@ export function WebBrowserSurface(): React.ReactElement {
       </div>
       <div className="flex min-h-0 flex-1">
         <div ref={hostRef} className="relative min-w-0 flex-1 bg-white dark:bg-zinc-950" />
-        {browserWorkflowEnabled && browserAgentSessionId && browserAgentPanelOpen ? (
+        {browserWorkflowEnabled && browserAgentSessionId && browserAgentPanelOpen && activeTabId ? (
           <>
             <div
               role="separator"
@@ -294,6 +311,8 @@ export function WebBrowserSurface(): React.ReactElement {
             />
             <BrowserAgentPanel
               sessionId={browserAgentSessionId}
+              tabId={activeTabId}
+              pageUrl={activeTab.url}
               tabTitle={activeTab.title}
               channelId={browserAgentSession?.channelId ?? agentChannelId}
               modelId={browserAgentSession?.modelId}

@@ -164,6 +164,7 @@ import type {
   OpenWebBookmarksWindowInput,
   ResizeWebBookmarksWindowInput,
   SaveWebBookmarkInput,
+  SaveWebPageProjectAssociationInput,
   CreateWebBookmarkGroupInput,
   RenameWebBookmarkGroupInput,
   UpdateWebTabBoundsInput,
@@ -173,6 +174,7 @@ import type {
   BrowserWorkflowVersion,
   BrowserWorkflowManifest,
   WebBookmarksSnapshot,
+  WebPageProjectAssociation,
   WebTabsSnapshot,
   WorkingWorkspace,
   WorkingWorkspaceInput,
@@ -292,6 +294,10 @@ export interface ElectronAPI {
     bookmarksGroupRename: (input: RenameWebBookmarkGroupInput) => Promise<WebBookmarksSnapshot>
     /** 删除收藏分组，分组内收藏移动到未分组。 */
     bookmarksGroupRemove: (groupId: string) => Promise<WebBookmarksSnapshot>
+    /** 获取当前页面上次关联的 Agent 项目。 */
+    getProjectAssociation: (url: string) => Promise<WebPageProjectAssociation | null>
+    /** 保存当前页面与 Agent 项目的关联。 */
+    saveProjectAssociation: (input: SaveWebPageProjectAssociationInput) => Promise<WebPageProjectAssociation>
     /** 订阅主进程推送的网页页签状态。 */
     onChanged: (callback: (snapshot: WebTabsSnapshot) => void) => () => void
   }
@@ -1407,6 +1413,8 @@ const electronAPI: ElectronAPI = {
     bookmarksGroupCreate: (input: CreateWebBookmarkGroupInput) => ipcRenderer.invoke(WEB_IPC_CHANNELS.BOOKMARK_GROUP_CREATE, input) as Promise<WebBookmarksSnapshot>,
     bookmarksGroupRename: (input: RenameWebBookmarkGroupInput) => ipcRenderer.invoke(WEB_IPC_CHANNELS.BOOKMARK_GROUP_RENAME, input) as Promise<WebBookmarksSnapshot>,
     bookmarksGroupRemove: (groupId: string) => ipcRenderer.invoke(WEB_IPC_CHANNELS.BOOKMARK_GROUP_REMOVE, groupId) as Promise<WebBookmarksSnapshot>,
+    getProjectAssociation: (url: string) => ipcRenderer.invoke(WEB_IPC_CHANNELS.PROJECT_ASSOCIATION_GET, url) as Promise<WebPageProjectAssociation | null>,
+    saveProjectAssociation: (input: SaveWebPageProjectAssociationInput) => ipcRenderer.invoke(WEB_IPC_CHANNELS.PROJECT_ASSOCIATION_SAVE, input) as Promise<WebPageProjectAssociation>,
     onChanged: (callback: (snapshot: WebTabsSnapshot) => void) => {
       const listener = (_event: Electron.IpcRendererEvent, snapshot: WebTabsSnapshot): void => callback(snapshot)
       ipcRenderer.on(WEB_IPC_CHANNELS.STATE_CHANGED, listener)

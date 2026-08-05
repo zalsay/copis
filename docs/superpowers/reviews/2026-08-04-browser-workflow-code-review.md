@@ -299,7 +299,7 @@ Automation scheduler 的 `AutomationRun` 只保存 session、状态、耗时和�
 - Runner 使用 Workflow-owned views、Origin 检查、变量检查、profile lease 和终态清理；Automation run 记录现在关联 Workflow、版本和 runId。
 - Store 按 `manifest.currentVersion` 读取，并先原子写版本、再更新 manifest；`wait`/`assert`/`outcome` 的 union 和正则校验已收紧。
 - Browser Agent 面板宽度使用 Jotai 持久化，网页 Agent session 在首条消息前标记为 draft；Plan mode 已允许只读 Workflow 工具。
-- Pi 工具在工具列表构建和每次执行时都重新检查 `browserWorkflowEnabled`；旧设置缺省和新安装默认开启，显式 `false` 仍可关闭。
+- Pi 工具在工具列表构建和每次执行时都重新检查 `browserWorkflowEnabled`；开发模式始终开启，打包版缺省开启且显式 `false` 仍可关闭。
 
 ### 仍需补充或部分完成
 

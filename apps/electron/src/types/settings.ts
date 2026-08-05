@@ -259,7 +259,7 @@ export interface AppSettings {
   windowsShellPreference?: WindowsShellPreference
   /** 侧栏「自动任务」合成项目组在项目列表中的位置索引（默认 0 = 最靠前；可拖拽调整） */
   agentAutomationGroupOrder?: number
-  /** 是否启用网页 Browser Workflow 入口与 Agent 工具；默认开启，显式设置为 false 可关闭。 */
+  /** 是否启用网页 Browser Workflow 入口与 Agent 工具；默认开启，开发模式始终开启，打包版显式设置为 false 可关闭。 */
   browserWorkflowEnabled?: boolean
   /** 是否已完成 Onboarding 流程 */
   onboardingCompleted?: boolean

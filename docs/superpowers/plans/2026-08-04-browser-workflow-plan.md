@@ -1496,7 +1496,7 @@ git diff --check
 
 ### 22.1 Feature Flag
 
-首版使用本地设置 `browserWorkflowEnabled` 控制 UI 和 Pi tools，默认开启；用户显式设置为 `false` 时可关闭，用于紧急回滚或隐私控制。
+首版使用本地设置 `browserWorkflowEnabled` 控制 UI 和 Pi tools，默认开启；开发模式始终开启，打包版用户显式设置为 `false` 时可关闭，用于紧急回滚或隐私控制。
 
 Flag 关闭时：
 

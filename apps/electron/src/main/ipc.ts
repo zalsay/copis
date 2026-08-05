@@ -144,6 +144,7 @@ import type {
   OpenWebBookmarksWindowInput,
   ResizeWebBookmarksWindowInput,
   SaveWebBookmarkInput,
+  SaveWebPageProjectAssociationInput,
   CreateWebBookmarkGroupInput,
   RenameWebBookmarkGroupInput,
   UpdateWebTabBoundsInput,
@@ -235,6 +236,11 @@ import {
   renameWebBookmarkGroup,
   saveWebBookmark,
 } from './lib/web-bookmark-service'
+
+import {
+  getWebPageProjectAssociation,
+  saveWebPageProjectAssociation,
+} from './lib/web-project-association-service'
 
 import { checkEnvironment } from './lib/environment-checker'
 import { fetchInstallerManifest, findInstallerSource } from './lib/installer-manifest'
@@ -1002,6 +1008,17 @@ export function registerIpcHandlers(): void {
       throw new Error('网页收藏分组 ID 不正确')
     }
     return removeWebBookmarkGroup(groupId)
+  })
+
+  ipcMain.handle(WEB_IPC_CHANNELS.PROJECT_ASSOCIATION_GET, (_event, url: string) => {
+    if (typeof url !== 'string') throw new Error('页面项目关联地址不正确')
+    return getWebPageProjectAssociation(url)
+  })
+  ipcMain.handle(WEB_IPC_CHANNELS.PROJECT_ASSOCIATION_SAVE, (_event, input: SaveWebPageProjectAssociationInput) => {
+    if (!input || typeof input !== 'object' || typeof input.url !== 'string' || typeof input.workspaceId !== 'string') {
+      throw new Error('页面项目关联参数不正确')
+    }
+    return saveWebPageProjectAssociation(input)
   })
 
   // ===== Browser Workflow（仅高层能力；CDP 不通过 IPC 暴露） =====

@@ -11,6 +11,25 @@ import { DEFAULT_AGENT_RUNTIME, DEFAULT_INTERFACE_VARIANT, DEFAULT_MEMORY_POLICY
 import type { AppSettings } from '../../types'
 import { normalizeMemoryPolicy } from '@copis/shared'
 
+interface ElectronAppModule {
+  app?: {
+    isPackaged?: boolean
+  }
+}
+
+function isBrowserWorkflowDevelopmentMode(): boolean {
+  if (process.env.COPIS_DEV === '1') return true
+  try {
+    return (require('electron') as ElectronAppModule).app?.isPackaged === false
+  } catch {
+    return false
+  }
+}
+
+function resolveBrowserWorkflowEnabled(value: boolean | undefined): boolean {
+  return isBrowserWorkflowDevelopmentMode() || value !== false
+}
+
 /**
  * 获取应用设置
  *
@@ -53,7 +72,7 @@ export function getSettings(): AppSettings {
       themeMode: data.themeMode || DEFAULT_THEME_MODE,
       interfaceVariant: data.interfaceVariant || DEFAULT_INTERFACE_VARIANT,
       onboardingCompleted: data.onboardingCompleted ?? false,
-      browserWorkflowEnabled: data.browserWorkflowEnabled ?? true,
+      browserWorkflowEnabled: resolveBrowserWorkflowEnabled(data.browserWorkflowEnabled),
       environmentCheckSkipped: data.environmentCheckSkipped ?? false,
       notificationsEnabled: data.notificationsEnabled ?? true,
       longTextPasteAsAttachmentEnabled: data.longTextPasteAsAttachmentEnabled ?? false,
