@@ -496,3 +496,13 @@ React UI 更新
 - **文件监听**：项目根目录、会话文件、附加目录、MCP 配置与 Chat 工具实时监控
 - **事件流处理**：SDK 消息流式转换与累积
 - **错误映射**：SDK 错误统一转换为应用错误
+
+### Browser Workflow 录制边界
+
+- Browser Workflow 只支持 Pi Agent；CDP 只由 Electron 主进程内部使用，Renderer、Preload、HTTP bridge 和 MCP 不暴露任意 CDP。
+- 页面操作由主进程完成 nonce、Origin、URL 和 `event.isTrusted` 校验，并在进入 Rust API 前移除普通输入字面值和敏感值。
+- Rust 本地 HTTP API 是录制操作 JSONL 的文件事实源：`~/.copis(-dev)/agent-workspaces/{workspace}/browser-recordings/{recordingId}.jsonl`。Electron 通过内部 token 调用 start/event/finish/cancel/content 端点，事件按链路串行追加。
+- 停止录制后，Pi 工具 `BrowserWorkflowRecordingGet` 将脱敏 JSONL 标记为 untrusted browser data 提供给 Agent；Agent 通过 `BrowserWorkflowDraft` 总结步骤、变量、Origin 和人工检查点，主进程重新校验后才允许用户批准保存。
+- Renderer 的停止操作只结束采集并触发同一 Pi session 读取 JSONL，不直接接收或编译原始录制内容。
+- `browserWorkflowEnabled` 默认关闭；开发验证时显式启用后，Browser Agent 通过共享 `AgentConversationSurface` 的 `browser` variant 渲染，不直接挂载完整 `AgentView`。
+- 真实 Runner 回放命令为 `bun run --filter='@copis/electron' test:browser-workflow:e2e`；harness 使用临时 HOME、userData 和本地 HTTP fixture，覆盖跨 Origin iframe、popup、React controlled input、Locator 歧义与 CDP detach/resume，并在退出时清理临时目录。

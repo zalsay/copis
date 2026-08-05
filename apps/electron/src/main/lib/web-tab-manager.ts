@@ -15,7 +15,6 @@ import type {
   NavigateWebTabInput,
   OpenWebBookmarksWindowInput,
   ResizeWebBookmarksWindowInput,
-  SendWebTabCdpCommandInput,
   UpdateWebTabBoundsInput,
   WebTabBounds,
   WebTabState,
@@ -26,6 +25,12 @@ interface WebTabRecord {
   state: WebTabState
   view: WebContentsView
   bounds: WebTabBounds
+  workflowOwned?: boolean
+  workflowVisible?: boolean
+  mainFrameLoadError?: string
+  partition: string
+  cdpDetachListeners: Set<(reason: string) => void>
+  cdpDetachHandler?: (event: Electron.Event, reason: string) => void
 }
 
 interface BookmarksWindowState {
@@ -110,7 +115,9 @@ export function normalizeWebTabUrl(input: string): string {
 
 function getSnapshot(): WebTabsSnapshot {
   return {
-    tabs: Array.from(records.values(), (record) => ({ ...record.state })),
+    tabs: Array.from(records.values())
+      .filter((record) => !record.workflowOwned)
+      .map((record) => ({ ...record.state })),
     activeTabId,
   }
 }
@@ -181,12 +188,22 @@ function refreshState(record: WebTabRecord | undefined, updates?: Partial<WebTab
     canGoForward: contents.canGoForward(),
     ...updates,
   }
+  if (record.workflowOwned) {
+    if (record.workflowVisible) applyActiveView()
+    return
+  }
   persistTabs()
   emitSnapshot()
 }
 
 function applyActiveView(): void {
   for (const record of records.values()) {
+    if (record.workflowOwned) {
+      const hasBounds = record.bounds.width > 0 && record.bounds.height > 0
+      record.view.setVisible(Boolean(record.workflowVisible && hasBounds))
+      if (record.workflowVisible && hasBounds) record.view.setBounds(record.bounds)
+      continue
+    }
     const isActive = record.state.id === activeTabId
     const hasBounds = record.bounds.width > 0 && record.bounds.height > 0
 
@@ -201,22 +218,18 @@ function applyActiveView(): void {
 
 function attachCdp(record: WebTabRecord): void {
   const cdp = record.view.webContents.debugger
+  if (record.cdpDetachHandler) {
+    cdp.removeListener('detach', record.cdpDetachHandler)
+    record.cdpDetachHandler = undefined
+  }
 
+  const detachHandler = (_event: Electron.Event, reason: string): void => {
+    for (const listener of record.cdpDetachListeners) listener(reason)
+  }
+  cdp.on('detach', detachHandler)
+  record.cdpDetachHandler = detachHandler
   try {
-    if (!cdp.isAttached()) {
-      cdp.attach('1.3')
-    }
-    const attached = cdp.isAttached()
-    record.state = { ...record.state, cdpAttached: attached }
-
-    if (attached) {
-      void cdp.sendCommand('Page.enable').catch((error: unknown) => {
-        console.warn('[网页页签] 初始化 CDP Page 域失败:', error)
-      })
-      void cdp.sendCommand('Runtime.enable').catch((error: unknown) => {
-        console.warn('[网页页签] 初始化 CDP Runtime 域失败:', error)
-      })
-    }
+    if (!cdp.isAttached()) cdp.attach('1.3')
   } catch (error) {
     console.warn('[网页页签] 自动连接 CDP 失败:', error)
   }
@@ -226,6 +239,7 @@ function installWebContentsHandlers(record: WebTabRecord): void {
   const contents = record.view.webContents
 
   contents.on('did-start-loading', () => {
+    record.mainFrameLoadError = undefined
     refreshState(record, { isLoading: true, faviconUrl: null })
   })
 
@@ -239,10 +253,14 @@ function installWebContentsHandlers(record: WebTabRecord): void {
 
   contents.on('did-navigate', (_event, url) => {
     refreshState(record, { url, isLoading: false, title: getFallbackTitle(url), faviconUrl: null })
+    emitWebTabLifecycle({ type: 'navigated', tabId: record.state.id, workflowOwned: record.workflowOwned, url, snapshot: getSnapshot() })
   })
 
   contents.on('did-navigate-in-page', (_event, url, isMainFrame) => {
-    if (isMainFrame) refreshState(record, { url })
+    if (isMainFrame) {
+      refreshState(record, { url })
+      emitWebTabLifecycle({ type: 'navigated', tabId: record.state.id, workflowOwned: record.workflowOwned, url, snapshot: getSnapshot() })
+    }
   })
 
   contents.on('page-title-updated', (event, title) => {
@@ -252,6 +270,7 @@ function installWebContentsHandlers(record: WebTabRecord): void {
 
   contents.on('did-fail-load', (_event, _errorCode, errorDescription, validatedURL, isMainFrame) => {
     if (!isMainFrame) return
+    record.mainFrameLoadError = errorDescription || '网页加载失败'
     refreshState(record, {
       url: validatedURL || record.state.url,
       title: errorDescription || '网页加载失败',
@@ -267,9 +286,14 @@ function installWebContentsHandlers(record: WebTabRecord): void {
   contents.on('destroyed', () => {
     if (records.get(record.state.id) !== record) return
     records.delete(record.state.id)
-    if (activeTabId === record.state.id) activeTabId = null
-    persistTabs()
-    emitSnapshot()
+    if (!record.workflowOwned && activeTabId === record.state.id) activeTabId = null
+    if (!record.workflowOwned) {
+      persistTabs()
+      emitSnapshot()
+    } else if (record.workflowVisible) {
+      applyActiveView()
+    }
+    emitWebTabLifecycle({ type: 'closed', tabId: record.state.id, workflowOwned: record.workflowOwned, snapshot: getSnapshot() })
   })
 
   contents.on('will-navigate', (event, url) => {
@@ -283,7 +307,11 @@ function installWebContentsHandlers(record: WebTabRecord): void {
   contents.setWindowOpenHandler(({ url }) => {
     if (isAllowedWebUrl(url)) {
       try {
-        createWebTab({ url, activate: true })
+        createWebTabInternal(
+          { url, partition: record.partition, activate: !record.workflowOwned },
+          record.workflowOwned === true,
+          record.state.id,
+        )
       } catch (error) {
         console.error('[网页页签] 创建 window.open 页签失败:', error)
       }
@@ -295,11 +323,6 @@ function installWebContentsHandlers(record: WebTabRecord): void {
     return { action: 'deny' }
   })
 
-  contents.debugger.on('detach', () => {
-    if (records.get(record.state.id) !== record) return
-    record.state = { ...record.state, cdpAttached: false }
-    emitSnapshot()
-  })
 }
 
 /** 设置承载 WebContentsView 的主窗口。 */
@@ -449,6 +472,7 @@ export function saveWebTabsSession(): void {
 
 /** 释放所有网页页签及原生视图。 */
 export function disposeWebTabs(): void {
+  isDisposingWebTabs = true
   closeWebBookmarksWindow()
   const currentHost = hostWindow
   hostWindow = null
@@ -466,6 +490,7 @@ export function disposeWebTabs(): void {
 
       try {
         const cdp = record.view.webContents.debugger
+        if (record.cdpDetachHandler) cdp.removeListener('detach', record.cdpDetachHandler)
         if (cdp.isAttached()) cdp.detach()
       } catch {
         // 网页进程可能已经退出，忽略清理阶段错误。
@@ -481,63 +506,133 @@ export function disposeWebTabs(): void {
   }
 }
 
+export interface WebTabLifecycleEvent {
+  type: 'created' | 'activated' | 'closed' | 'navigated'
+  tabId: string
+  openerTabId?: string
+  workflowOwned?: boolean
+  url?: string
+  snapshot: WebTabsSnapshot
+}
+
+const webTabLifecycleListeners = new Set<(event: WebTabLifecycleEvent) => void>()
+
+export function subscribeWebTabLifecycle(listener: (event: WebTabLifecycleEvent) => void): () => void {
+  webTabLifecycleListeners.add(listener)
+  return () => webTabLifecycleListeners.delete(listener)
+}
+
+function emitWebTabLifecycle(event: WebTabLifecycleEvent): void {
+  for (const listener of webTabLifecycleListeners) listener(event)
+}
+
 /** 获取当前网页页签快照。 */
 export function listWebTabs(): WebTabsSnapshot {
   return getSnapshot()
 }
 
-/** 创建并默认激活一个新的 Chromium 网页页签。 */
-export function createWebTab(input: CreateWebTabInput = {}): WebTabsSnapshot {
+function normalizeWebTabPartition(partition: string | undefined): string {
+  if (partition === 'persist:copis-web') return partition
+  const prefix = 'persist:copis-workflow-'
+  if (partition?.startsWith(prefix) && /^[a-zA-Z0-9_-]+$/.test(partition.slice(prefix.length))) return partition
+  return 'persist:copis-web'
+}
+
+/** 创建网页 WebContentsView；Workflow-owned 视图不进入用户页签和持久化会话。 */
+function createWebTabInternal(input: CreateWebTabInput, workflowOwned: boolean, openerTabId?: string): WebTabRecord {
   if (!isHostAvailable()) throw new Error('主窗口尚未准备好')
 
   const url = normalizeWebTabUrl(input.url ?? DEFAULT_URL)
+  const partition = normalizeWebTabPartition(input.partition)
   const view = new WebContentsView({
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
       devTools: true,
-      partition: 'persist:copis-web',
+      partition,
     },
   })
   const id = `web-${randomUUID()}`
+  const showWorkflowForE2E = workflowOwned && process.env.COPIS_BROWSER_WORKFLOW_E2E_VISIBLE === '1'
   const record: WebTabRecord = {
     state: {
       id,
       title: getFallbackTitle(url),
       url,
-      isLoading: url !== DEFAULT_URL,
       faviconUrl: null,
+      isLoading: url !== DEFAULT_URL,
       canGoBack: false,
       canGoForward: false,
-      cdpAttached: false,
     },
     view,
     bounds: { x: 0, y: 0, width: 0, height: 0 },
+    workflowOwned,
+    workflowVisible: showWorkflowForE2E,
+    partition,
+    cdpDetachListeners: new Set(),
   }
 
   records.set(id, record)
+  if (showWorkflowForE2E && activeTabId) {
+    const activeRecord = records.get(activeTabId)
+    if (activeRecord) record.bounds = { ...activeRecord.bounds }
+  }
   hostWindow!.contentView.addChildView(view)
   view.setVisible(false)
   installWebContentsHandlers(record)
   attachCdp(record)
 
-  if (input.activate !== false) activeTabId = id
+  if (!workflowOwned && input.activate !== false) activeTabId = id
   persistTabs()
   applyActiveView()
-  emitSnapshot()
+  if (!workflowOwned) emitSnapshot()
+  emitWebTabLifecycle({ type: 'created', tabId: id, openerTabId, workflowOwned, snapshot: getSnapshot() })
+  if (!workflowOwned && input.activate !== false) emitWebTabLifecycle({ type: 'activated', tabId: id, snapshot: getSnapshot() })
 
   if (url !== DEFAULT_URL) {
     void view.webContents.loadURL(url).catch((error: unknown) => {
+      record.mainFrameLoadError = error instanceof Error ? error.message : '网页加载失败'
       console.warn('[网页页签] 初始导航失败:', error)
       refreshState(record, { isLoading: false, title: '网页加载失败' })
     })
   }
 
+  return record
+}
+
+/** 创建并默认激活一个新的 Chromium 网页页签。 */
+export function createWebTab(input: CreateWebTabInput = {}): WebTabsSnapshot {
+  createWebTabInternal(input, false)
   return getSnapshot()
 }
 
-/** 激活网页页签；传 null 返回 Copis 首页。 */
+/** 创建仅供固定 Workflow 使用的隔离网页视图，不出现在用户页签或恢复文件中。 */
+export function createWorkflowWebTab(input: CreateWebTabInput = {}): WebTabState {
+  const record = createWebTabInternal({ ...input, activate: false }, true)
+  return { ...record.state }
+}
+
+/** 关闭 Workflow-owned 网页视图并释放 CDP。 */
+export function closeWorkflowWebTab(tabId: string): void {
+  const record = records.get(tabId)
+  if (!record || !record.workflowOwned) return
+  records.delete(tabId)
+  try {
+    hostWindow?.contentView.removeChildView(record.view)
+  } catch {
+    // 主窗口正在销毁时，Electron 会自动移除子视图。
+  }
+  try {
+    const cdp = record.view.webContents.debugger
+    if (record.cdpDetachHandler) cdp.removeListener('detach', record.cdpDetachHandler)
+    if (cdp.isAttached()) cdp.detach()
+  } catch {
+    // 清理阶段忽略已退出网页进程的错误。
+  }
+  if (!record.view.webContents.isDestroyed()) record.view.webContents.close({ waitForBeforeUnload: false })
+  applyActiveView()
+}
 export function activateWebTab(tabId: string | null): WebTabsSnapshot {
   if (tabId !== null && !records.has(tabId)) {
     throw new Error('网页页签不存在')
@@ -546,6 +641,7 @@ export function activateWebTab(tabId: string | null): WebTabsSnapshot {
   persistTabs()
   applyActiveView()
   emitSnapshot()
+  if (tabId) emitWebTabLifecycle({ type: 'activated', tabId, snapshot: getSnapshot() })
   return getSnapshot()
 }
 
@@ -554,7 +650,9 @@ export function closeWebTab(tabId: string): WebTabsSnapshot {
   const record = records.get(tabId)
   if (!record) return getSnapshot()
 
-  const tabIds = Array.from(records.keys())
+  const tabIds = Array.from(records.values())
+    .filter((item) => !item.workflowOwned)
+    .map((item) => item.state.id)
   const tabIndex = tabIds.indexOf(tabId)
   const wasActive = activeTabId === tabId
   records.delete(tabId)
@@ -571,6 +669,7 @@ export function closeWebTab(tabId: string): WebTabsSnapshot {
 
   try {
     const cdp = record.view.webContents.debugger
+    if (record.cdpDetachHandler) cdp.removeListener('detach', record.cdpDetachHandler)
     if (cdp.isAttached()) cdp.detach()
   } catch {
     // 清理阶段忽略已退出网页进程的错误。
@@ -580,6 +679,7 @@ export function closeWebTab(tabId: string): WebTabsSnapshot {
   persistTabs()
   applyActiveView()
   emitSnapshot()
+  emitWebTabLifecycle({ type: 'closed', tabId, snapshot: getSnapshot() })
   return getSnapshot()
 }
 
@@ -589,6 +689,7 @@ export function navigateWebTab(input: NavigateWebTabInput): WebTabsSnapshot {
   if (!record) throw new Error('网页页签不存在')
 
   const url = normalizeWebTabUrl(input.url)
+  record.mainFrameLoadError = undefined
   record.state = {
     ...record.state,
     url,
@@ -602,10 +703,34 @@ export function navigateWebTab(input: NavigateWebTabInput): WebTabsSnapshot {
   emitSnapshot()
 
   void record.view.webContents.loadURL(url).catch((error: unknown) => {
+    record.mainFrameLoadError = error instanceof Error ? error.message : '网页加载失败'
     console.warn('[网页页签] 导航失败:', error)
     refreshState(record, { isLoading: false, title: '网页加载失败' })
   })
   return getSnapshot()
+}
+
+/** 等待当前页签最近一次主框架导航完成，Workflow 不直接操作未完成或失败的页面。 */
+export async function waitForWebTabLoad(tabId: string, timeoutMs: number, signal?: AbortSignal): Promise<void> {
+  const record = records.get(tabId)
+  if (!record) throw new Error('网页页签不存在')
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    if (signal?.aborted) throw new Error('Browser Workflow 已取消')
+    const current = records.get(tabId)
+    if (!current) throw new Error('网页页签不存在')
+    if (current.mainFrameLoadError) throw new Error(`网页加载失败: ${current.mainFrameLoadError}`)
+    if (!current.state.isLoading) {
+      // did-stop-loading 可能先于 loadURL rejection 到达，留出一个 macrotask 让失败标记落盘。
+      await new Promise((resolve) => setTimeout(resolve, 100))
+      const settled = records.get(tabId)
+      if (!settled) throw new Error('网页页签不存在')
+      if (settled.mainFrameLoadError) throw new Error(`网页加载失败: ${settled.mainFrameLoadError}`)
+      if (!settled.state.isLoading) return
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50))
+  }
+  throw new Error('等待网页加载超时')
 }
 
 /** 同步原生网页视图尺寸。 */
@@ -621,10 +746,30 @@ export function updateWebTabBounds(input: UpdateWebTabBoundsInput): void {
     width: Math.max(0, Math.round(bounds.width)),
     height: Math.max(0, Math.round(bounds.height)),
   }
+  if (record.workflowOwned) {
+    if (record.workflowVisible) applyActiveView()
+    return
+  }
+  for (const workflowRecord of records.values()) {
+    if (workflowRecord.workflowOwned && workflowRecord.workflowVisible) {
+      workflowRecord.bounds = { ...record.bounds }
+    }
+  }
   applyActiveView()
 }
 
-/** 后退当前网页。 */
+/** 让 Workflow-owned 页面临时显示在当前用户网页区域，供人工检查点操作。 */
+export function setWorkflowWebTabVisible(tabId: string, visible: boolean): void {
+  const record = records.get(tabId)
+  if (!record?.workflowOwned) return
+  record.workflowVisible = visible
+  if (visible) {
+    const activeRecord = activeTabId ? records.get(activeTabId) : undefined
+    if (activeRecord && !activeRecord.workflowOwned) record.bounds = { ...activeRecord.bounds }
+  }
+  applyActiveView()
+}
+
 export function goBackWebTab(tabId: string): WebTabsSnapshot {
   const record = records.get(tabId)
   if (!record) throw new Error('网页页签不存在')
@@ -648,15 +793,63 @@ export function reloadWebTab(tabId: string): WebTabsSnapshot {
   return getSnapshot()
 }
 
-/** 向自动连接的 CDP 会话发送命令。 */
-export async function sendWebTabCdpCommand(input: SendWebTabCdpCommandInput): Promise<unknown> {
+interface WebTabCdpCommandInput {
+  tabId: string
+  method: string
+  params?: Record<string, unknown>
+}
+
+export type WebTabCdpEventListener = (method: string, params: Record<string, unknown>) => void
+
+export type WebTabCdpDetachListener = (reason: string) => void
+
+/** 订阅主进程内部 CDP 会话断开事件；不通过 IPC 暴露。 */
+export function subscribeWebTabCdpDetach(tabId: string, listener: WebTabCdpDetachListener): () => void {
+  const record = records.get(tabId)
+  if (!record) return () => undefined
+  record.cdpDetachListeners.add(listener)
+  return () => record.cdpDetachListeners.delete(listener)
+}
+
+/** 获取主进程持有的网页页签状态，供 Workflow 服务绑定页面。 */
+export function getWebTabLoadError(tabId: string): string | undefined {
+  return records.get(tabId)?.mainFrameLoadError
+}
+
+export function getWebTabState(tabId: string): WebTabState | undefined {
+  const record = records.get(tabId)
+  return record ? { ...record.state } : undefined
+}
+
+/** 订阅指定网页页签的 CDP 事件；监听器只在主进程内部使用。 */
+export function subscribeWebTabCdpEvents(tabId: string, listener: WebTabCdpEventListener): () => void {
+  const record = records.get(tabId)
+  if (!record) throw new Error('网页页签不存在')
+  const handler = (_event: Electron.Event, method: string, params: Record<string, unknown>): void => {
+    listener(method, params)
+  }
+  record.view.webContents.debugger.on('message', handler)
+  return () => {
+    record.view.webContents.debugger.removeListener('message', handler)
+  }
+}
+
+/** 仅供真实 Electron E2E 触发 CDP detach；生产 IPC 不暴露该能力。 */
+export function detachWebTabCdpForTest(tabId: string): void {
+  if (process.env.COPIS_BROWSER_WORKFLOW_E2E !== '1') throw new Error('E2E CDP 操作未启用')
+  const record = records.get(tabId)
+  if (!record) throw new Error('网页页签不存在')
+  const cdp = record.view.webContents.debugger
+  if (cdp.isAttached()) cdp.detach()
+}
+
+/** 向主进程内部的网页 CDP 会话发送命令，禁止通过 Renderer/HTTP 暴露。 */
+export async function sendWebTabCdpCommandInternal(input: WebTabCdpCommandInput): Promise<unknown> {
   const record = records.get(input.tabId)
   if (!record) throw new Error('网页页签不存在')
 
   const cdp = record.view.webContents.debugger
-  if (!cdp.isAttached()) {
-    attachCdp(record)
-  }
+  if (!cdp.isAttached()) attachCdp(record)
   if (!cdp.isAttached()) throw new Error('网页 CDP 未连接')
   return cdp.sendCommand(input.method, input.params)
 }

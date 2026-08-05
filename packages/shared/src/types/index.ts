@@ -71,3 +71,5 @@ export * from './web'
 
 // Copis Memory 长期记忆相关类型
 export * from './memory'
+// Pi Agent 浏览器工作流相关类型
+export * from './browser-workflow'

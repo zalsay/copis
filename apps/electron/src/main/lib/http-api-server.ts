@@ -1,4 +1,5 @@
 import { app } from 'electron'
+import { randomBytes } from 'node:crypto'
 import { spawn, type ChildProcessWithoutNullStreams, type SpawnOptions } from 'node:child_process'
 import { chmodSync, existsSync } from 'node:fs'
 import { createInterface, type Interface } from 'node:readline'
@@ -63,6 +64,7 @@ export interface HttpApiServerOptions {
 interface ManagedProcess {
   child: ChildProcessWithoutNullStreams
   lineReader?: Interface
+  internalToken: string
 }
 
 interface RustBridgeRequest {
@@ -73,6 +75,7 @@ interface RustBridgeRequest {
 }
 
 let httpApiProcess: ChildProcessWithoutNullStreams | null = null
+let httpApiInternalToken: string | null = null
 let stopping = false
 let responseWriteChain = Promise.resolve()
 
@@ -206,6 +209,7 @@ function spawnManagedProcess(
   const spawnImpl = options.spawnImpl ?? ((file, args, spawnOptions) => (
     spawn(file, args, spawnOptions) as ChildProcessWithoutNullStreams
   ))
+  const internalToken = randomBytes(32).toString('hex')
   let child: ChildProcessWithoutNullStreams
   try {
     child = spawnImpl(binaryPath, [], {
@@ -216,6 +220,7 @@ function spawnManagedProcess(
         ...process.env,
         COPIS_HTTP_API_PORT: String(port),
         COPIS_MEMORY_DIR: join(getConfigDir(), 'memory'),
+        COPIS_HTTP_API_INTERNAL_TOKEN: internalToken,
         COPIS_PI_RPC_RUNTIME: process.execPath,
         ...(workerPath ? { COPIS_PI_RPC_WORKER: workerPath } : {}),
       },
@@ -250,6 +255,7 @@ function spawnManagedProcess(
   child.once('error', (error) => {
     if (httpApiProcess === child) {
       httpApiProcess = null
+      httpApiInternalToken = null
       if (!stopping) console.error('[HTTP API] Rust 进程错误:', error.message)
     }
   })
@@ -257,12 +263,13 @@ function spawnManagedProcess(
     lineReader?.close()
     if (httpApiProcess !== child) return
     httpApiProcess = null
+    httpApiInternalToken = null
     if (!stopping) {
       console.error(`[HTTP API] Rust 进程退出（code=${code ?? 'null'}, signal=${signal ?? 'none'}）`)
     }
   })
 
-  return { child, ...(lineReader ? { lineReader } : {}) }
+  return { child, internalToken, ...(lineReader ? { lineReader } : {}) }
 }
 
 function stopManagedProcess(
@@ -354,6 +361,7 @@ export function startHttpApiServer(options: HttpApiServerOptions = {}): void {
   const managed = spawnManagedProcess(binaryPath, options.port ?? HTTP_API_PORT, options, true)
   if (!managed) return
   httpApiProcess = managed.child
+  httpApiInternalToken = managed.internalToken
   console.log(`[HTTP API] Rust 服务已启动：http://${HTTP_API_HOST}:${options.port ?? HTTP_API_PORT}${workerPath ? `，Pi worker: ${workerPath}` : ''}`)
 }
 
@@ -386,6 +394,7 @@ export async function updateHttpApiServer(options: HttpApiServerOptions = {}): P
   const oldProcess = httpApiProcess
   if (oldProcess) {
     httpApiProcess = null
+    httpApiInternalToken = null
     await stopManagedProcess(oldProcess, options.stopTimeoutMs)
   }
 
@@ -401,6 +410,7 @@ export async function updateHttpApiServer(options: HttpApiServerOptions = {}): P
   const next = spawnManagedProcess(candidatePath, formalPort, options, true)
   if (next && await waitForHealth(formalPort, options)) {
     httpApiProcess = next.child
+    httpApiInternalToken = next.internalToken
     console.log(`[HTTP API] Rust 模块已切换到 v${prepared.artifact.version}`)
     return true
   }
@@ -412,6 +422,10 @@ export async function updateHttpApiServer(options: HttpApiServerOptions = {}): P
   }
   console.warn('[HTTP API] 新 Rust 模块正式端口健康检查失败，已恢复旧版本')
   return false
+}
+
+export function getHttpApiInternalToken(): string | null {
+  return httpApiInternalToken
 }
 
 export async function ensureHttpApiServer(options: HttpApiServerOptions = {}): Promise<void> {
@@ -440,6 +454,7 @@ export function stopHttpApiServer(stopTimeoutMs = 1_000): Promise<void> {
 
   stopping = true
   httpApiProcess = null
+  httpApiInternalToken = null
   return stopManagedProcess(child, stopTimeoutMs).finally(() => {
     stopping = false
   })

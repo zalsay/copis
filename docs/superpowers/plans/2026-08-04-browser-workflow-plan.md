@@ -2,16 +2,16 @@
 
 > **For agentic workers:** 实施时按本文 Task 顺序推进，每个步骤使用 checkbox（`- [ ]`）跟踪。遵循 BDD：先写失败场景和测试，再实现，再运行聚焦验证。不要在同一提交中夹带无关重构。
 
-**状态：** 已确认方案，尚未开始实现
+**状态：** 实施中：Rust JSONL 录制、Pi 提炼、session/Origin/审批/profile 边界和确定性 Runner 已接入；真实 Electron Runner 回放和共享 `AgentConversationSurface` 已完成，当前重点是录制端到端、权限矩阵和生产隐藏执行视图回归
 **日期：** 2026-08-04
-**目标版本：** 以实际实施时的下一个 patch 版本为准
-**负责人边界：** Electron 主进程、Pi Agent Runtime、Renderer 浏览器页签与 Agent 会话 UI
+**目标版本：** `@copis/electron` 0.16.13；Shared 未新增运行时契约，版本保持不变
+**负责人边界：** Electron 主进程、Rust 本地 API、Pi Agent Runtime、Renderer 浏览器页签与 Agent 会话 UI
 
-**Goal:** 将 Copis 当前的 CDP 测试能力重构为 Pi Agent 专用的浏览器工作流系统。用户可以从网页工具栏打开 Copis Agent 侧栏，通过对话录制真实网页操作，将录制结果编译成固定、可审计、可跨页面执行的 Workflow，并由 Agent 后续调用确定性执行器完成自动化。
+**Goal:** 将 Copis 当前的 CDP 测试能力重构为 Pi Agent 专用的浏览器工作流系统。用户可以从网页工具栏打开 Copis Agent 侧栏，通过对话录制真实网页操作；录制事件先由 Rust 本地 API 以脱敏 JSONL 文件追加保存，停止后由 Pi Agent 读取并总结提炼成固定、可审计、可跨页面执行的 Workflow，最后由确定性执行器完成自动化。
 
-**Architecture:** CDP 只存在于 Electron 主进程，由 `BrowserWorkflowService` 管理。Renderer 不接触原始 CDP，只展示浏览器 Agent 对话、录制状态、Workflow 审批和运行进度。Pi Agent 只获得高层 Workflow 工具，不能自由发送任意点击、脚本或 CDP 命令。正式回放由确定性状态机执行，Agent负责发起、参数化、解释失败和提出版本修复。
+**Architecture:** CDP 只存在于 Electron 主进程，由 `BrowserWorkflowService` 管理。主进程只负责验证上下文、采集并脱敏操作事件，然后通过带内部 token 的本地 Rust API 将每个事件按顺序写入 workspace 下的 JSONL 文件；停止后 Pi Agent 通过高层工具读取这份 untrusted JSONL，负责总结、命名、变量提炼和提交待审核草稿。主进程只对 Agent 草稿做 schema、workspace、来源录制和 Origin 校验，不把任意 CDP 或网页日志指令交给 Agent 执行。Renderer 不接触原始 CDP 或 JSONL，只展示浏览器 Agent 对话、录制状态、Workflow 审批和运行进度。正式回放由确定性状态机执行，Agent 负责发起、参数化、解释失败和提出版本修复。
 
-**Tech Stack:** Bun workspace、TypeScript、Electron `WebContentsView` / `webContents.debugger`、React 18、Jotai、TypeBox、Pi Agent SDK、JSON/JSONL、本地文件存储、Bun test。Playwright只用于开发期 E2E，不进入产品运行链路。
+**Tech Stack:** Bun workspace、TypeScript、Electron `WebContentsView` / `webContents.debugger`、Rust 本地 HTTP API、React 18、Jotai、TypeBox、Pi Agent SDK、JSON/JSONL、本地文件存储、Bun test、Cargo test。Playwright只用于开发期 E2E，不进入产品运行链路。
 
 ---
 
@@ -31,6 +31,7 @@
 10. 录制使用用户当前可见网页；正式运行使用 Workflow 自有页面上下文，默认不接管用户正在操作的页签。
 11. Playwright只作为开发期 E2E 测试工具。首版产品运行时不增加 Playwright依赖或浏览器下载。
 12. 网页工具栏现有 `CDP` 提示替换为 Copis 图标。点击后打开真实分栏式 Agent 对话面板，不使用覆盖原生网页的 DOM Sheet。
+13. 录制操作 JSONL 由 Rust 本地 API 创建、追加和结束标记；Electron 主进程不把内存事件数组作为最终 Workflow 来源。停止录制后，Pi Agent 通过高层工具获得这份脱敏 JSONL，再提交结构化草稿。
 
 ---
 
@@ -67,7 +68,7 @@
 2. 点击网页工具栏中的 Copis 图标。
 3. 在右侧 Agent 面板中说明要记录的业务流程。
 4. Agent 启动录制，用户正常操作网页，包括跨页面和新页签。
-5. 停止录制后，Agent将操作整理成参数化 Workflow 草稿。
+5. 停止录制后，Rust JSONL 由 `BrowserWorkflowRecordingGet` 提供给 Agent；Agent将操作总结、参数化并提交待审核 Workflow 草稿。
 6. 用户检查步骤、变量、允许域名和人工检查点，并批准一个版本。
 7. 用户以后通过自然语言、手动入口或定时任务运行该 Workflow。
 8. 执行失败时，系统暂停并生成诊断，Agent提出修复版本，用户批准后才更新。
@@ -111,19 +112,25 @@ Pi Agent Runtime + Pi Native Tools
           │
           ▼
 BrowserWorkflowService (Main Process, source of truth)
-  ├── RecordingCoordinator
-  ├── WorkflowCompiler
-  ├── WorkflowStore
-  ├── WorkflowRunner
-  ├── BrowserProfileManager
-  ├── BrowserPageManager
-  ├── CdpSessionRouter
-  ├── LocatorResolver
-  ├── WorkflowPermissionPolicy
-  └── WorkflowArtifactStore
+  ├── RecordingCoordinator / CDP recorder
+  ├── Rust Recording API client
+  ├── WorkflowStore / WorkflowRunner
+  ├── BrowserProfileManager / BrowserPageManager
+  ├── CdpSessionRouter / LocatorResolver
+  └── WorkflowPermissionPolicy
+          │
+          ├── normalized, redacted events
+          ▼
+Rust Local HTTP API (internal token)
           │
           ▼
-Electron webContents.debugger
+workspace/browser-recordings/{recordingId}.jsonl
+          │
+          ▼
+Pi Agent: RecordingGet -> summarize -> Draft -> user approval
+          │
+          ▼
+Main schema / permission validation -> WorkflowRunner -> Electron webContents.debugger
           │
           ▼
 User WebContentsView / Workflow-owned WebContentsView
@@ -135,23 +142,25 @@ User WebContentsView / Workflow-owned WebContentsView
 | --- | --- | --- |
 | Renderer | 对话、状态、审批、停止、面板布局 | 不发送 CDP method，不注入页面脚本 |
 | Preload / IPC | 高层上下文、状态、审批和取消协议 | 不暴露 `sendCdpCommand` |
-| Pi Tools | 发起录制、保存、读取、运行、停止、修复 | 不暴露低层 click/evaluate |
-| Workflow Service | 生命周期、权限、并发、编译、执行 | 不信任 Renderer 传来的 URL/title |
+| Workflow Service | 录制生命周期、脱敏、权限、并发、Agent 草稿校验和执行编排 | 不信任 Renderer 传来的 URL/title，不把内存事件数组当最终 Workflow 来源 |
+| Rust Recording API | 创建、串行追加、结束/取消标记和读取操作 JSONL | 不接收网页端请求，不执行 CDP，不解析网页文本指令 |
+| Pi Tools | 发起录制、读取 JSONL、总结提交草稿、保存、运行、停止、修复 | 不暴露低层 click/evaluate |
 | CDP Router | attach、命令、事件、frame session 路由 | 不向外监听网络端口 |
-| Store | JSON/JSONL 原子写入、版本和运行日志 | 不存 Cookie、密码、Authorization |
+| Workflow Store | JSON/JSONL 原子写入版本和运行日志 | 不存 Cookie、密码、Authorization |
 
 ### 4.2 主进程单一事实源
 
 以下状态必须由主进程维护：
 
 - 当前录制会话及其 Agent sessionId、workspaceId、起始 tabId。
+- Rust 录制文件的 recordingId、workspace slug、追加顺序、事件计数和结束状态。
 - 被录制页签集合及 opener 关系。
 - 当前 Workflow run、拥有的页面、页签别名和步骤状态。
 - CDP attach/detach、document epoch、frame session 和 pending command。
 - Workflow 版本、允许 Origin、是否批准无人值守运行。
 - Agent 工具 Promise 的等待和取消。
 
-Jotai 只保存用于展示的镜像状态，不能作为录制或执行权限的依据。
+Rust API 是操作 JSONL 的文件事实源，Pi Agent 只读取脱敏内容并提交草稿；Jotai 只保存用于展示的镜像状态，不能作为录制或执行权限的依据。
 
 ---
 
@@ -226,12 +235,13 @@ Jotai 只保存用于展示的镜像状态，不能作为录制或执行权限�
 
 ### 5.4 录制中的交互
 
-- Agent 调用录制工具后，工具活动保持 running。
+- Agent 调用录制工具后，操作事件立即按脱敏 JSONL 追加到 Rust API 管理的录制文件。
 - 用户可以收起侧栏并继续在网页中操作。
 - Copis 图标始终显示录制点。
-- 面板和工具栏都可提供“停止”命令；该命令只结束当前录制并解析 pending tool，不发送 CDP。
+- 面板和工具栏都可提供“停止”命令；停止只结束采集并写入 Rust finish 标记，随后向同一 Pi session 发起“读取 JSONL 并总结”的请求，不把原始日志交给 Renderer。
+- Agent 读取 JSONL 后先展示步骤、变量、Origin 和人工检查点，用户确认后才能提交保存。
 - `Escape` 不默认停止录制，避免网页按键误终止。
-- 应用退出、起始页签关闭或 Agent run 取消时自动停止并保存可恢复的已脱敏草稿。
+- 应用退出、起始页签关闭或 Agent run 取消时写入 cancel 标记并释放录制资源。
 
 ---
 
@@ -288,7 +298,7 @@ idle
   -> starting
   -> recording
   -> stopping
-  -> compiling
+  -> awaiting_agent_summary
   -> awaiting_review
   -> approved | discarded | error
 ```
@@ -297,16 +307,16 @@ idle
 
 - `recordingId`
 - `agentSessionId`
-- `workspaceId`
+- `workspaceId` / workspace slug
 - `rootTabId`
 - `includedTabIds`
 - `startedAt`
 - `status`
-- `sanitizedEvents`
+- Rust JSONL file reference and event count
 - `tabAliases`
 - `observedOrigins`
 
-同一时刻只允许一个全局用户录制，避免无法判断用户操作归属。Workflow 回放与录制不能同时控制同一页面。
+同一时刻只允许一个全局用户录制，避免无法判断用户操作归属。Workflow 回放与录制不能同时控制同一页面。录制结束后，Rust 文件保留原始操作顺序和结束标记；它不是 Workflow 版本，必须由 Agent 读取和总结后才能产生草稿。
 
 ### 7.2 注入方式
 
@@ -321,6 +331,17 @@ idle
 7. 监听主框架导航、history change、目标创建和页面销毁
 
 注入脚本运行在命名隔离 world，不污染页面全局变量。事件监听使用 capture phase，并只接受 `event.isTrusted === true` 的真实用户事件。每个 recording 使用不可预测 nonce，主进程拒绝 nonce 不匹配、来源 context 不匹配或超出录制范围的 payload。
+
+### 7.3.1 Rust JSONL 持久化边界
+
+Electron 主进程通过内部 token 调用 Rust API：
+
+- `POST /internal/browser-workflows/recordings/{workspace}/{recording}/start` 创建文件并写入 metadata 行。
+- `POST .../event` 追加一条已经完成 nonce、Origin、URL 和敏感字段处理的操作事件。
+- `POST .../finish` 或 `POST .../cancel` 追加结束标记。
+- `GET .../content` 只允许主进程读取，Pi 工具通过主进程将内容作为 untrusted browser data 提供给 Agent。
+
+文件位于 `~/.copis(-dev)/agent-workspaces/{workspace}/browser-recordings/{recordingId}.jsonl`。Renderer、网页端、HTTP bridge 的业务路由和 MCP 不得直接访问这些端点。普通 input 的字面值在进入 Rust 前已被替换为 empty/variable 语义；password、OTP、支付、文件等敏感输入只保留人工检查点信息。
 
 ### 7.3 录制事件
 
@@ -425,45 +446,41 @@ export type BrowserLocatorStrategy =
 
 ---
 
-## 9. Workflow 编译
+## 9. Workflow Agent 提炼
 
-### 9.1 编译流水线
+### 9.1 Agent 提炼流水线
 
 ```text
-Sanitized Raw Events
-  -> sort/deduplicate
-  -> coalesce input
-  -> correlate click + submit + navigation/new tab
-  -> assign tab aliases
-  -> infer implicit waits and expected URL
-  -> parameterize input
-  -> detect manual checkpoints
-  -> validate origins
-  -> produce immutable draft version
+Rust JSONL operation log
+  -> BrowserWorkflowRecordingGet
+  -> Agent reads untrusted events and summarizes user intent
+  -> Agent proposes variables, fixed values, waits and manual checkpoints
+  -> BrowserWorkflowDraft submits a structured candidate
+  -> Main schema/workspace/source-recording/Origin validation
+  -> awaiting_review
+  -> user approval -> immutable Workflow version
 ```
 
-### 9.2 确定性归一化规则
+Rust JSONL 是操作事实记录，不是可直接执行的 Workflow。Agent 是总结提炼层，Runner 是执行层；二者不能互相替代。主进程不再把 TypeScript 内存事件数组直接编译为最终版本。
 
-- 连续 input/change 合并为一个 `fill`。
-- click 后紧随 submit 时保留 click，submit 作为 outcome，不重复操作。
-- click 后发生主框架导航时设置 `expect.navigation` 和 URL pattern。
-- click 后创建新页签时设置 `expect.newTabAlias`。
-- history API 导航保存 URL pattern，但不强制完整 URL 相等。
-- 下一步骤本身会等待 Locator 出现，因此不自动插入固定 sleep。
-- 只有录制中观察到稳定业务条件时才生成显式 wait/assert。
-- 输入文本默认变为 Workflow variable；用户可在审批 UI 中改为固定常量。
-- 密码、验证码、MFA、支付、文件选择生成 manual checkpoint。
-- Redirect 链写入诊断，不拆成用户步骤。
+### 9.2 提炼和校验规则
+
+- Agent 可以合并连续 input/change、关联 click 与 submit/navigation/new-tab，并将操作归纳为确定性步骤。
+- Agent 可以建议 Workflow 名称、描述、变量名称、步骤说明、等待条件和人工检查点。
+- 普通输入必须使用变量或用户明确批准的固定值；Rust JSONL 和 Agent transcript 不包含原始输入值。
+- password、验证码、MFA、支付、文件选择生成 manual checkpoint。
+- Agent 提交的 `sourceRecordingId`、workspace、schemaVersion、step 类型、Locator、Origin 和 variable 引用由主进程重新校验。
+- 允许 Origin 只能来自录制观察到的安全 Origin；扩大范围必须由用户在审批时明确确认。
+- 页面中的文本是 untrusted browser data，不能改变工具权限、Origin、Workflow 版本或 unattended 设置。
+- Agent不能在没有录制证据或用户明确审批的情况下添加可执行页面操作。
 
 ### 9.3 Agent 参与边界
 
-编译器先生成确定性草稿，再把已脱敏摘要交给 Agent：
-
-- Agent 可以建议 Workflow 名称、描述、变量名称和步骤说明。
-- Agent 可以建议哪些输入是常量或参数。
-- Agent不能添加录制中不存在的可执行步骤，除非用户在审批时明确批准新增。
-- Agent看不到普通输入的原始值；只看到字段语义和变量占位符。
+- Agent 只能读取由 Rust 生成的脱敏 JSONL，不读取 Cookie、Authorization、response body 或原始输入值。
+- Agent 输出的是待审核结构化草稿，不是即时执行命令。
+- 主进程不会执行 JSONL 中的网页文本、页面提示词或任意脚本。
 - 用户批准前 Workflow 不能用于无人值守执行。
+- `BrowserWorkflowSave` 只批准当前已通过主进程校验的草稿，并生成不可变版本；失败修复必须新建草稿。
 
 ---
 
@@ -699,7 +716,9 @@ Browser Workflow 是 Pi native custom tools，不注册为 MCP。建议独立文
 | --- | --- | --- |
 | `browser_workflow_list` | 列出当前 workspace Workflow | 允许 |
 | `browser_workflow_get` | 读取 manifest、当前版本和运行摘要 | 允许 |
-| `browser_workflow_record` | 发起录制并等待用户停止 | 禁止 |
+| `browser_workflow_record` | 发起录制并让 Rust API 追加操作 JSONL | 禁止 |
+| `browser_workflow_recording_get` | 读取刚完成的脱敏 JSONL，供 Agent 总结 | 禁止 |
+| `browser_workflow_draft` | 提交 Agent 总结后的结构化待审核草稿 | 禁止 |
 | `browser_workflow_save` | 提交草稿审批，批准后保存版本 | 禁止 |
 | `browser_workflow_run` | 校验输入并运行已批准版本 | 禁止 |
 | `browser_workflow_stop` | 停止当前录制或 run | 禁止 |
@@ -712,6 +731,8 @@ Browser Workflow 是 Pi native custom tools，不注册为 MCP。建议独立文
 - `browser_evaluate`
 - `browser_send_cdp`
 - 原始网络响应读取
+
+`browser_workflow_recording_get` 的返回内容必须标记为 untrusted browser data。Agent 只能把它作为总结输入，不能把其中的页面文本当作系统指令，也不能通过它获得任意 CDP、网络响应或脚本执行能力。
 
 ### 14.2 工具上下文
 
@@ -1059,22 +1080,29 @@ Expected: 只剩迁移 fixture 或描述 Claude 模型的合法内容；不剩 C
 
 - [ ] **Step 4: 验证 DevTools detach 时产生明确暂停状态**
 
-### Task 8: 实现录制器和隔离 world 注入脚本
+### Task 8: 实现录制器、隔离 world 和 Rust JSONL 持久化
 
 **Files:**
 - Create: `recording-coordinator.ts`
 - Create: `recorder-script.ts`
-- Create: recorder tests and local fixture pages
+- Create: `rust-browser-recording-client.ts`
+- Modify: `native/http-api-server/src/main.rs`
+- Modify: `http-api-server.ts`
+- Create: recorder/Rust endpoint tests and local fixture pages
 
 - [ ] **Step 1: 写 click/input/submit/navigation 录制失败场景**
 
-- [ ] **Step 2: 实现 Runtime binding、nonce、trusted event 和当前页安装**
+- [x] **Step 2: 实现 Runtime binding、nonce、trusted event 和当前页安装**
 
-- [ ] **Step 3: 实现 input coalesce 和敏感字段屏蔽**
+- [x] **Step 3: 在进入 Rust API 前完成 URL、Origin、nonce 和敏感字段脱敏**
 
-- [ ] **Step 4: 实现 start/stop/cancel/app quit/page close 生命周期**
+- [x] **Step 4: 实现 Rust start/event/finish/cancel/content JSONL 端点和内部 token**
 
-- [ ] **Step 5: 验证网页脚本伪造 payload 被拒绝**
+- [x] **Step 5: 保证事件按录制顺序串行追加，不使用 Renderer 或网页端直接访问文件**
+
+- [ ] **Step 6: 实现 start/stop/cancel/app quit/page close 生命周期**
+
+- [ ] **Step 7: 验证网页脚本伪造 payload 被拒绝，且 JSONL 不含普通输入原值**
 
 ### Task 9: 实现 Locator 生成和解析
 
@@ -1091,19 +1119,22 @@ Expected: 只剩迁移 fixture 或描述 Claude 模型的合法内容；不剩 C
 
 - [ ] **Step 4: 导航后验证旧 node/ref 失效**
 
-### Task 10: 实现 Workflow Compiler
+### Task 10: 实现 Agent Workflow 总结提炼和主进程校验
 
 **Files:**
-- Create: `workflow-compiler.ts`
-- Create: `workflow-compiler.test.ts`
+- Modify: `browser-workflow-service.ts`
+- Create: `browser-workflow-agent-extraction.test.ts`
+- Modify: Pi Browser Workflow tools
 
-- [ ] **Step 1: 写 input 合并、click+navigation、click+new-tab、manual step 场景**
+- [ ] **Step 1: 写读取 Rust JSONL、untrusted 内容隔离、普通输入不泄漏场景**
 
-- [ ] **Step 2: 实现确定性编译，不调用模型**
+- [x] **Step 2: 实现 `BrowserWorkflowRecordingGet`，只向当前用户 Pi session 提供已结束录制**
 
-- [ ] **Step 3: 输出已脱敏 Agent draft summary**
+- [x] **Step 3: Agent 根据 JSONL 提炼步骤、变量、Origin、等待和人工检查点，并通过 `BrowserWorkflowDraft` 提交结构化候选**
 
-- [ ] **Step 4: 验证原始输入值不进入 summary 和版本文件**
+- [x] **Step 4: 主进程重新校验 sourceRecordingId、workspace、schema、step/variable 引用和 Origin 集合**
+
+- [x] **Step 5: 用户审批后才生成不可变版本；录制 JSONL 不直接作为可执行 Workflow**
 
 ### Task 11: 实现 Workflow Runner
 
@@ -1144,11 +1175,13 @@ Expected: 只剩迁移 fixture 或描述 Claude 模型的合法内容；不剩 C
 
 - [ ] **Step 1: 写工具 schema、workspace 隔离和 trigger source 权限测试**
 
-- [ ] **Step 2: 注册 list/get/record/save/run/stop/repair**
+- [x] **Step 2: 注册 list/get/record/recording-get/draft/save/run/stop/repair**
 
-- [ ] **Step 3: 实现 long-running tool 与 Agent abort 联动**
+- [x] **Step 3: 将停止后的 Rust JSONL 读取和 Agent follow-up 接入同一 Pi session**
 
-- [ ] **Step 4: 验证不存在低层 click/type/evaluate/CDP tool**
+- [ ] **Step 4: 实现 long-running tool 与 Agent abort 联动**
+
+- [ ] **Step 5: 验证不存在低层 click/type/evaluate/CDP tool**
 
 ### Task 14: 重构可复用 Agent Conversation Surface
 
@@ -1160,9 +1193,13 @@ Expected: 只剩迁移 fixture 或描述 Claude 模型的合法内容；不剩 C
 
 - [ ] **Step 1: 为现有 AgentView 关键发送/停止/队列行为补回归测试**
 
-- [ ] **Step 2: 抽取 controller 和消息/composer surface**
+- [x] **Step 2: 抽取共享 AgentConversationSurface 实现**
 
-- [ ] **Step 3: 保证 main/browser 两种 variant 不重复注册 listener**
+主 Agent 和 Browser Agent 通过 `variant="main" | "browser"` 进入同一套会话、消息、composer、权限和流式生命周期；`AgentView` 仅保留兼容适配器。
+
+- [x] **Step 3: 保证 main/browser 两种 variant 不重复注册 listener**
+
+两种 variant 只改变布局，IPC 流式监听仍由全局 `useGlobalAgentListeners` 维护。
 
 - [ ] **Step 4: 验证面板切换不丢流式消息、权限请求和 pending tool**
 
@@ -1237,9 +1274,15 @@ Expected: 只剩迁移 fixture 或描述 Claude 模型的合法内容；不剩 C
 
 - [ ] **Step 2: E2E 录制同页表单流程**
 
-- [ ] **Step 3: E2E 录制并回放跨域/新页签流程**
+- [x] **Step 3: 真实 Electron Runner 回放跨域/新页签流程**
+
+`bun run --filter='@copis/electron' test:browser-workflow:e2e` 使用临时 HOME/userData 和本地 HTTP fixture，覆盖 React controlled input、Tab、跨 Origin iframe、popup、close、navigation outcome、Locator 歧义和 CDP detach/resume。
+
+- [ ] **Step 3a: 录制 Rust JSONL 并由 Pi 总结后回放**
 
 - [ ] **Step 4: E2E 验证真实 WebContentsView 与 Agent 侧栏不重叠**
+
+已有手工真实窗口检查覆盖侧栏 bounds；仍需将该检查固化为带截图像素断言的自动化 harness。
 
 - [ ] **Step 5: 检查截图像素、窗口 bounds、控制台错误和原生 view 销毁竞态**
 
@@ -1253,9 +1296,9 @@ Expected: 只剩迁移 fixture 或描述 Claude 模型的合法内容；不剩 C
 
 功能实现完成后，先获得文档修改许可，再更新 AGENTS/README。记录 CDP 私有边界、Workflow 存储、侧栏与原生 View 分栏、测试命令和 Claude Runtime 移除。
 
-- [ ] **Step 2: 递增受影响包 patch 版本**
+- [x] **Step 2: 递增受影响包 patch 版本**
 
-至少包括 `@copis/shared` 和 `@copis/electron`；以实际 diff 为准。
+`@copis/electron` 已从 `0.16.12` 递增至 `0.16.13`，并同步 `bun.lock`；本轮没有修改 Shared 运行时契约。
 
 - [ ] **Step 3: 运行全量类型检查、测试和构建**
 
@@ -1283,7 +1326,9 @@ And 点击本身不会请求模型或开始录制
 Given Browser Agent 对话栏已绑定当前网页
 When 用户发送“记录我接下来的操作”
 Then Pi Agent 调用 browser_workflow_record
-And 工具保持运行直到用户停止
+And Rust API 创建 recording JSONL 文件并持续追加脱敏操作事件
+And 停止后状态进入 awaiting_agent_summary
+And Agent 调用 browser_workflow_recording_get 读取 JSONL 并提交 browser_workflow_draft
 And Copis 图标显示录制状态
 And 收起侧栏不会中断录制
 ```
@@ -1293,8 +1338,9 @@ And 收起侧栏不会中断录制
 ```text
 Given 用户正在录制表单操作
 When 用户输入普通文本、密码和一次性验证码
-Then 普通文本被编译为变量占位符
-And 密码和验证码被编译为人工步骤
+Then Rust JSONL 不包含普通文本原值
+And Agent 将普通文本总结为变量占位符
+And Agent 将密码和验证码总结为人工步骤
 And Agent transcript、Workflow 文件和运行日志均不包含原始敏感值
 ```
 

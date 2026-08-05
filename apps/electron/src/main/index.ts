@@ -10,7 +10,7 @@ if (process.platform === 'win32') {
 // Dev 与正式版使用独立的 userData 目录，避免共享 Chromium SingletonLock 导致 dev 启动被静默退出
 // 必须在任何会读取 userData 路径的模块加载之前执行
 if (!app.isPackaged) {
-  app.setPath('userData', join(app.getPath('appData'), '@copis/electron-dev'))
+  app.setPath('userData', process.env.COPIS_ELECTRON_USER_DATA ?? join(app.getPath('appData'), '@copis/electron-dev'))
 }
 
 // 单实例锁：防止重复启动同一个版本（dev/prod 因 userData 已隔离，互不影响）
@@ -99,6 +99,8 @@ import { stopAllGenerations } from './lib/chat-service'
 import { configureUpdater, initAutoUpdater, cleanupUpdater } from './lib/updater/auto-updater'
 import { startWorkspaceWatcher, stopWorkspaceWatcher } from './lib/workspace-watcher'
 import { disposeWebTabs, saveWebTabsSession, setWebTabHostWindow } from './lib/web-tab-manager'
+import { stopAllBrowserWorkflowRecordings } from './lib/browser-workflow-service'
+import { stopAllBrowserWorkflowRuns } from './lib/browser-workflow-runner'
 import { startChatToolsWatcher, stopChatToolsWatcher } from './lib/chat-tools-watcher'
 import { getIsQuitting, setQuitting } from './lib/app-lifecycle'
 import {
@@ -363,9 +365,11 @@ function saveMainWindowState(): void {
   })
 }
 
+const DEV_SERVER_URL = process.env.COPIS_DEV_SERVER_URL ?? 'http://127.0.0.1:5174'
+
 function isDevServerNavigation(url: string): boolean {
   try {
-    return new URL(url).origin === 'http://127.0.0.1:5174'
+    return new URL(url).origin === new URL(DEV_SERVER_URL).origin
   } catch {
     return false
   }
@@ -418,7 +422,7 @@ function createWindow(): void {
   // Load the renderer
   const isDev = !app.isPackaged
   if (isDev) {
-    mainWindow.loadURL('http://127.0.0.1:5174')
+    mainWindow.loadURL(DEV_SERVER_URL)
     mainWindow.webContents.openDevTools()
   } else {
     mainWindow.loadFile(join(__dirname, 'renderer', 'index.html'))
@@ -501,6 +505,8 @@ function createWindow(): void {
   }
 
   mainWindow.on('closed', () => {
+    stopAllBrowserWorkflowRecordings()
+    stopAllBrowserWorkflowRuns()
     disposeWebTabs()
     mainWindow = null
   })
@@ -739,6 +745,8 @@ app.on('before-quit', () => {
   setQuitting()
   // 先保存网页页签恢复状态，再释放原生 WebContentsView。
   saveWebTabsSession()
+  stopAllBrowserWorkflowRecordings()
+  stopAllBrowserWorkflowRuns()
   disposeWebTabs()
 
   // 关闭本地 HTTP API，避免开发重启时残留端口占用。
@@ -749,6 +757,7 @@ app.on('before-quit', () => {
   // 中止所有活跃的 Agent 和 Chat 子进程
   stopAllAgents()
   stopAllGenerations()
+  // 释放 Pi runtime 资源
   cleanupAgentRuntimeResources()
   // 清理更新器定时器
   cleanupUpdater()

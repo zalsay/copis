@@ -9,7 +9,7 @@ import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'nod
 import { existsSync, realpathSync, rmSync, readFileSync, writeFileSync, mkdirSync, statSync } from 'node:fs'
 import { writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, CHAT_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, INSTALLER_IPC_CHANNELS, FUNCTIONAL_MODULE_IPC_CHANNELS, PROXY_IPC_CHANNELS, GITHUB_RELEASE_IPC_CHANNELS, SYSTEM_PROMPT_IPC_CHANNELS, CHAT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, WECHAT_IPC_CHANNELS, AUTOMATION_IPC_CHANNELS, PLANNING_IPC_CHANNELS, PLANNING_CONFLICT_ERROR, WORKING_IPC_CHANNELS, WEB_IPC_CHANNELS, COPIS_WORKING_CHANNEL_ID, isCopisPermissionMode, isWorkingMode, normalizePathForCompare } from '@copis/shared'
+import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, CHAT_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, INSTALLER_IPC_CHANNELS, FUNCTIONAL_MODULE_IPC_CHANNELS, PROXY_IPC_CHANNELS, GITHUB_RELEASE_IPC_CHANNELS, SYSTEM_PROMPT_IPC_CHANNELS, CHAT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, WECHAT_IPC_CHANNELS, AUTOMATION_IPC_CHANNELS, PLANNING_IPC_CHANNELS, PLANNING_CONFLICT_ERROR, WORKING_IPC_CHANNELS, WEB_IPC_CHANNELS, BROWSER_WORKFLOW_IPC_CHANNELS, COPIS_WORKING_CHANNEL_ID, isCopisPermissionMode, isWorkingMode, normalizePathForCompare } from '@copis/shared'
 import { USER_PROFILE_IPC_CHANNELS, SETTINGS_IPC_CHANNELS, SCRATCH_PAD_IPC_CHANNELS, QUICK_TASK_IPC_CHANNELS, VOICE_DICTATION_IPC_CHANNELS, APP_ICON_IPC_CHANNELS, DOCK_BADGE_IPC_CHANNELS, STORAGE_IPC_CHANNELS } from '../types'
 import type {
   QuickTaskSubmitInput,
@@ -146,8 +146,8 @@ import type {
   SaveWebBookmarkInput,
   CreateWebBookmarkGroupInput,
   RenameWebBookmarkGroupInput,
-  SendWebTabCdpCommandInput,
   UpdateWebTabBoundsInput,
+  BrowserAgentContext,
 } from '@copis/shared'
 import type { UserProfile, AppSettings } from '../types'
 import { getRuntimeStatus, getGitRepoStatus, reinitializeRuntime } from './lib/runtime-init'
@@ -212,9 +212,21 @@ import {
   resizeWebBookmarksWindow,
   closeWebBookmarksWindow,
   reloadWebTab,
-  sendWebTabCdpCommand,
   updateWebTabBounds,
 } from './lib/web-tab-manager'
+import {
+  bindBrowserAgentContext,
+  approveBrowserWorkflowDraft,
+  cancelBrowserWorkflowRecording,
+  getBrowserWorkflowDraft,
+  getBrowserWorkflowStatus,
+  assertBrowserWorkflowSessionOwner,
+  rejectBrowserWorkflowDraft,
+  stopBrowserWorkflowRecording,
+  subscribeBrowserWorkflowStatus,
+  unbindBrowserAgentContext,
+} from './lib/browser-workflow-service'
+import { continueBrowserWorkflowRun, stopBrowserWorkflowRun } from './lib/browser-workflow-runner'
 import {
   createWebBookmarkGroup,
   getWebBookmarks,
@@ -925,6 +937,14 @@ function releaseDirectoryWatcherIfUnreferenced(dirPath: string): void {
   if (!isStillReferenced) unwatchAttachedDirectory(dirPath)
 }
 
+async function assertBrowserWorkflowMainWindow(senderId: number): Promise<void> {
+  const { getMainWindow } = await import('./index')
+  const mainWindow = getMainWindow()
+  if (!mainWindow || mainWindow.isDestroyed() || mainWindow.webContents.isDestroyed() || mainWindow.webContents.id !== senderId) {
+    throw new Error('Browser Workflow IPC 只能由主渲染窗口调用')
+  }
+}
+
 export function registerIpcHandlers(): void {
   console.log('[IPC] 正在注册 IPC 处理器...')
 
@@ -949,7 +969,6 @@ export function registerIpcHandlers(): void {
   ipcMain.handle(WEB_IPC_CHANNELS.GO_BACK, (_event, tabId: string) => goBackWebTab(tabId))
   ipcMain.handle(WEB_IPC_CHANNELS.GO_FORWARD, (_event, tabId: string) => goForwardWebTab(tabId))
   ipcMain.handle(WEB_IPC_CHANNELS.RELOAD, (_event, tabId: string) => reloadWebTab(tabId))
-  ipcMain.handle(WEB_IPC_CHANNELS.SEND_CDP_COMMAND, (_event, input: SendWebTabCdpCommandInput) => sendWebTabCdpCommand(input))
   ipcMain.handle(WEB_IPC_CHANNELS.BOOKMARKS_LIST, () => getWebBookmarks())
   ipcMain.handle(WEB_IPC_CHANNELS.BOOKMARKS_SAVE, (_event, input: SaveWebBookmarkInput) => {
     if (!input || typeof input !== 'object' || typeof input.title !== 'string' || typeof input.url !== 'string') {
@@ -983,6 +1002,69 @@ export function registerIpcHandlers(): void {
       throw new Error('网页收藏分组 ID 不正确')
     }
     return removeWebBookmarkGroup(groupId)
+  })
+
+  // ===== Browser Workflow（仅高层能力；CDP 不通过 IPC 暴露） =====
+  ipcMain.handle(BROWSER_WORKFLOW_IPC_CHANNELS.BIND_CONTEXT, async (event, sessionId: string, context: BrowserAgentContext) => {
+    await assertBrowserWorkflowMainWindow(event.sender.id)
+    if (!sessionId?.trim() || !context || typeof context.tabId !== 'string' || !context.tabId.trim()) {
+      throw new Error('Browser Agent 页面上下文参数不正确')
+    }
+    return bindBrowserAgentContext(sessionId, context, event.sender.id)
+  })
+  ipcMain.handle(BROWSER_WORKFLOW_IPC_CHANNELS.UNBIND_CONTEXT, async (event, sessionId: string) => {
+    await assertBrowserWorkflowMainWindow(event.sender.id)
+    if (!sessionId?.trim()) throw new Error('Browser Agent 会话 ID 不正确')
+    assertBrowserWorkflowSessionOwner(sessionId, event.sender.id)
+    unbindBrowserAgentContext(sessionId, event.sender.id)
+  })
+  ipcMain.handle(BROWSER_WORKFLOW_IPC_CHANNELS.STATUS, async (event, sessionId: string) => {
+    await assertBrowserWorkflowMainWindow(event.sender.id)
+    if (!sessionId?.trim()) throw new Error('Browser Agent 会话 ID 不正确')
+    assertBrowserWorkflowSessionOwner(sessionId, event.sender.id)
+    return getBrowserWorkflowStatus(sessionId)
+  })
+  ipcMain.handle(BROWSER_WORKFLOW_IPC_CHANNELS.STOP_RECORDING, async (event, sessionId: string) => {
+    await assertBrowserWorkflowMainWindow(event.sender.id)
+    assertBrowserWorkflowSessionOwner(sessionId, event.sender.id)
+    return stopBrowserWorkflowRecording(sessionId)
+  })
+  ipcMain.handle(BROWSER_WORKFLOW_IPC_CHANNELS.STOP_RUN, async (event, sessionId: string) => {
+    await assertBrowserWorkflowMainWindow(event.sender.id)
+    assertBrowserWorkflowSessionOwner(sessionId, event.sender.id)
+    return stopBrowserWorkflowRun(sessionId)
+  })
+  ipcMain.handle(BROWSER_WORKFLOW_IPC_CHANNELS.CONTINUE_RUN, async (event, sessionId: string) => {
+    await assertBrowserWorkflowMainWindow(event.sender.id)
+    assertBrowserWorkflowSessionOwner(sessionId, event.sender.id)
+    return continueBrowserWorkflowRun(sessionId)
+  })
+  ipcMain.handle(BROWSER_WORKFLOW_IPC_CHANNELS.CANCEL_RECORDING, async (event, sessionId: string) => {
+    await assertBrowserWorkflowMainWindow(event.sender.id)
+    assertBrowserWorkflowSessionOwner(sessionId, event.sender.id)
+    return cancelBrowserWorkflowRecording(sessionId)
+  })
+  ipcMain.handle(BROWSER_WORKFLOW_IPC_CHANNELS.DRAFT, async (event, sessionId: string) => {
+    await assertBrowserWorkflowMainWindow(event.sender.id)
+    assertBrowserWorkflowSessionOwner(sessionId, event.sender.id)
+    return getBrowserWorkflowDraft(sessionId)
+  })
+  ipcMain.handle(BROWSER_WORKFLOW_IPC_CHANNELS.APPROVE_DRAFT, async (event, sessionId: string, name?: string, description?: string, unattendedAllowed?: boolean) => {
+    await assertBrowserWorkflowMainWindow(event.sender.id)
+    assertBrowserWorkflowSessionOwner(sessionId, event.sender.id)
+    return approveBrowserWorkflowDraft(sessionId, name ?? '网页操作 Workflow', description, unattendedAllowed === true, 'ui')
+  })
+  ipcMain.handle(BROWSER_WORKFLOW_IPC_CHANNELS.REJECT_DRAFT, async (event, sessionId: string) => {
+    await assertBrowserWorkflowMainWindow(event.sender.id)
+    assertBrowserWorkflowSessionOwner(sessionId, event.sender.id)
+    return rejectBrowserWorkflowDraft(sessionId)
+  })
+  subscribeBrowserWorkflowStatus((sessionId, status) => {
+    void import('./index').then(({ getMainWindow }) => {
+      const mainWindow = getMainWindow()
+      if (!mainWindow || mainWindow.isDestroyed() || mainWindow.webContents.isDestroyed()) return
+      mainWindow.webContents.send(BROWSER_WORKFLOW_IPC_CHANNELS.STATUS_CHANGED, { sessionId, status })
+    })
   })
 
   // ===== Copis Working 后端（仅账号与业务元数据） =====

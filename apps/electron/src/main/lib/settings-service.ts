@@ -24,6 +24,7 @@ export function getSettings(): AppSettings {
       themeMode: DEFAULT_THEME_MODE,
       interfaceVariant: DEFAULT_INTERFACE_VARIANT,
       onboardingCompleted: false,
+      browserWorkflowEnabled: false,
       environmentCheckSkipped: false,
       notificationsEnabled: true,
       longTextPasteAsAttachmentEnabled: false,
@@ -52,6 +53,7 @@ export function getSettings(): AppSettings {
       themeMode: data.themeMode || DEFAULT_THEME_MODE,
       interfaceVariant: data.interfaceVariant || DEFAULT_INTERFACE_VARIANT,
       onboardingCompleted: data.onboardingCompleted ?? false,
+      browserWorkflowEnabled: data.browserWorkflowEnabled ?? false,
       environmentCheckSkipped: data.environmentCheckSkipped ?? false,
       notificationsEnabled: data.notificationsEnabled ?? true,
       longTextPasteAsAttachmentEnabled: data.longTextPasteAsAttachmentEnabled ?? false,
@@ -63,7 +65,6 @@ export function getSettings(): AppSettings {
       defaultMemoryPolicy: normalizeMemoryPolicy(data.defaultMemoryPolicy),
       windowsShellPreference: settings.windowsShellPreference ?? 'auto',
       agentThinking: settings.agentThinking ?? { type: 'adaptive' },
-      // 缺省 true：老配置文件未写该字段时保持推广默认开启
       gitAttributionEnabled: settings.gitAttributionEnabled ?? true,
     }
   } catch (error) {
@@ -72,6 +73,7 @@ export function getSettings(): AppSettings {
       themeMode: DEFAULT_THEME_MODE,
       interfaceVariant: DEFAULT_INTERFACE_VARIANT,
       onboardingCompleted: false,
+      browserWorkflowEnabled: false,
       environmentCheckSkipped: false,
       notificationsEnabled: true,
       longTextPasteAsAttachmentEnabled: false,

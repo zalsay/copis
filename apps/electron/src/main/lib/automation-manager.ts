@@ -16,6 +16,7 @@ import {
   AUTOMATION_DEFAULT_PERMISSION_MODE,
   type Automation,
   type AutomationRun,
+  type AutomationWorkflowRunReference,
   type CreateAutomationInput,
   type UpdateAutomationInput,
 } from '@copis/shared'
@@ -27,6 +28,7 @@ interface AutomationsIndex {
 }
 
 const INDEX_VERSION = 2
+const pendingWorkflowRuns = new Map<string, AutomationWorkflowRunReference[]>()
 
 /**
  * 兼容历史字段：
@@ -376,6 +378,13 @@ export function deleteAutomation(id: string): boolean {
   return true
 }
 
+/** 记录尚未写入 AutomationRun 的 Workflow 执行，调度器随后 appendRun 时合并。 */
+export function registerAutomationWorkflowRun(reference: AutomationWorkflowRunReference, sessionId: string): void {
+  const current = pendingWorkflowRuns.get(sessionId) ?? []
+  current.push(reference)
+  pendingWorkflowRuns.set(sessionId, current)
+}
+
 /**
  * 记录一次运行结果并推进下次触发时间
  *
@@ -389,10 +398,26 @@ export function deleteAutomation(id: string): boolean {
 export function appendRun(id: string, run: AutomationRun): Automation | undefined {
   const index = readIndex()
   const target = index.automations.find((a) => a.id === id)
-  if (!target) return undefined
+  if (!target) {
+    if (run.sessionId) pendingWorkflowRuns.delete(run.sessionId)
+    return undefined
+  }
+
+  const workflowRuns = run.sessionId ? pendingWorkflowRuns.get(run.sessionId) : undefined
+  if (run.sessionId) pendingWorkflowRuns.delete(run.sessionId)
+  const latestWorkflowRun = workflowRuns?.at(-1)
+  const enrichedRun: AutomationRun = latestWorkflowRun
+    ? {
+        ...run,
+        workflowRuns,
+        workflowId: latestWorkflowRun.workflowId,
+        workflowVersion: latestWorkflowRun.version,
+        workflowRunId: latestWorkflowRun.runId,
+      }
+    : run
 
   const now = Date.now()
-  target.runHistory.unshift(run)
+  target.runHistory.unshift(enrichedRun)
   if (target.runHistory.length > AUTOMATION_MAX_HISTORY) {
     target.runHistory = target.runHistory.slice(0, AUTOMATION_MAX_HISTORY)
   }

@@ -48,6 +48,8 @@ import { getAgentWorkspacePath, getAgentSessionWorkspacePath, getSdkConfigDir, g
 import { isPathWithinRootsAllowMissing } from './file-access-policy'
 import { getRuntimeStatus } from './runtime-init'
 import { getSettings } from './settings-service'
+import { getBrowserAgentContext, sanitizeBrowserWorkflowUrl } from './browser-workflow-service'
+import { getWebTabState } from './web-tab-manager'
 import { buildSystemPrompt, buildDynamicContext } from './agent-prompt-builder'
 import { appendMemoryContext } from './memory-context-builder'
 import { MAX_CONTEXT_MESSAGES, buildContextPrompt, buildRecoveryPrompt, buildReferencedSessionsPrompt } from './agent-session-context-prompt'
@@ -59,8 +61,6 @@ import { askUserService } from './agent-ask-user-service'
 import { exitPlanService, type ExitPlanPermissionResult } from './agent-exit-plan-service'
 import { validateToolInput } from './agent-tool-input-validator'
 import { estimateTokenCount, WRITE_CONTENT_TOKEN_THRESHOLD } from './agent-tool-token-estimator'
-import { injectChromeDevtoolsMcpServer } from './builtin-mcp/chrome-devtools'
-import { isBuiltinMcpUserEnabled } from './builtin-mcp/settings'
 import { buildPiBuiltinTools } from './adapters/pi-builtin-tools'
 import { buildPiMcpTools } from './adapters/pi-mcp-tools'
 import { MemoryAutoCapture, extractMemoryFactsWithProvider } from './adapters/pi-memory-auto-capture'
@@ -1157,9 +1157,6 @@ export class AgentOrchestrator {
 
       // 10. 构建 MCP 服务器配置 + 记忆工具 + 生图工具 + 自定义工具
       const mcpServers = this.buildMcpServers(workspaceSlug)
-      if (isBuiltinMcpUserEnabled('chrome-devtools')) {
-        injectChromeDevtoolsMcpServer(mcpServers)
-      }
       let piBuiltinTools: unknown[] = []
       let piMcpTools: unknown[] = []
       const piSdk = await import('@earendil-works/pi-coding-agent')
@@ -1344,13 +1341,6 @@ export class AgentOrchestrator {
         'REPL', 'Workflow', 'ScheduleWakeup', 'Monitor', 'PushNotification',
         'CronCreate', 'CronDelete', 'RemoteTrigger',
       ])
-      const PLAN_MODE_READ_ONLY_CHROME_DEVTOOLS = new Set([
-        'mcp__chrome_devtools__list_pages',
-        'mcp__chrome_devtools__take_snapshot',
-        'mcp__chrome_devtools__take_screenshot',
-        'mcp__chrome_devtools__list_network_requests',
-        'mcp__chrome_devtools__performance_stop_trace',
-      ])
       // Planning 是本地用户数据：计划模式只允许查询，严禁创建、更新、删除或确认/推迟提醒。
       const PLAN_MODE_READ_ONLY_PLANNING_TOOLS = new Set([
         'mcp__planning__list_todos', 'mcp__planning__get_todo',
@@ -1522,13 +1512,6 @@ export class AgentOrchestrator {
               }
               return { behavior: 'deny' as const, message: '计划模式下不允许执行写操作，请在计划审批通过后再执行' }
             }
-            // Chrome DevTools MCP 同时包含只读观察和会改变页面状态的操作。
-            // 计划模式只允许快照、截图、网络列表等调研工具；点击、输入、脚本执行等需等计划通过。
-            if (toolName.startsWith('mcp__chrome_devtools__')) {
-              return PLAN_MODE_READ_ONLY_CHROME_DEVTOOLS.has(toolName)
-                ? { behavior: 'allow' as const, updatedInput: input }
-                : { behavior: 'deny' as const, message: '计划模式下不允许执行会改变浏览器页面状态的 Chrome DevTools 操作，请在计划审批通过后再执行' }
-            }
             if (toolName.startsWith('mcp__planning__')) {
               return PLAN_MODE_READ_ONLY_PLANNING_TOOLS.has(toolName)
                 ? { behavior: 'allow' as const, updatedInput: input }
@@ -1559,6 +1542,8 @@ export class AgentOrchestrator {
       const piThinkingLevel = agentRuntime === 'pi'
         ? resolvePiThinkingLevel(appSettings, sessionMeta, channel.provider, selectedModelId, piReasoningCapability)
         : undefined
+      const browserContext = getBrowserAgentContext(sessionId)
+      const browserTab = browserContext ? getWebTabState(browserContext.tabId) : undefined
       const systemPromptAppend = buildSystemPrompt({
         agentRuntime,
         workspaceName: workspace?.name,
@@ -1571,6 +1556,9 @@ export class AgentOrchestrator {
         currentModelId: selectedModelId,
         workingMode,
         memoryPolicy,
+        browserContext: browserTab
+          ? { tabId: browserTab.id, title: browserTab.title, url: sanitizeBrowserWorkflowUrl(browserTab.url) }
+          : undefined,
       }) + (automationContext ? `\n\n## 定时任务执行上下文\n\n${automationContext}` : '')
       const startAutoTitleGeneration = (): void => {
         if (titleGenerationStarted) return

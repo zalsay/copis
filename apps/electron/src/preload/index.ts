@@ -6,7 +6,7 @@
  */
 
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
-import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, CHAT_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, INSTALLER_IPC_CHANNELS, FUNCTIONAL_MODULE_IPC_CHANNELS, PROXY_IPC_CHANNELS, GITHUB_RELEASE_IPC_CHANNELS, SYSTEM_PROMPT_IPC_CHANNELS, CHAT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, WECHAT_IPC_CHANNELS, AUTOMATION_IPC_CHANNELS, PLANNING_IPC_CHANNELS, AGENT_ISLAND_IPC_CHANNELS, WORKING_IPC_CHANNELS, WEB_IPC_CHANNELS } from '@copis/shared'
+import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, CHAT_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, INSTALLER_IPC_CHANNELS, FUNCTIONAL_MODULE_IPC_CHANNELS, PROXY_IPC_CHANNELS, GITHUB_RELEASE_IPC_CHANNELS, SYSTEM_PROMPT_IPC_CHANNELS, CHAT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, WECHAT_IPC_CHANNELS, AUTOMATION_IPC_CHANNELS, PLANNING_IPC_CHANNELS, AGENT_ISLAND_IPC_CHANNELS, WORKING_IPC_CHANNELS, WEB_IPC_CHANNELS, BROWSER_WORKFLOW_IPC_CHANNELS } from '@copis/shared'
 import { USER_PROFILE_IPC_CHANNELS, SETTINGS_IPC_CHANNELS, SCRATCH_PAD_IPC_CHANNELS, APP_ICON_IPC_CHANNELS, DOCK_BADGE_IPC_CHANNELS, STORAGE_IPC_CHANNELS } from '../types'
 import { agentHttpStreamClient } from '../renderer/lib/agent-http-stream'
 import type {
@@ -166,8 +166,12 @@ import type {
   SaveWebBookmarkInput,
   CreateWebBookmarkGroupInput,
   RenameWebBookmarkGroupInput,
-  SendWebTabCdpCommandInput,
   UpdateWebTabBoundsInput,
+  BrowserAgentContext,
+  BrowserWorkflowStatus,
+  BrowserWorkflowRecordingSummary,
+  BrowserWorkflowVersion,
+  BrowserWorkflowManifest,
   WebBookmarksSnapshot,
   WebTabsSnapshot,
   WorkingWorkspace,
@@ -276,7 +280,6 @@ export interface ElectronAPI {
     /** 刷新网页。 */
     reload: (tabId: string) => Promise<WebTabsSnapshot>
     /** 发送 CDP 命令。 */
-    sendCdpCommand: (input: SendWebTabCdpCommandInput) => Promise<unknown>
     /** 获取网页收藏夹。 */
     bookmarksList: () => Promise<WebBookmarksSnapshot>
     /** 保存网页收藏。 */
@@ -291,6 +294,21 @@ export interface ElectronAPI {
     bookmarksGroupRemove: (groupId: string) => Promise<WebBookmarksSnapshot>
     /** 订阅主进程推送的网页页签状态。 */
     onChanged: (callback: (snapshot: WebTabsSnapshot) => void) => () => void
+  }
+
+  // ===== Browser Workflow（仅暴露高层录制控制，不暴露 CDP） =====
+  browserWorkflow: {
+    bindContext: (sessionId: string, context: BrowserAgentContext) => Promise<BrowserWorkflowStatus>
+    unbindContext: (sessionId: string) => Promise<void>
+    getStatus: (sessionId: string) => Promise<BrowserWorkflowStatus>
+    stopRecording: (sessionId: string) => Promise<BrowserWorkflowRecordingSummary>
+    stopRun: (sessionId: string) => Promise<void>
+    continueRun: (sessionId: string) => Promise<void>
+    cancelRecording: (sessionId: string) => Promise<void>
+    getDraft: (sessionId: string) => Promise<BrowserWorkflowVersion | undefined>
+    approveDraft: (sessionId: string, name?: string, description?: string, unattendedAllowed?: boolean) => Promise<BrowserWorkflowManifest>
+    rejectDraft: (sessionId: string) => Promise<void>
+    onStatusChanged: (callback: (event: { sessionId: string; status: BrowserWorkflowStatus }) => void) => () => void
   }
 
   // ===== 窗口控制（Windows 自定义标题栏）=====
@@ -1383,7 +1401,6 @@ const electronAPI: ElectronAPI = {
     goBack: (tabId: string) => ipcRenderer.invoke(WEB_IPC_CHANNELS.GO_BACK, tabId) as Promise<WebTabsSnapshot>,
     goForward: (tabId: string) => ipcRenderer.invoke(WEB_IPC_CHANNELS.GO_FORWARD, tabId) as Promise<WebTabsSnapshot>,
     reload: (tabId: string) => ipcRenderer.invoke(WEB_IPC_CHANNELS.RELOAD, tabId) as Promise<WebTabsSnapshot>,
-    sendCdpCommand: (input: SendWebTabCdpCommandInput) => ipcRenderer.invoke(WEB_IPC_CHANNELS.SEND_CDP_COMMAND, input) as Promise<unknown>,
     bookmarksList: () => ipcRenderer.invoke(WEB_IPC_CHANNELS.BOOKMARKS_LIST) as Promise<WebBookmarksSnapshot>,
     bookmarksSave: (input: SaveWebBookmarkInput) => ipcRenderer.invoke(WEB_IPC_CHANNELS.BOOKMARKS_SAVE, input) as Promise<WebBookmarksSnapshot>,
     bookmarksRemove: (bookmarkId: string) => ipcRenderer.invoke(WEB_IPC_CHANNELS.BOOKMARKS_REMOVE, bookmarkId) as Promise<WebBookmarksSnapshot>,
@@ -1394,6 +1411,25 @@ const electronAPI: ElectronAPI = {
       const listener = (_event: Electron.IpcRendererEvent, snapshot: WebTabsSnapshot): void => callback(snapshot)
       ipcRenderer.on(WEB_IPC_CHANNELS.STATE_CHANGED, listener)
       return () => { ipcRenderer.removeListener(WEB_IPC_CHANNELS.STATE_CHANGED, listener) }
+    },
+  },
+
+  // Browser Workflow：只暴露录制和状态控制，CDP 命令仅在主进程内部使用。
+  browserWorkflow: {
+    bindContext: (sessionId: string, context: BrowserAgentContext) => ipcRenderer.invoke(BROWSER_WORKFLOW_IPC_CHANNELS.BIND_CONTEXT, sessionId, context) as Promise<BrowserWorkflowStatus>,
+    unbindContext: (sessionId: string) => ipcRenderer.invoke(BROWSER_WORKFLOW_IPC_CHANNELS.UNBIND_CONTEXT, sessionId) as Promise<void>,
+    getStatus: (sessionId: string) => ipcRenderer.invoke(BROWSER_WORKFLOW_IPC_CHANNELS.STATUS, sessionId) as Promise<BrowserWorkflowStatus>,
+    stopRecording: (sessionId: string) => ipcRenderer.invoke(BROWSER_WORKFLOW_IPC_CHANNELS.STOP_RECORDING, sessionId) as Promise<BrowserWorkflowRecordingSummary>,
+    stopRun: (sessionId: string) => ipcRenderer.invoke(BROWSER_WORKFLOW_IPC_CHANNELS.STOP_RUN, sessionId) as Promise<void>,
+    continueRun: (sessionId: string) => ipcRenderer.invoke(BROWSER_WORKFLOW_IPC_CHANNELS.CONTINUE_RUN, sessionId) as Promise<void>,
+    cancelRecording: (sessionId: string) => ipcRenderer.invoke(BROWSER_WORKFLOW_IPC_CHANNELS.CANCEL_RECORDING, sessionId) as Promise<void>,
+    getDraft: (sessionId: string) => ipcRenderer.invoke(BROWSER_WORKFLOW_IPC_CHANNELS.DRAFT, sessionId) as Promise<BrowserWorkflowVersion | undefined>,
+    approveDraft: (sessionId: string, name?: string, description?: string, unattendedAllowed?: boolean) => ipcRenderer.invoke(BROWSER_WORKFLOW_IPC_CHANNELS.APPROVE_DRAFT, sessionId, name, description, unattendedAllowed) as Promise<BrowserWorkflowManifest>,
+    rejectDraft: (sessionId: string) => ipcRenderer.invoke(BROWSER_WORKFLOW_IPC_CHANNELS.REJECT_DRAFT, sessionId) as Promise<void>,
+    onStatusChanged: (callback: (event: { sessionId: string; status: BrowserWorkflowStatus }) => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, payload: { sessionId: string; status: BrowserWorkflowStatus }): void => callback(payload)
+      ipcRenderer.on(BROWSER_WORKFLOW_IPC_CHANNELS.STATUS_CHANGED, listener)
+      return () => { ipcRenderer.removeListener(BROWSER_WORKFLOW_IPC_CHANNELS.STATUS_CHANGED, listener) }
     },
   },
 

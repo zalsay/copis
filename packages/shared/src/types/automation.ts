@@ -5,12 +5,26 @@
  * 每次执行都新建独立子会话（不污染来源会话，规避 orchestrator 同会话并发守卫）。
  */
 
+/** 自动化运行中调用的固定 Browser Workflow，可用于追踪具体版本和执行产物。 */
+export interface AutomationWorkflowRunReference {
+  workflowId: string
+  version: number
+  runId: string
+  status: 'completed' | 'failed' | 'cancelled'
+}
+
 /** 单次自动运行的记录 */
 export interface AutomationRun {
   /** 本次触发的时间戳 */
   runAt: number
   /** 本轮新建的子会话 ID（可点进去查看执行详情） */
   sessionId: string
+  /** 本轮执行过的固定 Browser Workflow；旧记录可能没有该字段。 */
+  workflowRuns?: AutomationWorkflowRunReference[]
+  /** 兼容单 Workflow 展示的最近一次关联 ID。 */
+  workflowId?: string
+  workflowVersion?: number
+  workflowRunId?: string
   /** 运行结果 */
   status: 'success' | 'error' | 'skipped'
   /** 耗时（毫秒） */

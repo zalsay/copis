@@ -25,6 +25,7 @@ import {
 } from './atoms/theme'
 import {
   agentChannelIdAtom,
+  agentChannelIdsAtom,
   agentModelIdAtom,
   agentRuntimeAtom,
   agentWorkspacesAtom,
@@ -86,6 +87,7 @@ import { showCapabilityChangeToasts } from './lib/capabilities-toast'
 import { GlobalShortcuts } from './components/shortcuts/GlobalShortcuts'
 import { VoiceDictationApp } from './components/voice-dictation/VoiceDictationApp'
 import { TabSwitcher } from './components/tabs/TabSwitcher'
+import { getEnabledAgentChannelIds } from './lib/agent-channel-selection'
 import { CopisLogo } from './lib/model-logo'
 import { initShortcutRegistry, updateShortcutOverrides } from './lib/shortcut-registry'
 import { installHttpApiBridge } from './lib/http-api-bridge'
@@ -178,6 +180,7 @@ function ThemeInitializer(): null {
  */
 function AgentSettingsInitializer(): null {
   const setAgentChannelId = useSetAtom(agentChannelIdAtom)
+  const setAgentChannelIds = useSetAtom(agentChannelIdsAtom)
   const setAgentModelId = useSetAtom(agentModelIdAtom)
   const setAgentRuntime = useSetAtom(agentRuntimeAtom)
   const setAgentWorkspaces = useSetAtom(agentWorkspacesAtom)
@@ -230,7 +233,16 @@ function AgentSettingsInitializer(): null {
       const defaultAgentRuntime = 'pi' as const
       setAgentRuntime(defaultAgentRuntime)
 
+      // 渠道的启用状态是唯一开关：启动时也必须从实际渠道派生可用列表。
+      const agentChannelIds = getEnabledAgentChannelIds(channels)
+      setAgentChannelIds(agentChannelIds)
+
       const updates: Parameters<typeof window.electronAPI.updateSettings>[0] = {}
+      const storedAgentChannelIds = settings.agentChannelIds ?? []
+      const whitelistChanged = agentChannelIds.length !== storedAgentChannelIds.length
+        || agentChannelIds.some((id, index) => id !== storedAgentChannelIds[index])
+      if (whitelistChanged) updates.agentChannelIds = agentChannelIds
+
       // Working Agent 不使用用户渠道；fast/export 由 edu-api 服务端 alias 解析。
       setAgentChannelId(COPIS_WORKING_CHANNEL_ID)
       setAgentModelId(COPIS_WORKING_FAST_MODEL_ID)
@@ -283,7 +295,7 @@ function AgentSettingsInitializer(): null {
       console.error(err)
       setAgentSettingsReady(true) // 即使出错也标记就绪，避免永远阻塞
     })
-  }, [setAgentChannelId, setAgentModelId, setAgentRuntime, setAgentWorkspaces, setCurrentWorkspaceId, setThinking, setEffort, setMaxBudget, setMaxTurns, setAutomationGroupOrder, setWorkingClientConfig, setChannels, setChannelsLoaded, setAgentSettingsReady])
+  }, [setAgentChannelId, setAgentChannelIds, setAgentModelId, setAgentRuntime, setAgentWorkspaces, setCurrentWorkspaceId, setThinking, setEffort, setMaxBudget, setMaxTurns, setAutomationGroupOrder, setWorkingClientConfig, setChannels, setChannelsLoaded, setAgentSettingsReady])
 
   // 工作区切换时重置能力缓存，预加载基线
   useEffect(() => {

@@ -2,6 +2,14 @@
   position: relative;
 }
 
+.copis-agent-session-compact {
+  max-width: none;
+}
+
+.copis-agent-session-compact [data-input-mode="agent"] > div:first-child {
+  border-radius: 10px;
+}
+
 .copis-agent-session.new-conversation .copis-agent-new-session-hero {
   position: absolute;
   top: calc(50% - 150px);

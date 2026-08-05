@@ -220,7 +220,6 @@ function createWebTabsFallback(): Record<string, unknown> {
     goBack: () => Promise.resolve(emptySnapshot()),
     goForward: () => Promise.resolve(emptySnapshot()),
     reload: () => Promise.resolve(emptySnapshot()),
-    sendCdpCommand: () => Promise.reject(new Error('浏览器模式不支持 CDP')),
     bookmarksList: () => Promise.resolve({ groups: [], bookmarks: [] }),
     bookmarksSave: () => Promise.reject(new Error('浏览器模式不支持网页收藏')),
     bookmarksRemove: () => Promise.reject(new Error('浏览器模式不支持网页收藏')),

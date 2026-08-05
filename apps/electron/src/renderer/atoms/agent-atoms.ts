@@ -7,7 +7,7 @@
 
 import { atom } from 'jotai'
 import { atomFamily, atomWithStorage } from 'jotai/utils'
-import type { AgentSessionMeta, AgentEvent, AgentWorkspace, AgentPendingFile, RetryAttempt, CopisPermissionMode, PermissionRequest, AskUserRequest, ExitPlanModeRequest, ThinkingConfig, AgentEffort, SDKMessage, UnstagedChangesResult } from '@copis/shared'
+import type { AgentSessionMeta, AgentRuntime, AgentEvent, AgentWorkspace, AgentPendingFile, RetryAttempt, CopisPermissionMode, PermissionRequest, AskUserRequest, ExitPlanModeRequest, ThinkingConfig, AgentEffort, SDKMessage, UnstagedChangesResult } from '@copis/shared'
 import { COPIS_DEFAULT_PERMISSION_MODE } from '@copis/shared'
 import { calculateDockBadgeCount, countPendingRequests } from '@/lib/dock-badge-count'
 import type { AgentQueuedMessage } from '@/lib/agent-message-queue'
@@ -295,8 +295,9 @@ export const agentChannelIdAtom = atom<string | null>(null)
 /** 全局默认模型 ID（新会话继承用，从 settings.json 加载） */
 export const agentModelIdAtom = atom<string | null>(null)
 /** Agent 启用的渠道 ID 列表（多选，设置页 Switch 开关控制） */
+export const agentChannelIdsAtom = atom<string[]>([])
 /** 新 Agent 会话默认 runtime */
-export const agentRuntimeAtom = atom<'pi'>('pi')
+export const agentRuntimeAtom = atom<AgentRuntime>('pi')
 
 /** Per-session 渠道 ID Map — sessionId → channelId */
 export const agentSessionChannelMapAtom = atom<Map<string, string>>(new Map())

@@ -18,8 +18,6 @@ export interface WebTabState {
   canGoBack: boolean
   /** 是否可以前进。 */
   canGoForward: boolean
-  /** 是否已在主进程中自动连接 Chrome DevTools Protocol。 */
-  cdpAttached: boolean
 }
 
 /** 网页页签集合及当前激活项。 */
@@ -74,6 +72,8 @@ export interface RenameWebBookmarkGroupInput {
 export interface CreateWebTabInput {
   /** 初始地址，缺省为 about:blank。 */
   url?: string
+  /** 主进程内部可选的 Chromium Session partition；Renderer 输入会被主进程校验。 */
+  partition?: string
   /** 是否创建后立即激活，缺省为 true。 */
   activate?: boolean
 }
@@ -109,13 +109,6 @@ export interface ResizeWebBookmarksWindowInput {
   height: number
 }
 
-/** 发送 CDP 命令的参数。 */
-export interface SendWebTabCdpCommandInput {
-  tabId: string
-  method: string
-  params?: Record<string, unknown>
-}
-
 /** 网页页签相关 IPC 通道。 */
 export const WEB_IPC_CHANNELS = {
   LIST: 'web-tabs:list',
@@ -130,7 +123,6 @@ export const WEB_IPC_CHANNELS = {
   GO_BACK: 'web-tabs:go-back',
   GO_FORWARD: 'web-tabs:go-forward',
   RELOAD: 'web-tabs:reload',
-  SEND_CDP_COMMAND: 'web-tabs:send-cdp-command',
   STATE_CHANGED: 'web-tabs:state-changed',
   BOOKMARKS_LIST: 'web-bookmarks:list',
   BOOKMARKS_SAVE: 'web-bookmarks:save',

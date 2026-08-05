@@ -438,6 +438,13 @@ export function getAgentWorkspacePath(slug: string): string {
   return dir
 }
 
+/** 获取工作区浏览器 Workflow 存储目录。 */
+export function getWorkspaceBrowserWorkflowsDir(slug: string): string {
+  const dir = join(getAgentWorkspacePath(slug), 'browser-workflows')
+  if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
+  return dir
+}
+
 /**
  * 获取指定工作区的 MCP 配置文件路径
  *
@@ -455,6 +462,7 @@ export function getWorkspaceMcpPath(slug: string): string {
  *
  * @param slug 工作区 slug
  * @returns ~/.copis/agent-workspaces/{slug}/.agents/skills/
+ * @returns ~/.copis/agent-workspaces/{slug}/skills/
  */
 export function getWorkspaceSkillsDir(slug: string): string {
   const workspaceDir = getAgentWorkspacePath(slug)
@@ -522,6 +530,7 @@ export function resolveAgentSessionWorkspacePath(slug: string, sessionId: string
  *
  * @param slug 工作区 slug
  * @returns ~/.copis/agent-workspaces/{slug}/.agents/skills-inactive/
+ * @returns ~/.copis/agent-workspaces/{slug}/skills-inactive/
  */
 export function getInactiveSkillsDir(slug: string): string {
   const workspaceDir = getAgentWorkspacePath(slug)
@@ -871,6 +880,9 @@ export function getAgentSessionWorkspacePath(workspaceSlug: string, sessionId: s
  * 获取 Agent SDK 配置目录路径
  *
  * 用于保存 Pi session artifact 与运行时配置，避免与用户环境中的配置混用。
+ * 获取 Pi runtime 配置目录路径
+ *
+ * 用于保存 Pi session artifact、模型配置和运行时状态。
  *
  * 如果目录不存在则自动创建。
  *

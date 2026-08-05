@@ -247,9 +247,11 @@ export interface AppSettings {
   agentChannelId?: string
   /** Agent 默认模型 ID */
   agentModelId?: string
+  /** Agent 可用渠道 ID 列表（由渠道启用状态派生） */
+  agentChannelIds?: string[]
   /** Agent 当前工作区 ID */
   agentWorkspaceId?: string
-  /** 新 Agent 会话默认使用的 runtime。 */
+  /** 新 Agent 会话默认使用的 runtime；历史会话缺省迁移为 Pi。 */
   agentRuntime?: AgentRuntime
   /** Agent 默认的 Copis Memory 策略；工作区策略优先。 */
   defaultMemoryPolicy?: MemoryPolicy
@@ -257,6 +259,8 @@ export interface AppSettings {
   windowsShellPreference?: WindowsShellPreference
   /** 侧栏「自动任务」合成项目组在项目列表中的位置索引（默认 0 = 最靠前；可拖拽调整） */
   agentAutomationGroupOrder?: number
+  /** 是否启用网页 Browser Workflow 入口与 Agent 工具；默认关闭，开启需显式设置。 */
+  browserWorkflowEnabled?: boolean
   /** 是否已完成 Onboarding 流程 */
   onboardingCompleted?: boolean
   /** 是否跳过了环境检测 */
