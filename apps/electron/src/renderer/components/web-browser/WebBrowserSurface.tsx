@@ -1,6 +1,6 @@
 import * as React from 'react'
 import { useAtom, useAtomValue, useSetAtom } from 'jotai'
-import { ArrowLeft, ArrowRight, ExternalLink, Globe2, RotateCw, ShieldCheck } from 'lucide-react'
+import { ArrowLeft, ArrowRight, CircleStop, ExternalLink, Globe2, RotateCw, ShieldCheck } from 'lucide-react'
 import type { WebTabsSnapshot } from '@copis/shared'
 import { browserAgentPanelOpenAtom, browserAgentPanelWidthAtom, browserAgentSessionIdAtom, browserWorkflowStatusAtom } from '@/atoms/browser-agent'
 import { activeWebTabAtom, activeWebTabIdAtom, webTabsAtom } from '@/atoms/web-tabs'
@@ -10,6 +10,7 @@ import { Button } from '@/components/ui/button'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
 import { CopisTemplateLogo } from '@/lib/model-logo'
+import { getBrowserWorkflowToolbarAction } from './browser-workflow-toolbar'
 import { toast } from 'sonner'
 import { WebBookmarksPopover } from './WebBookmarksPopover'
 import { BrowserAgentPanel } from './BrowserAgentPanel'
@@ -40,12 +41,15 @@ export function WebBrowserSurface(): React.ReactElement {
   const browserAgentPanelOpen = useAtomValue(browserAgentPanelOpenAtom)
   const [browserAgentPanelWidth, setBrowserAgentPanelWidth] = useAtom(browserAgentPanelWidthAtom)
   const setBrowserAgentPanelOpen = useSetAtom(browserAgentPanelOpenAtom)
+  const browserWorkflowStatus = useAtomValue(browserWorkflowStatusAtom)
   const setBrowserWorkflowStatus = useSetAtom(browserWorkflowStatusAtom)
   const browserAgentSession = agentSessions.find((session) => session.id === browserAgentSessionId)
   const addressInputRef = React.useRef<HTMLInputElement>(null)
   const hostRef = React.useRef<HTMLDivElement>(null)
   const [address, setAddress] = React.useState('')
   const [browserWorkflowEnabled, setBrowserWorkflowEnabled] = React.useState<boolean | null>(null)
+  const [browserActionPending, setBrowserActionPending] = React.useState(false)
+  const browserActionPendingRef = React.useRef(false)
 
   React.useEffect(() => {
     let active = true
@@ -142,12 +146,14 @@ export function WebBrowserSurface(): React.ReactElement {
     })
   }, [activeTab])
 
-  const handleOpenBrowserAgent = React.useCallback(async (): Promise<void> => {
-    if (!browserWorkflowEnabled || !activeTabId || !activeTab) return
+  const ensureBrowserAgentSession = React.useCallback(async (): Promise<string> => {
+    if (!activeTabId || !activeTab) throw new Error('当前没有可用的网页页签')
+    if (!/^https?:\/\//i.test(activeTab.url)) throw new Error('请先打开 HTTP(S) 网页')
     if (browserAgentSessionId) {
-      setBrowserAgentPanelOpen(true)
-      return
+      await window.electronAPI.browserWorkflow.bindContext(browserAgentSessionId, { tabId: activeTabId })
+      return browserAgentSessionId
     }
+    if (!agentChannelId) throw new Error('请先配置 Agent 渠道')
     try {
       const association = await window.electronAPI.webTabs.getProjectAssociation(activeTab.url)
       const associatedWorkspace = association
@@ -172,12 +178,88 @@ export function WebBrowserSurface(): React.ReactElement {
       })
       setBrowserAgentSessionId(session.id)
       setBrowserWorkflowStatus({ sessionId: session.id, state: 'idle' })
-      setBrowserAgentPanelOpen(true)
+      return session.id
     } catch (error) {
-      const message = error instanceof Error ? error.message : '无法打开网页 Agent'
-      toast.error(message)
+      throw error instanceof Error ? error : new Error('无法打开网页 Agent')
     }
-  }, [activeTabId, activeTab?.url, agentChannelId, agentModelId, agentWorkspaces, browserAgentSessionId, browserWorkflowEnabled, currentWorkspaceId, setAgentSessions, setDraftSessionIds, setBrowserAgentPanelOpen, setBrowserAgentSessionId, setBrowserWorkflowStatus])
+  }, [activeTabId, activeTab, agentChannelId, agentModelId, agentWorkspaces, browserAgentSessionId, currentWorkspaceId, setAgentSessions, setDraftSessionIds, setBrowserAgentSessionId, setBrowserWorkflowStatus])
+
+  const summarizeBrowserRecording = React.useCallback((sessionId: string): void => {
+    const session = agentSessions.find((item) => item.id === sessionId)
+    const channelId = session?.channelId ?? agentChannelId
+    if (!channelId) {
+      toast.error('录制已停止，但当前没有可用的 Agent 渠道')
+      return
+    }
+    void window.electronAPI.sendAgentMessage({
+      sessionId,
+      userMessage: '请读取刚刚完成的网页操作 JSONL，并总结为待审核的 Browser Workflow 草稿。先调用 BrowserWorkflowRecordingGet，再调用 BrowserWorkflowDraft；不要直接保存。',
+      channelId,
+      modelId: session?.modelId ?? agentModelId ?? undefined,
+      agentRuntime: 'pi',
+      workspaceId: session?.workspaceId ?? currentWorkspaceId ?? undefined,
+      triggeredBy: 'user',
+    }).catch((error) => {
+      console.error('[Browser Workflow] 请求 Agent 总结录制失败:', error)
+      toast.error(error instanceof Error ? error.message : '无法请求 Agent 总结网页操作')
+    })
+  }, [agentChannelId, agentModelId, agentSessions, currentWorkspaceId])
+
+  const handleStartRecording = React.useCallback(async (): Promise<void> => {
+    if (!browserWorkflowEnabled || browserActionPendingRef.current) return
+    const session = browserAgentSessionId
+      ? agentSessions.find((item) => item.id === browserAgentSessionId)
+      : undefined
+    if (!session?.channelId && !agentChannelId) {
+      toast.error('请先配置 Agent 渠道')
+      return
+    }
+    browserActionPendingRef.current = true
+    setBrowserActionPending(true)
+    try {
+      const sessionId = await ensureBrowserAgentSession()
+      setBrowserAgentPanelOpen(true)
+      const status = await window.electronAPI.browserWorkflow.startRecording(sessionId)
+      setBrowserWorkflowStatus(status)
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : '无法开始记录网页操作')
+    } finally {
+      browserActionPendingRef.current = false
+      setBrowserActionPending(false)
+    }
+  }, [agentChannelId, agentSessions, browserAgentSessionId, browserWorkflowEnabled, ensureBrowserAgentSession, setBrowserAgentPanelOpen, setBrowserWorkflowStatus])
+
+  const handleStopRecording = React.useCallback(async (): Promise<void> => {
+    if (!browserAgentSessionId || browserActionPendingRef.current) return
+    browserActionPendingRef.current = true
+    setBrowserActionPending(true)
+    try {
+      await window.electronAPI.browserWorkflow.stopRecording(browserAgentSessionId)
+      const status = await window.electronAPI.browserWorkflow.getStatus(browserAgentSessionId)
+      setBrowserWorkflowStatus(status)
+      setBrowserAgentPanelOpen(true)
+      summarizeBrowserRecording(browserAgentSessionId)
+      toast.success('网页操作已停止，Agent 正在总结录制内容')
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : '无法停止网页操作记录')
+    } finally {
+      browserActionPendingRef.current = false
+      setBrowserActionPending(false)
+    }
+  }, [browserAgentSessionId, setBrowserAgentPanelOpen, setBrowserWorkflowStatus, summarizeBrowserRecording])
+
+  const handleBrowserToolbarClick = React.useCallback((): void => {
+    const action = getBrowserWorkflowToolbarAction(browserWorkflowStatus)
+    if (action === 'stop-recording') {
+      void handleStopRecording()
+      return
+    }
+    if (action === 'open-agent') {
+      setBrowserAgentPanelOpen(true)
+      return
+    }
+    void handleStartRecording()
+  }, [browserWorkflowStatus, handleStartRecording, handleStopRecording, setBrowserAgentPanelOpen])
 
   const handleCloseBrowserAgent = React.useCallback((): void => {
     setBrowserAgentPanelOpen(false)
@@ -242,6 +324,14 @@ export function WebBrowserSurface(): React.ReactElement {
     }
   }, [activeTabId, apply])
 
+  const browserToolbarAction = getBrowserWorkflowToolbarAction(browserWorkflowStatus)
+  const browserToolbarIsRecording = browserToolbarAction === 'stop-recording'
+  const browserToolbarLabel = browserToolbarIsRecording
+    ? '停止记录网页操作'
+    : browserToolbarAction === 'start-recording'
+      ? '开始记录网页操作'
+      : '打开 Copis 网页 Agent'
+
   if (!activeTab) {
     return <div className="hidden" aria-hidden="true" />
   }
@@ -282,15 +372,20 @@ export function WebBrowserSurface(): React.ReactElement {
 
         {browserWorkflowEnabled ? (
           <BrowserToolbarButton
-            label="打开 Copis 网页 Agent"
+            label={browserToolbarLabel}
             showTooltip={false}
-            onClick={() => void handleOpenBrowserAgent()}
+            disabled={browserActionPending}
+            onClick={handleBrowserToolbarClick}
           >
-            <img
-              src={CopisTemplateLogo}
-              alt=""
-              className={cn('size-4 rounded object-cover', browserAgentSessionId && 'ring-2 ring-primary/40')}
-            />
+            {browserToolbarIsRecording ? (
+              <CircleStop className="size-4 text-destructive" />
+            ) : (
+              <img
+                src={CopisTemplateLogo}
+                alt=""
+                className={cn('size-4 rounded object-cover', browserAgentSessionId && 'ring-2 ring-primary/40')}
+              />
+            )}
           </BrowserToolbarButton>
         ) : null}
 
@@ -314,10 +409,10 @@ export function WebBrowserSurface(): React.ReactElement {
               tabId={activeTabId}
               pageUrl={activeTab.url}
               tabTitle={activeTab.title}
-              channelId={browserAgentSession?.channelId ?? agentChannelId}
-              modelId={browserAgentSession?.modelId}
               workspaceId={browserAgentSession?.workspaceId}
               width={browserAgentPanelWidth}
+              onStartRecording={handleStartRecording}
+              onStopRecording={handleStopRecording}
               onClose={handleCloseBrowserAgent}
             />
           </>

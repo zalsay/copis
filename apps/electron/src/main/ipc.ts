@@ -71,6 +71,8 @@ import type {
   InstallerDownloadRequest,
   InstallerDownloadResult,
   FunctionalModuleInstallInput,
+  FunctionalModuleProgressPayload,
+  FunctionalModuleStartupProgressPayload,
   FunctionalModuleStatus,
   ProxyConfig,
   SystemProxyDetectResult,
@@ -223,6 +225,7 @@ import {
   getBrowserWorkflowStatus,
   assertBrowserWorkflowSessionOwner,
   rejectBrowserWorkflowDraft,
+  startBrowserWorkflowRecording,
   stopBrowserWorkflowRecording,
   subscribeBrowserWorkflowStatus,
   unbindBrowserAgentContext,
@@ -254,6 +257,7 @@ import {
   getFunctionalModuleStatuses,
   installFunctionalModule,
 } from './lib/functional-module-manager'
+import { ensureRequiredFunctionalModules } from './lib/functional-module-startup'
 import { getProxySettings, saveProxySettings } from './lib/proxy-settings-service'
 import { detectSystemProxy } from './lib/system-proxy-detector'
 import {
@@ -1041,6 +1045,12 @@ export function registerIpcHandlers(): void {
     if (!sessionId?.trim()) throw new Error('Browser Agent 会话 ID 不正确')
     assertBrowserWorkflowSessionOwner(sessionId, event.sender.id)
     return getBrowserWorkflowStatus(sessionId)
+  })
+  ipcMain.handle(BROWSER_WORKFLOW_IPC_CHANNELS.START_RECORDING, async (event, sessionId: string) => {
+    await assertBrowserWorkflowMainWindow(event.sender.id)
+    if (!sessionId?.trim()) throw new Error('Browser Agent 会话 ID 不正确')
+    assertBrowserWorkflowSessionOwner(sessionId, event.sender.id)
+    return startBrowserWorkflowRecording(sessionId)
   })
   ipcMain.handle(BROWSER_WORKFLOW_IPC_CHANNELS.STOP_RECORDING, async (event, sessionId: string) => {
     await assertBrowserWorkflowMainWindow(event.sender.id)
@@ -2211,6 +2221,28 @@ export function registerIpcHandlers(): void {
             window.webContents.send(FUNCTIONAL_MODULE_IPC_CHANNELS.PROGRESS, payload)
           }
         },
+      })
+    },
+  )
+
+  ipcMain.handle(
+    FUNCTIONAL_MODULE_IPC_CHANNELS.ENSURE_REQUIRED,
+    async (event): Promise<FunctionalModuleStatus[]> => {
+      const window = BrowserWindow.fromWebContents(event.sender)
+      const sendStartupProgress = (payload: FunctionalModuleStartupProgressPayload): void => {
+        if (window && !window.isDestroyed()) {
+          window.webContents.send(FUNCTIONAL_MODULE_IPC_CHANNELS.STARTUP_PROGRESS, payload)
+        }
+      }
+      const sendModuleProgress = (payload: FunctionalModuleProgressPayload): void => {
+        if (window && !window.isDestroyed()) {
+          window.webContents.send(FUNCTIONAL_MODULE_IPC_CHANNELS.PROGRESS, payload)
+        }
+      }
+      return ensureRequiredFunctionalModules({
+        skipModuleUpdates: app.isPackaged !== true,
+        onProgress: sendStartupProgress,
+        onModuleProgress: sendModuleProgress,
       })
     },
   )

@@ -34,7 +34,7 @@ function officeCliPackage(sha256: string): FunctionalModulePackage {
     size: Buffer.byteLength('officecli-binary'),
     format: 'binary',
     entrypoint: 'bin/officecli',
-    required: false,
+    required: true,
   }
 }
 

@@ -16,7 +16,13 @@ import {
   workspaceCapabilitiesVersionAtom,
 } from '@/atoms/agent-atoms'
 import type { BuiltinMcpServerSummary, SkillMeta, WorkspaceCapabilities, WorkspaceMcpConfig } from '@copis/shared'
-import { installWorkingSkill, uninstallWorkingSkill } from '@/lib/working-skill-market-api'
+import {
+  installWorkingSkill,
+  listWorkingSkillMarket,
+  mapInstalledMarketSkills,
+  uninstallWorkingSkill,
+} from '@/lib/working-skill-market-api'
+import { builtinSkillCatalog } from './builtin-skill-catalog'
 
 export interface AgentSkillsData {
   /** 当前工作区（未选中时为 null） */
@@ -67,17 +73,33 @@ export function useAgentSkillsData(): AgentSkillsData {
       return
     }
     try {
-      const [config, skillList, dir, defaultSlugs, capabilities] = await Promise.all([
+      const [config, skillList, dir, defaultSlugs, capabilities, marketItems] = await Promise.all([
         window.electronAPI.getWorkspaceMcpConfig(workspaceSlug),
         window.electronAPI.getWorkspaceSkills(workspaceSlug),
         window.electronAPI.getWorkspaceSkillsDir(workspaceSlug),
         window.electronAPI.getDefaultSkillSlugs(),
         window.electronAPI.getWorkspaceCapabilities(workspaceSlug),
+        listWorkingSkillMarket(workspaceSlug).catch((error: unknown) => {
+          console.warn('[Agent 技能] 读取已安装市场 Skill 失败:', error)
+          return []
+        }),
       ])
+      const mergedSkills = [...skillList]
+      const knownSlugs = new Set(mergedSkills.map((skill) => skill.slug))
+      for (const skill of builtinSkillCatalog) {
+        if (knownSlugs.has(skill.slug)) continue
+        mergedSkills.push(skill)
+        knownSlugs.add(skill.slug)
+      }
+      for (const skill of mapInstalledMarketSkills(marketItems)) {
+        if (knownSlugs.has(skill.slug)) continue
+        mergedSkills.push(skill)
+        knownSlugs.add(skill.slug)
+      }
       setMcpConfig(config)
-      setSkills(skillList)
+      setSkills(mergedSkills)
       setSkillsDir(dir)
-      setDefaultSkillSlugs(new Set(defaultSlugs))
+      setDefaultSkillSlugs(new Set([...defaultSlugs, ...builtinSkillCatalog.map((skill) => skill.slug)]))
       setCapabilities(capabilities)
       setBuiltinMcpServers(capabilities.builtinMcpServers)
     } catch (error) {

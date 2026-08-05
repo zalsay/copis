@@ -8,6 +8,7 @@ import { MigrationImportDialog } from './components/migration/MigrationImportDia
 import { TooltipProvider } from './components/ui/tooltip'
 import { ShortcutGuideDialog } from './components/shortcuts/ShortcutGuideDialog'
 import { CopisWorkingLoginDialog } from './components/app-shell/CopisWorkingLoginDialog'
+import { FunctionalModuleUpdateGate } from './components/functional-modules/FunctionalModuleUpdateGate'
 import { PlanningReminderRail } from './components/planning/PlanningReminderRail'
 import { conversationsAtom } from './atoms/chat-atoms'
 import { environmentCheckDialogOpenAtom } from './atoms/environment'
@@ -104,29 +105,27 @@ export default function App(): React.ReactElement {
     )
   }
 
-  // 显示 onboarding 界面
-  if (showOnboarding) {
-    return (
-      <TooltipProvider delayDuration={200}>
-        <OnboardingView onComplete={handleOnboardingComplete} />
-        <MigrationImportDialog />
-      </TooltipProvider>
-    )
-  }
-
   // Placeholder context value
   const contextValue: AppShellContextType = {}
 
-  // 显示主界面
   return (
-    <TooltipProvider delayDuration={200}>
-      <AppShell contextValue={contextValue} />
-      <PlanningReminderRail />
-      <ShortcutGuideDialog />
-      <TutorialBanner />
-      <GlobalEnvironmentCheckDialog />
-      <MigrationImportDialog />
-    </TooltipProvider>
+    <FunctionalModuleUpdateGate>
+      {showOnboarding ? (
+        <TooltipProvider delayDuration={200}>
+          <OnboardingView onComplete={handleOnboardingComplete} />
+          <MigrationImportDialog />
+        </TooltipProvider>
+      ) : (
+        <TooltipProvider delayDuration={200}>
+          <AppShell contextValue={contextValue} />
+          <PlanningReminderRail />
+          <ShortcutGuideDialog />
+          <TutorialBanner />
+          <GlobalEnvironmentCheckDialog />
+          <MigrationImportDialog />
+        </TooltipProvider>
+      )}
+    </FunctionalModuleUpdateGate>
   )
 }
 

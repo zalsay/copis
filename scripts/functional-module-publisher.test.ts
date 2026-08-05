@@ -4,7 +4,9 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
+  buildFunctionalModuleManifestUpload,
   buildFunctionalModuleRelease,
+  markFunctionalModuleRequired,
   publishFunctionalModuleRelease,
   type FunctionalModuleObjectClient,
 } from './functional-module-publisher'
@@ -33,7 +35,7 @@ describe('COS 功能模块发布器', () => {
       clientMinVersion: '0.16.18',
       publicBaseUrl: 'https://download.example.com/copis/modules',
       modules: [
-        { module: 'officecli', version: '1.2.3', platform: 'darwin', arch: 'arm64', binaryPath: officePath, required: false },
+        { module: 'officecli', version: '1.2.3', platform: 'darwin', arch: 'arm64', binaryPath: officePath, required: true },
         { module: 'rust-http-api', version: '0.2.0', platform: 'darwin', arch: 'arm64', binaryPath: rustPath, required: true },
       ],
     })
@@ -44,7 +46,7 @@ describe('COS 功能模块发布器', () => {
       url: 'https://download.example.com/copis/modules/stable/darwin-arm64/officecli-1.2.3',
       size: Buffer.byteLength('officecli-binary'),
       sha256: createHash('sha256').update('officecli-binary').digest('hex'),
-      required: false,
+      required: true,
     })
     expect(platform?.modules['rust-http-api']?.required).toBe(true)
     expect(release.manifestEntry.key).toBe('stable/manifest.json')
@@ -56,8 +58,8 @@ describe('COS 功能模块发布器', () => {
       channel: 'stable',
       publicBaseUrl: 'https://download.example.com/copis/modules',
       modules: [
-        { module: 'officecli', version: '1.0.0', platform: 'darwin', arch: 'arm64', binaryPath, required: false },
-        { module: 'officecli', version: '1.0.1', platform: 'darwin', arch: 'arm64', binaryPath, required: false },
+        { module: 'officecli', version: '1.0.0', platform: 'darwin', arch: 'arm64', binaryPath, required: true },
+        { module: 'officecli', version: '1.0.1', platform: 'darwin', arch: 'arm64', binaryPath, required: true },
       ],
     })).toThrow('重复')
   })
@@ -72,7 +74,7 @@ describe('COS 功能模块发布器', () => {
         platform: 'darwin',
         arch: 'arm64',
         binaryPath: join(tmpdir(), 'copis-officecli-does-not-exist'),
-        required: false,
+        required: true,
       }],
     })).toThrow('功能模块二进制不存在')
   })
@@ -82,7 +84,7 @@ describe('COS 功能模块发布器', () => {
     const release = buildFunctionalModuleRelease({
       channel: 'stable',
       publicBaseUrl: 'https://download.example.com/copis/modules',
-      modules: [{ module: 'officecli', version: '1.0.0', platform: 'darwin', arch: 'arm64', binaryPath, required: false }],
+      modules: [{ module: 'officecli', version: '1.0.0', platform: 'darwin', arch: 'arm64', binaryPath, required: true }],
     })
     const calls: string[] = []
     const client: FunctionalModuleObjectClient = {
@@ -104,6 +106,63 @@ describe('COS 功能模块发布器', () => {
       'put:stable/manifest.json',
       'head:stable/manifest.json',
     ])
+  })
+
+  test('二进制保持不可变，manifest 允许覆盖发布', async () => {
+    const binaryPath = createFixture('upload-me', 'officecli')
+    const release = buildFunctionalModuleRelease({
+      channel: 'stable',
+      publicBaseUrl: 'https://download.example.com/copis/modules',
+      modules: [{ module: 'officecli', version: '1.0.0', platform: 'darwin', arch: 'arm64', binaryPath, required: true }],
+    })
+    const overwriteFlags: boolean[] = []
+    const client: FunctionalModuleObjectClient = {
+      async putObject(_input, options) {
+        overwriteFlags.push(options?.allowOverwrite === true)
+      },
+      async headObject(input) {
+        const entry = [...release.binaries, release.manifestEntry].find((item) => item.key === input.key)
+        return { size: entry?.size ?? 0, sha256: entry?.sha256 }
+      },
+    }
+
+    await publishFunctionalModuleRelease(release, client)
+
+    expect(overwriteFlags).toEqual([false, true])
+  })
+
+  test('可以在保留二进制元数据的情况下把 OfficeCLI 标为必选并生成 manifest', () => {
+    const manifest = {
+      schema: 1,
+      channel: 'stable',
+      platforms: {
+        'darwin-arm64': {
+          modules: {
+            officecli: {
+              version: '1.0.0',
+              url: 'https://download.example.com/officecli-1.0.0',
+              sha256: 'a'.repeat(64),
+              size: 10,
+              format: 'binary' as const,
+              entrypoint: 'bin/officecli',
+              required: false,
+            },
+          },
+        },
+      },
+    }
+
+    const entry = buildFunctionalModuleManifestUpload({
+      channel: 'stable',
+      publicBaseUrl: 'https://download.example.com/copis/modules',
+      prefix: 'copis/client',
+      manifest: markFunctionalModuleRequired(manifest, 'officecli'),
+    })
+
+    expect(entry.key).toBe('copis/client/stable/manifest.json')
+    expect(JSON.parse(entry.body?.toString('utf8') ?? '{}')).toMatchObject({
+      platforms: { 'darwin-arm64': { modules: { officecli: { required: true } } } },
+    })
   })
 
   test('为 Windows 发布带 exe 后缀的不可变对象和入口', () => {

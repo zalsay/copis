@@ -10,7 +10,7 @@ describe('功能模块设置页模型', () => {
   test('模块列表同时包含 Rust API 和 OfficeCLI', () => {
     expect(FUNCTIONAL_MODULE_DEFINITIONS.map((item) => item.name)).toEqual(['rust-http-api', 'officecli'])
     expect(FUNCTIONAL_MODULE_DEFINITIONS.find((item) => item.name === 'rust-http-api')?.required).toBe(true)
-    expect(FUNCTIONAL_MODULE_DEFINITIONS.find((item) => item.name === 'officecli')?.required).toBe(false)
+    expect(FUNCTIONAL_MODULE_DEFINITIONS.find((item) => item.name === 'officecli')?.required).toBe(true)
   })
 
   test('状态文案覆盖错误、更新、已安装和未安装', () => {
@@ -33,7 +33,7 @@ describe('功能模块设置页模型', () => {
       name: 'officecli',
       displayName: 'OfficeCLI',
       installed: false,
-      required: false,
+      required: true,
       error: null,
     })
   })

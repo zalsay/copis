@@ -35,6 +35,10 @@ export interface FunctionalModuleUploadEntry {
   allowOverwrite?: boolean
 }
 
+export interface FunctionalModulePutObjectOptions {
+  allowOverwrite?: boolean
+}
+
 export interface FunctionalModuleRelease {
   manifest: FunctionalModuleManifest
   binaries: FunctionalModuleUploadEntry[]
@@ -50,7 +54,7 @@ export interface FunctionalModuleObjectUpload {
 }
 
 export interface FunctionalModuleObjectClient {
-  putObject(input: FunctionalModuleObjectUpload): Promise<void>
+  putObject(input: FunctionalModuleObjectUpload, options?: FunctionalModulePutObjectOptions): Promise<void>
   headObject(input: { key: string }): Promise<{ size: number; sha256?: string }>
 }
 
@@ -100,19 +104,65 @@ export function buildFunctionalModuleRelease(input: FunctionalModuleReleaseInput
     ...(input.clientMinVersion ? { client: { minVersion: input.clientMinVersion } } : {}),
     platforms,
   }
-  const manifestBody = Buffer.from(`${JSON.stringify(manifest, null, 2)}\n`, 'utf8')
-  const manifestKey = `${prefix}${input.channel}/manifest.json`
-  const manifestEntry: FunctionalModuleUploadEntry = {
-    key: manifestKey,
-    url: `${baseUrl}/${manifestKey}`,
-    body: manifestBody,
-    size: manifestBody.byteLength,
-    sha256: sha256(manifestBody),
+  const manifestEntry = buildFunctionalModuleManifestUpload({
+    channel: input.channel,
+    publicBaseUrl: baseUrl,
+    prefix,
+    manifest,
+  })
+
+  return { manifest, binaries, manifestEntry }
+}
+
+export interface FunctionalModuleManifestUploadInput {
+  channel: string
+  publicBaseUrl: string
+  prefix?: string
+  manifest: FunctionalModuleManifest
+}
+
+export function buildFunctionalModuleManifestUpload(
+  input: FunctionalModuleManifestUploadInput,
+): FunctionalModuleUploadEntry {
+  validateManifestUploadInput(input)
+  const baseUrl = input.publicBaseUrl.replace(/\/+$/, '')
+  const prefix = normalizePrefix(input.prefix)
+  const key = `${prefix}${input.channel}/manifest.json`
+  const body = Buffer.from(`${JSON.stringify(input.manifest, null, 2)}\n`, 'utf8')
+  return {
+    key,
+    url: `${baseUrl}/${key}`,
+    body,
+    size: body.byteLength,
+    sha256: sha256(body),
     contentType: 'application/json',
     allowOverwrite: true,
   }
+}
 
-  return { manifest, binaries, manifestEntry }
+export function markFunctionalModuleRequired(
+  manifest: FunctionalModuleManifest,
+  name: FunctionalModuleName,
+): FunctionalModuleManifest {
+  let found = false
+  const platforms: FunctionalModuleManifest['platforms'] = {}
+  for (const [platformKey, platform] of Object.entries(manifest.platforms)) {
+    const artifact = platform.modules[name]
+    if (!artifact) {
+      platforms[platformKey] = platform
+      continue
+    }
+    found = true
+    platforms[platformKey] = {
+      ...platform,
+      modules: {
+        ...platform.modules,
+        [name]: { ...artifact, required: true },
+      },
+    }
+  }
+  if (!found) throw new Error(`manifest 缺少功能模块: ${name}`)
+  return { ...manifest, platforms }
 }
 
 export async function publishFunctionalModuleRelease(
@@ -122,12 +172,20 @@ export async function publishFunctionalModuleRelease(
   for (const entry of release.binaries) {
     await uploadAndVerify(entry, client)
   }
-  await uploadAndVerify(release.manifestEntry, client)
+  await publishFunctionalModuleManifest(release.manifestEntry, client)
+}
+
+export async function publishFunctionalModuleManifest(
+  manifestEntry: FunctionalModuleUploadEntry,
+  client: FunctionalModuleObjectClient,
+): Promise<void> {
+  await uploadAndVerify(manifestEntry, client, { allowOverwrite: true })
 }
 
 async function uploadAndVerify(
   entry: FunctionalModuleUploadEntry,
   client: FunctionalModuleObjectClient,
+  options: FunctionalModulePutObjectOptions = {},
 ): Promise<void> {
   const body = entry.body ?? readFileSync(entry.path ?? '')
   if (body.byteLength !== entry.size || sha256(body) !== entry.sha256) {
@@ -140,7 +198,7 @@ async function uploadAndVerify(
     contentType: entry.contentType,
     metadata: { sha256: entry.sha256 },
     ...(entry.allowOverwrite ? { allowOverwrite: true } : {}),
-  })
+  }, options)
   const remote = await client.headObject({ key: entry.key })
   if (remote.size !== entry.size || remote.sha256?.toLowerCase() !== entry.sha256) {
     throw new Error(`远端对象校验失败: ${entry.key}`)
@@ -160,6 +218,51 @@ function validateReleaseInput(input: FunctionalModuleReleaseInput): void {
     if (!isSemver(module.version)) throw new Error(`功能模块版本不合法: ${module.version}`)
     if (typeof module.required !== 'boolean') throw new Error(`功能模块 required 不合法: ${module.module}`)
   }
+}
+
+function validateManifestUploadInput(input: FunctionalModuleManifestUploadInput): void {
+  if (!isSafeSegment(input.channel)) throw new Error(`发布 channel 不合法: ${input.channel}`)
+  if (!isSafeHttpUrl(input.publicBaseUrl)) throw new Error('发布 publicBaseUrl 必须是 HTTP(S) URL')
+  if (input.prefix !== undefined) normalizePrefix(input.prefix)
+
+  const manifest = input.manifest
+  if (manifest.schema !== 1) throw new Error(`发布 manifest schema 不支持: ${String(manifest.schema)}`)
+  if (manifest.channel !== input.channel) {
+    throw new Error(`发布 manifest channel 不匹配: ${manifest.channel}`)
+  }
+  if (manifest.client?.minVersion !== undefined && !isSemver(manifest.client.minVersion)) {
+    throw new Error(`发布 manifest client.minVersion 不合法: ${manifest.client.minVersion}`)
+  }
+
+  const platforms = manifest.platforms as unknown
+  if (!isRecord(platforms) || Object.keys(platforms).length === 0) {
+    throw new Error('发布 manifest platforms 不能为空')
+  }
+  for (const [platformKey, platformValue] of Object.entries(platforms)) {
+    if (!isSafeSegment(platformKey) || !isRecord(platformValue) || !isRecord(platformValue.modules)) {
+      throw new Error(`发布 manifest 平台不合法: ${platformKey}`)
+    }
+    for (const [moduleName, artifactValue] of Object.entries(platformValue.modules)) {
+      validateManifestUploadArtifact(moduleName, artifactValue)
+    }
+  }
+}
+
+function validateManifestUploadArtifact(name: string, value: unknown): void {
+  if (!isSafeSegment(name) || !isRecord(value)) throw new Error(`发布 manifest 模块不合法: ${name}`)
+  if (!isSemver(value.version)) throw new Error(`发布 manifest 模块版本不合法: ${name}`)
+  if (!isSafeHttpUrl(value.url)) throw new Error(`发布 manifest 模块 URL 不合法: ${name}`)
+  if (typeof value.sha256 !== 'string' || !/^[a-f0-9]{64}$/i.test(value.sha256)) {
+    throw new Error(`发布 manifest 模块 sha256 不合法: ${name}`)
+  }
+  if (!Number.isSafeInteger(value.size) || value.size < 0) {
+    throw new Error(`发布 manifest 模块 size 不合法: ${name}`)
+  }
+  if (value.format !== 'binary') throw new Error(`发布 manifest 模块 format 不支持: ${name}`)
+  if (typeof value.entrypoint !== 'string' || !isSafeRelativePath(value.entrypoint)) {
+    throw new Error(`发布 manifest 模块 entrypoint 不安全: ${name}`)
+  }
+  if (typeof value.required !== 'boolean') throw new Error(`发布 manifest 模块 required 不合法: ${name}`)
 }
 
 function readBinaryMetadata(path: string): { size: number; sha256: string } {
@@ -187,17 +290,27 @@ function isSafeSegment(value: unknown): value is string {
     && !value.includes('\\')
 }
 
-function isSemver(value: string): boolean {
-  return /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(value)
+function isSemver(value: unknown): value is string {
+  return typeof value === 'string' && /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(value)
 }
 
-function isSafeHttpUrl(value: string): boolean {
+function isSafeHttpUrl(value: unknown): value is string {
+  if (typeof value !== 'string') return false
   try {
     const url = new URL(value)
     return url.protocol === 'https:' || url.protocol === 'http:'
   } catch {
     return false
   }
+}
+
+function isSafeRelativePath(value: string): boolean {
+  if (!value || value.includes('\0') || value.startsWith('/') || /^[a-zA-Z]:[\\/]/.test(value)) return false
+  const normalized = value.replaceAll('\\', '/')
+  return normalized !== '.'
+    && normalized !== '..'
+    && !normalized.startsWith('../')
+    && !normalized.includes('/../')
 }
 
 function normalizePrefix(value: string | undefined): string {
@@ -213,4 +326,8 @@ function getModuleEntrypoint(name: FunctionalModuleName, suffix: string): string
   return name === 'officecli'
     ? `bin/officecli${suffix}`
     : `bin/copis-http-api-server${suffix}`
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
 }

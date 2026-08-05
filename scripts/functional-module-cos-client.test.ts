@@ -75,4 +75,36 @@ describe('功能模块 COS SDK client', () => {
 
     expect(putCount).toBe(0)
   })
+
+  test('manifest 覆盖发布时允许替换对象且不设置不可变 header', async () => {
+    const calls: Array<{ operation: string; params: Record<string, unknown> }> = []
+    let putCount = 0
+    let uploaded = false
+    const sdk: FunctionalModuleCosSdkClient = {
+      putObject(params, callback) {
+        putCount += 1
+        uploaded = true
+        calls.push({ operation: 'put', params })
+        callback(null, {})
+      },
+      headObject(params, callback) {
+        calls.push({ operation: 'head', params })
+        callback(null, uploaded
+          ? { ContentLength: 8, headers: { 'x-cos-meta-sha256': 'abc123' } }
+          : { ContentLength: 7, headers: { 'x-cos-meta-sha256': 'old123' } })
+      },
+    }
+
+    const client = createFunctionalModuleCosClient(sdk, { bucket: 'copis-1250000000', region: 'ap-shanghai' })
+    await client.putObject({
+      key: 'copis/modules/stable/manifest.json',
+      body: Buffer.from('manifest'),
+      contentType: 'application/json',
+      metadata: { sha256: 'abc123' },
+    }, { allowOverwrite: true })
+
+    expect(putCount).toBe(1)
+    expect(calls[0]?.operation).toBe('put')
+    expect(calls[0]?.params['x-cos-forbid-overwrite']).toBeUndefined()
+  })
 })

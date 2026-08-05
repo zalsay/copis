@@ -90,7 +90,7 @@ describe('COS 功能模块统一管理', () => {
     const officeContent = 'officecli-v1'
     const rustContent = 'rust-api-v1'
     const manifest = createManifest(
-      moduleArtifact('officecli', '1.2.3', officeContent, false),
+      moduleArtifact('officecli', '1.2.3', officeContent, true),
       moduleArtifact('rust-http-api', '0.2.0', rustContent, true),
     )
     const artifacts = await fetchFunctionalModuleManifest({
@@ -112,7 +112,7 @@ describe('COS 功能模块统一管理', () => {
     const officeContent = 'officecli-v1'
     const rustContent = 'rust-api-v1'
     const manifest = createManifest(
-      moduleArtifact('officecli', '1.2.3', officeContent, false),
+      moduleArtifact('officecli', '1.2.3', officeContent, true),
       moduleArtifact('rust-http-api', '0.2.0', rustContent, true),
     )
     const calls: string[] = []
@@ -140,7 +140,7 @@ describe('COS 功能模块统一管理', () => {
   test('Rust API 下载内容校验失败时不产生 active 版本', async () => {
     const rustContent = 'rust-api-v1'
     const badManifest = createManifest(
-      moduleArtifact('officecli', '1.2.3', 'officecli-v1', false),
+      moduleArtifact('officecli', '1.2.3', 'officecli-v1', true),
       { ...moduleArtifact('rust-http-api', '0.2.0', rustContent, true), sha256: 'f'.repeat(64) },
     )
     const root = createRoot()
@@ -166,7 +166,7 @@ describe('COS 功能模块统一管理', () => {
     const officeContent = 'officecli-v1'
     const rustContent = 'rust-api-v1'
     const manifest = createManifest(
-      moduleArtifact('officecli', '1.2.3', officeContent, false),
+      moduleArtifact('officecli', '1.2.3', officeContent, true),
       moduleArtifact('rust-http-api', '0.2.0', rustContent, true),
     )
     const calls: string[] = []
@@ -194,6 +194,6 @@ describe('COS 功能模块统一管理', () => {
 
     expect(statuses.map((item) => item.name)).toEqual(['rust-http-api', 'officecli'])
     expect(statuses.find((item) => item.name === 'rust-http-api')?.required).toBe(true)
-    expect(statuses.find((item) => item.name === 'officecli')?.required).toBe(false)
+    expect(statuses.find((item) => item.name === 'officecli')?.required).toBe(true)
   })
 })

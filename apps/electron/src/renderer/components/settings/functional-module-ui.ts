@@ -18,7 +18,7 @@ export const FUNCTIONAL_MODULE_DEFINITIONS: readonly FunctionalModuleDefinition[
     name: 'officecli',
     displayName: 'OfficeCLI',
     description: '为 .docx、.xlsx、.pptx 提供统一的 Office 文档处理能力',
-    required: false,
+    required: true,
   },
 ]
 

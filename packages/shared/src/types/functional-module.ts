@@ -79,6 +79,23 @@ export interface FunctionalModuleProgressPayload {
   version?: string
 }
 
+export type FunctionalModuleStartupProgressPhase =
+  | 'checking'
+  | 'modules'
+  | 'health'
+  | 'ready'
+  | 'error'
+
+export interface FunctionalModuleStartupProgressPayload {
+  phase: FunctionalModuleStartupProgressPhase
+  detail: string
+  progress: number
+  activeModule?: FunctionalModuleName
+  downloadedBytes?: number
+  totalBytes?: number
+  error?: string
+}
+
 export interface FunctionalModuleInstallInput {
   name: FunctionalModuleName
   force?: boolean
@@ -89,4 +106,6 @@ export const FUNCTIONAL_MODULE_IPC_CHANNELS = {
   CHECK: 'functional-module:check',
   INSTALL: 'functional-module:install',
   PROGRESS: 'functional-module:progress',
+  ENSURE_REQUIRED: 'functional-module:ensure-required',
+  STARTUP_PROGRESS: 'functional-module:startup-progress',
 } as const

@@ -21,10 +21,10 @@ interface BrowserAgentPanelProps {
   tabId: string
   pageUrl: string
   tabTitle: string
-  channelId: string | null
-  modelId: string | undefined
   workspaceId: string | undefined
   width: number
+  onStartRecording: () => Promise<void>
+  onStopRecording: () => Promise<void>
   onClose: () => void
 }
 
@@ -39,7 +39,7 @@ function draftOrigins(draft: BrowserWorkflowVersion): string[] {
   return [...origins]
 }
 
-export function BrowserAgentPanel({ sessionId, tabId, pageUrl, tabTitle, channelId, modelId, workspaceId, width, onClose }: BrowserAgentPanelProps): React.ReactElement {
+export function BrowserAgentPanel({ sessionId, tabId, pageUrl, tabTitle, workspaceId, width, onStartRecording, onStopRecording, onClose }: BrowserAgentPanelProps): React.ReactElement {
   const [status, setStatus] = useAtom(browserWorkflowStatusAtom)
   const [draft, setDraft] = useAtom(browserWorkflowDraftAtom)
   const setAgentSessions = useSetAtom(agentSessionsAtom)
@@ -55,7 +55,6 @@ export function BrowserAgentPanel({ sessionId, tabId, pageUrl, tabTitle, channel
 
   React.useEffect(() => {
     let active = true
-    setStatus({ sessionId, state: 'idle' })
     setDraft(null)
     setUnattendedAllowed(false)
     void window.electronAPI.browserWorkflow.getStatus(sessionId).then((next) => {
@@ -120,27 +119,15 @@ export function BrowserAgentPanel({ sessionId, tabId, pageUrl, tabTitle, channel
   const projectSelectionLocked = isActionPending || (status.state !== 'idle' && status.state !== 'error')
 
   const requestRecording = React.useCallback(async (): Promise<void> => {
-    if (!channelId) {
-      toast.error('请先配置 Agent 渠道')
-      return
-    }
     setIsActionPending(true)
     try {
-      await window.electronAPI.sendAgentMessage({
-        sessionId,
-        userMessage: '记录我接下来的操作',
-        channelId,
-        modelId,
-        workspaceId: selectedProjectId || workspaceId || undefined,
-        agentRuntime: 'pi',
-        triggeredBy: 'user',
-      })
+      await onStartRecording()
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : '无法向网页 Agent 发送消息')
+      toast.error(error instanceof Error ? error.message : '无法开始记录网页操作')
     } finally {
       setIsActionPending(false)
     }
-  }, [channelId, modelId, selectedProjectId, sessionId, workspaceId])
+  }, [onStartRecording])
 
   const stopRun = React.useCallback(async (): Promise<void> => {
     setIsActionPending(true)
@@ -156,14 +143,13 @@ export function BrowserAgentPanel({ sessionId, tabId, pageUrl, tabTitle, channel
   const stopRecording = React.useCallback(async (): Promise<void> => {
     setIsActionPending(true)
     try {
-      await window.electronAPI.browserWorkflow.stopRecording(sessionId)
-      toast.success('网页操作已停止，Rust JSONL 已交给当前 Agent 总结')
+      await onStopRecording()
     } catch (error) {
       toast.error(error instanceof Error ? error.message : '无法停止网页操作记录')
     } finally {
       setIsActionPending(false)
     }
-  }, [sessionId])
+  }, [onStopRecording])
 
   const continueRun = React.useCallback(async (): Promise<void> => {
     setIsActionPending(true)

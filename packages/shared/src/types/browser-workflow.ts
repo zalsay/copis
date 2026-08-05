@@ -379,6 +379,7 @@ export const BROWSER_WORKFLOW_IPC_CHANNELS = {
   UNBIND_CONTEXT: 'browser-workflows:unbind-context',
   STATUS: 'browser-workflows:status',
   STATUS_CHANGED: 'browser-workflows:status-changed',
+  START_RECORDING: 'browser-workflows:start-recording',
   STOP_RECORDING: 'browser-workflows:stop-recording',
   CANCEL_RECORDING: 'browser-workflows:cancel-recording',
   DRAFT: 'browser-workflows:draft',

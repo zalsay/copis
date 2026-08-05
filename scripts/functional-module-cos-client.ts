@@ -1,6 +1,7 @@
 import type {
   FunctionalModuleObjectClient,
   FunctionalModuleObjectUpload,
+  FunctionalModulePutObjectOptions,
 } from './functional-module-publisher'
 
 export interface FunctionalModuleCosSdkClient {
@@ -30,21 +31,24 @@ export function createFunctionalModuleCosClient(
   bucket: FunctionalModuleCosBucket,
 ): FunctionalModuleObjectClient {
   const client: FunctionalModuleObjectClient = {
-    putObject: async (input) => {
-      let existing: { size: number; sha256?: string } | undefined
-      try {
-        existing = await client.headObject({ key: input.key })
-      } catch (error) {
-        if (!isNotFoundError(error)) throw error
-      }
-      if (existing && !input.allowOverwrite) {
-        const expectedSha256 = input.metadata.sha256?.toLowerCase()
-        if (existing.size === input.body.byteLength
-          && expectedSha256
-          && existing.sha256?.toLowerCase() === expectedSha256) {
-          return
+    putObject: async (input, options: FunctionalModulePutObjectOptions = {}) => {
+      const allowOverwrite = options.allowOverwrite === true || input.allowOverwrite === true
+      if (!allowOverwrite) {
+        let existing: { size: number; sha256?: string } | undefined
+        try {
+          existing = await client.headObject({ key: input.key })
+        } catch (error) {
+          if (!isNotFoundError(error)) throw error
         }
-        throw new Error(`COS 不可变对象已存在且内容不同: ${input.key}`)
+        if (existing) {
+          const expectedSha256 = input.metadata.sha256?.toLowerCase()
+          if (existing.size === input.body.byteLength
+            && expectedSha256
+            && existing.sha256?.toLowerCase() === expectedSha256) {
+            return
+          }
+          throw new Error(`COS 不可变对象已存在且内容不同: ${input.key}`)
+        }
       }
 
       const params: Record<string, unknown> = {
@@ -56,7 +60,7 @@ export function createFunctionalModuleCosClient(
         ContentType: input.contentType,
         ...metadataHeaders(input),
       }
-      if (!input.allowOverwrite) params['x-cos-forbid-overwrite'] = 'true'
+      if (!allowOverwrite) params['x-cos-forbid-overwrite'] = 'true'
       await callCos(sdk.putObject.bind(sdk), params)
     },
     headObject: async (input) => {

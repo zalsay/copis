@@ -1,4 +1,4 @@
-import type { WorkingExpertSkillMarketItem } from '@copis/shared'
+import type { SkillMeta, WorkingExpertSkillMarketItem } from '@copis/shared'
 import { RENDERER_HTTP_API_BASE_URL } from './http-api-base-url'
 
 const WORKING_HTTP_API_URL = RENDERER_HTTP_API_BASE_URL
@@ -86,6 +86,46 @@ function normalizeMarketItem(value: unknown): WorkingExpertSkillMarketItem {
     throw new Error('技能市场返回项缺少 slug')
   }
   return value as unknown as WorkingExpertSkillMarketItem
+}
+
+function legacyStringField(value: WorkingExpertSkillMarketItem, camelKey: string, snakeKey: string): string | undefined {
+  const record = value as unknown as Record<string, unknown>
+  const candidate = record[camelKey] ?? record[snakeKey]
+  return typeof candidate === 'string' && candidate.trim() ? candidate.trim() : undefined
+}
+
+/** 将当前工作区已安装的市场 Skill 映射为 Agent 技能列表项。 */
+export function mapInstalledMarketSkills(items: WorkingExpertSkillMarketItem[]): SkillMeta[] {
+  return items.flatMap((item) => {
+    if (item.localInstalled !== true) return []
+
+    const slug = item.slug.trim()
+    const name = item.name.trim()
+    const latestVersion = item.version.trim()
+    if (!slug || !name || !latestVersion) return []
+
+    const localVersion = item.localVersion?.trim() || latestVersion
+    const sourceProvider = legacyStringField(item, 'sourceProvider', 'source_provider') ?? 'platform'
+    const installedAt = legacyStringField(item, 'installedAt', 'installed_at') ?? ''
+    const category = item.category.trim()
+
+    return [{
+      slug,
+      name,
+      description: item.description,
+      ...(category ? { group: category } : {}),
+      version: localVersion,
+      enabled: true,
+      ...(localVersion !== latestVersion ? { hasUpdate: true } : {}),
+      marketSource: {
+        id: item.id,
+        slug,
+        version: latestVersion,
+        sourceProvider,
+        installedAt,
+      },
+    }]
+  })
 }
 
 export async function listWorkingSkillMarket(workspaceSlug: string): Promise<WorkingExpertSkillMarketItem[]> {

@@ -30,7 +30,7 @@ interface FunctionalModuleDefinition {
 
 const MODULE_DEFINITIONS: readonly FunctionalModuleDefinition[] = [
   { name: 'rust-http-api', displayName: 'Rust HTTP API', required: true },
-  { name: 'officecli', displayName: 'OfficeCLI', required: false },
+  { name: 'officecli', displayName: 'OfficeCLI', required: true },
 ]
 
 export type FunctionalModuleFetch = (
@@ -46,6 +46,7 @@ export interface FunctionalModuleManagerOptions {
   clientVersion?: string
   fetchImpl?: FunctionalModuleFetch
   onProgress?: (payload: FunctionalModuleProgressPayload) => void
+  artifactOverride?: FunctionalModuleArtifact
 }
 
 export interface PreparedFunctionalModule {
@@ -146,9 +147,25 @@ export async function resolveFunctionalModuleArtifact(
   name: FunctionalModuleName,
   options: FunctionalModuleManagerOptions = {},
 ): Promise<FunctionalModuleArtifact> {
-  getModuleDefinition(name)
+  const definition = getModuleDefinition(name)
+  if (options.artifactOverride) {
+    if (options.artifactOverride.name !== name) {
+      throw new Error(`功能模块 manifest 与目标不匹配: ${name}`)
+    }
+    return ensureRequiredArtifact(definition, options.artifactOverride)
+  }
   const artifact = (await fetchFunctionalModuleManifest(options)).find((item) => item.name === name)
   if (!artifact) throw new Error(`当前平台没有功能模块: ${name}`)
+  return ensureRequiredArtifact(definition, artifact)
+}
+
+function ensureRequiredArtifact(
+  definition: FunctionalModuleDefinition,
+  artifact: FunctionalModuleArtifact,
+): FunctionalModuleArtifact {
+  if (definition.required && !artifact.required) {
+    throw new Error(`${definition.displayName} 必须是必选模块`)
+  }
   return artifact
 }
 

@@ -10,7 +10,9 @@ import {
 } from '@copis/shared/config'
 import type {
   FunctionalModuleArchitecture,
+  FunctionalModuleArtifact,
   FunctionalModulePlatform,
+  FunctionalModuleProgressPayload,
 } from '@copis/shared'
 import { getConfigDir, getFunctionalModulesDir } from './config-paths'
 import {
@@ -31,6 +33,7 @@ import {
   type HttpApiRequest,
   type HttpApiResponse,
 } from './http-api-handler'
+import { getWorkingTokenStore } from './working-auth-store'
 
 export const HTTP_API_HOST = COPIS_HTTP_API_HOST
 export const HTTP_API_PORT = resolveCopisHttpApiPort({
@@ -41,6 +44,8 @@ export const HTTP_API_PORT = resolveCopisHttpApiPort({
 const RUST_HTTP_API_BINARY = 'copis-http-api-server'
 const HEALTH_POLL_INTERVAL_MS = 100
 const DEFAULT_HEALTH_TIMEOUT_MS = 5_000
+const WORKING_TOKEN_SYNC_RETRY_COUNT = 20
+const WORKING_TOKEN_SYNC_RETRY_DELAY_MS = 100
 
 export type HttpApiSpawn = (
   file: string,
@@ -51,10 +56,13 @@ export type HttpApiSpawn = (
 export interface HttpApiServerOptions {
   rootDir?: string
   manifestUrl?: string
+  artifactOverride?: FunctionalModuleArtifact
   platform?: FunctionalModulePlatform
   arch?: FunctionalModuleArchitecture
   clientVersion?: string
   fetchImpl?: FunctionalModuleFetch
+  onProgress?: (payload: FunctionalModuleProgressPayload) => void
+  onHealthProgress?: (progress: number) => void
   spawnImpl?: HttpApiSpawn
   healthTimeoutMs?: number
   stopTimeoutMs?: number
@@ -92,6 +100,16 @@ function getBinaryName(): string {
   return process.platform === 'win32' ? `${RUST_HTTP_API_BINARY}.exe` : RUST_HTTP_API_BINARY
 }
 
+export function resolveDevelopmentRustBinaryCandidates(
+  baseDir: string,
+  binaryName = getBinaryName(),
+): string[] {
+  return [
+    resolve(baseDir, '../../..', 'native/http-api-server/target/release', binaryName),
+    resolve(baseDir, '../../..', 'native/http-api-server/target/debug', binaryName),
+  ]
+}
+
 function getRootDir(options: HttpApiServerOptions): string {
   return options.rootDir ?? getFunctionalModulesDir()
 }
@@ -106,11 +124,7 @@ function resolveBinaryPath(options: HttpApiServerOptions): string | undefined {
 
   // 正式包只使用 active module；本地开发允许直接使用 Cargo 产物。
   if (app.isPackaged) return undefined
-  const candidates = [
-    join(__dirname, '..', 'resources', 'bin', binaryName),
-    resolve(__dirname, '../../..', 'native/http-api-server/target/debug', binaryName),
-    resolve(__dirname, '../../..', 'native/http-api-server/target/release', binaryName),
-  ]
+  const candidates = resolveDevelopmentRustBinaryCandidates(__dirname, binaryName)
   return candidates.find((candidate) => existsSync(candidate))
     ? prepareBinary(candidates.find((candidate) => existsSync(candidate))!)
     : undefined
@@ -222,8 +236,10 @@ function spawnManagedProcess(
       env: {
         ...process.env,
         COPIS_HTTP_API_PORT: String(port),
+        COPIS_CONFIG_DIR: getConfigDir(),
         COPIS_MEMORY_DIR: join(getConfigDir(), 'memory'),
         COPIS_HTTP_API_INTERNAL_TOKEN: internalToken,
+        COPIS_WORKING_ACCESS_TOKEN: getWorkingTokenStore().getToken() ?? '',
         COPIS_PI_RPC_RUNTIME: process.execPath,
         ...(workerPath ? { COPIS_PI_RPC_WORKER: workerPath } : {}),
       },
@@ -304,41 +320,66 @@ function stopManagedProcess(
   })
 }
 
-async function waitForHealth(port: number, options: HttpApiServerOptions): Promise<boolean> {
+export async function waitForHttpApiHealth(
+  port: number,
+  options: Pick<HttpApiServerOptions, 'fetchImpl' | 'healthTimeoutMs' | 'onHealthProgress'> = {},
+): Promise<boolean> {
   const fetchImpl = options.fetchImpl ?? fetch
   const timeoutMs = Math.max(1, options.healthTimeoutMs ?? DEFAULT_HEALTH_TIMEOUT_MS)
   const deadline = Date.now() + timeoutMs
+  options.onHealthProgress?.(0)
   do {
     try {
       const response = await fetchImpl(`http://${HTTP_API_HOST}:${port}/api/health`, {
         headers: { Accept: 'application/json' },
       })
-      if (response.ok) return true
+      if (response.ok && await isHealthyHttpApiResponse(response)) {
+        options.onHealthProgress?.(1)
+        return true
+      }
     } catch {
       // 候选进程启动需要一点时间，继续轮询直到超时。
     }
     const remaining = deadline - Date.now()
     if (remaining <= 0) break
+    options.onHealthProgress?.(Math.min(0.99, 1 - remaining / timeoutMs))
     await new Promise<void>((resolveDelay) => setTimeout(resolveDelay, Math.min(HEALTH_POLL_INTERVAL_MS, remaining)))
   } while (Date.now() < deadline)
   return false
 }
 
+async function isHealthyHttpApiResponse(response: Response): Promise<boolean> {
+  try {
+    const body = await response.json() as unknown
+    return isRecord(body) && body.ok === true && body.service === 'copis-http-api'
+  } catch {
+    return false
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null
+}
+
 function managerOptions(options: HttpApiServerOptions, rootDir: string): {
   rootDir: string
   manifestUrl?: string
+  artifactOverride?: FunctionalModuleArtifact
   platform?: FunctionalModulePlatform
   arch?: FunctionalModuleArchitecture
   clientVersion?: string
   fetchImpl?: FunctionalModuleFetch
+  onProgress?: (payload: FunctionalModuleProgressPayload) => void
 } {
   return {
     rootDir,
     ...(options.manifestUrl ? { manifestUrl: options.manifestUrl } : {}),
+    ...(options.artifactOverride ? { artifactOverride: options.artifactOverride } : {}),
     ...(options.platform ? { platform: options.platform } : {}),
     ...(options.arch ? { arch: options.arch } : {}),
     ...(options.clientVersion ? { clientVersion: options.clientVersion } : {}),
     ...(options.fetchImpl ? { fetchImpl: options.fetchImpl } : {}),
+    ...(options.onProgress ? { onProgress: options.onProgress } : {}),
   }
 }
 
@@ -387,7 +428,10 @@ export async function updateHttpApiServer(options: HttpApiServerOptions = {}): P
   const candidate = spawnManagedProcess(candidatePath, candidatePort, options, false)
   if (!candidate) return false
 
-  if (!await waitForHealth(candidatePort, options)) {
+  if (!await waitForHttpApiHealth(candidatePort, {
+    ...options,
+    onHealthProgress: undefined,
+  })) {
     await stopManagedProcess(candidate.child, options.stopTimeoutMs)
     console.warn('[HTTP API] 候选 Rust 模块健康检查失败，保留当前版本')
     return false
@@ -411,7 +455,10 @@ export async function updateHttpApiServer(options: HttpApiServerOptions = {}): P
   }
 
   const next = spawnManagedProcess(candidatePath, formalPort, options, true)
-  if (next && await waitForHealth(formalPort, options)) {
+  if (next && await waitForHttpApiHealth(formalPort, {
+    ...options,
+    onHealthProgress: options.onHealthProgress,
+  })) {
     httpApiProcess = next.child
     httpApiInternalToken = next.internalToken
     console.log(`[HTTP API] Rust 模块已切换到 v${prepared.artifact.version}`)
@@ -431,15 +478,51 @@ export function getHttpApiInternalToken(): string | null {
   return httpApiInternalToken
 }
 
+/** 将 Electron 保存的 Working token 同步到 Rust，技能市场业务不再经过 Electron 业务桥。 */
+export async function syncWorkingAccessToken(token: string | null): Promise<void> {
+  const internalToken = getHttpApiInternalToken()
+  if (!internalToken) return
+
+  let lastError: unknown
+  for (let attempt = 0; attempt < WORKING_TOKEN_SYNC_RETRY_COUNT; attempt += 1) {
+    try {
+      const response = await fetch(`http://${HTTP_API_HOST}:${HTTP_API_PORT}/internal/working-auth/token`, {
+        method: 'POST',
+        headers: {
+          Accept: 'application/json',
+          'Content-Type': 'application/json',
+          'X-Copis-Internal-Token': internalToken,
+        },
+        body: JSON.stringify({ token }),
+      })
+      if (response.ok) return
+      lastError = new Error(`HTTP ${response.status}`)
+      // 非网络错误通常不会因重试改变；保留一次重试窗口只用于 Rust 启动竞态。
+      if (response.status >= 400 && response.status < 500) break
+    } catch (error) {
+      lastError = error
+    }
+    if (attempt + 1 < WORKING_TOKEN_SYNC_RETRY_COUNT) {
+      await new Promise<void>((resolve) => setTimeout(resolve, WORKING_TOKEN_SYNC_RETRY_DELAY_MS))
+    }
+  }
+  // Rust 重启或更新期间可能暂时没有监听；重试结束后保留日志，下一次认证操作会再次同步。
+  console.warn('[HTTP API] 同步 Working token 到 Rust 失败:', lastError)
+}
+
+export function shouldInstallMissingHttpApiModule(isPackaged: boolean): boolean {
+  return !isPackaged
+}
+
 export async function ensureHttpApiServer(options: HttpApiServerOptions = {}): Promise<void> {
   const rootDir = getRootDir(options)
   if (resolveBinaryPath({ ...options, rootDir })) {
     startHttpApiServer({ ...options, rootDir })
-    if (options.manifestUrl || process.env.COPIS_FUNCTIONAL_MODULE_MANIFEST_URL) {
-      void updateHttpApiServer({ ...options, rootDir }).catch((error: unknown) => {
-        console.warn('[HTTP API] 后台检查 Rust 模块失败:', error)
-      })
-    }
+    return
+  }
+
+  if (!shouldInstallMissingHttpApiModule(app.isPackaged === true)) {
+    console.warn('[HTTP API] 当前没有 active Rust 模块，等待登录后的功能模块 Gate 完成首次安装')
     return
   }
 

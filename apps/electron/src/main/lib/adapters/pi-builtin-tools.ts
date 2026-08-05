@@ -33,7 +33,7 @@ import { getAgentSessionMeta } from '../agent-session-manager'
 import { memoryApiClient } from '../memory-api-client'
 import { memoryToolNamesForPolicy } from './memory-tool-policy'
 import { getSettings } from '../settings-service'
-import { getBrowserAgentContext, getBrowserWorkflowDraft, getBrowserWorkflowRecording, getBrowserWorkflowStatus, startBrowserWorkflowRecording, stopBrowserWorkflowRecording, submitBrowserWorkflowDraft, submitBrowserWorkflowRepairDraft, approveBrowserWorkflowDraft, waitForBrowserWorkflowRecording } from '../browser-workflow-service'
+import { getBrowserAgentContext, getBrowserWorkflowDraft, getBrowserWorkflowRecording, getBrowserWorkflowStatus, startBrowserWorkflowRecording, stopBrowserWorkflowRecording, submitBrowserWorkflowDraft, submitBrowserWorkflowRepairDraft, approveBrowserWorkflowDraft } from '../browser-workflow-service'
 import { runBrowserWorkflow, stopBrowserWorkflowRun } from '../browser-workflow-runner'
 import { getBrowserWorkflow, listBrowserWorkflows } from '../browser-workflow-store'
 import { isBuiltinMcpUserEnabled } from '../builtin-mcp/settings'
@@ -279,17 +279,16 @@ function buildBrowserWorkflowTools(sdk: PiSdk, ctx: PiBuiltinToolsContext): Tool
     sdk.defineTool({
       name: 'BrowserWorkflowRecord',
       label: '记录网页操作',
-      description: '开始记录用户在当前 Copis 网页页签中的操作。工具会保持等待，直到用户通过网页 Agent 控制停止录制；完成后返回由 Rust API 写入的脱敏 JSONL。',
-      promptSnippet: 'BrowserWorkflowRecord: 仅在用户明确要求记录网页操作时调用，开始录制并等待用户停止；不要自行停止。',
+      description: '开始记录用户在当前 Copis 网页页签中的操作。启动后立即返回；用户通过网页工具栏 Copis 停止，随后由 Agent 读取 Rust API 写入的脱敏 JSONL 并总结。',
+      promptSnippet: 'BrowserWorkflowRecord: 仅在用户明确要求记录网页操作时调用，启动录制后等待用户通过工具栏 Copis 停止。',
       parameters: Type.Object({}),
       async execute() {
         assertBrowserWorkflowEnabled()
         if (ctx.triggeredBy === 'automation' || ctx.triggeredBy === 'delegation') {
           throw new Error('只有用户主会话可以开始网页操作录制')
         }
-        await startBrowserWorkflowRecording(ctx.sessionId)
-        await waitForBrowserWorkflowRecording(ctx.sessionId)
-        return untrustedBrowserRecordingResult(await getBrowserWorkflowRecording(ctx.sessionId))
+        const status = await startBrowserWorkflowRecording(ctx.sessionId)
+        return jsonToolResult({ started: true, status, message: '网页操作录制已开始，请用户通过工具栏 Copis 停止。' })
       },
     }),
     sdk.defineTool({

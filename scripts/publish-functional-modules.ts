@@ -2,13 +2,19 @@
 import { createHash } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
-import type { FunctionalModuleManifest } from '@copis/shared'
 import {
+  buildFunctionalModuleManifestUpload,
   buildFunctionalModuleRelease,
+  markFunctionalModuleRequired,
+  publishFunctionalModuleManifest,
   publishFunctionalModuleRelease,
   type FunctionalModuleBinaryInput,
 } from './functional-module-publisher'
-import type { FunctionalModuleArchitecture, FunctionalModulePlatform } from '@copis/shared'
+import type {
+  FunctionalModuleArchitecture,
+  FunctionalModuleManifest,
+  FunctionalModulePlatform,
+} from '@copis/shared'
 import {
   createFunctionalModuleCosClient,
   type FunctionalModuleCosSdkClient,
@@ -44,68 +50,80 @@ if (!bucket || !region) {
   throw new Error('无法从 COS_BUCKET_URL 推断 bucket/region，请设置 COS_BUCKET 和 COS_REGION')
 }
 
-const rustBinary = getOption('--rust-binary')
-  ?? process.env.COPIS_RUST_HTTP_API_BINARY?.trim()
-  ?? join(repoRoot, 'native/http-api-server/target/release', binaryName('copis-http-api-server', platform))
-const officeCliBinary = getOption('--officecli-binary')
-  ?? process.env.COPIS_OFFICECLI_BINARY?.trim()
-  ?? join(electronDir, 'resources/bin', binaryName('officecli', platform))
-const modules: FunctionalModuleBinaryInput[] = [
-  {
-    module: 'rust-http-api',
-    version: getOption('--rust-version') ?? process.env.COPIS_RUST_HTTP_API_VERSION?.trim() ?? version,
-    platform,
-    arch,
-    binaryPath: rustBinary,
-    required: true,
-  },
-  {
-    module: 'officecli',
-    version: getOption('--officecli-version') ?? process.env.COPIS_OFFICECLI_VERSION?.trim() ?? version,
-    platform,
-    arch,
-    binaryPath: officeCliBinary,
-    required: false,
-  },
-]
-
-const release = buildFunctionalModuleRelease({
-  channel,
-  clientMinVersion: getOption('--client-min-version')
-    ?? process.env.COPIS_MODULE_CLIENT_MIN_VERSION?.trim()
-    ?? packageMetadata.version,
-  publicBaseUrl,
-  prefix,
-  modules,
-})
-
-const existingManifest = await fetchExistingManifest(release.manifestEntry.url)
-const mergedManifest = mergeFunctionalModuleManifests(existingManifest, release.manifest)
-const mergedManifestBody = Buffer.from(`${JSON.stringify(mergedManifest, null, 2)}\n`, 'utf8')
-const releaseToPublish = {
-  ...release,
-  manifest: mergedManifest,
-  manifestEntry: {
-    ...release.manifestEntry,
-    body: mergedManifestBody,
-    size: mergedManifestBody.byteLength,
-    sha256: createHash('sha256').update(mergedManifestBody).digest('hex'),
-    allowOverwrite: true,
-  },
-}
-
-if (existingManifest) {
-  console.log('[publish:functional-modules] 已合并 COS 中现有 manifest，保留其他平台模块')
-}
-
 const cosModule = await import('cos-nodejs-sdk-v5') as unknown as { default?: CosSdkConstructor }
 const Cos = cosModule.default
 if (!Cos) throw new Error('COS SDK 初始化失败')
 const cos = new Cos({ SecretId: secretId, SecretKey: secretKey, Region: region })
 const client = createFunctionalModuleCosClient(cos, { bucket, region })
 
-await publishFunctionalModuleRelease(releaseToPublish, client)
-console.log(`[publish:functional-modules] 已发布 ${release.binaries.length} 个二进制和 manifest`)
+if (hasFlag('--manifest-only')) {
+  const manifestPath = requiredOption('--manifest-file', 'COPIS_FUNCTIONAL_MODULE_MANIFEST_FILE')
+  const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as FunctionalModuleManifest
+  const requiredManifest = markFunctionalModuleRequired(manifest, 'officecli')
+  const manifestEntry = buildFunctionalModuleManifestUpload({
+    channel,
+    publicBaseUrl,
+    prefix,
+    manifest: requiredManifest,
+  })
+  await publishFunctionalModuleManifest(manifestEntry, client)
+  console.log(`[publish:functional-modules] 已覆盖发布 manifest: ${manifestEntry.key}`)
+} else {
+  const rustBinary = getOption('--rust-binary')
+    ?? process.env.COPIS_RUST_HTTP_API_BINARY?.trim()
+    ?? join(repoRoot, 'native/http-api-server/target/release', binaryName('copis-http-api-server', platform))
+  const officeCliBinary = getOption('--officecli-binary')
+    ?? process.env.COPIS_OFFICECLI_BINARY?.trim()
+    ?? join(electronDir, 'resources/bin', binaryName('officecli', platform))
+  const modules: FunctionalModuleBinaryInput[] = [
+    {
+      module: 'rust-http-api',
+      version: getOption('--rust-version') ?? process.env.COPIS_RUST_HTTP_API_VERSION?.trim() ?? version,
+      platform,
+      arch,
+      binaryPath: rustBinary,
+      required: true,
+    },
+    {
+      module: 'officecli',
+      version: getOption('--officecli-version') ?? process.env.COPIS_OFFICECLI_VERSION?.trim() ?? version,
+      platform,
+      arch,
+      binaryPath: officeCliBinary,
+      required: true,
+    },
+  ]
+  const release = buildFunctionalModuleRelease({
+    channel,
+    clientMinVersion: getOption('--client-min-version')
+      ?? process.env.COPIS_MODULE_CLIENT_MIN_VERSION?.trim()
+      ?? packageMetadata.version,
+    publicBaseUrl,
+    prefix,
+    modules,
+  })
+  const existingManifest = await fetchExistingManifest(release.manifestEntry.url)
+  const mergedManifest = mergeFunctionalModuleManifests(existingManifest, release.manifest)
+  const mergedManifestBody = Buffer.from(`${JSON.stringify(mergedManifest, null, 2)}\n`, 'utf8')
+  const releaseToPublish = {
+    ...release,
+    manifest: mergedManifest,
+    manifestEntry: {
+      ...release.manifestEntry,
+      body: mergedManifestBody,
+      size: mergedManifestBody.byteLength,
+      sha256: createHash('sha256').update(mergedManifestBody).digest('hex'),
+      allowOverwrite: true,
+    },
+  }
+
+  if (existingManifest) {
+    console.log('[publish:functional-modules] 已合并 COS 中现有 manifest，保留其他平台模块')
+  }
+
+  await publishFunctionalModuleRelease(releaseToPublish, client)
+  console.log(`[publish:functional-modules] 已发布 ${release.binaries.length} 个二进制和 manifest`)
+}
 
 function requiredEnv(name: string): string {
   const value = process.env[name]?.trim()
@@ -123,6 +141,10 @@ function getOption(name: string): string | undefined {
   const index = process.argv.indexOf(name)
   const value = index >= 0 ? process.argv[index + 1] : undefined
   return value?.trim() || undefined
+}
+
+function hasFlag(name: string): boolean {
+  return process.argv.includes(name)
 }
 
 function parseBucketUrl(value: string): { bucket: string; region: string } {

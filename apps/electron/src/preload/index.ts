@@ -73,6 +73,7 @@ import type {
   FunctionalModuleInstallInput,
   FunctionalModuleName,
   FunctionalModuleProgressPayload,
+  FunctionalModuleStartupProgressPayload,
   FunctionalModuleStatus,
   ProxyConfig,
   SystemProxyDetectResult,
@@ -307,6 +308,7 @@ export interface ElectronAPI {
     bindContext: (sessionId: string, context: BrowserAgentContext) => Promise<BrowserWorkflowStatus>
     unbindContext: (sessionId: string) => Promise<void>
     getStatus: (sessionId: string) => Promise<BrowserWorkflowStatus>
+    startRecording: (sessionId: string) => Promise<BrowserWorkflowStatus>
     stopRecording: (sessionId: string) => Promise<BrowserWorkflowRecordingSummary>
     stopRun: (sessionId: string) => Promise<void>
     continueRun: (sessionId: string) => Promise<void>
@@ -577,6 +579,14 @@ export interface ElectronAPI {
   /** 订阅功能模块安装进度，返回取消订阅函数 */
   onFunctionalModuleProgress: (
     callback: (payload: FunctionalModuleProgressPayload) => void,
+  ) => () => void
+
+  /** 登录后检查并更新全部必选功能模块 */
+  ensureRequiredFunctionalModules: () => Promise<FunctionalModuleStatus[]>
+
+  /** 订阅登录后功能模块启动聚合进度，返回取消订阅函数 */
+  onFunctionalModuleStartupProgress: (
+    callback: (payload: FunctionalModuleStartupProgressPayload) => void,
   ) => () => void
 
   // ===== 代理配置相关 =====
@@ -1427,6 +1437,7 @@ const electronAPI: ElectronAPI = {
     bindContext: (sessionId: string, context: BrowserAgentContext) => ipcRenderer.invoke(BROWSER_WORKFLOW_IPC_CHANNELS.BIND_CONTEXT, sessionId, context) as Promise<BrowserWorkflowStatus>,
     unbindContext: (sessionId: string) => ipcRenderer.invoke(BROWSER_WORKFLOW_IPC_CHANNELS.UNBIND_CONTEXT, sessionId) as Promise<void>,
     getStatus: (sessionId: string) => ipcRenderer.invoke(BROWSER_WORKFLOW_IPC_CHANNELS.STATUS, sessionId) as Promise<BrowserWorkflowStatus>,
+    startRecording: (sessionId: string) => ipcRenderer.invoke(BROWSER_WORKFLOW_IPC_CHANNELS.START_RECORDING, sessionId) as Promise<BrowserWorkflowStatus>,
     stopRecording: (sessionId: string) => ipcRenderer.invoke(BROWSER_WORKFLOW_IPC_CHANNELS.STOP_RECORDING, sessionId) as Promise<BrowserWorkflowRecordingSummary>,
     stopRun: (sessionId: string) => ipcRenderer.invoke(BROWSER_WORKFLOW_IPC_CHANNELS.STOP_RUN, sessionId) as Promise<void>,
     continueRun: (sessionId: string) => ipcRenderer.invoke(BROWSER_WORKFLOW_IPC_CHANNELS.CONTINUE_RUN, sessionId) as Promise<void>,
@@ -1769,6 +1780,14 @@ const electronAPI: ElectronAPI = {
     const listener = (_: unknown, payload: FunctionalModuleProgressPayload) => callback(payload)
     ipcRenderer.on(FUNCTIONAL_MODULE_IPC_CHANNELS.PROGRESS, listener)
     return () => ipcRenderer.off(FUNCTIONAL_MODULE_IPC_CHANNELS.PROGRESS, listener)
+  },
+  ensureRequiredFunctionalModules: () => {
+    return ipcRenderer.invoke(FUNCTIONAL_MODULE_IPC_CHANNELS.ENSURE_REQUIRED)
+  },
+  onFunctionalModuleStartupProgress: (callback: (payload: FunctionalModuleStartupProgressPayload) => void) => {
+    const listener = (_: unknown, payload: FunctionalModuleStartupProgressPayload) => callback(payload)
+    ipcRenderer.on(FUNCTIONAL_MODULE_IPC_CHANNELS.STARTUP_PROGRESS, listener)
+    return () => ipcRenderer.off(FUNCTIONAL_MODULE_IPC_CHANNELS.STARTUP_PROGRESS, listener)
   },
 
   // 代理配置

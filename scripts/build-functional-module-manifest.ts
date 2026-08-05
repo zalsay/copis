@@ -53,7 +53,7 @@ const modules: FunctionalModuleBinaryInput[] = [
     platform,
     arch,
     binaryPath: officeCliBinary,
-    required: false,
+    required: true,
   },
 ]
 

@@ -5,7 +5,7 @@ import { afterAll, afterEach, describe, expect, test, mock } from 'bun:test'
 import { createHash } from 'node:crypto'
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import type { FunctionalModuleFetch } from './functional-module-manager'
 import {
   activateFunctionalModule,
@@ -41,9 +41,12 @@ const previousHttpApiPort = process.env.COPIS_HTTP_API_PORT
 process.env.COPIS_HTTP_API_PORT = '51740'
 
 const {
+  resolveDevelopmentRustBinaryCandidates,
   startHttpApiServer,
   stopHttpApiServer,
+  shouldInstallMissingHttpApiModule,
   updateHttpApiServer,
+  waitForHttpApiHealth,
 } = await import('./http-api-server')
 import type { HttpApiSpawn } from './http-api-server'
 
@@ -147,7 +150,7 @@ function fetchFixture(
   return async (input) => {
     if (input.includes('/api/health')) {
       return health(new URL(input).port)
-        ? new Response(JSON.stringify({ ok: true }), { status: 200 })
+        ? new Response(JSON.stringify({ ok: true, service: 'copis-http-api' }), { status: 200 })
         : new Response(JSON.stringify({ ok: false }), { status: 503 })
     }
     if (input.endsWith('/manifest.json')) return new Response(JSON.stringify(manifest), { status: 200 })
@@ -162,6 +165,32 @@ function fetchFixture(
 }
 
 describe('Rust HTTP API 功能模块生命周期', () => {
+  test('打包环境缺少 active 模块时不在后台安装，开发环境保留初始化兼容路径', () => {
+    expect(shouldInstallMissingHttpApiModule(true)).toBe(false)
+    expect(shouldInstallMissingHttpApiModule(false)).toBe(true)
+  })
+
+  test('health 必须匹配 Copis HTTP API 服务身份', async () => {
+    const fetchImpl: FunctionalModuleFetch = async () => (
+      new Response(JSON.stringify({ ok: true, service: 'other-service' }), { status: 200 })
+    )
+
+    await expect(waitForHttpApiHealth(51740, {
+      fetchImpl,
+      healthTimeoutMs: 1,
+    })).resolves.toBe(false)
+  })
+
+  test('开发环境只从 Cargo 产物候选启动，不回退 resources/bin', () => {
+    const candidates = resolveDevelopmentRustBinaryCandidates('/tmp/copis/dist', 'copis-http-api-server')
+
+    expect(candidates).toEqual([
+      resolve('/tmp/copis/dist', '../../..', 'native/http-api-server/target/release/copis-http-api-server'),
+      resolve('/tmp/copis/dist', '../../..', 'native/http-api-server/target/debug/copis-http-api-server'),
+    ])
+    expect(candidates.some((candidate) => candidate.includes('/resources/bin/'))).toBe(false)
+  })
+
   test('active Rust API 从功能模块版本目录启动并使用开发端口', async () => {
     const root = createRoot()
     const packageInfo = rustPackage('0.1.0', 'old-rust-api')

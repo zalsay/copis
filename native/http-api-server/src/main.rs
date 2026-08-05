@@ -12,6 +12,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 mod memory;
 mod pi_rpc;
 mod runtime;
+mod skill_market;
 
 use memory::{
     MemoryCaptureBatchInput, MemoryCaptureInput, MemoryContextInput, MemoryError, MemoryKind,
@@ -24,6 +25,7 @@ use pi_rpc::{
 };
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::{json, Value};
+use skill_market::{handle_request as handle_skill_market_request, SkillMarketState};
 
 const HOST: &str = "127.0.0.1";
 const DEFAULT_PORT: u16 = 51730;
@@ -34,6 +36,7 @@ const MAX_RECORDING_LINE_BYTES: usize = 256 * 1024;
 const MAX_RECORDING_FILE_BYTES: u64 = 8 * 1024 * 1024;
 const INTERNAL_TOKEN_HEADER: &str = "x-copis-internal-token";
 const INTERNAL_RECORDING_PREFIX: &str = "/internal/browser-workflows/recordings/";
+const INTERNAL_WORKING_AUTH_PATH: &str = "/internal/working-auth/token";
 
 struct BridgeResponse {
     status: u16,
@@ -946,6 +949,7 @@ fn handle_connection(
     bridge: Arc<Bridge>,
     workers: Arc<PiWorkerManager>,
     memory_store: Arc<MemoryStore>,
+    skill_market_state: Arc<SkillMarketState>,
 ) {
     let request = match read_http_request(&mut stream) {
         Ok(request) => request,
@@ -1063,6 +1067,41 @@ fn handle_connection(
         return;
     }
 
+    if path == INTERNAL_WORKING_AUTH_PATH {
+        if !is_internal_token_valid(&request) {
+            send_json_response(
+                &mut stream,
+                403,
+                r#"{"error":"内部 Working 认证接口未授权","code":"internal_token_required"}"#,
+                None,
+            );
+        } else {
+            match serde_json::from_slice::<Value>(&request.body) {
+                Ok(value)
+                    if value
+                        .get("token")
+                        .map(|token| token.is_null() || token.is_string())
+                        .unwrap_or(false) =>
+                {
+                    let token = value
+                        .get("token")
+                        .and_then(Value::as_str)
+                        .map(str::to_string);
+                    skill_market_state.set_access_token(token);
+                    send_empty_response(&mut stream, 204, origin);
+                }
+                _ => send_json_response(
+                    &mut stream,
+                    400,
+                    r#"{"error":"Working token 请求格式不正确","code":"invalid_request"}"#,
+                    origin,
+                ),
+            }
+        }
+        let _ = stream.shutdown(Shutdown::Both);
+        return;
+    }
+
     if path.starts_with(INTERNAL_RECORDING_PREFIX) {
         if !is_internal_token_valid(&request) {
             send_json_response(
@@ -1099,6 +1138,32 @@ fn handle_connection(
         return;
     }
 
+    if is_skill_market_path(path) {
+        match handle_skill_market_request(
+            &skill_market_state,
+            &request.method,
+            &request.target,
+            &request.body,
+        ) {
+            Ok(response) => {
+                if response.status == 204 {
+                    send_empty_response(&mut stream, 204, origin);
+                } else if let Some(body) = response.body {
+                    let body = serde_json::to_string(&body).unwrap_or_else(|_| "null".to_string());
+                    send_json_response(&mut stream, response.status, &body, origin);
+                } else {
+                    send_empty_response(&mut stream, response.status, origin);
+                }
+            }
+            Err(error) => {
+                let body = json!({ "error": error.message, "code": error.code }).to_string();
+                send_json_response(&mut stream, error.status, &body, origin);
+            }
+        }
+        let _ = stream.shutdown(Shutdown::Both);
+        return;
+    }
+
     match bridge.send_request(&request) {
         Ok(response) => {
             if response.status == 204 {
@@ -1120,6 +1185,10 @@ fn handle_connection(
         }
     }
     let _ = stream.shutdown(Shutdown::Both);
+}
+
+fn is_skill_market_path(path: &str) -> bool {
+    path == "/api/working/skill-market" || path.starts_with("/api/working/skill-market/")
 }
 
 fn is_allowed_origin(origin: &str) -> bool {
@@ -1590,6 +1659,9 @@ fn main() {
             process::exit(1);
         }
     };
+    let skill_market_state = Arc::new(SkillMarketState::new(
+        std::env::var("COPIS_WORKING_ACCESS_TOKEN").ok(),
+    ));
     let response_bridge = Arc::clone(&bridge);
     thread::spawn(move || read_bridge_responses(response_bridge));
 
@@ -1600,12 +1672,14 @@ fn main() {
                 let connection_bridge = Arc::clone(&bridge);
                 let connection_workers = Arc::clone(&workers);
                 let connection_memory = Arc::clone(&memory_store);
+                let connection_skill_market = Arc::clone(&skill_market_state);
                 thread::spawn(move || {
                     handle_connection(
                         stream,
                         connection_bridge,
                         connection_workers,
                         connection_memory,
+                        connection_skill_market,
                     )
                 });
             }
@@ -1624,7 +1698,8 @@ mod tests {
     };
     use super::{
         append_recording_line, decode_hex, encode_hex, find_subslice, is_allowed_origin,
-        is_safe_path_component, parse_internal_recording_route, recording_marker, Bridge,
+        is_safe_path_component, is_skill_market_path, parse_internal_recording_route,
+        recording_marker, Bridge,
     };
 
     #[test]
@@ -1729,6 +1804,13 @@ mod tests {
             "POST",
             "/api/agent/sessions/session-1/stop/extra"
         ));
+    }
+
+    #[test]
+    fn recognizes_skill_market_routes_as_rust_owned_routes() {
+        assert!(is_skill_market_path("/api/working/skill-market"));
+        assert!(is_skill_market_path("/api/working/skill-market/12/install"));
+        assert!(!is_skill_market_path("/api/working/skill-markets"));
     }
 
     #[test]
