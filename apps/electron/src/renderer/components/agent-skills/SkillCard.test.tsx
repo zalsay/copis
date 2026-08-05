@@ -5,12 +5,12 @@ import type { SkillMeta } from '@copis/shared'
 import { SkillCard } from './SkillCard'
 
 describe('SkillCard 图标', () => {
-  test('使用 puzzle 元数据时渲染技能市场相同的 Puzzle 图标', () => {
+  test('所有技能卡片统一渲染技能市场相同的 Puzzle 图标', () => {
     const skill: SkillMeta = {
-      slug: 'automation',
-      name: 'automation',
-      displayName: '自动化办公',
-      icon: 'puzzle',
+      slug: 'weekly-report',
+      name: 'weekly-report',
+      displayName: '周报月报生成',
+      icon: 'sparkles',
       enabled: true,
     }
 

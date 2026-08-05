@@ -5,7 +5,7 @@
  */
 
 import * as React from 'react'
-import { Puzzle, Sparkles, RefreshCw, ShieldCheck, ArrowDownToLine, Download } from 'lucide-react'
+import { Puzzle, RefreshCw, ShieldCheck, ArrowDownToLine, Download } from 'lucide-react'
 import { Switch } from '@/components/ui/switch'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
@@ -22,7 +22,6 @@ interface SkillCardProps {
 
 export function SkillCard({ skill, isBuiltin, updating, onOpen, onToggle, onUpdate }: SkillCardProps): React.ReactElement {
   const title = skill.displayName?.trim() || skill.name
-  const SkillIcon = skill.icon?.trim().toLowerCase() === 'puzzle' ? Puzzle : Sparkles
 
   return (
     <div
@@ -43,7 +42,7 @@ export function SkillCard({ skill, isBuiltin, updating, onOpen, onToggle, onUpda
     >
       <div className="flex items-start gap-3">
         <div className="rounded-xl bg-amber-500/12 p-2 text-amber-500 shadow-sm shrink-0">
-          <SkillIcon size={18} />
+          <Puzzle size={18} />
         </div>
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
