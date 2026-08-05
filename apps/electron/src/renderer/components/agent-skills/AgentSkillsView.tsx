@@ -475,6 +475,7 @@ export function AgentSkillsView(): React.ReactElement {
         open={showMarket}
         onOpenChange={setShowMarket}
         currentWorkspaceSlug={currentWorkspace?.slug ?? ''}
+        currentWorkspaceName={currentWorkspace?.name ?? ''}
         onChanged={() => bumpCapabilities((v) => v + 1)}
       />
     </div>

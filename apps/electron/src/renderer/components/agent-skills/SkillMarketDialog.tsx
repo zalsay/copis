@@ -14,7 +14,7 @@ import {
   X,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import type { WorkingExpertSkillMarketItem } from '@copis/shared'
 import { installWorkingSkill, listWorkingSkillMarket, uninstallWorkingSkill } from '@/lib/working-skill-market-api'
@@ -24,6 +24,7 @@ interface SkillMarketDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
   currentWorkspaceSlug: string
+  currentWorkspaceName: string
   onChanged: () => void
 }
 
@@ -54,7 +55,7 @@ function accentClass(accent: string): string {
   }
 }
 
-export function SkillMarketDialog({ open, onOpenChange, currentWorkspaceSlug, onChanged }: SkillMarketDialogProps): React.ReactElement {
+export function SkillMarketDialog({ open, onOpenChange, currentWorkspaceSlug, currentWorkspaceName, onChanged }: SkillMarketDialogProps): React.ReactElement {
   const [skills, setSkills] = React.useState<WorkingExpertSkillMarketItem[]>([])
   const [loading, setLoading] = React.useState(false)
   const [error, setError] = React.useState('')
@@ -64,6 +65,7 @@ export function SkillMarketDialog({ open, onOpenChange, currentWorkspaceSlug, on
   const [busyId, setBusyId] = React.useState<string | null>(null)
   const requestIdRef = React.useRef(0)
   const workspaceSlug = currentWorkspaceSlug.trim()
+  const workspaceName = currentWorkspaceName.trim()
 
   const invalidateMarket = React.useCallback((): void => {
     requestIdRef.current += 1
@@ -168,8 +170,14 @@ export function SkillMarketDialog({ open, onOpenChange, currentWorkspaceSlug, on
                 <Store size={19} />
               </div>
               <div>
-                <DialogTitle>技能市场</DialogTitle>
-                <DialogDescription className="mt-1">从 Working 官方技能市场安装专家能力到当前项目</DialogDescription>
+                <div className="flex items-center gap-2">
+                  <DialogTitle>技能市场</DialogTitle>
+                  {workspaceName && (
+                    <span className="rounded-md bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground">
+                      {workspaceName}
+                    </span>
+                  )}
+                </div>
               </div>
             </div>
           </div>
