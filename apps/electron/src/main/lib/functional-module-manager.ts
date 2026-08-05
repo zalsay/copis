@@ -48,7 +48,14 @@ export interface FunctionalModuleManagerOptions {
   onProgress?: (payload: FunctionalModuleProgressPayload) => void
 }
 
+export interface PreparedFunctionalModule {
+  artifact: FunctionalModuleArtifact
+  packageInfo: FunctionalModulePackage
+  versionDir: string
+}
+
 const activeInstalls = new Map<string, Promise<FunctionalModuleStatus>>()
+const activePrepares = new Map<string, Promise<PreparedFunctionalModule>>()
 
 export async function fetchFunctionalModuleManifest(
   options: FunctionalModuleManagerOptions = {},
@@ -164,6 +171,34 @@ export async function installFunctionalModule(
   }
 }
 
+export async function prepareFunctionalModule(
+  input: FunctionalModuleInstallInput,
+  options: FunctionalModuleManagerOptions = {},
+): Promise<PreparedFunctionalModule> {
+  const definition = getModuleDefinition(input.name)
+  const rootDir = options.rootDir ?? getFunctionalModulesDir()
+  const key = `${rootDir}:${input.name}`
+  const existing = activePrepares.get(key)
+  if (existing) return existing
+
+  const operation = prepareFunctionalModuleInner(input, { ...options, rootDir }, definition)
+  activePrepares.set(key, operation)
+  try {
+    return await operation
+  } finally {
+    if (activePrepares.get(key) === operation) activePrepares.delete(key)
+  }
+}
+
+export async function activatePreparedFunctionalModule(
+  prepared: PreparedFunctionalModule,
+  rootDir = getFunctionalModulesDir(),
+): Promise<FunctionalModuleStatus> {
+  const paths = getFunctionalModulePaths(rootDir)
+  await activateFunctionalModule(paths, prepared.packageInfo, prepared.versionDir)
+  return statusWithArtifact(getFunctionalModuleStatus(prepared.artifact.name, rootDir), prepared.artifact)
+}
+
 async function installFunctionalModuleInner(
   input: FunctionalModuleInstallInput,
   options: FunctionalModuleManagerOptions,
@@ -186,6 +221,36 @@ async function installFunctionalModuleInner(
       return statusWithArtifact(getFunctionalModuleStatus(input.name, rootDir), artifact)
     }
 
+    const prepared = await prepareFunctionalModuleInner(input, options, definition, emit, artifact)
+    emit({ phase: 'activate', detail: `正在启用 ${definition.displayName}`, progress: 0.94, version: artifact.version })
+    await activateFunctionalModule(paths, prepared.packageInfo, prepared.versionDir)
+    emit({ phase: 'done', detail: `${definition.displayName} v${artifact.version} 已就绪`, progress: 1, version: artifact.version })
+    return statusWithArtifact(getFunctionalModuleStatus(input.name, rootDir), artifact)
+  } catch (error) {
+    const detail = toErrorMessage(error)
+    emit({ phase: 'error', detail, progress: 1 })
+    throw new Error(`安装${definition.displayName}失败: ${detail}`, { cause: error })
+  }
+}
+
+async function prepareFunctionalModuleInner(
+  input: FunctionalModuleInstallInput,
+  options: FunctionalModuleManagerOptions,
+  definition: FunctionalModuleDefinition,
+  emit?: (payload: Omit<FunctionalModuleProgressPayload, 'name'>) => void,
+  artifactOverride?: FunctionalModuleArtifact,
+): Promise<PreparedFunctionalModule> {
+  const rootDir = options.rootDir ?? getFunctionalModulesDir()
+  const paths = getFunctionalModulePaths(rootDir)
+  const emitProgress = emit ?? ((payload: Omit<FunctionalModuleProgressPayload, 'name'>): void => {
+    options.onProgress?.({ name: input.name, ...payload })
+  })
+
+  try {
+    if (!artifactOverride) {
+      emitProgress({ phase: 'manifest', detail: '正在获取功能模块版本信息', progress: 0.04 })
+    }
+    const artifact = artifactOverride ?? await resolveFunctionalModuleArtifact(input.name, options)
     const packageInfo: FunctionalModulePackage = {
       name: artifact.name,
       version: artifact.version,
@@ -199,26 +264,21 @@ async function installFunctionalModuleInner(
       artifact,
       definition.displayName,
       paths.downloadsDir,
-      emit,
+      emitProgress,
       options.fetchImpl ?? fetch,
     )
-    emit({ phase: 'verify', detail: '正在校验功能模块', progress: 0.78, version: artifact.version })
+    emitProgress({ phase: 'verify', detail: '正在校验功能模块', progress: 0.78, version: artifact.version })
     const verifiedSha256 = await sha256File(artifactPath)
     if (verifiedSha256 !== artifact.sha256.toLowerCase()) {
       throw new Error(`功能模块校验失败：期望 ${artifact.sha256}，实际 ${verifiedSha256}`)
     }
 
-    emit({ phase: 'install', detail: `正在安装 ${definition.displayName}`, progress: 0.84, version: artifact.version })
+    emitProgress({ phase: 'install', detail: `正在安装 ${definition.displayName}`, progress: 0.84, version: artifact.version })
     await cacheFunctionalModule(paths, packageInfo, artifactPath)
     const versionDir = await assembleFunctionalModule(paths, packageInfo)
-    emit({ phase: 'activate', detail: `正在启用 ${definition.displayName}`, progress: 0.94, version: artifact.version })
-    await activateFunctionalModule(paths, packageInfo, versionDir)
-    emit({ phase: 'done', detail: `${definition.displayName} v${artifact.version} 已就绪`, progress: 1, version: artifact.version })
-    return statusWithArtifact(getFunctionalModuleStatus(input.name, rootDir), artifact)
+    return { artifact, packageInfo, versionDir }
   } catch (error) {
-    const detail = toErrorMessage(error)
-    emit({ phase: 'error', detail, progress: 1 })
-    throw new Error(`安装${definition.displayName}失败: ${detail}`, { cause: error })
+    throw new Error(`准备${definition.displayName}失败: ${toErrorMessage(error)}`, { cause: error })
   }
 }
 
