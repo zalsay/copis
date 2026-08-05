@@ -129,7 +129,10 @@ function prepareBinary(path: string): string {
 
 function resolvePiRpcWorkerPath(): string | undefined {
   const candidates = app.isPackaged
-    ? [join(__dirname, 'pi-rpc-worker.cjs')]
+    ? [
+      join(process.resourcesPath, 'app.asar.unpacked', 'dist', 'pi-rpc-worker.cjs'),
+      join(__dirname, 'pi-rpc-worker.cjs'),
+    ]
     : [
       join(__dirname, 'pi-rpc-worker.cjs'),
       resolve(__dirname, '../../..', 'apps/electron/dist/pi-rpc-worker.cjs'),

@@ -78,7 +78,7 @@ process.stderr?.on?.('error', (err: NodeJS.ErrnoException) => {
 
 // 清理本地环境中的 ANTHROPIC_* 变量，防止干扰应用的认证流程
 // Electron 桌面应用通过渠道系统管理 API Key，不应受终端环境变量影响
-// 注意：此操作必须在 initializeRuntime()（loadShellEnv）之前执行
+// 注意：此操作必须在运行时环境加载之前执行
 for (const key of Object.keys(process.env)) {
   if (key.startsWith('ANTHROPIC_')) {
     delete process.env[key]
@@ -344,8 +344,8 @@ function showAndFocusMainWindow(): void {
  * Get the appropriate app icon path for the current platform
  */
 function getIconPath(): string {
-  // resources 在 build:resources 阶段被复制到 dist/ 下，与 main.cjs 同级
-  const resourcesDir = join(__dirname, 'resources')
+  // 开发环境资源位于 dist/resources，生产环境资源位于 process.resourcesPath。
+  const resourcesDir = app.isPackaged ? process.resourcesPath : join(__dirname, 'resources')
 
   if (process.platform === 'darwin') {
     return join(resourcesDir, 'icon.icns')
@@ -546,13 +546,12 @@ async function bootstrap(): Promise<void> {
   // HTTP API 由 Electron 统一确保 active 模块和进程生命周期；网络安装失败不阻断 UI 启动。
   void safeAwait('ensureHttpApiServer', () => ensureHttpApiServer())
 
+  // Runtime 检测在 Rust 子进程中异步执行，不阻塞窗口创建和 Electron 主进程。
+  void safeAwait('initializeRuntime', () => initializeRuntime())
+
   // 注册自定义协议 copis-file:// 用于内联预览本地文件。
   // 协议只接受主进程签发的 opaque token，不解析 renderer 提供的绝对路径。
   protocol.handle('copis-file', handleCopisFileRequest)
-
-  // 初始化运行时环境（Shell 环境 + Bun + Git 检测）
-  // 必须在其他初始化之前执行，确保环境变量正确加载
-  await safeAwait('initializeRuntime', () => initializeRuntime())
 
   // 同步默认 Skills 模板到 ~/.copis/default-skills/
   safeRun('seedDefaultSkills', seedDefaultSkills)

@@ -88,6 +88,7 @@ import { GlobalShortcuts } from './components/shortcuts/GlobalShortcuts'
 import { VoiceDictationApp } from './components/voice-dictation/VoiceDictationApp'
 import { TabSwitcher } from './components/tabs/TabSwitcher'
 import { getEnabledAgentChannelIds } from './lib/agent-channel-selection'
+import { WindowControls } from './components/WindowControls'
 import { CopisLogo } from './lib/model-logo'
 import { initShortcutRegistry, updateShortcutOverrides } from './lib/shortcut-registry'
 import { installHttpApiBridge } from './lib/http-api-bridge'
@@ -1070,6 +1071,7 @@ if (isQuickTaskWindow) {
       <FeishuInitializer />
       <DingTalkInitializer />
       <TabStatePersistenceInitializer />
+      <WindowControls quitApp />
       <VoiceDictationApp embedded />
       <GlobalShortcuts />
       <TabSwitcher />

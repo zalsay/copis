@@ -9,7 +9,12 @@ import { detectIsWindows } from '@/lib/platform'
 import { interfaceVariantAtom } from '@/atoms/theme'
 import { cn } from '@/lib/utils'
 
-export function WindowControls(): React.ReactElement | null {
+interface WindowControlsProps {
+  /** 主窗口关闭时退出应用；独立子窗口仍只关闭当前窗口。 */
+  quitApp?: boolean
+}
+
+export function WindowControls({ quitApp = false }: WindowControlsProps = {}): React.ReactElement | null {
   const isWindows = React.useMemo(() => detectIsWindows(), [])
   const interfaceVariant = useAtomValue(interfaceVariantAtom)
   const isClassic = interfaceVariant === 'classic'
@@ -73,7 +78,7 @@ export function WindowControls(): React.ReactElement | null {
         type="button"
         className="window-control-btn window-control-close"
         aria-label="关闭"
-        onClick={() => window.electronAPI.windowClose()}
+        onClick={() => { void window.electronAPI.windowClose(quitApp) }}
       >
         <svg width="12" height="12" viewBox="0 0 12 12">
           <path d="M1.5 1.5l9 9M10.5 1.5l-9 9" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />

@@ -1,5 +1,5 @@
 import { homedir } from 'node:os'
-import { dirname, join, resolve } from 'node:path'
+import { join, resolve } from 'node:path'
 import {
   COPIS_DEFAULT_PERMISSION_MODE,
   COPIS_WORKING_CHANNEL_ID,
@@ -63,6 +63,7 @@ import {
   buildRpcMemoryTurn,
   shouldCaptureRpcRun,
 } from './agent-rpc-memory'
+import { filterAttachedPaths, getAttachedFileDirectories } from './attached-paths'
 import type {
   AgentRpcWorkerFrame,
   PiWorkerRunConfig,
@@ -113,8 +114,7 @@ const rpcMemoryAutoCapture = new MemoryAutoCapture()
 const rpcMemoryMaintenance = sharedMemoryMaintenanceService
 
 function stringArray(value: unknown): string[] | undefined {
-  if (!Array.isArray(value)) return undefined
-  const values = value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+  const values = filterAttachedPaths(value)
   return values.length > 0 ? values : undefined
 }
 
@@ -174,10 +174,10 @@ export function parseAgentRpcInput(record: Record<string, unknown>): AgentSendIn
 }
 
 function uniqueDirectories(input: AgentSendInput, session: AgentSessionMeta | undefined): string[] {
-  const attachedDirectories = session?.attachedDirectories ?? []
-  const attachedFileDirectories = (session?.attachedFiles ?? []).map((filePath) => dirname(filePath))
+  const attachedDirectories = filterAttachedPaths(session?.attachedDirectories)
+  const attachedFileDirectories = getAttachedFileDirectories(session?.attachedFiles)
   return Array.from(new Set([
-    ...(input.additionalDirectories ?? []),
+    ...filterAttachedPaths(input.additionalDirectories),
     ...attachedDirectories,
     ...attachedFileDirectories,
   ].map((path) => resolve(path))))

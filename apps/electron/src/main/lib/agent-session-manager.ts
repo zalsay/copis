@@ -49,6 +49,7 @@ import { getConversationMessages } from './conversation-manager'
 import { convertLegacyMessage } from '@copis/session-core'
 import { assertEnabledModelForChannel } from './agent-model-selection'
 import { copyForkWorkspaceFiles } from './agent-fork-workspace-copy'
+import { filterAttachedPaths, normalizeAttachedPaths } from './attached-paths'
 
 /**
  * 会话索引文件格式
@@ -135,6 +136,25 @@ function normalizePersistedSDKMessage(parsed: unknown): SDKMessage {
   return parsed as SDKMessage
 }
 
+function hasSameAttachedPaths(value: unknown, normalized: string[] | undefined): boolean {
+  if (normalized === undefined) return value === undefined
+  if (!Array.isArray(value) || value.length !== normalized.length) return false
+  return value.every((item, index) => item === normalized[index])
+}
+
+function normalizePersistedAttachedPaths(index: AgentSessionsIndex): boolean {
+  let changed = false
+  for (const session of index.sessions) {
+    for (const field of ['attachedDirectories', 'attachedFiles'] as const) {
+      const normalized = normalizeAttachedPaths(session[field])
+      if (hasSameAttachedPaths(session[field], normalized)) continue
+      session[field] = normalized
+      changed = true
+    }
+  }
+  return changed
+}
+
 function migrateLegacyPermissionMode(index: AgentSessionsIndex): boolean {
   let changed = false
   for (const session of index.sessions) {
@@ -190,7 +210,8 @@ function readIndex(): AgentSessionsIndex {
     const permissionModeMigrated = migrateLegacyPermissionMode(data)
     const agentRuntimeMigrated = migrateLegacyAgentRuntime(data)
     const thinkingDefaultMigrated = migrateLegacyOpenAIThinkingDefault(data)
-    if (permissionModeMigrated || agentRuntimeMigrated || thinkingDefaultMigrated) {
+    const attachedPathsMigrated = normalizePersistedAttachedPaths(data)
+    if (permissionModeMigrated || agentRuntimeMigrated || thinkingDefaultMigrated || attachedPathsMigrated) {
       writeIndex(data)
       if (permissionModeMigrated) {
         console.log('[Agent 会话] 已迁移历史权限模式 auto → bypassPermissions')
@@ -200,6 +221,9 @@ function readIndex(): AgentSessionsIndex {
       }
       if (agentRuntimeMigrated) {
         console.log('[Agent 会话] 已将历史 runtime 统一迁移为 Pi，并清理旧 session ID')
+      }
+      if (attachedPathsMigrated) {
+        console.log('[Agent 会话] 已清理历史会话中的非法附加路径')
       }
     }
     return data
@@ -492,15 +516,22 @@ export function updateAgentSessionMeta(
   }
 
   const existing = index.sessions[idx]!
-  const updateKeys = Object.keys(updates)
+  const normalizedUpdates = { ...updates }
+  if (Object.prototype.hasOwnProperty.call(normalizedUpdates, 'attachedDirectories')) {
+    normalizedUpdates.attachedDirectories = normalizeAttachedPaths(normalizedUpdates.attachedDirectories)
+  }
+  if (Object.prototype.hasOwnProperty.call(normalizedUpdates, 'attachedFiles')) {
+    normalizedUpdates.attachedFiles = normalizeAttachedPaths(normalizedUpdates.attachedFiles)
+  }
+  const updateKeys = Object.keys(normalizedUpdates)
   // 星标只是侧栏的视觉标记，不应改变会话的新鲜度或归档状态。
   const isStarredOnly = updateKeys.every((key) => key === 'starred')
   // 非手动归档操作时，若会话已归档则自动恢复为活跃（仅更新 stoppedByUser 或 starred 不触发解归档）
   const isStoppedByUserOnly = updateKeys.every((key) => key === 'stoppedByUser')
-  const autoUnarchive = existing.archived && !('archived' in updates) && !isStoppedByUserOnly && !isStarredOnly
+  const autoUnarchive = existing.archived && !('archived' in normalizedUpdates) && !isStoppedByUserOnly && !isStarredOnly
   const updated: AgentSessionMeta = {
     ...existing,
-    ...updates,
+    ...normalizedUpdates,
     ...(autoUnarchive ? { archived: false } : {}),
     updatedAt: isStarredOnly ? existing.updatedAt : Date.now(),
   }
@@ -1061,7 +1092,7 @@ export function cleanupStaleAttachedPaths(): number {
     let changed = false
 
     if (session.attachedDirectories?.length) {
-      const valid = session.attachedDirectories.filter((d) => existsSync(d))
+      const valid = filterAttachedPaths(session.attachedDirectories).filter((d) => existsSync(d))
       if (valid.length < session.attachedDirectories.length) {
         count += session.attachedDirectories.length - valid.length
         session.attachedDirectories = valid.length > 0 ? valid : undefined
@@ -1070,7 +1101,7 @@ export function cleanupStaleAttachedPaths(): number {
     }
 
     if (session.attachedFiles?.length) {
-      const valid = session.attachedFiles.filter((f) => existsSync(f))
+      const valid = filterAttachedPaths(session.attachedFiles).filter((f) => existsSync(f))
       if (valid.length < session.attachedFiles.length) {
         count += session.attachedFiles.length - valid.length
         session.attachedFiles = valid.length > 0 ? valid : undefined

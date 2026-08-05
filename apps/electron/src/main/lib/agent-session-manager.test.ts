@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, mock, test } from 'bun:test'
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import * as os from 'node:os'
 import { join } from 'node:path'
 
@@ -155,6 +155,43 @@ describe('Agent 会话 runtime 元数据', () => {
 
     expect(existsSync(join(projectRootPath, '.context'))).toBe(true)
     expect(existsSync(join(tempHome, '.copis', 'agent-workspaces', 'context-workspace', session.id, '.context'))).toBe(true)
+  })
+
+  test('Given 历史索引包含非法附加路径 When 读取会话 Then 清理非法值后再返回', () => {
+    const indexPath = join(tempHome, '.copis', 'agent-sessions.json')
+    const indexBackup = existsSync(indexPath) ? readFileSync(indexPath, 'utf-8') : undefined
+    const validFile = join(tempHome, 'attached-note.md')
+    const validDirectory = join(tempHome, 'attached-directory')
+
+    mkdirSync(join(tempHome, '.copis'), { recursive: true })
+    writeFileSync(indexPath, JSON.stringify({
+      version: 1,
+      sessions: [{
+        id: 'session-with-invalid-attached-paths',
+        title: '脏路径会话',
+        attachedFiles: [validFile, null, '', 42],
+        attachedDirectories: [validDirectory, null, '  '],
+        createdAt: 1,
+        updatedAt: 1,
+      }],
+    }), 'utf-8')
+
+    try {
+      const session = manager.getAgentSessionMeta('session-with-invalid-attached-paths')
+
+      expect(session?.attachedFiles).toEqual([validFile])
+      expect(session?.attachedDirectories).toEqual([validDirectory])
+      expect(JSON.parse(readFileSync(indexPath, 'utf-8')).sessions[0]).toMatchObject({
+        attachedFiles: [validFile],
+        attachedDirectories: [validDirectory],
+      })
+    } finally {
+      if (indexBackup === undefined) {
+        rmSync(indexPath, { force: true })
+      } else {
+        writeFileSync(indexPath, indexBackup, 'utf-8')
+      }
+    }
   })
 
   test('Given 已保存 OpenAI medium 默认值 When 新建 Pi 会话 Then 默认并持久化 medium', () => {

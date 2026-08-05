@@ -33,6 +33,7 @@ import { listBuiltinMcpServers } from './builtin-mcp/catalog'
 import { RESERVED_BUILTIN_KEYS } from './builtin-mcp/baseline'
 import { inferMcpTransportType, normalizeMcpTransportType, normalizeOptionalMemoryPolicy } from '@copis/shared'
 import type { AgentWorkspace, CreateAgentWorkspaceInput, LocalProjectRootStatus, MemoryPolicy, WorkspaceMcpConfig, SkillMeta, SkillImportSource, SkillMarketSource, OtherWorkspaceSkillsGroup, WorkspaceCapabilities, SkillFileNode, SkillFileContent } from '@copis/shared'
+import { filterAttachedPaths, requireAttachedPath } from './attached-paths'
 
 interface AgentWorkspacesIndex {
   version: number
@@ -1460,13 +1461,11 @@ function readWorkspaceConfig(workspaceSlug: string): WorkspaceConfig {
   try {
     const raw = readFileSync(configPath, 'utf-8')
     const data = JSON.parse(raw) as Partial<WorkspaceConfig>
+    const attachedDirectories = filterAttachedPaths(data.attachedDirectories)
+    const attachedFiles = filterAttachedPaths(data.attachedFiles)
     return {
-      attachedDirectories: Array.isArray(data.attachedDirectories)
-        ? data.attachedDirectories.filter((dir): dir is string => typeof dir === 'string')
-        : undefined,
-      attachedFiles: Array.isArray(data.attachedFiles)
-        ? data.attachedFiles.filter((file): file is string => typeof file === 'string')
-        : undefined,
+      attachedDirectories: attachedDirectories.length > 0 ? attachedDirectories : undefined,
+      attachedFiles: attachedFiles.length > 0 ? attachedFiles : undefined,
       worktreeRepos: Array.isArray(data.worktreeRepos)
         ? data.worktreeRepos.filter((r) => r && typeof r.name === 'string' && typeof r.repoPath === 'string' && typeof r.worktreesPath === 'string')
         : undefined,
@@ -1489,6 +1488,7 @@ export function getWorkspaceAttachedDirectories(workspaceSlug: string): string[]
 }
 
 export function attachWorkspaceDirectory(workspaceSlug: string, directoryPath: string): string[] {
+  directoryPath = requireAttachedPath(directoryPath, '附加目录路径')
   const config = readWorkspaceConfig(workspaceSlug)
   const existing = config.attachedDirectories ?? []
 
@@ -1519,6 +1519,7 @@ export function getWorkspaceAttachedFiles(workspaceSlug: string): string[] {
 }
 
 export function attachWorkspaceFile(workspaceSlug: string, filePath: string): string[] {
+  filePath = requireAttachedPath(filePath, '附加文件路径')
   const config = readWorkspaceConfig(workspaceSlug)
   const existing = config.attachedFiles ?? []
 
@@ -1625,7 +1626,7 @@ export function cleanupStaleWorkspaceAttachedPaths(): number {
     let changed = false
 
     if (config.attachedDirectories?.length) {
-      const valid = config.attachedDirectories.filter((d) => existsSync(d))
+      const valid = filterAttachedPaths(config.attachedDirectories).filter((d) => existsSync(d))
       if (valid.length < config.attachedDirectories.length) {
         count += config.attachedDirectories.length - valid.length
         config.attachedDirectories = valid.length > 0 ? valid : undefined
@@ -1634,7 +1635,7 @@ export function cleanupStaleWorkspaceAttachedPaths(): number {
     }
 
     if (config.attachedFiles?.length) {
-      const valid = config.attachedFiles.filter((f) => existsSync(f))
+      const valid = filterAttachedPaths(config.attachedFiles).filter((f) => existsSync(f))
       if (valid.length < config.attachedFiles.length) {
         count += config.attachedFiles.length - valid.length
         config.attachedFiles = valid.length > 0 ? valid : undefined

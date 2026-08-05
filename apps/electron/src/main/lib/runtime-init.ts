@@ -1,179 +1,150 @@
 /**
- * 运行时初始化协调器
+ * Pi runtime 状态协调器。
  *
- * 负责协调所有运行时初始化逻辑，包括：
- * 1. Shell 环境加载（macOS）
- * 2. Node.js 运行时检测
- * 3. Bun 运行时检测
- * 4. Git 运行时检测
- * 5. Shell 环境检测（Windows - Git Bash / WSL）
+ * Windows 下不再扫描系统 PATH、注册表、Git Bash 或 WSL。外部 runtime
+ * 由 Rust HTTP API 解析和启动，Electron 只异步读取状态，避免主进程被检测命令卡住。
  */
 
-import type { RuntimeStatus, RuntimeInitOptions, ShellEnvironmentStatus } from '@copis/shared'
-import { loadShellEnv } from './shell-env'
-import { detectNodeRuntime } from './node-detector'
-import { detectBunRuntime } from './bun-finder'
-import { detectGitRuntime, getGitRepoStatus } from './git-detector'
-import { detectGitBash } from './git-bash-detector'
-import { detectWsl } from './wsl-detector'
-import { selectWindowsShell } from './windows-shell-selection'
+import type {
+  GitBashStatus,
+  RuntimeInitOptions,
+  RuntimeStatus,
+  ShellEnvironmentStatus,
+  WslStatus,
+} from '@copis/shared'
 
-/** 运行时状态缓存 */
+const RUNTIME_STATUS_URL = 'http://127.0.0.1:51730/api/runtime/status'
+const RUNTIME_CHECK_URL = 'http://127.0.0.1:51730/api/runtime/check'
+// Rust 会并行启动外部 Node/Git/Bash，Windows 冷启动可能需要数秒；请求仍有硬超时，
+// 但不能在 Rust 完成一次探测前就取消请求并制造重复探测。
+const REQUEST_TIMEOUT_MS = 12_000
+const STARTUP_RETRY_COUNT = 3
+const STARTUP_RETRY_DELAY_MS = 250
+
 let runtimeStatusCache: RuntimeStatus | null = null
-
-/** 初始化标志 */
 let isInitialized = false
+let refreshPromise: Promise<RuntimeStatus> | null = null
 
-/**
- * 初始化运行时环境
- *
- * 按顺序执行：
- * 1. loadShellEnv() - 加载 Shell 环境（仅 macOS 打包环境）
- * 2. detectNodeRuntime() - 检测 Node.js 运行时
- * 3. detectBunRuntime() - 检测 Bun 运行时
- * 4. detectGitRuntime() - 检测 Git 运行时
- * 5. detectShellEnvironment() - 检测 Shell 环境（仅 Windows）
- *
- * @param options - 初始化选项
- * @returns 运行时状态
- */
-export async function initializeRuntime(options: RuntimeInitOptions = {}): Promise<RuntimeStatus> {
-  const startTime = Date.now()
-  console.log('[运行时初始化] 开始初始化运行时环境...')
-
-  // 1. 加载 Shell 环境
-  let envLoaded = false
-
-  if (!options.skipEnvLoad) {
-    try {
-      const shellEnvResult = await loadShellEnv()
-      envLoaded = shellEnvResult.success
-    } catch (error) {
-      console.error('[运行时初始化] Shell 环境加载失败:', error)
-      envLoaded = false
-    }
-  }
-
-  // 2. 检测 Node.js 运行时
-  const nodeStatus = options.skipNodeDetection
-    ? {
-        available: false,
-        path: null,
-        version: null,
-        error: '已跳过 Node.js 检测',
-      }
-    : await detectNodeRuntime()
-
-  // 3. 检测 Bun 运行时
-  const bunStatus = options.skipBunDetection
-    ? {
-        available: false,
-        path: null,
-        version: null,
-        source: null,
-        error: '已跳过 Bun 检测',
-      }
-    : await detectBunRuntime()
-
-  // 4. 检测 Git 运行时
-  const gitStatus = options.skipGitDetection
-    ? {
-        available: false,
-        version: null,
-        path: null,
-        error: '已跳过 Git 检测',
-      }
-    : await detectGitRuntime()
-
-  // 5. 检测 Shell 环境（仅 Windows 平台）
-  let shellEnvironmentStatus: ShellEnvironmentStatus | undefined
-
-  if (process.platform === 'win32' && !options.skipShellDetection) {
-    try {
-      const gitBashStatus = await detectGitBash()
-      const wslStatus = await detectWsl()
-
-      const recommended = selectWindowsShell({ gitBash: gitBashStatus, wsl: wslStatus })
-
-      shellEnvironmentStatus = {
-        gitBash: gitBashStatus,
-        wsl: wslStatus,
-        recommended,
-      }
-
-      console.log('[运行时初始化] Shell 环境检测完成:', {
-        gitBash: gitBashStatus.available ? `✅ ${gitBashStatus.version}` : `❌ ${gitBashStatus.error}`,
-        wsl: wslStatus.available
-          ? `✅ WSL ${wslStatus.version} (${wslStatus.defaultDistro})`
-          : `❌ ${wslStatus.error}`,
-        recommended: recommended || '⚠️ 无可用环境',
-      })
-    } catch (error) {
-      console.error('[运行时初始化] Shell 环境检测失败:', error)
-    }
-  }
-
-  // 构建运行时状态
-  const runtimeStatus: RuntimeStatus = {
-    node: nodeStatus,
-    bun: bunStatus,
-    git: gitStatus,
-    shell: shellEnvironmentStatus,
-    envLoaded,
-    initializedAt: Date.now(),
-  }
-
-  // 缓存状态
-  runtimeStatusCache = runtimeStatus
-  isInitialized = true
-
-  const duration = Date.now() - startTime
-  console.log(`[运行时初始化] 初始化完成 (耗时 ${duration}ms)`)
-  console.log('[运行时初始化] 状态:', {
-    node: nodeStatus.available ? `✅ ${nodeStatus.version}` : `❌ ${nodeStatus.error}`,
-    bun: bunStatus.available ? `✅ ${bunStatus.version} (${bunStatus.source})` : `❌ ${bunStatus.error}`,
-    git: gitStatus.available ? `✅ ${gitStatus.version}` : `❌ ${gitStatus.error}`,
-    shell: shellEnvironmentStatus
-      ? `${shellEnvironmentStatus.recommended ? '✅' : '⚠️'} ${shellEnvironmentStatus.recommended || '无可用环境'}`
-      : '⏭️ 跳过（非 Windows）',
-    envLoaded: envLoaded ? '✅' : '⚠️ 未加载或不需要',
-  })
-
-  return runtimeStatus
+interface RuntimeApiRecord {
+  readonly [key: string]: unknown
 }
 
-/**
- * 获取当前运行时状态
- *
- * @returns 运行时状态，如果未初始化返回 null
- */
+function isRecord(value: unknown): value is RuntimeApiRecord {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function isRuntimeStatus(value: unknown): value is RuntimeStatus {
+  if (!isRecord(value)) return false
+  return isRecord(value.node) && isRecord(value.git) && isRecord(value.bun)
+}
+
+function delay(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds))
+}
+
+async function requestRuntimeStatus(forceRefresh = false): Promise<RuntimeStatus> {
+  let lastError: unknown
+
+  for (let attempt = 0; attempt < STARTUP_RETRY_COUNT; attempt += 1) {
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS)
+    try {
+      const response = await fetch(forceRefresh ? RUNTIME_CHECK_URL : RUNTIME_STATUS_URL, {
+        method: forceRefresh ? 'POST' : 'GET',
+        headers: { Accept: 'application/json' },
+        signal: controller.signal,
+      })
+      const payload: unknown = await response.json()
+      if (!response.ok) {
+        throw new Error(
+          isRecord(payload) && typeof payload.error === 'string'
+            ? payload.error
+            : `Rust runtime API 返回 HTTP ${response.status}`,
+        )
+      }
+      if (!isRuntimeStatus(payload)) {
+        throw new Error('Rust runtime API 返回了无效状态')
+      }
+      return payload
+    } catch (error: unknown) {
+      lastError = error
+      if (attempt + 1 < STARTUP_RETRY_COUNT) await delay(STARTUP_RETRY_DELAY_MS)
+    } finally {
+      clearTimeout(timeout)
+    }
+  }
+
+  const message = lastError instanceof Error ? lastError.message : String(lastError ?? 'Rust runtime API 不可用')
+  console.warn(`[Pi runtime] Rust runtime API 不可用，使用失败状态: ${message}`)
+  return createUnavailableRuntimeStatus(message)
+}
+
+function createUnavailableRuntimeStatus(error: string): RuntimeStatus {
+  const gitBash: GitBashStatus = {
+    available: false,
+    path: null,
+    version: null,
+    error,
+  }
+  const wsl: WslStatus = {
+    available: false,
+    version: null,
+    defaultDistro: null,
+    distros: [],
+    error: 'Pi runtime 不使用 WSL',
+  }
+  const shell: ShellEnvironmentStatus = {
+    gitBash,
+    wsl,
+    recommended: null,
+  }
+
+  return {
+    node: { available: false, version: null, path: null, error },
+    bun: { available: false, version: null, path: null, source: null, error: 'Pi runtime 不依赖 Bun' },
+    git: { available: false, version: null, path: null, error },
+    shell,
+    envLoaded: false,
+    initializedAt: Date.now(),
+  }
+}
+
+async function refreshRuntimeStatus(forceRefresh = false): Promise<RuntimeStatus> {
+  if (refreshPromise) return refreshPromise
+
+  refreshPromise = requestRuntimeStatus(forceRefresh)
+    .then((status) => {
+      runtimeStatusCache = status
+      isInitialized = true
+      return status
+    })
+    .finally(() => {
+      refreshPromise = null
+    })
+
+  return refreshPromise
+}
+
+/** 异步读取 Rust 管理的外部 Pi runtime 状态。options 仅保留 IPC 兼容性。 */
+export async function initializeRuntime(options: RuntimeInitOptions = {}): Promise<RuntimeStatus> {
+  void options
+  console.log('[Pi runtime] 通过 Rust API 读取外部 Node/Git runtime 状态')
+  return refreshRuntimeStatus()
+}
+
 export function getRuntimeStatus(): RuntimeStatus | null {
   return runtimeStatusCache
 }
 
-/**
- * 检查运行时是否已初始化
- *
- * @returns 是否已初始化
- */
 export function isRuntimeInitialized(): boolean {
   return isInitialized
 }
 
-/**
- * 重新初始化运行时
- *
- * @param options - 初始化选项
- * @returns 新的运行时状态
- */
 export async function reinitializeRuntime(options: RuntimeInitOptions = {}): Promise<RuntimeStatus> {
-  isInitialized = false
+  void options
   runtimeStatusCache = null
-  return initializeRuntime(options)
+  isInitialized = false
+  return refreshRuntimeStatus(true)
 }
 
-// 重新导出子模块的函数，方便外部使用
 export { getGitRepoStatus } from './git-detector'
-export { detectNodeRuntime } from './node-detector'
-export { detectBunRuntime } from './bun-finder'
-export { loadShellEnv } from './shell-env'

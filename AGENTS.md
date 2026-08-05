@@ -97,6 +97,42 @@ bun run dist:linux    # Linux
 bun run dist:fast     # 当前架构快速打包
 ```
 
+### 仓库级构建与部署
+
+```powershell
+# Windows：默认只构建 Electron 应用，不编译 Rust API、不发布 COS
+powershell -ExecutionPolicy Bypass -File .\build.ps1
+
+# Windows：默认构建 Rust API、生成功能模块 manifest 并发布 COS
+powershell -ExecutionPolicy Bypass -File .\deploy.ps1 -Platform win32 -Arch x64
+
+# Windows：部署功能模块时同时构建 Electron 安装包
+powershell -ExecutionPolicy Bypass -File .\deploy.ps1 -BuildApp -Platform win32 -Arch x64
+```
+
+```bash
+# macOS：默认只构建 Electron DMG，不编译 Rust API、不发布 COS
+bash ./build.sh
+
+# macOS/Linux：默认构建当前平台 Rust API、生成 manifest 并发布 COS
+./deploy.sh --platform darwin --arch arm64
+./deploy.sh --platform linux --arch x64
+
+# 部署功能模块时同时构建当前平台 Electron 包
+./deploy.sh --build-app
+```
+
+构建与部署边界必须保持以下规则：
+
+- `build.ps1`、`build.sh` 和 `apps/electron` 的默认 `build` 只负责 Electron 应用，不调用 `build:http-api-server`，也不执行 COS 发布。
+- `deploy.ps1`、`deploy.sh` 默认负责 Rust API 二进制、功能模块 manifest 和 COS 发布；Electron 应用包只有传入 `-BuildApp` 或 `--build-app` 时才构建。
+- 发布前需要通过 `.env` 或参数提供 `COS_SECRET_ID`、`COS_SECRET_KEY`、`COS_BUCKET_URL`、`COS_PUBLIC_BASE_URL`；禁止把密钥写入 manifest、日志或构建产物。
+- `deploy.ps1` 适用于 Windows x64 Rust 构建；跨平台部署应在目标平台执行对应的 `deploy.sh`，或使用 `-SkipRustBuild` / `--skip-rust-build` 配合已经验证的目标二进制。
+- 功能模块发布包含 `rust-http-api` 和可选的 `officecli`。OfficeCLI 是外部单文件二进制，需要通过 `COPIS_OFFICECLI_BINARY` 或 `apps/electron/resources/bin/officecli.exe` 提供，并通过 `COPIS_OFFICECLI_VERSION` 指定独立于 Electron 的模块版本。
+- 发布单个平台时必须合并 COS 中已有 manifest，保留其他平台和模块；二进制对象使用不可变版本 key，只有 manifest 允许更新。
+
+常用部署选项：`-SkipInstall` / `--skip-install`、`-SkipRustBuild` / `--skip-rust-build`、`-SkipPublish` / `--skip-publish`、版本、平台、架构、channel、COS 前缀和已有 Rust 二进制路径。当前 stable 的 Windows x64 OfficeCLI 模块版本为 `1.0.143`。
+
 ### Electron 构建脚本（`apps/electron/` 目录下）
 
 ```bash
@@ -105,6 +141,7 @@ bun run build:preload     # esbuild → dist/preload.cjs
 bun run build:renderer    # Vite → dist/renderer/
 bun run build:resources   # 复制 resources/ 到 dist/
 bun run generate:icons    # 生成应用图标
+bun run build:http-api-server # 显式构建 Rust HTTP API 功能模块
 ```
 
 ## 运行时环境

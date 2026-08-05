@@ -11,6 +11,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 mod memory;
 mod pi_rpc;
+mod runtime;
 
 use memory::{
     MemoryCaptureBatchInput, MemoryCaptureInput, MemoryContextInput, MemoryError, MemoryKind,
@@ -1005,6 +1006,20 @@ fn handle_connection(
 
     if path == "/api/memory" || path.starts_with("/api/memory/") {
         handle_memory_route(&mut stream, &request, origin, &memory_store);
+        let _ = stream.shutdown(Shutdown::Both);
+        return;
+    }
+
+    if (request.method == "GET" && path == "/api/runtime/status")
+        || (request.method == "POST" && path == "/api/runtime/check")
+    {
+        let body = if request.method == "POST" {
+            runtime::refresh_status_json()
+        } else {
+            runtime::status_json()
+        }
+        .to_string();
+        send_json_response(&mut stream, 200, &body, origin);
         let _ = stream.shutdown(Shutdown::Both);
         return;
     }

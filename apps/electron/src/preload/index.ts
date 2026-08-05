@@ -324,7 +324,7 @@ export interface ElectronAPI {
   /** 最大化/还原窗口 */
   windowMaximize: () => Promise<void>
   /** 关闭窗口 */
-  windowClose: () => Promise<void>
+  windowClose: (quitApp?: boolean) => Promise<void>
   /** 窗口是否处于最大化状态 */
   windowIsMaximized: () => Promise<boolean>
   /** 订阅窗口最大化/还原事件 */
@@ -1450,8 +1450,8 @@ const electronAPI: ElectronAPI = {
     return ipcRenderer.invoke(IPC_CHANNELS.WINDOW_MAXIMIZE)
   },
 
-  windowClose: () => {
-    return ipcRenderer.invoke(IPC_CHANNELS.WINDOW_CLOSE)
+  windowClose: (quitApp = false) => {
+    return ipcRenderer.invoke(IPC_CHANNELS.WINDOW_CLOSE, quitApp)
   },
 
   windowIsMaximized: () => {

@@ -5,8 +5,8 @@
  */
 
 import type { EnvironmentCheckResult } from '@copis/shared'
-import { detectNodeRuntime, checkNodeVersion } from './node-detector'
-import { detectGitRuntime } from './git-detector'
+import { initializeRuntime } from './runtime-init'
+import { checkNodeVersion } from './node-detector'
 
 /**
  * 获取下载链接
@@ -81,11 +81,10 @@ export async function checkEnvironment(): Promise<EnvironmentCheckResult> {
   const platform = process.platform as 'darwin' | 'win32' | 'linux'
   const downloadUrls = getDownloadUrls(platform)
 
-  // 并行检测 Node.js 和 Git
-  const [nodeStatus, gitStatus] = await Promise.all([
-    detectNodeRuntime(),
-    detectGitRuntime(),
-  ])
+  // Pi 只使用 Rust 解析的外部 runtime，避免再次扫描系统 PATH、注册表或系统安装包。
+  const runtimeStatus = await initializeRuntime()
+  const nodeStatus = runtimeStatus.node
+  const gitStatus = runtimeStatus.git
 
   // Node.js 检测结果
   const nodejsResult = {

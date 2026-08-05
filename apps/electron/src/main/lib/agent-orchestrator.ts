@@ -16,7 +16,7 @@
 
 import { randomUUID } from 'node:crypto'
 import { homedir } from 'node:os'
-import { join, dirname, isAbsolute, relative, resolve } from 'node:path'
+import { join, isAbsolute, relative, resolve } from 'node:path'
 import { accessSync, constants, existsSync, mkdirSync, realpathSync } from 'node:fs'
 import { COPIS_WORKING_CHANNEL_ID, createCopisWorkingChannel, normalizeWorkingMode, type AgentRuntime, type AgentSendInput, type AgentMessage, type AgentGenerateTitleInput, type AgentProviderAdapter, type AgentSessionMeta, type CodexOAuthCredentials, type XaiOAuthCredentials, type TypedError, type RetryAttempt, type SDKMessage, type SDKAssistantMessage, type AgentStreamPayload, type RewindSessionResult, type ProviderType, workingModeToModelId } from '@copis/shared'
 import {
@@ -72,6 +72,7 @@ import { resolvePiThinkingLevel } from './agent-thinking-level'
 import { resolvePiReasoningCapability } from './adapters/pi-model-registry'
 import { generateCodexTitle } from './adapters/pi-codex-title-generator'
 import { createFallbackTitle, sanitizeGeneratedTitle, TITLE_PROMPT } from './title-generation'
+import { filterAttachedPaths, getAttachedFileDirectories } from './attached-paths'
 
 // ===== 类型定义 =====
 
@@ -275,14 +276,14 @@ function collectAttachedDirectories(params: {
     if (!result.includes(dir)) result.push(dir)
   }
 
-  for (const d of extraDirs ?? []) push(d)
+  for (const d of filterAttachedPaths(extraDirs)) push(d)
   if (workspaceSlug && sessionMeta) push(getAgentSessionWorkspacePath(workspaceSlug, sessionMeta.id))
-  for (const d of sessionMeta?.attachedDirectories ?? []) push(d)
-  for (const file of sessionMeta?.attachedFiles ?? []) push(dirname(file))
+  for (const d of filterAttachedPaths(sessionMeta?.attachedDirectories)) push(d)
+  for (const dir of getAttachedFileDirectories(sessionMeta?.attachedFiles)) push(dir)
 
   if (workspaceSlug) {
-    for (const d of getWorkspaceAttachedDirectories(workspaceSlug)) push(d)
-    for (const f of getWorkspaceAttachedFiles(workspaceSlug)) push(dirname(f))
+    for (const d of filterAttachedPaths(getWorkspaceAttachedDirectories(workspaceSlug))) push(d)
+    for (const dir of getAttachedFileDirectories(getWorkspaceAttachedFiles(workspaceSlug))) push(dir)
     push(getProjectFilesPath(workspaceSlug))
   }
 

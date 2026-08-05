@@ -363,6 +363,7 @@ import {
   getReleaseByTag,
 } from './lib/github-release-service'
 import { watchAttachedDirectory, unwatchAttachedDirectory } from './lib/workspace-watcher'
+import { filterAttachedPaths, requireAttachedPath } from './lib/attached-paths'
 import {
   getFeishuConfig,
   saveFeishuConfig,
@@ -417,10 +418,10 @@ function getAuthorizedRoots(options?: FileAccessOptions): string[] {
   if (options?.sessionId) {
     const meta = getAgentSessionMeta(options.sessionId)
     if (meta?.attachedDirectories) {
-      roots.push(...meta.attachedDirectories)
+      roots.push(...filterAttachedPaths(meta.attachedDirectories))
     }
     if (meta?.attachedFiles) {
-      roots.push(...meta.attachedFiles)
+      roots.push(...filterAttachedPaths(meta.attachedFiles))
     }
     if (meta?.workspaceId) {
       const workspace = getAgentWorkspace(meta.workspaceId)
@@ -3206,14 +3207,15 @@ export function registerIpcHandlers(): void {
     async (_, input: AgentAttachDirectoryInput): Promise<string[]> => {
       const meta = getAgentSessionMeta(input.sessionId)
       if (!meta) throw new Error(`会话不存在: ${input.sessionId}`)
+      const directoryPath = requireAttachedPath(input.directoryPath, '附加目录路径')
 
       const existing = meta.attachedDirectories ?? []
-      if (existing.includes(input.directoryPath)) return existing
+      if (existing.includes(directoryPath)) return existing
 
-      const updated = [...existing, input.directoryPath]
+      const updated = [...existing, directoryPath]
       updateAgentSessionMeta(input.sessionId, { attachedDirectories: updated })
       // 启动附加目录文件监听
-      watchAttachedDirectory(input.directoryPath)
+      watchAttachedDirectory(directoryPath)
       return updated
     }
   )
@@ -3224,11 +3226,12 @@ export function registerIpcHandlers(): void {
     async (_, input: AgentAttachDirectoryInput): Promise<string[]> => {
       const meta = getAgentSessionMeta(input.sessionId)
       if (!meta) throw new Error(`会话不存在: ${input.sessionId}`)
+      const directoryPath = requireAttachedPath(input.directoryPath, '附加目录路径')
 
       const existing = meta.attachedDirectories ?? []
-      const updated = existing.filter((d) => d !== input.directoryPath)
+      const updated = existing.filter((d) => d !== directoryPath)
       updateAgentSessionMeta(input.sessionId, { attachedDirectories: updated })
-      releaseDirectoryWatcherIfUnreferenced(input.directoryPath)
+      releaseDirectoryWatcherIfUnreferenced(directoryPath)
       return updated
     }
   )
@@ -3239,10 +3242,11 @@ export function registerIpcHandlers(): void {
     async (_, input: AgentAttachFileInput): Promise<string[]> => {
       const meta = getAgentSessionMeta(input.sessionId)
       if (!meta) throw new Error(`会话不存在: ${input.sessionId}`)
+      const filePath = requireAttachedPath(input.filePath, '附加文件路径')
 
       const { realpathSync, statSync } = await import('node:fs')
       const { resolve } = await import('node:path')
-      const safePath = realpathSync(resolve(input.filePath))
+      const safePath = realpathSync(resolve(filePath))
       const stats = statSync(safePath)
       if (!stats.isFile()) throw new Error('只能附加文件')
 
@@ -3261,9 +3265,10 @@ export function registerIpcHandlers(): void {
     async (_, input: AgentAttachFileInput): Promise<string[]> => {
       const meta = getAgentSessionMeta(input.sessionId)
       if (!meta) throw new Error(`会话不存在: ${input.sessionId}`)
+      const filePath = requireAttachedPath(input.filePath, '附加文件路径')
 
       const existing = meta.attachedFiles ?? []
-      const updated = existing.filter((f) => f !== input.filePath)
+      const updated = existing.filter((f) => f !== filePath)
       updateAgentSessionMeta(input.sessionId, { attachedFiles: updated })
       return updated
     }
@@ -3273,8 +3278,9 @@ export function registerIpcHandlers(): void {
   ipcMain.handle(
     AGENT_IPC_CHANNELS.ATTACH_WORKSPACE_DIRECTORY,
     async (_, input: WorkspaceAttachDirectoryInput): Promise<string[]> => {
-      const updated = attachWorkspaceDirectory(input.workspaceSlug, input.directoryPath)
-      watchAttachedDirectory(input.directoryPath)
+      const directoryPath = requireAttachedPath(input.directoryPath, '附加目录路径')
+      const updated = attachWorkspaceDirectory(input.workspaceSlug, directoryPath)
+      watchAttachedDirectory(directoryPath)
       return updated
     }
   )
@@ -3283,8 +3289,9 @@ export function registerIpcHandlers(): void {
   ipcMain.handle(
     AGENT_IPC_CHANNELS.DETACH_WORKSPACE_DIRECTORY,
     async (_, input: WorkspaceAttachDirectoryInput): Promise<string[]> => {
-      const updated = detachWorkspaceDirectory(input.workspaceSlug, input.directoryPath)
-      releaseDirectoryWatcherIfUnreferenced(input.directoryPath)
+      const directoryPath = requireAttachedPath(input.directoryPath, '附加目录路径')
+      const updated = detachWorkspaceDirectory(input.workspaceSlug, directoryPath)
+      releaseDirectoryWatcherIfUnreferenced(directoryPath)
       return updated
     }
   )
@@ -3293,9 +3300,10 @@ export function registerIpcHandlers(): void {
   ipcMain.handle(
     AGENT_IPC_CHANNELS.ATTACH_WORKSPACE_FILE,
     async (_, input: WorkspaceAttachFileInput): Promise<string[]> => {
+      const filePath = requireAttachedPath(input.filePath, '附加文件路径')
       const { realpathSync, statSync } = await import('node:fs')
       const { resolve } = await import('node:path')
-      const safePath = realpathSync(resolve(input.filePath))
+      const safePath = realpathSync(resolve(filePath))
       const stats = statSync(safePath)
       if (!stats.isFile()) throw new Error('只能附加文件')
 
@@ -3307,7 +3315,8 @@ export function registerIpcHandlers(): void {
   ipcMain.handle(
     AGENT_IPC_CHANNELS.DETACH_WORKSPACE_FILE,
     async (_, input: WorkspaceAttachFileInput): Promise<string[]> => {
-      return detachWorkspaceFile(input.workspaceSlug, input.filePath)
+      const filePath = requireAttachedPath(input.filePath, '附加文件路径')
+      return detachWorkspaceFile(input.workspaceSlug, filePath)
     }
   )
 
@@ -3766,10 +3775,10 @@ export function registerIpcHandlers(): void {
       if (sessionId) {
         const meta = getAgentSessionMeta(sessionId)
         if (meta?.attachedDirectories) {
-          allowedDirs.push(...meta.attachedDirectories)
+          allowedDirs.push(...filterAttachedPaths(meta.attachedDirectories))
         }
         if (meta?.attachedFiles) {
-          allowedFiles.push(...meta.attachedFiles)
+          allowedFiles.push(...filterAttachedPaths(meta.attachedFiles))
         }
       }
       if (workspaceSlug) {
@@ -4942,9 +4951,15 @@ export function registerIpcHandlers(): void {
 
   ipcMain.handle(
     IPC_CHANNELS.WINDOW_CLOSE,
-    async (event) => {
+    async (event, quitApp?: unknown) => {
       const win = BrowserWindow.fromWebContents(event.sender)
-      if (win && !win.isDestroyed()) win.close()
+      if (!win || win.isDestroyed()) return
+      if (quitApp === true) {
+        // 主窗口的自定义关闭按钮必须真正退出应用，避免被 Windows 的托盘隐藏逻辑拦截。
+        app.quit()
+        return
+      }
+      win.close()
     }
   )
 

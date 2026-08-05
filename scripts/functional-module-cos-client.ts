@@ -37,7 +37,7 @@ export function createFunctionalModuleCosClient(
       } catch (error) {
         if (!isNotFoundError(error)) throw error
       }
-      if (existing) {
+      if (existing && !input.allowOverwrite) {
         const expectedSha256 = input.metadata.sha256?.toLowerCase()
         if (existing.size === input.body.byteLength
           && expectedSha256
@@ -47,16 +47,17 @@ export function createFunctionalModuleCosClient(
         throw new Error(`COS 不可变对象已存在且内容不同: ${input.key}`)
       }
 
-      await callCos(sdk.putObject.bind(sdk), {
+      const params: Record<string, unknown> = {
         Bucket: bucket.bucket,
         Region: bucket.region,
         Key: input.key,
         Body: input.body,
         ContentLength: input.body.byteLength,
         ContentType: input.contentType,
-        'x-cos-forbid-overwrite': 'true',
         ...metadataHeaders(input),
-      })
+      }
+      if (!input.allowOverwrite) params['x-cos-forbid-overwrite'] = 'true'
+      await callCos(sdk.putObject.bind(sdk), params)
     },
     headObject: async (input) => {
       const response = await callCos<CosHeadObjectResponse>(sdk.headObject.bind(sdk), {

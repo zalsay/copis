@@ -20,7 +20,6 @@ import { automationFormAtom } from '@/atoms/automation-atoms'
 import { activeViewAtom } from '@/atoms/active-view'
 import { interfaceVariantAtom } from '@/atoms/theme'
 import { settingsOpenAtom } from '@/atoms/settings-tab'
-import { WindowControls } from '@/components/WindowControls'
 import { SettingsPanel } from '@/components/settings/SettingsPanel'
 import { CopisWorkingSettingsPanel } from './CopisWorkingSettingsPanel'
 import { SearchDialog } from './SearchDialog'
@@ -187,7 +186,6 @@ export function AppShell({ contextValue }: AppShellProps): React.ReactElement {
       />
 
       {/* Windows 自定义窗口控制按钮（最小化/最大化/关闭） */}
-      <WindowControls />
       <SearchDialog />
 
       <div className="shell-bg relative flex h-screen w-screen flex-col overflow-hidden bg-gradient-to-br from-zinc-50 to-zinc-100 dark:from-zinc-950 dark:to-zinc-900">

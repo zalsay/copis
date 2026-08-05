@@ -2,9 +2,10 @@ import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import { resolve } from 'path'
 import pkg from './package.json' with { type: 'json' }
-import { COPIS_HTTP_API_DEVELOPMENT_PORT } from '@copis/shared/config'
 
-const httpApiPort = process.env.COPIS_HTTP_API_PORT?.trim() || String(COPIS_HTTP_API_DEVELOPMENT_PORT)
+// Vite 配置由 Node 直接加载，不能依赖 workspace 内的 TypeScript 导出。
+// 默认端口需与 @copis/shared/config 中的 COPIS_HTTP_API_DEVELOPMENT_PORT 保持一致。
+const httpApiPort = process.env.COPIS_HTTP_API_PORT?.trim() || '51740'
 
 export default defineConfig({
   plugins: [react()],

@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# 默认只构建应用，不编译 Rust API，也不执行 COS 发布；发布流程由独立部署脚本负责。
+
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_DIR="$ROOT_DIR/apps/electron"
 
@@ -33,6 +35,7 @@ esac
 export CSC_IDENTITY_AUTO_DISCOVERY="${CSC_IDENTITY_AUTO_DISCOVERY:-false}"
 
 cd "$APP_DIR"
+echo "[Copis] 默认构建仅包含 macOS 应用，不编译 Rust API，不发布 COS。"
 echo "[Copis] 开始构建 macOS $MAC_ARCH DMG"
 bun run build
 bun run sync:runtime-deps

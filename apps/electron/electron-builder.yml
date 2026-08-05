@@ -20,6 +20,11 @@ compression: normal
 # 启用 ASAR 归档，将 SDK native binary / Pi native addon 解压到 app.asar.unpacked/ 避免路径问题
 asar: true
 asarUnpack:
+  - "dist/pi-rpc-worker.cjs"
+  # Pi worker 由外部 Node.js 直接执行，不能读取 app.asar 内的模块。
+  # 将同步后的完整运行时依赖解包到 app.asar.unpacked/node_modules，保证
+  # worker 及其传递依赖使用标准 Node.js 模块解析规则。
+  - "node_modules/**/*"
   - "node_modules/@anthropic-ai/**"
   - "node_modules/@silvia-odwyer/**"
   - "node_modules/@mariozechner/**"
@@ -84,6 +89,10 @@ extraResources:
   # 默认 Dock 图标（macOS app.dock.setIcon 使用）
   - from: resources/icon.png
     to: icon.png
+  - from: resources/icon.ico
+    to: icon.ico
+  - from: resources/icon.icns
+    to: icon.icns
 
 # ============================================
 # macOS 配置

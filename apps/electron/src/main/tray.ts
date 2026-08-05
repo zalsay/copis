@@ -25,7 +25,17 @@ function getTrayIconPath(): string {
   const resourcesDir = app.isPackaged
     ? join(process.resourcesPath, 'copis-logos')
     : join(__dirname, 'resources/copis-logos')
-  return join(resourcesDir, 'iconTemplate.png')
+
+  // macOS 菜单栏需要使用单色 Template 图标；Windows/Linux 使用彩色应用图标，
+  // 避免白色 Template 图标在浅色系统托盘背景上不可见。
+  if (process.platform === 'darwin') {
+    return join(resourcesDir, 'iconTemplate.png')
+  }
+
+  const appResourcesDir = app.isPackaged
+    ? process.resourcesPath
+    : join(__dirname, 'resources')
+  return join(appResourcesDir, 'icon.png')
 }
 
 /** 显示主窗口 */
@@ -137,6 +147,10 @@ export function createTray(actionsInput?: Partial<TrayActions>): Tray | null {
 
   try {
     const image = nativeImage.createFromPath(iconPath)
+    if (image.isEmpty()) {
+      console.warn('Tray icon is empty:', iconPath)
+      return null
+    }
 
     // macOS: 标记为 Template 图像
     // Template 图像必须是单色的，使用 alpha 通道定义形状

@@ -32,6 +32,7 @@ export interface FunctionalModuleUploadEntry {
   size: number
   sha256: string
   contentType: string
+  allowOverwrite?: boolean
 }
 
 export interface FunctionalModuleRelease {
@@ -45,6 +46,7 @@ export interface FunctionalModuleObjectUpload {
   body: Buffer
   contentType: string
   metadata: Record<string, string>
+  allowOverwrite?: boolean
 }
 
 export interface FunctionalModuleObjectClient {
@@ -107,6 +109,7 @@ export function buildFunctionalModuleRelease(input: FunctionalModuleReleaseInput
     size: manifestBody.byteLength,
     sha256: sha256(manifestBody),
     contentType: 'application/json',
+    allowOverwrite: true,
   }
 
   return { manifest, binaries, manifestEntry }
@@ -136,6 +139,7 @@ async function uploadAndVerify(
     body,
     contentType: entry.contentType,
     metadata: { sha256: entry.sha256 },
+    ...(entry.allowOverwrite ? { allowOverwrite: true } : {}),
   })
   const remote = await client.headObject({ key: entry.key })
   if (remote.size !== entry.size || remote.sha256?.toLowerCase() !== entry.sha256) {

@@ -5,6 +5,8 @@ use std::sync::{Arc, Mutex};
 
 use serde_json::Value;
 
+use crate::runtime;
+
 pub fn is_agent_messages_route(method: &str, path: &str) -> bool {
     method.eq_ignore_ascii_case("POST")
         && path.starts_with("/api/agent/sessions/")
@@ -21,7 +23,9 @@ pub fn is_agent_stop_route(method: &str, path: &str) -> bool {
 
 pub fn agent_session_id(path: &str) -> Option<String> {
     let mut segments = path.split('/');
-    if segments.next()? != "" || segments.next()? != "api" || segments.next()? != "agent"
+    if segments.next()? != ""
+        || segments.next()? != "api"
+        || segments.next()? != "agent"
         || segments.next()? != "sessions"
     {
         return None;
@@ -81,27 +85,37 @@ impl PiWorkerManager {
         }
     }
 
-    pub fn start(
-        &self,
-        session_id: &str,
-        config: Value,
-    ) -> Result<PiWorkerRun, String> {
-        let runtime = std::env::var("COPIS_PI_RPC_RUNTIME").ok();
-        let worker_path = std::env::var("COPIS_PI_RPC_WORKER")
-            .map_err(|_| "Pi worker 路径未配置".to_string())?;
+    pub fn start(&self, session_id: &str, mut config: Value) -> Result<PiWorkerRun, String> {
+        let external_runtime = runtime::resolve_runtime();
+        external_runtime.validate_for_pi()?;
+        external_runtime.inject_pi_config(&mut config)?;
+        let worker_path =
+            std::env::var("COPIS_PI_RPC_WORKER").map_err(|_| "Pi worker 路径未配置".to_string())?;
         if worker_path.trim().is_empty() {
             return Err("Pi worker 路径为空".to_string());
         }
 
-        let mut command = if let Some(runtime_path) = runtime.filter(|value| !value.trim().is_empty()) {
-            let mut command = Command::new(runtime_path);
-            command.arg(&worker_path);
-            command
-        } else {
-            Command::new(&worker_path)
-        };
+        let runtime_path = external_runtime
+            .node_path()
+            .ok_or_else(|| "外部 Node.js runtime 未就绪".to_string())?;
+        let mut command = Command::new(runtime_path);
+        command.arg(&worker_path);
+        command.env("PATH", external_runtime.path_value());
+        command.env("COPIS_RUNTIME_ROOT", &external_runtime.runtime_root);
+        command.env("COPIS_RUNTIME_DIR", &external_runtime.active_dir);
+        command.env_remove("ELECTRON_RUN_AS_NODE");
+        if let Some(path) = external_runtime.node_path() {
+            command.env("COPIS_NODE_PATH", path);
+        }
+        if let Some(path) = external_runtime.git_path.as_deref() {
+            command.env("COPIS_GIT_PATH", path);
+        }
+        if let Some(path) = external_runtime.bash_path.as_deref() {
+            command.env("COPIS_GIT_BASH_PATH", path);
+            command.env("COPIS_WINDOWS_SHELL", "git-bash");
+            command.env("SHELL", path);
+        }
         let mut child = command
-            .env("ELECTRON_RUN_AS_NODE", "1")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
