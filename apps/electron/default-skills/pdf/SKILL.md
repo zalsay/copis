@@ -1,9 +1,10 @@
 ---
 name: pdf
+displayName: PDF 文档处理
 description: "Use this skill whenever the user mentions a PDF file or asks to produce/edit one. For read-only tasks such as reading, summarizing, extracting plain text, or answering questions from a PDF, follow this skill's read-only routing rules: use the built-in Read tool first, do not write code or scripts, and prefer markitdown for PDFs over 100 pages. Use PDF processing libraries/scripts only for modification tasks such as merging, splitting, rotating, watermarking, filling forms, encrypting/decrypting, extracting images, OCR, or creating PDFs."
 license: Proprietary. LICENSE.txt has complete terms
 group: 系统内置
-version: "1.0.6"
+version: "1.0.7"
 ---
 
 # PDF Processing Guide

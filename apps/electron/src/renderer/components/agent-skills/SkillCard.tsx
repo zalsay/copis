@@ -5,7 +5,7 @@
  */
 
 import * as React from 'react'
-import { Sparkles, RefreshCw, ShieldCheck, ArrowDownToLine, Download } from 'lucide-react'
+import { Puzzle, Sparkles, RefreshCw, ShieldCheck, ArrowDownToLine, Download } from 'lucide-react'
 import { Switch } from '@/components/ui/switch'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
@@ -21,6 +21,9 @@ interface SkillCardProps {
 }
 
 export function SkillCard({ skill, isBuiltin, updating, onOpen, onToggle, onUpdate }: SkillCardProps): React.ReactElement {
+  const title = skill.displayName?.trim() || skill.name
+  const SkillIcon = skill.icon?.trim().toLowerCase() === 'puzzle' ? Puzzle : Sparkles
+
   return (
     <div
       role="button"
@@ -40,11 +43,11 @@ export function SkillCard({ skill, isBuiltin, updating, onOpen, onToggle, onUpda
     >
       <div className="flex items-start gap-3">
         <div className="rounded-xl bg-amber-500/12 p-2 text-amber-500 shadow-sm shrink-0">
-          <Sparkles size={18} />
+          <SkillIcon size={18} />
         </div>
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
-            <span className="truncate text-sm font-medium text-foreground">{skill.name}</span>
+            <span className="truncate text-sm font-medium text-foreground">{title}</span>
             {skill.version && (
               <span className="shrink-0 rounded-md bg-muted px-1.5 py-0.5 text-[11px] font-medium text-muted-foreground">
                 v{skill.version}
@@ -67,7 +70,7 @@ export function SkillCard({ skill, isBuiltin, updating, onOpen, onToggle, onUpda
 
       <div className="mt-auto flex items-center gap-2">
         {isBuiltin ? (
-          <span className="flex items-center gap-1 rounded-md bg-blue-500/10 px-1.5 py-0.5 text-[11px] font-medium text-blue-600 dark:text-blue-400">
+          <span className="flex items-center gap-1 rounded-md bg-primary/10 px-1.5 py-0.5 text-[11px] font-medium text-primary">
             <ShieldCheck size={12} /> COPIS 内置
           </span>
         ) : skill.marketSource ? (

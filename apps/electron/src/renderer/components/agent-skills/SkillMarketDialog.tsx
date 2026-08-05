@@ -6,6 +6,7 @@ import {
   Filter,
   Loader2,
   PackageOpen,
+  Puzzle,
   RefreshCw,
   Search,
   Store,
@@ -14,16 +15,15 @@ import {
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
-import type { AgentWorkspace, WorkingExpertSkillMarketItem } from '@copis/shared'
+import type { WorkingExpertSkillMarketItem } from '@copis/shared'
 import { installWorkingSkill, listWorkingSkillMarket, uninstallWorkingSkill } from '@/lib/working-skill-market-api'
 import { cn } from '@/lib/utils'
 
 interface SkillMarketDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
-  workspaces: AgentWorkspace[]
+  currentWorkspaceSlug: string
   onChanged: () => void
 }
 
@@ -54,7 +54,7 @@ function accentClass(accent: string): string {
   }
 }
 
-export function SkillMarketDialog({ open, onOpenChange, workspaces, onChanged }: SkillMarketDialogProps): React.ReactElement {
+export function SkillMarketDialog({ open, onOpenChange, currentWorkspaceSlug, onChanged }: SkillMarketDialogProps): React.ReactElement {
   const [skills, setSkills] = React.useState<WorkingExpertSkillMarketItem[]>([])
   const [loading, setLoading] = React.useState(false)
   const [error, setError] = React.useState('')
@@ -62,8 +62,8 @@ export function SkillMarketDialog({ open, onOpenChange, workspaces, onChanged }:
   const [category, setCategory] = React.useState('全部')
   const [view, setView] = React.useState<MarketView>('all')
   const [busyId, setBusyId] = React.useState<string | null>(null)
-  const [selectedWorkspaceSlug, setSelectedWorkspaceSlug] = React.useState('')
   const requestIdRef = React.useRef(0)
+  const workspaceSlug = currentWorkspaceSlug.trim()
 
   const invalidateMarket = React.useCallback((): void => {
     requestIdRef.current += 1
@@ -74,7 +74,6 @@ export function SkillMarketDialog({ open, onOpenChange, workspaces, onChanged }:
 
   const resetDialogState = React.useCallback((): void => {
     invalidateMarket()
-    setSelectedWorkspaceSlug('')
     setQuery('')
     setCategory('全部')
     setView('all')
@@ -106,31 +105,12 @@ export function SkillMarketDialog({ open, onOpenChange, workspaces, onChanged }:
       resetDialogState()
       return
     }
-    setQuery('')
-    setCategory('全部')
-    setView('all')
-  }, [open, resetDialogState])
-
-  React.useEffect(() => {
-    if (!open || !selectedWorkspaceSlug) return
-    if (!workspaces.some((workspace) => workspace.slug === selectedWorkspaceSlug)) {
-      resetDialogState()
-      return
-    }
-    void loadMarket(selectedWorkspaceSlug)
-  }, [loadMarket, open, resetDialogState, selectedWorkspaceSlug, workspaces])
-
-  const handleWorkspaceChange = (workspaceSlug: string): void => {
-    if (!workspaces.some((workspace) => workspace.slug === workspaceSlug)) {
-      resetDialogState()
-      return
-    }
     invalidateMarket()
-    setSelectedWorkspaceSlug(workspaceSlug)
     setQuery('')
     setCategory('全部')
     setView('all')
-  }
+    if (workspaceSlug) void loadMarket(workspaceSlug)
+  }, [invalidateMarket, loadMarket, open, resetDialogState, workspaceSlug])
 
   const handleOpenChange = (nextOpen: boolean): void => {
     if (!nextOpen && busyId !== null) return
@@ -159,14 +139,14 @@ export function SkillMarketDialog({ open, onOpenChange, workspaces, onChanged }:
   )
 
   const runSkillAction = async (skill: WorkingExpertSkillMarketItem, action: 'install' | 'uninstall'): Promise<void> => {
-    if (busyId !== null || !selectedWorkspaceSlug) return
+    if (busyId !== null || !workspaceSlug) return
     const id = String(skill.id)
     setBusyId(id)
     setError('')
     try {
-      if (action === 'install') await installWorkingSkill(selectedWorkspaceSlug, skill.id)
-      else await uninstallWorkingSkill(selectedWorkspaceSlug, skill.id)
-      await loadMarket(selectedWorkspaceSlug)
+      if (action === 'install') await installWorkingSkill(workspaceSlug, skill.id)
+      else await uninstallWorkingSkill(workspaceSlug, skill.id)
+      await loadMarket(workspaceSlug)
       onChanged()
       toast.success(action === 'install' ? `已安装 Skill：${skill.name}` : `已卸载 Skill：${skill.name}`)
     } catch (actionError: unknown) {
@@ -189,33 +169,12 @@ export function SkillMarketDialog({ open, onOpenChange, workspaces, onChanged }:
               </div>
               <div>
                 <DialogTitle>技能市场</DialogTitle>
-                <DialogDescription className="mt-1">选择目标项目后，从 Working 官方技能市场安装专家能力</DialogDescription>
+                <DialogDescription className="mt-1">从 Working 官方技能市场安装专家能力到当前项目</DialogDescription>
               </div>
             </div>
           </div>
 
-          <div className="mt-5 space-y-2">
-            <div className="flex items-center justify-between gap-3">
-              <label htmlFor="skill-market-workspace" className="text-sm font-medium text-foreground">
-                目标项目 <span className="text-xs font-normal text-destructive">（必选）</span>
-              </label>
-              {workspaces.length === 0 && <span className="text-xs text-muted-foreground">暂无可用项目</span>}
-            </div>
-            <Select value={selectedWorkspaceSlug} onValueChange={handleWorkspaceChange} disabled={busyId !== null || workspaces.length === 0}>
-              <SelectTrigger id="skill-market-workspace" aria-label="选择目标项目">
-                <SelectValue placeholder="请选择项目（必选）" />
-              </SelectTrigger>
-              <SelectContent>
-                {workspaces.map((workspace) => (
-                  <SelectItem key={workspace.slug} value={workspace.slug}>
-                    {workspace.name || workspace.slug}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-
-          <div className="mt-4 flex flex-wrap items-center gap-2">
+          <div className="mt-5 flex flex-wrap items-center gap-2">
             <div className="flex h-9 min-w-[220px] flex-1 items-center gap-2 rounded-lg border border-border/60 bg-content-area px-3 focus-within:border-primary/40">
               <Search size={15} className="shrink-0 text-muted-foreground" />
               <input
@@ -224,7 +183,7 @@ export function SkillMarketDialog({ open, onOpenChange, workspaces, onChanged }:
                 placeholder="搜索技能名称、用途或分类"
                 className="w-full bg-transparent text-sm text-foreground outline-none placeholder:text-muted-foreground/60"
                 aria-label="搜索技能市场"
-                disabled={!selectedWorkspaceSlug}
+                disabled={!workspaceSlug}
               />
               {query && (
                 <button type="button" onClick={() => setQuery('')} className="text-muted-foreground hover:text-foreground" aria-label="清除搜索">
@@ -236,7 +195,7 @@ export function SkillMarketDialog({ open, onOpenChange, workspaces, onChanged }:
               <button
                 type="button"
                 onClick={() => setView('all')}
-                disabled={!selectedWorkspaceSlug}
+                disabled={!workspaceSlug}
                 className={cn('h-8 rounded-md px-3 text-xs font-medium transition-colors', view === 'all' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground')}
               >
                 全部技能
@@ -244,7 +203,7 @@ export function SkillMarketDialog({ open, onOpenChange, workspaces, onChanged }:
               <button
                 type="button"
                 onClick={() => setView('installed')}
-                disabled={!selectedWorkspaceSlug}
+                disabled={!workspaceSlug}
                 className={cn('h-8 rounded-md px-3 text-xs font-medium transition-colors', view === 'installed' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground')}
               >
                 已安装 {localInstalledCount}
@@ -259,7 +218,7 @@ export function SkillMarketDialog({ open, onOpenChange, workspaces, onChanged }:
                 key={item}
                 type="button"
                 onClick={() => setCategory(item)}
-                disabled={!selectedWorkspaceSlug}
+                disabled={!workspaceSlug}
                 className={cn('shrink-0 rounded-md px-2.5 py-1 text-xs transition-colors', category === item ? 'bg-primary/10 font-medium text-primary' : 'text-muted-foreground hover:bg-muted hover:text-foreground')}
               >
                 {item}
@@ -272,15 +231,15 @@ export function SkillMarketDialog({ open, onOpenChange, workspaces, onChanged }:
           {error && (
             <div className="mb-4 flex items-center justify-between gap-3 rounded-lg bg-destructive/10 px-3 py-2.5 text-sm text-destructive" role="alert">
               <span>{error}</span>
-              <Button type="button" size="sm" variant="ghost" onClick={() => void loadMarket(selectedWorkspaceSlug)} disabled={loading || busyId !== null}>重试</Button>
+              <Button type="button" size="sm" variant="ghost" onClick={() => void loadMarket(workspaceSlug)} disabled={loading || busyId !== null}>重试</Button>
             </div>
           )}
 
-          {!selectedWorkspaceSlug ? (
+          {!workspaceSlug ? (
             <div className="flex flex-col items-center justify-center gap-3 py-20 text-center text-muted-foreground" role="status">
               <PackageOpen size={30} className="text-foreground/25" />
-              <div className="text-sm font-medium text-foreground/70">请先选择目标项目</div>
-              <div className="text-xs">选择项目后才能查看和安装技能</div>
+              <div className="text-sm font-medium text-foreground/70">当前项目不可用</div>
+              <div className="text-xs">请先在 Agent 技能页顶部选择项目</div>
             </div>
           ) : loading ? (
             <div className="flex items-center justify-center gap-2 py-20 text-sm text-muted-foreground" role="status">
@@ -296,7 +255,7 @@ export function SkillMarketDialog({ open, onOpenChange, workspaces, onChanged }:
                 return (
                   <div key={String(skill.id)} className="flex items-center gap-3 py-3 first:pt-0 last:pb-0">
                     <div className={cn('flex size-10 shrink-0 items-center justify-center rounded-xl', accentClass(skill.accent))}>
-                      <PackageOpen size={18} />
+                      <Puzzle size={18} />
                     </div>
                     <div className="min-w-0 flex-1">
                       <div className="flex flex-wrap items-center gap-2">

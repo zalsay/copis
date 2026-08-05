@@ -933,6 +933,8 @@ export interface SkillMarketSource {
 export interface SkillMeta {
   slug: string
   name: string
+  /** 面向用户的中文展示名；未设置时 UI 回退到 name */
+  displayName?: string
   description?: string
   /** UI 分组名，用于把 Copis 内嵌 Skills 收拢到同一组 */
   group?: string

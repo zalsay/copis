@@ -291,8 +291,8 @@ function EmptyState({ onCreate }: { onCreate: () => void }): React.ReactElement 
       <div className="flex flex-col gap-1.5">
         <div className="text-[16px] font-medium text-foreground/85">暂无定时任务</div>
         <div className="text-[13px] text-foreground/50 leading-relaxed max-w-md">
-          定时任务可以让 AI 周期性地执行某项任务，如每天总结新邮件、每小时检查 GitHub 仓库等。
-          也可以在对话中用「以后每隔 X 分钟…」让 Copis 自动识别并创建。
+          Copis 专注自动化办公，可按计划处理日常事务：整理邮件和消息、汇总文档、生成日报周报、跟进项目进展。
+          也可以在对话中说「每天上午 9 点生成工作日报」或「每周一整理项目进展」，Copis 会自动识别并创建任务。
         </div>
       </div>
       <button

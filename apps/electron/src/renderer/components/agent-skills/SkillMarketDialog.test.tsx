@@ -1,7 +1,6 @@
 import { describe, expect, mock, test } from 'bun:test'
 import * as React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
-import type { AgentWorkspace } from '@copis/shared'
 
 interface DialogMockProps {
   children?: React.ReactNode
@@ -23,35 +22,19 @@ mock.module('@/lib/working-skill-market-api', () => ({
 
 const { SkillMarketDialog } = await import('./SkillMarketDialog')
 
-const workspaces: AgentWorkspace[] = [
-  {
-    id: 'current-id',
-    name: '当前项目',
-    slug: 'current-project',
-    createdAt: 1,
-    updatedAt: 1,
-  },
-  {
-    id: 'other-id',
-    name: '其他项目',
-    slug: 'other-project',
-    createdAt: 2,
-    updatedAt: 2,
-  },
-]
-
-describe('技能市场目标项目选择', () => {
-  test('打开技能市场时不默认当前项目，必须先选择目标项目', () => {
+describe('技能市场当前项目', () => {
+  test('直接使用 Agent 技能页传入的当前项目，不显示二次选择器', () => {
     const html = renderToStaticMarkup(
       <SkillMarketDialog
         open
         onOpenChange={() => undefined}
-        workspaces={workspaces}
+        currentWorkspaceSlug="current-project"
         onChanged={() => undefined}
       />,
     )
 
-    expect(html).toContain('选择目标项目')
-    expect(html).toContain('请选择项目（必选）')
+    expect(html).toContain('技能市场暂时没有可用内容')
+    expect(html).not.toContain('目标项目')
+    expect(html).not.toContain('role="combobox"')
   })
 })

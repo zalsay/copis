@@ -73,7 +73,7 @@ export function ImportSkillDialog({ open, onOpenChange, workspaceSlug, installed
       const imported = await window.electronAPI.importSkillFromWorkspace(workspaceSlug, sourceSlug, skillSlug)
       onImported()
       onOpenChange(false)
-      toast.success(`已导入 Skill：${imported.name}`)
+      toast.success(`已导入 Skill：${imported.displayName ?? imported.name}`)
     } catch (error) {
       console.error('[Agent 技能] 导入 Skill 失败:', error)
       const message = error instanceof Error ? error.message : '未知错误'
@@ -136,7 +136,7 @@ export function ImportSkillDialog({ open, onOpenChange, workspaceSlug, installed
                             </div>
                             <div className="min-w-0 flex-1">
                               <div className="flex items-center gap-2">
-                                <div className="truncate text-sm font-medium text-foreground">{skill.name}</div>
+                                <div className="truncate text-sm font-medium text-foreground">{skill.displayName ?? skill.name}</div>
                                 {skill.version ? (
                                   <span className="rounded-md bg-muted px-1.5 py-0.5 text-[11px] font-medium text-muted-foreground">
                                     v{skill.version}

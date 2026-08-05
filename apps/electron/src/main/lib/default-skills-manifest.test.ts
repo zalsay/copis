@@ -53,6 +53,12 @@ describe('默认 Skills 清单', () => {
     expect(ungrouped).toEqual([])
   })
 
+  test('每个保留的默认 Skill 都有中文展示名', () => {
+    const missingDisplayNames = bundledSkillSlugs().filter((slug) => !readFrontmatter(slug).get('displayName'))
+
+    expect(missingDisplayNames).toEqual([])
+  })
+
   test('Office 文档统一使用系统内置 officecli Skill', () => {
     const bundled = new Set(bundledSkillSlugs())
     expect(bundled.has('officecli')).toBe(true)

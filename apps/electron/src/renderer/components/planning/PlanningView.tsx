@@ -1,6 +1,6 @@
 import * as React from 'react'
 import { useAtom, useAtomValue, useSetAtom } from 'jotai'
-import { Bell, CalendarDays, ChevronRight, ExternalLink, Plus, RefreshCw } from 'lucide-react'
+import { Bell, CalendarDays, ChevronRight, Plus, RefreshCw } from 'lucide-react'
 import { toast } from 'sonner'
 import type { CalendarEvent } from '@copis/shared'
 import { cn } from '@/lib/utils'
@@ -177,13 +177,6 @@ export function PlanningView({ standalone = false }: { standalone?: boolean } = 
     setTab('calendar')
     requestCalendarCreate((count) => count + 1)
   }, [requestCalendarCreate, setTab])
-  const openPlanningWindow = React.useCallback((): void => {
-    void window.electronAPI.openPlanningWindow().catch((error) => {
-      console.error('[任务/日程] 打开独立窗口失败:', error)
-      toast.error('打开独立窗口失败')
-    })
-  }, [])
-
   useShortcut('new-session', triggerCalendarCreate, true, { exclusive: true })
 
   const pageTitle = tab === 'schedule' ? '日程表' : tab === 'calendar' ? '日历' : '定时任务'
@@ -195,7 +188,6 @@ export function PlanningView({ standalone = false }: { standalone?: boolean } = 
         <div className={cn('absolute inset-y-0 left-0 z-0 titlebar-drag-region', isWindows ? WINDOW_CONTROLS_INSET_RIGHT : 'right-0')} />
         <div className="relative z-[1]"><h1 className="text-2xl font-semibold tracking-tight text-wrap-balance">{pageTitle}</h1><p className="mt-1 text-sm text-muted-foreground">{pageDescription}</p></div>
         <div className="relative z-[1] titlebar-no-drag flex items-center gap-2">
-          {!standalone && <button type="button" onClick={openPlanningWindow} className="inline-flex min-h-10 items-center gap-1.5 rounded-lg border border-border/60 bg-background px-3 text-sm font-medium text-foreground shadow-sm transition-colors hover:bg-muted/60 active:scale-[0.96]"><ExternalLink size={16} />独立窗口</button>}
           <button type="button" onClick={triggerCalendarCreate} aria-keyshortcuts="Meta+N Control+N" className="inline-flex min-h-10 items-center gap-1.5 rounded-lg bg-primary px-3 text-sm font-medium text-primary-foreground shadow-sm transition-colors hover:bg-primary/90 active:scale-[0.96]"><Plus size={16} />新建日程<CreateShortcutHint /></button>
         </div>
       </header>

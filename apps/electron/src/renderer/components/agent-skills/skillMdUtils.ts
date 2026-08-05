@@ -2,7 +2,7 @@
  * SKILL.md frontmatter 解析与重写工具
  *
  * 从 SKILL.md 文本中提取正文，以及在保留 frontmatter 的前提下
- * 重写 name / description / body 字段。供 Agent 技能详情抽屉编辑使用。
+ * 重写 name / displayName / description / body 字段。供 Agent 技能详情抽屉编辑使用。
  */
 
 /** 提取 SKILL.md 的正文（去除 frontmatter） */
@@ -22,7 +22,7 @@ function toInlineValue(value: string): string {
 /** 在保留 frontmatter 结构的前提下重写指定字段 */
 export function rebuildSkillMd(
   originalContent: string,
-  updates: { name?: string; description?: string; body?: string },
+  updates: { name?: string; displayName?: string; description?: string; body?: string },
 ): string {
   // 移除 UTF-8 BOM（﻿），确保 frontmatter 匹配不受 BOM 干扰
   if (originalContent.charCodeAt(0) === 0xFEFF) originalContent = originalContent.slice(1)
@@ -38,6 +38,18 @@ export function rebuildSkillMd(
     fmBlock = /^name:/m.test(fmBlock)
       ? fmBlock.replace(/^name:.*$/m, `name: ${name}`)
       : `name: ${name}\n${fmBlock}`
+  }
+  if (updates.displayName !== undefined) {
+    const displayName = toInlineValue(updates.displayName)
+    if (displayName) {
+      fmBlock = /^displayName:/m.test(fmBlock)
+        ? fmBlock.replace(/^displayName:.*$/m, `displayName: ${displayName}`)
+        : /^(name:.*)$/m.test(fmBlock)
+          ? fmBlock.replace(/^(name:.*)$/m, `$1\ndisplayName: ${displayName}`)
+          : `displayName: ${displayName}\n${fmBlock}`
+    } else {
+      fmBlock = fmBlock.replace(/^displayName:.*(?:\n|$)/m, '')
+    }
   }
   if (updates.description !== undefined) {
     const description = toInlineValue(updates.description)

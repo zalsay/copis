@@ -464,12 +464,12 @@ function CalendarEventDialog({ editor, workspaces, tags, busy, error, onChange, 
             <label className="flex items-center justify-between rounded-lg border border-border/60 px-3 py-3 text-sm font-medium"><span>全天日程</span><input type="checkbox" checked={editor.allDay} onChange={(event) => setAllDay(event.target.checked)} className="size-4 accent-primary" /></label>
             <div className="flex items-center justify-between rounded-lg border border-border/60 px-3 py-3">
               <div><p className="text-sm font-medium">到时提醒</p><p className="mt-1 text-xs text-muted-foreground">在日程开始时间提醒</p></div>
-              <Switch checked={editor.reminderEnabled} onCheckedChange={(checked) => update('reminderEnabled', checked)} aria-label="开启到时提醒" />
+              <Switch className="calendar-reminder-switch" checked={editor.reminderEnabled} onCheckedChange={(checked) => update('reminderEnabled', checked)} aria-label="开启到时提醒" />
             </div>
             <div className="grid gap-4 sm:grid-cols-2">
-              <label className="grid gap-2 text-sm font-medium"><span>开始日期</span><Input type="date" required value={localDateInputValue(editor.startAt)} onChange={(event) => setStartDate(event.target.value)} /></label>
+              <label className="grid gap-2 text-sm font-medium"><span>开始日期</span><Input className="calendar-date-input" type="date" required value={localDateInputValue(editor.startAt)} onChange={(event) => setStartDate(event.target.value)} /></label>
               {!editor.allDay && <label className="grid gap-2 text-sm font-medium"><span>开始时间</span><Input type="time" required value={localTimeInputValue(editor.startAt)} onChange={(event) => setStartTime(event.target.value)} /></label>}
-              <label className="grid gap-2 text-sm font-medium"><span>结束日期</span><Input type="date" required min={localDateInputValue(editor.startAt)} value={localDateInputValue(editor.allDay ? previousDayStart(editor.endAt) : editor.endAt)} onChange={(event) => setEndDate(event.target.value)} /></label>
+              <label className="grid gap-2 text-sm font-medium"><span>结束日期</span><Input className="calendar-date-input" type="date" required min={localDateInputValue(editor.startAt)} value={localDateInputValue(editor.allDay ? previousDayStart(editor.endAt) : editor.endAt)} onChange={(event) => setEndDate(event.target.value)} /></label>
               {!editor.allDay && <label className="grid gap-2 text-sm font-medium"><span>结束时间</span><Input type="time" required value={localTimeInputValue(editor.endAt)} onChange={(event) => setEndTime(event.target.value)} /></label>}
             </div>
             <label className="grid gap-2 text-sm font-medium"><span>工作项目</span><Select value={editor.workspaceId} onValueChange={(value) => update('workspaceId', value)}><SelectTrigger><SelectValue placeholder="选择工作项目" /></SelectTrigger><SelectContent><SelectItem value="__none__">未选择工作区</SelectItem>{workspaces.map((workspace) => <SelectItem key={workspace.id} value={workspace.id}>{workspace.name}</SelectItem>)}</SelectContent></Select></label>

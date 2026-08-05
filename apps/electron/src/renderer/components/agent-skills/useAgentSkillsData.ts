@@ -84,7 +84,13 @@ export function useAgentSkillsData(): AgentSkillsData {
           return []
         }),
       ])
-      const mergedSkills = [...skillList]
+      const builtinBySlug = new Map(builtinSkillCatalog.map((skill) => [skill.slug, skill]))
+      const mergedSkills = skillList.map((skill) => {
+        const bundledSkill = builtinBySlug.get(skill.slug)
+        return bundledSkill?.displayName && !skill.displayName?.trim()
+          ? { ...skill, displayName: bundledSkill.displayName }
+          : skill
+      })
       const knownSlugs = new Set(mergedSkills.map((skill) => skill.slug))
       for (const skill of builtinSkillCatalog) {
         if (knownSlugs.has(skill.slug)) continue

@@ -1,8 +1,9 @@
 ---
 name: executing-plans
+displayName: 执行计划
 description: Use when you have a written implementation plan to execute in a separate session with review checkpoints
 group: 系统内置
-version: "1.0.2"
+version: "1.0.3"
 ---
 # Executing Plans
 

@@ -58,12 +58,14 @@ function SkillDetailBody({
   onOpenFolder,
   onChanged,
 }: SkillDetailSheetProps & { skill: SkillMeta }): React.ReactElement {
+  const displayName = skill.displayName?.trim() || skill.name
   const [content, setContent] = React.useState<string | null>(null)
   const [loadingContent, setLoadingContent] = React.useState(true)
 
   const [isEditingMeta, setIsEditingMeta] = React.useState(false)
   const [isEditingBody, setIsEditingBody] = React.useState(false)
   const [editName, setEditName] = React.useState('')
+  const [editDisplayName, setEditDisplayName] = React.useState('')
   const [editDescription, setEditDescription] = React.useState('')
   const [editBody, setEditBody] = React.useState('')
   const [saving, setSaving] = React.useState(false)
@@ -86,6 +88,7 @@ function SkillDetailBody({
 
   const startEditMeta = (): void => {
     setEditName(skill.name)
+    setEditDisplayName(skill.displayName ?? '')
     setEditDescription(skill.description ?? '')
     setIsEditingMeta(true)
   }
@@ -94,7 +97,7 @@ function SkillDetailBody({
     if (!content) return
     setSaving(true)
     try {
-      const newContent = rebuildSkillMd(content, { name: editName, description: editDescription })
+      const newContent = rebuildSkillMd(content, { name: editName, displayName: editDisplayName, description: editDescription })
       await window.electronAPI.writeSkillContent(workspaceSlug, skill.slug, newContent)
       setContent(newContent)
       setIsEditingMeta(false)
@@ -151,7 +154,7 @@ function SkillDetailBody({
           </div>
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2">
-              <h3 className="truncate text-base font-semibold text-foreground">{skill.name}</h3>
+              <h3 className="truncate text-base font-semibold text-foreground">{displayName}</h3>
               {skill.version && (
                 <span className="shrink-0 rounded-md bg-muted px-1.5 py-0.5 text-[11px] font-medium text-muted-foreground">
                   v{skill.version}
@@ -237,11 +240,13 @@ function SkillDetailBody({
               {isEditingMeta ? (
                 <>
                   <MetaEditRow label="名称" value={editName} onChange={setEditName} />
+                  <MetaEditRow label="显示名称" value={editDisplayName} onChange={setEditDisplayName} />
                   <MetaEditRow label="描述" value={editDescription} onChange={setEditDescription} multiline />
                 </>
               ) : (
                 <>
                   <MetaRow label="名称" value={skill.name} />
+                  <MetaRow label="显示名称" value={displayName} />
                   <MetaRow label="描述" value={skill.description ?? '无描述'} />
                 </>
               )}

@@ -40,6 +40,20 @@
   color: hsl(var(--foreground));
 }
 
+/* 深色主题下保持日期图标和提醒开关滑块清晰可见。 */
+:root.dark .calendar-date-input::-webkit-calendar-picker-indicator {
+  filter: invert(1);
+  opacity: 0.78;
+}
+
+:root.dark .calendar-reminder-switch[data-state='checked'] {
+  background-color: hsl(var(--primary) / 0.6);
+}
+
+:root.dark .calendar-reminder-switch > span {
+  background-color: hsl(var(--foreground));
+}
+
 /* 暗色特殊主题：--primary 太暗，改用 --accent-foreground（明亮的强调文字色）
  * 远山暮霭 / 森息夜语：把不透明度提到 75%（v3 调灰后 accent-foreground 本身就柔，
  * 必须靠 opacity 把对比拉回来才看得清）；slate-dark（莫兰迪夜）保持柔和。

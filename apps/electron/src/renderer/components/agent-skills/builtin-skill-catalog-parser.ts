@@ -1,6 +1,6 @@
 import type { SkillMeta } from '@copis/shared'
 
-const FRONTMATTER_KEYS = new Set(['name', 'description', 'group', 'icon', 'version'])
+const FRONTMATTER_KEYS = new Set(['name', 'displayName', 'description', 'group', 'icon', 'version'])
 
 /** 仅解析内置 Skill 的 frontmatter，避免把完整 Skill 正文带入 UI 状态。 */
 export function parseBuiltinSkillMarkdown(content: string, slug: string): SkillMeta {
@@ -55,6 +55,7 @@ export function parseBuiltinSkillMarkdown(content: string, slug: string): SkillM
   }
 
   if (entries.name) meta.name = entries.name.trim()
+  if (entries.displayName) meta.displayName = entries.displayName.trim()
   if (entries.description) meta.description = entries.description.trim()
   if (entries.group) meta.group = entries.group.trim()
   if (entries.icon) meta.icon = entries.icon.trim()

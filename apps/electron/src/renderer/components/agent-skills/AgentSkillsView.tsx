@@ -47,7 +47,7 @@ function buildSkillClassificationPrompt(input: {
     .map((skill) => {
       const meta: string[] = []
       if (skill.group) meta.push(`group=${skill.group}`)
-      return `- ${skill.slug} (${skill.name})${meta.length > 0 ? ` [${meta.join('; ')}]` : ''}`
+      return `- ${skill.slug} (${skill.displayName ?? skill.name})${meta.length > 0 ? ` [${meta.join('; ')}]` : ''}`
     })
     .join('\n')
 
@@ -474,7 +474,7 @@ export function AgentSkillsView(): React.ReactElement {
       <SkillMarketDialog
         open={showMarket}
         onOpenChange={setShowMarket}
-        workspaces={workspaces}
+        currentWorkspaceSlug={currentWorkspace?.slug ?? ''}
         onChanged={() => bumpCapabilities((v) => v + 1)}
       />
     </div>
