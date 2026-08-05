@@ -44,12 +44,12 @@ export function WebBrowserSurface(): React.ReactElement {
   const addressInputRef = React.useRef<HTMLInputElement>(null)
   const hostRef = React.useRef<HTMLDivElement>(null)
   const [address, setAddress] = React.useState('')
-  const [browserWorkflowEnabled, setBrowserWorkflowEnabled] = React.useState(false)
+  const [browserWorkflowEnabled, setBrowserWorkflowEnabled] = React.useState<boolean | null>(null)
 
   React.useEffect(() => {
     let active = true
     void window.electronAPI.getSettings().then((settings) => {
-      if (active) setBrowserWorkflowEnabled(settings.browserWorkflowEnabled === true)
+      if (active) setBrowserWorkflowEnabled(settings.browserWorkflowEnabled !== false)
     }).catch((error) => {
       console.error('[Browser Workflow] 读取功能开关失败:', error)
     })
