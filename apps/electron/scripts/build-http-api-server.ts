@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 /**
- * 编译 Rust HTTP API 服务，并复制到 Electron 的额外二进制目录。
+ * 编译 Rust HTTP API 服务。
  *
  * CI 在各目标平台 runner 上执行，因此产物与当前 runner 的平台和架构一致，
  * 不依赖交叉编译工具链。
@@ -35,7 +35,7 @@ if (!existsSync(manifestPath)) {
   process.exit(1)
 }
 
-console.log(`[build:http-api-server] 编译 Rust HTTP API 服务 → ${outputPath}`)
+console.log(`[build:http-api-server] 编译 Rust HTTP API 服务 → ${sourcePath}`)
 const result = spawnSync(
   cargoCommand,
   ['build', '--release', '--manifest-path', manifestPath],
@@ -55,7 +55,13 @@ if (!existsSync(sourcePath)) {
   process.exit(1)
 }
 
-mkdirSync(outputDir, { recursive: true })
-copyFileSync(sourcePath, outputPath)
-if (process.platform !== 'win32') chmodSync(outputPath, 0o755)
-console.log(`[build:http-api-server] 完成: ${outputPath}`)
+if (process.platform !== 'win32') chmodSync(sourcePath, 0o755)
+
+if (process.env.COPIS_BUILD_BUNDLED_HTTP_API === '1') {
+  mkdirSync(outputDir, { recursive: true })
+  copyFileSync(sourcePath, outputPath)
+  if (process.platform !== 'win32') chmodSync(outputPath, 0o755)
+  console.log(`[build:http-api-server] 已按显式配置复制兼容产物: ${outputPath}`)
+} else {
+  console.log('[build:http-api-server] 默认不复制到 resources/bin，正式 App 从功能模块 active 版本启动')
+}

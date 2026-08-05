@@ -53,6 +53,7 @@ export interface HttpApiServerOptions {
   fetchImpl?: FunctionalModuleFetch
   spawnImpl?: HttpApiSpawn
   healthTimeoutMs?: number
+  stopTimeoutMs?: number
   port?: number
 }
 
@@ -199,7 +200,9 @@ function spawnManagedProcess(
   bridgeEnabled: boolean,
 ): ManagedProcess | undefined {
   const workerPath = resolvePiRpcWorkerPath()
-  const spawnImpl = options.spawnImpl ?? ((file, args, spawnOptions) => spawn(file, args, spawnOptions))
+  const spawnImpl = options.spawnImpl ?? ((file, args, spawnOptions) => (
+    spawn(file, args, spawnOptions) as ChildProcessWithoutNullStreams
+  ))
   let child: ChildProcessWithoutNullStreams
   try {
     child = spawnImpl(binaryPath, [], {
@@ -259,7 +262,10 @@ function spawnManagedProcess(
   return { child, ...(lineReader ? { lineReader } : {}) }
 }
 
-function stopManagedProcess(child: ChildProcessWithoutNullStreams): Promise<void> {
+function stopManagedProcess(
+  child: ChildProcessWithoutNullStreams,
+  timeoutMs = 1_000,
+): Promise<void> {
   return new Promise<void>((resolveStop) => {
     let settled = false
     const finish = (): void => {
@@ -280,7 +286,7 @@ function stopManagedProcess(child: ChildProcessWithoutNullStreams): Promise<void
     const forceTimer = setTimeout(() => {
       if (!child.killed) child.kill()
       finish()
-    }, 1_000)
+    }, Math.max(1, timeoutMs))
     child.once('exit', () => clearTimeout(forceTimer))
   })
 }
@@ -368,16 +374,16 @@ export async function updateHttpApiServer(options: HttpApiServerOptions = {}): P
   if (!candidate) return false
 
   if (!await waitForHealth(candidatePort, options)) {
-    await stopManagedProcess(candidate.child)
+    await stopManagedProcess(candidate.child, options.stopTimeoutMs)
     console.warn('[HTTP API] 候选 Rust 模块健康检查失败，保留当前版本')
     return false
   }
-  await stopManagedProcess(candidate.child)
+  await stopManagedProcess(candidate.child, options.stopTimeoutMs)
 
   const oldProcess = httpApiProcess
   if (oldProcess) {
     httpApiProcess = null
-    await stopManagedProcess(oldProcess)
+    await stopManagedProcess(oldProcess, options.stopTimeoutMs)
   }
 
   try {
@@ -396,7 +402,7 @@ export async function updateHttpApiServer(options: HttpApiServerOptions = {}): P
     return true
   }
 
-  if (next) await stopManagedProcess(next.child)
+  if (next) await stopManagedProcess(next.child, options.stopTimeoutMs)
   if (previous) {
     await restoreFunctionalModule(paths, previous)
     startHttpApiServer({ ...options, rootDir })
@@ -425,13 +431,13 @@ export async function ensureHttpApiServer(options: HttpApiServerOptions = {}): P
   }
 }
 
-export function stopHttpApiServer(): Promise<void> {
+export function stopHttpApiServer(stopTimeoutMs = 1_000): Promise<void> {
   const child = httpApiProcess
   if (!child) return Promise.resolve()
 
   stopping = true
   httpApiProcess = null
-  return stopManagedProcess(child).finally(() => {
+  return stopManagedProcess(child, stopTimeoutMs).finally(() => {
     stopping = false
   })
 }

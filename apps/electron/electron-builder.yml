@@ -64,6 +64,8 @@ extraResources:
     to: bin
     filter:
       - "**/*"
+      - "!copis-http-api-server"
+      - "!copis-http-api-server.exe"
   # 默认 Skills 模板（首次启动时同步到 ~/.copis/default-skills/）
   - from: default-skills
     to: default-skills

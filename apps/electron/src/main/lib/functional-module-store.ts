@@ -195,6 +195,23 @@ export async function activateFunctionalModule(
   await writeJsonAtomically(paths.activeFile, next)
 }
 
+/** 将一个已经完成的旧版本重新写回 active 指针，用于更新失败后的恢复。 */
+export async function restoreFunctionalModule(
+  paths: FunctionalModulePaths,
+  active: ActiveFunctionalModule,
+): Promise<void> {
+  const packageInfo: FunctionalModulePackage = {
+    name: active.name,
+    version: active.version,
+    sha256: active.sha256,
+    size: active.size,
+    format: active.format,
+    entrypoint: active.entrypoint,
+    required: active.required,
+  }
+  await activateFunctionalModule(paths, packageInfo, moduleVersionDir(paths, packageInfo))
+}
+
 export async function deactivateFunctionalModule(
   paths: FunctionalModulePaths,
   name: string,
