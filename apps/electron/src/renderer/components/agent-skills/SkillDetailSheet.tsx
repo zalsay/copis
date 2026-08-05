@@ -18,7 +18,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 import { SettingsCard } from '@/components/settings/primitives'
 import { SkillFilesPanel } from '@/components/settings/SkillFilesPanel'
 import { cn } from '@/lib/utils'
-import type { SkillMeta } from '@proma/shared'
+import type { SkillMeta } from '@copis/shared'
 import { extractSkillBody, rebuildSkillMd } from './skillMdUtils'
 
 interface SkillDetailSheetProps {
@@ -127,7 +127,7 @@ function SkillDetailBody({
   }
 
   const sourceLabel = isBuiltin
-    ? 'PROMA 内置'
+    ? 'COPIS 内置'
     : skill.importSource
       ? `从 ${skill.importSource.sourceWorkspaceName} 导入`
       : '当前项目'

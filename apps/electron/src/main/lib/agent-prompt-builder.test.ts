@@ -12,7 +12,7 @@ mock.module('./agent-workspace-manager', () => ({
 }))
 
 mock.module('./config-paths', () => ({
-  getConfigDirName: () => '.proma',
+  getConfigDirName: () => '.copis',
 }))
 
 mock.module('./agent-git-attribution', () => ({
@@ -53,7 +53,7 @@ describe('项目与会话工作台提示词', () => {
   })
 
   test('Given 历史会话工作台 cwd When 构建提示词 Then 不将它误称为项目根', () => {
-    const prompt = buildPrompt('/tmp/.proma/agent-workspaces/sample-project/session-1')
+    const prompt = buildPrompt('/tmp/.copis/agent-workspaces/sample-project/session-1')
 
     expect(prompt).toContain('当前会话仍使用私有会话工作台，不等同于项目根目录')
     expect(prompt).toContain('项目根与 cwd 不一定相同')

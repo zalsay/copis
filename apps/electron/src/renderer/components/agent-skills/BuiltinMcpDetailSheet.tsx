@@ -1,5 +1,5 @@
 /**
- * BuiltinMcpDetailSheet — Proma 内置 MCP 托管详情
+ * BuiltinMcpDetailSheet — Copis 内置 MCP 托管详情
  */
 
 import * as React from 'react'
@@ -7,7 +7,7 @@ import { ArrowLeft, CheckCircle2, Plug, Settings2, XCircle } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Sheet, SheetContent, SheetDescription, SheetTitle } from '@/components/ui/sheet'
 import { cn } from '@/lib/utils'
-import type { BuiltinMcpServerSummary } from '@proma/shared'
+import type { BuiltinMcpServerSummary } from '@copis/shared'
 
 interface BuiltinMcpDetailSheetProps {
   open: boolean
@@ -39,12 +39,6 @@ function getConfigInfo(server: BuiltinMcpServerSummary): BuiltinMcpConfigInfo {
       actionLabel: '配置生图',
     }
   }
-  if (server.id === 'chrome-devtools') {
-    return {
-      source: 'Chrome DevTools MCP / npx',
-      description: '启用后 Proma 会通过 npx 启动 chrome-devtools-mcp，让 Agent 可以打开真实浏览器页面、截图和检查 DOM。首次使用可能需要下载 npm 包，并要求本机安装 Chrome。',
-    }
-  }
   if (server.id === 'collaboration') {
     return {
       source: '当前 Agent 项目',
@@ -53,13 +47,13 @@ function getConfigInfo(server: BuiltinMcpServerSummary): BuiltinMcpConfigInfo {
   }
   if (server.id === 'automation') {
     return {
-      source: 'Proma 本地自动任务',
-      description: '自动任务 MCP 直接使用 Proma 本地任务服务，无需填写额外凭据。',
+      source: 'Copis 本地自动任务',
+      description: '自动任务 MCP 直接使用 Copis 本地任务服务，无需填写额外凭据。',
     }
   }
   return {
-    source: 'Proma 运行时',
-    description: '该内置 MCP 由 Proma 运行时托管。',
+    source: 'Copis 运行时',
+    description: '该内置 MCP 由 Copis 运行时托管。',
   }
 }
 
@@ -87,7 +81,7 @@ export function BuiltinMcpDetailSheet({ open, server, onOpenChange, onConfigure 
                   <div className="flex items-center gap-2">
                     <h3 className="truncate text-base font-semibold text-foreground">{server.displayName}</h3>
                     <span className="shrink-0 rounded-md bg-blue-500/10 px-1.5 py-0.5 text-[11px] font-medium text-blue-600 dark:text-blue-400">
-                      Proma 内置
+                      Copis 内置
                     </span>
                   </div>
                   <div className="mt-0.5 truncate text-xs text-muted-foreground">{server.name}</div>

@@ -1,10 +1,10 @@
-请帮我从零完成 Nowledge Mem 接入 Proma 的完整配置。严格按以下步骤操作。
+请帮我从零完成 Nowledge Mem 接入 Copis 的完整配置。严格按以下步骤操作。
 
 ---
 
 ## Step 0：确认 Nowledge Mem 客户端已安装并运行（必须）
 
-本地模式下**不需要登录或注册账号**——Nowledge Mem 是本地优先的，App 装好并启动之后，后台服务就在 `127.0.0.1:14242` 运行，Proma 通过 MCP 直连，全程不出本地。
+本地模式下**不需要登录或注册账号**——Nowledge Mem 是本地优先的，App 装好并启动之后，后台服务就在 `127.0.0.1:14242` 运行，Copis 通过 MCP 直连，全程不出本地。
 
 先检查 App 是否已安装：
 
@@ -24,24 +24,24 @@ curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:14242/mcp/ 2>/dev/null |
 
 ---
 
-## Step 0.5：与用户确认目标 Proma 工作区（必须）
+## Step 0.5：与用户确认目标 Copis 工作区（必须）
 
-MCP、Skills 按 Proma 工作区生效。Hooks 写在 Proma 的全局 Claude 配置中，但 Proma 会在每次会话启动时注入当前项目的环境变量；Hooks 只会在 `nowledge-mem` 已启用的项目运行。因此**必须先问清楚用户希望配置到哪个 Proma 工作区**。
+MCP、Skills 按 Copis 工作区生效。Hooks 写在 Copis 的全局 Claude 配置中，但 Copis 会在每次会话启动时注入当前项目的环境变量；Hooks 只会在 `nowledge-mem` 已启用的项目运行。因此**必须先问清楚用户希望配置到哪个 Copis 工作区**。
 
-先列出当前所有 Proma 工作区：
+先列出当前所有 Copis 工作区：
 
 ```bash
-ls "$PROMA_HOME/agent-workspaces/"
+ls "$COPIS_HOME/agent-workspaces/"
 ```
 
 然后**必须调用 `AskUserQuestion` 工具**向用户提问，不要用纯文本问，否则用户无法在选项中点选。具体参数：
 
-- `question`: "你希望把 Nowledge Mem 配置到哪个 Proma 工作区？"
-- `header`: "目标 Proma 工作区"
+- `question`: "你希望把 Nowledge Mem 配置到哪个 Copis 工作区？"
+- `header`: "目标 Copis 工作区"
 - `multiSelect`: `false`
-- `options`: 上一步扫描到的每个 Proma 工作区目录名作为一个 option，`label` 直接写目录名（如 `default`、`dev-pma`），`description` 留空或填关联项目简介。`mcp.json` 中已存在 `nowledge-mem` 条目的 Proma 工作区可以在 `description` 标注 "已配置"，方便用户避免重复装。
+- `options`: 上一步扫描到的每个 Copis 工作区目录名作为一个 option，`label` 直接写目录名（如 `default`、`dev-pma`），`description` 留空或填关联项目简介。`mcp.json` 中已存在 `nowledge-mem` 条目的 Copis 工作区可以在 `description` 标注 "已配置"，方便用户避免重复装。
 
-**记下用户选中的 Proma 工作区名**（下文统一用 `<Proma工作区名>` 表示）。后续命令中出现的 `<Proma工作区名>` 占位都要替换成用户的选择。
+**记下用户选中的 Copis 工作区名**（下文统一用 `<Copis工作区名>` 表示）。后续命令中出现的 `<Copis工作区名>` 占位都要替换成用户的选择。
 
 ---
 
@@ -85,7 +85,7 @@ powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | ie
 uvx nmem-cli status
 ```
 
-如果走方式 B，**记下"用户的 nmem 实际命令是 `uvx nmem-cli`"**——这个信息当前 Step 4 的 hooks 不直接用到（hooks 是调用 `PROMA_HOME/scripts/` 下的 Python 脚本，跟 nmem CLI 无关），但用户排错或自己用 nmem 时需要知道。
+如果走方式 B，**记下"用户的 nmem 实际命令是 `uvx nmem-cli`"**——这个信息当前 Step 4 的 hooks 不直接用到（hooks 是调用 `COPIS_HOME/scripts/` 下的 Python 脚本，跟 nmem CLI 无关），但用户排错或自己用 nmem 时需要知道。
 
 ### 方式 C · 最后兜底 · 仅 macOS
 
@@ -104,20 +104,20 @@ nmem status
 
 注意：这条路径绕过 Nowledge 官方推荐方式，依赖 App 内部实现，未来 App 升级可能失效。
 
-## Step 2：下载插件文件并安装到目标 Proma 工作区
+## Step 2：下载插件文件并安装到目标 Copis 工作区
 ```bash
 rm -rf /tmp/nowledge-community
 git clone https://github.com/nowledge-co/community.git /tmp/nowledge-community
 
-mkdir -p "$PROMA_HOME/scripts" "$PROMA_HOME/agent-workspaces/<Proma工作区名>/skills"
-cp /tmp/nowledge-community/nowledge-mem-proma-plugin/hooks/save-to-nmem.py "$PROMA_HOME/scripts/"
-cp /tmp/nowledge-community/nowledge-mem-proma-plugin/hooks/read-working-memory.py "$PROMA_HOME/scripts/"
-chmod +x "$PROMA_HOME/scripts/save-to-nmem.py" "$PROMA_HOME/scripts/read-working-memory.py"
-cp -R /tmp/nowledge-community/nowledge-mem-proma-plugin/skills/{read-working-memory,search-memory,distill-memory,save-thread,status} "$PROMA_HOME/agent-workspaces/<Proma工作区名>/skills/"
+mkdir -p "$COPIS_HOME/scripts" "$COPIS_HOME/agent-workspaces/<Copis工作区名>/skills"
+cp /tmp/nowledge-community/nowledge-mem-copis-plugin/hooks/save-to-nmem.py "$COPIS_HOME/scripts/"
+cp /tmp/nowledge-community/nowledge-mem-copis-plugin/hooks/read-working-memory.py "$COPIS_HOME/scripts/"
+chmod +x "$COPIS_HOME/scripts/save-to-nmem.py" "$COPIS_HOME/scripts/read-working-memory.py"
+cp -R /tmp/nowledge-community/nowledge-mem-copis-plugin/skills/{read-working-memory,search-memory,distill-memory,save-thread,status} "$COPIS_HOME/agent-workspaces/<Copis工作区名>/skills/"
 ```
 
-## Step 3：配置目标 Proma 工作区 MCP
-在 `$PROMA_HOME/agent-workspaces/<Proma工作区名>/mcp.json` 中创建或编辑（顶层 key 必须是 `servers`）：
+## Step 3：配置目标 Copis 工作区 MCP
+在 `$COPIS_HOME/agent-workspaces/<Copis工作区名>/mcp.json` 中创建或编辑（顶层 key 必须是 `servers`）：
 
 ```json
 {
@@ -127,7 +127,7 @@ cp -R /tmp/nowledge-community/nowledge-mem-proma-plugin/skills/{read-working-mem
       "type": "http",
       "enabled": true,
       "headers": {
-        "APP": "Proma"
+        "APP": "Copis"
       }
     }
   }
@@ -137,9 +137,9 @@ cp -R /tmp/nowledge-community/nowledge-mem-proma-plugin/skills/{read-working-mem
 如果文件已存在，把 `nowledge-mem` 合并进已有 `servers`，**不要覆盖其他条目**。
 
 ## Step 4：配置 Hooks
-编辑 `$PROMA_HOME/sdk-config/.claude/settings.json`，添加以下 hooks。如果文件已有内容则合并，不要覆盖。
+编辑 `$COPIS_HOME/sdk-config/.claude/settings.json`，添加以下 hooks。如果文件已有内容则合并，不要覆盖。
 
-Hooks 是全局 Claude 配置，**不要在命令中硬编码某个项目或 Proma 工作区目录**。Proma 会在每次会话启动时提供 `PROMA_HOME`、`PROMA_WORKSPACE_DIR` 和 `PROMA_NOWLEDGE_MEM_ENABLED`；下面的条件会使 Hook 仅在已启用 `nowledge-mem` 的项目中运行。
+Hooks 是全局 Claude 配置，**不要在命令中硬编码某个项目或 Copis 工作区目录**。Copis 会在每次会话启动时提供 `COPIS_HOME`、`COPIS_WORKSPACE_DIR` 和 `COPIS_NOWLEDGE_MEM_ENABLED`；下面的条件会使 Hook 仅在已启用 `nowledge-mem` 的项目中运行。
 
 ```json
 {
@@ -150,7 +150,7 @@ Hooks 是全局 Claude 配置，**不要在命令中硬编码某个项目或 Pro
         "hooks": [
           {
             "type": "command",
-            "command": "[ \"${PROMA_NOWLEDGE_MEM_ENABLED:-0}\" = \"1\" ] || exit 0; python \"${PROMA_HOME}/scripts/read-working-memory.py\"",
+            "command": "[ \"${COPIS_NOWLEDGE_MEM_ENABLED:-0}\" = \"1\" ] || exit 0; python \"${COPIS_HOME}/scripts/read-working-memory.py\"",
             "timeout": 15000
           }
         ]
@@ -161,7 +161,7 @@ Hooks 是全局 Claude 配置，**不要在命令中硬编码某个项目或 Pro
         "hooks": [
           {
             "type": "command",
-            "command": "[ \"${PROMA_NOWLEDGE_MEM_ENABLED:-0}\" = \"1\" ] || exit 0; python \"${PROMA_HOME}/scripts/save-to-nmem.py\" --event user-prompt-submit",
+            "command": "[ \"${COPIS_NOWLEDGE_MEM_ENABLED:-0}\" = \"1\" ] || exit 0; python \"${COPIS_HOME}/scripts/save-to-nmem.py\" --event user-prompt-submit",
             "timeout": 30000
           }
         ]
@@ -172,7 +172,7 @@ Hooks 是全局 Claude 配置，**不要在命令中硬编码某个项目或 Pro
         "hooks": [
           {
             "type": "command",
-            "command": "[ \"${PROMA_NOWLEDGE_MEM_ENABLED:-0}\" = \"1\" ] || exit 0; python \"${PROMA_HOME}/scripts/save-to-nmem.py\" --event stop",
+            "command": "[ \"${COPIS_NOWLEDGE_MEM_ENABLED:-0}\" = \"1\" ] || exit 0; python \"${COPIS_HOME}/scripts/save-to-nmem.py\" --event stop",
             "timeout": 30000
           }
         ]
@@ -181,7 +181,7 @@ Hooks 是全局 Claude 配置，**不要在命令中硬编码某个项目或 Pro
         "hooks": [
           {
             "type": "command",
-            "command": "[ \"${PROMA_NOWLEDGE_MEM_ENABLED:-0}\" = \"1\" ] || exit 0; python \"${PROMA_HOME}/scripts/read-working-memory.py\" --rewake",
+            "command": "[ \"${COPIS_NOWLEDGE_MEM_ENABLED:-0}\" = \"1\" ] || exit 0; python \"${COPIS_HOME}/scripts/read-working-memory.py\" --rewake",
             "timeout": 15000,
             "async": true,
             "asyncRewake": true,
@@ -198,12 +198,12 @@ Hooks 是全局 Claude 配置，**不要在命令中硬编码某个项目或 Pro
 ```bash
 export PATH="$HOME/.local/bin:$PATH"
 nmem status
-PROMA_WORKSPACE_DIR="$PROMA_HOME/agent-workspaces/<Proma工作区名>" python3 "$PROMA_HOME/scripts/read-working-memory.py"
-grep 'nowledge-mem:start' "$PROMA_HOME/agent-workspaces/<Proma工作区名>/CLAUDE.md" && echo "Block 已注入" || echo "Block 缺失"
+COPIS_WORKSPACE_DIR="$COPIS_HOME/agent-workspaces/<Copis工作区名>" python3 "$COPIS_HOME/scripts/read-working-memory.py"
+grep 'nowledge-mem:start' "$COPIS_HOME/agent-workspaces/<Copis工作区名>/CLAUDE.md" && echo "Block 已注入" || echo "Block 缺失"
 
-# 检查 5 个 skill 是否都已安装到目标 Proma 工作区
+# 检查 5 个 skill 是否都已安装到目标 Copis 工作区
 for s in read-working-memory search-memory distill-memory save-thread status; do
-  if [ -d "$PROMA_HOME/agent-workspaces/<Proma工作区名>/skills/$s" ]; then
+  if [ -d "$COPIS_HOME/agent-workspaces/<Copis工作区名>/skills/$s" ]; then
     echo "✅ skill: $s"
   else
     echo "❌ skill: $s 缺失"
@@ -220,10 +220,10 @@ done
 
 ---
 
-## ⚠️ 以上步骤完成后，必须完全退出并重启 Proma，配置才会生效。
+## ⚠️ 以上步骤完成后，必须完全退出并重启 Copis，配置才会生效。
 
-MCP 和 Hooks 只在 Proma 启动时加载，不重启等于没有配置。
+MCP 和 Hooks 只在 Copis 启动时加载，不重启等于没有配置。
 
 重启后在新会话里验证：
-1. `cat "$PROMA_HOME/logs/nm-hooks.log"` — 确认有新的 SessionStart 记录
+1. `cat "$COPIS_HOME/logs/nm-hooks.log"` — 确认有新的 SessionStart 记录
 2. 用自然语言说「帮我记住：<想存的内容>」存第一条记忆

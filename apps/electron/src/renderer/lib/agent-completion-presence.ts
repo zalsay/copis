@@ -1,4 +1,4 @@
-import type { AgentSessionMeta, AgentStreamCompletePayload } from '@proma/shared'
+import type { AgentSessionMeta, AgentStreamCompletePayload } from '@copis/shared'
 import type { TabItem } from '@/atoms/tab-atoms'
 
 export interface AgentCompletionPresenceInput {

@@ -1,16 +1,23 @@
 use std::collections::HashMap;
+use std::fs::{self, OpenOptions};
 use std::io::{self, BufRead, BufReader, BufWriter, Read, Write};
 use std::net::{Shutdown, TcpListener, TcpStream};
+use std::path::PathBuf;
 use std::process;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 const HOST: &str = "127.0.0.1";
 const PORT: u16 = 51730;
 const MAX_REQUEST_BODY_BYTES: usize = 2 * 1024 * 1024;
 const MAX_HEADER_BYTES: usize = 64 * 1024;
 const MAX_LINE_BYTES: usize = 64 * 1024;
+const MAX_RECORDING_LINE_BYTES: usize = 256 * 1024;
+const MAX_RECORDING_FILE_BYTES: u64 = 8 * 1024 * 1024;
+const INTERNAL_TOKEN_HEADER: &str = "x-copis-internal-token";
+const INTERNAL_RECORDING_PREFIX: &str = "/internal/browser-workflows/recordings/";
 
 struct BridgeResponse {
     status: u16,
@@ -22,6 +29,7 @@ struct Bridge {
     available: AtomicBool,
     writer: Mutex<BufWriter<io::Stdout>>,
     pending: Mutex<HashMap<u64, mpsc::Sender<Result<BridgeResponse, String>>>>,
+    recording_locks: Mutex<HashMap<String, Arc<Mutex<()>>>>,
 }
 
 impl Bridge {
@@ -31,6 +39,7 @@ impl Bridge {
             available: AtomicBool::new(true),
             writer: Mutex::new(BufWriter::new(io::stdout())),
             pending: Mutex::new(HashMap::new()),
+            recording_locks: Mutex::new(HashMap::new()),
         }
     }
 
@@ -278,6 +287,220 @@ fn parse_bridge_response(line: &str) -> Option<(u64, BridgeResponse)> {
     Some((id, BridgeResponse { status, body }))
 }
 
+struct InternalRecordingResponse {
+    status: u16,
+    body: Option<String>,
+    json: bool,
+}
+
+struct InternalRecordingRoute<'a> {
+    workspace: &'a str,
+    recording_id: &'a str,
+    action: &'a str,
+}
+
+fn parse_internal_recording_route(target: &str) -> Option<InternalRecordingRoute<'_>> {
+    let path = target.split('?').next()?;
+    let parts: Vec<&str> = path.split('/').collect();
+    if parts.len() != 7
+        || parts[1] != "internal"
+        || parts[2] != "browser-workflows"
+        || parts[3] != "recordings"
+    {
+        return None;
+    }
+
+    if !is_safe_path_component(parts[4]) || !is_safe_path_component(parts[5]) {
+        return None;
+    }
+
+    Some(InternalRecordingRoute {
+        workspace: parts[4],
+        recording_id: parts[5],
+        action: parts[6],
+    })
+}
+
+fn is_safe_path_component(value: &str) -> bool {
+    !value.is_empty()
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
+}
+
+fn recording_path(workspace: &str, recording_id: &str) -> Result<PathBuf, &'static str> {
+    if !is_safe_path_component(workspace) || !is_safe_path_component(recording_id) {
+        return Err("录制路径参数不正确");
+    }
+
+    let config_dir = std::env::var("COPIS_CONFIG_DIR").map_err(|_| "Copis 配置目录未设置")?;
+    Ok(PathBuf::from(config_dir)
+        .join("agent-workspaces")
+        .join(workspace)
+        .join("browser-recordings")
+        .join(format!("{}.jsonl", recording_id)))
+}
+
+fn recording_lock(bridge: &Bridge, path: &PathBuf) -> Arc<Mutex<()>> {
+    let key = path.to_string_lossy().into_owned();
+    let mut locks = bridge.recording_locks.lock().unwrap();
+    locks
+        .entry(key)
+        .or_insert_with(|| Arc::new(Mutex::new(())))
+        .clone()
+}
+
+fn append_recording_line(
+    bridge: &Bridge,
+    path: &PathBuf,
+    line: &[u8],
+    create: bool,
+) -> Result<(), &'static str> {
+    if line.is_empty()
+        || line.len() > MAX_RECORDING_LINE_BYTES
+        || line.first() != Some(&b'{')
+        || line.last() != Some(&b'}')
+        || line.contains(&b'\n')
+        || line.contains(&b'\r')
+    {
+        return Err("录制 JSONL 行不正确");
+    }
+
+    let lock = recording_lock(bridge, path);
+    let _guard = lock.lock().unwrap();
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|_| "创建录制目录失败")?;
+    }
+
+    let current_len = if create {
+        0
+    } else {
+        fs::metadata(path)
+            .map_err(|_| "打开录制 JSONL 文件失败")?
+            .len()
+    };
+    let next_len = current_len.saturating_add(line.len() as u64).saturating_add(1);
+    if next_len > MAX_RECORDING_FILE_BYTES {
+        return Err("录制 JSONL 过大");
+    }
+
+    let mut file = if create {
+        OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(path)
+            .map_err(|_| "创建录制 JSONL 文件失败")?
+    } else {
+        OpenOptions::new()
+            .append(true)
+            .open(path)
+            .map_err(|_| "打开录制 JSONL 文件失败")?
+    };
+    file.write_all(line).map_err(|_| "写入录制 JSONL 失败")?;
+    file.write_all(b"\n")
+        .map_err(|_| "写入录制 JSONL 换行失败")?;
+    file.flush().map_err(|_| "刷新录制 JSONL 失败")
+}
+
+fn recording_marker(recording_id: &str, kind: &str) -> Vec<u8> {
+    format!(
+        "{{\"kind\":\"{}\",\"recordingId\":\"{}\",\"timestamp\":{}}}",
+        kind,
+        recording_id,
+        unix_timestamp_millis(),
+    )
+    .into_bytes()
+}
+
+fn unix_timestamp_millis() -> u128 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis())
+        .unwrap_or(0)
+}
+
+fn is_internal_token_valid(request: &HttpRequest) -> bool {
+    let Ok(expected) = std::env::var("COPIS_HTTP_API_INTERNAL_TOKEN") else {
+        return false;
+    };
+    !expected.is_empty()
+        && request
+            .headers
+            .get(INTERNAL_TOKEN_HEADER)
+            .map(|received| received == &expected)
+            .unwrap_or(false)
+}
+
+fn handle_internal_recording_request(
+    request: &HttpRequest,
+    bridge: &Bridge,
+) -> Result<InternalRecordingResponse, (u16, &'static str)> {
+    let route =
+        parse_internal_recording_route(&request.target).ok_or((404, "录制 API 路径不存在"))?;
+    let path =
+        recording_path(route.workspace, route.recording_id).map_err(|message| (400, message))?;
+
+    match (request.method.as_str(), route.action) {
+        ("POST", "start") => {
+            let body = if request.body.is_empty() {
+                return Err((400, "录制开始元数据不能为空"));
+            } else {
+                request.body.as_slice()
+            };
+            append_recording_line(bridge, &path, body, true).map_err(|message| (500, message))?;
+            Ok(InternalRecordingResponse {
+                status: 201,
+                body: Some("{\"ok\":true}".to_string()),
+                json: true,
+            })
+        }
+        ("POST", "event") => {
+            append_recording_line(bridge, &path, &request.body, false)
+                .map_err(|message| (500, message))?;
+            Ok(InternalRecordingResponse {
+                status: 204,
+                body: None,
+                json: false,
+            })
+        }
+        ("POST", "finish") => {
+            let marker = recording_marker(route.recording_id, "recording_finished");
+            append_recording_line(bridge, &path, &marker, false)
+                .map_err(|message| (500, message))?;
+            Ok(InternalRecordingResponse {
+                status: 200,
+                body: Some("{\"ok\":true}".to_string()),
+                json: true,
+            })
+        }
+        ("POST", "cancel") => {
+            let marker = recording_marker(route.recording_id, "recording_cancelled");
+            append_recording_line(bridge, &path, &marker, false)
+                .map_err(|message| (500, message))?;
+            Ok(InternalRecordingResponse {
+                status: 200,
+                body: Some("{\"ok\":true}".to_string()),
+                json: true,
+            })
+        }
+        ("GET", "content") => {
+            let lock = recording_lock(bridge, &path);
+            let _guard = lock.lock().unwrap();
+            let metadata = fs::metadata(&path).map_err(|_| (404, "录制 JSONL 不存在"))?;
+            if metadata.len() > MAX_RECORDING_FILE_BYTES {
+                return Err((413, "录制 JSONL 过大"));
+            }
+            let content = fs::read_to_string(&path).map_err(|_| (500, "读取录制 JSONL 失败"))?;
+            Ok(InternalRecordingResponse {
+                status: 200,
+                body: Some(content),
+                json: false,
+            })
+        }
+        _ => Err((405, "录制 API 方法不支持")),
+    }
+}
+
 fn handle_connection(mut stream: TcpStream, bridge: Arc<Bridge>) {
     let request = match read_http_request(&mut stream) {
         Ok(request) => request,
@@ -335,6 +558,42 @@ fn handle_connection(mut stream: TcpStream, bridge: Arc<Bridge>) {
         return;
     }
 
+    if path.starts_with(INTERNAL_RECORDING_PREFIX) {
+        if !is_internal_token_valid(&request) {
+            send_json_response(
+                &mut stream,
+                403,
+                r#"{"error":"内部录制 API 未授权","code":"internal_token_required"}"#,
+                None,
+            );
+        } else {
+            match handle_internal_recording_request(&request, &bridge) {
+                Ok(response) => {
+                    if response.status == 204 {
+                        send_empty_response(&mut stream, response.status, origin);
+                    } else if let Some(body) = response.body {
+                        if response.json {
+                            send_json_response(&mut stream, response.status, &body, origin);
+                        } else {
+                            send_text_response(&mut stream, response.status, &body, origin);
+                        }
+                    } else {
+                        send_empty_response(&mut stream, response.status, origin);
+                    }
+                }
+                Err((status, message)) => {
+                    let body = format!(
+                        r#"{{"error":"{}","code":"browser_recording_error"}}"#,
+                        message
+                    );
+                    send_json_response(&mut stream, status, &body, origin);
+                }
+            }
+        }
+        let _ = stream.shutdown(Shutdown::Both);
+        return;
+    }
+
     match bridge.send_request(&request) {
         Ok(response) => {
             if response.status == 204 {
@@ -370,6 +629,10 @@ fn send_empty_response(stream: &mut TcpStream, status: u16, origin: Option<&str>
     send_response(stream, status, None, origin, false);
 }
 
+fn send_text_response(stream: &mut TcpStream, status: u16, body: &str, origin: Option<&str>) {
+    send_response(stream, status, Some(body), origin, false);
+}
+
 fn send_response(
     stream: &mut TcpStream,
     status: u16,
@@ -394,6 +657,8 @@ fn send_response(
     }
     if json && !body_bytes.is_empty() {
         response.push_str("Content-Type: application/json; charset=utf-8\r\n");
+    } else if !json && !body_bytes.is_empty() {
+        response.push_str("Content-Type: application/x-ndjson; charset=utf-8\r\n");
     }
     response.push_str(&format!(
         "Content-Length: {}\r\nConnection: close\r\n\r\n",
@@ -491,7 +756,10 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::{decode_hex, encode_hex, find_subslice, is_allowed_origin};
+    use super::{
+        append_recording_line, decode_hex, encode_hex, find_subslice, is_allowed_origin,
+        is_safe_path_component, parse_internal_recording_route, recording_marker, Bridge,
+    };
 
     #[test]
     fn hex_round_trip_supports_utf8() {
@@ -516,6 +784,44 @@ mod tests {
             Some(14)
         );
         assert_eq!(find_subslice(b"abc", b"\r\n"), None);
+    }
+
+    #[test]
+    fn parses_only_safe_recording_routes() {
+        let route = parse_internal_recording_route(
+            "/internal/browser-workflows/recordings/workspace-1/recording-1/event?x=1",
+        )
+        .unwrap();
+        assert_eq!(route.workspace, "workspace-1");
+        assert_eq!(route.recording_id, "recording-1");
+        assert_eq!(route.action, "event");
+        assert!(parse_internal_recording_route(
+            "/internal/browser-workflows/recordings/../recording-1/event",
+        )
+        .is_none());
+        assert!(!is_safe_path_component("workspace/escape"));
+    }
+
+    #[test]
+    fn recording_markers_are_single_jsonl_lines() {
+        let marker =
+            String::from_utf8(recording_marker("recording-1", "recording_finished")).unwrap();
+        assert!(marker.ends_with('}'));
+        assert!(!marker.contains('\n'));
+        assert!(marker.contains("recording-1"));
+    }
+
+    #[test]
+    fn appends_valid_jsonl_lines_and_rejects_multiline_payloads() {
+        let path = std::env::temp_dir().join(format!("copis-recording-{}.jsonl", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let bridge = Bridge::new();
+        append_recording_line(&bridge, &path, br#"{"kind":"recording_started"}"#, true).unwrap();
+        append_recording_line(&bridge, &path, br#"{"type":"click"}"#, false).unwrap();
+        assert!(append_recording_line(&bridge, &path, b"{\"type\":\"click\"}\n{}", false).is_err());
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(content.lines().count(), 2);
+        let _ = std::fs::remove_file(path);
     }
 
     #[test]

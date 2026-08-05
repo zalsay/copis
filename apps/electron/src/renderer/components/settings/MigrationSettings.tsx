@@ -2,8 +2,8 @@
  * MigrationSettings - 数据迁移设置页
  *
  * 支持两种模式：
- * - Personal 备份（.proma-backup）：全量导出，含解密 API Key
- * - Share 分发（.proma-share）：自由选择组件，凭据自动剥离
+ * - Personal 备份（.copis-backup）：全量导出，含解密 API Key
+ * - Share 分发（.copis-share）：自由选择组件，凭据自动剥离
  *
  * Share 模式支持多工作区导出：
  * - 默认：导出所有工作区的 Skills + MCP
@@ -27,7 +27,7 @@ import { agentWorkspacesAtom } from '@/atoms/agent-atoms'
 import { migrationImportDialogOpenAtom } from '@/atoms/migration-atoms'
 import { LocalProjectBadge } from '@/components/agent/LocalProjectBadge'
 import { cn } from '@/lib/utils'
-import type { LocalProjectRootStatus } from '@proma/shared'
+import type { LocalProjectRootStatus } from '@copis/shared'
 
 type MigrationMode = 'personal' | 'share'
 type MigrationComponent = 'sessions' | 'skills' | 'mcp' | 'channels' | 'chattools'
@@ -474,7 +474,7 @@ export function MigrationSettings(): React.ReactElement {
       {/* ── 导入区块 ──────────────────────────────── */}
       <SettingsSection
         title="导入备份"
-        description="从备份文件导入数据，支持 .copis-backup 和 .copis-share；也兼容旧版 .proma 文件"
+        description="从备份文件导入数据，支持 .copis-backup 和 .copis-share；也兼容旧版 .proma-backup 和 .proma-share 文件"
       >
         <button
           onClick={() => setMigrationImportDialogOpen(true)}

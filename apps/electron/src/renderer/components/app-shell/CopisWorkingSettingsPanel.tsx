@@ -17,7 +17,7 @@ import {
 import type {
   WorkingLedgerEntry,
   WorkingSettingsSnapshot,
-} from '@proma/shared'
+} from '@copis/shared'
 import { workingAuthStateAtom } from '@/atoms/working-atoms'
 import { tabsAtom, activeTabIdAtom, openTab, TUTORIAL_TAB_ID, TUTORIAL_TAB_TITLE } from '@/atoms/tab-atoms'
 import { CopisWorkingMessageSettingsPanel } from './CopisWorkingMessageSettingsPanel'

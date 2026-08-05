@@ -26,8 +26,8 @@ import type {
   AgentSessionMeta,
   SDKAssistantMessage,
   SDKUserMessage,
-} from '@proma/shared'
-import { FEISHU_IPC_CHANNELS, AGENT_IPC_CHANNELS } from '@proma/shared'
+} from '@copis/shared'
+import { FEISHU_IPC_CHANNELS, AGENT_IPC_CHANNELS } from '@copis/shared'
 import { getDecryptedBotAppSecret } from './feishu-config'
 import { agentEventBus, runAgentHeadless, stopAgent } from './agent-service'
 import { createAgentSession, listAgentSessions, getAgentSessionMeta } from './agent-session-manager'
@@ -343,7 +343,7 @@ class FeishuBridge {
     this.groupInfoCache.clear()
     this.userNameCache.clear()
     // 注意：lastInteractedUserOpenId 不在 stop 中清空——它代表"用户曾经与该 Bot 互动过"的事实，
-    // 重启后仍需用来给桌面 Session 镜像建群。完整重置请删除 ~/.proma/feishu-metadata-{botId}.json。
+    // 重启后仍需用来给桌面 Session 镜像建群。完整重置请删除 ~/.copis/feishu-metadata-{botId}.json。
     this.botOpenId = null
 
     this.updateStatus({ status: 'disconnected', activeBindings: 0 })
@@ -523,10 +523,10 @@ class FeishuBridge {
   }
 
   /**
-   * 为 Proma 桌面端会话准备飞书镜像群。
+   * 为 Copis 桌面端会话准备飞书镜像群。
    *
    * 该群只包含用户与当前 Bot。用户在群里继续发送消息时，会通过
-   * source=session-mirror 的绑定回到同一个 Proma session。
+   * source=session-mirror 的绑定回到同一个 Copis session。
    */
   async ensureSessionMirror(session: AgentSessionMeta): Promise<void> {
     if (!this.client) return
@@ -1084,14 +1084,14 @@ class FeishuBridge {
     }
 
     if (!workspaceId) {
-      await this.sendMessage(chatId, '请先在 Proma 设置中创建项目。')
+      await this.sendMessage(chatId, '请先在 Copis 设置中创建项目。')
       return
     }
 
     // 渠道/模型：Bot 配置 > 应用设置
     const channelId = this.botConfig.defaultChannelId ?? appSettings.agentChannelId
     if (!channelId) {
-      await this.sendMessage(chatId, '请先在 Proma Agent 设置中选择渠道。')
+      await this.sendMessage(chatId, '请先在 Copis Agent 设置中选择渠道。')
       return
     }
 
@@ -1101,7 +1101,7 @@ class FeishuBridge {
       channelId,
       workspaceId,
       undefined,
-      appSettings.agentRuntime ?? 'claude',
+      appSettings.agentRuntime ?? 'pi',
     )
 
     // 绑定
@@ -1507,7 +1507,7 @@ class FeishuBridge {
     if (channels.length === 0) {
       await this.sendMessage(
         chatId,
-        '暂无可用渠道。请先在 Proma 设置中配置并启用渠道（需填入 API Key 且至少启用一个模型）。',
+        '暂无可用渠道。请先在 Copis 设置中配置并启用渠道（需填入 API Key 且至少启用一个模型）。',
       )
       return
     }
@@ -1565,7 +1565,7 @@ class FeishuBridge {
       await this.createNewSession(msgCtx)
       targetBinding = this.chatBindings.get(chatId)
       if (!targetBinding) {
-        await this.sendMessage(chatId, '请先发送一条消息创建会话，或在 Proma 设置中选择 Agent 渠道。')
+        await this.sendMessage(chatId, '请先发送一条消息创建会话，或在 Copis 设置中选择 Agent 渠道。')
         return
       }
     }
@@ -1728,15 +1728,7 @@ class FeishuBridge {
       groupExtraBlock,
     })
 
-    // fire-and-forget，不阻塞事件回调
-    // 群聊时注入动态 MCP 工具（允许 Agent 主动拉取更多群聊历史）
-    let customMcpServers: Record<string, Record<string, unknown>> | undefined
-    if (msgCtx.chatType === 'group') {
-      const mcpServer = await this.createFeishuChatMcpServer(chatId)
-      if (mcpServer) {
-        customMcpServers = { feishu_chat: mcpServer as unknown as Record<string, unknown> }
-      }
-    }
+    // 群聊历史已在上方注入上下文；Pi runtime 不再通过动态 MCP 注册额外工具。
 
     // 渠道/模型解析：binding（per-chat 用户在 IM 里切过的）优先，其次 Bot 配置、应用设置
     const latestSettings = getSettings()
@@ -1750,7 +1742,6 @@ class FeishuBridge {
       modelId,
       workspaceId: binding.workspaceId,
       permissionModeOverride: 'bypassPermissions',
-      ...(customMcpServers && { customMcpServers }),
     }
 
     // 直接 await runAgentHeadless 的 Promise——它会在 orchestrator.sendMessage
@@ -1873,7 +1864,7 @@ class FeishuBridge {
       }
     }
 
-    if (payload.kind === 'proma_event' && payload.event.type === 'title_updated') {
+    if ((payload.kind === 'copis_event' || payload.kind === 'proma_event') && payload.event.type === 'title_updated') {
       this.updateSessionMirrorGroupName(sessionId, payload.event.title)
     }
   }
@@ -2364,67 +2355,6 @@ class FeishuBridge {
       ...lines,
       '--- 历史消息结束 ---',
     ].join('\n')
-  }
-
-  /**
-   * 创建飞书群聊 MCP 服务器（动态工具，仅在群聊 Agent 会话中注入）
-   *
-   * 提供 `fetch_group_chat_history` 工具，让 Agent 可以主动拉取更多群聊历史。
-   */
-  private async createFeishuChatMcpServer(
-    chatId: string,
-  ): Promise<Record<string, unknown> | null> {
-    try {
-      const sdk = await import('@anthropic-ai/claude-agent-sdk')
-      const { z } = await import('zod')
-
-      const server = sdk.createSdkMcpServer({
-        name: 'feishu_chat',
-        version: '1.0.0',
-        tools: [
-          sdk.tool(
-            'fetch_group_chat_history',
-            '获取飞书群聊的历史消息。当你需要了解更多群聊上下文来完成任务时使用此工具。' +
-            '返回指定数量的历史消息，包含发送者、时间和内容。',
-            {
-              limit: z.number().min(1).max(50).optional()
-                .describe('要获取的消息数量（默认 20，最多 50）'),
-              before_timestamp: z.number().optional()
-                .describe('获取此时间戳（毫秒）之前的消息，用于向前翻页'),
-            },
-            async (args) => {
-              const messages = await this.fetchChatHistory(chatId, {
-                pageSize: args.limit,
-                beforeTimestamp: args.before_timestamp,
-              })
-
-              if (messages.length === 0) {
-                return {
-                  content: [{ type: 'text' as const, text: '没有更多历史消息。' }],
-                }
-              }
-
-              const formatted = this.formatChatHistoryContext(messages)
-              const oldestTimestamp = messages[0]?.createTime ?? 0
-
-              return {
-                content: [{
-                  type: 'text' as const,
-                  text: `${formatted}\n\n（如需更早的消息，使用 before_timestamp: ${oldestTimestamp}）`,
-                }],
-              }
-            },
-            { annotations: { readOnlyHint: true } },
-          ),
-        ],
-      })
-
-      console.log('[飞书 Bridge] 已创建群聊 MCP 工具')
-      return server as unknown as Record<string, unknown>
-    } catch (error) {
-      console.warn('[飞书 Bridge] 创建群聊 MCP 工具失败:', redactSensitiveLogValue(error))
-      return null
-    }
   }
 
   /**

@@ -1,4 +1,4 @@
-import type { AgentSendInput, PromaPermissionMode } from '@proma/shared'
+import type { AgentSendInput, CopisPermissionMode } from '@copis/shared'
 
 const PLANNING_DELETION_TOOLS = new Set([
   'mcp__planning__delete_todo',
@@ -27,7 +27,7 @@ export type PlanningDeletionPermissionDecision =
  */
 export function resolvePlanningDeletionPermission(
   toolName: string,
-  permissionMode: PromaPermissionMode,
+  permissionMode: CopisPermissionMode,
   triggeredBy: AgentSendInput['triggeredBy'],
 ): PlanningDeletionPermissionDecision {
   if (!PLANNING_DELETION_TOOLS.has(toolName)) return 'not-planning-deletion'

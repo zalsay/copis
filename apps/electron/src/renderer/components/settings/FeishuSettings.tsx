@@ -56,7 +56,7 @@ import {
   type FeishuBindingTypeFilter,
   type FeishuBindingViewMode,
 } from '@/lib/feishu-bindings'
-import type { AgentSessionMeta, AgentWorkspace, FeishuTestResult, FeishuChatBinding, FeishuBotConfig, FeishuBotBridgeState, FeishuRegisterAppQRCode, FeishuRegisterAppStatus } from '@proma/shared'
+import type { AgentSessionMeta, AgentWorkspace, FeishuTestResult, FeishuChatBinding, FeishuBotConfig, FeishuBotBridgeState, FeishuRegisterAppQRCode, FeishuRegisterAppStatus } from '@copis/shared'
 
 // ===== 常量 =====
 
@@ -210,10 +210,10 @@ const FEISHU_CLI_PROMPT = `请帮我配置飞书 CLI 开发环境，按以下步
 1. 安装飞书 CLI 到全局
 npm install -g @larksuite/cli
 
-2. 将 SKILL 安装到当前项目的 Proma 工作区 Skills 目录。先下载，再按系统提示给出的 Skills 目录将下载内容移动过去；不要使用全局安装，以免在无关项目预置上下文。
+2. 将 SKILL 安装到当前项目的 Copis 工作区 Skills 目录。先下载，再按系统提示给出的 Skills 目录将下载内容移动过去；不要使用全局安装，以免在无关项目预置上下文。
 npx skills add https://github.com/larksuite/cli -y
 
-3. 初始化 CLI 配置（创建一个全新的飞书 CLI 应用，与 Proma 飞书 Bot 互不影响）
+3. 初始化 CLI 配置（创建一个全新的飞书 CLI 应用，与 Copis 飞书 Bot 互不影响）
 lark-cli config init --new
 
 4. 一键申请全部领域的所有权限（文档/表格/日历/任务/邮件/通讯录/会议/审批/OKR/Wiki/多维表格/幻灯片/考勤/项目板等都包含在内）
@@ -240,11 +240,11 @@ function FeishuCliSection(): React.ReactElement {
   return (
     <SettingsSection
       title="配置飞书 CLI"
-      description="飞书官方开源的命令行工具，配置后 Proma Agent 将可以直接读消息、查日历、写文档、建多维表格、发邮件，把任务真正落到飞书里完成。"
+      description="飞书官方开源的命令行工具，配置后 Copis Agent 将可以直接读消息、查日历、写文档、建多维表格、发邮件，把任务真正落到飞书里完成。"
     >
       <SettingsCard divided={false}>
         <div className="px-4 py-4 space-y-2 text-sm text-muted-foreground">
-          <p className="text-xs">复制配置提示词，并前往飞书Bot日常绑定的<strong>项目</strong>，创建新的 Proma Agent 对话并发送即可让 Proma 协助完成配置。</p>
+          <p className="text-xs">复制配置提示词，并前往飞书Bot日常绑定的<strong>项目</strong>，创建新的 Copis Agent 对话并发送即可让 Copis 协助完成配置。</p>
           <button
             type="button"
             className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
@@ -258,9 +258,9 @@ function FeishuCliSection(): React.ReactElement {
             <div className="bg-muted/50 rounded-md p-3 font-mono text-xs space-y-1.5 animate-in fade-in-0 slide-in-from-top-1 duration-200">
               <div><span className="text-foreground/70 font-semibold">步骤 1</span> — 安装飞书 CLI 到全局</div>
               <div className="pl-3 text-foreground/60">npm install -g @larksuite/cli</div>
-              <div className="pt-1"><span className="text-foreground/70 font-semibold">步骤 2</span> — 下载并安装到当前项目的 Proma 工作区 Skills 目录</div>
+              <div className="pt-1"><span className="text-foreground/70 font-semibold">步骤 2</span> — 下载并安装到当前项目的 Copis 工作区 Skills 目录</div>
               <div className="pl-3 text-foreground/60">npx skills add https://github.com/larksuite/cli -y</div>
-              <div className="pt-1"><span className="text-foreground/70 font-semibold">步骤 3</span> — 初始化 CLI（新建独立 CLI 应用，不影响 Proma 飞书 Bot）</div>
+              <div className="pt-1"><span className="text-foreground/70 font-semibold">步骤 3</span> — 初始化 CLI（新建独立 CLI 应用，不影响 Copis 飞书 Bot）</div>
               <div className="pl-3 text-foreground/60">lark-cli config init --new</div>
               <div className="pt-1"><span className="text-foreground/70 font-semibold">步骤 4</span> — 一键申请全部领域权限（文档/表格/日历/任务/邮件/通讯录/会议等）</div>
               <div className="pl-3 text-foreground/60">lark-cli auth login --domain all</div>
@@ -740,7 +740,7 @@ function CliRecommendationCard(): React.ReactElement {
       <div className="flex items-start gap-2">
         <div className="flex-1 text-xs text-foreground/80 leading-relaxed">
           <div className="font-medium text-foreground mb-0.5">想要更完整的飞书生态体验？</div>
-          补全飞书 CLI 后 Proma Agent 还可以直接读写你的文档、查日历、发邮件等。
+          补全飞书 CLI 后 Copis Agent 还可以直接读写你的文档、查日历、发邮件等。
           复制下方提示词到任意项目的新对话发送即可，Agent 会全程引导完成。
         </div>
       </div>
@@ -838,7 +838,7 @@ function RegisterFeishuDialog({ open, onOpenChange, onSuccess }: RegisterFeishuD
             扫码创建飞书 Bot
           </DialogTitle>
           <DialogDescription>
-            飞书后端将自动创建一个 PersonalAgent 应用，扫码完成后 Proma 会自动保存凭证并启动 Bot，整个过程无需手动复制 App ID / Secret。
+            飞书后端将自动创建一个 PersonalAgent 应用，扫码完成后 Copis 会自动保存凭证并启动 Bot，整个过程无需手动复制 App ID / Secret。
           </DialogDescription>
         </DialogHeader>
 

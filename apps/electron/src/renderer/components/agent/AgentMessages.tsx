@@ -22,8 +22,8 @@ import {
 import { ScrollMinimap } from '@/components/ai-elements/scroll-minimap'
 import type { MinimapItem } from '@/components/ai-elements/scroll-minimap'
 import { StickyUserMessage } from '@/components/ai-elements/sticky-user-message'
-import { useSmoothStream } from '@proma/ui'
-import { CopisLogo } from '@/lib/model-logo'
+import { useSmoothStream } from '@copis/ui'
+import { CopisTemplateLogo3x } from '@/lib/model-logo'
 import { userProfileAtom } from '@/atoms/user-profile'
 import { tabMinimapCacheAtom } from '@/atoms/tab-atoms'
 import { ScrollPositionManager } from '@/hooks/useScrollPositionMemory'
@@ -36,8 +36,8 @@ import { ContentBlock } from './ContentBlock'
 import { parseThinkTagsFromText } from './thinking-tag-parser'
 import { AgentHistorySelectionLayer } from './AgentHistorySelectionLayer'
 import { TaskProgressOverlay, type ContextCompactionProgress } from './TaskProgressOverlay'
-import type { AgentEventUsage, RetryAttempt, SDKMessage, SDKSystemMessage } from '@proma/shared'
-import { getSDKCompactStatus } from '@proma/shared'
+import type { AgentEventUsage, RetryAttempt, SDKMessage, SDKSystemMessage } from '@copis/shared'
+import { getSDKCompactStatus } from '@copis/shared'
 import type { AgentStreamState } from '@/atoms/agent-atoms'
 
 function stableStringify(value: unknown): string {
@@ -211,7 +211,7 @@ function EmptyState(): React.ReactElement {
 function AssistantLogo(): React.ReactElement {
   return (
     <img
-      src={CopisLogo}
+      src={CopisTemplateLogo3x}
       alt="Copis Agent"
       className="size-[35px] rounded-[25%] object-cover"
     />
@@ -587,11 +587,11 @@ export function AgentMessages({ sessionId, sessionModelId, messagesLoaded, persi
     const live = liveMessages ?? []
     const stampStableKey = (message: SDKMessage): SDKMessage => {
       const key = getSDKMessageStableKey(message)
-      ;(message as Record<string, unknown>)._promaStableKey = key
+      ;(message as Record<string, unknown>)._copisStableKey = key
       return message
     }
     const keyOf = (message: SDKMessage): string =>
-      (message as Record<string, unknown>)._promaStableKey as string
+      (message as Record<string, unknown>)._copisStableKey as string
 
     const persistedWithKeys = persisted.map(stampStableKey)
     const liveWithKeys = live.map(stampStableKey)

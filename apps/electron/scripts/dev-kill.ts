@@ -74,6 +74,8 @@ function killStaleVite(port: number): void {
   }
 }
 
-kill(isWin ? 'electronmon.exe' : 'electronmon \\.')
-kill(isWin ? 'electron.exe' : 'electron.*dist/main')
+// macOS 的 Electron 主进程命令名是大写 `Electron`，且 electronmon 通过 hook
+// 启动它，不一定包含旧版脚本依赖的 `dist/main` 字样。
+kill(isWin ? 'electronmon.exe' : 'electronmon[[:space:]]*$')
+kill(isWin ? 'electron.exe' : '[Ee]lectron.*electronmon.*/hook')
 if (killVite) killStaleVite(VITE_PORT)

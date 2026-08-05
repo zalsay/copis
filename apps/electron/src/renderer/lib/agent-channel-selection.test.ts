@@ -1,9 +1,9 @@
 import { describe, expect, test } from 'bun:test'
-import { getEnabledClaudeAgentChannelIds } from './agent-channel-selection'
+import { getEnabledAgentChannelIds } from './agent-channel-selection'
 
-describe('getEnabledClaudeAgentChannelIds', () => {
+describe('getEnabledAgentChannelIds', () => {
   test('uses the channel enabled state as the only Claude availability switch', () => {
-    expect(getEnabledClaudeAgentChannelIds([
+    expect(getEnabledAgentChannelIds([
       { id: 'anthropic', provider: 'anthropic', enabled: true },
       { id: 'custom', provider: 'custom', enabled: true },
       { id: 'disabled-kimi', provider: 'kimi-api', enabled: false },

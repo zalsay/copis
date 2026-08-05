@@ -1,8 +1,10 @@
 import { app } from 'electron'
+import { randomBytes } from 'node:crypto'
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { chmodSync, existsSync } from 'node:fs'
 import { createInterface } from 'node:readline'
 import { join, resolve } from 'node:path'
+import { getConfigDir } from './config-paths'
 import {
   handleHttpApiRequest,
   HTTP_API_HOST,
@@ -23,6 +25,7 @@ interface RustBridgeRequest {
 }
 
 let httpApiProcess: ChildProcessWithoutNullStreams | null = null
+let httpApiInternalToken: string | null = null
 let stopping = false
 let responseWriteChain = Promise.resolve()
 
@@ -128,6 +131,14 @@ function dispatchBridgeRequest(child: ChildProcessWithoutNullStreams, request: R
   )
 }
 
+export function getHttpApiInternalToken(): string | null {
+  return httpApiInternalToken
+}
+
+function createHttpApiInternalToken(): string {
+  return randomBytes(32).toString('hex')
+}
+
 export function startHttpApiServer(): void {
   if (httpApiProcess && !httpApiProcess.killed) return
 
@@ -142,9 +153,16 @@ export function startHttpApiServer(): void {
 
   stopping = false
   responseWriteChain = Promise.resolve()
+  const internalToken = createHttpApiInternalToken()
+  const childEnv: NodeJS.ProcessEnv = {
+    ...process.env,
+    COPIS_CONFIG_DIR: getConfigDir(),
+    COPIS_HTTP_API_INTERNAL_TOKEN: internalToken,
+  }
   let child: ChildProcessWithoutNullStreams
   try {
     child = spawn(binaryPath, [], {
+      env: childEnv,
       stdio: ['pipe', 'pipe', 'pipe'],
       detached: false,
       windowsHide: true,
@@ -155,6 +173,7 @@ export function startHttpApiServer(): void {
   }
 
   httpApiProcess = child
+  httpApiInternalToken = internalToken
   const lineReader = createInterface({ input: child.stdout })
   lineReader.on('line', (line) => {
     // 不能对整行调用 trim：空请求体由末尾的制表符表示，trim 会丢掉协议字段。
@@ -175,6 +194,7 @@ export function startHttpApiServer(): void {
   child.once('error', (error) => {
     if (httpApiProcess !== child || stopping) return
     httpApiProcess = null
+    httpApiInternalToken = null
     console.error('[HTTP API] Rust 进程错误:', error.message)
   })
 
@@ -182,6 +202,7 @@ export function startHttpApiServer(): void {
     lineReader.close()
     if (httpApiProcess !== child) return
     httpApiProcess = null
+    httpApiInternalToken = null
     if (!stopping) {
       console.error(`[HTTP API] Rust 进程退出（code=${code ?? 'null'}, signal=${signal ?? 'none'}）`)
     }
@@ -196,6 +217,7 @@ export function stopHttpApiServer(): Promise<void> {
 
   stopping = true
   httpApiProcess = null
+  httpApiInternalToken = null
   return new Promise<void>((resolveStop) => {
     let settled = false
     const finish = (): void => {

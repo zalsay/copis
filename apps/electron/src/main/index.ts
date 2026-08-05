@@ -10,7 +10,7 @@ if (process.platform === 'win32') {
 // Dev 与正式版使用独立的 userData 目录，避免共享 Chromium SingletonLock 导致 dev 启动被静默退出
 // 必须在任何会读取 userData 路径的模块加载之前执行
 if (!app.isPackaged) {
-  app.setPath('userData', join(app.getPath('appData'), '@copis/electron-dev'))
+  app.setPath('userData', process.env.COPIS_ELECTRON_USER_DATA ?? join(app.getPath('appData'), '@copis/electron-dev'))
 }
 
 // 单实例锁：防止重复启动同一个版本（dev/prod 因 userData 已隔离，互不影响）
@@ -92,13 +92,15 @@ import { createTray, destroyTray, getTray } from './tray'
 import { initializeRuntime } from './lib/runtime-init'
 import { seedDefaultSkills } from './lib/config-paths'
 import { ensureDefaultWorkspace, upgradeDefaultSkillsInWorkspaces } from './lib/agent-workspace-manager'
-import { hasActiveAgentSessions, stopAllAgents, killOrphanedClaudeSubprocesses } from './lib/agent-service'
+import { hasActiveAgentSessions, stopAllAgents, cleanupAgentRuntimeResources } from './lib/agent-service'
 import { disposePiMcpConnections } from './lib/adapters/pi-mcp-tools'
 import { markRunningDelegationsAsInterrupted } from './lib/agent-session-manager'
 import { stopAllGenerations } from './lib/chat-service'
 import { configureUpdater, initAutoUpdater, cleanupUpdater } from './lib/updater/auto-updater'
 import { startWorkspaceWatcher, stopWorkspaceWatcher } from './lib/workspace-watcher'
-import { disposeWebTabs, setWebTabHostWindow } from './lib/web-tab-manager'
+import { disposeWebTabs, saveWebTabsSession, setWebTabHostWindow } from './lib/web-tab-manager'
+import { stopAllBrowserWorkflowRecordings } from './lib/browser-workflow-service'
+import { stopAllBrowserWorkflowRuns } from './lib/browser-workflow-runner'
 import { startChatToolsWatcher, stopChatToolsWatcher } from './lib/chat-tools-watcher'
 import { getIsQuitting, setQuitting } from './lib/app-lifecycle'
 import {
@@ -131,7 +133,7 @@ import {
   shouldSuppressVoiceDictationActivate,
 } from './lib/voice-dictation-window'
 import { registerGlobalShortcut, unregisterAllGlobalShortcuts } from './lib/global-shortcut-service'
-import { setPromaVersion } from '@proma/core'
+import { setCopisVersion } from '@copis/core'
 import { TRAY_IPC_CHANNELS } from '../types'
 
 const MIGRATION_IPC_OPEN = 'migration:open-import-file'
@@ -363,9 +365,11 @@ function saveMainWindowState(): void {
   })
 }
 
+const DEV_SERVER_URL = process.env.COPIS_DEV_SERVER_URL ?? 'http://127.0.0.1:5174'
+
 function isDevServerNavigation(url: string): boolean {
   try {
-    return new URL(url).origin === 'http://127.0.0.1:5174'
+    return new URL(url).origin === new URL(DEV_SERVER_URL).origin
   } catch {
     return false
   }
@@ -418,7 +422,7 @@ function createWindow(): void {
   // Load the renderer
   const isDev = !app.isPackaged
   if (isDev) {
-    mainWindow.loadURL('http://127.0.0.1:5174')
+    mainWindow.loadURL(DEV_SERVER_URL)
     mainWindow.webContents.openDevTools()
   } else {
     mainWindow.loadFile(join(__dirname, 'renderer', 'index.html'))
@@ -501,6 +505,8 @@ function createWindow(): void {
   }
 
   mainWindow.on('closed', () => {
+    stopAllBrowserWorkflowRecordings()
+    stopAllBrowserWorkflowRuns()
     disposeWebTabs()
     mainWindow = null
   })
@@ -535,8 +541,8 @@ async function bootstrap(): Promise<void> {
   // HTTP API 不依赖运行时检测，提前启动，确保浏览器端可以尽快连接。
   safeRun('startHttpApiServer', startHttpApiServer)
 
-  // 初始化兼容层版本号（供复用的 Pi/Proma 运行时使用）
-  setPromaVersion(app.getVersion())
+  // 初始化兼容层版本号（供复用的 Pi/Copis 运行时使用）
+  setCopisVersion(app.getVersion())
 
   // 注册自定义协议 copis-file:// 用于内联预览本地文件。
   // 协议只接受主进程签发的 opaque token，不解析 renderer 提供的绝对路径。
@@ -647,7 +653,7 @@ async function bootstrap(): Promise<void> {
   )
   safeRun('registerGlobalShortcut:voice-dictation', () =>
     registerGlobalShortcut('voice-dictation', () => {
-      toggleVoiceDictationWindow({ targetIsProma: mainWindow?.isFocused() === true })
+      toggleVoiceDictationWindow({ targetIsCopis: mainWindow?.isFocused() === true })
     }),
   )
 
@@ -735,6 +741,10 @@ app.on('window-all-closed', () => {
 app.on('before-quit', () => {
   // 标记正在退出，让 close 事件不再阻止关闭
   setQuitting()
+  // 先保存网页页签恢复状态，再释放原生 WebContentsView。
+  saveWebTabsSession()
+  stopAllBrowserWorkflowRecordings()
+  stopAllBrowserWorkflowRuns()
   disposeWebTabs()
 
   // 关闭本地 HTTP API，避免开发重启时残留端口占用。
@@ -745,9 +755,8 @@ app.on('before-quit', () => {
   // 中止所有活跃的 Agent 和 Chat 子进程
   stopAllAgents()
   stopAllGenerations()
-  // 最后兜底：扫描并强杀所有孤儿 claude-agent-sdk 子进程（Issue #357）
-  // 针对 pidMap 未覆盖、dispose 漏杀等极端场景，确保不遗留残留进程
-  killOrphanedClaudeSubprocesses()
+  // 释放 Pi runtime 资源
+  cleanupAgentRuntimeResources()
   // 清理更新器定时器
   cleanupUpdater()
   // 停止工作区文件监听

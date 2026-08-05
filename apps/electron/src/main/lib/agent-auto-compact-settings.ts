@@ -1,4 +1,4 @@
-export function removePromaAutoCompactSettings(settings: Record<string, unknown>): boolean {
+export function removeCopisAutoCompactSettings(settings: Record<string, unknown>): boolean {
   let changed = false
 
   if ('autoCompactWindow' in settings) {

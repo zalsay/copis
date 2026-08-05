@@ -1,10 +1,9 @@
-import { isAgentCompatibleProvider, type Channel } from '@proma/shared'
+import { isAgentCompatibleProvider, type Channel } from '@copis/shared'
 
 /**
- * 没有独立渠道开关时，Claude runtime 的白名单完全由「渠道已启用 + 协议兼容」派生。
- * Pi runtime 不读取该白名单。
+ * Pi runtime 可用渠道由「渠道已启用 + 协议兼容」派生。
  */
-export function getEnabledClaudeAgentChannelIds(
+export function getEnabledAgentChannelIds(
   channels: readonly Pick<Channel, 'id' | 'enabled' | 'provider'>[],
 ): string[] {
   return channels

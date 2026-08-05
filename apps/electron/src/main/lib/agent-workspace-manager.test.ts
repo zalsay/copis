@@ -10,7 +10,7 @@ let manager: AgentWorkspaceManager
 let configPaths: ConfigPathsModule
 let tempHome: string
 const originalHome = process.env.HOME
-const originalPromaDev = process.env.PROMA_DEV
+const originalCopisDev = process.env.COPIS_DEV
 
 mock.module('electron', () => ({
   app: {
@@ -32,16 +32,16 @@ mock.module('node:os', () => ({
 }))
 
 beforeAll(async () => {
-  tempHome = mkdtempSync(join(os.tmpdir(), 'proma-agent-workspace-manager-'))
+  tempHome = mkdtempSync(join(os.tmpdir(), 'copis-agent-workspace-manager-'))
   process.env.HOME = tempHome
-  process.env.PROMA_DEV = '0'
+  process.env.COPIS_DEV = '0'
   configPaths = await import('./config-paths')
   manager = await import('./agent-workspace-manager')
 })
 
 beforeEach(() => {
-  rmSync(join(tempHome, '.proma'), { recursive: true, force: true })
-  mkdirSync(join(tempHome, '.proma'), { recursive: true })
+  rmSync(join(tempHome, '.copis'), { recursive: true, force: true })
+  mkdirSync(join(tempHome, '.copis'), { recursive: true })
 })
 
 afterAll(() => {
@@ -50,10 +50,10 @@ afterAll(() => {
   } else {
     process.env.HOME = originalHome
   }
-  if (originalPromaDev === undefined) {
-    delete process.env.PROMA_DEV
+  if (originalCopisDev === undefined) {
+    delete process.env.COPIS_DEV
   } else {
-    process.env.PROMA_DEV = originalPromaDev
+    process.env.COPIS_DEV = originalCopisDev
   }
   rmSync(tempHome, { recursive: true, force: true })
 })

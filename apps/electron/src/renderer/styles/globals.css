@@ -516,9 +516,9 @@
 
 @layer base {
   /* Electron 主窗口不应成为滚动容器；所有滚动必须停留在各自面板内。 */
-  html.proma-main-window,
-  html.proma-main-window body,
-  html.proma-main-window #root {
+  html.copis-main-window,
+  html.copis-main-window body,
+  html.copis-main-window #root {
     width: 100%;
     height: 100%;
     overflow: hidden;
@@ -1576,23 +1576,6 @@
     inset 0 6px 0 hsl(100 42% 58% / 0.10),
     inset 0 -6px 0 hsl(100 42% 58% / 0.10),
     0 0 8px hsl(100 42% 58% / 0.25) !important;
-}
-
-/* ===== 计划模式：输入框定位上下文 ===== */
-.plan-mode-border {
-  position: relative;
-}
-/* 深色主题 plan 虚线颜色加亮 */
-.theme-ocean-dark .plan-mode-border .plan-mode-stroke {
-  stroke: hsl(210 30% 50% / 0.7);
-}
-.theme-forest-dark .plan-mode-border .plan-mode-stroke {
-  stroke: hsl(145 25% 45% / 0.7);
-}
-
-/* CRT 终端：Plan Mode 虚线 */
-.theme-terminal-dark .plan-mode-border .plan-mode-stroke {
-  stroke: hsl(var(--ring) / 0.7);
 }
 
 /* ===== prose inline code：移除 Tailwind Typography 默认的前后反引号伪元素 ===== */

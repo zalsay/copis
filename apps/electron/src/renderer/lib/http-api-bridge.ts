@@ -213,11 +213,36 @@ function createWebTabsFallback(): Record<string, unknown> {
     close: () => Promise.resolve(emptySnapshot()),
     navigate: () => Promise.reject(new Error('浏览器模式不支持内嵌 Chromium 页签')),
     updateBounds: () => Promise.resolve(),
+    bookmarksOpen: () => Promise.resolve(),
+    bookmarksClose: () => Promise.resolve(),
+    bookmarksResize: () => Promise.resolve(),
     goBack: () => Promise.resolve(emptySnapshot()),
     goForward: () => Promise.resolve(emptySnapshot()),
     reload: () => Promise.resolve(emptySnapshot()),
-    sendCdpCommand: () => Promise.reject(new Error('浏览器模式不支持 CDP')),
+    bookmarksList: () => Promise.resolve({ groups: [], bookmarks: [] }),
+    bookmarksSave: () => Promise.reject(new Error('浏览器模式不支持网页收藏')),
+    bookmarksRemove: () => Promise.reject(new Error('浏览器模式不支持网页收藏')),
+    bookmarksGroupCreate: () => Promise.reject(new Error('浏览器模式不支持网页收藏分组')),
+    bookmarksGroupRename: () => Promise.reject(new Error('浏览器模式不支持网页收藏分组')),
+    bookmarksGroupRemove: () => Promise.reject(new Error('浏览器模式不支持网页收藏分组')),
     onChanged: (_callback: unknown) => () => {},
+  }
+}
+
+function createBrowserWorkflowFallback(): Record<string, unknown> {
+  const unsupported = (): Promise<never> => Promise.reject(new Error('浏览器模式不支持 Browser Workflow'))
+  return {
+    bindContext: unsupported,
+    unbindContext: () => Promise.resolve(),
+    getStatus: () => Promise.resolve({ state: 'idle' }),
+    startRecording: unsupported,
+    stopRecording: unsupported,
+    cancelRecording: () => Promise.resolve(),
+    getDraft: () => Promise.resolve(undefined),
+    approveDraft: unsupported,
+    stopRun: unsupported,
+    continueRun: unsupported,
+    onStatusChanged: (_callback: unknown) => () => {},
   }
 }
 
@@ -225,6 +250,7 @@ function createHttpApiBridge(): Window['electronAPI'] {
   const methods = createHttpMethods()
   const agentIsland = createAgentIslandFallback()
   const webTabs = createWebTabsFallback()
+  const browserWorkflow = createBrowserWorkflowFallback()
 
   const bridge = new Proxy<Record<string, unknown>>({}, {
     get: (_target, property: string | symbol) => {
@@ -232,6 +258,7 @@ function createHttpApiBridge(): Window['electronAPI'] {
       if (property === 'updater') return undefined
       if (property === 'agentIsland') return agentIsland
       if (property === 'webTabs') return webTabs
+      if (property === 'browserWorkflow') return browserWorkflow
       if (property === 'updateSettingsSync') return () => false
       if (property === 'saveScratchPadSync') return () => true
       if (property === 'loadScratchPad') return () => Promise.resolve('')

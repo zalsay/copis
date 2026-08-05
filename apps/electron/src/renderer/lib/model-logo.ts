@@ -109,11 +109,14 @@ import MiniMaxLogo from '@/assets/models/minimax.png'
 // Xiaomi / MiMo
 import XiaomiLogo from '@/assets/models/xiaomi.png'
 
-// Proma
-import PromaLogo from '@/assets/models/proma.png'
+// Copis
 import CopisLogo from '@/assets/models/copis.png'
+// 登录与桌面品牌使用裁切后的新 Logo。
+import CopisAppLogo from '../../../resources/icon.png'
 // Composer 与网页首页页签使用的 macOS Template Logo。
-import CopisTemplateLogo from '../../../resources/proma-logos/iconTemplate@2x.png'
+import CopisTemplateLogo from '../../../resources/copis-logos/iconTemplate@2x.png'
+// Agent 消息气泡使用 3x 资源，保证头像在高分辨率界面中清晰。
+import CopisTemplateLogo3x from '../../../resources/copis-logos/iconTemplate@3x.png'
 
 // Cohere
 import CohereLogo from '@/assets/models/cohere.png'
@@ -124,7 +127,7 @@ import EmbeddingLogo from '@/assets/models/embedding.png'
 
 // ===== 供应商类型 =====
 
-import type { ProviderType } from '@proma/shared'
+import type { ProviderType } from '@copis/shared'
 
 // ===== 正则匹配映射 =====
 
@@ -321,7 +324,7 @@ export function getProviderLogo(provider: ProviderType): string {
  * 服务（常以 /anthropic 结尾）不应被误判为 Claude（见 #659）。
  */
 const URL_LOGO_MAP: Array<[RegExp, string]> = [
-  [/proma\.cool/i, PromaLogo],
+  [/copis\.cool|proma\.cool/i, CopisLogo],
   [/moonshot\.cn|kimi/i, KimiLogo],
   [/bigmodel\.cn|zhipuai/i, ZhipuLogo],
   [/minimax/i, MiniMaxLogo],
@@ -375,7 +378,7 @@ export function getChannelLogo(channel: { provider: ProviderType; baseUrl: strin
  * 优先返回别名（name !== id），未找到则返回原始 modelId。
  * 用于将 SDK 返回的 model ID 转为用户友好的显示名称。
  */
-export function resolveModelDisplayName(modelId: string, channels: import('@proma/shared').Channel[]): string {
+export function resolveModelDisplayName(modelId: string, channels: import('@copis/shared').Channel[]): string {
   for (const channel of channels) {
     for (const model of channel.models) {
       if (model.id === modelId && model.name && model.name !== model.id) {
@@ -389,7 +392,7 @@ export function resolveModelDisplayName(modelId: string, channels: import('@prom
 /**
  * 根据模型 ID 在渠道列表中查找供应商类型
  */
-export function resolveModelProvider(modelId: string, channels: import('@proma/shared').Channel[]): ProviderType | undefined {
+export function resolveModelProvider(modelId: string, channels: import('@copis/shared').Channel[]): ProviderType | undefined {
   for (const channel of channels) {
     for (const model of channel.models) {
       if (model.id === modelId) {
@@ -401,4 +404,4 @@ export function resolveModelProvider(modelId: string, channels: import('@proma/s
 }
 
 /** 默认模型图标 */
-export { CopisLogo, CopisTemplateLogo, DefaultLogo, PromaLogo }
+export { CopisAppLogo, CopisLogo, CopisTemplateLogo, CopisTemplateLogo3x, DefaultLogo }

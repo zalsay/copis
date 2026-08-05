@@ -1,8 +1,8 @@
 {
-  "name": "@proma/core",
-  "version": "0.2.15",
+  "name": "@copis/core",
+  "version": "0.2.16",
   "license": "AGPL-3.0-only",
-  "description": "proma core types,storage and core logic with agents",
+  "description": "Copis core types, storage and core logic with agents",
   "type": "module",
   "main": "./src/index.ts",
   "types": "./src/index.ts",
@@ -14,12 +14,11 @@
     "./highlight": "./src/highlight/index.ts"
   },
   "dependencies": {
-    "@proma/shared": "workspace:*",
+    "@copis/shared": "workspace:*",
     "highlight.js": "^11.11.1",
     "shiki": "^3.22.0"
   },
   "peerDependencies": {
-    "@anthropic-ai/claude-agent-sdk": ">=0.2.123",
     "@anthropic-ai/sdk": ">=0.70.0",
     "@modelcontextprotocol/sdk": ">=1.0.0"
   },

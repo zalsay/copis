@@ -86,7 +86,7 @@ describe('Working 事件适配', () => {
 
     const legacy = adaptWorkingStreamEvent({
       sessionId: 'session-1',
-      payload: { kind: 'proma_event', event: { type: 'model_resolved', model: 'model-1' } },
+      payload: { kind: 'copis_event', event: { type: 'model_resolved', model: 'model-1' } },
       event: { type: 'tool_start', toolName: 'Bash', toolUseId: 'bash-1', input: { command: 'pwd' } },
     })
     expect(legacy).toEqual([{
@@ -96,5 +96,15 @@ describe('Working 事件适配', () => {
       toolName: 'Bash',
       input: { command: 'pwd' },
     }])
+  })
+
+  test('Given 旧版 proma_event payload When 适配 Working 事件 Then 保留运行恢复语义', () => {
+    const events = adaptWorkingStreamEvent({
+      sessionId: 'session-1',
+      payload: { kind: 'proma_event', event: { type: 'run_resumed', sessionId: 'session-1' } },
+    })
+
+    expect(events).toHaveLength(1)
+    expect(events[0]).toMatchObject({ type: 'run_started', sessionId: 'session-1' })
   })
 })

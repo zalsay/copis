@@ -14,14 +14,14 @@ This file provides guidance to Codex (Codex.ai/code) when working with code in t
 
 ## 项目概述
 
-Proma 是一个集成通用 AI Agent 的下一代人工智能软件，采用 Electron 桌面应用架构。
+Copis 是一个集成通用 AI Agent 的下一代人工智能软件，采用 Electron 桌面应用架构。
 
 ## Monorepo 结构
 
 Bun workspace monorepo：
 
 ```
-proma-v2/
+copis-v2/
 ├── packages/
 │   ├── shared/     # 共享类型、IPC 通道常量、配置、工具函数 (v0.1.20)
 │   ├── core/       # AI Provider 适配器、代码高亮服务 (v0.2.9)
@@ -34,29 +34,29 @@ proma-v2/
             └── renderer/   # React UI (Vite + Tailwind + Radix UI)
 ```
 
-**包命名规范**：`@proma/*` 作用域（`@proma/core`、`@proma/shared`、`@proma/ui`、`@proma/electron`）
+**包命名规范**：`@copis/*` 作用域（`@copis/core`、`@copis/shared`、`@copis/ui`、`@copis/electron`）
 
 **依赖管理**：package.json 中使用 `workspace:*` 引用内部包
 
 ### 包职责详解
 
-#### @proma/shared (v0.1.20)
+#### @copis/shared (v0.1.20)
 - **导出模块**：`./types`、`./config`、`./utils`、`./constants/permission-rules`
 - **关键类型**：`AgentMessage`、`ChatMessage`、`Channel`、`PermissionRequest`、`FeishuConfig`
 - **依赖**：无运行时依赖（仅 TypeScript）
 
-#### @proma/core (v0.2.9)
+#### @copis/core (v0.2.9)
 - **导出模块**：`./providers`、`./highlight`、`./types`、`./utils`
 - **关键功能**：Provider 适配器注册表、代码高亮（Shiki）
-- **依赖**：`@proma/shared`、`shiki`
+- **依赖**：`@copis/shared`、`shiki`
 - **Peer 依赖**：`@anthropic-ai/Codex-agent-sdk`、`@anthropic-ai/sdk`、`@modelcontextprotocol/sdk`
 
-#### @proma/ui (v0.1.6)
+#### @copis/ui (v0.1.6)
 - **关键组件**：共享 React UI 组件库
-- **依赖**：`@proma/core`、`beautiful-mermaid`、`mermaid`、`shiki`
+- **依赖**：`@copis/core`、`beautiful-mermaid`、`mermaid`、`shiki`
 - **Peer 依赖**：`react@^18.3.0`、`react-dom@^18.3.0`
 
-#### @proma/electron (v0.10.7)
+#### @copis/electron (v0.10.7)
 - **职责**：Electron 桌面应用主体，集成所有包
 - **关键依赖**：
   - `@anthropic-ai/Codex-agent-sdk@0.2.120` - Agent SDK
@@ -144,7 +144,7 @@ bun run generate:icons    # 生成应用图标
 
 类型定义 → 主进程处理 → Preload 桥接 → 渲染进程调用：
 
-1. **类型 & 常量**：`@proma/shared` 定义 IPC 通道名称常量和请求/响应类型
+1. **类型 & 常量**：`@copis/shared` 定义 IPC 通道名称常量和请求/响应类型
 2. **主进程处理**：`main/ipc.ts`（57KB）注册 `ipcMain.handle()` 处理器，调用 `main/lib/` 服务
 3. **Preload 桥接**：`preload/index.ts` 通过 `contextBridge.exposeInMainWorld` 暴露类型安全的 API
 4. **渲染进程**：通过 `window.electronAPI.*` 调用，Jotai atoms 中封装调用逻辑
@@ -202,7 +202,7 @@ bun run generate:icons    # 生成应用图标
 | 服务 | 职责 |
 |------|------|
 | `runtime-init.ts` | 运行时初始化：Shell 环境、Bun、Git 检测（`bun-finder.ts`、`git-detector.ts`、`shell-env.ts`） |
-| `config-paths.ts` | 配置路径管理：`~/.proma/` 目录结构 |
+| `config-paths.ts` | 配置路径管理：`~/.copis/` 目录结构 |
 | `user-profile-service.ts` | 用户档案持久化 |
 | `settings-service.ts` | 应用设置持久化（主题等） |
 | `updater/` | 自动更新：Electron Updater 集成 |
@@ -255,6 +255,7 @@ bun run generate:icons    # 生成应用图标
 - **`settings/`**：设置面板 — GeneralSettings（用户档案）、AppearanceSettings（主题）、ChannelSettings（渠道管理）、ChannelForm（Provider 配置）、AgentSettings（Agent 渠道/工作区/MCP）、McpServerForm（MCP 服务器配置）、AboutSettings（版本/更新）、FeishuSettings（飞书集成）；含 `primitives/` 可复用表单组件
 - **`file-browser/`**：文件浏览器 — FileBrowser（会话文件与项目根目录文件树浏览）
 - **`ai-elements/`**：AI 展示组件 — Markdown 渲染、代码块、Mermaid 图、推理折叠、上下文分割线、富文本输入
+- **`web-browser/`**：内嵌 Chromium 网页页签、浏览器工具栏、网页收藏夹与独立收藏夹浮层窗口
 - **`ui/`**：Radix UI 组件（现代化设计，CSS 变量主题）
 
 ### 全局 Hooks（`renderer/hooks/`）
@@ -273,10 +274,52 @@ bun run generate:icons    # 生成应用图标
 | `AgentListenersInitializer` | 挂载 `useGlobalAgentListeners`，全局 Agent IPC 监听 |
 | `UpdaterInitializer` | 订阅主进程推送的自动更新状态变化事件 |
 
-### 本地文件存储（`~/.proma/`）
+### 原生网页页签与浮层窗口（必须遵守）
+
+`main/lib/web-tab-manager.ts` 使用原生 `WebContentsView` 承载网页。原生子视图位于主渲染进程的 DOM 之上，CSS `z-index` 无法让普通 React/Radix 浮层覆盖网页；收藏夹因此使用以主窗口为 `parent` 的独立无边框 `BrowserWindow`，由 `WebBookmarksWindowApp` 单独渲染。
+
+**实现约束：**
+
+- 需要覆盖网页内容的菜单、抽屉或弹层，不能只挂在主窗口 DOM 中；应使用具有主窗口 `parent` 的原生子窗口（或同层级的原生 View），并保留失焦关闭和随主窗口移动/缩放的生命周期。不要默认使用全局 `alwaysOnTop`，避免浮层覆盖其他应用。
+- 网页工具栏中的刷新、星标“收藏当前页”和列表“打开收藏夹”三个按钮不得挂载 hover Tooltip，也不显示 hover 背景或颜色变化；星标未收藏时保存当前网页，已收藏时直接取消收藏；列表按钮只负责打开原生收藏夹窗口。主窗口模式的 `WebBookmarksPopover` 必须保持关闭，禁止把收藏内容 Popover 重新挂回网页宿主。
+- 独立窗口是新的 React 根节点，不会继承 `App.tsx` 中的 Context Provider。使用 Radix Tooltip 的独立入口必须显式包裹 `TooltipProvider`；`WebBookmarksWindowApp` 不得移除此 Provider，否则会抛出 `Tooltip must be used within TooltipProvider` 并留下空白窗口。新增 Dialog、Toast、主题等能力时也必须逐项检查其 Provider/Initializer。
+- `PopoverContent` 带有 `zoom-in-95` 入场 transform。透明窗口自适应内容时，禁止用 `getBoundingClientRect().width/height` 驱动窗口尺寸，否则首帧会把 `384px` 误测为约 `365px`，动画结束后内容被裁切。应使用不受 transform 影响的 `offsetWidth/offsetHeight` 或 `ResizeObserverEntry.borderBoxSize`，主进程使用 `setContentBounds()` 同步内容区尺寸。
+- 独立 Popover 的定位锚点必须保持零尺寸；`1px` 锚点会让面板从 `y=1` 开始并裁掉底边。触发按钮的屏幕位置仍可使用 `getBoundingClientRect()`，上述限制仅针对浮层内容宽高。
+- 收藏夹独立窗口的 Popover 入场和退出动画使用 `duration-100` 并显式设置 `animationDuration: 100ms`，避免原生窗口显示与缩放/淡入动画叠加造成迟滞；不要通过修改全局 Popover 动画时长来解决。
+- 收藏夹管理内容使用树形 UI：根节点为“全部收藏”，一级节点为现有平级分组和“未分组”，网页收藏作为分组子节点；展开状态只保存在渲染进程，持久化仍使用 `WebBookmark.groupId`，不得为了展示树形结构擅自改变存储模型。分组的重命名、删除和收藏移动操作必须从对应树节点继续可用。
+- 原生网页页签的 `loadURL`、导航和 `did-fail-load` 回调可能在窗口/视图销毁后到达；所有异步状态刷新必须先检查 `record`、`view.webContents` 和 `isDestroyed()`，不能让释放竞态变成 `UnhandledPromiseRejection`。
+
+**BDD 回归场景：**
+
+```text
+Given 顶部已打开并加载一个 HTTP(S) 网页页签
+When 点击浏览器工具栏中的星标“收藏当前页”按钮
+Then 未收藏时保存当前网页，已收藏时取消当前网页收藏，且不会在主窗口打开收藏内容抽屉
+
+Given 顶部已打开并加载一个 HTTP(S) 网页页签
+When 点击工具栏中的列表“打开收藏夹”按钮
+Then 收藏夹完整显示在网页上方，内容不为空且可交互
+And 独立窗口的 parent 是主窗口，失焦后正常关闭
+And 控制台没有 Tooltip Provider 或 React 挂载错误
+And 动画结束后 panel 的 right/bottom 不超过 window.innerWidth/innerHeight
+```
+
+修改该链路后至少执行：
+
+```bash
+bun run typecheck
+bun run --filter='@copis/electron' build:main
+bun run --filter='@copis/electron' build:renderer
+bun test apps/electron/src/main/lib/web-bookmark-service.test.ts
+bun test apps/electron/src/main/lib/web-tab-session-service.test.ts
+```
+
+两个网页测试文件都会 mock `./config-paths`，必须分两个 Bun 进程运行，避免 module mock 互相覆盖产生假失败。最后还要在 Electron 实际窗口中打开普通网页并做一次可视化验证，不能只验证 `about:blank` 或主渲染进程 DOM。
+
+### 本地文件存储（`~/.copis/`）
 
 ```
-~/.proma/
+~/.copis/
 ├── channels.json           # 渠道配置（API Key 经 safeStorage 加密）
 ├── conversations.json      # 对话索引（元数据，轻量）
 ├── conversations/          # 消息存储
@@ -287,7 +330,7 @@ bun run generate:icons    # 生成应用图标
 ├── agent-workspaces/       # Agent 工作区目录
 │   └── {workspace-slug}/
 │       ├── {session-id}/   # 会话工作目录
-│       ├── workspace-files/# 仅空白项目使用的 Proma 托管项目根
+│       ├── workspace-files/# 仅空白项目使用的 Copis 托管项目根
 │       ├── mcp.json        # MCP Server 配置
 │       └── skills/         # Skills 配置目录
 ├── attachments/            # 附件文件
@@ -326,7 +369,7 @@ bun run generate:icons    # 生成应用图标
     - node_modules/@anthropic-ai/Codex-agent-sdk-darwin-arm64/**/*
     - node_modules/@anthropic-ai/Codex-agent-sdk-darwin-x64/**/*
     - node_modules/@anthropic-ai/Codex-agent-sdk-win32-x64/**/*
-    - "!node_modules/@proma/**"
+    - "!node_modules/@copis/**"
   ```
 - SDK 主包和同级平台子包会被复制到 `app/node_modules/@anthropic-ai/`，Node.js 的模块解析能从 `app/dist/main.cjs` 找到
 - `agent-orchestrator.ts` 中 `resolveSDKCliPath()` 解析到 SDK 主包入口后，沿 `..` 到 `@anthropic-ai/` 同级目录，再拼 `Codex-agent-sdk-${platform}-${arch}/{Codex|Codex.exe}` 得到 binary 路径
@@ -379,7 +422,7 @@ bun run generate:icons    # 生成应用图标
 
 修改任何 `default-skills/<skill>/` 内容时，**必须同步递增该 Skill `SKILL.md` frontmatter 的 `version` 字段**（patch +1）。
 
-**为什么**：`seedDefaultSkills()` 与 `upgradeDefaultSkillsInWorkspaces()` 通过 semver 比较决定是否将 bundle 中的 Skill 同步到老用户的 `~/.proma/default-skills/` 与各工作区。**version 不变 = 老用户拿不到新内容**。
+**为什么**：`seedDefaultSkills()` 与 `upgradeDefaultSkillsInWorkspaces()` 通过 semver 比较决定是否将 bundle 中的 Skill 同步到老用户的 `~/.copis/default-skills/` 与各工作区。**version 不变 = 老用户拿不到新内容**。
 
 **早期实现曾用"无条件 cpSync"绕开这个约束**，但每次启动同步 4MB+ 文件会阻塞主进程导致启动卡顿，已恢复为 semver 比较（见 `config-paths.ts:seedDefaultSkills`、`agent-workspace-manager.ts:upgradeDefaultSkillsInWorkspaces`）。
 
@@ -428,7 +471,7 @@ React UI 更新
 ### 关键设计
 
 - **SDK 调用**：`sdk.query({ prompt, options: { apiKey, model, permissionMode, cwd, abortController } })`
-- **事件转换**：`convertSDKMessage()`（`@proma/shared`）将 SDK 原始消息转为统一的 `AgentEvent` 类型
+- **事件转换**：`convertSDKMessage()`（`@copis/shared`）将 SDK 原始消息转为统一的 `AgentEvent` 类型
 - **工具匹配**：`packages/shared/src/agent/tool-matching.ts` — 无状态 `ToolIndex` + `extractToolStarts` / `extractToolResults` 解析工具调用
 - **状态管理**：`applyAgentEvent()` 纯函数更新 `AgentStreamState`，支持流式增量更新
 - **全局 IPC 监听**：`useGlobalAgentListeners`（`renderer/hooks/`）在 `main.tsx` 顶层挂载，通过 `useStore()` 直接操作 atoms，永不销毁。确保页面切换（如设置页）时流式输出、权限请求不丢失
@@ -455,9 +498,9 @@ React UI 更新
   - `options.env` 回退为"替换"
   - **SDK 包结构重构**：删除 `cli.js`，改为平台 native binary（通过 `@anthropic-ai/Codex-agent-sdk-{platform}-{arch}` optionalDependency 分发），ripgrep 编译进 binary
   - 详见上方"打包配置注意事项"段落
-- `0.2.120`: `query()` 省略 `settingSources` 时默认加载所有来源（Proma 已显式传 `['user', 'project']`，不受影响）
+- `0.2.120`: `query()` 省略 `settingSources` 时默认加载所有来源（Copis 已显式传 `['user', 'project']`，不受影响）
 
-### 共享类型（`@proma/shared`）
+### 共享类型（`@copis/shared`）
 
 - `AgentEvent`：Agent 事件（text / tool_start / tool_result / done / error）
 - `AgentSessionMeta`：会话元数据（id / title / channelId / workspaceId）
@@ -473,9 +516,9 @@ React UI 更新
 - **会话管理**：收件箱/归档工作流
 - **权限模式**：safe / ask / allow-all
 - **Agent SDK**：@anthropic-ai/Codex-agent-sdk（[v1 文档](https://platform.Codex.com/docs/en/agent-sdk/typescript)、[v2 文档](https://platform.Codex.com/docs/en/agent-sdk/typescript-v2-preview)）
-- **MCP 集成**：Model Context Protocol 用于外部数据源
+- **MCP 集成**：Model Context Protocol 用于外部
 - **凭证存储**：AES-256-GCM 加密
-- **配置位置**：`~/.proma/`（类似 `~/.craft-agent/`）
+- **配置位置**：`~/.copis/`（类似 `~/.craft-agent/`）
 
 ## 核心特性
 
@@ -500,3 +543,13 @@ React UI 更新
 - **文件监听**：项目根目录、会话文件、附加目录、MCP 配置与 Chat 工具实时监控
 - **事件流处理**：SDK 消息流式转换与累积
 - **错误映射**：SDK 错误统一转换为应用错误
+
+### Browser Workflow 录制边界
+
+- Browser Workflow 只支持 Pi Agent；CDP 只由 Electron 主进程内部使用，Renderer、Preload、HTTP bridge 和 MCP 不暴露任意 CDP。
+- 页面操作由主进程完成 nonce、Origin、URL 和 `event.isTrusted` 校验，并在进入 Rust API 前移除普通输入字面值和敏感值。
+- Rust 本地 HTTP API 是录制操作 JSONL 的文件事实源：`~/.copis(-dev)/agent-workspaces/{workspace}/browser-recordings/{recordingId}.jsonl`。Electron 通过内部 token 调用 start/event/finish/cancel/content 端点，事件按链路串行追加。
+- 停止录制后，Pi 工具 `BrowserWorkflowRecordingGet` 将脱敏 JSONL 标记为 untrusted browser data 提供给 Agent；Agent 通过 `BrowserWorkflowDraft` 总结步骤、变量、Origin 和人工检查点，主进程重新校验后才允许用户批准保存。
+- Renderer 的停止操作只结束采集并触发同一 Pi session 读取 JSONL，不直接接收或编译原始录制内容。
+- `browserWorkflowEnabled` 默认关闭；开发验证时显式启用后，Browser Agent 通过共享 `AgentConversationSurface` 的 `browser` variant 渲染，不直接挂载完整 `AgentView`。
+- 真实 Runner 回放命令为 `bun run --filter='@copis/electron' test:browser-workflow:e2e`；harness 使用临时 HOME、userData 和本地 HTTP fixture，覆盖跨 Origin iframe、popup、React controlled input、Locator 歧义与 CDP detach/resume，并在退出时清理临时目录。

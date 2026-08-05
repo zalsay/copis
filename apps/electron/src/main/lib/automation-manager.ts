@@ -2,7 +2,7 @@
  * 定时任务（Automation）管理器
  *
  * 负责定时任务的 CRUD 与运行历史持久化。
- * - 索引文件：~/.proma/automations.json
+ * - 索引文件：~/.copis/automations.json
  *
  * 照搬 agent-session-manager.ts 的原子写模式（safe-file）。
  * 调度逻辑见 automation-scheduler.ts，本文件只管数据。
@@ -16,9 +16,10 @@ import {
   AUTOMATION_DEFAULT_PERMISSION_MODE,
   type Automation,
   type AutomationRun,
+  type AutomationWorkflowRunReference,
   type CreateAutomationInput,
   type UpdateAutomationInput,
-} from '@proma/shared'
+} from '@copis/shared'
 
 /** 索引文件格式 */
 interface AutomationsIndex {
@@ -27,6 +28,7 @@ interface AutomationsIndex {
 }
 
 const INDEX_VERSION = 2
+const pendingWorkflowRuns = new Map<string, AutomationWorkflowRunReference[]>()
 
 /**
  * 兼容历史字段：
@@ -79,7 +81,7 @@ function readIndex(): AutomationsIndex {
     return cachedIndex
   }
   if (data.version > INDEX_VERSION) {
-    // 数据由更高版本的 Proma 写入（用户回滚到旧版的场景）。保留原始 automations 数组只读返回，
+    // 数据由更高版本的 Copis 写入（用户回滚到旧版的场景）。保留原始 automations 数组只读返回，
     // 避免下次 writeIndex 用空数据覆盖磁盘导致永久丢失任务配置和运行历史。
     console.warn(
       `[定时任务] 索引文件版本 ${data.version} 高于当前构建（${INDEX_VERSION}），将以原数据加载，` +
@@ -272,7 +274,7 @@ export function createAutomation(input: CreateAutomationInput): Automation {
     dayOfMonth: input.dayOfMonth,
     scheduledAt: input.scheduledAt,
     maxRuns: normalizeMaxRuns(input.maxRuns),
-    // 新建任务未指定 runtime 时默认 Pi；已有历史任务的缺省值由读取/调度路径继续按 Claude 处理。
+    // 新建任务未指定 runtime 时默认 Pi；历史任务缺省值同样迁移为 Pi。
     agentRuntime: input.agentRuntime ?? 'pi',
     channelId: input.channelId,
     modelId: input.modelId,
@@ -372,6 +374,13 @@ export function deleteAutomation(id: string): boolean {
   return true
 }
 
+/** 记录尚未写入 AutomationRun 的 Workflow 执行，调度器随后 appendRun 时合并。 */
+export function registerAutomationWorkflowRun(reference: AutomationWorkflowRunReference, sessionId: string): void {
+  const current = pendingWorkflowRuns.get(sessionId) ?? []
+  current.push(reference)
+  pendingWorkflowRuns.set(sessionId, current)
+}
+
 /**
  * 记录一次运行结果并推进下次触发时间
  *
@@ -385,10 +394,26 @@ export function deleteAutomation(id: string): boolean {
 export function appendRun(id: string, run: AutomationRun): Automation | undefined {
   const index = readIndex()
   const target = index.automations.find((a) => a.id === id)
-  if (!target) return undefined
+  if (!target) {
+    if (run.sessionId) pendingWorkflowRuns.delete(run.sessionId)
+    return undefined
+  }
+
+  const workflowRuns = run.sessionId ? pendingWorkflowRuns.get(run.sessionId) : undefined
+  if (run.sessionId) pendingWorkflowRuns.delete(run.sessionId)
+  const latestWorkflowRun = workflowRuns?.at(-1)
+  const enrichedRun: AutomationRun = latestWorkflowRun
+    ? {
+        ...run,
+        workflowRuns,
+        workflowId: latestWorkflowRun.workflowId,
+        workflowVersion: latestWorkflowRun.version,
+        workflowRunId: latestWorkflowRun.runId,
+      }
+    : run
 
   const now = Date.now()
-  target.runHistory.unshift(run)
+  target.runHistory.unshift(enrichedRun)
   if (target.runHistory.length > AUTOMATION_MAX_HISTORY) {
     target.runHistory = target.runHistory.slice(0, AUTOMATION_MAX_HISTORY)
   }

@@ -6,9 +6,10 @@ import {
   COPIS_WORKING_CHANNEL_ID,
   COPIS_WORKING_EXPERT_MODEL_ID,
   COPIS_WORKING_FAST_MODEL_ID,
-} from '@proma/shared'
+} from '@copis/shared'
 import type {
   AgentMessage,
+  AgentRuntime,
   AgentSendInput,
   AgentSessionMeta,
   AgentWorkspace,
@@ -21,7 +22,7 @@ import type {
   WorkingVerifyPasswordResetCodeInput,
   WorkingWorkspaceInput,
   WorkingReceiveChannel,
-} from '@proma/shared'
+} from '@copis/shared'
 
 export const HTTP_API_HOST = '127.0.0.1'
 export const HTTP_API_PORT = 51730
@@ -80,7 +81,7 @@ export interface AgentHttpFacade {
     channelId?: string,
     workspaceId?: string,
     modelId?: string,
-    agentRuntime?: 'claude' | 'pi',
+    agentRuntime?: AgentRuntime,
   ) => AgentSessionMeta
   getAgentSessionSDKMessages: (id: string) => SDKMessage[]
   runAgentHeadless: (

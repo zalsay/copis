@@ -24,10 +24,10 @@ import type {
   WorkingWalletMember,
   WorkingWorkspace,
   WorkingWorkspaceInput,
-} from '@proma/shared'
+} from '@copis/shared'
 import type { WorkingTokenStore } from './working-auth-store'
 
-export const DEFAULT_COPIS_BACKEND_URL = 'http://127.0.0.1:9000/module/edu-api'
+export const DEFAULT_COPIS_BACKEND_URL = 'https://edu-api.meetlife.com.cn:9001'
 
 const WORKING_TOKEN_REFRESH_BUFFER_MS = 5 * 60 * 1000
 const WORKING_REFRESH_RETRY_DELAY_MS = 60 * 1000

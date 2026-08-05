@@ -2,14 +2,14 @@ import { afterAll, beforeAll, beforeEach, describe, expect, mock, test } from 'b
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import * as os from 'node:os'
 import { join } from 'node:path'
-import { serializeCodexCredentials } from '@proma/shared'
+import { serializeCodexCredentials } from '@copis/shared'
 
 type ChannelManagerModule = typeof import('./channel-manager')
 
 let channelManager: ChannelManagerModule
 let tempHome: string
 const originalHome = process.env.HOME
-const originalPromaDev = process.env.PROMA_DEV
+const originalCopisDev = process.env.COPIS_DEV
 
 mock.module('electron', () => ({
   app: {
@@ -32,7 +32,7 @@ mock.module('node:os', () => ({
 }))
 
 function writeChannels(channels: unknown[]): void {
-  const configDir = join(tempHome, '.proma')
+  const configDir = join(tempHome, '.copis')
   mkdirSync(configDir, { recursive: true })
   writeFileSync(
     join(configDir, 'channels.json'),
@@ -42,14 +42,14 @@ function writeChannels(channels: unknown[]): void {
 }
 
 beforeAll(async () => {
-  tempHome = mkdtempSync(join(os.tmpdir(), 'proma-channel-runtime-key-'))
+  tempHome = mkdtempSync(join(os.tmpdir(), 'copis-channel-runtime-key-'))
   process.env.HOME = tempHome
-  process.env.PROMA_DEV = '0'
+  process.env.COPIS_DEV = '0'
   channelManager = await import('./channel-manager')
 })
 
 beforeEach(() => {
-  rmSync(join(tempHome, '.proma'), { recursive: true, force: true })
+  rmSync(join(tempHome, '.copis'), { recursive: true, force: true })
 })
 
 afterAll(() => {
@@ -58,10 +58,10 @@ afterAll(() => {
   } else {
     process.env.HOME = originalHome
   }
-  if (originalPromaDev === undefined) {
-    delete process.env.PROMA_DEV
+  if (originalCopisDev === undefined) {
+    delete process.env.COPIS_DEV
   } else {
-    process.env.PROMA_DEV = originalPromaDev
+    process.env.COPIS_DEV = originalCopisDev
   }
   rmSync(tempHome, { recursive: true, force: true })
 })

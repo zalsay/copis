@@ -1,4 +1,4 @@
-import type { WorkingEvent } from '@proma/shared'
+import type { WorkingEvent } from '@copis/shared'
 
 export type WorkingRunStatus = 'idle' | 'running' | 'completed' | 'failed' | 'stopped'
 

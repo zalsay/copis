@@ -14,7 +14,7 @@ const electronBinary = createRequire(import.meta.url)('electron') as string
  * 因此用 Bun 打包 TypeScript 验证脚本，再用独立 Electron Node 进程执行真实 SQLite 回归。
  */
 test('Given a fresh planning database When planning data changes Then isolation, transactions, reminders and optimistic versions stay correct', async () => {
-  const home = mkdtempSync(join(tmpdir(), 'proma-planning-'))
+  const home = mkdtempSync(join(tmpdir(), 'copis-planning-'))
   const sourcePath = join(home, 'verify-planning-manager.ts')
   const outputPath = join(home, 'verify-planning-manager.mjs')
   const source = `
@@ -24,7 +24,7 @@ test('Given a fresh planning database When planning data changes Then isolation,
     import { DatabaseSync } from 'node:sqlite'
     import * as manager from ${JSON.stringify(managerModulePath)}
 
-    const configDir = join(process.env.HOME, '.proma-dev')
+    const configDir = join(process.env.HOME, '.copis-dev')
     mkdirSync(configDir, { recursive: true })
     const now = Date.now()
 
@@ -74,8 +74,17 @@ test('Given a fresh planning database When planning data changes Then isolation,
     assert.throws(() => manager.updateTodo({ id: todo.id, title: 'Todo 旧版本', expectedUpdatedAt: todo.updatedAt }), /其他窗口修改/)
 
     const calendarEvent = manager.createCalendarEvent({ title: '稳定日程', startAt: now, groupId: calendarGroup.id, tagIds: [tagged.id] })
+    assert.equal(calendarEvent.status, 'pending')
+    const workspaceEvent = manager.createCalendarEvent({ title: '工作区提醒日程', startAt: now, workspaceId: 'workspace-1', reminders: [{ triggerAt: now }] })
+    assert.equal(manager.getCalendarEvent(workspaceEvent.id).workspaceId, 'workspace-1')
+    const claimedWorkspaceReminder = manager.claimDuePlanningReminders(now).find((reminder) => reminder.targetId === workspaceEvent.id)
+    assert.ok(claimedWorkspaceReminder)
+    assert.equal(claimedWorkspaceReminder.workspaceId, 'workspace-1')
     const firstEventUpdate = manager.updateCalendarEvent({ id: calendarEvent.id, title: '日程新版本', expectedUpdatedAt: calendarEvent.updatedAt })
     assert.equal(firstEventUpdate.title, '日程新版本')
+    const completedEvent = manager.updateCalendarEvent({ id: calendarEvent.id, status: 'completed', expectedUpdatedAt: firstEventUpdate.updatedAt })
+    assert.equal(completedEvent.status, 'completed')
+    assert.ok(completedEvent.completedAt)
     assert.throws(() => manager.updateCalendarEvent({ id: calendarEvent.id, title: '日程旧版本', expectedUpdatedAt: calendarEvent.updatedAt }), /其他窗口修改/)
 
     // Group deletes only detach their own scope and keep foreign keys consistent.
@@ -113,7 +122,7 @@ test('Given a fresh planning database When planning data changes Then isolation,
 
     const result = spawnSync(electronBinary, [outputPath], {
       cwd: repoRoot,
-      env: { ...process.env, ELECTRON_RUN_AS_NODE: '1', HOME: home, PROMA_DEV: '1' },
+      env: { ...process.env, ELECTRON_RUN_AS_NODE: '1', HOME: home, COPIS_DEV: '1' },
       encoding: 'utf8',
     })
     expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0)

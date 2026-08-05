@@ -1,14 +1,14 @@
 /**
  * Agent Provider 适配器接口
  *
- * 定义 Proma 自己的 Agent 接口层，让底层 SDK 可替换。
- * 当前实现：ClaudeAgentAdapter / PiAgentAdapter 双 runtime。
+ * 定义 Copis 自己的 Agent 接口层，让底层 SDK 可替换。
+ * 当前实现：Pi Agent runtime。
  */
 
 import type { SDKMessage } from './agent'
 
-/** Agent runtime 实现 */
-export type AgentRuntime = 'claude' | 'pi'
+/** Agent runtime 实现；历史会话中的其它值会在读取时迁移为 Pi。 */
+export type AgentRuntime = 'pi'
 
 /** SDK 用户消息（队列消息注入用，匹配 SDK SDKUserMessage 结构） */
 export interface SDKUserMessageInput {

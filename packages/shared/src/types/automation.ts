@@ -5,12 +5,26 @@
  * 每次执行都新建独立子会话（不污染来源会话，规避 orchestrator 同会话并发守卫）。
  */
 
+/** 自动化运行中调用的固定 Browser Workflow，可用于追踪具体版本和执行产物。 */
+export interface AutomationWorkflowRunReference {
+  workflowId: string
+  version: number
+  runId: string
+  status: 'completed' | 'failed' | 'cancelled'
+}
+
 /** 单次自动运行的记录 */
 export interface AutomationRun {
   /** 本次触发的时间戳 */
   runAt: number
   /** 本轮新建的子会话 ID（可点进去查看执行详情） */
   sessionId: string
+  /** 本轮执行过的固定 Browser Workflow；旧记录可能没有该字段。 */
+  workflowRuns?: AutomationWorkflowRunReference[]
+  /** 兼容单 Workflow 展示的最近一次关联 ID。 */
+  workflowId?: string
+  workflowVersion?: number
+  workflowRunId?: string
   /** 运行结果 */
   status: 'success' | 'error' | 'skipped'
   /** 耗时（毫秒） */
@@ -89,7 +103,7 @@ export interface Automation {
    * 与 scheduleType 正交——任意循环模式都可叠加；once 模式语义上等价于 maxRuns=1。
    */
   maxRuns?: number
-  /** 本任务运行时使用的 Agent runtime；新任务默认 pi，历史任务缺省仍按 claude 兼容。 */
+  /** 本任务运行时使用的 Agent runtime；新任务和历史缺省值均为 Pi。 */
   agentRuntime?: import('./agent-provider').AgentRuntime
   /** AI 渠道 ID */
   channelId: string

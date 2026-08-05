@@ -1,7 +1,7 @@
 import * as React from 'react'
 import { useAtomValue, useSetAtom } from 'jotai'
 import { AlertTriangle, Loader2, RefreshCw, X } from 'lucide-react'
-import type { SDKMessage, WorkingSessionHistory } from '@proma/shared'
+import type { SDKMessage, WorkingSessionHistory } from '@copis/shared'
 import { AgentMessages } from '@/components/agent/AgentMessages'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'

@@ -1,4 +1,4 @@
-import type { AgentSessionMeta } from '@proma/shared'
+import type { AgentSessionMeta } from '@copis/shared'
 
 /** 校验来自 IPC/HTTP 边界的 Agent 会话元数据，避免无效项进入全局列表。 */
 export function isAgentSessionMeta(value: unknown): value is AgentSessionMeta {

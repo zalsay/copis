@@ -2,8 +2,8 @@
  * 数据迁移服务
  *
  * 支持两种导出模式：
- * - personal (.proma-backup)：个人全量备份，含解密后的 API Key 明文
- * - share (.proma-share)：团队分发，自由选择组件，凭据自动剥离
+ * - personal (.copis-backup)：个人全量备份，含解密后的 API Key 明文
+ * - share (.copis-share)：团队分发，自由选择组件，凭据自动剥离
  *
  * 导入时自动检测跨平台差异并提示用户处理路径映射。
  */
@@ -35,7 +35,7 @@ import {
 } from './config-paths'
 import { listAgentWorkspaces, getAgentWorkspace, getAllWorkspaceSkills, getWorkspaceMcpConfig } from './agent-workspace-manager'
 import { listChannels, decryptApiKey } from './channel-manager'
-import type { AgentWorkspace } from '@proma/shared'
+import type { AgentWorkspace } from '@copis/shared'
 
 // ─── 类型定义 ────────────────────────────────────────────────────────────────
 
@@ -616,7 +616,7 @@ function _addPersonalFiles(zip: AdmZip) {
 // ─── 导入（解析预览）────────────────────────────────────────────────────────
 
 export async function parseImportFile(filePath: string): Promise<ImportPreview | ImportPreviewV2> {
-  const tempDir = join(tmpdir(), `proma-import-${randomUUID()}`)
+  const tempDir = join(tmpdir(), `copis-import-${randomUUID()}`)
   mkdirSync(tempDir, { recursive: true })
 
   const zip = new AdmZip(filePath)
@@ -807,7 +807,7 @@ export async function confirmImport(options: ConfirmImportOptions | ConfirmImpor
     let targetWorkspace: AgentWorkspace | undefined
     if (createNewWorkspace) {
       const { createAgentWorkspace } = await import('./agent-workspace-manager')
-      // 迁移包不携带本地项目根；新项目始终从 Proma 托管根开始，避免跨机器误绑绝对路径。
+      // 迁移包不携带本地项目根；新项目始终从 Copis 托管根开始，避免跨机器误绑绝对路径。
       targetWorkspace = createAgentWorkspace(newWorkspaceName ?? (manifest as MigrationManifest).workspaceName)
     } else if (targetWorkspaceId) {
       targetWorkspace = getAgentWorkspace(targetWorkspaceId)

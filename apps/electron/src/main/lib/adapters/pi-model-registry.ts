@@ -1,7 +1,7 @@
 /**
  * Pi 模型注册与渠道兼容层。
  *
- * Pi SDK 需要把 Proma 渠道临时注册成 runtime provider；这里集中处理
+ * Pi SDK 需要把 Copis 渠道临时注册成 runtime provider；这里集中处理
  * ProviderType 到 Pi API 协议、baseUrl、认证头和模型 catalog 默认值的映射。
  */
 
@@ -19,13 +19,13 @@ import {
   type ReasoningCapability,
   type ReasoningTransport,
   type ProviderType,
-} from '@proma/shared'
+} from '@copis/shared'
 import {
-  getPromaUserAgent,
+  getCopisUserAgent,
   normalizeAnthropicBaseUrlForSdk,
   normalizeOpenAIBaseUrlForSdk,
   resolveAnthropicMessagesUrl,
-} from '@proma/core'
+} from '@copis/core'
 import type { Api, KnownProvider, Model } from '@earendil-works/pi-ai/compat'
 import type { PiAgentQueryOptions } from './pi-agent-adapter'
 import { rememberXaiOAuthCredentials, refreshXaiOAuthCredentialsSerial } from '../xai-oauth-credentials'
@@ -508,7 +508,7 @@ function normalizePiBaseUrl(baseUrl: string | undefined, provider: ProviderType)
   return baseUrl.trim().replace(/\/$/, '')
 }
 
-export function requiresPromaUserAgent(provider: ProviderType): boolean {
+export function requiresCopisUserAgent(provider: ProviderType): boolean {
   return provider === 'kimi-coding'
     || provider === 'xiaomi-token-plan'
     || provider === 'qwen-token-plan'
@@ -517,7 +517,7 @@ export function requiresPromaUserAgent(provider: ProviderType): boolean {
 }
 
 function usesBearerOnlyAnthropicAuth(provider: ProviderType): boolean {
-  return requiresPromaUserAgent(provider) || provider === 'minimax' || provider === 'qwen-anthropic'
+  return requiresCopisUserAgent(provider) || provider === 'minimax' || provider === 'qwen-anthropic'
 }
 
 export function buildPiRequestHeaders(provider: ProviderType, apiKey: string): PiRequestHeaders | undefined {
@@ -527,8 +527,8 @@ export function buildPiRequestHeaders(provider: ProviderType, apiKey: string): P
     Authorization: `Bearer ${apiKey}`,
   }
 
-  if (requiresPromaUserAgent(provider)) {
-    headers['User-Agent'] = getPromaUserAgent()
+  if (requiresCopisUserAgent(provider)) {
+    headers['User-Agent'] = getCopisUserAgent()
   }
 
   return headers
@@ -544,7 +544,7 @@ function shouldUseRuntimeApiKey(provider: ProviderType): boolean {
  * 智谱团队版（zhipu-coding-team）的凭据是复合串（形如
  * `apiKey=xxx; bigmodel_organization=yyy; bigmodel_project=zzz`），
  * 必须先提取其中的 apiKey，否则整串会被塞进 `Authorization: Bearer` 头导致 401。
- * 与 Claude runtime 的 applyAgentSdkAuthEnv 保持一致。
+ * 认证环境变量的规范化逻辑。
  */
 export function resolvePiApiKey(provider: ProviderType, apiKey: string): string {
   return provider === 'zhipu-coding-team' ? extractZhipuCodingTeamApiToken(apiKey) : apiKey
@@ -601,8 +601,8 @@ export async function getCodexCatalogModels(): Promise<PiCatalogModel[]> {
  * openai-codex 是 Pi SDK 的内置 KnownProvider：模型目录、baseUrl 和
  * `openai-codex-responses` 协议全部内置，无需（也不能）手工构造 models 或 baseUrl。
  * Pi 0.80.10 将它声明为 OAuth-only provider；runtime API key 不会参与其认证解析。
- * 因此将 Proma 已刷新过的完整凭据放入一次性内存 OAuth credential store，
- * 按真实 expires 刷新并回写 Proma，避免读写全局 ~/.pi 认证文件。
+ * 因此将 Copis 已刷新过的完整凭据放入一次性内存 OAuth credential store，
+ * 按真实 expires 刷新并回写 Copis，避免读写全局 ~/.pi 认证文件。
  */
 export async function buildCodexModel(sdk: PiSdk, input: CodexModelInput) {
   if (!input.codexOAuthCredentials) {
@@ -680,7 +680,7 @@ export async function buildModel(sdk: PiSdk, input: PiAgentQueryOptions) {
   if (input.provider === 'xai') {
     return buildXaiModel(sdk, input)
   }
-  const providerName = `proma-${input.provider}-${input.sessionId}`
+  const providerName = `copis-${input.provider}-${input.sessionId}`
   const resolvedApiKey = resolvePiApiKey(input.provider, input.apiKey)
   // pi runtime 统一剥离 `[1m]` 后缀：无论上游从哪条路径传入，注册与查找都用干净 ID。
   const resolvedModelId = stripAgentSdkContextSuffix(input.model)

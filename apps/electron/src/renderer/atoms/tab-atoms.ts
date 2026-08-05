@@ -96,7 +96,7 @@ export const sessionViewStateMapAtom = atom<Map<string, SessionViewState>>(new M
 
 /** 侧边栏是否收起（持久化） */
 export const sidebarCollapsedAtom = atomWithStorage<boolean>(
-  'proma-sidebar-collapsed',
+  'copis-sidebar-collapsed',
   false,
 )
 

@@ -1,4 +1,4 @@
-import type { RetryAttempt } from '@proma/shared'
+import type { RetryAttempt } from '@copis/shared'
 
 /** 将 Pi native retry 与当前 renderer stream 绑定，拒绝迟到事件污染下一轮。 */
 export interface PiRetryEventContext {
@@ -83,7 +83,7 @@ function retryAttempt(event: PiNativeRetryDetails, timestamp: number, errorMessa
   }
 }
 
-/** 将 Pi native retry 生命周期转换为 Proma UI 已识别的 retry 事件。 */
+/** 将 Pi native retry 生命周期转换为 Copis UI 已识别的 retry 事件。 */
 export function mapPiNativeRetryEvent(
   event: PiNativeRetryEvent,
   context: PiRetryEventContext,

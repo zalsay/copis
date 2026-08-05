@@ -7,7 +7,7 @@
   display: flex;
   flex-direction: column;
   gap: 8px;
-  background: #202020;
+  background: hsl(var(--muted));
   color: #eeeeee;
   border-radius: 0;
 }
@@ -242,6 +242,7 @@
   text-align: left;
   cursor: pointer;
   font: inherit;
+  font-size: 13px;
 }
 
 .copis-working-project-main > svg {

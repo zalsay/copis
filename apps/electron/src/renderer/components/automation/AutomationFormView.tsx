@@ -34,7 +34,7 @@ import {
   automationToDraft,
   type AutomationDraft,
 } from '@/atoms/automation-atoms'
-import { agentWorkspacesAtom, agentSessionsAtom, agentChannelIdsAtom, agentRuntimeAtom, currentAgentWorkspaceIdAtom } from '@/atoms/agent-atoms'
+import { agentWorkspacesAtom, agentSessionsAtom, agentRuntimeAtom, currentAgentWorkspaceIdAtom } from '@/atoms/agent-atoms'
 import { activeSessionIdAtom } from '@/atoms/tab-atoms'
 import { activeViewAtom, agentSkillsTabAtom } from '@/atoms/active-view'
 import { settingsOpenAtom, settingsTabAtom } from '@/atoms/settings-tab'
@@ -49,7 +49,7 @@ import type {
   FeishuChatBinding,
   UpdateAutomationInput,
   AgentRuntime,
-} from '@proma/shared'
+} from '@copis/shared'
 
 const NO_FEISHU_BINDING = '__none__'
 
@@ -196,16 +196,10 @@ function createFeishuTarget(binding: FeishuChatBinding): AutomationFeishuNotific
 function coerceAutomationDraftRuntime(
   draft: AutomationDraft,
   defaultAgentRuntime: AgentRuntime,
-  agentChannelIds: string[],
 ): AutomationDraft {
   const runtime: AgentRuntime = draft.id
     ? draft.agentRuntime ?? defaultAgentRuntime
     : defaultAgentRuntime
-
-  if (runtime === 'claude' && draft.channelId && !agentChannelIds.includes(draft.channelId)) {
-    return { ...draft, agentRuntime: runtime, channelId: '', modelId: undefined, active: false }
-  }
-
   return draft.agentRuntime === runtime ? draft : { ...draft, agentRuntime: runtime }
 }
 
@@ -214,16 +208,16 @@ function AutomationPromptEmptyGuide(): React.ReactElement {
     <div className="rounded-xl bg-foreground/[0.035] p-4 shadow-inner">
       <div className="flex flex-col gap-3">
         <div>
-          <div className="text-[13px] font-semibold text-foreground">推荐：让 Proma Agent 创建</div>
+          <div className="text-[13px] font-semibold text-foreground">推荐：让 Copis Agent 创建</div>
           <div className="mt-1 text-xs leading-relaxed text-muted-foreground">
-            在左侧会话里说清目标，并明确表示要求创建定时任务，Proma Agent 会生成任务描述，并补全周期、项目和模型等配置，手动编辑更适合微调任务描述。
+            在左侧会话里说清目标，并明确表示要求创建定时任务，Copis Agent 会生成任务描述，并补全周期、项目和模型等配置，手动编辑更适合微调任务描述。
           </div>
         </div>
         <div className="h-px bg-border/50" />
         <div>
           <div className="text-[13px] font-medium text-foreground/85">手动编写时，只写任务本身</div>
           <div className="mt-1 text-xs leading-relaxed text-muted-foreground">
-            例：检查 Proma 仓库新增 issue，主动回复问答类问题，不清楚的部分整理到项目级 Context 的 .context/issue-faq.md 文档；真正的 Bug 或请求罗列后发给我，不要记录任何重复的信息。
+            例：检查 Copis 仓库新增 issue，主动回复问答类问题，不清楚的部分整理到项目级 Context 的 .context/issue-faq.md 文档；真正的 Bug 或请求罗列后发给我，不要记录任何重复的信息。
           </div>
         </div>
       </div>
@@ -280,7 +274,7 @@ function SaveStatusBadge({
   )
 }
 
-// Pi 为默认与推荐内核，Claude Agent SDK 计划于 2026 年 8 月中旬彻底下线
+// Pi 是 Copis 当前唯一的 Agent runtime。
 const AGENT_RUNTIME_OPTIONS: Array<{
   value: AgentRuntime
   label: string
@@ -292,17 +286,9 @@ const AGENT_RUNTIME_OPTIONS: Array<{
   {
     value: 'pi',
     label: 'Pi',
-    description: 'Pi Agent SDK，Proma 默认内核，新功能仅在 Pi 上提供；可选择任意已启用模型渠道',
-    badge: '推荐',
+    description: 'Pi Agent runtime，Copis 当前唯一的 Agent 内核；可选择任意已启用模型渠道',
+    badge: '默认',
     badgeTone: 'recommended',
-  },
-  {
-    value: 'claude',
-    label: 'Claude',
-    description: 'Claude Agent SDK；模型仅限已标记为 Agent 兼容的渠道',
-    badge: '即将下线',
-    badgeTone: 'deprecated',
-    notice: '新功能已不再支持，将于 8 月中旬彻底下线，建议尽快切换到 Pi',
   },
 ]
 
@@ -391,7 +377,6 @@ export function AutomationFormView({ standalone = false }: { standalone?: boolea
   const setAutomations = useSetAtom(automationsAtom)
   const workspaces = useAtomValue(agentWorkspacesAtom)
   const automations = useAtomValue(automationsAtom)
-  const agentChannelIds = useAtomValue(agentChannelIdsAtom)
   const defaultAgentRuntime = useAtomValue(agentRuntimeAtom)
   const [agentSessions, setAgentSessions] = useAtom(agentSessionsAtom)
   const activeSessionId = useAtomValue(activeSessionIdAtom)
@@ -427,7 +412,6 @@ export function AutomationFormView({ standalone = false }: { standalone?: boolea
       const draft = coerceAutomationDraftRuntime(
         formState.draft,
         defaultAgentRuntime,
-        agentChannelIds,
       )
       setForm(draft)
       lastSavedSignatureRef.current = draft.id && canPersistDraft(draft)
@@ -697,14 +681,9 @@ export function AutomationFormView({ standalone = false }: { standalone?: boolea
   const selectedModel = form.channelId && form.modelId
     ? { channelId: form.channelId, modelId: form.modelId }
     : null
-  const modelFilterChannelIds = form.agentRuntime === 'pi' ? undefined : agentChannelIds
-  const handleRuntimeChange = (runtime: AgentRuntime): void => {
-    const patch: Partial<AutomationDraft> = { agentRuntime: runtime }
-    if (runtime === 'claude' && form.channelId && !agentChannelIds.includes(form.channelId)) {
-      patch.channelId = ''
-      patch.modelId = undefined
-    }
-    update(patch)
+  const modelFilterChannelIds = undefined
+  const handleRuntimeChange = (_runtime: AgentRuntime): void => {
+    update({ agentRuntime: 'pi' })
   }
   const feishuTarget = getFeishuTarget(form.notificationTargets)
   const selectedFeishuBinding = feishuTarget
@@ -1054,38 +1033,22 @@ export function AutomationFormView({ standalone = false }: { standalone?: boolea
 
           <div className="flex flex-col gap-2">
             <Label>Agent 内核</Label>
-            <AutomationRuntimeSelector runtime={form.agentRuntime} onChange={handleRuntimeChange} />
-            <span className="pl-2.5 text-xs text-muted-foreground leading-relaxed">
-              Pi 内核支持选择任意已启用模型渠道；Claude 内核仅显示已勾选为 Agent 兼容的渠道。
+            <div className="flex h-9 items-center rounded-md border border-input bg-muted/30 px-3 text-sm text-foreground">
+              Pi Agent
+            </div>
+            <span className="pl-2.5 text-xs leading-relaxed text-muted-foreground">
+              Copis 使用 Pi Agent runtime，可选择任意已启用的模型渠道。
             </span>
           </div>
 
-          {/* 选择模型（Claude 内核仅显示 Agent 兼容渠道；Pi 内核显示所有已启用渠道） */}
           <div className="flex flex-col gap-2">
             <Label>选择模型</Label>
-            {form.agentRuntime === 'claude' && agentChannelIds.length === 0 ? (
-              <div className="flex items-center gap-2 rounded-md border border-amber-200 dark:border-amber-900/50 bg-amber-50 dark:bg-amber-950/30 px-3 py-2 text-sm text-amber-700 dark:text-amber-400">
-                <Settings size={14} className="shrink-0" />
-                <span>尚未启用任何 Agent 兼容渠道</span>
-                <button
-                  type="button"
-                  className="ml-auto text-xs underline underline-offset-2 hover:text-foreground transition-colors"
-                  onClick={() => {
-                    setSettingsTab('channels')
-                    setSettingsOpen(true)
-                  }}
-                >
-                  前往渠道设置
-                </button>
-              </div>
-            ) : (
-              <ModelSelector
-                filterChannelIds={modelFilterChannelIds}
-                externalSelectedModel={selectedModel}
-                showChannelInTrigger
-                onModelSelect={(opt) => update({ channelId: opt.channelId, modelId: opt.modelId })}
-              />
-            )}
+            <ModelSelector
+              filterChannelIds={modelFilterChannelIds}
+              externalSelectedModel={selectedModel}
+              showChannelInTrigger
+              onModelSelect={(opt) => update({ channelId: opt.channelId, modelId: opt.modelId })}
+            />
           </div>
 
           {/* 项目（必选，默认填入当前会话所在项目） */}
@@ -1237,6 +1200,11 @@ export function AutomationFormView({ standalone = false }: { standalone?: boolea
                             <span className="tabular-nums">{formatTime(run.runAt)}</span>
                             <span className="shrink-0 text-foreground/45">{formatRunStatus(run.status)}</span>
                             <span className="text-foreground/35 truncate">
+                              {run.workflowRuns?.length
+                                ? `Workflow ${run.workflowRuns.map((workflowRun) => `${workflowRun.workflowId.slice(0, 8)}@v${workflowRun.version}`).join(', ')}`
+                                : run.workflowId
+                                  ? `Workflow ${run.workflowId.slice(0, 8)}@v${run.workflowVersion ?? '?'}`
+                                  : ''}
                               {run.status === 'success' && run.durationMs ? `${(run.durationMs / 1000).toFixed(1)}s` : ''}
                               {run.status === 'error' ? (run.error ?? '失败') : ''}
                               {run.status === 'skipped' ? (run.skipReason ?? '跳过') : ''}

@@ -26,8 +26,8 @@ import {
   type AgentIslandWindowSnapshot,
   type NativeAgentIslandEvent,
   type NativeAgentIslandSnapshot,
-} from '@proma/shared'
-import type { AgentStreamPayload } from '@proma/shared'
+} from '@copis/shared'
+import type { AgentStreamPayload } from '@copis/shared'
 import { agentEventBus } from './agent-service'
 import { getAgentSessionMeta, listAgentSessions } from './agent-session-manager'
 import { createAgentIslandWindow, getAgentIslandWindow, hideAgentIslandWindow, moveAgentIslandWindow, onAgentIslandWindowReady, resizeAgentIslandWindow, showAgentIslandWindow } from './agent-island-window'
@@ -151,14 +151,14 @@ function setToolDetail(session: InternalSessionSnapshot, toolName: string): void
 // ===== 事件映射（AgentStreamPayload → 灵动岛语义） =====
 
 function handleAgentEvent(sessionId: string, payload: AgentStreamPayload): void {
-  if (payload.kind === 'proma_event') {
-    handlePromaEvent(sessionId, payload.event)
+  if (payload.kind === 'copis_event' || payload.kind === 'proma_event') {
+    handleCopisEvent(sessionId, payload.event)
   } else {
     handleSdkMessage(sessionId, payload.message)
   }
 }
 
-function handlePromaEvent(sessionId: string, event: import('@proma/shared').PromaEvent): void {
+function handleCopisEvent(sessionId: string, event: import('@copis/shared').CopisEvent): void {
   switch (event.type) {
     case 'permission_request': {
       const session = ensureSession(sessionId)
@@ -245,10 +245,10 @@ function handlePromaEvent(sessionId: string, event: import('@proma/shared').Prom
   }
 }
 
-function handleSdkMessage(sessionId: string, message: import('@proma/shared').SDKMessage): void {
+function handleSdkMessage(sessionId: string, message: import('@copis/shared').SDKMessage): void {
   switch (message.type) {
     case 'assistant': {
-      const aMsg = message as import('@proma/shared').SDKAssistantMessage
+      const aMsg = message as import('@copis/shared').SDKAssistantMessage
       if (aMsg.isReplay) return
       if (aMsg.error) {
         const session = ensureSession(sessionId)
@@ -278,7 +278,7 @@ function handleSdkMessage(sessionId: string, message: import('@proma/shared').SD
       break
     }
     case 'user': {
-      const uMsg = message as import('@proma/shared').SDKUserMessage
+      const uMsg = message as import('@copis/shared').SDKUserMessage
       const session = sessions.get(sessionId)
       if (!session) break
       const content = uMsg.message?.content
@@ -297,7 +297,7 @@ function handleSdkMessage(sessionId: string, message: import('@proma/shared').SD
       break
     }
     case 'result': {
-      const rMsg = message as import('@proma/shared').SDKResultMessage
+      const rMsg = message as import('@copis/shared').SDKResultMessage
       const session = ensureSession(sessionId)
       if (rMsg.subtype === 'success') {
         session.phase = 'completed'
@@ -318,7 +318,7 @@ function handleSdkMessage(sessionId: string, message: import('@proma/shared').SD
       break
     }
     case 'system': {
-      const sMsg = message as import('@proma/shared').SDKSystemMessage
+      const sMsg = message as import('@copis/shared').SDKSystemMessage
       const session = ensureSession(sessionId)
       switch (sMsg.subtype) {
         case 'task_started': {
@@ -731,11 +731,11 @@ function schedulePush(throttleMs = PUSH_THROTTLE_MS): void {
 }
 
 function requiresImmediateAgentIslandPush(payload: AgentStreamPayload): boolean {
-  if (payload.kind === 'proma_event') {
+  if (payload.kind === 'copis_event' || payload.kind === 'proma_event') {
     return ['permission_request', 'ask_user_request', 'exit_plan_mode_request'].includes(payload.event.type)
   }
   const message = payload.message
-  return message.type === 'result' || (message.type === 'assistant' && Boolean((message as import('@proma/shared').SDKAssistantMessage).error))
+  return message.type === 'result' || (message.type === 'assistant' && Boolean((message as import('@copis/shared').SDKAssistantMessage).error))
 }
 
 // ===== 事件订阅与初始化 =====

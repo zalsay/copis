@@ -5,11 +5,34 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Copis</title>
     <script>
+      // 将旧版 localStorage 键迁移到 Copis 前缀，保留用户的主题、模型和布局偏好。
+      ;(function() {
+        var prefixes = [
+          ['proma-', 'copis-'],
+          ['proma_', 'copis_'],
+        ]
+        for (var i = 0; i < localStorage.length; i += 1) {
+          var key = localStorage.key(i)
+          if (!key) continue
+          for (var j = 0; j < prefixes.length; j += 1) {
+            var legacyPrefix = prefixes[j][0]
+            var currentPrefix = prefixes[j][1]
+            if (!key.startsWith(legacyPrefix)) continue
+            var currentKey = currentPrefix + key.slice(legacyPrefix.length)
+            if (localStorage.getItem(currentKey) === null) {
+              var value = localStorage.getItem(key)
+              if (value !== null) localStorage.setItem(currentKey, value)
+            }
+            break
+          }
+        }
+      })()
+
       // 主题初始化脚本（在 React 加载前执行，避免闪烁）
       // 从 localStorage 缓存读取主题模式和特殊风格，立即应用类名
       ;(function() {
-        var mode = localStorage.getItem('proma-theme-mode') || 'dark'
-        var style = localStorage.getItem('proma-theme-style')
+        var mode = localStorage.getItem('copis-theme-mode') || 'dark'
+        var style = localStorage.getItem('copis-theme-style')
         var html = document.documentElement
 
         if (mode === 'special' && style && style !== 'default') {

@@ -61,8 +61,8 @@ import { channelsAtom } from '@/atoms/chat-atoms'
 import { previewFileMapAtom } from '@/atoms/preview-atoms'
 import type { NotificationSoundType } from '@/types/settings'
 import { toast } from 'sonner'
-import type { AgentStreamEvent, AgentStreamCompletePayload, AgentEvent, AgentStreamPayload, SDKAssistantMessage, SDKUserMessage, SDKSystemMessage, SDKContentBlock, SDKUserContentBlock, PromaEvent, AgentSessionMeta, ProviderType } from '@proma/shared'
-import { inferAgentSdkContextWindow, inferContextWindow } from '@proma/shared'
+import type { AgentStreamEvent, AgentStreamCompletePayload, AgentEvent, AgentStreamPayload, SDKAssistantMessage, SDKUserMessage, SDKSystemMessage, SDKContentBlock, SDKUserContentBlock, CopisEvent, AgentSessionMeta, ProviderType } from '@copis/shared'
+import { inferAgentSdkContextWindow, inferContextWindow } from '@copis/shared'
 import { buildExternalAgentRunActivation, shouldActivateExternalAgentRun } from '@/lib/external-agent-run'
 import { upsertAgentSession, mergeFetchedAgentSessions } from '@/lib/agent-session-list'
 import {
@@ -72,7 +72,7 @@ import {
 import { getPlanModeChangeFromToolName, updatePlanModeSessionSet } from '@/lib/agent-plan-mode'
 import { buildTodoAgentPrompt } from '@/lib/todo-agent-prompt'
 import { appendWorkingEvents, workingEventsAtom } from '@/atoms/working-atoms'
-import { adaptWorkingStreamComplete, adaptWorkingStreamError, adaptWorkingStreamEvent } from '@proma/shared'
+import { adaptWorkingStreamComplete, adaptWorkingStreamError, adaptWorkingStreamEvent } from '@copis/shared'
 
 /** 触发右侧文件浏览器自动定位的写入类工具集合 */
 const WRITE_TOOLS = new Set(['Write', 'Edit', 'MultiEdit', 'NotebookEdit', 'Update'])
@@ -125,7 +125,7 @@ function isRunScopedRetryEvent(event: AgentEvent): event is Extract<AgentEvent, 
 }
 
 function payloadToLegacyEvents(payload: AgentStreamPayload): AgentEvent[] {
-  if (payload.kind === 'proma_event') {
+  if (payload.kind === 'copis_event' || payload.kind === 'proma_event') {
     const evt = payload.event
     switch (evt.type) {
       case 'permission_request':
@@ -481,7 +481,7 @@ export function useGlobalAgentListeners(): void {
       return sessions.find((s) => s.id === sessionId)?.title ?? '未命名会话'
     }
 
-    const activateExternalAgentRun = (event: Extract<PromaEvent, { type: 'external_run_started' }>): void => {
+    const activateExternalAgentRun = (event: Extract<CopisEvent, { type: 'external_run_started' }>): void => {
       const applyActivation = (sessions: AgentSessionMeta[]): void => {
         const currentStreamState = store.get(agentStreamingStatesAtom).get(event.sessionId)
         if (!shouldActivateExternalAgentRun(currentStreamState, event.startedAt)) {
@@ -707,12 +707,12 @@ export function useGlobalAgentListeners(): void {
           adaptWorkingStreamEvent(streamEvent),
         ))
 
-        if (payload.kind === 'proma_event' && payload.event.type === 'external_run_started') {
+        if ((payload.kind === 'copis_event' || payload.kind === 'proma_event') && payload.event.type === 'external_run_started') {
           activateExternalAgentRun(payload.event)
         }
 
         // 自动任务会话被用户接管（毕业）：向用户提示，后续定时运行将新建独立会话
-        if (payload.kind === 'proma_event' && payload.event.type === 'automation_graduated') {
+        if ((payload.kind === 'copis_event' || payload.kind === 'proma_event') && payload.event.type === 'automation_graduated') {
           toast('已接管自动任务会话，后续定时运行将创建新会话。', { duration: 3000 })
           window.electronAPI.listAgentSessions()
             .then((sessions) => store.set(agentSessionsAtom, (prev) => mergeFetchedAgentSessions(prev, sessions)))
@@ -1055,7 +1055,7 @@ export function useGlobalAgentListeners(): void {
           } else if (event.type === 'permission_mode_changed') {
             // 权限模式变更（如 Plan 模式退出后切换到完全自动）
             console.log(`[GlobalAgentListeners] 权限模式变更: ${event.mode}`)
-            store.set(agentPermissionModeMapAtom, (prev: Map<string, import('@proma/shared').PromaPermissionMode>) => {
+            store.set(agentPermissionModeMapAtom, (prev: Map<string, import('@copis/shared').CopisPermissionMode>) => {
               const next = new Map(prev)
               next.set(sessionId, event.mode)
               return next

@@ -1,4 +1,4 @@
-import type { FileAccessOptions } from '@proma/shared'
+import type { FileAccessOptions } from '@copis/shared'
 import type { PreviewFile } from '@/atoms/preview-atoms'
 
 export function isAbsoluteFilePath(filePath: string): boolean {

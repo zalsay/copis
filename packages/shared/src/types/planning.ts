@@ -2,12 +2,14 @@
 
 export type TodoStatus = 'open' | 'completed'
 export type TodoPriority = 'low' | 'medium' | 'high'
-/** Todo 与日程分组独立存储；同名分组允许分别存在。 */
+/** Todo 分组继续独立存储；日程历史分组字段仅用于兼容，新增日程通过工作区归属。 */
 export type PlanningGroupScope = 'todo' | 'calendar'
 export type PlanningReminderTargetType = 'todo' | 'calendar_event'
 export type PlanningReminderStatus = 'pending' | 'acknowledged' | 'completed'
+/** 日程状态与 ai-education 日程接口保持一致；pending/in_progress/expired 可按时间推导，completed 由用户显式完成。 */
+export type CalendarEventStatus = 'pending' | 'in_progress' | 'completed' | 'expired'
 /** 标识提醒是否由目标计划时间自动生成，供改期时安全同步。 */
-export type PlanningReminderOrigin = 'manual' | 'todo_due_at'
+export type PlanningReminderOrigin = 'manual' | 'todo_due_at' | 'calendar_start_at'
 
 /** 日程编辑基于此错误文案识别并提示跨窗口并发冲突。 */
 export const PLANNING_CONFLICT_ERROR = '日程已被其他窗口修改，请重新加载后再试'
@@ -60,9 +62,11 @@ export interface PlanningReminder {
   updatedAt: number
 }
 
-/** 常驻提醒 UI 所需的目标摘要，避免渲染端自行拼接数据库关系。 */
+/** 常驻提醒 UI 与外部 Bridge 通知所需的目标摘要，避免调用方自行拼接数据库关系。 */
 export interface ActivePlanningReminder extends PlanningReminder {
   targetTitle: string
+  /** Todo 或日程绑定的 Agent 工作区；外部消息和后续对话按此路由。 */
+  workspaceId?: string
   group?: PlanningGroup
   tags: PlanningTag[]
 }
@@ -99,6 +103,10 @@ export interface CalendarEvent {
   reminders: PlanningReminder[]
   workspaceId?: string
   todoId?: string
+  /** 日程状态；旧版数据没有该字段时由渲染层根据时间推导。 */
+  status?: CalendarEventStatus
+  /** 日程是否在开始时间触发提醒；由日程表开关控制。 */
+  reminderEnabled?: boolean
   createdAt: number
   updatedAt: number
 }
@@ -180,6 +188,8 @@ export interface CreateCalendarEventInput {
   reminders?: CreatePlanningReminderInput[]
   workspaceId?: string
   todoId?: string
+  status?: CalendarEventStatus
+  reminderEnabled?: boolean
 }
 
 export interface UpdateCalendarEventInput {
@@ -193,7 +203,9 @@ export interface UpdateCalendarEventInput {
   tagIds?: string[]
   workspaceId?: string | null
   todoId?: string | null
-  /** 详情面板保存时携带的版本号，用于拒绝跨窗口的旧草稿覆盖。 */
+  status?: CalendarEventStatus
+  /** 是否在日程开始时间提醒；未传入时保留现有提醒配置。 */
+  reminderEnabled?: boolean
   expectedUpdatedAt?: number
 }
 

@@ -1,7 +1,7 @@
 /**
  * Bun 运行时路径检测模块
  *
- * Bun 是 Proma 的可选组件（不影响核心 Agent 功能，SDK 自带编译好的 claude 二进制）。
+ * Bun 是 Copis 的可选组件（不影响核心 Agent 功能，SDK 自带编译好的 claude 二进制）。
  * 仅用于：
  * - 系统状态展示（设置页显示用户是否装了 Bun）
  * - 用户可能从终端用 Bun 跑自定义脚本时的路径探测
@@ -16,7 +16,7 @@ import { existsSync } from 'fs'
 import { join, dirname } from 'path'
 import { execSync, spawnSync } from 'child_process'
 import { app } from 'electron'
-import type { BunRuntimeStatus, PlatformArch } from '@proma/shared'
+import type { BunRuntimeStatus, PlatformArch } from '@copis/shared'
 
 /**
  * 获取当前平台架构标识
@@ -168,8 +168,7 @@ export function validateBunExecutable(bunPath: string): string | null {
 /**
  * 检测并返回 Bun 运行时状态
  *
- * Bun 是可选组件 —— Claude Agent SDK 0.2.113+ 分发了按平台编译的 claude native
- * binary，核心功能不依赖 Bun。这里的检测结果只用于：
+ * Bun 是可选组件，核心功能不依赖 Bun。这里的检测结果只用于：
  * - 系统运行时状态卡片展示
  * - 用户执行依赖 Bun 的自定义脚本时提供可用性提示
  *
@@ -210,7 +209,7 @@ export async function detectBunRuntime(): Promise<BunRuntimeStatus> {
     }
   }
 
-  console.log('[Bun 检测] 未找到 Bun（可选，不影响 Proma 核心功能）')
+  console.log('[Bun 检测] 未找到 Bun（可选，不影响 Copis 核心功能）')
   return {
     available: false,
     path: null,

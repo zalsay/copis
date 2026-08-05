@@ -1,5 +1,5 @@
 /**
- * Shared type definitions for proma
+ * Shared type definitions for copis
  */
 
 // Placeholder types - will be expanded as needed
@@ -65,3 +65,6 @@ export * from './working'
 
 // 内嵌 Chromium 网页页签相关类型
 export * from './web'
+
+// Pi Agent 浏览器工作流相关类型
+export * from './browser-workflow'

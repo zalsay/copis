@@ -46,7 +46,7 @@ import {
 import { workingClientConfigAtom } from './atoms/working-atoms'
 import { updateStatusAtom, initializeUpdater } from './atoms/updater'
 import { automationsAtom } from './atoms/automation-atoms'
-import { calendarEventsAtom, calendarPlanningGroupsAtom, planningTagsAtom, todoPlanningGroupsAtom, todosAtom } from './atoms/planning-atoms'
+import { calendarEventsAtom, planningTagsAtom, todoPlanningGroupsAtom, todosAtom } from './atoms/planning-atoms'
 import {
   notificationsEnabledAtom,
   notificationSoundEnabledAtom,
@@ -76,18 +76,18 @@ import { appModeAtom } from './atoms/app-mode'
 import {
   COPIS_WORKING_CHANNEL_ID,
   COPIS_WORKING_FAST_MODEL_ID,
-} from '@proma/shared'
-import type { FeishuBotBridgeState, FeishuBridgeState, DingTalkBotBridgeState, DingTalkBridgeState } from '@proma/shared'
+} from '@copis/shared'
+import type { FeishuBotBridgeState, FeishuBridgeState, DingTalkBotBridgeState, DingTalkBridgeState } from '@copis/shared'
 import { Toaster } from './components/ui/sonner'
 import { toast } from 'sonner'
 import { ArrowUpRight } from 'lucide-react'
-import { diffCapabilities } from '@proma/shared'
-import type { WorkspaceCapabilities } from '@proma/shared'
+import { diffCapabilities } from '@copis/shared'
+import type { WorkspaceCapabilities } from '@copis/shared'
 import { showCapabilityChangeToasts } from './lib/capabilities-toast'
 import { GlobalShortcuts } from './components/shortcuts/GlobalShortcuts'
 import { VoiceDictationApp } from './components/voice-dictation/VoiceDictationApp'
 import { TabSwitcher } from './components/tabs/TabSwitcher'
-import { getEnabledClaudeAgentChannelIds } from './lib/agent-channel-selection'
+import { getEnabledAgentChannelIds } from './lib/agent-channel-selection'
 import { CopisLogo } from './lib/model-logo'
 import { initShortcutRegistry, updateShortcutOverrides } from './lib/shortcut-registry'
 import { installHttpApiBridge } from './lib/http-api-bridge'
@@ -103,11 +103,12 @@ const isVoiceDictationIndicatorWindow = new URLSearchParams(window.location.sear
 const isDetachedPreviewWindow = new URLSearchParams(window.location.search).get('window') === 'detached-preview'
 const isPlanningWindow = new URLSearchParams(window.location.search).get('window') === 'planning'
 const isAgentIslandWindow = new URLSearchParams(window.location.search).get('window') === 'agent-island'
-const isMainWindow = !isQuickTaskWindow && !isVoiceDictationIndicatorWindow && !isDetachedPreviewWindow && !isPlanningWindow && !isAgentIslandWindow
+const isWebBookmarksWindow = new URLSearchParams(window.location.search).get('window') === 'web-bookmarks'
+const isMainWindow = !isQuickTaskWindow && !isVoiceDictationIndicatorWindow && !isDetachedPreviewWindow && !isPlanningWindow && !isAgentIslandWindow && !isWebBookmarksWindow
 
 // 主窗口和独立规划窗口均由内部面板管理滚动，避免页面本身出现第二层滚动。
 if (isMainWindow || isPlanningWindow) {
-  document.documentElement.classList.add('proma-main-window')
+  document.documentElement.classList.add('copis-main-window')
 }
 
 /**
@@ -232,16 +233,15 @@ function AgentSettingsInitializer(): null {
       const defaultAgentRuntime = 'pi' as const
       setAgentRuntime(defaultAgentRuntime)
 
-      // 渠道的启用状态是唯一开关：启动时也必须从实际渠道派生 Claude 白名单，
-      // 不能继承旧版独立开关，或把 Pi 专用渠道带入 Claude runtime。
-      const claudeChannelIds = getEnabledClaudeAgentChannelIds(channels)
-      setAgentChannelIds(claudeChannelIds)
+      // 渠道的启用状态是唯一开关：启动时也必须从实际渠道派生可用列表。
+      const agentChannelIds = getEnabledAgentChannelIds(channels)
+      setAgentChannelIds(agentChannelIds)
 
       const updates: Parameters<typeof window.electronAPI.updateSettings>[0] = {}
-      const storedClaudeChannelIds = settings.agentChannelIds ?? []
-      const whitelistChanged = claudeChannelIds.length !== storedClaudeChannelIds.length
-        || claudeChannelIds.some((id, index) => id !== storedClaudeChannelIds[index])
-      if (whitelistChanged) updates.agentChannelIds = claudeChannelIds
+      const storedAgentChannelIds = settings.agentChannelIds ?? []
+      const whitelistChanged = agentChannelIds.length !== storedAgentChannelIds.length
+        || agentChannelIds.some((id, index) => id !== storedAgentChannelIds[index])
+      if (whitelistChanged) updates.agentChannelIds = agentChannelIds
 
       // Working Agent 不使用用户渠道；fast/export 由 edu-api 服务端 alias 解析。
       setAgentChannelId(COPIS_WORKING_CHANNEL_ID)
@@ -486,12 +486,11 @@ function PlanningInitializer(): null {
   const setTodos = useSetAtom(todosAtom)
   const setCalendarEvents = useSetAtom(calendarEventsAtom)
   const setTodoGroups = useSetAtom(todoPlanningGroupsAtom)
-  const setCalendarGroups = useSetAtom(calendarPlanningGroupsAtom)
   const setTags = useSetAtom(planningTagsAtom)
 
   useEffect(() => {
     let disposed = false
-    const latestRequest = { todos: 0, calendarEvents: 0, todoGroups: 0, calendarGroups: 0, tags: 0 }
+    const latestRequest = { todos: 0, calendarEvents: 0, todoGroups: 0, tags: 0 }
     const loadTodos = (): void => {
       const requestId = ++latestRequest.todos
       void window.electronAPI.listTodos().then((todos) => {
@@ -510,12 +509,6 @@ function PlanningInitializer(): null {
         if (!disposed && requestId === latestRequest.todoGroups) setTodoGroups(groups)
       }).catch((error: unknown) => console.error('[任务/日程] 加载 Todo 分组失败:', error))
     }
-    const loadCalendarGroups = (): void => {
-      const requestId = ++latestRequest.calendarGroups
-      void window.electronAPI.listPlanningGroups('calendar').then((groups) => {
-        if (!disposed && requestId === latestRequest.calendarGroups) setCalendarGroups(groups)
-      }).catch((error: unknown) => console.error('[任务/日程] 加载日程分组失败:', error))
-    }
     const loadTags = (): void => {
       const requestId = ++latestRequest.tags
       void window.electronAPI.listPlanningTags().then((tags) => {
@@ -527,13 +520,12 @@ function PlanningInitializer(): null {
       if (includes('todos')) loadTodos()
       if (includes('calendar_events')) loadCalendarEvents()
       if (includes('todo_groups')) loadTodoGroups()
-      if (includes('calendar_groups')) loadCalendarGroups()
       if (includes('tags')) loadTags()
     }
     load()
     const unsubscribe = window.electronAPI.onPlanningChanged((change) => load(change.resources))
     return () => { disposed = true; unsubscribe() }
-  }, [setCalendarEvents, setCalendarGroups, setTags, setTodoGroups, setTodos])
+  }, [setCalendarEvents, setTags, setTodoGroups, setTodos])
 
   return null
 }
@@ -1047,6 +1039,15 @@ if (isQuickTaskWindow) {
       <React.StrictMode>
         <ThemeInitializer />
         <AgentIslandApp />
+      </React.StrictMode>
+    )
+  })
+} else if (isWebBookmarksWindow) {
+  import('./components/web-browser/WebBookmarksWindowApp').then(({ WebBookmarksWindowApp }) => {
+    ReactDOM.createRoot(document.getElementById('root')!).render(
+      <React.StrictMode>
+        <ThemeInitializer />
+        <WebBookmarksWindowApp />
       </React.StrictMode>
     )
   })

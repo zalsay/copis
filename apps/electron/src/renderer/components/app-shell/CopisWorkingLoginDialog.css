@@ -45,17 +45,13 @@
   width: 32px;
   height: 32px;
   place-items: center;
-  border: 1px solid rgba(200, 167, 255, 0.45);
-  border-radius: 9px;
-  background: rgba(200, 167, 255, 0.13);
-  color: #c8a7ff;
 }
 
 .copis-working-auth-brand-icon img {
   display: block;
-  width: 20px;
-  height: 20px;
-  border-radius: 25%;
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
   object-fit: cover;
 }
 

@@ -3,7 +3,7 @@
  *
  * 负责渠道的 CRUD 操作、API Key 加密/解密、连接测试。
  * 使用 Electron safeStorage 进行 API Key 加密（底层使用 OS 级加密）。
- * 数据持久化到 ~/.proma/channels.json。
+ * 数据持久化到 ~/.copis/channels.json。
  */
 
 import { readFileSync, writeFileSync, existsSync } from 'node:fs'
@@ -25,7 +25,7 @@ import type {
   FetchModelsInput,
   FetchModelsResult,
   ProviderType,
-} from '@proma/shared'
+} from '@copis/shared'
 import {
   extractZhipuCodingTeamApiToken,
   parseZhipuTeamCredentials,
@@ -36,7 +36,7 @@ import {
   parseXaiCredentials,
   serializeXaiCredentials,
   isXaiCredentialExpired,
-} from '@proma/shared'
+} from '@copis/shared'
 import { refreshCodexOAuth } from './codex-oauth-service'
 import { refreshXaiOAuth } from './xai-oauth-service'
 import { refreshXaiOAuthCredentialsSerial, rememberXaiOAuthCredentials } from './xai-oauth-credentials'
@@ -45,13 +45,13 @@ import { listCodexModels, listXaiModels } from './adapters/pi-model-registry'
 import { getFetchFn } from './proxy-fetch'
 import { getEffectiveProxyUrl } from './proxy-settings-service'
 import {
-  getPromaUserAgent,
+  getCopisUserAgent,
   migrateCompatibleChannelBaseUrl,
   normalizeBaseUrl,
   resolveAnthropicMessagesUrl,
   resolveAnthropicModelsUrl,
   resolveOpenAIModelsUrl,
-} from '@proma/core'
+} from '@copis/core'
 import { normalizeHttpResponse, normalizeRequestError } from './channel-test-error'
 import pkg from '../../../package.json' with { type: 'json' }
 
@@ -440,7 +440,7 @@ export function decryptApiKey(channelId: string): string {
  */
 const inflightCodexRefresh = new Map<string, Promise<CodexOAuthCredentials>>()
 
-/** 保存 Pi 或 Proma 刷新后的完整 Codex OAuth 凭据。 */
+/** 保存 Pi 或 Copis 刷新后的完整 Codex OAuth 凭据。 */
 export function persistCodexOAuthCredentials(channelId: string, credentials: CodexOAuthCredentials): void {
   const channel = getChannelById(channelId)
   if (!channel || channel.provider !== 'openai-codex') {
@@ -501,7 +501,7 @@ export async function resolveCodexAccessToken(channelId: string): Promise<string
   return (await resolveCodexOAuthCredentials(channelId)).access
 }
 
-/** 保存 Pi 或 Proma 刷新后的完整 xAI OAuth 凭据。 */
+/** 保存 Pi 或 Copis 刷新后的完整 xAI OAuth 凭据。 */
 export function persistXaiOAuthCredentials(channelId: string, credentials: XaiOAuthCredentials): void {
   const channel = getChannelById(channelId)
   if (!channel || channel.provider !== 'xai') {
@@ -646,7 +646,7 @@ export async function testChannel(channelId: string): Promise<ChannelTestResult>
       case 'google':
         return await testGoogle(channel.baseUrl, apiKey, proxyUrl)
       default:
-        return { success: false, message: `不支持的供应商: ${provider}。你可能过去使用的是 Proma 商业版，请重新下载商业版覆盖安装，当前版本为开源版本。` }
+        return { success: false, message: `不支持的供应商: ${provider}。你可能过去使用的是 Copis 商业版，请重新下载商业版覆盖安装，当前版本为开源版本。` }
     }
   } catch (error) {
     return normalizeRequestError(error)
@@ -658,7 +658,7 @@ export async function testChannel(channelId: string): Promise<ChannelTestResult>
  *
  * DeepSeek / Kimi 等内置供应商会按协议根路径补全端点。
  * Anthropic 兼容格式使用用户填写的完整请求地址。
- * Coding Plan 渠道必须发送 Proma User-Agent，否则返回 403。
+ * Coding Plan 渠道必须发送 Copis User-Agent，否则返回 403。
  */
 async function testAnthropicCompatible(
   baseUrl: string,
@@ -675,10 +675,10 @@ async function testAnthropicCompatible(
   if (provider === 'kimi-coding' || provider === 'zhipu-coding' || provider === 'zhipu-coding-team') {
     const authToken = provider === 'zhipu-coding-team' ? extractZhipuCodingTeamApiToken(apiKey) : apiKey
     headers.Authorization = `Bearer ${authToken}`
-    headers['User-Agent'] = getPromaUserAgent(pkg.version)
+    headers['User-Agent'] = getCopisUserAgent(pkg.version)
   } else if (provider === 'xiaomi-token-plan') {
     headers.Authorization = `Bearer ${apiKey}`
-    headers['User-Agent'] = getPromaUserAgent(pkg.version)
+    headers['User-Agent'] = getCopisUserAgent(pkg.version)
   } else if (provider === 'minimax' || provider === 'qwen-anthropic') {
     headers.Authorization = `Bearer ${apiKey}`
   } else {
@@ -774,7 +774,7 @@ async function testXiaomiMessages(
   }
   if (provider === 'xiaomi-token-plan') {
     headers.Authorization = `Bearer ${apiKey}`
-    headers['User-Agent'] = getPromaUserAgent(pkg.version)
+    headers['User-Agent'] = getCopisUserAgent(pkg.version)
   } else {
     headers['api-key'] = apiKey
   }
@@ -810,7 +810,7 @@ async function testQwenTokenPlanMessages(
       'anthropic-version': '2023-06-01',
       'content-type': 'application/json',
       Authorization: `Bearer ${apiKey}`,
-      'User-Agent': getPromaUserAgent(pkg.version),
+      'User-Agent': getCopisUserAgent(pkg.version),
     },
     body: JSON.stringify({
       model: modelId,
@@ -936,7 +936,7 @@ async function queryCodexPlanQuota(
   const headers: Record<string, string> = {
     Authorization: `Bearer ${accessToken}`,
     Accept: 'application/json',
-    'User-Agent': getPromaUserAgent(pkg.version),
+    'User-Agent': getCopisUserAgent(pkg.version),
   }
   if (activeCredentials.accountId) {
     headers['ChatGPT-Account-Id'] = activeCredentials.accountId
@@ -971,7 +971,7 @@ async function queryKimiPlanQuota(apiKey: string, proxyUrl?: string): Promise<Ch
     method: 'GET',
     headers: {
       'Content-Type': 'application/json',
-      'User-Agent': getPromaUserAgent(pkg.version),
+      'User-Agent': getCopisUserAgent(pkg.version),
       Authorization: `Bearer ${apiKey}`,
     },
   }))
@@ -1061,7 +1061,7 @@ async function queryMiniMaxPlanQuota(apiKey: string, baseUrl: string, proxyUrl?:
     headers: {
       Authorization: `Bearer ${apiKey}`,
       'Content-Type': 'application/json',
-      'User-Agent': getPromaUserAgent(pkg.version),
+      'User-Agent': getCopisUserAgent(pkg.version),
     },
   }))
   const responseText = await response.text()
@@ -1156,7 +1156,7 @@ async function queryDeepSeekBalance(apiKey: string, baseUrl: string, proxyUrl?: 
     headers: {
       Authorization: `Bearer ${apiKey}`,
       Accept: 'application/json',
-      'User-Agent': getPromaUserAgent(pkg.version),
+      'User-Agent': getCopisUserAgent(pkg.version),
     },
   }))
   const responseText = await response.text()
@@ -1290,7 +1290,7 @@ async function fetchZhipuQuota(
     headers: {
       Authorization: apiKey,
       'Content-Type': 'application/json',
-      'User-Agent': getPromaUserAgent(pkg.version),
+      'User-Agent': getCopisUserAgent(pkg.version),
     },
   }))
   const responseText = await response.text()
@@ -1306,7 +1306,7 @@ async function fetchZhipuQuota(
 }
 
 async function fetchZhipuTeamQuota(
-  credentials: import('@proma/shared').ZhipuTeamCredentials,
+  credentials: import('@copis/shared').ZhipuTeamCredentials,
   proxyUrl?: string,
 ): Promise<ZhipuQuotaResponse | { error: string }> {
   const fetchFn = getFetchFn(proxyUrl)
@@ -1316,7 +1316,7 @@ async function fetchZhipuTeamQuota(
     'Content-Type': 'application/json',
     'set-language': 'zh',
     Referer: 'https://bigmodel.cn/coding-plan/team/usage-stats',
-    'User-Agent': getPromaUserAgent(pkg.version),
+    'User-Agent': getCopisUserAgent(pkg.version),
   }
   if (credentials.organization) {
     headers['bigmodel-organization'] = credentials.organization
@@ -1819,7 +1819,7 @@ interface AnthropicModelItem {
  *
  * DeepSeek / Kimi 等内置供应商会按协议根路径补全模型端点。
  * Anthropic 兼容格式使用完整请求地址，不再推导模型端点。
- * Coding Plan 渠道必须发送 Proma User-Agent。
+ * Coding Plan 渠道必须发送 Copis User-Agent。
  * 文档: https://docs.anthropic.com/en/api/models-list
  */
 async function fetchAnthropicCompatibleModels(
@@ -1837,10 +1837,10 @@ async function fetchAnthropicCompatibleModels(
   if (provider === 'kimi-coding' || provider === 'zhipu-coding' || provider === 'zhipu-coding-team') {
     const authToken = provider === 'zhipu-coding-team' ? extractZhipuCodingTeamApiToken(apiKey) : apiKey
     headers.Authorization = `Bearer ${authToken}`
-    headers['User-Agent'] = getPromaUserAgent(pkg.version)
+    headers['User-Agent'] = getCopisUserAgent(pkg.version)
   } else if (provider === 'xiaomi-token-plan') {
     headers.Authorization = `Bearer ${apiKey}`
-    headers['User-Agent'] = getPromaUserAgent(pkg.version)
+    headers['User-Agent'] = getCopisUserAgent(pkg.version)
   } else if (provider === 'minimax' || provider === 'qwen-anthropic') {
     headers.Authorization = `Bearer ${apiKey}`
   } else {

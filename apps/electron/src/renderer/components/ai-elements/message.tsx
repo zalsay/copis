@@ -1,7 +1,7 @@
 /**
  * AI Elements - 消息组件原语
  *
- * 简化迁移自 proma-frontend 的 ai-elements/message.tsx，
+ * 简化迁移自 copis-frontend 的 ai-elements/message.tsx，
  * 保留核心消息展示组件，适配 Electron + Jotai 架构。
  *
  * 包含：
@@ -15,6 +15,7 @@
  * - MessageLoading — 3 个弹跳点加载动画
  * - MessageStopped — "已停止生成" 状态标记
  * - StreamingIndicator — 流式呼吸脉冲点
+ * - Markdown mention/remark 工具独立，保持组件的 Fast Refresh 边界稳定
  */
 
 import * as React from 'react'
@@ -36,11 +37,19 @@ import {
   TooltipTrigger,
 } from '@/components/ui/tooltip'
 import { LoadingIndicator } from '@/components/ui/loading-indicator'
-import { CodeBlock, MermaidBlock } from '@proma/ui'
-import { detectLanguage } from '@proma/core'
+import { CodeBlock, MermaidBlock } from '@copis/ui'
+import { detectLanguage } from '@copis/core'
 import { FilePathChip, isAbsoluteFilePath, isRelativeFilePath } from './file-path-chip'
+import {
+  normalizeNamedReferenceDelimiters,
+  remarkMentions,
+  remarkPreserveBreaks,
+  safeDecode,
+  type MentionType,
+  type RemarkPluginFn,
+} from './message-markdown'
 import type { HTMLAttributes, ComponentProps, ReactNode } from 'react'
-import type { FileAttachment } from '@proma/shared'
+import type { FileAttachment } from '@copis/shared'
 
 // ===== Message 根容器 =====
 
@@ -194,59 +203,7 @@ export function MessageAction({
 
 // ===== MessageResponse Markdown 渲染 =====
 
-// ----- mdast 节点类型（remark 自定义插件用） -----
-
-interface MdastTextNode {
-  type: 'text'
-  value: string
-}
-
-interface MdastLinkNode {
-  type: 'link'
-  url: string
-  children: MdastNode[]
-}
-
-interface MdastBreakNode {
-  type: 'break'
-}
-
-interface MdastGenericNode {
-  type: string
-  children?: MdastNode[]
-  value?: string
-}
-
-type MdastNode = MdastTextNode | MdastLinkNode | MdastBreakNode | MdastGenericNode
-
-interface MdastParent {
-  type: string
-  children: MdastNode[]
-}
-
-// ----- mdast 工具函数 -----
-
-/** 递归遍历 mdast text 节点（自动跳过 code / inlineCode 子树） */
-function walkMdastText(
-  node: MdastParent,
-  visitor: (node: MdastTextNode, index: number, parent: MdastParent) => number | void
-): void {
-  if (!node.children) return
-  for (let i = 0; i < node.children.length; i++) {
-    const child = node.children[i]!
-    if (child.type === 'text') {
-      const result = visitor(child as MdastTextNode, i, node)
-      if (typeof result === 'number') i = result - 1
-    } else if (child.type !== 'code' && child.type !== 'inlineCode') {
-      const asParent = child as MdastParent
-      if (asParent.children) walkMdastText(asParent, visitor)
-    }
-  }
-}
-
 // ----- MentionChip 组件 -----
-
-type MentionType = 'file' | 'skill' | 'mcp' | 'session' | 'todo' | 'calendar_event'
 
 const MENTION_STYLES: Record<MentionType, { icon: typeof FileText; className: string }> = {
   file: { icon: FileText, className: 'bg-primary/10 text-primary' },
@@ -255,62 +212,6 @@ const MENTION_STYLES: Record<MentionType, { icon: typeof FileText; className: st
   session: { icon: MessageSquareText, className: 'bg-[hsl(200_80%_50%/0.14)] text-[hsl(200_80%_40%)]' },
   todo: { icon: ListTodo, className: 'bg-amber-500/15 text-amber-800 dark:text-amber-200' },
   calendar_event: { icon: CalendarDays, className: 'bg-cyan-500/15 text-cyan-800 dark:text-cyan-200' },
-}
-
-function safeDecode(raw: string): string {
-  try {
-    return decodeURIComponent(raw)
-  } catch {
-    return raw
-  }
-}
-
-/** 仅在普通文本中转换旧引用，避免改写 inline code、fenced code 和缩进代码块。 */
-export function normalizeNamedReferenceDelimiters(markdown: string): string {
-  const normalizeText = (text: string): string => text.replace(
-    /(&(?:session|todo|calendar_event):[A-Za-z0-9-]+)~(\S+)/g,
-    '$1::$2'
-  )
-  const normalizeInlineCodeSafeText = (text: string): string => {
-    let normalized = ''
-    let cursor = 0
-
-    while (cursor < text.length) {
-      const openingIndex = text.indexOf('`', cursor)
-      if (openingIndex === -1) return normalized + normalizeText(text.slice(cursor))
-      const delimiter = text.slice(openingIndex).match(/^`+/)?.[0]
-      if (!delimiter) return normalized + normalizeText(text.slice(cursor))
-      const closingIndex = text.indexOf(delimiter, openingIndex + delimiter.length)
-      if (closingIndex === -1) return normalized + normalizeText(text.slice(cursor))
-
-      normalized += normalizeText(text.slice(cursor, openingIndex))
-      normalized += text.slice(openingIndex, closingIndex + delimiter.length)
-      cursor = closingIndex + delimiter.length
-    }
-
-    return normalized
-  }
-
-  const lines = markdown.split('\n')
-  let inFence: { marker: '`' | '~'; length: number } | null = null
-  return lines.map((line) => {
-    const fenceMatch = line.match(/^ {0,3}(`{3,}|~{3,})/)
-    const indentedCode = !inFence && /^(?: {4}|\t)/.test(line)
-    const isCode = Boolean(inFence || indentedCode || fenceMatch)
-    const result = isCode ? line : normalizeInlineCodeSafeText(line)
-
-    if (fenceMatch) {
-      const markerText = fenceMatch[1] ?? ''
-      const marker = markerText[0] as '`' | '~'
-      if (!inFence) {
-        inFence = { marker, length: markerText.length }
-      } else if (marker === inFence.marker && markerText.length >= inFence.length) {
-        inFence = null
-      }
-    }
-
-    return result
-  }).join('\n')
 }
 
 function MentionChip({ type, value }: { type: MentionType; value: string }): React.ReactElement {
@@ -342,85 +243,6 @@ function MentionChip({ type, value }: { type: MentionType; value: string }): Rea
     </span>
   )
 }
-
-// ----- remarkMentions：将 @file: /skill: #mcp: &session: &todo: &calendar_event: 转为 mention:// link 节点 -----
-
-export function remarkMentions() {
-  return (tree: MdastParent) => {
-    walkMdastText(tree, (node, index, parent) => {
-      const text = node.value
-      // 每次调用创建独立正则实例，避免 /g 状态在并发 remark pipeline 间互相干扰
-      const mentionPattern = /@file:(\S+)|\/skill:(\S+)|#mcp:(\S+)|&session:([A-Za-z0-9-]+)(?:(?:~|::)(\S+))?|&todo:([A-Za-z0-9-]+)(?:(?:~|::)(\S+))?|&calendar_event:([A-Za-z0-9-]+)(?:(?:~|::)(\S+))?/g
-      if (!mentionPattern.test(text)) return
-      mentionPattern.lastIndex = 0
-
-      const parts: MdastNode[] = []
-      let lastIdx = 0
-      let m: RegExpExecArray | null
-
-      while ((m = mentionPattern.exec(text)) !== null) {
-        if (m.index > lastIdx) {
-          parts.push({ type: 'text', value: text.slice(lastIdx, m.index) })
-        }
-        const mType: MentionType = m[1]
-          ? 'file'
-          : m[2]
-            ? 'skill'
-            : m[3]
-              ? 'mcp'
-              : m[4]
-                ? 'session'
-                : m[6]
-                  ? 'todo'
-                  : 'calendar_event'
-        const referenceId = m[1] ?? m[2] ?? m[3] ?? m[4] ?? m[6] ?? m[8] ?? ''
-        const encodedLabel = m[5] ?? m[7] ?? m[9]
-        const rawValue = encodedLabel ? `${referenceId}::${safeDecode(encodedLabel)}` : referenceId
-        // 文件/Skill/MCP 旧消息可能已经编码；带标题的 named reference 始终重新编码整个值。
-        const alreadyEncoded = !encodedLabel && /%[0-9A-Fa-f]{2}/.test(referenceId)
-        const safeValue = alreadyEncoded ? referenceId : encodeURIComponent(rawValue)
-        parts.push({
-          type: 'link',
-          url: `mention://${mType}/${safeValue}`,
-          children: [{ type: 'text', value: m[0] }],
-        })
-        lastIdx = m.index + m[0].length
-      }
-
-      if (lastIdx < text.length) {
-        parts.push({ type: 'text', value: text.slice(lastIdx) })
-      }
-
-      parent.children.splice(index, 1, ...parts)
-      return index + parts.length
-    })
-  }
-}
-
-// ----- remarkPreserveBreaks：在 text 节点中将 \n 转为 break 节点（跳过代码块） -----
-
-export function remarkPreserveBreaks() {
-  return (tree: MdastParent) => {
-    walkMdastText(tree, (node, index, parent) => {
-      const text = node.value
-      if (!text.includes('\n')) return
-
-      const lines = text.split('\n')
-      const parts: MdastNode[] = []
-
-      for (let i = 0; i < lines.length; i++) {
-        if (i > 0) parts.push({ type: 'break' })
-        if (lines[i]) parts.push({ type: 'text', value: lines[i] })
-      }
-
-      parent.children.splice(index, 1, ...parts)
-      return index + parts.length
-    })
-  }
-}
-
-/** remark 插件函数签名 */
-export type RemarkPluginFn = () => (tree: MdastParent) => void
 
 /**
  * 附加 basePaths 上下文 — 用于把"附加目录候选"穿透到 MarkdownInlineCode 而不必逐层透传 props。
@@ -648,7 +470,7 @@ export const MessageResponse = React.memo(
     const renderedMarkdown = (remarkPlugins?.includes(remarkMentions)
       ? normalizeNamedReferenceDelimiters(children)
       : children
-    ).replace(/<!--PROMA_AUTOMATION:[\s\S]*?-->/g, '').trim()
+    ).replace(/<!--COPIS_AUTOMATION:[\s\S]*?-->/g, '').trim()
 
     return (
       <div

@@ -5,9 +5,9 @@
       <rect x="100" y="100" width="824" height="824" rx="185" ry="185"/>
     </clipPath>
   </defs>
-  <!-- 仅取最新主标志的有效区域，避免把源图的大块黑色留白带进应用图标。 -->
+  <!-- 扩大源图裁剪范围，让背景与内部图案之间保留更充足的留白。 -->
   <g clip-path="url(#apple-icon-mask)">
-    <svg x="100" y="100" width="824" height="824" viewBox="354 345 536 536" preserveAspectRatio="none">
+    <svg x="100" y="100" width="824" height="824" viewBox="302 293 640 640" preserveAspectRatio="none">
       <image href="../../../main-logo.png" x="0" y="0" width="1254" height="1254"/>
     </svg>
   </g>

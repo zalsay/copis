@@ -1,14 +1,14 @@
 /**
  * Pi Agent 消息兼容层。
  *
- * 主进程和渲染层仍使用 Claude SDK 兼容的 SDKMessage 协议；本模块集中处理
+ * 主进程和渲染层使用统一的 SDKMessage 传输协议；本模块集中处理
  * Pi AgentMessage 与 SDKMessage 之间的形状转换，避免 session 编排代码混入 UI 协议细节。
  */
 
 import { randomUUID } from 'node:crypto'
 import type { AgentMessage } from '@earendil-works/pi-agent-core'
 import type { AssistantMessage, ToolResultMessage, UserMessage } from '@earendil-works/pi-ai/compat'
-import type { SDKAssistantMessage, SDKMessage } from '@proma/shared'
+import type { SDKAssistantMessage, SDKMessage } from '@copis/shared'
 import type { RuntimeGuardResultOverride } from '../agent-runtime-guards'
 import { isMalformedResponseError, isTransientNetworkError } from '../error-patterns'
 

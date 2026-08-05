@@ -13,8 +13,8 @@ import type {
   AutomationPermissionMode,
   AutomationSessionMode,
   AgentRuntime,
-} from '@proma/shared'
-import { AUTOMATION_DEFAULT_PERMISSION_MODE, AUTOMATION_DEFAULT_SESSION_MODE } from '@proma/shared'
+} from '@copis/shared'
+import { AUTOMATION_DEFAULT_PERMISSION_MODE, AUTOMATION_DEFAULT_SESSION_MODE } from '@copis/shared'
 
 /** 全部定时任务列表 */
 export const automationsAtom = atom<Automation[]>([])
@@ -94,7 +94,7 @@ export function automationToDraft(a: Automation): AutomationDraft {
     dayOfMonth: a.dayOfMonth,
     scheduledAt: a.scheduledAt,
     maxRuns: a.maxRuns,
-    agentRuntime: a.agentRuntime ?? 'claude',
+    agentRuntime: a.agentRuntime ?? 'pi',
     channelId: a.channelId,
     modelId: a.modelId,
     workspaceId: a.workspaceId,

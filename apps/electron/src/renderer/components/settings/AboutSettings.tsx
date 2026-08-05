@@ -8,7 +8,7 @@
 import * as React from 'react'
 import { useAtomValue, useSetAtom } from 'jotai'
 import { RefreshCw, Loader2, CheckCircle2, AlertCircle, Info, Terminal, ChevronDown, ChevronUp, ExternalLink, RotateCw } from 'lucide-react'
-import type { EnvironmentCheckResult, RuntimeStatus, WindowsShellPreference } from '@proma/shared'
+import type { EnvironmentCheckResult, RuntimeStatus, WindowsShellPreference } from '@copis/shared'
 import {
   SettingsSection,
   SettingsCard,
@@ -39,7 +39,7 @@ function UpdateCard(): React.ReactElement | null {
   const [checking, setChecking] = React.useState(false)
   const [idleInstallScheduled, setIdleInstallScheduled] = React.useState(false)
   const [showReleaseNotes, setShowReleaseNotes] = React.useState(false)
-  const [release, setRelease] = React.useState<import('@proma/shared').GitHubRelease | null>(null)
+  const [release, setRelease] = React.useState<import('@copis/shared').GitHubRelease | null>(null)
 
   // updater 不可用时不渲染
   if (!available) return null

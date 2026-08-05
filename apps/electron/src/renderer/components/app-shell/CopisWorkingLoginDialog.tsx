@@ -1,8 +1,8 @@
 import * as React from 'react'
 import { KeyRound, Loader2, LogIn, Mail, UserPlus, X } from 'lucide-react'
-import type { WorkingAuthState } from '@proma/shared'
+import type { WorkingAuthState } from '@copis/shared'
 import { cn } from '@/lib/utils'
-import { CopisLogo } from '@/lib/model-logo'
+import { CopisAppLogo } from '@/lib/model-logo'
 import './CopisWorkingLoginDialog.css'
 
 const EMAIL_PATTERN = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/
@@ -259,7 +259,7 @@ export function CopisWorkingLoginDialog({
       >
         <div className="copis-working-auth-top">
           <div className="copis-working-auth-brand">
-            <span className="copis-working-auth-brand-icon" aria-hidden="true"><img src={CopisLogo} alt="" /></span>
+            <span className="copis-working-auth-brand-icon" aria-hidden="true"><img src={CopisAppLogo} alt="" /></span>
             <span>Copis 账户</span>
           </div>
           {dismissible && (

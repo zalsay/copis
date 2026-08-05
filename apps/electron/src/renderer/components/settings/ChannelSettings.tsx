@@ -10,10 +10,10 @@ import { ExternalLink, Pencil, Plus, Trash2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Switch } from '@/components/ui/switch'
-import { PROVIDER_LABELS, isAgentCompatibleProvider } from '@proma/shared'
-import type { Channel } from '@proma/shared'
-import { getChannelLogo, PromaLogo } from '@/lib/model-logo'
-import { getEnabledClaudeAgentChannelIds } from '@/lib/agent-channel-selection'
+import { PROVIDER_LABELS } from '@copis/shared'
+import type { Channel } from '@copis/shared'
+import { getChannelLogo, CopisLogo } from '@/lib/model-logo'
+import { getEnabledAgentChannelIds } from '@/lib/agent-channel-selection'
 import { agentChannelIdAtom, agentModelIdAtom, agentChannelIdsAtom } from '@/atoms/agent-atoms'
 import { channelsAtom } from '@/atoms/chat-atoms'
 import { SettingsSection, SettingsCard, SettingsRow } from './primitives'
@@ -72,10 +72,10 @@ export function ChannelSettings(): React.ReactElement {
     loadChannels()
   }, [loadChannels])
 
-  // 渠道的启用状态是唯一开关：同步衍生的 Claude 白名单，清理旧版独立开关留下的状态。
+  // 渠道的启用状态是唯一开关：同步衍生的 Agent 可用渠道列表。
   React.useEffect(() => {
     if (loading) return
-    const derivedIds = getEnabledClaudeAgentChannelIds(channels)
+    const derivedIds = getEnabledAgentChannelIds(channels)
     const currentIds = agentChannelIdsRef.current
     const unchanged = derivedIds.length === currentIds.length
       && derivedIds.every((id, index) => id === currentIds[index])
@@ -160,7 +160,8 @@ export function ChannelSettings(): React.ReactElement {
       const savedChannel = await window.electronAPI.updateChannel(channel.id, { enabled: !channel.enabled })
       await syncAgentChannelEligibility(
         savedChannel,
-        savedChannel.enabled && isAgentCompatibleProvider(savedChannel.provider),
+        savedChannel.enabled,
+
       )
 
       await loadChannels()
@@ -209,7 +210,7 @@ export function ChannelSettings(): React.ReactElement {
         }
       >
         <SettingsCard>
-          <PromaProviderCard />
+          <CopisProviderCard />
         </SettingsCard>
         {loading ? (
           <div className="text-sm text-muted-foreground py-8 text-center">加载中...</div>
@@ -256,8 +257,8 @@ export function ChannelSettings(): React.ReactElement {
   )
 }
 
-function openPromaDownload(): void {
-  window.open('https://proma.cool/download', '_blank')
+function openCopisDownload(): void {
+  window.open('https://copis.cool/download', '_blank')
 }
 
 // ===== 渠道行子组件 =====
@@ -285,7 +286,7 @@ function ChannelRow({ channel, onEdit, onDelete, onToggle }: ChannelRowProps): R
       description={
         <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
           <span>{description}</span>
-          <AgentCoreChips provider={channel.provider} />
+          <AgentCoreChips />
         </div>
       }
       className="group"
@@ -317,24 +318,13 @@ function ChannelRow({ channel, onEdit, onDelete, onToggle }: ChannelRowProps): R
   )
 }
 
-function AgentCoreChips({ provider }: Pick<Channel, 'provider'>): React.ReactElement {
-  const supportsClaude = isAgentCompatibleProvider(provider)
-
+function AgentCoreChips(): React.ReactElement {
   return (
     <div className="inline-flex items-center gap-1" aria-label="支持的 Agent Core">
-      {supportsClaude && (
-        <Badge
-          variant="outline"
-          className="px-1.5 py-0 text-[10px] font-medium leading-5"
-          title="Claude Agent SDK（新功能不再支持，将于 8 月中旬彻底下线）"
-        >
-          Claude
-        </Badge>
-      )}
       <Badge
         variant="outline"
         className="px-1.5 py-0 text-[10px] font-medium leading-5"
-        title="Pi Agent SDK（推荐，新功能仅在 Pi 上提供）"
+        title="Pi Agent runtime"
       >
         Pi
       </Badge>
@@ -342,16 +332,16 @@ function AgentCoreChips({ provider }: Pick<Channel, 'provider'>): React.ReactEle
   )
 }
 
-// ===== Proma 官方供应商推广卡片 =====
+// ===== Copis 官方供应商推广卡片 =====
 
-function PromaProviderCard(): React.ReactElement {
+function CopisProviderCard(): React.ReactElement {
   return (
     <SettingsRow
-      label="Proma"
-      icon={<img src={PromaLogo} alt="Proma" className="w-8 h-8 rounded" />}
-      description="Proma 商业版｜安全、稳定、优惠的内置模型｜适用于 Chat 与 Agent"
+      label="Copis"
+      icon={<img src={CopisLogo} alt="Copis" className="w-8 h-8 rounded" />}
+      description="Copis 商业版｜安全、稳定、优惠的内置模型｜适用于 Chat 与 Agent"
     >
-      <Button size="sm" variant="outline" className="gap-1.5" onClick={openPromaDownload}>
+      <Button size="sm" variant="outline" className="gap-1.5" onClick={openCopisDownload}>
         <ExternalLink size={13} />
         <span>下载商业版</span>
       </Button>

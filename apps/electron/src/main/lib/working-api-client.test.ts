@@ -4,7 +4,7 @@ import { WorkingApiClient, WorkingApiError } from './working-api-client'
 interface FakeStore {
   token: string | null
   refreshToken: string | null
-  user: import('@proma/shared').WorkingUser | null
+  user: import('@copis/shared').WorkingUser | null
 }
 
 function createStore(initialToken: string | null = null, initialRefreshToken: string | null = null): FakeStore & import('./working-auth-store').WorkingTokenStore {
@@ -325,5 +325,18 @@ describe('Copis Working API client', () => {
   test('rejects invalid backend URLs before making a request', () => {
     expect(() => new WorkingApiClient({ baseUrl: 'file:///tmp/backend', tokenStore: createStore() }))
       .toThrow('只支持 http 或 https')
+  })
+
+  test('uses the remote Working backend by default', () => {
+    const previousBackendUrl = process.env.COPIS_BACKEND_URL
+    delete process.env.COPIS_BACKEND_URL
+
+    try {
+      const client = new WorkingApiClient({ tokenStore: createStore() })
+      expect(client.baseUrl).toBe('https://edu-api.meetlife.com.cn:9001')
+    } finally {
+      if (previousBackendUrl === undefined) delete process.env.COPIS_BACKEND_URL
+      else process.env.COPIS_BACKEND_URL = previousBackendUrl
+    }
   })
 })
