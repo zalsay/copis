@@ -44,6 +44,7 @@ import { getAgentWorkspacePath, getSdkConfigDir, getWorkspaceSkillsDir } from '.
 import { buildDynamicContext, buildSystemPrompt } from './agent-prompt-builder'
 import { appendMemoryContext } from './memory-context-builder'
 import { buildContextPrompt } from './agent-session-context-prompt'
+import { buildMentionedToolsPrompt } from './agent-mentioned-tools-prompt'
 import { buildAgentRuntimeEnv, mergeRuntimeEnv } from './agent-runtime-env'
 import { getFunctionalModulePath } from './functional-module-manager'
 import { getEffectiveProxyUrl } from './proxy-settings-service'
@@ -96,6 +97,8 @@ export interface AgentRpcInputRecord {
   agentRuntime?: 'pi'
   workspaceId?: string
   additionalDirectories?: string[]
+  mentionedSkills?: string[]
+  mentionedMcpServers?: string[]
   permissionModeOverride?: CopisPermissionMode
   workingMode?: WorkingMode
   startedAt?: number
@@ -116,6 +119,15 @@ const rpcMemoryMaintenance = sharedMemoryMaintenanceService
 function stringArray(value: unknown): string[] | undefined {
   const values = filterAttachedPaths(value)
   return values.length > 0 ? values : undefined
+}
+
+function stringList(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined
+  const values = value
+    .filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+    .map((item) => item.trim())
+  const uniqueValues = Array.from(new Set(values))
+  return uniqueValues.length > 0 ? uniqueValues : undefined
 }
 
 function optionalString(value: unknown): string | undefined {
@@ -154,6 +166,8 @@ export function parseAgentRpcInput(record: Record<string, unknown>): AgentSendIn
     throw new Error('Working 模式参数不正确')
   }
   const triggeredBy = isTriggeredBy(record.triggeredBy)
+  const mentionedSkills = stringList(record.mentionedSkills)
+  const mentionedMcpServers = stringList(record.mentionedMcpServers)
 
   return {
     sessionId,
@@ -164,6 +178,8 @@ export function parseAgentRpcInput(record: Record<string, unknown>): AgentSendIn
     agentRuntime: 'pi',
     ...(optionalString(record.workspaceId) ? { workspaceId: optionalString(record.workspaceId) } : {}),
     ...(stringArray(record.additionalDirectories) ? { additionalDirectories: stringArray(record.additionalDirectories) } : {}),
+    ...(mentionedSkills ? { mentionedSkills } : {}),
+    ...(mentionedMcpServers ? { mentionedMcpServers } : {}),
     ...(permissionMode ? { permissionModeOverride: permissionMode } : {}),
     ...(isWorkingMode(rawWorkingMode) ? { workingMode: rawWorkingMode } : {}),
     ...(startedAt !== undefined ? { startedAt } : {}),
@@ -275,6 +291,10 @@ export async function prepareAgentRpcRun(input: AgentSendInput): Promise<PiWorke
   const proxyUrl = await getEffectiveProxyUrl()
   const runtimeEnv = buildRuntimeEnv(settings, proxyUrl, workspace, workspaceSlug)
   const compactRequest = input.userMessage.trim() === '/compact'
+  const mentionedToolsPrompt = buildMentionedToolsPrompt(input.mentionedSkills, input.mentionedMcpServers)
+  const enrichedUserMessage = mentionedToolsPrompt
+    ? `${mentionedToolsPrompt}\n\n${input.userMessage}`
+    : input.userMessage
 
   const initialPermissionMode = input.permissionModeOverride
     ?? session.permissionMode
@@ -285,12 +305,12 @@ export async function prepareAgentRpcRun(input: AgentSendInput): Promise<PiWorke
     workspaceSlug,
     agentCwd,
   })
-  const baseContextualMessage = `${dynamicContext}\n\n${input.userMessage}`
+  const baseContextualMessage = `${dynamicContext}\n\n${enrichedUserMessage}`
   const contextualMessage = compactRequest
     ? baseContextualMessage
     : await appendMemoryContext(baseContextualMessage, {
       workspaceSlug,
-      userMessage: input.userMessage,
+      userMessage: enrichedUserMessage,
       policy: memoryPolicy,
     })
   appendSDKMessages(input.sessionId, [buildUserMessage(input, startedAt)])
@@ -333,6 +353,7 @@ export async function prepareAgentRpcRun(input: AgentSendInput): Promise<PiWorke
     ...(settings.agentMaxBudgetUsd && settings.agentMaxBudgetUsd > 0 ? { maxBudgetUsd: settings.agentMaxBudgetUsd } : {}),
     ...(directories.length > 0 ? { additionalDirectories: directories } : {}),
     ...(workspaceSlug ? { additionalSkillPaths: [getWorkspaceSkillsDir(workspaceSlug)] } : {}),
+    ...(input.mentionedSkills?.length ? { skillMentions: input.mentionedSkills } : {}),
     ...(workspaceSlug ? { workspaceSlug } : {}),
     memoryPolicy,
     ...(proxyUrl ? { proxyUrl } : {}),

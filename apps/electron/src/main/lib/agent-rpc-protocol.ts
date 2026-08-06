@@ -30,6 +30,8 @@ export interface PiWorkerQueryConfig {
   maxBudgetUsd?: number
   additionalDirectories?: string[]
   additionalSkillPaths?: string[]
+  /** 当前用户输入显式引用的 Skill slug。 */
+  skillMentions?: string[]
   workspaceSlug?: string
   memoryPolicy?: MemoryPolicy
   proxyUrl?: string

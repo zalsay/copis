@@ -25,6 +25,7 @@ describe('Agent RPC 协议', () => {
           systemPrompt: 'Copis Agent',
           piAgentDir: '/tmp/.copis/sdk-config',
           piSessionDir: '/tmp/.copis/sdk-config/sessions',
+          skillMentions: ['automation'],
         },
       },
     }
@@ -33,6 +34,7 @@ describe('Agent RPC 协议', () => {
 
     expect(frame.endsWith('\n')).toBe(true)
     expect(JSON.parse(frame)).toEqual(command)
+    expect((JSON.parse(frame) as { config: { query: { skillMentions?: string[] } } }).config.query.skillMentions).toEqual(['automation'])
   })
 
   test('Given worker JSONL When parsed Then accepts event and complete frames only as objects', () => {
