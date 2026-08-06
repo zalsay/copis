@@ -29,7 +29,7 @@ export function WelcomeView(): React.ReactElement {
   const initRef = React.useRef<string | null>(null)
 
   // 将高频变化的值收集到 ref 中，避免污染 useEffect 依赖数组（否则 tabs/draftSessionIds
-  // 引用变化会导致重复触发，而 createChat/createAgent 每次渲染都是新引用）
+  // 引用变化会导致重复触发，而 Agent 会话创建函数每次渲染都是新引用）
   const latestRef = React.useRef({
     tabs,
     draftSessionIds,

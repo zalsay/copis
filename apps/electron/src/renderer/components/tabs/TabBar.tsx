@@ -131,9 +131,6 @@ export function TabBar(): React.ReactElement {
           agentWorkspaceId: session.workspaceId,
         }).catch(console.error)
       }
-    } else if (tab.type === 'tutorial') {
-      setCurrentAgentSessionId(null)
-      setAppMode('agent')
     }
   }, [setActiveTabId, setAutomationForm, tabs, validAgentSessions, setAppMode, setCurrentAgentSessionId, setCurrentAgentWorkspaceId, setUnviewedCompleted])
 

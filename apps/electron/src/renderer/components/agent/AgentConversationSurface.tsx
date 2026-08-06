@@ -99,14 +99,18 @@ import {
   finalizeStreamingActivities,
 } from '@/atoms/agent-atoms'
 import type { AgentContextStatus } from '@/atoms/agent-atoms'
-import { settingsOpenAtom } from '@/atoms/settings-tab'
 import { longTextPasteAsAttachmentEnabledAtom } from '@/atoms/ui-preferences'
 import { channelsAtom } from '@/atoms/model-atoms'
 import { todoPlanningGroupsAtom } from '@/atoms/planning-atoms'
-import { workingClientConfigAtom } from '@/atoms/working-atoms'
+import { workingClientConfigAtom, workingSettingsOpenAtom } from '@/atoms/working-atoms'
 import { useOpenSession } from '@/hooks/useOpenSession'
 import { AgentSessionProvider } from '@/contexts/session-context'
 import { draftSessionIdsAtom } from '@/atoms/draft-session-atoms'
+import {
+  resolveAgentConversationPermissionMode,
+  shouldShowAgentPlanUi,
+  shouldShowExitPlanBanner,
+} from '@/lib/browser-agent-permission-policy'
 import { sendWithCmdEnterAtom } from '@/atoms/shortcut-atoms'
 import { useOpenPreview } from '@/components/diff/preview-opener'
 import type { AgentRuntime, AgentSendInput, AgentPendingFile, FileDialogLargeFile, FileDialogResult, ModelOption, SDKMessage, SDKUserMessage, WorkingMode } from '@copis/shared'
@@ -293,7 +297,7 @@ export function AgentConversationSurface({ sessionId, variant = 'main' }: AgentC
     ?? (sessionMetaChannelId === COPIS_WORKING_CHANNEL_ID && sessionMetaModelId === COPIS_WORKING_EXPERT_MODEL_ID ? 'expert' : 'fast')
   const agentChannelId = COPIS_WORKING_CHANNEL_ID
   const agentModelId = workingModeToModelId(workingMode)
-  const setSettingsOpen = useSetAtom(settingsOpenAtom)
+  const setWorkingSettingsOpen = useSetAtom(workingSettingsOpenAtom)
   const setDraftSessionIds = useSetAtom(draftSessionIdsAtom)
   const globalWorkspaceId = useAtomValue(currentAgentWorkspaceIdAtom)
   // 从会话元数据派生 workspaceId：会话数据已加载时以自身为准，未加载时回退全局 atom
@@ -353,12 +357,15 @@ export function AgentConversationSurface({ sessionId, variant = 'main' }: AgentC
   const streamErrors = useAtomValue(agentStreamErrorsAtom)
   const agentError = streamErrors.get(sessionId) ?? null
   const planModeSessions = useAtomValue(agentPlanModeSessionsAtom)
-  const isPlanMode = planModeSessions.has(sessionId)
+  const isPlanMode = shouldShowAgentPlanUi(variant, planModeSessions.has(sessionId))
   const permissionModeMap = useAtomValue(agentPermissionModeMapAtom)
   const defaultPermissionMode = useAtomValue(agentDefaultPermissionModeAtom)
   const persistedPermissionMode = useAtomValue(sessionPersistedPermissionModeAtom(sessionId))
-  const permissionMode = permissionModeMap.get(sessionId) ?? persistedPermissionMode ?? defaultPermissionMode
-  const isPermissionPlanMode = permissionMode === 'plan'
+  const permissionMode = resolveAgentConversationPermissionMode(
+    variant,
+    permissionModeMap.get(sessionId) ?? persistedPermissionMode ?? defaultPermissionMode,
+  )
+  const isPermissionPlanMode = shouldShowAgentPlanUi(variant, permissionMode === 'plan')
   const store = useStore()
   const currentQuotedSelection = useAtomValue(currentQuotedSelectionAtom)
   const setQuotedSelectionMap = useSetAtom(quotedSelectionMapAtom)
@@ -2406,6 +2413,15 @@ export function AgentConversationSurface({ sessionId, variant = 'main' }: AgentC
     return () => window.removeEventListener('copis:stop-generation', handler)
   }, [streaming, handleStop])
 
+  // 监听快捷键系统分发的 clear-context 事件（Cmd+K），复用 Pi 的 /compact 语义。
+  React.useEffect(() => {
+    const handler = (): void => {
+      handleCompact()
+    }
+    window.addEventListener('copis:clear-context', handler)
+    return () => window.removeEventListener('copis:clear-context', handler)
+  }, [handleCompact])
+
   // 监听快捷键系统分发的 focus-input 事件（Cmd+L）
   React.useEffect(() => {
     const handler = (): void => {
@@ -2430,9 +2446,10 @@ export function AgentConversationSurface({ sessionId, variant = 'main' }: AgentC
   const allAskUserRequests = useAtomValue(allPendingAskUserRequestsAtom)
   const allPermissionRequests = useAtomValue(allPendingPermissionRequestsAtom)
   const allExitPlanRequests = useAtomValue(allPendingExitPlanRequestsAtom)
+  const hasExitPlanBanner = shouldShowExitPlanBanner(variant, allExitPlanRequests.get(sessionId)?.length ?? 0)
   const hasBannerOverlay =
     (allAskUserRequests.get(sessionId)?.length ?? 0) > 0 ||
-    (allExitPlanRequests.get(sessionId)?.length ?? 0) > 0
+    hasExitPlanBanner
   const hasBlockingRequests = hasBannerOverlay || (allPermissionRequests.get(sessionId)?.length ?? 0) > 0
   const canSendQueuedNow = messagesLoaded && (streaming || !messagesRefreshing) && !!agentChannelId && hasAvailableModel && !hasBlockingRequests
   const autoSendingQueuedRef = React.useRef(false)
@@ -2758,8 +2775,8 @@ export function AgentConversationSurface({ sessionId, variant = 'main' }: AgentC
         <AskUserBanner sessionId={sessionId} />
 
 
-        {/* ExitPlanMode 计划审批横幅 */}
-        <ExitPlanModeBanner sessionId={sessionId} />
+        {/* ExitPlanMode 计划审批横幅；Browser Agent 不参与 Copis 计划审批。 */}
+        {hasExitPlanBanner && <ExitPlanModeBanner sessionId={sessionId} />}
 
         {/* 输入区域 — 交互横幅显示时隐藏，由横幅替代 */}
         {!hasBannerOverlay && (
@@ -2782,7 +2799,7 @@ export function AgentConversationSurface({ sessionId, variant = 'main' }: AgentC
                 <button
                   type="button"
                   className="text-xs underline underline-offset-2 hover:text-foreground transition-colors"
-                  onClick={() => setSettingsOpen(true)}
+                  onClick={() => setWorkingSettingsOpen(true)}
                 >
                   前往设置
                 </button>

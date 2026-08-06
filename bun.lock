@@ -37,7 +37,7 @@
     },
     "apps/electron": {
       "name": "@copis/electron",
-      "version": "0.0.14",
+      "version": "0.0.16",
       "dependencies": {
         "@anthropic-ai/sdk": "^0.93.0",
         "@earendil-works/pi-agent-core": "0.82.1",
@@ -152,7 +152,7 @@
     },
     "packages/core": {
       "name": "@copis/core",
-      "version": "0.2.17",
+      "version": "0.2.18",
       "dependencies": {
         "@copis/shared": "workspace:*",
         "highlight.js": "^11.11.1",
@@ -179,7 +179,7 @@
     },
     "packages/shared": {
       "name": "@copis/shared",
-      "version": "0.1.57",
+      "version": "0.1.58",
       "devDependencies": {
         "typescript": "^5.0.0",
       },

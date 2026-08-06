@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { parseFunctionalModuleManifest } from './functional-module-manifest'
+import { getFunctionalModuleManifestUrl, parseFunctionalModuleManifest } from './functional-module-manifest'
 
 const manifest = {
   schema: 1,
@@ -49,6 +49,17 @@ function manifestJson(overrides: Record<string, unknown> = {}): string {
 }
 
 describe('COS 功能模块 manifest 解析', () => {
+  test('运行时环境变量可以覆盖构建时注入的 manifest 地址', () => {
+    const previous = process.env.COPIS_FUNCTIONAL_MODULE_MANIFEST_URL
+    process.env.COPIS_FUNCTIONAL_MODULE_MANIFEST_URL = 'https://runtime.example.com/manifest.json'
+    try {
+      expect(getFunctionalModuleManifestUrl()).toBe('https://runtime.example.com/manifest.json')
+    } finally {
+      if (previous === undefined) delete process.env.COPIS_FUNCTIONAL_MODULE_MANIFEST_URL
+      else process.env.COPIS_FUNCTIONAL_MODULE_MANIFEST_URL = previous
+    }
+  })
+
   test('当前平台返回 OfficeCLI 和 Rust API 的完整 artifact', () => {
     const artifacts = parseFunctionalModuleManifest(manifestJson(), '0.16.17', 'darwin', 'arm64')
 

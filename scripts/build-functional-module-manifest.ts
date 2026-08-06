@@ -18,6 +18,9 @@ const arch = parseArchitecture(process.env.COPIS_MODULE_ARCH ?? process.arch)
 const version = getOption('--version') ?? process.env.COPIS_MODULE_VERSION ?? packageMetadata.version
 const channel = getOption('--channel') ?? process.env.COPIS_MODULE_CHANNEL ?? 'stable'
 const publicBaseUrl = getOption('--public-base-url') ?? process.env.COS_PUBLIC_BASE_URL
+const rustOnly = hasFlag('--rust') || process.env.COPIS_RUST_ONLY === '1'
+const officeCliOnly = hasFlag('--officecli') || process.env.COPIS_OFFICECLI_ONLY === '1'
+if (rustOnly && officeCliOnly) throw new Error('--rust 与 --officecli 不能同时使用')
 const prefix = resolveFunctionalModulePrefix({
   cliPrefix: getOption('--prefix'),
   objectPrefixPath: process.env.OBJECT_PREFIX_PATH,
@@ -31,31 +34,35 @@ const outputPath = resolve(
 
 if (!publicBaseUrl) throw new Error('缺少 COS_PUBLIC_BASE_URL 或 --public-base-url')
 
-const rustBinary = getOption('--rust-binary')
-  ?? process.env.COPIS_RUST_HTTP_API_BINARY
-  ?? join(repoRoot, 'native/http-api-server/target/release', binaryName('copis-http-api-server', platform))
-const officeCliBinary = getOption('--officecli-binary')
-  ?? process.env.COPIS_OFFICECLI_BINARY
-  ?? join(electronDir, 'resources/bin', binaryName('officecli', platform))
+const modules: FunctionalModuleBinaryInput[] = []
 
-const modules: FunctionalModuleBinaryInput[] = [
-  {
+if (!officeCliOnly) {
+  const rustBinary = getOption('--rust-binary')
+    ?? process.env.COPIS_RUST_HTTP_API_BINARY
+    ?? join(repoRoot, 'native/http-api-server/target/release', binaryName('copis-http-api-server', platform))
+  modules.push({
     module: 'rust-http-api',
     version: getOption('--rust-version') ?? process.env.COPIS_RUST_HTTP_API_VERSION ?? version,
     platform,
     arch,
     binaryPath: rustBinary,
     required: true,
-  },
-  {
+  })
+}
+
+if (!rustOnly) {
+  const officeCliBinary = getOption('--officecli-binary')
+    ?? process.env.COPIS_OFFICECLI_BINARY
+    ?? join(electronDir, 'resources/bin', binaryName('officecli', platform))
+  modules.push({
     module: 'officecli',
     version: getOption('--officecli-version') ?? process.env.COPIS_OFFICECLI_VERSION ?? version,
     platform,
     arch,
     binaryPath: officeCliBinary,
     required: true,
-  },
-]
+  })
+}
 
 const release = buildFunctionalModuleRelease({
   channel,
@@ -78,6 +85,10 @@ function getOption(name: string): string | undefined {
   const index = process.argv.indexOf(name)
   const value = index >= 0 ? process.argv[index + 1] : undefined
   return value?.trim() || undefined
+}
+
+function hasFlag(name: string): boolean {
+  return process.argv.includes(name)
 }
 
 function binaryName(name: string, targetPlatform: FunctionalModulePlatform): string {

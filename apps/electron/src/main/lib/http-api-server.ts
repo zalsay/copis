@@ -41,6 +41,11 @@ import {
   type HttpApiResponse,
 } from './http-api-handler'
 import { getWorkingTokenStore } from './working-auth-store'
+import {
+  MODEL_BASE_URL_ENV,
+  resolveCopisBackendEndpoints,
+  type CopisBackendEndpointResolution,
+} from './backend-endpoint-resolver'
 
 export const HTTP_API_HOST = COPIS_HTTP_API_HOST
 export const HTTP_API_PORT = resolveCopisHttpApiPort({
@@ -75,6 +80,9 @@ export interface HttpApiServerOptions {
   stopTimeoutMs?: number
   port?: number
   workerLaunch?: PiWorkerLaunch
+  backendUrl?: string
+  modelBaseUrl?: string
+  endpointConfigUrl?: string
 }
 
 interface ManagedProcess {
@@ -256,6 +264,12 @@ function spawnManagedProcess(
         COPIS_MEMORY_DIR: join(getConfigDir(), 'memory'),
         COPIS_HTTP_API_INTERNAL_TOKEN: internalToken,
         COPIS_WORKING_ACCESS_TOKEN: getWorkingTokenStore().getToken() ?? '',
+        ...(options.backendUrl || process.env.COPIS_BACKEND_URL
+          ? { COPIS_BACKEND_URL: options.backendUrl ?? process.env.COPIS_BACKEND_URL }
+          : {}),
+        ...(options.modelBaseUrl || process.env[MODEL_BASE_URL_ENV]
+          ? { [MODEL_BASE_URL_ENV]: options.modelBaseUrl ?? process.env[MODEL_BASE_URL_ENV] }
+          : {}),
         ...(app.isPackaged ? { COPIS_PI_RPC_COMPILED_RUNTIME: '1' } : {}),
         ...(useDevelopmentScriptRuntime
           ? {
@@ -319,6 +333,37 @@ function spawnManagedProcess(
   })
 
   return { child, internalToken, ...(lineReader ? { lineReader } : {}) }
+}
+
+async function resolveHttpApiBackend(
+  options: HttpApiServerOptions,
+): Promise<{ options: HttpApiServerOptions; resolution: CopisBackendEndpointResolution }> {
+  const resolution = await resolveCopisBackendEndpoints({
+    configuredBackendUrl: options.backendUrl,
+    configuredModelBaseUrl: options.modelBaseUrl,
+    endpointConfigUrl: options.endpointConfigUrl,
+    fetchImpl: options.fetchImpl,
+  })
+  return {
+    options: {
+      ...options,
+      backendUrl: resolution.backendUrl,
+      modelBaseUrl: resolution.modelBaseUrl,
+    },
+    resolution,
+  }
+}
+
+export async function prepareHttpApiBackend(
+  options: HttpApiServerOptions = {},
+): Promise<HttpApiServerOptions> {
+  const prepared = await resolveHttpApiBackend(options)
+  process.env.COPIS_BACKEND_URL = prepared.resolution.backendUrl
+  process.env[MODEL_BASE_URL_ENV] = prepared.resolution.modelBaseUrl
+  console.log(
+    `[HTTP API] edu-api endpoint 已选择（${prepared.resolution.source}）：${prepared.resolution.backendUrl}`,
+  )
+  return prepared.options
 }
 
 function stopManagedProcess(
@@ -442,54 +487,55 @@ export function startHttpApiServer(options: HttpApiServerOptions = {}): void {
 }
 
 export async function updateHttpApiServer(options: HttpApiServerOptions = {}): Promise<boolean> {
-  const rootDir = getRootDir(options)
+  const runtimeOptions = await prepareHttpApiBackend(options)
+  const rootDir = getRootDir(runtimeOptions)
   const paths = getFunctionalModulePaths(rootDir)
   const previous = readActiveFunctionalModule(paths, 'rust-http-api')
-  const formalPort = options.port ?? HTTP_API_PORT
+  const formalPort = runtimeOptions.port ?? HTTP_API_PORT
   const candidatePort = formalPort + 1 <= 65_535 ? formalPort + 1 : formalPort - 1
 
   let prepared
   try {
-    prepared = await prepareFunctionalModule({ name: 'rust-http-api' }, managerOptions(options, rootDir))
+    prepared = await prepareFunctionalModule({ name: 'rust-http-api' }, managerOptions(runtimeOptions, rootDir))
   } catch (error) {
     console.warn('[HTTP API] 准备候选 Rust 模块失败:', error)
     return false
   }
 
   const candidatePath = join(prepared.versionDir, prepared.artifact.entrypoint)
-  const candidate = spawnManagedProcess(candidatePath, candidatePort, options, false)
+  const candidate = spawnManagedProcess(candidatePath, candidatePort, runtimeOptions, false)
   if (!candidate) return false
 
   if (!await waitForHttpApiHealth(candidatePort, {
-    ...options,
+    ...runtimeOptions,
     onHealthProgress: undefined,
   })) {
-    await stopManagedProcess(candidate.child, options.stopTimeoutMs)
+    await stopManagedProcess(candidate.child, runtimeOptions.stopTimeoutMs)
     console.warn('[HTTP API] 候选 Rust 模块健康检查失败，保留当前版本')
     return false
   }
-  await stopManagedProcess(candidate.child, options.stopTimeoutMs)
+  await stopManagedProcess(candidate.child, runtimeOptions.stopTimeoutMs)
 
   const oldProcess = httpApiProcess
   if (oldProcess) {
     httpApiProcess = null
     httpApiInternalToken = null
-    await stopManagedProcess(oldProcess, options.stopTimeoutMs)
+    await stopManagedProcess(oldProcess, runtimeOptions.stopTimeoutMs)
   }
 
   try {
     await activatePreparedFunctionalModule(prepared, rootDir)
   } catch (error) {
     if (previous) await restoreFunctionalModule(paths, previous)
-    if (previous) startHttpApiServer({ ...options, rootDir })
+    if (previous) startHttpApiServer({ ...runtimeOptions, rootDir })
     console.warn('[HTTP API] 激活候选 Rust 模块失败，已恢复旧版本:', error)
     return false
   }
 
-  const next = spawnManagedProcess(candidatePath, formalPort, options, true)
+  const next = spawnManagedProcess(candidatePath, formalPort, runtimeOptions, true)
   if (next && await waitForHttpApiHealth(formalPort, {
-    ...options,
-    onHealthProgress: options.onHealthProgress,
+    ...runtimeOptions,
+    onHealthProgress: runtimeOptions.onHealthProgress,
   })) {
     httpApiProcess = next.child
     httpApiInternalToken = next.internalToken
@@ -497,10 +543,10 @@ export async function updateHttpApiServer(options: HttpApiServerOptions = {}): P
     return true
   }
 
-  if (next) await stopManagedProcess(next.child, options.stopTimeoutMs)
+  if (next) await stopManagedProcess(next.child, runtimeOptions.stopTimeoutMs)
   if (previous) {
     await restoreFunctionalModule(paths, previous)
-    startHttpApiServer({ ...options, rootDir })
+    startHttpApiServer({ ...runtimeOptions, rootDir })
   }
   console.warn('[HTTP API] 新 Rust 模块正式端口健康检查失败，已恢复旧版本')
   return false
@@ -547,9 +593,10 @@ export function shouldInstallMissingHttpApiModule(isPackaged: boolean): boolean 
 }
 
 export async function ensureHttpApiServer(options: HttpApiServerOptions = {}): Promise<void> {
-  const rootDir = getRootDir(options)
-  if (resolveBinaryPath({ ...options, rootDir })) {
-    startHttpApiServer({ ...options, rootDir })
+  const runtimeOptions = await prepareHttpApiBackend(options)
+  const rootDir = getRootDir(runtimeOptions)
+  if (resolveBinaryPath({ ...runtimeOptions, rootDir })) {
+    startHttpApiServer({ ...runtimeOptions, rootDir })
     return
   }
 
@@ -559,8 +606,8 @@ export async function ensureHttpApiServer(options: HttpApiServerOptions = {}): P
   }
 
   try {
-    await installFunctionalModule({ name: 'rust-http-api' }, managerOptions(options, rootDir))
-    startHttpApiServer({ ...options, rootDir })
+    await installFunctionalModule({ name: 'rust-http-api' }, managerOptions(runtimeOptions, rootDir))
+    startHttpApiServer({ ...runtimeOptions, rootDir })
   } catch (error) {
     console.error('[HTTP API] Rust 功能模块初始化失败:', error)
   }

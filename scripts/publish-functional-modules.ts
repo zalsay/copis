@@ -29,101 +29,107 @@ interface CosSdkConstructor {
 const repoRoot = resolve(import.meta.dir, '..')
 const electronDir = join(repoRoot, 'apps/electron')
 const packageMetadata = JSON.parse(readFileSync(join(electronDir, 'package.json'), 'utf8')) as { version: string }
-const secretId = requiredEnv('COS_SECRET_ID')
-const secretKey = requiredEnv('COS_SECRET_KEY')
-const bucketUrl = requiredOption('--bucket-url', 'COS_BUCKET_URL')
-const bucketInfo = parseBucketUrl(bucketUrl)
-const bucket = getOption('--bucket') ?? (process.env.COS_BUCKET?.trim() || bucketInfo.bucket)
-const region = getOption('--region') ?? (process.env.COS_REGION?.trim() || bucketInfo.region)
-const publicBaseUrl = requiredOption('--public-base-url', 'COS_PUBLIC_BASE_URL')
-const channel = getOption('--channel') ?? process.env.COPIS_MODULE_CHANNEL?.trim() ?? 'stable'
-const version = getOption('--version') ?? process.env.COPIS_MODULE_VERSION?.trim() ?? packageMetadata.version
-const platform = parsePlatform(getOption('--platform') ?? process.env.COPIS_MODULE_PLATFORM ?? process.platform)
-const arch = parseArchitecture(getOption('--arch') ?? process.env.COPIS_MODULE_ARCH ?? process.arch)
-const prefix = resolveFunctionalModulePrefix({
-  cliPrefix: getOption('--prefix'),
-  objectPrefixPath: process.env.OBJECT_PREFIX_PATH,
-  legacyCosPrefix: process.env.COS_PREFIX,
-})
 
-if (!bucket || !region) {
-  throw new Error('无法从 COS_BUCKET_URL 推断 bucket/region，请设置 COS_BUCKET 和 COS_REGION')
-}
+async function main(): Promise<void> {
+  const rustOnly = hasFlag('--rust') || process.env.COPIS_RUST_ONLY === '1'
+  const officeCliOnly = hasFlag('--officecli') || process.env.COPIS_OFFICECLI_ONLY === '1'
+  if (rustOnly && officeCliOnly) throw new Error('--rust 与 --officecli 不能同时使用')
 
-const cosModule = await import('cos-nodejs-sdk-v5') as unknown as { default?: CosSdkConstructor }
-const Cos = cosModule.default
-if (!Cos) throw new Error('COS SDK 初始化失败')
-const cos = new Cos({ SecretId: secretId, SecretKey: secretKey, Region: region })
-const client = createFunctionalModuleCosClient(cos, { bucket, region })
-
-if (hasFlag('--manifest-only')) {
-  const manifestPath = requiredOption('--manifest-file', 'COPIS_FUNCTIONAL_MODULE_MANIFEST_FILE')
-  const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as FunctionalModuleManifest
-  const requiredManifest = markFunctionalModuleRequired(manifest, 'officecli')
-  const manifestEntry = buildFunctionalModuleManifestUpload({
-    channel,
-    publicBaseUrl,
-    prefix,
-    manifest: requiredManifest,
+  const secretId = requiredEnv('COS_SECRET_ID')
+  const secretKey = requiredEnv('COS_SECRET_KEY')
+  const bucketUrl = requiredOption('--bucket-url', 'COS_BUCKET_URL')
+  const bucketInfo = parseBucketUrl(bucketUrl)
+  const bucket = getOption('--bucket') ?? (process.env.COS_BUCKET?.trim() || bucketInfo.bucket)
+  const region = getOption('--region') ?? (process.env.COS_REGION?.trim() || bucketInfo.region)
+  const publicBaseUrl = requiredOption('--public-base-url', 'COS_PUBLIC_BASE_URL')
+  const channel = getOption('--channel') ?? process.env.COPIS_MODULE_CHANNEL?.trim() ?? 'stable'
+  const version = getOption('--version') ?? process.env.COPIS_MODULE_VERSION?.trim() ?? packageMetadata.version
+  const platform = parsePlatform(getOption('--platform') ?? process.env.COPIS_MODULE_PLATFORM ?? process.platform)
+  const arch = parseArchitecture(getOption('--arch') ?? process.env.COPIS_MODULE_ARCH ?? process.arch)
+  const prefix = resolveFunctionalModulePrefix({
+    cliPrefix: getOption('--prefix'),
+    objectPrefixPath: process.env.OBJECT_PREFIX_PATH,
+    legacyCosPrefix: process.env.COS_PREFIX,
   })
-  await publishFunctionalModuleManifest(manifestEntry, client)
-  console.log(`[publish:functional-modules] 已覆盖发布 manifest: ${manifestEntry.key}`)
-} else {
-  const rustBinary = getOption('--rust-binary')
-    ?? process.env.COPIS_RUST_HTTP_API_BINARY?.trim()
-    ?? join(repoRoot, 'native/http-api-server/target/release', binaryName('copis-http-api-server', platform))
-  const officeCliBinary = getOption('--officecli-binary')
-    ?? process.env.COPIS_OFFICECLI_BINARY?.trim()
-    ?? join(electronDir, 'resources/bin', binaryName('officecli', platform))
-  const modules: FunctionalModuleBinaryInput[] = [
-    {
-      module: 'rust-http-api',
-      version: getOption('--rust-version') ?? process.env.COPIS_RUST_HTTP_API_VERSION?.trim() ?? version,
-      platform,
-      arch,
-      binaryPath: rustBinary,
-      required: true,
-    },
-    {
-      module: 'officecli',
-      version: getOption('--officecli-version') ?? process.env.COPIS_OFFICECLI_VERSION?.trim() ?? version,
-      platform,
-      arch,
-      binaryPath: officeCliBinary,
-      required: true,
-    },
-  ]
-  const release = buildFunctionalModuleRelease({
-    channel,
-    clientMinVersion: getOption('--client-min-version')
-      ?? process.env.COPIS_MODULE_CLIENT_MIN_VERSION?.trim()
-      ?? packageMetadata.version,
-    publicBaseUrl,
-    prefix,
-    modules,
-  })
-  const existingManifest = await fetchExistingManifest(release.manifestEntry.url)
-  const mergedManifest = mergeFunctionalModuleManifests(existingManifest, release.manifest)
-  const mergedManifestBody = Buffer.from(`${JSON.stringify(mergedManifest, null, 2)}\n`, 'utf8')
-  const releaseToPublish = {
-    ...release,
-    manifest: mergedManifest,
-    manifestEntry: {
-      ...release.manifestEntry,
-      body: mergedManifestBody,
-      size: mergedManifestBody.byteLength,
-      sha256: createHash('sha256').update(mergedManifestBody).digest('hex'),
-      allowOverwrite: true,
-    },
+  if (!bucket || !region) {
+    throw new Error('无法从 COS_BUCKET_URL 推断 bucket/region，请设置 COS_BUCKET 和 COS_REGION')
   }
 
-  if (existingManifest) {
-    console.log('[publish:functional-modules] 已合并 COS 中现有 manifest，保留其他平台模块')
-  }
+  const cosModule = await import('cos-nodejs-sdk-v5') as unknown as { default?: CosSdkConstructor }
+  const Cos = cosModule.default
+  if (!Cos) throw new Error('COS SDK 初始化失败')
+  const cos = new Cos({ SecretId: secretId, SecretKey: secretKey, Region: region })
+  const client = createFunctionalModuleCosClient(cos, { bucket, region })
 
-  await publishFunctionalModuleRelease(releaseToPublish, client)
-  console.log(`[publish:functional-modules] 已发布 ${release.binaries.length} 个二进制和 manifest`)
+  if (hasFlag('--manifest-only')) {
+    const manifestPath = requiredOption('--manifest-file', 'COPIS_FUNCTIONAL_MODULE_MANIFEST_FILE')
+    const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as FunctionalModuleManifest
+    const requiredManifest = markFunctionalModuleRequired(manifest, 'officecli')
+    const manifestEntry = buildFunctionalModuleManifestUpload({
+      channel,
+      publicBaseUrl,
+      prefix,
+      manifest: requiredManifest,
+    })
+    await publishFunctionalModuleManifest(manifestEntry, client)
+    console.log(`[publish:functional-modules] 已覆盖发布 manifest: ${manifestEntry.key}`)
+  } else {
+    const rustBinary = officeCliOnly
+      ? ''
+      : getOption('--rust-binary')
+        ?? process.env.COPIS_RUST_HTTP_API_BINARY?.trim()
+        ?? join(repoRoot, 'native/http-api-server/target/release', binaryName('copis-http-api-server', platform))
+    const officeCliBinary = rustOnly
+      ? undefined
+      : getOption('--officecli-binary')
+        ?? process.env.COPIS_OFFICECLI_BINARY?.trim()
+        ?? join(electronDir, 'resources/bin', binaryName('officecli', platform))
+    const modules = buildFunctionalModuleBinaryInputs({
+      rustOnly,
+      officeCliOnly,
+      rustBinary,
+      rustVersion: getOption('--rust-version') ?? process.env.COPIS_RUST_HTTP_API_VERSION?.trim() ?? version,
+      officeCliBinary,
+      officeCliVersion: getOption('--officecli-version') ?? process.env.COPIS_OFFICECLI_VERSION?.trim() ?? version,
+      platform,
+      arch,
+    })
+    const release = buildFunctionalModuleRelease({
+      channel,
+      clientMinVersion: getOption('--client-min-version')
+        ?? process.env.COPIS_MODULE_CLIENT_MIN_VERSION?.trim()
+        ?? packageMetadata.version,
+      publicBaseUrl,
+      prefix,
+      modules,
+    })
+    const existingManifest = await fetchExistingManifest(release.manifestEntry.url)
+    if (rustOnly) requireExistingOfficeCli(existingManifest, platform, arch)
+    if (officeCliOnly) requireExistingRustApi(existingManifest, platform, arch)
+    const mergedManifest = mergeFunctionalModuleManifests(existingManifest, release.manifest)
+    const mergedManifestBody = Buffer.from(`${JSON.stringify(mergedManifest, null, 2)}\n`, 'utf8')
+    const releaseToPublish = {
+      ...release,
+      manifest: mergedManifest,
+      manifestEntry: {
+        ...release.manifestEntry,
+        body: mergedManifestBody,
+        size: mergedManifestBody.byteLength,
+        sha256: createHash('sha256').update(mergedManifestBody).digest('hex'),
+        allowOverwrite: true,
+      },
+    }
+
+    if (existingManifest) {
+      console.log('[publish:functional-modules] 已合并 COS 中现有 manifest，保留其他平台模块')
+    }
+
+    await publishFunctionalModuleRelease(releaseToPublish, client)
+    console.log(`[publish:functional-modules] 已发布 ${release.binaries.length} 个二进制和 manifest`)
+  }
 }
+
+if (import.meta.main) await main()
 
 function requiredEnv(name: string): string {
   const value = process.env[name]?.trim()
@@ -145,6 +151,77 @@ function getOption(name: string): string | undefined {
 
 function hasFlag(name: string): boolean {
   return process.argv.includes(name)
+}
+
+export function requireExistingOfficeCli(
+  manifest: FunctionalModuleManifest | undefined,
+  platform: FunctionalModulePlatform,
+  arch: FunctionalModuleArchitecture,
+): void {
+  const platformKey = `${platform}-${arch}`
+  const artifact = manifest?.platforms[platformKey]?.modules.officecli
+  if (!artifact) {
+    throw new Error(`COS manifest 当前平台/架构缺少 officecli: ${platformKey}，--rust 发布已停止`)
+  }
+  if (artifact.required !== true) {
+    throw new Error(`COS manifest 当前平台/架构的 officecli 未标记 required=true: ${platformKey}，--rust 发布已停止`)
+  }
+}
+
+export function requireExistingRustApi(
+  manifest: FunctionalModuleManifest | undefined,
+  platform: FunctionalModulePlatform,
+  arch: FunctionalModuleArchitecture,
+): void {
+  const platformKey = `${platform}-${arch}`
+  const artifact = manifest?.platforms[platformKey]?.modules['rust-http-api']
+  if (!artifact) {
+    throw new Error(`COS manifest 当前平台/架构缺少 rust-http-api: ${platformKey}，--officecli 发布已停止`)
+  }
+  if (artifact.required !== true) {
+    throw new Error(`COS manifest 当前平台/架构的 rust-http-api 未标记 required=true: ${platformKey}，--officecli 发布已停止`)
+  }
+}
+
+interface FunctionalModuleBinaryInputOptions {
+  rustOnly: boolean
+  officeCliOnly?: boolean
+  rustBinary: string
+  rustVersion: string
+  officeCliBinary?: string
+  officeCliVersion: string
+  platform: FunctionalModulePlatform
+  arch: FunctionalModuleArchitecture
+}
+
+export function buildFunctionalModuleBinaryInputs(
+  input: FunctionalModuleBinaryInputOptions,
+): FunctionalModuleBinaryInput[] {
+  const officeCliOnly = input.officeCliOnly ?? false
+  if (input.rustOnly && officeCliOnly) throw new Error('--rust 与 --officecli 不能同时使用')
+  const modules: FunctionalModuleBinaryInput[] = []
+  if (!officeCliOnly) {
+    modules.push({
+      module: 'rust-http-api',
+      version: input.rustVersion,
+      platform: input.platform,
+      arch: input.arch,
+      binaryPath: input.rustBinary,
+      required: true,
+    })
+  }
+  if (!input.rustOnly) {
+    if (!input.officeCliBinary) throw new Error('正常发布或 OfficeCLI-only 发布需要提供 OfficeCLI 二进制路径')
+    modules.push({
+      module: 'officecli',
+      version: input.officeCliVersion,
+      platform: input.platform,
+      arch: input.arch,
+      binaryPath: input.officeCliBinary,
+      required: true,
+    })
+  }
+  return modules
 }
 
 function parseBucketUrl(value: string): { bucket: string; region: string } {

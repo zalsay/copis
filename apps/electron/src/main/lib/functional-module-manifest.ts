@@ -10,6 +10,7 @@ import type {
 
 const SUPPORTED_SCHEMA = 1
 const MANIFEST_ENV = 'COPIS_FUNCTIONAL_MODULE_MANIFEST_URL'
+declare const __COPIS_FUNCTIONAL_MODULE_MANIFEST_URL__: string | undefined
 
 export function parseFunctionalModuleManifest(
   json: string,
@@ -56,7 +57,14 @@ export function parseFunctionalModuleManifest(
 
 export function getFunctionalModuleManifestUrl(): string | undefined {
   const value = process.env[MANIFEST_ENV]?.trim()
-  return value || undefined
+  if (value) return value
+
+  if (typeof __COPIS_FUNCTIONAL_MODULE_MANIFEST_URL__ === 'string') {
+    const builtValue = __COPIS_FUNCTIONAL_MODULE_MANIFEST_URL__.trim()
+    if (builtValue) return builtValue
+  }
+
+  return undefined
 }
 
 function asManifest(value: unknown): FunctionalModuleManifest {

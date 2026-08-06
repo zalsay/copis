@@ -19,4 +19,11 @@ describe('native zoom shortcuts', () => {
       readonly: true,
     })
   })
+
+  test('describes the Agent context shortcut as Pi compaction', () => {
+    expect(DEFAULT_SHORTCUTS.find((shortcut) => shortcut.id === 'clear-context')).toMatchObject({
+      name: '压缩上下文',
+      description: '压缩当前 Agent 会话的上下文',
+    })
+  })
 })

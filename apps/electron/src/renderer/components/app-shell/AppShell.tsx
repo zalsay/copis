@@ -19,8 +19,6 @@ import { sidebarCollapsedAtom } from '@/atoms/tab-atoms'
 import { automationFormAtom } from '@/atoms/automation-atoms'
 import { activeViewAtom } from '@/atoms/active-view'
 import { interfaceVariantAtom } from '@/atoms/theme'
-import { settingsOpenAtom } from '@/atoms/settings-tab'
-import { SettingsPanel } from '@/components/settings/SettingsPanel'
 import { CopisWorkingSettingsPanel } from './CopisWorkingSettingsPanel'
 import { SearchDialog } from './SearchDialog'
 import { detectIsWindows, WINDOW_CONTROLS_INSET_RIGHT } from '@/lib/platform'
@@ -54,8 +52,6 @@ export function AppShell({ contextValue }: AppShellProps): React.ReactElement {
   const isPanelOpen = useAtomValue(currentSessionSidePanelOpenAtom)
   const automationForm = useAtomValue(automationFormAtom)
   const interfaceVariant = useAtomValue(interfaceVariantAtom)
-  const settingsOpen = useAtomValue(settingsOpenAtom)
-  const setSettingsOpen = useSetAtom(settingsOpenAtom)
   const workingSettingsOpen = useAtomValue(workingSettingsOpenAtom)
   const setWorkingSettingsOpen = useSetAtom(workingSettingsOpenAtom)
   const isClassic = interfaceVariant === 'classic'
@@ -194,9 +190,9 @@ export function AppShell({ contextValue }: AppShellProps): React.ReactElement {
           <div
             className={cn(
               'absolute inset-0 flex h-full w-full',
-              (settingsOpen || workingSettingsOpen || activeWebTabId) && 'invisible pointer-events-none',
+              (workingSettingsOpen || activeWebTabId) && 'invisible pointer-events-none',
             )}
-            aria-hidden={settingsOpen || workingSettingsOpen || !!activeWebTabId}
+            aria-hidden={workingSettingsOpen || !!activeWebTabId}
           >
             {/* 左侧边栏：可折叠，可拖拽调整宽度 */}
             <div className={cn(isClassic ? 'p-2 pr-0' : '', 'relative z-[60] crt-sidebar')}>
@@ -250,17 +246,6 @@ export function AppShell({ contextValue }: AppShellProps): React.ReactElement {
             )}
           </div>
           {activeWebTabId && <WebBrowserSurface />}
-          {settingsOpen && (
-            <div
-              className={cn(
-                'absolute inset-0 z-[60]',
-                activeWebTabId && 'invisible pointer-events-none',
-              )}
-              aria-hidden={!!activeWebTabId}
-            >
-              <SettingsPanel onClose={() => setSettingsOpen(false)} />
-            </div>
-          )}
           {workingSettingsOpen && (
             <div
               className={cn(

@@ -219,12 +219,6 @@ export type MarkdownFontSize = 'small' | 'medium' | 'large'
 /** 默认 Markdown 字号档位 */
 export const DEFAULT_MARKDOWN_FONT_SIZE: MarkdownFontSize = 'medium'
 
-/** Agent 灵动岛偏好。外接/无刘海屏默认不绘制顶部覆盖层。 */
-export interface AgentIslandSettings {
-  /** 是否启用 Agent / 近期 Todo 日程的灵动岛提醒，默认 true。 */
-  enabled?: boolean
-}
-
 /**
  * 给无视觉输入能力的 Agent 使用的独立视觉模型路由。
  * 仅保存用户已有渠道和模型的 ID，凭据继续由渠道加密存储管理。
@@ -327,8 +321,6 @@ export interface AppSettings {
    * 关闭后不注入任何 Copis 归因，并覆盖 Agent runtime 默认 Co-Authored-By。
    */
   gitAttributionEnabled?: boolean
-  /** Agent 灵动岛偏好（macOS 刘海屏优先，其他平台使用 Electron 降级体验）。 */
-  agentIsland?: AgentIslandSettings
   /** 主窗口状态（大小、位置、是否最大化） */
   mainWindowState?: MainWindowState
   /** 独立任务/日程窗口状态（大小、位置、是否最大化） */

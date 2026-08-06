@@ -1,7 +1,7 @@
 /**
  * System Prompt Atoms - 系统提示词状态管理
  *
- * 管理 Chat 模式的系统提示词配置，包括：
+ * 管理 Agent 的系统提示词配置，包括：
  * - 提示词列表和配置
  * - 当前选中的提示词
  * - 解析后的最终 systemMessage

@@ -22,6 +22,7 @@ const buildScript = readFileSync(join(repoRoot, 'build.ps1'), 'utf8')
 const buildShellScript = readFileSync(join(repoRoot, 'build.sh'), 'utf8')
 const deployScript = readFileSync(join(repoRoot, 'deploy.ps1'), 'utf8')
 const deployShellScript = readFileSync(join(repoRoot, 'deploy.sh'), 'utf8')
+const buildManifestScript = readFileSync(join(repoRoot, 'scripts/build-functional-module-manifest.ts'), 'utf8')
 
 describe('功能模块发布边界', () => {
   test('Electron 只负责下载，COS 上传工具属于仓库级开发脚本', () => {
@@ -47,5 +48,27 @@ describe('功能模块发布边界', () => {
     expect(deployShellScript).toContain('build:http-api-server')
     expect(deployShellScript).toContain('publish:functional-modules')
     expect(deployShellScript).toContain('--build-app')
+  })
+
+  test('部署入口在读取发布配置前加载根目录 .env', () => {
+    expect(deployShellScript).toContain('load_dotenv "$ROOT_DIR/.env"')
+    expect(deployShellScript).toContain('if [[ -n "${!key+x}" ]]')
+    expect(deployShellScript).toContain('PUBLIC_BASE_URL="${COS_PUBLIC_BASE_URL:-}"')
+    expect(deployScript).toContain('Import-DotEnvFile')
+    expect(deployScript).toContain("Join-Path $rootDir '.env'")
+  })
+
+  test('Rust-only 部署入口不要求本地 OfficeCLI', () => {
+    expect(buildManifestScript).toContain('--rust')
+    expect(deployShellScript).toContain('--rust')
+    expect(deployScript).toContain('[switch]$RustOnly')
+    expect(deployScript).toContain("'--rust'")
+  })
+
+  test('OfficeCLI-only 部署入口不要求本地 Rust API', () => {
+    expect(buildManifestScript).toContain('--officecli')
+    expect(deployShellScript).toContain('--officecli')
+    expect(deployScript).toContain('[switch]$OfficeCliOnly')
+    expect(deployScript).toContain("'--officecli'")
   })
 })

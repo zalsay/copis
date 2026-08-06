@@ -6,6 +6,42 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_DIR="$ROOT_DIR/apps/electron"
 
+load_dotenv() {
+  local env_file="$1"
+  local line key value
+
+  [[ -f "$env_file" ]] || return 0
+
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    line="${line%$'\r'}"
+    [[ "$line" =~ ^[[:space:]]*(#|$) ]] && continue
+    line="${line#"${line%%[![:space:]]*}"}"
+    if [[ "$line" == export[[:space:]]* ]]; then
+      line="${line#export}"
+      line="${line#"${line%%[![:space:]]*}"}"
+    fi
+
+    if [[ "$line" =~ ^[[:space:]]*([A-Za-z_][A-Za-z0-9_]*)[[:space:]]*=(.*)$ ]]; then
+      key="${BASH_REMATCH[1]}"
+      value="${BASH_REMATCH[2]}"
+      if [[ -n "${!key+x}" ]]; then
+        continue
+      fi
+
+      value="${value#"${value%%[![:space:]]*}"}"
+      value="${value%"${value##*[![:space:]]}"}"
+      if [[ "${value:0:1}" == '"' && "${value: -1}" == '"' ]]; then
+        value="${value:1:${#value}-2}"
+      elif [[ "${value:0:1}" == "'" && "${value: -1}" == "'" ]]; then
+        value="${value:1:${#value}-2}"
+      fi
+      export "$key=$value"
+    fi
+  done < "$env_file"
+}
+
+load_dotenv "$ROOT_DIR/.env"
+
 export BUN_INSTALL="${BUN_INSTALL:-$HOME/.bun}"
 export PATH="$BUN_INSTALL/bin:$PATH"
 
@@ -13,6 +49,8 @@ SKIP_INSTALL=0
 BUILD_APP=0
 SKIP_RUST_BUILD=0
 SKIP_PUBLISH=0
+RUST_ONLY="${COPIS_RUST_ONLY:-0}"
+OFFICECLI_ONLY="${COPIS_OFFICECLI_ONLY:-0}"
 PLATFORM="${COPIS_MODULE_PLATFORM:-}"
 ARCH="${COPIS_MODULE_ARCH:-}"
 CHANNEL="${COPIS_MODULE_CHANNEL:-stable}"
@@ -38,6 +76,8 @@ show_help() {
   --skip-install       跳过 bun install --frozen-lockfile
   --build-app          同时构建当前平台 Electron 应用包
   --skip-rust-build    使用已有 Rust 二进制
+  --rust               只发布 Rust HTTP API，保留 COS 中已有 OfficeCLI
+  --officecli          只发布 OfficeCLI，保留 COS 中已有 Rust HTTP API
   --skip-publish       只构建二进制，不发布 COS
   --platform <name>    win32、darwin 或 linux
   --arch <name>        x64 或 arm64
@@ -67,6 +107,12 @@ while [[ $# -gt 0 ]]; do
       ;;
     --skip-rust-build)
       SKIP_RUST_BUILD=1
+      ;;
+    --rust)
+      RUST_ONLY=1
+      ;;
+    --officecli)
+      OFFICECLI_ONLY=1
       ;;
     --skip-publish)
       SKIP_PUBLISH=1
@@ -121,6 +167,10 @@ while [[ $# -gt 0 ]]; do
   esac
   shift
 done
+
+if [[ "$RUST_ONLY" == '1' && "$OFFICECLI_ONLY" == '1' ]]; then
+  fail '--rust 与 --officecli 不能同时使用。'
+fi
 
 if ! command -v bun >/dev/null 2>&1; then
   fail "未找到 Bun，请确认 $BUN_INSTALL/bin/bun 已安装并位于 PATH。"
@@ -200,7 +250,7 @@ else
   DEFAULT_RUST_BINARY="$ROOT_DIR/native/http-api-server/target/release/copis-http-api-server"
 fi
 
-if [[ "$SKIP_RUST_BUILD" -eq 0 ]]; then
+if [[ "$OFFICECLI_ONLY" != '1' && "$SKIP_RUST_BUILD" -eq 0 ]]; then
   if [[ "$PLATFORM" != "$CURRENT_PLATFORM" || "$ARCH" != "$CURRENT_ARCH" ]]; then
     fail 'deploy.sh 默认只能在当前平台和架构编译 Rust API；跨平台产物请传入 --skip-rust-build 和 --rust-binary。'
   fi
@@ -208,14 +258,16 @@ if [[ "$SKIP_RUST_BUILD" -eq 0 ]]; then
   run_bun "$APP_DIR" 'Rust HTTP API 构建失败' run build:http-api-server
 fi
 
-if [[ -n "$RUST_BINARY" && "$RUST_BINARY" != /* ]]; then
-  RUST_BINARY="$ROOT_DIR/$RUST_BINARY"
+if [[ "$OFFICECLI_ONLY" != '1' ]]; then
+  if [[ -n "$RUST_BINARY" && "$RUST_BINARY" != /* ]]; then
+    RUST_BINARY="$ROOT_DIR/$RUST_BINARY"
+  fi
+  RUST_BINARY="${RUST_BINARY:-$DEFAULT_RUST_BINARY}"
+  if [[ ! -f "$RUST_BINARY" ]]; then
+    fail "未找到 Rust HTTP API 二进制：$RUST_BINARY"
+  fi
+  RUST_BINARY="$(cd "$(dirname "$RUST_BINARY")" && pwd)/$(basename "$RUST_BINARY")"
 fi
-RUST_BINARY="${RUST_BINARY:-$DEFAULT_RUST_BINARY}"
-if [[ ! -f "$RUST_BINARY" ]]; then
-  fail "未找到 Rust HTTP API 二进制：$RUST_BINARY"
-fi
-RUST_BINARY="$(cd "$(dirname "$RUST_BINARY")" && pwd)/$(basename "$RUST_BINARY")"
 
 if [[ "$BUILD_APP" -eq 1 ]]; then
   if [[ "$PLATFORM" != "$CURRENT_PLATFORM" ]]; then
@@ -243,10 +295,18 @@ if [[ "$SKIP_PUBLISH" -eq 0 ]]; then
     --version "$VERSION"
     --client-min-version "$CLIENT_MIN_VERSION"
     --public-base-url "$PUBLIC_BASE_URL"
-    --rust-binary "$RUST_BINARY"
   )
+  if [[ "$OFFICECLI_ONLY" != '1' ]]; then
+    RELEASE_ARGS+=(--rust-binary "$RUST_BINARY")
+  fi
   if [[ -n "$OBJECT_PREFIX_PATH" ]]; then
     RELEASE_ARGS+=(--prefix "$OBJECT_PREFIX_PATH")
+  fi
+  if [[ "$RUST_ONLY" == '1' ]]; then
+    RELEASE_ARGS+=(--rust)
+  fi
+  if [[ "$OFFICECLI_ONLY" == '1' ]]; then
+    RELEASE_ARGS+=(--officecli)
   fi
 
   echo '[Copis] 正在生成功能模块 manifest...'

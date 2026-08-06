@@ -73,6 +73,7 @@ import { resolvePiReasoningCapability } from './adapters/pi-model-registry'
 import { generateCodexTitle } from './adapters/pi-codex-title-generator'
 import { createFallbackTitle, sanitizeGeneratedTitle, TITLE_PROMPT } from './title-generation'
 import { filterAttachedPaths, getAttachedFileDirectories } from './attached-paths'
+import { getBrowserAgentPlanToolDenial, resolveBrowserAgentPermissionMode, resolveBrowserAgentSkillMentions } from './browser-agent-skill'
 
 // ===== 类型定义 =====
 
@@ -767,6 +768,9 @@ export class AgentOrchestrator {
     let userMessagePersisted = false
     let sessionMeta = getAgentSessionMeta(sessionId)
     const workingMode = normalizeWorkingMode(input.workingMode ?? sessionMeta?.workingMode)
+    const browserContext = getBrowserAgentContext(sessionId)
+    const hasBrowserContext = browserContext !== undefined
+    const effectiveSkillMentions = resolveBrowserAgentSkillMentions(mentionedSkills, hasBrowserContext)
 
     // 兼容旧会话和非 UI 触发路径：首次运行时把实际使用的模式补回会话索引。
     if (sessionMeta && sessionMeta.workingMode !== workingMode) {
@@ -1169,7 +1173,10 @@ export class AgentOrchestrator {
         workspaceId,
         workspaceSlug,
         allowedRoots: allAdditionalDirectories,
-        permissionMode: permissionModeOverride ?? sessionMeta?.permissionMode ?? COPIS_DEFAULT_PERMISSION_MODE,
+        permissionMode: resolveBrowserAgentPermissionMode(
+          hasBrowserContext,
+          permissionModeOverride ?? sessionMeta?.permissionMode,
+        ),
         memoryPolicy: workspace?.memoryPolicy ?? appSettings.defaultMemoryPolicy ?? 'writable',
         triggeredBy: input.triggeredBy,
         requestSingleApproval: async (approval) => {
@@ -1270,8 +1277,10 @@ export class AgentOrchestrator {
 
       // 12. 读取应用设置并确定权限模式
       // 权限模式只属于当前 session；新会话默认完全自动模式。
-      const initialPermissionMode: CopisPermissionMode = permissionModeOverride
-        ?? COPIS_DEFAULT_PERMISSION_MODE
+      const initialPermissionMode: CopisPermissionMode = resolveBrowserAgentPermissionMode(
+        hasBrowserContext,
+        permissionModeOverride,
+      )
       // 注册到 Map，支持运行中动态切换
       this.sessionPermissionModes.set(sessionId, initialPermissionMode)
       console.log(`[Agent 编排] 权限模式: ${initialPermissionMode}${permissionModeOverride ? '（外部覆盖）' : ''}`)
@@ -1372,6 +1381,7 @@ export class AgentOrchestrator {
       let planModeEntered = initialPermissionMode === 'plan'
 
       const syncPlanModeFromToolUse = (toolName: string): void => {
+        if (getBrowserAgentPlanToolDenial(toolName, hasBrowserContext)) return
         if (toolName === 'EnterPlanMode') {
           planModeEntered = true
           emitPlanModeChanged(true, 'tool')
@@ -1432,6 +1442,12 @@ export class AgentOrchestrator {
         }
 
         // ── EnterPlanMode / ExitPlanMode 处理 ──
+
+        const browserPlanToolDenial = getBrowserAgentPlanToolDenial(toolName, hasBrowserContext)
+        if (browserPlanToolDenial) {
+          console.warn(`[Agent 编排] Browser Agent 拒绝计划工具: tool=${toolName}`)
+          return { behavior: 'deny' as const, message: browserPlanToolDenial }
+        }
 
         // 完全自动模式：计划进入和退出都透明化，保持 bypassPermissions 的无人值守语义。
         if (currentMode === 'bypassPermissions' && (toolName === 'EnterPlanMode' || toolName === 'ExitPlanMode')) {
@@ -1560,7 +1576,6 @@ export class AgentOrchestrator {
       const piThinkingLevel = agentRuntime === 'pi'
         ? resolvePiThinkingLevel(appSettings, sessionMeta, channel.provider, selectedModelId, piReasoningCapability)
         : undefined
-      const browserContext = getBrowserAgentContext(sessionId)
       const browserTab = browserContext ? getWebTabState(browserContext.tabId) : undefined
       const systemPromptAppend = buildSystemPrompt({
         agentRuntime,
@@ -1679,7 +1694,7 @@ export class AgentOrchestrator {
         piSessionDir: join(getSdkConfigDir(), 'sessions'),
         ...(allAdditionalDirectories.length > 0 && { additionalDirectories: allAdditionalDirectories }),
         ...(workspaceSlug ? { additionalSkillPaths: [getWorkspaceSkillsDir(workspaceSlug)] } : {}),
-        ...(mentionedSkills?.length ? { skillMentions: mentionedSkills } : {}),
+        ...(effectiveSkillMentions?.length ? { skillMentions: effectiveSkillMentions } : {}),
         ...(workspaceSlug ? { workspaceSlug } : {}),
         memoryPolicy,
         ...(memoryTokenMaintenanceRunner ? { memoryMaintenanceRunner: memoryTokenMaintenanceRunner } : {}),
@@ -2665,6 +2680,10 @@ export class AgentOrchestrator {
     const workspaceSlug = meta?.workspaceId
       ? getAgentWorkspace(meta.workspaceId)?.slug
       : undefined
+    const effectiveSkillMentions = resolveBrowserAgentSkillMentions(
+      mentionedSkills,
+      getBrowserAgentContext(sessionId) !== undefined,
+    )
 
     let enrichedText = text
     const referencedSessionsBlock = buildReferencedSessionsPrompt(sessionId, mentionedSessionIds, workspaceSlug)
@@ -2723,7 +2742,11 @@ export class AgentOrchestrator {
         }
       }
 
-      await this.adapter.sendQueuedMessage(sessionId, sdkMessage)
+      await this.adapter.sendQueuedMessage(
+        sessionId,
+        sdkMessage,
+        effectiveSkillMentions?.length ? { skillMentions: effectiveSkillMentions } : undefined,
+      )
       console.log(`[Agent 编排] 追加消息已注入: sessionId=${sessionId}, uuid=${uuid}, interrupt=${!!opts?.interrupt}`)
 
       // 立即持久化到 JSONL — 仅存原始文本，不含 prompt 工程块（与 sendMessage 路径一致）

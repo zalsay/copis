@@ -24,17 +24,9 @@ import {
   currentAgentWorkspaceIdAtom,
   unviewedCompletedSessionIdsAtom,
 } from '@/atoms/agent-atoms'
-import {
-  channelFormDirtyAtom,
-  settingsOpenAtom,
-  settingsPendingSessionNavigationAtom,
-} from '@/atoms/settings-tab'
+import { workingSettingsOpenAtom } from '@/atoms/working-atoms'
 
-interface OpenSessionOptions {
-  bypassSettingsGuard?: boolean
-}
-
-type OpenSessionFn = (type: TabType, sessionId: string, title: string, options?: OpenSessionOptions) => void
+type OpenSessionFn = (type: TabType, sessionId: string, title: string) => void
 
 export function useOpenSession(): OpenSessionFn {
   const store = useStore()
@@ -47,19 +39,11 @@ export function useOpenSession(): OpenSessionFn {
   const agentSessions = useAtomValue(agentSessionsAtom)
   const setCurrentAgentWorkspaceId = useSetAtom(currentAgentWorkspaceIdAtom)
   const setUnviewedCompleted = useSetAtom(unviewedCompletedSessionIdsAtom)
-  const settingsOpen = useAtomValue(settingsOpenAtom)
-  const channelFormDirty = useAtomValue(channelFormDirtyAtom)
-  const setSettingsOpen = useSetAtom(settingsOpenAtom)
-  const setPendingSessionNavigation = useSetAtom(settingsPendingSessionNavigationAtom)
+  const setWorkingSettingsOpen = useSetAtom(workingSettingsOpenAtom)
 
   return React.useCallback(
-    (type: TabType, sessionId: string, title: string, options?: OpenSessionOptions): void => {
-      if (!options?.bypassSettingsGuard && settingsOpen && channelFormDirty) {
-        setPendingSessionNavigation({ type, sessionId, title })
-        return
-      }
-
-      setSettingsOpen(false)
+    (type: TabType, sessionId: string, title: string): void => {
+      setWorkingSettingsOpen(false)
 
       // 切回 agent 会话时，若该会话上次开着预览 Tab 则一并重建并回到上次视图
       const restore = type === 'agent'
@@ -97,6 +81,6 @@ export function useOpenSession(): OpenSessionFn {
         }
       }
     },
-    [tabs, setTabs, setActiveTabId, setAutomationForm, setActiveView, setAppMode, setCurrentAgentSessionId, agentSessions, setCurrentAgentWorkspaceId, setUnviewedCompleted, settingsOpen, channelFormDirty, setSettingsOpen, setPendingSessionNavigation],
+    [tabs, setTabs, setActiveTabId, setAutomationForm, setActiveView, setAppMode, setCurrentAgentSessionId, agentSessions, setCurrentAgentWorkspaceId, setUnviewedCompleted, setWorkingSettingsOpen],
   )
 }

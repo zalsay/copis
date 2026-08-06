@@ -2,7 +2,7 @@
  * AgentHeader — Agent 会话头部
  *
  * 显示会话标题（可点击编辑）。
- * 参照 ChatHeader 的编辑模式。
+ * 使用与其他会话一致的标题编辑模式。
  */
 
 import * as React from 'react'

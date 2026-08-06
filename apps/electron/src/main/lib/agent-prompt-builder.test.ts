@@ -32,7 +32,7 @@ beforeAll(async () => {
   ({ buildSystemPrompt, buildDynamicContext } = await import('./agent-prompt-builder'))
 })
 
-function buildPrompt(agentCwd: string): string {
+function buildPrompt(agentCwd: string, memoryPolicy?: 'off' | 'visible' | 'writable'): string {
   return buildSystemPrompt({
     agentRuntime: 'pi',
     workspaceName: '示例项目',
@@ -40,6 +40,7 @@ function buildPrompt(agentCwd: string): string {
     sessionId: 'session-1',
     agentCwd,
     permissionMode: 'bypassPermissions',
+    memoryPolicy,
   })
 }
 
@@ -119,5 +120,29 @@ describe('项目与会话工作台提示词', () => {
     const prompt = buildPrompt('/tmp/sample-project')
 
     expect(prompt).not.toContain('CLAUDE.md')
+  })
+
+  test('Given 三种 Memory 策略 When 构建系统提示词 Then 说明工具和注入权限边界', () => {
+    const offPrompt = buildPrompt('/tmp/sample-project', 'off')
+    const visiblePrompt = buildPrompt('/tmp/sample-project', 'visible')
+    const writablePrompt = buildPrompt('/tmp/sample-project', 'writable')
+
+    expect(offPrompt).toContain('`off`')
+    expect(offPrompt).toContain('不注入 `copis_memory_context`')
+    expect(offPrompt).toContain('不提供 Memory 工具')
+    expect(visiblePrompt).toContain('`visible`')
+    expect(visiblePrompt).toContain('只提供 `memory_recall` 和 `memory_read`')
+    expect(visiblePrompt).toContain('不提供 `memory_capture` 和 `memory_rewrite`')
+    expect(writablePrompt).toContain('`writable`')
+    expect(writablePrompt).toContain('提供四个 Memory 工具')
+  })
+
+  test('Given writable Memory 策略 When 构建系统提示词 Then 说明自动注入和后台捕获时序', () => {
+    const prompt = buildPrompt('/tmp/sample-project', 'writable')
+
+    expect(prompt).toContain('每个非 `/compact` 回合')
+    expect(prompt).toContain('后台进入自动捕获队列')
+    expect(prompt).toContain('180 秒静默窗口或 10 个回合')
+    expect(prompt).toContain('自动任务或委派回合只保留 `scratch`')
   })
 })

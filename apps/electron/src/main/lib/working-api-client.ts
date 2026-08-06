@@ -26,8 +26,9 @@ import type {
   WorkingWorkspaceInput,
 } from '@copis/shared'
 import type { WorkingTokenStore } from './working-auth-store'
+import { DEFAULT_COPIS_BACKEND_URL } from './backend-endpoint-resolver'
 
-export const DEFAULT_COPIS_BACKEND_URL = 'https://edu-api.meetlife.com.cn:9001'
+export { DEFAULT_COPIS_BACKEND_URL }
 
 const WORKING_TOKEN_REFRESH_BUFFER_MS = 5 * 60 * 1000
 const WORKING_REFRESH_RETRY_DELAY_MS = 60 * 1000

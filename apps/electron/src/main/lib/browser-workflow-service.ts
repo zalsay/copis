@@ -16,7 +16,7 @@ import {
   authorizeBrowserPageOrigin,
   resolveBrowserPageControlState,
 } from './browser-page-control-policy'
-import { getAgentSessionMeta } from './agent-session-manager'
+import { getAgentSessionMeta, updateAgentSessionMeta } from './agent-session-manager'
 import { getAgentWorkspace } from './agent-workspace-manager'
 import { getBrowserWorkflow, saveBrowserWorkflow } from './browser-workflow-store'
 import { assertBrowserWorkflowVersion } from './browser-workflow-schema'
@@ -654,6 +654,10 @@ export function bindBrowserAgentContext(
   const authorizedOrigin = previousBinding?.authorizedOrigin === nextOrigin
     ? previousBinding.authorizedOrigin
     : undefined
+  if (session.permissionMode !== 'bypassPermissions') {
+    // Browser Agent 的网页控制授权由 Browser Page 工具负责，不继承工作区只读会话的 plan 模式。
+    updateAgentSessionMeta(sessionId, { permissionMode: 'bypassPermissions' })
+  }
   bindings.set(sessionId, {
     sessionId,
     workspaceId: session.workspaceId,

@@ -12,7 +12,6 @@
 import { useEffect, useCallback } from 'react'
 import { useAtomValue, useSetAtom, useAtom, useStore } from 'jotai'
 import { appModeAtom } from '@/atoms/app-mode'
-import { settingsOpenAtom, channelFormDirtyAtom, settingsCloseRequestedAtom } from '@/atoms/settings-tab'
 import { searchDialogOpenAtom } from '@/atoms/search-atoms'
 import {
   tabsAtom,
@@ -38,6 +37,7 @@ import { activeViewAtom } from '@/atoms/active-view'
 import { useCreateSession } from '@/hooks/useCreateSession'
 import { useShortcut } from '@/hooks/useShortcut'
 import { useCloseTab } from '@/hooks/useCloseTab'
+import { workingSettingsOpenAtom } from '@/atoms/working-atoms'
 import {
   initShortcutRegistry,
   updateShortcutOverrides,
@@ -54,9 +54,7 @@ import {
  * 挂载后从 settings 加载自定义配置，并注册所有应用级快捷键。
  */
 export function GlobalShortcuts(): null {
-  const [settingsOpen, setSettingsOpen] = useAtom(settingsOpenAtom)
-  const channelFormDirty = useAtomValue(channelFormDirtyAtom)
-  const setSettingsCloseRequested = useSetAtom(settingsCloseRequestedAtom)
+  const [workingSettingsOpen, setWorkingSettingsOpen] = useAtom(workingSettingsOpenAtom)
   const [searchOpen, setSearchOpen] = useAtom(searchDialogOpenAtom)
   const [shortcutGuideOpen, setShortcutGuideOpen] = useAtom(shortcutGuideOpenAtom)
   const [sidebarCollapsed, setSidebarCollapsed] = useAtom(sidebarCollapsedAtom)
@@ -98,13 +96,8 @@ export function GlobalShortcuts(): null {
       setShortcutGuideOpen(false)
       return
     }
-    if (settingsOpen) {
-      // 渠道表单有未保存内容时，通知 SettingsPanel 弹出确认对话框
-      if (channelFormDirty) {
-        setSettingsCloseRequested(true)
-        return
-      }
-      setSettingsOpen(false)
+    if (workingSettingsOpen) {
+      setWorkingSettingsOpen(false)
       return
     }
     if (searchOpen) {
@@ -114,7 +107,7 @@ export function GlobalShortcuts(): null {
 
     if (!activeTabId) return
     requestClose(activeTabId)
-  }, [shortcutGuideOpen, setShortcutGuideOpen, settingsOpen, setSettingsOpen, channelFormDirty, setSettingsCloseRequested, searchOpen, setSearchOpen, activeTabId, requestClose])
+  }, [shortcutGuideOpen, setShortcutGuideOpen, workingSettingsOpen, setWorkingSettingsOpen, searchOpen, setSearchOpen, activeTabId, requestClose])
 
   // 监听菜单 IPC 事件（Cmd+W 被 Electron 菜单拦截后通过 IPC 转发）
   useEffect(() => {
@@ -130,7 +123,7 @@ export function GlobalShortcuts(): null {
   // Cmd+, → 打开设置
   useShortcut(
     'open-settings',
-    useCallback(() => setSettingsOpen(true), [setSettingsOpen]),
+    useCallback(() => setWorkingSettingsOpen(true), [setWorkingSettingsOpen]),
   )
 
   // Cmd+Shift+F / Ctrl+Shift+F → 全局搜索
@@ -166,7 +159,7 @@ export function GlobalShortcuts(): null {
     ),
   )
 
-  // Cmd+K → 清除上下文（通过 CustomEvent 分发到 ChatInput）
+  // Cmd+K → 压缩 Agent 上下文（通过 CustomEvent 分发）
   useShortcut(
     'clear-context',
     useCallback(() => {
@@ -174,7 +167,7 @@ export function GlobalShortcuts(): null {
     }, []),
   )
 
-  // Cmd+L → 聚焦输入框（通过 CustomEvent 分发到 ChatInput/AgentView）
+  // Cmd+L → 聚焦 Agent 输入框（通过 CustomEvent 分发）
   useShortcut(
     'focus-input',
     useCallback(() => {
@@ -182,7 +175,7 @@ export function GlobalShortcuts(): null {
     }, []),
   )
 
-  // Cmd+Shift+Backspace → 停止 Agent（通过 CustomEvent 分发到 ChatView/AgentView）
+  // Cmd+Shift+Backspace → 停止 Agent 生成（通过 CustomEvent 分发，流式运行时生效）
   useShortcut(
     'stop-generation',
     useCallback(() => {

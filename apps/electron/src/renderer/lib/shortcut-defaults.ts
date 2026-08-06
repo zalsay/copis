@@ -158,8 +158,8 @@ export const DEFAULT_SHORTCUTS: ShortcutDefinition[] = [
   // 编辑级
   {
     id: 'clear-context',
-    name: '清除上下文',
-    description: '清除当前 Agent 会话的上下文',
+    name: '压缩上下文',
+    description: '压缩当前 Agent 会话的上下文',
     defaultMac: 'Cmd+K',
     defaultWin: 'Ctrl+K',
     category: 'edit',

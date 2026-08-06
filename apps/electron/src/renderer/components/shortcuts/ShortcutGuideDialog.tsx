@@ -195,7 +195,7 @@ export function ShortcutGuideDialog(): React.ReactElement {
       {
         id: 'send-message',
         name: '发送消息',
-        description: '在 Chat 或 Agent 输入框中发送当前内容',
+        description: '在 Agent 输入框中发送当前内容',
         accelerator: sendWithCmdEnter ? `${primaryModifier}+Enter` : 'Enter',
       },
       {

@@ -1,8 +1,7 @@
 import * as React from 'react'
-import { useAtom, useAtomValue, useSetAtom, useStore } from 'jotai'
+import { useAtom, useAtomValue, useSetAtom } from 'jotai'
 import { AppShell } from './components/app-shell/AppShell'
 import { OnboardingView } from './components/onboarding/OnboardingView'
-import { TutorialBanner } from './components/tutorial/TutorialBanner'
 import { EnvironmentCheckDialog } from './components/environment/EnvironmentCheckDialog'
 import { MigrationImportDialog } from './components/migration/MigrationImportDialog'
 import { TooltipProvider } from './components/ui/tooltip'
@@ -11,7 +10,6 @@ import { CopisWorkingLoginDialog } from './components/app-shell/CopisWorkingLogi
 import { FunctionalModuleUpdateGate } from './components/functional-modules/FunctionalModuleUpdateGate'
 import { PlanningReminderRail } from './components/planning/PlanningReminderRail'
 import { environmentCheckDialogOpenAtom } from './atoms/environment'
-import { tabsAtom, activeTabIdAtom, openTab, TUTORIAL_TAB_ID, TUTORIAL_TAB_TITLE } from './atoms/tab-atoms'
 import { workingAuthStateAtom } from './atoms/working-atoms'
 import { useCreateSession } from './hooks/useCreateSession'
 import type { AppShellContextType } from './contexts/AppShellContext'
@@ -19,7 +17,6 @@ import type { AppShellContextType } from './contexts/AppShellContext'
 export default function App(): React.ReactElement {
   // 应用级初始化状态。
 
-  const store = useStore()
   const workingAuthState = useAtomValue(workingAuthStateAtom)
   const setWorkingAuthState = useSetAtom(workingAuthStateAtom)
   const { createAgent } = useCreateSession()
@@ -49,17 +46,9 @@ export default function App(): React.ReactElement {
     initialize()
   }, [setWorkingAuthState])
 
-  // 完成 onboarding 回调：创建欢迎 Agent 会话，可选打开教程 Tab
-  const handleOnboardingComplete = async (openTutorial?: boolean) => {
+  // 完成 onboarding 回调：创建欢迎 Agent 会话
+  const handleOnboardingComplete = async () => {
     setShowOnboarding(false)
-
-    if (openTutorial) {
-      const tabs = store.get(tabsAtom)
-      const result = openTab(tabs, { type: 'tutorial', sessionId: TUTORIAL_TAB_ID, title: TUTORIAL_TAB_TITLE })
-      store.set(tabsAtom, result.tabs)
-      store.set(activeTabIdAtom, result.activeTabId)
-      return
-    }
 
     try {
       await createAgent({ draft: true })
@@ -108,7 +97,6 @@ export default function App(): React.ReactElement {
           <AppShell contextValue={contextValue} />
           <PlanningReminderRail />
           <ShortcutGuideDialog />
-          <TutorialBanner />
           <GlobalEnvironmentCheckDialog />
           <MigrationImportDialog />
         </TooltipProvider>

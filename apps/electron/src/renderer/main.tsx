@@ -102,9 +102,8 @@ const isQuickTaskWindow = new URLSearchParams(window.location.search).get('windo
 const isVoiceDictationIndicatorWindow = new URLSearchParams(window.location.search).get('window') === 'voice-dictation-indicator'
 const isDetachedPreviewWindow = new URLSearchParams(window.location.search).get('window') === 'detached-preview'
 const isPlanningWindow = new URLSearchParams(window.location.search).get('window') === 'planning'
-const isAgentIslandWindow = new URLSearchParams(window.location.search).get('window') === 'agent-island'
 const isWebBookmarksWindow = new URLSearchParams(window.location.search).get('window') === 'web-bookmarks'
-const isMainWindow = !isQuickTaskWindow && !isVoiceDictationIndicatorWindow && !isDetachedPreviewWindow && !isPlanningWindow && !isAgentIslandWindow && !isWebBookmarksWindow
+const isMainWindow = !isQuickTaskWindow && !isVoiceDictationIndicatorWindow && !isDetachedPreviewWindow && !isPlanningWindow && !isWebBookmarksWindow
 
 // 主窗口和独立规划窗口均由内部面板管理滚动，避免页面本身出现第二层滚动。
 if (isMainWindow || isPlanningWindow) {
@@ -592,9 +591,6 @@ function DockBadgeInitializer(): null {
   useEffect(() => {
     const clearActiveSessionBadge = (): void => {
       if (!document.hasFocus() || !activeAgentSessionId) return
-      // 以实际激活的 Agent/预览 Tab 为准，不能仅据 currentAgentSessionId
-      // 把后台会话误判为已查看。
-      void window.electronAPI.agentIsland.markSessionViewed(activeAgentSessionId).catch(console.error)
       setUnviewedCompleted((prev) => {
         if (!prev.has(activeAgentSessionId)) return prev
         const next = new Set(prev)
@@ -991,15 +987,6 @@ if (isQuickTaskWindow) {
         <PlanningInitializer />
         <PlanningWindowApp />
         <Toaster position="bottom-right" />
-      </React.StrictMode>
-    )
-  })
-} else if (isAgentIslandWindow) {
-  import('./components/agent-island/AgentIslandApp').then(({ AgentIslandApp }) => {
-    ReactDOM.createRoot(document.getElementById('root')!).render(
-      <React.StrictMode>
-        <ThemeInitializer />
-        <AgentIslandApp />
       </React.StrictMode>
     )
   })

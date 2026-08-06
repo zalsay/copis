@@ -220,15 +220,6 @@ const OBJECT_DEFAULTS: Record<string, unknown> = {
   checkEnvironment: null,
 }
 
-function createAgentIslandFallback(): Record<string, unknown> {
-  return new Proxy<Record<string, unknown>>({}, {
-    get: (_target, property: string | symbol) => {
-      if (typeof property !== 'string') return undefined
-      return (..._args: unknown[]) => Promise.resolve(undefined)
-    },
-  })
-}
-
 function createWebTabsFallback(): Record<string, unknown> {
   const emptySnapshot = (): { tabs: never[]; activeTabId: null } => ({ tabs: [], activeTabId: null })
   return {
@@ -258,14 +249,12 @@ function createWebTabsFallback(): Record<string, unknown> {
 
 function createHttpApiBridge(): Window['electronAPI'] {
   const methods = createHttpMethods()
-  const agentIsland = createAgentIslandFallback()
   const webTabs = createWebTabsFallback()
 
   const bridge = new Proxy<Record<string, unknown>>({}, {
     get: (_target, property: string | symbol) => {
       if (typeof property !== 'string' || property === 'then') return undefined
       if (property === 'updater') return undefined
-      if (property === 'agentIsland') return agentIsland
       if (property === 'webTabs') return webTabs
       if (property === 'updateSettingsSync') return () => false
       if (property === 'saveScratchPadSync') return () => true

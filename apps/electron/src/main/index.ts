@@ -122,10 +122,6 @@ import { wechatBridge } from './lib/wechat-bridge'
 import { getWeChatConfig } from './lib/wechat-config'
 import { createQuickTaskWindow, toggleQuickTaskWindow, destroyQuickTaskWindow } from './lib/quick-task-window'
 import { destroyPlanningWindow, showPlanningWindow } from './lib/planning-window'
-import { createAgentIslandWindow, destroyAgentIslandWindow, showAgentIslandWindow } from './lib/agent-island-window'
-import { handleNativeAgentIslandEvent, initAgentIslandService, disposeAgentIslandService, publishAgentIslandNow } from './lib/agent-island-service'
-import { disposeMacAgentIslandNativeHost, startMacAgentIslandNativeHost } from './lib/mac-agent-island-native-host'
-import { isMacOS26OrLater } from './lib/macos-version'
 import {
   createVoiceDictationWindow,
   toggleVoiceDictationWindow,
@@ -137,36 +133,6 @@ import { setCopisVersion } from '@copis/core'
 import { TRAY_IPC_CHANNELS } from '../types'
 
 const MIGRATION_IPC_OPEN = 'migration:open-import-file'
-
-let agentIslandElectronFallbackActive = false
-
-/** 非 macOS 或 Swift helper 不可用时的无损降级。 */
-function activateAgentIslandElectronFallback(reason?: string): void {
-  if (agentIslandElectronFallbackActive) return
-  agentIslandElectronFallbackActive = true
-  if (reason) console.warn(`[agent-island] 使用 Electron 降级窗口：${reason}`)
-  createAgentIslandWindow()
-  showAgentIslandWindow()
-  publishAgentIslandNow()
-}
-
-/** macOS 26+ 优先使用真刘海 NSPanel；旧版 macOS 默认不显示灵动岛。 */
-function startAgentIslandSurface(): void {
-  if (process.platform === 'darwin' && !isMacOS26OrLater()) {
-    console.info('[agent-island] 已在 macOS 26 以下禁用')
-    return
-  }
-
-  const startedNative = startMacAgentIslandNativeHost({
-    onReady: () => {
-      console.info('[agent-island] macOS 原生 NSPanel helper 已就绪')
-      publishAgentIslandNow()
-    },
-    onEvent: handleNativeAgentIslandEvent,
-    onUnavailable: (reason) => activateAgentIslandElectronFallback(reason),
-  })
-  if (!startedNative) activateAgentIslandElectronFallback(process.platform === 'darwin' ? 'native helper unavailable' : 'non-macOS platform')
-}
 
 /** 检查文件路径是否为迁移文件，如果是则通知渲染进程打开导入流程 */
 function handleMigrationFileOpen(filePath: string): void {
@@ -629,19 +595,6 @@ async function bootstrap(): Promise<void> {
     safeRun('createVoiceDictationWindow', createVoiceDictationWindow)
   }
 
-  // Agent 灵动岛：macOS 优先 Swift/AppKit NSPanel（真刘海），其他平台回退 BrowserWindow。
-  safeRun('initAgentIslandService', () => {
-    initAgentIslandService({
-      showAndFocusMainWindow,
-      openAgentSession: (sessionId, title) => {
-        sendToMainWindow(TRAY_IPC_CHANNELS.OPEN_AGENT_SESSION, { sessionId, title })
-      },
-      openPlanning: showPlanningWindow,
-      enabled: () => getSettings().agentIsland?.enabled !== false,
-    })
-  })
-  safeRun('startAgentIslandSurface', startAgentIslandSurface)
-
   // 飞书实时同步开启时，默认阻止系统自动休眠，保证远程群内继续可用。
   safeRun('syncFeishuSyncSleepBlocker', () => syncFeishuSyncSleepBlocker(getSettings()))
 
@@ -777,10 +730,6 @@ app.on('before-quit', () => {
   destroyQuickTaskWindow()
   destroyPlanningWindow()
   destroyVoiceDictationWindow()
-  // 销毁灵动岛服务与窗口（先关闭 NSPanel helper，避免开发热重载遗留原生面板）
-  disposeMacAgentIslandNativeHost()
-  disposeAgentIslandService()
-  destroyAgentIslandWindow()
   // 关闭 Pi MCP 桥接连接（释放 stdio 子进程）
   disposePiMcpConnections().catch(() => {})
   // Clean up system tray before quitting

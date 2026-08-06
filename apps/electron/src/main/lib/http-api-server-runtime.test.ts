@@ -42,6 +42,7 @@ process.env.COPIS_HTTP_API_PORT = '51740'
 
 const {
   resolveDevelopmentRustBinaryCandidates,
+  prepareHttpApiBackend,
   startHttpApiServer,
   stopHttpApiServer,
   shouldInstallMissingHttpApiModule,
@@ -227,6 +228,44 @@ describe('Rust HTTP API 功能模块生命周期', () => {
       'C:\\Program Files\\Copis\\resources\\bin\\win32-x64\\copis.exe',
     )
     expect(records[0]?.options.env?.COPIS_PI_RPC_WORKER).toBeUndefined()
+  })
+
+  test('Rust 启动环境注入已选 edu-api 根地址和 working-model 地址', async () => {
+    const root = createRoot()
+    const packageInfo = rustPackage('0.1.0', 'endpoint-aware-rust-api')
+    await activateRustVersion(root, packageInfo, 'endpoint-aware-rust-api')
+    const records: SpawnRecord[] = []
+    const previousBackendUrl = process.env.COPIS_BACKEND_URL
+    const previousModelBaseUrl = process.env.WORKING_AGENT_MODEL_BASE_URL
+
+    try {
+      const options = await prepareHttpApiBackend({
+        rootDir: join(root, 'modules'),
+        backendUrl: 'https://configured.example.test',
+        modelBaseUrl: 'https://configured.example.test/api/internal/working-model',
+        endpointConfigUrl: 'https://config.example.test/endpoints.json',
+        fetchImpl: async (input) => {
+          if (input.endsWith('/endpoints.json')) {
+            return new Response(JSON.stringify({
+              base_urls: ['https://healthy.example.test/api/internal/working-model'],
+            }), { status: 200 })
+          }
+          if (input === 'https://healthy.example.test/health') return new Response('', { status: 200 })
+          return new Response('', { status: 404 })
+        },
+      })
+      startHttpApiServer({ ...options, spawnImpl: spawnFixture(records) })
+
+      expect(records[0]?.options.env?.COPIS_BACKEND_URL).toBe('https://healthy.example.test')
+      expect(records[0]?.options.env?.WORKING_AGENT_MODEL_BASE_URL).toBe(
+        'https://healthy.example.test/api/internal/working-model',
+      )
+    } finally {
+      if (previousBackendUrl === undefined) delete process.env.COPIS_BACKEND_URL
+      else process.env.COPIS_BACKEND_URL = previousBackendUrl
+      if (previousModelBaseUrl === undefined) delete process.env.WORKING_AGENT_MODEL_BASE_URL
+      else process.env.WORKING_AGENT_MODEL_BASE_URL = previousModelBaseUrl
+    }
   })
 
   test('开发版脚本 Worker 使用系统 Bun 标记，不回退托管 Node runtime', async () => {

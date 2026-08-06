@@ -2,7 +2,7 @@
  * Tab Atoms — 当前工作区入口状态管理
  *
  * 顶部只保留当前会话入口；会话恢复与导航交给左侧列表。
- * 顶部标签只承载 Agent 会话、预览和静态教程。
+ * 顶部标签只承载 Agent 会话和文件预览。
  */
 
 import { atom } from 'jotai'
@@ -18,14 +18,10 @@ import type { PreviewFile } from './preview-atoms'
 // ===== 类型定义 =====
 
 /** 标签页类型（Settings 不作为 Tab，保留独立视图） */
-export type TabType = 'agent' | 'preview' | 'tutorial'
+export type TabType = 'agent' | 'preview'
 
 /** 旧版本 Scratch Tab 的固定 ID，仅用于过滤历史持久化状态。 */
 const LEGACY_SCRATCH_PAD_ID = '__scratch-pad__'
-
-/** 教程 Tab 固定 ID */
-export const TUTORIAL_TAB_ID = '__tutorial__'
-export const TUTORIAL_TAB_TITLE = 'Copis 使用教程'
 
 /** 会话预览 Tab 的 ID 前缀：运行时临时入口，不参与持久化 */
 const PREVIEW_TAB_PREFIX = '__preview__:'
@@ -36,7 +32,7 @@ export interface TabItem {
   id: string
   /** 标签页类型 */
   type: TabType
-  /** Agent sessionId 或预览/教程的固定 ID */
+  /** Agent sessionId 或预览 Tab 的固定 ID */
   sessionId: string
   /** 标签页显示标题 */
   title: string
@@ -177,7 +173,7 @@ function isSessionTab(tab: TabItem): boolean {
 }
 
 function getPersistentTabs(tabs: TabItem[]): TabItem[] {
-  return tabs.filter((tab) => tab.id !== LEGACY_SCRATCH_PAD_ID && tab.id !== TUTORIAL_TAB_ID && !isPreviewTab(tab))
+  return tabs.filter((tab) => tab.id !== LEGACY_SCRATCH_PAD_ID && !isPreviewTab(tab))
 }
 
 function isPersistedAgentTab(value: unknown): value is TabItem {
@@ -225,19 +221,6 @@ export function openTab(
   item: { type: TabType; sessionId: string; title: string },
   restore?: OpenTabRestore,
 ): { tabs: TabItem[]; activeTabId: string } {
-  if (item.type === 'tutorial') {
-    const tutorialTab: TabItem = tabs.find((t) => t.id === TUTORIAL_TAB_ID) ?? {
-      id: TUTORIAL_TAB_ID,
-      type: 'tutorial',
-      sessionId: TUTORIAL_TAB_ID,
-      title: TUTORIAL_TAB_TITLE,
-    }
-    return {
-      tabs: [tutorialTab],
-      activeTabId: TUTORIAL_TAB_ID,
-    }
-  }
-
   if (item.type === 'preview') {
     const ownerAgentTab = tabs.find((t) => t.type === 'agent' && t.sessionId === item.sessionId) ?? {
       id: item.sessionId,

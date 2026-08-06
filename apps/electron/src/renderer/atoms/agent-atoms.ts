@@ -2,7 +2,7 @@
  * Agent Atoms — Agent 模式的 Jotai 状态管理
  *
  * 管理 Agent 会话列表、当前会话、消息、流式状态等。
- * 模式照搬 chat-atoms.ts。
+ * 为 Agent 会话、消息和流式运行状态提供集中式原子。
  */
 
 import { atom } from 'jotai'

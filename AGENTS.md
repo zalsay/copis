@@ -98,6 +98,13 @@ bun run dist:linux    # Linux
 bun run dist:fast     # 当前架构快速打包
 ```
 
+Pi Worker 的自包含运行时由应用构建链生成，不需要在开发环境预先生成：
+
+```bash
+cd apps/electron
+bun run build:cli     # Bun build --compile，生成当前平台/架构的 copis(.exe)
+```
+
 ### 仓库级构建与部署
 
 ```powershell
@@ -131,6 +138,8 @@ bash ./build.sh
 - `deploy.ps1` 适用于 Windows x64 Rust 构建；跨平台部署应在目标平台执行对应的 `deploy.sh`，或使用 `-SkipRustBuild` / `--skip-rust-build` 配合已经验证的目标二进制。
 - 功能模块发布包含 `rust-http-api` 和可选的 `officecli`。OfficeCLI 是外部单文件二进制，需要通过 `COPIS_OFFICECLI_BINARY` 或 `apps/electron/resources/bin/officecli.exe` 提供，并通过 `COPIS_OFFICECLI_VERSION` 指定独立于 Electron 的模块版本。
 - 发布单个平台时必须合并 COS 中已有 manifest，保留其他平台和模块；二进制对象使用不可变版本 key，只有 manifest 允许更新。
+- `build.ps1` 和 `bun run --filter='@copis/electron' dist:win` 会在 Windows x64 构建中执行 `build:cli`；macOS ARM/Intel 需在对应 runner 上执行 `build.sh` 或 `dist:mac`，不能用其他平台的 `copis` 产物代替。
+- `--rust` / `--officecli` 是功能模块的单模块 COS 发布选项；它们与应用内的 `copis` 组合运行时构建无关，不能用功能模块二进制替代组合运行时。
 
 常用部署选项：`-SkipInstall` / `--skip-install`、`-SkipRustBuild` / `--skip-rust-build`、`-SkipPublish` / `--skip-publish`、版本、平台、架构、channel、COS 前缀和已有 Rust 二进制路径。当前 stable 的 Windows x64 OfficeCLI 模块版本为 `1.0.143`。
 
@@ -142,6 +151,7 @@ bun run build:preload     # esbuild → dist/preload.cjs
 bun run build:renderer    # Vite → dist/renderer/
 bun run build:resources   # 复制 resources/ 到 dist/
 bun run generate:icons    # 生成应用图标
+bun run build:cli         # Bun build --compile → resources/bin/{platform}-{arch}/copis(.exe)
 bun run build:http-api-server # 显式构建 Rust HTTP API 功能模块
 ```
 
@@ -400,6 +410,15 @@ bun test apps/electron/src/main/lib/web-tab-session-service.test.ts
 - `pdfjs-dist`、`sharp` 及其运行时依赖也由同步脚本复制到 `apps/electron/node_modules/`。
 - `electron-builder.yml` 使用 `files: node_modules/**/*` 包含同步后的 external 依赖，并排除 workspace 包和构建期依赖。
 - `asarUnpack` 必须覆盖 Pi 的 native addon、`sharp`/`@img` 以及其他运行时要求文件；不要重新引入已移除的旧 runtime 平台 binary 规则。
+
+**Pi Worker 自包含运行时要求（必须遵守）：**
+- `apps/electron/scripts/build-cli.ts` 使用 `bun build --compile`，通过 `compiled-runtime-entry.ts` 将 Copis CLI 和 Pi Worker 编译为同一个 Bun 二进制；普通 CLI 参数进入 CLI，内部 `copis __pi-worker` 子命令进入 Pi Worker。
+- 构建产物按平台和架构放在 `apps/electron/resources/bin/{platform}-{arch}/`：Windows x64 为 `win32-x64/copis.exe`，macOS ARM 为 `darwin-arm64/copis`，macOS Intel 为 `darwin-x64/copis`；Linux runner 也使用对应的 `linux-{arch}/copis` 目录。
+- `build:cli` 会把 `photon_rs_bg.wasm` 复制到同一平台目录；不能只复制 `copis` 而遗漏该运行时资源。
+- `electron-builder.yml` 通过 `extraResources` 将上述目录复制到 `process.resourcesPath/bin/`。主进程使用 `resolveBundledCliPath()` 按当前平台/架构选择二进制，并保留旧版 `resources/bin/copis(.exe)` 作为兼容回退。
+- 正式包启动 Rust HTTP API 时注入 `COPIS_PI_RPC_COMPILED_RUNTIME=1`、`COPIS_PI_RPC_EXECUTABLE` 和 `COPIS_CLI`；Rust `PiWorkerManager` 必须执行 `<copis> __pi-worker`，不能再寻找 `node/node.exe` 或其他托管 Node runtime。
+- 正式包找不到当前平台的组合二进制时，应报告“未找到打包的 Copis runtime，请重新安装或重新构建应用”，不能退回 Node runtime 并产生误导性的 Node 缺失错误。
+- 开发环境不要求生成 `copis.exe`：`bun run dev` 使用 `dist/pi-rpc-worker.cjs`，通过系统 Bun 或 `vendor/bun` 启动，并设置 `COPIS_PI_RPC_USE_SYSTEM_RUNTIME=1`；开发构建可以继续使用 JS Worker 热重载路径。
 
 **跨平台打包检查：**
 - Pi 的原生依赖按当前平台安装和同步；在目标平台分别执行构建，不能用单个平台的 `node_modules` 代替其他平台产物。
