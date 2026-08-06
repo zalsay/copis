@@ -1,6 +1,6 @@
 # AgentOrchestrator 到 Pi Worker RPC 迁移计划
 
-> 状态：实施中。普通发送已走 Pi Worker RPC；队列消息与会话回退已完成本轮迁移，权限模式和外部入口仍待后续阶段处理。
+> 状态：实施中。普通发送、队列、停止、运行中权限模式及所有外部入口均已走 Pi Worker RPC；遗留 `AgentOrchestrator` 源码和旧 IPC 的删除仍待后续阶段处理。
 >
 > 日期：2026-08-06
 
@@ -41,7 +41,7 @@ Rust HTTP API
 
 - 不修改 `README.md` 或 `AGENTS.md`，除非后续得到明确允许。
 - 不引入数据库、不改变会话 JSONL 和工作区目录结构。
-- 不在第一阶段删除自动化、飞书、微信/钉钉 Bridge 等外部入口；这些入口仍需要一个非 UI 的 Agent 执行适配层。
+- 不在本阶段直接删除自动化、飞书、微信/钉钉 Bridge 等外部入口；它们改经统一的非 UI RPC gateway 执行。
 - 不把快照回退强行实现为 Worker 内部命令。回退是本地会话和文件状态操作，应从 `AgentOrchestrator` 提取为独立服务。
 - 不通过简单删除 IPC 方法来“完成迁移”；每个旧入口必须先完成调用方审计和行为替代。
 
@@ -49,7 +49,7 @@ Rust HTTP API
 
 ### 2.1 AgentOrchestrator 的职责
 
-`AgentOrchestrator` 是 Electron 主进程中的 TypeScript 类，不是独立进程，也不是 HTTP 服务。它由 [agent-service.ts](../apps/electron/src/main/lib/agent-service.ts) 创建，当前负责：
+`AgentOrchestrator` 是 Electron 主进程中的遗留 TypeScript 类，不是独立进程，也不是 HTTP 服务。它的实现仍保留在仓库中，但 [agent-service.ts](../apps/electron/src/main/lib/agent-service.ts) 已不再创建或调用它。其旧职责包括：
 
 - 同一会话的并发守卫和运行状态。
 - 渠道、API Key、代理、Shell 和工作区运行环境构建。
@@ -59,7 +59,7 @@ Rust HTTP API
 - `stop`、`queueMessage`、`updateSessionPermissionMode` 和 `rewindSession`。
 - Memory 自动捕获和部分运行时资源清理。
 
-`agent-service.ts` 是它的 IPC/外部调用薄包装，并负责把 EventBus 事件转成 `webContents.send()`。
+`agent-service.ts` 现在是 RPC gateway 的 IPC/外部调用薄包装，负责将 Rust Worker 的 SSE 事件转为 EventBus 和 `webContents.send()`。
 
 ### 2.2 已经走 Pi Worker RPC 的 UI 发送链路
 
@@ -74,20 +74,20 @@ Preload 中 `sendAgentMessage()` 对 `agentRuntime === 'pi'` 直接调用 `agent
 
 Rust 在 `/api/agent/sessions/:id/messages` 路由中调用 Electron internal `prepare`，由 `agent-rpc-service.ts` 构建 Worker 配置；Rust 随后直接启动 Pi Worker 并转发 SSE。
 
-### 2.3 仍然调用 AgentOrchestrator 的 UI 链路
+### 2.3 UI 兼容入口迁移状态
 
 | UI 入口 | 旧 API | 现有调用位置 | 迁移判断 |
 | --- | --- | --- | --- |
 | 活跃 Agent 追加消息 | `queueAgentMessage()` -> 本地 HTTP `/queue` -> Pi Worker | `AgentConversationSurface.tsx` | 已迁移；Skill、MCP、会话、待办和日程引用由 RPC prepare 统一处理 |
 | 会话快照回退 | `rewindSession()` -> `agent-session-rewind-service` | `AgentConversationSurface.tsx` | 已从 Orchestrator 提取为独立服务，不进入 Worker |
-| 运行中权限模式切换 | `updateSessionPermissionMode()` -> `orchestrator.updateSessionPermissionMode()` | `PermissionModeSelector.tsx` | 必须明确 Worker 控制协议；不能只保留持久化而继续显示“运行中已切换” |
-| 停止 Agent | `stopAgent()` 先 HTTP，失败后 IPC `orchestrator.stop()` | `AgentConversationSurface`、`WelcomeComposer`、`AskUserBanner`、`PermissionBanner`、`ExitPlanModeBanner` | HTTP stop 保留；IPC fallback 仅作为过渡兼容，并增加幂等和状态核对 |
+| 运行中权限模式切换 | `updateSessionPermissionMode()` -> Rust policy update | `PermissionModeSelector.tsx` | 已迁移；Rust 根据会话策略存在性更新 `plan` / `bypassPermissions`，Pi 不接收策略对象 |
+| 停止 Agent | `stopAgent()` -> Rust `/stop` | `AgentConversationSurface`、`WelcomeComposer`、`AskUserBanner`、`PermissionBanner`、`ExitPlanModeBanner` | 已迁移；不存在旧 Orchestrator fallback |
 
 以下接口仍暴露在 Preload/IPC 中，但当前没有发现 renderer 生产代码直接调用 `generateAgentTitle()`。Pi Worker 路径已经由 `agent-rpc-service.finalizeAgentRpcRun()` 生成回退标题；旧 `GENERATE_TITLE` 可以在调用方审计后删除或转为统一标题服务。
 
 ### 2.4 非 UI 调用方
 
-以下主进程服务仍通过 `agent-service.ts` 使用 `runAgentHeadless()` 或 `stopAgent()`，它们不是 UI 调用，但决定了 `AgentOrchestrator` 不能在第一阶段直接删除：
+以下主进程服务仍通过 `agent-service.ts` 使用 `runAgentHeadless()` 或 `stopAgent()`，但其实现已统一委托给 `AgentRpcGateway`，不会调用 `AgentOrchestrator`：
 
 - `automation-scheduler.ts`：定时任务执行。
 - `bridge-command-handler.ts`：微信、钉钉等 Bridge 命令。
@@ -216,7 +216,7 @@ Then 不得同时启动 AgentOrchestrator，调用方得到明确的 legacy path
 4. Worker 只输出结构化 stdout；诊断日志继续写 stderr。
 5. Rust manager 维护 Worker 状态和 session 映射，应用退出时向所有 Worker 发送 stop 并等待有限时间后清理。
 
-**本轮完成：** `queue` 通过现有 `PiAgentAdapter.sendQueuedMessage()` 注入同一 Pi session，支持 `interrupt` 和 Skill mention。`set_permission_mode` 尚未实现，不能宣称运行中权限模式已经迁移。
+**本轮完成：** `queue` 通过现有 `PiAgentAdapter.sendQueuedMessage()` 注入同一 Pi session，支持 `interrupt` 和 Skill mention。运行中权限模式由 Rust 保存的 `AgentFilePolicyStore` 原子更新，后续 Read/Edit/Write 均重新按该策略校验；Pi 不持有或修改权限策略。
 
 **BDD：**
 
@@ -341,10 +341,12 @@ Then Worker 只产生一个 stopped complete，Rust manager 删除 session 映�
 **工作：**
 
 1. 自动化任务使用统一 RPC gateway，继续支持 automation context、workspace、model、memory policy 和完成通知。
-2. 微信/钉钉 Bridge 和飞书 Bridge 订阅统一的 Worker 事件，不再直接 import `runAgentHeadless`。
+2. 微信/钉钉 Bridge 和飞书 Bridge 通过 `agent-service` 暴露的统一 gateway 订阅 Worker 事件，不再依赖 Orchestrator EventBus 语义。
 3. 外部调用必须保留 source、originSessionId、session title、workspace 和错误回调。
 4. 处理应用重启和旧任务恢复：运行中的外部任务标记 interrupted，不能因为迁移重复执行。
 5. `http-api-handler` 只保留业务 API facade 和 internal RPC persistence，不再把 `/api/agent` fallback 指向 `agent-service.runAgentHeadless`。
+
+**本轮完成：** 新增 `AgentRpcGateway`，自动化、微信/钉钉 Bridge、飞书 Bridge、旧 IPC 兼容入口和 `http-api-handler` 的 headless facade 都经过 Rust `/api/agent` SSE、queue 与 stop 路由。gateway 将 Worker 事件回放到既有 EventBus；Rust 对每个 Worker 生成文件 capability，Pi 只持有该会话 token，不能调用管理权限接口。
 
 ### Task 7：删除 AgentOrchestrator 和旧 IPC
 
@@ -445,7 +447,7 @@ git diff --check
 
 ### 6.2 回滚规则
 
-- Worker 启动失败：返回明确的 `pi_worker_unavailable`，允许暂时切回旧执行链路，但必须以 session ownership 检查为前提。
+- Worker 启动失败：返回明确的 `pi_worker_unavailable`，不得回退到旧执行链路。
 - queue 请求超时：不能无条件重试；先通过 UUID/Worker ack 判断是否已接收，避免重复执行。
 - Worker complete 已发送后出现 persistence 错误：UI 进入终态，错误写入诊断日志，不能再次启动 Orchestrator 补跑。
 - 迁移期间任何旧 fallback 都必须记录 `legacy-orchestrator` 来源，便于确认是否仍有生产调用。
@@ -457,8 +459,8 @@ git diff --check
 
 - renderer 生产代码的普通发送、队列、停止和运行中权限控制不再依赖 `AgentOrchestrator`。
 - 回退能力由独立会话服务提供，不依赖 Orchestrator active map。
-- 自动化、飞书、微信/钉钉 Bridge 已通过统一 gateway 运行，或被明确列入下一版本范围并保留可观测兼容层。
-- `AgentOrchestrator` 和 `agent-service` 不再是 Pi 用户请求的必经路径。
+- 自动化、飞书、微信/钉钉 Bridge 已通过统一 gateway 运行。
+- `AgentOrchestrator` 不再是 Pi 用户请求的必经路径；`agent-service` 仅保留 IPC、事件桥接和外部 gateway 包装，不执行 Pi SDK。
 - Skill/MCP/session/todo/calendar mention 在普通发送和队列发送中都能到达 Pi Worker。
 - 同一会话没有重复 Worker、重复 complete 或重复消息持久化。
 - TypeScript、Rust、focused BDD 测试和构建全部通过。

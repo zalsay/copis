@@ -158,7 +158,10 @@ impl PiWorkerManager {
             .get_mut("query")
             .and_then(Value::as_object_mut)
             .ok_or_else(|| "Pi worker 配置缺少 query".to_string())?;
-        self.file_policies.register_from_query(session_id, query)?;
+        let file_api_token = self.file_policies.register_from_query(session_id, query)?;
+        if file_api_token.is_empty() {
+            return Err("Pi Worker 未收到 Rust 文件能力令牌".to_string());
+        }
         let executable_path = std::env::var("COPIS_PI_RPC_EXECUTABLE").ok();
         let worker_path = std::env::var("COPIS_PI_RPC_WORKER").ok();
         let runtime_path = std::env::var("COPIS_PI_RPC_RUNTIME").ok();
@@ -215,6 +218,7 @@ impl PiWorkerManager {
         }
         let mut command = Command::new(&launch.program);
         command.args(&launch.args);
+        configure_worker_file_capability(&mut command, &file_api_token);
         if let Some(external_runtime) = external_runtime.as_ref() {
             command.env("PATH", external_runtime.path_value());
             command.env("COPIS_RUNTIME_ROOT", &external_runtime.runtime_root);
@@ -357,6 +361,12 @@ fn write_json_line(control: &WorkerControl, value: &Value) -> io::Result<()> {
     writer.flush()
 }
 
+/// Pi 只获得当前会话的文件 capability；全局内部管理令牌绝不能传给 Pi。
+fn configure_worker_file_capability(command: &mut Command, file_api_token: &str) {
+    command.env_remove("COPIS_HTTP_API_INTERNAL_TOKEN");
+    command.env("COPIS_PI_FILE_API_TOKEN", file_api_token);
+}
+
 fn spawn_stderr_reader(stderr: ChildStderr) {
     std::thread::spawn(move || {
         let reader = BufReader::new(stderr);
@@ -370,8 +380,34 @@ fn spawn_stderr_reader(stderr: ChildStderr) {
 
 #[cfg(test)]
 mod tests {
-    use super::{resolve_worker_launch, worker_requires_node, WorkerLaunch};
+    use super::{
+        configure_worker_file_capability, resolve_worker_launch, worker_requires_node, WorkerLaunch,
+    };
     use std::path::PathBuf;
+    use std::process::Command;
+
+    #[test]
+    fn worker_only_receives_session_file_capability() {
+        let mut command = Command::new("copis");
+        command.env("COPIS_HTTP_API_INTERNAL_TOKEN", "admin-token");
+
+        configure_worker_file_capability(&mut command, "session-file-token");
+
+        let variables = command
+            .get_envs()
+            .map(|(key, value)| {
+                (
+                    key.to_string_lossy().into_owned(),
+                    value.map(|value| value.to_string_lossy().into_owned()),
+                )
+            })
+            .collect::<std::collections::HashMap<_, _>>();
+        assert_eq!(variables.get("COPIS_HTTP_API_INTERNAL_TOKEN"), Some(&None));
+        assert_eq!(
+            variables.get("COPIS_PI_FILE_API_TOKEN"),
+            Some(&Some("session-file-token".to_string()))
+        );
+    }
 
     #[test]
     fn packaged_worker_prefers_compiled_executable() {

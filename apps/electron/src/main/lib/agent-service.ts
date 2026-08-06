@@ -2,12 +2,12 @@
  * Agent 服务层（IPC 薄层）
  *
  * 职责：
- * - 创建 AgentOrchestrator / EventBus / Adapter 实例
+ * - 创建 Agent RPC gateway / EventBus 实例
  * - 注册 EventBus IPC 转发中间件（webContents.send）
  * - 导出 IPC handler 调用的薄包装函数
  * - 文件操作（saveFilesToAgentSession）
  *
- * 所有业务逻辑已委托给 AgentOrchestrator。
+ * Pi 执行统一委托给 Rust HTTP API + Pi Worker；本模块只保留 IPC、事件和本地附件包装。
  */
 
 import { dirname, isAbsolute, join, relative, resolve, sep, win32 } from 'node:path'
@@ -29,9 +29,8 @@ import type {
   AgentMessage,
   RewindSessionResult,
 } from '@copis/shared'
-import { PiAgentAdapter, cleanupPiRuntimeResources } from './adapters/pi-agent-adapter'
 import { AgentEventBus } from './agent-event-bus'
-import { AgentOrchestrator } from './agent-orchestrator'
+import { agentRpcGateway } from './agent-rpc-gateway'
 import { agentSessionRewindService } from './agent-session-rewind-service'
 import { getAgentSessionWorkspacePath } from './config-paths'
 import { getAgentWorkspaceBySlug, getAgentWorkspaceWritableRoot, getLocalProjectRootStatus } from './agent-workspace-manager'
@@ -39,12 +38,11 @@ import { getAgentSessionMeta, updateAgentSessionMeta } from './agent-session-man
 import { setAgentStopper, setHeadlessAgentRunner } from './agent-headless-runner-registry'
 import { getHeadlessAgentRunTarget } from './agent-headless-run-target'
 import { sendAgentStreamComplete } from './agent-completion-payload'
+import { getHttpApiInternalToken } from './http-api-server'
 
 // ===== 实例创建 =====
 
 const eventBus = new AgentEventBus()
-const adapter = new PiAgentAdapter()
-const orchestrator = new AgentOrchestrator(adapter, eventBus)
 
 /** 导出 EventBus 供飞书 Bridge 等外部服务订阅事件 */
 export { eventBus as agentEventBus }
@@ -124,13 +122,13 @@ eventBus.use((sessionId, payload, next) => {
 /**
  * 运行 Agent 并流式推送事件到渲染进程
  *
- * 注册 webContents 到 EventBus 映射，委托给 Orchestrator。
+ * 注册 webContents 到 EventBus 映射，委托给 Rust Pi Worker gateway。
  */
 export async function runAgent(
   input: AgentSendInput,
   webContents: WebContents,
 ): Promise<void> {
-  // 更新 webContents 映射（允许覆盖 — 由 orchestrator.activeSessions 处理真正的并发保护）
+  // 更新 webContents 映射；并发状态由 RPC gateway 与 Rust Worker 共同维护。
   registerWebContents(input.sessionId, webContents)
   // 开始新一轮执行时清除"完成未确认"标记
   try {
@@ -151,9 +149,13 @@ export async function runAgent(
       }
     } catch { /* 新会话可能尚未写入索引 */ }
   }
+  let errorSent = false
+  let completeSent = false
   try {
-    await orchestrator.sendMessage(input, {
+    await agentRpcGateway.run(input, {
+      onEvent: ({ sessionId, payload }) => eventBus.emit(sessionId, payload),
       onError: (error) => {
+        errorSent = true
         if (!webContents.isDestroyed()) {
           webContents.send(AGENT_IPC_CHANNELS.STREAM_ERROR, {
             sessionId: input.sessionId,
@@ -161,23 +163,19 @@ export async function runAgent(
           })
         }
       },
-      onComplete: (messages, opts) => {
+      onComplete: (messages, complete) => {
+        completeSent = true
         if (!webContents.isDestroyed()) {
           sendAgentStreamComplete(webContents, input, {
             messages,
-            stoppedByUser: opts?.stoppedByUser ?? false,
-            startedAt: opts?.startedAt,
-            resultSubtype: opts?.resultSubtype,
-            resultErrors: opts?.resultErrors,
-            backgroundTasksPending: opts?.backgroundTasksPending,
+            stoppedByUser: complete?.stoppedByUser ?? false,
+            startedAt: complete?.startedAt,
+            resultSubtype: complete?.resultSubtype,
+            resultErrors: complete?.resultErrors,
           })
         }
       },
       onTitleUpdated: (title) => {
-        eventBus.emit(input.sessionId, {
-          kind: 'copis_event',
-          event: { type: 'title_updated', title },
-        })
         if (!webContents.isDestroyed()) {
           webContents.send(AGENT_IPC_CHANNELS.TITLE_UPDATED, {
             sessionId: input.sessionId,
@@ -189,20 +187,19 @@ export async function runAgent(
   } catch (err) {
     console.error('[Agent 服务] runAgent 未处理异常:', err)
     const errorMessage = err instanceof Error ? err.message : '未知错误'
-    if (!webContents.isDestroyed()) {
+    if (!errorSent && !webContents.isDestroyed()) {
       webContents.send(AGENT_IPC_CHANNELS.STREAM_ERROR, {
         sessionId: input.sessionId,
         error: errorMessage,
       })
-      sendAgentStreamComplete(webContents, input, {
-        messages: [],
-        stoppedByUser: false,
-      })
+    }
+    if (!completeSent && !webContents.isDestroyed()) {
+      sendAgentStreamComplete(webContents, input, { messages: [], stoppedByUser: false })
     }
   } finally {
-    // 仅在 orchestrator 已完成此会话时清理映射
+    // 仅在 gateway 已完成此会话时清理映射
     // 避免被拒绝的请求误删仍在运行的会话映射
-    if (!orchestrator.isActive(input.sessionId)) {
+    if (!agentRpcGateway.isActive(input.sessionId)) {
       sessionWebContents.delete(input.sessionId)
     }
   }
@@ -236,9 +233,13 @@ export async function runAgentHeadless(
     registerWebContents(runInput.sessionId, wc)
   }
 
+  let errorSent = false
+  let completeSent = false
   try {
-    await orchestrator.sendMessage(runInput, {
+    await agentRpcGateway.run(runInput, {
+      onEvent: ({ sessionId, payload }) => eventBus.emit(sessionId, payload),
       onError: (error) => {
+        errorSent = true
         callbacks.onError(error)
         // 同步到渲染进程
         if (wc && !wc.isDestroyed()) {
@@ -248,26 +249,22 @@ export async function runAgentHeadless(
           })
         }
       },
-      onComplete: (messages, opts) => {
+      onComplete: (messages, complete) => {
+        completeSent = true
         callbacks.onComplete(messages)
         // 同步到渲染进程
         if (wc && !wc.isDestroyed()) {
           sendAgentStreamComplete(wc, runInput, {
             messages,
-            stoppedByUser: opts?.stoppedByUser ?? false,
-            startedAt: opts?.startedAt,
-            resultSubtype: opts?.resultSubtype,
-            resultErrors: opts?.resultErrors,
-            backgroundTasksPending: opts?.backgroundTasksPending,
+            stoppedByUser: complete?.stoppedByUser ?? false,
+            startedAt: complete?.startedAt,
+            resultSubtype: complete?.resultSubtype,
+            resultErrors: complete?.resultErrors,
           })
         }
       },
       onTitleUpdated: (title) => {
         callbacks.onTitleUpdated(title)
-        eventBus.emit(runInput.sessionId, {
-          kind: 'copis_event',
-          event: { type: 'title_updated', title },
-        })
         // 同步到渲染进程
         if (wc && !wc.isDestroyed()) {
           wc.send(AGENT_IPC_CHANNELS.TITLE_UPDATED, {
@@ -276,7 +273,7 @@ export async function runAgentHeadless(
           })
         }
       },
-      onRunStarted: ({ startedAt: persistedStartedAt }) => {
+      onRunStarted: (persistedStartedAt) => {
         const session = getAgentSessionMeta(runInput.sessionId)
         eventBus.emit(runInput.sessionId, {
           kind: 'copis_event',
@@ -296,18 +293,16 @@ export async function runAgentHeadless(
   } catch (err) {
     console.error('[Agent 服务] runAgentHeadless 未处理异常:', err)
     const errorMessage = err instanceof Error ? err.message : '未知错误'
-    callbacks.onError(errorMessage)
-    callbacks.onComplete()
+    if (!errorSent) callbacks.onError(errorMessage)
+    if (!completeSent) callbacks.onComplete()
     if (wc && !wc.isDestroyed()) {
-      wc.send(AGENT_IPC_CHANNELS.STREAM_ERROR, { sessionId: runInput.sessionId, error: errorMessage })
-      sendAgentStreamComplete(wc, runInput, {
-        messages: [],
-        stoppedByUser: false,
-        startedAt,
-      })
+      if (!errorSent) wc.send(AGENT_IPC_CHANNELS.STREAM_ERROR, { sessionId: runInput.sessionId, error: errorMessage })
+      if (!completeSent) {
+        sendAgentStreamComplete(wc, runInput, { messages: [], stoppedByUser: false, startedAt })
+      }
     }
   } finally {
-    if (!orchestrator.isActive(runInput.sessionId)) {
+    if (!agentRpcGateway.isActive(runInput.sessionId)) {
       sessionWebContents.delete(runInput.sessionId)
     }
   }
@@ -317,14 +312,17 @@ export async function runAgentHeadless(
  * 生成 Agent 会话标题
  */
 export async function generateAgentTitle(input: AgentGenerateTitleInput): Promise<string | null> {
-  return orchestrator.generateTitle(input)
+  void input
+  return null
 }
 
 /**
  * 中止指定会话的 Agent 执行
  */
 export function stopAgent(sessionId: string): void {
-  orchestrator.stop(sessionId)
+  void agentRpcGateway.stop(sessionId).catch((error: unknown) => {
+    console.warn(`[Agent 服务] Rust Worker 停止失败: sessionId=${sessionId}`, error)
+  })
 }
 
 setHeadlessAgentRunner(runAgentHeadless)
@@ -338,7 +336,7 @@ export async function rewindAgentSession(
   assistantMessageUuid: string,
 ): Promise<RewindSessionResult> {
   return agentSessionRewindService.rewind(sessionId, assistantMessageUuid, {
-    isSessionActive: (candidateSessionId) => orchestrator.isActive(candidateSessionId),
+    isSessionActive: (candidateSessionId) => agentRpcGateway.isActive(candidateSessionId),
   })
 }
 
@@ -346,22 +344,22 @@ export async function rewindAgentSession(
  * 检查指定会话是否正在运行
  */
 export function isAgentSessionActive(sessionId: string): boolean {
-  return orchestrator.isActive(sessionId)
+  return agentRpcGateway.isActive(sessionId)
 }
 
 /** 是否存在任意运行中 Agent，供更新器等全局生命周期服务安全判断。 */
 export function hasActiveAgentSessions(): boolean {
-  return orchestrator.hasActiveSessions()
+  return agentRpcGateway.hasActiveSessions()
 }
 
 /** 中止所有活跃的 Agent 会话（应用退出时调用） */
 export function stopAllAgents(): void {
-  orchestrator.stopAll()
+  for (const sessionId of agentRpcGateway.activeSessionIds()) stopAgent(sessionId)
 }
 
 /** 退出前清理 Pi runtime 资源。 */
 export function cleanupAgentRuntimeResources(): void {
-  cleanupPiRuntimeResources()
+  // Pi runtime 由 Rust Worker 生命周期管理，主进程不再持有 Adapter 资源。
 }
 
 /**
@@ -370,7 +368,14 @@ export function cleanupAgentRuntimeResources(): void {
  * 同时更新 Copis 侧（canUseTool 动态读取）和 SDK 侧（query.setPermissionMode）。
  */
 export async function updateAgentPermissionMode(sessionId: string, mode: CopisPermissionMode): Promise<void> {
-  await orchestrator.updateSessionPermissionMode(sessionId, mode)
+  const internalToken = getHttpApiInternalToken()
+  if (!internalToken) throw new Error('Rust HTTP API 内部令牌不可用')
+  const updated = await agentRpcGateway.updatePermissionMode(sessionId, mode, internalToken)
+  if (!updated) return
+  eventBus.emit(sessionId, {
+    kind: 'copis_event',
+    event: { type: 'plan_mode_changed', sessionId, active: mode === 'plan', source: 'permission' },
+  })
 }
 
 // ===== 流式追加消息 =====
@@ -384,19 +389,7 @@ export async function queueAgentMessage(
   input: AgentQueueMessageInput,
   _webContents: WebContents,
 ): Promise<string> {
-  return orchestrator.queueMessage(
-    input.sessionId,
-    input.userMessage,
-    input.rawUserMessage,
-    undefined,
-    input.uuid,
-    { interrupt: input.interrupt },
-    input.mentionedSkills,
-    input.mentionedMcpServers,
-    input.mentionedSessionIds,
-    input.mentionedTodoIds,
-    input.mentionedCalendarEventIds,
-  )
+  return agentRpcGateway.queue(input)
 }
 
 // ===== 文件操作 =====

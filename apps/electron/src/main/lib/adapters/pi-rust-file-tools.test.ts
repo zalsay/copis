@@ -14,7 +14,7 @@ describe('Pi Rust 文件工具桥接', () => {
     const operations = createRustFileToolOperations({
       sessionId: 'session-1',
       baseUrl: 'http://127.0.0.1:51730',
-      internalToken: 'test-token',
+      fileToken: 'test-token',
       fetchImpl: async (url, init) => {
         requests.push({ url: String(url), init })
         const target = new URL(String(url)).pathname
@@ -43,7 +43,7 @@ describe('Pi Rust 文件工具桥接', () => {
       content: '原内容\n更新',
       expectedRevision: 'r1',
     })
-    expect((requests[2]?.init?.headers as Record<string, string>)['x-copis-internal-token']).toBe('test-token')
+    expect((requests[2]?.init?.headers as Record<string, string>)['x-copis-agent-file-token']).toBe('test-token')
     expect(writeBody).not.toHaveProperty('readRoots')
     expect(writeBody).not.toHaveProperty('writeRoots')
   })
@@ -51,7 +51,7 @@ describe('Pi Rust 文件工具桥接', () => {
   test('Given Rust 拒绝越界路径 When Pi 执行操作 Then 直接返回拒绝错误', async () => {
     const operations = createRustFileToolOperations({
       sessionId: 'session-1',
-      internalToken: 'test-token',
+      fileToken: 'test-token',
       fetchImpl: async () => response({ error: '路径超出授权范围', code: 'path_not_allowed' }, 403),
     })
 

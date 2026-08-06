@@ -5,6 +5,7 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use getrandom::getrandom;
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
@@ -75,6 +76,7 @@ struct FileAccessPolicy {
     write_roots: Vec<PathBuf>,
     base_dir: PathBuf,
     permission_mode: String,
+    worker_token: String,
 }
 
 #[derive(Default)]
@@ -102,7 +104,7 @@ impl AgentFilePolicyStore {
         &self,
         session_id: &str,
         query: &mut Map<String, Value>,
-    ) -> Result<(), String> {
+    ) -> Result<String, String> {
         let use_rust_file_api = match query.get("useRustFileApi") {
             None => false,
             Some(value) => value
@@ -113,19 +115,21 @@ impl AgentFilePolicyStore {
             if use_rust_file_api {
                 return Err("Rust 文件 API 缺少会话权限策略".to_string());
             }
-            return Ok(());
+            return Ok(String::new());
         };
         if !use_rust_file_api {
             return Err("Rust 文件权限策略未启用 Rust 文件 API".to_string());
         }
-        let policy = FileAccessPolicy::from_value(&value, query.get("cwd"))
+        let mut policy = FileAccessPolicy::from_value(&value, query.get("cwd"))
             .map_err(|error| error.message)?;
+        let worker_token = generate_worker_token()?;
+        policy.worker_token = worker_token.clone();
         let mut policies = self.policies.lock().unwrap();
         if policies.contains_key(session_id) {
             return Err("该 Agent 会话已有文件权限策略".to_string());
         }
         policies.insert(session_id.to_string(), policy);
-        Ok(())
+        Ok(worker_token)
     }
 
     pub fn remove(&self, session_id: &str) {
@@ -134,6 +138,57 @@ impl AgentFilePolicyStore {
 
     pub fn contains(&self, session_id: &str) -> bool {
         self.policies.lock().unwrap().contains_key(session_id)
+    }
+
+    pub fn update_permission_mode(
+        &self,
+        session_id: &str,
+        permission_mode: &str,
+    ) -> Result<(), AgentFileError> {
+        if permission_mode != "bypassPermissions" && permission_mode != "plan" {
+            return Err(AgentFileError::bad_request("权限模式不正确"));
+        }
+        let mut policies = self.policies.lock().unwrap();
+        let policy = policies.get_mut(session_id).ok_or_else(|| {
+            AgentFileError::forbidden("agent_policy_not_found", "Agent 文件权限策略不存在")
+        })?;
+        policy.permission_mode = permission_mode.to_string();
+        Ok(())
+    }
+
+    pub fn handle_with_worker_token(
+        &self,
+        action: &str,
+        method: &str,
+        worker_token: &str,
+        body: &[u8],
+    ) -> Result<Option<Value>, AgentFileError> {
+        let request: FileRequest = serde_json::from_slice(body)
+            .map_err(|_| AgentFileError::bad_request("文件请求体不是有效的 JSON"))?;
+        if request.session_id.trim().is_empty() {
+            return Err(AgentFileError::bad_request("文件请求缺少 sessionId"));
+        }
+        self.ensure_worker_token(&request.session_id, worker_token)?;
+        self.handle(action, method, body)
+    }
+
+    fn ensure_worker_token(
+        &self,
+        session_id: &str,
+        worker_token: &str,
+    ) -> Result<(), AgentFileError> {
+        let policies = self.policies.lock().unwrap();
+        let policy = policies.get(session_id).ok_or_else(|| {
+            AgentFileError::forbidden("agent_policy_not_found", "Agent 文件权限策略不存在")
+        })?;
+        if tokens_equal(&policy.worker_token, worker_token) {
+            Ok(())
+        } else {
+            Err(AgentFileError::forbidden(
+                "agent_file_token_invalid",
+                "Agent 文件能力令牌无效",
+            ))
+        }
     }
 
     pub fn handle(
@@ -305,6 +360,7 @@ impl FileAccessPolicy {
             write_roots: parse_roots(object, "writeRoots", &base_dir, true)?,
             base_dir,
             permission_mode: permission_mode.to_string(),
+            worker_token: String::new(),
         })
     }
 
@@ -387,6 +443,25 @@ impl FileAccessPolicy {
             ))
         }
     }
+}
+
+fn generate_worker_token() -> Result<String, String> {
+    let mut bytes = [0_u8; 32];
+    getrandom(&mut bytes).map_err(|error| format!("无法生成 Agent 文件能力令牌: {error}"))?;
+    Ok(bytes.iter().map(|byte| format!("{byte:02x}")).collect())
+}
+
+fn tokens_equal(expected: &str, actual: &str) -> bool {
+    if expected.len() != actual.len() {
+        return false;
+    }
+    expected
+        .bytes()
+        .zip(actual.bytes())
+        .fold(0_u8, |difference, (left, right)| {
+            difference | (left ^ right)
+        })
+        == 0
 }
 
 fn parse_roots(
@@ -743,5 +818,59 @@ mod tests {
         )
         .unwrap();
         assert!(store.handle("write", "PUT", &plan_body).is_ok());
+    }
+
+    #[test]
+    fn running_session_permission_switch_is_enforced_by_rust() {
+        let root = temp_dir("permission-switch");
+        let copis = root.join("copis");
+        fs::create_dir_all(&copis).unwrap();
+        let (store, session) = store_for(&root, &copis);
+        let code_file = copis.join("main.ts");
+        let write_body = serde_json::to_vec(
+            &json!({ "sessionId": session, "path": code_file, "content": "export {}" }),
+        )
+        .unwrap();
+        assert!(store.handle("write", "PUT", &write_body).is_ok());
+
+        store.update_permission_mode("session-1", "plan").unwrap();
+        assert_eq!(
+            store.handle("write", "PUT", &write_body).unwrap_err().code,
+            "plan_write_not_allowed"
+        );
+    }
+
+    #[test]
+    fn worker_file_token_cannot_access_another_session_policy() {
+        let root = temp_dir("worker-token");
+        let file = root.join("note.txt");
+        fs::write(&file, "secret").unwrap();
+        let store = AgentFilePolicyStore::new();
+        let mut query = Map::new();
+        query.insert(
+            "cwd".to_string(),
+            Value::String(root.to_string_lossy().into_owned()),
+        );
+        query.insert("useRustFileApi".to_string(), Value::Bool(true));
+        query.insert(
+            "fileAccessPolicy".to_string(),
+            json!({
+                "readRoots": [root], "readFiles": [], "writeRoots": [root],
+                "permissionMode": "bypassPermissions"
+            }),
+        );
+        let token = store.register_from_query("session-1", &mut query).unwrap();
+        let request = body("session-1", &file);
+
+        assert_eq!(
+            store
+                .handle_with_worker_token("read", "POST", "not-the-worker-token", &request)
+                .unwrap_err()
+                .code,
+            "agent_file_token_invalid"
+        );
+        assert!(store
+            .handle_with_worker_token("read", "POST", &token, &request)
+            .is_ok());
     }
 }

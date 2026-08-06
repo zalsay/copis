@@ -1597,7 +1597,7 @@ class FeishuBridge {
     }
 
     // 注：之前在此处有 isAgentSessionActive silent skip 兜底，会在
-    // 时序"onComplete 触发但 orchestrator finally 还没清 activeSessions"
+    // 时序：complete 事件到达时，Rust gateway 的本地运行状态尚未在 finally 中清理。
     // 间隙下吃掉合法 batch（实测重现：第 1 条任务跑完后第 2 条丢失）。
     // 当前架构靠 RunCoordinator 的 per-scope 串行 + ScopedQueue.block/unblock
     // + finishedPromise 三层保证不会真正并发，移除此兜底以避免误丢消息。
@@ -1742,10 +1742,10 @@ class FeishuBridge {
       permissionModeOverride: 'bypassPermissions',
     }
 
-    // 直接 await runAgentHeadless 的 Promise——它会在 orchestrator.sendMessage
-    // 完整 await 结束（包含 finally { activeSessions.delete }）后才 resolve。
+    // 直接 await runAgentHeadless 的 Promise——它会在 Rust Worker SSE complete 后
+    // 完整 await 结束（包含 gateway finally { activeSessions.delete }）后才 resolve。
     // 这是消除并发守卫竞态的核心：上层 runMergedBatch 看到本 Promise resolve
-    // 时，orchestrator 已经清理干净，下一个 batch 立刻调 sendMessage 不会撞守卫。
+    // 时，gateway 已经清理干净，下一个 batch 立刻执行不会撞运行守卫。
     try {
       await runAgentHeadless(input, {
         source: 'feishu',

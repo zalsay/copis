@@ -37,6 +37,7 @@ const MAX_LINE_BYTES: usize = 64 * 1024;
 const MAX_RECORDING_LINE_BYTES: usize = 256 * 1024;
 const MAX_RECORDING_FILE_BYTES: u64 = 8 * 1024 * 1024;
 const INTERNAL_TOKEN_HEADER: &str = "x-copis-internal-token";
+const AGENT_FILE_TOKEN_HEADER: &str = "x-copis-agent-file-token";
 const INTERNAL_RECORDING_PREFIX: &str = "/internal/browser-workflows/recordings/";
 const INTERNAL_WORKING_AUTH_PATH: &str = "/internal/working-auth/token";
 const INTERNAL_AGENT_FILES_PREFIX: &str = "/api/internal/agent/files/";
@@ -1240,16 +1241,6 @@ fn handle_internal_agent_files(
     origin: Option<&str>,
     policies: Arc<agent_files::AgentFilePolicyStore>,
 ) {
-    if !is_internal_token_valid(request) {
-        send_json_response(
-            stream,
-            403,
-            r#"{"error":"内部 Agent 文件接口未授权","code":"internal_token_required"}"#,
-            None,
-        );
-        return;
-    }
-
     let action = path
         .strip_prefix(INTERNAL_AGENT_FILES_PREFIX)
         .filter(|value| !value.is_empty() && !value.contains('/'))
@@ -1264,7 +1255,64 @@ fn handle_internal_agent_files(
         return;
     }
 
-    match policies.handle(action, &request.method, &request.body) {
+    if action == "permission-mode" {
+        if !request.method.eq_ignore_ascii_case("POST") {
+            send_json_response(
+                stream,
+                404,
+                r#"{"error":"文件权限接口不存在","code":"route_not_found"}"#,
+                origin,
+            );
+            return;
+        }
+        if !is_internal_token_valid(request) {
+            send_json_response(
+                stream,
+                403,
+                r#"{"error":"内部 Agent 权限接口未授权","code":"internal_token_required"}"#,
+                None,
+            );
+            return;
+        }
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct PermissionModeRequest {
+            session_id: String,
+            permission_mode: String,
+        }
+        let parsed = serde_json::from_slice::<PermissionModeRequest>(&request.body);
+        match parsed {
+            Ok(input) if !input.session_id.trim().is_empty() => {
+                match policies.update_permission_mode(&input.session_id, &input.permission_mode) {
+                    Ok(()) => send_json_response(stream, 200, r#"{"updated":true}"#, origin),
+                    Err(error) => {
+                        let body =
+                            json!({ "error": error.message, "code": error.code }).to_string();
+                        send_json_response(stream, error.status, &body, origin);
+                    }
+                }
+            }
+            _ => send_json_response(
+                stream,
+                400,
+                r#"{"error":"权限模式请求不正确","code":"invalid_request"}"#,
+                origin,
+            ),
+        }
+        return;
+    }
+
+    let Some(worker_token) = request.headers.get(AGENT_FILE_TOKEN_HEADER) else {
+        send_json_response(
+            stream,
+            403,
+            r#"{"error":"Agent 文件能力令牌缺失","code":"agent_file_token_required"}"#,
+            None,
+        );
+        return;
+    };
+
+    match policies.handle_with_worker_token(action, &request.method, worker_token, &request.body) {
         Ok(Some(body)) => send_json_response(stream, 200, &body.to_string(), origin),
         Ok(None) => send_empty_response(stream, 204, origin),
         Err(error) => {

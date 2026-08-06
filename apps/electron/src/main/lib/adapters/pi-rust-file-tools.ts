@@ -6,13 +6,13 @@ import type {
 } from '@earendil-works/pi-coding-agent'
 
 const DEFAULT_HTTP_API_PORT = 51730
-const INTERNAL_TOKEN_HEADER = 'x-copis-internal-token'
+const AGENT_FILE_TOKEN_HEADER = 'x-copis-agent-file-token'
 type FetchImplementation = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>
 
 export interface RustFileToolClientOptions {
   sessionId: string
   baseUrl?: string
-  internalToken?: string
+  fileToken?: string
   fetchImpl?: FetchImplementation
 }
 
@@ -49,9 +49,9 @@ function resolveBaseUrl(value: string | undefined): string {
   return `http://127.0.0.1:${effectivePort}`
 }
 
-function requireInternalToken(value: string | undefined): string {
+function requireFileToken(value: string | undefined): string {
   const token = value?.trim()
-  if (!token) throw new Error('Rust 文件权限服务内部令牌不可用')
+  if (!token) throw new Error('Rust 文件能力令牌不可用')
   return token
 }
 
@@ -76,12 +76,12 @@ function imageMimeType(path: string): string | undefined {
 class RustFileToolClient {
   private readonly revisions = new Map<string, string>()
   private readonly baseUrl: string
-  private readonly internalToken: string
+  private readonly fileToken: string
   private readonly fetchImpl: FetchImplementation
 
   constructor(private readonly options: RustFileToolClientOptions) {
     this.baseUrl = resolveBaseUrl(options.baseUrl)
-    this.internalToken = requireInternalToken(options.internalToken ?? process.env.COPIS_HTTP_API_INTERNAL_TOKEN)
+    this.fileToken = requireFileToken(options.fileToken ?? process.env.COPIS_PI_FILE_API_TOKEN)
     this.fetchImpl = options.fetchImpl ?? fetch
   }
 
@@ -99,7 +99,7 @@ class RustFileToolClient {
         headers: {
           Accept: 'application/json',
           'Content-Type': 'application/json',
-          [INTERNAL_TOKEN_HEADER]: this.internalToken,
+          [AGENT_FILE_TOKEN_HEADER]: this.fileToken,
         },
         body: JSON.stringify({ sessionId: this.options.sessionId, ...body }),
       })

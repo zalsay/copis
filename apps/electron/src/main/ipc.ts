@@ -2729,13 +2729,11 @@ export function registerIpcHandlers(): void {
       } catch (err) {
         console.warn(`[IPC] 持久化 session 权限模式失败: sessionId=${sessionId}`, err)
       }
-      // 若 session 正在跑，同步热切换运行时模式
-      if (isAgentSessionActive(sessionId)) {
-        await updateAgentPermissionMode(sessionId, mode).catch((err) => {
-          console.warn(`[IPC] 运行中权限模式切换失败: sessionId=${sessionId}`, err)
-          throw err
-        })
-      }
+      // Rust 根据会话策略是否存在判断是否正在运行：空闲会话正常返回，运行中会话立即更新 Rust 策略。
+      await updateAgentPermissionMode(sessionId, mode).catch((err) => {
+        console.warn(`[IPC] 运行中权限模式切换失败: sessionId=${sessionId}`, err)
+        throw err
+      })
     }
   )
 
