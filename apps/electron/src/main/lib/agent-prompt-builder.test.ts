@@ -142,7 +142,8 @@ describe('项目与会话工作台提示词', () => {
 
     expect(prompt).toContain('每个非 `/compact` 回合')
     expect(prompt).toContain('后台进入自动捕获队列')
-    expect(prompt).toContain('180 秒静默窗口或 10 个回合')
+    expect(prompt).toContain('180 秒静默窗口')
+    expect(prompt).toContain('累计 10 个回合')
     expect(prompt).toContain('自动任务或委派回合只保留 `scratch`')
   })
 })
