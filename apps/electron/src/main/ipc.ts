@@ -2273,11 +2273,10 @@ export function registerIpcHandlers(): void {
   ipcMain.handle(
     AGENT_IPC_CHANNELS.MOVE_SESSION_TO_WORKSPACE,
     async (_, input: MoveSessionToWorkspaceInput): Promise<AgentSessionMeta> => {
-      // 渲染进程的 running 状态可能比主进程 activeSessions 清理更早变为 false
-      // （STREAM_COMPLETE 在 finally 之前发送），短暂等待后重试一次
-      if (isAgentSessionActive(input.sessionId)) {
+      // Pi Worker 的 SSE complete 与状态清理有极短竞态，短暂等待后由 Rust 再确认。
+      if (await isAgentSessionActive(input.sessionId)) {
         await new Promise((r) => setTimeout(r, 500))
-        if (isAgentSessionActive(input.sessionId)) {
+        if (await isAgentSessionActive(input.sessionId)) {
           throw new Error('会话正在运行中，请停止后再迁移')
         }
       }
@@ -2427,8 +2426,8 @@ export function registerIpcHandlers(): void {
       }
 
       for (const sessionId of affectedSessionIds) {
-        if (isAgentSessionActive(sessionId)) {
-          stopAgent(sessionId)
+        if (await isAgentSessionActive(sessionId)) {
+          await stopAgent(sessionId)
         }
         deleteAgentSession(sessionId)
       }
@@ -2641,7 +2640,7 @@ export function registerIpcHandlers(): void {
     AGENT_IPC_CHANNELS.STOP_AGENT,
     async (_, sessionId: string): Promise<void> => {
       feishuBridgeManager.stopSessionMirrorRun(sessionId)
-      stopAgent(sessionId)
+      await stopAgent(sessionId)
     }
   )
 
@@ -2747,7 +2746,7 @@ export function registerIpcHandlers(): void {
       if (!getAgentSessionMeta(sessionId)) {
         throw new Error(`Agent 会话不存在: ${sessionId}`)
       }
-      if (isAgentSessionActive(sessionId)) {
+      if (await isAgentSessionActive(sessionId)) {
         throw new Error('Agent 正在运行，完成后再切换快速模式')
       }
       return updateAgentSessionMeta(sessionId, { codexFastMode: enabled })
@@ -2764,7 +2763,7 @@ export function registerIpcHandlers(): void {
       if (!getAgentSessionMeta(sessionId)) {
         throw new Error(`Agent 会话不存在: ${sessionId}`)
       }
-      if (isAgentSessionActive(sessionId)) {
+      if (await isAgentSessionActive(sessionId)) {
         throw new Error('Agent 正在运行，完成后再切换 Working 模式')
       }
       return updateAgentSessionMeta(sessionId, { workingMode: mode })

@@ -17,7 +17,7 @@ import { getAgentWorkspace, getLocalProjectRootStatus } from './agent-workspace-
 
 export interface AgentSessionRewindRunState {
   /** 返回会话当前是否由任一运行时持有。 */
-  isSessionActive: (sessionId: string) => boolean
+  isSessionActive: (sessionId: string) => boolean | Promise<boolean>
 }
 
 export interface AgentSessionRewindDependencies {
@@ -85,7 +85,7 @@ export class AgentSessionRewindService {
     runState: AgentSessionRewindRunState,
   ): Promise<RewindSessionResult> {
     // JSONL 在运行中可能被 Worker 或 legacy runtime 追加，必须拒绝回退。
-    if (runState.isSessionActive(sessionId)) {
+    if (await runState.isSessionActive(sessionId)) {
       throw new Error('会话正在运行中，请停止后再回退')
     }
 
@@ -104,7 +104,7 @@ export class AgentSessionRewindService {
       )
       : undefined
 
-    if (localProjectRoot && this.hasOtherActiveSessionForLocalProjectRoot(
+    if (localProjectRoot && await this.hasOtherActiveSessionForLocalProjectRoot(
       sessionId,
       localProjectRoot,
       runState,
@@ -127,13 +127,13 @@ export class AgentSessionRewindService {
   }
 
   /** 同一个真实本地项目根不能与另一运行中会话并发回退文件。 */
-  private hasOtherActiveSessionForLocalProjectRoot(
+  private async hasOtherActiveSessionForLocalProjectRoot(
     sessionId: string,
     localProjectRoot: string,
     runState: AgentSessionRewindRunState,
-  ): boolean {
+  ): Promise<boolean> {
     for (const activeSession of this.dependencies.listAgentSessions()) {
-      if (activeSession.id === sessionId || !runState.isSessionActive(activeSession.id)) continue
+      if (activeSession.id === sessionId || !(await runState.isSessionActive(activeSession.id))) continue
       if (!activeSession.workspaceId) continue
 
       const activeWorkspace = this.dependencies.getAgentWorkspace(activeSession.workspaceId)

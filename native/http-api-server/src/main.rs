@@ -21,7 +21,8 @@ use memory::{
     MemoryRewriteInput, MemoryScope, MemoryStore, DEFAULT_LIST_LIMIT, DEFAULT_RECALL_LIMIT,
 };
 use pi_rpc::{
-    agent_session_id, is_agent_messages_route, is_agent_queue_route, is_agent_stop_route,
+    agent_session_id, is_agent_messages_route, is_agent_queue_route, is_agent_status_route,
+    is_agent_stop_route, is_agent_workers_status_route, is_agent_workers_stop_all_route,
     parse_worker_frame, sse_headers_with_origin, PiWorkerManager,
 };
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
@@ -1047,7 +1048,59 @@ fn handle_connection(
     }
 
     if path.starts_with(INTERNAL_AGENT_FILES_PREFIX) {
-        handle_internal_agent_files(&mut stream, &request, path, origin, workers.file_policies());
+        handle_internal_agent_files(&mut stream, &request, path, origin, workers.as_ref());
+        let _ = stream.shutdown(Shutdown::Both);
+        return;
+    }
+
+    if is_agent_workers_status_route(&request.method, path) {
+        let body = json!({ "activeSessionIds": workers.active_session_ids() }).to_string();
+        send_json_response(&mut stream, 200, &body, origin);
+        let _ = stream.shutdown(Shutdown::Both);
+        return;
+    }
+
+    if is_agent_workers_stop_all_route(&request.method, path) {
+        match workers.stop_all() {
+            Ok(stopped) => {
+                let body = json!({ "stopped": stopped }).to_string();
+                send_json_response(&mut stream, 200, &body, origin);
+            }
+            Err(error) => {
+                eprintln!("[HTTP API] Pi worker 批量停止失败: {}", error);
+                send_json_response(
+                    &mut stream,
+                    503,
+                    r#"{"error":"Pi worker 不可用","code":"pi_worker_unavailable"}"#,
+                    origin,
+                );
+            }
+        }
+        let _ = stream.shutdown(Shutdown::Both);
+        return;
+    }
+
+    if is_agent_status_route(&request.method, path) {
+        let Some(session_id) = agent_session_id(path) else {
+            send_json_response(
+                &mut stream,
+                400,
+                r#"{"error":"Agent 会话路径不正确","code":"invalid_path"}"#,
+                origin,
+            );
+            let _ = stream.shutdown(Shutdown::Both);
+            return;
+        };
+        let body = match workers.session_status(&session_id) {
+            Some(status) => json!({
+                "active": true,
+                "state": status.state.as_str(),
+                "permissionMode": status.permission_mode,
+            }),
+            None => json!({ "active": false }),
+        }
+        .to_string();
+        send_json_response(&mut stream, 200, &body, origin);
         let _ = stream.shutdown(Shutdown::Both);
         return;
     }
@@ -1065,12 +1118,7 @@ fn handle_connection(
         };
         match workers.stop(&session_id) {
             Ok(true) => send_empty_response(&mut stream, 204, origin),
-            Ok(false) => send_json_response(
-                &mut stream,
-                404,
-                r#"{"error":"Agent 会话没有运行中的 Pi worker","code":"agent_worker_not_found"}"#,
-                origin,
-            ),
+            Ok(false) => send_empty_response(&mut stream, 204, origin),
             Err(error) => {
                 eprintln!("[HTTP API] Pi worker 停止失败: {}", error);
                 send_json_response(
@@ -1239,7 +1287,7 @@ fn handle_internal_agent_files(
     request: &HttpRequest,
     path: &str,
     origin: Option<&str>,
-    policies: Arc<agent_files::AgentFilePolicyStore>,
+    workers: &PiWorkerManager,
 ) {
     let action = path
         .strip_prefix(INTERNAL_AGENT_FILES_PREFIX)
@@ -1283,8 +1331,11 @@ fn handle_internal_agent_files(
         let parsed = serde_json::from_slice::<PermissionModeRequest>(&request.body);
         match parsed {
             Ok(input) if !input.session_id.trim().is_empty() => {
-                match policies.update_permission_mode(&input.session_id, &input.permission_mode) {
-                    Ok(()) => send_json_response(stream, 200, r#"{"updated":true}"#, origin),
+                match workers.set_permission_mode(&input.session_id, &input.permission_mode) {
+                    Ok(updated) => {
+                        let body = json!({ "updated": updated }).to_string();
+                        send_json_response(stream, 200, &body, origin);
+                    }
                     Err(error) => {
                         let body =
                             json!({ "error": error.message, "code": error.code }).to_string();
@@ -1312,7 +1363,12 @@ fn handle_internal_agent_files(
         return;
     };
 
-    match policies.handle_with_worker_token(action, &request.method, worker_token, &request.body) {
+    match workers.file_policies().handle_with_worker_token(
+        action,
+        &request.method,
+        worker_token,
+        &request.body,
+    ) {
         Ok(Some(body)) => send_json_response(stream, 200, &body.to_string(), origin),
         Ok(None) => send_empty_response(stream, 204, origin),
         Err(error) => {
@@ -1908,7 +1964,8 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::pi_rpc::{
-        format_sse_event, is_agent_messages_route, is_agent_queue_route, is_agent_stop_route,
+        format_sse_event, is_agent_messages_route, is_agent_queue_route, is_agent_status_route,
+        is_agent_stop_route, is_agent_workers_status_route, is_agent_workers_stop_all_route,
         parse_worker_frame, sse_headers,
     };
     use super::{
@@ -2035,6 +2092,30 @@ mod tests {
         assert!(!is_agent_queue_route(
             "POST",
             "/api/agent/sessions/session-1/queue/extra"
+        ));
+    }
+
+    #[test]
+    fn recognizes_only_pi_worker_lifecycle_routes() {
+        assert!(is_agent_status_route(
+            "GET",
+            "/api/agent/sessions/session-1/status"
+        ));
+        assert!(!is_agent_status_route(
+            "POST",
+            "/api/agent/sessions/session-1/status"
+        ));
+        assert!(is_agent_workers_status_route(
+            "GET",
+            "/api/agent/workers/status"
+        ));
+        assert!(is_agent_workers_stop_all_route(
+            "POST",
+            "/api/agent/workers/stop-all"
+        ));
+        assert!(!is_agent_workers_stop_all_route(
+            "GET",
+            "/api/agent/workers/stop-all"
         ));
     }
 

@@ -58,7 +58,32 @@ describe('AgentRpcGateway', () => {
     expect(events).toEqual(['sdk_message', 'copis_event'])
     expect(titles).toEqual(['周报'])
     expect(complete).toEqual(['session-1:success'])
-    expect(gateway.isActive('session-1')).toBe(false)
+  })
+
+  test('Given Rust Pi Worker lifecycle state When queried or stopped Then gateway does not keep an Electron state mirror', async () => {
+    const requests: string[] = []
+    const gateway = new AgentRpcGateway({
+      baseUrl: 'http://127.0.0.1:51730',
+      fetchImpl: async (url) => {
+        const target = String(url)
+        requests.push(target)
+        if (target.endsWith('/workers/status')) return Response.json({ activeSessionIds: ['session-1', 'session-2'] })
+        if (target.endsWith('/status')) return Response.json({ active: true })
+        if (target.endsWith('/workers/stop-all')) return Response.json({ stopped: 2 })
+        return new Response(null, { status: 404 })
+      },
+    })
+
+    await expect(gateway.isActive('session-1')).resolves.toBe(true)
+    await expect(gateway.activeSessionIds()).resolves.toEqual(['session-1', 'session-2'])
+    await expect(gateway.hasActiveSessions()).resolves.toBe(true)
+    await expect(gateway.stopAll()).resolves.toBeUndefined()
+    expect(requests).toEqual([
+      'http://127.0.0.1:51730/api/agent/sessions/session-1/status',
+      'http://127.0.0.1:51730/api/agent/workers/status',
+      'http://127.0.0.1:51730/api/agent/workers/status',
+      'http://127.0.0.1:51730/api/agent/workers/stop-all',
+    ])
   })
 
   test('Given 正在运行的会话 When queue、stop 或更新权限模式 Then仅调用 Rust API', async () => {
@@ -70,6 +95,7 @@ describe('AgentRpcGateway', () => {
         if (String(url).endsWith('/queue')) {
           return Response.json({ accepted: true, uuid: 'queue-1' }, { status: 202 })
         }
+        if (String(url).endsWith('/permission-mode')) return Response.json({ updated: true })
         return new Response(null, { status: 204 })
       },
     })

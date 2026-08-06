@@ -20,7 +20,7 @@ pub struct AgentFileError {
 }
 
 impl AgentFileError {
-    fn bad_request(message: impl Into<String>) -> Self {
+    pub fn bad_request(message: impl Into<String>) -> Self {
         Self {
             status: 400,
             code: "invalid_request",
@@ -60,13 +60,17 @@ impl AgentFileError {
         }
     }
 
-    fn internal(message: impl Into<String>) -> Self {
+    pub fn internal(message: impl Into<String>) -> Self {
         Self {
             status: 500,
             code: "file_operation_failed",
             message: message.into(),
         }
     }
+}
+
+pub fn is_supported_permission_mode(permission_mode: &str) -> bool {
+    matches!(permission_mode, "bypassPermissions" | "plan")
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -136,8 +140,17 @@ impl AgentFilePolicyStore {
         self.policies.lock().unwrap().remove(session_id);
     }
 
+    #[cfg(test)]
     pub fn contains(&self, session_id: &str) -> bool {
         self.policies.lock().unwrap().contains_key(session_id)
+    }
+
+    pub fn permission_mode(&self, session_id: &str) -> Option<String> {
+        self.policies
+            .lock()
+            .unwrap()
+            .get(session_id)
+            .map(|policy| policy.permission_mode.clone())
     }
 
     pub fn update_permission_mode(
@@ -145,7 +158,7 @@ impl AgentFilePolicyStore {
         session_id: &str,
         permission_mode: &str,
     ) -> Result<(), AgentFileError> {
-        if permission_mode != "bypassPermissions" && permission_mode != "plan" {
+        if !is_supported_permission_mode(permission_mode) {
             return Err(AgentFileError::bad_request("权限模式不正确"));
         }
         let mut policies = self.policies.lock().unwrap();
@@ -343,7 +356,7 @@ impl FileAccessPolicy {
             .get("permissionMode")
             .and_then(Value::as_str)
             .ok_or_else(|| AgentFileError::bad_request("fileAccessPolicy.permissionMode 不正确"))?;
-        if permission_mode != "bypassPermissions" && permission_mode != "plan" {
+        if !is_supported_permission_mode(permission_mode) {
             return Err(AgentFileError::bad_request(
                 "fileAccessPolicy.permissionMode 不正确",
             ));

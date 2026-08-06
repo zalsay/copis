@@ -407,7 +407,7 @@ class DingTalkBridge {
     }
 
     // 有图片：先检查 session 是否正在运行，避免保存图片后消息被拦截
-    if (this.commandHandler.isSessionActive(chatId)) {
+    if (await this.commandHandler.isSessionActive(chatId)) {
       this.pendingImages.set(chatId, { images: allImages, createdAt: Date.now() })
       await this.replyTextViaWebhook(data.sessionWebhook, '❌ 上一条消息仍在处理中，图片已暂存，请稍候再试')
       return

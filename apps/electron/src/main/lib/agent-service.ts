@@ -197,11 +197,8 @@ export async function runAgent(
       sendAgentStreamComplete(webContents, input, { messages: [], stoppedByUser: false })
     }
   } finally {
-    // 仅在 gateway 已完成此会话时清理映射
-    // 避免被拒绝的请求误删仍在运行的会话映射
-    if (!agentRpcGateway.isActive(input.sessionId)) {
-      sessionWebContents.delete(input.sessionId)
-    }
+    // 该调用独占本次 SSE 生命周期；结束后映射不再需要。
+    sessionWebContents.delete(input.sessionId)
   }
 }
 
@@ -302,9 +299,7 @@ export async function runAgentHeadless(
       }
     }
   } finally {
-    if (!agentRpcGateway.isActive(runInput.sessionId)) {
-      sessionWebContents.delete(runInput.sessionId)
-    }
+    sessionWebContents.delete(runInput.sessionId)
   }
 }
 
@@ -319,14 +314,16 @@ export async function generateAgentTitle(input: AgentGenerateTitleInput): Promis
 /**
  * 中止指定会话的 Agent 执行
  */
-export function stopAgent(sessionId: string): void {
-  void agentRpcGateway.stop(sessionId).catch((error: unknown) => {
-    console.warn(`[Agent 服务] Rust Worker 停止失败: sessionId=${sessionId}`, error)
-  })
+export async function stopAgent(sessionId: string): Promise<void> {
+  await agentRpcGateway.stop(sessionId)
 }
 
 setHeadlessAgentRunner(runAgentHeadless)
-setAgentStopper(stopAgent)
+setAgentStopper((sessionId) => {
+  void stopAgent(sessionId).catch((error: unknown) => {
+    console.warn(`[Agent 服务] Rust Worker 停止失败: sessionId=${sessionId}`, error)
+  })
+})
 
 /**
  * 快照回退：回退到指定消息点，恢复文件 + 截断对话
@@ -343,18 +340,23 @@ export async function rewindAgentSession(
 /**
  * 检查指定会话是否正在运行
  */
-export function isAgentSessionActive(sessionId: string): boolean {
+export async function isAgentSessionActive(sessionId: string): Promise<boolean> {
   return agentRpcGateway.isActive(sessionId)
 }
 
 /** 是否存在任意运行中 Agent，供更新器等全局生命周期服务安全判断。 */
-export function hasActiveAgentSessions(): boolean {
+export async function hasActiveAgentSessions(): Promise<boolean> {
   return agentRpcGateway.hasActiveSessions()
 }
 
+/** 返回 Rust Pi Worker 当前持有的会话，用于托盘等跨窗口展示。 */
+export async function getActiveAgentSessionIds(): Promise<string[]> {
+  return agentRpcGateway.activeSessionIds()
+}
+
 /** 中止所有活跃的 Agent 会话（应用退出时调用） */
-export function stopAllAgents(): void {
-  for (const sessionId of agentRpcGateway.activeSessionIds()) stopAgent(sessionId)
+export async function stopAllAgents(): Promise<void> {
+  await agentRpcGateway.stopAll()
 }
 
 /** 退出前清理 Pi runtime 资源。 */
@@ -365,17 +367,13 @@ export function cleanupAgentRuntimeResources(): void {
 /**
  * 运行中动态切换会话的权限模式
  *
- * 同时更新 Copis 侧（canUseTool 动态读取）和 SDK 侧（query.setPermissionMode）。
+ * Rust 先下发 Worker 状态事件，再原子更新文件策略；Pi 不持有权限策略。
  */
 export async function updateAgentPermissionMode(sessionId: string, mode: CopisPermissionMode): Promise<void> {
   const internalToken = getHttpApiInternalToken()
   if (!internalToken) throw new Error('Rust HTTP API 内部令牌不可用')
   const updated = await agentRpcGateway.updatePermissionMode(sessionId, mode, internalToken)
   if (!updated) return
-  eventBus.emit(sessionId, {
-    kind: 'copis_event',
-    event: { type: 'plan_mode_changed', sessionId, active: mode === 'plan', source: 'permission' },
-  })
 }
 
 // ===== 流式追加消息 =====

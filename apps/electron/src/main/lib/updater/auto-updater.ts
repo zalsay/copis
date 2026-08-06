@@ -20,8 +20,8 @@ let win: BrowserWindow | null = null
 /** 定时检查定时器 */
 let checkInterval: ReturnType<typeof setInterval> | null = null
 
-/** 由 Agent 服务注入，覆盖所有窗口/后台 Agent 的运行状态。 */
-let hasActiveAgents = (): boolean => false
+/** 由 Agent 服务注入，状态始终查询 Rust Pi Worker。 */
+let hasActiveAgents = (): boolean | Promise<boolean> => false
 
 /**
  * 用户选择「空闲时更新」后，等待所有 Agent 结束再安装。
@@ -29,10 +29,19 @@ let hasActiveAgents = (): boolean => false
  * 状态检查留在主进程，避免渲染进程漏掉后台运行或其他窗口中的 Agent。
  */
 const idleInstallScheduler = createIdleInstallScheduler({
-  canInstall: () => currentStatus.status === 'downloaded' && !hasActiveAgents(),
+  canInstall: async () => {
+    if (currentStatus.status !== 'downloaded') return false
+    try {
+      return !(await hasActiveAgents())
+    } catch (error) {
+      // 无法确认 Worker 状态时保守地不安装更新。
+      console.warn('[更新] Pi Worker 状态读取失败，继续等待空闲:', error)
+      return false
+    }
+  },
   install: () => {
     console.log('[更新] 当前没有运行中的 Agent，开始安装已下载更新')
-    quitAndInstall()
+    void quitAndInstall()
   },
 })
 
@@ -50,7 +59,7 @@ function setStatus(status: UpdateStatus): void {
  */
 export function configureUpdater(
   mainWindow: BrowserWindow,
-  options?: { hasActiveAgents?: () => boolean },
+  options?: { hasActiveAgents?: () => boolean | Promise<boolean> },
 ): void {
   hasActiveAgents = options?.hasActiveAgents ?? hasActiveAgents
   win = mainWindow
@@ -109,13 +118,21 @@ export function cancelIdleInstall(): void {
  * 所有安装入口最终都经过这里：即使调用方绕过空闲调度器，也不会在 Agent
  * 运行时退出；在真正安装前再次检查一次，避免检查与退出之间启动新 Agent。
  */
-function quitAndInstall(): void {
+async function quitAndInstall(): Promise<void> {
   if (!app.isPackaged) {
     console.warn('[更新] 开发环境不支持安装更新')
     return
   }
 
-  if (hasActiveAgents()) {
+  let activeAgents: boolean
+  try {
+    activeAgents = await hasActiveAgents()
+  } catch (error) {
+    console.warn('[更新] Pi Worker 状态读取失败，继续等待空闲:', error)
+    installWhenIdle()
+    return
+  }
+  if (activeAgents) {
     console.log('[更新] 检测到运行中的 Agent，改为等待空闲后安装')
     installWhenIdle()
     return
@@ -123,17 +140,24 @@ function quitAndInstall(): void {
 
   // 延迟调用确保 IPC 响应已发送回渲染进程；回调内再次检查防止竞态。
   setImmediate(() => {
-    if (hasActiveAgents()) {
-      console.log('[更新] 安装前出现新的运行中 Agent，继续等待空闲')
-      installWhenIdle()
-      return
-    }
+    void Promise.resolve(hasActiveAgents())
+      .then((active) => {
+        if (active) {
+          console.log('[更新] 安装前出现新的运行中 Agent，继续等待空闲')
+          installWhenIdle()
+          return
+        }
 
-    // 移除所有窗口的 close 监听器，避免 preventDefault 阻止退出。
-    for (const w of BrowserWindow.getAllWindows()) {
-      w.removeAllListeners('close')
-    }
-    autoUpdater.quitAndInstall(true, true)
+        // 移除所有窗口的 close 监听器，避免 preventDefault 阻止退出。
+        for (const w of BrowserWindow.getAllWindows()) {
+          w.removeAllListeners('close')
+        }
+        autoUpdater.quitAndInstall(true, true)
+      })
+      .catch((error: unknown) => {
+        console.warn('[更新] Pi Worker 状态读取失败，继续等待空闲:', error)
+        installWhenIdle()
+      })
   })
 }
 

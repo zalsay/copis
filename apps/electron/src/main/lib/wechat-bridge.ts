@@ -858,7 +858,7 @@ class WeChatBridge {
     }
 
     // 有媒体：先检查 session 是否正在运行
-    if (this.commandHandler.isSessionActive(chatId)) {
+    if (await this.commandHandler.isSessionActive(chatId)) {
       if (allImages.length > 0) {
         this.pendingImages.set(chatId, { images: allImages, createdAt: Date.now() })
       }

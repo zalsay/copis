@@ -134,6 +134,8 @@ import { setCopisVersion } from '@copis/core'
 import { TRAY_IPC_CHANNELS } from '../types'
 
 const MIGRATION_IPC_OPEN = 'migration:open-import-file'
+let piWorkersStoppedForQuit = false
+let piWorkerStopInProgress = false
 
 /** 检查文件路径是否为迁移文件，如果是则通知渲染进程打开导入流程 */
 function handleMigrationFileOpen(filePath: string): void {
@@ -684,7 +686,25 @@ app.on('window-all-closed', () => {
   }
 })
 
-app.on('before-quit', () => {
+app.on('before-quit', (event) => {
+  // Rust 是 Pi Worker 唯一控制面。先等待 stop-all 写入每个 Worker stdin，
+  // 再进入第二次 before-quit 关闭 HTTP API，避免关闭顺序吞掉停止命令。
+  if (!piWorkersStoppedForQuit) {
+    event.preventDefault()
+    if (!piWorkerStopInProgress) {
+      piWorkerStopInProgress = true
+      void stopAllAgents()
+        .catch((error: unknown) => {
+          console.warn('[退出] Pi Worker 批量停止失败:', error)
+        })
+        .finally(() => {
+          piWorkersStoppedForQuit = true
+          piWorkerStopInProgress = false
+          app.quit()
+        })
+    }
+    return
+  }
   // 标记正在退出，让 close 事件不再阻止关闭
   setQuitting()
   // 先保存网页页签恢复状态，再释放原生 WebContentsView。
@@ -693,13 +713,11 @@ app.on('before-quit', () => {
   stopAllBrowserWorkflowRuns()
   disposeWebTabs()
 
-  // 关闭本地 HTTP API，避免开发重启时残留端口占用。
+  // Pi Worker 已收到停止命令后再关闭本地 HTTP API，避免开发重启时残留端口占用。
   stopHttpApiServer().catch((error: unknown) => {
     console.error('[HTTP API] 关闭失败:', error)
   })
 
-  // 中止所有活跃的 Agent 子进程
-  stopAllAgents()
   // 释放 Pi runtime 资源
   cleanupAgentRuntimeResources()
   // 清理更新器定时器

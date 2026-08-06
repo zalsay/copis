@@ -265,6 +265,12 @@ export async function runAutomationNow(id: string): Promise<void> {
 
 /** 一个 tick：扫描所有 active 且到期的任务并触发 */
 function tick(): void {
+  void tickAsync().catch((error: unknown) => {
+    console.error('[定时任务] Pi Worker 状态检查失败:', error)
+  })
+}
+
+async function tickAsync(): Promise<void> {
   const now = Date.now()
   for (const automation of listAutomations()) {
     if (!automation.active) continue
@@ -273,7 +279,7 @@ function tick(): void {
     if (now < automation.nextRunAt) continue
     if (runningAutomations.has(automation.id)) continue
     // 来源会话忙时跳过（极端情况下的额外保险，主要靠新建子会话规避）
-    if (automation.sourceSessionId && isAgentSessionActive(automation.sourceSessionId)) {
+    if (automation.sourceSessionId && await isAgentSessionActive(automation.sourceSessionId)) {
       continue
     }
     // 不 await，让多个任务可以并行触发；各自有 runningAutomations 重入保护

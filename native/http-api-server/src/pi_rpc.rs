@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 
 use serde_json::Value;
 
-use crate::agent_files::AgentFilePolicyStore;
+use crate::agent_files::{is_supported_permission_mode, AgentFileError, AgentFilePolicyStore};
 use crate::runtime;
 
 pub fn is_agent_messages_route(method: &str, path: &str) -> bool {
@@ -28,6 +28,21 @@ pub fn is_agent_queue_route(method: &str, path: &str) -> bool {
         && path.starts_with("/api/agent/sessions/")
         && path.ends_with("/queue")
         && path.matches('/').count() == 5
+}
+
+pub fn is_agent_status_route(method: &str, path: &str) -> bool {
+    method.eq_ignore_ascii_case("GET")
+        && path.starts_with("/api/agent/sessions/")
+        && path.ends_with("/status")
+        && path.matches('/').count() == 5
+}
+
+pub fn is_agent_workers_status_route(method: &str, path: &str) -> bool {
+    method.eq_ignore_ascii_case("GET") && path == "/api/agent/workers/status"
+}
+
+pub fn is_agent_workers_stop_all_route(method: &str, path: &str) -> bool {
+    method.eq_ignore_ascii_case("POST") && path == "/api/agent/workers/stop-all"
 }
 
 pub fn agent_session_id(path: &str) -> Option<String> {
@@ -77,8 +92,31 @@ struct WorkerControl {
     writer: Mutex<BufWriter<std::process::ChildStdin>>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PiWorkerRunState {
+    Running,
+    Stopping,
+}
+
+impl PiWorkerRunState {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Running => "running",
+            Self::Stopping => "stopping",
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PiWorkerStatusSnapshot {
+    pub session_id: String,
+    pub state: PiWorkerRunState,
+    pub permission_mode: String,
+}
+
 pub struct PiWorkerManager {
     workers: Mutex<HashMap<String, Arc<WorkerControl>>>,
+    worker_statuses: Mutex<HashMap<String, PiWorkerStatusSnapshot>>,
     file_policies: Arc<AgentFilePolicyStore>,
 }
 
@@ -145,6 +183,7 @@ impl PiWorkerManager {
     pub fn new() -> Self {
         Self {
             workers: Mutex::new(HashMap::new()),
+            worker_statuses: Mutex::new(HashMap::new()),
             file_policies: Arc::new(AgentFilePolicyStore::new()),
         }
     }
@@ -153,14 +192,47 @@ impl PiWorkerManager {
         Arc::clone(&self.file_policies)
     }
 
+    pub fn session_status(&self, session_id: &str) -> Option<PiWorkerStatusSnapshot> {
+        self.worker_statuses
+            .lock()
+            .unwrap()
+            .get(session_id)
+            .cloned()
+    }
+
+    #[cfg(test)]
+    pub fn status_snapshot(&self) -> Vec<PiWorkerStatusSnapshot> {
+        let mut statuses = self
+            .worker_statuses
+            .lock()
+            .unwrap()
+            .values()
+            .cloned()
+            .collect::<Vec<_>>();
+        statuses.sort_by(|left, right| left.session_id.cmp(&right.session_id));
+        statuses
+    }
+
     pub fn start(&self, session_id: &str, mut config: Value) -> Result<PiWorkerRun, String> {
         let query = config
             .get_mut("query")
             .and_then(Value::as_object_mut)
             .ok_or_else(|| "Pi worker 配置缺少 query".to_string())?;
+        let permission_mode = query
+            .get("permissionMode")
+            .and_then(Value::as_str)
+            .filter(|mode| is_supported_permission_mode(mode))
+            .ok_or_else(|| "Pi worker 配置缺少有效 permissionMode".to_string())?
+            .to_string();
         let file_api_token = self.file_policies.register_from_query(session_id, query)?;
         if file_api_token.is_empty() {
             return Err("Pi Worker 未收到 Rust 文件能力令牌".to_string());
+        }
+        if self.file_policies.permission_mode(session_id).as_deref()
+            != Some(permission_mode.as_str())
+        {
+            self.file_policies.remove(session_id);
+            return Err("Pi Worker 权限模式与 Rust 文件策略不一致".to_string());
         }
         let executable_path = std::env::var("COPIS_PI_RPC_EXECUTABLE").ok();
         let worker_path = std::env::var("COPIS_PI_RPC_WORKER").ok();
@@ -277,6 +349,14 @@ impl PiWorkerManager {
             }
             workers.insert(session_id.to_string(), Arc::clone(&control));
         }
+        self.worker_statuses.lock().unwrap().insert(
+            session_id.to_string(),
+            PiWorkerStatusSnapshot {
+                session_id: session_id.to_string(),
+                state: PiWorkerRunState::Running,
+                permission_mode,
+            },
+        );
 
         let command = serde_json::json!({
             "type": "run",
@@ -285,6 +365,7 @@ impl PiWorkerManager {
         });
         if let Err(error) = write_json_line(&control, &command) {
             self.workers.lock().unwrap().remove(session_id);
+            self.worker_statuses.lock().unwrap().remove(session_id);
             self.file_policies.remove(session_id);
             let _ = child.kill();
             return Err(format!("Pi worker run 命令发送失败: {}", error));
@@ -302,12 +383,86 @@ impl PiWorkerManager {
         let Some(control) = control else {
             return Ok(false);
         };
-        let command = serde_json::json!({
-            "type": "stop",
-            "sessionId": session_id,
-        });
-        write_json_line(&control, &command)
+        write_json_line(&control, &stop_command(session_id))
             .map_err(|error| format!("Pi worker 停止命令发送失败: {}", error))?;
+        self.mark_stopping(session_id);
+        Ok(true)
+    }
+
+    #[cfg(test)]
+    pub fn is_active(&self, session_id: &str) -> bool {
+        self.worker_statuses
+            .lock()
+            .unwrap()
+            .contains_key(session_id)
+    }
+
+    pub fn active_session_ids(&self) -> Vec<String> {
+        let mut session_ids = self
+            .worker_statuses
+            .lock()
+            .unwrap()
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>();
+        session_ids.sort();
+        session_ids
+    }
+
+    pub fn stop_all(&self) -> Result<usize, String> {
+        let workers = self
+            .workers
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(session_id, control)| (session_id.clone(), Arc::clone(control)))
+            .collect::<Vec<_>>();
+        let mut stopped = 0;
+        let mut errors = Vec::new();
+        for (session_id, control) in &workers {
+            match write_json_line(control, &stop_command(session_id)) {
+                Ok(()) => {
+                    self.mark_stopping(session_id);
+                    stopped += 1;
+                }
+                Err(error) => errors.push(format!("{}: {}", session_id, error)),
+            }
+        }
+        if errors.is_empty() {
+            Ok(stopped)
+        } else {
+            Err(format!(
+                "Pi worker 批量停止命令发送失败: {}",
+                errors.join("; ")
+            ))
+        }
+    }
+
+    /// 权限模式由 Rust 的文件策略实际执行；Worker 仅接收状态同步命令并输出 UI 事件。
+    pub fn set_permission_mode(
+        &self,
+        session_id: &str,
+        permission_mode: &str,
+    ) -> Result<bool, AgentFileError> {
+        if !is_supported_permission_mode(permission_mode) {
+            return Err(AgentFileError::bad_request("权限模式不正确"));
+        }
+        let control = self.workers.lock().unwrap().get(session_id).cloned();
+        let Some(control) = control else {
+            return Ok(false);
+        };
+        write_json_line(
+            &control,
+            &permission_mode_command(session_id, permission_mode),
+        )
+        .map_err(|error| {
+            AgentFileError::internal(format!("Pi worker 权限模式命令发送失败: {}", error))
+        })?;
+        self.file_policies
+            .update_permission_mode(session_id, permission_mode)?;
+        if let Some(status) = self.worker_statuses.lock().unwrap().get_mut(session_id) {
+            status.permission_mode = permission_mode.to_string();
+        }
         Ok(true)
     }
 
@@ -340,11 +495,18 @@ impl PiWorkerManager {
 
     pub fn finish(&self, mut run: PiWorkerRun) {
         self.workers.lock().unwrap().remove(&run.session_id);
+        self.worker_statuses.lock().unwrap().remove(&run.session_id);
         self.file_policies.remove(&run.session_id);
         if run.child.try_wait().ok().flatten().is_none() {
             let _ = run.child.kill();
         }
         let _ = run.child.wait();
+    }
+
+    fn mark_stopping(&self, session_id: &str) {
+        if let Some(status) = self.worker_statuses.lock().unwrap().get_mut(session_id) {
+            status.state = PiWorkerRunState::Stopping;
+        }
     }
 }
 
@@ -359,6 +521,21 @@ fn write_json_line(control: &WorkerControl, value: &Value) -> io::Result<()> {
     writer.write_all(value.to_string().as_bytes())?;
     writer.write_all(b"\n")?;
     writer.flush()
+}
+
+fn stop_command(session_id: &str) -> Value {
+    serde_json::json!({
+        "type": "stop",
+        "sessionId": session_id,
+    })
+}
+
+fn permission_mode_command(session_id: &str, permission_mode: &str) -> Value {
+    serde_json::json!({
+        "type": "set_permission_mode",
+        "sessionId": session_id,
+        "mode": permission_mode,
+    })
 }
 
 /// Pi 只获得当前会话的文件 capability；全局内部管理令牌绝不能传给 Pi。
@@ -381,8 +558,11 @@ fn spawn_stderr_reader(stderr: ChildStderr) {
 #[cfg(test)]
 mod tests {
     use super::{
-        configure_worker_file_capability, resolve_worker_launch, worker_requires_node, WorkerLaunch,
+        configure_worker_file_capability, permission_mode_command, resolve_worker_launch,
+        stop_command, worker_requires_node, PiWorkerManager, PiWorkerRunState,
+        PiWorkerStatusSnapshot, WorkerLaunch,
     };
+    use serde_json::json;
     use std::path::PathBuf;
     use std::process::Command;
 
@@ -509,5 +689,83 @@ mod tests {
         )
         .expect_err("开发模式不能回退到托管 Node runtime");
         assert_eq!(error, "开发 Bun runtime 未配置");
+    }
+
+    #[test]
+    fn given_no_pi_workers_when_querying_lifecycle_then_rust_is_the_empty_authority() {
+        let manager = PiWorkerManager::new();
+
+        assert!(!manager.is_active("session-1"));
+        assert!(manager.active_session_ids().is_empty());
+        assert!(manager.session_status("session-1").is_none());
+        assert!(manager.status_snapshot().is_empty());
+        assert_eq!(manager.stop_all().unwrap(), 0);
+        assert!(!manager.set_permission_mode("session-1", "plan").unwrap());
+    }
+
+    #[test]
+    fn given_active_statuses_when_listing_snapshot_then_results_are_sorted_and_observable() {
+        let manager = PiWorkerManager::new();
+        let mut statuses = manager.worker_statuses.lock().unwrap();
+        statuses.insert(
+            "session-b".to_string(),
+            PiWorkerStatusSnapshot {
+                session_id: "session-b".to_string(),
+                state: PiWorkerRunState::Stopping,
+                permission_mode: "plan".to_string(),
+            },
+        );
+        statuses.insert(
+            "session-a".to_string(),
+            PiWorkerStatusSnapshot {
+                session_id: "session-a".to_string(),
+                state: PiWorkerRunState::Running,
+                permission_mode: "bypassPermissions".to_string(),
+            },
+        );
+        drop(statuses);
+
+        assert_eq!(
+            manager.status_snapshot(),
+            vec![
+                PiWorkerStatusSnapshot {
+                    session_id: "session-a".to_string(),
+                    state: PiWorkerRunState::Running,
+                    permission_mode: "bypassPermissions".to_string(),
+                },
+                PiWorkerStatusSnapshot {
+                    session_id: "session-b".to_string(),
+                    state: PiWorkerRunState::Stopping,
+                    permission_mode: "plan".to_string(),
+                },
+            ],
+        );
+    }
+
+    #[test]
+    fn given_worker_control_operations_when_serializing_then_protocol_payloads_are_stable() {
+        assert_eq!(
+            stop_command("session-1"),
+            json!({ "type": "stop", "sessionId": "session-1" }),
+        );
+        assert_eq!(
+            permission_mode_command("session-1", "plan"),
+            json!({
+                "type": "set_permission_mode",
+                "sessionId": "session-1",
+                "mode": "plan",
+            }),
+        );
+    }
+
+    #[test]
+    fn given_invalid_permission_mode_when_switching_then_reject_before_worker_lookup() {
+        let manager = PiWorkerManager::new();
+
+        let error = manager
+            .set_permission_mode("session-1", "unsafe")
+            .unwrap_err();
+
+        assert_eq!(error.code, "invalid_request");
     }
 }

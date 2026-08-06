@@ -1,5 +1,5 @@
 import { createInterface } from 'node:readline'
-import type { AgentStreamPayload, SDKMessage } from '@copis/shared'
+import type { AgentStreamPayload, CopisPermissionMode, SDKMessage } from '@copis/shared'
 import type { PiAgentQueryOptions, PiAgentAdapter } from './lib/adapters/pi-agent-adapter'
 import {
   parseWorkerCommand,
@@ -212,7 +212,33 @@ function handleCommand(command: AgentRpcWorkerCommand): void {
     void queueWorker(command.config)
     return
   }
+  if (command.type === 'set_permission_mode') {
+    void setWorkerPermissionMode(command.sessionId, command.mode)
+    return
+  }
   void runWorker(command.config)
+}
+
+async function setWorkerPermissionMode(sessionId: string, mode: CopisPermissionMode): Promise<void> {
+  const run = activeRun
+  if (!run || run.sessionId !== sessionId) {
+    await writeFrame({ type: 'error', sessionId, error: '当前会话没有正在运行的 Pi Worker' })
+    return
+  }
+
+  try {
+    // Pi 不接收文件策略；该调用仅保持 SDK 非文件工具状态兼容，实际文件权限由 Rust 执行。
+    await run.adapter.setPermissionMode(sessionId, mode)
+    emitCopisEvent(sessionId, {
+      type: 'plan_mode_changed',
+      sessionId,
+      active: mode === 'plan',
+      source: 'permission',
+    })
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error)
+    await writeFrame({ type: 'error', sessionId, error: message })
+  }
 }
 
 async function queueWorker(config: PiWorkerQueueConfig): Promise<void> {

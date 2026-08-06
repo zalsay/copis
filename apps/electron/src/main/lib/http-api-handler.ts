@@ -114,7 +114,7 @@ export interface AgentHttpFacade {
       onTitleUpdated: (title: string) => void
     },
   ) => Promise<void>
-  stopAgent: (sessionId: string) => void
+  stopAgent: (sessionId: string) => Promise<void>
 }
 
 export interface FileHttpFacade {
@@ -420,7 +420,7 @@ async function handleAgentRequest(
   }
 
   if (sessionAction === 'stop' && method === 'POST') {
-    api.stopAgent(sessionId)
+    await api.stopAgent(sessionId)
     return { status: 204 }
   }
 

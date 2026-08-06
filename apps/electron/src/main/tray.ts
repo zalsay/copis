@@ -3,7 +3,7 @@ import { join } from 'path'
 import { existsSync } from 'fs'
 import { listAgentSessions } from './lib/agent-session-manager'
 import { listAgentWorkspaces } from './lib/agent-workspace-manager'
-import { isAgentSessionActive } from './lib/agent-service'
+import { getActiveAgentSessionIds } from './lib/agent-service'
 import { createTrayMenuModel, type TrayRecentSessionItem } from './lib/tray-menu-model'
 
 let tray: Tray | null = null
@@ -68,13 +68,9 @@ function createRecentSessionMenuItem(
   }
 }
 
-function buildTrayMenu(actions: TrayActions): Menu {
+async function buildTrayMenu(actions: TrayActions): Promise<Menu> {
   const sessions = listAgentSessions()
-  const runningSessionIds = new Set(
-    sessions
-      .filter((session) => isAgentSessionActive(session.id))
-      .map((session) => session.id)
-  )
+  const runningSessionIds = new Set(await getActiveAgentSessionIds())
   const model = createTrayMenuModel(sessions, listAgentWorkspaces(), runningSessionIds)
   const runningItems = model.runningSessions.map((item) => createRecentSessionMenuItem(item, actions))
   const recentItems = model.recentSessions.map((item) => createRecentSessionMenuItem(item, actions))
@@ -120,9 +116,10 @@ function buildTrayMenu(actions: TrayActions): Menu {
   return Menu.buildFromTemplate(template)
 }
 
-function updateTrayMenu(actions: TrayActions): Menu | null {
+async function updateTrayMenu(actions: TrayActions): Promise<Menu | null> {
   if (!tray) return null
-  const contextMenu = buildTrayMenu(actions)
+  const contextMenu = await buildTrayMenu(actions)
+  if (!tray) return null
   tray.setContextMenu(contextMenu)
   return contextMenu
 }
@@ -158,18 +155,21 @@ export function createTray(actionsInput?: Partial<TrayActions>): Tray | null {
     // 设置 tooltip
     tray.setToolTip('Copis')
 
-    updateTrayMenu(actions)
+    void updateTrayMenu(actions).catch((error: unknown) => {
+      console.warn('[托盘] Pi Worker 状态读取失败:', error)
+    })
 
     // 点击行为：始终弹出菜单（与右键一致）
     tray.on('click', () => {
-      const contextMenu = updateTrayMenu(actions)
-      if (contextMenu) {
-        tray?.popUpContextMenu(contextMenu)
-      }
+      void updateTrayMenu(actions)
+        .then((contextMenu) => contextMenu && tray?.popUpContextMenu(contextMenu))
+        .catch((error: unknown) => console.warn('[托盘] Pi Worker 状态读取失败:', error))
     })
 
     tray.on('right-click', () => {
-      updateTrayMenu(actions)
+      void updateTrayMenu(actions).catch((error: unknown) => {
+        console.warn('[托盘] Pi Worker 状态读取失败:', error)
+      })
     })
 
     console.log('System tray created')

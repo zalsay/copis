@@ -80,8 +80,9 @@ Rust 在 `/api/agent/sessions/:id/messages` 路由中调用 Electron internal `p
 | --- | --- | --- | --- |
 | 活跃 Agent 追加消息 | `queueAgentMessage()` -> 本地 HTTP `/queue` -> Pi Worker | `AgentConversationSurface.tsx` | 已迁移；Skill、MCP、会话、待办和日程引用由 RPC prepare 统一处理 |
 | 会话快照回退 | `rewindSession()` -> `agent-session-rewind-service` | `AgentConversationSurface.tsx` | 已从 Orchestrator 提取为独立服务，不进入 Worker |
-| 运行中权限模式切换 | `updateSessionPermissionMode()` -> Rust policy update | `PermissionModeSelector.tsx` | 已迁移；Rust 根据会话策略存在性更新 `plan` / `bypassPermissions`，Pi 不接收策略对象 |
-| 停止 Agent | `stopAgent()` -> Rust `/stop` | `AgentConversationSurface`、`WelcomeComposer`、`AskUserBanner`、`PermissionBanner`、`ExitPlanModeBanner` | 已迁移；不存在旧 Orchestrator fallback |
+| 运行中权限模式切换 | `updateSessionPermissionMode()` -> Rust internal policy control | `PermissionModeSelector.tsx` | 已迁移；内部令牌接口由 Rust 向 Worker 下发 `set_permission_mode`，仅在命令写入成功后更新文件策略；Pi 不接收策略或内部令牌 |
+| 停止 Agent | `stopAgent()` -> Rust `/stop` | `AgentConversationSurface`、`WelcomeComposer`、`AskUserBanner`、`PermissionBanner`、`ExitPlanModeBanner` | 已迁移；停止接口幂等，不存在旧 Orchestrator fallback |
+| 生命周期状态与批量停止 | Rust `PiWorkerManager` status / `stop-all` | 托盘、更新器、项目删除、自动任务和 Bridge | 已迁移；Electron 不再维护 `activeSessions` 镜像，全部异步查询或命令 Pi Worker |
 
 以下接口仍暴露在 Preload/IPC 中，但当前没有发现 renderer 生产代码直接调用 `generateAgentTitle()`。Pi Worker 路径已经由 `agent-rpc-service.finalizeAgentRpcRun()` 生成回退标题；旧 `GENERATE_TITLE` 可以在调用方审计后删除或转为统一标题服务。
 
@@ -138,12 +139,7 @@ Worker 当前在一次 `query()` 完成后发送 `complete` 并退出进程。�
 3. 不能让 UI 已经进入 idle 后又收到没有对应 running 状态的追加事件。
 4. Rust 连接关闭、Worker 崩溃和队列请求超时都要产生唯一的 error/complete 终态。
 
-权限模式控制必须明确实际语义。当前 Worker 的 `canUseTool` 是直接允许工具，不能只在协议层添加 `set_permission_mode` 字段而不改变工具权限判定。迁移前要决定：
-
-- 保持当前 Pi Worker 的 bypass 行为，并移除 UI 的运行中权限切换；或
-- 在 Worker 内维护可变权限状态，并将模式切换传给工具包装层和 Pi 查询。
-
-本计划采用第二种作为目标行为；在完成前保留旧权限链路作为回滚手段，但不得同时对一个会话执行两套权限状态。
+权限模式的实际执行权属于 Rust。Pi Worker 的命令只同步 `plan_mode_changed` UI 状态，不携带可读根、可写根或内部令牌；所有 Read/Edit/Write 都必须经 Rust 的会话文件 capability 和工作区策略校验。`set_permission_mode` 先由 Rust 验证并写入 Worker stdin，成功后才更新 Rust 文件策略，避免 UI 与文件权限状态分叉。
 
 ### 3.3 UI 控制 API
 
@@ -154,7 +150,10 @@ Worker 当前在一次 `query()` 完成后发送 `complete` 并退出进程。�
 | `POST /api/agent/sessions/:id/messages` | 新回合，现有接口 | 当前 SSE 连接 |
 | `POST /api/agent/sessions/:id/queue` | 活跃回合追加消息，返回接受 UUID | 当前 Worker SSE 连接 |
 | `POST /api/agent/sessions/:id/stop` | 幂等停止 | 当前 SSE 连接发送 complete/error |
-| `POST /api/agent/sessions/:id/permission-mode` | 运行中更新权限模式 | 当前 Worker SSE 连接发送状态事件 |
+| `GET /api/agent/sessions/:id/status` | 查询 `Running` / `Stopping` Worker 生命周期 | Rust `PiWorkerManager` 快照 |
+| `GET /api/agent/workers/status` | 查询所有活跃 Worker 会话 | Rust `PiWorkerManager` 快照 |
+| `POST /api/agent/workers/stop-all` | 应用退出前批量停止 | Rust 逐个向 Worker stdin 发送 stop |
+| `POST /api/internal/agent/files/permission-mode` | 内部令牌授权的权限热切换 | Worker SSE 发送 `plan_mode_changed`；Rust 更新文件策略 |
 | `POST /api/agent/sessions/:id/rewind` | 可选 HTTP facade；第一阶段也可继续走 IPC 独立服务 | 普通 JSON 响应 |
 
 队列 API 不应另开一条 UI 流来消费事件；同一会话的事件必须由 Worker 的主 SSE 流统一输出，避免两个 reader 竞争同一个会话事件。
@@ -261,7 +260,7 @@ Then Worker 只产生一个 stopped complete，Rust manager 删除 session 映�
 - 运行中输入 `/skill`，Skill mention 到达同一个 Pi Worker，并在 Worker prompt 中可见。
 - `interrupt`、引用会话、引用待办和引用日程行为与现有 Orchestrator 路径一致。
 
-### Task 3：迁移停止、权限和运行状态
+### Task 3：迁移停止、权限和运行状态（完成）
 
 **目标：** 去掉 UI 对 `isAgentSessionActive()` 和 Orchestrator active map 的隐式依赖。
 
@@ -279,10 +278,12 @@ Then Worker 只产生一个 stopped complete，Rust manager 删除 session 映�
 
 **工作：**
 
-1. `stopAgent()` 只调用 RPC stop；保留旧 IPC fallback 一个版本周期，并要求 fallback 先确认 RPC Worker 不存在，避免两个运行时同时停止同一会话。
-2. 增加 RPC Worker 的运行状态查询或由当前 renderer atom 维护可靠的 session ownership；不能继续用 Orchestrator 的 `activeSessions` 判断 RPC 会话是否运行。
-3. 实现权限模式切换的 Worker 控制命令，输出 `plan_mode_changed` 等现有 Copis 事件。
+1. `stopAgent()` 只调用 Rust RPC stop，停止接口幂等；不保留 Orchestrator 或 IPC fallback。
+2. `PiWorkerManager` 维护 `Running` / `Stopping` 快照和会话映射，并提供会话状态、全量状态和 `stop-all` HTTP 端点；Electron 不再维护 `activeSessions`。
+3. 实现 `set_permission_mode` Worker 控制命令。Rust 在命令写入后更新 Rust 文件策略，Worker 仅输出 `plan_mode_changed`，Pi 不获取策略对象或内部令牌。
 4. 对 AskUser/Permission/ExitPlan 现有 UI 做路径审计。若 RPC Worker 当前不能安全等待 UI 响应，必须先明确采用 `bypassPermissions` 或新增 Worker 控制通道，不能静默丢掉请求。
+
+**本轮完成：** 托盘、自动更新、项目删除、自动任务、Bridge、回退保护和应用退出均通过 Rust Pi Worker 查询状态或下发命令。应用退出先完成 `stop-all`，再关闭 Rust HTTP API，避免停止命令因关闭顺序丢失。
 
 ### Task 4：将回退逻辑从 AgentOrchestrator 提取（完成）
 

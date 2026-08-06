@@ -55,6 +55,15 @@ describe('Agent RPC 协议', () => {
     expect(parseWorkerCommand('{"type":"stop"}')).toBeUndefined()
   })
 
+  test('Given Rust permission control command When parsed Then only accepts supported modes', () => {
+    expect(parseWorkerCommand('{"type":"set_permission_mode","sessionId":"session-1","mode":"plan"}')).toEqual({
+      type: 'set_permission_mode',
+      sessionId: 'session-1',
+      mode: 'plan',
+    })
+    expect(parseWorkerCommand('{"type":"set_permission_mode","sessionId":"session-1","mode":"allow-all"}')).toBeUndefined()
+  })
+
   test('Given queue command When parsed Then preserves the worker queue payload', () => {
     const command: AgentRpcWorkerCommand = {
       type: 'queue',

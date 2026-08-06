@@ -76,6 +76,7 @@ export interface PiWorkerQueueConfig {
 export type AgentRpcWorkerCommand =
   | { type: 'run'; requestId: string; config: PiWorkerRunConfig }
   | { type: 'stop'; sessionId: string }
+  | { type: 'set_permission_mode'; sessionId: string; mode: CopisPermissionMode }
   | { type: 'queue'; requestId: string; config: PiWorkerQueueConfig }
 
 export type AgentRpcWorkerFrame =
@@ -124,10 +125,17 @@ export function parseWorkerCommand(line: string): AgentRpcWorkerCommand | undefi
   } catch {
     return undefined
   }
-  if (!isRecord(parsed) || (parsed.type !== 'run' && parsed.type !== 'stop' && parsed.type !== 'queue')) return undefined
+  if (!isRecord(parsed) || (parsed.type !== 'run' && parsed.type !== 'stop' && parsed.type !== 'set_permission_mode' && parsed.type !== 'queue')) return undefined
   if (parsed.type === 'stop') {
     return typeof parsed.sessionId === 'string' && parsed.sessionId.length > 0
       ? { type: 'stop', sessionId: parsed.sessionId }
+      : undefined
+  }
+  if (parsed.type === 'set_permission_mode') {
+    return typeof parsed.sessionId === 'string'
+      && parsed.sessionId.length > 0
+      && (parsed.mode === 'bypassPermissions' || parsed.mode === 'plan')
+      ? { type: 'set_permission_mode', sessionId: parsed.sessionId, mode: parsed.mode }
       : undefined
   }
   if (typeof parsed.requestId !== 'string' || parsed.requestId.length === 0 || !isRecord(parsed.config)) return undefined

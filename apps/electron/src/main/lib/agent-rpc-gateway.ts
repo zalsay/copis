@@ -74,31 +74,41 @@ function toComplete(frame: Extract<AgentRpcWorkerFrame, { type: 'complete' }>): 
 export class AgentRpcGateway {
   private readonly baseUrl: string
   private readonly fetchImpl: FetchImplementation
-  private readonly activeSessions = new Set<string>()
 
   constructor(options: AgentRpcGatewayOptions = {}) {
     this.baseUrl = resolveBaseUrl(options.baseUrl)
     this.fetchImpl = options.fetchImpl ?? fetch
   }
 
-  isActive(sessionId: string): boolean {
-    return this.activeSessions.has(sessionId)
+  async isActive(sessionId: string): Promise<boolean> {
+    const response = await this.fetchImpl(
+      `${this.baseUrl}/api/agent/sessions/${encodeURIComponent(sessionId)}/status`,
+      { headers: { Accept: 'application/json' } },
+    )
+    if (!response.ok) throw new Error(await readErrorMessage(response))
+    const payload: unknown = await response.json()
+    if (isRecord(payload) && typeof payload.active === 'boolean') return payload.active
+    throw new Error('Pi Worker 状态响应不正确')
   }
 
-  hasActiveSessions(): boolean {
-    return this.activeSessions.size > 0
+  async hasActiveSessions(): Promise<boolean> {
+    return (await this.activeSessionIds()).length > 0
   }
 
-  activeSessionIds(): string[] {
-    return Array.from(this.activeSessions)
+  async activeSessionIds(): Promise<string[]> {
+    const response = await this.fetchImpl(`${this.baseUrl}/api/agent/workers/status`, {
+      headers: { Accept: 'application/json' },
+    })
+    if (!response.ok) throw new Error(await readErrorMessage(response))
+    const payload: unknown = await response.json()
+    if (isRecord(payload) && Array.isArray(payload.activeSessionIds)
+      && payload.activeSessionIds.every((sessionId) => typeof sessionId === 'string')) {
+      return payload.activeSessionIds
+    }
+    throw new Error('Pi Worker 列表响应不正确')
   }
 
   async run(input: AgentSendInput, callbacks: AgentRpcGatewayCallbacks): Promise<void> {
-    if (this.activeSessions.has(input.sessionId)) {
-      throw new Error(`Agent 会话正在运行: ${input.sessionId}`)
-    }
-    this.activeSessions.add(input.sessionId)
-
     try {
       const response = await this.fetchImpl(
         `${this.baseUrl}/api/agent/sessions/${encodeURIComponent(input.sessionId)}/messages`,
@@ -144,8 +154,6 @@ export class AgentRpcGateway {
       const message = error instanceof Error ? error.message : String(error)
       callbacks.onError(message)
       throw error
-    } finally {
-      this.activeSessions.delete(input.sessionId)
     }
   }
 
@@ -174,6 +182,14 @@ export class AgentRpcGateway {
     if (!response.ok) throw new Error(await readErrorMessage(response))
   }
 
+  async stopAll(): Promise<void> {
+    const response = await this.fetchImpl(`${this.baseUrl}/api/agent/workers/stop-all`, {
+      method: 'POST',
+      headers: { Accept: 'application/json' },
+    })
+    if (!response.ok) throw new Error(await readErrorMessage(response))
+  }
+
   async updatePermissionMode(
     sessionId: string,
     mode: CopisPermissionMode,
@@ -188,7 +204,11 @@ export class AgentRpcGateway {
       },
       body: JSON.stringify({ sessionId, permissionMode: mode }),
     })
-    if (response.ok) return true
+    if (response.ok) {
+      const payload: unknown = await response.json()
+      if (isRecord(payload) && typeof payload.updated === 'boolean') return payload.updated
+      throw new Error('Pi Worker 权限模式响应不正确')
+    }
     const body = await response.text()
     try {
       const payload: unknown = JSON.parse(body)

@@ -7,7 +7,7 @@
 
 export interface IdleInstallSchedulerOptions {
   /** 当前是否允许安装更新（例如更新仍处于 downloaded 状态且无活跃 Agent） */
-  canInstall: () => boolean
+  canInstall: () => boolean | Promise<boolean>
   /** 条件满足时执行安装 */
   install: () => void
   /** 轮询间隔，默认 1 秒 */
@@ -35,6 +35,7 @@ export function createIdleInstallScheduler({
   clearIntervalFn = clearInterval,
 }: IdleInstallSchedulerOptions): IdleInstallScheduler {
   let requested = false
+  let checking = false
   let timer: ReturnType<typeof setInterval> | null = null
 
   const clearTimer = (): void => {
@@ -43,13 +44,32 @@ export function createIdleInstallScheduler({
     timer = null
   }
 
-  const attemptInstall = (): void => {
+  const completeInstall = (): void => {
     if (!requested) return
-    if (!canInstall()) return
-
     requested = false
     clearTimer()
     install()
+  }
+
+  const attemptInstall = (): void => {
+    if (!requested || checking) return
+    const result = canInstall()
+    if (typeof result === 'boolean') {
+      if (result) completeInstall()
+      return
+    }
+
+    checking = true
+    void result
+      .then((allowed) => {
+        if (allowed) completeInstall()
+      })
+      .catch(() => {
+        // 状态提供方失败时保留请求，等待下一次轮询确认。
+      })
+      .finally(() => {
+        checking = false
+      })
   }
 
   const request = (): void => {

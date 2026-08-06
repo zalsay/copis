@@ -158,7 +158,7 @@ export class BridgeCommandHandler {
   }
 
   /** 检查指定 chatId 的 session 是否正在运行 */
-  isSessionActive(chatId: string): boolean {
+  async isSessionActive(chatId: string): Promise<boolean> {
     const binding = this.getValidBinding(chatId)
     if (!binding) return false
     return isAgentSessionActive(binding.sessionId)
@@ -444,7 +444,7 @@ export class BridgeCommandHandler {
       await this.send(chatId, '当前没有绑定的会话。', contextData)
       return
     }
-    stopAgent(binding.sessionId)
+    await stopAgent(binding.sessionId)
     await this.send(chatId, '✅ 已停止 Agent', contextData)
   }
 
@@ -746,7 +746,7 @@ export class BridgeCommandHandler {
     }
 
     // 并发保护：如果该会话的 Agent 仍在运行，直接拒绝，不要触碰 buffer
-    if (isAgentSessionActive(binding.sessionId)) {
+    if (await isAgentSessionActive(binding.sessionId)) {
       await this.send(chatId, '❌ 上一条消息仍在处理中，请稍候再试', contextData)
       return
     }
