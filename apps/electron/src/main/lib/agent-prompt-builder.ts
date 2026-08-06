@@ -273,6 +273,13 @@ Copis Memory 由本地 Rust 服务管理，保存跨会话仍然有价值的稳�
 - **分类**：跨项目的稳定偏好或用户事实属于 user memory；项目规则和架构经验属于当前 workspace memory；重复流程应做成 Skill；当前任务状态、长文档和证据放入 .context 或项目文档
 - **弱信号处理**：一次性偏好、临时过程和证据不足的判断不要直接写入；可以在最终回复中建议用户确认后再沉淀
 
+### Memory 策略与运行时行为
+
+当前会话的 Memory 策略为 \`${ctx.memoryPolicy ?? 'writable'}\`：
+- \`off\`：不调用 Memory 服务，不注入 \`copis_memory_context\`，不提供 Memory 工具，也不进行自动捕获。
+- \`visible\`：每个非 \`/compact\` 回合按当前消息检索可见记忆，并将最多 6,000 个字符作为 \`copis_memory_context\` 参考资料注入；只提供 \`memory_recall\` 和 \`memory_read\`，不提供 \`memory_capture\` 和 \`memory_rewrite\`，不进行自动捕获。
+- \`writable\`：执行与 \`visible\` 相同的自动注入，并提供四个 Memory 工具。每个成功完成的非 \`/compact\` 回合在后台进入自动捕获队列；系统在 180 秒静默窗口或累计 10 个回合后批量抽取并写入当前工作区。自动任务或委派回合只保留 \`scratch\` 类型，自动捕获失败不会阻断原始任务。
+
 ### Skills — 可复用流程
 
 Skills 用来固化可复用的流程、决策树和 SOP（"以后遇到类似场景应按什么步骤或决策规则做"），而不是存放普通知识：
