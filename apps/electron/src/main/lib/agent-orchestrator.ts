@@ -54,6 +54,7 @@ import { buildSystemPrompt, buildDynamicContext } from './agent-prompt-builder'
 import { appendMemoryContext } from './memory-context-builder'
 import { MAX_CONTEXT_MESSAGES, buildContextPrompt, buildRecoveryPrompt, buildReferencedSessionsPrompt } from './agent-session-context-prompt'
 import { buildReferencedPlanningPrompt } from './planning-reference-context'
+import { buildMentionedToolsPrompt } from './agent-mentioned-tools-prompt'
 import { permissionService } from './agent-permission-service'
 import type { PermissionResult, CanUseToolOptions } from './agent-permission-service'
 import { resolvePlanningDeletionPermission } from './planning-permission-policy'
@@ -1229,18 +1230,9 @@ export class AgentOrchestrator {
         enrichedMessage = `${referencedSessionsBlock}\n\n${enrichedMessage}`
         console.log(`[Agent 编排] 注入 referenced_sessions: ${mentionedSessionIds?.length ?? 0} sessions`)
       }
-      if (mentionedSkills?.length || mentionedMcpServers?.length) {
-        const toolLines: string[] = ['用户在消息中明确引用了以下工具，请在本次回复中主动调用：']
-        for (const slug of mentionedSkills ?? []) {
-          const qualifiedName = workspaceSlug
-            ? `copis-workspace-${workspaceSlug}:${slug}`
-            : slug
-          toolLines.push(`- Skill: ${qualifiedName}（请立即调用此 Skill）`)
-        }
-        for (const name of mentionedMcpServers ?? []) {
-          toolLines.push(`- MCP 服务器: ${name}（请使用此 MCP 服务器的工具来完成任务）`)
-        }
-        enrichedMessage = `<mentioned_tools>\n${toolLines.join('\n')}\n</mentioned_tools>\n\n${enrichedMessage}`
+      const mentionedToolsPrompt = buildMentionedToolsPrompt(mentionedSkills, mentionedMcpServers)
+      if (mentionedToolsPrompt) {
+        enrichedMessage = `${mentionedToolsPrompt}\n\n${enrichedMessage}`
         console.log(`[Agent 编排] 注入 mentioned_tools: ${mentionedSkills?.length ?? 0} skills, ${mentionedMcpServers?.length ?? 0} MCP`)
       }
       const referencedPlanningBlock = buildReferencedPlanningPrompt(
@@ -2690,18 +2682,9 @@ export class AgentOrchestrator {
     if (referencedSessionsBlock) {
       enrichedText = `${referencedSessionsBlock}\n\n${enrichedText}`
     }
-    if (mentionedSkills?.length || mentionedMcpServers?.length) {
-      const toolLines: string[] = ['用户在消息中明确引用了以下工具，请在本次回复中主动调用：']
-      for (const slug of mentionedSkills ?? []) {
-        const qualifiedName = workspaceSlug
-          ? `copis-workspace-${workspaceSlug}:${slug}`
-          : slug
-        toolLines.push(`- Skill: ${qualifiedName}（请立即调用此 Skill）`)
-      }
-      for (const name of mentionedMcpServers ?? []) {
-        toolLines.push(`- MCP 服务器: ${name}（请使用此 MCP 服务器的工具来完成任务）`)
-      }
-      enrichedText = `<mentioned_tools>\n${toolLines.join('\n')}\n</mentioned_tools>\n\n${enrichedText}`
+    const mentionedToolsPrompt = buildMentionedToolsPrompt(mentionedSkills, mentionedMcpServers)
+    if (mentionedToolsPrompt) {
+      enrichedText = `${mentionedToolsPrompt}\n\n${enrichedText}`
     }
     // Planning read tools are Pi-native; only inject them when the current runtime supports them.
     const referencedPlanningBlock = buildReferencedPlanningPrompt(
