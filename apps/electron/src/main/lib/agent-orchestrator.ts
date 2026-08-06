@@ -1172,6 +1172,23 @@ export class AgentOrchestrator {
         permissionMode: permissionModeOverride ?? sessionMeta?.permissionMode ?? COPIS_DEFAULT_PERMISSION_MODE,
         memoryPolicy: workspace?.memoryPolicy ?? appSettings.defaultMemoryPolicy ?? 'writable',
         triggeredBy: input.triggeredBy,
+        requestSingleApproval: async (approval) => {
+          const result = await permissionService.requestSingleApproval(
+            sessionId,
+            approval.toolName,
+            approval.toolInput,
+            {
+              signal: approval.signal,
+              toolUseID: approval.toolCallId,
+              displayName: approval.displayName,
+              description: approval.description,
+            },
+            (request) => {
+              this.eventBus.emit(sessionId, { kind: 'copis_event', event: { type: 'permission_request', request } })
+            },
+          )
+          return result.behavior === 'allow'
+        },
       })
       piBuiltinTools = builtinMcpResult.tools
       const collaborationAvailable = builtinMcpResult.collaborationAvailable

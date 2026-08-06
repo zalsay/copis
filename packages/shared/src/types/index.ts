@@ -15,11 +15,12 @@ export * from './runtime'
 // 渠道（AI 供应商）相关类型
 export * from './channel'
 
+// 通用附件和模型类型
+export * from './attachments'
+export * from './model'
+
 // 代理配置相关类型
 export * from './proxy'
-
-// Chat 相关类型
-export * from './chat'
 
 // Agent 相关类型
 export * from './agent'
@@ -43,8 +44,8 @@ export * from './github'
 // 系统提示词相关类型
 export * from './system-prompt'
 
-// Chat 工具（function calling）相关类型
-export * from './chat-tool'
+// Agent 工具（function calling）相关类型
+export * from './agent-tool'
 
 // 飞书集成相关类型
 export * from './feishu'

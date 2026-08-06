@@ -65,14 +65,13 @@ import {
   initializeMarkdownFontSize,
 } from './atoms/markdown-font-size'
 import { useGlobalAgentListeners } from './hooks/useGlobalAgentListeners'
-import { useGlobalChatListeners } from './hooks/useGlobalChatListeners'
-import { tabsAtom, activeTabIdAtom, getPersistableTabState } from './atoms/tab-atoms'
+import { tabsAtom, activeTabIdAtom, getPersistableTabState, sanitizePersistedTabs } from './atoms/tab-atoms'
 import type { TabItem } from './atoms/tab-atoms'
-import { chatToolsAtom } from './atoms/chat-tool-atoms'
+import { agentToolsAtom } from './atoms/agent-tool-atoms'
 import { feishuBotStatesAtom } from './atoms/feishu-atoms'
 import { dingtalkBotStatesAtom } from './atoms/dingtalk-atoms'
-import { currentConversationIdAtom, channelsAtom, channelsLoadedAtom, selectedModelAtom } from './atoms/chat-atoms'
-import { appModeAtom } from './atoms/app-mode'
+import { channelsAtom, channelsLoadedAtom, selectedModelAtom } from './atoms/model-atoms'
+import { appModeAtom, normalizeAppMode } from './atoms/app-mode'
 import {
   COPIS_WORKING_CHANNEL_ID,
   COPIS_WORKING_FAST_MODEL_ID,
@@ -216,17 +215,17 @@ function AgentSettingsInitializer(): null {
       window.electronAPI.getSettings(),
       window.electronAPI.getWorkingConfig(),
     ]).then(([channels, settings, workingConfig]) => {
-      // 渠道列表供 Chat 使用；Copis Working 虚拟渠道只在 Agent 视图中追加。
+      // 渠道列表供 Agent、自动化和视觉助手共用。
       setChannels(channels)
       setChannelsLoaded(true)
       setWorkingClientConfig(workingConfig)
 
       const channelIds = new Set(channels.map((c) => c.id))
 
-      // 验证 Chat 模式的全局默认模型（localStorage 持久化的可能指向已删除渠道）
-      const chatModel = store.get(selectedModelAtom)
-      if (chatModel && !channelIds.has(chatModel.channelId)) {
-        console.warn('[AgentSettings] Chat selectedModel 指向已删除的渠道，清除')
+      // 验证全局默认模型（localStorage 持久化的可能指向已删除渠道）。
+      const storedModel = store.get(selectedModelAtom)
+      if (storedModel && !channelIds.has(storedModel.channelId)) {
+        console.warn('[AgentSettings] selectedModel 指向已删除的渠道，清除')
         store.set(selectedModelAtom, null)
       }
 
@@ -655,17 +654,6 @@ function MarkdownFontSizeInitializer(): null {
 }
 
 /**
- * Chat IPC 监听器初始化组件
- *
- * 全局挂载，永不销毁。确保 Chat 流式事件
- * 在页面切换时不丢失。
- */
-function ChatListenersInitializer(): null {
-  useGlobalChatListeners()
-  return null
-}
-
-/**
  * Agent IPC 监听器初始化组件
  *
  * 全局挂载，永不销毁。确保 Agent 流式事件、权限请求
@@ -677,32 +665,32 @@ function AgentListenersInitializer(): null {
 }
 
 /**
- * Chat 工具初始化组件
+ * Agent 工具初始化组件
  *
  * 启动时从主进程加载所有工具信息到 atom。
- * 订阅 chat-tools.json 文件变更通知，自动刷新工具列表。
+ * 订阅工具配置文件变更通知，自动刷新工具列表。
  */
-function ChatToolInitializer(): null {
-  const setChatTools = useSetAtom(chatToolsAtom)
+function AgentToolInitializer(): null {
+  const setAgentTools = useSetAtom(agentToolsAtom)
 
   useEffect(() => {
-    window.electronAPI.getChatTools()
-      .then(setChatTools)
-      .catch((err: unknown) => console.error('[ChatToolInitializer] 加载工具列表失败:', err))
-  }, [setChatTools])
+    window.electronAPI.getAgentTools()
+      .then(setAgentTools)
+      .catch((err: unknown) => console.error('[AgentToolInitializer] 加载工具列表失败:', err))
+  }, [setAgentTools])
 
   // 订阅自定义工具配置变更
   useEffect(() => {
-    const cleanup = window.electronAPI.onCustomToolChanged(() => {
-      window.electronAPI.getChatTools()
+    const cleanup = window.electronAPI.onAgentToolChanged(() => {
+      window.electronAPI.getAgentTools()
         .then((tools) => {
-          setChatTools(tools)
-          toast.success('Chat 工具已更新')
+          setAgentTools(tools)
+          toast.success('Agent 工具已更新')
         })
-        .catch((err: unknown) => console.error('[ChatToolInitializer] 刷新工具列表失败:', err))
+        .catch((err: unknown) => console.error('[AgentToolInitializer] 刷新工具列表失败:', err))
     })
     return cleanup
-  }, [setChatTools])
+  }, [setAgentTools])
 
   return null
 }
@@ -746,7 +734,7 @@ function FeishuInitializer(): null {
 
     // 定期上报在场状态（5 秒间隔 + 焦点变化时即时上报）
     const reportPresence = (): void => {
-      const activeSessionId = store.get(currentAgentSessionIdAtom) ?? store.get(currentConversationIdAtom)
+      const activeSessionId = store.get(currentAgentSessionIdAtom)
       window.electronAPI.reportFeishuPresence({
         activeSessionId,
         lastInteractionAt: Date.now(),
@@ -845,35 +833,17 @@ function TabStatePersistenceInitializer(): null {
 
   // 启动恢复：读取 settings.tabState + 校验会话有效性
   useEffect(() => {
-    // 兼容旧版本曾持久化的 Scratch 模式值。
-    const persistedMode = store.get(appModeAtom) as string
-    if (persistedMode !== 'chat' && persistedMode !== 'agent') {
-      store.set(appModeAtom, 'agent')
-    }
+    store.set(appModeAtom, normalizeAppMode(store.get(appModeAtom)))
 
     Promise.all([
       window.electronAPI.getSettings(),
-      window.electronAPI.listConversations(),
       window.electronAPI.listAgentSessions(),
-    ]).then(([settings, conversations, agentSessions]) => {
+    ]).then(([settings, agentSessions]) => {
       const tabState = settings.tabState
-      const validSessionIds = new Set([
-        ...conversations.map((c) => c.id),
-        ...agentSessions.map((s) => s.id),
-      ])
+      const validSessionIds = new Set(agentSessions.map((s) => s.id))
 
-      // 过滤旧版 Scratch/Preview 入口，只恢复真实 Chat/Agent 会话。
-      const validTabs = tabState?.tabs?.filter(
-        (t): t is TabItem =>
-          typeof t === 'object' &&
-          t !== null &&
-          'id' in t &&
-          'sessionId' in t &&
-          'type' in t &&
-          'title' in t &&
-          (t.type === 'chat' || t.type === 'agent') &&
-          validSessionIds.has(t.sessionId),
-      ) ?? []
+      // 过滤旧版 Scratch/Preview/Chat 入口，只恢复有效 Agent 会话。
+      const validTabs = sanitizePersistedTabs(tabState?.tabs, validSessionIds)
 
       // 旧配置没有可恢复 Tab 时，优先进入上次工作区中的最近 Agent 会话。
       const sortByUpdatedAt = <T extends { updatedAt: number }>(items: T[]): T[] =>
@@ -886,14 +856,9 @@ function TabStatePersistenceInitializer(): null {
       const recentAgentSession = preferredAgentSessions[0] ?? sortByUpdatedAt(
         agentSessions.filter((session) => !session.archived),
       )[0]
-      const recentConversation = sortByUpdatedAt(
-        conversations.filter((conversation) => !conversation.archived),
-      )[0]
       const fallbackTab: TabItem | null = recentAgentSession
         ? { id: recentAgentSession.id, type: 'agent', sessionId: recentAgentSession.id, title: recentAgentSession.title }
-        : recentConversation
-          ? { id: recentConversation.id, type: 'chat', sessionId: recentConversation.id, title: recentConversation.title }
-          : null
+        : null
       const tabsToRestore = validTabs.length > 0 ? validTabs : fallbackTab ? [fallbackTab] : []
       if (tabsToRestore.length === 0) {
         restoredRef.current = true
@@ -920,14 +885,9 @@ function TabStatePersistenceInitializer(): null {
       store.set(tabsAtom, tabsToRestore)
       store.set(activeTabIdAtom, activeTab?.id ?? null)
 
-      // 同步模式、当前会话和工作区，确保启动后直接回到上次会话工作区。
-      if (activeTab?.type === 'chat') {
-        store.set(appModeAtom, 'chat')
-        store.set(currentConversationIdAtom, activeTab.sessionId)
-        store.set(currentAgentSessionIdAtom, null)
-      } else if (activeTab?.type === 'agent') {
+      // 同步模式、当前 Agent 会话和工作区。
+      if (activeTab?.type === 'agent') {
         store.set(appModeAtom, 'agent')
-        store.set(currentConversationIdAtom, null)
         store.set(currentAgentSessionIdAtom, activeTab.sessionId)
         const session = agentSessions.find((item) => item.id === activeTab.sessionId)
         if (session?.workspaceId) store.set(currentAgentWorkspaceIdAtom, session.workspaceId)
@@ -1062,9 +1022,8 @@ if (isQuickTaskWindow) {
       <DockBadgeInitializer />
       <UiPreferencesInitializer />
       <MarkdownFontSizeInitializer />
-      <ChatListenersInitializer />
       <AgentListenersInitializer />
-      <ChatToolInitializer />
+      <AgentToolInitializer />
       <UpdaterInitializer />
       <AutomationInitializer />
       <PlanningInitializer />

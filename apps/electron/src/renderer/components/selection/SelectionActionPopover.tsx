@@ -5,14 +5,14 @@ interface SelectionActionPopoverProps {
   x: number
   y: number
   onAddToAgent: () => void
-  onOpenChat: () => void | Promise<void>
+  onOpenAgentQuestion: () => void | Promise<void>
 }
 
 export function SelectionActionPopover({
   x,
   y,
   onAddToAgent,
-  onOpenChat,
+  onOpenAgentQuestion,
 }: SelectionActionPopoverProps): React.ReactElement {
   return (
     <div
@@ -34,11 +34,11 @@ export function SelectionActionPopover({
           type="button"
           className="inline-flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-[13px] font-medium transition-colors hover:bg-muted"
           onClick={() => {
-            void onOpenChat()
+            void onOpenAgentQuestion()
           }}
         >
           <MessageCircle className="size-4" />
-          打开右侧问答
+          在 Agent 问答中提问
         </button>
       </div>
     </div>

@@ -18,9 +18,6 @@ import { safeStorage } from 'electron'
 import {
   getConfigDir,
   getChannelsPath,
-  getConversationsIndexPath,
-  getConversationsDir,
-  getConversationMessagesPath,
   getAgentSessionsIndexPath,
   getAgentSessionsDir,
   getAgentSessionMessagesPath,
@@ -70,7 +67,6 @@ export function serializeWorkspaceMetadataForMigration(
 export interface ExportPreview {
   workspace: AgentWorkspace | null
   agentSessionCount: number
-  chatConversationCount: number
   skillCount: number
   hasMcp: boolean
   estimatedComponents: MigrationComponent[]
@@ -85,7 +81,6 @@ export interface PathCheckResult {
 export interface ImportPreview {
   manifest: MigrationManifest
   agentSessionCount: number
-  chatConversationCount: number
   skillNames: string[]
   hasMcp: boolean
   crossPlatform: boolean
@@ -155,7 +150,6 @@ export interface WorkspaceSelection {
 export interface ShareExportPreview {
   workspaces: ShareExportWorkspacePreview[]
   agentSessionCount: number
-  chatConversationCount: number
 }
 
 export interface ShareExportWorkspacePreview {
@@ -178,7 +172,6 @@ export interface WorkspaceImportPreview {
 export interface ImportPreviewV2 {
   manifest: MigrationManifestV2
   agentSessionCount: number
-  chatConversationCount: number
   workspaces: WorkspaceImportPreview[]
   crossPlatform: boolean
   pathCheckResults: PathCheckResult[]
@@ -209,7 +202,6 @@ export async function getExportPreview(workspaceId: string): Promise<ExportPrevi
   const workspace = getAgentWorkspace(workspaceId) ?? null
 
   let agentSessionCount = 0
-  let chatConversationCount = 0
   let skillCount = 0
   let hasMcp = false
 
@@ -217,10 +209,6 @@ export async function getExportPreview(workspaceId: string): Promise<ExportPrevi
     // 统计 Agent 会话
     const sessionsIndex = readJsonSafe<{ sessions: Array<{ workspaceId: string }> }>(getAgentSessionsIndexPath())
     agentSessionCount = (sessionsIndex?.sessions ?? []).filter((s) => s.workspaceId === workspaceId).length
-
-    // 统计 Chat 对话（全量，不按工作区过滤）
-    const convIndex = readJsonSafe<{ conversations: unknown[] }>(getConversationsIndexPath())
-    chatConversationCount = (convIndex?.conversations ?? []).length
 
     // 统计 Skills
     const skillsDir = getWorkspaceSkillsDir(workspace.slug)
@@ -236,7 +224,6 @@ export async function getExportPreview(workspaceId: string): Promise<ExportPrevi
   return {
     workspace,
     agentSessionCount,
-    chatConversationCount,
     skillCount,
     hasMcp,
     estimatedComponents: ['sessions', 'skills', 'mcp', 'channels', 'chattools'],
@@ -264,10 +251,7 @@ export async function getShareExportPreview(): Promise<ShareExportPreview> {
   const sessionsIndex = readJsonSafe<{ sessions: unknown[] }>(getAgentSessionsIndexPath())
   const agentSessionCount = (sessionsIndex?.sessions ?? []).length
 
-  const convIndex = readJsonSafe<{ conversations: unknown[] }>(getConversationsIndexPath())
-  const chatConversationCount = (convIndex?.conversations ?? []).length
-
-  return { workspaces, agentSessionCount, chatConversationCount }
+  return { workspaces, agentSessionCount }
 }
 
 export async function exportData(options: ExportOptions): Promise<ExportResult> {
@@ -298,7 +282,7 @@ export async function exportData(options: ExportOptions): Promise<ExportResult> 
   if (components.includes('skills')) _addSkills(zip, workspace, warnings)
   if (components.includes('mcp')) _addMcp(zip, workspace, mode)
   if (components.includes('channels')) _addChannels(zip, mode)
-  if (components.includes('chattools')) _addChatTools(zip, mode)
+  if (components.includes('chattools')) _addAgentTools(zip, mode)
   _addWorkspaceConfig(zip, workspace)
   if (mode === 'personal') _addPersonalFiles(zip)
 
@@ -372,7 +356,7 @@ export async function exportDataV2(options: ExportOptionsV2): Promise<ExportResu
   }
 
   if (components.includes('channels')) _addChannels(zip, mode)
-  if (components.includes('chattools')) _addChatTools(zip, mode)
+  if (components.includes('chattools')) _addAgentTools(zip, mode)
   if (mode === 'personal') _addPersonalFiles(zip)
 
   zip.writeZip(outputPath)
@@ -405,20 +389,6 @@ function _addSessions(zip: AdmZip, workspace: AgentWorkspace, filterIds: string[
     }
   }
 
-  const convIndexPath = getConversationsIndexPath()
-  if (existsSync(convIndexPath)) {
-    const index = readJsonSafe<{ version: number; conversations: Array<{ id: string }> }>(convIndexPath)
-    const conversations = index?.conversations ?? []
-    const targets = filterIds ? conversations.filter((c) => filterIds.includes(c.id)) : conversations
-
-    for (const conv of targets) {
-      const msgPath = getConversationMessagesPath(conv.id)
-      if (existsSync(msgPath)) {
-        zip.addLocalFile(msgPath, 'sessions/chat')
-      }
-    }
-    zip.addFile('sessions/conversations-index.json', Buffer.from(JSON.stringify({ ...index, conversations: targets }, null, 2), 'utf-8'))
-  }
 }
 
 function _addSessionsMultiWorkspace(zip: AdmZip, workspaces: AgentWorkspace[], filterIds: string[] | undefined, warnings: string[]) {
@@ -452,20 +422,6 @@ function _addSessionsMultiWorkspace(zip: AdmZip, workspaces: AgentWorkspace[], f
     }
   }
 
-  const convIndexPath = getConversationsIndexPath()
-  if (existsSync(convIndexPath)) {
-    const index = readJsonSafe<{ version: number; conversations: Array<{ id: string }> }>(convIndexPath)
-    const conversations = index?.conversations ?? []
-    const targets = filterIds ? conversations.filter((c) => filterIds.includes(c.id)) : conversations
-
-    for (const conv of targets) {
-      const msgPath = getConversationMessagesPath(conv.id)
-      if (existsSync(msgPath)) {
-        zip.addLocalFile(msgPath, 'sessions/chat')
-      }
-    }
-    zip.addFile('sessions/conversations-index.json', Buffer.from(JSON.stringify({ ...index, conversations: targets }, null, 2), 'utf-8'))
-  }
 }
 
 function _addSkills(zip: AdmZip, workspace: AgentWorkspace, warnings: string[]) {
@@ -526,7 +482,7 @@ function _addChannels(zip: AdmZip, mode: MigrationMode) {
   }
 }
 
-function _addChatTools(zip: AdmZip, mode: MigrationMode) {
+function _addAgentTools(zip: AdmZip, mode: MigrationMode) {
   const toolsPath = getChatToolsConfigPath()
   if (!existsSync(toolsPath)) return
 
@@ -635,14 +591,9 @@ export async function parseImportFile(filePath: string): Promise<ImportPreview |
   }
 
   let agentSessionCount = 0
-  let chatConversationCount = 0
   const agentDir = join(tempDir, 'sessions/agent')
-  const chatDir = join(tempDir, 'sessions/chat')
   if (existsSync(agentDir)) {
     agentSessionCount = readdirSync(agentDir).filter((f) => f.endsWith('.jsonl')).length
-  }
-  if (existsSync(chatDir)) {
-    chatConversationCount = readdirSync(chatDir).filter((f) => f.endsWith('.jsonl')).length
   }
 
   const crossPlatform = rawManifest.sourcePlatform !== platform()
@@ -707,7 +658,6 @@ export async function parseImportFile(filePath: string): Promise<ImportPreview |
     return {
       manifest,
       agentSessionCount,
-      chatConversationCount,
       workspaces: wsPreviewList,
       crossPlatform,
       pathCheckResults,
@@ -728,7 +678,6 @@ export async function parseImportFile(filePath: string): Promise<ImportPreview |
   return {
     manifest,
     agentSessionCount,
-    chatConversationCount,
     skillNames,
     hasMcp,
     crossPlatform,
@@ -831,7 +780,7 @@ export async function confirmImport(options: ConfirmImportOptions | ConfirmImpor
       _importChannels(tempDir, manifest.mode)
     }
     if (manifest.components.includes('chattools')) {
-      _importChatTools(tempDir)
+      _importAgentTools(tempDir)
     }
     _importWorkspaceConfig(tempDir, targetWorkspace, pathMappings)
     if (manifest.mode === 'personal') {
@@ -910,7 +859,7 @@ async function _confirmImportV2(options: ConfirmImportOptionsV2): Promise<{ succ
     _importChannels(tempDir, v2Manifest.mode)
   }
   if (v2Manifest.components.includes('chattools')) {
-    _importChatTools(tempDir)
+    _importAgentTools(tempDir)
   }
   if (v2Manifest.mode === 'personal') {
     _importPersonalFiles(tempDir)
@@ -962,35 +911,6 @@ async function _importSessions(tempDir: string, targetWorkspace: AgentWorkspace)
     }
   }
 
-  // Chat 对话
-  const chatDir = join(tempDir, 'sessions/chat')
-  const convDir = getConversationsDir()
-  if (existsSync(chatDir)) {
-    for (const file of readdirSync(chatDir)) {
-      if (!file.endsWith('.jsonl')) continue
-      const src = join(chatDir, file)
-      const dest = join(convDir, file)
-      if (!existsSync(dest)) {
-        cpSync(src, dest)
-      }
-    }
-  }
-
-  // Chat 对话 index 合并
-  const importedConvIndexPath = join(tempDir, 'sessions/conversations-index.json')
-  if (existsSync(importedConvIndexPath)) {
-    const imported = readJsonSafe<{ conversations: Array<{ id: string }> }>(importedConvIndexPath)
-    const currentIndexPath = getConversationsIndexPath()
-    const current = readJsonSafe<{ version: number; conversations: Array<{ id: string }> }>(currentIndexPath) ?? { version: 1, conversations: [] }
-    const currentIds = new Set(current.conversations.map((c) => c.id))
-
-    for (const c of imported?.conversations ?? []) {
-      if (!currentIds.has(c.id)) {
-        current.conversations.push(c)
-      }
-    }
-    writeFileSync(currentIndexPath, JSON.stringify(current, null, 2), 'utf-8')
-  }
 }
 
 function _importSkills(tempDir: string, targetWorkspace: AgentWorkspace, overwrite = false) {
@@ -1059,7 +979,7 @@ function _importChannels(tempDir: string, mode: MigrationMode) {
   writeFileSync(currentPath, JSON.stringify(current, null, 2), 'utf-8')
 }
 
-function _importChatTools(tempDir: string) {
+function _importAgentTools(tempDir: string) {
   const srcTools = join(tempDir, 'config/chat-tools.json')
   if (!existsSync(srcTools)) return
 
@@ -1280,32 +1200,6 @@ async function _importSessionsV2(
     }
   }
 
-  const chatDir = join(tempDir, 'sessions/chat')
-  const convDir = getConversationsDir()
-  if (existsSync(chatDir)) {
-    for (const file of readdirSync(chatDir)) {
-      if (!file.endsWith('.jsonl')) continue
-      const dest = join(convDir, file)
-      if (!existsSync(dest)) {
-        cpSync(join(chatDir, file), dest)
-      }
-    }
-  }
-
-  const importedConvIndexPath = join(tempDir, 'sessions/conversations-index.json')
-  if (existsSync(importedConvIndexPath)) {
-    const imported = readJsonSafe<{ conversations: Array<{ id: string }> }>(importedConvIndexPath)
-    const currentIndexPath = getConversationsIndexPath()
-    const current = readJsonSafe<{ version: number; conversations: Array<{ id: string }> }>(currentIndexPath) ?? { version: 1, conversations: [] }
-    const currentIds = new Set(current.conversations.map((c) => c.id))
-
-    for (const c of imported?.conversations ?? []) {
-      if (!currentIds.has(c.id)) {
-        current.conversations.push(c)
-      }
-    }
-    writeFileSync(currentIndexPath, JSON.stringify(current, null, 2), 'utf-8')
-  }
 }
 
 // ─── 工具函数 ────────────────────────────────────────────────────────────────

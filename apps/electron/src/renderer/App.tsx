@@ -10,10 +10,10 @@ import { ShortcutGuideDialog } from './components/shortcuts/ShortcutGuideDialog'
 import { CopisWorkingLoginDialog } from './components/app-shell/CopisWorkingLoginDialog'
 import { FunctionalModuleUpdateGate } from './components/functional-modules/FunctionalModuleUpdateGate'
 import { PlanningReminderRail } from './components/planning/PlanningReminderRail'
-import { conversationsAtom } from './atoms/chat-atoms'
 import { environmentCheckDialogOpenAtom } from './atoms/environment'
 import { tabsAtom, activeTabIdAtom, openTab, TUTORIAL_TAB_ID, TUTORIAL_TAB_TITLE } from './atoms/tab-atoms'
 import { workingAuthStateAtom } from './atoms/working-atoms'
+import { useCreateSession } from './hooks/useCreateSession'
 import type { AppShellContextType } from './contexts/AppShellContext'
 
 export default function App(): React.ReactElement {
@@ -22,6 +22,7 @@ export default function App(): React.ReactElement {
   const store = useStore()
   const workingAuthState = useAtomValue(workingAuthStateAtom)
   const setWorkingAuthState = useSetAtom(workingAuthStateAtom)
+  const { createAgent } = useCreateSession()
   const [isLoading, setIsLoading] = React.useState(true)
   const [showOnboarding, setShowOnboarding] = React.useState(false)
 
@@ -48,7 +49,7 @@ export default function App(): React.ReactElement {
     initialize()
   }, [setWorkingAuthState])
 
-  // 完成 onboarding 回调：创建欢迎对话，可选打开教程 Tab
+  // 完成 onboarding 回调：创建欢迎 Agent 会话，可选打开教程 Tab
   const handleOnboardingComplete = async (openTutorial?: boolean) => {
     setShowOnboarding(false)
 
@@ -61,22 +62,9 @@ export default function App(): React.ReactElement {
     }
 
     try {
-      const meta = await window.electronAPI.createWelcomeConversation()
-      if (meta) {
-        const conversations = store.get(conversationsAtom)
-        store.set(conversationsAtom, [meta, ...conversations])
-
-        const tabs = store.get(tabsAtom)
-        const result = openTab(tabs, {
-          type: 'chat',
-          sessionId: meta.id,
-          title: meta.title,
-        })
-        store.set(tabsAtom, result.tabs)
-        store.set(activeTabIdAtom, result.activeTabId)
-      }
+      await createAgent({ draft: true })
     } catch (error) {
-      console.error('[App] 创建欢迎对话失败:', error)
+      console.error('[App] 创建欢迎 Agent 会话失败:', error)
     }
   }
 

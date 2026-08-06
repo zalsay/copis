@@ -10,15 +10,14 @@ import { createPortal } from 'react-dom'
 import { useAtom, useAtomValue } from 'jotai'
 import Markdown, { type Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import { AlertTriangle, Bot, Loader2, MessageSquare } from 'lucide-react'
-import { UserAvatar } from '@/components/chat/UserAvatar'
+import { AlertTriangle, Bot, Loader2 } from 'lucide-react'
+import { UserAvatar } from '@/components/profile/UserAvatar'
 import { tabMinimapCacheAtom, type TabMinimapItem } from '@/atoms/tab-atoms'
 import { userProfileAtom } from '@/atoms/user-profile'
 import { getModelLogo, resolveModelProvider } from '@/lib/model-logo'
-import { channelsAtom } from '@/atoms/chat-atoms'
+import { channelsAtom } from '@/atoms/model-atoms'
 import { cn } from '@/lib/utils'
 import type {
-  ChatMessage,
   SDKAssistantMessage,
   SDKContentBlock,
   SDKMessage,
@@ -28,7 +27,7 @@ import type {
 } from '@copis/shared'
 import { getSDKCompactStatus } from '@copis/shared'
 
-export type SessionMiniMapType = 'chat' | 'agent'
+export type SessionMiniMapType = 'agent'
 
 export interface SessionMiniMapTarget {
   type: SessionMiniMapType
@@ -180,18 +179,6 @@ function sdkBlockText(block: SDKContentBlock | SDKUserContentBlock): string {
   return ''
 }
 
-function buildChatMinimapItems(messages: ChatMessage[], userAvatar?: string): TabMinimapItem[] {
-  return messages
-    .map((message) => ({
-      id: message.id,
-      role: message.role === 'user' ? 'user' as const : message.role === 'assistant' ? 'assistant' as const : 'status' as const,
-      preview: normalizePreviewText(message.content).slice(0, 220),
-      avatar: message.role === 'user' ? userAvatar : undefined,
-      model: message.model,
-    }))
-    .filter((item) => item.preview.length > 0)
-}
-
 function buildAgentMinimapItems(messages: SDKMessage[], userAvatar?: string): TabMinimapItem[] {
   const items: TabMinimapItem[] = []
 
@@ -331,7 +318,7 @@ function PreviewText({ text }: { text: string }): React.ReactElement {
   )
 }
 
-function ItemIcon({ item, type }: { item: TabMinimapItem; type: SessionMiniMapType }): React.ReactElement {
+function ItemIcon({ item }: { item: TabMinimapItem }): React.ReactElement {
   const channels = useAtomValue(channelsAtom)
   if (item.role === 'user' && item.avatar) {
     return <UserAvatar avatar={item.avatar} size={16} className="mt-0.5" />
@@ -351,9 +338,7 @@ function ItemIcon({ item, type }: { item: TabMinimapItem; type: SessionMiniMapTy
   if (item.role === 'status') {
     return <AlertTriangle className="size-4 shrink-0 mt-0.5 text-muted-foreground/60" />
   }
-  return type === 'chat'
-    ? <MessageSquare className="size-4 shrink-0 mt-0.5 text-muted-foreground/60" />
-    : <Bot className="size-4 shrink-0 mt-0.5 text-muted-foreground/60" />
+  return <Bot className="size-4 shrink-0 mt-0.5 text-muted-foreground/60" />
 }
 
 export function SessionMiniMapPopover(props: SessionMiniMapPopoverProps): React.ReactElement | null {
@@ -398,9 +383,10 @@ function SessionMiniMapPopoverContent({
 
     const load = async (): Promise<void> => {
       try {
-        const nextItems = target.type === 'chat'
-          ? buildChatMinimapItems(await window.electronAPI.getConversationMessages(target.sessionId), userProfile.avatar)
-          : buildAgentMinimapItems(await window.electronAPI.getAgentSessionSDKMessages(target.sessionId), userProfile.avatar)
+        const nextItems = buildAgentMinimapItems(
+          await window.electronAPI.getAgentSessionSDKMessages(target.sessionId),
+          userProfile.avatar,
+        )
         if (cancelled) return
         setItems(nextItems)
         setCache((prev) => {
@@ -420,7 +406,7 @@ function SessionMiniMapPopoverContent({
     return () => {
       cancelled = true
     }
-  }, [cachedItems, open, setCache, target.sessionId, target.type, userProfile.avatar])
+  }, [cachedItems, open, setCache, target.sessionId, userProfile.avatar])
 
   if (!open || !position) return null
 
@@ -489,7 +475,7 @@ function SessionMiniMapPopoverContent({
                   key={`${item.id}-${index}`}
                   className="flex items-start gap-2 w-full px-2 py-1 text-left"
                 >
-                  <ItemIcon item={item} type={target.type} />
+                  <ItemIcon item={item} />
                   <div className="flex-1 min-w-0">
                     <div
                       className={cn(

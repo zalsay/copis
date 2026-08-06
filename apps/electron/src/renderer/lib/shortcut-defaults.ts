@@ -60,8 +60,8 @@ export const DEFAULT_SHORTCUTS: ShortcutDefinition[] = [
   },
   {
     id: 'new-session',
-    name: '新建对话',
-    description: '根据当前模式创建 Chat 对话或 Agent 会话',
+    name: '新建 Agent 会话',
+    description: '创建并打开新的 Agent 会话',
     defaultMac: 'Cmd+N',
     defaultWin: 'Ctrl+N',
     category: 'app',
@@ -103,17 +103,9 @@ export const DEFAULT_SHORTCUTS: ShortcutDefinition[] = [
     readonly: true,
   },
   {
-    id: 'toggle-mode',
-    name: '切换模式',
-    description: '在 Chat 和 Agent 模式之间切换',
-    defaultMac: 'Cmd+Shift+M',
-    defaultWin: 'Ctrl+Shift+M',
-    category: 'app',
-  },
-  {
     id: 'global-search',
     name: '全局搜索',
-    description: '搜索对话和会话',
+    description: '搜索 Agent 会话和消息',
     defaultMac: 'Cmd+Shift+F',
     defaultWin: 'Ctrl+Shift+F',
     category: 'navigation',
@@ -129,7 +121,7 @@ export const DEFAULT_SHORTCUTS: ShortcutDefinition[] = [
   {
     id: 'file-find',
     name: '查找',
-    description: '在对话中搜索消息，或在文件预览/Diff 面板中查找文件内容',
+    description: '在 Agent 消息或文件预览/Diff 面板中查找内容',
     defaultMac: 'Cmd+F',
     defaultWin: 'Ctrl+F',
     category: 'navigation',
@@ -167,7 +159,7 @@ export const DEFAULT_SHORTCUTS: ShortcutDefinition[] = [
   {
     id: 'clear-context',
     name: '清除上下文',
-    description: '清除当前对话的上下文',
+    description: '清除当前 Agent 会话的上下文',
     defaultMac: 'Cmd+K',
     defaultWin: 'Ctrl+K',
     category: 'edit',
@@ -183,7 +175,7 @@ export const DEFAULT_SHORTCUTS: ShortcutDefinition[] = [
   {
     id: 'close-tab',
     name: '关闭当前标签',
-    description: '关闭当前活跃的 Chat 或 Agent 标签页',
+    description: '关闭当前活跃的 Agent 标签页',
     defaultMac: 'Cmd+W',
     defaultWin: 'Ctrl+W',
     category: 'app',

@@ -12,9 +12,15 @@ import type {
   ShellEnvironmentStatus,
   WslStatus,
 } from '@copis/shared'
+import { COPIS_HTTP_API_HOST, resolveCopisHttpApiPort } from '@copis/shared/config'
+import { app } from 'electron'
 
-const RUNTIME_STATUS_URL = 'http://127.0.0.1:51730/api/runtime/status'
-const RUNTIME_CHECK_URL = 'http://127.0.0.1:51730/api/runtime/check'
+const RUNTIME_API_PORT = resolveCopisHttpApiPort({
+  configuredPort: process.env.COPIS_HTTP_API_PORT,
+  isPackaged: app.isPackaged === true,
+})
+const RUNTIME_STATUS_URL = `http://${COPIS_HTTP_API_HOST}:${RUNTIME_API_PORT}/api/runtime/status`
+const RUNTIME_CHECK_URL = `http://${COPIS_HTTP_API_HOST}:${RUNTIME_API_PORT}/api/runtime/check`
 // Rust 会并行启动外部 Node/Git/Bash，Windows 冷启动可能需要数秒；请求仍有硬超时，
 // 但不能在 Rust 完成一次探测前就取消请求并制造重复探测。
 const REQUEST_TIMEOUT_MS = 12_000

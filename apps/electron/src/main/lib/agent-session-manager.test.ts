@@ -131,6 +131,23 @@ describe('Agent 会话 JSONL 读取', () => {
 })
 
 describe('Agent 会话 runtime 元数据', () => {
+  test('Given 父 Agent 没有安全 Pi artifact When 创建侧问答 Then 创建归档 Agent 子会话并通过引用上下文兜底', async () => {
+    const parent = manager.createAgentSession('父 Agent', 'channel-1', undefined, 'model-1')
+
+    const result = await manager.createAgentSideQuestionSession({
+      parentSessionId: parent.id,
+      upToMessageUuid: 'completed-assistant',
+      modelId: 'model-1',
+    })
+
+    expect(result.contextMode).toBe('referenced-session')
+    expect(result.contextMessageUuid).toBe('completed-assistant')
+    expect(result.session.parentSessionId).toBe(parent.id)
+    expect(result.session.rootSessionId).toBe(parent.id)
+    expect(result.session.archived).toBe(true)
+    expect(result.session.title).toBe('Agent 问答')
+  })
+
   test('Given Pi 会话运行在项目 cwd When 创建会话 Then 初始化项目级和会话级 .context', () => {
     const projectRootPath = join(tempHome, 'context-project')
     mkdirSync(projectRootPath, { recursive: true })

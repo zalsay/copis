@@ -46,12 +46,12 @@ import {
   UserMessageContent,
   TurnFileMapProvider,
 } from '@/components/ai-elements/message'
-import { CopyButton } from '@/components/chat/CopyButton'
+import { CopyButton } from '@/components/message/CopyButton'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
-import { formatMessageTime } from '@/components/chat/ChatMessageItem'
+import { formatMessageTime } from '@/components/message/message-format'
 import { CopisTemplateLogo3x } from '@/lib/model-logo'
-import { modelSelectorOpenAtom } from '@/atoms/chat-atoms'
+import { modelSelectorOpenAtom } from '@/atoms/model-atoms'
 import { agentSessionPendingFilesAtom, agentSessionsAtom, agentWorkspacesAtom } from '@/atoms/agent-atoms'
 import { activeSessionIdAtom } from '@/atoms/tab-atoms'
 import { automationsAtom, automationFormAtom, automationToDraft } from '@/atoms/automation-atoms'

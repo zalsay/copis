@@ -451,7 +451,7 @@ async function extractPdfWithPdfJs(buffer: Buffer): Promise<string> {
 /**
  * 从附件相对路径提取文本（IPC 层使用）
  *
- * 将附件的 localPath（如 {conversationId}/{uuid}.ext）
+ * 将附件的 localPath（如 {groupId}/{uuid}.ext）
  * 解析为完整路径后提取文本。
  *
  * @param localPath 附件相对路径

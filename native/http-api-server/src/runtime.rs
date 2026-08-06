@@ -56,8 +56,15 @@ impl ExternalRuntime {
         runtime_path(&self.active_dir)
     }
 
-    pub fn validate_for_pi(&self) -> Result<(), String> {
-        if self.node_path.is_none() {
+    pub fn validate_for_worker(
+        &self,
+        require_node: bool,
+        require_external_runtime: bool,
+    ) -> Result<(), String> {
+        if !require_external_runtime {
+            return Ok(());
+        }
+        if require_node && self.node_path.is_none() {
             return Err(format!(
                 "外部 Node.js runtime 不可用：{}",
                 self.node_error
@@ -82,8 +89,13 @@ impl ExternalRuntime {
         Ok(())
     }
 
-    pub fn inject_pi_config(&self, config: &mut Value) -> Result<(), String> {
-        self.validate_for_pi()?;
+    pub fn inject_pi_config(
+        &self,
+        config: &mut Value,
+        require_node: bool,
+        require_external_runtime: bool,
+    ) -> Result<(), String> {
+        self.validate_for_worker(require_node, require_external_runtime)?;
 
         let query = config
             .get_mut("query")
@@ -559,8 +571,72 @@ fn apply_no_window(_command: &mut Command) {}
 
 #[cfg(test)]
 mod tests {
-    use super::{active_runtime_dir, is_safe_version, runtime_path, runtime_roots};
+    use super::{
+        active_runtime_dir, is_safe_version, runtime_path, runtime_roots, ExternalRuntime,
+    };
+    use serde_json::json;
     use std::fs;
+    use std::path::PathBuf;
+
+    fn runtime_without_node() -> ExternalRuntime {
+        ExternalRuntime {
+            runtime_root: PathBuf::from("/runtime"),
+            active_dir: PathBuf::from("/runtime/current"),
+            node_path: None,
+            git_path: Some(PathBuf::from("/runtime/git")),
+            bash_path: if cfg!(windows) {
+                Some(PathBuf::from("/runtime/git/bash.exe"))
+            } else {
+                None
+            },
+            node_version: None,
+            git_version: Some("2.0.0".to_string()),
+            bash_version: if cfg!(windows) {
+                Some("GNU bash".to_string())
+            } else {
+                None
+            },
+            node_error: Some("未找到 node 可执行文件".to_string()),
+            git_error: None,
+            bash_error: None,
+        }
+    }
+
+    #[test]
+    fn compiled_worker_does_not_require_node_runtime() {
+        assert!(runtime_without_node()
+            .validate_for_worker(false, false)
+            .is_ok());
+    }
+
+    #[test]
+    fn javascript_worker_still_requires_node_runtime() {
+        let error = runtime_without_node()
+            .validate_for_worker(true, true)
+            .expect_err("JS Worker 必须要求 Node.js runtime");
+        assert!(error.contains("Node.js"));
+    }
+
+    #[test]
+    fn development_bun_worker_can_use_system_runtime() {
+        assert!(runtime_without_node()
+            .validate_for_worker(false, false)
+            .is_ok());
+    }
+
+    #[test]
+    fn compiled_worker_injects_runtime_config_without_node_path() {
+        let runtime = runtime_without_node();
+        let mut config = json!({ "query": {} });
+
+        runtime
+            .inject_pi_config(&mut config, false, false)
+            .expect("编译 Worker 不应因为缺少 Node.js 失败");
+
+        let env = &config["query"]["runtimeEnv"]["env"];
+        assert_eq!(env["COPIS_RUNTIME_ROOT"], "/runtime");
+        assert!(env["COPIS_NODE_PATH"].is_null());
+    }
 
     #[test]
     fn rejects_unsafe_runtime_version() {

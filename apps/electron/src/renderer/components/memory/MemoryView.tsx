@@ -1,7 +1,7 @@
 import * as React from 'react'
 import { useAtom, useAtomValue, useSetAtom } from 'jotai'
 import { BookOpen, Loader2 } from 'lucide-react'
-import type { MemoryEntry, MemoryPolicy, MemoryRevision } from '@copis/shared'
+import type { MemoryEntry, MemoryPolicy, MemoryRevision, MemoryStats } from '@copis/shared'
 import {
   memoryConflictAtom,
   memoryDirtyAtom,
@@ -21,7 +21,9 @@ import {
   memoryStatsAtom,
   memoryDefaultPolicyAtom,
   memoryMaintenanceStateAtom,
+  memoryPageAtom,
   memoryPolicyAtom,
+  memorySelectedWorkspaceIdAtom,
   memoryWorkspaceSlugAtom,
   type MemoryDraft,
 } from '@/atoms/memory-atoms'
@@ -30,6 +32,11 @@ import { MemoryApiError, memoryApi } from '@/lib/memory-api'
 import { MemoryEditor } from './MemoryEditor'
 import { MemoryList } from './MemoryList'
 import { MemoryToolbar } from './MemoryToolbar'
+import { MemoryWorkspaceNav } from './MemoryWorkspaceNav'
+import { MemoryProjectSelector } from './MemoryProjectSelector'
+import { MemoryProjectOverview } from './MemoryProjectOverview'
+import { MemoryGlobalSettings } from './MemoryGlobalSettings'
+import { MemoryExportView } from './MemoryExportView'
 import { toast } from 'sonner'
 
 function draftFromEntry(entry: MemoryEntry): MemoryDraft {
@@ -53,6 +60,13 @@ function createDraft(scope: MemoryDraft['scope']): MemoryDraft {
   }
 }
 
+export function createMemoryWorkspaceResetData(): { entries: MemoryEntry[]; stats: MemoryStats } {
+  return {
+    entries: [],
+    stats: { userCount: 0, workspaceCount: 0, archivedCount: 0 },
+  }
+}
+
 function parseTags(value: string): string[] {
   return [...new Set(value.split(',').map((tag) => tag.trim()).filter(Boolean))]
 }
@@ -64,9 +78,11 @@ function entryWorkspaceSlug(entry: MemoryEntry, workspaceSlug: string | null): s
 export function MemoryView(): React.ReactElement {
   const [workspaces, setWorkspaces] = useAtom(agentWorkspacesAtom)
   const currentWorkspaceId = useAtomValue(currentAgentWorkspaceIdAtom)
-  const currentWorkspace = workspaces.find((workspace) => workspace.id === currentWorkspaceId)
-  const workspaceSlug = currentWorkspace?.slug ?? null
+  const [selectedWorkspaceId, setSelectedWorkspaceId] = useAtom(memorySelectedWorkspaceIdAtom)
+  const selectedWorkspace = workspaces.find((workspace) => workspace.id === selectedWorkspaceId)
+  const workspaceSlug = selectedWorkspace?.slug ?? null
 
+  const [page, setPage] = useAtom(memoryPageAtom)
   const [memoryWorkspaceSlug, setMemoryWorkspaceSlug] = useAtom(memoryWorkspaceSlugAtom)
   const [scope, setScope] = useAtom(memoryScopeFilterAtom)
   const [kind, setKind] = useAtom(memoryKindFilterAtom)
@@ -92,23 +108,38 @@ export function MemoryView(): React.ReactElement {
   const selectedEntry = entries.find((entry) => entry.id === selectedId) ?? null
 
   React.useEffect(() => {
+    if (selectedWorkspaceId && workspaces.some((workspace) => workspace.id === selectedWorkspaceId)) return
+    const fallbackWorkspaceId = currentWorkspaceId && workspaces.some((workspace) => workspace.id === currentWorkspaceId)
+      ? currentWorkspaceId
+      : workspaces[0]?.id ?? null
+    setSelectedWorkspaceId(fallbackWorkspaceId)
+  }, [currentWorkspaceId, selectedWorkspaceId, setSelectedWorkspaceId, workspaces])
+
+  React.useEffect(() => {
+    const resetData = createMemoryWorkspaceResetData()
     setMemoryWorkspaceSlug(workspaceSlug)
+    setEntries(resetData.entries)
+    setStats(resetData.stats)
     setSelectedId(null)
     setDraft(null)
     setHistory([])
     setEditorMode('view')
     setConflict(null)
-    setMemoryPolicy(currentWorkspace?.memoryPolicy ?? defaultMemoryPolicy)
+    setDirty(false)
+    setMemoryPolicy(selectedWorkspace?.memoryPolicy ?? defaultMemoryPolicy)
     setMaintenanceState(null)
-  }, [currentWorkspace?.memoryPolicy, defaultMemoryPolicy, setDraft, setEditorMode, setHistory, setMemoryPolicy, setMemoryWorkspaceSlug, setSelectedId, setConflict, setMaintenanceState, workspaceSlug])
+  }, [selectedWorkspaceId, selectedWorkspace?.memoryPolicy, defaultMemoryPolicy, setDraft, setEditorMode, setEntries, setHistory, setMemoryPolicy, setMemoryWorkspaceSlug, setSelectedId, setConflict, setDirty, setMaintenanceState, setStats, workspaceSlug])
 
   React.useEffect(() => {
     void window.electronAPI.getSettings().then((settings) => {
       const policy = settings.defaultMemoryPolicy ?? 'writable'
       setDefaultMemoryPolicy(policy)
-      if (!currentWorkspace) setMemoryPolicy(policy)
     }).catch((error) => console.warn('[Memory] 读取默认策略失败:', error))
-  }, [currentWorkspace, setDefaultMemoryPolicy, setMemoryPolicy])
+  }, [setDefaultMemoryPolicy])
+
+  React.useEffect(() => {
+    setMemoryPolicy(selectedWorkspace?.memoryPolicy ?? defaultMemoryPolicy)
+  }, [defaultMemoryPolicy, selectedWorkspace?.memoryPolicy, setMemoryPolicy])
 
   const loadHistory = React.useCallback(async (entry: MemoryEntry): Promise<void> => {
     setHistoryLoading(true)
@@ -151,26 +182,40 @@ export function MemoryView(): React.ReactElement {
   }, [includeArchived, kind, memoryWorkspaceSlug, query, scope, setEntries, setListLoading, setMaintenanceState, setStats])
 
   React.useEffect(() => {
+    if (page !== 'current') return
     const timer = window.setTimeout(() => { void loadData() }, query.trim() ? 220 : 0)
     return () => window.clearTimeout(timer)
-  }, [loadData, query, refreshToken])
+  }, [loadData, page, query, refreshToken])
 
-  const handleMemoryPolicyChange = React.useCallback(async (nextPolicy: MemoryPolicy): Promise<void> => {
+  const handleMemoryPolicyChange = React.useCallback(async (nextPolicy: MemoryPolicy | null): Promise<void> => {
     try {
-      if (currentWorkspaceId && currentWorkspace) {
-        const updated = await window.electronAPI.updateAgentWorkspace(currentWorkspaceId, { memoryPolicy: nextPolicy })
+      if (selectedWorkspace) {
+        const updated = await window.electronAPI.updateAgentWorkspace(selectedWorkspace.id, { memoryPolicy: nextPolicy })
         setWorkspaces((items) => items.map((item) => item.id === updated.id ? updated : item))
       } else {
-        const updated = await window.electronAPI.updateSettings({ defaultMemoryPolicy: nextPolicy })
-        setDefaultMemoryPolicy(updated.defaultMemoryPolicy ?? 'writable')
+        toast.error('请先选择项目，再修改项目策略')
+        return
       }
-      setMemoryPolicy(nextPolicy)
+      setMemoryPolicy(nextPolicy ?? defaultMemoryPolicy)
       setRefreshToken((value) => value + 1)
       toast.success('Memory 策略已更新')
     } catch (error) {
       toast.error(error instanceof Error ? error.message : '更新 Memory 策略失败')
     }
-  }, [currentWorkspace, currentWorkspaceId, setDefaultMemoryPolicy, setMemoryPolicy, setRefreshToken, setWorkspaces])
+  }, [defaultMemoryPolicy, selectedWorkspace, setMemoryPolicy, setRefreshToken, setWorkspaces])
+
+  const handleDefaultPolicyChange = React.useCallback(async (nextPolicy: MemoryPolicy): Promise<void> => {
+    try {
+      const updated = await window.electronAPI.updateSettings({ defaultMemoryPolicy: nextPolicy })
+      const effectivePolicy = updated.defaultMemoryPolicy ?? 'writable'
+      setDefaultMemoryPolicy(effectivePolicy)
+      if (!selectedWorkspace?.memoryPolicy) setMemoryPolicy(effectivePolicy)
+      setRefreshToken((value) => value + 1)
+      toast.success('全局 Memory 策略已更新')
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : '更新全局 Memory 策略失败')
+    }
+  }, [selectedWorkspace?.memoryPolicy, setDefaultMemoryPolicy, setMemoryPolicy, setRefreshToken])
 
   const selectEntry = React.useCallback((entry: MemoryEntry): void => {
     setSelectedId(entry.id)
@@ -325,56 +370,90 @@ export function MemoryView(): React.ReactElement {
     <div className="flex h-full min-h-0 flex-col overflow-hidden bg-content-area">
       <header className="titlebar-no-drag flex shrink-0 items-center justify-between px-6 pb-3 pt-14">
         <div className="flex items-center gap-3">
-          <div className="flex size-9 items-center justify-center rounded-xl bg-primary/10 text-primary">
+          <div className="flex size-9 items-center justify-center rounded-lg bg-primary/10 text-primary">
             <BookOpen className="size-5" />
           </div>
           <div>
             <h1 className="text-xl font-semibold text-foreground">记忆</h1>
             <p className="mt-0.5 text-xs text-foreground/45">
-              {memoryWorkspaceSlug ? `当前工作区：${memoryWorkspaceSlug}` : '当前仅显示用户记忆'}
+              {selectedWorkspace?.name ?? '当前仅显示用户记忆'}
             </p>
           </div>
         </div>
-        {listLoading && <Loader2 className="size-4 animate-spin text-foreground/35" />}
+        <div className="flex items-center gap-3">
+          {page === 'current' && (
+            <MemoryProjectSelector
+              workspaces={workspaces}
+              selectedWorkspaceId={selectedWorkspaceId}
+              onChange={setSelectedWorkspaceId}
+            />
+          )}
+          {listLoading && <Loader2 className="size-4 animate-spin text-foreground/35" />}
+        </div>
       </header>
 
-      <MemoryToolbar
-        query={query}
-        scope={scope}
-        kind={kind}
-        includeArchived={includeArchived}
-        stats={stats}
-        memoryPolicy={memoryPolicy}
-        maintenanceState={maintenanceState}
-        loading={listLoading}
-        onQueryChange={setQuery}
-        onScopeChange={setScope}
-        onKindChange={setKind}
-        onIncludeArchivedChange={setIncludeArchived}
-        onNew={handleNew}
-        onRefresh={() => setRefreshToken((value) => value + 1)}
-        onMemoryPolicyChange={(value) => { void handleMemoryPolicyChange(value) }}
-      />
-
       <div className="flex min-h-0 flex-1">
-        <MemoryList entries={entries} selectedId={selectedId} loading={listLoading} query={query} onSelect={selectEntry} />
-        <MemoryEditor
-          entry={selectedEntry}
-          draft={draft}
-          mode={editorMode}
-          dirty={dirty}
-          saving={saving}
-          workspaceSlug={workspaceSlug}
-          conflict={conflict}
-          history={history}
-          historyLoading={historyLoading}
-          onDraftChange={handleDraftChange}
-          onEdit={handleEdit}
-          onCancel={handleCancel}
-          onSave={() => { void handleSave() }}
-          onArchive={() => { void handleArchive() }}
-          onRestore={(revision) => { void handleRestore(revision) }}
-        />
+        <MemoryWorkspaceNav page={page} onPageChange={setPage} />
+        <div className="flex min-w-0 min-h-0 flex-1 flex-col">
+          {page === 'current' && (
+            <>
+              <MemoryToolbar
+                query={query}
+                scope={scope}
+                kind={kind}
+                includeArchived={includeArchived}
+                stats={stats}
+                memoryPolicy={memoryPolicy}
+                memoryDefaultPolicy={defaultMemoryPolicy}
+                memoryPolicyOverride={selectedWorkspace?.memoryPolicy ?? null}
+                workspaceAvailable={!!selectedWorkspace}
+                maintenanceState={maintenanceState}
+                loading={listLoading}
+                onQueryChange={setQuery}
+                onScopeChange={setScope}
+                onKindChange={setKind}
+                onIncludeArchivedChange={setIncludeArchived}
+                onNew={handleNew}
+                onRefresh={() => setRefreshToken((value) => value + 1)}
+                onMemoryPolicyChange={(value) => { void handleMemoryPolicyChange(value) }}
+              />
+              <div className="flex min-h-0 flex-1">
+                <MemoryList entries={entries} selectedId={selectedId} loading={listLoading} query={query} onSelect={selectEntry} />
+                <MemoryEditor
+                  entry={selectedEntry}
+                  draft={draft}
+                  mode={editorMode}
+                  dirty={dirty}
+                  saving={saving}
+                  workspaceSlug={workspaceSlug}
+                  conflict={conflict}
+                  history={history}
+                  historyLoading={historyLoading}
+                  onDraftChange={handleDraftChange}
+                  onEdit={handleEdit}
+                  onCancel={handleCancel}
+                  onSave={() => { void handleSave() }}
+                  onArchive={() => { void handleArchive() }}
+                  onRestore={(revision) => { void handleRestore(revision) }}
+                />
+              </div>
+            </>
+          )}
+          {page === 'all' && (
+            <MemoryProjectOverview
+              workspaces={workspaces}
+              selectedWorkspaceId={selectedWorkspaceId}
+              onSelectWorkspace={(workspaceId) => {
+                setSelectedWorkspaceId(workspaceId)
+                setPage('current')
+              }}
+            />
+          )}
+          {page === 'global' && (
+            <MemoryGlobalSettings policy={defaultMemoryPolicy} onChange={(value) => { void handleDefaultPolicyChange(value) }} />
+          )}
+          {page === 'export' && <MemoryExportView workspaceSlug={workspaceSlug} workspaces={workspaces} />}
+        </div>
       </div>
     </div>
   )

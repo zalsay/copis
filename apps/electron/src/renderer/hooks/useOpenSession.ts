@@ -1,8 +1,7 @@
 /**
  * useOpenSession — 统一的"打开/聚焦会话 Tab"操作
  *
- * 封装 openTab + setTabs + setActiveTabId + setAppMode + setCurrentXxxId，
- * 确保所有打开会话的入口都能正确同步 appMode 和 currentSessionId。
+ * 封装 openTab + setTabs + setActiveTabId + Agent 当前会话同步。
  */
 
 import * as React from 'react'
@@ -19,7 +18,6 @@ import { previewFileMapAtom } from '@/atoms/preview-atoms'
 import { appModeAtom } from '@/atoms/app-mode'
 import { activeViewAtom } from '@/atoms/active-view'
 import { automationFormAtom } from '@/atoms/automation-atoms'
-import { currentConversationIdAtom } from '@/atoms/chat-atoms'
 import {
   currentAgentSessionIdAtom,
   agentSessionsAtom,
@@ -45,7 +43,6 @@ export function useOpenSession(): OpenSessionFn {
   const setAppMode = useSetAtom(appModeAtom)
   const setActiveView = useSetAtom(activeViewAtom)
   const setAutomationForm = useSetAtom(automationFormAtom)
-  const setCurrentConversationId = useSetAtom(currentConversationIdAtom)
   const setCurrentAgentSessionId = useSetAtom(currentAgentSessionIdAtom)
   const agentSessions = useAtomValue(agentSessionsAtom)
   const setCurrentAgentWorkspaceId = useSetAtom(currentAgentWorkspaceIdAtom)
@@ -78,10 +75,7 @@ export function useOpenSession(): OpenSessionFn {
       setAutomationForm({ open: false, draft: null })
       setActiveView('conversations')
 
-      if (type === 'chat') {
-        setAppMode('chat')
-        setCurrentConversationId(sessionId)
-      } else if (type === 'agent' || type === 'preview') {
+      if (type === 'agent' || type === 'preview') {
         setAppMode('agent')
         setCurrentAgentSessionId(sessionId)
 
@@ -103,6 +97,6 @@ export function useOpenSession(): OpenSessionFn {
         }
       }
     },
-    [tabs, setTabs, setActiveTabId, setAutomationForm, setActiveView, setAppMode, setCurrentConversationId, setCurrentAgentSessionId, agentSessions, setCurrentAgentWorkspaceId, setUnviewedCompleted, settingsOpen, channelFormDirty, setSettingsOpen, setPendingSessionNavigation],
+    [tabs, setTabs, setActiveTabId, setAutomationForm, setActiveView, setAppMode, setCurrentAgentSessionId, agentSessions, setCurrentAgentWorkspaceId, setUnviewedCompleted, settingsOpen, channelFormDirty, setSettingsOpen, setPendingSessionNavigation],
   )
 }

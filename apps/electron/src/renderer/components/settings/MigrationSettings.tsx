@@ -42,7 +42,6 @@ interface ShareExportWorkspacePreview {
 interface ShareExportPreview {
   workspaces: ShareExportWorkspacePreview[]
   agentSessionCount: number
-  chatConversationCount: number
 }
 
 interface WsSelection {
@@ -62,7 +61,7 @@ const COMPONENT_LABELS: Record<MigrationComponent, string> = {
   skills: 'Skills',
   mcp: 'MCP 配置',
   channels: '模型渠道',
-  chattools: 'Chat 工具',
+  chattools: 'Agent 工具',
 }
 
 export function MigrationSettings(): React.ReactElement {

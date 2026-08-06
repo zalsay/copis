@@ -10,6 +10,7 @@ This file provides guidance to Codex (Codex.ai/code) when working with code in t
 - 这是个开源项目，本地存储优先，善用配置文件优于大部分默认采用 localstorage，不采用本地数据库方案。
 - 保证充分的组件化以及人类的可读性，每次完成改动后都要思考这一点，运行@code-simplifier 来简化优化代码，保持简单直接不过渡设计的风格。
 - 在 UI 设计上采用更现代的方案，UI 组件推荐采用 ShadcnUI，在合适的情况下，用卡片和阴影取代边框，用符合主题的饱满色彩，设置界面要设置背景，为未来做不同主题留下空间。
+- Electron UI 层功能的真实交互、视觉效果与最终验收必须由用户在实际应用窗口中确认。Agent 不得使用截图、截图比对或截图分析代替用户确认；Agent 可执行代码检查、自动化测试、类型检查、构建、日志和运行状态验证，并在交付时明确标注仍需用户确认的 UI 项目。
 - 采用 BDD 行为驱动开发的方案。
 
 ## 项目概述
@@ -351,7 +352,7 @@ bun test apps/electron/src/main/lib/web-bookmark-service.test.ts
 bun test apps/electron/src/main/lib/web-tab-session-service.test.ts
 ```
 
-两个网页测试文件都会 mock `./config-paths`，必须分两个 Bun 进程运行，避免 module mock 互相覆盖产生假失败。最后还要在 Electron 实际窗口中打开普通网页并做一次可视化验证，不能只验证 `about:blank` 或主渲染进程 DOM。
+两个网页测试文件都会 mock `./config-paths`，必须分两个 Bun 进程运行，避免 module mock 互相覆盖产生假失败。完成自动化验证后，由用户在 Electron 实际窗口中打开普通网页并确认 UI 交互与视觉结果，不能只验证 `about:blank` 或主渲染进程 DOM；Agent 不得使用截图方案代替该用户确认。
 
 ### 本地文件存储（`~/.copis/`）
 

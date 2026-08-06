@@ -64,6 +64,7 @@ function registerProtocolsAndHandlers(): void {
 
 import { getSettings, updateSettings } from './lib/settings-service'
 import { handleCopisFileRequest } from './lib/local-file-protocol'
+import { cleanupLegacyChatData } from './lib/legacy-chat-cleanup'
 
 // 处理 EPIPE 错误：当 stdout/stderr 管道被关闭时（如 electronmon 重启），忽略写入错误
 // 这在开发环境热重载时经常发生，不影响应用功能
@@ -95,13 +96,12 @@ import { ensureDefaultWorkspace, upgradeDefaultSkillsInWorkspaces } from './lib/
 import { hasActiveAgentSessions, stopAllAgents, cleanupAgentRuntimeResources } from './lib/agent-service'
 import { disposePiMcpConnections } from './lib/adapters/pi-mcp-tools'
 import { markRunningDelegationsAsInterrupted } from './lib/agent-session-manager'
-import { stopAllGenerations } from './lib/chat-service'
 import { configureUpdater, initAutoUpdater, cleanupUpdater } from './lib/updater/auto-updater'
 import { startWorkspaceWatcher, stopWorkspaceWatcher } from './lib/workspace-watcher'
 import { disposeWebTabs, saveWebTabsSession, setWebTabHostWindow } from './lib/web-tab-manager'
 import { stopAllBrowserWorkflowRecordings } from './lib/browser-workflow-service'
 import { stopAllBrowserWorkflowRuns } from './lib/browser-workflow-runner'
-import { startChatToolsWatcher, stopChatToolsWatcher } from './lib/chat-tools-watcher'
+import { startAgentToolsWatcher, stopAgentToolsWatcher } from './lib/agent-tools-watcher'
 import { getIsQuitting, setQuitting } from './lib/app-lifecycle'
 import {
   registerBridge,
@@ -556,6 +556,9 @@ async function bootstrap(): Promise<void> {
   // 同步默认 Skills 模板到 ~/.copis/default-skills/
   safeRun('seedDefaultSkills', seedDefaultSkills)
 
+  // 启动早期幂等清理旧 Chat 数据，避免旧目录被后续初始化重新创建。
+  safeRun('cleanupLegacyChatData', cleanupLegacyChatData)
+
   // 确保默认 Agent 项目绑定到用户文稿下的 Copis 目录，并允许 Agent 写入。
   // 同时固定新会话的默认项目，避免渲染进程只依赖工作区列表顺序。
   safeRun('ensureDefaultWorkspace', () => {
@@ -601,11 +604,8 @@ async function bootstrap(): Promise<void> {
     openAgentSession: (sessionId, title) => {
       sendToMainWindow(TRAY_IPC_CHANNELS.OPEN_AGENT_SESSION, { sessionId, title })
     },
-    createChatSession: () => {
-      sendToMainWindow(TRAY_IPC_CHANNELS.CREATE_SESSION, { mode: 'chat' })
-    },
     createAgentSession: () => {
-      sendToMainWindow(TRAY_IPC_CHANNELS.CREATE_SESSION, { mode: 'agent' })
+      sendToMainWindow(TRAY_IPC_CHANNELS.CREATE_SESSION)
     },
   })
 
@@ -614,8 +614,8 @@ async function bootstrap(): Promise<void> {
     safeRun('startWorkspaceWatcher', () => startWorkspaceWatcher(mainWindow!))
   }
 
-  // 启动 Chat 工具配置文件监听（Agent 创建工具后自动通知渲染进程）
-  safeRun('startChatToolsWatcher', startChatToolsWatcher)
+  // 启动 Agent 工具配置文件监听（自定义工具变化后通知渲染进程）
+  safeRun('startAgentToolsWatcher', startAgentToolsWatcher)
 
   // 自动更新仅在生产环境启用，并由主进程统一检测 Agent 是否空闲。
   if (app.isPackaged && mainWindow) {
@@ -753,17 +753,16 @@ app.on('before-quit', () => {
     console.error('[HTTP API] 关闭失败:', error)
   })
 
-  // 中止所有活跃的 Agent 和 Chat 子进程
+  // 中止所有活跃的 Agent 子进程
   stopAllAgents()
-  stopAllGenerations()
   // 释放 Pi runtime 资源
   cleanupAgentRuntimeResources()
   // 清理更新器定时器
   cleanupUpdater()
   // 停止工作区文件监听
   stopWorkspaceWatcher()
-  // 停止 Chat 工具配置文件监听
-  stopChatToolsWatcher()
+  // 停止 Agent 工具配置文件监听
+  stopAgentToolsWatcher()
   // 停止所有 Bridge
   stopBridgeSelfHealing()
   stopAllBridges()

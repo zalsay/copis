@@ -57,7 +57,7 @@ import {
   createAgentRuntimeGuard,
   type AgentRuntimeGuard,
 } from '../agent-runtime-guards'
-import { createCopisAgentsFilesOverride } from './pi-resource-loader-overrides'
+import { createCopisResourceLoaderOptions } from './pi-resource-loader-overrides'
 import { createCodexFastModeExtension, withCodexFastModeServiceTier } from './pi-codex-request-settings'
 import { createOpenAIReasoningRequestExtension } from './pi-openai-reasoning-request-settings'
 import { mergeRuntimeEnv, type AgentRuntimeEnv } from '../agent-runtime-env'
@@ -1472,9 +1472,9 @@ export class PiAgentAdapter implements AgentProviderAdapter {
         agentDir: input.piAgentDir,
         settingsManager,
         noSkills: true,
+        ...createCopisResourceLoaderOptions(),
         additionalSkillPaths: input.additionalSkillPaths ?? [],
         skillsOverride: createCopisSkillsOverride(input.additionalSkillPaths),
-        agentsFilesOverride: createCopisAgentsFilesOverride(),
         ...(model.reasoning && extensionFactories.length > 0 && { extensionFactories }),
         systemPromptOverride: () => input.systemPrompt,
       })

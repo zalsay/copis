@@ -25,7 +25,7 @@ describe('会话入口持久化', () => {
 
   test('Given 打开一个会话 When 创建入口 Then 只保留当前真实会话', () => {
     const result = openTab(
-      [{ id: 'old', type: 'chat', sessionId: 'old', title: '旧会话' }],
+      [{ id: 'old', type: 'agent', sessionId: 'old', title: '旧会话' }],
       { type: 'agent', sessionId: 'agent-1', title: '新会话' },
     )
 

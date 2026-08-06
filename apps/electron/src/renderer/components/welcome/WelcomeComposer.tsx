@@ -15,7 +15,7 @@ import {
   workingModeToModelId,
 } from '@copis/shared'
 import { workingClientConfigAtom } from '@/atoms/working-atoms'
-import { ModelSelector } from '@/components/chat/ModelSelector'
+import { ModelSelector } from '@/components/model/ModelSelector'
 import { RichTextInput } from '@/components/ai-elements/rich-text-input'
 import { InputToolbarOverflow, type ToolbarItem } from '@/components/ai-elements/InputToolbarOverflow'
 import { SpeechButton } from '@/components/ai-elements/speech-button'

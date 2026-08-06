@@ -20,7 +20,7 @@ import { cn } from '@/lib/utils'
 import { FileBrowser, FileDropZone, FileTypeIcon, FileSearchBar, computeRevealAncestors, isPathUnderRoot, computeTreeRowLayout, AncestorGuides, STICKY_ROW_BASE_CLASS, canBeSticky } from '@/components/file-browser'
 import { DiffPanelTabBar } from '@/components/diff/DiffPanelTabBar'
 import { DiffChangesList } from '@/components/diff/DiffChangesList'
-import { ChatView } from '@/components/chat/ChatView'
+import { AgentQuestionView } from './AgentQuestionView'
 import {
   agentSidePanelOpenAtom,
   agentFileSourceFilterMapAtom,
@@ -36,9 +36,10 @@ import {
   agentDiffRefreshVersionAtom,
   fileBrowserAutoRevealAtom,
   agentSelectedWorktreeAtom,
+  agentSideQuestionSessionMapAtom,
+  agentSideQuestionReferenceMapAtom,
 } from '@/atoms/agent-atoms'
 import type { AgentSidePanelTab, AgentFileSourceFilter } from '@/atoms/agent-atoms'
-import { agentSideChatMapAtom } from '@/atoms/chat-atoms'
 import { interfaceVariantAtom } from '@/atoms/theme'
 import { previewFileMapAtom } from '@/atoms/preview-atoms'
 import { useOpenPreview } from '@/components/diff/preview-opener'
@@ -342,10 +343,10 @@ export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange, widt
     setFilesVersion((prev) => prev + 1)
   }, [setFilesVersion])
 
-  // 添加文件到聊天
+  // 添加文件到 Agent 待发送列表
   const pendingFiles = useAtomValue(agentPendingFilesAtomFamily(sessionId))
   const setPendingFiles = useSetAtom(agentPendingFilesAtomFamily(sessionId))
-  const handleAddToChat = React.useCallback((entry: FileEntry) => {
+  const handleAddToAgent = React.useCallback((entry: FileEntry) => {
     // 先在 setter 外部检查去重，避免在 updater 函数内执行不可逆副作用
     if (pendingFiles.some((f) => f.sourcePath === entry.path)) return
 
@@ -417,24 +418,34 @@ export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange, widt
   const hasVisibleWorkspaceAttachedItems = showProjectFiles && hasWorkspaceAttachedItems
   const interfaceVariant = useAtomValue(interfaceVariantAtom)
   const isClassic = interfaceVariant === 'classic'
-  const sideChatMap = useAtomValue(agentSideChatMapAtom)
-  const setSideChatMap = useSetAtom(agentSideChatMapAtom)
-  const sideChatConversationId = sideChatMap.get(sessionId) ?? null
-  const effectiveActiveTab: AgentSidePanelTab = activeTab === 'chat' && !sideChatConversationId
+  const sideQuestionMap = useAtomValue(agentSideQuestionSessionMapAtom)
+  const setSideQuestionMap = useSetAtom(agentSideQuestionSessionMapAtom)
+  const setSideQuestionReferenceMap = useSetAtom(agentSideQuestionReferenceMapAtom)
+  const sideQuestionSessionId = sideQuestionMap.get(sessionId) ?? null
+  const effectiveActiveTab: AgentSidePanelTab = activeTab === 'qa' && !sideQuestionSessionId
     ? 'files'
     : activeTab
 
-  const handleCloseChatTab = React.useCallback(() => {
-    setSideChatMap((prev) => {
+  const handleCloseQuestionTab = React.useCallback(() => {
+    const childSessionId = sideQuestionMap.get(sessionId)
+    setSideQuestionMap((prev) => {
       if (!prev.has(sessionId)) return prev
       const next = new Map(prev)
       next.delete(sessionId)
       return next
     })
-    if (activeTab === 'chat') {
+    if (childSessionId) {
+      setSideQuestionReferenceMap((prev) => {
+        if (!prev.has(childSessionId)) return prev
+        const next = new Map(prev)
+        next.delete(childSessionId)
+        return next
+      })
+    }
+    if (activeTab === 'qa') {
       onTabChange('files')
     }
-  }, [activeTab, onTabChange, sessionId, setSideChatMap])
+  }, [activeTab, onTabChange, sessionId, setSideQuestionMap, setSideQuestionReferenceMap, sideQuestionMap])
 
 
   return (
@@ -459,15 +470,15 @@ export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange, widt
             activeTab={effectiveActiveTab}
             onTabChange={onTabChange}
             onClose={() => setIsOpen(false)}
-            onCloseChat={handleCloseChatTab}
-            showChatTab={Boolean(sideChatConversationId)}
+            onCloseQuestion={handleCloseQuestionTab}
+            showQuestionTab={Boolean(sideQuestionSessionId)}
             isWindows={isWindows}
           />
 
-          {effectiveActiveTab === 'chat' ? (
-            sideChatConversationId ? (
+          {effectiveActiveTab === 'qa' ? (
+            sideQuestionSessionId ? (
               <div className="min-h-0 flex-1 overflow-hidden">
-                <ChatView conversationId={sideChatConversationId} />
+                <AgentQuestionView sessionId={sideQuestionSessionId} />
               </div>
             ) : (
               <div className="flex-1 flex items-center justify-center text-muted-foreground text-xs">暂无问答会话</div>
@@ -546,7 +557,7 @@ export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange, widt
                         scope="project"
                         attachedFiles={wsAttachedFiles}
                         onDetach={handleDetachWorkspaceFile}
-                        onAddToChat={handleAddToChat}
+                        onAddToAgent={handleAddToAgent}
                         onFilePreview={handleFilePreview}
                         allowedPaths={basePathsRef.current}
                         sessionId={sessionId}
@@ -558,7 +569,7 @@ export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange, widt
                         attachedDirs={wsAttachedDirs}
                         onDetach={handleDetachWorkspaceDirectory}
                         refreshVersion={filesVersion}
-                        onAddToChat={handleAddToChat}
+                        onAddToAgent={handleAddToAgent}
                         onFilePreview={handleFilePreview}
                         allowedPaths={basePathsRef.current}
                         sessionId={sessionId}
@@ -570,7 +581,7 @@ export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange, widt
                         showSessionBadge={false}
                         attachedFiles={attachedFiles}
                         onDetach={handleDetachFile}
-                        onAddToChat={handleAddToChat}
+                        onAddToAgent={handleAddToAgent}
                         onFilePreview={handleFilePreview}
                         allowedPaths={basePathsRef.current}
                         sessionId={sessionId}
@@ -583,7 +594,7 @@ export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange, widt
                         attachedDirs={attachedDirs}
                         onDetach={handleDetachDirectory}
                         refreshVersion={filesVersion}
-                        onAddToChat={handleAddToChat}
+                        onAddToAgent={handleAddToAgent}
                         onFilePreview={handleFilePreview}
                         allowedPaths={basePathsRef.current}
                         sessionId={sessionId}
@@ -602,7 +613,7 @@ export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange, widt
                       hideToolbar
                       embedded
                       hideEmpty={hasVisibleSessionAttachedItems || hasVisibleWorkspaceAttachedItems}
-                      onAddToChat={handleAddToChat}
+                      onAddToAgent={handleAddToAgent}
                       onFilePreview={handleFilePreview}
                     />
                     {showSessionFiles && workspaceSlug && (
@@ -646,13 +657,13 @@ interface AttachedFilesSectionProps {
   showSessionBadge?: boolean
   attachedFiles: string[]
   onDetach: (filePath: string) => void
-  onAddToChat?: (entry: FileEntry) => void
+  onAddToAgent?: (entry: FileEntry) => void
   onFilePreview?: (filePath: string) => void
   allowedPaths?: string[]
   sessionId: string
 }
 
-function AttachedFilesSection({ title, scope = 'project', showSessionBadge = true, attachedFiles, onDetach, onAddToChat, onFilePreview, allowedPaths, sessionId }: AttachedFilesSectionProps): React.ReactElement {
+function AttachedFilesSection({ title, scope = 'project', showSessionBadge = true, attachedFiles, onDetach, onAddToAgent, onFilePreview, allowedPaths, sessionId }: AttachedFilesSectionProps): React.ReactElement {
   return (
     <div className="pt-1 pb-0 flex-shrink-0">
       {title && <div className="text-[11px] font-medium text-muted-foreground mb-1 px-3">{title}</div>}
@@ -711,13 +722,13 @@ function AttachedFilesSection({ title, scope = 'project', showSessionBadge = tru
                     <MessageSquarePlus />
                     引用到 Agent
                   </DropdownMenuItem>
-                  {onAddToChat && (
+                  {onAddToAgent && (
                     <DropdownMenuItem
                       className="text-xs py-1 [&>svg]:size-3.5"
-                      onSelect={() => onAddToChat(entry)}
+                      onSelect={() => onAddToAgent(entry)}
                     >
                       <MessageSquarePlus />
-                      添加到聊天
+                      添加到 Agent
                     </DropdownMenuItem>
                   )}
                   <DropdownMenuItem
@@ -763,7 +774,7 @@ interface AttachedDirsSectionProps {
   onDetach: (dirPath: string) => void
   /** 文件版本号，用于自动刷新已展开的目录 */
   refreshVersion: number
-  onAddToChat?: (entry: FileEntry) => void
+  onAddToAgent?: (entry: FileEntry) => void
   onFilePreview?: (filePath: string) => void
   /** 所有允许访问的路径（传给 IPC 做路径校验） */
   allowedPaths?: string[]
@@ -771,7 +782,7 @@ interface AttachedDirsSectionProps {
 }
 
 /** 附加目录区域：统一管理所有子项的选中状态 */
-function AttachedDirsSection({ title, scope = 'project', showSessionBadge = true, attachedDirs, onDetach, refreshVersion, onAddToChat, onFilePreview, allowedPaths, sessionId }: AttachedDirsSectionProps): React.ReactElement {
+function AttachedDirsSection({ title, scope = 'project', showSessionBadge = true, attachedDirs, onDetach, refreshVersion, onAddToAgent, onFilePreview, allowedPaths, sessionId }: AttachedDirsSectionProps): React.ReactElement {
   const [selectedPaths, setSelectedPaths] = React.useState<Set<string>>(new Set())
 
   // ===== 接入搜索点击触发的 reveal：附加目录文件搜到后，需要展开/选中目标 =====
@@ -830,7 +841,7 @@ function AttachedDirsSection({ title, scope = 'project', showSessionBadge = true
             selectedPaths={selectedPaths}
             onSelect={handleSelect}
             refreshVersion={refreshVersion}
-            onAddToChat={onAddToChat}
+            onAddToAgent={onAddToAgent}
             onFilePreview={onFilePreview}
             allowedPaths={allowedPaths}
             sessionId={sessionId}
@@ -853,7 +864,7 @@ interface AttachedDirTreeProps {
   selectedPaths: Set<string>
   onSelect: (path: string, ctrlKey: boolean) => void
   refreshVersion: number
-  onAddToChat?: (entry: FileEntry) => void
+  onAddToAgent?: (entry: FileEntry) => void
   onFilePreview?: (filePath: string) => void
   allowedPaths?: string[]
   sessionId: string
@@ -865,7 +876,7 @@ interface AttachedDirTreeProps {
   revealTs?: number
 }
 
-function AttachedDirTree({ dirPath, onDetach, selectedPaths, onSelect, refreshVersion, onAddToChat, onFilePreview, allowedPaths, sessionId, scope, showSessionBadge, revealTarget = null, revealTs = 0 }: AttachedDirTreeProps): React.ReactElement {
+function AttachedDirTree({ dirPath, onDetach, selectedPaths, onSelect, refreshVersion, onAddToAgent, onFilePreview, allowedPaths, sessionId, scope, showSessionBadge, revealTarget = null, revealTs = 0 }: AttachedDirTreeProps): React.ReactElement {
   const [expanded, setExpanded] = React.useState(false)
   const [children, setChildren] = React.useState<FileEntry[]>([])
   const [loaded, setLoaded] = React.useState(false)
@@ -995,7 +1006,7 @@ function AttachedDirTree({ dirPath, onDetach, selectedPaths, onSelect, refreshVe
             </div>
           )}
           {children.map((child) => (
-            <AttachedDirItem key={child.path} entry={child} depth={1} selectedPaths={selectedPaths} onSelect={onSelect} refreshVersion={refreshVersion} onAddToChat={onAddToChat} onFilePreview={onFilePreview} allowedPaths={allowedPaths} sessionId={sessionId} scope={scope} revealTarget={revealTarget} revealTs={revealTs} revealAncestors={revealAncestors} />
+            <AttachedDirItem key={child.path} entry={child} depth={1} selectedPaths={selectedPaths} onSelect={onSelect} refreshVersion={refreshVersion} onAddToAgent={onAddToAgent} onFilePreview={onFilePreview} allowedPaths={allowedPaths} sessionId={sessionId} scope={scope} revealTarget={revealTarget} revealTs={revealTs} revealAncestors={revealAncestors} />
           ))}
         </div>
       )}
@@ -1009,7 +1020,7 @@ interface AttachedDirItemProps {
   selectedPaths: Set<string>
   onSelect: (path: string, ctrlKey: boolean) => void
   refreshVersion: number
-  onAddToChat?: (entry: FileEntry) => void
+  onAddToAgent?: (entry: FileEntry) => void
   onFilePreview?: (filePath: string) => void
   allowedPaths?: string[]
   sessionId: string
@@ -1022,7 +1033,7 @@ interface AttachedDirItemProps {
   revealAncestors?: Set<string>
 }
 
-function AttachedDirItem({ entry, depth, selectedPaths, onSelect, refreshVersion, onAddToChat, onFilePreview, allowedPaths, sessionId, scope, revealTarget = null, revealTs = 0, revealAncestors }: AttachedDirItemProps): React.ReactElement {
+function AttachedDirItem({ entry, depth, selectedPaths, onSelect, refreshVersion, onAddToAgent, onFilePreview, allowedPaths, sessionId, scope, revealTarget = null, revealTs = 0, revealAncestors }: AttachedDirItemProps): React.ReactElement {
   const [expanded, setExpanded] = React.useState(false)
   const [children, setChildren] = React.useState<FileEntry[]>([])
   const [loaded, setLoaded] = React.useState(false)
@@ -1279,13 +1290,13 @@ function AttachedDirItem({ entry, depth, selectedPaths, onSelect, refreshVersion
                   <MessageSquarePlus />
                   引用到 Agent
                 </DropdownMenuItem>
-                {onAddToChat && !entry.isDirectory && (
+                {onAddToAgent && !entry.isDirectory && (
                   <DropdownMenuItem
                     className="text-xs py-1 [&>svg]:size-3.5"
-                    onSelect={() => onAddToChat({ ...entry, path: currentPath, name: currentName })}
+                    onSelect={() => onAddToAgent({ ...entry, path: currentPath, name: currentName })}
                   >
                     <MessageSquarePlus />
-                    添加到聊天
+                    添加到 Agent
                   </DropdownMenuItem>
                 )}
                 <DropdownMenuItem
@@ -1339,7 +1350,7 @@ function AttachedDirItem({ entry, depth, selectedPaths, onSelect, refreshVersion
             </div>
           )}
           {children.map((child) => (
-            <AttachedDirItem key={child.path} entry={child} depth={depth + 1} selectedPaths={selectedPaths} onSelect={onSelect} refreshVersion={refreshVersion} onAddToChat={onAddToChat} onFilePreview={onFilePreview} allowedPaths={allowedPaths} sessionId={sessionId} scope={scope} revealTarget={revealTarget} revealTs={revealTs} revealAncestors={revealAncestors} />
+            <AttachedDirItem key={child.path} entry={child} depth={depth + 1} selectedPaths={selectedPaths} onSelect={onSelect} refreshVersion={refreshVersion} onAddToAgent={onAddToAgent} onFilePreview={onFilePreview} allowedPaths={allowedPaths} sessionId={sessionId} scope={scope} revealTarget={revealTarget} revealTs={revealTs} revealAncestors={revealAncestors} />
           ))}
         </div>
       )}

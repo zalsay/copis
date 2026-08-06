@@ -1,5 +1,5 @@
 import type { MemoryPolicy } from '@copis/shared'
-import { memoryApiClient } from './memory-api-client'
+import { runtimeMemoryApiClient as memoryApiClient } from './memory-api-client-runtime'
 
 const DEFAULT_MEMORY_POLICY: MemoryPolicy = 'writable'
 

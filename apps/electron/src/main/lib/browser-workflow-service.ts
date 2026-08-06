@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import type {
   BrowserAgentContext,
   BrowserFramePath,
+  BrowserPageControlMode,
   BrowserRecordedTarget,
   BrowserRecordedValue,
   BrowserRecordingEvent,
@@ -11,6 +12,10 @@ import type {
   BrowserWorkflowStatus,
   BrowserWorkflowVersion,
 } from '@copis/shared'
+import {
+  authorizeBrowserPageOrigin,
+  resolveBrowserPageControlState,
+} from './browser-page-control-policy'
 import { getAgentSessionMeta } from './agent-session-manager'
 import { getAgentWorkspace } from './agent-workspace-manager'
 import { getBrowserWorkflow, saveBrowserWorkflow } from './browser-workflow-store'
@@ -37,6 +42,7 @@ interface BrowserAgentBinding {
   workspaceSlug: string
   ownerWebContentsId?: number
   context: BrowserAgentContext
+  authorizedOrigin?: string
 }
 
 interface RecordingPayload {
@@ -324,12 +330,31 @@ function parsePayload(value: string | undefined): RecordingPayload | undefined {
 }
 
 function emitStatus(sessionId: string, status: BrowserWorkflowStatus): void {
-  statuses.set(sessionId, status)
-  for (const listener of listeners) listener(sessionId, status)
+  const next = withBrowserPageControlState(sessionId, status)
+  statuses.set(sessionId, next)
+  for (const listener of listeners) listener(sessionId, next)
 }
 
 function currentStatus(sessionId: string): BrowserWorkflowStatus {
-  return statuses.get(sessionId) ?? { sessionId, state: 'idle' }
+  return withBrowserPageControlState(sessionId, statuses.get(sessionId) ?? { sessionId, state: 'idle' })
+}
+
+function withBrowserPageControlState(
+  sessionId: string,
+  status: BrowserWorkflowStatus,
+): BrowserWorkflowStatus {
+  const binding = bindings.get(sessionId)
+  const tab = binding ? getWebTabState(binding.context.tabId) : undefined
+  if (!binding || !tab) return status
+  const control = resolveBrowserPageControlState(tab.url, binding.authorizedOrigin)
+  if (binding.authorizedOrigin && control.mode === 'ask') binding.authorizedOrigin = undefined
+  return {
+    ...status,
+    tabId: tab.id,
+    tabTitle: tab.title,
+    pageOrigin: control.pageOrigin,
+    controlMode: control.mode,
+  }
 }
 
 function normalizeFramePath(value: BrowserFramePath | undefined): BrowserFramePath {
@@ -625,12 +650,17 @@ export function bindBrowserAgentContext(
   if (previousBinding && ownerWebContentsId !== undefined && previousBinding.ownerWebContentsId !== ownerWebContentsId) {
     throw new Error('Browser Workflow session 已绑定到其它渲染进程')
   }
+  const nextOrigin = getOrigin(tab.url)
+  const authorizedOrigin = previousBinding?.authorizedOrigin === nextOrigin
+    ? previousBinding.authorizedOrigin
+    : undefined
   bindings.set(sessionId, {
     sessionId,
     workspaceId: session.workspaceId,
     workspaceSlug: workspace.slug,
     ownerWebContentsId: ownerWebContentsId ?? previousBinding?.ownerWebContentsId,
     context,
+    authorizedOrigin,
   })
   const status = { ...currentStatus(sessionId), sessionId, tabId: tab.id, tabTitle: tab.title }
   emitStatus(sessionId, status)
@@ -647,6 +677,26 @@ export function unbindBrowserAgentContext(sessionId: string, ownerWebContentsId?
 
 export function getBrowserAgentContext(sessionId: string): BrowserAgentContext | undefined {
   return bindings.get(sessionId)?.context
+}
+
+export function getBrowserPageControlMode(sessionId: string): BrowserPageControlMode {
+  return currentStatus(sessionId).controlMode ?? 'ask'
+}
+
+export function setBrowserPageControlMode(
+  sessionId: string,
+  mode: BrowserPageControlMode,
+): BrowserWorkflowStatus {
+  const binding = bindings.get(sessionId)
+  if (!binding) throw new Error('Browser Agent 页面上下文不存在')
+  const tab = getWebTabState(binding.context.tabId)
+  if (!tab) throw new Error('当前网页页签不存在')
+  binding.authorizedOrigin = mode === 'authorized'
+    ? authorizeBrowserPageOrigin(tab.url)
+    : undefined
+  const status = currentStatus(sessionId)
+  emitStatus(sessionId, status)
+  return currentStatus(sessionId)
 }
 
 export function getBrowserAgentWorkspaceId(sessionId: string): string | undefined {

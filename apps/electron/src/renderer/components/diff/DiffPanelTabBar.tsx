@@ -17,8 +17,8 @@ interface DiffPanelTabBarProps {
   activeTab: AgentSidePanelTab
   onTabChange: (tab: AgentSidePanelTab) => void
   onClose?: () => void
-  onCloseChat?: () => void
-  showChatTab?: boolean
+  onCloseQuestion?: () => void
+  showQuestionTab?: boolean
   isWindows?: boolean
 }
 
@@ -26,8 +26,8 @@ export function DiffPanelTabBar({
   activeTab,
   onTabChange,
   onClose,
-  onCloseChat,
-  showChatTab = false,
+  onCloseQuestion,
+  showQuestionTab = false,
   isWindows = false,
 }: DiffPanelTabBarProps): React.ReactElement {
   const interfaceVariant = useAtomValue(interfaceVariantAtom)
@@ -37,13 +37,13 @@ export function DiffPanelTabBar({
     <div className="flex items-end h-[34px] tabbar-bg relative flex-shrink-0">
       <div className={cn("absolute inset-0 titlebar-drag-region", isWindows && WINDOW_CONTROLS_INSET_RIGHT)} />
       <div className="relative flex items-end flex-1 titlebar-no-drag">
-        {showChatTab && (
+        {showQuestionTab && (
           <div
             className={cn(
               'flex-1 h-[34px] text-xs transition-colors select-none relative whitespace-nowrap overflow-hidden',
               isClassic ? 'rounded-t-lg' : 'rounded-none',
               'border-t border-l border-r',
-              activeTab === 'chat'
+              activeTab === 'qa'
                 ? isClassic
                   ? 'bg-content-area text-foreground border-border/50'
                   : 'app-tab-active text-foreground border-border/80'
@@ -55,17 +55,17 @@ export function DiffPanelTabBar({
             <div className="flex h-full items-center">
               <button
                 type="button"
-                onClick={() => onTabChange('chat')}
+                onClick={() => onTabChange('qa')}
                 className="min-w-0 flex-1 self-stretch px-2 text-left"
               >
-                <span className="block truncate text-center">问答</span>
+                <span className="block truncate text-center">Agent 问答</span>
               </button>
-              {onCloseChat && (
+              {onCloseQuestion && (
                 <button
                   type="button"
                   className="mr-1 inline-flex size-5 shrink-0 items-center justify-center rounded text-muted-foreground hover:bg-muted/70 hover:text-foreground"
                   aria-label="关闭问答 Tab"
-                  onClick={onCloseChat}
+                  onClick={onCloseQuestion}
                 >
                   <X className="size-3" />
                 </button>

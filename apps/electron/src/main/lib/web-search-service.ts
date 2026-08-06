@@ -1,5 +1,5 @@
 /**
- * Web search/fetch service shared by Chat tools and Agent tools.
+ * Web search/fetch service used by Agent tools.
  *
  * Tavily provides both search (`/search`) and page extraction (`/extract`).
  * Copis keeps these as app-hosted tools so Agent runtimes can use a stable,
@@ -7,7 +7,7 @@
  * not support native hosted web-search tools.
  */
 
-import { getToolCredentials, getToolState } from './chat-tool-config'
+import { getAgentToolCredentials, getAgentToolState } from './agent-tool-config'
 
 const TAVILY_SEARCH_URL = 'https://api.tavily.com/search'
 const TAVILY_EXTRACT_URL = 'https://api.tavily.com/extract'
@@ -74,16 +74,16 @@ export interface WebFetchOptions {
 }
 
 export function isWebSearchAvailable(): boolean {
-  const credentials = getToolCredentials('web-search')
+  const credentials = getAgentToolCredentials('web-search')
   return !!credentials.apiKey
 }
 
 export function isWebSearchEnabledForAgent(): boolean {
-  return getToolState('web-search').enabled && isWebSearchAvailable()
+  return getAgentToolState('web-search').enabled && isWebSearchAvailable()
 }
 
 function getTavilyApiKey(): string | undefined {
-  return getToolCredentials('web-search').apiKey
+  return getAgentToolCredentials('web-search').apiKey
 }
 
 function clampInt(value: unknown, fallback: number, min: number, max: number): number {

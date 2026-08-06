@@ -8,7 +8,7 @@
  */
 
 import type { BuiltinMcpServerSummary } from '@copis/shared'
-import { getToolCredentials, getToolState } from '../chat-tool-config'
+import { getAgentToolCredentials, getAgentToolState } from '../agent-tool-config'
 import { getBuiltinMcpDefinitions, type BuiltinMcpDefinition } from './baseline'
 import { isBuiltinMcpDefaultDisabled, isBuiltinMcpUserEnabled } from './settings'
 
@@ -46,8 +46,8 @@ function resolveAvailability(
   }
 
   if (item.id === 'nano-banana') {
-    const state = getToolState('nano-banana')
-    const credentials = getToolCredentials('nano-banana')
+    const state = getAgentToolState('nano-banana')
+    const credentials = getAgentToolCredentials('nano-banana')
     const available = state.enabled && !!credentials.apiKey
     return {
       enabled: true,

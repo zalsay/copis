@@ -31,7 +31,7 @@ mock.module('sonner', () => ({
   toast: { error: () => undefined, success: () => undefined },
 }))
 
-const { MemoryView } = await import('./MemoryView')
+const { MemoryView, createMemoryWorkspaceResetData } = await import('./MemoryView')
 
 function renderMemory(input: {
   workspace?: AgentWorkspace
@@ -57,15 +57,27 @@ function renderMemory(input: {
 }
 
 describe('Memory 页面 BDD', () => {
-  test('Given 当前工作区 When 打开 Memory 页面 Then 显示工作区范围、策略和维护状态', () => {
+  test('Given 切换项目 When 重置 Memory 页面 Then 清空旧项目条目和统计', () => {
+    expect(createMemoryWorkspaceResetData()).toEqual({
+      entries: [],
+      stats: { userCount: 0, workspaceCount: 0, archivedCount: 0 },
+    })
+  })
+
+  test('Given 当前项目名称为 Copis When 打开 Memory 页面 Then 显示项目名称、作用域导航和策略状态', () => {
     const html = renderMemory({
-      workspace: { id: 'workspace-a', slug: 'workspace-a', name: 'A 项目', createdAt: 1, updatedAt: 1 },
+      workspace: { id: 'workspace-a', slug: 'workspace-a', name: 'Copis', createdAt: 1, updatedAt: 1 },
       memoryWorkspaceSlug: 'workspace-a',
       policy: 'writable',
       maintenance: { workspaceSlug: 'workspace-a', captureCount: 10, lastConsolidatedCaptureCount: 10 },
     })
 
-    expect(html).toContain('当前工作区：workspace-a')
+    expect(html).toContain('Copis')
+    expect(html).not.toContain('当前工作区：workspace-a')
+    expect(html).toContain('当前项目')
+    expect(html).toContain('全部项目')
+    expect(html).toContain('全局设置')
+    expect(html).toContain('导出记忆')
     expect(html).toContain('记忆：可写')
     expect(html).toContain('维护 10/10')
   })

@@ -204,6 +204,52 @@ describe('Rust HTTP API 功能模块生命周期', () => {
     expect(records[0]?.options.env?.COPIS_HTTP_API_PORT).toBe('51740')
   })
 
+  test('打包版 Rust API 使用自包含 Copis 二进制启动 Pi Worker', async () => {
+    const root = createRoot()
+    const packageInfo = rustPackage('0.1.0', 'packaged-rust-api')
+    await activateRustVersion(root, packageInfo, 'packaged-rust-api')
+    const records: SpawnRecord[] = []
+
+    startHttpApiServer({
+      rootDir: join(root, 'modules'),
+      spawnImpl: spawnFixture(records),
+      workerLaunch: {
+        kind: 'executable',
+        path: 'C:\\Program Files\\Copis\\resources\\bin\\win32-x64\\copis.exe',
+      },
+    })
+
+    expect(records).toHaveLength(1)
+    expect(records[0]?.options.env?.COPIS_PI_RPC_EXECUTABLE).toBe(
+      'C:\\Program Files\\Copis\\resources\\bin\\win32-x64\\copis.exe',
+    )
+    expect(records[0]?.options.env?.COPIS_CLI).toBe(
+      'C:\\Program Files\\Copis\\resources\\bin\\win32-x64\\copis.exe',
+    )
+    expect(records[0]?.options.env?.COPIS_PI_RPC_WORKER).toBeUndefined()
+  })
+
+  test('开发版脚本 Worker 使用系统 Bun 标记，不回退托管 Node runtime', async () => {
+    const root = createRoot()
+    const packageInfo = rustPackage('0.1.0', 'development-rust-api')
+    await activateRustVersion(root, packageInfo, 'development-rust-api')
+    const records: SpawnRecord[] = []
+
+    startHttpApiServer({
+      rootDir: join(root, 'modules'),
+      spawnImpl: spawnFixture(records),
+      workerLaunch: {
+        kind: 'script',
+        path: '/repo/apps/electron/dist/pi-rpc-worker.cjs',
+      },
+    })
+
+    const env = records[0]?.options.env
+    expect(env?.COPIS_PI_RPC_WORKER).toBe('/repo/apps/electron/dist/pi-rpc-worker.cjs')
+    expect(env?.COPIS_PI_RPC_USE_SYSTEM_RUNTIME).toBe('1')
+    expect(env?.COPIS_PI_RPC_EXECUTABLE).toBeUndefined()
+  })
+
   test('候选版本健康检查通过后切换 active 和开发进程', async () => {
     const root = createRoot()
     const oldPackage = rustPackage('0.1.0', 'old-rust-api')

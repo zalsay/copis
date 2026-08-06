@@ -95,6 +95,33 @@ export interface MemoryHistoryResponse {
   revisions: MemoryRevision[]
 }
 
+export type MemoryExportScope = 'current-workspace' | 'all-workspaces' | 'user'
+
+export type MemoryExportFormat = 'json' | 'markdown'
+
+export interface MemoryExportInput {
+  scope: MemoryExportScope
+  workspaceSlug?: string
+  workspaceNames?: Record<string, string>
+  format: MemoryExportFormat
+  includeArchived: boolean
+  includeHistory: boolean
+}
+
+export interface MemoryExportResponse {
+  fileName: string
+  mimeType: 'application/json' | 'text/markdown'
+  content: string
+  entryCount: number
+  revisionCount: number
+}
+
+export interface MemoryExportFileInput {
+  fileName: string
+  mimeType: MemoryExportResponse['mimeType']
+  content: string
+}
+
 export interface MemoryRecallItem {
   id: string
   scope: MemoryScope

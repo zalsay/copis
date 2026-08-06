@@ -8,6 +8,7 @@
 import { join, basename } from 'node:path'
 import { mkdirSync, existsSync, cpSync, renameSync, rmSync, readdirSync, readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
+import { resolveBundledCliPath } from './compiled-runtime-path'
 import { rmSyncWithRetry } from './fs-retry'
 
 interface ElectronAppPathProvider {
@@ -204,43 +205,6 @@ export function getChannelsPath(): string {
 }
 
 /**
- * 获取对话索引文件路径
- *
- * @returns ~/.copis/conversations.json
- */
-export function getConversationsIndexPath(): string {
-  return join(getConfigDir(), 'conversations.json')
-}
-
-/**
- * 获取对话消息目录路径
- *
- * 如果目录不存在则自动创建。
- *
- * @returns ~/.copis/conversations/
- */
-export function getConversationsDir(): string {
-  const dir = join(getConfigDir(), 'conversations')
-
-  if (!existsSync(dir)) {
-    mkdirSync(dir, { recursive: true })
-    console.log(`[配置] 已创建对话目录: ${dir}`)
-  }
-
-  return dir
-}
-
-/**
- * 获取指定对话的消息文件路径
- *
- * @param id 对话 ID
- * @returns ~/.copis/conversations/{id}.jsonl
- */
-export function getConversationMessagesPath(id: string): string {
-  return join(getConversationsDir(), `${id}.jsonl`)
-}
-
-/**
  * 获取附件存储根目录
  *
  * 如果目录不存在则自动创建。
@@ -259,15 +223,15 @@ export function getAttachmentsDir(): string {
 }
 
 /**
- * 获取指定对话的附件目录
+ * 获取指定附件分组的目录
  *
  * 如果目录不存在则自动创建。
  *
- * @param conversationId 对话 ID
- * @returns ~/.copis/attachments/{conversationId}/
+ * @param groupId 附件分组 ID
+ * @returns ~/.copis/attachments/{groupId}/
  */
-export function getConversationAttachmentsDir(conversationId: string): string {
-  const dir = join(getAttachmentsDir(), conversationId)
+export function getAttachmentGroupDir(groupId: string): string {
+  const dir = join(getAttachmentsDir(), groupId)
 
   if (!existsSync(dir)) {
     mkdirSync(dir, { recursive: true })
@@ -352,7 +316,7 @@ export function getSystemPromptsPath(): string {
 }
 
 /**
- * 获取 Chat 工具配置文件路径
+ * 获取 Agent 工具配置文件路径
  *
  * @returns ~/.copis/chat-tools.json
  */
@@ -581,7 +545,8 @@ export function getFunctionalModulesDir(): string {
 /**
  * 获取打包进 App 的 copis CLI 二进制路径。
  *
- * 打包模式下从 process.resourcesPath/bin 取（electron-builder extraResources 注入）。
+ * 打包模式下从 process.resourcesPath/bin 取当前平台架构的 copis 文件（electron-builder
+ * extraResources 注入）；旧版无架构文件名仍作为兼容回退。
  * 开发模式下没有编译二进制——返回 undefined，由调用方回退到源码运行
  * （bun apps/cli/src/index.ts）。
  *
@@ -590,9 +555,11 @@ export function getFunctionalModulesDir(): string {
 export function getBundledCliPath(): string | undefined {
   const { app } = require('electron')
   if (!app.isPackaged) return undefined
-  const binName = process.platform === 'win32' ? 'copis.exe' : 'copis'
-  const cliPath = join(process.resourcesPath, 'bin', binName)
-  return existsSync(cliPath) ? cliPath : undefined
+  return resolveBundledCliPath({
+    resourcesPath: process.resourcesPath,
+    platform: process.platform,
+    arch: process.arch,
+  })
 }
 
 /**

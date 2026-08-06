@@ -14,7 +14,14 @@ import type {
   FunctionalModulePlatform,
   FunctionalModuleProgressPayload,
 } from '@copis/shared'
-import { getConfigDir, getFunctionalModulesDir } from './config-paths'
+import { getBundledCliPath, getConfigDir, getFunctionalModulesDir } from './config-paths'
+import { getSystemBunPath, getVendorBunPath } from './bun-finder'
+import {
+  resolvePiWorkerLaunch,
+  resolvePiWorkerRuntime,
+  type PiWorkerLaunch,
+  type PiWorkerRuntime,
+} from './pi-worker-launch'
 import {
   activatePreparedFunctionalModule,
   getFunctionalModulePath,
@@ -67,6 +74,7 @@ export interface HttpApiServerOptions {
   healthTimeoutMs?: number
   stopTimeoutMs?: number
   port?: number
+  workerLaunch?: PiWorkerLaunch
 }
 
 interface ManagedProcess {
@@ -141,17 +149,23 @@ function prepareBinary(path: string): string {
   return path
 }
 
-function resolvePiRpcWorkerPath(): string | undefined {
-  const candidates = app.isPackaged
-    ? [
-      join(process.resourcesPath, 'app.asar.unpacked', 'dist', 'pi-rpc-worker.cjs'),
-      join(__dirname, 'pi-rpc-worker.cjs'),
-    ]
-    : [
+function resolvePiRpcWorkerLaunch(options: HttpApiServerOptions): PiWorkerLaunch | undefined {
+  return options.workerLaunch ?? resolvePiWorkerLaunch({
+    isPackaged: app.isPackaged,
+    bundledCliPath: getBundledCliPath(),
+    developmentCandidates: [
       join(__dirname, 'pi-rpc-worker.cjs'),
       resolve(__dirname, '../../..', 'apps/electron/dist/pi-rpc-worker.cjs'),
-    ]
-  return candidates.find((candidate) => existsSync(candidate))
+    ],
+  })
+}
+
+function resolvePiRpcWorkerRuntime(workerLaunch: PiWorkerLaunch | undefined): PiWorkerRuntime | undefined {
+  if (workerLaunch?.kind !== 'script') return undefined
+  return resolvePiWorkerRuntime({
+    isPackaged: app.isPackaged,
+    bunPath: getSystemBunPath() ?? getVendorBunPath() ?? undefined,
+  })
 }
 
 function parseBridgeRequest(line: string): RustBridgeRequest | undefined {
@@ -222,7 +236,9 @@ function spawnManagedProcess(
   options: HttpApiServerOptions,
   bridgeEnabled: boolean,
 ): ManagedProcess | undefined {
-  const workerPath = resolvePiRpcWorkerPath()
+  const workerLaunch = resolvePiRpcWorkerLaunch(options)
+  const workerRuntime = resolvePiRpcWorkerRuntime(workerLaunch)
+  const useDevelopmentScriptRuntime = workerLaunch?.kind === 'script' && !app.isPackaged
   const spawnImpl = options.spawnImpl ?? ((file, args, spawnOptions) => (
     spawn(file, args, spawnOptions) as ChildProcessWithoutNullStreams
   ))
@@ -240,8 +256,22 @@ function spawnManagedProcess(
         COPIS_MEMORY_DIR: join(getConfigDir(), 'memory'),
         COPIS_HTTP_API_INTERNAL_TOKEN: internalToken,
         COPIS_WORKING_ACCESS_TOKEN: getWorkingTokenStore().getToken() ?? '',
-        COPIS_PI_RPC_RUNTIME: process.execPath,
-        ...(workerPath ? { COPIS_PI_RPC_WORKER: workerPath } : {}),
+        ...(app.isPackaged ? { COPIS_PI_RPC_COMPILED_RUNTIME: '1' } : {}),
+        ...(useDevelopmentScriptRuntime
+          ? {
+            COPIS_PI_RPC_USE_SYSTEM_RUNTIME: '1',
+            ...(workerRuntime ? { COPIS_PI_RPC_RUNTIME: workerRuntime.path } : {}),
+          }
+          : {}),
+        ...(workerLaunch?.kind === 'executable'
+          ? {
+            COPIS_PI_RPC_EXECUTABLE: workerLaunch.path,
+            COPIS_CLI: workerLaunch.path,
+          }
+          : {}),
+        ...(workerLaunch?.kind === 'script'
+          ? { COPIS_PI_RPC_WORKER: workerLaunch.path }
+          : {}),
       },
     })
   } catch (error) {
@@ -395,9 +425,11 @@ export function startHttpApiServer(options: HttpApiServerOptions = {}): void {
     return
   }
 
-  const workerPath = resolvePiRpcWorkerPath()
-  if (!workerPath) {
-    console.warn('[HTTP API] 找不到 Pi RPC worker，将暂时只提供非 Agent HTTP API。请先运行 bun run build:agent-rpc-worker。')
+  const workerLaunch = resolvePiRpcWorkerLaunch(options)
+  if (!workerLaunch) {
+    console.warn('[HTTP API] 找不到 Pi RPC Worker，将暂时只提供非 Agent HTTP API。请重新构建 Copis 运行时。')
+  } else if (workerLaunch.kind === 'script' && !app.isPackaged && !resolvePiRpcWorkerRuntime(workerLaunch)) {
+    console.warn('[HTTP API] 开发模式找不到 Bun runtime，Agent Worker 暂不可用。请先安装 Bun 或配置 vendor/bun。')
   }
 
   stopping = false
@@ -406,7 +438,7 @@ export function startHttpApiServer(options: HttpApiServerOptions = {}): void {
   if (!managed) return
   httpApiProcess = managed.child
   httpApiInternalToken = managed.internalToken
-  console.log(`[HTTP API] Rust 服务已启动：http://${HTTP_API_HOST}:${options.port ?? HTTP_API_PORT}${workerPath ? `，Pi worker: ${workerPath}` : ''}`)
+  console.log(`[HTTP API] Rust 服务已启动：http://${HTTP_API_HOST}:${options.port ?? HTTP_API_PORT}${workerLaunch ? `，Pi Worker: ${workerLaunch.path}` : ''}`)
 }
 
 export async function updateHttpApiServer(options: HttpApiServerOptions = {}): Promise<boolean> {

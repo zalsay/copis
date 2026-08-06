@@ -32,7 +32,7 @@ import { findAllGitRoots, normalizeGitRoot } from './git-diff-service'
 import { listBuiltinMcpServers } from './builtin-mcp/catalog'
 import { RESERVED_BUILTIN_KEYS } from './builtin-mcp/baseline'
 import { inferMcpTransportType, normalizeMcpTransportType, normalizeOptionalMemoryPolicy } from '@copis/shared'
-import type { AgentWorkspace, CreateAgentWorkspaceInput, LocalProjectRootStatus, MemoryPolicy, WorkspaceMcpConfig, SkillMeta, SkillImportSource, SkillMarketSource, OtherWorkspaceSkillsGroup, WorkspaceCapabilities, SkillFileNode, SkillFileContent } from '@copis/shared'
+import type { AgentWorkspace, CreateAgentWorkspaceInput, LocalProjectRootStatus, MemoryPolicy, UpdateAgentWorkspaceInput, WorkspaceMcpConfig, SkillMeta, SkillImportSource, SkillMarketSource, OtherWorkspaceSkillsGroup, WorkspaceCapabilities, SkillFileNode, SkillFileContent } from '@copis/shared'
 import { filterAttachedPaths, requireAttachedPath } from './attached-paths'
 
 interface AgentWorkspacesIndex {
@@ -402,7 +402,7 @@ export function createAgentWorkspace(input: string | CreateAgentWorkspaceInput):
 /** 更新工作区名称（slug 和目录不变） */
 export function updateAgentWorkspace(
   id: string,
-  updates: { name?: string; memoryPolicy?: MemoryPolicy },
+  updates: UpdateAgentWorkspaceInput,
 ): AgentWorkspace {
   const index = readIndex()
   const idx = index.workspaces.findIndex((w) => w.id === id)
@@ -423,10 +423,11 @@ export function updateAgentWorkspace(
     throw new Error(`项目名称「${name}」已存在`)
   }
 
+  const { memoryPolicy: _existingMemoryPolicy, ...existingWithoutMemoryPolicy } = existing
   const updated: AgentWorkspace = {
-    ...existing,
+    ...existingWithoutMemoryPolicy,
     name,
-    ...(updates.memoryPolicy !== undefined ? { memoryPolicy: updates.memoryPolicy } : {}),
+    ...(updates.memoryPolicy !== undefined && updates.memoryPolicy !== null ? { memoryPolicy: updates.memoryPolicy } : {}),
     updatedAt: Date.now(),
   }
 

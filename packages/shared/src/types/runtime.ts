@@ -383,6 +383,8 @@ export const IPC_CHANNELS = {
   WRITE_CLIPBOARD_TEXT: 'clipboard:write-text',
   /** 截图导出：将 HTML 渲染为 PNG 图片 */
   SCREENSHOT_CAPTURE: 'screenshot:capture',
+  /** 获取内置教程内容 */
+  GET_TUTORIAL_CONTENT: 'tutorial:get-content',
 } as const
 
 /**

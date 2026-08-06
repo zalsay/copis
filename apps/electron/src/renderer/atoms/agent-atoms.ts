@@ -268,6 +268,8 @@ export interface AgentPendingPrompt {
   additionalDirectories?: string[]
   /** 自动发送时注入的 Todo 引用，确保 Agent 读取最新记录而非仅依赖提示文本。 */
   mentionedTodoIds?: string[]
+  /** 自动发送时注入的父 Agent 会话引用。 */
+  mentionedSessionIds?: string[]
 }
 
 // ===== Atoms =====
@@ -413,10 +415,16 @@ export const agentFileSourceFilterMapAtom = atomWithStorage<Record<string, Agent
 /** @deprecated 保留以兼容旧代码，但实际所有 session 都读全局 atom */
 export const agentSidePanelOpenMapAtom = atom<Map<string, boolean>>(new Map())
 
-export type AgentSidePanelTab = 'files' | 'changes' | 'chat'
+export type AgentSidePanelTab = 'files' | 'changes' | 'qa'
 
-/** 侧面板当前 Tab：Files / 文件改动 / Chat（per-session Map） */
+/** 侧面板当前 Tab：Files / 文件改动 / Agent 问答（per-session Map）。 */
 export const agentDiffPanelTabAtom = atom<Map<string, AgentSidePanelTab>>(new Map())
+
+/** 父 Agent 到归档问答子会话的映射。 */
+export const agentSideQuestionSessionMapAtom = atom<Map<string, string>>(new Map())
+
+/** 需要通过 mentionedSessionIds 引用父 Agent 历史的问答子会话。 */
+export const agentSideQuestionReferenceMapAtom = atom<Map<string, string>>(new Map())
 
 /** Diff 视图模式：'split' | 'unified'，默认使用统一预览 */
 export const agentDiffViewModeAtom = atom<'split' | 'unified'>('unified')

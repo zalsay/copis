@@ -18,6 +18,40 @@ afterEach(() => {
 })
 
 describe('Memory API client 边界', () => {
+  test('Given导出选项 When调用 export Then以 typed JSON body 请求 Memory export 路由', async () => {
+    let requestUrl = ''
+    let requestBody: unknown
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      requestUrl = String(input)
+      requestBody = JSON.parse(String(init?.body)) as unknown
+      return Response.json({
+        fileName: 'copis-memory-project-a.md',
+        mimeType: 'text/markdown',
+        content: '# Copis Memory Export',
+        entryCount: 2,
+        revisionCount: 0,
+      })
+    }) as unknown as typeof fetch
+
+    const response = await memoryApiClient.export({
+      scope: 'current-workspace',
+      workspaceSlug: 'project/a',
+      format: 'markdown',
+      includeArchived: true,
+      includeHistory: false,
+    })
+
+    expect(requestUrl).toContain('/api/memory/export')
+    expect(requestBody).toEqual({
+      scope: 'current-workspace',
+      workspaceSlug: 'project/a',
+      format: 'markdown',
+      includeArchived: true,
+      includeHistory: false,
+    })
+    expect(response.mimeType).toBe('text/markdown')
+  })
+
   test('Given workspaceSlug 含特殊字符 When请求 context Then使用 JSON body 且不拼接 SQL/path', async () => {
     let requestUrl = ''
     let requestBody: unknown

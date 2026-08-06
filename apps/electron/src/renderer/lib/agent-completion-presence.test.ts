@@ -23,12 +23,12 @@ describe('Agent 完成归属判断', () => {
 
   test('Given 当前激活的是其他会话 When 旧 Agent 完成 Then 视为后台完成', () => {
     const tabs: TabItem[] = [
-      { id: 'chat-1', type: 'chat', sessionId: 'chat-1', title: '其他会话' },
+      { id: 'agent-2', type: 'agent', sessionId: 'agent-2', title: '其他会话' },
       { id: 'agent-1', type: 'agent', sessionId: 'agent-1', title: '后台任务' },
     ]
     const input = {
       tabs,
-      activeTabId: 'chat-1',
+      activeTabId: 'agent-2',
       currentAgentSessionId: 'agent-1',
       sessionId: 'agent-1',
       documentHasFocus: true,

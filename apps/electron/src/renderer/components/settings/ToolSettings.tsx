@@ -1,7 +1,7 @@
 /**
  * ToolSettings - 工具设置页
  *
- * Chat 模式工具统一管理 tab。
+ * Agent 工具统一管理 tab。
  * 联网搜索、图片生成和自定义工具配置。
  */
 
@@ -13,13 +13,13 @@ import { Button } from '@/components/ui/button'
 import { Switch } from '@/components/ui/switch'
 import { Input } from '@/components/ui/input'
 import { SettingsSection, SettingsCard } from './primitives'
-import { chatToolsAtom } from '@/atoms/chat-tool-atoms'
+import { agentToolsAtom } from '@/atoms/agent-tool-atoms'
 import { toolSettingsFocusAtom, type ToolSettingsFocus } from '@/atoms/settings-tab'
 
 /** 刷新全局工具列表 atom */
-async function refreshChatTools(setter: (tools: Awaited<ReturnType<typeof window.electronAPI.getChatTools>>) => void): Promise<void> {
+async function refreshAgentTools(setter: (tools: Awaited<ReturnType<typeof window.electronAPI.getAgentTools>>) => void): Promise<void> {
   try {
-    const tools = await window.electronAPI.getChatTools()
+    const tools = await window.electronAPI.getAgentTools()
     setter(tools)
   } catch (err) {
     console.error('[ToolSettings] 刷新工具列表失败:', err)
@@ -34,7 +34,7 @@ function WebSearchSettings(): React.ReactElement {
   const [loading, setLoading] = React.useState(true)
   const [testing, setTesting] = React.useState(false)
   const [testResult, setTestResult] = React.useState<{ success: boolean; message: string } | null>(null)
-  const setChatTools = useSetAtom(chatToolsAtom)
+  const setAgentTools = useSetAtom(agentToolsAtom)
 
   // 已保存的 API Key（用于判断是否有变更）
   const savedApiKeyRef = React.useRef('')
@@ -42,8 +42,8 @@ function WebSearchSettings(): React.ReactElement {
   // 从主进程加载当前配置 + 凭据
   React.useEffect(() => {
     Promise.all([
-      window.electronAPI.getChatTools(),
-      window.electronAPI.getChatToolCredentials('web-search'),
+      window.electronAPI.getAgentTools(),
+      window.electronAPI.getAgentToolCredentials('web-search'),
     ]).then(([tools, credentials]) => {
       const searchTool = tools.find((t) => t.meta.id === 'web-search')
       if (searchTool) {
@@ -65,21 +65,21 @@ function WebSearchSettings(): React.ReactElement {
     const trimmed = apiKey.trim()
     if (trimmed === savedApiKeyRef.current) return
     try {
-      await window.electronAPI.updateChatToolCredentials('web-search', { apiKey: trimmed })
+      await window.electronAPI.updateAgentToolCredentials('web-search', { apiKey: trimmed })
       savedApiKeyRef.current = trimmed
       // 刷新全局工具列表（available 状态可能变化）
-      await refreshChatTools(setChatTools)
+      await refreshAgentTools(setAgentTools)
       toast.success('联网搜索设置已保存')
     } catch (error) {
       console.error('[联网搜索设置] 保存失败:', error)
     }
-  }, [apiKey, setChatTools])
+  }, [apiKey, setAgentTools])
 
   const handleToggle = async (checked: boolean): Promise<void> => {
     try {
-      await window.electronAPI.updateChatToolState('web-search', { enabled: checked })
+      await window.electronAPI.updateAgentToolState('web-search', { enabled: checked })
       setEnabled(checked)
-      await refreshChatTools(setChatTools)
+      await refreshAgentTools(setAgentTools)
     } catch (error) {
       console.error('[联网搜索设置] 切换失败:', error)
     }
@@ -90,9 +90,9 @@ function WebSearchSettings(): React.ReactElement {
     const trimmed = apiKey.trim()
     if (trimmed !== savedApiKeyRef.current) {
       try {
-        await window.electronAPI.updateChatToolCredentials('web-search', { apiKey: trimmed })
+        await window.electronAPI.updateAgentToolCredentials('web-search', { apiKey: trimmed })
         savedApiKeyRef.current = trimmed
-        await refreshChatTools(setChatTools)
+        await refreshAgentTools(setAgentTools)
       } catch (error) {
         console.error('[联网搜索设置] 保存失败:', error)
       }
@@ -101,7 +101,7 @@ function WebSearchSettings(): React.ReactElement {
     setTesting(true)
     setTestResult(null)
     try {
-      const result = await window.electronAPI.testChatTool('web-search')
+      const result = await window.electronAPI.testAgentTool('web-search')
       setTestResult(result)
     } catch (error) {
       setTestResult({ success: false, message: error instanceof Error ? error.message : String(error) })
@@ -204,14 +204,14 @@ function NanoBananaSettings(): React.ReactElement {
   const [loading, setLoading] = React.useState(true)
   const [testing, setTesting] = React.useState(false)
   const [testResult, setTestResult] = React.useState<{ success: boolean; message: string } | null>(null)
-  const setChatTools = useSetAtom(chatToolsAtom)
+  const setAgentTools = useSetAtom(agentToolsAtom)
 
   const savedCredentialsRef = React.useRef({ apiKey: '', baseUrl: '', model: '' })
 
   React.useEffect(() => {
     Promise.all([
-      window.electronAPI.getChatTools(),
-      window.electronAPI.getChatToolCredentials('nano-banana'),
+      window.electronAPI.getAgentTools(),
+      window.electronAPI.getAgentToolCredentials('nano-banana'),
     ]).then(([tools, credentials]) => {
       const tool = tools.find((t) => t.meta.id === 'nano-banana')
       if (tool) setEnabled(tool.enabled)
@@ -236,20 +236,20 @@ function NanoBananaSettings(): React.ReactElement {
     const saved = savedCredentialsRef.current
     if (current.apiKey === saved.apiKey && current.baseUrl === saved.baseUrl && current.model === saved.model) return
     try {
-      await window.electronAPI.updateChatToolCredentials('nano-banana', current)
+      await window.electronAPI.updateAgentToolCredentials('nano-banana', current)
       savedCredentialsRef.current = current
-      await refreshChatTools(setChatTools)
+      await refreshAgentTools(setAgentTools)
       toast.success('Nano Banana 设置已保存')
     } catch (error) {
       console.error('[Nano Banana 设置] 保存失败:', error)
     }
-  }, [apiKey, baseUrl, model, setChatTools])
+  }, [apiKey, baseUrl, model, setAgentTools])
 
   const handleToggle = async (checked: boolean): Promise<void> => {
     try {
-      await window.electronAPI.updateChatToolState('nano-banana', { enabled: checked })
+      await window.electronAPI.updateAgentToolState('nano-banana', { enabled: checked })
       setEnabled(checked)
-      await refreshChatTools(setChatTools)
+      await refreshAgentTools(setAgentTools)
     } catch (error) {
       console.error('[Nano Banana 设置] 切换失败:', error)
     }
@@ -261,9 +261,9 @@ function NanoBananaSettings(): React.ReactElement {
     const saved = savedCredentialsRef.current
     if (current.apiKey !== saved.apiKey || current.baseUrl !== saved.baseUrl || current.model !== saved.model) {
       try {
-        await window.electronAPI.updateChatToolCredentials('nano-banana', current)
+        await window.electronAPI.updateAgentToolCredentials('nano-banana', current)
         savedCredentialsRef.current = current
-        await refreshChatTools(setChatTools)
+        await refreshAgentTools(setAgentTools)
       } catch (error) {
         console.error('[Nano Banana 设置] 保存失败:', error)
       }
@@ -272,7 +272,7 @@ function NanoBananaSettings(): React.ReactElement {
     setTesting(true)
     setTestResult(null)
     try {
-      const result = await window.electronAPI.testChatTool('nano-banana')
+      const result = await window.electronAPI.testAgentTool('nano-banana')
       setTestResult(result)
     } catch (error) {
       setTestResult({ success: false, message: error instanceof Error ? error.message : String(error) })
@@ -391,16 +391,16 @@ function NanoBananaSettings(): React.ReactElement {
 
 /** 自定义工具列表区域 */
 function CustomToolsSection(): React.ReactElement | null {
-  const tools = useAtomValue(chatToolsAtom)
-  const setChatTools = useSetAtom(chatToolsAtom)
+  const tools = useAtomValue(agentToolsAtom)
+  const setAgentTools = useSetAtom(agentToolsAtom)
 
   const customTools = tools.filter((t) => t.meta.category === 'custom')
   if (customTools.length === 0) return null
 
   const handleToggle = async (toolId: string, checked: boolean): Promise<void> => {
     try {
-      await window.electronAPI.updateChatToolState(toolId, { enabled: checked })
-      await refreshChatTools(setChatTools)
+      await window.electronAPI.updateAgentToolState(toolId, { enabled: checked })
+      await refreshAgentTools(setAgentTools)
     } catch (error) {
       console.error('[自定义工具] 切换失败:', error)
     }
@@ -408,8 +408,8 @@ function CustomToolsSection(): React.ReactElement | null {
 
   const handleDelete = async (toolId: string, toolName: string): Promise<void> => {
     try {
-      await window.electronAPI.deleteCustomChatTool(toolId)
-      await refreshChatTools(setChatTools)
+      await window.electronAPI.deleteCustomAgentTool(toolId)
+      await refreshAgentTools(setAgentTools)
       toast.success(`已删除工具: ${toolName}`)
     } catch (error) {
       console.error('[自定义工具] 删除失败:', error)

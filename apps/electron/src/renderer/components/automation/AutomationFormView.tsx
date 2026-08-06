@@ -25,7 +25,7 @@ import {
 } from '@/components/ui/select'
 import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip'
 import { Popover, PopoverTrigger, PopoverContent } from '@/components/ui/popover'
-import { ModelSelector } from '@/components/chat/ModelSelector'
+import { ModelSelector } from '@/components/model/ModelSelector'
 import {
   automationFormAtom,
   automationsAtom,

@@ -5,7 +5,7 @@
  * - 手动触发搜索（点击搜索按钮 / 在输入框按 Enter）
  * - 标题匹配 + 消息内容匹配统一渲染，匹配文字高亮
  * - 键盘导航（上下箭头选择 + Enter 打开结果 + Esc 关闭）
- * - 同时搜索 Chat 和 Agent 模式
+ * - 只搜索 Agent 会话标题和消息内容
  *
  * 为什么手动触发：随着用户历史对话变多，自动搜索每次按键都会扫描全量 JSONL，
  * 主进程被 IO 阻塞导致整体卡顿。改成手动触发后只在用户确认意图时执行一次。
@@ -17,11 +17,11 @@
 
 import * as React from 'react'
 import { useAtom, useAtomValue, useSetAtom } from 'jotai'
-import { Search, X, MessageSquare, Bot, Archive, Loader2 } from 'lucide-react'
+import { Search, X, Bot, Archive, Loader2 } from 'lucide-react'
 import { Dialog, DialogContent, DialogPortal, DialogTitle } from '@/components/ui/dialog'
 import { cn } from '@/lib/utils'
 import { searchDialogOpenAtom } from '@/atoms/search-atoms'
-import { conversationsAtom, channelsAtom } from '@/atoms/chat-atoms'
+import { channelsAtom } from '@/atoms/model-atoms'
 import {
   agentSessionsAtom,
   agentWorkspacesAtom,
@@ -36,16 +36,13 @@ import {
   SessionMiniMapPopover,
   useSessionMiniMapHover,
 } from '@/components/session-preview/SessionMiniMapPopover'
-import type {
-  MessageSearchResult,
-  AgentMessageSearchResult,
-} from '@copis/shared'
+import type { AgentMessageSearchResult } from '@copis/shared'
 
 /** 标题搜索结果项 */
 interface TitleResult {
   id: string
   title: string
-  type: 'chat' | 'agent'
+  type: 'agent'
   archived?: boolean
   updatedAt: number
 }
@@ -54,7 +51,7 @@ interface TitleResult {
 interface ContentResult {
   id: string
   title: string
-  type: 'chat' | 'agent'
+  type: 'agent'
   messageId: string
   snippet: string
   matchStart: number
@@ -120,11 +117,8 @@ function HighlightSnippet({ snippet, matchStart, matchLength }: {
 }
 
 function SearchResultIcon({ result }: { result: SearchResult }): React.ReactElement {
-  return result.type === 'chat' ? (
-    <MessageSquare size={14} className="flex-shrink-0 text-foreground/40" />
-  ) : (
-    <Bot size={14} className="flex-shrink-0 text-blue-500/70" />
-  )
+  void result
+  return <Bot size={14} className="flex-shrink-0 text-blue-500/70" />
 }
 
 interface SearchResultRowProps {
@@ -215,7 +209,6 @@ function SearchResultRow({
 
 export function SearchDialog(): React.ReactElement {
   const [open, setOpen] = useAtom(searchDialogOpenAtom)
-  const conversations = useAtomValue(conversationsAtom)
   const agentSessions = useAtomValue(agentSessionsAtom)
   const sessionHoverPreviewEnabled = useAtomValue(sessionHoverPreviewEnabledAtom)
   const agentWorkspaces = useAtomValue(agentWorkspacesAtom)
@@ -278,7 +271,7 @@ export function SearchDialog(): React.ReactElement {
   }, [])
 
   /**
-   * 执行一次搜索：标题前端过滤 + 内容主进程 IPC 并行调用。
+   * 执行一次搜索：标题前端过滤 + Agent 内容主进程 IPC。
    *
    * 通过 token 隔离多次手动触发——若用户在搜索进行中再次触发，旧 token 的结果会被丢弃。
    */
@@ -299,39 +292,19 @@ export function SearchDialog(): React.ReactElement {
     setSelectedIndex(0)
 
     const qLower = q.toLowerCase()
-    const titles: TitleResult[] = [
-      ...conversations
-        .filter((c) => c.title.toLowerCase().includes(qLower))
-        .map((c) => ({ id: c.id, title: c.title, type: 'chat' as const, archived: c.archived, updatedAt: c.updatedAt })),
-      ...agentSessions
-        .filter((s) => s.title.toLowerCase().includes(qLower))
-        .map((s) => ({ id: s.id, title: s.title, type: 'agent' as const, archived: s.archived, updatedAt: s.updatedAt })),
-    ]
+    const titles: TitleResult[] = agentSessions
+      .filter((s) => s.title.toLowerCase().includes(qLower))
+      .map((s) => ({ id: s.id, title: s.title, type: 'agent' as const, archived: s.archived, updatedAt: s.updatedAt }))
       .sort((a, b) => b.updatedAt - a.updatedAt)
       .slice(0, 20)
 
     setTitleResults(titles)
 
     try {
-      const [chatResults, agentResults] = await Promise.all([
-        window.electronAPI.searchConversationMessages(q),
-        window.electronAPI.searchAgentSessionMessages(q),
-      ])
+      const agentResults = await window.electronAPI.searchAgentSessionMessages(q)
       if (token !== searchTokenRef.current) return
 
       const titleIds = new Set(titles.map((t) => t.id))
-      const chatContent: ContentResult[] = (chatResults as MessageSearchResult[])
-        .filter((r) => !titleIds.has(r.conversationId))
-        .map((r) => ({
-          id: r.conversationId,
-          title: r.conversationTitle,
-          type: 'chat' as const,
-          messageId: r.messageId,
-          snippet: r.snippet,
-          matchStart: r.matchStart,
-          matchLength: r.matchLength,
-          archived: r.archived,
-        }))
       const agentContent: ContentResult[] = (agentResults as AgentMessageSearchResult[])
         .filter((r) => !titleIds.has(r.sessionId))
         .map((r) => ({
@@ -345,14 +318,14 @@ export function SearchDialog(): React.ReactElement {
           archived: r.archived,
         }))
 
-      setContentResults([...chatContent, ...agentContent])
+      setContentResults(agentContent)
     } catch (error) {
       console.error('[搜索] 内容搜索失败:', error)
       if (token === searchTokenRef.current) setContentResults([])
     } finally {
       if (token === searchTokenRef.current) setLoading(false)
     }
-  }, [query, conversations, agentSessions])
+  }, [query, agentSessions])
 
   const handleAgentSearch = React.useCallback(async () => {
     const q = query.trim()
@@ -364,13 +337,11 @@ export function SearchDialog(): React.ReactElement {
     const channelId = deepseekChannel?.id ?? currentAgentChannelId ?? undefined
 
     const configDir = import.meta.env.DEV ? '.copis-dev' : '.copis'
-    const prompt = `请帮我在 Copis 的全部会话历史中搜索与以下描述相关的内容：
+    const prompt = `请帮我在 Copis 的 Agent 会话历史中搜索与以下描述相关的内容：
 
 "${q}"
 
-搜索范围：
-- Chat 会话消息文件：~/${configDir}/conversations/ 目录下所有 .jsonl 文件
-- Agent 会话消息文件：~/${configDir}/agent-sessions/ 目录下所有 .jsonl 文件
+搜索范围：~/${configDir}/agent-sessions/ 目录下所有 .jsonl 文件
 
 要求：
 1. 理解用户描述的语义，不要求关键词完全匹配，根据内容相关性判断
@@ -396,16 +367,10 @@ export function SearchDialog(): React.ReactElement {
     setOpen(false)
     setActiveView('conversations')
 
-    if (result.type === 'chat') {
-      const conv = conversations.find((c) => c.id === result.id)
-      const title = conv?.title ?? result.title
-      openSession('chat', result.id, title)
-    } else {
-      const session = agentSessions.find((s) => s.id === result.id)
-      const title = session?.title ?? result.title
-      openSession('agent', result.id, title)
-    }
-  }, [setOpen, setActiveView, openSession, conversations, agentSessions])
+    const session = agentSessions.find((s) => s.id === result.id)
+    const title = session?.title ?? result.title
+    openSession('agent', result.id, title)
+  }, [setOpen, setActiveView, openSession, agentSessions])
 
   /**
    * Enter 键语义：

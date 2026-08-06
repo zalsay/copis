@@ -2,15 +2,11 @@
  * Tab Atoms — 当前工作区入口状态管理
  *
  * 顶部只保留当前会话入口；会话恢复与导航交给左侧列表。
- * 通过桥接 atom 与现有 currentConversationIdAtom / currentAgentSessionIdAtom 同步，
- * 确保所有现有派生 atoms 无需修改。
+ * 顶部标签只承载 Agent 会话、预览和静态教程。
  */
 
 import { atom } from 'jotai'
 import { atomWithStorage } from 'jotai/utils'
-import {
-  streamingConversationIdsAtom,
-} from './chat-atoms'
 import {
   agentRunningSessionIdsAtom,
   agentSessionIndicatorMapAtom,
@@ -22,7 +18,7 @@ import type { PreviewFile } from './preview-atoms'
 // ===== 类型定义 =====
 
 /** 标签页类型（Settings 不作为 Tab，保留独立视图） */
-export type TabType = 'chat' | 'agent' | 'preview' | 'tutorial'
+export type TabType = 'agent' | 'preview' | 'tutorial'
 
 /** 旧版本 Scratch Tab 的固定 ID，仅用于过滤历史持久化状态。 */
 const LEGACY_SCRATCH_PAD_ID = '__scratch-pad__'
@@ -40,7 +36,7 @@ export interface TabItem {
   id: string
   /** 标签页类型 */
   type: TabType
-  /** Chat conversationId 或 Agent sessionId */
+  /** Agent sessionId 或预览/教程的固定 ID */
   sessionId: string
   /** 标签页显示标题 */
   title: string
@@ -132,30 +128,24 @@ export const activeSessionIdAtom = atom<string | null>((get) => {
 /** 标签是否在流式输出中（派生，从现有流式 atoms 计算） */
 export const tabStreamingMapAtom = atom<Map<string, boolean>>((get) => {
   const tabs = get(tabsAtom)
-  const chatStreaming = get(streamingConversationIdsAtom)
   const agentRunning = get(agentRunningSessionIdsAtom)
   const map = new Map<string, boolean>()
   for (const tab of tabs) {
-    if (tab.type === 'chat') {
-      map.set(tab.id, chatStreaming.has(tab.sessionId))
-    } else if (tab.type === 'agent') {
+    if (tab.type === 'agent') {
       map.set(tab.id, agentRunning.has(tab.sessionId))
     }
   }
   return map
 })
 
-/** 标签页指示点状态（chat 用 running/idle，agent 用完整 SessionIndicatorStatus） */
+/** 标签页指示点状态（Agent 使用完整 SessionIndicatorStatus）。 */
 export const tabIndicatorMapAtom = atom<Map<string, SessionIndicatorStatus>>((get) => {
   const tabs = get(tabsAtom)
-  const chatStreaming = get(streamingConversationIdsAtom)
   const agentIndicator = get(agentSessionIndicatorMapAtom)
   const unviewedCompletedIds = get(unviewedCompletedSessionIdsAtom)
   const map = new Map<string, SessionIndicatorStatus>()
   for (const tab of tabs) {
-    if (tab.type === 'chat') {
-      map.set(tab.id, chatStreaming.has(tab.sessionId) ? 'running' : 'idle')
-    } else if (tab.type === 'agent') {
+    if (tab.type === 'agent') {
       const status = agentIndicator.get(tab.sessionId)
         ?? (unviewedCompletedIds.has(tab.sessionId) ? 'completed' : 'idle')
       map.set(tab.id, status)
@@ -183,11 +173,29 @@ export function isPreviewTab(tab: TabItem): boolean {
 }
 
 function isSessionTab(tab: TabItem): boolean {
-  return tab.type === 'chat' || tab.type === 'agent'
+  return tab.type === 'agent'
 }
 
 function getPersistentTabs(tabs: TabItem[]): TabItem[] {
   return tabs.filter((tab) => tab.id !== LEGACY_SCRATCH_PAD_ID && tab.id !== TUTORIAL_TAB_ID && !isPreviewTab(tab))
+}
+
+function isPersistedAgentTab(value: unknown): value is TabItem {
+  if (typeof value !== 'object' || value === null) return false
+  const candidate = value as Record<string, unknown>
+  return candidate.type === 'agent'
+    && typeof candidate.id === 'string'
+    && typeof candidate.sessionId === 'string'
+    && typeof candidate.title === 'string'
+}
+
+/** 从旧 settings.json 中解析并过滤 Agent Tab，拒绝 Chat/preview 等历史入口。 */
+export function sanitizePersistedTabs(
+  value: unknown,
+  validSessionIds: ReadonlySet<string>,
+): TabItem[] {
+  if (!Array.isArray(value)) return []
+  return value.filter(isPersistedAgentTab).filter((tab) => validSessionIds.has(tab.sessionId))
 }
 
 export function getPersistableTabState(

@@ -124,7 +124,10 @@ export function getSystemBunPath(): string | null {
       timeout: 5000,
     })
 
-    const bunPath = result.trim().split('\n')[0]
+    const bunPath = result
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .find((line) => line.length > 0)
 
     if (bunPath && existsSync(bunPath)) {
       return bunPath

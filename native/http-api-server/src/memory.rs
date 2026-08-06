@@ -1,5 +1,6 @@
 use rusqlite::{params, params_from_iter, types::Value, Connection, OptionalExtension, Row, Transaction, TransactionBehavior};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::fmt;
 use std::fs;
 use std::path::Path;
@@ -140,6 +141,43 @@ pub struct MemoryRevision {
     pub created_at: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub author: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum MemoryExportScope {
+    CurrentWorkspace,
+    AllWorkspaces,
+    User,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum MemoryExportFormat {
+    Json,
+    Markdown,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MemoryExportInput {
+    pub scope: MemoryExportScope,
+    pub workspace_slug: Option<String>,
+    #[serde(default)]
+    pub workspace_names: Option<BTreeMap<String, String>>,
+    pub format: MemoryExportFormat,
+    pub include_archived: bool,
+    pub include_history: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MemoryExportResponse {
+    pub file_name: String,
+    pub mime_type: String,
+    pub content: String,
+    pub entry_count: usize,
+    pub revision_count: usize,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -535,6 +573,124 @@ impl MemoryStore {
             total,
             limit,
         })
+    }
+
+    pub fn export(&self, input: MemoryExportInput) -> Result<MemoryExportResponse, MemoryError> {
+        let workspace_names = input.workspace_names.as_ref();
+        let workspace_slug = match input.scope {
+            MemoryExportScope::CurrentWorkspace => normalize_workspace_slug(input.workspace_slug)?
+                .ok_or_else(|| MemoryError::Validation("workspaceSlug 参数不正确".to_string()))?,
+            MemoryExportScope::AllWorkspaces | MemoryExportScope::User => {
+                if let Some(value) = input.workspace_slug {
+                    normalize_workspace_slug(Some(value))?;
+                }
+                String::new()
+            }
+        };
+
+        let entries = self.export_entries(
+            input.scope,
+            (!workspace_slug.is_empty()).then_some(workspace_slug.as_str()),
+            input.include_archived,
+        )?;
+        let revisions = if input.include_history {
+            self.export_revisions(&entries)?
+        } else {
+            Vec::new()
+        };
+        let exported_at = now_millis();
+        let (content, mime_type, extension) = match input.format {
+            MemoryExportFormat::Json => (
+                serde_json::to_string_pretty(&serde_json::json!({
+                    "schemaVersion": 1,
+                    "exportedAt": exported_at,
+                    "scope": input.scope,
+                    "workspaceSlug": (!workspace_slug.is_empty()).then_some(workspace_slug.as_str()),
+                    "entries": entries,
+                    "revisions": revisions,
+                }))
+                .map_err(storage_error)?,
+                "application/json",
+                "json",
+            ),
+            MemoryExportFormat::Markdown => (
+                render_markdown_export(
+                    input.scope,
+                    (!workspace_slug.is_empty()).then_some(workspace_slug.as_str()),
+                    workspace_names,
+                    &entries,
+                    &revisions,
+                ),
+                "text/markdown",
+                "md",
+            ),
+        };
+
+        Ok(MemoryExportResponse {
+            file_name: export_file_name(
+                input.scope,
+                (!workspace_slug.is_empty()).then_some(workspace_slug.as_str()),
+                extension,
+            ),
+            mime_type: mime_type.to_string(),
+            content,
+            entry_count: entries.len(),
+            revision_count: revisions.len(),
+        })
+    }
+
+    fn export_entries(
+        &self,
+        scope: MemoryExportScope,
+        workspace_slug: Option<&str>,
+        include_archived: bool,
+    ) -> Result<Vec<MemoryEntry>, MemoryError> {
+        let connection = self.lock_connection()?;
+        let mut sql = format!("SELECT {} FROM memory_entries WHERE ", ENTRY_COLUMNS);
+        let mut values = Vec::<Value>::new();
+        match scope {
+            MemoryExportScope::CurrentWorkspace => {
+                let workspace_slug = workspace_slug.ok_or_else(|| {
+                    MemoryError::Validation("workspaceSlug 参数不正确".to_string())
+                })?;
+                sql.push_str("(scope = 'user' OR (scope = 'workspace' AND workspace_slug = ?))");
+                values.push(Value::Text(workspace_slug.to_string()));
+            }
+            MemoryExportScope::AllWorkspaces => sql.push_str("1 = 1"),
+            MemoryExportScope::User => sql.push_str("scope = 'user'"),
+        }
+        if !include_archived {
+            sql.push_str(" AND archived = 0");
+        }
+        sql.push_str(
+            " ORDER BY CASE WHEN scope = 'user' THEN 0 ELSE 1 END,
+                      workspace_slug ASC, kind ASC, updated_at DESC, id DESC",
+        );
+        let mut statement = connection.prepare(&sql).map_err(storage_error)?;
+        let rows = statement
+            .query_map(params_from_iter(values), entry_from_row)
+            .map_err(storage_error)?;
+        rows.map(|row| row.map_err(storage_error)).collect()
+    }
+
+    fn export_revisions(&self, entries: &[MemoryEntry]) -> Result<Vec<MemoryRevision>, MemoryError> {
+        let connection = self.lock_connection()?;
+        let mut revisions = Vec::new();
+        let mut statement = connection
+            .prepare(
+                "SELECT memory_id, revision, operation, snapshot_json, author, created_at
+                 FROM memory_revisions WHERE memory_id = ? ORDER BY revision DESC",
+            )
+            .map_err(storage_error)?;
+        for entry in entries {
+            let rows = statement
+                .query_map(params![entry.id], revision_from_row)
+                .map_err(storage_error)?;
+            for row in rows {
+                revisions.push(row.map_err(storage_error)?);
+            }
+        }
+        Ok(revisions)
     }
 
     pub fn recall(
@@ -1650,6 +1806,160 @@ fn to_recall_item(entry: &MemoryEntry) -> MemoryRecallItem {
     }
 }
 
+fn render_markdown_export(
+    scope: MemoryExportScope,
+    workspace_slug: Option<&str>,
+    workspace_names: Option<&BTreeMap<String, String>>,
+    entries: &[MemoryEntry],
+    revisions: &[MemoryRevision],
+) -> String {
+    let mut output = String::from("# Copis Memory Export\n\n");
+    output.push_str(&format!("- 导出范围：{}\n", export_scope_label(scope)));
+    if let Some(workspace_slug) = workspace_slug {
+        output.push_str(&format!(
+            "- 项目：{}\n- 项目标识：{}\n",
+            export_workspace_name(workspace_slug, workspace_names),
+            workspace_slug,
+        ));
+    }
+    output.push_str(&format!("- 条目数量：{}\n- 修订数量：{}\n\n", entries.len(), revisions.len()));
+
+    let active_entries: Vec<&MemoryEntry> = entries.iter().filter(|entry| !entry.archived).collect();
+    let user_entries: Vec<&MemoryEntry> = active_entries
+        .iter()
+        .copied()
+        .filter(|entry| entry.scope == MemoryScope::User)
+        .collect();
+    append_markdown_group(&mut output, "用户记忆", &user_entries);
+
+    let mut projects = BTreeMap::<String, Vec<&MemoryEntry>>::new();
+    for entry in active_entries.iter().copied().filter(|entry| entry.scope == MemoryScope::Workspace) {
+        if let Some(slug) = entry.workspace_slug.as_deref() {
+            projects.entry(slug.to_string()).or_default().push(entry);
+        }
+    }
+    if let Some(workspace_slug) = workspace_slug {
+        projects.entry(workspace_slug.to_string()).or_default();
+    }
+    for (slug, project_entries) in projects {
+        output.push_str(&format!("## 项目：{}\n\n", export_workspace_name(&slug, workspace_names)));
+        append_markdown_entries(&mut output, &project_entries);
+    }
+
+    let archived_entries: Vec<&MemoryEntry> = entries.iter().filter(|entry| entry.archived).collect();
+    if !archived_entries.is_empty() {
+        output.push_str("## 已归档\n\n");
+        for entry in archived_entries {
+            let group = entry
+                .workspace_slug
+                .as_deref()
+                .map(|slug| format!("项目：{}", export_workspace_name(slug, workspace_names)))
+                .unwrap_or_else(|| "用户记忆".to_string());
+            output.push_str(&format!(
+                "### {} · {}\n\n#### {}\n\n{}\n\n",
+                group,
+                memory_kind_label(entry.kind),
+                entry.title,
+                entry.content,
+            ));
+        }
+    }
+
+    if !revisions.is_empty() {
+        output.push_str("## 修订历史\n\n");
+        for revision in revisions {
+            output.push_str(&format!(
+                "- `{}` v{} · {} · {}\n",
+                revision.memory_id,
+                revision.revision,
+                operation_name(revision.operation),
+                revision.created_at,
+            ));
+        }
+        output.push('\n');
+    }
+
+    output
+}
+
+fn export_workspace_name(slug: &str, workspace_names: Option<&BTreeMap<String, String>>) -> String {
+    let candidate = workspace_names
+        .and_then(|names| names.get(slug))
+        .map(|name| normalize_for_display(name))
+        .filter(|name| !name.is_empty());
+    candidate.unwrap_or_else(|| slug.to_string())
+}
+
+fn append_markdown_group(output: &mut String, title: &str, entries: &[&MemoryEntry]) {
+    output.push_str(&format!("## {}\n\n", title));
+    append_markdown_entries(output, entries);
+}
+
+fn append_markdown_entries(output: &mut String, entries: &[&MemoryEntry]) {
+    if entries.is_empty() {
+        output.push_str("_暂无条目。_\n\n");
+        return;
+    }
+
+    let mut by_kind = BTreeMap::<String, Vec<&MemoryEntry>>::new();
+    for entry in entries {
+        by_kind
+            .entry(memory_kind_label(entry.kind).to_string())
+            .or_default()
+            .push(*entry);
+    }
+    for (kind, kind_entries) in by_kind {
+        output.push_str(&format!("### {}\n\n", kind));
+        for entry in kind_entries {
+            output.push_str(&format!("#### {}\n\n{}\n\n", entry.title, entry.content));
+            if !entry.tags.is_empty() {
+                output.push_str(&format!("标签：{}\n\n", entry.tags.join("、")));
+            }
+        }
+    }
+}
+
+fn memory_kind_label(kind: MemoryKind) -> &'static str {
+    match kind {
+        MemoryKind::Fact => "事实",
+        MemoryKind::Preference => "偏好",
+        MemoryKind::Decision => "决策",
+        MemoryKind::Project => "项目",
+        MemoryKind::Scratch => "草稿",
+    }
+}
+
+fn export_scope_label(scope: MemoryExportScope) -> &'static str {
+    match scope {
+        MemoryExportScope::CurrentWorkspace => "当前项目",
+        MemoryExportScope::AllWorkspaces => "全部项目",
+        MemoryExportScope::User => "用户记忆",
+    }
+}
+
+fn export_file_name(scope: MemoryExportScope, workspace_slug: Option<&str>, extension: &str) -> String {
+    let target = match scope {
+        MemoryExportScope::CurrentWorkspace => workspace_slug.unwrap_or("current").to_string(),
+        MemoryExportScope::AllWorkspaces => "all-projects".to_string(),
+        MemoryExportScope::User => "user".to_string(),
+    };
+    format!("copis-memory-{}.{}", sanitize_export_component(&target), extension)
+}
+
+fn sanitize_export_component(value: &str) -> String {
+    let sanitized: String = value
+        .bytes()
+        .map(|byte| {
+            if byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_' {
+                byte as char
+            } else {
+                '-'
+            }
+        })
+        .collect();
+    sanitized.trim_matches('-').to_string()
+}
+
 fn workspace_scope_key(workspace_slug: &str) -> String {
     format!("workspace:{}", workspace_slug)
 }
@@ -2022,5 +2332,74 @@ mod tests {
         let reopened = MemoryStore::open(&directory.0).unwrap();
         assert_eq!(reopened.history("legacy-1", None).unwrap().len(), 1);
         assert_eq!(fs::read_to_string(directory.0.join("entries.json")).unwrap(), before);
+    }
+
+    #[test]
+    fn export_current_workspace_includes_user_and_selected_project_only() {
+        let directory = TestDirectory::new();
+        let store = MemoryStore::open(&directory.0).unwrap();
+        let user = store.capture(user_capture("用户内容")).unwrap();
+        let project_a = store.capture(workspace_capture("project-a", "A 内容")).unwrap();
+        let project_b = store.capture(workspace_capture("project-b", "B 内容")).unwrap();
+        let result = store.export(MemoryExportInput {
+            scope: MemoryExportScope::CurrentWorkspace,
+            workspace_slug: Some("project-a".to_string()),
+            workspace_names: None,
+            format: MemoryExportFormat::Json,
+            include_archived: false,
+            include_history: true,
+        }).unwrap();
+        let json: serde_json::Value = serde_json::from_str(&result.content).unwrap();
+        let ids: Vec<&str> = json["entries"].as_array().unwrap()
+            .iter().map(|entry| entry["id"].as_str().unwrap()).collect();
+        assert!(ids.contains(&user.entry.id.as_str()));
+        assert!(ids.contains(&project_a.entry.id.as_str()));
+        assert!(!ids.contains(&project_b.entry.id.as_str()));
+        assert_eq!(result.revision_count, 2);
+        assert_eq!(result.file_name, "copis-memory-project-a.json");
+    }
+
+    #[test]
+    fn export_all_workspaces_markdown_groups_projects_and_archived_entries() {
+        let directory = TestDirectory::new();
+        let store = MemoryStore::open(&directory.0).unwrap();
+        store.capture(user_capture("用户内容")).unwrap();
+        store.capture(workspace_capture("project-a", "A 内容")).unwrap();
+        let archived = store.capture(workspace_capture("project-b", "B 内容")).unwrap();
+        store.archive(&archived.entry.id, Some("project-b")).unwrap();
+        let result = store.export(MemoryExportInput {
+            scope: MemoryExportScope::AllWorkspaces,
+            workspace_slug: None,
+            workspace_names: None,
+            format: MemoryExportFormat::Markdown,
+            include_archived: true,
+            include_history: false,
+        }).unwrap();
+        assert!(result.content.contains("## 用户记忆"));
+        assert!(result.content.contains("## 项目：project-a"));
+        assert!(result.content.contains("## 项目：project-b"));
+        assert!(result.content.contains("## 已归档"));
+    }
+
+    #[test]
+    fn export_markdown_prefers_project_display_name_over_slug() {
+        let directory = TestDirectory::new();
+        let store = MemoryStore::open(&directory.0).unwrap();
+        store.capture(workspace_capture("project-a", "A 内容")).unwrap();
+        let mut workspace_names = BTreeMap::new();
+        workspace_names.insert("project-a".to_string(), "Copis 文档项目".to_string());
+
+        let result = store.export(MemoryExportInput {
+            scope: MemoryExportScope::CurrentWorkspace,
+            workspace_slug: Some("project-a".to_string()),
+            workspace_names: Some(workspace_names),
+            format: MemoryExportFormat::Markdown,
+            include_archived: false,
+            include_history: false,
+        }).unwrap();
+
+        assert!(result.content.contains("## 项目：Copis 文档项目"));
+        assert!(!result.content.contains("## 项目：project-a"));
+        assert!(result.content.contains("项目标识：project-a"));
     }
 }

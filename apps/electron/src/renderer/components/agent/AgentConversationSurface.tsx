@@ -26,8 +26,8 @@ import { PermissionBanner } from './PermissionBanner'
 import { PermissionModeSelector } from './PermissionModeSelector'
 import { AskUserBanner } from './AskUserBanner'
 import { ExitPlanModeBanner } from './ExitPlanModeBanner'
-import { ModelSelector } from '@/components/chat/ModelSelector'
-import { AttachmentPreviewItem } from '@/components/chat/AttachmentPreviewItem'
+import { ModelSelector } from '@/components/model/ModelSelector'
+import { AttachmentPreviewItem } from '@/components/attachments/AttachmentPreviewItem'
 import { QuotedSelectionChip } from '@/components/diff/QuotedSelectionChip'
 import { RichTextInput, type RichTextInputHandle } from '@/components/ai-elements/rich-text-input'
 import { SpeechButton } from '@/components/ai-elements/speech-button'
@@ -67,6 +67,7 @@ import {
   agentSessionModelMapAtom,
   currentAgentWorkspaceIdAtom,
   agentPendingPromptAtom,
+  agentSideQuestionReferenceMapAtom,
   agentPendingFilesAtomFamily,
   agentMessageQueueAtomFamily,
   agentWorkspacesAtom,
@@ -100,7 +101,7 @@ import {
 import type { AgentContextStatus } from '@/atoms/agent-atoms'
 import { settingsOpenAtom } from '@/atoms/settings-tab'
 import { longTextPasteAsAttachmentEnabledAtom } from '@/atoms/ui-preferences'
-import { channelsAtom } from '@/atoms/chat-atoms'
+import { channelsAtom } from '@/atoms/model-atoms'
 import { todoPlanningGroupsAtom } from '@/atoms/planning-atoms'
 import { workingClientConfigAtom } from '@/atoms/working-atoms'
 import { useOpenSession } from '@/hooks/useOpenSession'
@@ -301,6 +302,8 @@ export function AgentConversationSurface({ sessionId, variant = 'main' }: AgentC
     return sessionMeta.workspaceId ?? null     // 数据已加载，以会话自身为准
   }, [sessionMeta, globalWorkspaceId])
   const [pendingPrompt, setPendingPrompt] = useAtom(agentPendingPromptAtom)
+  const sideQuestionReferenceMap = useAtomValue(agentSideQuestionReferenceMapAtom)
+  const referencedParentSessionId = sideQuestionReferenceMap.get(sessionId)
   const [pendingFiles, setPendingFiles] = useAtom(agentPendingFilesAtomFamily(sessionId))
   const [queuedMessages, setQueuedMessages] = useAtom(agentMessageQueueAtomFamily(sessionId))
   const workspaces = useAtomValue(agentWorkspacesAtom)
@@ -1030,6 +1033,7 @@ export function AgentConversationSurface({ sessionId, variant = 'main' }: AgentC
       workspaceId: currentWorkspaceId || undefined,
       additionalDirectories: Array.from(new Set([...attachedDirs, ...attachedFileDirectories, ...(pendingPrompt.additionalDirectories ?? [])])),
       mentionedTodoIds: pendingPrompt.mentionedTodoIds,
+      mentionedSessionIds: pendingPrompt.mentionedSessionIds,
     }
     setPendingPrompt(null)
 
@@ -1079,6 +1083,9 @@ export function AgentConversationSurface({ sessionId, variant = 'main' }: AgentC
         }),
         ...(snapshot.mentionedTodoIds && snapshot.mentionedTodoIds.length > 0 && {
           mentionedTodoIds: snapshot.mentionedTodoIds,
+        }),
+        ...(snapshot.mentionedSessionIds && snapshot.mentionedSessionIds.length > 0 && {
+          mentionedSessionIds: snapshot.mentionedSessionIds,
         }),
       }
       window.electronAPI.sendAgentMessage(input).catch((error) => {
@@ -2006,6 +2013,10 @@ export function AgentConversationSurface({ sessionId, variant = 'main' }: AgentC
     } as unknown as SDKMessage
     appendOptimisticPersistedMessage(tempUserSDKMsg)
 
+    const mentionedSessionIds = Array.from(new Set([
+      ...mentions.mentionedSessionIds,
+      ...(referencedParentSessionId ? [referencedParentSessionId] : []),
+    ]))
     const input: AgentSendInput = {
       sessionId,
       userMessage: sdkMessage,
@@ -2020,7 +2031,7 @@ export function AgentConversationSurface({ sessionId, variant = 'main' }: AgentC
       ...(additionalDirectoriesForRun.size > 0 && { additionalDirectories: Array.from(additionalDirectoriesForRun) }),
       ...(mentions.mentionedSkills.length > 0 && { mentionedSkills: mentions.mentionedSkills }),
       ...(mentions.mentionedMcpServers.length > 0 && { mentionedMcpServers: mentions.mentionedMcpServers }),
-      ...(mentions.mentionedSessionIds.length > 0 && { mentionedSessionIds: mentions.mentionedSessionIds }),
+      ...(mentionedSessionIds.length > 0 && { mentionedSessionIds }),
       ...(mentions.mentionedTodoIds.length > 0 && { mentionedTodoIds: mentions.mentionedTodoIds }),
       ...(mentions.mentionedCalendarEventIds.length > 0 && { mentionedCalendarEventIds: mentions.mentionedCalendarEventIds }),
     }
@@ -2043,7 +2054,7 @@ export function AgentConversationSurface({ sessionId, variant = 'main' }: AgentC
         return map
       })
     })
-  }, [inputContent, createBaseAdditionalDirectories, preparePendingFilesForSend, restoreQueuedAttachmentsToPending, sessionId, agentChannelId, agentModelId, sessionAgentRuntime, workingMode, agentChannelProvider, currentWorkspaceId, streaming, backgroundWaiting, suggestion, hasAvailableModel, store, consumeQuotedSelection, setStreamingStates, setAgentStreamErrors, setPromptSuggestions, setInputContent, setLiveMessagesMap, permissionMode, messagesLoaded, setQueuedMessages, setQuotedSelectionMap, sendPlainTextAgentMessage])
+  }, [inputContent, createBaseAdditionalDirectories, preparePendingFilesForSend, restoreQueuedAttachmentsToPending, sessionId, agentChannelId, agentModelId, sessionAgentRuntime, workingMode, agentChannelProvider, currentWorkspaceId, streaming, backgroundWaiting, suggestion, hasAvailableModel, store, consumeQuotedSelection, setStreamingStates, setAgentStreamErrors, setPromptSuggestions, setInputContent, setLiveMessagesMap, permissionMode, messagesLoaded, setQueuedMessages, setQuotedSelectionMap, sendPlainTextAgentMessage, referencedParentSessionId])
 
   /** 停止生成 */
   const handleStop = React.useCallback((): void => {
@@ -2565,7 +2576,7 @@ export function AgentConversationSurface({ sessionId, variant = 'main' }: AgentC
         </Tooltip>
       ),
     }] : []),
-    { key: 'permission-mode', node: <PermissionModeSelector sessionId={sessionId} /> },
+    ...(!compact ? [{ key: 'permission-mode', node: <PermissionModeSelector sessionId={sessionId} /> }] : []),
     { key: 'speech', node: <SpeechButton className={inputToolbarButtonClass} /> },
     {
       key: 'attach-content',

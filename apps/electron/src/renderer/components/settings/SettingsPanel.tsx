@@ -85,7 +85,7 @@ const BASE_TABS: TabItem[] = [
 
 const TOOLS_TAB: TabItem = {
   id: "tools",
-  label: "Chat 工具",
+  label: "Agent 工具",
   icon: <Wrench size={16} />,
 };
 const BOTS_TAB: TabItem = {

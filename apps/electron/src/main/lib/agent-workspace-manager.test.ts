@@ -132,6 +132,21 @@ describe('项目术语迁移', () => {
 })
 
 describe('Agent 工作区创建', () => {
+  test('Given workspace 设置了覆盖策略 When 清除 memoryPolicy Then 回退为未设置并继承全局策略', () => {
+    const workspace = manager.createAgentWorkspace('Memory UI 项目')
+
+    const overridden = manager.updateAgentWorkspace(workspace.id, { memoryPolicy: 'visible' })
+    expect(overridden.memoryPolicy).toBe('visible')
+
+    const inherited = manager.updateAgentWorkspace(workspace.id, { memoryPolicy: null })
+    expect(inherited.memoryPolicy).toBeUndefined()
+
+    const persisted = JSON.parse(readFileSync(configPaths.getAgentWorkspacesIndexPath(), 'utf-8')) as {
+      workspaces: Array<{ id: string; memoryPolicy?: string }>
+    }
+    expect(persisted.workspaces.find((item) => item.id === workspace.id)?.memoryPolicy).toBeUndefined()
+  })
+
   test('Given索引中存在未知 Memory policy When读取工作区 Then按继承默认策略处理而不传播非法值', () => {
     const workspace = {
       id: 'policy-workspace',

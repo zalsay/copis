@@ -114,4 +114,10 @@ describe('项目与会话工作台提示词', () => {
     expect(prompt).not.toContain('MEMORY.md')
     expect(prompt).not.toContain('Nowledge Mem')
   })
+
+  test('Given 任意工作区 When 构建系统提示词 Then 不再引导读取 CLAUDE.md', () => {
+    const prompt = buildPrompt('/tmp/sample-project')
+
+    expect(prompt).not.toContain('CLAUDE.md')
+  })
 })

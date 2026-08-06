@@ -22,7 +22,6 @@ export interface ImportPreview {
     }>
   }
   agentSessionCount: number
-  chatConversationCount: number
   skillNames: string[]
   hasMcp: boolean
   crossPlatform: boolean

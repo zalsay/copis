@@ -238,7 +238,7 @@ export function MigrationImportDialog(): React.ReactElement {
 
 // ─── v1 内容摘要（原有逻辑）────────────────────────────────────────────────
 
-function V1ContentSummary({ preview }: { preview: { manifest: { workspaceName?: string; exportedAt: number; components: string[] }; agentSessionCount: number; chatConversationCount: number; skillNames: string[]; hasMcp: boolean } }): React.ReactElement {
+function V1ContentSummary({ preview }: { preview: { manifest: { workspaceName?: string; exportedAt: number; components: string[] }; agentSessionCount: number; skillNames: string[]; hasMcp: boolean } }): React.ReactElement {
   return (
     <div className="rounded-lg border border-border/50 bg-muted/20 px-4 py-3 space-y-2">
       <p className="text-sm font-medium text-foreground">
@@ -249,9 +249,6 @@ function V1ContentSummary({ preview }: { preview: { manifest: { workspaceName?: 
         {preview.agentSessionCount > 0 && (
           <span>Agent 会话：{preview.agentSessionCount} 个</span>
         )}
-        {preview.chatConversationCount > 0 && (
-          <span>Chat 对话：{preview.chatConversationCount} 个</span>
-        )}
         {preview.skillNames.length > 0 && (
           <span>Skills：{preview.skillNames.length} 个</span>
         )}
@@ -260,7 +257,7 @@ function V1ContentSummary({ preview }: { preview: { manifest: { workspaceName?: 
           <span>模型渠道：已包含</span>
         )}
         {preview.manifest.components.includes('chattools') && (
-          <span>Chat 工具：已包含</span>
+          <span>Agent 工具：已包含</span>
         )}
       </div>
     </div>
@@ -270,7 +267,7 @@ function V1ContentSummary({ preview }: { preview: { manifest: { workspaceName?: 
 // ─── v2 多工作区内容摘要 ──────────────────────────────────────────────────
 
 interface V2ContentSummaryProps {
-  preview: { manifest: { exportedAt: number; components: string[] }; agentSessionCount: number; chatConversationCount: number; workspaces?: WorkspaceImportPreviewItem[] }
+  preview: { manifest: { exportedAt: number; components: string[] }; agentSessionCount: number; workspaces?: WorkspaceImportPreviewItem[] }
   workspaceMappings: Array<{ sourceSlug: string; action: string; targetWorkspaceId?: string; newWorkspaceName?: string }>
   localWorkspaces: Array<{ id: string; name: string; slug: string }>
   onWorkspaceMapping: (sourceSlug: string, mapping: Record<string, unknown>) => void
@@ -292,14 +289,11 @@ function V2ContentSummary({ preview, workspaceMappings, localWorkspaces, onWorks
           {preview.agentSessionCount > 0 && (
             <span>Agent 会话：{preview.agentSessionCount} 个</span>
           )}
-          {preview.chatConversationCount > 0 && (
-            <span>Chat 对话：{preview.chatConversationCount} 个</span>
-          )}
           {preview.manifest.components.includes('channels') && (
             <span>模型渠道：已包含</span>
           )}
           {preview.manifest.components.includes('chattools') && (
-            <span>Chat 工具：已包含</span>
+            <span>Agent 工具：已包含</span>
           )}
         </div>
       </div>

@@ -1,6 +1,6 @@
 import * as React from 'react'
-import { Check, CircleStop, Play, X } from 'lucide-react'
-import type { BrowserWorkflowVersion } from '@copis/shared'
+import { Check, CircleStop, MessageCircleQuestion, Play, ShieldCheck, X } from 'lucide-react'
+import type { BrowserPageControlMode, BrowserWorkflowVersion } from '@copis/shared'
 import { useAtom, useAtomValue, useSetAtom } from 'jotai'
 import { agentSessionsAtom, agentWorkspacesAtom } from '@/atoms/agent-atoms'
 import { browserWorkflowDraftAtom, browserWorkflowStatusAtom } from '@/atoms/browser-agent'
@@ -14,7 +14,9 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { cn } from '@/lib/utils'
+import { CopisTemplateLogo } from '@/lib/model-logo'
 import { toast } from 'sonner'
+import { getBrowserAgentHeaderState } from './browser-agent-header-policy'
 
 interface BrowserAgentPanelProps {
   sessionId: string
@@ -48,6 +50,7 @@ export function BrowserAgentPanel({ sessionId, tabId, pageUrl, tabTitle, workspa
   const [unattendedAllowed, setUnattendedAllowed] = React.useState(false)
   const defaultWorkspaceId = workspaces.find((workspace) => workspace.slug === 'default')?.id ?? workspaces[0]?.id ?? ''
   const [selectedProjectId, setSelectedProjectId] = React.useState(workspaceId ?? defaultWorkspaceId)
+  const headerState = getBrowserAgentHeaderState(status)
 
   React.useEffect(() => {
     setSelectedProjectId(workspaceId ?? defaultWorkspaceId)
@@ -118,6 +121,18 @@ export function BrowserAgentPanel({ sessionId, tabId, pageUrl, tabTitle, workspa
 
   const projectSelectionLocked = isActionPending || (status.state !== 'idle' && status.state !== 'error')
 
+  const changeControlMode = React.useCallback(async (mode: BrowserPageControlMode): Promise<void> => {
+    if (mode === headerState.mode || (mode === 'authorized' && !headerState.canAuthorize)) return
+    setIsActionPending(true)
+    try {
+      setStatus(await window.electronAPI.browserWorkflow.setControlMode(sessionId, mode))
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : '切换页面授权失败')
+    } finally {
+      setIsActionPending(false)
+    }
+  }, [headerState.canAuthorize, headerState.mode, sessionId, setStatus])
+
   const requestRecording = React.useCallback(async (): Promise<void> => {
     setIsActionPending(true)
     try {
@@ -187,23 +202,14 @@ export function BrowserAgentPanel({ sessionId, tabId, pageUrl, tabTitle, workspa
 
   return (
     <aside style={{ width }} className="flex h-full min-w-[320px] max-w-[560px] shrink-0 flex-col border-l border-border/70 bg-background shadow-[-8px_0_24px_rgba(15,23,42,0.08)]">
-      <header className="flex h-11 shrink-0 items-center gap-2 border-b border-border/60 px-3">
-        <div className="min-w-0 flex-1">
-          <Select value={selectedProjectId} onValueChange={(value) => void changeProject(value)} disabled={projectSelectionLocked || workspaces.length === 0}>
-            <SelectTrigger aria-label="选择网页 Agent 项目" className="h-7 max-w-[220px] border-0 bg-transparent px-1 text-xs font-semibold shadow-none hover:bg-accent/50 focus:bg-accent/50">
-              <SelectValue placeholder="选择项目" />
-            </SelectTrigger>
-            <SelectContent align="start">
-              {workspaces.map((workspace) => (
-                <SelectItem key={workspace.id} value={workspace.id}>
-                  {workspace.name}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          <div className="truncate text-[10px] text-muted-foreground">当前页面：{tabTitle || '网页'}</div>
-        </div>
-        <div className="flex items-center gap-1">
+      <header className="shrink-0 border-b border-border/60 bg-muted/30">
+        <div className="flex h-11 items-center gap-2 px-3">
+          <img src={CopisTemplateLogo} alt="" className="size-5 shrink-0 rounded object-cover" />
+          <div className="min-w-0 flex-1">
+            <div className="truncate text-xs font-semibold">{tabTitle || '当前页面'}</div>
+            <div className="truncate text-[10px] text-muted-foreground">{headerState.originLabel || '未打开 HTTP(S) 页面'}</div>
+          </div>
+          <div className="flex items-center gap-1">
           {status.state === 'running' || status.state === 'waiting_user' || (status.state === 'paused_cdp_detached' && Boolean(status.run)) ? (
             <Button
               type="button"
@@ -251,6 +257,56 @@ export function BrowserAgentPanel({ sessionId, tabId, pageUrl, tabTitle, workspa
           >
             <X className="size-4" />
           </Button>
+          </div>
+        </div>
+        <div className="flex h-9 items-center gap-2 border-t border-border/40 px-3">
+          <div role="group" aria-label="页面控制模式" className="grid h-7 w-[146px] shrink-0 grid-cols-2 rounded-md bg-muted p-0.5 shadow-inner">
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className={cn(
+                'h-6 gap-1 rounded px-2 text-[11px] shadow-none',
+                headerState.mode === 'ask' && headerState.tone === 'safe'
+                  && 'bg-emerald-600 text-white shadow-sm hover:bg-emerald-600 hover:text-white dark:bg-emerald-500 dark:text-emerald-950',
+              )}
+              aria-pressed={headerState.mode === 'ask'}
+              disabled={isActionPending}
+              onClick={() => void changeControlMode('ask')}
+            >
+              <MessageCircleQuestion className="size-3.5" />
+              询问
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className={cn(
+                'h-6 gap-1 rounded px-2 text-[11px] shadow-none',
+                headerState.mode === 'authorized' && headerState.tone === 'warning'
+                  ? 'bg-amber-400 text-amber-950 shadow-sm hover:bg-amber-400 hover:text-amber-950 dark:bg-amber-400 dark:text-amber-950'
+                  : 'text-muted-foreground',
+              )}
+              aria-pressed={headerState.mode === 'authorized'}
+              disabled={isActionPending || !headerState.canAuthorize}
+              onClick={() => void changeControlMode('authorized')}
+            >
+              <ShieldCheck className="size-3.5" />
+              授权
+            </Button>
+          </div>
+          <Select value={selectedProjectId} onValueChange={(value) => void changeProject(value)} disabled={projectSelectionLocked || workspaces.length === 0}>
+            <SelectTrigger aria-label="选择网页 Agent 项目" className="ml-auto h-7 min-w-0 max-w-[180px] border-0 bg-transparent px-2 text-[11px] shadow-none hover:bg-accent/50 focus:bg-accent/50">
+              <SelectValue placeholder="选择项目" />
+            </SelectTrigger>
+            <SelectContent align="end">
+              {workspaces.map((workspace) => (
+                <SelectItem key={workspace.id} value={workspace.id}>
+                  {workspace.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         </div>
       </header>
       {status.state === 'recording' ? (

@@ -16,7 +16,7 @@ mod skill_market;
 
 use memory::{
     MemoryCaptureBatchInput, MemoryCaptureInput, MemoryContextInput, MemoryError, MemoryKind,
-    MemoryMaintenanceApplyInput, MemoryRestoreInput, MemoryRewriteInput, MemoryScope, MemoryStore,
+    MemoryExportInput, MemoryMaintenanceApplyInput, MemoryRestoreInput, MemoryRewriteInput, MemoryScope, MemoryStore,
     DEFAULT_LIST_LIMIT, DEFAULT_RECALL_LIMIT,
 };
 use pi_rpc::{
@@ -351,6 +351,18 @@ fn handle_memory_route(
             }
         };
         send_memory_result(stream, store.capture(input), origin);
+        return;
+    }
+
+    if request.method == "POST" && path == "/api/memory/export" {
+        let input = match parse_memory_body::<MemoryExportInput>(request) {
+            Ok(input) => input,
+            Err(error) => {
+                send_memory_error(stream, error, origin);
+                return;
+            }
+        };
+        send_memory_result(stream, store.export(input), origin);
         return;
     }
 

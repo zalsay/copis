@@ -173,16 +173,16 @@ ${visibleEntries}
 function defaultClient(): MemoryMaintenanceClient {
   return {
     list: async (input) => {
-      const { memoryApiClient } = await import('../memory-api-client')
-      return memoryApiClient.list(input)
+      const { runtimeMemoryApiClient } = await import('../memory-api-client-runtime')
+      return runtimeMemoryApiClient.list(input)
     },
     maintenanceState: async (workspaceSlug) => {
-      const { memoryApiClient } = await import('../memory-api-client')
-      return memoryApiClient.maintenanceState(workspaceSlug)
+      const { runtimeMemoryApiClient } = await import('../memory-api-client-runtime')
+      return runtimeMemoryApiClient.maintenanceState(workspaceSlug)
     },
     applyMaintenance: async (input) => {
-      const { memoryApiClient } = await import('../memory-api-client')
-      return memoryApiClient.applyMaintenance(input)
+      const { runtimeMemoryApiClient } = await import('../memory-api-client-runtime')
+      return runtimeMemoryApiClient.applyMaintenance(input)
     },
   }
 }

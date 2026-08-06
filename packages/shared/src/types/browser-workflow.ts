@@ -335,6 +335,43 @@ export interface BrowserWorkflowRecordingArtifact extends BrowserWorkflowRecordi
   jsonl: string
 }
 
+export type BrowserPageControlMode = 'ask' | 'authorized'
+
+export type BrowserPageSensitiveReason = 'password' | 'otp' | 'payment' | 'file' | 'captcha' | 'secret'
+
+export interface BrowserPageElement {
+  ref: string
+  tagName: string
+  role?: string
+  name?: string
+  inputType?: string
+  placeholder?: string
+  enabled: boolean
+  sensitiveReason?: BrowserPageSensitiveReason
+  requiresConfirmation: boolean
+}
+
+export interface BrowserPageSnapshot {
+  kind: 'untrusted_browser_page'
+  instruction: string
+  url: string
+  title: string
+  text: string
+  elements: BrowserPageElement[]
+  scrollX: number
+  scrollY: number
+  viewportWidth: number
+  viewportHeight: number
+  documentWidth: number
+  documentHeight: number
+}
+
+export interface BrowserPageActionResult {
+  ok: true
+  url: string
+  title: string
+}
+
 export interface BrowserWorkflowStatus {
   recordingId?: string
   sessionId?: string
@@ -342,6 +379,8 @@ export interface BrowserWorkflowStatus {
   state: 'idle' | 'recording' | 'compiling' | 'awaiting_summary' | 'awaiting_review' | 'paused_cdp_detached' | 'running' | 'waiting_user' | 'error'
   tabId?: string
   tabTitle?: string
+  pageOrigin?: string
+  controlMode?: BrowserPageControlMode
   error?: string
 }
 
@@ -379,6 +418,7 @@ export const BROWSER_WORKFLOW_IPC_CHANNELS = {
   UNBIND_CONTEXT: 'browser-workflows:unbind-context',
   STATUS: 'browser-workflows:status',
   STATUS_CHANGED: 'browser-workflows:status-changed',
+  SET_CONTROL_MODE: 'browser-workflows:set-control-mode',
   START_RECORDING: 'browser-workflows:start-recording',
   STOP_RECORDING: 'browser-workflows:stop-recording',
   CANCEL_RECORDING: 'browser-workflows:cancel-recording',

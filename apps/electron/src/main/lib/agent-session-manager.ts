@@ -5,7 +5,7 @@
  * - 会话索引：~/.copis/agent-sessions.json（轻量元数据）
  * - 消息存储：~/.copis/agent-sessions/{id}.jsonl（JSONL 格式，逐行追加）
  *
- * 照搬 conversation-manager.ts 的模式。
+ * 使用 JSONL 文件保存 Agent 会话消息。
  */
 
 import { readFileSync, appendFileSync, existsSync, mkdirSync, unlinkSync, readdirSync, createReadStream, createWriteStream, type WriteStream } from 'node:fs'
@@ -42,9 +42,10 @@ import type {
   AgentSessionReferenceSearchResult,
   AgentRuntime,
   AgentCwdMode,
+  CreateAgentSideQuestionSessionInput,
+  AgentSideQuestionSessionResult,
 } from '@copis/shared'
 import { migratePermissionMode } from '@copis/shared'
-import { getConversationMessages } from './conversation-manager'
 // 旧格式 → SDKMessage 的转换逻辑下沉到 @copis/session-core 作为唯一真源，避免主进程与渲染层各存一份。
 import { convertLegacyMessage } from '@copis/session-core'
 import { assertEnabledModelForChannel } from './agent-model-selection'
@@ -702,44 +703,6 @@ export function moveSessionToWorkspace(sessionId: string, targetWorkspaceId: str
   return updatedRoot
 }
 
-/**
- * 迁移 Chat 对话记录到 Agent 会话
- *
- * 读取 Chat 对话的消息，转换为 AgentMessage 格式，
- * 追加到目标 Agent 会话的 JSONL 文件中。
- *
- * 仅迁移 user 和 assistant 角色的消息文本内容，
- * 工具活动、推理、附件等 Chat 特有字段不迁移。
- */
-export function migrateChatToAgentSession(conversationId: string, agentSessionId: string): void {
-  const chatMessages = getConversationMessages(conversationId)
-
-  if (chatMessages.length === 0) {
-    console.log(`[Agent 会话] Chat 对话无消息，跳过迁移 (${conversationId})`)
-    return
-  }
-
-  let count = 0
-  for (const cm of chatMessages) {
-    // 仅迁移 user 和 assistant 消息
-    if (cm.role !== 'user' && cm.role !== 'assistant') continue
-    if (!cm.content.trim()) continue
-
-    const agentMsg: AgentMessage = {
-      id: randomUUID(),
-      role: cm.role,
-      content: cm.content,
-      createdAt: cm.createdAt,
-      model: cm.role === 'assistant' ? cm.model : undefined,
-    }
-
-    appendAgentMessage(agentSessionId, agentMsg)
-    count++
-  }
-
-  console.log(`[Agent 会话] 已迁移 ${count} 条消息到 Agent 会话 (${conversationId} → ${agentSessionId})`)
-}
-
 /** 分叉 Agent 会话。Pi session 是 append-only tree，必须创建新的 branch artifact。 */
 export async function forkAgentSession(input: ForkSessionInput): Promise<AgentSessionMeta> {
   const { sessionId, upToMessageUuid } = input
@@ -748,6 +711,72 @@ export async function forkAgentSession(input: ForkSessionInput): Promise<AgentSe
     throw new Error(`源 Agent 会话不存在: ${sessionId}`)
   }
   return forkPiAgentSession(sourceMeta, input)
+}
+
+/**
+ * 创建右侧 Agent 问答子会话。
+ *
+ * 只有父会话已持久化的 assistant message 同时具备 Pi entry binding 和 artifact
+ * 时才允许分叉。缺少任一条件就创建普通 Agent 子会话，由后续消息的
+ * mentionedSessionIds 注入父会话上下文，避免把正在流式生成的内容带进子会话。
+ */
+export async function createAgentSideQuestionSession(
+  input: CreateAgentSideQuestionSessionInput,
+): Promise<AgentSideQuestionSessionResult> {
+  const parent = getAgentSessionMeta(input.parentSessionId)
+  if (!parent) throw new Error('父 Agent 会话不存在')
+
+  const upToMessageUuid = input.upToMessageUuid
+  const canFork = Boolean(
+    upToMessageUuid
+      && parent.piEntryBindings?.[upToMessageUuid]
+      && parent.piSessionFile
+      && existsSync(parent.piSessionFile),
+  )
+  const rootSessionId = parent.rootSessionId ?? parent.id
+
+  if (canFork && upToMessageUuid) {
+    try {
+      const forked = await forkAgentSession({
+        sessionId: parent.id,
+        upToMessageUuid,
+        modelId: input.modelId,
+      })
+      const session = updateAgentSessionMeta(forked.id, {
+        title: 'Agent 问答',
+        parentSessionId: parent.id,
+        rootSessionId,
+        archived: true,
+      })
+      return {
+        session,
+        contextMode: 'fork',
+        contextMessageUuid: upToMessageUuid,
+      }
+    } catch (error) {
+      console.warn('[Agent 会话] Pi 问答分叉不可用，改用父会话引用上下文:', error)
+    }
+  }
+
+  const session = createAgentSession(
+    'Agent 问答',
+    parent.channelId,
+    parent.workspaceId,
+    input.modelId ?? parent.modelId,
+    parent.agentRuntime ?? 'pi',
+    parent.agentCwdMode,
+  )
+  const updatedSession = updateAgentSessionMeta(session.id, {
+    title: 'Agent 问答',
+    parentSessionId: parent.id,
+    rootSessionId,
+    archived: true,
+  })
+  return {
+    session: updatedSession,
+    contextMode: 'referenced-session',
+    ...(upToMessageUuid ? { contextMessageUuid: upToMessageUuid } : {}),
+  }
 }
 
 /**

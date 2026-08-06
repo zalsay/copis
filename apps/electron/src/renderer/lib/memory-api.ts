@@ -6,6 +6,8 @@ import type {
   MemoryContextInput,
   MemoryContextResponse,
   MemoryEntry,
+  MemoryExportInput,
+  MemoryExportResponse,
   MemoryHistoryResponse,
   MemoryKindFilter,
   MemoryListResponse,
@@ -122,6 +124,13 @@ function queryString(options: MemoryListOptions): string {
 export const memoryApi = {
   list(options: MemoryListOptions = {}): Promise<MemoryListResponse> {
     return request<MemoryListResponse>(`/api/memory${queryString(options)}`)
+  },
+
+  export(input: MemoryExportInput): Promise<MemoryExportResponse> {
+    return request<MemoryExportResponse>('/api/memory/export', {
+      method: 'POST',
+      body: JSON.stringify(input),
+    })
   },
 
   stats(workspaceSlug?: string): Promise<MemoryStats> {

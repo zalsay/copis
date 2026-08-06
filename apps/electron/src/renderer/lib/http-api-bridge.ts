@@ -1,5 +1,5 @@
 // 浏览器模式的普通 API 走 Vite 代理；Agent 流式请求直接连接 Rust SSE 服务。
-import type { AgentStreamCompletePayload, AgentStreamEvent, AgentSendInput } from '@copis/shared'
+import type { AgentStreamCompletePayload, AgentStreamEvent, AgentSendInput, MemoryExportFileInput } from '@copis/shared'
 import { agentHttpStreamClient, configureAgentHttpApiBaseUrl } from './agent-http-stream'
 import { RENDERER_HTTP_API_BASE_URL, RENDERER_HTTP_API_PORT } from './http-api-base-url'
 
@@ -14,6 +14,32 @@ export function isHttpApiBridgeActive(): boolean {
 }
 
 type HttpMethod = (args: readonly unknown[]) => Promise<unknown>
+
+export interface MemoryDownloadRuntime {
+  document: Pick<Document, 'createElement'> & { body: Pick<HTMLElement, 'appendChild'> }
+  url: Pick<typeof URL, 'createObjectURL' | 'revokeObjectURL'>
+}
+
+/** 浏览器模式没有原生 Save As 时，使用标准下载能力保存导出内容。 */
+export function downloadMemoryExport(
+  input: MemoryExportFileInput,
+  runtime: MemoryDownloadRuntime = { document: globalThis.document, url: globalThis.URL },
+): boolean {
+  const blob = new Blob([input.content], { type: input.mimeType })
+  const objectUrl = runtime.url.createObjectURL(blob)
+  const anchor = runtime.document.createElement('a')
+  anchor.href = objectUrl
+  anchor.download = input.fileName
+  anchor.rel = 'noopener'
+  runtime.document.body.appendChild(anchor)
+  try {
+    anchor.click()
+    return true
+  } finally {
+    anchor.remove()
+    runtime.url.revokeObjectURL(objectUrl)
+  }
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -149,6 +175,7 @@ function createHttpMethods(): Record<string, HttpMethod> {
       const text = getArgument<string>(args, 0)
       await navigator.clipboard?.writeText(text)
     },
+    saveMemoryExport: (args) => Promise.resolve(downloadMemoryExport(getArgument<MemoryExportFileInput>(args, 0))),
     windowIsMaximized: () => Promise.resolve(false),
     setDockBadgeCount: () => Promise.resolve(true),
   }
@@ -156,7 +183,6 @@ function createHttpMethods(): Record<string, HttpMethod> {
 
 const ARRAY_DEFAULT_METHODS = new Set([
   'listChannels',
-  'listConversations',
   'listAgentSessions',
   'listAgentWorkspaces',
   'listTodos',
@@ -166,13 +192,11 @@ const ARRAY_DEFAULT_METHODS = new Set([
   'listActivePlanningReminders',
   'listAutomations',
   'listWorktrees',
-  'getChatTools',
-  'getConversationMessages',
+  'getAgentTools',
   'getAgentSessionSDKMessages',
   'getWorkspaceSkills',
   'getOtherWorkspaceSkills',
   'getDefaultSkillSlugs',
-  'searchConversationMessages',
   'searchAgentSessionMessages',
   'searchAgentSessionReferences',
   'listSkillFiles',

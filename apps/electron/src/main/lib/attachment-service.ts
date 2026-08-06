@@ -2,21 +2,21 @@
  * 附件存储服务
  *
  * 负责文件附件的本地存储、读取和删除。
- * 存储路径：~/.copis/attachments/{conversationId}/{uuid}.ext
+ * 存储路径：~/.copis/attachments/{groupId}/{uuid}.ext
  *
  * - 保存：base64 解码 → 写入文件
  * - 读取：文件 → base64 编码（用于 API 发送）
- * - 删除：单个文件或整个对话附件目录
+ * - 删除：单个附件文件
  * - 文件选择对话框：Electron dialog → 小文件读取为 base64，大文件返回本地路径引用
  */
 
-import { readFileSync, writeFileSync, unlinkSync, existsSync, rmSync, statSync } from 'node:fs'
+import { readFileSync, writeFileSync, unlinkSync, existsSync, statSync } from 'node:fs'
 import { extname, basename, join, isAbsolute, normalize } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { dialog, BrowserWindow } from 'electron'
 import {
   getConfigDir,
-  getConversationAttachmentsDir,
+  getAttachmentGroupDir,
   resolveAttachmentPath,
 } from './config-paths'
 import type {
@@ -129,13 +129,13 @@ export function getMimeType(ext: string): string {
  * 保存附件到本地
  *
  * 将 base64 编码的文件数据解码后写入
- * ~/.copis/attachments/{conversationId}/{uuid}.ext
+ * ~/.copis/attachments/{groupId}/{uuid}.ext
  *
  * @param input 保存附件参数
  * @returns 保存结果，包含附件元信息
  */
 export function saveAttachment(input: AttachmentSaveInput): AttachmentSaveResult {
-  const { conversationId, filename, mediaType, data } = input
+  const { conversationId: groupId, filename, mediaType, data } = input
 
   // 防御性检查：base64 数据量不应超过 100MB 限制
   // base64 字符串长度 × 0.75 ≈ 原始字节数
@@ -144,13 +144,13 @@ export function saveAttachment(input: AttachmentSaveInput): AttachmentSaveResult
   }
 
   // 确保目录存在
-  const dir = getConversationAttachmentsDir(conversationId)
+  const dir = getAttachmentGroupDir(groupId)
 
   // 生成唯一文件名
   const ext = extname(filename) || '.bin'
   const id = randomUUID()
   const storedFilename = `${id}${ext}`
-  const localPath = `${conversationId}/${storedFilename}`
+  const localPath = `${groupId}/${storedFilename}`
   const fullPath = join(dir, storedFilename)
 
   // base64 解码并写入
@@ -173,7 +173,7 @@ export function saveAttachment(input: AttachmentSaveInput): AttachmentSaveResult
  * 读取附件并返回 base64 编码
  *
  * 支持两种路径格式：
- * 1. 相对路径 {conversationId}/{uuid}.ext → 解析到 ~/.copis/attachments/
+ * 1. 相对路径 {groupId}/{uuid}.ext → 解析到 ~/.copis/attachments/
  * 2. 绝对路径（Agent 工作区附件）→ 需在 ~/.copis/ 目录下，直接读取
  *
  * @param localPath 相对路径或绝对路径
@@ -205,7 +205,7 @@ export function readAttachmentAsBase64(localPath: string): string {
 /**
  * 删除单个附件
  *
- * @param localPath 相对路径 {conversationId}/{uuid}.ext
+ * @param localPath 相对路径 {groupId}/{uuid}.ext
  */
 export function deleteAttachment(localPath: string): void {
   const fullPath = resolveAttachmentPath(localPath)
@@ -216,26 +216,6 @@ export function deleteAttachment(localPath: string): void {
       console.log(`[附件服务] 已删除附件: ${localPath}`)
     } catch (error) {
       console.warn(`[附件服务] 删除附件失败: ${localPath}`, error)
-    }
-  }
-}
-
-/**
- * 删除对话的全部附件
- *
- * 删除整个 ~/.copis/attachments/{conversationId}/ 目录。
- *
- * @param conversationId 对话 ID
- */
-export function deleteConversationAttachments(conversationId: string): void {
-  const dir = join(resolveAttachmentPath(''), conversationId)
-
-  if (existsSync(dir)) {
-    try {
-      rmSync(dir, { recursive: true, force: true })
-      console.log(`[附件服务] 已删除对话附件目录: ${conversationId}`)
-    } catch (error) {
-      console.warn(`[附件服务] 删除对话附件目录失败: ${conversationId}`, error)
     }
   }
 }

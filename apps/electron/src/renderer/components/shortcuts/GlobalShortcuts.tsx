@@ -34,13 +34,6 @@ import {
   agentWorkspacesAtom,
   agentAttachedFilesMapAtom,
 } from '@/atoms/agent-atoms'
-import {
-  chatPendingMessageAtom,
-  conversationDraftsAtom,
-  conversationsAtom,
-  currentConversationIdAtom,
-  selectedModelAtom,
-} from '@/atoms/chat-atoms'
 import { activeViewAtom } from '@/atoms/active-view'
 import { useCreateSession } from '@/hooks/useCreateSession'
 import { useShortcut } from '@/hooks/useShortcut'
@@ -61,7 +54,6 @@ import {
  * 挂载后从 settings 加载自定义配置，并注册所有应用级快捷键。
  */
 export function GlobalShortcuts(): null {
-  const [appMode, setAppMode] = useAtom(appModeAtom)
   const [settingsOpen, setSettingsOpen] = useAtom(settingsOpenAtom)
   const channelFormDirty = useAtomValue(channelFormDirtyAtom)
   const setSettingsCloseRequested = useSetAtom(settingsCloseRequestedAtom)
@@ -71,7 +63,7 @@ export function GlobalShortcuts(): null {
   const setShortcutOverrides = useSetAtom(shortcutOverridesAtom)
   const shortcutOverrides = useAtomValue(shortcutOverridesAtom)
   const setSendWithCmdEnter = useSetAtom(sendWithCmdEnterAtom)
-  const { createChat, createAgent } = useCreateSession()
+  const { createAgent } = useCreateSession()
 
   // Tab 管理（用于关闭标签页）
   const activeTabId = useAtomValue(activeTabIdAtom)
@@ -157,16 +149,12 @@ export function GlobalShortcuts(): null {
     }, []),
   )
 
-  // Cmd+N → 新建对话/会话（根据当前模式）
+  // Cmd+N → 新建 Agent 会话
   useShortcut(
     'new-session',
     useCallback(() => {
-      if (appMode === 'agent') {
-        createAgent({ draft: true })
-      } else {
-        createChat({ draft: true })
-      }
-    }, [appMode, createAgent, createChat]),
+      void createAgent({ draft: true })
+    }, [createAgent]),
   )
 
   // Cmd+B → 切换侧边栏
@@ -175,15 +163,6 @@ export function GlobalShortcuts(): null {
     useCallback(
       () => setSidebarCollapsed(!sidebarCollapsed),
       [sidebarCollapsed, setSidebarCollapsed],
-    ),
-  )
-
-  // Cmd+Shift+M → 切换模式
-  useShortcut(
-    'toggle-mode',
-    useCallback(
-      () => setAppMode(appMode === 'chat' ? 'agent' : 'chat'),
-      [appMode, setAppMode],
     ),
   )
 
@@ -218,15 +197,35 @@ export function GlobalShortcuts(): null {
   useEffect(() => {
     const cleanup = window.electronAPI.onQuickTaskOpenSession(async (data) => {
       try {
-        // 切换到对应模式
-        store.set(appModeAtom, data.mode)
+        // 快速任务统一进入 Agent 会话。
+        store.set(appModeAtom, 'agent')
         store.set(activeViewAtom, 'conversations')
 
-        if (data.mode === 'agent') {
+        {
           // Agent 模式：创建会话 + 保存附件到 session 目录
           const channelId = store.get(agentChannelIdAtom) || undefined
           const modelId = store.get(agentModelIdAtom) || undefined
-          const workspaceId = store.get(currentAgentWorkspaceIdAtom) || undefined
+          const configuredWorkspaceId = store.get(currentAgentWorkspaceIdAtom) || undefined
+          let workspaces = store.get(agentWorkspacesAtom)
+          if (
+            workspaces.length === 0
+            || (configuredWorkspaceId && !workspaces.some((workspace) => workspace.id === configuredWorkspaceId))
+          ) {
+            try {
+              workspaces = await window.electronAPI.listAgentWorkspaces()
+              store.set(agentWorkspacesAtom, workspaces)
+            } catch (error) {
+              console.error('[快速任务] 加载 Agent 工作区失败:', error)
+            }
+          }
+          const workspace = workspaces.find((item) => item.id === configuredWorkspaceId)
+            ?? workspaces.find((item) => item.slug === 'default')
+            ?? workspaces[0]
+          const workspaceId = workspace?.id ?? configuredWorkspaceId
+          if (workspace && workspace.id !== configuredWorkspaceId) {
+            store.set(currentAgentWorkspaceIdAtom, workspace.id)
+            void window.electronAPI.updateSettings({ agentWorkspaceId: workspace.id }).catch(console.error)
+          }
           const meta = await window.electronAPI.createAgentSession(
             undefined,
             channelId,
@@ -240,48 +239,44 @@ export function GlobalShortcuts(): null {
           // 处理附件：保存到 session 目录，构建 file references
           let fileReferences = ''
           const additionalDirectories = new Set<string>()
-          if (data.files && data.files.length > 0 && workspaceId) {
-            const workspaces = store.get(agentWorkspacesAtom)
-            const workspace = workspaces.find((w) => w.id === workspaceId)
-            if (workspace) {
-              try {
-                const allRefs: Array<{ filename: string; targetPath: string }> = []
-                for (const file of data.files) {
-                  if (!file.sourcePath) continue
-                  const attachedFiles = await window.electronAPI.attachFile({
-                    sessionId: meta.id,
-                    filePath: file.sourcePath,
-                  })
-                  store.set(agentAttachedFilesMapAtom, (prev) => {
-                    const map = new Map(prev)
-                    map.set(meta.id, attachedFiles)
-                    return map
-                  })
-                  allRefs.push({ filename: file.filename, targetPath: file.sourcePath })
-                  const parentPath = getFileParentPath(file.sourcePath)
-                  if (parentPath) additionalDirectories.add(parentPath)
-                }
-
-                const filesToSave = data.files.filter((f) => f.base64).map((f) => ({
-                  filename: f.filename,
-                  data: f.base64!,
-                }))
-                if (filesToSave.length > 0) {
-                  const saved = await window.electronAPI.saveFilesToAgentSession({
-                    workspaceSlug: workspace.slug,
-                    sessionId: meta.id,
-                    files: filesToSave,
-                  })
-                  allRefs.push(...saved)
-                }
-
-                if (allRefs.length > 0) {
-                  const refs = allRefs.map((f) => `- ${f.filename}: ${f.targetPath}`).join('\n')
-                  fileReferences = `<attached_files>\n${refs}\n</attached_files>\n\n`
-                }
-              } catch (error) {
-                console.error('[快速任务] 保存 Agent 附件失败:', error)
+          if (data.files && data.files.length > 0) {
+            try {
+              const allRefs: Array<{ filename: string; targetPath: string }> = []
+              for (const file of data.files) {
+                if (!file.sourcePath) continue
+                const attachedFiles = await window.electronAPI.attachFile({
+                  sessionId: meta.id,
+                  filePath: file.sourcePath,
+                })
+                store.set(agentAttachedFilesMapAtom, (prev) => {
+                  const map = new Map(prev)
+                  map.set(meta.id, attachedFiles)
+                  return map
+                })
+                allRefs.push({ filename: file.filename, targetPath: file.sourcePath })
+                const parentPath = getFileParentPath(file.sourcePath)
+                if (parentPath) additionalDirectories.add(parentPath)
               }
+
+              const filesToSave = data.files.filter((f) => f.base64).map((f) => ({
+                filename: f.filename,
+                data: f.base64!,
+              }))
+              if (workspace && filesToSave.length > 0) {
+                const saved = await window.electronAPI.saveFilesToAgentSession({
+                  workspaceSlug: workspace.slug,
+                  sessionId: meta.id,
+                  files: filesToSave,
+                })
+                allRefs.push(...saved)
+              }
+
+              if (allRefs.length > 0) {
+                const refs = allRefs.map((f) => `- ${f.filename}: ${f.targetPath}`).join('\n')
+                fileReferences = `<attached_files>\n${refs}\n</attached_files>\n\n`
+              }
+            } catch (error) {
+              console.error('[快速任务] 保存 Agent 附件失败:', error)
             }
           }
 
@@ -300,56 +295,6 @@ export function GlobalShortcuts(): null {
             sessionId: meta.id,
             message: fileReferences + data.text,
             ...(additionalDirectories.size > 0 && { additionalDirectories: Array.from(additionalDirectories) }),
-          })
-        } else {
-          // Chat 模式：创建对话 + 保存附件到磁盘
-          const chatModel = store.get(selectedModelAtom)
-          const meta = await window.electronAPI.createConversation(
-            undefined,
-            chatModel?.modelId,
-            chatModel?.channelId,
-          )
-          // 更新 atom 状态
-          store.set(conversationsAtom, (prev) => [meta, ...prev])
-          store.set(currentConversationIdAtom, meta.id)
-
-          // 处理附件：保存到磁盘，收集 FileAttachment[]
-          const savedAttachments: import('@copis/shared').FileAttachment[] = []
-          if (data.files && data.files.length > 0) {
-            for (const file of data.files) {
-              if (!file.base64) {
-                console.warn('[快速任务] Chat 附件缺少 base64，已跳过:', file.filename)
-                continue
-              }
-              try {
-                const result = await window.electronAPI.saveAttachment({
-                  conversationId: meta.id,
-                  filename: file.filename,
-                  mediaType: file.mediaType,
-                  data: file.base64,
-                })
-                savedAttachments.push(result.attachment)
-              } catch (error) {
-                console.error('[快速任务] 保存 Chat 附件失败:', error)
-              }
-            }
-          }
-
-          // 打开新标签页
-          const currentTabs = store.get(tabsAtom)
-          const tabResult = openTab(currentTabs, {
-            type: 'chat',
-            sessionId: meta.id,
-            title: data.text.slice(0, 30),
-          })
-          store.set(tabsAtom, tabResult.tabs)
-          store.set(activeTabIdAtom, tabResult.activeTabId)
-
-          // 设置待发送消息（含已保存的附件）
-          store.set(chatPendingMessageAtom, {
-            conversationId: meta.id,
-            message: data.text,
-            attachments: savedAttachments.length > 0 ? savedAttachments : undefined,
           })
         }
       } catch (error) {
@@ -385,11 +330,7 @@ export function GlobalShortcuts(): null {
       const tabs = store.get(tabsAtom)
       const activeTabId = store.get(activeTabIdAtom)
       const activeTab = tabs.find((tab) => tab.id === activeTabId)
-      const currentMode = store.get(appModeAtom)
-      const fallbackTarget =
-        currentMode === 'agent'
-          ? { type: 'agent' as const, sessionId: store.get(currentAgentSessionIdAtom) }
-          : { type: 'chat' as const, sessionId: store.get(currentConversationIdAtom) }
+      const fallbackTarget = { type: 'agent' as const, sessionId: store.get(currentAgentSessionIdAtom) }
       const target = activeTab ?? fallbackTarget
 
       if (!target.sessionId) return
@@ -415,18 +356,6 @@ export function GlobalShortcuts(): null {
         return
       }
 
-      if (target.type === 'chat') {
-        const conversationId = target.sessionId
-        store.set(appModeAtom, 'chat')
-        store.set(currentConversationIdAtom, conversationId)
-        store.set(conversationDraftsAtom, (prev) => {
-          const map = new Map(prev)
-          const current = map.get(conversationId) ?? ''
-          map.set(conversationId, current ? `${current}\n${trimmed}` : trimmed)
-          return map
-        })
-        window.dispatchEvent(new CustomEvent('copis:focus-input'))
-      }
     })
     return () => {
       cleanupPreview()
@@ -469,20 +398,16 @@ export function GlobalShortcuts(): null {
       }
     })
 
-    const cleanupCreate = window.electronAPI.onTrayCreateSession(async (data) => {
-      store.set(appModeAtom, data.mode)
+    const cleanupCreate = window.electronAPI.onTrayCreateSession(async () => {
+      store.set(appModeAtom, 'agent')
       store.set(activeViewAtom, 'conversations')
-      if (data.mode === 'agent') {
-        await createAgent()
-      } else {
-        await createChat()
-      }
+      await createAgent()
     })
 
     return () => {
       cleanupOpen()
       cleanupCreate()
     }
-  }, [store, createAgent, createChat])
+  }, [store, createAgent])
   return null
 }

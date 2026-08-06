@@ -10,6 +10,9 @@ interface MemoryToolbarProps {
   includeArchived: boolean
   stats: MemoryStats
   memoryPolicy: MemoryPolicy
+  memoryDefaultPolicy: MemoryPolicy
+  memoryPolicyOverride: MemoryPolicy | null
+  workspaceAvailable: boolean
   maintenanceState: MemoryMaintenanceState | null
   loading: boolean
   onQueryChange: (value: string) => void
@@ -18,7 +21,7 @@ interface MemoryToolbarProps {
   onIncludeArchivedChange: (value: boolean) => void
   onNew: () => void
   onRefresh: () => void
-  onMemoryPolicyChange: (value: MemoryPolicy) => void
+  onMemoryPolicyChange: (value: MemoryPolicy | null) => void
 }
 
 export function MemoryToolbar({
@@ -28,6 +31,9 @@ export function MemoryToolbar({
   includeArchived,
   stats,
   memoryPolicy,
+  memoryDefaultPolicy,
+  memoryPolicyOverride,
+  workspaceAvailable,
   maintenanceState,
   loading,
   onQueryChange,
@@ -62,11 +68,13 @@ export function MemoryToolbar({
       </select>
 
       <select
-        value={memoryPolicy}
-        onChange={(event) => onMemoryPolicyChange(event.target.value as MemoryPolicy)}
+        value={workspaceAvailable ? (memoryPolicyOverride ?? 'inherit') : memoryPolicy}
+        disabled={!workspaceAvailable}
+        onChange={(event) => onMemoryPolicyChange(event.target.value === 'inherit' ? null : event.target.value as MemoryPolicy)}
         aria-label="Memory 策略"
         className="h-9 rounded-lg bg-muted/60 px-2.5 text-sm text-foreground/75 outline-none focus:ring-1 focus:ring-primary/40"
       >
+        {workspaceAvailable && <option value="inherit">记忆：{memoryDefaultPolicy === 'writable' ? '可写' : memoryDefaultPolicy === 'visible' ? '只读' : '关闭'}（继承全局）</option>}
         <option value="writable">记忆：可写</option>
         <option value="visible">记忆：只读</option>
         <option value="off">记忆：关闭</option>

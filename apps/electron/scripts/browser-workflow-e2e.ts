@@ -44,7 +44,6 @@ try {
     '--format=cjs',
     `--outfile=${bundledMain}`,
     '--external:electron',
-    '--external:sharp',
     '--external:@earendil-works/pi-coding-agent',
     '--external:@earendil-works/pi-agent-core',
     '--external:@earendil-works/pi-ai',

@@ -6,7 +6,18 @@
  * core 层不依赖 Electron / Node fs，通过注入函数访问平台能力。
  */
 
-import type { ChatMessage, FileAttachment, ProviderType } from '@copis/shared'
+import type { FileAttachment, ProviderType } from '@copis/shared'
+
+/** Provider 适配器使用的通用历史消息，不依赖旧 Chat 产品模型。 */
+export interface ProviderHistoryMessage {
+  id?: string
+  role: 'user' | 'assistant' | 'system'
+  content: string
+  createdAt?: number
+  model?: string
+  reasoning?: string
+  attachments?: FileAttachment[]
+}
 
 // ===== 图片附件数据 =====
 
@@ -209,7 +220,7 @@ export interface StreamRequestInput {
   /** 模型 ID */
   modelId: string
   /** 经过裁剪的历史消息（不含当前用户消息） */
-  history: ChatMessage[]
+  history: ProviderHistoryMessage[]
   /** 当前用户消息文本 */
   userMessage: string
   /** 系统提示词 */

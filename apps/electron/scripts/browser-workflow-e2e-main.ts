@@ -12,10 +12,16 @@ import {
   createWebTab,
   disposeWebTabs,
   detachWebTabCdpForTest,
+  getWebTabState,
+  navigateWebTab,
+  sendWebTabCdpCommandInternal,
   setWebTabHostWindow,
   subscribeWebTabLifecycle,
   updateWebTabBounds,
+  waitForWebTabLoad,
 } from '../src/main/lib/web-tab-manager'
+import { createBrowserPageControlService } from '../src/main/lib/browser-page-control-service'
+import { resolveBrowserPageControlState } from '../src/main/lib/browser-page-control-policy'
 import {
   continueBrowserWorkflowRun,
   runBrowserWorkflow,
@@ -32,10 +38,62 @@ interface FixtureServers {
 }
 
 interface E2EResult {
+  readonly pageControl: {
+    readonly observed: boolean
+    readonly askRejected: boolean
+    readonly typed: boolean
+    readonly crossOriginRevoked: boolean
+  }
   readonly workflow: BrowserWorkflowRunSummary
   readonly ambiguousError: string
   readonly detachWorkflow: BrowserWorkflowRunSummary
   readonly detachPaused: boolean
+}
+
+async function runPageControlE2E(
+  tabId: string,
+  fixtures: FixtureServers,
+): Promise<E2EResult['pageControl']> {
+  let authorizedOrigin: string | undefined
+  const service = createBrowserPageControlService({
+    getContext: () => ({ tabId }),
+    getControlMode: () => resolveBrowserPageControlState(getWebTabState(tabId)?.url ?? '', authorizedOrigin).mode,
+    getTab: getWebTabState,
+    sendCommand: sendWebTabCdpCommandInternal,
+    navigate(id, url) {
+      navigateWebTab({ tabId: id, url })
+    },
+  })
+
+  await waitForWebTabLoad(tabId, 10_000)
+  const first = await service.observe('browser-page-control-e2e')
+  const email = first.elements.find((element) => element.name === 'Email')
+  const goNext = first.elements.find((element) => element.name === 'Go next')
+  if (!email || !goNext) throw new Error('page control E2E did not observe expected elements')
+
+  let askRejected = false
+  try {
+    await service.click('browser-page-control-e2e', goNext.ref)
+  } catch (error) {
+    askRejected = error instanceof Error && error.message.includes('授权')
+  }
+  if (!askRejected) throw new Error('page control E2E did not reject mutation in ask mode')
+
+  authorizedOrigin = fixtures.mainOrigin
+  await service.typeText('browser-page-control-e2e', email.ref, 'browser-agent@example.test')
+  const typedSnapshot = await service.observe('browser-page-control-e2e')
+  const typed = typedSnapshot.text.includes('Email: browser-agent@example.test')
+  if (!typed) throw new Error('page control E2E did not update React controlled input')
+
+  await service.navigate('browser-page-control-e2e', `${fixtures.frameOrigin}/popup`)
+  await waitForWebTabLoad(tabId, 10_000)
+  const crossOriginRevoked = resolveBrowserPageControlState(
+    getWebTabState(tabId)?.url ?? '',
+    authorizedOrigin,
+  ).mode === 'ask'
+  if (!crossOriginRevoked) throw new Error('page control E2E did not revoke authorization after cross-Origin navigation')
+
+  return { observed: first.text.includes('Workflow start'), askRejected, typed, crossOriginRevoked }
 }
 
 const userDataDir = process.env.COPIS_E2E_USER_DATA
@@ -323,10 +381,11 @@ async function main(): Promise<E2EResult> {
     updateWebTabBounds({ tabId: userTab.id, bounds: { x: 0, y: 0, width: 1200, height: 820 } })
 
     const workspace = ensureDefaultWorkspace()
+    const pageControl = await runPageControlE2E(userTab.id, fixtures)
     const workflow = await runMainWorkflow(workspace.id, fixtures)
     const ambiguousError = await runAmbiguousWorkflow(workspace.id, fixtures.mainOrigin)
     const detachWorkflow = await runDetachWorkflow(workspace.id, fixtures.mainOrigin)
-    return { workflow, ambiguousError, detachWorkflow: detachWorkflow.summary, detachPaused: detachWorkflow.paused }
+    return { pageControl, workflow, ambiguousError, detachWorkflow: detachWorkflow.summary, detachPaused: detachWorkflow.paused }
   } finally {
     disposeWebTabs()
     if (window && !window.isDestroyed()) window.destroy()

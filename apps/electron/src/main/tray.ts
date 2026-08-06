@@ -11,7 +11,6 @@ let tray: Tray | null = null
 export interface TrayActions {
   showMainWindow: () => void
   openAgentSession: (sessionId: string, title: string) => void
-  createChatSession: () => void
   createAgentSession: () => void
 }
 
@@ -54,7 +53,6 @@ function getDefaultTrayActions(): TrayActions {
   return {
     showMainWindow,
     openAgentSession: () => showMainWindow(),
-    createChatSession: () => showMainWindow(),
     createAgentSession: () => showMainWindow(),
   }
 }
@@ -101,10 +99,6 @@ function buildTrayMenu(actions: TrayActions): Menu {
         }]
       : []),
     { type: 'separator' },
-    {
-      label: '新建对话',
-      click: () => actions.createChatSession(),
-    },
     {
       label: '新建 Agent 会话',
       click: () => actions.createAgentSession(),

@@ -221,8 +221,8 @@ export class MemoryAutoCapture {
 
   constructor(options: MemoryAutoCaptureOptions = {}) {
     this.captureBatch = options.captureBatch ?? (async (input) => {
-      const { memoryApiClient } = await import('../memory-api-client')
-      return memoryApiClient.captureBatch(input)
+      const { runtimeMemoryApiClient } = await import('../memory-api-client-runtime')
+      return runtimeMemoryApiClient.captureBatch(input)
     })
     this.defaultExtractor = options.extractor
     this.quietMs = options.quietMs ?? MEMORY_CAPTURE_QUIET_MS

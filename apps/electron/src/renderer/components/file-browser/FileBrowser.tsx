@@ -4,7 +4,7 @@
  * 显示指定根路径下的文件树，支持：
  * - 文件夹懒加载展开（Chevron 旋转动画）
  * - 单击选中、Cmd/Ctrl+Click 多选
- * - 悬浮/选中后显示三点菜单（添加到聊天 / 在文件夹中显示 / 重命名 / 移动 / 删除）
+ * - 悬浮/选中后显示三点菜单（添加到 Agent / 在文件夹中显示 / 重命名 / 移动 / 删除）
  * - 文件/文件夹删除（带确认对话框）
  * - 原位重命名（含同名检查）
  * - 自动刷新
@@ -116,8 +116,8 @@ interface FileBrowserProps {
   projectRootPath?: string | null
   /** 混合来源时用 badge 标记会话文件。 */
   showSessionBadge?: boolean
-  /** 点击添加到聊天（在文件操作菜单中显示） */
-  onAddToChat?: (entry: FileEntry) => void
+  /** 点击添加到 Agent（在文件操作菜单中显示） */
+  onAddToAgent?: (entry: FileEntry) => void
   /** 单击文件时在内联预览面板中显示（替代外部窗口预览） */
   onFilePreview?: (filePath: string) => void
 }
@@ -129,7 +129,7 @@ function sortEntries(entries: ScopedFileEntry[]): ScopedFileEntry[] {
   })
 }
 
-export function FileBrowser({ rootPath, roots, hideToolbar, embedded, hideEmpty, access, projectRootPath, showSessionBadge = true, onAddToChat, onFilePreview }: FileBrowserProps): React.ReactElement {
+export function FileBrowser({ rootPath, roots, hideToolbar, embedded, hideEmpty, access, projectRootPath, showSessionBadge = true, onAddToAgent, onFilePreview }: FileBrowserProps): React.ReactElement {
   const browserRoots = React.useMemo<FileBrowserRoot[]>(() => {
     if (roots && roots.length > 0) return roots.filter((root) => Boolean(root.path))
     return rootPath ? [{ path: rootPath, scope: 'project' }] : []
@@ -401,7 +401,7 @@ export function FileBrowser({ rootPath, roots, hideToolbar, embedded, hideEmpty,
           showSessionBadge={showSessionBadge}
           onRefresh={loadRoot}
           onClearSelection={() => setSelectedPaths(new Set())}
-          onAddToChat={onAddToChat}
+          onAddToAgent={onAddToAgent}
           onFilePreview={onFilePreview}
         />
       ))}
@@ -509,7 +509,7 @@ interface FileTreeItemProps {
   showSessionBadge: boolean
   onRefresh: () => Promise<void>
   onClearSelection: () => void
-  onAddToChat?: (entry: FileEntry) => void
+  onAddToAgent?: (entry: FileEntry) => void
   onFilePreview?: (filePath: string) => void
 }
 
@@ -538,7 +538,7 @@ function FileTreeItem({
   showSessionBadge,
   onRefresh,
   onClearSelection,
-  onAddToChat,
+  onAddToAgent,
   onFilePreview,
 }: FileTreeItemProps): React.ReactElement {
   const [expanded, setExpanded] = React.useState(false)
@@ -885,13 +885,13 @@ function FileTreeItem({
                     引用到 Agent
                   </DropdownMenuItem>
                 )}
-                {onAddToChat && !entry.isDirectory && menuSelectedCount === 1 && (
+                {onAddToAgent && !entry.isDirectory && menuSelectedCount === 1 && (
                   <DropdownMenuItem
                     className="text-xs py-1 [&>svg]:size-3.5"
-                    onSelect={() => onAddToChat(entry)}
+                    onSelect={() => onAddToAgent(entry)}
                   >
                     <MessageSquarePlus />
-                    添加到聊天
+                    添加到 Agent
                   </DropdownMenuItem>
                 )}
                 {menuSelectedCount === 1 && (
@@ -1010,7 +1010,7 @@ function FileTreeItem({
               showSessionBadge={showSessionBadge}
               onRefresh={handleRefreshAfterDelete}
               onClearSelection={onClearSelection}
-              onAddToChat={onAddToChat}
+              onAddToAgent={onAddToAgent}
               onFilePreview={onFilePreview}
             />
           ))}

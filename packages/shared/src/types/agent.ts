@@ -50,6 +50,12 @@ export interface CreateAgentWorkspaceInput {
   memoryPolicy?: MemoryPolicy
 }
 
+/** 更新项目显示信息和 Memory 策略覆盖。null 表示清除覆盖并继承全局默认策略。 */
+export interface UpdateAgentWorkspaceInput {
+  name?: string
+  memoryPolicy?: MemoryPolicy | null
+}
+
 /** 创建项目后自动生成的首个 Agent 会话。 */
 export interface CreateAgentProjectResult {
   workspace: AgentWorkspace
@@ -1090,6 +1096,23 @@ export interface ForkSessionInput {
   modelId?: string
 }
 
+/** 创建 Agent 右侧问答子会话的输入。 */
+export interface CreateAgentSideQuestionSessionInput {
+  /** 父 Agent 会话 ID。 */
+  parentSessionId: string
+  /** 只允许从本轮之前的已完成 assistant 消息分叉。 */
+  upToMessageUuid?: string
+  /** 可选的子会话模型；缺省继承父会话。 */
+  modelId?: string
+}
+
+/** Agent 右侧问答子会话的创建结果。 */
+export interface AgentSideQuestionSessionResult {
+  session: AgentSessionMeta
+  contextMode: 'fork' | 'referenced-session'
+  contextMessageUuid?: string
+}
+
 /** 快照回退输入（同一会话内回退到指定点） */
 export interface RewindSessionInput {
   /** Copis 会话 ID */
@@ -1487,8 +1510,6 @@ export const AGENT_IPC_CHANNELS = {
   UPDATE_SESSION_MODEL: 'agent:update-session-model',
   /** 删除会话 */
   DELETE_SESSION: 'agent:delete-session',
-  /** 迁移 Chat 对话记录到 Agent 会话 */
-  MIGRATE_CHAT_TO_AGENT: 'agent:migrate-chat-to-agent',
   /** 切换会话置顶状态 */
   TOGGLE_PIN: 'agent:toggle-pin',
   /** 切换会话星标状态 */
@@ -1505,6 +1526,8 @@ export const AGENT_IPC_CHANNELS = {
   MOVE_SESSION_TO_WORKSPACE: 'agent:move-session-to-workspace',
   /** 分叉会话（从指定消息处创建新会话） */
   FORK_SESSION: 'agent:fork-session',
+  /** 创建基于父 Agent 历史的右侧问答子会话 */
+  CREATE_SIDE_QUESTION_SESSION: 'agent:create-side-question-session',
   /** 快照回退（同一会话内回退到指定点，恢复文件 + 截断对话） */
   REWIND_SESSION: 'agent:rewind-session',
 

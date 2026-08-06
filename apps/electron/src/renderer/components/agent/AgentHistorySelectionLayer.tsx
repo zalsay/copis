@@ -7,18 +7,12 @@
  */
 
 import * as React from 'react'
-import { useAtomValue, useSetAtom } from 'jotai'
+import { useSetAtom } from 'jotai'
 import { toast } from 'sonner'
-import {
-  agentSideChatMapAtom,
-  conversationsAtom,
-  conversationDraftsAtom,
-  selectedModelAtom,
-} from '@/atoms/chat-atoms'
 import { quotedSelectionMapAtom } from '@/atoms/preview-atoms'
-import { agentDiffPanelTabAtom, agentSidePanelOpenAtom } from '@/atoms/agent-atoms'
 import { SelectionActionPopover } from '@/components/selection/SelectionActionPopover'
 import { SELECTION_ACTION_POPOVER_SELECTOR } from '@/lib/quoted-selection'
+import { useOpenAgentQuestion } from '@/hooks/useOpenAgentQuestion'
 
 const MAX_AGENT_HISTORY_QUOTED_CHARS = 2000
 
@@ -57,16 +51,10 @@ export function AgentHistorySelectionLayer({
   rootRef,
 }: AgentHistorySelectionLayerProps): React.ReactElement {
   const setQuotedSelectionMap = useSetAtom(quotedSelectionMapAtom)
-  const selectedChatModel = useAtomValue(selectedModelAtom)
-  const setConversations = useSetAtom(conversationsAtom)
-  const setConversationDrafts = useSetAtom(conversationDraftsAtom)
-  const setSideChatMap = useSetAtom(agentSideChatMapAtom)
-  const setSidePanelOpen = useSetAtom(agentSidePanelOpenAtom)
-  const setSidePanelTabMap = useSetAtom(agentDiffPanelTabAtom)
+  const openAgentQuestion = useOpenAgentQuestion()
   const [selection, setSelection] = React.useState<AgentHistorySelection | null>(null)
   const pointerSelectingRef = React.useRef(false)
   const captureTimerRef = React.useRef<number | null>(null)
-  const openChatPendingRef = React.useRef(false)
 
   const clearSelection = React.useCallback((): void => {
     setSelection(null)
@@ -212,69 +200,24 @@ export function AgentHistorySelectionLayer({
     toast.success('已添加到 Agent 引用')
   }, [clearSelection, selection, sessionId, setQuotedSelectionMap])
 
-  const handleOpenChatTab = React.useCallback(async (): Promise<void> => {
+  const handleOpenAgentQuestion = React.useCallback(async (): Promise<void> => {
     if (!selection) return
-    if (openChatPendingRef.current) return
-    openChatPendingRef.current = true
-    try {
-      const conversation = await window.electronAPI.createConversation(
-        '历史选区问答',
-        selectedChatModel?.modelId,
-        selectedChatModel?.channelId,
-      )
-      setConversations((prev) => {
-        if (prev.some((item) => item.id === conversation.id)) return prev
-        return [conversation, ...prev]
-      })
-      setConversationDrafts((prev) => {
-        const next = new Map(prev)
-        next.set(conversation.id, '我的问题：')
-        return next
-      })
-      setQuotedSelectionMap((prev) => {
-        const next = new Map(prev)
-        next.set(conversation.id, {
-          text: selection.text,
-          filePath: selection.sourceLabel,
-          sourceType: 'agent-history',
-          sourceLabel: selection.sourceLabel,
-          messageId: selection.messageId,
-          messageRole: selection.messageRole,
-          capturedAt: Date.now(),
-        })
-        return next
-      })
-      setSideChatMap((prev) => {
-        const next = new Map(prev)
-        next.set(sessionId, conversation.id)
-        return next
-      })
-      setSidePanelOpen(true)
-      setSidePanelTabMap((prev) => {
-        const next = new Map(prev)
-        next.set(sessionId, 'chat')
-        return next
-      })
+    const childSessionId = await openAgentQuestion({
+      parentSessionId: sessionId,
+      selection: {
+        text: selection.text,
+        filePath: selection.sourceLabel,
+        sourceType: 'agent-history',
+        sourceLabel: selection.sourceLabel,
+        messageId: selection.messageId,
+        messageRole: selection.messageRole,
+      },
+    })
+    if (childSessionId) {
       window.getSelection()?.removeAllRanges()
       clearSelection()
-    } catch (error) {
-      console.error('[AgentMessages] 打开历史选区聊天标签失败:', error)
-      toast.error('打开聊天标签失败')
-    } finally {
-      openChatPendingRef.current = false
     }
-  }, [
-    clearSelection,
-    selectedChatModel,
-    selection,
-    sessionId,
-    setConversationDrafts,
-    setConversations,
-    setQuotedSelectionMap,
-    setSideChatMap,
-    setSidePanelOpen,
-    setSidePanelTabMap,
-  ])
+  }, [clearSelection, openAgentQuestion, selection, sessionId])
 
   return (
     <>
@@ -283,7 +226,7 @@ export function AgentHistorySelectionLayer({
           x={selection.x}
           y={selection.y}
           onAddToAgent={handleAddToAgent}
-          onOpenChat={handleOpenChatTab}
+          onOpenAgentQuestion={handleOpenAgentQuestion}
         />
       )}
     </>

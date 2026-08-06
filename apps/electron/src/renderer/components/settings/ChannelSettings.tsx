@@ -13,7 +13,7 @@ import { PROVIDER_LABELS } from '@copis/shared'
 import type { Channel } from '@copis/shared'
 import { getChannelLogo, CopisLogo } from '@/lib/model-logo'
 import { agentChannelIdAtom, agentModelIdAtom } from '@/atoms/agent-atoms'
-import { channelsAtom } from '@/atoms/chat-atoms'
+import { channelsAtom } from '@/atoms/model-atoms'
 import { SettingsSection, SettingsCard, SettingsRow } from './primitives'
 import {
   AlertDialog,

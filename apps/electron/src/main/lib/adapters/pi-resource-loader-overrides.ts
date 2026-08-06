@@ -1,20 +1,4 @@
-import { basename } from 'node:path'
-
-interface AgentsFilesResult {
-  agentsFiles: Array<{ path: string; content: string }>
-}
-
-// Copis injects its own system prompt. Do not inherit instruction files from a
-// user-selected local project or any of its ancestors.
-const LEGACY_AGENT_CONTEXT_FILE_NAMES = new Set([
-  'CLAUDE.md',
-  'CLAUDE.MD',
-  'AGENTS.md',
-  'AGENTS.MD',
-])
-
-export function createCopisAgentsFilesOverride(): (base: AgentsFilesResult) => AgentsFilesResult {
-  return (base) => ({
-    agentsFiles: base.agentsFiles.filter((file) => !LEGACY_AGENT_CONTEXT_FILE_NAMES.has(basename(file.path))),
-  })
+/** Copis 使用自有 Prompt、Context、Memory 和 Skills，不加载 Pi 的指令文件。 */
+export function createCopisResourceLoaderOptions(): { noContextFiles: true } {
+  return { noContextFiles: true }
 }
