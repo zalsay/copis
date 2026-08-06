@@ -45,6 +45,19 @@ export interface PiWorkerQueryConfig {
   xaiOAuthCredentials?: XaiOAuthCredentials
   openAIThinkingLevel?: AgentThinkingLevel
   retryRunStartedAt?: number
+  /**
+   * 仅由 Electron 传给 Rust 的会话文件授权策略。Rust 启动 Worker 前会移除它，
+   * Pi 只能使用固定的文件操作端点，不能读取或修改策略。
+   */
+  fileAccessPolicy?: PiWorkerFileAccessPolicy
+  useRustFileApi?: boolean
+}
+
+export interface PiWorkerFileAccessPolicy {
+  readRoots: string[]
+  readFiles: string[]
+  writeRoots: string[]
+  permissionMode: CopisPermissionMode
 }
 
 export interface PiWorkerRunConfig {
@@ -52,9 +65,18 @@ export interface PiWorkerRunConfig {
   query: PiWorkerQueryConfig
 }
 
+export interface PiWorkerQueueConfig {
+  sessionId: string
+  userMessage: string
+  uuid: string
+  interrupt?: boolean
+  skillMentions?: string[]
+}
+
 export type AgentRpcWorkerCommand =
   | { type: 'run'; requestId: string; config: PiWorkerRunConfig }
   | { type: 'stop'; sessionId: string }
+  | { type: 'queue'; requestId: string; config: PiWorkerQueueConfig }
 
 export type AgentRpcWorkerFrame =
   | { type: 'event'; sessionId: string; payload: AgentStreamPayload }
@@ -102,13 +124,24 @@ export function parseWorkerCommand(line: string): AgentRpcWorkerCommand | undefi
   } catch {
     return undefined
   }
-  if (!isRecord(parsed) || (parsed.type !== 'run' && parsed.type !== 'stop')) return undefined
+  if (!isRecord(parsed) || (parsed.type !== 'run' && parsed.type !== 'stop' && parsed.type !== 'queue')) return undefined
   if (parsed.type === 'stop') {
     return typeof parsed.sessionId === 'string' && parsed.sessionId.length > 0
       ? { type: 'stop', sessionId: parsed.sessionId }
       : undefined
   }
-  if (typeof parsed.requestId !== 'string' || !isRecord(parsed.config)) return undefined
+  if (typeof parsed.requestId !== 'string' || parsed.requestId.length === 0 || !isRecord(parsed.config)) return undefined
+  if (parsed.type === 'queue') {
+    const config = parsed.config
+    if (typeof config.sessionId !== 'string' || config.sessionId.length === 0) return undefined
+    if (typeof config.userMessage !== 'string' || config.userMessage.length === 0) return undefined
+    if (typeof config.uuid !== 'string' || config.uuid.length === 0) return undefined
+    if (config.interrupt !== undefined && typeof config.interrupt !== 'boolean') return undefined
+    if (config.skillMentions !== undefined && (
+      !Array.isArray(config.skillMentions)
+      || !config.skillMentions.every((value) => typeof value === 'string' && value.trim().length > 0)
+    )) return undefined
+  }
   return parsed as unknown as AgentRpcWorkerCommand
 }
 

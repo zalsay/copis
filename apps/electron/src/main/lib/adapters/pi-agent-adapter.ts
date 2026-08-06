@@ -60,6 +60,7 @@ import {
 import { createCopisResourceLoaderOptions } from './pi-resource-loader-overrides'
 import { createCodexFastModeExtension, withCodexFastModeServiceTier } from './pi-codex-request-settings'
 import { createOpenAIReasoningRequestExtension } from './pi-openai-reasoning-request-settings'
+import { createRustFileToolOperations } from './pi-rust-file-tools'
 import { mergeRuntimeEnv, type AgentRuntimeEnv } from '../agent-runtime-env'
 import {
   convertPiMessage,
@@ -165,6 +166,11 @@ export interface PiAgentQueryOptions extends AgentQueryInput {
   onXaiOAuthCredentialsRefreshed?: (credentials: XaiOAuthCredentials) => void | Promise<void>
   /** 会话级 OpenAI（Codex OAuth / Responses API）思考深度。 */
   openAIThinkingLevel?: AgentThinkingLevel
+  /**
+   * Pi Worker 文件工具经 Rust 执行。会话授权根仅在 Rust 中保存，不能降级为
+   * Pi 本地文件系统操作。
+   */
+  useRustFileApi?: boolean
 }
 
 interface ActivePiSession {
@@ -1294,16 +1300,31 @@ function buildBuiltinToolDefinitions(
   cwd: string,
   canUseTool: PiAgentQueryOptions['canUseTool'],
   runtimeEnv: AgentRuntimeEnv | undefined,
+  options: Pick<PiAgentQueryOptions, 'sessionId' | 'useRustFileApi'>,
 ): ToolDefinition[] {
+  const rustFileTools = options.useRustFileApi
+    ? createRustFileToolOperations({ sessionId: options.sessionId })
+    : undefined
   const definitions = [
-    sdk.createReadToolDefinition(cwd),
-    sdk.createBashToolDefinition(cwd, createCopisBashToolOptions(runtimeEnv)),
-    sdk.createEditToolDefinition(cwd),
-    sdk.createWriteToolDefinition(cwd),
-    sdk.createGrepToolDefinition(cwd),
-    sdk.createFindToolDefinition(cwd),
-    sdk.createLsToolDefinition(cwd),
+    sdk.createReadToolDefinition(cwd, rustFileTools ? { operations: rustFileTools.read } : undefined),
+    // Bash / grep / find / ls 都能绕过跨平台的 Rust 文件策略。工作区会话在这些
+    // 工具也迁移到 Rust 之前，不把它们交给 Pi。
+    ...(!rustFileTools ? [sdk.createBashToolDefinition(cwd, createCopisBashToolOptions(runtimeEnv))] : []),
+    sdk.createEditToolDefinition(cwd, rustFileTools ? { operations: rustFileTools.edit } : undefined),
+    sdk.createWriteToolDefinition(cwd, rustFileTools ? { operations: rustFileTools.write } : undefined),
+    ...(!rustFileTools ? [
+      sdk.createGrepToolDefinition(cwd),
+      sdk.createFindToolDefinition(cwd),
+      sdk.createLsToolDefinition(cwd),
+    ] : []),
   ] as unknown as ToolDefinition[]
+
+  if (rustFileTools) {
+    return definitions.map((tool) => ({
+      ...tool,
+      executionMode: 'sequential' as const,
+    })) as ToolDefinition[]
+  }
 
   return definitions.map((tool) =>
     wrapToolWithPermission(tool as unknown as ToolDefinition<TSchema, unknown, unknown>, { canUseTool }) as ToolDefinition)
@@ -1426,6 +1447,7 @@ export class PiAgentAdapter implements AgentProviderAdapter {
           cwd,
           input.canUseTool,
           input.runtimeEnv,
+          input,
         ),
         ...buildCopisProductToolDefinitions(sdk, input.canUseTool),
         ...wrapCustomToolDefinitions(input.customTools, input.canUseTool),

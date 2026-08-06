@@ -5,9 +5,11 @@ import { getSettings, updateSettings } from './settings-service'
 import {
   finalizeAgentRpcRun,
   parseAgentRpcInput,
+  parseAgentRpcQueueInput,
   persistAgentRpcCredential,
   persistAgentRpcMessage,
   persistAgentRpcMeta,
+  prepareAgentRpcQueue,
   prepareAgentRpcRun,
 } from './agent-rpc-service'
 import { parseWorkerFrame } from './agent-rpc-protocol'
@@ -24,6 +26,10 @@ import type {
   AgentSendInput,
   AgentSessionMeta,
   AgentWorkspace,
+  FileApiContext,
+  FileApiReadTextResponse,
+  FileApiWriteTextRequest,
+  FileApiWriteTextResponse,
   SDKMessage,
   WorkingFeedbackInput,
   WorkingLoginInput,
@@ -34,6 +40,7 @@ import type {
   WorkingWorkspaceInput,
   WorkingReceiveChannel,
 } from '@copis/shared'
+import { fileService } from './file-service'
 
 export const HTTP_API_HOST = '127.0.0.1'
 export const HTTP_API_PORT = resolveCopisHttpApiPort({
@@ -82,6 +89,7 @@ export interface HttpApiDependencies {
   getAppSettings: () => AppSettings
   updateAppSettings: (updates: Partial<AppSettings>) => AppSettings
   getAgentApi?: () => Promise<AgentHttpFacade>
+  getFileApi?: () => FileHttpFacade | Promise<FileHttpFacade>
 }
 
 export interface AgentHttpFacade {
@@ -109,10 +117,16 @@ export interface AgentHttpFacade {
   stopAgent: (sessionId: string) => void
 }
 
+export interface FileHttpFacade {
+  readText: (input: { path: string } & FileApiContext) => FileApiReadTextResponse
+  writeText: (input: FileApiWriteTextRequest) => FileApiWriteTextResponse
+}
+
 const defaultDependencies: HttpApiDependencies = {
   getWorkingClient: getWorkingApiClient,
   getAppSettings: getSettings,
   updateAppSettings: updateSettings,
+  getFileApi: () => fileService,
 }
 
 let defaultAgentApiPromise: Promise<AgentHttpFacade> | null = null
@@ -590,6 +604,10 @@ async function handleAgentRpcInternalRequest(
     return { status: 200, body: await prepareAgentRpcRun(parseAgentRpcInput(bodyRecord)) }
   }
 
+  if (action === 'queue') {
+    return { status: 200, body: prepareAgentRpcQueue(parseAgentRpcQueueInput(bodyRecord)) }
+  }
+
   if (action === 'message') {
     const sessionId = requireString(bodyRecord, 'sessionId')
     const message = bodyRecord.message
@@ -639,6 +657,52 @@ async function handleAgentRpcInternalRequest(
   throw new HttpApiRequestError('Agent RPC 内部接口不存在', 404, 'not_found')
 }
 
+function parseFileContext(record: Record<string, unknown>): FileApiContext {
+  const candidateBasePaths = Array.isArray(record.candidateBasePaths)
+    ? record.candidateBasePaths.filter((value): value is string => typeof value === 'string' && value.length > 0)
+    : undefined
+  return {
+    ...(typeof record.sessionId === 'string' ? { sessionId: record.sessionId } : {}),
+    ...(typeof record.workspaceSlug === 'string' ? { workspaceSlug: record.workspaceSlug } : {}),
+    ...(candidateBasePaths && candidateBasePaths.length > 0 ? { candidateBasePaths } : {}),
+  }
+}
+
+async function handleFileRequest(
+  request: HttpApiRequest,
+  segments: string[],
+  dependencies: HttpApiDependencies,
+): Promise<HttpApiResponse> {
+  const bodyRecord = requireRecord(await readJsonBody(request))
+  const fileApi = await (dependencies.getFileApi?.() ?? fileService)
+  const action = segments[2]
+
+  if (action === 'read-text' && request.method === 'POST') {
+    const path = requireString(bodyRecord, 'path', '文件路径不正确')
+    return {
+      status: 200,
+      body: fileApi.readText({ path, ...parseFileContext(bodyRecord) }),
+    }
+  }
+
+  if (action === 'text' && request.method === 'PUT') {
+    const path = requireString(bodyRecord, 'path', '文件路径不正确')
+    if (typeof bodyRecord.content !== 'string') {
+      throw new HttpApiRequestError('文件内容不正确', 400, 'invalid_request')
+    }
+    const expectedRevision = optionalString(bodyRecord, 'expectedRevision')
+    const input: FileApiWriteTextRequest = {
+      path,
+      content: bodyRecord.content,
+      ...parseFileContext(bodyRecord),
+      ...(expectedRevision ? { expectedRevision } : {}),
+    }
+    return { status: 200, body: fileApi.writeText(input) }
+  }
+
+  throw new HttpApiRequestError('文件 API 路径不存在', 404, 'not_found')
+}
+
 export async function handleHttpApiRequest(
   request: HttpApiRequest,
   dependencies: HttpApiDependencies = defaultDependencies,
@@ -684,6 +748,9 @@ export async function handleHttpApiRequest(
 
     if (segments[1] === 'internal' && segments[2] === 'agent') {
       return await handleAgentRpcInternalRequest(request, segments)
+    }
+    if (segments[1] === 'files') {
+      return await handleFileRequest(request, segments, dependencies)
     }
     if (segments[1] === 'agent') {
       return await handleAgentRequest(request, url, segments, dependencies)

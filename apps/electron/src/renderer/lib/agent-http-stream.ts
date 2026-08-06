@@ -1,4 +1,5 @@
 import type {
+  AgentQueueMessageInput,
   AgentSendInput,
   AgentStreamCompletePayload,
   AgentStreamEvent,
@@ -115,6 +116,29 @@ export class AgentHttpStreamClient {
       reader.releaseLock()
     }
     if (!completed) throw new Error('Agent HTTP 流在完成事件前断开')
+  }
+
+  async queue(input: AgentQueueMessageInput): Promise<string> {
+    const response = await fetch(
+      `${this.baseUrl}/api/agent/sessions/${encodeURIComponent(input.sessionId)}/queue`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        body: JSON.stringify(input),
+      },
+    )
+    if (!response.ok) throw new Error(await readErrorMessage(response))
+
+    const text = await response.text()
+    try {
+      const payload: unknown = JSON.parse(text) as unknown
+      if (isRecord(payload) && payload.accepted === true && typeof payload.uuid === 'string' && payload.uuid) {
+        return payload.uuid
+      }
+    } catch {
+      // queue 接口必须返回 JSON 确认，解析失败统一按协议错误处理。
+    }
+    throw new Error('Agent queue 响应不正确')
   }
 
   async stop(sessionId: string): Promise<void> {

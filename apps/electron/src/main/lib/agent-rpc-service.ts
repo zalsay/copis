@@ -1,4 +1,4 @@
-import { homedir } from 'node:os'
+import { randomUUID } from 'node:crypto'
 import { join, resolve } from 'node:path'
 import {
   COPIS_DEFAULT_PERMISSION_MODE,
@@ -8,6 +8,7 @@ import {
   isCopisPermissionMode,
   normalizeWorkingMode,
   workingModeToModelId,
+  type AgentQueueMessageInput,
   type AgentSendInput,
   type AgentSessionMeta,
   type AgentWorkspace,
@@ -38,12 +39,16 @@ import {
   ensureAgentWorkspaceContextDir,
   getAgentWorkspace,
   getAgentWorkspaceWritableRoot,
+  getProjectFilesPath,
+  getWorkspaceAttachedDirectories,
+  getWorkspaceAttachedFiles,
   getLocalProjectRootStatus,
 } from './agent-workspace-manager'
-import { getAgentWorkspacePath, getSdkConfigDir, getWorkspaceSkillsDir } from './config-paths'
+import { getAgentSessionWorkspacePath, getAgentWorkspacePath, getSdkConfigDir, getWorkspaceSkillsDir } from './config-paths'
 import { buildDynamicContext, buildSystemPrompt } from './agent-prompt-builder'
 import { appendMemoryContext } from './memory-context-builder'
-import { buildContextPrompt } from './agent-session-context-prompt'
+import { buildReferencedSessionsPrompt, buildContextPrompt } from './agent-session-context-prompt'
+import { buildReferencedPlanningPrompt } from './planning-reference-context'
 import { buildMentionedToolsPrompt } from './agent-mentioned-tools-prompt'
 import { buildAgentRuntimeEnv, mergeRuntimeEnv } from './agent-runtime-env'
 import { getFunctionalModulePath } from './functional-module-manager'
@@ -64,9 +69,11 @@ import {
   buildRpcMemoryTurn,
   shouldCaptureRpcRun,
 } from './agent-rpc-memory'
-import { filterAttachedPaths, getAttachedFileDirectories } from './attached-paths'
+import { filterAttachedPaths } from './attached-paths'
 import type {
   AgentRpcWorkerFrame,
+  PiWorkerFileAccessPolicy,
+  PiWorkerQueueConfig,
   PiWorkerRunConfig,
   PiWorkerQueryConfig,
 } from './agent-rpc-protocol'
@@ -189,14 +196,89 @@ export function parseAgentRpcInput(record: Record<string, unknown>): AgentSendIn
   }
 }
 
-function uniqueDirectories(input: AgentSendInput, session: AgentSessionMeta | undefined): string[] {
+export function parseAgentRpcQueueInput(record: Record<string, unknown>): AgentQueueMessageInput {
+  const sessionId = requireString(record, 'sessionId')
+  const userMessage = requireString(record, 'userMessage')
+  if (record.interrupt !== undefined && typeof record.interrupt !== 'boolean') {
+    throw new Error('interrupt 参数不正确')
+  }
+
+  const mentionedSkills = stringList(record.mentionedSkills)
+  const mentionedMcpServers = stringList(record.mentionedMcpServers)
+  const mentionedSessionIds = stringList(record.mentionedSessionIds)
+  const mentionedTodoIds = stringList(record.mentionedTodoIds)
+  const mentionedCalendarEventIds = stringList(record.mentionedCalendarEventIds)
+
+  return {
+    sessionId,
+    userMessage,
+    ...(optionalString(record.rawUserMessage) ? { rawUserMessage: optionalString(record.rawUserMessage) } : {}),
+    ...(optionalString(record.uuid) ? { uuid: optionalString(record.uuid) } : {}),
+    ...(record.interrupt === true ? { interrupt: true } : {}),
+    ...(mentionedSkills ? { mentionedSkills } : {}),
+    ...(mentionedMcpServers ? { mentionedMcpServers } : {}),
+    ...(mentionedSessionIds ? { mentionedSessionIds } : {}),
+    ...(mentionedTodoIds ? { mentionedTodoIds } : {}),
+    ...(mentionedCalendarEventIds ? { mentionedCalendarEventIds } : {}),
+  }
+}
+
+function uniqueDirectories(
+  input: AgentSendInput,
+  session: AgentSessionMeta | undefined,
+  workspace: AgentWorkspace | undefined,
+): string[] {
   const attachedDirectories = filterAttachedPaths(session?.attachedDirectories)
-  const attachedFileDirectories = getAttachedFileDirectories(session?.attachedFiles)
-  return Array.from(new Set([
-    ...filterAttachedPaths(input.additionalDirectories),
+  const workspaceAttachedDirectories = workspace ? getWorkspaceAttachedDirectories(workspace.slug) : []
+  const authorizedDirectories = [
     ...attachedDirectories,
-    ...attachedFileDirectories,
-  ].map((path) => resolve(path))))
+    ...workspaceAttachedDirectories,
+  ].map((path) => resolve(path))
+  const authorizedSet = new Set(authorizedDirectories)
+  const requestedDirectories = filterAttachedPaths(input.additionalDirectories).map((path) => resolve(path))
+  const ignoredDirectories = requestedDirectories.filter((path) => !authorizedSet.has(path))
+  if (ignoredDirectories.length > 0) {
+    console.warn(`[Agent RPC] 忽略未在工作区授权清单中的附加目录: ${ignoredDirectories.join(', ')}`)
+  }
+  return Array.from(new Set(authorizedDirectories))
+}
+
+function uniqueAbsolutePaths(paths: readonly string[]): string[] {
+  return Array.from(new Set(paths.filter((path) => path.trim().length > 0).map((path) => resolve(path))))
+}
+
+function buildRustFileAccessPolicy(input: {
+  workspace: AgentWorkspace
+  session: AgentSessionMeta
+  sessionId: string
+  agentCwd: string
+  workspaceWriteRoot: string
+  additionalDirectories: string[]
+  permissionMode: CopisPermissionMode
+}): PiWorkerFileAccessPolicy {
+  const projectRoot = getProjectFilesPath(input.workspace.slug)
+  const sessionWorkspaceRoot = getAgentSessionWorkspacePath(input.workspace.slug, input.sessionId)
+  const workspaceReadRoots = [
+    input.agentCwd,
+    projectRoot,
+    input.workspaceWriteRoot,
+    sessionWorkspaceRoot,
+    ...input.additionalDirectories,
+    ...getWorkspaceAttachedDirectories(input.workspace.slug),
+  ]
+  const writeRoots = input.workspace.allowWorkspaceWrite === false
+    ? [input.workspaceWriteRoot, sessionWorkspaceRoot]
+    : [projectRoot, sessionWorkspaceRoot, input.agentCwd]
+
+  return {
+    readRoots: uniqueAbsolutePaths(workspaceReadRoots),
+    readFiles: uniqueAbsolutePaths([
+      ...filterAttachedPaths(input.session.attachedFiles),
+      ...getWorkspaceAttachedFiles(input.workspace.slug),
+    ]),
+    writeRoots: uniqueAbsolutePaths(writeRoots),
+    permissionMode: input.permissionMode,
+  }
 }
 
 function buildUserMessage(input: AgentSendInput, startedAt: number): SDKMessage {
@@ -232,6 +314,61 @@ function buildRuntimeEnv(
   return { ...base, env: mergeRuntimeEnv(base.env, workspaceEnv) }
 }
 
+export function prepareAgentRpcQueue(input: AgentQueueMessageInput): PiWorkerQueueConfig {
+  const session = getAgentSessionMeta(input.sessionId)
+  if (!session) throw new Error(`Agent 会话不存在: ${input.sessionId}`)
+  if (!pendingAgentRpcRuns.has(input.sessionId)) {
+    throw new Error(`Agent 会话未运行，无法追加消息: ${input.sessionId}`)
+  }
+
+  const workspace = session.workspaceId ? getAgentWorkspace(session.workspaceId) : undefined
+  const workspaceSlug = workspace?.slug
+  let enrichedText = input.userMessage
+
+  const referencedSessionsBlock = buildReferencedSessionsPrompt(
+    input.sessionId,
+    input.mentionedSessionIds,
+    workspaceSlug,
+  )
+  if (referencedSessionsBlock) enrichedText = `${referencedSessionsBlock}\n\n${enrichedText}`
+
+  const mentionedToolsPrompt = buildMentionedToolsPrompt(input.mentionedSkills, input.mentionedMcpServers)
+  if (mentionedToolsPrompt) enrichedText = `${mentionedToolsPrompt}\n\n${enrichedText}`
+
+  const referencedPlanningBlock = buildReferencedPlanningPrompt(
+    input.mentionedTodoIds,
+    input.mentionedCalendarEventIds,
+    { requireToolRead: true },
+  )
+  if (referencedPlanningBlock) enrichedText = `${referencedPlanningBlock}\n\n${enrichedText}`
+
+  const uuid = input.uuid ?? randomUUID()
+  // HTTP 响应丢失时前端会按原 UUID 重试；JSONL 只能保留首次接受的用户消息。
+  const alreadyPersisted = getAgentSessionSDKMessages(input.sessionId).some((message) => {
+    const record = message as unknown as Record<string, unknown>
+    return record.uuid === uuid
+  })
+  if (!alreadyPersisted) {
+    appendSDKMessages(input.sessionId, [{
+      type: 'user',
+      uuid,
+      message: {
+        content: [{ type: 'text', text: input.rawUserMessage ?? input.userMessage }],
+      },
+      parent_tool_use_id: null,
+      _createdAt: Date.now(),
+    } as unknown as SDKMessage])
+  }
+
+  return {
+    sessionId: input.sessionId,
+    userMessage: enrichedText,
+    uuid,
+    ...(input.interrupt ? { interrupt: true } : {}),
+    ...(input.mentionedSkills?.length ? { skillMentions: input.mentionedSkills } : {}),
+  }
+}
+
 async function resolveWorkerCredentials(channelId: string, provider: string): Promise<{
   apiKey: string
   codexOAuthCredentials?: Awaited<ReturnType<typeof resolveCodexOAuthCredentials>>
@@ -260,11 +397,12 @@ export async function prepareAgentRpcRun(input: AgentSendInput): Promise<PiWorke
   const workspaceId = session.workspaceId ?? input.workspaceId
   const workspace = workspaceId ? getAgentWorkspace(workspaceId) : undefined
   if (workspaceId && !workspace) throw new Error(`Agent 项目不存在: ${workspaceId}`)
-  if (workspace) {
-    const projectRootStatus = getLocalProjectRootStatus(workspace.projectRootPath)
-    if (projectRootStatus && projectRootStatus !== 'available') {
-      throw new Error(`本地项目根目录不可用：${workspace.projectRootPath}`)
-    }
+  if (!workspace) {
+    throw new Error('Agent 必须绑定有效工作区后才能执行文件操作')
+  }
+  const projectRootStatus = getLocalProjectRootStatus(workspace.projectRootPath)
+  if (projectRootStatus && projectRootStatus !== 'available') {
+    throw new Error(`本地项目根目录不可用：${workspace.projectRootPath}`)
   }
 
   const channelId = input.channelId ?? session.channelId ?? COPIS_WORKING_CHANNEL_ID
@@ -281,13 +419,14 @@ export async function prepareAgentRpcRun(input: AgentSendInput): Promise<PiWorke
     : input.modelId ?? session.modelId ?? DEFAULT_PI_MODEL_ID
   const credentials = await resolveWorkerCredentials(channelId, channel.provider)
   const settings = getSettings()
-  const workspaceSlug = workspace?.slug
-  const agentCwd = workspace ? resolveAgentCwd(workspace, input.sessionId, session.agentCwdMode) ?? homedir() : homedir()
-  const workspaceWriteRoot = workspace ? getAgentWorkspaceWritableRoot(workspace) : undefined
-  if (workspace) ensureAgentWorkspaceContextDir(workspace)
+  const workspaceSlug = workspace.slug
+  const agentCwd = resolveAgentCwd(workspace, input.sessionId, session.agentCwdMode)
+  if (!agentCwd) throw new Error('Agent 工作区 cwd 不可用，已拒绝启动文件操作')
+  const workspaceWriteRoot = getAgentWorkspaceWritableRoot(workspace)
+  ensureAgentWorkspaceContextDir(workspace)
   const startedAt = input.startedAt ?? Date.now()
   const existingSdkSessionId = session.sdkSessionId
-  const directories = uniqueDirectories(input, session)
+  const directories = uniqueDirectories(input, session, workspace)
   const proxyUrl = await getEffectiveProxyUrl()
   const runtimeEnv = buildRuntimeEnv(settings, proxyUrl, workspace, workspaceSlug)
   const compactRequest = input.userMessage.trim() === '/compact'
@@ -299,9 +438,18 @@ export async function prepareAgentRpcRun(input: AgentSendInput): Promise<PiWorke
   const initialPermissionMode = input.permissionModeOverride
     ?? session.permissionMode
     ?? COPIS_DEFAULT_PERMISSION_MODE
-  const memoryPolicy = workspace?.memoryPolicy ?? settings.defaultMemoryPolicy ?? 'writable'
+  const fileAccessPolicy = buildRustFileAccessPolicy({
+    workspace,
+    session,
+    sessionId: input.sessionId,
+    agentCwd,
+    workspaceWriteRoot,
+    additionalDirectories: directories,
+    permissionMode: initialPermissionMode,
+  })
+  const memoryPolicy = workspace.memoryPolicy ?? settings.defaultMemoryPolicy ?? 'writable'
   const dynamicContext = buildDynamicContext({
-    workspaceName: workspace?.name,
+    workspaceName: workspace.name,
     workspaceSlug,
     agentCwd,
   })
@@ -321,7 +469,7 @@ export async function prepareAgentRpcRun(input: AgentSendInput): Promise<PiWorke
       : buildContextPrompt(input.sessionId, contextualMessage, { agentCwd, workspaceSlug })
   const systemPrompt = buildSystemPrompt({
     agentRuntime: 'pi',
-    workspaceName: workspace?.name,
+    workspaceName: workspace.name,
     workspaceSlug,
     sessionId: input.sessionId,
     agentCwd,
@@ -364,6 +512,7 @@ export async function prepareAgentRpcRun(input: AgentSendInput): Promise<PiWorke
     ...(credentials.xaiOAuthCredentials ? { xaiOAuthCredentials: credentials.xaiOAuthCredentials } : {}),
     thinkingLevel: settings.agentEffort === 'max' ? 'xhigh' : settings.agentEffort ?? 'high',
     retryRunStartedAt: startedAt,
+    ...(fileAccessPolicy ? { fileAccessPolicy, useRustFileApi: true } : {}),
   }
 
   updateAgentSessionMeta(input.sessionId, {

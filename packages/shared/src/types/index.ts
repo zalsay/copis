@@ -71,3 +71,6 @@ export * from './web'
 export * from './memory'
 // Pi Agent 浏览器工作流相关类型
 export * from './browser-workflow'
+
+// 本地文件 HTTP API
+export * from './file-api'

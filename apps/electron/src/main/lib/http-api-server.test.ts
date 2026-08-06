@@ -86,4 +86,39 @@ describe('Rust HTTP API 业务桥契约', () => {
     expect(response.status).toBe(404)
     expect(response.body).toEqual({ error: 'Working API 路径不存在', code: 'not_found' })
   })
+
+  test('文件文本读写路由将上下文转发给文件服务', async () => {
+    const received: unknown[] = []
+    const dependencies: HttpApiDependencies = {
+      ...createDependencies(),
+      getFileApi: () => ({
+        readText: (input) => {
+          received.push(input)
+          return { resolvedPath: input.path, content: '初始内容', revision: 'revision-1' }
+        },
+        writeText: (input) => {
+          received.push(input)
+          return { resolvedPath: input.path, revision: 'revision-2' }
+        },
+      }),
+    }
+
+    const read = await handleHttpApiRequest({
+      method: 'POST',
+      path: '/api/files/read-text',
+      body: JSON.stringify({ path: '/workspace/note.md', sessionId: 'session-1' }),
+    }, dependencies)
+    const write = await handleHttpApiRequest({
+      method: 'PUT',
+      path: '/api/files/text',
+      body: JSON.stringify({ path: '/workspace/note.md', content: '更新内容', expectedRevision: 'revision-1' }),
+    }, dependencies)
+
+    expect(read).toEqual({ status: 200, body: { resolvedPath: '/workspace/note.md', content: '初始内容', revision: 'revision-1' } })
+    expect(write).toEqual({ status: 200, body: { resolvedPath: '/workspace/note.md', revision: 'revision-2' } })
+    expect(received).toEqual([
+      { path: '/workspace/note.md', sessionId: 'session-1' },
+      { path: '/workspace/note.md', content: '更新内容', expectedRevision: 'revision-1' },
+    ])
+  })
 })

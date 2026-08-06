@@ -17,7 +17,7 @@
 import { randomUUID } from 'node:crypto'
 import { homedir } from 'node:os'
 import { join, isAbsolute, relative, resolve } from 'node:path'
-import { accessSync, constants, existsSync, mkdirSync, realpathSync } from 'node:fs'
+import { existsSync, mkdirSync } from 'node:fs'
 import { COPIS_WORKING_CHANNEL_ID, createCopisWorkingChannel, normalizeWorkingMode, type AgentRuntime, type AgentSendInput, type AgentMessage, type AgentGenerateTitleInput, type AgentProviderAdapter, type AgentSessionMeta, type CodexOAuthCredentials, type XaiOAuthCredentials, type TypedError, type RetryAttempt, type SDKMessage, type SDKAssistantMessage, type AgentStreamPayload, type RewindSessionResult, type ProviderType, workingModeToModelId } from '@copis/shared'
 import {
   COPIS_DEFAULT_PERMISSION_MODE,
@@ -25,7 +25,6 @@ import {
   THINKING_SIGNATURE_ERROR_MESSAGE,
   THINKING_SIGNATURE_ERROR_TITLE,
   isPersistableSDKSystemMessage,
-  normalizePathForCompare,
   normalizeMcpTransportType,
   inferAgentContextWindow,
   inferReasoningTransport,
@@ -41,7 +40,7 @@ import { decryptApiKey, getChannelById, listChannels, persistCodexOAuthCredentia
 import { getAdapter, fetchTitle } from '@copis/core'
 import { getFetchFn } from './proxy-fetch'
 import { getEffectiveProxyUrl } from './proxy-settings-service'
-import { appendSDKMessages, updateAgentSessionMeta, getAgentSessionMeta, getAgentSessionMessages, truncateSDKMessages, removeSDKErrorMessage, rewindPiAgentSession, resolveAgentCwd, getAgentCwdMode } from './agent-session-manager'
+import { appendSDKMessages, updateAgentSessionMeta, getAgentSessionMeta, getAgentSessionMessages, removeSDKErrorMessage, resolveAgentCwd, getAgentCwdMode } from './agent-session-manager'
 import { ensureAgentWorkspaceContextDir, ensureAgentWorkspaceWritableRoot, getAgentWorkspace, getAgentWorkspaceWritableRoot, getLocalProjectRootStatus, getProjectFilesPath, getWorkspaceMcpConfig, getWorkspaceAttachedDirectories, getWorkspaceAttachedFiles } from './agent-workspace-manager'
 import { getWorkingApiClient } from './working-api-service'
 import { getAgentWorkspacePath, getAgentSessionWorkspacePath, getSdkConfigDir, getWorkspaceSkillsDir } from './config-paths'
@@ -75,6 +74,7 @@ import { generateCodexTitle } from './adapters/pi-codex-title-generator'
 import { createFallbackTitle, sanitizeGeneratedTitle, TITLE_PROMPT } from './title-generation'
 import { filterAttachedPaths, getAttachedFileDirectories } from './attached-paths'
 import { getBrowserAgentPlanToolDenial, resolveBrowserAgentPermissionMode, resolveBrowserAgentSkillMentions } from './browser-agent-skill'
+import { agentSessionRewindService } from './agent-session-rewind-service'
 
 // ===== 类型定义 =====
 
@@ -318,34 +318,6 @@ ${writeInstruction}
 如需读取这些目录中的内容，请直接使用绝对路径，不要先复制到当前工作目录。
 ${directoryLines}
 </attached_directories>`
-}
-
-const LOCAL_PROJECT_ROOT_UNAVAILABLE_CODE = 'local_project_root_unavailable'
-
-function createLocalProjectRootUnavailableError(projectRootPath: string, status?: string): Error {
-  const error = new Error(
-    `本地项目根目录不可用: 本地项目根目录不存在或无法访问：${projectRootPath}。请在 Copis 中重新选择项目文件夹。`,
-  ) as Error & { code?: string; details?: string[] }
-  error.code = LOCAL_PROJECT_ROOT_UNAVAILABLE_CODE
-  error.details = status ? [`目录状态: ${status}`] : undefined
-  return error
-}
-
-/** 验证本地项目根，并返回用于跨会话比较的真实规范化路径。 */
-function resolveLocalProjectRootForRewind(projectRootPath: string): string {
-  const status = getLocalProjectRootStatus(projectRootPath)
-  if (status !== 'available') {
-    throw createLocalProjectRootUnavailableError(projectRootPath, status)
-  }
-
-  try {
-    accessSync(projectRootPath, constants.R_OK | constants.W_OK | constants.X_OK)
-    const realRoot = realpathSync(projectRootPath)
-    const normalizedRoot = normalizePathForCompare(realRoot) || realRoot
-    return process.platform === 'win32' ? normalizedRoot.toLowerCase() : normalizedRoot
-  } catch {
-    throw createLocalProjectRootUnavailableError(projectRootPath, 'unavailable')
-  }
 }
 
 // ===== AgentOrchestrator =====
@@ -2527,29 +2499,6 @@ export class AgentOrchestrator {
     return this.activeSessions.size > 0
   }
 
-  /** 同一个真实本地项目根只能由一个运行中会话执行文件回退。 */
-  private hasOtherActiveSessionForLocalProjectRoot(sessionId: string, localProjectRoot: string): boolean {
-    for (const activeSessionId of this.activeSessions.keys()) {
-      if (activeSessionId === sessionId) continue
-
-      const activeSessionMeta = getAgentSessionMeta(activeSessionId)
-      if (!activeSessionMeta?.workspaceId) continue
-
-      const activeWorkspace = getAgentWorkspace(activeSessionMeta.workspaceId)
-      if (!activeWorkspace?.projectRootPath) continue
-
-      try {
-        if (resolveLocalProjectRootForRewind(activeWorkspace.projectRootPath) === localProjectRoot) {
-          return true
-        }
-      } catch {
-        // 运行中的会话已通过启动时校验；若其根后来不可用，无法安全比较，跳过即可。
-      }
-    }
-
-    return false
-  }
-
   /**
    * 运行中动态切换会话的权限模式
    *
@@ -2586,41 +2535,9 @@ export class AgentOrchestrator {
     sessionId: string,
     assistantMessageUuid: string,
   ): Promise<RewindSessionResult> {
-    // 0. 阻止运行中会话回退（JSONL 并发写入会损坏文件）
-    if (this.activeSessions.has(sessionId)) {
-      throw new Error('会话正在运行中，请停止后再回退')
-    }
-
-    const sessionMeta = getAgentSessionMeta(sessionId)
-    if (!sessionMeta?.sdkSessionId) {
-      throw new Error('会话没有 SDK session ID，无法回退')
-    }
-
-    const workspace = sessionMeta.workspaceId
-      ? getAgentWorkspace(sessionMeta.workspaceId)
-      : undefined
-    const localProjectRoot = workspace?.projectRootPath
-      ? resolveLocalProjectRootForRewind(workspace.projectRootPath)
-      : undefined
-
-    if (localProjectRoot && this.hasOtherActiveSessionForLocalProjectRoot(sessionId, localProjectRoot)) {
-      throw new Error('同一项目的其他会话正在运行，请先停止同项目的其他会话后再回退文件')
-    }
-
-    // Pi 使用原生树状 session 导出一个持久 artifact；随后截断 Copis 展示消息，
-    // 确保下一轮 resume 不会重新加载被舍弃的上下文。
-    await rewindPiAgentSession(sessionId, assistantMessageUuid)
-    const kept = truncateSDKMessages(sessionId, assistantMessageUuid)
-
-    console.log(`[Agent 编排] Pi 回退完成: sessionId=${sessionId}, 保留 ${kept.length} 条消息`)
-
-    return {
-      remainingMessages: kept.length,
-      fileRewind: {
-        canRewind: false,
-        error: '已回退 Pi 对话；Pi 文件回退尚未启用，当前未修改任何文件。',
-      },
-    }
+    return agentSessionRewindService.rewind(sessionId, assistantMessageUuid, {
+      isSessionActive: (candidateSessionId) => this.activeSessions.has(candidateSessionId),
+    })
   }
 
   /** 中止所有活跃的 Agent 会话（应用退出时调用） */

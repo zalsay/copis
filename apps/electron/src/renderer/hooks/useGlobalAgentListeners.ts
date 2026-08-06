@@ -71,7 +71,9 @@ import {
 } from '@/lib/agent-completion-presence'
 import { getPlanModeChangeFromToolName, updatePlanModeSessionSet } from '@/lib/agent-plan-mode'
 import { buildTodoAgentPrompt } from '@/lib/todo-agent-prompt'
+import { fileApiClient } from '@/lib/file-api-client'
 import { appendWorkingEvents, workingEventsAtom } from '@/atoms/working-atoms'
+import { toFileApiContext } from '@copis/shared'
 import { adaptWorkingStreamComplete, adaptWorkingStreamError, adaptWorkingStreamEvent } from '@copis/shared'
 
 /** 触发右侧文件浏览器自动定位的写入类工具集合 */
@@ -1383,15 +1385,18 @@ export function useGlobalAgentListeners(): void {
       const seq = ++focusCheckSeq
 
       try {
-        const result = await window.electronAPI.resolveAndReadFile(previewFile.filePath, {
-          sessionId: activeSessionId,
-          candidateBasePaths: candidateBasePaths.length > 0 ? candidateBasePaths : undefined,
+        const result = await fileApiClient.readText({
+          path: previewFile.filePath,
+          ...toFileApiContext({
+            sessionId: activeSessionId,
+            candidateBasePaths: candidateBasePaths.length > 0 ? candidateBasePaths : undefined,
+          }),
         })
 
         // 丢弃过期结果（快速切换窗口时）
         if (seq !== focusCheckSeq) return
 
-        const content = result?.content ?? ''
+        const content = result.content
         // cyrb53 hash：遍历完整内容，避免边缘碰撞
         const hash = cyrb53(content)
         const prevHash = fileContentHashMap.get(hashKey)

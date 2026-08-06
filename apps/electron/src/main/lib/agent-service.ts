@@ -27,10 +27,12 @@ import type {
   CopisPermissionMode,
   AgentExternalRunSource,
   AgentMessage,
+  RewindSessionResult,
 } from '@copis/shared'
 import { PiAgentAdapter, cleanupPiRuntimeResources } from './adapters/pi-agent-adapter'
 import { AgentEventBus } from './agent-event-bus'
 import { AgentOrchestrator } from './agent-orchestrator'
+import { agentSessionRewindService } from './agent-session-rewind-service'
 import { getAgentSessionWorkspacePath } from './config-paths'
 import { getAgentWorkspaceBySlug, getAgentWorkspaceWritableRoot, getLocalProjectRootStatus } from './agent-workspace-manager'
 import { getAgentSessionMeta, updateAgentSessionMeta } from './agent-session-manager'
@@ -334,8 +336,10 @@ setAgentStopper(stopAgent)
 export async function rewindAgentSession(
   sessionId: string,
   assistantMessageUuid: string,
-): Promise<import('@copis/shared').RewindSessionResult> {
-  return orchestrator.rewindSession(sessionId, assistantMessageUuid)
+): Promise<RewindSessionResult> {
+  return agentSessionRewindService.rewind(sessionId, assistantMessageUuid, {
+    isSessionActive: (candidateSessionId) => orchestrator.isActive(candidateSessionId),
+  })
 }
 
 /**

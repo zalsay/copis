@@ -23,6 +23,7 @@ import { useFocusAgentSessionInput } from '@/hooks/useFocusAgentSessionInput'
 import { useOpenAgentQuestion } from '@/hooks/useOpenAgentQuestion'
 import { useShortcut } from '@/hooks/useShortcut'
 import { initShortcutRegistry } from '@/lib/shortcut-registry'
+import { FileApiError, fileApiClient } from '@/lib/file-api-client'
 import { DiffView } from './DiffView'
 import { MarkdownRichEditor } from './MarkdownRichEditor'
 import { getPreviewCandidateBasePaths, isAbsoluteFilePath } from './preview-open-path'
@@ -33,6 +34,7 @@ import { PIERRE_FILE_CSS } from '@/components/agent/tool-result-renderers/pierre
 import { SelectionActionPopover } from '@/components/selection/SelectionActionPopover'
 import { SELECTION_ACTION_POPOVER_SELECTOR } from '@/lib/quoted-selection'
 import { copyTextToClipboard } from '@/lib/clipboard'
+import { toFileApiContext } from '@copis/shared'
 
 const MD_EXTS = new Set(['.md', '.markdown'])
 const PLAIN_TEXT_EDIT_EXTS = new Set(['.txt', '.text', '.log'])
@@ -54,6 +56,8 @@ const FILE_FIND_SHORTCUT_OPTIONS = { exclusive: true }
 type CacheEntry = {
   oldContent: string
   newContent: string
+  /** 文本读取时的乐观锁版本。 */
+  revision?: string
   /** 非文本文件预览数据 */
   pdfSrc?: string
   imageDataUrl?: string
@@ -239,6 +243,9 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
   const [autosaveStatus, setAutosaveStatus] = React.useState<'idle' | 'saving' | 'saved' | 'error'>('idle')
   const lastSavedDraftRef = React.useRef('')
   const autosaveTimerRef = React.useRef<number | null>(null)
+  const fileRevisionsRef = React.useRef(new Map<string, string>())
+  const fileSaveQueueRef = React.useRef(Promise.resolve())
+  const lastFileSaveErrorRef = React.useRef<FileApiError | null>(null)
   const [docxHtml, setDocxHtml] = React.useState('')
   const [officeHtml, setOfficeHtml] = React.useState('')
   const [officeText, setOfficeText] = React.useState('')
@@ -590,6 +597,7 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
       setPdfZoom(100)
       setImagePath(cached.imagePath ?? '')
       setImageDataUrl(cached.imageDataUrl ?? '')
+      if (cached.revision) fileRevisionsRef.current.set(filePath, cached.revision)
       setImageZoom(0.25)
       setImageNaturalSize({ w: 0, h: 0 })
       setLoading(false)
@@ -666,9 +674,14 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
             if (isLegacyOffice) {
               return
             }
-            const result = await window.electronAPI.resolveAndReadFile(filePath, fileAccess)
+            const result = await fileApiClient.readText({
+              path: filePath,
+              ...toFileApiContext(fileAccess),
+            })
             if (cancelled) return
-            content = result?.content ?? ''
+            content = result.content
+            fileRevisionsRef.current.set(filePath, result.revision)
+            cacheSet(cacheKey, { oldContent: '', newContent: content, revision: result.revision })
           } else {
             const result = await window.electronAPI.getDiffContents({ dirPath, filePath, gitRoot, sessionId, baseRef })
             if (cancelled) return
@@ -681,7 +694,7 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
           setOldContent(old)
           setNewContent(content)
 
-          if (cacheKey) cacheSet(cacheKey, { oldContent: old, newContent: content })
+          if (cacheKey && !previewOnly) cacheSet(cacheKey, { oldContent: old, newContent: content })
         }
 
         if (previewOnly && !MD_EXTS.has(ext) && content) {
@@ -902,35 +915,55 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
     fp: string,
     fa: typeof fileAccess,
   ): Promise<boolean> => {
-    if (draft === lastSavedDraftRef.current) return true
-    setAutosaveStatus('saving')
-    try {
-      const ok = await window.electronAPI.writeTextFile(fp, draft, fa)
-      if (!ok) {
-        setAutosaveStatus('error')
+    const saveTask = fileSaveQueueRef.current.then(async () => {
+      if (draft === lastSavedDraftRef.current) return true
+      lastFileSaveErrorRef.current = null
+      if (fp === filePathRef.current) setAutosaveStatus('saving')
+      try {
+        const expectedRevision = fileRevisionsRef.current.get(fp)
+        const result = await fileApiClient.writeText({
+          path: fp,
+          content: draft,
+          ...toFileApiContext(fa),
+          ...(expectedRevision ? { expectedRevision } : {}),
+        })
+        fileRevisionsRef.current.set(fp, result.revision)
+        lastSavedDraftRef.current = draft
+        // 仅当当前展示的仍是这个文件时，才同步 UI state，避免覆盖刚切到的新文件
+        if (fp === filePathRef.current) {
+          lastNewContentRef.current = draft
+          lastOldContentRef.current = ''
+          setOldContent('')
+          setNewContent(draft)
+          cacheSet(getContentCacheKey('preview', refreshVersion + 1), {
+            oldContent: '',
+            newContent: draft,
+            revision: result.revision,
+          })
+          setRefreshVersionMap((prev) => {
+            const m = new Map(prev)
+            m.set(sessionId, (prev.get(sessionId) ?? 0) + 1)
+            return m
+          })
+          setAutosaveStatus('saved')
+        }
+        return true
+      } catch (error) {
+        if (error instanceof FileApiError) {
+          lastFileSaveErrorRef.current = error
+          if (error.code === 'write_conflict') {
+            toast.error('文件已被外部修改，当前草稿已保留。请重新加载后合并再保存。', {
+              id: `file-write-conflict:${fp}`,
+            })
+          }
+        }
+        console.error('[DiffTabContent] Markdown save failed:', error)
+        if (fp === filePathRef.current) setAutosaveStatus('error')
         return false
       }
-      lastSavedDraftRef.current = draft
-      // 仅当当前展示的仍是这个文件时，才同步 UI state，避免覆盖刚切到的新文件
-      if (fp === filePathRef.current) {
-        lastNewContentRef.current = draft
-        lastOldContentRef.current = ''
-        setOldContent('')
-        setNewContent(draft)
-        cacheSet(getContentCacheKey('preview', refreshVersion + 1), { oldContent: '', newContent: draft })
-        setRefreshVersionMap((prev) => {
-          const m = new Map(prev)
-          m.set(sessionId, (prev.get(sessionId) ?? 0) + 1)
-          return m
-        })
-        setAutosaveStatus('saved')
-      }
-      return true
-    } catch (err) {
-      console.error('[DiffTabContent] Markdown save failed:', err)
-      setAutosaveStatus('error')
-      return false
-    }
+    })
+    fileSaveQueueRef.current = saveTask.then(() => undefined, () => undefined)
+    return saveTask
   }, [getContentCacheKey, refreshVersion, sessionId, setRefreshVersionMap])
 
   const saveMarkdownEdit = React.useCallback(async () => {
@@ -946,7 +979,9 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
     const ok = await persistMarkdownDraft(markdownDraft, filePath, fileAccess)
     setMarkdownSaving(false)
     if (!ok) {
-      window.alert('保存失败：没有写入权限或文件不存在')
+      window.alert(lastFileSaveErrorRef.current?.code === 'write_conflict'
+        ? '保存冲突：文件已被外部修改，当前草稿已保留。请刷新后合并再保存。'
+        : '保存失败：没有写入权限或文件不存在')
       return
     }
     setMarkdownSourceMode(false)

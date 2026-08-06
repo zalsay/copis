@@ -113,6 +113,7 @@ import {
 } from '@/lib/browser-agent-permission-policy'
 import { sendWithCmdEnterAtom } from '@/atoms/shortcut-atoms'
 import { useOpenPreview } from '@/components/diff/preview-opener'
+import { fileApiClient } from '@/lib/file-api-client'
 import type { AgentRuntime, AgentSendInput, AgentPendingFile, FileDialogLargeFile, FileDialogResult, ModelOption, SDKMessage, SDKUserMessage, WorkingMode } from '@copis/shared'
 import './AgentView.css'
 import {
@@ -123,6 +124,7 @@ import {
   inferContextWindow,
   isCodexFastModeSupportedModel,
   MAX_ATTACHMENT_SIZE,
+  toFileApiContext,
   workingModeToModelId,
 } from '@copis/shared'
 import { fileToBase64, formatFileNames, getFileParentPath } from '@/lib/file-utils'
@@ -1169,14 +1171,13 @@ export function AgentConversationSurface({ sessionId, variant = 'main' }: AgentC
       const sourcePath = f.sourcePath!
       const parentPath = getFileParentPath(sourcePath)
       try {
-        const read = await window.electronAPI.resolveAndReadFile(sourcePath, {
-          sessionId,
-          candidateBasePaths: parentPath ? [parentPath] : undefined,
+        const read = await fileApiClient.readText({
+          path: sourcePath,
+          ...toFileApiContext({
+            sessionId,
+            candidateBasePaths: parentPath ? [parentPath] : undefined,
+          }),
         })
-        if (!read) {
-          staleDraftFiles.push(f.filename)
-          continue
-        }
         const data = await fileToBase64(new File([read.content], f.filename, { type: f.mediaType }))
         draftFilesToSave.push({ sourceFile: f, filename: f.filename, data })
       } catch (error) {

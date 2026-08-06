@@ -11,6 +11,8 @@ import { FileDiff } from '@pierre/diffs/react'
 import { parseDiffFromFile, type FileContents, type FileDiffMetadata } from '@pierre/diffs'
 import { resolvedThemeAtom } from '@/atoms/theme'
 import { currentAgentSessionIdAtom } from '@/atoms/agent-atoms'
+import { fileApiClient } from '@/lib/file-api-client'
+import { toFileApiContext } from '@copis/shared'
 import { PIERRE_DIFF_CSS } from './pierre-styles'
 
 function cheapHash(s: string): number {
@@ -129,13 +131,16 @@ export function EditResultRenderer({ result, isError, input, basePath }: EditRes
 
     let cancelled = false
     const candidateBasePaths = basePath ? [basePath] : undefined
-    window.electronAPI.resolveAndReadFile(filePath, {
-      sessionId: sessionId ?? undefined,
-      candidateBasePaths,
+    fileApiClient.readText({
+      path: filePath,
+      ...toFileApiContext({
+        sessionId: sessionId ?? undefined,
+        candidateBasePaths,
+      }),
     })
       .then((file) => {
         if (cancelled) return
-        setLineNumberStart(file ? findEditedSnippetStartLine(file.content, oldStr, newStr) : null)
+        setLineNumberStart(findEditedSnippetStartLine(file.content, oldStr, newStr))
       })
       .catch(() => {
         if (!cancelled) setLineNumberStart(null)

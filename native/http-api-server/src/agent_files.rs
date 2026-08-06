@@ -1,0 +1,747 @@
+use std::collections::HashMap;
+use std::fs::{self, File, OpenOptions};
+use std::io::{Read, Write};
+use std::path::{Component, Path, PathBuf};
+use std::sync::Mutex;
+use std::time::{SystemTime, UNIX_EPOCH};
+
+use serde::Deserialize;
+use serde_json::{json, Map, Value};
+use sha2::{Digest, Sha256};
+
+pub const MAX_FILE_BYTES: u64 = 50 * 1024 * 1024;
+
+#[derive(Debug)]
+pub struct AgentFileError {
+    pub status: u16,
+    pub code: &'static str,
+    pub message: String,
+}
+
+impl AgentFileError {
+    fn bad_request(message: impl Into<String>) -> Self {
+        Self {
+            status: 400,
+            code: "invalid_request",
+            message: message.into(),
+        }
+    }
+
+    fn forbidden(code: &'static str, message: impl Into<String>) -> Self {
+        Self {
+            status: 403,
+            code,
+            message: message.into(),
+        }
+    }
+
+    fn not_found(message: impl Into<String>) -> Self {
+        Self {
+            status: 404,
+            code: "file_not_found",
+            message: message.into(),
+        }
+    }
+
+    fn conflict(message: impl Into<String>) -> Self {
+        Self {
+            status: 409,
+            code: "write_conflict",
+            message: message.into(),
+        }
+    }
+
+    fn too_large(message: impl Into<String>) -> Self {
+        Self {
+            status: 413,
+            code: "file_too_large",
+            message: message.into(),
+        }
+    }
+
+    fn internal(message: impl Into<String>) -> Self {
+        Self {
+            status: 500,
+            code: "file_operation_failed",
+            message: message.into(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct FileAccessPolicy {
+    read_roots: Vec<PathBuf>,
+    read_files: Vec<PathBuf>,
+    write_roots: Vec<PathBuf>,
+    base_dir: PathBuf,
+    permission_mode: String,
+}
+
+#[derive(Default)]
+pub struct AgentFilePolicyStore {
+    policies: Mutex<HashMap<String, FileAccessPolicy>>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct FileRequest {
+    session_id: String,
+    path: String,
+    mode: Option<String>,
+    content: Option<String>,
+    expected_revision: Option<String>,
+}
+
+impl AgentFilePolicyStore {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// 从 Electron 的 prepare 配置中取走策略。取走后，传给 Pi Worker 的 JSON 中不再含有策略。
+    pub fn register_from_query(
+        &self,
+        session_id: &str,
+        query: &mut Map<String, Value>,
+    ) -> Result<(), String> {
+        let use_rust_file_api = match query.get("useRustFileApi") {
+            None => false,
+            Some(value) => value
+                .as_bool()
+                .ok_or_else(|| "useRustFileApi 必须是布尔值".to_string())?,
+        };
+        let Some(value) = query.remove("fileAccessPolicy") else {
+            if use_rust_file_api {
+                return Err("Rust 文件 API 缺少会话权限策略".to_string());
+            }
+            return Ok(());
+        };
+        if !use_rust_file_api {
+            return Err("Rust 文件权限策略未启用 Rust 文件 API".to_string());
+        }
+        let policy = FileAccessPolicy::from_value(&value, query.get("cwd"))
+            .map_err(|error| error.message)?;
+        let mut policies = self.policies.lock().unwrap();
+        if policies.contains_key(session_id) {
+            return Err("该 Agent 会话已有文件权限策略".to_string());
+        }
+        policies.insert(session_id.to_string(), policy);
+        Ok(())
+    }
+
+    pub fn remove(&self, session_id: &str) {
+        self.policies.lock().unwrap().remove(session_id);
+    }
+
+    pub fn contains(&self, session_id: &str) -> bool {
+        self.policies.lock().unwrap().contains_key(session_id)
+    }
+
+    pub fn handle(
+        &self,
+        action: &str,
+        method: &str,
+        body: &[u8],
+    ) -> Result<Option<Value>, AgentFileError> {
+        let request: FileRequest = serde_json::from_slice(body)
+            .map_err(|_| AgentFileError::bad_request("文件请求体不是有效的 JSON"))?;
+        if request.session_id.trim().is_empty() || request.path.trim().is_empty() {
+            return Err(AgentFileError::bad_request(
+                "文件请求缺少 sessionId 或 path",
+            ));
+        }
+        let value: Value = serde_json::from_slice(body)
+            .map_err(|_| AgentFileError::bad_request("文件请求体不是有效的 JSON"))?;
+        if let Some(object) = value.as_object() {
+            if ["readRoots", "readFiles", "writeRoots"]
+                .iter()
+                .any(|key| object.contains_key(*key))
+            {
+                return Err(AgentFileError::bad_request("客户端不能提交文件权限根目录"));
+            }
+        }
+        let policy = self
+            .policies
+            .lock()
+            .unwrap()
+            .get(&request.session_id)
+            .cloned()
+            .ok_or_else(|| {
+                AgentFileError::forbidden("agent_policy_not_found", "Agent 文件权限策略不存在")
+            })?;
+
+        match (action, method.to_ascii_uppercase().as_str()) {
+            ("access", "POST") => {
+                let mode = request.mode.as_deref().unwrap_or("read");
+                let target =
+                    policy.resolve(&request.path, mode == "write" || mode == "readWrite")?;
+                match mode {
+                    "read" => policy.ensure_read(&target)?,
+                    "write" => policy.ensure_write(&target)?,
+                    "readWrite" => {
+                        policy.ensure_read(&target)?;
+                        policy.ensure_write(&target)?;
+                    }
+                    _ => return Err(AgentFileError::bad_request("文件访问 mode 不正确")),
+                }
+                Ok(Some(json!({ "allowed": true })))
+            }
+            ("read", "POST") => {
+                let target = policy.resolve(&request.path, false)?;
+                policy.ensure_read(&target)?;
+                let metadata = fs::metadata(&target).map_err(io_error)?;
+                if !metadata.is_file() {
+                    return Err(AgentFileError::forbidden("not_a_file", "目标不是文件"));
+                }
+                let content = read_limited(&target, metadata.len())?;
+                let revision = revision_for_bytes(&content);
+                Ok(Some(json!({
+                    "contentBase64": encode_base64(&content),
+                    "revision": revision,
+                })))
+            }
+            ("write", "PUT") => {
+                let content = request
+                    .content
+                    .ok_or_else(|| AgentFileError::bad_request("文件写入缺少 content"))?;
+                if content.as_bytes().len() as u64 > MAX_FILE_BYTES {
+                    return Err(AgentFileError::too_large("文件写入不能超过 50 MB"));
+                }
+                let target = policy.resolve(&request.path, true)?;
+                policy.ensure_write(&target)?;
+                let current = match fs::symlink_metadata(&target) {
+                    Ok(metadata) => {
+                        if metadata.file_type().is_symlink() {
+                            return Err(AgentFileError::forbidden(
+                                "symlink_not_allowed",
+                                "不允许通过符号链接写入文件",
+                            ));
+                        }
+                        if metadata.is_dir() {
+                            return Err(AgentFileError::forbidden("not_a_file", "目标是目录"));
+                        }
+                        Some(fs::read(&target).map_err(io_error)?)
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+                    Err(error) => return Err(io_error(error)),
+                };
+                if let Some(expected) = request.expected_revision.as_deref() {
+                    let actual = current.as_deref().map(revision_for_bytes);
+                    if actual.as_deref() != Some(expected) {
+                        return Err(AgentFileError::conflict("文件已被其他操作修改"));
+                    }
+                }
+                let parent = target
+                    .parent()
+                    .ok_or_else(|| AgentFileError::bad_request("文件路径没有父目录"))?;
+                fs::create_dir_all(parent).map_err(io_error)?;
+                let verified_target = policy.resolve(&request.path, true)?;
+                if verified_target != target {
+                    return Err(AgentFileError::forbidden(
+                        "symlink_not_allowed",
+                        "文件路径包含符号链接",
+                    ));
+                }
+                atomic_write(&target, content.as_bytes())?;
+                Ok(Some(
+                    json!({ "revision": revision_for_bytes(content.as_bytes()) }),
+                ))
+            }
+            ("stat", "POST") => {
+                let target = policy.resolve(&request.path, false)?;
+                policy.ensure_read(&target)?;
+                let metadata = fs::metadata(&target).map_err(io_error)?;
+                Ok(Some(json!({ "isDirectory": metadata.is_dir() })))
+            }
+            ("list", "POST") => {
+                let target = policy.resolve(&request.path, false)?;
+                policy.ensure_read(&target)?;
+                let metadata = fs::metadata(&target).map_err(io_error)?;
+                if !metadata.is_dir() {
+                    return Err(AgentFileError::forbidden("not_a_directory", "目标不是目录"));
+                }
+                let mut entries = fs::read_dir(&target)
+                    .map_err(io_error)?
+                    .map(|entry| {
+                        entry
+                            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+                            .map_err(io_error)
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                entries.sort();
+                Ok(Some(json!({ "entries": entries })))
+            }
+            _ => Err(AgentFileError {
+                status: 404,
+                code: "route_not_found",
+                message: "文件权限接口不存在".to_string(),
+            }),
+        }
+    }
+}
+
+impl FileAccessPolicy {
+    fn from_value(value: &Value, cwd: Option<&Value>) -> Result<Self, AgentFileError> {
+        let object = value
+            .as_object()
+            .ok_or_else(|| AgentFileError::bad_request("fileAccessPolicy 必须是对象"))?;
+        let permission_mode = object
+            .get("permissionMode")
+            .and_then(Value::as_str)
+            .ok_or_else(|| AgentFileError::bad_request("fileAccessPolicy.permissionMode 不正确"))?;
+        if permission_mode != "bypassPermissions" && permission_mode != "plan" {
+            return Err(AgentFileError::bad_request(
+                "fileAccessPolicy.permissionMode 不正确",
+            ));
+        }
+        let base_dir = cwd
+            .and_then(Value::as_str)
+            .filter(|path| !path.trim().is_empty())
+            .map(PathBuf::from)
+            .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+        let base_dir = absolute_without_parent(&base_dir, None)?;
+        Ok(Self {
+            read_roots: parse_roots(object, "readRoots", &base_dir, true)?,
+            read_files: parse_roots(object, "readFiles", &base_dir, false)?,
+            write_roots: parse_roots(object, "writeRoots", &base_dir, true)?,
+            base_dir,
+            permission_mode: permission_mode.to_string(),
+        })
+    }
+
+    fn resolve(&self, input: &str, allow_missing: bool) -> Result<PathBuf, AgentFileError> {
+        let path = absolute_without_parent(Path::new(input), Some(&self.base_dir))?;
+        if fs::symlink_metadata(&path)
+            .map(|metadata| metadata.file_type().is_symlink())
+            .unwrap_or(false)
+        {
+            return Err(AgentFileError::forbidden(
+                "symlink_not_allowed",
+                "文件路径包含符号链接",
+            ));
+        }
+        if has_symlink_component_below_roots(&path, self) {
+            return Err(AgentFileError::forbidden(
+                "symlink_not_allowed",
+                "文件路径包含符号链接",
+            ));
+        }
+        if !allow_missing && fs::symlink_metadata(&path).is_err() {
+            return Err(AgentFileError::not_found("文件不存在"));
+        }
+        if fs::symlink_metadata(&path).is_ok() {
+            return fs::canonicalize(&path).map_err(io_error);
+        }
+        let mut existing = path.clone();
+        let mut missing = Vec::new();
+        while fs::symlink_metadata(&existing).is_err() {
+            let name = existing
+                .file_name()
+                .ok_or_else(|| AgentFileError::not_found("文件路径不存在"))?
+                .to_os_string();
+            missing.push(name);
+            existing.pop();
+        }
+        let canonical = fs::canonicalize(&existing).map_err(io_error)?;
+        let mut result = canonical;
+        for name in missing.iter().rev() {
+            result.push(name);
+        }
+        Ok(result)
+    }
+
+    fn ensure_read(&self, target: &Path) -> Result<(), AgentFileError> {
+        if self
+            .read_roots
+            .iter()
+            .any(|root| target == root || target.starts_with(root))
+            || self.read_files.iter().any(|file| target == file)
+        {
+            Ok(())
+        } else {
+            Err(AgentFileError::forbidden(
+                "read_not_allowed",
+                "当前工作区不允许读取该路径",
+            ))
+        }
+    }
+
+    fn ensure_write(&self, target: &Path) -> Result<(), AgentFileError> {
+        if self.permission_mode == "plan"
+            && target.extension().and_then(|extension| extension.to_str()) != Some("md")
+        {
+            return Err(AgentFileError::forbidden(
+                "plan_write_not_allowed",
+                "计划模式下只能写入 Markdown 计划文档",
+            ));
+        }
+        if self
+            .write_roots
+            .iter()
+            .any(|root| target == root || target.starts_with(root))
+        {
+            Ok(())
+        } else {
+            Err(AgentFileError::forbidden(
+                "write_not_allowed",
+                "当前工作区不允许写入该路径",
+            ))
+        }
+    }
+}
+
+fn parse_roots(
+    object: &Map<String, Value>,
+    key: &str,
+    base_dir: &Path,
+    must_be_directory: bool,
+) -> Result<Vec<PathBuf>, AgentFileError> {
+    let values = object
+        .get(key)
+        .and_then(Value::as_array)
+        .ok_or_else(|| AgentFileError::bad_request(format!("fileAccessPolicy.{key} 必须是数组")))?;
+    values
+        .iter()
+        .map(|value| {
+            let path = value
+                .as_str()
+                .filter(|path| !path.trim().is_empty())
+                .ok_or_else(|| {
+                    AgentFileError::bad_request(format!("fileAccessPolicy.{key} 包含无效路径"))
+                })?;
+            let path = absolute_without_parent(Path::new(path), Some(base_dir))?;
+            let canonical = fs::canonicalize(&path).map_err(|error| {
+                if error.kind() == std::io::ErrorKind::NotFound {
+                    AgentFileError::bad_request("权限策略路径不存在")
+                } else {
+                    io_error(error)
+                }
+            })?;
+            if must_be_directory && !fs::metadata(&canonical).map_err(io_error)?.is_dir() {
+                return Err(AgentFileError::bad_request("权限策略根目录不是目录"));
+            }
+            Ok(canonical)
+        })
+        .collect()
+}
+
+fn absolute_without_parent(
+    path: &Path,
+    base_dir: Option<&Path>,
+) -> Result<PathBuf, AgentFileError> {
+    let candidate = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        base_dir.unwrap_or(Path::new(".")).join(path)
+    };
+    let mut result = PathBuf::new();
+    for component in candidate.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                return Err(AgentFileError::forbidden(
+                    "path_traversal",
+                    "文件路径不能包含 ..",
+                ))
+            }
+            _ => result.push(component.as_os_str()),
+        }
+    }
+    if result.is_absolute() {
+        Ok(result)
+    } else {
+        Err(AgentFileError::bad_request("文件路径必须是绝对路径"))
+    }
+}
+
+fn has_symlink_component_below_roots(path: &Path, policy: &FileAccessPolicy) -> bool {
+    let mut current = PathBuf::new();
+    let mut below_authorized_root = false;
+    for component in path.components() {
+        current.push(component.as_os_str());
+        if !below_authorized_root {
+            below_authorized_root = policy
+                .read_roots
+                .iter()
+                .chain(policy.write_roots.iter())
+                .any(|root| fs::canonicalize(&current).ok().as_deref() == Some(root.as_path()));
+            continue;
+        }
+        if fs::symlink_metadata(&current)
+            .map(|metadata| metadata.file_type().is_symlink())
+            .unwrap_or(false)
+        {
+            return true;
+        }
+    }
+    false
+}
+
+fn read_limited(path: &Path, size: u64) -> Result<Vec<u8>, AgentFileError> {
+    if size > MAX_FILE_BYTES {
+        return Err(AgentFileError::too_large("文件读取不能超过 50 MB"));
+    }
+    let mut file = File::open(path).map_err(io_error)?;
+    let mut content = Vec::with_capacity(size as usize);
+    file.read_to_end(&mut content).map_err(io_error)?;
+    if content.len() as u64 > MAX_FILE_BYTES {
+        return Err(AgentFileError::too_large("文件读取不能超过 50 MB"));
+    }
+    Ok(content)
+}
+
+fn atomic_write(path: &Path, content: &[u8]) -> Result<(), AgentFileError> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| AgentFileError::bad_request("文件路径没有父目录"))?;
+    let name = path
+        .file_name()
+        .ok_or_else(|| AgentFileError::bad_request("文件名不正确"))?
+        .to_string_lossy();
+    let stamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let temporary = parent.join(format!(".{name}.copis-{stamp}.tmp"));
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&temporary)
+        .map_err(io_error)?;
+    if let Err(error) = file
+        .write_all(content)
+        .and_then(|_| file.sync_all())
+        .and_then(|_| fs::rename(&temporary, path))
+    {
+        let _ = fs::remove_file(&temporary);
+        return Err(io_error(error));
+    }
+    Ok(())
+}
+
+fn io_error(error: std::io::Error) -> AgentFileError {
+    match error.kind() {
+        std::io::ErrorKind::NotFound => AgentFileError::not_found("文件不存在"),
+        std::io::ErrorKind::PermissionDenied => {
+            AgentFileError::forbidden("filesystem_denied", "文件系统拒绝访问")
+        }
+        _ => AgentFileError::internal(error.to_string()),
+    }
+}
+
+fn revision_for_bytes(content: &[u8]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(content);
+    hasher
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+fn encode_base64(bytes: &[u8]) -> String {
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut output = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let first = chunk[0] as u32;
+        let second = chunk.get(1).copied().unwrap_or(0) as u32;
+        let third = chunk.get(2).copied().unwrap_or(0) as u32;
+        let value = (first << 16) | (second << 8) | third;
+        output.push(ALPHABET[((value >> 18) & 63) as usize] as char);
+        output.push(ALPHABET[((value >> 12) & 63) as usize] as char);
+        output.push(if chunk.len() > 1 {
+            ALPHABET[((value >> 6) & 63) as usize] as char
+        } else {
+            '='
+        });
+        output.push(if chunk.len() > 2 {
+            ALPHABET[(value & 63) as usize] as char
+        } else {
+            '='
+        });
+    }
+    output
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    fn temp_dir(name: &str) -> PathBuf {
+        let path =
+            std::env::temp_dir().join(format!("copis-agent-files-{name}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&path);
+        fs::create_dir_all(&path).unwrap();
+        path
+    }
+
+    fn store_for(root: &Path, write_root: &Path) -> (AgentFilePolicyStore, String) {
+        let store = AgentFilePolicyStore::new();
+        let mut query = Map::new();
+        query.insert(
+            "cwd".to_string(),
+            Value::String(root.to_string_lossy().into_owned()),
+        );
+        query.insert("useRustFileApi".to_string(), Value::Bool(true));
+        query.insert(
+            "fileAccessPolicy".to_string(),
+            json!({
+                "readRoots": [root], "readFiles": [], "writeRoots": [write_root],
+                "permissionMode": "bypassPermissions"
+            }),
+        );
+        store.register_from_query("session-1", &mut query).unwrap();
+        assert!(!query.contains_key("fileAccessPolicy"));
+        (store, "session-1".to_string())
+    }
+
+    fn store_for_plan(root: &Path, write_root: &Path) -> (AgentFilePolicyStore, String) {
+        let store = AgentFilePolicyStore::new();
+        let mut query = Map::new();
+        query.insert(
+            "cwd".to_string(),
+            Value::String(root.to_string_lossy().into_owned()),
+        );
+        query.insert("useRustFileApi".to_string(), Value::Bool(true));
+        query.insert(
+            "fileAccessPolicy".to_string(),
+            json!({
+                "readRoots": [root], "readFiles": [], "writeRoots": [write_root],
+                "permissionMode": "plan"
+            }),
+        );
+        store
+            .register_from_query("session-plan", &mut query)
+            .unwrap();
+        (store, "session-plan".to_string())
+    }
+
+    fn body(session: &str, path: &Path) -> Vec<u8> {
+        serde_json::to_vec(&json!({ "sessionId": session, "path": path })).unwrap()
+    }
+
+    #[test]
+    fn rejects_rust_file_api_without_policy() {
+        let store = AgentFilePolicyStore::new();
+        let mut query = Map::new();
+        query.insert("useRustFileApi".to_string(), Value::Bool(true));
+
+        let error = store
+            .register_from_query("session-missing-policy", &mut query)
+            .unwrap_err();
+
+        assert_eq!(error, "Rust 文件 API 缺少会话权限策略");
+    }
+
+    #[test]
+    fn rejects_client_policy_roots_in_file_requests() {
+        let root = temp_dir("client-policy");
+        let (store, session) = store_for(&root, &root);
+        let request = serde_json::to_vec(&json!({
+            "sessionId": session,
+            "path": root.join("allowed.txt"),
+            "readRoots": ["/"],
+            "readFiles": ["/etc/passwd"],
+            "writeRoots": ["/"]
+        }))
+        .unwrap();
+
+        let error = store.handle("access", "POST", &request).unwrap_err();
+
+        assert_eq!(error.code, "invalid_request");
+        assert_eq!(error.message, "客户端不能提交文件权限根目录");
+    }
+
+    #[test]
+    fn readonly_workspace_can_read_but_only_copis_root_can_write() {
+        let root = temp_dir("readonly");
+        let copis = root.join("copis");
+        fs::create_dir_all(&copis).unwrap();
+        let project_file = root.join("project.txt");
+        fs::write(&project_file, "project").unwrap();
+        let (store, session) = store_for(&root, &copis);
+        assert!(store
+            .handle("read", "POST", &body(&session, &project_file))
+            .is_ok());
+        let project_write = serde_json::to_vec(
+            &json!({ "sessionId": session, "path": project_file, "content": "no" }),
+        )
+        .unwrap();
+        assert_eq!(
+            store
+                .handle("write", "PUT", &project_write)
+                .unwrap_err()
+                .code,
+            "write_not_allowed"
+        );
+        let copis_file = copis.join("nested/out.txt");
+        let copis_write = serde_json::to_vec(
+            &json!({ "sessionId": "session-1", "path": copis_file, "content": "yes" }),
+        )
+        .unwrap();
+        assert!(store.handle("write", "PUT", &copis_write).is_ok());
+    }
+
+    #[test]
+    fn rejects_traversal_and_symlink() {
+        let root = temp_dir("symlink");
+        let outside = temp_dir("outside");
+        fs::write(outside.join("secret.txt"), "secret").unwrap();
+        let link = root.join("link");
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&outside, &link).unwrap();
+        #[cfg(windows)]
+        std::os::windows::fs::symlink_dir(&outside, &link).unwrap();
+        let (store, session) = store_for(&root, &root);
+        let traversal = serde_json::to_vec(
+            &json!({ "sessionId": session, "path": root.join(".."), "content": "x" }),
+        )
+        .unwrap();
+        assert_eq!(
+            store.handle("write", "PUT", &traversal).unwrap_err().code,
+            "path_traversal"
+        );
+        let linked = body("session-1", &link.join("secret.txt"));
+        assert_eq!(
+            store.handle("read", "POST", &linked).unwrap_err().code,
+            "symlink_not_allowed"
+        );
+    }
+
+    #[test]
+    fn finish_cleanup_removes_private_policy() {
+        let root = temp_dir("cleanup");
+        let (store, _) = store_for(&root, &root);
+        assert!(store.contains("session-1"));
+        store.remove("session-1");
+        assert!(!store.contains("session-1"));
+        let request = body("session-1", &root);
+        assert_eq!(
+            store.handle("stat", "POST", &request).unwrap_err().code,
+            "agent_policy_not_found"
+        );
+    }
+
+    #[test]
+    fn plan_mode_only_allows_markdown_writes_inside_authorized_root() {
+        let root = temp_dir("plan");
+        let copis = root.join("copis");
+        fs::create_dir_all(&copis).unwrap();
+        let (store, session) = store_for_plan(&root, &copis);
+        let code_file = copis.join("main.ts");
+        let code_body = serde_json::to_vec(
+            &json!({ "sessionId": session, "path": code_file, "content": "no" }),
+        )
+        .unwrap();
+        assert_eq!(
+            store.handle("write", "PUT", &code_body).unwrap_err().code,
+            "plan_write_not_allowed"
+        );
+        let plan_file = copis.join("plan.md");
+        let plan_body = serde_json::to_vec(
+            &json!({ "sessionId": "session-plan", "path": plan_file, "content": "yes" }),
+        )
+        .unwrap();
+        assert!(store.handle("write", "PUT", &plan_body).is_ok());
+    }
+}

@@ -9,19 +9,20 @@ use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+mod agent_files;
 mod memory;
 mod pi_rpc;
 mod runtime;
 mod skill_market;
 
 use memory::{
-    MemoryCaptureBatchInput, MemoryCaptureInput, MemoryContextInput, MemoryError, MemoryKind,
-    MemoryExportInput, MemoryMaintenanceApplyInput, MemoryRestoreInput, MemoryRewriteInput, MemoryScope, MemoryStore,
-    DEFAULT_LIST_LIMIT, DEFAULT_RECALL_LIMIT,
+    MemoryCaptureBatchInput, MemoryCaptureInput, MemoryContextInput, MemoryError,
+    MemoryExportInput, MemoryKind, MemoryMaintenanceApplyInput, MemoryRestoreInput,
+    MemoryRewriteInput, MemoryScope, MemoryStore, DEFAULT_LIST_LIMIT, DEFAULT_RECALL_LIMIT,
 };
 use pi_rpc::{
-    agent_session_id, is_agent_messages_route, is_agent_stop_route, parse_worker_frame,
-    sse_headers_with_origin, PiWorkerManager,
+    agent_session_id, is_agent_messages_route, is_agent_queue_route, is_agent_stop_route,
+    parse_worker_frame, sse_headers_with_origin, PiWorkerManager,
 };
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -29,7 +30,8 @@ use skill_market::{handle_request as handle_skill_market_request, SkillMarketSta
 
 const HOST: &str = "127.0.0.1";
 const DEFAULT_PORT: u16 = 51730;
-const MAX_REQUEST_BODY_BYTES: usize = 2 * 1024 * 1024;
+// 文件写入接口允许 50 MB 内容，额外预留 JSON/path/sessionId 等请求字段空间。
+const MAX_REQUEST_BODY_BYTES: usize = 50 * 1024 * 1024 + 256 * 1024;
 const MAX_HEADER_BYTES: usize = 64 * 1024;
 const MAX_LINE_BYTES: usize = 64 * 1024;
 const MAX_RECORDING_LINE_BYTES: usize = 256 * 1024;
@@ -37,6 +39,7 @@ const MAX_RECORDING_FILE_BYTES: u64 = 8 * 1024 * 1024;
 const INTERNAL_TOKEN_HEADER: &str = "x-copis-internal-token";
 const INTERNAL_RECORDING_PREFIX: &str = "/internal/browser-workflows/recordings/";
 const INTERNAL_WORKING_AUTH_PATH: &str = "/internal/working-auth/token";
+const INTERNAL_AGENT_FILES_PREFIX: &str = "/api/internal/agent/files/";
 
 struct BridgeResponse {
     status: u16,
@@ -834,7 +837,9 @@ fn append_recording_line(
             .map_err(|_| "打开录制 JSONL 文件失败")?
             .len()
     };
-    let next_len = current_len.saturating_add(line.len() as u64).saturating_add(1);
+    let next_len = current_len
+        .saturating_add(line.len() as u64)
+        .saturating_add(1);
     if next_len > MAX_RECORDING_FILE_BYTES {
         return Err("录制 JSONL 过大");
     }
@@ -1040,6 +1045,12 @@ fn handle_connection(
         return;
     }
 
+    if path.starts_with(INTERNAL_AGENT_FILES_PREFIX) {
+        handle_internal_agent_files(&mut stream, &request, path, origin, workers.file_policies());
+        let _ = stream.shutdown(Shutdown::Both);
+        return;
+    }
+
     if is_agent_stop_route(&request.method, path) {
         let Some(session_id) = agent_session_id(path) else {
             send_json_response(
@@ -1069,6 +1080,12 @@ fn handle_connection(
                 );
             }
         }
+        let _ = stream.shutdown(Shutdown::Both);
+        return;
+    }
+
+    if is_agent_queue_route(&request.method, path) {
+        handle_agent_queue(&mut stream, &request, path, origin, bridge, workers);
         let _ = stream.shutdown(Shutdown::Both);
         return;
     }
@@ -1214,6 +1231,47 @@ fn is_allowed_origin(origin: &str) -> bool {
 
 fn send_json_response(stream: &mut TcpStream, status: u16, body: &str, origin: Option<&str>) {
     send_response(stream, status, Some(body), origin, true);
+}
+
+fn handle_internal_agent_files(
+    stream: &mut TcpStream,
+    request: &HttpRequest,
+    path: &str,
+    origin: Option<&str>,
+    policies: Arc<agent_files::AgentFilePolicyStore>,
+) {
+    if !is_internal_token_valid(request) {
+        send_json_response(
+            stream,
+            403,
+            r#"{"error":"内部 Agent 文件接口未授权","code":"internal_token_required"}"#,
+            None,
+        );
+        return;
+    }
+
+    let action = path
+        .strip_prefix(INTERNAL_AGENT_FILES_PREFIX)
+        .filter(|value| !value.is_empty() && !value.contains('/'))
+        .unwrap_or("");
+    if action.is_empty() {
+        send_json_response(
+            stream,
+            404,
+            r#"{"error":"文件权限接口不存在","code":"route_not_found"}"#,
+            origin,
+        );
+        return;
+    }
+
+    match policies.handle(action, &request.method, &request.body) {
+        Ok(Some(body)) => send_json_response(stream, 200, &body.to_string(), origin),
+        Ok(None) => send_empty_response(stream, 204, origin),
+        Err(error) => {
+            let body = json!({ "error": error.message, "code": error.code }).to_string();
+            send_json_response(stream, error.status, &body, origin);
+        }
+    }
 }
 
 fn handle_agent_stream(
@@ -1385,6 +1443,103 @@ fn handle_agent_stream(
     workers.finish(worker);
 }
 
+fn handle_agent_queue(
+    stream: &mut TcpStream,
+    request: &HttpRequest,
+    path: &str,
+    origin: Option<&str>,
+    bridge: Arc<Bridge>,
+    workers: Arc<PiWorkerManager>,
+) {
+    let Some(session_id) = agent_session_id(path) else {
+        send_json_response(
+            stream,
+            400,
+            r#"{"error":"Agent 会话路径不正确","code":"invalid_path"}"#,
+            origin,
+        );
+        return;
+    };
+
+    let prepare_body = match build_prepare_body(request, &session_id) {
+        Ok(body) => body,
+        Err(error) => {
+            let body = format!(
+                r#"{{"error":"{}","code":"invalid_request"}}"#,
+                escape_json_string(&error)
+            );
+            send_json_response(stream, 400, &body, origin);
+            return;
+        }
+    };
+    let prepared = match send_internal_request(&bridge, "/api/internal/agent/queue", prepare_body) {
+        Ok(response) if (200..300).contains(&response.status) => response,
+        Ok(response) => {
+            send_bridge_response(stream, response, origin);
+            return;
+        }
+        Err(error) => {
+            eprintln!("[HTTP API] Agent queue 配置准备失败: {}", error);
+            send_json_response(
+                stream,
+                503,
+                r#"{"error":"Agent queue 配置服务不可用","code":"agent_rpc_unavailable"}"#,
+                origin,
+            );
+            return;
+        }
+    };
+    let config = match prepared
+        .body
+        .as_deref()
+        .and_then(|body| serde_json::from_str::<Value>(body).ok())
+    {
+        Some(config) => config,
+        None => {
+            send_json_response(
+                stream,
+                502,
+                r#"{"error":"Agent queue 配置响应不正确","code":"invalid_agent_rpc_config"}"#,
+                origin,
+            );
+            return;
+        }
+    };
+    let uuid = match config.get("uuid").and_then(Value::as_str) {
+        Some(uuid) if !uuid.trim().is_empty() => uuid.to_string(),
+        _ => {
+            send_json_response(
+                stream,
+                502,
+                r#"{"error":"Agent queue 配置缺少 uuid","code":"invalid_agent_rpc_config"}"#,
+                origin,
+            );
+            return;
+        }
+    };
+
+    match workers.queue(&session_id, config) {
+        Ok(true) => {
+            let body = json!({ "accepted": true, "uuid": uuid }).to_string();
+            send_json_response(stream, 202, &body, origin);
+        }
+        Ok(false) => send_json_response(
+            stream,
+            409,
+            r#"{"error":"Agent 会话没有运行中的 Pi worker","code":"agent_worker_not_found"}"#,
+            origin,
+        ),
+        Err(error) => {
+            eprintln!("[HTTP API] Pi worker queue 失败: {}", error);
+            let body = format!(
+                r#"{{"error":"{}","code":"pi_worker_unavailable"}}"#,
+                escape_json_string(&error)
+            );
+            send_json_response(stream, 503, &body, origin);
+        }
+    }
+}
+
 fn build_prepare_body(request: &HttpRequest, session_id: &str) -> Result<Vec<u8>, String> {
     let mut value = serde_json::from_slice::<Value>(&request.body)
         .map_err(|_| "请求体不是有效的 JSON".to_string())?;
@@ -1479,8 +1634,8 @@ fn finalize_worker_run(bridge: &Arc<Bridge>, frame: &Value) -> Result<Option<Str
                 .collect(),
         );
     }
-    let body = serde_json::to_vec(&body)
-        .map_err(|error| format!("Agent 完成帧序列化失败: {}", error))?;
+    let body =
+        serde_json::to_vec(&body).map_err(|error| format!("Agent 完成帧序列化失败: {}", error))?;
     let response = send_internal_request(bridge, "/api/internal/agent/complete", body)?;
     ensure_internal_success_with_body(response)
 }
@@ -1705,8 +1860,8 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::pi_rpc::{
-        format_sse_event, is_agent_messages_route, is_agent_stop_route, parse_worker_frame,
-        sse_headers,
+        format_sse_event, is_agent_messages_route, is_agent_queue_route, is_agent_stop_route,
+        parse_worker_frame, sse_headers,
     };
     use super::{
         append_recording_line, decode_hex, encode_hex, find_subslice, is_allowed_origin,
@@ -1771,7 +1926,8 @@ mod tests {
 
     #[test]
     fn appends_valid_jsonl_lines_and_rejects_multiline_payloads() {
-        let path = std::env::temp_dir().join(format!("copis-recording-{}.jsonl", std::process::id()));
+        let path =
+            std::env::temp_dir().join(format!("copis-recording-{}.jsonl", std::process::id()));
         let _ = std::fs::remove_file(&path);
         let bridge = Bridge::new();
         append_recording_line(&bridge, &path, br#"{"kind":"recording_started"}"#, true).unwrap();
@@ -1815,6 +1971,22 @@ mod tests {
         assert!(!is_agent_stop_route(
             "POST",
             "/api/agent/sessions/session-1/stop/extra"
+        ));
+    }
+
+    #[test]
+    fn recognizes_only_agent_queue_post_as_queue_route() {
+        assert!(is_agent_queue_route(
+            "POST",
+            "/api/agent/sessions/session-1/queue"
+        ));
+        assert!(!is_agent_queue_route(
+            "GET",
+            "/api/agent/sessions/session-1/queue"
+        ));
+        assert!(!is_agent_queue_route(
+            "POST",
+            "/api/agent/sessions/session-1/queue/extra"
         ));
     }
 

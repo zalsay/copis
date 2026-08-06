@@ -1701,7 +1701,7 @@ const electronAPI: ElectronAPI = {
 
   // Agent 队列消息
   queueAgentMessage: (input: AgentQueueMessageInput) => {
-    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.QUEUE_MESSAGE, input)
+    return agentHttpStreamClient.queue(input)
   },
 
   // Agent 后台任务管理

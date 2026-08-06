@@ -1,0 +1,214 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="Copis，本地优先的智能体工作台。" />
+    <title>Copis | 智能体工作台</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main>
+      <section class="hero" id="top" aria-labelledby="copis-title">
+        <div class="hero-image" aria-hidden="true"></div>
+        <header class="site-header glass-surface">
+          <a class="brand" href="#top" aria-label="Copis 首页">
+            <img class="brand-logo" src="./assets/main-logo.png" alt="" />
+            <span>Copis</span>
+          </a>
+          <nav class="site-nav" aria-label="主导航">
+            <a href="#workflow">工作流</a>
+          </nav>
+          <div class="auth-actions" aria-label="账号操作">
+            <button class="nav-auth nav-auth-login" type="button" data-open-auth="登录">登录</button>
+            <button class="nav-auth nav-auth-register" type="button" data-open-auth="注册">注册</button>
+          </div>
+        </header>
+
+        <div class="hero-copy">
+          <p class="eyebrow">本地优先的智能工作台</p>
+          <h1 id="copis-title">Copis</h1>
+          <p class="hero-statement">给长期工作，
+            <span>一个能持续推进的智能体。</span>
+          </p>
+          <p class="hero-description">从一句任务开始，把模型、文件、技能和工具连接成你自己的工作流。数据与配置默认留在本地。</p>
+          <div class="hero-actions">
+            <button class="button button-primary" type="button" data-open-command>开始一个任务</button>
+            <a class="button button-secondary" href="#workflow">看看它如何工作</a>
+          </div>
+          <dl class="hero-facts" aria-label="Copis 关键能力">
+            <div><dt>01</dt><dd>多模型对话</dd></div>
+            <div><dt>02</dt><dd>本地智能体</dd></div>
+            <div><dt>03</dt><dd>技能与工具服务</dd></div>
+          </dl>
+        </div>
+
+        <section class="workbench glass-surface" aria-label="Copis 智能体工作台预览">
+          <aside class="workbench-sidebar">
+            <div class="workbench-brand">
+              <img src="./assets/main-logo.png" alt="" />
+              <span>工作台</span>
+            </div>
+            <button class="new-task" type="button" data-open-command>新建任务 <strong>+</strong></button>
+            <div class="workspace-label">今天</div>
+            <button class="session-item active" type="button" data-session="整理本周产品反馈" aria-pressed="true">
+              <span class="session-dot yellow"></span>整理本周产品反馈
+            </button>
+            <button class="session-item" type="button" data-session="准备版本发布说明" aria-pressed="false">
+              <span class="session-dot green"></span>准备版本发布说明
+            </button>
+            <button class="session-item" type="button" data-session="检查 API 接入" aria-pressed="false">
+              <span class="session-dot teal"></span>检查 API 接入
+            </button>
+            <div class="workbench-person">
+              <span class="person-avatar">S</span>
+              <span><strong>本地工作区</strong><small>文件始终由你掌控</small></span>
+            </div>
+          </aside>
+          <div class="workbench-main">
+            <div class="workbench-topbar">
+              <span class="status-live"><i></i>智能体正在工作</span>
+              <button class="icon-button" type="button" data-open-command aria-label="创建新任务">+</button>
+            </div>
+            <div class="conversation">
+              <div class="message message-user">
+                <span>你</span>
+                <p id="active-session-title">整理本周产品反馈</p>
+              </div>
+              <div class="message message-agent">
+                <span class="agent-avatar"><img src="./assets/main-logo.png" alt="" /></span>
+                <div>
+                  <strong>Copis 智能体</strong>
+                  <p id="active-session-copy">已读取工作区中的访谈记录，正在归纳可验证的问题与下一步行动。</p>
+                  <div class="activity-row">
+                    <span class="activity-icon">/</span>
+                    <span>正在分析访谈记录</span>
+                    <b>进行中</b>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="agent-composer">
+              <span>继续告诉 Copis 你想完成什么</span>
+              <button type="button" data-open-command aria-label="发送任务">&#8593;</button>
+            </div>
+          </div>
+        </section>
+      </section>
+
+      <section class="workflow-section" id="workflow" aria-labelledby="workflow-title">
+        <div class="section-heading">
+          <p class="eyebrow">选择一个起点</p>
+          <h2 id="workflow-title">今天，从哪件事开始？</h2>
+          <p>像家庭π的空间入口一样直接。选定一个方向，Copis 立刻把它变成可追踪的任务。</p>
+        </div>
+        <section class="workflow-carousel glass-surface" data-workflow-carousel aria-label="Copis 工作场景轮播">
+          <header class="carousel-context">
+            <span class="carousel-count" id="carousel-count">01 / 03</span>
+            <span class="carousel-label">Copis 工作场景</span>
+            <div class="carousel-arrows">
+              <button class="carousel-arrow" type="button" data-carousel-step="-1" aria-label="上一张">&#8592;</button>
+              <button class="carousel-arrow" type="button" data-carousel-step="1" aria-label="下一张">&#8594;</button>
+            </div>
+          </header>
+          <div class="carousel-window">
+            <div class="carousel-track" id="workflow-carousel-track">
+              <article class="workflow-slide" data-slide-title="研究与判断" aria-hidden="false">
+                <div class="slide-copy">
+                  <span class="slide-kicker yellow">研究与判断</span>
+                  <h3>让信息，<span>成为可靠的下一步。</span></h3>
+                  <p>Copis 在你的工作区里读取资料、归纳证据、对比选择，最后把分析还原成可继续推进的任务。</p>
+                  <div class="slide-tags"><span>访谈记录</span><span>问题归纳</span><span>行动建议</span></div>
+                  <button class="button button-primary" type="button" data-open-command>从资料开始</button>
+                </div>
+                <div class="scene research-scene" aria-label="研究任务预览">
+                  <div class="scene-toolbar"><span class="scene-name">本周产品反馈</span><span class="scene-status">已读取 12 条资料</span></div>
+                  <div class="research-layout">
+                    <div class="source-stack"><span>访谈记录</span><span>用户工单</span><span>会议纪要</span></div>
+                    <div class="insight-panel"><small>关键发现</small><strong>首次配置路径太长，影响任务启动。</strong><p>已关联 7 条用户反馈</p></div>
+                  </div>
+                  <div class="scene-footer"><span>结论已整理</span><b>查看下一步 &#8594;</b></div>
+                </div>
+              </article>
+              <article class="workflow-slide" data-slide-title="文件与交付" aria-hidden="true" inert>
+                <div class="slide-copy">
+                  <span class="slide-kicker lime">文件与交付</span>
+                  <h3>让成果，<span>留在你的工作区。</span></h3>
+                  <p>从一份草稿到一个完整交付，智能体在你的授权范围内创建、整理和更新本地文件，不丢失过程与上下文。</p>
+                  <div class="slide-tags"><span>本地文件</span><span>版本记录</span><span>交付清单</span></div>
+                  <button class="button button-primary lime-button" type="button" data-open-command>开始整理文件</button>
+                </div>
+                <div class="scene file-scene" aria-label="文件任务预览">
+                  <div class="scene-toolbar"><span class="scene-name">发布说明</span><span class="scene-status">3 项已更新</span></div>
+                  <div class="file-layout">
+                    <div class="file-tree"><span>项目资料</span><span>发布说明</span><span class="active-file">版本摘要</span><span>待办清单</span></div>
+                    <div class="document-sheet"><span>版本摘要</span><i></i><i></i><i class="short"></i><strong>交付已准备</strong></div>
+                  </div>
+                  <div class="scene-footer"><span>修改已保存到本地</span><b>打开文件夹 &#8594;</b></div>
+                </div>
+              </article>
+              <article class="workflow-slide" data-slide-title="团队与自动化" aria-hidden="true" inert>
+                <div class="slide-copy">
+                  <span class="slide-kicker teal">团队与自动化</span>
+                  <h3>让重复工作，<span>自己向前走。</span></h3>
+                  <p>将常用技能、工具服务和远程机器人组合成流程，在你需要的时候继续推进，而不是重新开始。</p>
+                  <div class="slide-tags"><span>定时任务</span><span>工具服务</span><span>远程协作</span></div>
+                  <button class="button button-primary teal-button" type="button" data-open-command>创建自动流程</button>
+                </div>
+                <div class="scene automation-scene" aria-label="自动化任务预览">
+                  <div class="scene-toolbar"><span class="scene-name">每周反馈汇总</span><span class="scene-status">按计划运行</span></div>
+                  <div class="automation-flow"><span>收集反馈</span><i></i><span>归纳主题</span><i></i><span>发送摘要</span></div>
+                  <div class="automation-result"><span class="success-dot"></span><div><strong>最近一次运行完成</strong><small>摘要已发送到团队空间</small></div></div>
+                  <div class="scene-footer"><span>下次运行：周一 09:00</span><b>管理流程 &#8594;</b></div>
+                </div>
+              </article>
+            </div>
+          </div>
+          <footer class="carousel-footer">
+            <div class="carousel-dots" aria-label="轮播分页">
+              <button class="active" type="button" data-carousel-dot="0" aria-label="查看研究与判断" aria-pressed="true"></button>
+              <button type="button" data-carousel-dot="1" aria-label="查看文件与交付" aria-pressed="false"></button>
+              <button type="button" data-carousel-dot="2" aria-label="查看团队与自动化" aria-pressed="false"></button>
+            </div>
+            <span id="carousel-caption">研究与判断</span>
+          </footer>
+        </section>
+      </section>
+    </main>
+
+    <dialog class="command-dialog" id="command-dialog" aria-labelledby="dialog-title">
+      <form method="dialog" class="command-panel glass-surface">
+        <div class="dialog-heading">
+          <img class="brand-logo" src="./assets/main-logo.png" alt="" />
+          <div><p class="eyebrow">新建任务</p><h2 id="dialog-title">开始一个任务</h2></div>
+          <button class="dialog-close" value="cancel" aria-label="关闭">&#215;</button>
+        </div>
+        <label for="task-input">你想让 Copis 推进什么？</label>
+        <textarea id="task-input" rows="4" placeholder="例如：阅读这个项目的反馈文件，列出影响最大的三个问题。"></textarea>
+        <div class="dialog-actions">
+          <button class="button button-secondary" value="cancel">暂不开始</button>
+          <button class="button button-primary" id="submit-task" value="default">创建任务</button>
+        </div>
+      </form>
+    </dialog>
+    <dialog class="command-dialog" id="auth-dialog" aria-labelledby="auth-dialog-title">
+      <form class="command-panel glass-surface" id="auth-form" novalidate>
+        <div class="dialog-heading">
+          <img class="brand-logo" src="./assets/main-logo.png" alt="" />
+          <div><p class="eyebrow" id="auth-dialog-kicker">欢迎回来</p><h2 id="auth-dialog-title">登录 Copis</h2></div>
+          <button class="dialog-close" type="button" data-close-auth aria-label="关闭">&#215;</button>
+        </div>
+        <label for="auth-account">邮箱</label>
+        <input class="auth-input" id="auth-account" type="email" autocomplete="email" required placeholder="输入你的邮箱" />
+        <label for="auth-password">密码</label>
+        <input class="auth-input" id="auth-password" type="password" autocomplete="current-password" required placeholder="输入你的密码" />
+        <div class="dialog-actions">
+          <button class="button button-secondary" type="button" data-close-auth>取消</button>
+          <button class="button button-primary" id="auth-submit" type="submit">登录</button>
+        </div>
+      </form>
+    </dialog>
+    <div class="toast" id="task-toast" role="status" aria-live="polite">任务已准备好。打开 Copis 后即可继续。</div>
+    <script src="./app.js"></script>
+  </body>
+</html>

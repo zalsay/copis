@@ -1,5 +1,5 @@
 // 浏览器模式的普通 API 走 Vite 代理；Agent 流式请求直接连接 Rust SSE 服务。
-import type { AgentStreamCompletePayload, AgentStreamEvent, AgentSendInput, MemoryExportFileInput } from '@copis/shared'
+import type { AgentQueueMessageInput, AgentStreamCompletePayload, AgentStreamEvent, AgentSendInput, MemoryExportFileInput } from '@copis/shared'
 import { agentHttpStreamClient, configureAgentHttpApiBaseUrl } from './agent-http-stream'
 import { RENDERER_HTTP_API_BASE_URL, RENDERER_HTTP_API_PORT } from './http-api-base-url'
 
@@ -159,6 +159,9 @@ function createHttpMethods(): Record<string, HttpMethod> {
     },
     sendAgentMessage: (args) => {
       return agentHttpStreamClient.send(getArgument<AgentSendInput>(args, 0))
+    },
+    queueAgentMessage: (args) => {
+      return agentHttpStreamClient.queue(getArgument<AgentQueueMessageInput>(args, 0))
     },
     stopAgent: (args) => {
       return agentHttpStreamClient.stop(getArgument<string>(args, 0))

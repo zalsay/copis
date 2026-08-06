@@ -5,15 +5,18 @@ import {
   parseWorkerCommand,
   type AgentRpcWorkerCommand,
   type AgentRpcWorkerFrame,
+  type PiWorkerQueueConfig,
   type PiWorkerRunConfig,
 } from './lib/agent-rpc-protocol'
 import { attachAgentRunDuration } from './lib/agent-rpc-duration'
 import { createMemoryMaintenanceRunner, MemoryMaintenanceService } from './lib/adapters/pi-memory-maintenance'
+import { receiveActiveWorkerQueue } from './lib/pi-worker-queue-receiver'
 
 interface ActiveWorkerRun {
   sessionId: string
   adapter: PiAgentAdapter
   stopped: boolean
+  acceptedQueueUuids: Set<string>
 }
 
 let activeRun: ActiveWorkerRun | undefined
@@ -83,6 +86,19 @@ async function runWorker(config: PiWorkerRunConfig): Promise<void> {
     return
   }
 
+  // 权限策略只能由 Rust 保存和校验。策略字段若能到达 Pi Worker，说明 Rust
+  // 没有完成“取走策略再启动”的边界，必须拒绝运行，不能降级执行。
+  if (config.query.useRustFileApi !== true) {
+    await writeFrame({ type: 'fatal', sessionId: config.sessionId, error: 'Pi Worker 未启用 Rust 文件权限服务' })
+    await flushOutput()
+    return
+  }
+  if (Object.prototype.hasOwnProperty.call(config.query, 'fileAccessPolicy')) {
+    await writeFrame({ type: 'fatal', sessionId: config.sessionId, error: '文件权限策略不允许传入 Pi Worker' })
+    await flushOutput()
+    return
+  }
+
   const runStartedAt = config.query.retryRunStartedAt ?? Date.now()
   const { PiAgentAdapter } = await import('./lib/adapters/pi-agent-adapter')
   const adapter = new PiAgentAdapter()
@@ -91,6 +107,7 @@ async function runWorker(config: PiWorkerRunConfig): Promise<void> {
     sessionId: config.sessionId,
     adapter,
     stopped: false,
+    acceptedQueueUuids: new Set(),
   }
   activeRun = run
 
@@ -191,7 +208,45 @@ function handleCommand(command: AgentRpcWorkerCommand): void {
     }
     return
   }
+  if (command.type === 'queue') {
+    void queueWorker(command.config)
+    return
+  }
   void runWorker(command.config)
+}
+
+async function queueWorker(config: PiWorkerQueueConfig): Promise<void> {
+  const run = activeRun
+  if (!run || run.sessionId !== config.sessionId) {
+    await writeFrame({ type: 'error', sessionId: config.sessionId, error: '当前会话没有正在运行的 Pi Worker' })
+    return
+  }
+
+  try {
+    const accepted = await receiveActiveWorkerQueue(run, config.uuid, async () => {
+      await run.adapter.sendQueuedMessage(
+        config.sessionId,
+        {
+          type: 'user',
+          message: { role: 'user', content: config.userMessage },
+          parent_tool_use_id: null,
+          priority: 'now',
+          uuid: config.uuid,
+          session_id: config.sessionId,
+        },
+        {
+          ...(config.interrupt ? { interrupt: true } : {}),
+          ...(config.skillMentions && config.skillMentions.length > 0 ? { skillMentions: config.skillMentions } : {}),
+        },
+      )
+    })
+    if (!accepted) {
+      console.info(`[Pi Worker] 忽略重复 queue UUID: sessionId=${config.sessionId}, uuid=${config.uuid}`)
+    }
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error)
+    await writeFrame({ type: 'error', sessionId: config.sessionId, error: message })
+  }
 }
 
 async function main(): Promise<void> {

@@ -6,6 +6,7 @@ use std::sync::{Arc, Mutex};
 
 use serde_json::Value;
 
+use crate::agent_files::AgentFilePolicyStore;
 use crate::runtime;
 
 pub fn is_agent_messages_route(method: &str, path: &str) -> bool {
@@ -19,6 +20,13 @@ pub fn is_agent_stop_route(method: &str, path: &str) -> bool {
     method.eq_ignore_ascii_case("POST")
         && path.starts_with("/api/agent/sessions/")
         && path.ends_with("/stop")
+        && path.matches('/').count() == 5
+}
+
+pub fn is_agent_queue_route(method: &str, path: &str) -> bool {
+    method.eq_ignore_ascii_case("POST")
+        && path.starts_with("/api/agent/sessions/")
+        && path.ends_with("/queue")
         && path.matches('/').count() == 5
 }
 
@@ -71,6 +79,7 @@ struct WorkerControl {
 
 pub struct PiWorkerManager {
     workers: Mutex<HashMap<String, Arc<WorkerControl>>>,
+    file_policies: Arc<AgentFilePolicyStore>,
 }
 
 pub struct PiWorkerRun {
@@ -136,10 +145,20 @@ impl PiWorkerManager {
     pub fn new() -> Self {
         Self {
             workers: Mutex::new(HashMap::new()),
+            file_policies: Arc::new(AgentFilePolicyStore::new()),
         }
     }
 
+    pub fn file_policies(&self) -> Arc<AgentFilePolicyStore> {
+        Arc::clone(&self.file_policies)
+    }
+
     pub fn start(&self, session_id: &str, mut config: Value) -> Result<PiWorkerRun, String> {
+        let query = config
+            .get_mut("query")
+            .and_then(Value::as_object_mut)
+            .ok_or_else(|| "Pi worker 配置缺少 query".to_string())?;
+        self.file_policies.register_from_query(session_id, query)?;
         let executable_path = std::env::var("COPIS_PI_RPC_EXECUTABLE").ok();
         let worker_path = std::env::var("COPIS_PI_RPC_WORKER").ok();
         let runtime_path = std::env::var("COPIS_PI_RPC_RUNTIME").ok();
@@ -155,16 +174,16 @@ impl PiWorkerManager {
             .as_deref()
             .is_some_and(|path| !path.trim().is_empty());
         if require_compiled_runtime && !has_compiled_executable {
+            self.file_policies.remove(session_id);
             return Err(
-                "未找到打包的 Copis runtime。请重新安装或重新构建应用后再启动 Agent。"
-                    .to_string(),
+                "未找到打包的 Copis runtime。请重新安装或重新构建应用后再启动 Agent。".to_string(),
             );
         }
         let require_external_runtime = !has_compiled_executable && !use_system_runtime;
         // 自包含 Bun Worker 不需要探测旧的 Node/Git runtime 目录；这也避免坏掉的
         // 外部 runtime 在 Windows 上拖慢每次 Agent 启动。
         let external_runtime = require_external_runtime.then(runtime::resolve_runtime);
-        let launch = resolve_worker_launch(
+        let launch = match resolve_worker_launch(
             executable_path.clone(),
             worker_path,
             runtime_path.clone(),
@@ -172,15 +191,27 @@ impl PiWorkerManager {
                 .as_ref()
                 .and_then(|runtime| runtime.node_path().map(PathBuf::from)),
             use_system_runtime,
-        )?;
+        ) {
+            Ok(launch) => launch,
+            Err(error) => {
+                self.file_policies.remove(session_id);
+                return Err(error);
+            }
+        };
         let require_node = worker_requires_node(
             executable_path.as_deref(),
             runtime_path.as_deref(),
             use_system_runtime,
         );
         if let Some(external_runtime) = external_runtime.as_ref() {
-            external_runtime.validate_for_worker(require_node, true)?;
-            external_runtime.inject_pi_config(&mut config, require_node, true)?;
+            if let Err(error) = external_runtime.validate_for_worker(require_node, true) {
+                self.file_policies.remove(session_id);
+                return Err(error);
+            }
+            if let Err(error) = external_runtime.inject_pi_config(&mut config, require_node, true) {
+                self.file_policies.remove(session_id);
+                return Err(error);
+            }
         }
         let mut command = Command::new(&launch.program);
         command.args(&launch.args);
@@ -203,21 +234,29 @@ impl PiWorkerManager {
                 command.env("SHELL", path);
             }
         }
-        let mut child = command
+        let mut child = match command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
-            .map_err(|error| format!("Pi worker 启动失败: {}", error))?;
+        {
+            Ok(child) => child,
+            Err(error) => {
+                self.file_policies.remove(session_id);
+                return Err(format!("Pi worker 启动失败: {}", error));
+            }
+        };
 
-        let stdin = child
-            .stdin
-            .take()
-            .ok_or_else(|| "Pi worker stdin 不可用".to_string())?;
-        let stdout = child
-            .stdout
-            .take()
-            .ok_or_else(|| "Pi worker stdout 不可用".to_string())?;
+        let stdin = child.stdin.take().ok_or_else(|| {
+            self.file_policies.remove(session_id);
+            let _ = child.kill();
+            "Pi worker stdin 不可用".to_string()
+        })?;
+        let stdout = child.stdout.take().ok_or_else(|| {
+            self.file_policies.remove(session_id);
+            let _ = child.kill();
+            "Pi worker stdout 不可用".to_string()
+        })?;
         if let Some(stderr) = child.stderr.take() {
             spawn_stderr_reader(stderr);
         }
@@ -228,6 +267,7 @@ impl PiWorkerManager {
         {
             let mut workers = self.workers.lock().unwrap();
             if workers.contains_key(session_id) {
+                self.file_policies.remove(session_id);
                 let _ = child.kill();
                 return Err("该 Agent 会话已有运行中的 Pi worker".to_string());
             }
@@ -241,6 +281,7 @@ impl PiWorkerManager {
         });
         if let Err(error) = write_json_line(&control, &command) {
             self.workers.lock().unwrap().remove(session_id);
+            self.file_policies.remove(session_id);
             let _ = child.kill();
             return Err(format!("Pi worker run 命令发送失败: {}", error));
         }
@@ -266,8 +307,36 @@ impl PiWorkerManager {
         Ok(true)
     }
 
+    pub fn queue(&self, session_id: &str, config: Value) -> Result<bool, String> {
+        let configured_session_id = config
+            .get("sessionId")
+            .and_then(Value::as_str)
+            .ok_or_else(|| "Pi worker queue 配置缺少 sessionId".to_string())?;
+        if configured_session_id != session_id {
+            return Err("Pi worker queue 会话不匹配".to_string());
+        }
+        let request_id = config
+            .get("uuid")
+            .and_then(Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+            .ok_or_else(|| "Pi worker queue 配置缺少 uuid".to_string())?;
+        let control = self.workers.lock().unwrap().get(session_id).cloned();
+        let Some(control) = control else {
+            return Ok(false);
+        };
+        let command = serde_json::json!({
+            "type": "queue",
+            "requestId": request_id,
+            "config": config,
+        });
+        write_json_line(&control, &command)
+            .map_err(|error| format!("Pi worker queue 命令发送失败: {}", error))?;
+        Ok(true)
+    }
+
     pub fn finish(&self, mut run: PiWorkerRun) {
         self.workers.lock().unwrap().remove(&run.session_id);
+        self.file_policies.remove(&run.session_id);
         if run.child.try_wait().ok().flatten().is_none() {
             let _ = run.child.kill();
         }

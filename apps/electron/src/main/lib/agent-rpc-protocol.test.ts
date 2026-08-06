@@ -55,6 +55,23 @@ describe('Agent RPC 协议', () => {
     expect(parseWorkerCommand('{"type":"stop"}')).toBeUndefined()
   })
 
+  test('Given queue command When parsed Then preserves the worker queue payload', () => {
+    const command: AgentRpcWorkerCommand = {
+      type: 'queue',
+      requestId: 'queue-1',
+      config: {
+        sessionId: 'session-1',
+        userMessage: '继续使用 automation',
+        uuid: 'message-1',
+        interrupt: true,
+        skillMentions: ['automation'],
+      },
+    }
+
+    expect(parseWorkerCommand(serializeWorkerCommand(command))).toEqual(command)
+    expect(parseWorkerCommand('{"type":"queue","requestId":"queue-1","config":{"sessionId":"session-1","userMessage":"继续","uuid":42}}')).toBeUndefined()
+  })
+
   test('Given one SSE data frame When parsed Then restores the worker frame JSON', () => {
     expect(parseAgentSseData('data: {"type":"error","sessionId":"s1","error":"失败"}\n\n')).toEqual({
       type: 'error',
