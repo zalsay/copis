@@ -9,6 +9,8 @@ import type {
 import { functionalModuleBusyAtom, functionalModuleProgressAtom, functionalModuleStartupAtom, functionalModuleStatusesAtom } from '@/atoms/functional-modules'
 import { isHttpApiBridgeActive } from '@/lib/http-api-bridge'
 import { CopisAppLogo } from '@/lib/model-logo'
+import { detectIsWindows, WINDOW_CONTROLS_INSET_RIGHT } from '@/lib/platform'
+import { cn } from '@/lib/utils'
 import {
   formatStartupBytes,
   getStartupModuleRowsForMode,
@@ -27,6 +29,7 @@ const INITIAL_PROGRESS: FunctionalModuleStartupProgressPayload = {
 
 export function FunctionalModuleUpdateGate({ children }: FunctionalModuleUpdateGateProps): React.ReactElement {
   const developmentMode = import.meta.env.DEV
+  const isWindows = React.useMemo(() => detectIsWindows(), [])
   const [startup, setStartup] = useAtom(functionalModuleStartupAtom)
   const statuses = useAtomValue(functionalModuleStatusesAtom)
   const progresses = useAtomValue(functionalModuleProgressAtom)
@@ -127,7 +130,15 @@ export function FunctionalModuleUpdateGate({ children }: FunctionalModuleUpdateG
       aria-label="Copis 功能模块更新"
     >
       <div className="flex min-h-full w-full flex-col px-6 pb-10 pt-0 sm:px-10">
-        <div aria-hidden="true" className="titlebar-drag-region -mx-6 h-[35px] shrink-0 bg-[hsl(var(--sidebar-surface))] sm:-mx-10" />
+        <div className="relative -mx-6 h-[35px] shrink-0 bg-[hsl(var(--sidebar-surface))] sm:-mx-10">
+          <div
+            aria-hidden="true"
+            className={cn(
+              'pointer-events-none absolute inset-y-0 left-0 titlebar-drag-region',
+              isWindows ? WINDOW_CONTROLS_INSET_RIGHT : 'right-0',
+            )}
+          />
+        </div>
 
         <section className="mx-auto flex w-full max-w-3xl flex-1 flex-col justify-center py-10 sm:py-14">
           <header className="flex flex-col gap-5">

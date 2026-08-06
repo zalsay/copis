@@ -1,6 +1,7 @@
 ﻿[CmdletBinding()]
 param(
-    [switch]$SkipInstall
+    [switch]$SkipInstall,
+    [string]$FunctionalModuleManifestUrl
 )
 
 $ErrorActionPreference = 'Stop'
@@ -23,6 +24,32 @@ $appVersion = [string]$electronPackage.version
 if ([string]::IsNullOrWhiteSpace($appVersion)) {
     throw "无法从 Electron 包 package.json 读取版本号：$electronPackagePath"
 }
+
+$manifestUrl = ([string]$FunctionalModuleManifestUrl).Trim()
+if ([string]::IsNullOrWhiteSpace($manifestUrl)) {
+    $manifestUrl = $env:COPIS_FUNCTIONAL_MODULE_MANIFEST_URL
+}
+if ([string]::IsNullOrWhiteSpace($manifestUrl)) {
+    $envPath = Join-Path $rootDir '.env'
+    if (Test-Path -LiteralPath $envPath -PathType Leaf) {
+        foreach ($line in Get-Content -LiteralPath $envPath) {
+            if ($line -match '^\s*(?:export\s+)?COPIS_FUNCTIONAL_MODULE_MANIFEST_URL\s*=\s*(?<value>.*)\s*$') {
+                $manifestUrl = $Matches['value'].Trim()
+                if ($manifestUrl.Length -ge 2) {
+                    $quote = $manifestUrl[0]
+                    if (($quote -eq '"' -or $quote -eq "'") -and $manifestUrl[$manifestUrl.Length - 1] -eq $quote) {
+                        $manifestUrl = $manifestUrl.Substring(1, $manifestUrl.Length - 2)
+                    }
+                }
+                break
+            }
+        }
+    }
+}
+if ([string]::IsNullOrWhiteSpace($manifestUrl)) {
+    throw '功能模块 manifest 地址未配置。请提供 -FunctionalModuleManifestUrl 或 COPIS_FUNCTIONAL_MODULE_MANIFEST_URL。'
+}
+$env:COPIS_FUNCTIONAL_MODULE_MANIFEST_URL = $manifestUrl.Trim()
 
 $bunPath = $null
 $bunCommand = Get-Command bun -ErrorAction SilentlyContinue
@@ -53,6 +80,7 @@ $pathSeparator = [System.IO.Path]::PathSeparator
 $env:PATH = "$bunBinDir$pathSeparator$env:PATH"
 
 Write-Host "使用 Bun：$bunPath"
+Write-Host '已配置功能模块 manifest 地址。'
 
 if (-not $SkipInstall) {
     Write-Host '正在按 bun.lock 安装依赖...'

@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import type { MainWindowState } from '../../types'
 import { getPersistableMainWindowState } from './main-window-lifecycle'
 import { getSettings, updateSettings } from './settings-service'
+import { getCustomWindowChromeOptions } from './window-chrome'
 
 const DEFAULT_WIDTH = 1180
 const DEFAULT_HEIGHT = 820
@@ -78,18 +79,10 @@ function persistPlanningWindowState(win: BrowserWindow): void {
 
 function createPlanningWindow(): BrowserWindow {
   const savedState = getSettings().planningWindowState
-  const isMac = process.platform === 'darwin'
-  const isWindows = process.platform === 'win32'
-  const titleBarOptions = isMac
-    ? {
-        titleBarStyle: 'hiddenInset' as const,
-        trafficLightPosition: { x: 18, y: 18 },
-        vibrancy: 'under-window' as const,
-        visualEffectState: 'followWindow' as const,
-      }
-    : isWindows
-      ? { titleBarStyle: 'hidden' as const }
-      : {}
+  const titleBarOptions = getCustomWindowChromeOptions({
+    platform: process.platform,
+    trafficLightPosition: { x: 18, y: 18 },
+  })
   const win = new BrowserWindow({
     ...getInitialBounds(savedState),
     minWidth: MIN_WIDTH,

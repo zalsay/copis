@@ -13,10 +13,8 @@ describe('Electron 主进程构建配置', () => {
     })
   })
 
-  test('构建环境未提供地址时保持空配置，运行时仍可通过环境变量覆盖', () => {
-    expect(resolveManifestBuildConfig({})).toEqual({
-      __COPIS_FUNCTIONAL_MODULE_MANIFEST_URL__: '""',
-    })
+  test('未提供 manifest 地址时中止构建配置', () => {
+    expect(() => resolveManifestBuildConfig({})).toThrow('COPIS_FUNCTIONAL_MODULE_MANIFEST_URL')
   })
 
   test('从仓库 .env 读取构建时 manifest 地址，显式环境变量优先', () => {

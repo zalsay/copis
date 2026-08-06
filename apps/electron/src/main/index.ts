@@ -129,6 +129,7 @@ import {
   shouldSuppressVoiceDictationActivate,
 } from './lib/voice-dictation-window'
 import { registerGlobalShortcut, unregisterAllGlobalShortcuts } from './lib/global-shortcut-service'
+import { getCustomWindowChromeOptions } from './lib/window-chrome'
 import { setCopisVersion } from '@copis/core'
 import { TRAY_IPC_CHANNELS } from '../types'
 
@@ -349,19 +350,10 @@ function createWindow(): void {
     console.warn('App icon not found at:', iconPath)
   }
 
-  const isMac = process.platform === 'darwin'
-  const isWindows = process.platform === 'win32'
-
-  const titleBarOptions = isMac
-    ? {
-        titleBarStyle: 'hiddenInset' as const,
-        trafficLightPosition: { x: 18, y: 10 },
-        vibrancy: 'under-window' as const,
-        visualEffectState: 'followWindow' as const,
-      }
-    : isWindows
-      ? { titleBarStyle: 'hidden' as const }
-      : {}
+  const titleBarOptions = getCustomWindowChromeOptions({
+    platform: process.platform,
+    trafficLightPosition: { x: 18, y: 10 },
+  })
 
   const savedState = getSettings().mainWindowState
   const initialBounds = savedState

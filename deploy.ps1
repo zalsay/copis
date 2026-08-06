@@ -14,6 +14,8 @@
 #>
 [CmdletBinding()]
 param(
+    [Parameter(Position = 0, ValueFromRemainingArguments = $true)]
+    [string[]]$LegacyArguments,
     [switch]$SkipInstall,
     [switch]$BuildApp,
     [switch]$SkipRustBuild,
@@ -35,6 +37,20 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+
+foreach ($argument in $LegacyArguments) {
+    switch ($argument) {
+        '--rust' { $RustOnly = $true }
+        '--officecli' { $OfficeCliOnly = $true }
+        '--build-app' { $BuildApp = $true }
+        '--skip-install' { $SkipInstall = $true }
+        '--skip-rust-build' { $SkipRustBuild = $true }
+        '--skip-publish' { $SkipPublish = $true }
+        default {
+            throw "不支持的参数：$argument。PowerShell 参数请使用单横线形式，例如 -RustOnly。"
+        }
+    }
+}
 
 $rootDir = (Resolve-Path -LiteralPath $PSScriptRoot).Path
 $appDir = Join-Path $rootDir 'apps\electron'

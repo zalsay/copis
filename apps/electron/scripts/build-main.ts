@@ -17,8 +17,12 @@ export function loadBuildEnvironment(
 }
 
 export function resolveManifestBuildConfig(env: NodeJS.ProcessEnv): Record<string, string> {
+  const configuredUrl = env.COPIS_FUNCTIONAL_MODULE_MANIFEST_URL?.trim()
+  if (!configuredUrl) {
+    throw new Error('功能模块 manifest 地址未配置：请提供 COPIS_FUNCTIONAL_MODULE_MANIFEST_URL')
+  }
   return {
-    [MANIFEST_URL_DEFINE]: JSON.stringify(env.COPIS_FUNCTIONAL_MODULE_MANIFEST_URL?.trim() ?? ''),
+    [MANIFEST_URL_DEFINE]: JSON.stringify(configuredUrl),
   }
 }
 

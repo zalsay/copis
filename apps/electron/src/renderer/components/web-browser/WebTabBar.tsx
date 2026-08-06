@@ -4,7 +4,12 @@ import { Globe2, LoaderCircle, Plus, X } from 'lucide-react'
 import type { WebTabsSnapshot } from '@copis/shared'
 import { activeWebTabIdAtom, webTabsAtom } from '@/atoms/web-tabs'
 import { cn } from '@/lib/utils'
-import { detectIsMac, detectIsWindows, WINDOW_CONTROLS_PADDING_RIGHT } from '@/lib/platform'
+import {
+  detectIsMac,
+  detectIsWindows,
+  WINDOW_CONTROLS_INSET_RIGHT,
+  WINDOW_CONTROLS_PADDING_RIGHT,
+} from '@/lib/platform'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { CopisTemplateLogo } from '@/lib/model-logo'
 
@@ -81,10 +86,17 @@ export function WebTabBar(): React.ReactElement {
   }, [apply])
 
   return (
-    <div className="relative z-[70] flex h-[38px] shrink-0 items-end border-b border-border/70 bg-[hsl(var(--tabbar-surface))] text-foreground titlebar-drag-region">
+    <div className="relative z-[70] flex h-[38px] shrink-0 items-end border-b border-border/70 bg-[hsl(var(--tabbar-surface))] text-foreground">
+      <div
+        aria-hidden="true"
+        className={cn(
+          'pointer-events-none absolute inset-y-0 left-0 titlebar-drag-region',
+          isWindows ? WINDOW_CONTROLS_INSET_RIGHT : 'right-0',
+        )}
+      />
       <div
         className={cn(
-          'flex h-full min-w-0 flex-1 items-end gap-0.5 overflow-x-auto px-1 scrollbar-none',
+          'relative flex h-full min-w-0 flex-1 items-end gap-0.5 overflow-x-auto px-1 scrollbar-none',
           isMac && 'pl-[96px]',
           isWindows && WINDOW_CONTROLS_PADDING_RIGHT,
         )}

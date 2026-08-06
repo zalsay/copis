@@ -19,4 +19,10 @@ describe('Windows 部署入口的 .env 加载', () => {
     expect(deployScript).not.toMatch(/Write-Host[^\r\n]*COS_SECRET_(?:ID|KEY)/)
     expect(deployScript).not.toMatch(/Write-Host[^\r\n]*COS_BUCKET_URL/)
   })
+
+  test('兼容 deploy.sh 使用的长横线开关', () => {
+    expect(deployScript).toContain('ValueFromRemainingArguments = $true')
+    expect(deployScript).toContain("'--rust' { $RustOnly = $true }")
+    expect(deployScript).toContain("'--skip-publish' { $SkipPublish = $true }")
+  })
 })
