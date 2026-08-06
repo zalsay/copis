@@ -33,7 +33,7 @@ describe('本地设置旧入口清理契约', () => {
     }
   })
 
-  test('Given 设置菜单 When 检查旧页面 Then 旧设置 section 和教程入口都已移除', () => {
+  test('Given 设置菜单 When 检查旧页面 Then 本地旧设置移除且 Working 教程入口可用', () => {
     for (const legacyLabel of [
       '通用设置',
       '模型配置',
@@ -49,13 +49,19 @@ describe('本地设置旧入口清理契约', () => {
       expect(workingPanelSource).not.toContain(legacyLabel)
     }
 
-    for (const source of [appSource, onboardingSource, tabAtomsSource, tabBarSource, tabContentSource]) {
+    for (const source of [appSource, onboardingSource]) {
       expect(source).not.toContain('TutorialBanner')
+    }
+
+    expect(workingPanelSource).toContain('查看使用教程')
+    expect(workingPanelSource).toContain('handleOpenTutorial')
+    expect(tabAtomsSource).toContain('TUTORIAL_TAB_ID')
+    expect(tabAtomsSource).toContain("type: 'tutorial'")
+    expect(tabContentSource).toContain('TutorialTabContent')
+    expect(tabContentSource).toContain('getTutorialContent')
+
+    for (const source of [tabBarSource]) {
       expect(source).not.toContain('TutorialTabContent')
-      expect(source).not.toContain('TUTORIAL_TAB_ID')
-      expect(source).not.toContain("type: 'tutorial'")
-      expect(source).not.toContain("tab.type === 'tutorial'")
-      expect(source).not.toContain('openTutorial')
     }
   })
 

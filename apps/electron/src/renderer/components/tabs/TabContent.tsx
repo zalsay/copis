@@ -8,8 +8,11 @@
 import * as React from 'react'
 import { useAtomValue } from 'jotai'
 import { tabsAtom } from '@/atoms/tab-atoms'
+import { markdownTocOpenAtom } from '@/atoms/markdown-toc'
 import { AgentView } from '@/components/agent'
+import { MarkdownRichEditor } from '@/components/diff/MarkdownRichEditor'
 import { PreviewTabContent } from '@/components/diff/PreviewTabContent'
+import { MarkdownToc } from '@/components/diff/MarkdownToc'
 import { TabErrorBoundary } from './TabErrorBoundary'
 
 export interface TabContentProps {
@@ -43,9 +46,63 @@ export function TabContent({ tabId }: TabContentProps): React.ReactElement {
     )
   }
 
+  if (tab.type === 'tutorial') {
+    return <TutorialTabContent />
+  }
+
   return (
     <TabErrorBoundary key={tab.sessionId} sessionId={tab.sessionId}>
       <AgentView sessionId={tab.sessionId} />
     </TabErrorBoundary>
+  )
+}
+
+function TutorialTabContent(): React.ReactElement {
+  const [content, setContent] = React.useState('')
+  const [loadState, setLoadState] = React.useState<'loading' | 'ready' | 'error'>('loading')
+  const tocOpen = useAtomValue(markdownTocOpenAtom)
+  const scrollRef = React.useRef<HTMLDivElement>(null)
+
+  React.useEffect(() => {
+    void window.electronAPI.getTutorialContent()
+      .then((result) => {
+        if (result === null) {
+          setLoadState('error')
+          return
+        }
+        setContent(result)
+        setLoadState('ready')
+      })
+      .catch((error: unknown) => {
+        console.error('[教程] 加载教程失败:', error)
+        setLoadState('error')
+      })
+  }, [])
+
+  if (loadState === 'loading') {
+    return <div className="flex h-full items-center justify-center text-xs text-muted-foreground">加载中...</div>
+  }
+
+  if (loadState === 'error') {
+    return <div className="flex h-full items-center justify-center text-xs text-muted-foreground">教程加载失败</div>
+  }
+
+  return (
+    <div className="relative flex h-full min-h-0 overflow-hidden">
+      <MarkdownToc
+        containerRef={scrollRef as React.RefObject<HTMLElement>}
+        contentKey={content.slice(0, 100)}
+        enabled={tocOpen}
+      />
+      <div ref={scrollRef} className="min-w-0 flex-1 overflow-y-auto p-8">
+        <MarkdownRichEditor
+          value={content}
+          editing={false}
+          onChange={() => {}}
+          onSave={() => {}}
+          onCancel={() => {}}
+        />
+      </div>
+    </div>
   )
 }

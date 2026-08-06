@@ -34,4 +34,24 @@ describe('会话入口持久化', () => {
       activeTabId: 'agent-1',
     })
   })
+
+  test('Given 查看使用教程 When 打开教程 Tab Then 教程入口不写入会话持久化状态', () => {
+    const tutorialTab = {
+      id: '__tutorial__',
+      type: 'tutorial',
+      sessionId: '__tutorial__',
+      title: 'Copis 使用教程',
+    } as unknown as TabItem
+
+    const result = openTab(
+      [{ id: 'old', type: 'agent', sessionId: 'old', title: '旧会话' }],
+      tutorialTab,
+    )
+
+    expect(result).toEqual({ tabs: [tutorialTab], activeTabId: tutorialTab.id })
+    expect(getPersistableTabState(result.tabs, result.activeTabId)).toEqual({
+      tabs: [],
+      activeTabId: null,
+    })
+  })
 })

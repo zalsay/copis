@@ -1,0 +1,253 @@
+.copis-working-orders-panel {
+  width: min(1120px, 100%);
+  margin: 0 auto;
+}
+
+.copis-working-orders-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 18px;
+}
+
+.copis-working-orders-header h2 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 650;
+}
+
+.copis-working-orders-header span,
+.copis-working-order-identity small,
+.copis-working-order-identity time,
+.copis-working-order-payment small,
+.copis-working-order-benefit small {
+  display: block;
+  margin-top: 5px;
+  overflow: hidden;
+  color: var(--muted-foreground);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.copis-working-orders-refresh,
+.copis-working-orders-error button,
+.copis-working-orders-pagination button {
+  min-height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--muted) 66%, transparent);
+  color: var(--foreground);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.copis-working-orders-refresh {
+  width: 34px;
+  padding: 0;
+}
+
+.copis-working-orders-refresh:disabled,
+.copis-working-orders-pagination button:disabled {
+  cursor: default;
+  opacity: .5;
+}
+
+.copis-working-orders-refresh svg,
+.copis-working-orders-error button svg,
+.copis-working-orders-pagination button svg {
+  width: 15px;
+  height: 15px;
+}
+
+.copis-working-orders-refresh svg.spinning,
+.copis-working-order-delete svg.spinning {
+  animation: copis-working-orders-spin .8s linear infinite;
+}
+
+@keyframes copis-working-orders-spin {
+  to { transform: rotate(360deg); }
+}
+
+.copis-working-orders-action-error,
+.copis-working-orders-message {
+  margin: -5px 0 12px;
+  padding: 9px 11px;
+  border-radius: 6px;
+  font-size: 13px;
+}
+
+.copis-working-orders-action-error {
+  background: color-mix(in srgb, #ef4444 13%, transparent);
+  color: #fca5a5;
+}
+
+.copis-working-orders-message {
+  background: color-mix(in srgb, var(--primary) 13%, transparent);
+  color: var(--foreground);
+}
+
+.copis-working-orders-list {
+  border-top: 1px solid var(--border);
+}
+
+.copis-working-order-row {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) 120px 150px 116px 34px;
+  align-items: center;
+  gap: 18px;
+  min-height: 88px;
+  padding: 15px 4px;
+  border-bottom: 1px solid var(--border);
+}
+
+.copis-working-order-identity,
+.copis-working-order-payment,
+.copis-working-order-benefit {
+  min-width: 0;
+}
+
+.copis-working-order-title-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.copis-working-order-title-line strong {
+  overflow: hidden;
+  font-size: 14px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.copis-working-order-type,
+.copis-working-order-status {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: fit-content;
+  min-height: 24px;
+  padding: 0 8px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--muted) 78%, transparent);
+  color: var(--muted-foreground);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.copis-working-order-type.vip_upgrade {
+  background: color-mix(in srgb, var(--primary) 16%, transparent);
+  color: var(--foreground);
+}
+
+.copis-working-order-payment strong,
+.copis-working-order-benefit strong {
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+.copis-working-order-actions {
+  display: grid;
+  gap: 8px;
+  justify-items: start;
+}
+
+.copis-working-order-status.pending { background: color-mix(in srgb, #f59e0b 16%, transparent); color: #fcd34d; }
+.copis-working-order-status.paid { background: color-mix(in srgb, #22c55e 16%, transparent); color: #86efac; }
+.copis-working-order-status.failed { background: color-mix(in srgb, #ef4444 13%, transparent); color: #fca5a5; }
+
+.copis-working-order-resume {
+  min-height: 26px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 8px;
+  border: 1px solid color-mix(in srgb, var(--primary) 38%, transparent);
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--primary) 12%, transparent);
+  color: var(--foreground);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.copis-working-order-resume svg { width: 13px; height: 13px; }
+
+.copis-working-order-delete {
+  display: inline-flex;
+  width: 34px;
+  height: 34px;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--muted-foreground);
+  cursor: pointer;
+}
+
+.copis-working-order-delete:hover:not(:disabled) {
+  background: color-mix(in srgb, #ef4444 13%, transparent);
+  color: #fca5a5;
+}
+
+.copis-working-orders-loading span {
+  display: block;
+  height: 88px;
+  border-bottom: 1px solid var(--border);
+  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--muted) 62%, transparent), transparent);
+  background-size: 220% 100%;
+  animation: copis-working-orders-loading 1.2s ease-in-out infinite;
+}
+
+@keyframes copis-working-orders-loading {
+  from { background-position: 100% 0; }
+  to { background-position: -100% 0; }
+}
+
+.copis-working-orders-error,
+.copis-working-orders-empty {
+  min-height: 180px;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 14px;
+  color: var(--muted-foreground);
+  font-size: 13px;
+}
+
+.copis-working-orders-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  padding-top: 18px;
+}
+
+.copis-working-orders-pagination > span {
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+
+@media (max-width: 768px) {
+  .copis-working-order-row {
+    grid-template-columns: minmax(0, 1fr) auto 34px;
+    gap: 12px 16px;
+  }
+
+  .copis-working-order-identity { grid-column: 1 / -1; }
+  .copis-working-order-payment { grid-column: 1; grid-row: 2; }
+  .copis-working-order-benefit { grid-column: 1; grid-row: 3; }
+  .copis-working-order-actions { grid-column: 2; grid-row: 2; }
+  .copis-working-order-delete { grid-column: 3; grid-row: 2; }
+  .copis-working-orders-pagination { justify-content: space-between; }
+}
