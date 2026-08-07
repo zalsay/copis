@@ -40,6 +40,7 @@ describe('功能模块发布边界', () => {
     expect(electronPackage.scripts?.build).not.toContain('build:http-api-server')
     expect(buildScript).not.toContain('build:http-api-server')
     expect(buildScript).not.toContain('publish:functional-modules')
+    expect(buildScript).toContain('publish:windows-installer')
     expect(buildShellScript).toContain('bun run build')
     expect(buildShellScript).not.toContain('build:http-api-server')
     expect(buildShellScript).not.toContain('publish:functional-modules')

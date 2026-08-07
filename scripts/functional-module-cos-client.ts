@@ -20,6 +20,21 @@ export interface FunctionalModuleCosBucket {
   region: string
 }
 
+export function parseFunctionalModuleCosBucketUrl(value: string): FunctionalModuleCosBucket {
+  const url = new URL(value)
+  if (url.protocol !== 'https:' && url.protocol !== 'http:') {
+    throw new Error('COS_BUCKET_URL 必须是 HTTP(S) URL')
+  }
+  const parts = url.hostname.split('.')
+  const cosIndex = parts.indexOf('cos')
+  const bucket = parts[0]
+  const region = cosIndex >= 0 ? parts[cosIndex + 1] : undefined
+  return {
+    bucket: bucket && cosIndex > 0 ? bucket : '',
+    region: region ?? '',
+  }
+}
+
 interface CosHeadObjectResponse {
   ContentLength?: string | number
   Metadata?: Record<string, unknown>
@@ -60,6 +75,8 @@ export function createFunctionalModuleCosClient(
         ContentType: input.contentType,
         ...metadataHeaders(input),
       }
+      if (input.cacheControl) params.CacheControl = input.cacheControl
+      if (input.contentDisposition) params.ContentDisposition = input.contentDisposition
       if (!allowOverwrite) params['x-cos-forbid-overwrite'] = 'true'
       await callCos(sdk.putObject.bind(sdk), params)
     },

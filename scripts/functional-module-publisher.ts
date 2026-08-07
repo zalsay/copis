@@ -49,6 +49,8 @@ export interface FunctionalModuleObjectUpload {
   key: string
   body: Buffer
   contentType: string
+  cacheControl?: string
+  contentDisposition?: string
   metadata: Record<string, string>
   allowOverwrite?: boolean
 }

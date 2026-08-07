@@ -107,4 +107,36 @@ describe('功能模块 COS SDK client', () => {
     expect(calls[0]?.operation).toBe('put')
     expect(calls[0]?.params['x-cos-forbid-overwrite']).toBeUndefined()
   })
+
+  test('固定安装包上传时传递缓存控制和下载响应头', async () => {
+    const calls: Array<{ operation: string; params: Record<string, unknown> }> = []
+    const sdk: FunctionalModuleCosSdkClient = {
+      putObject(params, callback) {
+        calls.push({ operation: 'put', params })
+        callback(null, {})
+      },
+      headObject(_params, callback) {
+        callback(null, {
+          ContentLength: 4,
+          headers: { 'x-cos-meta-sha256': 'abcd' },
+        })
+      },
+    }
+
+    const client = createFunctionalModuleCosClient(sdk, { bucket: 'copis-1250000000', region: 'ap-shanghai' })
+    await client.putObject({
+      key: 'copis/downloads/stable/win32-x64/Copis-Setup.exe',
+      body: Buffer.from('test'),
+      contentType: 'application/vnd.microsoft.portable-executable',
+      cacheControl: 'no-cache, max-age=0, must-revalidate',
+      contentDisposition: 'attachment; filename="Copis-Setup.exe"',
+      metadata: { sha256: 'abcd' },
+      allowOverwrite: true,
+    })
+
+    expect(calls[0]?.params).toMatchObject({
+      CacheControl: 'no-cache, max-age=0, must-revalidate',
+      ContentDisposition: 'attachment; filename="Copis-Setup.exe"',
+    })
+  })
 })

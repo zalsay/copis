@@ -17,6 +17,7 @@ import type {
 } from '@copis/shared'
 import {
   createFunctionalModuleCosClient,
+  parseFunctionalModuleCosBucketUrl,
   type FunctionalModuleCosSdkClient,
 } from './functional-module-cos-client'
 import { mergeFunctionalModuleManifests } from './functional-module-manifest-merge'
@@ -38,7 +39,7 @@ async function main(): Promise<void> {
   const secretId = requiredEnv('COS_SECRET_ID')
   const secretKey = requiredEnv('COS_SECRET_KEY')
   const bucketUrl = requiredOption('--bucket-url', 'COS_BUCKET_URL')
-  const bucketInfo = parseBucketUrl(bucketUrl)
+  const bucketInfo = parseFunctionalModuleCosBucketUrl(bucketUrl)
   const bucket = getOption('--bucket') ?? (process.env.COS_BUCKET?.trim() || bucketInfo.bucket)
   const region = getOption('--region') ?? (process.env.COS_REGION?.trim() || bucketInfo.region)
   const publicBaseUrl = requiredOption('--public-base-url', 'COS_PUBLIC_BASE_URL')
@@ -222,21 +223,6 @@ export function buildFunctionalModuleBinaryInputs(
     })
   }
   return modules
-}
-
-function parseBucketUrl(value: string): { bucket: string; region: string } {
-  const url = new URL(value)
-  if (url.protocol !== 'https:' && url.protocol !== 'http:') {
-    throw new Error('COS_BUCKET_URL 必须是 HTTP(S) URL')
-  }
-  const parts = url.hostname.split('.')
-  const cosIndex = parts.indexOf('cos')
-  const bucket = parts[0]
-  const region = cosIndex >= 0 ? parts[cosIndex + 1] : undefined
-  return {
-    bucket: bucket && cosIndex > 0 ? bucket : '',
-    region: region ?? '',
-  }
 }
 
 function binaryName(name: string, targetPlatform: FunctionalModulePlatform): string {

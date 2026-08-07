@@ -1,7 +1,12 @@
 ﻿[CmdletBinding()]
 param(
     [switch]$SkipInstall,
-    [string]$FunctionalModuleManifestUrl
+    [string]$FunctionalModuleManifestUrl,
+    [switch]$SkipCosUpload,
+    [string]$InstallerFileName,
+    [string]$InstallerObjectKey,
+    [string]$CosPublicBaseUrl,
+    [string]$CosBucketUrl
 )
 
 $ErrorActionPreference = 'Stop'
@@ -120,8 +125,70 @@ if ($installerInfo.Length -lt 10MB) {
     throw "安装程序体积异常（$($installerInfo.Length) 字节），可能是 NSIS 打包未完成：$installerPath"
 }
 
+$installerFileNameValue = if ([string]::IsNullOrWhiteSpace($InstallerFileName)) {
+    'Copis-Setup.exe'
+} else {
+    $InstallerFileName.Trim()
+}
+if ([string]::IsNullOrWhiteSpace($installerFileNameValue) -or $installerFileNameValue -match '[\\/:]' -or -not $installerFileNameValue.EndsWith('.exe', [System.StringComparison]::OrdinalIgnoreCase)) {
+    throw "固定安装程序文件名不合法：$installerFileNameValue"
+}
+
+$fixedInstallerPath = Join-Path $outDir $installerFileNameValue
+if (-not [string]::Equals(
+        [System.IO.Path]::GetFullPath($installerPath),
+        [System.IO.Path]::GetFullPath($fixedInstallerPath),
+        [System.StringComparison]::OrdinalIgnoreCase)) {
+    Move-Item -LiteralPath $installerPath -Destination $fixedInstallerPath -Force
+}
+
+$installerObjectKeyValue = if (-not [string]::IsNullOrWhiteSpace($InstallerObjectKey)) {
+    $InstallerObjectKey.Trim()
+} elseif (-not [string]::IsNullOrWhiteSpace($env:COPIS_WINDOWS_INSTALLER_OBJECT_KEY)) {
+    $env:COPIS_WINDOWS_INSTALLER_OBJECT_KEY.Trim()
+} elseif (-not [string]::IsNullOrWhiteSpace($InstallerFileName)) {
+    "copis/downloads/stable/win32-x64/$installerFileNameValue"
+} else {
+    $null
+}
+
 Write-Host '构建完成，EXE 产物：'
-Write-Host "  安装程序：$installerPath"
+Write-Host "  安装程序：$fixedInstallerPath"
 if (Test-Path -LiteralPath $unpackedAppPath -PathType Leaf) {
     Write-Host "  解压版本（需保留整个 win-unpacked 目录）：$unpackedAppPath"
+}
+
+if ($SkipCosUpload) {
+    Write-Host '已跳过固定安装程序 COS 上传（-SkipCosUpload）。'
+} else {
+    Write-Host '正在上传固定文件名安装程序到 COS...'
+    $uploadArguments = @(
+        'run',
+        'publish:windows-installer',
+        '--',
+        '--file',
+        $fixedInstallerPath,
+        '--version',
+        $appVersion
+    )
+    if (-not [string]::IsNullOrWhiteSpace($installerObjectKeyValue)) {
+        $uploadArguments += @('--object-key', $installerObjectKeyValue)
+    }
+    if (-not [string]::IsNullOrWhiteSpace($CosPublicBaseUrl)) {
+        $uploadArguments += @('--public-base-url', $CosPublicBaseUrl.Trim())
+    }
+    if (-not [string]::IsNullOrWhiteSpace($CosBucketUrl)) {
+        $uploadArguments += @('--bucket-url', $CosBucketUrl.Trim())
+    }
+
+    Push-Location $rootDir
+    try {
+        & $bunPath @uploadArguments
+        if ($LASTEXITCODE -ne 0) {
+            throw "Windows 安装程序 COS 上传失败，退出码：$LASTEXITCODE"
+        }
+    }
+    finally {
+        Pop-Location
+    }
 }
