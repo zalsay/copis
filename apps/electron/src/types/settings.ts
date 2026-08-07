@@ -229,6 +229,11 @@ export interface VisionRelaySettings {
   modelId?: string
 }
 
+/** AI 浏览器按会话隔离的页面授权 Origin 列表。 */
+export interface BrowserPageAuthorizationMap {
+  [sessionId: string]: string[]
+}
+
 /** 应用设置 */
 export interface AppSettings {
   /** 主题模式 */
@@ -255,6 +260,8 @@ export interface AppSettings {
   agentAutomationGroupOrder?: number
   /** 是否启用网页 Browser Workflow 入口与 Agent 工具；默认开启，开发模式始终开启，打包版显式设置为 false 可关闭。 */
   browserWorkflowEnabled?: boolean
+  /** AI 浏览器已授权的 HTTP(S) Origin，按 Agent 会话隔离。 */
+  browserPageAuthorizations?: BrowserPageAuthorizationMap
   /** 是否已完成 Onboarding 流程 */
   onboardingCompleted?: boolean
   /** 是否跳过了环境检测 */

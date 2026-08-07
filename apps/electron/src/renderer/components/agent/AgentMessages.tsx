@@ -23,7 +23,7 @@ import { ScrollMinimap } from '@/components/ai-elements/scroll-minimap'
 import type { MinimapItem } from '@/components/ai-elements/scroll-minimap'
 import { StickyUserMessage } from '@/components/ai-elements/sticky-user-message'
 import { useSmoothStream } from '@copis/ui'
-import { CopisTemplateLogo3x } from '@/lib/model-logo'
+import { CopisAgentLogo } from '@/lib/model-logo'
 import { userProfileAtom } from '@/atoms/user-profile'
 import { tabMinimapCacheAtom } from '@/atoms/tab-atoms'
 import { ScrollPositionManager } from '@/hooks/useScrollPositionMemory'
@@ -211,7 +211,7 @@ function EmptyState(): React.ReactElement {
 function AssistantLogo(): React.ReactElement {
   return (
     <img
-      src={CopisTemplateLogo3x}
+      src={CopisAgentLogo}
       alt="Copis Agent"
       className="size-[35px] rounded-[25%] object-cover"
     />

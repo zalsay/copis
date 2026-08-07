@@ -15,6 +15,20 @@
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   text-rendering: optimizeLegibility;
+  --ui-primary: #f5c18e;
+  --ui-primary-foreground: #2b2137;
+  --ui-primary-background: rgb(240 161 90 / 10%);
+}
+
+.ui-primary-surface {
+  background-color: var(--ui-primary-background);
+  color: var(--ui-primary);
+}
+
+.ui-primary-badge {
+  background-color: var(--ui-primary-background);
+  color: var(--ui-primary);
+  border: 1px solid color-mix(in srgb, var(--ui-primary) 30%, transparent);
 }
 
 /* CRT Terminal 主题：全局等宽字体覆盖 */

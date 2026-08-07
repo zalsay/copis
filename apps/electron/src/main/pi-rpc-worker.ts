@@ -3,6 +3,7 @@ import type { AgentStreamPayload, CopisPermissionMode, SDKMessage } from '@copis
 import type { PiAgentQueryOptions, PiAgentAdapter } from './lib/adapters/pi-agent-adapter'
 import {
   parseWorkerCommand,
+  parsePiWorkerBrowserCapability,
   type AgentRpcWorkerCommand,
   type AgentRpcWorkerFrame,
   type PiWorkerQueueConfig,
@@ -98,6 +99,14 @@ async function runWorker(config: PiWorkerRunConfig): Promise<void> {
     await flushOutput()
     return
   }
+  const browserPageControl = config.query.browserPageControl === undefined
+    ? undefined
+    : parsePiWorkerBrowserCapability(config.query.browserPageControl)
+  if (config.query.browserPageControl !== undefined && !browserPageControl) {
+    await writeFrame({ type: 'fatal', sessionId: config.sessionId, error: 'AI浏览器 capability 不正确' })
+    await flushOutput()
+    return
+  }
 
   const runStartedAt = config.query.retryRunStartedAt ?? Date.now()
   const { PiAgentAdapter } = await import('./lib/adapters/pi-agent-adapter')
@@ -116,6 +125,7 @@ async function runWorker(config: PiWorkerRunConfig): Promise<void> {
 
   const query: PiAgentQueryOptions = {
     ...config.query,
+    ...(browserPageControl ? { browserPageControl } : {}),
     agentRuntime: 'pi',
     canUseTool: async (_toolName, input) => ({ behavior: 'allow', updatedInput: input }),
     onSessionId: (sdkSessionId, sessionFile) => {

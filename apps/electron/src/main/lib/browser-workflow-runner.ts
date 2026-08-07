@@ -1024,9 +1024,9 @@ export async function runBrowserWorkflow(input: BrowserWorkflowRunInput, externa
   const context = getBrowserAgentContext(input.sessionId)
   const boundWorkspaceId = getBrowserAgentWorkspaceId(input.sessionId)
   if (context && boundWorkspaceId !== input.workspaceId) {
-    throw new Error('Browser Agent 会话工作区与 Workflow 工作区不一致')
+    throw new Error('AI浏览器会话工作区与 Workflow 工作区不一致')
   }
-  if (input.source === 'user' && !context) throw new Error('Browser Agent 尚未绑定网页页签')
+  if (input.source === 'user' && !context) throw new Error('AI浏览器尚未绑定网页页签')
   if (context && !getWebTabState(context.tabId)) throw new Error('当前网页页签不存在')
   const startOrigin = new URL(workflow.version.start.url).origin
   if (!workflow.manifest.allowedOrigins.includes(startOrigin)) {

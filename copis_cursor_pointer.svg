@@ -1,0 +1,68 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" fill="none">
+  <defs>
+    <!-- 银白金属质感，呼应参考 Logo -->
+    <linearGradient id="metal" x1="88" y1="42" x2="338" y2="430" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFFFFF"/>
+      <stop offset="0.28" stop-color="#E6E6E8"/>
+      <stop offset="0.52" stop-color="#FFFFFF"/>
+      <stop offset="0.78" stop-color="#D7D7DA"/>
+      <stop offset="1" stop-color="#F8F8F8"/>
+    </linearGradient>
+  </defs>
+
+  <!--
+    熊猫风电脑鼠标指针
+    - 透明背景
+    - 银白主体 + 黑色细节
+    - 保留标准 Arrow Cursor 的辨识度
+  -->
+
+  <!-- 指针主体 -->
+  <path
+    d="M78 54
+       C72 48 62 53 63 62
+       L83 382
+       C84 393 97 398 105 390
+       L172 319
+       L238 459
+       C242 468 253 472 262 468
+       L307 447
+       C316 443 320 432 316 423
+       L249 286
+       L348 282
+       C359 282 364 268 356 261
+       L78 54Z"
+    fill="url(#metal)"
+    stroke="#000000"
+    stroke-width="18"
+    stroke-linejoin="round"
+  />
+
+  <!-- 熊猫左眼 -->
+  <path
+    d="M122 151
+       C135 132 158 126 176 139
+       C193 151 195 174 183 191
+       C171 209 147 215 130 204
+       C111 192 109 170 122 151Z"
+    fill="#000000"
+  />
+  <circle cx="157" cy="158" r="8" fill="#FFFFFF"/>
+
+  <!-- 熊猫右眼 -->
+  <path
+    d="M193 188
+       C207 170 230 168 247 182
+       C264 195 265 218 252 235
+       C239 252 215 255 199 243
+       C181 230 180 206 193 188Z"
+    fill="#000000"
+  />
+  <circle cx="226" cy="194" r="8" fill="#FFFFFF"/>
+
+  <!-- 鼻子 -->
+  <circle cx="177" cy="218" r="10" fill="#000000"/>
+
+  <!-- 极简嘴部 / Logo 感短线 -->
+  <rect x="171" y="235" width="13" height="31" rx="6.5" fill="#000000"/>
+</svg>

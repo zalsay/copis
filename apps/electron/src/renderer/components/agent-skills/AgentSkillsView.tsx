@@ -12,19 +12,17 @@
 import * as React from 'react'
 import { useAtom, useSetAtom } from 'jotai'
 import { toast } from 'sonner'
-import { Blocks, ChevronDown, ChevronRight, Search, Plus, Store, FolderOpen, Check, Sparkles, Loader2 } from 'lucide-react'
+import { Blocks, ChevronDown, Search, Plus, Store, FolderOpen, Check } from 'lucide-react'
 import { cn } from '@/lib/utils'
-import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import {
   Popover,
   PopoverContent,
   PopoverTrigger,
 } from '@/components/ui/popover'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
-import { agentPendingPromptAtom, workspaceCapabilitiesVersionAtom } from '@/atoms/agent-atoms'
+import { workspaceCapabilitiesVersionAtom } from '@/atoms/agent-atoms'
 import { agentSkillsTabAtom } from '@/atoms/active-view'
 import { useProjectActions } from '@/hooks/useProjectActions'
-import { useCreateSession } from '@/hooks/useCreateSession'
 import { LocalProjectBadge } from '@/components/agent/LocalProjectBadge'
 import type { BuiltinMcpServerSummary, McpServerEntry, SkillMeta } from '@copis/shared'
 import { useAgentSkillsData } from './useAgentSkillsData'
@@ -35,62 +33,11 @@ import { SkillMarketDialog } from './SkillMarketDialog'
 import { McpDetailSheet } from './McpDetailSheet'
 import { BuiltinMcpDetailSheet } from './BuiltinMcpDetailSheet'
 import { ImportSkillDialog } from './ImportSkillDialog'
-import { groupSkills } from './skillGrouping'
-
-function buildSkillClassificationPrompt(input: {
-  workspaceName: string
-  skillsDir: string
-  skills: SkillMeta[]
-}): string {
-  const skillList = input.skills
-    .map((skill) => {
-      const meta: string[] = []
-      if (skill.group) meta.push(`group=${skill.group}`)
-      return `- ${skill.slug} (${skill.displayName ?? skill.name})${meta.length > 0 ? ` [${meta.join('; ')}]` : ''}`
-    })
-    .join('\n')
-
-  return `请帮我整理当前项目在 Copis 工作区中保存的 Skills 的分组。
-
-项目：${input.workspaceName || '当前项目'}
-Skills 目录：${input.skillsDir}
-
-当前已安装 Skills：
-${skillList || '- 暂无'}
-
-目标：
-1. 逐个读取 Skills 目录下每个子目录的 SKILL.md，基于实际 description 和正文内容判断用途，不要只靠 slug、文件夹名或固定前缀猜分类。
-2. 为每个 Skill 补全或修正 frontmatter 中的 group：
-   - group 是一个简短、稳定的一级分组，直接用人类可读名称，例如 "Lark"、"文档"、"演示文稿"、"规划协作"。这些只是例子，不是固定枚举；请根据实际内容归纳。
-   - 分组数量要克制，优先让用户能快速折叠/浏览，不要把每个细分场景都做成新组。
-3. 只修改每个 SKILL.md 的 YAML frontmatter；保留 name、description、version、license、icon 等已有字段，不要改正文内容。
-4. 对已有 group 做增量修订：明显准确的保留，不准确、缺失或过粗的再调整。
-5. 同一平台或同一能力域的 Skills 应该归到同一个 group。
-6. 如果某个 Skill 内容证据不足，放入 "未分组"，不要编造用途。
-7. 只处理上述 Skills 目录内的 Skill，不要修改仓库 bundled default-skills、README、AGENTS.md 或其他 unrelated 文件。
-
-写入格式示例：
-
----
-name: example
-description: ...
-group: Lark
-version: "1.0.0"
----
-
-完成后请回复：
-- 修改了多少个 Skill
-- 使用了哪些 group，各自包含哪些 Skill
-- 哪些 Skill 的分类不确定，以及原因
-- 是否有需要用户确认或后续合并同类项的建议`
-}
 
 export function AgentSkillsView(): React.ReactElement {
   const data = useAgentSkillsData()
   const bumpCapabilities = useSetAtom(workspaceCapabilitiesVersionAtom)
-  const setPendingPrompt = useSetAtom(agentPendingPromptAtom)
   const { workspaces, currentWorkspaceId, selectProject } = useProjectActions()
-  const { createAgent } = useCreateSession()
   const currentWorkspace = workspaces.find((workspace) => workspace.id === currentWorkspaceId)
 
   const [tab, setTab] = useAtom(agentSkillsTabAtom)
@@ -106,7 +53,6 @@ export function AgentSkillsView(): React.ReactElement {
   const [pendingDeleteMcpName, setPendingDeleteMcpName] = React.useState<string | null>(null)
   const [isDeletingSkill, setIsDeletingSkill] = React.useState(false)
   const [isDeletingMcp, setIsDeletingMcp] = React.useState(false)
-  const [classifyingSkills, setClassifyingSkills] = React.useState(false)
 
   const q = search.trim().toLowerCase()
 
@@ -151,36 +97,6 @@ export function AgentSkillsView(): React.ReactElement {
   const openSkillFolder = (slug: string): void => {
     if (data.skillsDir) window.electronAPI.openFile(`${data.skillsDir}/${slug}`)
   }
-
-  const handleClassifySkills = React.useCallback(async (): Promise<void> => {
-    if (classifyingSkills) return
-    if (!data.skillsDir) {
-      toast.error('无法定位当前项目的 Copis 工作区 Skills 目录')
-      return
-    }
-    setClassifyingSkills(true)
-    try {
-      const sessionId = await createAgent()
-      if (!sessionId) {
-        toast.error('创建 Agent 会话失败')
-        return
-      }
-      setPendingPrompt({
-        sessionId,
-        message: buildSkillClassificationPrompt({
-          workspaceName: data.workspaceName,
-          skillsDir: data.skillsDir,
-          skills: data.skills,
-        }),
-      })
-      toast.success('已创建 Skills 分类整理会话')
-    } catch (error) {
-      console.error('[Agent 技能] 创建 Skills 分类会话失败:', error)
-      toast.error(error instanceof Error ? error.message : '创建 Skills 分类会话失败')
-    } finally {
-      setClassifyingSkills(false)
-    }
-  }, [classifyingSkills, createAgent, data.skills, data.skillsDir, data.workspaceName, setPendingPrompt])
 
   if (!data.hasWorkspace) {
     return (
@@ -308,30 +224,14 @@ export function AgentSkillsView(): React.ReactElement {
 
         {/* Skills：从其他工作区导入 */}
         {tab === 'skills' && (
-          <>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <button
-                  type="button"
-                  onClick={() => void handleClassifySkills()}
-                  disabled={classifyingSkills || data.skills.length === 0}
-                  className="flex h-8 items-center gap-1.5 rounded-lg border border-border/60 bg-content-area px-3 text-[13px] font-medium text-foreground/80 shadow-sm transition-colors hover:bg-foreground/[0.04] disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  {classifyingSkills ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}
-                  <span>AI 分类</span>
-                </button>
-              </TooltipTrigger>
-              <TooltipContent side="bottom">创建 Agent 会话，读取 SKILL.md 内容并补全 group</TooltipContent>
-            </Tooltip>
-            <button
-              type="button"
-              onClick={() => setShowImport(true)}
-              className="flex h-8 items-center gap-1.5 rounded-lg border border-border/60 bg-content-area px-3 text-[13px] font-medium text-foreground/80 shadow-sm transition-colors hover:bg-foreground/[0.04]"
-            >
-              <Plus size={14} />
-              <span>导入</span>
-            </button>
-          </>
+          <button
+            type="button"
+            onClick={() => setShowImport(true)}
+            className="flex h-8 items-center gap-1.5 rounded-lg border border-border/60 bg-content-area px-3 text-[13px] font-medium text-foreground/80 shadow-sm transition-colors hover:bg-foreground/[0.04]"
+          >
+            <Plus size={14} />
+            <span>导入</span>
+          </button>
         )}
 
         {/* 新增 MCP */}
@@ -508,7 +408,7 @@ function SkillsTab({
         <SkillSection title="我的 Skills" skills={customSkills} isBuiltin={isBuiltin} updatingSkill={updatingSkill} onOpen={onOpen} onToggle={onToggle} onUpdate={onUpdate} />
       )}
       {builtinSkills.length > 0 && (
-        <SkillSection title="COPIS 内置" skills={builtinSkills} isBuiltin={isBuiltin} updatingSkill={updatingSkill} onOpen={onOpen} onToggle={onToggle} onUpdate={onUpdate} />
+        <SkillSection title="Copis 内置" skills={builtinSkills} isBuiltin={isBuiltin} updatingSkill={updatingSkill} onOpen={onOpen} onToggle={onToggle} onUpdate={onUpdate} />
       )}
     </div>
   )
@@ -525,56 +425,24 @@ interface SkillSectionProps {
 }
 
 function SkillSection({ title, skills, isBuiltin, updatingSkill, onOpen, onToggle, onUpdate }: SkillSectionProps): React.ReactElement {
-  const [collapsedGroups, setCollapsedGroups] = React.useState<Set<string>>(new Set())
-  const groups = React.useMemo(() => groupSkills(skills), [skills])
-
-  const toggleGroup = React.useCallback((groupId: string): void => {
-    setCollapsedGroups((prev) => {
-      const next = new Set(prev)
-      if (next.has(groupId)) next.delete(groupId)
-      else next.add(groupId)
-      return next
-    })
-  }, [])
-
   return (
     <div className="flex flex-col gap-3">
       <div className="flex items-center gap-2 px-1">
         <span className="text-[13px] font-medium text-foreground/55">{title}</span>
         <span className="text-[12px] tabular-nums text-foreground/35">{skills.length}</span>
       </div>
-      <div className="flex flex-col gap-4">
-        {groups.map((group) => {
-          const collapsed = collapsedGroups.has(group.id)
-          return (
-            <div key={group.id} className="flex flex-col gap-3">
-              <button
-                type="button"
-                onClick={() => toggleGroup(group.id)}
-                className="flex h-8 items-center gap-2 rounded-lg px-1 text-left text-[13px] font-medium text-foreground/65 transition-colors hover:bg-foreground/[0.04] hover:text-foreground"
-              >
-                <ChevronRight size={14} className={cn('text-foreground/35 transition-transform', !collapsed && 'rotate-90')} />
-                <span>{group.title}</span>
-                <span className="text-[12px] tabular-nums text-foreground/35">{group.skills.length}</span>
-              </button>
-              {!collapsed && (
-                <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-                  {group.skills.map((skill) => (
-                    <SkillCard
-                      key={skill.slug}
-                      skill={skill}
-                      isBuiltin={isBuiltin(skill.slug)}
-                      updating={updatingSkill === skill.slug}
-                      onOpen={() => onOpen(skill.slug)}
-                      onToggle={(enabled) => onToggle(skill.slug, enabled)}
-                      onUpdate={() => onUpdate(skill.slug)}
-                    />
-                  ))}
-                </div>
-              )}
-            </div>
-          )
-        })}
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+        {skills.map((skill) => (
+          <SkillCard
+            key={skill.slug}
+            skill={skill}
+            isBuiltin={isBuiltin(skill.slug)}
+            updating={updatingSkill === skill.slug}
+            onOpen={() => onOpen(skill.slug)}
+            onToggle={(enabled) => onToggle(skill.slug, enabled)}
+            onUpdate={() => onUpdate(skill.slug)}
+          />
+        ))}
       </div>
     </div>
   )

@@ -494,8 +494,8 @@
   display: grid;
   place-items: center;
   border-radius: 50%;
-  background: #2b2137;
-  color: #c8a7ff;
+  background: var(--ui-primary-background);
+  color: var(--ui-primary);
 }
 
 .copis-working-account-mark svg {

@@ -74,3 +74,6 @@ export * from './browser-workflow'
 
 // 本地文件 HTTP API
 export * from './file-api'
+
+// 专家团队工作台与 Rust HTTP API
+export * from './expert-team'

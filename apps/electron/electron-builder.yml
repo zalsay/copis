@@ -94,6 +94,8 @@ extraResources:
     to: icon.ico
   - from: resources/icon.icns
     to: icon.icns
+  - from: resources/cursor_rainbow.svg
+    to: cursor_rainbow.svg
 
 # ============================================
 # macOS 配置

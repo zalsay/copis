@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import {
+  parseBrowserAgentToolRequest,
   parseAgentSseData,
   parseWorkerCommand,
   parseWorkerFrame,
@@ -35,6 +36,94 @@ describe('Agent RPC 协议', () => {
     expect(frame.endsWith('\n')).toBe(true)
     expect(JSON.parse(frame)).toEqual(command)
     expect((JSON.parse(frame) as { config: { query: { skillMentions?: string[] } } }).config.query.skillMentions).toEqual(['automation'])
+  })
+
+  test('Given Browser capability When serialized in a run Then keeps only the opaque endpoint and token', () => {
+    const command: AgentRpcWorkerCommand = {
+      type: 'run',
+      requestId: 'request-browser-1',
+      config: {
+        sessionId: 'session-1',
+        query: {
+          sessionId: 'session-1',
+          prompt: '观察当前页面',
+          apiKey: 'secret',
+          provider: 'openai',
+          permissionMode: 'bypassPermissions',
+          systemPrompt: 'Browser Agent',
+          piAgentDir: '/tmp/.copis/sdk-config',
+          piSessionDir: '/tmp/.copis/sdk-config/sessions',
+          browserPageControl: {
+            endpoint: '/api/internal/agent/browser-tool',
+            token: 'opaque-capability',
+          },
+        },
+      },
+    }
+
+    expect(parseWorkerCommand(serializeWorkerCommand(command))).toEqual(command)
+  })
+
+  test('Given run command with mismatched outer and query sessions When parsed Then rejects the command', () => {
+    expect(parseWorkerCommand(JSON.stringify({
+      type: 'run',
+      requestId: 'request-session-mismatch',
+      config: {
+        sessionId: 'outer-session',
+        query: {
+          sessionId: 'query-session',
+          prompt: '观察当前页面',
+          apiKey: 'secret',
+          provider: 'openai',
+          permissionMode: 'bypassPermissions',
+          systemPrompt: 'Browser Agent',
+          piAgentDir: '/tmp/.copis/sdk-config',
+          piSessionDir: '/tmp/.copis/sdk-config/sessions',
+        },
+      },
+    }))).toBeUndefined()
+  })
+
+  test('Given Browser tool request When parsed Then accepts only the fixed high-level tool allowlist', () => {
+    expect(parseBrowserAgentToolRequest({
+      sessionId: 'session-1',
+      capabilityToken: 'token-1',
+      toolCallId: 'call-1',
+      toolName: 'BrowserPageObserve',
+      toolInput: {},
+    })).toEqual({
+      sessionId: 'session-1',
+      capabilityToken: 'token-1',
+      toolCallId: 'call-1',
+      toolName: 'BrowserPageObserve',
+      toolInput: {},
+    })
+
+    expect(parseBrowserAgentToolRequest({
+      sessionId: 'session-1',
+      capabilityToken: 'token-1',
+      toolCallId: 'call-1',
+      toolName: 'Runtime.evaluate',
+      toolInput: { expression: 'document.cookie' },
+    })).toBeUndefined()
+  })
+
+  test('Given malformed Browser tool request When parsed Then rejects non-plain inputs and malformed capability', () => {
+    expect(parseBrowserAgentToolRequest({
+      sessionId: 'session-1',
+      capabilityToken: 'token-1',
+      toolCallId: 'call-1',
+      toolName: 'BrowserPageObserve',
+      toolInput: [],
+    })).toBeUndefined()
+    expect(parseBrowserAgentToolRequest({
+      sessionId: 'session-1',
+      capabilityToken: 'token-1',
+      toolCallId: 'call-1',
+      toolName: 'BrowserPageObserve',
+      toolInput: {},
+      browserPageControl: { endpoint: '/api/internal/agent/browser-tool', token: 'leak' },
+    })).toBeUndefined()
   })
 
   test('Given worker JSONL When parsed Then accepts event and complete frames only as objects', () => {

@@ -1009,33 +1009,33 @@ export function registerIpcHandlers(): void {
   ipcMain.handle(BROWSER_WORKFLOW_IPC_CHANNELS.BIND_CONTEXT, async (event, sessionId: string, context: BrowserAgentContext) => {
     await assertBrowserWorkflowMainWindow(event.sender.id)
     if (!sessionId?.trim() || !context || typeof context.tabId !== 'string' || !context.tabId.trim()) {
-      throw new Error('Browser Agent 页面上下文参数不正确')
+      throw new Error('AI浏览器页面上下文参数不正确')
     }
     return bindBrowserAgentContext(sessionId, context, event.sender.id)
   })
   ipcMain.handle(BROWSER_WORKFLOW_IPC_CHANNELS.UNBIND_CONTEXT, async (event, sessionId: string) => {
     await assertBrowserWorkflowMainWindow(event.sender.id)
-    if (!sessionId?.trim()) throw new Error('Browser Agent 会话 ID 不正确')
+    if (!sessionId?.trim()) throw new Error('AI浏览器会话 ID 不正确')
     assertBrowserWorkflowSessionOwner(sessionId, event.sender.id)
     unbindBrowserAgentContext(sessionId, event.sender.id)
   })
   ipcMain.handle(BROWSER_WORKFLOW_IPC_CHANNELS.STATUS, async (event, sessionId: string) => {
     await assertBrowserWorkflowMainWindow(event.sender.id)
-    if (!sessionId?.trim()) throw new Error('Browser Agent 会话 ID 不正确')
+    if (!sessionId?.trim()) throw new Error('AI浏览器会话 ID 不正确')
     assertBrowserWorkflowSessionOwner(sessionId, event.sender.id)
     return getBrowserWorkflowStatus(sessionId)
   })
   ipcMain.handle(BROWSER_WORKFLOW_IPC_CHANNELS.SET_CONTROL_MODE, async (event, sessionId: string, mode: BrowserPageControlMode) => {
     await assertBrowserWorkflowMainWindow(event.sender.id)
     if (!sessionId?.trim() || (mode !== 'ask' && mode !== 'authorized')) {
-      throw new Error('Browser Agent 页面授权参数不正确')
+      throw new Error('AI浏览器页面授权参数不正确')
     }
     assertBrowserWorkflowSessionOwner(sessionId, event.sender.id)
     return setBrowserPageControlMode(sessionId, mode)
   })
   ipcMain.handle(BROWSER_WORKFLOW_IPC_CHANNELS.START_RECORDING, async (event, sessionId: string) => {
     await assertBrowserWorkflowMainWindow(event.sender.id)
-    if (!sessionId?.trim()) throw new Error('Browser Agent 会话 ID 不正确')
+    if (!sessionId?.trim()) throw new Error('AI浏览器会话 ID 不正确')
     assertBrowserWorkflowSessionOwner(sessionId, event.sender.id)
     return startBrowserWorkflowRecording(sessionId)
   })

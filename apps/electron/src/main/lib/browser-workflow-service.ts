@@ -12,12 +12,15 @@ import type {
   BrowserWorkflowStatus,
   BrowserWorkflowVersion,
 } from '@copis/shared'
+import type { BrowserPageAuthorizationMap } from '../../types'
 import {
   authorizeBrowserPageOrigin,
+  normalizeBrowserPageOrigin,
   resolveBrowserPageControlState,
 } from './browser-page-control-policy'
 import { getAgentSessionMeta, updateAgentSessionMeta } from './agent-session-manager'
 import { getAgentWorkspace } from './agent-workspace-manager'
+import { getSettings, updateSettings } from './settings-service'
 import { getBrowserWorkflow, saveBrowserWorkflow } from './browser-workflow-store'
 import { assertBrowserWorkflowVersion } from './browser-workflow-schema'
 import {
@@ -35,6 +38,7 @@ import {
   subscribeWebTabLifecycle,
   type WebTabCdpEventListener,
 } from './web-tab-manager'
+import { revokeBrowserAgentWorkerCapability } from './browser-agent-worker-capability'
 
 interface BrowserAgentBinding {
   sessionId: string
@@ -42,7 +46,7 @@ interface BrowserAgentBinding {
   workspaceSlug: string
   ownerWebContentsId?: number
   context: BrowserAgentContext
-  authorizedOrigin?: string
+  authorizedOrigins: Set<string>
 }
 
 interface RecordingPayload {
@@ -290,6 +294,43 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
+function normalizeBrowserPageAuthorizations(value: unknown): BrowserPageAuthorizationMap {
+  if (!isRecord(value)) return {}
+  const normalized: BrowserPageAuthorizationMap = {}
+  for (const [sessionId, urls] of Object.entries(value)) {
+    if (!sessionId || !Array.isArray(urls)) continue
+    const normalizedUrls = urls
+      .filter((url): url is string => typeof url === 'string')
+      .map((url) => normalizeBrowserPageOrigin(url))
+      .filter((url, index, allUrls) => url !== '' && allUrls.indexOf(url) === index)
+    if (normalizedUrls.length > 0) normalized[sessionId] = normalizedUrls
+  }
+  return normalized
+}
+
+function loadBrowserPageAuthorizations(sessionId: string): Set<string> {
+  const settings = getSettings()
+  const authorizations = normalizeBrowserPageAuthorizations(settings.browserPageAuthorizations)
+  if (settings.browserPageAuthorizations !== undefined
+    && JSON.stringify(settings.browserPageAuthorizations) !== JSON.stringify(authorizations)) {
+    updateSettings({ browserPageAuthorizations: authorizations })
+  }
+  return new Set(authorizations[sessionId] ?? [])
+}
+
+function persistBrowserPageAuthorizations(sessionId: string, authorizedOrigins: Set<string>): void {
+  const authorizations = normalizeBrowserPageAuthorizations(getSettings().browserPageAuthorizations)
+  const origins = [...authorizedOrigins]
+    .map((origin) => normalizeBrowserPageOrigin(origin))
+    .filter((origin, index, allOrigins) => origin !== '' && allOrigins.indexOf(origin) === index)
+  if (origins.length > 0) {
+    authorizations[sessionId] = origins
+  } else {
+    delete authorizations[sessionId]
+  }
+  updateSettings({ browserPageAuthorizations: authorizations })
+}
+
 function sanitizeWorkflowUrl(url: string): string {
   try {
     const parsed = new URL(url)
@@ -307,15 +348,6 @@ function sanitizeWorkflowUrl(url: string): string {
 
 export function sanitizeBrowserWorkflowUrl(url: string): string {
   return sanitizeWorkflowUrl(url)
-}
-
-function getOrigin(url: string): string {
-  try {
-    const parsed = new URL(url)
-    return parsed.protocol === 'http:' || parsed.protocol === 'https:' ? parsed.origin : ''
-  } catch {
-    return ''
-  }
 }
 
 function parsePayload(value: string | undefined): RecordingPayload | undefined {
@@ -346,8 +378,9 @@ function withBrowserPageControlState(
   const binding = bindings.get(sessionId)
   const tab = binding ? getWebTabState(binding.context.tabId) : undefined
   if (!binding || !tab) return status
-  const control = resolveBrowserPageControlState(tab.url, binding.authorizedOrigin)
-  if (binding.authorizedOrigin && control.mode === 'ask') binding.authorizedOrigin = undefined
+  const pageOrigin = normalizeBrowserPageOrigin(tab.url)
+  const authorizedOrigin = pageOrigin && binding.authorizedOrigins.has(pageOrigin) ? pageOrigin : undefined
+  const control = resolveBrowserPageControlState(tab.url, authorizedOrigin)
   return {
     ...status,
     tabId: tab.id,
@@ -394,7 +427,7 @@ function normalizePayload(payload: RecordingPayload, recording: ActiveRecording,
   if (payload.nonce !== recording.nonce) return undefined
   const url = sanitizeWorkflowUrl(payload.url || getWebTabState(page.tabId)?.url || '')
   const target = getTargetOrigin(payload.target)
-  if (!url || !getOrigin(url)) return undefined
+  if (!url || !normalizeBrowserPageOrigin(url)) return undefined
   const value = payload.value
     ? payload.value.kind === 'sensitive'
       ? { kind: 'sensitive' as const }
@@ -451,7 +484,7 @@ function handleBindingEvent(recording: ActiveRecording, page: RecordingPage, par
 function handleNavigationEvent(recording: ActiveRecording, page: RecordingPage, params: Record<string, unknown>): void {
   const data = params as unknown as CdpFrameNavigatedParams
   const frame = data.frame
-  if (!frame || frame.parentId || !frame.url || !getOrigin(frame.url)) return
+  if (!frame || frame.parentId || !frame.url || !normalizeBrowserPageOrigin(frame.url)) return
   queueRecordingEvent(recording, {
     id: randomUUID(),
     recordingId: recording.recordingId,
@@ -566,7 +599,7 @@ function attachRecordingPage(recording: ActiveRecording, tabId: string, tabAlias
   const tab = getWebTabState(tabId)
   if (!tab) throw new Error(`网页页签不存在: ${tabId}`)
   const activeUrl = getWebTabState(recording.activeTabId)?.url
-  const origin = getOrigin(tab.url) || (activeUrl ? getOrigin(activeUrl) : undefined)
+  const origin = normalizeBrowserPageOrigin(tab.url) || (activeUrl ? normalizeBrowserPageOrigin(activeUrl) : undefined)
   if (!origin) throw new Error(`网页页签不是 HTTP(S): ${tabId}`)
   const page: RecordingPage = {
     tabId,
@@ -604,7 +637,7 @@ async function installRecordingPage(recording: ActiveRecording, page: RecordingP
 
 function assertBindingOwner(sessionId: string, ownerWebContentsId: number): BrowserAgentBinding {
   const binding = bindings.get(sessionId)
-  if (!binding) throw new Error('Browser Agent 页面上下文不存在')
+  if (!binding) throw new Error('AI浏览器页面上下文不存在')
   if (binding.ownerWebContentsId !== ownerWebContentsId) {
     throw new Error('Browser Workflow session 不属于当前渲染进程')
   }
@@ -639,23 +672,23 @@ export function bindBrowserAgentContext(
   ownerWebContentsId?: number,
 ): BrowserWorkflowStatus {
   const session = getAgentSessionMeta(sessionId)
-  if (!session) throw new Error('Browser Agent 会话不存在')
-  if (!session.workspaceId) throw new Error('Browser Agent 会话必须绑定工作区')
+  if (!session) throw new Error('AI浏览器会话不存在')
+  if (!session.workspaceId) throw new Error('AI浏览器会话必须绑定工作区')
   const workspace = getAgentWorkspace(session.workspaceId)
-  if (!workspace) throw new Error('Browser Agent 工作区不存在')
+  if (!workspace) throw new Error('AI浏览器工作区不存在')
   const tab = getWebTabState(context.tabId)
   if (!tab) throw new Error('网页页签不存在')
-  if (!getOrigin(tab.url)) throw new Error('只有 HTTP(S) 网页可以绑定 Browser Agent')
+  if (!normalizeBrowserPageOrigin(tab.url)) throw new Error('只有 HTTP(S) 网页可以绑定 AI浏览器')
   const previousBinding = bindings.get(sessionId)
   if (previousBinding && ownerWebContentsId !== undefined && previousBinding.ownerWebContentsId !== ownerWebContentsId) {
     throw new Error('Browser Workflow session 已绑定到其它渲染进程')
   }
-  const nextOrigin = getOrigin(tab.url)
-  const authorizedOrigin = previousBinding?.authorizedOrigin === nextOrigin
-    ? previousBinding.authorizedOrigin
-    : undefined
+  if (previousBinding && previousBinding.context.tabId !== context.tabId) {
+    revokeBrowserAgentWorkerCapability(sessionId)
+  }
+  const authorizedOrigins = loadBrowserPageAuthorizations(sessionId)
   if (session.permissionMode !== 'bypassPermissions') {
-    // Browser Agent 的网页控制授权由 Browser Page 工具负责，不继承工作区只读会话的 plan 模式。
+    // AI浏览器的网页控制授权由 Browser Page 工具负责，不继承工作区只读会话的 plan 模式。
     updateAgentSessionMeta(sessionId, { permissionMode: 'bypassPermissions' })
   }
   bindings.set(sessionId, {
@@ -664,7 +697,7 @@ export function bindBrowserAgentContext(
     workspaceSlug: workspace.slug,
     ownerWebContentsId: ownerWebContentsId ?? previousBinding?.ownerWebContentsId,
     context,
-    authorizedOrigin,
+    authorizedOrigins,
   })
   const status = { ...currentStatus(sessionId), sessionId, tabId: tab.id, tabTitle: tab.title }
   emitStatus(sessionId, status)
@@ -673,6 +706,7 @@ export function bindBrowserAgentContext(
 
 export function unbindBrowserAgentContext(sessionId: string, ownerWebContentsId?: number): void {
   if (ownerWebContentsId !== undefined) assertBindingOwner(sessionId, ownerWebContentsId)
+  revokeBrowserAgentWorkerCapability(sessionId)
   const recording = recordings.get(sessionId)
   if (recording) void cancelBrowserWorkflowRecording(sessionId)
   bindings.delete(sessionId)
@@ -692,12 +726,18 @@ export function setBrowserPageControlMode(
   mode: BrowserPageControlMode,
 ): BrowserWorkflowStatus {
   const binding = bindings.get(sessionId)
-  if (!binding) throw new Error('Browser Agent 页面上下文不存在')
+  if (!binding) throw new Error('AI浏览器页面上下文不存在')
   const tab = getWebTabState(binding.context.tabId)
   if (!tab) throw new Error('当前网页页签不存在')
-  binding.authorizedOrigin = mode === 'authorized'
-    ? authorizeBrowserPageOrigin(tab.url)
-    : undefined
+  const authorizedOrigins = new Set(binding.authorizedOrigins)
+  if (mode === 'authorized') {
+    authorizedOrigins.add(authorizeBrowserPageOrigin(tab.url))
+  } else {
+    const pageOrigin = normalizeBrowserPageOrigin(tab.url)
+    if (pageOrigin) authorizedOrigins.delete(pageOrigin)
+  }
+  persistBrowserPageAuthorizations(sessionId, authorizedOrigins)
+  binding.authorizedOrigins = authorizedOrigins
   const status = currentStatus(sessionId)
   emitStatus(sessionId, status)
   return currentStatus(sessionId)
@@ -724,9 +764,9 @@ export async function startBrowserWorkflowRecording(sessionId: string): Promise<
     throw new Error('已有其他会话正在记录网页操作')
   }
   const binding = bindings.get(sessionId)
-  if (!binding) throw new Error('Browser Agent 尚未绑定网页页签')
+  if (!binding) throw new Error('AI浏览器尚未绑定网页页签')
   const tab = getWebTabState(binding.context.tabId)
-  if (!tab || !getOrigin(tab.url)) throw new Error('当前页签不是可录制的 HTTP(S) 网页')
+  if (!tab || !normalizeBrowserPageOrigin(tab.url)) throw new Error('当前页签不是可录制的 HTTP(S) 网页')
   const recording: ActiveRecording = {
     recordingId: randomUUID(),
     nonce: randomUUID(),
@@ -765,7 +805,7 @@ export async function startBrowserWorkflowRecording(sessionId: string): Promise<
         if (!event.openerTabId || !recording.pages.has(event.openerTabId)) return
         const createdTab = event.snapshot.tabs.find((item) => item.id === event.tabId)
         if (!createdTab) return
-        const createdOrigin = getOrigin(createdTab.url) || getOrigin(getWebTabState(recording.activeTabId)?.url || '')
+        const createdOrigin = normalizeBrowserPageOrigin(createdTab.url) || normalizeBrowserPageOrigin(getWebTabState(recording.activeTabId)?.url || '')
         if (!createdOrigin) return
         const newPage = attachRecordingPage(recording, event.tabId, nextTabAlias(recording))
         recordLifecycleEvent(recording, newPage, 'tab_open')
@@ -902,11 +942,11 @@ function inspectRecordingJsonl(jsonl: string): { types: Set<string>; origins: Se
       if (!isRecord(value)) continue
       if (typeof value.type === 'string') types.add(value.type)
       if (typeof value.url === 'string') {
-        const origin = getOrigin(value.url)
+        const origin = normalizeBrowserPageOrigin(value.url)
         if (origin) origins.add(origin)
       }
       if (typeof value.startUrl === 'string') {
-        const origin = getOrigin(value.startUrl)
+        const origin = normalizeBrowserPageOrigin(value.startUrl)
         if (origin) origins.add(origin)
       }
     } catch {
@@ -1068,7 +1108,7 @@ export function approveBrowserWorkflowDraft(
   const session = getAgentSessionMeta(sessionId)
   if (!session?.workspaceId) throw new Error('Browser Workflow 会话没有绑定工作区')
   if (unattendedAllowed && approvalSource !== 'ui') {
-    throw new Error('无人值守权限必须由 Browser Agent 审核面板明确授予')
+    throw new Error('无人值守权限必须由 AI浏览器审核面板明确授予')
   }
   const approvedVersion: BrowserWorkflowVersion = {
     ...draft,

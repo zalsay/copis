@@ -5,7 +5,7 @@ import {
   shouldShowExitPlanBanner,
 } from './browser-agent-permission-policy'
 
-describe('Browser Agent 对话表面权限策略', () => {
+describe('AI浏览器对话表面权限策略', () => {
   test('Browser variant 固定完全自动并忽略 stale plan 状态', () => {
     expect(resolveAgentConversationPermissionMode('browser', 'plan')).toBe('bypassPermissions')
     expect(shouldShowAgentPlanUi('browser', true)).toBe(false)

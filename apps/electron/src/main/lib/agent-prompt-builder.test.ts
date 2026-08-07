@@ -45,6 +45,19 @@ function buildPrompt(agentCwd: string, memoryPolicy?: 'off' | 'visible' | 'writa
 }
 
 describe('项目与会话工作台提示词', () => {
+  test('Given 主 Agent 专家团队工具 When 构建系统提示词 Then 强制主 Agent 汇总子 Agent 结果', () => {
+    const prompt = buildSystemPrompt({
+      agentRuntime: 'pi',
+      sessionId: 'session-expert-team',
+      permissionMode: 'bypassPermissions',
+      expertTeamAvailable: true,
+    })
+
+    expect(prompt).toContain('## 深入研究团队')
+    expect(prompt).toContain('expert_team_run')
+    expect(prompt).toContain('子 Agent 不直接面向用户')
+  })
+
   test('Given 项目根 cwd When 构建提示词 Then 标明会话直接在项目中工作', () => {
     const prompt = buildPrompt('/tmp/sample-project')
 

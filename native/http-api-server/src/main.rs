@@ -10,11 +10,13 @@ use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 mod agent_files;
+mod expert_teams;
 mod memory;
 mod pi_rpc;
 mod runtime;
 mod skill_market;
 
+use expert_teams::{ExpertTeamError, ExpertTeamStore};
 use memory::{
     MemoryCaptureBatchInput, MemoryCaptureInput, MemoryContextInput, MemoryError,
     MemoryExportInput, MemoryKind, MemoryMaintenanceApplyInput, MemoryRestoreInput,
@@ -968,6 +970,7 @@ fn handle_connection(
     bridge: Arc<Bridge>,
     workers: Arc<PiWorkerManager>,
     memory_store: Arc<MemoryStore>,
+    expert_team_store: Arc<ExpertTeamStore>,
     skill_market_state: Arc<SkillMarketState>,
 ) {
     let request = match read_http_request(&mut stream) {
@@ -1017,10 +1020,12 @@ fn handle_connection(
         .unwrap_or(request.target.as_str());
     if request.method == "GET" && path == "/api/health" {
         let memory_available = memory_store.integrity_check().is_ok();
+        let expert_teams_available = expert_team_store.integrity_check().is_ok();
         let health_body = format!(
-            r#"{{"ok":true,"service":"copis-http-api","port":{},"memory":{{"available":{},"backend":"sqlite","schemaVersion":1}}}}"#,
+            r#"{{"ok":true,"service":"copis-http-api","port":{},"memory":{{"available":{},"backend":"sqlite","schemaVersion":1}},"expertTeams":{{"available":{},"backend":"sqlite","schemaVersion":1,"execution":"pi-only"}}}}"#,
             configured_port(),
             memory_available,
+            expert_teams_available,
         );
         send_json_response(&mut stream, 200, &health_body, origin);
         let _ = stream.shutdown(Shutdown::Both);
@@ -1029,6 +1034,18 @@ fn handle_connection(
 
     if path == "/api/memory" || path.starts_with("/api/memory/") {
         handle_memory_route(&mut stream, &request, origin, &memory_store);
+        let _ = stream.shutdown(Shutdown::Both);
+        return;
+    }
+
+    if path == "/api/expert-teams" || path.starts_with("/api/expert-teams/") {
+        handle_expert_team_route(&mut stream, &request, origin, &expert_team_store);
+        let _ = stream.shutdown(Shutdown::Both);
+        return;
+    }
+
+    if path == "/api/internal/expert-teams" || path.starts_with("/api/internal/expert-teams/") {
+        handle_internal_expert_team_route(&mut stream, &request, origin, &expert_team_store);
         let _ = stream.shutdown(Shutdown::Both);
         return;
     }
@@ -1267,6 +1284,195 @@ fn handle_connection(
 
 fn is_skill_market_path(path: &str) -> bool {
     path == "/api/working/skill-market" || path.starts_with("/api/working/skill-market/")
+}
+
+fn handle_expert_team_route(
+    stream: &mut TcpStream,
+    request: &HttpRequest,
+    origin: Option<&str>,
+    store: &ExpertTeamStore,
+) {
+    match expert_teams::handle_request(store, &request.method, &request.target, &request.body) {
+        Ok(response) => {
+            send_json_response(stream, response.status, &response.body.to_string(), origin)
+        }
+        Err(error) => send_expert_team_error(stream, error, origin),
+    }
+}
+
+fn handle_internal_expert_team_route(
+    stream: &mut TcpStream,
+    request: &HttpRequest,
+    origin: Option<&str>,
+    store: &ExpertTeamStore,
+) {
+    if !is_internal_token_valid(request) {
+        send_json_response(
+            stream,
+            403,
+            r#"{"error":"内部专家团队执行接口未授权","code":"internal_token_required"}"#,
+            None,
+        );
+        return;
+    }
+    let parts: Vec<&str> = request
+        .target
+        .split('?')
+        .next()
+        .unwrap_or_default()
+        .split('/')
+        .filter(|part| !part.is_empty())
+        .collect();
+    if parts.len() < 5 || parts[..3] != ["api", "internal", "expert-teams"] || parts[3] != "runs" {
+        send_expert_team_error(
+            stream,
+            ExpertTeamError::NotFound("专家团队内部路由不存在".to_string()),
+            origin,
+        );
+        return;
+    }
+    let run_id = parts[4];
+    let result = match (
+        request.method.as_str(),
+        parts.get(5).copied(),
+        parts.get(6).copied(),
+    ) {
+        ("POST", Some("claim"), None) => store.claim_run(run_id),
+        ("POST", Some("events"), None) => {
+            let value = match serde_json::from_slice::<Value>(&request.body) {
+                Ok(value) => value,
+                Err(_) => {
+                    send_expert_team_error(
+                        stream,
+                        ExpertTeamError::Validation("事件请求不是有效 JSON".to_string()),
+                        origin,
+                    );
+                    return;
+                }
+            };
+            let event_type = value
+                .get("type")
+                .or_else(|| value.get("eventType"))
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            let mut payload = value.get("payload").cloned().unwrap_or_else(|| json!({}));
+            if let Some(node_id) = value.get("nodeId") {
+                if let Some(payload_object) = payload.as_object_mut() {
+                    payload_object.insert("nodeId".to_string(), node_id.clone());
+                }
+            }
+            store.append_run_event(run_id, event_type, payload)
+        }
+        ("POST", Some("nodes"), Some(node_id)) if parts.len() == 7 => {
+            let value = match serde_json::from_slice::<Value>(&request.body) {
+                Ok(value) => value,
+                Err(_) => {
+                    send_expert_team_error(
+                        stream,
+                        ExpertTeamError::Validation("节点状态请求不是有效 JSON".to_string()),
+                        origin,
+                    );
+                    return;
+                }
+            };
+            store.update_run_node(run_id, node_id, value)
+        }
+        ("POST", Some("nodes"), Some(node_id)) if parts.len() == 8 => {
+            let mut value = match serde_json::from_slice::<Value>(&request.body) {
+                Ok(value) => value,
+                Err(_) => {
+                    send_expert_team_error(
+                        stream,
+                        ExpertTeamError::Validation("节点状态请求不是有效 JSON".to_string()),
+                        origin,
+                    );
+                    return;
+                }
+            };
+            let Some(value_object) = value.as_object_mut() else {
+                send_expert_team_error(
+                    stream,
+                    ExpertTeamError::Validation("节点状态请求必须是 JSON 对象".to_string()),
+                    origin,
+                );
+                return;
+            };
+            let status = match parts[7] {
+                "start" => "running",
+                "complete" => "succeeded",
+                "fail" => "failed",
+                "cancel" => "cancelled",
+                _ => {
+                    send_expert_team_error(
+                        stream,
+                        ExpertTeamError::NotFound("专家团队内部节点路由不存在".to_string()),
+                        origin,
+                    );
+                    return;
+                }
+            };
+            value_object.insert("status".to_string(), Value::String(status.to_string()));
+            if status == "running" {
+                value_object.insert(
+                    "startedAt".to_string(),
+                    json!(unix_timestamp_millis() as i64),
+                );
+            } else {
+                value_object.insert(
+                    "completedAt".to_string(),
+                    json!(unix_timestamp_millis() as i64),
+                );
+            }
+            store.update_run_node(run_id, node_id, value)
+        }
+        ("POST", Some("artifacts"), None) => {
+            let value = match serde_json::from_slice::<Value>(&request.body) {
+                Ok(value) => value,
+                Err(_) => {
+                    send_expert_team_error(
+                        stream,
+                        ExpertTeamError::Validation("artifact 请求不是有效 JSON".to_string()),
+                        origin,
+                    );
+                    return;
+                }
+            };
+            store.add_artifact(run_id, value)
+        }
+        ("POST", Some("complete"), None) => {
+            let value = match serde_json::from_slice::<Value>(&request.body) {
+                Ok(value) => value,
+                Err(_) => {
+                    send_expert_team_error(
+                        stream,
+                        ExpertTeamError::Validation("run 完成请求不是有效 JSON".to_string()),
+                        origin,
+                    );
+                    return;
+                }
+            };
+            let status = value.get("status").and_then(Value::as_str).unwrap_or("");
+            store.complete_run(run_id, status)
+        }
+        _ => Err(ExpertTeamError::NotFound(
+            "专家团队内部路由不存在".to_string(),
+        )),
+    };
+    match result {
+        Ok(value) => send_json_response(stream, 200, &value.to_string(), origin),
+        Err(error) => send_expert_team_error(stream, error, origin),
+    }
+}
+
+fn send_expert_team_error(stream: &mut TcpStream, error: ExpertTeamError, origin: Option<&str>) {
+    let (status, code) = match error {
+        ExpertTeamError::Validation(_) => (400, "invalid_expert_team_request"),
+        ExpertTeamError::NotFound(_) => (404, "expert_team_not_found"),
+        ExpertTeamError::Conflict(_) => (409, "expert_team_conflict"),
+        ExpertTeamError::Storage(_) => (500, "expert_team_storage_error"),
+    };
+    let body = json!({ "error": error.to_string(), "code": code });
+    send_json_response(stream, status, &body.to_string(), origin);
 }
 
 fn is_allowed_origin(origin: &str) -> bool {
@@ -1894,6 +2100,19 @@ fn resolve_memory_directory() -> PathBuf {
     PathBuf::from(home).join(".copis").join("memory")
 }
 
+fn resolve_expert_teams_directory() -> PathBuf {
+    if let Ok(directory) = std::env::var("COPIS_EXPERT_TEAMS_DIR") {
+        if !directory.trim().is_empty() {
+            return PathBuf::from(directory);
+        }
+    }
+
+    let home = std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .unwrap_or_else(|_| ".".to_string());
+    PathBuf::from(home).join(".copis").join("expert-teams")
+}
+
 fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
     if needle.is_empty() {
         return Some(0);
@@ -1930,6 +2149,13 @@ fn main() {
             process::exit(1);
         }
     };
+    let expert_team_store = match ExpertTeamStore::open(resolve_expert_teams_directory()) {
+        Ok(store) => Arc::new(store),
+        Err(error) => {
+            eprintln!("[HTTP API] Expert Teams 存储初始化失败: {}", error);
+            process::exit(1);
+        }
+    };
     let skill_market_state = Arc::new(SkillMarketState::new(
         std::env::var("COPIS_WORKING_ACCESS_TOKEN").ok(),
     ));
@@ -1943,6 +2169,7 @@ fn main() {
                 let connection_bridge = Arc::clone(&bridge);
                 let connection_workers = Arc::clone(&workers);
                 let connection_memory = Arc::clone(&memory_store);
+                let connection_expert_teams = Arc::clone(&expert_team_store);
                 let connection_skill_market = Arc::clone(&skill_market_state);
                 thread::spawn(move || {
                     handle_connection(
@@ -1950,6 +2177,7 @@ fn main() {
                         connection_bridge,
                         connection_workers,
                         connection_memory,
+                        connection_expert_teams,
                         connection_skill_market,
                     )
                 });

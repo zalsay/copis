@@ -13,6 +13,7 @@ const rpcSession: AgentSessionMeta = {
 }
 const persistedRpcMessages: SDKMessage[] = []
 const appendedRpcMessages: SDKMessage[] = []
+let browserContext: { tabId: string } | undefined
 
 mock.module('./agent-session-manager', () => ({
   appendSDKMessages: (_sessionId: string, messages: SDKMessage[]) => {
@@ -81,6 +82,17 @@ mock.module('./proxy-settings-service', () => ({
 
 mock.module('./functional-module-manager', () => ({
   getFunctionalModulePath: () => undefined,
+}))
+
+mock.module('./browser-workflow-service', () => ({
+  getBrowserAgentContext: () => browserContext,
+  sanitizeBrowserWorkflowUrl: (url: string) => url.replace(/token=[^&]+/, 'token=REDACTED'),
+}))
+
+mock.module('./web-tab-manager', () => ({
+  getWebTabState: (tabId: string) => browserContext?.tabId === tabId
+    ? { id: tabId, title: '测试网页', url: 'https://example.com/account?token=secret' }
+    : undefined,
 }))
 
 mock.module('electron', () => ({
@@ -217,5 +229,79 @@ describe('Agent RPC 工作区边界', () => {
     })).rejects.toThrow('必须绑定有效工作区')
 
     rpcSession.workspaceId = originalWorkspaceId
+  })
+})
+
+describe('Browser Agent RPC 准备', () => {
+  test('Given Browser session bound to an HTTP tab When preparing Pi Worker Then it injects capability, Skill, sanitized prompt context and bypass mode', async () => {
+    const { prepareAgentRpcRun } = await import('./agent-rpc-service')
+    browserContext = { tabId: 'tab-1' }
+
+    const run = await prepareAgentRpcRun({
+      sessionId: rpcSession.id,
+      userMessage: '这个页面是什么？',
+      channelId: 'channel-1',
+      modelId: rpcSession.modelId,
+      agentRuntime: 'pi',
+      permissionModeOverride: 'plan',
+    })
+
+    expect(run.query.permissionMode).toBe('bypassPermissions')
+    expect(run.query.skillMentions).toContain('browser-page-control')
+    expect(run.query.systemPrompt).toContain('tab-1')
+    expect(run.query.systemPrompt).toContain('token=REDACTED')
+    expect(run.query.systemPrompt).not.toContain('token=secret')
+    expect(run.query.browserPageControl).toEqual({
+      endpoint: '/api/internal/agent/browser-tool',
+      token: expect.any(String),
+    })
+
+    browserContext = undefined
+  })
+
+  test('Given Browser Agent run When queueing and finalizing Then it retains the Skill and revokes the issued capability', async () => {
+    const { assertBrowserAgentWorkerCapability } = await import('./browser-agent-worker-capability')
+    const { finalizeAgentRpcRun, prepareAgentRpcQueue, prepareAgentRpcRun } = await import('./agent-rpc-service')
+    browserContext = { tabId: 'tab-1' }
+    const run = await prepareAgentRpcRun({
+      sessionId: rpcSession.id,
+      userMessage: '观察页面',
+      channelId: 'channel-1',
+      modelId: rpcSession.modelId,
+      agentRuntime: 'pi',
+    })
+
+    expect(prepareAgentRpcQueue({
+      sessionId: rpcSession.id,
+      userMessage: '继续说明页面内容',
+      uuid: 'browser-queue-1',
+    }).skillMentions).toContain('browser-page-control')
+
+    finalizeAgentRpcRun({ sessionId: rpcSession.id, stoppedByUser: false })
+    expect(() => assertBrowserAgentWorkerCapability({
+      sessionId: rpcSession.id,
+      tabId: 'tab-1',
+      token: run.query.browserPageControl?.token ?? '',
+    })).toThrow(expect.objectContaining({ code: 'browser_capability_stale' }))
+
+    browserContext = undefined
+  })
+
+  test('Given ordinary Agent session When preparing Pi Worker Then Browser-only fields stay absent', async () => {
+    const { prepareAgentRpcRun } = await import('./agent-rpc-service')
+    browserContext = undefined
+
+    const run = await prepareAgentRpcRun({
+      sessionId: rpcSession.id,
+      userMessage: '整理工作区文件',
+      channelId: 'channel-1',
+      modelId: rpcSession.modelId,
+      agentRuntime: 'pi',
+      permissionModeOverride: 'plan',
+    })
+
+    expect(run.query.permissionMode).toBe('plan')
+    expect(run.query.skillMentions ?? []).not.toContain('browser-page-control')
+    expect(run.query.browserPageControl).toBeUndefined()
   })
 })

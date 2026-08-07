@@ -55,6 +55,19 @@ import { getFunctionalModulePath } from './functional-module-manager'
 import { getEffectiveProxyUrl } from './proxy-settings-service'
 import { getRuntimeStatus } from './runtime-init'
 import { getSettings } from './settings-service'
+import {
+  resolveBrowserAgentPermissionMode,
+  resolveBrowserAgentSkillMentions,
+} from './browser-agent-skill'
+import {
+  getBrowserAgentContext,
+  sanitizeBrowserWorkflowUrl,
+} from './browser-workflow-service'
+import { getWebTabState } from './web-tab-manager'
+import {
+  issueBrowserAgentWorkerCapability,
+  revokeBrowserAgentWorkerCapability,
+} from './browser-agent-worker-capability'
 import { createFallbackTitle } from './title-generation'
 import { isVisibleRunMessage } from './agent-run-message-visibility'
 import {
@@ -323,6 +336,9 @@ export function prepareAgentRpcQueue(input: AgentQueueMessageInput): PiWorkerQue
 
   const workspace = session.workspaceId ? getAgentWorkspace(session.workspaceId) : undefined
   const workspaceSlug = workspace?.slug
+  const browserBinding = getBrowserAgentContext(input.sessionId)
+  const hasBrowserContext = Boolean(browserBinding && getWebTabState(browserBinding.tabId))
+  const effectiveSkillMentions = resolveBrowserAgentSkillMentions(input.mentionedSkills, hasBrowserContext)
   let enrichedText = input.userMessage
 
   const referencedSessionsBlock = buildReferencedSessionsPrompt(
@@ -365,7 +381,7 @@ export function prepareAgentRpcQueue(input: AgentQueueMessageInput): PiWorkerQue
     userMessage: enrichedText,
     uuid,
     ...(input.interrupt ? { interrupt: true } : {}),
-    ...(input.mentionedSkills?.length ? { skillMentions: input.mentionedSkills } : {}),
+    ...(effectiveSkillMentions?.length ? { skillMentions: effectiveSkillMentions } : {}),
   }
 }
 
@@ -420,6 +436,14 @@ export async function prepareAgentRpcRun(input: AgentSendInput): Promise<PiWorke
   const credentials = await resolveWorkerCredentials(channelId, channel.provider)
   const settings = getSettings()
   const workspaceSlug = workspace.slug
+  const browserBinding = getBrowserAgentContext(input.sessionId)
+  const browserTab = browserBinding ? getWebTabState(browserBinding.tabId) : undefined
+  const hasBrowserContext = Boolean(browserBinding && browserTab)
+  const effectivePermissionMode = resolveBrowserAgentPermissionMode(
+    hasBrowserContext,
+    input.permissionModeOverride ?? session.permissionMode ?? COPIS_DEFAULT_PERMISSION_MODE,
+  )
+  const effectiveSkillMentions = resolveBrowserAgentSkillMentions(input.mentionedSkills, hasBrowserContext)
   const agentCwd = resolveAgentCwd(workspace, input.sessionId, session.agentCwdMode)
   if (!agentCwd) throw new Error('Agent 工作区 cwd 不可用，已拒绝启动文件操作')
   const workspaceWriteRoot = getAgentWorkspaceWritableRoot(workspace)
@@ -435,9 +459,6 @@ export async function prepareAgentRpcRun(input: AgentSendInput): Promise<PiWorke
     ? `${mentionedToolsPrompt}\n\n${input.userMessage}`
     : input.userMessage
 
-  const initialPermissionMode = input.permissionModeOverride
-    ?? session.permissionMode
-    ?? COPIS_DEFAULT_PERMISSION_MODE
   const fileAccessPolicy = buildRustFileAccessPolicy({
     workspace,
     session,
@@ -445,7 +466,7 @@ export async function prepareAgentRpcRun(input: AgentSendInput): Promise<PiWorke
     agentCwd,
     workspaceWriteRoot,
     additionalDirectories: directories,
-    permissionMode: initialPermissionMode,
+    permissionMode: effectivePermissionMode,
   })
   const memoryPolicy = workspace.memoryPolicy ?? settings.defaultMemoryPolicy ?? 'writable'
   const dynamicContext = buildDynamicContext({
@@ -474,11 +495,20 @@ export async function prepareAgentRpcRun(input: AgentSendInput): Promise<PiWorke
     sessionId: input.sessionId,
     agentCwd,
     workspaceWriteRoot,
-    permissionMode: initialPermissionMode,
+    permissionMode: effectivePermissionMode,
     collaborationAvailable: false,
     currentModelId: modelId,
     workingMode,
     memoryPolicy,
+    ...(browserBinding && browserTab
+      ? {
+        browserContext: {
+          tabId: browserBinding.tabId,
+          title: browserTab.title,
+          url: sanitizeBrowserWorkflowUrl(browserTab.url),
+        },
+      }
+      : {}),
   }) + (input.automationContext ? `\n\n## 定时任务执行上下文\n\n${input.automationContext}` : '')
 
   const maxTurns = settings.agentMaxTurns && settings.agentMaxTurns > 0 ? settings.agentMaxTurns : undefined
@@ -493,7 +523,7 @@ export async function prepareAgentRpcRun(input: AgentSendInput): Promise<PiWorke
     channelId,
     channelName: channel.name,
     ...(maxTurns !== undefined ? { maxTurns } : {}),
-    permissionMode: initialPermissionMode,
+    permissionMode: effectivePermissionMode,
     systemPrompt,
     ...(existingSdkSessionId ? { resumeSessionId: existingSdkSessionId } : {}),
     piAgentDir: getSdkConfigDir(),
@@ -501,7 +531,7 @@ export async function prepareAgentRpcRun(input: AgentSendInput): Promise<PiWorke
     ...(settings.agentMaxBudgetUsd && settings.agentMaxBudgetUsd > 0 ? { maxBudgetUsd: settings.agentMaxBudgetUsd } : {}),
     ...(directories.length > 0 ? { additionalDirectories: directories } : {}),
     ...(workspaceSlug ? { additionalSkillPaths: [getWorkspaceSkillsDir(workspaceSlug)] } : {}),
-    ...(input.mentionedSkills?.length ? { skillMentions: input.mentionedSkills } : {}),
+    ...(effectiveSkillMentions?.length ? { skillMentions: effectiveSkillMentions } : {}),
     ...(workspaceSlug ? { workspaceSlug } : {}),
     memoryPolicy,
     ...(proxyUrl ? { proxyUrl } : {}),
@@ -513,6 +543,15 @@ export async function prepareAgentRpcRun(input: AgentSendInput): Promise<PiWorke
     thinkingLevel: settings.agentEffort === 'max' ? 'xhigh' : settings.agentEffort ?? 'high',
     retryRunStartedAt: startedAt,
     ...(fileAccessPolicy ? { fileAccessPolicy, useRustFileApi: true } : {}),
+    ...(browserBinding && browserTab
+      ? {
+        browserPageControl: issueBrowserAgentWorkerCapability({
+          sessionId: input.sessionId,
+          tabId: browserBinding.tabId,
+          triggeredBy: input.triggeredBy ?? 'user',
+        }),
+      }
+      : {}),
   }
 
   updateAgentSessionMeta(input.sessionId, {
@@ -633,6 +672,7 @@ export function finalizeAgentRpcRun(input: {
   resultSubtype?: string
   resultErrors?: string[]
 }): AgentRpcCompletionResult {
+  revokeBrowserAgentWorkerCapability(input.sessionId)
   const pending = pendingAgentRpcRuns.get(input.sessionId)
   const current = getAgentSessionMeta(input.sessionId)
   if (!current) {

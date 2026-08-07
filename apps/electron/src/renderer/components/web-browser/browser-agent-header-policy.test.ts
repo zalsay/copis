@@ -6,7 +6,7 @@ function status(input: Partial<BrowserWorkflowStatus>): BrowserWorkflowStatus {
   return { state: 'idle', ...input }
 }
 
-describe('Browser Agent Header 状态', () => {
+describe('AI浏览器 Header 状态', () => {
   test('Given 尚未授权当前页面 When 渲染 Header Then 选中询问模式', () => {
     expect(getBrowserAgentHeaderState(status({
       controlMode: 'ask',

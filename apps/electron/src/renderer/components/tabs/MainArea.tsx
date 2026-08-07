@@ -24,6 +24,7 @@ import { AutomationFormView } from '@/components/automation/AutomationFormView'
 import { PlanningView } from '@/components/planning/PlanningView'
 import { AgentSkillsView } from '@/components/agent-skills/AgentSkillsView'
 import { MemoryView } from '@/components/memory/MemoryView'
+import { ExpertTeamView } from '@/components/expert-team/ExpertTeamView'
 import { automationFormAtom } from '@/atoms/automation-atoms'
 import { activeViewAtom } from '@/atoms/active-view'
 import { interfaceVariantAtom } from '@/atoms/theme'
@@ -180,6 +181,8 @@ export function MainArea(): React.ReactElement {
             ) : activeView === 'memory' ? (
               // Copis Memory：独立于 Chat/Agent 模式的长期记忆视图。
               <MemoryView />
+            ) : activeView === 'expert-team' ? (
+              <ExpertTeamView />
             ) : (
               <>
                 <TabBar />

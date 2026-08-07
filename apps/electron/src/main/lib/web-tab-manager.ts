@@ -75,6 +75,32 @@ function selectFaviconUrl(favicons: string[]): string | null {
   return null
 }
 
+/**
+ * 主框架加载生命周期事件对 favicon 的纯状态转换，便于单元测试。
+ *
+ * 事件顺序约束：从收藏夹导航已加载页签时，Chromium 可能在 did-navigate（导航提交）
+ * 之前触发 page-favicon-updated；导航提交阶段不应清空刚收到的图标，
+ * 旧图标由下一次导航开始（loading-started）负责清空。
+ */
+export type WebTabFaviconLifecycleEvent =
+  | { type: 'loading-started' }
+  | { type: 'favicon-updated'; favicons: string[] }
+  | { type: 'navigation-committed' }
+
+export function resolveWebTabFaviconUrl(
+  previous: string | null,
+  event: WebTabFaviconLifecycleEvent,
+): string | null {
+  switch (event.type) {
+    case 'loading-started':
+      return null
+    case 'favicon-updated':
+      return selectFaviconUrl(event.favicons)
+    case 'navigation-committed':
+      return previous
+  }
+}
+
 function isAllowedWebUrl(url: string): boolean {
   return /^https?:\/\//i.test(url) || url === DEFAULT_URL
 }
@@ -240,7 +266,10 @@ function installWebContentsHandlers(record: WebTabRecord): void {
 
   contents.on('did-start-loading', () => {
     record.mainFrameLoadError = undefined
-    refreshState(record, { isLoading: true, faviconUrl: null })
+    refreshState(record, {
+      isLoading: true,
+      faviconUrl: resolveWebTabFaviconUrl(record.state.faviconUrl, { type: 'loading-started' }),
+    })
   })
 
   contents.on('did-stop-loading', () => {
@@ -248,11 +277,18 @@ function installWebContentsHandlers(record: WebTabRecord): void {
   })
 
   contents.on('page-favicon-updated', (_event, favicons) => {
-    refreshState(record, { faviconUrl: selectFaviconUrl(favicons) })
+    refreshState(record, {
+      faviconUrl: resolveWebTabFaviconUrl(record.state.faviconUrl, { type: 'favicon-updated', favicons }),
+    })
   })
 
   contents.on('did-navigate', (_event, url) => {
-    refreshState(record, { url, isLoading: false, title: getFallbackTitle(url), faviconUrl: null })
+    refreshState(record, {
+      url,
+      isLoading: false,
+      title: getFallbackTitle(url),
+      faviconUrl: resolveWebTabFaviconUrl(record.state.faviconUrl, { type: 'navigation-committed' }),
+    })
     emitWebTabLifecycle({ type: 'navigated', tabId: record.state.id, workflowOwned: record.workflowOwned, url, snapshot: getSnapshot() })
   })
 

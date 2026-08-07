@@ -1172,6 +1172,7 @@ export class AgentOrchestrator {
       })
       piBuiltinTools = builtinMcpResult.tools
       const collaborationAvailable = builtinMcpResult.collaborationAvailable
+      const expertTeamAvailable = builtinMcpResult.expertTeamAvailable
 
       // 合并外部注入的自定义 MCP 服务器（如飞书群聊工具）
       if (customMcpServers) {
@@ -1409,7 +1410,7 @@ export class AgentOrchestrator {
 
         const browserPlanToolDenial = getBrowserAgentPlanToolDenial(toolName, hasBrowserContext)
         if (browserPlanToolDenial) {
-          console.warn(`[Agent 编排] Browser Agent 拒绝计划工具: tool=${toolName}`)
+          console.warn(`[Agent 编排] AI浏览器拒绝计划工具: tool=${toolName}`)
           return { behavior: 'deny' as const, message: browserPlanToolDenial }
         }
 
@@ -1550,6 +1551,7 @@ export class AgentOrchestrator {
         workspaceWriteRoot,
         permissionMode: initialPermissionMode,
         collaborationAvailable,
+        expertTeamAvailable,
         currentModelId: selectedModelId,
         workingMode,
         memoryPolicy,

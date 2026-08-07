@@ -8,6 +8,7 @@ mock.module('electron', () => ({
     getPath: () => '/tmp/copis-test-app-data',
   },
   BrowserWindow: class {},
+  WebContentsView: class {},
   clipboard: {},
   dialog: {},
   nativeImage: { createFromPath: () => ({}) },

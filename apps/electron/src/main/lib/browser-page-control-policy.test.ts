@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import {
   authorizeBrowserPageOrigin,
+  normalizeBrowserPageOrigin,
   requiresBrowserPageActionConfirmation,
   resolveBrowserPageControlState,
 } from './browser-page-control-policy'
@@ -13,21 +14,41 @@ describe('Browser Agent 页面授权策略', () => {
     })
   })
 
-  test('Given 已授权当前 Origin When 页面同站导航 Then 保持授权模式', () => {
-    const authorizedOrigin = authorizeBrowserPageOrigin('https://example.com/account')
+  test('Given 已授权当前 Origin When 页面切换 path query hash Then 保持授权模式', () => {
+    const authorizedOrigin = authorizeBrowserPageOrigin('https://example.com/account?tab=1')
 
-    expect(resolveBrowserPageControlState('https://example.com/settings', authorizedOrigin)).toEqual({
+    expect(authorizedOrigin).toBe('https://example.com')
+    expect(resolveBrowserPageControlState('https://example.com/settings?tab=2#section', authorizedOrigin)).toEqual({
       mode: 'authorized',
       pageOrigin: 'https://example.com',
       authorizedOrigin: 'https://example.com',
     })
   })
 
-  test('Given 已授权当前 Origin When 页面跨站导航 Then 自动回到询问模式', () => {
-    expect(resolveBrowserPageControlState('https://other.example/path', 'https://example.com')).toEqual({
-      mode: 'ask',
-      pageOrigin: 'https://other.example',
+  test('Given settings 中保留旧完整 URL When 匹配页面 Then 归一化为同一 Origin', () => {
+    const legacyAuthorizedUrl = 'https://example.com/account?tab=1#section'
+
+    expect(normalizeBrowserPageOrigin(legacyAuthorizedUrl)).toBe('https://example.com')
+    expect(resolveBrowserPageControlState('https://example.com/settings?tab=2#other', legacyAuthorizedUrl)).toEqual({
+      mode: 'authorized',
+      pageOrigin: 'https://example.com',
+      authorizedOrigin: 'https://example.com',
     })
+  })
+
+  test('Given 已授权当前 Origin When 页面切换协议主机名子域名或端口 Then 回到询问模式', () => {
+    const authorizedOrigin = authorizeBrowserPageOrigin('https://example.com/account?tab=1')
+    for (const pageUrl of [
+      'http://example.com/settings',
+      'https://other.example/settings',
+      'https://sub.example.com/settings',
+      'https://example.com:8443/settings',
+    ]) {
+      expect(resolveBrowserPageControlState(pageUrl, authorizedOrigin)).toEqual({
+        mode: 'ask',
+        pageOrigin: new URL(pageUrl).origin,
+      })
+    }
   })
 
   test('Given 非 HTTP 页面 When 请求授权 Then 拒绝授权', () => {

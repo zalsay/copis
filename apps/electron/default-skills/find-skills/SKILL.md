@@ -1,135 +1,54 @@
 ---
 name: find-skills
 displayName: 技能发现
-description: Helps users discover and install agent skills when they ask questions like "how do I do X", "find a skill for X", "is there a skill that can...", or express interest in extending capabilities. This skill should be used when the user is looking for functionality that might exist as an installable skill.
+description: "在 SkillHub 平台查找/搜索 Skill 技能。基于 skills 列表接口，支持关键词分词搜索、一级标签（一级分类）筛选、以及二者组合检索。当用户说『找个 xxx 技能』『有没有处理 PDF 的 skill』『SkillHub 上搜一下 xxx』『按分类看技能』『办公效率类有哪些技能』『推荐一个做数据分析的 skill』『这个需求有现成技能吗』等需要在 SkillHub 上发现/检索/推荐 Skill 的场景时使用本技能。"
 group: 系统内置
-version: "1.0.3"
+version: "1.0.4"
 ---
-# Find Skills
+# 在 SkillHub 查找 Skill
 
-This skill helps you discover and install skills from the open agent skills ecosystem.
+通过公开接口 `GET https://api.skillhub.cn/api/skills` 查找平台 Skill（无需鉴权，关键词为**分词搜索**，**不要**用 `/api/v1/search`）。
 
-## When to Use This Skill
+接口参数 / 返回字段 / 更多示例 / 安装命令见 [references/api.md](references/api.md)。
 
-Use this skill when the user:
+## 核心流程
 
-- Asks "how do I do X" where X might be a common task with an existing skill
-- Says "find a skill for X" or "is there a skill for X"
-- Asks "can you do X" where X is a specialized capability
-- Expresses interest in extending agent capabilities
-- Wants to search for tools, templates, or workflows
-- Mentions they wish they had help with a specific domain (design, testing, deployment, etc.)
+关键词分词召回有限，必须走完五步，**不要拿用户原话搜一次就结束**。
 
-## What is the Skills CLI?
+### Step 1 · 理解场景
+从用户自然语言中提取：**任务意图** + **领域标签**（映射到 `category`）+ **中英文关键词**（同义/上位词扩展，2~4 个）。
+- 例："帮我自动写周报发给老板" → `office-efficiency`；`周报`/`工作汇报`/`日报`/`weekly report`
 
-The Skills CLI (`npx skills`) is the package manager for the open agent skills ecosystem. Skills are modular packages that extend agent capabilities with specialized knowledge, workflows, and tools.
-
-**Key commands:**
-
-- `npx skills find [query]` - Search for skills interactively or by keyword
-- `npx skills add <package>` - Install a skill from GitHub or other sources
-- `npx skills check` - Check for skill updates
-- `npx skills update` - Update all installed skills
-
-**Browse skills at:** https://skills.sh/
-
-## How to Help Users Find Skills
-
-### Step 1: Understand What They Need
-
-When a user asks for help with something, identify:
-
-1. The domain (e.g., React, testing, design, deployment)
-2. The specific task (e.g., writing tests, creating animations, reviewing PRs)
-3. Whether this is a common enough task that a skill likely exists
-
-### Step 2: Search for Skills
-
-Run the find command with a relevant query:
+### Step 2 · 多次搜索
+每个候选词调 `GET /api/skills?keyword=..&sortBy=score`（必要时叠加 `category`/`labels`），合并结果并按 `slug` 去重。
 
 ```bash
-npx skills find [query]
+curl -s "https://api.skillhub.cn/api/skills?keyword=周报&sortBy=score&pageSize=5" \
+  | jq '.data.skills[] | {name, slug, downloads, installs, desc: .description_zh}'
 ```
 
-For example:
+### Step 3 · 意图匹配排序
+不要把原始列表直接丢给用户。结合 `name`+`description` 判断契合度，**过滤不相关项**，挑出**最契合的 3~5 个**：契合度优先，同档按热度（`downloads`/`installs`）降序。命中过多→`category`/`labels` 收窄；为空→去掉 `category`、换同义/上位词放宽。
 
-- User asks "how do I make my React app faster?" → `npx skills find react performance`
-- User asks "can you help me with PR reviews?" → `npx skills find pr review`
-- User asks "I need to create a changelog" → `npx skills find changelog`
-
-The command will return results like:
+### Step 4 · 输出推荐
+统一格式，每条必须给**匹配理由**，并请用户选择。**只能输出下列字段**，⛔ 严禁在推荐列表里出现安装命令 / `curl` / `skillhub install` / `sh -c` 等任何命令行或代码块——这是给用户看的，命令属于 Step 5 且由你执行而非展示：
 
 ```
-Install with npx skills add <owner/repo@skill>
+🔍 为你找到 {N} 个相关技能：
 
-vercel-labs/agent-skills@vercel-react-best-practices
-└ https://skills.sh/vercel-labs/agent-skills/vercel-react-best-practices
+1. {name} — {一句话用途（description_zh 优先）}
+   匹配理由：{为什么适合这个场景}
+   分类：{category 中文名} | 下载：{downloads} | 安装：{installs}
+   主页：https://skillhub.cn/skills/{slug}
+
+需要我帮你安装第几个？（回复"安装第N个"即可；都不合适我再换词搜）
 ```
 
-### Step 3: Present Options to the User
+### Step 5 · 一键安装
+**用户选定后**才进入本步，且命令由你**直接执行**（不要把命令行贴给用户看）：`command -v skillhub` 检查 → 未装则 `install.sh --cli-only` 仅装 CLI → `skillhub install <slug> --dir <当前 Agent 的 skills 目录>`（必须带 `--dir`，否则不被识别）。装完只回一句「✅ {name} 已安装」。各 Agent 目录与备用 zip 方式见 [references/api.md](references/api.md#一键安装用户选定后)。
 
-When you find relevant skills, present them to the user with:
+## 一级标签（category）
 
-1. The skill name and what it does
-2. The install command they can run
-3. A link to learn more at skills.sh
+12 个一级标签（`?category=<key>`），映射意图时按需打开对应详情文件（渐进式披露）。完整索引与说明见 [references/categories.md](references/categories.md)：
 
-Example response:
-
-```
-I found a skill that might help! The "vercel-react-best-practices" skill provides
-React and Next.js performance optimization guidelines from Vercel Engineering.
-
-To install it:
-npx skills add vercel-labs/agent-skills@vercel-react-best-practices
-
-Learn more: https://skills.sh/vercel-labs/agent-skills/vercel-react-best-practices
-```
-
-### Step 4: Offer to Install
-
-If the user wants to proceed, you can install the skill for them:
-
-```bash
-npx skills add <owner/repo@skill> -g -y
-```
-
-The `-g` flag installs globally (user-level) and `-y` skips confirmation prompts.
-
-## Common Skill Categories
-
-When searching, consider these common categories:
-
-| Category        | Example Queries                          |
-| --------------- | ---------------------------------------- |
-| Web Development | react, nextjs, typescript, css, tailwind |
-| Testing         | testing, jest, playwright, e2e           |
-| DevOps          | deploy, docker, kubernetes, ci-cd        |
-| Documentation   | docs, readme, changelog, api-docs        |
-| Code Quality    | review, lint, refactor, best-practices   |
-| Design          | ui, ux, design-system, accessibility     |
-| Productivity    | workflow, automation, git                |
-
-## Tips for Effective Searches
-
-1. **Use specific keywords**: "react testing" is better than just "testing"
-2. **Try alternative terms**: If "deploy" doesn't work, try "deployment" or "ci-cd"
-3. **Check popular sources**: Many skills come from `vercel-labs/agent-skills` or `ComposioHQ/awesome-claude-skills`
-
-## When No Skills Are Found
-
-If no relevant skills exist:
-
-1. Acknowledge that no existing skill was found
-2. Offer to help with the task directly using your general capabilities
-3. Suggest the user could create their own skill with `npx skills init`
-
-Example:
-
-```
-I searched for skills related to "xyz" but didn't find any matches.
-I can still help you with this task directly! Would you like me to proceed?
-
-If this is something you do often, you could create your own skill:
-npx skills init my-xyz-skill
-```
+`office-efficiency` 办公效率 · `content-creation` 内容创作 · `dev-programming` 开发编程 · `data-analysis` 数据分析 · `design-media` 设计多媒体 · `ai-agent` AI Agent · `knowledge-management` 知识管理 · `business-ops` 商业运营 · `education` 教育学习 · `professional` 行业专业 · `it-ops-security` IT 运维与安全 · `life-service` 生活服务

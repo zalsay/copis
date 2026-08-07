@@ -1,11 +1,12 @@
 import * as React from 'react'
-import { Check, CircleStop, MessageCircleQuestion, Play, ShieldCheck, X } from 'lucide-react'
+import { Check, CircleStop, MessageCircleQuestion, Play, Plus, ShieldCheck, X } from 'lucide-react'
 import type { BrowserPageControlMode, BrowserWorkflowVersion } from '@copis/shared'
 import { useAtom, useAtomValue, useSetAtom } from 'jotai'
 import { agentSessionsAtom, agentWorkspacesAtom } from '@/atoms/agent-atoms'
 import { browserWorkflowDraftAtom, browserWorkflowStatusAtom } from '@/atoms/browser-agent'
 import { AgentConversationSurface } from '@/components/agent/AgentConversationSurface'
 import { Button } from '@/components/ui/button'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import {
   Select,
   SelectContent,
@@ -14,7 +15,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { cn } from '@/lib/utils'
-import { CopisTemplateLogo } from '@/lib/model-logo'
+import { CopisAgentLogo } from '@/lib/model-logo'
 import { toast } from 'sonner'
 import { getBrowserAgentHeaderState } from './browser-agent-header-policy'
 
@@ -27,6 +28,7 @@ interface BrowserAgentPanelProps {
   width: number
   onStartRecording: () => Promise<void>
   onStopRecording: () => Promise<void>
+  onStartNewSession: () => Promise<void>
   onClose: () => void
 }
 
@@ -41,7 +43,7 @@ function draftOrigins(draft: BrowserWorkflowVersion): string[] {
   return [...origins]
 }
 
-export function BrowserAgentPanel({ sessionId, tabId, pageUrl, tabTitle, workspaceId, width, onStartRecording, onStopRecording, onClose }: BrowserAgentPanelProps): React.ReactElement {
+export function BrowserAgentPanel({ sessionId, tabId, pageUrl, tabTitle, workspaceId, width, onStartRecording, onStopRecording, onStartNewSession, onClose }: BrowserAgentPanelProps): React.ReactElement {
   const [status, setStatus] = useAtom(browserWorkflowStatusAtom)
   const [draft, setDraft] = useAtom(browserWorkflowDraftAtom)
   const setAgentSessions = useSetAtom(agentSessionsAtom)
@@ -51,6 +53,13 @@ export function BrowserAgentPanel({ sessionId, tabId, pageUrl, tabTitle, workspa
   const defaultWorkspaceId = workspaces.find((workspace) => workspace.slug === 'default')?.id ?? workspaces[0]?.id ?? ''
   const [selectedProjectId, setSelectedProjectId] = React.useState(workspaceId ?? defaultWorkspaceId)
   const headerState = getBrowserAgentHeaderState(status)
+  const newSessionDisabled = isActionPending
+    || status.state === 'recording'
+    || status.state === 'running'
+    || status.state === 'waiting_user'
+    || status.state === 'paused_cdp_detached'
+    || status.state === 'compiling'
+    || status.state === 'awaiting_summary'
 
   React.useEffect(() => {
     setSelectedProjectId(workspaceId ?? defaultWorkspaceId)
@@ -204,7 +213,7 @@ export function BrowserAgentPanel({ sessionId, tabId, pageUrl, tabTitle, workspa
     <aside style={{ width }} className="flex h-full min-w-[320px] max-w-[560px] shrink-0 flex-col border-l border-border/70 bg-background shadow-[-8px_0_24px_rgba(15,23,42,0.08)]">
       <header className="shrink-0 border-b border-border/60 bg-muted/30">
         <div className="flex h-11 items-center gap-2 px-3">
-          <img src={CopisTemplateLogo} alt="" className="size-5 shrink-0 rounded object-cover" />
+          <img src={CopisAgentLogo} alt="" className="size-5 shrink-0 rounded-[25%] object-cover" />
           <div className="min-w-0 flex-1">
             <div className="truncate text-xs font-semibold">{tabTitle || '当前页面'}</div>
             <div className="truncate text-[10px] text-muted-foreground">{headerState.originLabel || '未打开 HTTP(S) 页面'}</div>
@@ -247,6 +256,22 @@ export function BrowserAgentPanel({ sessionId, tabId, pageUrl, tabTitle, workspa
               <Play className="size-3.5" />
             </Button>
           )}
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="size-7"
+                aria-label="开启新会话"
+                disabled={newSessionDisabled}
+                onClick={() => void onStartNewSession()}
+              >
+                <Plus className="size-4" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">开启新会话</TooltipContent>
+          </Tooltip>
           <Button
             type="button"
             variant="ghost"

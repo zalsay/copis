@@ -9,7 +9,7 @@ import { draftSessionIdsAtom } from '@/atoms/draft-session-atoms'
 import { Button } from '@/components/ui/button'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
-import { CopisTemplateLogo } from '@/lib/model-logo'
+import { CopisAgentLogo } from '@/lib/model-logo'
 import {
   createBrowserAgentBindingQueue,
   getBrowserWorkflowToolbarAction,
@@ -21,6 +21,12 @@ import {
   type BrowserAgentContextRequest,
   type BrowserAgentTarget,
 } from './browser-workflow-toolbar'
+import {
+  browserAgentUnmountPolicy,
+  createAndSwitchBrowserAgentSession,
+  resolveBrowserAgentWorkspaceId,
+  selectBrowserAgentSession,
+} from './browser-agent-session-policy'
 import { toast } from 'sonner'
 import { WebBookmarksPopover } from './WebBookmarksPopover'
 import { BrowserAgentPanel } from './BrowserAgentPanel'
@@ -186,41 +192,76 @@ export function WebBrowserSurface(): React.ReactElement {
     })
   }, [activeTab])
 
+  const resolveBrowserAgentProjectId = React.useCallback(async (): Promise<string> => {
+    if (!activeTab) throw new Error('当前没有可用的网页页签')
+    const association = await window.electronAPI.webTabs.getProjectAssociation(activeTab.url)
+    const workspaceId = resolveBrowserAgentWorkspaceId(
+      association?.workspaceId,
+      agentWorkspaces,
+      currentWorkspaceId,
+    )
+    if (!workspaceId) throw new Error('没有可用的 Agent 项目')
+    return workspaceId
+  }, [activeTab, agentWorkspaces, currentWorkspaceId])
+
+  const createBrowserAgentDraftSession = React.useCallback(async (
+    workspaceId: string,
+    channelId: string | undefined,
+    modelId: string | undefined,
+  ) => {
+    if (!channelId) throw new Error('请先配置 Agent 渠道')
+    const session = await window.electronAPI.createAgentSession(
+      '网页 AI浏览器',
+      channelId,
+      workspaceId,
+      modelId,
+    )
+    setAgentSessions((sessions) => [...sessions, session])
+    setDraftSessionIds((previous) => {
+      const next = new Set(previous)
+      next.add(session.id)
+      return next
+    })
+    return session
+  }, [setAgentSessions, setDraftSessionIds])
+
   const ensureBrowserAgentSession = React.useCallback(async (): Promise<BrowserAgentSessionBinding> => {
     if (!activeTabId || !activeTab) throw new Error('当前没有可用的网页页签')
     if (!/^https?:\/\//i.test(activeTab.url)) throw new Error('请先打开 HTTP(S) 网页')
-    if (browserAgentSessionId) {
-      const binding = await browserAgentBindingQueue.bind(browserAgentSessionId, activeTabId)
-      return { sessionId: browserAgentSessionId, binding, isNewSession: false }
+    let sessions = agentSessions
+    if (browserAgentSessionId && !sessions.some((session) => session.id === browserAgentSessionId)) {
+      sessions = await window.electronAPI.listAgentSessions()
+      setAgentSessions(sessions)
     }
-    if (!agentChannelId) throw new Error('请先配置 Agent 渠道')
     try {
-      const association = await window.electronAPI.webTabs.getProjectAssociation(activeTab.url)
-      const associatedWorkspace = association
-        ? agentWorkspaces.find((workspace) => workspace.id === association.workspaceId)
-        : undefined
-      const defaultWorkspace = agentWorkspaces.find((workspace) => workspace.slug === 'default') ?? agentWorkspaces[0]
-      const workspaceId = associatedWorkspace?.id ?? defaultWorkspace?.id ?? currentWorkspaceId
-      if (!workspaceId) throw new Error('没有可用的 Agent 项目')
+      const workspaceId = await resolveBrowserAgentProjectId()
+      const selection = selectBrowserAgentSession({
+        persistedSessionId: browserAgentSessionId,
+        projectId: workspaceId,
+        availableWorkspaceIds: agentWorkspaces.map((workspace) => workspace.id),
+        sessions,
+      })
+      if (selection.sessionId) {
+        const binding = await browserAgentBindingQueue.bind(selection.sessionId, activeTabId)
+        return { sessionId: selection.sessionId, binding, isNewSession: false }
+      }
 
-      const session = await window.electronAPI.createAgentSession(
-        '网页 Browser Agent',
-        agentChannelId ?? undefined,
+      const session = await createBrowserAgentDraftSession(
         workspaceId,
+        agentChannelId ?? undefined,
         agentModelId ?? undefined,
       )
       const binding = await browserAgentBindingQueue.bind(session.id, activeTabId)
-      setAgentSessions((sessions) => [...sessions, session])
-      setDraftSessionIds((previous) => {
-        const next = new Set(previous)
-        next.add(session.id)
-        return next
-      })
+      if (browserAgentSessionId && browserAgentSessionId !== session.id) {
+        await browserAgentBindingQueue.unbindAfterPending(browserAgentSessionId).catch((error) => {
+          console.error('[Browser Workflow] 自动切换项目后旧页面绑定未能解除:', error)
+        })
+      }
       return { sessionId: session.id, binding, isNewSession: true }
     } catch (error) {
       throw error instanceof Error ? error : new Error('无法打开网页 Agent')
     }
-  }, [activeTabId, activeTab, agentChannelId, agentModelId, agentWorkspaces, browserAgentBindingQueue, browserAgentSessionId, currentWorkspaceId, setAgentSessions, setDraftSessionIds])
+  }, [activeTabId, activeTab, agentChannelId, agentModelId, agentSessions, agentWorkspaces, browserAgentBindingQueue, browserAgentSessionId, createBrowserAgentDraftSession, resolveBrowserAgentProjectId, setAgentSessions])
 
   const summarizeBrowserRecording = React.useCallback((sessionId: string): void => {
     const session = agentSessions.find((item) => item.id === sessionId)
@@ -374,6 +415,87 @@ export function WebBrowserSurface(): React.ReactElement {
     }
   }, [activeTab?.url, activeTabId, browserAgentBindingQueue, browserWorkflowEnabled, ensureBrowserAgentSession, setBrowserAgentPanelOpen, setBrowserAgentSessionId, setBrowserWorkflowStatus])
 
+  const handleStartNewBrowserAgentSession = React.useCallback(async (): Promise<void> => {
+    if (!browserWorkflowEnabled || browserActionPendingRef.current || !activeTabId || !activeTab) return
+    if (!/^https?:\/\//i.test(activeTab.url)) {
+      toast.error('请先打开 HTTP(S) 网页')
+      return
+    }
+
+    const requestId = browserAgentActionRequestIdRef.current + 1
+    browserAgentActionRequestIdRef.current = requestId
+    const requestedTarget: BrowserAgentTarget = {
+      tabId: activeTabId,
+      pageUrl: activeTab.url,
+    }
+    browserActionPendingRef.current = true
+    setBrowserActionPending(true)
+    try {
+      let currentSession = browserAgentSessionId
+        ? agentSessions.find((session) => session.id === browserAgentSessionId)
+        : undefined
+      if (browserAgentSessionId && !currentSession) {
+        const sessions = await window.electronAPI.listAgentSessions()
+        setAgentSessions(sessions)
+        currentSession = sessions.find((session) => session.id === browserAgentSessionId)
+      }
+      let workspaceId: string
+      try {
+        workspaceId = await resolveBrowserAgentProjectId()
+      } catch (error) {
+        if (!currentSession?.workspaceId) throw error
+        workspaceId = currentSession.workspaceId
+      }
+      const result = await createAndSwitchBrowserAgentSession(
+        browserAgentSessionId,
+        () => createBrowserAgentDraftSession(
+          workspaceId,
+          currentSession?.channelId ?? agentChannelId ?? undefined,
+          currentSession?.modelId ?? agentModelId ?? undefined,
+        ),
+        async (sessionId) => {
+          await browserAgentBindingQueue.bind(sessionId, activeTabId)
+        },
+        (sessionId) => browserAgentBindingQueue.unbindAfterPending(sessionId),
+        () => shouldCommitBrowserAgentAction(
+          requestId,
+          browserAgentActionRequestIdRef.current,
+          browserAgentMountedRef.current,
+          requestedTarget,
+          browserAgentTargetRef.current,
+        ),
+      )
+      if (!shouldCommitBrowserAgentAction(
+        requestId,
+        browserAgentActionRequestIdRef.current,
+        browserAgentMountedRef.current,
+        requestedTarget,
+        browserAgentTargetRef.current,
+      )) return
+
+      browserAgentSessionIdRef.current = result.sessionId
+      setBrowserAgentSessionId(result.sessionId)
+      setBrowserWorkflowStatus({ sessionId: result.sessionId, state: 'idle' })
+      setBrowserAgentPanelOpen(true)
+      if (!result.previousBindingReleased) {
+        console.error('[Browser Workflow] 开启新会话后旧页面绑定未能解除:', result.previousSessionId)
+      }
+    } catch (error) {
+      if (shouldCommitBrowserAgentAction(
+        requestId,
+        browserAgentActionRequestIdRef.current,
+        browserAgentMountedRef.current,
+        requestedTarget,
+        browserAgentTargetRef.current,
+      )) {
+        toast.error(error instanceof Error ? error.message : '无法开启新的网页 Agent 会话')
+      }
+    } finally {
+      browserActionPendingRef.current = false
+      if (browserAgentMountedRef.current) setBrowserActionPending(false)
+    }
+  }, [activeTab, activeTabId, agentChannelId, agentModelId, agentSessions, browserAgentBindingQueue, browserAgentSessionId, browserWorkflowEnabled, createBrowserAgentDraftSession, resolveBrowserAgentProjectId, setAgentSessions, setBrowserAgentPanelOpen, setBrowserAgentSessionId, setBrowserWorkflowStatus])
+
   const handleBrowserToolbarClick = React.useCallback((): void => {
     const action = getBrowserWorkflowToolbarAction(browserWorkflowStatus)
     if (action === 'stop-recording') {
@@ -458,12 +580,12 @@ export function WebBrowserSurface(): React.ReactElement {
           browserAgentMountedRef.current,
         )) return
         const sessionId = browserAgentSessionIdRef.current
-        if (sessionId) {
+        if (browserAgentUnmountPolicy.unbindContext && sessionId) {
           void browserAgentBindingQueue.unbindAfterPending(sessionId).catch((error) => {
             console.error('[Browser Workflow] 页面宿主卸载时解除绑定失败:', error)
           })
         }
-        setBrowserAgentSessionId(null)
+        if (!browserAgentUnmountPolicy.preserveSessionId) setBrowserAgentSessionId(null)
         setBrowserAgentPanelOpen(false)
         setBrowserWorkflowStatus({ state: 'idle' })
       })
@@ -536,9 +658,9 @@ export function WebBrowserSurface(): React.ReactElement {
               <CircleStop className="size-4 text-destructive" />
             ) : (
               <img
-                src={CopisTemplateLogo}
+                src={CopisAgentLogo}
                 alt=""
-                className={cn('size-4 rounded object-cover', browserAgentSessionId && 'ring-2 ring-primary/40')}
+                className={cn('size-4 rounded-[25%] object-cover')}
               />
             )}
           </BrowserToolbarButton>
@@ -568,6 +690,7 @@ export function WebBrowserSurface(): React.ReactElement {
               width={browserAgentPanelWidth}
               onStartRecording={handleStartRecording}
               onStopRecording={handleStopRecording}
+              onStartNewSession={handleStartNewBrowserAgentSession}
               onClose={handleCloseBrowserAgent}
             />
           </>

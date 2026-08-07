@@ -51,6 +51,41 @@ export interface PiWorkerQueryConfig {
    */
   fileAccessPolicy?: PiWorkerFileAccessPolicy
   useRustFileApi?: boolean
+  browserPageControl?: PiWorkerBrowserCapability
+}
+
+export const BROWSER_AGENT_TOOL_NAMES = [
+  'BrowserPageObserve',
+  'BrowserPageClick',
+  'BrowserPageType',
+  'BrowserPageSelect',
+  'BrowserPagePress',
+  'BrowserPageScroll',
+  'BrowserPageNavigate',
+  'BrowserWorkflowRecord',
+  'BrowserWorkflowRecordingGet',
+  'BrowserWorkflowDraft',
+  'BrowserWorkflowSave',
+  'BrowserWorkflowRepair',
+  'BrowserWorkflowList',
+  'BrowserWorkflowGet',
+  'BrowserWorkflowRun',
+  'BrowserWorkflowStop',
+] as const
+
+export type BrowserAgentToolName = (typeof BROWSER_AGENT_TOOL_NAMES)[number]
+
+export interface PiWorkerBrowserCapability {
+  endpoint: '/api/internal/agent/browser-tool'
+  token: string
+}
+
+export interface BrowserAgentToolRequest {
+  sessionId: string
+  capabilityToken: string
+  toolCallId: string
+  toolName: BrowserAgentToolName
+  toolInput: Record<string, unknown>
 }
 
 export interface PiWorkerFileAccessPolicy {
@@ -105,6 +140,49 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  if (!isRecord(value)) return false
+  const prototype = Object.getPrototypeOf(value)
+  return prototype === Object.prototype || prototype === null
+}
+
+function isBoundedNonBlankString(value: unknown, maxLength = 512): value is string {
+  return typeof value === 'string' && value.trim().length > 0 && value.length <= maxLength
+}
+
+function isBrowserAgentToolName(value: unknown): value is BrowserAgentToolName {
+  return typeof value === 'string' && (BROWSER_AGENT_TOOL_NAMES as readonly string[]).includes(value)
+}
+
+export function parsePiWorkerBrowserCapability(value: unknown): PiWorkerBrowserCapability | undefined {
+  if (!isPlainRecord(value)) return undefined
+  const keys = Object.keys(value).sort()
+  if (keys.length !== 2 || keys[0] !== 'endpoint' || keys[1] !== 'token') return undefined
+  if (value.endpoint !== '/api/internal/agent/browser-tool') return undefined
+  if (!isBoundedNonBlankString(value.token)) return undefined
+  return { endpoint: value.endpoint, token: value.token }
+}
+
+export function parseBrowserAgentToolRequest(value: unknown): BrowserAgentToolRequest | undefined {
+  if (!isPlainRecord(value)) return undefined
+  const keys = Object.keys(value).sort()
+  if (keys.join(',') !== 'capabilityToken,sessionId,toolCallId,toolInput,toolName') return undefined
+  if (!isBoundedNonBlankString(value.sessionId)
+    || !isBoundedNonBlankString(value.capabilityToken)
+    || !isBoundedNonBlankString(value.toolCallId)
+    || !isBrowserAgentToolName(value.toolName)
+    || !isPlainRecord(value.toolInput)) {
+    return undefined
+  }
+  return {
+    sessionId: value.sessionId,
+    capabilityToken: value.capabilityToken,
+    toolCallId: value.toolCallId,
+    toolName: value.toolName,
+    toolInput: value.toolInput,
+  }
+}
+
 function isWorkerFrameType(value: unknown): value is AgentRpcWorkerFrame['type'] {
   return value === 'event'
     || value === 'meta'
@@ -139,8 +217,8 @@ export function parseWorkerCommand(line: string): AgentRpcWorkerCommand | undefi
       : undefined
   }
   if (typeof parsed.requestId !== 'string' || parsed.requestId.length === 0 || !isRecord(parsed.config)) return undefined
+  const config = parsed.config
   if (parsed.type === 'queue') {
-    const config = parsed.config
     if (typeof config.sessionId !== 'string' || config.sessionId.length === 0) return undefined
     if (typeof config.userMessage !== 'string' || config.userMessage.length === 0) return undefined
     if (typeof config.uuid !== 'string' || config.uuid.length === 0) return undefined
@@ -149,6 +227,10 @@ export function parseWorkerCommand(line: string): AgentRpcWorkerCommand | undefi
       !Array.isArray(config.skillMentions)
       || !config.skillMentions.every((value) => typeof value === 'string' && value.trim().length > 0)
     )) return undefined
+  } else {
+    if (typeof config.sessionId !== 'string' || config.sessionId.length === 0 || !isPlainRecord(config.query)) return undefined
+    if (config.query.sessionId !== config.sessionId) return undefined
+    if (config.query.browserPageControl !== undefined && !parsePiWorkerBrowserCapability(config.query.browserPageControl)) return undefined
   }
   return parsed as unknown as AgentRpcWorkerCommand
 }

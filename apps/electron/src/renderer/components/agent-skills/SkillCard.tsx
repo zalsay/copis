@@ -70,7 +70,7 @@ export function SkillCard({ skill, isBuiltin, updating, onOpen, onToggle, onUpda
       <div className="mt-auto flex items-center gap-2">
         {isBuiltin ? (
           <span className="flex items-center gap-1 rounded-md bg-primary/10 px-1.5 py-0.5 text-[11px] font-medium text-primary">
-            <ShieldCheck size={12} /> COPIS 内置
+            <ShieldCheck size={12} /> Copis 内置
           </span>
         ) : skill.marketSource ? (
           <span className="flex items-center gap-1 rounded-md bg-primary/10 px-1.5 py-0.5 text-[11px] font-medium text-primary">

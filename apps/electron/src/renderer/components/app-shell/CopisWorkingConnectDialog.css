@@ -95,8 +95,8 @@
   align-items: center;
   gap: 7px;
   border-radius: 6px;
-  background: #c8a7ff;
-  color: #20162c;
+  background: var(--ui-primary);
+  color: var(--ui-primary-foreground);
   font-size: 13px;
   font-weight: 700;
 }
@@ -126,18 +126,20 @@
   grid-template-columns: 30px minmax(0, 1fr);
   gap: 12px;
   align-items: center;
-  border: 1px solid rgba(200, 167, 255, 0.68);
+  border: 1px solid color-mix(in srgb, var(--ui-primary) 68%, transparent);
   border-radius: 12px;
-  background: linear-gradient(180deg, rgba(200, 167, 255, 0.28), rgba(200, 167, 255, 0.14));
+  background: var(--ui-primary-background);
   color: #ffffff;
   text-align: left;
-  box-shadow: 0 0 0 1px rgba(200, 167, 255, 0.14), 0 10px 24px rgba(200, 167, 255, 0.14);
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--ui-primary) 14%, transparent),
+    0 10px 24px color-mix(in srgb, var(--ui-primary) 14%, transparent);
   cursor: pointer;
 }
 
 .copis-working-connect-picker:hover:not(:disabled) {
-  border-color: rgba(220, 203, 255, 0.82);
-  background: linear-gradient(180deg, rgba(200, 167, 255, 0.34), rgba(200, 167, 255, 0.28));
+  border-color: color-mix(in srgb, var(--ui-primary) 82%, transparent);
+  background: color-mix(in srgb, var(--ui-primary) 20%, var(--ui-primary-background));
 }
 
 .copis-working-connect-picker:disabled {
@@ -151,8 +153,8 @@
   padding: 6px;
   box-sizing: content-box;
   border-radius: 9px;
-  background: rgba(200, 167, 255, 0.28);
-  color: #f0e8ff;
+  background: var(--ui-primary-background);
+  color: var(--ui-primary);
 }
 
 .copis-working-connect-picker span {
@@ -195,13 +197,13 @@
 }
 
 .copis-working-connect-check input:checked + .copis-working-connect-check-box {
-  border-color: #c8a7ff;
-  background: #c8a7ff;
-  color: #20162c;
+  border-color: var(--ui-primary);
+  background: var(--ui-primary);
+  color: var(--ui-primary-foreground);
 }
 
 .copis-working-connect-check input:focus-visible + .copis-working-connect-check-box {
-  outline: 2px solid rgba(200, 167, 255, 0.72);
+  outline: 2px solid color-mix(in srgb, var(--ui-primary) 72%, transparent);
   outline-offset: 2px;
 }
 
@@ -230,10 +232,10 @@
 .copis-working-connect-note {
   margin-top: 10px;
   padding: 10px 12px;
-  border: 1px solid rgba(245, 158, 11, 0.32);
+  border: 1px solid color-mix(in srgb, var(--ui-primary) 30%, transparent);
   border-radius: 9px;
-  background: rgba(245, 158, 11, 0.14);
-  color: #f7c46a;
+  background: var(--ui-primary-background);
+  color: var(--ui-primary);
   font-size: 13px;
   line-height: 1.45;
 }
@@ -259,8 +261,8 @@
 }
 
 .copis-working-connect-actions button:last-child {
-  background: #f1f1f3;
-  color: #171717;
+  background: var(--ui-primary);
+  color: var(--ui-primary-foreground);
   border-color: transparent;
 }
 

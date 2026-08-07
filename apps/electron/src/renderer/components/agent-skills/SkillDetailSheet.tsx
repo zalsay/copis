@@ -130,7 +130,7 @@ function SkillDetailBody({
   }
 
   const sourceLabel = isBuiltin
-    ? 'COPIS 内置'
+    ? 'Copis 内置'
     : skill.marketSource
       ? `社区市场 · ${skill.marketSource.sourceProvider}`
     : skill.importSource

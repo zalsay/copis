@@ -2776,7 +2776,7 @@ export function AgentConversationSurface({ sessionId, variant = 'main' }: AgentC
         <AskUserBanner sessionId={sessionId} />
 
 
-        {/* ExitPlanMode 计划审批横幅；Browser Agent 不参与 Copis 计划审批。 */}
+        {/* ExitPlanMode 计划审批横幅；AI浏览器不参与 Copis 计划审批。 */}
         {hasExitPlanBanner && <ExitPlanModeBanner sessionId={sessionId} />}
 
         {/* 输入区域 — 交互横幅显示时隐藏，由横幅替代 */}

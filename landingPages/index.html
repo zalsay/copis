@@ -13,7 +13,7 @@
         <div class="hero-image" aria-hidden="true"></div>
         <header class="site-header glass-surface">
           <a class="brand" href="#top" aria-label="Copis 首页">
-            <img class="brand-logo" src="./assets/main-logo.png" alt="" />
+            <img class="brand-logo" src="../mian-logo.svg" alt="" />
             <span>Copis</span>
           </a>
           <nav class="site-nav" aria-label="主导航">
@@ -46,7 +46,7 @@
         <section class="workbench glass-surface" aria-label="Copis 智能体工作台预览">
           <aside class="workbench-sidebar">
             <div class="workbench-brand">
-              <img src="./assets/main-logo.png" alt="" />
+              <img src="../mian-logo.svg" alt="" />
               <span>工作台</span>
             </div>
             <button class="new-task" type="button" data-open-command>新建任务 <strong>+</strong></button>
@@ -55,10 +55,10 @@
               <span class="session-dot yellow"></span>整理本周产品反馈
             </button>
             <button class="session-item" type="button" data-session="准备版本发布说明" aria-pressed="false">
-              <span class="session-dot green"></span>准备版本发布说明
+              <span class="session-dot lime"></span>准备版本发布说明
             </button>
             <button class="session-item" type="button" data-session="检查 API 接入" aria-pressed="false">
-              <span class="session-dot teal"></span>检查 API 接入
+              <span class="session-dot green"></span>检查 API 接入
             </button>
             <div class="workbench-person">
               <span class="person-avatar">S</span>
@@ -76,7 +76,7 @@
                 <p id="active-session-title">整理本周产品反馈</p>
               </div>
               <div class="message message-agent">
-                <span class="agent-avatar"><img src="./assets/main-logo.png" alt="" /></span>
+                <span class="agent-avatar"><img src="../mian-logo.svg" alt="" /></span>
                 <div>
                   <strong>Copis 智能体</strong>
                   <p id="active-session-copy">已读取工作区中的访谈记录，正在归纳可验证的问题与下一步行动。</p>
@@ -94,6 +94,51 @@
             </div>
           </div>
         </section>
+      </section>
+
+      <section class="browser-automation-section" id="browser-automation" aria-labelledby="browser-automation-title">
+        <div class="browser-automation-layout">
+          <div class="browser-automation-media">
+            <figure class="ai-browser" aria-label="Copis 内置 AI 浏览器正在打开产品反馈页面，观察状态并定位下一步操作">
+              <div class="ai-browser-toolbar">
+                <span class="ai-browser-dots" aria-hidden="true"><i></i><i></i><i></i></span>
+                <div class="ai-browser-address" aria-label="当前地址：工作区 / 产品反馈">
+                  <span class="ai-browser-lock" aria-hidden="true"></span>
+                  <span>工作区 / 产品反馈</span>
+                </div>
+                <span class="ai-browser-badge">AI 浏览器</span>
+              </div>
+              <div class="ai-browser-page">
+                <header class="ai-page-head">
+                  <span class="ai-page-kicker">产品反馈</span>
+                  <h3>本周反馈清单</h3>
+                </header>
+                <ul class="ai-page-list">
+                  <li><b>1</b><span>首次配置路径太长</span><em>已读</em></li>
+                  <li class="is-target">
+                    <b>2</b><span>导入文件时缺少进度提示</span><em>待处理</em>
+                    <span class="ai-pointer" aria-hidden="true"></span>
+                  </li>
+                  <li><b>3</b><span>希望支持导出为文档</span><em>已读</em></li>
+                </ul>
+              </div>
+              <div class="ai-browser-status" role="status">
+                <span class="ai-status-dot" aria-hidden="true"></span>
+                <span>AI 正在观察页面，下一步：点击「导入文件时缺少进度提示」</span>
+              </div>
+            </figure>
+          </div>
+          <div class="browser-automation-copy">
+            <p class="eyebrow">AI 浏览器自动化</p>
+            <h2 id="browser-automation-title">看见页面，<span>再替你推进。</span></h2>
+            <p class="browser-automation-description">Copis 会在内置 AI 浏览器中打开你需要的页面，观察页面状态与变化，并在你授权后连续完成下一步操作——整个过程每一步都可见、可追踪。</p>
+            <ol class="browser-automation-steps">
+              <li><span>打开页面</span></li>
+              <li><span>观察状态</span></li>
+              <li><span>执行操作</span></li>
+            </ol>
+          </div>
+        </div>
       </section>
 
       <section class="workflow-section" id="workflow" aria-labelledby="workflow-title">
@@ -149,11 +194,11 @@
               </article>
               <article class="workflow-slide" data-slide-title="团队与自动化" aria-hidden="true" inert>
                 <div class="slide-copy">
-                  <span class="slide-kicker teal">团队与自动化</span>
+                  <span class="slide-kicker green">团队与自动化</span>
                   <h3>让重复工作，<span>自己向前走。</span></h3>
                   <p>将常用技能、工具服务和远程机器人组合成流程，在你需要的时候继续推进，而不是重新开始。</p>
                   <div class="slide-tags"><span>定时任务</span><span>工具服务</span><span>远程协作</span></div>
-                  <button class="button button-primary teal-button" type="button" data-open-command>创建自动流程</button>
+                  <button class="button button-primary green-button" type="button" data-open-command>创建自动流程</button>
                 </div>
                 <div class="scene automation-scene" aria-label="自动化任务预览">
                   <div class="scene-toolbar"><span class="scene-name">每周反馈汇总</span><span class="scene-status">按计划运行</span></div>
@@ -179,7 +224,7 @@
     <dialog class="command-dialog" id="command-dialog" aria-labelledby="dialog-title">
       <form method="dialog" class="command-panel glass-surface">
         <div class="dialog-heading">
-          <img class="brand-logo" src="./assets/main-logo.png" alt="" />
+          <img class="brand-logo" src="../mian-logo.svg" alt="" />
           <div><p class="eyebrow">新建任务</p><h2 id="dialog-title">开始一个任务</h2></div>
           <button class="dialog-close" value="cancel" aria-label="关闭">&#215;</button>
         </div>
@@ -194,7 +239,7 @@
     <dialog class="command-dialog" id="auth-dialog" aria-labelledby="auth-dialog-title">
       <form class="command-panel glass-surface" id="auth-form" novalidate>
         <div class="dialog-heading">
-          <img class="brand-logo" src="./assets/main-logo.png" alt="" />
+          <img class="brand-logo" src="../mian-logo.svg" alt="" />
           <div><p class="eyebrow" id="auth-dialog-kicker">欢迎回来</p><h2 id="auth-dialog-title">登录 Copis</h2></div>
           <button class="dialog-close" type="button" data-close-auth aria-label="关闭">&#215;</button>
         </div>

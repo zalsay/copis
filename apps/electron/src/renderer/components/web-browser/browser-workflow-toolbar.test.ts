@@ -25,7 +25,7 @@ function status(state: BrowserWorkflowStatus['state'], run = false): BrowserWork
 }
 
 describe('网页工具栏 Browser Workflow 状态', () => {
-  test('Given 当前没有录制 When 点击 Copis 按钮 Then 只打开 Browser Agent 抽屉', () => {
+  test('Given 当前没有录制 When 点击 Copis 按钮 Then 只打开 AI浏览器抽屉', () => {
     expect(getBrowserWorkflowToolbarAction(status('idle'))).toBe('open-agent')
     expect(getBrowserWorkflowToolbarAction(status('error'))).toBe('open-agent')
   })

@@ -60,8 +60,10 @@ import {
 import { createCopisResourceLoaderOptions } from './pi-resource-loader-overrides'
 import { createCodexFastModeExtension, withCodexFastModeServiceTier } from './pi-codex-request-settings'
 import { createOpenAIReasoningRequestExtension } from './pi-openai-reasoning-request-settings'
+import { buildPiBrowserAgentTools } from './pi-browser-agent-tools'
 import { createRustFileToolOperations } from './pi-rust-file-tools'
 import { mergeRuntimeEnv, type AgentRuntimeEnv } from '../agent-runtime-env'
+import type { PiWorkerBrowserCapability } from '../agent-rpc-protocol'
 import {
   convertPiMessage,
   convertResultMessage,
@@ -171,6 +173,8 @@ export interface PiAgentQueryOptions extends AgentQueryInput {
    * Pi 本地文件系统操作。
    */
   useRustFileApi?: boolean
+  /** Browser Worker 的短期 capability；缺失时不得注册任何 Browser 页面工具。 */
+  browserPageControl?: PiWorkerBrowserCapability
 }
 
 interface ActivePiSession {
@@ -1295,12 +1299,12 @@ function createCopisBashToolOptions(runtimeEnv: AgentRuntimeEnv | undefined): Ba
   }
 }
 
-function buildBuiltinToolDefinitions(
+export function buildBuiltinToolDefinitions(
   sdk: PiSdk,
   cwd: string,
   canUseTool: PiAgentQueryOptions['canUseTool'],
   runtimeEnv: AgentRuntimeEnv | undefined,
-  options: Pick<PiAgentQueryOptions, 'sessionId' | 'useRustFileApi'>,
+  options: Pick<PiAgentQueryOptions, 'sessionId' | 'useRustFileApi' | 'browserPageControl'>,
 ): ToolDefinition[] {
   const rustFileTools = options.useRustFileApi
     ? createRustFileToolOperations({ sessionId: options.sessionId })
@@ -1317,6 +1321,12 @@ function buildBuiltinToolDefinitions(
       sdk.createFindToolDefinition(cwd),
       sdk.createLsToolDefinition(cwd),
     ] : []),
+    ...(options.browserPageControl
+      ? buildPiBrowserAgentTools(sdk, {
+        sessionId: options.sessionId,
+        capability: options.browserPageControl,
+      })
+      : []),
   ] as unknown as ToolDefinition[]
 
   if (rustFileTools) {

@@ -115,8 +115,8 @@ import CopisLogo from '@/assets/models/copis.png'
 import CopisAppLogo from '../../../resources/icon.png'
 // Composer 与网页首页页签使用的 macOS Template Logo。
 import CopisTemplateLogo from '../../../resources/copis-logos/iconTemplate@2x.png'
-// Agent 消息气泡使用 3x 资源，保证头像在高分辨率界面中清晰。
-import CopisTemplateLogo3x from '../../../resources/copis-logos/iconTemplate@3x.png'
+// Agent 消息气泡使用根目录 Logo；图案边界较画布小，由消费者居中放大以保持头像视觉尺寸。
+import CopisAgentLogo from '../../../../../mian-logo.svg'
 
 // Cohere
 import CohereLogo from '@/assets/models/cohere.png'
@@ -404,4 +404,4 @@ export function resolveModelProvider(modelId: string, channels: import('@copis/s
 }
 
 /** 默认模型图标 */
-export { CopisAppLogo, CopisLogo, CopisTemplateLogo, CopisTemplateLogo3x, DefaultLogo }
+export { CopisAgentLogo, CopisAppLogo, CopisLogo, CopisTemplateLogo, DefaultLogo }

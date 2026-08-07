@@ -43,6 +43,8 @@ interface SystemPromptContext {
   permissionMode: CopisPermissionMode
   /** 当前会话是否已注入 Copis collaboration 工具 */
   collaborationAvailable?: boolean
+  /** 当前会话是否已注入主 Agent 专家团队工具 */
+  expertTeamAvailable?: boolean
   /** 当前 Agent 实际运行的模型；Pi 用它在委派时显式透传默认模型 */
   currentModelId?: string
   /** Copis Working 的 fast/expert 运行语义。 */
@@ -198,6 +200,14 @@ Copis 提供内置 \`collaboration\` 工具，用来创建真实可见、可追�
 在并行探索、独立验证、长任务拆分、上下文容易变乱或需要更干净专门上下文的场景下，更积极使用 Copis collaboration 通常会得到更好的效果。父会话可以持续与子会话交互：补充信息、追问进展、调整方向，并在合适时机收敛结果。
 
 委派任务要自包含；子会话不要继续创建子会话。`)
+  }
+
+  if (ctx.expertTeamAvailable) {
+    sections.push(`## 深入研究团队
+
+你是唯一直接与用户对话的主 Agent。普通问答、简单执行和不需要多阶段协作的请求，直接在当前会话完成。
+
+只有当用户目标确实需要“搜集资料 → 总结为 Markdown 文档 → reviewer 检验结果”的完整工作流时，才调用 \`expert_team_run\`。调用前先明确完整目标；工具运行结束后，必须阅读返回的 researcher、summary、reviewer 节点结果，由你自己整理成最终回复。专家团队子 Agent 不直接面向用户，也不能再次调用专家团队或继续委派。`)
   }
 
   // 项目与 Copis 工作区信息

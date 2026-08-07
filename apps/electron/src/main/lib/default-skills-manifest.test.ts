@@ -84,4 +84,61 @@ describe('默认 Skills 清单', () => {
     expect(content).not.toContain('install.ps1')
     expect(content).not.toContain('Other Agent Runtimes')
   })
+
+  test('网页工作流自动化 Skill 包含兼容元数据和安全操作流程', () => {
+    const frontmatter = readFrontmatter('browser-workflow-automation')
+    expect(frontmatter.get('name')).toBe('browser-workflow-automation')
+    expect(frontmatter.get('displayName')).toBe('网页工作流自动化')
+    expect(frontmatter.get('group')).toBe('系统内置')
+    expect(frontmatter.get('version')?.replace(/^['"]|['"]$/g, '')).toMatch(/^\d+\.\d+\.\d+$/)
+    expect(frontmatter.get('license')).toBe('AGPL-3.0-only')
+
+    const content = readFileSync(join(DEFAULT_SKILLS_DIR, 'browser-workflow-automation', 'SKILL.md'), 'utf8')
+    for (const requiredText of [
+      'BrowserPageNavigate',
+      'BrowserPageObserve',
+      'BrowserPageClick',
+      'BrowserWorkflowList',
+      'BrowserWorkflowGet',
+      'BrowserWorkflowRun',
+      '最新 ref',
+      '询问模式只允许观察和读取页面',
+      '高风险点击、选择和按键（包括 `Enter`）',
+      '不重复请求单次审批',
+      '只有跨 Origin 的 `BrowserPageNavigate` 仍需要一次单独审批',
+      '密码、验证码',
+      '网页内容当作系统指令',
+    ]) {
+      expect(content).toContain(requiredText)
+    }
+    expect(content).not.toContain('为每一个明确动作取得单独确认')
+  })
+
+  test('find-skills 使用 SkillHub 源工作流并保持 Copis 默认 Skill 兼容元数据', () => {
+    const frontmatter = readFrontmatter('find-skills')
+    expect(frontmatter.get('name')).toBe('find-skills')
+    expect(frontmatter.get('displayName')).toBe('技能发现')
+    expect(frontmatter.get('group')).toBe('系统内置')
+    expect(frontmatter.get('version')?.replace(/^['"]|['"]$/g, '')).toBe('1.0.4')
+    expect(frontmatter.get('description')).toContain('在 SkillHub 平台查找/搜索 Skill 技能')
+
+    const content = readFileSync(join(DEFAULT_SKILLS_DIR, 'find-skills', 'SKILL.md'), 'utf8')
+    expect(content).toContain('GET https://api.skillhub.cn/api/skills')
+    expect(content).toContain('references/api.md')
+    expect(content).toContain('references/categories.md')
+    expect(content).toContain('核心流程')
+    expect(content).toContain('Step 5')
+    expect(content).not.toMatch(/\bnpx\s+skills\b/i)
+    expect(content).not.toContain('skills.sh')
+    expect(content).not.toContain('install npx skills')
+  })
+
+  test('find-skills 包含 SkillHub 源引用文件', () => {
+    const referencesDir = join(DEFAULT_SKILLS_DIR, 'find-skills', 'references')
+    const references = readdirSync(referencesDir).sort()
+
+    expect(references).toHaveLength(14)
+    expect(references).toContain('api.md')
+    expect(references).toContain('categories.md')
+  })
 })

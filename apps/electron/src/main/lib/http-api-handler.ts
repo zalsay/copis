@@ -12,7 +12,10 @@ import {
   prepareAgentRpcQueue,
   prepareAgentRpcRun,
 } from './agent-rpc-service'
-import { parseWorkerFrame } from './agent-rpc-protocol'
+import { parseBrowserAgentToolRequest, parseWorkerFrame } from './agent-rpc-protocol'
+import type { BrowserAgentToolRequest } from './agent-rpc-protocol'
+import type { BrowserAgentToolResult } from './browser-agent-tool-service'
+import { redactSensitiveLogValue, shortLogId } from './bridge-log-redaction'
 import type { AppSettings } from '../../types'
 import {
   COPIS_WORKING_CHANNEL_ID,
@@ -41,6 +44,8 @@ import type {
   WorkingReceiveChannel,
 } from '@copis/shared'
 import { fileService } from './file-service'
+import { getAgentWorkspace, getAgentWorkspaceWritableRoot } from './agent-workspace-manager'
+import type { ExpertTeamNodeSnapshot, ExpertTeamRunResult, ExpertTeamRunSnapshot } from './expert-team-runner'
 
 export const HTTP_API_HOST = '127.0.0.1'
 export const HTTP_API_PORT = resolveCopisHttpApiPort({
@@ -90,6 +95,13 @@ export interface HttpApiDependencies {
   updateAppSettings: (updates: Partial<AppSettings>) => AppSettings
   getAgentApi?: () => Promise<AgentHttpFacade>
   getFileApi?: () => FileHttpFacade | Promise<FileHttpFacade>
+  getBrowserAgentToolApi?: () => BrowserAgentToolHttpApi | Promise<BrowserAgentToolHttpApi>
+  /** Rust bridge dispatch 使用的主进程专家团队入口。 */
+  dispatchExpertTeam?: (snapshot: ExpertTeamRunSnapshot, workspaceRoot: string) => Promise<ExpertTeamRunResult>
+}
+
+export interface BrowserAgentToolHttpApi {
+  executeWorker(input: BrowserAgentToolRequest): Promise<BrowserAgentToolResult>
 }
 
 export interface AgentHttpFacade {
@@ -130,6 +142,7 @@ const defaultDependencies: HttpApiDependencies = {
 }
 
 let defaultAgentApiPromise: Promise<AgentHttpFacade> | null = null
+let defaultBrowserAgentToolApiPromise: Promise<BrowserAgentToolHttpApi> | null = null
 
 /** 延迟加载 Agent 服务，避免仅访问健康检查时初始化 Electron Agent 运行时。 */
 function getDefaultAgentApi(): Promise<AgentHttpFacade> {
@@ -163,6 +176,26 @@ function getDefaultAgentApi(): Promise<AgentHttpFacade> {
 }
 
 defaultDependencies.getAgentApi = getDefaultAgentApi
+
+function getDefaultBrowserAgentToolApi(): Promise<BrowserAgentToolHttpApi> {
+  if (!defaultBrowserAgentToolApiPromise) {
+    defaultBrowserAgentToolApiPromise = import('./browser-agent-tool-service').then(({ browserAgentToolService }) => browserAgentToolService)
+  }
+  return defaultBrowserAgentToolApiPromise
+}
+
+defaultDependencies.getBrowserAgentToolApi = getDefaultBrowserAgentToolApi
+
+defaultDependencies.dispatchExpertTeam = async (snapshot, workspaceRoot) => {
+  const [{ ExpertTeamRunner }, { HttpExpertTeamRustApiClient }] = await Promise.all([
+    import('./expert-team-runner'),
+    import('./expert-team-rust-client'),
+  ])
+  return new ExpertTeamRunner({
+    workspaceRoot,
+    rustApi: new HttpExpertTeamRustApiClient(),
+  }).run(snapshot)
+}
 
 class HttpApiRequestError extends Error {
   readonly status: number
@@ -232,7 +265,7 @@ function sendError(error: unknown): HttpApiResponse {
   }
 
   const message = error instanceof Error ? error.message : 'HTTP API 请求失败'
-  console.error('[HTTP API] 请求处理失败:', error)
+  console.error('[HTTP API] 请求处理失败:', redactSensitiveLogValue(error))
   return {
     status: 500,
     body: { error: message, code: 'internal_error' },
@@ -592,13 +625,90 @@ async function handleWorkingRequest(
 async function handleAgentRpcInternalRequest(
   request: HttpApiRequest,
   segments: string[],
+  dependencies: HttpApiDependencies,
 ): Promise<HttpApiResponse> {
+  const action = segments[3]
+  const isBrowserToolRequest = action === 'browser-tool'
+  if (isBrowserToolRequest) {
+    console.info('[AI浏览器][HTTP] browser-tool 请求进入', { method: request.method })
+  }
   if (request.method !== 'POST') {
+    if (isBrowserToolRequest) {
+      console.warn('[AI浏览器][HTTP] browser-tool 参数校验拒绝', { method: request.method, reason: 'method_not_allowed' })
+    }
     throw new HttpApiRequestError('Agent RPC 内部接口只支持 POST', 405, 'method_not_allowed')
   }
-  const body = await readJsonBody(request)
-  const bodyRecord = requireRecord(body)
-  const action = segments[3]
+  let body: unknown
+  try {
+    body = await readJsonBody(request)
+  } catch (error) {
+    if (isBrowserToolRequest) {
+      const errorRecord = isRecord(error) ? error : undefined
+      console.warn('[AI浏览器][HTTP] browser-tool 参数校验拒绝', {
+        method: request.method,
+        reason: typeof errorRecord?.code === 'string' ? errorRecord.code : 'invalid_body',
+      })
+    }
+    throw error
+  }
+  let bodyRecord: Record<string, unknown>
+  try {
+    bodyRecord = requireRecord(body)
+  } catch (error) {
+    if (isBrowserToolRequest) {
+      const errorRecord = isRecord(error) ? error : undefined
+      console.warn('[AI浏览器][HTTP] browser-tool 参数校验拒绝', {
+        method: request.method,
+        reason: typeof errorRecord?.code === 'string' ? errorRecord.code : 'invalid_body',
+      })
+    }
+    throw error
+  }
+  if (segments.length !== 4) {
+    if (isBrowserToolRequest) {
+      console.warn('[AI浏览器][HTTP] browser-tool 参数校验拒绝', { method: request.method, reason: 'not_found' })
+    }
+    throw new HttpApiRequestError('Agent RPC 内部接口不存在', 404, 'not_found')
+  }
+
+  if (action === 'browser-tool') {
+    const input = parseBrowserAgentToolRequest(bodyRecord)
+    const logFields = {
+      sessionId: shortLogId(bodyRecord.sessionId),
+      toolCallId: shortLogId(bodyRecord.toolCallId),
+      ...(typeof bodyRecord.toolName === 'string' ? { toolName: bodyRecord.toolName } : {}),
+      ...(isRecord(bodyRecord.toolInput) ? { inputKeys: Object.keys(bodyRecord.toolInput).sort() } : {}),
+    }
+    console.info('[AI浏览器][HTTP] browser-tool 参数已解析', logFields)
+    if (!input) {
+      console.warn('[AI浏览器][HTTP] browser-tool 参数校验拒绝', logFields)
+      throw new HttpApiRequestError('AI浏览器工具参数不正确', 400, 'invalid_browser_tool_request')
+    }
+    try {
+      const browserAgentToolApi = await (dependencies.getBrowserAgentToolApi?.() ?? getDefaultBrowserAgentToolApi())
+      const result = await browserAgentToolApi.executeWorker(input)
+      console.info('[AI浏览器][HTTP] dispatcher 返回', {
+        ...logFields,
+        status: 200,
+        resultKind: result.kind,
+      })
+      return { status: 200, body: result }
+    } catch (error) {
+      const errorRecord = isRecord(error) ? error : undefined
+      const errorMessage = error instanceof Error ? error.message : errorRecord?.message
+      const failureKind = errorRecord?.code === 'browser_page_policy_refused'
+        ? 'main_policy_refused'
+        : typeof errorMessage === 'string' && /timeout|timed out|超时/i.test(errorMessage)
+          ? 'cdp_timeout'
+          : 'dispatcher_error'
+      console.error('[AI浏览器][HTTP] dispatcher 失败', {
+        ...logFields,
+        failureKind,
+        error: redactSensitiveLogValue(error),
+      })
+      throw error
+    }
+  }
 
   if (action === 'prepare') {
     return { status: 200, body: await prepareAgentRpcRun(parseAgentRpcInput(bodyRecord)) }
@@ -666,6 +776,83 @@ function parseFileContext(record: Record<string, unknown>): FileApiContext {
     ...(typeof record.workspaceSlug === 'string' ? { workspaceSlug: record.workspaceSlug } : {}),
     ...(candidateBasePaths && candidateBasePaths.length > 0 ? { candidateBasePaths } : {}),
   }
+}
+
+function parseExpertTeamNodeSnapshot(value: unknown, index: number): ExpertTeamNodeSnapshot {
+  const node = requireRecord(value, `专家团队节点 ${index} 参数不正确`)
+  const id = requireString(node, 'id', `专家团队节点 ${index} 缺少 id`)
+  const role = requireString(node, 'role', `专家团队节点 ${id} 缺少 role`)
+  const task = optionalString(node, 'task') ?? optionalString(node, 'prompt')
+  if (!task) throw new HttpApiRequestError(`专家团队节点 ${id} 缺少任务文本`, 400, 'invalid_request')
+  const dependsOn = Array.isArray(node.dependsOn)
+    ? node.dependsOn.filter((value): value is string => typeof value === 'string')
+    : undefined
+  const outputPath = optionalString(node, 'outputPath') ?? optionalString(node, 'path')
+  return {
+    id,
+    role: role as ExpertTeamNodeSnapshot['role'],
+    task,
+    ...(dependsOn ? { dependsOn } : {}),
+    ...(outputPath ? { outputPath } : {}),
+    ...(typeof node.allowNoArtifact === 'boolean' ? { allowNoArtifact: node.allowNoArtifact } : {}),
+  }
+}
+
+/**
+ * Rust HTTP 请求通过主进程 stdio bridge 到达这里。workspaceRoot 从持久化会话和工作区解析，
+ * 不接受请求体中的绝对路径；调度本身异步执行，避免阻塞 Rust 请求线程。
+ */
+async function handleExpertTeamInternalRequest(
+  request: HttpApiRequest,
+  segments: string[],
+  dependencies: HttpApiDependencies,
+): Promise<HttpApiResponse> {
+  if (request.method !== 'POST' || segments.length !== 6 || segments[3] !== 'runs' || segments[5] !== 'dispatch') {
+    throw new HttpApiRequestError('专家团队内部 dispatch 路径不存在', 404, 'not_found')
+  }
+  const runId = decodePathSegment(segments[4] ?? '')
+  const body = requireRecord(await readJsonBody(request))
+  const requestedRunId = optionalString(body, 'runId')
+  if (requestedRunId && requestedRunId !== runId) {
+    throw new HttpApiRequestError('runId 与路径不一致', 400, 'invalid_request')
+  }
+  const parentSessionId = requireString(body, 'parentSessionId', '父 Agent 会话不能为空')
+  const agentApi = await (dependencies.getAgentApi?.() ?? getDefaultAgentApi())
+  const parent = agentApi.getAgentSessionMeta(parentSessionId)
+  if (!parent) throw new HttpApiRequestError('父 Agent 会话不存在', 404, 'not_found')
+  if (!parent.workspaceId || !parent.channelId) {
+    throw new HttpApiRequestError('父 Agent 会话缺少工作区或渠道', 422, 'invalid_agent_context')
+  }
+  const workspace = getAgentWorkspace(parent.workspaceId)
+  if (!workspace) throw new HttpApiRequestError('父 Agent 工作区不存在', 404, 'not_found')
+  const requestedWorkspaceId = optionalString(body, 'workspaceId')
+  if (requestedWorkspaceId && requestedWorkspaceId !== parent.workspaceId) {
+    throw new HttpApiRequestError('工作区必须继承父 Agent 会话', 400, 'invalid_request')
+  }
+  const requestedChannelId = optionalString(body, 'channelId')
+  if (requestedChannelId && requestedChannelId !== parent.channelId) {
+    throw new HttpApiRequestError('渠道必须继承父 Agent 会话', 400, 'invalid_request')
+  }
+  const requestedModelId = optionalString(body, 'modelId')
+  if (requestedModelId && requestedModelId !== parent.modelId) {
+    throw new HttpApiRequestError('模型必须继承父 Agent 会话', 400, 'invalid_request')
+  }
+  if (!Array.isArray(body.nodes)) throw new HttpApiRequestError('专家团队节点快照不正确', 400, 'invalid_request')
+  const snapshot: ExpertTeamRunSnapshot = {
+    runId,
+    parentSessionId,
+    channelId: parent.channelId,
+    workspaceId: parent.workspaceId,
+    ...(parent.modelId ? { modelId: parent.modelId } : {}),
+    nodes: body.nodes.map(parseExpertTeamNodeSnapshot),
+  }
+  const workspaceRoot = getAgentWorkspaceWritableRoot(workspace)
+  const dispatcher = dependencies.dispatchExpertTeam
+  if (!dispatcher) throw new HttpApiRequestError('专家团队调度器不可用', 503, 'service_unavailable')
+  void dispatcher(snapshot, workspaceRoot).catch((error: unknown) => {
+    console.error(`[专家团队] Rust bridge dispatch 失败 (${runId}):`, error)
+  })
+  return { status: 202, body: { accepted: true, runId } }
 }
 
 async function handleFileRequest(
@@ -746,8 +933,11 @@ export async function handleHttpApiRequest(
       throw new HttpApiRequestError('HTTP API 路径不存在', 404, 'not_found')
     }
 
+    if (segments[1] === 'internal' && segments[2] === 'expert-teams') {
+      return await handleExpertTeamInternalRequest(request, segments, dependencies)
+    }
     if (segments[1] === 'internal' && segments[2] === 'agent') {
-      return await handleAgentRpcInternalRequest(request, segments)
+      return await handleAgentRpcInternalRequest(request, segments, dependencies)
     }
     if (segments[1] === 'files') {
       return await handleFileRequest(request, segments, dependencies)

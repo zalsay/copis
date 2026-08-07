@@ -50,7 +50,7 @@ import { CopyButton } from '@/components/message/CopyButton'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { formatMessageTime } from '@/components/message/message-format'
-import { CopisTemplateLogo3x } from '@/lib/model-logo'
+import { CopisAgentLogo } from '@/lib/model-logo'
 import { modelSelectorOpenAtom } from '@/atoms/model-atoms'
 import { agentSessionPendingFilesAtom, agentSessionsAtom, agentWorkspacesAtom } from '@/atoms/agent-atoms'
 import { activeSessionIdAtom } from '@/atoms/tab-atoms'
@@ -266,7 +266,7 @@ function extractToolResultForTask(message: SDKUserMessage, resultBlock: SDKToolR
 function AssistantLogo(): React.ReactElement {
   return (
     <img
-      src={CopisTemplateLogo3x}
+      src={CopisAgentLogo}
       alt="Copis Agent"
       className="size-[35px] rounded-[25%] object-cover"
     />

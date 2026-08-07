@@ -21,6 +21,22 @@ function isSensitiveKey(key: string): boolean {
   return SENSITIVE_KEY_PATTERN.test(key)
 }
 
+/** 日志中的关联标识只保留短前缀，避免暴露完整会话或页签标识。 */
+export function shortLogId(value: unknown): string {
+  return typeof value === 'string' && value.length > 0 ? value.slice(0, 8) : '-'
+}
+
+/** 日志中的网页地址只保留 Origin，不记录路径、查询参数和 Hash。 */
+export function redactLogOrigin(value: unknown): string {
+  if (typeof value !== 'string' || !value.trim()) return '-'
+  try {
+    const origin = new URL(value).origin
+    return origin === 'null' ? '[opaque-origin]' : origin
+  } catch {
+    return '[invalid-origin]'
+  }
+}
+
 /** 脱敏自由文本中的键值、Authorization header 和 URL query 参数。 */
 export function redactSensitiveLogText(text: string): string {
   return text

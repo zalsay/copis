@@ -7,6 +7,7 @@ import type {
   BrowserPageSensitiveReason,
 } from '@copis/shared'
 import { requiresBrowserPageActionConfirmation } from './browser-page-control-policy'
+import { buildBrowserPageCursorSource, type BrowserPageCursorPhase } from './browser-page-cursor'
 
 export interface BrowserPageElementCandidate {
   tagName: string
@@ -82,6 +83,8 @@ interface CachedBrowserPageSnapshot {
   elements: Map<string, CachedBrowserPageElement>
 }
 
+const 点击前等待毫秒 = 1_000
+
 function resolveSensitiveReason(candidate: BrowserPageElementCandidate): BrowserPageSensitiveReason | undefined {
   const inputType = candidate.inputType?.toLowerCase()
   const signature = [candidate.name, ...Object.values(candidate.attributes)].filter(Boolean).join(' ')
@@ -107,7 +110,7 @@ export function classifyBrowserPageElement(
 
 export function assertBrowserPageMutationAllowed(mode: BrowserPageControlMode): void {
   if (mode !== 'authorized') {
-    throw new Error('当前页面处于询问模式，请先在 Browser Agent Header 中授权页面操作')
+    throw new Error('当前页面处于询问模式，请先在 AI浏览器顶部授权页面操作')
   }
 }
 
@@ -145,6 +148,27 @@ function sanitizePageUrl(value: string): string {
 function unwrapEvaluationValue(response: unknown): unknown {
   if (!isRecord(response) || !isRecord(response.result)) return undefined
   return response.result.value
+}
+
+interface BrowserPagePoint {
+  x: number
+  y: number
+}
+
+function isSafePageCoordinate(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 100_000
+}
+
+function parsePagePoint(value: unknown): BrowserPagePoint | undefined {
+  if (!isRecord(value) || !isSafePageCoordinate(value.x) || !isSafePageCoordinate(value.y)) return undefined
+  return { x: value.x, y: value.y }
+}
+
+function parseFinitePagePoint(value: unknown): BrowserPagePoint | undefined {
+  if (!isRecord(value) || typeof value.x !== 'number' || !Number.isFinite(value.x) || typeof value.y !== 'number' || !Number.isFinite(value.y)) {
+    return undefined
+  }
+  return { x: value.x, y: value.y }
 }
 
 function parseObservedElement(value: unknown): RawObservedElement | undefined {
@@ -301,19 +325,22 @@ function focusTargetSource(element: CachedBrowserPageElement, selectValue?: stri
     if ('disabled' in target && target.disabled) return { ok: false, reason: 'disabled' };
     target.scrollIntoView({ block: 'center', inline: 'center' });
     target.focus();
+    const rect = target.getBoundingClientRect();
+    const x = rect.left + rect.width / 2;
+    const y = rect.top + rect.height / 2;
     if (selectValue !== undefined) {
       if (!(target instanceof HTMLSelectElement)) return { ok: false, reason: 'not_select' };
       const optionIndex = Array.from(target.options).findIndex((option) => option.value === selectValue || normalize(option.textContent) === selectValue);
       if (optionIndex < 0) return { ok: false, reason: 'option_not_found' };
-      return { ok: true, optionIndex };
+      return { ok: true, x, y, optionIndex };
     }
-    return { ok: true };
+    return { ok: true, x, y };
   })()`
 }
 
 function requireContext(runtime: BrowserPageControlRuntime, sessionId: string): { context: BrowserAgentContext; tab: BrowserPageControlTab } {
   const context = runtime.getContext(sessionId)
-  if (!context) throw new Error('Browser Agent 尚未绑定当前页面')
+  if (!context) throw new Error('AI浏览器尚未绑定当前页面')
   const tab = runtime.getTab(context.tabId)
   if (!tab) throw new Error('当前网页页签不存在')
   return { context, tab }
@@ -345,7 +372,7 @@ export function createBrowserPageControlService(runtime: BrowserPageControlRunti
 
   const assertNonSensitiveElement = (element: CachedBrowserPageElement): void => {
     if (element.publicElement.sensitiveReason) {
-      throw new Error(`Browser Agent 不允许填写敏感字段: ${element.publicElement.sensitiveReason}`)
+      throw new Error(`AI浏览器不允许填写敏感字段: ${element.publicElement.sensitiveReason}`)
     }
   }
 
@@ -353,6 +380,25 @@ export function createBrowserPageControlService(runtime: BrowserPageControlRunti
     const code = key.length === 1 ? `Key${key.toUpperCase()}` : key
     await runtime.sendCommand({ tabId, method: 'Input.dispatchKeyEvent', params: { type: 'keyDown', key, code, ...params } })
     await runtime.sendCommand({ tabId, method: 'Input.dispatchKeyEvent', params: { type: 'keyUp', key, code, ...params } })
+  }
+
+  const showCursor = async (tabId: string, phase: BrowserPageCursorPhase, point?: BrowserPagePoint): Promise<void> => {
+    try {
+      const response = await runtime.sendCommand({
+        tabId,
+        method: 'Runtime.evaluate',
+        params: {
+          expression: buildBrowserPageCursorSource({ phase, ...point }),
+          returnByValue: true,
+          ...(phase === 'hide' ? {} : { awaitPromise: true }),
+        },
+      })
+      if (isRecord(response) && response.exceptionDetails !== undefined && response.exceptionDetails !== null) {
+        throw new Error('页面指针脚本执行失败')
+      }
+    } catch (error) {
+      console.warn('[AI浏览器][主进程] 页面指针注入失败', { tabId, phase, error })
+    }
   }
 
   const focusElement = async (tab: BrowserPageControlTab, element: CachedBrowserPageElement, selectValue?: string): Promise<Record<string, unknown>> => {
@@ -364,10 +410,14 @@ export function createBrowserPageControlService(runtime: BrowserPageControlRunti
     const result = unwrapEvaluationValue(response)
     if (!isRecord(result) || result.ok !== true) {
       const reason = isRecord(result) && typeof result.reason === 'string' ? result.reason : 'unknown'
-      if (reason === 'sensitive') throw new Error('Browser Agent 不允许填写敏感字段')
+      if (reason === 'sensitive') throw new Error('AI浏览器不允许填写敏感字段')
       throw new Error(`页面元素已变化或不可操作: ${reason}`)
     }
     return result
+  }
+
+  const getFocusedPoint = (result: Record<string, unknown>): BrowserPagePoint | undefined => {
+    return parseFinitePagePoint(result)
   }
 
   return {
@@ -428,11 +478,16 @@ export function createBrowserPageControlService(runtime: BrowserPageControlRunti
         params: { expression: clickTargetSource(element), returnByValue: true },
       })
       const point = unwrapEvaluationValue(response)
-      if (!isRecord(point) || point.ok !== true || typeof point.x !== 'number' || typeof point.y !== 'number') {
+      if (!isRecord(point) || point.ok !== true) {
         throw new Error('页面元素已变化，请重新观察页面后再操作')
       }
-      const mouse = { x: point.x, y: point.y, button: 'left', clickCount: 1 }
+      const cursorPoint = parsePagePoint(point)
+      if (!cursorPoint) throw new Error('页面元素坐标无效，请重新观察页面后再操作')
+      const mouse = { ...cursorPoint, button: 'left', clickCount: 1 }
+      await showCursor(tab.id, 'move', cursorPoint)
+      await new Promise<void>((resolve) => setTimeout(resolve, 点击前等待毫秒))
       await runtime.sendCommand({ tabId: tab.id, method: 'Input.dispatchMouseEvent', params: { type: 'mousePressed', ...mouse } })
+      await showCursor(tab.id, 'press', cursorPoint)
       await runtime.sendCommand({ tabId: tab.id, method: 'Input.dispatchMouseEvent', params: { type: 'mouseReleased', ...mouse } })
       return actionResult(runtime, tab.id)
     },
@@ -443,7 +498,8 @@ export function createBrowserPageControlService(runtime: BrowserPageControlRunti
       const { tab, element } = requireCachedElement(sessionId, ref)
       assertInteractiveElement(element)
       assertNonSensitiveElement(element)
-      await focusElement(tab, element)
+      const point = getFocusedPoint(await focusElement(tab, element))
+      if (point) await showCursor(tab.id, 'type', point)
       const isMac = process.platform === 'darwin'
       const modifier = isMac ? 'Meta' : 'Control'
       const modifierCode = isMac ? 'MetaLeft' : 'ControlLeft'
@@ -466,6 +522,8 @@ export function createBrowserPageControlService(runtime: BrowserPageControlRunti
         ? result.optionIndex
         : undefined
       if (optionIndex === undefined || optionIndex < 0 || optionIndex > 10_000) throw new Error('页面选项位置无效')
+      const point = getFocusedPoint(result)
+      if (point) await showCursor(tab.id, 'select', point)
       await dispatchKey(tab.id, 'Home')
       for (let index = 0; index < optionIndex; index += 1) await dispatchKey(tab.id, 'ArrowDown')
       await dispatchKey(tab.id, 'Enter')
@@ -479,7 +537,8 @@ export function createBrowserPageControlService(runtime: BrowserPageControlRunti
       const { tab, element } = requireCachedElement(sessionId, ref)
       assertInteractiveElement(element)
       assertNonSensitiveElement(element)
-      await focusElement(tab, element)
+      const point = getFocusedPoint(await focusElement(tab, element))
+      if (point) await showCursor(tab.id, 'key', point)
       await dispatchKey(tab.id, key)
       return actionResult(runtime, tab.id)
     },
@@ -489,6 +548,7 @@ export function createBrowserPageControlService(runtime: BrowserPageControlRunti
       const { context } = requireContext(runtime, sessionId)
       const x = Math.max(-5_000, Math.min(5_000, Number.isFinite(deltaX) ? deltaX : 0))
       const y = Math.max(-5_000, Math.min(5_000, Number.isFinite(deltaY) ? deltaY : 0))
+      await showCursor(context.tabId, 'scroll')
       await runtime.sendCommand({
         tabId: context.tabId,
         method: 'Runtime.evaluate',
@@ -507,6 +567,7 @@ export function createBrowserPageControlService(runtime: BrowserPageControlRunti
         throw new Error('页面导航地址不正确')
       }
       if (target.protocol !== 'http:' && target.protocol !== 'https:') throw new Error('页面导航只支持 HTTP(S) 地址')
+      await showCursor(context.tabId, 'hide')
       runtime.navigate(context.tabId, target.toString())
       snapshots.delete(sessionId)
       return { ok: true, url: sanitizePageUrl(target.toString()), title: tab.title }

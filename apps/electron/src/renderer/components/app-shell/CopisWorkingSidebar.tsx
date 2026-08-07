@@ -38,7 +38,15 @@ import { appModeAtom } from '@/atoms/app-mode'
 import { activeViewAtom } from '@/atoms/active-view'
 import { searchDialogOpenAtom } from '@/atoms/search-atoms'
 import { planningTabAtom } from '@/atoms/planning-atoms'
-import { workingAuthStateAtom, workingHistorySelectionAtom, workingSettingsOpenAtom } from '@/atoms/working-atoms'
+import {
+  createWorkspaceDialogOpenAtom,
+  createdWorkspaceIdAtom,
+  openCreateWorkspaceDialogAtom,
+  workspaceCreationSourceAtom,
+  workingAuthStateAtom,
+  workingHistorySelectionAtom,
+  workingSettingsOpenAtom,
+} from '@/atoms/working-atoms'
 import { useCreateSession } from '@/hooks/useCreateSession'
 import { useOpenSession } from '@/hooks/useOpenSession'
 import { isAgentSessionMeta, sanitizeAgentSessions } from '@/lib/agent-session-list'
@@ -73,7 +81,7 @@ export function CopisWorkingSidebar({ width, noTransition = false }: CopisWorkin
   const [expandedWorkspaceId, setExpandedWorkspaceId] = React.useState<string | null>(null)
   const [expandedConversationWorkspaceIds, setExpandedConversationWorkspaceIds] = React.useState<Set<string>>(new Set())
   const [openMenuWorkspaceId, setOpenMenuWorkspaceId] = React.useState<string | null>(null)
-  const [createWorkspaceOpen, setCreateWorkspaceOpen] = React.useState(false)
+  const [createWorkspaceOpen, setCreateWorkspaceOpen] = useAtom(createWorkspaceDialogOpenAtom)
   const [feedbackOpen, setFeedbackOpen] = React.useState(false)
   const initialProjectsLoadedRef = React.useRef(false)
 
@@ -92,6 +100,10 @@ export function CopisWorkingSidebar({ width, noTransition = false }: CopisWorkin
   const setWorkingSettingsOpen = useSetAtom(workingSettingsOpenAtom)
   const setSearchDialogOpen = useSetAtom(searchDialogOpenAtom)
   const setWorkingHistorySelection = useSetAtom(workingHistorySelectionAtom)
+  const setCreatedWorkspaceId = useSetAtom(createdWorkspaceIdAtom)
+  const workspaceCreationSource = useAtomValue(workspaceCreationSourceAtom)
+  const setWorkspaceCreationSource = useSetAtom(workspaceCreationSourceAtom)
+  const openCreateWorkspaceDialog = useSetAtom(openCreateWorkspaceDialogAtom)
   const { createAgent } = useCreateSession()
   const openSession = useOpenSession()
 
@@ -191,7 +203,11 @@ export function CopisWorkingSidebar({ width, noTransition = false }: CopisWorkin
       setExpandedWorkspaceId(project.workspace.id)
       setCurrentWorkspaceId(project.workspace.id)
       window.electronAPI.updateSettings({ agentWorkspaceId: project.workspace.id }).catch(console.error)
-      openSession('agent', project.session.id, project.session.title)
+      if (workspaceCreationSource !== 'expert-team') {
+        openSession('agent', project.session.id, project.session.title)
+      }
+      setCreatedWorkspaceId(project.workspace.id)
+      setWorkspaceCreationSource(null)
       setCreateWorkspaceOpen(false)
     } catch (error) {
       toast.error(error instanceof Error ? error.message : '创建工作区失败')
@@ -221,6 +237,15 @@ export function CopisWorkingSidebar({ width, noTransition = false }: CopisWorkin
     setWorkingHistorySelection(null)
     setActiveView('memory')
   }
+
+  const handleOpenCreateWorkspace = React.useCallback((): void => {
+    openCreateWorkspaceDialog('sidebar')
+  }, [openCreateWorkspaceDialog])
+
+  const handleCloseCreateWorkspace = React.useCallback((): void => {
+    setCreateWorkspaceOpen(false)
+    setWorkspaceCreationSource(null)
+  }, [setCreateWorkspaceOpen, setWorkspaceCreationSource])
 
   const handleRemoveWorkspace = async (workspaceId: string): Promise<void> => {
     const workspace = localWorkspaces.find((item) => item.id === workspaceId)
@@ -284,6 +309,14 @@ export function CopisWorkingSidebar({ width, noTransition = false }: CopisWorkin
         >
           <BookOpen aria-hidden="true" />
         </button>
+        <button
+          type="button"
+          className={cn('copis-working-sidebar-icon-button', activeView === 'expert-team' && 'active')}
+          aria-label="专家团队"
+          onClick={() => { setWorkingHistorySelection(null); setAppMode('agent'); setActiveView('expert-team') }}
+        >
+          <UsersRound aria-hidden="true" />
+        </button>
         <Sparkles className="copis-working-sidebar-collapsed-mark" aria-hidden="true" />
         <span className="copis-working-sidebar-session-count">{activeSessionCount}</span>
       </aside>
@@ -310,7 +343,7 @@ export function CopisWorkingSidebar({ width, noTransition = false }: CopisWorkin
             <BookOpen aria-hidden="true" />
             <span>记忆</span>
           </button>
-          <button type="button" className="copis-working-menu-button" onClick={() => { setWorkingHistorySelection(null); setAppMode('agent'); setActiveView('agent-skills') }}>
+          <button type="button" className={cn('copis-working-menu-button', activeView === 'expert-team' && 'active')} onClick={() => { setWorkingHistorySelection(null); setAppMode('agent'); setActiveView('expert-team') }}>
             <UsersRound aria-hidden="true" />
             <span>专家团队</span>
           </button>
@@ -318,7 +351,7 @@ export function CopisWorkingSidebar({ width, noTransition = false }: CopisWorkin
             <Puzzle aria-hidden="true" />
             <span>技能市场</span>
           </button>
-          <button type="button" className="copis-working-menu-button" onClick={() => setCreateWorkspaceOpen(true)}>
+          <button type="button" className="copis-working-menu-button" onClick={handleOpenCreateWorkspace}>
             <FolderOpen aria-hidden="true" />
             <span>创建工作区</span>
           </button>
@@ -403,7 +436,7 @@ export function CopisWorkingSidebar({ width, noTransition = false }: CopisWorkin
               )
             })}
             {agentSettingsReady && localWorkspaces.length === 0 && (
-              <button type="button" className="copis-working-sidebar-muted" onClick={() => setCreateWorkspaceOpen(true)} disabled={busy}>
+              <button type="button" className="copis-working-sidebar-muted" onClick={handleOpenCreateWorkspace} disabled={busy}>
                 创建工作区后显示项目对话
               </button>
             )}
@@ -430,7 +463,7 @@ export function CopisWorkingSidebar({ width, noTransition = false }: CopisWorkin
       {createWorkspaceOpen && (
         <CopisWorkingConnectDialog
           busy={busy}
-          onClose={() => setCreateWorkspaceOpen(false)}
+          onClose={handleCloseCreateWorkspace}
           onConfirm={createLocalWorkspace}
         />
       )}

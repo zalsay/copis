@@ -17,6 +17,24 @@ export const workingHistorySelectionAtom = atom<WorkingHistorySelection | null>(
 /** Working 账户设置页是否打开；与 Copis 本地设置面板分离。 */
 export const workingSettingsOpenAtom = atom(false)
 
+/** 左侧 Copis Working 创建工作区弹窗是否打开。 */
+export const createWorkspaceDialogOpenAtom = atom(false)
+
+/** 最近一次通过左侧创建工作区弹窗成功创建的工作区 ID。 */
+export const createdWorkspaceIdAtom = atom<string | null>(null)
+
+export type WorkspaceCreationSource = 'sidebar' | 'expert-team'
+
+/** 当前创建工作区请求的来源，用于保留来源页面的导航语义。 */
+export const workspaceCreationSourceAtom = atom<WorkspaceCreationSource | null>(null)
+
+/** 打开创建工作区弹窗，并清除上一次创建结果。 */
+export const openCreateWorkspaceDialogAtom = atom(null, (_get, set, source: WorkspaceCreationSource): void => {
+  set(createdWorkspaceIdAtom, null)
+  set(workspaceCreationSourceAtom, source)
+  set(createWorkspaceDialogOpenAtom, true)
+})
+
 /** 本地 Agent 最近的 Working 语义事件，供运行态诊断和后续 Working UI 消费。 */
 export const workingEventsAtom = atom<Map<string, WorkingEvent[]>>(new Map())
 
