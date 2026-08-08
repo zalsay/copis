@@ -46,6 +46,42 @@ mock.module('../settings-service', () => ({
   updateSettings: () => ({}),
 }))
 
+const nanoBananaUserEnabled = mock(() => false)
+const nanoBananaToolState = mock(() => ({ enabled: false }))
+const nanoBananaAvailable = mock(() => false)
+const executeNanoBanana = mock(async () => ({
+  toolCallId: 'call-1',
+  content: '图片已成功生成（1 张）',
+  generatedAttachments: [{
+    id: 'attachment-1',
+    filename: 'nano-banana-1.png',
+    mediaType: 'image/png',
+    localPath: '/tmp/nano-banana-1.png',
+    size: 1024,
+  }],
+}))
+const readAttachmentBase64 = mock(() => 'base64-image-data')
+
+mock.module('../builtin-mcp/settings', () => ({
+  isBuiltinMcpUserEnabled: nanoBananaUserEnabled,
+  isBuiltinMcpDefaultDisabled: (id: string) => id === 'nano-banana',
+  setBuiltinMcpUserEnabled: () => {},
+}))
+mock.module('../agent-tool-config', () => ({
+  getAgentToolState: nanoBananaToolState,
+  getAgentToolCredentials: () => ({}),
+}))
+mock.module('../agent-tools/image-generation-tool', () => ({
+  isNanoBananaAvailable: nanoBananaAvailable,
+  executeNanoBananaTool: executeNanoBanana,
+  isNanoBananaToolCall: () => false,
+  NANO_BANANA_TOOL_META: { id: 'nano-banana' },
+  NANO_BANANA_TOOL_DEFINITIONS: [],
+}))
+mock.module('../attachment-service', () => ({
+  readAttachmentAsBase64: readAttachmentBase64,
+}))
+
 const { buildPiBuiltinTools } = await import('./pi-builtin-tools')
 
 describe('Pi Memory 工具策略矩阵', () => {
@@ -127,5 +163,92 @@ describe('主 Agent 专家团队工具边界', () => {
 
     expect(result.expertTeamAvailable).toBe(false)
     expect(result.tools.some((tool) => tool.name === 'expert_team_run')).toBe(false)
+  })
+
+  test('Given automation 子会话 When 构建内置工具 Then 不暴露专家团队调度工具', async () => {
+    const result = await buildPiBuiltinTools(sdk, {
+      sessionId: 'automation-session',
+      channelId: 'channel-1',
+      workspaceId: 'workspace-1',
+      workspaceSlug: 'workspace-1',
+      memoryPolicy: 'off',
+      triggeredBy: 'automation',
+    })
+
+    expect(result.expertTeamAvailable).toBe(false)
+    expect(result.tools.some((tool) => tool.name === 'expert_team_run')).toBe(false)
+  })
+})
+
+describe('Pi Copis 图片生成工具', () => {
+  const sdk = {
+    defineTool: <T>(definition: T): T => definition,
+  } as unknown as typeof import('@earendil-works/pi-coding-agent')
+
+  test('Given 用户未启用内置生图 Then 不注入 generate_image 工具', async () => {
+    nanoBananaUserEnabled.mockReturnValue(false)
+    const result = await buildPiBuiltinTools(sdk, {
+      sessionId: 'session-1',
+      channelId: 'channel-1',
+      memoryPolicy: 'off',
+      triggeredBy: 'user',
+    })
+    expect(result.tools.find((tool) => tool.name === 'generate_image')).toBeUndefined()
+    expect(executeNanoBanana).not.toHaveBeenCalled()
+  })
+
+  test('Given 内置生图已启用且 API Key 已配置 When 执行 generate_image Then 回传文本与图片内容', async () => {
+    nanoBananaUserEnabled.mockReturnValue(true)
+    nanoBananaToolState.mockReturnValue({ enabled: true })
+    nanoBananaAvailable.mockReturnValue(true)
+
+    const result = await buildPiBuiltinTools(sdk, {
+      sessionId: 'session-1',
+      channelId: 'channel-1',
+      memoryPolicy: 'off',
+      triggeredBy: 'user',
+    })
+    const tool = result.tools.find((item) => item.name === 'generate_image') as unknown as {
+      execute: (toolCallId: string, params: Record<string, unknown>) => Promise<unknown>
+    }
+    expect(tool).toBeDefined()
+
+    const executed = await tool.execute('call-1', { prompt: '一只戴着帽子的猫' })
+    expect(executeNanoBanana).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'call-1' }),
+      expect.objectContaining({ conversationId: 'session-1' }),
+    )
+    const executedRecord = executed as { content: Array<Record<string, unknown>>; details: unknown }
+    expect(executedRecord.details).toEqual({
+      generatedAttachments: [{
+        filename: 'nano-banana-1.png',
+        path: '/tmp/nano-banana-1.png',
+        mediaType: 'image/png',
+      }],
+    })
+    expect(executedRecord.content.some((block) => block.type === 'image' && block.data === 'base64-image-data')).toBe(true)
+    expect(executedRecord.content.some((block) => block.type === 'text' && String(block.text).includes('<generated_images>'))).toBe(true)
+  })
+
+  test('Given 生图执行失败 When 工具被调用 Then 抛出错误而不是返回成功', async () => {
+    nanoBananaUserEnabled.mockReturnValue(true)
+    nanoBananaToolState.mockReturnValue({ enabled: true })
+    nanoBananaAvailable.mockReturnValue(true)
+    executeNanoBanana.mockResolvedValue({
+      toolCallId: 'call-1',
+      content: '图片模型请求失败 (401): unauthorized',
+      isError: true,
+    } as unknown as Awaited<ReturnType<typeof executeNanoBanana>>)
+
+    const result = await buildPiBuiltinTools(sdk, {
+      sessionId: 'session-1',
+      channelId: 'channel-1',
+      memoryPolicy: 'off',
+      triggeredBy: 'user',
+    })
+    const tool = result.tools.find((item) => item.name === 'generate_image') as unknown as {
+      execute: (toolCallId: string, params: Record<string, unknown>) => Promise<unknown>
+    }
+    await expect(tool.execute('call-1', { prompt: '测试' })).rejects.toThrow('图片模型请求失败')
   })
 })

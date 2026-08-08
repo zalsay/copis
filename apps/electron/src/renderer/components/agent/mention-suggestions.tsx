@@ -11,6 +11,7 @@ import type { SuggestionOptions } from '@tiptap/suggestion'
 import { CalendarDays, ListTodo, MessageSquareText, Sparkles, Server } from 'lucide-react'
 import { MentionList } from './MentionList'
 import type { MentionListRef } from './MentionList'
+import { getWorkspaceMcpConfig } from '@/lib/workspace-mcp-api'
 import { createLatestSuggestionRequestGuard, createMentionPopup, positionPopup, isSuggestionTriggerPresent, shouldSuppressEscTrigger, shouldClearEscSuppressionOnExit, type EscSuppressedTrigger } from './mention-popup-utils'
 import type { AgentSessionReferenceSearchResult } from '@copis/shared'
 import {
@@ -255,11 +256,11 @@ export function createMcpMentionSuggestion(
       headerLabel: 'MCP 服务',
       emptyText: '无匹配 MCP 服务',
       fetchItems: async (slug, q) => {
-        const caps = await window.electronAPI.getWorkspaceCapabilities(slug)
-        return caps.mcpServers
-          .filter((s) => s.enabled)
-          .filter((s) => !q || s.name.toLowerCase().includes(q))
-          .map((s) => ({ id: s.name, name: s.name, type: s.type }))
+        const config = await getWorkspaceMcpConfig(slug)
+        return Object.entries(config.servers ?? {})
+          .filter(([, entry]) => entry.enabled)
+          .filter(([name]) => !q || name.toLowerCase().includes(q))
+          .map(([name, entry]) => ({ id: name, name, type: entry.type }))
       },
       keyExtractor: (item) => item.id,
       renderItem: (item) => (

@@ -105,14 +105,31 @@ export interface WorkingSessionHistory {
 
 /** Copis Working 只在主进程中使用的虚拟渠道标识，不会写入 channels.json。 */
 export const COPIS_WORKING_CHANNEL_ID = 'copis-working'
+export const COPIS_WORKING_DEEPSEEK_CHANNEL_ID = 'copis-working-deepseek'
 export const COPIS_WORKING_MODEL_ENDPOINT_PATH = '/api/internal/working-model/v1'
 export const COPIS_WORKING_FAST_MODEL_ID = 'fast'
 export const COPIS_WORKING_EXPERT_MODEL_ID = 'export'
+export const COPIS_WORKING_DEEPSEEK_FAST_MODEL_ID = 'deepseek-v4-flash'
+/** Working 模型计费来源头：官方 Copis 客户端标记请求属于 Copis Agent 模型。 */
+export const COPIS_WORKING_MODEL_SOURCE_TYPE_HEADER = 'X-Working-Model-Source-Type'
+/** Working 模型计费来源值：Copis 内置 Agent 模型统一标记为 copis-agent-model。 */
+export const COPIS_WORKING_MODEL_SOURCE_TYPE_COPIS_AGENT = 'copis-agent-model'
 export const COPIS_WORKING_MODEL_IDS = [
   COPIS_WORKING_FAST_MODEL_ID,
   COPIS_WORKING_EXPERT_MODEL_ID,
 ] as const
+export const COPIS_WORKING_DEEPSEEK_MODEL_IDS = [
+  COPIS_WORKING_DEEPSEEK_FAST_MODEL_ID,
+] as const
+export const COPIS_WORKING_CHANNEL_IDS = [
+  COPIS_WORKING_CHANNEL_ID,
+  COPIS_WORKING_DEEPSEEK_CHANNEL_ID,
+] as const
 export type CopisWorkingModelId = (typeof COPIS_WORKING_MODEL_IDS)[number]
+
+export function isCopisWorkingChannelId(value: string | undefined): boolean {
+  return value === COPIS_WORKING_CHANNEL_ID || value === COPIS_WORKING_DEEPSEEK_CHANNEL_ID
+}
 
 /** Working Composer 的执行模式。edu-api 使用 fast/export alias；Copis 保留 fast/expert UI 语义。 */
 export type WorkingMode = 'fast' | 'expert'
@@ -152,6 +169,40 @@ export function createCopisWorkingChannel(backendUrl: string, now = 0): Channel 
     createdAt: now,
     updatedAt: now,
   }
+}
+
+/** 构造仅供 Agent UI 和主进程使用的 DeepSeek 虚拟渠道。 */
+export function createCopisWorkingDeepSeekChannel(backendUrl: string, now = 0): Channel {
+  const baseUrl = backendUrl.trim().replace(/\/+$/, '')
+  if (!baseUrl) throw new Error('Copis Working 后端地址不能为空')
+
+  return {
+    id: COPIS_WORKING_DEEPSEEK_CHANNEL_ID,
+    name: 'DeepSeek',
+    provider: 'openai-responses',
+    baseUrl: `${baseUrl}${COPIS_WORKING_MODEL_ENDPOINT_PATH}`,
+    apiKey: '',
+    models: [{
+      id: COPIS_WORKING_DEEPSEEK_FAST_MODEL_ID,
+      name: '快速',
+      enabled: true,
+      source: 'manual',
+    }],
+    enabled: true,
+    createdAt: now,
+    updatedAt: now,
+  }
+}
+
+/** 根据虚拟渠道 ID 构造 Copis Working 内置渠道。 */
+export function createCopisWorkingChannelForId(
+  backendUrl: string,
+  channelId: string,
+  now = 0,
+): Channel | undefined {
+  if (channelId === COPIS_WORKING_CHANNEL_ID) return createCopisWorkingChannel(backendUrl, now)
+  if (channelId === COPIS_WORKING_DEEPSEEK_CHANNEL_ID) return createCopisWorkingDeepSeekChannel(backendUrl, now)
+  return undefined
 }
 
 /**
@@ -338,11 +389,22 @@ export interface WorkingLedgerEntry {
   amountTokens: number
   type: string
   sourceType?: string
+  modelAlias?: string
   memo?: string
   deductionMultiplier?: number
   payerBalanceAfter?: number
   payeeBalanceAfter?: number
   createdAt?: string
+}
+
+/** Copis 图片生成结果（edu-api /api/working/images/generate） */
+export interface WorkingImageGenerationResult {
+  imageUrl?: string
+  dataUrl?: string
+  contentType?: string
+  outputHint?: string
+  deductedTokens?: number
+  balanceAfter?: number
 }
 
 export type WorkingReceiveChannel = 'weixin' | 'feishu'

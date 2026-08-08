@@ -15,6 +15,9 @@ mock.module('../settings-service', () => ({
   getSettings: () => settings,
   updateSettings: () => settings,
 }))
+mock.module('../working-auth-store', () => ({
+  getWorkingTokenStore: () => ({ getToken: () => 'working-token' }),
+}))
 
 type BuiltinMcpCatalogModule = typeof import('./catalog')
 let catalog: BuiltinMcpCatalogModule
@@ -41,14 +44,14 @@ afterAll(() => {
 })
 
 describe('内置 MCP Agent 能力目录', () => {
-  test('Nano Banana 开启且有凭据时标记为可用', () => {
+  test('Copis 图片生成开启且有凭据时标记为可用', () => {
     const server = catalog.listBuiltinMcpServers().find((item) => item.id === 'nano-banana')
 
     expect(server).toMatchObject({ enabled: true, available: true })
-    expect(server?.name).toBe('nano_banana')
+    expect(server?.name).toBe('copis_image')
   })
 
-  test('Nano Banana 未开启时保留目录项但标记为不可用', () => {
+  test('Copis 图片生成未开启时保留目录项但标记为不可用', () => {
     settings = { builtinMcpEnabledIds: [], builtinMcpDisabledIds: [] }
 
     const server = catalog.listBuiltinMcpServers().find((item) => item.id === 'nano-banana')

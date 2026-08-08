@@ -5,13 +5,25 @@ import { join } from 'node:path'
 import type { AgentToolMeta } from '@copis/shared'
 
 let configPath = ''
+mock.module('electron', () => ({
+  app: { isPackaged: true, getPath: () => '/tmp/copis-agent-tool-config-test' },
+  safeStorage: {
+    isEncryptionAvailable: () => false,
+    encryptString: (value: string) => Buffer.from(value),
+    decryptString: (value: Buffer) => value.toString('utf8'),
+  },
+}))
 mock.module('./config-paths', () => ({
   getChatToolsConfigPath: () => configPath,
+  getWorkingAuthPath: () => join(tempDir, 'working-auth.json'),
 }))
 mock.module('./attachment-service', () => ({
   saveAttachment: () => ({ id: 'attachment', localPath: 'attachment' }),
   readAttachmentAsBase64: () => '',
   isImageAttachment: () => false,
+}))
+mock.module('./working-auth-store', () => ({
+  getWorkingTokenStore: () => ({ getToken: () => 'working-token' }),
 }))
 
 type AgentToolConfigModule = typeof import('./agent-tool-config')
@@ -82,7 +94,7 @@ describe('Agent 工具配置', () => {
     expect(config.getAgentToolCredentials('nano-banana')).toEqual({ apiKey: 'gemini-key' })
   })
 
-  test('凭据存在时注册表报告 web-search 和 Nano Banana 可用', () => {
+  test('凭据存在时注册表报告 web-search 和 Copis 图片生成可用', () => {
     config.updateAgentToolCredentials('web-search', { apiKey: 'tavily-key' })
     config.updateAgentToolCredentials('nano-banana', { apiKey: 'gemini-key' })
 

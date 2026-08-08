@@ -10,6 +10,7 @@ import {
   COPIS_HTTP_API_PRODUCTION_PORT,
 } from '@copis/shared/config'
 import { parseAgentSseData, type AgentRpcWorkerFrame } from '../../main/lib/agent-rpc-protocol'
+import { withHttpApiWebToken } from './http-api-web-token'
 
 function resolveInitialAgentHttpApiBaseUrl(): string {
   const configuredPort = typeof process !== 'undefined' ? process.env.COPIS_HTTP_API_PORT : undefined
@@ -82,11 +83,11 @@ export class AgentHttpStreamClient {
   async send(input: AgentSendInput): Promise<void> {
     const response = await fetch(
       `${this.baseUrl}/api/agent/sessions/${encodeURIComponent(input.sessionId)}/messages`,
-      {
+      withHttpApiWebToken({
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },
         body: JSON.stringify(input),
-      },
+      }),
     )
     if (!response.ok) throw new Error(await readErrorMessage(response))
     if (!response.body) throw new Error('Agent HTTP 响应没有流式内容')
@@ -121,11 +122,11 @@ export class AgentHttpStreamClient {
   async queue(input: AgentQueueMessageInput): Promise<string> {
     const response = await fetch(
       `${this.baseUrl}/api/agent/sessions/${encodeURIComponent(input.sessionId)}/queue`,
-      {
+      withHttpApiWebToken({
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
         body: JSON.stringify(input),
-      },
+      }),
     )
     if (!response.ok) throw new Error(await readErrorMessage(response))
 
@@ -144,7 +145,7 @@ export class AgentHttpStreamClient {
   async stop(sessionId: string): Promise<void> {
     const response = await fetch(
       `${this.baseUrl}/api/agent/sessions/${encodeURIComponent(sessionId)}/stop`,
-      { method: 'POST', headers: { Accept: 'application/json' } },
+      withHttpApiWebToken({ method: 'POST', headers: { Accept: 'application/json' } }),
     )
     if (!response.ok) throw new Error(await readErrorMessage(response))
   }

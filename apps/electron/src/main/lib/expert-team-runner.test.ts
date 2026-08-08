@@ -37,7 +37,10 @@ function rootDir(): string {
   return root
 }
 
-function snapshot(nodes: ExpertTeamRunSnapshot['nodes']): ExpertTeamRunSnapshot {
+function snapshot(
+  nodes: ExpertTeamRunSnapshot['nodes'],
+  expertTeamContext?: ExpertTeamRunSnapshot['expertTeamContext'],
+): ExpertTeamRunSnapshot {
   return {
     runId: 'run-1',
     parentSessionId: 'parent-1',
@@ -45,6 +48,23 @@ function snapshot(nodes: ExpertTeamRunSnapshot['nodes']): ExpertTeamRunSnapshot 
     modelId: 'model-1',
     workspaceId: 'workspace-1',
     nodes,
+    ...(expertTeamContext ? { expertTeamContext } : {}),
+  }
+}
+
+function frozenContext() {
+  return {
+    schemaId: 'team-a',
+    schemaRevisionId: 202,
+    revision: 2,
+    sha256: 'b'.repeat(64),
+    schemaName: '深入研究团队',
+    nodes: [
+      { id: 'research', role: 'researcher', task: 'research', dependsOn: [] },
+      { id: 'write', role: 'writer', task: 'write', dependsOn: ['research'], outputPath: 'result.md' },
+    ],
+    agentsMdPath: '/tmp/.copis/agent-workspaces/test/AGENTS.md',
+    agentsMdContent: '<!-- copis-expert-team:start -->\n## 专家团队协议\n<!-- copis-expert-team:end -->',
   }
 }
 
@@ -185,6 +205,37 @@ describe('ExpertTeamRunner', () => {
     expect(result.nodes.find((node) => node.nodeId === 'dependent')?.status).toBe('failed')
     expect(agent.started).toEqual(['bad'])
     expect(rust.completedRunStatus).toBe('failed')
+  })
+
+  test('节点输入携带冻结专家团队上下文且仅暴露当前 nodeId', async () => {
+    const root = rootDir()
+    const rust = new FakeRustApi()
+    const agent = new FakeAgent(root)
+    const context = frozenContext()
+    const result = await new ExpertTeamRunner({ workspaceRoot: root, rustApi: rust, agent }).run(snapshot([
+      { id: 'research', role: 'researcher', task: 'research' },
+      { id: 'writer', role: 'writer', task: 'write', dependsOn: ['research'], outputPath: 'result.md' },
+    ], context))
+
+    expect(result.nodes.every((node) => node.status === 'succeeded')).toBe(true)
+    expect(agent.inputs).toHaveLength(2)
+    expect(agent.inputs.every((input) => input.triggeredBy === 'delegation' && input.expertTeamContext)).toBe(true)
+    for (const input of agent.inputs) {
+      expect(input.expertTeamContext?.schemaId).toBe('team-a')
+      expect(input.expertTeamContext?.schemaRevisionId).toBe(202)
+      expect(input.expertTeamContext?.revision).toBe(2)
+      expect(input.expertTeamContext?.sha256).toBe('b'.repeat(64))
+      expect(input.expertTeamContext?.agentsMdContent).toContain('copis-expert-team:start')
+      expect(['research', 'writer']).toContain(input.expertTeamContext?.nodeId ?? '')
+      expect(input.expertTeamContext?.nodes).toHaveLength(2)
+    }
+    const researchInput = agent.inputs.find((input) => input.expertTeamContext?.nodeId === 'research')!
+    expect(researchInput.userMessage).toContain('专家团队')
+    expect(researchInput.userMessage).toContain('research')
+    const writerInput = agent.inputs.find((input) => input.expertTeamContext?.nodeId === 'writer')!
+    expect(writerInput.userMessage).toContain('result.md')
+    // 同一 run 使用创建时冻结的 revision，不随外部 schema 变化
+    expect(agent.inputs[0]?.expertTeamContext?.sha256).toBe(context.sha256)
   })
 
   test('AbortController 会停止运行节点并取消剩余节点', async () => {

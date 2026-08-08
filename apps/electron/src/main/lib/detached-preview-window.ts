@@ -9,6 +9,7 @@ import { app, BrowserWindow, screen, shell } from 'electron'
 import type { Rectangle } from 'electron'
 import { basename, join } from 'path'
 import type { DetachedPreviewWindowData, DetachedPreviewWindowInput } from '@copis/shared'
+import { httpApiWebTokenArgument } from './http-api-web-token'
 
 const previewDataById = new Map<string, DetachedPreviewWindowData>()
 const previewWindowsById = new Map<string, BrowserWindow>()
@@ -110,6 +111,7 @@ export function openDetachedPreviewWindow(
       preload: join(__dirname, 'preload.cjs'),
       contextIsolation: true,
       nodeIntegration: false,
+      additionalArguments: [httpApiWebTokenArgument()],
     },
   })
 

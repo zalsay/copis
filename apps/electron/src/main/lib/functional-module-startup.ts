@@ -77,10 +77,17 @@ export function mapHealthProgress(progress: number): number {
 
 export function toStartupError(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error)
+  const fallback = '必要组件准备失败，请重试'
   if (/secret|token|authorization|credential|password|internal/i.test(message)) {
-    return '功能模块更新失败，请重试'
+    return fallback
   }
-  return message.trim() || '功能模块更新失败，请重试'
+  if (/health|Rust HTTP API|本地 API|系统核心模块|运行检查/i.test(message)) {
+    return '系统核心模块运行检查未通过，请重试'
+  }
+  if (/manifest|HTTP \d+|下载|响应没有内容|大小不匹配|校验|SHA256|安装|准备|必须是必要组件|缺少必要/i.test(message)) {
+    return fallback
+  }
+  return message.trim() || fallback
 }
 
 export function assertRequiredModuleArtifacts(
@@ -88,12 +95,12 @@ export function assertRequiredModuleArtifacts(
 ): void {
   const byName = new Map(artifacts.map((artifact) => [artifact.name, artifact]))
   const officeCli = byName.get('officecli')
-  if (!officeCli) throw new Error('功能模块 manifest 缺少必选模块 OfficeCLI')
-  if (!officeCli.required) throw new Error('OfficeCLI 必须是必选模块')
+  if (!officeCli) throw new Error('组件清单缺少必要的 Office 文档支持')
+  if (!officeCli.required) throw new Error('Office 文档支持必须是必要组件')
 
   const rustApi = byName.get('rust-http-api')
-  if (!rustApi) throw new Error('功能模块 manifest 缺少必选模块 Rust HTTP API')
-  if (!rustApi.required) throw new Error('Rust HTTP API 必须是必选模块')
+  if (!rustApi) throw new Error('组件清单缺少必要的系统核心模块')
+  if (!rustApi.required) throw new Error('系统核心模块必须是必要组件')
 }
 
 export function ensureRequiredFunctionalModules(
@@ -128,7 +135,7 @@ async function runRequiredModuleStartup(
   try {
     if (options.skipModuleUpdates) return await runDevelopmentHealthCheck(options, publish)
 
-    publish({ phase: 'checking', detail: '正在检查功能模块版本', progress: 0.02 })
+    publish({ phase: 'checking', detail: '正在检查必要组件版本', progress: 0.02 })
     const moduleOptions = createModuleOptions(options)
     const artifacts = await fetchFunctionalModuleManifest(moduleOptions)
     assertRequiredModuleArtifacts(artifacts)
@@ -140,10 +147,10 @@ async function runRequiredModuleStartup(
     )
     let completedWeight = 0
 
-    publish({ phase: 'modules', detail: '正在准备功能模块', progress: MODULE_PROGRESS_START })
+    publish({ phase: 'modules', detail: '正在准备必要组件', progress: MODULE_PROGRESS_START })
     for (const name of REQUIRED_MODULES) {
       const artifact = artifactByName.get(name)
-      if (!artifact) throw new Error(`功能模块 manifest 缺少必选模块: ${name}`)
+      if (!artifact) throw new Error(`组件清单缺少必要组件: ${name}`)
 
       const moduleStart = completedWeight / totalWeight
       const moduleWeight = artifact.size / totalWeight
@@ -172,13 +179,13 @@ async function runRequiredModuleStartup(
             onHealthProgress: (progress) => {
               publish({
                 phase: 'health',
-                detail: '正在检查本地 API',
+                detail: '正在检查本地服务',
                 progress: mapHealthProgress(progress),
                 activeModule: 'rust-http-api',
               })
             },
           })
-          if (!updated) throw new Error('Rust HTTP API 更新后健康检查失败')
+          if (!updated) throw new Error('系统核心模块更新后运行检查未通过')
         } else {
           await installFunctionalModule({ name }, {
             ...moduleOptions,
@@ -198,9 +205,9 @@ async function runRequiredModuleStartup(
       completedWeight += artifact.size
     }
 
-    publish({ phase: 'modules', detail: '功能模块已准备完成', progress: MODULE_PROGRESS_END })
+    publish({ phase: 'modules', detail: '必要组件已准备完成', progress: MODULE_PROGRESS_END })
     if (!await ensureFormalHttpApiHealth(options, publish)) {
-      throw new Error('本地 Rust HTTP API 未通过 health 检查')
+      throw new Error('系统核心模块未通过运行检查')
     }
     await syncWorkingAccessToken(getWorkingTokenStore().getToken())
     const statuses = getFunctionalModuleStatuses(options.rootDir).map((status) => {
@@ -214,7 +221,7 @@ async function runRequiredModuleStartup(
         } : {}),
       }
     })
-    publish({ phase: 'ready', detail: '所有功能模块已就绪', progress: 1 })
+    publish({ phase: 'ready', detail: '必要组件已准备完成', progress: 1 })
     return statuses
   } catch (error) {
     const detail = toStartupError(error)
@@ -233,7 +240,7 @@ async function runDevelopmentHealthCheck(
     onHealthProgress: (progress: number): void => {
       publish({
         phase: 'health',
-        detail: '正在检查本地 API',
+        detail: '正在检查本地服务',
         progress: mapHealthProgress(progress),
         activeModule: 'rust-http-api',
       })
@@ -242,17 +249,17 @@ async function runDevelopmentHealthCheck(
 
   startHttpApiServer(createHttpApiOptions(options))
   if (await waitForHttpApiHealth(HTTP_API_PORT, healthOptions)) {
-    publish({ phase: 'ready', detail: '本地 API 已通过 health 检查', progress: 1, activeModule: 'rust-http-api' })
+    publish({ phase: 'ready', detail: '本地服务运行正常', progress: 1, activeModule: 'rust-http-api' })
     return []
   }
 
   await stopHttpApiServer(options.stopTimeoutMs)
   startHttpApiServer(createHttpApiOptions(options))
   if (await waitForHttpApiHealth(HTTP_API_PORT, healthOptions)) {
-    publish({ phase: 'ready', detail: '本地 API 已通过 health 检查', progress: 1, activeModule: 'rust-http-api' })
+    publish({ phase: 'ready', detail: '本地服务运行正常', progress: 1, activeModule: 'rust-http-api' })
     return []
   }
-  throw new Error('开发模式本地 Rust HTTP API 未通过 health 检查')
+  throw new Error('系统核心模块未通过运行检查')
 }
 
 async function ensureFormalHttpApiHealth(
@@ -268,7 +275,7 @@ async function ensureFormalHttpApiHealth(
     onHealthProgress: (progress: number): void => {
       publish({
         phase: 'health',
-        detail: '正在检查本地 API',
+        detail: '正在检查本地服务',
         progress: mapHealthProgress(progress),
         activeModule: 'rust-http-api',
       })
@@ -319,7 +326,7 @@ function createHttpApiOptions(options: FunctionalModuleStartupOptions & { rootDi
 }
 
 function displayName(name: FunctionalModuleName): string {
-  return name === 'officecli' ? 'OfficeCLI' : 'Rust HTTP API'
+  return name === 'officecli' ? 'Office 文档支持' : '系统核心模块'
 }
 
 function clamp01(value: number): number {

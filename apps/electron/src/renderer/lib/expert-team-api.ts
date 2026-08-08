@@ -12,6 +12,7 @@ import type {
   ExpertTeamWorkspaceBinding,
 } from '@copis/shared'
 import { RENDERER_HTTP_API_BASE_URL } from './http-api-base-url'
+import { withHttpApiWebToken } from './http-api-web-token'
 
 const EXPERT_TEAM_API_BASE_URL = RENDERER_HTTP_API_BASE_URL
 const STARTUP_RETRY_COUNT = 20
@@ -61,14 +62,14 @@ async function fetchWithStartupRetry(path: string, init: RequestInit): Promise<R
 }
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
-  const response = await fetchWithStartupRetry(path, {
+  const response = await fetchWithStartupRetry(path, withHttpApiWebToken({
     ...init,
     headers: {
       Accept: 'application/json',
       ...(init.body === undefined ? {} : { 'Content-Type': 'application/json' }),
       ...init.headers,
     },
-  })
+  }))
   const payload = await readPayload(response)
   if (!response.ok) {
     const errorPayload = isRecord(payload) ? payload : undefined

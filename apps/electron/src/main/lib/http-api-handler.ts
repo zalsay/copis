@@ -109,6 +109,7 @@ export interface AgentHttpFacade {
   listAgentWorkspaces: () => AgentWorkspace[]
   listAgentSessions: () => AgentSessionMeta[]
   getAgentSessionMeta: (id: string) => AgentSessionMeta | undefined
+  deleteAgentSession: (id: string) => void
   clearAgentCompletionState: (id: string) => AgentSessionMeta
   createAgentSession: (
     title?: string,
@@ -156,6 +157,7 @@ function getDefaultAgentApi(): Promise<AgentHttpFacade> {
       listAgentWorkspaces: workspaceManager.listAgentWorkspaces,
       listAgentSessions: sessionManager.listAgentSessions,
       getAgentSessionMeta: sessionManager.getAgentSessionMeta,
+      deleteAgentSession: sessionManager.deleteAgentSession,
       clearAgentCompletionState: (id: string) => {
         const current = sessionManager.getAgentSessionMeta(id)
         if (!current) throw new Error(`Agent session not found: ${id}`)
@@ -386,6 +388,11 @@ async function handleAgentRequest(
 
   const sessionId = decodePathSegment(action)
   const session = getRequiredAgentSession(api, sessionId)
+
+  if (sessionAction === undefined && method === 'DELETE') {
+    api.deleteAgentSession(session.id)
+    return { status: 204 }
+  }
 
   if (sessionAction === 'messages' && method === 'GET') {
     return {
@@ -890,6 +897,65 @@ async function handleFileRequest(
   throw new HttpApiRequestError('文件 API 路径不存在', 404, 'not_found')
 }
 
+/**
+ * 工作区 MCP 扩展路由（Rust 直管 mcp.json 的 GET/PUT 之外的部分）：
+ * - GET  /api/workspaces/:slug/mcp/builtin        内置 MCP 列表
+ * - PATCH /api/workspaces/:slug/mcp/builtin/:id   内置 MCP 开关
+ * - POST  /api/workspaces/:slug/mcp/test          连接测试
+ *
+ * 内置 MCP 目录与开关依赖 Electron 设置/工具凭据状态，连接测试依赖
+ * 本地进程环境，因此这些路由通过业务桥在 Electron 侧实现。
+ */
+async function handleWorkspaceMcpRequest(
+  request: HttpApiRequest,
+  segments: string[],
+): Promise<HttpApiResponse> {
+  const workspaceSlug = segments[2]
+  if (!workspaceSlug) {
+    throw new HttpApiRequestError('工作区 slug 不正确', 400, 'invalid_workspace')
+  }
+
+  if (request.method === 'GET' && segments[4] === 'builtin') {
+    const { listBuiltinMcpServers } = await import('./builtin-mcp/catalog')
+    return { status: 200, body: listBuiltinMcpServers({ workspaceSlug }) }
+  }
+
+  if (request.method === 'PATCH' && segments[4] === 'builtin' && segments[5]) {
+    const body = requireRecord(await readJsonBody(request))
+    const enabled = body.enabled
+    if (typeof enabled !== 'boolean') {
+      throw new HttpApiRequestError('enabled 参数不正确', 400, 'invalid_request')
+    }
+    const [{ setBuiltinMcpUserEnabled }, { listBuiltinMcpServers }] = await Promise.all([
+      import('./builtin-mcp/settings'),
+      import('./builtin-mcp/catalog'),
+    ])
+    setBuiltinMcpUserEnabled(segments[5], enabled)
+    return { status: 200, body: listBuiltinMcpServers({ workspaceSlug }) }
+  }
+
+  throw new HttpApiRequestError('MCP 路径不存在', 404, 'not_found')
+}
+
+/** 测试 MCP 服务器连接（POST /api/mcp/test） */
+async function handleMcpTestRequest(request: HttpApiRequest): Promise<HttpApiResponse> {
+  const body = requireRecord(await readJsonBody(request))
+  const name = requireString(body, 'name', 'MCP 名称不正确')
+  const entry = body.entry
+  if (!isRecord(entry)) {
+    throw new HttpApiRequestError('MCP 配置不正确', 400, 'invalid_request')
+  }
+  const { validateMcpServer } = await import('./mcp-validator')
+  const result = await validateMcpServer(name, entry as unknown as import('@copis/shared').McpServerEntry)
+  return {
+    status: 200,
+    body: {
+      success: result.valid,
+      message: result.valid ? '连接成功' : (result.reason || '连接失败'),
+    },
+  }
+}
+
 export async function handleHttpApiRequest(
   request: HttpApiRequest,
   dependencies: HttpApiDependencies = defaultDependencies,
@@ -933,6 +999,12 @@ export async function handleHttpApiRequest(
       throw new HttpApiRequestError('HTTP API 路径不存在', 404, 'not_found')
     }
 
+    if (segments[1] === 'workspaces' && segments[2] && segments[3] === 'mcp') {
+      return await handleWorkspaceMcpRequest(request, segments)
+    }
+    if (segments[1] === 'mcp' && segments[2] === 'test') {
+      return await handleMcpTestRequest(request)
+    }
     if (segments[1] === 'internal' && segments[2] === 'expert-teams') {
       return await handleExpertTeamInternalRequest(request, segments, dependencies)
     }

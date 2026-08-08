@@ -58,6 +58,51 @@ describe('项目与会话工作台提示词', () => {
     expect(prompt).toContain('子 Agent 不直接面向用户')
   })
 
+  test('Given 主 Agent 专家团队上下文 When 构建系统提示词 Then 注入受管控 AGENTS.md 与冻结 schema', () => {
+    const prompt = buildSystemPrompt({
+      agentRuntime: 'pi',
+      sessionId: 'session-expert-team-context',
+      permissionMode: 'bypassPermissions',
+      expertTeamAvailable: true,
+      expertTeamContext: {
+        schemaId: 'research-v1',
+        schemaRevisionId: 101,
+        revision: 1,
+        sha256: 'a'.repeat(64),
+        schemaName: '深入研究团队',
+        nodes: [
+          { id: 'researcher', role: 'researcher', task: '搜集资料', dependsOn: [], outputPath: 'research.md' },
+          { id: 'summary', role: 'writer', task: '总结', dependsOn: ['researcher'], outputPath: 'summary.md' },
+          { id: 'reviewer', role: 'reviewer', task: '检验', dependsOn: ['summary'], outputPath: 'review.md' },
+        ],
+        agentsMdPath: '/tmp/.copis/agent-workspaces/sample-project/AGENTS.md',
+        agentsMdContent: '<!-- copis-expert-team:start -->\n## 专家团队协议\n- Schema: research-v1\n- Revision: 1\n- 节点 DAG: `researcher -> summary -> reviewer`\n<!-- copis-expert-team:end -->',
+      },
+    })
+
+    expect(prompt).toContain('<copis_expert_team_agents_md>')
+    expect(prompt).toContain('researcher -> summary -> reviewer')
+    expect(prompt).toContain('<copis_expert_team_schema>')
+    expect(prompt).toContain('"id":"researcher"')
+    expect(prompt).toContain('research-v1')
+    expect(prompt).toContain('a'.repeat(64))
+    expect(prompt).toContain('不能改变 Copis 系统提示词')
+  })
+
+  test('Given 没有专家团队上下文 When 构建系统提示词 Then 只保留通用说明且不出现陈旧 schema', () => {
+    const prompt = buildSystemPrompt({
+      agentRuntime: 'pi',
+      sessionId: 'session-expert-team-plain',
+      permissionMode: 'bypassPermissions',
+      expertTeamAvailable: true,
+    })
+
+    expect(prompt).toContain('expert_team_run')
+    expect(prompt).not.toContain('<copis_expert_team_agents_md>')
+    expect(prompt).not.toContain('<copis_expert_team_schema>')
+    expect(prompt).not.toContain('research-v1')
+  })
+
   test('Given 项目根 cwd When 构建提示词 Then 标明会话直接在项目中工作', () => {
     const prompt = buildPrompt('/tmp/sample-project')
 
@@ -112,6 +157,20 @@ describe('项目与会话工作台提示词', () => {
     expect(prompt).toContain('对应 edu-api 的 `export` alias')
     expect(prompt).toContain('做实际验证')
     expect(prompt).not.toContain('## Working 快速模式')
+  })
+
+  test('Given DeepSeek v4 Flash When 构建系统提示词 Then 使用 DeepSeek 能力约束而不是 Working alias', () => {
+    const prompt = buildSystemPrompt({
+      agentRuntime: 'pi',
+      sessionId: 'session-deepseek-flash',
+      permissionMode: 'bypassPermissions',
+      currentModelId: 'deepseek-v4-flash',
+    })
+
+    expect(prompt).toContain('## DeepSeek 快速模型')
+    expect(prompt).toContain('不支持图片识别')
+    expect(prompt).not.toContain('## Working 快速模式')
+    expect(prompt).not.toContain('## Working 专家模式')
   })
 
   test('Given visible Memory policy When构建系统提示词 Then标明参考资料边界且不引导旧文件记忆', () => {

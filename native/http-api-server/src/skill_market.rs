@@ -192,7 +192,7 @@ pub fn extract_skill_archive(archive: &[u8], destination: &Path) -> Result<PathB
     fs::create_dir_all(destination).map_err(|_| "创建技能包临时目录失败".to_string())?;
     let mut zip =
         ZipArchive::new(Cursor::new(archive)).map_err(|_| "技能包不是有效 ZIP".to_string())?;
-    if zip.len() == 0 || zip.len() > MAX_PACKAGE_FILES {
+    if zip.is_empty() || zip.len() > MAX_PACKAGE_FILES {
         return Err("技能包文件数量无效".to_string());
     }
 
@@ -311,6 +311,11 @@ fn install_market(
     let lock = state.install_lock(&format!("{}:{}", workspace_slug, skill_id));
     let _guard = lock.lock().unwrap();
 
+    // 记录安装前本地是否已存在该 Skill，用于失败回滚时判断远端安装是否需要撤销
+    let had_local = find_local_market_skill(workspace_slug, skill_id)
+        .map(|path| path.is_some())
+        .unwrap_or(false);
+
     let path = format!(
         "/api/working/expert-skills/{}/install",
         encode_path_component(skill_id)
@@ -322,35 +327,60 @@ fn install_market(
     validate_skill_slug(&slug)
         .map_err(|message| SkillMarketError::new(502, "invalid_skill_response", message))?;
 
-    let runtime_payload = remote_json("GET", "/api/working/expert-skills/runtime", token, None)?;
-    let runtime_items = runtime_payload.as_array().ok_or_else(|| {
-        SkillMarketError::new(
-            502,
-            "invalid_skill_response",
-            "Working runtime 响应格式不正确",
-        )
-    })?;
-    let runtime = runtime_items
-        .iter()
-        .find(|item| string_value(item, &["slug"]).as_deref() == Some(slug.as_str()))
-        .map(runtime_package);
-    let runtime = runtime.ok_or_else(|| {
-        SkillMarketError::new(
-            502,
-            "runtime_skill_not_found",
-            format!("Working runtime 未返回已安装 Skill: {}", slug),
-        )
-    })?;
+    let install_result = (|| -> Result<Value, SkillMarketError> {
+        let runtime_payload =
+            remote_json("GET", "/api/working/expert-skills/runtime", token, None)?;
+        let runtime_items = runtime_payload.as_array().ok_or_else(|| {
+            SkillMarketError::new(
+                502,
+                "invalid_skill_response",
+                "Working runtime 响应格式不正确",
+            )
+        })?;
+        let runtime = runtime_items
+            .iter()
+            .find(|item| string_value(item, &["slug"]).as_deref() == Some(slug.as_str()))
+            .map(runtime_package);
+        let runtime = runtime.ok_or_else(|| {
+            SkillMarketError::new(
+                502,
+                "runtime_skill_not_found",
+                format!("Working runtime 未返回已安装 Skill: {}", slug),
+            )
+        })?;
 
-    let archive = match runtime.download_url.as_deref() {
-        Some(url) => Some(download_archive(
-            url,
-            runtime.size,
-            runtime.sha256.as_deref(),
-        )?),
-        None => None,
+        let archive = match runtime.download_url.as_deref() {
+            Some(url) => Some(download_archive(
+                url,
+                runtime.size,
+                runtime.sha256.as_deref(),
+            )?),
+            None => None,
+        };
+        install_into_workspace(workspace_slug, &market_skill, &runtime, archive.as_deref())
+    })();
+    let meta = match install_result {
+        Ok(meta) => meta,
+        Err(error) => {
+            // 远端安装已成功而本地安装失败：若此前本地没有该 Skill 且其他工作区也没有，
+            // 回滚远端安装状态，避免两端不一致；无法判断时保守不回滚。
+            let other_workspace_has = market_skill_in_other_workspace(workspace_slug, skill_id)
+                .unwrap_or(true);
+            if !had_local && !other_workspace_has {
+                match remote_json("DELETE", &path, token, None) {
+                    Ok(_) => eprintln!(
+                        "[skill-market] 本地安装失败，已回滚远端安装状态: {}",
+                        slug
+                    ),
+                    Err(rollback_error) => eprintln!(
+                        "[skill-market] 本地安装失败且远端回滚失败: {} ({})",
+                        rollback_error.message, rollback_error.code
+                    ),
+                }
+            }
+            return Err(error);
+        }
     };
-    let meta = install_into_workspace(workspace_slug, &market_skill, &runtime, archive.as_deref())?;
     Ok(SkillMarketResponse {
         status: 200,
         body: Some(meta),
@@ -661,6 +691,16 @@ fn merge_local_status(item: &Value, local: &[LocalMarketSkill]) -> Result<Value,
 }
 
 fn remove_local_market_skill(workspace_slug: &str, skill_id: &str) -> Result<(), SkillMarketError> {
+    if let Some(path) = find_local_market_skill(workspace_slug, skill_id)? {
+        remove_path(&path)?;
+    }
+    Ok(())
+}
+
+fn find_local_market_skill(
+    workspace_slug: &str,
+    skill_id: &str,
+) -> Result<Option<PathBuf>, SkillMarketError> {
     let root = workspace_dir(workspace_slug)?;
     for directory in [
         root.join(".agents").join("skills"),
@@ -685,12 +725,11 @@ fn remove_local_market_skill(workspace_slug: &str, skill_id: &str) -> Result<(),
                 .map(|value| same_id(value, &Value::String(skill_id.to_string())))
                 .unwrap_or(false)
             {
-                remove_path(&path)?;
-                return Ok(());
+                return Ok(Some(path));
             }
         }
     }
-    Ok(())
+    Ok(None)
 }
 
 fn market_skill_in_other_workspace(
@@ -701,33 +740,8 @@ fn market_skill_in_other_workspace(
         if slug == current_slug {
             continue;
         }
-        let root = workspace_dir(&slug)?;
-        for directory in [
-            root.join(".agents").join("skills"),
-            root.join(".agents").join("skills-inactive"),
-            root.join("skills"),
-            root.join("skills-inactive"),
-        ] {
-            let entries = match fs::read_dir(&directory) {
-                Ok(entries) => entries,
-                Err(_) => continue,
-            };
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if !entry.file_type().map(|kind| kind.is_dir()).unwrap_or(false) {
-                    continue;
-                }
-                let Some(source) = read_market_source(&path) else {
-                    continue;
-                };
-                if source
-                    .get("id")
-                    .map(|value| same_id(value, &Value::String(skill_id.to_string())))
-                    .unwrap_or(false)
-                {
-                    return Ok(true);
-                }
-            }
+        if find_local_market_skill(&slug, skill_id)?.is_some() {
+            return Ok(true);
         }
     }
     Ok(false)
@@ -1154,230 +1168,5 @@ fn civil_date_from_days(days_since_epoch: i64) -> (i32, u32, u32) {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::{
-        civil_date_from_days, extract_skill_archive, handle_request, parse_skill_market_route,
-        validate_skill_slug, SkillMarketRoute, SkillMarketState,
-    };
-    use std::fs;
-    use std::io::{Read, Write};
-    use std::net::TcpListener;
-    use std::sync::mpsc;
-    use zip::write::SimpleFileOptions;
-    use zip::ZipWriter;
-
-    #[test]
-    fn parses_list_install_and_uninstall_routes() {
-        assert_eq!(
-            parse_skill_market_route("GET", "/api/working/skill-market?workspaceSlug=demo")
-                .unwrap(),
-            SkillMarketRoute::List {
-                workspace_slug: "demo".to_string(),
-            },
-        );
-        assert_eq!(
-            parse_skill_market_route(
-                "POST",
-                "/api/working/skill-market/12/install?workspaceSlug=demo",
-            )
-            .unwrap(),
-            SkillMarketRoute::Install {
-                workspace_slug: "demo".to_string(),
-                skill_id: "12".to_string(),
-            },
-        );
-        assert_eq!(
-            parse_skill_market_route(
-                "DELETE",
-                "/api/working/skill-market/12/install?workspaceSlug=demo",
-            )
-            .unwrap(),
-            SkillMarketRoute::Uninstall {
-                workspace_slug: "demo".to_string(),
-                skill_id: "12".to_string(),
-            },
-        );
-    }
-
-    #[test]
-    fn rejects_invalid_skill_slugs() {
-        assert!(validate_skill_slug("weekly-report").is_ok());
-        assert!(validate_skill_slug("../escape").is_err());
-        assert!(validate_skill_slug("contains space").is_err());
-        assert!(validate_skill_slug("a/child").is_err());
-    }
-
-    #[test]
-    fn converts_epoch_days_to_utc_calendar_dates() {
-        assert_eq!(civil_date_from_days(0), (1970, 1, 1));
-        assert_eq!(civil_date_from_days(20_000), (2024, 10, 4));
-    }
-
-    #[test]
-    fn extracts_a_skill_archive_inside_the_destination() {
-        let mut archive = std::io::Cursor::new(Vec::new());
-        {
-            let mut writer = ZipWriter::new(&mut archive);
-            writer
-                .start_file("weekly-report/SKILL.md", SimpleFileOptions::default())
-                .unwrap();
-            writer
-                .write_all(b"---\nname: weekly-report\n---\n")
-                .unwrap();
-            writer.finish().unwrap();
-        }
-        let destination =
-            std::env::temp_dir().join(format!("copis-skill-market-test-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&destination);
-        let root = extract_skill_archive(archive.get_ref(), &destination).unwrap();
-        assert!(root.starts_with(&destination));
-        assert!(root.join("SKILL.md").is_file());
-        let _ = fs::remove_dir_all(&destination);
-    }
-
-    #[test]
-    fn rejects_zip_slip_paths_before_writing_outside_the_destination() {
-        let mut archive = std::io::Cursor::new(Vec::new());
-        {
-            let mut writer = ZipWriter::new(&mut archive);
-            writer
-                .start_file("../escape/SKILL.md", SimpleFileOptions::default())
-                .unwrap();
-            writer.write_all(b"unsafe").unwrap();
-            writer.finish().unwrap();
-        }
-        let destination =
-            std::env::temp_dir().join(format!("copis-skill-market-slip-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&destination);
-        assert!(extract_skill_archive(archive.get_ref(), &destination).is_err());
-        assert!(!destination.parent().unwrap().join("escape").exists());
-        let _ = fs::remove_dir_all(&destination);
-    }
-
-    #[test]
-    fn handles_market_list_install_and_uninstall_without_electron_bridge() {
-        let suffix = format!("{}-{}", std::process::id(), super::unique_suffix());
-        let config_dir = std::env::temp_dir().join(format!("copis-skill-market-e2e-{}", suffix));
-        let workspace_dir = config_dir.join("agent-workspaces").join("demo");
-        fs::create_dir_all(&workspace_dir).unwrap();
-        fs::write(
-            config_dir.join("agent-workspaces.json"),
-            r#"{"version":2,"workspaces":[{"slug":"demo"}]}"#,
-        )
-        .unwrap();
-
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let port = listener.local_addr().unwrap().port();
-        let (ready_tx, ready_rx) = mpsc::channel();
-        let backend = std::thread::spawn(move || {
-            ready_tx.send(()).unwrap();
-            for _ in 0..5 {
-                let (mut stream, _) = listener.accept().unwrap();
-                let mut request = Vec::new();
-                let mut buffer = [0_u8; 8192];
-                loop {
-                    let read = stream.read(&mut buffer).unwrap();
-                    if read == 0 {
-                        break;
-                    }
-                    request.extend_from_slice(&buffer[..read]);
-                    if request.windows(4).any(|window| window == b"\r\n\r\n") {
-                        break;
-                    }
-                }
-                let request_text = String::from_utf8_lossy(&request);
-                let path = request_text.split_whitespace().nth(1).unwrap_or_default();
-                let method = request_text.split_whitespace().next().unwrap_or_default();
-                let body = match (method, path.split('?').next().unwrap_or(path)) {
-                    ("GET", "/api/working/expert-skills") => {
-                        r#"[{"id":12,"slug":"weekly-report","name":"周报","description":"整理周报","version":"1.2.0","installed":false,"sourceProvider":"skillhub"}]"#
-                    }
-                    ("POST", "/api/working/expert-skills/12/install") => {
-                        r#"{"id":12,"slug":"weekly-report","name":"周报","description":"整理周报","version":"1.2.0","installed":true,"sourceProvider":"skillhub"}"#
-                    }
-                    ("GET", "/api/working/expert-skills/runtime") => {
-                        r#"[{"slug":"weekly-report","name":"周报","description":"整理周报","version":"1.2.0","instructions":"生成周报"}]"#
-                    }
-                    ("DELETE", "/api/working/expert-skills/12/install") => "{}",
-                    _ => panic!("unexpected backend request: {} {}", method, path),
-                };
-                let response = format!(
-                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                    body.len(),
-                    body,
-                );
-                stream.write_all(response.as_bytes()).unwrap();
-            }
-        });
-        ready_rx.recv().unwrap();
-
-        let previous_backend = std::env::var("COPIS_BACKEND_URL").ok();
-        let previous_config = std::env::var("COPIS_CONFIG_DIR").ok();
-        std::env::set_var("COPIS_BACKEND_URL", format!("http://127.0.0.1:{}", port));
-        std::env::set_var("COPIS_CONFIG_DIR", &config_dir);
-        let state = SkillMarketState::new(Some("market-token".to_string()));
-
-        let listed = handle_request(
-            &state,
-            "GET",
-            "/api/working/skill-market?workspaceSlug=demo",
-            &[],
-        )
-        .unwrap();
-        assert_eq!(listed.status, 200);
-        assert_eq!(listed.body.unwrap()[0]["localInstalled"], false);
-
-        let installed = handle_request(
-            &state,
-            "POST",
-            "/api/working/skill-market/12/install?workspaceSlug=demo",
-            b"{}",
-        )
-        .unwrap();
-        assert_eq!(installed.status, 200);
-        assert!(workspace_dir
-            .join(".agents/skills/weekly-report/SKILL.md")
-            .is_file());
-        assert!(workspace_dir
-            .join(".agents/skills/weekly-report/.market.json")
-            .is_file());
-        let market_source =
-            fs::read_to_string(workspace_dir.join(".agents/skills/weekly-report/.market.json"))
-                .unwrap();
-        assert!(market_source.contains("\"installedAt\": \"20"));
-        assert!(market_source.contains('T'));
-
-        let listed_after_install = handle_request(
-            &state,
-            "GET",
-            "/api/working/skill-market?workspaceSlug=demo",
-            &[],
-        )
-        .unwrap();
-        assert_eq!(
-            listed_after_install.body.unwrap()[0]["localInstalled"],
-            true
-        );
-
-        let removed = handle_request(
-            &state,
-            "DELETE",
-            "/api/working/skill-market/12/install?workspaceSlug=demo",
-            &[],
-        )
-        .unwrap();
-        assert_eq!(removed.status, 204);
-        assert!(!workspace_dir.join(".agents/skills/weekly-report").exists());
-
-        backend.join().unwrap();
-        match previous_backend {
-            Some(value) => std::env::set_var("COPIS_BACKEND_URL", value),
-            None => std::env::remove_var("COPIS_BACKEND_URL"),
-        }
-        match previous_config {
-            Some(value) => std::env::set_var("COPIS_CONFIG_DIR", value),
-            None => std::env::remove_var("COPIS_CONFIG_DIR"),
-        }
-        let _ = fs::remove_dir_all(config_dir);
-    }
-}
+#[path = "skill_market_tests.rs"]
+mod tests;

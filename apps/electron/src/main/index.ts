@@ -1,6 +1,7 @@
 import { app, BrowserWindow, dialog, Menu, nativeTheme, protocol, screen, shell } from 'electron'
 import { join } from 'path'
 import { existsSync } from 'fs'
+import { httpApiWebTokenArgument } from './lib/http-api-web-token'
 
 app.setName('Copis')
 if (process.platform === 'win32') {
@@ -373,6 +374,7 @@ function createWindow(): void {
       preload: join(__dirname, 'preload.cjs'),
       contextIsolation: true,
       nodeIntegration: false,
+      additionalArguments: [httpApiWebTokenArgument()],
     },
     ...titleBarOptions,
   })

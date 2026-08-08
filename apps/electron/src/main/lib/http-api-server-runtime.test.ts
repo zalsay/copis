@@ -22,6 +22,7 @@ mock.module('electron', () => ({
     getPath: () => '/tmp/copis-http-api-runtime-test',
   },
   BrowserWindow: class {},
+  WebContentsView: class {},
   clipboard: {},
   dialog: {},
   nativeImage: { createFromPath: () => ({}) },

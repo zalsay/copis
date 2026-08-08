@@ -10,6 +10,7 @@ import { randomUUID } from 'node:crypto'
 import { join } from 'node:path'
 import { WEB_IPC_CHANNELS } from '@copis/shared'
 import { getPersistedWebTabs, savePersistedWebTabs } from './web-tab-session-service'
+import { httpApiWebTokenArgument } from './http-api-web-token'
 import type {
   CreateWebTabInput,
   NavigateWebTabInput,
@@ -437,6 +438,7 @@ export function openWebBookmarksWindow(input: OpenWebBookmarksWindowInput): void
       preload: join(__dirname, 'preload.cjs'),
       contextIsolation: true,
       nodeIntegration: false,
+      additionalArguments: [httpApiWebTokenArgument()],
     },
   })
   bookmarksWindow = window

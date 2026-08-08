@@ -39,8 +39,8 @@
   height: 34px;
   place-items: center;
   border-radius: 10px;
-  background: hsl(var(--primary) / 0.12);
-  color: hsl(var(--primary));
+  background: var(--ui-primary-background);
+  color: var(--ui-primary);
 }
 
 .copis-working-settings-account-icon svg {
@@ -98,7 +98,7 @@
 
 .copis-working-settings-nav-button:hover,
 .copis-working-settings-nav-button.active {
-  background: hsl(var(--primary) / 0.11);
+  background: var(--ui-primary-background);
   color: hsl(var(--foreground));
 }
 
@@ -150,7 +150,7 @@
   flex: 0 0 21px;
   width: 21px;
   height: 21px;
-  color: hsl(var(--primary));
+  color: var(--ui-primary);
 }
 
 .copis-working-settings-header h1 {
@@ -262,7 +262,7 @@
 
 .copis-working-settings-grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 14px;
 }
 
@@ -299,7 +299,7 @@
 .copis-working-settings-card-heading-title > svg {
   width: 16px;
   height: 16px;
-  color: hsl(var(--primary));
+  color: var(--ui-primary);
 }
 
 .copis-working-settings-card-heading-title {
@@ -339,14 +339,15 @@
 }
 
 .copis-working-settings-primary-button {
-  border-color: hsl(var(--primary) / 0.5);
-  background: hsl(var(--primary) / 0.16);
+  border-color: color-mix(in srgb, var(--ui-primary) 50%, transparent);
+  background: color-mix(in srgb, var(--ui-primary) 16%, var(--ui-primary-background));
+  color: var(--ui-primary);
 }
 
 .copis-working-settings-vip-button {
-  border-color: hsl(43 85% 52% / 0.38);
-  background: hsl(43 85% 52% / 0.13);
-  color: hsl(43 95% 68%);
+  border-color: color-mix(in srgb, var(--ui-primary) 38%, transparent);
+  background: color-mix(in srgb, var(--ui-primary) 13%, var(--ui-primary-background));
+  color: var(--ui-primary);
 }
 
 .copis-working-settings-card > strong {
@@ -366,7 +367,7 @@
 
 .copis-working-settings-balance {
   margin-top: 22px !important;
-  color: hsl(43 90% 62%) !important;
+  color: var(--ui-primary) !important;
   font-size: 28px !important;
   font-variant-numeric: tabular-nums;
 }
@@ -400,7 +401,7 @@
   border: 0;
   border-radius: 6px;
   background: transparent;
-  color: hsl(var(--primary));
+  color: var(--ui-primary);
   font: inherit;
   font-size: 12px;
   cursor: pointer;
@@ -435,7 +436,7 @@
 }
 
 .copis-working-settings-ledger-daily-total strong {
-  color: hsl(43 90% 62%);
+  color: var(--ui-primary);
   font-size: 16px;
   font-variant-numeric: tabular-nums;
 }
@@ -504,7 +505,7 @@
 .copis-working-settings-empty svg {
   width: 24px;
   height: 24px;
-  color: hsl(43 90% 62%);
+  color: var(--ui-primary);
 }
 
 @media (max-width: 900px) {

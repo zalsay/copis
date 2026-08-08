@@ -124,7 +124,7 @@
 .copis-working-menu-button:hover,
 .copis-working-menu-button:focus-visible,
 .copis-working-conversation-row:hover,
-.copis-working-conversation-row:focus-visible,
+.copis-working-conversation-row:focus-within,
 .copis-working-sidebar-muted:hover,
 .copis-working-sidebar-muted:focus-visible,
 .copis-working-sidebar-account:hover,
@@ -270,9 +270,11 @@
 
 .copis-working-project-main > small {
   flex: 0 0 auto;
-  color: #8f8f99;
+  padding: 1px 5px;
+  border-radius: 999px;
   font-size: 10px;
   font-weight: 520;
+  line-height: 1.2;
 }
 
 .copis-working-project-collapse,
@@ -365,7 +367,7 @@
   min-height: 29px;
   padding: 4px 8px;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) auto 22px;
   align-items: center;
   gap: 8px;
   border-radius: 7px;
@@ -378,11 +380,35 @@
   background: rgba(255, 255, 255, 0.055);
 }
 
-.copis-working-conversation-row > span {
+.copis-working-conversation-main {
+  min-width: 0;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  font: inherit;
+  cursor: pointer;
+}
+
+.copis-working-conversation-main:focus-visible {
+  outline: 0;
+}
+
+.copis-working-conversation-main > span {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.copis-working-conversation-meta {
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
 }
 
 .copis-working-conversation-row small {
@@ -399,6 +425,45 @@
 
 .copis-working-conversation-row svg.completed {
   color: #42d17a;
+}
+
+.copis-working-conversation-delete {
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #a8a8b0;
+  cursor: pointer;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.copis-working-conversation-row:hover .copis-working-conversation-delete,
+.copis-working-conversation-row:focus-within .copis-working-conversation-delete {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.copis-working-conversation-delete:hover:not(:disabled),
+.copis-working-conversation-delete:focus-visible {
+  background: hsl(var(--destructive) / 0.12);
+  color: hsl(var(--destructive));
+  outline: 0;
+}
+
+.copis-working-conversation-delete:disabled {
+  cursor: not-allowed;
+  opacity: 0.35;
+}
+
+.copis-working-conversation-delete svg {
+  width: 14px;
+  height: 14px;
+  color: inherit;
 }
 
 .copis-working-conversation-empty,

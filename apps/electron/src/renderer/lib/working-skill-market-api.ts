@@ -1,5 +1,6 @@
 import type { SkillMeta, WorkingExpertSkillMarketItem } from '@copis/shared'
 import { RENDERER_HTTP_API_BASE_URL } from './http-api-base-url'
+import { withHttpApiWebToken } from './http-api-web-token'
 
 const WORKING_HTTP_API_URL = RENDERER_HTTP_API_BASE_URL
 const STARTUP_RETRY_COUNT = 20
@@ -45,14 +46,14 @@ async function fetchWithStartupRetry(path: string, init: RequestInit): Promise<R
 }
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
-  const response = await fetchWithStartupRetry(path, {
+  const response = await fetchWithStartupRetry(path, withHttpApiWebToken({
     ...init,
     headers: {
       Accept: 'application/json',
       ...(init.body === undefined ? {} : { 'Content-Type': 'application/json' }),
       ...init.headers,
     },
-  })
+  }))
   const text = await response.text()
   let payload: unknown
   if (text) {

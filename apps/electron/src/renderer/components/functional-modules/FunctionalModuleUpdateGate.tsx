@@ -13,6 +13,8 @@ import { detectIsWindows, WINDOW_CONTROLS_INSET_RIGHT } from '@/lib/platform'
 import { cn } from '@/lib/utils'
 import {
   formatStartupBytes,
+  getStartupErrorLabel,
+  getStartupModuleDetail,
   getStartupModuleRowsForMode,
   getStartupPhaseLabel,
 } from './functional-module-startup-ui'
@@ -23,7 +25,7 @@ interface FunctionalModuleUpdateGateProps {
 
 const INITIAL_PROGRESS: FunctionalModuleStartupProgressPayload = {
   phase: 'checking',
-  detail: '正在检查功能模块版本',
+  detail: '正在检查必要组件',
   progress: 0,
 }
 
@@ -64,10 +66,10 @@ export function FunctionalModuleUpdateGate({ children }: FunctionalModuleUpdateG
       const nextStatuses = await window.electronAPI.ensureRequiredFunctionalModules()
       setStatuses((current) => mergeStatuses(current, nextStatuses))
       setBusy({ 'officecli': false, 'rust-http-api': false })
-      setStartup({ phase: 'ready', detail: '所有功能模块已就绪', progress: 1, error: null })
+      setStartup({ phase: 'ready', detail: '本地服务运行正常', progress: 1, error: null })
       window.setTimeout(() => setReleased(true), 260)
     } catch (error) {
-      const message = error instanceof Error ? error.message : '功能模块更新失败，请重试'
+      const message = error instanceof Error ? error.message : '必要组件准备失败，请重试'
       setBusy({ 'officecli': false, 'rust-http-api': false })
       setStartup((current) => ({
         ...current,
@@ -80,7 +82,7 @@ export function FunctionalModuleUpdateGate({ children }: FunctionalModuleUpdateG
 
   React.useEffect(() => {
     if (isHttpApiBridgeActive()) {
-      setStartup({ phase: 'ready', detail: '浏览器模式', progress: 1, error: null })
+      setStartup({ phase: 'ready', detail: '浏览器版已准备好', progress: 1, error: null })
       setReleased(true)
       return undefined
     }
@@ -127,7 +129,7 @@ export function FunctionalModuleUpdateGate({ children }: FunctionalModuleUpdateG
     <main
       className="flex h-full min-h-0 overflow-auto bg-background text-foreground"
       aria-busy={!isError && startup.phase !== 'ready'}
-      aria-label="Copis 功能模块更新"
+      aria-label="Copis 启动准备"
     >
       <div className="flex min-h-full w-full flex-col px-6 pb-10 pt-0 sm:px-10">
         <div className="relative -mx-6 h-[35px] shrink-0 bg-[hsl(var(--sidebar-surface))] sm:-mx-10">
@@ -146,7 +148,7 @@ export function FunctionalModuleUpdateGate({ children }: FunctionalModuleUpdateG
               <img src={CopisAppLogo} alt="Copis" className="size-11 rounded-xl shadow-sm" />
               <div className="min-w-0">
                 <p className="text-xs font-semibold uppercase tracking-[0.14em] text-muted-foreground">Copis</p>
-                <p className="mt-1 text-sm text-muted-foreground">本地能力准备</p>
+                <p className="mt-1 text-sm text-muted-foreground">正在准备本地能力</p>
               </div>
             </div>
             <div className="max-w-xl">
@@ -154,10 +156,10 @@ export function FunctionalModuleUpdateGate({ children }: FunctionalModuleUpdateG
                 {isError ? '启动遇到问题' : phaseLabel}
               </p>
               <h1 className="mt-2 text-2xl font-semibold tracking-tight sm:text-3xl">
-                {isError ? '功能模块暂未准备完成' : '正在准备 Copis'}
+                {isError ? 'Copis 暂时无法启动' : '正在准备 Copis'}
               </h1>
               <p className="mt-3 text-sm leading-6 text-muted-foreground">
-                {isError ? '必选模块或本地 API 未通过检查，请重试后继续使用。' : '正在检查并更新本地功能模块，完成后会自动进入工作区。'}
+                {isError ? '必要组件暂未准备完成，请重试后继续使用。' : '正在检查并准备本地能力，完成后会自动进入工作区。'}
               </p>
             </div>
           </header>
@@ -165,15 +167,15 @@ export function FunctionalModuleUpdateGate({ children }: FunctionalModuleUpdateG
           <div className="mt-10 space-y-3" aria-live="polite">
             <div className="flex items-end justify-between gap-4">
               <div className="min-w-0">
-                <p className={`truncate text-sm font-medium ${isError ? 'text-destructive' : 'text-foreground'}`}>{startup.detail}</p>
-                <p className="mt-1 min-h-5 text-xs tabular-nums text-muted-foreground">{bytes || '正在读取模块状态'}</p>
+                <p className={`truncate text-sm font-medium ${isError ? 'text-destructive' : 'text-foreground'}`}>{isError ? getStartupErrorLabel(startup.error) : phaseLabel}</p>
+                <p className="mt-1 min-h-5 text-xs tabular-nums text-muted-foreground">{bytes || '正在确认安装状态'}</p>
               </div>
               <strong className={`shrink-0 text-2xl tabular-nums ${isError ? 'text-destructive' : 'text-foreground'}`}>{percentage}%</strong>
             </div>
             <div
               className="h-2 w-full overflow-hidden rounded-full bg-secondary"
               role="progressbar"
-              aria-label="功能模块更新进度"
+              aria-label="本地能力准备进度"
               aria-valuemin={0}
               aria-valuemax={100}
               aria-valuenow={percentage}
@@ -186,14 +188,14 @@ export function FunctionalModuleUpdateGate({ children }: FunctionalModuleUpdateG
           </div>
 
           {developmentMode ? (
-            <div className="mt-8 flex items-center gap-3 rounded-lg bg-card p-4 shadow-sm ring-1 ring-border/60" aria-label="本地 API health 检查">
+            <div className="mt-8 flex items-center gap-3 rounded-lg bg-card p-4 shadow-sm ring-1 ring-border/60" aria-label="本地服务检查">
               <ShieldCheck className={`size-4 shrink-0 ${startup.phase === 'ready' ? 'text-primary' : 'text-muted-foreground'}`} aria-hidden="true" />
               <p className="min-w-0 text-sm text-muted-foreground">
-                {startup.phase === 'ready' ? '本地 API 已通过 health 检查' : '开发模式仅检查本地 API health'}
+                {startup.phase === 'ready' ? '本地服务运行正常' : '正在检查本地服务是否可用'}
               </p>
             </div>
           ) : (
-            <div className="mt-8 grid gap-3" aria-label="必选功能模块">
+            <div className="mt-8 grid gap-3" aria-label="必要组件">
               {getStartupModuleRowsForMode(developmentMode).map((row) => (
                 <StartupModuleRow
                   key={row.name}
@@ -202,7 +204,7 @@ export function FunctionalModuleUpdateGate({ children }: FunctionalModuleUpdateG
                   status={statuses[row.name]}
                   active={activeModule === row.name}
                   progress={progresses[row.name]}
-                  error={isError && activeModule === row.name ? startup.error : null}
+                  error={isError && activeModule === row.name ? getStartupErrorLabel(startup.error) : null}
                 />
               ))}
             </div>
@@ -212,7 +214,7 @@ export function FunctionalModuleUpdateGate({ children }: FunctionalModuleUpdateG
             <div className="mt-8 flex flex-col gap-4 rounded-lg bg-destructive/10 p-4" role="alert">
               <div className="flex items-start gap-3">
                 <AlertCircle className="mt-0.5 size-4 shrink-0 text-destructive" aria-hidden="true" />
-                <p className="min-w-0 text-sm leading-6 text-destructive">{startup.error ?? startup.detail}</p>
+                <p className="min-w-0 text-sm leading-6 text-destructive">{getStartupErrorLabel(startup.error)}</p>
               </div>
               <button
                 type="button"
@@ -228,7 +230,7 @@ export function FunctionalModuleUpdateGate({ children }: FunctionalModuleUpdateG
           {!isError && startup.phase === 'ready' && (
             <p className="mt-8 flex items-center gap-2 text-sm text-muted-foreground">
               <ShieldCheck className="size-4 text-primary" aria-hidden="true" />
-              本地 API 已通过 health 检查
+              本地服务运行正常
             </p>
           )}
         </section>
@@ -252,7 +254,11 @@ function StartupModuleRow({ displayName, description, status, active, progress, 
   const isWorking = active && !isDone && !error
   const Icon = error ? AlertCircle : isDone ? CheckCircle2 : isWorking ? Loader2 : PackageCheck
   const detail = error
-    ?? (isWorking ? progress?.detail ?? '正在准备' : isDone ? `v${status?.version ?? '-'} 已就绪` : '等待检查')
+    ?? (isWorking
+      ? getStartupModuleDetail(progress)
+      : isDone
+        ? getStartupModuleDetail({ phase: 'done', version: status?.version ?? undefined })
+        : '等待准备')
 
   return (
     <div className="flex min-w-0 items-start gap-3 rounded-lg bg-card p-4 shadow-sm ring-1 ring-border/60">
@@ -260,7 +266,7 @@ function StartupModuleRow({ displayName, description, status, active, progress, 
       <div className="min-w-0 flex-1">
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
           <p className="text-sm font-medium">{displayName}</p>
-          <span className="text-[11px] text-muted-foreground">必选</span>
+          <span className="text-[11px] text-muted-foreground">必要</span>
         </div>
         <p className={`mt-1 truncate text-xs ${error ? 'text-destructive' : 'text-muted-foreground'}`}>{detail}</p>
         <p className="mt-2 text-xs leading-5 text-muted-foreground">{description}</p>

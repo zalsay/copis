@@ -64,6 +64,32 @@ describe('Agent RPC 协议', () => {
     expect(parseWorkerCommand(serializeWorkerCommand(command))).toEqual(command)
   })
 
+  test('Given system prompt 含专家团队受管控协议 When serialized Then worker 帧只透传提示词文本，不携带原始上下文字段', () => {
+    const command: AgentRpcWorkerCommand = {
+      type: 'run',
+      requestId: 'request-expert-team-1',
+      config: {
+        sessionId: 'session-1',
+        query: {
+          sessionId: 'session-1',
+          prompt: '执行专家节点任务',
+          apiKey: 'secret',
+          provider: 'openai',
+          permissionMode: 'bypassPermissions',
+          systemPrompt: '# Copis Agent\n\n<copis_expert_team_agents_md>\n<!-- copis-expert-team:start -->\n## 专家团队协议\n<!-- copis-expert-team:end -->\n</copis_expert_team_agents_md>\n\n<copis_expert_team_schema>\n[{"id":"researcher"}]\n</copis_expert_team_schema>',
+          piAgentDir: '/tmp/.copis/sdk-config',
+          piSessionDir: '/tmp/.copis/sdk-config/sessions',
+        },
+      },
+    }
+
+    const parsed = parseWorkerCommand(serializeWorkerCommand(command))
+    expect(parsed).toEqual(command)
+    const rawQuery = (parsed as unknown as { config: { query: Record<string, unknown> } }).config.query
+    expect(rawQuery.systemPrompt).toContain('<copis_expert_team_agents_md>')
+    expect('expertTeamContext' in rawQuery).toBe(false)
+  })
+
   test('Given run command with mismatched outer and query sessions When parsed Then rejects the command', () => {
     expect(parseWorkerCommand(JSON.stringify({
       type: 'run',

@@ -4,32 +4,21 @@ import { join } from 'node:path'
 
 const dialogStyles = readFileSync(join(import.meta.dir, 'CopisWorkingConnectDialog.css'), 'utf8')
 const dialogSource = readFileSync(join(import.meta.dir, 'CopisWorkingConnectDialog.tsx'), 'utf8')
-const globalStyles = readFileSync(join(import.meta.dir, '../../styles/globals.css'), 'utf8')
 
 function ruleBody(selector: string): string {
   return dialogStyles.match(new RegExp(`${selector}\\s*\\{([^}]*)\\}`, 's'))?.[1] ?? ''
 }
 
 describe('创建工作区弹窗视觉契约', () => {
-  test('Given 创建工作区弹窗 When 查看本地目录 active 标签 Then 使用 primary 实色背景与 primary-foreground 前景', () => {
-    const activeRule = ruleBody('\\.copis-working-connect-location \\.active')
-
-    expect(globalStyles).toContain('--ui-primary: #f5c18e;')
-    expect(globalStyles).toContain('--ui-primary-background: rgb(240 161 90 / 10%);')
-    expect(globalStyles).toContain('--ui-primary-foreground: #2b2137;')
-    expect(activeRule).toContain('background: var(--ui-primary)')
-    expect(activeRule).toContain('color: var(--ui-primary-foreground)')
-  })
-
-  test('Given 创建工作区弹窗 When 查看目录选择器 Then 所有强调色使用 primary tokens', () => {
+  test('Given 创建工作区弹窗 When 查看目录选择器 Then 静止态无边框无背景且强调色使用 primary tokens', () => {
     const pickerRule = ruleBody('\\.copis-working-connect-picker')
     const pickerHoverRule = ruleBody('\\.copis-working-connect-picker:hover\\:not\\(:disabled\\)')
     const pickerIconRule = ruleBody('\\.copis-working-connect-picker svg')
 
-    expect(pickerRule).toContain('var(--ui-primary)')
-    expect(pickerRule).toContain('var(--ui-primary-background)')
-    expect(pickerHoverRule).toContain('var(--ui-primary)')
-    expect(pickerHoverRule).toContain('var(--ui-primary-background)')
+    expect(pickerRule).not.toContain('border: 1px')
+    expect(pickerRule).not.toContain('background: var(--ui-primary-background)')
+    expect(pickerRule).toContain('background: transparent')
+    expect(pickerHoverRule).toContain('background: var(--ui-primary-background)')
     expect(pickerIconRule).toContain('var(--ui-primary-background)')
     expect(pickerIconRule).toContain('var(--ui-primary)')
   })
@@ -71,5 +60,15 @@ describe('创建工作区弹窗视觉契约', () => {
     expect(dialogSource).toContain('window.electronAPI.openFolderDialog()')
     expect(dialogSource).toContain('onConfirm(selection, allowWorkspaceWrite)')
     expect(dialogSource).toContain('onClick={onClose}')
+  })
+
+  test('Given 创建工作区弹窗 When 查看弹窗表面与选择器结构 Then 使用主题卡片变量与新层级', () => {
+    const modalRule = ruleBody('\\.copis-working-connect-modal')
+
+    expect(modalRule).toContain('hsl(var(--card))')
+    expect(modalRule).toContain('hsl(var(--card-foreground))')
+    expect(dialogSource).toContain('copis-working-connect-heading-icon')
+    expect(dialogSource).toContain('copis-working-connect-picker-copy')
+    expect(dialogSource).toContain('copis-working-connect-picker-action')
   })
 })

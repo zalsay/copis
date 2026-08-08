@@ -410,7 +410,8 @@ impl ExpertTeamStore {
         validate_workspace_slug(workspace_slug)?;
         let revision = self.resolve_revision(
             input.schema_id.as_deref(),
-            input.schema_revision_id.or(input.schema_revision),
+            input.schema_revision_id,
+            input.schema_revision,
         )?;
         let connection = self.connection.lock().unwrap();
         let now = now_millis();
@@ -433,12 +434,43 @@ impl ExpertTeamStore {
         }))
     }
 
+    /// 只读返回 workspace 当前的 binding 与冻结 revision，未绑定时返回 NotFound。
+    pub fn get_workspace_binding(&self, workspace_slug: &str) -> Result<Value, ExpertTeamError> {
+        validate_workspace_slug(workspace_slug)?;
+        let connection = self.connection.lock().unwrap();
+        connection
+            .query_row(
+                "SELECT b.workspace_slug, b.schema_id, b.schema_revision_id, b.bound_at,
+                        r.revision, r.sha256
+                   FROM workspace_bindings b
+                   JOIN schema_revisions r ON r.id = b.schema_revision_id
+                  WHERE b.workspace_slug = ?",
+                [workspace_slug],
+                |row| {
+                    Ok(json!({
+                        "workspaceSlug": row.get::<_, String>(0)?,
+                        "schemaId": row.get::<_, String>(1)?,
+                        "schemaRevisionId": row.get::<_, i64>(2)?,
+                        "boundAt": row.get::<_, i64>(3)?,
+                        "revision": row.get::<_, i64>(4)?,
+                        "sha256": row.get::<_, String>(5)?,
+                    }))
+                },
+            )
+            .optional()
+            .map_err(storage_error)?
+            .ok_or_else(|| {
+                ExpertTeamError::NotFound("工作区尚未绑定专家团队 schema".to_string())
+            })
+    }
+
     pub fn create_run(&self, input: RunCreateInput) -> Result<Value, ExpertTeamError> {
         validate_workspace_slug(&input.workspace_slug)?;
         let revision = self.resolve_run_revision(
             &input.workspace_slug,
             input.schema_id.as_deref(),
-            input.schema_revision_id.or(input.schema_revision),
+            input.schema_revision_id,
+            input.schema_revision,
         )?;
         let snapshot: SchemaSnapshot =
             serde_json::from_str(&revision.snapshot_json).map_err(|error| {
@@ -780,55 +812,97 @@ impl ExpertTeamStore {
     fn resolve_revision(
         &self,
         schema_id: Option<&str>,
+        revision_id: Option<i64>,
         revision: Option<i64>,
     ) -> Result<RevisionRow, ExpertTeamError> {
         let connection = self.connection.lock().unwrap();
-        let revision = match (schema_id, revision) {
-            (Some(schema_id), None) => connection
-                .query_row(
-                    "SELECT current_revision_id FROM schemas WHERE id = ?",
-                    [schema_id],
-                    |row| row.get::<_, Option<i64>>(0),
-                )
-                .optional()
-                .map_err(storage_error)?
-                .flatten()
-                .ok_or_else(|| {
-                    ExpertTeamError::NotFound("schema 当前 revision 不存在".to_string())
-                })?,
-            (_, Some(revision)) if revision > 0 => revision,
-            _ => {
+        if let Some(revision_id) = revision_id {
+            if revision_id <= 0 {
                 return Err(ExpertTeamError::Validation(
-                    "必须提供 schemaRevision 或 schemaRevisionId".to_string(),
-                ))
+                    "schemaRevisionId 必须为正整数".to_string(),
+                ));
             }
-        };
-        let row = if let Some(schema_id) = schema_id {
-            let by_revision = connection.query_row(
-                "SELECT id, schema_id, revision, sha256, snapshot_json FROM schema_revisions WHERE schema_id = ? AND revision = ?",
-                params![schema_id, revision], revision_row,
-            ).optional().map_err(storage_error)?;
-            by_revision.or(connection.query_row(
-                "SELECT id, schema_id, revision, sha256, snapshot_json FROM schema_revisions WHERE id = ?",
-                [revision], revision_row,
-            ).optional().map_err(storage_error)?)
-        } else {
-            connection.query_row(
-                "SELECT id, schema_id, revision, sha256, snapshot_json FROM schema_revisions WHERE id = ?",
-                [revision], revision_row,
-            ).optional().map_err(storage_error)?
-        };
-        row.ok_or_else(|| ExpertTeamError::NotFound("schema revision 不存在".to_string()))
+            let row = if let Some(schema_id) = schema_id {
+                connection
+                    .query_row(
+                        "SELECT id, schema_id, revision, sha256, snapshot_json FROM schema_revisions WHERE id = ? AND schema_id = ?",
+                        params![revision_id, schema_id],
+                        revision_row,
+                    )
+                    .optional()
+                    .map_err(storage_error)?
+            } else {
+                connection
+                    .query_row(
+                        "SELECT id, schema_id, revision, sha256, snapshot_json FROM schema_revisions WHERE id = ?",
+                        [revision_id],
+                        revision_row,
+                    )
+                    .optional()
+                    .map_err(storage_error)?
+            };
+            return row.ok_or_else(|| {
+                ExpertTeamError::NotFound("schema revision 不存在或与 schemaId 不匹配".to_string())
+            });
+        }
+        match (schema_id, revision) {
+            (Some(schema_id), Some(revision)) => {
+                if revision <= 0 {
+                    return Err(ExpertTeamError::Validation(
+                        "schemaRevision 必须为正整数".to_string(),
+                    ));
+                }
+                connection
+                    .query_row(
+                        "SELECT id, schema_id, revision, sha256, snapshot_json FROM schema_revisions WHERE schema_id = ? AND revision = ?",
+                        params![schema_id, revision],
+                        revision_row,
+                    )
+                    .optional()
+                    .map_err(storage_error)?
+                    .ok_or_else(|| ExpertTeamError::NotFound("schema revision 不存在".to_string()))
+            }
+            (Some(schema_id), None) => {
+                let current_revision_id = connection
+                    .query_row(
+                        "SELECT current_revision_id FROM schemas WHERE id = ?",
+                        [schema_id],
+                        |row| row.get::<_, Option<i64>>(0),
+                    )
+                    .optional()
+                    .map_err(storage_error)?
+                    .flatten()
+                    .ok_or_else(|| {
+                        ExpertTeamError::NotFound("schema 当前 revision 不存在".to_string())
+                    })?;
+                connection
+                    .query_row(
+                        "SELECT id, schema_id, revision, sha256, snapshot_json FROM schema_revisions WHERE id = ?",
+                        [current_revision_id],
+                        revision_row,
+                    )
+                    .optional()
+                    .map_err(storage_error)?
+                    .ok_or_else(|| ExpertTeamError::NotFound("schema revision 不存在".to_string()))
+            }
+            (None, Some(_)) => Err(ExpertTeamError::Validation(
+                "使用 schemaRevision 版本号时必须同时提供 schemaId".to_string(),
+            )),
+            (None, None) => Err(ExpertTeamError::Validation(
+                "必须提供 schemaRevisionId 或 schemaId + schemaRevision".to_string(),
+            )),
+        }
     }
 
     fn resolve_run_revision(
         &self,
         workspace_slug: &str,
         schema_id: Option<&str>,
+        revision_id: Option<i64>,
         revision: Option<i64>,
     ) -> Result<RevisionRow, ExpertTeamError> {
-        if schema_id.is_some() || revision.is_some() {
-            return self.resolve_revision(schema_id, revision);
+        if schema_id.is_some() || revision_id.is_some() || revision.is_some() {
+            return self.resolve_revision(schema_id, revision_id, revision);
         }
         let connection = self.connection.lock().unwrap();
         let revision_id: Option<i64> = connection
@@ -840,7 +914,7 @@ impl ExpertTeamStore {
             .optional()
             .map_err(storage_error)?;
         drop(connection);
-        self.resolve_revision(None, revision_id)
+        self.resolve_revision(None, revision_id, None)
     }
 }
 
@@ -918,6 +992,14 @@ pub fn handle_request(
             Ok(ExpertTeamResponse {
                 status: 200,
                 body: store.bind_workspace(slug, input)?,
+            })
+        }
+        ("GET", [_, _, resource, slug, action])
+            if resource == "workspaces" && action == "binding" =>
+        {
+            Ok(ExpertTeamResponse {
+                status: 200,
+                body: store.get_workspace_binding(slug)?,
             })
         }
         ("POST", [_, _, resource]) if resource == "runs" => {
@@ -1208,259 +1290,5 @@ fn percent_decode(value: &str) -> Result<String, ExpertTeamError> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use std::path::PathBuf;
-    use std::time::{SystemTime, UNIX_EPOCH};
-
-    fn test_directory(label: &str) -> PathBuf {
-        let unique = ID_COUNTER.fetch_add(1, Ordering::Relaxed);
-        let timestamp = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos();
-        std::env::temp_dir().join(format!(
-            "copis-expert-team-{}-{}-{}",
-            label, timestamp, unique
-        ))
-    }
-
-    fn store() -> ExpertTeamStore {
-        ExpertTeamStore::open(test_directory("test")).unwrap()
-    }
-
-    fn schema(id: Option<&str>, depends_on: Vec<&str>) -> ExpertSchemaInput {
-        ExpertSchemaInput {
-            id: id.map(str::to_string),
-            name: "研究团队".to_string(),
-            description: Some("本地团队".to_string()),
-            nodes: vec![
-                ExpertSchemaNodeInput {
-                    id: "research".to_string(),
-                    role: "researcher".to_string(),
-                    prompt: None,
-                    depends_on: vec![],
-                    path: Some("notes/input.md".to_string()),
-                    config: json!({}),
-                },
-                ExpertSchemaNodeInput {
-                    id: "write".to_string(),
-                    role: "writer".to_string(),
-                    prompt: None,
-                    depends_on: depends_on.into_iter().map(str::to_string).collect(),
-                    path: None,
-                    config: json!({}),
-                },
-            ],
-            metadata: json!({}),
-        }
-    }
-
-    #[test]
-    fn validation_rejects_cycles_duplicate_ids_and_absolute_paths() {
-        let mut input = schema(None, vec!["write"]);
-        assert!(matches!(
-            validate_schema_input(&input),
-            Err(ExpertTeamError::Validation(_))
-        ));
-        input = schema(None, vec!["missing"]);
-        assert!(matches!(
-            validate_schema_input(&input),
-            Err(ExpertTeamError::Validation(_))
-        ));
-        input = schema(None, vec![]);
-        input.nodes[0].path = Some("/tmp/nope".to_string());
-        assert!(matches!(
-            validate_schema_input(&input),
-            Err(ExpertTeamError::Validation(_))
-        ));
-        input.nodes[0].path = Some("..\\outside.txt".to_string());
-        assert!(matches!(
-            validate_schema_input(&input),
-            Err(ExpertTeamError::Validation(_))
-        ));
-    }
-
-    #[test]
-    fn publishes_immutable_revisions_and_queues_snapshot_run() {
-        let store = store();
-        let first = store
-            .publish_schema(schema(Some("team"), vec!["research"]))
-            .unwrap();
-        let first_revision_id = first["schemaRevisionId"].as_i64().unwrap();
-        let second = store
-            .publish_schema(schema(Some("team"), vec!["research"]))
-            .unwrap();
-        assert_eq!(second["revision"], 2);
-        let run = store
-            .create_run(RunCreateInput {
-                workspace_slug: "project-a".to_string(),
-                schema_id: None,
-                schema_revision: None,
-                schema_revision_id: Some(first_revision_id),
-                input: json!({"topic":"rust"}),
-            })
-            .unwrap();
-        assert_eq!(run["status"], "queued");
-        assert_eq!(
-            store
-                .list_run_events(run["id"].as_str().unwrap())
-                .unwrap()
-                .len(),
-            1
-        );
-        let canceled = store.cancel_run(run["id"].as_str().unwrap()).unwrap();
-        assert_eq!(canceled["status"], "cancelled");
-    }
-
-    #[test]
-    fn request_routes_use_camel_case_and_error_shape() {
-        let store = store();
-        let body = serde_json::to_vec(&schema(None, vec!["research"])).unwrap();
-        let response = handle_request(&store, "POST", "/api/expert-teams/schemas", &body).unwrap();
-        assert_eq!(response.status, 201);
-        let id = response.body["id"].as_str().unwrap();
-        let response = handle_request(
-            &store,
-            "GET",
-            &format!("/api/expert-teams/schemas/{}", id),
-            &[],
-        )
-        .unwrap();
-        assert!(response.body["currentRevisionId"].is_i64());
-        let response = handle_request(
-            &store,
-            "POST",
-            "/api/expert-teams/runs",
-            br#"{"workspaceSlug":"ws"}"#,
-        );
-        assert!(matches!(response, Err(ExpertTeamError::Validation(_))));
-    }
-
-    #[test]
-    fn database_uses_expected_file_name() {
-        let directory = test_directory("path");
-        let _store = ExpertTeamStore::open(&directory).unwrap();
-        assert!(directory.join(DATABASE_FILE).exists());
-    }
-
-    #[test]
-    fn empty_database_is_seeded_with_pi_only_builtin_dag() {
-        let store = store();
-        let schemas = store.list_schemas().unwrap();
-        assert_eq!(schemas.len(), 1);
-        assert_eq!(schemas[0]["id"], BUILTIN_SCHEMA_ID);
-        assert_eq!(schemas[0]["name"], "深入研究团队");
-        assert_eq!(schemas[0]["snapshot"]["metadata"]["execution"], "pi-only");
-        assert_eq!(
-            schemas[0]["snapshot"]["metadata"]["templateVersion"],
-            BUILTIN_TEMPLATE_VERSION
-        );
-        let nodes = schemas[0]["snapshot"]["nodes"].as_array().unwrap();
-        assert_eq!(
-            nodes
-                .iter()
-                .map(|node| node["id"].as_str().unwrap())
-                .collect::<Vec<_>>(),
-            vec!["researcher", "summary", "reviewer"]
-        );
-        assert_eq!(nodes[0]["role"], "researcher");
-        assert_eq!(nodes[0]["dependsOn"], json!([]));
-        assert_eq!(
-            nodes[0]["prompt"],
-            "搜集与任务相关的可靠资料、来源和关键事实，整理为可读的 Markdown 资料文档。"
-        );
-        assert_eq!(nodes[0]["path"], "research/materials.md");
-        assert_eq!(nodes[1]["role"], "writer");
-        assert_eq!(nodes[1]["dependsOn"], json!(["researcher"]));
-        assert_eq!(
-            nodes[1]["prompt"],
-            "阅读 researcher 的资料文档，将资料提炼并总结为结构清晰的 Markdown 文档。"
-        );
-        assert_eq!(nodes[1]["path"], "summary/summary.md");
-        assert_eq!(nodes[2]["role"], "reviewer");
-        assert_eq!(nodes[2]["dependsOn"], json!(["summary"]));
-        assert_eq!(
-            nodes[2]["prompt"],
-            "检验前序研究与总结是否准确、完整、可追溯，输出 Markdown 检验报告。"
-        );
-        assert_eq!(nodes[2]["path"], "review/validation-report.md");
-    }
-
-    #[test]
-    fn old_builtin_revision_is_upgraded_without_replacing_history() {
-        let directory = test_directory("upgrade");
-        let store = ExpertTeamStore::open(&directory).unwrap();
-        let mut old = builtin_schema_input();
-        old.name = "AI 教育研究撰写审核团队".to_string();
-        old.metadata = json!({"source":"copis-builtin","execution":"pi-only"});
-        old.nodes[0].id = "research".to_string();
-        old.nodes[0].path = Some("research/summary.md".to_string());
-        old.nodes[1].id = "writer".to_string();
-        old.nodes[1].depends_on = vec!["research".to_string()];
-        old.nodes[1].path = Some("draft/article.md".to_string());
-        old.nodes[2].depends_on = vec!["writer".to_string()];
-        old.nodes[2].path = Some("review/report.md".to_string());
-        store.publish_schema(old).unwrap();
-        drop(store);
-
-        let upgraded = ExpertTeamStore::open(&directory).unwrap();
-        let schema = upgraded.get_schema(BUILTIN_SCHEMA_ID).unwrap();
-        assert_eq!(schema["revisions"].as_array().unwrap().len(), 3);
-        assert_eq!(schema["revisions"][0]["revision"], 3);
-        assert_eq!(
-            schema["revisions"][1]["snapshot"]["name"],
-            "AI 教育研究撰写审核团队"
-        );
-        assert_eq!(schema["revisions"][0]["snapshot"]["name"], "深入研究团队");
-        assert_eq!(
-            schema["revisions"][0]["snapshot"]["metadata"]["templateVersion"],
-            BUILTIN_TEMPLATE_VERSION
-        );
-        assert_eq!(
-            schema["revisions"][0]["snapshot"]["nodes"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .map(|node| node["id"].as_str().unwrap())
-                .collect::<Vec<_>>(),
-            vec!["researcher", "summary", "reviewer"]
-        );
-    }
-
-    #[test]
-    fn custom_schema_with_builtin_id_is_not_overwritten() {
-        let directory = test_directory("custom");
-        let store = ExpertTeamStore::open(&directory).unwrap();
-        let mut custom = schema(Some(BUILTIN_SCHEMA_ID), vec!["research"]);
-        custom.name = "用户自定义团队".to_string();
-        custom.metadata = json!({"source":"user"});
-        store.publish_schema(custom).unwrap();
-        drop(store);
-
-        let reopened = ExpertTeamStore::open(&directory).unwrap();
-        let schema = reopened.get_schema(BUILTIN_SCHEMA_ID).unwrap();
-        assert_eq!(schema["name"], "用户自定义团队");
-        assert_eq!(schema["revisions"].as_array().unwrap().len(), 2);
-        assert_eq!(
-            schema["revisions"][0]["snapshot"]["metadata"]["source"],
-            "user"
-        );
-    }
-
-    #[test]
-    fn current_builtin_v2_does_not_create_duplicate_revision() {
-        let directory = test_directory("v2");
-        let store = ExpertTeamStore::open(&directory).unwrap();
-        drop(store);
-
-        let reopened = ExpertTeamStore::open(&directory).unwrap();
-        let schema = reopened.get_schema(BUILTIN_SCHEMA_ID).unwrap();
-        assert_eq!(schema["revisions"].as_array().unwrap().len(), 1);
-        assert_eq!(schema["revisions"][0]["revision"], 1);
-        assert_eq!(
-            schema["revisions"][0]["snapshot"]["metadata"]["templateVersion"],
-            BUILTIN_TEMPLATE_VERSION
-        );
-    }
-}
+#[path = "expert_teams_tests.rs"]
+mod tests;

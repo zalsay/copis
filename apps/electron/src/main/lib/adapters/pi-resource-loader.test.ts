@@ -52,4 +52,23 @@ describe('Pi Skill 资源加载', () => {
 
     expect(loader.getAgentsFiles().agentsFiles).toEqual([])
   })
+
+  test('Given 项目根与父目录均存在 AGENTS.md When Copis 创建 Pi loader Then 仍返回空 agentsFiles', async () => {
+    const parent = mkdtempSync(join(tmpdir(), 'copis-pi-resource-loader-parent-'))
+    tempRoots.push(parent)
+    const root = join(parent, 'project')
+    mkdirSync(root, { recursive: true })
+    writeFileSync(join(root, 'AGENTS.md'), '# 项目根指令\n', 'utf-8')
+    writeFileSync(join(parent, 'AGENTS.md'), '# 父目录指令\n', 'utf-8')
+
+    const loader = new DefaultResourceLoader({
+      cwd: root,
+      agentDir: join(root, '.pi-agent'),
+      noSkills: true,
+      ...createCopisResourceLoaderOptions(),
+    })
+    await loader.reload()
+
+    expect(loader.getAgentsFiles().agentsFiles).toEqual([])
+  })
 })

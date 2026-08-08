@@ -15,7 +15,7 @@
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   text-rendering: optimizeLegibility;
-  --ui-primary: #f5c18e;
+  --ui-primary: #f3af6b;
   --ui-primary-foreground: #2b2137;
   --ui-primary-background: rgb(240 161 90 / 10%);
 }
@@ -29,6 +29,22 @@
   background-color: var(--ui-primary-background);
   color: var(--ui-primary);
   border: 1px solid color-mix(in srgb, var(--ui-primary) 30%, transparent);
+}
+
+.ui-primary-button {
+  border: 1px solid color-mix(in srgb, var(--ui-primary) 30%, transparent);
+  background-color: var(--ui-primary-background);
+  color: var(--ui-primary);
+}
+
+.ui-primary-button:hover {
+  background-color: color-mix(in srgb, var(--ui-primary) 18%, var(--ui-primary-background));
+}
+
+.ui-primary-button:focus-visible {
+  background-color: color-mix(in srgb, var(--ui-primary) 22%, var(--ui-primary-background));
+  outline: 2px solid color-mix(in srgb, var(--ui-primary) 55%, transparent);
+  outline-offset: 2px;
 }
 
 /* CRT Terminal 主题：全局等宽字体覆盖 */

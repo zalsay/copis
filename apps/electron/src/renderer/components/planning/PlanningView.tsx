@@ -9,7 +9,6 @@ import { calendarEventsAtom, planningCalendarCreateRequestAtom, planningSelected
 import { AutomationsListView } from '@/components/automation/AutomationsListView'
 import { CalendarWorkspace, getCalendarEventEndAt, getCalendarStatus } from '@/components/planning/CalendarWorkspace'
 import { Button } from '@/components/ui/button'
-import { ShortcutKeycaps } from '@/components/shortcuts/ShortcutKeycaps'
 import { useShortcut } from '@/hooks/useShortcut'
 import { detectIsWindows, WINDOW_CONTROLS_INSET_RIGHT } from '@/lib/platform'
 
@@ -27,17 +26,6 @@ const STATUS_LABELS = {
 } as const
 
 type ScheduleFilter = 'upcoming' | 'today' | 'all' | 'completed'
-
-function CreateShortcutHint(): React.ReactElement | null {
-  return (
-    <ShortcutKeycaps
-      shortcutId="new-session"
-      className="ml-1.5"
-      keycapClassName="border-primary-foreground/30 bg-primary-foreground/10 text-primary-foreground shadow-none"
-      separatorClassName="text-primary-foreground/70"
-    />
-  )
-}
 
 function startOfDay(value: number | Date): number {
   const date = new Date(value)
@@ -188,7 +176,7 @@ export function PlanningView({ standalone = false }: { standalone?: boolean } = 
         <div className={cn('absolute inset-y-0 left-0 z-0 titlebar-drag-region', isWindows ? WINDOW_CONTROLS_INSET_RIGHT : 'right-0')} />
         <div className="relative z-[1]"><h1 className="text-2xl font-semibold tracking-tight text-wrap-balance">{pageTitle}</h1><p className="mt-1 text-sm text-muted-foreground">{pageDescription}</p></div>
         <div className="relative z-[1] titlebar-no-drag flex items-center gap-2">
-          <button type="button" onClick={triggerCalendarCreate} aria-keyshortcuts="Meta+N Control+N" className="inline-flex min-h-10 items-center gap-1.5 rounded-lg bg-primary px-3 text-sm font-medium text-primary-foreground shadow-sm transition-colors hover:bg-primary/90 active:scale-[0.96]"><Plus size={16} />新建日程<CreateShortcutHint /></button>
+          <button type="button" onClick={triggerCalendarCreate} aria-keyshortcuts="Meta+N Control+N" className="ui-primary-button inline-flex min-h-10 items-center gap-1.5 rounded-lg px-3 text-sm font-medium shadow-sm transition-colors active:scale-[0.96]"><Plus size={16} />新建日程</button>
         </div>
       </header>
       <div className={cn('titlebar-no-drag w-full', standalone ? 'px-5' : 'px-6 sm:px-8 xl:px-10')}>

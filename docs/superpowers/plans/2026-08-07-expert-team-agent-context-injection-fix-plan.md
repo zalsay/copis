@@ -49,7 +49,7 @@
 - Create: `apps/electron/src/main/lib/expert-team-context.test.ts`
 - Modify: `packages/shared/src/types/expert-team.ts`
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 测试使用临时 workspace 根目录和两个 schema revision，验证 `renderExpertTeamAgentsBlock()` 生成固定标记、包含 `schemaId/revision/sha256` 与 `researcher → summary → reviewer` 节点，并且第二次渲染只替换 Copis 区块、保留用户手写内容。
 
@@ -61,13 +61,13 @@ expect(second).toContain('schema-research-v2')
 expect(second).not.toContain('schema-research-v1')
 ```
 
-- [ ] **Step 2: 运行红测试**
+- [x] **Step 2: 运行红测试**
 
 运行：`bun test apps/electron/src/main/lib/expert-team-context.test.ts`
 
 预期：失败原因是上下文类型、受管控标记或渲染函数尚未存在，而不是测试导入错误。
 
-- [ ] **Step 3: 实现最小上下文模型**
+- [x] **Step 3: 实现最小上下文模型**
 
 增加以下语义字段：`schemaId`、`schemaRevisionId`、`revision`、`sha256`、`schemaName`、`schemaDescription`、规范化节点数组、`agentsMdPath`、`agentsMdContent` 和可选 `nodeId`。只接受 Rust 返回的冻结 snapshot；对名称、目标、路径和文件内容执行长度限制，使用固定 `<!-- copis-expert-team:start -->` / `<!-- copis-expert-team:end -->` 标记替换区块。
 
@@ -86,7 +86,7 @@ export interface ExpertTeamPromptContext {
 }
 ```
 
-- [ ] **Step 4: 运行绿测试**
+- [x] **Step 4: 运行绿测试**
 
 运行：`bun test apps/electron/src/main/lib/expert-team-context.test.ts`
 
@@ -100,17 +100,17 @@ export interface ExpertTeamPromptContext {
 - Modify: `apps/electron/src/main/lib/agent-workspace-manager.ts`（仅增加受控 `AGENTS.md` 路径 helper）
 - Test: `apps/electron/src/main/lib/expert-team-context.test.ts`
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 用 fake fetch 返回 `/api/expert-teams/workspaces/:slug/binding` 和 `/api/expert-teams/schemas/:id`，断言 resolver 只接受 binding 对应的 revision snapshot，并将文件写入 `getAgentWorkspacePath(slug)/AGENTS.md`；binding 的 `schemaId`、revision 或 sha256 不匹配时返回 `undefined`/结构化诊断，不继续使用旧文件。
 
-- [ ] **Step 2: 运行红测试**
+- [x] **Step 2: 运行红测试**
 
 运行：`bun test apps/electron/src/main/lib/expert-team-context.test.ts`
 
 预期：当前没有只读 binding/schema resolver 或 revision 一致性校验，测试失败。
 
-- [ ] **Step 3: 实现解析与落盘**
+- [x] **Step 3: 实现解析与落盘**
 
 新增 `resolveExpertTeamPromptContext({ workspace, schemaId? })`：先读 workspace binding，再读 schema 详情和绑定的不可变 revision；规范化 JSON 后计算/核对 sha256；成功后更新 workspace 根目录 `AGENTS.md` 的 Copis 区块，并返回内存上下文。Rust 不可用时只记录中文 warning 并返回无上下文结果，不阻断普通主 Agent 对话。
 
@@ -123,7 +123,7 @@ if (!revision || hashSnapshot(revision.snapshot) !== binding.sha256) return unde
 return persistManagedExpertTeamAgents(workspace, buildPromptContext(schema, revision))
 ```
 
-- [ ] **Step 4: 运行绿测试**
+- [x] **Step 4: 运行绿测试**
 
 运行：`bun test apps/electron/src/main/lib/expert-team-context.test.ts`
 
@@ -138,7 +138,7 @@ return persistManagedExpertTeamAgents(workspace, buildPromptContext(schema, revi
 - Test: `apps/electron/src/main/lib/agent-prompt-builder.test.ts`
 - Test: `apps/electron/src/main/lib/agent-rpc-service.test.ts`
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 增加两个行为断言：带 `expertTeamContext` 的 system prompt 包含受管控 `AGENTS.md` 区块、revision/hash 和完整节点 DAG；没有 context 时只包含通用 `expert_team_run` 说明，不出现陈旧 schema。`prepareAgentRpcRun()` 和 orchestrator 的首次运行、resume 运行都要传入同一上下文。
 
@@ -149,13 +149,13 @@ expect(prompt).toContain('schema-research-v2')
 expect(prompt).toContain('researcher -> summary -> reviewer')
 ```
 
-- [ ] **Step 2: 运行红测试**
+- [x] **Step 2: 运行红测试**
 
 运行：`bun test apps/electron/src/main/lib/agent-prompt-builder.test.ts apps/electron/src/main/lib/agent-rpc-service.test.ts`
 
 预期：当前 `SystemPromptContext` 不接受 context，或主/子路径的 prompt 缺少 schema 内容。
 
-- [ ] **Step 3: 实现统一注入**
+- [x] **Step 3: 实现统一注入**
 
 在 `buildSystemPrompt` 增加独立 section：将 `AGENTS.md` 作为“当前专家团队受管控协议”引用，明确其不能改变 Copis system、权限、workspace root 和子 Agent 规则；schema 使用规范化 JSON/表格展示。两条入口在构建 system prompt 前调用 Task 2 resolver，并在 `expertTeamAvailable && triggeredBy === 'user'` 时传 context；`delegation` 只传节点 context，不暴露主 Agent 工具。
 
@@ -166,7 +166,7 @@ if (ctx.expertTeamContext) {
 }
 ```
 
-- [ ] **Step 4: 运行绿测试**
+- [x] **Step 4: 运行绿测试**
 
 运行：`bun test apps/electron/src/main/lib/agent-prompt-builder.test.ts apps/electron/src/main/lib/agent-rpc-service.test.ts`
 
@@ -182,17 +182,17 @@ if (ctx.expertTeamContext) {
 - Test: `apps/electron/src/main/lib/expert-team-runner.test.ts`
 - Create: `apps/electron/src/main/lib/expert-team-agent-tool.test.ts`
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 扩展 fake Agent executor，断言每个节点的 `AgentSendInput` 携带 `triggeredBy: 'delegation'`、schema revision/hash、Agents 区块、当前 `nodeId/role` 和依赖；断言同一 run 使用创建时 snapshot，即使 Rust 当前 schema 随后升级也不变。
 
-- [ ] **Step 2: 运行红测试**
+- [x] **Step 2: 运行红测试**
 
 运行：`bun test apps/electron/src/main/lib/expert-team-runner.test.ts apps/electron/src/main/lib/expert-team-agent-tool.test.ts`
 
 预期：当前 snapshot/input 类型没有 context，节点 prompt 只包含任务文本。
 
-- [ ] **Step 3: 实现冻结传递**
+- [x] **Step 3: 实现冻结传递**
 
 `runExpertTeam()` 将 Rust 返回的 revision snapshot 转换成 `ExpertTeamPromptContext`，写入 `ExpertTeamRunSnapshot`；`ExpertTeamRunner` 为每个节点构建 `<copis_expert_team_agents_md>`、`<copis_expert_team_schema>` 和 `<copis_expert_team_node>` 块，并通过 `AgentSendInput.expertTeamContext` 交给 system prompt builder。节点只能读取自己的依赖产物，不得修改 schema、调用 `expert_team_run` 或继续委派。
 
@@ -205,7 +205,7 @@ const input: AgentSendInput = {
 }
 ```
 
-- [ ] **Step 4: 运行绿测试**
+- [x] **Step 4: 运行绿测试**
 
 运行：`bun test apps/electron/src/main/lib/expert-team-runner.test.ts apps/electron/src/main/lib/expert-team-agent-tool.test.ts`
 
@@ -218,17 +218,17 @@ const input: AgentSendInput = {
 - Modify/Test: `apps/electron/src/main/lib/adapters/pi-builtin-tools.test.ts`
 - Test: `apps/electron/src/main/lib/agent-rpc-protocol.test.ts`
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 增加契约：workspace/project 根目录存在任意 `AGENTS.md` 时，Pi loader 仍返回空 `agentsFiles`；只有 Copis 显式传入的专家上下文出现在 system prompt。`delegation`/`automation` input 不包含主 Agent expert team tool。
 
-- [ ] **Step 2: 运行测试确认边界**
+- [x] **Step 2: 运行测试确认边界**
 
 运行：`bun test apps/electron/src/main/lib/adapters/pi-resource-loader.test.ts apps/electron/src/main/lib/adapters/pi-builtin-tools.test.ts apps/electron/src/main/lib/agent-rpc-protocol.test.ts`
 
 预期：既有 noContextFiles 与工具可见性测试通过；新增测试在实现前失败，完成后通过。
 
-- [ ] **Step 3: 实现协议透传与安全校验**
+- [x] **Step 3: 实现协议透传与安全校验**
 
 为 RPC parser/query config 透传 `expertTeamContext`，禁止从 renderer 直接提交；只接受主进程 resolver 或 runner 生成、带 revision/hash 的对象。限制 prompt 字符数，日志只记录 schema ID/revision，不记录 Agents 全文、用户输入、token 或绝对路径。
 
@@ -239,7 +239,7 @@ const internalContext = input.triggeredBy === 'delegation'
   : undefined
 ```
 
-- [ ] **Step 4: 运行绿测试**
+- [x] **Step 4: 运行绿测试**
 
 运行：`bun test apps/electron/src/main/lib/adapters/pi-resource-loader.test.ts apps/electron/src/main/lib/adapters/pi-builtin-tools.test.ts apps/electron/src/main/lib/agent-rpc-protocol.test.ts`
 
@@ -252,7 +252,7 @@ const internalContext = input.triggeredBy === 'delegation'
 - Review: `apps/electron/src/main/lib/adapters/pi-resource-loader-overrides.ts`
 - No change: `README.md`、根 `AGENTS.md`（除非用户另行批准）
 
-- [ ] **Step 1: 运行 focused tests**
+- [x] **Step 1: 运行 focused tests**
 
 ```bash
 bun test apps/electron/src/main/lib/expert-team-context.test.ts
@@ -264,7 +264,7 @@ bun test apps/electron/src/main/lib/adapters/pi-resource-loader.test.ts apps/ele
 
 预期：所有测试通过，且测试日志不打印 Agents 内容、完整 schema、用户输入、API key 或内部 token。
 
-- [ ] **Step 2: 运行类型检查和构建**
+- [x] **Step 2: 运行类型检查和构建**
 
 ```bash
 bun run typecheck

@@ -18,7 +18,7 @@ import { randomUUID } from 'node:crypto'
 import { homedir } from 'node:os'
 import { join, isAbsolute, relative, resolve } from 'node:path'
 import { existsSync, mkdirSync } from 'node:fs'
-import { COPIS_WORKING_CHANNEL_ID, createCopisWorkingChannel, normalizeWorkingMode, type AgentRuntime, type AgentSendInput, type AgentMessage, type AgentGenerateTitleInput, type AgentProviderAdapter, type AgentSessionMeta, type CodexOAuthCredentials, type XaiOAuthCredentials, type TypedError, type RetryAttempt, type SDKMessage, type SDKAssistantMessage, type AgentStreamPayload, type RewindSessionResult, type ProviderType, workingModeToModelId } from '@copis/shared'
+import { COPIS_WORKING_CHANNEL_ID, COPIS_WORKING_MODEL_SOURCE_TYPE_HEADER, COPIS_WORKING_MODEL_SOURCE_TYPE_COPIS_AGENT, createCopisWorkingChannelForId, isCopisWorkingChannelId, normalizeWorkingMode, type AgentRuntime, type AgentSendInput, type AgentMessage, type AgentGenerateTitleInput, type AgentProviderAdapter, type AgentSessionMeta, type CodexOAuthCredentials, type XaiOAuthCredentials, type TypedError, type RetryAttempt, type SDKMessage, type SDKAssistantMessage, type AgentStreamPayload, type RewindSessionResult, type ProviderType, workingModeToModelId } from '@copis/shared'
 import {
   COPIS_DEFAULT_PERMISSION_MODE,
   THINKING_SIGNATURE_ERROR_CODE,
@@ -50,6 +50,10 @@ import { getSettings } from './settings-service'
 import { getBrowserAgentContext, sanitizeBrowserWorkflowUrl } from './browser-workflow-service'
 import { getWebTabState } from './web-tab-manager'
 import { buildSystemPrompt, buildDynamicContext } from './agent-prompt-builder'
+import {
+  HttpExpertTeamContextReader,
+  resolveExpertTeamPromptContext,
+} from './expert-team-context'
 import { appendMemoryContext } from './memory-context-builder'
 import { MAX_CONTEXT_MESSAGES, buildContextPrompt, buildRecoveryPrompt, buildReferencedSessionsPrompt } from './agent-session-context-prompt'
 import { buildReferencedPlanningPrompt } from './planning-reference-context'
@@ -443,8 +447,8 @@ export class AgentOrchestrator {
     // 同时保留 listChannels 自身的错误边界：解析失败时按“无渠道”处理并返回 null。
     let channel: import('@copis/shared').Channel | undefined
     try {
-      channel = channelId === COPIS_WORKING_CHANNEL_ID
-        ? createCopisWorkingChannel(getWorkingApiClient().baseUrl)
+      channel = isCopisWorkingChannelId(channelId)
+        ? createCopisWorkingChannelForId(getWorkingApiClient().baseUrl, channelId)
         : listChannels().find((c) => c.id === channelId)
     } catch (error) {
       console.warn('[Agent 标题生成] 渠道解析失败:', error)
@@ -492,7 +496,7 @@ export class AgentOrchestrator {
     }
 
     try {
-      const apiKey = channelId === COPIS_WORKING_CHANNEL_ID
+      const apiKey = isCopisWorkingChannelId(channelId)
         ? await getWorkingApiClient().getValidToken()
         : await resolveChannelRuntimeApiKey(channelId)
       if (!apiKey) return createFallbackTitle(userMessage)
@@ -503,6 +507,10 @@ export class AgentOrchestrator {
         modelId,
         prompt: TITLE_PROMPT + userMessage,
       })
+      // Working 内置模型标题请求同样经过 edu-api 计费，必须携带与主请求一致的计费来源标记。
+      if (isCopisWorkingChannelId(channelId)) {
+        request.headers[COPIS_WORKING_MODEL_SOURCE_TYPE_HEADER] = COPIS_WORKING_MODEL_SOURCE_TYPE_COPIS_AGENT
+      }
 
       const proxyUrl = await getEffectiveProxyUrl()
       const fetchFn = getFetchFn(proxyUrl)
@@ -740,13 +748,15 @@ export class AgentOrchestrator {
     const streamStartedAt = input.startedAt ?? Date.now()
     let userMessagePersisted = false
     let sessionMeta = getAgentSessionMeta(sessionId)
-    const workingMode = normalizeWorkingMode(input.workingMode ?? sessionMeta?.workingMode)
+    const workingMode = channelId === COPIS_WORKING_CHANNEL_ID
+      ? normalizeWorkingMode(input.workingMode ?? sessionMeta?.workingMode)
+      : undefined
     const browserContext = getBrowserAgentContext(sessionId)
     const hasBrowserContext = browserContext !== undefined
     const effectiveSkillMentions = resolveBrowserAgentSkillMentions(mentionedSkills, hasBrowserContext)
 
     // 兼容旧会话和非 UI 触发路径：首次运行时把实际使用的模式补回会话索引。
-    if (sessionMeta && sessionMeta.workingMode !== workingMode) {
+    if (sessionMeta && workingMode !== undefined && sessionMeta.workingMode !== workingMode) {
       try {
         sessionMeta = updateAgentSessionMeta(sessionId, { workingMode })
       } catch (error) {
@@ -897,9 +907,9 @@ export class AgentOrchestrator {
 
     // 2. 获取渠道信息并解密 API Key。Working 渠道是内存虚拟渠道，
     // Pi 直接将用户 JWT 发送给 edu-api Responses proxy。
-    const workingClient = channelId === COPIS_WORKING_CHANNEL_ID ? getWorkingApiClient() : undefined
+    const workingClient = isCopisWorkingChannelId(channelId) ? getWorkingApiClient() : undefined
     const channel = workingClient
-      ? createCopisWorkingChannel(workingClient.baseUrl)
+      ? createCopisWorkingChannelForId(workingClient.baseUrl, channelId)
       : getChannelById(channelId)
     if (!channel) {
       reportPreflightError({
@@ -985,10 +995,14 @@ export class AgentOrchestrator {
     const appSettings = getSettings()
     const previousAgentRuntime = normalizeAgentRuntime(sessionMeta?.agentRuntime)
     const agentRuntime: AgentRuntime = 'pi'
-    const workingModelId = workingClient ? workingModeToModelId(workingMode) : undefined
+    const workingModelId = workingClient
+      ? channelId === COPIS_WORKING_CHANNEL_ID
+        ? workingModeToModelId(workingMode ?? 'fast')
+        : modelId ?? channel.models[0]?.id
+      : undefined
     const needsWorkingSessionMigration = Boolean(
       workingClient && (
-        sessionMeta?.channelId !== COPIS_WORKING_CHANNEL_ID
+        sessionMeta?.channelId !== channelId
         || sessionMeta.modelId !== workingModelId
       ),
     )
@@ -996,7 +1010,7 @@ export class AgentOrchestrator {
       try {
         sessionMeta = updateAgentSessionMeta(sessionId, {
           agentRuntime,
-          ...(workingClient && { channelId: COPIS_WORKING_CHANNEL_ID, modelId: workingModelId }),
+          ...(workingClient && { channelId, modelId: workingModelId }),
           ...(previousAgentRuntime !== agentRuntime && !sessionMeta?.piSessionFile ? { sdkSessionId: undefined } : {}),
         })
       } catch {
@@ -1542,6 +1556,12 @@ export class AgentOrchestrator {
         ? resolvePiThinkingLevel(appSettings, sessionMeta, channel.provider, selectedModelId, piReasoningCapability)
         : undefined
       const browserTab = browserContext ? getWebTabState(browserContext.tabId) : undefined
+      const expertTeamContext = expertTeamAvailable && (input.triggeredBy ?? 'user') === 'user' && workspace
+        ? await resolveExpertTeamPromptContext({
+          workspace,
+          reader: new HttpExpertTeamContextReader(),
+        })
+        : undefined
       const systemPromptAppend = buildSystemPrompt({
         agentRuntime,
         workspaceName: workspace?.name,
@@ -1555,6 +1575,7 @@ export class AgentOrchestrator {
         currentModelId: selectedModelId,
         workingMode,
         memoryPolicy,
+        ...(expertTeamContext ? { expertTeamContext } : {}),
         browserContext: browserTab
           ? { tabId: browserTab.id, title: browserTab.title, url: sanitizeBrowserWorkflowUrl(browserTab.url) }
           : undefined,
@@ -2210,6 +2231,9 @@ export class AgentOrchestrator {
                 modelId: selectedModelId,
                 proxyUrl,
                 turns,
+                ...(isCopisWorkingChannelId(channelId)
+                  ? { extraHeaders: { [COPIS_WORKING_MODEL_SOURCE_TYPE_HEADER]: COPIS_WORKING_MODEL_SOURCE_TYPE_COPIS_AGENT } }
+                  : {}),
               }),
               ...(memoryCaptureMaintenanceRunner ? { maintenanceRunner: memoryCaptureMaintenanceRunner } : {}),
             }).catch((error) => {

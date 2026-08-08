@@ -44,16 +44,16 @@
     },
     {
       "id": "nano-banana",
-      "name": "nano_banana",
-      "displayName": "Nano Banana 生图",
-      "description": "通过 Gemini Image Generation 为 Agent 提供图片生成和编辑能力。",
+      "name": "copis_image",
+      "displayName": "Copis 图片生成",
+      "description": "通过 Copis 后端（edu-api）为 Agent 提供图片生成与计费能力。",
       "category": "media",
       "kind": "internal",
       "deletable": false,
       "defaultEnabled": false,
       "toggleable": true,
       "tools": [
-        { "name": "generate_image", "description": "生成或编辑图片。" }
+        { "name": "generate_image", "description": "生成图片。" }
       ]
     }
   ]

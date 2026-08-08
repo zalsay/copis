@@ -151,3 +151,43 @@ export interface ExpertTeamEventsResponse {
 export interface ExpertTeamArtifactsResponse {
   artifacts: ExpertTeamArtifact[]
 }
+
+/**
+ * 进入主 Agent system prompt 与专家节点子会话的冻结上下文。
+ * 只接受主进程基于 Rust 返回的 binding/schema revision 生成的对象；
+ * renderer 提交的同名字段会被 RPC parser 忽略。
+ */
+export interface ExpertTeamPromptNode {
+  /** 节点 ID（如 researcher） */
+  id: string
+  /** 节点角色（researcher / writer / reviewer / executor 等） */
+  role: string
+  /** 冻结后的节点任务文本，运行时不得由 renderer 或子 Agent 改写 */
+  task: string
+  /** 依赖的前序节点 ID */
+  dependsOn?: string[]
+  /** 相对该节点输出目录的声明产物路径 */
+  outputPath?: string
+  /** 允许显式无产物完成 */
+  allowNoArtifact?: boolean
+}
+
+/** 主进程生成、跨 IPC/主进程/子 Agent 传递的专家团队提示词上下文。 */
+export interface ExpertTeamPromptContext {
+  schemaId: string
+  schemaRevisionId?: number
+  /** schema 版本号（Rust revision） */
+  revision?: number
+  /** Rust 冻结 revision 的 sha256（64 位 hex） */
+  sha256: string
+  schemaName: string
+  schemaDescription?: string
+  /** 规范化后的冻结节点数组 */
+  nodes: ExpertTeamPromptNode[]
+  /** 工作区受控 AGENTS.md 的绝对路径（不写入用户项目根目录） */
+  agentsMdPath: string
+  /** 由 Copis 标记包围的受管控 AGENTS.md 区块内容 */
+  agentsMdContent: string
+  /** 子 Agent 运行时填充为当前节点 ID；主 Agent 上下文中缺省 */
+  nodeId?: string
+}

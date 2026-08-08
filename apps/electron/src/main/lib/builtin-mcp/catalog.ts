@@ -8,7 +8,8 @@
  */
 
 import type { BuiltinMcpServerSummary } from '@copis/shared'
-import { getAgentToolCredentials, getAgentToolState } from '../agent-tool-config'
+import { getAgentToolState } from '../agent-tool-config'
+import { getWorkingTokenStore } from '../working-auth-store'
 import { getBuiltinMcpDefinitions, type BuiltinMcpDefinition } from './baseline'
 import { isBuiltinMcpDefaultDisabled, isBuiltinMcpUserEnabled } from './settings'
 
@@ -47,14 +48,13 @@ function resolveAvailability(
 
   if (item.id === 'nano-banana') {
     const state = getAgentToolState('nano-banana')
-    const credentials = getAgentToolCredentials('nano-banana')
-    const available = state.enabled && !!credentials.apiKey
+    const available = state.enabled && !!getWorkingTokenStore().getToken()
     return {
       enabled: true,
       available,
       availabilityReason: available
         ? undefined
-        : state.enabled ? '需要配置 Gemini API Key' : 'Nano Banana 未启用',
+        : state.enabled ? '需要登录 Copis Working' : 'Copis 图片生成未启用',
     }
   }
 

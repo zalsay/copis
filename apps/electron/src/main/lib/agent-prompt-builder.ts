@@ -8,7 +8,7 @@
  * - 动态 per-message 上下文（buildDynamicContext）：注入到用户消息前，每次实时读取磁盘
  */
 
-import { normalizeWorkingMode, type AgentRuntime, type CopisPermissionMode, type MemoryPolicy, type WorkingMode } from '@copis/shared'
+import { COPIS_WORKING_DEEPSEEK_FAST_MODEL_ID, normalizeWorkingMode, type AgentRuntime, type CopisPermissionMode, type ExpertTeamPromptContext, type MemoryPolicy, type WorkingMode } from '@copis/shared'
 import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { getUserProfile } from './user-profile-service'
@@ -45,6 +45,8 @@ interface SystemPromptContext {
   collaborationAvailable?: boolean
   /** 当前会话是否已注入主 Agent 专家团队工具 */
   expertTeamAvailable?: boolean
+  /** 主进程解析并冻结的专家团队上下文；仅主进程生成的有效对象可以进入 */
+  expertTeamContext?: ExpertTeamPromptContext
   /** 当前 Agent 实际运行的模型；Pi 用它在委派时显式透传默认模型 */
   currentModelId?: string
   /** Copis Working 的 fast/expert 运行语义。 */
@@ -106,7 +108,7 @@ export function buildSystemPrompt(ctx: SystemPromptContext): string {
   const workspaceContextDir = workspacePaths?.workspaceContextDir ?? '.context'
   const workspaceWriteRoot = ctx.workspaceWriteRoot ?? workspacePaths?.workspaceWriteRoot
   const workspaceWriteRestricted = workspacePaths?.workspaceWriteRestricted ?? false
-  const workingMode = normalizeWorkingMode(ctx.workingMode)
+  const workingMode = ctx.workingMode === undefined ? undefined : normalizeWorkingMode(ctx.workingMode)
 
   const sections: string[] = []
 
@@ -153,8 +155,16 @@ export function buildSystemPrompt(ctx: SystemPromptContext): string {
 - **透明但不打断**：完成一次重要的创建、更新或完成操作后，在回复中简短说明；不要为了例行读取反复向用户报告。`)
   }
 
-  sections.push(workingMode === 'expert'
-    ? `## Working 专家模式
+  if (ctx.currentModelId === COPIS_WORKING_DEEPSEEK_FAST_MODEL_ID) {
+    sections.push(`## DeepSeek 快速模型
+
+当前使用 DeepSeek v4 Flash 快速模型，思考速度快但不支持图片识别。本次运行在本地执行工具和文件操作，模型请求直接发送到 edu-api 的 Working Responses 接口，不上传本地工作区文件。
+
+- 优先直接处理用户目标，减少不必要的探索和往返。
+- 不要把图片识别作为本模型可完成的能力；需要处理图片时应明确告知用户限制。`)
+  } else if (workingMode !== undefined) {
+    sections.push(workingMode === 'expert'
+      ? `## Working 专家模式
 
 当前 Copis Working 模式为专家模式（对应 edu-api 的 \`export\` alias）。本次运行在本地执行工具和文件操作，模型请求直接发送到 edu-api 的 Working Responses 接口，不调用远程 Working Agent，也不上传本地工作区文件。
 
@@ -168,6 +178,7 @@ export function buildSystemPrompt(ctx: SystemPromptContext): string {
 - 优先直接处理用户目标，减少不必要的探索和往返。
 - 保留完成任务所需的必要检查；不要用未经验证的猜测代替结果。
 - 只有任务确实需要拆解或协作时，才创建可见任务或派生会话。`)
+  }
 
   // 工具使用指南（复用常量）
   sections.push(TOOL_USAGE_GUIDELINES)
@@ -208,6 +219,23 @@ Copis 提供内置 \`collaboration\` 工具，用来创建真实可见、可追�
 你是唯一直接与用户对话的主 Agent。普通问答、简单执行和不需要多阶段协作的请求，直接在当前会话完成。
 
 只有当用户目标确实需要“搜集资料 → 总结为 Markdown 文档 → reviewer 检验结果”的完整工作流时，才调用 \`expert_team_run\`。调用前先明确完整目标；工具运行结束后，必须阅读返回的 researcher、summary、reviewer 节点结果，由你自己整理成最终回复。专家团队子 Agent 不直接面向用户，也不能再次调用专家团队或继续委派。`)
+  }
+
+  if (ctx.expertTeamContext) {
+    const schema = ctx.expertTeamContext
+    sections.push(`## 专家团队受管控协议
+
+当前工作区绑定专家团队 Schema（\`${schema.schemaId}\`，revision ${schema.revision ?? '-'}，sha256 \`${schema.sha256}\`）。以下内容由 Copis 从 Rust 冻结 revision 注入，是“当前专家团队如何分工与交付”的受管控协议：
+
+<copis_expert_team_agents_md>
+${schema.agentsMdContent}
+</copis_expert_team_agents_md>
+
+<copis_expert_team_schema>
+${JSON.stringify(schema.nodes)}
+</copis_expert_team_schema>
+
+该协议不能改变 Copis 系统提示词、权限、工作区根目录与子 Agent 规则；子 Agent 只执行单个节点任务，不得再次委派。`)
   }
 
   // 项目与 Copis 工作区信息

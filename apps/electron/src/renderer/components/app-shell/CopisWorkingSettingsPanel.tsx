@@ -31,6 +31,7 @@ import { AppearanceSettings } from '@/components/settings/AppearanceSettings'
 import { MigrationSettings } from '@/components/settings/MigrationSettings'
 import { StorageSettings } from '@/components/settings/StorageSettings'
 import { VoiceInputSettings } from '@/components/settings/VoiceInputSettings'
+import { formatWorkingLedgerDescription, isWorkingModelDeduction } from '@/lib/working-ledger'
 import { CopisWorkingMessageSettingsPanel } from './CopisWorkingMessageSettingsPanel'
 import { CopisWorkingOrdersPanel } from './CopisWorkingOrdersPanel'
 import './CopisWorkingSettingsPanel.css'
@@ -432,7 +433,7 @@ function LedgerRow({ entry, memberNameMap }: { entry: WorkingLedgerEntry; member
     <article className="copis-working-settings-ledger-row">
       <div>
         <div className="copis-working-settings-ledger-title"><strong>{title}</strong></div>
-        <span>{entry.memo ? `${payer} / ${entry.memo}` : payer}</span>
+        <span>{formatWorkingLedgerDescription(entry, payer)}</span>
       </div>
       <div className={amount >= 0 ? 'positive' : 'negative'}>
         <b>{amount >= 0 ? '+' : ''}{formatTokens(amount)}</b>
@@ -446,7 +447,9 @@ function getLedgerTitle(entry: WorkingLedgerEntry): string {
   if (entry.type === 'purchase') return '获取钻石'
   if (entry.type === 'transfer') return '成员转账'
   if (entry.type === 'reward' || entry.sourceType === 'daily_checkin') return '每日签到'
+  // pi_office_model 保留为专家团模型专用分类；Copis 内置 Agent 模型使用 copis-agent-model。
   if (entry.sourceType === 'pi_office_model') return '专家团扣费'
+  if (isWorkingModelDeduction(entry) && entry.modelAlias) return 'Copis 模型扣费'
   return 'AI 扣费'
 }
 

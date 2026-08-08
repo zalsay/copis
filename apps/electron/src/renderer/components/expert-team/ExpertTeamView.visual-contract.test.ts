@@ -34,7 +34,7 @@ describe('专家团队页头视觉契约', () => {
 
   test('Given 打开专家团队页 When 查看页头状态徽章 Then 使用全局 primary badge 令牌', () => {
     expect(primaryBadgeRule).toBeDefined()
-    expect(globalsSource).toContain('--ui-primary: #f5c18e;')
+    expect(globalsSource).toContain('--ui-primary: #f3af6b;')
     expect(globalsSource).toContain('--ui-primary-background: rgb(240 161 90 / 10%);')
     expect(globalsSource).toContain('.ui-primary-badge')
     expect(globalsSource).toContain('.ui-primary-surface')
@@ -73,11 +73,28 @@ describe('专家团队页头视觉契约', () => {
     expect(viewSource).toContain('节点详情')
     expect(viewSource).toContain('运行历史')
     expect(viewSource).toContain('currentSchema.edges')
-    expect(viewSource).toContain('currentSchema.nodes[0]')
+    expect(viewSource).toContain('hoveredNodeId')
+    expect(viewSource).toContain('showNodeDetails(node.id, event)')
+    expect(viewSource).toContain('hideNodeDetails')
+    expect(viewSource).toContain('pinnedNodeId ?? hoveredNodeId')
+    expect(viewSource).toContain('onClick={(event) => togglePinNode(node.id, event)}')
+    expect(viewSource).not.toContain('currentSchema.nodes[0]')
     expect(viewSource).toContain('dependsOn')
     expect(viewSource).toContain('nodeStates')
     expect(viewSource).not.toContain('contentEditable')
     expect(viewSource).not.toContain('<textarea')
+  })
+
+  test('Given 悬停或点击专家节点 When 查看详情 Then 节点详情面板移除并以节点附近悬浮层展示', () => {
+    expect(viewSource).not.toContain('aria-label="专家团队节点详情"')
+    expect(viewSource).not.toContain('xl:grid-cols-[minmax(0,1.35fr)')
+    expect(viewSource).toContain('aria-label="节点详情悬浮层"')
+    expect(viewSource).toContain('role="tooltip"')
+    expect(viewSource).toContain('getBoundingClientRect()')
+    expect(viewSource).toContain('nodeRect')
+    expect(viewSource).toContain("position: 'fixed'")
+    expect(viewSource).toContain('pinnedNodeId === activeNode.id')
+    expect(viewSource).toContain('aria-label="关闭节点详情"')
   })
 
   test('Given 打开专家团队页 When 查看布局 Then 左侧列表从顶部开始且 header 位于右侧工作台', () => {

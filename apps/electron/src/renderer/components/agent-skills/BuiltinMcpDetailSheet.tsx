@@ -34,9 +34,8 @@ interface BuiltinMcpConfigInfo {
 function getConfigInfo(server: BuiltinMcpServerSummary): BuiltinMcpConfigInfo {
   if (server.id === 'nano-banana') {
     return {
-      source: 'Agent 工具 / Nano Banana',
-      description: '配置 Gemini API Key、API 地址、模型与开关后，Agent 会话才能注入生图 MCP。',
-      actionLabel: '配置生图',
+      source: 'Copis 后端 / edu-api',
+      description: '图片生成与计费由 Copis 后端（edu-api）提供，登录 Copis Working 后即可使用，无需填写本地凭据。',
     }
   }
   if (server.id === 'collaboration') {

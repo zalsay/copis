@@ -33,6 +33,8 @@ import { CopisTemplateLogo, getModelLogo, getChannelLogo, DefaultLogo } from '@/
 import { cn } from '@/lib/utils'
 import {
   COPIS_WORKING_CHANNEL_ID,
+  COPIS_WORKING_DEEPSEEK_CHANNEL_ID,
+  COPIS_WORKING_DEEPSEEK_FAST_MODEL_ID,
   COPIS_WORKING_EXPERT_MODEL_ID,
   COPIS_WORKING_FAST_MODEL_ID,
 } from '@copis/shared'
@@ -55,6 +57,10 @@ function groupByChannel(options: ModelOption[]): Map<string, ModelOption[]> {
 }
 
 function getModelDescription(option: Pick<ModelOption, 'channelId' | 'modelId'>): string | undefined {
+  if (option.channelId === COPIS_WORKING_DEEPSEEK_CHANNEL_ID
+    && option.modelId === COPIS_WORKING_DEEPSEEK_FAST_MODEL_ID) {
+    return 'v4 Flash，思考速度快，不支持图片识别'
+  }
   if (option.channelId !== COPIS_WORKING_CHANNEL_ID) return undefined
   if (option.modelId === COPIS_WORKING_FAST_MODEL_ID) return '速度快，思考能力一般'
   if (option.modelId === COPIS_WORKING_EXPERT_MODEL_ID) return '知识面广，深度思考，消耗更多钻石'
@@ -70,7 +76,9 @@ function renderModelIcon(option: ModelOption, useCopisLogo: boolean, className: 
   }
   return (
     <img
-      src={useCopisLogo ? CopisTemplateLogo : getModelLogo(option.modelId, option.provider)}
+      src={useCopisLogo && option.channelId !== COPIS_WORKING_DEEPSEEK_CHANNEL_ID
+        ? CopisTemplateLogo
+        : getModelLogo(option.modelId, option.provider)}
       alt={option.modelName}
       className={cn(className, 'rounded object-cover')}
     />
@@ -307,14 +315,17 @@ export function ModelSelector({
                 return Array.from(filteredGrouped.entries()).map(([channelId, options]) => {
                 const first = options[0]
                 if (!first) return null
-                const channel = channels.find((c) => c.id === channelId)
+                const channel = availableChannels.find((c) => c.id === channelId)
+                const useDeepSeekLogo = first.channelId === COPIS_WORKING_DEEPSEEK_CHANNEL_ID
 
                 return (
                   <div key={channelId}>
                     {/* 供应商标题行 - 灰色背景 */}
                     <div className="flex items-center gap-2 px-4 py-2 bg-muted/50 border-b border-border/30">
                       <img
-                        src={useCopisLogo ? CopisTemplateLogo : channel ? getChannelLogo(channel) : DefaultLogo}
+                        src={useDeepSeekLogo
+                          ? getModelLogo(first.modelId, first.provider)
+                          : useCopisLogo ? CopisTemplateLogo : channel ? getChannelLogo(channel) : DefaultLogo}
                         alt={first.channelName}
                         className="size-5 rounded object-cover"
                       />

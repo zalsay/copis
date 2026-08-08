@@ -24,6 +24,7 @@ import type {
   WorkingWalletMember,
   WorkingWorkspace,
   WorkingWorkspaceInput,
+  WorkingImageGenerationResult,
 } from '@copis/shared'
 import type { WorkingTokenStore } from './working-auth-store'
 import { DEFAULT_COPIS_BACKEND_URL } from './backend-endpoint-resolver'
@@ -303,6 +304,9 @@ function normalizeLedgerEntry(value: unknown): WorkingLedgerEntry {
     amountTokens: normalizeNumber(item.amount_tokens ?? item.amountTokens),
     type: String(item.type ?? ''),
     sourceType: item.source_type == null && item.sourceType == null ? undefined : String(item.source_type ?? item.sourceType),
+    modelAlias: item.alias == null && item.model_alias == null && item.modelAlias == null
+      ? undefined
+      : String(item.alias ?? item.model_alias ?? item.modelAlias),
     memo: item.memo == null ? undefined : String(item.memo),
     deductionMultiplier: normalizeNumber(item.deduction_multiplier ?? item.deductionMultiplier),
     payerBalanceAfter: normalizeNumber(item.payer_balance_after ?? item.payerBalanceAfter),
@@ -336,6 +340,32 @@ function normalizeOrder(value: unknown): WorkingOrder {
     method: String(item.method ?? ''),
     status: String(item.status ?? 'failed'),
     createdAt: item.created_at == null && item.createdAt == null ? undefined : String(item.created_at ?? item.createdAt),
+  }
+}
+
+function normalizeWorkingImageGenerationResult(value: unknown): WorkingImageGenerationResult {
+  const item = isRecord(value) ? value : {}
+  const numberOrUndefined = (keys: readonly string[]): number | undefined => {
+    for (const key of keys) {
+      const raw = item[key]
+      if (typeof raw === 'number' && Number.isFinite(raw)) return raw
+    }
+    return undefined
+  }
+  const stringOrUndefined = (keys: readonly string[]): string | undefined => {
+    for (const key of keys) {
+      const raw = item[key]
+      if (typeof raw === 'string' && raw.trim()) return raw
+    }
+    return undefined
+  }
+  return {
+    imageUrl: stringOrUndefined(['image_url', 'imageUrl']),
+    dataUrl: stringOrUndefined(['data_url', 'dataUrl']),
+    contentType: stringOrUndefined(['content_type', 'contentType']),
+    outputHint: stringOrUndefined(['output_hint', 'outputHint']),
+    deductedTokens: numberOrUndefined(['deducted_tokens', 'deductedTokens']),
+    balanceAfter: numberOrUndefined(['balance_after', 'balanceAfter']),
   }
 }
 
@@ -663,6 +693,21 @@ export class WorkingApiClient {
       }),
     })
     return normalizeWorkspace(data)
+  }
+
+  /** 调用 edu-api /api/working/images/generate 生成图片（Copis 图片生成） */
+  async generateWorkingImage(input: { prompt: string; size?: string; runId?: string }): Promise<WorkingImageGenerationResult> {
+    const prompt = input.prompt.trim()
+    if (!prompt) throw new Error('图片生成提示词不能为空')
+    const data = await this.request<unknown>('/api/working/images/generate', {
+      method: 'POST',
+      body: JSON.stringify({
+        prompt,
+        size: input.size?.trim() ?? '',
+        run_id: input.runId?.trim() ?? '',
+      }),
+    })
+    return normalizeWorkingImageGenerationResult(data)
   }
 
   async listSessions(): Promise<WorkingSessionSummary[]> {

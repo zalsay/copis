@@ -16,6 +16,7 @@ import { WebSearchResultRenderer } from './web-search-result'
 import { WebFetchResultRenderer } from './web-fetch-result'
 import { TaskGetResultRenderer } from './task-get-result'
 import { TaskListResultRenderer } from './task-list-result'
+import { GenerateImageResultRenderer } from './generate-image-result'
 import { DefaultResultRenderer } from './default-result'
 
 export interface ToolResultRendererProps {
@@ -48,6 +49,8 @@ export function ToolResultRenderer({ toolName, input, result, isError, basePath 
       return <TaskGetResultRenderer result={result} isError={isError} />
     case 'TaskList':
       return <TaskListResultRenderer result={result} isError={isError} />
+    case 'generate_image':
+      return <GenerateImageResultRenderer result={result} isError={isError} />
     default:
       return <DefaultResultRenderer result={result} isError={isError} />
   }

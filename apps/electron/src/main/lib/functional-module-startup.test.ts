@@ -14,6 +14,7 @@ mock.module('electron', () => ({
     getPath: () => '/tmp/copis-functional-module-startup-test',
   },
   BrowserWindow: class {},
+  WebContentsView: class {},
   clipboard: {},
   dialog: {},
   nativeImage: { createFromPath: () => ({}) },
@@ -57,7 +58,7 @@ describe('登录后功能模块启动契约', () => {
   test('定义独立的启动进度 IPC 和 health 阶段', () => {
     const progress: FunctionalModuleStartupProgressPayload = {
       phase: 'health',
-      detail: '正在检查本地 API',
+      detail: '正在检查本地服务',
       progress: 0.97,
       activeModule: 'rust-http-api',
     }
@@ -78,7 +79,8 @@ describe('登录后功能模块启动契约', () => {
 
   test('错误消息不泄露 COS secret 或内部 token', () => {
     expect(toStartupError(new Error('COS_SECRET_KEY=secret /internal token'))).not.toContain('secret')
-    expect(toStartupError(new Error('OfficeCLI 安装失败'))).toBe('OfficeCLI 安装失败')
+    expect(toStartupError(new Error('OfficeCLI 安装失败'))).toBe('必要组件准备失败，请重试')
+    expect(toStartupError(new Error('系统核心模块未通过运行检查'))).toBe('系统核心模块运行检查未通过，请重试')
   })
 
   test('OfficeCLI 和 Rust API 都必须由 manifest 标记为必选', () => {
@@ -109,7 +111,7 @@ describe('登录后功能模块启动契约', () => {
       },
     ]
 
-    expect(() => assertRequiredModuleArtifacts(artifacts)).toThrow('OfficeCLI 必须是必选模块')
+    expect(() => assertRequiredModuleArtifacts(artifacts)).toThrow('Office 文档支持必须是必要组件')
   })
 
   test('自动启动流程拒绝可选 OfficeCLI manifest', async () => {
@@ -155,7 +157,7 @@ describe('登录后功能模块启动契约', () => {
       const first = ensureRequiredFunctionalModules(options)
       const second = ensureRequiredFunctionalModules(options)
       expect(second).toBe(first)
-      await expect(first).rejects.toThrow('OfficeCLI 必须是必选模块')
+      await expect(first).rejects.toThrow('必要组件准备失败，请重试')
     } finally {
       rmSync(rootDir, { recursive: true, force: true })
     }

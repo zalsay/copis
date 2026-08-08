@@ -18,7 +18,7 @@ export type FunctionalModuleStartupState = Omit<FunctionalModuleStartupProgressP
 
 export const functionalModuleStartupAtom = atom<FunctionalModuleStartupState>({
   phase: 'checking',
-  detail: '正在检查功能模块版本',
+  detail: '正在检查必要组件',
   progress: 0,
   error: null,
 })

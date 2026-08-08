@@ -80,6 +80,36 @@ mock.module('./proxy-settings-service', () => ({
   getEffectiveProxyUrl: async () => undefined,
 }))
 
+const resolvedRpcContexts: unknown[] = []
+mock.module('./expert-team-context', () => ({
+  resolveExpertTeamPromptContext: async (options: unknown) => {
+    resolvedRpcContexts.push(options)
+    return {
+      schemaId: 'team-a',
+      schemaRevisionId: 202,
+      revision: 2,
+      sha256: 'b'.repeat(64),
+      schemaName: '深入研究团队',
+      nodes: [
+        { id: 'researcher', role: 'researcher', task: '搜集资料', dependsOn: [], outputPath: 'research.md' },
+        { id: 'summary', role: 'writer', task: '总结', dependsOn: ['researcher'], outputPath: 'summary.md' },
+        { id: 'reviewer', role: 'reviewer', task: '检验', dependsOn: ['summary'], outputPath: 'review.md' },
+      ],
+      agentsMdPath: '/tmp/.copis/agent-workspaces/test-workspace/AGENTS.md',
+      agentsMdContent: '<!-- copis-expert-team:start -->\n## 专家团队协议\n- Schema: team-a\n- Revision: 2\n- 节点 DAG: `researcher -> summary -> reviewer`\n<!-- copis-expert-team:end -->',
+    }
+  },
+  validateInternalExpertTeamContext: (value: unknown) => {
+    if (typeof value !== 'object' || value === null) return undefined
+    const record = value as Record<string, unknown>
+    return typeof record.sha256 === 'string' && /^[a-f0-9]{64}$/i.test(record.sha256)
+      && Array.isArray(record.nodes) && record.nodes.length > 0
+      ? value
+      : undefined
+  },
+  HttpExpertTeamContextReader: class {},
+}))
+
 mock.module('./functional-module-manager', () => ({
   getFunctionalModulePath: () => undefined,
 }))
@@ -159,6 +189,61 @@ describe('Agent RPC mention 参数', () => {
   })
 })
 
+describe('Agent RPC 专家团队上下文解析边界', () => {
+  const validContext = {
+    schemaId: 'team-a',
+    schemaRevisionId: 202,
+    revision: 2,
+    sha256: 'b'.repeat(64),
+    schemaName: '深入研究团队',
+    nodes: [{ id: 'researcher', role: 'researcher', task: '搜集', dependsOn: [], outputPath: 'research.md' }],
+    agentsMdPath: '/tmp/.copis/agent-workspaces/test-workspace/AGENTS.md',
+    agentsMdContent: '<!-- copis-expert-team:start -->\n## 协议\n<!-- copis-expert-team:end -->',
+  }
+
+  test('Given delegation 输入携带有效冻结上下文 When 解析 Then 保留内部上下文', () => {
+    const input = parseAgentRpcInput({
+      sessionId: 'session-1',
+      userMessage: '执行节点任务',
+      triggeredBy: 'delegation',
+      expertTeamContext: validContext,
+    })
+
+    expect(input.triggeredBy).toBe('delegation')
+    expect(input.expertTeamContext?.schemaId).toBe('team-a')
+    expect(input.expertTeamContext?.revision).toBe(2)
+  })
+
+  test('Given user/automation 输入携带 expertTeamContext When 解析 Then 一律忽略', () => {
+    const user = parseAgentRpcInput({
+      sessionId: 'session-1',
+      userMessage: '开始',
+      triggeredBy: 'user',
+      expertTeamContext: validContext,
+    })
+    const automation = parseAgentRpcInput({
+      sessionId: 'session-1',
+      userMessage: '开始',
+      triggeredBy: 'automation',
+      expertTeamContext: validContext,
+    })
+
+    expect(user.expertTeamContext).toBeUndefined()
+    expect(automation.expertTeamContext).toBeUndefined()
+  })
+
+  test('Given delegation 输入携带伪造/损坏上下文 When 解析 Then 拒绝并忽略', () => {
+    const forged = parseAgentRpcInput({
+      sessionId: 'session-1',
+      userMessage: '执行节点任务',
+      triggeredBy: 'delegation',
+      expertTeamContext: { schemaId: 'team-a', sha256: 'not-a-hex', nodes: [] },
+    })
+
+    expect(forged.expertTeamContext).toBeUndefined()
+  })
+})
+
 describe('Agent RPC queue UUID 幂等性', () => {
   test('Given 同一个 queue UUID 重复准备 When 写入 RPC 持久化链路 Then JSONL 只追加一次并返回同一个 UUID', async () => {
     const { prepareAgentRpcQueue, prepareAgentRpcRun } = await import('./agent-rpc-service')
@@ -232,6 +317,64 @@ describe('Agent RPC 工作区边界', () => {
   })
 })
 
+describe('Agent RPC 专家团队上下文', () => {
+  const delegationContext = {
+    schemaId: 'team-a',
+    schemaRevisionId: 202,
+    revision: 2,
+    sha256: 'b'.repeat(64),
+    schemaName: '深入研究团队',
+    nodes: [
+      { id: 'researcher', role: 'researcher', task: '搜集资料', dependsOn: [], outputPath: 'research.md' },
+      { id: 'summary', role: 'writer', task: '总结', dependsOn: ['researcher'], outputPath: 'summary.md' },
+      { id: 'reviewer', role: 'reviewer', task: '检验', dependsOn: ['summary'], outputPath: 'review.md' },
+    ],
+    agentsMdPath: '/tmp/.copis/agent-workspaces/test-workspace/AGENTS.md',
+    agentsMdContent: '<!-- copis-expert-team:start -->\n## 专家团队协议\n- Schema: team-a\n- Revision: 2\n- 节点 DAG: `researcher -> summary -> reviewer`\n<!-- copis-expert-team:end -->',
+    nodeId: 'researcher',
+  }
+
+  test('Given delegation 子会话携带冻结上下文 When 准备 Pi Worker Then 注入受管控协议与节点 schema', async () => {
+    const { prepareAgentRpcRun } = await import('./agent-rpc-service')
+
+    const run = await prepareAgentRpcRun({
+      sessionId: rpcSession.id,
+      userMessage: '执行专家节点任务',
+      channelId: 'channel-1',
+      modelId: rpcSession.modelId,
+      agentRuntime: 'pi',
+      triggeredBy: 'delegation',
+      expertTeamContext: delegationContext,
+    })
+
+    expect(run.query.systemPrompt).toContain('<copis_expert_team_agents_md>')
+    expect(run.query.systemPrompt).toContain('researcher -> summary -> reviewer')
+    expect(run.query.systemPrompt).toContain('<copis_expert_team_schema>')
+    expect(run.query.systemPrompt).toContain('"id":"researcher"')
+    expect(run.query.systemPrompt).toContain('revision 2')
+  })
+
+  test('Given user 主会话 When 准备 Pi Worker Then 解析 workspace binding 并注入同一上下文', async () => {
+    const { prepareAgentRpcRun } = await import('./agent-rpc-service')
+    resolvedRpcContexts.length = 0
+
+    const run = await prepareAgentRpcRun({
+      sessionId: rpcSession.id,
+      userMessage: '开始研究',
+      channelId: 'channel-1',
+      modelId: rpcSession.modelId,
+      agentRuntime: 'pi',
+    })
+
+    expect(resolvedRpcContexts).toHaveLength(1)
+    expect(resolvedRpcContexts[0]).toMatchObject({
+      workspace: expect.objectContaining({ slug: 'test-workspace' }),
+    })
+    expect(run.query.systemPrompt).toContain('<copis_expert_team_agents_md>')
+    expect(run.query.systemPrompt).toContain('team-a')
+  })
+})
+
 describe('Browser Agent RPC 准备', () => {
   test('Given Browser session bound to an HTTP tab When preparing Pi Worker Then it injects capability, Skill, sanitized prompt context and bypass mode', async () => {
     const { prepareAgentRpcRun } = await import('./agent-rpc-service')
@@ -248,6 +391,8 @@ describe('Browser Agent RPC 准备', () => {
 
     expect(run.query.permissionMode).toBe('bypassPermissions')
     expect(run.query.skillMentions).toContain('browser-page-control')
+    expect(run.query.additionalSkillPaths).toHaveLength(1)
+    expect(run.query.fileAccessPolicy?.readRoots).toContain(run.query.additionalSkillPaths?.[0])
     expect(run.query.systemPrompt).toContain('tab-1')
     expect(run.query.systemPrompt).toContain('token=REDACTED')
     expect(run.query.systemPrompt).not.toContain('token=secret')

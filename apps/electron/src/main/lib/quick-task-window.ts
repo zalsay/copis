@@ -8,6 +8,7 @@
 import { BrowserWindow, screen } from 'electron'
 import { join } from 'path'
 import { app } from 'electron'
+import { httpApiWebTokenArgument } from './http-api-web-token'
 
 /** 快速任务窗口单例 */
 let quickTaskWindow: BrowserWindow | null = null
@@ -42,6 +43,7 @@ export function createQuickTaskWindow(): void {
       preload: join(__dirname, 'preload.cjs'),
       contextIsolation: true,
       nodeIntegration: false,
+      additionalArguments: [httpApiWebTokenArgument()],
     },
   })
 

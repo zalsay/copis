@@ -118,8 +118,11 @@ import type { AgentRuntime, AgentSendInput, AgentPendingFile, FileDialogLargeFil
 import './AgentView.css'
 import {
   COPIS_WORKING_CHANNEL_ID,
+  COPIS_WORKING_DEEPSEEK_CHANNEL_ID,
+  COPIS_WORKING_DEEPSEEK_FAST_MODEL_ID,
   COPIS_WORKING_EXPERT_MODEL_ID,
   createCopisWorkingChannel,
+  createCopisWorkingDeepSeekChannel,
   inferAgentContextWindow,
   inferContextWindow,
   isCodexFastModeSupportedModel,
@@ -295,10 +298,22 @@ export function AgentConversationSurface({ sessionId, variant = 'main' }: AgentC
     () => workingClientConfig ? createCopisWorkingChannel(workingClientConfig.backendUrl) : null,
     [workingClientConfig],
   )
+  const deepSeekChannel = React.useMemo(
+    () => workingClientConfig ? createCopisWorkingDeepSeekChannel(workingClientConfig.backendUrl) : null,
+    [workingClientConfig],
+  )
   const workingMode: WorkingMode = sessionMeta?.workingMode
     ?? (sessionMetaChannelId === COPIS_WORKING_CHANNEL_ID && sessionMetaModelId === COPIS_WORKING_EXPERT_MODEL_ID ? 'expert' : 'fast')
-  const agentChannelId = COPIS_WORKING_CHANNEL_ID
-  const agentModelId = workingModeToModelId(workingMode)
+  const configuredChannelId = sessionChannelMap.get(sessionId)
+    ?? sessionMetaChannelId
+    ?? (!hasSessionMeta ? defaultChannelId : undefined)
+  // Agent 当前只展示 Copis 内置渠道；保留普通渠道会话的兼容回退，同时允许 DeepSeek 虚拟渠道恢复。
+  const agentChannelId = configuredChannelId === COPIS_WORKING_DEEPSEEK_CHANNEL_ID
+    ? COPIS_WORKING_DEEPSEEK_CHANNEL_ID
+    : COPIS_WORKING_CHANNEL_ID
+  const agentModelId = agentChannelId === COPIS_WORKING_DEEPSEEK_CHANNEL_ID
+    ? sessionModelMap.get(sessionId) ?? sessionMetaModelId ?? COPIS_WORKING_DEEPSEEK_FAST_MODEL_ID
+    : workingModeToModelId(workingMode)
   const setWorkingSettingsOpen = useSetAtom(workingSettingsOpenAtom)
   const setDraftSessionIds = useSetAtom(draftSessionIdsAtom)
   const globalWorkspaceId = useAtomValue(currentAgentWorkspaceIdAtom)
@@ -512,14 +527,16 @@ export function AgentConversationSurface({ sessionId, variant = 'main' }: AgentC
   const stableChannel = React.useMemo(
     () => stableChannelId === COPIS_WORKING_CHANNEL_ID
       ? workingChannel
+      : stableChannelId === COPIS_WORKING_DEEPSEEK_CHANNEL_ID
+        ? deepSeekChannel
       : stableChannelId ? globalChannels.find((channel) => channel.id === stableChannelId) : undefined,
-    [globalChannels, stableChannelId, workingChannel],
+    [deepSeekChannel, globalChannels, stableChannelId, workingChannel],
   )
   const planQuotaChannelId = stableChannel && supportsChannelPlanQuota(stableChannel)
     ? stableChannel.id
     : null
   const planQuotaChannelUpdatedAt = planQuotaChannelId ? stableChannel?.updatedAt : undefined
-  const agentChannelProvider = workingChannel?.provider
+  const agentChannelProvider = stableChannel?.provider
   const isCodexFastModeAvailable = hasSessionMeta
     && sessionAgentRuntime === 'pi'
     && agentChannelProvider === 'openai-codex'
@@ -527,7 +544,7 @@ export function AgentConversationSurface({ sessionId, variant = 'main' }: AgentC
   const codexFastModeEnabled = isCodexFastModeAvailable && sessionMeta?.codexFastMode === true
 
   // 检查 Agent 渠道列表中是否存在可用的模型（渠道 enabled + 模型 enabled）
-  const hasAvailableModel = Boolean(workingChannel?.enabled && workingChannel.models.some((model) => model.enabled))
+  const hasAvailableModel = Boolean(stableChannel?.enabled && stableChannel.models.some((model) => model.enabled))
   React.useEffect(() => {
     if (!agentChannelId || agentModelId) return
 
@@ -2708,12 +2725,11 @@ export function AgentConversationSurface({ sessionId, variant = 'main' }: AgentC
     <>
       <div className="flex min-w-0 items-center gap-1 [&_.model-selector-trigger>span]:max-w-[min(12rem,30vw)]">
         <ModelSelector
-          filterChannelId={COPIS_WORKING_CHANNEL_ID}
-          additionalChannels={workingChannel ? [workingChannel] : []}
+          filterChannelIds={[COPIS_WORKING_CHANNEL_ID, COPIS_WORKING_DEEPSEEK_CHANNEL_ID]}
+          additionalChannels={[workingChannel, deepSeekChannel].filter((channel): channel is NonNullable<typeof channel> => channel !== null)}
           externalSelectedModel={externalSelectedModel}
           onModelSelect={handleModelSelect}
           showChannelInTrigger
-          triggerChannelName="Copis"
           useCopisLogo
           useSharedOpenState
         />

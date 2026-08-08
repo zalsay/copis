@@ -2,6 +2,7 @@
 import type { AgentQueueMessageInput, AgentStreamCompletePayload, AgentStreamEvent, AgentSendInput, MemoryExportFileInput } from '@copis/shared'
 import { agentHttpStreamClient, configureAgentHttpApiBaseUrl } from './agent-http-stream'
 import { RENDERER_HTTP_API_BASE_URL, RENDERER_HTTP_API_PORT } from './http-api-base-url'
+import { withHttpApiWebToken } from './http-api-web-token'
 
 const HTTP_API_BASE_URL = ''
 const HTTP_API_STARTUP_RETRY_COUNT = 60
@@ -65,15 +66,14 @@ async function fetchWithStartupRetry(url: string, init: RequestInit): Promise<Re
 }
 
 async function request<T>(path: string, method = 'GET', body?: unknown): Promise<T> {
-  const init: RequestInit = {
+  const response = await fetchWithStartupRetry(`${HTTP_API_BASE_URL}${path}`, withHttpApiWebToken({
     method,
     headers: {
       Accept: 'application/json',
       ...(body === undefined ? {} : { 'Content-Type': 'application/json' }),
     },
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-  }
-  const response = await fetchWithStartupRetry(`${HTTP_API_BASE_URL}${path}`, init)
+  }))
   const text = await response.text()
   let payload: unknown
   if (text) {
@@ -152,6 +152,10 @@ function createHttpMethods(): Record<string, HttpMethod> {
       ...(getArgument<string | undefined>(args, 2) ? { workspaceId: getArgument<string>(args, 2) } : {}),
       ...(getArgument<string | undefined>(args, 3) ? { modelId: getArgument<string>(args, 3) } : {}),
     }),
+    deleteAgentSession: (args) => {
+      const sessionId = encodeURIComponent(getArgument<string>(args, 0))
+      return request(`/api/agent/sessions/${sessionId}`, 'DELETE')
+    },
     getAgentSessionSDKMessages: (args) => {
       const sessionId = encodeURIComponent(getArgument<string>(args, 0))
       return request(`/api/agent/sessions/${sessionId}/messages`)

@@ -1042,6 +1042,12 @@ export interface AgentSendInput {
   triggeredBy?: 'user' | 'automation' | 'delegation'
   /** 定时任务执行上下文（注入到系统提示词，用户不可见） */
   automationContext?: string
+  /**
+   * 主进程生成并冻结的专家团队上下文（仅 delegation 子会话携带）。
+   * renderer 无法直接提交：RPC parser 只接受带 revision/hash 的内部对象，
+   * 非 delegation 输入一律忽略。
+   */
+  expertTeamContext?: import('./expert-team').ExpertTeamPromptContext
 }
 
 // ===== Agent 队列消息 =====

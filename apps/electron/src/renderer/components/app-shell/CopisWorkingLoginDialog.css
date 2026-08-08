@@ -118,7 +118,7 @@
 .copis-working-auth-submit:focus-visible,
 .copis-working-auth-secondary:focus-visible,
 .copis-working-auth-code-row button:focus-visible {
-  outline: 2px solid #c8a7ff;
+  outline: 2px solid var(--ui-primary);
   outline-offset: 2px;
 }
 
@@ -232,8 +232,8 @@
 .copis-working-auth-field > input:focus,
 .copis-working-auth-code-row > input:focus,
 .copis-working-auth-input-wrap:focus-within {
-  border-color: #c8a7ff;
-  box-shadow: 0 0 0 3px rgba(200, 167, 255, 0.22);
+  border-color: var(--ui-primary);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--ui-primary) 22%, transparent);
 }
 
 .copis-working-auth-field > input:disabled,
@@ -258,7 +258,7 @@
 
 .copis-working-auth-link:hover,
 .copis-working-auth-footer-link:hover {
-  color: #c8a7ff;
+  color: var(--ui-primary);
 }
 
 .copis-working-auth-code-row {
@@ -301,8 +301,8 @@
   height: 18px;
   place-items: center;
   border-radius: 5px;
-  background: #c8a7ff;
-  color: #21182c;
+  background: var(--ui-primary);
+  color: var(--ui-primary-foreground);
   font-size: 12px;
   font-weight: 900;
 }
@@ -318,7 +318,7 @@
 }
 
 .copis-working-auth-message.notice {
-  color: #c8a7ff;
+  color: var(--ui-primary);
 }
 
 .copis-working-auth-submit {
@@ -327,10 +327,10 @@
   align-items: center;
   justify-content: center;
   gap: 8px;
-  border: 1px solid rgba(200, 167, 255, 0.3);
+  border: 1px solid color-mix(in srgb, var(--ui-primary) 30%, transparent);
   border-radius: 9px;
-  background: #c8a7ff;
-  color: #21182c;
+  background: var(--ui-primary);
+  color: var(--ui-primary-foreground);
   font: inherit;
   font-size: 15px;
   font-weight: 850;
@@ -338,7 +338,7 @@
 }
 
 .copis-working-auth-submit:hover:not(:disabled) {
-  background: #d5bdff;
+  filter: brightness(1.08);
 }
 
 .copis-working-auth-submit:disabled {
@@ -397,9 +397,9 @@
 }
 
 .copis-working-reset-steps span.active {
-  border-color: #c8a7ff;
-  background: #c8a7ff;
-  color: #21182c;
+  border-color: var(--ui-primary);
+  background: var(--ui-primary);
+  color: var(--ui-primary-foreground);
 }
 
 .copis-working-reset-actions {

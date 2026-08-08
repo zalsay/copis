@@ -51,28 +51,29 @@ export function CopisWorkingConnectDialog({
         onMouseDown={(event) => event.stopPropagation()}
       >
         <header className="copis-working-connect-header">
-          <div>
-            <strong id="copis-working-connect-title">创建工作区</strong>
-            <span>选择一个目录作为 Agent 的工作区。</span>
+          <div className="copis-working-connect-heading">
+            <span className="copis-working-connect-heading-icon" aria-hidden="true">
+              <FolderOpen />
+            </span>
+            <div>
+              <strong id="copis-working-connect-title">创建工作区</strong>
+              <span>选择一个目录作为 Agent 的工作区。</span>
+            </div>
           </div>
           <button type="button" aria-label="关闭创建工作区" onClick={onClose} disabled={busy}>
             <X aria-hidden="true" />
           </button>
         </header>
 
-        <div className="copis-working-connect-location" role="group" aria-label="工作区位置">
-          <div className="active">
-            <FolderOpen aria-hidden="true" />
-            <span>本地目录</span>
-          </div>
-          {selection?.path && (
-            <span className="copis-working-connect-location-note" title={selection.path}>{selection.path}</span>
-          )}
-        </div>
-
         <button type="button" className="copis-working-connect-picker" onClick={() => void handleSelectFolder()} disabled={busy}>
-          <FolderOpen aria-hidden="true" />
-          <span>{selection?.path || '选择目录'}</span>
+          <span className="copis-working-connect-picker-icon" aria-hidden="true">
+            <FolderOpen />
+          </span>
+          <span className="copis-working-connect-picker-copy">
+            <strong>{selection?.name || selection?.path || '选择工作目录'}</strong>
+            <small>{selection?.path ? selection.path : '点击选择本地目录，Agent 将在其中工作'}</small>
+          </span>
+          <span className="copis-working-connect-picker-action">选择</span>
         </button>
 
         <label className="copis-working-connect-check">

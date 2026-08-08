@@ -1,5 +1,6 @@
 import { describe, expect, mock, test } from 'bun:test'
-import type { HttpApiDependencies } from './http-api-handler'
+import type { AgentSessionMeta } from '@copis/shared'
+import type { AgentHttpFacade, HttpApiDependencies } from './http-api-handler'
 
 // Bun 测试环境没有 Electron 原生模块，健康检查测试不需要真实凭证存储。
 mock.module('electron', () => ({
@@ -78,6 +79,27 @@ describe('Rust HTTP API 业务桥契约', () => {
     })
   })
 
+  test('MCP 测试路由缺少 entry 时返回 400', async () => {
+    const response = await handleHttpApiRequest({
+      method: 'POST',
+      path: '/api/mcp/test',
+      body: JSON.stringify({ name: 'filesystem' }),
+    }, createDependencies())
+
+    expect(response.status).toBe(400)
+    expect(response.body).toEqual({ error: 'MCP 配置不正确', code: 'invalid_request' })
+  })
+
+  test('MCP 扩展路径不存在时返回统一错误', async () => {
+    const response = await handleHttpApiRequest({
+      method: 'GET',
+      path: '/api/workspaces/demo-project/mcp/unknown',
+    }, createDependencies())
+
+    expect(response.status).toBe(404)
+    expect(response.body).toEqual({ error: 'MCP 路径不存在', code: 'not_found' })
+  })
+
   test('技能市场路由不再由 Electron 业务桥处理', async () => {
     const response = await handleHttpApiRequest({
       method: 'GET',
@@ -121,5 +143,24 @@ describe('Rust HTTP API 业务桥契约', () => {
       { path: '/workspace/note.md', sessionId: 'session-1' },
       { path: '/workspace/note.md', content: '更新内容', expectedRevision: 'revision-1' },
     ])
+  })
+
+  test('删除 Agent 会话路由只删除指定会话并返回 204', async () => {
+    const deleted: string[] = []
+    const dependencies: HttpApiDependencies = {
+      ...createDependencies(),
+      getAgentApi: async (): Promise<AgentHttpFacade> => ({
+        getAgentSessionMeta: (id: string) => id === 'session-1' ? { id: 'session-1' } as AgentSessionMeta : undefined,
+        deleteAgentSession: (id: string) => { deleted.push(id) },
+      } as unknown as AgentHttpFacade),
+    }
+
+    const response = await handleHttpApiRequest({
+      method: 'DELETE',
+      path: '/api/agent/sessions/session-1',
+    }, dependencies)
+
+    expect(response).toEqual({ status: 204 })
+    expect(deleted).toEqual(['session-1'])
   })
 })

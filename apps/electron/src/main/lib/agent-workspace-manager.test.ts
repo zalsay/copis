@@ -73,9 +73,9 @@ describe('Agent 工作区 MCP 配置', () => {
           command: 'custom-automation',
           enabled: true,
         },
-        nano_banana: {
+        copis_image: {
           type: 'stdio',
-          command: 'custom-nano',
+          command: 'custom-image',
           enabled: true,
         },
         github: {

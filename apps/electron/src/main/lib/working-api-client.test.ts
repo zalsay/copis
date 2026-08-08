@@ -144,6 +144,41 @@ describe('Copis Working API client', () => {
     expect(JSON.parse(requestBody)).toEqual(expect.objectContaining({ allow_workspace_write: false }))
   })
 
+  test('generates a Working image through the edu-api endpoint and normalizes the response', async () => {
+    let requestUrl = ''
+    let requestBody = ''
+    const client = new WorkingApiClient({
+      baseUrl: 'https://backend.example.test',
+      tokenStore: createStore('image-token'),
+      fetchImpl: async (url, init) => {
+        requestUrl = String(url)
+        requestBody = String(init?.body ?? '')
+        return jsonResponse({
+          data: {
+            image_url: 'https://cos.example/generated.png?token=short',
+            data_url: 'data:image/png;base64,iVBORw0KGgo=',
+            content_type: 'image/png',
+            output_hint: '',
+            deducted_tokens: 2,
+            balance_after: 98,
+          },
+        })
+      },
+    })
+
+    const result = await client.generateWorkingImage({ prompt: '一只戴帽子的猫', size: '1024x1024', runId: 'session-1' })
+
+    expect(requestUrl).toBe('https://backend.example.test/api/working/images/generate')
+    expect(JSON.parse(requestBody)).toEqual({ prompt: '一只戴帽子的猫', size: '1024x1024', run_id: 'session-1' })
+    expect(result).toEqual({
+      imageUrl: 'https://cos.example/generated.png?token=short',
+      dataUrl: 'data:image/png;base64,iVBORw0KGgo=',
+      contentType: 'image/png',
+      deductedTokens: 2,
+      balanceAfter: 98,
+    })
+  })
+
   test('supports the ai-education auth flow without exposing credentials to the renderer contract', async () => {
     const client = new WorkingApiClient({
       baseUrl: 'https://backend.example.test',
@@ -179,7 +214,7 @@ describe('Copis Working API client', () => {
         }
         if (url.endsWith('/api/users/invited')) return jsonResponse({ data: [{ id: 8, email: 'child@example.com', nickname: '孩子', tokens: 20 }] })
         if (url.endsWith('/api/family/wallet')) return jsonResponse({ data: { members: [{ user_id: 7, role: 'owner', display_name: '设置用户', tokens: 123.5 }], ledger: [] } })
-        if (url.endsWith('/api/users/billing-ledger')) return jsonResponse({ data: [{ id: 1, payer_user_id: 7, amount_tokens: 3, type: 'charge', source_type: 'pi_office_model', created_at: '2026-01-01T08:00:00Z' }] })
+        if (url.endsWith('/api/users/billing-ledger')) return jsonResponse({ data: [{ id: 1, payer_user_id: 7, amount_tokens: 3, type: 'charge', source_type: 'pi_office_model', alias: 'fast', created_at: '2026-01-01T08:00:00Z' }] })
         if (url.endsWith('/api/users/invite-code')) return jsonResponse({ data: { Code: 'invite-7' }, invite_link: 'https://example.test/auth?invite=invite-7' })
         if (url.endsWith('/api/working/receive-channel')) return jsonResponse({ data: { channel: 'weixin', weixin_bound: true, feishu_bound: false } })
         throw new Error(`unexpected request: ${url}`)
@@ -192,7 +227,7 @@ describe('Copis Working API client', () => {
       inviteCode: 'invite-7',
       inviteLink: 'https://example.test/auth?invite=invite-7',
       receiveChannel: { channel: 'weixin', weixinBound: true, feishuBound: false },
-      ledger: [expect.objectContaining({ sourceType: 'pi_office_model', amountTokens: 3 })],
+      ledger: [expect.objectContaining({ sourceType: 'pi_office_model', modelAlias: 'fast', amountTokens: 3 })],
     }))
   })
 

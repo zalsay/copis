@@ -3,9 +3,11 @@ import { join, resolve } from 'node:path'
 import {
   COPIS_DEFAULT_PERMISSION_MODE,
   COPIS_WORKING_CHANNEL_ID,
-  COPIS_WORKING_FAST_MODEL_ID,
-  createCopisWorkingChannel,
+  COPIS_WORKING_MODEL_SOURCE_TYPE_HEADER,
+  COPIS_WORKING_MODEL_SOURCE_TYPE_COPIS_AGENT,
+  createCopisWorkingChannelForId,
   isCopisPermissionMode,
+  isCopisWorkingChannelId,
   normalizeWorkingMode,
   workingModeToModelId,
   type AgentQueueMessageInput,
@@ -46,6 +48,11 @@ import {
 } from './agent-workspace-manager'
 import { getAgentSessionWorkspacePath, getAgentWorkspacePath, getSdkConfigDir, getWorkspaceSkillsDir } from './config-paths'
 import { buildDynamicContext, buildSystemPrompt } from './agent-prompt-builder'
+import {
+  HttpExpertTeamContextReader,
+  resolveExpertTeamPromptContext,
+  validateInternalExpertTeamContext,
+} from './expert-team-context'
 import { appendMemoryContext } from './memory-context-builder'
 import { buildReferencedSessionsPrompt, buildContextPrompt } from './agent-session-context-prompt'
 import { buildReferencedPlanningPrompt } from './planning-reference-context'
@@ -188,6 +195,11 @@ export function parseAgentRpcInput(record: Record<string, unknown>): AgentSendIn
   const triggeredBy = isTriggeredBy(record.triggeredBy)
   const mentionedSkills = stringList(record.mentionedSkills)
   const mentionedMcpServers = stringList(record.mentionedMcpServers)
+  // 专家团队上下文是主进程内部字段：只有 delegation 子会话携带，且必须通过
+  // revision/hash/受管控标记校验；renderer 或 user/automation 提交的同名字段一律忽略。
+  const expertTeamContext = triggeredBy === 'delegation'
+    ? validateInternalExpertTeamContext(record.expertTeamContext)
+    : undefined
 
   return {
     sessionId,
@@ -206,6 +218,7 @@ export function parseAgentRpcInput(record: Record<string, unknown>): AgentSendIn
     ...(optionalString(record.retryOfErrorUuid) ? { retryOfErrorUuid: optionalString(record.retryOfErrorUuid) } : {}),
     ...(triggeredBy ? { triggeredBy } : {}),
     ...(optionalString(record.automationContext) ? { automationContext: optionalString(record.automationContext) } : {}),
+    ...(expertTeamContext ? { expertTeamContext } : {}),
   }
 }
 
@@ -265,6 +278,7 @@ function buildRustFileAccessPolicy(input: {
   session: AgentSessionMeta
   sessionId: string
   agentCwd: string
+  workspaceSkillsDir: string
   workspaceWriteRoot: string
   additionalDirectories: string[]
   permissionMode: CopisPermissionMode
@@ -276,6 +290,7 @@ function buildRustFileAccessPolicy(input: {
     projectRoot,
     input.workspaceWriteRoot,
     sessionWorkspaceRoot,
+    input.workspaceSkillsDir,
     ...input.additionalDirectories,
     ...getWorkspaceAttachedDirectories(input.workspace.slug),
   ]
@@ -390,7 +405,7 @@ async function resolveWorkerCredentials(channelId: string, provider: string): Pr
   codexOAuthCredentials?: Awaited<ReturnType<typeof resolveCodexOAuthCredentials>>
   xaiOAuthCredentials?: Awaited<ReturnType<typeof resolveXaiOAuthCredentials>>
 }> {
-  if (channelId === COPIS_WORKING_CHANNEL_ID) {
+  if (isCopisWorkingChannelId(channelId)) {
     const token = await getWorkingApiClient().getValidToken()
     if (!token) throw new Error('请先登录 Copis Working')
     return { apiKey: token }
@@ -422,16 +437,20 @@ export async function prepareAgentRpcRun(input: AgentSendInput): Promise<PiWorke
   }
 
   const channelId = input.channelId ?? session.channelId ?? COPIS_WORKING_CHANNEL_ID
-  const workingClient = channelId === COPIS_WORKING_CHANNEL_ID ? getWorkingApiClient() : undefined
+  const workingClient = isCopisWorkingChannelId(channelId) ? getWorkingApiClient() : undefined
   const channel = workingClient
-    ? createCopisWorkingChannel(workingClient.baseUrl)
+    ? createCopisWorkingChannelForId(workingClient.baseUrl, channelId)
     : getChannelById(channelId)
   if (!channel) throw new Error(`渠道不存在: ${channelId}`)
   if (!channel.enabled) throw new Error('当前渠道已禁用')
 
-  const workingMode = normalizeWorkingMode(input.workingMode ?? session.workingMode)
+  const workingMode = channelId === COPIS_WORKING_CHANNEL_ID
+    ? normalizeWorkingMode(input.workingMode ?? session.workingMode)
+    : undefined
   const modelId = workingClient
-    ? workingModeToModelId(workingMode)
+    ? channelId === COPIS_WORKING_CHANNEL_ID
+      ? workingModeToModelId(workingMode ?? 'fast')
+      : input.modelId ?? channel.models[0]?.id ?? DEFAULT_PI_MODEL_ID
     : input.modelId ?? session.modelId ?? DEFAULT_PI_MODEL_ID
   const credentials = await resolveWorkerCredentials(channelId, channel.provider)
   const settings = getSettings()
@@ -448,6 +467,7 @@ export async function prepareAgentRpcRun(input: AgentSendInput): Promise<PiWorke
   if (!agentCwd) throw new Error('Agent 工作区 cwd 不可用，已拒绝启动文件操作')
   const workspaceWriteRoot = getAgentWorkspaceWritableRoot(workspace)
   ensureAgentWorkspaceContextDir(workspace)
+  const workspaceSkillsDir = getWorkspaceSkillsDir(workspaceSlug)
   const startedAt = input.startedAt ?? Date.now()
   const existingSdkSessionId = session.sdkSessionId
   const directories = uniqueDirectories(input, session, workspace)
@@ -464,6 +484,7 @@ export async function prepareAgentRpcRun(input: AgentSendInput): Promise<PiWorke
     session,
     sessionId: input.sessionId,
     agentCwd,
+    workspaceSkillsDir,
     workspaceWriteRoot,
     additionalDirectories: directories,
     permissionMode: effectivePermissionMode,
@@ -488,6 +509,20 @@ export async function prepareAgentRpcRun(input: AgentSendInput): Promise<PiWorke
     : existingSdkSessionId
       ? contextualMessage
       : buildContextPrompt(input.sessionId, contextualMessage, { agentCwd, workspaceSlug })
+  // 专家团队上下文：delegation 只接受主进程 runner 生成的冻结上下文；
+  // user 回合每次按 Rust 当前 binding/revision 重新解析（fail-soft）。
+  const expertTeamContext = input.expertTeamContext
+    ? (input.triggeredBy === 'delegation'
+      ? validateInternalExpertTeamContext(input.expertTeamContext)
+      : undefined)
+    : compactRequest
+      ? undefined
+      : (input.triggeredBy ?? 'user') === 'user'
+        ? await resolveExpertTeamPromptContext({
+          workspace,
+          reader: new HttpExpertTeamContextReader(),
+        })
+        : undefined
   const systemPrompt = buildSystemPrompt({
     agentRuntime: 'pi',
     workspaceName: workspace.name,
@@ -500,6 +535,7 @@ export async function prepareAgentRpcRun(input: AgentSendInput): Promise<PiWorke
     currentModelId: modelId,
     workingMode,
     memoryPolicy,
+    ...(expertTeamContext ? { expertTeamContext } : {}),
     ...(browserBinding && browserTab
       ? {
         browserContext: {
@@ -530,7 +566,7 @@ export async function prepareAgentRpcRun(input: AgentSendInput): Promise<PiWorke
     piSessionDir: join(getSdkConfigDir(), 'sessions'),
     ...(settings.agentMaxBudgetUsd && settings.agentMaxBudgetUsd > 0 ? { maxBudgetUsd: settings.agentMaxBudgetUsd } : {}),
     ...(directories.length > 0 ? { additionalDirectories: directories } : {}),
-    ...(workspaceSlug ? { additionalSkillPaths: [getWorkspaceSkillsDir(workspaceSlug)] } : {}),
+    ...(workspaceSlug ? { additionalSkillPaths: [workspaceSkillsDir] } : {}),
     ...(effectiveSkillMentions?.length ? { skillMentions: effectiveSkillMentions } : {}),
     ...(workspaceSlug ? { workspaceSlug } : {}),
     memoryPolicy,
@@ -659,6 +695,9 @@ function scheduleRpcMemoryCapture(
       modelId: pending.modelId,
       proxyUrl: pending.proxyUrl,
       turns,
+      ...(isCopisWorkingChannelId(pending.channelId)
+        ? { extraHeaders: { [COPIS_WORKING_MODEL_SOURCE_TYPE_HEADER]: COPIS_WORKING_MODEL_SOURCE_TYPE_COPIS_AGENT } }
+        : {}),
     }),
     ...(maintenanceRunner ? { maintenanceRunner } : {}),
   }).catch((error) => {

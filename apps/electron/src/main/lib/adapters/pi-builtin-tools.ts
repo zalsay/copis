@@ -40,6 +40,12 @@ import {
 } from '../browser-agent-tool-service'
 import type { BrowserAgentToolName } from '../agent-rpc-protocol'
 import { isBuiltinMcpUserEnabled } from '../builtin-mcp/settings'
+import { getAgentToolState } from '../agent-tool-config'
+import { readAttachmentAsBase64 } from '../attachment-service'
+import {
+  executeNanoBananaTool,
+  isNanoBananaAvailable,
+} from '../agent-tools/image-generation-tool'
 import { buildPiCollaborationTools } from '../agent-collaboration-tools'
 import { buildExpertTeamTools } from '../expert-team-agent-tool'
 import { getVisionRelayRouteLabel, inspectImageWithVisionRelay, isVisionRelayConfigured, isVisionRelayEligibleForModel } from '../vision-relay-service'
@@ -1189,6 +1195,93 @@ function buildVisionRelayTools(sdk: PiSdk, ctx: PiBuiltinToolsContext): ToolDefi
   ] as unknown as ToolDefinition[]
 }
 
+// ===== Copis 图片生成工具 =====
+//
+// 参考 ai-education 的 image-generation Skill 实现：
+// - 把用户自然语言图片需求整理成适合图片模型执行的提示词；
+// - 提示词覆盖主题、受众、风格、比例、尺寸、必含元素与避开元素；
+// - 通过 Copis 后端（edu-api /api/working/images/generate）生成并计费；
+// - 只返回真实生成的图片，不编造 URL；客户端无需本地模型凭据。
+
+function buildNanoBananaTools(sdk: PiSdk, ctx: PiBuiltinToolsContext): ToolDefinition[] {
+  // 与内置 MCP 卡片可用性一致：工具配置开关 + Working 登录态都就绪才注入。
+  const toolState = getAgentToolState('nano-banana')
+  if (!toolState.enabled || !isNanoBananaAvailable()) return []
+
+  return [
+    sdk.defineTool({
+      name: 'generate_image',
+      label: 'Copis 图片生成',
+      description: `基于 Copis 后端（edu-api）的图片生成服务生成图片，计费由后端完成。
+
+**使用时机**：用户要求生成图片、画图、生图、出图，生成插图/配图/海报/封面/头像时调用。
+
+**提示词要求**：把用户需求整理成清晰、安全、可执行的英文/中文提示词，按顺序包含：
+1. 主体、场景、动作；
+2. 风格（卡通、手绘、简约、水彩、像素、写实、信息图等）；
+3. 构图、光线、比例与尺寸；
+4. must_include 必含元素与 avoid 避开元素。
+图片文字易错，如非用户明确要求，提示词中明确要求“画面中不出现文字”。
+
+**参数说明**：
+- size：生成尺寸，如 1024x1024（默认）、1536x1024、1280x720；头像默认 1:1，海报默认 3:4。
+
+**安全与真实性**：
+- 不生成成人化、血腥、恐怖、仇恨、危险操作、自伤或隐私诱导内容。
+- 不复刻受版权保护角色、商标形象或真实人物肖像；改写为 legally distinct 的原创角色或泛化描述。
+- 不编造图片 URL 或本地路径，只使用工具真实返回的图片。`,
+      parameters: Type.Object({
+        prompt: Type.String({ description: '要生成的图片内容的详细描述' }),
+        size: Type.Optional(Type.String({ description: '生成尺寸，如 1024x1024（默认）、1536x1024、1280x720' })),
+      }),
+      async execute(toolCallId: string, params: unknown) {
+        const args = (params ?? {}) as Record<string, unknown>
+        const prompt = typeof args.prompt === 'string' ? args.prompt.trim() : ''
+        if (!prompt) throw new Error('prompt 参数缺失：请描述要生成的图片内容')
+
+        const toolResult = await executeNanoBananaTool(
+          { id: toolCallId, name: 'generate_image', arguments: args },
+          {
+            conversationId: ctx.sessionId,
+          },
+        )
+        if (toolResult.isError) {
+          throw new Error(toolResult.content)
+        }
+
+        const attachments = toolResult.generatedAttachments ?? []
+        const meta = attachments.map((attachment) => ({
+          filename: attachment.filename,
+          path: attachment.localPath,
+          mediaType: attachment.mediaType,
+        }))
+        const content: AgentToolResult<unknown>['content'] = [
+          { type: 'text', text: toolResult.content } as { type: 'text'; text: string },
+          ...(meta.length > 0
+            ? [{ type: 'text', text: `\n\n<generated_images>\n${JSON.stringify(meta)}\n</generated_images>` } as { type: 'text'; text: string }]
+            : []),
+        ]
+        for (const attachment of attachments) {
+          try {
+            content.push({
+              type: 'image',
+              data: readAttachmentAsBase64(attachment.localPath),
+              mimeType: attachment.mediaType,
+            } as { type: 'image'; data: string; mimeType: string })
+          } catch (error) {
+            console.warn(`[Copis 图片生成] 读取生成图片失败: ${attachment.localPath}`, error)
+          }
+        }
+
+        return {
+          content,
+          details: { generatedAttachments: meta },
+        } as unknown as AgentToolResult<unknown>
+      },
+    }),
+  ] as unknown as ToolDefinition[]
+}
+
 // ===== Collaboration 工具（占位，下阶段实现） =====
 
 // collaboration 逻辑较重（涉及子会话生命周期管理、EventBus 订阅、BlockedEvent 冒泡），
@@ -1308,7 +1401,14 @@ export async function buildPiBuiltinTools(
     console.error('[Pi 桥接] 注入视觉助手失败:', error)
   }
 
-  // nano-banana 当前走外部 MCP stdio，不需要 in-process 桥接
+  // nano-banana 生图：参考 ai-education image-generation Skill 实现为 Pi 内置工具。
+  if (isBuiltinMcpUserEnabled('nano-banana')) {
+    try {
+      tools.push(...buildNanoBananaTools(sdk, ctx))
+    } catch (error) {
+      console.error('[Pi 桥接] 注入 Copis 图片生成工具失败:', error)
+    }
+  }
 
   const cloudTools = buildCopisCloudTools(sdk, ctx)
   tools.push(...cloudTools)

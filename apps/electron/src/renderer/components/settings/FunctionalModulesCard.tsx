@@ -12,6 +12,7 @@ import { Button } from '@/components/ui/button'
 import {
   createEmptyFunctionalModuleStatus,
   FUNCTIONAL_MODULE_DEFINITIONS,
+  getFunctionalModuleProgressText,
   getFunctionalModuleStateText,
   type FunctionalModuleDefinition,
 } from './functional-module-ui'
@@ -97,8 +98,8 @@ export function FunctionalModulesCard(): React.ReactElement {
         <div className="flex items-center gap-2">
           <PackageCheck className="h-4 w-4 text-muted-foreground" />
           <div>
-            <h3 className="text-sm font-medium">功能模块</h3>
-            <p className="mt-1 text-xs text-muted-foreground">由 Electron 统一管理本地组件的安装、更新和启动</p>
+            <h3 className="text-sm font-medium">本地能力</h3>
+            <p className="mt-1 text-xs text-muted-foreground">Copis 会自动管理使用所需的本地能力</p>
           </div>
         </div>
         <CheckCircle2 className={`h-4 w-4 ${requiredInstalled ? 'text-green-600' : 'text-muted-foreground'}`} />
@@ -136,7 +137,7 @@ export function FunctionalModulesCard(): React.ReactElement {
                     <div className="flex items-center justify-between text-[11px] text-muted-foreground">
                       <span className="flex min-w-0 items-center gap-1.5 truncate">
                         <Loader2 className="h-3 w-3 shrink-0 animate-spin" />
-                        {progress.detail}
+                        {getFunctionalModuleProgressText(progress)}
                       </span>
                       <span className="shrink-0">{progressPercent}%</span>
                     </div>

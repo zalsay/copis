@@ -1,7 +1,7 @@
 import * as React from 'react'
 import { useAtom, useAtomValue, useSetAtom } from 'jotai'
-import { Check, ChevronRight, CircleAlert, FolderOpen, GitBranch, Loader2, MessageSquare, Search, Square } from 'lucide-react'
-import type { AgentWorkspace, ExpertTeamNodeStatus, ExpertTeamRunStatus } from '@copis/shared'
+import { Check, ChevronRight, CircleAlert, FolderOpen, GitBranch, Loader2, MessageSquare, Search, Square, X } from 'lucide-react'
+import type { AgentWorkspace, ExpertTeamEdge, ExpertTeamNode, ExpertTeamNodeStatus, ExpertTeamRunStatus } from '@copis/shared'
 import { toast } from 'sonner'
 import {
   expertTeamArtifactsAtom,
@@ -73,6 +73,58 @@ function NodeRoleIcon({ role }: { role?: string }): React.ReactElement {
   return <GitBranch aria-hidden="true" />
 }
 
+/** 计算节点的前置依赖：优先使用 dependsOn，缺失时回退到 edges。 */
+function nodeDependencies(node: ExpertTeamNode, edges: ExpertTeamEdge[]): string[] {
+  return node.dependsOn?.length ? node.dependsOn : edges.filter((edge) => edge.to === node.id).map((edge) => edge.from)
+}
+
+/** 根据节点视口位置计算详情浮层定位：优先出现在节点下方，底部空间不足时翻转到上方。 */
+function nodeDetailsPopoverStyle(rect: { left: number; top: number; bottom: number }): React.CSSProperties {
+  const width = 320
+  const height = 252
+  const margin = 8
+  const left = Math.max(margin, Math.min(rect.left, window.innerWidth - width - margin))
+  const top = rect.bottom + margin + height <= window.innerHeight
+    ? rect.bottom + margin
+    : Math.max(margin, rect.top - height - margin)
+  return { position: 'fixed', left, top, width, zIndex: 100 }
+}
+
+/** 悬停（或点击固定）节点详情浮层：锚定在对应节点附近展示角色、依赖与产物路径。 */
+function NodeDetailsPopover({ node, status, dependencies, pinned, style, onClose }: {
+  node: ExpertTeamNode
+  status: ExpertTeamNodeStatus
+  dependencies: string[]
+  pinned: boolean
+  style: React.CSSProperties
+  onClose: () => void
+}): React.ReactElement {
+  return (
+    <div
+      role="tooltip"
+      aria-label="节点详情悬浮层"
+      className={cn('rounded-lg bg-[#1d1e1f] p-4 shadow-xl ring-1 ring-white/10', pinned ? 'pointer-events-auto' : 'pointer-events-none')}
+      style={style}
+    >
+      <div className="mb-2 flex items-center gap-2">
+        <span className="grid size-7 shrink-0 place-items-center rounded-full border border-[#f0a15a]/35 bg-[#2b211a] text-[#f0a15a]"><NodeRoleIcon role={node.role} /></span>
+        <div className="min-w-0 flex-1">
+          <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-[#f0a15a]">节点详情</span>
+          <h3 className="mt-0.5 truncate text-sm font-semibold text-[#f1f3f2]">{node.name}</h3>
+        </div>
+        {pinned && <button type="button" aria-label="关闭节点详情" onClick={onClose} className="shrink-0 rounded p-1 text-[#858b8e] transition-colors hover:bg-white/10 hover:text-[#f1f3f2]"><X className="size-4" /></button>}
+      </div>
+      <p className="text-xs leading-5 text-[#9fa3a6]">{node.description || `${roleLabel(node.role)}负责当前专家团队中的受控工作。`}</p>
+      <dl className="mt-3 grid gap-2 text-xs">
+        <div><dt className="text-[#858b8e]">节点 ID</dt><dd className="mt-0.5 break-all font-mono text-[#dfe4e1]">{node.id}</dd></div>
+        <div><dt className="text-[#858b8e]">角色 / 状态</dt><dd className="mt-0.5 text-[#dfe4e1]">{roleLabel(node.role)} · {nodeStatusLabels[status]}</dd></div>
+        <div><dt className="text-[#858b8e]">依赖</dt><dd className="mt-0.5 break-words text-[#dfe4e1]">{dependencies.length > 0 ? dependencies.join('、') : '无前置节点'}</dd></div>
+      </dl>
+      {node.path && <div className="mt-3 rounded-md bg-[#151515] px-3 py-2 text-[10px] text-[#858b8e]">产物路径：<span className="break-all text-[#dfe4e1]">{node.path}</span></div>}
+    </div>
+  )
+}
+
 export function ExpertTeamView(): React.ReactElement {
   const schemas = useAtomValue(expertTeamSchemasAtom)
   const currentSchema = useAtomValue(expertTeamCurrentSchemaAtom)
@@ -108,6 +160,12 @@ export function ExpertTeamView(): React.ReactElement {
   const [pendingCreate, setPendingCreate] = React.useState(false)
   const [workspaceActionLoading, setWorkspaceActionLoading] = React.useState(false)
   const [workspaceActionError, setWorkspaceActionError] = React.useState<string | null>(null)
+  /** 当前悬停的节点 ID；节点详情浮层据此展示对应节点（hover 触发，不再默认选中首个节点）。 */
+  const [hoveredNodeId, setHoveredNodeId] = React.useState<string | null>(null)
+  /** 点击固定的节点 ID；固定后浮层不随鼠标移出消失。 */
+  const [pinnedNodeId, setPinnedNodeId] = React.useState<string | null>(null)
+  /** 悬停/点击节点的视口位置，用于把详情浮层锚定在对应节点附近。 */
+  const [nodeRect, setNodeRect] = React.useState<{ left: number; top: number; bottom: number } | null>(null)
 
   const loadSchemas = React.useCallback(async (): Promise<void> => {
     setLoadState((state) => ({ ...state, schemas: true }))
@@ -301,13 +359,24 @@ export function ExpertTeamView(): React.ReactElement {
   events.forEach((event) => {
     if (event.nodeId && event.status) nodeStates.set(event.nodeId, event.status)
   })
-  const selectedNode = currentSchema ? currentSchema.nodes[0] ?? null : null
+  const activeNodeId = pinnedNodeId ?? hoveredNodeId
+  const activeNode = currentSchema
+    ? currentSchema.nodes.find((node) => node.id === activeNodeId) ?? null
+    : null
   const schemaEdges = currentSchema ? currentSchema.edges : []
-  const selectedNodeDependencies = selectedNode
-    ? selectedNode.dependsOn?.length
-      ? selectedNode.dependsOn
-      : schemaEdges.filter((edge) => edge.to === selectedNode.id).map((edge) => edge.from)
-    : []
+  const showNodeDetails = (nodeId: string, event: React.MouseEvent<HTMLDivElement>): void => {
+    const rect = event.currentTarget.getBoundingClientRect()
+    setHoveredNodeId(nodeId)
+    setNodeRect({ left: rect.left, top: rect.top, bottom: rect.bottom })
+  }
+  const hideNodeDetails = (): void => {
+    setHoveredNodeId(null)
+    setNodeRect(null)
+  }
+  const togglePinNode = (nodeId: string, event: React.MouseEvent<HTMLDivElement>): void => {
+    showNodeDetails(nodeId, event)
+    setPinnedNodeId((current) => (current === nodeId ? null : nodeId))
+  }
   const schemaRevision = currentSchema?.revision ?? currentSchema?.currentRevisionId ?? binding?.revision ?? binding?.schemaRevisionId
   return (
     <div className="flex h-full min-h-0 bg-[#151515] text-[#f2f3f3]">
@@ -370,34 +439,27 @@ export function ExpertTeamView(): React.ReactElement {
           {!currentSchema ? <div className="flex h-full items-center justify-center text-sm text-[#858b8e]">选择一个 Schema 开始编排</div> : <div className="mx-auto max-w-6xl space-y-5">
             <section className="rounded-lg bg-[#1d1e1f] p-5 shadow-sm ring-1 ring-white/10" aria-label="专家团队执行阵容">
               <div className="flex items-end justify-between gap-4"><h2 className="text-lg font-semibold text-[#f1f3f2]">执行阵容</h2><span className="text-xs text-[#858b8e]">{currentSchema.version ? `v${currentSchema.version}` : '未指定版本'} · {currentSchema.nodes.length} 个节点</span></div>
-              <div className="mt-4 grid gap-2 sm:grid-cols-2 xl:grid-cols-3" role="list" aria-label="Schema 节点列表">
+              <div className="mt-4 grid gap-2 sm:grid-cols-2 xl:grid-cols-3" role="list" aria-label="Schema 节点列表" onMouseLeave={hideNodeDetails}>
                 {currentSchema.nodes.map((node) => {
                   const state = nodeStates.get(node.id) ?? 'pending'
-                  return <div className="flex min-w-0 items-center gap-3 rounded-md border border-white/10 bg-[#151515] px-3 py-3" key={node.id} role="listitem"><span className="grid size-8 shrink-0 place-items-center rounded-full border border-[#f0a15a]/35 bg-[#2b211a] text-[#f0a15a]"><NodeRoleIcon role={node.role} /></span><span className="min-w-0"><strong className="block truncate text-xs font-semibold text-[#e9ecea]">{node.name}</strong><small className="mt-1 block truncate text-[10px] text-[#858b8e]">{roleCode(node.role)} · {roleLabel(node.role)} · {nodeStatusLabels[state]}</small></span></div>
+                  return <div className={cn('flex min-w-0 cursor-pointer items-center gap-3 rounded-md border border-white/10 bg-[#151515] px-3 py-3 transition-colors', hoveredNodeId === node.id && 'border-[#f0a15a]/40')} key={node.id} role="listitem" onMouseEnter={(event) => showNodeDetails(node.id, event)} onClick={(event) => togglePinNode(node.id, event)}><span className="grid size-8 shrink-0 place-items-center rounded-full border border-[#f0a15a]/35 bg-[#2b211a] text-[#f0a15a]"><NodeRoleIcon role={node.role} /></span><span className="min-w-0"><strong className="block truncate text-xs font-semibold text-[#e9ecea]">{node.name}</strong><small className="mt-1 block truncate text-[10px] text-[#858b8e]">{roleCode(node.role)} · {roleLabel(node.role)} · {nodeStatusLabels[state]}</small></span></div>
                 })}
               </div>
             </section>
 
-            <div className="grid gap-5 xl:grid-cols-[minmax(0,1.35fr)_minmax(280px,0.65fr)]">
-              <section className="min-w-0 rounded-lg bg-[#1d1e1f] p-5 shadow-sm ring-1 ring-white/10" aria-label="专家团队依赖编排">
+            <section className="rounded-lg bg-[#1d1e1f] p-5 shadow-sm ring-1 ring-white/10" aria-label="专家团队依赖编排">
                 <div className="flex items-end justify-between gap-4"><h2 className="text-lg font-semibold text-[#f1f3f2]">任务路径</h2><span className="rounded-md bg-[#f0a15a]/10 px-2 py-1 text-[11px] font-medium text-[#f5c18e]">{currentRun ? statusLabels[currentRun.status] : '等待运行'}</span></div>
                 <div className="mt-4 overflow-x-auto rounded-md bg-[#151515] p-4 ring-1 ring-white/10">
-                  <div className="flex min-w-max items-center gap-3">
+                  <div className="flex min-w-max items-center gap-3" onMouseLeave={hideNodeDetails}>
                     {currentSchema.nodes.map((node, index) => {
                       const state = nodeStates.get(node.id) ?? 'pending'
                       const dependencies = node.dependsOn?.length ? node.dependsOn : schemaEdges.filter((edge) => edge.to === node.id).map((edge) => edge.from)
-                      return <React.Fragment key={node.id}><div className={cn('w-44 rounded-md border px-3 py-3', state === 'running' ? 'border-[#f0a15a]/70 bg-[#f0a15a]/10' : 'border-white/10 bg-[#1d1e1f]')}><div className="flex items-center gap-2"><span className="grid size-7 shrink-0 place-items-center rounded-full bg-[#2b211a] text-[#f0a15a]"><NodeRoleIcon role={node.role} /></span><span className="min-w-0 truncate text-xs font-semibold text-[#e9ecea]">{node.name}</span></div><div className="mt-2 text-[10px] text-[#858b8e]">{roleCode(node.role)} · {roleLabel(node.role)} · {nodeStatusLabels[state]}</div>{dependencies.length > 0 && <div className="mt-1 truncate text-[10px] text-[#858b8e]">依赖 {dependencies.join('、')}</div>}</div>{index < currentSchema.nodes.length - 1 && <ChevronRight className="size-4 shrink-0 text-[#f0a15a]" />}</React.Fragment>
+                      return <React.Fragment key={node.id}><div className={cn('w-44 cursor-pointer rounded-md border px-3 py-3 transition-colors', state === 'running' ? 'border-[#f0a15a]/70 bg-[#f0a15a]/10' : hoveredNodeId === node.id ? 'border-[#f0a15a]/50 bg-[#f0a15a]/5' : 'border-white/10 bg-[#1d1e1f]')} onMouseEnter={(event) => showNodeDetails(node.id, event)} onClick={(event) => togglePinNode(node.id, event)}><div className="flex items-center gap-2"><span className="grid size-7 shrink-0 place-items-center rounded-full bg-[#2b211a] text-[#f0a15a]"><NodeRoleIcon role={node.role} /></span><span className="min-w-0 truncate text-xs font-semibold text-[#e9ecea]">{node.name}</span></div><div className="mt-2 text-[10px] text-[#858b8e]">{roleCode(node.role)} · {roleLabel(node.role)} · {nodeStatusLabels[state]}</div>{dependencies.length > 0 && <div className="mt-1 truncate text-[10px] text-[#858b8e]">依赖 {dependencies.join('、')}</div>}</div>{index < currentSchema.nodes.length - 1 && <ChevronRight className="size-4 shrink-0 text-[#f0a15a]" />}</React.Fragment>
                     })}
                   </div>
                 </div>
                 <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-[10px] text-[#858b8e]"><span>{schemaEdges.length > 0 ? `${schemaEdges.length} 条 edges` : '按节点 dependsOn 编排'}</span><span>nodeStates 已同步</span><span>子结果回传主 Agent</span><span>revision {schemaRevision ?? '--'}</span></div>
-              </section>
-
-              <aside className="min-w-0 rounded-lg bg-[#1d1e1f] p-5 shadow-sm ring-1 ring-white/10" aria-label="专家团队节点详情">
-                <div className="mb-4 flex items-center gap-3"><span className="grid size-9 shrink-0 place-items-center rounded-full border border-[#f0a15a]/35 bg-[#2b211a] text-[#f0a15a]">{selectedNode ? <NodeRoleIcon role={selectedNode.role} /> : <GitBranch aria-hidden="true" />}</span><div className="min-w-0"><span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-[#f0a15a]">节点详情</span><h2 className="mt-1 truncate text-base font-semibold text-[#f1f3f2]">{selectedNode?.name ?? '暂无节点'}</h2></div></div>
-                {selectedNode ? <><p className="text-xs leading-5 text-[#9fa3a6]">{selectedNode.description || `${roleLabel(selectedNode.role)}负责当前专家团队中的受控工作。`}</p><dl className="mt-4 grid gap-3 text-xs"><div><dt className="text-[#858b8e]">节点 ID</dt><dd className="mt-1 break-all font-mono text-[#dfe4e1]">{selectedNode.id}</dd></div><div><dt className="text-[#858b8e]">角色 / 状态</dt><dd className="mt-1 text-[#dfe4e1]">{roleLabel(selectedNode.role)} · {nodeStatusLabels[nodeStates.get(selectedNode.id) ?? 'pending']}</dd></div><div><dt className="text-[#858b8e]">依赖</dt><dd className="mt-1 break-words text-[#dfe4e1]">{selectedNodeDependencies.length > 0 ? selectedNodeDependencies.join('、') : '无前置节点'}</dd></div></dl>{selectedNode.path && <div className="mt-4 rounded-md bg-[#151515] px-3 py-2 text-[10px] text-[#858b8e]">产物路径：<span className="break-all text-[#dfe4e1]">{selectedNode.path}</span></div>}</> : <p className="text-xs text-[#858b8e]">当前 Schema 暂无可展示节点。</p>}
-              </aside>
-            </div>
+            </section>
 
             <section className="rounded-lg bg-[#1d1e1f] p-5 shadow-sm ring-1 ring-white/10" aria-label="专家团队运行历史">
               <div className="mb-4 flex items-center justify-between gap-3"><div><span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-[#f0a15a]">运行历史</span><h2 className="mt-1 text-lg font-semibold text-[#f1f3f2]">{currentRun ? `运行 ${currentRun.id}` : '尚未运行'}</h2></div>{currentRun && <div className="flex items-center gap-2"><span className={cn('rounded px-2 py-1 text-[11px]', statusClass(currentRun.status))}>{statusLabels[currentRun.status]}</span>{currentRun.status === 'queued' && <Button variant="outline" size="sm" className="border-white/15 bg-transparent text-[#dfe4e1] hover:bg-white/5" onClick={() => void cancelRun()} disabled={loadState.run}><Square className="size-3.5" />取消运行</Button>}</div>}</div>
@@ -406,6 +468,7 @@ export function ExpertTeamView(): React.ReactElement {
           </div>}
         </main>
       </div>
+      {activeNode && nodeRect && <NodeDetailsPopover node={activeNode} status={nodeStates.get(activeNode.id) ?? 'pending'} dependencies={nodeDependencies(activeNode, schemaEdges)} pinned={pinnedNodeId === activeNode.id} style={nodeDetailsPopoverStyle(nodeRect)} onClose={() => setPinnedNodeId(null)} />}
     </div>
   )
 }

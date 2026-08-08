@@ -2,12 +2,12 @@ use std::collections::HashMap;
 use std::fs::{self, OpenOptions};
 use std::io::{self, BufRead, BufReader, BufWriter, Read, Write};
 use std::net::{Shutdown, TcpListener, TcpStream};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 mod agent_files;
 mod expert_teams;
@@ -15,6 +15,7 @@ mod memory;
 mod pi_rpc;
 mod runtime;
 mod skill_market;
+mod workspace_mcp;
 
 use expert_teams::{ExpertTeamError, ExpertTeamStore};
 use memory::{
@@ -30,6 +31,7 @@ use pi_rpc::{
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::{json, Value};
 use skill_market::{handle_request as handle_skill_market_request, SkillMarketState};
+use workspace_mcp::{WorkspaceMcpError, WorkspaceMcpStore};
 
 const HOST: &str = "127.0.0.1";
 const DEFAULT_PORT: u16 = 51730;
@@ -40,10 +42,36 @@ const MAX_LINE_BYTES: usize = 64 * 1024;
 const MAX_RECORDING_LINE_BYTES: usize = 256 * 1024;
 const MAX_RECORDING_FILE_BYTES: u64 = 8 * 1024 * 1024;
 const INTERNAL_TOKEN_HEADER: &str = "x-copis-internal-token";
+const WEB_TOKEN_HEADER: &str = "x-copis-web-token";
 const AGENT_FILE_TOKEN_HEADER: &str = "x-copis-agent-file-token";
 const INTERNAL_RECORDING_PREFIX: &str = "/internal/browser-workflows/recordings/";
 const INTERNAL_WORKING_AUTH_PATH: &str = "/internal/working-auth/token";
 const INTERNAL_AGENT_FILES_PREFIX: &str = "/api/internal/agent/files/";
+const VITE_DEV_ORIGINS: [&str; 2] = ["http://127.0.0.1:5174", "http://localhost:5174"];
+// 业务桥请求等待 Electron 响应的上限，超时后清理 pending 避免线程永久挂起。
+const BRIDGE_REQUEST_TIMEOUT_SECS: u64 = 60;
+const BRIDGE_TIMEOUT_MESSAGE: &str = "HTTP API 业务桥响应超时";
+// 慢速/半开连接在读取请求时占用线程，设置读超时避免长期占用（slowloris 防护）。
+const CONNECTION_READ_TIMEOUT_SECS: u64 = 30;
+const MAX_CONCURRENT_CONNECTIONS: usize = 64;
+
+fn bridge_request_timeout() -> Duration {
+    let millis = std::env::var("COPIS_HTTP_API_BRIDGE_TIMEOUT_MS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(BRIDGE_REQUEST_TIMEOUT_SECS * 1000);
+    Duration::from_millis(millis)
+}
+
+fn connection_read_timeout() -> Duration {
+    let millis = std::env::var("COPIS_HTTP_API_READ_TIMEOUT_MS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(CONNECTION_READ_TIMEOUT_SECS * 1000);
+    Duration::from_millis(millis)
+}
 
 struct BridgeResponse {
     status: u16,
@@ -98,8 +126,12 @@ impl Bridge {
             return Err(format!("HTTP API 业务桥写入失败: {}", error));
         }
 
-        match receiver.recv() {
+        match receiver.recv_timeout(bridge_request_timeout()) {
             Ok(result) => result,
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                self.pending.lock().unwrap().remove(&id);
+                Err(BRIDGE_TIMEOUT_MESSAGE.to_string())
+            }
             Err(_) => Err("HTTP API 业务桥未返回响应".to_string()),
         }
     }
@@ -474,7 +506,7 @@ fn handle_memory_route(
         return;
     }
 
-    if parts.len() < 1 {
+    if parts.is_empty() {
         send_memory_not_found(stream, origin);
         return;
     }
@@ -486,12 +518,12 @@ fn handle_memory_route(
         return;
     }
 
-    if parts.len() == 2 && parts[0] == *id && parts[1] == "read" && request.method == "GET" {
+    if parts.len() == 2 && parts[1] == "read" && request.method == "GET" {
         send_memory_result(stream, store.get(id, workspace_slug), origin);
         return;
     }
 
-    if parts.len() == 2 && parts[0] == *id && parts[1] == "history" && request.method == "GET" {
+    if parts.len() == 2 && parts[1] == "history" && request.method == "GET" {
         let result = store
             .history(id, workspace_slug)
             .map(|revisions| json!({ "revisions": revisions }));
@@ -499,7 +531,7 @@ fn handle_memory_route(
         return;
     }
 
-    if parts.len() == 2 && parts[0] == *id && parts[1] == "rewrite" && request.method == "PATCH" {
+    if parts.len() == 2 && parts[1] == "rewrite" && request.method == "PATCH" {
         let input = match parse_memory_body::<AgentMemoryRewriteRequest>(request) {
             Ok(input) => input,
             Err(error) => {
@@ -519,7 +551,7 @@ fn handle_memory_route(
         return;
     }
 
-    if parts.len() == 2 && parts[0] == *id && parts[1] == "restore" && request.method == "POST" {
+    if parts.len() == 2 && parts[1] == "restore" && request.method == "POST" {
         let input = match parse_memory_body::<MemoryRestoreInput>(request) {
             Ok(input) => input,
             Err(error) => {
@@ -803,7 +835,7 @@ fn recording_path(workspace: &str, recording_id: &str) -> Result<PathBuf, &'stat
         .join(format!("{}.jsonl", recording_id)))
 }
 
-fn recording_lock(bridge: &Bridge, path: &PathBuf) -> Arc<Mutex<()>> {
+fn recording_lock(bridge: &Bridge, path: &Path) -> Arc<Mutex<()>> {
     let key = path.to_string_lossy().into_owned();
     let mut locks = bridge.recording_locks.lock().unwrap();
     locks
@@ -891,8 +923,44 @@ fn is_internal_token_valid(request: &HttpRequest) -> bool {
         && request
             .headers
             .get(INTERNAL_TOKEN_HEADER)
-            .map(|received| received == &expected)
+            .map(|received| agent_files::tokens_equal(&expected, received))
             .unwrap_or(false)
+}
+
+fn is_web_token_valid(request: &HttpRequest) -> bool {
+    if is_internal_token_valid(request) {
+        return true;
+    }
+    let Ok(expected) = std::env::var("COPIS_HTTP_API_WEB_TOKEN") else {
+        return false;
+    };
+    !expected.is_empty()
+        && request
+            .headers
+            .get(WEB_TOKEN_HEADER)
+            .map(|received| agent_files::tokens_equal(&expected, received))
+            .unwrap_or(false)
+}
+
+fn is_vite_dev_origin(origin: &str) -> bool {
+    VITE_DEV_ORIGINS.contains(&origin)
+}
+
+fn is_internal_path(path: &str) -> bool {
+    path.starts_with("/internal/") || path.starts_with("/api/internal/")
+}
+
+/// 浏览器 Origin 请求必须携带 web 令牌；Vite 开发来源与无 Origin 的本地进程请求除外。
+/// 内部路由与健康检查继续由各自逻辑放行，不在此处校验。
+fn is_web_route_authorized(origin: Option<&str>, request: &HttpRequest, path: &str) -> bool {
+    if is_internal_path(path) || path == "/api/health" {
+        return true;
+    }
+    match origin {
+        None => true,
+        Some(value) if is_vite_dev_origin(value) => true,
+        Some(_) => is_web_token_valid(request),
+    }
 }
 
 fn handle_internal_recording_request(
@@ -972,7 +1040,9 @@ fn handle_connection(
     memory_store: Arc<MemoryStore>,
     expert_team_store: Arc<ExpertTeamStore>,
     skill_market_state: Arc<SkillMarketState>,
+    workspace_mcp_store: Arc<WorkspaceMcpStore>,
 ) {
+    let _ = stream.set_read_timeout(Some(connection_read_timeout()));
     let request = match read_http_request(&mut stream) {
         Ok(request) => request,
         Err(RequestError::TooLarge) => {
@@ -1018,6 +1088,16 @@ fn handle_connection(
         .split('?')
         .next()
         .unwrap_or(request.target.as_str());
+    if !is_web_route_authorized(origin, &request, path) {
+        send_json_response(
+            &mut stream,
+            403,
+            r#"{"error":"HTTP API 未授权","code":"web_token_required"}"#,
+            origin,
+        );
+        let _ = stream.shutdown(Shutdown::Both);
+        return;
+    }
     if request.method == "GET" && path == "/api/health" {
         let memory_available = memory_store.integrity_check().is_ok();
         let expert_teams_available = expert_team_store.integrity_check().is_ok();
@@ -1046,6 +1126,12 @@ fn handle_connection(
 
     if path == "/api/internal/expert-teams" || path.starts_with("/api/internal/expert-teams/") {
         handle_internal_expert_team_route(&mut stream, &request, origin, &expert_team_store);
+        let _ = stream.shutdown(Shutdown::Both);
+        return;
+    }
+
+    if is_workspace_mcp_route(&request.method, path) {
+        handle_workspace_mcp_route(&mut stream, &request, origin, &workspace_mcp_store);
         let _ = stream.shutdown(Shutdown::Both);
         return;
     }
@@ -1271,12 +1357,13 @@ fn handle_connection(
         }
         Err(error) => {
             eprintln!("[HTTP API] 业务桥请求失败: {}", error);
-            send_json_response(
-                &mut stream,
-                503,
-                r#"{"error":"HTTP API 业务桥不可用","code":"bridge_unavailable"}"#,
-                origin,
-            );
+            let (status, code, message) = if error == BRIDGE_TIMEOUT_MESSAGE {
+                (504, "bridge_timeout", "HTTP API 业务桥响应超时")
+            } else {
+                (503, "bridge_unavailable", "HTTP API 业务桥不可用")
+            };
+            let body = json!({ "error": message, "code": code }).to_string();
+            send_json_response(&mut stream, status, &body, origin);
         }
     }
     let _ = stream.shutdown(Shutdown::Both);
@@ -1284,6 +1371,59 @@ fn handle_connection(
 
 fn is_skill_market_path(path: &str) -> bool {
     path == "/api/working/skill-market" || path.starts_with("/api/working/skill-market/")
+}
+
+fn is_workspace_mcp_route(method: &str, path: &str) -> bool {
+    if method != "GET" && method != "PUT" {
+        return false;
+    }
+    let parts: Vec<&str> = path.split('/').collect();
+    parts.len() == 5
+        && parts[1] == "api"
+        && parts[2] == "workspaces"
+        && parts[4] == "mcp"
+}
+
+fn handle_workspace_mcp_route(
+    stream: &mut TcpStream,
+    request: &HttpRequest,
+    origin: Option<&str>,
+    store: &WorkspaceMcpStore,
+) {
+    let path = request.target.split('?').next().unwrap_or(&request.target);
+    let parts: Vec<&str> = path.split('/').collect();
+    let slug = parts[3];
+    let result = match request.method.as_str() {
+        "GET" => store.get_config(slug),
+        "PUT" => match serde_json::from_slice::<Value>(&request.body) {
+            Ok(config) => store.save_config(slug, config),
+            Err(_) => Err(WorkspaceMcpError::InvalidConfig(
+                "MCP 配置必须是合法 JSON".to_string(),
+            )),
+        },
+        _ => {
+            let body = json!({ "error": "MCP 方法不支持", "code": "method_not_allowed" })
+                .to_string();
+            send_json_response(stream, 405, &body, origin);
+            return;
+        }
+    };
+
+    match result {
+        Ok(config) => {
+            let body = config.to_string();
+            send_json_response(stream, 200, &body, origin);
+        }
+        Err(error) => {
+            let (status, code) = match error {
+                WorkspaceMcpError::InvalidWorkspace => (400, "invalid_workspace"),
+                WorkspaceMcpError::InvalidConfig(_) => (400, "invalid_config"),
+                WorkspaceMcpError::Io(_) => (500, "storage_error"),
+            };
+            let body = json!({ "error": error.to_string(), "code": code }).to_string();
+            send_json_response(stream, status, &body, origin);
+        }
+    }
 }
 
 fn handle_expert_team_route(
@@ -1667,12 +1807,14 @@ fn handle_agent_stream(
 
     let mut line = String::new();
     let mut completed = false;
+    let mut stop_worker = false;
     loop {
         line.clear();
         let read = match worker.read_line(&mut line) {
             Ok(read) => read,
             Err(error) => {
                 eprintln!("[HTTP API] 读取 Pi worker 输出失败: {}", error);
+                stop_worker = true;
                 break;
             }
         };
@@ -1691,7 +1833,11 @@ fn handle_agent_stream(
                 if let Err(error) = persist_worker_event(&bridge, &frame) {
                     eprintln!("[HTTP API] Agent SDK 消息持久化失败: {}", error);
                 }
-                let _ = send_sse_frame(stream, &frame);
+                if let Err(error) = send_sse_frame(stream, &frame) {
+                    eprintln!("[HTTP API] SSE 发送失败，客户端可能已断开: {}", error);
+                    stop_worker = true;
+                    break;
+                }
             }
             Some("meta") => {
                 if let Err(error) =
@@ -1728,9 +1874,19 @@ fn handle_agent_stream(
                 break;
             }
             Some("error") | Some("fatal") => {
-                let _ = send_sse_frame(stream, &frame);
+                if let Err(error) = send_sse_frame(stream, &frame) {
+                    eprintln!("[HTTP API] SSE 发送失败，客户端可能已断开: {}", error);
+                    stop_worker = true;
+                    break;
+                }
             }
             _ => {}
+        }
+    }
+
+    if stop_worker {
+        if let Err(error) = workers.stop(&session_id) {
+            eprintln!("[HTTP API] 停止 Pi worker 失败: {}", error);
         }
     }
 
@@ -2021,7 +2177,7 @@ fn send_response(
             origin_value
         ));
         response.push_str("Access-Control-Allow-Methods: GET,POST,PUT,PATCH,DELETE,OPTIONS\r\n");
-        response.push_str("Access-Control-Allow-Headers: Content-Type\r\n");
+        response.push_str("Access-Control-Allow-Headers: Content-Type, x-copis-web-token\r\n");
         response.push_str("Access-Control-Max-Age: 600\r\n");
     }
     if json && !body_bytes.is_empty() {
@@ -2100,6 +2256,19 @@ fn resolve_memory_directory() -> PathBuf {
     PathBuf::from(home).join(".copis").join("memory")
 }
 
+fn resolve_config_directory() -> PathBuf {
+    if let Ok(directory) = std::env::var("COPIS_CONFIG_DIR") {
+        if !directory.trim().is_empty() {
+            return PathBuf::from(directory);
+        }
+    }
+
+    let home = std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .unwrap_or_else(|_| ".".to_string());
+    PathBuf::from(home).join(".copis")
+}
+
 fn resolve_expert_teams_directory() -> PathBuf {
     if let Ok(directory) = std::env::var("COPIS_EXPERT_TEAMS_DIR") {
         if !directory.trim().is_empty() {
@@ -2128,6 +2297,14 @@ fn configured_port() -> u16 {
         .and_then(|value| value.parse::<u16>().ok())
         .filter(|port| *port > 0)
         .unwrap_or(DEFAULT_PORT)
+}
+
+struct ConnectionCountGuard(Arc<AtomicUsize>);
+
+impl Drop for ConnectionCountGuard {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::Relaxed);
+    }
 }
 
 fn main() {
@@ -2159,19 +2336,29 @@ fn main() {
     let skill_market_state = Arc::new(SkillMarketState::new(
         std::env::var("COPIS_WORKING_ACCESS_TOKEN").ok(),
     ));
+    let workspace_mcp_store = Arc::new(WorkspaceMcpStore::open(resolve_config_directory()));
     let response_bridge = Arc::clone(&bridge);
     thread::spawn(move || read_bridge_responses(response_bridge));
 
     eprintln!("[HTTP API] Rust 服务监听 http://{}:{}", HOST, port);
+    let active_connections = Arc::new(AtomicUsize::new(0));
     for stream in listener.incoming() {
         match stream {
             Ok(stream) => {
+                if active_connections.load(Ordering::Acquire) >= MAX_CONCURRENT_CONNECTIONS {
+                    eprintln!("[HTTP API] 并发连接数已达上限，拒绝新连接");
+                    continue;
+                }
+                active_connections.fetch_add(1, Ordering::Relaxed);
                 let connection_bridge = Arc::clone(&bridge);
                 let connection_workers = Arc::clone(&workers);
                 let connection_memory = Arc::clone(&memory_store);
                 let connection_expert_teams = Arc::clone(&expert_team_store);
                 let connection_skill_market = Arc::clone(&skill_market_state);
+                let connection_workspace_mcp = Arc::clone(&workspace_mcp_store);
+                let connection_active = Arc::clone(&active_connections);
                 thread::spawn(move || {
+                    let _guard = ConnectionCountGuard(connection_active);
                     handle_connection(
                         stream,
                         connection_bridge,
@@ -2179,6 +2366,7 @@ fn main() {
                         connection_memory,
                         connection_expert_teams,
                         connection_skill_market,
+                        connection_workspace_mcp,
                     )
                 });
             }
@@ -2190,192 +2378,5 @@ fn main() {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::pi_rpc::{
-        format_sse_event, is_agent_messages_route, is_agent_queue_route, is_agent_status_route,
-        is_agent_stop_route, is_agent_workers_status_route, is_agent_workers_stop_all_route,
-        parse_worker_frame, sse_headers,
-    };
-    use super::{
-        append_recording_line, decode_hex, encode_hex, find_subslice, is_allowed_origin,
-        is_safe_path_component, is_skill_market_path, parse_internal_recording_route,
-        recording_marker, Bridge,
-    };
-
-    #[test]
-    fn hex_round_trip_supports_utf8() {
-        let value = "Copis HTTP API / 测试";
-        let encoded = encode_hex(value.as_bytes());
-        assert_eq!(
-            String::from_utf8(decode_hex(&encoded).unwrap()).unwrap(),
-            value
-        );
-    }
-
-    #[test]
-    fn rejects_malformed_hex() {
-        assert!(decode_hex("0").is_none());
-        assert!(decode_hex("zz").is_none());
-    }
-
-    #[test]
-    fn finds_http_delimiter() {
-        assert_eq!(
-            find_subslice(b"GET / HTTP/1.1\r\n\r\n", b"\r\n\r\n"),
-            Some(14)
-        );
-        assert_eq!(find_subslice(b"abc", b"\r\n"), None);
-    }
-
-    #[test]
-    fn allows_vite_and_packaged_electron_origins() {
-        assert!(is_allowed_origin("null"));
-    }
-
-    #[test]
-    fn parses_only_safe_recording_routes() {
-        let route = parse_internal_recording_route(
-            "/internal/browser-workflows/recordings/workspace-1/recording-1/event?x=1",
-        )
-        .unwrap();
-        assert_eq!(route.workspace, "workspace-1");
-        assert_eq!(route.recording_id, "recording-1");
-        assert_eq!(route.action, "event");
-        assert!(parse_internal_recording_route(
-            "/internal/browser-workflows/recordings/../recording-1/event",
-        )
-        .is_none());
-        assert!(!is_safe_path_component("workspace/escape"));
-    }
-
-    #[test]
-    fn recording_markers_are_single_jsonl_lines() {
-        let marker =
-            String::from_utf8(recording_marker("recording-1", "recording_finished")).unwrap();
-        assert!(marker.ends_with('}'));
-        assert!(!marker.contains('\n'));
-        assert!(marker.contains("recording-1"));
-    }
-
-    #[test]
-    fn appends_valid_jsonl_lines_and_rejects_multiline_payloads() {
-        let path =
-            std::env::temp_dir().join(format!("copis-recording-{}.jsonl", std::process::id()));
-        let _ = std::fs::remove_file(&path);
-        let bridge = Bridge::new();
-        append_recording_line(&bridge, &path, br#"{"kind":"recording_started"}"#, true).unwrap();
-        append_recording_line(&bridge, &path, br#"{"type":"click"}"#, false).unwrap();
-        assert!(append_recording_line(&bridge, &path, b"{\"type\":\"click\"}\n{}", false).is_err());
-        let content = std::fs::read_to_string(&path).unwrap();
-        assert_eq!(content.lines().count(), 2);
-        let _ = std::fs::remove_file(path);
-    }
-
-    #[test]
-    fn only_allows_vite_origins() {
-        assert!(is_allowed_origin("http://127.0.0.1:5174"));
-        assert!(is_allowed_origin("http://localhost:5174"));
-        assert!(!is_allowed_origin("http://example.com"));
-    }
-
-    #[test]
-    fn recognizes_only_agent_message_post_as_stream_route() {
-        assert!(is_agent_messages_route(
-            "POST",
-            "/api/agent/sessions/session-1/messages"
-        ));
-        assert!(!is_agent_messages_route(
-            "GET",
-            "/api/agent/sessions/session-1/messages"
-        ));
-        assert!(!is_agent_messages_route("POST", "/api/agent/sessions"));
-    }
-
-    #[test]
-    fn recognizes_only_agent_stop_post_as_stop_route() {
-        assert!(is_agent_stop_route(
-            "POST",
-            "/api/agent/sessions/session-1/stop"
-        ));
-        assert!(!is_agent_stop_route(
-            "GET",
-            "/api/agent/sessions/session-1/stop"
-        ));
-        assert!(!is_agent_stop_route(
-            "POST",
-            "/api/agent/sessions/session-1/stop/extra"
-        ));
-    }
-
-    #[test]
-    fn recognizes_only_agent_queue_post_as_queue_route() {
-        assert!(is_agent_queue_route(
-            "POST",
-            "/api/agent/sessions/session-1/queue"
-        ));
-        assert!(!is_agent_queue_route(
-            "GET",
-            "/api/agent/sessions/session-1/queue"
-        ));
-        assert!(!is_agent_queue_route(
-            "POST",
-            "/api/agent/sessions/session-1/queue/extra"
-        ));
-    }
-
-    #[test]
-    fn recognizes_only_pi_worker_lifecycle_routes() {
-        assert!(is_agent_status_route(
-            "GET",
-            "/api/agent/sessions/session-1/status"
-        ));
-        assert!(!is_agent_status_route(
-            "POST",
-            "/api/agent/sessions/session-1/status"
-        ));
-        assert!(is_agent_workers_status_route(
-            "GET",
-            "/api/agent/workers/status"
-        ));
-        assert!(is_agent_workers_stop_all_route(
-            "POST",
-            "/api/agent/workers/stop-all"
-        ));
-        assert!(!is_agent_workers_stop_all_route(
-            "GET",
-            "/api/agent/workers/stop-all"
-        ));
-    }
-
-    #[test]
-    fn recognizes_skill_market_routes_as_rust_owned_routes() {
-        assert!(is_skill_market_path("/api/working/skill-market"));
-        assert!(is_skill_market_path("/api/working/skill-market/12/install"));
-        assert!(!is_skill_market_path("/api/working/skill-markets"));
-    }
-
-    #[test]
-    fn formats_sse_response_headers_without_content_length() {
-        let headers = sse_headers(200);
-        assert!(headers.contains("Content-Type: text/event-stream"));
-        assert!(headers.contains("Cache-Control: no-cache"));
-        assert!(!headers.contains("Content-Length"));
-    }
-
-    #[test]
-    fn formats_json_as_an_sse_data_frame() {
-        assert_eq!(
-            format_sse_event(r#"{"type":"text_delta","text":"你好"}"#),
-            "data: {\"type\":\"text_delta\",\"text\":\"你好\"}\n\n"
-        );
-    }
-
-    #[test]
-    fn parses_worker_jsonl_frames_without_accepting_non_objects() {
-        let frame =
-            parse_worker_frame(r#"{"type":"event","sessionId":"s1"}"#).expect("valid worker frame");
-        assert_eq!(frame["type"], "event");
-        assert!(parse_worker_frame("[]").is_none());
-        assert!(parse_worker_frame("not-json").is_none());
-    }
-}
+#[path = "main_tests.rs"]
+mod tests;

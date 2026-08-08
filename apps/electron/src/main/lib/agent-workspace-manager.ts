@@ -236,6 +236,15 @@ export function getProjectFilesPath(workspaceSlug: string): string {
   return getAgentWorkspaceBySlug(workspaceSlug)?.projectRootPath ?? getWorkspaceFilesDir(workspaceSlug)
 }
 
+/**
+ * 返回工作区受控 AGENTS.md 路径。
+ * Copis 专家团队托管区块只写入该文件（~/.copis/agent-workspaces/<slug>/），
+ * 不写入用户本地项目根目录，避免项目根指令文件绕过 Copis 权限边界。
+ */
+export function getAgentWorkspaceAgentsPath(workspaceSlug: string): string {
+  return join(getAgentWorkspacePath(workspaceSlug), 'AGENTS.md')
+}
+
 /** 未授权直接修改原始目录时，Agent 的受控输出目录名称。 */
 export const COPIS_WORKSPACE_WRITE_DIR = 'copis'
 

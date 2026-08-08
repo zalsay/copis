@@ -40,6 +40,7 @@ import {
   type HttpApiRequest,
   type HttpApiResponse,
 } from './http-api-handler'
+import { getOrCreateHttpApiWebToken } from './http-api-web-token'
 import { getWorkingTokenStore } from './working-auth-store'
 import {
   MODEL_BASE_URL_ENV,
@@ -263,6 +264,7 @@ function spawnManagedProcess(
         COPIS_CONFIG_DIR: getConfigDir(),
         COPIS_MEMORY_DIR: join(getConfigDir(), 'memory'),
         COPIS_HTTP_API_INTERNAL_TOKEN: internalToken,
+        COPIS_HTTP_API_WEB_TOKEN: getOrCreateHttpApiWebToken(),
         COPIS_WORKING_ACCESS_TOKEN: getWorkingTokenStore().getToken() ?? '',
         ...(options.backendUrl || process.env.COPIS_BACKEND_URL
           ? { COPIS_BACKEND_URL: options.backendUrl ?? process.env.COPIS_BACKEND_URL }

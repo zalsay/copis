@@ -169,6 +169,8 @@ import type {
   WorkingWorkspace,
   WorkingWorkspaceInput,
 } from '@copis/shared'
+
+const HTTP_API_WEB_TOKEN_ARGUMENT_PREFIX = '--copis-http-api-web-token='
 import type {
   UserProfile,
   AppSettings,
@@ -198,6 +200,12 @@ import { QUICK_TASK_IPC_CHANNELS, TRAY_IPC_CHANNELS, VOICE_DICTATION_IPC_CHANNEL
  */
 export interface ElectronAPI {
   // ===== 运行时相关 =====
+
+  /**
+   * 获取本次启动的 HTTP API 浏览器会话令牌
+   * 渲染层直连 Rust HTTP API 时通过 x-copis-web-token 请求头携带。
+   */
+  getHttpApiWebToken: () => string
 
   /**
    * 获取运行时状态
@@ -1230,6 +1238,13 @@ interface MigrationExportResult {
  */
 const electronAPI: ElectronAPI = {
   // 运行时
+  getHttpApiWebToken: () => {
+    const argument = process.argv.find((value) =>
+      value.startsWith(HTTP_API_WEB_TOKEN_ARGUMENT_PREFIX),
+    )
+    return argument ? argument.slice(HTTP_API_WEB_TOKEN_ARGUMENT_PREFIX.length) : ''
+  },
+
   getRuntimeStatus: () => {
     return ipcRenderer.invoke(IPC_CHANNELS.GET_RUNTIME_STATUS)
   },

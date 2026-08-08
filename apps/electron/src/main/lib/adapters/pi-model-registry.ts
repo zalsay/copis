@@ -19,6 +19,9 @@ import {
   type ReasoningCapability,
   type ReasoningTransport,
   type ProviderType,
+  COPIS_WORKING_MODEL_SOURCE_TYPE_HEADER,
+  COPIS_WORKING_MODEL_SOURCE_TYPE_COPIS_AGENT,
+  isCopisWorkingChannelId,
 } from '@copis/shared'
 import {
   getCopisUserAgent,
@@ -520,10 +523,17 @@ function usesBearerOnlyAnthropicAuth(provider: ProviderType): boolean {
   return requiresCopisUserAgent(provider) || provider === 'minimax' || provider === 'qwen-anthropic'
 }
 
-export function buildPiRequestHeaders(provider: ProviderType, apiKey: string): PiRequestHeaders | undefined {
-  if (normalizePiApi(provider) !== 'anthropic-messages') return undefined
+export function buildPiRequestHeaders(
+  provider: ProviderType,
+  apiKey: string,
+  extraHeaders?: PiRequestHeaders,
+): PiRequestHeaders | undefined {
+  if (normalizePiApi(provider) !== 'anthropic-messages') {
+    return extraHeaders && Object.keys(extraHeaders).length > 0 ? { ...extraHeaders } : undefined
+  }
 
   const headers: PiRequestHeaders = {
+    ...(extraHeaders ?? {}),
     Authorization: `Bearer ${apiKey}`,
   }
 
@@ -682,6 +692,9 @@ export async function buildModel(sdk: PiSdk, input: PiAgentQueryOptions) {
   }
   const providerName = `copis-${input.provider}-${input.sessionId}`
   const resolvedApiKey = resolvePiApiKey(input.provider, input.apiKey)
+  const workingSourceTypeHeader = isCopisWorkingChannelId(input.channelId)
+    ? { [COPIS_WORKING_MODEL_SOURCE_TYPE_HEADER]: COPIS_WORKING_MODEL_SOURCE_TYPE_COPIS_AGENT }
+    : undefined
   // pi runtime 统一剥离 `[1m]` 后缀：无论上游从哪条路径传入，注册与查找都用干净 ID。
   const resolvedModelId = stripAgentContextSuffix(input.model)
   const modelRuntime = await sdk.ModelRuntime.create({ allowModelNetwork: false })
@@ -691,7 +704,7 @@ export async function buildModel(sdk: PiSdk, input: PiAgentQueryOptions) {
   if (!baseUrl) {
     throw new Error(`渠道 ${input.channelName ?? input.provider} 缺少 Base URL`)
   }
-  const headers = buildPiRequestHeaders(input.provider, resolvedApiKey)
+  const headers = buildPiRequestHeaders(input.provider, resolvedApiKey, workingSourceTypeHeader)
   const compat = {
     ...modelDefaults.compat,
     ...(supportsPiDeveloperRole(input.provider) ? {} : { supportsDeveloperRole: false }),

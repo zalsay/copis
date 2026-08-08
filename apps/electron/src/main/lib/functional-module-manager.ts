@@ -29,8 +29,8 @@ interface FunctionalModuleDefinition {
 }
 
 const MODULE_DEFINITIONS: readonly FunctionalModuleDefinition[] = [
-  { name: 'rust-http-api', displayName: 'Rust HTTP API', required: true },
-  { name: 'officecli', displayName: 'OfficeCLI', required: true },
+  { name: 'rust-http-api', displayName: '系统核心模块', required: true },
+  { name: 'officecli', displayName: 'Office 文档支持', required: true },
 ]
 
 export type FunctionalModuleFetch = (
@@ -228,7 +228,7 @@ async function installFunctionalModuleInner(
   }
 
   try {
-    emit({ phase: 'manifest', detail: '正在获取功能模块版本信息', progress: 0.04 })
+    emit({ phase: 'manifest', detail: '正在获取组件版本信息', progress: 0.04 })
     const artifact = await resolveFunctionalModuleArtifact(input.name, options)
     const current = readActiveFunctionalModule(paths, input.name)
     if (!input.force
@@ -265,7 +265,7 @@ async function prepareFunctionalModuleInner(
 
   try {
     if (!artifactOverride) {
-      emitProgress({ phase: 'manifest', detail: '正在获取功能模块版本信息', progress: 0.04 })
+      emitProgress({ phase: 'manifest', detail: '正在获取组件版本信息', progress: 0.04 })
     }
     const artifact = artifactOverride ?? await resolveFunctionalModuleArtifact(input.name, options)
     const packageInfo: FunctionalModulePackage = {
@@ -284,7 +284,7 @@ async function prepareFunctionalModuleInner(
       emitProgress,
       options.fetchImpl ?? fetch,
     )
-    emitProgress({ phase: 'verify', detail: '正在校验功能模块', progress: 0.78, version: artifact.version })
+    emitProgress({ phase: 'verify', detail: '正在校验组件', progress: 0.78, version: artifact.version })
     const verifiedSha256 = await sha256File(artifactPath)
     if (verifiedSha256 !== artifact.sha256.toLowerCase()) {
       throw new Error(`功能模块校验失败：期望 ${artifact.sha256}，实际 ${verifiedSha256}`)

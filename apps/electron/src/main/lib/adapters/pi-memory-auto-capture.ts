@@ -164,6 +164,7 @@ export async function runMemoryTextTurn(input: {
   modelId: string
   proxyUrl?: string
   prompt: string
+  extraHeaders?: Record<string, string>
 }): Promise<string> {
   const adapter = getAdapter(input.provider)
   const request = increaseExtractionBudget(adapter.buildTitleRequest({
@@ -172,6 +173,9 @@ export async function runMemoryTextTurn(input: {
     modelId: input.modelId,
     prompt: input.prompt,
   }))
+  if (input.extraHeaders) {
+    Object.assign(request.headers, input.extraHeaders)
+  }
   const response = await getFetchFn(input.proxyUrl)(request.url, {
     method: 'POST',
     headers: request.headers,
@@ -190,6 +194,7 @@ export async function extractMemoryFactsWithProvider(input: {
   modelId: string
   proxyUrl?: string
   turns: readonly CompletedAgentTurn[]
+  extraHeaders?: Record<string, string>
 }): Promise<string> {
   return runMemoryTextTurn({
     ...input,

@@ -20,6 +20,7 @@ import type {
   MemoryStats,
 } from '@copis/shared'
 import { RENDERER_HTTP_API_BASE_URL } from './http-api-base-url'
+import { withHttpApiWebToken } from './http-api-web-token'
 
 const MEMORY_API_BASE_URL = RENDERER_HTTP_API_BASE_URL
 const STARTUP_RETRY_COUNT = 20
@@ -85,10 +86,13 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   let lastError: unknown
   for (let attempt = 0; attempt < STARTUP_RETRY_COUNT; attempt += 1) {
     try {
-      const response = await fetch(`${MEMORY_API_BASE_URL}${path}`, {
-        headers: { Accept: 'application/json', ...(init?.body === undefined ? {} : { 'Content-Type': 'application/json' }) },
+      const response = await fetch(`${MEMORY_API_BASE_URL}${path}`, withHttpApiWebToken({
         ...init,
-      })
+        headers: {
+          Accept: 'application/json',
+          ...(init?.body === undefined ? {} : { 'Content-Type': 'application/json' }),
+        },
+      }))
       const payload = await readPayload(response)
       if (response.ok) return payload as T
 

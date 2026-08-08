@@ -459,7 +459,7 @@ export function DurationBadge({ durationMs, usage }: { durationMs: number; usage
   )
 }
 
-/** Agent 运行指示器 — Shimmer Spinner + 无括号的运行时间 */
+/** Agent 运行指示器 — 思考文案、Shimmer Spinner + 运行时间 */
 function AgentRunningIndicator({ startedAt }: { startedAt?: number }): React.ReactElement {
   const [elapsed, setElapsed] = React.useState(0)
 
@@ -481,7 +481,7 @@ function AgentRunningIndicator({ startedAt }: { startedAt?: number }): React.Rea
   return (
     <div className="flex items-center gap-2 min-h-[28px]">
       <Spinner size="sm" className="text-primary/75" />
-      <span className="text-[13px] font-light text-muted-foreground/75 tabular-nums">Agent Running {formatTime(elapsed)}</span>
+      <span className="agent-thinking-marquee text-[13px] font-light tabular-nums">正在思考 {formatTime(elapsed)}</span>
     </div>
   )
 }

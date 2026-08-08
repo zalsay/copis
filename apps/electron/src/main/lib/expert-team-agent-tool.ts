@@ -3,12 +3,17 @@
 import { Type } from 'typebox'
 import type { ToolDefinition } from '@earendil-works/pi-coding-agent'
 import type { AgentToolResult } from '@earendil-works/pi-agent-core'
-import type { ExpertTeamSchema, ExpertTeamSchemaRevision } from '@copis/shared'
+import type { AgentWorkspace, ExpertTeamPromptContext, ExpertTeamSchema, ExpertTeamSchemaRevision } from '@copis/shared'
 import { HTTP_API_HOST, HTTP_API_PORT } from './http-api-server'
-import { getAgentWorkspace, getAgentWorkspaceWritableRoot } from './agent-workspace-manager'
+import { getAgentWorkspace, getAgentWorkspaceAgentsPath, getAgentWorkspaceWritableRoot } from './agent-workspace-manager'
 import { ExpertTeamRunner, type ExpertTeamNodeRole, type ExpertTeamRunSnapshot } from './expert-team-runner'
 import { HttpExpertTeamRustApiClient } from './expert-team-rust-client'
 import { createToolCallIdempotencyCache } from './agent-collaboration-utils'
+import {
+  buildPromptContext,
+  HttpExpertTeamContextReader,
+  resolveExpertTeamPromptContext,
+} from './expert-team-context'
 
 const DEFAULT_SCHEMA_ID = 'ai-education-research-writer-reviewer'
 const MAX_GOAL_LENGTH = 20_000
@@ -90,22 +95,44 @@ async function requestPublic<T>(path: string, init: RequestInit = {}): Promise<T
   return payload as T
 }
 
-async function runExpertTeam(ctx: ExpertTeamToolContext, goal: string, schemaId: string, signal?: AbortSignal): Promise<ExpertTeamToolResult> {
+/** 显式指定 schemaId 时按 Rust API 读取该 schema 的当前冻结 revision。 */
+async function resolveExplicitSchemaContext(
+  workspace: AgentWorkspace,
+  schemaId: string,
+): Promise<ExpertTeamPromptContext> {
+  const rawSchema = await requestPublic<ExpertTeamSchema | { schema: ExpertTeamSchema }>(`/api/expert-teams/schemas/${encodeURIComponent(schemaId)}`)
+  const schema = assertSchema(rawSchema && typeof rawSchema === 'object' && 'schema' in rawSchema ? rawSchema.schema : rawSchema)
+  const revision = currentRevision(schema)
+  if (!revision || !revision.snapshot) {
+    throw new Error(`专家团队 Schema ${schema.id} 没有可用的冻结 revision`)
+  }
+  return buildPromptContext(schema, revision, {
+    agentsMdPath: getAgentWorkspaceAgentsPath(workspace.slug),
+  })
+}
+
+async function runExpertTeam(ctx: ExpertTeamToolContext, goal: string, schemaId: string | undefined, signal?: AbortSignal): Promise<ExpertTeamToolResult> {
   if ((ctx.triggeredBy ?? 'user') !== 'user') throw new Error('只有主 Agent 可以调度专家团队')
   if (!ctx.workspaceId || !ctx.workspaceSlug) throw new Error('调度专家团队需要当前工作区')
   const workspace = getAgentWorkspace(ctx.workspaceId)
   if (!workspace || workspace.slug !== ctx.workspaceSlug) throw new Error('当前工作区不存在或上下文不一致')
 
-  const rawSchema = await requestPublic<ExpertTeamSchema | { schema: ExpertTeamSchema }>(`/api/expert-teams/schemas/${encodeURIComponent(schemaId)}`)
-  const schema = assertSchema(rawSchema && typeof rawSchema === 'object' && 'schema' in rawSchema ? rawSchema.schema : rawSchema)
-  const revision = currentRevision(schema)
-  const snapshotSchema = revision?.snapshot ?? schema
+  // 冻结上下文：省略 schemaId 时优先使用 workspace binding；显式指定时按 Rust API 校验并读取 revision。
+  const promptContext = schemaId
+    ? await resolveExplicitSchemaContext(workspace, schemaId)
+    : await resolveExpertTeamPromptContext({
+      workspace,
+      reader: new HttpExpertTeamContextReader(),
+    })
+  if (!promptContext) {
+    throw new Error('当前工作区未绑定专家团队 Schema 或 schema 校验失败，无法调度专家团队')
+  }
   const runPayload = await requestPublic<Record<string, unknown>>('/api/expert-teams/runs', {
     method: 'POST',
     body: JSON.stringify({
-      schemaId: schema.id,
+      schemaId: promptContext.schemaId,
       workspaceSlug: workspace.slug,
-      ...(revision ? { schemaRevisionId: revision.id } : {}),
+      ...(promptContext.schemaRevisionId !== undefined ? { schemaRevisionId: promptContext.schemaRevisionId } : {}),
       input: goal,
     }),
   })
@@ -113,15 +140,14 @@ async function runExpertTeam(ctx: ExpertTeamToolContext, goal: string, schemaId:
     ? (runPayload as { run: Record<string, unknown> }).run
     : runPayload
   const runId = assertNonBlank(run.id, 'runId')
-  const nodes = snapshotSchema.nodes.map((node) => {
-    const prompt = node.prompt?.trim() || node.description?.trim() || `完成 ${node.name} 节点任务`
+  const nodes = promptContext.nodes.map((node) => {
     return {
       id: node.id,
       role: toNodeRole(node.role),
-      task: `${prompt}\n\n用户目标：\n${goal}`,
+      task: `${node.task}\n\n用户目标：\n${goal}`,
       ...(node.dependsOn?.length ? { dependsOn: node.dependsOn } : {}),
-      ...(node.path ? { outputPath: node.path } : {}),
-      ...(node.config?.allowNoArtifact === true ? { allowNoArtifact: true } : {}),
+      ...(node.outputPath ? { outputPath: node.outputPath } : {}),
+      ...(node.allowNoArtifact ? { allowNoArtifact: true } : {}),
     }
   })
   const snapshot: ExpertTeamRunSnapshot = {
@@ -131,6 +157,7 @@ async function runExpertTeam(ctx: ExpertTeamToolContext, goal: string, schemaId:
     ...(ctx.modelId ? { modelId: ctx.modelId } : {}),
     workspaceId: ctx.workspaceId,
     nodes,
+    expertTeamContext: promptContext,
   }
   const result = await new ExpertTeamRunner({
     workspaceRoot: getAgentWorkspaceWritableRoot(workspace),
@@ -140,8 +167,8 @@ async function runExpertTeam(ctx: ExpertTeamToolContext, goal: string, schemaId:
   const cancelled = result.nodes.some((node) => node.status === 'cancelled')
   return {
     runId,
-    schemaId: schema.id,
-    ...(revision ? { schemaRevision: revision.revision } : {}),
+    schemaId: promptContext.schemaId,
+    ...(promptContext.revision !== undefined ? { schemaRevision: promptContext.revision } : {}),
     status: cancelled ? 'cancelled' : failed ? 'failed' : 'succeeded',
     nodes: result.nodes.map((node) => ({
       nodeId: node.nodeId,
@@ -161,13 +188,13 @@ export function buildExpertTeamTools(sdk: typeof import('@earendil-works/pi-codi
     description: '由主 Agent 按需调度本地 Pi 专家团队。普通问答和简单任务不要调用；只有需要深入研究、总结成文档并由 reviewer 检验的完整工作流才调用。子 Agent 结果会回传给你，你必须自行汇总后再回复用户。',
     parameters: Type.Object({
       goal: Type.String({ description: '专家团队需要完成的完整目标' }),
-      schemaId: Type.Optional(Type.String({ description: `团队 Schema ID，默认 ${DEFAULT_SCHEMA_ID}` })),
+      schemaId: Type.Optional(Type.String({ description: '团队 Schema ID；省略时使用当前工作区绑定的 Schema' })),
     }),
     async execute(toolCallId: string, params: unknown, signal?: AbortSignal) {
       const args = params as { goal?: unknown; schemaId?: unknown }
       const goal = assertNonBlank(args.goal, 'goal')
       if (goal.length > MAX_GOAL_LENGTH) throw new Error(`goal 不能超过 ${MAX_GOAL_LENGTH} 个字符`)
-      const schemaId = args.schemaId === undefined ? DEFAULT_SCHEMA_ID : assertNonBlank(args.schemaId, 'schemaId')
+      const schemaId = args.schemaId === undefined ? undefined : assertNonBlank(args.schemaId, 'schemaId')
       const result = await expertTeamCalls.getOrCreate(
         ctx.sessionId,
         toolCallId,

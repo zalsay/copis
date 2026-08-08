@@ -10,6 +10,11 @@ import { ArrowLeft, Loader2, CheckCircle2, XCircle, AlertCircle } from 'lucide-r
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
+import {
+  getWorkspaceMcpConfig,
+  saveWorkspaceMcpConfig,
+  testMcpServer,
+} from '@/lib/workspace-mcp-api'
 import type { McpServerEntry, McpTransportType, WorkspaceMcpConfig } from '@copis/shared'
 import {
   SettingsSection,
@@ -210,11 +215,11 @@ export function McpServerForm({ server, workspaceSlug, onSaved, onChanged, onCan
   const doSaveEntry = React.useCallback(async (serverName: string, entry: McpServerEntry) => {
     const generation = ++saveGenerationRef.current
     try {
-      const config = await window.electronAPI.getWorkspaceMcpConfig(workspaceSlug)
+      const config = await getWorkspaceMcpConfig(workspaceSlug)
       const newConfig: WorkspaceMcpConfig = {
         servers: { ...config.servers, [serverName]: entry },
       }
-      await window.electronAPI.saveWorkspaceMcpConfig(workspaceSlug, newConfig)
+      await saveWorkspaceMcpConfig(workspaceSlug, newConfig)
       if (generation === saveGenerationRef.current && mountedRef.current) {
         if (entry.enabled !== lastSavedEnabledRef.current) {
           lastSavedEnabledRef.current = entry.enabled
@@ -307,7 +312,7 @@ export function McpServerForm({ server, workspaceSlug, onSaved, onChanged, onCan
 
     try {
       const entry = buildEntry(false) // 测试时不包含旧的测试结果
-      const result = await window.electronAPI.testMcpServer(serverName, entry)
+      const result = await testMcpServer(serverName, entry)
       setTestResult({
         success: result.success,
         message: result.message,
@@ -339,7 +344,7 @@ export function McpServerForm({ server, workspaceSlug, onSaved, onChanged, onCan
     setSaving(true)
     try {
       // 读取现有配置
-      const config = await window.electronAPI.getWorkspaceMcpConfig(workspaceSlug)
+      const config = await getWorkspaceMcpConfig(workspaceSlug)
       const entry = buildEntry(true) // 保存时包含测试结果
 
       console.log(`[MCP 表单] 保存 MCP: ${serverName}, enabled: ${entry.enabled}, testResult: ${testResult?.success ?? '未测试'}`)
@@ -350,7 +355,7 @@ export function McpServerForm({ server, workspaceSlug, onSaved, onChanged, onCan
           [serverName]: entry,
         },
       }
-      await window.electronAPI.saveWorkspaceMcpConfig(workspaceSlug, newConfig)
+      await saveWorkspaceMcpConfig(workspaceSlug, newConfig)
       onSaved()
     } catch (error) {
       console.error('[MCP 表单] 保存失败:', error)

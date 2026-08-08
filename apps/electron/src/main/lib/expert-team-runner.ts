@@ -8,7 +8,7 @@
 import { createHash } from 'node:crypto'
 import { mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs'
 import { isAbsolute, join, normalize, relative, resolve } from 'node:path'
-import type { AgentMessage, AgentSendInput } from '@copis/shared'
+import type { AgentMessage, AgentSendInput, ExpertTeamPromptContext } from '@copis/shared'
 import {
   createAgentSession,
   updateAgentSessionMeta,
@@ -43,6 +43,8 @@ export interface ExpertTeamRunSnapshot {
   readonly modelId?: string
   readonly workspaceId: string
   readonly nodes: readonly ExpertTeamNodeSnapshot[]
+  /** 创建 run 时冻结的专家团队上下文；同一 run 的所有节点共享，不得被后续 schema 更新改写。 */
+  readonly expertTeamContext?: ExpertTeamPromptContext
 }
 
 export interface ExpertTeamNodeResult {
@@ -159,6 +161,16 @@ function buildNodePrompt(
     ? `前序节点产物位于工作区运行目录下：${node.dependencies.map((dependency) => `.copis/expert-team-runs/${snapshot.runId}/${dependency}`).join('、')}。需要时先读取这些目录中的文件。`
     : '本节点没有前序节点产物。'
   return `你是 Copis 本地专家团队的 ${node.role} 节点成员，属于运行 ${snapshot.runId} 的节点 ${node.id}。
+
+<copis_expert_team_node>
+${JSON.stringify({
+  nodeId: node.id,
+  role: node.role,
+  task: node.task,
+  dependsOn: node.dependencies,
+  outputPath: node.declaredOutputPath ?? null,
+})}
+</copis_expert_team_node>
 
 工作边界：
 - 只处理本节点任务，不创建或调用任何协作子会话，不委派给其他 Agent。
@@ -359,6 +371,9 @@ export class ExpertTeamRunner {
         workingMode: 'expert',
         startedAt: Date.now(),
         triggeredBy: 'delegation',
+        ...(snapshot.expertTeamContext
+          ? { expertTeamContext: { ...snapshot.expertTeamContext, nodeId: node.id } }
+          : {}),
       }
       await this.agent.run(input, {
         onError: (error) => { callbackError = error },

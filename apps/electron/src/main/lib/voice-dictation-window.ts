@@ -11,6 +11,7 @@ import { VOICE_DICTATION_IPC_CHANNELS } from '../../types'
 import { getSettings } from './settings-service'
 import { captureVoiceDictationTarget } from './text-output-service'
 import { getMainWindow } from '../index'
+import { httpApiWebTokenArgument } from './http-api-web-token'
 
 const INDICATOR_WIDTH = 360
 const INDICATOR_HEIGHT = 110
@@ -140,6 +141,7 @@ function getOrCreateVoiceIndicatorWindow(): BrowserWindow {
       preload: join(__dirname, 'preload.cjs'),
       contextIsolation: true,
       nodeIntegration: false,
+      additionalArguments: [httpApiWebTokenArgument()],
       partition: 'voice-dictation-indicator',
     },
   }

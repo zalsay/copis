@@ -32,7 +32,12 @@ interface UseCloseTabReturn {
   /** 请求关闭当前会话入口 */
   requestClose: (tabId: string) => void
   /** 直接执行关闭 */
-  executeClose: (tabId: string) => void
+  executeClose: (tabId: string, options?: CloseTabOptions) => void
+}
+
+interface CloseTabOptions {
+  /** 删除会话后无需再写入完成状态。 */
+  clearCompletionNotice?: boolean
 }
 
 export function useCloseTab(): UseCloseTabReturn {
@@ -68,7 +73,7 @@ export function useCloseTab(): UseCloseTabReturn {
     })
   }, [store, setAgentSessions, setUnviewedCompleted])
 
-  const executeClose = React.useCallback((tabId: string) => {
+  const executeClose = React.useCallback((tabId: string, options?: CloseTabOptions) => {
     const closingTab = tabs.find((t) => t.id === tabId)
     const wasActive = activeTabId === tabId
     const result = closeTab(tabs, activeTabId, tabId)
@@ -114,7 +119,7 @@ export function useCloseTab(): UseCloseTabReturn {
     }
 
     // 用户主动关闭 idle 的 Agent Tab 时，清除完成提醒状态
-    if (closingTab && closingTab.type === 'agent') {
+    if (closingTab && closingTab.type === 'agent' && options?.clearCompletionNotice !== false) {
       clearIdleAgentCompletionNotice(closingTab.sessionId)
     }
   }, [tabs, activeTabId, setTabs, setActiveTabId, setViewStateMap, setSideQuestionMap, syncActiveTabSideEffects, clearIdleAgentCompletionNotice])

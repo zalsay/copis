@@ -162,7 +162,7 @@ impl ExternalRuntime {
             "node": {
                 "available": node_available,
                 "version": self.node_version,
-                "path": self.node_path.as_ref().map(path_string),
+                "path": self.node_path.as_deref().map(path_string),
                 "error": if node_available { Value::Null } else { Value::String(self.node_error.clone().unwrap_or_else(|| "Node.js 版本探测失败".to_string())) },
             },
             "bun": {
@@ -175,13 +175,13 @@ impl ExternalRuntime {
             "git": {
                 "available": git_available,
                 "version": self.git_version,
-                "path": self.git_path.as_ref().map(path_string),
+                "path": self.git_path.as_deref().map(path_string),
                 "error": if git_available { Value::Null } else { Value::String(self.git_error.clone().unwrap_or_else(|| "Git 版本探测失败".to_string())) },
             },
             "shell": {
                 "gitBash": {
                     "available": bash_available,
-                    "path": self.bash_path.as_ref().map(path_string),
+                    "path": self.bash_path.as_deref().map(path_string),
                     "version": self.bash_version,
                     "error": if bash_available { Value::Null } else { Value::String(self.bash_error.clone().unwrap_or_else(|| "Git Bash 版本探测失败".to_string())) },
                 },
@@ -549,7 +549,7 @@ fn normalize_git_version(value: &str) -> String {
     value.trim().to_string()
 }
 
-fn path_string(path: &PathBuf) -> String {
+fn path_string(path: &Path) -> String {
     path.to_string_lossy().into_owned()
 }
 
@@ -570,157 +570,5 @@ fn apply_no_window(command: &mut Command) {
 fn apply_no_window(_command: &mut Command) {}
 
 #[cfg(test)]
-mod tests {
-    use super::{
-        active_runtime_dir, is_safe_version, runtime_path, runtime_roots, ExternalRuntime,
-    };
-    use serde_json::json;
-    use std::fs;
-    use std::path::PathBuf;
-
-    fn runtime_without_node() -> ExternalRuntime {
-        ExternalRuntime {
-            runtime_root: PathBuf::from("/runtime"),
-            active_dir: PathBuf::from("/runtime/current"),
-            node_path: None,
-            git_path: Some(PathBuf::from("/runtime/git")),
-            bash_path: if cfg!(windows) {
-                Some(PathBuf::from("/runtime/git/bash.exe"))
-            } else {
-                None
-            },
-            node_version: None,
-            git_version: Some("2.0.0".to_string()),
-            bash_version: if cfg!(windows) {
-                Some("GNU bash".to_string())
-            } else {
-                None
-            },
-            node_error: Some("未找到 node 可执行文件".to_string()),
-            git_error: None,
-            bash_error: None,
-        }
-    }
-
-    #[test]
-    fn compiled_worker_does_not_require_node_runtime() {
-        assert!(runtime_without_node()
-            .validate_for_worker(false, false)
-            .is_ok());
-    }
-
-    #[test]
-    fn javascript_worker_still_requires_node_runtime() {
-        let error = runtime_without_node()
-            .validate_for_worker(true, true)
-            .expect_err("JS Worker 必须要求 Node.js runtime");
-        assert!(error.contains("Node.js"));
-    }
-
-    #[test]
-    fn development_bun_worker_can_use_system_runtime() {
-        assert!(runtime_without_node()
-            .validate_for_worker(false, false)
-            .is_ok());
-    }
-
-    #[test]
-    fn compiled_worker_injects_runtime_config_without_node_path() {
-        let runtime = runtime_without_node();
-        let mut config = json!({ "query": {} });
-
-        runtime
-            .inject_pi_config(&mut config, false, false)
-            .expect("编译 Worker 不应因为缺少 Node.js 失败");
-
-        let env = &config["query"]["runtimeEnv"]["env"];
-        assert_eq!(env["COPIS_RUNTIME_ROOT"], "/runtime");
-        assert!(env["COPIS_NODE_PATH"].is_null());
-    }
-
-    #[test]
-    fn rejects_unsafe_runtime_version() {
-        assert!(!is_safe_version("../other"));
-        assert!(!is_safe_version("versions\\other"));
-        assert!(is_safe_version("2026.08.04.1"));
-    }
-
-    #[test]
-    fn resolves_current_version_before_current_directory() {
-        let root = std::env::temp_dir().join(format!("copis-runtime-test-{}", std::process::id()));
-        let version_dir = root.join("versions").join("test");
-        fs::create_dir_all(version_dir.join("node")).expect("create version runtime");
-        fs::create_dir_all(root.join("current")).expect("create current runtime");
-        fs::write(root.join("current-version.txt"), "test\n").expect("write current version");
-
-        assert_eq!(active_runtime_dir(&root), version_dir);
-        let _ = fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn resolves_current_version_with_utf8_bom() {
-        let root =
-            std::env::temp_dir().join(format!("copis-runtime-bom-test-{}", std::process::id()));
-        let version_dir = root.join("versions").join("test");
-        fs::create_dir_all(version_dir.join("node")).expect("create version runtime");
-        fs::write(root.join("current-version.txt"), "\u{feff}test\r\n")
-            .expect("write current version");
-
-        assert_eq!(active_runtime_dir(&root), version_dir);
-        let _ = fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn prepends_external_runtime_directories_to_path() {
-        let root =
-            std::env::temp_dir().join(format!("copis-runtime-path-test-{}", std::process::id()));
-        fs::create_dir_all(root.join("node")).expect("create node directory");
-        fs::create_dir_all(root.join("git").join("cmd")).expect("create git directory");
-        let path = runtime_path(&root);
-        assert!(path.starts_with(&root.join("node").to_string_lossy().to_string()));
-        assert!(path.contains(&root.join("git").join("cmd").to_string_lossy().to_string()));
-        let _ = fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn includes_ai_education_appdata_runtime_root() {
-        let Some(app_data) = std::env::var_os("APPDATA") else {
-            return;
-        };
-        let expected = std::path::PathBuf::from(app_data)
-            .join("com.ai-education.app")
-            .join("runtime");
-        assert!(runtime_roots().contains(&expected));
-    }
-
-    #[test]
-    fn probes_configured_external_runtime_when_requested() {
-        let Some(root) = std::env::var_os("COPIS_RUNTIME_ROOT") else {
-            return;
-        };
-        let runtime = super::resolve_runtime();
-        assert_eq!(runtime.runtime_root, std::path::PathBuf::from(root));
-        assert!(
-            runtime.node_version.is_some(),
-            "外部 Node.js runtime 探测失败: root={}, active={}, path={:?}, error={:?}",
-            runtime.runtime_root.display(),
-            runtime.active_dir.display(),
-            runtime.node_path,
-            runtime.node_error
-        );
-        assert!(
-            runtime.git_version.is_some(),
-            "外部 Git runtime 探测失败: root={}, active={}, path={:?}, error={:?}",
-            runtime.runtime_root.display(),
-            runtime.active_dir.display(),
-            runtime.git_path,
-            runtime.git_error
-        );
-        if cfg!(windows) {
-            assert!(
-                runtime.bash_version.is_some(),
-                "外部 Git Bash runtime 探测失败"
-            );
-        }
-    }
-}
+#[path = "runtime_tests.rs"]
+mod tests;

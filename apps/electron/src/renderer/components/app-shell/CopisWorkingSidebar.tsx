@@ -20,6 +20,7 @@ import {
   Search,
   Settings,
   Sparkles,
+  Trash2,
   UsersRound,
 } from 'lucide-react'
 import { toast } from 'sonner'
@@ -48,8 +49,19 @@ import {
   workingSettingsOpenAtom,
 } from '@/atoms/working-atoms'
 import { useCreateSession } from '@/hooks/useCreateSession'
+import { useCloseTab } from '@/hooks/useCloseTab'
 import { useOpenSession } from '@/hooks/useOpenSession'
 import { isAgentSessionMeta, sanitizeAgentSessions } from '@/lib/agent-session-list'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
 import { CopisWorkingConnectDialog, type WorkingFolderSelection } from './CopisWorkingConnectDialog'
 import { CopisWorkingFeedbackDialog } from './CopisWorkingFeedbackDialog'
 import './CopisWorkingSidebar.css'
@@ -57,6 +69,11 @@ import './CopisWorkingSidebar.css'
 interface CopisWorkingSidebarProps {
   width: number
   noTransition?: boolean
+}
+
+interface PendingDeleteSession {
+  id: string
+  title: string
 }
 
 const CONVERSATION_PREVIEW_LIMIT = 5
@@ -81,6 +98,7 @@ export function CopisWorkingSidebar({ width, noTransition = false }: CopisWorkin
   const [expandedWorkspaceId, setExpandedWorkspaceId] = React.useState<string | null>(null)
   const [expandedConversationWorkspaceIds, setExpandedConversationWorkspaceIds] = React.useState<Set<string>>(new Set())
   const [openMenuWorkspaceId, setOpenMenuWorkspaceId] = React.useState<string | null>(null)
+  const [pendingDeleteSession, setPendingDeleteSession] = React.useState<PendingDeleteSession | null>(null)
   const [createWorkspaceOpen, setCreateWorkspaceOpen] = useAtom(createWorkspaceDialogOpenAtom)
   const [feedbackOpen, setFeedbackOpen] = React.useState(false)
   const initialProjectsLoadedRef = React.useRef(false)
@@ -105,6 +123,7 @@ export function CopisWorkingSidebar({ width, noTransition = false }: CopisWorkin
   const setWorkspaceCreationSource = useSetAtom(workspaceCreationSourceAtom)
   const openCreateWorkspaceDialog = useSetAtom(openCreateWorkspaceDialogAtom)
   const { createAgent } = useCreateSession()
+  const { executeClose } = useCloseTab()
   const openSession = useOpenSession()
 
   const loadWorkingData = React.useCallback(async (): Promise<void> => {
@@ -231,6 +250,39 @@ export function CopisWorkingSidebar({ width, noTransition = false }: CopisWorkin
     setWorkingHistorySelection(null)
     const sessionId = await createAgent({ workspaceId })
     if (!sessionId) toast.error('新建 Agent 会话失败')
+  }
+
+  const requestRemoveSession = (sessionId: string, title: string): void => {
+    const session = localSessions.find((item) => item.id === sessionId)
+    if (!session) return
+    if (streamingStates.get(sessionId)?.running) {
+      toast.info('会话进行中，完成后再删除')
+      return
+    }
+    setPendingDeleteSession({ id: sessionId, title })
+  }
+
+  const handleConfirmRemoveSession = async (): Promise<void> => {
+    const pendingSession = pendingDeleteSession
+    if (!pendingSession) return
+    const sessionId = pendingSession.id
+    if (streamingStates.get(sessionId)?.running) {
+      setPendingDeleteSession(null)
+      toast.info('会话进行中，暂不能删除')
+      return
+    }
+    setPendingDeleteSession(null)
+
+    try {
+      setBusy(true)
+      await window.electronAPI.deleteAgentSession(sessionId)
+      executeClose(sessionId, { clearCompletionNotice: false })
+      setLocalSessions((previous) => previous.filter((item) => item.id !== sessionId))
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : '删除会话失败')
+    } finally {
+      setBusy(false)
+    }
   }
 
   const handleOpenMemory = (): void => {
@@ -388,7 +440,7 @@ export function CopisWorkingSidebar({ width, noTransition = false }: CopisWorkin
                     <button type="button" className="copis-working-project-main" onClick={(event) => { event.stopPropagation(); selectLocalWorkspace(workspace.id) }}>
                       <FolderOpen aria-hidden="true" />
                       <span>{workspace.name}</span>
-                      {workspace.projectRootPath && <small>本地</small>}
+                      {workspace.projectRootPath && <small className="ui-primary-badge">本地</small>}
                     </button>
                     <button type="button" className="copis-working-project-collapse" aria-label={isWorkspaceExpanded ? '折叠项目会话' : '展开项目会话'} aria-expanded={isWorkspaceExpanded} onClick={(event) => { event.stopPropagation(); toggleWorkspace(workspace.id) }}>
                       {isWorkspaceExpanded ? <ChevronDown aria-hidden="true" /> : <ChevronRight aria-hidden="true" />}
@@ -413,11 +465,29 @@ export function CopisWorkingSidebar({ width, noTransition = false }: CopisWorkin
                     <div className="copis-working-conversation-list">
                       {visibleSessions.map((session) => {
                         const streamState = streamingStates.get(session.id)
+                        const sessionTitle = session.title || '未命名会话'
                         return (
-                          <button type="button" key={session.id} className={cn('copis-working-conversation-row', session.id === currentSessionId && 'active')} onClick={() => selectLocalSession(session.id, workspace.id, session.title)}>
-                            <span>{session.title || '未命名会话'}</span>
-                            {streamState?.running ? <Loader2 className="loading" aria-label="会话进行中" /> : session.completedButUnconfirmed ? <CircleCheck className="completed" aria-label="会话已完成" /> : <small>{formatSessionTime(session.updatedAt)}</small>}
-                          </button>
+                          <div key={session.id} className={cn('copis-working-conversation-row', session.id === currentSessionId && 'active')}>
+                            <button type="button" className="copis-working-conversation-main" onClick={() => selectLocalSession(session.id, workspace.id, sessionTitle)}>
+                              <span>{sessionTitle}</span>
+                            </button>
+                            <span className="copis-working-conversation-meta">
+                              {streamState?.running ? <Loader2 className="loading" aria-label="会话进行中" /> : session.completedButUnconfirmed ? <CircleCheck className="completed" aria-label="会话已完成" /> : <small>{formatSessionTime(session.updatedAt)}</small>}
+                            </span>
+                            <button
+                              type="button"
+                              className="copis-working-conversation-delete"
+                              aria-label={`删除会话 ${sessionTitle}`}
+                              title={streamState?.running ? '会话进行中，暂不能删除' : '删除会话'}
+                              disabled={busy || streamState?.running === true}
+                              onClick={(event) => {
+                                event.stopPropagation()
+                                requestRemoveSession(session.id, sessionTitle)
+                              }}
+                            >
+                              <Trash2 aria-hidden="true" />
+                            </button>
+                          </div>
                         )
                       })}
                       {workspaceSessions.length === 0 && (
@@ -468,6 +538,29 @@ export function CopisWorkingSidebar({ width, noTransition = false }: CopisWorkin
         />
       )}
       <CopisWorkingFeedbackDialog open={feedbackOpen} onClose={() => setFeedbackOpen(false)} />
+      <AlertDialog
+        open={pendingDeleteSession !== null}
+        onOpenChange={(open) => { if (!open) setPendingDeleteSession(null) }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>确认删除会话</AlertDialogTitle>
+            <AlertDialogDescription>
+              确定要删除“{pendingDeleteSession?.title || '未命名会话'}”吗？会话消息和工作文件也会被移除，且无法恢复。
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={busy}>取消</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => void handleConfirmRemoveSession()}
+              disabled={busy}
+              className="bg-[var(--ui-primary)] text-[var(--ui-primary-foreground)] hover:brightness-105"
+            >
+              删除会话
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </aside>
   )
 }

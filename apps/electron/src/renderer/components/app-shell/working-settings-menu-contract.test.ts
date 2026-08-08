@@ -4,6 +4,8 @@ import { join } from 'node:path'
 
 const panelSource = readFileSync(join(import.meta.dir, 'CopisWorkingSettingsPanel.tsx'), 'utf8')
 const panelStyles = readFileSync(join(import.meta.dir, 'CopisWorkingSettingsPanel.css'), 'utf8')
+const ledgerSource = readFileSync(join(import.meta.dir, '..', '..', 'lib', 'working-ledger.ts'), 'utf8')
+const globalStyles = readFileSync(join(import.meta.dir, '..', '..', 'styles', 'globals.css'), 'utf8')
 const tabAtomsSource = readFileSync(join(import.meta.dir, '..', '..', 'atoms', 'tab-atoms.ts'), 'utf8')
 const tabContentSource = readFileSync(join(import.meta.dir, '..', 'tabs', 'TabContent.tsx'), 'utf8')
 
@@ -74,6 +76,27 @@ describe('Working 设置菜单契约', () => {
       expect(panelSource).toContain(className)
       expect(panelStyles).toContain(`.${className}`)
     }
+  })
+
+  test('Given 账户设置页面 When 使用品牌强调色 Then 所有高亮读取 ui-primary 且不保留旧金色', () => {
+    expect(globalStyles).toContain('--ui-primary:')
+    expect(globalStyles).toContain('--ui-primary-background:')
+    expect(panelStyles).toContain('var(--ui-primary)')
+    expect(panelStyles).toContain('var(--ui-primary-background)')
+    expect(panelStyles).toContain('color-mix(in srgb, var(--ui-primary)')
+    expect(panelStyles).not.toContain('hsl(var(--primary)')
+    expect(panelStyles).not.toContain('hsl(43')
+  })
+
+  test('Given 账户流水 When 显示模型扣费 Then 使用 alias 文案并将快速和专家映射为 Copis 名称', () => {
+    expect(panelSource).toContain('formatWorkingLedgerDescription(entry, payer)')
+    expect(ledgerSource).toContain('模型 · ${displayAlias} Token消耗')
+    expect(ledgerSource).toContain("alias === 'fast' ? 'Copis 快速'")
+    expect(ledgerSource).toContain("alias === 'export' ? 'Copis 专家'")
+    expect(panelSource).toContain("'Copis 模型扣费'")
+    expect(panelSource).toContain("'专家团扣费'")
+    expect(panelStyles).toContain('grid-template-columns: repeat(3, minmax(0, 1fr))')
+    expect(panelStyles).toContain('color: var(--ui-primary);')
   })
 
   test('Given Working 查看使用教程 When 打开菜单 Then 通过现有教程 Tab 和 IPC 加载页面', () => {

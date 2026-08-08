@@ -6,6 +6,7 @@ import type {
   FileApiWriteTextResponse,
 } from '@copis/shared'
 import { RENDERER_HTTP_API_BASE_URL } from './http-api-base-url'
+import { withHttpApiWebToken } from './http-api-web-token'
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -58,11 +59,11 @@ export class FileApiClient {
   private async request<T>(path: string, method: 'POST' | 'PUT', body: unknown): Promise<T> {
     let response: Response
     try {
-      response = await this.fetchImpl(`${this.baseUrl}${path}`, {
+      response = await this.fetchImpl(`${this.baseUrl}${path}`, withHttpApiWebToken({
         method,
         headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
-      })
+      }))
     } catch (error) {
       const message = error instanceof Error ? error.message : '文件 API 服务不可用'
       throw new FileApiError(message, 503, 'server_unavailable')

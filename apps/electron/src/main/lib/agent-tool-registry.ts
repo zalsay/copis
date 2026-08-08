@@ -20,7 +20,7 @@ import {
   NANO_BANANA_TOOL_META,
   NANO_BANANA_TOOL_DEFINITIONS,
   isNanoBananaAvailable,
-} from './agent-tools/nano-banana-tool'
+} from './agent-tools/image-generation-tool'
 
 // ===== 内置工具注册 =====
 
