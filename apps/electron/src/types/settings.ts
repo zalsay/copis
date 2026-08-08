@@ -25,7 +25,7 @@ export interface NotificationSoundSettings {
 }
 
 /** 语音输入供应商 */
-export type VoiceDictationProvider = 'doubao'
+export type VoiceDictationProvider = 'http-api' | 'copis-model'
 
 /** 豆包 ASR 连接模式 */
 export type VoiceDictationEndpointMode = 'async' | 'duplex'
@@ -47,7 +47,7 @@ export interface VoiceDictationWindowPosition {
 export interface VoiceDictationSettings {
   /** 是否启用语音输入 */
   enabled: boolean
-  /** 语音识别供应商 */
+  /** 语音识别模式：http-api 使用免费 HTTP API 识别，copis-model 使用 Copis 语音识别大模型（消耗钻石） */
   provider: VoiceDictationProvider
   /** 豆包 APP ID，对应 X-Api-App-Key 请求头 */
   appId: string

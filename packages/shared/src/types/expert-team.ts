@@ -144,6 +144,10 @@ export interface ExpertTeamSchemasResponse {
   schemas: ExpertTeamSchema[]
 }
 
+export interface ExpertTeamRunsResponse {
+  runs: ExpertTeamRun[]
+}
+
 export interface ExpertTeamEventsResponse {
   events: ExpertTeamRunEvent[]
 }

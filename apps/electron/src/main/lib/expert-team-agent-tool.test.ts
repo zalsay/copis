@@ -86,6 +86,10 @@ mock.module('./agent-workspace-manager', () => ({
   getAgentWorkspaceAgentsPath: () => '/tmp/.copis/agent-workspaces/test-workspace/AGENTS.md',
 }))
 
+mock.module('./agent-session-manager', () => ({
+  updateAgentSessionMeta: () => undefined,
+}))
+
 mock.module('./expert-team-rust-client', () => ({
   HttpExpertTeamRustApiClient: class {},
 }))
@@ -137,6 +141,14 @@ function jsonResponse(status: number, body: unknown): Response {
 function installFetchMock(): void {
   globalThis.fetch = mock(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input)
+    if (url.endsWith('/api/expert-teams/schemas') && (init?.method ?? 'GET') === 'GET') {
+      return jsonResponse(200, {
+        schemas: [
+          { id: 'bound-team', name: '深入研究团队', description: '研究-总结-检验', revision: 3, nodes: [{ id: 'researcher' }, { id: 'summary' }, { id: 'reviewer' }] },
+          { id: 'explicit-team', name: '显式团队', revision: 4, nodes: [{ id: 'researcher' }] },
+        ],
+      })
+    }
     if (url.endsWith('/api/expert-teams/schemas/explicit-team')) {
       schemaRequests.push(url)
       return jsonResponse(200, explicitSchema)
@@ -209,6 +221,28 @@ describe('专家团队工具冻结上下文', () => {
     expect(capturedSnapshot?.expertTeamContext?.sha256).toBe('d'.repeat(64))
     expect(capturedSnapshot?.nodes[0]?.task).toContain('显式搜集')
     expect(result).toMatchObject({ details: { schemaId: 'explicit-team', schemaRevision: 4 } })
+  })
+
+  test('Given 主 Agent 筹备新专家团 When 执行 expert_team_list_schemas Then 返回可用团队阵容', async () => {
+    installFetchMock()
+    const tools = buildExpertTeamTools(sdkMock(), {
+      sessionId: 'parent-session',
+      channelId: 'channel-1',
+      workspaceId: workspace.id,
+      workspaceSlug: workspace.slug,
+      triggeredBy: 'user',
+    })
+    const listTool = tools[1] as unknown as { execute: () => Promise<unknown> }
+
+    expect(tools.length).toBeGreaterThanOrEqual(2)
+    const result = await listTool.execute()
+
+    expect(result).toMatchObject({
+      details: [
+        { id: 'bound-team', name: '深入研究团队', nodeCount: 3 },
+        { id: 'explicit-team', name: '显式团队', nodeCount: 1 },
+      ],
+    })
   })
 
   test('Given delegation 子会话 When 构建专家团队工具 Then 不暴露 expert_team_run', () => {

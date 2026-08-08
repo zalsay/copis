@@ -17,7 +17,7 @@ Copis 是一个本地优先的 AI 桌面应用，把多模型 Chat、通用 Agen
 ## 现在能做什么
 
 - **Chat 模式**：多模型对话、附件解析、图片输入、Markdown / Mermaid / KaTeX / 代码高亮、并排对话、系统提示词、上下文管理。
-- **Agent 模式**：基于 Pi Agent SDK 的统一运行时；支持工作区隔离、权限模式、文件操作、长任务流式输出、计划确认和用户追问。可通过 Pi 调用 Anthropic、Claude、OpenAI、Google 及兼容渠道的模型。
+- **Agent 模式**：基于 Pi Agent SDK 的统一运行时；支持工作区隔离、权限模式、文件操作、长任务流式输出、计划确认和用户追问。可通过 Pi 调用 Anthropic、Claude、OpenAI、Google 及兼容渠道的模型，且每个会话默认内置联网搜索与网页抓取扩展（pi-web-access）。
 - **协作与任务**：复杂任务可拆分为可追踪的协作子 Agent / Task，并在消息流中展示调用过程和结果。
 - **Skills、MCP 与项目根目录**：每个 Copis 项目独立配置 Skills 与 MCP Server。项目文件可使用用户选择的本地项目根目录，也可使用 Copis 托管的空白项目目录；本地项目配置不会被自动导入。
 - **远程机器人**：支持飞书 / Lark 机器人桥接，并已提供钉钉、微信桥接入口，用手机或群聊触发本机 Agent 工作流。
@@ -127,6 +127,8 @@ Copis 的 Agent 模式统一使用 Pi Agent Runtime，基于 `@earendil-works/pi
 
 > Pi Runtime 会为每个 Agent 会话管理底层 session，但不会删除 Copis 中已保存的消息。Pi 会桥接工作区 Skills、用户 MCP Server，以及 Copis 内置的 Automation / Collaboration 工具；不同模型供应商对工具调用、推理和上下文长度的支持仍可能不同。
 
+每个 Pi Agent 会话默认内置 [pi-web-access](https://github.com/nicobailon/pi-web-access) 扩展，无需手动 `pi install`，即可使用 `web_search`（联网搜索）、`fetch_content`（网页抓取）、`source_check`（来源核查）和 `get_search_content`（结果检索）工具。搜索供应商优先复用当前 OpenAI 渠道或环境变量中的 API Key（如 `OPENAI_API_KEY`、`TAVILY_API_KEY`、`EXA_API_KEY`），也可通过 `~/.pi/web-search.json` 配置；未配置任何供应商时，工具会返回配置引导而非报错中断。
+
 > **Kimi Coding Plan 用户须知**：Copis 已获得 Kimi 官方白名单支持，使用 Copis 连接 Kimi Coding Plan 不会触发第三方客户端封号策略，可放心使用。
 
 ## 本地数据
@@ -173,10 +175,10 @@ copis-v2/
 
 | 包 | 版本 | 职责 |
 | --- | --- | --- |
-| `@copis/electron` | `0.15.0` | Electron 桌面应用 |
-| `@copis/shared` | `0.1.42` | 共享类型、IPC 常量、配置和工具 |
-| `@copis/core` | `0.2.15` | Provider Adapter、SSE、Shiki 高亮 |
-| `@copis/ui` | `0.1.9` | 共享 React UI 组件 |
+| `@copis/electron` | `0.0.35` | Electron 桌面应用 |
+| `@copis/shared` | `0.1.62` | 共享类型、IPC 常量、配置和工具 |
+| `@copis/core` | `0.2.18` | Provider Adapter、SSE、Shiki 高亮 |
+| `@copis/ui` | `0.1.10` | 共享 React UI 组件 |
 
 常用命令：
 
@@ -210,6 +212,7 @@ bun run dev:electron
 bun run build:main
 bun run build:preload
 bun run build:renderer
+bun run copy:pi-extensions   # 复制默认 Pi 扩展（pi-web-access）及依赖闭包到 resources/pi-extensions/
 bun run dist:fast
 ```
 
@@ -228,6 +231,7 @@ bun run dist:fast
 | 构建 | Vite + esbuild |
 | 分发 | electron-builder |
 | Agent Runtime | Pi: `@earendil-works/pi-coding-agent`、`pi-agent-core`、`pi-ai` `@0.82.1` |
+| 默认 Pi 扩展 | `pi-web-access` `@0.18.0`（联网搜索、网页抓取、来源核查） |
 
 ## 架构概览
 
@@ -266,6 +270,7 @@ Pi runtime 在主进程中作为 esbuild external 依赖运行。`apps/electron`
 - `build:main` / `watch:main` 将 Pi runtime 依赖标记为 external。
 - `scripts/sync-runtime-deps.ts` 的 external runtime 清单与实际依赖一致。
 - `electron-builder.yml` 保留 Pi native addon 的 `asarUnpack` 规则。
+- 默认 Pi 扩展由 `bun run copy:pi-extensions` 复制到 `resources/pi-extensions/`，并经 `extraResources` 打入 `process.resourcesPath/pi-extensions`。打包后的 Pi Worker 是自包含 Bun 二进制，无法读取 `app.asar` 内的 node_modules，因此扩展必须保留在真实磁盘目录。
 - 在目标平台测试 `bun run dist:fast` 后，验证 Pi 可以启动、调用工具和恢复会话。
 
 更完整的工程约定见 [AGENTS.md](./AGENTS.md)。

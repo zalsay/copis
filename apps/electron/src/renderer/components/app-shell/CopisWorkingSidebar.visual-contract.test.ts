@@ -45,6 +45,28 @@ describe('Working 侧边栏视觉契约', () => {
     expect(primaryBadgeRule).toContain('var(--ui-primary)')
   })
 
+  test('Given 专家团队会话 When 显示在项目列表 Then 使用统一 primary 标签并保留团队名称', () => {
+    expect(sidebarSource).toContain('const isExpertTeamSession = session.expertTeamSession !== undefined')
+    expect(sidebarSource).toContain("<small className=\"ui-primary-badge\">{session.expertTeamSession ? '专家团队' : '组建中'}</small>")
+    expect(sidebarSource).toContain("sessionTitle.replace(/^专家团队\\s*·\\s*/, '')")
+    expect(sidebarStyles).toContain('.copis-working-conversation-label')
+    expect(sidebarStyles).toContain('.copis-working-conversation-label > small.ui-primary-badge')
+    expect(sidebarStyles).toContain('color: var(--ui-primary)')
+  })
+
+  test('Given 新专家团筹备会话 When 显示在项目列表 Then 使用「组建中」primary 标签', () => {
+    expect(sidebarSource).toContain('session.expertTeamSetup === true')
+    expect(sidebarSource).toContain('session.expertTeamSession ? \'专家团队\' : \'组建中\'')
+  })
+
+  test('Given 主侧边栏 When 查看菜单 Then 不展示新专家团入口（入口保留在专家团队工作台左侧栏）', () => {
+    expect(sidebarSource).not.toContain('className="copis-working-menu-button expert-team-create"')
+    expect(sidebarSource).not.toContain('CopisWorkingNewExpertTeamDialog')
+    expect(sidebarStyles).not.toContain('.copis-working-menu-button.expert-team-create')
+    expect(sidebarStyles).not.toContain('.copis-working-sidebar-expert-team-mark')
+    expect(sidebarSource).not.toContain('expertTeamSetup: true')
+  })
+
   test('Given Working footer When 检查账户图标标记 Then 使用 primary 背景与图标颜色', () => {
     const accountMarkRule = sidebarStyles.match(
       /\.copis-working-account-mark\s*\{([^}]*)\}/s,

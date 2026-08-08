@@ -11,8 +11,10 @@ const handleStartEnd = viewSource.indexOf('\n\n  React.useEffect', handleStartSt
 const handleStartSource = viewSource.slice(handleStartStart, handleStartEnd)
 
 describe('专家团队页头视觉契约', () => {
-  test('Given 打开专家团队页 When 渲染页头 Then 不显示额外的团队图标', () => {
-    expect(viewSource).not.toContain('UsersRound')
+  test('Given 打开专家团队页 When 渲染左列 Then 提供新专家团入口且页头不显示额外的团队图标', () => {
+    expect(viewSource).toContain('aria-label="新专家团"')
+    expect(viewSource).toContain('CopisWorkingNewExpertTeamDialog')
+    expect(viewSource).toContain('expertTeamSetup: true')
     expect(viewSource).not.toContain('bg-primary/12 text-primary')
     expect(viewSource).not.toContain('Workflow')
   })
@@ -116,6 +118,17 @@ describe('专家团队页头视觉契约', () => {
     expect(viewSource).toContain('cancelRun')
   })
 
+  test('Given 当前运行已有主理人会话 When 点击继续对话 Then 跳转到对应会话且运行状态显示等待中', () => {
+    expect(viewSource).toContain('agentSessionsAtom')
+    expect(viewSource).toContain('useOpenSession')
+    expect(viewSource).toContain('currentRunSession')
+    expect(viewSource).toContain("openSession('agent', currentRunSession.id, currentRunSession.title)")
+    expect(viewSource).toContain('>继续对话</button>')
+    expect(viewSource).toContain("queued: '等待中'")
+    expect(viewSource).toContain('formatRunDisplayName')
+    expect(viewSource).toContain("const runNumber = run.id.match(/-(\\d+)$/)?.[1] ?? 'n'")
+  })
+
   test('Given 尚未运行专家团队 When 点击页头状态 Then 进入工作区选择与创建流程', () => {
     expect(viewSource).not.toContain("currentRun ? statusLabels[currentRun.status] : '工作区内使用'")
     expect(viewSource).toContain('>开始</Button>')
@@ -128,26 +141,34 @@ describe('专家团队页头视觉契约', () => {
     expect(viewSource).toContain('createWorkspaceDialogOpenAtom')
     expect(viewSource).toContain('createdWorkspaceIdAtom')
     expect(viewSource).toContain("openCreateWorkspaceDialog('expert-team')")
-    expect(sidebarSource).toMatch(/workspaceCreationSource\s*!==\s*'expert-team'[\s\S]*openSession\(/)
+    expect(viewSource).toContain('newExpertTeamPendingRef')
+    expect(viewSource).toContain("openCreateWorkspaceDialog('expert-team-new')")
+    expect(sidebarSource).toContain("openSession('agent', project.session.id, project.session.title)")
+    expect(sidebarSource).toContain("workspaceCreationSource === 'expert-team' || workspaceCreationSource === 'expert-team-new'")
+    expect(sidebarSource).toContain('deleteAgentSession(project.session.id)')
     expect(viewSource).not.toContain('createAgentWorkspace')
     expect(viewSource).not.toContain('openFolderDialog')
     expect(viewSource).not.toContain('从本地文件夹创建')
   })
 
-  test('Given Schema 已绑定工作区 When 点击开始 Then 进入该工作区已有或新建的 Agent 会话', () => {
+  test('Given Schema 已绑定工作区 When 点击开始 Then 先持久化运行再创建专属 Agent 会话', () => {
     expect(viewSource).toContain('agentSessionsAtom')
     expect(viewSource).toContain('useOpenSession')
     expect(viewSource).toContain('useCreateSession')
     expect(viewSource).toContain('handleStart')
-    expect(viewSource).toContain("openSession('agent', session.id, session.title)")
-    expect(viewSource).toContain('createAgent({ workspaceId })')
+    expect(viewSource).toContain('createExpertTeamRunAtom')
+    expect(viewSource).toContain('createPersistedRun')
+    expect(handleStartSource).toContain('await createPersistedRun(workspace, workspaceBinding)')
+    expect(handleStartSource).toContain('await openExpertTeamAgentSession(workspace, workspaceBinding, run)')
+    expect(viewSource).toContain('title: `专家团队 · ${currentSchema?.name ?? workspaceBinding.schemaId}`')
+    expect(viewSource).toContain('expertTeamSession: {')
+    expect(viewSource).toContain("if (!sessionId) throw new Error('创建专家团队主控会话失败')")
   })
 
-  test('Given Schema 已绑定工作区 When 点击开始 Then 先同步当前工作区且不复用归档会话', () => {
-    expect(handleStartSource).toContain('setCurrentWorkspaceId(workspaceId)')
-    expect(handleStartSource).toMatch(
-      /setCurrentWorkspaceId\(workspaceId\)[\s\S]*agentSessions\.find\(\(item\) => item\.workspaceId === workspaceId && !item\.archived\)/,
-    )
+  test('Given Schema 已绑定工作区 When 进入 Agent 会话 Then 同步当前工作区且不复用普通会话', () => {
+    expect(viewSource).toContain('const openExpertTeamAgentSession')
+    expect(viewSource).toContain('setCurrentWorkspaceId(workspace.id)')
+    expect(viewSource).toContain('agentSessions.find')
   })
 
   test('Given Schema 未绑定工作区 When 点击开始 Then 打开工作区选择弹窗', () => {
@@ -165,5 +186,11 @@ describe('专家团队页头视觉契约', () => {
     expect(createWorkspaceButton).not.toContain('bg-[#f0a15a]/10')
     expect(viewSource).toContain('onClick={handleOpenCreateWorkspace}')
     expect(viewSource).toContain('disabled={workspaceActionLoading}')
+  })
+
+  test('Given 工作台重新打开 When 当前工作区已有专家团队记录 Then 恢复 binding 与最近运行', () => {
+    expect(viewSource).toContain('loadExpertTeamWorkspaceStateAtom')
+    expect(viewSource).toContain('loadExpertTeamWorkspaceState({ workspaceSlug: workspace.slug, schemaId: currentSchema.id })')
+    expect(viewSource).toContain('createPersistedRun(workspace, nextBinding)')
   })
 })

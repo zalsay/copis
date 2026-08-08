@@ -98,9 +98,11 @@ describe('项目术语迁移', () => {
 
     expect(workspace.name).toBe('默认项目')
     expect(workspace.projectRootPath).toBe(expectedProjectRootPath)
+    expect(workspace.projectPath).toBe(join(expectedProjectRootPath, 'project'))
     expect(existsSync(workspace.projectRootPath!)).toBe(true)
     expect(workspace.allowWorkspaceWrite).toBe(true)
-    expect(manager.getAgentWorkspaceWritableRoot(workspace)).toBe(expectedProjectRootPath)
+    expect(manager.getAgentWorkspaceWritableRoot(workspace)).toBe(join(expectedProjectRootPath, 'project'))
+    expect(existsSync(workspace.projectPath!)).toBe(true)
   })
 
   test('Given 旧版本默认项目缺少本地根目录 When 启动迁移 Then 补齐默认路径和写入权限', () => {
@@ -120,13 +122,15 @@ describe('项目术语迁移', () => {
     const workspace = manager.ensureDefaultWorkspace()
     const expectedProjectRootPath = realpathSync(join(tempHome, 'Documents', 'Copis'))
     const persisted = JSON.parse(readFileSync(configPaths.getAgentWorkspacesIndexPath(), 'utf-8')) as {
-      workspaces: Array<{ id: string; projectRootPath?: string; allowWorkspaceWrite?: boolean }>
+      workspaces: Array<{ id: string; projectRootPath?: string; projectPath?: string; allowWorkspaceWrite?: boolean }>
     }
 
     expect(workspace.id).toBe('legacy-default-id')
     expect(workspace.projectRootPath).toBe(expectedProjectRootPath)
+    expect(workspace.projectPath).toBe(join(expectedProjectRootPath, 'project'))
     expect(workspace.allowWorkspaceWrite).toBe(true)
     expect(persisted.workspaces[0]?.projectRootPath).toBe(expectedProjectRootPath)
+    expect(persisted.workspaces[0]?.projectPath).toBe(join(expectedProjectRootPath, 'project'))
     expect(persisted.workspaces[0]?.allowWorkspaceWrite).toBe(true)
   })
 })
@@ -192,7 +196,7 @@ describe('Agent 工作区创建', () => {
     expect(existsSync(join(workspaceRoot, 'skills-inactive'))).toBe(false)
   })
 
-  test('Given 创建时未授权写入 When 解析 Agent 写入根 Then 只允许项目下的 copis 目录', () => {
+  test('Given 创建时未授权写入 When 解析 Agent 写入根 Then 只允许项目下的 copis/project 目录', () => {
     const projectRootPath = join(tempHome, 'source-project')
     mkdirSync(projectRootPath, { recursive: true })
     const workspace = manager.createAgentWorkspace({
@@ -202,33 +206,80 @@ describe('Agent 工作区创建', () => {
     })
 
     expect(workspace.allowWorkspaceWrite).toBe(false)
-    const expectedWritableRoot = join(workspace.projectRootPath!, 'copis')
+    const expectedWritableRoot = join(workspace.projectRootPath!, 'copis', 'project')
     expect(manager.getAgentWorkspaceWritableRoot(workspace)).toBe(expectedWritableRoot)
     expect(manager.ensureAgentWorkspaceWritableRoot(workspace)).toBe(expectedWritableRoot)
     expect(existsSync(expectedWritableRoot)).toBe(true)
   })
 
-  test('Given 本地项目不允许直接写入 When 初始化项目级 Context Then 写入 copis/.context', () => {
+  test('Given 本地项目不允许直接写入 When 初始化项目级 Context Then 写入 copis/project/.context', () => {
     const projectRootPath = join(tempHome, 'readonly-context-project')
     mkdirSync(projectRootPath, { recursive: true })
     const workspace = manager.createAgentWorkspace({ name: '只读 Context 项目', projectRootPath, allowWorkspaceWrite: false })
 
     const contextDir = manager.ensureAgentWorkspaceContextDir(workspace)
 
-    expect(contextDir).toBe(join(workspace.projectRootPath!, 'copis', '.context'))
+    expect(contextDir).toBe(join(workspace.projectRootPath!, 'copis', 'project', '.context'))
     expect(contextDir).toBeDefined()
     if (!contextDir) throw new Error('项目级 Context 路径未初始化')
     expect(existsSync(contextDir)).toBe(true)
     expect(existsSync(join(projectRootPath, '.context'))).toBe(false)
   })
 
-  test('Given 本地项目未传写入选项 When 创建工作区 Then 默认使用 copis 受控写入目录', () => {
+  test('Given 本地项目未传写入选项 When 创建工作区 Then 默认使用 copis/project 受控开发目录', () => {
     const projectRootPath = join(tempHome, 'default-readonly-project')
     mkdirSync(projectRootPath, { recursive: true })
     const workspace = manager.createAgentWorkspace({ name: '默认只读项目', projectRootPath })
 
     expect(workspace.allowWorkspaceWrite).toBe(false)
-    expect(manager.getAgentWorkspaceWritableRoot(workspace)).toBe(join(workspace.projectRootPath!, 'copis'))
+    expect(manager.getAgentWorkspaceWritableRoot(workspace)).toBe(join(workspace.projectRootPath!, 'copis', 'project'))
+  })
+
+  test('Given 本地项目允许写入 When 创建工作区 Then 在来源目录下初始化 project 开发目录', () => {
+    const projectRootPath = join(tempHome, 'writable-project')
+    mkdirSync(projectRootPath, { recursive: true })
+
+    const workspace = manager.createAgentWorkspace({
+      name: '可写项目',
+      projectRootPath,
+      allowWorkspaceWrite: true,
+    })
+
+    const expectedProjectPath = join(workspace.projectRootPath!, 'project')
+    expect(workspace.projectPath).toBe(expectedProjectPath)
+    expect(manager.ensureAgentWorkspaceWritableRoot(workspace)).toBe(expectedProjectPath)
+    expect(existsSync(expectedProjectPath)).toBe(true)
+    expect(manager.getAgentWorkspaceReadableRoots(workspace)).toEqual([expectedProjectPath, workspace.projectRootPath!])
+  })
+
+  test('Given Copis 托管工作区 When 创建工作区 Then 在 workspace-files/project 中初始化开发目录', () => {
+    const workspace = manager.createAgentWorkspace('托管项目')
+    const expectedProjectPath = join(configPaths.getAgentWorkspacePath(workspace.slug), 'workspace-files', 'project')
+
+    expect(workspace.projectPath).toBe(expectedProjectPath)
+    expect(manager.ensureAgentWorkspaceWritableRoot(workspace)).toBe(expectedProjectPath)
+    expect(existsSync(expectedProjectPath)).toBe(true)
+  })
+
+  test('Given 旧版只读本地工作区缺少 projectPath When 解析开发目录 Then 继续使用 copis/project', () => {
+    const projectRootPath = join(tempHome, 'legacy-readonly-project')
+    mkdirSync(projectRootPath, { recursive: true })
+    const workspace = {
+      id: 'legacy-readonly-id',
+      name: '旧版只读项目',
+      slug: 'legacy-readonly-project',
+      projectRootPath,
+      allowWorkspaceWrite: false,
+      createdAt: 1,
+      updatedAt: 1,
+    }
+    writeFileSync(
+      configPaths.getAgentWorkspacesIndexPath(),
+      JSON.stringify({ version: 2, workspaces: [workspace] }),
+      'utf-8',
+    )
+
+    expect(manager.getProjectFilesPath(workspace.slug)).toBe(join(projectRootPath, 'copis', 'project'))
   })
 
   test('Given 项目名称是 Windows 保留设备名 When 创建工作区 Then slug 避免直接使用保留名', () => {

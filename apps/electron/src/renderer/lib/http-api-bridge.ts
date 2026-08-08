@@ -1,5 +1,5 @@
 // 浏览器模式的普通 API 走 Vite 代理；Agent 流式请求直接连接 Rust SSE 服务。
-import type { AgentQueueMessageInput, AgentStreamCompletePayload, AgentStreamEvent, AgentSendInput, MemoryExportFileInput } from '@copis/shared'
+import type { AgentExpertTeamSession, AgentQueueMessageInput, AgentStreamCompletePayload, AgentStreamEvent, AgentSendInput, MemoryExportFileInput } from '@copis/shared'
 import { agentHttpStreamClient, configureAgentHttpApiBaseUrl } from './agent-http-stream'
 import { RENDERER_HTTP_API_BASE_URL, RENDERER_HTTP_API_PORT } from './http-api-base-url'
 import { withHttpApiWebToken } from './http-api-web-token'
@@ -151,6 +151,8 @@ function createHttpMethods(): Record<string, HttpMethod> {
       ...(getArgument<string | undefined>(args, 0) ? { title: getArgument<string>(args, 0) } : {}),
       ...(getArgument<string | undefined>(args, 2) ? { workspaceId: getArgument<string>(args, 2) } : {}),
       ...(getArgument<string | undefined>(args, 3) ? { modelId: getArgument<string>(args, 3) } : {}),
+      ...(getArgument<AgentExpertTeamSession | undefined>(args, 4) ? { expertTeamSession: getArgument<AgentExpertTeamSession>(args, 4) } : {}),
+      ...(getArgument<boolean | undefined>(args, 5) ? { expertTeamSetup: getArgument<boolean>(args, 5) } : {}),
     }),
     deleteAgentSession: (args) => {
       const sessionId = encodeURIComponent(getArgument<string>(args, 0))

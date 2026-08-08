@@ -38,6 +38,7 @@ import type {
   FileDialogResult,
   FileOrFolderDialogResult,
   AgentSessionMeta,
+  AgentExpertTeamSession,
   AgentSendInput,
   AgentRuntime,
   AgentThinkingLevel,
@@ -305,6 +306,8 @@ import {
   getDefaultSkillSlugs,
   getWorkspaceCapabilities,
   getAgentWorkspace,
+  getAgentWorkspaceBySlug,
+  getAgentWorkspaceReadableRoots,
   getProjectFilesPath,
   deleteWorkspaceSkill,
   importSkillFromWorkspace,
@@ -417,7 +420,9 @@ function getAuthorizedRoots(options?: FileAccessOptions): string[] {
   }
 
   for (const slug of workspaceSlugs) {
-    roots.push(getProjectFilesPath(slug))
+    const workspace = getAgentWorkspaceBySlug(slug)
+    if (workspace) roots.push(...getAgentWorkspaceReadableRoots(workspace))
+    else roots.push(getProjectFilesPath(slug))
     roots.push(...getWorkspaceAttachedDirectories(slug))
     roots.push(...getWorkspaceAttachedFiles(slug))
   }
@@ -2124,8 +2129,8 @@ export function registerIpcHandlers(): void {
   // 创建 Agent 会话
   ipcMain.handle(
     AGENT_IPC_CHANNELS.CREATE_SESSION,
-    async (_, title?: string, channelId?: string, workspaceId?: string, modelId?: string): Promise<AgentSessionMeta> => {
-      const session = createAgentSession(title, channelId, workspaceId, modelId, getSettings().agentRuntime ?? 'pi')
+    async (_, title?: string, channelId?: string, workspaceId?: string, modelId?: string, expertTeamSession?: AgentExpertTeamSession, expertTeamSetup?: boolean): Promise<AgentSessionMeta> => {
+      const session = createAgentSession(title, channelId, workspaceId, modelId, getSettings().agentRuntime ?? 'pi', undefined, expertTeamSession, expertTeamSetup)
       feishuBridgeManager.ensureSessionMirror(session).catch((error) => {
         console.error('[飞书 Session 镜像] 新会话建群失败:', error)
       })
@@ -3625,7 +3630,9 @@ export function registerIpcHandlers(): void {
       if (workspaceSlug) {
         allowedDirs.push(...getWorkspaceAttachedDirectories(workspaceSlug))
         allowedFiles.push(...getWorkspaceAttachedFiles(workspaceSlug))
-        allowedDirs.push(getProjectFilesPath(workspaceSlug))
+        const workspace = getAgentWorkspaceBySlug(workspaceSlug)
+        if (workspace) allowedDirs.push(...getAgentWorkspaceReadableRoots(workspace))
+        else allowedDirs.push(getProjectFilesPath(workspaceSlug))
       }
 
       // 还允许访问 agent-workspaces 根目录下的文件（session 文件等）
@@ -4587,6 +4594,9 @@ export function registerIpcHandlers(): void {
       const { getVoiceDictationSettings } = await import('./lib/voice-dictation-settings-service')
       const { testDoubaoAsrConnection } = await import('./lib/doubao-asr-service')
       const settings = { ...getVoiceDictationSettings(), ...(updates ?? {}) }
+      if (settings.provider === 'copis-model') {
+        return { success: false, message: 'Copis 语音识别大模型尚未接入，暂不支持连接测试' }
+      }
       return testDoubaoAsrConnection(settings)
     }
   )
@@ -4607,7 +4617,11 @@ export function registerIpcHandlers(): void {
       const { startDoubaoAsrSession } = await import('./lib/doubao-asr-service')
       const win = BrowserWindow.fromWebContents(event.sender)
       if (!win) throw new Error('语音输入窗口不存在')
-      await startDoubaoAsrSession(input.sessionId, getVoiceDictationSettings(), win)
+      const settings = getVoiceDictationSettings()
+      if (settings.provider === 'copis-model') {
+        throw new Error('Copis 语音识别大模型尚未接入，请先在设置中切换到“使用免费语音识别”')
+      }
+      await startDoubaoAsrSession(input.sessionId, settings, win)
     }
   )
 

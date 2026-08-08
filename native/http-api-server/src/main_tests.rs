@@ -13,6 +13,7 @@
         append_recording_line, decode_hex, encode_hex, find_subslice, is_allowed_origin,
         handle_connection, is_internal_path, is_internal_token_valid, is_safe_path_component,
         is_skill_market_path, is_vite_dev_origin, is_web_route_authorized,
+        is_workspace_dev_route,
         parse_internal_recording_route, recording_marker, Bridge, HttpRequest,
     };
 
@@ -266,6 +267,10 @@
         let skill_market_state = Arc::new(super::skill_market::SkillMarketState::new(None));
         let workspace_mcp_store =
             Arc::new(super::workspace_mcp::WorkspaceMcpStore::open(directory.join("mcp")));
+        let workspace_dev_store =
+            Arc::new(super::workspace_dev::WorkspaceDevStore::open(directory.join("dev")));
+        let workspace_skills_store =
+            Arc::new(super::workspace_skills::WorkspaceSkillsStore::open(directory.join("skills")));
 
         let server = thread::spawn(move || {
             let (stream, _) = listener.accept().unwrap();
@@ -277,6 +282,8 @@
                 expert_team_store,
                 skill_market_state,
                 workspace_mcp_store,
+                workspace_dev_store,
+                workspace_skills_store,
             );
         });
         let mut client = std::net::TcpStream::connect(address).unwrap();
@@ -374,6 +381,34 @@
         assert!(is_skill_market_path("/api/working/skill-market"));
         assert!(is_skill_market_path("/api/working/skill-market/12/install"));
         assert!(!is_skill_market_path("/api/working/skill-markets"));
+    }
+
+    #[test]
+    fn recognizes_only_workspace_dev_project_routes() {
+        assert!(is_workspace_dev_route(
+            "GET",
+            "/api/workspaces/demo/dev-projects"
+        ));
+        assert!(is_workspace_dev_route(
+            "POST",
+            "/api/workspaces/demo/dev-projects/start"
+        ));
+        assert!(is_workspace_dev_route(
+            "POST",
+            "/api/workspaces/demo/dev-projects/stop"
+        ));
+        assert!(!is_workspace_dev_route(
+            "POST",
+            "/api/workspaces/demo/dev-projects"
+        ));
+        assert!(!is_workspace_dev_route(
+            "GET",
+            "/api/workspaces/demo/dev-projects/start"
+        ));
+        assert!(!is_workspace_dev_route(
+            "POST",
+            "/api/workspaces/demo/dev-projects/restart"
+        ));
     }
 
     #[test]

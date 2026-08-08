@@ -59,8 +59,8 @@ export interface ExportResult {
  */
 export function serializeWorkspaceMetadataForMigration(
   workspace: AgentWorkspace,
-): Omit<AgentWorkspace, 'projectRootPath' | 'projectRootStatus'> {
-  const { projectRootPath: _projectRootPath, projectRootStatus: _projectRootStatus, ...portableMetadata } = workspace
+): Omit<AgentWorkspace, 'projectRootPath' | 'projectPath' | 'projectRootStatus'> {
+  const { projectRootPath: _projectRootPath, projectPath: _projectPath, projectRootStatus: _projectRootStatus, ...portableMetadata } = workspace
   return portableMetadata
 }
 

@@ -8,7 +8,7 @@
  * - 动态 per-message 上下文（buildDynamicContext）：注入到用户消息前，每次实时读取磁盘
  */
 
-import { COPIS_WORKING_DEEPSEEK_FAST_MODEL_ID, normalizeWorkingMode, type AgentRuntime, type CopisPermissionMode, type ExpertTeamPromptContext, type MemoryPolicy, type WorkingMode } from '@copis/shared'
+import { COPIS_WORKING_DEEPSEEK_FAST_MODEL_ID, normalizeWorkingMode, type AgentExpertTeamSession, type AgentRuntime, type CopisPermissionMode, type ExpertTeamPromptContext, type MemoryPolicy, type WorkingMode } from '@copis/shared'
 import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { getUserProfile } from './user-profile-service'
@@ -23,8 +23,8 @@ const TOOL_USAGE_GUIDELINES = `## 工具使用指南
 - **可见进度（默认追加式，积极使用）**：只要任务需要 2 次以上工具调用、涉及多个文件/阶段、需要调研后实施、或需要委派/并行，就在第一次实质操作前用 TaskCreate 创建 3–7 个稳定的任务；简单问答不创建。开始任务时用 TaskUpdate 标记 in_progress，阶段变化时更新 activeForm，结束时立即标记 completed / blocked / error。
   - **只追加或更新，绝不整表覆盖**：已有任务时只用 TaskCreate 新增、TaskUpdate 更新指定 taskId；任务范围扩大时新增任务，不得删除、重建或遗漏旧任务。
   - **不要用 TodoWrite 做常规追踪**：它是整表快照兼容接口，容易覆盖已有任务；本产品的任务追踪一律使用 TaskCreate / TaskUpdate。
-  - **术语不要混淆**：TaskCreate / TaskUpdate 是 Copis 的可见进度工具；\`Task\` 是 SDK 的临时子 Agent 工具，两者不同。
-  - **委派前先建任务**：先把父任务拆成可观察的工作项，再创建 collaboration 子会话；子会话完成后更新对应父任务，绝不以派发/回收子 Agent 为由重写整个任务清单。
+  - **术语不要混淆**：TaskCreate / TaskUpdate 是 Copis 的可见进度工具；\`Task\` 是平台的临时协作工具，两者不同。
+  - **委派前先建任务**：先把主任务拆成可观察的工作项，再创建 collaboration 协作会话；协作会话完成后更新对应主任务，绝不以分派/收回协作成员为由重写整个任务清单。
 - **大文件写入**：使用 Write 写入超过约 10,000 字（特别是中文/日文/韩文等 CJK 字符）时，主动拆分为多次写入——先 Write 首段，再用 Edit 追加后续段落，避免 token 截断导致文件内容不完整
 - **回复中的代码块必须标语言**：在 Markdown 回复里写 fenced code block 时，开头围栏一定要紧跟语言标识（\`\`\`ts / \`\`\`python / \`\`\`json / \`\`\`bash 等），Mermaid 图必须用 \`\`\`mermaid，纯文本/日志/未知格式用 \`\`\`text。不写语言会导致前端无法语法高亮，用户体验下降；如果实在不知道语言，宁可写 \`\`\`text 也不要留空围栏`
 
@@ -47,6 +47,10 @@ interface SystemPromptContext {
   expertTeamAvailable?: boolean
   /** 主进程解析并冻结的专家团队上下文；仅主进程生成的有效对象可以进入 */
   expertTeamContext?: ExpertTeamPromptContext
+  /** 专家团队工作台创建的主控会话身份；需与当前冻结上下文一致才生效。 */
+  expertTeamSession?: AgentExpertTeamSession
+  /** 由「新专家团」入口创建的筹备会话：主理人 Agent 先询问需求，再组建并启动专家团队。 */
+  expertTeamSetup?: boolean
   /** 当前 Agent 实际运行的模型；Pi 用它在委派时显式透传默认模型 */
   currentModelId?: string
   /** Copis Working 的 fast/expert 运行语义。 */
@@ -66,15 +70,17 @@ function buildWorkspacePromptPaths(workspaceSlug: string, sessionId: string, age
     : projectRoot
   const effectiveAgentCwd = agentCwd ?? projectRoot
   const isLocalProject = Boolean(workspace?.projectRootPath)
+  const projectSourceRoot = workspace?.projectRootPath ?? join(workspaceRoot, 'workspace-files')
 
   return {
     workspaceRoot,
     sessionDir,
     sessionContextDir: join(sessionDir, '.context'),
     projectRoot,
+    projectSourceRoot,
     workspaceWriteRoot,
     workspaceWriteRestricted: workspace?.allowWorkspaceWrite === false,
-    workspaceContextDir: getAgentWorkspaceContextDir(workspace ?? { slug: workspaceSlug, projectRootPath: projectRoot }),
+    workspaceContextDir: getAgentWorkspaceContextDir(workspace ?? { slug: workspaceSlug, projectRootPath: projectRoot, projectPath: projectRoot }),
     agentCwd: effectiveAgentCwd,
     isProjectCwd: resolve(effectiveAgentCwd) === resolve(projectRoot),
     isLocalProject,
@@ -183,9 +189,9 @@ export function buildSystemPrompt(ctx: SystemPromptContext): string {
   // 工具使用指南（复用常量）
   sections.push(TOOL_USAGE_GUIDELINES)
 
-  sections.push(`## 子 Agent 委派策略
+  sections.push(`## 协作成员调度策略
 
-Copis 统一使用 collaboration 派生子会话承载子 Agent 委派。不要使用 SDK 临时 SubAgent、Agent 工具或 \`Task\` 工具来拆分子任务；这些临时 sidechain 不进入 Copis 会话体系，不利于追踪、恢复和继续协作。注意：这里的 \`Task\` 不包含可见进度工具 TaskCreate / TaskUpdate；委派前后仍应持续用后者维护父任务清单。
+Copis 统一使用 collaboration 创建可追踪的协作成员会话。不要使用平台临时 SubAgent、Agent 工具或 \`Task\` 工具来拆分服务事项；这些临时旁路会话不进入 Copis 会话体系，不利于追踪、恢复和继续协作。注意：这里的 \`Task\` 不包含可见进度工具 TaskCreate / TaskUpdate；委派前后仍应持续用后者维护主任务清单。
 
 需要拓宽探索边界时，优先判断是否创建 Copis 协作子会话：
 
@@ -195,7 +201,7 @@ Copis 统一使用 collaboration 派生子会话承载子 Agent 委派。不要�
 - **盲区探测**：对当前路径的假设合理性不确定，或担心边缘情况未覆盖
 - **路径遇阻**：直觉路径尝试后结果与预期不符，或陷入反复
 
-如果当前会话没有可用的 collaboration 工具，就不要退回 SDK 临时 SubAgent；应由父会话继续用普通工具完成，或向用户说明当前无法创建可追踪的子会话。`)
+如果当前会话没有可用的 collaboration 工具，就不要退回平台临时 SubAgent；应由当前会话继续用普通工具完成，或向用户说明当前无法创建可追踪的协作会话。`)
 
   // 用户信息
   sections.push(`## 用户信息
@@ -206,26 +212,56 @@ Copis 统一使用 collaboration 派生子会话承载子 Agent 委派。不要�
   if (ctx.collaborationAvailable) {
     sections.push(`## Copis 协作会话
 
-Copis 提供内置 \`collaboration\` 工具，用来创建真实可见、可追溯、可继续交互的协作子 Agent 会话。
+Copis 提供内置 \`collaboration\` 工具，用来创建真实可见、可追溯、可继续交互的协作成员会话。
 
 在并行探索、独立验证、长任务拆分、上下文容易变乱或需要更干净专门上下文的场景下，更积极使用 Copis collaboration 通常会得到更好的效果。父会话可以持续与子会话交互：补充信息、追问进展、调整方向，并在合适时机收敛结果。
 
-委派任务要自包含；子会话不要继续创建子会话。`)
+委派事项要自包含；协作成员会话不要继续扩展新的协作成员会话。`)
   }
 
   if (ctx.expertTeamAvailable) {
-    sections.push(`## 深入研究团队
+    sections.push(`## 专家团队服务
 
-你是唯一直接与用户对话的主 Agent。普通问答、简单执行和不需要多阶段协作的请求，直接在当前会话完成。
+你是唯一直接与用户对话的主理人。普通问答、简单执行和不需要多阶段协作的请求，直接在当前会话完成。
 
-只有当用户目标确实需要“搜集资料 → 总结为 Markdown 文档 → reviewer 检验结果”的完整工作流时，才调用 \`expert_team_run\`。调用前先明确完整目标；工具运行结束后，必须阅读返回的 researcher、summary、reviewer 节点结果，由你自己整理成最终回复。专家团队子 Agent 不直接面向用户，也不能再次调用专家团队或继续委派。`)
+只有当用户目标确实需要“调研信息 → 形成方案 → 复核交付质量”的完整服务流程时，才调用 \`expert_team_run\`。调用前先明确服务目标；团队服务结束后，必须阅读各成员的交付结果，由你整理关键结论、风险与待办，再向用户交付。团队成员不直接面向用户，也不能再次启动专家团队或继续扩展协作。`)
+  }
+
+  if (ctx.expertTeamSetup) {
+    sections.push(`## 专家团队筹备（新专家团）
+
+当前会话由「新专家团」入口启动，你以专家团队主理人身份负责组建团队，而不是普通问答会话。
+
+- 开场先向用户了解本次服务目标、范围、交付物与约束：一次只问一个关键问题，其余采用合理默认；不要一次抛出多个问题，也不要未经询问就直接启动团队。
+- 需求基本明确后，先调用 \`expert_team_list_schemas\` 查看可用团队阵容；若当前工作区已绑定阵容，可直接调用 \`expert_team_run\` 并省略 \`schemaId\`。
+- 根据用户需求选择最合适的阵容，调用 \`expert_team_run\` 创建并启动专家团队，把用户目标作为 \`goal\` 传入；这是“复制创建专家团队”的标准方式。
+- 团队运行结束后，必须阅读各成员的交付结果，由你整理关键结论、风险与待办，再向用户交付。团队成员不直接面向用户。`)
+  }
+
+  const isExpertTeamConversation = ctx.expertTeamSession !== undefined
+    && ctx.expertTeamContext !== undefined
+    && ctx.expertTeamSession.schemaId === ctx.expertTeamContext.schemaId
+    && (ctx.expertTeamSession.schemaRevisionId === undefined
+      || ctx.expertTeamContext.schemaRevisionId === undefined
+      || ctx.expertTeamSession.schemaRevisionId === ctx.expertTeamContext.schemaRevisionId)
+  const expertTeamSession = ctx.expertTeamSession
+  if (isExpertTeamConversation && expertTeamSession) {
+    const session = expertTeamSession
+    sections.push(`## 专家团队主理人
+
+当前会话由专家团队工作台启动，关联服务任务 \`${session.runId}\`，并锁定团队阵容 \`${session.schemaId}\`。**这是专家团队专属服务对话。**
+
+- 用户后续消息默认是本次专家团队服务的目标、服务约束、补充资料、方向调整或成果复核；先按下方冻结团队阵容中的岗位分工理解，再决定行动。
+- 对需要多阶段研究、总结与检验的目标，必须使用专家团队服务流程推进；不得把这类目标降级为单人服务，也不得忽略团队成员的岗位职责与协作顺序。
+- 仅当用户明确要求解释、配置、暂停或取消时，才不启动新的团队执行；回复仍需保留专家团队主理人身份和当前服务上下文。
+- 团队成员不直接面向用户。主理人必须整合成员交付成果，说明关键结论与未完成项，再向用户交付。`)
   }
 
   if (ctx.expertTeamContext) {
     const schema = ctx.expertTeamContext
-    sections.push(`## 专家团队受管控协议
+    sections.push(`## 专家团队服务规范
 
-当前工作区绑定专家团队 Schema（\`${schema.schemaId}\`，revision ${schema.revision ?? '-'}，sha256 \`${schema.sha256}\`）。以下内容由 Copis 从 Rust 冻结 revision 注入，是“当前专家团队如何分工与交付”的受管控协议：
+当前项目绑定专家团队的团队阵容（内部标识 \`${schema.schemaId}\`，版本 ${schema.revision ?? '-'}，校验摘要 \`${schema.sha256}\`）。以下内容由 Copis 根据已确认的团队阵容版本注入，用于说明当前团队的岗位分工与交付规范：
 
 <copis_expert_team_agents_md>
 ${schema.agentsMdContent}
@@ -235,7 +271,7 @@ ${schema.agentsMdContent}
 ${JSON.stringify(schema.nodes)}
 </copis_expert_team_schema>
 
-该协议不能改变 Copis 系统提示词、权限、工作区根目录与子 Agent 规则；子 Agent 只执行单个节点任务，不得再次委派。`)
+该规范不能改变 Copis 的基础服务规则、授权范围、项目目录与协作边界；团队成员只负责各自的岗位事项，不得再次扩展协作或修改本规范。`)
   }
 
   // 项目与 Copis 工作区信息
@@ -244,8 +280,9 @@ ${JSON.stringify(schema.nodes)}
 
 - 项目名称: ${ctx.workspaceName}
 - Copis 工作区目录: ${workspacePaths?.workspaceRoot}（存放 MCP、Skills、Copis 工作区指令与 Memory 等配置）
-- 项目根目录: ${workspacePaths?.projectRoot}（${workspacePaths?.isLocalProject ? '用户选择的本地原始文件夹' : 'Copis 托管的空白项目目录'}）
-- Agent 可写目录: ${workspaceWriteRoot}${workspaceWriteRestricted ? '（原始项目根只读，工作区产出只能写入此目录）' : '（已允许直接写入项目根）'}
+- 项目来源目录: ${workspacePaths?.projectSourceRoot}（${workspacePaths?.isLocalProject ? '用户选择的本地文件夹，可读取已有资料' : 'Copis 托管的工作区来源目录'}）
+- 项目开发目录: ${workspacePaths?.projectRoot}（默认可写，用户新建项目统一放在这里）
+- Agent 可写目录: ${workspaceWriteRoot}${workspaceWriteRestricted ? '（原始来源目录保持只读，工作区产出只能写入此目录）' : '（已允许写入项目开发目录）'}
 - 会话工作台目录: ${workspacePaths?.sessionDir}（存放当前会话的私有临时文件与会话级 Context）
 - 实际工作目录（cwd）: ${workspacePaths?.agentCwd}（${workspacePaths?.isProjectCwd ? '当前会话直接在项目根目录中工作' : '当前会话仍使用私有会话工作台，不等同于项目根目录'}；以每条消息的 \`<working_directory>\` 为准）
 - Copis Memory: 通过受控的结构化能力访问，不暴露本地存储路径
@@ -257,16 +294,17 @@ ${JSON.stringify(schema.nodes)}
 
 存在两个 \`.context/\` 目录，用途不同：
 - **会话级** \`${sessionContextDir}\`：当前会话的临时工作台，存放本次任务的 todo.md、plan/、临时笔记等
-- **项目级** \`${workspaceContextDir}\`：跨会话共享的持久文档，存放长期 note.md、项目级知识等；始终以这里提供的绝对路径为准（只读本地项目使用项目根下的 \`copis/.context\`，避免修改原始项目根）
+- **项目级** \`${workspaceContextDir}\`：跨会话共享的持久文档，存放长期 note.md、项目级知识等；始终以这里提供的绝对路径为准（只读本地项目使用来源目录下的 \`copis/project/.context\`，避免修改原始项目根）
 
-项目根与 cwd 不一定相同：新会话通常在项目根目录运行，历史会话可能仍在会话工作台运行，始终以“实际工作目录”和每条消息的 \`<working_directory>\` 为准。
+项目来源目录与项目开发目录可能不同：新会话通常在项目开发目录运行，历史会话可能仍在会话工作台运行，始终以“实际工作目录”和每条消息的 \`<working_directory>\` 为准。
 
 选择写入哪个目录时：
 - 只与当前任务相关的内容 → 会话级 Context 的绝对路径
 - 跨会话有参考价值的内容（调研报告、架构分析等） → 项目级 Context 的绝对路径
 - 用户明确指定了位置时，按用户要求
 - 新会话开始时，**两个目录都要检查**以恢复完整上下文
-- ${workspaceWriteRestricted ? '本地项目根目录保持只读，工作区产出只能写入上方 Agent 可写目录；' : '本地项目根目录中的改动会直接写入用户的原始文件；'}不要把项目根当作可随意清理的临时目录`)
+- 项目开发目录默认支持两类轻量项目：TypeScript + Vite + HTML 前端，以及 Python 后端配合简单前端。优先按 \`frontend/\`、\`backend/\`、\`src/\` 等清晰结构创建，并提供启动和验证命令。
+- 项目来源目录只作为参考；新项目文件、依赖配置和启动脚本都写入项目开发目录，不要把它当作可随意清理的临时目录`)
   }
 
   // 自主执行与最小澄清策略

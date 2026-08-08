@@ -16,6 +16,8 @@ mod pi_rpc;
 mod runtime;
 mod skill_market;
 mod workspace_mcp;
+mod workspace_dev;
+mod workspace_skills;
 
 use expert_teams::{ExpertTeamError, ExpertTeamStore};
 use memory::{
@@ -32,6 +34,8 @@ use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::{json, Value};
 use skill_market::{handle_request as handle_skill_market_request, SkillMarketState};
 use workspace_mcp::{WorkspaceMcpError, WorkspaceMcpStore};
+use workspace_dev::{WorkspaceDevActionInput, WorkspaceDevError, WorkspaceDevStore};
+use workspace_skills::{WorkspaceSkillsError, WorkspaceSkillsStore};
 
 const HOST: &str = "127.0.0.1";
 const DEFAULT_PORT: u16 = 51730;
@@ -1041,6 +1045,8 @@ fn handle_connection(
     expert_team_store: Arc<ExpertTeamStore>,
     skill_market_state: Arc<SkillMarketState>,
     workspace_mcp_store: Arc<WorkspaceMcpStore>,
+    workspace_dev_store: Arc<WorkspaceDevStore>,
+    workspace_skills_store: Arc<WorkspaceSkillsStore>,
 ) {
     let _ = stream.set_read_timeout(Some(connection_read_timeout()));
     let request = match read_http_request(&mut stream) {
@@ -1132,6 +1138,18 @@ fn handle_connection(
 
     if is_workspace_mcp_route(&request.method, path) {
         handle_workspace_mcp_route(&mut stream, &request, origin, &workspace_mcp_store);
+        let _ = stream.shutdown(Shutdown::Both);
+        return;
+    }
+
+    if is_workspace_dev_route(&request.method, path) {
+        handle_workspace_dev_route(&mut stream, &request, origin, &workspace_dev_store);
+        let _ = stream.shutdown(Shutdown::Both);
+        return;
+    }
+
+    if is_workspace_skills_route(&request.method, path) {
+        handle_workspace_skills_route(&mut stream, &request, origin, &workspace_skills_store);
         let _ = stream.shutdown(Shutdown::Both);
         return;
     }
@@ -1382,6 +1400,83 @@ fn is_workspace_mcp_route(method: &str, path: &str) -> bool {
         && parts[1] == "api"
         && parts[2] == "workspaces"
         && parts[4] == "mcp"
+}
+
+fn is_workspace_skills_route(method: &str, path: &str) -> bool {
+    if method != "GET" {
+        return false;
+    }
+    let parts: Vec<&str> = path.split('/').collect();
+    parts.len() == 5
+        && parts[1] == "api"
+        && parts[2] == "workspaces"
+        && parts[4] == "skills"
+}
+
+fn is_workspace_dev_route(method: &str, path: &str) -> bool {
+    let parts: Vec<&str> = path.split('/').collect();
+    (method == "GET" && parts.len() == 5 && parts[1] == "api" && parts[2] == "workspaces" && parts[4] == "dev-projects")
+        || (method == "POST" && parts.len() == 6 && parts[1] == "api" && parts[2] == "workspaces" && parts[4] == "dev-projects" && matches!(parts[5], "start" | "stop"))
+}
+
+fn handle_workspace_dev_route(
+    stream: &mut TcpStream,
+    request: &HttpRequest,
+    origin: Option<&str>,
+    store: &WorkspaceDevStore,
+) {
+    let path = request.target.split('?').next().unwrap_or(&request.target);
+    let parts: Vec<&str> = path.split('/').collect();
+    let slug = parts[3];
+    let result = match request.method.as_str() {
+        "GET" => store.list_projects(slug),
+        "POST" => match serde_json::from_slice::<WorkspaceDevActionInput>(&request.body) {
+            Ok(input) if parts[5] == "start" => store.start_project(slug, &input.project_path),
+            Ok(input) if parts[5] == "stop" => store.stop_project(slug, &input.project_path),
+            Ok(_) => Err(WorkspaceDevError::NotFound("开发服务路由不存在".to_string())),
+            Err(_) => Err(WorkspaceDevError::InvalidProject),
+        },
+        _ => Err(WorkspaceDevError::NotFound("开发服务路由不存在".to_string())),
+    };
+    match result {
+        Ok(value) => send_json_response(stream, 200, &value.to_string(), origin),
+        Err(error) => {
+            let (status, code) = match error {
+                WorkspaceDevError::InvalidWorkspace => (400, "invalid_workspace"),
+                WorkspaceDevError::InvalidProject => (400, "invalid_project"),
+                WorkspaceDevError::NotFound(_) => (404, "project_not_found"),
+                WorkspaceDevError::Io(_) => (500, "workspace_dev_io_error"),
+                WorkspaceDevError::Spawn(_) => (503, "dev_server_start_failed"),
+            };
+            let body = json!({ "error": error.to_string(), "code": code }).to_string();
+            send_json_response(stream, status, &body, origin);
+        }
+    }
+}
+
+fn handle_workspace_skills_route(
+    stream: &mut TcpStream,
+    request: &HttpRequest,
+    origin: Option<&str>,
+    store: &WorkspaceSkillsStore,
+) {
+    let path = request.target.split('?').next().unwrap_or(&request.target);
+    let parts: Vec<&str> = path.split('/').collect();
+    let slug = parts[3];
+    match store.list_skills(slug) {
+        Ok(skills) => {
+            let body = serde_json::to_string(&skills).unwrap_or_else(|_| "[]".to_string());
+            send_json_response(stream, 200, &body, origin);
+        }
+        Err(error) => {
+            let (status, code) = match error {
+                WorkspaceSkillsError::InvalidWorkspace => (400, "invalid_workspace"),
+                WorkspaceSkillsError::Io(_) => (500, "workspace_skills_io_error"),
+            };
+            let body = json!({ "error": error.to_string(), "code": code }).to_string();
+            send_json_response(stream, status, &body, origin);
+        }
+    }
 }
 
 fn handle_workspace_mcp_route(
@@ -2337,6 +2432,8 @@ fn main() {
         std::env::var("COPIS_WORKING_ACCESS_TOKEN").ok(),
     ));
     let workspace_mcp_store = Arc::new(WorkspaceMcpStore::open(resolve_config_directory()));
+    let workspace_dev_store = Arc::new(WorkspaceDevStore::open(resolve_config_directory()));
+    let workspace_skills_store = Arc::new(WorkspaceSkillsStore::open(resolve_config_directory()));
     let response_bridge = Arc::clone(&bridge);
     thread::spawn(move || read_bridge_responses(response_bridge));
 
@@ -2356,6 +2453,8 @@ fn main() {
                 let connection_expert_teams = Arc::clone(&expert_team_store);
                 let connection_skill_market = Arc::clone(&skill_market_state);
                 let connection_workspace_mcp = Arc::clone(&workspace_mcp_store);
+                let connection_workspace_dev = Arc::clone(&workspace_dev_store);
+                let connection_workspace_skills = Arc::clone(&workspace_skills_store);
                 let connection_active = Arc::clone(&active_connections);
                 thread::spawn(move || {
                     let _guard = ConnectionCountGuard(connection_active);
@@ -2367,6 +2466,8 @@ fn main() {
                         connection_expert_teams,
                         connection_skill_market,
                         connection_workspace_mcp,
+                        connection_workspace_dev,
+                        connection_workspace_skills,
                     )
                 });
             }

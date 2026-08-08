@@ -25,6 +25,8 @@ import {
 import { resolveCopisHttpApiPort } from '@copis/shared/config'
 import type {
   AgentMessage,
+  AgentCwdMode,
+  AgentExpertTeamSession,
   AgentRuntime,
   AgentSendInput,
   AgentSessionMeta,
@@ -117,6 +119,9 @@ export interface AgentHttpFacade {
     workspaceId?: string,
     modelId?: string,
     agentRuntime?: AgentRuntime,
+    agentCwdMode?: AgentCwdMode,
+    expertTeamSession?: AgentExpertTeamSession,
+    expertTeamSetup?: boolean,
   ) => AgentSessionMeta
   getAgentSessionSDKMessages: (id: string) => SDKMessage[]
   runAgentHeadless: (
@@ -231,6 +236,46 @@ function requireString(record: Record<string, unknown>, key: string, message = `
 function optionalString(record: Record<string, unknown>, key: string): string | undefined {
   const value = record[key]
   return typeof value === 'string' && value.trim() ? value : undefined
+}
+
+function optionalExpertTeamSession(record: Record<string, unknown>): AgentExpertTeamSession | undefined {
+  const value = record.expertTeamSession
+  if (value === undefined) return undefined
+  if (!isRecord(value)) {
+    throw new HttpApiRequestError('专家团队会话关联不正确', 400, 'invalid_expert_team_session')
+  }
+
+  const runId = optionalString(value, 'runId')
+  const schemaId = optionalString(value, 'schemaId')
+  if (!runId || !schemaId) {
+    throw new HttpApiRequestError('专家团队会话关联不完整', 400, 'invalid_expert_team_session')
+  }
+
+  const requestedSchemaRevisionId = value.schemaRevisionId
+  let schemaRevisionId: number | undefined
+  if (requestedSchemaRevisionId !== undefined) {
+    if (typeof requestedSchemaRevisionId !== 'number'
+      || !Number.isSafeInteger(requestedSchemaRevisionId)
+      || requestedSchemaRevisionId < 0) {
+      throw new HttpApiRequestError('专家团队 Schema revision 不正确', 400, 'invalid_expert_team_session')
+    }
+    schemaRevisionId = requestedSchemaRevisionId
+  }
+
+  return {
+    runId,
+    schemaId,
+    ...(schemaRevisionId === undefined ? {} : { schemaRevisionId }),
+  }
+}
+
+function optionalExpertTeamSetup(record: Record<string, unknown>): boolean | undefined {
+  const value = record.expertTeamSetup
+  if (value === undefined) return undefined
+  if (typeof value !== 'boolean') {
+    throw new HttpApiRequestError('专家团队筹备标记不正确', 400, 'invalid_expert_team_setup')
+  }
+  return value
 }
 
 function decodePathSegment(value: string): string {
@@ -372,12 +417,17 @@ async function handleAgentRequest(
     const modelId = requestedModelId === COPIS_WORKING_EXPERT_MODEL_ID
       ? COPIS_WORKING_EXPERT_MODEL_ID
       : COPIS_WORKING_FAST_MODEL_ID
+    const expertTeamSession = optionalExpertTeamSession(bodyRecord ?? {})
+    const expertTeamSetup = optionalExpertTeamSetup(bodyRecord ?? {})
     const session = api.createAgentSession(
       optionalString(bodyRecord ?? {}, 'title'),
       COPIS_WORKING_CHANNEL_ID,
       workspace.id,
       modelId,
       'pi',
+      undefined,
+      expertTeamSession,
+      expertTeamSetup,
     )
     return { status: 201, body: session }
   }

@@ -8,10 +8,11 @@
 import type React from 'react'
 import { ReactRenderer } from '@tiptap/react'
 import type { SuggestionOptions } from '@tiptap/suggestion'
-import { CalendarDays, ListTodo, MessageSquareText, Sparkles, Server } from 'lucide-react'
+import { CalendarDays, ListTodo, MessageSquareText, Puzzle, Server } from 'lucide-react'
 import { MentionList } from './MentionList'
 import type { MentionListRef } from './MentionList'
 import { getWorkspaceMcpConfig } from '@/lib/workspace-mcp-api'
+import { listWorkspaceSkills } from '@/lib/workspace-skills-api'
 import { createLatestSuggestionRequestGuard, createMentionPopup, positionPopup, isSuggestionTriggerPresent, shouldSuppressEscTrigger, shouldClearEscSuppressionOnExit, type EscSuppressedTrigger } from './mention-popup-utils'
 import type { AgentSessionReferenceSearchResult } from '@copis/shared'
 import {
@@ -213,8 +214,8 @@ export function createSkillMentionSuggestion(
       headerLabel: '调用 skill',
       emptyText: '无匹配 Skill',
       fetchItems: async (slug, q) => {
-        const caps = await window.electronAPI.getWorkspaceCapabilities(slug)
-        return caps.skills
+        const skills = await listWorkspaceSkills(slug)
+        return skills
           .filter((s) => s.enabled)
           .filter((s) => !q || s.name.toLowerCase().includes(q) || (s.slug ?? '').toLowerCase().includes(q))
           .map((s) => ({ id: s.slug, name: s.name, description: s.description }))
@@ -222,7 +223,9 @@ export function createSkillMentionSuggestion(
       keyExtractor: (item) => item.id,
       renderItem: (item) => (
         <>
-          <Sparkles className="size-3.5 text-violet-500 flex-shrink-0" />
+          <div className="flex size-5 shrink-0 items-center justify-center rounded-md bg-[var(--ui-primary-background)] text-[var(--ui-primary)]">
+            <Puzzle size={11} />
+          </div>
           <span className="truncate font-medium flex-1 min-w-0">{item.name}</span>
           {item.description && (
             <span className="truncate text-[10px] text-muted-foreground/50 max-w-[120px]">{item.description}</span>

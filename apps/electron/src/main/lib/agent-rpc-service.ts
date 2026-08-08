@@ -40,6 +40,7 @@ import {
 import {
   ensureAgentWorkspaceContextDir,
   getAgentWorkspace,
+  getAgentWorkspaceReadableRoots,
   getAgentWorkspaceWritableRoot,
   getProjectFilesPath,
   getWorkspaceAttachedDirectories,
@@ -287,7 +288,7 @@ function buildRustFileAccessPolicy(input: {
   const sessionWorkspaceRoot = getAgentSessionWorkspacePath(input.workspace.slug, input.sessionId)
   const workspaceReadRoots = [
     input.agentCwd,
-    projectRoot,
+    ...getAgentWorkspaceReadableRoots(input.workspace),
     input.workspaceWriteRoot,
     sessionWorkspaceRoot,
     input.workspaceSkillsDir,
@@ -535,6 +536,8 @@ export async function prepareAgentRpcRun(input: AgentSendInput): Promise<PiWorke
     currentModelId: modelId,
     workingMode,
     memoryPolicy,
+    ...(session.expertTeamSession ? { expertTeamSession: session.expertTeamSession } : {}),
+    ...(session.expertTeamSetup ? { expertTeamSetup: true } : {}),
     ...(expertTeamContext ? { expertTeamContext } : {}),
     ...(browserBinding && browserTab
       ? {

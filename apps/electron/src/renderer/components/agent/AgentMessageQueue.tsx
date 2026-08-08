@@ -1,5 +1,5 @@
 import * as React from 'react'
-import { CalendarDays, Clock3, CornerDownLeft, FileText, GripVertical, ListTodo, MessageSquareText, Paperclip, Quote, Server, Sparkles, Trash2, Undo2 } from 'lucide-react'
+import { CalendarDays, Clock3, CornerDownLeft, FileText, GripVertical, ListTodo, MessageSquareText, Paperclip, Puzzle, Quote, Server, Trash2, Undo2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
@@ -161,8 +161,8 @@ export function AgentMessageQueue({
 }
 
 const QUEUED_REFERENCE_STYLES = {
-  file: { icon: FileText, className: 'bg-primary/10 text-primary' },
-  skill: { icon: Sparkles, className: 'bg-[hsl(270_60%_60%/0.15)] text-[hsl(270_60%_50%)]' },
+  file: { icon: FileText, className: 'bg-[var(--ui-primary-background)] text-[var(--ui-primary)]' },
+  skill: { icon: Puzzle, className: 'bg-[var(--ui-primary-background)] text-[var(--ui-primary)]' },
   mcp: { icon: Server, className: 'bg-[hsl(160_60%_45%/0.15)] text-[hsl(160_60%_35%)]' },
   session: { icon: MessageSquareText, className: 'bg-[hsl(200_80%_50%/0.14)] text-[hsl(200_80%_40%)]' },
   todo: { icon: ListTodo, className: 'bg-amber-500/15 text-amber-800 dark:text-amber-200' },

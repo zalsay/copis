@@ -1,7 +1,7 @@
 /**
  * SidePanel — Agent 侧面板容器
  *
- * 直接展示文件浏览器，默认打开状态。
+ * 展示项目开发列表与项目文件浏览器，默认打开状态。
  * 切换按钮在面板关闭时显示活动指示点。
  */
 
@@ -21,6 +21,7 @@ import { FileBrowser, FileDropZone, FileTypeIcon, FileSearchBar, computeRevealAn
 import { DiffPanelTabBar } from '@/components/diff/DiffPanelTabBar'
 import { DiffChangesList } from '@/components/diff/DiffChangesList'
 import { AgentQuestionView } from './AgentQuestionView'
+import { WorkspaceDevProjects } from './WorkspaceDevProjects'
 import {
   agentSidePanelOpenAtom,
   agentFileSourceFilterMapAtom,
@@ -407,7 +408,7 @@ export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange, widt
     ...(showSessionFiles && sessionPath ? [{ path: sessionPath, scope: 'session' as const }] : []),
   ], [showProjectFiles, workspaceFilesPath, isProjectRootUnavailable, showSessionFiles, sessionPath])
 
-  // Files 将会话与项目文件放在同一视图；FileBrowser 自己处理对应根目录的自动定位。
+  // 项目文件由 FileBrowser 处理对应根目录的自动定位。
   // RightSidePanel 完全由用户控制，不因 Agent 文件变更自动打开。
 
   // 同步 basePaths ref（供 handleFilePreview 使用，避免 hooks 声明顺序问题）
@@ -503,7 +504,39 @@ export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange, widt
             )
           ) : effectiveActiveTab === 'files' ? (
             <div className="flex-1 min-h-0 flex flex-col pt-2 mx-2 mb-2">
-              {sessionPath ? (
+              <div className="file-source-tabbar main-tabbar mt-1.5 flex h-7 border-b border-border/80" role="tablist" aria-label="项目内容">
+                <button
+                  type="button"
+                  role="tab"
+                  className={cn(
+                    'relative flex-1 h-7 px-2 text-[11px] transition-colors select-none',
+                    fileSourceFilter === 'session'
+                      ? 'app-tab-active text-foreground'
+                      : 'app-tab-inactive text-muted-foreground hover:text-foreground',
+                  )}
+                  aria-selected={fileSourceFilter === 'session'}
+                  onClick={() => setFileSourceFilter('session')}
+                >
+                  项目列表
+                </button>
+                <button
+                  type="button"
+                  role="tab"
+                  className={cn(
+                    'relative flex-1 h-7 px-2 text-[11px] transition-colors select-none',
+                    fileSourceFilter === 'project'
+                      ? 'app-tab-active text-foreground'
+                      : 'app-tab-inactive text-muted-foreground hover:text-foreground',
+                  )}
+                  aria-selected={fileSourceFilter === 'project'}
+                  onClick={() => setFileSourceFilter('project')}
+                >
+                  项目文件
+                </button>
+              </div>
+              {showSessionFiles ? (
+                <WorkspaceDevProjects workspaceSlug={workspaceSlug} />
+              ) : sessionPath ? (
                 <>
                   <FileSearchBar
                     workspaceFilesPath={isProjectRootUnavailable ? null : workspaceFilesPath}
@@ -515,38 +548,7 @@ export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange, widt
                     placeholder="搜索文件..."
                     sessionId={sessionId}
                     onFilePreview={handleFilePreview}
-                  >
-                    <div className="file-source-tabbar main-tabbar mt-1.5 flex h-7 border-b border-border/80" role="tablist" aria-label="文件来源">
-                      <button
-                        type="button"
-                        role="tab"
-                        className={cn(
-                          'relative flex-1 h-7 px-2 text-[11px] transition-colors select-none',
-                          fileSourceFilter === 'session'
-                            ? 'app-tab-active text-foreground'
-                            : 'app-tab-inactive text-muted-foreground hover:text-foreground',
-                        )}
-                        aria-selected={fileSourceFilter === 'session'}
-                        onClick={() => setFileSourceFilter('session')}
-                      >
-                        会话文件
-                      </button>
-                      <button
-                        type="button"
-                        role="tab"
-                        className={cn(
-                          'relative flex-1 h-7 px-2 text-[11px] transition-colors select-none',
-                          fileSourceFilter === 'project'
-                            ? 'app-tab-active text-foreground'
-                            : 'app-tab-inactive text-muted-foreground hover:text-foreground',
-                        )}
-                        aria-selected={fileSourceFilter === 'project'}
-                        onClick={() => setFileSourceFilter('project')}
-                      >
-                        项目文件
-                      </button>
-                    </div>
-                  </FileSearchBar>
+                  />
                   <div className="flex-1 min-h-0 overflow-y-auto scrollbar-thin pt-1">
                     {/* 拖拽引用提示：引用块样式，左侧竖线 + 缩进，与下方文件列表内容左对齐 */}
                     <div className="mb-1.5 ml-4 border-l-2 border-primary/40 pl-2 text-[11px] leading-4 text-foreground/75">

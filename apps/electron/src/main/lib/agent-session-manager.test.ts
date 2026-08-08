@@ -148,7 +148,7 @@ describe('Agent 会话 runtime 元数据', () => {
     expect(result.session.title).toBe('Agent 问答')
   })
 
-  test('Given Pi 会话运行在项目 cwd When 创建会话 Then 初始化项目级和会话级 .context', () => {
+  test('Given Pi 会话运行在项目 cwd When 创建会话 Then 初始化 project 下的项目级和会话级 .context', () => {
     const projectRootPath = join(tempHome, 'context-project')
     mkdirSync(projectRootPath, { recursive: true })
     writeAgentWorkspacesIndex([{
@@ -170,7 +170,7 @@ describe('Agent 会话 runtime 元数据', () => {
       'project',
     )
 
-    expect(existsSync(join(projectRootPath, '.context'))).toBe(true)
+    expect(existsSync(join(projectRootPath, 'project', '.context'))).toBe(true)
     expect(existsSync(join(tempHome, '.copis', 'agent-workspaces', 'context-workspace', session.id, '.context'))).toBe(true)
   })
 
@@ -275,6 +275,37 @@ describe('Agent 会话 runtime 元数据', () => {
 
     expect(updated.workingMode).toBe('expert')
     expect(manager.getAgentSessionMeta(session.id)).toMatchObject({ workingMode: 'expert' })
+  })
+
+  test('Given 专家团队工作台 When 创建主控会话 Then 持久化运行与 Schema 标识', () => {
+    const session = manager.createAgentSession(
+      '专家团队 · 深入研究团队',
+      'channel-1',
+      undefined,
+      'model-1',
+      'pi',
+      undefined,
+      { runId: 'run-1', schemaId: 'team-a', schemaRevisionId: 7 },
+    )
+
+    expect(session.expertTeamSession).toEqual({ runId: 'run-1', schemaId: 'team-a', schemaRevisionId: 7 })
+    expect(manager.getAgentSessionMeta(session.id)?.expertTeamSession).toEqual(session.expertTeamSession)
+  })
+
+  test('Given 新专家团入口 When 创建筹备会话 Then 持久化 expertTeamSetup 标记', () => {
+    const session = manager.createAgentSession(
+      '专家团队 · 组建新团队',
+      'channel-1',
+      'workspace-1',
+      'model-1',
+      'pi',
+      undefined,
+      undefined,
+      true,
+    )
+
+    expect(session.expertTeamSetup).toBe(true)
+    expect(manager.getAgentSessionMeta(session.id)?.expertTeamSetup).toBe(true)
   })
 
   test('Given a session When star state is updated Then it persists without changing freshness or archive state', () => {

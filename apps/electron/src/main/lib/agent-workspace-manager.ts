@@ -229,11 +229,53 @@ export function getAgentWorkspaceBySlug(slug: string): AgentWorkspace | undefine
 }
 
 /**
- * 返回项目文件根。本地目录项目直接使用用户选择的目录；空白项目继续
- * 使用 Copis 托管的 workspace-files/，以保持历史项目完全兼容。
+ * 工作区来源根：本地项目是用户选择的目录，托管项目是 workspace-files/。
+ * 来源根用于读取已有文件；用户新建的小项目统一放在其下的 project/。
  */
+export function getAgentWorkspaceSourceRoot(
+  workspace: Pick<AgentWorkspace, 'slug' | 'projectRootPath'>,
+): string {
+  return workspace.projectRootPath ?? getWorkspaceFilesDir(workspace.slug)
+}
+
+/** 返回工作区来源根与项目根，供读取授权使用。 */
+export function getAgentWorkspaceReadableRoots(
+  workspace: Pick<AgentWorkspace, 'slug' | 'projectRootPath' | 'projectPath' | 'allowWorkspaceWrite'>,
+): string[] {
+  const sourceRoot = getAgentWorkspaceSourceRoot(workspace)
+  const projectPath = getAgentWorkspaceProjectPath(workspace)
+  return sourceRoot === projectPath ? [projectPath] : [projectPath, sourceRoot]
+}
+
+/** 工作区内用户项目的固定目录名称。 */
+export const COPIS_PROJECT_DIR = 'project'
+
+/**
+ * 返回工作区内用户项目的开发根。
+ *
+ * - 允许写入时：来源根/project/
+ * - 原始目录只读时：来源根/copis/project/
+ * - 托管工作区：workspace-files/project/
+ */
+export function getAgentWorkspaceProjectPath(
+  workspace: Pick<AgentWorkspace, 'slug' | 'projectRootPath' | 'projectPath' | 'allowWorkspaceWrite'>,
+): string {
+  if (workspace.projectPath) return resolve(workspace.projectPath)
+  if (workspace.projectRootPath) {
+    const base = workspace.allowWorkspaceWrite === false
+      ? join(resolve(workspace.projectRootPath), COPIS_WORKSPACE_WRITE_DIR)
+      : resolve(workspace.projectRootPath)
+    return join(base, COPIS_PROJECT_DIR)
+  }
+  return join(getWorkspaceFilesDir(workspace.slug), COPIS_PROJECT_DIR)
+}
+
+/** 返回工作区项目开发根；兼容只传 slug 的历史调用。 */
 export function getProjectFilesPath(workspaceSlug: string): string {
-  return getAgentWorkspaceBySlug(workspaceSlug)?.projectRootPath ?? getWorkspaceFilesDir(workspaceSlug)
+  const workspace = getAgentWorkspaceBySlug(workspaceSlug)
+  return workspace
+    ? getAgentWorkspaceProjectPath(workspace)
+    : join(getWorkspaceFilesDir(workspaceSlug), COPIS_PROJECT_DIR)
 }
 
 /**
@@ -252,49 +294,46 @@ export const COPIS_WORKSPACE_WRITE_DIR = 'copis'
  * 返回工作区允许 Agent 写入的根目录。
  *
  * 未勾选“允许 Agent 写入工作区目录”时，原始项目根保持只读，写入范围
- * 收敛到项目根下的 copis/；Copis 托管项目也使用 workspace-files/copis/。
+ * 收敛到项目根下的 copis/project/；Copis 托管项目使用 workspace-files/project/。
  */
 export function getAgentWorkspaceWritableRoot(
-  workspace: Pick<AgentWorkspace, 'slug' | 'projectRootPath' | 'allowWorkspaceWrite'>,
+  workspace: Pick<AgentWorkspace, 'slug' | 'projectRootPath' | 'projectPath' | 'allowWorkspaceWrite'>,
 ): string {
-  const projectRoot = workspace.projectRootPath ?? getWorkspaceFilesDir(workspace.slug)
-  return workspace.allowWorkspaceWrite === false
-    ? join(projectRoot, COPIS_WORKSPACE_WRITE_DIR)
-    : projectRoot
+  return getAgentWorkspaceProjectPath(workspace)
 }
 
-/** 确保受控写入目录存在，并返回其路径。 */
+/** 确保工作区项目开发根存在，并返回其路径。 */
 export function ensureAgentWorkspaceWritableRoot(
-  workspace: Pick<AgentWorkspace, 'slug' | 'projectRootPath' | 'allowWorkspaceWrite'>,
+  workspace: Pick<AgentWorkspace, 'slug' | 'projectRootPath' | 'projectPath' | 'allowWorkspaceWrite'>,
 ): string {
-  const projectRoot = workspace.projectRootPath ?? getWorkspaceFilesDir(workspace.slug)
+  const projectRoot = workspace.projectRootPath
+    ? resolve(workspace.projectRootPath)
+    : resolve(getAgentWorkspacePath(workspace.slug))
   const writableRoot = getAgentWorkspaceWritableRoot(workspace)
-  if (workspace.allowWorkspaceWrite === false) {
-    mkdirSync(writableRoot, { recursive: true })
-    const projectRootReal = realpathSync(resolve(projectRoot))
-    const writableRootReal = realpathSync(resolve(writableRoot))
-    const relativeWritableRoot = relative(projectRootReal, writableRootReal)
-    if (
-      relativeWritableRoot === '..'
-      || relativeWritableRoot.startsWith(`..${sep}`)
-      || isAbsolute(relativeWritableRoot)
-    ) {
-      throw new Error(`Copis 受控写入目录不能指向项目根之外: ${writableRoot}`)
-    }
+  mkdirSync(writableRoot, { recursive: true })
+  const projectRootReal = realpathSync(resolve(projectRoot))
+  const writableRootReal = realpathSync(resolve(writableRoot))
+  const relativeWritableRoot = relative(projectRootReal, writableRootReal)
+  if (
+    relativeWritableRoot === '..'
+    || relativeWritableRoot.startsWith(`..${sep}`)
+    || isAbsolute(relativeWritableRoot)
+  ) {
+    throw new Error(`Copis 项目写入目录不能指向工作区来源根之外: ${writableRoot}`)
   }
   return writableRoot
 }
 
 /** 返回工作区项目级 Context 目录；只读项目使用受控写入根，避免修改原始目录。 */
 export function getAgentWorkspaceContextDir(
-  workspace: Pick<AgentWorkspace, 'slug' | 'projectRootPath' | 'allowWorkspaceWrite'>,
+  workspace: Pick<AgentWorkspace, 'slug' | 'projectRootPath' | 'projectPath' | 'allowWorkspaceWrite'>,
 ): string {
   return join(getAgentWorkspaceWritableRoot(workspace), '.context')
 }
 
 /** 确保工作区项目级 Context 存在；项目根不可用时跳过，避免意外重建本地项目。 */
 export function ensureAgentWorkspaceContextDir(
-  workspace: Pick<AgentWorkspace, 'slug' | 'projectRootPath' | 'allowWorkspaceWrite'>,
+  workspace: Pick<AgentWorkspace, 'slug' | 'projectRootPath' | 'projectPath' | 'allowWorkspaceWrite'>,
 ): string | undefined {
   if (workspace.projectRootPath && getLocalProjectRootStatus(workspace.projectRootPath) !== 'available') {
     return undefined
@@ -372,11 +411,19 @@ export function createAgentWorkspace(input: string | CreateAgentWorkspaceInput):
   const effectiveAllowWorkspaceWrite = normalizedProjectRootPath
     ? allowWorkspaceWrite ?? false
     : allowWorkspaceWrite
+  const sourceRoot = normalizedProjectRootPath ?? getWorkspaceFilesDir(slug)
+  const projectPath = join(
+    normalizedProjectRootPath && effectiveAllowWorkspaceWrite === false
+      ? join(sourceRoot, COPIS_WORKSPACE_WRITE_DIR)
+      : sourceRoot,
+    COPIS_PROJECT_DIR,
+  )
   const workspace: AgentWorkspace = {
     id: randomUUID(),
     name,
     slug,
     projectRootPath: normalizedProjectRootPath,
+    projectPath,
     ...(effectiveAllowWorkspaceWrite !== undefined ? { allowWorkspaceWrite: effectiveAllowWorkspaceWrite } : {}),
     ...(memoryPolicy !== undefined ? { memoryPolicy } : {}),
     createdAt: now,
@@ -386,6 +433,7 @@ export function createAgentWorkspace(input: string | CreateAgentWorkspaceInput):
   try {
     getAgentWorkspacePath(slug)
     copyDefaultSkills(slug, { throwOnError: true })
+    ensureAgentWorkspaceWritableRoot(workspace)
   } catch (error) {
     const workspacesRoot = resolve(getAgentWorkspacesDir())
     const workspaceDir = resolve(join(workspacesRoot, slug))
@@ -470,6 +518,12 @@ export function relinkAgentWorkspaceProjectRoot(id: string, projectRootPath: str
   const updated: AgentWorkspace = {
     ...index.workspaces[idx]!,
     projectRootPath: normalizedProjectRootPath,
+    projectPath: join(
+      index.workspaces[idx]!.allowWorkspaceWrite === false
+        ? join(normalizedProjectRootPath, COPIS_WORKSPACE_WRITE_DIR)
+        : normalizedProjectRootPath,
+      COPIS_PROJECT_DIR,
+    ),
     updatedAt: Date.now(),
   }
   index.workspaces[idx] = updated
@@ -561,6 +615,7 @@ export function ensureDefaultWorkspace(): AgentWorkspace {
       name: '默认项目',
       slug: 'default',
       projectRootPath,
+      projectPath: join(projectRootPath, COPIS_PROJECT_DIR),
       allowWorkspaceWrite: true,
       createdAt: now,
       updatedAt: now,
@@ -568,6 +623,7 @@ export function ensureDefaultWorkspace(): AgentWorkspace {
 
     getAgentWorkspacePath('default')
     copyDefaultSkills('default')
+    ensureAgentWorkspaceWritableRoot(defaultWs)
 
     index.workspaces.push(defaultWs)
     writeIndex(index)
@@ -583,11 +639,18 @@ export function ensureDefaultWorkspace(): AgentWorkspace {
       needsWrite = true
     }
 
-    // 默认项目明确允许 Agent 直接写入项目根，避免新会话退回计划模式。
+    if (!defaultWs.projectPath) {
+      defaultWs.projectPath = join(defaultWs.projectRootPath, COPIS_PROJECT_DIR)
+      needsWrite = true
+    }
+
+    // 默认项目始终允许 Agent 写入 project/，避免新会话退回计划模式。
     if (defaultWs.allowWorkspaceWrite !== true) {
       defaultWs.allowWorkspaceWrite = true
       needsWrite = true
     }
+
+    ensureAgentWorkspaceWritableRoot(defaultWs)
 
     if (needsWrite) {
       defaultWs.updatedAt = Date.now()

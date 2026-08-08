@@ -62,6 +62,7 @@ import { createCodexFastModeExtension, withCodexFastModeServiceTier } from './pi
 import { createOpenAIReasoningRequestExtension } from './pi-openai-reasoning-request-settings'
 import { buildPiBrowserAgentTools } from './pi-browser-agent-tools'
 import { createRustFileToolOperations } from './pi-rust-file-tools'
+import { resolveDefaultPiExtensionEntries } from './pi-default-extensions'
 import { mergeRuntimeEnv, type AgentRuntimeEnv } from '../agent-runtime-env'
 import type { PiWorkerBrowserCapability } from '../agent-rpc-protocol'
 import {
@@ -1505,6 +1506,7 @@ export class PiAgentAdapter implements AgentProviderAdapter {
         settingsManager,
         noSkills: true,
         ...createCopisResourceLoaderOptions(),
+        additionalExtensionPaths: resolveDefaultPiExtensionEntries(),
         additionalSkillPaths: input.additionalSkillPaths ?? [],
         skillsOverride: createCopisSkillsOverride(input.additionalSkillPaths),
         ...(model.reasoning && extensionFactories.length > 0 && { extensionFactories }),

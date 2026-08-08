@@ -68,6 +68,32 @@ describe('expertTeamApi', () => {
     expect(JSON.parse(String(calls[1]?.init?.body))).toMatchObject({ schemaId: 'team', schemaRevisionId: 7, input: 'goal' })
   })
 
+  test('Given 已保存工作区运行 When 工作台重新打开 Then 恢复 binding 和筛选后的最近运行', async () => {
+    const calls: string[] = []
+    globalThis.fetch = (async (input: RequestInfo | URL): Promise<Response> => {
+      const url = String(input)
+      calls.push(url)
+      if (url.endsWith('/workspaces/demo/binding')) {
+        return new Response(JSON.stringify({ workspaceSlug: 'demo', schemaId: 'team', schemaRevisionId: 7 }), { status: 200 })
+      }
+      return new Response(JSON.stringify({ runs: [
+        { id: 'run-1', schemaId: 'team', workspaceSlug: 'demo', status: 'queued', input: {}, createdAt: 1 },
+      ] }), { status: 200 })
+    }) as unknown as typeof fetch
+
+    const binding = await expertTeamApi.getWorkspaceBinding('demo')
+    const runs = await expertTeamApi.listRuns({ workspaceSlug: 'demo', schemaId: 'team' })
+
+    expect(binding).toMatchObject({ workspaceSlug: 'demo', schemaId: 'team', schemaRevisionId: 7 })
+    expect(runs).toMatchObject([{ id: 'run-1', workspaceSlug: 'demo', schemaId: 'team' }])
+    expect(calls[1]).toContain('/api/expert-teams/runs?workspaceSlug=demo&schemaId=team')
+  })
+
+  test('未绑定工作区以空值恢复，不将首次使用视为错误', async () => {
+    globalThis.fetch = (async (): Promise<Response> => new Response(JSON.stringify({ error: '尚未绑定' }), { status: 404 })) as unknown as typeof fetch
+    await expect(expertTeamApi.getWorkspaceBinding('demo')).resolves.toBeNull()
+  })
+
   test('按 error/code 抛出结构化错误', async () => {
     globalThis.fetch = (async () => new Response(JSON.stringify({ error: '无法取消', code: 'run_conflict' }), { status: 409 })) as unknown as typeof fetch
     await expect(expertTeamApi.cancelRun('run-1')).rejects.toBeInstanceOf(ExpertTeamApiError)

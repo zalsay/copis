@@ -79,6 +79,12 @@ extraResources:
     to: default-skills
     filter:
       - "**/*"
+  # 默认 Pi 扩展（pi-web-access 等）：worker 是自包含 Bun 二进制，无法读取
+  # app.asar 内的 node_modules，扩展与其依赖闭包必须落在真实磁盘目录。
+  - from: resources/pi-extensions
+    to: pi-extensions
+    filter:
+      - "**/*"
   # 教程文件（教程查看器 + 欢迎对话使用）
   - from: ../../tutorial/tutorial-v2.md
     to: tutorial.md

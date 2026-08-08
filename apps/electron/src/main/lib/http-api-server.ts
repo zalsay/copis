@@ -54,6 +54,13 @@ export const HTTP_API_PORT = resolveCopisHttpApiPort({
   isPackaged: app.isPackaged === true,
 })
 
+/** 默认 Pi 扩展目录：打包模式在 resources/pi-extensions，开发模式在 dist/resources/pi-extensions。 */
+function resolvePiExtensionsDir(): string | undefined {
+  const resourcesDir = app.isPackaged ? process.resourcesPath : join(__dirname, 'resources')
+  const candidate = join(resourcesDir, 'pi-extensions')
+  return existsSync(candidate) ? candidate : undefined
+}
+
 const RUST_HTTP_API_BINARY = 'copis-http-api-server'
 const HEALTH_POLL_INTERVAL_MS = 100
 const DEFAULT_HEALTH_TIMEOUT_MS = 5_000
@@ -248,6 +255,7 @@ function spawnManagedProcess(
   const workerLaunch = resolvePiRpcWorkerLaunch(options)
   const workerRuntime = resolvePiRpcWorkerRuntime(workerLaunch)
   const useDevelopmentScriptRuntime = workerLaunch?.kind === 'script' && !app.isPackaged
+  const piExtensionsDir = resolvePiExtensionsDir()
   const spawnImpl = options.spawnImpl ?? ((file, args, spawnOptions) => (
     spawn(file, args, spawnOptions) as ChildProcessWithoutNullStreams
   ))
@@ -272,6 +280,7 @@ function spawnManagedProcess(
         ...(options.modelBaseUrl || process.env[MODEL_BASE_URL_ENV]
           ? { [MODEL_BASE_URL_ENV]: options.modelBaseUrl ?? process.env[MODEL_BASE_URL_ENV] }
           : {}),
+        ...(piExtensionsDir ? { COPIS_PI_EXTENSIONS_DIR: piExtensionsDir } : {}),
         ...(app.isPackaged ? { COPIS_PI_RPC_COMPILED_RUNTIME: '1' } : {}),
         ...(useDevelopmentScriptRuntime
           ? {

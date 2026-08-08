@@ -6,6 +6,7 @@ import type {
   ExpertTeamPublishSchemaInput,
   ExpertTeamRun,
   ExpertTeamRunEvent,
+  ExpertTeamRunsResponse,
   ExpertTeamSchema,
   ExpertTeamSchemaRevision,
   ExpertTeamSchemasResponse,
@@ -225,11 +226,32 @@ export const expertTeamApi = {
     return unwrapObject<ExpertTeamWorkspaceBinding>(payload, 'binding')
   },
 
+  async getWorkspaceBinding(workspaceSlug: string): Promise<ExpertTeamWorkspaceBinding | null> {
+    try {
+      const payload = await request<ExpertTeamWorkspaceBinding | { binding: ExpertTeamWorkspaceBinding }>(
+        `/api/expert-teams/workspaces/${workspacePath(workspaceSlug)}/binding`,
+      )
+      return unwrapObject<ExpertTeamWorkspaceBinding>(payload, 'binding')
+    } catch (error) {
+      if (error instanceof ExpertTeamApiError && error.status === 404) return null
+      throw error
+    }
+  },
+
   createRun(input: ExpertTeamCreateRunInput): Promise<ExpertTeamRun> {
     return request<ExpertTeamRun | { run: ExpertTeamRun }>('/api/expert-teams/runs', {
       method: 'POST',
       body: JSON.stringify(input),
     }).then((payload) => normalizeRun(unwrapObject<unknown>(payload, 'run')))
+  },
+
+  async listRuns(filters: { workspaceSlug?: string; schemaId?: string } = {}): Promise<ExpertTeamRun[]> {
+    const parameters = new URLSearchParams()
+    if (filters.workspaceSlug) parameters.set('workspaceSlug', filters.workspaceSlug)
+    if (filters.schemaId) parameters.set('schemaId', filters.schemaId)
+    const query = parameters.size > 0 ? `?${parameters.toString()}` : ''
+    const payload = await request<ExpertTeamRunsResponse | ExpertTeamRun[]>(`/api/expert-teams/runs${query}`)
+    return unwrapArray<unknown>(payload, 'runs').map(normalizeRun)
   },
 
   getRun(runId: string): Promise<ExpertTeamRun> {

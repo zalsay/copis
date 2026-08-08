@@ -23,10 +23,13 @@ export interface AgentWorkspace {
   slug: string
   /**
    * 用户选择的本地项目根目录。未设置时，项目文件使用 Copis 托管的
-   * workspace-files/ 目录；设置后，项目文件直接指向该原始目录。
+   * workspace-files/ 目录；该目录下的 `project/` 是 Agent 默认开发根。
+   * 设置后，该路径作为项目来源根，Agent 的新项目仍写入其下的 `project/`。
    */
   projectRootPath?: string
-  /** 创建工作区时是否允许 Agent 直接写入项目根目录。 */
+  /** Agent 默认项目开发目录；由 Copis 在工作区内初始化，始终允许 Agent 写入。 */
+  projectPath?: string
+  /** 创建工作区时是否允许 Agent 直接写入项目来源根目录；project/ 始终是默认开发目录。 */
   allowWorkspaceWrite?: boolean
   /** Agent 对 Copis Memory 的可见/可写策略。 */
   memoryPolicy?: MemoryPolicy
@@ -649,6 +652,16 @@ export type AgentStreamPayload =
  */
 export type AgentCwdMode = 'session' | 'project'
 
+/** 由专家团队工作台创建的主控会话标识，用于恢复专属协作语义。 */
+export interface AgentExpertTeamSession {
+  /** 工作台启动时创建的专家团队运行 ID。 */
+  runId: string
+  /** 该会话锁定的专家团队 Schema ID。 */
+  schemaId: string
+  /** 该会话锁定的 Schema revision ID。 */
+  schemaRevisionId?: number
+}
+
 /**
  * Agent 会话轻量索引项
  *
@@ -682,6 +695,10 @@ export interface AgentSessionMeta {
   openAIThinkingLevel?: AgentThinkingLevel
   /** 所属工作区 ID */
   workspaceId?: string
+  /** 由专家团队工作台启动的专属主控会话；缺失时兼容普通 Agent 会话。 */
+  expertTeamSession?: AgentExpertTeamSession
+  /** 由「新专家团」入口创建的筹备会话：主理人 Agent 先询问需求，再组建并启动专家团队。 */
+  expertTeamSetup?: boolean
   /**
    * Agent 执行 cwd 的持久化语义。新会话使用 project；缺失字段兼容升级前的
    * session workbench cwd。

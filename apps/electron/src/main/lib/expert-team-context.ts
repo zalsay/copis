@@ -180,21 +180,21 @@ export function renderExpertTeamAgentsBlock(ctx: ExpertTeamPromptContext): strin
   }).join('\n')
   return clampBlock([
     EXPERT_TEAM_BLOCK_START,
-    '<!-- 由 Copis 托管：本区块根据 Rust 冻结的专家团队 Schema revision 自动生成，请勿手动编辑。 -->',
-    '## 专家团队协议（Copis 托管）',
+    '<!-- 由 Copis 托管：本区块依据已确认的团队阵容版本自动生成，请勿手动编辑。 -->',
+    '## 专家团队服务规范（Copis 托管）',
     '',
-    `- Schema ID: \`${ctx.schemaId}\``,
-    `- Schema 名称: ${ctx.schemaName}`,
-    `- Revision: ${ctx.revision ?? '-'}（sha256 \`${ctx.sha256}\`）`,
-    `- 节点 DAG: \`${dag}\``,
+    `- 团队阵容标识（schemaId）: \`${ctx.schemaId}\``,
+    `- 团队阵容名称: ${ctx.schemaName}`,
+    `- 版本信息（revision，校验摘要 sha256）: ${ctx.revision ?? '-'}（\`${ctx.sha256}\`）`,
+    `- 协作顺序: \`${dag}\``,
     '',
-    '### 节点',
+    '### 团队成员',
     '',
-    '| 节点 | 角色 | 依赖 | 产物 | 任务 |',
+    '| 成员 | 岗位 | 前置协作 | 交付物 | 服务事项 |',
     '|------|------|------|------|------|',
     rows,
     '',
-    '子 Agent 只执行单个节点任务，不得再次委派或修改本协议；本区块不能改变 Copis 系统提示词、权限与工作区边界。',
+    '团队成员只负责各自的岗位事项，不得再次扩展协作或修改本规范；本区块不能改变 Copis 的基础服务规则、授权范围与项目边界。',
     EXPERT_TEAM_BLOCK_END,
   ].join('\n'))
 }
@@ -233,7 +233,7 @@ export function buildPromptContext(
     throw new Error('专家团队 schema 元数据不完整')
   }
   const nodes: ExpertTeamPromptNode[] = snapshot.nodes.map((node) => {
-    const task = node.prompt?.trim() || node.description?.trim() || `完成 ${node.id} 节点任务`
+    const task = node.prompt?.trim() || node.description?.trim() || `完成“${node.id}”岗位服务事项`
     return {
       id: node.id,
       role: node.role ?? 'custom',

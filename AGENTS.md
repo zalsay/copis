@@ -24,11 +24,11 @@ Bun workspace monorepo：
 ```
 copis-v2/
 ├── packages/
-│   ├── shared/     # 共享类型、IPC 通道常量、配置、工具函数 (v0.1.20)
-│   ├── core/       # AI Provider 适配器、代码高亮服务 (v0.2.9)
-│   └── ui/         # 共享 UI 组件 (CodeBlock, MermaidBlock) (v0.1.6)
+│   ├── shared/     # 共享类型、IPC 通道常量、配置、工具函数 (v0.1.62)
+│   ├── core/       # AI Provider 适配器、代码高亮服务 (v0.2.18)
+│   └── ui/         # 共享 UI 组件 (CodeBlock, MermaidBlock) (v0.1.10)
 └── apps/
-    └── electron/   # Electron 桌面应用 (v0.10.7)
+    └── electron/   # Electron 桌面应用 (v0.0.35)
         └── src/
             ├── main/       # 主进程 + 服务层 (main/lib/)
             ├── preload/    # IPC 上下文桥接
@@ -41,12 +41,12 @@ copis-v2/
 
 ### 包职责详解
 
-#### @copis/shared (v0.1.52)
+#### @copis/shared (v0.1.62)
 - **导出模块**：`./types`、`./config`、`./utils`、`./constants/permission-rules`
 - **关键类型**：`AgentMessage`、`ChatMessage`、`Channel`、`PermissionRequest`、`FeishuConfig`
 - **依赖**：无运行时依赖（仅 TypeScript）
 
-#### @copis/core (v0.2.17)
+#### @copis/core (v0.2.18)
 - **导出模块**：`./providers`、`./highlight`、`./types`、`./utils`
 - **关键功能**：Provider 适配器注册表、代码高亮（Shiki）
 - **依赖**：`@copis/shared`、`shiki`
@@ -57,10 +57,11 @@ copis-v2/
 - **依赖**：`@copis/core`、`beautiful-mermaid`、`mermaid`、`shiki`
 - **Peer 依赖**：`react@^18.3.0`、`react-dom@^18.3.0`
 
-#### @copis/electron (v0.16.13)
+#### @copis/electron (v0.0.35)
 - **职责**：Electron 桌面应用主体，集成所有包
 - **关键依赖**：
   - `@earendil-works/pi-coding-agent@0.82.1`、`pi-agent-core@0.82.1`、`pi-ai@0.82.1` - Pi Agent runtime
+  - `pi-web-access@0.18.0` - 默认内置的 Pi 扩展（联网搜索、网页抓取、来源核查）
   - `@larksuiteoapi/node-sdk` - 飞书集成
   - Radix UI、TipTap、Tailwind CSS
   - 文件解析：`pdf-parse`、`officeparser`、`word-extractor`
@@ -152,6 +153,7 @@ bun run build:renderer    # Vite → dist/renderer/
 bun run build:resources   # 复制 resources/ 到 dist/
 bun run generate:icons    # 生成应用图标
 bun run build:cli         # Bun build --compile → resources/bin/{platform}-{arch}/copis(.exe)
+bun run copy:pi-extensions # 复制默认 Pi 扩展及依赖闭包 → resources/pi-extensions/（build 链自动执行）
 bun run build:http-api-server # 显式构建 Rust HTTP API 功能模块
 ```
 
@@ -433,6 +435,13 @@ bun test apps/electron/src/main/lib/web-tab-session-service.test.ts
   - ❌ 如果标记为 external：必须在 `electron-builder.yml` 的 `files` 中手动列出所有子依赖。
 - **常见错误**：将普通 npm 包标记为 external 但忘记在 `files` 中包含，导致打包后找不到模块（如 `Cannot find module 'universalify'`）。
 
+**默认 Pi 扩展打包要求（必须遵守）：**
+- 每个 Pi Agent 会话默认加载 `pi-web-access`（`web_search`、`fetch_content`、`source_check`、`get_search_content`），通过 `pi-agent-adapter.ts` 的 `DefaultResourceLoader.additionalExtensionPaths` 注入，不需要用户手动 `pi install`。
+- 打包后的 Pi Worker 是自包含 Bun 二进制，无法读取 `app.asar` 内的 node_modules，因此扩展必须落在真实磁盘目录：`scripts/copy-pi-extensions.ts` 会把扩展及其依赖闭包复制到 `resources/pi-extensions/`，再由 `electron-builder.yml` 的 `extraResources` 打入 `process.resourcesPath/pi-extensions`。
+- 主进程启动 Rust HTTP API 时注入 `COPIS_PI_EXTENSIONS_DIR`，worker 从该目录解析扩展入口；开发模式未注入时回退到仓库 node_modules 解析（见 `src/main/lib/adapters/pi-default-extensions.ts`）。
+- 修改默认扩展清单时，必须同步更新 `scripts/copy-pi-extensions.ts` 与 `src/main/lib/adapters/pi-default-extensions.ts` 两处的包名列表；新增扩展需确保其运行时依赖闭包能完整复制（jiti 会从扩展入口所在目录向上解析依赖）。
+- 扩展工具由 Pi 的 ExtensionRunner 提供 `ExtensionContext`（含 modelRegistry / cwd / isProjectTrusted），不经过 Copis 的 `canUseTool` 权限包装；新增默认扩展前要评估其工具是否存在文件系统副作用。
+
 ## 代码风格
 
 - 永远不要使用 `any` 类型 — 创建合适的 interface
@@ -494,6 +503,7 @@ React UI 更新
 #### pi-agent-adapter.ts
 - **Pi session**：创建、恢复、中断、分叉和回退 Pi AgentSession。
 - **工具桥接**：接入 Pi 原生工具、MCP 工具、Skills 和 Copis 权限策略。
+- **默认扩展**：通过 `DefaultResourceLoader.additionalExtensionPaths` 为每个会话注入 `pi-web-access`（联网搜索、网页抓取、来源核查），由 Pi 负责扩展加载、`ExtensionContext` 注入和 session 持久化；扩展缺失时仅告警跳过，不阻断会话。
 - **模型兼容**：按 ProviderType 动态构建 Anthropic、OpenAI、Google 及兼容模型。
 
 #### agent-prompt-builder.ts / agent-permission-service.ts
@@ -509,6 +519,7 @@ React UI 更新
 - **全局 IPC 监听**：`useGlobalAgentListeners` 在 `main.tsx` 顶层挂载，确保页面切换时流式输出、权限请求和后台任务不丢失。
 - **权限请求排队**：权限/AskUser 请求按 sessionId 入队到 Map atoms，SDK Promise 等待用户回来响应。
 - **工作区隔离**：每个工作区拥有独立的 MCP、Skills、cwd 和 Pi session artifact。
+- **默认扩展凭据**：`pi-web-access` 优先复用当前 OpenAI 渠道或环境变量中的 API Key（如 `OPENAI_API_KEY`、`TAVILY_API_KEY`、`EXA_API_KEY`），也可通过 `~/.pi/web-search.json` 配置；未配置任何供应商时工具返回配置引导。
 
 ### 共享类型（`@copis/shared`）
 

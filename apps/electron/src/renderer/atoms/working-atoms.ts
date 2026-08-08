@@ -17,13 +17,30 @@ export const workingHistorySelectionAtom = atom<WorkingHistorySelection | null>(
 /** Working 账户设置页是否打开；与 Copis 本地设置面板分离。 */
 export const workingSettingsOpenAtom = atom(false)
 
+/** Working 设置面板当前区块 */
+export type WorkingSettingsSectionId =
+  | 'settings'
+  | 'messages'
+  | 'orders'
+  | 'tutorial'
+  | 'voice-input'
+  | 'migration'
+  | 'storage'
+  | 'appearance'
+
+/** Working 设置面板当前激活区块，供外部跳转（如语音输入开关提示）设置初始值。 */
+export const workingSettingsSectionAtom = atom<WorkingSettingsSectionId>('settings')
+
 /** 左侧 Copis Working 创建工作区弹窗是否打开。 */
 export const createWorkspaceDialogOpenAtom = atom(false)
+
+/** 新专家团工作区选择弹窗是否打开（由专家团队工作台左侧栏打开）。 */
+export const newExpertTeamDialogOpenAtom = atom(false)
 
 /** 最近一次通过左侧创建工作区弹窗成功创建的工作区 ID。 */
 export const createdWorkspaceIdAtom = atom<string | null>(null)
 
-export type WorkspaceCreationSource = 'sidebar' | 'expert-team'
+export type WorkspaceCreationSource = 'sidebar' | 'expert-team' | 'expert-team-new'
 
 /** 当前创建工作区请求的来源，用于保留来源页面的导航语义。 */
 export const workspaceCreationSourceAtom = atom<WorkspaceCreationSource | null>(null)

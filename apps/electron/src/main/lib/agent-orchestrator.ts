@@ -41,7 +41,7 @@ import { getAdapter, fetchTitle } from '@copis/core'
 import { getFetchFn } from './proxy-fetch'
 import { getEffectiveProxyUrl } from './proxy-settings-service'
 import { appendSDKMessages, updateAgentSessionMeta, getAgentSessionMeta, getAgentSessionMessages, removeSDKErrorMessage, resolveAgentCwd, getAgentCwdMode } from './agent-session-manager'
-import { ensureAgentWorkspaceContextDir, ensureAgentWorkspaceWritableRoot, getAgentWorkspace, getAgentWorkspaceWritableRoot, getLocalProjectRootStatus, getProjectFilesPath, getWorkspaceMcpConfig, getWorkspaceAttachedDirectories, getWorkspaceAttachedFiles } from './agent-workspace-manager'
+import { ensureAgentWorkspaceContextDir, ensureAgentWorkspaceWritableRoot, getAgentWorkspace, getAgentWorkspaceBySlug, getAgentWorkspaceReadableRoots, getAgentWorkspaceWritableRoot, getLocalProjectRootStatus, getProjectFilesPath, getWorkspaceMcpConfig, getWorkspaceAttachedDirectories, getWorkspaceAttachedFiles } from './agent-workspace-manager'
 import { getWorkingApiClient } from './working-api-service'
 import { getAgentWorkspacePath, getAgentSessionWorkspacePath, getSdkConfigDir, getWorkspaceSkillsDir } from './config-paths'
 import { isPathWithinRootsAllowMissing } from './file-access-policy'
@@ -268,7 +268,7 @@ const DEFAULT_MODEL_ID = 'claude-sonnet-5'
  *   1. extraDirs：调用方传入的临时附加目录（例如 sendMessage 时用户当次提交的目录）
  *   2. 当前会话的私有工作目录，以及会话级 attachedDirectories + attachedFiles 的父目录
  *   3. 工作区级 attachedDirectories + attachedFiles 的父目录
- *   4. 项目文件根目录（本地项目为用户目录，空白项目为 workspace-files/）
+ *   4. 工作区项目目录，以及本地项目来源目录（只读参考）
  */
 function collectAttachedDirectories(params: {
   sessionMeta?: AgentSessionMeta
@@ -290,7 +290,12 @@ function collectAttachedDirectories(params: {
   if (workspaceSlug) {
     for (const d of filterAttachedPaths(getWorkspaceAttachedDirectories(workspaceSlug))) push(d)
     for (const dir of getAttachedFileDirectories(getWorkspaceAttachedFiles(workspaceSlug))) push(dir)
-    push(getProjectFilesPath(workspaceSlug))
+    const workspace = getAgentWorkspaceBySlug(workspaceSlug)
+    if (workspace) {
+      for (const root of getAgentWorkspaceReadableRoots(workspace)) push(root)
+    } else {
+      push(getProjectFilesPath(workspaceSlug))
+    }
   }
 
   return result
@@ -1575,6 +1580,8 @@ export class AgentOrchestrator {
         currentModelId: selectedModelId,
         workingMode,
         memoryPolicy,
+        ...(sessionMeta?.expertTeamSession ? { expertTeamSession: sessionMeta.expertTeamSession } : {}),
+        ...(sessionMeta?.expertTeamSetup ? { expertTeamSetup: true } : {}),
         ...(expertTeamContext ? { expertTeamContext } : {}),
         browserContext: browserTab
           ? { tabId: browserTab.id, title: browserTab.title, url: sanitizeBrowserWorkflowUrl(browserTab.url) }

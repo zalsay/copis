@@ -1,6 +1,6 @@
 {
   "name": "@copis/electron",
-  "version": "0.0.33",
+  "version": "0.0.36",
   "description": "Copis Working desktop client - Electron App",
   "main": "dist/main.cjs",
   "author": {
@@ -28,7 +28,8 @@
     "build:cli": "bun run scripts/build-cli.ts",
     "sync:runtime-deps": "bun run scripts/sync-runtime-deps.ts",
     "sync:runtime-deps:dev": "bun run scripts/sync-runtime-deps.ts --no-clean",
-    "build": "bun run build:main && bun run build:preload && bun run build:agent-rpc-worker && bun run build:renderer && bun run build:cli && bun run build:resources",
+    "copy:pi-extensions": "bun run scripts/copy-pi-extensions.ts",
+    "build": "bun run build:main && bun run build:preload && bun run build:agent-rpc-worker && bun run build:renderer && bun run build:cli && bun run copy:pi-extensions && bun run build:resources",
     "start": "bun run build && bunx electron .",
     "typecheck": "tsc --noEmit",
     "generate:icons": "cd resources && ./generate-icons.sh",
@@ -55,6 +56,7 @@
     "iconv-lite": "^0.6.3",
     "mammoth": "^1.12.0",
     "pdfjs-dist": "^4.10.38",
+    "pi-web-access": "0.18.0",
     "typebox": "1.1.38"
   },
   "devDependencies": {

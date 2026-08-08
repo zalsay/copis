@@ -396,11 +396,28 @@
   outline: 0;
 }
 
-.copis-working-conversation-main > span {
+.copis-working-conversation-label {
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.copis-working-conversation-label > span {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.copis-working-conversation-label > small.ui-primary-badge {
+  flex: 0 0 auto;
+  padding: 1px 5px;
+  border-radius: 999px;
+  color: var(--ui-primary);
+  font-size: 10px;
+  font-weight: 520;
+  line-height: 1.2;
 }
 
 .copis-working-conversation-meta {

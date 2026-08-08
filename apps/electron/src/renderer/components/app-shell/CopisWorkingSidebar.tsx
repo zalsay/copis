@@ -42,6 +42,7 @@ import { planningTabAtom } from '@/atoms/planning-atoms'
 import {
   createWorkspaceDialogOpenAtom,
   createdWorkspaceIdAtom,
+  newExpertTeamDialogOpenAtom,
   openCreateWorkspaceDialogAtom,
   workspaceCreationSourceAtom,
   workingAuthStateAtom,
@@ -119,6 +120,7 @@ export function CopisWorkingSidebar({ width, noTransition = false }: CopisWorkin
   const setSearchDialogOpen = useSetAtom(searchDialogOpenAtom)
   const setWorkingHistorySelection = useSetAtom(workingHistorySelectionAtom)
   const setCreatedWorkspaceId = useSetAtom(createdWorkspaceIdAtom)
+  const setNewExpertTeamDialogOpen = useSetAtom(newExpertTeamDialogOpenAtom)
   const workspaceCreationSource = useAtomValue(workspaceCreationSourceAtom)
   const setWorkspaceCreationSource = useSetAtom(workspaceCreationSourceAtom)
   const openCreateWorkspaceDialog = useSetAtom(openCreateWorkspaceDialogAtom)
@@ -208,6 +210,7 @@ export function CopisWorkingSidebar({ width, noTransition = false }: CopisWorkin
     try {
       setBusy(true)
       setWorkingHistorySelection(null)
+      const isExpertTeamFlow = workspaceCreationSource === 'expert-team' || workspaceCreationSource === 'expert-team-new'
       const project = await window.electronAPI.createAgentProject({
         name: selection.name,
         projectRootPath: selection.path,
@@ -218,12 +221,23 @@ export function CopisWorkingSidebar({ width, noTransition = false }: CopisWorkin
         project.workspace,
         ...previous.filter((workspace) => workspace.id !== project.workspace.id),
       ])
-      setLocalSessions((previous) => [project.session, ...sanitizeAgentSessions(previous)])
+      if (!isExpertTeamFlow) {
+        setLocalSessions((previous) => [project.session, ...sanitizeAgentSessions(previous)])
+      }
       setExpandedWorkspaceId(project.workspace.id)
       setCurrentWorkspaceId(project.workspace.id)
       window.electronAPI.updateSettings({ agentWorkspaceId: project.workspace.id }).catch(console.error)
-      if (workspaceCreationSource !== 'expert-team') {
+      if (workspaceCreationSource === 'sidebar') {
         openSession('agent', project.session.id, project.session.title)
+      }
+      // 'expert-team' / 'expert-team-new'：专家团队工作台绑定/筹备流程自行接管会话导航
+      if (isExpertTeamFlow) {
+        // createAgentProject 会自动生成项目首个默认会话；专家团队流程会另建主理人会话，这里删除多余默认会话，避免侧栏多出空对话。
+        try {
+          await window.electronAPI.deleteAgentSession(project.session.id)
+        } catch (deleteError) {
+          console.warn('[Copis Working] 清理专家团队流程默认会话失败:', deleteError)
+        }
       }
       setCreatedWorkspaceId(project.workspace.id)
       setWorkspaceCreationSource(null)
@@ -295,9 +309,11 @@ export function CopisWorkingSidebar({ width, noTransition = false }: CopisWorkin
   }, [openCreateWorkspaceDialog])
 
   const handleCloseCreateWorkspace = React.useCallback((): void => {
+    const reopenNewExpertTeam = workspaceCreationSource === 'expert-team-new'
     setCreateWorkspaceOpen(false)
     setWorkspaceCreationSource(null)
-  }, [setCreateWorkspaceOpen, setWorkspaceCreationSource])
+    if (reopenNewExpertTeam) setNewExpertTeamDialogOpen(true)
+  }, [setCreateWorkspaceOpen, setWorkspaceCreationSource, workspaceCreationSource])
 
   const handleRemoveWorkspace = async (workspaceId: string): Promise<void> => {
     const workspace = localWorkspaces.find((item) => item.id === workspaceId)
@@ -466,10 +482,17 @@ export function CopisWorkingSidebar({ width, noTransition = false }: CopisWorkin
                       {visibleSessions.map((session) => {
                         const streamState = streamingStates.get(session.id)
                         const sessionTitle = session.title || '未命名会话'
+                        const isExpertTeamSession = session.expertTeamSession !== undefined || session.expertTeamSetup === true
+                        const displaySessionTitle = isExpertTeamSession
+                          ? sessionTitle.replace(/^专家团队\s*·\s*/, '')
+                          : sessionTitle
                         return (
                           <div key={session.id} className={cn('copis-working-conversation-row', session.id === currentSessionId && 'active')}>
                             <button type="button" className="copis-working-conversation-main" onClick={() => selectLocalSession(session.id, workspace.id, sessionTitle)}>
-                              <span>{sessionTitle}</span>
+                              <span className="copis-working-conversation-label">
+                                {isExpertTeamSession && <small className="ui-primary-badge">{session.expertTeamSession ? '专家团队' : '组建中'}</small>}
+                                <span>{displaySessionTitle}</span>
+                              </span>
                             </button>
                             <span className="copis-working-conversation-meta">
                               {streamState?.running ? <Loader2 className="loading" aria-label="会话进行中" /> : session.completedButUnconfirmed ? <CircleCheck className="completed" aria-label="会话已完成" /> : <small>{formatSessionTime(session.updatedAt)}</small>}

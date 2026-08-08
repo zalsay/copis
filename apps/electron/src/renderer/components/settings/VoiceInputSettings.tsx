@@ -3,24 +3,17 @@
  */
 
 import * as React from 'react'
-import { ExternalLink, Loader2, TestTube2, Mic, MicOff } from 'lucide-react'
+import { CircleCheck, Globe, Loader2, Mic, MicOff, Sparkles } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import {
   SettingsCard,
-  SettingsInput,
-  SettingsSecretInput,
   SettingsSection,
   SettingsSelect,
-  SettingsTextarea,
   SettingsToggle,
 } from './primitives'
 import type { VoiceDictationSettings, MicPermissionResult } from '../../../types'
-
-const ENDPOINT_OPTIONS = [
-  { value: 'async', label: '双向流式优化版' },
-  { value: 'duplex', label: '双向流式标准版' },
-]
+import './VoiceInputSettings.css'
 
 const OUTPUT_OPTIONS = [
   { value: 'auto', label: '自动：Copis 激活时写入对话框，否则写入当前光标' },
@@ -37,12 +30,9 @@ const LANGUAGE_OPTIONS = [
   { value: 'ko-KR', label: '韩语' },
 ]
 
-const VOLCENGINE_SPEECH_SERVICE_URL = 'https://console.volcengine.com/speech/service/'
-
 export function VoiceInputSettings(): React.ReactElement {
   const [settings, setSettings] = React.useState<VoiceDictationSettings | null>(null)
   const [saving, setSaving] = React.useState(false)
-  const [testing, setTesting] = React.useState(false)
   const [micPermission, setMicPermission] = React.useState<MicPermissionResult | null>(null)
   const [requestingPermission, setRequestingPermission] = React.useState(false)
 
@@ -85,7 +75,7 @@ export function VoiceInputSettings(): React.ReactElement {
 
   const update = React.useCallback(async (updates: Partial<VoiceDictationSettings>) => {
     if (!settings) return
-    const optimistic = { ...settings, ...updates, provider: 'doubao' as const }
+    const optimistic = { ...settings, ...updates }
     setSettings(optimistic)
     setSaving(true)
     try {
@@ -97,24 +87,6 @@ export function VoiceInputSettings(): React.ReactElement {
       toast.error('保存语音输入设置失败')
     } finally {
       setSaving(false)
-    }
-  }, [settings])
-
-  const handleTest = React.useCallback(async () => {
-    if (!settings) return
-    setTesting(true)
-    try {
-      const result = await window.electronAPI.testVoiceDictationConnection(settings)
-      if (result.success) {
-        toast.success(result.message)
-      } else {
-        toast.error(result.message)
-      }
-    } catch (error) {
-      const message = error instanceof Error ? error.message : '未知错误'
-      toast.error(`测试连接失败: ${message}`)
-    } finally {
-      setTesting(false)
     }
   }, [settings])
 
@@ -130,40 +102,17 @@ export function VoiceInputSettings(): React.ReactElement {
   return (
     <div className="space-y-6">
       <SettingsSection
-        title="豆包流式语音输入"
-        description="通过全局快捷键唤起浮窗，实时识别语音，停止后写入 Copis 输入框或当前光标位置。"
-        action={
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={handleTest}
-            disabled={testing || !settings.appId || !settings.accessToken || !settings.resourceId}
-          >
-            {testing ? <Loader2 className="mr-1.5 size-3.5 animate-spin" /> : <TestTube2 className="mr-1.5 size-3.5" />}
-            测试连接
-          </Button>
-        }
+        title="语音输入"
+        description="管理麦克风权限、语音服务和全局语音输入行为。"
       >
-        <div className="rounded-lg bg-muted/55 px-4 py-3 text-sm text-muted-foreground shadow-sm">
-          <div className="mb-1.5 font-medium text-foreground">配置方式</div>
-          <div className="space-y-1 leading-relaxed">
-            <p>
-              打开
-              <a
-                href={VOLCENGINE_SPEECH_SERVICE_URL}
-                target="_blank"
-                rel="noreferrer"
-                className="mx-1 inline-flex items-center gap-1 text-primary underline-offset-4 hover:underline"
-              >
-                火山引擎语音服务控制台
-                <ExternalLink className="size-3" />
-              </a>
-              ，选择旧版服务界面。
-            </p>
-            <p>找到“豆包流式语音识别模型2.0”类目，选择已申请对应权限的应用。</p>
-            <p>在页面下方对照填写 APP ID、Access Token 和 Resource ID，然后点击“测试连接”。</p>
-          </div>
-        </div>
+        <SettingsCard>
+          <SettingsToggle
+            label="启用语音输入"
+            description="启用后可使用 Ctrl+～ 打开语音输入浮窗，再按一次停止。"
+            checked={settings.enabled}
+            onCheckedChange={(enabled) => update({ enabled })}
+          />
+        </SettingsCard>
 
         {/* 麦克风权限状态 */}
         {micPermission && (
@@ -212,66 +161,100 @@ export function VoiceInputSettings(): React.ReactElement {
             </div>
           </div>
         )}
-
-        <SettingsCard>
-          <SettingsToggle
-            label="启用语音输入"
-            description="启用后可使用 Ctrl+～ 打开语音输入浮窗，再按一次停止。"
-            checked={settings.enabled}
-            onCheckedChange={(enabled) => update({ enabled })}
-          />
-          <SettingsInput
-            label="豆包 APP ID"
-            description="对应 X-Api-App-Key，请填写火山引擎控制台中的 APP ID。"
-            value={settings.appId}
-            onChange={(appId) => update({ appId })}
-            placeholder="请输入 APP ID"
-          />
-          <SettingsSecretInput
-            label="豆包 Access Token"
-            description="对应 X-Api-Access-Key，保存时会加密。"
-            value={settings.accessToken}
-            onChange={(accessToken) => update({ accessToken })}
-            placeholder="请输入 Access Token"
-          />
-          <SettingsInput
-            label="Resource ID"
-            description="默认使用豆包语音识别模型 2.0 小时版。"
-            value={settings.resourceId}
-            onChange={(resourceId) => update({ resourceId })}
-            placeholder="volc.seedasr.sauc.duration"
-          />
-          <SettingsSelect
-            label="连接模式"
-            description="优化版只在结果变化时返回新包，实时体验更好。"
-            value={settings.endpointMode}
-            onValueChange={(endpointMode) => update({ endpointMode: endpointMode as VoiceDictationSettings['endpointMode'] })}
-            options={ENDPOINT_OPTIONS}
-          />
-          <SettingsSelect
-            label="识别语言"
-            description="自动识别适合中英文和方言混合输入。"
-            value={settings.language || 'auto'}
-            onValueChange={(language) => update({ language: language === 'auto' ? '' : language })}
-            options={LANGUAGE_OPTIONS}
-          />
-          <SettingsTextarea
-            label="自定义热词"
-            description="每行或逗号分隔一个词，会在本次识别请求中直传给豆包，用于改善产品名、技术词和人名识别。"
-            value={settings.customHotwords}
-            onChange={(customHotwords) => update({ customHotwords })}
-            placeholder={"Copis\nJotai\nShadcnUI\nClaude Code"}
-            minHeight={112}
-          />
-          <SettingsSelect
-            label="输出方式"
-            description="默认写入当前光标位置；如果唤起时 Copis 是当前激活窗口，会写入当前 Agent 输入框。自动粘贴失败时会保留到剪贴板。"
-            value={settings.outputMode}
-            onValueChange={(outputMode) => update({ outputMode: outputMode as VoiceDictationSettings['outputMode'] })}
-            options={OUTPUT_OPTIONS}
-          />
-        </SettingsCard>
       </SettingsSection>
+
+      <SettingsSection
+        title="识别模式"
+        description="选择语音转写使用的识别服务。"
+      >
+        <div className="copis-voice-mode-grid">
+          <button
+            type="button"
+            className={settings.provider === 'http-api' ? 'copis-voice-mode-card is-selected' : 'copis-voice-mode-card'}
+            onClick={() => update({ provider: 'http-api' })}
+            disabled={saving}
+            aria-pressed={settings.provider === 'http-api'}
+          >
+            <span className="copis-voice-mode-card-heading">
+              <span className="copis-voice-mode-card-icon">
+                <Globe aria-hidden="true" />
+              </span>
+              {settings.provider === 'http-api' && <CircleCheck className="copis-voice-mode-card-check" aria-hidden="true" />}
+            </span>
+            <strong className="copis-voice-mode-card-title">使用免费语音识别</strong>
+            <span className="copis-voice-mode-card-description">
+              使用浏览器自带的语音识别，免费使用、无需配置任何凭证；适合日常听写。
+            </span>
+            <span className="copis-voice-mode-card-badge">免费</span>
+          </button>
+
+          <button
+            type="button"
+            className={settings.provider === 'copis-model' ? 'copis-voice-mode-card is-selected' : 'copis-voice-mode-card'}
+            onClick={() => update({ provider: 'copis-model' })}
+            disabled={saving}
+            aria-pressed={settings.provider === 'copis-model'}
+          >
+            <span className="copis-voice-mode-card-heading">
+              <span className="copis-voice-mode-card-icon copis-voice-mode-card-icon-copis">
+                <Sparkles aria-hidden="true" />
+              </span>
+              {settings.provider === 'copis-model' && <CircleCheck className="copis-voice-mode-card-check" aria-hidden="true" />}
+            </span>
+            <strong className="copis-voice-mode-card-title">使用 Copis 语音识别大模型</strong>
+            <span className="copis-voice-mode-card-description">
+              由 Copis 语音识别大模型提供更精准的转写，识别时从账户余额扣除钻石。
+            </span>
+            <span className="copis-voice-mode-card-badge copis-voice-mode-card-badge-copis">消耗钻石</span>
+          </button>
+        </div>
+      </SettingsSection>
+
+      {settings.provider === 'copis-model' ? (
+        <SettingsSection
+          title="Copis 语音识别大模型"
+          description="无需配置外部凭证，识别费用从 Copis 账户钻石余额扣除。"
+        >
+          <div className="rounded-lg bg-muted/55 px-4 py-3 text-sm text-muted-foreground shadow-sm">
+            <div className="mb-1.5 font-medium text-foreground">使用说明</div>
+            <div className="space-y-1 leading-relaxed">
+              <p>启用后使用全局快捷键唤起浮窗，语音转写由 Copis 语音识别大模型完成，识别结果写入 Copis 输入框或当前光标位置。</p>
+              <p>每次识别会消耗钻石，余额不足时无法继续使用，请在 Copis 账户中充值。</p>
+              <p>该能力尚未接入，当前选择后启动语音输入会提示不可用，请先切换到“使用免费语音识别”。</p>
+            </div>
+          </div>
+        </SettingsSection>
+      ) : (
+        <SettingsSection
+          title="免费语音识别"
+          description="由浏览器自带的语音识别能力提供，无需任何凭证或配置。"
+        >
+          <div className="rounded-lg bg-muted/55 px-4 py-3 text-sm text-muted-foreground shadow-sm">
+            <div className="mb-1.5 font-medium text-foreground">使用说明</div>
+            <div className="space-y-1 leading-relaxed">
+              <p>选择后使用浏览器自带的语音识别能力进行听写，免费使用，无需配置任何凭证。</p>
+              <p>首次使用前需要允许麦克风权限；识别过程需要浏览器语音服务可达。</p>
+            </div>
+          </div>
+
+          <SettingsCard>
+            <SettingsSelect
+              label="识别语言"
+              description="选择语音识别使用的语言，自动识别适合中英文混合输入。"
+              value={settings.language || 'auto'}
+              onValueChange={(language) => update({ language: language === 'auto' ? '' : language })}
+              options={LANGUAGE_OPTIONS}
+            />
+            <SettingsSelect
+              label="输出方式"
+              description="默认写入当前光标位置；如果唤起时 Copis 是当前激活窗口，会写入当前 Agent 输入框。自动粘贴失败时会保留到剪贴板。"
+              value={settings.outputMode}
+              onValueChange={(outputMode) => update({ outputMode: outputMode as VoiceDictationSettings['outputMode'] })}
+              options={OUTPUT_OPTIONS}
+            />
+          </SettingsCard>
+        </SettingsSection>
+      )}
 
       {saving && (
         <p className="text-xs text-muted-foreground">正在保存语音输入设置...</p>

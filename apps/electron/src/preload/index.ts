@@ -26,6 +26,7 @@ import type {
   FileDialogResult,
   FileOrFolderDialogResult,
   AgentSessionMeta,
+  AgentExpertTeamSession,
   SDKMessage,
   AgentSendInput,
   AgentRuntime,
@@ -538,7 +539,7 @@ export interface ElectronAPI {
   listAgentSessions: () => Promise<AgentSessionMeta[]>
 
   /** 创建 Agent 会话 */
-  createAgentSession: (title?: string, channelId?: string, workspaceId?: string, modelId?: string) => Promise<AgentSessionMeta>
+  createAgentSession: (title?: string, channelId?: string, workspaceId?: string, modelId?: string, expertTeamSession?: AgentExpertTeamSession, expertTeamSetup?: boolean) => Promise<AgentSessionMeta>
 
   /** 创建基于父 Agent 历史的右侧问答子会话 */
   createAgentSideQuestionSession: (input: CreateAgentSideQuestionSessionInput) => Promise<AgentSideQuestionSessionResult>
@@ -1621,8 +1622,8 @@ const electronAPI: ElectronAPI = {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.LIST_SESSIONS)
   },
 
-  createAgentSession: (title?: string, channelId?: string, workspaceId?: string, modelId?: string) => {
-    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.CREATE_SESSION, title, channelId, workspaceId, modelId)
+  createAgentSession: (title?: string, channelId?: string, workspaceId?: string, modelId?: string, expertTeamSession?: AgentExpertTeamSession, expertTeamSetup?: boolean) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.CREATE_SESSION, title, channelId, workspaceId, modelId, expertTeamSession, expertTeamSetup)
   },
 
   createAgentSideQuestionSession: (input: CreateAgentSideQuestionSessionInput) => {

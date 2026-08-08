@@ -1,6 +1,6 @@
 {
   "name": "@copis/shared",
-  "version": "0.1.60",
+  "version": "0.1.63",
   "license": "AGPL-3.0-only",
   "description": "Shared types, configs and utilities for Copis",
   "type": "module",

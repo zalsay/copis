@@ -933,8 +933,8 @@ export const RichTextInput = forwardRef<RichTextInputHandle, RichTextInputProps>
           width: 3px;
         }
         .mention-chip {
-          background-color: hsl(var(--primary) / 0.1);
-          color: hsl(var(--primary));
+          background-color: var(--ui-primary-background);
+          color: var(--ui-primary);
           border-radius: 4px;
           padding: 1px 4px 1px 2px;
           font-size: 13px;
@@ -957,8 +957,8 @@ export const RichTextInput = forwardRef<RichTextInputHandle, RichTextInputProps>
           flex-shrink: 0;
         }
         .directory-mention-chip {
-          background-color: hsl(var(--primary) / 0.14);
-          color: hsl(var(--primary));
+          background-color: var(--ui-primary-background);
+          color: var(--ui-primary);
           border-radius: 4px;
           padding: 1px 4px 1px 2px;
           font-size: 13px;
@@ -981,8 +981,8 @@ export const RichTextInput = forwardRef<RichTextInputHandle, RichTextInputProps>
           flex-shrink: 0;
         }
         .skill-mention-chip {
-          background-color: hsl(270 60% 60% / 0.15);
-          color: hsl(270 60% 50%);
+          background-color: var(--ui-primary-background);
+          color: var(--ui-primary);
           border-radius: 4px;
           padding: 1px 4px 1px 2px;
           font-size: 13px;
@@ -999,7 +999,7 @@ export const RichTextInput = forwardRef<RichTextInputHandle, RichTextInputProps>
           width: 12px;
           height: 12px;
           background-color: currentColor;
-          mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z'/%3E%3C/svg%3E");
+          mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M15.39 4.39a1 1 0 0 0 1.68-.474 2.5 2.5 0 1 1 3.014 3.015 1 1 0 0 0-.474 1.68l1.683 1.682a2.414 2.414 0 0 1 0 3.414L19.61 15.39a1 1 0 0 1-1.68-.474 2.5 2.5 0 1 0-3.014 3.015 1 1 0 0 1 .474 1.68l-1.683 1.682a2.414 2.414 0 0 1-3.414 0L8.61 19.61a1 1 0 0 0-1.68.474 2.5 2.5 0 1 1-3.014-3.015 1 1 0 0 0 .474-1.68l-1.683-1.682a2.414 2.414 0 0 1 0-3.414L4.39 8.61a1 1 0 0 1 1.68.474 2.5 2.5 0 1 0 3.014-3.015 1 1 0 0 1-.474-1.68l1.683-1.682a2.414 2.414 0 0 1 3.414 0z'/%3E%3C/svg%3E");
           mask-size: contain;
           mask-repeat: no-repeat;
           flex-shrink: 0;

@@ -10,7 +10,7 @@ import { getSettings, updateSettings } from './settings-service'
 
 const DEFAULT_VOICE_DICTATION_SETTINGS: VoiceDictationSettings = {
   enabled: false,
-  provider: 'doubao',
+  provider: 'http-api',
   appId: '',
   accessToken: '',
   resourceId: 'volc.seedasr.sauc.duration',
@@ -47,6 +47,7 @@ export function getVoiceDictationSettings(): VoiceDictationSettings {
   return {
     ...DEFAULT_VOICE_DICTATION_SETTINGS,
     ...raw,
+    provider: raw.provider === 'copis-model' ? 'copis-model' : 'http-api',
     appId: raw.appId ?? raw.appKey ?? '',
     accessToken: decryptSecret(encryptedAccessToken),
     customHotwords: typeof raw.customHotwords === 'string' ? raw.customHotwords : '',
@@ -61,7 +62,9 @@ export function updateVoiceDictationSettings(
   const next: VoiceDictationSettings = {
     ...current,
     ...updates,
-    provider: 'doubao',
+    provider: updates.provider === 'copis-model' || (updates.provider === undefined && current.provider === 'copis-model')
+      ? 'copis-model'
+      : 'http-api',
   }
 
   updateSettings({

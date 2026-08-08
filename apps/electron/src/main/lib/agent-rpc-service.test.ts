@@ -53,6 +53,7 @@ mock.module('./agent-workspace-manager', () => ({
     }
     : undefined,
   getAgentWorkspaceContextDir: () => '/tmp/copis-agent-rpc-test/project/.context',
+  getAgentWorkspaceReadableRoots: () => ['/tmp/copis-agent-rpc-test/project'],
   getProjectFilesPath: () => '/tmp/copis-agent-rpc-test/project',
   getWorkspaceAttachedDirectories: () => [],
   getWorkspaceAttachedFiles: () => [],
@@ -351,7 +352,7 @@ describe('Agent RPC 专家团队上下文', () => {
     expect(run.query.systemPrompt).toContain('researcher -> summary -> reviewer')
     expect(run.query.systemPrompt).toContain('<copis_expert_team_schema>')
     expect(run.query.systemPrompt).toContain('"id":"researcher"')
-    expect(run.query.systemPrompt).toContain('revision 2')
+    expect(run.query.systemPrompt).toContain('版本 2')
   })
 
   test('Given user 主会话 When 准备 Pi Worker Then 解析 workspace binding 并注入同一上下文', async () => {
@@ -372,6 +373,27 @@ describe('Agent RPC 专家团队上下文', () => {
     })
     expect(run.query.systemPrompt).toContain('<copis_expert_team_agents_md>')
     expect(run.query.systemPrompt).toContain('team-a')
+  })
+
+  test('Given 专家团队主理人会话 When 准备 Pi Worker Then 注入专属服务语义', async () => {
+    const { prepareAgentRpcRun } = await import('./agent-rpc-service')
+    rpcSession.expertTeamSession = { runId: 'run-1', schemaId: 'team-a', schemaRevisionId: 202 }
+
+    try {
+      const run = await prepareAgentRpcRun({
+        sessionId: rpcSession.id,
+        userMessage: '研究这个问题',
+        channelId: 'channel-1',
+        modelId: rpcSession.modelId,
+        agentRuntime: 'pi',
+      })
+
+      expect(run.query.systemPrompt).toContain('## 专家团队主理人')
+      expect(run.query.systemPrompt).toContain('关联服务任务 `run-1`')
+      expect(run.query.systemPrompt).toContain('这是专家团队专属服务对话')
+    } finally {
+      delete rpcSession.expertTeamSession
+    }
   })
 })
 

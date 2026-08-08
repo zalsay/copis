@@ -33,7 +33,7 @@ import { AgentEventBus } from './agent-event-bus'
 import { agentRpcGateway } from './agent-rpc-gateway'
 import { agentSessionRewindService } from './agent-session-rewind-service'
 import { getAgentSessionWorkspacePath } from './config-paths'
-import { getAgentWorkspaceBySlug, getAgentWorkspaceWritableRoot, getLocalProjectRootStatus } from './agent-workspace-manager'
+import { ensureAgentWorkspaceWritableRoot, getAgentWorkspaceBySlug, getLocalProjectRootStatus } from './agent-workspace-manager'
 import { getAgentSessionMeta, updateAgentSessionMeta } from './agent-session-manager'
 import { setAgentStopper, setHeadlessAgentRunner } from './agent-headless-runner-registry'
 import { getHeadlessAgentRunTarget } from './agent-headless-run-target'
@@ -474,7 +474,8 @@ function resolveSafeWorkspaceFilePath(workspaceRoot: string, filename: string): 
 /**
  * 保存文件到 Agent 允许写入的工作区目录。
  *
- * 空白项目使用 Copis 托管目录；未授权原始目录写入时，文件保存到项目根下的 copis/。
+ * 空白项目使用 Copis 托管目录；用户新建项目统一保存到工作区的 project/，
+ * 未授权原始目录写入时使用项目根下的 copis/project/。
  */
 export function saveFilesToWorkspaceFiles(input: AgentSaveWorkspaceFilesInput): AgentSavedFile[] {
   const workspace = getAgentWorkspaceBySlug(input.workspaceSlug)
@@ -494,10 +495,7 @@ export function saveFilesToWorkspaceFiles(input: AgentSaveWorkspaceFilesInput): 
     }
   }
 
-  const wsFilesDir = getAgentWorkspaceWritableRoot(workspace)
-  if (workspace.allowWorkspaceWrite === false) {
-    mkdirSync(wsFilesDir, { recursive: true })
-  }
+  const wsFilesDir = ensureAgentWorkspaceWritableRoot(workspace)
   const files = input.files.map((file) => ({
     file,
     initialTargetPath: resolveSafeWorkspaceFilePath(wsFilesDir, file.filename),

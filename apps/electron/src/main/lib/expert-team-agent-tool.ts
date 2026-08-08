@@ -6,6 +6,7 @@ import type { AgentToolResult } from '@earendil-works/pi-agent-core'
 import type { AgentWorkspace, ExpertTeamPromptContext, ExpertTeamSchema, ExpertTeamSchemaRevision } from '@copis/shared'
 import { HTTP_API_HOST, HTTP_API_PORT } from './http-api-server'
 import { getAgentWorkspace, getAgentWorkspaceAgentsPath, getAgentWorkspaceWritableRoot } from './agent-workspace-manager'
+import { updateAgentSessionMeta } from './agent-session-manager'
 import { ExpertTeamRunner, type ExpertTeamNodeRole, type ExpertTeamRunSnapshot } from './expert-team-runner'
 import { HttpExpertTeamRustApiClient } from './expert-team-rust-client'
 import { createToolCallIdempotencyCache } from './agent-collaboration-utils'
@@ -17,6 +18,10 @@ import {
 
 const DEFAULT_SCHEMA_ID = 'ai-education-research-writer-reviewer'
 const MAX_GOAL_LENGTH = 20_000
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
 
 interface ExpertTeamToolContext {
   sessionId: string
@@ -43,7 +48,7 @@ interface ExpertTeamToolResult {
 
 const expertTeamCalls = createToolCallIdempotencyCache<Promise<ExpertTeamToolResult>>()
 
-function jsonToolResult(payload: ExpertTeamToolResult): AgentToolResult<unknown> {
+function jsonToolResult(payload: unknown): AgentToolResult<unknown> {
   return {
     content: [{ type: 'text', text: JSON.stringify(payload, null, 2) }],
     details: payload,
@@ -111,6 +116,34 @@ async function resolveExplicitSchemaContext(
   })
 }
 
+/** 主理人选择团队阵容时只读的轻量列表，不包含完整 prompt 内容。 */
+interface ExpertTeamSchemaSummary {
+  id: string
+  name: string
+  description?: string
+  revision?: number
+  nodeCount: number
+}
+
+async function listAvailableSchemas(): Promise<ExpertTeamSchemaSummary[]> {
+  const raw = await requestPublic<unknown>('/api/expert-teams/schemas')
+  const list = Array.isArray(raw)
+    ? raw
+    : isRecord(raw) && Array.isArray(raw.schemas)
+      ? raw.schemas
+      : []
+  return list.flatMap((item): ExpertTeamSchemaSummary[] => {
+    if (!isRecord(item) || typeof item.id !== 'string' || typeof item.name !== 'string') return []
+    return [{
+      id: item.id,
+      name: item.name,
+      ...(typeof item.description === 'string' && item.description ? { description: item.description } : {}),
+      ...(typeof item.revision === 'number' ? { revision: item.revision } : {}),
+      nodeCount: Array.isArray(item.nodes) ? item.nodes.length : 0,
+    }]
+  })
+}
+
 async function runExpertTeam(ctx: ExpertTeamToolContext, goal: string, schemaId: string | undefined, signal?: AbortSignal): Promise<ExpertTeamToolResult> {
   if ((ctx.triggeredBy ?? 'user') !== 'user') throw new Error('只有主 Agent 可以调度专家团队')
   if (!ctx.workspaceId || !ctx.workspaceSlug) throw new Error('调度专家团队需要当前工作区')
@@ -140,6 +173,18 @@ async function runExpertTeam(ctx: ExpertTeamToolContext, goal: string, schemaId:
     ? (runPayload as { run: Record<string, unknown> }).run
     : runPayload
   const runId = assertNonBlank(run.id, 'runId')
+  // 回填主理人会话关联，让专家团队工作台的「继续对话」能定位到启动本次运行的会话。
+  try {
+    updateAgentSessionMeta(ctx.sessionId, {
+      expertTeamSession: {
+        runId,
+        schemaId: promptContext.schemaId,
+        ...(promptContext.schemaRevisionId !== undefined ? { schemaRevisionId: promptContext.schemaRevisionId } : {}),
+      },
+    })
+  } catch (error) {
+    console.error('[专家团队] 回填主理人会话关联失败:', error)
+  }
   const nodes = promptContext.nodes.map((node) => {
     return {
       id: node.id,
@@ -182,27 +227,39 @@ async function runExpertTeam(ctx: ExpertTeamToolContext, goal: string, schemaId:
 
 export function buildExpertTeamTools(sdk: typeof import('@earendil-works/pi-coding-agent'), ctx: ExpertTeamToolContext): ToolDefinition[] {
   if ((ctx.triggeredBy ?? 'user') !== 'user' || !ctx.workspaceId || !ctx.workspaceSlug) return []
-  return [sdk.defineTool({
-    name: 'expert_team_run',
-    label: '调度专家团队',
-    description: '由主 Agent 按需调度本地 Pi 专家团队。普通问答和简单任务不要调用；只有需要深入研究、总结成文档并由 reviewer 检验的完整工作流才调用。子 Agent 结果会回传给你，你必须自行汇总后再回复用户。',
-    parameters: Type.Object({
-      goal: Type.String({ description: '专家团队需要完成的完整目标' }),
-      schemaId: Type.Optional(Type.String({ description: '团队 Schema ID；省略时使用当前工作区绑定的 Schema' })),
-    }),
-    async execute(toolCallId: string, params: unknown, signal?: AbortSignal) {
-      const args = params as { goal?: unknown; schemaId?: unknown }
-      const goal = assertNonBlank(args.goal, 'goal')
-      if (goal.length > MAX_GOAL_LENGTH) throw new Error(`goal 不能超过 ${MAX_GOAL_LENGTH} 个字符`)
-      const schemaId = args.schemaId === undefined ? undefined : assertNonBlank(args.schemaId, 'schemaId')
-      const result = await expertTeamCalls.getOrCreate(
-        ctx.sessionId,
-        toolCallId,
-        () => runExpertTeam(ctx, goal, schemaId, signal),
-      )
-      return jsonToolResult(result)
-    },
-  }) as unknown as ToolDefinition]
+  return [
+    sdk.defineTool({
+      name: 'expert_team_run',
+      label: '调度专家团队',
+      description: '由主 Agent 按需调度本地 Pi 专家团队。普通问答和简单任务不要调用；只有需要深入研究、总结成文档并由 reviewer 检验的完整工作流才调用。子 Agent 结果会回传给你，你必须自行汇总后再回复用户。',
+      parameters: Type.Object({
+        goal: Type.String({ description: '专家团队需要完成的完整目标' }),
+        schemaId: Type.Optional(Type.String({ description: '团队 Schema ID；省略时使用当前工作区绑定的 Schema' })),
+      }),
+      async execute(toolCallId: string, params: unknown, signal?: AbortSignal) {
+        const args = params as { goal?: unknown; schemaId?: unknown }
+        const goal = assertNonBlank(args.goal, 'goal')
+        if (goal.length > MAX_GOAL_LENGTH) throw new Error(`goal 不能超过 ${MAX_GOAL_LENGTH} 个字符`)
+        const schemaId = args.schemaId === undefined ? undefined : assertNonBlank(args.schemaId, 'schemaId')
+        const result = await expertTeamCalls.getOrCreate(
+          ctx.sessionId,
+          toolCallId,
+          () => runExpertTeam(ctx, goal, schemaId, signal),
+        )
+        return jsonToolResult(result)
+      },
+    }) as unknown as ToolDefinition,
+    sdk.defineTool({
+      name: 'expert_team_list_schemas',
+      label: '查看团队阵容',
+      description: '列出当前可用的专家团队阵容（Schema），包含 ID、名称、说明、版本与岗位数量；由主理人结合用户需求选择阵容后，再调用 expert_team_run 创建并启动专家团队。',
+      parameters: Type.Object({}),
+      async execute() {
+        const schemas = await listAvailableSchemas()
+        return jsonToolResult(schemas)
+      },
+    }) as unknown as ToolDefinition,
+  ]
 }
 
 export const expertTeamDefaultSchemaId = DEFAULT_SCHEMA_ID

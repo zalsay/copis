@@ -11,6 +11,8 @@ native/**/target/
 apps/electron/resources/bin/
 # Swift 编译的 macOS 原生灵动岛 helper（构建时生成，按宿主架构分发）
 apps/electron/resources/agent-island/
+# 默认 Pi 扩展副本（copy:pi-extensions 从 node_modules 生成，打包时现拷，不进 git）
+apps/electron/resources/pi-extensions/
 # bun build --compile 的临时中间产物
 *.bun-build
 

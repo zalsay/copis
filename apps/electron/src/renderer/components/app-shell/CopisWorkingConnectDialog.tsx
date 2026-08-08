@@ -90,7 +90,7 @@ export function CopisWorkingConnectDialog({
         </label>
 
         <div className="copis-working-connect-note">
-          {allowWorkspaceWrite ? '已授权写入所选目录，Agent 可以执行文件修改。' : '将自动创建 copis 作为 Agent 的输出目录，原始文件保持只读。'}
+          {allowWorkspaceWrite ? 'Agent 将在所选目录的 project/ 中开发，原始文件仍可作为参考。' : 'Agent 将在所选目录的 copis/project/ 中开发，原始文件保持只读。'}
         </div>
 
         <footer className="copis-working-connect-actions">

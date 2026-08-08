@@ -1,0 +1,109 @@
+/* 语音输入识别模式卡片 */
+
+.copis-voice-mode-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.copis-voice-mode-card {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 18px;
+  border: 1px solid hsl(var(--border) / 0.7);
+  border-radius: 8px;
+  background: hsl(var(--card));
+  box-shadow: var(--shadow-sm);
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background-color 0.15s ease;
+}
+
+.copis-voice-mode-card:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--ui-primary) 42%, transparent);
+}
+
+.copis-voice-mode-card:disabled {
+  cursor: not-allowed;
+  opacity: 0.62;
+}
+
+.copis-voice-mode-card.is-selected {
+  border-color: color-mix(in srgb, var(--ui-primary) 62%, transparent);
+  background: color-mix(in srgb, var(--ui-primary) 7%, var(--card));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--ui-primary) 14%, transparent), var(--shadow-sm);
+}
+
+.copis-voice-mode-card-heading {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.copis-voice-mode-card-icon {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  place-items: center;
+  border-radius: 9px;
+  background: var(--ui-primary-background);
+  color: var(--ui-primary);
+}
+
+.copis-voice-mode-card-icon-copis {
+  background: color-mix(in srgb, var(--ui-primary) 13%, var(--ui-primary-background));
+}
+
+.copis-voice-mode-card-icon svg {
+  width: 17px;
+  height: 17px;
+}
+
+.copis-voice-mode-card-check {
+  width: 18px;
+  height: 18px;
+  color: var(--ui-primary);
+}
+
+.copis-voice-mode-card-title {
+  color: hsl(var(--foreground));
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1.35;
+}
+
+.copis-voice-mode-card-description {
+  color: hsl(var(--muted-foreground));
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.copis-voice-mode-card-badge {
+  display: inline-flex;
+  min-height: 22px;
+  align-items: center;
+  padding: 0 9px;
+  border: 1px solid color-mix(in srgb, var(--ui-primary) 38%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--ui-primary) 13%, var(--ui-primary-background));
+  color: var(--ui-primary);
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.copis-voice-mode-card-badge-copis {
+  border-color: color-mix(in srgb, var(--ui-primary) 50%, transparent);
+  background: color-mix(in srgb, var(--ui-primary) 16%, var(--ui-primary-background));
+}
+
+@media (max-width: 700px) {
+  .copis-voice-mode-grid {
+    grid-template-columns: 1fr;
+  }
+}

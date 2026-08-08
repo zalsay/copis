@@ -541,32 +541,38 @@ impl ExpertTeamStore {
                         input_json, created_at, updated_at, canceled_at
                    FROM runs WHERE id = ?",
                 [id],
-                |row| {
-                    let input: Value =
-                        serde_json::from_str(&row.get::<_, String>(6)?).map_err(|error| {
-                            rusqlite::Error::FromSqlConversionFailure(
-                                6,
-                                rusqlite::types::Type::Text,
-                                Box::new(error),
-                            )
-                        })?;
-                    Ok(json!({
-                        "id": row.get::<_, String>(0)?,
-                        "workspaceSlug": row.get::<_, String>(1)?,
-                        "schemaId": row.get::<_, String>(2)?,
-                        "schemaRevisionId": row.get::<_, i64>(3)?,
-                        "schemaSha256": row.get::<_, String>(4)?,
-                        "status": row.get::<_, String>(5)?,
-                        "input": input,
-                        "createdAt": row.get::<_, i64>(7)?,
-                        "updatedAt": row.get::<_, i64>(8)?,
-                        "canceledAt": row.get::<_, Option<i64>>(9)?,
-                    }))
-                },
+                run_row,
             )
             .optional()
             .map_err(storage_error)?
             .ok_or_else(|| ExpertTeamError::NotFound("专家团队 run 不存在".to_string()))
+    }
+
+    /// 按工作区和 schema 返回最近的运行记录，供工作台重启后恢复展示。
+    pub fn list_runs(
+        &self,
+        workspace_slug: Option<&str>,
+        schema_id: Option<&str>,
+    ) -> Result<Vec<Value>, ExpertTeamError> {
+        if let Some(workspace_slug) = workspace_slug {
+            validate_workspace_slug(workspace_slug)?;
+        }
+        let connection = self.connection.lock().unwrap();
+        let mut statement = connection
+            .prepare(
+                "SELECT id, workspace_slug, schema_id, schema_revision_id, schema_sha256, status,
+                        input_json, created_at, updated_at, canceled_at
+                   FROM runs
+                  WHERE (?1 IS NULL OR workspace_slug = ?1)
+                    AND (?2 IS NULL OR schema_id = ?2)
+                  ORDER BY created_at DESC
+                  LIMIT 100",
+            )
+            .map_err(storage_error)?;
+        let rows = statement
+            .query_map(params![workspace_slug, schema_id], run_row)
+            .map_err(storage_error)?;
+        rows.map(|row| row.map_err(storage_error)).collect()
     }
 
     pub fn list_run_events(&self, id: &str) -> Result<Vec<Value>, ExpertTeamError> {
@@ -954,6 +960,28 @@ fn schema_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Value> {
     }))
 }
 
+fn run_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Value> {
+    let input: Value = serde_json::from_str(&row.get::<_, String>(6)?).map_err(|error| {
+        rusqlite::Error::FromSqlConversionFailure(
+            6,
+            rusqlite::types::Type::Text,
+            Box::new(error),
+        )
+    })?;
+    Ok(json!({
+        "id": row.get::<_, String>(0)?,
+        "workspaceSlug": row.get::<_, String>(1)?,
+        "schemaId": row.get::<_, String>(2)?,
+        "schemaRevisionId": row.get::<_, i64>(3)?,
+        "schemaSha256": row.get::<_, String>(4)?,
+        "status": row.get::<_, String>(5)?,
+        "input": input,
+        "createdAt": row.get::<_, i64>(7)?,
+        "updatedAt": row.get::<_, i64>(8)?,
+        "canceledAt": row.get::<_, Option<i64>>(9)?,
+    }))
+}
+
 pub fn handle_request(
     store: &ExpertTeamStore,
     method: &str,
@@ -1009,6 +1037,14 @@ pub fn handle_request(
                 body: store.create_run(input)?,
             })
         }
+        ("GET", [_, _, resource]) if resource == "runs" => {
+            let workspace_slug = query_parameter(query, "workspaceSlug")?;
+            let schema_id = query_parameter(query, "schemaId")?;
+            Ok(ExpertTeamResponse {
+                status: 200,
+                body: json!({ "runs": store.list_runs(workspace_slug.as_deref(), schema_id.as_deref())? }),
+            })
+        }
         ("GET", [_, _, resource, id]) if resource == "runs" => Ok(ExpertTeamResponse {
             status: 200,
             body: store.get_run(id)?,
@@ -1041,6 +1077,15 @@ pub fn handle_request(
 fn parse_body<T: for<'de> Deserialize<'de>>(body: &[u8]) -> Result<T, ExpertTeamError> {
     serde_json::from_slice(body)
         .map_err(|_| ExpertTeamError::Validation("请求体不是有效的专家团队 JSON".to_string()))
+}
+
+fn query_parameter(query: &str, name: &str) -> Result<Option<String>, ExpertTeamError> {
+    query
+        .split('&')
+        .filter_map(|part| part.split_once('='))
+        .find_map(|(key, value)| (key == name).then_some(value))
+        .map(percent_decode)
+        .transpose()
 }
 
 fn json_text(value: Option<&Value>) -> Option<String> {

@@ -115,6 +115,41 @@ export const createExpertTeamRunAtom = atom(null, async (_get, set, input: Param
   }
 })
 
+/** 恢复当前工作区的 schema binding、最近运行及首条运行详情。 */
+export const loadExpertTeamWorkspaceStateAtom = atom(null, async (_get, set, input: { workspaceSlug: string; schemaId: string }): Promise<void> => {
+  set(expertTeamLoadStateAtom, { ...initialLoadState, binding: true, run: true, events: true, artifacts: true })
+  set(expertTeamErrorAtom, null)
+  try {
+    const [binding, runs] = await Promise.all([
+      expertTeamApi.getWorkspaceBinding(input.workspaceSlug),
+      expertTeamApi.listRuns(input),
+    ])
+    const previousRunId = _get(expertTeamCurrentRunIdAtom)
+    const currentRun = runs.find((run) => run.id === previousRunId) ?? runs[0] ?? null
+    set(expertTeamWorkspaceBindingAtom, binding?.schemaId === input.schemaId ? binding : null)
+    set(expertTeamRunsAtom, runs)
+    set(expertTeamCurrentRunIdAtom, currentRun?.id ?? null)
+
+    if (!currentRun) {
+      set(expertTeamEventsAtom, [])
+      set(expertTeamArtifactsAtom, [])
+      return
+    }
+
+    const [events, artifacts] = await Promise.all([
+      expertTeamApi.listEvents(currentRun.id),
+      expertTeamApi.listArtifacts(currentRun.id),
+    ])
+    set(expertTeamEventsAtom, events)
+    set(expertTeamArtifactsAtom, artifacts)
+  } catch (error) {
+    set(expertTeamErrorAtom, error instanceof Error ? error.message : '恢复专家团队工作区失败')
+    throw error
+  } finally {
+    set(expertTeamLoadStateAtom, { ...initialLoadState })
+  }
+})
+
 export const refreshExpertTeamRunAtom = atom(null, async (_get, set, runId: string): Promise<ExpertTeamRun> => {
   set(expertTeamLoadStateAtom, { ...initialLoadState, run: true, events: true, artifacts: true })
   set(expertTeamErrorAtom, null)

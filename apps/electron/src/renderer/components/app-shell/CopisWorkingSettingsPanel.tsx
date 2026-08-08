@@ -25,7 +25,11 @@ import type {
   WorkingSettingsSnapshot,
   WorkingUser,
 } from '@copis/shared'
-import { workingAuthStateAtom } from '@/atoms/working-atoms'
+import {
+  workingAuthStateAtom,
+  workingSettingsSectionAtom,
+  type WorkingSettingsSectionId,
+} from '@/atoms/working-atoms'
 import { activeTabIdAtom, openTab, tabsAtom, TUTORIAL_TAB_ID, TUTORIAL_TAB_TITLE } from '@/atoms/tab-atoms'
 import { AppearanceSettings } from '@/components/settings/AppearanceSettings'
 import { MigrationSettings } from '@/components/settings/MigrationSettings'
@@ -35,15 +39,6 @@ import { formatWorkingLedgerDescription, isWorkingModelDeduction } from '@/lib/w
 import { CopisWorkingMessageSettingsPanel } from './CopisWorkingMessageSettingsPanel'
 import { CopisWorkingOrdersPanel } from './CopisWorkingOrdersPanel'
 import './CopisWorkingSettingsPanel.css'
-
-export type WorkingSettingsSectionId =
-  | 'settings'
-  | 'messages'
-  | 'orders'
-  | 'voice-input'
-  | 'migration'
-  | 'storage'
-  | 'appearance'
 
 type WorkingSettingsMenuId = WorkingSettingsSectionId | 'tutorial'
 
@@ -114,7 +109,7 @@ export function CopisWorkingSettingsPanel({ onClose }: CopisWorkingSettingsPanel
   const [tabs, setTabs] = useAtom(tabsAtom)
   const [, setActiveTabId] = useAtom(activeTabIdAtom)
   const [settings, setSettings] = React.useState<WorkingSettingsSnapshot | null>(null)
-  const [activeSection, setActiveSection] = React.useState<WorkingSettingsSectionId>('settings')
+  const [activeSection, setActiveSection] = useAtom(workingSettingsSectionAtom)
   const [loading, setLoading] = React.useState(true)
   const [checkingIn, setCheckingIn] = React.useState(false)
   const [loggingOut, setLoggingOut] = React.useState(false)
@@ -183,13 +178,13 @@ export function CopisWorkingSettingsPanel({ onClose }: CopisWorkingSettingsPanel
   }
 
   const handleCopyInvite = async (): Promise<void> => {
-    const inviteText = settings?.inviteLink || settings?.inviteCode
-    if (!inviteText) {
+    const inviteCode = settings?.inviteCode
+    if (!inviteCode) {
       setNotice('暂时没有可用的邀请码，请刷新后重试')
       return
     }
-    await navigator.clipboard?.writeText(inviteText)
-    setCopiedLabel(settings?.inviteLink ? '邀请链接' : '邀请码')
+    await navigator.clipboard?.writeText(inviteCode)
+    setCopiedLabel('已复制')
     window.setTimeout(() => setCopiedLabel(''), 1600)
   }
 
@@ -381,17 +376,25 @@ function WorkingAccountSettings({
       </section>
 
       <section className="copis-working-settings-card copis-working-settings-invite-card">
-        <div className="copis-working-settings-card-heading">
-          <UserRound aria-hidden="true" />
-          <span>邀请</span>
+        <div className="copis-working-settings-card-heading copis-working-settings-card-heading-with-action">
+          <div className="copis-working-settings-card-heading-title">
+            <UserRound aria-hidden="true" />
+            <span>邀请</span>
+          </div>
+          <button
+            type="button"
+            className="copis-working-settings-card-action copis-working-settings-invite-button"
+            onClick={onCopyInvite}
+            disabled={!settings?.inviteCode}
+            aria-label="复制邀请码"
+          >
+            {copiedLabel ? <CircleCheck aria-hidden="true" /> : <Clipboard aria-hidden="true" />}
+            <span>{copiedLabel || '复制邀请码'}</span>
+          </button>
         </div>
         <p>一个账号体验家庭与工作两种空间，分享 π 的陪伴与交付能力。</p>
         <div className="copis-working-settings-invite-code">
           <span>{settings?.inviteCode || (loading ? '正在获取邀请码' : '暂无邀请码')}</span>
-          <button type="button" onClick={onCopyInvite} disabled={!settings?.inviteCode && !settings?.inviteLink} aria-label="复制邀请信息">
-            <Clipboard aria-hidden="true" />
-            <span>{copiedLabel || '复制'}</span>
-          </button>
         </div>
         <div className="copis-working-settings-invite-stats">
           <strong>{settings?.invitedUsers.length ?? 0}</strong>

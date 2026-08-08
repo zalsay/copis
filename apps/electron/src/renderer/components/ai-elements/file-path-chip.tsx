@@ -211,7 +211,7 @@ export function FilePathChip({ filePath, basePath, basePaths, className }: FileP
             'align-baseline not-prose',
             fileStatus === 'broken'
               ? 'opacity-50 border border-dashed border-muted-foreground/30 text-muted-foreground hover:opacity-70 hover:bg-muted/20'
-              : 'bg-primary/10 text-primary hover:bg-primary/20',
+              : 'bg-[var(--ui-primary-background)] text-[var(--ui-primary)] hover:bg-[color-mix(in_srgb,var(--ui-primary)_18%,var(--ui-primary-background))]',
             className
           )}
         >

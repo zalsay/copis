@@ -42,6 +42,7 @@ import type {
   AgentSessionReferenceSearchResult,
   AgentRuntime,
   AgentCwdMode,
+  AgentExpertTeamSession,
   CreateAgentSideQuestionSessionInput,
   AgentSideQuestionSessionResult,
 } from '@copis/shared'
@@ -301,6 +302,8 @@ export function createAgentSession(
   modelId?: string,
   agentRuntime: AgentRuntime = 'pi',
   agentCwdMode?: AgentCwdMode,
+  expertTeamSession?: AgentExpertTeamSession,
+  expertTeamSetup?: boolean,
 ): AgentSessionMeta {
   const index = readIndex()
   const now = Date.now()
@@ -315,6 +318,8 @@ export function createAgentSession(
     channelId,
     modelId,
     workspaceId,
+    ...(expertTeamSession ? { expertTeamSession } : {}),
+    ...(expertTeamSetup ? { expertTeamSetup: true } : {}),
     agentCwdMode: workspaceId ? agentCwdMode ?? 'project' : undefined,
     agentRuntime,
     // 新会话继承已持久化的全局思考偏好，之后仍可按会话单独调整。
@@ -507,7 +512,7 @@ export function getAgentSessionSDKMessages(id: string): SDKMessage[] {
  */
 export function updateAgentSessionMeta(
   id: string,
-  updates: Partial<Pick<AgentSessionMeta, 'title' | 'channelId' | 'modelId' | 'sdkSessionId' | 'piSessionFile' | 'piEntryBindings' | 'agentRuntime' | 'codexFastMode' | 'workingMode' | 'reasoningLevel' | 'openAIThinkingLevel' | 'workspaceId' | 'pinned' | 'starred' | 'archived' | 'attachedDirectories' | 'attachedFiles' | 'forkSourceDir' | 'forkSourceSdkSessionId' | 'resumeAtMessageUuid' | 'stoppedByUser' | 'permissionMode' | 'completedButUnconfirmed' | 'sourceAutomationId' | 'automationGraduated' | 'parentSessionId' | 'rootSessionId' | 'sourceDelegationId' | 'delegationRole' | 'delegationStatus' | 'delegationDepth' | 'delegationGoal'>>,
+  updates: Partial<Pick<AgentSessionMeta, 'title' | 'channelId' | 'modelId' | 'sdkSessionId' | 'piSessionFile' | 'piEntryBindings' | 'agentRuntime' | 'codexFastMode' | 'workingMode' | 'reasoningLevel' | 'openAIThinkingLevel' | 'workspaceId' | 'expertTeamSession' | 'expertTeamSetup' | 'pinned' | 'starred' | 'archived' | 'attachedDirectories' | 'attachedFiles' | 'forkSourceDir' | 'forkSourceSdkSessionId' | 'resumeAtMessageUuid' | 'stoppedByUser' | 'permissionMode' | 'completedButUnconfirmed' | 'sourceAutomationId' | 'automationGraduated' | 'parentSessionId' | 'rootSessionId' | 'sourceDelegationId' | 'delegationRole' | 'delegationStatus' | 'delegationDepth' | 'delegationGoal'>>,
 ): AgentSessionMeta {
   const index = readIndex()
   const idx = index.sessions.findIndex((s) => s.id === id)

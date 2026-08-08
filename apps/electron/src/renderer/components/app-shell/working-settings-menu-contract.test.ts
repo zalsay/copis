@@ -78,6 +78,35 @@ describe('Working 设置菜单契约', () => {
     }
   })
 
+  test('Given 账户设置邀请卡片 When 展示邀请信息 Then 复制操作位于标题行右侧', () => {
+    const inviteCardStart = panelSource.indexOf('<section className="copis-working-settings-card copis-working-settings-invite-card">')
+    const ledgerCardStart = panelSource.indexOf('<section className="copis-working-settings-card copis-working-settings-ledger-card">')
+    expect(inviteCardStart).toBeGreaterThanOrEqual(0)
+    expect(ledgerCardStart).toBeGreaterThan(inviteCardStart)
+
+    const inviteCardSource = panelSource.slice(inviteCardStart, ledgerCardStart)
+    const inviteCodeStart = inviteCardSource.indexOf('<div className="copis-working-settings-invite-code">')
+    expect(inviteCardSource).toContain('copis-working-settings-card-heading copis-working-settings-card-heading-with-action')
+    expect(inviteCardSource).toContain('copis-working-settings-card-action copis-working-settings-invite-button')
+    expect(inviteCardSource).toContain("'复制邀请码'")
+    expect(inviteCardSource).toContain('copiedLabel ? <CircleCheck')
+    expect(inviteCodeStart).toBeGreaterThan(0)
+    expect(inviteCardSource.slice(inviteCodeStart)).not.toContain('<button')
+  })
+
+  test('Given 账户设置邀请卡片 When 点击复制 Then 只复制邀请码不复制链接', () => {
+    const handlerStart = panelSource.indexOf('const handleCopyInvite')
+    const handlerEnd = panelSource.indexOf('const handleReceiveChannelChange')
+    expect(handlerStart).toBeGreaterThanOrEqual(0)
+    expect(handlerEnd).toBeGreaterThan(handlerStart)
+
+    const handlerSource = panelSource.slice(handlerStart, handlerEnd)
+    expect(handlerSource).toContain('const inviteCode = settings?.inviteCode')
+    expect(handlerSource).toContain('navigator.clipboard?.writeText(inviteCode)')
+    expect(handlerSource).toContain("setCopiedLabel('已复制')")
+    expect(handlerSource).not.toContain('inviteLink')
+  })
+
   test('Given 账户设置页面 When 使用品牌强调色 Then 所有高亮读取 ui-primary 且不保留旧金色', () => {
     expect(globalStyles).toContain('--ui-primary:')
     expect(globalStyles).toContain('--ui-primary-background:')

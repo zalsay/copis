@@ -85,7 +85,7 @@ function schema(id: string, rev: ExpertTeamSchemaRevision): ExpertTeamSchema {
   return {
     id,
     name: '深入研究团队',
-    description: '资料搜集、总结和检验 DAG',
+    description: '资料搜集、总结和成果复核服务',
     nodes: (rev.snapshot?.nodes ?? []) as ExpertTeamSchema['nodes'],
     edges: [],
     currentRevisionId: rev.id,
@@ -102,7 +102,7 @@ function context(schemaId: string, revisionNumber: number, sha256: string): Expe
     revision: revisionNumber,
     sha256,
     schemaName: '深入研究团队',
-    schemaDescription: '资料搜集、总结和检验 DAG',
+    schemaDescription: '资料搜集、总结和成果复核服务',
     nodes: [
       { id: 'researcher', role: 'researcher', task: '搜集资料', dependsOn: [], outputPath: 'research.md' },
       { id: 'summary', role: 'writer', task: '总结成文档', dependsOn: ['researcher'], outputPath: 'summary.md' },
@@ -114,13 +114,13 @@ function context(schemaId: string, revisionNumber: number, sha256: string): Expe
 }
 
 describe('专家团队受管控 AGENTS.md 渲染', () => {
-  test('Given 冻结上下文 When 渲染区块 Then 包含固定标记、schemaId/revision/sha256 与节点 DAG', () => {
+  test('Given 冻结上下文 When 渲染区块 Then 包含固定标记、团队阵容版本与协作顺序', () => {
     const block = renderExpertTeamAgentsBlock(context('research-v1', 1, 'a'.repeat(64)))
 
     expect(block.startsWith(EXPERT_TEAM_BLOCK_START)).toBe(true)
     expect(block.endsWith(EXPERT_TEAM_BLOCK_END)).toBe(true)
     expect(block).toContain('research-v1')
-    expect(block).toContain('Revision: 1')
+    expect(block).toContain('版本信息（revision，校验摘要 sha256）: 1')
     expect(block).toContain('a'.repeat(64))
     expect(block).toContain('researcher -> summary -> reviewer')
     expect(block).toContain('researcher')
@@ -201,7 +201,7 @@ describe('专家团队快照哈希与上下文构建', () => {
     expect(ctx.nodes.map((node) => node.id)).toEqual(['researcher', 'summary'])
     expect(ctx.nodes[0]).toMatchObject({ id: 'researcher', role: 'researcher', dependsOn: [], outputPath: 'research.md' })
     expect(ctx.nodes[0]?.task).toContain('搜集并整理研究资料')
-    expect(ctx.nodes[1]?.task).toBe('完成 summary 节点任务')
+    expect(ctx.nodes[1]?.task).toBe('完成“summary”岗位服务事项')
     expect(ctx.agentsMdPath).toBe('/tmp/.copis/agent-workspaces/sample-project/AGENTS.md')
   })
 
@@ -308,7 +308,7 @@ describe('专家团队 binding/schema 解析', () => {
     expect(ctx?.agentsMdPath).toBe(join(tempWorkspacesDir, 'sample-project', 'AGENTS.md'))
     const file = readFileSync(join(tempWorkspacesDir, 'sample-project', 'AGENTS.md'), 'utf8')
     expect(file).toContain('team-a')
-    expect(file).toContain('Revision: 2')
+    expect(file).toContain('版本信息（revision，校验摘要 sha256）: 2')
     expect(file).toContain('researcher -> summary -> reviewer')
     // 本地项目根目录必须保持不动
     expect(() => readFileSync(join(projectRoot, 'AGENTS.md'), 'utf8')).toThrow()
@@ -389,7 +389,7 @@ describe('专家团队 binding/schema 解析', () => {
 
     const file = readFileSync(join(tempWorkspacesDir, 'sample-project', 'AGENTS.md'), 'utf8')
     expect(file).toContain('# 用户规则')
-    expect(file).toContain('Revision: 2')
+    expect(file).toContain('版本信息（revision，校验摘要 sha256）: 2')
     expect(file).not.toContain('Revision: 1')
   })
 })

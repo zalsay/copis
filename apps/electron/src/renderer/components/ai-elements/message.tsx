@@ -23,7 +23,7 @@ import Markdown, { defaultUrlTransform } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import remarkMath from 'remark-math'
 import rehypeKatex from 'rehype-katex'
-import { CalendarDays, ChevronDown, ChevronUp, Paperclip, FileText, ListTodo, Sparkles, Server, Download, MessageSquareText } from 'lucide-react'
+import { CalendarDays, ChevronDown, ChevronUp, Paperclip, FileText, ListTodo, Puzzle, Server, Download, MessageSquareText } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { shouldInspectMermaidCodeBlock, shouldRenderMermaidCodeBlock } from '@/lib/mermaid-detection'
 import { normalizeLatexDelimiters } from '@/lib/normalize-latex'
@@ -206,8 +206,8 @@ export function MessageAction({
 // ----- MentionChip 组件 -----
 
 const MENTION_STYLES: Record<MentionType, { icon: typeof FileText; className: string }> = {
-  file: { icon: FileText, className: 'bg-primary/10 text-primary' },
-  skill: { icon: Sparkles, className: 'bg-[hsl(270_60%_60%/0.15)] text-[hsl(270_60%_50%)]' },
+  file: { icon: FileText, className: 'bg-[var(--ui-primary-background)] text-[var(--ui-primary)]' },
+  skill: { icon: Puzzle, className: 'bg-[var(--ui-primary-background)] text-[var(--ui-primary)]' },
   mcp: { icon: Server, className: 'bg-[hsl(160_60%_45%/0.15)] text-[hsl(160_60%_35%)]' },
   session: { icon: MessageSquareText, className: 'bg-[hsl(200_80%_50%/0.14)] text-[hsl(200_80%_40%)]' },
   todo: { icon: ListTodo, className: 'bg-amber-500/15 text-amber-800 dark:text-amber-200' },

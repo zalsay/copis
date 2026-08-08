@@ -1,5 +1,5 @@
 import { describe, expect, mock, test } from 'bun:test'
-import type { AgentSessionMeta } from '@copis/shared'
+import { COPIS_WORKING_FAST_MODEL_ID, type AgentSessionMeta, type AgentWorkspace } from '@copis/shared'
 import type { AgentHttpFacade, HttpApiDependencies } from './http-api-handler'
 
 // Bun 测试环境没有 Electron 原生模块，健康检查测试不需要真实凭证存储。
@@ -143,6 +143,53 @@ describe('Rust HTTP API 业务桥契约', () => {
       { path: '/workspace/note.md', sessionId: 'session-1' },
       { path: '/workspace/note.md', content: '更新内容', expectedRevision: 'revision-1' },
     ])
+  })
+
+  test('Given 专家团队工作台创建会话 When 通过 Rust HTTP API 提交 Then 保留运行与 Schema 关联', async () => {
+    const workspace = { id: 'workspace-1', slug: 'project-a' } as AgentWorkspace
+    const calls: unknown[][] = []
+    const dependencies: HttpApiDependencies = {
+      ...createDependencies(),
+      getAgentApi: async (): Promise<AgentHttpFacade> => ({
+        ensureDefaultWorkspace: () => workspace,
+        listAgentWorkspaces: () => [workspace],
+        createAgentSession: (...args: Parameters<AgentHttpFacade['createAgentSession']>) => {
+          calls.push(args)
+          return {
+            id: 'session-1',
+            title: '专家团队 · 研究',
+            createdAt: 1,
+            updatedAt: 1,
+            workspaceId: workspace.id,
+            expertTeamSession: args[6],
+          } as AgentSessionMeta
+        },
+      } as unknown as AgentHttpFacade),
+    }
+
+    const response = await handleHttpApiRequest({
+      method: 'POST',
+      path: '/api/agent/sessions',
+      body: JSON.stringify({
+        title: '专家团队 · 研究',
+        workspaceId: workspace.id,
+        expertTeamSession: { runId: 'run-1', schemaId: 'research-v1', schemaRevisionId: 8 },
+      }),
+    }, dependencies)
+
+    expect(response).toMatchObject({
+      status: 201,
+      body: { id: 'session-1', expertTeamSession: { runId: 'run-1', schemaId: 'research-v1', schemaRevisionId: 8 } },
+    })
+    expect(calls).toEqual([[
+      '专家团队 · 研究',
+      'copis-working',
+      'workspace-1',
+      COPIS_WORKING_FAST_MODEL_ID,
+      'pi',
+      undefined,
+      { runId: 'run-1', schemaId: 'research-v1', schemaRevisionId: 8 },
+    ]])
   })
 
   test('删除 Agent 会话路由只删除指定会话并返回 204', async () => {

@@ -45,7 +45,7 @@ function buildPrompt(agentCwd: string, memoryPolicy?: 'off' | 'visible' | 'writa
 }
 
 describe('项目与会话工作台提示词', () => {
-  test('Given 主 Agent 专家团队工具 When 构建系统提示词 Then 强制主 Agent 汇总子 Agent 结果', () => {
+  test('Given 专家团队服务工具 When 构建系统提示词 Then 强制主理人汇总团队交付成果', () => {
     const prompt = buildSystemPrompt({
       agentRuntime: 'pi',
       sessionId: 'session-expert-team',
@@ -53,12 +53,12 @@ describe('项目与会话工作台提示词', () => {
       expertTeamAvailable: true,
     })
 
-    expect(prompt).toContain('## 深入研究团队')
+    expect(prompt).toContain('## 专家团队服务')
     expect(prompt).toContain('expert_team_run')
-    expect(prompt).toContain('子 Agent 不直接面向用户')
+    expect(prompt).toContain('团队成员不直接面向用户')
   })
 
-  test('Given 主 Agent 专家团队上下文 When 构建系统提示词 Then 注入受管控 AGENTS.md 与冻结 schema', () => {
+  test('Given 专家团队上下文 When 构建系统提示词 Then 注入受管控工作区规范与冻结团队阵容', () => {
     const prompt = buildSystemPrompt({
       agentRuntime: 'pi',
       sessionId: 'session-expert-team-context',
@@ -76,7 +76,7 @@ describe('项目与会话工作台提示词', () => {
           { id: 'reviewer', role: 'reviewer', task: '检验', dependsOn: ['summary'], outputPath: 'review.md' },
         ],
         agentsMdPath: '/tmp/.copis/agent-workspaces/sample-project/AGENTS.md',
-        agentsMdContent: '<!-- copis-expert-team:start -->\n## 专家团队协议\n- Schema: research-v1\n- Revision: 1\n- 节点 DAG: `researcher -> summary -> reviewer`\n<!-- copis-expert-team:end -->',
+        agentsMdContent: '<!-- copis-expert-team:start -->\n## 专家团队服务规范\n- 团队阵容标识（schemaId）: research-v1\n- 版本信息（revision）: 1\n- 协作顺序: `researcher -> summary -> reviewer`\n<!-- copis-expert-team:end -->',
       },
     })
 
@@ -86,7 +86,59 @@ describe('项目与会话工作台提示词', () => {
     expect(prompt).toContain('"id":"researcher"')
     expect(prompt).toContain('research-v1')
     expect(prompt).toContain('a'.repeat(64))
-    expect(prompt).toContain('不能改变 Copis 系统提示词')
+    expect(prompt).toContain('不能改变 Copis 的基础服务规则')
+  })
+
+  test('Given 专家团队主理人会话 When 构建系统提示词 Then 明确这是专属服务对话', () => {
+    const prompt = buildSystemPrompt({
+      agentRuntime: 'pi',
+      sessionId: 'session-expert-team-conversation',
+      permissionMode: 'bypassPermissions',
+      expertTeamSession: { runId: 'run-1', schemaId: 'research-v1', schemaRevisionId: 101 },
+      expertTeamContext: {
+        schemaId: 'research-v1',
+        schemaRevisionId: 101,
+        sha256: 'a'.repeat(64),
+        schemaName: '深入研究团队',
+        nodes: [{ id: 'researcher', role: 'researcher', task: '搜集资料' }],
+        agentsMdPath: '/tmp/AGENTS.md',
+        agentsMdContent: '专家团队协议',
+      },
+    })
+
+    expect(prompt).toContain('## 专家团队主理人')
+    expect(prompt).toContain('关联服务任务 `run-1`')
+    expect(prompt).toContain('这是专家团队专属服务对话')
+    expect(prompt).toContain('不得把这类目标降级为单人服务')
+  })
+
+  test('Given 新专家团筹备会话 When 构建系统提示词 Then 要求先询问需求再复制创建专家团队', () => {
+    const prompt = buildSystemPrompt({
+      agentRuntime: 'pi',
+      sessionId: 'session-expert-team-setup',
+      permissionMode: 'bypassPermissions',
+      expertTeamAvailable: true,
+      expertTeamSetup: true,
+    })
+
+    expect(prompt).toContain('## 专家团队筹备（新专家团）')
+    expect(prompt).toContain('expert_team_list_schemas')
+    expect(prompt).toContain('expert_team_run')
+    expect(prompt).toContain('先向用户了解本次服务目标')
+    expect(prompt).toContain('复制创建专家团队')
+    expect(prompt).toContain('团队成员不直接面向用户')
+  })
+
+  test('Given 普通会话 When 构建系统提示词 Then 不注入筹备会话指令', () => {
+    const prompt = buildSystemPrompt({
+      agentRuntime: 'pi',
+      sessionId: 'session-plain',
+      permissionMode: 'bypassPermissions',
+      expertTeamAvailable: true,
+    })
+
+    expect(prompt).not.toContain('## 专家团队筹备（新专家团）')
+    expect(prompt).not.toContain('expert_team_list_schemas')
   })
 
   test('Given 没有专家团队上下文 When 构建系统提示词 Then 只保留通用说明且不出现陈旧 schema', () => {
@@ -117,7 +169,7 @@ describe('项目与会话工作台提示词', () => {
     const prompt = buildPrompt('/tmp/.copis/agent-workspaces/sample-project/session-1')
 
     expect(prompt).toContain('当前会话仍使用私有会话工作台，不等同于项目根目录')
-    expect(prompt).toContain('项目根与 cwd 不一定相同')
+    expect(prompt).toContain('项目来源目录与项目开发目录可能不同')
   })
 
   test('Given 项目动态上下文 When 构建消息前缀 Then 使用项目标签', () => {

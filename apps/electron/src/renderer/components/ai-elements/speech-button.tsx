@@ -5,10 +5,12 @@
  */
 
 import { useCallback, useEffect, useState } from 'react'
+import { useSetAtom } from 'jotai'
 import { Loader2, MicIcon } from 'lucide-react'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
+import { workingSettingsOpenAtom, workingSettingsSectionAtom } from '@/atoms/working-atoms'
 import {
   Tooltip,
   TooltipContent,
@@ -40,6 +42,8 @@ export function SpeechButton({
   disabled = false,
   className,
 }: SpeechButtonProps): React.ReactElement {
+  const setWorkingSettingsOpen = useSetAtom(workingSettingsOpenAtom)
+  const setWorkingSettingsSection = useSetAtom(workingSettingsSectionAtom)
   const [voiceStatus, setVoiceStatus] = useState<InlineVoiceStatus>(IDLE_VOICE_STATUS)
   const isRecording = voiceStatus.status === 'recording'
   const isStopping = voiceStatus.status === 'connecting' || voiceStatus.status === 'stopping'
@@ -64,7 +68,16 @@ export function SpeechButton({
       try {
         const settings = await window.electronAPI.getVoiceDictationSettings()
         if (!settings.enabled) {
-          toast.info('请先在设置中打开语音输入开关')
+          toast.info('请先在设置中打开语音输入开关', {
+            description: '语音输入开关位于「设置 > 语音输入」。',
+            action: {
+              label: '去设置',
+              onClick: () => {
+                setWorkingSettingsSection('voice-input')
+                setWorkingSettingsOpen(true)
+              },
+            },
+          })
           return
         }
 
@@ -74,7 +87,7 @@ export function SpeechButton({
         toast.error('切换语音输入失败')
       }
     })()
-  }, [])
+  }, [setWorkingSettingsOpen, setWorkingSettingsSection])
 
   return (
     <Tooltip>

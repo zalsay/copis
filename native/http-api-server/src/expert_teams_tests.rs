@@ -258,6 +258,74 @@
     }
 
     #[test]
+    fn 工作区绑定和运行在重启后按_schema_恢复() {
+        let directory = test_directory("workspace-recovery");
+        let store = ExpertTeamStore::open(&directory).unwrap();
+        store
+            .publish_schema(schema(Some("team-a"), vec!["research"]))
+            .unwrap();
+        store
+            .publish_schema(schema(Some("team-b"), vec!["research"]))
+            .unwrap();
+        store
+            .bind_workspace(
+                "project-a",
+                WorkspaceBindingInput {
+                    schema_id: Some("team-a".to_string()),
+                    schema_revision: None,
+                    schema_revision_id: None,
+                },
+            )
+            .unwrap();
+        let expected_run = store
+            .create_run(RunCreateInput {
+                workspace_slug: "project-a".to_string(),
+                schema_id: Some("team-a".to_string()),
+                schema_revision: None,
+                schema_revision_id: None,
+                input: json!({ "source": "expert-team-workbench-start" }),
+            })
+            .unwrap();
+        store
+            .create_run(RunCreateInput {
+                workspace_slug: "project-a".to_string(),
+                schema_id: Some("team-b".to_string()),
+                schema_revision: None,
+                schema_revision_id: None,
+                input: json!(null),
+            })
+            .unwrap();
+        store
+            .create_run(RunCreateInput {
+                workspace_slug: "project-b".to_string(),
+                schema_id: Some("team-a".to_string()),
+                schema_revision: None,
+                schema_revision_id: None,
+                input: json!(null),
+            })
+            .unwrap();
+        drop(store);
+
+        let reopened = ExpertTeamStore::open(&directory).unwrap();
+        let binding = reopened.get_workspace_binding("project-a").unwrap();
+        let runs = reopened.list_runs(Some("project-a"), Some("team-a")).unwrap();
+        assert_eq!(binding["schemaId"], "team-a");
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0]["id"], expected_run["id"]);
+
+        let response = handle_request(
+            &reopened,
+            "GET",
+            "/api/expert-teams/runs?workspaceSlug=project-a&schemaId=team-a",
+            &[],
+        )
+        .unwrap();
+        assert_eq!(response.status, 200);
+        assert_eq!(response.body["runs"].as_array().unwrap().len(), 1);
+        assert_eq!(response.body["runs"][0]["id"], expected_run["id"]);
+    }
+
+    #[test]
     fn request_routes_use_camel_case_and_error_shape() {
         let store = store();
         let body = serde_json::to_vec(&schema(None, vec!["research"])).unwrap();

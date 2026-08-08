@@ -344,7 +344,8 @@
   color: var(--ui-primary);
 }
 
-.copis-working-settings-vip-button {
+.copis-working-settings-vip-button,
+.copis-working-settings-invite-button {
   border-color: color-mix(in srgb, var(--ui-primary) 38%, transparent);
   background: color-mix(in srgb, var(--ui-primary) 13%, var(--ui-primary-background));
   color: var(--ui-primary);
@@ -376,10 +377,9 @@
   display: flex;
   min-height: 38px;
   align-items: center;
-  justify-content: space-between;
   gap: 8px;
   margin-top: 18px;
-  padding-left: 11px;
+  padding: 0 11px;
   border: 1px solid hsl(var(--border) / 0.55);
   border-radius: 7px;
   background: hsl(var(--muted) / 0.54);
@@ -389,22 +389,11 @@
 }
 
 .copis-working-settings-invite-code > span {
+  display: block;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.copis-working-settings-invite-code button {
-  min-height: 32px;
-  padding: 0 9px;
-  border: 0;
-  border-radius: 6px;
-  background: transparent;
-  color: var(--ui-primary);
-  font: inherit;
-  font-size: 12px;
-  cursor: pointer;
 }
 
 .copis-working-settings-invite-stats {

@@ -121,7 +121,7 @@ impl WorkspaceMcpStore {
     }
 }
 
-fn is_safe_workspace_slug(slug: &str) -> bool {
+pub(crate) fn is_safe_workspace_slug(slug: &str) -> bool {
     !slug.is_empty()
         && slug
             .bytes()

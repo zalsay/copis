@@ -11,6 +11,8 @@ import type {
 import { getAgentSessionMeta } from './agent-session-manager'
 import {
   getAgentWorkspace,
+  getAgentWorkspaceBySlug,
+  getAgentWorkspaceReadableRoots,
   getProjectFilesPath,
   getWorkspaceAttachedDirectories,
   getWorkspaceAttachedFiles,
@@ -163,7 +165,9 @@ function getAuthorizedRoots(context?: FileAccessOptions): string[] {
   if (context?.workspaceSlug) workspaceSlugs.add(context.workspaceSlug)
 
   for (const slug of workspaceSlugs) {
-    roots.push(getProjectFilesPath(slug))
+    const workspace = getAgentWorkspaceBySlug(slug)
+    if (workspace) roots.push(...getAgentWorkspaceReadableRoots(workspace))
+    else roots.push(getProjectFilesPath(slug))
     roots.push(...getWorkspaceAttachedDirectories(slug))
     roots.push(...getWorkspaceAttachedFiles(slug))
   }

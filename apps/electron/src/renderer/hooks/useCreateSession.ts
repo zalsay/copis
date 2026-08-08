@@ -15,9 +15,11 @@ import { activeViewAtom } from '@/atoms/active-view'
 import { draftSessionIdsAtom } from '@/atoms/draft-session-atoms'
 import { useOpenSession } from './useOpenSession'
 import { isAgentSessionMeta, sanitizeAgentSessions } from '@/lib/agent-session-list'
-import { isHttpApiBridgeActive } from '@/lib/http-api-bridge'
+import type { AgentExpertTeamSession } from '@copis/shared'
 
 interface CreateSessionOptions {
+  /** 覆盖默认标题。 */
+  title?: string
   /** 标记为草稿会话（不在侧边栏显示，发送首条消息后自动取消） */
   draft?: boolean
   /** 覆盖默认渠道 ID（仅 Agent 会话） */
@@ -26,6 +28,10 @@ interface CreateSessionOptions {
   modelId?: string
   /** 覆盖当前工作区 ID（仅 Agent 会话） */
   workspaceId?: string
+  /** 专家团队工作台创建的主控会话关联信息。 */
+  expertTeamSession?: AgentExpertTeamSession
+  /** 由「新专家团」入口创建的筹备会话：主理人 Agent 先询问需求，再组建专家团队。 */
+  expertTeamSetup?: boolean
 }
 
 interface CreateSessionActions {
@@ -45,13 +51,14 @@ export function useCreateSession(): CreateSessionActions {
   const currentWorkspaceId = useAtomValue(currentAgentWorkspaceIdAtom)
 
   const createAgent = async (options?: CreateSessionOptions): Promise<string | undefined> => {
-    if (isHttpApiBridgeActive()) return undefined
     try {
       const meta = await window.electronAPI.createAgentSession(
-        undefined,
+        options?.title,
         options?.channelId ?? agentChannelId ?? undefined,
         options?.workspaceId ?? currentWorkspaceId ?? undefined,
         options?.modelId ?? agentModelId ?? undefined,
+        options?.expertTeamSession,
+        options?.expertTeamSetup,
       )
       if (!isAgentSessionMeta(meta)) throw new Error('创建 Agent 会话未返回有效会话')
       setAgentSessions((prev) => [meta, ...sanitizeAgentSessions(prev)])

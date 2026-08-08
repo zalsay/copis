@@ -403,7 +403,7 @@ export const agentSidePanelOpenAtom = atomWithStorage<boolean>('copis-agent-side
 /** 侧面板宽度（全局共享，用户拖拽后持久化） */
 export const agentSidePanelWidthAtom = atomWithStorage<number>('copis-agent-sidepanel-width', 280)
 
-/** 文件来源选择：按会话持久化，未存储的会话默认显示会话文件。 */
+/** 右侧项目区选择：保留 session 值兼容既有存储；session = 项目列表，project = 项目文件。 */
 export type AgentFileSourceFilter = 'session' | 'project'
 export const agentFileSourceFilterMapAtom = atomWithStorage<Record<string, AgentFileSourceFilter>>(
   'copis-agent-file-source-filter-map',
