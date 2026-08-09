@@ -78,6 +78,8 @@ interface PendingDeleteSession {
 }
 
 const CONVERSATION_PREVIEW_LIMIT = 5
+/** 项目菜单的估算高度，用于判断向下弹出是否会超出侧栏底部。 */
+const PROJECT_MENU_ESTIMATED_HEIGHT = 44
 
 function formatSessionTime(timestamp: number): string {
   const date = new Date(timestamp)
@@ -99,6 +101,7 @@ export function CopisWorkingSidebar({ width, noTransition = false }: CopisWorkin
   const [expandedWorkspaceId, setExpandedWorkspaceId] = React.useState<string | null>(null)
   const [expandedConversationWorkspaceIds, setExpandedConversationWorkspaceIds] = React.useState<Set<string>>(new Set())
   const [openMenuWorkspaceId, setOpenMenuWorkspaceId] = React.useState<string | null>(null)
+  const [openMenuDirection, setOpenMenuDirection] = React.useState<'down' | 'up'>('down')
   const [pendingDeleteSession, setPendingDeleteSession] = React.useState<PendingDeleteSession | null>(null)
   const [createWorkspaceOpen, setCreateWorkspaceOpen] = useAtom(createWorkspaceDialogOpenAtom)
   const [feedbackOpen, setFeedbackOpen] = React.useState(false)
@@ -449,10 +452,11 @@ export function CopisWorkingSidebar({ width, noTransition = false }: CopisWorkin
               const hasHiddenSessions = workspaceSessions.length > visibleSessions.length
               const isActiveWorkspace = workspace.id === currentWorkspaceId
               const isMenuOpen = openMenuWorkspaceId === workspace.id
+              const isMenuOpenUp = isMenuOpen && openMenuDirection === 'up'
 
               return (
                 <div className="copis-working-project-group" key={workspace.id}>
-                  <div className={cn('copis-working-project-row', isActiveWorkspace && 'active', isMenuOpen && 'menu-open')} onClick={() => selectLocalWorkspace(workspace.id)}>
+                  <div className={cn('copis-working-project-row', isActiveWorkspace && 'active', isMenuOpen && 'menu-open', isMenuOpenUp && 'menu-up')} onClick={() => selectLocalWorkspace(workspace.id)}>
                     <button type="button" className="copis-working-project-main" onClick={(event) => { event.stopPropagation(); selectLocalWorkspace(workspace.id) }}>
                       <FolderOpen aria-hidden="true" />
                       <span>{workspace.name}</span>
@@ -462,7 +466,18 @@ export function CopisWorkingSidebar({ width, noTransition = false }: CopisWorkin
                       {isWorkspaceExpanded ? <ChevronDown aria-hidden="true" /> : <ChevronRight aria-hidden="true" />}
                     </button>
                     {workspace.slug !== 'default' && (
-                      <button type="button" className="copis-working-project-menu-trigger" aria-label={`${workspace.name} 项目菜单`} aria-haspopup="menu" aria-expanded={isMenuOpen} onClick={(event) => { event.stopPropagation(); setOpenMenuWorkspaceId(isMenuOpen ? null : workspace.id) }}>
+                      <button type="button" className="copis-working-project-menu-trigger" aria-label={`${workspace.name} 项目菜单`} aria-haspopup="menu" aria-expanded={isMenuOpen} onClick={(event) => {
+                        event.stopPropagation()
+                        if (isMenuOpen) {
+                          setOpenMenuWorkspaceId(null)
+                          return
+                        }
+                        // 靠近侧栏底部时向下弹出会被下方组件遮挡，改为向上弹出。
+                        const triggerRect = event.currentTarget.getBoundingClientRect()
+                        const spaceBelow = window.innerHeight - triggerRect.bottom
+                        setOpenMenuDirection(spaceBelow < PROJECT_MENU_ESTIMATED_HEIGHT ? 'up' : 'down')
+                        setOpenMenuWorkspaceId(workspace.id)
+                      }}>
                         <MoreHorizontal aria-hidden="true" />
                       </button>
                     )}

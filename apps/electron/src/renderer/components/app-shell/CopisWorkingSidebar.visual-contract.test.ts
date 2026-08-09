@@ -85,4 +85,13 @@ describe('Working 侧边栏视觉契约', () => {
     expect(accountMarkRule).not.toContain('color: hsl(var(--primary))')
     expect(accountMarkRule).not.toContain('#c8a7ff')
   })
+
+  test('Given 最后一个项目靠近侧栏底部 When 打开项目菜单 Then 菜单向上弹出避免被下方组件遮盖', () => {
+    expect(sidebarSource).toContain('getBoundingClientRect()')
+    expect(sidebarSource).toContain('setOpenMenuDirection')
+    expect(sidebarSource).toContain("'menu-up'")
+    expect(sidebarStyles).toContain('.copis-working-project-row.menu-up .copis-working-project-menu')
+    expect(sidebarStyles).toContain('top: auto')
+    expect(sidebarStyles).toContain('bottom: 30px')
+  })
 })

@@ -335,6 +335,11 @@
   box-shadow: 0 12px 28px rgba(0, 0, 0, 0.28);
 }
 
+.copis-working-project-row.menu-up .copis-working-project-menu {
+  top: auto;
+  bottom: 30px;
+}
+
 .copis-working-project-menu button {
   width: 100%;
   min-height: 30px;

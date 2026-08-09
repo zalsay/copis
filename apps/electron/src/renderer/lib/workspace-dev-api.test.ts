@@ -6,9 +6,13 @@ import {
 } from './workspace-dev-api'
 
 const originalFetch = globalThis.fetch
+const originalSetTimeout = globalThis.setTimeout
+const originalClearTimeout = globalThis.clearTimeout
 
 afterEach(() => {
   globalThis.fetch = originalFetch
+  globalThis.setTimeout = originalSetTimeout
+  globalThis.clearTimeout = originalClearTimeout
 })
 
 describe('workspace development API', () => {
@@ -32,5 +36,32 @@ describe('workspace development API', () => {
     expect(calls[1]?.init?.body).toBe(JSON.stringify({ projectPath: 'landing' }))
     expect(calls[2]?.url).toContain('/api/workspaces/demo%20workspace/dev-projects/stop')
     expect(calls[2]?.init?.method).toBe('POST')
+  })
+
+  test('Given 开发服务未响应 When 停止项目 Then 在超时后返回可重试错误', async () => {
+    let requestSignal: AbortSignal | undefined
+    globalThis.setTimeout = ((handler: TimerHandler) => {
+      if (typeof handler === 'function') {
+        const callback = handler as () => void
+        queueMicrotask(callback)
+      }
+      return 0 as unknown as ReturnType<typeof setTimeout>
+    }) as unknown as typeof setTimeout
+    globalThis.clearTimeout = (() => undefined) as typeof clearTimeout
+    globalThis.fetch = ((_: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+      requestSignal = init?.signal ?? undefined
+      return new Promise<Response>((_, reject) => {
+        requestSignal?.addEventListener('abort', () => {
+          reject(new DOMException('请求已中止', 'AbortError'))
+        }, { once: true })
+      })
+    }) as typeof fetch
+
+    await expect(stopWorkspaceDevProject('default', 'workbench')).rejects.toMatchObject({
+      message: '项目开发服务响应超时，请重试',
+      status: 408,
+      code: 'REQUEST_TIMEOUT',
+    })
+    expect(requestSignal?.aborted).toBe(true)
   })
 })

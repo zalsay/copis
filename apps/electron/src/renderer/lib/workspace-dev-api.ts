@@ -16,6 +16,8 @@ interface WorkspaceDevErrorPayload {
   code?: string
 }
 
+const WORKSPACE_DEV_REQUEST_TIMEOUT_MS = 15_000
+
 export class WorkspaceDevApiError extends Error {
   constructor(
     message: string,
@@ -37,30 +39,47 @@ function encodeWorkspaceSlug(workspaceSlug: string): string {
 }
 
 async function request<T>(path: string, method = 'GET', body?: unknown): Promise<T> {
-  const response = await fetch(`${RENDERER_HTTP_API_BASE_URL}${path}`, withHttpApiWebToken({
-    method,
-    headers: {
-      Accept: 'application/json',
-      ...(body === undefined ? {} : { 'Content-Type': 'application/json' }),
-    },
-    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-  }))
-  const text = await response.text()
-  let payload: unknown
+  const controller = new AbortController()
+  let timedOut = false
+  const timeout = globalThis.setTimeout(() => {
+    timedOut = true
+    controller.abort()
+  }, WORKSPACE_DEV_REQUEST_TIMEOUT_MS)
+
   try {
-    payload = text ? JSON.parse(text) as unknown : undefined
-  } catch {
-    payload = undefined
+    const response = await fetch(`${RENDERER_HTTP_API_BASE_URL}${path}`, withHttpApiWebToken({
+      method,
+      headers: {
+        Accept: 'application/json',
+        ...(body === undefined ? {} : { 'Content-Type': 'application/json' }),
+      },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      signal: controller.signal,
+    }))
+    const text = await response.text()
+    let payload: unknown
+    try {
+      payload = text ? JSON.parse(text) as unknown : undefined
+    } catch {
+      payload = undefined
+    }
+    if (!response.ok) {
+      const error = isErrorPayload(payload) ? payload : {}
+      throw new WorkspaceDevApiError(
+        error.error ?? `项目开发服务请求失败（${response.status}）`,
+        response.status,
+        error.code,
+      )
+    }
+    return payload as T
+  } catch (error: unknown) {
+    if (timedOut) {
+      throw new WorkspaceDevApiError('项目开发服务响应超时，请重试', 408, 'REQUEST_TIMEOUT')
+    }
+    throw error
+  } finally {
+    globalThis.clearTimeout(timeout)
   }
-  if (!response.ok) {
-    const error = isErrorPayload(payload) ? payload : {}
-    throw new WorkspaceDevApiError(
-      error.error ?? `项目开发服务请求失败（${response.status}）`,
-      response.status,
-      error.code,
-    )
-  }
-  return payload as T
 }
 
 export function listWorkspaceDevProjects(workspaceSlug: string): Promise<WorkspaceDevProject[]> {
