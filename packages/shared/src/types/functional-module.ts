@@ -10,7 +10,7 @@ export type FunctionalModulePlatform = 'darwin' | 'linux' | 'win32'
 
 export type FunctionalModuleArchitecture = 'arm64' | 'x64'
 
-export type FunctionalModuleFormat = 'binary'
+export type FunctionalModuleFormat = 'binary' | 'tar.gz'
 
 export interface FunctionalModuleManifestArtifact {
   version: string

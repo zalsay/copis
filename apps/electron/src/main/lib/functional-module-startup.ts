@@ -33,7 +33,7 @@ const MODULE_PROGRESS_START = 0.05
 const MODULE_PROGRESS_END = 0.95
 const HEALTH_PROGRESS_START = 0.95
 const HEALTH_PROGRESS_END = 1
-const REQUIRED_MODULES: readonly FunctionalModuleName[] = ['officecli', 'rust-http-api']
+const REQUIRED_MODULES: readonly FunctionalModuleName[] = ['node-runtime', 'officecli', 'rust-http-api']
 
 export interface FunctionalModuleStartupOptions {
   rootDir?: string
@@ -101,6 +101,14 @@ export function assertRequiredModuleArtifacts(
   const rustApi = byName.get('rust-http-api')
   if (!rustApi) throw new Error('组件清单缺少必要的系统核心模块')
   if (!rustApi.required) throw new Error('系统核心模块必须是必要组件')
+
+  const nodeRuntime = byName.get('node-runtime')
+  if (!nodeRuntime) throw new Error('组件清单缺少必要的 Node.js 运行环境')
+  if (!nodeRuntime.required) throw new Error('Node.js 运行环境必须是必要组件')
+  const nodeEntrypoint = nodeRuntime.platform === 'win32' ? 'bin/node.exe' : 'bin/node'
+  if (nodeRuntime.format !== 'tar.gz' || nodeRuntime.entrypoint !== nodeEntrypoint) {
+    throw new Error('Node.js 运行环境模块格式不正确')
+  }
 }
 
 export function ensureRequiredFunctionalModules(
@@ -326,7 +334,9 @@ function createHttpApiOptions(options: FunctionalModuleStartupOptions & { rootDi
 }
 
 function displayName(name: FunctionalModuleName): string {
-  return name === 'officecli' ? 'Office 文档支持' : '系统核心模块'
+  if (name === 'node-runtime') return 'Node.js 运行环境'
+  if (name === 'officecli') return 'Office 文档支持'
+  return '系统核心模块'
 }
 
 function clamp01(value: number): number {

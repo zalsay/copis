@@ -1,5 +1,5 @@
 import * as React from 'react'
-import { CircleAlert, FolderCode, LoaderCircle, Play, RefreshCw, Square } from 'lucide-react'
+import { CircleAlert, ExternalLink, FolderCode, LoaderCircle, Play, RefreshCw, Square } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import {
@@ -15,6 +15,11 @@ interface WorkspaceDevProjectsProps {
 
 function updateProject(items: WorkspaceDevProject[], updated: WorkspaceDevProject): WorkspaceDevProject[] {
   return items.map((project) => project.projectPath === updated.projectPath ? updated : project)
+}
+
+async function openProjectUrl(project: WorkspaceDevProject): Promise<void> {
+  if (!project.url) return
+  await window.electronAPI.webTabs.create({ url: project.url, activate: true })
 }
 
 export function WorkspaceDevProjects({ workspaceSlug }: WorkspaceDevProjectsProps): React.ReactElement {
@@ -52,6 +57,14 @@ export function WorkspaceDevProjects({ workspaceSlug }: WorkspaceDevProjectsProp
         ? await stopWorkspaceDevProject(workspaceSlug, project.projectPath)
         : await startWorkspaceDevProject(workspaceSlug, project.projectPath)
       setProjects((current) => updateProject(current, updated))
+      if (updated.status === 'running' && updated.url) {
+        try {
+          await window.electronAPI.webTabs.create({ url: updated.url, activate: true })
+        } catch (browserError) {
+          const message = browserError instanceof Error ? browserError.message : '未知错误'
+          setError(`开发服务已启动，但无法打开内置浏览器：${message}`)
+        }
+      }
       window.setTimeout(() => void refresh(), 900)
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : '更新开发服务失败')
@@ -59,6 +72,16 @@ export function WorkspaceDevProjects({ workspaceSlug }: WorkspaceDevProjectsProp
       setBusyProjectPath(null)
     }
   }, [refresh, workspaceSlug])
+
+  const reopenProject = React.useCallback(async (project: WorkspaceDevProject) => {
+    setError(null)
+    try {
+      await openProjectUrl(project)
+    } catch (browserError) {
+      const message = browserError instanceof Error ? browserError.message : '未知错误'
+      setError(`无法打开项目页面：${message}`)
+    }
+  }, [])
 
   if (!workspaceSlug) {
     return <EmptyState text="请选择工作区后查看项目" />
@@ -113,6 +136,24 @@ export function WorkspaceDevProjects({ workspaceSlug }: WorkspaceDevProjectsProp
                     {project.port ? `  :${project.port}` : ''}
                   </div>
                 </div>
+                {running && project.url && (
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        className="size-7 text-primary hover:text-primary"
+                        onClick={() => void reopenProject(project)}
+                        disabled={busy}
+                        aria-label={`重新打开 ${project.name}`}
+                      >
+                        <ExternalLink className="size-3.5" />
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent>重新打开项目页面</TooltipContent>
+                  </Tooltip>
+                )}
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <Button

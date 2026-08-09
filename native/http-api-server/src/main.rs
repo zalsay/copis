@@ -15,8 +15,8 @@ mod memory;
 mod pi_rpc;
 mod runtime;
 mod skill_market;
-mod workspace_mcp;
 mod workspace_dev;
+mod workspace_mcp;
 mod workspace_skills;
 
 use expert_teams::{ExpertTeamError, ExpertTeamStore};
@@ -33,8 +33,8 @@ use pi_rpc::{
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::{json, Value};
 use skill_market::{handle_request as handle_skill_market_request, SkillMarketState};
-use workspace_mcp::{WorkspaceMcpError, WorkspaceMcpStore};
 use workspace_dev::{WorkspaceDevActionInput, WorkspaceDevError, WorkspaceDevStore};
+use workspace_mcp::{WorkspaceMcpError, WorkspaceMcpStore};
 use workspace_skills::{WorkspaceSkillsError, WorkspaceSkillsStore};
 
 const HOST: &str = "127.0.0.1";
@@ -51,6 +51,7 @@ const AGENT_FILE_TOKEN_HEADER: &str = "x-copis-agent-file-token";
 const INTERNAL_RECORDING_PREFIX: &str = "/internal/browser-workflows/recordings/";
 const INTERNAL_WORKING_AUTH_PATH: &str = "/internal/working-auth/token";
 const INTERNAL_AGENT_FILES_PREFIX: &str = "/api/internal/agent/files/";
+const INTERNAL_AGENT_SHELL_PATH: &str = "/api/internal/agent/shell";
 const VITE_DEV_ORIGINS: [&str; 2] = ["http://127.0.0.1:5174", "http://localhost:5174"];
 // 业务桥请求等待 Electron 响应的上限，超时后清理 pending 避免线程永久挂起。
 const BRIDGE_REQUEST_TIMEOUT_SECS: u64 = 60;
@@ -954,6 +955,10 @@ fn is_internal_path(path: &str) -> bool {
     path.starts_with("/internal/") || path.starts_with("/api/internal/")
 }
 
+fn is_internal_agent_shell_path(path: &str) -> bool {
+    path == INTERNAL_AGENT_SHELL_PATH
+}
+
 /// 浏览器 Origin 请求必须携带 web 令牌；Vite 开发来源与无 Origin 的本地进程请求除外。
 /// 内部路由与健康检查继续由各自逻辑放行，不在此处校验。
 fn is_web_route_authorized(origin: Option<&str>, request: &HttpRequest, path: &str) -> bool {
@@ -1164,6 +1169,12 @@ fn handle_connection(
         }
         .to_string();
         send_json_response(&mut stream, 200, &body, origin);
+        let _ = stream.shutdown(Shutdown::Both);
+        return;
+    }
+
+    if is_internal_agent_shell_path(path) {
+        handle_internal_agent_shell(&mut stream, &request, origin, workers.as_ref());
         let _ = stream.shutdown(Shutdown::Both);
         return;
     }
@@ -1396,10 +1407,7 @@ fn is_workspace_mcp_route(method: &str, path: &str) -> bool {
         return false;
     }
     let parts: Vec<&str> = path.split('/').collect();
-    parts.len() == 5
-        && parts[1] == "api"
-        && parts[2] == "workspaces"
-        && parts[4] == "mcp"
+    parts.len() == 5 && parts[1] == "api" && parts[2] == "workspaces" && parts[4] == "mcp"
 }
 
 fn is_workspace_skills_route(method: &str, path: &str) -> bool {
@@ -1407,16 +1415,22 @@ fn is_workspace_skills_route(method: &str, path: &str) -> bool {
         return false;
     }
     let parts: Vec<&str> = path.split('/').collect();
-    parts.len() == 5
-        && parts[1] == "api"
-        && parts[2] == "workspaces"
-        && parts[4] == "skills"
+    parts.len() == 5 && parts[1] == "api" && parts[2] == "workspaces" && parts[4] == "skills"
 }
 
 fn is_workspace_dev_route(method: &str, path: &str) -> bool {
     let parts: Vec<&str> = path.split('/').collect();
-    (method == "GET" && parts.len() == 5 && parts[1] == "api" && parts[2] == "workspaces" && parts[4] == "dev-projects")
-        || (method == "POST" && parts.len() == 6 && parts[1] == "api" && parts[2] == "workspaces" && parts[4] == "dev-projects" && matches!(parts[5], "start" | "stop"))
+    (method == "GET"
+        && parts.len() == 5
+        && parts[1] == "api"
+        && parts[2] == "workspaces"
+        && parts[4] == "dev-projects")
+        || (method == "POST"
+            && parts.len() == 6
+            && parts[1] == "api"
+            && parts[2] == "workspaces"
+            && parts[4] == "dev-projects"
+            && matches!(parts[5], "start" | "stop"))
 }
 
 fn handle_workspace_dev_route(
@@ -1433,10 +1447,14 @@ fn handle_workspace_dev_route(
         "POST" => match serde_json::from_slice::<WorkspaceDevActionInput>(&request.body) {
             Ok(input) if parts[5] == "start" => store.start_project(slug, &input.project_path),
             Ok(input) if parts[5] == "stop" => store.stop_project(slug, &input.project_path),
-            Ok(_) => Err(WorkspaceDevError::NotFound("开发服务路由不存在".to_string())),
+            Ok(_) => Err(WorkspaceDevError::NotFound(
+                "开发服务路由不存在".to_string(),
+            )),
             Err(_) => Err(WorkspaceDevError::InvalidProject),
         },
-        _ => Err(WorkspaceDevError::NotFound("开发服务路由不存在".to_string())),
+        _ => Err(WorkspaceDevError::NotFound(
+            "开发服务路由不存在".to_string(),
+        )),
     };
     match result {
         Ok(value) => send_json_response(stream, 200, &value.to_string(), origin),
@@ -1497,8 +1515,8 @@ fn handle_workspace_mcp_route(
             )),
         },
         _ => {
-            let body = json!({ "error": "MCP 方法不支持", "code": "method_not_allowed" })
-                .to_string();
+            let body =
+                json!({ "error": "MCP 方法不支持", "code": "method_not_allowed" }).to_string();
             send_json_response(stream, 405, &body, origin);
             return;
         }
@@ -1812,6 +1830,42 @@ fn handle_internal_agent_files(
     ) {
         Ok(Some(body)) => send_json_response(stream, 200, &body.to_string(), origin),
         Ok(None) => send_empty_response(stream, 204, origin),
+        Err(error) => {
+            let body = json!({ "error": error.message, "code": error.code }).to_string();
+            send_json_response(stream, error.status, &body, origin);
+        }
+    }
+}
+
+fn handle_internal_agent_shell(
+    stream: &mut TcpStream,
+    request: &HttpRequest,
+    origin: Option<&str>,
+    workers: &PiWorkerManager,
+) {
+    if !request.method.eq_ignore_ascii_case("POST") {
+        send_json_response(
+            stream,
+            405,
+            r#"{"error":"Agent 命令接口只支持 POST","code":"method_not_allowed"}"#,
+            origin,
+        );
+        return;
+    }
+    let Some(worker_token) = request.headers.get(AGENT_FILE_TOKEN_HEADER) else {
+        send_json_response(
+            stream,
+            403,
+            r#"{"error":"Agent 命令能力令牌缺失","code":"agent_file_token_required"}"#,
+            None,
+        );
+        return;
+    };
+    match workers
+        .file_policies()
+        .handle_shell_with_worker_token(worker_token, &request.body)
+    {
+        Ok(body) => send_json_response(stream, 200, &body.to_string(), origin),
         Err(error) => {
             let body = json!({ "error": error.message, "code": error.code }).to_string();
             send_json_response(stream, error.status, &body, origin);

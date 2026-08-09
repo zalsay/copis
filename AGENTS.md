@@ -24,11 +24,11 @@ Bun workspace monorepo：
 ```
 copis-v2/
 ├── packages/
-│   ├── shared/     # 共享类型、IPC 通道常量、配置、工具函数 (v0.1.62)
+│   ├── shared/     # 共享类型、IPC 通道常量、配置、工具函数 (v0.1.63)
 │   ├── core/       # AI Provider 适配器、代码高亮服务 (v0.2.18)
 │   └── ui/         # 共享 UI 组件 (CodeBlock, MermaidBlock) (v0.1.10)
 └── apps/
-    └── electron/   # Electron 桌面应用 (v0.0.35)
+    └── electron/   # Electron 桌面应用 (v0.0.39)
         └── src/
             ├── main/       # 主进程 + 服务层 (main/lib/)
             ├── preload/    # IPC 上下文桥接
@@ -41,7 +41,7 @@ copis-v2/
 
 ### 包职责详解
 
-#### @copis/shared (v0.1.62)
+#### @copis/shared (v0.1.63)
 - **导出模块**：`./types`、`./config`、`./utils`、`./constants/permission-rules`
 - **关键类型**：`AgentMessage`、`ChatMessage`、`Channel`、`PermissionRequest`、`FeishuConfig`
 - **依赖**：无运行时依赖（仅 TypeScript）
@@ -57,7 +57,7 @@ copis-v2/
 - **依赖**：`@copis/core`、`beautiful-mermaid`、`mermaid`、`shiki`
 - **Peer 依赖**：`react@^18.3.0`、`react-dom@^18.3.0`
 
-#### @copis/electron (v0.0.35)
+#### @copis/electron (v0.0.39)
 - **职责**：Electron 桌面应用主体，集成所有包
 - **关键依赖**：
   - `@earendil-works/pi-coding-agent@0.82.1`、`pi-agent-core@0.82.1`、`pi-ai@0.82.1` - Pi Agent runtime
@@ -104,6 +104,7 @@ Pi Worker 的自包含运行时由应用构建链生成，不需要在开发环�
 ```bash
 cd apps/electron
 bun run build:cli     # Bun build --compile，生成当前平台/架构的 copis(.exe)
+bun run build:node-runtime-module # 打包用户工作区项目使用的 Node.js + npm runtime
 ```
 
 ### 仓库级构建与部署
@@ -137,10 +138,11 @@ bash ./build.sh
 - `deploy.ps1`、`deploy.sh` 默认负责 Rust API 二进制、功能模块 manifest 和 COS 发布；Electron 应用包只有传入 `-BuildApp` 或 `--build-app` 时才构建。
 - 发布前需要通过 `.env` 或参数提供 `COS_SECRET_ID`、`COS_SECRET_KEY`、`COS_BUCKET_URL`、`COS_PUBLIC_BASE_URL`；禁止把密钥写入 manifest、日志或构建产物。
 - `deploy.ps1` 适用于 Windows x64 Rust 构建；跨平台部署应在目标平台执行对应的 `deploy.sh`，或使用 `-SkipRustBuild` / `--skip-rust-build` 配合已经验证的目标二进制。
-- 功能模块发布包含 `rust-http-api` 和可选的 `officecli`。OfficeCLI 是外部单文件二进制，需要通过 `COPIS_OFFICECLI_BINARY` 或 `apps/electron/resources/bin/officecli.exe` 提供，并通过 `COPIS_OFFICECLI_VERSION` 指定独立于 Electron 的模块版本。
+- 功能模块发布包含 `node-runtime`、`rust-http-api` 和可选的 `officecli`。`node-runtime` 是按目标平台和架构打包的 Node.js + npm `tar.gz` 归档，终端用户无需自行安装 Node.js 或 npm；OfficeCLI 是外部单文件二进制，需要通过 `COPIS_OFFICECLI_BINARY` 或 `apps/electron/resources/bin/officecli.exe` 提供，并通过 `COPIS_OFFICECLI_VERSION` 指定独立于 Electron 的模块版本。
+- `deploy.ps1` / `deploy.sh` 默认会构建并发布 Node runtime；单模块发布可使用 `-NodeRuntimeOnly` / `--node-runtime`，已有归档可通过 `-NodeRuntimeArchive` / `--node-runtime-archive` 提供，模块版本可通过 `-NodeRuntimeVersion` / `--node-runtime-version` 指定。单模块发布会校验同一平台和架构的其他必要模块仍存在于远端 manifest。
 - 发布单个平台时必须合并 COS 中已有 manifest，保留其他平台和模块；二进制对象使用不可变版本 key，只有 manifest 允许更新。
 - `build.ps1` 和 `bun run --filter='@copis/electron' dist:win` 会在 Windows x64 构建中执行 `build:cli`；macOS ARM/Intel 需在对应 runner 上执行 `build.sh` 或 `dist:mac`，不能用其他平台的 `copis` 产物代替。
-- `--rust` / `--officecli` 是功能模块的单模块 COS 发布选项；它们与应用内的 `copis` 组合运行时构建无关，不能用功能模块二进制替代组合运行时。
+- `--rust` / `--officecli` / `--node-runtime` 是功能模块的单模块 COS 发布选项；它们与应用内的 `copis` 组合运行时构建无关，不能用功能模块二进制替代组合运行时。
 
 常用部署选项：`-SkipInstall` / `--skip-install`、`-SkipRustBuild` / `--skip-rust-build`、`-SkipPublish` / `--skip-publish`、版本、平台、架构、channel、COS 前缀和已有 Rust 二进制路径。当前 stable 的 Windows x64 OfficeCLI 模块版本为 `1.0.143`。
 
@@ -155,16 +157,19 @@ bun run generate:icons    # 生成应用图标
 bun run build:cli         # Bun build --compile → resources/bin/{platform}-{arch}/copis(.exe)
 bun run copy:pi-extensions # 复制默认 Pi 扩展及依赖闭包 → resources/pi-extensions/（build 链自动执行）
 bun run build:http-api-server # 显式构建 Rust HTTP API 功能模块
+bun run build:node-runtime-module # 将当前平台 Node.js + npm 打包为功能模块归档
 ```
 
 ## 运行时环境
 
-使用 Bun 代替 Node.js/npm/pnpm：
+仓库自身使用 Bun；工作区中的用户项目使用 Copis 随功能模块提供的 Node.js + npm：
 
 - `bun install` 安装依赖，`bun run <script>` 运行脚本
 - `bun test` 运行测试（内置测试运行器，`import { test, expect } from "bun:test"`）
 - Bun 自动加载 .env 文件（无需 dotenv）
 - 优先使用 Bun 原生 API：`Bun.file` > `node:fs`，`Bun.$\`command\`` > `execa`
+- Agent 创建的前端项目必须使用 Vue 3 + Vite；项目依赖安装和 `npm run dev` 由 Rust HTTP API 调用内置 Node/npm 完成，用户不需要在系统中安装 Node.js。
+- 每个工作区项目都位于工作区 `project/` 目录下，启动时由 Rust API 分配并持久化独立的 Vite 端口，随后由内置浏览器打开项目地址。
 
 ## 技术栈
 
@@ -380,7 +385,8 @@ bun test apps/electron/src/main/lib/web-tab-session-service.test.ts
 ├── agent-workspaces/       # Agent 工作区目录
 │   └── {workspace-slug}/
 │       ├── {session-id}/   # 会话工作目录
-│       ├── workspace-files/# 仅空白项目使用的 Copis 托管项目根
+│       ├── workspace-files/ # Copis 托管的工作区文件根
+│       │   └── project/     # Agent 创建和运行的用户项目目录
 │       ├── mcp.json        # MCP Server 配置
 │       └── skills/         # Skills 配置目录
 ├── attachments/            # 附件文件
@@ -395,6 +401,7 @@ bun test apps/electron/src/main/lib/web-tab-session-service.test.ts
 **关键设计**：
 - JSON 配置 + JSONL 追加日志，无本地数据库，文件可移植
 - Agent 工作区按 slug 隔离，每个会话独立目录
+- 工作区项目统一放在 `project/`，项目目录默认允许 Agent 写入；项目开发服务由 Rust HTTP API 使用激活的 Node.js + npm runtime 启动
 - MCP 配置和 Skills 按工作区管理
 
 ## 构建工具
@@ -421,6 +428,14 @@ bun test apps/electron/src/main/lib/web-tab-session-service.test.ts
 - 正式包启动 Rust HTTP API 时注入 `COPIS_PI_RPC_COMPILED_RUNTIME=1`、`COPIS_PI_RPC_EXECUTABLE` 和 `COPIS_CLI`；Rust `PiWorkerManager` 必须执行 `<copis> __pi-worker`，不能再寻找 `node/node.exe` 或其他托管 Node runtime。
 - 正式包找不到当前平台的组合二进制时，应报告“未找到打包的 Copis runtime，请重新安装或重新构建应用”，不能退回 Node runtime 并产生误导性的 Node 缺失错误。
 - 开发环境不要求生成 `copis.exe`：`bun run dev` 使用 `dist/pi-rpc-worker.cjs`，通过系统 Bun 或 `vendor/bun` 启动，并设置 `COPIS_PI_RPC_USE_SYSTEM_RUNTIME=1`；开发构建可以继续使用 JS Worker 热重载路径。
+
+**工作区项目 Node runtime 要求（必须遵守）：**
+- `node-runtime` 功能模块只服务工作区内用户项目的 `npm install`、`npm run dev` 等项目命令，不替代 Pi Worker 的 Bun 组合运行时。
+- Electron 启动 Rust HTTP API 时，将已激活的 Node runtime 根目录通过 `COPIS_RUNTIME_ROOT` 注入；Rust 项目启动器必须从该目录解析绝对的 `node` / `npm` 路径，不能依赖用户系统 PATH 中是否安装 Node.js。
+- Pi Agent 默认提供 `read`、`write`、`edit`、`bash` 四个基础工具。`bash` 在 Rust 文件 API 模式下由 Rust 校验会话权限后执行，只允许工作区内的依赖安装、构建、测试和本地开发命令；Agent 不得因为系统 PATH 中没有 `node` 或 `npm` 就要求用户安装运行时。
+- Agent 安装项目依赖时，应在当前项目目录单独调用 `bash` 的 `npm install`，随后再单独调用 `npm run build` 验证；禁止使用 `--prefix`、管道、重定向、命令替换或 `&&`/`;` 串联命令。
+- 项目列表只发现工作区 `project/` 下包含 `package.json` 和 Vite `dev` 脚本的项目；每个项目需要持久化独立端口，启动成功后由 Electron 内置浏览器打开对应地址。
+- Agent 创建前端项目必须使用 Vue 3 + Vite，不能只生成单独的 HTML 文件；完成后必须先安装依赖并验证 `npm run dev` 可启动。
 
 **跨平台打包检查：**
 - Pi 的原生依赖按当前平台安装和同步；在目标平台分别执行构建，不能用单个平台的 `node_modules` 代替其他平台产物。

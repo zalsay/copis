@@ -19,7 +19,7 @@ Copis 是一个本地优先的 AI 桌面应用，把多模型 Chat、通用 Agen
 - **Chat 模式**：多模型对话、附件解析、图片输入、Markdown / Mermaid / KaTeX / 代码高亮、并排对话、系统提示词、上下文管理。
 - **Agent 模式**：基于 Pi Agent SDK 的统一运行时；支持工作区隔离、权限模式、文件操作、长任务流式输出、计划确认和用户追问。可通过 Pi 调用 Anthropic、Claude、OpenAI、Google 及兼容渠道的模型，且每个会话默认内置联网搜索与网页抓取扩展（pi-web-access）。
 - **协作与任务**：复杂任务可拆分为可追踪的协作子 Agent / Task，并在消息流中展示调用过程和结果。
-- **Skills、MCP 与项目根目录**：每个 Copis 项目独立配置 Skills 与 MCP Server。项目文件可使用用户选择的本地项目根目录，也可使用 Copis 托管的空白项目目录；本地项目配置不会被自动导入。
+- **Skills、MCP 与项目根目录**：每个 Copis 项目独立配置 Skills 与 MCP Server。项目文件可使用用户选择的本地项目根目录，也可使用 Copis 托管的空白项目目录；本地项目配置不会被自动导入。工作区的 `project/` 目录用于 Agent 创建和维护用户项目。
 - **远程机器人**：支持飞书 / Lark 机器人桥接，并已提供钉钉、微信桥接入口，用手机或群聊触发本机 Agent 工作流。
 - **记忆与工具**：Chat 和 Agent 可共享记忆能力，并支持联网搜索、内置 Chat 工具、Agent 推荐等辅助能力。
 - **本地优先**：会话、工作区、附件、配置、Skills 等默认存储在 `~/.copis/`，使用 JSON / JSONL 文件组织，不依赖本地数据库。
@@ -53,7 +53,7 @@ Copis 是一个本地优先的 AI 桌面应用，把多模型 Chat、通用 Agen
 
 ### 首次配置
 
-1. 打开 Copis，先完成环境检查。Agent 模式依赖本机基础环境，尤其是 Git、Node.js / Bun 以及可用的 Shell。
+1. 打开 Copis，先完成环境检查。Agent 模式依赖本机基础环境，尤其是 Git 和可用的 Shell。运行工作区项目所需的 Node.js 与 npm 会由 Copis 的功能模块自动准备，无需用户另行安装 Node.js。
 2. 进入 **设置 > 渠道**，添加至少一个 AI 供应商渠道，填写 Base URL、API Key 和模型列表。
 3. Chat 模式可以使用 OpenAI、Anthropic、Google 或 OpenAI 兼容协议的渠道。
 4. 默认的 Pi Agent Runtime 可使用已启用的模型渠道，包括 Anthropic、DeepSeek、Kimi API、Kimi Coding Plan、OpenAI、Google 及兼容端点。
@@ -78,6 +78,14 @@ Copis 是一个本地优先的 AI 桌面应用，把多模型 Chat、通用 Agen
 - 需要权限确认、计划模式、后台任务或远程机器人持续跟进的工作。
 
 简单说：**只需要回答时用 Chat，需要行动和交付结果时用 Agent。**
+
+### 在工作区开发项目
+
+Agent 可以在工作区的 `project/` 目录中创建项目。项目列表会自动发现包含 `package.json` 和 Vite `dev` 脚本的项目；点击项目右侧的启动按钮后，Rust HTTP API 会使用 Copis 内置的 Node.js + npm runtime 执行 `npm run dev`，并为每个项目持久化分配独立端口，启动成功后在右侧内置浏览器打开地址。
+
+项目建议使用 Vue 3 + Vite 构建。Agent 创建项目时应先执行依赖安装，再启动开发服务；如果项目依赖尚未安装，可由 Agent 通过 Rust 项目命令接口执行 `npm install`，不需要用户打开终端手动操作。
+
+Pi Agent 的基础工具是 `read`、`write`、`edit` 和 `bash`。项目命令由 Copis 内置 Node.js/npm runtime 执行，Agent 不应要求用户另行安装 Node.js/npm；命令需要逐条调用，不能使用管道、重定向或串联语法。
 
 ## 截图
 
@@ -146,7 +154,8 @@ Copis 采用本地文件存储，方便备份、迁移和排查问题。
 │   └── {session-id}.jsonl
 ├── agent-workspaces/
 │   └── {workspace-slug}/
-│       ├── workspace-files/ # 仅空白项目使用的 Copis 托管项目根
+│       ├── workspace-files/ # Copis 托管的工作区文件根
+│       │   └── project/     # Agent 创建和运行的用户项目目录
 │       ├── mcp.json
 │       └── skills/
 ├── attachments/
@@ -175,8 +184,8 @@ copis-v2/
 
 | 包 | 版本 | 职责 |
 | --- | --- | --- |
-| `@copis/electron` | `0.0.35` | Electron 桌面应用 |
-| `@copis/shared` | `0.1.62` | 共享类型、IPC 常量、配置和工具 |
+| `@copis/electron` | `0.0.39` | Electron 桌面应用 |
+| `@copis/shared` | `0.1.63` | 共享类型、IPC 常量、配置和工具 |
 | `@copis/core` | `0.2.18` | Provider Adapter、SSE、Shiki 高亮 |
 | `@copis/ui` | `0.1.10` | 共享 React UI 组件 |
 
@@ -200,6 +209,9 @@ bun run typecheck
 
 # 测试
 bun test
+
+# 打包工作区项目所需的 Node.js + npm runtime 功能模块
+bun run build:node-runtime-module -- --output /tmp/copis-node-runtime.tar.gz
 ```
 
 Electron 子应用内也提供更细的脚本：
@@ -259,6 +271,10 @@ shared 类型和 IPC 常量
 渲染进程以 Jotai 管理状态，关键 atoms 位于 `apps/electron/src/renderer/atoms/`。Agent IPC 监听器在应用顶层全局挂载，避免切换页面时丢失流式事件、权限请求或后台任务状态。
 
 ## 打包注意事项
+
+Copis 的功能模块包含 `node-runtime`、`rust-http-api` 和 `officecli`。`node-runtime` 是按目标平台打包的 Node.js 与 npm `tar.gz` 归档，应用首次启动时自动下载、校验、解包并激活。终端用户不需要自行安装 Node.js 或 npm。
+
+部署功能模块时，`deploy.sh` / `deploy.ps1` 会在当前目标平台生成 Node runtime 归档并与 Rust API、OfficeCLI 一起发布；发布后最终 manifest 会记录三个模块的实际版本。单模块发布使用 `--rust`、`--officecli` 或 `--node-runtime`，每种模式都会校验其他必要模块已存在于远端 manifest。
 
 Pi runtime 在主进程中作为 esbuild external 依赖运行。`apps/electron` 的打包脚本会在 `electron-builder` 前执行 `bun run sync:runtime-deps`，把下列依赖及其运行时闭包复制到应用目录：
 

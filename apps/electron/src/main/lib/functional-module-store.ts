@@ -1,13 +1,18 @@
-import { chmod, copyFile, mkdir, rename, rm, stat, writeFile } from 'node:fs/promises'
+import { chmod, copyFile, mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { existsSync, readFileSync } from 'node:fs'
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
+import { gunzipSync } from 'node:zlib'
+import type { FunctionalModuleFormat } from '@copis/shared'
+
+const ARCHIVE_PAYLOAD_FILE = '.artifact.tar.gz'
+const MAX_ARCHIVE_UNPACKED_BYTES = 512 * 1024 * 1024
 
 export interface FunctionalModulePackage {
   name: string
   version: string
   sha256: string
   size: number
-  format: 'binary'
+  format: FunctionalModuleFormat
   entrypoint: string
   required: boolean
 }
@@ -65,8 +70,8 @@ export function moduleCacheComplete(
       && metadata.package.format === packageInfo.format
       && metadata.package.entrypoint === packageInfo.entrypoint
       && metadata.package.required === packageInfo.required
-      && metadata.files.includes(packageInfo.entrypoint)
-      && existsSync(join(dir, 'payload', packageInfo.entrypoint))
+      && metadata.files.includes(moduleCachePayloadName(packageInfo))
+      && existsSync(join(dir, 'payload', moduleCachePayloadName(packageInfo)))
   } catch {
     return false
   }
@@ -83,7 +88,7 @@ export async function cacheFunctionalModule(
   if (!sourceStats?.isFile()) throw new Error(`模块源文件不存在: ${source}`)
 
   const targetDir = moduleCacheDir(paths, packageInfo)
-  const payloadPath = join(targetDir, 'payload', packageInfo.entrypoint)
+  const payloadPath = join(targetDir, 'payload', moduleCachePayloadName(packageInfo))
   if (moduleCacheComplete(paths, packageInfo)) return payloadPath
 
   const temporaryDir = join(
@@ -93,13 +98,13 @@ export async function cacheFunctionalModule(
   await rm(temporaryDir, { recursive: true, force: true })
 
   try {
-    const temporaryPayloadPath = join(temporaryDir, 'payload', packageInfo.entrypoint)
+    const temporaryPayloadPath = join(temporaryDir, 'payload', moduleCachePayloadName(packageInfo))
     await mkdir(dirname(temporaryPayloadPath), { recursive: true })
     await copyFile(source, temporaryPayloadPath)
-    await markExecutable(temporaryPayloadPath)
+    if (packageInfo.format === 'binary') await markExecutable(temporaryPayloadPath)
     await writeFile(
       join(temporaryDir, 'module.json'),
-      JSON.stringify({ package: packageInfo, files: [packageInfo.entrypoint] } satisfies FunctionalModuleCacheMetadata, null, 2),
+      JSON.stringify({ package: packageInfo, files: [moduleCachePayloadName(packageInfo)] } satisfies FunctionalModuleCacheMetadata, null, 2),
       'utf-8',
     )
     await writeFile(join(temporaryDir, '.complete'), 'complete\n', 'utf-8')
@@ -129,7 +134,7 @@ export async function assembleFunctionalModule(
     throw new Error(`功能模块缓存不完整: ${packageInfo.name}`)
   }
 
-  const sourcePath = join(moduleCacheDir(paths, packageInfo), 'payload', packageInfo.entrypoint)
+  const sourcePath = join(moduleCacheDir(paths, packageInfo), 'payload', moduleCachePayloadName(packageInfo))
   const versionDir = moduleVersionDir(paths, packageInfo)
   if (moduleVersionComplete(versionDir, packageInfo)) return versionDir
 
@@ -141,8 +146,15 @@ export async function assembleFunctionalModule(
 
   try {
     const temporaryPath = join(temporaryDir, packageInfo.entrypoint)
-    await mkdir(dirname(temporaryPath), { recursive: true })
-    await copyFile(sourcePath, temporaryPath)
+    if (packageInfo.format === 'binary') {
+      await mkdir(dirname(temporaryPath), { recursive: true })
+      await copyFile(sourcePath, temporaryPath)
+    } else {
+      await extractTarGz(sourcePath, temporaryDir)
+    }
+    if (!existsSync(temporaryPath)) {
+      throw new Error(`归档模块缺少入口文件: ${packageInfo.entrypoint}`)
+    }
     await markExecutable(temporaryPath)
     await writeFile(
       join(temporaryDir, 'module-lock.json'),
@@ -335,7 +347,7 @@ function validateModulePackage(packageInfo: FunctionalModulePackage): void {
   if (!Number.isSafeInteger(packageInfo.size) || packageInfo.size < 0) {
     throw new Error(`模块 size 不合法: ${packageInfo.size}`)
   }
-  if (packageInfo.format !== 'binary') {
+  if (packageInfo.format !== 'binary' && packageInfo.format !== 'tar.gz') {
     throw new Error(`模块 format 不支持: ${packageInfo.format}`)
   }
   if (typeof packageInfo.required !== 'boolean') {
@@ -360,4 +372,76 @@ function isPathWithin(root: string, target: string): boolean {
 async function markExecutable(path: string): Promise<void> {
   if (process.platform === 'win32') return
   await chmod(path, 0o755)
+}
+
+function moduleCachePayloadName(packageInfo: FunctionalModulePackage): string {
+  return packageInfo.format === 'binary' ? packageInfo.entrypoint : ARCHIVE_PAYLOAD_FILE
+}
+
+async function extractTarGz(sourcePath: string, targetDir: string): Promise<void> {
+  let tar: Buffer
+  try {
+    tar = gunzipSync(await readFile(sourcePath), { maxOutputLength: MAX_ARCHIVE_UNPACKED_BYTES })
+  } catch (error) {
+    throw new Error(`无法解压 tar.gz 功能模块: ${error instanceof Error ? error.message : String(error)}`)
+  }
+
+  let offset = 0
+  while (offset + 512 <= tar.length) {
+    const header = tar.subarray(offset, offset + 512)
+    if (header.every((byte) => byte === 0)) return
+
+    const name = readTarString(header, 0, 100)
+    const prefix = readTarString(header, 345, 155)
+    const path = [prefix, name].filter(Boolean).join('/')
+    const size = readTarSize(header)
+    const type = header[156] ?? 0
+    const dataStart = offset + 512
+    const dataEnd = dataStart + size
+    if (dataEnd > tar.length) throw new Error('tar.gz 功能模块内容不完整')
+
+    const normalizedPath = path.replace(/^\.\//, '')
+    // GNU tar 和 BSD tar 都可能在归档开头写入 "./" 根目录条目；它不代表文件，跳过即可。
+    if ((path === '.' || path === './' || normalizedPath === '') && type === 53 && size === 0) {
+      offset = dataStart + Math.ceil(size / 512) * 512
+      continue
+    }
+    if (!isSafeRelativePath(normalizedPath)) {
+      throw new Error(`tar.gz 功能模块包含不安全路径: ${path}`)
+    }
+    const targetPath = resolve(targetDir, normalizedPath)
+    if (!isPathWithin(targetDir, targetPath)) {
+      throw new Error(`tar.gz 功能模块路径超出目标目录: ${path}`)
+    }
+
+    if (type === 0 || type === 48) {
+      await mkdir(dirname(targetPath), { recursive: true })
+      await writeFile(targetPath, tar.subarray(dataStart, dataEnd))
+      if (normalizedPath.startsWith('bin/')) await markExecutable(targetPath)
+    } else if (type === 53) {
+      await mkdir(targetPath, { recursive: true })
+    } else {
+      throw new Error(`tar.gz 功能模块不支持的条目类型: ${String.fromCharCode(type)}`)
+    }
+    offset = dataStart + Math.ceil(size / 512) * 512
+  }
+
+  throw new Error('tar.gz 功能模块缺少结束标记')
+}
+
+function readTarString(header: Buffer, start: number, length: number): string {
+  const value = header.subarray(start, start + length)
+  const end = value.indexOf(0)
+  return value.subarray(0, end < 0 ? value.length : end).toString('utf-8')
+}
+
+function readTarSize(header: Buffer): number {
+  const value = readTarString(header, 124, 12).trim()
+  if (!value) return 0
+  if (!/^[0-7]+$/.test(value)) throw new Error('tar.gz 功能模块条目大小不合法')
+  const size = Number.parseInt(value, 8)
+  if (!Number.isSafeInteger(size) || size < 0 || size > MAX_ARCHIVE_UNPACKED_BYTES) {
+    throw new Error('tar.gz 功能模块条目过大')
+  }
+  return size
 }

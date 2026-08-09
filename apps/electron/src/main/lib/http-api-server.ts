@@ -3,7 +3,7 @@ import { randomBytes } from 'node:crypto'
 import { spawn, type ChildProcessWithoutNullStreams, type SpawnOptions } from 'node:child_process'
 import { chmodSync, existsSync } from 'node:fs'
 import { createInterface, type Interface } from 'node:readline'
-import { join, resolve } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import {
   COPIS_HTTP_API_HOST,
   resolveCopisHttpApiPort,
@@ -154,6 +154,16 @@ function resolveBinaryPath(options: HttpApiServerOptions): string | undefined {
     : undefined
 }
 
+function resolveNodeRuntimeRoot(options: HttpApiServerOptions): string | undefined {
+  const active = readActiveFunctionalModule(
+    getFunctionalModulePaths(getRootDir(options)),
+    'node-runtime',
+  )
+  const nodeEntrypoint = process.platform === 'win32' ? 'bin/node.exe' : 'bin/node'
+  if (!active || active.entrypoint !== nodeEntrypoint) return undefined
+  return dirname(dirname(active.path))
+}
+
 function prepareBinary(path: string): string {
   if (process.platform !== 'win32') {
     try {
@@ -256,6 +266,7 @@ function spawnManagedProcess(
   const workerRuntime = resolvePiRpcWorkerRuntime(workerLaunch)
   const useDevelopmentScriptRuntime = workerLaunch?.kind === 'script' && !app.isPackaged
   const piExtensionsDir = resolvePiExtensionsDir()
+  const nodeRuntimeRoot = resolveNodeRuntimeRoot(options)
   const spawnImpl = options.spawnImpl ?? ((file, args, spawnOptions) => (
     spawn(file, args, spawnOptions) as ChildProcessWithoutNullStreams
   ))
@@ -281,6 +292,7 @@ function spawnManagedProcess(
           ? { [MODEL_BASE_URL_ENV]: options.modelBaseUrl ?? process.env[MODEL_BASE_URL_ENV] }
           : {}),
         ...(piExtensionsDir ? { COPIS_PI_EXTENSIONS_DIR: piExtensionsDir } : {}),
+        ...(nodeRuntimeRoot ? { COPIS_RUNTIME_ROOT: nodeRuntimeRoot } : {}),
         ...(app.isPackaged ? { COPIS_PI_RPC_COMPILED_RUNTIME: '1' } : {}),
         ...(useDevelopmentScriptRuntime
           ? {

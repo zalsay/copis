@@ -45,6 +45,16 @@ function buildPrompt(agentCwd: string, memoryPolicy?: 'off' | 'visible' | 'writa
 }
 
 describe('项目与会话工作台提示词', () => {
+  test('Given Pi 会话 When 构建系统提示词 Then 明确基础工具和内置 Node 命令边界', () => {
+    const prompt = buildPrompt('/tmp/sample-project')
+
+    expect(prompt).toContain('`read`、`write`、`edit`、`bash`')
+    expect(prompt).toContain('直接在当前项目目录调用一次 `bash`，例如 `npm install`')
+    expect(prompt).toContain('不要要求用户安装 Node.js/npm')
+    expect(prompt).toContain('不要使用 `&&`、`;`、管道、重定向或命令替换')
+    expect(prompt).not.toContain('Read、Write、Edit、Bash、Grep、Glob、LS、Skill')
+  })
+
   test('Given 专家团队服务工具 When 构建系统提示词 Then 强制主理人汇总团队交付成果', () => {
     const prompt = buildSystemPrompt({
       agentRuntime: 'pi',
@@ -163,6 +173,16 @@ describe('项目与会话工作台提示词', () => {
     expect(prompt).toContain('当前会话直接在项目根目录中工作')
     expect(prompt).toContain('.agents/skills')
     expect(prompt).not.toContain('项目根始终是 cwd')
+  })
+
+  test('Given 工作区前端任务 When 构建提示词 Then 强制使用可启动的 Vue 3 Vite 项目', () => {
+    const prompt = buildPrompt('/tmp/sample-project')
+
+    expect(prompt).toContain('所有需要在 Copis 中展示或启动的前端，必须使用 **Vue 3 + Vite** 构建')
+    expect(prompt).toContain('不得只交付单独的 `.html` 文件或静态 HTML 页面')
+    expect(prompt).toContain('`scripts.dev` 必须调用 `vite`')
+    expect(prompt).toContain('自行安装依赖，并执行 `npm run build` 验证')
+    expect(prompt).toContain('`npm run dev` 由 Copis 项目列表启动')
   })
 
   test('Given 历史会话工作台 cwd When 构建提示词 Then 不将它误称为项目根', () => {

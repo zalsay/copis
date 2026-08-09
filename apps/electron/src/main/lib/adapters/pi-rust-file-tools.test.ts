@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { createRustFileToolOperations } from './pi-rust-file-tools'
+import { createRustBashToolOperations, createRustFileToolOperations } from './pi-rust-file-tools'
 
 function response(body: unknown, status = 200): Response {
   return new Response(body === undefined ? undefined : JSON.stringify(body), {
@@ -56,5 +56,32 @@ describe('Pi Rust 文件工具桥接', () => {
     })
 
     await expect(operations.read.access('/outside/secret.txt')).rejects.toThrow('path_not_allowed')
+  })
+
+  test('Given Pi 执行项目构建命令 When 转发到 Rust Then 使用会话能力令牌与受控工作目录', async () => {
+    const requests: Array<{ url: string; init?: RequestInit }> = []
+    const operations = createRustBashToolOperations({
+      sessionId: 'session-1',
+      baseUrl: 'http://127.0.0.1:51730',
+      fileToken: 'test-token',
+      fetchImpl: async (url, init) => {
+        requests.push({ url: String(url), init })
+        return response({ output: 'build complete\n', outputTruncated: false, exitCode: 0, timedOut: false })
+      },
+    })
+    const output: Buffer[] = []
+
+    const result = await operations.exec('npm run build', '/workspace/project', {
+      onData: (data) => output.push(data),
+      timeout: 30,
+    })
+
+    expect(result).toEqual({ exitCode: 0 })
+    expect(Buffer.concat(output).toString('utf8')).toBe('build complete\n')
+    expect(new URL(requests[0]!.url).pathname).toBe('/api/internal/agent/shell')
+    expect(JSON.parse(String(requests[0]!.init?.body))).toEqual({
+      sessionId: 'session-1', command: 'npm run build', cwd: '/workspace/project', timeoutMs: 30_000,
+    })
+    expect((requests[0]!.init?.headers as Record<string, string>)['x-copis-agent-file-token']).toBe('test-token')
   })
 })

@@ -96,7 +96,7 @@ function buildWorkspacePromptPaths(workspaceSlug: string, sessionId: string, age
  * 构建 Copis Agent 的自定义系统提示词。
  *
  * 本函数追加：Copis Agent 角色定义、工具使用指南、子 Agent 委派策略、工作区信息、记忆系统等。
- * 工具（Read/Write/Edit/Bash 等）由 SDK 独立注册，不受 systemPrompt 影响。
+ * 工具由 SDK 独立注册，不受 systemPrompt 影响；提示词只说明真实可用的调用方式。
  */
 export function buildSystemPrompt(ctx: SystemPromptContext): string {
   const profile = getUserProfile()
@@ -140,7 +140,9 @@ export function buildSystemPrompt(ctx: SystemPromptContext): string {
 
 当前会话运行在 Pi Agent SDK 上。你仍然遵循 Copis Agent 的统一行为规范，但底层工具、权限和消息流由 Copis 的 Pi adapter 桥接：
 
-- 使用 Copis 暴露给你的 Read、Write、Edit、Bash、Grep、Glob、LS、Skill 和产品工具完成任务
+- 当前会话的基础工具使用小写名称：\`read\`、\`write\`、\`edit\`、\`bash\`。它们由 Copis 注入并可直接调用；不要根据自己的思考内容重新猜测工具是否存在，也不要向用户展示工具枚举或声称 Copis 没有 Bash。
+- Copis 默认通过 Rust HTTP API 执行文件与项目命令，工具会在服务端检查会话权限。需要安装项目依赖时，直接在当前项目目录调用一次 \`bash\`，例如 \`npm install\`；不要要求用户安装 Node.js/npm，也不要使用 \`--prefix\` 指向其他目录。
+- 项目命令必须逐条调用：只使用 Copis 允许的依赖安装、构建、测试和本地开发命令，不要使用 \`&&\`、\`;\`、管道、重定向或命令替换。完成依赖安装后再单独调用 \`npm run build\` 验证。
 - 调用 \`write\` 时必须在同一次调用中同时提供 \`path\` 和完整的字符串 \`content\`；不要只提供路径。需要创建空文件时显式传入 \`content: ""\`
 - 遵循本提示词中的项目、Copis 工作区、权限、计划模式、Context 和知识维护规则
 - 当 Copis 提供附加目录时，可以按提示中的绝对路径直接访问这些用户授权范围
@@ -303,7 +305,9 @@ ${JSON.stringify(schema.nodes)}
 - 跨会话有参考价值的内容（调研报告、架构分析等） → 项目级 Context 的绝对路径
 - 用户明确指定了位置时，按用户要求
 - 新会话开始时，**两个目录都要检查**以恢复完整上下文
-- 项目开发目录默认支持两类轻量项目：TypeScript + Vite + HTML 前端，以及 Python 后端配合简单前端。优先按 \`frontend/\`、\`backend/\`、\`src/\` 等清晰结构创建，并提供启动和验证命令。
+- **前端项目强制规范**：所有需要在 Copis 中展示或启动的前端，必须使用 **Vue 3 + Vite** 构建，优先使用 TypeScript。不得只交付单独的 \`.html\` 文件或静态 HTML 页面；\`index.html\` 只能作为 Vite 项目的入口文件，必须与 \`package.json\`、\`src/\`、Vue 组件和依赖配置一起存在。
+- **可启动项目结构**：在项目开发目录中为每个前端创建独立目录（例如 \`frontend/\` 或 \`<项目名>/\`），其中 \`package.json\` 的 \`scripts.dev\` 必须调用 \`vite\`。完成后自行安装依赖，并执行 \`npm run build\` 验证；需要持续运行的 \`npm run dev\` 由 Copis 项目列表启动并为其分配独立端口。
+- Python 后端可以与 Vue 3 前端组成简单前后端项目，建议使用 \`frontend/\` 和 \`backend/\` 清晰分层；不要用单文件 HTML 替代前端工程。
 - 项目来源目录只作为参考；新项目文件、依赖配置和启动脚本都写入项目开发目录，不要把它当作可随意清理的临时目录`)
   }
 
@@ -325,7 +329,7 @@ ${JSON.stringify(schema.nodes)}
 2. 完成计划后，**不要立即调用 ExitPlanMode**
 3. 先向用户展示计划摘要，以及完整的计划文档的路径地址，然后等待用户确认后再退出计划模式
 4. 用户确认执行后，再调用 ExitPlanMode 退出计划模式
-5. 在计划模式下，你可以使用 Read、Glob、Grep、WebSearch 等只读工具进行调研，也可以使用 Bash 执行只读命令（如 find、grep、cat、ls、head、tail 等）；但不能使用 Edit 或 Bash 写操作命令（如 rm、mv、sed -i、> 重定向等）`)
+5. 在计划模式下，只使用当前会话实际提供的只读工具进行调研；默认 Rust 文件 API 会拒绝 \`edit\`、\`write\` 和 \`bash\`，不要尝试通过 Bash 绕过计划模式写入或执行命令。完成计划后等待用户确认，不要擅自修改项目文件。`)
   } else {
     sections.push(`## 计划模式文件路径
 

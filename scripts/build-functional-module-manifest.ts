@@ -20,7 +20,10 @@ const channel = getOption('--channel') ?? process.env.COPIS_MODULE_CHANNEL ?? 's
 const publicBaseUrl = getOption('--public-base-url') ?? process.env.COS_PUBLIC_BASE_URL
 const rustOnly = hasFlag('--rust') || process.env.COPIS_RUST_ONLY === '1'
 const officeCliOnly = hasFlag('--officecli') || process.env.COPIS_OFFICECLI_ONLY === '1'
-if (rustOnly && officeCliOnly) throw new Error('--rust 与 --officecli 不能同时使用')
+const nodeRuntimeOnly = hasFlag('--node-runtime') || process.env.COPIS_NODE_RUNTIME_ONLY === '1'
+if (Number(rustOnly) + Number(officeCliOnly) + Number(nodeRuntimeOnly) > 1) {
+  throw new Error('--rust、--officecli 与 --node-runtime 不能同时使用')
+}
 const prefix = resolveFunctionalModulePrefix({
   cliPrefix: getOption('--prefix'),
   objectPrefixPath: process.env.OBJECT_PREFIX_PATH,
@@ -36,7 +39,7 @@ if (!publicBaseUrl) throw new Error('缺少 COS_PUBLIC_BASE_URL 或 --public-bas
 
 const modules: FunctionalModuleBinaryInput[] = []
 
-if (!officeCliOnly) {
+if (!officeCliOnly && !nodeRuntimeOnly) {
   const rustBinary = getOption('--rust-binary')
     ?? process.env.COPIS_RUST_HTTP_API_BINARY
     ?? join(repoRoot, 'native/http-api-server/target/release', binaryName('copis-http-api-server', platform))
@@ -50,7 +53,7 @@ if (!officeCliOnly) {
   })
 }
 
-if (!rustOnly) {
+if (!rustOnly && !nodeRuntimeOnly) {
   const officeCliBinary = getOption('--officecli-binary')
     ?? process.env.COPIS_OFFICECLI_BINARY
     ?? join(electronDir, 'resources/bin', binaryName('officecli', platform))
@@ -60,6 +63,22 @@ if (!rustOnly) {
     platform,
     arch,
     binaryPath: officeCliBinary,
+    required: true,
+  })
+}
+
+if (!rustOnly && !officeCliOnly) {
+  const nodeRuntimeArchive = getOption('--node-runtime-archive')
+    ?? process.env.COPIS_NODE_RUNTIME_ARCHIVE
+    ?? join(electronDir, 'resources/node-runtime', `${platform}-${arch}.tar.gz`)
+  modules.push({
+    module: 'node-runtime',
+    version: getOption('--node-runtime-version') ?? process.env.COPIS_NODE_RUNTIME_VERSION ?? version,
+    platform,
+    arch,
+    binaryPath: nodeRuntimeArchive,
+    format: 'tar.gz',
+    entrypoint: `bin/${binaryName('node', platform)}`,
     required: true,
   })
 }

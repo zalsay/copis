@@ -8,12 +8,8 @@ use std::sync::Mutex;
 /// 内置 MCP 占用的保留名（id + 运行时 name），与 Electron
 /// `builtin-mcp/baseline.ts` 的 RESERVED_BUILTIN_KEYS 保持一致。
 /// 工作区 mcp.json 不允许出现这些 key，保存时应剔除。
-const RESERVED_BUILTIN_KEYS: &[&str] = &[
-    "automation",
-    "collaboration",
-    "nano-banana",
-    "nano_banana",
-];
+const RESERVED_BUILTIN_KEYS: &[&str] =
+    &["automation", "collaboration", "nano-banana", "nano_banana"];
 
 /// streamable http 的别名，规范化为 http，与共享层 mcp-transport 一致。
 const STREAMABLE_HTTP_ALIASES: &[&str] = &["streamableHttp", "streamable-http", "streamable_http"];
@@ -114,9 +110,8 @@ impl WorkspaceMcpStore {
                     WorkspaceMcpError::Io(format!("写入临时配置失败: {}", temporary.display()))
                 })?;
         }
-        fs::rename(&temporary, &path).map_err(|_| {
-            WorkspaceMcpError::Io(format!("替换 MCP 配置失败: {}", path.display()))
-        })?;
+        fs::rename(&temporary, &path)
+            .map_err(|_| WorkspaceMcpError::Io(format!("替换 MCP 配置失败: {}", path.display())))?;
         Ok(normalized)
     }
 }

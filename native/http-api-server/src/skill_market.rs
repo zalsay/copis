@@ -364,14 +364,11 @@ fn install_market(
         Err(error) => {
             // 远端安装已成功而本地安装失败：若此前本地没有该 Skill 且其他工作区也没有，
             // 回滚远端安装状态，避免两端不一致；无法判断时保守不回滚。
-            let other_workspace_has = market_skill_in_other_workspace(workspace_slug, skill_id)
-                .unwrap_or(true);
+            let other_workspace_has =
+                market_skill_in_other_workspace(workspace_slug, skill_id).unwrap_or(true);
             if !had_local && !other_workspace_has {
                 match remote_json("DELETE", &path, token, None) {
-                    Ok(_) => eprintln!(
-                        "[skill-market] 本地安装失败，已回滚远端安装状态: {}",
-                        slug
-                    ),
+                    Ok(_) => eprintln!("[skill-market] 本地安装失败，已回滚远端安装状态: {}", slug),
                     Err(rollback_error) => eprintln!(
                         "[skill-market] 本地安装失败且远端回滚失败: {} ({})",
                         rollback_error.message, rollback_error.code

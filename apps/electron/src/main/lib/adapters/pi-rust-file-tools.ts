@@ -1,5 +1,6 @@
 import { extname } from 'node:path'
 import type {
+  BashOperations,
   EditOperations,
   ReadOperations,
   WriteOperations,
@@ -29,6 +30,13 @@ interface RustFileReadResponse {
 
 interface RustFileWriteResponse {
   revision: string
+}
+
+interface RustShellResponse {
+  output: string
+  outputTruncated: boolean
+  exitCode: number | null
+  timedOut: boolean
 }
 
 interface RustFileErrorResponse {
@@ -125,6 +133,56 @@ class RustFileToolClient {
     return payload as T | undefined
   }
 
+  private async requestShell(
+    body: Record<string, unknown>,
+    signal?: AbortSignal,
+  ): Promise<RustShellResponse> {
+    let response: Response
+    try {
+      response = await this.fetchImpl(`${this.baseUrl}/api/internal/agent/shell`, {
+        method: 'POST',
+        signal,
+        headers: {
+          Accept: 'application/json',
+          'Content-Type': 'application/json',
+          [AGENT_FILE_TOKEN_HEADER]: this.fileToken,
+        },
+        body: JSON.stringify({ sessionId: this.options.sessionId, ...body }),
+      })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Rust 命令服务不可用'
+      throw new Error(`项目命令执行失败: ${message}`)
+    }
+
+    const text = await response.text()
+    let payload: unknown
+    if (text) {
+      try {
+        payload = JSON.parse(text) as unknown
+      } catch {
+        payload = undefined
+      }
+    }
+    if (!response.ok) {
+      const details = isRecord(payload) ? payload as RustFileErrorResponse : undefined
+      const code = details?.code ? ` (${details.code})` : ''
+      throw new Error(`${details?.error ?? `项目命令被拒绝（${response.status}）`}${code}`)
+    }
+    if (!isRecord(payload)
+      || typeof payload.output !== 'string'
+      || typeof payload.outputTruncated !== 'boolean'
+      || typeof payload.timedOut !== 'boolean'
+      || (payload.exitCode !== null && typeof payload.exitCode !== 'number')) {
+      throw new Error('Rust 项目命令响应不正确')
+    }
+    return {
+      output: payload.output,
+      outputTruncated: payload.outputTruncated,
+      exitCode: payload.exitCode,
+      timedOut: payload.timedOut,
+    }
+  }
+
   async assertAccess(path: string, mode: 'read' | 'write' | 'readWrite'): Promise<void> {
     await this.request('access', 'POST', { path, mode })
   }
@@ -150,6 +208,27 @@ class RustFileToolClient {
     }
     this.revisions.set(path, result.revision)
   }
+
+  async executeShell(
+    command: string,
+    cwd: string,
+    options: Parameters<BashOperations['exec']>[2],
+  ): Promise<{ exitCode: number | null }> {
+    const timeoutMs = options.timeout === undefined
+      ? undefined
+      : Math.max(1, Math.round(options.timeout * 1_000))
+    const result = await this.requestShell({
+      command,
+      cwd,
+      ...(timeoutMs === undefined ? {} : { timeoutMs }),
+    }, options.signal)
+    if (result.output) options.onData(Buffer.from(result.output))
+    if (result.timedOut) {
+      const seconds = timeoutMs === undefined ? 120 : Math.ceil(timeoutMs / 1_000)
+      throw new Error(`timeout:${seconds}`)
+    }
+    return { exitCode: result.exitCode }
+  }
 }
 
 /**
@@ -173,5 +252,13 @@ export function createRustFileToolOperations(options: RustFileToolClientOptions)
       mkdir: async () => {},
       writeFile: (path, content) => client.writeFile(path, content),
     },
+  }
+}
+
+/** Pi Bash 仅能经 Rust 执行，Rust 负责会话令牌、目录与命令类别校验。 */
+export function createRustBashToolOperations(options: RustFileToolClientOptions): BashOperations {
+  const client = new RustFileToolClient(options)
+  return {
+    exec: (command, cwd, executionOptions) => client.executeShell(command, cwd, executionOptions),
   }
 }

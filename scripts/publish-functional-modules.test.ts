@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { FunctionalModuleManifest } from '@copis/shared'
@@ -7,10 +7,25 @@ import { mergeFunctionalModuleManifests } from './functional-module-manifest-mer
 import {
   buildFunctionalModuleBinaryInputs,
   requireExistingOfficeCli,
+  requireExistingNodeRuntime,
   requireExistingRustApi,
+  writePublishedManifest,
 } from './publish-functional-modules'
 
 describe('功能模块发布脚本 --rust', () => {
+  test('自动升版后将最终 manifest 写回本地构建目录', () => {
+    const root = mkdtempSync(join(tmpdir(), 'copis-functional-module-manifest-'))
+    const output = join(root, 'nested', 'manifest.json')
+    const body = Buffer.from('{"version":"0.0.37"}\n')
+
+    try {
+      writePublishedManifest(output, body)
+      expect(readFileSync(output)).toEqual(body)
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
   test('Rust-only 输入只包含 Rust，不触碰本地 OfficeCLI 路径', () => {
     const modules = buildFunctionalModuleBinaryInputs({
       rustOnly: true,
@@ -40,6 +55,54 @@ describe('功能模块发布脚本 --rust', () => {
 
     expect(modules).toHaveLength(1)
     expect(modules[0]).toMatchObject({ module: 'officecli', binaryPath: '/tmp/officecli' })
+  })
+
+  test('Node runtime-only 输入使用 tar.gz 归档并保留稳定入口', () => {
+    const modules = buildFunctionalModuleBinaryInputs({
+      rustOnly: false,
+      officeCliOnly: false,
+      nodeRuntimeOnly: true,
+      rustBinary: '/tmp/rust-api-does-not-exist',
+      rustVersion: '0.2.0',
+      officeCliBinary: '/tmp/officecli-does-not-exist',
+      officeCliVersion: '1.0.143',
+      nodeRuntimeArchive: '/tmp/node-runtime.tar.gz',
+      nodeRuntimeVersion: '22.21.1',
+      platform: 'darwin',
+      arch: 'arm64',
+    })
+
+    expect(modules).toEqual([expect.objectContaining({
+      module: 'node-runtime',
+      format: 'tar.gz',
+      entrypoint: 'bin/node',
+      binaryPath: '/tmp/node-runtime.tar.gz',
+    })])
+  })
+
+  test('Node runtime-only 发布要求 COS 已有 Rust 与 OfficeCLI', () => {
+    const manifest: FunctionalModuleManifest = {
+      schema: 1,
+      channel: 'stable',
+      platforms: {
+        'darwin-arm64': {
+          modules: {
+            'rust-http-api': {
+              version: '0.2.0', url: 'https://download.example.com/rust', sha256: 'a'.repeat(64), size: 1,
+              format: 'binary', entrypoint: 'bin/copis-http-api-server', required: true,
+            },
+            officecli: {
+              version: '1.0.143', url: 'https://download.example.com/office', sha256: 'b'.repeat(64), size: 1,
+              format: 'binary', entrypoint: 'bin/officecli', required: true,
+            },
+          },
+        },
+      },
+    }
+
+    requireExistingOfficeCli(manifest, 'darwin', 'arm64')
+    requireExistingRustApi(manifest, 'darwin', 'arm64')
+    expect(() => requireExistingNodeRuntime(manifest, 'darwin', 'arm64')).toThrow('缺少 node-runtime')
   })
 
   test('合并 Rust 发布时保留远端当前平台的 OfficeCLI artifact', () => {

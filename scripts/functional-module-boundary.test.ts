@@ -66,6 +66,15 @@ describe('功能模块发布边界', () => {
     expect(deployScript).toContain("'--rust'")
   })
 
+  test('部署完成日志从最终 manifest 读取实际发布的模块版本', () => {
+    expect(deployShellScript).toContain('MANIFEST_OUTPUT="$APP_DIR/dist/functional-modules/manifest.json"')
+    expect(deployShellScript).toContain('--manifest-output "$MANIFEST_OUTPUT"')
+    expect(deployShellScript).toContain('PUBLISHED_MODULE_VERSIONS=')
+    expect(deployShellScript).toContain('功能模块发布完成：$PLATFORM/$ARCH $PUBLISHED_MODULE_VERSIONS')
+    expect(deployScript).toContain("@('--manifest-output', $manifestPath)")
+    expect(deployScript).toContain('实际模块版本：')
+  })
+
   test('OfficeCLI-only 部署入口不要求本地 Rust API', () => {
     expect(buildManifestScript).toContain('--officecli')
     expect(deployShellScript).toContain('--officecli')

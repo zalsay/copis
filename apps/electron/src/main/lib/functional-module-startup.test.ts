@@ -5,6 +5,7 @@ import { createHash } from 'node:crypto'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { gzipSync } from 'node:zlib'
 import type { FunctionalModuleArtifact, FunctionalModuleStartupProgressPayload } from '@copis/shared'
 import { FUNCTIONAL_MODULE_IPC_CHANNELS } from '@copis/shared'
 
@@ -52,6 +53,19 @@ class StartupFakeChild extends EventEmitter {
     this.emit('exit', 0, null)
     return true
   }
+}
+
+function createTarGz(files: Record<string, string>): Buffer {
+  const entries = Object.entries(files).flatMap(([path, content]) => {
+    const body = Buffer.from(content)
+    const header = Buffer.alloc(512)
+    header.write(path)
+    header.write(`${body.byteLength.toString(8).padStart(11, '0')}\0`, 124)
+    header[156] = '0'.charCodeAt(0)
+    const padding = Buffer.alloc((512 - (body.byteLength % 512)) % 512)
+    return [header, body, padding]
+  })
+  return gzipSync(Buffer.concat([...entries, Buffer.alloc(1024)]))
 }
 
 describe('登录后功能模块启动契约', () => {
@@ -209,6 +223,7 @@ describe('登录后功能模块启动契约', () => {
     const rootDir = mkdtempSync(join(tmpdir(), 'copis-functional-module-startup-success-'))
     const officeContent = 'officecli-startup-binary'
     const rustContent = 'rust-http-api-startup-binary'
+    const nodeContent = createTarGz({ 'bin/node': 'node-runtime-binary', 'bin/npm': 'npm-runtime-launcher' })
     const moduleArtifact = (name: 'officecli' | 'rust-http-api', version: string, content: string) => ({
       version,
       url: `https://download.example.com/${name}-${version}`,
@@ -224,16 +239,30 @@ describe('登录后功能模块启动契约', () => {
       platforms: {
         'darwin-arm64': {
           modules: {
+            'node-runtime': {
+              version: '22.21.1',
+              url: 'https://download.example.com/node-runtime-22.21.1.tar.gz',
+              sha256: createHash('sha256').update(nodeContent).digest('hex'),
+              size: nodeContent.byteLength,
+              format: 'tar.gz' as const,
+              entrypoint: 'bin/node',
+              required: true,
+            },
             officecli: moduleArtifact('officecli', '1.0.143', officeContent),
             'rust-http-api': moduleArtifact('rust-http-api', '0.1.2', rustContent),
           },
         },
       },
     }
-    const records: Array<{ file: string; child: StartupFakeChild; port: string | undefined }> = []
+    const records: Array<{ file: string; child: StartupFakeChild; port: string | undefined; runtimeRoot?: string }> = []
     const spawnImpl = ((file, _args, options) => {
       const child = new StartupFakeChild()
-      records.push({ file, child, port: options.env?.COPIS_HTTP_API_PORT })
+      records.push({
+        file,
+        child,
+        port: options.env?.COPIS_HTTP_API_PORT,
+        runtimeRoot: typeof options.env?.COPIS_RUNTIME_ROOT === 'string' ? options.env.COPIS_RUNTIME_ROOT : undefined,
+      })
       return child as unknown as ReturnType<HttpApiSpawn>
     }) as HttpApiSpawn
     const progress: FunctionalModuleStartupProgressPayload[] = []
@@ -247,6 +276,9 @@ describe('登录后功能模块启动契约', () => {
       }
       if (input.endsWith('/rust-http-api-0.1.2')) {
         return new Response(rustContent, { status: 200, headers: { 'content-length': String(Buffer.byteLength(rustContent)) } })
+      }
+      if (input.endsWith('/node-runtime-22.21.1.tar.gz')) {
+        return new Response(new Uint8Array(nodeContent), { status: 200, headers: { 'content-length': String(nodeContent.byteLength) } })
       }
       return new Response('not found', { status: 404 })
     }
@@ -266,6 +298,7 @@ describe('登录后功能模块启动契约', () => {
       })
 
       expect(statuses.map((item) => [item.name, item.installed, item.required])).toEqual([
+        ['node-runtime', true, true],
         ['rust-http-api', true, true],
         ['officecli', true, true],
       ])
@@ -273,6 +306,7 @@ describe('登录后功能模块启动契约', () => {
       expect(progress.some((item) => item.phase === 'health' && item.progress >= 0.95)).toBe(true)
       expect(progress.at(-1)).toMatchObject({ phase: 'ready', progress: 1 })
       expect(records.map((record) => record.port)).toEqual(['51741', '51740'])
+      expect(records.some((record) => record.runtimeRoot?.includes('/node-runtime/'))).toBe(true)
     } finally {
       await stopHttpApiServer(5)
       rmSync(rootDir, { recursive: true, force: true })

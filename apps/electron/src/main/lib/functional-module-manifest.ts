@@ -108,7 +108,9 @@ function validateManifestArtifact(name: string, artifact: FunctionalModuleManife
   if (!Number.isSafeInteger(artifact.size) || artifact.size < 0) {
     throw new Error(`模块 size 不合法: ${name}`)
   }
-  if (artifact.format !== 'binary') throw new Error(`功能模块 format 不支持: ${name}`)
+  if (artifact.format !== 'binary' && artifact.format !== 'tar.gz') {
+    throw new Error(`功能模块 format 不支持: ${name}`)
+  }
   if (typeof artifact.entrypoint !== 'string' || !isSafeRelativePath(artifact.entrypoint)) {
     throw new Error(`功能模块 entrypoint 不安全: ${name}`)
   }

@@ -13,6 +13,7 @@
     "electron:dev": "bun run --filter='@copis/electron' dev",
     "electron:build": "bun run --filter='@copis/electron' build",
     "electron:start": "bun run --filter='@copis/electron' start",
+    "build:node-runtime-module": "bun run scripts/build-node-runtime-module.ts",
     "build:functional-module-manifest": "bun run scripts/build-functional-module-manifest.ts",
     "publish:functional-modules": "bun run scripts/publish-functional-modules.ts",
     "publish:windows-installer": "bun run scripts/publish-windows-installer.ts",

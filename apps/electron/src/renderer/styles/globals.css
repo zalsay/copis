@@ -1399,7 +1399,7 @@
 
 .spinner-cube {
   background-color: currentColor;
-  animation: spinner 1.3s infinite ease-in-out;
+  animation: spinner 1.35s infinite ease-in-out;
 }
 
 /* 9 个 cube 的动画延迟（创建波浪效果） */

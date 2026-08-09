@@ -3,8 +3,8 @@
     构建并发布 Copis 功能模块。
 
 .DESCRIPTION
-    默认构建并发布 Rust HTTP API 与 OfficeCLI。使用 -RustOnly 或
-    -OfficeCliOnly 可以只发布对应的功能模块；两个模式不能同时启用。
+    默认构建并发布 Node.js runtime、Rust HTTP API 与 OfficeCLI。使用单模块
+    参数可以只发布对应的功能模块；多个单模块模式不能同时启用。
 
 .PARAMETER RustOnly
     只发布 Rust HTTP API，并保留 COS 中已有的 OfficeCLI。
@@ -22,6 +22,7 @@ param(
     [switch]$SkipPublish,
     [switch]$RustOnly,
     [switch]$OfficeCliOnly,
+    [switch]$NodeRuntimeOnly,
     [ValidateSet('win32', 'darwin', 'linux')]
     [string]$Platform = 'win32',
     [ValidateSet('x64', 'arm64')]
@@ -33,7 +34,9 @@ param(
     [string]$ObjectPrefixPath,
     [string]$RustBinary,
     [string]$OfficeCliBinary,
-    [string]$OfficeCliVersion
+    [string]$OfficeCliVersion,
+    [string]$NodeRuntimeArchive,
+    [string]$NodeRuntimeVersion
 )
 
 $ErrorActionPreference = 'Stop'
@@ -42,6 +45,7 @@ foreach ($argument in $LegacyArguments) {
     switch ($argument) {
         '--rust' { $RustOnly = $true }
         '--officecli' { $OfficeCliOnly = $true }
+        '--node-runtime' { $NodeRuntimeOnly = $true }
         '--build-app' { $BuildApp = $true }
         '--skip-install' { $SkipInstall = $true }
         '--skip-rust-build' { $SkipRustBuild = $true }
@@ -100,8 +104,8 @@ function Import-DotEnvFile {
 
 Import-DotEnvFile -Path (Join-Path $rootDir '.env')
 
-if ($RustOnly -and $OfficeCliOnly) {
-    throw '-RustOnly 与 -OfficeCliOnly 不能同时使用。'
+if ((@($RustOnly, $OfficeCliOnly, $NodeRuntimeOnly) | Where-Object { $_ }).Count -gt 1) {
+    throw '-RustOnly、-OfficeCliOnly 与 -NodeRuntimeOnly 不能同时使用。'
 }
 
 if (-not (Test-Path -LiteralPath (Join-Path $rootDir 'package.json') -PathType Leaf)) {
@@ -191,7 +195,7 @@ if (-not $SkipInstall) {
 
 
 $rustBinaryPath = $null
-if (-not $OfficeCliOnly) {
+if (-not $OfficeCliOnly -and -not $NodeRuntimeOnly) {
     $defaultRustBinary = if ($Platform -eq 'win32') {
         Join-Path $rootDir 'native\http-api-server\target\release\copis-http-api-server.exe'
     } else {
@@ -226,7 +230,7 @@ if (-not $OfficeCliOnly) {
 
 $officeCliBinaryPath = $null
 $officeCliVersionValue = $null
-if (-not $RustOnly) {
+if (-not $RustOnly -and -not $NodeRuntimeOnly) {
     $defaultOfficeCliBinary = Join-Path $appDir 'resources\bin\officecli'
     if ($Platform -eq 'win32') {
         $defaultOfficeCliBinary = "$defaultOfficeCliBinary.exe"
@@ -260,6 +264,43 @@ if (-not $RustOnly) {
     }
 }
 
+$nodeRuntimeArchivePath = $null
+$nodeRuntimeVersionValue = $null
+if (-not $RustOnly -and -not $OfficeCliOnly) {
+    $nodeRuntimeArchiveInput = if ([string]::IsNullOrWhiteSpace($NodeRuntimeArchive)) {
+        $env:COPIS_NODE_RUNTIME_ARCHIVE
+    } else {
+        $NodeRuntimeArchive.Trim()
+    }
+    $nodeRuntimeArchivePath = if ([string]::IsNullOrWhiteSpace($nodeRuntimeArchiveInput)) {
+        Join-Path $appDir "resources\node-runtime\$Platform-$Arch.tar.gz"
+    } elseif ([System.IO.Path]::IsPathRooted($nodeRuntimeArchiveInput)) {
+        $nodeRuntimeArchiveInput
+    } else {
+        Join-Path $rootDir $nodeRuntimeArchiveInput
+    }
+    if (-not (Test-Path -LiteralPath $nodeRuntimeArchivePath -PathType Leaf)) {
+        if ($Platform -ne 'win32' -or $Arch -ne 'x64') {
+            throw 'Node.js runtime 必须在目标平台和架构构建，跨平台请提供 -NodeRuntimeArchive。'
+        }
+        Write-Host '正在打包 Node.js runtime 功能模块...'
+        Invoke-BunCommand `
+            -WorkingDirectory $rootDir `
+            -Arguments @('run', 'build:node-runtime-module', '--', '--output', $nodeRuntimeArchivePath) `
+            -FailureMessage 'Node.js runtime 模块构建失败'
+    }
+    $nodeRuntimeArchivePath = (Resolve-Path -LiteralPath $nodeRuntimeArchivePath).Path
+    $nodeRuntimeVersionValue = if ([string]::IsNullOrWhiteSpace($NodeRuntimeVersion)) {
+        if ([string]::IsNullOrWhiteSpace($env:COPIS_NODE_RUNTIME_VERSION)) {
+            $releaseVersion
+        } else {
+            $env:COPIS_NODE_RUNTIME_VERSION.Trim()
+        }
+    } else {
+        $NodeRuntimeVersion.Trim()
+    }
+}
+
 if ($BuildApp) {
     Write-Host '正在构建 Electron Windows 应用（默认构建不包含 Rust API 与 COS 发布）...'
     if (-not (Test-Path -LiteralPath $buildScriptPath -PathType Leaf)) {
@@ -290,14 +331,17 @@ if (-not $SkipPublish) {
         '--client-min-version', $minimumClientVersion,
         '--public-base-url', $resolvedPublicBaseUrl
     )
-    if (-not $OfficeCliOnly) {
+    if (-not $OfficeCliOnly -and -not $NodeRuntimeOnly) {
         $releaseArguments += @('--rust-binary', $rustBinaryPath)
     }
-    if (-not $RustOnly) {
+    if (-not $RustOnly -and -not $NodeRuntimeOnly) {
         $releaseArguments += @(
             '--officecli-binary', $officeCliBinaryPath,
             '--officecli-version', $officeCliVersionValue
         )
+    }
+    if (-not $RustOnly -and -not $OfficeCliOnly) {
+        $releaseArguments += @('--node-runtime-archive', $nodeRuntimeArchivePath, '--node-runtime-version', $nodeRuntimeVersionValue)
     }
     if (-not [string]::IsNullOrWhiteSpace($ObjectPrefixPath)) {
         $releaseArguments += @('--prefix', $ObjectPrefixPath.Trim())
@@ -308,20 +352,24 @@ if (-not $SkipPublish) {
     if ($OfficeCliOnly) {
         $releaseArguments += '--officecli'
     }
+    if ($NodeRuntimeOnly) {
+        $releaseArguments += '--node-runtime'
+    }
+
+    $manifestPath = Join-Path $appDir 'dist\functional-modules\manifest.json'
 
     Write-Host '正在生成功能模块 manifest...'
     Invoke-BunCommand `
         -WorkingDirectory $rootDir `
-        -Arguments (@('run', 'build:functional-module-manifest', '--') + $releaseArguments) `
+        -Arguments (@('run', 'build:functional-module-manifest', '--') + $releaseArguments + @('--output', $manifestPath)) `
         -FailureMessage '功能模块 manifest 构建失败'
 
     Write-Host '正在发布功能模块二进制与 manifest 到 COS...'
     Invoke-BunCommand `
         -WorkingDirectory $rootDir `
-        -Arguments (@('run', 'publish:functional-modules', '--') + $releaseArguments) `
+        -Arguments (@('run', 'publish:functional-modules', '--') + $releaseArguments + @('--manifest-output', $manifestPath)) `
         -FailureMessage '功能模块 COS 发布失败'
 
-    $manifestPath = Join-Path $appDir 'dist\functional-modules\manifest.json'
     Write-Host '功能模块发布完成：'
     if ($rustBinaryPath) {
         Write-Host "  Rust 二进制：$rustBinaryPath"
@@ -329,8 +377,24 @@ if (-not $SkipPublish) {
     if ($officeCliBinaryPath) {
         Write-Host "  OfficeCLI 二进制：$officeCliBinaryPath（版本：$officeCliVersionValue）"
     }
+    if ($nodeRuntimeArchivePath) {
+        Write-Host "  Node.js runtime：$nodeRuntimeArchivePath（版本：$nodeRuntimeVersionValue）"
+    }
     if (Test-Path -LiteralPath $manifestPath -PathType Leaf) {
         Write-Host "  Manifest：$manifestPath"
+        $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+        $platformKey = "$Platform-$Arch"
+        $platformProperty = $manifest.platforms.PSObject.Properties[$platformKey]
+        if ($null -ne $platformProperty) {
+            $versions = @(
+                $platformProperty.Value.modules.PSObject.Properties |
+                    ForEach-Object { "$($_.Name)=$($_.Value.version)" } |
+                    Sort-Object
+            )
+            if ($versions.Count -gt 0) {
+                Write-Host "  实际模块版本：$($versions -join ', ')"
+            }
+        }
     }
 } else {
     Write-Host '已跳过 COS 发布（-SkipPublish）。'

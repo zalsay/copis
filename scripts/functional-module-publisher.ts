@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 import { readFileSync, statSync } from 'node:fs'
 import type {
   FunctionalModuleArchitecture,
+  FunctionalModuleFormat,
   FunctionalModuleManifest,
   FunctionalModuleName,
   FunctionalModulePlatform,
@@ -14,6 +15,8 @@ export interface FunctionalModuleBinaryInput {
   arch: FunctionalModuleArchitecture
   binaryPath: string
   required: boolean
+  format?: FunctionalModuleFormat
+  entrypoint?: string
 }
 
 export interface FunctionalModuleReleaseInput {
@@ -43,6 +46,17 @@ export interface FunctionalModuleRelease {
   manifest: FunctionalModuleManifest
   binaries: FunctionalModuleUploadEntry[]
   manifestEntry: FunctionalModuleUploadEntry
+}
+
+export interface FunctionalModuleVersionBump {
+  module: FunctionalModuleName
+  fromVersion: string
+  toVersion: string
+}
+
+export interface ResolvedFunctionalModuleRelease {
+  release: FunctionalModuleRelease
+  versionBumps: FunctionalModuleVersionBump[]
 }
 
 export interface FunctionalModuleObjectUpload {
@@ -75,15 +89,17 @@ export function buildFunctionalModuleRelease(input: FunctionalModuleReleaseInput
     seen.add(moduleKey)
 
     const metadata = readBinaryMetadata(module.binaryPath)
-    const binarySuffix = module.platform === 'win32' ? '.exe' : ''
-    const objectKey = `${prefix}${input.channel}/${platformKey}/${module.module}-${module.version}${binarySuffix}`
+    const format = module.format ?? 'binary'
+    const binarySuffix = format === 'binary' && module.platform === 'win32' ? '.exe' : ''
+    const archiveSuffix = format === 'tar.gz' ? '.tar.gz' : ''
+    const objectKey = `${prefix}${input.channel}/${platformKey}/${module.module}-${module.version}${binarySuffix}${archiveSuffix}`
     const artifact = {
       version: module.version,
       url: `${baseUrl}/${objectKey}`,
       sha256: metadata.sha256,
       size: metadata.size,
-      format: 'binary' as const,
-      entrypoint: getModuleEntrypoint(module.module, binarySuffix),
+      format,
+      entrypoint: module.entrypoint ?? getModuleEntrypoint(module.module, binarySuffix),
       required: module.required,
     }
     const platform = platforms[platformKey] ?? { modules: {} }
@@ -114,6 +130,45 @@ export function buildFunctionalModuleRelease(input: FunctionalModuleReleaseInput
   })
 
   return { manifest, binaries, manifestEntry }
+}
+
+/**
+ * 为内容发生变化的不可变二进制自动递增 patch 版本。
+ *
+ * 同版本、同 SHA 的发布保持幂等；只有 COS 已存在同 key 但内容不同，
+ * 才为对应模块生成下一个 patch 版本。manifest 始终由调用方使用返回的 release 生成。
+ */
+export async function resolveImmutableModuleVersions(
+  input: FunctionalModuleReleaseInput,
+  client: FunctionalModuleObjectClient,
+): Promise<ResolvedFunctionalModuleRelease> {
+  const modules = input.modules.map((module) => ({ ...module }))
+  const initialVersions = new Map(modules.map((module) => [module.module, module.version]))
+
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    const release = buildFunctionalModuleRelease({ ...input, modules })
+    const collisions = await Promise.all(release.binaries.map(async (entry, index) => (
+      await hasImmutableObjectCollision(entry, client) ? index : -1
+    )))
+    const collisionIndexes = collisions.filter((index) => index >= 0)
+    if (collisionIndexes.length === 0) {
+      const versionBumps = modules.flatMap((module): FunctionalModuleVersionBump[] => {
+        const fromVersion = initialVersions.get(module.module)
+        return fromVersion && fromVersion !== module.version
+          ? [{ module: module.module, fromVersion, toVersion: module.version }]
+          : []
+      })
+      return { release, versionBumps }
+    }
+
+    for (const index of collisionIndexes) {
+      const module = modules[index]
+      if (!module) throw new Error('功能模块版本解析失败：二进制与模块索引不匹配')
+      module.version = incrementPatchVersion(module.version)
+    }
+  }
+
+  throw new Error('功能模块版本自动递增超过 100 次，已停止发布')
 }
 
 export interface FunctionalModuleManifestUploadInput {
@@ -207,6 +262,32 @@ async function uploadAndVerify(
   }
 }
 
+async function hasImmutableObjectCollision(
+  entry: FunctionalModuleUploadEntry,
+  client: FunctionalModuleObjectClient,
+): Promise<boolean> {
+  try {
+    const remote = await client.headObject({ key: entry.key })
+    return remote.size !== entry.size || remote.sha256?.toLowerCase() !== entry.sha256
+  } catch (error) {
+    if (isNotFoundError(error)) return false
+    throw error
+  }
+}
+
+function incrementPatchVersion(version: string): string {
+  const match = /^(\d+)\.(\d+)\.(\d+)$/.exec(version)
+  if (!match) {
+    throw new Error(`无法自动递增非稳定版功能模块版本: ${version}`)
+  }
+  return `${match[1]}.${match[2]}.${(BigInt(match[3]!) + 1n).toString()}`
+}
+
+function isNotFoundError(error: unknown): boolean {
+  if (!isRecord(error)) return false
+  return error.statusCode === 404 || error.status === 404 || error.code === 'NoSuchKey'
+}
+
 function validateReleaseInput(input: FunctionalModuleReleaseInput): void {
   if (!isSafeSegment(input.channel)) throw new Error(`发布 channel 不合法: ${input.channel}`)
   if (!isSafeHttpUrl(input.publicBaseUrl)) throw new Error('发布 publicBaseUrl 必须是 HTTP(S) URL')
@@ -218,6 +299,12 @@ function validateReleaseInput(input: FunctionalModuleReleaseInput): void {
   for (const module of input.modules) {
     if (!isSafeSegment(module.module)) throw new Error(`功能模块名称不合法: ${module.module}`)
     if (!isSemver(module.version)) throw new Error(`功能模块版本不合法: ${module.version}`)
+    if (module.format !== undefined && module.format !== 'binary' && module.format !== 'tar.gz') {
+      throw new Error(`功能模块 format 不支持: ${module.module}`)
+    }
+    if (module.entrypoint !== undefined && !isSafeRelativePath(module.entrypoint)) {
+      throw new Error(`功能模块入口路径不安全: ${module.module}`)
+    }
     if (typeof module.required !== 'boolean') throw new Error(`功能模块 required 不合法: ${module.module}`)
   }
 }
@@ -260,7 +347,9 @@ function validateManifestUploadArtifact(name: string, value: unknown): void {
   if (!Number.isSafeInteger(value.size) || value.size < 0) {
     throw new Error(`发布 manifest 模块 size 不合法: ${name}`)
   }
-  if (value.format !== 'binary') throw new Error(`发布 manifest 模块 format 不支持: ${name}`)
+  if (value.format !== 'binary' && value.format !== 'tar.gz') {
+    throw new Error(`发布 manifest 模块 format 不支持: ${name}`)
+  }
   if (typeof value.entrypoint !== 'string' || !isSafeRelativePath(value.entrypoint)) {
     throw new Error(`发布 manifest 模块 entrypoint 不安全: ${name}`)
   }
@@ -325,9 +414,9 @@ function normalizePrefix(value: string | undefined): string {
 }
 
 function getModuleEntrypoint(name: FunctionalModuleName, suffix: string): string {
-  return name === 'officecli'
-    ? `bin/officecli${suffix}`
-    : `bin/copis-http-api-server${suffix}`
+  if (name === 'officecli') return `bin/officecli${suffix}`
+  if (name === 'node-runtime') return `bin/node${suffix}`
+  return `bin/copis-http-api-server${suffix}`
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

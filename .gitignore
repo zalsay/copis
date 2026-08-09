@@ -13,6 +13,8 @@ apps/electron/resources/bin/
 apps/electron/resources/agent-island/
 # 默认 Pi 扩展副本（copy:pi-extensions 从 node_modules 生成，打包时现拷，不进 git）
 apps/electron/resources/pi-extensions/
+# 工作区项目 Node runtime 功能模块归档（build:node-runtime-module 生成，打包时现拷，不进 git）
+apps/electron/resources/node-runtime/
 # bun build --compile 的临时中间产物
 *.bun-build
 

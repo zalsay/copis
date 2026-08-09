@@ -73,12 +73,15 @@ impl WorkspaceSkillsStore {
             };
             let slug_name = entry.file_name().to_string_lossy().into_owned();
             let (name, description) = parse_skill_frontmatter(&content, &slug_name);
-            skills.push((slug_name.clone(), json!({
-                "slug": slug_name,
-                "name": name,
-                "description": description,
-                "enabled": true,
-            })));
+            skills.push((
+                slug_name.clone(),
+                json!({
+                    "slug": slug_name,
+                    "name": name,
+                    "description": description,
+                    "enabled": true,
+                }),
+            ));
         }
 
         skills.sort_by(|left, right| left.0.cmp(&right.0));
@@ -115,7 +118,9 @@ fn parse_skill_frontmatter(content: &str, slug: &str) -> (String, String) {
                     continue;
                 }
                 match key {
-                    "name" => append_line(name.get_or_insert_with(|| slug.to_string()), text, folded),
+                    "name" => {
+                        append_line(name.get_or_insert_with(|| slug.to_string()), text, folded)
+                    }
                     "description" => append_line(&mut description, text, folded),
                     _ => {}
                 }
@@ -154,7 +159,11 @@ fn parse_skill_frontmatter(content: &str, slug: &str) -> (String, String) {
 }
 
 fn append_line(target: &mut String, text: &str, folded: bool) {
-    let separator = if folded && !target.is_empty() { " " } else { "\n" };
+    let separator = if folded && !target.is_empty() {
+        " "
+    } else {
+        "\n"
+    };
     if target.is_empty() {
         target.push_str(text);
     } else {

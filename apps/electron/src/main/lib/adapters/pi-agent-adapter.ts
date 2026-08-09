@@ -61,7 +61,7 @@ import { createCopisResourceLoaderOptions } from './pi-resource-loader-overrides
 import { createCodexFastModeExtension, withCodexFastModeServiceTier } from './pi-codex-request-settings'
 import { createOpenAIReasoningRequestExtension } from './pi-openai-reasoning-request-settings'
 import { buildPiBrowserAgentTools } from './pi-browser-agent-tools'
-import { createRustFileToolOperations } from './pi-rust-file-tools'
+import { createRustBashToolOperations, createRustFileToolOperations } from './pi-rust-file-tools'
 import { resolveDefaultPiExtensionEntries } from './pi-default-extensions'
 import { mergeRuntimeEnv, type AgentRuntimeEnv } from '../agent-runtime-env'
 import type { PiWorkerBrowserCapability } from '../agent-rpc-protocol'
@@ -1312,9 +1312,10 @@ export function buildBuiltinToolDefinitions(
     : undefined
   const definitions = [
     sdk.createReadToolDefinition(cwd, rustFileTools ? { operations: rustFileTools.read } : undefined),
-    // Bash / grep / find / ls 都能绕过跨平台的 Rust 文件策略。工作区会话在这些
-    // 工具也迁移到 Rust 之前，不把它们交给 Pi。
-    ...(!rustFileTools ? [sdk.createBashToolDefinition(cwd, createCopisBashToolOptions(runtimeEnv))] : []),
+    // Bash 在 Rust 文件能力启用时同样经 Rust 执行，不能回退到 Pi 本地 Shell。
+    sdk.createBashToolDefinition(cwd, rustFileTools
+      ? { operations: createRustBashToolOperations({ sessionId: options.sessionId }) }
+      : createCopisBashToolOptions(runtimeEnv)),
     sdk.createEditToolDefinition(cwd, rustFileTools ? { operations: rustFileTools.edit } : undefined),
     sdk.createWriteToolDefinition(cwd, rustFileTools ? { operations: rustFileTools.write } : undefined),
     ...(!rustFileTools ? [

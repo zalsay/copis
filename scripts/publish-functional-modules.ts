@@ -1,13 +1,14 @@
 #!/usr/bin/env bun
 import { createHash } from 'node:crypto'
-import { readFileSync } from 'node:fs'
-import { join, resolve } from 'node:path'
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { dirname, join, resolve } from 'node:path'
 import {
   buildFunctionalModuleManifestUpload,
   buildFunctionalModuleRelease,
   markFunctionalModuleRequired,
   publishFunctionalModuleManifest,
   publishFunctionalModuleRelease,
+  resolveImmutableModuleVersions,
   type FunctionalModuleBinaryInput,
 } from './functional-module-publisher'
 import type {
@@ -34,7 +35,10 @@ const packageMetadata = JSON.parse(readFileSync(join(electronDir, 'package.json'
 async function main(): Promise<void> {
   const rustOnly = hasFlag('--rust') || process.env.COPIS_RUST_ONLY === '1'
   const officeCliOnly = hasFlag('--officecli') || process.env.COPIS_OFFICECLI_ONLY === '1'
-  if (rustOnly && officeCliOnly) throw new Error('--rust 与 --officecli 不能同时使用')
+  const nodeRuntimeOnly = hasFlag('--node-runtime') || process.env.COPIS_NODE_RUNTIME_ONLY === '1'
+  if (Number(rustOnly) + Number(officeCliOnly) + Number(nodeRuntimeOnly) > 1) {
+    throw new Error('--rust、--officecli 与 --node-runtime 不能同时使用')
+  }
 
   const secretId = requiredEnv('COS_SECRET_ID')
   const secretKey = requiredEnv('COS_SECRET_KEY')
@@ -65,7 +69,10 @@ async function main(): Promise<void> {
   if (hasFlag('--manifest-only')) {
     const manifestPath = requiredOption('--manifest-file', 'COPIS_FUNCTIONAL_MODULE_MANIFEST_FILE')
     const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as FunctionalModuleManifest
-    const requiredManifest = markFunctionalModuleRequired(manifest, 'officecli')
+    const requiredManifest = ['node-runtime', 'officecli', 'rust-http-api'].reduce<FunctionalModuleManifest>(
+      (value, name) => markFunctionalModuleRequired(value, name),
+      manifest,
+    )
     const manifestEntry = buildFunctionalModuleManifestUpload({
       channel,
       publicBaseUrl,
@@ -75,27 +82,35 @@ async function main(): Promise<void> {
     await publishFunctionalModuleManifest(manifestEntry, client)
     console.log(`[publish:functional-modules] 已覆盖发布 manifest: ${manifestEntry.key}`)
   } else {
-    const rustBinary = officeCliOnly
+    const rustBinary = officeCliOnly || nodeRuntimeOnly
       ? ''
       : getOption('--rust-binary')
         ?? process.env.COPIS_RUST_HTTP_API_BINARY?.trim()
         ?? join(repoRoot, 'native/http-api-server/target/release', binaryName('copis-http-api-server', platform))
-    const officeCliBinary = rustOnly
+    const officeCliBinary = rustOnly || nodeRuntimeOnly
       ? undefined
       : getOption('--officecli-binary')
         ?? process.env.COPIS_OFFICECLI_BINARY?.trim()
         ?? join(electronDir, 'resources/bin', binaryName('officecli', platform))
+    const nodeRuntimeArchive = rustOnly || officeCliOnly
+      ? undefined
+      : getOption('--node-runtime-archive')
+        ?? process.env.COPIS_NODE_RUNTIME_ARCHIVE?.trim()
+        ?? join(electronDir, 'resources/node-runtime', `${platform}-${arch}.tar.gz`)
     const modules = buildFunctionalModuleBinaryInputs({
       rustOnly,
       officeCliOnly,
+      nodeRuntimeOnly,
       rustBinary,
       rustVersion: getOption('--rust-version') ?? process.env.COPIS_RUST_HTTP_API_VERSION?.trim() ?? version,
       officeCliBinary,
       officeCliVersion: getOption('--officecli-version') ?? process.env.COPIS_OFFICECLI_VERSION?.trim() ?? version,
+      nodeRuntimeArchive,
+      nodeRuntimeVersion: getOption('--node-runtime-version') ?? process.env.COPIS_NODE_RUNTIME_VERSION?.trim() ?? version,
       platform,
       arch,
     })
-    const release = buildFunctionalModuleRelease({
+    const releaseInput = {
       channel,
       clientMinVersion: getOption('--client-min-version')
         ?? process.env.COPIS_MODULE_CLIENT_MIN_VERSION?.trim()
@@ -103,10 +118,26 @@ async function main(): Promise<void> {
       publicBaseUrl,
       prefix,
       modules,
-    })
-    const existingManifest = await fetchExistingManifest(release.manifestEntry.url)
-    if (rustOnly) requireExistingOfficeCli(existingManifest, platform, arch)
-    if (officeCliOnly) requireExistingRustApi(existingManifest, platform, arch)
+    }
+    const initialRelease = buildFunctionalModuleRelease(releaseInput)
+    const existingManifest = await fetchExistingManifest(initialRelease.manifestEntry.url)
+    if (rustOnly) {
+      requireExistingOfficeCli(existingManifest, platform, arch)
+      requireExistingNodeRuntime(existingManifest, platform, arch)
+    }
+    if (officeCliOnly) {
+      requireExistingRustApi(existingManifest, platform, arch)
+      requireExistingNodeRuntime(existingManifest, platform, arch)
+    }
+    if (nodeRuntimeOnly) {
+      requireExistingRustApi(existingManifest, platform, arch)
+      requireExistingOfficeCli(existingManifest, platform, arch)
+    }
+    const resolvedRelease = await resolveImmutableModuleVersions(releaseInput, client)
+    const release = resolvedRelease.release
+    for (const bump of resolvedRelease.versionBumps) {
+      console.log(`[publish:functional-modules] 检测到不可变对象内容变化，${bump.module} 自动递增版本：${bump.fromVersion} → ${bump.toVersion}`)
+    }
     const mergedManifest = mergeFunctionalModuleManifests(existingManifest, release.manifest)
     const mergedManifestBody = Buffer.from(`${JSON.stringify(mergedManifest, null, 2)}\n`, 'utf8')
     const releaseToPublish = {
@@ -126,11 +157,23 @@ async function main(): Promise<void> {
     }
 
     await publishFunctionalModuleRelease(releaseToPublish, client)
+    const manifestOutput = getOption('--manifest-output')
+    if (manifestOutput) {
+      writePublishedManifest(manifestOutput, mergedManifestBody)
+      console.log(`[publish:functional-modules] 已同步最终 manifest: ${resolve(manifestOutput)}`)
+    }
     console.log(`[publish:functional-modules] 已发布 ${release.binaries.length} 个二进制和 manifest`)
   }
 }
 
 if (import.meta.main) await main()
+
+/** 将已发布的最终 manifest 回写到本地构建目录，避免自动升版后留下过期文件。 */
+export function writePublishedManifest(outputPath: string, body: Buffer): void {
+  const path = resolve(outputPath)
+  mkdirSync(dirname(path), { recursive: true })
+  writeFileSync(path, body)
+}
 
 function requiredEnv(name: string): string {
   const value = process.env[name]?.trim()
@@ -184,13 +227,31 @@ export function requireExistingRustApi(
   }
 }
 
+export function requireExistingNodeRuntime(
+  manifest: FunctionalModuleManifest | undefined,
+  platform: FunctionalModulePlatform,
+  arch: FunctionalModuleArchitecture,
+): void {
+  const platformKey = `${platform}-${arch}`
+  const artifact = manifest?.platforms[platformKey]?.modules['node-runtime']
+  if (!artifact) {
+    throw new Error(`COS manifest 当前平台/架构缺少 node-runtime: ${platformKey}，单模块发布已停止`)
+  }
+  if (artifact.required !== true || artifact.format !== 'tar.gz' || artifact.entrypoint !== `bin/${binaryName('node', platform)}`) {
+    throw new Error(`COS manifest 当前平台/架构的 node-runtime 无效: ${platformKey}，单模块发布已停止`)
+  }
+}
+
 interface FunctionalModuleBinaryInputOptions {
   rustOnly: boolean
   officeCliOnly?: boolean
+  nodeRuntimeOnly?: boolean
   rustBinary: string
   rustVersion: string
   officeCliBinary?: string
   officeCliVersion: string
+  nodeRuntimeArchive?: string
+  nodeRuntimeVersion?: string
   platform: FunctionalModulePlatform
   arch: FunctionalModuleArchitecture
 }
@@ -199,9 +260,12 @@ export function buildFunctionalModuleBinaryInputs(
   input: FunctionalModuleBinaryInputOptions,
 ): FunctionalModuleBinaryInput[] {
   const officeCliOnly = input.officeCliOnly ?? false
-  if (input.rustOnly && officeCliOnly) throw new Error('--rust 与 --officecli 不能同时使用')
+  const nodeRuntimeOnly = input.nodeRuntimeOnly ?? false
+  if (Number(input.rustOnly) + Number(officeCliOnly) + Number(nodeRuntimeOnly) > 1) {
+    throw new Error('--rust、--officecli 与 --node-runtime 不能同时使用')
+  }
   const modules: FunctionalModuleBinaryInput[] = []
-  if (!officeCliOnly) {
+  if (!officeCliOnly && !nodeRuntimeOnly) {
     modules.push({
       module: 'rust-http-api',
       version: input.rustVersion,
@@ -211,7 +275,7 @@ export function buildFunctionalModuleBinaryInputs(
       required: true,
     })
   }
-  if (!input.rustOnly) {
+  if (!input.rustOnly && !nodeRuntimeOnly) {
     if (!input.officeCliBinary) throw new Error('正常发布或 OfficeCLI-only 发布需要提供 OfficeCLI 二进制路径')
     modules.push({
       module: 'officecli',
@@ -219,6 +283,19 @@ export function buildFunctionalModuleBinaryInputs(
       platform: input.platform,
       arch: input.arch,
       binaryPath: input.officeCliBinary,
+      required: true,
+    })
+  }
+  if (!input.rustOnly && !officeCliOnly) {
+    if (!input.nodeRuntimeArchive) throw new Error('正常发布或 Node.js runtime-only 发布需要提供 Node.js runtime 归档')
+    modules.push({
+      module: 'node-runtime',
+      version: input.nodeRuntimeVersion ?? input.rustVersion,
+      platform: input.platform,
+      arch: input.arch,
+      binaryPath: input.nodeRuntimeArchive,
+      format: 'tar.gz',
+      entrypoint: `bin/${binaryName('node', input.platform)}`,
       required: true,
     })
   }

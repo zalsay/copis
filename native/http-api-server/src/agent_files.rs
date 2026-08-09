@@ -2,8 +2,10 @@ use std::collections::HashMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Component, Path, PathBuf};
+use std::process::{Command, Stdio};
 use std::sync::Mutex;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::thread;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use getrandom::getrandom;
 use serde::Deserialize;
@@ -11,6 +13,9 @@ use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 
 pub const MAX_FILE_BYTES: u64 = 50 * 1024 * 1024;
+const DEFAULT_COMMAND_TIMEOUT_MS: u64 = 120_000;
+const MAX_COMMAND_TIMEOUT_MS: u64 = 600_000;
+const MAX_COMMAND_OUTPUT_BYTES: usize = 1024 * 1024;
 
 #[derive(Debug)]
 pub struct AgentFileError {
@@ -98,6 +103,20 @@ struct FileRequest {
     expected_revision: Option<String>,
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ShellRequest {
+    session_id: String,
+    command: String,
+    cwd: String,
+    timeout_ms: Option<u64>,
+}
+
+struct CapturedCommandOutput {
+    bytes: Vec<u8>,
+    truncated: bool,
+}
+
 impl AgentFilePolicyStore {
     pub fn new() -> Self {
         Self::default()
@@ -183,6 +202,35 @@ impl AgentFilePolicyStore {
         }
         self.ensure_worker_token(&request.session_id, worker_token)?;
         self.handle(action, method, body)
+    }
+
+    /// Bash 命令由 Rust 执行，Pi Worker 只有当前会话的能力令牌，不能获取授权目录。
+    pub fn handle_shell_with_worker_token(
+        &self,
+        worker_token: &str,
+        body: &[u8],
+    ) -> Result<Value, AgentFileError> {
+        let request: ShellRequest = serde_json::from_slice(body)
+            .map_err(|_| AgentFileError::bad_request("命令请求体不是有效的 JSON"))?;
+        if request.session_id.trim().is_empty()
+            || request.command.trim().is_empty()
+            || request.cwd.trim().is_empty()
+        {
+            return Err(AgentFileError::bad_request(
+                "命令请求缺少 sessionId、command 或 cwd",
+            ));
+        }
+        self.ensure_worker_token(&request.session_id, worker_token)?;
+        let policy = self
+            .policies
+            .lock()
+            .unwrap()
+            .get(&request.session_id)
+            .cloned()
+            .ok_or_else(|| {
+                AgentFileError::forbidden("agent_policy_not_found", "Agent 文件权限策略不存在")
+            })?;
+        policy.execute_project_command(&request)
     }
 
     fn ensure_worker_token(
@@ -348,6 +396,32 @@ impl AgentFilePolicyStore {
 }
 
 impl FileAccessPolicy {
+    fn execute_project_command(&self, request: &ShellRequest) -> Result<Value, AgentFileError> {
+        if self.permission_mode == "plan" {
+            return Err(AgentFileError::forbidden(
+                "plan_command_not_allowed",
+                "计划模式下不能执行项目命令",
+            ));
+        }
+        validate_project_command(&request.command)?;
+        let cwd = self.resolve(&request.cwd, false)?;
+        self.ensure_read(&cwd)?;
+        self.ensure_write(&cwd)?;
+        if !fs::metadata(&cwd).map_err(io_error)?.is_dir() {
+            return Err(AgentFileError::forbidden(
+                "not_a_directory",
+                "命令工作目录不是目录",
+            ));
+        }
+        let timeout_ms = request.timeout_ms.unwrap_or(DEFAULT_COMMAND_TIMEOUT_MS);
+        if timeout_ms == 0 || timeout_ms > MAX_COMMAND_TIMEOUT_MS {
+            return Err(AgentFileError::bad_request(
+                "命令 timeoutMs 必须在 1 到 600000 之间",
+            ));
+        }
+        run_project_command(&request.command, &cwd, Duration::from_millis(timeout_ms))
+    }
+
     fn from_value(value: &Value, cwd: Option<&Value>) -> Result<Self, AgentFileError> {
         let object = value
             .as_object()
@@ -456,6 +530,177 @@ impl FileAccessPolicy {
             ))
         }
     }
+}
+
+/// 仅开放项目依赖、构建与本地开发所需的包管理命令；通用 Shell 语法会绕过路径策略。
+fn validate_project_command(command: &str) -> Result<(), AgentFileError> {
+    let command = command.trim();
+    if command.is_empty() || command.len() > 16 * 1024 {
+        return Err(AgentFileError::bad_request(
+            "项目命令不能为空且不能超过 16 KB",
+        ));
+    }
+    if command.contains([';', '|', '&', '>', '<', '\n', '\r', '`']) || command.contains("$(") {
+        return Err(AgentFileError::forbidden(
+            "command_syntax_not_allowed",
+            "项目命令不允许使用重定向、管道或串联语法",
+        ));
+    }
+    let arguments = command.split_whitespace().collect::<Vec<_>>();
+    let Some(executable) = arguments.first() else {
+        return Err(AgentFileError::bad_request("项目命令不能为空"));
+    };
+    if arguments.iter().skip(1).any(|argument| {
+        matches!(
+            *argument,
+            "-g" | "--global" | "--prefix" | "--cache" | "--userconfig" | "--target" | "--user"
+        ) || argument.starts_with("--prefix=")
+            || argument.starts_with("--cache=")
+            || argument.starts_with("--userconfig=")
+            || argument.starts_with("--target=")
+    }) {
+        return Err(AgentFileError::forbidden(
+            "command_scope_not_allowed",
+            "项目命令不能修改全局环境或指定工作区外的目录",
+        ));
+    }
+    let operation = arguments.get(1).copied().unwrap_or_default();
+    let allowed = match *executable {
+        "npm" => matches!(
+            operation,
+            "install" | "ci" | "run" | "test" | "exec" | "create"
+        ),
+        "pnpm" => matches!(operation, "install" | "run" | "test" | "exec" | "create"),
+        "yarn" => matches!(operation, "install" | "run" | "test" | "create"),
+        "bun" => matches!(operation, "install" | "run" | "test" | "x" | "create"),
+        "npx" => matches!(operation, "vite" | "create-vite" | "create-vite@latest"),
+        "python" | "python3" => operation == "-m",
+        "pip" | "pip3" => operation == "install",
+        "uv" => matches!(operation, "sync" | "run" | "pip"),
+        _ => false,
+    };
+    if allowed {
+        Ok(())
+    } else {
+        Err(AgentFileError::forbidden(
+            "command_not_allowed",
+            "仅支持工作区内的依赖安装、构建、测试和本地开发命令",
+        ))
+    }
+}
+
+fn run_project_command(
+    command: &str,
+    cwd: &Path,
+    timeout: Duration,
+) -> Result<Value, AgentFileError> {
+    let mut process = if cfg!(windows) {
+        let mut command_process = Command::new("cmd");
+        command_process.args(["/C", command]);
+        command_process
+    } else {
+        let mut command_process = Command::new("/bin/sh");
+        command_process.args(["-lc", command]);
+        command_process
+    };
+    process
+        .current_dir(cwd)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    configure_project_command_environment(&mut process);
+    let mut child = process
+        .spawn()
+        .map_err(|error| AgentFileError::internal(format!("无法启动项目命令: {}", error)))?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| AgentFileError::internal("项目命令标准输出不可用"))?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| AgentFileError::internal("项目命令错误输出不可用"))?;
+    let stdout_reader = thread::spawn(move || read_command_output(stdout));
+    let stderr_reader = thread::spawn(move || read_command_output(stderr));
+    let started_at = Instant::now();
+    let mut timed_out = false;
+    let status = loop {
+        match child.try_wait().map_err(io_error)? {
+            Some(status) => break status,
+            None if started_at.elapsed() >= timeout => {
+                timed_out = true;
+                let _ = child.kill();
+                break child.wait().map_err(io_error)?;
+            }
+            None => thread::sleep(Duration::from_millis(25)),
+        }
+    };
+    let stdout = stdout_reader
+        .join()
+        .map_err(|_| AgentFileError::internal("读取项目命令标准输出失败"))?;
+    let stderr = stderr_reader
+        .join()
+        .map_err(|_| AgentFileError::internal("读取项目命令错误输出失败"))?;
+    let mut output = String::from_utf8_lossy(&stdout.bytes).into_owned();
+    if !stderr.bytes.is_empty() {
+        if !output.is_empty() && !output.ends_with('\n') {
+            output.push('\n');
+        }
+        output.push_str(&String::from_utf8_lossy(&stderr.bytes));
+    }
+    Ok(json!({
+        "output": output,
+        "outputTruncated": stdout.truncated || stderr.truncated,
+        "exitCode": if timed_out { Value::Null } else { status.code().map_or(Value::Null, Value::from) },
+        "timedOut": timed_out,
+    }))
+}
+
+fn read_command_output<R: Read>(mut reader: R) -> CapturedCommandOutput {
+    let mut bytes = Vec::new();
+    let mut buffer = [0_u8; 8192];
+    let mut truncated = false;
+    loop {
+        match reader.read(&mut buffer) {
+            Ok(0) | Err(_) => break,
+            Ok(read) => {
+                let remaining = MAX_COMMAND_OUTPUT_BYTES.saturating_sub(bytes.len());
+                if read > remaining {
+                    bytes.extend_from_slice(&buffer[..remaining]);
+                    truncated = true;
+                } else {
+                    bytes.extend_from_slice(&buffer[..read]);
+                }
+            }
+        }
+    }
+    CapturedCommandOutput { bytes, truncated }
+}
+
+fn configure_project_command_environment(command: &mut Command) {
+    command.env_clear();
+    for key in [
+        "PATH",
+        "HOME",
+        "USER",
+        "LOGNAME",
+        "SHELL",
+        "TMPDIR",
+        "TMP",
+        "TEMP",
+        "SystemRoot",
+        "ComSpec",
+        "PATHEXT",
+        "APPDATA",
+        "LOCALAPPDATA",
+    ] {
+        if let Some(value) = std::env::var_os(key) {
+            command.env(key, value);
+        }
+    }
+
+    // 项目命令必须优先使用 Copis 管理的 Node.js/npm，不能依赖用户的系统 PATH。
+    command.env("PATH", crate::runtime::resolve_runtime().path_value());
 }
 
 fn generate_worker_token() -> Result<String, String> {

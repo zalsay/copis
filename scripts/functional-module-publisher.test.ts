@@ -8,6 +8,7 @@ import {
   buildFunctionalModuleRelease,
   markFunctionalModuleRequired,
   publishFunctionalModuleRelease,
+  resolveImmutableModuleVersions,
   type FunctionalModuleObjectClient,
 } from './functional-module-publisher'
 
@@ -62,6 +63,86 @@ describe('COS 功能模块发布器', () => {
         { module: 'officecli', version: '1.0.1', platform: 'darwin', arch: 'arm64', binaryPath, required: true },
       ],
     })).toThrow('重复')
+  })
+
+  test('同版本二进制与 COS 内容不同时自动递增 patch 版本', async () => {
+    const binaryPath = createFixture('new-rust-api', 'copis-http-api-server')
+    const client: FunctionalModuleObjectClient = {
+      async putObject() {},
+      async headObject(input) {
+        if (input.key.endsWith('rust-http-api-0.0.36')) {
+          return { size: 1, sha256: 'a'.repeat(64) }
+        }
+        throw { statusCode: 404 }
+      },
+    }
+
+    const resolved = await resolveImmutableModuleVersions({
+      channel: 'stable',
+      publicBaseUrl: 'https://download.example.com/copis/modules',
+      modules: [{ module: 'rust-http-api', version: '0.0.36', platform: 'darwin', arch: 'x64', binaryPath, required: true }],
+    }, client)
+
+    expect(resolved.release.binaries[0]?.key).toContain('rust-http-api-0.0.37')
+    expect(resolved.versionBumps).toEqual([{ module: 'rust-http-api', fromVersion: '0.0.36', toVersion: '0.0.37' }])
+  })
+
+  test('同版本二进制与 COS 内容相同时保持幂等，不递增版本', async () => {
+    const binaryPath = createFixture('unchanged-rust-api', 'copis-http-api-server')
+    const initial = buildFunctionalModuleRelease({
+      channel: 'stable',
+      publicBaseUrl: 'https://download.example.com/copis/modules',
+      modules: [{ module: 'rust-http-api', version: '0.0.36', platform: 'darwin', arch: 'x64', binaryPath, required: true }],
+    })
+    const entry = initial.binaries[0]!
+    const client: FunctionalModuleObjectClient = {
+      async putObject() {},
+      async headObject() {
+        return { size: entry.size, sha256: entry.sha256 }
+      },
+    }
+
+    const resolved = await resolveImmutableModuleVersions({
+      channel: 'stable',
+      publicBaseUrl: 'https://download.example.com/copis/modules',
+      modules: [{ module: 'rust-http-api', version: '0.0.36', platform: 'darwin', arch: 'x64', binaryPath, required: true }],
+    }, client)
+
+    expect(resolved.release.binaries[0]?.key).toContain('rust-http-api-0.0.36')
+    expect(resolved.versionBumps).toEqual([])
+  })
+
+  test('已有自动递增版本与当前二进制相同时复用该版本，不继续递增', async () => {
+    const binaryPath = createFixture('stable-rust-api', 'copis-http-api-server')
+    const stableRelease = buildFunctionalModuleRelease({
+      channel: 'stable',
+      publicBaseUrl: 'https://download.example.com/copis/modules',
+      modules: [{ module: 'rust-http-api', version: '0.0.37', platform: 'darwin', arch: 'x64', binaryPath, required: true }],
+    })
+    const stableEntry = stableRelease.binaries[0]!
+    const checkedKeys: string[] = []
+    const client: FunctionalModuleObjectClient = {
+      async putObject() {},
+      async headObject(input) {
+        checkedKeys.push(input.key)
+        if (input.key.endsWith('rust-http-api-0.0.36')) {
+          return { size: 1, sha256: 'a'.repeat(64) }
+        }
+        if (input.key.endsWith('rust-http-api-0.0.37')) {
+          return { size: stableEntry.size, sha256: stableEntry.sha256 }
+        }
+        throw { statusCode: 404 }
+      },
+    }
+
+    const resolved = await resolveImmutableModuleVersions({
+      channel: 'stable',
+      publicBaseUrl: 'https://download.example.com/copis/modules',
+      modules: [{ module: 'rust-http-api', version: '0.0.36', platform: 'darwin', arch: 'x64', binaryPath, required: true }],
+    }, client)
+
+    expect(resolved.release.binaries[0]?.key).toContain('rust-http-api-0.0.37')
+    expect(checkedKeys.some((key) => key.endsWith('rust-http-api-0.0.38'))).toBe(false)
   })
 
   test('缺少二进制时返回可诊断错误', () => {

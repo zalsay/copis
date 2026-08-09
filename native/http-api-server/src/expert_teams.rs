@@ -459,9 +459,7 @@ impl ExpertTeamStore {
             )
             .optional()
             .map_err(storage_error)?
-            .ok_or_else(|| {
-                ExpertTeamError::NotFound("工作区尚未绑定专家团队 schema".to_string())
-            })
+            .ok_or_else(|| ExpertTeamError::NotFound("工作区尚未绑定专家团队 schema".to_string()))
     }
 
     pub fn create_run(&self, input: RunCreateInput) -> Result<Value, ExpertTeamError> {
@@ -962,11 +960,7 @@ fn schema_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Value> {
 
 fn run_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Value> {
     let input: Value = serde_json::from_str(&row.get::<_, String>(6)?).map_err(|error| {
-        rusqlite::Error::FromSqlConversionFailure(
-            6,
-            rusqlite::types::Type::Text,
-            Box::new(error),
-        )
+        rusqlite::Error::FromSqlConversionFailure(6, rusqlite::types::Type::Text, Box::new(error))
     })?;
     Ok(json!({
         "id": row.get::<_, String>(0)?,
