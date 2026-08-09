@@ -64,6 +64,10 @@ import {
   markdownFontSizeAtom,
   initializeMarkdownFontSize,
 } from './atoms/markdown-font-size'
+import {
+  pinnedDevProjectsAtom,
+  initializePinnedDevProjects,
+} from './atoms/pinned-dev-projects'
 import { useGlobalAgentListeners } from './hooks/useGlobalAgentListeners'
 import { tabsAtom, activeTabIdAtom, getPersistableTabState, sanitizePersistedTabs } from './atoms/tab-atoms'
 import type { TabItem } from './atoms/tab-atoms'
@@ -650,6 +654,21 @@ function MarkdownFontSizeInitializer(): null {
 }
 
 /**
+ * 固定项目初始化组件
+ *
+ * 从主进程加载「我的项目」固定列表，供右侧项目列表与左侧边栏共享。
+ */
+function PinnedDevProjectsInitializer(): null {
+  const setPinnedDevProjects = useSetAtom(pinnedDevProjectsAtom)
+
+  useEffect(() => {
+    void initializePinnedDevProjects(setPinnedDevProjects)
+  }, [setPinnedDevProjects])
+
+  return null
+}
+
+/**
  * Agent IPC 监听器初始化组件
  *
  * 全局挂载，永不销毁。确保 Agent 流式事件、权限请求
@@ -1009,6 +1028,7 @@ if (isQuickTaskWindow) {
       <DockBadgeInitializer />
       <UiPreferencesInitializer />
       <MarkdownFontSizeInitializer />
+      <PinnedDevProjectsInitializer />
       <AgentListenersInitializer />
       <AgentToolInitializer />
       <UpdaterInitializer />

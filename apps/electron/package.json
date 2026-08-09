@@ -1,6 +1,6 @@
 {
   "name": "@copis/electron",
-  "version": "0.0.40",
+  "version": "0.0.41",
   "description": "Copis Working desktop client - Electron App",
   "main": "dist/main.cjs",
   "author": {

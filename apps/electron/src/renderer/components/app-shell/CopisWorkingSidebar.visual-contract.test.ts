@@ -94,4 +94,64 @@ describe('Working 侧边栏视觉契约', () => {
     expect(sidebarStyles).toContain('top: auto')
     expect(sidebarStyles).toContain('bottom: 30px')
   })
+
+  test('Given 侧边栏 When 查看项目标题 Then 创建工作区按钮位于标题右侧并使用加号图标', () => {
+    expect(sidebarSource).not.toContain('<span>创建工作区</span>')
+    expect(sidebarSource).toContain('className="copis-working-project-heading-actions"')
+    expect(sidebarSource).toContain('className="copis-working-project-create"')
+    expect(sidebarSource).toContain('aria-label="创建工作区"')
+    expect(sidebarSource).toContain('<Plus aria-hidden="true" />')
+    expect(sidebarStyles).toContain('.copis-working-project-heading-actions')
+    expect(sidebarStyles).toContain('.copis-working-project-create')
+  })
+
+  test('Given 工作区列表 When 固定了开发项目 Then 左侧我的项目分组展示固定项目并支持展开折叠', () => {
+    expect(sidebarSource).toContain('我的项目')
+    expect(sidebarSource).toContain('工作区')
+    expect(sidebarSource).toContain('pinnedDevProjectsAtom')
+    expect(sidebarSource).toContain('pinnedProjectEntries')
+    expect(sidebarSource).toContain('copis-working-project-pinned-row')
+    expect(sidebarSource).not.toContain('{pinnedProjectEntries.length > 0 && (')
+    expect(sidebarSource).toContain('暂无固定项目，在右侧项目列表点击图钉添加')
+    expect(sidebarSource).toContain('aria-expanded={!pinnedGroupCollapsed}')
+    expect(sidebarSource).toContain('aria-expanded={!workspaceGroupCollapsed}')
+    expect(sidebarSource).not.toContain('pinnedWorkspaceIds')
+    expect(sidebarStyles).toContain('.copis-working-project-group-toggle')
+    expect(sidebarStyles).toContain('.copis-working-project-group-chevron')
+    expect(sidebarStyles).toContain('.copis-working-project-pinned-row')
+    expect(sidebarStyles).toContain('.copis-working-project-pinned-empty')
+    expect(sidebarStyles).toContain('color: var(--ui-primary)')
+  })
+
+  test('Given 项目分组 When 查看左侧对齐 Then 与顶部菜单保持同一文字起点与左边缘', () => {
+    const menuRule = sidebarStyles.match(/\.copis-working-menu-button\s*\{([^}]*)\}/s)?.[1]
+    const headingRule = sidebarStyles.match(
+      /\.copis-working-project-group-heading\s*\{([^}]*)\}/s,
+    )?.[1]
+    const toggleRule = sidebarStyles.match(
+      /\.copis-working-project-group-toggle\s*\{([^}]*)\}/s,
+    )?.[1]
+    const pinnedRule = sidebarStyles.match(
+      /\.copis-working-project-pinned-row\s*\{([^}]*)\}/s,
+    )?.[1]
+    const mainRule = sidebarStyles.match(
+      /\.copis-working-project-main\s*\{([^}]*)\}/s,
+    )?.[1]
+
+    expect(menuRule).toBeDefined()
+    expect(menuRule).toContain('grid-template-columns: 18px minmax(0, 1fr)')
+    expect(menuRule).toContain('gap: 8px')
+
+    // 分组标题按钮与菜单按钮左边缘对齐
+    expect(headingRule).toContain('padding-left: 0')
+    expect(toggleRule).toContain('padding: 5px 8px')
+    expect(toggleRule).toContain('grid-template-columns: 18px minmax(0, 1fr) auto')
+    expect(toggleRule).toContain('gap: 8px')
+
+    // 固定项目与工作区行的文字与分组标题/菜单文字同一列起点（18px 图标列 + 8px 间距）
+    expect(pinnedRule).toContain('grid-template-columns: 18px minmax(0, 1fr)')
+    expect(pinnedRule).toContain('gap: 8px')
+    expect(mainRule).toContain('grid-template-columns: 18px minmax(0, 1fr) auto')
+    expect(mainRule).toContain('gap: 8px')
+  })
 })

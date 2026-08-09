@@ -6,6 +6,7 @@ import {
   ChevronDown,
   ChevronRight,
   CircleCheck,
+  FolderCode,
   FolderOpen,
   Gem,
   Loader2,
@@ -39,6 +40,7 @@ import { appModeAtom } from '@/atoms/app-mode'
 import { activeViewAtom } from '@/atoms/active-view'
 import { searchDialogOpenAtom } from '@/atoms/search-atoms'
 import { planningTabAtom } from '@/atoms/planning-atoms'
+import { pinnedDevProjectsAtom } from '@/atoms/pinned-dev-projects'
 import {
   createWorkspaceDialogOpenAtom,
   createdWorkspaceIdAtom,
@@ -100,6 +102,8 @@ export function CopisWorkingSidebar({ width, noTransition = false }: CopisWorkin
   const [refreshingProjects, setRefreshingProjects] = React.useState(false)
   const [expandedWorkspaceId, setExpandedWorkspaceId] = React.useState<string | null>(null)
   const [expandedConversationWorkspaceIds, setExpandedConversationWorkspaceIds] = React.useState<Set<string>>(new Set())
+  const [pinnedGroupCollapsed, setPinnedGroupCollapsed] = React.useState(false)
+  const [workspaceGroupCollapsed, setWorkspaceGroupCollapsed] = React.useState(false)
   const [openMenuWorkspaceId, setOpenMenuWorkspaceId] = React.useState<string | null>(null)
   const [openMenuDirection, setOpenMenuDirection] = React.useState<'down' | 'up'>('down')
   const [pendingDeleteSession, setPendingDeleteSession] = React.useState<PendingDeleteSession | null>(null)
@@ -115,6 +119,7 @@ export function CopisWorkingSidebar({ width, noTransition = false }: CopisWorkin
   const activeView = useAtomValue(activeViewAtom)
   const agentSettingsReady = useAtomValue(agentSettingsReadyAtom)
   const streamingStates = useAtomValue(agentStreamingStatesAtom)
+  const pinnedDevProjects = useAtomValue(pinnedDevProjectsAtom)
   const setCurrentWorkspaceId = useSetAtom(currentAgentWorkspaceIdAtom)
   const setAppMode = useSetAtom(appModeAtom)
   const setActiveView = useSetAtom(activeViewAtom)
@@ -362,6 +367,112 @@ export function CopisWorkingSidebar({ width, noTransition = false }: CopisWorkin
   const tokenBalance = typeof auth?.user?.tokens === 'number' && Number.isFinite(auth.user.tokens)
     ? new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 2 }).format(auth.user.tokens)
     : '--'
+  const pinnedProjectEntries = localWorkspaces.flatMap((workspace) => {
+    const paths = pinnedDevProjects[workspace.slug] ?? []
+    return paths.map((projectPath) => ({ workspace, projectPath }))
+  })
+
+  const renderWorkspaceGroup = (workspace: AgentWorkspace): React.ReactElement => {
+    const workspaceSessions = validLocalSessions
+      .filter((session) => !session.archived && session.workspaceId === workspace.id)
+      .sort((a, b) => b.updatedAt - a.updatedAt)
+    const isWorkspaceExpanded = expandedWorkspaceId === workspace.id
+    const isConversationListExpanded = expandedConversationWorkspaceIds.has(workspace.id)
+    const visibleSessions = isConversationListExpanded ? workspaceSessions : workspaceSessions.slice(0, CONVERSATION_PREVIEW_LIMIT)
+    const hasHiddenSessions = workspaceSessions.length > visibleSessions.length
+    const isActiveWorkspace = workspace.id === currentWorkspaceId
+    const isMenuOpen = openMenuWorkspaceId === workspace.id
+    const isMenuOpenUp = isMenuOpen && openMenuDirection === 'up'
+
+    return (
+      <div className="copis-working-project-group" key={workspace.id}>
+        <div className={cn('copis-working-project-row', isActiveWorkspace && 'active', isMenuOpen && 'menu-open', isMenuOpenUp && 'menu-up')} onClick={() => selectLocalWorkspace(workspace.id)}>
+          <button type="button" className="copis-working-project-main" onClick={(event) => { event.stopPropagation(); selectLocalWorkspace(workspace.id) }}>
+            <FolderOpen aria-hidden="true" />
+            <span>{workspace.name}</span>
+            {workspace.projectRootPath && <small className="ui-primary-badge">本地</small>}
+          </button>
+          <button type="button" className="copis-working-project-collapse" aria-label={isWorkspaceExpanded ? '折叠项目会话' : '展开项目会话'} aria-expanded={isWorkspaceExpanded} onClick={(event) => { event.stopPropagation(); toggleWorkspace(workspace.id) }}>
+            {isWorkspaceExpanded ? <ChevronDown aria-hidden="true" /> : <ChevronRight aria-hidden="true" />}
+          </button>
+          {workspace.slug !== 'default' && (
+            <button type="button" className="copis-working-project-menu-trigger" aria-label={`${workspace.name} 项目菜单`} aria-haspopup="menu" aria-expanded={isMenuOpen} onClick={(event) => {
+              event.stopPropagation()
+              if (isMenuOpen) {
+                setOpenMenuWorkspaceId(null)
+                return
+              }
+              // 靠近侧栏底部时向下弹出会被下方组件遮挡，改为向上弹出。
+              const triggerRect = event.currentTarget.getBoundingClientRect()
+              const spaceBelow = window.innerHeight - triggerRect.bottom
+              setOpenMenuDirection(spaceBelow < PROJECT_MENU_ESTIMATED_HEIGHT ? 'up' : 'down')
+              setOpenMenuWorkspaceId(workspace.id)
+            }}>
+              <MoreHorizontal aria-hidden="true" />
+            </button>
+          )}
+          <button type="button" className="copis-working-project-new-task" aria-label={`在 ${workspace.name} 发起新会话`} title="新会话" onClick={(event) => { event.stopPropagation(); void handleNewSessionForWorkspace(workspace.id) }}>
+            <PencilLine aria-hidden="true" />
+          </button>
+          {isMenuOpen && workspace.slug !== 'default' && (
+            <div className="copis-working-project-menu" role="menu">
+              <button type="button" role="menuitem" disabled={busy || localWorkspaces.length <= 1} onClick={(event) => { event.stopPropagation(); void handleRemoveWorkspace(workspace.id) }}>
+                删除工作区
+              </button>
+            </div>
+          )}
+        </div>
+        {isWorkspaceExpanded && (
+          <div className="copis-working-conversation-list">
+            {visibleSessions.map((session) => {
+              const streamState = streamingStates.get(session.id)
+              const sessionTitle = session.title || '未命名会话'
+              const isExpertTeamSession = session.expertTeamSession !== undefined || session.expertTeamSetup === true
+              const displaySessionTitle = isExpertTeamSession
+                ? sessionTitle.replace(/^专家团队\s*·\s*/, '')
+                : sessionTitle
+              return (
+                <div key={session.id} className={cn('copis-working-conversation-row', session.id === currentSessionId && 'active')}>
+                  <button type="button" className="copis-working-conversation-main" onClick={() => selectLocalSession(session.id, workspace.id, sessionTitle)}>
+                    <span className="copis-working-conversation-label">
+                      {isExpertTeamSession && <small className="ui-primary-badge">{session.expertTeamSession ? '专家团队' : '组建中'}</small>}
+                      <span>{displaySessionTitle}</span>
+                    </span>
+                  </button>
+                  <span className="copis-working-conversation-meta">
+                    {streamState?.running ? <Loader2 className="loading" aria-label="会话进行中" /> : session.completedButUnconfirmed ? <CircleCheck className="completed" aria-label="会话已完成" /> : <small>{formatSessionTime(session.updatedAt)}</small>}
+                  </span>
+                  <button
+                    type="button"
+                    className="copis-working-conversation-delete"
+                    aria-label={`删除会话 ${sessionTitle}`}
+                    title={streamState?.running ? '会话进行中，暂不能删除' : '删除会话'}
+                    disabled={busy || streamState?.running === true}
+                    onClick={(event) => {
+                      event.stopPropagation()
+                      requestRemoveSession(session.id, sessionTitle)
+                    }}
+                  >
+                    <Trash2 aria-hidden="true" />
+                  </button>
+                </div>
+              )
+            })}
+            {workspaceSessions.length === 0 && (
+              <button type="button" className="copis-working-conversation-empty" onClick={() => void handleNewSessionForWorkspace(workspace.id)}>
+                还没有会话，开始一个新任务
+              </button>
+            )}
+            {workspaceSessions.length > CONVERSATION_PREVIEW_LIMIT && (
+              <button type="button" className="copis-working-conversation-toggle" onClick={() => toggleWorkspaceConversations(workspace.id)}>
+                {hasHiddenSessions ? '展开更多' : '折叠显示'}
+              </button>
+            )}
+          </div>
+        )}
+      </div>
+    )
+  }
 
   if (collapsed) {
     return (
@@ -422,131 +533,80 @@ export function CopisWorkingSidebar({ width, noTransition = false }: CopisWorkin
             <Puzzle aria-hidden="true" />
             <span>技能市场</span>
           </button>
-          <button type="button" className="copis-working-menu-button" onClick={handleOpenCreateWorkspace}>
-            <FolderOpen aria-hidden="true" />
-            <span>创建工作区</span>
-          </button>
         </nav>
 
-        <section className="copis-working-project-section" aria-label="项目">
-          <div className="copis-working-project-heading">
-            <span>项目</span>
-            <button type="button" className={cn('copis-working-project-refresh', refreshingProjects && 'refreshing')} aria-label="刷新项目" title="刷新项目" disabled={refreshingProjects || busy} onClick={() => void refreshProjects()}>
-              <RefreshCw aria-hidden="true" />
-            </button>
-          </div>
-          <div className="copis-working-project-list">
-            {!agentSettingsReady && (
-              <div className="copis-working-project-loading" role="status" aria-live="polite">
-                <div><Loader2 aria-hidden="true" />正在加载项目</div>
-                <span aria-hidden="true" /><span aria-hidden="true" />
-              </div>
-            )}
-            {agentSettingsReady && localWorkspaces.map((workspace) => {
-              const workspaceSessions = validLocalSessions
-                .filter((session) => !session.archived && session.workspaceId === workspace.id)
-                .sort((a, b) => b.updatedAt - a.updatedAt)
-              const isWorkspaceExpanded = expandedWorkspaceId === workspace.id
-              const isConversationListExpanded = expandedConversationWorkspaceIds.has(workspace.id)
-              const visibleSessions = isConversationListExpanded ? workspaceSessions : workspaceSessions.slice(0, CONVERSATION_PREVIEW_LIMIT)
-              const hasHiddenSessions = workspaceSessions.length > visibleSessions.length
-              const isActiveWorkspace = workspace.id === currentWorkspaceId
-              const isMenuOpen = openMenuWorkspaceId === workspace.id
-              const isMenuOpenUp = isMenuOpen && openMenuDirection === 'up'
-
-              return (
-                <div className="copis-working-project-group" key={workspace.id}>
-                  <div className={cn('copis-working-project-row', isActiveWorkspace && 'active', isMenuOpen && 'menu-open', isMenuOpenUp && 'menu-up')} onClick={() => selectLocalWorkspace(workspace.id)}>
-                    <button type="button" className="copis-working-project-main" onClick={(event) => { event.stopPropagation(); selectLocalWorkspace(workspace.id) }}>
-                      <FolderOpen aria-hidden="true" />
-                      <span>{workspace.name}</span>
-                      {workspace.projectRootPath && <small className="ui-primary-badge">本地</small>}
-                    </button>
-                    <button type="button" className="copis-working-project-collapse" aria-label={isWorkspaceExpanded ? '折叠项目会话' : '展开项目会话'} aria-expanded={isWorkspaceExpanded} onClick={(event) => { event.stopPropagation(); toggleWorkspace(workspace.id) }}>
-                      {isWorkspaceExpanded ? <ChevronDown aria-hidden="true" /> : <ChevronRight aria-hidden="true" />}
-                    </button>
-                    {workspace.slug !== 'default' && (
-                      <button type="button" className="copis-working-project-menu-trigger" aria-label={`${workspace.name} 项目菜单`} aria-haspopup="menu" aria-expanded={isMenuOpen} onClick={(event) => {
-                        event.stopPropagation()
-                        if (isMenuOpen) {
-                          setOpenMenuWorkspaceId(null)
-                          return
-                        }
-                        // 靠近侧栏底部时向下弹出会被下方组件遮挡，改为向上弹出。
-                        const triggerRect = event.currentTarget.getBoundingClientRect()
-                        const spaceBelow = window.innerHeight - triggerRect.bottom
-                        setOpenMenuDirection(spaceBelow < PROJECT_MENU_ESTIMATED_HEIGHT ? 'up' : 'down')
-                        setOpenMenuWorkspaceId(workspace.id)
-                      }}>
-                        <MoreHorizontal aria-hidden="true" />
-                      </button>
-                    )}
-                    <button type="button" className="copis-working-project-new-task" aria-label={`在 ${workspace.name} 发起新会话`} title="新会话" onClick={(event) => { event.stopPropagation(); void handleNewSessionForWorkspace(workspace.id) }}>
-                      <PencilLine aria-hidden="true" />
-                    </button>
-                    {isMenuOpen && workspace.slug !== 'default' && (
-                      <div className="copis-working-project-menu" role="menu">
-                        <button type="button" role="menuitem" disabled={busy || localWorkspaces.length <= 1} onClick={(event) => { event.stopPropagation(); void handleRemoveWorkspace(workspace.id) }}>
-                          删除工作区
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                  {isWorkspaceExpanded && (
-                    <div className="copis-working-conversation-list">
-                      {visibleSessions.map((session) => {
-                        const streamState = streamingStates.get(session.id)
-                        const sessionTitle = session.title || '未命名会话'
-                        const isExpertTeamSession = session.expertTeamSession !== undefined || session.expertTeamSetup === true
-                        const displaySessionTitle = isExpertTeamSession
-                          ? sessionTitle.replace(/^专家团队\s*·\s*/, '')
-                          : sessionTitle
-                        return (
-                          <div key={session.id} className={cn('copis-working-conversation-row', session.id === currentSessionId && 'active')}>
-                            <button type="button" className="copis-working-conversation-main" onClick={() => selectLocalSession(session.id, workspace.id, sessionTitle)}>
-                              <span className="copis-working-conversation-label">
-                                {isExpertTeamSession && <small className="ui-primary-badge">{session.expertTeamSession ? '专家团队' : '组建中'}</small>}
-                                <span>{displaySessionTitle}</span>
-                              </span>
-                            </button>
-                            <span className="copis-working-conversation-meta">
-                              {streamState?.running ? <Loader2 className="loading" aria-label="会话进行中" /> : session.completedButUnconfirmed ? <CircleCheck className="completed" aria-label="会话已完成" /> : <small>{formatSessionTime(session.updatedAt)}</small>}
-                            </span>
-                            <button
-                              type="button"
-                              className="copis-working-conversation-delete"
-                              aria-label={`删除会话 ${sessionTitle}`}
-                              title={streamState?.running ? '会话进行中，暂不能删除' : '删除会话'}
-                              disabled={busy || streamState?.running === true}
-                              onClick={(event) => {
-                                event.stopPropagation()
-                                requestRemoveSession(session.id, sessionTitle)
-                              }}
-                            >
-                              <Trash2 aria-hidden="true" />
-                            </button>
-                          </div>
-                        )
-                      })}
-                      {workspaceSessions.length === 0 && (
-                        <button type="button" className="copis-working-conversation-empty" onClick={() => void handleNewSessionForWorkspace(workspace.id)}>
-                          还没有会话，开始一个新任务
-                        </button>
-                      )}
-                      {workspaceSessions.length > CONVERSATION_PREVIEW_LIMIT && (
-                        <button type="button" className="copis-working-conversation-toggle" onClick={() => toggleWorkspaceConversations(workspace.id)}>
-                          {hasHiddenSessions ? '展开更多' : '折叠显示'}
-                        </button>
-                      )}
-                    </div>
-                  )}
-                </div>
-              )
-            })}
-            {agentSettingsReady && localWorkspaces.length === 0 && (
-              <button type="button" className="copis-working-sidebar-muted" onClick={handleOpenCreateWorkspace} disabled={busy}>
-                创建工作区后显示项目对话
+        <section className="copis-working-project-section" aria-label="工作区">
+          <div className="copis-working-project-group-section">
+            <div className="copis-working-project-heading copis-working-project-group-heading">
+              <button
+                type="button"
+                className="copis-working-project-group-toggle"
+                aria-expanded={!pinnedGroupCollapsed}
+                onClick={() => setPinnedGroupCollapsed((current) => !current)}
+              >
+                <ChevronRight className={cn('copis-working-project-group-chevron', !pinnedGroupCollapsed && 'expanded')} aria-hidden="true" />
+                <span>我的项目</span>
+                <small className="copis-working-project-group-count">{pinnedProjectEntries.length}</small>
               </button>
+            </div>
+            {!pinnedGroupCollapsed && (
+              pinnedProjectEntries.length > 0 ? (
+                pinnedProjectEntries.map((entry) => (
+                  <button
+                    type="button"
+                    key={`${entry.workspace.id}:${entry.projectPath}`}
+                    className="copis-working-project-pinned-row"
+                    title={`${entry.workspace.name} · project/${entry.projectPath}`}
+                    onClick={() => selectLocalWorkspace(entry.workspace.id)}
+                  >
+                    <FolderCode aria-hidden="true" />
+                    <span className="copis-working-project-pinned-copy">
+                      <span className="copis-working-project-pinned-name">{entry.workspace.name}</span>
+                      <small>project/{entry.projectPath}</small>
+                    </span>
+                  </button>
+                ))
+              ) : (
+                <div className="copis-working-project-pinned-empty">暂无固定项目，在右侧项目列表点击图钉添加</div>
+              )
+            )}
+          </div>
+          <div className="copis-working-project-group-section">
+            <div className="copis-working-project-heading copis-working-project-group-heading">
+              <button
+                type="button"
+                className="copis-working-project-group-toggle"
+                aria-expanded={!workspaceGroupCollapsed}
+                onClick={() => setWorkspaceGroupCollapsed((current) => !current)}
+                >
+                  <ChevronRight className={cn('copis-working-project-group-chevron', !workspaceGroupCollapsed && 'expanded')} aria-hidden="true" />
+                  <span>工作区</span>
+                  <small className="copis-working-project-group-count">{localWorkspaces.length}</small>
+                </button>
+              <div className="copis-working-project-heading-actions">
+                <button type="button" className={cn('copis-working-project-refresh', refreshingProjects && 'refreshing')} aria-label="刷新项目" title="刷新项目" disabled={refreshingProjects || busy} onClick={() => void refreshProjects()}>
+                  <RefreshCw aria-hidden="true" />
+                </button>
+                <button type="button" className="copis-working-project-create" aria-label="创建工作区" title="创建工作区" disabled={busy} onClick={handleOpenCreateWorkspace}>
+                  <Plus aria-hidden="true" />
+                </button>
+              </div>
+            </div>
+            {!workspaceGroupCollapsed && (
+              <div className="copis-working-project-list">
+                {!agentSettingsReady && (
+                  <div className="copis-working-project-loading" role="status" aria-live="polite">
+                    <div><Loader2 aria-hidden="true" />正在加载项目</div>
+                    <span aria-hidden="true" /><span aria-hidden="true" />
+                  </div>
+                )}
+                {agentSettingsReady && localWorkspaces.map(renderWorkspaceGroup)}
+                {agentSettingsReady && localWorkspaces.length === 0 && (
+                  <button type="button" className="copis-working-sidebar-muted" onClick={handleOpenCreateWorkspace} disabled={busy}>
+                    创建工作区后显示项目对话
+                  </button>
+                )}
+              </div>
             )}
           </div>
         </section>

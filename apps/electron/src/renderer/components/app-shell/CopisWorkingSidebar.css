@@ -163,6 +163,70 @@
   line-height: 1.2;
 }
 
+.copis-working-project-group-section {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.copis-working-project-group-heading {
+  gap: 6px;
+  padding-left: 0;
+}
+
+.copis-working-project-group-toggle {
+  min-width: 0;
+  flex: 1;
+  min-height: 31px;
+  padding: 5px 8px;
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #8f8f99;
+  font-size: 13px;
+  font-weight: 650;
+  line-height: 1.2;
+  text-align: left;
+  cursor: pointer;
+}
+
+.copis-working-project-group-toggle:hover,
+.copis-working-project-group-toggle:focus-visible {
+  background: rgba(255, 255, 255, 0.07);
+  color: #eeeeee;
+  outline: 0;
+}
+
+.copis-working-project-group-chevron {
+  width: 13px;
+  height: 13px;
+  flex-shrink: 0;
+  justify-self: center;
+  color: #a8a8b0;
+  transition: transform 0.15s ease;
+}
+
+.copis-working-project-group-chevron.expanded {
+  transform: rotate(90deg);
+}
+
+.copis-working-project-group-count {
+  color: #6f6f78;
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.copis-working-project-heading-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
 .copis-working-project-refresh {
   width: 22px;
   height: 22px;
@@ -200,6 +264,34 @@
 }
 
 .copis-working-project-refresh svg {
+  width: 14px;
+  height: 14px;
+}
+
+.copis-working-project-create {
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #a8a8b0;
+  cursor: pointer;
+}
+
+.copis-working-project-create:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.07);
+  color: #eeeeee;
+}
+
+.copis-working-project-create:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.copis-working-project-create svg {
   width: 14px;
   height: 14px;
 }
@@ -243,9 +335,10 @@
   flex: 1 1 auto;
   align-self: stretch;
   padding: 0;
-  display: inline-flex;
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) auto;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   border: 0;
   background: transparent;
   color: inherit;
@@ -258,7 +351,6 @@
 .copis-working-project-main > svg {
   width: 15px;
   height: 15px;
-  flex: 0 0 15px;
 }
 
 .copis-working-project-main > span {
@@ -320,6 +412,67 @@
 .copis-working-project-new-task svg {
   width: 15px;
   height: 15px;
+}
+
+.copis-working-project-pinned-row {
+  width: 100%;
+  min-width: 0;
+  min-height: 31px;
+  padding: 4px 8px;
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: #eeeeee;
+  text-align: left;
+  cursor: pointer;
+}
+
+.copis-working-project-pinned-row:hover,
+.copis-working-project-pinned-row:focus-visible {
+  background: rgba(255, 255, 255, 0.07);
+  outline: 0;
+}
+
+.copis-working-project-pinned-row svg {
+  width: 15px;
+  height: 15px;
+  color: var(--ui-primary);
+}
+
+.copis-working-project-pinned-copy {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.copis-working-project-pinned-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  font-weight: 520;
+  line-height: 1.25;
+}
+
+.copis-working-project-pinned-copy small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #8f8f99;
+  font-size: 11px;
+  line-height: 1.2;
+}
+
+.copis-working-project-pinned-empty {
+  padding: 2px 8px 6px 34px;
+  color: #6f6f78;
+  font-size: 11px;
+  line-height: 1.4;
 }
 
 .copis-working-project-menu {
@@ -550,6 +703,10 @@
 .copis-working-sidebar-muted {
   padding-left: 8px;
   color: #8f8f99;
+}
+
+.copis-working-project-list > .copis-working-sidebar-muted {
+  padding-left: 34px;
 }
 
 .copis-working-sidebar-footer {

@@ -332,6 +332,8 @@ export interface AppSettings {
   mainWindowState?: MainWindowState
   /** 独立任务/日程窗口状态（大小、位置、是否最大化） */
   planningWindowState?: MainWindowState
+  /** 工作区开发项目列表中固定到「我的项目」分组的项目路径，按工作区 slug 分组 */
+  pinnedDevProjects?: Record<string, string[]>
 }
 
 /** 主窗口大小、位置和最大化状态 */
