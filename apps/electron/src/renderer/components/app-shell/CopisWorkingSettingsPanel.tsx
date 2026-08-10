@@ -1,5 +1,5 @@
 import * as React from 'react'
-import { useAtom } from 'jotai'
+import { useAtom, useAtomValue, useSetAtom } from 'jotai'
 import {
   ArrowLeft,
   Clipboard,
@@ -30,6 +30,12 @@ import {
   workingSettingsSectionAtom,
   type WorkingSettingsSectionId,
 } from '@/atoms/working-atoms'
+import {
+  closeWorkingPaymentAtom,
+  openWorkingPaymentAtom,
+  workingPaymentNoticeAtom,
+  workingPaymentRefreshAtom,
+} from '@/atoms/working-payment-atoms'
 import { activeTabIdAtom, openTab, tabsAtom, TUTORIAL_TAB_ID, TUTORIAL_TAB_TITLE } from '@/atoms/tab-atoms'
 import { AppearanceSettings } from '@/components/settings/AppearanceSettings'
 import { MigrationSettings } from '@/components/settings/MigrationSettings'
@@ -38,6 +44,7 @@ import { VoiceInputSettings } from '@/components/settings/VoiceInputSettings'
 import { formatWorkingLedgerDescription, isWorkingModelDeduction } from '@/lib/working-ledger'
 import { CopisWorkingMessageSettingsPanel } from './CopisWorkingMessageSettingsPanel'
 import { CopisWorkingOrdersPanel } from './CopisWorkingOrdersPanel'
+import { CopisWorkingPaymentModal } from './CopisWorkingPaymentModal'
 import './CopisWorkingSettingsPanel.css'
 
 type WorkingSettingsMenuId = WorkingSettingsSectionId | 'tutorial'
@@ -108,6 +115,12 @@ export function CopisWorkingSettingsPanel({ onClose }: CopisWorkingSettingsPanel
   const [authState, setAuthState] = useAtom(workingAuthStateAtom)
   const [tabs, setTabs] = useAtom(tabsAtom)
   const [, setActiveTabId] = useAtom(activeTabIdAtom)
+  const openPayment = useSetAtom(openWorkingPaymentAtom)
+  const closePayment = useSetAtom(closeWorkingPaymentAtom)
+  const paymentRefresh = useAtomValue(workingPaymentRefreshAtom)
+  const paymentNotice = useAtomValue(workingPaymentNoticeAtom)
+  const setPaymentNotice = useSetAtom(workingPaymentNoticeAtom)
+  const paymentRefreshRef = React.useRef(paymentRefresh)
   const [settings, setSettings] = React.useState<WorkingSettingsSnapshot | null>(null)
   const [activeSection, setActiveSection] = useAtom(workingSettingsSectionAtom)
   const [loading, setLoading] = React.useState(true)
@@ -143,6 +156,19 @@ export function CopisWorkingSettingsPanel({ onClose }: CopisWorkingSettingsPanel
   React.useEffect(() => {
     void loadSettings()
   }, [loadSettings])
+
+  React.useEffect(() => {
+    if (paymentRefresh <= paymentRefreshRef.current) return
+    paymentRefreshRef.current = paymentRefresh
+    void loadSettings()
+  }, [loadSettings, paymentRefresh])
+
+  React.useEffect(() => {
+    if (!paymentNotice) return undefined
+    setNotice(paymentNotice)
+    setPaymentNotice(null)
+    return undefined
+  }, [paymentNotice, setPaymentNotice])
 
   React.useEffect(() => {
     if (!notice) return undefined
@@ -208,6 +234,7 @@ export function CopisWorkingSettingsPanel({ onClose }: CopisWorkingSettingsPanel
     setError('')
     try {
       setAuthState(await window.electronAPI.logoutWorking())
+      closePayment()
       onClose()
     } catch (logoutError) {
       setError(logoutError instanceof Error ? logoutError.message : '退出登录失败')
@@ -284,6 +311,8 @@ export function CopisWorkingSettingsPanel({ onClose }: CopisWorkingSettingsPanel
                 copiedLabel={copiedLabel}
                 onNotice={setNotice}
                 onCopyInvite={() => void handleCopyInvite()}
+                onOpenDiamonds={() => openPayment({ mode: 'diamonds' })}
+                onOpenVip={() => openPayment({ mode: 'vip' })}
               />
             )}
             {activeSection === 'messages' && (
@@ -300,6 +329,7 @@ export function CopisWorkingSettingsPanel({ onClose }: CopisWorkingSettingsPanel
           </div>
         </main>
       </div>
+      <CopisWorkingPaymentModal vipStatus={settings?.vip ?? null} />
     </div>
   )
 }
@@ -311,6 +341,8 @@ interface WorkingAccountSettingsProps {
   copiedLabel: string
   onNotice: (message: string) => void
   onCopyInvite: () => void
+  onOpenDiamonds: () => void
+  onOpenVip: () => void
 }
 
 function WorkingAccountSettings({
@@ -320,6 +352,8 @@ function WorkingAccountSettings({
   copiedLabel,
   onNotice,
   onCopyInvite,
+  onOpenDiamonds,
+  onOpenVip,
 }: WorkingAccountSettingsProps): React.ReactElement {
   const tokenBalance = formatTokens(settings?.vip?.diamonds ?? user?.tokens ?? 0)
   const isVip = settings?.vip?.isVip ?? user?.isVip === true
@@ -348,7 +382,7 @@ function WorkingAccountSettings({
             <Gem aria-hidden="true" />
             <span>个人钻石</span>
           </div>
-          <button type="button" className="copis-working-settings-card-action copis-working-settings-primary-button" onClick={() => onNotice('钻石充值将在 Working 支付模块开放。')}>
+          <button type="button" className="copis-working-settings-card-action copis-working-settings-primary-button" onClick={onOpenDiamonds} disabled={loading}>
             <Gem aria-hidden="true" />
             <span>获取钻石</span>
           </button>
@@ -363,9 +397,9 @@ function WorkingAccountSettings({
             <Crown aria-hidden="true" />
             <span>VIP</span>
           </div>
-          <button type="button" className="copis-working-settings-card-action copis-working-settings-vip-button" onClick={() => onNotice('VIP 支付将在 Working 支付模块开放。')}>
+          <button type="button" className="copis-working-settings-card-action copis-working-settings-vip-button" onClick={onOpenVip} disabled={loading || settings?.vip?.upgradeAvailable === false}>
             <Crown aria-hidden="true" />
-            <span>{isVip ? '查看 VIP 权益' : '升级 VIP'}</span>
+            <span>{settings?.vip?.upgradeAvailable === false ? 'VIP 暂未开放' : isVip ? '查看 VIP 权益' : '升级 VIP'}</span>
           </button>
         </div>
         <strong>{isVip ? '已开通' : '未开通'}</strong>

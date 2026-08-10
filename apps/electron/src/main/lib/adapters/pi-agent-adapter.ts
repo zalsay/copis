@@ -61,6 +61,7 @@ import { createCopisResourceLoaderOptions } from './pi-resource-loader-overrides
 import { createCodexFastModeExtension, withCodexFastModeServiceTier } from './pi-codex-request-settings'
 import { createOpenAIReasoningRequestExtension } from './pi-openai-reasoning-request-settings'
 import { buildPiBrowserAgentTools } from './pi-browser-agent-tools'
+import { buildPiAlipayBotTools } from './pi-alipay-bot-tool'
 import { createRustBashToolOperations, createRustFileToolOperations } from './pi-rust-file-tools'
 import { resolveDefaultPiExtensionEntries } from './pi-default-extensions'
 import { mergeRuntimeEnv, type AgentRuntimeEnv } from '../agent-runtime-env'
@@ -1329,6 +1330,7 @@ export function buildBuiltinToolDefinitions(
         capability: options.browserPageControl,
       })
       : []),
+    ...buildPiAlipayBotTools(sdk, { sessionId: options.sessionId }),
   ] as unknown as ToolDefinition[]
 
   if (rustFileTools) {

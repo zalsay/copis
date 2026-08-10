@@ -141,4 +141,22 @@ describe('默认 Skills 清单', () => {
     expect(references).toContain('api.md')
     expect(references).toContain('categories.md')
   })
+
+  test('支付宝买家 Skill 使用 Rust capability 并与 Working 支付链路隔离', () => {
+    const frontmatter = readFrontmatter('alipay-ai-buyer-agent')
+    expect(frontmatter.get('name')).toBe('alipay-ai-buyer-agent')
+    expect(frontmatter.get('displayName')).toBe('支付宝买家支付')
+    expect(frontmatter.get('group')).toBe('系统内置')
+    expect(frontmatter.get('version')?.replace(/^['"]|['"]$/g, '')).toMatch(/^\d+\.\d+\.\d+$/)
+
+    const content = readFileSync(join(DEFAULT_SKILLS_DIR, 'alipay-ai-buyer-agent', 'SKILL.md'), 'utf8')
+    expect(content).toContain('alipay_bot')
+    expect(content).toContain('402 Payment Required')
+    expect(content).toContain('wallet.check')
+    expect(content).toContain('payment.check')
+    expect(content).toContain('payment.ack')
+    expect(content).toContain('Rust API -> edu-api')
+    expect(content).toContain('设置页的 VIP/钻石购买不使用本 Skill')
+    expect(content).toContain('禁止使用 Bash')
+  })
 })

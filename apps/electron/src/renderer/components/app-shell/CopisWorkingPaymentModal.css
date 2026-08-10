@@ -1,0 +1,559 @@
+.copis-working-payment-overlay {
+  position: fixed;
+  z-index: 120;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  background: hsl(var(--background) / 0.68);
+  backdrop-filter: blur(4px);
+}
+
+.copis-working-payment-modal {
+  display: flex;
+  width: min(620px, 100%);
+  max-height: min(760px, calc(100vh - 32px));
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid hsl(var(--border) / 0.78);
+  border-radius: 8px;
+  background: hsl(var(--card));
+  color: hsl(var(--foreground));
+  box-shadow: 0 24px 68px hsl(var(--foreground) / 0.18);
+}
+
+.copis-working-payment-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 20px 22px 18px;
+  border-bottom: 1px solid hsl(var(--border) / 0.68);
+}
+
+.copis-working-payment-heading {
+  display: flex;
+  min-width: 0;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.copis-working-payment-mark {
+  display: grid;
+  flex: 0 0 38px;
+  width: 38px;
+  height: 38px;
+  place-items: center;
+  border-radius: 10px;
+  background: var(--ui-primary-background);
+  color: var(--ui-primary);
+}
+
+.copis-working-payment-mark svg {
+  width: 19px;
+  height: 19px;
+}
+
+.copis-working-payment-eyebrow {
+  display: block;
+  margin-bottom: 4px;
+  color: hsl(var(--muted-foreground));
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.copis-working-payment-header h2 {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.copis-working-payment-header p {
+  max-width: 480px;
+  margin: 6px 0 0;
+  color: hsl(var(--muted-foreground));
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.copis-working-payment-close,
+.copis-working-payment-qr-preview-close {
+  display: inline-grid;
+  flex: 0 0 32px;
+  width: 32px;
+  height: 32px;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: hsl(var(--muted-foreground));
+  cursor: pointer;
+}
+
+.copis-working-payment-close:hover,
+.copis-working-payment-qr-preview-close:hover {
+  background: hsl(var(--accent));
+  color: hsl(var(--foreground));
+}
+
+.copis-working-payment-close svg,
+.copis-working-payment-qr-preview-close svg {
+  width: 17px;
+  height: 17px;
+}
+
+.copis-working-payment-body {
+  min-height: 0;
+  overflow-y: auto;
+  padding: 20px 22px;
+}
+
+.copis-working-payment-alert,
+.copis-working-payment-status,
+.copis-working-payment-no-qr {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-bottom: 16px;
+  padding: 10px 12px;
+  border: 1px solid hsl(var(--destructive) / 0.28);
+  border-radius: 7px;
+  background: hsl(var(--destructive) / 0.08);
+  color: hsl(var(--destructive));
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.copis-working-payment-alert svg,
+.copis-working-payment-status svg {
+  flex: 0 0 16px;
+  width: 16px;
+  height: 16px;
+  margin-top: 1px;
+}
+
+.copis-working-payment-status {
+  border-color: color-mix(in srgb, var(--ui-primary) 28%, transparent);
+  background: var(--ui-primary-background);
+  color: var(--ui-primary);
+}
+
+.copis-working-payment-loading {
+  display: flex;
+  min-height: 150px;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  color: hsl(var(--muted-foreground));
+  font-size: 13px;
+}
+
+.copis-working-payment-loading svg {
+  width: 18px;
+  height: 18px;
+}
+
+.copis-working-payment-loading svg.spinning {
+  animation: copis-working-payment-spin 0.9s linear infinite;
+}
+
+@keyframes copis-working-payment-spin {
+  to { transform: rotate(360deg); }
+}
+
+.copis-working-payment-section-heading,
+.copis-working-payment-vip-intro {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.copis-working-payment-vip-intro span {
+  color: hsl(var(--muted-foreground));
+  font-size: 11px;
+  text-align: right;
+}
+
+.copis-working-payment-section-heading strong,
+.copis-working-payment-vip-intro strong {
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.copis-working-payment-package-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
+  gap: 9px;
+}
+
+.copis-working-payment-package {
+  display: flex;
+  min-height: 94px;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 9px;
+  padding: 14px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 8px;
+  background: hsl(var(--background) / 0.45);
+  color: hsl(var(--foreground));
+  text-align: left;
+  cursor: pointer;
+}
+
+.copis-working-payment-package:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--ui-primary) 55%, transparent);
+  background: var(--ui-primary-background);
+}
+
+.copis-working-payment-package.selected {
+  border-color: var(--ui-primary);
+  background: var(--ui-primary-background);
+  box-shadow: inset 0 0 0 1px var(--ui-primary);
+}
+
+.copis-working-payment-package:disabled {
+  cursor: not-allowed;
+  opacity: 0.62;
+}
+
+.copis-working-payment-package-amount {
+  font-size: 16px;
+  font-weight: 750;
+}
+
+.copis-working-payment-package-diamonds {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: hsl(var(--muted-foreground));
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.copis-working-payment-package-diamonds svg {
+  width: 14px;
+  height: 14px;
+  color: var(--ui-primary);
+}
+
+.copis-working-payment-vip-benefits {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.copis-working-payment-benefit-table {
+  overflow: hidden;
+  border: 1px solid hsl(var(--border));
+  border-radius: 8px;
+}
+
+.copis-working-payment-benefit-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1.25fr) minmax(74px, 0.85fr) minmax(74px, 0.85fr);
+  min-height: 42px;
+  align-items: center;
+  gap: 10px;
+  padding: 0 13px;
+  border-top: 1px solid hsl(var(--border) / 0.65);
+  font-size: 12px;
+}
+
+.copis-working-payment-benefit-row:first-child {
+  border-top: 0;
+}
+
+.copis-working-payment-benefit-row.header {
+  min-height: 36px;
+  background: hsl(var(--muted) / 0.42);
+  color: hsl(var(--muted-foreground));
+  font-size: 11px;
+}
+
+.copis-working-payment-benefit-row strong {
+  color: var(--ui-primary);
+  font-weight: 700;
+}
+
+.copis-working-payment-vip-summary {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 8px 14px;
+  padding: 13px 14px;
+  border-radius: 8px;
+  background: hsl(var(--muted) / 0.42);
+  color: hsl(var(--muted-foreground));
+  font-size: 12px;
+}
+
+.copis-working-payment-vip-summary strong {
+  color: hsl(var(--foreground));
+  font-weight: 700;
+  text-align: right;
+}
+
+.copis-working-payment-pending {
+  display: flex;
+  min-height: 188px;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 18px;
+  border: 1px solid color-mix(in srgb, var(--ui-primary) 28%, transparent);
+  border-radius: 8px;
+  background: var(--ui-primary-background);
+  text-align: center;
+}
+
+.copis-working-payment-pending-icon {
+  display: grid;
+  width: 40px;
+  height: 40px;
+  place-items: center;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--ui-primary) 14%, var(--ui-primary-background));
+  color: var(--ui-primary);
+}
+
+.copis-working-payment-pending-icon svg {
+  width: 20px;
+  height: 20px;
+}
+
+.copis-working-payment-pending strong {
+  font-size: 16px;
+}
+
+.copis-working-payment-pending > span {
+  color: var(--ui-primary);
+  font-size: 22px;
+  font-weight: 750;
+}
+
+.copis-working-payment-pending p {
+  max-width: 400px;
+  margin: 2px 0 0;
+  color: hsl(var(--muted-foreground));
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.copis-working-payment-pending small,
+.copis-working-payment-meta small {
+  color: hsl(var(--muted-foreground));
+  font-size: 11px;
+}
+
+.copis-working-payment-view {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+}
+
+.copis-working-payment-summary {
+  display: flex;
+  align-items: baseline;
+  justify-content: center;
+  gap: 12px;
+  width: 100%;
+}
+
+.copis-working-payment-summary strong {
+  font-size: 24px;
+  font-weight: 750;
+}
+
+.copis-working-payment-summary span {
+  color: var(--ui-primary);
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.copis-working-payment-qr-trigger {
+  display: grid;
+  width: 232px;
+  height: 232px;
+  place-items: center;
+  padding: 8px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 8px;
+  background: white;
+  cursor: zoom-in;
+}
+
+.copis-working-payment-qr-trigger img,
+.copis-working-payment-qr-preview img {
+  display: block;
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+
+.copis-working-payment-cashier {
+  display: inline-flex;
+  min-height: 44px;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 0 16px;
+  border: 1px solid color-mix(in srgb, var(--ui-primary) 38%, transparent);
+  border-radius: 8px;
+  background: var(--ui-primary-background);
+  color: var(--ui-primary);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.copis-working-payment-cashier:hover {
+  background: color-mix(in srgb, var(--ui-primary) 18%, var(--ui-primary-background));
+}
+
+.copis-working-payment-cashier svg {
+  width: 16px;
+  height: 16px;
+}
+
+.copis-working-payment-meta {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  color: hsl(var(--muted-foreground));
+  font-size: 12px;
+  text-align: center;
+}
+
+.copis-working-payment-qr-preview {
+  position: fixed;
+  z-index: 130;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: hsl(0 0% 0% / 0.76);
+  cursor: zoom-out;
+}
+
+.copis-working-payment-qr-preview img {
+  width: min(480px, 90vw);
+  height: min(480px, 82vh);
+  padding: 14px;
+  border-radius: 8px;
+  background: white;
+}
+
+.copis-working-payment-qr-preview-close {
+  position: absolute;
+  top: 18px;
+  right: 18px;
+  color: white;
+}
+
+.copis-working-payment-qr-preview-close:hover {
+  background: hsl(0 0% 100% / 0.16);
+  color: white;
+}
+
+.copis-working-payment-footer {
+  display: flex;
+  min-height: 68px;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 14px 22px;
+  border-top: 1px solid hsl(var(--border) / 0.68);
+}
+
+.copis-working-payment-footer button {
+  min-height: 36px;
+  padding: 0 13px;
+  border-radius: 7px;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.copis-working-payment-footer button:disabled {
+  cursor: not-allowed;
+  opacity: 0.56;
+}
+
+.copis-working-payment-modal button:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--ui-primary) 68%, transparent);
+  outline-offset: 2px;
+}
+
+.copis-working-payment-secondary {
+  border: 1px solid hsl(var(--border));
+  background: transparent;
+  color: hsl(var(--muted-foreground));
+}
+
+.copis-working-payment-secondary:hover:not(:disabled) {
+  background: hsl(var(--accent));
+  color: hsl(var(--foreground));
+}
+
+.copis-working-payment-secondary.danger {
+  border-color: hsl(var(--destructive) / 0.3);
+  color: hsl(var(--destructive));
+}
+
+.copis-working-payment-primary {
+  border: 1px solid var(--ui-primary);
+  background: var(--ui-primary);
+  color: var(--ui-primary-foreground, white);
+}
+
+.copis-working-payment-primary:hover:not(:disabled) {
+  filter: brightness(0.94);
+}
+
+@media (max-width: 560px) {
+  .copis-working-payment-overlay {
+    place-items: end center;
+    padding: 8px;
+  }
+
+  .copis-working-payment-modal {
+    max-height: calc(100vh - 16px);
+  }
+
+  .copis-working-payment-header,
+  .copis-working-payment-body,
+  .copis-working-payment-footer {
+    padding-right: 16px;
+    padding-left: 16px;
+  }
+
+  .copis-working-payment-section-heading,
+  .copis-working-payment-vip-intro {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .copis-working-payment-section-heading span,
+  .copis-working-payment-vip-intro span {
+    text-align: left;
+  }
+
+  .copis-working-payment-footer {
+    flex-wrap: wrap;
+  }
+
+  .copis-working-payment-footer button {
+    flex: 1 1 auto;
+  }
+}

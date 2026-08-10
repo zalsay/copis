@@ -370,6 +370,7 @@ import { getWorkingApiClient } from './lib/working-api-service'
 import type {
   WorkingLoginInput,
   WorkingPasswordResetInput,
+  WorkingPaymentIdentifier,
   WorkingRegisterInput,
   WorkingSendVerificationCodeInput,
   WorkingVerifyPasswordResetCodeInput,
@@ -379,6 +380,11 @@ import type {
 /** 文件浏览器中需要隐藏的系统文件 */
 const HIDDEN_FS_ENTRIES = new Set(['.DS_Store', 'Thumbs.db'])
 const MAX_DIRECTORY_ENTRIES = 2000
+
+function isWorkingPaymentIdentifier(value: unknown): value is WorkingPaymentIdentifier {
+  return (typeof value === 'string' && value.trim().length > 0)
+    || (typeof value === 'number' && Number.isFinite(value))
+}
 
 /** 已知编辑器应用名称白名单（macOS） */
 const KNOWN_EDITORS = [
@@ -1206,6 +1212,38 @@ export function registerIpcHandlers(): void {
       throw new Error('订单 ID 不正确')
     }
     return getWorkingApiClient().deleteOrder(orderId)
+  })
+
+  ipcMain.handle(WORKING_IPC_CHANNELS.LIST_DIAMOND_PACKAGES, async () => {
+    return getWorkingApiClient().listDiamondPackages()
+  })
+
+  ipcMain.handle(WORKING_IPC_CHANNELS.GET_PENDING_DIAMOND_PURCHASE, async () => {
+    return getWorkingApiClient().getPendingDiamondPurchase()
+  })
+
+  ipcMain.handle(WORKING_IPC_CHANNELS.CREATE_DIAMOND_PURCHASE, async (_, packageId: number) => {
+    if (!Number.isSafeInteger(packageId) || packageId <= 0) throw new Error('套餐 ID 不正确')
+    return getWorkingApiClient().createDiamondPurchase(packageId)
+  })
+
+  ipcMain.handle(WORKING_IPC_CHANNELS.CREATE_VIP_UPGRADE, async () => {
+    return getWorkingApiClient().createVipUpgrade()
+  })
+
+  ipcMain.handle(WORKING_IPC_CHANNELS.GET_ORDER_PAYMENT, async (_, orderId: WorkingPaymentIdentifier) => {
+    if (!isWorkingPaymentIdentifier(orderId)) throw new Error('订单 ID 不正确')
+    return getWorkingApiClient().getOrderPayment(orderId)
+  })
+
+  ipcMain.handle(WORKING_IPC_CHANNELS.CHECK_PAYMENT, async (_, paymentId: WorkingPaymentIdentifier) => {
+    if (!isWorkingPaymentIdentifier(paymentId)) throw new Error('支付会话 ID 不正确')
+    return getWorkingApiClient().checkPayment(paymentId)
+  })
+
+  ipcMain.handle(WORKING_IPC_CHANNELS.CANCEL_DIAMOND_PAYMENT, async (_, paymentId: WorkingPaymentIdentifier) => {
+    if (!isWorkingPaymentIdentifier(paymentId)) throw new Error('支付会话 ID 不正确')
+    return getWorkingApiClient().cancelDiamondPayment(paymentId)
   })
 
   // ===== 运行时相关 =====

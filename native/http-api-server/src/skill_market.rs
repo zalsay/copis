@@ -4,6 +4,8 @@ use std::collections::{HashMap, HashSet};
 use std::fs::{self, OpenOptions};
 use std::io::{Cursor, Read, Write};
 use std::path::{Component, Path, PathBuf};
+#[cfg(test)]
+use std::sync::OnceLock;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use zip::ZipArchive;
@@ -38,7 +40,7 @@ pub struct SkillMarketError {
 }
 
 impl SkillMarketError {
-    fn new(status: u16, code: impl Into<String>, message: impl Into<String>) -> Self {
+    pub(crate) fn new(status: u16, code: impl Into<String>, message: impl Into<String>) -> Self {
         Self {
             status,
             code: code.into(),
@@ -57,6 +59,12 @@ pub struct SkillMarketState {
     install_locks: Mutex<HashMap<String, Arc<Mutex<()>>>>,
 }
 
+#[cfg(test)]
+pub(crate) fn backend_env_test_lock() -> &'static Mutex<()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+}
+
 impl SkillMarketState {
     pub fn new(initial_token: Option<String>) -> Self {
         Self {
@@ -69,7 +77,7 @@ impl SkillMarketState {
         *self.access_token.lock().unwrap() = token.filter(|value| !value.trim().is_empty());
     }
 
-    fn access_token(&self) -> Option<String> {
+    pub(crate) fn access_token(&self) -> Option<String> {
         self.access_token.lock().unwrap().clone()
     }
 
@@ -868,7 +876,16 @@ fn is_local_http_url(value: &str) -> bool {
     matches!(host, "127.0.0.1" | "localhost" | "::1")
 }
 
-fn remote_json(
+pub(crate) fn remote_json(
+    method: &str,
+    path: &str,
+    token: &str,
+    body: Option<&str>,
+) -> Result<Value, SkillMarketError> {
+    Ok(unwrap_data(remote_json_raw(method, path, token, body)?))
+}
+
+pub(crate) fn remote_json_raw(
     method: &str,
     path: &str,
     token: &str,
@@ -940,7 +957,7 @@ fn remote_json(
     if !(200..300).contains(&status) {
         return Err(remote_error(status, &payload));
     }
-    Ok(unwrap_data(payload))
+    Ok(payload)
 }
 
 fn remote_error(status: u16, payload: &Value) -> SkillMarketError {
@@ -1060,7 +1077,7 @@ fn query_value(query: &str, key: &str) -> Option<String> {
     })
 }
 
-fn percent_decode(value: &str) -> Result<String, String> {
+pub(crate) fn percent_decode(value: &str) -> Result<String, String> {
     let bytes = value.as_bytes();
     let mut output = Vec::with_capacity(bytes.len());
     let mut index = 0;

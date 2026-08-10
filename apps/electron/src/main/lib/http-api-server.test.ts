@@ -110,6 +110,18 @@ describe('Rust HTTP API 业务桥契约', () => {
     expect(response.body).toEqual({ error: 'Working API 路径不存在', code: 'not_found' })
   })
 
+  test('Working 支付路由不再由 Electron 业务桥处理', async () => {
+    const response = await handleHttpApiRequest({
+      method: 'GET',
+      path: '/api/working/diamond-packages',
+    }, createDependencies())
+
+    expect(response).toEqual({
+      status: 404,
+      body: { error: 'Working API 路径不存在', code: 'not_found' },
+    })
+  })
+
   test('文件文本读写路由将上下文转发给文件服务', async () => {
     const received: unknown[] = []
     const dependencies: HttpApiDependencies = {

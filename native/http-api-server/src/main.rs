@@ -10,11 +10,13 @@ use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 mod agent_files;
+mod alipay_bot;
 mod expert_teams;
 mod memory;
 mod pi_rpc;
 mod runtime;
 mod skill_market;
+mod working_payment;
 mod workspace_dev;
 mod workspace_mcp;
 mod workspace_skills;
@@ -33,6 +35,7 @@ use pi_rpc::{
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::{json, Value};
 use skill_market::{handle_request as handle_skill_market_request, SkillMarketState};
+use working_payment::handle_request as handle_working_payment_request;
 use workspace_dev::{WorkspaceDevActionInput, WorkspaceDevError, WorkspaceDevStore};
 use workspace_mcp::{WorkspaceMcpError, WorkspaceMcpStore};
 use workspace_skills::{WorkspaceSkillsError, WorkspaceSkillsStore};
@@ -52,6 +55,7 @@ const INTERNAL_RECORDING_PREFIX: &str = "/internal/browser-workflows/recordings/
 const INTERNAL_WORKING_AUTH_PATH: &str = "/internal/working-auth/token";
 const INTERNAL_AGENT_FILES_PREFIX: &str = "/api/internal/agent/files/";
 const INTERNAL_AGENT_SHELL_PATH: &str = "/api/internal/agent/shell";
+const INTERNAL_AGENT_ALIPAY_BOT_PATH: &str = "/api/internal/agent/alipay-bot";
 const VITE_DEV_ORIGINS: [&str; 2] = ["http://127.0.0.1:5174", "http://localhost:5174"];
 // 业务桥请求等待 Electron 响应的上限，超时后清理 pending 避免线程永久挂起。
 const BRIDGE_REQUEST_TIMEOUT_SECS: u64 = 60;
@@ -959,6 +963,10 @@ fn is_internal_agent_shell_path(path: &str) -> bool {
     path == INTERNAL_AGENT_SHELL_PATH
 }
 
+fn is_internal_agent_alipay_bot_path(path: &str) -> bool {
+    path == INTERNAL_AGENT_ALIPAY_BOT_PATH
+}
+
 /// 浏览器 Origin 请求必须携带 web 令牌；Vite 开发来源与无 Origin 的本地进程请求除外。
 /// 内部路由与健康检查继续由各自逻辑放行，不在此处校验。
 fn is_web_route_authorized(origin: Option<&str>, request: &HttpRequest, path: &str) -> bool {
@@ -1179,6 +1187,12 @@ fn handle_connection(
         return;
     }
 
+    if is_internal_agent_alipay_bot_path(path) {
+        handle_internal_agent_alipay_bot(&mut stream, &request, origin, workers.as_ref());
+        let _ = stream.shutdown(Shutdown::Both);
+        return;
+    }
+
     if path.starts_with(INTERNAL_AGENT_FILES_PREFIX) {
         handle_internal_agent_files(&mut stream, &request, path, origin, workers.as_ref());
         let _ = stream.shutdown(Shutdown::Both);
@@ -1374,6 +1388,30 @@ fn handle_connection(
         return;
     }
 
+    if is_working_payment_path(path) {
+        match handle_working_payment_request(
+            &skill_market_state,
+            &request.method,
+            &request.target,
+            &request.body,
+        ) {
+            Ok(response) => {
+                if let Some(body) = response.body {
+                    let body = serde_json::to_string(&body).unwrap_or_else(|_| "null".to_string());
+                    send_json_response(&mut stream, response.status, &body, origin);
+                } else {
+                    send_empty_response(&mut stream, response.status, origin);
+                }
+            }
+            Err(error) => {
+                let body = json!({ "error": error.message, "code": error.code }).to_string();
+                send_json_response(&mut stream, error.status, &body, origin);
+            }
+        }
+        let _ = stream.shutdown(Shutdown::Both);
+        return;
+    }
+
     match bridge.send_request(&request) {
         Ok(response) => {
             if response.status == 204 {
@@ -1400,6 +1438,20 @@ fn handle_connection(
 
 fn is_skill_market_path(path: &str) -> bool {
     path == "/api/working/skill-market" || path.starts_with("/api/working/skill-market/")
+}
+
+fn is_working_payment_path(path: &str) -> bool {
+    [
+        "/api/working/diamond-packages",
+        "/api/working/diamond-purchases",
+        "/api/working/vip/upgrade",
+    ]
+    .iter()
+    .any(|prefix| path == *prefix || path.starts_with(&format!("{}/", prefix)))
+        || path
+            .strip_prefix("/api/working/orders/")
+            .map(|value| value.ends_with("/payment") && value.len() > "/payment".len())
+            .unwrap_or(false)
 }
 
 fn is_workspace_mcp_route(method: &str, path: &str) -> bool {
@@ -1866,6 +1918,38 @@ fn handle_internal_agent_shell(
         .handle_shell_with_worker_token(worker_token, &request.body)
     {
         Ok(body) => send_json_response(stream, 200, &body.to_string(), origin),
+        Err(error) => {
+            let body = json!({ "error": error.message, "code": error.code }).to_string();
+            send_json_response(stream, error.status, &body, origin);
+        }
+    }
+}
+
+fn handle_internal_agent_alipay_bot(
+    stream: &mut TcpStream,
+    request: &HttpRequest,
+    origin: Option<&str>,
+    workers: &PiWorkerManager,
+) {
+    let Some(worker_token) = request.headers.get(AGENT_FILE_TOKEN_HEADER) else {
+        send_json_response(
+            stream,
+            403,
+            r#"{"error":"Agent 支付能力令牌缺失","code":"agent_file_token_required"}"#,
+            None,
+        );
+        return;
+    };
+
+    match alipay_bot::handle_request(
+        workers.file_policies().as_ref(),
+        &request.method,
+        worker_token,
+        &request.body,
+    ) {
+        Ok(response) => {
+            send_json_response(stream, response.status, &response.body.to_string(), origin)
+        }
         Err(error) => {
             let body = json!({ "error": error.message, "code": error.code }).to_string();
             send_json_response(stream, error.status, &body, origin);

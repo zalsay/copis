@@ -1,6 +1,8 @@
 import * as React from 'react'
+import { useAtomValue, useSetAtom } from 'jotai'
 import { ChevronLeft, ChevronRight, Loader2, QrCode, RefreshCw, Trash2 } from 'lucide-react'
 import type { WorkingOrder, WorkingOrdersPagination } from '@copis/shared'
+import { openWorkingPaymentAtom, workingPaymentRefreshAtom } from '@/atoms/working-payment-atoms'
 import './CopisWorkingOrdersPanel.css'
 
 const EMPTY_PAGINATION: WorkingOrdersPagination = {
@@ -29,8 +31,10 @@ export function CopisWorkingOrdersPanel(): React.ReactElement {
   const [loading, setLoading] = React.useState(true)
   const [error, setError] = React.useState('')
   const [actionError, setActionError] = React.useState('')
-  const [message, setMessage] = React.useState('')
   const [deletingOrderId, setDeletingOrderId] = React.useState<number | string | null>(null)
+  const openPayment = useSetAtom(openWorkingPaymentAtom)
+  const paymentRefresh = useAtomValue(workingPaymentRefreshAtom)
+  const paymentRefreshRef = React.useRef(paymentRefresh)
 
   const loadOrders = React.useCallback(async (targetPage: number): Promise<void> => {
     setLoading(true)
@@ -49,6 +53,12 @@ export function CopisWorkingOrdersPanel(): React.ReactElement {
   React.useEffect(() => {
     void loadOrders(page)
   }, [loadOrders, page])
+
+  React.useEffect(() => {
+    if (paymentRefresh <= paymentRefreshRef.current) return
+    paymentRefreshRef.current = paymentRefresh
+    void loadOrders(page)
+  }, [loadOrders, page, paymentRefresh])
 
   const handleDeleteOrder = async (order: WorkingOrder): Promise<void> => {
     if (!window.confirm(`确认删除订单“${order.outTradeNo}”？`)) return
@@ -78,7 +88,6 @@ export function CopisWorkingOrdersPanel(): React.ReactElement {
       </header>
 
       {actionError && <div className="copis-working-orders-action-error" role="alert">{actionError}</div>}
-      {message && <div className="copis-working-orders-message" role="status">{message}</div>}
 
       {loading ? (
         <div className="copis-working-orders-loading" aria-label="正在加载订单">
@@ -122,7 +131,14 @@ export function CopisWorkingOrdersPanel(): React.ReactElement {
               <div className="copis-working-order-actions">
                 <span className={`copis-working-order-status ${order.status}`}>{orderStatusLabels[order.status] || '支付失败'}</span>
                 {order.status === 'pending' && (
-                  <button type="button" className="copis-working-order-resume" onClick={() => setMessage('继续支付将在 Working 支付模块开放。')}>
+                  <button
+                    type="button"
+                    className="copis-working-order-resume"
+                    onClick={() => openPayment({
+                      mode: order.orderType === 'vip_upgrade' ? 'vip' : 'diamonds',
+                      resumeOrderId: order.id,
+                    })}
+                  >
                     <QrCode aria-hidden="true" />
                     继续支付
                   </button>

@@ -1,5 +1,7 @@
 import type {
   WorkingCheckInResult,
+  WorkingDiamondPackage,
+  WorkingDiamondPurchaseResult,
   WorkingFeedbackInput,
   WorkingFeedbackResult,
   WorkingInvitedUser,
@@ -7,9 +9,14 @@ import type {
   WorkingLoginInput,
   WorkingLoginResult,
   WorkingOrder,
+  WorkingOrderPayment,
   WorkingOrdersPage,
   WorkingPasswordResetInput,
   WorkingPasswordResetVerificationResult,
+  WorkingPaymentCancelResult,
+  WorkingPaymentCheckResult,
+  WorkingPaymentIdentifier,
+  WorkingPendingDiamondPurchase,
   WorkingRegisterInput,
   WorkingSendVerificationCodeInput,
   WorkingSessionHistory,
@@ -25,6 +32,18 @@ import type {
   WorkingWorkspace,
   WorkingWorkspaceInput,
   WorkingImageGenerationResult,
+} from '@copis/shared'
+import {
+  getWorkingPaymentCheckError,
+  isWorkingPaymentCheckFailure,
+  isWorkingVipDiamondPackage,
+  normalizeWorkingDiamondPackages,
+  normalizeWorkingDiamondPurchaseResult,
+  normalizeWorkingOrderPayment,
+  normalizeWorkingPaymentCancelResult,
+  normalizeWorkingPaymentCheckResult,
+  normalizeWorkingPendingDiamondPurchase,
+  WorkingPaymentNormalizationError,
 } from '@copis/shared'
 import type { WorkingTokenStore } from './working-auth-store'
 import { DEFAULT_COPIS_BACKEND_URL } from './backend-endpoint-resolver'
@@ -340,6 +359,22 @@ function normalizeOrder(value: unknown): WorkingOrder {
     method: String(item.method ?? ''),
     status: String(item.status ?? 'failed'),
     createdAt: item.created_at == null && item.createdAt == null ? undefined : String(item.created_at ?? item.createdAt),
+  }
+}
+
+function paymentErrorFromCheck(value: unknown): WorkingApiError {
+  const detail = getWorkingPaymentCheckError(value)
+  return new WorkingApiError(detail.message, 200, detail.code ?? 'payment_check_failed')
+}
+
+function normalizePaymentResult<T>(normalize: () => T): T {
+  try {
+    return normalize()
+  } catch (error: unknown) {
+    if (error instanceof WorkingPaymentNormalizationError) {
+      throw new WorkingApiError(error.message, 200, error.code)
+    }
+    throw error
   }
 }
 
@@ -674,6 +709,74 @@ export class WorkingApiClient {
     await this.request<unknown>(`/api/users/orders/${encodeURIComponent(value)}`, { method: 'DELETE' })
   }
 
+  async listDiamondPackages(): Promise<WorkingDiamondPackage[]> {
+    const data = await this.requestRust<unknown>('/api/working/diamond-packages', { includePayload: false })
+    return normalizePaymentResult(() => normalizeWorkingDiamondPackages(data))
+  }
+
+  async getPendingDiamondPurchase(): Promise<WorkingPendingDiamondPurchase | null> {
+    const data = await this.requestRust<unknown>('/api/working/diamond-purchases/pending', { includePayload: false })
+    return normalizePaymentResult(() => normalizeWorkingPendingDiamondPurchase(data))
+  }
+
+  async createDiamondPurchase(packageId: number): Promise<WorkingDiamondPurchaseResult> {
+    if (!Number.isSafeInteger(packageId) || packageId <= 0) throw new Error('套餐 ID 不正确')
+    const data = await this.requestRust<unknown>('/api/working/diamond-purchases', {
+      method: 'POST',
+      body: JSON.stringify({ packageId }),
+      includePayload: false,
+    })
+    const result = normalizePaymentResult(() => normalizeWorkingDiamondPurchaseResult(data))
+    if (result.isVip || isWorkingVipDiamondPackage(result.package)) {
+      throw new WorkingApiError('普通钻石套餐响应无效', 200, 'invalid_diamond_package_response')
+    }
+    return result
+  }
+
+  async createVipUpgrade(): Promise<WorkingDiamondPurchaseResult> {
+    const data = await this.requestRust<unknown>('/api/working/vip/upgrade', {
+      method: 'POST',
+      body: JSON.stringify({}),
+      includePayload: false,
+    })
+    const result = normalizePaymentResult(() => normalizeWorkingDiamondPurchaseResult(data))
+    if (!result.isVip && !result.vip && !isWorkingVipDiamondPackage(result.package)) {
+      throw new WorkingApiError('VIP 支付响应格式不正确', 200, 'invalid_vip_payment_response')
+    }
+    return result
+  }
+
+  async getOrderPayment(orderId: WorkingPaymentIdentifier): Promise<WorkingOrderPayment> {
+    const value = String(orderId).trim()
+    if (!value) throw new Error('订单 ID 不能为空')
+    const data = await this.requestRust<unknown>(`/api/working/orders/${encodeURIComponent(value)}/payment`, { includePayload: false })
+    return normalizePaymentResult(() => normalizeWorkingOrderPayment(data))
+  }
+
+  async checkPayment(paymentId: WorkingPaymentIdentifier): Promise<WorkingPaymentCheckResult> {
+    const value = String(paymentId).trim()
+    if (!value) throw new Error('支付会话 ID 不能为空')
+    const payload = await this.requestRust<unknown>(`/api/working/diamond-purchases/${encodeURIComponent(value)}/check`, {
+      method: 'POST',
+      body: JSON.stringify({}),
+      unwrap: false,
+      includePayload: false,
+    })
+    if (isWorkingPaymentCheckFailure(payload)) throw paymentErrorFromCheck(payload)
+    return normalizePaymentResult(() => normalizeWorkingPaymentCheckResult(payload))
+  }
+
+  async cancelDiamondPayment(paymentId: WorkingPaymentIdentifier): Promise<WorkingPaymentCancelResult> {
+    const value = String(paymentId).trim()
+    if (!value) throw new Error('支付会话 ID 不能为空')
+    const data = await this.requestRust<unknown>(`/api/working/diamond-purchases/${encodeURIComponent(value)}/cancel`, {
+      method: 'POST',
+      body: JSON.stringify({}),
+      includePayload: false,
+    })
+    return normalizePaymentResult(() => normalizeWorkingPaymentCancelResult(data))
+  }
+
   async listWorkspaces(): Promise<WorkingWorkspace[]> {
     const data = await this.request<unknown>('/api/working/workspaces')
     if (!Array.isArray(data)) throw new WorkingApiError('工作区响应格式不正确', 200, 'invalid_workspaces_response', data)
@@ -794,10 +897,10 @@ export class WorkingApiClient {
 
   private async request<T>(
     path: string,
-    options: RequestInit & { auth?: boolean; unwrap?: boolean } = {},
+    options: RequestInit & { auth?: boolean; unwrap?: boolean; includePayload?: boolean } = {},
     retryOnUnauthorized = true,
   ): Promise<T> {
-    const { auth = true, unwrap = true, ...requestInit } = options
+    const { auth = true, unwrap = true, includePayload = true, ...requestInit } = options
     const headers = new Headers(requestInit.headers)
     headers.set('Accept', 'application/json')
     if (requestInit.body !== undefined) headers.set('Content-Type', 'application/json')
@@ -838,8 +941,66 @@ export class WorkingApiClient {
       }
       if (response.status === 401 && auth) this.clearAuth()
       const detail = errorMessage(payload, `Working 后端请求失败（HTTP ${response.status}）`)
-      throw new WorkingApiError(detail.message, response.status, detail.code, payload)
+      throw new WorkingApiError(detail.message, response.status, detail.code, includePayload ? payload : undefined)
     }
     return unwrap ? unwrapData<T>(payload) : payload as T
+  }
+
+  private async requestRust<T>(
+    path: string,
+    options: RequestInit & { unwrap?: boolean; includePayload?: boolean } = {},
+    retryOnUnauthorized = true,
+  ): Promise<T> {
+    const { unwrap = true, includePayload = true, ...requestInit } = options
+    const token = await this.getValidToken()
+    if (!token) throw new WorkingApiError('请先登录 Copis Working', 401, 'unauthorized')
+
+    await syncRustWorkingToken(token)
+    const baseUrl = await this.resolveRustApiBaseUrl()
+    const headers = new Headers(requestInit.headers)
+    headers.set('Accept', 'application/json')
+    if (requestInit.body !== undefined) headers.set('Content-Type', 'application/json')
+
+    let response: Response
+    try {
+      response = await this.fetchImpl(`${baseUrl}${path.startsWith('/') ? path : `/${path}`}`, {
+        ...requestInit,
+        headers,
+      })
+    } catch (error) {
+      throw new WorkingApiError(error instanceof Error ? error.message : '无法连接本地 Rust HTTP API', 0, 'network_error', error)
+    }
+
+    const text = await response.text()
+    let payload: unknown = null
+    if (text.trim()) {
+      try {
+        payload = JSON.parse(text) as unknown
+      } catch {
+        payload = text
+      }
+    }
+    if (!response.ok) {
+      if (response.status === 401 && retryOnUnauthorized && this.tokenStore.getRefreshToken()) {
+        try {
+          await this.refreshAccessToken()
+          return this.requestRust(path, options, false)
+        } catch (error) {
+          if (error instanceof WorkingApiError && error.status === 401) this.clearAuth()
+          throw error
+        }
+      }
+      if (response.status === 401) this.clearAuth()
+      const detail = errorMessage(payload, `Rust HTTP API 请求失败（HTTP ${response.status}）`)
+      throw new WorkingApiError(detail.message, response.status, detail.code, includePayload ? payload : undefined)
+    }
+    return unwrap ? unwrapData<T>(payload) : payload as T
+  }
+
+  private async resolveRustApiBaseUrl(): Promise<string> {
+    const configured = process.env.COPIS_HTTP_API_BASE_URL?.trim()
+    if (configured) return resolveBackendUrl(configured)
+    const { HTTP_API_HOST, HTTP_API_PORT } = await import('./http-api-server')
+    return `http://${HTTP_API_HOST}:${HTTP_API_PORT}`
   }
 }

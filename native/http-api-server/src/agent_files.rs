@@ -252,6 +252,15 @@ impl AgentFilePolicyStore {
         }
     }
 
+    /// 将当前会话令牌复用于受限的 Agent capability；不会向调用方暴露权限根目录。
+    pub fn validate_worker_token(
+        &self,
+        session_id: &str,
+        worker_token: &str,
+    ) -> Result<(), AgentFileError> {
+        self.ensure_worker_token(session_id, worker_token)
+    }
+
     pub fn handle(
         &self,
         action: &str,

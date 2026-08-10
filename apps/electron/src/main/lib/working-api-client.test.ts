@@ -272,6 +272,106 @@ describe('Copis Working API client', () => {
     ])
   })
 
+  test('normalizes diamond packages, VIP pending payments, QR data URLs, and payment checks', async () => {
+    const calls: Array<{ url: string; method: string; body?: string }> = []
+    const previousRustApiBaseUrl = process.env.COPIS_HTTP_API_BASE_URL
+    process.env.COPIS_HTTP_API_BASE_URL = 'http://127.0.0.1:51730'
+    const client = new WorkingApiClient({
+      baseUrl: 'https://backend.example.test',
+      tokenStore: createStore('payment-token'),
+      fetchImpl: async (url, init) => {
+        calls.push({ url, method: init?.method ?? 'GET', body: typeof init?.body === 'string' ? init.body : undefined })
+        if (url.endsWith('/api/working/diamond-packages')) {
+          expect(new Headers(init?.headers).get('Authorization')).toBeNull()
+          return jsonResponse({ data: [
+            { id: 1, service_id: 'diamond', amount: '9.90', amount_cents: 990, currency: 'CNY', diamonds: 100 },
+            { id: 2, service_id: 'pi-vip', amount: '29.90', amount_cents: 2990, currency: 'CNY', diamonds: 500 },
+          ] })
+        }
+        if (url.endsWith('/api/working/vip/upgrade')) {
+          expect(new Headers(init?.headers).get('Authorization')).toBeNull()
+          return jsonResponse({ data: {
+            out_trade_no: 'VIP-1',
+            package: { id: 2, service_id: 'pi-vip', amount: '29.90', amount_cents: 2990, currency: 'CNY', diamonds: 500 },
+            is_vip: true,
+            pending_existing: true,
+            payment: { payment_id: 'vip-payment', status: 'pending_user_pay', qrcode_image: 'vip-qr', qrcode_mime_type: 'image/png' },
+            vip: { service_id: 'pi-vip', days: 30, amount: '29.90', amount_cents: 2990, bonus_diamonds: 500 },
+          } })
+        }
+        if (url.includes('/api/working/diamond-purchases/pay%2F1/check')) {
+          expect(new Headers(init?.headers).get('Authorization')).toBeNull()
+          return jsonResponse({ skill: 'alipay.payment.check', ok: true, message: 'ok', data: {
+            status: 'resource_ready',
+            payment: { payment_id: 'pay/1', status: 'resource_ready', qrcode_image: 'data:image/png;base64,ready' },
+          } })
+        }
+        throw new Error(`unexpected request: ${url}`)
+      },
+    })
+
+    try {
+      await expect(client.listDiamondPackages()).resolves.toEqual([
+        expect.objectContaining({ id: 1, amount: '9.90', amountCents: 990, diamonds: 100 }),
+      ])
+      await expect(client.createVipUpgrade()).resolves.toEqual(expect.objectContaining({
+        isVip: true,
+        pendingExisting: true,
+        payment: expect.objectContaining({ qrCodeImage: 'data:image/png;base64,vip-qr' }),
+        vip: expect.objectContaining({ days: 30, bonusDiamonds: 500 }),
+      }))
+      await expect(client.checkPayment('pay/1')).resolves.toEqual({
+        status: 'resource_ready',
+        payment: expect.objectContaining({ paymentId: 'pay/1', qrCodeImage: 'data:image/png;base64,ready' }),
+      })
+      expect(calls).toEqual([
+        { url: 'http://127.0.0.1:51730/api/working/diamond-packages', method: 'GET', body: undefined },
+        { url: 'http://127.0.0.1:51730/api/working/vip/upgrade', method: 'POST', body: '{}' },
+        { url: 'http://127.0.0.1:51730/api/working/diamond-purchases/pay%2F1/check', method: 'POST', body: '{}' },
+      ])
+    } finally {
+      if (previousRustApiBaseUrl === undefined) delete process.env.COPIS_HTTP_API_BASE_URL
+      else process.env.COPIS_HTTP_API_BASE_URL = previousRustApiBaseUrl
+    }
+  })
+
+  test('refreshes once and retries a payment request after Rust returns HTTP 401', async () => {
+    const store = createStore('stale-payment-token', 'refresh-secret')
+    const calls: string[] = []
+    let paymentRequestCount = 0
+    const previousRustApiBaseUrl = process.env.COPIS_HTTP_API_BASE_URL
+    process.env.COPIS_HTTP_API_BASE_URL = 'http://127.0.0.1:51730'
+    const client = new WorkingApiClient({
+      baseUrl: 'https://backend.example.test',
+      tokenStore: store,
+      fetchImpl: async (url) => {
+        calls.push(url)
+        if (url.endsWith('/api/working/diamond-packages')) {
+          paymentRequestCount += 1
+          if (paymentRequestCount === 1) return jsonResponse({ error: 'token expired' }, 401)
+          return jsonResponse([{ id: 1, amount: '9.90', diamonds: 100 }])
+        }
+        if (url.endsWith('/api/auth/refresh')) return jsonResponse({ token: 'new-payment-token', refresh_token: 'refresh-secret' })
+        throw new Error(`unexpected request: ${url}`)
+      },
+    })
+
+    try {
+      await expect(client.listDiamondPackages()).resolves.toEqual([
+        expect.objectContaining({ id: 1, amount: '9.90', diamonds: 100 }),
+      ])
+      expect(calls).toEqual([
+        'http://127.0.0.1:51730/api/working/diamond-packages',
+        'https://backend.example.test/api/auth/refresh',
+        'http://127.0.0.1:51730/api/working/diamond-packages',
+      ])
+      expect(store.token).toBe('new-payment-token')
+    } finally {
+      if (previousRustApiBaseUrl === undefined) delete process.env.COPIS_HTTP_API_BASE_URL
+      else process.env.COPIS_HTTP_API_BASE_URL = previousRustApiBaseUrl
+    }
+  })
+
   test('submits Working feedback through the authenticated ai-education endpoint', async () => {
     const client = new WorkingApiClient({
       baseUrl: 'https://backend.example.test',

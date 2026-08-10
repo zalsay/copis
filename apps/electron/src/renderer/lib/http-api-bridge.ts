@@ -1,5 +1,14 @@
 // 浏览器模式的普通 API 走 Vite 代理；Agent 流式请求直接连接 Rust SSE 服务。
 import type { AgentExpertTeamSession, AgentQueueMessageInput, AgentStreamCompletePayload, AgentStreamEvent, AgentSendInput, MemoryExportFileInput } from '@copis/shared'
+import {
+  normalizeWorkingDiamondPackages,
+  normalizeWorkingDiamondPurchaseResult,
+  normalizeWorkingOrderPayment,
+  normalizeWorkingPaymentCancelResult,
+  normalizeWorkingPaymentCheckResult,
+  normalizeWorkingPendingDiamondPurchase,
+  WorkingPaymentNormalizationError,
+} from '@copis/shared'
 import { agentHttpStreamClient, configureAgentHttpApiBaseUrl } from './agent-http-stream'
 import { RENDERER_HTTP_API_BASE_URL, RENDERER_HTTP_API_PORT } from './http-api-base-url'
 import { withHttpApiWebToken } from './http-api-web-token'
@@ -87,13 +96,27 @@ async function request<T>(path: string, method = 'GET', body?: unknown): Promise
     const message = isRecord(payload) && typeof payload.error === 'string'
       ? payload.error
       : `HTTP API 请求失败（${response.status}）`
-    throw new Error(message)
+    throw Object.assign(new Error(message), {
+      status: response.status,
+      ...(isRecord(payload) && typeof payload.code === 'string' ? { code: payload.code } : {}),
+    })
   }
   return payload as T
 }
 
 function getArgument<T>(args: readonly unknown[], index: number): T {
   return args[index] as T
+}
+
+function normalizeWorkingPayment<T>(normalize: () => T): T {
+  try {
+    return normalize()
+  } catch (error: unknown) {
+    if (error instanceof WorkingPaymentNormalizationError) {
+      throw Object.assign(error, { status: 200, code: error.code })
+    }
+    throw error
+  }
 }
 
 function createHttpMethods(): Record<string, HttpMethod> {
@@ -131,6 +154,21 @@ function createHttpMethods(): Record<string, HttpMethod> {
       return request(`/api/working/orders?${query.toString()}`)
     },
     deleteWorkingOrder: (args) => request(`/api/working/orders/${encodeURIComponent(String(getArgument<number | string>(args, 0)))}`, 'DELETE'),
+    listWorkingDiamondPackages: () => request('/api/working/diamond-packages')
+      .then((value) => normalizeWorkingPayment(() => normalizeWorkingDiamondPackages(value))),
+    getPendingWorkingDiamondPurchase: () => request('/api/working/diamond-purchases/pending')
+      .then((value) => normalizeWorkingPayment(() => normalizeWorkingPendingDiamondPurchase(value))),
+    createWorkingDiamondPurchase: (args) => request('/api/working/diamond-purchases', 'POST', {
+      packageId: getArgument<number>(args, 0),
+    }).then((value) => normalizeWorkingPayment(() => normalizeWorkingDiamondPurchaseResult(value))),
+    createWorkingVipUpgrade: () => request('/api/working/vip/upgrade', 'POST', {})
+      .then((value) => normalizeWorkingPayment(() => normalizeWorkingDiamondPurchaseResult(value))),
+    getWorkingOrderPayment: (args) => request(`/api/working/orders/${encodeURIComponent(String(getArgument<number | string>(args, 0)))}/payment`)
+      .then((value) => normalizeWorkingPayment(() => normalizeWorkingOrderPayment(value))),
+    checkWorkingPayment: (args) => request(`/api/working/diamond-purchases/${encodeURIComponent(String(getArgument<number | string>(args, 0)))}/check`, 'POST', {})
+      .then((value) => normalizeWorkingPayment(() => normalizeWorkingPaymentCheckResult(value))),
+    cancelWorkingDiamondPayment: (args) => request(`/api/working/diamond-purchases/${encodeURIComponent(String(getArgument<number | string>(args, 0)))}/cancel`, 'POST', {})
+      .then((value) => normalizeWorkingPayment(() => normalizeWorkingPaymentCancelResult(value))),
 
     // ===== 应用设置 =====
     getSettings: () => request('/api/settings'),
@@ -264,6 +302,7 @@ function createHttpApiBridge(): Window['electronAPI'] {
     get: (_target, property: string | symbol) => {
       if (typeof property !== 'string' || property === 'then') return undefined
       if (property === 'updater') return undefined
+      if (property === 'getHttpApiWebToken') return () => ''
       if (property === 'webTabs') return webTabs
       if (property === 'updateSettingsSync') return () => false
       if (property === 'saveScratchPadSync') return () => true

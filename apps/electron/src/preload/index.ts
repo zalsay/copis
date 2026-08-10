@@ -140,6 +140,13 @@ import type {
   WorkingSettingsSnapshot,
   WorkingLoginInput,
   WorkingOrdersPage,
+  WorkingOrderPayment,
+  WorkingPaymentCancelResult,
+  WorkingPaymentCheckResult,
+  WorkingPaymentIdentifier,
+  WorkingPendingDiamondPurchase,
+  WorkingDiamondPackage,
+  WorkingDiamondPurchaseResult,
   WorkingPasswordResetInput,
   WorkingPasswordResetVerificationResult,
   WorkingRegisterInput,
@@ -351,6 +358,13 @@ export interface ElectronAPI {
   setWorkingReceiveChannel: (channel: WorkingReceiveChannel) => Promise<WorkingReceiveChannelSettings>
   listWorkingOrders: (page?: number, pageSize?: number) => Promise<WorkingOrdersPage>
   deleteWorkingOrder: (orderId: number | string) => Promise<void>
+  listWorkingDiamondPackages: () => Promise<WorkingDiamondPackage[]>
+  getPendingWorkingDiamondPurchase: () => Promise<WorkingPendingDiamondPurchase | null>
+  createWorkingDiamondPurchase: (packageId: number) => Promise<WorkingDiamondPurchaseResult>
+  createWorkingVipUpgrade: () => Promise<WorkingDiamondPurchaseResult>
+  getWorkingOrderPayment: (orderId: WorkingPaymentIdentifier) => Promise<WorkingOrderPayment>
+  checkWorkingPayment: (paymentId: WorkingPaymentIdentifier) => Promise<WorkingPaymentCheckResult>
+  cancelWorkingDiamondPayment: (paymentId: WorkingPaymentIdentifier) => Promise<WorkingPaymentCancelResult>
 
   // ===== 渠道管理相关 =====
 
@@ -1397,6 +1411,13 @@ const electronAPI: ElectronAPI = {
   setWorkingReceiveChannel: (channel: WorkingReceiveChannel) => ipcRenderer.invoke(WORKING_IPC_CHANNELS.SET_RECEIVE_CHANNEL, channel),
   listWorkingOrders: (page?: number, pageSize?: number) => ipcRenderer.invoke(WORKING_IPC_CHANNELS.LIST_ORDERS, page, pageSize),
   deleteWorkingOrder: (orderId: number | string) => ipcRenderer.invoke(WORKING_IPC_CHANNELS.DELETE_ORDER, orderId),
+  listWorkingDiamondPackages: () => ipcRenderer.invoke(WORKING_IPC_CHANNELS.LIST_DIAMOND_PACKAGES),
+  getPendingWorkingDiamondPurchase: () => ipcRenderer.invoke(WORKING_IPC_CHANNELS.GET_PENDING_DIAMOND_PURCHASE),
+  createWorkingDiamondPurchase: (packageId: number) => ipcRenderer.invoke(WORKING_IPC_CHANNELS.CREATE_DIAMOND_PURCHASE, packageId),
+  createWorkingVipUpgrade: () => ipcRenderer.invoke(WORKING_IPC_CHANNELS.CREATE_VIP_UPGRADE),
+  getWorkingOrderPayment: (orderId: WorkingPaymentIdentifier) => ipcRenderer.invoke(WORKING_IPC_CHANNELS.GET_ORDER_PAYMENT, orderId),
+  checkWorkingPayment: (paymentId: WorkingPaymentIdentifier) => ipcRenderer.invoke(WORKING_IPC_CHANNELS.CHECK_PAYMENT, paymentId),
+  cancelWorkingDiamondPayment: (paymentId: WorkingPaymentIdentifier) => ipcRenderer.invoke(WORKING_IPC_CHANNELS.CANCEL_DIAMOND_PAYMENT, paymentId),
 
   // 渠道管理
   listChannels: () => {

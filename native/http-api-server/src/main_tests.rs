@@ -11,9 +11,10 @@ use super::pi_rpc::{
 };
 use super::{
     append_recording_line, decode_hex, encode_hex, find_subslice, handle_connection,
-    is_allowed_origin, is_internal_agent_shell_path, is_internal_path, is_internal_token_valid,
-    is_safe_path_component, is_skill_market_path, is_vite_dev_origin, is_web_route_authorized,
-    is_workspace_dev_route, parse_internal_recording_route, recording_marker, Bridge, HttpRequest,
+    is_allowed_origin, is_internal_agent_alipay_bot_path, is_internal_agent_shell_path,
+    is_internal_path, is_internal_token_valid, is_safe_path_component, is_skill_market_path,
+    is_vite_dev_origin, is_web_route_authorized, is_working_payment_path, is_workspace_dev_route,
+    parse_internal_recording_route, recording_marker, Bridge, HttpRequest,
 };
 
 #[test]
@@ -396,6 +397,19 @@ fn recognizes_skill_market_routes_as_rust_owned_routes() {
 }
 
 #[test]
+fn recognizes_working_payment_routes_as_rust_owned_routes() {
+    assert!(is_working_payment_path("/api/working/diamond-packages"));
+    assert!(is_working_payment_path(
+        "/api/working/diamond-purchases/payment-1/check"
+    ));
+    assert!(is_working_payment_path("/api/working/vip/upgrade"));
+    assert!(is_working_payment_path("/api/working/orders/12/payment"));
+    assert!(!is_working_payment_path("/api/working/diamond-package"));
+    assert!(!is_working_payment_path("/api/working/orders"));
+    assert!(!is_working_payment_path("/api/working/orders/12"));
+}
+
+#[test]
 fn recognizes_only_workspace_dev_project_routes() {
     assert!(is_workspace_dev_route(
         "GET",
@@ -429,6 +443,19 @@ fn recognizes_only_exact_internal_agent_shell_route() {
     assert!(!is_internal_agent_shell_path("/api/internal/agent/shell/"));
     assert!(!is_internal_agent_shell_path(
         "/api/internal/agent/files/shell"
+    ));
+}
+
+#[test]
+fn recognizes_only_exact_internal_agent_alipay_bot_route() {
+    assert!(is_internal_agent_alipay_bot_path(
+        "/api/internal/agent/alipay-bot"
+    ));
+    assert!(!is_internal_agent_alipay_bot_path(
+        "/api/internal/agent/alipay-bot/"
+    ));
+    assert!(!is_internal_agent_alipay_bot_path(
+        "/api/internal/agent/files/alipay-bot"
     ));
 }
 

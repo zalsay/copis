@@ -57,3 +57,16 @@ export {
   adaptWorkingStreamError,
   adaptWorkingStreamEvent,
 } from './working-event-adapter'
+export {
+  getWorkingPaymentCheckError,
+  isWorkingPaymentCheckFailure,
+  isWorkingVipDiamondPackage,
+  normalizeWorkingDiamondPackage,
+  normalizeWorkingDiamondPackages,
+  normalizeWorkingDiamondPurchaseResult,
+  normalizeWorkingOrderPayment,
+  normalizeWorkingPaymentCancelResult,
+  normalizeWorkingPaymentCheckResult,
+  normalizeWorkingPendingDiamondPurchase,
+  WorkingPaymentNormalizationError,
+} from './working-payment'

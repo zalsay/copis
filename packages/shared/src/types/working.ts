@@ -460,9 +460,80 @@ export interface WorkingOrdersPage {
   pagination: WorkingOrdersPagination
 }
 
+export type WorkingPaymentIdentifier = number | string
+
+export interface WorkingDiamondPackage {
+  id: number
+  serviceId?: string
+  goodsName?: string
+  amount: string
+  amountCents: number
+  currency: string
+  diamonds: number
+  enabled?: boolean
+  sortOrder?: number
+}
+
+export interface WorkingPaymentSession {
+  paymentId: string
+  resourceId?: string
+  outTradeNo?: string
+  tradeNo?: string
+  outShakeNo?: string
+  status: string
+  goodsName?: string
+  amount?: string
+  currency?: string
+  cashierUrl?: string
+  qrCodeImage?: string
+  qrCodeMimeType?: string
+  expiresAt?: string | null
+}
+
+export interface WorkingVipPaymentSummary {
+  serviceId: string
+  days: number
+  amount?: string
+  amountCents?: number
+  bonusDiamonds?: number
+  paymentPackage?: WorkingDiamondPackage
+}
+
+export interface WorkingPendingDiamondPurchase {
+  payment: WorkingPaymentSession
+  package: WorkingDiamondPackage
+}
+
+export interface WorkingDiamondPurchaseResult {
+  outTradeNo?: string
+  package: WorkingDiamondPackage
+  isVip: boolean
+  payment: WorkingPaymentSession
+  vip?: WorkingVipPaymentSummary
+  pendingExisting?: boolean
+}
+
+export interface WorkingOrderPayment {
+  order: WorkingOrder
+  payment: WorkingPaymentSession
+  package: WorkingDiamondPackage
+  vip?: WorkingVipPaymentSummary
+}
+
+export interface WorkingPaymentCheckResult {
+  payment: WorkingPaymentSession
+  status: string
+}
+
+export interface WorkingPaymentCancelResult {
+  cancelled: boolean
+  payment: WorkingPaymentSession
+}
+
 /** Renderer 可见的登录结果，不包含 token。 */
 export type WorkingLoginResponse = WorkingAuthState
 
+/** Renderer 只接收归一化后的支付结果，不包含支付 proof、payment_needed 或资源诊断数据。 */
 export const WORKING_IPC_CHANNELS = {
   GET_CONFIG: 'working:get-config',
   GET_AUTH_STATE: 'working:get-auth-state',
@@ -484,4 +555,11 @@ export const WORKING_IPC_CHANNELS = {
   SET_RECEIVE_CHANNEL: 'working:set-receive-channel',
   LIST_ORDERS: 'working:list-orders',
   DELETE_ORDER: 'working:delete-order',
+  LIST_DIAMOND_PACKAGES: 'working:list-diamond-packages',
+  GET_PENDING_DIAMOND_PURCHASE: 'working:get-pending-diamond-purchase',
+  CREATE_DIAMOND_PURCHASE: 'working:create-diamond-purchase',
+  CREATE_VIP_UPGRADE: 'working:create-vip-upgrade',
+  GET_ORDER_PAYMENT: 'working:get-order-payment',
+  CHECK_PAYMENT: 'working:check-payment',
+  CANCEL_DIAMOND_PAYMENT: 'working:cancel-diamond-payment',
 } as const

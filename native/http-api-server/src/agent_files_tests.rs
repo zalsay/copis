@@ -234,6 +234,41 @@ fn worker_file_token_cannot_access_another_session_policy() {
 }
 
 #[test]
+fn worker_capability_token_can_be_reused_by_another_restricted_capability() {
+    let root = temp_dir("worker-capability");
+    let store = AgentFilePolicyStore::new();
+    let mut query = Map::new();
+    query.insert(
+        "cwd".to_string(),
+        Value::String(root.to_string_lossy().into_owned()),
+    );
+    query.insert("useRustFileApi".to_string(), Value::Bool(true));
+    query.insert(
+        "permissionMode".to_string(),
+        Value::String("bypassPermissions".to_string()),
+    );
+    query.insert(
+        "fileAccessPolicy".to_string(),
+        json!({
+            "readRoots": [root],
+            "readFiles": [],
+            "writeRoots": [root],
+            "permissionMode": "bypassPermissions"
+        }),
+    );
+    let token = store.register_from_query("session-1", &mut query).unwrap();
+
+    assert!(store.validate_worker_token("session-1", &token).is_ok());
+    assert_eq!(
+        store
+            .validate_worker_token("session-1", "wrong-token")
+            .unwrap_err()
+            .code,
+        "agent_file_token_invalid"
+    );
+}
+
+#[test]
 fn project_shell_requires_writable_mode_and_authorized_cwd() {
     let root = temp_dir("shell-policy");
     let copis = root.join("copis");

@@ -1,15 +1,15 @@
 use super::{
-    civil_date_from_days, extract_skill_archive, handle_request, parse_skill_market_route,
-    validate_skill_slug, SkillMarketRoute, SkillMarketState, MARKET_SOURCE_FILE,
+    backend_env_test_lock, civil_date_from_days, extract_skill_archive, handle_request,
+    parse_skill_market_route, validate_skill_slug, SkillMarketRoute, SkillMarketState,
+    MARKET_SOURCE_FILE,
 };
 use std::fs;
 use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::{mpsc, Arc};
 use std::time::Duration;
 
-static ENV_LOCK: std::sync::OnceLock<Mutex<()>> = std::sync::OnceLock::new();
 use zip::write::SimpleFileOptions;
 use zip::ZipWriter;
 
@@ -102,7 +102,7 @@ fn rejects_zip_slip_paths_before_writing_outside_the_destination() {
 
 #[test]
 fn handles_market_list_install_and_uninstall_without_electron_bridge() {
-    let _env_guard = ENV_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
+    let _env_guard = backend_env_test_lock().lock().unwrap();
     let suffix = format!("{}-{}", std::process::id(), super::unique_suffix());
     let config_dir = std::env::temp_dir().join(format!("copis-skill-market-e2e-{}", suffix));
     let workspace_dir = config_dir.join("agent-workspaces").join("demo");
@@ -293,7 +293,7 @@ fn spawn_market_mock_backend(
 
 #[test]
 fn local_install_failure_rolls_back_remote_install() {
-    let _env_guard = ENV_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
+    let _env_guard = backend_env_test_lock().lock().unwrap();
     let suffix = format!("{}-{}", std::process::id(), super::unique_suffix());
     let config_dir = std::env::temp_dir().join(format!("copis-skill-market-rollback-{}", suffix));
     let workspace_dir = config_dir.join("agent-workspaces").join("demo");
@@ -347,7 +347,7 @@ fn local_install_failure_rolls_back_remote_install() {
 
 #[test]
 fn local_install_failure_keeps_remote_when_other_workspace_uses_skill() {
-    let _env_guard = ENV_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
+    let _env_guard = backend_env_test_lock().lock().unwrap();
     let suffix = format!("{}-{}", std::process::id(), super::unique_suffix());
     let config_dir =
         std::env::temp_dir().join(format!("copis-skill-market-no-rollback-{}", suffix));
