@@ -20,6 +20,7 @@ import {
   getBrowserWorkflowDraft,
   getBrowserWorkflowRecording,
   getBrowserWorkflowStatus,
+  openBrowserAgentTab,
   startBrowserWorkflowRecording,
   stopBrowserWorkflowRecording,
   submitBrowserWorkflowDraft,
@@ -62,6 +63,7 @@ export class BrowserAgentToolPolicyError extends Error {
 
 interface BrowserAgentToolDependencies {
   browserPageControl: BrowserPageControlOperations
+  openBrowserAgentTab: typeof openBrowserAgentTab
   getBrowserAgentContext: typeof getBrowserAgentContext
   getBrowserPageControlMode: typeof getBrowserPageControlMode
   getBrowserWorkflowStatus: typeof getBrowserWorkflowStatus
@@ -84,6 +86,7 @@ interface BrowserAgentToolDependencies {
 
 export interface BrowserAgentToolServiceDependencies {
   browserPageControl?: Partial<BrowserPageControlOperations>
+  openBrowserAgentTab?: BrowserAgentToolDependencies['openBrowserAgentTab']
   getBrowserAgentContext?: BrowserAgentToolDependencies['getBrowserAgentContext']
   getBrowserPageControlMode?: BrowserAgentToolDependencies['getBrowserPageControlMode']
   getBrowserWorkflowStatus?: BrowserAgentToolDependencies['getBrowserWorkflowStatus']
@@ -185,6 +188,7 @@ async function defaultRequestSingleApproval(input: BrowserAgentToolApprovalInput
 
 const defaultDependencies: BrowserAgentToolDependencies = {
   browserPageControl,
+  openBrowserAgentTab,
   getBrowserAgentContext,
   getBrowserPageControlMode,
   getBrowserWorkflowStatus,
@@ -373,6 +377,38 @@ export function createBrowserAgentToolService(
           })
         }
         return { kind: 'json', value: await dependencies.browserPageControl.navigate(input.sessionId, url) }
+      }
+      case 'BrowserPageOpenTab': {
+        requireContext()
+        assertMutationAllowed()
+        const url = requiredString(input.toolInput, 'url')
+        let targetUrl: string
+        try {
+          const parsed = new URL(url)
+          if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') throw new Error('non-http')
+          targetUrl = parsed.toString()
+        } catch {
+          throw new BrowserAgentToolPolicyError('新页签地址必须是 HTTP(S) 网页')
+        }
+        const status = dependencies.getBrowserWorkflowStatus(input.sessionId)
+        const targetOrigin = new URL(targetUrl).origin
+        if (!status.pageOrigin || targetOrigin !== status.pageOrigin) {
+          await requestPageApproval({
+            toolCallId: input.toolCallId,
+            toolName: input.toolName,
+            toolInput: { url: targetUrl, fromOrigin: status.pageOrigin ?? '', targetOrigin },
+            displayName: '确认打开新页签',
+            description: `将打开新的网页页签并跳转到 ${targetOrigin}`,
+          })
+        }
+        return {
+          kind: 'json',
+          value: {
+            ok: true,
+            ...(await dependencies.openBrowserAgentTab(input.sessionId, targetUrl)),
+            message: '已打开新的 HTTP(S) 网页页签并切换当前 AI浏览器绑定。',
+          },
+        }
       }
       case 'BrowserWorkflowRecord': {
         requireContext()

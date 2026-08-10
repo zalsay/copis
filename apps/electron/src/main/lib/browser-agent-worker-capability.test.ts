@@ -3,6 +3,7 @@ import {
   assertBrowserAgentWorkerCapability,
   issueBrowserAgentWorkerCapability,
   revokeBrowserAgentWorkerCapability,
+  updateBrowserAgentWorkerCapabilityTabId,
 } from './browser-agent-worker-capability'
 
 describe('Browser Agent Worker capability', () => {
@@ -41,6 +42,29 @@ describe('Browser Agent Worker capability', () => {
     })).toThrow(expect.objectContaining({ code: 'browser_capability_invalid' }))
 
     revokeBrowserAgentWorkerCapability('session-1')
+  })
+
+  test('Given issued capability When tab id updates with the same token Then only the new tab matches', () => {
+    const capability = issueBrowserAgentWorkerCapability({
+      sessionId: 'session-tab-switch',
+      tabId: 'tab-1',
+      triggeredBy: 'user',
+    })
+
+    updateBrowserAgentWorkerCapabilityTabId('session-tab-switch', 'tab-2')
+
+    expect(assertBrowserAgentWorkerCapability({
+      sessionId: 'session-tab-switch',
+      tabId: 'tab-2',
+      token: capability.token,
+    })).toEqual({ triggeredBy: 'user' })
+    expect(() => assertBrowserAgentWorkerCapability({
+      sessionId: 'session-tab-switch',
+      tabId: 'tab-1',
+      token: capability.token,
+    })).toThrow(expect.objectContaining({ code: 'browser_capability_invalid' }))
+
+    revokeBrowserAgentWorkerCapability('session-tab-switch')
   })
 
   test('Given capability issued for one session When another query session presents its token Then it is rejected', () => {

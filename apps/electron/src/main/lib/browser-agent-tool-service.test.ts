@@ -330,6 +330,112 @@ describe('Browser Agent 主进程工具 dispatcher', () => {
     expect(start).not.toHaveBeenCalled()
   })
 
+  test('Given authorized page When Worker opens a new same-origin tab Then it binds the new tab without one-time approval', async () => {
+    const capability = issueBrowserAgentWorkerCapability({
+      sessionId: 'browser-session',
+      tabId: 'tab-1',
+      triggeredBy: 'user',
+    })
+    const openBrowserAgentTab = mock((_sessionId: string, url: string) => ({
+      tabId: 'tab-2',
+      url,
+      title: 'New tab',
+    }))
+    const requestSingleApproval = mock(async () => true)
+    const service = createBrowserAgentToolService({
+      openBrowserAgentTab,
+      getBrowserAgentContext: () => ({ tabId: 'tab-1' }),
+      getBrowserPageControlMode: () => 'authorized',
+      getBrowserWorkflowStatus: () => ({
+        sessionId: 'browser-session',
+        state: 'idle',
+        pageOrigin: 'https://example.com',
+        controlMode: 'authorized',
+      }),
+      requestSingleApproval,
+    })
+
+    await expect(service.executeWorker({
+      sessionId: 'browser-session',
+      capabilityToken: capability.token,
+      toolCallId: 'open-tab-call-1',
+      toolName: 'BrowserPageOpenTab',
+      toolInput: { url: 'https://example.com/new?token=secret' },
+    })).resolves.toEqual({
+      kind: 'json',
+      value: expect.objectContaining({
+        ok: true,
+        tabId: 'tab-2',
+        url: 'https://example.com/new?token=secret',
+        title: 'New tab',
+      }),
+    })
+    expect(requestSingleApproval).not.toHaveBeenCalled()
+    expect(openBrowserAgentTab).toHaveBeenCalledWith('browser-session', 'https://example.com/new?token=secret')
+  })
+
+  test('Given cross-origin open-tab When approval succeeds Then it opens the new tab', async () => {
+    const capability = issueBrowserAgentWorkerCapability({
+      sessionId: 'browser-session',
+      tabId: 'tab-1',
+      triggeredBy: 'user',
+    })
+    const openBrowserAgentTab = mock((_sessionId: string, url: string) => ({
+      tabId: 'tab-2',
+      url,
+      title: 'Other tab',
+    }))
+    const requestSingleApproval = mock(async () => true)
+    const service = createBrowserAgentToolService({
+      openBrowserAgentTab,
+      getBrowserAgentContext: () => ({ tabId: 'tab-1' }),
+      getBrowserPageControlMode: () => 'authorized',
+      getBrowserWorkflowStatus: () => ({
+        sessionId: 'browser-session',
+        state: 'idle',
+        pageOrigin: 'https://example.com',
+        controlMode: 'authorized',
+      }),
+      requestSingleApproval,
+    })
+
+    await expect(service.executeWorker({
+      sessionId: 'browser-session',
+      capabilityToken: capability.token,
+      toolCallId: 'open-tab-call-2',
+      toolName: 'BrowserPageOpenTab',
+      toolInput: { url: 'https://other.example.test/new' },
+    })).resolves.toEqual({
+      kind: 'json',
+      value: expect.objectContaining({ ok: true, tabId: 'tab-2', url: 'https://other.example.test/new', title: 'Other tab' }),
+    })
+    expect(requestSingleApproval).toHaveBeenCalledTimes(1)
+    expect(openBrowserAgentTab).toHaveBeenCalledWith('browser-session', 'https://other.example.test/new')
+  })
+
+  test('Given ask mode When Worker opens a new tab Then it is refused and no tab is opened', async () => {
+    const capability = issueBrowserAgentWorkerCapability({
+      sessionId: 'browser-session',
+      tabId: 'tab-1',
+      triggeredBy: 'user',
+    })
+    const openBrowserAgentTab = mock(() => ({ tabId: 'tab-2', url: 'https://other.example.test', title: 'Other tab' }))
+    const service = createBrowserAgentToolService({
+      openBrowserAgentTab,
+      getBrowserAgentContext: () => ({ tabId: 'tab-1' }),
+      getBrowserPageControlMode: () => 'ask',
+    })
+
+    await expect(service.executeWorker({
+      sessionId: 'browser-session',
+      capabilityToken: capability.token,
+      toolCallId: 'open-tab-call-3',
+      toolName: 'BrowserPageOpenTab',
+      toolInput: { url: 'https://other.example.test/new' },
+    })).rejects.toThrow('询问模式')
+    expect(openBrowserAgentTab).not.toHaveBeenCalled()
+  })
+
   test('Given cross-origin navigation When approval succeeds Then logs only origins and approval result', async () => {
     const service = createBrowserAgentToolService({
       browserPageControl: {

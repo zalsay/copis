@@ -31,6 +31,7 @@ import {
   startRustBrowserRecording,
 } from './rust-browser-recording-client'
 import {
+  createWebTab,
   getWebTabState,
   sendWebTabCdpCommandInternal,
   subscribeWebTabCdpEvents,
@@ -38,7 +39,10 @@ import {
   subscribeWebTabLifecycle,
   type WebTabCdpEventListener,
 } from './web-tab-manager'
-import { revokeBrowserAgentWorkerCapability } from './browser-agent-worker-capability'
+import {
+  revokeBrowserAgentWorkerCapability,
+  updateBrowserAgentWorkerCapabilityTabId,
+} from './browser-agent-worker-capability'
 
 interface BrowserAgentBinding {
   sessionId: string
@@ -670,6 +674,7 @@ export function bindBrowserAgentContext(
   sessionId: string,
   context: BrowserAgentContext,
   ownerWebContentsId?: number,
+  options: { preserveWorkerCapability?: boolean } = {},
 ): BrowserWorkflowStatus {
   const session = getAgentSessionMeta(sessionId)
   if (!session) throw new Error('AI浏览器会话不存在')
@@ -683,7 +688,7 @@ export function bindBrowserAgentContext(
   if (previousBinding && ownerWebContentsId !== undefined && previousBinding.ownerWebContentsId !== ownerWebContentsId) {
     throw new Error('Browser Workflow session 已绑定到其它渲染进程')
   }
-  if (previousBinding && previousBinding.context.tabId !== context.tabId) {
+  if (previousBinding && previousBinding.context.tabId !== context.tabId && !options.preserveWorkerCapability) {
     revokeBrowserAgentWorkerCapability(sessionId)
   }
   const authorizedOrigins = loadBrowserPageAuthorizations(sessionId)
@@ -715,6 +720,28 @@ export function unbindBrowserAgentContext(sessionId: string, ownerWebContentsId?
 
 export function getBrowserAgentContext(sessionId: string): BrowserAgentContext | undefined {
   return bindings.get(sessionId)?.context
+}
+
+export interface BrowserPageOpenTabResult {
+  tabId: string
+  url: string
+  title: string
+}
+
+/** 打开新的用户网页页签，并把当前 AI浏览器会话绑定到新页签。 */
+export function openBrowserAgentTab(sessionId: string, url: string): BrowserPageOpenTabResult {
+  const binding = bindings.get(sessionId)
+  if (!binding) throw new Error('AI浏览器页面上下文不存在')
+  const snapshot = createWebTab({ url, activate: true })
+  const tabId = snapshot.activeTabId
+  if (!tabId) throw new Error('新网页页签创建失败')
+  const tab = getWebTabState(tabId)
+  if (!tab || !normalizeBrowserPageOrigin(tab.url)) {
+    throw new Error('只有 HTTP(S) 网页可以绑定 AI浏览器')
+  }
+  bindBrowserAgentContext(sessionId, { tabId }, undefined, { preserveWorkerCapability: true })
+  updateBrowserAgentWorkerCapabilityTabId(sessionId, tabId)
+  return { tabId, url: sanitizeBrowserWorkflowUrl(tab.url), title: tab.title }
 }
 
 export function getBrowserPageControlMode(sessionId: string): BrowserPageControlMode {

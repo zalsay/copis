@@ -253,6 +253,13 @@ const BROWSER_TOOL_DEFINITIONS: BrowserToolDefinition[] = [
     parameters: Type.Object({ url: Type.String({ description: 'HTTP(S) 地址，可使用当前页面的相对地址' }) }),
   },
   {
+    name: 'BrowserPageOpenTab',
+    label: '打开新页签',
+    description: '打开一个新的 Copis 内部 HTTP(S) 网页页签，并把当前 AI浏览器会话绑定到新页签。仅在授权模式下可用；跨站地址需要用户单次确认。',
+    promptSnippet: 'BrowserPageOpenTab: 用户要求打开新网页或需要保留原页面时使用；新页签会自动成为当前绑定页。',
+    parameters: Type.Object({ url: Type.String({ description: 'HTTP(S) 地址' }) }),
+  },
+  {
     name: 'BrowserWorkflowRecord',
     label: '记录网页操作',
     description: '开始记录用户在当前 Copis 网页页签中的操作。启动后立即返回；用户通过网页工具栏 Copis 停止，随后由 Agent 读取 Rust API 写入的脱敏 JSONL 并总结。',

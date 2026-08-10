@@ -76,3 +76,11 @@ export function assertBrowserAgentWorkerCapability(input: {
 export function revokeBrowserAgentWorkerCapability(sessionId: string): void {
   capabilities.delete(sessionId)
 }
+
+/** 保留同一 worker 的 token，把 capability 指向 Agent 新打开的页签。 */
+export function updateBrowserAgentWorkerCapabilityTabId(sessionId: string, tabId: string): void {
+  const record = capabilities.get(sessionId)
+  if (!record) return
+  requireNonBlank(tabId, 'tabId')
+  record.tabId = tabId
+}

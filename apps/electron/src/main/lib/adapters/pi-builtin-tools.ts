@@ -399,6 +399,16 @@ function buildBrowserPageControlTools(sdk: PiSdk, ctx: PiBuiltinToolsContext): T
         return executeBrowserAgentTool(ctx, toolCallId, 'BrowserPageNavigate', params, signal)
       },
     }),
+    sdk.defineTool({
+      name: 'BrowserPageOpenTab',
+      label: '打开新页签',
+      description: '打开一个新的 Copis 内部 HTTP(S) 网页页签，并把当前 AI浏览器会话绑定到新页签。仅在授权模式下可用；跨站地址需要用户单次确认。',
+      promptSnippet: 'BrowserPageOpenTab: 用户要求打开新网页或需要保留原页面时使用；新页签会自动成为当前绑定页。',
+      parameters: Type.Object({ url: Type.String({ description: 'HTTP(S) 地址' }) }),
+      async execute(toolCallId: string, params: unknown, signal?: AbortSignal) {
+        return executeBrowserAgentTool(ctx, toolCallId, 'BrowserPageOpenTab', params, signal)
+      },
+    }),
   ] as unknown as ToolDefinition[]
 }
 

@@ -96,6 +96,7 @@ describe('默认 Skills 清单', () => {
     const content = readFileSync(join(DEFAULT_SKILLS_DIR, 'browser-workflow-automation', 'SKILL.md'), 'utf8')
     for (const requiredText of [
       'BrowserPageNavigate',
+      'BrowserPageOpenTab',
       'BrowserPageObserve',
       'BrowserPageClick',
       'BrowserWorkflowList',

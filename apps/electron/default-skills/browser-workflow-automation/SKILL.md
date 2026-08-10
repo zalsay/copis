@@ -4,7 +4,7 @@ displayName: 网页工作流自动化
 description: 当用户要求打开网页并连续完成操作，或运行已保存的网页 Workflow 时，指导主对话使用 Copis 内部 AI浏览器完成可审计的自动化流程。
 group: 系统内置
 icon: workflow
-version: "1.0.0"
+version: "1.0.1"
 license: AGPL-3.0-only
 ---
 
@@ -25,6 +25,8 @@ license: AGPL-3.0-only
 ## 临时自然语言自动化
 
 只对用户明确要求的目标执行，严格按以下顺序使用现有 Browser Page 工具：
+
+- 需要保留当前页面或用户要求打开新网页时，先调用 `BrowserPageOpenTab` 打开新的 HTTP(S) 页签；该工具会自动切换当前 AI浏览器绑定。
 
 1. 在确认处于授权模式后，如果当前页不是目标页面，调用 `BrowserPageNavigate` 打开用户指定的 HTTP(S) URL；跨 Origin 导航遵守现有网页控制流程并单独确认。
 2. 调用 `BrowserPageObserve`，确认当前 URL、页面状态和下一步目标元素。

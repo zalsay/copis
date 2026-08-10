@@ -62,6 +62,7 @@ export const BROWSER_AGENT_TOOL_NAMES = [
   'BrowserPagePress',
   'BrowserPageScroll',
   'BrowserPageNavigate',
+  'BrowserPageOpenTab',
   'BrowserWorkflowRecord',
   'BrowserWorkflowRecordingGet',
   'BrowserWorkflowDraft',

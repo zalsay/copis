@@ -49,6 +49,10 @@ mock.module('./rust-browser-recording-client', () => ({
   startRustBrowserRecording: () => Promise.resolve(undefined),
 }))
 mock.module('./web-tab-manager', () => ({
+  createWebTab: (input: { url?: string } = {}) => {
+    currentTab = { id: 'tab-2', url: input.url ?? 'https://new.example.test', title: 'New tab' }
+    return { tabs: [currentTab], activeTabId: 'tab-2' }
+  },
   getWebTabState: () => currentTab,
   sendWebTabCdpCommandInternal: () => Promise.resolve(undefined),
   subscribeWebTabCdpEvents: () => () => undefined,
@@ -60,6 +64,7 @@ let bindBrowserAgentContext: typeof import('./browser-workflow-service')['bindBr
 let unbindBrowserAgentContext: typeof import('./browser-workflow-service')['unbindBrowserAgentContext']
 let getBrowserPageControlMode: typeof import('./browser-workflow-service')['getBrowserPageControlMode']
 let setBrowserPageControlMode: typeof import('./browser-workflow-service')['setBrowserPageControlMode']
+let openBrowserAgentTab: typeof import('./browser-workflow-service')['openBrowserAgentTab']
 
 beforeAll(async () => {
   const service = await import('./browser-workflow-service')
@@ -67,6 +72,7 @@ beforeAll(async () => {
   unbindBrowserAgentContext = service.unbindBrowserAgentContext
   getBrowserPageControlMode = service.getBrowserPageControlMode
   setBrowserPageControlMode = service.setBrowserPageControlMode
+  openBrowserAgentTab = service.openBrowserAgentTab
 })
 
 beforeEach(() => {
@@ -83,6 +89,35 @@ describe('Browser Agent Context 绑定', () => {
     expect(updateAgentSessionMeta).toHaveBeenCalledWith('browser-session', {
       permissionMode: 'bypassPermissions',
     })
+
+    unbindBrowserAgentContext('browser-session')
+  })
+
+  test('Given BrowserPageOpenTab When opens and binds a new tab Then the same worker token follows the new tab', () => {
+    bindBrowserAgentContext('browser-session', { tabId: 'tab-1' })
+    const capability = issueBrowserAgentWorkerCapability({
+      sessionId: 'browser-session',
+      tabId: 'tab-1',
+      triggeredBy: 'user',
+    })
+
+    const result = openBrowserAgentTab('browser-session', 'https://new.example.test')
+
+    expect(result).toEqual({
+      tabId: 'tab-2',
+      url: 'https://new.example.test/',
+      title: 'New tab',
+    })
+    expect(assertBrowserAgentWorkerCapability({
+      sessionId: 'browser-session',
+      tabId: 'tab-2',
+      token: capability.token,
+    })).toEqual({ triggeredBy: 'user' })
+    expect(() => assertBrowserAgentWorkerCapability({
+      sessionId: 'browser-session',
+      tabId: 'tab-1',
+      token: capability.token,
+    })).toThrow(expect.objectContaining({ code: 'browser_capability_invalid' }))
 
     unbindBrowserAgentContext('browser-session')
   })
