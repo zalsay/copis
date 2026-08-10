@@ -105,6 +105,30 @@ describe('功能模块发布脚本 --rust', () => {
     expect(() => requireExistingNodeRuntime(manifest, 'darwin', 'arm64')).toThrow('缺少 node-runtime')
   })
 
+  test('Rust-only 发布允许远端暂时缺少 Node runtime', () => {
+    const manifest: FunctionalModuleManifest = {
+      schema: 1,
+      channel: 'stable',
+      platforms: {
+        'darwin-arm64': {
+          modules: {
+            officecli: {
+              version: '1.0.143',
+              url: 'https://download.example.com/officecli',
+              sha256: 'b'.repeat(64),
+              size: 1,
+              format: 'binary',
+              entrypoint: 'bin/officecli',
+              required: true,
+            },
+          },
+        },
+      },
+    }
+
+    expect(requireExistingNodeRuntime(manifest, 'darwin', 'arm64', { allowMissing: true })).toBe(false)
+  })
+
   test('合并 Rust 发布时保留远端当前平台的 OfficeCLI artifact', () => {
     const officeCli = {
       version: '1.0.143',

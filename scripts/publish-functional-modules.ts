@@ -123,7 +123,10 @@ async function main(): Promise<void> {
     const existingManifest = await fetchExistingManifest(initialRelease.manifestEntry.url)
     if (rustOnly) {
       requireExistingOfficeCli(existingManifest, platform, arch)
-      requireExistingNodeRuntime(existingManifest, platform, arch)
+      const hasNodeRuntime = requireExistingNodeRuntime(existingManifest, platform, arch, { allowMissing: true })
+      if (!hasNodeRuntime) {
+        console.warn(`[publish:functional-modules] COS manifest 当前平台/架构缺少 node-runtime: ${platform}-${arch}，--rust 将继续发布；请随后执行 --node-runtime 补齐`)
+      }
     }
     if (officeCliOnly) {
       requireExistingRustApi(existingManifest, platform, arch)
@@ -231,15 +234,22 @@ export function requireExistingNodeRuntime(
   manifest: FunctionalModuleManifest | undefined,
   platform: FunctionalModulePlatform,
   arch: FunctionalModuleArchitecture,
-): void {
+  options: NodeRuntimeValidationOptions = {},
+): boolean {
   const platformKey = `${platform}-${arch}`
   const artifact = manifest?.platforms[platformKey]?.modules['node-runtime']
   if (!artifact) {
+    if (options.allowMissing) return false
     throw new Error(`COS manifest 当前平台/架构缺少 node-runtime: ${platformKey}，单模块发布已停止`)
   }
   if (artifact.required !== true || artifact.format !== 'tar.gz' || artifact.entrypoint !== `bin/${binaryName('node', platform)}`) {
     throw new Error(`COS manifest 当前平台/架构的 node-runtime 无效: ${platformKey}，单模块发布已停止`)
   }
+  return true
+}
+
+interface NodeRuntimeValidationOptions {
+  allowMissing?: boolean
 }
 
 interface FunctionalModuleBinaryInputOptions {

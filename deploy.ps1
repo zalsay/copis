@@ -7,7 +7,7 @@
     参数可以只发布对应的功能模块；多个单模块模式不能同时启用。
 
 .PARAMETER RustOnly
-    只发布 Rust HTTP API，并保留 COS 中已有的 OfficeCLI。
+    只发布 Rust HTTP API，并保留 COS 中已有的 OfficeCLI；缺失 Node.js runtime 时先发布 Rust，随后用 -NodeRuntimeOnly 补齐。
 
 .PARAMETER OfficeCliOnly
     只发布 OfficeCLI，并保留 COS 中已有的 Rust HTTP API。

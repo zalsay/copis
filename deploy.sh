@@ -79,7 +79,7 @@ show_help() {
   --skip-install       跳过 bun install --frozen-lockfile
   --build-app          同时构建当前平台 Electron 应用包
   --skip-rust-build    使用已有 Rust 二进制
-  --rust               只发布 Rust HTTP API，保留 COS 中已有 Node.js runtime 与 OfficeCLI
+  --rust               只发布 Rust HTTP API，保留 COS 中已有 Node.js runtime 与 OfficeCLI；缺失 Node.js runtime 时先发布 Rust，随后用 --node-runtime 补齐
   --officecli          只发布 OfficeCLI，保留 COS 中已有 Node.js runtime 与 Rust HTTP API
   --node-runtime       只发布 Node.js runtime，保留 COS 中已有 Rust HTTP API 与 OfficeCLI
   --skip-publish       只构建二进制，不发布 COS

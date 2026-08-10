@@ -29,15 +29,19 @@ describe('Working 侧边栏视觉契约', () => {
     expect(deleteRule).toContain('pointer-events: none')
   })
 
-  test('Given 项目列表 When 显示本地项目标签 Then 使用全局 primary badge 配色', () => {
+  test('Given 工作区项目 When 查看项目名称 Then 不展示本地标签并保留全局 primary badge 配色契约', () => {
     const projectBadgeRule = sidebarStyles.match(
       /\.copis-working-project-main > small\s*\{([^}]*)\}/s,
     )?.[1]
     const primaryBadgeRule = globalStyles.match(/\.ui-primary-badge\s*\{([^}]*)\}/s)?.[1]
+    const workspaceProjectMainStart = sidebarSource.indexOf('className="copis-working-project-main"')
+    const workspaceProjectMainEnd = sidebarSource.indexOf('</button>', workspaceProjectMainStart)
+    const workspaceProjectMainSource = sidebarSource.slice(workspaceProjectMainStart, workspaceProjectMainEnd)
 
     expect(projectBadgeRule).toBeDefined()
     expect(primaryBadgeRule).toBeDefined()
-    expect(sidebarSource).toContain('<small className="ui-primary-badge">本地</small>')
+    expect(workspaceProjectMainSource).not.toContain('本地')
+    expect(workspaceProjectMainSource).not.toContain('ui-primary-badge')
     expect(projectBadgeRule).toContain('border-radius: 999px')
     expect(projectBadgeRule).not.toContain('color: #8f8f99')
     expect(primaryBadgeRule).toContain('background-color: var(--ui-primary-background)')
@@ -95,14 +99,40 @@ describe('Working 侧边栏视觉契约', () => {
     expect(sidebarStyles).toContain('bottom: 30px')
   })
 
-  test('Given 侧边栏 When 查看项目标题 Then 创建工作区按钮位于标题右侧并使用加号图标', () => {
+  test('Given 侧边栏 When 查看项目标题 Then 刷新按钮位于我的项目且创建按钮保留在工作区', () => {
     expect(sidebarSource).not.toContain('<span>创建工作区</span>')
     expect(sidebarSource).toContain('className="copis-working-project-heading-actions"')
-    expect(sidebarSource).toContain('className="copis-working-project-create"')
-    expect(sidebarSource).toContain('aria-label="创建工作区"')
     expect(sidebarSource).toContain('<Plus aria-hidden="true" />')
     expect(sidebarStyles).toContain('.copis-working-project-heading-actions')
     expect(sidebarStyles).toContain('.copis-working-project-create')
+
+    const pinnedHeadingStart = sidebarSource.indexOf(
+      'className="copis-working-project-group-toggle copis-working-project-pinned-toggle"',
+    )
+    const pinnedHeadingEnd = sidebarSource.indexOf('</div>', pinnedHeadingStart)
+    const pinnedHeadingSource = sidebarSource.slice(pinnedHeadingStart, pinnedHeadingEnd)
+    const workspaceHeadingStart = sidebarSource.indexOf(
+      'className="copis-working-project-group-toggle copis-working-project-workspace-toggle"',
+    )
+    const workspaceHeadingEnd = sidebarSource.indexOf('</div>', workspaceHeadingStart)
+    const workspaceHeadingSource = sidebarSource.slice(workspaceHeadingStart, workspaceHeadingEnd)
+
+    expect(pinnedHeadingSource).toContain('className={cn(\'copis-working-project-refresh\'')
+    expect(pinnedHeadingSource).toContain('onClick={() => void refreshProjects()}')
+    expect(pinnedHeadingSource).not.toContain('className="copis-working-project-create"')
+    expect(workspaceHeadingSource).not.toContain('copis-working-project-refresh')
+    expect(workspaceHeadingSource).toContain('className="copis-working-project-create"')
+    expect(workspaceHeadingSource).toContain('aria-label="创建工作区"')
+  })
+
+  test('Given 侧边栏 When 未悬停项目标题 Then 刷新按钮默认显示并可点击', () => {
+    const refreshRule = sidebarStyles.match(
+      /\.copis-working-project-refresh\s*\{([^}]*)\}/s,
+    )?.[1]
+
+    expect(refreshRule).toBeDefined()
+    expect(refreshRule).toContain('opacity: 1')
+    expect(refreshRule).toContain('pointer-events: auto')
   })
 
   test('Given 工作区列表 When 固定了开发项目 Then 左侧我的项目分组展示固定项目并支持展开折叠', () => {
@@ -123,7 +153,7 @@ describe('Working 侧边栏视觉契约', () => {
     expect(sidebarStyles).toContain('color: var(--ui-primary)')
   })
 
-  test('Given 项目分组 When 查看左侧对齐 Then 与顶部菜单保持同一文字起点与左边缘', () => {
+  test('Given 项目分组 When 悬停分组标题 Then 背景覆盖左侧留白且内容起点与技能市场一致', () => {
     const menuRule = sidebarStyles.match(/\.copis-working-menu-button\s*\{([^}]*)\}/s)?.[1]
     const headingRule = sidebarStyles.match(
       /\.copis-working-project-group-heading\s*\{([^}]*)\}/s,
@@ -131,27 +161,149 @@ describe('Working 侧边栏视觉契约', () => {
     const toggleRule = sidebarStyles.match(
       /\.copis-working-project-group-toggle\s*\{([^}]*)\}/s,
     )?.[1]
+    const pinnedToggleRule = sidebarStyles.match(
+      /\.copis-working-project-pinned-toggle\s*\{([^}]*)\}/s,
+    )?.[1]
+    const pinnedIconRule = sidebarStyles.match(
+      /\.copis-working-project-pinned-icon\s*\{([^}]*)\}/s,
+    )?.[1]
+    const pinnedCountRule = sidebarStyles.match(
+      /\.copis-working-project-pinned-toggle\s+\.copis-working-project-group-count\s*\{([^}]*)\}/s,
+    )?.[1]
     const pinnedRule = sidebarStyles.match(
       /\.copis-working-project-pinned-row\s*\{([^}]*)\}/s,
-    )?.[1]
-    const mainRule = sidebarStyles.match(
-      /\.copis-working-project-main\s*\{([^}]*)\}/s,
     )?.[1]
 
     expect(menuRule).toBeDefined()
     expect(menuRule).toContain('grid-template-columns: 18px minmax(0, 1fr)')
     expect(menuRule).toContain('gap: 8px')
 
-    // 分组标题按钮与菜单按钮左边缘对齐
-    expect(headingRule).toContain('padding-left: 0')
-    expect(toggleRule).toContain('padding: 5px 8px')
+    const menuPaddingLeft = menuRule?.match(/padding:\s*5px\s+(\d+)px/)?.[1]
+    const headingPaddingLeft = headingRule?.match(/padding-left:\s*(\d+)(?:px)?/)?.[1]
+    const togglePaddingLeft = toggleRule?.match(/padding:\s*5px\s+(\d+)(?:px)?(?:\s+5px\s+\d+(?:px)?)?/)?.[1]
+
+    expect(menuPaddingLeft).toBe('8')
+    expect(headingPaddingLeft).toBe('0')
+    expect(togglePaddingLeft).toBe('8')
+    expect(Number(headingPaddingLeft) + Number(togglePaddingLeft)).toBe(Number(menuPaddingLeft))
     expect(toggleRule).toContain('grid-template-columns: 18px minmax(0, 1fr) auto')
     expect(toggleRule).toContain('gap: 8px')
 
-    // 固定项目与工作区行的文字与分组标题/菜单文字同一列起点（18px 图标列 + 8px 间距）
-    expect(pinnedRule).toContain('grid-template-columns: 18px minmax(0, 1fr)')
+    // 第一组标题文字先于箭头，计数固定贴右；第二组标题继续使用相同的图标列布局。
+    expect(pinnedToggleRule).toBeDefined()
+    expect(pinnedCountRule).toBeDefined()
+    const pinnedToggleStart = sidebarSource.indexOf(
+      'className="copis-working-project-group-toggle copis-working-project-pinned-toggle"',
+    )
+    expect(pinnedToggleStart).toBeGreaterThanOrEqual(0)
+    const pinnedToggleEnd = sidebarSource.indexOf('</button>', pinnedToggleStart)
+    const pinnedToggleSource = sidebarSource.slice(pinnedToggleStart, pinnedToggleEnd)
+    expect(pinnedToggleSource.indexOf('<span>我的项目</span>')).toBeLessThan(
+      pinnedToggleSource.indexOf('<ChevronRight'),
+    )
+    expect(pinnedToggleSource).toContain('aria-expanded={!pinnedGroupCollapsed}')
+    expect(pinnedToggleSource).toContain('setPinnedGroupCollapsed((current) => !current)')
+    expect(pinnedToggleRule).toContain('display: flex')
+    expect(pinnedToggleRule).toContain('gap: 8px')
+    expect(pinnedCountRule).toContain('margin-left: auto')
+    expect(pinnedToggleSource).not.toContain('FolderCode')
+    expect(pinnedIconRule).toBeDefined()
+    expect(pinnedIconRule).toContain('width: 15px')
+    expect(pinnedIconRule).toContain('height: 15px')
+    expect(pinnedIconRule).toContain('flex: 0 0 15px')
+
+    const pinnedRowStart = sidebarSource.indexOf(
+      'className="copis-working-project-pinned-row"',
+    )
+    expect(pinnedRowStart).toBeGreaterThanOrEqual(0)
+    const pinnedRowEnd = sidebarSource.indexOf('</button>', pinnedRowStart)
+    const pinnedRowSource = sidebarSource.slice(pinnedRowStart, pinnedRowEnd)
+    expect(pinnedRowSource).toContain(
+      '<FolderCode className="copis-working-project-pinned-icon" aria-hidden="true" />',
+    )
+    expect(pinnedRowSource.indexOf('<FolderCode')).toBeLessThan(
+      pinnedRowSource.indexOf('<span className="copis-working-project-pinned-copy">'),
+    )
+    expect(pinnedRule).toContain('display: flex')
+    expect(pinnedRule).toContain('padding: 4px 8px 4px 16px')
     expect(pinnedRule).toContain('gap: 8px')
-    expect(mainRule).toContain('grid-template-columns: 18px minmax(0, 1fr) auto')
-    expect(mainRule).toContain('gap: 8px')
+  })
+
+  test('Given 工作区分组 When 查看标题与项目行 Then 标题不显示图标且各工作区名称前显示状态图标', () => {
+    const workspaceLabelIndex = sidebarSource.indexOf('<span>工作区</span>')
+    const workspaceToggleStart = sidebarSource.lastIndexOf(
+      'className="copis-working-project-group-toggle copis-working-project-workspace-toggle"',
+      workspaceLabelIndex,
+    )
+    const workspaceToggleEnd = sidebarSource.indexOf('</button>', workspaceToggleStart)
+    const workspaceToggleSource = sidebarSource.slice(workspaceToggleStart, workspaceToggleEnd)
+    const workspaceToggleRule = sidebarStyles.match(
+      /\.copis-working-project-workspace-toggle\s*\{([^}]*)\}/s,
+    )?.[1]
+    const workspaceRowIconRule = sidebarStyles.match(
+      /\.copis-working-project-row\s+\.copis-working-project-workspace-row-icon\s*\{([^}]*)\}/s,
+    )?.[1]
+    const currentWorkspaceRowIconRule = sidebarStyles.match(
+      /\.copis-working-project-row\.current-session-workspace\s+\.copis-working-project-workspace-row-icon\s*\{([^}]*)\}/s,
+    )?.[1]
+    const workspaceCountRule = sidebarStyles.match(
+      /\.copis-working-project-workspace-toggle\s+\.copis-working-project-group-count\s*\{([^}]*)\}/s,
+    )?.[1]
+    const workspaceProjectMainStart = sidebarSource.indexOf('className="copis-working-project-main"')
+    const workspaceProjectMainEnd = sidebarSource.indexOf('</button>', workspaceProjectMainStart)
+    const workspaceProjectMainSource = sidebarSource.slice(workspaceProjectMainStart, workspaceProjectMainEnd)
+    const workspaceRowRule = sidebarStyles.match(
+      /\.copis-working-project-row\s*\{([^}]*)\}/s,
+    )?.[1]
+    const workspaceMainRule = sidebarStyles.match(
+      /\.copis-working-project-main\s*\{([^}]*)\}/s,
+    )?.[1]
+    const conversationListRule = sidebarStyles.match(
+      /\.copis-working-conversation-list\s*\{([^}]*)\}\s*\.copis-working-conversation-row/s,
+    )?.[1]
+
+    expect(workspaceLabelIndex).toBeGreaterThanOrEqual(0)
+    expect(workspaceToggleStart).toBeGreaterThanOrEqual(0)
+    expect(workspaceToggleRule).toBeDefined()
+    expect(workspaceToggleRule).toContain('display: flex')
+    expect(workspaceToggleRule).toContain('gap: 8px')
+    expect(workspaceRowIconRule).toBeDefined()
+    expect(workspaceRowIconRule).toContain('width: 15px')
+    expect(workspaceRowIconRule).toContain('height: 15px')
+    expect(workspaceRowIconRule).toContain('flex: 0 0 15px')
+    expect(workspaceRowIconRule).toContain('color: #a8a8b0')
+    expect(currentWorkspaceRowIconRule).toBeDefined()
+    expect(currentWorkspaceRowIconRule).toContain('color: var(--ui-primary)')
+    expect(workspaceCountRule).toBeDefined()
+    expect(workspaceCountRule).toContain('margin-left: auto')
+    expect(sidebarStyles).not.toContain('.copis-working-project-group-toggle > svg')
+    expect(workspaceToggleSource).not.toContain('FolderOpen')
+    expect(workspaceToggleSource).toContain('aria-expanded={!workspaceGroupCollapsed}')
+    expect(workspaceToggleSource.indexOf('<FolderOpen')).toBeLessThan(
+      workspaceToggleSource.indexOf('<span>工作区</span>'),
+    )
+    expect(workspaceToggleSource.indexOf('<span>工作区</span>')).toBeLessThan(
+      workspaceToggleSource.indexOf('<ChevronRight'),
+    )
+    expect(workspaceToggleSource.indexOf('<ChevronRight')).toBeLessThan(
+      workspaceToggleSource.indexOf('<small className="copis-working-project-group-count">{localWorkspaces.length}</small>'),
+    )
+    expect(workspaceProjectMainSource).toContain(
+      '<FolderOpen className="copis-working-project-workspace-row-icon" aria-hidden="true" />',
+    )
+    expect(workspaceProjectMainSource.indexOf('<FolderOpen')).toBeLessThan(
+      workspaceProjectMainSource.indexOf('<span>{workspace.name}</span>'),
+    )
+    expect(workspaceProjectMainSource).not.toContain('本地')
+    expect(workspaceProjectMainSource).not.toContain('ui-primary-badge')
+    expect(workspaceRowRule).toBeDefined()
+    expect(workspaceRowRule).toContain('padding: 4px 2px 4px 16px')
+    expect(workspaceMainRule).toBeDefined()
+    expect(workspaceMainRule).toContain('display: flex')
+    expect(workspaceMainRule).not.toContain('grid-template-columns')
+    expect(workspaceMainRule).toContain('gap: 8px')
+    expect(sidebarSource).toContain("isCurrentSessionWorkspace && 'current-session-workspace'")
+    expect(conversationListRule).toBeDefined()
+    expect(conversationListRule).toContain('padding-left: 16px')
   })
 })

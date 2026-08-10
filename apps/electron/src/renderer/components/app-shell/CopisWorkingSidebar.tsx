@@ -362,6 +362,9 @@ export function CopisWorkingSidebar({ width, noTransition = false }: CopisWorkin
   }
 
   const validLocalSessions = sanitizeAgentSessions(localSessions)
+  const currentSessionWorkspaceId = currentSessionId === null
+    ? null
+    : validLocalSessions.find((session) => session.id === currentSessionId)?.workspaceId ?? null
   const activeSessionCount = validLocalSessions.filter((session) => !session.archived).length
   const accountName = auth?.user?.nickname || auth?.user?.email || '用户'
   const tokenBalance = typeof auth?.user?.tokens === 'number' && Number.isFinite(auth.user.tokens)
@@ -381,16 +384,25 @@ export function CopisWorkingSidebar({ width, noTransition = false }: CopisWorkin
     const visibleSessions = isConversationListExpanded ? workspaceSessions : workspaceSessions.slice(0, CONVERSATION_PREVIEW_LIMIT)
     const hasHiddenSessions = workspaceSessions.length > visibleSessions.length
     const isActiveWorkspace = workspace.id === currentWorkspaceId
+    const isCurrentSessionWorkspace = workspace.id === currentSessionWorkspaceId
     const isMenuOpen = openMenuWorkspaceId === workspace.id
     const isMenuOpenUp = isMenuOpen && openMenuDirection === 'up'
 
     return (
       <div className="copis-working-project-group" key={workspace.id}>
-        <div className={cn('copis-working-project-row', isActiveWorkspace && 'active', isMenuOpen && 'menu-open', isMenuOpenUp && 'menu-up')} onClick={() => selectLocalWorkspace(workspace.id)}>
+        <div
+          className={cn(
+            'copis-working-project-row',
+            isActiveWorkspace && 'active',
+            isCurrentSessionWorkspace && 'current-session-workspace',
+            isMenuOpen && 'menu-open',
+            isMenuOpenUp && 'menu-up',
+          )}
+          onClick={() => selectLocalWorkspace(workspace.id)}
+        >
           <button type="button" className="copis-working-project-main" onClick={(event) => { event.stopPropagation(); selectLocalWorkspace(workspace.id) }}>
-            <FolderOpen aria-hidden="true" />
+            <FolderOpen className="copis-working-project-workspace-row-icon" aria-hidden="true" />
             <span>{workspace.name}</span>
-            {workspace.projectRootPath && <small className="ui-primary-badge">本地</small>}
           </button>
           <button type="button" className="copis-working-project-collapse" aria-label={isWorkspaceExpanded ? '折叠项目会话' : '展开项目会话'} aria-expanded={isWorkspaceExpanded} onClick={(event) => { event.stopPropagation(); toggleWorkspace(workspace.id) }}>
             {isWorkspaceExpanded ? <ChevronDown aria-hidden="true" /> : <ChevronRight aria-hidden="true" />}
@@ -540,14 +552,19 @@ export function CopisWorkingSidebar({ width, noTransition = false }: CopisWorkin
             <div className="copis-working-project-heading copis-working-project-group-heading">
               <button
                 type="button"
-                className="copis-working-project-group-toggle"
+                className="copis-working-project-group-toggle copis-working-project-pinned-toggle"
                 aria-expanded={!pinnedGroupCollapsed}
                 onClick={() => setPinnedGroupCollapsed((current) => !current)}
               >
-                <ChevronRight className={cn('copis-working-project-group-chevron', !pinnedGroupCollapsed && 'expanded')} aria-hidden="true" />
                 <span>我的项目</span>
+                <ChevronRight className={cn('copis-working-project-group-chevron', !pinnedGroupCollapsed && 'expanded')} aria-hidden="true" />
                 <small className="copis-working-project-group-count">{pinnedProjectEntries.length}</small>
               </button>
+              <div className="copis-working-project-heading-actions">
+                <button type="button" className={cn('copis-working-project-refresh', refreshingProjects && 'refreshing')} aria-label="刷新项目" title="刷新项目" disabled={refreshingProjects || busy} onClick={() => void refreshProjects()}>
+                  <RefreshCw aria-hidden="true" />
+                </button>
+              </div>
             </div>
             {!pinnedGroupCollapsed && (
               pinnedProjectEntries.length > 0 ? (
@@ -559,7 +576,7 @@ export function CopisWorkingSidebar({ width, noTransition = false }: CopisWorkin
                     title={`${entry.workspace.name} · project/${entry.projectPath}`}
                     onClick={() => selectLocalWorkspace(entry.workspace.id)}
                   >
-                    <FolderCode aria-hidden="true" />
+                    <FolderCode className="copis-working-project-pinned-icon" aria-hidden="true" />
                     <span className="copis-working-project-pinned-copy">
                       <span className="copis-working-project-pinned-name">{entry.workspace.name}</span>
                       <small>project/{entry.projectPath}</small>
@@ -575,18 +592,15 @@ export function CopisWorkingSidebar({ width, noTransition = false }: CopisWorkin
             <div className="copis-working-project-heading copis-working-project-group-heading">
               <button
                 type="button"
-                className="copis-working-project-group-toggle"
+                className="copis-working-project-group-toggle copis-working-project-workspace-toggle"
                 aria-expanded={!workspaceGroupCollapsed}
                 onClick={() => setWorkspaceGroupCollapsed((current) => !current)}
-                >
-                  <ChevronRight className={cn('copis-working-project-group-chevron', !workspaceGroupCollapsed && 'expanded')} aria-hidden="true" />
-                  <span>工作区</span>
-                  <small className="copis-working-project-group-count">{localWorkspaces.length}</small>
-                </button>
+              >
+                <span>工作区</span>
+                <ChevronRight className={cn('copis-working-project-group-chevron', !workspaceGroupCollapsed && 'expanded')} aria-hidden="true" />
+                <small className="copis-working-project-group-count">{localWorkspaces.length}</small>
+              </button>
               <div className="copis-working-project-heading-actions">
-                <button type="button" className={cn('copis-working-project-refresh', refreshingProjects && 'refreshing')} aria-label="刷新项目" title="刷新项目" disabled={refreshingProjects || busy} onClick={() => void refreshProjects()}>
-                  <RefreshCw aria-hidden="true" />
-                </button>
                 <button type="button" className="copis-working-project-create" aria-label="创建工作区" title="创建工作区" disabled={busy} onClick={handleOpenCreateWorkspace}>
                   <Plus aria-hidden="true" />
                 </button>
