@@ -1,7 +1,8 @@
 import * as React from 'react'
 import { useAtomValue, useSetAtom } from 'jotai'
-import { Check, CircleAlert, Crown, ExternalLink, Gem, Loader2, X } from 'lucide-react'
+import { Bot, Check, CircleAlert, Crown, ExternalLink, Gem, Loader2, QrCode, X } from 'lucide-react'
 import type {
+  WorkingAlipayPagePayOrder,
   WorkingDiamondPackage,
   WorkingDiamondPurchaseResult,
   WorkingPaymentSession,
@@ -203,6 +204,32 @@ export function CopisWorkingPaymentModal({ vipStatus }: CopisWorkingPaymentModal
     }
   }
 
+  const handleCreateAlipayPagePayOrder = async (): Promise<void> => {
+    if (!selectedPackage || isBusy || paymentState.phase === 'loading') return
+    const operationId = beginOperation()
+    updatePaymentState(operationId, (current) => ({ ...current, phase: 'creating', error: undefined }))
+    try {
+      const order = await window.electronAPI.createWorkingAlipayPagePayOrder(selectedPackage.id)
+      if (!isCurrentOperation(operationId)) return
+      updatePaymentState(operationId, (current) => ({
+        ...current,
+        phase: 'waiting_user_pay',
+        payment: undefined,
+        pageOrder: order,
+        packages: [order.package],
+        selectedPackageId: order.package.id,
+        error: undefined,
+      }))
+    } catch (error: unknown) {
+      if (!isCurrentOperation(operationId)) return
+      updatePaymentState(operationId, (current) => ({
+        ...current,
+        phase: 'error',
+        error: getWorkingPaymentError(error, '创建支付宝网页订单失败，请稍后重试'),
+      }))
+    }
+  }
+
   const handleCreateVipUpgrade = async (): Promise<void> => {
     if (vipUpgradeUnavailable || isBusy) return
     const operationId = beginOperation()
@@ -304,25 +331,57 @@ export function CopisWorkingPaymentModal({ vipStatus }: CopisWorkingPaymentModal
     }
   }
 
+  const handleCheckAlipayPagePayOrder = async (): Promise<void> => {
+    const order = paymentState.pageOrder
+    if (!order || isBusy) return
+    const operationId = beginOperation()
+    updatePaymentState(operationId, (current) => ({ ...current, phase: 'checking', error: undefined }))
+    try {
+      const checked = await window.electronAPI.checkWorkingAlipayPagePayOrder(order.paymentId)
+      if (!isCurrentOperation(operationId)) return
+      if (checked.status === 'paid') {
+        requestPaymentRefresh('支付成功，钻石已到账。')
+        handleClose()
+        return
+      }
+      updatePaymentState(operationId, (current) => ({
+        ...current,
+        phase: checked.status === 'closed' ? 'error' : 'waiting_user_pay',
+        pageOrder: checked,
+        error: checked.status === 'closed' ? '支付宝订单已关闭，请重新选择套餐。' : undefined,
+      }))
+    } catch (error: unknown) {
+      if (!isCurrentOperation(operationId)) return
+      updatePaymentState(operationId, (current) => ({
+        ...current,
+        phase: 'waiting_user_pay',
+        error: getWorkingPaymentError(error, '检查支付状态失败，请稍后重试'),
+      }))
+    }
+  }
+
   if (!paymentState.open) return null
 
   const pendingPackage = paymentState.pendingPurchase?.package
   const displayPackage = pendingPackage ?? selectedPackage
-  const showPayment = paymentState.payment !== undefined
+  const showPagePayment = paymentState.pageOrder !== undefined
+  const showPayment = paymentState.payment !== undefined && !showPagePayment
   const showPending = paymentState.pendingPurchase !== undefined
   const showVipBenefits = paymentState.mode === 'vip'
     && paymentState.resumeOrderId === undefined
     && !showPayment
+    && !showPagePayment
     && !showPending
   const showDiamondSelection = paymentState.mode === 'diamonds'
     && !showPayment
+    && !showPagePayment
     && !showPending
     && paymentState.packages.length > 0
 
   return (
     <div className="copis-working-payment-overlay" role="presentation" onClick={handleClose}>
       <section
-        className="copis-working-payment-modal"
+        className={`copis-working-payment-modal ${showPagePayment ? 'copis-working-payment-modal-page' : ''}`}
         role="dialog"
         aria-modal="true"
         aria-labelledby="copis-working-payment-title"
@@ -335,8 +394,8 @@ export function CopisWorkingPaymentModal({ vipStatus }: CopisWorkingPaymentModal
             </div>
             <div>
               <span className="copis-working-payment-eyebrow">COPIS WORKING</span>
-              <h2 id="copis-working-payment-title">{paymentState.mode === 'vip' ? '升级 VIP' : showPayment ? '支付宝支付' : '获取钻石'}</h2>
-              <p>{paymentState.mode === 'vip' ? '提升钻石消耗效率，解锁专家团队和定时任务。' : '选择服务端提供的套餐，使用支付宝扫码完成支付。'}</p>
+              <h2 id="copis-working-payment-title">{paymentState.mode === 'vip' ? '升级 VIP' : showPagePayment || showPayment ? '支付宝支付' : '获取钻石'}</h2>
+              <p>{paymentState.mode === 'vip' ? '提升钻石消耗效率，解锁专家团队和定时任务。' : showPagePayment ? '请在支付宝官网收银台完成扫码支付。' : '选择服务端提供的套餐和支付方式。'}</p>
             </div>
           </div>
           <button type="button" className="copis-working-payment-close" onClick={handleClose} aria-label="关闭支付窗口" title="关闭">
@@ -366,12 +425,19 @@ export function CopisWorkingPaymentModal({ vipStatus }: CopisWorkingPaymentModal
           )}
 
           {showDiamondSelection && (
-            <DiamondPackageSelection
-              packages={paymentState.packages}
-              selectedPackageId={paymentState.selectedPackageId}
-              disabled={isBusy || paymentState.phase === 'loading'}
-              onSelect={(packageId) => setPaymentState((current) => ({ ...current, selectedPackageId: packageId, error: undefined }))}
-            />
+            <>
+              <DiamondPackageSelection
+                packages={paymentState.packages}
+                selectedPackageId={paymentState.selectedPackageId}
+                disabled={isBusy || paymentState.phase === 'loading'}
+                onSelect={(packageId) => setPaymentState((current) => ({ ...current, selectedPackageId: packageId, error: undefined }))}
+              />
+              <DiamondPaymentMethodSelection
+                value={paymentState.paymentMethod}
+                disabled={isBusy || paymentState.phase === 'loading'}
+                onChange={(paymentMethod) => setPaymentState((current) => ({ ...current, paymentMethod, error: undefined }))}
+              />
+            </>
           )}
 
           {showPending && paymentState.pendingPurchase && (
@@ -386,6 +452,10 @@ export function CopisWorkingPaymentModal({ vipStatus }: CopisWorkingPaymentModal
               mode={paymentState.mode}
               onOpenCashier={openCashier}
             />
+          )}
+
+          {showPagePayment && paymentState.pageOrder && (
+            <AlipayPagePayView order={paymentState.pageOrder} />
           )}
 
           {paymentState.phase === 'resource_pending' && (
@@ -415,9 +485,20 @@ export function CopisWorkingPaymentModal({ vipStatus }: CopisWorkingPaymentModal
               {paymentState.phase === 'checking' ? '正在确认...' : paymentState.phase === 'resource_pending' ? '再次检查' : '我已支付'}
             </button>
           )}
+          {showPagePayment && paymentState.pageOrder && (
+            <>
+              <button type="button" className="copis-working-payment-secondary" onClick={() => openCashier(paymentState.pageOrder!.cashierUrl)}>
+                <ExternalLink aria-hidden="true" />
+                <span>在浏览器继续</span>
+              </button>
+              <button type="button" className="copis-working-payment-primary" onClick={() => void handleCheckAlipayPagePayOrder()} disabled={isBusy}>
+                {paymentState.phase === 'checking' ? '正在确认...' : '我已支付'}
+              </button>
+            </>
+          )}
           {showDiamondSelection && (
-            <button type="button" className="copis-working-payment-primary" onClick={() => void handleCreateDiamondPurchase()} disabled={!selectedPackage || isBusy || paymentState.phase === 'loading'}>
-              {paymentState.phase === 'creating' ? '创建中...' : '确认支付'}
+            <button type="button" className="copis-working-payment-primary" onClick={() => void (paymentState.paymentMethod === 'alipay_page' ? handleCreateAlipayPagePayOrder() : handleCreateDiamondPurchase())} disabled={!selectedPackage || isBusy || paymentState.phase === 'loading'}>
+              {paymentState.phase === 'creating' ? '创建中...' : paymentState.paymentMethod === 'alipay_page' ? '打开官网收银台' : '创建 Agent 支付'}
             </button>
           )}
           {showVipBenefits && (
@@ -461,6 +542,46 @@ function DiamondPackageSelection({
             <span className="copis-working-payment-package-diamonds"><Gem aria-hidden="true" />{formatDiamonds(item.diamonds)} 钻石</span>
           </button>
         ))}
+      </div>
+    </div>
+  )
+}
+
+function DiamondPaymentMethodSelection({
+  value,
+  disabled,
+  onChange,
+}: {
+  value: 'agent' | 'alipay_page'
+  disabled: boolean
+  onChange: (value: 'agent' | 'alipay_page') => void
+}): React.ReactElement {
+  return (
+    <div className="copis-working-payment-methods" role="radiogroup" aria-label="支付方式">
+      <strong>支付方式</strong>
+      <div className="copis-working-payment-method-options">
+        <button
+          type="button"
+          className={`copis-working-payment-method ${value === 'alipay_page' ? 'selected' : ''}`}
+          role="radio"
+          aria-checked={value === 'alipay_page'}
+          onClick={() => onChange('alipay_page')}
+          disabled={disabled}
+        >
+          <QrCode aria-hidden="true" />
+          <span>支付宝官网扫码</span>
+        </button>
+        <button
+          type="button"
+          className={`copis-working-payment-method ${value === 'agent' ? 'selected' : ''}`}
+          role="radio"
+          aria-checked={value === 'agent'}
+          onClick={() => onChange('agent')}
+          disabled={disabled}
+        >
+          <Bot aria-hidden="true" />
+          <span>使用 Agent-AI 支付</span>
+        </button>
       </div>
     </div>
   )
@@ -564,6 +685,28 @@ function PaymentView({
         {payment.outTradeNo && <small>订单号：{payment.outTradeNo}</small>}
         <small>{paymentStatusMessage(payment.status)}</small>
       </div>
+    </div>
+  )
+}
+
+function AlipayPagePayView({ order }: { order: WorkingAlipayPagePayOrder }): React.ReactElement {
+  return (
+    <div className="copis-working-page-pay-view">
+      <div className="copis-working-page-pay-summary">
+        <div>
+          <strong>¥ {order.package.amount}</strong>
+          <span>{formatDiamonds(order.creditTokens)} 钻石</span>
+        </div>
+        <small>订单号：{order.outTradeNo}</small>
+      </div>
+      <iframe
+        className="copis-working-page-pay-frame"
+        src={order.cashierUrl}
+        title="支付宝官网收银台"
+        sandbox="allow-forms allow-popups allow-same-origin allow-scripts"
+        allow="payment"
+        referrerPolicy="no-referrer"
+      />
     </div>
   )
 }

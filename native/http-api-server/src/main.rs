@@ -1444,6 +1444,7 @@ fn is_working_payment_path(path: &str) -> bool {
     [
         "/api/working/diamond-packages",
         "/api/working/diamond-purchases",
+        "/api/working/alipay/page-orders",
         "/api/working/vip/upgrade",
     ]
     .iter()

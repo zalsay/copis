@@ -42,6 +42,17 @@ fn parses_all_working_payment_routes() {
             payment_id: "payment/7".to_string(),
         },
     );
+    assert_eq!(
+        parse_working_payment_route("POST", "/api/working/alipay/page-orders").unwrap(),
+        WorkingPaymentRoute::CreateAlipayPagePayOrder,
+    );
+    assert_eq!(
+        parse_working_payment_route("POST", "/api/working/alipay/page-orders/payment%2F7/check")
+            .unwrap(),
+        WorkingPaymentRoute::CheckAlipayPagePayOrder {
+            payment_id: "payment/7".to_string(),
+        },
+    );
 }
 
 fn read_request(stream: &mut TcpStream) -> (String, String, String, Vec<u8>) {
@@ -154,6 +165,62 @@ fn preserves_payment_check_business_envelope() {
     let body = result.body.unwrap();
     assert_eq!(body["ok"], true);
     assert_eq!(body["data"]["status"], "resource_ready");
+}
+
+#[test]
+fn forwards_page_pay_requests_with_backend_auth_and_unwraps_data() {
+    let _env_guard = backend_env_test_lock().lock().unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let backend = std::thread::spawn(move || {
+        for expected in [
+            (
+                "/api/pay/alipay/page-orders",
+                br#"{"package_id":7}"#.as_slice(),
+            ),
+            (
+                "/api/pay/alipay/page-orders/payment%2F7/check",
+                br#"{}"#.as_slice(),
+            ),
+        ] {
+            let (mut stream, _) = listener.accept().unwrap();
+            let (method, path, authorization, body) = read_request(&mut stream);
+            assert_eq!(method, "POST");
+            assert_eq!(path, expected.0);
+            assert_eq!(authorization, "Bearer payment-token");
+            assert_eq!(body, expected.1);
+            respond(
+                &mut stream,
+                r#"{"data":{"payment_id":"payment/7","out_trade_no":"PAGE-7","cashier_url":"https://cashier.example.test/pay","status":"pending","credit_tokens":100,"package":{"id":7,"amount":"0.99","diamonds":100}}}"#,
+            );
+        }
+    });
+
+    let previous_backend = std::env::var("COPIS_BACKEND_URL").ok();
+    std::env::set_var("COPIS_BACKEND_URL", format!("http://127.0.0.1:{}", port));
+    let state = SkillMarketState::new(Some("payment-token".to_string()));
+    let created = handle_request(
+        &state,
+        "POST",
+        "/api/working/alipay/page-orders",
+        br#"{"packageId":7}"#,
+    )
+    .unwrap();
+    let checked = handle_request(
+        &state,
+        "POST",
+        "/api/working/alipay/page-orders/payment%2F7/check",
+        br#"{}"#,
+    )
+    .unwrap();
+    backend.join().unwrap();
+    restore_backend_url(previous_backend);
+
+    assert_eq!(created.body.unwrap()["payment_id"], "payment/7");
+    assert_eq!(
+        checked.body.unwrap()["cashier_url"],
+        "https://cashier.example.test/pay"
+    );
 }
 
 fn restore_backend_url(previous_backend: Option<String>) {

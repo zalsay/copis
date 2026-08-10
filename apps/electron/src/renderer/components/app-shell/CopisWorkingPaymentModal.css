@@ -22,6 +22,11 @@
   box-shadow: 0 24px 68px hsl(var(--foreground) / 0.18);
 }
 
+.copis-working-payment-modal-page {
+  width: min(1040px, 100%);
+  max-height: min(820px, calc(100vh - 32px));
+}
+
 .copis-working-payment-header {
   display: flex;
   align-items: flex-start;
@@ -242,6 +247,57 @@
   color: var(--ui-primary);
 }
 
+.copis-working-payment-methods {
+  display: grid;
+  gap: 9px;
+  margin-top: 20px;
+}
+
+.copis-working-payment-methods > strong {
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.copis-working-payment-method-options {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 9px;
+}
+
+.copis-working-payment-method {
+  display: inline-flex;
+  min-height: 44px;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 0 12px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 8px;
+  background: hsl(var(--background) / 0.45);
+  color: hsl(var(--foreground));
+  font: inherit;
+  font-size: 12px;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.copis-working-payment-method:hover:not(:disabled),
+.copis-working-payment-method.selected {
+  border-color: var(--ui-primary);
+  background: var(--ui-primary-background);
+  color: var(--ui-primary);
+}
+
+.copis-working-payment-method:disabled {
+  cursor: not-allowed;
+  opacity: 0.62;
+}
+
+.copis-working-payment-method svg {
+  width: 16px;
+  height: 16px;
+}
+
 .copis-working-payment-vip-benefits {
   display: flex;
   flex-direction: column;
@@ -358,6 +414,51 @@
   gap: 14px;
 }
 
+.copis-working-page-pay-view {
+  display: grid;
+  gap: 12px;
+}
+
+.copis-working-page-pay-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.copis-working-page-pay-summary > div {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.copis-working-page-pay-summary strong {
+  font-size: 22px;
+  font-weight: 750;
+}
+
+.copis-working-page-pay-summary span {
+  color: var(--ui-primary);
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.copis-working-page-pay-summary small {
+  color: hsl(var(--muted-foreground));
+  font-size: 11px;
+  overflow-wrap: anywhere;
+  text-align: right;
+}
+
+.copis-working-page-pay-frame {
+  display: block;
+  width: 100%;
+  min-height: 500px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 8px;
+  background: white;
+}
+
 .copis-working-payment-summary {
   display: flex;
   align-items: baseline;
@@ -421,6 +522,18 @@
 .copis-working-payment-cashier svg {
   width: 16px;
   height: 16px;
+}
+
+.copis-working-payment-secondary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+}
+
+.copis-working-payment-secondary svg {
+  width: 15px;
+  height: 15px;
 }
 
 .copis-working-payment-meta {

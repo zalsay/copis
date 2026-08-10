@@ -1,4 +1,5 @@
 import type {
+  WorkingAlipayPagePayOrder,
   WorkingDiamondPackage,
   WorkingDiamondPurchaseResult,
   WorkingOrder,
@@ -168,6 +169,38 @@ export function normalizeWorkingDiamondPurchaseResult(value: unknown): WorkingDi
     payment: requirePaymentSession(value.payment, '支付订单缺少有效支付会话'),
     vip: normalizeVipPaymentSummary(value.vip),
     pendingExisting: value.pending_existing === true || value.pendingExisting === true ? true : undefined,
+  }
+}
+
+function normalizeHttpsUrl(value: unknown): string | undefined {
+  if (typeof value !== 'string' || !value.trim()) return undefined
+  try {
+    const url = new URL(value.trim())
+    return url.protocol === 'https:' && url.host ? url.toString() : undefined
+  } catch {
+    return undefined
+  }
+}
+
+export function normalizeWorkingAlipayPagePayOrder(value: unknown): WorkingAlipayPagePayOrder {
+  if (!isRecord(value)) throw new WorkingPaymentNormalizationError('支付宝网页订单响应格式不正确')
+  const paymentId = normalizePaymentIdentifier(firstDefined(value, ['payment_id', 'paymentId']))
+  const outTradeNo = optionalString(value, ['out_trade_no', 'outTradeNo'])
+  const cashierUrl = normalizeHttpsUrl(firstDefined(value, ['cashier_url', 'cashierUrl']))
+  const packageValue = normalizeWorkingDiamondPackage(value.package)
+  if (!paymentId || !outTradeNo || !cashierUrl || !packageValue) {
+    throw new WorkingPaymentNormalizationError('支付宝网页订单缺少有效支付信息')
+  }
+  return {
+    paymentId,
+    outTradeNo,
+    cashierUrl,
+    status: optionalString(value, ['status']) ?? 'pending',
+    tradeStatus: optionalString(value, ['trade_status', 'tradeStatus']),
+    creditTokens: normalizeNumber(firstDefined(value, ['credit_tokens', 'creditTokens'])),
+    package: packageValue,
+    credited: typeof value.credited === 'boolean' ? value.credited : undefined,
+    retryable: typeof value.retryable === 'boolean' ? value.retryable : undefined,
   }
 }
 

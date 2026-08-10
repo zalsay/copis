@@ -13,6 +13,8 @@ pub enum WorkingPaymentRoute {
     GetOrderPayment { order_id: String },
     CheckPayment { payment_id: String },
     CancelDiamondPayment { payment_id: String },
+    CreateAlipayPagePayOrder,
+    CheckAlipayPagePayOrder { payment_id: String },
 }
 
 pub fn parse_working_payment_route(
@@ -44,6 +46,14 @@ pub fn parse_working_payment_route(
         }
         ("POST", ["api", "working", "diamond-purchases", payment_id, "cancel"]) => {
             Ok(WorkingPaymentRoute::CancelDiamondPayment {
+                payment_id: decode_identifier(payment_id)?,
+            })
+        }
+        ("POST", ["api", "working", "alipay", "page-orders"]) => {
+            Ok(WorkingPaymentRoute::CreateAlipayPagePayOrder)
+        }
+        ("POST", ["api", "working", "alipay", "page-orders", payment_id, "check"]) => {
+            Ok(WorkingPaymentRoute::CheckAlipayPagePayOrder {
                 payment_id: decode_identifier(payment_id)?,
             })
         }
@@ -105,6 +115,24 @@ pub fn handle_request(
             "POST",
             &format!(
                 "/api/pay/alipay/diamond-purchases/{}/cancel",
+                encode_identifier(&payment_id)
+            ),
+            &token,
+            Some("{}"),
+        )?,
+        WorkingPaymentRoute::CreateAlipayPagePayOrder => {
+            let package_id = parse_package_id(body)?;
+            remote_json(
+                "POST",
+                "/api/pay/alipay/page-orders",
+                &token,
+                Some(&json!({ "package_id": package_id }).to_string()),
+            )?
+        }
+        WorkingPaymentRoute::CheckAlipayPagePayOrder { payment_id } => remote_json(
+            "POST",
+            &format!(
+                "/api/pay/alipay/page-orders/{}/check",
                 encode_identifier(&payment_id)
             ),
             &token,

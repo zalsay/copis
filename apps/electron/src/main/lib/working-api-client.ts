@@ -1,4 +1,5 @@
 import type {
+  WorkingAlipayPagePayOrder,
   WorkingCheckInResult,
   WorkingDiamondPackage,
   WorkingDiamondPurchaseResult,
@@ -37,6 +38,7 @@ import {
   getWorkingPaymentCheckError,
   isWorkingPaymentCheckFailure,
   isWorkingVipDiamondPackage,
+  normalizeWorkingAlipayPagePayOrder,
   normalizeWorkingDiamondPackages,
   normalizeWorkingDiamondPurchaseResult,
   normalizeWorkingOrderPayment,
@@ -731,6 +733,27 @@ export class WorkingApiClient {
       throw new WorkingApiError('普通钻石套餐响应无效', 200, 'invalid_diamond_package_response')
     }
     return result
+  }
+
+  async createAlipayPagePayOrder(packageId: number): Promise<WorkingAlipayPagePayOrder> {
+    if (!Number.isSafeInteger(packageId) || packageId <= 0) throw new Error('套餐 ID 不正确')
+    const data = await this.requestRust<unknown>('/api/working/alipay/page-orders', {
+      method: 'POST',
+      body: JSON.stringify({ package_id: packageId }),
+      includePayload: false,
+    })
+    return normalizePaymentResult(() => normalizeWorkingAlipayPagePayOrder(data))
+  }
+
+  async checkAlipayPagePayOrder(paymentId: WorkingPaymentIdentifier): Promise<WorkingAlipayPagePayOrder> {
+    const value = String(paymentId).trim()
+    if (!value) throw new Error('支付订单 ID 不能为空')
+    const data = await this.requestRust<unknown>(`/api/working/alipay/page-orders/${encodeURIComponent(value)}/check`, {
+      method: 'POST',
+      body: JSON.stringify({}),
+      includePayload: false,
+    })
+    return normalizePaymentResult(() => normalizeWorkingAlipayPagePayOrder(data))
   }
 
   async createVipUpgrade(): Promise<WorkingDiamondPurchaseResult> {

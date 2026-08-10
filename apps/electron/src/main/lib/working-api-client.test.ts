@@ -128,6 +128,50 @@ describe('Copis Working API client', () => {
     expect(calls.at(-1)).toBe('https://backend.example.test/api/working/sessions/run%2F1/history?session_id=session%20with%20space')
   })
 
+  test('creates and checks an HTTPS Alipay page-pay order through edu-api with the main-process token', async () => {
+    const calls: Array<{ url: string; init?: RequestInit }> = []
+    const previousRustApiBaseUrl = process.env.COPIS_HTTP_API_BASE_URL
+    process.env.COPIS_HTTP_API_BASE_URL = 'http://127.0.0.1:51730'
+    const client = new WorkingApiClient({
+      baseUrl: 'https://backend.example.test/module/edu-api',
+      tokenStore: createStore('working-token'),
+      fetchImpl: async (url, init) => {
+        calls.push({ url, init })
+        const paid = url.endsWith('/check')
+        return jsonResponse({ data: {
+          payment_id: 71,
+          out_trade_no: 'PAGE-DIAMOND-7-1',
+          cashier_url: 'https://cashier.example.test/pay?order=71',
+          status: paid ? 'paid' : 'pending',
+          trade_status: paid ? 'TRADE_SUCCESS' : 'WAIT_BUYER_PAY',
+          credit_tokens: 1050,
+          ...(paid ? { credited: true } : {}),
+          package: { id: 3, amount: '9.90', amount_cents: 990, currency: 'CNY', diamonds: 1050 },
+        } })
+      },
+    })
+
+    try {
+      await expect(client.createAlipayPagePayOrder(3)).resolves.toMatchObject({
+        paymentId: '71',
+        cashierUrl: 'https://cashier.example.test/pay?order=71',
+        status: 'pending',
+      })
+      await expect(client.checkAlipayPagePayOrder(71)).resolves.toMatchObject({ status: 'paid', credited: true })
+
+      expect(calls.map((call) => call.url)).toEqual([
+        'http://127.0.0.1:51730/api/working/alipay/page-orders',
+        'http://127.0.0.1:51730/api/working/alipay/page-orders/71/check',
+      ])
+      expect(new Headers(calls[0]?.init?.headers).get('Authorization')).toBeNull()
+      expect(calls[0]?.init?.body).toBe(JSON.stringify({ package_id: 3 }))
+      expect(calls[1]?.init?.body).toBe(JSON.stringify({}))
+    } finally {
+      if (previousRustApiBaseUrl === undefined) delete process.env.COPIS_HTTP_API_BASE_URL
+      else process.env.COPIS_HTTP_API_BASE_URL = previousRustApiBaseUrl
+    }
+  })
+
   test('uses read-only workspace writes by default when saving a Working workspace', async () => {
     let requestBody = ''
     const client = new WorkingApiClient({

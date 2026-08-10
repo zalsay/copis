@@ -132,6 +132,7 @@ import type {
   SnoozePlanningReminderInput,
   WorkingAuthState,
   WorkingCheckInResult,
+  WorkingAlipayPagePayOrder,
   WorkingClientConfig,
   WorkingFeedbackInput,
   WorkingFeedbackResult,
@@ -365,6 +366,8 @@ export interface ElectronAPI {
   getWorkingOrderPayment: (orderId: WorkingPaymentIdentifier) => Promise<WorkingOrderPayment>
   checkWorkingPayment: (paymentId: WorkingPaymentIdentifier) => Promise<WorkingPaymentCheckResult>
   cancelWorkingDiamondPayment: (paymentId: WorkingPaymentIdentifier) => Promise<WorkingPaymentCancelResult>
+  createWorkingAlipayPagePayOrder: (packageId: number) => Promise<WorkingAlipayPagePayOrder>
+  checkWorkingAlipayPagePayOrder: (paymentId: WorkingPaymentIdentifier) => Promise<WorkingAlipayPagePayOrder>
 
   // ===== 渠道管理相关 =====
 
@@ -1418,6 +1421,8 @@ const electronAPI: ElectronAPI = {
   getWorkingOrderPayment: (orderId: WorkingPaymentIdentifier) => ipcRenderer.invoke(WORKING_IPC_CHANNELS.GET_ORDER_PAYMENT, orderId),
   checkWorkingPayment: (paymentId: WorkingPaymentIdentifier) => ipcRenderer.invoke(WORKING_IPC_CHANNELS.CHECK_PAYMENT, paymentId),
   cancelWorkingDiamondPayment: (paymentId: WorkingPaymentIdentifier) => ipcRenderer.invoke(WORKING_IPC_CHANNELS.CANCEL_DIAMOND_PAYMENT, paymentId),
+  createWorkingAlipayPagePayOrder: (packageId: number) => ipcRenderer.invoke(WORKING_IPC_CHANNELS.CREATE_ALIPAY_PAGE_PAY_ORDER, packageId),
+  checkWorkingAlipayPagePayOrder: (paymentId: WorkingPaymentIdentifier) => ipcRenderer.invoke(WORKING_IPC_CHANNELS.CHECK_ALIPAY_PAGE_PAY_ORDER, paymentId),
 
   // 渠道管理
   listChannels: () => {
