@@ -1,4 +1,5 @@
 use crate::agent_files::AgentFilePolicyStore;
+use crate::payment_capability::PaymentCapabilityStore;
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
 use std::env;
@@ -42,6 +43,19 @@ impl AlipayBotAction {
             "payment.check" => Self::PaymentCheck,
             "payment.ack" => Self::PaymentAck,
             other => Self::Unsupported(other.to_string()),
+        }
+    }
+
+    fn as_str(&self) -> &str {
+        match self {
+            Self::WalletCheck => "wallet.check",
+            Self::WalletApply => "wallet.apply",
+            Self::WalletBind => "wallet.bind",
+            Self::WalletClose => "wallet.close",
+            Self::PaymentStart => "payment.start",
+            Self::PaymentCheck => "payment.check",
+            Self::PaymentAck => "payment.ack",
+            Self::Unsupported(value) => value,
         }
     }
 }
@@ -207,8 +221,10 @@ fn parse_request(body: &[u8]) -> Result<AlipayBotRequest, AlipayBotError> {
 
 pub fn handle_request(
     policy_store: &AgentFilePolicyStore,
+    payment_capabilities: &PaymentCapabilityStore,
     method: &str,
-    worker_token: &str,
+    agent_worker_token: Option<&str>,
+    payment_capability_token: Option<&str>,
     body: &[u8],
 ) -> Result<AlipayBotResponse, AlipayBotError> {
     if !method.eq_ignore_ascii_case("POST") {
@@ -223,11 +239,24 @@ pub fn handle_request(
         .session_id
         .as_deref()
         .ok_or_else(|| AlipayBotError::invalid("alipay-bot 请求缺少 sessionId"))?;
-    policy_store
-        .validate_worker_token(session_id, worker_token)
-        .map_err(|error| AlipayBotError::new(error.status, error.code, error.message))?;
+    let payment_home = match payment_capability_token {
+        Some(token) => Some(
+            payment_capabilities
+                .resolve(session_id, token, request.action.as_str())
+                .map_err(|error| AlipayBotError::new(error.status, error.code, error.message))?,
+        ),
+        None => {
+            let token = agent_worker_token.ok_or_else(|| {
+                AlipayBotError::new(403, "agent_file_token_required", "Agent 支付能力令牌缺失")
+            })?;
+            policy_store
+                .validate_worker_token(session_id, token)
+                .map_err(|error| AlipayBotError::new(error.status, error.code, error.message))?;
+            None
+        }
+    };
 
-    let output = execute_alipay_bot(&request)?;
+    let output = execute_alipay_bot_with_home(&request, payment_home.as_deref())?;
     Ok(AlipayBotResponse {
         status: 200,
         body: output.to_public_value(),
@@ -381,36 +410,7 @@ fn write_payment_needed_file(
     bot_home: &Path,
     payment_needed: &str,
 ) -> Result<PathBuf, AlipayBotError> {
-    let tmp_dir = bot_home.join("tmp");
-    fs::create_dir_all(&tmp_dir).map_err(|_| {
-        AlipayBotError::new(
-            500,
-            "alipay_payment_file_failed",
-            "无法准备支付宝支付请求文件",
-        )
-    })?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mut permissions = fs::metadata(&tmp_dir)
-            .map_err(|_| {
-                AlipayBotError::new(
-                    500,
-                    "alipay_payment_file_failed",
-                    "无法准备支付宝支付请求文件",
-                )
-            })?
-            .permissions();
-        permissions.set_mode(0o700);
-        fs::set_permissions(&tmp_dir, permissions).map_err(|_| {
-            AlipayBotError::new(
-                500,
-                "alipay_payment_file_failed",
-                "无法准备支付宝支付请求文件",
-            )
-        })?;
-    }
-
+    let tmp_dir = ensure_alipay_bot_tmp_dir(bot_home)?;
     let nonce = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
@@ -445,19 +445,64 @@ fn write_payment_needed_file(
     Ok(path)
 }
 
+fn ensure_alipay_bot_tmp_dir(bot_home: &Path) -> Result<PathBuf, AlipayBotError> {
+    let tmp_dir = bot_home.join("tmp");
+    fs::create_dir_all(&tmp_dir).map_err(|_| {
+        AlipayBotError::new(
+            500,
+            "alipay_payment_file_failed",
+            "无法准备支付宝支付请求文件",
+        )
+    })?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut permissions = fs::metadata(&tmp_dir)
+            .map_err(|_| {
+                AlipayBotError::new(
+                    500,
+                    "alipay_payment_file_failed",
+                    "无法准备支付宝支付请求文件",
+                )
+            })?
+            .permissions();
+        permissions.set_mode(0o700);
+        fs::set_permissions(&tmp_dir, permissions).map_err(|_| {
+            AlipayBotError::new(
+                500,
+                "alipay_payment_file_failed",
+                "无法准备支付宝支付请求文件",
+            )
+        })?;
+    }
+    Ok(tmp_dir)
+}
+
+#[cfg(test)]
 fn execute_alipay_bot(request: &AlipayBotRequest) -> Result<AlipayBotOutput, AlipayBotError> {
+    execute_alipay_bot_with_home(request, None)
+}
+
+fn execute_alipay_bot_with_home(
+    request: &AlipayBotRequest,
+    payment_home: Option<&Path>,
+) -> Result<AlipayBotOutput, AlipayBotError> {
     let command = env::var_os("COPIS_ALIPAY_BOT_CLI")
         .filter(|value| !value.is_empty())
         .unwrap_or_else(|| DEFAULT_ALIPAY_BOT_COMMAND.into());
     let fallback_home = current_process_home();
     let configured_home = env::var("COPIS_ALIPAY_BOT_HOME").ok();
-    let bot_home = resolve_alipay_bot_home(configured_home.as_deref(), &fallback_home);
+    let bot_home = payment_home
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| resolve_alipay_bot_home(configured_home.as_deref(), &fallback_home));
+    let tmp_dir = ensure_alipay_bot_tmp_dir(&bot_home)?;
     let prepared = prepare_alipay_bot_command(request, &bot_home)?;
 
     let output = Command::new(command)
         .args(&prepared.args)
         .env("HOME", &bot_home)
         .env("USERPROFILE", &bot_home)
+        .env("TMPDIR", &tmp_dir)
         .env("COPIS_ALIPAY_BOT_HOME", &bot_home)
         .output()
         .map_err(|_| {
@@ -510,14 +555,37 @@ pub fn sanitize_alipay_output(raw: &str) -> AlipayBotOutput {
         merge_alipay_output_json(&mut output, &value);
     }
 
+    if output.trade_no.is_none() {
+        output.trade_no = extract_markdown_trade_no(raw);
+    }
     if output.cashier_url.is_none() {
-        output.cashier_url = raw.split_whitespace().find_map(sanitize_http_url);
+        output.cashier_url = extract_http_url(raw);
     }
     // 这些字段只允许在 CLI 内部存在，不能随结构化结果回到 Pi 或 UI。
     output.qr_code_path = None;
     output.payment_proof = None;
     output.raw = None;
     output
+}
+
+fn extract_markdown_trade_no(raw: &str) -> Option<String> {
+    raw.lines().find_map(|line| {
+        let line = line.trim().replace("**", "");
+        let value = line
+            .trim_start_matches(['-', '*', ' '])
+            .strip_prefix("交易号")?
+            .trim_start_matches(['：', ':', ' ']);
+        let value = value
+            .split_whitespace()
+            .next()
+            .map(|value| value.trim_matches(|character| matches!(character, '*' | '`')))?;
+        sanitize_text(value)
+    })
+}
+
+fn extract_http_url(raw: &str) -> Option<String> {
+    raw.split(|character: char| character.is_whitespace() || matches!(character, '(' | '['))
+        .find_map(sanitize_http_url)
 }
 
 fn merge_alipay_output_json(output: &mut AlipayBotOutput, value: &Value) {

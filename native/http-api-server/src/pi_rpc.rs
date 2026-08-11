@@ -4,9 +4,12 @@ use std::path::PathBuf;
 use std::process::{Child, ChildStderr, ChildStdout, Command, Stdio};
 use std::sync::{Arc, Mutex};
 
+use getrandom::getrandom;
 use serde_json::Value;
 
 use crate::agent_files::{is_supported_permission_mode, AgentFileError, AgentFilePolicyStore};
+use crate::payment_capability::PaymentCapabilityStore;
+use crate::payment_workspace::PaymentWorkspace;
 use crate::runtime;
 
 pub fn is_agent_messages_route(method: &str, path: &str) -> bool {
@@ -118,12 +121,35 @@ pub struct PiWorkerManager {
     workers: Mutex<HashMap<String, Arc<WorkerControl>>>,
     worker_statuses: Mutex<HashMap<String, PiWorkerStatusSnapshot>>,
     file_policies: Arc<AgentFilePolicyStore>,
+    payment_capabilities: Arc<PaymentCapabilityStore>,
 }
 
 pub struct PiWorkerRun {
     pub session_id: String,
     child: Child,
     stdout: BufReader<ChildStdout>,
+}
+
+#[allow(dead_code)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PaymentWorkerAction {
+    WalletCheck,
+    WalletApply,
+    WalletBind,
+    PaymentStart,
+    PaymentCheck,
+}
+
+impl PaymentWorkerAction {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::WalletCheck => "wallet.check",
+            Self::WalletApply => "wallet.apply",
+            Self::WalletBind => "wallet.bind",
+            Self::PaymentStart => "payment.start",
+            Self::PaymentCheck => "payment.check",
+        }
+    }
 }
 
 #[derive(Debug, PartialEq)]
@@ -185,11 +211,16 @@ impl PiWorkerManager {
             workers: Mutex::new(HashMap::new()),
             worker_statuses: Mutex::new(HashMap::new()),
             file_policies: Arc::new(AgentFilePolicyStore::new()),
+            payment_capabilities: Arc::new(PaymentCapabilityStore::new()),
         }
     }
 
     pub fn file_policies(&self) -> Arc<AgentFilePolicyStore> {
         Arc::clone(&self.file_policies)
+    }
+
+    pub fn payment_capabilities(&self) -> Arc<PaymentCapabilityStore> {
+        Arc::clone(&self.payment_capabilities)
     }
 
     pub fn session_status(&self, session_id: &str) -> Option<PiWorkerStatusSnapshot> {
@@ -378,6 +409,131 @@ impl PiWorkerManager {
         })
     }
 
+    /// 支付 Worker 是一次性、无模型的本机 capability，不加入普通 Agent 的会话或状态表。
+    #[allow(dead_code)]
+    pub fn execute_payment(
+        &self,
+        workspace: &PaymentWorkspace,
+        server_account_id: &str,
+        action: PaymentWorkerAction,
+        request: Value,
+    ) -> Result<Value, String> {
+        if !request.is_object() {
+            return Err("Pi 支付请求不正确".to_string());
+        }
+        let account_home = workspace
+            .ensure_account_home(server_account_id)
+            .map_err(|_| "默认支付工作区不可用".to_string())?;
+        let session_id = payment_worker_session_id()?;
+        let token = self
+            .payment_capabilities
+            .register(&session_id, &account_home, action.as_str())
+            .map_err(|_| "Pi 支付能力不可用".to_string())?;
+
+        let result = self.execute_payment_worker(
+            workspace,
+            &account_home,
+            &session_id,
+            &token,
+            action,
+            request,
+        );
+        self.payment_capabilities.remove(&session_id);
+        result
+    }
+
+    #[allow(dead_code)]
+    fn execute_payment_worker(
+        &self,
+        workspace: &PaymentWorkspace,
+        account_home: &std::path::Path,
+        session_id: &str,
+        capability_token: &str,
+        action: PaymentWorkerAction,
+        request: Value,
+    ) -> Result<Value, String> {
+        let executable_path = std::env::var("COPIS_PI_RPC_EXECUTABLE").ok();
+        let worker_path = std::env::var("COPIS_PI_RPC_WORKER").ok();
+        let runtime_path = std::env::var("COPIS_PI_RPC_RUNTIME").ok();
+        let use_system_runtime = std::env::var("COPIS_PI_RPC_USE_SYSTEM_RUNTIME")
+            .ok()
+            .as_deref()
+            == Some("1");
+        let require_compiled_runtime = std::env::var("COPIS_PI_RPC_COMPILED_RUNTIME")
+            .ok()
+            .as_deref()
+            == Some("1");
+        let has_compiled_executable = executable_path
+            .as_deref()
+            .is_some_and(|path| !path.trim().is_empty());
+        if require_compiled_runtime && !has_compiled_executable {
+            return Err(
+                "未找到打包的 Copis runtime。请重新安装或重新构建应用后再启动支付。".to_string(),
+            );
+        }
+        let require_external_runtime = !has_compiled_executable && !use_system_runtime;
+        let external_runtime = require_external_runtime.then(runtime::resolve_runtime);
+        let launch = resolve_worker_launch(
+            executable_path.clone(),
+            worker_path,
+            runtime_path.clone(),
+            external_runtime
+                .as_ref()
+                .and_then(|runtime| runtime.node_path().map(PathBuf::from)),
+            use_system_runtime,
+        )?;
+        let require_node = worker_requires_node(
+            executable_path.as_deref(),
+            runtime_path.as_deref(),
+            use_system_runtime,
+        );
+        if let Some(external_runtime) = external_runtime.as_ref() {
+            external_runtime.validate_for_worker(require_node, true)?;
+        }
+
+        let mut command = Command::new(&launch.program);
+        command.args(&launch.args);
+        command.current_dir(workspace.cwd());
+        configure_payment_worker_capability(&mut command, capability_token);
+        command.env("HOME", account_home);
+        command.env("USERPROFILE", account_home);
+        command.env_remove("ELECTRON_RUN_AS_NODE");
+        if let Some(external_runtime) = external_runtime.as_ref() {
+            command.env("PATH", external_runtime.path_value());
+            command.env("COPIS_RUNTIME_ROOT", &external_runtime.runtime_root);
+            command.env("COPIS_RUNTIME_DIR", &external_runtime.active_dir);
+            if let Some(path) = external_runtime.node_path() {
+                command.env("COPIS_NODE_PATH", path);
+            }
+        }
+        let mut child = command
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|_| "Pi 支付 Worker 启动失败".to_string())?;
+        let mut stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| "Pi 支付 Worker stdin 不可用".to_string())?;
+        if let Some(stderr) = child.stderr.take() {
+            spawn_stderr_reader(stderr);
+        }
+        let worker_command = payment_worker_command(session_id, action, request);
+        serde_json::to_writer(&mut stdin, &worker_command)
+            .map_err(|_| "Pi 支付 Worker 请求编码失败".to_string())?;
+        stdin
+            .write_all(b"\n")
+            .and_then(|_| stdin.flush())
+            .map_err(|_| "Pi 支付 Worker 请求发送失败".to_string())?;
+        drop(stdin);
+
+        let output = child
+            .wait_with_output()
+            .map_err(|_| "Pi 支付 Worker 执行失败".to_string())?;
+        parse_payment_worker_result(&output.stdout, session_id)
+    }
+
     pub fn stop(&self, session_id: &str) -> Result<bool, String> {
         let control = self.workers.lock().unwrap().get(session_id).cloned();
         let Some(control) = control else {
@@ -538,10 +694,76 @@ fn permission_mode_command(session_id: &str, permission_mode: &str) -> Value {
     })
 }
 
+#[allow(dead_code)]
+pub fn payment_worker_command(
+    session_id: &str,
+    action: PaymentWorkerAction,
+    mut request: Value,
+) -> Value {
+    let request_object = request.as_object_mut().expect("支付 Worker 请求必须是对象");
+    request_object.insert(
+        "action".to_string(),
+        Value::String(action.as_str().to_string()),
+    );
+    serde_json::json!({
+        "type": "payment",
+        "requestId": session_id,
+        "config": {
+            "sessionId": session_id,
+            "request": request,
+        },
+    })
+}
+
+#[allow(dead_code)]
+fn payment_worker_session_id() -> Result<String, String> {
+    let mut bytes = [0_u8; 16];
+    getrandom(&mut bytes).map_err(|_| "无法创建 Pi 支付会话".to_string())?;
+    let token = bytes
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    Ok(format!("payment-{token}"))
+}
+
+#[allow(dead_code)]
+fn parse_payment_worker_result(output: &[u8], session_id: &str) -> Result<Value, String> {
+    let text = String::from_utf8_lossy(output);
+    for line in text.lines() {
+        let Some(frame) = parse_worker_frame(line) else {
+            continue;
+        };
+        if frame.get("sessionId").and_then(Value::as_str) != Some(session_id) {
+            continue;
+        }
+        match frame.get("type").and_then(Value::as_str) {
+            Some("payment_result") => {
+                let result = frame
+                    .get("result")
+                    .filter(|value| value.is_object())
+                    .cloned()
+                    .ok_or_else(|| "Pi 支付 Worker 响应不正确".to_string())?;
+                return Ok(result);
+            }
+            Some("error") | Some("fatal") => return Err("Pi 支付能力调用失败".to_string()),
+            _ => {}
+        }
+    }
+    Err("Pi 支付 Worker 未返回结果".to_string())
+}
+
 /// Pi 只获得当前会话的文件 capability；全局内部管理令牌绝不能传给 Pi。
 fn configure_worker_file_capability(command: &mut Command, file_api_token: &str) {
     command.env_remove("COPIS_HTTP_API_INTERNAL_TOKEN");
     command.env("COPIS_PI_FILE_API_TOKEN", file_api_token);
+}
+
+/// 设置页支付使用专用 capability，不能混入普通 Agent 的文件权限令牌。
+#[allow(dead_code)]
+fn configure_payment_worker_capability(command: &mut Command, payment_token: &str) {
+    command.env_remove("COPIS_HTTP_API_INTERNAL_TOKEN");
+    command.env_remove("COPIS_PI_FILE_API_TOKEN");
+    command.env("COPIS_PI_PAYMENT_CAPABILITY_TOKEN", payment_token);
 }
 
 fn spawn_stderr_reader(stderr: ChildStderr) {

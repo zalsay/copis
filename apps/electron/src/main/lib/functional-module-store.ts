@@ -6,6 +6,8 @@ import type { FunctionalModuleFormat } from '@copis/shared'
 
 const ARCHIVE_PAYLOAD_FILE = '.artifact.tar.gz'
 const MAX_ARCHIVE_UNPACKED_BYTES = 512 * 1024 * 1024
+const TAR_TYPE_PAX_GLOBAL_EXTENDED_HEADER = 'g'.charCodeAt(0)
+const TAR_TYPE_PAX_EXTENDED_HEADER = 'x'.charCodeAt(0)
 
 export interface FunctionalModulePackage {
   name: string
@@ -399,6 +401,12 @@ async function extractTarGz(sourcePath: string, targetDir: string): Promise<void
     const dataStart = offset + 512
     const dataEnd = dataStart + size
     if (dataEnd > tar.length) throw new Error('tar.gz 功能模块内容不完整')
+
+    // macOS tar 会写入 PAX 扩展头保存时间戳和扩展属性；它们不代表待落盘的文件。
+    if (type === TAR_TYPE_PAX_GLOBAL_EXTENDED_HEADER || type === TAR_TYPE_PAX_EXTENDED_HEADER) {
+      offset = dataStart + Math.ceil(size / 512) * 512
+      continue
+    }
 
     const normalizedPath = path.replace(/^\.\//, '')
     // GNU tar 和 BSD tar 都可能在归档开头写入 "./" 根目录条目；它不代表文件，跳过即可。

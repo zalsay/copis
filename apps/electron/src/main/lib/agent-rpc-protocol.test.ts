@@ -196,6 +196,30 @@ describe('Agent RPC 协议', () => {
     expect(parseWorkerCommand('{"type":"queue","requestId":"queue-1","config":{"sessionId":"session-1","userMessage":"继续","uuid":42}}')).toBeUndefined()
   })
 
+  test('Given fixed payment action When parsed Then accepts one non-model payment worker command', () => {
+    const command: AgentRpcWorkerCommand = {
+      type: 'payment',
+      requestId: 'payment-request-1',
+      config: {
+        sessionId: 'payment-session-1',
+        request: { action: 'wallet.check' },
+      },
+    }
+
+    expect(parseWorkerCommand(serializeWorkerCommand(command))).toEqual(command)
+  })
+
+  test('Given unsupported payment action When parsed Then rejects the worker command', () => {
+    expect(parseWorkerCommand(JSON.stringify({
+      type: 'payment',
+      requestId: 'payment-request-1',
+      config: {
+        sessionId: 'payment-session-1',
+        request: { action: 'wallet.close' },
+      },
+    }))).toBeUndefined()
+  })
+
   test('Given one SSE data frame When parsed Then restores the worker frame JSON', () => {
     expect(parseAgentSseData('data: {"type":"error","sessionId":"s1","error":"失败"}\n\n')).toEqual({
       type: 'error',

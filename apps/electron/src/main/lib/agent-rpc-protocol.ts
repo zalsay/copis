@@ -109,11 +109,41 @@ export interface PiWorkerQueueConfig {
   skillMentions?: string[]
 }
 
+export const PI_PAYMENT_WORKER_ACTIONS = [
+  'wallet.check',
+  'wallet.apply',
+  'wallet.bind',
+  'payment.start',
+  'payment.check',
+] as const
+
+export type PiPaymentWorkerAction = (typeof PI_PAYMENT_WORKER_ACTIONS)[number]
+
+export interface PiPaymentWorkerRequest {
+  action: PiPaymentWorkerAction
+  agentName?: string
+  bindCode?: string
+  paymentNeeded?: string
+  resourceUrl?: string
+  method?: 'GET' | 'POST'
+  data?: string
+  headers?: Array<{ name: string; value: string }>
+  intentSummary?: string
+  tradeNo?: string
+  outShakeNo?: string
+}
+
+export interface PiPaymentWorkerConfig {
+  sessionId: string
+  request: PiPaymentWorkerRequest
+}
+
 export type AgentRpcWorkerCommand =
   | { type: 'run'; requestId: string; config: PiWorkerRunConfig }
   | { type: 'stop'; sessionId: string }
   | { type: 'set_permission_mode'; sessionId: string; mode: CopisPermissionMode }
   | { type: 'queue'; requestId: string; config: PiWorkerQueueConfig }
+  | { type: 'payment'; requestId: string; config: PiPaymentWorkerConfig }
 
 export type AgentRpcWorkerFrame =
   | { type: 'event'; sessionId: string; payload: AgentStreamPayload }
@@ -134,6 +164,7 @@ export type AgentRpcWorkerFrame =
     resultSubtype?: string
     resultErrors?: string[]
   }
+  | { type: 'payment_result'; sessionId: string; requestId: string; result: Record<string, unknown> }
   | { type: 'credential'; sessionId: string; channelId: string; provider: 'openai-codex' | 'xai'; credentials: CodexOAuthCredentials | XaiOAuthCredentials }
   | { type: 'fatal'; sessionId?: string; error: string }
 
@@ -153,6 +184,55 @@ function isBoundedNonBlankString(value: unknown, maxLength = 512): value is stri
 
 function isBrowserAgentToolName(value: unknown): value is BrowserAgentToolName {
   return typeof value === 'string' && (BROWSER_AGENT_TOOL_NAMES as readonly string[]).includes(value)
+}
+
+function isPiPaymentWorkerAction(value: unknown): value is PiPaymentWorkerAction {
+  return typeof value === 'string' && (PI_PAYMENT_WORKER_ACTIONS as readonly string[]).includes(value)
+}
+
+function isBoundedText(value: unknown, maxLength: number): value is string {
+  return typeof value === 'string' && value.trim().length > 0 && value.length <= maxLength
+}
+
+function hasOnlyKeys(value: Record<string, unknown>, allowedKeys: readonly string[]): boolean {
+  return Object.keys(value).every((key) => allowedKeys.includes(key))
+}
+
+export function parsePiPaymentWorkerRequest(value: unknown): PiPaymentWorkerRequest | undefined {
+  if (!isPlainRecord(value) || !isPiPaymentWorkerAction(value.action)) return undefined
+  const request = value as Record<string, unknown>
+  const scalarFields: Array<[keyof Omit<PiPaymentWorkerRequest, 'action' | 'headers' | 'method'>, number]> = [
+    ['agentName', 128],
+    ['bindCode', 4 * 1024],
+    ['paymentNeeded', 1024 * 1024],
+    ['resourceUrl', 8 * 1024],
+    ['data', 1024 * 1024],
+    ['intentSummary', 4 * 1024],
+    ['tradeNo', 512],
+    ['outShakeNo', 512],
+  ]
+  for (const [key, maxLength] of scalarFields) {
+    if (request[key] !== undefined && !isBoundedText(request[key], maxLength)) return undefined
+  }
+  if (request.method !== undefined && request.method !== 'GET' && request.method !== 'POST') return undefined
+  if (request.headers !== undefined && (!Array.isArray(request.headers)
+    || request.headers.length > 64
+    || !request.headers.every((header) => isPlainRecord(header)
+      && hasOnlyKeys(header, ['name', 'value'])
+      && isBoundedText(header.name, 256)
+      && isBoundedText(header.value, 8 * 1024)))) {
+    return undefined
+  }
+
+  const allowedByAction: Record<PiPaymentWorkerAction, readonly string[]> = {
+    'wallet.check': ['action'],
+    'wallet.apply': ['action', 'agentName'],
+    'wallet.bind': ['action', 'bindCode'],
+    'payment.start': ['action', 'paymentNeeded', 'resourceUrl', 'method', 'data', 'headers', 'intentSummary'],
+    'payment.check': ['action', 'tradeNo', 'outShakeNo'],
+  }
+  if (!hasOnlyKeys(request, allowedByAction[value.action])) return undefined
+  return request as unknown as PiPaymentWorkerRequest
 }
 
 export function parsePiWorkerBrowserCapability(value: unknown): PiWorkerBrowserCapability | undefined {
@@ -189,6 +269,7 @@ function isWorkerFrameType(value: unknown): value is AgentRpcWorkerFrame['type']
     || value === 'meta'
     || value === 'error'
     || value === 'complete'
+    || value === 'payment_result'
     || value === 'credential'
     || value === 'fatal'
 }
@@ -204,7 +285,7 @@ export function parseWorkerCommand(line: string): AgentRpcWorkerCommand | undefi
   } catch {
     return undefined
   }
-  if (!isRecord(parsed) || (parsed.type !== 'run' && parsed.type !== 'stop' && parsed.type !== 'set_permission_mode' && parsed.type !== 'queue')) return undefined
+  if (!isRecord(parsed) || (parsed.type !== 'run' && parsed.type !== 'stop' && parsed.type !== 'set_permission_mode' && parsed.type !== 'queue' && parsed.type !== 'payment')) return undefined
   if (parsed.type === 'stop') {
     return typeof parsed.sessionId === 'string' && parsed.sessionId.length > 0
       ? { type: 'stop', sessionId: parsed.sessionId }
@@ -219,6 +300,17 @@ export function parseWorkerCommand(line: string): AgentRpcWorkerCommand | undefi
   }
   if (typeof parsed.requestId !== 'string' || parsed.requestId.length === 0 || !isRecord(parsed.config)) return undefined
   const config = parsed.config
+  if (parsed.type === 'payment') {
+    if (!isBoundedNonBlankString(config.sessionId) || !parsePiPaymentWorkerRequest(config.request)) return undefined
+    return {
+      type: 'payment',
+      requestId: parsed.requestId,
+      config: {
+        sessionId: config.sessionId,
+        request: parsePiPaymentWorkerRequest(config.request)!,
+      },
+    }
+  }
   if (parsed.type === 'queue') {
     if (typeof config.sessionId !== 'string' || config.sessionId.length === 0) return undefined
     if (typeof config.userMessage !== 'string' || config.userMessage.length === 0) return undefined

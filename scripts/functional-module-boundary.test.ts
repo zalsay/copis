@@ -81,4 +81,19 @@ describe('功能模块发布边界', () => {
     expect(deployScript).toContain('[switch]$OfficeCliOnly')
     expect(deployScript).toContain("'--officecli'")
   })
+
+  test('Shell 部署入口允许单独指定 Node.js runtime 模块版本', () => {
+    expect(deployShellScript).toMatch(
+      /--node-runtime-version\)\s+require_value "\$1" "\$\{2:-\}"\s+NODE_RUNTIME_VERSION="\$2"/s,
+    )
+  })
+
+  test('Shell 默认部署会准备官方 OfficeCLI 并自动解析 Node.js 24 构建源', () => {
+    expect(rootPackage.scripts?.['prepare:officecli-module']).toBeDefined()
+    expect(deployShellScript).toContain('prepare:officecli-module')
+    expect(deployShellScript).toContain('--officecli-version "$OFFICECLI_VERSION"')
+    expect(deployShellScript).toContain('resolve_node_runtime_source')
+    expect(deployShellScript).toContain('v24.*')
+    expect(deployShellScript).toContain('--source "$NODE_RUNTIME_SOURCE"')
+  })
 })

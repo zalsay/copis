@@ -8,6 +8,9 @@ type FetchImplementation = (input: RequestInfo | URL, init?: RequestInit) => Pro
 const DEFAULT_HTTP_API_PORT = 51730
 const ALIPAY_BOT_ENDPOINT = '/api/internal/agent/alipay-bot'
 const AGENT_FILE_TOKEN_HEADER = 'x-copis-agent-file-token'
+export const PAYMENT_CAPABILITY_TOKEN_HEADER = 'x-copis-payment-capability'
+
+export type PiAlipayBotCapabilityHeader = typeof AGENT_FILE_TOKEN_HEADER | typeof PAYMENT_CAPABILITY_TOKEN_HEADER
 
 export type AlipayBotAction =
   | 'wallet.check'
@@ -21,11 +24,12 @@ export type AlipayBotAction =
 export interface PiAlipayBotToolOptions {
   sessionId: string
   token?: string
+  capabilityHeader?: PiAlipayBotCapabilityHeader
   baseUrl?: string
   fetchImpl?: FetchImplementation
 }
 
-interface AlipayBotToolInput {
+export interface AlipayBotToolInput {
   action: AlipayBotAction
   agentName?: string
   bindCode?: string
@@ -67,8 +71,11 @@ function resolveBaseUrl(value: string | undefined): string {
   return `http://127.0.0.1:${port}`
 }
 
-function requireToken(value: string | undefined): string {
-  const token = value?.trim() || process.env.COPIS_PI_FILE_API_TOKEN?.trim()
+function requireToken(value: string | undefined, capabilityHeader: PiAlipayBotCapabilityHeader): string {
+  const runtimeToken = capabilityHeader === PAYMENT_CAPABILITY_TOKEN_HEADER
+    ? process.env.COPIS_PI_PAYMENT_CAPABILITY_TOKEN?.trim()
+    : process.env.COPIS_PI_FILE_API_TOKEN?.trim()
+  const token = value?.trim() || runtimeToken
   if (!token) throw new PiAlipayBotToolError('alipay-bot 会话能力令牌不可用')
   return token
 }
@@ -117,20 +124,22 @@ function toAgentToolResult(payload: unknown): AgentToolResult<unknown> {
   } as AgentToolResult<unknown>
 }
 
-class PiAlipayBotToolClient {
+export class PiAlipayBotToolClient {
   private readonly baseUrl: string
   private readonly configuredToken?: string
+  private readonly capabilityHeader: PiAlipayBotCapabilityHeader
   private readonly fetchImpl: FetchImplementation
 
   constructor(private readonly options: PiAlipayBotToolOptions) {
     if (!options.sessionId.trim()) throw new PiAlipayBotToolError('alipay-bot 缺少 Agent 会话 ID')
     this.baseUrl = resolveBaseUrl(options.baseUrl)
-    this.configuredToken = options.token?.trim() || process.env.COPIS_PI_FILE_API_TOKEN?.trim()
+    this.capabilityHeader = options.capabilityHeader ?? AGENT_FILE_TOKEN_HEADER
+    this.configuredToken = options.token?.trim()
     this.fetchImpl = options.fetchImpl ?? fetch
   }
 
-  async execute(input: AlipayBotToolInput, signal?: AbortSignal): Promise<unknown> {
-    const token = requireToken(this.configuredToken)
+  async execute(input: AlipayBotToolInput, signal?: AbortSignal): Promise<Record<string, unknown>> {
+    const token = requireToken(this.configuredToken, this.capabilityHeader)
     let response: Response
     try {
       response = await this.fetchImpl(`${this.baseUrl}${ALIPAY_BOT_ENDPOINT}`, {
@@ -139,7 +148,7 @@ class PiAlipayBotToolClient {
         headers: {
           Accept: 'application/json',
           'Content-Type': 'application/json',
-          [AGENT_FILE_TOKEN_HEADER]: token,
+          [this.capabilityHeader]: token,
         },
         body: JSON.stringify(buildRequestBody(input, this.options.sessionId)),
       })

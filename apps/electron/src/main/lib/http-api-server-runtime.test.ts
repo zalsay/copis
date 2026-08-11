@@ -3,7 +3,7 @@ import { PassThrough } from 'node:stream'
 import type { SpawnOptions } from 'node:child_process'
 import { afterAll, afterEach, describe, expect, test, mock } from 'bun:test'
 import { createHash } from 'node:crypto'
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import type { FunctionalModuleFetch } from './functional-module-manager'
@@ -89,6 +89,13 @@ function createRoot(): string {
   const root = mkdtempSync(join(tmpdir(), 'copis-http-api-runtime-'))
   tempRoots.push(root)
   return root
+}
+
+function paymentWorkspaceFor(root: string): { slug: 'default'; projectRootPath: string; projectPath: string } {
+  const projectRootPath = join(root, 'default-workspace')
+  const projectPath = join(projectRootPath, 'project')
+  mkdirSync(projectPath, { recursive: true })
+  return { slug: 'default', projectRootPath, projectPath }
 }
 
 function rustPackage(version: string, content: string): FunctionalModulePackage {
@@ -199,7 +206,11 @@ describe('Rust HTTP API 功能模块生命周期', () => {
     const activePath = await activateRustVersion(root, packageInfo, 'old-rust-api')
     const records: SpawnRecord[] = []
 
-    startHttpApiServer({ rootDir: join(root, 'modules'), spawnImpl: spawnFixture(records) })
+    startHttpApiServer({
+      rootDir: join(root, 'modules'),
+      paymentWorkspace: paymentWorkspaceFor(root),
+      spawnImpl: spawnFixture(records),
+    })
 
     expect(records).toHaveLength(1)
     expect(records[0]?.file).toBe(activePath)
@@ -214,6 +225,7 @@ describe('Rust HTTP API 功能模块生命周期', () => {
 
     startHttpApiServer({
       rootDir: join(root, 'modules'),
+      paymentWorkspace: paymentWorkspaceFor(root),
       spawnImpl: spawnFixture(records),
       workerLaunch: {
         kind: 'executable',
@@ -255,7 +267,11 @@ describe('Rust HTTP API 功能模块生命周期', () => {
           return new Response('', { status: 404 })
         },
       })
-      startHttpApiServer({ ...options, spawnImpl: spawnFixture(records) })
+      startHttpApiServer({
+        ...options,
+        paymentWorkspace: paymentWorkspaceFor(root),
+        spawnImpl: spawnFixture(records),
+      })
 
       expect(records[0]?.options.env?.COPIS_BACKEND_URL).toBe('https://healthy.example.test')
       expect(records[0]?.options.env?.WORKING_AGENT_MODEL_BASE_URL).toBe(
@@ -277,6 +293,7 @@ describe('Rust HTTP API 功能模块生命周期', () => {
 
     startHttpApiServer({
       rootDir: join(root, 'modules'),
+      paymentWorkspace: paymentWorkspaceFor(root),
       spawnImpl: spawnFixture(records),
       workerLaunch: {
         kind: 'script',
@@ -290,6 +307,66 @@ describe('Rust HTTP API 功能模块生命周期', () => {
     expect(env?.COPIS_PI_RPC_EXECUTABLE).toBeUndefined()
   })
 
+  test('Given 默认支付项目 When 启动 Rust API Then 注入固定 Pi 工作区环境', async () => {
+    const root = createRoot()
+    const projectRootPath = join(root, 'default-workspace')
+    const projectPath = join(projectRootPath, 'project')
+    mkdirSync(projectPath, { recursive: true })
+    const records: SpawnRecord[] = []
+    const packageInfo = rustPackage('0.1.0', 'payment-rust-api')
+    await activateRustVersion(root, packageInfo, 'payment-rust-api')
+
+    startHttpApiServer({
+      rootDir: join(root, 'modules'),
+      paymentWorkspace: paymentWorkspaceFor(root),
+      spawnImpl: spawnFixture(records),
+    })
+
+    expect(records[0]?.options.env).toMatchObject({
+      COPIS_PAYMENT_WORKSPACE_SLUG: 'default',
+      COPIS_PAYMENT_WORKSPACE_PROJECT_ROOT: realpathSync(projectRootPath),
+      COPIS_PAYMENT_WORKSPACE_CWD: realpathSync(projectPath),
+      COPIS_PAYMENT_HOME_ROOT: join(realpathSync(projectRootPath), '.copis', 'payment'),
+    })
+  })
+
+  test('Given 非默认支付项目 When 启动 Rust API Then 拒绝启动子进程', async () => {
+    const root = createRoot()
+    const projectRootPath = join(root, 'other-workspace')
+    const projectPath = join(projectRootPath, 'project')
+    mkdirSync(projectPath, { recursive: true })
+    const records: SpawnRecord[] = []
+    const packageInfo = rustPackage('0.1.0', 'payment-rust-api')
+    await activateRustVersion(root, packageInfo, 'payment-rust-api')
+
+    startHttpApiServer({
+      rootDir: join(root, 'modules'),
+      paymentWorkspace: { slug: 'other', projectRootPath, projectPath },
+      spawnImpl: spawnFixture(records),
+    })
+
+    expect(records).toHaveLength(0)
+  })
+
+  test('Given 默认支付项目路径是文件 When 启动 Rust API Then 拒绝启动子进程', async () => {
+    const root = createRoot()
+    const projectRootPath = join(root, 'default-workspace')
+    const projectPath = join(projectRootPath, 'project-file')
+    mkdirSync(projectRootPath, { recursive: true })
+    writeFileSync(projectPath, 'not a project directory')
+    const records: SpawnRecord[] = []
+    const packageInfo = rustPackage('0.1.0', 'payment-rust-api')
+    await activateRustVersion(root, packageInfo, 'payment-rust-api')
+
+    startHttpApiServer({
+      rootDir: join(root, 'modules'),
+      paymentWorkspace: { slug: 'default', projectRootPath, projectPath },
+      spawnImpl: spawnFixture(records),
+    })
+
+    expect(records).toHaveLength(0)
+  })
+
   test('候选版本健康检查通过后切换 active 和开发进程', async () => {
     const root = createRoot()
     const oldPackage = rustPackage('0.1.0', 'old-rust-api')
@@ -298,9 +375,14 @@ describe('Rust HTTP API 功能模块生命周期', () => {
     const records: SpawnRecord[] = []
     const manifestUrl = 'https://download.example.com/manifest.json'
 
-    startHttpApiServer({ rootDir: join(root, 'modules'), spawnImpl: spawnFixture(records) })
+    startHttpApiServer({
+      rootDir: join(root, 'modules'),
+      paymentWorkspace: paymentWorkspaceFor(root),
+      spawnImpl: spawnFixture(records),
+    })
     const updated = await updateHttpApiServer({
       rootDir: join(root, 'modules'),
+      paymentWorkspace: paymentWorkspaceFor(root),
       manifestUrl,
       platform: 'darwin',
       arch: 'arm64',
@@ -327,9 +409,14 @@ describe('Rust HTTP API 功能模块生命周期', () => {
     const records: SpawnRecord[] = []
     const manifestUrl = 'https://download.example.com/manifest.json'
 
-    startHttpApiServer({ rootDir: join(root, 'modules'), spawnImpl: spawnFixture(records) })
+    startHttpApiServer({
+      rootDir: join(root, 'modules'),
+      paymentWorkspace: paymentWorkspaceFor(root),
+      spawnImpl: spawnFixture(records),
+    })
     const updated = await updateHttpApiServer({
       rootDir: join(root, 'modules'),
+      paymentWorkspace: paymentWorkspaceFor(root),
       manifestUrl,
       platform: 'darwin',
       arch: 'arm64',
@@ -356,9 +443,14 @@ describe('Rust HTTP API 功能模块生命周期', () => {
     const manifestUrl = 'https://download.example.com/manifest.json'
     let formalProbeCount = 0
 
-    startHttpApiServer({ rootDir: join(root, 'modules'), spawnImpl: spawnFixture(records) })
+    startHttpApiServer({
+      rootDir: join(root, 'modules'),
+      paymentWorkspace: paymentWorkspaceFor(root),
+      spawnImpl: spawnFixture(records),
+    })
     const updated = await updateHttpApiServer({
       rootDir: join(root, 'modules'),
+      paymentWorkspace: paymentWorkspaceFor(root),
       manifestUrl,
       platform: 'darwin',
       arch: 'arm64',

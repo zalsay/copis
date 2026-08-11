@@ -1,6 +1,8 @@
 use super::{
-    configure_worker_file_capability, permission_mode_command, resolve_worker_launch, stop_command,
-    worker_requires_node, PiWorkerManager, PiWorkerRunState, PiWorkerStatusSnapshot, WorkerLaunch,
+    configure_payment_worker_capability, configure_worker_file_capability,
+    parse_payment_worker_result, payment_worker_command, permission_mode_command,
+    resolve_worker_launch, stop_command, worker_requires_node, PaymentWorkerAction,
+    PiWorkerManager, PiWorkerRunState, PiWorkerStatusSnapshot, WorkerLaunch,
 };
 use serde_json::json;
 use std::path::PathBuf;
@@ -27,6 +29,66 @@ fn worker_only_receives_session_file_capability() {
         variables.get("COPIS_PI_FILE_API_TOKEN"),
         Some(&Some("session-file-token".to_string()))
     );
+}
+
+#[test]
+fn payment_worker_only_receives_its_dedicated_capability() {
+    let mut command = Command::new("copis");
+    command.env("COPIS_HTTP_API_INTERNAL_TOKEN", "admin-token");
+    command.env("COPIS_PI_FILE_API_TOKEN", "agent-file-token");
+
+    configure_payment_worker_capability(&mut command, "payment-token");
+
+    let variables = command
+        .get_envs()
+        .map(|(key, value)| {
+            (
+                key.to_string_lossy().into_owned(),
+                value.map(|value| value.to_string_lossy().into_owned()),
+            )
+        })
+        .collect::<std::collections::HashMap<_, _>>();
+    assert_eq!(variables.get("COPIS_HTTP_API_INTERNAL_TOKEN"), Some(&None));
+    assert_eq!(variables.get("COPIS_PI_FILE_API_TOKEN"), Some(&None));
+    assert_eq!(
+        variables.get("COPIS_PI_PAYMENT_CAPABILITY_TOKEN"),
+        Some(&Some("payment-token".to_string()))
+    );
+}
+
+#[test]
+fn payment_worker_command_has_no_model_or_agent_session_configuration() {
+    assert_eq!(
+        payment_worker_command(
+            "payment-session-1",
+            PaymentWorkerAction::WalletCheck,
+            json!({})
+        ),
+        json!({
+            "type": "payment",
+            "requestId": "payment-session-1",
+            "config": {
+                "sessionId": "payment-session-1",
+                "request": { "action": "wallet.check" },
+            },
+        }),
+    );
+}
+
+#[test]
+fn payment_worker_result_only_accepts_its_own_structured_response() {
+    let result = parse_payment_worker_result(
+        b"{\"type\":\"event\",\"sessionId\":\"payment-session-1\"}\n{\"type\":\"payment_result\",\"sessionId\":\"payment-session-1\",\"requestId\":\"payment-session-1\",\"result\":{\"ok\":true,\"tradeNo\":\"trade-1\"}}\n",
+        "payment-session-1",
+    )
+    .unwrap();
+
+    assert_eq!(result, json!({ "ok": true, "tradeNo": "trade-1" }));
+    assert!(parse_payment_worker_result(
+        b"{\"type\":\"payment_result\",\"sessionId\":\"other-session\",\"result\":{\"ok\":true}}\n",
+        "payment-session-1",
+    )
+    .is_err());
 }
 
 #[test]

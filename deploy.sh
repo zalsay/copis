@@ -60,8 +60,11 @@ CLIENT_MIN_VERSION="${COPIS_MODULE_CLIENT_MIN_VERSION:-}"
 PUBLIC_BASE_URL="${COS_PUBLIC_BASE_URL:-}"
 OBJECT_PREFIX_PATH="${OBJECT_PREFIX_PATH:-}"
 RUST_BINARY="${COPIS_RUST_HTTP_API_BINARY:-}"
+OFFICECLI_BINARY="${COPIS_OFFICECLI_BINARY:-}"
+OFFICECLI_VERSION="${COPIS_OFFICECLI_VERSION:-}"
 NODE_RUNTIME_ARCHIVE="${COPIS_NODE_RUNTIME_ARCHIVE:-}"
 NODE_RUNTIME_VERSION="${COPIS_NODE_RUNTIME_VERSION:-}"
+NODE_RUNTIME_SOURCE="${COPIS_NODE_RUNTIME_SOURCE:-}"
 
 fail() {
   echo "[Copis] $*" >&2
@@ -91,7 +94,10 @@ show_help() {
   --public-base-url    COS_PUBLIC_BASE_URL 的显式值
   --prefix <path>      COS 对象前缀
   --rust-binary <path> 指定已有 Rust 二进制路径
+  --officecli-binary <path> 指定已有 OfficeCLI 二进制路径
+  --officecli-version <version> 指定 OfficeCLI 模块版本，默认读取二进制版本
   --node-runtime-archive <path> 指定已打包的 Node.js runtime tar.gz
+  --node-runtime-version <version> 指定 Node.js runtime 模块版本，默认使用功能模块版本
   -h, --help           显示帮助
 EOF
 }
@@ -165,9 +171,24 @@ while [[ $# -gt 0 ]]; do
       RUST_BINARY="$2"
       shift
       ;;
+    --officecli-binary)
+      require_value "$1" "${2:-}"
+      OFFICECLI_BINARY="$2"
+      shift
+      ;;
+    --officecli-version)
+      require_value "$1" "${2:-}"
+      OFFICECLI_VERSION="$2"
+      shift
+      ;;
     --node-runtime-archive)
       require_value "$1" "${2:-}"
       NODE_RUNTIME_ARCHIVE="$2"
+      shift
+      ;;
+    --node-runtime-version)
+      require_value "$1" "${2:-}"
+      NODE_RUNTIME_VERSION="$2"
       shift
       ;;
     -h|--help)
@@ -252,6 +273,61 @@ run_bun() {
   fi
 }
 
+is_node_runtime_24() {
+  local node_path="$1"
+  local version
+  [[ -x "$node_path" ]] || return 1
+  version="$("$node_path" --version 2>/dev/null || true)"
+  [[ "$version" =~ ^v?24\. ]]
+}
+
+resolve_node_runtime_source() {
+  local system_node nvm_root candidate
+  if [[ -n "$NODE_RUNTIME_SOURCE" ]]; then
+    printf '%s\n' "$NODE_RUNTIME_SOURCE"
+    return
+  fi
+
+  system_node="$(node -p 'process.execPath' 2>/dev/null || true)"
+  if [[ -n "$system_node" ]] && is_node_runtime_24 "$system_node"; then
+    dirname "$system_node"
+    return
+  fi
+
+  nvm_root="${NVM_DIR:-$HOME/.nvm}"
+  for candidate in "$nvm_root"/versions/node/v24.* /opt/homebrew/opt/node@24 /usr/local/opt/node@24; do
+    if is_node_runtime_24 "$candidate/bin/node"; then
+      printf '%s\n' "$candidate"
+      return
+    fi
+  done
+  fail '未找到 Node.js 24 runtime。请安装 Node.js 24，或通过 COPIS_NODE_RUNTIME_SOURCE 指定其安装目录。'
+}
+
+read_node_runtime_version() {
+  local source="$1"
+  local node_path version
+  for node_path in "$source/bin/node" "$source/node"; do
+    if is_node_runtime_24 "$node_path"; then
+      version="$("$node_path" --version)"
+      printf '%s\n' "${version#v}"
+      return
+    fi
+  done
+  fail "Node.js runtime 源目录不是 Node.js 24：$source"
+}
+
+read_officecli_version() {
+  local binary="$1"
+  local version
+  version="$("$binary" --version 2>/dev/null || true)"
+  if [[ "$version" =~ ([0-9]+\.[0-9]+\.[0-9]+) ]]; then
+    printf '%s\n' "${BASH_REMATCH[1]}"
+    return
+  fi
+  fail "无法读取 OfficeCLI 版本：$binary"
+}
+
 if [[ "$SKIP_INSTALL" -eq 0 ]]; then
   echo '[Copis] 正在按 bun.lock 安装依赖...'
   run_bun "$ROOT_DIR" 'Bun 依赖安装失败' install --frozen-lockfile
@@ -282,14 +358,39 @@ if [[ "$OFFICECLI_ONLY" != '1' && "$NODE_RUNTIME_ONLY" != '1' ]]; then
   RUST_BINARY="$(cd "$(dirname "$RUST_BINARY")" && pwd)/$(basename "$RUST_BINARY")"
 fi
 
+if [[ "$RUST_ONLY" != '1' && "$NODE_RUNTIME_ONLY" != '1' ]]; then
+  if [[ -n "$OFFICECLI_BINARY" && "$OFFICECLI_BINARY" != /* ]]; then
+    OFFICECLI_BINARY="$ROOT_DIR/$OFFICECLI_BINARY"
+  fi
+  if [[ -z "$OFFICECLI_BINARY" ]]; then
+    OFFICECLI_BINARY="$APP_DIR/resources/bin/officecli"
+    if [[ "$PLATFORM" == 'win32' ]]; then
+      OFFICECLI_BINARY+='.exe'
+    fi
+    echo '[Copis] 正在从 GitHub release 准备 OfficeCLI 功能模块...'
+    run_bun "$ROOT_DIR" 'OfficeCLI 功能模块准备失败' run prepare:officecli-module -- \
+      --platform "$PLATFORM" --arch "$ARCH" --output "$OFFICECLI_BINARY"
+  fi
+  if [[ ! -f "$OFFICECLI_BINARY" ]]; then
+    fail "未找到 OfficeCLI 二进制：$OFFICECLI_BINARY"
+  fi
+  OFFICECLI_BINARY="$(cd "$(dirname "$OFFICECLI_BINARY")" && pwd)/$(basename "$OFFICECLI_BINARY")"
+  OFFICECLI_VERSION="${OFFICECLI_VERSION:-$(read_officecli_version "$OFFICECLI_BINARY")}"
+fi
+
 if [[ "$RUST_ONLY" != '1' && "$OFFICECLI_ONLY" != '1' ]]; then
-  NODE_RUNTIME_ARCHIVE="${NODE_RUNTIME_ARCHIVE:-$APP_DIR/resources/node-runtime/${PLATFORM}-${ARCH}.tar.gz}"
   if [[ "$PLATFORM" != "$CURRENT_PLATFORM" || "$ARCH" != "$CURRENT_ARCH" ]]; then
     fail 'Node.js runtime 必须在目标平台和架构构建，跨平台请传入 --node-runtime-archive。'
   fi
-  if [[ ! -f "$NODE_RUNTIME_ARCHIVE" ]]; then
+  if [[ -z "$NODE_RUNTIME_ARCHIVE" ]]; then
+    NODE_RUNTIME_ARCHIVE="$APP_DIR/resources/node-runtime/${PLATFORM}-${ARCH}.tar.gz"
+    NODE_RUNTIME_SOURCE="$(resolve_node_runtime_source)"
     echo '[Copis] 正在打包 Node.js runtime 功能模块...'
-    run_bun "$ROOT_DIR" 'Node.js runtime 模块构建失败' run build:node-runtime-module -- --output "$NODE_RUNTIME_ARCHIVE"
+    run_bun "$ROOT_DIR" 'Node.js runtime 模块构建失败' run build:node-runtime-module -- \
+      --source "$NODE_RUNTIME_SOURCE" --output "$NODE_RUNTIME_ARCHIVE"
+    NODE_RUNTIME_VERSION="${NODE_RUNTIME_VERSION:-$(read_node_runtime_version "$NODE_RUNTIME_SOURCE")}"
+  elif [[ ! -f "$NODE_RUNTIME_ARCHIVE" ]]; then
+    fail "未找到 Node.js runtime 归档：$NODE_RUNTIME_ARCHIVE"
   fi
   NODE_RUNTIME_VERSION="${NODE_RUNTIME_VERSION:-$VERSION}"
 fi
@@ -324,6 +425,9 @@ if [[ "$SKIP_PUBLISH" -eq 0 ]]; then
   MANIFEST_OUTPUT="$APP_DIR/dist/functional-modules/manifest.json"
   if [[ "$OFFICECLI_ONLY" != '1' && "$NODE_RUNTIME_ONLY" != '1' ]]; then
     RELEASE_ARGS+=(--rust-binary "$RUST_BINARY")
+  fi
+  if [[ "$RUST_ONLY" != '1' && "$NODE_RUNTIME_ONLY" != '1' ]]; then
+    RELEASE_ARGS+=(--officecli-binary "$OFFICECLI_BINARY" --officecli-version "$OFFICECLI_VERSION")
   fi
   if [[ "$RUST_ONLY" != '1' && "$OFFICECLI_ONLY" != '1' ]]; then
     RELEASE_ARGS+=(--node-runtime-archive "$NODE_RUNTIME_ARCHIVE" --node-runtime-version "$NODE_RUNTIME_VERSION")

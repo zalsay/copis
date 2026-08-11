@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { buildBuiltinToolDefinitions } from './pi-agent-adapter'
-import { buildPiAlipayBotTools } from './pi-alipay-bot-tool'
+import { buildPiAlipayBotTools, PiAlipayBotToolClient } from './pi-alipay-bot-tool'
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -24,6 +24,27 @@ function testSdk(): {
 }
 
 describe('Pi alipay-bot capability', () => {
+  test('Given payment Worker capability When client executes Then it only sends the dedicated payment header', async () => {
+    const requests: Array<{ init?: RequestInit }> = []
+    const client = new PiAlipayBotToolClient({
+      sessionId: 'payment-session-1',
+      token: 'payment-secret',
+      capabilityHeader: 'x-copis-payment-capability',
+      fetchImpl: async (_url, init) => {
+        requests.push({ init })
+        return jsonResponse({ ok: true })
+      },
+    })
+
+    await client.execute({ action: 'wallet.check' })
+
+    expect(requests[0]?.init?.headers).toEqual({
+      Accept: 'application/json',
+      'Content-Type': 'application/json',
+      'x-copis-payment-capability': 'payment-secret',
+    })
+  })
+
   test('Given a Worker token When alipay_bot executes Then it posts the fixed capability request without exposing token in the result', async () => {
     const requests: Array<{ url: string; init?: RequestInit }> = []
     const { sdk, definitions } = testSdk()

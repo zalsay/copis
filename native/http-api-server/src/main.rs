@@ -13,6 +13,8 @@ mod agent_files;
 mod alipay_bot;
 mod expert_teams;
 mod memory;
+mod payment_capability;
+mod payment_workspace;
 mod pi_rpc;
 mod runtime;
 mod skill_market;
@@ -27,6 +29,7 @@ use memory::{
     MemoryExportInput, MemoryKind, MemoryMaintenanceApplyInput, MemoryRestoreInput,
     MemoryRewriteInput, MemoryScope, MemoryStore, DEFAULT_LIST_LIMIT, DEFAULT_RECALL_LIMIT,
 };
+use payment_capability::PAYMENT_CAPABILITY_TOKEN_HEADER;
 use pi_rpc::{
     agent_session_id, is_agent_messages_route, is_agent_queue_route, is_agent_status_route,
     is_agent_stop_route, is_agent_workers_status_route, is_agent_workers_stop_all_route,
@@ -1932,7 +1935,9 @@ fn handle_internal_agent_alipay_bot(
     origin: Option<&str>,
     workers: &PiWorkerManager,
 ) {
-    let Some(worker_token) = request.headers.get(AGENT_FILE_TOKEN_HEADER) else {
+    let agent_worker_token = request.headers.get(AGENT_FILE_TOKEN_HEADER);
+    let payment_capability_token = request.headers.get(PAYMENT_CAPABILITY_TOKEN_HEADER);
+    if agent_worker_token.is_none() && payment_capability_token.is_none() {
         send_json_response(
             stream,
             403,
@@ -1940,12 +1945,14 @@ fn handle_internal_agent_alipay_bot(
             None,
         );
         return;
-    };
+    }
 
     match alipay_bot::handle_request(
         workers.file_policies().as_ref(),
+        workers.payment_capabilities().as_ref(),
         &request.method,
-        worker_token,
+        agent_worker_token.map(String::as_str),
+        payment_capability_token.map(String::as_str),
         &request.body,
     ) {
         Ok(response) => {

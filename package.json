@@ -1,6 +1,6 @@
 {
   "name": "copis",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Copis Working desktop client",
   "type": "module",
   "private": true,
@@ -14,6 +14,7 @@
     "electron:build": "bun run --filter='@copis/electron' build",
     "electron:start": "bun run --filter='@copis/electron' start",
     "build:node-runtime-module": "bun run scripts/build-node-runtime-module.ts",
+    "prepare:officecli-module": "bun run scripts/prepare-officecli-module.ts",
     "build:functional-module-manifest": "bun run scripts/build-functional-module-manifest.ts",
     "publish:functional-modules": "bun run scripts/publish-functional-modules.ts",
     "publish:windows-installer": "bun run scripts/publish-windows-installer.ts",

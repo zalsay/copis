@@ -5,7 +5,7 @@
 本文是 Copis Electron 的支付接入规范和验收契约。当前状态分为两层：
 
 - Copis 的设置页 UI、IPC、Preload、Jotai 状态、支付展示和本地 Rust 支付路由基础能力已落地。
-- A1 支付执行链路尚未落地：`edu-api` 仍会在公开创建接口内调用 `pi-runtime /api/alipay/execute`。后续应改为 `edu-api` 负责订单/权益，本地 Pi SDK + `alipay-bot` 负责支付宝执行。
+- A1 支付执行链路尚未落地：`edu-api` 仍会在公开创建接口内调用 `pi-runtime /api/alipay/execute`。后续应改为 Rust API 负责本地支付协调和本机 Pi Worker 调度，`edu-api` 只负责订单/权益，本机 Pi SDK + `alipay-bot` 负责支付宝执行。
 
 本文中的“当前基础接入”或“legacy”指工作区现有、已完成的 Rust loopback -> `edu-api` 转发路径；“A1 目标”指后续要实现的本地 Pi 支付协调路径。两者不能混用，当前基础接入通过不等于 A1 已完成。
 
@@ -22,7 +22,7 @@
 - 支付成功以支付会话 `status === "resource_ready"` 为唯一成功条件。
 - 支付成功后刷新 Working 设置快照和订单列表，显示最新钻石余额、VIP 状态和有效期。
 - 已存在的待支付订单可以恢复；VIP 升级不能重复创建待支付订单。
-- Electron 主进程支付请求调用 `http://127.0.0.1:<rust-port>/api/working/*`，由 Rust 使用同步后的 Working token 转发 edu-api。
+- Renderer 的支付请求只调用 `http://127.0.0.1:<rust-port>/api/working/*`；Rust 使用同步后的 Working token 调用 edu-api，并调度本机 Pi Worker。Electron 只负责 Rust 的启动和运行时配置注入，不参与每笔支付的业务协调。
 - 浏览器模式通过 Vite `/api` 代理访问同一组 Rust 路由；支付路由不再进入 Electron `http-api-handler` 业务桥。
 
 ## 范围
@@ -53,18 +53,19 @@ Copis 已在既有 Working 链路上完成支付接入：
 - `http-api-handler` 不处理支付业务路由，避免浏览器模式绕过 Rust；renderer bridge 只调用本地 `/api/working/*` 并复用共享归一化。
 - `packages/shared/src/types/working.ts` 和 `working-payment.ts` 提供 renderer-safe 支付模型、状态和响应校验。
 - 设置页、订单页和 Jotai 支付状态共用 `CopisWorkingPaymentModal`，待支付订单支持恢复。
-- `native/http-api-server/src/alipay_bot.rs` 和 `pi-alipay-bot-tool.ts` 已提供 Agent 侧的钱包/支付 capability，但目前只由 Pi Agent 工具调用，尚未接入设置页的确定性支付协调流程。
+- `native/http-api-server/src/alipay_bot.rs`、`payment_workspace.rs`、`payment_capability.rs`、`pi_rpc.rs` 和 `pi-rpc-worker.ts` 已完成 A1 的本机执行基建：Rust 固定 `default` 项目的 `project/` 目录，每个 Working 账号拥有隔离的 PiHome，且一次性 Worker 只获得单 action 的支付 capability，不创建模型会话。
 - 当前 `working_payment.rs` 仍将创建和检查请求转发到公开 `edu-api` 接口；这条路径是基础接入现状，不是 A1 的最终执行路径。
 
 ## A1 目标架构
 
-A1 保留 `edu-api` 作为业务账本和权益服务，但把支付宝执行从 `edu-api -> pi-runtime` 移到 Copis 本地 Pi SDK + `alipay-bot`：
+A1 保留 `edu-api` 作为业务账本和权益服务，但把支付宝执行从 `edu-api -> pi-runtime` 移到 Copis Rust API 管理的本地 Pi SDK + `alipay-bot`：
 
 ```text
 设置页 Renderer
   -> Copis Rust Working Payment Coordinator
   -> edu-api：套餐、订单、Payment-Needed、订单状态
-  -> 本地 Pi SDK / alipay_bot：wallet.check、payment.start、payment.check
+  -> Rust PiWorkerManager -> copis __pi-worker -> 本地 Pi SDK / 官方 alipay-bot adapter
+  -> wallet.check、payment.start、payment.check
   -> Copis Rust：受控保存执行结果
   -> edu-api：payment-started、finalize/到账
   -> resource_ready
@@ -75,17 +76,24 @@ A1 保留 `edu-api` 作为业务账本和权益服务，但把支付宝执行从
 | 层 | A1 职责 | 不负责的内容 |
 | --- | --- | --- |
 | Renderer | 选择套餐、明确确认支付、展示二维码和状态 | 不接收 JWT、Payment-Needed 或 payment proof，不计算金额和权益 |
-| Copis Rust | 持有 Working JWT、调用 edu-api、创建受限支付会话、调用本地 alipay-bot、转发受控结果 | 不维护钻石余额、VIP 到期时间或服务端套餐真相 |
-| 本地 Pi SDK / alipay-bot | 钱包检查、支付宝支付启动、支付状态查询 | 不决定套餐金额，不直接给用户账户入账 |
+| Copis Rust | 持有 Working JWT、调用 edu-api、创建受限支付会话、固定默认项目、通过 PiWorkerManager 调度本机 Pi Worker、转发受控结果 | 不维护钻石余额、VIP 到期时间或服务端套餐真相 |
+| 本地 Pi SDK / 官方 alipay-bot adapter | 在 `copis __pi-worker` 内执行钱包检查、支付宝支付启动和支付状态查询 | 不决定套餐金额，不直接给用户账户入账 |
 | edu-api | 账户权限、套餐、订单、Payment-Needed、支付幂等、钻石/VIP 入账和最终状态 | A1 下不再承担本地支付宝 CLI 执行 |
+
+### 默认项目工作区边界
+
+- 支付 Pi Worker 的 `workspaceSlug` 固定为 `default`，其 `cwd` 固定为该默认项目已持久化的 `projectPath`；Rust 不接受 Renderer、订单、普通 Agent 会话或请求体传入的工作区 ID、路径或 cwd。
+- Rust 在创建支付 Pi Worker 前必须验证默认项目存在、`slug === "default"`、`projectPath` 是默认项目根内的规范化目录且可读写。验证失败时返回 `default_payment_workspace_unavailable`，不创建业务订单，也不回退到其他项目。
+- 每个 Working 账号在默认项目的受限 `.copis/payment/<account-hash>/` 目录拥有独立 PiHome、临时支付文件和短生命周期 capability；普通 Agent 会话、其他账号和 Renderer 均不能读取该目录。`account-hash` 只能由 Rust 根据服务端账号标识生成，不能由客户端指定。
+- 支付 Pi Worker 不继承普通 Agent session、模型上下文、Skills 选择或文件权限。它只执行 Rust 固定的 `wallet.check`、`wallet.apply`、`wallet.bind`、`payment.start`、`payment.check` 动作，并在完成、取消、登出或超时后清理临时状态。
 
 ### A1 流程
 
 1. Copis 从 `edu-api` 读取可购买套餐；服务端过滤 VIP 套餐，客户端只做防御性过滤。
-2. 用户选择套餐并明确确认后，Rust 先在当前 Working 用户隔离的 PiHome 中执行 `wallet.check`。钱包未开通或未绑定时，进入用户授权/绑定流程，不创建新的业务订单；`wallet.apply`、`wallet.bind` 只能由明确的用户动作触发。
+2. 用户选择套餐并明确确认后，Rust 固定默认项目工作区并在当前 Working 用户隔离的 PiHome 中通过本机 Pi Worker 执行 `wallet.check`。钱包未开通或未绑定时，进入用户授权/绑定流程，不创建新的业务订单；`wallet.apply`、`wallet.bind` 只能由明确的用户动作触发。
 3. 钱包可用后，Copis 请求 `edu-api` 创建或恢复业务订单。该阶段只准备订单和卖家生成的 `Payment-Needed`，不能调用 `pi-runtime /api/alipay/execute`。
 4. Copis 获取支付上下文，包括 `resource_url`、HTTP 方法、请求体、受控 headers 和 `session_id`；这些字段只留在 Rust/本地支付协调器内。
-5. Copis 为当前 Working 用户创建短生命周期的本地 Pi 支付会话，调用 `alipay_bot payment.start`。支付金额、订单号和 `Payment-Needed` 必须来自服务端，不能由模型或 Renderer 编造。
+5. Rust 为当前 Working 用户创建短生命周期的本地 Pi 支付会话，使用 PiWorkerManager 启动 `copis __pi-worker` 并调用官方 `alipay-bot payment.start` adapter。支付金额、订单号和 `Payment-Needed` 必须来自服务端，不能由模型或 Renderer 编造。
 6. Rust 将二维码、收银台 URL、交易号和状态回写 `edu-api` 的 payment-started 接口；Renderer 只收到可以展示的支付会话。
 7. 用户点击“我已支付”后，Copis 本地调用 `alipay_bot payment.check`，再把受控的支付结果提交给 `edu-api` finalize/check 接口。
 8. `edu-api` 以 `payment_id` / `out_trade_no` 做幂等入账。只有返回 `resource_ready`，Copis 才刷新设置快照并关闭支付视图。
@@ -109,17 +117,15 @@ VIP 需要 `edu-api` 提供同语义的 prepare-only 和 finalize/check 接口�
 以下事项是 A1 的未完成项，不代表本轮已经修改：
 
 1. **创建接口仍是执行接口**：当前 `working_payment.rs` 调用公开钻石/VIP创建接口，`edu-api` 会继续触发 `pi-runtime`；需要切换到 prepare-only 协议。
-2. **缺少设置页支付协调器**：当前 `CopisWorkingPaymentModal` 直接通过 `window.electronAPI` 创建和检查支付，没有调用本地 Pi SDK 的固定 action 序列。
+2. **缺少业务级 Rust 支付协调器**：默认项目、账号 PiHome、短生命周期 capability 和无模型 Pi Worker 已就绪；当前设置页创建和检查路径仍只转发 `edu-api`，尚未根据 prepare/payment-context 编排本机固定 action 序列。
 3. **缺少支付上下文模型**：Rust 需要内部保存 `Payment-Needed`、资源 URL、方法、请求体、headers 和 session ID；这些内容不能进入共享 renderer 类型。
 4. **缺少 payment-started 回写**：当前本地 alipay-bot 结果没有回写 `edu-api` 的支付会话，二维码和交易号无法按参考实现持久化。
 5. **缺少本地检查后的 finalize**：当前 `checkPayment()` 仍请求公开 `edu-api` 检查接口，可能再次进入 `pi-runtime`；需要本地 `payment.check` 后的服务端 finalize/check 协议。
 6. **VIP prepare/finalize 契约缺失**：钻石参考接口已有 prepare-only 语义，VIP 还需要由 `edu-api` 提供同等能力，并保留 `pending_existing` 的幂等行为。
 7. **支付 proof 没有内部回传通道**：当前 `alipay_bot.rs` 会隐藏 `payment_proof`、原始输出和二维码本地路径；A1 需要仅供 Rust 到 `edu-api` 的受控结果通道，不能把 proof 暴露给模型或 Renderer。
 8. **二维码输出未对齐**：当前 capability 的公开结果主要提供 `cashierUrl`，设置页需要对齐参考实现的 `qrcode_image` / MIME 类型，但只能把可展示二维码返回 UI。
-9. **支付宝钱包未完成按账号隔离**：当前没有完整的 Working 用户到独立 `PiHome` / `COPIS_ALIPAY_BOT_HOME` 的绑定路径；必须避免多个 Copis 账号共享一个本地支付宝钱包状态。
-10. **Agent capability 会话边界缺失**：当前 worker token 绑定普通 Agent 文件策略。A1 需要为设置页支付创建短生命周期、单支付、可清理的 capability 会话，不能复用任意 Agent session。
-11. **订单恢复上下文不完整**：恢复订单时需要重新获得 `Payment-Needed` 和支付上下文；只有二维码字段的旧 session 不能直接作为 A1 的可支付会话。
-12. **Rust 功能模块尚未更新到运行实例**：当前安装实例仍可能激活旧 `rust-http-api`，必须在实现后更新模块并验证实际服务路由。
+9. **订单恢复上下文不完整**：恢复订单时需要重新获得 `Payment-Needed` 和支付上下文；只有二维码字段的旧 session 不能直接作为 A1 的可支付会话。
+10. **Rust 功能模块尚未更新到运行实例**：当前安装实例仍可能激活旧 `rust-http-api`，必须在实现后更新模块并验证实际服务路由。
 
 ## 业务契约
 
@@ -188,13 +194,13 @@ VIP 需要 `edu-api` 提供同语义的 prepare-only 和 finalize/check 接口�
 | 阶段 | edu-api 参考/目标接口 | 执行方 | 结果边界 |
 | --- | --- | --- | --- |
 | 套餐读取 | `GET /api/internal/working-agent/alipay/diamond-packages` | edu-api | 只返回服务端启用套餐 |
-| 钱包检查 | 本地 `alipay_bot wallet.check` | Copis 本地 Pi SDK / Rust capability | 按 Working 用户隔离 PiHome；未就绪时不得创建新订单 |
+| 钱包检查 | 本地 `alipay_bot wallet.check` | Rust PiWorkerManager -> 本机 Pi SDK | 固定 `default` 项目、按 Working 用户隔离 PiHome；未就绪时不得创建新订单 |
 | 钻石准备 | `POST /api/internal/working-agent/alipay/diamond-purchase` | edu-api | 创建订单并返回 `Payment-Needed`，不得执行 alipay-bot |
 | 支付上下文 | `POST /api/internal/working-agent/alipay/payment-context` | edu-api | 返回 `resource_url`、方法、请求体、headers、session ID，仅供 Rust 使用 |
 | VIP 准备 | edu-api 提供同语义的 VIP prepare-only 接口（路径待外部契约确定） | edu-api | 创建/复用 `pi-vip` 订单并返回 `Payment-Needed`，不得直接调用 `pi-runtime` |
-| 支付启动 | 本地 `alipay_bot payment.start` | Copis 本地 Pi SDK / Rust capability | 生成二维码、收银台 URL、交易号；proof 不进入 Renderer |
+| 支付启动 | 本地 `alipay_bot payment.start` | Rust PiWorkerManager -> 本机 Pi SDK | 生成二维码、收银台 URL、交易号；proof 不进入 Renderer |
 | 启动回写 | `POST /api/internal/working-agent/alipay/payment-started` 或桌面端等价接口 | Rust -> edu-api | 持久化支付会话和可展示二维码 |
-| 支付检查 | 本地 `alipay_bot payment.check` | Copis 本地 Pi SDK / Rust capability | 使用服务端订单号查询真实状态 |
+| 支付检查 | 本地 `alipay_bot payment.check` | Rust PiWorkerManager -> 本机 Pi SDK | 使用服务端订单号查询真实状态 |
 | 入账确认 | `payment-check` 的桌面端等价 finalize/check 接口 | Rust -> edu-api | 幂等完成钻石到账或 VIP 延期，最终返回 `resource_ready` |
 
 参考实现中的 `payment-check` 如果仍由 edu-api 再调用 `pi-runtime`，不能直接视为 A1 的最终接口；A1 需要让 edu-api 接受本地执行结果，或提供不再重复执行支付宝的 finalize 语义。
@@ -280,7 +286,7 @@ interface WorkingOrderPayment {
 
 ### A1 Rust 内部支付模型
 
-以下是概念模型，只允许存在于 Rust/主进程支付协调器，不加入 `packages/shared`，也不通过 IPC 返回完整内容：
+以下是概念模型，只允许存在于 Rust 支付协调器，不加入 `packages/shared`，也不通过 IPC 返回完整内容：
 
 ```text
 WorkingPaymentPreparation
@@ -494,7 +500,7 @@ A1 状态约束：
 - `success` 只由服务端 `resource_ready` 进入，随后刷新设置快照和订单列表；本地 `tradeNo` 或 `paid` 不能直接触发成功。
 - 订单恢复必须重新取得或校验 Payment-Needed、payment context 和会话状态；仅有旧二维码的记录不能直接作为 A1 可支付会话。
 
-A1 复用的是本地 Pi SDK 和 `alipay_bot` 的底层 action 能力，不复用 `alipay-ai-buyer-agent` Skill 的对话式资源购买流程，也不把设置页订单转换为 Agent 付费资源订单。设置页必须由 Rust 协调器固定编排 `wallet.check`、`payment.start`、`payment.check`，不让模型自由选择支付 action。
+A1 复用的是 Rust 启动的本地 Pi SDK 和官方 `alipay-bot` adapter 的底层 action 能力，不复用 `alipay-ai-buyer-agent` Skill 的对话式资源购买流程，也不把设置页订单转换为 Agent 付费资源订单。设置页必须由 Rust 协调器在固定 `default` 项目中编排 `wallet.check`、`payment.start`、`payment.check`，不让模型自由选择支付 action。
 
 ## 订单恢复
 
@@ -526,9 +532,9 @@ A1 复用的是本地 Pi SDK 和 `alipay_bot` 的底层 action 能力，不复�
 - 所有 URL 路径参数必须编码；`cashierUrl` 只允许现有 `openExternal` 的 `http` / `https` 协议校验。
 - 金额、套餐归属、支付状态、资源到账和 VIP 有效期都以服务端为准，客户端不能通过修改响应或本地状态获得权益。
 - 账号登出时清理 Jotai 中的支付会话；正在进行的请求返回后不得重新写入已登出的账户界面。
-- A1 的 `Payment-Needed`、支付上下文和 payment proof 只允许在 Rust 支付协调器与受控服务端接口之间传递；不能进入 Renderer、Pi 模型上下文、普通 Agent transcript、日志或持久化的用户配置。
+- A1 的 `Payment-Needed`、支付上下文和 payment proof 只允许在 Rust 支付协调器、本机支付 Pi Worker 的官方 adapter 调用和受控服务端接口之间传递；不能进入 Renderer、Pi 模型上下文、普通 Agent transcript、日志或持久化的用户配置。
 - 设置页支付必须在用户明确确认后才调用本地 `payment.start`；套餐金额、订单号和支付意图不能由模型推断或拼接。
-- `alipay-bot` 钱包状态必须按 Working 用户隔离，并与普通 Agent session 隔离；支付 session 结束、取消、登出或超时后清理临时文件和 capability。
+- `alipay-bot` 钱包状态必须按 Working 用户隔离、固定在默认项目的受限支付目录，并与普通 Agent session 隔离；支付 session 结束、取消、登出或超时后清理临时文件和 capability。
 - A1 不允许通过重复调用创建接口规避上游失败；`payment_id` / `out_trade_no` 是恢复和 finalize 的幂等键。
 
 ## BDD 验收场景
@@ -665,6 +671,14 @@ Given 两个不同 Working 用户分别发起支付宝支付
 When 本地 alipay-bot 读取钱包状态
 Then 两个用户使用隔离的 PiHome/钱包目录
 And 一个用户不能读取、复用或覆盖另一个用户的支付会话
+```
+
+```text
+Given 当前用户在任意 Agent 项目、浏览器项目或设置页面发起支付
+When Rust 创建支付 Pi Worker
+Then worker 的 workspaceSlug 始终为 default
+And cwd 始终为默认项目的 projectPath
+And 任意非 default 的 workspaceSlug、cwd 或路径参数都会被拒绝
 ```
 
 ## 实现验证

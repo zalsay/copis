@@ -130,6 +130,33 @@ describe('Pi Browser 工具复用主进程 dispatcher', () => {
       workspaceId: 'workspace-1',
     }))
   })
+
+  test('Given direct Pi BrowserPageOpenTab When executed Then forwards the high-level request to dispatcher', async () => {
+    const sdk = {
+      defineTool: <T>(definition: T): T => definition,
+    } as unknown as typeof import('@earendil-works/pi-coding-agent')
+    const result = await buildPiBuiltinTools(sdk, {
+      sessionId: 'browser-session',
+      channelId: 'channel-1',
+      workspaceId: 'workspace-1',
+      memoryPolicy: 'off',
+      triggeredBy: 'user',
+    })
+    const openTab = result.tools.find((tool) => tool.name === 'BrowserPageOpenTab') as unknown as {
+      execute: (toolCallId: string, input: Record<string, unknown>) => Promise<unknown>
+    }
+
+    await expect(openTab.execute('call-2', { url: 'https://www.xiaohongshu.com/' })).resolves.toMatchObject({
+      details: { source: 'dispatcher' },
+    })
+    expect(executeDirect).toHaveBeenCalledWith(expect.objectContaining({
+      sessionId: 'browser-session',
+      toolCallId: 'call-2',
+      toolName: 'BrowserPageOpenTab',
+      toolInput: { url: 'https://www.xiaohongshu.com/' },
+      workspaceId: 'workspace-1',
+    }))
+  })
 })
 
 describe('主 Agent 专家团队工具边界', () => {

@@ -42,14 +42,10 @@ describe('Working 支付视觉契约', () => {
     expect(paymentSource).toContain('解锁专家团队和定时任务。')
   })
 
-  test('Given 获取钻石 When 选择官网扫码 Then 只嵌入服务端返回的 HTTPS 收银台并提供支付确认', () => {
-    expect(paymentSource).toContain('支付宝官网扫码')
-    expect(paymentSource).toContain('使用 Agent-AI 支付')
-    expect(paymentSource).toContain('createWorkingAlipayPagePayOrder')
-    expect(paymentSource).toContain('checkWorkingAlipayPagePayOrder')
-    expect(paymentSource).toContain('title="支付宝官网收银台"')
-    expect(paymentSource).toContain('sandbox="allow-forms allow-popups allow-same-origin allow-scripts"')
-    expect(paymentSource).toContain('在浏览器继续')
-    expect(paymentStyles).toContain('.copis-working-page-pay-frame')
+  test('Given 获取钻石 When 打开支付弹窗 Then 暂不展示支付宝网站支付入口', () => {
+    expect(paymentSource).not.toContain('支付宝官网扫码')
+    expect(paymentSource).not.toContain('title="支付宝官网收银台"')
+    expect(paymentSource).not.toContain('打开官网收银台')
+    expect(paymentSource).toContain('确认支付')
   })
 })

@@ -47,6 +47,14 @@ function createTarGzWithRootDirectory(files: Record<string, string>): Buffer {
   return gzipSync(Buffer.concat([...entries, Buffer.alloc(1024)]))
 }
 
+function createTarGzWithPaxMetadata(files: Record<string, string>): Buffer {
+  const entries = [createTarPaxHeader('./PaxHeader/currentdir'), createTarDirectoryEntry('./')]
+  for (const [path, content] of Object.entries(files)) {
+    entries.push(createTarPaxHeader(`./PaxHeader/${path}`), createTarFileEntry(`./${path}`, content))
+  }
+  return gzipSync(Buffer.concat([...entries, Buffer.alloc(1024)]))
+}
+
 function createTarDirectoryEntry(path: string): Buffer {
   const header = Buffer.alloc(512)
   header.write(path)
@@ -60,6 +68,16 @@ function createTarFileEntry(path: string, content: string): Buffer {
   header.write(path)
   header.write(`${body.byteLength.toString(8).padStart(11, '0')}\0`, 124)
   header[156] = '0'.charCodeAt(0)
+  const padding = Buffer.alloc((512 - (body.byteLength % 512)) % 512)
+  return Buffer.concat([header, body, padding])
+}
+
+function createTarPaxHeader(path: string): Buffer {
+  const body = Buffer.from('30 mtime=1786365923.349214887\n')
+  const header = Buffer.alloc(512)
+  header.write(path)
+  header.write(`${body.byteLength.toString(8).padStart(11, '0')}\0`, 124)
+  header[156] = 'x'.charCodeAt(0)
   const padding = Buffer.alloc((512 - (body.byteLength % 512)) % 512)
   return Buffer.concat([header, body, padding])
 }
@@ -112,6 +130,32 @@ describe('Copis 功能模块存储', () => {
       name: 'node-runtime',
       version: '22.21.1',
       sha256: 'd'.repeat(64),
+      size: archive.byteLength,
+      format: 'tar.gz',
+      entrypoint: 'bin/node',
+      required: true,
+    }
+
+    await cacheFunctionalModule(paths, packageInfo, source)
+    const versionDir = await assembleFunctionalModule(paths, packageInfo)
+    await activateFunctionalModule(paths, packageInfo, versionDir)
+
+    expect(readActiveFunctionalModule(paths, 'node-runtime')?.path).toBe(join(versionDir, 'bin/node'))
+  })
+
+  test('Given 带 PAX 元数据头的 Node runtime 归档 When 组装 Then 正确激活入口文件', async () => {
+    const root = createRoot()
+    const archive = createTarGzWithPaxMetadata({
+      'bin/node': 'node-runtime-binary',
+      'bin/npm': 'npm-runtime-launcher',
+    })
+    const source = join(root, 'node-runtime-pax.tar.gz')
+    writeFileSync(source, archive)
+    const paths = getFunctionalModulePaths(join(root, 'modules'))
+    const packageInfo: FunctionalModulePackage = {
+      name: 'node-runtime',
+      version: '22.21.1',
+      sha256: 'e'.repeat(64),
       size: archive.byteLength,
       format: 'tar.gz',
       entrypoint: 'bin/node',

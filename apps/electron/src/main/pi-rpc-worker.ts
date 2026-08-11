@@ -6,6 +6,7 @@ import {
   parsePiWorkerBrowserCapability,
   type AgentRpcWorkerCommand,
   type AgentRpcWorkerFrame,
+  type PiPaymentWorkerConfig,
   type PiWorkerQueueConfig,
   type PiWorkerRunConfig,
 } from './lib/agent-rpc-protocol'
@@ -21,6 +22,7 @@ interface ActiveWorkerRun {
 }
 
 let activeRun: ActiveWorkerRun | undefined
+let hasActivePaymentRun = false
 let outputChain = Promise.resolve()
 
 function formatLogValue(value: unknown): string {
@@ -210,6 +212,35 @@ async function runWorker(config: PiWorkerRunConfig): Promise<void> {
   }
 }
 
+/** 设置页支付只调用 Rust 已授权的单一 capability，不创建 Pi 模型会话。 */
+async function runPaymentWorker(requestId: string, config: PiPaymentWorkerConfig): Promise<void> {
+  const token = process.env.COPIS_PI_PAYMENT_CAPABILITY_TOKEN?.trim()
+  if (!token) {
+    await writeFrame({ type: 'fatal', sessionId: config.sessionId, error: 'Pi 支付能力令牌不可用' })
+    await flushOutput()
+    process.exit(1)
+    return
+  }
+
+  try {
+    const { PiAlipayBotToolClient, PAYMENT_CAPABILITY_TOKEN_HEADER } = await import('./lib/adapters/pi-alipay-bot-tool')
+    const client = new PiAlipayBotToolClient({
+      sessionId: config.sessionId,
+      token,
+      capabilityHeader: PAYMENT_CAPABILITY_TOKEN_HEADER,
+    })
+    const result = await client.execute(config.request)
+    await writeFrame({ type: 'payment_result', sessionId: config.sessionId, requestId, result })
+    await flushOutput()
+    process.exit(0)
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : 'Pi 支付能力调用失败'
+    await writeFrame({ type: 'error', sessionId: config.sessionId, error: message })
+    await flushOutput()
+    process.exit(1)
+  }
+}
+
 function handleCommand(command: AgentRpcWorkerCommand): void {
   if (command.type === 'stop') {
     if (activeRun?.sessionId === command.sessionId) {
@@ -224,6 +255,15 @@ function handleCommand(command: AgentRpcWorkerCommand): void {
   }
   if (command.type === 'set_permission_mode') {
     void setWorkerPermissionMode(command.sessionId, command.mode)
+    return
+  }
+  if (command.type === 'payment') {
+    if (hasActivePaymentRun) {
+      void writeFrame({ type: 'fatal', sessionId: command.config.sessionId, error: 'Pi Worker 已有支付任务在执行' })
+      return
+    }
+    hasActivePaymentRun = true
+    void runPaymentWorker(command.requestId, command.config)
     return
   }
   void runWorker(command.config)
@@ -300,7 +340,7 @@ async function main(): Promise<void> {
     if (activeRun) {
       activeRun.stopped = true
       activeRun.adapter.abort(activeRun.sessionId)
-    } else {
+    } else if (!hasActivePaymentRun) {
       process.exit(0)
     }
   })

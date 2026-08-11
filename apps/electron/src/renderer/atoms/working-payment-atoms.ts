@@ -1,6 +1,5 @@
 import { atom } from 'jotai'
 import type {
-  WorkingAlipayPagePayOrder,
   WorkingDiamondPackage,
   WorkingPaymentSession,
   WorkingPendingDiamondPurchase,
@@ -9,8 +8,6 @@ import type {
 } from '@copis/shared'
 
 export type WorkingPaymentMode = 'diamonds' | 'vip'
-export type WorkingDiamondPaymentMethod = 'agent' | 'alipay_page'
-
 export type WorkingPaymentPhase =
   | 'idle'
   | 'loading'
@@ -31,10 +28,8 @@ export interface WorkingPaymentState {
   resumeOrderId?: WorkingPaymentIdentifier
   packages: WorkingDiamondPackage[]
   selectedPackageId?: number
-  paymentMethod: WorkingDiamondPaymentMethod
   pendingPurchase?: WorkingPendingDiamondPurchase
   payment?: WorkingPaymentSession
-  pageOrder?: WorkingAlipayPagePayOrder
   vip?: WorkingVipPaymentSummary
   error?: string
 }
@@ -48,7 +43,6 @@ export const EMPTY_WORKING_PAYMENT_STATE: WorkingPaymentState = {
   open: false,
   mode: 'diamonds',
   phase: 'idle',
-  paymentMethod: 'agent',
   packages: [],
 }
 

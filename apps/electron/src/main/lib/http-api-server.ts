@@ -1,14 +1,15 @@
 import { app } from 'electron'
 import { randomBytes } from 'node:crypto'
 import { spawn, type ChildProcessWithoutNullStreams, type SpawnOptions } from 'node:child_process'
-import { chmodSync, existsSync } from 'node:fs'
+import { chmodSync, existsSync, realpathSync, statSync } from 'node:fs'
 import { createInterface, type Interface } from 'node:readline'
-import { dirname, join, resolve } from 'node:path'
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import {
   COPIS_HTTP_API_HOST,
   resolveCopisHttpApiPort,
 } from '@copis/shared/config'
 import type {
+  AgentWorkspace,
   FunctionalModuleArchitecture,
   FunctionalModuleArtifact,
   FunctionalModulePlatform,
@@ -16,6 +17,7 @@ import type {
 } from '@copis/shared'
 import { getBundledCliPath, getConfigDir, getFunctionalModulesDir } from './config-paths'
 import { getSystemBunPath, getVendorBunPath } from './bun-finder'
+import { ensureDefaultWorkspace } from './agent-workspace-manager'
 import {
   resolvePiWorkerLaunch,
   resolvePiWorkerRuntime,
@@ -91,6 +93,15 @@ export interface HttpApiServerOptions {
   backendUrl?: string
   modelBaseUrl?: string
   endpointConfigUrl?: string
+  /** 仅测试内部注入；生产启动路径使用 ensureDefaultWorkspace()。 */
+  paymentWorkspace?: Pick<AgentWorkspace, 'slug' | 'projectRootPath' | 'projectPath'>
+}
+
+export interface PaymentWorkspaceRuntime {
+  COPIS_PAYMENT_WORKSPACE_SLUG: 'default'
+  COPIS_PAYMENT_WORKSPACE_PROJECT_ROOT: string
+  COPIS_PAYMENT_WORKSPACE_CWD: string
+  COPIS_PAYMENT_HOME_ROOT: string
 }
 
 interface ManagedProcess {
@@ -118,6 +129,31 @@ function encodeHex(value: string): string {
 function decodeHex(value: string): string | undefined {
   if (!/^(?:[0-9a-f]{2})*$/i.test(value)) return undefined
   return Buffer.from(value, 'hex').toString('utf8')
+}
+
+export function resolvePaymentWorkspaceRuntime(
+  workspace: Pick<AgentWorkspace, 'slug' | 'projectRootPath' | 'projectPath'>,
+): PaymentWorkspaceRuntime {
+  if (workspace.slug !== 'default' || !workspace.projectRootPath || !workspace.projectPath) {
+    throw new Error('默认支付项目配置不完整')
+  }
+
+  const projectRootPath = realpathSync(resolve(workspace.projectRootPath))
+  const projectPath = realpathSync(resolve(workspace.projectPath))
+  if (!statSync(projectRootPath).isDirectory() || !statSync(projectPath).isDirectory()) {
+    throw new Error('默认支付项目路径不是目录')
+  }
+  const relation = relative(projectRootPath, projectPath)
+  if (!relation || relation === '..' || relation.startsWith(`..${sep}`) || isAbsolute(relation)) {
+    throw new Error('默认支付项目路径不在项目根目录内')
+  }
+
+  return {
+    COPIS_PAYMENT_WORKSPACE_SLUG: 'default',
+    COPIS_PAYMENT_WORKSPACE_PROJECT_ROOT: projectRootPath,
+    COPIS_PAYMENT_WORKSPACE_CWD: projectPath,
+    COPIS_PAYMENT_HOME_ROOT: join(projectRootPath, '.copis', 'payment'),
+  }
 }
 
 function getBinaryName(): string {
@@ -267,6 +303,13 @@ function spawnManagedProcess(
   const useDevelopmentScriptRuntime = workerLaunch?.kind === 'script' && !app.isPackaged
   const piExtensionsDir = resolvePiExtensionsDir()
   const nodeRuntimeRoot = resolveNodeRuntimeRoot(options)
+  let paymentRuntime: PaymentWorkspaceRuntime
+  try {
+    paymentRuntime = resolvePaymentWorkspaceRuntime(options.paymentWorkspace ?? ensureDefaultWorkspace())
+  } catch (error) {
+    console.error('[HTTP API] 默认支付项目解析失败，已阻止启动 Rust 进程:', error)
+    return undefined
+  }
   const spawnImpl = options.spawnImpl ?? ((file, args, spawnOptions) => (
     spawn(file, args, spawnOptions) as ChildProcessWithoutNullStreams
   ))
@@ -285,6 +328,7 @@ function spawnManagedProcess(
         COPIS_HTTP_API_INTERNAL_TOKEN: internalToken,
         COPIS_HTTP_API_WEB_TOKEN: getOrCreateHttpApiWebToken(),
         COPIS_WORKING_ACCESS_TOKEN: getWorkingTokenStore().getToken() ?? '',
+        ...paymentRuntime,
         ...(options.backendUrl || process.env.COPIS_BACKEND_URL
           ? { COPIS_BACKEND_URL: options.backendUrl ?? process.env.COPIS_BACKEND_URL }
           : {}),
