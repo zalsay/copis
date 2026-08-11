@@ -20,7 +20,7 @@ export const SAFE_TOOLS: readonly string[] = [
 
 /** 安全的 Bash 命令模式（只读操作） */
 export const SAFE_BASH_PATTERNS: readonly RegExp[] = [
-  /^git\s+(status|log|diff|show|branch|remote|tag)\b/,
+  /^git\s+(status|log|diff|show|branch|remote|tag|rev-parse|ls-files|grep|blame|describe|shortlog)\b/,
   /^ls\b/,
   /^head\b/,
   /^tail\b/,
@@ -80,6 +80,14 @@ export function hasDangerousStructure(command: string): boolean {
   // 子 shell / 命令替换（$(...) 和反引号）
   if (/\$\(/.test(command) || /`/.test(command)) return true
   return false
+}
+
+/**
+ * 判断 Bash 命令是否属于 Composer 高级授权范围（Git/SSH）
+ */
+export function isAdvancedAuthorizationCommand(command: string): boolean {
+  const executable = command.trim().split(/\s+/, 1)[0]
+  return executable === 'git' || executable === 'ssh'
 }
 
 /**

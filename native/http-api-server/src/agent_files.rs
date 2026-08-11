@@ -85,6 +85,7 @@ struct FileAccessPolicy {
     write_roots: Vec<PathBuf>,
     base_dir: PathBuf,
     permission_mode: String,
+    advanced_authorization: bool,
     worker_token: String,
 }
 
@@ -412,6 +413,12 @@ impl FileAccessPolicy {
                 "计划模式下不能执行项目命令",
             ));
         }
+        if !self.advanced_authorization && requires_advanced_authorization(&request.command) {
+            return Err(AgentFileError::forbidden(
+                "advanced_authorization_required",
+                "Git/SSH 命令需要先在 Composer 开启高级授权",
+            ));
+        }
         validate_project_command(&request.command)?;
         let cwd = self.resolve(&request.cwd, false)?;
         self.ensure_read(&cwd)?;
@@ -456,6 +463,10 @@ impl FileAccessPolicy {
             write_roots: parse_roots(object, "writeRoots", &base_dir, true)?,
             base_dir,
             permission_mode: permission_mode.to_string(),
+            advanced_authorization: object
+                .get("advancedAuthorization")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
             worker_token: String::new(),
         })
     }
@@ -541,7 +552,11 @@ impl FileAccessPolicy {
     }
 }
 
-/// 仅开放项目依赖、构建与本地开发所需的包管理命令；通用 Shell 语法会绕过路径策略。
+fn requires_advanced_authorization(command: &str) -> bool {
+    matches!(command.split_whitespace().next(), Some("git" | "ssh"))
+}
+
+/// 仅开放项目依赖、构建、本地开发、工作区 Git 与高级授权的 SSH 命令；通用 Shell 语法会绕过路径策略。
 fn validate_project_command(command: &str) -> Result<(), AgentFileError> {
     let command = command.trim();
     if command.is_empty() || command.len() > 16 * 1024 {
@@ -562,8 +577,12 @@ fn validate_project_command(command: &str) -> Result<(), AgentFileError> {
     if arguments.iter().skip(1).any(|argument| {
         matches!(
             *argument,
-            "-g" | "--global" | "--prefix" | "--cache" | "--userconfig" | "--target" | "--user"
-        ) || argument.starts_with("--prefix=")
+            "-g" | "--global" | "--system" | "-C" | "-c" | "--git-dir" | "--work-tree"
+                | "--prefix" | "--cache" | "--userconfig" | "--target" | "--user"
+        ) || argument.starts_with("--git-dir=")
+            || argument.starts_with("--work-tree=")
+            || argument.starts_with("--config-env=")
+            || argument.starts_with("--prefix=")
             || argument.starts_with("--cache=")
             || argument.starts_with("--userconfig=")
             || argument.starts_with("--target=")
@@ -586,6 +605,7 @@ fn validate_project_command(command: &str) -> Result<(), AgentFileError> {
         "python" | "python3" => operation == "-m",
         "pip" | "pip3" => operation == "install",
         "uv" => matches!(operation, "sync" | "run" | "pip"),
+        "git" | "ssh" => true,
         _ => false,
     };
     if allowed {
@@ -593,7 +613,7 @@ fn validate_project_command(command: &str) -> Result<(), AgentFileError> {
     } else {
         Err(AgentFileError::forbidden(
             "command_not_allowed",
-            "仅支持工作区内的依赖安装、构建、测试和本地开发命令",
+            "仅支持工作区内的依赖安装、构建、测试、本地开发与 Git 命令",
         ))
     }
 }

@@ -728,6 +728,8 @@ export interface AgentSessionMeta {
   stoppedByUser?: boolean
   /** 该会话当前的权限模式（持久化到磁盘，重启后恢复）。未设置时新会话默认 auto */
   permissionMode?: CopisPermissionMode
+  /** 是否已在 Composer 中开启高级授权；未开启时 Git/SSH 命令会被拒绝 */
+  advancedAuthorization?: boolean
   /** 来源定时任务 ID（该会话由定时任务自动创建/复用时标记，用于侧栏显示钟表图标 + 跳转设置） */
   sourceAutomationId?: string
   /**
@@ -1726,6 +1728,8 @@ export const AGENT_IPC_CHANNELS = {
   PERMISSION_RESPOND: 'agent:permission:respond',
   /** 热切换指定会话的权限模式（运行中生效，不广播到其他会话） */
   UPDATE_SESSION_PERMISSION_MODE: 'agent:update-session-permission-mode',
+  /** 切换指定会话的 Composer 高级授权（下一轮 Pi 请求生效，控制 Git/SSH 命令） */
+  UPDATE_SESSION_ADVANCED_AUTHORIZATION: 'agent:update-session-advanced-authorization',
   /** 切换指定会话的 Agent runtime（下一轮生效，跨 runtime 时清空 SDK resume ID） */
   UPDATE_SESSION_AGENT_RUNTIME: 'agent:update-session-agent-runtime',
   /** 切换指定会话的 ChatGPT Codex Fast Mode（下一轮 Pi 请求生效） */

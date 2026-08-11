@@ -338,6 +338,114 @@ fn project_shell_rejects_composition_and_global_package_targets() {
 }
 
 #[test]
+fn project_shell_allows_workspace_git_commands_but_blocks_scope_escape() {
+    assert!(validate_project_command("git status").is_ok());
+    assert!(validate_project_command("git add .").is_ok());
+    assert!(validate_project_command("git commit -m \"feat: support git\"").is_ok());
+    assert!(validate_project_command("git push origin main").is_ok());
+    assert!(validate_project_command("ssh user@example.com").is_ok());
+
+    assert_eq!(
+        validate_project_command("git config --global user.name copis")
+            .unwrap_err()
+            .code,
+        "command_scope_not_allowed"
+    );
+    assert_eq!(
+        validate_project_command("git -C /tmp status")
+            .unwrap_err()
+            .code,
+        "command_scope_not_allowed"
+    );
+    assert_eq!(
+        validate_project_command("git --git-dir=/tmp/repo status")
+            .unwrap_err()
+            .code,
+        "command_scope_not_allowed"
+    );
+    assert_eq!(
+        validate_project_command("git --work-tree=/tmp status")
+            .unwrap_err()
+            .code,
+        "command_scope_not_allowed"
+    );
+    assert_eq!(
+        validate_project_command("git -c alias.danger=!sh status")
+            .unwrap_err()
+            .code,
+        "command_scope_not_allowed"
+    );
+}
+
+#[test]
+fn project_shell_requires_advanced_authorization_for_git_and_ssh() {
+    let root = temp_dir("advanced-auth");
+    fs::create_dir_all(&root).unwrap();
+    let store = AgentFilePolicyStore::new();
+    let mut query = Map::new();
+    query.insert(
+        "cwd".to_string(),
+        Value::String(root.to_string_lossy().into_owned()),
+    );
+    query.insert("useRustFileApi".to_string(), Value::Bool(true));
+    query.insert(
+        "fileAccessPolicy".to_string(),
+        json!({ "readRoots": [root], "readFiles": [], "writeRoots": [root], "permissionMode": "bypassPermissions" }),
+    );
+    let token = store.register_from_query("session-no-advanced", &mut query).unwrap();
+
+    let git_request = serde_json::to_vec(&json!({
+        "sessionId": "session-no-advanced", "command": "git status", "cwd": root
+    }))
+    .unwrap();
+    assert_eq!(
+        store
+            .handle_shell_with_worker_token(&token, &git_request)
+            .unwrap_err()
+            .code,
+        "advanced_authorization_required"
+    );
+
+    let ssh_request = serde_json::to_vec(&json!({
+        "sessionId": "session-no-advanced", "command": "ssh -V", "cwd": root
+    }))
+    .unwrap();
+    assert_eq!(
+        store
+            .handle_shell_with_worker_token(&token, &ssh_request)
+            .unwrap_err()
+            .code,
+        "advanced_authorization_required"
+    );
+
+    assert!(requires_advanced_authorization("git status"));
+    assert!(requires_advanced_authorization("ssh user@example.com"));
+    assert!(!requires_advanced_authorization("npm install"));
+
+    let mut advanced_query = Map::new();
+    advanced_query.insert(
+        "cwd".to_string(),
+        Value::String(root.to_string_lossy().into_owned()),
+    );
+    advanced_query.insert("useRustFileApi".to_string(), Value::Bool(true));
+    advanced_query.insert(
+        "fileAccessPolicy".to_string(),
+        json!({ "readRoots": [root], "readFiles": [], "writeRoots": [root], "permissionMode": "bypassPermissions", "advancedAuthorization": true }),
+    );
+    let advanced_token = store
+        .register_from_query("session-advanced", &mut advanced_query)
+        .unwrap();
+    let git_version_request = serde_json::to_vec(&json!({
+        "sessionId": "session-advanced", "command": "git --version", "cwd": root
+    }))
+    .unwrap();
+    let result = store
+        .handle_shell_with_worker_token(&advanced_token, &git_version_request)
+        .unwrap();
+    assert!(result["output"].as_str().unwrap_or_default().contains("git version"));
+}
+
+#[test]
 fn project_command_environment_uses_copis_runtime_path() {
     let mut command = Command::new("sh");
     configure_project_command_environment(&mut command);

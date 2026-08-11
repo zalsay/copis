@@ -2789,6 +2789,20 @@ export function registerIpcHandlers(): void {
     }
   )
 
+  // 切换指定会话的 Composer 高级授权；下一轮生效，运行中仍使用启动时的授权状态。
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.UPDATE_SESSION_ADVANCED_AUTHORIZATION,
+    async (_, sessionId: string, enabled: boolean): Promise<AgentSessionMeta> => {
+      if (typeof enabled !== 'boolean') {
+        throw new Error(`无效的高级授权状态: ${String(enabled)}`)
+      }
+      if (!getAgentSessionMeta(sessionId)) {
+        throw new Error(`Agent 会话不存在: ${sessionId}`)
+      }
+      return updateAgentSessionMeta(sessionId, { advancedAuthorization: enabled })
+    }
+  )
+
   // 切换指定会话的 Agent runtime（空闲后下一轮生效）
   ipcMain.handle(
     AGENT_IPC_CHANNELS.UPDATE_SESSION_CODEX_FAST_MODE,
@@ -2809,7 +2823,7 @@ export function registerIpcHandlers(): void {
   // 切换 Copis Working 模式；当前运行仍使用启动时的模式，下一轮生效。
   ipcMain.handle(
     AGENT_IPC_CHANNELS.UPDATE_SESSION_WORKING_MODE,
-    async (_, sessionId: string, mode: unknown): Promise<AgentSessionMeta> => {
+    async (_, sessionId: string, mode: unknown, channelId?: string, modelId?: string): Promise<AgentSessionMeta> => {
       if (!isWorkingMode(mode)) {
         throw new Error(`无效的 Working 模式: ${String(mode)}`)
       }
@@ -2819,7 +2833,10 @@ export function registerIpcHandlers(): void {
       if (await isAgentSessionActive(sessionId)) {
         throw new Error('Agent 正在运行，完成后再切换 Working 模式')
       }
-      return updateAgentSessionMeta(sessionId, { workingMode: mode })
+      const updates: Partial<Pick<AgentSessionMeta, 'channelId' | 'modelId' | 'workingMode'>> = { workingMode: mode }
+      if (channelId !== undefined) updates.channelId = channelId
+      if (modelId !== undefined) updates.modelId = modelId
+      return updateAgentSessionMeta(sessionId, updates)
     }
   )
 

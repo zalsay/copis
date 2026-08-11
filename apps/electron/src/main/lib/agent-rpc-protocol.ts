@@ -94,6 +94,7 @@ export interface PiWorkerFileAccessPolicy {
   readFiles: string[]
   writeRoots: string[]
   permissionMode: CopisPermissionMode
+  advancedAuthorization?: boolean
 }
 
 export interface PiWorkerRunConfig {

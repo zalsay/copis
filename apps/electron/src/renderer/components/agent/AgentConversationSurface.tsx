@@ -17,7 +17,7 @@ import * as React from 'react'
 import { unstable_batchedUpdates } from 'react-dom'
 import { useAtom, useAtomValue, useSetAtom, useStore } from 'jotai'
 import { toast } from 'sonner'
-import { CornerDownLeft, Square, Settings, X, Copy, Sparkles, ListTodo, Paperclip } from 'lucide-react'
+import { CornerDownLeft, Square, Settings, X, Copy, Sparkles, ListTodo, Paperclip, ShieldCheck, ShieldX } from 'lucide-react'
 import { AgentMessages } from './AgentMessages'
 import { AgentHeader } from './AgentHeader'
 import { AgentMessageQueue } from './AgentMessageQueue'
@@ -542,6 +542,7 @@ export function AgentConversationSurface({ sessionId, variant = 'main' }: AgentC
     && agentChannelProvider === 'openai-codex'
     && isCodexFastModeSupportedModel(agentModelId ?? undefined)
   const codexFastModeEnabled = isCodexFastModeAvailable && sessionMeta?.codexFastMode === true
+  const advancedAuthorizationEnabled = sessionMeta?.advancedAuthorization === true
 
   // 检查 Agent 渠道列表中是否存在可用的模型（渠道 enabled + 模型 enabled）
   const hasAvailableModel = Boolean(stableChannel?.enabled && stableChannel.models.some((model) => model.enabled))
@@ -1756,12 +1757,31 @@ export function AgentConversationSurface({ sessionId, variant = 'main' }: AgentC
     // 避免从模型菜单切回 fast 时仍被旧的 expert 模式覆盖。
     if (option.channelId === COPIS_WORKING_CHANNEL_ID) {
       const nextMode: WorkingMode = option.modelId === COPIS_WORKING_EXPERT_MODEL_ID ? 'expert' : 'fast'
-      if (nextMode === workingMode || streaming || backgroundWaiting || !sessionMeta) return
+      if (streaming || backgroundWaiting || !sessionMeta) return
       const previousSessionMeta = sessionMeta
+
+      // 从 DeepSeek 切回内置模型时，必须同步覆盖 per-session 渠道选择；
+      // 否则 configuredChannelId 仍会读到 Map 里的 DeepSeek，后续 UI 一直停留在 DeepSeek。
+      setSessionChannelMap((prev) => {
+        if (prev.get(sessionId) === COPIS_WORKING_CHANNEL_ID) return prev
+        const map = new Map(prev)
+        map.set(sessionId, COPIS_WORKING_CHANNEL_ID)
+        return map
+      })
+      setSessionModelMap((prev) => {
+        if (prev.get(sessionId) === option.modelId) return prev
+        const map = new Map(prev)
+        map.set(sessionId, option.modelId)
+        return map
+      })
+      if (nextMode === workingMode && agentChannelId === COPIS_WORKING_CHANNEL_ID) return
+
       setAgentSessions((prev) => prev.map((item) => (
-        item.id === sessionId ? { ...item, workingMode: nextMode, updatedAt: Date.now() } : item
+        item.id === sessionId
+          ? { ...item, channelId: option.channelId, modelId: option.modelId, workingMode: nextMode, updatedAt: Date.now() }
+          : item
       )))
-      window.electronAPI.updateSessionWorkingMode(sessionId, nextMode)
+      window.electronAPI.updateSessionWorkingMode(sessionId, nextMode, option.channelId, option.modelId)
         .then((updated) => {
           setAgentSessions((prev) => prev.map((item) => item.id === sessionId ? updated : item))
         })
@@ -1826,7 +1846,26 @@ export function AgentConversationSurface({ sessionId, variant = 'main' }: AgentC
     if (modelSwitchDeferred) {
       toast.info('模型已切换，本轮结束后生效')
     }
-  }, [backgroundWaiting, sessionId, sessionMeta, setAgentSessions, setSessionChannelMap, setSessionModelMap, setDefaultChannelId, setDefaultModelId, streaming, workingMode])
+  }, [agentChannelId, backgroundWaiting, sessionId, sessionMeta, setAgentSessions, setSessionChannelMap, setSessionModelMap, setDefaultChannelId, setDefaultModelId, streaming, workingMode])
+
+  const handleAdvancedAuthorizationChange = React.useCallback(async (): Promise<void> => {
+    if (streaming || backgroundWaiting || !sessionMeta) return
+
+    const previousSessionMeta = sessionMeta
+    const nextEnabled = !advancedAuthorizationEnabled
+    setAgentSessions((prev) => prev.map((item) => (
+      item.id === sessionId ? { ...item, advancedAuthorization: nextEnabled, updatedAt: Date.now() } : item
+    )))
+
+    try {
+      const updated = await window.electronAPI.updateSessionAdvancedAuthorization(sessionId, nextEnabled)
+      setAgentSessions((prev) => prev.map((item) => item.id === sessionId ? updated : item))
+    } catch (error) {
+      console.error('[AgentView] 切换高级授权失败:', error)
+      setAgentSessions((prev) => prev.map((item) => item.id === sessionId ? previousSessionMeta : item))
+      toast.error('高级授权切换失败', { description: getErrorMessage(error) })
+    }
+  }, [advancedAuthorizationEnabled, backgroundWaiting, sessionId, sessionMeta, setAgentSessions, streaming])
 
   const handleCodexFastModeChange = React.useCallback(async (): Promise<void> => {
     if (!isCodexFastModeAvailable || streaming || backgroundWaiting || !sessionMeta) return
@@ -2611,7 +2650,35 @@ export function AgentConversationSurface({ sessionId, variant = 'main' }: AgentC
         </Tooltip>
       ),
     }] : []),
-    ...(!compact ? [{ key: 'permission-mode', node: <PermissionModeSelector sessionId={sessionId} /> }] : []),
+    ...(!compact ? [
+      { key: 'permission-mode', node: <PermissionModeSelector sessionId={sessionId} /> },
+      {
+        key: 'advanced-authorization',
+        node: (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className={cn(inputToolbarButtonClass, advancedAuthorizationEnabled && 'text-[var(--ui-primary)]')}
+                onClick={() => void handleAdvancedAuthorizationChange()}
+                disabled={streaming || backgroundWaiting}
+                aria-pressed={advancedAuthorizationEnabled}
+                aria-label="高级授权"
+              >
+                {advancedAuthorizationEnabled
+                  ? <ShieldCheck className="size-[17px]" />
+                  : <ShieldX className="size-[17px]" />}
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="top">
+              <p>{advancedAuthorizationEnabled ? '高级授权已开启：允许 Git/SSH 命令' : '开启高级授权：允许 Git/SSH 命令'}</p>
+            </TooltipContent>
+          </Tooltip>
+        ),
+      },
+    ] : []),
     { key: 'speech', node: <SpeechButton className={inputToolbarButtonClass} /> },
     {
       key: 'attach-content',
@@ -2658,6 +2725,8 @@ export function AgentConversationSurface({ sessionId, variant = 'main' }: AgentC
     isCodexFastModeAvailable,
     codexFastModeEnabled,
     handleCodexFastModeChange,
+    advancedAuthorizationEnabled,
+    handleAdvancedAuthorizationChange,
     sessionAgentRuntime,
     backgroundWaiting,
     sessionId,

@@ -573,8 +573,11 @@ export interface ElectronAPI {
   /** 切换当前会话的 ChatGPT Codex Fast Mode */
   updateSessionCodexFastMode: (sessionId: string, enabled: boolean) => Promise<AgentSessionMeta>
 
+  /** 切换当前会话的 Composer 高级授权（控制 Git/SSH 命令） */
+  updateSessionAdvancedAuthorization: (sessionId: string, enabled: boolean) => Promise<AgentSessionMeta>
+
   /** 切换当前会话的 Copis Working 模式 */
-  updateSessionWorkingMode: (sessionId: string, mode: import('@copis/shared').WorkingMode) => Promise<AgentSessionMeta>
+  updateSessionWorkingMode: (sessionId: string, mode: import('@copis/shared').WorkingMode, channelId?: string, modelId?: string) => Promise<AgentSessionMeta>
 
   /** 查询 Pi catalog 或专属 profile 支持的会话级推理档位 */
   getPiReasoningCapability: (channelId: string, modelId: string) => Promise<import('@copis/shared').ReasoningCapability | undefined>
@@ -1672,8 +1675,12 @@ const electronAPI: ElectronAPI = {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.UPDATE_SESSION_CODEX_FAST_MODE, sessionId, enabled)
   },
 
-  updateSessionWorkingMode: (sessionId: string, mode: import('@copis/shared').WorkingMode) => {
-    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.UPDATE_SESSION_WORKING_MODE, sessionId, mode)
+  updateSessionAdvancedAuthorization: (sessionId: string, enabled: boolean) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.UPDATE_SESSION_ADVANCED_AUTHORIZATION, sessionId, enabled)
+  },
+
+  updateSessionWorkingMode: (sessionId: string, mode: import('@copis/shared').WorkingMode, channelId?: string, modelId?: string) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.UPDATE_SESSION_WORKING_MODE, sessionId, mode, channelId, modelId)
   },
 
   getPiReasoningCapability: (channelId: string, modelId: string) => {

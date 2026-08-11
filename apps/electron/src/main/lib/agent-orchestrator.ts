@@ -29,6 +29,7 @@ import {
   inferAgentContextWindow,
   inferReasoningTransport,
   resolveReasoningProfile,
+  isAdvancedAuthorizationCommand,
 } from '@copis/shared'
 import type { CopisPermissionMode, AskUserRequest, ExitPlanModeRequest, SDKSystemMessage } from '@copis/shared'
 import { isPromptTooLongError, isThinkingSignatureError, friendlyErrorMessage, mapSDKErrorToTypedError, shouldKeepChannelOpen } from './agent-error-utils'
@@ -1389,6 +1390,18 @@ export class AgentOrchestrator {
         if (validationFailure) {
           console.warn(`[Agent 工具验证] 参数缺失: tool=${toolName}, mode=${currentMode}`)
           return validationFailure
+        }
+
+        // ── Composer 高级授权：Git/SSH 命令必须显式开启后才允许执行 ──
+        if (toolName === 'Bash') {
+          const command = typeof input.command === 'string' ? input.command : ''
+          const advancedAuthorization = getAgentSessionMeta(sessionId)?.advancedAuthorization === true
+          if (isAdvancedAuthorizationCommand(command) && !advancedAuthorization) {
+            return {
+              behavior: 'deny' as const,
+              message: 'Git/SSH 命令需要先在 Composer 开启高级授权。',
+            }
+          }
         }
 
         // ── Write 大文件 token 截断防护 ──

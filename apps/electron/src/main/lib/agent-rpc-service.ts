@@ -283,6 +283,7 @@ function buildRustFileAccessPolicy(input: {
   workspaceWriteRoot: string
   additionalDirectories: string[]
   permissionMode: CopisPermissionMode
+  advancedAuthorization: boolean
 }): PiWorkerFileAccessPolicy {
   const projectRoot = getProjectFilesPath(input.workspace.slug)
   const sessionWorkspaceRoot = getAgentSessionWorkspacePath(input.workspace.slug, input.sessionId)
@@ -307,6 +308,7 @@ function buildRustFileAccessPolicy(input: {
     ]),
     writeRoots: uniqueAbsolutePaths(writeRoots),
     permissionMode: input.permissionMode,
+    advancedAuthorization: input.advancedAuthorization,
   }
 }
 
@@ -489,6 +491,7 @@ export async function prepareAgentRpcRun(input: AgentSendInput): Promise<PiWorke
     workspaceWriteRoot,
     additionalDirectories: directories,
     permissionMode: effectivePermissionMode,
+    advancedAuthorization: session.advancedAuthorization === true,
   })
   const memoryPolicy = workspace.memoryPolicy ?? settings.defaultMemoryPolicy ?? 'writable'
   const dynamicContext = buildDynamicContext({
