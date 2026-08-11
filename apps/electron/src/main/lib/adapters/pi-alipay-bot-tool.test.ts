@@ -157,7 +157,7 @@ describe('Pi alipay-bot capability', () => {
     await expect(tool?.execute?.('call-4', { action: 'wallet.check' })).rejects.not.toThrow('worker-secret')
   })
 
-  test('Given the built-in tool factory When a Worker starts Then alipay_bot is registered with the other Copis tools', () => {
+  test('Given the built-in tool factory When a Worker starts Then Copis 支付工具会一同注册', () => {
     const { sdk } = testSdk()
     const sdkWithBuiltinDefinitions = {
       ...sdk,
@@ -178,7 +178,10 @@ describe('Pi alipay-bot capability', () => {
     )
 
     expect(definitions.map((definition) => definition.name)).toContain('alipay_bot')
+    expect(definitions.map((definition) => definition.name)).toContain('copis_working_payment')
     const alipayTool = definitions.find((definition) => definition.name === 'alipay_bot')
     expect(JSON.stringify(alipayTool?.parameters)).toContain('payment.ack')
+    const workingPaymentTool = definitions.find((definition) => definition.name === 'copis_working_payment')
+    expect(JSON.stringify(workingPaymentTool?.parameters)).toContain('packages.list')
   })
 })

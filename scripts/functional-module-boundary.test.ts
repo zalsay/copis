@@ -22,7 +22,9 @@ const buildScript = readFileSync(join(repoRoot, 'build.ps1'), 'utf8')
 const buildShellScript = readFileSync(join(repoRoot, 'build.sh'), 'utf8')
 const deployScript = readFileSync(join(repoRoot, 'deploy.ps1'), 'utf8')
 const deployShellScript = readFileSync(join(repoRoot, 'deploy.sh'), 'utf8')
+const startDevScript = readFileSync(join(repoRoot, 'start-dev.sh'), 'utf8')
 const buildManifestScript = readFileSync(join(repoRoot, 'scripts/build-functional-module-manifest.ts'), 'utf8')
+const prepareAlipayBotScript = readFileSync(join(repoRoot, 'scripts/prepare-alipay-bot-module.ts'), 'utf8')
 
 describe('功能模块发布边界', () => {
   test('Electron 只负责下载，COS 上传工具属于仓库级开发脚本', () => {
@@ -80,6 +82,32 @@ describe('功能模块发布边界', () => {
     expect(deployShellScript).toContain('--officecli')
     expect(deployScript).toContain('[switch]$OfficeCliOnly')
     expect(deployScript).toContain("'--officecli'")
+  })
+
+  test('Shell 默认部署会准备官方支付宝智能体 CLI，并只允许当前平台本机构建', () => {
+    expect(rootPackage.scripts?.['prepare:alipay-bot-module']).toBeDefined()
+    expect(deployShellScript).toContain('--alipay-bot')
+    expect(deployShellScript).toContain('prepare:alipay-bot-module')
+    expect(deployShellScript).toContain('--alipay-bot-archive')
+    expect(deployShellScript).toContain('支付宝智能体 CLI 必须在目标平台和架构准备')
+    expect(deployShellScript).toContain('read_alipay_bot_version')
+    expect(deployShellScript).toContain('COPIS_REFRESH_ALIPAY_BOT_CLI')
+    expect(buildManifestScript).toContain('--alipay-bot')
+    expect(deployScript).toContain('[switch]$AlipayBotOnly')
+    expect(deployScript).toContain("'--alipay-bot'")
+  })
+
+  test('start-dev 会准备隔离的支付宝智能体 CLI 并传入开发 Rust API', () => {
+    expect(startDevScript).toContain('prepare:alipay-bot-module')
+    expect(startDevScript).toContain('COPIS_DEV_ALIPAY_BOT_DIR')
+    expect(startDevScript).toContain('COPIS_ALIPAY_BOT_CLI')
+    expect(startDevScript).toContain('COPIS_ALIPAY_BOT_NODE')
+  })
+
+  test('官方支付宝安装器有超时和有限重试，避免部署流程无限阻塞', () => {
+    expect(prepareAlipayBotScript).toContain('OFFICIAL_INSTALLER_ATTEMPTS = 3')
+    expect(prepareAlipayBotScript).toContain('OFFICIAL_INSTALLER_TIMEOUT_MS = 30_000')
+    expect(prepareAlipayBotScript).toContain('官方安装器第 ${attempt} 次失败，正在重试')
   })
 
   test('Shell 部署入口允许单独指定 Node.js runtime 模块版本', () => {

@@ -51,6 +51,7 @@ describe('Working 支付视觉契约', () => {
     expect(paymentSource).not.toContain('支付宝官网扫码')
     expect(paymentSource).not.toContain('title="支付宝官网收银台"')
     expect(paymentSource).not.toContain('打开官网收银台')
-    expect(paymentSource).toContain('确认支付')
+    expect(paymentSource).toContain('在对话中继续')
+    expect(paymentSource).toContain('onStartDiamondPurchase')
   })
 })

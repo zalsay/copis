@@ -21,6 +21,11 @@ export const STARTUP_MODULE_ROWS: readonly StartupModuleRow[] = [
     displayName: 'Office 文档支持',
     description: '帮助 Copis 读取和处理 Word、Excel、PowerPoint 文档',
   },
+  {
+    name: 'alipay-bot',
+    displayName: '支付宝智能体 CLI',
+    description: '为默认项目提供支付宝付款能力',
+  },
 ]
 
 export type StartupGateAction = 'retry'

@@ -224,6 +224,10 @@ describe('登录后功能模块启动契约', () => {
     const officeContent = 'officecli-startup-binary'
     const rustContent = 'rust-http-api-startup-binary'
     const nodeContent = createTarGz({ 'bin/node': 'node-runtime-binary', 'bin/npm': 'npm-runtime-launcher' })
+    const alipayBotContent = createTarGz({
+      'bin/alipay-bot': 'alipay-bot-launcher',
+      'runtime/dist/cli.js': 'alipay-bot-cli',
+    })
     const moduleArtifact = (name: 'officecli' | 'rust-http-api', version: string, content: string) => ({
       version,
       url: `https://download.example.com/${name}-${version}`,
@@ -249,12 +253,28 @@ describe('登录后功能模块启动契约', () => {
               required: true,
             },
             officecli: moduleArtifact('officecli', '1.0.143', officeContent),
+            'alipay-bot': {
+              version: '0.3.40',
+              url: 'https://download.example.com/alipay-bot-0.3.40.tar.gz',
+              sha256: createHash('sha256').update(alipayBotContent).digest('hex'),
+              size: alipayBotContent.byteLength,
+              format: 'tar.gz' as const,
+              entrypoint: 'bin/alipay-bot',
+              required: true,
+            },
             'rust-http-api': moduleArtifact('rust-http-api', '0.1.2', rustContent),
           },
         },
       },
     }
-    const records: Array<{ file: string; child: StartupFakeChild; port: string | undefined; runtimeRoot?: string }> = []
+    const records: Array<{
+      file: string
+      child: StartupFakeChild
+      port: string | undefined
+      runtimeRoot?: string
+      alipayBotCli?: string
+      alipayBotNode?: string
+    }> = []
     const spawnImpl = ((file, _args, options) => {
       const child = new StartupFakeChild()
       records.push({
@@ -262,6 +282,8 @@ describe('登录后功能模块启动契约', () => {
         child,
         port: options.env?.COPIS_HTTP_API_PORT,
         runtimeRoot: typeof options.env?.COPIS_RUNTIME_ROOT === 'string' ? options.env.COPIS_RUNTIME_ROOT : undefined,
+        alipayBotCli: typeof options.env?.COPIS_ALIPAY_BOT_CLI === 'string' ? options.env.COPIS_ALIPAY_BOT_CLI : undefined,
+        alipayBotNode: typeof options.env?.COPIS_ALIPAY_BOT_NODE === 'string' ? options.env.COPIS_ALIPAY_BOT_NODE : undefined,
       })
       return child as unknown as ReturnType<HttpApiSpawn>
     }) as HttpApiSpawn
@@ -279,6 +301,9 @@ describe('登录后功能模块启动契约', () => {
       }
       if (input.endsWith('/node-runtime-22.21.1.tar.gz')) {
         return new Response(new Uint8Array(nodeContent), { status: 200, headers: { 'content-length': String(nodeContent.byteLength) } })
+      }
+      if (input.endsWith('/alipay-bot-0.3.40.tar.gz')) {
+        return new Response(new Uint8Array(alipayBotContent), { status: 200, headers: { 'content-length': String(alipayBotContent.byteLength) } })
       }
       return new Response('not found', { status: 404 })
     }
@@ -301,12 +326,15 @@ describe('登录后功能模块启动契约', () => {
         ['node-runtime', true, true],
         ['rust-http-api', true, true],
         ['officecli', true, true],
+        ['alipay-bot', true, true],
       ])
       expect(progress.some((item) => item.phase === 'modules' && item.progress === 0.95)).toBe(true)
       expect(progress.some((item) => item.phase === 'health' && item.progress >= 0.95)).toBe(true)
       expect(progress.at(-1)).toMatchObject({ phase: 'ready', progress: 1 })
       expect(records.map((record) => record.port)).toEqual(['51741', '51740'])
       expect(records.some((record) => record.runtimeRoot?.includes('/node-runtime/'))).toBe(true)
+      expect(records.some((record) => record.alipayBotCli?.includes('/alipay-bot/'))).toBe(true)
+      expect(records.some((record) => record.alipayBotNode?.endsWith('/bin/node'))).toBe(true)
     } finally {
       await stopHttpApiServer(5)
       rmSync(rootDir, { recursive: true, force: true })

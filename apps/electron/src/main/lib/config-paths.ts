@@ -621,6 +621,7 @@ export const RETIRED_DEFAULT_SKILL_SLUGS: readonly string[] = [
   'xlsx',
   'copis-coach',
   'proma-coach',
+  'alipay-ai-buyer-agent',
 ]
 
 /** 第一方默认 Skill 的历史 slug 到当前 slug 的兼容映射。 */

@@ -9,10 +9,11 @@ import {
 
 describe('功能模块设置页模型', () => {
   test('Given 本地能力列表 When 生成设置页模型 Then 显示友好的能力名称', () => {
-    expect(FUNCTIONAL_MODULE_DEFINITIONS.map((item) => item.name)).toEqual(['rust-http-api', 'officecli'])
+    expect(FUNCTIONAL_MODULE_DEFINITIONS.map((item) => item.name)).toEqual(['rust-http-api', 'officecli', 'alipay-bot'])
     expect(FUNCTIONAL_MODULE_DEFINITIONS.find((item) => item.name === 'rust-http-api')?.required).toBe(true)
     expect(FUNCTIONAL_MODULE_DEFINITIONS.find((item) => item.name === 'officecli')?.required).toBe(true)
-    expect(FUNCTIONAL_MODULE_DEFINITIONS.map((item) => item.displayName)).toEqual(['系统核心模块', 'Office 文档支持'])
+    expect(FUNCTIONAL_MODULE_DEFINITIONS.find((item) => item.name === 'alipay-bot')?.required).toBe(true)
+    expect(FUNCTIONAL_MODULE_DEFINITIONS.map((item) => item.displayName)).toEqual(['系统核心模块', 'Office 文档支持', '支付宝智能体 CLI'])
     expect(FUNCTIONAL_MODULE_DEFINITIONS.every((item) => !/Rust|HTTP|API|Electron/.test(`${item.displayName} ${item.description}`))).toBe(true)
   })
 

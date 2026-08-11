@@ -1,6 +1,7 @@
 use super::{
     build_alipay_bot_args, execute_alipay_bot, handle_request, prepare_alipay_bot_command,
-    resolve_alipay_bot_home, sanitize_alipay_output, AlipayBotAction, AlipayBotRequest,
+    read_qr_code_data_url, resolve_alipay_bot_home, sanitize_alipay_output, AlipayBotAction,
+    AlipayBotRequest,
 };
 use crate::agent_files::AgentFilePolicyStore;
 use crate::payment_capability::PaymentCapabilityStore;
@@ -152,9 +153,12 @@ fn payment_start_runs_cli_with_wallet_scoped_tmpdir() {
     ));
     let command = home.join("fake-alipay-bot.sh");
     fs::create_dir_all(&home).unwrap();
+    let qr_code_path = home.join("tmp/payment.png");
+    fs::create_dir_all(qr_code_path.parent().unwrap()).unwrap();
+    fs::write(&qr_code_path, b"\x89PNG\r\n\x1a\n").unwrap();
     fs::write(
         &command,
-        "#!/bin/sh\ntest \"$TMPDIR\" = \"$HOME/tmp\" || exit 42\nprintf '{\\\"trade_no\\\":\\\"trade-1\\\"}\\n'\n",
+        "#!/bin/sh\ntest \"$TMPDIR\" = \"$HOME/tmp\" || exit 42\nprintf '{\\\"trade_no\\\":\\\"trade-1\\\"}\\n'\nprintf 'MEDIA: %s\\n' \"$HOME/tmp/payment.png\" >&2\n",
     )
     .unwrap();
     fs::set_permissions(&command, fs::Permissions::from_mode(0o700)).unwrap();
@@ -168,7 +172,13 @@ fn payment_start_runs_cli_with_wallet_scoped_tmpdir() {
         ..Default::default()
     });
 
-    assert_eq!(result.unwrap().trade_no.as_deref(), Some("trade-1"));
+    let output = result.unwrap();
+    assert_eq!(output.trade_no.as_deref(), Some("trade-1"));
+    assert!(output
+        .qr_code_image
+        .as_deref()
+        .is_some_and(|value| value.starts_with("data:image/png;base64,")));
+    assert_eq!(output.qr_code_mime_type.as_deref(), Some("image/png"));
     let _ = fs::remove_dir_all(home);
 }
 
@@ -205,6 +215,81 @@ fn cli_output_keeps_payment_proof_for_rust_but_hides_it_from_public_result() {
 }
 
 #[test]
+fn given_media_qr_in_controlled_tmp_dir_when_read_then_returns_data_url_without_path() {
+    let root = std::env::temp_dir().join(format!(
+        "copis-alipay-qr-test-{}",
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    fs::create_dir_all(&root).unwrap();
+    let qr_path = root.join("payment.png");
+    fs::write(&qr_path, b"\x89PNG\r\n\x1a\nqr-code").unwrap();
+
+    let image = read_qr_code_data_url(&format!("MEDIA: {}", qr_path.display()), &root);
+
+    assert_eq!(
+        image.as_deref(),
+        Some("data:image/png;base64,iVBORw0KGgpxci1jb2Rl")
+    );
+    assert!(!image.unwrap().contains(&qr_path.display().to_string()));
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn given_payment_qr_code_when_serialized_then_includes_matching_mime_type() {
+    let mut output = sanitize_alipay_output(r#"{"trade_no":"trade-1"}"#);
+    output.qr_code_image = Some("data:image/png;base64,iVBORw0KGgo=".to_string());
+    output.qr_code_mime_type = Some("image/png".to_string());
+
+    let payment = output.to_payment_value();
+
+    assert_eq!(payment["qrCodeMimeType"], "image/png");
+    assert_eq!(payment["qrCodeImage"], "data:image/png;base64,iVBORw0KGgo=");
+}
+
+#[test]
+fn given_media_path_outside_controlled_tmp_dir_when_read_then_rejects_it() {
+    let root = std::env::temp_dir().join(format!(
+        "copis-alipay-qr-test-{}",
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let outside = std::env::temp_dir().join(format!(
+        "copis-alipay-qr-outside-{}.png",
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    fs::create_dir_all(&root).unwrap();
+    fs::write(&outside, b"\x89PNG\r\n\x1a\nnot-a-qr").unwrap();
+
+    assert!(read_qr_code_data_url(&format!("MEDIA: {}", outside.display()), &root).is_none());
+    let _ = fs::remove_dir_all(root);
+    let _ = fs::remove_file(outside);
+}
+
+#[test]
+fn official_wallet_media_root_is_allowed_but_other_tmp_paths_are_rejected() {
+    let root = Path::new("/tmp/openclaw/alipay-bot-cli/qrcode");
+    fs::create_dir_all(root).unwrap();
+    let qr_path = root.join(format!("copis-test-{}.png", std::process::id()));
+    fs::write(&qr_path, b"\x89PNG\r\n\x1a\nwallet-qr").unwrap();
+
+    let image = read_qr_code_data_url(
+        &format!("MEDIA: {}", qr_path.display()),
+        Path::new("/tmp/copis-controlled-missing"),
+    );
+
+    assert!(image.is_some());
+    let _ = fs::remove_file(qr_path);
+}
+
+#[test]
 fn cli_output_parses_pretty_json_after_cli_diagnostics() {
     let output = sanitize_alipay_output(
         "[alipay-bot-cli] 发现更新\n{\n  \"code\": 200,\n  \"message\": \"已开启支付宝支付功能\"\n}\n",
@@ -224,6 +309,22 @@ fn cli_output_parses_markdown_payment_identifiers() {
     assert_eq!(
         output.trade_no.as_deref(),
         Some("20260703008281200344450000060846")
+    );
+    assert_eq!(
+        output.cashier_url.as_deref(),
+        Some("https://u.alipay.cn/example")
+    );
+}
+
+#[test]
+fn official_wallet_apply_markdown_preserves_access_url() {
+    let output = sanitize_alipay_output(
+        "[✅当前环境安全，请放心开启]\n请扫码或点击链接，开启支付宝支付功能\n[支付宝官方开启链接](<https://u.alipay.cn/example>)\n",
+    );
+
+    assert_eq!(
+        output.access_url.as_deref(),
+        Some("https://u.alipay.cn/example")
     );
     assert_eq!(
         output.cashier_url.as_deref(),

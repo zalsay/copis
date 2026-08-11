@@ -1,7 +1,6 @@
 // 浏览器模式的普通 API 走 Vite 代理；Agent 流式请求直接连接 Rust SSE 服务。
 import type { AgentExpertTeamSession, AgentQueueMessageInput, AgentStreamCompletePayload, AgentStreamEvent, AgentSendInput, MemoryExportFileInput } from '@copis/shared'
 import {
-  normalizeWorkingAlipayPagePayOrder,
   normalizeWorkingDiamondPackages,
   normalizeWorkingDiamondPurchaseResult,
   normalizeWorkingOrderPayment,
@@ -170,12 +169,6 @@ function createHttpMethods(): Record<string, HttpMethod> {
       .then((value) => normalizeWorkingPayment(() => normalizeWorkingPaymentCheckResult(value))),
     cancelWorkingDiamondPayment: (args) => request(`/api/working/diamond-purchases/${encodeURIComponent(String(getArgument<number | string>(args, 0)))}/cancel`, 'POST', {})
       .then((value) => normalizeWorkingPayment(() => normalizeWorkingPaymentCancelResult(value))),
-    createWorkingAlipayPagePayOrder: (args) => request('/api/working/alipay/page-orders', 'POST', {
-      packageId: getArgument<number>(args, 0),
-    }).then((value) => normalizeWorkingPayment(() => normalizeWorkingAlipayPagePayOrder(value))),
-    checkWorkingAlipayPagePayOrder: (args) => request(`/api/working/alipay/page-orders/${encodeURIComponent(String(getArgument<number | string>(args, 0)))}/check`, 'POST', {})
-      .then((value) => normalizeWorkingPayment(() => normalizeWorkingAlipayPagePayOrder(value))),
-
     // ===== 应用设置 =====
     getSettings: () => request('/api/settings'),
     updateSettings: (args) => request('/api/settings', 'PATCH', getArgument(args, 0)),

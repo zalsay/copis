@@ -110,10 +110,36 @@ function rustPackage(version: string, content: string): FunctionalModulePackage 
   }
 }
 
+function binaryPackage(
+  name: string,
+  version: string,
+  entrypoint: string,
+  content: string,
+): FunctionalModulePackage {
+  return {
+    name,
+    version,
+    sha256: createHash('sha256').update(content).digest('hex'),
+    size: Buffer.byteLength(content),
+    format: 'binary',
+    entrypoint,
+    required: true,
+  }
+}
+
 async function activateRustVersion(root: string, packageInfo: FunctionalModulePackage, content: string): Promise<string> {
-  const source = join(root, `${packageInfo.version}.source`)
+  return activateModuleVersion(join(root, 'modules'), packageInfo, content)
+}
+
+async function activateModuleVersion(
+  modulesRoot: string,
+  packageInfo: FunctionalModulePackage,
+  content: string,
+): Promise<string> {
+  mkdirSync(modulesRoot, { recursive: true })
+  const source = join(modulesRoot, `${packageInfo.name}-${packageInfo.version}.source`)
   writeFileSync(source, content)
-  const paths = getFunctionalModulePaths(join(root, 'modules'))
+  const paths = getFunctionalModulePaths(modulesRoot)
   await cacheFunctionalModule(paths, packageInfo, source)
   const versionDir = await assembleFunctionalModule(paths, packageInfo)
   await activateFunctionalModule(paths, packageInfo, versionDir)
@@ -328,6 +354,60 @@ describe('Rust HTTP API 功能模块生命周期', () => {
       COPIS_PAYMENT_WORKSPACE_CWD: realpathSync(projectPath),
       COPIS_PAYMENT_HOME_ROOT: join(realpathSync(projectRootPath), '.copis', 'payment'),
     })
+  })
+
+  test('Given 已激活的 Node runtime 和支付宝智能体 CLI When 启动 Rust API Then 注入两个绝对入口', async () => {
+    const root = createRoot()
+    const modulesRoot = join(root, 'modules')
+    const records: SpawnRecord[] = []
+    const rust = rustPackage('0.1.0', 'payment-rust-api')
+    const node = binaryPackage('node-runtime', '24.0.0', 'bin/node', 'node-runtime')
+    const alipayBot = binaryPackage('alipay-bot', '0.3.40', 'bin/alipay-bot', 'alipay-bot')
+    await activateRustVersion(root, rust, 'payment-rust-api')
+    const nodePath = await activateModuleVersion(modulesRoot, node, 'node-runtime')
+    const alipayBotPath = await activateModuleVersion(modulesRoot, alipayBot, 'alipay-bot')
+
+    startHttpApiServer({
+      rootDir: modulesRoot,
+      paymentWorkspace: paymentWorkspaceFor(root),
+      spawnImpl: spawnFixture(records),
+    })
+
+    expect(records[0]?.options.env).toMatchObject({
+      COPIS_ALIPAY_BOT_CLI: alipayBotPath,
+      COPIS_ALIPAY_BOT_NODE: nodePath,
+    })
+  })
+
+  test('Given 开发环境显式 CLI When 启动 Rust API Then 优先注入开发入口', async () => {
+    const root = createRoot()
+    const developmentCli = join(root, 'development-alipay-bot')
+    const developmentNode = join(root, 'development-node')
+    writeFileSync(developmentCli, 'development-alipay-bot')
+    writeFileSync(developmentNode, 'development-node')
+    const records: SpawnRecord[] = []
+    await activateRustVersion(root, rustPackage('0.1.0', 'payment-rust-api'), 'payment-rust-api')
+    const previousCli = process.env.COPIS_ALIPAY_BOT_CLI
+    const previousNode = process.env.COPIS_ALIPAY_BOT_NODE
+    process.env.COPIS_ALIPAY_BOT_CLI = developmentCli
+    process.env.COPIS_ALIPAY_BOT_NODE = developmentNode
+
+    try {
+      startHttpApiServer({
+        rootDir: join(root, 'modules'),
+        paymentWorkspace: paymentWorkspaceFor(root),
+        spawnImpl: spawnFixture(records),
+      })
+      expect(records[0]?.options.env).toMatchObject({
+        COPIS_ALIPAY_BOT_CLI: developmentCli,
+        COPIS_ALIPAY_BOT_NODE: developmentNode,
+      })
+    } finally {
+      if (previousCli === undefined) delete process.env.COPIS_ALIPAY_BOT_CLI
+      else process.env.COPIS_ALIPAY_BOT_CLI = previousCli
+      if (previousNode === undefined) delete process.env.COPIS_ALIPAY_BOT_NODE
+      else process.env.COPIS_ALIPAY_BOT_NODE = previousNode
+    }
   })
 
   test('Given 非默认支付项目 When 启动 Rust API Then 拒绝启动子进程', async () => {

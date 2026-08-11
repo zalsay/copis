@@ -93,6 +93,14 @@ describe('Agent 工作区 MCP 配置', () => {
 
 describe('项目术语迁移', () => {
   test('Given 新安装 When 创建默认项目 Then 绑定文稿目录并允许 Agent 写入', () => {
+    const defaultSkillsDir = configPaths.getDefaultSkillsDir()
+    const officialSkillDir = join(defaultSkillsDir, 'alipay-payment-skill')
+    const retiredSkillDir = join(defaultSkillsDir, 'alipay-ai-buyer-agent')
+    mkdirSync(officialSkillDir, { recursive: true })
+    mkdirSync(retiredSkillDir, { recursive: true })
+    writeFileSync(join(officialSkillDir, 'SKILL.md'), '---\nname: alipay-payment-skill\n---\n', 'utf-8')
+    writeFileSync(join(retiredSkillDir, 'SKILL.md'), '---\nname: alipay-ai-buyer-agent\n---\n', 'utf-8')
+
     const workspace = manager.ensureDefaultWorkspace()
     const expectedProjectRootPath = realpathSync(join(tempHome, 'Documents', 'Copis'))
 
@@ -103,6 +111,8 @@ describe('项目术语迁移', () => {
     expect(workspace.allowWorkspaceWrite).toBe(true)
     expect(manager.getAgentWorkspaceWritableRoot(workspace)).toBe(join(expectedProjectRootPath, 'project'))
     expect(existsSync(workspace.projectPath!)).toBe(true)
+    expect(existsSync(join(configPaths.getWorkspaceSkillsDir('default'), 'alipay-payment-skill', 'SKILL.md'))).toBe(true)
+    expect(existsSync(join(configPaths.getWorkspaceSkillsDir('default'), 'alipay-ai-buyer-agent'))).toBe(false)
   })
 
   test('Given 旧版本默认项目缺少本地根目录 When 启动迁移 Then 补齐默认路径和写入权限', () => {
@@ -132,6 +142,46 @@ describe('项目术语迁移', () => {
     expect(persisted.workspaces[0]?.projectRootPath).toBe(expectedProjectRootPath)
     expect(persisted.workspaces[0]?.projectPath).toBe(join(expectedProjectRootPath, 'project'))
     expect(persisted.workspaces[0]?.allowWorkspaceWrite).toBe(true)
+  })
+
+  test('Given 已有默认项目仍加载旧支付宝买家 Skill When 升级默认 Skills Then 注入官方支付 Skill 并移除旧 Skill', () => {
+    const workspace = manager.ensureDefaultWorkspace()
+    const defaultSkillsDir = configPaths.getDefaultSkillsDir()
+    const officialSkillDir = join(defaultSkillsDir, 'alipay-payment-skill')
+    const activeSkillsDir = configPaths.getWorkspaceSkillsDir(workspace.slug)
+
+    mkdirSync(officialSkillDir, { recursive: true })
+    writeFileSync(join(officialSkillDir, 'SKILL.md'), '---\nname: alipay-payment-skill\nversion: 0.0.1\n---\n', 'utf-8')
+    writeWorkspaceSkill(workspace.slug, 'alipay-ai-buyer-agent', 'alipay-ai-buyer-agent')
+
+    manager.upgradeDefaultSkillsInWorkspaces()
+
+    expect(existsSync(join(activeSkillsDir, 'alipay-payment-skill', 'SKILL.md'))).toBe(true)
+    expect(existsSync(join(activeSkillsDir, 'alipay-ai-buyer-agent'))).toBe(false)
+  })
+
+  test('Given 默认项目保留旧版支付宝支付 Skill When 升级默认 Skills Then 覆盖为当前规则', () => {
+    const workspace = manager.ensureDefaultWorkspace()
+    const defaultSkillsDir = configPaths.getDefaultSkillsDir()
+    const officialSkillDir = join(defaultSkillsDir, 'alipay-payment-skill')
+    const activeSkillDir = join(configPaths.getWorkspaceSkillsDir(workspace.slug), 'alipay-payment-skill')
+
+    mkdirSync(officialSkillDir, { recursive: true })
+    writeFileSync(
+      join(officialSkillDir, 'SKILL.md'),
+      '---\nname: alipay-payment-skill\nversion: 0.0.6\n---\n由 Rust 自动轮询。\n',
+      'utf-8',
+    )
+    mkdirSync(activeSkillDir, { recursive: true })
+    writeFileSync(
+      join(activeSkillDir, 'SKILL.md'),
+      '---\nname: alipay-payment-skill\nversion: 0.0.1\n---\n旧规则。\n',
+      'utf-8',
+    )
+
+    manager.upgradeDefaultSkillsInWorkspaces()
+
+    expect(readFileSync(join(activeSkillDir, 'SKILL.md'), 'utf-8')).toContain('由 Rust 自动轮询。')
   })
 })
 

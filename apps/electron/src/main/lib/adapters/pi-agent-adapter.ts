@@ -62,6 +62,7 @@ import { createCodexFastModeExtension, withCodexFastModeServiceTier } from './pi
 import { createOpenAIReasoningRequestExtension } from './pi-openai-reasoning-request-settings'
 import { buildPiBrowserAgentTools } from './pi-browser-agent-tools'
 import { buildPiAlipayBotTools } from './pi-alipay-bot-tool'
+import { buildPiWorkingPaymentTools } from './pi-working-payment-tool'
 import { createRustBashToolOperations, createRustFileToolOperations } from './pi-rust-file-tools'
 import { resolveDefaultPiExtensionEntries } from './pi-default-extensions'
 import { mergeRuntimeEnv, type AgentRuntimeEnv } from '../agent-runtime-env'
@@ -1331,6 +1332,7 @@ export function buildBuiltinToolDefinitions(
       })
       : []),
     ...buildPiAlipayBotTools(sdk, { sessionId: options.sessionId }),
+    ...buildPiWorkingPaymentTools(sdk),
   ] as unknown as ToolDefinition[]
 
   if (rustFileTools) {

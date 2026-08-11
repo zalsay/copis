@@ -52,6 +52,7 @@ SKIP_PUBLISH=0
 RUST_ONLY="${COPIS_RUST_ONLY:-0}"
 OFFICECLI_ONLY="${COPIS_OFFICECLI_ONLY:-0}"
 NODE_RUNTIME_ONLY="${COPIS_NODE_RUNTIME_ONLY:-0}"
+ALIPAY_BOT_ONLY="${COPIS_ALIPAY_BOT_ONLY:-0}"
 PLATFORM="${COPIS_MODULE_PLATFORM:-}"
 ARCH="${COPIS_MODULE_ARCH:-}"
 CHANNEL="${COPIS_MODULE_CHANNEL:-stable}"
@@ -65,6 +66,8 @@ OFFICECLI_VERSION="${COPIS_OFFICECLI_VERSION:-}"
 NODE_RUNTIME_ARCHIVE="${COPIS_NODE_RUNTIME_ARCHIVE:-}"
 NODE_RUNTIME_VERSION="${COPIS_NODE_RUNTIME_VERSION:-}"
 NODE_RUNTIME_SOURCE="${COPIS_NODE_RUNTIME_SOURCE:-}"
+ALIPAY_BOT_ARCHIVE="${COPIS_ALIPAY_BOT_ARCHIVE:-}"
+ALIPAY_BOT_VERSION="${COPIS_ALIPAY_BOT_VERSION:-}"
 
 fail() {
   echo "[Copis] $*" >&2
@@ -82,9 +85,10 @@ show_help() {
   --skip-install       跳过 bun install --frozen-lockfile
   --build-app          同时构建当前平台 Electron 应用包
   --skip-rust-build    使用已有 Rust 二进制
-  --rust               只发布 Rust HTTP API，保留 COS 中已有 Node.js runtime 与 OfficeCLI；缺失 Node.js runtime 时先发布 Rust，随后用 --node-runtime 补齐
-  --officecli          只发布 OfficeCLI，保留 COS 中已有 Node.js runtime 与 Rust HTTP API
-  --node-runtime       只发布 Node.js runtime，保留 COS 中已有 Rust HTTP API 与 OfficeCLI
+  --rust               只发布 Rust HTTP API，保留 COS 中已有 Node.js runtime、OfficeCLI 与支付宝智能体 CLI；缺失 Node.js runtime 时先发布 Rust，随后用 --node-runtime 补齐
+  --officecli          只发布 OfficeCLI，保留 COS 中已有 Node.js runtime、Rust HTTP API 与支付宝智能体 CLI
+  --node-runtime       只发布 Node.js runtime，保留 COS 中已有 Rust HTTP API、OfficeCLI 与支付宝智能体 CLI
+  --alipay-bot         只发布官方支付宝智能体 CLI，保留 COS 中已有 Node.js runtime、Rust HTTP API 与 OfficeCLI
   --skip-publish       只构建二进制，不发布 COS
   --platform <name>    win32、darwin 或 linux
   --arch <name>        x64 或 arm64
@@ -98,6 +102,8 @@ show_help() {
   --officecli-version <version> 指定 OfficeCLI 模块版本，默认读取二进制版本
   --node-runtime-archive <path> 指定已打包的 Node.js runtime tar.gz
   --node-runtime-version <version> 指定 Node.js runtime 模块版本，默认使用功能模块版本
+  --alipay-bot-archive <path> 指定已打包的 alipay-bot tar.gz
+  --alipay-bot-version <version> 指定 alipay-bot 模块版本，默认读取官方 runtime 版本
   -h, --help           显示帮助
 EOF
 }
@@ -127,6 +133,9 @@ while [[ $# -gt 0 ]]; do
       ;;
     --node-runtime)
       NODE_RUNTIME_ONLY=1
+      ;;
+    --alipay-bot)
+      ALIPAY_BOT_ONLY=1
       ;;
     --skip-publish)
       SKIP_PUBLISH=1
@@ -191,6 +200,16 @@ while [[ $# -gt 0 ]]; do
       NODE_RUNTIME_VERSION="$2"
       shift
       ;;
+    --alipay-bot-archive)
+      require_value "$1" "${2:-}"
+      ALIPAY_BOT_ARCHIVE="$2"
+      shift
+      ;;
+    --alipay-bot-version)
+      require_value "$1" "${2:-}"
+      ALIPAY_BOT_VERSION="$2"
+      shift
+      ;;
     -h|--help)
       show_help
       exit 0
@@ -202,8 +221,8 @@ while [[ $# -gt 0 ]]; do
   shift
 done
 
-if [[ $((RUST_ONLY + OFFICECLI_ONLY + NODE_RUNTIME_ONLY)) -gt 1 ]]; then
-  fail '--rust、--officecli 与 --node-runtime 不能同时使用。'
+if [[ $((RUST_ONLY + OFFICECLI_ONLY + NODE_RUNTIME_ONLY + ALIPAY_BOT_ONLY)) -gt 1 ]]; then
+  fail '--rust、--officecli、--node-runtime 与 --alipay-bot 不能同时使用。'
 fi
 
 if ! command -v bun >/dev/null 2>&1; then
@@ -328,6 +347,22 @@ read_officecli_version() {
   fail "无法读取 OfficeCLI 版本：$binary"
 }
 
+read_alipay_bot_version() {
+  local archive runtime_metadata
+  archive="$1"
+  runtime_metadata="$(LC_ALL=C tar -xOf "$archive" ./runtime/package.json 2>/dev/null)"
+  if [[ -z "$runtime_metadata" ]]; then
+    fail "无法读取支付宝智能体 CLI 归档版本：$archive"
+  fi
+  "$BUN_BIN" -e '
+    const metadata = JSON.parse(process.argv[1])
+    if (typeof metadata.version !== "string" || !/^\d+\.\d+\.\d+/.test(metadata.version)) {
+      throw new Error("runtime package.json 缺少 version")
+    }
+    console.log(metadata.version)
+  ' "$runtime_metadata"
+}
+
 if [[ "$SKIP_INSTALL" -eq 0 ]]; then
   echo '[Copis] 正在按 bun.lock 安装依赖...'
   run_bun "$ROOT_DIR" 'Bun 依赖安装失败' install --frozen-lockfile
@@ -339,7 +374,7 @@ else
   DEFAULT_RUST_BINARY="$ROOT_DIR/native/http-api-server/target/release/copis-http-api-server"
 fi
 
-if [[ "$OFFICECLI_ONLY" != '1' && "$NODE_RUNTIME_ONLY" != '1' && "$SKIP_RUST_BUILD" -eq 0 ]]; then
+if [[ "$OFFICECLI_ONLY" != '1' && "$NODE_RUNTIME_ONLY" != '1' && "$ALIPAY_BOT_ONLY" != '1' && "$SKIP_RUST_BUILD" -eq 0 ]]; then
   if [[ "$PLATFORM" != "$CURRENT_PLATFORM" || "$ARCH" != "$CURRENT_ARCH" ]]; then
     fail 'deploy.sh 默认只能在当前平台和架构编译 Rust API；跨平台产物请传入 --skip-rust-build 和 --rust-binary。'
   fi
@@ -347,7 +382,7 @@ if [[ "$OFFICECLI_ONLY" != '1' && "$NODE_RUNTIME_ONLY" != '1' && "$SKIP_RUST_BUI
   run_bun "$APP_DIR" 'Rust HTTP API 构建失败' run build:http-api-server
 fi
 
-if [[ "$OFFICECLI_ONLY" != '1' && "$NODE_RUNTIME_ONLY" != '1' ]]; then
+if [[ "$OFFICECLI_ONLY" != '1' && "$NODE_RUNTIME_ONLY" != '1' && "$ALIPAY_BOT_ONLY" != '1' ]]; then
   if [[ -n "$RUST_BINARY" && "$RUST_BINARY" != /* ]]; then
     RUST_BINARY="$ROOT_DIR/$RUST_BINARY"
   fi
@@ -358,7 +393,7 @@ if [[ "$OFFICECLI_ONLY" != '1' && "$NODE_RUNTIME_ONLY" != '1' ]]; then
   RUST_BINARY="$(cd "$(dirname "$RUST_BINARY")" && pwd)/$(basename "$RUST_BINARY")"
 fi
 
-if [[ "$RUST_ONLY" != '1' && "$NODE_RUNTIME_ONLY" != '1' ]]; then
+if [[ "$RUST_ONLY" != '1' && "$NODE_RUNTIME_ONLY" != '1' && "$ALIPAY_BOT_ONLY" != '1' ]]; then
   if [[ -n "$OFFICECLI_BINARY" && "$OFFICECLI_BINARY" != /* ]]; then
     OFFICECLI_BINARY="$ROOT_DIR/$OFFICECLI_BINARY"
   fi
@@ -378,7 +413,7 @@ if [[ "$RUST_ONLY" != '1' && "$NODE_RUNTIME_ONLY" != '1' ]]; then
   OFFICECLI_VERSION="${OFFICECLI_VERSION:-$(read_officecli_version "$OFFICECLI_BINARY")}"
 fi
 
-if [[ "$RUST_ONLY" != '1' && "$OFFICECLI_ONLY" != '1' ]]; then
+if [[ "$RUST_ONLY" != '1' && "$OFFICECLI_ONLY" != '1' && "$ALIPAY_BOT_ONLY" != '1' ]]; then
   if [[ "$PLATFORM" != "$CURRENT_PLATFORM" || "$ARCH" != "$CURRENT_ARCH" ]]; then
     fail 'Node.js runtime 必须在目标平台和架构构建，跨平台请传入 --node-runtime-archive。'
   fi
@@ -393,6 +428,30 @@ if [[ "$RUST_ONLY" != '1' && "$OFFICECLI_ONLY" != '1' ]]; then
     fail "未找到 Node.js runtime 归档：$NODE_RUNTIME_ARCHIVE"
   fi
   NODE_RUNTIME_VERSION="${NODE_RUNTIME_VERSION:-$VERSION}"
+fi
+
+if [[ "$RUST_ONLY" != '1' && "$OFFICECLI_ONLY" != '1' && "$NODE_RUNTIME_ONLY" != '1' ]]; then
+  if [[ -n "$ALIPAY_BOT_ARCHIVE" && "$ALIPAY_BOT_ARCHIVE" != /* ]]; then
+    ALIPAY_BOT_ARCHIVE="$ROOT_DIR/$ALIPAY_BOT_ARCHIVE"
+  fi
+  if [[ -z "$ALIPAY_BOT_ARCHIVE" ]]; then
+    ALIPAY_BOT_ARCHIVE="$APP_DIR/resources/alipay-bot/${PLATFORM}-${ARCH}.tar.gz"
+  fi
+  if [[ ! -f "$ALIPAY_BOT_ARCHIVE" || "${COPIS_REFRESH_ALIPAY_BOT_CLI:-0}" == '1' ]]; then
+    if [[ "$PLATFORM" != "$CURRENT_PLATFORM" || "$ARCH" != "$CURRENT_ARCH" ]]; then
+      fail '支付宝智能体 CLI 必须在目标平台和架构准备，跨平台请传入 --alipay-bot-archive。'
+    fi
+    ALIPAY_BOT_METADATA="$(mktemp "${TMPDIR:-/tmp}/copis-alipay-bot-metadata.XXXXXX")"
+    echo '[Copis] 正在通过官方安装器准备支付宝智能体 CLI 功能模块...'
+    run_bun "$ROOT_DIR" '支付宝智能体 CLI 功能模块准备失败' run prepare:alipay-bot-module -- \
+      --platform "$PLATFORM" --arch "$ARCH" --output "$ALIPAY_BOT_ARCHIVE" --metadata "$ALIPAY_BOT_METADATA"
+    ALIPAY_BOT_VERSION="${ALIPAY_BOT_VERSION:-$(cd "$ROOT_DIR" && "$BUN_BIN" -e 'const metadata = JSON.parse(await Bun.file(process.argv[1]).text()); console.log(metadata.version)' "$ALIPAY_BOT_METADATA")}"
+    rm -f "$ALIPAY_BOT_METADATA"
+  fi
+  if [[ ! -f "$ALIPAY_BOT_ARCHIVE" ]]; then
+    fail "未找到支付宝智能体 CLI 归档：$ALIPAY_BOT_ARCHIVE"
+  fi
+  ALIPAY_BOT_VERSION="${ALIPAY_BOT_VERSION:-$(read_alipay_bot_version "$ALIPAY_BOT_ARCHIVE")}"
 fi
 
 if [[ "$BUILD_APP" -eq 1 ]]; then
@@ -423,14 +482,17 @@ if [[ "$SKIP_PUBLISH" -eq 0 ]]; then
     --public-base-url "$PUBLIC_BASE_URL"
   )
   MANIFEST_OUTPUT="$APP_DIR/dist/functional-modules/manifest.json"
-  if [[ "$OFFICECLI_ONLY" != '1' && "$NODE_RUNTIME_ONLY" != '1' ]]; then
+  if [[ "$OFFICECLI_ONLY" != '1' && "$NODE_RUNTIME_ONLY" != '1' && "$ALIPAY_BOT_ONLY" != '1' ]]; then
     RELEASE_ARGS+=(--rust-binary "$RUST_BINARY")
   fi
-  if [[ "$RUST_ONLY" != '1' && "$NODE_RUNTIME_ONLY" != '1' ]]; then
+  if [[ "$RUST_ONLY" != '1' && "$NODE_RUNTIME_ONLY" != '1' && "$ALIPAY_BOT_ONLY" != '1' ]]; then
     RELEASE_ARGS+=(--officecli-binary "$OFFICECLI_BINARY" --officecli-version "$OFFICECLI_VERSION")
   fi
-  if [[ "$RUST_ONLY" != '1' && "$OFFICECLI_ONLY" != '1' ]]; then
+  if [[ "$RUST_ONLY" != '1' && "$OFFICECLI_ONLY" != '1' && "$ALIPAY_BOT_ONLY" != '1' ]]; then
     RELEASE_ARGS+=(--node-runtime-archive "$NODE_RUNTIME_ARCHIVE" --node-runtime-version "$NODE_RUNTIME_VERSION")
+  fi
+  if [[ "$RUST_ONLY" != '1' && "$OFFICECLI_ONLY" != '1' && "$NODE_RUNTIME_ONLY" != '1' ]]; then
+    RELEASE_ARGS+=(--alipay-bot-archive "$ALIPAY_BOT_ARCHIVE" --alipay-bot-version "$ALIPAY_BOT_VERSION")
   fi
   if [[ -n "$OBJECT_PREFIX_PATH" ]]; then
     RELEASE_ARGS+=(--prefix "$OBJECT_PREFIX_PATH")
@@ -443,6 +505,9 @@ if [[ "$SKIP_PUBLISH" -eq 0 ]]; then
   fi
   if [[ "$NODE_RUNTIME_ONLY" == '1' ]]; then
     RELEASE_ARGS+=(--node-runtime)
+  fi
+  if [[ "$ALIPAY_BOT_ONLY" == '1' ]]; then
+    RELEASE_ARGS+=(--alipay-bot)
   fi
 
   echo '[Copis] 正在生成功能模块 manifest...'

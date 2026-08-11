@@ -61,7 +61,6 @@ export {
   getWorkingPaymentCheckError,
   isWorkingPaymentCheckFailure,
   isWorkingVipDiamondPackage,
-  normalizeWorkingAlipayPagePayOrder,
   normalizeWorkingDiamondPackage,
   normalizeWorkingDiamondPackages,
   normalizeWorkingDiamondPurchaseResult,

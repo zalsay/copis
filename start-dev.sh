@@ -23,9 +23,57 @@ if [[ -x "$LOCAL_RUST_HTTP_API" ]]; then
   export COPIS_HTTP_API_SERVER="$LOCAL_RUST_HTTP_API"
 fi
 
+prepare_development_alipay_bot() {
+  local platform architecture archive_path module_dir node_path
+  if [[ -n "${COPIS_ALIPAY_BOT_CLI:-}" ]]; then
+    return
+  fi
+
+  case "$(uname -s)" in
+    Darwin) platform='darwin' ;;
+    Linux) platform='linux' ;;
+    *)
+      echo "[Copis] start-dev.sh 不支持当前操作系统的支付宝智能体 CLI：$(uname -s)" >&2
+      exit 1
+      ;;
+  esac
+  case "$(uname -m)" in
+    arm64|aarch64) architecture='arm64' ;;
+    x86_64|amd64) architecture='x64' ;;
+    *)
+      echo "[Copis] 不支持当前架构的支付宝智能体 CLI：$(uname -m)" >&2
+      exit 1
+      ;;
+  esac
+
+  archive_path="$ROOT_DIR/apps/electron/resources/alipay-bot/${platform}-${architecture}.tar.gz"
+  module_dir="${COPIS_DEV_ALIPAY_BOT_DIR:-$HOME/.copis-dev/alipay-bot/${platform}-${architecture}}"
+  if [[ ! -f "$archive_path" || "${COPIS_REFRESH_ALIPAY_BOT_CLI:-0}" == '1' ]]; then
+    echo '[Copis] 正在准备开发环境的官方支付宝智能体 CLI...'
+    bun run prepare:alipay-bot-module -- --platform "$platform" --arch "$architecture" --output "$archive_path"
+  fi
+
+  mkdir -p "$module_dir"
+  tar -xzf "$archive_path" -C "$module_dir"
+  if [[ ! -x "$module_dir/bin/alipay-bot" ]]; then
+    echo "[Copis] 开发环境支付宝智能体 CLI 入口无效：$module_dir/bin/alipay-bot" >&2
+    exit 1
+  fi
+  node_path="$(node -p 'process.execPath')"
+  if [[ ! -x "$node_path" ]]; then
+    echo '[Copis] 未找到开发环境支付宝智能体 CLI 所需的 Node.js。' >&2
+    exit 1
+  fi
+  export COPIS_ALIPAY_BOT_CLI="$module_dir/bin/alipay-bot"
+  export COPIS_ALIPAY_BOT_NODE="$node_path"
+}
+
+prepare_development_alipay_bot
+
 echo "[Copis] 启动 Electron dev"
 echo "[Copis] COPIS_BACKEND_URL=${COPIS_BACKEND_URL}"
 echo "[Copis] Vite=http://127.0.0.1:5174"
 echo "[Copis] HTTP API=http://127.0.0.1:${COPIS_HTTP_API_PORT}"
+echo "[Copis] Alipay CLI=${COPIS_ALIPAY_BOT_CLI}"
 
 exec bun run dev

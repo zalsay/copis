@@ -1253,16 +1253,6 @@ export function registerIpcHandlers(): void {
     return getWorkingApiClient().cancelDiamondPayment(paymentId)
   })
 
-  ipcMain.handle(WORKING_IPC_CHANNELS.CREATE_ALIPAY_PAGE_PAY_ORDER, async (_, packageId: number) => {
-    if (!Number.isSafeInteger(packageId) || packageId <= 0) throw new Error('套餐 ID 不正确')
-    return getWorkingApiClient().createAlipayPagePayOrder(packageId)
-  })
-
-  ipcMain.handle(WORKING_IPC_CHANNELS.CHECK_ALIPAY_PAGE_PAY_ORDER, async (_, paymentId: WorkingPaymentIdentifier) => {
-    if (!isWorkingPaymentIdentifier(paymentId)) throw new Error('支付订单 ID 不正确')
-    return getWorkingApiClient().checkAlipayPagePayOrder(paymentId)
-  })
-
   // ===== 运行时相关 =====
 
   // 获取运行时状态

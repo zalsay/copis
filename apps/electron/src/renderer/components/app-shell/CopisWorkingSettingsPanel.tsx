@@ -42,6 +42,7 @@ import { MigrationSettings } from '@/components/settings/MigrationSettings'
 import { StorageSettings } from '@/components/settings/StorageSettings'
 import { VoiceInputSettings } from '@/components/settings/VoiceInputSettings'
 import { formatWorkingLedgerDescription, isWorkingModelDeduction } from '@/lib/working-ledger'
+import { useStartCopisDiamondPurchase } from '@/hooks/useStartCopisDiamondPurchase'
 import { CopisWorkingMessageSettingsPanel } from './CopisWorkingMessageSettingsPanel'
 import { CopisWorkingOrdersPanel } from './CopisWorkingOrdersPanel'
 import { CopisWorkingPaymentModal } from './CopisWorkingPaymentModal'
@@ -120,6 +121,7 @@ export function CopisWorkingSettingsPanel({ onClose }: CopisWorkingSettingsPanel
   const paymentRefresh = useAtomValue(workingPaymentRefreshAtom)
   const paymentNotice = useAtomValue(workingPaymentNoticeAtom)
   const setPaymentNotice = useSetAtom(workingPaymentNoticeAtom)
+  const startCopisDiamondPurchase = useStartCopisDiamondPurchase()
   const paymentRefreshRef = React.useRef(paymentRefresh)
   const [settings, setSettings] = React.useState<WorkingSettingsSnapshot | null>(null)
   const [activeSection, setActiveSection] = useAtom(workingSettingsSectionAtom)
@@ -329,7 +331,10 @@ export function CopisWorkingSettingsPanel({ onClose }: CopisWorkingSettingsPanel
           </div>
         </main>
       </div>
-      <CopisWorkingPaymentModal vipStatus={settings?.vip ?? null} />
+      <CopisWorkingPaymentModal
+        vipStatus={settings?.vip ?? null}
+        onStartDiamondPurchase={startCopisDiamondPurchase}
+      />
     </div>
   )
 }

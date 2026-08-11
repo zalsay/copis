@@ -1,5 +1,6 @@
 use crate::agent_files::AgentFilePolicyStore;
 use crate::payment_capability::PaymentCapabilityStore;
+use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
 use std::env;
@@ -13,6 +14,8 @@ const DEFAULT_AGENT_NAME: &str = "Copis";
 const DEFAULT_ALIPAY_BOT_COMMAND: &str = "alipay-bot";
 const MAX_ARGUMENT_BYTES: usize = 1024 * 1024;
 const MAX_TEXT_BYTES: usize = 4 * 1024;
+const MAX_QR_CODE_BYTES: u64 = 1024 * 1024;
+const ALIPAY_BOT_MEDIA_ROOT: &str = "/tmp/openclaw/alipay-bot-cli";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum AlipayBotAction {
@@ -111,8 +114,11 @@ pub struct AlipayBotOutput {
     pub trade_no: Option<String>,
     pub out_shake_no: Option<String>,
     pub cashier_url: Option<String>,
+    pub access_url: Option<String>,
     pub status: Option<String>,
     pub qr_code_path: Option<String>,
+    pub qr_code_image: Option<String>,
+    pub qr_code_mime_type: Option<String>,
     pub payment_proof: Option<String>,
     pub client_session: Option<String>,
     pub raw: Option<String>,
@@ -159,8 +165,17 @@ impl AlipayBotOutput {
         if let Some(cashier_url) = self.cashier_url.as_deref() {
             value.insert("cashierUrl".to_string(), json!(cashier_url));
         }
+        if let Some(access_url) = self.access_url.as_deref() {
+            value.insert("accessUrl".to_string(), json!(access_url));
+        }
         if let Some(status) = self.status.as_deref() {
             value.insert("status".to_string(), json!(status));
+        }
+        if let Some(qr_code_image) = self.qr_code_image.as_deref() {
+            value.insert("qrCodeImage".to_string(), json!(qr_code_image));
+        }
+        if let Some(qr_code_mime_type) = self.qr_code_mime_type.as_deref() {
+            value.insert("qrCodeMimeType".to_string(), json!(qr_code_mime_type));
         }
         if include_payment_secrets {
             if let Some(payment_proof) = self.payment_proof.as_deref() {
@@ -537,12 +552,14 @@ fn execute_alipay_bot_with_home(
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
-    let text = if stdout.trim().is_empty() {
-        stderr.as_ref()
-    } else {
-        stdout.as_ref()
-    };
-    let sanitized = sanitize_alipay_output(text);
+    // 官方 CLI 会把结构化结果和 MEDIA 行分别写入 stdout、stderr，必须合并解析。
+    let combined_output = format!("{stdout}\n{stderr}");
+    let mut sanitized = sanitize_alipay_output(&combined_output);
+    if let Some(qr_code_image) = read_qr_code_data_url(&combined_output, &tmp_dir) {
+        sanitized.qr_code_mime_type =
+            qr_code_data_url_mime_type(&qr_code_image).map(str::to_string);
+        sanitized.qr_code_image = Some(qr_code_image);
+    }
     if !output.status.success() {
         let message = sanitized
             .message
@@ -586,10 +603,74 @@ pub fn sanitize_alipay_output(raw: &str) -> AlipayBotOutput {
     if output.cashier_url.is_none() {
         output.cashier_url = extract_http_url(raw);
     }
+    if output.access_url.is_none() {
+        output.access_url = extract_wallet_access_url(raw);
+    }
     // CLI 路径和原始输出只允许在进程内部存在；支付 proof 由受控 capability 响应单独返回 Rust。
     output.qr_code_path = None;
     output.raw = None;
     output
+}
+
+/// 只接受本次 CLI 临时目录或官方 CLI 固定媒体目录中的常规图片，避免 MEDIA 行被伪造后读取任意本地文件。
+fn read_qr_code_data_url(raw: &str, tmp_dir: &Path) -> Option<String> {
+    let media_path = raw.lines().find_map(|line| {
+        line.trim()
+            .strip_prefix("MEDIA:")
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(PathBuf::from)
+    })?;
+    let candidate = if media_path.is_absolute() {
+        media_path
+    } else {
+        tmp_dir.join(media_path)
+    };
+    let canonical_image = fs::canonicalize(candidate).ok()?;
+    let canonical_tmp_dir = fs::canonicalize(tmp_dir).ok();
+    let canonical_media_root = fs::canonicalize(ALIPAY_BOT_MEDIA_ROOT).ok();
+    let is_allowed = canonical_tmp_dir
+        .as_ref()
+        .is_some_and(|root| canonical_image.starts_with(root))
+        || canonical_media_root
+            .as_ref()
+            .is_some_and(|root| canonical_image.starts_with(root));
+    if !is_allowed {
+        return None;
+    }
+    let metadata = fs::metadata(&canonical_image).ok()?;
+    if !metadata.is_file() || metadata.len() == 0 || metadata.len() > MAX_QR_CODE_BYTES {
+        return None;
+    }
+    let bytes = fs::read(canonical_image).ok()?;
+    let mime_type = qr_code_mime_type(&bytes)?;
+    Some(format!(
+        "data:{};base64,{}",
+        mime_type,
+        BASE64_STANDARD.encode(bytes)
+    ))
+}
+
+fn qr_code_mime_type(bytes: &[u8]) -> Option<&'static str> {
+    if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+        return Some("image/png");
+    }
+    if bytes.starts_with(&[0xff, 0xd8, 0xff]) {
+        return Some("image/jpeg");
+    }
+    if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") {
+        return Some("image/gif");
+    }
+    if bytes.len() >= 12 && &bytes[..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
+        return Some("image/webp");
+    }
+    None
+}
+
+fn qr_code_data_url_mime_type(value: &str) -> Option<&'static str> {
+    ["image/png", "image/jpeg", "image/gif", "image/webp"]
+        .into_iter()
+        .find(|mime_type| value.starts_with(&format!("data:{};base64,", mime_type)))
 }
 
 fn extract_markdown_trade_no(raw: &str) -> Option<String> {
@@ -635,6 +716,13 @@ fn extract_http_url(raw: &str) -> Option<String> {
         .find_map(sanitize_http_url)
 }
 
+/// 官方钱包 CLI 会把授权链接放在“开启支付宝支付功能”这类 Markdown 行中，单独映射为 accessUrl。
+fn extract_wallet_access_url(raw: &str) -> Option<String> {
+    raw.lines()
+        .filter(|line| line.contains("开启") || line.contains("授权") || line.contains("绑定"))
+        .find_map(extract_http_url)
+}
+
 fn merge_alipay_output_json(output: &mut AlipayBotOutput, value: &Value) {
     merge_alipay_output_json_at_depth(output, value, 0);
 }
@@ -669,6 +757,9 @@ fn merge_alipay_output_json_at_depth(output: &mut AlipayBotOutput, value: &Value
             &["cashierUrl", "cashier_url", "paymentUrl", "payment_url"],
         )
         .and_then(|value| sanitize_http_url(&value))
+    });
+    output.access_url = output.access_url.take().or_else(|| {
+        get_string(object, &["accessUrl", "access_url"]).and_then(|value| sanitize_http_url(&value))
     });
     output.status = output
         .status
@@ -789,9 +880,12 @@ fn sanitize_text(value: &str) -> Option<String> {
 }
 
 fn sanitize_http_url(value: &str) -> Option<String> {
-    let value = value
-        .trim()
-        .trim_matches(|character| matches!(character, '"' | '\'' | '`' | ')' | ']' | '}' | ','));
+    let value = value.trim().trim_matches(|character| {
+        matches!(
+            character,
+            '"' | '\'' | '`' | '(' | ')' | '[' | ']' | '<' | '>' | '}' | ','
+        )
+    });
     if (value.starts_with("https://") || value.starts_with("http://"))
         && !value.chars().any(char::is_whitespace)
         && value.len() <= MAX_TEXT_BYTES

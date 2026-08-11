@@ -21,8 +21,9 @@ const publicBaseUrl = getOption('--public-base-url') ?? process.env.COS_PUBLIC_B
 const rustOnly = hasFlag('--rust') || process.env.COPIS_RUST_ONLY === '1'
 const officeCliOnly = hasFlag('--officecli') || process.env.COPIS_OFFICECLI_ONLY === '1'
 const nodeRuntimeOnly = hasFlag('--node-runtime') || process.env.COPIS_NODE_RUNTIME_ONLY === '1'
-if (Number(rustOnly) + Number(officeCliOnly) + Number(nodeRuntimeOnly) > 1) {
-  throw new Error('--rust、--officecli 与 --node-runtime 不能同时使用')
+const alipayBotOnly = hasFlag('--alipay-bot') || process.env.COPIS_ALIPAY_BOT_ONLY === '1'
+if (Number(rustOnly) + Number(officeCliOnly) + Number(nodeRuntimeOnly) + Number(alipayBotOnly) > 1) {
+  throw new Error('--rust、--officecli、--node-runtime 与 --alipay-bot 不能同时使用')
 }
 const prefix = resolveFunctionalModulePrefix({
   cliPrefix: getOption('--prefix'),
@@ -39,7 +40,7 @@ if (!publicBaseUrl) throw new Error('缺少 COS_PUBLIC_BASE_URL 或 --public-bas
 
 const modules: FunctionalModuleBinaryInput[] = []
 
-if (!officeCliOnly && !nodeRuntimeOnly) {
+if (!officeCliOnly && !nodeRuntimeOnly && !alipayBotOnly) {
   const rustBinary = getOption('--rust-binary')
     ?? process.env.COPIS_RUST_HTTP_API_BINARY
     ?? join(repoRoot, 'native/http-api-server/target/release', binaryName('copis-http-api-server', platform))
@@ -53,7 +54,7 @@ if (!officeCliOnly && !nodeRuntimeOnly) {
   })
 }
 
-if (!rustOnly && !nodeRuntimeOnly) {
+if (!rustOnly && !nodeRuntimeOnly && !alipayBotOnly) {
   const officeCliBinary = getOption('--officecli-binary')
     ?? process.env.COPIS_OFFICECLI_BINARY
     ?? join(electronDir, 'resources/bin', binaryName('officecli', platform))
@@ -67,7 +68,7 @@ if (!rustOnly && !nodeRuntimeOnly) {
   })
 }
 
-if (!rustOnly && !officeCliOnly) {
+if (!rustOnly && !officeCliOnly && !alipayBotOnly) {
   const nodeRuntimeArchive = getOption('--node-runtime-archive')
     ?? process.env.COPIS_NODE_RUNTIME_ARCHIVE
     ?? join(electronDir, 'resources/node-runtime', `${platform}-${arch}.tar.gz`)
@@ -79,6 +80,22 @@ if (!rustOnly && !officeCliOnly) {
     binaryPath: nodeRuntimeArchive,
     format: 'tar.gz',
     entrypoint: `bin/${binaryName('node', platform)}`,
+    required: true,
+  })
+}
+
+if (!rustOnly && !officeCliOnly && !nodeRuntimeOnly) {
+  const alipayBotArchive = getOption('--alipay-bot-archive')
+    ?? process.env.COPIS_ALIPAY_BOT_ARCHIVE
+    ?? join(electronDir, 'resources/alipay-bot', `${platform}-${arch}.tar.gz`)
+  modules.push({
+    module: 'alipay-bot',
+    version: getOption('--alipay-bot-version') ?? process.env.COPIS_ALIPAY_BOT_VERSION ?? version,
+    platform,
+    arch,
+    binaryPath: alipayBotArchive,
+    format: 'tar.gz',
+    entrypoint: `bin/${platform === 'win32' ? 'alipay-bot.cmd' : 'alipay-bot'}`,
     required: true,
   })
 }

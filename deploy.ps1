@@ -3,7 +3,7 @@
     构建并发布 Copis 功能模块。
 
 .DESCRIPTION
-    默认构建并发布 Node.js runtime、Rust HTTP API 与 OfficeCLI。使用单模块
+    默认构建并发布 Node.js runtime、Rust HTTP API、OfficeCLI 与支付宝智能体 CLI。使用单模块
     参数可以只发布对应的功能模块；多个单模块模式不能同时启用。
 
 .PARAMETER RustOnly
@@ -23,6 +23,7 @@ param(
     [switch]$RustOnly,
     [switch]$OfficeCliOnly,
     [switch]$NodeRuntimeOnly,
+    [switch]$AlipayBotOnly,
     [ValidateSet('win32', 'darwin', 'linux')]
     [string]$Platform = 'win32',
     [ValidateSet('x64', 'arm64')]
@@ -36,7 +37,9 @@ param(
     [string]$OfficeCliBinary,
     [string]$OfficeCliVersion,
     [string]$NodeRuntimeArchive,
-    [string]$NodeRuntimeVersion
+    [string]$NodeRuntimeVersion,
+    [string]$AlipayBotArchive,
+    [string]$AlipayBotVersion
 )
 
 $ErrorActionPreference = 'Stop'
@@ -46,6 +49,7 @@ foreach ($argument in $LegacyArguments) {
         '--rust' { $RustOnly = $true }
         '--officecli' { $OfficeCliOnly = $true }
         '--node-runtime' { $NodeRuntimeOnly = $true }
+        '--alipay-bot' { $AlipayBotOnly = $true }
         '--build-app' { $BuildApp = $true }
         '--skip-install' { $SkipInstall = $true }
         '--skip-rust-build' { $SkipRustBuild = $true }
@@ -104,8 +108,8 @@ function Import-DotEnvFile {
 
 Import-DotEnvFile -Path (Join-Path $rootDir '.env')
 
-if ((@($RustOnly, $OfficeCliOnly, $NodeRuntimeOnly) | Where-Object { $_ }).Count -gt 1) {
-    throw '-RustOnly、-OfficeCliOnly 与 -NodeRuntimeOnly 不能同时使用。'
+if ((@($RustOnly, $OfficeCliOnly, $NodeRuntimeOnly, $AlipayBotOnly) | Where-Object { $_ }).Count -gt 1) {
+    throw '-RustOnly、-OfficeCliOnly、-NodeRuntimeOnly 与 -AlipayBotOnly 不能同时使用。'
 }
 
 if (-not (Test-Path -LiteralPath (Join-Path $rootDir 'package.json') -PathType Leaf)) {
@@ -195,7 +199,7 @@ if (-not $SkipInstall) {
 
 
 $rustBinaryPath = $null
-if (-not $OfficeCliOnly -and -not $NodeRuntimeOnly) {
+if (-not $OfficeCliOnly -and -not $NodeRuntimeOnly -and -not $AlipayBotOnly) {
     $defaultRustBinary = if ($Platform -eq 'win32') {
         Join-Path $rootDir 'native\http-api-server\target\release\copis-http-api-server.exe'
     } else {
@@ -230,7 +234,7 @@ if (-not $OfficeCliOnly -and -not $NodeRuntimeOnly) {
 
 $officeCliBinaryPath = $null
 $officeCliVersionValue = $null
-if (-not $RustOnly -and -not $NodeRuntimeOnly) {
+if (-not $RustOnly -and -not $NodeRuntimeOnly -and -not $AlipayBotOnly) {
     $defaultOfficeCliBinary = Join-Path $appDir 'resources\bin\officecli'
     if ($Platform -eq 'win32') {
         $defaultOfficeCliBinary = "$defaultOfficeCliBinary.exe"
@@ -266,7 +270,7 @@ if (-not $RustOnly -and -not $NodeRuntimeOnly) {
 
 $nodeRuntimeArchivePath = $null
 $nodeRuntimeVersionValue = $null
-if (-not $RustOnly -and -not $OfficeCliOnly) {
+if (-not $RustOnly -and -not $OfficeCliOnly -and -not $AlipayBotOnly) {
     $nodeRuntimeArchiveInput = if ([string]::IsNullOrWhiteSpace($NodeRuntimeArchive)) {
         $env:COPIS_NODE_RUNTIME_ARCHIVE
     } else {
@@ -301,6 +305,49 @@ if (-not $RustOnly -and -not $OfficeCliOnly) {
     }
 }
 
+$alipayBotArchivePath = $null
+$alipayBotVersionValue = $null
+if (-not $RustOnly -and -not $OfficeCliOnly -and -not $NodeRuntimeOnly) {
+    $alipayBotArchiveInput = if ([string]::IsNullOrWhiteSpace($AlipayBotArchive)) {
+        $env:COPIS_ALIPAY_BOT_ARCHIVE
+    } else {
+        $AlipayBotArchive.Trim()
+    }
+    $alipayBotArchivePath = if ([string]::IsNullOrWhiteSpace($alipayBotArchiveInput)) {
+        Join-Path $appDir "resources\alipay-bot\$Platform-$Arch.tar.gz"
+    } elseif ([System.IO.Path]::IsPathRooted($alipayBotArchiveInput)) {
+        $alipayBotArchiveInput
+    } else {
+        Join-Path $rootDir $alipayBotArchiveInput
+    }
+    if (-not (Test-Path -LiteralPath $alipayBotArchivePath -PathType Leaf)) {
+        if ($Platform -ne 'win32' -or $Arch -ne 'x64') {
+            throw '支付宝智能体 CLI 必须在目标平台和架构准备，跨平台请提供 -AlipayBotArchive。'
+        }
+        $alipayBotMetadataPath = Join-Path ([System.IO.Path]::GetTempPath()) "copis-alipay-bot-$([Guid]::NewGuid().ToString('N')).json"
+        Write-Host '正在通过官方安装器准备支付宝智能体 CLI 功能模块...'
+        Invoke-BunCommand `
+            -WorkingDirectory $rootDir `
+            -Arguments @('run', 'prepare:alipay-bot-module', '--', '--platform', $Platform, '--arch', $Arch, '--output', $alipayBotArchivePath, '--metadata', $alipayBotMetadataPath) `
+            -FailureMessage '支付宝智能体 CLI 功能模块准备失败'
+        $alipayBotMetadata = Get-Content -LiteralPath $alipayBotMetadataPath -Raw | ConvertFrom-Json
+        Remove-Item -LiteralPath $alipayBotMetadataPath -Force
+        $alipayBotVersionValue = [string]$alipayBotMetadata.version
+    }
+    $alipayBotArchivePath = (Resolve-Path -LiteralPath $alipayBotArchivePath).Path
+    if ([string]::IsNullOrWhiteSpace($alipayBotVersionValue)) {
+        $alipayBotVersionValue = if ([string]::IsNullOrWhiteSpace($AlipayBotVersion)) {
+            if ([string]::IsNullOrWhiteSpace($env:COPIS_ALIPAY_BOT_VERSION)) {
+                $releaseVersion
+            } else {
+                $env:COPIS_ALIPAY_BOT_VERSION.Trim()
+            }
+        } else {
+            $AlipayBotVersion.Trim()
+        }
+    }
+}
+
 if ($BuildApp) {
     Write-Host '正在构建 Electron Windows 应用（默认构建不包含 Rust API 与 COS 发布）...'
     if (-not (Test-Path -LiteralPath $buildScriptPath -PathType Leaf)) {
@@ -331,17 +378,20 @@ if (-not $SkipPublish) {
         '--client-min-version', $minimumClientVersion,
         '--public-base-url', $resolvedPublicBaseUrl
     )
-    if (-not $OfficeCliOnly -and -not $NodeRuntimeOnly) {
+    if (-not $OfficeCliOnly -and -not $NodeRuntimeOnly -and -not $AlipayBotOnly) {
         $releaseArguments += @('--rust-binary', $rustBinaryPath)
     }
-    if (-not $RustOnly -and -not $NodeRuntimeOnly) {
+    if (-not $RustOnly -and -not $NodeRuntimeOnly -and -not $AlipayBotOnly) {
         $releaseArguments += @(
             '--officecli-binary', $officeCliBinaryPath,
             '--officecli-version', $officeCliVersionValue
         )
     }
-    if (-not $RustOnly -and -not $OfficeCliOnly) {
+    if (-not $RustOnly -and -not $OfficeCliOnly -and -not $AlipayBotOnly) {
         $releaseArguments += @('--node-runtime-archive', $nodeRuntimeArchivePath, '--node-runtime-version', $nodeRuntimeVersionValue)
+    }
+    if (-not $RustOnly -and -not $OfficeCliOnly -and -not $NodeRuntimeOnly) {
+        $releaseArguments += @('--alipay-bot-archive', $alipayBotArchivePath, '--alipay-bot-version', $alipayBotVersionValue)
     }
     if (-not [string]::IsNullOrWhiteSpace($ObjectPrefixPath)) {
         $releaseArguments += @('--prefix', $ObjectPrefixPath.Trim())
@@ -354,6 +404,9 @@ if (-not $SkipPublish) {
     }
     if ($NodeRuntimeOnly) {
         $releaseArguments += '--node-runtime'
+    }
+    if ($AlipayBotOnly) {
+        $releaseArguments += '--alipay-bot'
     }
 
     $manifestPath = Join-Path $appDir 'dist\functional-modules\manifest.json'
@@ -379,6 +432,9 @@ if (-not $SkipPublish) {
     }
     if ($nodeRuntimeArchivePath) {
         Write-Host "  Node.js runtime：$nodeRuntimeArchivePath（版本：$nodeRuntimeVersionValue）"
+    }
+    if ($alipayBotArchivePath) {
+        Write-Host "  支付宝智能体 CLI：$alipayBotArchivePath（版本：$alipayBotVersionValue）"
     }
     if (Test-Path -LiteralPath $manifestPath -PathType Leaf) {
         Write-Host "  Manifest：$manifestPath"

@@ -161,21 +161,42 @@ describe('默认 Skills 清单', () => {
     expect(references).toContain('categories.md')
   })
 
-  test('支付宝买家 Skill 使用 Rust capability 并与 Working 支付链路隔离', () => {
-    const frontmatter = readFrontmatter('alipay-ai-buyer-agent')
-    expect(frontmatter.get('name')).toBe('alipay-ai-buyer-agent')
-    expect(frontmatter.get('displayName')).toBe('支付宝买家支付')
-    expect(frontmatter.get('group')).toBe('系统内置')
-    expect(frontmatter.get('version')?.replace(/^['"]|['"]$/g, '')).toMatch(/^\d+\.\d+\.\d+$/)
+  test('支付宝官方支付 Skill 保持发布元数据和完整支付引用', () => {
+    const bundled = new Set(bundledSkillSlugs())
+    expect(bundled.has('alipay-ai-buyer-agent')).toBe(false)
+    expect(bundled.has('alipay-payment-skill')).toBe(true)
+    expect(bundled.has('alipay-authenticate-wallet')).toBe(true)
 
-    const content = readFileSync(join(DEFAULT_SKILLS_DIR, 'alipay-ai-buyer-agent', 'SKILL.md'), 'utf8')
-    expect(content).toContain('alipay_bot')
+    const frontmatter = readFrontmatter('alipay-payment-skill')
+    expect(frontmatter.get('name')).toBe('alipay-payment-skill')
+    expect(frontmatter.get('displayName')).toBe('支付宝官方支付')
+    expect(frontmatter.get('group')).toBe('系统内置')
+    expect(frontmatter.get('version')?.replace(/^['"]|['"]$/g, '')).toBe('0.0.6')
+
+    const content = readFileSync(join(DEFAULT_SKILLS_DIR, 'alipay-payment-skill', 'SKILL.md'), 'utf8')
+    expect(content).toContain('https://github.com/alipay/payment-skills')
+    expect(content).toContain('@alipay/agent-payment@1.0.3')
     expect(content).toContain('402 Payment Required')
+    expect(content).toContain('alipay-authenticate-wallet')
+    expect(content).toContain('copis_working_payment')
+    expect(content).toContain('packages.list')
     expect(content).toContain('wallet.check')
-    expect(content).toContain('payment.check')
-    expect(content).toContain('payment.ack')
-    expect(content).toContain('Rust API -> edu-api')
-    expect(content).toContain('设置页的 VIP/钻石购买不使用本 Skill')
-    expect(content).toContain('禁止使用 Bash')
+    expect(content).toContain('accessUrl')
+
+    const walletSkill = readFrontmatter('alipay-authenticate-wallet')
+    expect(walletSkill.get('displayName')).toBe('支付宝钱包开通')
+    expect(walletSkill.get('version')?.replace(/^['"]|['"]$/g, '')).toBe('0.0.1')
+
+    const references = readdirSync(join(DEFAULT_SKILLS_DIR, 'alipay-payment-skill', 'references')).sort()
+    expect(references).toEqual([
+      '402-payment.md',
+      'cashier-payment.md',
+      'cli-setup.md',
+      'env-vars.md',
+      'feedback.md',
+      'image-output.md',
+      'output-rules.md',
+      'security.md',
+    ])
   })
 })

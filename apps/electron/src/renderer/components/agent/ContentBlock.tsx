@@ -22,6 +22,8 @@ import { MessageResponse } from '@/components/ai-elements/message'
 import { getToolIcon, extractFilePath } from './tool-utils'
 import { getToolPhrase } from './tool-phrase'
 import { ToolResultRenderer } from './tool-result-renderers'
+import { AlipayBotQrCode, parseAlipayBotResult } from './tool-result-renderers/alipay-bot-result'
+import { parseWorkingPaymentResult } from './tool-result-renderers/working-payment-result'
 import { PreviewOpenButton } from './tool-result-renderers/preview-open-button'
 import { getTaskGetStatusLabel, parseTaskGetResult, type ParsedTaskGetResult } from './tool-result-renderers/task-get-result'
 import { parseTaskListResult, type ParsedTaskListItem } from './tool-result-renderers/task-list-result'
@@ -346,6 +348,14 @@ function ToolUseBlock({ block, allMessages, animate = false, index = 0, dimmed =
     if (block.name !== 'TaskList' || !resultText || isError) return null
     return parseTaskListResult(resultText)
   }, [block.name, resultText, isError])
+  const alipayQrCodeImage = React.useMemo(() => {
+    if (block.name !== 'alipay_bot' || !resultText || isError) return undefined
+    return parseAlipayBotResult(resultText).qrCodeImage
+  }, [block.name, resultText, isError])
+  const workingPaymentQrCodeImage = React.useMemo(() => {
+    if (block.name !== 'copis_working_payment' || !resultText || isError) return undefined
+    return parseWorkingPaymentResult(resultText).qrCodeImage
+  }, [block.name, resultText, isError])
   const isAgentTool = block.name === 'Agent' || block.name === 'Task'
   const hasChildren = isAgentTool && childBlocks && childBlocks.length > 0
   const subAgentMeta = useSubAgentMeta(block.id, allMessages)
@@ -533,6 +543,9 @@ function ToolUseBlock({ block, allMessages, animate = false, index = 0, dimmed =
         )}
       </button>
 
+      {alipayQrCodeImage && <AlipayBotQrCode source={alipayQrCodeImage} />}
+      {workingPaymentQrCodeImage && <AlipayBotQrCode source={workingPaymentQrCodeImage} />}
+
       {shouldShowResult && resultText && expanded && (
         <div className={cn(
           'ml-5.5 mt-1 mb-2 pl-3 border-l-2 border-border/30',
@@ -544,6 +557,7 @@ function ToolUseBlock({ block, allMessages, animate = false, index = 0, dimmed =
             result={resultText}
             isError={isError}
             basePath={basePath}
+            hideQrCodeImage={!!alipayQrCodeImage || !!workingPaymentQrCodeImage}
           />
         </div>
       )}

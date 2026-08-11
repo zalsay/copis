@@ -39,7 +39,10 @@ use pi_rpc::{
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::{json, Value};
 use skill_market::{handle_request as handle_skill_market_request, SkillMarketState};
-use working_payment::{handle_request as handle_working_payment_request, WorkingPaymentState};
+use working_payment::{
+    handle_request as handle_working_payment_request, start_desktop_payment_poller,
+    WorkingPaymentState,
+};
 use workspace_dev::{WorkspaceDevActionInput, WorkspaceDevError, WorkspaceDevStore};
 use workspace_mcp::{WorkspaceMcpError, WorkspaceMcpStore};
 use workspace_skills::{WorkspaceSkillsError, WorkspaceSkillsStore};
@@ -1453,7 +1456,6 @@ fn is_working_payment_path(path: &str) -> bool {
     [
         "/api/working/diamond-packages",
         "/api/working/diamond-purchases",
-        "/api/working/alipay/page-orders",
         "/api/working/vip/upgrade",
     ]
     .iter()
@@ -2591,6 +2593,12 @@ fn main() {
             process::exit(1);
         }
     };
+    start_desktop_payment_poller(
+        Arc::clone(&working_payment_state),
+        Arc::clone(&workers),
+        Arc::clone(&payment_workspace),
+        Arc::clone(&skill_market_state),
+    );
     let workspace_mcp_store = Arc::new(WorkspaceMcpStore::open(resolve_config_directory()));
     let workspace_dev_store = Arc::new(WorkspaceDevStore::open(resolve_config_directory()));
     let workspace_skills_store = Arc::new(WorkspaceSkillsStore::open(resolve_config_directory()));

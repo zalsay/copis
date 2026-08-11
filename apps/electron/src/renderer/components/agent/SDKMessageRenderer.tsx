@@ -19,6 +19,8 @@ import { ImageLightbox, type LightboxImage } from '@/components/ui/image-lightbo
 import { ContentBlock } from './ContentBlock'
 import { TurnFileChangesSummary, buildTurnFileNameMap } from './TurnFileChangesSummary'
 import { ProcessBlockGroup, buildAssistantTurnRenderItems, buildCompletedToolResultIds } from './ProcessBlockGroup'
+import { parseAlipayBotResult } from './tool-result-renderers/alipay-bot-result'
+import { parseWorkingPaymentResult } from './tool-result-renderers/working-payment-result'
 import { extractToolResultText, TASK_TOOL_NAMES } from './task-progress'
 import { normalizeThinkTagsInContentBlocks } from './thinking-tag-parser'
 // 会话转录的纯逻辑(Turn 分组 / 快照去重 / 预览)已下沉到 @copis/session-core 作为唯一真源。
@@ -520,6 +522,31 @@ export function AssistantTurnRenderer({ turn, allMessages, basePath, onFork, onR
     return renderTopLevelBlock(block, i)
   }
 
+  const hasAlipayQrCode = (blocks: SDKContentBlock[]): boolean => blocks.some((block) => {
+    if (block.type !== 'tool_use') return false
+    const toolName = (block as SDKToolUseBlock).name
+    if (toolName !== 'alipay_bot' && toolName !== 'copis_working_payment') return false
+    const result = allMessages.find((message) => {
+      if (message.type !== 'user') return false
+      return (message as SDKUserMessage).message?.content?.some((content) => (
+        content.type === 'tool_result'
+          && (content as SDKToolResultBlock).tool_use_id === (block as SDKToolUseBlock).id
+      ))
+    })
+    if (!result || result.type !== 'user') return false
+    const resultContent = (result as SDKUserMessage).message?.content
+    if (!Array.isArray(resultContent)) return false
+    const resultBlock = resultContent.find((content) => (
+      content.type === 'tool_result'
+          && (content as SDKToolResultBlock).tool_use_id === (block as SDKToolUseBlock).id
+    )) as SDKToolResultBlock | undefined
+    const text = extractToolResultText(resultBlock?.content)
+    if (!text) return false
+    return toolName === 'alipay_bot'
+      ? !!parseAlipayBotResult(text).qrCodeImage
+      : !!parseWorkingPaymentResult(text).qrCodeImage
+  })
+
   return (
     <Message from="assistant">
       {showHeader && (
@@ -543,6 +570,7 @@ export function AssistantTurnRenderer({ turn, allMessages, basePath, onFork, onR
                 blocks={groupBlocks}
                 isStreaming={isStreaming}
                 isMessageTail={itemIndex === renderItems.length - 1}
+                preventAutoCollapse={hasAlipayQrCode(groupBlocks)}
               >
                 {item.items.map((groupItem) => renderProcessGroupBlock(groupItem.block, groupItem.index))}
               </ProcessBlockGroup>

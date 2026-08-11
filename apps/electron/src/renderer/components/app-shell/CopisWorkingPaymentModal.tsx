@@ -22,6 +22,7 @@ import './CopisWorkingPaymentModal.css'
 
 interface CopisWorkingPaymentModalProps {
   vipStatus: WorkingVipStatus | null
+  onStartDiamondPurchase: (packageValue: WorkingDiamondPackage) => Promise<void>
 }
 
 interface VipBenefitRow {
@@ -36,7 +37,7 @@ const VIP_BENEFITS: readonly VipBenefitRow[] = [
   { label: '定时任务', free: '不可用', vip: '可使用' },
 ]
 
-export function CopisWorkingPaymentModal({ vipStatus }: CopisWorkingPaymentModalProps): React.ReactElement | null {
+export function CopisWorkingPaymentModal({ vipStatus, onStartDiamondPurchase }: CopisWorkingPaymentModalProps): React.ReactElement | null {
   const paymentState = useAtomValue(workingPaymentStateAtom)
   const setPaymentState = useSetAtom(workingPaymentStateAtom)
   const closePayment = useSetAtom(closeWorkingPaymentAtom)
@@ -182,23 +183,18 @@ export function CopisWorkingPaymentModal({ vipStatus }: CopisWorkingPaymentModal
     }))
   }, [handleClose, isCurrentOperation, paymentState, requestPaymentRefresh, updatePaymentState])
 
-  const handleCreateDiamondPurchase = async (): Promise<void> => {
+  const handleStartDiamondPurchase = async (): Promise<void> => {
     if (!selectedPackage || isBusy || paymentState.phase === 'loading') return
     const operationId = beginOperation()
     updatePaymentState(operationId, (current) => ({ ...current, phase: 'creating', error: undefined }))
     try {
-      const result = await window.electronAPI.createWorkingDiamondPurchase(selectedPackage.id)
-      applyCreatedPayment(operationId, result)
+      await onStartDiamondPurchase(selectedPackage)
     } catch (error: unknown) {
       if (!isCurrentOperation(operationId)) return
-      if (getPaymentErrorStatus(error) === 409) {
-        handleConflict()
-        return
-      }
       updatePaymentState(operationId, (current) => ({
         ...current,
-        phase: 'error',
-        error: getWorkingPaymentError(error, '创建支付宝订单失败，请稍后重试'),
+        phase: 'selecting',
+        error: getWorkingPaymentError(error, '无法打开购买钻石对话，请稍后重试'),
       }))
     }
   }
@@ -416,8 +412,8 @@ export function CopisWorkingPaymentModal({ vipStatus }: CopisWorkingPaymentModal
             </button>
           )}
           {showDiamondSelection && (
-            <button type="button" className="copis-working-payment-primary" onClick={() => void handleCreateDiamondPurchase()} disabled={!selectedPackage || isBusy || paymentState.phase === 'loading'}>
-              {paymentState.phase === 'creating' ? '创建中...' : '确认支付'}
+            <button type="button" className="copis-working-payment-primary" onClick={() => void handleStartDiamondPurchase()} disabled={!selectedPackage || isBusy || paymentState.phase === 'loading'}>
+              {paymentState.phase === 'creating' ? '正在打开对话...' : '在对话中继续'}
             </button>
           )}
           {showVipBenefits && (

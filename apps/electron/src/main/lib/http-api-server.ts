@@ -200,6 +200,27 @@ function resolveNodeRuntimeRoot(options: HttpApiServerOptions): string | undefin
   return dirname(dirname(active.path))
 }
 
+function resolveAlipayBotCli(options: HttpApiServerOptions): string | undefined {
+  const configuredPath = process.env.COPIS_ALIPAY_BOT_CLI?.trim()
+  if (!app.isPackaged && configuredPath && existsSync(configuredPath)) {
+    return prepareBinary(configuredPath)
+  }
+  const active = readActiveFunctionalModule(
+    getFunctionalModulePaths(getRootDir(options)),
+    'alipay-bot',
+  )
+  const entrypoint = process.platform === 'win32' ? 'bin/alipay-bot.cmd' : 'bin/alipay-bot'
+  return active?.entrypoint === entrypoint ? prepareBinary(active.path) : undefined
+}
+
+function resolveAlipayBotNode(nodeRuntimeRoot: string | undefined): string | undefined {
+  const configuredPath = process.env.COPIS_ALIPAY_BOT_NODE?.trim()
+  if (!app.isPackaged && configuredPath && existsSync(configuredPath)) return configuredPath
+  return nodeRuntimeRoot
+    ? join(nodeRuntimeRoot, 'bin', process.platform === 'win32' ? 'node.exe' : 'node')
+    : undefined
+}
+
 function prepareBinary(path: string): string {
   if (process.platform !== 'win32') {
     try {
@@ -303,6 +324,8 @@ function spawnManagedProcess(
   const useDevelopmentScriptRuntime = workerLaunch?.kind === 'script' && !app.isPackaged
   const piExtensionsDir = resolvePiExtensionsDir()
   const nodeRuntimeRoot = resolveNodeRuntimeRoot(options)
+  const alipayBotCli = resolveAlipayBotCli(options)
+  const alipayBotNode = resolveAlipayBotNode(nodeRuntimeRoot)
   let paymentRuntime: PaymentWorkspaceRuntime
   try {
     paymentRuntime = resolvePaymentWorkspaceRuntime(options.paymentWorkspace ?? ensureDefaultWorkspace())
@@ -337,6 +360,8 @@ function spawnManagedProcess(
           : {}),
         ...(piExtensionsDir ? { COPIS_PI_EXTENSIONS_DIR: piExtensionsDir } : {}),
         ...(nodeRuntimeRoot ? { COPIS_RUNTIME_ROOT: nodeRuntimeRoot } : {}),
+        ...(alipayBotCli ? { COPIS_ALIPAY_BOT_CLI: alipayBotCli } : {}),
+        ...(alipayBotNode ? { COPIS_ALIPAY_BOT_NODE: alipayBotNode } : {}),
         ...(app.isPackaged ? { COPIS_PI_RPC_COMPILED_RUNTIME: '1' } : {}),
         ...(useDevelopmentScriptRuntime
           ? {

@@ -17,6 +17,8 @@ import { WebFetchResultRenderer } from './web-fetch-result'
 import { TaskGetResultRenderer } from './task-get-result'
 import { TaskListResultRenderer } from './task-list-result'
 import { GenerateImageResultRenderer } from './generate-image-result'
+import { AlipayBotResultRenderer } from './alipay-bot-result'
+import { WorkingPaymentResultRenderer } from './working-payment-result'
 import { DefaultResultRenderer } from './default-result'
 
 export interface ToolResultRendererProps {
@@ -25,9 +27,10 @@ export interface ToolResultRendererProps {
   result: string
   isError: boolean
   basePath?: string
+  hideQrCodeImage?: boolean
 }
 
-export function ToolResultRenderer({ toolName, input, result, isError, basePath }: ToolResultRendererProps): React.ReactElement {
+export function ToolResultRenderer({ toolName, input, result, isError, basePath, hideQrCodeImage = false }: ToolResultRendererProps): React.ReactElement {
   switch (toolName) {
     case 'Bash':
       return <BashResultRenderer result={result} isError={isError} input={input} />
@@ -51,6 +54,10 @@ export function ToolResultRenderer({ toolName, input, result, isError, basePath 
       return <TaskListResultRenderer result={result} isError={isError} />
     case 'generate_image':
       return <GenerateImageResultRenderer result={result} isError={isError} />
+    case 'alipay_bot':
+      return <AlipayBotResultRenderer result={result} isError={isError} showQrCodeImage={!hideQrCodeImage} />
+    case 'copis_working_payment':
+      return <WorkingPaymentResultRenderer result={result} isError={isError} showQrCodeImage={!hideQrCodeImage} />
     default:
       return <DefaultResultRenderer result={result} isError={isError} />
   }

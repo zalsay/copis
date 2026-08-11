@@ -36,8 +36,9 @@ async function main(): Promise<void> {
   const rustOnly = hasFlag('--rust') || process.env.COPIS_RUST_ONLY === '1'
   const officeCliOnly = hasFlag('--officecli') || process.env.COPIS_OFFICECLI_ONLY === '1'
   const nodeRuntimeOnly = hasFlag('--node-runtime') || process.env.COPIS_NODE_RUNTIME_ONLY === '1'
-  if (Number(rustOnly) + Number(officeCliOnly) + Number(nodeRuntimeOnly) > 1) {
-    throw new Error('--rust、--officecli 与 --node-runtime 不能同时使用')
+  const alipayBotOnly = hasFlag('--alipay-bot') || process.env.COPIS_ALIPAY_BOT_ONLY === '1'
+  if (Number(rustOnly) + Number(officeCliOnly) + Number(nodeRuntimeOnly) + Number(alipayBotOnly) > 1) {
+    throw new Error('--rust、--officecli、--node-runtime 与 --alipay-bot 不能同时使用')
   }
 
   const secretId = requiredEnv('COS_SECRET_ID')
@@ -69,7 +70,7 @@ async function main(): Promise<void> {
   if (hasFlag('--manifest-only')) {
     const manifestPath = requiredOption('--manifest-file', 'COPIS_FUNCTIONAL_MODULE_MANIFEST_FILE')
     const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as FunctionalModuleManifest
-    const requiredManifest = ['node-runtime', 'officecli', 'rust-http-api'].reduce<FunctionalModuleManifest>(
+    const requiredManifest = ['node-runtime', 'officecli', 'alipay-bot', 'rust-http-api'].reduce<FunctionalModuleManifest>(
       (value, name) => markFunctionalModuleRequired(value, name),
       manifest,
     )
@@ -82,31 +83,39 @@ async function main(): Promise<void> {
     await publishFunctionalModuleManifest(manifestEntry, client)
     console.log(`[publish:functional-modules] 已覆盖发布 manifest: ${manifestEntry.key}`)
   } else {
-    const rustBinary = officeCliOnly || nodeRuntimeOnly
+    const rustBinary = officeCliOnly || nodeRuntimeOnly || alipayBotOnly
       ? ''
       : getOption('--rust-binary')
         ?? process.env.COPIS_RUST_HTTP_API_BINARY?.trim()
         ?? join(repoRoot, 'native/http-api-server/target/release', binaryName('copis-http-api-server', platform))
-    const officeCliBinary = rustOnly || nodeRuntimeOnly
+    const officeCliBinary = rustOnly || nodeRuntimeOnly || alipayBotOnly
       ? undefined
       : getOption('--officecli-binary')
         ?? process.env.COPIS_OFFICECLI_BINARY?.trim()
         ?? join(electronDir, 'resources/bin', binaryName('officecli', platform))
-    const nodeRuntimeArchive = rustOnly || officeCliOnly
+    const nodeRuntimeArchive = rustOnly || officeCliOnly || alipayBotOnly
       ? undefined
       : getOption('--node-runtime-archive')
         ?? process.env.COPIS_NODE_RUNTIME_ARCHIVE?.trim()
         ?? join(electronDir, 'resources/node-runtime', `${platform}-${arch}.tar.gz`)
+    const alipayBotArchive = rustOnly || officeCliOnly || nodeRuntimeOnly
+      ? undefined
+      : getOption('--alipay-bot-archive')
+        ?? process.env.COPIS_ALIPAY_BOT_ARCHIVE?.trim()
+        ?? join(electronDir, 'resources/alipay-bot', `${platform}-${arch}.tar.gz`)
     const modules = buildFunctionalModuleBinaryInputs({
       rustOnly,
       officeCliOnly,
       nodeRuntimeOnly,
+      alipayBotOnly,
       rustBinary,
       rustVersion: getOption('--rust-version') ?? process.env.COPIS_RUST_HTTP_API_VERSION?.trim() ?? version,
       officeCliBinary,
       officeCliVersion: getOption('--officecli-version') ?? process.env.COPIS_OFFICECLI_VERSION?.trim() ?? version,
       nodeRuntimeArchive,
       nodeRuntimeVersion: getOption('--node-runtime-version') ?? process.env.COPIS_NODE_RUNTIME_VERSION?.trim() ?? version,
+      alipayBotArchive,
+      alipayBotVersion: getOption('--alipay-bot-version') ?? process.env.COPIS_ALIPAY_BOT_VERSION?.trim() ?? version,
       platform,
       arch,
     })
@@ -123,6 +132,7 @@ async function main(): Promise<void> {
     const existingManifest = await fetchExistingManifest(initialRelease.manifestEntry.url)
     if (rustOnly) {
       requireExistingOfficeCli(existingManifest, platform, arch)
+      requireExistingAlipayBot(existingManifest, platform, arch)
       const hasNodeRuntime = requireExistingNodeRuntime(existingManifest, platform, arch, { allowMissing: true })
       if (!hasNodeRuntime) {
         console.warn(`[publish:functional-modules] COS manifest 当前平台/架构缺少 node-runtime: ${platform}-${arch}，--rust 将继续发布；请随后执行 --node-runtime 补齐`)
@@ -131,10 +141,17 @@ async function main(): Promise<void> {
     if (officeCliOnly) {
       requireExistingRustApi(existingManifest, platform, arch)
       requireExistingNodeRuntime(existingManifest, platform, arch)
+      requireExistingAlipayBot(existingManifest, platform, arch)
     }
     if (nodeRuntimeOnly) {
       requireExistingRustApi(existingManifest, platform, arch)
       requireExistingOfficeCli(existingManifest, platform, arch)
+      requireExistingAlipayBot(existingManifest, platform, arch)
+    }
+    if (alipayBotOnly) {
+      requireExistingRustApi(existingManifest, platform, arch)
+      requireExistingOfficeCli(existingManifest, platform, arch)
+      requireExistingNodeRuntime(existingManifest, platform, arch)
     }
     const resolvedRelease = await resolveImmutableModuleVersions(releaseInput, client)
     const release = resolvedRelease.release
@@ -215,6 +232,22 @@ export function requireExistingOfficeCli(
   }
 }
 
+export function requireExistingAlipayBot(
+  manifest: FunctionalModuleManifest | undefined,
+  platform: FunctionalModulePlatform,
+  arch: FunctionalModuleArchitecture,
+): void {
+  const platformKey = `${platform}-${arch}`
+  const artifact = manifest?.platforms[platformKey]?.modules['alipay-bot']
+  const entrypoint = `bin/${platform === 'win32' ? 'alipay-bot.cmd' : 'alipay-bot'}`
+  if (!artifact) {
+    throw new Error(`COS manifest 当前平台/架构缺少 alipay-bot: ${platformKey}，单模块发布已停止`)
+  }
+  if (artifact.required !== true || artifact.format !== 'tar.gz' || artifact.entrypoint !== entrypoint) {
+    throw new Error(`COS manifest 当前平台/架构的 alipay-bot 无效: ${platformKey}，单模块发布已停止`)
+  }
+}
+
 export function requireExistingRustApi(
   manifest: FunctionalModuleManifest | undefined,
   platform: FunctionalModulePlatform,
@@ -256,12 +289,15 @@ interface FunctionalModuleBinaryInputOptions {
   rustOnly: boolean
   officeCliOnly?: boolean
   nodeRuntimeOnly?: boolean
+  alipayBotOnly?: boolean
   rustBinary: string
   rustVersion: string
   officeCliBinary?: string
   officeCliVersion: string
   nodeRuntimeArchive?: string
   nodeRuntimeVersion?: string
+  alipayBotArchive?: string
+  alipayBotVersion?: string
   platform: FunctionalModulePlatform
   arch: FunctionalModuleArchitecture
 }
@@ -271,11 +307,12 @@ export function buildFunctionalModuleBinaryInputs(
 ): FunctionalModuleBinaryInput[] {
   const officeCliOnly = input.officeCliOnly ?? false
   const nodeRuntimeOnly = input.nodeRuntimeOnly ?? false
-  if (Number(input.rustOnly) + Number(officeCliOnly) + Number(nodeRuntimeOnly) > 1) {
-    throw new Error('--rust、--officecli 与 --node-runtime 不能同时使用')
+  const alipayBotOnly = input.alipayBotOnly ?? false
+  if (Number(input.rustOnly) + Number(officeCliOnly) + Number(nodeRuntimeOnly) + Number(alipayBotOnly) > 1) {
+    throw new Error('--rust、--officecli、--node-runtime 与 --alipay-bot 不能同时使用')
   }
   const modules: FunctionalModuleBinaryInput[] = []
-  if (!officeCliOnly && !nodeRuntimeOnly) {
+  if (!officeCliOnly && !nodeRuntimeOnly && !alipayBotOnly) {
     modules.push({
       module: 'rust-http-api',
       version: input.rustVersion,
@@ -285,7 +322,7 @@ export function buildFunctionalModuleBinaryInputs(
       required: true,
     })
   }
-  if (!input.rustOnly && !nodeRuntimeOnly) {
+  if (!input.rustOnly && !nodeRuntimeOnly && !alipayBotOnly) {
     if (!input.officeCliBinary) throw new Error('正常发布或 OfficeCLI-only 发布需要提供 OfficeCLI 二进制路径')
     modules.push({
       module: 'officecli',
@@ -296,7 +333,7 @@ export function buildFunctionalModuleBinaryInputs(
       required: true,
     })
   }
-  if (!input.rustOnly && !officeCliOnly) {
+  if (!input.rustOnly && !officeCliOnly && !alipayBotOnly) {
     if (!input.nodeRuntimeArchive) throw new Error('正常发布或 Node.js runtime-only 发布需要提供 Node.js runtime 归档')
     modules.push({
       module: 'node-runtime',
@@ -306,6 +343,19 @@ export function buildFunctionalModuleBinaryInputs(
       binaryPath: input.nodeRuntimeArchive,
       format: 'tar.gz',
       entrypoint: `bin/${binaryName('node', input.platform)}`,
+      required: true,
+    })
+  }
+  if (!input.rustOnly && !officeCliOnly && !nodeRuntimeOnly) {
+    if (!input.alipayBotArchive) throw new Error('正常发布或支付宝智能体 CLI-only 发布需要提供 alipay-bot 归档')
+    modules.push({
+      module: 'alipay-bot',
+      version: input.alipayBotVersion ?? input.rustVersion,
+      platform: input.platform,
+      arch: input.arch,
+      binaryPath: input.alipayBotArchive,
+      format: 'tar.gz',
+      entrypoint: `bin/${input.platform === 'win32' ? 'alipay-bot.cmd' : 'alipay-bot'}`,
       required: true,
     })
   }

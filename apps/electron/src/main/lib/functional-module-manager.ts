@@ -32,6 +32,7 @@ const MODULE_DEFINITIONS: readonly FunctionalModuleDefinition[] = [
   { name: 'node-runtime', displayName: 'Node.js 运行环境', required: true },
   { name: 'rust-http-api', displayName: '系统核心模块', required: true },
   { name: 'officecli', displayName: 'Office 文档支持', required: true },
+  { name: 'alipay-bot', displayName: '支付宝智能体 CLI', required: true },
 ]
 
 export type FunctionalModuleFetch = (

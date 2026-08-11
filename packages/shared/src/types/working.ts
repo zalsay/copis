@@ -525,19 +525,6 @@ export interface WorkingPaymentCheckResult {
   status: string
 }
 
-/** 支付宝网页收银台订单，仅向渲染进程暴露经过主进程校验的 HTTPS 收银台地址。 */
-export interface WorkingAlipayPagePayOrder {
-  paymentId: string
-  outTradeNo: string
-  cashierUrl: string
-  status: string
-  tradeStatus?: string
-  creditTokens: number
-  package: WorkingDiamondPackage
-  credited?: boolean
-  retryable?: boolean
-}
-
 export interface WorkingPaymentCancelResult {
   cancelled: boolean
   payment: WorkingPaymentSession
@@ -575,6 +562,4 @@ export const WORKING_IPC_CHANNELS = {
   GET_ORDER_PAYMENT: 'working:get-order-payment',
   CHECK_PAYMENT: 'working:check-payment',
   CANCEL_DIAMOND_PAYMENT: 'working:cancel-diamond-payment',
-  CREATE_ALIPAY_PAGE_PAY_ORDER: 'working:create-alipay-page-pay-order',
-  CHECK_ALIPAY_PAGE_PAY_ORDER: 'working:check-alipay-page-pay-order',
 } as const

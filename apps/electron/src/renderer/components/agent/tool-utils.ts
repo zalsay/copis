@@ -11,6 +11,7 @@ import {
   CalendarDays,
   CalendarX,
   ClipboardList,
+  CreditCard,
   Database,
   Download,
   FilePenLine,
@@ -81,6 +82,8 @@ export const TOOL_ICONS: Record<string, LucideIcon> = {
   ReadMcpResourceTool: Database,
   ListMcpResourcesTool: Server,
   SendMessage: Send,
+  alipay_bot: Zap,
+  copis_working_payment: CreditCard,
 }
 
 /**
@@ -134,6 +137,8 @@ const TOOL_DISPLAY_NAMES: Record<string, string> = {
   ReadMcpResourceTool: '读取 MCP 资源',
   ListMcpResourcesTool: '列出 MCP 资源',
   SendMessage: '发送消息',
+  alipay_bot: '支付宝支付',
+  copis_working_payment: 'Copis 钻石购买',
 }
 
 /**

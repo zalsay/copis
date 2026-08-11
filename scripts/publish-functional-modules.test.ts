@@ -6,6 +6,7 @@ import type { FunctionalModuleManifest } from '@copis/shared'
 import { mergeFunctionalModuleManifests } from './functional-module-manifest-merge'
 import {
   buildFunctionalModuleBinaryInputs,
+  requireExistingAlipayBot,
   requireExistingOfficeCli,
   requireExistingNodeRuntime,
   requireExistingRustApi,
@@ -80,6 +81,30 @@ describe('功能模块发布脚本 --rust', () => {
     })])
   })
 
+  test('支付宝智能体 CLI-only 输入使用 tar.gz 归档并保留稳定入口', () => {
+    const modules = buildFunctionalModuleBinaryInputs({
+      rustOnly: false,
+      alipayBotOnly: true,
+      rustBinary: '/tmp/rust-api-does-not-exist',
+      rustVersion: '0.2.0',
+      officeCliBinary: '/tmp/officecli-does-not-exist',
+      officeCliVersion: '1.0.143',
+      nodeRuntimeArchive: '/tmp/node-runtime-does-not-exist.tar.gz',
+      nodeRuntimeVersion: '22.21.1',
+      alipayBotArchive: '/tmp/alipay-bot.tar.gz',
+      alipayBotVersion: '0.3.40',
+      platform: 'darwin',
+      arch: 'arm64',
+    })
+
+    expect(modules).toEqual([expect.objectContaining({
+      module: 'alipay-bot',
+      format: 'tar.gz',
+      entrypoint: 'bin/alipay-bot',
+      binaryPath: '/tmp/alipay-bot.tar.gz',
+    })])
+  })
+
   test('Node runtime-only 发布要求 COS 已有 Rust 与 OfficeCLI', () => {
     const manifest: FunctionalModuleManifest = {
       schema: 1,
@@ -103,6 +128,26 @@ describe('功能模块发布脚本 --rust', () => {
     requireExistingOfficeCli(manifest, 'darwin', 'arm64')
     requireExistingRustApi(manifest, 'darwin', 'arm64')
     expect(() => requireExistingNodeRuntime(manifest, 'darwin', 'arm64')).toThrow('缺少 node-runtime')
+  })
+
+  test('支付宝智能体 CLI-only 发布要求 COS 已有兼容归档模块', () => {
+    const manifest: FunctionalModuleManifest = {
+      schema: 1,
+      channel: 'stable',
+      platforms: {
+        'darwin-arm64': {
+          modules: {
+            'alipay-bot': {
+              version: '0.3.40', url: 'https://download.example.com/alipay-bot.tar.gz', sha256: 'a'.repeat(64), size: 1,
+              format: 'tar.gz', entrypoint: 'bin/alipay-bot', required: true,
+            },
+          },
+        },
+      },
+    }
+
+    requireExistingAlipayBot(manifest, 'darwin', 'arm64')
+    expect(() => requireExistingAlipayBot(manifest, 'win32', 'x64')).toThrow('缺少 alipay-bot')
   })
 
   test('Rust-only 发布允许远端暂时缺少 Node runtime', () => {

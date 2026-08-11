@@ -33,7 +33,12 @@ const MODULE_PROGRESS_START = 0.05
 const MODULE_PROGRESS_END = 0.95
 const HEALTH_PROGRESS_START = 0.95
 const HEALTH_PROGRESS_END = 1
-const REQUIRED_MODULES: readonly FunctionalModuleName[] = ['node-runtime', 'officecli', 'rust-http-api']
+const REQUIRED_MODULES: readonly FunctionalModuleName[] = [
+  'node-runtime',
+  'officecli',
+  'alipay-bot',
+  'rust-http-api',
+]
 
 export interface FunctionalModuleStartupOptions {
   rootDir?: string
@@ -108,6 +113,14 @@ export function assertRequiredModuleArtifacts(
   const nodeEntrypoint = nodeRuntime.platform === 'win32' ? 'bin/node.exe' : 'bin/node'
   if (nodeRuntime.format !== 'tar.gz' || nodeRuntime.entrypoint !== nodeEntrypoint) {
     throw new Error('Node.js 运行环境模块格式不正确')
+  }
+
+  const alipayBot = byName.get('alipay-bot')
+  if (!alipayBot) throw new Error('组件清单缺少必要的支付宝智能体 CLI')
+  if (!alipayBot.required) throw new Error('支付宝智能体 CLI 必须是必要组件')
+  const alipayBotEntrypoint = alipayBot.platform === 'win32' ? 'bin/alipay-bot.cmd' : 'bin/alipay-bot'
+  if (alipayBot.format !== 'tar.gz' || alipayBot.entrypoint !== alipayBotEntrypoint) {
+    throw new Error('支付宝智能体 CLI 模块格式不正确')
   }
 }
 

@@ -238,6 +238,24 @@ export function getToolPhrase(toolName: string, input: Record<string, unknown>):
       return phrase('生成图片')
     }
 
+    case 'alipay_bot': {
+      const action = input.action
+      const labels: Record<string, string> = {
+        'wallet.check': '检查支付宝钱包状态',
+        'wallet.apply': '申请开通支付宝钱包',
+        'wallet.bind': '绑定支付宝钱包',
+        'wallet.close': '关闭支付宝钱包',
+        'payment.start': '发起支付宝支付',
+        'payment.check': '查询支付宝支付状态',
+        'payment.ack': '确认支付宝支付结果',
+      }
+      return phrase(typeof action === 'string' ? (labels[action] ?? '处理支付宝支付') : '处理支付宝支付')
+    }
+
+    case 'copis_working_payment': {
+      return phrase(input.action === 'packages.list' ? '查询 Copis 钻石套餐' : '创建 Copis 钻石订单')
+    }
+
     case 'TaskOutput': {
       const taskId = input.task_id ?? input.taskId
       if (typeof taskId === 'string') return phrase(`获取任务 #${taskId} 输出`)

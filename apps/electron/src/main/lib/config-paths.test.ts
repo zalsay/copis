@@ -83,10 +83,12 @@ describe('Electron 配置目录改名迁移', () => {
       'xlsx',
       'copis-coach',
       'proma-coach',
+      'alipay-ai-buyer-agent',
     ]))
     expect(DEFAULT_SKILL_SLUG_ALIASES).toContainEqual({ legacy: 'proma-coach', canonical: 'copis-coach' })
     expect(isRetiredDefaultSkill('copis-coach')).toBe(true)
     expect(isRetiredDefaultSkill('proma-coach')).toBe(true)
+    expect(isRetiredDefaultSkill('alipay-ai-buyer-agent')).toBe(true)
     expect(isRetiredDefaultSkill('automation')).toBe(false)
   })
 })
