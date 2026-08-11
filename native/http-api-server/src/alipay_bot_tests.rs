@@ -183,16 +183,25 @@ fn configured_alipay_home_is_isolated_from_process_home() {
 }
 
 #[test]
-fn cli_output_keeps_structured_payment_fields_without_sensitive_raw_text() {
+fn cli_output_keeps_payment_proof_for_rust_but_hides_it_from_public_result() {
     let output = sanitize_alipay_output(
-        "{\"trade_no\":\"trade-1\",\"payment_proof\":\"proof-secret\",\"cashier_url\":\"https://pay.example\"}\nMEDIA: /tmp/openclaw/alipay-bot-cli/qrcode/pay.png\n等待您的支付宝支付",
+        "{\"trade_no\":\"trade-1\",\"payment_proof\":\"proof-secret\",\"client_session\":\"client-1\",\"cashier_url\":\"https://pay.example\"}\nMEDIA: /tmp/openclaw/alipay-bot-cli/qrcode/pay.png\n等待您的支付宝支付",
     );
 
     assert_eq!(output.trade_no.as_deref(), Some("trade-1"));
     assert_eq!(output.cashier_url.as_deref(), Some("https://pay.example"));
     assert!(output.qr_code_path.is_none());
-    assert!(output.payment_proof.is_none());
+    assert_eq!(output.payment_proof.as_deref(), Some("proof-secret"));
+    assert_eq!(output.client_session.as_deref(), Some("client-1"));
     assert!(output.raw.is_none());
+    assert!(output.to_public_value().get("paymentProof").is_none());
+    assert_eq!(
+        output
+            .to_payment_value()
+            .get("paymentProof")
+            .and_then(|value| value.as_str()),
+        Some("proof-secret")
+    );
 }
 
 #[test]
@@ -219,6 +228,32 @@ fn cli_output_parses_markdown_payment_identifiers() {
     assert_eq!(
         output.cashier_url.as_deref(),
         Some("https://u.alipay.cn/example")
+    );
+}
+
+#[test]
+fn given_nested_payment_start_result_when_sanitized_then_preserves_out_shake_no() {
+    let output = sanitize_alipay_output(
+        r#"{"code":200,"data":{"outShakeNo":"12345678908282123456789012345678","status":"pending"}}"#,
+    );
+
+    assert_eq!(output.code, Some(200));
+    assert_eq!(
+        output.out_shake_no.as_deref(),
+        Some("12345678908282123456789012345678")
+    );
+    assert_eq!(output.status.as_deref(), Some("pending"));
+}
+
+#[test]
+fn given_text_payment_start_result_when_sanitized_then_preserves_out_shake_no() {
+    let output = sanitize_alipay_output(
+        "**✓ 支付待确认**\n**outShakeNo**：12345678908282123456789012345678\n等待您的支付宝支付\n",
+    );
+
+    assert_eq!(
+        output.out_shake_no.as_deref(),
+        Some("12345678908282123456789012345678")
     );
 }
 

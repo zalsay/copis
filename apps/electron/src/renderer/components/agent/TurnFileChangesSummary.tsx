@@ -101,18 +101,21 @@ export function buildTurnFileNameMap(turnMessages: SDKMessage[]): Map<string, st
 export interface TurnFileChangesSummaryProps {
   turnMessages: SDKMessage[]
   basePath?: string
+  /** 是否保留左侧头像间距，默认 true */
+  hasAvatar?: boolean
 }
 
 export function TurnFileChangesSummary({
   turnMessages,
   basePath,
+  hasAvatar = true,
 }: TurnFileChangesSummaryProps): React.ReactElement | null {
   const paths = React.useMemo(() => collectFilePaths(turnMessages), [turnMessages])
 
   if (paths.length === 0) return null
 
   return (
-    <div className="pl-[46px] mt-3">
+    <div className={hasAvatar ? 'pl-[46px] mt-3' : 'pl-0 mt-3'}>
       <div className="pt-3 border-t-2 border-dashed border-border/60">
         <div className="flex flex-wrap gap-1.5">
           {paths.map((filePath) => (

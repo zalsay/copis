@@ -1,8 +1,18 @@
-use super::{handle_request, parse_working_payment_route, WorkingPaymentRoute};
+use super::{
+    handle_request, legacy_handle_request, parse_working_payment_route, PaymentWorker,
+    WorkingPaymentRoute, WorkingPaymentState,
+};
+use crate::payment_workspace::PaymentWorkspace;
+use crate::pi_rpc::PaymentWorkerAction;
 use crate::skill_market::{backend_env_test_lock, SkillMarketState};
 use serde_json::json;
+use std::collections::VecDeque;
+use std::fs;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
+use std::path::PathBuf;
+use std::sync::Mutex;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 #[test]
 fn parses_all_working_payment_routes() {
@@ -116,7 +126,7 @@ fn forwards_create_payment_with_backend_auth_and_unwraps_data() {
 
     let previous_backend = std::env::var("COPIS_BACKEND_URL").ok();
     std::env::set_var("COPIS_BACKEND_URL", format!("http://127.0.0.1:{}", port));
-    let result = handle_request(
+    let result = legacy_handle_request(
         &SkillMarketState::new(Some("payment-token".to_string())),
         "POST",
         "/api/working/diamond-purchases",
@@ -152,7 +162,7 @@ fn preserves_payment_check_business_envelope() {
 
     let previous_backend = std::env::var("COPIS_BACKEND_URL").ok();
     std::env::set_var("COPIS_BACKEND_URL", format!("http://127.0.0.1:{}", port));
-    let result = handle_request(
+    let result = legacy_handle_request(
         &SkillMarketState::new(Some("payment-token".to_string())),
         "POST",
         "/api/working/diamond-purchases/payment%2F7/check",
@@ -199,14 +209,14 @@ fn forwards_page_pay_requests_with_backend_auth_and_unwraps_data() {
     let previous_backend = std::env::var("COPIS_BACKEND_URL").ok();
     std::env::set_var("COPIS_BACKEND_URL", format!("http://127.0.0.1:{}", port));
     let state = SkillMarketState::new(Some("payment-token".to_string()));
-    let created = handle_request(
+    let created = legacy_handle_request(
         &state,
         "POST",
         "/api/working/alipay/page-orders",
         br#"{"packageId":7}"#,
     )
     .unwrap();
-    let checked = handle_request(
+    let checked = legacy_handle_request(
         &state,
         "POST",
         "/api/working/alipay/page-orders/payment%2F7/check",
@@ -228,4 +238,265 @@ fn restore_backend_url(previous_backend: Option<String>) {
         Some(value) => std::env::set_var("COPIS_BACKEND_URL", value),
         None => std::env::remove_var("COPIS_BACKEND_URL"),
     }
+}
+
+struct PaymentWorkspaceFixture {
+    root: PathBuf,
+    workspace: PaymentWorkspace,
+}
+
+impl PaymentWorkspaceFixture {
+    fn new() -> Self {
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "copis-working-payment-test-{}-{}",
+            std::process::id(),
+            suffix
+        ));
+        let project = root.join("project");
+        fs::create_dir_all(&project).unwrap();
+        let root = fs::canonicalize(&root).unwrap();
+        let project = root.join("project");
+        let root_text = root.to_string_lossy().to_string();
+        let project_text = project.to_string_lossy().to_string();
+        let payment_home = root.join(".copis").join("payment");
+        let payment_home_text = payment_home.to_string_lossy().to_string();
+        let workspace =
+            PaymentWorkspace::parse("default", &root_text, &project_text, &payment_home_text)
+                .unwrap();
+        Self { root, workspace }
+    }
+}
+
+impl Drop for PaymentWorkspaceFixture {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.root);
+    }
+}
+
+struct FakePaymentWorker {
+    results: Mutex<VecDeque<Result<serde_json::Value, String>>>,
+    calls: Mutex<Vec<(PaymentWorkerAction, serde_json::Value)>>,
+}
+
+impl FakePaymentWorker {
+    fn new(results: Vec<Result<serde_json::Value, String>>) -> Self {
+        Self {
+            results: Mutex::new(results.into()),
+            calls: Mutex::new(Vec::new()),
+        }
+    }
+}
+
+impl PaymentWorker for FakePaymentWorker {
+    fn execute_payment(
+        &self,
+        _workspace: &PaymentWorkspace,
+        server_account_id: &str,
+        action: PaymentWorkerAction,
+        request: serde_json::Value,
+    ) -> Result<serde_json::Value, String> {
+        assert!(!server_account_id.contains("payment-token"));
+        self.calls.lock().unwrap().push((action, request));
+        self.results
+            .lock()
+            .unwrap()
+            .pop_front()
+            .expect("支付 Worker 缺少预期结果")
+    }
+}
+
+#[test]
+fn desktop_diamond_payment_uses_local_pi_and_never_calls_legacy_payment_routes() {
+    let _env_guard = backend_env_test_lock().lock().unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let backend = std::thread::spawn(move || {
+        let expected = [
+            (
+                "/api/internal/working-desktop/payment-capabilities",
+                "Bearer payment-token",
+                br#"{"flow_kind":"diamond"}"#.as_slice(),
+                r#"{"data":{"capability":"wdpc_test","flow_kind":"diamond"}}"#,
+            ),
+            (
+                "/api/internal/working-desktop/alipay/diamond/prepare",
+                "Bearer wdpc_test",
+                br#"{"package_id":7}"#.as_slice(),
+                r#"{"data":{"pending_existing":false,"payment":{"payment_id":"pay-7","out_trade_no":"ORDER-7","status":"created","amount":"9.90","currency":"CNY"},"package":{"id":7,"amount":"9.90","amount_cents":990,"diamonds":100,"currency":"CNY"},"payment_needed":{"protocol":"402"}}}"#,
+            ),
+            (
+                "/api/internal/working-desktop/alipay/payment-context",
+                "Bearer wdpc_test",
+                br#"{"payment_id":"pay-7"}"#.as_slice(),
+                r#"{"data":{"payment_id":"pay-7","session_id":"pay-7","payment_needed":{"protocol":"402"},"resource_url":"https://seller.example.test/resource","method":"POST","data":"{}","headers":{"Content-Type":"application/json","X-Working-Desktop-Payment-Resource":"wdpr-test"}}}"#,
+            ),
+            (
+                "/api/internal/working-desktop/alipay/payment-started",
+                "Bearer wdpc_test",
+                br#"{"payment_id":"pay-7","trade_no":"trade-7","cashier_url":"https://cashier.example.test/pay","bot_result":{"action":"payment.start","ok":true}}"#.as_slice(),
+                r#"{"data":{"payment":{"payment_id":"pay-7","out_trade_no":"ORDER-7","trade_no":"trade-7","status":"pending_user_pay","amount":"9.90","currency":"CNY","cashier_url":"https://cashier.example.test/pay"}}}"#,
+            ),
+            (
+                "/api/internal/working-desktop/alipay/payment-finalize",
+                "Bearer wdpc_test",
+                br#"{"payment_id":"pay-7","action":"check","check_result":{"status":"paid","trade_no":"trade-7","payment_proof":"proof-7","client_session":"client-7"}}"#.as_slice(),
+                r#"{"data":{"payment":{"payment_id":"pay-7","out_trade_no":"ORDER-7","trade_no":"trade-7","status":"resource_ready","amount":"9.90","currency":"CNY","cashier_url":"https://cashier.example.test/pay"}}}"#,
+            ),
+        ];
+        for (path_expected, authorization_expected, body_expected, response) in expected {
+            let (mut stream, _) = listener.accept().unwrap();
+            let (method, path, authorization, body) = read_request(&mut stream);
+            assert_eq!(method, "POST");
+            assert_eq!(path, path_expected);
+            assert_eq!(authorization, authorization_expected);
+            assert_eq!(
+                serde_json::from_slice::<serde_json::Value>(&body).unwrap(),
+                serde_json::from_slice::<serde_json::Value>(body_expected).unwrap(),
+            );
+            respond(&mut stream, response);
+        }
+    });
+
+    let previous_backend = std::env::var("COPIS_BACKEND_URL").ok();
+    std::env::set_var("COPIS_BACKEND_URL", format!("http://127.0.0.1:{}", port));
+    let fixture = PaymentWorkspaceFixture::new();
+    let worker = FakePaymentWorker::new(vec![
+        Ok(json!({
+            "ok": true,
+            "tradeNo": "trade-7",
+            "cashierUrl": "https://cashier.example.test/pay",
+        })),
+        Ok(json!({
+            "ok": true,
+            "status": "paid",
+            "tradeNo": "trade-7",
+            "paymentProof": "proof-7",
+            "clientSession": "client-7",
+        })),
+    ]);
+    let payment_state = WorkingPaymentState::new();
+    let state = SkillMarketState::new(Some("payment-token".to_string()));
+
+    let created = handle_request(
+        &state,
+        &payment_state,
+        &worker,
+        &fixture.workspace,
+        "POST",
+        "/api/working/diamond-purchases",
+        br#"{"packageId":7}"#,
+    )
+    .unwrap();
+    let checked = handle_request(
+        &state,
+        &payment_state,
+        &worker,
+        &fixture.workspace,
+        "POST",
+        "/api/working/diamond-purchases/pay-7/check",
+        br#"{}"#,
+    )
+    .unwrap();
+
+    backend.join().unwrap();
+    restore_backend_url(previous_backend);
+
+    let created_body = created.body.as_ref().unwrap();
+    let checked_body = checked.body.as_ref().unwrap();
+    assert_eq!(created_body["payment"]["status"], "pending_user_pay");
+    assert_eq!(checked_body["data"]["status"], "resource_ready");
+    let calls = worker.calls.lock().unwrap();
+    assert_eq!(calls.len(), 2);
+    assert_eq!(calls[0].0, PaymentWorkerAction::PaymentStart);
+    assert!(calls[0].1["paymentNeeded"]
+        .as_str()
+        .is_some_and(|value| value.contains("\"protocol\":\"402\"")));
+    assert_eq!(calls[1].0, PaymentWorkerAction::PaymentCheck);
+    assert!(created_body.get("paymentProof").is_none());
+}
+
+#[test]
+fn desktop_vip_payment_uses_prepare_only_route_and_builds_renderer_package() {
+    let _env_guard = backend_env_test_lock().lock().unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let backend = std::thread::spawn(move || {
+        let expected = [
+            (
+                "/api/internal/working-desktop/payment-capabilities",
+                "Bearer payment-token",
+                br#"{"flow_kind":"vip"}"#.as_slice(),
+                r#"{"data":{"capability":"wdpc_vip","flow_kind":"vip"}}"#,
+            ),
+            (
+                "/api/internal/working-desktop/alipay/vip/prepare",
+                "Bearer wdpc_vip",
+                br#"{}"#.as_slice(),
+                r#"{"data":{"pending_existing":false,"payment":{"payment_id":"vip-pay-1","out_trade_no":"VIP-1","status":"created","goods_name":"pi-vip","amount":"49.90","currency":"CNY"},"vip":{"service_id":"pi-vip","days":30,"amount":"49.90","amount_cents":4990,"bonus_diamonds":500},"payment_needed":{"protocol":"402"}}}"#,
+            ),
+            (
+                "/api/internal/working-desktop/alipay/payment-context",
+                "Bearer wdpc_vip",
+                br#"{"payment_id":"vip-pay-1"}"#.as_slice(),
+                r#"{"data":{"payment_id":"vip-pay-1","session_id":"vip-pay-1","payment_needed":{"protocol":"402"},"resource_url":"https://seller.example.test/resource","method":"POST","data":"{}","headers":{"Content-Type":"application/json","X-Working-Desktop-Payment-Resource":"wdpr-vip"}}}"#,
+            ),
+            (
+                "/api/internal/working-desktop/alipay/payment-started",
+                "Bearer wdpc_vip",
+                br#"{"payment_id":"vip-pay-1","trade_no":"vip-trade-1","cashier_url":"https://cashier.example.test/vip","bot_result":{"action":"payment.start","ok":true}}"#.as_slice(),
+                r#"{"data":{"payment":{"payment_id":"vip-pay-1","out_trade_no":"VIP-1","trade_no":"vip-trade-1","status":"pending_user_pay","goods_name":"pi-vip","amount":"49.90","currency":"CNY","cashier_url":"https://cashier.example.test/vip"}}}"#,
+            ),
+        ];
+        for (path_expected, authorization_expected, body_expected, response) in expected {
+            let (mut stream, _) = listener.accept().unwrap();
+            let (method, path, authorization, body) = read_request(&mut stream);
+            assert_eq!(method, "POST");
+            assert_eq!(path, path_expected);
+            assert_eq!(authorization, authorization_expected);
+            assert_eq!(
+                serde_json::from_slice::<serde_json::Value>(&body).unwrap(),
+                serde_json::from_slice::<serde_json::Value>(body_expected).unwrap(),
+            );
+            respond(&mut stream, response);
+        }
+    });
+
+    let previous_backend = std::env::var("COPIS_BACKEND_URL").ok();
+    std::env::set_var("COPIS_BACKEND_URL", format!("http://127.0.0.1:{}", port));
+    let fixture = PaymentWorkspaceFixture::new();
+    let worker = FakePaymentWorker::new(vec![Ok(json!({
+        "ok": true,
+        "tradeNo": "vip-trade-1",
+        "cashierUrl": "https://cashier.example.test/vip",
+    }))]);
+    let payment_state = WorkingPaymentState::new();
+    let state = SkillMarketState::new(Some("payment-token".to_string()));
+
+    let created = handle_request(
+        &state,
+        &payment_state,
+        &worker,
+        &fixture.workspace,
+        "POST",
+        "/api/working/vip/upgrade",
+        br#"{}"#,
+    )
+    .unwrap();
+
+    backend.join().unwrap();
+    restore_backend_url(previous_backend);
+
+    let body = created.body.as_ref().unwrap();
+    assert_eq!(body["is_vip"], true);
+    assert_eq!(body["vip"]["days"], 30);
+    assert_eq!(body["package"]["service_id"], "pi-vip");
+    assert_eq!(body["package"]["diamonds"], 500);
+    assert_eq!(
+        worker.calls.lock().unwrap()[0].0,
+        PaymentWorkerAction::PaymentStart
+    );
 }

@@ -114,6 +114,7 @@ pub struct AlipayBotOutput {
     pub status: Option<String>,
     pub qr_code_path: Option<String>,
     pub payment_proof: Option<String>,
+    pub client_session: Option<String>,
     pub raw: Option<String>,
 }
 
@@ -124,8 +125,17 @@ impl AlipayBotOutput {
             .unwrap_or(true)
     }
 
-    /// 只向 Pi 暴露可用于继续流程的字段；CLI 原文、二维码本地路径和支付凭证不得越过 Rust 边界。
+    /// 普通 Agent 只能看到可用于继续流程的展示字段；CLI 原文、二维码本地路径和支付凭证不得外泄。
     pub fn to_public_value(&self) -> Value {
+        self.to_value(false)
+    }
+
+    /// 设置页支付由 Rust 消费受控检查结果。该值只会从 Pi Worker 返回 Rust，不能返回 Renderer。
+    pub fn to_payment_value(&self) -> Value {
+        self.to_value(true)
+    }
+
+    fn to_value(&self, include_payment_secrets: bool) -> Value {
         let mut value = Map::new();
         value.insert("ok".to_string(), Value::Bool(self.ok()));
         if let Some(code) = self.code {
@@ -151,6 +161,14 @@ impl AlipayBotOutput {
         }
         if let Some(status) = self.status.as_deref() {
             value.insert("status".to_string(), json!(status));
+        }
+        if include_payment_secrets {
+            if let Some(payment_proof) = self.payment_proof.as_deref() {
+                value.insert("paymentProof".to_string(), json!(payment_proof));
+            }
+            if let Some(client_session) = self.client_session.as_deref() {
+                value.insert("clientSession".to_string(), json!(client_session));
+            }
         }
         Value::Object(value)
     }
@@ -259,7 +277,11 @@ pub fn handle_request(
     let output = execute_alipay_bot_with_home(&request, payment_home.as_deref())?;
     Ok(AlipayBotResponse {
         status: 200,
-        body: output.to_public_value(),
+        body: if payment_capability_token.is_some() {
+            output.to_payment_value()
+        } else {
+            output.to_public_value()
+        },
     })
 }
 
@@ -558,12 +580,14 @@ pub fn sanitize_alipay_output(raw: &str) -> AlipayBotOutput {
     if output.trade_no.is_none() {
         output.trade_no = extract_markdown_trade_no(raw);
     }
+    if output.out_shake_no.is_none() {
+        output.out_shake_no = extract_markdown_out_shake_no(raw);
+    }
     if output.cashier_url.is_none() {
         output.cashier_url = extract_http_url(raw);
     }
-    // 这些字段只允许在 CLI 内部存在，不能随结构化结果回到 Pi 或 UI。
+    // CLI 路径和原始输出只允许在进程内部存在；支付 proof 由受控 capability 响应单独返回 Rust。
     output.qr_code_path = None;
-    output.payment_proof = None;
     output.raw = None;
     output
 }
@@ -583,12 +607,39 @@ fn extract_markdown_trade_no(raw: &str) -> Option<String> {
     })
 }
 
+fn extract_markdown_out_shake_no(raw: &str) -> Option<String> {
+    raw.lines().find_map(|line| {
+        let line = line.trim().replace("**", "").replace('`', "");
+        let line = line.trim_start_matches(['-', '*', ' ']);
+        let lower = line.to_ascii_lowercase();
+        for label in ["outshakeno", "out_shake_no"] {
+            if !lower.starts_with(label) {
+                continue;
+            }
+            let value = &line[label.len()..];
+            if !value.starts_with(['：', ':', ' ', '\t']) {
+                continue;
+            }
+            let value = value
+                .trim_start_matches(['：', ':', ' ', '\t'])
+                .split_whitespace()
+                .next()?;
+            return sanitize_text(value.trim_matches(|character| matches!(character, '*' | '`')));
+        }
+        None
+    })
+}
+
 fn extract_http_url(raw: &str) -> Option<String> {
     raw.split(|character: char| character.is_whitespace() || matches!(character, '(' | '['))
         .find_map(sanitize_http_url)
 }
 
 fn merge_alipay_output_json(output: &mut AlipayBotOutput, value: &Value) {
+    merge_alipay_output_json_at_depth(output, value, 0);
+}
+
+fn merge_alipay_output_json_at_depth(output: &mut AlipayBotOutput, value: &Value, depth: usize) {
     let Some(object) = value.as_object() else {
         return;
     };
@@ -623,6 +674,21 @@ fn merge_alipay_output_json(output: &mut AlipayBotOutput, value: &Value) {
         .status
         .take()
         .or_else(|| get_string(object, &["status"]).and_then(|value| sanitize_text(&value)));
+    output.payment_proof = output.payment_proof.take().or_else(|| {
+        get_string(object, &["paymentProof", "payment_proof"])
+            .and_then(|value| sanitize_text(&value))
+    });
+    output.client_session = output.client_session.take().or_else(|| {
+        get_string(object, &["clientSession", "client_session"])
+            .and_then(|value| sanitize_text(&value))
+    });
+    if depth < 4 {
+        for envelope in ["data", "result"] {
+            if let Some(value) = object.get(envelope) {
+                merge_alipay_output_json_at_depth(output, value, depth + 1);
+            }
+        }
+    }
 }
 
 fn extract_first_json_value(raw: &str) -> Option<Value> {

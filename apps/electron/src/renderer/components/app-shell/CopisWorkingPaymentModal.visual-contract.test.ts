@@ -17,6 +17,11 @@ describe('Working 支付视觉契约', () => {
     expect(paymentStyles).not.toContain('hsl(var(--ui-primary)')
   })
 
+  test('Given 钻石或 VIP 支付弹窗 When 读取外层样式 Then 阴影收敛且不保留外边框', () => {
+    expect(paymentStyles).toContain('box-shadow: 0 12px 32px hsl(var(--foreground) / 0.12);')
+    expect(paymentStyles).not.toMatch(/\.copis-working-payment-modal\s*\{[^}]*\bborder:/s)
+  })
+
   test('Given 订单状态 When 切换亮暗主题 Then 成功状态保持可读并沿用语义色', () => {
     expect(ordersStyles).toContain('color: hsl(142 70% 35%);')
     expect(ordersStyles).toContain('.dark .copis-working-order-status.paid')

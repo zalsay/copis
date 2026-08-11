@@ -24,3 +24,13 @@ test('Given 会话曾切换到 DeepSeek When 选择内置模型 Then 覆盖 per-
   expect(noopGuardIndex).toBeGreaterThan(channelMapIndex)
   expect(persistentCallIndex).toBeGreaterThan(noopGuardIndex)
 })
+
+test('Given AI浏览器中的紧凑 Composer When 渲染工具栏 Then 保留高级授权开关', () => {
+  const compactConditionStart = source.indexOf('...(compact ? [] : [')
+  const compactConditionEnd = source.indexOf(']),', compactConditionStart)
+  const advancedAuthorizationStart = source.indexOf("key: 'advanced-authorization'")
+
+  expect(compactConditionStart).toBeGreaterThan(-1)
+  expect(compactConditionEnd).toBeGreaterThan(compactConditionStart)
+  expect(advancedAuthorizationStart).toBeGreaterThan(compactConditionEnd)
+})

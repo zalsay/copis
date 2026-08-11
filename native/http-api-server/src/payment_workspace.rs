@@ -1,4 +1,5 @@
 use std::env;
+use std::ffi::OsString;
 use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -102,12 +103,13 @@ impl PaymentWorkspace {
 
         let expected_payment_home_root = canonical_project_root.join(".copis").join("payment");
         let payment_home_path = Path::new(payment_home_root);
-        if payment_home_path != expected_payment_home_root.as_path() {
+        let canonical_payment_home_path = canonicalize_with_missing_tail(payment_home_path)?;
+        if canonical_payment_home_path != expected_payment_home_root {
             return Err(PaymentWorkspaceError::InvalidPaymentHomeRoot);
         }
         validate_no_external_symlink(&canonical_project_root, &expected_payment_home_root)?;
-        if fs::symlink_metadata(payment_home_path).is_ok() {
-            let canonical_payment_home_root = fs::canonicalize(payment_home_path)
+        if fs::symlink_metadata(&expected_payment_home_root).is_ok() {
+            let canonical_payment_home_root = fs::canonicalize(&expected_payment_home_root)
                 .map_err(|_| PaymentWorkspaceError::InvalidPaymentHomeRoot)?;
             if canonical_payment_home_root
                 .strip_prefix(&canonical_project_root)
@@ -187,6 +189,35 @@ fn read_environment(name: &str) -> Result<String, PaymentWorkspaceError> {
 fn sha256_hex(bytes: &[u8]) -> String {
     let digest = Sha256::digest(bytes);
     digest.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+/// 末级目录尚未创建时，先解析已有祖先以统一文件系统保留的路径大小写。
+fn canonicalize_with_missing_tail(path: &Path) -> Result<PathBuf, PaymentWorkspaceError> {
+    let mut missing_tail = Vec::<OsString>::new();
+    let mut ancestor = path;
+
+    loop {
+        match fs::symlink_metadata(ancestor) {
+            Ok(_) => {
+                let mut canonical = fs::canonicalize(ancestor)
+                    .map_err(|_| PaymentWorkspaceError::InvalidPaymentHomeRoot)?;
+                for component in missing_tail.iter().rev() {
+                    canonical.push(component);
+                }
+                return Ok(canonical);
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                let component = ancestor
+                    .file_name()
+                    .ok_or(PaymentWorkspaceError::InvalidPaymentHomeRoot)?;
+                missing_tail.push(component.to_os_string());
+                ancestor = ancestor
+                    .parent()
+                    .ok_or(PaymentWorkspaceError::InvalidPaymentHomeRoot)?;
+            }
+            Err(_) => return Err(PaymentWorkspaceError::InvalidPaymentHomeRoot),
+        }
+    }
 }
 
 #[allow(dead_code)]
@@ -289,6 +320,37 @@ mod tests {
             canonical_root.join(".copis").join("payment")
         );
         assert!(!workspace.payment_home_root().exists());
+    }
+
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    #[test]
+    fn given_case_mismatched_payment_home_on_case_insensitive_filesystem_when_parsed_then_succeeds()
+    {
+        let temp = TempDir::new("case-mismatch");
+        let project_root = temp.path().join("DefaultWorkspace");
+        let cwd = project_root.join("project");
+        fs::create_dir_all(&cwd).unwrap();
+        let case_mismatched_home_root = temp
+            .path()
+            .join("defaultworkspace")
+            .join(".copis")
+            .join("payment");
+
+        let workspace = PaymentWorkspace::parse(
+            "default",
+            project_root.to_str().unwrap(),
+            cwd.to_str().unwrap(),
+            case_mismatched_home_root.to_str().unwrap(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            workspace.payment_home_root(),
+            fs::canonicalize(project_root)
+                .unwrap()
+                .join(".copis")
+                .join("payment")
+        );
     }
 
     #[test]

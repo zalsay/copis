@@ -275,6 +275,25 @@ fn slow_connection_is_closed_by_read_timeout() {
         super::expert_teams::ExpertTeamStore::open(directory.join("expert-teams")).unwrap(),
     );
     let skill_market_state = Arc::new(super::skill_market::SkillMarketState::new(None));
+    let payment_project_root = directory.join("payment-workspace");
+    let payment_project = payment_project_root.join("project");
+    std::fs::create_dir_all(&payment_project).unwrap();
+    let payment_project_root = std::fs::canonicalize(payment_project_root).unwrap();
+    let payment_project = payment_project_root.join("project");
+    let payment_workspace = Arc::new(
+        super::payment_workspace::PaymentWorkspace::parse(
+            "default",
+            payment_project_root.to_string_lossy().as_ref(),
+            payment_project.to_string_lossy().as_ref(),
+            payment_project_root
+                .join(".copis")
+                .join("payment")
+                .to_string_lossy()
+                .as_ref(),
+        )
+        .unwrap(),
+    );
+    let working_payment_state = Arc::new(super::working_payment::WorkingPaymentState::new());
     let workspace_mcp_store = Arc::new(super::workspace_mcp::WorkspaceMcpStore::open(
         directory.join("mcp"),
     ));
@@ -294,6 +313,8 @@ fn slow_connection_is_closed_by_read_timeout() {
             memory_store,
             expert_team_store,
             skill_market_state,
+            working_payment_state,
+            payment_workspace,
             workspace_mcp_store,
             workspace_dev_store,
             workspace_skills_store,

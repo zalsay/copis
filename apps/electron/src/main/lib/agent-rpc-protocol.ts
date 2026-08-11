@@ -60,6 +60,7 @@ export const BROWSER_AGENT_TOOL_NAMES = [
   'BrowserPageType',
   'BrowserPageSelect',
   'BrowserPagePress',
+  'BrowserPageUpload',
   'BrowserPageScroll',
   'BrowserPageNavigate',
   'BrowserPageOpenTab',

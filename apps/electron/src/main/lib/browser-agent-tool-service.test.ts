@@ -125,6 +125,72 @@ describe('Browser Agent 主进程工具 dispatcher', () => {
     expect(observe).not.toHaveBeenCalled()
   })
 
+  test('Given an unbound user Agent When opening its first page Then it opens and binds the new tab without a single approval', async () => {
+    const capability = issueBrowserAgentWorkerCapability({
+      sessionId: 'browser-session',
+      triggeredBy: 'user',
+    })
+    const openBrowserAgentTab = mock((_sessionId: string, url: string) => ({
+      tabId: 'tab-2',
+      url,
+      title: '小红书',
+    }))
+    const requestSingleApproval = mock(async () => false)
+    const service = createBrowserAgentToolService({
+      openBrowserAgentTab,
+      getBrowserAgentContext: () => undefined,
+      requestSingleApproval,
+    })
+
+    await expect(service.executeWorker({
+      sessionId: 'browser-session',
+      capabilityToken: capability.token,
+      toolCallId: 'open-first-tab-call',
+      toolName: 'BrowserPageOpenTab',
+      toolInput: { url: 'https://www.xiaohongshu.com/' },
+    })).resolves.toEqual({
+      kind: 'json',
+      value: expect.objectContaining({
+        ok: true,
+        tabId: 'tab-2',
+        title: '小红书',
+      }),
+    })
+    expect(requestSingleApproval).not.toHaveBeenCalled()
+    expect(openBrowserAgentTab).toHaveBeenCalledWith('browser-session', 'https://www.xiaohongshu.com/')
+  })
+
+  for (const triggeredBy of ['automation', 'delegation'] as const) {
+    test(`Given an unbound ${triggeredBy} Agent When opening its first page Then it is refused before approval or tab creation`, async () => {
+      const capability = issueBrowserAgentWorkerCapability({
+        sessionId: 'browser-session',
+        triggeredBy,
+      })
+      const openBrowserAgentTab = mock(() => ({
+        tabId: 'tab-2',
+        url: 'https://www.xiaohongshu.com/',
+        title: '小红书',
+      }))
+      const requestSingleApproval = mock(async () => true)
+      const service = createBrowserAgentToolService({
+        openBrowserAgentTab,
+        getBrowserAgentContext: () => undefined,
+        requestSingleApproval,
+      })
+
+      await expect(service.executeWorker({
+        sessionId: 'browser-session',
+        capabilityToken: capability.token,
+        toolCallId: 'automation-open-first-tab-call',
+        toolName: 'BrowserPageOpenTab',
+        toolInput: { url: 'https://www.xiaohongshu.com/' },
+      })).rejects.toThrow('只有用户主会话可以执行当前网页操作')
+
+      expect(requestSingleApproval).not.toHaveBeenCalled()
+      expect(openBrowserAgentTab).not.toHaveBeenCalled()
+    })
+  }
+
   test('Given authorized page and dangerous element When Worker clicks Then it executes without one-time approval', async () => {
     const capability = issueBrowserAgentWorkerCapability({
       sessionId: 'browser-session',
@@ -285,6 +351,87 @@ describe('Browser Agent 主进程工具 dispatcher', () => {
     expect(typeText).not.toHaveBeenCalled()
   })
 
+  test('Given a user Composer advanced authorization When Worker types into a sensitive element Then it reaches page control', async () => {
+    const capability = issueBrowserAgentWorkerCapability({
+      sessionId: 'browser-session',
+      tabId: 'tab-1',
+      triggeredBy: 'user',
+    })
+    const typeText = mock(async (): Promise<BrowserPageActionResult> => actionResult())
+    const service = createBrowserAgentToolService({
+      browserPageControl: {
+        getElement: () => element({ sensitiveReason: 'password', requiresConfirmation: false }),
+        typeText,
+      },
+      getBrowserAgentContext: () => ({ tabId: 'tab-1' }),
+      getBrowserPageControlMode: () => 'authorized',
+      isAdvancedAuthorizationEnabled: () => true,
+    })
+
+    await expect(service.executeWorker({
+      sessionId: 'browser-session',
+      capabilityToken: capability.token,
+      toolCallId: 'advanced-sensitive-type',
+      toolName: 'BrowserPageType',
+      toolInput: { ref: 'e-danger', text: 'secret-value' },
+    })).resolves.toEqual({ kind: 'json', value: actionResult() })
+
+    expect(typeText).toHaveBeenCalledWith('browser-session', 'e-danger', 'secret-value')
+  })
+
+  test('Given a user Composer advanced authorization When Worker uploads an authorized file Then it reaches page control', async () => {
+    const capability = issueBrowserAgentWorkerCapability({
+      sessionId: 'browser-session',
+      tabId: 'tab-1',
+      triggeredBy: 'user',
+    })
+    const upload = mock(async (): Promise<BrowserPageActionResult> => actionResult())
+    const service = createBrowserAgentToolService({
+      browserPageControl: { upload },
+      getBrowserAgentContext: () => ({ tabId: 'tab-1' }),
+      getBrowserPageControlMode: () => 'authorized',
+      isAdvancedAuthorizationEnabled: () => true,
+    })
+
+    await expect(service.executeWorker({
+      sessionId: 'browser-session',
+      capabilityToken: capability.token,
+      toolCallId: 'advanced-file-upload',
+      toolName: 'BrowserPageUpload',
+      toolInput: { ref: 'e-file', paths: ['/workspace/project/contract.pdf'] },
+    })).resolves.toEqual({ kind: 'json', value: actionResult() })
+
+    expect(upload).toHaveBeenCalledWith('browser-session', 'e-file', ['/workspace/project/contract.pdf'])
+  })
+
+  test('Given automation advanced authorization metadata When Worker types into a sensitive element Then it remains blocked', async () => {
+    const capability = issueBrowserAgentWorkerCapability({
+      sessionId: 'browser-session',
+      tabId: 'tab-1',
+      triggeredBy: 'automation',
+    })
+    const typeText = mock(async (): Promise<BrowserPageActionResult> => actionResult())
+    const service = createBrowserAgentToolService({
+      browserPageControl: {
+        getElement: () => element({ sensitiveReason: 'password', requiresConfirmation: false }),
+        typeText,
+      },
+      getBrowserAgentContext: () => ({ tabId: 'tab-1' }),
+      getBrowserPageControlMode: () => 'authorized',
+      isAdvancedAuthorizationEnabled: () => true,
+    })
+
+    await expect(service.executeWorker({
+      sessionId: 'browser-session',
+      capabilityToken: capability.token,
+      toolCallId: 'automation-sensitive-type',
+      toolName: 'BrowserPageType',
+      toolInput: { ref: 'e-danger', text: 'secret-value' },
+    })).rejects.toThrow('敏感字段')
+
+    expect(typeText).not.toHaveBeenCalled()
+  })
+
   test('Given recording JSONL When Worker reads it Then the result is marked untrusted browser data', async () => {
     const capability = issueBrowserAgentWorkerCapability({
       sessionId: 'browser-session',
@@ -374,7 +521,7 @@ describe('Browser Agent 主进程工具 dispatcher', () => {
     expect(openBrowserAgentTab).toHaveBeenCalledWith('browser-session', 'https://example.com/new?token=secret')
   })
 
-  test('Given cross-origin open-tab When approval succeeds Then it opens the new tab', async () => {
+  test('Given a user Agent opens a cross-origin tab When page controls are authorized Then it opens the new tab without a single approval', async () => {
     const capability = issueBrowserAgentWorkerCapability({
       sessionId: 'browser-session',
       tabId: 'tab-1',
@@ -385,7 +532,7 @@ describe('Browser Agent 主进程工具 dispatcher', () => {
       url,
       title: 'Other tab',
     }))
-    const requestSingleApproval = mock(async () => true)
+    const requestSingleApproval = mock(async () => false)
     const service = createBrowserAgentToolService({
       openBrowserAgentTab,
       getBrowserAgentContext: () => ({ tabId: 'tab-1' }),
@@ -409,8 +556,45 @@ describe('Browser Agent 主进程工具 dispatcher', () => {
       kind: 'json',
       value: expect.objectContaining({ ok: true, tabId: 'tab-2', url: 'https://other.example.test/new', title: 'Other tab' }),
     })
-    expect(requestSingleApproval).toHaveBeenCalledTimes(1)
+    expect(requestSingleApproval).not.toHaveBeenCalled()
     expect(openBrowserAgentTab).toHaveBeenCalledWith('browser-session', 'https://other.example.test/new')
+  })
+
+  test('Given an automation Agent opens a cross-origin tab When approval is rejected Then it does not open the new tab', async () => {
+    const capability = issueBrowserAgentWorkerCapability({
+      sessionId: 'browser-session',
+      tabId: 'tab-1',
+      triggeredBy: 'automation',
+    })
+    const openBrowserAgentTab = mock(() => ({
+      tabId: 'tab-2',
+      url: 'https://other.example.test/new',
+      title: 'Other tab',
+    }))
+    const requestSingleApproval = mock(async () => false)
+    const service = createBrowserAgentToolService({
+      openBrowserAgentTab,
+      getBrowserAgentContext: () => ({ tabId: 'tab-1' }),
+      getBrowserPageControlMode: () => 'authorized',
+      getBrowserWorkflowStatus: () => ({
+        sessionId: 'browser-session',
+        state: 'idle',
+        pageOrigin: 'https://example.com',
+        controlMode: 'authorized',
+      }),
+      requestSingleApproval,
+    })
+
+    await expect(service.executeWorker({
+      sessionId: 'browser-session',
+      capabilityToken: capability.token,
+      toolCallId: 'automation-open-tab-call',
+      toolName: 'BrowserPageOpenTab',
+      toolInput: { url: 'https://other.example.test/new' },
+    })).rejects.toThrow('用户拒绝了当前页面操作')
+
+    expect(requestSingleApproval).toHaveBeenCalledTimes(1)
+    expect(openBrowserAgentTab).not.toHaveBeenCalled()
   })
 
   test('Given ask mode When Worker opens a new tab Then it is refused and no tab is opened', async () => {
@@ -436,10 +620,12 @@ describe('Browser Agent 主进程工具 dispatcher', () => {
     expect(openBrowserAgentTab).not.toHaveBeenCalled()
   })
 
-  test('Given cross-origin navigation When approval succeeds Then logs only origins and approval result', async () => {
+  test('Given a user Agent navigates cross-origin When page controls are authorized Then it navigates without a single approval', async () => {
+    const navigate = mock(async () => actionResult())
+    const requestSingleApproval = mock(async () => false)
     const service = createBrowserAgentToolService({
       browserPageControl: {
-        navigate: async () => actionResult(),
+        navigate,
       },
       getBrowserAgentContext: () => ({ tabId: 'tab-1' }),
       getBrowserPageControlMode: () => 'authorized',
@@ -449,7 +635,7 @@ describe('Browser Agent 主进程工具 dispatcher', () => {
         pageOrigin: 'https://example.com',
         controlMode: 'authorized',
       }),
-      requestSingleApproval: async () => true,
+      requestSingleApproval,
     })
     const sensitiveUrl = 'https://payments.example.test/pay?token=capability-secret&code=123#password=secret'
 
@@ -461,12 +647,47 @@ describe('Browser Agent 主进程工具 dispatcher', () => {
         toolInput: { url: sensitiveUrl },
       })).resolves.toEqual({ kind: 'json', value: actionResult() })
       const output = serializedLogs(logs)
-      expect(output).toContain('单次审批开始')
-      expect(output).toContain('单次审批结果')
-      expect(output).toContain('https://payments.example.test')
+      expect(output).not.toContain('单次审批')
       expect(output).not.toContain(sensitiveUrl)
       expect(output).not.toContain('capability-secret')
       expect(output).not.toContain('123')
     })
+    expect(requestSingleApproval).not.toHaveBeenCalled()
+    expect(navigate).toHaveBeenCalledWith('browser-session', sensitiveUrl)
+  })
+
+  test('Given an automation Agent navigates cross-origin When approval succeeds Then it navigates after the approval', async () => {
+    const capability = issueBrowserAgentWorkerCapability({
+      sessionId: 'browser-session',
+      tabId: 'tab-1',
+      triggeredBy: 'automation',
+    })
+    const navigate = mock(async () => actionResult())
+    const requestSingleApproval = mock(async () => true)
+    const service = createBrowserAgentToolService({
+      browserPageControl: {
+        navigate,
+      },
+      getBrowserAgentContext: () => ({ tabId: 'tab-1' }),
+      getBrowserPageControlMode: () => 'authorized',
+      getBrowserWorkflowStatus: () => ({
+        sessionId: 'browser-session',
+        state: 'idle',
+        pageOrigin: 'https://example.com',
+        controlMode: 'authorized',
+      }),
+      requestSingleApproval,
+    })
+
+    await expect(service.executeWorker({
+      sessionId: 'browser-session',
+      capabilityToken: capability.token,
+      toolCallId: 'automation-navigate-call',
+      toolName: 'BrowserPageNavigate',
+      toolInput: { url: 'https://other.example.test/path' },
+    })).resolves.toEqual({ kind: 'json', value: actionResult() })
+
+    expect(requestSingleApproval).toHaveBeenCalledTimes(1)
+    expect(navigate).toHaveBeenCalledWith('browser-session', 'https://other.example.test/path')
   })
 })

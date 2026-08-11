@@ -69,6 +69,7 @@ import {
 } from './browser-agent-skill'
 import {
   getBrowserAgentContext,
+  isBrowserPageAdvancedAuthorizationEnabled,
   sanitizeBrowserWorkflowUrl,
 } from './browser-workflow-service'
 import { getWebTabState } from './web-tab-manager'
@@ -461,6 +462,8 @@ export async function prepareAgentRpcRun(input: AgentSendInput): Promise<PiWorke
   const browserBinding = getBrowserAgentContext(input.sessionId)
   const browserTab = browserBinding ? getWebTabState(browserBinding.tabId) : undefined
   const hasBrowserContext = Boolean(browserBinding && browserTab)
+  const browserAdvancedAuthorization = (input.triggeredBy ?? 'user') === 'user'
+    && isBrowserPageAdvancedAuthorizationEnabled(input.sessionId)
   const effectivePermissionMode = resolveBrowserAgentPermissionMode(
     hasBrowserContext,
     input.permissionModeOverride ?? session.permissionMode ?? COPIS_DEFAULT_PERMISSION_MODE,
@@ -549,6 +552,7 @@ export async function prepareAgentRpcRun(input: AgentSendInput): Promise<PiWorke
           title: browserTab.title,
           url: sanitizeBrowserWorkflowUrl(browserTab.url),
         },
+        browserAdvancedAuthorization,
       }
       : {}),
   }) + (input.automationContext ? `\n\n## 定时任务执行上下文\n\n${input.automationContext}` : '')
@@ -585,15 +589,11 @@ export async function prepareAgentRpcRun(input: AgentSendInput): Promise<PiWorke
     thinkingLevel: settings.agentEffort === 'max' ? 'xhigh' : settings.agentEffort ?? 'high',
     retryRunStartedAt: startedAt,
     ...(fileAccessPolicy ? { fileAccessPolicy, useRustFileApi: true } : {}),
-    ...(browserBinding && browserTab
-      ? {
-        browserPageControl: issueBrowserAgentWorkerCapability({
-          sessionId: input.sessionId,
-          tabId: browserBinding.tabId,
-          triggeredBy: input.triggeredBy ?? 'user',
-        }),
-      }
-      : {}),
+    browserPageControl: issueBrowserAgentWorkerCapability({
+      sessionId: input.sessionId,
+      ...(browserBinding && browserTab ? { tabId: browserBinding.tabId } : {}),
+      triggeredBy: input.triggeredBy ?? 'user',
+    }),
   }
 
   updateAgentSessionMeta(input.sessionId, {

@@ -58,6 +58,8 @@ async function runPageControlE2E(
   const service = createBrowserPageControlService({
     getContext: () => ({ tabId }),
     getControlMode: () => resolveBrowserPageControlState(getWebTabState(tabId)?.url ?? '', authorizedOrigin).mode,
+    isAdvancedAuthorizationEnabled: () => false,
+    resolveUploadPaths: (_sessionId, paths) => paths,
     getTab: getWebTabState,
     sendCommand: sendWebTabCdpCommandInternal,
     navigate(id, url) {

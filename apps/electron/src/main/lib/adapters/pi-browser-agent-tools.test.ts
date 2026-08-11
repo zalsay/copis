@@ -112,6 +112,60 @@ describe('Pi Browser Agent tool client', () => {
     })
   })
 
+  test('Given opaque capability When BrowserPageUpload executes Then it forwards only ref and paths through the fixed bridge', async () => {
+    const requests: Array<{ url: string; init?: RequestInit }> = []
+    const definitions: Array<{ name: string; execute: (toolCallId: string, params: unknown, signal?: AbortSignal) => Promise<unknown> }> = []
+    const sdk = {
+      defineTool: <T>(definition: T): T => {
+        definitions.push(definition as typeof definitions[number])
+        return definition
+      },
+    } as unknown as typeof import('@earendil-works/pi-coding-agent')
+
+    buildPiBrowserAgentTools(sdk, {
+      sessionId: 'session-1',
+      capability: { endpoint: '/api/internal/agent/browser-tool', token: 'capability-1' },
+      baseUrl: 'http://127.0.0.1:51730',
+      fetchImpl: async (url, init) => {
+        requests.push({ url: String(url), init })
+        return new Response(JSON.stringify({ kind: 'json', value: { ok: true } }), { status: 200 })
+      },
+    })
+
+    const upload = definitions.find((definition) => definition.name === 'BrowserPageUpload')
+    expect(upload).toBeDefined()
+    await upload!.execute('upload-call-1', { ref: 'e-file', paths: ['/workspace/project/contract.pdf'] })
+
+    expect(JSON.parse(String(requests[0]!.init?.body))).toEqual({
+      sessionId: 'session-1',
+      capabilityToken: 'capability-1',
+      toolCallId: 'upload-call-1',
+      toolName: 'BrowserPageUpload',
+      toolInput: { ref: 'e-file', paths: ['/workspace/project/contract.pdf'] },
+    })
+  })
+
+  test('Given Composer 高级授权 When BrowserPageType is described Then its input permits the user-requested sensitive value', () => {
+    const definitions: Array<{ name: string; parameters?: unknown }> = []
+    const sdk = {
+      defineTool: <T>(definition: T): T => {
+        definitions.push(definition as typeof definitions[number])
+        return definition
+      },
+    } as unknown as typeof import('@earendil-works/pi-coding-agent')
+
+    buildPiBrowserAgentTools(sdk, {
+      sessionId: 'session-1',
+      capability: { endpoint: '/api/internal/agent/browser-tool', token: 'capability-1' },
+    })
+
+    const text = (definitions.find((definition) => definition.name === 'BrowserPageType')?.parameters as {
+      properties?: { text?: { description?: string } }
+    } | undefined)?.properties?.text?.description
+    expect(text).toContain('高级授权开启时可包含敏感值')
+    expect(text).not.toContain('不得包含')
+  })
+
   test('Given fetch abort When browser tool executes Then logs the fetch abort stage without request values', async () => {
     const definitions: Array<{ name: string; execute: (toolCallId: string, params: unknown) => Promise<unknown> }> = []
     const sdk = {

@@ -7,7 +7,7 @@ import {
   type BrowserPageControlRuntime,
 } from './browser-page-control-service'
 
-function createRuntime(mode: 'ask' | 'authorized'): {
+function createRuntime(mode: 'ask' | 'authorized', advancedAuthorization = false): {
   runtime: BrowserPageControlRuntime
   commands: string[]
   calls: BrowserPageCdpCommandInput[]
@@ -25,6 +25,8 @@ function createRuntime(mode: 'ask' | 'authorized'): {
   const runtime: BrowserPageControlRuntime = {
     getContext: () => ({ tabId: 'tab-1' }),
     getControlMode: () => mode,
+    isAdvancedAuthorizationEnabled: () => advancedAuthorization,
+    resolveUploadPaths: (_sessionId, paths) => paths,
     getTab: () => ({ id: 'tab-1', url: 'https://example.com/form', title: '示例表单' }),
     navigate: () => undefined,
     async sendCommand(input) {
@@ -93,12 +95,23 @@ function createRuntime(mode: 'ask' | 'authorized'): {
                 name: '国家',
                 enabled: true,
                 attributes: { id: 'country' },
+              }, {
+                selector: '#attachment',
+                tagName: 'input',
+                role: 'button',
+                name: '上传附件',
+                inputType: 'file',
+                enabled: true,
+                attributes: { id: 'attachment', type: 'file' },
               }],
             },
           },
         }
       }
       if (input.method === 'Runtime.evaluate') {
+        if (typeof input.params?.expression === 'string' && input.params.expression.includes("input[type=file]")) {
+          return { result: { objectId: 'file-input-1' } }
+        }
         if (typeof input.params?.expression === 'string' && input.params.expression.includes('selectValue =')) {
           return { result: { value: { ok: true, ...focusResult, optionIndex: 1 } } }
         }
@@ -243,6 +256,44 @@ describe('Browser Agent 页面操作安全策略', () => {
 
     await expect(service.typeText('session-1', 'e2', 'secret')).rejects.toThrow('敏感')
     expect(commands).toEqual(['Runtime.enable', 'Runtime.evaluate'])
+  })
+
+  test('Given Composer 高级授权和敏感字段 When Agent 输入 Then 使用 CDP 可信键盘事件', async () => {
+    const { runtime, commands } = createRuntime('authorized', true)
+    const service = createBrowserPageControlService(runtime)
+    await service.observe('session-1')
+
+    await expect(service.typeText('session-1', 'e2', 'secret')).resolves.toMatchObject({ ok: true })
+
+    expect(commands).toContain('Input.insertText')
+  })
+
+  test('Given Composer 高级授权和已授权文件 When Agent 上传到 file input Then 使用 CDP 设置文件并派发页面事件', async () => {
+    const { runtime, calls } = createRuntime('authorized', true)
+    Object.assign(runtime, {
+      resolveUploadPaths: (_sessionId: string, paths: string[]) => paths,
+    })
+    const service = createBrowserPageControlService(runtime)
+    await service.observe('session-1')
+
+    const upload = (service as unknown as {
+      upload: (sessionId: string, ref: string, paths: string[]) => Promise<{ ok: boolean }>
+    }).upload
+    await expect(upload('session-1', 'e4', ['/workspace/project/contract.pdf'])).resolves.toMatchObject({ ok: true })
+
+    expect(calls).toContainEqual(expect.objectContaining({
+      method: 'DOM.setFileInputFiles',
+      params: { objectId: 'file-input-1', files: ['/workspace/project/contract.pdf'] },
+    }))
+    expect(calls).toContainEqual(expect.objectContaining({
+      method: 'Runtime.releaseObject',
+      params: { objectId: 'file-input-1' },
+    }))
+    expect(calls.some((call) => (
+      call.method === 'Runtime.evaluate'
+      && typeof call.params?.expression === 'string'
+      && call.params.expression.includes("new Event('change'")
+    ))).toBe(true)
   })
 
   test('Given 授权模式和普通字段 When Agent 输入文本 Then 使用 CDP 可信键盘事件', async () => {

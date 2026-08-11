@@ -15,11 +15,10 @@
   max-height: min(760px, calc(100vh - 32px));
   flex-direction: column;
   overflow: hidden;
-  border: 1px solid hsl(var(--border) / 0.78);
   border-radius: 8px;
   background: hsl(var(--card));
   color: hsl(var(--foreground));
-  box-shadow: 0 24px 68px hsl(var(--foreground) / 0.18);
+  box-shadow: 0 12px 32px hsl(var(--foreground) / 0.12);
 }
 
 .copis-working-payment-modal-page {

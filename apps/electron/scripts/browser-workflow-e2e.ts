@@ -10,10 +10,15 @@ const bundledMain = join(tempRoot, 'browser-workflow-e2e-main.cjs')
 const esbuildBinary = join(repositoryRoot, 'node_modules/.bin/esbuild')
 const electronBinary = process.env.ELECTRON_BINARY ?? join(repositoryRoot, 'node_modules/.bin/electron')
 
-function run(command: string, args: string[], env: NodeJS.ProcessEnv = process.env): Promise<number> {
+function run(
+  command: string,
+  args: string[],
+  env: NodeJS.ProcessEnv = process.env,
+  cwd = repositoryRoot,
+): Promise<number> {
   return new Promise((resolveExit) => {
     const child = spawn(command, args, {
-      cwd: repositoryRoot,
+      cwd,
       env,
       stdio: 'inherit',
     })
@@ -53,16 +58,21 @@ try {
   } else {
     const e2eUserData = join(tempRoot, 'user-data')
     const e2eHome = join(tempRoot, 'home')
-    exitCode = await run(electronBinary, [bundledMain], {
-      ...process.env,
-      HOME: e2eHome,
-      USERPROFILE: e2eHome,
-      COPIS_BROWSER_WORKFLOW_E2E: '1',
-      COPIS_BROWSER_WORKFLOW_E2E_VISIBLE: '1',
-      COPIS_E2E_USER_DATA: e2eUserData,
-      COPIS_REPO_ROOT: repositoryRoot,
-      ELECTRON_DISABLE_SECURITY_WARNINGS: '1',
-    })
+    exitCode = await run(
+      electronBinary,
+      [bundledMain],
+      {
+        ...process.env,
+        HOME: e2eHome,
+        USERPROFILE: e2eHome,
+        COPIS_BROWSER_WORKFLOW_E2E: '1',
+        COPIS_BROWSER_WORKFLOW_E2E_VISIBLE: '1',
+        COPIS_E2E_USER_DATA: e2eUserData,
+        COPIS_REPO_ROOT: repositoryRoot,
+        ELECTRON_DISABLE_SECURITY_WARNINGS: '1',
+      },
+      electronRoot,
+    )
   }
 } catch (error) {
   console.error('[Browser Workflow E2E] 执行失败', error)

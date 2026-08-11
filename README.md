@@ -87,6 +87,14 @@ Agent 可以在工作区的 `project/` 目录中创建项目。项目列表会�
 
 Pi Agent 的基础工具是 `read`、`write`、`edit` 和 `bash`。项目命令由 Copis 内置 Node.js/npm runtime 执行，Agent 不应要求用户另行安装 Node.js/npm；命令需要逐条调用，不能使用管道、重定向或串联语法。
 
+### 使用内嵌 AI浏览器
+
+在 Agent 对话中直接提出“打开 https://example.com 并继续操作”。当会话尚未绑定网页时，Agent 会直接在 Copis 内部创建并激活 HTTP(S) 网页页签，自动绑定当前会话并恢复网页 Agent 侧栏。用户明确要求的跨站地址也会直接打开，不再产生单次确认。之后 Agent 可在既有网页授权边界内继续观察和操作页面。
+
+Composer 的“高级授权”护盾开启后，当前用户主会话绑定的 AI浏览器页签默认放行导航、点击、输入、选择、按键、滚动和新页签操作，包含密码、验证码、支付、文件上传、Captcha 与 secret 字段；文件上传通过 `BrowserPageUpload` 使用当前 Agent 工作区或已附加文件范围内的路径。关闭后恢复页面自身的询问/授权策略。该开关不会授予系统浏览器或外部 Chrome 权限。
+
+AI浏览器只能控制 Copis 内部页签，不能控制系统浏览器或外部 Chrome。自动化和委派会话不能创建首个网页页签，也不会继承 Composer 高级授权；Worker capability、页签归属、HTTP(S)、Origin/URL 和页面可信事件校验仍然生效。
+
 ## 截图
 
 ### Chat 快速分析

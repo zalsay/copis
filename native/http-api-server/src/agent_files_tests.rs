@@ -392,7 +392,9 @@ fn project_shell_requires_advanced_authorization_for_git_and_ssh() {
         "fileAccessPolicy".to_string(),
         json!({ "readRoots": [root], "readFiles": [], "writeRoots": [root], "permissionMode": "bypassPermissions" }),
     );
-    let token = store.register_from_query("session-no-advanced", &mut query).unwrap();
+    let token = store
+        .register_from_query("session-no-advanced", &mut query)
+        .unwrap();
 
     let git_request = serde_json::to_vec(&json!({
         "sessionId": "session-no-advanced", "command": "git status", "cwd": root
@@ -442,7 +444,10 @@ fn project_shell_requires_advanced_authorization_for_git_and_ssh() {
     let result = store
         .handle_shell_with_worker_token(&advanced_token, &git_version_request)
         .unwrap();
-    assert!(result["output"].as_str().unwrap_or_default().contains("git version"));
+    assert!(result["output"]
+        .as_str()
+        .unwrap_or_default()
+        .contains("git version"));
 }
 
 #[test]

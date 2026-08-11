@@ -109,22 +109,27 @@ export function MessageHeader({
 
 // ===== MessageContent 内容区域 =====
 
-type MessageContentProps = HTMLAttributes<HTMLDivElement>
+type MessageContentProps = HTMLAttributes<HTMLDivElement> & {
+  /** 是否保留左侧头像间距，默认 true */
+  hasAvatar?: boolean
+}
 
 /**
  * 消息内容区域
  * - user 消息：内容靠右对齐 + 浅色气泡背景
- * - assistant 消息：pl-[46px] 与头像对齐
+ * - assistant 消息：默认 pl-[46px] 与头像对齐，无头像时铺满整行
  */
 export function MessageContent({
   children,
   className,
+  hasAvatar = true,
   ...props
 }: MessageContentProps): React.ReactElement {
   return (
     <div
       className={cn(
-        'flex max-w-full min-w-0 flex-col gap-2 overflow-hidden pl-[46px]',
+        'flex max-w-full min-w-0 flex-col gap-2 overflow-hidden',
+        hasAvatar ? 'pl-[46px]' : 'pl-0',
         'group-[.is-user]:w-full group-[.is-user]:pl-0 group-[.is-user]:text-foreground group-[.is-user]:items-end',
         'group-[.is-assistant]:w-full group-[.is-assistant]:text-foreground',
         className

@@ -1,7 +1,9 @@
 import { createBrowserPageControlService } from './browser-page-control-service'
 import {
   getBrowserAgentContext,
+  isBrowserPageAdvancedAuthorizationEnabled,
   getBrowserPageControlMode,
+  resolveBrowserPageUploadPaths,
 } from './browser-workflow-service'
 import {
   getWebTabState,
@@ -12,6 +14,8 @@ import {
 export const browserPageControl = createBrowserPageControlService({
   getContext: getBrowserAgentContext,
   getControlMode: getBrowserPageControlMode,
+  isAdvancedAuthorizationEnabled: isBrowserPageAdvancedAuthorizationEnabled,
+  resolveUploadPaths: resolveBrowserPageUploadPaths,
   getTab: getWebTabState,
   sendCommand: sendWebTabCdpCommandInternal,
   navigate(tabId, url) {

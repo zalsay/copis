@@ -463,6 +463,7 @@ bun test apps/electron/src/main/lib/web-tab-session-service.test.ts
 - 对象类型优先使用 interface 而不是 type
 - 尽可能使用 `import type` 进行仅类型导入
 - 注释和日志采用中文，保留专业术语
+- Rust 测试代码必须与生产实现分离：每个生产模块的测试放在同目录、同名的 `*_test.rs` 文件中（例如 `working_payment.rs` 对应 `working_payment_test.rs`）；不得在 `main.rs` 或其他生产代码文件中内嵌 `#[cfg(test)]` 测试模块。
 - **路径别名**：`@/` → `apps/electron/src/renderer/`
 
 ## TypeScript 配置
@@ -583,9 +584,43 @@ React UI 更新
 ### Browser Workflow 录制边界
 
 - Browser Workflow 只支持 Pi Agent；CDP 只由 Electron 主进程内部使用，Renderer、Preload、HTTP bridge 和 MCP 不暴露任意 CDP。
+- Pi Worker 的普通 Agent 会话也会获得受限的 AI浏览器 capability。没有 Browser Context 时，只允许用户主会话调用 `BrowserPageOpenTab` 直接创建一个 HTTP(S) 内部页签，并自动把新页签绑定到该会话；用户主会话的跨 Origin 导航和新页签也不请求单次审批。`automation` 和 `delegation` 触发源不得创建首个页签，其他 Browser Page 工具在未绑定时一律拒绝。
+- Composer 的“高级授权”是用户主会话 AI浏览器的会话级总开关：开启后，已绑定内部页签视为授权模式，导航、点击、输入、选择、按键、滚动、新页签和敏感字段操作均可按用户明确目标直接执行；文件上传只允许通过 `BrowserPageUpload` 使用当前 Agent 工作区或已附加文件范围内的路径。关闭后恢复每页 Origin 授权策略。`automation`、`delegation` 不得继承该能力，且 Worker capability、页签 owner、HTTP(S)、Origin/URL、`event.isTrusted` 校验始终保留。
+- 首建页签由主进程绑定时暂时没有 Renderer owner。`browser-workflows:session-for-tab` 只允许主渲染窗口查询该页签的会话，`WebBrowserSurface` 恢复并首次认领绑定后，原有跨 Renderer owner 拒绝规则继续生效；不能依赖可能早于组件挂载发出的状态事件。
 - 页面操作由主进程完成 nonce、Origin、URL 和 `event.isTrusted` 校验，并在进入 Rust API 前移除普通输入字面值和敏感值。
 - Rust 本地 HTTP API 是录制操作 JSONL 的文件事实源：`~/.copis(-dev)/agent-workspaces/{workspace}/browser-recordings/{recordingId}.jsonl`。Electron 通过内部 token 调用 start/event/finish/cancel/content 端点，事件按链路串行追加。
 - 停止录制后，Pi 工具 `BrowserWorkflowRecordingGet` 将脱敏 JSONL 标记为 untrusted browser data 提供给 Agent；Agent 通过 `BrowserWorkflowDraft` 总结步骤、变量、Origin 和人工检查点，主进程重新校验后才允许用户批准保存。
 - Renderer 的停止操作只结束采集并触发同一 Pi session 读取 JSONL，不直接接收或编译原始录制内容。
 - `browserWorkflowEnabled` 默认开启；开发模式始终开启，打包版显式设置为 `false` 可关闭。Browser Agent 通过共享 `AgentConversationSurface` 的 `browser` variant 渲染，不直接挂载完整 `AgentView`。
 - 真实 Runner 回放命令为 `bun run --filter='@copis/electron' test:browser-workflow:e2e`；harness 使用临时 HOME、userData 和本地 HTTP fixture，覆盖跨 Origin iframe、popup、React controlled input、Locator 歧义与 CDP detach/resume，并在退出时清理临时目录。
+
+**首建页签 BDD 回归场景：**
+
+```text
+Given 用户主会话尚未绑定 Copis 内部网页页签
+When Agent 调用 BrowserPageOpenTab 打开 HTTP(S) 地址
+Then 主进程创建并激活新页签，将其绑定到该会话
+And 页面宿主可按页签恢复会话和侧栏，并首次认领 Renderer owner
+
+Given 用户主会话已绑定并处于授权模式的网页页签
+When Agent 调用 BrowserPageNavigate 或 BrowserPageOpenTab 打开跨 Origin HTTP(S) 地址
+Then 直接执行导航或创建页签，不请求单次审批
+
+Given 用户主会话已绑定网页页签且 Composer 高级授权已开启
+When Agent 执行普通或敏感页面操作
+Then 页面状态为 authorized 并直接执行，不显示“询问模式”提示
+
+Given automation 或 delegation 会话尚未绑定 Copis 内部网页页签
+When Agent 调用 BrowserPageOpenTab
+Then 在请求审批或创建页签前拒绝该调用
+```
+
+修改首建页签链路后至少执行：
+
+```bash
+bun test apps/electron/src/main/lib/browser-agent-worker-capability.test.ts
+bun test apps/electron/src/main/lib/browser-agent-tool-service.test.ts
+bun test apps/electron/src/main/lib/browser-workflow-service.test.ts
+bun test apps/electron/src/main/lib/browser-page-control-service.test.ts
+bun test apps/electron/src/main/lib/agent-rpc-service.test.ts
+```

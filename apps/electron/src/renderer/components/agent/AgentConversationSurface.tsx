@@ -2650,35 +2650,35 @@ export function AgentConversationSurface({ sessionId, variant = 'main' }: AgentC
         </Tooltip>
       ),
     }] : []),
-    ...(!compact ? [
+    ...(compact ? [] : [
       { key: 'permission-mode', node: <PermissionModeSelector sessionId={sessionId} /> },
-      {
-        key: 'advanced-authorization',
-        node: (
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon"
-                className={cn(inputToolbarButtonClass, advancedAuthorizationEnabled && 'text-[var(--ui-primary)]')}
-                onClick={() => void handleAdvancedAuthorizationChange()}
-                disabled={streaming || backgroundWaiting}
-                aria-pressed={advancedAuthorizationEnabled}
-                aria-label="高级授权"
-              >
-                {advancedAuthorizationEnabled
-                  ? <ShieldCheck className="size-[17px]" />
-                  : <ShieldX className="size-[17px]" />}
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent side="top">
-              <p>{advancedAuthorizationEnabled ? '高级授权已开启：允许 Git/SSH 命令' : '开启高级授权：允许 Git/SSH 命令'}</p>
-            </TooltipContent>
-          </Tooltip>
-        ),
-      },
-    ] : []),
+    ]),
+    {
+      key: 'advanced-authorization',
+      node: (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              className={cn(inputToolbarButtonClass, advancedAuthorizationEnabled && 'text-[var(--ui-primary)]')}
+              onClick={() => void handleAdvancedAuthorizationChange()}
+              disabled={streaming || backgroundWaiting}
+              aria-pressed={advancedAuthorizationEnabled}
+              aria-label="高级授权"
+            >
+              {advancedAuthorizationEnabled
+                ? <ShieldCheck className="size-[17px]" />
+                : <ShieldX className="size-[17px]" />}
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side="top">
+            <p>{advancedAuthorizationEnabled ? '高级授权已开启：允许 Git/SSH 和 AI浏览器全部页面操作' : '开启高级授权：允许 Git/SSH 和 AI浏览器全部页面操作'}</p>
+          </TooltipContent>
+        </Tooltip>
+      ),
+    },
     { key: 'speech', node: <SpeechButton className={inputToolbarButtonClass} /> },
     {
       key: 'attach-content',
@@ -2851,6 +2851,7 @@ export function AgentConversationSurface({ sessionId, variant = 'main' }: AgentC
             onRewind={handleRewindRequest}
             onCreateTodo={handleOpenReplyTodoDialog}
             onCompact={handleCompact}
+            showHeader={!compact}
           />
         )}
 

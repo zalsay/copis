@@ -45,6 +45,48 @@ function buildPrompt(agentCwd: string, memoryPolicy?: 'off' | 'visible' | 'writa
 }
 
 describe('项目与会话工作台提示词', () => {
+  test('Given user Browser Context When 构建系统提示词 Then 跨站地址直接执行且不要求单次确认', () => {
+    const prompt = buildSystemPrompt({
+      agentRuntime: 'pi',
+      sessionId: 'session-browser',
+      permissionMode: 'bypassPermissions',
+      browserContext: {
+        tabId: 'web-1',
+        url: 'https://example.com/',
+      },
+    })
+
+    expect(prompt).toContain('用户主会话明确要求的 HTTP(S) 地址可直接通过 `BrowserPageOpenTab` 或 `BrowserPageNavigate` 打开')
+    expect(prompt).not.toContain('跨 Origin 导航必须等待 Copis 的单次确认')
+  })
+
+  test('Given a Browser Context with Composer advanced authorization When 构建系统提示词 Then permits sensitive page actions', () => {
+    const prompt = buildSystemPrompt({
+      agentRuntime: 'pi',
+      sessionId: 'session-browser-advanced',
+      permissionMode: 'bypassPermissions',
+      browserContext: { tabId: 'web-1', url: 'https://example.com/' },
+      browserAdvancedAuthorization: true,
+    })
+
+    expect(prompt).toContain('Composer“高级授权”已开启')
+    expect(prompt).toContain('密码、验证码、支付、文件上传、Captcha 和 secret 字段')
+    expect(prompt).toContain('直接执行')
+    expect(prompt).not.toContain('密码、验证码、支付、文件上传、Captcha 和 secret 字段必须由用户亲自处理')
+  })
+
+  test('Given a Browser Context without Composer advanced authorization When 构建系统提示词 Then retains the sensitive page-action restriction', () => {
+    const prompt = buildSystemPrompt({
+      agentRuntime: 'pi',
+      sessionId: 'session-browser-default',
+      permissionMode: 'bypassPermissions',
+      browserContext: { tabId: 'web-1', url: 'https://example.com/' },
+    })
+
+    expect(prompt).toContain('Composer“高级授权”未开启')
+    expect(prompt).toContain('必须由用户亲自处理')
+  })
+
   test('Given Pi 会话 When 构建系统提示词 Then 明确基础工具和内置 Node 命令边界', () => {
     const prompt = buildPrompt('/tmp/sample-project')
 

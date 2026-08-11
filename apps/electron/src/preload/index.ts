@@ -312,6 +312,7 @@ export interface ElectronAPI {
   browserWorkflow: {
     bindContext: (sessionId: string, context: BrowserAgentContext) => Promise<BrowserWorkflowStatus>
     unbindContext: (sessionId: string) => Promise<void>
+    getSessionIdForTab: (tabId: string) => Promise<string | undefined>
     getStatus: (sessionId: string) => Promise<BrowserWorkflowStatus>
     setControlMode: (sessionId: string, mode: BrowserPageControlMode) => Promise<BrowserWorkflowStatus>
     startRecording: (sessionId: string) => Promise<BrowserWorkflowStatus>
@@ -1356,6 +1357,7 @@ const electronAPI: ElectronAPI = {
   browserWorkflow: {
     bindContext: (sessionId: string, context: BrowserAgentContext) => ipcRenderer.invoke(BROWSER_WORKFLOW_IPC_CHANNELS.BIND_CONTEXT, sessionId, context) as Promise<BrowserWorkflowStatus>,
     unbindContext: (sessionId: string) => ipcRenderer.invoke(BROWSER_WORKFLOW_IPC_CHANNELS.UNBIND_CONTEXT, sessionId) as Promise<void>,
+    getSessionIdForTab: (tabId: string) => ipcRenderer.invoke(BROWSER_WORKFLOW_IPC_CHANNELS.SESSION_FOR_TAB, tabId) as Promise<string | undefined>,
     getStatus: (sessionId: string) => ipcRenderer.invoke(BROWSER_WORKFLOW_IPC_CHANNELS.STATUS, sessionId) as Promise<BrowserWorkflowStatus>,
     setControlMode: (sessionId: string, mode: BrowserPageControlMode) => ipcRenderer.invoke(BROWSER_WORKFLOW_IPC_CHANNELS.SET_CONTROL_MODE, sessionId, mode) as Promise<BrowserWorkflowStatus>,
     startRecording: (sessionId: string) => ipcRenderer.invoke(BROWSER_WORKFLOW_IPC_CHANNELS.START_RECORDING, sessionId) as Promise<BrowserWorkflowStatus>,

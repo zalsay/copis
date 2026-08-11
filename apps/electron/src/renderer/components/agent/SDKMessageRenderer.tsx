@@ -382,9 +382,11 @@ export interface AssistantTurnRendererProps {
   stoppedByUser?: boolean
   /** 用户在前端选择的模型 ID（优先用于显示名称） */
   sessionModelId?: string
+  /** 是否显示助手头像头部，默认 true */
+  showHeader?: boolean
 }
 
-export function AssistantTurnRenderer({ turn, allMessages, basePath, onFork, onRewind, onCreateTodo, onRetry, onRetryInNewSession, onCompact, onRelinkProjectRoot, onRestoreProjectRoot, isStreaming, stoppedByUser, sessionModelId }: AssistantTurnRendererProps): React.ReactElement | null {
+export function AssistantTurnRenderer({ turn, allMessages, basePath, onFork, onRewind, onCreateTodo, onRetry, onRetryInNewSession, onCompact, onRelinkProjectRoot, onRestoreProjectRoot, isStreaming, stoppedByUser, sessionModelId, showHeader = true }: AssistantTurnRendererProps): React.ReactElement | null {
   // 收集所有 assistant 消息的内容块，保留 parent_tool_use_id 关联
   interface EnrichedBlock {
     block: SDKContentBlock
@@ -520,10 +522,12 @@ export function AssistantTurnRenderer({ turn, allMessages, basePath, onFork, onR
 
   return (
     <Message from="assistant">
-      <MessageHeader
-        logo={<AssistantLogo />}
-      />
-      <MessageContent>
+      {showHeader && (
+        <MessageHeader
+          logo={<AssistantLogo />}
+        />
+      )}
+      <MessageContent hasAvatar={showHeader}>
         <TurnFileMapProvider map={turnFileMap}>
         <div className={cn('space-y-2')}>
           {renderItems.map((item, itemIndex) => {
@@ -560,7 +564,7 @@ export function AssistantTurnRenderer({ turn, allMessages, basePath, onFork, onR
       </MessageContent>
       {/* 文件改动汇总：流式结束后展示本轮所有 Edit/Write/MultiEdit/NotebookEdit 文件 */}
       {!isStreaming && (
-        <TurnFileChangesSummary turnMessages={turn.turnMessages} basePath={basePath} />
+        <TurnFileChangesSummary turnMessages={turn.turnMessages} basePath={basePath} hasAvatar={showHeader} />
       )}
       {/* 操作栏：流式输出完成后显示操作按钮 */}
       {!isStreaming && (() => {
@@ -572,7 +576,7 @@ export function AssistantTurnRenderer({ turn, allMessages, basePath, onFork, onR
         const hasDuration = durationMs != null
         if (!hasDuration && !hasActions && !showStoppedBadge) return null
         return (
-          <MessageActions className="pl-[46px] mt-0.5 min-h-[28px] justify-start">
+          <MessageActions className={cn('mt-0.5 min-h-[28px] justify-start', showHeader && 'pl-[46px]')}>
             {hasDuration && <DurationBadge durationMs={durationMs!} usage={usage} />}
             {turn.createdAt && (
               <span className="message-time text-xs text-foreground/[0.38] leading-none tabular-nums">
@@ -652,7 +656,7 @@ export function SDKMessageRenderer({
             logo={<AssistantLogo />}
           />
         )}
-        <MessageContent>
+        <MessageContent hasAvatar={showHeader}>
           <div className={cn('space-y-2')}>
             {blocks.map((block, i) => (
               <ContentBlock
@@ -1338,6 +1342,8 @@ export interface MessageGroupRendererProps {
   stoppedByUser?: boolean
   /** 用户在前端选择的模型 ID（优先用于显示名称） */
   sessionModelId?: string
+  /** 是否显示助手头像头部，默认 true */
+  showHeader?: boolean
 }
 
 /**
@@ -1386,7 +1392,7 @@ export function getGroupId(group: MessageGroup): string {
 
 // getGroupPreview 已迁移至 @copis/session-core（本文件从该包 import 并 re-export）
 
-export function MessageGroupRenderer({ group, allMessages, basePath, onFork, onRewind, onCreateTodo, onRetry, onRetryInNewSession, onCompact, onRelinkProjectRoot, onRestoreProjectRoot, isStreaming, stoppedByUser, sessionModelId }: MessageGroupRendererProps): React.ReactElement | null {
+export function MessageGroupRenderer({ group, allMessages, basePath, onFork, onRewind, onCreateTodo, onRetry, onRetryInNewSession, onCompact, onRelinkProjectRoot, onRestoreProjectRoot, isStreaming, stoppedByUser, sessionModelId, showHeader = true }: MessageGroupRendererProps): React.ReactElement | null {
   const groupId = getGroupId(group)
 
   if (group.type === 'user') {
@@ -1422,6 +1428,7 @@ export function MessageGroupRenderer({ group, allMessages, basePath, onFork, onR
         isStreaming={isStreaming}
         stoppedByUser={stoppedByUser}
         sessionModelId={sessionModelId}
+        showHeader={showHeader}
       />
     </div>
   )

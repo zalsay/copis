@@ -37,6 +37,8 @@ export interface BrowserPageCdpCommandInput {
 export interface BrowserPageControlRuntime {
   getContext: (sessionId: string) => BrowserAgentContext | undefined
   getControlMode: (sessionId: string) => BrowserPageControlMode
+  isAdvancedAuthorizationEnabled: (sessionId: string) => boolean
+  resolveUploadPaths: (sessionId: string, paths: string[]) => string[]
   getTab: (tabId: string) => BrowserPageControlTab | undefined
   sendCommand: (input: BrowserPageCdpCommandInput) => Promise<unknown>
   navigate: (tabId: string, url: string) => void
@@ -49,6 +51,7 @@ export interface BrowserPageControlService {
   typeText: (sessionId: string, ref: string, text: string) => Promise<BrowserPageActionResult>
   select: (sessionId: string, ref: string, value: string) => Promise<BrowserPageActionResult>
   press: (sessionId: string, ref: string, key: string) => Promise<BrowserPageActionResult>
+  upload: (sessionId: string, ref: string, paths: string[]) => Promise<BrowserPageActionResult>
   scroll: (sessionId: string, deltaX: number, deltaY: number) => Promise<BrowserPageActionResult>
   navigate: (sessionId: string, url: string) => Promise<BrowserPageActionResult>
 }
@@ -148,6 +151,11 @@ function sanitizePageUrl(value: string): string {
 function unwrapEvaluationValue(response: unknown): unknown {
   if (!isRecord(response) || !isRecord(response.result)) return undefined
   return response.result.value
+}
+
+function unwrapEvaluationObjectId(response: unknown): string | undefined {
+  if (!isRecord(response) || !isRecord(response.result)) return undefined
+  return typeof response.result.objectId === 'string' && response.result.objectId ? response.result.objectId : undefined
 }
 
 interface BrowserPagePoint {
@@ -304,12 +312,17 @@ function clickTargetSource(element: CachedBrowserPageElement): string {
   })()`
 }
 
-function focusTargetSource(element: CachedBrowserPageElement, selectValue?: string): string {
+function focusTargetSource(
+  element: CachedBrowserPageElement,
+  selectValue?: string,
+  allowSensitive = false,
+): string {
   return `(() => {
     const selector = ${JSON.stringify(element.selector)};
     const expectedTag = ${JSON.stringify(element.publicElement.tagName)};
     const expectedName = ${JSON.stringify(element.publicElement.name ?? '')};
     const selectValue = ${selectValue === undefined ? 'undefined' : JSON.stringify(selectValue)};
+    const allowSensitive = ${allowSensitive};
     const normalize = (value) => String(value || '').trim().replace(/\\s+/g, ' ');
     const target = document.querySelector(selector);
     if (!target) return { ok: false, reason: 'not_found' };
@@ -319,7 +332,7 @@ function focusTargetSource(element: CachedBrowserPageElement, selectValue?: stri
     }
     const inputType = target instanceof HTMLInputElement ? String(target.type || 'text').toLowerCase() : '';
     const signature = [actualName, target.id, target.getAttribute('name'), target.getAttribute('autocomplete')].join(' ');
-    if (inputType === 'password' || inputType === 'file' || /(?:password|passwd|otp|verification|verify|auth.?code|card|credit|cvv|cvc|payment|bank|captcha|challenge|secret|token|api.?key|密码|验证码|支付|银行卡|信用卡|密钥|令牌)/i.test(signature)) {
+    if (!allowSensitive && (inputType === 'password' || inputType === 'file' || /(?:password|passwd|otp|verification|verify|auth.?code|card|credit|cvv|cvc|payment|bank|captcha|challenge|secret|token|api.?key|密码|验证码|支付|银行卡|信用卡|密钥|令牌)/i.test(signature))) {
       return { ok: false, reason: 'sensitive' };
     }
     if ('disabled' in target && target.disabled) return { ok: false, reason: 'disabled' };
@@ -335,6 +348,29 @@ function focusTargetSource(element: CachedBrowserPageElement, selectValue?: stri
       return { ok: true, x, y, optionIndex };
     }
     return { ok: true, x, y };
+  })()`
+}
+
+function fileInputTargetSource(element: CachedBrowserPageElement): string {
+  return `(() => {
+    const target = document.querySelector(${JSON.stringify(element.selector)});
+    if (!(target instanceof HTMLInputElement) || !target.matches('input[type=file]')) return null;
+    const expectedName = ${JSON.stringify(element.publicElement.name ?? '')};
+    const actualName = String(target.getAttribute('aria-label') || (target.labels && target.labels[0] ? target.labels[0].innerText : '') || target.placeholder || target.name || target.id || '').trim();
+    if (expectedName && actualName && expectedName !== actualName) return null;
+    if (target.disabled) return null;
+    target.focus();
+    return target;
+  })()`
+}
+
+function dispatchFileInputEventsSource(element: CachedBrowserPageElement): string {
+  return `(() => {
+    const target = document.querySelector(${JSON.stringify(element.selector)});
+    if (!(target instanceof HTMLInputElement) || !target.matches('input[type=file]')) return false;
+    target.dispatchEvent(new Event('input', { bubbles: true }));
+    target.dispatchEvent(new Event('change', { bubbles: true }));
+    return true;
   })()`
 }
 
@@ -370,7 +406,8 @@ export function createBrowserPageControlService(runtime: BrowserPageControlRunti
     if (!element.publicElement.enabled) throw new Error('页面元素当前不可用')
   }
 
-  const assertNonSensitiveElement = (element: CachedBrowserPageElement): void => {
+  const assertNonSensitiveElement = (sessionId: string, element: CachedBrowserPageElement): void => {
+    if (runtime.isAdvancedAuthorizationEnabled(sessionId)) return
     if (element.publicElement.sensitiveReason) {
       throw new Error(`AI浏览器不允许填写敏感字段: ${element.publicElement.sensitiveReason}`)
     }
@@ -401,11 +438,19 @@ export function createBrowserPageControlService(runtime: BrowserPageControlRunti
     }
   }
 
-  const focusElement = async (tab: BrowserPageControlTab, element: CachedBrowserPageElement, selectValue?: string): Promise<Record<string, unknown>> => {
+  const focusElement = async (
+    sessionId: string,
+    tab: BrowserPageControlTab,
+    element: CachedBrowserPageElement,
+    selectValue?: string,
+  ): Promise<Record<string, unknown>> => {
     const response = await runtime.sendCommand({
       tabId: tab.id,
       method: 'Runtime.evaluate',
-      params: { expression: focusTargetSource(element, selectValue), returnByValue: true },
+      params: {
+        expression: focusTargetSource(element, selectValue, runtime.isAdvancedAuthorizationEnabled(sessionId)),
+        returnByValue: true,
+      },
     })
     const result = unwrapEvaluationValue(response)
     if (!isRecord(result) || result.ok !== true) {
@@ -497,8 +542,8 @@ export function createBrowserPageControlService(runtime: BrowserPageControlRunti
       if (text.length > 10_000) throw new Error('单次页面输入不能超过 10000 个字符')
       const { tab, element } = requireCachedElement(sessionId, ref)
       assertInteractiveElement(element)
-      assertNonSensitiveElement(element)
-      const point = getFocusedPoint(await focusElement(tab, element))
+      assertNonSensitiveElement(sessionId, element)
+      const point = getFocusedPoint(await focusElement(sessionId, tab, element))
       if (point) await showCursor(tab.id, 'type', point)
       const isMac = process.platform === 'darwin'
       const modifier = isMac ? 'Meta' : 'Control'
@@ -516,8 +561,8 @@ export function createBrowserPageControlService(runtime: BrowserPageControlRunti
       assertBrowserPageMutationAllowed(runtime.getControlMode(sessionId))
       const { tab, element } = requireCachedElement(sessionId, ref)
       assertInteractiveElement(element)
-      assertNonSensitiveElement(element)
-      const result = await focusElement(tab, element, value.slice(0, 500))
+      assertNonSensitiveElement(sessionId, element)
+      const result = await focusElement(sessionId, tab, element, value.slice(0, 500))
       const optionIndex = typeof result.optionIndex === 'number' && Number.isInteger(result.optionIndex)
         ? result.optionIndex
         : undefined
@@ -536,10 +581,49 @@ export function createBrowserPageControlService(runtime: BrowserPageControlRunti
       if (!allowedKeys.has(key)) throw new Error(`不支持的页面按键: ${key}`)
       const { tab, element } = requireCachedElement(sessionId, ref)
       assertInteractiveElement(element)
-      assertNonSensitiveElement(element)
-      const point = getFocusedPoint(await focusElement(tab, element))
+      assertNonSensitiveElement(sessionId, element)
+      const point = getFocusedPoint(await focusElement(sessionId, tab, element))
       if (point) await showCursor(tab.id, 'key', point)
       await dispatchKey(tab.id, key)
+      return actionResult(runtime, tab.id)
+    },
+
+    async upload(sessionId, ref, paths) {
+      assertBrowserPageMutationAllowed(runtime.getControlMode(sessionId))
+      if (!runtime.isAdvancedAuthorizationEnabled(sessionId)) {
+        throw new Error('文件上传需要先在 Composer 开启高级授权')
+      }
+      if (paths.length === 0 || paths.length > 20) throw new Error('单次页面上传文件数量必须在 1 到 20 之间')
+      const { tab, element } = requireCachedElement(sessionId, ref)
+      assertInteractiveElement(element)
+      if (element.publicElement.sensitiveReason !== 'file') throw new Error('目标元素不是文件上传字段')
+      const files = runtime.resolveUploadPaths(sessionId, paths)
+      if (files.length === 0) throw new Error('没有可上传的文件')
+      const target = await runtime.sendCommand({
+        tabId: tab.id,
+        method: 'Runtime.evaluate',
+        params: { expression: fileInputTargetSource(element), returnByValue: false },
+      })
+      const objectId = unwrapEvaluationObjectId(target)
+      if (!objectId) throw new Error('页面文件上传元素已变化，请重新调用 BrowserPageObserve')
+      try {
+        await runtime.sendCommand({
+          tabId: tab.id,
+          method: 'DOM.setFileInputFiles',
+          params: { objectId, files },
+        })
+        await runtime.sendCommand({
+          tabId: tab.id,
+          method: 'Runtime.evaluate',
+          params: { expression: dispatchFileInputEventsSource(element), returnByValue: true },
+        })
+      } finally {
+        await runtime.sendCommand({
+          tabId: tab.id,
+          method: 'Runtime.releaseObject',
+          params: { objectId },
+        }).catch(() => undefined)
+      }
       return actionResult(runtime, tab.id)
     },
 

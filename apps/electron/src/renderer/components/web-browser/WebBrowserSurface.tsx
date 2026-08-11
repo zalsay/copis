@@ -70,6 +70,7 @@ export function WebBrowserSurface(): React.ReactElement {
   const hostRef = React.useRef<HTMLDivElement>(null)
   const [address, setAddress] = React.useState('')
   const [browserWorkflowEnabled, setBrowserWorkflowEnabled] = React.useState<boolean | null>(null)
+  const [browserAgentContextLookupTabId, setBrowserAgentContextLookupTabId] = React.useState<string | null>(null)
   const [browserActionPending, setBrowserActionPending] = React.useState(false)
   const browserActionPendingRef = React.useRef(false)
   const browserAgentContextRequestRef = React.useRef<BrowserAgentContextRequest | null>(null)
@@ -118,6 +119,30 @@ export function WebBrowserSurface(): React.ReactElement {
       if (event.sessionId === browserAgentSessionId) setBrowserWorkflowStatus(event.status)
     })
   }, [browserAgentSessionId, setBrowserWorkflowStatus])
+
+  React.useLayoutEffect(() => {
+    if (!activeTabId) {
+      setBrowserAgentContextLookupTabId(null)
+      return
+    }
+    let active = true
+    setBrowserAgentContextLookupTabId(activeTabId)
+    void window.electronAPI.browserWorkflow.getSessionIdForTab(activeTabId).then((sessionId) => {
+      if (!active || !sessionId) return
+      browserAgentSessionIdRef.current = sessionId
+      setBrowserAgentSessionId(sessionId)
+      setBrowserAgentPanelOpen(true)
+    }).catch((error) => {
+      if (active) console.error('[Browser Workflow] 恢复网页 Agent 绑定失败:', error)
+    }).finally(() => {
+      if (active) {
+        setBrowserAgentContextLookupTabId((tabId) => tabId === activeTabId ? null : tabId)
+      }
+    })
+    return () => {
+      active = false
+    }
+  }, [activeTabId, setBrowserAgentPanelOpen, setBrowserAgentSessionId])
 
   React.useEffect(() => {
     setAddress(activeTab?.url ?? '')
@@ -533,6 +558,7 @@ export function WebBrowserSurface(): React.ReactElement {
 
   React.useEffect(() => {
     if (!browserAgentSessionId || !activeTabId) return
+    if (browserAgentContextLookupTabId === activeTabId) return
     const request: BrowserAgentContextRequest = {
       requestId: (browserAgentContextRequestRef.current?.requestId ?? 0) + 1,
       sessionId: browserAgentSessionId,
@@ -561,7 +587,7 @@ export function WebBrowserSurface(): React.ReactElement {
     return () => {
       cancelled = true
     }
-  }, [activeTab?.url, activeTabId, browserAgentBindingQueue, browserAgentSessionId, setBrowserWorkflowStatus])
+  }, [activeTab?.url, activeTabId, browserAgentBindingQueue, browserAgentContextLookupTabId, browserAgentSessionId, setBrowserWorkflowStatus])
 
   React.useEffect(() => {
     browserAgentSessionIdRef.current = browserAgentSessionId

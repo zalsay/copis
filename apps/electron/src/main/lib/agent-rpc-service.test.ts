@@ -117,6 +117,11 @@ mock.module('./functional-module-manager', () => ({
 
 mock.module('./browser-workflow-service', () => ({
   getBrowserAgentContext: () => browserContext,
+  isBrowserPageAdvancedAuthorizationEnabled: () => (
+    rpcSession.advancedAuthorization === true
+    && !rpcSession.sourceAutomationId
+    && !rpcSession.sourceDelegationId
+  ),
   sanitizeBrowserWorkflowUrl: (url: string) => url.replace(/token=[^&]+/, 'token=REDACTED'),
 }))
 
@@ -426,6 +431,28 @@ describe('Browser Agent RPC 准备', () => {
     browserContext = undefined
   })
 
+  test('Given a user Browser session with Composer advanced authorization When preparing Pi Worker Then it permits sensitive page actions in the prompt', async () => {
+    const { prepareAgentRpcRun } = await import('./agent-rpc-service')
+    browserContext = { tabId: 'tab-1' }
+    rpcSession.advancedAuthorization = true
+
+    try {
+      const run = await prepareAgentRpcRun({
+        sessionId: rpcSession.id,
+        userMessage: '填写当前页面',
+        channelId: 'channel-1',
+        modelId: rpcSession.modelId,
+        agentRuntime: 'pi',
+      })
+
+      expect(run.query.systemPrompt).toContain('Composer“高级授权”已开启')
+      expect(run.query.systemPrompt).toContain('直接执行')
+    } finally {
+      delete rpcSession.advancedAuthorization
+      browserContext = undefined
+    }
+  })
+
   test('Given Browser Agent run When queueing and finalizing Then it retains the Skill and revokes the issued capability', async () => {
     const { assertBrowserAgentWorkerCapability } = await import('./browser-agent-worker-capability')
     const { finalizeAgentRpcRun, prepareAgentRpcQueue, prepareAgentRpcRun } = await import('./agent-rpc-service')
@@ -454,7 +481,7 @@ describe('Browser Agent RPC 准备', () => {
     browserContext = undefined
   })
 
-  test('Given ordinary Agent session When preparing Pi Worker Then Browser-only fields stay absent', async () => {
+  test('Given ordinary Agent session When preparing Pi Worker Then it receives a capability to open its first browser tab', async () => {
     const { prepareAgentRpcRun } = await import('./agent-rpc-service')
     browserContext = undefined
 
@@ -469,6 +496,9 @@ describe('Browser Agent RPC 准备', () => {
 
     expect(run.query.permissionMode).toBe('plan')
     expect(run.query.skillMentions ?? []).not.toContain('browser-page-control')
-    expect(run.query.browserPageControl).toBeUndefined()
+    expect(run.query.browserPageControl).toEqual({
+      endpoint: '/api/internal/agent/browser-tool',
+      token: expect.any(String),
+    })
   })
 })

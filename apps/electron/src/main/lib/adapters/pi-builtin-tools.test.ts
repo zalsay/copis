@@ -2,6 +2,7 @@ import { describe, expect, mock, test } from 'bun:test'
 import { memoryToolNamesForPolicy } from './memory-tool-policy'
 
 const executeDirect = mock(async () => ({ kind: 'json' as const, value: { source: 'dispatcher' } }))
+let browserAgentContext: { tabId: string } | undefined = { tabId: 'tab-1' }
 
 mock.module('electron', () => ({
   app: { isPackaged: true, getPath: () => '/tmp/copis-pi-builtin-tools-test' },
@@ -26,7 +27,8 @@ mock.module('../browser-agent-tool-service', () => ({
   browserAgentToolService: { executeDirect },
 }))
 mock.module('../browser-workflow-service', () => ({
-  getBrowserAgentContext: () => ({ tabId: 'tab-1' }),
+  getBrowserAgentContext: () => browserAgentContext,
+  isBrowserPageAdvancedAuthorizationEnabled: () => false,
   sanitizeBrowserWorkflowUrl: (url: string) => url,
   getBrowserPageControlMode: () => 'authorized',
   getBrowserWorkflowDraft: () => undefined,
@@ -156,6 +158,47 @@ describe('Pi Browser 工具复用主进程 dispatcher', () => {
       toolInput: { url: 'https://www.xiaohongshu.com/' },
       workspaceId: 'workspace-1',
     }))
+  })
+
+  test('Given Pi has no Browser Context When tools are built Then it still exposes BrowserPageOpenTab for a user to create the first tab', async () => {
+    browserAgentContext = undefined
+    const sdk = {
+      defineTool: <T>(definition: T): T => definition,
+    } as unknown as typeof import('@earendil-works/pi-coding-agent')
+
+    try {
+      const result = await buildPiBuiltinTools(sdk, {
+        sessionId: 'browser-session',
+        channelId: 'channel-1',
+        workspaceId: 'workspace-1',
+        memoryPolicy: 'off',
+        triggeredBy: 'user',
+      })
+
+      expect(result.tools.some((tool) => tool.name === 'BrowserPageOpenTab')).toBe(true)
+      expect(result.tools.some((tool) => tool.name === 'BrowserPageObserve')).toBe(true)
+    } finally {
+      browserAgentContext = { tabId: 'tab-1' }
+    }
+  })
+
+  test('Given Composer 高级授权 When direct Pi BrowserPageType is built Then its input permits the user-requested sensitive value', async () => {
+    const sdk = {
+      defineTool: <T>(definition: T): T => definition,
+    } as unknown as typeof import('@earendil-works/pi-coding-agent')
+    const result = await buildPiBuiltinTools(sdk, {
+      sessionId: 'browser-session',
+      channelId: 'channel-1',
+      workspaceId: 'workspace-1',
+      memoryPolicy: 'off',
+      triggeredBy: 'user',
+    })
+    const text = (result.tools.find((tool) => tool.name === 'BrowserPageType') as unknown as {
+      parameters?: { properties?: { text?: { description?: string } } }
+    } | undefined)?.parameters?.properties?.text?.description
+
+    expect(text).toContain('高级授权开启时可包含敏感值')
+    expect(text).not.toContain('不得包含')
   })
 })
 

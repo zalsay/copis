@@ -10,4 +10,8 @@ describe('Browser Workflow 录制控制 IPC', () => {
     expect(BROWSER_WORKFLOW_IPC_CHANNELS.SET_CONTROL_MODE).toBe('browser-workflows:set-control-mode')
     expect(Object.values(BROWSER_WORKFLOW_IPC_CHANNELS).some((channel) => /cdp|debugger/i.test(channel))).toBe(false)
   })
+
+  test('Given 浏览器页签激活 When 恢复 AI浏览器会话 Then 使用独立的页签绑定查询通道', () => {
+    expect(BROWSER_WORKFLOW_IPC_CHANNELS.SESSION_FOR_TAB).toBe('browser-workflows:session-for-tab')
+  })
 })

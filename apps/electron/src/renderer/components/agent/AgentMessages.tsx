@@ -201,6 +201,8 @@ interface AgentMessagesProps {
   onRewind?: (assistantMessageUuid: string) => void
   onCreateTodo?: (text: string) => void
   onCompact?: () => void
+  /** 是否显示助手头像头部，默认 true */
+  showHeader?: boolean
 }
 
 /** 空状态引导 — 使用 WelcomeEmptyState */
@@ -486,7 +488,7 @@ function AgentRunningIndicator({ startedAt }: { startedAt?: number }): React.Rea
   )
 }
 
-export function AgentMessages({ sessionId, sessionModelId, messagesLoaded, persistedSDKMessages, streaming, streamState, liveMessages, sessionPath, attachedDirs, stoppedByUser, onRetry, onRetryInNewSession, onRelinkProjectRoot, onRestoreProjectRoot, onFork, onRewind, onCreateTodo, onCompact }: AgentMessagesProps): React.ReactElement {
+export function AgentMessages({ sessionId, sessionModelId, messagesLoaded, persistedSDKMessages, streaming, streamState, liveMessages, sessionPath, attachedDirs, stoppedByUser, onRetry, onRetryInNewSession, onRelinkProjectRoot, onRestoreProjectRoot, onFork, onRewind, onCreateTodo, onCompact, showHeader = true }: AgentMessagesProps): React.ReactElement {
   const userProfile = useAtomValue(userProfileAtom)
   const setMinimapCache = useSetAtom(tabMinimapCacheAtom)
   const historySelectionRootRef = React.useRef<HTMLDivElement>(null)
@@ -745,6 +747,7 @@ export function AgentMessages({ sessionId, sessionModelId, messagesLoaded, persi
                     isStreaming={isLive || undefined}
                     stoppedByUser={isLastAssistantTurn || undefined}
                     sessionModelId={sessionModelId}
+                    showHeader={showHeader}
                   />
                 )
               })}
@@ -763,10 +766,12 @@ export function AgentMessages({ sessionId, sessionModelId, messagesLoaded, persi
               {/* 注意：工具活动已通过 SDK 渲染路径（liveGroups）展示 */}
               {!hasLiveAssistantContent && !suppressAgentRunning && (streaming || smoothContent || retrying) && (
                 <Message from="assistant">
-                  <MessageHeader
-                    logo={<AssistantLogo />}
-                  />
-                  <MessageContent>
+                  {showHeader && (
+                    <MessageHeader
+                      logo={<AssistantLogo />}
+                    />
+                  )}
+                  <MessageContent hasAvatar={showHeader}>
                     {retrying && <RetryingNotice retrying={retrying} />}
                     {smoothContent ? (
                       <>

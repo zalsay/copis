@@ -7,7 +7,7 @@ export type BrowserAgentCapabilityTrigger = 'user' | 'automation' | 'delegation'
 
 interface BrowserAgentWorkerCapabilityRecord {
   sessionId: string
-  tabId: string
+  tabId?: string
   token: string
   triggeredBy: BrowserAgentCapabilityTrigger
   expiresAt: number
@@ -38,11 +38,11 @@ function tokensMatch(expected: string, received: string): boolean {
 
 export function issueBrowserAgentWorkerCapability(input: {
   sessionId: string
-  tabId: string
+  tabId?: string
   triggeredBy: BrowserAgentCapabilityTrigger
 }): PiWorkerBrowserCapability {
   requireNonBlank(input.sessionId, 'sessionId')
-  requireNonBlank(input.tabId, 'tabId')
+  if (input.tabId !== undefined) requireNonBlank(input.tabId, 'tabId')
   const token = randomBytes(32).toString('base64url')
   capabilities.set(input.sessionId, {
     sessionId: input.sessionId,
@@ -56,7 +56,7 @@ export function issueBrowserAgentWorkerCapability(input: {
 
 export function assertBrowserAgentWorkerCapability(input: {
   sessionId: string
-  tabId: string
+  tabId?: string
   token: string
 }): { triggeredBy: BrowserAgentCapabilityTrigger } {
   const record = capabilities.get(input.sessionId)

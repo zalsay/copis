@@ -30,6 +30,7 @@ use memory::{
     MemoryRewriteInput, MemoryScope, MemoryStore, DEFAULT_LIST_LIMIT, DEFAULT_RECALL_LIMIT,
 };
 use payment_capability::PAYMENT_CAPABILITY_TOKEN_HEADER;
+use payment_workspace::PaymentWorkspace;
 use pi_rpc::{
     agent_session_id, is_agent_messages_route, is_agent_queue_route, is_agent_status_route,
     is_agent_stop_route, is_agent_workers_status_route, is_agent_workers_stop_all_route,
@@ -38,7 +39,7 @@ use pi_rpc::{
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::{json, Value};
 use skill_market::{handle_request as handle_skill_market_request, SkillMarketState};
-use working_payment::handle_request as handle_working_payment_request;
+use working_payment::{handle_request as handle_working_payment_request, WorkingPaymentState};
 use workspace_dev::{WorkspaceDevActionInput, WorkspaceDevError, WorkspaceDevStore};
 use workspace_mcp::{WorkspaceMcpError, WorkspaceMcpStore};
 use workspace_skills::{WorkspaceSkillsError, WorkspaceSkillsStore};
@@ -1060,6 +1061,8 @@ fn handle_connection(
     memory_store: Arc<MemoryStore>,
     expert_team_store: Arc<ExpertTeamStore>,
     skill_market_state: Arc<SkillMarketState>,
+    working_payment_state: Arc<WorkingPaymentState>,
+    payment_workspace: Arc<PaymentWorkspace>,
     workspace_mcp_store: Arc<WorkspaceMcpStore>,
     workspace_dev_store: Arc<WorkspaceDevStore>,
     workspace_skills_store: Arc<WorkspaceSkillsStore>,
@@ -1394,6 +1397,9 @@ fn handle_connection(
     if is_working_payment_path(path) {
         match handle_working_payment_request(
             &skill_market_state,
+            &working_payment_state,
+            workers.as_ref(),
+            payment_workspace.as_ref(),
             &request.method,
             &request.target,
             &request.body,
@@ -2577,6 +2583,14 @@ fn main() {
     let skill_market_state = Arc::new(SkillMarketState::new(
         std::env::var("COPIS_WORKING_ACCESS_TOKEN").ok(),
     ));
+    let working_payment_state = Arc::new(WorkingPaymentState::new());
+    let payment_workspace = match PaymentWorkspace::from_environment() {
+        Ok(workspace) => Arc::new(workspace),
+        Err(error) => {
+            eprintln!("[HTTP API] 默认支付工作区初始化失败: {}", error);
+            process::exit(1);
+        }
+    };
     let workspace_mcp_store = Arc::new(WorkspaceMcpStore::open(resolve_config_directory()));
     let workspace_dev_store = Arc::new(WorkspaceDevStore::open(resolve_config_directory()));
     let workspace_skills_store = Arc::new(WorkspaceSkillsStore::open(resolve_config_directory()));
@@ -2598,6 +2612,8 @@ fn main() {
                 let connection_memory = Arc::clone(&memory_store);
                 let connection_expert_teams = Arc::clone(&expert_team_store);
                 let connection_skill_market = Arc::clone(&skill_market_state);
+                let connection_working_payment = Arc::clone(&working_payment_state);
+                let connection_payment_workspace = Arc::clone(&payment_workspace);
                 let connection_workspace_mcp = Arc::clone(&workspace_mcp_store);
                 let connection_workspace_dev = Arc::clone(&workspace_dev_store);
                 let connection_workspace_skills = Arc::clone(&workspace_skills_store);
@@ -2611,6 +2627,8 @@ fn main() {
                         connection_memory,
                         connection_expert_teams,
                         connection_skill_market,
+                        connection_working_payment,
+                        connection_payment_workspace,
                         connection_workspace_mcp,
                         connection_workspace_dev,
                         connection_workspace_skills,

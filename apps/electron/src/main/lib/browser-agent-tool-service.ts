@@ -16,6 +16,7 @@ import { browserPageControl } from './browser-page-control-runtime'
 import {
   approveBrowserWorkflowDraft,
   getBrowserAgentContext,
+  isBrowserPageAdvancedAuthorizationEnabled,
   getBrowserPageControlMode,
   getBrowserWorkflowDraft,
   getBrowserWorkflowRecording,
@@ -33,7 +34,7 @@ import { getSettings } from './settings-service'
 import { redactLogOrigin, redactSensitiveLogValue, shortLogId } from './bridge-log-redaction'
 
 type BrowserPageControlOperations = Pick<BrowserPageControlService,
-  'observe' | 'getElement' | 'click' | 'typeText' | 'select' | 'press' | 'scroll' | 'navigate'>
+  'observe' | 'getElement' | 'click' | 'typeText' | 'select' | 'press' | 'upload' | 'scroll' | 'navigate'>
 
 export interface BrowserAgentToolResult {
   kind: 'json' | 'text'
@@ -65,6 +66,7 @@ interface BrowserAgentToolDependencies {
   browserPageControl: BrowserPageControlOperations
   openBrowserAgentTab: typeof openBrowserAgentTab
   getBrowserAgentContext: typeof getBrowserAgentContext
+  isAdvancedAuthorizationEnabled: typeof isBrowserPageAdvancedAuthorizationEnabled
   getBrowserPageControlMode: typeof getBrowserPageControlMode
   getBrowserWorkflowStatus: typeof getBrowserWorkflowStatus
   startBrowserWorkflowRecording: typeof startBrowserWorkflowRecording
@@ -88,6 +90,7 @@ export interface BrowserAgentToolServiceDependencies {
   browserPageControl?: Partial<BrowserPageControlOperations>
   openBrowserAgentTab?: BrowserAgentToolDependencies['openBrowserAgentTab']
   getBrowserAgentContext?: BrowserAgentToolDependencies['getBrowserAgentContext']
+  isAdvancedAuthorizationEnabled?: BrowserAgentToolDependencies['isAdvancedAuthorizationEnabled']
   getBrowserPageControlMode?: BrowserAgentToolDependencies['getBrowserPageControlMode']
   getBrowserWorkflowStatus?: BrowserAgentToolDependencies['getBrowserWorkflowStatus']
   startBrowserWorkflowRecording?: BrowserAgentToolDependencies['startBrowserWorkflowRecording']
@@ -130,6 +133,16 @@ function requiredString(input: Record<string, unknown>, key: string): string {
 function optionalNumber(input: Record<string, unknown>, key: string): number | undefined {
   const value = input[key]
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined
+}
+
+function requiredStringList(input: Record<string, unknown>, key: string): string[] {
+  const value = input[key]
+  if (!Array.isArray(value) || value.length === 0 || value.length > 20) {
+    throw new Error(`${key} 必须是 1 到 20 个文件路径`)
+  }
+  const paths = value.map((item) => typeof item === 'string' ? item.trim() : '')
+  if (paths.some((path) => !path || path.length > 4_096)) throw new Error(`${key} 包含无效文件路径`)
+  return Array.from(new Set(paths))
 }
 
 function workflowVariables(input: Record<string, unknown>): Record<string, string | number | boolean> | undefined {
@@ -190,6 +203,7 @@ const defaultDependencies: BrowserAgentToolDependencies = {
   browserPageControl,
   openBrowserAgentTab,
   getBrowserAgentContext,
+  isAdvancedAuthorizationEnabled: isBrowserPageAdvancedAuthorizationEnabled,
   getBrowserPageControlMode,
   getBrowserWorkflowStatus,
   startBrowserWorkflowRecording,
@@ -255,6 +269,8 @@ export function createBrowserAgentToolService(
     const workspaceId = input.workspaceId ?? dependencies.getWorkspaceId(input.sessionId)
     const signal = input.signal ?? new AbortController().signal
     const requestApproval = input.requestSingleApproval ?? dependencies.requestSingleApproval
+    const advancedAuthorizationEnabled = input.triggeredBy === 'user'
+      && dependencies.isAdvancedAuthorizationEnabled(input.sessionId)
     const logFields = {
       sessionId: shortLogId(input.sessionId),
       toolCallId: shortLogId(input.toolCallId),
@@ -323,7 +339,9 @@ export function createBrowserAgentToolService(
         const ref = requiredString(input.toolInput, 'ref')
         const text = typeof input.toolInput.text === 'string' ? input.toolInput.text : ''
         const element = dependencies.browserPageControl.getElement(input.sessionId, ref)
-        if (element.sensitiveReason) throw new BrowserAgentToolPolicyError(`AI浏览器不允许填写敏感字段: ${element.sensitiveReason}`)
+        if (element.sensitiveReason && !advancedAuthorizationEnabled) {
+          throw new BrowserAgentToolPolicyError(`AI浏览器不允许填写敏感字段: ${element.sensitiveReason}`)
+        }
         return { kind: 'json', value: await dependencies.browserPageControl.typeText(input.sessionId, ref, text) }
       }
       case 'BrowserPageSelect': {
@@ -332,7 +350,9 @@ export function createBrowserAgentToolService(
         const ref = requiredString(input.toolInput, 'ref')
         const value = requiredString(input.toolInput, 'value')
         const element = dependencies.browserPageControl.getElement(input.sessionId, ref)
-        if (element.sensitiveReason) throw new BrowserAgentToolPolicyError(`AI浏览器不允许填写敏感字段: ${element.sensitiveReason}`)
+        if (element.sensitiveReason && !advancedAuthorizationEnabled) {
+          throw new BrowserAgentToolPolicyError(`AI浏览器不允许填写敏感字段: ${element.sensitiveReason}`)
+        }
         return { kind: 'json', value: await dependencies.browserPageControl.select(input.sessionId, ref, value) }
       }
       case 'BrowserPagePress': {
@@ -341,8 +361,20 @@ export function createBrowserAgentToolService(
         const ref = requiredString(input.toolInput, 'ref')
         const key = requiredString(input.toolInput, 'key')
         const element = dependencies.browserPageControl.getElement(input.sessionId, ref)
-        if (element.sensitiveReason) throw new BrowserAgentToolPolicyError(`AI浏览器不允许操作敏感字段: ${element.sensitiveReason}`)
+        if (element.sensitiveReason && !advancedAuthorizationEnabled) {
+          throw new BrowserAgentToolPolicyError(`AI浏览器不允许操作敏感字段: ${element.sensitiveReason}`)
+        }
         return { kind: 'json', value: await dependencies.browserPageControl.press(input.sessionId, ref, key) }
+      }
+      case 'BrowserPageUpload': {
+        requireContext()
+        assertMutationAllowed()
+        if (!advancedAuthorizationEnabled) {
+          throw new BrowserAgentToolPolicyError('文件上传需要先在 Composer 开启高级授权')
+        }
+        const ref = requiredString(input.toolInput, 'ref')
+        const paths = requiredStringList(input.toolInput, 'paths')
+        return { kind: 'json', value: await dependencies.browserPageControl.upload(input.sessionId, ref, paths) }
       }
       case 'BrowserPageScroll': {
         requireContext()
@@ -367,7 +399,7 @@ export function createBrowserAgentToolService(
         } catch {
           throw new BrowserAgentToolPolicyError('页面导航地址不正确')
         }
-        if (!status.pageOrigin || targetOrigin !== status.pageOrigin) {
+        if (input.triggeredBy !== 'user' && (!status.pageOrigin || targetOrigin !== status.pageOrigin)) {
           await requestPageApproval({
             toolCallId: input.toolCallId,
             toolName: input.toolName,
@@ -379,8 +411,6 @@ export function createBrowserAgentToolService(
         return { kind: 'json', value: await dependencies.browserPageControl.navigate(input.sessionId, url) }
       }
       case 'BrowserPageOpenTab': {
-        requireContext()
-        assertMutationAllowed()
         const url = requiredString(input.toolInput, 'url')
         let targetUrl: string
         try {
@@ -390,9 +420,23 @@ export function createBrowserAgentToolService(
         } catch {
           throw new BrowserAgentToolPolicyError('新页签地址必须是 HTTP(S) 网页')
         }
+        if (!context) {
+          ensureUserTrigger(input.triggeredBy)
+          return {
+            kind: 'json',
+            value: {
+              ok: true,
+              ...(await dependencies.openBrowserAgentTab(input.sessionId, targetUrl)),
+              message: '已打开新的 HTTP(S) 网页页签并切换当前 AI浏览器绑定。',
+            },
+          }
+        }
+
+        requireContext()
+        assertMutationAllowed()
         const status = dependencies.getBrowserWorkflowStatus(input.sessionId)
         const targetOrigin = new URL(targetUrl).origin
-        if (!status.pageOrigin || targetOrigin !== status.pageOrigin) {
+        if (input.triggeredBy !== 'user' && (!status.pageOrigin || targetOrigin !== status.pageOrigin)) {
           await requestPageApproval({
             toolCallId: input.toolCallId,
             toolName: input.toolName,
@@ -553,10 +597,12 @@ export function createBrowserAgentToolService(
   return {
     async executeWorker(input) {
       const context = dependencies.getBrowserAgentContext(input.sessionId)
-      if (!context) throw new BrowserAgentWorkerCapabilityError('browser_capability_stale', 'AI浏览器 capability 已失效')
+      if (!context && input.toolName !== 'BrowserPageOpenTab') {
+        throw new BrowserAgentWorkerCapabilityError('browser_capability_stale', 'AI浏览器 capability 已失效')
+      }
       const { triggeredBy } = dependencies.assertWorkerCapability({
         sessionId: input.sessionId,
-        tabId: context.tabId,
+        tabId: context?.tabId,
         token: input.capabilityToken,
       })
       return execute({ ...input, triggeredBy })

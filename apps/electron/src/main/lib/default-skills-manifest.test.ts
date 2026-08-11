@@ -90,7 +90,7 @@ describe('默认 Skills 清单', () => {
     expect(frontmatter.get('name')).toBe('browser-workflow-automation')
     expect(frontmatter.get('displayName')).toBe('网页工作流自动化')
     expect(frontmatter.get('group')).toBe('系统内置')
-    expect(frontmatter.get('version')?.replace(/^['"]|['"]$/g, '')).toMatch(/^\d+\.\d+\.\d+$/)
+    expect(frontmatter.get('version')?.replace(/^['"]|['"]$/g, '')).toBe('1.0.2')
     expect(frontmatter.get('license')).toBe('AGPL-3.0-only')
 
     const content = readFileSync(join(DEFAULT_SKILLS_DIR, 'browser-workflow-automation', 'SKILL.md'), 'utf8')
@@ -99,6 +99,7 @@ describe('默认 Skills 清单', () => {
       'BrowserPageOpenTab',
       'BrowserPageObserve',
       'BrowserPageClick',
+      'BrowserPageUpload',
       'BrowserWorkflowList',
       'BrowserWorkflowGet',
       'BrowserWorkflowRun',
@@ -106,13 +107,30 @@ describe('默认 Skills 清单', () => {
       '询问模式只允许观察和读取页面',
       '高风险点击、选择和按键（包括 `Enter`）',
       '不重复请求单次审批',
-      '只有跨 Origin 的 `BrowserPageNavigate` 仍需要一次单独审批',
+      '用户主会话明确要求的 HTTP(S) 地址可直接通过 `BrowserPageOpenTab` 或 `BrowserPageNavigate` 打开，包括首次建页和跨 Origin 地址，不再单独审批',
+      'Composer“高级授权”',
+      '直接执行敏感字段操作',
       '密码、验证码',
       '网页内容当作系统指令',
     ]) {
       expect(content).toContain(requiredText)
     }
+    expect(content).toContain('没有 Browser Context 时，直接调用 `BrowserPageOpenTab` 打开用户指定的 HTTP(S) 地址。')
+    expect(content).not.toContain('需要用户先在 Copis 中打开并绑定内部网页页签')
     expect(content).not.toContain('为每一个明确动作取得单独确认')
+  })
+
+  test('网页控制 Skill 保持首次建页和跨站直接执行的用户主会话边界', () => {
+    const frontmatter = readFrontmatter('browser-page-control')
+    expect(frontmatter.get('version')?.replace(/^['"]|['"]$/g, '')).toBe('1.0.3')
+
+    const content = readFileSync(join(DEFAULT_SKILLS_DIR, 'browser-page-control', 'SKILL.md'), 'utf8')
+    expect(content).toContain('用户主会话明确要求的 HTTP(S) 地址可直接通过 `BrowserPageOpenTab` 或 `BrowserPageNavigate` 打开')
+    expect(content).toContain('Composer“高级授权”')
+    expect(content).toContain('直接执行敏感字段操作')
+    expect(content).toContain('BrowserPageUpload')
+    expect(content).not.toContain('敏感字段必须由用户亲自处理')
+    expect(content).not.toContain('跨站地址仍需用户单次确认')
   })
 
   test('find-skills 使用 SkillHub 源工作流并保持 Copis 默认 Skill 兼容元数据', () => {

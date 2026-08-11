@@ -1,4 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto'
+import { statSync } from 'node:fs'
+import { isAbsolute, resolve } from 'node:path'
 import type {
   BrowserAgentContext,
   BrowserFramePath,
@@ -19,7 +21,15 @@ import {
   resolveBrowserPageControlState,
 } from './browser-page-control-policy'
 import { getAgentSessionMeta, updateAgentSessionMeta } from './agent-session-manager'
-import { getAgentWorkspace } from './agent-workspace-manager'
+import {
+  getAgentWorkspace,
+  getAgentWorkspaceWritableRoot,
+  getProjectFilesPath,
+  getWorkspaceAttachedDirectories,
+  getWorkspaceAttachedFiles,
+} from './agent-workspace-manager'
+import { getAgentSessionWorkspacePath } from './config-paths'
+import { isPathWithinAuthorizedRoots, realpathOrResolve } from './file-access-policy'
 import { getSettings, updateSettings } from './settings-service'
 import { getBrowserWorkflow, saveBrowserWorkflow } from './browser-workflow-store'
 import { assertBrowserWorkflowVersion } from './browser-workflow-schema'
@@ -375,6 +385,14 @@ function currentStatus(sessionId: string): BrowserWorkflowStatus {
   return withBrowserPageControlState(sessionId, statuses.get(sessionId) ?? { sessionId, state: 'idle' })
 }
 
+/** Composer 高级授权仅对用户主会话的内嵌网页控制生效。 */
+export function isBrowserPageAdvancedAuthorizationEnabled(sessionId: string): boolean {
+  const session = getAgentSessionMeta(sessionId)
+  return session?.advancedAuthorization === true
+    && !session.sourceAutomationId
+    && !session.sourceDelegationId
+}
+
 function withBrowserPageControlState(
   sessionId: string,
   status: BrowserWorkflowStatus,
@@ -390,7 +408,7 @@ function withBrowserPageControlState(
     tabId: tab.id,
     tabTitle: tab.title,
     pageOrigin: control.pageOrigin,
-    controlMode: control.mode,
+    controlMode: isBrowserPageAdvancedAuthorizationEnabled(sessionId) ? 'authorized' : control.mode,
   }
 }
 
@@ -685,7 +703,12 @@ export function bindBrowserAgentContext(
   if (!tab) throw new Error('网页页签不存在')
   if (!normalizeBrowserPageOrigin(tab.url)) throw new Error('只有 HTTP(S) 网页可以绑定 AI浏览器')
   const previousBinding = bindings.get(sessionId)
-  if (previousBinding && ownerWebContentsId !== undefined && previousBinding.ownerWebContentsId !== ownerWebContentsId) {
+  if (
+    previousBinding
+    && ownerWebContentsId !== undefined
+    && previousBinding.ownerWebContentsId !== undefined
+    && previousBinding.ownerWebContentsId !== ownerWebContentsId
+  ) {
     throw new Error('Browser Workflow session 已绑定到其它渲染进程')
   }
   if (previousBinding && previousBinding.context.tabId !== context.tabId && !options.preserveWorkerCapability) {
@@ -719,7 +742,55 @@ export function unbindBrowserAgentContext(sessionId: string, ownerWebContentsId?
 }
 
 export function getBrowserAgentContext(sessionId: string): BrowserAgentContext | undefined {
-  return bindings.get(sessionId)?.context
+  const binding = bindings.get(sessionId)
+  return binding && getWebTabState(binding.context.tabId) ? binding.context : undefined
+}
+
+/** 将上传路径收敛到当前 Agent 已获授权读取的工作区文件。 */
+export function resolveBrowserPageUploadPaths(sessionId: string, paths: string[]): string[] {
+  const binding = bindings.get(sessionId)
+  const session = getAgentSessionMeta(sessionId)
+  const workspace = binding ? getAgentWorkspace(binding.workspaceId) : undefined
+  if (!binding || !session || !workspace) throw new Error('AI浏览器页面上下文不存在')
+
+  const writableRoot = getAgentWorkspaceWritableRoot(workspace)
+  const authorizedRoots = [
+    getProjectFilesPath(workspace.slug),
+    writableRoot,
+    getAgentSessionWorkspacePath(workspace.slug, sessionId),
+    ...(session.attachedDirectories ?? []),
+    ...getWorkspaceAttachedDirectories(workspace.slug),
+  ]
+  const authorizedFiles = new Set([
+    ...(session.attachedFiles ?? []),
+    ...getWorkspaceAttachedFiles(workspace.slug),
+  ].map((path) => realpathOrResolve(path)))
+  const resolvedPaths = paths.map((path) => isAbsolute(path) ? resolve(path) : resolve(writableRoot, path))
+
+  for (const path of resolvedPaths) {
+    let isFile = false
+    try {
+      isFile = statSync(path).isFile()
+    } catch {
+      // 后续使用统一的授权错误，避免向页面泄露本地路径是否存在。
+    }
+    const resolvedPath = realpathOrResolve(path)
+    if (!isFile || (
+      !isPathWithinAuthorizedRoots(path, authorizedRoots)
+      && !authorizedFiles.has(resolvedPath)
+    )) {
+      throw new Error('上传文件必须位于当前 Agent 工作区或已附加文件范围内')
+    }
+  }
+  return Array.from(new Set(resolvedPaths.map((path) => realpathOrResolve(path))))
+}
+
+/** 根据当前网页页签恢复已绑定的 AI浏览器会话。 */
+export function getBrowserAgentSessionIdForTab(tabId: string): string | undefined {
+  for (const binding of bindings.values()) {
+    if (binding.context.tabId === tabId) return binding.sessionId
+  }
+  return undefined
 }
 
 export interface BrowserPageOpenTabResult {
@@ -730,8 +801,6 @@ export interface BrowserPageOpenTabResult {
 
 /** 打开新的用户网页页签，并把当前 AI浏览器会话绑定到新页签。 */
 export function openBrowserAgentTab(sessionId: string, url: string): BrowserPageOpenTabResult {
-  const binding = bindings.get(sessionId)
-  if (!binding) throw new Error('AI浏览器页面上下文不存在')
   const snapshot = createWebTab({ url, activate: true })
   const tabId = snapshot.activeTabId
   if (!tabId) throw new Error('新网页页签创建失败')
@@ -776,6 +845,14 @@ export function getBrowserAgentWorkspaceId(sessionId: string): string | undefine
 
 export function getBrowserWorkflowStatus(sessionId: string): BrowserWorkflowStatus {
   return currentStatus(sessionId)
+}
+
+/** Composer 授权状态变化后，向已绑定网页的订阅者发布最新页面控制状态。 */
+export function refreshBrowserWorkflowStatus(sessionId: string): BrowserWorkflowStatus | undefined {
+  if (!bindings.has(sessionId)) return undefined
+  const status = currentStatus(sessionId)
+  emitStatus(sessionId, status)
+  return status
 }
 
 export function subscribeBrowserWorkflowStatus(

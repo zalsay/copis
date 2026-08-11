@@ -29,6 +29,20 @@ describe('Working 侧边栏视觉契约', () => {
     expect(deleteRule).toContain('pointer-events: none')
   })
 
+  test('Given 项目会话行 When 显示会话名称 Then 使用较小字号且不改变会话元信息字号', () => {
+    const conversationNameRule = sidebarStyles.match(
+      /\.copis-working-conversation-label > span\s*\{([^}]*)\}/s,
+    )?.[1]
+    const conversationMetaRule = sidebarStyles.match(
+      /\.copis-working-conversation-row small\s*\{([^}]*)\}/s,
+    )?.[1]
+
+    expect(conversationNameRule).toBeDefined()
+    expect(conversationNameRule).toContain('font-size: 12px')
+    expect(conversationMetaRule).toBeDefined()
+    expect(conversationMetaRule).toContain('font-size: 12px')
+  })
+
   test('Given 工作区项目 When 查看项目名称 Then 不展示本地标签并保留全局 primary badge 配色契约', () => {
     const projectBadgeRule = sidebarStyles.match(
       /\.copis-working-project-main > small\s*\{([^}]*)\}/s,

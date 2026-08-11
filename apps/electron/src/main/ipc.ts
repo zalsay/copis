@@ -202,7 +202,9 @@ import {
   cancelBrowserWorkflowRecording,
   getBrowserWorkflowDraft,
   getBrowserWorkflowStatus,
+  getBrowserAgentSessionIdForTab,
   assertBrowserWorkflowSessionOwner,
+  refreshBrowserWorkflowStatus,
   rejectBrowserWorkflowDraft,
   setBrowserPageControlMode,
   startBrowserWorkflowRecording,
@@ -1029,6 +1031,11 @@ export function registerIpcHandlers(): void {
     if (!sessionId?.trim()) throw new Error('AI浏览器会话 ID 不正确')
     assertBrowserWorkflowSessionOwner(sessionId, event.sender.id)
     unbindBrowserAgentContext(sessionId, event.sender.id)
+  })
+  ipcMain.handle(BROWSER_WORKFLOW_IPC_CHANNELS.SESSION_FOR_TAB, async (event, tabId: string) => {
+    await assertBrowserWorkflowMainWindow(event.sender.id)
+    if (!tabId?.trim()) throw new Error('网页页签 ID 不正确')
+    return getBrowserAgentSessionIdForTab(tabId)
   })
   ipcMain.handle(BROWSER_WORKFLOW_IPC_CHANNELS.STATUS, async (event, sessionId: string) => {
     await assertBrowserWorkflowMainWindow(event.sender.id)
@@ -2789,7 +2796,7 @@ export function registerIpcHandlers(): void {
     }
   )
 
-  // 切换指定会话的 Composer 高级授权；下一轮生效，运行中仍使用启动时的授权状态。
+  // 切换指定会话的 Composer 高级授权；网页控制立即同步，Git/SSH 在下一轮执行时生效。
   ipcMain.handle(
     AGENT_IPC_CHANNELS.UPDATE_SESSION_ADVANCED_AUTHORIZATION,
     async (_, sessionId: string, enabled: boolean): Promise<AgentSessionMeta> => {
@@ -2799,7 +2806,9 @@ export function registerIpcHandlers(): void {
       if (!getAgentSessionMeta(sessionId)) {
         throw new Error(`Agent 会话不存在: ${sessionId}`)
       }
-      return updateAgentSessionMeta(sessionId, { advancedAuthorization: enabled })
+      const updated = updateAgentSessionMeta(sessionId, { advancedAuthorization: enabled })
+      refreshBrowserWorkflowStatus(sessionId)
+      return updated
     }
   )
 

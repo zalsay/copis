@@ -416,6 +416,7 @@ export interface BrowserWorkflowRunInput {
 export const BROWSER_WORKFLOW_IPC_CHANNELS = {
   BIND_CONTEXT: 'browser-workflows:bind-context',
   UNBIND_CONTEXT: 'browser-workflows:unbind-context',
+  SESSION_FOR_TAB: 'browser-workflows:session-for-tab',
   STATUS: 'browser-workflows:status',
   STATUS_CHANGED: 'browser-workflows:status-changed',
   SET_CONTROL_MODE: 'browser-workflows:set-control-mode',

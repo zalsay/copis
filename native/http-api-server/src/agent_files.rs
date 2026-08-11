@@ -577,8 +577,17 @@ fn validate_project_command(command: &str) -> Result<(), AgentFileError> {
     if arguments.iter().skip(1).any(|argument| {
         matches!(
             *argument,
-            "-g" | "--global" | "--system" | "-C" | "-c" | "--git-dir" | "--work-tree"
-                | "--prefix" | "--cache" | "--userconfig" | "--target" | "--user"
+            "-g" | "--global"
+                | "--system"
+                | "-C"
+                | "-c"
+                | "--git-dir"
+                | "--work-tree"
+                | "--prefix"
+                | "--cache"
+                | "--userconfig"
+                | "--target"
+                | "--user"
         ) || argument.starts_with("--git-dir=")
             || argument.starts_with("--work-tree=")
             || argument.starts_with("--config-env=")
