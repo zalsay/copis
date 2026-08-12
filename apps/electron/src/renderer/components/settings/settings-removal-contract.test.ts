@@ -7,6 +7,7 @@ const appShellSource = readFileSync(join(rendererRoot, 'components/app-shell/App
 const workingPanelSource = readFileSync(join(rendererRoot, 'components/app-shell/CopisWorkingSettingsPanel.tsx'), 'utf8')
 const appSource = readFileSync(join(rendererRoot, 'App.tsx'), 'utf8')
 const onboardingSource = readFileSync(join(rendererRoot, 'components/onboarding/OnboardingView.tsx'), 'utf8')
+const appearanceSource = readFileSync(join(import.meta.dir, 'AppearanceSettings.tsx'), 'utf8')
 const tabAtomsSource = readFileSync(join(rendererRoot, 'atoms/tab-atoms.ts'), 'utf8')
 const tabBarSource = readFileSync(join(rendererRoot, 'components/tabs/TabBar.tsx'), 'utf8')
 const tabContentSource = readFileSync(join(rendererRoot, 'components/tabs/TabContent.tsx'), 'utf8')
@@ -70,7 +71,7 @@ describe('本地设置旧入口清理契约', () => {
       ['VoiceInputSettings.tsx', ['getVoiceDictationSettings', 'updateVoiceDictationSettings', 'checkMicrophonePermission', 'requestMicrophonePermission']],
       ['MigrationSettings.tsx', ['migrationExportV2', 'migrationGetShareExportPreview', 'migrationSaveFileDialog']],
       ['StorageSettings.tsx', ['getStorageStats', 'cleanupStorage', 'cleanupTempStorage', 'autoCleanupTempOnStart']],
-      ['AppearanceSettings.tsx', ['getSettings', 'updateThemeMode', 'updateThemeStyle', 'updateInterfaceVariant', 'setAppIcon']],
+      ['AppearanceSettings.tsx', ['updateThemeMode']],
     ] as const
 
     for (const [fileName, contracts] of pageContracts) {
@@ -85,5 +86,19 @@ describe('本地设置旧入口清理契约', () => {
     expect(existsSync(join(rendererRoot, 'atoms/migration-atoms.ts'))).toBe(true)
     expect(existsSync(join(rendererRoot, '..', 'main/lib/migration-service.ts'))).toBe(true)
     expect(readFileSync(join(rendererRoot, '..', 'main/index.ts'), 'utf8')).toContain('MIGRATION_IPC_OPEN')
+  })
+
+  test('Given 外观设置 When 检查已移除区域 Then 仅保留基础主题和内容显示设置', () => {
+    for (const removedLabel of ['应用图标', '界面风格', '特殊风格'] as const) {
+      expect(appearanceSource).not.toContain(removedLabel)
+    }
+
+    for (const removedImplementation of ['AppIconPicker', 'ICON_VARIANTS', 'INTERFACE_VARIANT_OPTIONS', 'SPECIAL_STYLES'] as const) {
+      expect(appearanceSource).not.toContain(removedImplementation)
+    }
+
+    expect(appearanceSource).toContain('label="主题模式"')
+    expect(appearanceSource).toContain('label="Markdown 字号"')
+    expect(appearanceSource).toContain('label="Agent 预览展开方式"')
   })
 })

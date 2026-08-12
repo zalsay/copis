@@ -1,7 +1,7 @@
 import { app } from 'electron'
 import { randomBytes } from 'node:crypto'
-import { spawn, type ChildProcessWithoutNullStreams, type SpawnOptions } from 'node:child_process'
-import { chmodSync, existsSync, realpathSync, statSync } from 'node:fs'
+import { execFileSync, spawn, type ChildProcessWithoutNullStreams, type SpawnOptions } from 'node:child_process'
+import { chmodSync, existsSync, mkdirSync, realpathSync, statSync } from 'node:fs'
 import { createInterface, type Interface } from 'node:readline'
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import {
@@ -131,6 +131,13 @@ function decodeHex(value: string): string | undefined {
   return Buffer.from(value, 'hex').toString('utf8')
 }
 
+function getWorkingUserId(): string | null {
+  const userId = getWorkingTokenStore().getUser()?.id
+  if (userId === undefined || userId === null) return null
+  const value = String(userId).trim()
+  return value || null
+}
+
 export function resolvePaymentWorkspaceRuntime(
   workspace: Pick<AgentWorkspace, 'slug' | 'projectRootPath' | 'projectPath'>,
 ): PaymentWorkspaceRuntime {
@@ -168,6 +175,61 @@ export function resolveDevelopmentRustBinaryCandidates(
     resolve(baseDir, '../../..', 'native/http-api-server/target/release', binaryName),
     resolve(baseDir, '../../..', 'native/http-api-server/target/debug', binaryName),
   ]
+}
+
+/**
+ * 开发模式直接启动 Electron 时，从仓库 alipay-bot 归档补齐隔离 CLI。
+ * start-dev.sh 已负责 prepare/export，这里作为 bun run dev 路径的兜底。
+ */
+export function prepareDevelopmentAlipayBotCli(developmentRoot: string): string | undefined {
+  if (app.isPackaged) return undefined
+
+  const platform = process.platform === 'darwin' || process.platform === 'linux' || process.platform === 'win32'
+    ? process.platform
+    : undefined
+  const architecture = process.arch === 'arm64' ? 'arm64' : process.arch === 'x64' ? 'x64' : undefined
+  if (!platform || !architecture) return undefined
+
+  const moduleDir = process.env.COPIS_DEV_ALIPAY_BOT_DIR?.trim()
+    || join(getConfigDir(), 'alipay-bot', `${platform}-${architecture}`)
+  const entrypoint = join(moduleDir, 'bin', platform === 'win32' ? 'alipay-bot.cmd' : 'alipay-bot')
+  const archive = join(
+    developmentRoot,
+    'apps/electron/resources/alipay-bot',
+    `${platform}-${architecture}.tar.gz`,
+  )
+
+  if (existsSync(archive)) {
+    try {
+      mkdirSync(moduleDir, { recursive: true })
+      execFileSync('tar', ['-xzf', archive, '-C', moduleDir], {
+        stdio: 'ignore',
+        timeout: 30_000,
+      })
+    } catch (error) {
+      console.warn('[HTTP API] 开发环境 alipay-bot 解压失败，继续使用已有目录:', error)
+    }
+  }
+
+  return existsSync(entrypoint) ? prepareBinary(entrypoint) : undefined
+}
+
+/** 开发模式未配置 Node runtime 时，使用系统 Node 启动 alipay-bot。 */
+export function resolveDevelopmentAlipayBotNode(): string | undefined {
+  if (app.isPackaged) return undefined
+  const configuredPath = process.env.COPIS_ALIPAY_BOT_NODE?.trim()
+  if (configuredPath && existsSync(configuredPath)) return configuredPath
+
+  try {
+    const result = execFileSync(
+      process.platform === 'win32' ? 'where' : 'which',
+      ['node'],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 5_000 },
+    ).trim().split(/\r?\n/)[0]
+    return result && existsSync(result) ? result : undefined
+  } catch {
+    return undefined
+  }
 }
 
 function getRootDir(options: HttpApiServerOptions): string {
@@ -210,15 +272,19 @@ function resolveAlipayBotCli(options: HttpApiServerOptions): string | undefined 
     'alipay-bot',
   )
   const entrypoint = process.platform === 'win32' ? 'bin/alipay-bot.cmd' : 'bin/alipay-bot'
-  return active?.entrypoint === entrypoint ? prepareBinary(active.path) : undefined
+  if (active?.entrypoint === entrypoint) return prepareBinary(active.path)
+
+  return prepareDevelopmentAlipayBotCli(resolve(__dirname, '../../..'))
 }
 
 function resolveAlipayBotNode(nodeRuntimeRoot: string | undefined): string | undefined {
   const configuredPath = process.env.COPIS_ALIPAY_BOT_NODE?.trim()
   if (!app.isPackaged && configuredPath && existsSync(configuredPath)) return configuredPath
-  return nodeRuntimeRoot
-    ? join(nodeRuntimeRoot, 'bin', process.platform === 'win32' ? 'node.exe' : 'node')
-    : undefined
+  if (nodeRuntimeRoot) {
+    const nodePath = join(nodeRuntimeRoot, 'bin', process.platform === 'win32' ? 'node.exe' : 'node')
+    if (existsSync(nodePath)) return nodePath
+  }
+  return resolveDevelopmentAlipayBotNode()
 }
 
 function prepareBinary(path: string): string {
@@ -326,6 +392,7 @@ function spawnManagedProcess(
   const nodeRuntimeRoot = resolveNodeRuntimeRoot(options)
   const alipayBotCli = resolveAlipayBotCli(options)
   const alipayBotNode = resolveAlipayBotNode(nodeRuntimeRoot)
+  const workingUserId = getWorkingUserId()
   let paymentRuntime: PaymentWorkspaceRuntime
   try {
     paymentRuntime = resolvePaymentWorkspaceRuntime(options.paymentWorkspace ?? ensureDefaultWorkspace())
@@ -351,6 +418,7 @@ function spawnManagedProcess(
         COPIS_HTTP_API_INTERNAL_TOKEN: internalToken,
         COPIS_HTTP_API_WEB_TOKEN: getOrCreateHttpApiWebToken(),
         COPIS_WORKING_ACCESS_TOKEN: getWorkingTokenStore().getToken() ?? '',
+        ...(workingUserId ? { COPIS_WORKING_USER_ID: workingUserId } : {}),
         ...paymentRuntime,
         ...(options.backendUrl || process.env.COPIS_BACKEND_URL
           ? { COPIS_BACKEND_URL: options.backendUrl ?? process.env.COPIS_BACKEND_URL }
@@ -663,7 +731,7 @@ export async function syncWorkingAccessToken(token: string | null): Promise<void
           'Content-Type': 'application/json',
           'X-Copis-Internal-Token': internalToken,
         },
-        body: JSON.stringify({ token }),
+        body: JSON.stringify({ token, userId: getWorkingUserId() }),
       })
       if (response.ok) return
       lastError = new Error(`HTTP ${response.status}`)

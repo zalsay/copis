@@ -8,6 +8,7 @@ use getrandom::getrandom;
 use serde_json::Value;
 
 use crate::agent_files::{is_supported_permission_mode, AgentFileError, AgentFilePolicyStore};
+use crate::automation::{issue_worker_capability, revoke_worker_capability};
 use crate::payment_capability::PaymentCapabilityStore;
 use crate::payment_workspace::PaymentWorkspace;
 use crate::runtime;
@@ -255,6 +256,26 @@ impl PiWorkerManager {
             .filter(|mode| is_supported_permission_mode(mode))
             .ok_or_else(|| "Pi worker 配置缺少有效 permissionMode".to_string())?
             .to_string();
+        let triggered_by = query
+            .get("triggeredBy")
+            .and_then(Value::as_str)
+            .filter(|value| matches!(*value, "user" | "automation" | "delegation"))
+            .unwrap_or("user");
+        if query.get("automationEnabled").and_then(Value::as_bool) != Some(false) {
+            let automation_capability = issue_worker_capability(
+                session_id,
+                triggered_by,
+                query.get("channelId").and_then(Value::as_str).unwrap_or_default().to_string(),
+                query.get("model").and_then(Value::as_str).map(str::to_string),
+                query.get("workspaceId").and_then(Value::as_str).map(str::to_string),
+                query.get("sourceAutomationId").and_then(Value::as_str).map(str::to_string),
+            );
+            query.insert(
+                "automationControl".to_string(),
+                serde_json::to_value(automation_capability)
+                    .map_err(|_| "定时任务 capability 编码失败".to_string())?,
+            );
+        }
         let file_api_token = self.file_policies.register_from_query(session_id, query)?;
         if file_api_token.is_empty() {
             return Err("Pi Worker 未收到 Rust 文件能力令牌".to_string());
@@ -653,6 +674,7 @@ impl PiWorkerManager {
         self.workers.lock().unwrap().remove(&run.session_id);
         self.worker_statuses.lock().unwrap().remove(&run.session_id);
         self.file_policies.remove(&run.session_id);
+        revoke_worker_capability(&run.session_id);
         if run.child.try_wait().ok().flatten().is_none() {
             let _ = run.child.kill();
         }

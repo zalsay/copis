@@ -63,6 +63,7 @@ import { getFunctionalModulePath } from './functional-module-manager'
 import { getEffectiveProxyUrl } from './proxy-settings-service'
 import { getRuntimeStatus } from './runtime-init'
 import { getSettings } from './settings-service'
+import { isBuiltinMcpUserEnabled } from './builtin-mcp/settings'
 import {
   resolveBrowserAgentPermissionMode,
   resolveBrowserAgentSkillMentions,
@@ -579,6 +580,9 @@ export async function prepareAgentRpcRun(input: AgentSendInput): Promise<PiWorke
     ...(workspaceSlug ? { additionalSkillPaths: [workspaceSkillsDir] } : {}),
     ...(effectiveSkillMentions?.length ? { skillMentions: effectiveSkillMentions } : {}),
     ...(workspaceSlug ? { workspaceSlug } : {}),
+    ...(workspace?.id ? { workspaceId: workspace.id } : {}),
+    ...(session.sourceAutomationId ? { sourceAutomationId: session.sourceAutomationId } : {}),
+    automationEnabled: isBuiltinMcpUserEnabled('automation'),
     memoryPolicy,
     ...(proxyUrl ? { proxyUrl } : {}),
     runtimeEnv,
@@ -594,6 +598,7 @@ export async function prepareAgentRpcRun(input: AgentSendInput): Promise<PiWorke
       ...(browserBinding && browserTab ? { tabId: browserBinding.tabId } : {}),
       triggeredBy: input.triggeredBy ?? 'user',
     }),
+    triggeredBy: input.triggeredBy ?? 'user',
   }
 
   updateAgentSessionMeta(input.sessionId, {

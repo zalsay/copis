@@ -242,13 +242,7 @@ import {
 import { ensureRequiredFunctionalModules } from './lib/functional-module-startup'
 import { getProxySettings, saveProxySettings } from './lib/proxy-settings-service'
 import { detectSystemProxy } from './lib/system-proxy-detector'
-import {
-  listAutomations,
-  getAutomation,
-  createAutomation,
-  updateAutomation,
-  deleteAutomation,
-} from './lib/automation-manager'
+import { runtimeAutomationApiClient } from './lib/automation-api-client'
 import { runAutomationNow, broadcastChanged as broadcastAutomationsChanged } from './lib/automation-scheduler'
 import {
   listTodos,
@@ -2457,7 +2451,7 @@ export function registerIpcHandlers(): void {
       const affectedSessionIds = listAgentSessions()
         .filter((session) => session.workspaceId === id)
         .map((session) => session.id)
-      const affectedAutomationIds = listAutomations()
+      const affectedAutomationIds = (await runtimeAutomationApiClient.list())
         .filter((automation) => automation.workspaceId === id)
         .map((automation) => automation.id)
       const deletedProjectRoot = deletingWorkspace.projectRootPath
@@ -2482,7 +2476,7 @@ export function registerIpcHandlers(): void {
         deleteAgentSession(sessionId)
       }
       for (const automationId of affectedAutomationIds) {
-        deleteAutomation(automationId)
+        await runtimeAutomationApiClient.delete(automationId)
       }
       if (affectedAutomationIds.length > 0) {
         broadcastAutomationsChanged()
@@ -5186,7 +5180,7 @@ export function registerIpcHandlers(): void {
 
   ipcMain.handle(
     AUTOMATION_IPC_CHANNELS.LIST,
-    async (): Promise<Automation[]> => listAutomations()
+    async (): Promise<Automation[]> => runtimeAutomationApiClient.list()
   )
 
   ipcMain.handle(
@@ -5199,7 +5193,7 @@ export function registerIpcHandlers(): void {
       validateAutomationFields(input)
       validateAutomationRuntimePolicy(input)
       validateAutomationScheduleComplete(input)
-      const a = createAutomation(input)
+      const a = await runtimeAutomationApiClient.create(input)
       broadcastAutomationsChanged()
       return a
     }
@@ -5212,12 +5206,12 @@ export function registerIpcHandlers(): void {
       if (!isNonEmptyString(input.id)) throw new Error('id 必填')
       if (input.name !== undefined && !isNonBlankString(input.name)) throw new Error('name 不能为空')
       if (input.prompt !== undefined && !isNonBlankString(input.prompt)) throw new Error('prompt 不能为空')
-      const existing = getAutomation(input.id)
+      const existing = await runtimeAutomationApiClient.get(input.id)
       if (!existing) return undefined
       validateAutomationFields(input)
       validateAutomationRuntimePolicy(input)
       validateAutomationScheduleComplete(input, existing)
-      const a = updateAutomation(input)
+      const a = await runtimeAutomationApiClient.update(input)
       broadcastAutomationsChanged()
       return a
     }
@@ -5227,7 +5221,7 @@ export function registerIpcHandlers(): void {
     AUTOMATION_IPC_CHANNELS.DELETE,
     async (_, id: string): Promise<boolean> => {
       if (!isNonEmptyString(id)) throw new Error('id 必填')
-      const ok = deleteAutomation(id)
+      const ok = await runtimeAutomationApiClient.delete(id)
       broadcastAutomationsChanged()
       return ok
     }
@@ -5238,7 +5232,7 @@ export function registerIpcHandlers(): void {
     async (_, id: string, active: boolean): Promise<Automation | undefined> => {
       if (!isNonEmptyString(id)) throw new Error('id 必填')
       if (typeof active !== 'boolean') throw new Error('active 必须是 boolean')
-      const a = updateAutomation({ id, active })
+      const a = await runtimeAutomationApiClient.update({ id, active })
       broadcastAutomationsChanged()
       return a
     }

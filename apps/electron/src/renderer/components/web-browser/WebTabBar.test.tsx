@@ -17,6 +17,7 @@ mock.module('@/components/ui/tooltip', () => ({
 }))
 
 mock.module('@/lib/model-logo', () => ({
+  CopisLogo: 'copis-logo.png',
   CopisTemplateLogo: 'copis-template-logo.png',
 }))
 
@@ -33,5 +34,16 @@ describe('WebTabBar Windows 标题栏', () => {
     expect(html).toContain('pointer-events-none absolute inset-y-0 left-0 titlebar-drag-region right-[126px]')
     expect(html).toContain('pr-[126px]')
     expect(html).not.toContain('text-foreground titlebar-drag-region')
+  })
+
+  test('Given Copis 首页页签 When 渲染 Logo Then 使用熊猫 Logo', () => {
+    const html = renderToStaticMarkup(
+      <Provider>
+        <WebTabBar />
+      </Provider>,
+    )
+
+    expect(html).toContain('src="copis-logo.png"')
+    expect(html).not.toContain('copis-template-logo.png')
   })
 })

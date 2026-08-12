@@ -8,7 +8,6 @@ use crate::{
     pi_rpc::{PaymentWorkerAction, PiWorkerManager},
 };
 use serde_json::{json, Value};
-use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -91,6 +90,47 @@ struct WorkingDesktopPaymentFlow {
     flow_kind: DesktopPaymentFlowKind,
     trade_no: Option<String>,
     out_shake_no: Option<String>,
+    request_context: PaymentRequestContext,
+}
+
+#[derive(Clone, Debug)]
+struct PaymentRequestContext {
+    resource_url: String,
+    method: String,
+    data: String,
+    headers: Vec<Value>,
+}
+
+impl PaymentRequestContext {
+    fn payment_start_request(&self, payment_needed: String) -> Value {
+        json!({
+            "paymentNeeded": payment_needed,
+            "resourceUrl": self.resource_url,
+            "method": self.method,
+            "data": self.data,
+            "headers": self.headers,
+            "intentSummary": "Copis Working 设置页支付",
+        })
+    }
+
+    fn payment_check_request(&self, trade_no: Option<&str>, out_shake_no: Option<&str>) -> Value {
+        let mut request = json!({
+            "resourceUrl": self.resource_url,
+            "method": self.method,
+            "data": self.data,
+            "headers": self.headers,
+        });
+        let request_object = request.as_object_mut().expect("支付检查请求必须是对象");
+        if let Some(out_shake_no) = out_shake_no {
+            request_object.insert(
+                "outShakeNo".to_string(),
+                Value::String(out_shake_no.to_string()),
+            );
+        } else if let Some(trade_no) = trade_no {
+            request_object.insert("tradeNo".to_string(), Value::String(trade_no.to_string()));
+        }
+        request
+    }
 }
 
 /// desktop capability 仅在 Rust 内存中保存，不进入 Renderer、Pi 模型输入或本地配置文件。
@@ -182,12 +222,17 @@ pub fn start_desktop_payment_poller(
                 thread::sleep(DESKTOP_PAYMENT_POLL_INTERVAL);
                 continue;
             };
+            let Some(account_key) = skill_market_state.payment_account_key() else {
+                thread::sleep(DESKTOP_PAYMENT_POLL_INTERVAL);
+                continue;
+            };
             let _ = recover_pending_desktop_payment(&payment_state, &token);
             let failures = poll_desktop_payments_once(
                 &payment_state,
                 worker.as_ref(),
                 workspace.as_ref(),
                 &token,
+                &account_key,
             );
             if failures > 0 {
                 eprintln!("[支付] 自动查询暂时失败，将继续重试");
@@ -223,12 +268,20 @@ pub fn poll_desktop_payments_once<P: PaymentWorker>(
     worker: &P,
     workspace: &PaymentWorkspace,
     working_token: &str,
+    payment_account_key: &str,
 ) -> usize {
     payment_state
         .payment_ids()
         .into_iter()
         .filter(|payment_id| {
-            match check_desktop_payment(payment_state, worker, workspace, working_token, payment_id)
+            match check_desktop_payment(
+                payment_state,
+                worker,
+                workspace,
+                working_token,
+                payment_account_key,
+                payment_id,
+            )
             {
                 Ok(_) => false,
                 Err(error) => error.code != "desktop_payment_check_in_progress",
@@ -252,6 +305,7 @@ pub fn handle_request<P: PaymentWorker>(
     let token = state
         .access_token()
         .ok_or_else(|| SkillMarketError::new(401, "unauthorized", "请先登录 Copis Working"))?;
+    let payment_account_key = state.payment_account_key();
 
     let response = match route {
         WorkingPaymentRoute::ListDiamondPackages => {
@@ -270,6 +324,7 @@ pub fn handle_request<P: PaymentWorker>(
                 worker,
                 workspace,
                 &token,
+                required_payment_account_key(payment_account_key.as_deref())?,
                 DesktopPaymentFlowKind::Diamond,
                 Some(package_id),
             )?
@@ -279,6 +334,7 @@ pub fn handle_request<P: PaymentWorker>(
             worker,
             workspace,
             &token,
+            required_payment_account_key(payment_account_key.as_deref())?,
             DesktopPaymentFlowKind::Vip,
             None,
         )?,
@@ -289,7 +345,14 @@ pub fn handle_request<P: PaymentWorker>(
             None,
         )?,
         WorkingPaymentRoute::CheckPayment { payment_id } => {
-            check_desktop_payment(payment_state, worker, workspace, &token, &payment_id)?
+            check_desktop_payment(
+                payment_state,
+                worker,
+                workspace,
+                &token,
+                required_payment_account_key(payment_account_key.as_deref())?,
+                &payment_id,
+            )?
         }
         WorkingPaymentRoute::CancelDiamondPayment { payment_id } => {
             cancel_desktop_payment(payment_state, &payment_id)?
@@ -307,6 +370,7 @@ fn create_desktop_payment<P: PaymentWorker>(
     worker: &P,
     workspace: &PaymentWorkspace,
     working_token: &str,
+    payment_account_key: &str,
     flow_kind: DesktopPaymentFlowKind,
     package_id: Option<u64>,
 ) -> Result<Value, SkillMarketError> {
@@ -350,11 +414,12 @@ fn create_desktop_payment<P: PaymentWorker>(
         &capability,
         Some(&json!({ "payment_id": payment_id }).to_string()),
     )?;
-    let payment_request = payment_start_request(&context)?;
+    let (payment_needed, request_context) = payment_request_context(&context)?;
+    let payment_request = request_context.payment_start_request(payment_needed);
     let worker_result = worker
         .execute_payment(
             workspace,
-            &working_account_key(working_token),
+            payment_account_key,
             PaymentWorkerAction::PaymentStart,
             payment_request,
         )
@@ -375,6 +440,7 @@ fn create_desktop_payment<P: PaymentWorker>(
             flow_kind,
             trade_no: optional_string_field(&worker_result, "tradeNo"),
             out_shake_no: optional_string_field(&worker_result, "outShakeNo"),
+            request_context,
         },
     );
     Ok(desktop_purchase_result(
@@ -391,6 +457,7 @@ fn check_desktop_payment<P: PaymentWorker>(
     worker: &P,
     workspace: &PaymentWorkspace,
     working_token: &str,
+    payment_account_key: &str,
     payment_id: &str,
 ) -> Result<Value, SkillMarketError> {
     let _check_guard = payment_state.begin_check(payment_id).ok_or_else(|| {
@@ -404,29 +471,21 @@ fn check_desktop_payment<P: PaymentWorker>(
         Some(flow) => flow,
         None => rehydrate_desktop_payment_flow(payment_state, working_token, payment_id)?,
     };
-    let mut request = json!({});
-    let request_object = request.as_object_mut().expect("支付检查请求必须是对象");
-    if let Some(trade_no) = flow.trade_no.as_deref() {
-        request_object.insert("tradeNo".to_string(), Value::String(trade_no.to_string()));
-    }
-    if let Some(out_shake_no) = flow.out_shake_no.as_deref() {
-        request_object.insert(
-            "outShakeNo".to_string(),
-            Value::String(out_shake_no.to_string()),
-        );
-    }
-    if request_object.is_empty() {
+    if flow.out_shake_no.is_none() && flow.trade_no.is_none() {
         return Err(SkillMarketError::new(
             409,
             "desktop_payment_context_missing",
             "支付会话缺少交易标识，请重新发起支付",
         ));
     }
+    let request = flow
+        .request_context
+        .payment_check_request(flow.trade_no.as_deref(), flow.out_shake_no.as_deref());
 
     let worker_result = worker
         .execute_payment(
             workspace,
-            &working_account_key(working_token),
+            payment_account_key,
             PaymentWorkerAction::PaymentCheck,
             request,
         )
@@ -531,6 +590,13 @@ fn rehydrate_desktop_payment_flow_from_pending(
         ));
     }
 
+    let context = remote_json(
+        "POST",
+        "/api/internal/working-desktop/alipay/payment-context",
+        &capability,
+        Some(&json!({ "payment_id": pending_payment_id }).to_string()),
+    )?;
+    let (_, request_context) = payment_request_context(&context)?;
     let flow = WorkingDesktopPaymentFlow {
         capability,
         flow_kind: DesktopPaymentFlowKind::Diamond,
@@ -538,6 +604,7 @@ fn rehydrate_desktop_payment_flow_from_pending(
             .or_else(|| optional_string_field(&prepared_payment, "trade_no")),
         out_shake_no: optional_string_field(&pending_payment, "out_shake_no")
             .or_else(|| optional_string_field(&prepared_payment, "out_shake_no")),
+        request_context,
     };
     payment_state.remember(pending_payment_id, flow.clone());
     Ok(flow)
@@ -593,7 +660,7 @@ fn issue_desktop_capability(
     Ok(capability)
 }
 
-fn payment_start_request(context: &Value) -> Result<Value, SkillMarketError> {
+fn payment_request_context(context: &Value) -> Result<(String, PaymentRequestContext), SkillMarketError> {
     let payment_needed = context
         .get("payment_needed")
         .ok_or_else(|| invalid_desktop_payment_response("支付上下文缺少 Payment-Needed"))?;
@@ -626,14 +693,15 @@ fn payment_start_request(context: &Value) -> Result<Value, SkillMarketError> {
             )
         })
         .collect::<Result<Vec<Value>, SkillMarketError>>()?;
-    Ok(json!({
-        "paymentNeeded": payment_needed,
-        "resourceUrl": resource_url,
-        "method": method,
-        "data": data,
-        "headers": headers,
-        "intentSummary": "Copis Working 设置页支付",
-    }))
+    Ok((
+        payment_needed,
+        PaymentRequestContext {
+            resource_url,
+            method,
+            data,
+            headers,
+        },
+    ))
 }
 
 fn payment_started_request(payment_id: &str, worker_result: &Value) -> Value {
@@ -789,9 +857,14 @@ fn invalid_desktop_payment_response(message: impl Into<String>) -> SkillMarketEr
     SkillMarketError::new(502, "invalid_desktop_payment_response", message)
 }
 
-fn working_account_key(token: &str) -> String {
-    let digest = Sha256::digest(token.as_bytes());
-    digest.iter().map(|byte| format!("{byte:02x}")).collect()
+fn required_payment_account_key(value: Option<&str>) -> Result<&str, SkillMarketError> {
+    value.filter(|value| !value.trim().is_empty()).ok_or_else(|| {
+        SkillMarketError::new(
+            409,
+            "desktop_payment_identity_missing",
+            "本机支付身份尚未同步，请重新登录 Copis Working 后重试",
+        )
+    })
 }
 
 fn is_terminal_payment_status(payment: &Value) -> bool {

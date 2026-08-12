@@ -4,6 +4,7 @@ import type { PiAgentQueryOptions, PiAgentAdapter } from './lib/adapters/pi-agen
 import {
   parseWorkerCommand,
   parsePiWorkerBrowserCapability,
+  parsePiWorkerAutomationCapability,
   type AgentRpcWorkerCommand,
   type AgentRpcWorkerFrame,
   type PiPaymentWorkerConfig,
@@ -109,6 +110,14 @@ async function runWorker(config: PiWorkerRunConfig): Promise<void> {
     await flushOutput()
     return
   }
+  const automationControl = config.query.automationControl === undefined
+    ? undefined
+    : parsePiWorkerAutomationCapability(config.query.automationControl)
+  if (config.query.automationControl !== undefined && !automationControl) {
+    await writeFrame({ type: 'fatal', sessionId: config.sessionId, error: '定时任务 capability 不正确' })
+    await flushOutput()
+    return
+  }
 
   const runStartedAt = config.query.retryRunStartedAt ?? Date.now()
   const { PiAgentAdapter } = await import('./lib/adapters/pi-agent-adapter')
@@ -128,6 +137,7 @@ async function runWorker(config: PiWorkerRunConfig): Promise<void> {
   const query: PiAgentQueryOptions = {
     ...config.query,
     ...(browserPageControl ? { browserPageControl } : {}),
+    ...(automationControl ? { automationControl } : {}),
     agentRuntime: 'pi',
     canUseTool: async (_toolName, input) => ({ behavior: 'allow', updatedInput: input }),
     onSessionId: (sdkSessionId, sessionFile) => {

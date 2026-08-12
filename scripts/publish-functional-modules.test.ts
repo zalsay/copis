@@ -6,6 +6,7 @@ import type { FunctionalModuleManifest } from '@copis/shared'
 import { mergeFunctionalModuleManifests } from './functional-module-manifest-merge'
 import {
   buildFunctionalModuleBinaryInputs,
+  validateExistingModulesForSingleModuleRelease,
   requireExistingAlipayBot,
   requireExistingOfficeCli,
   requireExistingNodeRuntime,
@@ -172,6 +173,38 @@ describe('功能模块发布脚本 --rust', () => {
     }
 
     expect(requireExistingNodeRuntime(manifest, 'darwin', 'arm64', { allowMissing: true })).toBe(false)
+  })
+
+  test('Rust-only 发布允许远端暂时缺少支付宝智能体 CLI', () => {
+    const manifest: FunctionalModuleManifest = {
+      schema: 1,
+      channel: 'stable',
+      platforms: {
+        'darwin-arm64': {
+          modules: {
+            officecli: {
+              version: '1.0.143',
+              url: 'https://download.example.com/officecli',
+              sha256: 'b'.repeat(64),
+              size: 1,
+              format: 'binary',
+              entrypoint: 'bin/officecli',
+              required: true,
+            },
+          },
+        },
+      },
+    }
+
+    expect(() => validateExistingModulesForSingleModuleRelease({
+      manifest,
+      rustOnly: true,
+      officeCliOnly: false,
+      nodeRuntimeOnly: false,
+      alipayBotOnly: false,
+      platform: 'darwin',
+      arch: 'arm64',
+    })).not.toThrow()
   })
 
   test('合并 Rust 发布时保留远端当前平台的 OfficeCLI artifact', () => {

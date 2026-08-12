@@ -60,6 +60,29 @@ fn parses_all_working_payment_routes() {
     .is_err());
 }
 
+#[test]
+fn payment_account_key_remains_stable_when_access_token_refreshes() {
+    let state = SkillMarketState::new(Some("access-token-1".to_string()));
+    state.set_working_auth(Some("access-token-1".to_string()), Some("user-7".to_string()));
+    let initial_account_key = state.payment_account_key().unwrap();
+
+    state.set_working_auth(Some("access-token-2".to_string()), Some("user-7".to_string()));
+
+    assert_eq!(state.payment_account_key().as_deref(), Some(initial_account_key.as_str()));
+    assert_eq!(state.access_token().as_deref(), Some("access-token-2"));
+}
+
+#[test]
+fn payment_account_key_changes_when_working_user_changes() {
+    let state = SkillMarketState::new(Some("access-token-1".to_string()));
+    state.set_working_auth(Some("access-token-1".to_string()), Some("user-7".to_string()));
+    let first_account_key = state.payment_account_key().unwrap();
+
+    state.set_working_auth(Some("access-token-2".to_string()), Some("user-8".to_string()));
+
+    assert_ne!(state.payment_account_key().as_deref(), Some(first_account_key.as_str()));
+}
+
 fn read_request(stream: &mut TcpStream) -> (String, String, String, Vec<u8>) {
     let mut header = Vec::new();
     let mut byte = [0_u8; 1];
@@ -321,6 +344,7 @@ fn desktop_diamond_payment_is_automatically_checked_by_rust_and_never_calls_lega
     ]);
     let payment_state = WorkingPaymentState::new();
     let state = SkillMarketState::new(Some("payment-token".to_string()));
+    state.set_working_auth(Some("payment-token".to_string()), Some("user-7".to_string()));
 
     let created = handle_request(
         &state,
@@ -333,7 +357,7 @@ fn desktop_diamond_payment_is_automatically_checked_by_rust_and_never_calls_lega
     )
     .unwrap();
     let failures =
-        poll_desktop_payments_once(&payment_state, &worker, &fixture.workspace, "payment-token");
+        poll_desktop_payments_once(&payment_state, &worker, &fixture.workspace, "payment-token", "account-7");
 
     backend.join().unwrap();
     restore_backend_url(previous_backend);
@@ -348,6 +372,11 @@ fn desktop_diamond_payment_is_automatically_checked_by_rust_and_never_calls_lega
         .as_str()
         .is_some_and(|value| value.contains("\"protocol\":\"402\"")));
     assert_eq!(calls[1].0, PaymentWorkerAction::PaymentCheck);
+    assert_eq!(calls[1].1["resourceUrl"], "https://seller.example.test/resource");
+    assert_eq!(calls[1].1["method"], "POST");
+    assert_eq!(calls[1].1["data"], "{}");
+    assert_eq!(calls[1].1["headers"][0]["name"], "Content-Type");
+    assert!(calls[1].1.get("paymentNeeded").is_none());
     assert!(created_body.get("paymentProof").is_none());
 }
 
@@ -398,6 +427,12 @@ fn desktop_payment_forwards_paid_status_without_payment_proof_for_go_api_fallbac
             flow_kind: super::DesktopPaymentFlowKind::Diamond,
             trade_no: Some("trade-7".to_string()),
             out_shake_no: None,
+            request_context: super::PaymentRequestContext {
+                resource_url: "https://seller.example.test/resource".to_string(),
+                method: "POST".to_string(),
+                data: "{}".to_string(),
+                headers: vec![json!({ "name": "Content-Type", "value": "application/json" })],
+            },
         },
     );
 
@@ -406,6 +441,7 @@ fn desktop_payment_forwards_paid_status_without_payment_proof_for_go_api_fallbac
         &worker,
         &fixture.workspace,
         "payment-token",
+        "account-7",
         "pay-7",
     )
     .unwrap();
@@ -413,6 +449,83 @@ fn desktop_payment_forwards_paid_status_without_payment_proof_for_go_api_fallbac
     backend.join().unwrap();
     restore_backend_url(previous_backend);
     assert_eq!(result["data"]["status"], "resource_ready");
+}
+
+#[test]
+fn desktop_payment_prefers_out_shake_no_and_forwards_paid_status_without_payment_proof() {
+    let _env_guard = backend_env_test_lock().lock().unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let backend = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let (method, path, authorization, body) = read_request(&mut stream);
+        assert_eq!(method, "POST");
+        assert_eq!(
+            path,
+            "/api/internal/working-desktop/alipay/payment-finalize"
+        );
+        assert_eq!(authorization, "Bearer wdpc_test");
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&body).unwrap(),
+            json!({
+                "payment_id": "pay-7",
+                "action": "check",
+                "check_result": {
+                    "status": "paid",
+                    "out_shake_no": "shake-7",
+                },
+            }),
+        );
+        respond(
+            &mut stream,
+            r#"{"data":{"payment":{"payment_id":"pay-7","status":"resource_ready"}}}"#,
+        );
+    });
+
+    let previous_backend = std::env::var("COPIS_BACKEND_URL").ok();
+    std::env::set_var("COPIS_BACKEND_URL", format!("http://127.0.0.1:{}", port));
+    let fixture = PaymentWorkspaceFixture::new();
+    let worker = FakePaymentWorker::new(vec![Ok(json!({
+        "ok": true,
+        "status": "paid",
+        "outShakeNo": "shake-7",
+    }))]);
+    let payment_state = WorkingPaymentState::new();
+    payment_state.remember(
+        "pay-7".to_string(),
+        super::WorkingDesktopPaymentFlow {
+            capability: "wdpc_test".to_string(),
+            flow_kind: super::DesktopPaymentFlowKind::Diamond,
+            trade_no: Some("trade-7".to_string()),
+            out_shake_no: Some("shake-7".to_string()),
+            request_context: super::PaymentRequestContext {
+                resource_url: "https://seller.example.test/resource".to_string(),
+                method: "POST".to_string(),
+                data: "{}".to_string(),
+                headers: vec![json!({ "name": "Content-Type", "value": "application/json" })],
+            },
+        },
+    );
+
+    let result = super::check_desktop_payment(
+        &payment_state,
+        &worker,
+        &fixture.workspace,
+        "payment-token",
+        "account-7",
+        "pay-7",
+    )
+    .unwrap();
+
+    backend.join().unwrap();
+    restore_backend_url(previous_backend);
+
+    assert_eq!(result["data"]["status"], "resource_ready");
+    let calls = worker.calls.lock().unwrap();
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].0, PaymentWorkerAction::PaymentCheck);
+    assert_eq!(calls[0].1["outShakeNo"], "shake-7");
+    assert!(calls[0].1.get("tradeNo").is_none());
 }
 
 #[test]
@@ -468,6 +581,13 @@ fn rust_automatically_recovers_pending_payment_after_restart() {
             ),
             (
                 "POST",
+                "/api/internal/working-desktop/alipay/payment-context",
+                "Bearer wdpc_rehydrated",
+                Some(br#"{"payment_id":"pay-7"}"#.as_slice()),
+                r#"{"data":{"payment_id":"pay-7","payment_needed":{"protocol":"402"},"resource_url":"https://seller.example.test/resource","method":"POST","data":"{}","headers":{"Content-Type":"application/json"}}}"#,
+            ),
+            (
+                "POST",
                 "/api/internal/working-desktop/alipay/payment-finalize",
                 "Bearer wdpc_rehydrated",
                 Some(br#"{"payment_id":"pay-7","action":"check","check_result":{"status":"paid","trade_no":"trade-7","out_shake_no":"shake-7","payment_proof":"proof-7","client_session":"client-7"}}"#.as_slice()),
@@ -507,7 +627,7 @@ fn rust_automatically_recovers_pending_payment_after_restart() {
 
     let recovered = recover_pending_desktop_payment(&payment_state, "payment-token").unwrap();
     let failures =
-        poll_desktop_payments_once(&payment_state, &worker, &fixture.workspace, "payment-token");
+        poll_desktop_payments_once(&payment_state, &worker, &fixture.workspace, "payment-token", "account-7");
 
     backend.join().unwrap();
     restore_backend_url(previous_backend);
@@ -517,8 +637,10 @@ fn rust_automatically_recovers_pending_payment_after_restart() {
     let calls = worker.calls.lock().unwrap();
     assert_eq!(calls.len(), 1);
     assert_eq!(calls[0].0, PaymentWorkerAction::PaymentCheck);
-    assert_eq!(calls[0].1["tradeNo"], "trade-7");
     assert_eq!(calls[0].1["outShakeNo"], "shake-7");
+    assert!(calls[0].1.get("tradeNo").is_none());
+    assert_eq!(calls[0].1["resourceUrl"], "https://seller.example.test/resource");
+    assert!(calls[0].1.get("paymentNeeded").is_none());
 }
 
 #[test]
@@ -577,6 +699,7 @@ fn desktop_vip_payment_uses_prepare_only_route_and_builds_renderer_package() {
     }))]);
     let payment_state = WorkingPaymentState::new();
     let state = SkillMarketState::new(Some("payment-token".to_string()));
+    state.set_working_auth(Some("payment-token".to_string()), Some("user-7".to_string()));
 
     let created = handle_request(
         &state,

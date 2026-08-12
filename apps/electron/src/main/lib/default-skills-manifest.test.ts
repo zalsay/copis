@@ -161,7 +161,7 @@ describe('默认 Skills 清单', () => {
     expect(references).toContain('categories.md')
   })
 
-  test('支付宝官方支付 Skill 保持发布元数据和完整支付引用', () => {
+  test('Copis 支付 Skill 只保留四步支付流程', () => {
     const bundled = new Set(bundledSkillSlugs())
     expect(bundled.has('alipay-ai-buyer-agent')).toBe(false)
     expect(bundled.has('alipay-payment-skill')).toBe(true)
@@ -169,34 +169,29 @@ describe('默认 Skills 清单', () => {
 
     const frontmatter = readFrontmatter('alipay-payment-skill')
     expect(frontmatter.get('name')).toBe('alipay-payment-skill')
-    expect(frontmatter.get('displayName')).toBe('支付宝官方支付')
+    expect(frontmatter.get('displayName')).toBe('Copis 支付')
     expect(frontmatter.get('group')).toBe('系统内置')
-    expect(frontmatter.get('version')?.replace(/^['"]|['"]$/g, '')).toBe('0.0.6')
+    expect(frontmatter.get('version')?.replace(/^['"]|['"]$/g, '')).toBe('0.0.8')
 
     const content = readFileSync(join(DEFAULT_SKILLS_DIR, 'alipay-payment-skill', 'SKILL.md'), 'utf8')
-    expect(content).toContain('https://github.com/alipay/payment-skills')
-    expect(content).toContain('@alipay/agent-payment@1.0.3')
-    expect(content).toContain('402 Payment Required')
+    expect(content).toContain('第一步：钱包检查')
+    expect(content).toContain('第二步：套餐复核')
+    expect(content).toContain('第三步：创建订单并显示二维码')
+    expect(content).toContain('第四步：等待支付确认')
     expect(content).toContain('alipay-authenticate-wallet')
     expect(content).toContain('copis_working_payment')
     expect(content).toContain('packages.list')
     expect(content).toContain('wallet.check')
     expect(content).toContain('accessUrl')
+    expect(content).toContain('payment.paymentId')
+    expect(content).toContain('请使用支付宝扫码完成支付，完成后我会自动为你确认到账。')
+    expect(content).not.toMatch(/收银台|cashier|payment\.start|payment\.check|payment\.ack|Payment-Needed|402/i)
+    expect(content).not.toMatch(/本机 Rust|Rust 服务|自动同步机制|额外查询/i)
 
     const walletSkill = readFrontmatter('alipay-authenticate-wallet')
     expect(walletSkill.get('displayName')).toBe('支付宝钱包开通')
     expect(walletSkill.get('version')?.replace(/^['"]|['"]$/g, '')).toBe('0.0.1')
 
-    const references = readdirSync(join(DEFAULT_SKILLS_DIR, 'alipay-payment-skill', 'references')).sort()
-    expect(references).toEqual([
-      '402-payment.md',
-      'cashier-payment.md',
-      'cli-setup.md',
-      'env-vars.md',
-      'feedback.md',
-      'image-output.md',
-      'output-rules.md',
-      'security.md',
-    ])
+    expect(readdirSync(join(DEFAULT_SKILLS_DIR, 'alipay-payment-skill')).sort()).toEqual(['SKILL.md'])
   })
 })

@@ -1,9 +1,9 @@
 import { EventEmitter } from 'node:events'
 import { PassThrough } from 'node:stream'
-import type { SpawnOptions } from 'node:child_process'
+import { execFileSync, type SpawnOptions } from 'node:child_process'
 import { afterAll, afterEach, describe, expect, test, mock } from 'bun:test'
 import { createHash } from 'node:crypto'
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import type { FunctionalModuleFetch } from './functional-module-manager'
@@ -42,8 +42,9 @@ const previousHttpApiPort = process.env.COPIS_HTTP_API_PORT
 process.env.COPIS_HTTP_API_PORT = '51740'
 
 const {
-  resolveDevelopmentRustBinaryCandidates,
+  prepareDevelopmentAlipayBotCli,
   prepareHttpApiBackend,
+  resolveDevelopmentRustBinaryCandidates,
   startHttpApiServer,
   stopHttpApiServer,
   shouldInstallMissingHttpApiModule,
@@ -377,6 +378,44 @@ describe('Rust HTTP API 功能模块生命周期', () => {
       COPIS_ALIPAY_BOT_CLI: alipayBotPath,
       COPIS_ALIPAY_BOT_NODE: nodePath,
     })
+  })
+
+  test('Given 未配置 CLI When 开发模式存在本地归档 Then 解压并返回隔离 CLI 入口', () => {
+    const root = createRoot()
+    const moduleDir = join(root, 'isolated-module')
+    const staging = join(root, 'staging')
+    const platform = process.platform === 'win32' ? 'win32' : process.platform === 'linux' ? 'linux' : 'darwin'
+    const architecture = process.arch === 'arm64' ? 'arm64' : 'x64'
+    const binName = platform === 'win32' ? 'alipay-bot.cmd' : 'alipay-bot'
+    const archiveDir = join(root, 'apps/electron/resources/alipay-bot')
+    mkdirSync(join(staging, 'bin'), { recursive: true })
+    const cli = join(staging, 'bin', binName)
+    writeFileSync(cli, platform === 'win32' ? '@echo off\r\n' : '#!/bin/sh\n', { mode: 0o755 })
+    if (platform !== 'win32') chmodSync(cli, 0o755)
+    mkdirSync(archiveDir, { recursive: true })
+    execFileSync('tar', [
+      '--format=pax',
+      '-czf',
+      join(archiveDir, `${platform}-${architecture}.tar.gz`),
+      '-C',
+      staging,
+      '.',
+    ], { stdio: 'ignore' })
+
+    const previousModuleDir = process.env.COPIS_DEV_ALIPAY_BOT_DIR
+    const previousCliEnv = process.env.COPIS_ALIPAY_BOT_CLI
+    process.env.COPIS_DEV_ALIPAY_BOT_DIR = moduleDir
+    delete process.env.COPIS_ALIPAY_BOT_CLI
+    try {
+      const prepared = prepareDevelopmentAlipayBotCli(root)
+      expect(prepared).toBe(join(moduleDir, 'bin', binName))
+      expect(prepared && existsSync(prepared)).toBe(true)
+    } finally {
+      if (previousModuleDir === undefined) delete process.env.COPIS_DEV_ALIPAY_BOT_DIR
+      else process.env.COPIS_DEV_ALIPAY_BOT_DIR = previousModuleDir
+      if (previousCliEnv === undefined) delete process.env.COPIS_ALIPAY_BOT_CLI
+      else process.env.COPIS_ALIPAY_BOT_CLI = previousCliEnv
+    }
   })
 
   test('Given 开发环境显式 CLI When 启动 Rust API Then 优先注入开发入口', async () => {

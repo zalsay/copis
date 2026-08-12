@@ -11,7 +11,7 @@ import {
   WINDOW_CONTROLS_PADDING_RIGHT,
 } from '@/lib/platform'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
-import { CopisTemplateLogo } from '@/lib/model-logo'
+import { CopisLogo } from '@/lib/model-logo'
 
 function applySnapshot(
   snapshot: WebTabsSnapshot,
@@ -146,7 +146,7 @@ function WebHomeTab({ active, onClick }: { active: boolean; onClick: () => void 
       )}
       onClick={onClick}
     >
-      <img src={CopisTemplateLogo} alt="" className="size-3.5 shrink-0 rounded object-cover" />
+      <img src={CopisLogo} alt="" className="size-3.5 shrink-0 rounded object-cover" />
       <span className="min-w-0 flex-1 truncate text-left font-medium">Copis 首页</span>
     </button>
   )

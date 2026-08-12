@@ -52,6 +52,11 @@ export interface PiWorkerQueryConfig {
   fileAccessPolicy?: PiWorkerFileAccessPolicy
   useRustFileApi?: boolean
   browserPageControl?: PiWorkerBrowserCapability
+  automationControl?: PiWorkerAutomationCapability
+  triggeredBy?: 'user' | 'automation' | 'delegation'
+  workspaceId?: string
+  sourceAutomationId?: string
+  automationEnabled?: boolean
 }
 
 export const BROWSER_AGENT_TOOL_NAMES = [
@@ -79,6 +84,11 @@ export type BrowserAgentToolName = (typeof BROWSER_AGENT_TOOL_NAMES)[number]
 
 export interface PiWorkerBrowserCapability {
   endpoint: '/api/internal/agent/browser-tool'
+  token: string
+}
+
+export interface PiWorkerAutomationCapability {
+  endpoint: '/api/internal/agent/automation-tool'
   token: string
 }
 
@@ -231,7 +241,7 @@ export function parsePiPaymentWorkerRequest(value: unknown): PiPaymentWorkerRequ
     'wallet.apply': ['action', 'agentName'],
     'wallet.bind': ['action', 'bindCode'],
     'payment.start': ['action', 'paymentNeeded', 'resourceUrl', 'method', 'data', 'headers', 'intentSummary'],
-    'payment.check': ['action', 'tradeNo', 'outShakeNo'],
+    'payment.check': ['action', 'tradeNo', 'outShakeNo', 'resourceUrl', 'method', 'data', 'headers'],
   }
   if (!hasOnlyKeys(request, allowedByAction[value.action])) return undefined
   return request as unknown as PiPaymentWorkerRequest
@@ -243,6 +253,14 @@ export function parsePiWorkerBrowserCapability(value: unknown): PiWorkerBrowserC
   if (keys.length !== 2 || keys[0] !== 'endpoint' || keys[1] !== 'token') return undefined
   if (value.endpoint !== '/api/internal/agent/browser-tool') return undefined
   if (!isBoundedNonBlankString(value.token)) return undefined
+  return { endpoint: value.endpoint, token: value.token }
+}
+
+export function parsePiWorkerAutomationCapability(value: unknown): PiWorkerAutomationCapability | undefined {
+  if (!isPlainRecord(value)) return undefined
+  const keys = Object.keys(value).sort()
+  if (keys.length !== 2 || keys[0] !== 'endpoint' || keys[1] !== 'token') return undefined
+  if (value.endpoint !== '/api/internal/agent/automation-tool' || !isBoundedNonBlankString(value.token)) return undefined
   return { endpoint: value.endpoint, token: value.token }
 }
 
@@ -326,6 +344,7 @@ export function parseWorkerCommand(line: string): AgentRpcWorkerCommand | undefi
     if (typeof config.sessionId !== 'string' || config.sessionId.length === 0 || !isPlainRecord(config.query)) return undefined
     if (config.query.sessionId !== config.sessionId) return undefined
     if (config.query.browserPageControl !== undefined && !parsePiWorkerBrowserCapability(config.query.browserPageControl)) return undefined
+    if (config.query.automationControl !== undefined && !parsePiWorkerAutomationCapability(config.query.automationControl)) return undefined
   }
   return parsed as unknown as AgentRpcWorkerCommand
 }

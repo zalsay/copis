@@ -303,6 +303,9 @@ fn slow_connection_is_closed_by_read_timeout() {
     let workspace_skills_store = Arc::new(super::workspace_skills::WorkspaceSkillsStore::open(
         directory.join("skills"),
     ));
+    let automation_store = Arc::new(super::automation::AutomationStore::open(
+        directory.join("automations"),
+    ));
 
     let server = thread::spawn(move || {
         let (stream, _) = listener.accept().unwrap();
@@ -318,6 +321,7 @@ fn slow_connection_is_closed_by_read_timeout() {
             workspace_mcp_store,
             workspace_dev_store,
             workspace_skills_store,
+            automation_store,
         );
     });
     let mut client = std::net::TcpStream::connect(address).unwrap();

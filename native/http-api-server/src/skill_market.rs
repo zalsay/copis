@@ -56,6 +56,7 @@ pub struct SkillMarketResponse {
 
 pub struct SkillMarketState {
     access_token: Mutex<Option<String>>,
+    payment_account_key: Mutex<Option<String>>,
     install_locks: Mutex<HashMap<String, Arc<Mutex<()>>>>,
 }
 
@@ -69,6 +70,7 @@ impl SkillMarketState {
     pub fn new(initial_token: Option<String>) -> Self {
         Self {
             access_token: Mutex::new(initial_token.filter(|value| !value.trim().is_empty())),
+            payment_account_key: Mutex::new(None),
             install_locks: Mutex::new(HashMap::new()),
         }
     }
@@ -77,8 +79,20 @@ impl SkillMarketState {
         *self.access_token.lock().unwrap() = token.filter(|value| !value.trim().is_empty());
     }
 
+    /// Working access token 会刷新，支付钱包必须只绑定到稳定的 Working 用户身份。
+    pub fn set_working_auth(&self, token: Option<String>, user_id: Option<String>) {
+        self.set_access_token(token);
+        *self.payment_account_key.lock().unwrap() = user_id
+            .filter(|value| !value.trim().is_empty())
+            .map(|value| stable_payment_account_key(&value));
+    }
+
     pub(crate) fn access_token(&self) -> Option<String> {
         self.access_token.lock().unwrap().clone()
+    }
+
+    pub(crate) fn payment_account_key(&self) -> Option<String> {
+        self.payment_account_key.lock().unwrap().clone()
     }
 
     fn install_lock(&self, key: &str) -> Arc<Mutex<()>> {
@@ -88,6 +102,11 @@ impl SkillMarketState {
             .or_insert_with(|| Arc::new(Mutex::new(())))
             .clone()
     }
+}
+
+fn stable_payment_account_key(user_id: &str) -> String {
+    let digest = Sha256::digest(format!("working-user:{}", user_id.trim()).as_bytes());
+    digest.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 #[derive(Debug, Clone)]

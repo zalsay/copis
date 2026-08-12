@@ -11,6 +11,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 mod agent_files;
 mod alipay_bot;
+mod automation;
 mod expert_teams;
 mod memory;
 mod payment_capability;
@@ -23,6 +24,7 @@ mod workspace_dev;
 mod workspace_mcp;
 mod workspace_skills;
 
+use automation::{AutomationCreateInput, AutomationError, AutomationRunInput, AutomationStore, AutomationUpdateInput};
 use expert_teams::{ExpertTeamError, ExpertTeamStore};
 use memory::{
     MemoryCaptureBatchInput, MemoryCaptureInput, MemoryContextInput, MemoryError,
@@ -60,6 +62,7 @@ const WEB_TOKEN_HEADER: &str = "x-copis-web-token";
 const AGENT_FILE_TOKEN_HEADER: &str = "x-copis-agent-file-token";
 const INTERNAL_RECORDING_PREFIX: &str = "/internal/browser-workflows/recordings/";
 const INTERNAL_WORKING_AUTH_PATH: &str = "/internal/working-auth/token";
+const WORKING_USER_ID_ENV: &str = "COPIS_WORKING_USER_ID";
 const INTERNAL_AGENT_FILES_PREFIX: &str = "/api/internal/agent/files/";
 const INTERNAL_AGENT_SHELL_PATH: &str = "/api/internal/agent/shell";
 const INTERNAL_AGENT_ALIPAY_BOT_PATH: &str = "/api/internal/agent/alipay-bot";
@@ -1069,6 +1072,7 @@ fn handle_connection(
     workspace_mcp_store: Arc<WorkspaceMcpStore>,
     workspace_dev_store: Arc<WorkspaceDevStore>,
     workspace_skills_store: Arc<WorkspaceSkillsStore>,
+    automation_store: Arc<AutomationStore>,
 ) {
     let _ = stream.set_read_timeout(Some(connection_read_timeout()));
     let request = match read_http_request(&mut stream) {
@@ -1142,6 +1146,18 @@ fn handle_connection(
 
     if path == "/api/memory" || path.starts_with("/api/memory/") {
         handle_memory_route(&mut stream, &request, origin, &memory_store);
+        let _ = stream.shutdown(Shutdown::Both);
+        return;
+    }
+
+    if path == "/api/automations" || path.starts_with("/api/automations/") {
+        handle_automation_route(&mut stream, &request, origin, &automation_store);
+        let _ = stream.shutdown(Shutdown::Both);
+        return;
+    }
+
+    if path == "/api/internal/agent/automation-tool" {
+        handle_internal_automation_tool(&mut stream, &request, origin, &automation_store);
         let _ = stream.shutdown(Shutdown::Both);
         return;
     }
@@ -1320,7 +1336,11 @@ fn handle_connection(
                         .get("token")
                         .and_then(Value::as_str)
                         .map(str::to_string);
-                    skill_market_state.set_access_token(token);
+                    let user_id = value
+                        .get("userId")
+                        .and_then(Value::as_str)
+                        .map(str::to_string);
+                    skill_market_state.set_working_auth(token, user_id);
                     send_empty_response(&mut stream, 204, origin);
                 }
                 _ => send_json_response(
@@ -1596,6 +1616,103 @@ fn handle_workspace_mcp_route(
                 WorkspaceMcpError::InvalidWorkspace => (400, "invalid_workspace"),
                 WorkspaceMcpError::InvalidConfig(_) => (400, "invalid_config"),
                 WorkspaceMcpError::Io(_) => (500, "storage_error"),
+            };
+            let body = json!({ "error": error.to_string(), "code": code }).to_string();
+            send_json_response(stream, status, &body, origin);
+        }
+    }
+}
+
+fn handle_automation_route(stream: &mut TcpStream, request: &HttpRequest, origin: Option<&str>, store: &AutomationStore) {
+    let path = request.target.split('?').next().unwrap_or(&request.target);
+    let parts: Vec<&str> = path.split('/').filter(|part| !part.is_empty()).collect();
+    let result = match (request.method.as_str(), parts.as_slice()) {
+        ("GET", ["api", "automations"]) => store.list().map(|automations| json!(automations)),
+        ("POST", ["api", "automations"]) => serde_json::from_slice::<AutomationCreateInput>(&request.body)
+            .map_err(|_| AutomationError::Validation("定时任务请求格式不正确".to_string()))
+            .and_then(|input| store.create(input)),
+        ("GET", ["api", "automations", id]) => store.get(id).and_then(|automation| automation.ok_or(AutomationError::NotFound)),
+        ("PATCH", ["api", "automations", id]) => serde_json::from_slice::<AutomationUpdateInput>(&request.body)
+            .map_err(|_| AutomationError::Validation("定时任务请求格式不正确".to_string()))
+            .and_then(|input| store.update(id, input)),
+        ("DELETE", ["api", "automations", id]) => store.delete(id).map(|deleted| json!({ "deleted": deleted })),
+        ("POST", ["api", "automations", id, "runs"]) => serde_json::from_slice::<AutomationRunInput>(&request.body)
+            .map_err(|_| AutomationError::Validation("定时任务运行记录格式不正确".to_string()))
+            .and_then(|input| store.append_run(id, input)),
+        ("POST", ["api", "automations", id, "next-run"]) => match serde_json::from_slice::<Value>(&request.body).ok().and_then(|body| body.get("nextRunAt").and_then(Value::as_u64)) {
+            Some(next_run_at) => store.set_next_run_at(id, next_run_at).map(|_| json!({ "updated": true })),
+            None => Err(AutomationError::Validation("nextRunAt 参数不正确".to_string())),
+        },
+        ("POST", ["api", "automations", id, "last-session"]) => match serde_json::from_slice::<Value>(&request.body).ok().and_then(|body| body.get("sessionId").and_then(Value::as_str).filter(|value| !value.trim().is_empty()).map(str::to_string)) {
+            Some(session_id) => store.set_last_session_id(id, &session_id).map(|_| json!({ "updated": true })),
+            None => Err(AutomationError::Validation("sessionId 参数不正确".to_string())),
+        },
+        _ => Err(AutomationError::NotFound),
+    };
+    send_automation_result(stream, result, origin);
+}
+
+fn handle_internal_automation_tool(stream: &mut TcpStream, request: &HttpRequest, origin: Option<&str>, store: &AutomationStore) {
+    if request.method != "POST" {
+        send_automation_result(stream, Err(AutomationError::NotFound), origin);
+        return;
+    }
+    let body = match serde_json::from_slice::<Value>(&request.body) {
+        Ok(body) => body,
+        Err(_) => {
+            send_automation_result(stream, Err(AutomationError::Validation("定时任务工具请求格式不正确".to_string())), origin);
+            return;
+        }
+    };
+    let session_id = body.get("sessionId").and_then(Value::as_str).unwrap_or("");
+    let token = body.get("capabilityToken").and_then(Value::as_str).unwrap_or("");
+    let action = body.get("action").and_then(Value::as_str).unwrap_or("");
+    let input = body.get("input").cloned().unwrap_or_else(|| json!({}));
+    let context = match automation::worker_automation_context(session_id, token) {
+        Ok(context) => context,
+        Err(error) => {
+            send_automation_result(stream, Err(error), origin);
+            return;
+        }
+    };
+    let result = match action {
+        "list" => store.list().map(|automations| json!({ "automations": automations })),
+        "get" => input.get("id").and_then(Value::as_str).or_else(|| {
+            (context.triggered_by == "automation").then(|| context.source_automation_id.as_deref()).flatten()
+        }).map_or_else(
+            || Err(AutomationError::Validation("id 必填".to_string())),
+            |id| store.get(id).and_then(|automation| automation.ok_or(AutomationError::NotFound)).map(|automation| json!({ "automation": automation })),
+        ),
+        "create" => serde_json::from_value::<AutomationCreateInput>(input).map_err(|_| AutomationError::Validation("创建定时任务参数不正确".to_string())).and_then(|mut create| {
+            create.channel_id = context.channel_id;
+            create.model_id = context.model_id;
+            create.workspace_id = context.workspace_id;
+            create.source_session_id = Some(session_id.to_string());
+            store.create_for_session(create, &context.triggered_by).map(|automation| json!({ "automation": automation }))
+        }),
+        "update" => {
+            let id = input.get("id").and_then(Value::as_str).or_else(|| {
+                (context.triggered_by == "automation").then(|| context.source_automation_id.as_deref()).flatten()
+            }).ok_or_else(|| AutomationError::Validation("id 必填；只有定时任务自动执行中才可以省略 id".to_string()));
+            match id {
+                Ok(id) => serde_json::from_value::<AutomationUpdateInput>(input.get("changes").cloned().unwrap_or_else(|| json!({}))).map_err(|_| AutomationError::Validation("修改定时任务参数不正确".to_string())).and_then(|update| store.update(id, update)).map(|automation| json!({ "automation": automation })),
+                Err(error) => Err(error),
+            }
+        }
+        "delete" => input.get("id").and_then(Value::as_str).map_or_else(|| Err(AutomationError::Validation("id 必填".to_string())), |id| store.delete(id).map(|deleted| json!({ "deleted": deleted }))),
+        _ => Err(AutomationError::NotFound),
+    };
+    send_automation_result(stream, result, origin);
+}
+
+fn send_automation_result(stream: &mut TcpStream, result: Result<Value, AutomationError>, origin: Option<&str>) {
+    match result {
+        Ok(value) => send_json_response(stream, 200, &value.to_string(), origin),
+        Err(error) => {
+            let (status, code) = match error {
+                AutomationError::Validation(_) => (400, "invalid_automation_request"),
+                AutomationError::NotFound => (404, "automation_not_found"),
+                AutomationError::Storage(_) => (500, "automation_storage_error"),
             };
             let body = json!({ "error": error.to_string(), "code": code }).to_string();
             send_json_response(stream, status, &body, origin);
@@ -2582,9 +2699,11 @@ fn main() {
             process::exit(1);
         }
     };
-    let skill_market_state = Arc::new(SkillMarketState::new(
+    let skill_market_state = Arc::new(SkillMarketState::new(None));
+    skill_market_state.set_working_auth(
         std::env::var("COPIS_WORKING_ACCESS_TOKEN").ok(),
-    ));
+        std::env::var(WORKING_USER_ID_ENV).ok(),
+    );
     let working_payment_state = Arc::new(WorkingPaymentState::new());
     let payment_workspace = match PaymentWorkspace::from_environment() {
         Ok(workspace) => Arc::new(workspace),
@@ -2602,6 +2721,7 @@ fn main() {
     let workspace_mcp_store = Arc::new(WorkspaceMcpStore::open(resolve_config_directory()));
     let workspace_dev_store = Arc::new(WorkspaceDevStore::open(resolve_config_directory()));
     let workspace_skills_store = Arc::new(WorkspaceSkillsStore::open(resolve_config_directory()));
+    let automation_store = Arc::new(AutomationStore::open(resolve_config_directory()));
     let response_bridge = Arc::clone(&bridge);
     thread::spawn(move || read_bridge_responses(response_bridge));
 
@@ -2625,6 +2745,7 @@ fn main() {
                 let connection_workspace_mcp = Arc::clone(&workspace_mcp_store);
                 let connection_workspace_dev = Arc::clone(&workspace_dev_store);
                 let connection_workspace_skills = Arc::clone(&workspace_skills_store);
+                let connection_automation = Arc::clone(&automation_store);
                 let connection_active = Arc::clone(&active_connections);
                 thread::spawn(move || {
                     let _guard = ConnectionCountGuard(connection_active);
@@ -2640,6 +2761,7 @@ fn main() {
                         connection_workspace_mcp,
                         connection_workspace_dev,
                         connection_workspace_skills,
+                        connection_automation,
                     )
                 });
             }
@@ -2653,3 +2775,7 @@ fn main() {
 #[cfg(test)]
 #[path = "main_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "automation_test.rs"]
+mod automation_test;

@@ -130,29 +130,15 @@ async function main(): Promise<void> {
     }
     const initialRelease = buildFunctionalModuleRelease(releaseInput)
     const existingManifest = await fetchExistingManifest(initialRelease.manifestEntry.url)
-    if (rustOnly) {
-      requireExistingOfficeCli(existingManifest, platform, arch)
-      requireExistingAlipayBot(existingManifest, platform, arch)
-      const hasNodeRuntime = requireExistingNodeRuntime(existingManifest, platform, arch, { allowMissing: true })
-      if (!hasNodeRuntime) {
-        console.warn(`[publish:functional-modules] COS manifest 当前平台/架构缺少 node-runtime: ${platform}-${arch}，--rust 将继续发布；请随后执行 --node-runtime 补齐`)
-      }
-    }
-    if (officeCliOnly) {
-      requireExistingRustApi(existingManifest, platform, arch)
-      requireExistingNodeRuntime(existingManifest, platform, arch)
-      requireExistingAlipayBot(existingManifest, platform, arch)
-    }
-    if (nodeRuntimeOnly) {
-      requireExistingRustApi(existingManifest, platform, arch)
-      requireExistingOfficeCli(existingManifest, platform, arch)
-      requireExistingAlipayBot(existingManifest, platform, arch)
-    }
-    if (alipayBotOnly) {
-      requireExistingRustApi(existingManifest, platform, arch)
-      requireExistingOfficeCli(existingManifest, platform, arch)
-      requireExistingNodeRuntime(existingManifest, platform, arch)
-    }
+    validateExistingModulesForSingleModuleRelease({
+      manifest: existingManifest,
+      rustOnly,
+      officeCliOnly,
+      nodeRuntimeOnly,
+      alipayBotOnly,
+      platform,
+      arch,
+    })
     const resolvedRelease = await resolveImmutableModuleVersions(releaseInput, client)
     const release = resolvedRelease.release
     for (const bump of resolvedRelease.versionBumps) {
@@ -283,6 +269,57 @@ export function requireExistingNodeRuntime(
 
 interface NodeRuntimeValidationOptions {
   allowMissing?: boolean
+}
+
+interface SingleModuleReleaseValidationOptions {
+  manifest: FunctionalModuleManifest | undefined
+  rustOnly: boolean
+  officeCliOnly: boolean
+  nodeRuntimeOnly: boolean
+  alipayBotOnly: boolean
+  platform: FunctionalModulePlatform
+  arch: FunctionalModuleArchitecture
+}
+
+/** 单模块发布只校验运行该发布模式所必需的远端模块。 */
+export function validateExistingModulesForSingleModuleRelease(
+  options: SingleModuleReleaseValidationOptions,
+): void {
+  const {
+    manifest,
+    rustOnly,
+    officeCliOnly,
+    nodeRuntimeOnly,
+    alipayBotOnly,
+    platform,
+    arch,
+  } = options
+
+  if (rustOnly) {
+    requireExistingOfficeCli(manifest, platform, arch)
+    const hasNodeRuntime = requireExistingNodeRuntime(manifest, platform, arch, { allowMissing: true })
+    if (!hasNodeRuntime) {
+      console.warn(`[publish:functional-modules] COS manifest 当前平台/架构缺少 node-runtime: ${platform}-${arch}，--rust 将继续发布；请随后执行 --node-runtime 补齐`)
+    }
+    return
+  }
+  if (officeCliOnly) {
+    requireExistingRustApi(manifest, platform, arch)
+    requireExistingNodeRuntime(manifest, platform, arch)
+    requireExistingAlipayBot(manifest, platform, arch)
+    return
+  }
+  if (nodeRuntimeOnly) {
+    requireExistingRustApi(manifest, platform, arch)
+    requireExistingOfficeCli(manifest, platform, arch)
+    requireExistingAlipayBot(manifest, platform, arch)
+    return
+  }
+  if (alipayBotOnly) {
+    requireExistingRustApi(manifest, platform, arch)
+    requireExistingOfficeCli(manifest, platform, arch)
+    requireExistingNodeRuntime(manifest, platform, arch)
+  }
 }
 
 interface FunctionalModuleBinaryInputOptions {

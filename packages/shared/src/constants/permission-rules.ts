@@ -83,11 +83,12 @@ export function hasDangerousStructure(command: string): boolean {
 }
 
 /**
- * 判断 Bash 命令是否属于 Composer 高级授权范围（Git/SSH）
+ * 判断 Bash 命令是否属于 Composer 高级授权范围（Git/SSH/curl/Python）
  */
 export function isAdvancedAuthorizationCommand(command: string): boolean {
   const executable = command.trim().split(/\s+/, 1)[0]
-  return executable === 'git' || executable === 'ssh'
+  return executable === 'git' || executable === 'ssh' || executable === 'curl'
+    || executable === 'python' || executable === 'python3'
 }
 
 /**

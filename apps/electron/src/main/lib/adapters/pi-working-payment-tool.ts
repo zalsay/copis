@@ -23,6 +23,53 @@ export interface WorkingPaymentToolInput {
 
 export class PiWorkingPaymentToolError extends Error {}
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function nonBlankString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value : undefined
+}
+
+function paymentSummary(payload: unknown): unknown {
+  if (!isRecord(payload)) return payload
+  const payment = isRecord(payload.payment) ? payload.payment : undefined
+  const packageInfo = isRecord(payload.package) ? payload.package : undefined
+  if (!payment) return payload
+
+  const paymentResult: Record<string, unknown> = {}
+  const fields: Array<[string, string]> = [
+    ['paymentId', 'payment_id'],
+    ['status', 'status'],
+    ['amount', 'amount'],
+    ['currency', 'currency'],
+    ['qrCodeImage', 'qrcode_image'],
+    ['qrCodeMimeType', 'qrcode_mime_type'],
+  ]
+  for (const [resultField, sourceField] of fields) {
+    const value = nonBlankString(payment[sourceField])
+    if (value) paymentResult[resultField] = value
+  }
+
+  const result: Record<string, unknown> = { payment: paymentResult }
+  if (packageInfo) {
+    const packageResult: Record<string, unknown> = {}
+    const packageFields: Array<[string, string]> = [
+      ['id', 'id'],
+      ['goodsName', 'goods_name'],
+      ['amount', 'amount'],
+      ['currency', 'currency'],
+      ['diamonds', 'diamonds'],
+    ]
+    for (const [resultField, sourceField] of packageFields) {
+      const value = packageInfo[sourceField]
+      if (typeof value === 'number' || nonBlankString(value)) packageResult[resultField] = value
+    }
+    result.package = packageResult
+  }
+  return result
+}
+
 function resolveBaseUrl(value: string | undefined): string {
   if (value?.trim()) return value.replace(/\/$/, '')
   const configuredPort = Number.parseInt(process.env.COPIS_HTTP_API_PORT ?? '', 10)
@@ -76,7 +123,7 @@ export class PiWorkingPaymentToolClient {
         : `Copis 钻石服务请求失败（${response.status}）`
       throw new PiWorkingPaymentToolError(message)
     }
-    return payload
+    return input.action === 'order.create' ? paymentSummary(payload) : payload
   }
 
   private buildRequest(input: WorkingPaymentToolInput): { method: 'GET' | 'POST'; path: string; body?: string } {
@@ -112,11 +159,11 @@ export function buildPiWorkingPaymentTools(
     name: 'copis_working_payment',
     label: 'Copis 钻石购买',
     description: '查询 edu-api 的最新 Copis 钻石套餐，创建钱包支付会话，或由本地 Rust 服务查询已创建订单的支付与履约状态。',
-    promptSnippet: '购买 Copis 钻石时，先用 packages.list 查询最新套餐；确认套餐并检查钱包就绪后调用 order.create。用户完成扫码支付后，仅使用 order.check 并传入 order.create 返回的 payment.payment_id；禁止直接调用 alipay_bot 的 payment.check 或 payment.ack。',
+    promptSnippet: '购买 Copis 钻石时严格执行四步：先用 alipay_bot 的 wallet.check 检查钱包；再用 packages.list 复核套餐；两项通过后调用 order.create 创建订单并显示二维码；最后等待本机 Rust 自动确认支付与履约。order.create 已完成受控支付初始化，创建后不得自行调用其他支付或订单查询动作。',
     parameters: Type.Object({
       action: Type.Union([Type.Literal('packages.list'), Type.Literal('order.create'), Type.Literal('order.check')]),
       packageId: Type.Optional(Type.Integer({ minimum: 1, description: '已由用户明确确认的 Copis 钻石套餐 ID。' })),
-      paymentId: Type.Optional(Type.String({ minLength: 1, description: 'order.create 返回的 payment.payment_id，仅用于本地 Rust 受控查询。' })),
+      paymentId: Type.Optional(Type.String({ minLength: 1, description: 'order.create 返回的 payment.paymentId，仅用于本地 Rust 受控查询。' })),
     }),
     async execute(_toolCallId, params, signal) {
       return toToolResult(await client.execute(params as WorkingPaymentToolInput, signal))

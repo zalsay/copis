@@ -104,6 +104,133 @@ describe('Working 侧边栏视觉契约', () => {
     expect(accountMarkRule).not.toContain('#c8a7ff')
   })
 
+  test('Given 浅色模式 When 使用 ui-primary-background Then 激活背景具有更高层次且深色模式保持原值', () => {
+    const lightThemeRule = globalStyles.match(
+      /:root:not\(\.dark\)\s*\{([^}]*)\}/s,
+    )?.[1]
+
+    expect(lightThemeRule).toBeDefined()
+    expect(lightThemeRule).toContain('--ui-primary-background: rgb(240 161 90 / 16%)')
+    expect(globalStyles).toContain('--ui-primary-background: rgb(240 161 90 / 10%);')
+  })
+
+  test('Given 浅色或特殊主题 When 查看 Working 侧栏 Then 普通文字与激活态跟随主题变量', () => {
+    const sidebarRule = sidebarStyles.match(
+      /\.copis-working-sidebar\s*\{([^}]*)\}/s,
+    )?.[1]
+    const sharedTextRule = sidebarStyles.match(
+      /\.copis-working-menu-button,\s*\.copis-working-project-row,\s*\.copis-working-conversation-row,\s*\.copis-working-sidebar-muted,\s*\.copis-working-sidebar-account\s*\{([^}]*)\}/s,
+    )?.[1]
+    const iconRule = sidebarStyles.match(
+      /\.copis-working-menu-button svg,\s*\.copis-working-project-row svg,\s*\.copis-working-conversation-row svg\s*\{([^}]*)\}/s,
+    )?.[1]
+    const menuActiveRule = sidebarStyles.match(
+      /\.copis-working-menu-button\.active\s*\{([^}]*)\}/s,
+    )?.[1]
+    const projectActiveRule = sidebarStyles.match(
+      /\.copis-working-project-row\.active\s*\{([^}]*)\}/s,
+    )?.[1]
+    const conversationActiveRule = sidebarStyles.match(
+      /\.copis-working-conversation-row\.active\s*\{([^}]*)\}/s,
+    )?.[1]
+
+    expect(sidebarRule).toBeDefined()
+    expect(sharedTextRule).toBeDefined()
+    expect(iconRule).toBeDefined()
+    expect(menuActiveRule).toBeDefined()
+    expect(projectActiveRule).toBeDefined()
+    expect(conversationActiveRule).toBeDefined()
+    expect(sidebarRule).toContain('color: hsl(var(--foreground))')
+    expect(sharedTextRule).toContain('color: hsl(var(--foreground))')
+    expect(iconRule).toContain('color: hsl(var(--muted-foreground))')
+    expect(menuActiveRule).toContain('background: var(--ui-primary-background)')
+    expect(menuActiveRule).toContain('color: var(--ui-primary)')
+    expect(sidebarStyles).toContain('.copis-working-menu-button.active > svg')
+    expect(sidebarStyles).toContain('color: var(--ui-primary)')
+    expect(projectActiveRule).toContain('background: var(--ui-primary-background)')
+    expect(projectActiveRule).toContain('color: var(--ui-primary)')
+    expect(conversationActiveRule).toContain('background: var(--ui-primary-background)')
+    expect(conversationActiveRule).toContain('color: var(--ui-primary)')
+    expect(sidebarStyles).toContain('background: hsl(var(--foreground) / 0.07)')
+  })
+
+  test('Given Working 侧栏 When 查看菜单与列表文字 Then 只有激活文字使用加粗字重', () => {
+    const menuRule = sidebarStyles.match(
+      /\.copis-working-menu-button\s*\{([^}]*)\}/s,
+    )?.[1]
+    const menuActiveRule = sidebarStyles.match(
+      /\.copis-working-menu-button\.active\s*\{([^}]*)\}/s,
+    )?.[1]
+    const headingRule = sidebarStyles.match(
+      /\.copis-working-project-heading\s*\{([^}]*)\}/s,
+    )?.[1]
+    const groupToggleRule = sidebarStyles.match(
+      /\.copis-working-project-group-toggle\s*\{([^}]*)\}/s,
+    )?.[1]
+    const projectRowRule = sidebarStyles.match(
+      /\.copis-working-project-row\s*\{([^}]*)\}/s,
+    )?.[1]
+    const projectActiveMainRule = sidebarStyles.match(
+      /\.copis-working-project-row\.active\s+\.copis-working-project-main\s*\{([^}]*)\}/s,
+    )?.[1]
+    const pinnedNameRule = sidebarStyles.match(
+      /\.copis-working-project-pinned-name\s*\{([^}]*)\}/s,
+    )?.[1]
+    const conversationRowRule = sidebarStyles.match(
+      /\.copis-working-conversation-row\s*\{([^}]*)\}/s,
+    )?.[1]
+    const conversationLabelRule = sidebarStyles.match(
+      /\.copis-working-conversation-label\s*>\s*span\s*\{([^}]*)\}/s,
+    )?.[1]
+    const conversationActiveLabelRule = sidebarStyles.match(
+      /\.copis-working-conversation-row\.active\s+\.copis-working-conversation-label\s*>\s*span\s*\{([^}]*)\}/s,
+    )?.[1]
+
+    expect(menuRule).toBeDefined()
+    expect(menuActiveRule).toBeDefined()
+    expect(headingRule).toBeDefined()
+    expect(groupToggleRule).toBeDefined()
+    expect(projectRowRule).toBeDefined()
+    expect(projectActiveMainRule).toBeDefined()
+    expect(pinnedNameRule).toBeDefined()
+    expect(conversationRowRule).toBeDefined()
+    expect(conversationLabelRule).toBeDefined()
+    expect(conversationActiveLabelRule).toBeDefined()
+    expect(menuRule).toContain('font-weight: 400')
+    expect(menuActiveRule).toContain('font-weight: 600')
+    expect(headingRule).toContain('font-weight: 400')
+    expect(groupToggleRule).toContain('font-weight: 400')
+    expect(projectRowRule).toContain('font-weight: 400')
+    expect(projectActiveMainRule).toContain('font-weight: 600')
+    expect(pinnedNameRule).toContain('font-weight: 400')
+    expect(conversationRowRule).toContain('font-weight: 400')
+    expect(conversationLabelRule).toContain('font-weight: 400')
+    expect(conversationActiveLabelRule).toContain('font-weight: 600')
+  })
+
+  test('Given Working footer When 查看反馈与账户文字 Then 使用常规字重', () => {
+    const accountStrongRule = sidebarStyles.match(
+      /\.copis-working-sidebar-account strong\s*\{([^}]*)\}/s,
+    )?.[1]
+    const balanceRule = sidebarStyles.match(
+      /\.copis-working-account-balance\s*\{([^}]*)\}/s,
+    )?.[1]
+
+    expect(accountStrongRule).toBeDefined()
+    expect(balanceRule).toBeDefined()
+    expect(accountStrongRule).toContain('font-weight: 400')
+    expect(balanceRule).toContain('font-weight: 400')
+  })
+
+  test('Given 工作区菜单 When 删除工作区 Then 使用统一项目确认弹窗', () => {
+    expect(sidebarSource).toContain("import { ConfirmDialog } from '@/components/ui/confirm-dialog'")
+    expect(sidebarSource).toContain('pendingDeleteWorkspace')
+    expect(sidebarSource).toContain('open={pendingDeleteWorkspace !== null}')
+    expect(sidebarSource).toContain('title={`确认删除项目「${pendingDeleteWorkspace?.name}」？`}')
+    expect(sidebarSource).toContain('loadingLabel="删除中..."')
+    expect(sidebarSource).not.toContain('window.confirm(`确定删除项目')
+  })
+
   test('Given 最后一个项目靠近侧栏底部 When 打开项目菜单 Then 菜单向上弹出避免被下方组件遮盖', () => {
     expect(sidebarSource).toContain('getBoundingClientRect()')
     expect(sidebarSource).toContain('setOpenMenuDirection')
@@ -285,7 +412,7 @@ describe('Working 侧边栏视觉契约', () => {
     expect(workspaceRowIconRule).toContain('width: 15px')
     expect(workspaceRowIconRule).toContain('height: 15px')
     expect(workspaceRowIconRule).toContain('flex: 0 0 15px')
-    expect(workspaceRowIconRule).toContain('color: #a8a8b0')
+    expect(workspaceRowIconRule).toContain('color: hsl(var(--muted-foreground))')
     expect(currentWorkspaceRowIconRule).toBeDefined()
     expect(currentWorkspaceRowIconRule).toContain('color: var(--ui-primary)')
     expect(workspaceCountRule).toBeDefined()

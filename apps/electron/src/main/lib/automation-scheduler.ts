@@ -24,14 +24,9 @@ import {
   type AutomationRun,
 } from '@copis/shared'
 import {
-  listAutomations,
-  getAutomation,
-  appendRun,
-  updateAutomation,
-  setNextRunAt,
-  setLastSessionId,
   computeNextRunAt,
 } from './automation-manager'
+import { runtimeAutomationApiClient } from './automation-api-client'
 import { createAgentSession, updateAgentSessionMeta, getAgentSessionMeta } from './agent-session-manager'
 import { getSessionContextUsageRatio } from './agent-session-usage'
 import { runAgentHeadless, isAgentSessionActive } from './agent-service'
@@ -107,7 +102,7 @@ export function broadcastChanged(): void {
 export async function runAutomation(automation: Automation, manual = false): Promise<void> {
   if (runningAutomations.has(automation.id)) {
     console.log(`[定时任务] ${automation.name} 上一轮尚未结束，跳过本轮`)
-    appendRun(automation.id, {
+    await runtimeAutomationApiClient.appendRun(automation.id, {
       runAt: Date.now(),
       sessionId: '',
       status: 'skipped',
@@ -160,7 +155,7 @@ export async function runAutomation(automation: Automation, manual = false): Pro
       const created = createAgentSession(automation.name, automation.channelId, automation.workspaceId, automation.modelId, agentRuntime)
       updateAgentSessionMeta(created.id, { sourceAutomationId: automation.id, agentRuntime })
       targetSessionId = created.id
-      setLastSessionId(automation.id, created.id)
+      await runtimeAutomationApiClient.setLastSessionId(automation.id, created.id)
     }
 
     const targetSessionMeta = getAgentSessionMeta(targetSessionId)
@@ -177,6 +172,9 @@ export async function runAutomation(automation: Automation, manual = false): Pro
       const finish = (status: 'success' | 'error', error?: string): void => {
         if (settled) return
         settled = true
+        void finishAsync(status, error)
+      }
+      const finishAsync = async (status: 'success' | 'error', error?: string): Promise<void> => {
         if (timeoutTimer) clearTimeout(timeoutTimer)
         const run: AutomationRun = {
           runAt,
@@ -185,23 +183,28 @@ export async function runAutomation(automation: Automation, manual = false): Pro
           durationMs: Date.now() - runAt,
           error,
         }
-        appendRun(automation.id, run)
-        broadcastChanged()
-        void notifyAutomationRunFinished({ automation, run }).catch((err) => {
-          console.error(`[定时任务] 发送完成通知失败: ${automation.name}`, err)
-        })
-        // 失败退避：连续失败达上限自动暂停
-        const latest = getAutomation(automation.id)
-        if (
-          latest &&
-          latest.active &&
-          (latest.consecutiveFailures ?? 0) >= AUTOMATION_MAX_CONSECUTIVE_FAILURES
-        ) {
-          updateAutomation({ id: automation.id, active: false })
-          console.warn(`[定时任务] ${automation.name} 连续失败 ${latest.consecutiveFailures} 次，已自动暂停`)
+        try {
+          await runtimeAutomationApiClient.appendRun(automation.id, run)
           broadcastChanged()
+          void notifyAutomationRunFinished({ automation, run }).catch((err) => {
+            console.error(`[定时任务] 发送完成通知失败: ${automation.name}`, err)
+          })
+          // 失败退避：连续失败达上限自动暂停
+          const latest = await runtimeAutomationApiClient.get(automation.id)
+          if (
+            latest &&
+            latest.active &&
+            (latest.consecutiveFailures ?? 0) >= AUTOMATION_MAX_CONSECUTIVE_FAILURES
+          ) {
+            await runtimeAutomationApiClient.update({ id: automation.id, active: false })
+            console.warn(`[定时任务] ${automation.name} 连续失败 ${latest.consecutiveFailures} 次，已自动暂停`)
+            broadcastChanged()
+          }
+        } catch (persistError) {
+          console.error(`[定时任务] 写入运行结果失败: ${automation.name}`, persistError)
+        } finally {
+          resolveRun()
         }
-        resolveRun()
       }
 
       // 超时保护：防止 runAgentHeadless 永远不回调导致 automation 永久卡死
@@ -242,7 +245,7 @@ export async function runAutomation(automation: Automation, manual = false): Pro
       durationMs: Date.now() - runAt,
       error: err instanceof Error ? err.message : '未知错误',
     }
-    appendRun(automation.id, run)
+    await runtimeAutomationApiClient.appendRun(automation.id, run)
     broadcastChanged()
     void notifyAutomationRunFinished({ automation, run }).catch((notifyError) => {
       console.error(`[定时任务] 发送异常通知失败: ${automation.name}`, notifyError)
@@ -254,7 +257,7 @@ export async function runAutomation(automation: Automation, manual = false): Pro
 
 /** 立即运行一次（手动触发，不影响调度计时之外的逻辑） */
 export async function runAutomationNow(id: string): Promise<void> {
-  const automation = getAutomation(id)
+  const automation = await runtimeAutomationApiClient.get(id)
   if (!automation) throw new Error(`定时任务不存在: ${id}`)
   // 草稿态（缺 channelId / workspaceId）拒绝运行，兜底前端 disabled 防止 IPC 绕过
   if (!automation.channelId || !automation.workspaceId) {
@@ -272,7 +275,7 @@ function tick(): void {
 
 async function tickAsync(): Promise<void> {
   const now = Date.now()
-  for (const automation of listAutomations()) {
+  for (const automation of await runtimeAutomationApiClient.list()) {
     if (!automation.active) continue
     // 完整度兜底：老用户可能存在「active=true 但缺工作区 / 渠道」的历史数据，跳过避免运行时崩溃
     if (!automation.channelId || !automation.workspaceId) continue
@@ -295,14 +298,18 @@ async function tickAsync(): Promise<void> {
  */
 export function startScheduler(): void {
   if (tickTimer) return
-  const now = Date.now()
-  for (const automation of listAutomations()) {
-    if (automation.active && automation.nextRunAt <= now) {
-      setNextRunAt(automation.id, computeNextRunAt(automation, now))
-    }
-  }
+  void restoreOverdueSchedules()
   tickTimer = setInterval(tick, TICK_INTERVAL_MS)
   console.log(`[定时任务] 调度器已启动，tick 周期 ${TICK_INTERVAL_MS / 1000}s`)
+}
+
+async function restoreOverdueSchedules(): Promise<void> {
+  const now = Date.now()
+  for (const automation of await runtimeAutomationApiClient.list()) {
+    if (automation.active && automation.nextRunAt <= now) {
+      await runtimeAutomationApiClient.setNextRunAt(automation.id, computeNextRunAt(automation, now))
+    }
+  }
 }
 
 /** 停止调度器（before-quit 调用） */

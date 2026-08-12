@@ -61,12 +61,13 @@ import { createCopisResourceLoaderOptions } from './pi-resource-loader-overrides
 import { createCodexFastModeExtension, withCodexFastModeServiceTier } from './pi-codex-request-settings'
 import { createOpenAIReasoningRequestExtension } from './pi-openai-reasoning-request-settings'
 import { buildPiBrowserAgentTools } from './pi-browser-agent-tools'
+import { buildPiAutomationTools } from './pi-automation-tools'
 import { buildPiAlipayBotTools } from './pi-alipay-bot-tool'
 import { buildPiWorkingPaymentTools } from './pi-working-payment-tool'
 import { createRustBashToolOperations, createRustFileToolOperations } from './pi-rust-file-tools'
 import { resolveDefaultPiExtensionEntries } from './pi-default-extensions'
 import { mergeRuntimeEnv, type AgentRuntimeEnv } from '../agent-runtime-env'
-import type { PiWorkerBrowserCapability } from '../agent-rpc-protocol'
+import type { PiWorkerAutomationCapability, PiWorkerBrowserCapability } from '../agent-rpc-protocol'
 import {
   convertPiMessage,
   convertResultMessage,
@@ -178,6 +179,8 @@ export interface PiAgentQueryOptions extends AgentQueryInput {
   useRustFileApi?: boolean
   /** Browser Worker 的短期 capability；缺失时不得注册任何 Browser 页面工具。 */
   browserPageControl?: PiWorkerBrowserCapability
+  /** Rust 在启动 Pi Worker 后签发的定时任务 capability。 */
+  automationControl?: PiWorkerAutomationCapability
 }
 
 interface ActivePiSession {
@@ -1307,7 +1310,7 @@ export function buildBuiltinToolDefinitions(
   cwd: string,
   canUseTool: PiAgentQueryOptions['canUseTool'],
   runtimeEnv: AgentRuntimeEnv | undefined,
-  options: Pick<PiAgentQueryOptions, 'sessionId' | 'useRustFileApi' | 'browserPageControl'>,
+  options: Pick<PiAgentQueryOptions, 'sessionId' | 'useRustFileApi' | 'browserPageControl' | 'automationControl'>,
 ): ToolDefinition[] {
   const rustFileTools = options.useRustFileApi
     ? createRustFileToolOperations({ sessionId: options.sessionId })
@@ -1330,6 +1333,9 @@ export function buildBuiltinToolDefinitions(
         sessionId: options.sessionId,
         capability: options.browserPageControl,
       })
+      : []),
+    ...(options.automationControl
+      ? buildPiAutomationTools(sdk, { sessionId: options.sessionId, capability: options.automationControl })
       : []),
     ...buildPiAlipayBotTools(sdk, { sessionId: options.sessionId }),
     ...buildPiWorkingPaymentTools(sdk),

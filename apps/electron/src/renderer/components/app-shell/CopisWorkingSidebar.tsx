@@ -65,6 +65,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
+import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { CopisWorkingConnectDialog, type WorkingFolderSelection } from './CopisWorkingConnectDialog'
 import { CopisWorkingFeedbackDialog } from './CopisWorkingFeedbackDialog'
 import './CopisWorkingSidebar.css'
@@ -77,6 +78,11 @@ interface CopisWorkingSidebarProps {
 interface PendingDeleteSession {
   id: string
   title: string
+}
+
+interface PendingDeleteWorkspace {
+  id: string
+  name: string
 }
 
 const CONVERSATION_PREVIEW_LIMIT = 5
@@ -107,6 +113,7 @@ export function CopisWorkingSidebar({ width, noTransition = false }: CopisWorkin
   const [openMenuWorkspaceId, setOpenMenuWorkspaceId] = React.useState<string | null>(null)
   const [openMenuDirection, setOpenMenuDirection] = React.useState<'down' | 'up'>('down')
   const [pendingDeleteSession, setPendingDeleteSession] = React.useState<PendingDeleteSession | null>(null)
+  const [pendingDeleteWorkspace, setPendingDeleteWorkspace] = React.useState<PendingDeleteWorkspace | null>(null)
   const [createWorkspaceOpen, setCreateWorkspaceOpen] = useAtom(createWorkspaceDialogOpenAtom)
   const [feedbackOpen, setFeedbackOpen] = React.useState(false)
   const initialProjectsLoadedRef = React.useRef(false)
@@ -323,20 +330,25 @@ export function CopisWorkingSidebar({ width, noTransition = false }: CopisWorkin
     if (reopenNewExpertTeam) setNewExpertTeamDialogOpen(true)
   }, [setCreateWorkspaceOpen, setWorkspaceCreationSource, workspaceCreationSource])
 
-  const handleRemoveWorkspace = async (workspaceId: string): Promise<void> => {
+  const requestRemoveWorkspace = (workspaceId: string): void => {
     const workspace = localWorkspaces.find((item) => item.id === workspaceId)
     if (!workspace || workspace.slug === 'default') {
       toast.error('默认项目不能删除')
       return
     }
-    if (!window.confirm(`确定删除项目“${workspace.name}”吗？该项目下的会话和配置也会被移除。`)) return
+    setPendingDeleteWorkspace({ id: workspace.id, name: workspace.name })
+  }
 
+  const handleConfirmRemoveWorkspace = async (): Promise<void> => {
+    const pendingWorkspace = pendingDeleteWorkspace
+    if (!pendingWorkspace) return
     try {
       setBusy(true)
-      await window.electronAPI.deleteAgentWorkspace(workspaceId)
+      await window.electronAPI.deleteAgentWorkspace(pendingWorkspace.id)
       const remainingWorkspaces = await refreshProjects()
       setOpenMenuWorkspaceId(null)
-      if (currentWorkspaceId === workspaceId) {
+      setPendingDeleteWorkspace(null)
+      if (currentWorkspaceId === pendingWorkspace.id) {
         const fallback = remainingWorkspaces.find((item) => item.slug === 'default') ?? remainingWorkspaces[0]
         setCurrentWorkspaceId(fallback?.id ?? null)
         window.electronAPI.updateSettings({ agentWorkspaceId: fallback?.id }).catch(console.error)
@@ -428,7 +440,7 @@ export function CopisWorkingSidebar({ width, noTransition = false }: CopisWorkin
           </button>
           {isMenuOpen && workspace.slug !== 'default' && (
             <div className="copis-working-project-menu" role="menu">
-              <button type="button" role="menuitem" disabled={busy || localWorkspaces.length <= 1} onClick={(event) => { event.stopPropagation(); void handleRemoveWorkspace(workspace.id) }}>
+              <button type="button" role="menuitem" disabled={busy || localWorkspaces.length <= 1} onClick={(event) => { event.stopPropagation(); requestRemoveWorkspace(workspace.id) }}>
                 删除工作区
               </button>
             </div>
@@ -650,6 +662,16 @@ export function CopisWorkingSidebar({ width, noTransition = false }: CopisWorkin
         />
       )}
       <CopisWorkingFeedbackDialog open={feedbackOpen} onClose={() => setFeedbackOpen(false)} />
+      <ConfirmDialog
+        open={pendingDeleteWorkspace !== null}
+        onOpenChange={(open) => { if (!open) setPendingDeleteWorkspace(null) }}
+        title={`确认删除项目「${pendingDeleteWorkspace?.name}」？`}
+        description="删除后项目配置将被移除，但目录文件会保留。确定要删除吗？"
+        confirmLabel="删除"
+        loadingLabel="删除中..."
+        loading={busy}
+        onConfirm={handleConfirmRemoveWorkspace}
+      />
       <AlertDialog
         open={pendingDeleteSession !== null}
         onOpenChange={(open) => { if (!open) setPendingDeleteSession(null) }}

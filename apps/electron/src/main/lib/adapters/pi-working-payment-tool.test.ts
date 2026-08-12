@@ -44,6 +44,38 @@ describe('Pi Copis 钻石支付工具', () => {
     }])
   })
 
+  test('Given Copis order creation When Rust has already started controlled payment Then the model only receives the pending payment summary', async () => {
+    const client = new PiWorkingPaymentToolClient({
+      baseUrl: 'http://127.0.0.1:51740',
+      fetchImpl: async () => jsonResponse({
+        out_trade_no: 'ORDER-12',
+        package: { id: 12, amount: '9.90', currency: 'CNY', diamonds: 100 },
+        payment: {
+          payment_id: 'payment-12',
+          status: 'pending_user_pay',
+          amount: '9.90',
+          currency: 'CNY',
+          qrcode_image: 'data:image/png;base64,iVBORw0KGgo=',
+          cashier_url: 'https://u.alipay.cn/example',
+          out_trade_no: 'ORDER-12',
+          out_shake_no: 'shake-12',
+          trade_no: 'trade-12',
+        },
+      }),
+    })
+
+    await expect(client.execute({ action: 'order.create', packageId: 12 })).resolves.toEqual({
+      payment: {
+        paymentId: 'payment-12',
+        status: 'pending_user_pay',
+        amount: '9.90',
+        currency: 'CNY',
+        qrCodeImage: 'data:image/png;base64,iVBORw0KGgo=',
+      },
+      package: { id: 12, amount: '9.90', currency: 'CNY', diamonds: 100 },
+    })
+  })
+
   test('Given 已支付订单 When 查询状态 Then 仅将订单号交给本地 Rust 服务', async () => {
     const calls: Array<{ url: string; init?: RequestInit }> = []
     const client = new PiWorkingPaymentToolClient({

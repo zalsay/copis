@@ -676,6 +676,7 @@ mod tests {
         assert!(second.is_dir());
     }
 
+
     #[test]
     fn given_blank_account_when_ensuring_account_home_then_unavailable() {
         let temp = TempDir::new("account-home-blank");

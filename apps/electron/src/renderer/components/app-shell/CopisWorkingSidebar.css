@@ -8,7 +8,7 @@
   flex-direction: column;
   gap: 8px;
   background: hsl(var(--muted));
-  color: #eeeeee;
+  color: hsl(var(--foreground));
   border-radius: 0;
 }
 
@@ -34,19 +34,19 @@
   border: 0;
   border-radius: 7px;
   background: transparent;
-  color: #a8a8b0;
+  color: hsl(var(--muted-foreground));
   cursor: pointer;
 }
 
 .copis-working-sidebar-icon-button:hover,
 .copis-working-sidebar-icon-button:focus-visible {
-  background: rgba(255, 255, 255, 0.08);
-  color: #eeeeee;
+  background: hsl(var(--foreground) / 0.08);
+  color: hsl(var(--foreground));
 }
 
 .copis-working-sidebar-icon-button.active {
-  background: rgba(255, 255, 255, 0.12);
-  color: #ffffff;
+  background: var(--ui-primary-background);
+  color: var(--ui-primary);
 }
 
 .copis-working-sidebar-icon-button svg {
@@ -62,12 +62,12 @@
   width: 18px;
   height: 18px;
   margin-top: 20px;
-  color: #c8a7ff;
+  color: var(--ui-primary);
 }
 
 .copis-working-sidebar-session-count {
   margin-top: auto;
-  color: #8f8f99;
+  color: hsl(var(--muted-foreground));
   font-size: 10px;
 }
 
@@ -79,7 +79,7 @@
   flex-direction: column;
   gap: 22px;
   scrollbar-width: thin;
-  scrollbar-color: rgba(255, 255, 255, 0.2) transparent;
+  scrollbar-color: hsl(var(--foreground) / 0.2) transparent;
 }
 
 .copis-working-sidebar-nav,
@@ -103,7 +103,7 @@
   min-width: 0;
   border: 0;
   background: transparent;
-  color: #eeeeee;
+  color: hsl(var(--foreground));
   text-align: left;
   cursor: pointer;
 }
@@ -117,7 +117,7 @@
   gap: 8px;
   border-radius: 7px;
   font-size: 14px;
-  font-weight: 520;
+  font-weight: 400;
   line-height: 1.25;
 }
 
@@ -129,13 +129,14 @@
 .copis-working-sidebar-muted:focus-visible,
 .copis-working-sidebar-account:hover,
 .copis-working-sidebar-account:focus-visible {
-  background: rgba(255, 255, 255, 0.07);
+  background: hsl(var(--foreground) / 0.07);
   outline: 0;
 }
 
 .copis-working-menu-button.active {
-  background: rgba(255, 255, 255, 0.1);
-  color: #ffffff;
+  background: var(--ui-primary-background);
+  color: var(--ui-primary);
+  font-weight: 600;
 }
 
 .copis-working-menu-button svg,
@@ -143,7 +144,13 @@
 .copis-working-conversation-row svg {
   width: 15px;
   height: 15px;
-  color: #d6d6dd;
+  color: hsl(var(--muted-foreground));
+}
+
+.copis-working-menu-button.active > svg,
+.copis-working-project-row.active .copis-working-project-main > svg,
+.copis-working-conversation-row.active .copis-working-conversation-main svg {
+  color: var(--ui-primary);
 }
 
 .copis-working-project-section {
@@ -157,9 +164,9 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  color: #8f8f99;
+  color: hsl(var(--muted-foreground));
   font-size: 13px;
-  font-weight: 650;
+  font-weight: 400;
   line-height: 1.2;
 }
 
@@ -187,9 +194,9 @@
   border: 0;
   border-radius: 6px;
   background: transparent;
-  color: #8f8f99;
+  color: hsl(var(--muted-foreground));
   font-size: 13px;
-  font-weight: 650;
+  font-weight: 400;
   line-height: 1.2;
   text-align: left;
   cursor: pointer;
@@ -197,8 +204,8 @@
 
 .copis-working-project-group-toggle:hover,
 .copis-working-project-group-toggle:focus-visible {
-  background: rgba(255, 255, 255, 0.07);
-  color: #eeeeee;
+  background: hsl(var(--foreground) / 0.07);
+  color: hsl(var(--foreground));
   outline: 0;
 }
 
@@ -212,7 +219,7 @@
   width: 15px;
   height: 15px;
   flex: 0 0 15px;
-  color: #a8a8b0;
+  color: hsl(var(--muted-foreground));
 }
 
 .copis-working-project-row.current-session-workspace .copis-working-project-workspace-row-icon {
@@ -245,7 +252,7 @@
   height: 13px;
   flex-shrink: 0;
   justify-self: center;
-  color: #a8a8b0;
+  color: hsl(var(--muted-foreground));
   transition: transform 0.15s ease;
 }
 
@@ -254,7 +261,7 @@
 }
 
 .copis-working-project-group-count {
-  color: #6f6f78;
+  color: hsl(var(--muted-foreground));
   font-size: 11px;
   font-weight: 500;
 }
@@ -274,7 +281,7 @@
   border: 0;
   border-radius: 6px;
   background: transparent;
-  color: #a8a8b0;
+  color: hsl(var(--muted-foreground));
   cursor: pointer;
   opacity: 1;
   pointer-events: auto;
@@ -287,8 +294,8 @@
 }
 
 .copis-working-project-refresh:hover:not(:disabled) {
-  background: rgba(255, 255, 255, 0.07);
-  color: #eeeeee;
+  background: hsl(var(--foreground) / 0.07);
+  color: hsl(var(--foreground));
 }
 
 .copis-working-project-refresh:disabled {
@@ -314,13 +321,13 @@
   border: 0;
   border-radius: 6px;
   background: transparent;
-  color: #a8a8b0;
+  color: hsl(var(--muted-foreground));
   cursor: pointer;
 }
 
 .copis-working-project-create:hover:not(:disabled) {
-  background: rgba(255, 255, 255, 0.07);
-  color: #eeeeee;
+  background: hsl(var(--foreground) / 0.07);
+  color: hsl(var(--foreground));
 }
 
 .copis-working-project-create:disabled {
@@ -357,10 +364,12 @@
   align-items: center;
   gap: 4px;
   border-radius: 7px;
+  font-weight: 400;
 }
 
 .copis-working-project-row.active {
-  color: #ffffff;
+  background: var(--ui-primary-background);
+  color: var(--ui-primary);
 }
 
 .copis-working-project-main {
@@ -378,6 +387,11 @@
   cursor: pointer;
   font: inherit;
   font-size: 13px;
+  font-weight: 400;
+}
+
+.copis-working-project-row.active .copis-working-project-main {
+  font-weight: 600;
 }
 
 .copis-working-project-main > span {
@@ -408,7 +422,7 @@
   border: 0;
   border-radius: 6px;
   background: transparent;
-  color: #a8a8b0;
+  color: hsl(var(--muted-foreground));
   cursor: pointer;
   opacity: 0;
   pointer-events: none;
@@ -430,8 +444,8 @@
 .copis-working-project-collapse:hover,
 .copis-working-project-menu-trigger:hover,
 .copis-working-project-new-task:hover {
-  background: rgba(255, 255, 255, 0.08);
-  color: #eeeeee;
+  background: hsl(var(--foreground) / 0.08);
+  color: hsl(var(--foreground));
 }
 
 .copis-working-project-collapse svg,
@@ -452,14 +466,14 @@
   border: 0;
   border-radius: 7px;
   background: transparent;
-  color: #eeeeee;
+  color: hsl(var(--foreground));
   text-align: left;
   cursor: pointer;
 }
 
 .copis-working-project-pinned-row:hover,
 .copis-working-project-pinned-row:focus-visible {
-  background: rgba(255, 255, 255, 0.07);
+  background: hsl(var(--foreground) / 0.07);
   outline: 0;
 }
 
@@ -475,7 +489,7 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: 13px;
-  font-weight: 520;
+  font-weight: 400;
   line-height: 1.25;
 }
 
@@ -483,14 +497,14 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  color: #8f8f99;
+  color: hsl(var(--muted-foreground));
   font-size: 11px;
   line-height: 1.2;
 }
 
 .copis-working-project-pinned-empty {
   padding: 2px 8px 6px 34px;
-  color: #6f6f78;
+  color: hsl(var(--muted-foreground));
   font-size: 11px;
   line-height: 1.4;
 }
@@ -502,9 +516,9 @@
   right: 8px;
   min-width: 118px;
   padding: 4px;
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  border: 1px solid hsl(var(--foreground) / 0.1);
   border-radius: 8px;
-  background: #2f2f2f;
+  background: hsl(var(--popover));
   box-shadow: 0 12px 28px rgba(0, 0, 0, 0.28);
 }
 
@@ -520,7 +534,7 @@
   border: 0;
   border-radius: 6px;
   background: transparent;
-  color: #ffb4a8;
+  color: hsl(var(--destructive));
   text-align: left;
   font: inherit;
   font-size: 13px;
@@ -528,7 +542,7 @@
 }
 
 .copis-working-project-menu button:hover:not(:disabled) {
-  background: rgba(255, 255, 255, 0.08);
+  background: hsl(var(--foreground) / 0.08);
 }
 
 .copis-working-project-menu button:disabled {
@@ -550,12 +564,13 @@
   gap: 8px;
   border-radius: 7px;
   font-size: 13px;
-  font-weight: 520;
+  font-weight: 400;
   line-height: 1.25;
 }
 
 .copis-working-conversation-row.active {
-  background: rgba(255, 255, 255, 0.055);
+  background: var(--ui-primary-background);
+  color: var(--ui-primary);
 }
 
 .copis-working-conversation-main {
@@ -587,6 +602,11 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: 12px;
+  font-weight: 400;
+}
+
+.copis-working-conversation-row.active .copis-working-conversation-label > span {
+  font-weight: 600;
 }
 
 .copis-working-conversation-label > small.ui-primary-badge {
@@ -608,14 +628,14 @@
 }
 
 .copis-working-conversation-row small {
-  color: #96969f;
+  color: hsl(var(--muted-foreground));
   font-size: 12px;
   font-weight: 520;
   white-space: nowrap;
 }
 
 .copis-working-conversation-row svg.loading {
-  color: #bfc0c8;
+  color: hsl(var(--muted-foreground));
   animation: copis-working-spin 0.9s linear infinite;
 }
 
@@ -632,7 +652,7 @@
   border: 0;
   border-radius: 6px;
   background: transparent;
-  color: #a8a8b0;
+  color: hsl(var(--muted-foreground));
   cursor: pointer;
   opacity: 0;
   pointer-events: none;
@@ -668,7 +688,7 @@
   min-height: 28px;
   padding: 4px 8px;
   border-radius: 7px;
-  color: #a8a8b0;
+  color: hsl(var(--muted-foreground));
   text-align: left;
   font: inherit;
   font-size: 13px;
@@ -682,7 +702,7 @@
 
 .copis-working-conversation-empty:hover,
 .copis-working-conversation-toggle:hover {
-  color: #eeeeee;
+  color: hsl(var(--foreground));
 }
 
 .copis-working-project-loading {
@@ -690,7 +710,7 @@
   flex-direction: column;
   gap: 10px;
   padding: 0 8px;
-  color: #a8a8b0;
+  color: hsl(var(--muted-foreground));
   font-size: 12px;
   font-weight: 620;
 }
@@ -712,7 +732,7 @@
   height: 10px;
   width: 72%;
   border-radius: 4px;
-  background: linear-gradient(90deg, #2d2d2f 20%, #3a3a3e 48%, #2d2d2f 76%);
+  background: linear-gradient(90deg, hsl(var(--foreground) / 0.08) 20%, hsl(var(--foreground) / 0.14) 48%, hsl(var(--foreground) / 0.08) 76%);
   background-size: 220% 100%;
   animation: copis-working-shimmer 1.25s ease-in-out infinite;
 }
@@ -723,7 +743,7 @@
 
 .copis-working-sidebar-muted {
   padding-left: 8px;
-  color: #8f8f99;
+  color: hsl(var(--muted-foreground));
 }
 
 .copis-working-project-list > .copis-working-sidebar-muted {
@@ -736,7 +756,7 @@
   display: flex;
   flex-direction: column;
   gap: 2px;
-  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  border-top: 1px solid hsl(var(--foreground) / 0.08);
 }
 
 .copis-working-sidebar-account {
@@ -777,13 +797,14 @@
 }
 
 .copis-working-sidebar-account strong {
-  color: #f1f1f3;
+  color: hsl(var(--foreground));
   font-size: 14px;
+  font-weight: 400;
   line-height: 1.2;
 }
 
 .copis-working-sidebar-account small {
-  color: #92929b;
+  color: hsl(var(--muted-foreground));
   font-size: 12px;
   line-height: 1.2;
 }
@@ -801,7 +822,7 @@
   gap: 3px;
   color: #f5d66b;
   font-size: 12px;
-  font-weight: 650;
+  font-weight: 400;
   line-height: 1;
 }
 
@@ -840,13 +861,13 @@
   border: 0;
   border-radius: 7px;
   background: transparent;
-  color: #92929b;
+  color: hsl(var(--muted-foreground));
   cursor: pointer;
 }
 
 .copis-working-logout:hover:not(:disabled) {
-  background: rgba(255, 255, 255, 0.08);
-  color: #eeeeee;
+  background: hsl(var(--foreground) / 0.08);
+  color: hsl(var(--foreground));
 }
 
 .copis-working-logout:disabled {

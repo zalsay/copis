@@ -20,6 +20,11 @@
   --ui-primary-background: rgb(240 161 90 / 10%);
 }
 
+/* 浅色主题提高 primary 激活背景的层次，深色主题继续继承基础值。 */
+:root:not(.dark) {
+  --ui-primary-background: rgb(240 161 90 / 16%);
+}
+
 .ui-primary-surface {
   background-color: var(--ui-primary-background);
   color: var(--ui-primary);
