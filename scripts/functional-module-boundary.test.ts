@@ -109,6 +109,7 @@ describe('功能模块发布边界', () => {
     expect(prepareAlipayBotScript).toContain('DEFAULT_OFFICIAL_INSTALLER_TIMEOUT_MS = 180_000')
     expect(prepareAlipayBotScript).toContain('COPIS_ALIPAY_BOT_INSTALL_TIMEOUT_MS')
     expect(prepareAlipayBotScript).toContain('官方安装器第 ${attempt} 次失败，正在重试')
+    expect(prepareAlipayBotScript).toContain("'.openclaw-autoclaw', 'alipay-bot-cli', 'runtime'")
   })
 
   test('Shell 部署入口允许单独指定 Node.js runtime 模块版本', () => {

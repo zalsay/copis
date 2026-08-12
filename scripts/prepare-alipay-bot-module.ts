@@ -16,7 +16,7 @@ import {
   writeFileSync,
 } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
-import { tmpdir } from 'node:os'
+import { homedir, tmpdir } from 'node:os'
 import { gzipSync } from 'node:zlib'
 import type { FunctionalModuleArchitecture, FunctionalModulePlatform } from '@copis/shared'
 
@@ -76,7 +76,8 @@ export function main(): void {
     }
     console.log(`[prepare:alipay-bot-module] 已生成 ${output}（alipay-bot v${runtimeMetadata.version}）`)
   } finally {
-    rmSync(staging, { recursive: true, force: true })
+    // Windows 下官方安装器的异步预热可能短暂占用临时目录。
+    rmSync(staging, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 })
   }
 }
 
@@ -113,7 +114,6 @@ function runOfficialInstaller(
   installerRoot: string,
   installerHome: string,
 ): string {
-  const runtimePath = join(installerHome, '.local', 'share', 'alipay-bot-cli', 'runtime')
   let lastError: unknown
   for (let attempt = 1; attempt <= OFFICIAL_INSTALLER_ATTEMPTS; attempt += 1) {
     try {
@@ -124,7 +124,8 @@ function runOfficialInstaller(
         timeout: OFFICIAL_INSTALLER_TIMEOUT_MS,
         killSignal: 'SIGTERM',
       })
-      if (isFile(join(runtimePath, 'dist', 'cli.js'))) return runtimePath
+      const runtimePath = resolveInstalledRuntimePath(installerHome)
+      if (runtimePath) return runtimePath
       throw new Error('官方支付宝安装器未生成 alipay-bot runtime')
     } catch (error) {
       lastError = error
@@ -139,6 +140,16 @@ function runOfficialInstaller(
   throw new Error(
     `官方支付宝安装器在 ${OFFICIAL_INSTALLER_ATTEMPTS} 次尝试后仍未完成：${toErrorMessage(lastError)}`,
   )
+}
+
+function resolveInstalledRuntimePath(installerHome: string): string | undefined {
+  const candidates = [join(installerHome, '.local', 'share', 'alipay-bot-cli', 'runtime')]
+  if (process.platform === 'win32') {
+    // 官方 Windows 安装器忽略 HOME，固定使用用户目录下的安装位置。
+    const userHome = process.env.USERPROFILE?.trim() || homedir()
+    candidates.push(join(userHome, '.openclaw-autoclaw', 'alipay-bot-cli', 'runtime'))
+  }
+  return candidates.find((candidate) => isFile(join(candidate, 'dist', 'cli.js')))
 }
 
 function resolveInstallerTimeoutMs(): number {
