@@ -23,6 +23,12 @@ import {
 } from './functional-module-cos-client'
 import { mergeFunctionalModuleManifests } from './functional-module-manifest-merge'
 import { resolveFunctionalModulePrefix } from './functional-module-prefix'
+import {
+  applyFunctionalModuleVersionLocks,
+  excludeUnchangedLockedModules,
+  loadFunctionalModuleVersionLocks,
+  lockedFunctionalModuleNames,
+} from './functional-module-version-lock'
 
 interface CosSdkConstructor {
   new (options: Record<string, string>): FunctionalModuleCosSdkClient
@@ -57,6 +63,7 @@ async function main(): Promise<void> {
     objectPrefixPath: process.env.OBJECT_PREFIX_PATH,
     legacyCosPrefix: process.env.COS_PREFIX,
   })
+  const versionLocks = loadFunctionalModuleVersionLocks()
   if (!bucket || !region) {
     throw new Error('无法从 COS_BUCKET_URL 推断 bucket/region，请设置 COS_BUCKET 和 COS_REGION')
   }
@@ -103,7 +110,7 @@ async function main(): Promise<void> {
       : getOption('--alipay-bot-archive')
         ?? process.env.COPIS_ALIPAY_BOT_ARCHIVE?.trim()
         ?? join(electronDir, 'resources/alipay-bot', `${platform}-${arch}.tar.gz`)
-    const modules = buildFunctionalModuleBinaryInputs({
+    const modules = applyFunctionalModuleVersionLocks(buildFunctionalModuleBinaryInputs({
       rustOnly,
       officeCliOnly,
       nodeRuntimeOnly,
@@ -118,7 +125,7 @@ async function main(): Promise<void> {
       alipayBotVersion: getOption('--alipay-bot-version') ?? process.env.COPIS_ALIPAY_BOT_VERSION?.trim() ?? version,
       platform,
       arch,
-    })
+    }), versionLocks)
     const releaseInput = {
       channel,
       clientMinVersion: getOption('--client-min-version')
@@ -139,7 +146,22 @@ async function main(): Promise<void> {
       platform,
       arch,
     })
-    const resolvedRelease = await resolveImmutableModuleVersions(releaseInput, client)
+    const modulesToPublish = excludeUnchangedLockedModules(
+      modules,
+      existingManifest,
+      platform,
+      arch,
+      versionLocks,
+    )
+    const skippedLockedModules = modules.filter((module) => !modulesToPublish.includes(module))
+    for (const module of skippedLockedModules) {
+      console.log(`[publish:functional-modules] ${module.module} 版本锁定为 ${module.version}，COS 已是相同或更高版本，跳过发布`)
+    }
+    const resolvedRelease = await resolveImmutableModuleVersions(
+      { ...releaseInput, modules: modulesToPublish },
+      client,
+      { lockedModules: lockedFunctionalModuleNames() },
+    )
     const release = resolvedRelease.release
     for (const bump of resolvedRelease.versionBumps) {
       console.log(`[publish:functional-modules] 检测到不可变对象内容变化，${bump.module} 自动递增版本：${bump.fromVersion} → ${bump.toVersion}`)

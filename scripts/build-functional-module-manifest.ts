@@ -4,6 +4,7 @@ import { join, resolve } from 'node:path'
 import type { FunctionalModuleArchitecture, FunctionalModulePlatform } from '@copis/shared'
 import { buildFunctionalModuleRelease, type FunctionalModuleBinaryInput } from './functional-module-publisher'
 import { resolveFunctionalModulePrefix } from './functional-module-prefix'
+import { applyFunctionalModuleVersionLocks, loadFunctionalModuleVersionLocks } from './functional-module-version-lock'
 
 interface PackageMetadata {
   version: string
@@ -107,7 +108,7 @@ const release = buildFunctionalModuleRelease({
     ?? packageMetadata.version,
   publicBaseUrl,
   prefix,
-  modules,
+  modules: applyFunctionalModuleVersionLocks(modules, loadFunctionalModuleVersionLocks()),
 })
 
 mkdirSync(resolve(outputPath, '..'), { recursive: true })

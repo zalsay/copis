@@ -456,4 +456,17 @@ describe('Working 侧边栏视觉契约', () => {
     expect(projectGroupRule).toBeDefined()
     expect(projectGroupRule).toContain('gap: 6px')
   })
+
+  test('Given 检测到新版本 When 查看设置入口 Then 设置图标显示小红点提醒', () => {
+    const updateDotRule = sidebarStyles.match(
+      /\.copis-working-update-dot\s*\{([^}]*)\}/s,
+    )?.[1]
+
+    expect(sidebarSource).toContain("import { hasUpdateAtom } from '@/atoms/updater'")
+    expect(sidebarSource).toContain('const hasUpdate = useAtomValue(hasUpdateAtom)')
+    expect(sidebarSource).toContain("aria-label={hasUpdate ? '设置，有可用更新' : '设置'}")
+    expect(sidebarSource).toContain('hasUpdate && <span className="copis-working-update-dot" aria-hidden="true" />')
+    expect(updateDotRule).toContain('background: hsl(var(--destructive))')
+    expect(updateDotRule).toContain('border-radius: 50%')
+  })
 })

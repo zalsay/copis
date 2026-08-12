@@ -10,6 +10,7 @@ import { BrowserWindow, app } from 'electron'
 import type { UpdateStatus } from './updater-types'
 import { UPDATER_IPC_CHANNELS } from './updater-types'
 import { createIdleInstallScheduler } from './idle-install-scheduler'
+import { getUpdaterFeedUrl } from './updater-feed'
 
 /** 当前更新状态 */
 let currentStatus: UpdateStatus = { status: 'idle' }
@@ -177,6 +178,10 @@ export function cleanupUpdater(): void {
  */
 export function initAutoUpdater(mainWindow: BrowserWindow): void {
   configureUpdater(mainWindow)
+
+  const feedUrl = getUpdaterFeedUrl()
+  autoUpdater.setFeedURL({ provider: 'generic', url: feedUrl })
+  console.log('[更新] 已配置 COS 更新源:', feedUrl)
 
   autoUpdater.logger = {
     info: (...args: unknown[]) => console.log('[更新-updater]', ...args),

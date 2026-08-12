@@ -59,6 +59,11 @@ export interface ResolvedFunctionalModuleRelease {
   versionBumps: FunctionalModuleVersionBump[]
 }
 
+export interface ImmutableVersionResolutionOptions {
+  /** 锁定模块在同版本对象内容变化时必须修改版本配置，禁止自动递增。 */
+  lockedModules?: readonly FunctionalModuleName[]
+}
+
 export interface FunctionalModuleObjectUpload {
   key: string
   body: Buffer
@@ -141,6 +146,7 @@ export function buildFunctionalModuleRelease(input: FunctionalModuleReleaseInput
 export async function resolveImmutableModuleVersions(
   input: FunctionalModuleReleaseInput,
   client: FunctionalModuleObjectClient,
+  options: ImmutableVersionResolutionOptions = {},
 ): Promise<ResolvedFunctionalModuleRelease> {
   const modules = input.modules.map((module) => ({ ...module }))
   const initialVersions = new Map(modules.map((module) => [module.module, module.version]))
@@ -164,6 +170,9 @@ export async function resolveImmutableModuleVersions(
     for (const index of collisionIndexes) {
       const module = modules[index]
       if (!module) throw new Error('功能模块版本解析失败：二进制与模块索引不匹配')
+      if (options.lockedModules?.includes(module.module)) {
+        throw new Error(`锁定模块 ${module.module} 的 ${module.version} 版本已存在且内容不同；请先修改 scripts/functional-module-versions.json 中的版本号再发布`)
+      }
       module.version = incrementPatchVersion(module.version)
     }
   }

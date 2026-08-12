@@ -78,8 +78,8 @@ export function WelcomeComposer(): React.ReactElement {
     [workingClientConfig],
   )
   const [selectedModel, setSelectedModel] = React.useState<{ channelId: string; modelId: string }>({
-    channelId: COPIS_WORKING_CHANNEL_ID,
-    modelId: workingModeToModelId('fast'),
+    channelId: COPIS_WORKING_DEEPSEEK_CHANNEL_ID,
+    modelId: COPIS_WORKING_DEEPSEEK_FAST_MODEL_ID,
   })
   const selectedModelId = selectedModel.modelId
 

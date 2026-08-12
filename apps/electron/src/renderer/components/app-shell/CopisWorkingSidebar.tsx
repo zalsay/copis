@@ -38,6 +38,7 @@ import {
 } from '@/atoms/agent-atoms'
 import { appModeAtom } from '@/atoms/app-mode'
 import { activeViewAtom } from '@/atoms/active-view'
+import { hasUpdateAtom } from '@/atoms/updater'
 import { searchDialogOpenAtom } from '@/atoms/search-atoms'
 import { planningTabAtom } from '@/atoms/planning-atoms'
 import { pinnedDevProjectsAtom } from '@/atoms/pinned-dev-projects'
@@ -124,6 +125,7 @@ export function CopisWorkingSidebar({ width, noTransition = false }: CopisWorkin
   const currentWorkspaceId = useAtomValue(currentAgentWorkspaceIdAtom)
   const currentSessionId = useAtomValue(currentAgentSessionIdAtom)
   const activeView = useAtomValue(activeViewAtom)
+  const hasUpdate = useAtomValue(hasUpdateAtom)
   const agentSettingsReady = useAtomValue(agentSettingsReadyAtom)
   const streamingStates = useAtomValue(agentStreamingStatesAtom)
   const pinnedDevProjects = useAtomValue(pinnedDevProjectsAtom)
@@ -644,8 +646,16 @@ export function CopisWorkingSidebar({ width, noTransition = false }: CopisWorkin
           <span><strong>意见反馈</strong><small>问题与建议</small></span>
         </button>
         <div className="copis-working-settings-row">
-          <button type="button" className="copis-working-sidebar-account with-balance" onClick={() => setWorkingSettingsOpen(true)}>
-            <span className="copis-working-account-mark"><Settings aria-hidden="true" /></span>
+          <button
+            type="button"
+            className="copis-working-sidebar-account with-balance"
+            aria-label={hasUpdate ? '设置，有可用更新' : '设置'}
+            onClick={() => setWorkingSettingsOpen(true)}
+          >
+            <span className="copis-working-account-mark">
+              <Settings aria-hidden="true" />
+              {hasUpdate && <span className="copis-working-update-dot" aria-hidden="true" />}
+            </span>
             <span className="copis-working-account-copy"><strong>设置</strong><small>{accountName}</small></span>
             <span className="copis-working-account-balance" title="当前积分" aria-label={`当前积分 ${tokenBalance}`}><Gem aria-hidden="true" /><b>{tokenBalance}</b></span>
           </button>

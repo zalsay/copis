@@ -112,6 +112,22 @@ describe('COS 功能模块发布器', () => {
     expect(resolved.versionBumps).toEqual([])
   })
 
+  test('锁定模块同版本对象内容变化时要求先修改版本锁配置', async () => {
+    const binaryPath = createFixture('new-node-runtime', 'node-runtime.tar.gz')
+    const client: FunctionalModuleObjectClient = {
+      async putObject() {},
+      async headObject() {
+        return { size: 1, sha256: 'a'.repeat(64) }
+      },
+    }
+
+    await expect(resolveImmutableModuleVersions({
+      channel: 'stable',
+      publicBaseUrl: 'https://download.example.com/copis/modules',
+      modules: [{ module: 'node-runtime', version: '24.19.0', platform: 'darwin', arch: 'x64', binaryPath, required: true }],
+    }, client, { lockedModules: ['node-runtime'] })).rejects.toThrow('functional-module-versions.json')
+  })
+
   test('已有自动递增版本与当前二进制相同时复用该版本，不继续递增', async () => {
     const binaryPath = createFixture('stable-rust-api', 'copis-http-api-server')
     const stableRelease = buildFunctionalModuleRelease({

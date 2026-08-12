@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   DEFAULT_FUNCTIONAL_MODULE_MANIFEST_URL,
+  DEFAULT_UPDATER_URL,
   loadBuildEnvironment,
   resolveManifestBuildConfig,
 } from './build-main'
@@ -12,14 +13,17 @@ describe('Electron 主进程构建配置', () => {
   test('优先使用构建环境中的功能模块 manifest 地址并注入 define', () => {
     expect(resolveManifestBuildConfig({
       COPIS_FUNCTIONAL_MODULE_MANIFEST_URL: 'https://build.example.com/stable/manifest.json',
+      COPIS_UPDATER_URL: 'https://build.example.com/updates/stable',
     })).toEqual({
       __COPIS_FUNCTIONAL_MODULE_MANIFEST_URL__: '"https://build.example.com/stable/manifest.json"',
+      __COPIS_UPDATER_URL__: '"https://build.example.com/updates/stable"',
     })
   })
 
   test('未提供 manifest 地址时使用正式版默认地址', () => {
     expect(resolveManifestBuildConfig({})).toEqual({
       __COPIS_FUNCTIONAL_MODULE_MANIFEST_URL__: JSON.stringify(DEFAULT_FUNCTIONAL_MODULE_MANIFEST_URL),
+      __COPIS_UPDATER_URL__: JSON.stringify(DEFAULT_UPDATER_URL),
     })
   })
 

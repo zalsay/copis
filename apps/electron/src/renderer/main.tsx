@@ -77,8 +77,8 @@ import { dingtalkBotStatesAtom } from './atoms/dingtalk-atoms'
 import { channelsAtom, channelsLoadedAtom, selectedModelAtom } from './atoms/model-atoms'
 import { appModeAtom, normalizeAppMode } from './atoms/app-mode'
 import {
-  COPIS_WORKING_CHANNEL_ID,
-  COPIS_WORKING_FAST_MODEL_ID,
+  COPIS_WORKING_DEEPSEEK_CHANNEL_ID,
+  COPIS_WORKING_DEEPSEEK_FAST_MODEL_ID,
 } from '@copis/shared'
 import type { FeishuBotBridgeState, FeishuBridgeState, DingTalkBotBridgeState, DingTalkBridgeState } from '@copis/shared'
 import { Toaster } from './components/ui/sonner'
@@ -246,16 +246,16 @@ function AgentSettingsInitializer(): null {
         || agentChannelIds.some((id, index) => id !== storedAgentChannelIds[index])
       if (whitelistChanged) updates.agentChannelIds = agentChannelIds
 
-      // Working Agent 不使用用户渠道；fast/export 由 edu-api 服务端 alias 解析。
-      setAgentChannelId(COPIS_WORKING_CHANNEL_ID)
-      setAgentModelId(COPIS_WORKING_FAST_MODEL_ID)
+      // Working Agent 不使用用户渠道；新 Composer 默认使用 DeepSeek 快速模型。
+      setAgentChannelId(COPIS_WORKING_DEEPSEEK_CHANNEL_ID)
+      setAgentModelId(COPIS_WORKING_DEEPSEEK_FAST_MODEL_ID)
       if (
-        settings.agentChannelId !== COPIS_WORKING_CHANNEL_ID
-        || settings.agentModelId !== COPIS_WORKING_FAST_MODEL_ID
+        settings.agentChannelId !== COPIS_WORKING_DEEPSEEK_CHANNEL_ID
+        || settings.agentModelId !== COPIS_WORKING_DEEPSEEK_FAST_MODEL_ID
         || settings.agentRuntime !== defaultAgentRuntime
       ) {
-        updates.agentChannelId = COPIS_WORKING_CHANNEL_ID
-        updates.agentModelId = COPIS_WORKING_FAST_MODEL_ID
+        updates.agentChannelId = COPIS_WORKING_DEEPSEEK_CHANNEL_ID
+        updates.agentModelId = COPIS_WORKING_DEEPSEEK_FAST_MODEL_ID
         updates.agentRuntime = defaultAgentRuntime
       }
 

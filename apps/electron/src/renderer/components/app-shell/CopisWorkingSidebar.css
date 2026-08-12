@@ -774,6 +774,7 @@
 }
 
 .copis-working-account-mark {
+  position: relative;
   width: 28px;
   height: 28px;
   display: grid;
@@ -786,6 +787,17 @@
 .copis-working-account-mark svg {
   width: 16px;
   height: 16px;
+}
+
+.copis-working-update-dot {
+  position: absolute;
+  top: -2px;
+  right: -2px;
+  width: 8px;
+  height: 8px;
+  border: 1.5px solid hsl(var(--background));
+  border-radius: 50%;
+  background: hsl(var(--destructive));
 }
 
 .copis-working-sidebar-account strong,

@@ -363,6 +363,7 @@ import { dingtalkBridgeManager } from './lib/dingtalk-bridge-manager'
 import { getWeChatConfig } from './lib/wechat-config'
 import { wechatBridge } from './lib/wechat-bridge'
 import { getWorkingApiClient } from './lib/working-api-service'
+import { assertWorkingWorkspaceCreationAllowed } from './lib/working-workspace-limit'
 import type {
   WorkingLoginInput,
   WorkingPasswordResetInput,
@@ -2371,6 +2372,10 @@ export function registerIpcHandlers(): void {
   ipcMain.handle(
     AGENT_IPC_CHANNELS.CREATE_WORKSPACE,
     async (_, input: import('@copis/shared').CreateAgentWorkspaceInput): Promise<AgentWorkspace> => {
+      assertWorkingWorkspaceCreationAllowed(
+        listAgentWorkspaces(),
+        getWorkingApiClient().getCachedUser()?.isVip,
+      )
       const workspace = createAgentWorkspace(input)
       if (workspace.projectRootPath) watchAttachedDirectory(workspace.projectRootPath)
       return workspace
@@ -2381,6 +2386,10 @@ export function registerIpcHandlers(): void {
   ipcMain.handle(
     AGENT_IPC_CHANNELS.CREATE_PROJECT,
     async (_, input: import('@copis/shared').CreateAgentWorkspaceInput, channelId?: string, modelId?: string): Promise<import('@copis/shared').CreateAgentProjectResult> => {
+      assertWorkingWorkspaceCreationAllowed(
+        listAgentWorkspaces(),
+        getWorkingApiClient().getCachedUser()?.isVip,
+      )
       const workspace = createAgentWorkspace(input)
       if (workspace.projectRootPath) watchAttachedDirectory(workspace.projectRootPath)
 

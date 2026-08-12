@@ -6,6 +6,8 @@ import { parseEnv } from 'node:util'
 
 export const MANIFEST_URL_DEFINE = '__COPIS_FUNCTIONAL_MODULE_MANIFEST_URL__'
 export const DEFAULT_FUNCTIONAL_MODULE_MANIFEST_URL = 'https://download.meetlife.com.cn/copis/client/stable/manifest.json'
+export const UPDATER_URL_DEFINE = '__COPIS_UPDATER_URL__'
+export const DEFAULT_UPDATER_URL = 'https://download.meetlife.com.cn/copis/updates/stable'
 
 export function loadBuildEnvironment(
   envFilePath: string,
@@ -20,8 +22,10 @@ export function loadBuildEnvironment(
 export function resolveManifestBuildConfig(env: NodeJS.ProcessEnv): Record<string, string> {
   const configuredUrl = env.COPIS_FUNCTIONAL_MODULE_MANIFEST_URL?.trim()
     || DEFAULT_FUNCTIONAL_MODULE_MANIFEST_URL
+  const updaterUrl = env.COPIS_UPDATER_URL?.trim() || DEFAULT_UPDATER_URL
   return {
     [MANIFEST_URL_DEFINE]: JSON.stringify(configuredUrl),
+    [UPDATER_URL_DEFINE]: JSON.stringify(updaterUrl),
   }
 }
 
