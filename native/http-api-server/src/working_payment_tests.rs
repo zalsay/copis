@@ -352,6 +352,93 @@ fn desktop_diamond_payment_is_automatically_checked_by_rust_and_never_calls_lega
 }
 
 #[test]
+fn desktop_payment_forwards_paid_status_without_payment_proof_for_go_api_fallback() {
+    let _env_guard = backend_env_test_lock().lock().unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let backend = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let (method, path, authorization, body) = read_request(&mut stream);
+        assert_eq!(method, "POST");
+        assert_eq!(
+            path,
+            "/api/internal/working-desktop/alipay/payment-finalize"
+        );
+        assert_eq!(authorization, "Bearer wdpc_test");
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&body).unwrap(),
+            json!({
+                "payment_id": "pay-7",
+                "action": "check",
+                "check_result": {
+                    "status": "paid",
+                    "trade_no": "trade-7",
+                },
+            }),
+        );
+        respond(
+            &mut stream,
+            r#"{"data":{"payment":{"payment_id":"pay-7","status":"resource_ready"}}}"#,
+        );
+    });
+
+    let previous_backend = std::env::var("COPIS_BACKEND_URL").ok();
+    std::env::set_var("COPIS_BACKEND_URL", format!("http://127.0.0.1:{}", port));
+    let fixture = PaymentWorkspaceFixture::new();
+    let worker = FakePaymentWorker::new(vec![Ok(json!({
+        "ok": true,
+        "status": "paid",
+        "tradeNo": "trade-7",
+    }))]);
+    let payment_state = WorkingPaymentState::new();
+    payment_state.remember(
+        "pay-7".to_string(),
+        super::WorkingDesktopPaymentFlow {
+            capability: "wdpc_test".to_string(),
+            flow_kind: super::DesktopPaymentFlowKind::Diamond,
+            trade_no: Some("trade-7".to_string()),
+            out_shake_no: None,
+        },
+    );
+
+    let result = super::check_desktop_payment(
+        &payment_state,
+        &worker,
+        &fixture.workspace,
+        "payment-token",
+        "pay-7",
+    )
+    .unwrap();
+
+    backend.join().unwrap();
+    restore_backend_url(previous_backend);
+    assert_eq!(result["data"]["status"], "resource_ready");
+}
+
+#[test]
+fn desktop_payment_keeps_a_nonempty_proof_for_the_normal_confirmation_path() {
+    let result = super::payment_check_result(&json!({
+        "status": "paid",
+        "tradeNo": "trade-7",
+        "paymentProof": "proof-7",
+    }))
+    .unwrap();
+
+    assert_eq!(result["status"], "paid");
+    assert_eq!(result["payment_proof"], "proof-7");
+}
+
+#[test]
+fn desktop_payment_forwards_paid_status_without_any_trade_identifier_for_out_trade_no_fallback() {
+    let result = super::payment_check_result(&json!({
+        "status": "paid",
+    }))
+    .unwrap();
+
+    assert_eq!(result, json!({ "status": "paid" }));
+}
+
+#[test]
 fn rust_automatically_recovers_pending_payment_after_restart() {
     let _env_guard = backend_env_test_lock().lock().unwrap();
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();

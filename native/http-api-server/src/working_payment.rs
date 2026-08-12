@@ -686,12 +686,9 @@ fn payment_check_result(worker_result: &Value) -> Result<Value, SkillMarketError
         }
     }
     if status == "paid" {
-        let payment_proof = required_string_field(
-            worker_result,
-            "paymentProof",
-            "本机支付检查未返回有效支付凭证",
-        )?;
-        result_object.insert("payment_proof".to_string(), Value::String(payment_proof));
+        if let Some(payment_proof) = optional_string_field(worker_result, "paymentProof") {
+            result_object.insert("payment_proof".to_string(), Value::String(payment_proof));
+        }
     }
     Ok(result)
 }

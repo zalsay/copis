@@ -416,7 +416,7 @@ impl FileAccessPolicy {
         if !self.advanced_authorization && requires_advanced_authorization(&request.command) {
             return Err(AgentFileError::forbidden(
                 "advanced_authorization_required",
-                "Git/SSH 命令需要先在 Composer 开启高级授权",
+                "Git/SSH/curl/Python 命令需要先在 Composer 开启高级授权",
             ));
         }
         validate_project_command(&request.command)?;
@@ -553,10 +553,13 @@ impl FileAccessPolicy {
 }
 
 fn requires_advanced_authorization(command: &str) -> bool {
-    matches!(command.split_whitespace().next(), Some("git" | "ssh"))
+    matches!(
+        command.split_whitespace().next(),
+        Some("git" | "ssh" | "curl" | "python" | "python3")
+    )
 }
 
-/// 仅开放项目依赖、构建、本地开发、工作区 Git 与高级授权的 SSH 命令；通用 Shell 语法会绕过路径策略。
+/// 仅开放项目依赖、构建、本地开发、工作区 Git 与高级授权的 SSH/curl/Python 命令；通用 Shell 语法会绕过路径策略。
 fn validate_project_command(command: &str) -> Result<(), AgentFileError> {
     let command = command.trim();
     if command.is_empty() || command.len() > 16 * 1024 {
@@ -580,7 +583,6 @@ fn validate_project_command(command: &str) -> Result<(), AgentFileError> {
             "-g" | "--global"
                 | "--system"
                 | "-C"
-                | "-c"
                 | "--git-dir"
                 | "--work-tree"
                 | "--prefix"
@@ -588,7 +590,8 @@ fn validate_project_command(command: &str) -> Result<(), AgentFileError> {
                 | "--userconfig"
                 | "--target"
                 | "--user"
-        ) || argument.starts_with("--git-dir=")
+        ) || (*executable != "python" && *executable != "python3" && *argument == "-c")
+            || argument.starts_with("--git-dir=")
             || argument.starts_with("--work-tree=")
             || argument.starts_with("--config-env=")
             || argument.starts_with("--prefix=")
@@ -602,6 +605,12 @@ fn validate_project_command(command: &str) -> Result<(), AgentFileError> {
         ));
     }
     let operation = arguments.get(1).copied().unwrap_or_default();
+    if *executable == "curl" && !is_restricted_curl_command(&arguments) {
+        return Err(AgentFileError::forbidden(
+            "command_scope_not_allowed",
+            "curl 命令仅允许 HTTP(S) 请求，且不能读取配置、本地文件或写入下载文件",
+        ));
+    }
     let allowed = match *executable {
         "npm" => matches!(
             operation,
@@ -611,10 +620,10 @@ fn validate_project_command(command: &str) -> Result<(), AgentFileError> {
         "yarn" => matches!(operation, "install" | "run" | "test" | "create"),
         "bun" => matches!(operation, "install" | "run" | "test" | "x" | "create"),
         "npx" => matches!(operation, "vite" | "create-vite" | "create-vite@latest"),
-        "python" | "python3" => operation == "-m",
+        "python" | "python3" => true,
         "pip" | "pip3" => operation == "install",
         "uv" => matches!(operation, "sync" | "run" | "pip"),
-        "git" | "ssh" => true,
+        "git" | "ssh" | "curl" => true,
         _ => false,
     };
     if allowed {
@@ -625,6 +634,77 @@ fn validate_project_command(command: &str) -> Result<(), AgentFileError> {
             "仅支持工作区内的依赖安装、构建、测试、本地开发与 Git 命令",
         ))
     }
+}
+
+fn is_restricted_curl_command(arguments: &[&str]) -> bool {
+    let mut has_http_url = false;
+    let mut expects_value_for = None;
+    for argument in arguments.iter().skip(1) {
+        if let Some(option) = expects_value_for.take() {
+            if curl_option_reads_or_writes_files(option, argument) {
+                return false;
+            }
+            continue;
+        }
+        if argument.starts_with("http://") || argument.starts_with("https://") {
+            has_http_url = true;
+            continue;
+        }
+        if argument.contains('@') || argument.contains("file:") {
+            return false;
+        }
+        if matches!(
+            *argument,
+            "-H" | "--header"
+                | "-X"
+                | "--request"
+                | "-d"
+                | "--data"
+                | "--data-raw"
+                | "--data-binary"
+                | "-F"
+                | "--form"
+        ) {
+            expects_value_for = Some(*argument);
+            continue;
+        }
+        if argument.starts_with("--header=")
+            || argument.starts_with("--request=")
+            || argument.starts_with("--data=")
+            || argument.starts_with("--data-raw=")
+            || argument.starts_with("--data-binary=")
+        {
+            if argument
+                .split_once('=')
+                .is_some_and(|(_, value)| value.starts_with('@'))
+            {
+                return false;
+            }
+            continue;
+        }
+        if matches!(
+            *argument,
+            "-s" | "--silent"
+                | "-S"
+                | "--show-error"
+                | "-f"
+                | "--fail"
+                | "--fail-with-body"
+                | "-L"
+                | "--location"
+                | "--compressed"
+        ) {
+            continue;
+        }
+        if argument.starts_with('-') {
+            return false;
+        }
+    }
+    has_http_url && expects_value_for.is_none()
+}
+
+fn curl_option_reads_or_writes_files(_option: &str, value: &str) -> bool {
+    value.contains('@') || value.contains("file:")
 }
 
 fn run_project_command(
