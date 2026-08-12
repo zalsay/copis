@@ -16,7 +16,7 @@ afterEach(() => {
 function createNodeRuntimeSource(version: string): string {
   const root = mkdtempSync(join(tmpdir(), 'copis-node-runtime-source-'))
   tempRoots.push(root)
-  const nodePath = join(root, 'bin', 'node')
+  const nodePath = join(root, 'bin', process.platform === 'win32' ? 'node.exe' : 'node')
   mkdirSync(join(root, 'bin'), { recursive: true })
   mkdirSync(join(root, 'lib', 'node_modules', 'npm'), { recursive: true })
   writeFileSync(
@@ -44,7 +44,9 @@ function runBuild(source: string, output: string): { exitCode: number; output: s
 }
 
 describe('Node.js runtime 模块构建', () => {
-  test('Given Node.js 22 源 When 构建运行时 Then 拒绝生成归档', () => {
+  const testOnUnix = process.platform === 'win32' ? test.skip : test
+
+  testOnUnix('Given Node.js 22 源 When 构建运行时 Then 拒绝生成归档', () => {
     const root = mkdtempSync(join(tmpdir(), 'copis-node-runtime-build-'))
     tempRoots.push(root)
 
@@ -54,7 +56,7 @@ describe('Node.js runtime 模块构建', () => {
     expect(result.output).toContain('必须使用 Node.js 24')
   })
 
-  test('Given Node.js 24 源 When 构建运行时 Then 生成归档', () => {
+  testOnUnix('Given Node.js 24 源 When 构建运行时 Then 生成归档', () => {
     const root = mkdtempSync(join(tmpdir(), 'copis-node-runtime-build-'))
     tempRoots.push(root)
     const output = join(root, 'node-runtime.tar.gz')
@@ -65,7 +67,7 @@ describe('Node.js runtime 模块构建', () => {
     expect(existsSync(output)).toBe(true)
   })
 
-  test('Given 相同 Node.js 24 源 When 跨秒连续构建运行时 Then 生成相同 SHA256 归档', async () => {
+  testOnUnix('Given 相同 Node.js 24 源 When 跨秒连续构建运行时 Then 生成相同 SHA256 归档', async () => {
     const root = mkdtempSync(join(tmpdir(), 'copis-node-runtime-build-'))
     tempRoots.push(root)
     const source = createNodeRuntimeSource('v24.19.0')

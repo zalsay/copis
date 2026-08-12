@@ -106,7 +106,8 @@ describe('功能模块发布边界', () => {
 
   test('官方支付宝安装器有超时和有限重试，避免部署流程无限阻塞', () => {
     expect(prepareAlipayBotScript).toContain('OFFICIAL_INSTALLER_ATTEMPTS = 3')
-    expect(prepareAlipayBotScript).toContain('OFFICIAL_INSTALLER_TIMEOUT_MS = 30_000')
+    expect(prepareAlipayBotScript).toContain('DEFAULT_OFFICIAL_INSTALLER_TIMEOUT_MS = 180_000')
+    expect(prepareAlipayBotScript).toContain('COPIS_ALIPAY_BOT_INSTALL_TIMEOUT_MS')
     expect(prepareAlipayBotScript).toContain('官方安装器第 ${attempt} 次失败，正在重试')
   })
 

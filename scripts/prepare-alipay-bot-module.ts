@@ -3,12 +3,10 @@ import { createHash } from 'node:crypto'
 import { execFileSync } from 'node:child_process'
 import {
   chmodSync,
-  closeSync,
   cpSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
-  openSync,
   readFileSync,
   readdirSync,
   renameSync,
@@ -19,13 +17,17 @@ import {
 } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
+import { gzipSync } from 'node:zlib'
 import type { FunctionalModuleArchitecture, FunctionalModulePlatform } from '@copis/shared'
 
 export const ALIPAY_AGENT_PAYMENT_PACKAGE = '@alipay/agent-payment'
 export const ALIPAY_AGENT_PAYMENT_VERSION = '1.0.20'
 export const ALIPAY_AGENT_PAYMENT_INTEGRITY = 'sha512-OR78BdjoHueJ7XgKPNxawUFbptc9E4CX9PpV8dHLguGOKQeM+CYRPQuRrxltPqZzyTeta372B/xyFb6uwRYfew=='
 const OFFICIAL_INSTALLER_ATTEMPTS = 3
-const OFFICIAL_INSTALLER_TIMEOUT_MS = 30_000
+const DEFAULT_OFFICIAL_INSTALLER_TIMEOUT_MS = 180_000
+const MINIMUM_OFFICIAL_INSTALLER_TIMEOUT_MS = 30_000
+const MAXIMUM_OFFICIAL_INSTALLER_TIMEOUT_MS = 600_000
+const OFFICIAL_INSTALLER_TIMEOUT_MS = resolveInstallerTimeoutMs()
 
 interface RuntimePackageMetadata {
   version: string
@@ -128,13 +130,30 @@ function runOfficialInstaller(
       lastError = error
       rmSync(join(installerHome, '.local'), { recursive: true, force: true })
       if (attempt < OFFICIAL_INSTALLER_ATTEMPTS) {
-        console.warn(`[prepare:alipay-bot-module] 官方安装器第 ${attempt} 次失败，正在重试`)
+        console.warn(
+          `[prepare:alipay-bot-module] 官方安装器第 ${attempt} 次失败，正在重试：${toErrorMessage(error)}`,
+        )
       }
     }
   }
   throw new Error(
     `官方支付宝安装器在 ${OFFICIAL_INSTALLER_ATTEMPTS} 次尝试后仍未完成：${toErrorMessage(lastError)}`,
   )
+}
+
+function resolveInstallerTimeoutMs(): number {
+  const value = process.env.COPIS_ALIPAY_BOT_INSTALL_TIMEOUT_MS?.trim()
+  if (!value) return DEFAULT_OFFICIAL_INSTALLER_TIMEOUT_MS
+  if (!/^\d+$/.test(value)) {
+    throw new Error('COPIS_ALIPAY_BOT_INSTALL_TIMEOUT_MS 必须是毫秒整数')
+  }
+  const timeout = Number(value)
+  if (timeout < MINIMUM_OFFICIAL_INSTALLER_TIMEOUT_MS || timeout > MAXIMUM_OFFICIAL_INSTALLER_TIMEOUT_MS) {
+    throw new Error(
+      `COPIS_ALIPAY_BOT_INSTALL_TIMEOUT_MS 必须在 ${MINIMUM_OFFICIAL_INSTALLER_TIMEOUT_MS} 到 ${MAXIMUM_OFFICIAL_INSTALLER_TIMEOUT_MS} 之间`,
+    )
+  }
+  return timeout
 }
 
 function downloadInstallerPackage(npmPath: string, packageCache: string): string {
@@ -192,13 +211,8 @@ function createArchive(moduleRoot: string, output: string): void {
   mkdirSync(dirname(output), { recursive: true })
   try {
     execFileSync('tar', ['--format=pax', '-cf', archiveTar, '-C', moduleRoot, '.'], { stdio: 'inherit' })
-    const descriptor = openSync(temporaryOutput, 'w')
-    try {
-      execFileSync('gzip', ['-n', '-c', archiveTar], { stdio: ['ignore', descriptor, 'inherit'] })
-    } finally {
-      closeSync(descriptor)
-      chmodSync(temporaryOutput, 0o644)
-    }
+    // Node zlib avoids requiring an external gzip executable on Windows.
+    writeFileSync(temporaryOutput, gzipSync(readFileSync(archiveTar), { mtime: 0 }), { mode: 0o644 })
     renameSync(temporaryOutput, output)
   } finally {
     if (existsSync(temporaryOutput)) rmSync(temporaryOutput, { force: true })

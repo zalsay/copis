@@ -1,12 +1,11 @@
 #!/usr/bin/env bun
 import {
-  closeSync,
   cpSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
-  openSync,
   readdirSync,
+  readFileSync,
   renameSync,
   rmSync,
   statSync,
@@ -16,6 +15,7 @@ import {
 import { execFileSync } from 'node:child_process'
 import { dirname, join, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
+import { gzipSync } from 'node:zlib'
 
 interface NodeRuntimeSource {
   nodePath: string
@@ -144,17 +144,11 @@ function listArchiveEntries(root: string, relativePath = '.'): string[] {
 
 function compressDeterministicTar(tarPath: string, output: string): void {
   const temporaryOutput = `${output}.${process.pid}.tmp`
-  let descriptor: number | undefined
   try {
-    descriptor = openSync(temporaryOutput, 'w')
-    execFileSync('gzip', ['-n', '-c', tarPath], {
-      stdio: ['ignore', descriptor, 'inherit'],
-    })
-    closeSync(descriptor)
-    descriptor = undefined
+    // Node zlib 在 Windows 上不依赖外部 gzip 可执行文件。
+    writeFileSync(temporaryOutput, gzipSync(readFileSync(tarPath), { mtime: 0 }))
     renameSync(temporaryOutput, output)
   } finally {
-    if (descriptor !== undefined) closeSync(descriptor)
     if (existsSync(temporaryOutput)) rmSync(temporaryOutput, { force: true })
   }
 }
