@@ -213,8 +213,19 @@ describe('Copis Working API client', () => {
           })
         }
         if (url.endsWith('/api/users/invited')) return jsonResponse({ data: [{ id: 8, email: 'child@example.com', nickname: '孩子', tokens: 20 }] })
-        if (url.endsWith('/api/family/wallet')) return jsonResponse({ data: { members: [{ user_id: 7, role: 'owner', display_name: '设置用户', tokens: 123.5 }], ledger: [] } })
+        if (url.endsWith('/api/family/wallet')) {
+          return jsonResponse({ data: {
+            members: [{ user_id: 7, role: 'owner', display_name: '设置用户', tokens: 123.5 }],
+            ledger: [{ id: 1, payer_user_id: 7, beneficiary_user_id: 7, amount_tokens: 100, type: 'purchase', source_type: 'alipay_diamond', memo: '支付宝获取钻石', created_at: '2026-01-02T08:00:00Z' }],
+          } })
+        }
         if (url.endsWith('/api/users/billing-ledger')) return jsonResponse({ data: [{ id: 1, payer_user_id: 7, amount_tokens: 3, type: 'charge', source_type: 'pi_office_model', alias: 'fast', created_at: '2026-01-01T08:00:00Z' }] })
+        if (url.endsWith('/api/users/orders?page=1&page_size=50')) {
+          return jsonResponse({ data: {
+            items: [{ id: 2, out_trade_no: 'PAID-2', order_type: 'diamond_recharge', title: '钻石充值', amount: '9.90', currency: 'CNY', diamonds: 100, method: 'alipay', status: 'paid', paid_at: '2026-01-03T08:00:00Z' }],
+            pagination: { page: 1, page_size: 50, total: 1, total_pages: 1 },
+          } })
+        }
         if (url.endsWith('/api/users/invite-code')) return jsonResponse({ data: { Code: 'invite-7' }, invite_link: 'https://example.test/auth?invite=invite-7' })
         if (url.endsWith('/api/working/receive-channel')) return jsonResponse({ data: { channel: 'weixin', weixin_bound: true, feishu_bound: false } })
         throw new Error(`unexpected request: ${url}`)
@@ -227,7 +238,10 @@ describe('Copis Working API client', () => {
       inviteCode: 'invite-7',
       inviteLink: 'https://example.test/auth?invite=invite-7',
       receiveChannel: { channel: 'weixin', weixinBound: true, feishuBound: false },
-      ledger: [expect.objectContaining({ sourceType: 'pi_office_model', modelAlias: 'fast', amountTokens: 3 })],
+      ledger: [
+        expect.objectContaining({ id: 'order:2', type: 'purchase', sourceType: 'alipay_diamond', amountTokens: 100 }),
+        expect.objectContaining({ sourceType: 'pi_office_model', modelAlias: 'fast', amountTokens: 3 }),
+      ],
     }))
   })
 

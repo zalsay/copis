@@ -44,6 +44,37 @@ describe('Pi Copis 钻石支付工具', () => {
     }])
   })
 
+  test('Given 存在待支付钻石订单 When 查询待支付订单 Then 只读取本机 Rust 已保存的支付摘要', async () => {
+    const calls: Array<{ url: string; init?: RequestInit }> = []
+    const client = new PiWorkingPaymentToolClient({
+      baseUrl: 'http://127.0.0.1:51740',
+      fetchImpl: async (url, init) => {
+        calls.push({ url: String(url), init })
+        return jsonResponse({
+          payment: {
+            payment_id: 'pending-12',
+            status: 'pending_user_pay',
+            qrcode_image: 'data:image/png;base64,iVBORw0KGgo=',
+          },
+          package: { id: 12, amount: '9.90', currency: 'CNY', diamonds: 100 },
+        })
+      },
+    })
+
+    await expect(client.execute({ action: 'orders.pending' })).resolves.toEqual({
+      payment: {
+        paymentId: 'pending-12',
+        status: 'pending_user_pay',
+        qrCodeImage: 'data:image/png;base64,iVBORw0KGgo=',
+      },
+      package: { id: 12, amount: '9.90', currency: 'CNY', diamonds: 100 },
+    })
+    expect(calls).toEqual([{
+      url: 'http://127.0.0.1:51740/api/working/diamond-purchases/pending',
+      init: expect.objectContaining({ method: 'GET' }),
+    }])
+  })
+
   test('Given Copis order creation When Rust has already started controlled payment Then the model only receives the pending payment summary', async () => {
     const client = new PiWorkingPaymentToolClient({
       baseUrl: 'http://127.0.0.1:51740',

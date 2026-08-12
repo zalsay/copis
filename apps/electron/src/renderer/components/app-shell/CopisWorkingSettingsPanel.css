@@ -436,6 +436,49 @@
   margin-top: 15px;
 }
 
+.copis-working-settings-ledger-tabs {
+  display: inline-flex;
+  width: fit-content;
+  gap: 3px;
+  margin-top: 14px;
+  padding: 3px;
+  border-radius: 7px;
+  background: color-mix(in srgb, hsl(var(--muted)) 72%, transparent);
+}
+
+.copis-working-settings-ledger-tabs button,
+.copis-working-settings-ledger-pagination button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: hsl(var(--muted-foreground));
+  font: inherit;
+  font-size: 12px;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.copis-working-settings-ledger-tabs button {
+  min-width: 58px;
+  min-height: 28px;
+  padding: 0 10px;
+}
+
+.copis-working-settings-ledger-tabs button.active {
+  background: hsl(var(--card));
+  box-shadow: var(--shadow-sm);
+  color: hsl(var(--foreground));
+}
+
+.copis-working-settings-ledger-tabs button:focus-visible,
+.copis-working-settings-ledger-pagination button:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--ui-primary) 68%, transparent);
+  outline-offset: 2px;
+}
+
 .copis-working-settings-ledger-row {
   display: flex;
   min-width: 0;
@@ -495,6 +538,37 @@
   width: 24px;
   height: 24px;
   color: var(--ui-primary);
+}
+
+.copis-working-settings-ledger-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.copis-working-settings-ledger-pagination button {
+  width: 30px;
+  height: 30px;
+  border: 1px solid hsl(var(--border) / 0.8);
+  background: hsl(var(--card) / 0.72);
+}
+
+.copis-working-settings-ledger-pagination button:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
+.copis-working-settings-ledger-pagination button svg {
+  width: 15px;
+  height: 15px;
+}
+
+.copis-working-settings-ledger-pagination span {
+  color: hsl(var(--muted-foreground));
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
 }
 
 @media (max-width: 900px) {

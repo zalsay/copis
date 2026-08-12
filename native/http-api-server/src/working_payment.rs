@@ -374,33 +374,107 @@ fn create_desktop_payment<P: PaymentWorker>(
     flow_kind: DesktopPaymentFlowKind,
     package_id: Option<u64>,
 ) -> Result<Value, SkillMarketError> {
-    let capability = issue_desktop_capability(working_token, flow_kind)?;
     let prepare_body = match package_id {
         Some(package_id) => json!({ "package_id": package_id }).to_string(),
         None => "{}".to_string(),
     };
-    let prepared = remote_json(
-        "POST",
-        flow_kind.prepare_path(),
-        &capability,
-        Some(&prepare_body),
-    )?;
-    let prepared_payment = required_object_field(&prepared, "payment", "支付准备响应缺少支付会话")?;
-    let payment_id = required_string_field(
-        &prepared_payment,
-        "payment_id",
-        "支付准备响应缺少支付会话 ID",
-    )?;
-    let package = payment_package_for_flow(&prepared, &prepared_payment, flow_kind)?;
-    let pending_existing = prepared
-        .get("pending_existing")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-    let vip = prepared.get("vip").cloned();
+    // prepare 会为 capability 绑定旧会话，并可能把会话状态写回 created；先保存待支付快照，
+    // 才能继续展示原二维码而不是误判为异常订单。
+    let pending_snapshot = if flow_kind == DesktopPaymentFlowKind::Diamond {
+        Some(pending_diamond_payment(working_token)?)
+    } else {
+        None
+    };
+    // 旧会话异常时只取消并重新准备一次，避免无限重试或重复创建支付订单。
+    for attempt in 0..2 {
+        let capability = issue_desktop_capability(working_token, flow_kind)?;
+        let prepared = remote_json(
+            "POST",
+            flow_kind.prepare_path(),
+            &capability,
+            Some(&prepare_body),
+        )?;
+        let prepared_payment = required_object_field(&prepared, "payment", "支付准备响应缺少支付会话")?;
+        let payment_id = required_string_field(
+            &prepared_payment,
+            "payment_id",
+            "支付准备响应缺少支付会话 ID",
+        )?;
+        let package = payment_package_for_flow(&prepared, &prepared_payment, flow_kind)?;
+        let pending_existing = prepared
+            .get("pending_existing")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        let vip = prepared.get("vip").cloned();
 
-    if is_terminal_payment_status(&prepared_payment) {
+        if flow_kind == DesktopPaymentFlowKind::Diamond && pending_existing {
+            if let Some(result) = reuse_pending_diamond_payment(
+                payment_state,
+                &capability,
+                &payment_id,
+                package.clone(),
+                pending_snapshot.as_ref(),
+            )? {
+                return Ok(result);
+            }
+            cancel_prepared_diamond_payment(&capability, &payment_id)?;
+            if attempt == 0 {
+                continue;
+            }
+            return Err(SkillMarketError::new(
+                409,
+                "desktop_payment_recovery_failed",
+                "待支付订单状态异常，请稍后重新发起支付",
+            ));
+        }
+
+        if is_terminal_payment_status(&prepared_payment) {
+            return Ok(desktop_purchase_result(
+                prepared_payment,
+                package,
+                flow_kind,
+                pending_existing,
+                vip,
+            ));
+        }
+
+        let context = remote_json(
+            "POST",
+            "/api/internal/working-desktop/alipay/payment-context",
+            &capability,
+            Some(&json!({ "payment_id": payment_id }).to_string()),
+        )?;
+        let (payment_needed, request_context) = payment_request_context(&context)?;
+        let payment_request = request_context.payment_start_request(payment_needed);
+        let worker_result = worker
+            .execute_payment(
+                workspace,
+                payment_account_key,
+                PaymentWorkerAction::PaymentStart,
+                payment_request,
+            )
+            .map_err(payment_worker_error)?;
+        ensure_worker_succeeded(&worker_result, "生成支付宝支付二维码失败")?;
+
+        let started = remote_json(
+            "POST",
+            "/api/internal/working-desktop/alipay/payment-started",
+            &capability,
+            Some(&payment_started_request(&payment_id, &worker_result).to_string()),
+        )?;
+        let payment = required_object_field(&started, "payment", "支付启动响应缺少支付会话")?;
+        payment_state.remember(
+            payment_id,
+            WorkingDesktopPaymentFlow {
+                capability,
+                flow_kind,
+                trade_no: optional_string_field(&worker_result, "tradeNo"),
+                out_shake_no: optional_string_field(&worker_result, "outShakeNo"),
+                request_context,
+            },
+        );
         return Ok(desktop_purchase_result(
-            prepared_payment,
+            payment,
             package,
             flow_kind,
             pending_existing,
@@ -408,48 +482,84 @@ fn create_desktop_payment<P: PaymentWorker>(
         ));
     }
 
+    Err(SkillMarketError::new(
+        409,
+        "desktop_payment_recovery_failed",
+        "待支付订单状态异常，请稍后重新发起支付",
+    ))
+}
+
+/// 复用已有的待支付订单，只恢复本机检查上下文，绝不再次启动支付或生成新二维码。
+fn reuse_pending_diamond_payment(
+    payment_state: &WorkingPaymentState,
+    capability: &str,
+    payment_id: &str,
+    package: Value,
+    pending: Option<&Value>,
+) -> Result<Option<Value>, SkillMarketError> {
+    let payment = match pending
+        .and_then(|value| value.get("payment"))
+        .filter(|value| value.is_object())
+        .cloned()
+    {
+        Some(payment) => payment,
+        None => return Ok(None),
+    };
+    if required_string_field(&payment, "payment_id", "待支付订单缺少支付会话 ID")? != payment_id {
+        return Err(SkillMarketError::new(
+            409,
+            "desktop_payment_context_changed",
+            "支付会话状态已变化，请重新发起支付",
+        ));
+    }
+    if optional_string_field(&payment, "status").as_deref() != Some("pending_user_pay")
+        || optional_string_field(&payment, "qrcode_image").is_none()
+    {
+        return Ok(None);
+    }
+
     let context = remote_json(
         "POST",
         "/api/internal/working-desktop/alipay/payment-context",
-        &capability,
+        capability,
         Some(&json!({ "payment_id": payment_id }).to_string()),
     )?;
-    let (payment_needed, request_context) = payment_request_context(&context)?;
-    let payment_request = request_context.payment_start_request(payment_needed);
-    let worker_result = worker
-        .execute_payment(
-            workspace,
-            payment_account_key,
-            PaymentWorkerAction::PaymentStart,
-            payment_request,
-        )
-        .map_err(payment_worker_error)?;
-    ensure_worker_succeeded(&worker_result, "生成支付宝支付二维码失败")?;
-
-    let started = remote_json(
-        "POST",
-        "/api/internal/working-desktop/alipay/payment-started",
-        &capability,
-        Some(&payment_started_request(&payment_id, &worker_result).to_string()),
-    )?;
-    let payment = required_object_field(&started, "payment", "支付启动响应缺少支付会话")?;
+    let (_, request_context) = payment_request_context(&context)?;
     payment_state.remember(
-        payment_id,
+        payment_id.to_string(),
         WorkingDesktopPaymentFlow {
-            capability,
-            flow_kind,
-            trade_no: optional_string_field(&worker_result, "tradeNo"),
-            out_shake_no: optional_string_field(&worker_result, "outShakeNo"),
+            capability: capability.to_string(),
+            flow_kind: DesktopPaymentFlowKind::Diamond,
+            trade_no: optional_string_field(&payment, "trade_no"),
+            out_shake_no: optional_string_field(&payment, "out_shake_no"),
             request_context,
         },
     );
-    Ok(desktop_purchase_result(
+    Ok(Some(desktop_purchase_result(
         payment,
         package,
-        flow_kind,
-        pending_existing,
-        vip,
-    ))
+        DesktopPaymentFlowKind::Diamond,
+        true,
+        None,
+    )))
+}
+
+fn cancel_prepared_diamond_payment(capability: &str, payment_id: &str) -> Result<(), SkillMarketError> {
+    let finalized = remote_json(
+        "POST",
+        "/api/internal/working-desktop/alipay/payment-finalize",
+        capability,
+        Some(&json!({ "payment_id": payment_id, "action": "cancel" }).to_string()),
+    )?;
+    let payment = required_object_field(&finalized, "payment", "取消支付响应缺少支付会话")?;
+    if optional_string_field(&payment, "status").as_deref() != Some("cancelled") {
+        return Err(SkillMarketError::new(
+            409,
+            "desktop_payment_cancel_failed",
+            "待支付订单状态已变化，请稍后重试",
+        ));
+    }
+    Ok(())
 }
 
 fn check_desktop_payment<P: PaymentWorker>(

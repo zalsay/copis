@@ -8,7 +8,7 @@ type FetchImplementation = (input: RequestInfo | URL, init?: RequestInit) => Pro
 const DEFAULT_HTTP_API_PORT = 51730
 const WORKING_PAYMENT_ENDPOINT = '/api/working'
 
-export type WorkingPaymentAction = 'packages.list' | 'order.create' | 'order.check'
+export type WorkingPaymentAction = 'packages.list' | 'orders.pending' | 'order.create' | 'order.check'
 
 export interface PiWorkingPaymentToolOptions {
   baseUrl?: string
@@ -123,12 +123,15 @@ export class PiWorkingPaymentToolClient {
         : `Copis 钻石服务请求失败（${response.status}）`
       throw new PiWorkingPaymentToolError(message)
     }
-    return input.action === 'order.create' ? paymentSummary(payload) : payload
+    return input.action === 'order.create' || input.action === 'orders.pending' ? paymentSummary(payload) : payload
   }
 
   private buildRequest(input: WorkingPaymentToolInput): { method: 'GET' | 'POST'; path: string; body?: string } {
     if (input.action === 'packages.list') {
       return { method: 'GET', path: `${WORKING_PAYMENT_ENDPOINT}/diamond-packages` }
+    }
+    if (input.action === 'orders.pending') {
+      return { method: 'GET', path: `${WORKING_PAYMENT_ENDPOINT}/diamond-purchases/pending` }
     }
     if (input.action === 'order.create') {
       if (!Number.isSafeInteger(input.packageId) || (input.packageId ?? 0) <= 0) {
@@ -158,10 +161,10 @@ export function buildPiWorkingPaymentTools(
   const definition = sdk.defineTool({
     name: 'copis_working_payment',
     label: 'Copis 钻石购买',
-    description: '查询 edu-api 的最新 Copis 钻石套餐，创建钱包支付会话，或由本地 Rust 服务查询已创建订单的支付与履约状态。',
-    promptSnippet: '购买 Copis 钻石时严格执行四步：先用 alipay_bot 的 wallet.check 检查钱包；再用 packages.list 复核套餐；两项通过后调用 order.create 创建订单并显示二维码；最后等待本机 Rust 自动确认支付与履约。order.create 已完成受控支付初始化，创建后不得自行调用其他支付或订单查询动作。',
+    description: '查询 Copis 钻石套餐与待支付订单，创建或继续钱包支付会话。',
+    promptSnippet: '购买 Copis 钻石时，先用 orders.pending 查询是否已有待支付订单；若返回可用二维码，则继续该订单且不得创建新订单。没有待支付订单时，依次执行钱包检查、套餐复核、创建订单和等待到账。',
     parameters: Type.Object({
-      action: Type.Union([Type.Literal('packages.list'), Type.Literal('order.create'), Type.Literal('order.check')]),
+      action: Type.Union([Type.Literal('packages.list'), Type.Literal('orders.pending'), Type.Literal('order.create'), Type.Literal('order.check')]),
       packageId: Type.Optional(Type.Integer({ minimum: 1, description: '已由用户明确确认的 Copis 钻石套餐 ID。' })),
       paymentId: Type.Optional(Type.String({ minLength: 1, description: 'order.create 返回的 payment.paymentId，仅用于本地 Rust 受控查询。' })),
     }),

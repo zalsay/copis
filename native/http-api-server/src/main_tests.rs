@@ -9,13 +9,42 @@ use super::pi_rpc::{
     is_agent_stop_route, is_agent_workers_status_route, is_agent_workers_stop_all_route,
     parse_worker_frame, sse_headers,
 };
+use super::automation::WorkerAutomationContext;
 use super::{
-    append_recording_line, decode_hex, encode_hex, find_subslice, handle_connection,
+    append_recording_line, bind_automation_create_input, decode_hex, encode_hex, find_subslice, handle_connection,
     is_allowed_origin, is_internal_agent_alipay_bot_path, is_internal_agent_shell_path,
     is_internal_path, is_internal_token_valid, is_safe_path_component, is_skill_market_path,
     is_vite_dev_origin, is_web_route_authorized, is_working_payment_path, is_workspace_dev_route,
     parse_internal_recording_route, recording_marker, Bridge, HttpRequest,
 };
+
+#[test]
+fn given_daily_tool_payload_without_protected_fields_when_binding_then_capability_context_is_used() {
+    let input = serde_json::json!({
+        "name": "每日检查钻石余额",
+        "prompt": "提醒用户：请检查 Copis 钻石余额。",
+        "scheduleType": "daily",
+        "timeOfDay": "08:00",
+        "channelId": "forged-channel",
+        "workspaceId": "forged-workspace"
+    });
+    let context = WorkerAutomationContext {
+        triggered_by: "user".to_string(),
+        channel_id: "capability-channel".to_string(),
+        model_id: Some("capability-model".to_string()),
+        workspace_id: Some("capability-workspace".to_string()),
+        source_automation_id: None,
+    };
+
+    let created = bind_automation_create_input(input, &context, "session-1").unwrap();
+
+    assert_eq!(created.schedule_type, "daily");
+    assert_eq!(created.time_of_day.as_deref(), Some("08:00"));
+    assert_eq!(created.channel_id, "capability-channel");
+    assert_eq!(created.model_id.as_deref(), Some("capability-model"));
+    assert_eq!(created.workspace_id.as_deref(), Some("capability-workspace"));
+    assert_eq!(created.source_session_id.as_deref(), Some("session-1"));
+}
 
 #[test]
 fn hex_round_trip_supports_utf8() {
@@ -306,6 +335,11 @@ fn slow_connection_is_closed_by_read_timeout() {
     let automation_store = Arc::new(super::automation::AutomationStore::open(
         directory.join("automations"),
     ));
+    let automation_scheduler = Arc::new(super::automation_scheduler::AutomationScheduler::new(
+        Arc::clone(&automation_store),
+        Arc::clone(&bridge),
+        Arc::clone(&workers),
+    ));
 
     let server = thread::spawn(move || {
         let (stream, _) = listener.accept().unwrap();
@@ -322,6 +356,7 @@ fn slow_connection_is_closed_by_read_timeout() {
             workspace_dev_store,
             workspace_skills_store,
             automation_store,
+            automation_scheduler,
         );
     });
     let mut client = std::net::TcpStream::connect(address).unwrap();

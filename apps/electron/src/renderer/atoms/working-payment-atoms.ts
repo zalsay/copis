@@ -84,6 +84,11 @@ export function isWorkingPaymentReady(status: string): boolean {
   return status === 'resource_ready'
 }
 
+/** 只有可展示二维码的待支付订单才允许用户继续支付。 */
+export function isWorkingPendingPaymentReusable(payment: WorkingPaymentSession): boolean {
+  return payment.status === 'pending_user_pay' && Boolean(payment.qrCodeImage)
+}
+
 export function phaseForWorkingPaymentStatus(status: string): WorkingPaymentPhase {
   switch (status) {
     case 'resource_ready':

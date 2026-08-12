@@ -446,6 +446,7 @@ export interface WorkingOrder {
   method: string
   status: WorkingOrderStatus
   createdAt?: string
+  paidAt?: string
 }
 
 export interface WorkingOrdersPagination {

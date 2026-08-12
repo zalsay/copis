@@ -111,7 +111,6 @@ import {
   stopAllBridges,
   stopBridgeSelfHealing,
 } from './lib/bridge-registry'
-import { startScheduler, stopScheduler } from './lib/automation-scheduler'
 import { startPlanningReminderScheduler, stopPlanningReminderScheduler } from './lib/planning-reminder-scheduler'
 import { feishuBridgeManager } from './lib/feishu-bridge-manager'
 import { getFeishuMultiBotConfig } from './lib/feishu-config'
@@ -503,6 +502,7 @@ async function bootstrap(): Promise<void> {
   // 初始化兼容层版本号（供复用的 Pi/Copis 运行时使用）
   const copisVersion = app.getVersion()
   process.env.COPIS_VERSION = copisVersion
+  process.env.COPIS_PACKAGED = app.isPackaged ? '1' : '0'
   setCopisVersion(copisVersion)
 
   // HTTP API 由 Electron 统一确保 active 模块和进程生命周期；网络安装失败不阻断 UI 启动。
@@ -611,8 +611,6 @@ async function bootstrap(): Promise<void> {
   await safeAwait('startAllBridges', () => startAllBridges())
   safeRun('startBridgeSelfHealing', startBridgeSelfHealing)
 
-  // 启动定时任务调度器（恢复持久化的 active 任务）
-  safeRun('startScheduler', startScheduler)
   safeRun('startPlanningReminderScheduler', startPlanningReminderScheduler)
 
   app.on('activate', () => {
@@ -731,8 +729,6 @@ app.on('before-quit', (event) => {
   // 停止所有 Bridge
   stopBridgeSelfHealing()
   stopAllBridges()
-  // 停止定时任务调度器
-  stopScheduler()
   stopPlanningReminderScheduler()
   // 释放飞书同步防休眠
   stopFeishuSyncSleepBlocker()

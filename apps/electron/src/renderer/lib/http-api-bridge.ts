@@ -210,6 +210,9 @@ function createHttpMethods(): Record<string, HttpMethod> {
       return agentHttpStreamClient.stop(getArgument<string>(args, 0))
     },
 
+    // ===== 定时任务 =====
+    listAutomations: () => request('/api/automations'),
+
     // ===== 浏览器可替代的系统能力 =====
     getSystemTheme: () => Promise.resolve(window.matchMedia('(prefers-color-scheme: dark)').matches),
     openExternal: (args) => {

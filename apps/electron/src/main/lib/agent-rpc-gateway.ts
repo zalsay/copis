@@ -9,7 +9,7 @@ import type {
 } from '@copis/shared'
 import {
   COPIS_HTTP_API_HOST,
-  COPIS_HTTP_API_PRODUCTION_PORT,
+  resolveCopisHttpApiPort,
 } from '@copis/shared/config'
 import { parseAgentSseData, type AgentRpcWorkerFrame } from './agent-rpc-protocol'
 
@@ -31,10 +31,10 @@ export interface AgentRpcGatewayOptions {
 
 function resolveBaseUrl(value: string | undefined): string {
   if (value?.trim()) return value.replace(/\/$/, '')
-  const configuredPort = Number.parseInt(process.env.COPIS_HTTP_API_PORT ?? '', 10)
-  const port = Number.isSafeInteger(configuredPort) && configuredPort > 0 && configuredPort <= 65_535
-    ? configuredPort
-    : COPIS_HTTP_API_PRODUCTION_PORT
+  const port = resolveCopisHttpApiPort({
+    configuredPort: process.env.COPIS_HTTP_API_PORT,
+    isPackaged: process.env.COPIS_PACKAGED === '1',
+  })
   return `http://${COPIS_HTTP_API_HOST}:${port}`
 }
 

@@ -54,4 +54,9 @@ describe('Working 支付视觉契约', () => {
     expect(paymentSource).toContain('在对话中继续')
     expect(paymentSource).toContain('onStartDiamondPurchase')
   })
+
+  test('Given 待支付订单没有可用二维码 When 打开获取钻石 Then 回到套餐选择而不是继续异常订单', () => {
+    expect(paymentSource).toContain('isWorkingPendingPaymentReusable(pending.payment)')
+    expect(paymentSource).toContain('待支付订单已失效，请重新选择套餐。')
+  })
 })

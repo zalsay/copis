@@ -447,4 +447,13 @@ describe('Working 侧边栏视觉契约', () => {
     expect(conversationListRule).toBeDefined()
     expect(conversationListRule).toContain('padding-left: 16px')
   })
+
+  test('Given 工作区项目行 When 展示其会话列表 Then 项目与首条会话之间保留更明显的间距', () => {
+    const projectGroupRule = sidebarStyles.match(
+      /\.copis-working-project-group\s*\{([^}]*)\}/s,
+    )?.[1]
+
+    expect(projectGroupRule).toBeDefined()
+    expect(projectGroupRule).toContain('gap: 6px')
+  })
 })

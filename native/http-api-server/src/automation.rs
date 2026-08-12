@@ -9,6 +9,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 const INDEX_VERSION: u64 = 2;
 const MAX_HISTORY: usize = 20;
+const MAX_CONSECUTIVE_FAILURES: u64 = 5;
 const WORKER_CAPABILITY_TTL_MS: u64 = 30 * 60 * 1000;
 
 static WORKER_CAPABILITIES: LazyLock<Mutex<std::collections::HashMap<String, WorkerCapability>>> =
@@ -191,6 +192,65 @@ impl AutomationStore {
         Ok(self.read_index()?.automations.into_iter().find(|item| item_id(item) == Some(id)))
     }
 
+    pub fn due_automations(&self, now: u64) -> Result<Vec<Value>, AutomationError> {
+        let _guard = self.lock.lock().unwrap();
+        let mut automations = self
+            .read_index()?
+            .automations
+            .into_iter()
+            .filter(|automation| {
+                automation.get("active").and_then(Value::as_bool) == Some(true)
+                    && runnable(
+                        value_string(automation, "channelId").unwrap_or(""),
+                        value_string(automation, "workspaceId"),
+                    )
+                    && automation
+                        .get("nextRunAt")
+                        .and_then(Value::as_u64)
+                        .is_some_and(|next_run_at| next_run_at <= now)
+            })
+            .collect::<Vec<_>>();
+        automations.sort_by_key(created_at);
+        Ok(automations)
+    }
+
+    /// 恢复进程时不补跑错过的循环任务，避免长期离线后集中触发；一次性任务仍保留为待执行。
+    pub fn defer_overdue_recurring(&self, now: u64) -> Result<(), AutomationError> {
+        let _guard = self.lock.lock().unwrap();
+        let mut index = self.read_index()?;
+        let mut changed = false;
+        for automation in &mut index.automations {
+            let schedule_type = value_string(automation, "scheduleType").unwrap_or("interval");
+            let overdue = automation
+                .get("nextRunAt")
+                .and_then(Value::as_u64)
+                .is_some_and(|next_run_at| next_run_at <= now);
+            if automation.get("active").and_then(Value::as_bool) != Some(true)
+                || schedule_type == "once"
+                || !overdue
+            {
+                continue;
+            }
+            let interval = automation.get("intervalMinutes").and_then(Value::as_u64).unwrap_or(10);
+            let next_run = next_run_at(
+                schedule_type,
+                interval,
+                value_string(automation, "timeOfDay"),
+                automation.get("dayOfWeek").and_then(Value::as_u64),
+                automation.get("dayOfMonth").and_then(Value::as_u64),
+                automation.get("scheduledAt").and_then(Value::as_u64),
+                now,
+            );
+            set_number(automation, "nextRunAt", next_run);
+            set_number(automation, "updatedAt", now);
+            changed = true;
+        }
+        if changed {
+            self.write_index(&index)?;
+        }
+        Ok(())
+    }
+
     pub fn create(&self, input: AutomationCreateInput) -> Result<Value, AutomationError> {
         self.create_for_session(input, "user")
     }
@@ -332,6 +392,9 @@ impl AutomationStore {
                 if run.status == "error" {
                     let failures = target.get("consecutiveFailures").and_then(Value::as_u64).unwrap_or(0).saturating_add(1);
                     set_number(target, "consecutiveFailures", failures);
+                    if failures >= MAX_CONSECUTIVE_FAILURES {
+                        set_bool(target, "active", false);
+                    }
                 } else {
                     set_number(target, "consecutiveFailures", 0);
                 }

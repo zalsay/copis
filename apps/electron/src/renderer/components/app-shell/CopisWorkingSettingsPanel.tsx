@@ -4,6 +4,8 @@ import {
   ArrowLeft,
   Clipboard,
   CircleCheck,
+  ChevronLeft,
+  ChevronRight,
   ClipboardList,
   Crown,
   Gem,
@@ -41,7 +43,12 @@ import { AppearanceSettings } from '@/components/settings/AppearanceSettings'
 import { MigrationSettings } from '@/components/settings/MigrationSettings'
 import { StorageSettings } from '@/components/settings/StorageSettings'
 import { VoiceInputSettings } from '@/components/settings/VoiceInputSettings'
-import { formatWorkingLedgerDescription, isWorkingModelDeduction } from '@/lib/working-ledger'
+import {
+  formatWorkingLedgerDescription,
+  isWorkingModelDeduction,
+  paginateWorkingLedgerEntries,
+  selectWorkingConsumptionLedgerEntries,
+} from '@/lib/working-ledger'
 import { useStartCopisDiamondPurchase } from '@/hooks/useStartCopisDiamondPurchase'
 import { CopisWorkingMessageSettingsPanel } from './CopisWorkingMessageSettingsPanel'
 import { CopisWorkingOrdersPanel } from './CopisWorkingOrdersPanel'
@@ -360,6 +367,9 @@ function WorkingAccountSettings({
   onOpenDiamonds,
   onOpenVip,
 }: WorkingAccountSettingsProps): React.ReactElement {
+  const LEDGER_PAGE_SIZE = 8
+  const [ledgerTab, setLedgerTab] = React.useState<'consumption' | 'purchase'>('consumption')
+  const [ledgerPage, setLedgerPage] = React.useState(1)
   const tokenBalance = formatTokens(settings?.vip?.diamonds ?? user?.tokens ?? 0)
   const isVip = settings?.vip?.isVip ?? user?.isVip === true
   const vipExpiresAt = settings?.vip?.vipExpiresAt ?? user?.vipExpiresAt ?? null
@@ -371,6 +381,19 @@ function WorkingAccountSettings({
     [settings?.members],
   )
   const personalLedger = settings?.ledger ?? []
+  const consumptionLedger = React.useMemo(
+    () => selectWorkingConsumptionLedgerEntries(personalLedger),
+    [personalLedger],
+  )
+  const purchaseLedger = React.useMemo(
+    () => personalLedger.filter((entry) => entry.type === 'purchase'),
+    [personalLedger],
+  )
+  const selectedLedger = ledgerTab === 'consumption' ? consumptionLedger : purchaseLedger
+  const ledgerPagination = React.useMemo(
+    () => paginateWorkingLedgerEntries(selectedLedger, ledgerPage, LEDGER_PAGE_SIZE),
+    [ledgerPage, selectedLedger],
+  )
   const dailyConsumption = React.useMemo(() => {
     const today = new Date().toDateString()
     return personalLedger.reduce((total, entry) => {
@@ -378,6 +401,10 @@ function WorkingAccountSettings({
       return total + entry.amountTokens
     }, 0)
   }, [personalLedger])
+
+  React.useEffect(() => {
+    setLedgerPage(1)
+  }, [ledgerTab, settings])
 
   return (
     <div className="copis-working-settings-grid">
@@ -447,21 +474,52 @@ function WorkingAccountSettings({
             <Sparkles aria-hidden="true" />
             <span>个人钻石流水</span>
           </div>
-          <div className="copis-working-settings-ledger-daily-total">
+          <div className="copis-working-settings-ledger-daily-total" hidden={ledgerTab !== 'consumption'}>
             <span>每日消耗累计</span>
             <strong>{formatTokens(dailyConsumption)}</strong>
           </div>
         </div>
+        <div className="copis-working-settings-ledger-tabs" role="tablist" aria-label="钻石流水分类">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={ledgerTab === 'consumption'}
+            className={ledgerTab === 'consumption' ? 'active' : undefined}
+            onClick={() => setLedgerTab('consumption')}
+          >
+            消耗
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={ledgerTab === 'purchase'}
+            className={ledgerTab === 'purchase' ? 'active' : undefined}
+            onClick={() => setLedgerTab('purchase')}
+          >
+            获取
+          </button>
+        </div>
         <div className="copis-working-settings-ledger-list">
-          {personalLedger.length > 0 ? personalLedger.slice(0, 8).map((entry) => (
+          {ledgerPagination.items.length > 0 ? ledgerPagination.items.map((entry) => (
             <LedgerRow key={String(entry.id)} entry={entry} memberNameMap={memberNameMap} />
           )) : (
             <div className="copis-working-settings-empty">
               <Sparkles aria-hidden="true" />
-              <span>{loading ? '正在读取流水...' : '暂无个人钻石流水'}</span>
+              <span>{loading ? '正在读取流水...' : ledgerTab === 'consumption' ? '暂无钻石消耗记录' : '暂无钻石获取记录'}</span>
             </div>
           )}
         </div>
+        {ledgerPagination.totalPages > 1 && (
+          <nav className="copis-working-settings-ledger-pagination" aria-label="钻石流水分页">
+            <button type="button" disabled={ledgerPagination.page <= 1} onClick={() => setLedgerPage((page) => page - 1)} aria-label="上一页">
+              <ChevronLeft aria-hidden="true" />
+            </button>
+            <span>第 {ledgerPagination.page} / {ledgerPagination.totalPages} 页</span>
+            <button type="button" disabled={ledgerPagination.page >= ledgerPagination.totalPages} onClick={() => setLedgerPage((page) => page + 1)} aria-label="下一页">
+              <ChevronRight aria-hidden="true" />
+            </button>
+          </nav>
+        )}
       </section>
     </div>
   )

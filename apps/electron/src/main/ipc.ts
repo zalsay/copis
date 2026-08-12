@@ -243,7 +243,7 @@ import { ensureRequiredFunctionalModules } from './lib/functional-module-startup
 import { getProxySettings, saveProxySettings } from './lib/proxy-settings-service'
 import { detectSystemProxy } from './lib/system-proxy-detector'
 import { runtimeAutomationApiClient } from './lib/automation-api-client'
-import { runAutomationNow, broadcastChanged as broadcastAutomationsChanged } from './lib/automation-scheduler'
+import { broadcastChanged as broadcastAutomationsChanged } from './lib/automation-scheduler'
 import {
   listTodos,
   getTodo,
@@ -5242,7 +5242,7 @@ export function registerIpcHandlers(): void {
     AUTOMATION_IPC_CHANNELS.RUN_NOW,
     async (_, id: string): Promise<void> => {
       if (!isNonEmptyString(id)) throw new Error('id 必填')
-      await runAutomationNow(id)
+      await runtimeAutomationApiClient.runNow(id)
     }
   )
 }

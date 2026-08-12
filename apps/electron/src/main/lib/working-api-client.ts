@@ -334,6 +334,38 @@ function normalizeLedgerEntry(value: unknown): WorkingLedgerEntry {
   }
 }
 
+function mergeSettingsLedger(familyLedger: WorkingLedgerEntry[], billingLedger: WorkingLedgerEntry[]): WorkingLedgerEntry[] {
+  const entries = [
+    ...familyLedger
+      .filter((entry) => entry.sourceType !== 'alipay_diamond')
+      .map((entry) => ({ ...entry, id: `family:${entry.id}` })),
+    ...billingLedger.map((entry) => ({ ...entry, id: `billing:${entry.id}` })),
+  ]
+  return entries.sort((left, right) => ledgerCreatedAt(right) - ledgerCreatedAt(left))
+}
+
+function purchaseLedgerFromOrders(orders: WorkingOrder[], payerUserId: number | string): WorkingLedgerEntry[] {
+  return orders
+    .filter((order) => order.orderType === 'diamond_recharge' && order.status === 'paid' && order.diamonds > 0)
+    .map((order) => ({
+      id: `order:${order.id}`,
+      payerUserId,
+      beneficiaryUserId: payerUserId,
+      amountTokens: order.diamonds,
+      type: 'purchase',
+      sourceType: 'alipay_diamond',
+      memo: order.outTradeNo ? `支付宝获取钻石 · ${order.outTradeNo}` : '支付宝获取钻石',
+      createdAt: order.paidAt ?? order.createdAt,
+    }))
+    .sort((left, right) => ledgerCreatedAt(right) - ledgerCreatedAt(left))
+}
+
+function ledgerCreatedAt(entry: WorkingLedgerEntry): number {
+  if (!entry.createdAt) return 0
+  const timestamp = Date.parse(entry.createdAt)
+  return Number.isNaN(timestamp) ? 0 : timestamp
+}
+
 function normalizeReceiveChannel(value: unknown): WorkingReceiveChannelSettings | null {
   if (!isRecord(value)) return null
   const channel = value.channel === 'feishu' ? 'feishu' : 'weixin'
@@ -359,6 +391,7 @@ function normalizeOrder(value: unknown): WorkingOrder {
     method: String(item.method ?? ''),
     status: String(item.status ?? 'failed'),
     createdAt: item.created_at == null && item.createdAt == null ? undefined : String(item.created_at ?? item.createdAt),
+    paidAt: item.paid_at == null && item.paidAt == null ? undefined : String(item.paid_at ?? item.paidAt),
   }
 }
 
@@ -619,10 +652,11 @@ export class WorkingApiClient {
     }
 
     const meEnvelope = isRecord(mePayload) ? mePayload : {}
-    const [invitedResult, walletResult, ledgerResult, inviteResult, receiveChannelResult] = await Promise.allSettled([
+    const [invitedResult, walletResult, ledgerResult, ordersResult, inviteResult, receiveChannelResult] = await Promise.allSettled([
       this.request<unknown>('/api/users/invited'),
       this.request<unknown>('/api/family/wallet'),
       this.request<unknown>('/api/users/billing-ledger'),
+      this.request<unknown>('/api/users/orders?page=1&page_size=50'),
       this.request<unknown>('/api/users/invite-code', { method: 'POST', body: JSON.stringify({}), unwrap: false }),
       this.request<unknown>('/api/working/receive-channel'),
     ])
@@ -636,6 +670,8 @@ export class WorkingApiClient {
     const billingLedger = ledgerResult.status === 'fulfilled' && Array.isArray(ledgerResult.value)
       ? ledgerResult.value.map(normalizeLedgerEntry)
       : []
+    const ordersPayload = ordersResult.status === 'fulfilled' && isRecord(ordersResult.value) ? ordersResult.value : {}
+    const orders = Array.isArray(ordersPayload.items) ? ordersPayload.items.map(normalizeOrder) : []
     const invitePayload = inviteResult.status === 'fulfilled' && isRecord(inviteResult.value) ? inviteResult.value : {}
     const inviteData = isRecord(invitePayload.data) ? invitePayload.data : {}
     const receiveChannel = receiveChannelResult.status === 'fulfilled'
@@ -655,7 +691,10 @@ export class WorkingApiClient {
         : undefined,
       inviteLink: typeof invitePayload.invite_link === 'string' ? invitePayload.invite_link : undefined,
       members,
-      ledger: billingLedger.length > 0 ? billingLedger : familyLedger,
+      ledger: [
+        ...purchaseLedgerFromOrders(orders, user.id),
+        ...mergeSettingsLedger(familyLedger, billingLedger),
+      ].sort((left, right) => ledgerCreatedAt(right) - ledgerCreatedAt(left)),
       receiveChannel,
     }
   }

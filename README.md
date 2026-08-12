@@ -143,6 +143,14 @@ Copis 的 Agent 模式统一使用 Pi Agent Runtime，基于 `@earendil-works/pi
 
 > Pi Runtime 会为每个 Agent 会话管理底层 session，但不会删除 Copis 中已保存的消息。Pi 会桥接工作区 Skills、用户 MCP Server，以及 Copis 内置的 Automation / Collaboration 工具；不同模型供应商对工具调用、推理和上下文长度的支持仍可能不同。
 
+### Automation 运行时
+
+定时任务由本地 Rust HTTP API 统一调度和执行：它负责 30 秒轮询、立即运行、Pi Worker 生命周期、一次运行记录、下一次触发时间与连续失败自动暂停。Electron 只通过私有桥接提供加密渠道凭据、会话 JSONL 持久化、界面事件和通知，不再拥有独立的定时器或后台 Agent 执行链。
+
+每个 Pi Worker 在启动时由 Rust 签发一次受限的 Automation capability，仅可访问当前 Rust API 进程中的任务工具端点；Worker 结束或启动失败后立即撤销。这样任务工具、能力授权与实际执行始终在同一个 Rust 进程中，避免开发版与已安装应用端口不同导致 capability 失效。
+
+恢复应用时，错过的循环任务会被顺延到下一个完整周期；错过的一次性任务仍会保留为待执行。连续失败 5 次的任务会自动暂停，运行历史保存在 `~/.copis/automations.json`。
+
 每个 Pi Agent 会话默认内置 [pi-web-access](https://github.com/nicobailon/pi-web-access) 扩展，无需手动 `pi install`，即可使用 `web_search`（联网搜索）、`fetch_content`（网页抓取）、`source_check`（来源核查）和 `get_search_content`（结果检索）工具。搜索供应商优先复用当前 OpenAI 渠道或环境变量中的 API Key（如 `OPENAI_API_KEY`、`TAVILY_API_KEY`、`EXA_API_KEY`），也可通过 `~/.pi/web-search.json` 配置；未配置任何供应商时，工具会返回配置引导而非报错中断。
 
 > **Kimi Coding Plan 用户须知**：Copis 已获得 Kimi 官方白名单支持，使用 Copis 连接 Kimi Coding Plan 不会触发第三方客户端封号策略，可放心使用。

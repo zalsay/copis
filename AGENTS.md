@@ -429,6 +429,13 @@ bun test apps/electron/src/main/lib/web-tab-session-service.test.ts
 - 正式包找不到当前平台的组合二进制时，应报告“未找到打包的 Copis runtime，请重新安装或重新构建应用”，不能退回 Node runtime 并产生误导性的 Node 缺失错误。
 - 开发环境不要求生成 `copis.exe`：`bun run dev` 使用 `dist/pi-rpc-worker.cjs`，通过系统 Bun 或 `vendor/bun` 启动，并设置 `COPIS_PI_RPC_USE_SYSTEM_RUNTIME=1`；开发构建可以继续使用 JS Worker 热重载路径。
 
+**Automation 与 Pi Worker 归属（必须遵守）：**
+- Rust HTTP API 是 Automation 的唯一执行方：负责 30 秒 tick、手动立即运行、同任务运行保留、Pi Worker 启动/结束、`automations.json` 运行历史与下次运行时间、连续失败 5 次自动暂停，以及 Worker Automation capability 的签发和撤销。
+- Electron 不得再用 `setInterval`、`runAgentHeadless()` 或 Electron 侧 Worker 管理执行 Automation；仅可通过私有 stdio business bridge 为 Rust 提供加密后的渠道凭据、会话配置与 JSONL/元数据持久化，并转发渲染事件和通知。
+- Automation Worker 的 capability 只能由 Rust 在 Worker 启动前注入，并必须在启动失败的所有路径和 `PiWorkerManager.finish()` 中撤销；不得让 capability 跨进程、跨会话或 Worker 生命周期复用。
+- 应用恢复时，过期的 `interval`、`daily`、`weekly`、`monthly` 任务应顺延到下一次完整周期，避免集中补跑；过期的 `once` 任务仍保持待执行。
+- Rust 通过 `/api/internal/automation/prepare-run`、`event`、`run-finished` 调用 Electron 私有桥接。`event` 必须进入 `AgentEventBus`，`run-finished` 必须发送标准 `STREAM_COMPLETE`，不能单独实现另一套渲染状态机。
+
 **工作区项目 Node runtime 要求（必须遵守）：**
 - `node-runtime` 功能模块只服务工作区内用户项目的 `npm install`、`npm run dev` 等项目命令，不替代 Pi Worker 的 Bun 组合运行时。
 - Electron 启动 Rust HTTP API 时，将已激活的 Node runtime 根目录通过 `COPIS_RUNTIME_ROOT` 注入；Rust 项目启动器必须从该目录解析绝对的 `node` / `npm` 路径，不能依赖用户系统 PATH 中是否安装 Node.js。

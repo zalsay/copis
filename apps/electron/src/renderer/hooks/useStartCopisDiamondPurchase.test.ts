@@ -16,6 +16,8 @@ describe('Copis 钻石购买对话', () => {
     expect(prompt).toContain('copis_working_payment 的 packages.list')
     expect(prompt).toContain('alipay_bot 的 wallet.check')
     expect(prompt).toContain('alipay-payment-skill')
+    expect(prompt).toContain('orders.pending')
+    expect(prompt).toContain('优先继续支付，不能创建新订单')
     expect(prompt).toContain('两项检查都通过后才使用 order.create')
     expect(prompt).toContain('生成并显示支付二维码')
     expect(prompt).toContain('等待支付结果自动确认并完成到账')

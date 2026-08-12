@@ -22,6 +22,7 @@ import type {
   AgentSaveWorkspaceFilesInput,
   AgentSavedFile,
   AgentStreamEvent,
+  AgentStreamCompletePayload,
   AgentStreamPayload,
   AgentQueueMessageInput,
   CopisPermissionMode,
@@ -101,6 +102,54 @@ function isMainRendererWindow(win: BrowserWindow): boolean {
 function getMainRendererWebContents(): WebContents | null {
   const win = BrowserWindow.getAllWindows().find(isMainRendererWindow)
   return win && !win.webContents.isDestroyed() ? win.webContents : null
+}
+
+function getExternalRunWebContents(sessionId: string): WebContents | null {
+  const current = sessionWebContents.get(sessionId)
+  if (current && !current.isDestroyed()) return current
+  const fallback = getMainRendererWebContents()
+  if (fallback) registerWebContents(sessionId, fallback)
+  return fallback
+}
+
+/** Rust 管理 Worker 生命周期时，仍使用统一的 Agent 事件与完成通知通道。 */
+export function forwardExternalAgentRunStarted(input: {
+  sessionId: string
+  startedAt: number
+  triggeredBy: AgentSendInput['triggeredBy']
+}): void {
+  getExternalRunWebContents(input.sessionId)
+  const session = getAgentSessionMeta(input.sessionId)
+  eventBus.emit(input.sessionId, {
+    kind: 'copis_event',
+    event: {
+      type: 'external_run_started',
+      source: 'bridge',
+      sessionId: input.sessionId,
+      title: session?.title,
+      workspaceId: session?.workspaceId,
+      modelId: session?.modelId,
+      startedAt: input.startedAt,
+      ...(session ? { session } : {}),
+    },
+  })
+}
+
+export function forwardExternalAgentEvent(sessionId: string, payload: AgentStreamPayload): void {
+  getExternalRunWebContents(sessionId)
+  eventBus.emit(sessionId, payload)
+}
+
+export function forwardExternalAgentError(sessionId: string, error: string): void {
+  const wc = getExternalRunWebContents(sessionId)
+  if (!wc || wc.isDestroyed()) return
+  wc.send(AGENT_IPC_CHANNELS.STREAM_ERROR, { sessionId, error })
+}
+
+export function forwardExternalAgentComplete(payload: AgentStreamCompletePayload): void {
+  const wc = getExternalRunWebContents(payload.sessionId)
+  if (wc && !wc.isDestroyed()) sendAgentStreamComplete(wc, payload, payload)
+  sessionWebContents.delete(payload.sessionId)
 }
 
 // ===== EventBus IPC 转发中间件 =====

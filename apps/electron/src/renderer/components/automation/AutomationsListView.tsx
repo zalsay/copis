@@ -72,6 +72,12 @@ export function AutomationsListView(): React.ReactElement {
     setAutomations(list)
   }, [setAutomations])
 
+  React.useEffect(() => {
+    void refreshList().catch((error) => {
+      console.error('[定时任务] 刷新失败:', error)
+    })
+  }, [refreshList])
+
   const current = automations.filter((a) => a.active)
   // 已完成（once 跑完 / 跑满 maxRuns 自动停用，带 completedAt）单独成组，区别于用户手动暂停 / 草稿
   const completed = automations.filter((a) => !a.active && a.completedAt)

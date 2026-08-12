@@ -12,6 +12,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 mod agent_files;
 mod alipay_bot;
 mod automation;
+mod automation_scheduler;
 mod expert_teams;
 mod memory;
 mod payment_capability;
@@ -25,6 +26,7 @@ mod workspace_mcp;
 mod workspace_skills;
 
 use automation::{AutomationCreateInput, AutomationError, AutomationRunInput, AutomationStore, AutomationUpdateInput};
+use automation_scheduler::AutomationScheduler;
 use expert_teams::{ExpertTeamError, ExpertTeamStore};
 use memory::{
     MemoryCaptureBatchInput, MemoryCaptureInput, MemoryContextInput, MemoryError,
@@ -1073,6 +1075,7 @@ fn handle_connection(
     workspace_dev_store: Arc<WorkspaceDevStore>,
     workspace_skills_store: Arc<WorkspaceSkillsStore>,
     automation_store: Arc<AutomationStore>,
+    automation_scheduler: Arc<AutomationScheduler>,
 ) {
     let _ = stream.set_read_timeout(Some(connection_read_timeout()));
     let request = match read_http_request(&mut stream) {
@@ -1151,7 +1154,7 @@ fn handle_connection(
     }
 
     if path == "/api/automations" || path.starts_with("/api/automations/") {
-        handle_automation_route(&mut stream, &request, origin, &automation_store);
+        handle_automation_route(&mut stream, &request, origin, &automation_store, &automation_scheduler);
         let _ = stream.shutdown(Shutdown::Both);
         return;
     }
@@ -1623,7 +1626,13 @@ fn handle_workspace_mcp_route(
     }
 }
 
-fn handle_automation_route(stream: &mut TcpStream, request: &HttpRequest, origin: Option<&str>, store: &AutomationStore) {
+fn handle_automation_route(
+    stream: &mut TcpStream,
+    request: &HttpRequest,
+    origin: Option<&str>,
+    store: &AutomationStore,
+    scheduler: &Arc<AutomationScheduler>,
+) {
     let path = request.target.split('?').next().unwrap_or(&request.target);
     let parts: Vec<&str> = path.split('/').filter(|part| !part.is_empty()).collect();
     let result = match (request.method.as_str(), parts.as_slice()) {
@@ -1647,6 +1656,9 @@ fn handle_automation_route(stream: &mut TcpStream, request: &HttpRequest, origin
             Some(session_id) => store.set_last_session_id(id, &session_id).map(|_| json!({ "updated": true })),
             None => Err(AutomationError::Validation("sessionId 参数不正确".to_string())),
         },
+        ("POST", ["api", "automations", id, "run"]) => scheduler
+            .run_now(id)
+            .map(|started| json!({ "started": started })),
         _ => Err(AutomationError::NotFound),
     };
     send_automation_result(stream, result, origin);
@@ -1683,13 +1695,12 @@ fn handle_internal_automation_tool(stream: &mut TcpStream, request: &HttpRequest
             || Err(AutomationError::Validation("id 必填".to_string())),
             |id| store.get(id).and_then(|automation| automation.ok_or(AutomationError::NotFound)).map(|automation| json!({ "automation": automation })),
         ),
-        "create" => serde_json::from_value::<AutomationCreateInput>(input).map_err(|_| AutomationError::Validation("创建定时任务参数不正确".to_string())).and_then(|mut create| {
-            create.channel_id = context.channel_id;
-            create.model_id = context.model_id;
-            create.workspace_id = context.workspace_id;
-            create.source_session_id = Some(session_id.to_string());
-            store.create_for_session(create, &context.triggered_by).map(|automation| json!({ "automation": automation }))
-        }),
+        "create" => bind_automation_create_input(input, &context, session_id)
+            .and_then(|create| {
+                store
+                    .create_for_session(create, &context.triggered_by)
+                    .map(|automation| json!({ "automation": automation }))
+            }),
         "update" => {
             let id = input.get("id").and_then(Value::as_str).or_else(|| {
                 (context.triggered_by == "automation").then(|| context.source_automation_id.as_deref()).flatten()
@@ -1703,6 +1714,24 @@ fn handle_internal_automation_tool(stream: &mut TcpStream, request: &HttpRequest
         _ => Err(AutomationError::NotFound),
     };
     send_automation_result(stream, result, origin);
+}
+
+/// Automation 工具不能从模型输入读取渠道、模型和工作区归属；这些字段只由 capability 绑定。
+/// 必须在反序列化前注入，否则工具 schema 省略 channelId 时会被必填 DTO 提前拒绝。
+fn bind_automation_create_input(
+    mut input: Value,
+    context: &automation::WorkerAutomationContext,
+    session_id: &str,
+) -> Result<AutomationCreateInput, AutomationError> {
+    let object = input
+        .as_object_mut()
+        .ok_or_else(|| AutomationError::Validation("创建定时任务参数不正确".to_string()))?;
+    object.insert("channelId".to_string(), json!(context.channel_id));
+    object.insert("modelId".to_string(), json!(context.model_id));
+    object.insert("workspaceId".to_string(), json!(context.workspace_id));
+    object.insert("sourceSessionId".to_string(), json!(session_id));
+    serde_json::from_value::<AutomationCreateInput>(input)
+        .map_err(|_| AutomationError::Validation("创建定时任务参数不正确".to_string()))
 }
 
 fn send_automation_result(stream: &mut TcpStream, result: Result<Value, AutomationError>, origin: Option<&str>) {
@@ -2385,7 +2414,7 @@ fn build_prepare_body(request: &HttpRequest, session_id: &str) -> Result<Vec<u8>
     serde_json::to_vec(&value).map_err(|error| format!("请求体序列化失败: {}", error))
 }
 
-fn send_internal_request(
+pub(crate) fn send_internal_request(
     bridge: &Arc<Bridge>,
     target: &str,
     body: Vec<u8>,
@@ -2398,7 +2427,7 @@ fn send_internal_request(
     })
 }
 
-fn persist_worker_event(bridge: &Arc<Bridge>, frame: &Value) -> Result<(), String> {
+pub(crate) fn persist_worker_event(bridge: &Arc<Bridge>, frame: &Value) -> Result<(), String> {
     let payload = frame.get("payload").and_then(Value::as_object);
     if payload
         .and_then(|value| value.get("kind"))
@@ -2435,13 +2464,13 @@ fn persist_worker_event(bridge: &Arc<Bridge>, frame: &Value) -> Result<(), Strin
     )?)
 }
 
-fn persist_worker_frame(bridge: &Arc<Bridge>, target: &str, frame: &Value) -> Result<(), String> {
+pub(crate) fn persist_worker_frame(bridge: &Arc<Bridge>, target: &str, frame: &Value) -> Result<(), String> {
     let body =
         serde_json::to_vec(frame).map_err(|error| format!("Agent RPC 帧序列化失败: {}", error))?;
     ensure_internal_success(send_internal_request(bridge, target, body)?)
 }
 
-fn finalize_worker_run(bridge: &Arc<Bridge>, frame: &Value) -> Result<Option<String>, String> {
+pub(crate) fn finalize_worker_run(bridge: &Arc<Bridge>, frame: &Value) -> Result<Option<String>, String> {
     let session_id = frame
         .get("sessionId")
         .and_then(Value::as_str)
@@ -2472,11 +2501,11 @@ fn finalize_worker_run(bridge: &Arc<Bridge>, frame: &Value) -> Result<Option<Str
     ensure_internal_success_with_body(response)
 }
 
-fn ensure_internal_success(response: BridgeResponse) -> Result<(), String> {
+pub(crate) fn ensure_internal_success(response: BridgeResponse) -> Result<(), String> {
     ensure_internal_success_with_body(response).map(|_| ())
 }
 
-fn ensure_internal_success_with_body(response: BridgeResponse) -> Result<Option<String>, String> {
+pub(crate) fn ensure_internal_success_with_body(response: BridgeResponse) -> Result<Option<String>, String> {
     if !(200..300).contains(&response.status) {
         return Err(response
             .body
@@ -2722,6 +2751,12 @@ fn main() {
     let workspace_dev_store = Arc::new(WorkspaceDevStore::open(resolve_config_directory()));
     let workspace_skills_store = Arc::new(WorkspaceSkillsStore::open(resolve_config_directory()));
     let automation_store = Arc::new(AutomationStore::open(resolve_config_directory()));
+    let automation_scheduler = Arc::new(AutomationScheduler::new(
+        Arc::clone(&automation_store),
+        Arc::clone(&bridge),
+        Arc::clone(&workers),
+    ));
+    automation_scheduler.start();
     let response_bridge = Arc::clone(&bridge);
     thread::spawn(move || read_bridge_responses(response_bridge));
 
@@ -2746,6 +2781,7 @@ fn main() {
                 let connection_workspace_dev = Arc::clone(&workspace_dev_store);
                 let connection_workspace_skills = Arc::clone(&workspace_skills_store);
                 let connection_automation = Arc::clone(&automation_store);
+                let connection_automation_scheduler = Arc::clone(&automation_scheduler);
                 let connection_active = Arc::clone(&active_connections);
                 thread::spawn(move || {
                     let _guard = ConnectionCountGuard(connection_active);
@@ -2762,6 +2798,7 @@ fn main() {
                         connection_workspace_dev,
                         connection_workspace_skills,
                         connection_automation,
+                        connection_automation_scheduler,
                     )
                 });
             }
@@ -2779,3 +2816,7 @@ mod tests;
 #[cfg(test)]
 #[path = "automation_test.rs"]
 mod automation_test;
+
+#[cfg(test)]
+#[path = "automation_scheduler_test.rs"]
+mod automation_scheduler_test;

@@ -13,6 +13,7 @@ import type {
 import {
   closeWorkingPaymentAtom,
   isWorkingPaymentReady,
+  isWorkingPendingPaymentReusable,
   phaseForWorkingPaymentStatus,
   requestWorkingPaymentRefreshAtom,
   type WorkingPaymentState,
@@ -95,7 +96,7 @@ export function CopisWorkingPaymentModal({ vipStatus, onStartDiamondPurchase }: 
 
         const pending = await window.electronAPI.getPendingWorkingDiamondPurchase()
         if (!isCurrentOperation(operationId)) return
-        if (pending) {
+        if (pending && isWorkingPendingPaymentReusable(pending.payment)) {
           updatePaymentState(operationId, (current) => ({
             ...current,
             phase: 'pending',
@@ -224,8 +225,8 @@ export function CopisWorkingPaymentModal({ vipStatus, onStartDiamondPurchase }: 
   const handleContinuePending = (): void => {
     const pending = paymentState.pendingPurchase
     if (!pending || isBusy) return
-    if (!hasPaymentPresentation(pending.payment)) {
-      setPaymentState((current) => ({ ...current, phase: 'error', error: '支付二维码读取失败，请关闭后从订单列表重试' }))
+    if (!isWorkingPendingPaymentReusable(pending.payment)) {
+      setPaymentState((current) => ({ ...current, phase: 'error', error: '待支付订单已失效，请重新选择套餐。' }))
       return
     }
     setPaymentState((current) => ({

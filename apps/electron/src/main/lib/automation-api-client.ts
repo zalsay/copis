@@ -1,5 +1,5 @@
 import type { Automation, AutomationRun, CreateAutomationInput, UpdateAutomationInput } from '@copis/shared'
-import { HTTP_API_HOST, HTTP_API_PORT } from './http-api-server'
+import { COPIS_HTTP_API_HOST, resolveCopisHttpApiPort } from '@copis/shared/config'
 
 interface AutomationApiErrorPayload {
   error?: unknown
@@ -36,9 +36,18 @@ export interface AutomationApiClient {
   appendRun(id: string, run: AutomationRun): Promise<Automation>
   setNextRunAt(id: string, nextRunAt: number): Promise<void>
   setLastSessionId(id: string, sessionId: string): Promise<void>
+  runNow(id: string): Promise<boolean>
 }
 
-export function createAutomationApiClient(baseUrl = `http://${HTTP_API_HOST}:${HTTP_API_PORT}`): AutomationApiClient {
+function resolveAutomationApiBaseUrl(): string {
+  const port = resolveCopisHttpApiPort({
+    configuredPort: process.env.COPIS_HTTP_API_PORT,
+    isPackaged: process.env.COPIS_PACKAGED === '1',
+  })
+  return `http://${COPIS_HTTP_API_HOST}:${port}`
+}
+
+export function createAutomationApiClient(baseUrl = resolveAutomationApiBaseUrl()): AutomationApiClient {
   async function request<T>(path: string, init?: RequestInit): Promise<T> {
     let response: Response
     try {
@@ -87,6 +96,10 @@ export function createAutomationApiClient(baseUrl = `http://${HTTP_API_HOST}:${H
     },
     async setLastSessionId(id, sessionId) {
       await jsonRequest(`/api/automations/${encodeURIComponent(id)}/last-session`, 'POST', { sessionId })
+    },
+    async runNow(id) {
+      const response = await jsonRequest<{ started?: unknown }>(`/api/automations/${encodeURIComponent(id)}/run`, 'POST', {})
+      return response.started === true
     },
   }
 }

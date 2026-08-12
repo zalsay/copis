@@ -279,46 +279,60 @@ fn desktop_diamond_payment_is_automatically_checked_by_rust_and_never_calls_lega
     let backend = std::thread::spawn(move || {
         let expected = [
             (
+                "GET",
+                "/api/pay/alipay/diamond-purchases/pending",
+                "Bearer payment-token",
+                None,
+                r#"{"data":null}"#,
+            ),
+            (
+                "POST",
                 "/api/internal/working-desktop/payment-capabilities",
                 "Bearer payment-token",
-                br#"{"flow_kind":"diamond"}"#.as_slice(),
+                Some(br#"{"flow_kind":"diamond"}"#.as_slice()),
                 r#"{"data":{"capability":"wdpc_test","flow_kind":"diamond"}}"#,
             ),
             (
+                "POST",
                 "/api/internal/working-desktop/alipay/diamond/prepare",
                 "Bearer wdpc_test",
-                br#"{"package_id":7}"#.as_slice(),
+                Some(br#"{"package_id":7}"#.as_slice()),
                 r#"{"data":{"pending_existing":false,"payment":{"payment_id":"pay-7","out_trade_no":"ORDER-7","status":"created","amount":"9.90","currency":"CNY"},"package":{"id":7,"amount":"9.90","amount_cents":990,"diamonds":100,"currency":"CNY"},"payment_needed":{"protocol":"402"}}}"#,
             ),
             (
+                "POST",
                 "/api/internal/working-desktop/alipay/payment-context",
                 "Bearer wdpc_test",
-                br#"{"payment_id":"pay-7"}"#.as_slice(),
+                Some(br#"{"payment_id":"pay-7"}"#.as_slice()),
                 r#"{"data":{"payment_id":"pay-7","session_id":"pay-7","payment_needed":{"protocol":"402"},"resource_url":"https://seller.example.test/resource","method":"POST","data":"{}","headers":{"Content-Type":"application/json","X-Working-Desktop-Payment-Resource":"wdpr-test"}}}"#,
             ),
             (
+                "POST",
                 "/api/internal/working-desktop/alipay/payment-started",
                 "Bearer wdpc_test",
-                br#"{"payment_id":"pay-7","trade_no":"trade-7","cashier_url":"https://cashier.example.test/pay","qrcode_image":"data:image/png;base64,iVBORw0KGgo=","qrcode_mime_type":"image/png","bot_result":{"action":"payment.start","ok":true}}"#.as_slice(),
+                Some(br#"{"payment_id":"pay-7","trade_no":"trade-7","cashier_url":"https://cashier.example.test/pay","qrcode_image":"data:image/png;base64,iVBORw0KGgo=","qrcode_mime_type":"image/png","bot_result":{"action":"payment.start","ok":true}}"#.as_slice()),
                 r#"{"data":{"payment":{"payment_id":"pay-7","out_trade_no":"ORDER-7","trade_no":"trade-7","status":"pending_user_pay","amount":"9.90","currency":"CNY","cashier_url":"https://cashier.example.test/pay"}}}"#,
             ),
             (
+                "POST",
                 "/api/internal/working-desktop/alipay/payment-finalize",
                 "Bearer wdpc_test",
-                br#"{"payment_id":"pay-7","action":"check","check_result":{"status":"paid","trade_no":"trade-7","payment_proof":"proof-7","client_session":"client-7"}}"#.as_slice(),
+                Some(br#"{"payment_id":"pay-7","action":"check","check_result":{"status":"paid","trade_no":"trade-7","payment_proof":"proof-7","client_session":"client-7"}}"#.as_slice()),
                 r#"{"data":{"payment":{"payment_id":"pay-7","out_trade_no":"ORDER-7","trade_no":"trade-7","status":"resource_ready","amount":"9.90","currency":"CNY","cashier_url":"https://cashier.example.test/pay"}}}"#,
             ),
         ];
-        for (path_expected, authorization_expected, body_expected, response) in expected {
+        for (method_expected, path_expected, authorization_expected, body_expected, response) in expected {
             let (mut stream, _) = listener.accept().unwrap();
             let (method, path, authorization, body) = read_request(&mut stream);
-            assert_eq!(method, "POST");
+            assert_eq!(method, method_expected);
             assert_eq!(path, path_expected);
             assert_eq!(authorization, authorization_expected);
-            assert_eq!(
-                serde_json::from_slice::<serde_json::Value>(&body).unwrap(),
-                serde_json::from_slice::<serde_json::Value>(body_expected).unwrap(),
-            );
+            if let Some(body_expected) = body_expected {
+                assert_eq!(
+                    serde_json::from_slice::<serde_json::Value>(&body).unwrap(),
+                    serde_json::from_slice::<serde_json::Value>(body_expected).unwrap(),
+                );
+            }
             respond(&mut stream, response);
         }
     });
@@ -378,6 +392,201 @@ fn desktop_diamond_payment_is_automatically_checked_by_rust_and_never_calls_lega
     assert_eq!(calls[1].1["headers"][0]["name"], "Content-Type");
     assert!(calls[1].1.get("paymentNeeded").is_none());
     assert!(created_body.get("paymentProof").is_none());
+}
+
+#[test]
+fn desktop_diamond_payment_reuses_a_pending_order_without_starting_a_second_payment() {
+    let _env_guard = backend_env_test_lock().lock().unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let backend = std::thread::spawn(move || {
+        let expected = [
+            (
+                "GET",
+                "/api/pay/alipay/diamond-purchases/pending",
+                "Bearer payment-token",
+                None,
+                r#"{"data":{"payment":{"payment_id":"pay-existing","status":"pending_user_pay","trade_no":"trade-existing","qrcode_image":"data:image/png;base64,iVBORw0KGgo="},"package":{"id":7,"amount":"9.90","amount_cents":990,"diamonds":100,"currency":"CNY"}}}"#,
+            ),
+            (
+                "POST",
+                "/api/internal/working-desktop/payment-capabilities",
+                "Bearer payment-token",
+                Some(br#"{"flow_kind":"diamond"}"#.as_slice()),
+                r#"{"data":{"capability":"wdpc_existing","flow_kind":"diamond"}}"#,
+            ),
+            (
+                "POST",
+                "/api/internal/working-desktop/alipay/diamond/prepare",
+                "Bearer wdpc_existing",
+                Some(br#"{"package_id":7}"#.as_slice()),
+                r#"{"data":{"pending_existing":true,"payment":{"payment_id":"pay-existing","status":"pending_user_pay"},"package":{"id":7,"amount":"9.90","amount_cents":990,"diamonds":100,"currency":"CNY"}}}"#,
+            ),
+            (
+                "POST",
+                "/api/internal/working-desktop/alipay/payment-context",
+                "Bearer wdpc_existing",
+                Some(br#"{"payment_id":"pay-existing"}"#.as_slice()),
+                r#"{"data":{"payment_id":"pay-existing","payment_needed":{"protocol":"402"},"resource_url":"https://seller.example.test/resource","method":"POST","data":"{}","headers":{"Content-Type":"application/json"}}}"#,
+            ),
+        ];
+        for (method_expected, path_expected, authorization_expected, body_expected, response) in expected {
+            let (mut stream, _) = listener.accept().unwrap();
+            let (method, path, authorization, body) = read_request(&mut stream);
+            assert_eq!(method, method_expected);
+            assert_eq!(path, path_expected);
+            assert_eq!(authorization, authorization_expected);
+            if let Some(body_expected) = body_expected {
+                assert_eq!(
+                    serde_json::from_slice::<serde_json::Value>(&body).unwrap(),
+                    serde_json::from_slice::<serde_json::Value>(body_expected).unwrap(),
+                );
+            }
+            respond(&mut stream, response);
+        }
+    });
+
+    let previous_backend = std::env::var("COPIS_BACKEND_URL").ok();
+    std::env::set_var("COPIS_BACKEND_URL", format!("http://127.0.0.1:{}", port));
+    let fixture = PaymentWorkspaceFixture::new();
+    let worker = FakePaymentWorker::new(vec![]);
+    let payment_state = WorkingPaymentState::new();
+    let state = SkillMarketState::new(Some("payment-token".to_string()));
+    state.set_working_auth(Some("payment-token".to_string()), Some("user-7".to_string()));
+
+    let result = handle_request(
+        &state,
+        &payment_state,
+        &worker,
+        &fixture.workspace,
+        "POST",
+        "/api/working/diamond-purchases",
+        br#"{"packageId":7}"#,
+    )
+    .unwrap();
+
+    backend.join().unwrap();
+    restore_backend_url(previous_backend);
+
+    let body = result.body.unwrap();
+    assert_eq!(body["pending_existing"], true);
+    assert_eq!(body["payment"]["payment_id"], "pay-existing");
+    assert_eq!(body["payment"]["qrcode_image"], "data:image/png;base64,iVBORw0KGgo=");
+    assert!(payment_state.flow("pay-existing").is_some());
+    assert!(worker.calls.lock().unwrap().is_empty());
+}
+
+#[test]
+fn desktop_diamond_payment_replaces_an_unusable_pending_order_before_starting_a_new_payment() {
+    let _env_guard = backend_env_test_lock().lock().unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let backend = std::thread::spawn(move || {
+        let expected = [
+            (
+                "GET",
+                "/api/pay/alipay/diamond-purchases/pending",
+                "Bearer payment-token",
+                None,
+                r#"{"data":{"payment":{"payment_id":"pay-old","status":"pending_user_pay"},"package":{"id":7,"amount":"9.90","amount_cents":990,"diamonds":100,"currency":"CNY"}}}"#,
+            ),
+            (
+                "POST",
+                "/api/internal/working-desktop/payment-capabilities",
+                "Bearer payment-token",
+                Some(br#"{"flow_kind":"diamond"}"#.as_slice()),
+                r#"{"data":{"capability":"wdpc_old","flow_kind":"diamond"}}"#,
+            ),
+            (
+                "POST",
+                "/api/internal/working-desktop/alipay/diamond/prepare",
+                "Bearer wdpc_old",
+                Some(br#"{"package_id":7}"#.as_slice()),
+                r#"{"data":{"pending_existing":true,"payment":{"payment_id":"pay-old","status":"pending_user_pay"},"package":{"id":7,"amount":"9.90","amount_cents":990,"diamonds":100,"currency":"CNY"}}}"#,
+            ),
+            (
+                "POST",
+                "/api/internal/working-desktop/alipay/payment-finalize",
+                "Bearer wdpc_old",
+                Some(br#"{"payment_id":"pay-old","action":"cancel"}"#.as_slice()),
+                r#"{"data":{"payment":{"payment_id":"pay-old","status":"cancelled"}}}"#,
+            ),
+            (
+                "POST",
+                "/api/internal/working-desktop/payment-capabilities",
+                "Bearer payment-token",
+                Some(br#"{"flow_kind":"diamond"}"#.as_slice()),
+                r#"{"data":{"capability":"wdpc_new","flow_kind":"diamond"}}"#,
+            ),
+            (
+                "POST",
+                "/api/internal/working-desktop/alipay/diamond/prepare",
+                "Bearer wdpc_new",
+                Some(br#"{"package_id":7}"#.as_slice()),
+                r#"{"data":{"pending_existing":false,"payment":{"payment_id":"pay-new","status":"created"},"package":{"id":7,"amount":"9.90","amount_cents":990,"diamonds":100,"currency":"CNY"},"payment_needed":{"protocol":"402"}}}"#,
+            ),
+            (
+                "POST",
+                "/api/internal/working-desktop/alipay/payment-context",
+                "Bearer wdpc_new",
+                Some(br#"{"payment_id":"pay-new"}"#.as_slice()),
+                r#"{"data":{"payment_id":"pay-new","payment_needed":{"protocol":"402"},"resource_url":"https://seller.example.test/resource","method":"POST","data":"{}","headers":{"Content-Type":"application/json"}}}"#,
+            ),
+            (
+                "POST",
+                "/api/internal/working-desktop/alipay/payment-started",
+                "Bearer wdpc_new",
+                Some(br#"{"payment_id":"pay-new","trade_no":"trade-new","qrcode_image":"data:image/png;base64,iVBORw0KGgo=","qrcode_mime_type":"image/png","bot_result":{"action":"payment.start","ok":true}}"#.as_slice()),
+                r#"{"data":{"payment":{"payment_id":"pay-new","status":"pending_user_pay","qrcode_image":"data:image/png;base64,iVBORw0KGgo="}}}"#,
+            ),
+        ];
+        for (method_expected, path_expected, authorization_expected, body_expected, response) in expected {
+            let (mut stream, _) = listener.accept().unwrap();
+            let (method, path, authorization, body) = read_request(&mut stream);
+            assert_eq!(method, method_expected);
+            assert_eq!(path, path_expected);
+            assert_eq!(authorization, authorization_expected);
+            if let Some(body_expected) = body_expected {
+                assert_eq!(
+                    serde_json::from_slice::<serde_json::Value>(&body).unwrap(),
+                    serde_json::from_slice::<serde_json::Value>(body_expected).unwrap(),
+                );
+            }
+            respond(&mut stream, response);
+        }
+    });
+
+    let previous_backend = std::env::var("COPIS_BACKEND_URL").ok();
+    std::env::set_var("COPIS_BACKEND_URL", format!("http://127.0.0.1:{}", port));
+    let fixture = PaymentWorkspaceFixture::new();
+    let worker = FakePaymentWorker::new(vec![Ok(json!({
+        "ok": true,
+        "tradeNo": "trade-new",
+        "qrCodeImage": "data:image/png;base64,iVBORw0KGgo=",
+        "qrCodeMimeType": "image/png",
+    }))]);
+    let payment_state = WorkingPaymentState::new();
+    let state = SkillMarketState::new(Some("payment-token".to_string()));
+    state.set_working_auth(Some("payment-token".to_string()), Some("user-7".to_string()));
+
+    let result = handle_request(
+        &state,
+        &payment_state,
+        &worker,
+        &fixture.workspace,
+        "POST",
+        "/api/working/diamond-purchases",
+        br#"{"packageId":7}"#,
+    )
+    .unwrap();
+
+    backend.join().unwrap();
+    restore_backend_url(previous_backend);
+
+    assert_eq!(result.body.unwrap()["payment"]["payment_id"], "pay-new");
+    let calls = worker.calls.lock().unwrap();
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].0, PaymentWorkerAction::PaymentStart);
 }
 
 #[test]

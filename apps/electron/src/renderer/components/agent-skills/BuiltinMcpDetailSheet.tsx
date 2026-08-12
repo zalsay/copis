@@ -34,8 +34,8 @@ interface BuiltinMcpConfigInfo {
 function getConfigInfo(server: BuiltinMcpServerSummary): BuiltinMcpConfigInfo {
   if (server.id === 'nano-banana') {
     return {
-      source: 'Copis 后端 / edu-api',
-      description: '图片生成与计费由 Copis 后端（edu-api）提供，登录 Copis Working 后即可使用，无需填写本地凭据。',
+      source: 'Copis 内置服务',
+      description: '登录 Copis Working 后即可使用图片生成功能，无需额外配置。',
     }
   }
   if (server.id === 'collaboration') {

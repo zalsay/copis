@@ -14,6 +14,7 @@ import {
   type AgentSendInput,
   type AgentSessionMeta,
   type AgentWorkspace,
+  type Automation,
   type CopisPermissionMode,
   type MemoryPolicy,
   type ProviderType,
@@ -32,11 +33,13 @@ import {
 import { getWorkingApiClient } from './working-api-service'
 import {
   appendSDKMessages,
+  createAgentSession,
   getAgentSessionMeta,
   resolveAgentCwd,
   updateAgentSessionMeta,
   getAgentSessionSDKMessages,
 } from './agent-session-manager'
+import { getSessionContextUsageRatio } from './agent-session-usage'
 import {
   ensureAgentWorkspaceContextDir,
   getAgentWorkspace,
@@ -140,6 +143,11 @@ export interface AgentRpcInputRecord {
 export interface AgentRpcCompletionResult {
   session: AgentSessionMeta | undefined
   title?: string
+}
+
+export interface PreparedAutomationRpcRun {
+  sessionId: string
+  config: PiWorkerRunConfig
 }
 
 const pendingAgentRpcRuns = new Map<string, PendingAgentRpcRun>()
@@ -624,6 +632,71 @@ export async function prepareAgentRpcRun(input: AgentSendInput): Promise<PiWorke
     compactRequest,
   })
   return { sessionId: input.sessionId, query }
+}
+
+function isSameLocalDay(left: number, right: number): boolean {
+  const leftDate = new Date(left)
+  const rightDate = new Date(right)
+  return leftDate.getFullYear() === rightDate.getFullYear()
+    && leftDate.getMonth() === rightDate.getMonth()
+    && leftDate.getDate() === rightDate.getDate()
+}
+
+function automationContext(automation: Automation): string {
+  return `这是 Copis 定时任务「${automation.name}」的自动执行（ID: ${automation.id}）。这本身就是定时任务，不要建议用户再创建定时任务。直接执行任务即可。如发现本任务连续失败、输出价值低、频率不合适或提示词不完整，可以使用 automation 工具读取并更新当前任务。`
+}
+
+/**
+ * Rust 调度器通过私有业务桥请求一次已授权的 Pi 配置。
+ * 会话元数据与渠道凭据仍在 Electron，但 Worker 启动、调度和运行记录均由 Rust 负责。
+ */
+export async function prepareAutomationRpcRun(
+  automation: Automation,
+  runAt: number,
+): Promise<PreparedAutomationRpcRun> {
+  if (!automation.channelId || !automation.workspaceId) {
+    throw new Error('请先为该任务配置模型与项目')
+  }
+
+  let sessionId: string | undefined
+  const lastSession = automation.lastSessionId
+    ? getAgentSessionMeta(automation.lastSessionId)
+    : undefined
+  if (lastSession && !lastSession.automationGraduated) {
+    if (automation.sessionMode === 'reuse') {
+      sessionId = lastSession.id
+    } else if (automation.lastRunAt
+      && isSameLocalDay(automation.lastRunAt, runAt)) {
+      const usage = getSessionContextUsageRatio(lastSession.id)
+      if (usage === undefined || usage < 0.7) sessionId = lastSession.id
+    }
+  }
+
+  if (!sessionId) {
+    const session = createAgentSession(
+      automation.name,
+      automation.channelId,
+      automation.workspaceId,
+      automation.modelId,
+      'pi',
+    )
+    updateAgentSessionMeta(session.id, { sourceAutomationId: automation.id, agentRuntime: 'pi' })
+    sessionId = session.id
+  }
+
+  const config = await prepareAgentRpcRun({
+    sessionId,
+    userMessage: `${automation.prompt}\n<!--COPIS_SCHEDULED_RUN-->`,
+    automationContext: automationContext(automation),
+    channelId: automation.channelId,
+    ...(automation.modelId ? { modelId: automation.modelId } : {}),
+    workspaceId: automation.workspaceId,
+    agentRuntime: 'pi',
+    permissionModeOverride: 'bypassPermissions',
+    triggeredBy: 'automation',
+    startedAt: runAt,
+  })
+  return { sessionId, config }
 }
 
 export function shouldPersistAgentRpcMessage(message: SDKMessage): boolean {

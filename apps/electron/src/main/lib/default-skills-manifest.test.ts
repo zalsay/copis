@@ -161,7 +161,7 @@ describe('默认 Skills 清单', () => {
     expect(references).toContain('categories.md')
   })
 
-  test('Copis 支付 Skill 只保留四步支付流程', () => {
+  test('Copis 支付 Skill 只保留待支付恢复与四步新建流程', () => {
     const bundled = new Set(bundledSkillSlugs())
     expect(bundled.has('alipay-ai-buyer-agent')).toBe(false)
     expect(bundled.has('alipay-payment-skill')).toBe(true)
@@ -171,17 +171,19 @@ describe('默认 Skills 清单', () => {
     expect(frontmatter.get('name')).toBe('alipay-payment-skill')
     expect(frontmatter.get('displayName')).toBe('Copis 支付')
     expect(frontmatter.get('group')).toBe('系统内置')
-    expect(frontmatter.get('version')?.replace(/^['"]|['"]$/g, '')).toBe('0.0.8')
+    expect(frontmatter.get('version')?.replace(/^['"]|['"]$/g, '')).toBe('0.0.9')
 
     const content = readFileSync(join(DEFAULT_SKILLS_DIR, 'alipay-payment-skill', 'SKILL.md'), 'utf8')
-    expect(content).toContain('第一步：钱包检查')
-    expect(content).toContain('第二步：套餐复核')
-    expect(content).toContain('第三步：创建订单并显示二维码')
-    expect(content).toContain('第四步：等待支付确认')
+    expect(content).toContain('第一步：待支付订单')
+    expect(content).toContain('第二步：钱包检查')
+    expect(content).toContain('第三步：套餐复核')
+    expect(content).toContain('第四步：创建订单并显示二维码')
+    expect(content).toContain('第五步：等待支付确认')
     expect(content).toContain('alipay-authenticate-wallet')
     expect(content).toContain('copis_working_payment')
     expect(content).toContain('packages.list')
     expect(content).toContain('wallet.check')
+    expect(content).toContain('orders.pending')
     expect(content).toContain('accessUrl')
     expect(content).toContain('payment.paymentId')
     expect(content).toContain('请使用支付宝扫码完成支付，完成后我会自动为你确认到账。')

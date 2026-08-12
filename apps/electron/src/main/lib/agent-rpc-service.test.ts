@@ -22,6 +22,19 @@ mock.module('./agent-session-manager', () => ({
   },
   getAgentSessionMeta: (sessionId: string) => sessionId === rpcSession.id ? rpcSession : undefined,
   getAgentSessionSDKMessages: () => persistedRpcMessages,
+  createAgentSession: (
+    title?: string,
+    channelId?: string,
+    workspaceId?: string,
+    modelId?: string,
+  ): AgentSessionMeta => ({
+    ...rpcSession,
+    id: 'automation-session-1',
+    title: title ?? rpcSession.title,
+    channelId,
+    workspaceId,
+    modelId,
+  }),
   resolveAgentCwd: () => '/tmp/copis-agent-rpc-test/project',
   updateAgentSessionMeta: () => rpcSession,
 }))

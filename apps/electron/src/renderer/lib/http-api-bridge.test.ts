@@ -100,3 +100,48 @@ describe('浏览器模式 Working 支付 bridge', () => {
     }
   })
 })
+
+describe('浏览器模式定时任务 bridge', () => {
+  test('Given Rust 已持久化定时任务 When 初始化日程表 Then 读取 /api/automations 返回任务', async () => {
+    const runtime = globalThis as typeof globalThis & { window?: Window & typeof globalThis }
+    const previousWindow = runtime.window
+    const previousFetch = globalThis.fetch
+    const requestedPaths: string[] = []
+
+    globalThis.fetch = (async (input: RequestInfo | URL): Promise<Response> => {
+      const path = new URL(String(input), 'http://127.0.0.1:51740').pathname
+      requestedPaths.push(path)
+      if (path !== '/api/automations') return new Response('Not found', { status: 404 })
+      return new Response(JSON.stringify([{
+        id: 'daily-diamond-balance',
+        name: '每日检查钻石余额',
+        prompt: '提醒检查 Copis 钻石余额。',
+        scheduleType: 'daily',
+        intervalMinutes: 1440,
+        timeOfDay: '08:00',
+        agentRuntime: 'pi',
+        channelId: 'copis-working',
+        workspaceId: 'workspace-1',
+        active: true,
+        nextRunAt: 1_786_579_200_000,
+        createdAt: 1_786_532_749_962,
+        updatedAt: 1_786_532_749_962,
+        runCount: 0,
+        consecutiveFailures: 0,
+        runHistory: [],
+      }]))
+    }) as unknown as typeof fetch
+    runtime.window = {} as Window & typeof globalThis
+
+    try {
+      installHttpApiBridge()
+      await expect(runtime.window.electronAPI?.listAutomations()).resolves.toEqual([
+        expect.objectContaining({ id: 'daily-diamond-balance', name: '每日检查钻石余额' }),
+      ])
+      expect(requestedPaths).toEqual(['/api/automations'])
+    } finally {
+      globalThis.fetch = previousFetch
+      runtime.window = previousWindow
+    }
+  })
+})

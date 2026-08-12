@@ -27,7 +27,7 @@ export function buildCopisDiamondPurchasePrompt(packageValue: WorkingDiamondPack
     `钻石：${packageValue.diamonds}`,
     '</copis_diamond_purchase>',
     '',
-    '请调用 alipay-payment-skill，并严格按以下四步执行：1. 使用 alipay_bot 的 wallet.check 确认钱包已开通并授权。2. 使用 copis_working_payment 的 packages.list 复核套餐 ID、价格和钻石数量。3. 两项检查都通过后才使用 order.create 创建订单，生成并显示支付二维码。4. 创建成功后等待支付结果自动确认并完成到账。不要再调用其他支付动作或支付查询动作。若钱包或套餐不满足条件，停止创建订单并进入重新选择或官方钱包开通流程。',
+    '请调用 alipay-payment-skill，并严格按以下流程执行：1. 先使用 copis_working_payment 的 orders.pending 查询是否已有待支付订单；若订单可继续支付，优先继续支付，不能创建新订单。2. 没有可继续订单时，使用 alipay_bot 的 wallet.check 确认钱包已开通并授权。3. 使用 copis_working_payment 的 packages.list 复核套餐 ID、价格和钻石数量。4. 两项检查都通过后才使用 order.create 创建订单，生成并显示支付二维码。5. 创建成功后等待支付结果自动确认并完成到账。不要再调用其他支付动作或支付查询动作。若钱包或套餐不满足条件，停止创建订单并进入重新选择或官方钱包开通流程。',
   ].join('\n')
 }
 

@@ -11,9 +11,10 @@ import {
   persistAgentRpcMeta,
   prepareAgentRpcQueue,
   prepareAgentRpcRun,
+  prepareAutomationRpcRun,
 } from './agent-rpc-service'
 import { parseBrowserAgentToolRequest, parseWorkerFrame } from './agent-rpc-protocol'
-import type { BrowserAgentToolRequest } from './agent-rpc-protocol'
+import type { AgentRpcWorkerFrame, BrowserAgentToolRequest } from './agent-rpc-protocol'
 import type { BrowserAgentToolResult } from './browser-agent-tool-service'
 import { redactSensitiveLogValue, shortLogId } from './bridge-log-redaction'
 import type { AppSettings } from '../../types'
@@ -31,6 +32,8 @@ import type {
   AgentSendInput,
   AgentSessionMeta,
   AgentWorkspace,
+  Automation,
+  AutomationRun,
   FileApiContext,
   FileApiReadTextResponse,
   FileApiWriteTextRequest,
@@ -47,6 +50,14 @@ import type {
 } from '@copis/shared'
 import { fileService } from './file-service'
 import { getAgentWorkspace, getAgentWorkspaceWritableRoot } from './agent-workspace-manager'
+import { broadcastChanged as broadcastAutomationsChanged } from './automation-scheduler'
+import { notifyAutomationRunFinished } from './automation-notification-service'
+import {
+  forwardExternalAgentComplete,
+  forwardExternalAgentError,
+  forwardExternalAgentEvent,
+  forwardExternalAgentRunStarted,
+} from './agent-service'
 import type { ExpertTeamNodeSnapshot, ExpertTeamRunResult, ExpertTeamRunSnapshot } from './expert-team-runner'
 
 export const HTTP_API_HOST = '127.0.0.1'
@@ -824,6 +835,76 @@ async function handleAgentRpcInternalRequest(
   throw new HttpApiRequestError('Agent RPC 内部接口不存在', 404, 'not_found')
 }
 
+function isAutomation(value: unknown): value is Automation {
+  return isRecord(value)
+    && typeof value.id === 'string'
+    && typeof value.name === 'string'
+    && typeof value.prompt === 'string'
+    && typeof value.channelId === 'string'
+    && typeof value.workspaceId === 'string'
+    && Array.isArray(value.runHistory)
+}
+
+function broadcastAutomationAgentFrame(frame: AgentRpcWorkerFrame): void {
+  if (frame.type === 'event') {
+    forwardExternalAgentEvent(frame.sessionId, frame.payload)
+  } else if ((frame.type === 'error' || frame.type === 'fatal') && frame.sessionId) {
+    forwardExternalAgentError(frame.sessionId, frame.error)
+  }
+}
+
+async function handleAutomationInternalRequest(
+  request: HttpApiRequest,
+  segments: string[],
+): Promise<HttpApiResponse> {
+  if (request.method !== 'POST' || segments.length !== 4) {
+    throw new HttpApiRequestError('定时任务内部接口不存在', 404, 'not_found')
+  }
+  const body = requireRecord(await readJsonBody(request))
+  const action = segments[3]
+  if (action === 'prepare-run') {
+    const automation = body.automation
+    const runAt = body.runAt
+    if (!isAutomation(automation) || typeof runAt !== 'number' || !Number.isFinite(runAt)) {
+      throw new HttpApiRequestError('定时任务执行配置不正确', 400, 'invalid_request')
+    }
+    const prepared = await prepareAutomationRpcRun(automation, runAt)
+    forwardExternalAgentRunStarted({ sessionId: prepared.sessionId, startedAt: runAt, triggeredBy: 'automation' })
+    return { status: 200, body: prepared }
+  }
+  if (action === 'event') {
+    const frame = parseWorkerFrame(JSON.stringify(body))
+    if (!frame) throw new HttpApiRequestError('定时任务事件帧不正确', 400, 'invalid_request')
+    broadcastAutomationAgentFrame(frame)
+    return { status: 204 }
+  }
+  if (action === 'run-finished') {
+    const automation = body.automation
+    const run = body.run
+    if (!isAutomation(automation) || !isRecord(run)
+      || typeof run.runAt !== 'number' || typeof run.sessionId !== 'string'
+      || (run.status !== 'success' && run.status !== 'error' && run.status !== 'skipped')) {
+      throw new HttpApiRequestError('定时任务运行结果不正确', 400, 'invalid_request')
+    }
+    broadcastAutomationsChanged()
+    if (run.sessionId) {
+      forwardExternalAgentComplete({
+        sessionId: run.sessionId,
+        triggeredBy: 'automation',
+        stoppedByUser: false,
+        startedAt: run.runAt,
+        ...(run.status === 'error' && typeof run.error === 'string' ? { resultErrors: [run.error] } : {}),
+      })
+    }
+    await notifyAutomationRunFinished({
+      automation,
+      run: run as unknown as AutomationRun,
+    })
+    return { status: 204 }
+  }
+  throw new HttpApiRequestError('定时任务内部接口不存在', 404, 'not_found')
+}
+
 function parseFileContext(record: Record<string, unknown>): FileApiContext {
   const candidateBasePaths = Array.isArray(record.candidateBasePaths)
     ? record.candidateBasePaths.filter((value): value is string => typeof value === 'string' && value.length > 0)
@@ -1060,6 +1141,9 @@ export async function handleHttpApiRequest(
     }
     if (segments[1] === 'internal' && segments[2] === 'agent') {
       return await handleAgentRpcInternalRequest(request, segments, dependencies)
+    }
+    if (segments[1] === 'internal' && segments[2] === 'automation') {
+      return await handleAutomationInternalRequest(request, segments)
     }
     if (segments[1] === 'files') {
       return await handleFileRequest(request, segments, dependencies)

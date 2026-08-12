@@ -1,4 +1,5 @@
 use super::automation::{
+    issue_worker_capability, revoke_worker_capability, worker_automation_context,
     AutomationCreateInput, AutomationRunInput, AutomationStore, AutomationUpdateInput,
 };
 use serde_json::json;
@@ -148,5 +149,47 @@ fn given_zero_max_runs_when_creating_then_treats_it_as_unlimited() {
     let created = store.create(input).unwrap();
 
     assert!(created.get("maxRuns").is_none());
+    let _ = fs::remove_dir_all(config_dir);
+}
+
+#[test]
+fn given_worker_capability_when_revoked_then_it_is_rejected() {
+    let capability = issue_worker_capability(
+        "automation-capability-test-session",
+        "automation",
+        "channel-1".to_string(),
+        None,
+        Some("workspace-1".to_string()),
+        Some("automation-1".to_string()),
+    );
+
+    assert!(worker_automation_context("automation-capability-test-session", &capability.token).is_ok());
+    revoke_worker_capability("automation-capability-test-session");
+    assert!(worker_automation_context("automation-capability-test-session", &capability.token).is_err());
+}
+
+#[test]
+fn given_overdue_recurring_task_when_scheduler_recovers_then_it_is_deferred_but_once_task_remains_due() {
+    let config_dir = temporary_config_dir("recover-overdue");
+    let store = AutomationStore::open(config_dir.clone());
+    let recurring = store.create(create_input()).unwrap();
+    let once: AutomationCreateInput = serde_json::from_value(json!({
+        "name": "一次性检查",
+        "prompt": "执行检查",
+        "scheduleType": "once",
+        "intervalMinutes": 10,
+        "scheduledAt": 1000u64,
+        "channelId": "channel-1",
+        "workspaceId": "workspace-1"
+    }))
+    .unwrap();
+    let once = store.create(once).unwrap();
+    let now = 2_000_000_000_000u64;
+    store.set_next_run_at(recurring["id"].as_str().unwrap(), 1).unwrap();
+
+    store.defer_overdue_recurring(now).unwrap();
+
+    assert!(store.get(recurring["id"].as_str().unwrap()).unwrap().unwrap()["nextRunAt"].as_u64().unwrap() > now);
+    assert!(store.get(once["id"].as_str().unwrap()).unwrap().unwrap()["nextRunAt"].as_u64().unwrap() <= now);
     let _ = fs::remove_dir_all(config_dir);
 }
