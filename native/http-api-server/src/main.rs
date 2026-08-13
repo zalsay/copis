@@ -45,7 +45,7 @@ use serde_json::{json, Value};
 use skill_market::{handle_request as handle_skill_market_request, SkillMarketState};
 use working_payment::{
     handle_request as handle_working_payment_request, start_desktop_payment_poller,
-    WorkingPaymentState,
+    RefreshedWorkingAuth, VipPaymentRefresher, WorkingPaymentState,
 };
 use workspace_dev::{WorkspaceDevActionInput, WorkspaceDevError, WorkspaceDevStore};
 use workspace_mcp::{WorkspaceMcpError, WorkspaceMcpStore};
@@ -105,6 +105,43 @@ struct Bridge {
     writer: Mutex<BufWriter<io::Stdout>>,
     pending: Mutex<HashMap<u64, mpsc::Sender<Result<BridgeResponse, String>>>>,
     recording_locks: Mutex<HashMap<String, Arc<Mutex<()>>>>,
+}
+
+struct BridgeVipPaymentRefresher {
+    bridge: Arc<Bridge>,
+}
+
+impl VipPaymentRefresher for BridgeVipPaymentRefresher {
+    fn refresh_after_vip_payment(&self) -> Result<RefreshedWorkingAuth, String> {
+        let response = self.bridge.send_request(&HttpRequest {
+            method: "POST".to_string(),
+            target: "/api/internal/working-auth/refresh-after-vip".to_string(),
+            headers: HashMap::new(),
+            body: b"{}".to_vec(),
+        })?;
+        if response.status != 200 {
+            return Err(format!("Electron 刷新账户状态失败（HTTP {}）", response.status));
+        }
+        let body = response
+            .body
+            .ok_or_else(|| "Electron 刷新账户状态缺少响应".to_string())?;
+        let value: Value = serde_json::from_str(&body)
+            .map_err(|_| "Electron 刷新账户状态响应格式不正确".to_string())?;
+        let token = value
+            .get("token")
+            .and_then(Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+            .ok_or_else(|| "Electron 刷新账户状态缺少 token".to_string())?;
+        let user_id = value
+            .get("userId")
+            .and_then(Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+            .ok_or_else(|| "Electron 刷新账户状态缺少用户标识".to_string())?;
+        Ok(RefreshedWorkingAuth {
+            token: token.to_string(),
+            user_id: user_id.to_string(),
+        })
+    }
 }
 
 impl Bridge {
@@ -2734,6 +2771,9 @@ fn main() {
         std::env::var(WORKING_USER_ID_ENV).ok(),
     );
     let working_payment_state = Arc::new(WorkingPaymentState::new());
+    working_payment_state.set_vip_payment_refresher(Arc::new(BridgeVipPaymentRefresher {
+        bridge: Arc::clone(&bridge),
+    }));
     let payment_workspace = match PaymentWorkspace::from_environment() {
         Ok(workspace) => Arc::new(workspace),
         Err(error) => {

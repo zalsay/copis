@@ -563,4 +563,6 @@ export const WORKING_IPC_CHANNELS = {
   GET_ORDER_PAYMENT: 'working:get-order-payment',
   CHECK_PAYMENT: 'working:check-payment',
   CANCEL_DIAMOND_PAYMENT: 'working:cancel-diamond-payment',
+  /** VIP 到账后主进程向 Renderer 推送最新账户资料。 */
+  AUTH_UPDATED: 'working:auth-updated',
 } as const

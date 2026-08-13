@@ -544,6 +544,8 @@ React UI 更新
 - **工作区隔离**：每个工作区拥有独立的 MCP、Skills、cwd 和 Pi session artifact。
 - **默认扩展凭据**：`pi-web-access` 优先复用当前 OpenAI 渠道或环境变量中的 API Key（如 `OPENAI_API_KEY`、`TAVILY_API_KEY`、`EXA_API_KEY`），也可通过 `~/.pi/web-search.json` 配置；未配置任何供应商时工具返回配置引导。
 
+**子智能体（Browser Workflow 总结 Agent）默认使用 DeepSeek v4 Flash + high 优先级配置**（通过 `agentChannelId` / `agentModelId` fallback 到 DeepSeek 系列模型）。
+
 ### 共享类型（`@copis/shared`）
 
 - `AgentEvent`：Agent 事件（text / tool_start / tool_result / done / error）

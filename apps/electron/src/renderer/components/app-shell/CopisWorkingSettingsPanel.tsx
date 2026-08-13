@@ -30,6 +30,7 @@ import type {
 import {
   workingAuthStateAtom,
   workingSettingsSectionAtom,
+  workingVipStatusAtom,
   type WorkingSettingsSectionId,
 } from '@/atoms/working-atoms'
 import {
@@ -49,10 +50,8 @@ import {
   paginateWorkingLedgerEntries,
   selectWorkingConsumptionLedgerEntries,
 } from '@/lib/working-ledger'
-import { useStartCopisDiamondPurchase } from '@/hooks/useStartCopisDiamondPurchase'
 import { CopisWorkingMessageSettingsPanel } from './CopisWorkingMessageSettingsPanel'
 import { CopisWorkingOrdersPanel } from './CopisWorkingOrdersPanel'
-import { CopisWorkingPaymentModal } from './CopisWorkingPaymentModal'
 import './CopisWorkingSettingsPanel.css'
 
 type WorkingSettingsMenuId = WorkingSettingsSectionId | 'tutorial'
@@ -121,6 +120,7 @@ interface CopisWorkingSettingsPanelProps {
 
 export function CopisWorkingSettingsPanel({ onClose }: CopisWorkingSettingsPanelProps): React.ReactElement {
   const [authState, setAuthState] = useAtom(workingAuthStateAtom)
+  const setWorkingVipStatus = useSetAtom(workingVipStatusAtom)
   const [tabs, setTabs] = useAtom(tabsAtom)
   const [, setActiveTabId] = useAtom(activeTabIdAtom)
   const openPayment = useSetAtom(openWorkingPaymentAtom)
@@ -128,7 +128,6 @@ export function CopisWorkingSettingsPanel({ onClose }: CopisWorkingSettingsPanel
   const paymentRefresh = useAtomValue(workingPaymentRefreshAtom)
   const paymentNotice = useAtomValue(workingPaymentNoticeAtom)
   const setPaymentNotice = useSetAtom(workingPaymentNoticeAtom)
-  const startCopisDiamondPurchase = useStartCopisDiamondPurchase()
   const paymentRefreshRef = React.useRef(paymentRefresh)
   const [settings, setSettings] = React.useState<WorkingSettingsSnapshot | null>(null)
   const [activeSection, setActiveSection] = useAtom(workingSettingsSectionAtom)
@@ -149,6 +148,7 @@ export function CopisWorkingSettingsPanel({ onClose }: CopisWorkingSettingsPanel
     try {
       const snapshot = await window.electronAPI.getWorkingSettingsSnapshot()
       setSettings(snapshot)
+      setWorkingVipStatus(snapshot.vip)
       setAuthState((current) => ({
         authenticated: true,
         user: snapshot.user,
@@ -160,7 +160,7 @@ export function CopisWorkingSettingsPanel({ onClose }: CopisWorkingSettingsPanel
     } finally {
       setLoading(false)
     }
-  }, [setAuthState])
+  }, [setAuthState, setWorkingVipStatus])
 
   React.useEffect(() => {
     void loadSettings()
@@ -338,10 +338,6 @@ export function CopisWorkingSettingsPanel({ onClose }: CopisWorkingSettingsPanel
           </div>
         </main>
       </div>
-      <CopisWorkingPaymentModal
-        vipStatus={settings?.vip ?? null}
-        onStartDiamondPurchase={startCopisDiamondPurchase}
-      />
     </div>
   )
 }
@@ -370,7 +366,9 @@ function WorkingAccountSettings({
   const LEDGER_PAGE_SIZE = 8
   const [ledgerTab, setLedgerTab] = React.useState<'consumption' | 'purchase'>('consumption')
   const [ledgerPage, setLedgerPage] = React.useState(1)
-  const tokenBalance = formatTokens(settings?.vip?.diamonds ?? user?.tokens ?? 0)
+  const diamondBalance = settings?.vip?.diamonds ?? user?.tokens ?? 0
+  const tokenBalance = formatTokens(diamondBalance)
+  const estimatedConversationCount = Math.floor(diamondBalance / 0.5)
   const isVip = settings?.vip?.isVip ?? user?.isVip === true
   const vipExpiresAt = settings?.vip?.vipExpiresAt ?? user?.vipExpiresAt ?? null
   const memberNameMap = React.useMemo(
@@ -420,7 +418,9 @@ function WorkingAccountSettings({
           </button>
         </div>
         <strong className="copis-working-settings-balance">{loading ? '--' : tokenBalance}</strong>
-        <p>用于 Working 与创作任务的 AI 消耗</p>
+        <span className="copis-working-settings-balance-conversation-count">
+          预计 {loading ? '--' : formatTokens(estimatedConversationCount)} 次对话
+        </span>
       </section>
 
       <section className="copis-working-settings-card copis-working-settings-vip-card">
@@ -431,14 +431,15 @@ function WorkingAccountSettings({
           </div>
           <button type="button" className="copis-working-settings-card-action copis-working-settings-vip-button" onClick={onOpenVip} disabled={loading || settings?.vip?.upgradeAvailable === false}>
             <Crown aria-hidden="true" />
-            <span>{settings?.vip?.upgradeAvailable === false ? 'VIP 暂未开放' : isVip ? '查看 VIP 权益' : '升级 VIP'}</span>
+            <span>{settings?.vip?.upgradeAvailable === false ? 'VIP 暂未开放' : isVip ? '续费 VIP' : '升级 VIP'}</span>
           </button>
         </div>
         <strong>{isVip ? '已开通' : '未开通'}</strong>
-        <p>
-          云文档容量 {settings?.vip?.quotaLabel || (isVip ? '5G' : '500M')}。
-          {isVip && vipExpiresAt ? ` 有效期至 ${formatDate(vipExpiresAt)}。` : ` 支付后提升到 5G，有效期 ${settings?.vip?.upgradeDays || 30} 天。`}
+        <p>{isVip
+          ? '钻石消耗节省 20%，可使用专家团队和定时任务。'
+          : '钻石按标准消耗，专家团队和定时任务暂不可用。'}
         </p>
+        {isVip && vipExpiresAt && <span className="copis-working-settings-vip-expiry">有效期至 {formatDate(vipExpiresAt)}</span>}
       </section>
 
       <section className="copis-working-settings-card copis-working-settings-invite-card">
@@ -458,14 +459,11 @@ function WorkingAccountSettings({
             <span>{copiedLabel || '复制邀请码'}</span>
           </button>
         </div>
-        <p>一个账号体验家庭与工作两种空间，分享 π 的陪伴与交付能力。</p>
+        <p>邀请好友使用，获取钻石奖励</p>
         <div className="copis-working-settings-invite-code">
           <span>{settings?.inviteCode || (loading ? '正在获取邀请码' : '暂无邀请码')}</span>
         </div>
-        <div className="copis-working-settings-invite-stats">
-          <strong>{settings?.invitedUsers.length ?? 0}</strong>
-          <span>已邀请用户</span>
-        </div>
+        <span className="copis-working-settings-invite-user-count">已邀请 {settings?.invitedUsers.length ?? 0} 位用户</span>
       </section>
 
       <section className="copis-working-settings-card copis-working-settings-ledger-card">

@@ -559,7 +559,7 @@ fn requires_advanced_authorization(command: &str) -> bool {
     )
 }
 
-/// 仅开放项目依赖、构建、本地开发、工作区 Git 与高级授权的 SSH/curl/Python 命令；通用 Shell 语法会绕过路径策略。
+/// 仅开放项目依赖、构建、本地开发、Office 文档操作、工作区 Git 与高级授权的 SSH/curl/Python 命令；通用 Shell 语法会绕过路径策略。
 fn validate_project_command(command: &str) -> Result<(), AgentFileError> {
     let command = command.trim();
     if command.is_empty() || command.len() > 16 * 1024 {
@@ -604,7 +604,16 @@ fn validate_project_command(command: &str) -> Result<(), AgentFileError> {
             "项目命令不能修改全局环境或指定工作区外的目录",
         ));
     }
-    let operation = arguments.get(1).copied().unwrap_or_default();
+    let operation = if *executable == "officecli" {
+        arguments
+            .iter()
+            .skip(1)
+            .copied()
+            .find(|argument| !is_officecli_global_option(argument))
+            .unwrap_or_default()
+    } else {
+        arguments.get(1).copied().unwrap_or_default()
+    };
     if *executable == "curl" && !is_restricted_curl_command(&arguments) {
         return Err(AgentFileError::forbidden(
             "command_scope_not_allowed",
@@ -623,6 +632,38 @@ fn validate_project_command(command: &str) -> Result<(), AgentFileError> {
         "python" | "python3" => true,
         "pip" | "pip3" => operation == "install",
         "uv" => matches!(operation, "sync" | "run" | "pip"),
+        "officecli" => matches!(
+            operation,
+            "" | "open"
+                | "close"
+                | "watch"
+                | "unwatch"
+                | "view"
+                | "get"
+                | "query"
+                | "set"
+                | "add"
+                | "remove"
+                | "move"
+                | "swap"
+                | "refresh"
+                | "raw"
+                | "raw-set"
+                | "add-part"
+                | "validate"
+                | "save"
+                | "batch"
+                | "dump"
+                | "import"
+                | "create"
+                | "merge"
+                | "help"
+                | "goto"
+                | "mark"
+                | "unmark"
+                | "get-marks"
+                | "load_skill"
+        ),
         "git" | "ssh" | "curl" => true,
         _ => false,
     };
@@ -631,9 +672,13 @@ fn validate_project_command(command: &str) -> Result<(), AgentFileError> {
     } else {
         Err(AgentFileError::forbidden(
             "command_not_allowed",
-            "仅支持工作区内的依赖安装、构建、测试、本地开发与 Git 命令",
+            "仅支持工作区内的依赖安装、构建、测试、本地开发、Office 文档操作与 Git 命令",
         ))
     }
+}
+
+fn is_officecli_global_option(argument: &str) -> bool {
+    matches!(argument, "--json" | "--version" | "--help" | "-h" | "-?")
 }
 
 fn is_restricted_curl_command(arguments: &[&str]) -> bool {
@@ -796,6 +841,14 @@ fn read_command_output<R: Read>(mut reader: R) -> CapturedCommandOutput {
 }
 
 fn configure_project_command_environment(command: &mut Command) {
+    let officecli = std::env::var_os("COPIS_OFFICECLI").map(PathBuf::from);
+    configure_project_command_environment_with_officecli(command, officecli.as_deref());
+}
+
+fn configure_project_command_environment_with_officecli(
+    command: &mut Command,
+    officecli: Option<&Path>,
+) {
     command.env_clear();
     for key in [
         "PATH",
@@ -817,8 +870,36 @@ fn configure_project_command_environment(command: &mut Command) {
         }
     }
 
-    // 项目命令必须优先使用 Copis 管理的 Node.js/npm，不能依赖用户的系统 PATH。
-    command.env("PATH", crate::runtime::resolve_runtime().path_value());
+    let configured_officecli = officecli.and_then(valid_officecli_path);
+    if let Some(path) = configured_officecli.as_ref() {
+        command.env("COPIS_OFFICECLI", path);
+    }
+
+    // 项目命令必须优先使用 Copis 管理的 Node.js/npm 和 OfficeCLI，不能依赖用户的系统 PATH。
+    let runtime_path = crate::runtime::resolve_runtime().path_value();
+    let mut path_entries = configured_officecli
+        .as_ref()
+        .and_then(|path| path.parent().map(PathBuf::from))
+        .into_iter()
+        .chain(std::env::split_paths(&runtime_path))
+        .collect::<Vec<_>>();
+    if path_entries.is_empty() {
+        path_entries.push(PathBuf::from(runtime_path));
+    }
+    if let Ok(path) = std::env::join_paths(path_entries) {
+        command.env("PATH", path);
+    }
+}
+
+fn valid_officecli_path(path: &Path) -> Option<PathBuf> {
+    if !path.is_absolute() {
+        return None;
+    }
+    let canonical = fs::canonicalize(path).ok()?;
+    fs::metadata(&canonical)
+        .ok()?
+        .is_file()
+        .then_some(canonical)
 }
 
 fn generate_worker_token() -> Result<String, String> {

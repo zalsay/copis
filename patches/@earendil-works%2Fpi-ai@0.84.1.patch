@@ -1,5 +1,5 @@
 diff --git a/dist/utils/retry.js b/dist/utils/retry.js
-index ac5c157b..3d79cc1e 100644
+index ac5c157bb4a7b0e5599b6bf07d4022f8ed49aac4..ad6068a88b8764b305cb2644d97a4c676f4ef1e6 100644
 --- a/dist/utils/retry.js
 +++ b/dist/utils/retry.js
 @@ -60,6 +60,17 @@ const RETRYABLE_PROVIDER_ERROR_PATTERN = buildProviderErrorPattern([

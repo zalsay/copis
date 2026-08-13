@@ -357,16 +357,18 @@ describe('Rust HTTP API 功能模块生命周期', () => {
     })
   })
 
-  test('Given 已激活的 Node runtime 和支付宝智能体 CLI When 启动 Rust API Then 注入两个绝对入口', async () => {
+  test('Given 已激活的受控 CLI 模块 When 启动 Rust API Then 注入全部绝对入口', async () => {
     const root = createRoot()
     const modulesRoot = join(root, 'modules')
     const records: SpawnRecord[] = []
     const rust = rustPackage('0.1.0', 'payment-rust-api')
     const node = binaryPackage('node-runtime', '24.0.0', 'bin/node', 'node-runtime')
     const alipayBot = binaryPackage('alipay-bot', '0.3.40', 'bin/alipay-bot', 'alipay-bot')
+    const officeCli = binaryPackage('officecli', '1.0.143', 'bin/officecli', 'officecli')
     await activateRustVersion(root, rust, 'payment-rust-api')
     const nodePath = await activateModuleVersion(modulesRoot, node, 'node-runtime')
     const alipayBotPath = await activateModuleVersion(modulesRoot, alipayBot, 'alipay-bot')
+    const officeCliPath = await activateModuleVersion(modulesRoot, officeCli, 'officecli')
 
     startHttpApiServer({
       rootDir: modulesRoot,
@@ -377,6 +379,7 @@ describe('Rust HTTP API 功能模块生命周期', () => {
     expect(records[0]?.options.env).toMatchObject({
       COPIS_ALIPAY_BOT_CLI: alipayBotPath,
       COPIS_ALIPAY_BOT_NODE: nodePath,
+      COPIS_OFFICECLI: officeCliPath,
     })
   })
 

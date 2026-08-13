@@ -1,0 +1,579 @@
+.copis-working-login-showcase {
+  position: relative;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  min-width: 0;
+  min-height: min(760px, calc(100dvh - 56px));
+  overflow: hidden;
+  padding: 30px 34px 24px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 20px;
+  background: #19211f;
+  color: #f5f6f3;
+  box-shadow: 0 28px 70px rgba(0, 0, 0, 0.28), inset 0 1px rgba(255, 255, 255, 0.1);
+}
+
+.copis-working-login-showcase::before {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  content: '';
+  background:
+    linear-gradient(90deg, transparent 0 49.8%, rgba(255, 255, 255, 0.045) 50%, transparent 50.2%),
+    linear-gradient(0deg, transparent 0 49.8%, rgba(255, 255, 255, 0.035) 50%, transparent 50.2%);
+  background-size: 100% 100%, 100% 100%;
+  opacity: 0.48;
+}
+
+.copis-working-login-showcase-header,
+.copis-working-login-showcase-viewport,
+.copis-working-login-showcase-footer {
+  position: relative;
+  z-index: 1;
+}
+
+.copis-working-login-showcase-header,
+.copis-working-login-showcase-footer,
+.copis-working-login-showcase-progress,
+.copis-working-login-showcase-controls,
+.copis-working-login-showcase-brand,
+.copis-working-showcase-card-label,
+.showcase-browser-address,
+.showcase-browser-status,
+.showcase-workflow-heading,
+.showcase-workflow-result,
+.showcase-workflow-footer {
+  display: flex;
+  align-items: center;
+}
+
+.copis-working-login-showcase-header {
+  justify-content: space-between;
+  gap: 20px;
+}
+
+.copis-working-login-showcase-brand {
+  gap: 10px;
+  color: #f9faf7;
+  font-size: 17px;
+  font-weight: 850;
+}
+
+.copis-working-login-showcase-brand img {
+  width: 35px;
+  height: 35px;
+  border-radius: 9px;
+  object-fit: cover;
+}
+
+.copis-working-login-showcase-context {
+  color: #909c96;
+  font-size: 11px;
+  font-weight: 750;
+}
+
+.copis-working-login-showcase-viewport {
+  min-height: 0;
+  padding: 48px 0 26px;
+}
+
+.copis-working-login-showcase-slide {
+  min-height: 100%;
+  grid-template-rows: auto minmax(220px, 1fr);
+  gap: 28px;
+}
+
+.copis-working-login-showcase-slide.is-active {
+  display: grid;
+  animation: copis-working-login-showcase-enter 340ms ease both;
+}
+
+.copis-working-login-showcase-slide[hidden] {
+  display: none;
+}
+
+.copis-working-login-showcase-copy {
+  max-width: 580px;
+}
+
+.copis-working-login-showcase-kicker {
+  display: inline-flex;
+  min-height: 26px;
+  align-items: center;
+  padding: 0 9px;
+  border-left: 3px solid var(--ui-primary);
+  background: var(--ui-primary-background);
+  color: #f3c18d;
+  font-size: 11px;
+  font-weight: 850;
+}
+
+.copis-working-login-showcase-copy h1 {
+  max-width: 580px;
+  margin: 17px 0 13px;
+  color: #f7f8f5;
+  font-size: clamp(34px, 4vw, 58px);
+  font-weight: 850;
+  letter-spacing: 0;
+  line-height: 1.08;
+}
+
+.copis-working-login-showcase-copy h1 span,
+.copis-working-login-showcase-copy h1 strong {
+  display: block;
+}
+
+.copis-working-login-showcase-copy h1 strong {
+  color: #f3af6b;
+  font-weight: inherit;
+}
+
+.copis-working-login-showcase-copy p {
+  max-width: 470px;
+  margin: 0;
+  color: #b9c3bd;
+  font-size: 14px;
+  line-height: 1.72;
+}
+
+.copis-working-login-showcase-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin-top: 20px;
+}
+
+.copis-working-login-showcase-tags span {
+  min-height: 27px;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 9px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 6px;
+  color: #d0d8d2;
+  font-size: 10px;
+  font-weight: 750;
+}
+
+.copis-working-login-showcase-visual {
+  position: relative;
+  min-height: 220px;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 13px;
+  background: #141b19;
+  box-shadow: inset 0 1px rgba(255, 255, 255, 0.08);
+}
+
+.copis-working-login-showcase-visual-hero {
+  display: grid;
+  place-items: center;
+}
+
+.copis-working-showcase-orbit {
+  position: absolute;
+  width: 330px;
+  aspect-ratio: 1;
+  border: 1px solid rgba(243, 175, 107, 0.25);
+  border-radius: 50%;
+  transform: rotate(-18deg) scaleY(0.42);
+}
+
+.orbit-one { transform: rotate(-18deg) scaleY(0.42) translateY(-4px); }
+.orbit-two { width: 230px; border-color: rgba(243, 175, 107, 0.14); transform: rotate(58deg) scaleY(0.42); }
+
+.copis-working-showcase-hero-mark {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  place-items: center;
+  gap: 8px;
+  color: #f7f8f5;
+  font-size: 13px;
+  font-weight: 850;
+}
+
+.copis-working-showcase-hero-mark img {
+  width: 68px;
+  height: 68px;
+  border: 1px solid rgba(243, 175, 107, 0.52);
+  border-radius: 17px;
+  box-shadow: 0 14px 30px rgba(243, 175, 107, 0.14);
+}
+
+.copis-working-showcase-task-card {
+  position: absolute;
+  z-index: 2;
+  display: grid;
+  gap: 7px;
+  padding: 12px 14px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 9px;
+  background: #202b27;
+  box-shadow: 0 15px 30px rgba(0, 0, 0, 0.2);
+}
+
+.task-card-main {
+  left: 7%;
+  bottom: 14%;
+  width: min(250px, 43%);
+}
+
+.task-card-side {
+  top: 16%;
+  right: 8%;
+  color: #f3af6b;
+  font-size: 10px;
+}
+
+.copis-working-showcase-card-label {
+  gap: 6px;
+  color: #aab7af;
+  font-size: 10px;
+  font-weight: 750;
+}
+
+.copis-working-showcase-task-card strong {
+  color: #f6f8f4;
+  font-size: 12px;
+}
+
+.showcase-card-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: #f3af6b;
+  font-size: 9px;
+  font-weight: 750;
+}
+
+.copis-working-login-showcase-visual-browser,
+.copis-working-login-showcase-visual-workflow {
+  display: grid;
+  place-items: center;
+  padding: 20px;
+}
+
+.showcase-browser-window,
+.showcase-workflow-window {
+  width: min(100%, 620px);
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.17);
+  border-radius: 10px;
+  background: #1d2824;
+  box-shadow: 0 18px 36px rgba(0, 0, 0, 0.25);
+}
+
+.showcase-browser-toolbar {
+  min-height: 39px;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 0 11px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.showcase-browser-dots {
+  display: flex;
+  gap: 4px;
+}
+
+.showcase-browser-dots i {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #f3af6b;
+}
+
+.showcase-browser-dots i:nth-child(2) { background: #e8d37c; }
+.showcase-browser-dots i:nth-child(3) { background: #89bd86; }
+
+.showcase-browser-address {
+  min-width: 0;
+  flex: 1;
+  gap: 5px;
+  overflow: hidden;
+  padding: 5px 8px;
+  border: 1px solid rgba(255, 255, 255, 0.11);
+  border-radius: 5px;
+  color: #aebbb2;
+  font-size: 9px;
+  white-space: nowrap;
+}
+
+.showcase-browser-badge {
+  color: #f3af6b;
+  font-size: 9px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.showcase-browser-page {
+  display: grid;
+  gap: 8px;
+  padding: 17px;
+}
+
+.showcase-browser-kicker {
+  color: #f3af6b;
+  font-size: 9px;
+  font-weight: 800;
+}
+
+.showcase-browser-page > strong {
+  margin-bottom: 5px;
+  color: #f4f7f3;
+  font-size: 16px;
+}
+
+.showcase-browser-row {
+  min-height: 31px;
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 7px;
+  padding: 0 8px;
+  border-radius: 5px;
+  background: rgba(255, 255, 255, 0.055);
+  color: #c0cbc2;
+  font-size: 9px;
+}
+
+.showcase-browser-row b { color: #7e9084; }
+.showcase-browser-row em { color: #85968a; font-size: 8px; font-style: normal; }
+.showcase-browser-row.is-target { background: rgba(243, 175, 107, 0.13); color: #f4f7f2; }
+.showcase-browser-row.is-target em { color: #f3af6b; }
+
+.showcase-browser-status {
+  min-height: 35px;
+  gap: 7px;
+  padding: 0 13px;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  color: #aebbb1;
+  font-size: 9px;
+}
+
+.showcase-browser-status span {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #f3af6b;
+  box-shadow: 0 0 10px rgba(243, 175, 107, 0.72);
+}
+
+.showcase-workflow-window {
+  padding: 16px;
+}
+
+.showcase-workflow-heading {
+  gap: 7px;
+  min-height: 34px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  color: #f4f7f3;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.showcase-workflow-heading strong {
+  margin-left: auto;
+  color: #f3af6b;
+  font-size: 9px;
+}
+
+.showcase-workflow-path {
+  display: grid;
+  grid-template-columns: 1fr 25px 1fr 25px 1fr;
+  align-items: center;
+  gap: 7px;
+  padding: 24px 0;
+}
+
+.showcase-workflow-path span {
+  min-height: 66px;
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 7px;
+  border: 1px solid rgba(243, 175, 107, 0.22);
+  border-radius: 7px;
+  background: rgba(243, 175, 107, 0.08);
+  color: #e9efe9;
+  font-size: 10px;
+  font-weight: 750;
+  text-align: center;
+}
+
+.showcase-workflow-path span svg { color: #f3af6b; }
+.showcase-workflow-path i { height: 1px; background: rgba(243, 175, 107, 0.56); }
+
+.showcase-workflow-result {
+  gap: 9px;
+  min-height: 47px;
+  padding: 0 11px;
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.06);
+  color: #f3af6b;
+}
+
+.showcase-workflow-result span { display: grid; gap: 3px; }
+.showcase-workflow-result b { color: #f3f7f2; font-size: 10px; }
+.showcase-workflow-result small { color: #9caa9f; font-size: 9px; }
+
+.showcase-workflow-footer {
+  justify-content: space-between;
+  min-height: 27px;
+  color: #9eaca1;
+  font-size: 9px;
+}
+
+.showcase-workflow-footer svg { color: #f3af6b; }
+
+.copis-working-login-showcase-footer {
+  justify-content: space-between;
+  gap: 20px;
+  padding-top: 18px;
+  border-top: 1px solid rgba(255, 255, 255, 0.11);
+}
+
+.copis-working-login-showcase-progress {
+  gap: 7px;
+  color: #f3af6b;
+  font-size: 11px;
+  font-weight: 850;
+}
+
+.copis-working-login-showcase-progress i {
+  width: 34px;
+  height: 1px;
+  background: rgba(243, 175, 107, 0.5);
+}
+
+.copis-working-login-showcase-progress small {
+  margin-left: 7px;
+  color: #99a79d;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.copis-working-login-showcase-controls {
+  gap: 9px;
+}
+
+.copis-working-login-showcase-controls > button {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  place-items: center;
+  padding: 0;
+  border: 1px solid rgba(255, 255, 255, 0.17);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.04);
+  color: #edf2ed;
+}
+
+.copis-working-login-showcase-controls > button:hover,
+.copis-working-login-showcase-controls > button:focus-visible {
+  border-color: var(--ui-primary);
+  background: var(--ui-primary-background);
+}
+
+.copis-working-login-showcase-dots {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.copis-working-login-showcase-dots button {
+  width: 7px;
+  height: 7px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.27);
+}
+
+.copis-working-login-showcase-dots button.is-active {
+  width: 20px;
+  border-radius: 6px;
+  background: var(--ui-primary);
+}
+
+.copis-working-login-showcase button:focus-visible {
+  outline: 2px solid var(--ui-primary);
+  outline-offset: 3px;
+}
+
+@keyframes copis-working-login-showcase-enter {
+  from { opacity: 0; transform: translateY(7px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.copis-working-auth-page .copis-working-login-showcase {
+  box-sizing: border-box;
+  min-height: 0;
+  width: 100%;
+  height: var(--copis-working-login-surface-height);
+  background: hsl(var(--dialog));
+}
+
+@media (max-width: 1120px) {
+  .copis-working-login-showcase {
+    padding-inline: 26px;
+  }
+
+  .copis-working-login-showcase-copy h1 {
+    font-size: clamp(32px, 4vw, 48px);
+  }
+}
+
+@media (max-width: 820px) {
+  .copis-working-login-showcase {
+    min-height: 390px;
+    padding: 22px 22px 18px;
+  }
+
+  .copis-working-login-showcase-viewport {
+    padding: 28px 0 20px;
+  }
+
+  .copis-working-login-showcase-slide {
+    grid-template-rows: auto minmax(145px, 1fr);
+    gap: 18px;
+  }
+
+  .copis-working-login-showcase-copy h1 {
+    margin-block: 11px 8px;
+    font-size: 32px;
+  }
+
+  .copis-working-login-showcase-copy p {
+    font-size: 12px;
+  }
+
+  .copis-working-login-showcase-tags {
+    display: none;
+  }
+
+  .copis-working-login-showcase-visual {
+    min-height: 145px;
+  }
+
+  .copis-working-showcase-hero-mark img {
+    width: 48px;
+    height: 48px;
+  }
+
+  .task-card-main { left: 5%; bottom: 9%; }
+  .task-card-side { top: 9%; right: 5%; }
+  .showcase-browser-page { padding: 10px; }
+  .showcase-browser-page > strong { font-size: 12px; }
+  .showcase-workflow-path { padding-block: 10px; }
+  .showcase-workflow-path span { min-height: 48px; font-size: 8px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .copis-working-login-showcase-slide.is-active {
+    animation: none;
+  }
+}

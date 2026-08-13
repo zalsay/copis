@@ -3,6 +3,7 @@ import { KeyRound, Loader2, LogIn, Mail, UserPlus, X } from 'lucide-react'
 import type { WorkingAuthState } from '@copis/shared'
 import { cn } from '@/lib/utils'
 import { CopisAppLogo } from '@/lib/model-logo'
+import { CopisWorkingLoginShowcase } from './CopisWorkingLoginShowcase'
 import './CopisWorkingLoginDialog.css'
 
 const EMAIL_PATTERN = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/
@@ -54,6 +55,7 @@ export function CopisWorkingLoginDialog({
   const normalizedEmail = email.trim().toLowerCase()
   const normalizedForgotEmail = forgotEmail.trim().toLowerCase()
   const requiresVerificationCode = invitationCode.trim().length === 0
+  const isFullPage = !dismissible
 
   React.useEffect(() => {
     emailInputRef.current?.focus()
@@ -244,17 +246,19 @@ export function CopisWorkingLoginDialog({
 
   return (
     <div
-      className="copis-working-auth-backdrop"
+      className={cn('copis-working-auth-backdrop', isFullPage && 'copis-working-auth-page')}
       role="presentation"
       onMouseDown={(event) => {
         if (dismissible && event.target === event.currentTarget && !busy && !resetBusy) onClose()
       }}
     >
+      {isFullPage && <CopisWorkingLoginShowcase />}
       <section
-        className="copis-working-auth-modal"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="copis-working-auth-title"
+        className={cn('copis-working-auth-modal', isFullPage && 'copis-working-auth-panel')}
+        role={dismissible ? 'dialog' : undefined}
+        aria-modal={dismissible ? true : undefined}
+        aria-labelledby={authMode === 'login' ? 'copis-working-auth-title' : undefined}
+        aria-label={authMode === 'register' ? '注册 Copis 账户' : undefined}
         onMouseDown={(event) => event.stopPropagation()}
       >
         <div className="copis-working-auth-top">
@@ -280,10 +284,12 @@ export function CopisWorkingLoginDialog({
           </button>
         </div>
 
-        <header className="copis-working-auth-header">
-          <h1 id="copis-working-auth-title">{authMode === 'login' ? '欢迎回来' : '创建 Copis 账户'}</h1>
-          <p>{authMode === 'login' ? '登录后继续进入你的工作空间。' : '使用邮箱创建账户，登录后即可使用 Working Agent。'}</p>
-        </header>
+        {authMode === 'login' && (
+          <header className="copis-working-auth-header">
+            <h1 id="copis-working-auth-title">欢迎回来</h1>
+            <p>登录后继续进入你的工作空间。</p>
+          </header>
+        )}
 
         <form className="copis-working-auth-form" onSubmit={(event) => void handleSubmit(event)}>
           <label className="copis-working-auth-field">

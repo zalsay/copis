@@ -1,5 +1,7 @@
 import { atom } from 'jotai'
-import type { WorkingAuthState, WorkingClientConfig, WorkingEvent, WorkingSessionSummary } from '@copis/shared'
+import type { WorkingAuthState, WorkingClientConfig, WorkingEvent, WorkingSessionSummary, WorkingVipStatus } from '@copis/shared'
+import { agentWorkspacesAtom } from './agent-atoms'
+import { EMPTY_WORKING_PAYMENT_STATE, workingPaymentStateAtom } from './working-payment-atoms'
 
 /** 主窗口认证状态；认证凭证仍只由主进程持有。 */
 export const workingAuthStateAtom = atom<WorkingAuthState | null>(null)
@@ -16,6 +18,9 @@ export const workingHistorySelectionAtom = atom<WorkingHistorySelection | null>(
 
 /** Working 账户设置页是否打开；与 Copis 本地设置面板分离。 */
 export const workingSettingsOpenAtom = atom(false)
+
+/** 最近一次从 Working 设置快照读取的 VIP 状态，供全局支付弹窗复用。 */
+export const workingVipStatusAtom = atom<WorkingVipStatus | null>(null)
 
 /** Working 设置面板当前区块 */
 export type WorkingSettingsSectionId =
@@ -47,6 +52,20 @@ export const workspaceCreationSourceAtom = atom<WorkspaceCreationSource | null>(
 
 /** 打开创建工作区弹窗，并清除上一次创建结果。 */
 export const openCreateWorkspaceDialogAtom = atom(null, (_get, set, source: WorkspaceCreationSource): void => {
+  const workspaces = _get(agentWorkspacesAtom)
+  const isVip = _get(workingAuthStateAtom)?.user?.isVip === true
+  const extraWorkspaceCount = workspaces.filter((workspace) => workspace.slug !== 'default').length
+  if (!isVip && extraWorkspaceCount >= 1) {
+    set(createWorkspaceDialogOpenAtom, false)
+    set(workspaceCreationSourceAtom, null)
+    set(workingPaymentStateAtom, {
+      ...EMPTY_WORKING_PAYMENT_STATE,
+      open: true,
+      mode: 'vip',
+      phase: 'selecting',
+    })
+    return
+  }
   set(createdWorkspaceIdAtom, null)
   set(workspaceCreationSourceAtom, source)
   set(createWorkspaceDialogOpenAtom, true)

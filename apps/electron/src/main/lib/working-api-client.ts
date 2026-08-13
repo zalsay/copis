@@ -551,7 +551,16 @@ export class WorkingApiClient {
     return this.refreshPromise
   }
 
-  private async performRefreshAccessToken(): Promise<string> {
+  /** VIP 到账后的 Rust bridge 调用。refresh token 留在 Electron 加密存储，不反向请求正在等待的 Rust 进程。 */
+  async refreshAfterVipPayment(): Promise<{ token: string; userId: string; isVip: boolean }> {
+    const token = await this.performRefreshAccessToken(false)
+    const user = await this.getCurrentUser()
+    this.tokenStore.save(token, user)
+    this.scheduleAutomaticRefresh()
+    return { token, userId: String(user.id), isVip: user.isVip === true }
+  }
+
+  private async performRefreshAccessToken(syncRust = true): Promise<string> {
     const refreshToken = this.tokenStore.getRefreshToken()
     if (!refreshToken) throw new WorkingApiError('登录状态缺少 refresh token', 401, 'missing_refresh_token')
 
@@ -567,7 +576,7 @@ export class WorkingApiClient {
       }
       this.tokenStore.save(result.token, this.tokenStore.getUser(), result.refreshToken ?? refreshToken)
       this.scheduleAutomaticRefresh()
-      await syncRustWorkingToken(result.token)
+      if (syncRust) await syncRustWorkingToken(result.token)
       return result.token
     } catch (error) {
       if (error instanceof WorkingApiError && error.status === 401) this.clearAuth()

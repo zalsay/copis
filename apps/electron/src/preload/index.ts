@@ -366,6 +366,8 @@ export interface ElectronAPI {
   getWorkingOrderPayment: (orderId: WorkingPaymentIdentifier) => Promise<WorkingOrderPayment>
   checkWorkingPayment: (paymentId: WorkingPaymentIdentifier) => Promise<WorkingPaymentCheckResult>
   cancelWorkingDiamondPayment: (paymentId: WorkingPaymentIdentifier) => Promise<WorkingPaymentCancelResult>
+  /** 订阅 VIP 到账后的 Working 账户更新。 */
+  onWorkingAuthUpdated: (callback: (state: WorkingAuthState) => void) => () => void
 
   // ===== 渠道管理相关 =====
 
@@ -1423,6 +1425,11 @@ const electronAPI: ElectronAPI = {
   getWorkingOrderPayment: (orderId: WorkingPaymentIdentifier) => ipcRenderer.invoke(WORKING_IPC_CHANNELS.GET_ORDER_PAYMENT, orderId),
   checkWorkingPayment: (paymentId: WorkingPaymentIdentifier) => ipcRenderer.invoke(WORKING_IPC_CHANNELS.CHECK_PAYMENT, paymentId),
   cancelWorkingDiamondPayment: (paymentId: WorkingPaymentIdentifier) => ipcRenderer.invoke(WORKING_IPC_CHANNELS.CANCEL_DIAMOND_PAYMENT, paymentId),
+  onWorkingAuthUpdated: (callback: (state: WorkingAuthState) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, state: WorkingAuthState): void => callback(state)
+    ipcRenderer.on(WORKING_IPC_CHANNELS.AUTH_UPDATED, listener)
+    return () => { ipcRenderer.removeListener(WORKING_IPC_CHANNELS.AUTH_UPDATED, listener) }
+  },
 
   // 渠道管理
   listChannels: () => {

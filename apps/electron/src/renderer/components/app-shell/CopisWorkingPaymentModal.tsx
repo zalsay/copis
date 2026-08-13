@@ -24,6 +24,7 @@ import './CopisWorkingPaymentModal.css'
 interface CopisWorkingPaymentModalProps {
   vipStatus: WorkingVipStatus | null
   onStartDiamondPurchase: (packageValue: WorkingDiamondPackage) => Promise<void>
+  onStartVipUpgrade: () => Promise<void>
 }
 
 interface VipBenefitRow {
@@ -34,11 +35,12 @@ interface VipBenefitRow {
 
 const VIP_BENEFITS: readonly VipBenefitRow[] = [
   { label: '钻石消耗', free: '标准消耗', vip: '节省 20%' },
+  { label: '工作区限制', free: '默认项目外 1 个', vip: '不限' },
   { label: '专家团队', free: '不可用', vip: '可使用' },
   { label: '定时任务', free: '不可用', vip: '可使用' },
 ]
 
-export function CopisWorkingPaymentModal({ vipStatus, onStartDiamondPurchase }: CopisWorkingPaymentModalProps): React.ReactElement | null {
+export function CopisWorkingPaymentModal({ vipStatus, onStartDiamondPurchase, onStartVipUpgrade }: CopisWorkingPaymentModalProps): React.ReactElement | null {
   const paymentState = useAtomValue(workingPaymentStateAtom)
   const setPaymentState = useSetAtom(workingPaymentStateAtom)
   const closePayment = useSetAtom(closeWorkingPaymentAtom)
@@ -205,15 +207,15 @@ export function CopisWorkingPaymentModal({ vipStatus, onStartDiamondPurchase }: 
     const operationId = beginOperation()
     updatePaymentState(operationId, (current) => ({ ...current, phase: 'creating', error: undefined }))
     try {
-      const result = await window.electronAPI.createWorkingVipUpgrade()
-      applyCreatedPayment(operationId, result)
+      await onStartVipUpgrade()
+      handleClose()
     } catch (error: unknown) {
       if (!isCurrentOperation(operationId)) return
       if (getPaymentErrorStatus(error) === 409) {
         handleConflict()
         return
       }
-      const fallback = getPaymentErrorStatus(error) === 404 ? 'VIP 暂未开放，请稍后再试' : '创建 VIP 支付订单失败，请稍后重试'
+      const fallback = getPaymentErrorStatus(error) === 404 ? 'VIP 暂未开放，请稍后再试' : '无法打开 VIP 支付对话，请稍后重试'
       updatePaymentState(operationId, (current) => ({
         ...current,
         phase: 'error',

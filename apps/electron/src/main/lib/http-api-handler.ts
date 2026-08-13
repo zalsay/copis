@@ -22,6 +22,7 @@ import {
   COPIS_WORKING_CHANNEL_ID,
   COPIS_WORKING_EXPERT_MODEL_ID,
   COPIS_WORKING_FAST_MODEL_ID,
+  WORKING_IPC_CHANNELS,
 } from '@copis/shared'
 import { resolveCopisHttpApiPort } from '@copis/shared/config'
 import type {
@@ -47,6 +48,7 @@ import type {
   WorkingVerifyPasswordResetCodeInput,
   WorkingWorkspaceInput,
   WorkingReceiveChannel,
+  WorkingAuthState,
 } from '@copis/shared'
 import { fileService } from './file-service'
 import { getAgentWorkspace, getAgentWorkspaceWritableRoot } from './agent-workspace-manager'
@@ -82,6 +84,7 @@ interface WorkingApiFacade {
   readonly baseUrl: string
   getToken(): string | null
   getCachedUser(): ReturnType<WorkingApiClient['getCachedUser']>
+  refreshAfterVipPayment(): ReturnType<WorkingApiClient['refreshAfterVipPayment']>
   login(input: WorkingLoginInput): ReturnType<WorkingApiClient['login']>
   register(input: WorkingRegisterInput): ReturnType<WorkingApiClient['register']>
   sendVerificationCode(input: WorkingSendVerificationCodeInput): ReturnType<WorkingApiClient['sendVerificationCode']>
@@ -106,6 +109,8 @@ export interface HttpApiDependencies {
   getWorkingClient: () => WorkingApiFacade
   getAppSettings: () => AppSettings
   updateAppSettings: (updates: Partial<AppSettings>) => AppSettings
+  /** Rust 后台支付确认后，向主渲染进程广播最新 Working 账户资料。 */
+  notifyWorkingAuthUpdated?: (state: WorkingAuthState) => void
   getAgentApi?: () => Promise<AgentHttpFacade>
   getFileApi?: () => FileHttpFacade | Promise<FileHttpFacade>
   getBrowserAgentToolApi?: () => BrowserAgentToolHttpApi | Promise<BrowserAgentToolHttpApi>
@@ -155,6 +160,15 @@ const defaultDependencies: HttpApiDependencies = {
   getWorkingClient: getWorkingApiClient,
   getAppSettings: getSettings,
   updateAppSettings: updateSettings,
+  notifyWorkingAuthUpdated: (state) => {
+    void import('../index').then(({ getMainWindow }) => {
+      const mainWindow = getMainWindow()
+      if (!mainWindow || mainWindow.isDestroyed() || mainWindow.webContents.isDestroyed()) return
+      mainWindow.webContents.send(WORKING_IPC_CHANNELS.AUTH_UPDATED, state)
+    }).catch((error: unknown) => {
+      console.error('[Copis Working] 广播账户状态失败:', error)
+    })
+  },
   getFileApi: () => fileService,
 }
 
@@ -1141,6 +1155,16 @@ export async function handleHttpApiRequest(
     }
     if (segments[1] === 'internal' && segments[2] === 'agent') {
       return await handleAgentRpcInternalRequest(request, segments, dependencies)
+    }
+    if (segments[1] === 'internal' && segments[2] === 'working-auth' && segments[3] === 'refresh-after-vip' && request.method === 'POST') {
+      const workingClient = dependencies.getWorkingClient()
+      const refreshed = await workingClient.refreshAfterVipPayment()
+      dependencies.notifyWorkingAuthUpdated?.({
+        authenticated: true,
+        user: workingClient.getCachedUser(),
+        backendUrl: workingClient.baseUrl,
+      })
+      return { status: 200, body: refreshed }
     }
     if (segments[1] === 'internal' && segments[2] === 'automation') {
       return await handleAutomationInternalRequest(request, segments)

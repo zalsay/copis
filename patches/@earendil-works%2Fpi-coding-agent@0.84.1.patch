@@ -1,5 +1,5 @@
 diff --git a/dist/core/agent-session.d.ts b/dist/core/agent-session.d.ts
-index b7a48336ddf4c0bcbf9609a91aba1a260635a19d..0eb38bfc0edb01f7413178379f8778de3c8c539e 100644
+index f37d1ccd41418199e1450f753de8d03b3205c83d..4f8007851b77b311b1fa2aeea4cfadf51929b212 100644
 --- a/dist/core/agent-session.d.ts
 +++ b/dist/core/agent-session.d.ts
 @@ -69,15 +69,38 @@ export type AgentSessionEvent = Exclude<AgentEvent, {
@@ -60,7 +60,7 @@ index b7a48336ddf4c0bcbf9609a91aba1a260635a19d..0eb38bfc0edb01f7413178379f8778de
 +    private _retryRunAttempts;
 +    private _retryRunDelayMs;
 +    private _pendingRetryAttemptStart;
-     private _bashAbortController;
+     private readonly _bashAbortControllers;
      private _pendingBashMessages;
      private _extensionRunner;
 @@ -263,6 +284,8 @@ export declare class AgentSession {
@@ -73,10 +73,10 @@ index b7a48336ddf4c0bcbf9609a91aba1a260635a19d..0eb38bfc0edb01f7413178379f8778de
      /** Find the last assistant message in agent state (including aborted ones) */
      private _findLastAssistantMessage;
 diff --git a/dist/core/agent-session.js b/dist/core/agent-session.js
-index c99a78f31ce2d58973ab1809bd72deb8a1f4135b..c18440c12741292d412f323fa53ff8d20e50a746 100644
+index ce8a9a2a613c08de483a6c94ef4f6341efff0457..7f8641a5fb7ef61965126e6baa9578627b54e432 100644
 --- a/dist/core/agent-session.js
 +++ b/dist/core/agent-session.js
-@@ -100,7 +100,14 @@ export class AgentSession {
+@@ -101,7 +101,14 @@ export class AgentSession {
      _branchSummaryAbortController = undefined;
      // Retry state
      _retryAbortController = undefined;
@@ -89,10 +89,10 @@ index c99a78f31ce2d58973ab1809bd72deb8a1f4135b..c18440c12741292d412f323fa53ff8d2
 +    /** 已完成等待、将在紧邻 agent.continue() 前发出的实际 retry-start 事件。 */
 +    _pendingRetryAttemptStart = undefined;
      // Bash execution state
-     _bashAbortController = undefined;
+     _bashAbortControllers = new Set();
      _pendingBashMessages = [];
-@@ -372,22 +379,45 @@ export class AgentSession {
-                 if (assistantMsg.stopReason !== "error") {
+@@ -385,22 +392,45 @@ export class AgentSession {
+                 if (assistantMsg.stopReason !== "error" && assistantMsg.stopReason !== "length") {
                      this._overflowRecoveryAttempted = false;
                  }
 -                // Reset retry counter immediately on successful assistant response
@@ -107,8 +107,8 @@ index c99a78f31ce2d58973ab1809bd72deb8a1f4135b..c18440c12741292d412f323fa53ff8d2
                      this._emit({
                          type: "auto_retry_end",
 -                        success: true,
-+                        success: !retryCancelled,
 -                        attempt: this._retryAttempt,
++                        success: !retryCancelled,
 +                        outcome: retryCancelled ? "cancelled" : "succeeded",
 +                        ...this._getRetryEventDetails(this._retryAttempt, settings),
                      });
@@ -183,7 +183,7 @@ index c99a78f31ce2d58973ab1809bd72deb8a1f4135b..c18440c12741292d412f323fa53ff8d2
                  finalError: msg.errorMessage,
              });
              this._retryAttempt = 0;
-@@ -2117,22 +2162,30 @@ export class AgentSession {
+@@ -2120,22 +2165,30 @@ export class AgentSession {
       */
      async _prepareRetry(message) {
          const settings = this.settingsManager.getRetrySettings();
@@ -226,7 +226,7 @@ index c99a78f31ce2d58973ab1809bd72deb8a1f4135b..c18440c12741292d412f323fa53ff8d2
          });
          // Remove error message from agent state (keep in session for history)
          const messages = this.agent.state.messages;
-@@ -2146,12 +2199,12 @@ export class AgentSession {
+@@ -2149,12 +2202,12 @@ export class AgentSession {
          }
          catch {
              // Aborted during sleep - emit end event so UI can clean up
@@ -241,7 +241,7 @@ index c99a78f31ce2d58973ab1809bd72deb8a1f4135b..c18440c12741292d412f323fa53ff8d2
                  finalError: "Retry cancelled",
              });
              return false;
-@@ -2159,6 +2212,7 @@ export class AgentSession {
+@@ -2162,6 +2215,7 @@ export class AgentSession {
          finally {
              this._retryAbortController = undefined;
          }
@@ -250,10 +250,10 @@ index c99a78f31ce2d58973ab1809bd72deb8a1f4135b..c18440c12741292d412f323fa53ff8d2
      }
      /**
 diff --git a/dist/core/settings-manager.d.ts b/dist/core/settings-manager.d.ts
-index 3922a195729b0f75474af8d31c5cb3e0dc6da0d2..79ee30ed99c9df0b5853df427308692bc5c413e2 100644
+index 0347d9a494d39caa1def813560503504d12d4be1..c7641fd340b4b9ab979aef8e47dd89805253ad26 100644
 --- a/dist/core/settings-manager.d.ts
 +++ b/dist/core/settings-manager.d.ts
-@@ -16,8 +16,16 @@ export interface ProviderRetrySettings {
+@@ -17,8 +17,16 @@ export interface ProviderRetrySettings {
  }
  export interface RetrySettings {
      enabled?: boolean;
@@ -269,8 +269,8 @@ index 3922a195729b0f75474af8d31c5cb3e0dc6da0d2..79ee30ed99c9df0b5853df427308692b
 +    maxTotalDelayMs?: number;
      provider?: ProviderRetrySettings;
  }
- export interface TerminalSettings {
-@@ -214,6 +222,9 @@ export declare class SettingsManager {
+ export type TuiMode = RendererTuiMode;
+@@ -220,6 +228,9 @@ export declare class SettingsManager {
          enabled: boolean;
          maxRetries: number;
          baseDelayMs: number;
@@ -281,10 +281,10 @@ index 3922a195729b0f75474af8d31c5cb3e0dc6da0d2..79ee30ed99c9df0b5853df427308692b
      getHttpIdleTimeoutMs(): number;
      setHttpIdleTimeoutMs(timeoutMs: number): void;
 diff --git a/dist/core/settings-manager.js b/dist/core/settings-manager.js
-index 4021796dfe036381eeaa6c119589f1d405275a03..adf363fc1985511ae737f70ec1473bb0aa657047 100644
+index cb06c10d276238865234d1129dfec66ab3ab7f9b..3a6b65b3ba4aa1bf025b42f98ff22242f428fb0b 100644
 --- a/dist/core/settings-manager.js
 +++ b/dist/core/settings-manager.js
-@@ -551,10 +551,16 @@ export class SettingsManager {
+@@ -548,10 +548,16 @@ export class SettingsManager {
          this.save();
      }
      getRetrySettings() {

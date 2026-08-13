@@ -98,6 +98,34 @@ describe('Copis Working API client', () => {
     expect(store.refreshToken).toBe('new-refresh-token')
   })
 
+  test('refreshes credentials and user level immediately after VIP payment is fulfilled', async () => {
+    const store = createStore('old-access-token', 'refresh-secret')
+    const client = new WorkingApiClient({
+      baseUrl: 'https://backend.example.test',
+      tokenStore: store,
+      fetchImpl: async (url, init) => {
+        if (url.endsWith('/api/auth/refresh')) {
+          expect(init?.body).toBe(JSON.stringify({ refresh_token: 'refresh-secret' }))
+          return jsonResponse({ token: 'vip-access-token', refresh_token: 'vip-refresh-token' })
+        }
+        if (url.endsWith('/api/users/me')) {
+          expect(new Headers(init?.headers).get('Authorization')).toBe('Bearer vip-access-token')
+          return jsonResponse({ data: { ID: 7, Email: 'user@example.com', Nickname: 'Copis 用户', IsVIP: true } })
+        }
+        throw new Error(`unexpected request: ${url}`)
+      },
+    })
+
+    await expect(client.refreshAfterVipPayment()).resolves.toEqual({
+      token: 'vip-access-token',
+      userId: '7',
+      isVip: true,
+    })
+    expect(store.token).toBe('vip-access-token')
+    expect(store.refreshToken).toBe('vip-refresh-token')
+    expect(store.user).toEqual(expect.objectContaining({ id: 7, isVip: true }))
+  })
+
   test('maps snake_case Working responses and encodes history identifiers', async () => {
     const store = createStore('token')
     const calls: string[] = []

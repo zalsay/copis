@@ -83,6 +83,62 @@ fn payment_account_key_changes_when_working_user_changes() {
     assert_ne!(state.payment_account_key().as_deref(), Some(first_account_key.as_str()));
 }
 
+#[test]
+fn pending_vip_payment_is_classified_for_vip_recovery() {
+    let pending = json!({
+        "package": {
+            "service_id": "API_3D421D0662F747BA",
+            "goods_name": "pi-vip"
+        },
+        "payment": {
+            "payment_id": "vip-payment-7"
+        }
+    });
+
+    assert_eq!(
+        super::pending_payment_flow_kind(&pending).unwrap(),
+        super::DesktopPaymentFlowKind::Vip,
+    );
+}
+
+struct FakeVipPaymentRefresher {
+    calls: Mutex<usize>,
+}
+
+impl FakeVipPaymentRefresher {
+    fn new() -> Self {
+        Self {
+            calls: Mutex::new(0),
+        }
+    }
+}
+
+impl super::VipPaymentRefresher for FakeVipPaymentRefresher {
+    fn refresh_after_vip_payment(&self) -> Result<super::RefreshedWorkingAuth, String> {
+        *self.calls.lock().unwrap() += 1;
+        Ok(super::RefreshedWorkingAuth {
+            token: "refreshed-token".to_string(),
+            user_id: "user-7".to_string(),
+        })
+    }
+}
+
+#[test]
+fn vip_resource_ready_refreshes_auth_but_diamond_or_pending_does_not() {
+    let state = WorkingPaymentState::new();
+    let auth_state = SkillMarketState::new(Some("payment-token".to_string()));
+    let refresher = std::sync::Arc::new(FakeVipPaymentRefresher::new());
+    state.set_vip_payment_refresher(refresher.clone());
+
+    state.refresh_after_payment(super::DesktopPaymentFlowKind::Diamond, "resource_ready", &auth_state);
+    state.refresh_after_payment(super::DesktopPaymentFlowKind::Vip, "pending_user_pay", &auth_state);
+    assert_eq!(*refresher.calls.lock().unwrap(), 0);
+
+    state.refresh_after_payment(super::DesktopPaymentFlowKind::Vip, "resource_ready", &auth_state);
+    assert_eq!(*refresher.calls.lock().unwrap(), 1);
+    assert_eq!(auth_state.access_token().as_deref(), Some("refreshed-token"));
+}
+
 fn read_request(stream: &mut TcpStream) -> (String, String, String, Vec<u8>) {
     let mut header = Vec::new();
     let mut byte = [0_u8; 1];
@@ -370,8 +426,14 @@ fn desktop_diamond_payment_is_automatically_checked_by_rust_and_never_calls_lega
         br#"{"packageId":7}"#,
     )
     .unwrap();
-    let failures =
-        poll_desktop_payments_once(&payment_state, &worker, &fixture.workspace, "payment-token", "account-7");
+    let failures = poll_desktop_payments_once(
+        &payment_state,
+        &worker,
+        &fixture.workspace,
+        &state,
+        "payment-token",
+        "account-7",
+    );
 
     backend.join().unwrap();
     restore_backend_url(previous_backend);
@@ -649,6 +711,7 @@ fn desktop_payment_forwards_paid_status_without_payment_proof_for_go_api_fallbac
         &payment_state,
         &worker,
         &fixture.workspace,
+        &SkillMarketState::new(Some("payment-token".to_string())),
         "payment-token",
         "account-7",
         "pay-7",
@@ -720,6 +783,7 @@ fn desktop_payment_prefers_out_shake_no_and_forwards_paid_status_without_payment
         &payment_state,
         &worker,
         &fixture.workspace,
+        &SkillMarketState::new(Some("payment-token".to_string())),
         "payment-token",
         "account-7",
         "pay-7",
@@ -835,8 +899,15 @@ fn rust_automatically_recovers_pending_payment_after_restart() {
     let payment_state = WorkingPaymentState::new();
 
     let recovered = recover_pending_desktop_payment(&payment_state, "payment-token").unwrap();
-    let failures =
-        poll_desktop_payments_once(&payment_state, &worker, &fixture.workspace, "payment-token", "account-7");
+    let auth_state = SkillMarketState::new(Some("payment-token".to_string()));
+    let failures = poll_desktop_payments_once(
+        &payment_state,
+        &worker,
+        &fixture.workspace,
+        &auth_state,
+        "payment-token",
+        "account-7",
+    );
 
     backend.join().unwrap();
     restore_backend_url(previous_backend);
@@ -850,6 +921,99 @@ fn rust_automatically_recovers_pending_payment_after_restart() {
     assert!(calls[0].1.get("tradeNo").is_none());
     assert_eq!(calls[0].1["resourceUrl"], "https://seller.example.test/resource");
     assert!(calls[0].1.get("paymentNeeded").is_none());
+}
+
+#[test]
+fn rust_recovers_pending_vip_payment_and_refreshes_auth_after_fulfillment() {
+    let _env_guard = backend_env_test_lock().lock().unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let backend = std::thread::spawn(move || {
+        let expected = [
+            (
+                "GET",
+                "/api/pay/alipay/diamond-purchases/pending",
+                "Bearer payment-token",
+                None,
+                r#"{"data":{"payment":{"payment_id":"vip-pay-7","trade_no":"vip-trade-7","status":"pending_user_pay"},"package":{"id":6,"service_id":"pi-vip"}}}"#,
+            ),
+            (
+                "POST",
+                "/api/internal/working-desktop/payment-capabilities",
+                "Bearer payment-token",
+                Some(br#"{"flow_kind":"vip"}"#.as_slice()),
+                r#"{"data":{"capability":"wdpc_rehydrated_vip","flow_kind":"vip"}}"#,
+            ),
+            (
+                "POST",
+                "/api/internal/working-desktop/alipay/vip/prepare",
+                "Bearer wdpc_rehydrated_vip",
+                Some(br#"{}"#.as_slice()),
+                r#"{"data":{"payment":{"payment_id":"vip-pay-7","trade_no":"vip-trade-7","status":"pending_user_pay"}}}"#,
+            ),
+            (
+                "POST",
+                "/api/internal/working-desktop/alipay/payment-context",
+                "Bearer wdpc_rehydrated_vip",
+                Some(br#"{"payment_id":"vip-pay-7"}"#.as_slice()),
+                r#"{"data":{"payment_id":"vip-pay-7","payment_needed":{"protocol":"402"},"resource_url":"https://seller.example.test/resource","method":"POST","data":"{}","headers":{"Content-Type":"application/json"}}}"#,
+            ),
+            (
+                "POST",
+                "/api/internal/working-desktop/alipay/payment-finalize",
+                "Bearer wdpc_rehydrated_vip",
+                Some(br#"{"payment_id":"vip-pay-7","action":"check","check_result":{"status":"paid","trade_no":"vip-trade-7","payment_proof":"proof-7"}}"#.as_slice()),
+                r#"{"data":{"payment":{"payment_id":"vip-pay-7","status":"resource_ready"}}}"#,
+            ),
+        ];
+        for (method_expected, path_expected, authorization_expected, body_expected, response) in expected {
+            let (mut stream, _) = listener.accept().unwrap();
+            let (method, path, authorization, body) = read_request(&mut stream);
+            assert_eq!(method, method_expected);
+            assert_eq!(path, path_expected);
+            assert_eq!(authorization, authorization_expected);
+            if let Some(body_expected) = body_expected {
+                assert_eq!(
+                    serde_json::from_slice::<serde_json::Value>(&body).unwrap(),
+                    serde_json::from_slice::<serde_json::Value>(body_expected).unwrap(),
+                );
+            }
+            respond(&mut stream, response);
+        }
+    });
+
+    let previous_backend = std::env::var("COPIS_BACKEND_URL").ok();
+    std::env::set_var("COPIS_BACKEND_URL", format!("http://127.0.0.1:{}", port));
+    let fixture = PaymentWorkspaceFixture::new();
+    let worker = FakePaymentWorker::new(vec![Ok(json!({
+        "ok": true,
+        "status": "paid",
+        "tradeNo": "vip-trade-7",
+        "paymentProof": "proof-7",
+    }))]);
+    let payment_state = WorkingPaymentState::new();
+    let auth_state = SkillMarketState::new(Some("payment-token".to_string()));
+    let refresher = std::sync::Arc::new(FakeVipPaymentRefresher::new());
+    payment_state.set_vip_payment_refresher(refresher.clone());
+
+    assert!(recover_pending_desktop_payment(&payment_state, "payment-token").unwrap());
+    assert_eq!(
+        poll_desktop_payments_once(
+            &payment_state,
+            &worker,
+            &fixture.workspace,
+            &auth_state,
+            "payment-token",
+            "account-7",
+        ),
+        0,
+    );
+
+    backend.join().unwrap();
+    restore_backend_url(previous_backend);
+
+    assert_eq!(*refresher.calls.lock().unwrap(), 1);
+    assert_eq!(auth_state.access_token().as_deref(), Some("refreshed-token"));
 }
 
 #[test]

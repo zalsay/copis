@@ -20,12 +20,15 @@ import { automationFormAtom } from '@/atoms/automation-atoms'
 import { activeViewAtom } from '@/atoms/active-view'
 import { interfaceVariantAtom } from '@/atoms/theme'
 import { CopisWorkingSettingsPanel } from './CopisWorkingSettingsPanel'
+import { CopisWorkingPaymentModal } from './CopisWorkingPaymentModal'
 import { SearchDialog } from './SearchDialog'
 import { detectIsWindows, WINDOW_CONTROLS_INSET_RIGHT } from '@/lib/platform'
 import { cn } from '@/lib/utils'
-import { workingHistorySelectionAtom, workingSettingsOpenAtom } from '@/atoms/working-atoms'
+import { workingAuthStateAtom, workingHistorySelectionAtom, workingSettingsOpenAtom, workingVipStatusAtom } from '@/atoms/working-atoms'
 import { activeWebTabIdAtom } from '@/atoms/web-tabs'
 import { WebBrowserSurface, WebTabBar } from '@/components/web-browser'
+import { useStartCopisDiamondPurchase, useStartCopisVipUpgrade } from '@/hooks/useStartCopisDiamondPurchase'
+import { workingPaymentStateAtom } from '@/atoms/working-payment-atoms'
 
 const MIN_RIGHT_PANEL_WIDTH = 300
 const MAX_RIGHT_PANEL_WIDTH = 560
@@ -53,7 +56,13 @@ export function AppShell({ contextValue }: AppShellProps): React.ReactElement {
   const automationForm = useAtomValue(automationFormAtom)
   const interfaceVariant = useAtomValue(interfaceVariantAtom)
   const workingSettingsOpen = useAtomValue(workingSettingsOpenAtom)
+  const workingAuth = useAtomValue(workingAuthStateAtom)
+  const paymentOpen = useAtomValue(workingPaymentStateAtom).open
+  const workingVipStatus = useAtomValue(workingVipStatusAtom)
   const setWorkingSettingsOpen = useSetAtom(workingSettingsOpenAtom)
+  const setWorkingVipStatus = useSetAtom(workingVipStatusAtom)
+  const startCopisDiamondPurchase = useStartCopisDiamondPurchase()
+  const startCopisVipUpgrade = useStartCopisVipUpgrade()
   const isClassic = interfaceVariant === 'classic'
   // 定时任务表单打开时隐藏右侧文件面板，让中间区域扩展到全宽（表单内含自己的右栏配置）
   const activeView = useAtomValue(activeViewAtom)
@@ -61,6 +70,13 @@ export function AppShell({ contextValue }: AppShellProps): React.ReactElement {
   const showRightPanel = appMode === 'agent' && !!currentSessionId && !workingHistorySelection && !automationForm.open && activeView !== 'planning' && activeView !== 'agent-skills' && activeView !== 'memory' && activeView !== 'expert-team'
   const isWindows = React.useMemo(() => detectIsWindows(), [])
   const activeWebTabId = useAtomValue(activeWebTabIdAtom)
+
+  React.useEffect(() => {
+    if (!paymentOpen || workingVipStatus) return
+    void window.electronAPI.getWorkingSettingsSnapshot()
+      .then((snapshot) => setWorkingVipStatus(snapshot.vip))
+      .catch((error) => console.error('[Copis Working] 读取 VIP 支付配置失败:', error))
+  }, [paymentOpen, setWorkingVipStatus, workingVipStatus])
 
   // 左侧边栏可拖拽宽度
   const [leftSidebarWidth, setLeftSidebarWidth] = useAtom(leftSidebarWidthAtom)
@@ -257,6 +273,19 @@ export function AppShell({ contextValue }: AppShellProps): React.ReactElement {
               <CopisWorkingSettingsPanel onClose={() => setWorkingSettingsOpen(false)} />
             </div>
           )}
+          <CopisWorkingPaymentModal
+            vipStatus={workingVipStatus ?? (workingAuth?.user ? {
+              isVip: workingAuth.user.isVip === true,
+              vipExpiresAt: workingAuth.user.vipExpiresAt ?? null,
+              tokens: workingAuth.user.tokens ?? 0,
+              diamonds: workingAuth.user.tokens ?? 0,
+              upgradeDays: 30,
+              quotaBytes: 0,
+              quotaLabel: '',
+            } : null)}
+            onStartDiamondPurchase={startCopisDiamondPurchase}
+            onStartVipUpgrade={startCopisVipUpgrade}
+          />
         </div>
       </div>
     </AppShellProvider>

@@ -2,12 +2,19 @@ import { describe, expect, mock, test } from 'bun:test'
 import { EventEmitter } from 'node:events'
 import { PassThrough } from 'node:stream'
 import { createHash } from 'node:crypto'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { gzipSync } from 'node:zlib'
 import type { FunctionalModuleArtifact, FunctionalModuleStartupProgressPayload } from '@copis/shared'
 import { FUNCTIONAL_MODULE_IPC_CHANNELS } from '@copis/shared'
+import {
+  activateFunctionalModule,
+  assembleFunctionalModule,
+  cacheFunctionalModule,
+  getFunctionalModulePaths,
+  type FunctionalModulePackage,
+} from './functional-module-store'
 
 mock.module('electron', () => ({
   app: {
@@ -38,8 +45,23 @@ const {
   ensureRequiredFunctionalModules,
   toStartupError,
 } = await import('./functional-module-startup')
-const { stopHttpApiServer } = await import('./http-api-server')
+const { startHttpApiServer, stopHttpApiServer } = await import('./http-api-server')
 import type { HttpApiSpawn } from './http-api-server'
+
+async function activateModuleVersion(
+  modulesRoot: string,
+  packageInfo: FunctionalModulePackage,
+  content: Buffer | string,
+): Promise<string> {
+  mkdirSync(modulesRoot, { recursive: true })
+  const source = join(modulesRoot, `${packageInfo.name}-${packageInfo.version}.source`)
+  writeFileSync(source, content)
+  const paths = getFunctionalModulePaths(modulesRoot)
+  await cacheFunctionalModule(paths, packageInfo, source)
+  const versionDir = await assembleFunctionalModule(paths, packageInfo)
+  await activateFunctionalModule(paths, packageInfo, versionDir)
+  return join(versionDir, packageInfo.entrypoint)
+}
 
 class StartupFakeChild extends EventEmitter {
   readonly stdin = new PassThrough()
@@ -335,6 +357,128 @@ describe('登录后功能模块启动契约', () => {
       expect(records.some((record) => record.runtimeRoot?.includes('/node-runtime/'))).toBe(true)
       expect(records.some((record) => record.alipayBotCli?.includes('/alipay-bot/'))).toBe(true)
       expect(records.some((record) => record.alipayBotNode?.endsWith('/bin/node'))).toBe(true)
+    } finally {
+      await stopHttpApiServer(5)
+      rmSync(rootDir, { recursive: true, force: true })
+    }
+  })
+
+  test('依赖模块更新而 Rust API 未更新时，正式 health 检查前重启 Rust 并注入新入口', async () => {
+    const rootDir = mkdtempSync(join(tmpdir(), 'copis-functional-module-startup-runtime-refresh-'))
+    const modulesRoot = join(rootDir, 'modules')
+    const oldNodeContent = createTarGz({ 'bin/node': 'old-node', 'bin/npm': 'old-npm' })
+    const newNodeContent = createTarGz({ 'bin/node': 'new-node', 'bin/npm': 'new-npm' })
+    const oldAlipayBotContent = createTarGz({
+      'bin/alipay-bot': 'old-alipay-bot',
+      'runtime/dist/cli.js': 'old-cli',
+    })
+    const newAlipayBotContent = createTarGz({
+      'bin/alipay-bot': 'new-alipay-bot',
+      'runtime/dist/cli.js': 'new-cli',
+    })
+    const rustContent = 'stable-rust-http-api'
+    const packageArtifact = (
+      name: 'node-runtime' | 'alipay-bot' | 'rust-http-api',
+      version: string,
+      content: Buffer | string,
+    ) => ({
+      name,
+      version,
+      url: `https://download.example.com/${name}-${version}`,
+      sha256: createHash('sha256').update(content).digest('hex'),
+      size: Buffer.byteLength(content),
+      format: (name === 'rust-http-api' ? 'binary' : 'tar.gz') as 'binary' | 'tar.gz',
+      entrypoint: name === 'rust-http-api' ? 'bin/copis-http-api-server' : name === 'alipay-bot' ? 'bin/alipay-bot' : 'bin/node',
+      required: true,
+    })
+    const oldNode = packageArtifact('node-runtime', '24.19.3', oldNodeContent)
+    const newNode = packageArtifact('node-runtime', '24.19.4', newNodeContent)
+    const oldAlipayBot = packageArtifact('alipay-bot', '0.3.39', oldAlipayBotContent)
+    const newAlipayBot = packageArtifact('alipay-bot', '0.3.40', newAlipayBotContent)
+    const rust = packageArtifact('rust-http-api', '0.1.2', rustContent)
+    const manifest = {
+      schema: 1,
+      channel: 'stable',
+      platforms: {
+        'darwin-arm64': {
+          modules: {
+            'node-runtime': newNode,
+            officecli: {
+              version: '1.0.143',
+              url: 'https://download.example.com/officecli-1.0.143',
+              sha256: createHash('sha256').update('officecli').digest('hex'),
+              size: 'officecli'.length,
+              format: 'binary' as const,
+              entrypoint: 'bin/officecli',
+              required: true,
+            },
+            'alipay-bot': newAlipayBot,
+            'rust-http-api': rust,
+          },
+        },
+      },
+    }
+    const records: Array<{
+      file: string
+      child: StartupFakeChild
+      alipayBotCli?: string
+      alipayBotNode?: string
+    }> = []
+    const spawnImpl = ((file, _args, options) => {
+      const child = new StartupFakeChild()
+      records.push({
+        file,
+        child,
+        alipayBotCli: typeof options.env?.COPIS_ALIPAY_BOT_CLI === 'string' ? options.env.COPIS_ALIPAY_BOT_CLI : undefined,
+        alipayBotNode: typeof options.env?.COPIS_ALIPAY_BOT_NODE === 'string' ? options.env.COPIS_ALIPAY_BOT_NODE : undefined,
+      })
+      return child as unknown as ReturnType<HttpApiSpawn>
+    }) as HttpApiSpawn
+    const fetchImpl = async (input: string): Promise<Response> => {
+      if (input.endsWith('/manifest.json')) return new Response(JSON.stringify(manifest), { status: 200 })
+      if (input.includes('/api/health')) return new Response(JSON.stringify({ ok: true, service: 'copis-http-api' }), { status: 200 })
+      if (input.endsWith('/node-runtime-24.19.4')) return new Response(new Uint8Array(newNodeContent), { status: 200 })
+      if (input.endsWith('/alipay-bot-0.3.40')) return new Response(new Uint8Array(newAlipayBotContent), { status: 200 })
+      if (input.endsWith('/officecli-1.0.143')) return new Response('officecli', { status: 200 })
+      return new Response('not found', { status: 404 })
+    }
+
+    try {
+      await activateModuleVersion(modulesRoot, oldNode, oldNodeContent)
+      await activateModuleVersion(modulesRoot, {
+        name: 'officecli',
+        version: '1.0.143',
+        sha256: createHash('sha256').update('officecli').digest('hex'),
+        size: 'officecli'.length,
+        format: 'binary',
+        entrypoint: 'bin/officecli',
+        required: true,
+      }, 'officecli')
+      await activateModuleVersion(modulesRoot, oldAlipayBot, oldAlipayBotContent)
+      await activateModuleVersion(modulesRoot, rust, rustContent)
+      startHttpApiServer({
+        rootDir: modulesRoot,
+        spawnImpl,
+      })
+
+      await ensureRequiredFunctionalModules({
+        rootDir: modulesRoot,
+        manifestUrl: 'https://download.example.com/manifest.json',
+        platform: 'darwin',
+        arch: 'arm64',
+        clientVersion: '0.0.4',
+        fetchImpl,
+        spawnImpl,
+        healthTimeoutMs: 10,
+        stopTimeoutMs: 5,
+      })
+
+      expect(records).toHaveLength(2)
+      expect(records[0]?.child.killed).toBe(true)
+      expect(records[0]?.alipayBotCli).toContain('/alipay-bot/0.3.39-')
+      expect(records[0]?.alipayBotNode).toContain('/node-runtime/24.19.3-')
+      expect(records[1]?.alipayBotCli).toContain('/alipay-bot/0.3.40-')
+      expect(records[1]?.alipayBotNode).toContain('/node-runtime/24.19.4-')
     } finally {
       await stopHttpApiServer(5)
       rmSync(rootDir, { recursive: true, force: true })

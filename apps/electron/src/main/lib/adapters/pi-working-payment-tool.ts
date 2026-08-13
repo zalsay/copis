@@ -8,7 +8,7 @@ type FetchImplementation = (input: RequestInfo | URL, init?: RequestInit) => Pro
 const DEFAULT_HTTP_API_PORT = 51730
 const WORKING_PAYMENT_ENDPOINT = '/api/working'
 
-export type WorkingPaymentAction = 'packages.list' | 'orders.pending' | 'order.create' | 'order.check'
+export type WorkingPaymentAction = 'packages.list' | 'orders.pending' | 'order.create' | 'vip.create' | 'order.check'
 
 export interface PiWorkingPaymentToolOptions {
   baseUrl?: string
@@ -123,7 +123,7 @@ export class PiWorkingPaymentToolClient {
         : `Copis 钻石服务请求失败（${response.status}）`
       throw new PiWorkingPaymentToolError(message)
     }
-    return input.action === 'order.create' || input.action === 'orders.pending' ? paymentSummary(payload) : payload
+    return input.action === 'order.create' || input.action === 'vip.create' || input.action === 'orders.pending' ? paymentSummary(payload) : payload
   }
 
   private buildRequest(input: WorkingPaymentToolInput): { method: 'GET' | 'POST'; path: string; body?: string } {
@@ -143,6 +143,13 @@ export class PiWorkingPaymentToolClient {
         body: JSON.stringify({ packageId: input.packageId }),
       }
     }
+    if (input.action === 'vip.create') {
+      return {
+        method: 'POST',
+        path: `${WORKING_PAYMENT_ENDPOINT}/vip/upgrade`,
+        body: '{}',
+      }
+    }
     const paymentId = input.paymentId?.trim()
     if (!paymentId) throw new PiWorkingPaymentToolError('查询 Copis 钻石订单需要有效的订单号')
     return {
@@ -160,11 +167,11 @@ export function buildPiWorkingPaymentTools(
   const client = new PiWorkingPaymentToolClient(options)
   const definition = sdk.defineTool({
     name: 'copis_working_payment',
-    label: 'Copis 钻石购买',
-    description: '查询 Copis 钻石套餐与待支付订单，创建或继续钱包支付会话。',
-    promptSnippet: '购买 Copis 钻石时，先用 orders.pending 查询是否已有待支付订单；若返回可用二维码，则继续该订单且不得创建新订单。没有待支付订单时，依次执行钱包检查、套餐复核、创建订单和等待到账。',
+    label: 'Copis 支付',
+    description: '查询 Copis 钻石套餐与待支付订单，创建钻石或 VIP 的钱包支付会话。',
+    promptSnippet: '购买 Copis 钻石时，先用 orders.pending 查询是否已有待支付订单；若返回可用二维码，则继续该订单且不得创建新订单。没有待支付订单时，依次执行钱包检查、套餐复核、创建订单和等待到账。升级 Copis VIP 时，先检查钱包，再使用 vip.create 创建支付订单并等待到账。用户确认已支付或询问进度时，必须使用当前 paymentId 调用 order.check，并根据返回状态明确回复到账、处理中、未支付或失败结果。',
     parameters: Type.Object({
-      action: Type.Union([Type.Literal('packages.list'), Type.Literal('orders.pending'), Type.Literal('order.create'), Type.Literal('order.check')]),
+      action: Type.Union([Type.Literal('packages.list'), Type.Literal('orders.pending'), Type.Literal('order.create'), Type.Literal('vip.create'), Type.Literal('order.check')]),
       packageId: Type.Optional(Type.Integer({ minimum: 1, description: '已由用户明确确认的 Copis 钻石套餐 ID。' })),
       paymentId: Type.Optional(Type.String({ minLength: 1, description: 'order.create 返回的 payment.paymentId，仅用于本地 Rust 受控查询。' })),
     }),

@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, test } from 'bun:test'
+import { execFileSync, spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import { join, resolve } from 'node:path'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { dirname, join, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
 
 const tempRoots: string[] = []
@@ -43,6 +44,11 @@ function runBuild(source: string, output: string): { exitCode: number; output: s
   }
 }
 
+function extractArchive(archive: string, output: string): void {
+  const result = Bun.spawnSync(['tar', '-xzf', archive, '-C', output])
+  expect(result.exitCode).toBe(0)
+}
+
 describe('Node.js runtime 模块构建', () => {
   const testOnUnix = process.platform === 'win32' ? test.skip : test
 
@@ -82,4 +88,35 @@ describe('Node.js runtime 模块构建', () => {
     const secondSha256 = createHash('sha256').update(readFileSync(secondOutput)).digest('hex')
     expect(secondSha256).toBe(firstSha256)
   })
+
+  const testOnMac = process.platform === 'darwin' ? test : test.skip
+  testOnMac('Given macOS 的系统 Node.js 24 When 构建并解压运行时 Then 归档内 Node.js 不依赖构建机的 Homebrew 动态库', () => {
+    const root = mkdtempSync(join(tmpdir(), 'copis-node-runtime-build-'))
+    tempRoots.push(root)
+    const output = join(root, 'node-runtime.tar.gz')
+    const extracted = join(root, 'extracted')
+    mkdirSync(extracted)
+    const systemNodePath = execFileSync('node', ['-p', 'process.execPath'], { encoding: 'utf8' }).trim()
+    const systemRuntimeRoot = dirname(dirname(systemNodePath))
+    const systemNodeVersion = execFileSync(systemNodePath, ['--version'], { encoding: 'utf8' }).trim()
+
+    const result = runBuild(systemRuntimeRoot, output)
+
+    expect(result.exitCode).toBe(0)
+    extractArchive(output, extracted)
+    expect(readdirSync(join(extracted, 'lib')).some((entry) => /^libnode.*\.dylib$/.test(entry))).toBe(true)
+
+    const bundledNode = join(extracted, 'bin', 'node')
+    const nodeVersion = spawnSync(bundledNode, ['--version'], {
+      env: { PATH: '/usr/bin:/bin', DYLD_LIBRARY_PATH: '' },
+      timeout: 15_000,
+      encoding: 'utf8',
+    })
+    expect(nodeVersion.status).toBe(0)
+    expect(nodeVersion.stdout.trim()).toBe(systemNodeVersion)
+
+    const linkedLibraries = Bun.spawnSync(['otool', '-L', bundledNode])
+    expect(linkedLibraries.exitCode).toBe(0)
+    expect(new TextDecoder().decode(linkedLibraries.stdout)).not.toContain('/opt/homebrew/')
+  }, 30_000)
 })

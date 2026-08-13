@@ -93,6 +93,17 @@ struct WorkingDesktopPaymentFlow {
     request_context: PaymentRequestContext,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RefreshedWorkingAuth {
+    pub token: String,
+    pub user_id: String,
+}
+
+/// refresh token 仅由 Electron 的加密存储持有；Rust 在 VIP 到账后只请求其刷新并接收新的 access token。
+pub trait VipPaymentRefresher: Send + Sync {
+    fn refresh_after_vip_payment(&self) -> Result<RefreshedWorkingAuth, String>;
+}
+
 #[derive(Clone, Debug)]
 struct PaymentRequestContext {
     resource_url: String,
@@ -138,6 +149,7 @@ impl PaymentRequestContext {
 pub struct WorkingPaymentState {
     flows: Mutex<HashMap<String, WorkingDesktopPaymentFlow>>,
     checking: Mutex<HashSet<String>>,
+    vip_payment_refresher: Mutex<Option<Arc<dyn VipPaymentRefresher>>>,
 }
 
 impl WorkingPaymentState {
@@ -156,6 +168,29 @@ impl WorkingPaymentState {
     fn remove(&self, payment_id: &str) {
         self.flows.lock().unwrap().remove(payment_id);
         self.checking.lock().unwrap().remove(payment_id);
+    }
+
+    pub fn set_vip_payment_refresher(&self, refresher: Arc<dyn VipPaymentRefresher>) {
+        *self.vip_payment_refresher.lock().unwrap() = Some(refresher);
+    }
+
+    fn refresh_after_payment(
+        &self,
+        flow_kind: DesktopPaymentFlowKind,
+        status: &str,
+        skill_market_state: &SkillMarketState,
+    ) {
+        if flow_kind != DesktopPaymentFlowKind::Vip || status != "resource_ready" {
+            return;
+        }
+        let Some(refresher) = self.vip_payment_refresher.lock().unwrap().clone() else {
+            eprintln!("[支付] VIP 到账后认证刷新器不可用");
+            return;
+        };
+        match refresher.refresh_after_vip_payment() {
+            Ok(auth) => skill_market_state.set_working_auth(Some(auth.token), Some(auth.user_id)),
+            Err(error) => eprintln!("[支付] VIP 到账后刷新账户状态失败: {}", error),
+        }
     }
 
     fn payment_ids(&self) -> Vec<String> {
@@ -231,6 +266,7 @@ pub fn start_desktop_payment_poller(
                 &payment_state,
                 worker.as_ref(),
                 workspace.as_ref(),
+                skill_market_state.as_ref(),
                 &token,
                 &account_key,
             );
@@ -267,6 +303,7 @@ pub fn poll_desktop_payments_once<P: PaymentWorker>(
     payment_state: &WorkingPaymentState,
     worker: &P,
     workspace: &PaymentWorkspace,
+    skill_market_state: &SkillMarketState,
     working_token: &str,
     payment_account_key: &str,
 ) -> usize {
@@ -278,6 +315,7 @@ pub fn poll_desktop_payments_once<P: PaymentWorker>(
                 payment_state,
                 worker,
                 workspace,
+                skill_market_state,
                 working_token,
                 payment_account_key,
                 payment_id,
@@ -349,6 +387,7 @@ pub fn handle_request<P: PaymentWorker>(
                 payment_state,
                 worker,
                 workspace,
+                state,
                 &token,
                 required_payment_account_key(payment_account_key.as_deref())?,
                 &payment_id,
@@ -566,6 +605,7 @@ fn check_desktop_payment<P: PaymentWorker>(
     payment_state: &WorkingPaymentState,
     worker: &P,
     workspace: &PaymentWorkspace,
+    skill_market_state: &SkillMarketState,
     working_token: &str,
     payment_account_key: &str,
     payment_id: &str,
@@ -618,6 +658,7 @@ fn check_desktop_payment<P: PaymentWorker>(
     let payment = required_object_field(&finalized, "payment", "支付确认响应缺少支付会话")?;
     let status =
         optional_string_field(&payment, "status").unwrap_or_else(|| "pending_user_pay".to_string());
+    payment_state.refresh_after_payment(flow.flow_kind, &status, skill_market_state);
     if is_terminal_payment_status(&payment) {
         payment_state.remove(payment_id);
     }
@@ -672,19 +713,26 @@ fn rehydrate_desktop_payment_flow_from_pending(
         "payment_id",
         "支付会话响应缺少支付会话 ID",
     )?;
+    let flow_kind = pending_payment_flow_kind(&pending)?;
     let package = required_object_field(&pending, "package", "支付会话响应缺少套餐")?;
-    let package_id = package
-        .get("id")
-        .and_then(Value::as_u64)
-        .filter(|value| *value > 0)
-        .ok_or_else(|| invalid_desktop_payment_response("支付会话响应缺少有效套餐 ID"))?;
+    let prepare_body = match flow_kind {
+        DesktopPaymentFlowKind::Diamond => {
+            let package_id = package
+                .get("id")
+                .and_then(Value::as_u64)
+                .filter(|value| *value > 0)
+                .ok_or_else(|| invalid_desktop_payment_response("支付会话响应缺少有效套餐 ID"))?;
+            json!({ "package_id": package_id })
+        }
+        DesktopPaymentFlowKind::Vip => json!({}),
+    };
 
-    let capability = issue_desktop_capability(working_token, DesktopPaymentFlowKind::Diamond)?;
+    let capability = issue_desktop_capability(working_token, flow_kind)?;
     let prepared = remote_json(
         "POST",
-        DesktopPaymentFlowKind::Diamond.prepare_path(),
+        flow_kind.prepare_path(),
         &capability,
-        Some(&json!({ "package_id": package_id }).to_string()),
+        Some(&prepare_body.to_string()),
     )?;
     let prepared_payment = required_object_field(&prepared, "payment", "支付准备响应缺少支付会话")?;
     let prepared_payment_id = required_string_field(
@@ -709,7 +757,7 @@ fn rehydrate_desktop_payment_flow_from_pending(
     let (_, request_context) = payment_request_context(&context)?;
     let flow = WorkingDesktopPaymentFlow {
         capability,
-        flow_kind: DesktopPaymentFlowKind::Diamond,
+        flow_kind,
         trade_no: optional_string_field(&pending_payment, "trade_no")
             .or_else(|| optional_string_field(&prepared_payment, "trade_no")),
         out_shake_no: optional_string_field(&pending_payment, "out_shake_no")
@@ -718,6 +766,17 @@ fn rehydrate_desktop_payment_flow_from_pending(
     };
     payment_state.remember(pending_payment_id, flow.clone());
     Ok(flow)
+}
+
+fn pending_payment_flow_kind(pending: &Value) -> Result<DesktopPaymentFlowKind, SkillMarketError> {
+    let package = required_object_field(pending, "package", "支付会话响应缺少套餐")?;
+    if ["service_id", "goods_name"]
+        .iter()
+        .any(|field| optional_string_field(&package, field).as_deref() == Some("pi-vip"))
+    {
+        return Ok(DesktopPaymentFlowKind::Vip);
+    }
+    Ok(DesktopPaymentFlowKind::Diamond)
 }
 
 fn cancel_desktop_payment(

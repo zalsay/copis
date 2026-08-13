@@ -43,7 +43,8 @@ import {
   dockBadgeCountAtom,
   unviewedCompletedSessionIdsAtom,
 } from './atoms/agent-atoms'
-import { workingClientConfigAtom } from './atoms/working-atoms'
+import { workingAuthStateAtom, workingClientConfigAtom, workingVipStatusAtom } from './atoms/working-atoms'
+import { workingPaymentRefreshAtom } from './atoms/working-payment-atoms'
 import { updateStatusAtom, initializeUpdater } from './atoms/updater'
 import { automationsAtom } from './atoms/automation-atoms'
 import { calendarEventsAtom, planningTagsAtom, todoPlanningGroupsAtom, todosAtom } from './atoms/planning-atoms'
@@ -80,7 +81,7 @@ import {
   COPIS_WORKING_DEEPSEEK_CHANNEL_ID,
   COPIS_WORKING_DEEPSEEK_FAST_MODEL_ID,
 } from '@copis/shared'
-import type { FeishuBotBridgeState, FeishuBridgeState, DingTalkBotBridgeState, DingTalkBridgeState } from '@copis/shared'
+import type { FeishuBotBridgeState, FeishuBridgeState, DingTalkBotBridgeState, DingTalkBridgeState, WorkingAuthState } from '@copis/shared'
 import { Toaster } from './components/ui/sonner'
 import { toast } from 'sonner'
 import { ArrowUpRight } from 'lucide-react'
@@ -196,6 +197,9 @@ function AgentSettingsInitializer(): null {
   const setMaxTurns = useSetAtom(agentMaxTurnsAtom)
   const setAutomationGroupOrder = useSetAtom(automationGroupOrderAtom)
   const setWorkingClientConfig = useSetAtom(workingClientConfigAtom)
+  const setWorkingAuthState = useSetAtom(workingAuthStateAtom)
+  const setWorkingVipStatus = useSetAtom(workingVipStatusAtom)
+  const bumpWorkingPaymentRefresh = useSetAtom(workingPaymentRefreshAtom)
 
   const setAgentSettingsReady = useSetAtom(agentSettingsReadyAtom)
   const setChannels = useSetAtom(channelsAtom)
@@ -210,6 +214,21 @@ function AgentSettingsInitializer(): null {
   const prevCapabilitiesRef = useRef<WorkspaceCapabilities | null>(null)
   // 初次加载标记 — 应用启动或切换工作区时不显示 toast
   const suppressToastRef = useRef(true)
+
+  useEffect(() => {
+    const unsubscribeWorkingAuth = window.electronAPI.onWorkingAuthUpdated((state: WorkingAuthState) => {
+      setWorkingAuthState(state)
+      bumpWorkingPaymentRefresh((value) => value + 1)
+      void window.electronAPI.getWorkingSettingsSnapshot().then((snapshot) => {
+        setWorkingAuthState((current) => current ? { ...current, user: snapshot.user } : state)
+        setWorkingVipStatus(snapshot.vip)
+      }).catch((error: unknown) => {
+        console.error('[Copis Working] 刷新 VIP 状态失败:', error)
+      })
+    })
+
+    return unsubscribeWorkingAuth
+  }, [bumpWorkingPaymentRefresh, setWorkingAuthState, setWorkingVipStatus])
 
   useEffect(() => {
     // 并行加载渠道列表和设置，确保两者都就绪后再验证渠道有效性

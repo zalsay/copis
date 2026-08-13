@@ -366,6 +366,31 @@
   line-height: 1.5;
 }
 
+.copis-working-settings-balance-card,
+.copis-working-settings-vip-card,
+.copis-working-settings-invite-card {
+  position: relative;
+}
+
+.copis-working-settings-balance-conversation-count,
+.copis-working-settings-vip-expiry,
+.copis-working-settings-invite-user-count {
+  position: absolute;
+  bottom: 20px;
+  left: 20px;
+  display: inline-flex;
+  min-height: 24px;
+  align-items: center;
+  padding: 0 8px;
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--ui-primary) 12%, var(--ui-primary-background));
+  color: var(--ui-primary);
+  font-size: 11px;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
 .copis-working-settings-balance {
   margin-top: 22px !important;
   color: var(--ui-primary) !important;
@@ -378,7 +403,7 @@
   min-height: 38px;
   align-items: center;
   gap: 8px;
-  margin-top: 18px;
+  margin-top: 6px;
   padding: 0 11px;
   border: 1px solid hsl(var(--border) / 0.55);
   border-radius: 7px;
@@ -394,21 +419,6 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.copis-working-settings-invite-stats {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-  margin-top: 18px;
-  color: hsl(var(--muted-foreground));
-  font-size: 12px;
-}
-
-.copis-working-settings-invite-stats strong {
-  color: hsl(var(--foreground));
-  font-size: 22px;
-  font-variant-numeric: tabular-nums;
 }
 
 .copis-working-settings-ledger-card {

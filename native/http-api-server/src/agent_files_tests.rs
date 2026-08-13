@@ -340,6 +340,41 @@ fn project_shell_rejects_composition_and_global_package_targets() {
 }
 
 #[test]
+fn project_shell_allows_officecli_document_operations_but_blocks_environment_management() {
+    for command in [
+        "officecli --version",
+        "officecli help docx paragraph",
+        "officecli view report.docx text",
+        "officecli get report.docx /body --json",
+        "officecli set report.docx /body/p[1] --prop bold=true",
+        "officecli create report.docx",
+        "officecli batch report.docx --commands []",
+        "officecli save report.docx",
+    ] {
+        assert!(
+            validate_project_command(command).is_ok(),
+            "应允许 Office 文档操作命令: {command}"
+        );
+    }
+
+    for command in [
+        "officecli install",
+        "officecli mcp",
+        "officecli plugins list",
+        "officecli skills",
+    ] {
+        assert_eq!(
+            validate_project_command(command).unwrap_err().code,
+            "command_not_allowed",
+            "应拒绝 OfficeCLI 环境管理命令: {command}"
+        );
+    }
+    assert!(!requires_advanced_authorization(
+        "officecli view report.docx text"
+    ));
+}
+
+#[test]
 fn project_shell_allows_authorized_bearer_curl_but_rejects_unsafe_structure() {
     let command = "curl -H 'Authorization: Bearer test-token' https://example.test/health";
 
@@ -576,4 +611,83 @@ fn project_command_environment_uses_copis_runtime_path() {
         .and_then(OsStr::to_str);
 
     assert_eq!(configured, Some(expected.as_str()));
+}
+
+#[test]
+fn project_command_environment_injects_valid_officecli_path_before_runtime_path() {
+    let root = temp_dir("officecli-environment");
+    let officecli = root.join("bin").join("officecli");
+    fs::create_dir_all(officecli.parent().unwrap()).unwrap();
+    fs::write(&officecli, "officecli").unwrap();
+    let canonical_officecli = fs::canonicalize(&officecli).unwrap();
+
+    let mut command = Command::new("sh");
+    configure_project_command_environment_with_officecli(&mut command, Some(&officecli));
+
+    let configured_officecli = command
+        .get_envs()
+        .find(|(key, _)| *key == OsStr::new("COPIS_OFFICECLI"))
+        .and_then(|(_, value)| value)
+        .and_then(OsStr::to_str);
+    assert_eq!(
+        configured_officecli,
+        Some(canonical_officecli.to_string_lossy().as_ref())
+    );
+
+    let configured_path = command
+        .get_envs()
+        .find(|(key, _)| *key == OsStr::new("PATH"))
+        .and_then(|(_, value)| value)
+        .map(|value| std::env::split_paths(value).collect::<Vec<_>>())
+        .unwrap();
+    assert_eq!(
+        configured_path.first().map(PathBuf::as_path),
+        canonical_officecli.parent()
+    );
+    let runtime_entries =
+        std::env::split_paths(&crate::runtime::resolve_runtime().path_value()).collect::<Vec<_>>();
+    assert!(configured_path[1..].starts_with(&runtime_entries));
+}
+
+#[cfg(unix)]
+#[test]
+fn project_command_environment_resolves_officecli_from_the_controlled_module_path() {
+    let root = temp_dir("officecli-command");
+    let officecli = root.join("bin").join("officecli");
+    fs::create_dir_all(officecli.parent().unwrap()).unwrap();
+    fs::write(&officecli, "#!/bin/sh\nprintf 'officecli-ready\\n'\n").unwrap();
+    let mut permissions = fs::metadata(&officecli).unwrap().permissions();
+    use std::os::unix::fs::PermissionsExt;
+    permissions.set_mode(0o755);
+    fs::set_permissions(&officecli, permissions).unwrap();
+
+    let mut command = Command::new("/bin/sh");
+    command.args(["-lc", "officecli --version"]);
+    configure_project_command_environment_with_officecli(&mut command, Some(&officecli));
+    let output = command.output().unwrap();
+
+    assert!(output.status.success());
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "officecli-ready\n");
+}
+
+#[test]
+fn project_command_environment_ignores_invalid_officecli_path() {
+    let root = temp_dir("officecli-invalid-environment");
+    let missing = root.join("missing-officecli");
+    let mut command = Command::new("sh");
+    configure_project_command_environment_with_officecli(&mut command, Some(&missing));
+
+    assert!(command
+        .get_envs()
+        .find(|(key, _)| *key == OsStr::new("COPIS_OFFICECLI"))
+        .is_none());
+    let configured_path = command
+        .get_envs()
+        .find(|(key, _)| *key == OsStr::new("PATH"))
+        .and_then(|(_, value)| value)
+        .and_then(OsStr::to_str);
+    assert_eq!(
+        configured_path,
+        Some(crate::runtime::resolve_runtime().path_value().as_str())
+    );
 }

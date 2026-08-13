@@ -167,6 +167,8 @@ async function runRequiredModuleStartup(
       REQUIRED_MODULES.reduce((sum, name) => sum + (artifactByName.get(name)?.size ?? 0), 0),
     )
     let completedWeight = 0
+    let httpApiRuntimeDependenciesUpdated = false
+    let rustHttpApiUpdated = false
 
     publish({ phase: 'modules', detail: '正在准备必要组件', progress: MODULE_PROGRESS_START })
     for (const name of REQUIRED_MODULES) {
@@ -207,12 +209,16 @@ async function runRequiredModuleStartup(
             },
           })
           if (!updated) throw new Error('系统核心模块更新后运行检查未通过')
+          rustHttpApiUpdated = true
         } else {
           await installFunctionalModule({ name }, {
             ...moduleOptions,
             artifactOverride: artifact,
             onProgress: emitModuleProgress,
           })
+          if (name === 'node-runtime' || name === 'officecli' || name === 'alipay-bot') {
+            httpApiRuntimeDependenciesUpdated = true
+          }
         }
       } else {
         emitModuleProgress({
@@ -227,6 +233,9 @@ async function runRequiredModuleStartup(
     }
 
     publish({ phase: 'modules', detail: '必要组件已准备完成', progress: MODULE_PROGRESS_END })
+    if (httpApiRuntimeDependenciesUpdated && !rustHttpApiUpdated) {
+      await stopHttpApiServer(options.stopTimeoutMs)
+    }
     if (!await ensureFormalHttpApiHealth(options, publish)) {
       throw new Error('系统核心模块未通过运行检查')
     }
