@@ -268,7 +268,7 @@
 
 .copis-working-settings-card {
   min-width: 0;
-  min-height: 172px;
+  min-height: 210px;
   padding: 20px;
   border: 1px solid hsl(var(--border) / 0.7);
   border-radius: 8px;
