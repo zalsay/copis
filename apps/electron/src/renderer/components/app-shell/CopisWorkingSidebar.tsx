@@ -223,7 +223,7 @@ export function CopisWorkingSidebar({ width, noTransition = false }: CopisWorkin
     openSession('agent', sessionId, title)
   }
 
-  const createLocalWorkspace = async (selection: WorkingFolderSelection, allowWorkspaceWrite: boolean): Promise<void> => {
+  const createLocalWorkspace = async (selection: WorkingFolderSelection): Promise<void> => {
     try {
       setBusy(true)
       setWorkingHistorySelection(null)
@@ -231,7 +231,6 @@ export function CopisWorkingSidebar({ width, noTransition = false }: CopisWorkin
       const project = await window.electronAPI.createAgentProject({
         name: selection.name,
         projectRootPath: selection.path,
-        allowWorkspaceWrite,
       })
       if (!isAgentSessionMeta(project.session)) throw new Error('创建工作区未返回有效会话')
       setLocalWorkspaces((previous) => [

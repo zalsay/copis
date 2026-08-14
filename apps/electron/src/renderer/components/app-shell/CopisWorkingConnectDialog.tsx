@@ -1,6 +1,6 @@
 import * as React from 'react'
 import { createPortal } from 'react-dom'
-import { Check, FolderOpen, X } from 'lucide-react'
+import { FolderOpen, X } from 'lucide-react'
 import './CopisWorkingConnectDialog.css'
 
 export interface WorkingFolderSelection {
@@ -11,7 +11,7 @@ export interface WorkingFolderSelection {
 interface CopisWorkingConnectDialogProps {
   busy: boolean
   onClose: () => void
-  onConfirm: (selection: WorkingFolderSelection, allowWorkspaceWrite: boolean) => Promise<void>
+  onConfirm: (selection: WorkingFolderSelection) => Promise<void>
 }
 
 export function CopisWorkingConnectDialog({
@@ -20,7 +20,6 @@ export function CopisWorkingConnectDialog({
   onConfirm,
 }: CopisWorkingConnectDialogProps): React.ReactElement {
   const [selection, setSelection] = React.useState<WorkingFolderSelection | null>(null)
-  const [allowWorkspaceWrite, setAllowWorkspaceWrite] = React.useState(false)
 
   React.useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent): void => {
@@ -76,26 +75,9 @@ export function CopisWorkingConnectDialog({
           <span className="copis-working-connect-picker-action">选择</span>
         </button>
 
-        <label className="copis-working-connect-check">
-          <input
-            type="checkbox"
-            checked={allowWorkspaceWrite}
-            onChange={(event) => setAllowWorkspaceWrite(event.target.checked)}
-            disabled={busy}
-          />
-          <span className="copis-working-connect-check-box" aria-hidden="true"><Check /></span>
-          <span>
-            <strong>允许 Agent 写入工作区目录</strong>
-          </span>
-        </label>
-
-        <div className="copis-working-connect-note">
-          {allowWorkspaceWrite ? 'Agent 将在所选目录的 project/ 中开发，原始文件仍可作为参考。' : 'Agent 将在所选目录的 copis/project/ 中开发，原始文件保持只读。'}
-        </div>
-
         <footer className="copis-working-connect-actions">
           <button type="button" onClick={onClose} disabled={busy}>取消</button>
-          <button type="button" onClick={() => selection && void onConfirm(selection, allowWorkspaceWrite)} disabled={busy || !selection}>
+          <button type="button" onClick={() => selection && void onConfirm(selection)} disabled={busy || !selection}>
             {busy ? '创建中...' : '创建'}
           </button>
         </footer>

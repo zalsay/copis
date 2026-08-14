@@ -259,18 +259,7 @@ impl WorkspaceDevStore {
             return Ok(PathBuf::from(project_path));
         }
         if let Some(source_root) = workspace.get("projectRootPath").and_then(Value::as_str) {
-            let source_root = PathBuf::from(source_root);
-            return Ok(
-                if workspace
-                    .get("allowWorkspaceWrite")
-                    .and_then(Value::as_bool)
-                    == Some(false)
-                {
-                    source_root.join("copis").join("project")
-                } else {
-                    source_root.join("project")
-                },
-            );
+            return Ok(PathBuf::from(source_root).join("project"));
         }
         Ok(self
             .config_dir

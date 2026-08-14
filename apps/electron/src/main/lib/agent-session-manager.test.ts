@@ -156,7 +156,6 @@ describe('Agent 会话 runtime 元数据', () => {
       name: 'Context 项目',
       slug: 'context-workspace',
       projectRootPath,
-      allowWorkspaceWrite: true,
       createdAt: 1,
       updatedAt: 1,
     }])
@@ -170,7 +169,8 @@ describe('Agent 会话 runtime 元数据', () => {
       'project',
     )
 
-    expect(existsSync(join(projectRootPath, 'project', '.context'))).toBe(true)
+    expect(existsSync(join(projectRootPath, 'copis', '.context'))).toBe(true)
+    expect(existsSync(join(projectRootPath, 'project', '.context'))).toBe(false)
     expect(existsSync(join(tempHome, '.copis', 'agent-workspaces', 'context-workspace', session.id, '.context'))).toBe(true)
   })
 

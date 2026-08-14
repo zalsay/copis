@@ -24,12 +24,16 @@ export interface AgentWorkspace {
   /**
    * 用户选择的本地项目根目录。未设置时，项目文件使用 Copis 托管的
    * workspace-files/ 目录；该目录下的 `project/` 是 Agent 默认开发根。
-   * 设置后，该路径作为项目来源根，Agent 的新项目仍写入其下的 `project/`。
+   * 设置后，该路径作为项目来源根，来源目录保持只读，Copis 仅在其下的
+   * `copis/` 与 `project/` 中写入工作区产物。
    */
   projectRootPath?: string
-  /** Agent 默认项目开发目录；由 Copis 在工作区内初始化，始终允许 Agent 写入。 */
+  /** Agent 默认项目开发目录；由 Copis 在工作区内初始化，始终位于来源根下的 `project/`。 */
   projectPath?: string
-  /** 创建工作区时是否允许 Agent 直接写入项目来源根目录；project/ 始终是默认开发目录。 */
+  /**
+   * 旧版本地工作区写权限标记，仅用于兼容历史记录。
+   * 当前版本不再允许直接写入来源根目录，写权限始终收敛到 `copis/` 与 `project/`。
+   */
   allowWorkspaceWrite?: boolean
   /** Agent 对 Copis Memory 的可见/可写策略。 */
   memoryPolicy?: MemoryPolicy
@@ -47,8 +51,6 @@ export interface CreateAgentWorkspaceInput {
   name: string
   /** 可选的用户本地项目根目录 */
   projectRootPath?: string
-  /** 是否允许 Agent 直接写入用户选择的项目根目录。 */
-  allowWorkspaceWrite?: boolean
   /** 新工作区的 Memory 策略。 */
   memoryPolicy?: MemoryPolicy
 }

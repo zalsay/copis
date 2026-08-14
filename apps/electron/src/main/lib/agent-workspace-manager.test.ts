@@ -92,7 +92,7 @@ describe('Agent 工作区 MCP 配置', () => {
 })
 
 describe('项目术语迁移', () => {
-  test('Given 新安装 When 创建默认项目 Then 绑定文稿目录并允许 Agent 写入', () => {
+  test('Given 新安装 When 创建默认项目 Then 初始化同级 project 与 copis 受控目录', () => {
     const defaultSkillsDir = configPaths.getDefaultSkillsDir()
     const officialSkillDir = join(defaultSkillsDir, 'alipay-payment-skill')
     const retiredSkillDir = join(defaultSkillsDir, 'alipay-ai-buyer-agent')
@@ -108,14 +108,14 @@ describe('项目术语迁移', () => {
     expect(workspace.projectRootPath).toBe(expectedProjectRootPath)
     expect(workspace.projectPath).toBe(join(expectedProjectRootPath, 'project'))
     expect(existsSync(workspace.projectRootPath!)).toBe(true)
-    expect(workspace.allowWorkspaceWrite).toBe(true)
-    expect(manager.getAgentWorkspaceWritableRoot(workspace)).toBe(join(expectedProjectRootPath, 'project'))
+    expect(manager.getAgentWorkspaceWritableRoot(workspace)).toBe(join(expectedProjectRootPath, 'copis'))
+    expect(manager.getAgentWorkspaceCopisPath(workspace)).toBe(join(expectedProjectRootPath, 'copis'))
     expect(existsSync(workspace.projectPath!)).toBe(true)
     expect(existsSync(join(configPaths.getWorkspaceSkillsDir('default'), 'alipay-payment-skill', 'SKILL.md'))).toBe(true)
     expect(existsSync(join(configPaths.getWorkspaceSkillsDir('default'), 'alipay-ai-buyer-agent'))).toBe(false)
   })
 
-  test('Given 旧版本默认项目缺少本地根目录 When 启动迁移 Then 补齐默认路径和写入权限', () => {
+  test('Given 旧版本默认项目缺少本地根目录 When 启动迁移 Then 补齐同级受控目录配置', () => {
     const legacyWorkspace = {
       id: 'legacy-default-id',
       name: '默认项目',
@@ -138,10 +138,9 @@ describe('项目术语迁移', () => {
     expect(workspace.id).toBe('legacy-default-id')
     expect(workspace.projectRootPath).toBe(expectedProjectRootPath)
     expect(workspace.projectPath).toBe(join(expectedProjectRootPath, 'project'))
-    expect(workspace.allowWorkspaceWrite).toBe(true)
     expect(persisted.workspaces[0]?.projectRootPath).toBe(expectedProjectRootPath)
     expect(persisted.workspaces[0]?.projectPath).toBe(join(expectedProjectRootPath, 'project'))
-    expect(persisted.workspaces[0]?.allowWorkspaceWrite).toBe(true)
+    expect(persisted.workspaces[0]?.allowWorkspaceWrite).toBeUndefined()
   })
 
   test('Given 已有默认项目仍加载旧支付宝买家 Skill When 升级默认 Skills Then 注入官方支付 Skill 并移除旧 Skill', () => {
@@ -246,60 +245,40 @@ describe('Agent 工作区创建', () => {
     expect(existsSync(join(workspaceRoot, 'skills-inactive'))).toBe(false)
   })
 
-  test('Given 创建时未授权写入 When 解析 Agent 写入根 Then 只允许项目下的 copis/project 目录', () => {
+  test('Given 本地工作区 When 初始化受控目录 Then project 与 copis 同级可写', () => {
     const projectRootPath = join(tempHome, 'source-project')
     mkdirSync(projectRootPath, { recursive: true })
-    const workspace = manager.createAgentWorkspace({
-      name: '只读项目',
-      projectRootPath,
-      allowWorkspaceWrite: false,
-    })
+    const workspace = manager.createAgentWorkspace({ name: '受控项目', projectRootPath })
 
-    expect(workspace.allowWorkspaceWrite).toBe(false)
-    const expectedWritableRoot = join(workspace.projectRootPath!, 'copis', 'project')
-    expect(manager.getAgentWorkspaceWritableRoot(workspace)).toBe(expectedWritableRoot)
-    expect(manager.ensureAgentWorkspaceWritableRoot(workspace)).toBe(expectedWritableRoot)
-    expect(existsSync(expectedWritableRoot)).toBe(true)
+    const expectedCopisRoot = join(workspace.projectRootPath!, 'copis')
+    const expectedProjectRoot = join(workspace.projectRootPath!, 'project')
+    expect(manager.getAgentWorkspaceWritableRoot(workspace)).toBe(expectedCopisRoot)
+    expect(manager.ensureAgentWorkspaceWritableRoot(workspace)).toBe(expectedCopisRoot)
+    expect(existsSync(expectedCopisRoot)).toBe(true)
+    expect(existsSync(expectedProjectRoot)).toBe(true)
   })
 
-  test('Given 本地项目不允许直接写入 When 初始化项目级 Context Then 写入 copis/project/.context', () => {
+  test('Given 本地项目 When 初始化项目级 Context Then 写入 copis/.context', () => {
     const projectRootPath = join(tempHome, 'readonly-context-project')
     mkdirSync(projectRootPath, { recursive: true })
-    const workspace = manager.createAgentWorkspace({ name: '只读 Context 项目', projectRootPath, allowWorkspaceWrite: false })
+    const workspace = manager.createAgentWorkspace({ name: 'Context 项目', projectRootPath })
 
     const contextDir = manager.ensureAgentWorkspaceContextDir(workspace)
 
-    expect(contextDir).toBe(join(workspace.projectRootPath!, 'copis', 'project', '.context'))
+    expect(contextDir).toBe(join(workspace.projectRootPath!, 'copis', '.context'))
     expect(contextDir).toBeDefined()
     if (!contextDir) throw new Error('项目级 Context 路径未初始化')
     expect(existsSync(contextDir)).toBe(true)
     expect(existsSync(join(projectRootPath, '.context'))).toBe(false)
   })
 
-  test('Given 本地项目未传写入选项 When 创建工作区 Then 默认使用 copis/project 受控开发目录', () => {
+  test('Given 本地项目 When 创建工作区 Then 默认使用同级 project 开发目录', () => {
     const projectRootPath = join(tempHome, 'default-readonly-project')
     mkdirSync(projectRootPath, { recursive: true })
     const workspace = manager.createAgentWorkspace({ name: '默认只读项目', projectRootPath })
 
-    expect(workspace.allowWorkspaceWrite).toBe(false)
-    expect(manager.getAgentWorkspaceWritableRoot(workspace)).toBe(join(workspace.projectRootPath!, 'copis', 'project'))
-  })
-
-  test('Given 本地项目允许写入 When 创建工作区 Then 在来源目录下初始化 project 开发目录', () => {
-    const projectRootPath = join(tempHome, 'writable-project')
-    mkdirSync(projectRootPath, { recursive: true })
-
-    const workspace = manager.createAgentWorkspace({
-      name: '可写项目',
-      projectRootPath,
-      allowWorkspaceWrite: true,
-    })
-
-    const expectedProjectPath = join(workspace.projectRootPath!, 'project')
-    expect(workspace.projectPath).toBe(expectedProjectPath)
-    expect(manager.ensureAgentWorkspaceWritableRoot(workspace)).toBe(expectedProjectPath)
-    expect(existsSync(expectedProjectPath)).toBe(true)
-    expect(manager.getAgentWorkspaceReadableRoots(workspace)).toEqual([expectedProjectPath, workspace.projectRootPath!])
+    expect(workspace.projectPath).toBe(join(workspace.projectRootPath!, 'project'))
+    expect(manager.getAgentWorkspaceWritableRoot(workspace)).toBe(join(workspace.projectRootPath!, 'copis'))
   })
 
   test('Given Copis 托管工作区 When 创建工作区 Then 在 workspace-files/project 中初始化开发目录', () => {
@@ -307,11 +286,11 @@ describe('Agent 工作区创建', () => {
     const expectedProjectPath = join(configPaths.getAgentWorkspacePath(workspace.slug), 'workspace-files', 'project')
 
     expect(workspace.projectPath).toBe(expectedProjectPath)
-    expect(manager.ensureAgentWorkspaceWritableRoot(workspace)).toBe(expectedProjectPath)
+    expect(manager.ensureAgentWorkspaceWritableRoot(workspace)).toBe(join(configPaths.getAgentWorkspacePath(workspace.slug), 'workspace-files', 'copis'))
     expect(existsSync(expectedProjectPath)).toBe(true)
   })
 
-  test('Given 旧版只读本地工作区缺少 projectPath When 解析开发目录 Then 继续使用 copis/project', () => {
+  test('Given 旧版本地工作区 When 迁移索引 Then 开发目录改为同级 project', () => {
     const projectRootPath = join(tempHome, 'legacy-readonly-project')
     mkdirSync(projectRootPath, { recursive: true })
     const workspace = {
@@ -329,7 +308,144 @@ describe('Agent 工作区创建', () => {
       'utf-8',
     )
 
-    expect(manager.getProjectFilesPath(workspace.slug)).toBe(join(projectRootPath, 'copis', 'project'))
+    expect(manager.getProjectFilesPath(workspace.slug)).toBe(join(projectRootPath, 'project'))
+  })
+
+  test('Given 旧版 copis/project 存在 When 启动更新检查迁移 Then 项目文件物理移动到同级 project', () => {
+    const projectRootPath = join(tempHome, 'legacy-physical-project')
+    const legacyProjectPath = join(projectRootPath, 'copis', 'project')
+    const targetProjectPath = join(projectRootPath, 'project')
+    mkdirSync(legacyProjectPath, { recursive: true })
+    writeFileSync(join(legacyProjectPath, 'package.json'), '{"scripts":{"dev":"vite"}}', 'utf-8')
+    writeFileSync(
+      configPaths.getAgentWorkspacesIndexPath(),
+      JSON.stringify({
+        version: 3,
+        workspaces: [{
+          id: 'legacy-physical-id',
+          name: '旧版物理目录',
+          slug: 'legacy-physical-project',
+          projectRootPath,
+          projectPath: legacyProjectPath,
+          createdAt: 1,
+          updatedAt: 1,
+        }],
+      }),
+      'utf-8',
+    )
+
+    manager.migrateLegacyAgentWorkspaceProjectDirectories()
+
+    expect(existsSync(join(targetProjectPath, 'package.json'))).toBe(true)
+    expect(existsSync(legacyProjectPath)).toBe(false)
+
+    // 重复执行不应重新创建或改变已迁移目录。
+    manager.migrateLegacyAgentWorkspaceProjectDirectories()
+    expect(readFileSync(join(targetProjectPath, 'package.json'), 'utf-8')).toContain('vite')
+  })
+
+  test('Given 新 project 已有内容 When 启动物理迁移 Then 保留新旧目录避免覆盖', () => {
+    const projectRootPath = join(tempHome, 'legacy-conflict-project')
+    const legacyProjectPath = join(projectRootPath, 'copis', 'project')
+    const targetProjectPath = join(projectRootPath, 'project')
+    mkdirSync(legacyProjectPath, { recursive: true })
+    mkdirSync(targetProjectPath, { recursive: true })
+    writeFileSync(join(legacyProjectPath, 'legacy.txt'), 'legacy', 'utf-8')
+    writeFileSync(join(targetProjectPath, 'current.txt'), 'current', 'utf-8')
+    writeFileSync(join(legacyProjectPath, 'conflict.txt'), 'legacy-conflict', 'utf-8')
+    writeFileSync(join(targetProjectPath, 'conflict.txt'), 'current-conflict', 'utf-8')
+    writeFileSync(
+      configPaths.getAgentWorkspacesIndexPath(),
+      JSON.stringify({
+        version: 3,
+        workspaces: [{
+          id: 'legacy-conflict-id',
+          name: '冲突物理目录',
+          slug: 'legacy-conflict-project',
+          projectRootPath,
+          projectPath: legacyProjectPath,
+          createdAt: 1,
+          updatedAt: 1,
+        }],
+      }),
+      'utf-8',
+    )
+
+    manager.migrateLegacyAgentWorkspaceProjectDirectories()
+
+    expect(existsSync(join(targetProjectPath, 'current.txt'))).toBe(true)
+    expect(readFileSync(join(targetProjectPath, 'legacy.txt'), 'utf-8')).toBe('legacy')
+    expect(readFileSync(join(targetProjectPath, 'conflict.txt'), 'utf-8')).toBe('current-conflict')
+    expect(readFileSync(join(legacyProjectPath, 'conflict.txt'), 'utf-8')).toBe('legacy-conflict')
+    expect(existsSync(join(legacyProjectPath, 'legacy.txt'))).toBe(false)
+  })
+
+  test('Given 托管工作区存在旧 project When 执行迁移 Then 同样移动到 workspace-files/project', () => {
+    const slug = 'managed-legacy-project'
+    const sourceRoot = join(tempHome, '.copis', 'agent-workspaces', slug, 'workspace-files')
+    const legacyProjectPath = join(sourceRoot, 'copis', 'project')
+    const targetProjectPath = join(sourceRoot, 'project')
+    mkdirSync(legacyProjectPath, { recursive: true })
+    writeFileSync(join(legacyProjectPath, 'index.html'), '<main>legacy</main>', 'utf-8')
+    writeFileSync(
+      configPaths.getAgentWorkspacesIndexPath(),
+      JSON.stringify({
+        version: 3,
+        workspaces: [{ id: 'managed-legacy-id', name: '托管旧项目', slug, createdAt: 1, updatedAt: 1 }],
+      }),
+      'utf-8',
+    )
+
+    manager.migrateLegacyAgentWorkspaceProjectDirectories()
+
+    expect(readFileSync(join(targetProjectPath, 'index.html'), 'utf-8')).toBe('<main>legacy</main>')
+    expect(existsSync(legacyProjectPath)).toBe(false)
+    expect(existsSync(join(sourceRoot, 'copis'))).toBe(true)
+  })
+
+  test('Given 托管 slug 越过工作区根 When 执行迁移 Then 保留越界目录不做移动', () => {
+    const outsideRoot = join(tempHome, '.copis', 'outside-workspace')
+    const legacyProjectPath = join(outsideRoot, 'workspace-files', 'copis', 'project')
+    mkdirSync(legacyProjectPath, { recursive: true })
+    writeFileSync(join(legacyProjectPath, 'outside.txt'), 'outside', 'utf-8')
+    writeFileSync(
+      configPaths.getAgentWorkspacesIndexPath(),
+      JSON.stringify({
+        version: 3,
+        workspaces: [{ id: 'escape-id', name: '越界项目', slug: '../outside-workspace', createdAt: 1, updatedAt: 1 }],
+      }),
+      'utf-8',
+    )
+
+    manager.migrateLegacyAgentWorkspaceProjectDirectories()
+
+    expect(existsSync(join(legacyProjectPath, 'outside.txt'))).toBe(true)
+    expect(existsSync(join(outsideRoot, 'workspace-files', 'project'))).toBe(false)
+  })
+
+  test('Given 旧 project 是指向来源根外的符号链接 When 执行迁移 Then 保留链接且不移动外部内容', () => {
+    const projectRootPath = join(tempHome, 'symlink-project')
+    const outsideRoot = join(tempHome, 'symlink-project-outside')
+    const legacyParent = join(projectRootPath, 'copis')
+    const legacyProjectPath = join(legacyParent, 'project')
+    mkdirSync(legacyParent, { recursive: true })
+    mkdirSync(outsideRoot, { recursive: true })
+    writeFileSync(join(outsideRoot, 'outside.txt'), 'outside', 'utf-8')
+    symlinkSync(outsideRoot, legacyProjectPath, 'dir')
+    writeFileSync(
+      configPaths.getAgentWorkspacesIndexPath(),
+      JSON.stringify({
+        version: 3,
+        workspaces: [{ id: 'symlink-id', name: '符号链接项目', slug: 'symlink-project', projectRootPath: projectRootPath, createdAt: 1, updatedAt: 1 }],
+      }),
+      'utf-8',
+    )
+
+    manager.migrateLegacyAgentWorkspaceProjectDirectories()
+
+    expect(existsSync(legacyProjectPath)).toBe(true)
+    expect(existsSync(join(outsideRoot, 'outside.txt'))).toBe(true)
+    expect(existsSync(join(projectRootPath, 'project'))).toBe(false)
   })
 
   test('Given 项目名称是 Windows 保留设备名 When 创建工作区 Then slug 避免直接使用保留名', () => {

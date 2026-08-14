@@ -43,6 +43,7 @@ import { getSessionContextUsageRatio } from './agent-session-usage'
 import {
   ensureAgentWorkspaceContextDir,
   getAgentWorkspace,
+  getAgentWorkspaceCopisPath,
   getAgentWorkspaceReadableRoots,
   getAgentWorkspaceWritableRoot,
   getProjectFilesPath,
@@ -306,9 +307,8 @@ function buildRustFileAccessPolicy(input: {
     ...input.additionalDirectories,
     ...getWorkspaceAttachedDirectories(input.workspace.slug),
   ]
-  const writeRoots = input.workspace.allowWorkspaceWrite === false
-    ? [input.workspaceWriteRoot, sessionWorkspaceRoot]
-    : [projectRoot, sessionWorkspaceRoot, input.agentCwd]
+  const workspaceCopisRoot = getAgentWorkspaceCopisPath(input.workspace)
+  const writeRoots = [projectRoot, workspaceCopisRoot, sessionWorkspaceRoot]
 
   return {
     readRoots: uniqueAbsolutePaths(workspaceReadRoots),

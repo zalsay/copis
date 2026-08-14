@@ -309,7 +309,6 @@ export function createAgentSession(
   const now = Date.now()
 
   const settings = getSettings()
-  const workspaceWritePermission = workspaceId ? getAgentWorkspace(workspaceId)?.allowWorkspaceWrite : undefined
   const defaultThinkingLevel = settings.defaultOpenAIThinkingLevel
     ?? resolvePiThinkingLevel(settings, undefined, 'openai-codex')
   const meta: AgentSessionMeta = {
@@ -326,12 +325,11 @@ export function createAgentSession(
     reasoningLevel: defaultThinkingLevel,
     // Copis Working 默认使用快速模式；用户可按会话切换到专家模式。
     workingMode: 'fast',
-    ...(workspaceWritePermission === false ? { permissionMode: 'plan' as const } : {}),
     createdAt: now,
     updatedAt: now,
   }
 
-  if (workspaceId && workspaceWritePermission === false) {
+  if (workspaceId) {
     const workspace = getAgentWorkspace(workspaceId)
     if (workspace) ensureAgentWorkspaceWritableRoot(workspace)
   }

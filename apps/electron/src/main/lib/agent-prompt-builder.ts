@@ -81,7 +81,6 @@ function buildWorkspacePromptPaths(workspaceSlug: string, sessionId: string, age
     projectRoot,
     projectSourceRoot,
     workspaceWriteRoot,
-    workspaceWriteRestricted: workspace?.allowWorkspaceWrite === false,
     workspaceContextDir: getAgentWorkspaceContextDir(workspace ?? { slug: workspaceSlug, projectRootPath: projectRoot, projectPath: projectRoot }),
     agentCwd: effectiveAgentCwd,
     isProjectCwd: resolve(effectiveAgentCwd) === resolve(projectRoot),
@@ -115,7 +114,6 @@ export function buildSystemPrompt(ctx: SystemPromptContext): string {
   const sessionContextDir = workspacePaths?.sessionContextDir ?? '.context'
   const workspaceContextDir = workspacePaths?.workspaceContextDir ?? '.context'
   const workspaceWriteRoot = ctx.workspaceWriteRoot ?? workspacePaths?.workspaceWriteRoot
-  const workspaceWriteRestricted = workspacePaths?.workspaceWriteRestricted ?? false
   const workingMode = ctx.workingMode === undefined ? undefined : normalizeWorkingMode(ctx.workingMode)
 
   const sections: string[] = []
@@ -290,7 +288,7 @@ ${JSON.stringify(schema.nodes)}
 - Copis 工作区目录: ${workspacePaths?.workspaceRoot}（存放 MCP、Skills、Copis 工作区指令与 Memory 等配置）
 - 项目来源目录: ${workspacePaths?.projectSourceRoot}（${workspacePaths?.isLocalProject ? '用户选择的本地文件夹，可读取已有资料' : 'Copis 托管的工作区来源目录'}）
 - 项目开发目录: ${workspacePaths?.projectRoot}（默认可写，用户新建项目统一放在这里）
-- Agent 可写目录: ${workspaceWriteRoot}${workspaceWriteRestricted ? '（原始来源目录保持只读，工作区产出只能写入此目录）' : '（已允许写入项目开发目录）'}
+- Agent 可写目录: ${workspaceWriteRoot}、${workspacePaths?.projectRoot}（项目来源目录保持只读）
 - 会话工作台目录: ${workspacePaths?.sessionDir}（存放当前会话的私有临时文件与会话级 Context）
 - 实际工作目录（cwd）: ${workspacePaths?.agentCwd}（${workspacePaths?.isProjectCwd ? '当前会话直接在项目根目录中工作' : '当前会话仍使用私有会话工作台，不等同于项目根目录'}；以每条消息的 \`<working_directory>\` 为准）
 - Copis Memory: 通过受控的结构化能力访问，不暴露本地存储路径
@@ -302,7 +300,7 @@ ${JSON.stringify(schema.nodes)}
 
 存在两个 \`.context/\` 目录，用途不同：
 - **会话级** \`${sessionContextDir}\`：当前会话的临时工作台，存放本次任务的 todo.md、plan/、临时笔记等
-- **项目级** \`${workspaceContextDir}\`：跨会话共享的持久文档，存放长期 note.md、项目级知识等；始终以这里提供的绝对路径为准（只读本地项目使用来源目录下的 \`copis/project/.context\`，避免修改原始项目根）
+- **项目级** \`${workspaceContextDir}\`：跨会话共享的持久文档，存放长期 note.md、项目级知识等；始终以这里提供的绝对路径为准（来源目录保持只读时使用来源目录下的 \`copis/.context\`）
 
 项目来源目录与项目开发目录可能不同：新会话通常在项目开发目录运行，历史会话可能仍在会话工作台运行，始终以“实际工作目录”和每条消息的 \`<working_directory>\` 为准。
 

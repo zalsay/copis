@@ -524,7 +524,7 @@ function resolveSafeWorkspaceFilePath(workspaceRoot: string, filename: string): 
  * 保存文件到 Agent 允许写入的工作区目录。
  *
  * 空白项目使用 Copis 托管目录；用户新建项目统一保存到工作区的 project/，
- * 未授权原始目录写入时使用项目根下的 copis/project/。
+ * Copis 受控产物与上下文写入项目根下的 copis/。
  */
 export function saveFilesToWorkspaceFiles(input: AgentSaveWorkspaceFilesInput): AgentSavedFile[] {
   const workspace = getAgentWorkspaceBySlug(input.workspaceSlug)
@@ -538,7 +538,7 @@ export function saveFilesToWorkspaceFiles(input: AgentSaveWorkspaceFilesInput): 
       throw createLocalProjectRootUnavailableError(workspace.projectRootPath, status)
     }
     try {
-      accessSync(workspace.projectRootPath, constants.R_OK | constants.W_OK | constants.X_OK)
+      accessSync(workspace.projectRootPath, constants.R_OK | constants.X_OK)
     } catch {
       throw createLocalProjectRootUnavailableError(workspace.projectRootPath, 'unavailable')
     }

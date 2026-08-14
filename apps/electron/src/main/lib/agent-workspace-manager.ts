@@ -6,7 +6,7 @@
  * - 工作区目录：~/.copis/agent-workspaces/{slug}/（Agent 的 cwd）
  */
 
-import { readFileSync, writeFileSync, existsSync, readdirSync, cpSync, mkdirSync, statSync, openSync, readSync, closeSync, realpathSync, accessSync, constants } from 'node:fs'
+import { readFileSync, writeFileSync, existsSync, readdirSync, cpSync, mkdirSync, statSync, lstatSync, openSync, readSync, closeSync, realpathSync, accessSync, constants, renameSync, rmdirSync } from 'node:fs'
 import type { Dirent } from 'node:fs'
 import { rmSyncWithRetry, renameWithRetry } from './fs-retry'
 import { writeJsonFileAtomic, readJsonFileSafe } from './safe-file'
@@ -20,6 +20,7 @@ import {
   getWorkspaceMcpPath,
   getWorkspaceSkillsDir,
   getWorkspaceFilesDir,
+  resolveWorkspaceFilesDir,
   getInactiveSkillsDir,
   getDefaultSkillsDir,
   parseSkillVersion,
@@ -40,7 +41,7 @@ interface AgentWorkspacesIndex {
   workspaces: AgentWorkspace[]
 }
 
-const INDEX_VERSION = 2
+const INDEX_VERSION = 3
 const WINDOWS_RESERVED_SLUGS = new Set([
   'con',
   'prn',
@@ -79,7 +80,7 @@ function readIndex(): AgentWorkspacesIndex {
     return {
       ...data,
       workspaces: data.workspaces.map((workspace) => {
-        const { memoryPolicy: rawMemoryPolicy, ...rest } = workspace
+        const { memoryPolicy: rawMemoryPolicy, allowWorkspaceWrite: _legacyAllowWorkspaceWrite, ...rest } = workspace
         const memoryPolicy = normalizeOptionalMemoryPolicy(rawMemoryPolicy)
         return {
           ...rest,
@@ -98,6 +99,23 @@ function migrateIndex(index: AgentWorkspacesIndex): void {
   // v1 → v2: 为所有工作区默认启用 skill-creator
   if (oldVersion < 2) {
     activateSkillCreatorInAllWorkspaces(index)
+  }
+
+  // v2 → v3: 项目来源目录始终只读，受控写入目录改为同级 copis/ 与 project/。
+  if (oldVersion < 3) {
+    const workspacesRoot = resolve(getAgentWorkspacesDir())
+    for (const workspace of index.workspaces) {
+      const sourceRoot = workspace.projectRootPath
+        ? resolve(workspace.projectRootPath)
+        : resolve(resolveWorkspaceFilesDir(workspace.slug))
+      if (!workspace.projectRootPath && !isPathWithin(workspacesRoot, sourceRoot)) {
+        console.warn(`[Agent 工作区] 索引迁移跳过越界托管工作区: ${workspace.slug}`)
+        delete workspace.allowWorkspaceWrite
+        continue
+      }
+      workspace.projectPath = join(sourceRoot, COPIS_PROJECT_DIR)
+      delete workspace.allowWorkspaceWrite
+    }
   }
 
   index.version = INDEX_VERSION
@@ -186,7 +204,7 @@ export function getLocalProjectRootStatus(projectRootPath: string | undefined): 
 
   try {
     if (!statSync(projectRootPath).isDirectory()) return 'not_directory'
-    accessSync(projectRootPath, constants.R_OK | constants.W_OK | constants.X_OK)
+    accessSync(projectRootPath, constants.R_OK | constants.X_OK)
     return 'available'
   } catch {
     return 'unavailable'
@@ -240,7 +258,7 @@ export function getAgentWorkspaceSourceRoot(
 
 /** 返回工作区来源根与项目根，供读取授权使用。 */
 export function getAgentWorkspaceReadableRoots(
-  workspace: Pick<AgentWorkspace, 'slug' | 'projectRootPath' | 'projectPath' | 'allowWorkspaceWrite'>,
+  workspace: Pick<AgentWorkspace, 'slug' | 'projectRootPath' | 'projectPath'>,
 ): string[] {
   const sourceRoot = getAgentWorkspaceSourceRoot(workspace)
   const projectPath = getAgentWorkspaceProjectPath(workspace)
@@ -253,19 +271,15 @@ export const COPIS_PROJECT_DIR = 'project'
 /**
  * 返回工作区内用户项目的开发根。
  *
- * - 允许写入时：来源根/project/
- * - 原始目录只读时：来源根/copis/project/
+ * - 本地工作区：来源根/project/
  * - 托管工作区：workspace-files/project/
  */
 export function getAgentWorkspaceProjectPath(
-  workspace: Pick<AgentWorkspace, 'slug' | 'projectRootPath' | 'projectPath' | 'allowWorkspaceWrite'>,
+  workspace: Pick<AgentWorkspace, 'slug' | 'projectRootPath' | 'projectPath'>,
 ): string {
   if (workspace.projectPath) return resolve(workspace.projectPath)
   if (workspace.projectRootPath) {
-    const base = workspace.allowWorkspaceWrite === false
-      ? join(resolve(workspace.projectRootPath), COPIS_WORKSPACE_WRITE_DIR)
-      : resolve(workspace.projectRootPath)
-    return join(base, COPIS_PROJECT_DIR)
+    return join(resolve(workspace.projectRootPath), COPIS_PROJECT_DIR)
   }
   return join(getWorkspaceFilesDir(workspace.slug), COPIS_PROJECT_DIR)
 }
@@ -287,30 +301,38 @@ export function getAgentWorkspaceAgentsPath(workspaceSlug: string): string {
   return join(getAgentWorkspacePath(workspaceSlug), 'AGENTS.md')
 }
 
-/** 未授权直接修改原始目录时，Agent 的受控输出目录名称。 */
+/** 工作区内由 Copis 管理的受控目录名称。 */
 export const COPIS_WORKSPACE_WRITE_DIR = 'copis'
+
+/** 返回工作区内 Copis 可写目录。 */
+export function getAgentWorkspaceCopisPath(
+  workspace: Pick<AgentWorkspace, 'slug' | 'projectRootPath'>,
+): string {
+  return join(getAgentWorkspaceSourceRoot(workspace), COPIS_WORKSPACE_WRITE_DIR)
+}
 
 /**
  * 返回工作区允许 Agent 写入的根目录。
  *
- * 未勾选“允许 Agent 写入工作区目录”时，原始项目根保持只读，写入范围
- * 收敛到项目根下的 copis/project/；Copis 托管项目使用 workspace-files/project/。
+ * 项目来源根始终只读，Agent 仅能写入来源根下同级的 project/ 与 copis/。
  */
 export function getAgentWorkspaceWritableRoot(
-  workspace: Pick<AgentWorkspace, 'slug' | 'projectRootPath' | 'projectPath' | 'allowWorkspaceWrite'>,
+  workspace: Pick<AgentWorkspace, 'slug' | 'projectRootPath' | 'projectPath'>,
 ): string {
-  return getAgentWorkspaceProjectPath(workspace)
+  return getAgentWorkspaceCopisPath(workspace)
 }
 
-/** 确保工作区项目开发根存在，并返回其路径。 */
+/** 确保工作区项目开发根与 Copis 受控目录存在，并返回 Copis 受控目录路径。 */
 export function ensureAgentWorkspaceWritableRoot(
-  workspace: Pick<AgentWorkspace, 'slug' | 'projectRootPath' | 'projectPath' | 'allowWorkspaceWrite'>,
+  workspace: Pick<AgentWorkspace, 'slug' | 'projectRootPath' | 'projectPath'>,
 ): string {
-  const projectRoot = workspace.projectRootPath
-    ? resolve(workspace.projectRootPath)
-    : resolve(getAgentWorkspacePath(workspace.slug))
+  const projectRoot = resolve(getAgentWorkspaceSourceRoot(workspace))
   const writableRoot = getAgentWorkspaceWritableRoot(workspace)
+  const copisRoot = getAgentWorkspaceCopisPath(workspace)
   mkdirSync(writableRoot, { recursive: true })
+  mkdirSync(copisRoot, { recursive: true })
+  const projectPath = getAgentWorkspaceProjectPath(workspace)
+  mkdirSync(projectPath, { recursive: true })
   const projectRootReal = realpathSync(resolve(projectRoot))
   const writableRootReal = realpathSync(resolve(writableRoot))
   const relativeWritableRoot = relative(projectRootReal, writableRootReal)
@@ -324,25 +346,209 @@ export function ensureAgentWorkspaceWritableRoot(
   return writableRoot
 }
 
+function isPathWithin(rootPath: string, candidatePath: string): boolean {
+  const relativePath = relative(resolve(rootPath), resolve(candidatePath))
+  return relativePath === '' || (
+    relativePath !== '..'
+    && !relativePath.startsWith(`..${sep}`)
+    && !isAbsolute(relativePath)
+  )
+}
+
+function isSymlinkEntry(path: string): boolean {
+  try {
+    return lstatSync(path).isSymbolicLink()
+  } catch {
+    return false
+  }
+}
+
+function isDirectoryEntry(path: string): boolean {
+  try {
+    return lstatSync(path).isDirectory()
+  } catch {
+    return false
+  }
+}
+
+function removeEmptyDirectory(path: string, workspaceLabel: string): void {
+  try {
+    // 使用 rmdirSync 的非递归语义，避免检查后有新文件写入时误删内容。
+    rmdirSync(path)
+  } catch (error) {
+    console.warn(`[Agent 工作区] 清理空旧项目目录失败，保留原目录 (${workspaceLabel}): ${path}`, error)
+  }
+}
+
+/** 递归合并旧项目目录，目标冲突条目保留双方。 */
+function mergeLegacyProjectDirectory(
+  sourcePath: string,
+  targetPath: string,
+  sourceRootReal: string,
+  workspaceLabel: string,
+): void {
+  for (const entry of readdirSync(sourcePath, { withFileTypes: true })) {
+    const sourceEntry = join(sourcePath, entry.name)
+    const targetEntry = join(targetPath, entry.name)
+    if (!isPathWithin(sourceRootReal, sourceEntry) || !isPathWithin(sourceRootReal, targetEntry)) {
+      console.warn(`[Agent 工作区] 旧项目条目越过来源根，保留原位置 (${workspaceLabel}): ${sourceEntry}`)
+      continue
+    }
+
+    const sourceIsSymlink = isSymlinkEntry(sourceEntry)
+    const targetExists = existsSync(targetEntry) || isSymlinkEntry(targetEntry)
+    if (!targetExists) {
+      try {
+        // 符号链接只移动链接本身，避免跨边界解析或复制其目标。
+        if (sourceIsSymlink) renameSync(sourceEntry, targetEntry)
+        else renameWithRetry(sourceEntry, targetEntry)
+      } catch (error) {
+        console.warn(`[Agent 工作区] 迁移旧项目条目失败，保留原文件 (${workspaceLabel}): ${sourceEntry}`, error)
+      }
+      continue
+    }
+
+    // 同名文件、符号链接或类型冲突均不覆盖任何一方。
+    if (sourceIsSymlink || isSymlinkEntry(targetEntry) || !entry.isDirectory() || !isDirectoryEntry(targetEntry)) {
+      continue
+    }
+
+    mergeLegacyProjectDirectory(sourceEntry, targetEntry, sourceRootReal, workspaceLabel)
+    try {
+      if (readdirSync(sourceEntry).length === 0) {
+        removeEmptyDirectory(sourceEntry, workspaceLabel)
+      }
+    } catch (error) {
+      console.warn(`[Agent 工作区] 清理已合并的旧项目目录失败 (${workspaceLabel}): ${sourceEntry}`, error)
+    }
+  }
+}
+
+/** 将单个工作区的旧 copis/project 迁移到来源根下的 project。 */
+function migrateLegacyProjectDirectory(sourceRoot: string, workspaceLabel: string): void {
+  if (!existsSync(sourceRoot) || !isDirectoryEntry(sourceRoot)) return
+
+  let sourceRootReal: string
+  try {
+    sourceRootReal = realpathSync(sourceRoot)
+  } catch (error) {
+    console.warn(`[Agent 工作区] 无法解析迁移来源根，跳过 (${workspaceLabel}):`, error)
+    return
+  }
+
+  // 统一使用来源根的真实路径，避免 macOS /var -> /private 等别名造成误判。
+  const legacyProjectPath = resolve(sourceRootReal, COPIS_WORKSPACE_WRITE_DIR, COPIS_PROJECT_DIR)
+  const projectPath = resolve(sourceRootReal, COPIS_PROJECT_DIR)
+  if (!isPathWithin(sourceRootReal, legacyProjectPath) || !isPathWithin(sourceRootReal, projectPath)) {
+    console.warn(`[Agent 工作区] 旧项目迁移路径越过来源根，跳过 (${workspaceLabel})`)
+    return
+  }
+  if (!existsSync(legacyProjectPath)) return
+  if (isSymlinkEntry(legacyProjectPath) || !isDirectoryEntry(legacyProjectPath)) {
+    console.warn(`[Agent 工作区] 旧项目目录不是普通目录，跳过 (${workspaceLabel}): ${legacyProjectPath}`)
+    return
+  }
+
+  try {
+    const legacyProjectReal = realpathSync(legacyProjectPath)
+    if (!isPathWithin(sourceRootReal, legacyProjectReal)) {
+      console.warn(`[Agent 工作区] 旧项目目录指向来源根外部，跳过 (${workspaceLabel}): ${legacyProjectPath}`)
+      return
+    }
+  } catch (error) {
+    console.warn(`[Agent 工作区] 无法解析旧项目目录，跳过 (${workspaceLabel}):`, error)
+    return
+  }
+
+  const projectExists = existsSync(projectPath) || isSymlinkEntry(projectPath)
+  if (!projectExists) {
+    try {
+      renameWithRetry(legacyProjectPath, projectPath)
+      console.log(`[Agent 工作区] 已迁移旧项目目录 (${workspaceLabel}): ${legacyProjectPath} → ${projectPath}`)
+    } catch (error) {
+      console.warn(`[Agent 工作区] 迁移旧项目目录失败，保留旧目录 (${workspaceLabel}):`, error)
+    }
+    return
+  }
+
+  if (isSymlinkEntry(projectPath) || !isDirectoryEntry(projectPath)) {
+    console.warn(`[Agent 工作区] 新项目路径存在冲突，保留双方并跳过迁移 (${workspaceLabel}): ${projectPath}`)
+    return
+  }
+
+  try {
+    mergeLegacyProjectDirectory(legacyProjectPath, projectPath, sourceRootReal, workspaceLabel)
+    // 只删除已经完全迁空的旧项目目录，不触碰 copis 根或其余条目。
+    if (readdirSync(legacyProjectPath).length === 0) {
+      removeEmptyDirectory(legacyProjectPath, workspaceLabel)
+    }
+  } catch (error) {
+    console.warn(`[Agent 工作区] 合并旧项目目录失败，保留未迁移内容 (${workspaceLabel}):`, error)
+  }
+}
+
+/**
+ * 在每次更新检查前幂等迁移所有工作区的旧 project 目录。
+ * 迁移自身吞掉错误，调用方即使遇到文件系统竞态也必须继续更新检查。
+ */
+export function migrateLegacyAgentWorkspaceProjectDirectories(): void {
+  let workspaces: AgentWorkspace[]
+  try {
+    workspaces = readIndex().workspaces
+  } catch (error) {
+    console.warn('[Agent 工作区] 读取索引失败，跳过旧项目迁移:', error)
+    return
+  }
+
+  let workspacesRoot: string
+  try {
+    workspacesRoot = realpathSync(resolve(getAgentWorkspacesDir()))
+  } catch (error) {
+    console.warn('[Agent 工作区] 无法解析工作区根，跳过旧项目迁移:', error)
+    return
+  }
+
+  for (const workspace of workspaces) {
+    try {
+      const sourceRootPath = workspace.projectRootPath
+        ? resolve(workspace.projectRootPath)
+        : resolve(resolveWorkspaceFilesDir(workspace.slug))
+      let sourceRoot = sourceRootPath
+      try {
+        sourceRoot = realpathSync(sourceRootPath)
+      } catch {
+        // 来源根尚不存在时保留词法路径，后续迁移函数会直接跳过。
+      }
+
+      // 托管工作区的 slug 来自索引文件，必须拒绝 ../ 等路径逃逸。
+      if (!workspace.projectRootPath && !isPathWithin(workspacesRoot, sourceRoot)) {
+        console.warn(`[Agent 工作区] 托管工作区来源根越界，跳过 (${workspace.slug}): ${sourceRoot}`)
+        continue
+      }
+      migrateLegacyProjectDirectory(sourceRoot, workspace.slug)
+    } catch (error) {
+      console.warn(`[Agent 工作区] 旧项目迁移失败，继续处理更新 (${workspace.slug}):`, error)
+    }
+  }
+}
+
 /** 返回工作区项目级 Context 目录；只读项目使用受控写入根，避免修改原始目录。 */
 export function getAgentWorkspaceContextDir(
-  workspace: Pick<AgentWorkspace, 'slug' | 'projectRootPath' | 'projectPath' | 'allowWorkspaceWrite'>,
+  workspace: Pick<AgentWorkspace, 'slug' | 'projectRootPath' | 'projectPath'>,
 ): string {
   return join(getAgentWorkspaceWritableRoot(workspace), '.context')
 }
 
 /** 确保工作区项目级 Context 存在；项目根不可用时跳过，避免意外重建本地项目。 */
 export function ensureAgentWorkspaceContextDir(
-  workspace: Pick<AgentWorkspace, 'slug' | 'projectRootPath' | 'projectPath' | 'allowWorkspaceWrite'>,
+  workspace: Pick<AgentWorkspace, 'slug' | 'projectRootPath' | 'projectPath'>,
 ): string | undefined {
   if (workspace.projectRootPath && getLocalProjectRootStatus(workspace.projectRootPath) !== 'available') {
     return undefined
   }
 
   const contextDir = getAgentWorkspaceContextDir(workspace)
-  if (workspace.allowWorkspaceWrite === false) {
-    ensureAgentWorkspaceWritableRoot(workspace)
-  }
+  ensureAgentWorkspaceWritableRoot(workspace)
   mkdirSync(contextDir, { recursive: true })
   return contextDir
 }
@@ -378,8 +584,8 @@ function copyDefaultSkills(workspaceSlug: string, options: { throwOnError?: bool
 }
 
 export function createAgentWorkspace(input: string | CreateAgentWorkspaceInput): AgentWorkspace {
-  const { name, projectRootPath, allowWorkspaceWrite, memoryPolicy } = typeof input === 'string'
-    ? { name: input, projectRootPath: undefined, allowWorkspaceWrite: undefined, memoryPolicy: undefined }
+  const { name, projectRootPath, memoryPolicy } = typeof input === 'string'
+    ? { name: input, projectRootPath: undefined, memoryPolicy: undefined }
     : input
   const index = readIndex()
 
@@ -408,23 +614,14 @@ export function createAgentWorkspace(input: string | CreateAgentWorkspaceInput):
     }
   }
 
-  const effectiveAllowWorkspaceWrite = normalizedProjectRootPath
-    ? allowWorkspaceWrite ?? false
-    : allowWorkspaceWrite
   const sourceRoot = normalizedProjectRootPath ?? getWorkspaceFilesDir(slug)
-  const projectPath = join(
-    normalizedProjectRootPath && effectiveAllowWorkspaceWrite === false
-      ? join(sourceRoot, COPIS_WORKSPACE_WRITE_DIR)
-      : sourceRoot,
-    COPIS_PROJECT_DIR,
-  )
+  const projectPath = join(sourceRoot, COPIS_PROJECT_DIR)
   const workspace: AgentWorkspace = {
     id: randomUUID(),
     name,
     slug,
     projectRootPath: normalizedProjectRootPath,
     projectPath,
-    ...(effectiveAllowWorkspaceWrite !== undefined ? { allowWorkspaceWrite: effectiveAllowWorkspaceWrite } : {}),
     ...(memoryPolicy !== undefined ? { memoryPolicy } : {}),
     createdAt: now,
     updatedAt: now,
@@ -518,16 +715,13 @@ export function relinkAgentWorkspaceProjectRoot(id: string, projectRootPath: str
   const updated: AgentWorkspace = {
     ...index.workspaces[idx]!,
     projectRootPath: normalizedProjectRootPath,
-    projectPath: join(
-      index.workspaces[idx]!.allowWorkspaceWrite === false
-        ? join(normalizedProjectRootPath, COPIS_WORKSPACE_WRITE_DIR)
-        : normalizedProjectRootPath,
-      COPIS_PROJECT_DIR,
-    ),
+    projectPath: join(normalizedProjectRootPath, COPIS_PROJECT_DIR),
     updatedAt: Date.now(),
   }
   index.workspaces[idx] = updated
   writeIndex(index)
+  mkdirSync(getAgentWorkspaceWritableRoot(updated), { recursive: true })
+  mkdirSync(getAgentWorkspaceProjectPath(updated), { recursive: true })
   console.log(`[Agent 工作区] 已重新关联项目根: ${updated.name} → ${normalizedProjectRootPath}`)
   return withProjectRootStatus(updated)
 }
@@ -589,7 +783,7 @@ export function deleteAgentWorkspace(id: string): void {
   console.log(`[Agent 工作区] 已删除工作区: ${removed.name} (slug: ${removed.slug})`)
 }
 
-/** 确保默认项目的本地根目录存在且可读写。 */
+/** 确保默认项目的本地根目录存在且可读取。 */
 function ensureDefaultProjectRootPath(): string {
   const projectRootPath = getDefaultProjectRootPath()
   mkdirSync(projectRootPath, { recursive: true })
@@ -616,7 +810,6 @@ export function ensureDefaultWorkspace(): AgentWorkspace {
       slug: 'default',
       projectRootPath,
       projectPath: join(projectRootPath, COPIS_PROJECT_DIR),
-      allowWorkspaceWrite: true,
       createdAt: now,
       updatedAt: now,
     }
@@ -636,17 +829,12 @@ export function ensureDefaultWorkspace(): AgentWorkspace {
     // 已经重新关联过其他目录的用户配置保持不变。
     if (!defaultWs.projectRootPath) {
       defaultWs.projectRootPath = ensureDefaultProjectRootPath()
+      defaultWs.projectPath = join(defaultWs.projectRootPath, COPIS_PROJECT_DIR)
       needsWrite = true
     }
 
     if (!defaultWs.projectPath) {
       defaultWs.projectPath = join(defaultWs.projectRootPath, COPIS_PROJECT_DIR)
-      needsWrite = true
-    }
-
-    // 默认项目始终允许 Agent 写入 project/，避免新会话退回计划模式。
-    if (defaultWs.allowWorkspaceWrite !== true) {
-      defaultWs.allowWorkspaceWrite = true
       needsWrite = true
     }
 

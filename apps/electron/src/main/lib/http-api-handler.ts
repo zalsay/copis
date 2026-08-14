@@ -416,7 +416,6 @@ async function handleAgentRequest(
         workspaces,
         channelId: COPIS_WORKING_CHANNEL_ID,
         modelId: COPIS_WORKING_FAST_MODEL_ID,
-        allowWorkspaceWrite: workspace.allowWorkspaceWrite === true,
       },
     }
   }
