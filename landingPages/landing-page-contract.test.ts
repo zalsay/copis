@@ -2,6 +2,10 @@ import { describe, expect, test } from 'bun:test'
 
 const html = await Bun.file(new URL('./index.html', import.meta.url)).text()
 const css = await Bun.file(new URL('./styles.css', import.meta.url)).text()
+const js = await Bun.file(new URL('./app.js', import.meta.url)).text()
+const electronPackage = JSON.parse(
+  await Bun.file(new URL('../apps/electron/package.json', import.meta.url)).text(),
+) as { version: string }
 
 function mediaBlocks(source: string, feature: string): string[] {
   const blocks: string[] = []
@@ -170,6 +174,77 @@ describe('landing page 静态契约', () => {
   })
 })
 
+describe('landing 下载中心契约', () => {
+  test('右上角用单个下载中心入口替代登录和注册', () => {
+    const header = html.slice(html.indexOf('<header class="site-header'), html.indexOf('</header>'))
+
+    expect(header).toMatch(/class="nav-auth nav-auth-download"[^>]*data-open-download/)
+    expect(header).toContain('下载中心')
+    expect(header).not.toContain('nav-auth-login')
+    expect(header).not.toContain('nav-auth-register')
+    expect(html).not.toContain('data-open-auth')
+    expect(html).not.toContain('auth-dialog')
+  })
+
+  test('下载中心前有联系我们按钮', () => {
+    const header = html.slice(html.indexOf('<header class="site-header'), html.indexOf('</header>'))
+    const contactIndex = header.indexOf('data-open-contact')
+    const downloadIndex = header.indexOf('data-open-download')
+
+    expect(contactIndex).toBeGreaterThan(-1)
+    expect(contactIndex).toBeLessThan(downloadIndex)
+    expect(header).toContain('联系我们')
+  })
+
+  test('联系我们弹窗展示 assets/contract.JPG', () => {
+    expect(html).toContain('id="contact-dialog"')
+    expect(html).toContain('data-close-contact')
+    expect(html).toContain('src="./assets/contract.JPG"')
+    expect(html).toContain('id="contact-dialog-title">联系我们</h2>')
+    expect(html).not.toContain('>联系方式<')
+    expect(css).toMatch(/\.contact-dialog\s*\{[^}]*min\(400px,\s*calc\(100% - 32px\)\)/)
+    expect(css).toMatch(/\.contact-dialog\s*\.dialog-heading h2\s*\{[^}]*color:\s*var\(--ink\)/)
+    expect(css).toMatch(/\.contact-dialog\s*\.dialog-heading h2\s*\{[^}]*font-size:\s*20px/)
+    expect(css).toMatch(/\.contact-image\s*\{[^}]*margin-top:\s*20px/)
+    expect(css).toMatch(/\.contact-image\s*\{[^}]*max-height:\s*480px/)
+    expect(js).toContain('#contact-dialog')
+    expect(js).toContain('[data-open-contact]')
+  })
+
+  test('下载中心弹窗包含三个平台下载入口', () => {
+    const dialogIndex = html.indexOf('id="download-dialog"')
+    expect(dialogIndex).toBeGreaterThan(-1)
+    const dialog = html.slice(dialogIndex, html.indexOf('</dialog>', dialogIndex))
+
+    expect(dialog).toContain('aria-labelledby="download-dialog-title"')
+    expect(dialog).toContain('id="download-dialog-title"')
+    expect(dialog).toContain('data-close-download')
+    expect(dialog).toContain('Windows')
+    expect(dialog).toContain('macOS')
+    expect(dialog).toContain('Apple 芯片')
+    expect(dialog).toContain('Intel 芯片')
+    expect(dialog).not.toContain('Linux')
+    const version = electronPackage.version
+    expect(dialog.match(/class="download-platform-action"/g)?.length ?? 0).toBe(3)
+    expect(dialog).toContain('https://download.meetlife.com.cn/copis/downloads/stable/darwin-arm64/Copis-arm64.dmg')
+    expect(dialog).toContain('https://download.meetlife.com.cn/copis/downloads/stable/darwin-x64/Copis-x64.dmg')
+    expect(dialog).toContain('https://download.meetlife.com.cn/copis/downloads/stable/win32-x64/Copis-Setup.exe')
+    expect(dialog).not.toContain(`Copis-${version}-arm64.dmg`)
+    expect(dialog).not.toContain(`Copis-${version}-x64.dmg`)
+    expect(dialog).not.toContain('github.com')
+  })
+
+  test('下载中心交互样式与脚本齐全', () => {
+    expect(css).toMatch(/\.nav-auth-download\s*\{/)
+    expect(css).toMatch(/\.download-dialog\s*\{/)
+    expect(css).toMatch(/\.download-platform-list\s*\{/)
+    expect(js).toContain("document.querySelector('#download-dialog')")
+    expect(js).toContain('[data-open-download]')
+    expect(js).not.toContain('data-open-auth')
+    expect(js).not.toContain('authForm')
+  })
+})
+
 describe('landing logo 契约', () => {
   test('index.html 与 styles.css 不再引用 ./assets/main-logo.png', () => {
     expect(html).not.toContain('./assets/main-logo.png')
@@ -178,16 +253,48 @@ describe('landing logo 契约', () => {
     expect(css).not.toMatch(/main-logo\.png/)
   })
 
-  test('index.html 中 5 处 logo 引用全部替换为 ../mian-logo.svg', () => {
-    expect(html.match(/\.\.\/mian-logo\.svg/g)?.length ?? 0).toBe(5)
+  test('index.html 中 6 处 logo 引用全部替换为 ./mian-logo.svg', () => {
+    expect(html.match(/\.\/mian-logo\.svg/g)?.length ?? 0).toBe(6)
+    expect(html).not.toContain('../mian-logo.svg')
   })
 
-  test('styles.css hero-image 背景使用 ../mian-logo.svg', () => {
-    expect(css).toMatch(/url\(["']?\.\.\/mian-logo\.svg["']?\)/)
+  test('styles.css 前两个文字区块使用更大 logo 背景，第三个不再使用', () => {
+    expect(css).toMatch(/\.hero-copy::before,\s*\.browser-automation-copy::before\s*\{[^}]*url\(["']?\.\/mian-logo\.svg["']?\)/)
+    expect(css).toMatch(/min\(460px,\s*64vw\)/)
+    expect(css).not.toContain('../mian-logo.svg')
+    expect(css).not.toMatch(/\.section-heading::before/)
+    expect(css).not.toMatch(/\.hero-facts div::after\s*\{[^}]*url\(["']?\.\/mian-logo\.svg["']?\)/)
+    expect(css).not.toMatch(/\.hero-image\s*\{[^}]*url\(["']?\.\.\/mian-logo\.svg["']?\)/)
   })
 
-  test('../mian-logo.svg 文件存在', async () => {
-    const exists = await Bun.file(new URL('../mian-logo.svg', import.meta.url)).exists()
+  test('styles.css 第二块文字区域高度与第一块一致', () => {
+    expect(css).toMatch(/\.hero-copy,\s*\.browser-automation-copy\s*\{[^}]*min-height:\s*440px/)
+  })
+
+  test('styles.css AI 浏览器自动化步骤按钮尺寸与第一块按钮一致，第一个为绿色', () => {
+    expect(css).toMatch(/\.browser-automation-steps li\s*\{[^}]*min-height:\s*43px/)
+    expect(css).toMatch(/\.browser-automation-steps li\s*\{[^}]*padding:\s*0 17px/)
+    expect(css).toMatch(/\.browser-automation-steps li\s*\{[^}]*font-size:\s*14px/)
+    expect(css).toMatch(/\.browser-automation-steps li:first-child\s*\{[^}]*background:\s*var\(--green\)/)
+  })
+
+  test('styles.css AI 浏览器自动化文字左对齐且垂直方向居中', () => {
+    expect(css).toMatch(/\.browser-automation-copy\s*\{[^}]*text-align:\s*left/)
+    expect(css).toMatch(/\.browser-automation-copy\s*\{[^}]*align-items:\s*flex-start/)
+    expect(css).toMatch(/\.browser-automation-copy\s*\{[^}]*justify-content:\s*center/)
+    expect(css).not.toMatch(/\.browser-automation-copy\s*\{[^}]*align-items:\s*center/)
+    expect(css).not.toMatch(/\.browser-automation-copy\s*\{[^}]*justify-content:\s*flex-start/)
+    expect(css).toMatch(/\.browser-automation-description\s*\{[^}]*margin:\s*0 0 28px/)
+    expect(css).toMatch(/\.browser-automation-steps\s*\{[^}]*justify-content:\s*flex-start/)
+  })
+
+  test('./mian-logo.svg 文件存在', async () => {
+    const exists = await Bun.file(new URL('./mian-logo.svg', import.meta.url)).exists()
+    expect(exists).toBe(true)
+  })
+
+  test('./assets/contract.JPG 文件存在', async () => {
+    const exists = await Bun.file(new URL('./assets/contract.JPG', import.meta.url)).exists()
     expect(exists).toBe(true)
   })
 })

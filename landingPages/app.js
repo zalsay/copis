@@ -1,19 +1,14 @@
 const commandDialog = document.querySelector('#command-dialog');
 const taskInput = document.querySelector('#task-input');
 const taskToast = document.querySelector('#task-toast');
-const authDialog = document.querySelector('#auth-dialog');
-const authForm = document.querySelector('#auth-form');
-const authAccount = document.querySelector('#auth-account');
-const authPassword = document.querySelector('#auth-password');
-const authDialogKicker = document.querySelector('#auth-dialog-kicker');
-const authDialogTitle = document.querySelector('#auth-dialog-title');
-const authSubmit = document.querySelector('#auth-submit');
+const contactDialog = document.querySelector('#contact-dialog');
+const downloadDialog = document.querySelector('#download-dialog');
 const carousel = document.querySelector('[data-workflow-carousel]');
 
 let toastTimer;
 let lastCommandTrigger;
-let lastAuthTrigger;
-let authMode = '登录';
+let lastContactTrigger;
+let lastDownloadTrigger;
 
 document.querySelectorAll('[data-open-command]').forEach((button) => {
   button.addEventListener('click', () => {
@@ -39,41 +34,41 @@ document.querySelector('#submit-task').addEventListener('click', (event) => {
 
 taskInput.addEventListener('input', () => taskInput.setCustomValidity(''));
 
-document.querySelectorAll('[data-open-auth]').forEach((button) => {
+document.querySelectorAll('[data-open-contact]').forEach((button) => {
   button.addEventListener('click', () => {
-    lastAuthTrigger = button;
-    setAuthMode(button.dataset.openAuth);
-    authForm.reset();
-    authDialog.showModal();
-    window.setTimeout(() => authAccount.focus(), 0);
+    lastContactTrigger = button;
+    contactDialog.showModal();
+    window.setTimeout(() => contactDialog.querySelector('[data-close-contact]')?.focus(), 0);
   });
 });
 
-document.querySelectorAll('[data-close-auth]').forEach((button) => {
-  button.addEventListener('click', () => authDialog.close());
+document.querySelectorAll('[data-close-contact]').forEach((button) => {
+  button.addEventListener('click', () => contactDialog.close());
 });
 
-authDialog.addEventListener('close', () => lastAuthTrigger?.focus());
+contactDialog.addEventListener('close', () => lastContactTrigger?.focus());
 
-authForm.addEventListener('submit', (event) => {
-  event.preventDefault();
-  if (!authForm.checkValidity()) {
-    authForm.reportValidity();
-    return;
-  }
-
-  authDialog.close();
-  showToast(`${authMode}信息已填写，接入账号服务后即可继续。`);
+contactDialog.addEventListener('click', (event) => {
+  if (event.target === contactDialog) contactDialog.close();
 });
 
-function setAuthMode(mode) {
-  authMode = mode === '注册' ? '注册' : '登录';
-  const isRegister = authMode === '注册';
-  authDialogKicker.textContent = isRegister ? '创建你的工作台' : '欢迎回来';
-  authDialogTitle.textContent = `${authMode} Copis`;
-  authSubmit.textContent = authMode;
-  authPassword.autocomplete = isRegister ? 'new-password' : 'current-password';
-}
+document.querySelectorAll('[data-open-download]').forEach((button) => {
+  button.addEventListener('click', () => {
+    lastDownloadTrigger = button;
+    downloadDialog.showModal();
+    window.setTimeout(() => downloadDialog.querySelector('[data-close-download]')?.focus(), 0);
+  });
+});
+
+document.querySelectorAll('[data-close-download]').forEach((button) => {
+  button.addEventListener('click', () => downloadDialog.close());
+});
+
+downloadDialog.addEventListener('close', () => lastDownloadTrigger?.focus());
+
+downloadDialog.addEventListener('click', (event) => {
+  if (event.target === downloadDialog) downloadDialog.close();
+});
 
 if (carousel) {
   const track = carousel.querySelector('#workflow-carousel-track');

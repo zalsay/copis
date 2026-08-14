@@ -13,15 +13,15 @@
         <div class="hero-image" aria-hidden="true"></div>
         <header class="site-header glass-surface">
           <a class="brand" href="#top" aria-label="Copis 首页">
-            <img class="brand-logo" src="../mian-logo.svg" alt="" />
+            <img class="brand-logo" src="./mian-logo.svg" alt="" />
             <span>Copis</span>
           </a>
           <nav class="site-nav" aria-label="主导航">
             <a href="#workflow">工作流</a>
           </nav>
-          <div class="auth-actions" aria-label="账号操作">
-            <button class="nav-auth nav-auth-login" type="button" data-open-auth="登录">登录</button>
-            <button class="nav-auth nav-auth-register" type="button" data-open-auth="注册">注册</button>
+          <div class="auth-actions" aria-label="联系与下载操作">
+            <button class="nav-auth nav-auth-contact" type="button" data-open-contact aria-haspopup="dialog">联系我们</button>
+            <button class="nav-auth nav-auth-download" type="button" data-open-download aria-haspopup="dialog">下载中心</button>
           </div>
         </header>
 
@@ -46,7 +46,7 @@
         <section class="workbench glass-surface" aria-label="Copis 智能体工作台预览">
           <aside class="workbench-sidebar">
             <div class="workbench-brand">
-              <img src="../mian-logo.svg" alt="" />
+              <img src="./mian-logo.svg" alt="" />
               <span>工作台</span>
             </div>
             <button class="new-task" type="button" data-open-command>新建任务 <strong>+</strong></button>
@@ -76,7 +76,7 @@
                 <p id="active-session-title">整理本周产品反馈</p>
               </div>
               <div class="message message-agent">
-                <span class="agent-avatar"><img src="../mian-logo.svg" alt="" /></span>
+                <span class="agent-avatar"><img src="./mian-logo.svg" alt="" /></span>
                 <div>
                   <strong>Copis 智能体</strong>
                   <p id="active-session-copy">已读取工作区中的访谈记录，正在归纳可验证的问题与下一步行动。</p>
@@ -224,7 +224,7 @@
     <dialog class="command-dialog" id="command-dialog" aria-labelledby="dialog-title">
       <form method="dialog" class="command-panel glass-surface">
         <div class="dialog-heading">
-          <img class="brand-logo" src="../mian-logo.svg" alt="" />
+          <img class="brand-logo" src="./mian-logo.svg" alt="" />
           <div><p class="eyebrow">新建任务</p><h2 id="dialog-title">开始一个任务</h2></div>
           <button class="dialog-close" value="cancel" aria-label="关闭">&#215;</button>
         </div>
@@ -236,22 +236,43 @@
         </div>
       </form>
     </dialog>
-    <dialog class="command-dialog" id="auth-dialog" aria-labelledby="auth-dialog-title">
-      <form class="command-panel glass-surface" id="auth-form" novalidate>
+    <dialog class="command-dialog contact-dialog" id="contact-dialog" aria-labelledby="contact-dialog-title">
+      <div class="command-panel glass-surface contact-panel">
         <div class="dialog-heading">
-          <img class="brand-logo" src="../mian-logo.svg" alt="" />
-          <div><p class="eyebrow" id="auth-dialog-kicker">欢迎回来</p><h2 id="auth-dialog-title">登录 Copis</h2></div>
-          <button class="dialog-close" type="button" data-close-auth aria-label="关闭">&#215;</button>
+          <img class="brand-logo" src="./mian-logo.svg" alt="" />
+          <div><h2 id="contact-dialog-title">联系我们</h2></div>
+          <button class="dialog-close" type="button" data-close-contact aria-label="关闭联系我们">&#215;</button>
         </div>
-        <label for="auth-account">邮箱</label>
-        <input class="auth-input" id="auth-account" type="email" autocomplete="email" required placeholder="输入你的邮箱" />
-        <label for="auth-password">密码</label>
-        <input class="auth-input" id="auth-password" type="password" autocomplete="current-password" required placeholder="输入你的密码" />
-        <div class="dialog-actions">
-          <button class="button button-secondary" type="button" data-close-auth>取消</button>
-          <button class="button button-primary" id="auth-submit" type="submit">登录</button>
+        <img class="contact-image" src="./assets/contract.JPG" alt="联系我们" />
+      </div>
+    </dialog>
+    <dialog class="command-dialog download-dialog" id="download-dialog" aria-labelledby="download-dialog-title">
+      <div class="command-panel glass-surface download-panel">
+        <div class="dialog-heading">
+          <img class="brand-logo" src="./mian-logo.svg" alt="" />
+          <div><p class="eyebrow">选择平台</p><h2 id="download-dialog-title">下载 Copis</h2></div>
+          <button class="dialog-close" type="button" data-close-download aria-label="关闭下载中心">&#215;</button>
         </div>
-      </form>
+        <p class="download-subtitle">选择适合你系统的安装包，安装后即可开始使用。</p>
+        <div class="download-platform-list">
+          <article class="download-platform-row">
+            <span class="download-platform-mark">Win</span>
+            <div class="download-platform-copy"><strong>Windows</strong><small>Windows 10 及以上 · x64</small></div>
+            <a class="download-platform-action" href="https://download.meetlife.com.cn/copis/downloads/stable/win32-x64/Copis-Setup.exe" target="_blank" rel="noreferrer">下载</a>
+          </article>
+          <article class="download-platform-row">
+            <span class="download-platform-mark">Apple</span>
+            <div class="download-platform-copy"><strong>macOS</strong><small>Apple 芯片</small></div>
+            <a class="download-platform-action" href="https://download.meetlife.com.cn/copis/downloads/stable/darwin-arm64/Copis-arm64.dmg" target="_blank" rel="noreferrer">下载</a>
+          </article>
+          <article class="download-platform-row">
+            <span class="download-platform-mark">Intel</span>
+            <div class="download-platform-copy"><strong>macOS</strong><small>Intel 芯片</small></div>
+            <a class="download-platform-action" href="https://download.meetlife.com.cn/copis/downloads/stable/darwin-x64/Copis-x64.dmg" target="_blank" rel="noreferrer">下载</a>
+          </article>
+        </div>
+        <p class="download-note">以下链接指向当前稳定版安装包；如需商业版，可前往 <a href="https://copis.cool/download" target="_blank" rel="noreferrer">copis.cool</a>。</p>
+      </div>
     </dialog>
     <div class="toast" id="task-toast" role="status" aria-live="polite">任务已准备好。打开 Copis 后即可继续。</div>
     <script src="./app.js"></script>

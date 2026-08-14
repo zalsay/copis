@@ -20,6 +20,7 @@
     "publish:functional-modules": "bun run scripts/publish-functional-modules.ts",
     "publish:app-updates": "bun run scripts/publish-app-updates.ts",
     "publish:windows-installer": "bun run scripts/publish-windows-installer.ts",
+    "publish:macos-installer": "bun run scripts/publish-macos-installer.ts",
     "build": "bun run --filter='*' build",
     "typecheck": "bun run --filter='*' typecheck",
     "test": "bun test --isolate"
