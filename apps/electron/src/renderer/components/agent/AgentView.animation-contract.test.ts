@@ -16,4 +16,17 @@ describe('Agent 思考状态动画契约', () => {
     expect(agentStyles).toContain('background-position: 220% 0;')
     expect(agentStyles).toContain('background-position: 0 0;')
   })
+
+  test('Given Agent composer When 显示输入区域 Then 使用半透明毛玻璃背景', () => {
+    expect(agentStyles).toContain('background: hsl(var(--background) / 0.42) !important;')
+    expect(agentStyles).toContain('position: absolute;')
+    expect(agentStyles).toContain('padding-bottom: 128px;')
+    expect(agentStyles).toContain('backdrop-filter: blur(18px) saturate(1.12);')
+    expect(agentStyles).toContain('-webkit-backdrop-filter: blur(18px) saturate(1.12);')
+  })
+
+  test('Given Agent 处于 Plan 模式 When 显示输入区域 Then 使用 primary background token', () => {
+    expect(agentStyles).toContain('background-color: var(--ui-primary-background) !important;')
+    expect(agentStyles).not.toContain('rgb(43 33 55 / 0.70)')
+  })
 })

@@ -67,11 +67,35 @@
   transform: translate(-50%, -50%);
 }
 
-/* Working Composer：深色现代主题沿用父项目的炭灰半透明材质。 */
+/* 普通会话中 Composer 覆盖在消息滚动区底部，避免半透明材质下方只有同色空白。 */
+.copis-agent-session:not(.new-conversation) > [data-input-mode="agent"] {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 10;
+  width: 100%;
+  max-width: none;
+}
+
+.copis-agent-session:not(.new-conversation) > .relative.flex.min-h-0.flex-1.flex-col {
+  padding-bottom: 128px;
+}
+
+/* Composer：保持半透明背景，让底层内容透过毛玻璃材质可见。 */
+.copis-agent-session [data-input-mode="agent"] > div:first-child:not(.border-dashed) {
+  background: hsl(var(--background) / 0.42) !important;
+  background-clip: padding-box;
+  box-shadow: 0 16px 48px hsl(0 0% 0% / 0.14);
+  backdrop-filter: blur(18px) saturate(1.12);
+  -webkit-backdrop-filter: blur(18px) saturate(1.12);
+}
+
+/* 深色现代主题使用更饱和的炭灰材质，避免输入区在暗背景中发白。 */
 :root.ui-modern.dark:not(.theme-terminal-dark) .copis-agent-session [data-input-mode="agent"] > div:first-child:not(.border-dashed) {
   border-color: rgba(255, 255, 255, 0.07);
   border-radius: 19px;
-  background-color: rgba(47, 47, 47, 0.76) !important;
+  background: rgba(47, 47, 47, 0.46) !important;
   background-clip: padding-box;
   box-shadow: 0 20px 60px rgba(0, 0, 0, 0.26);
   backdrop-filter: blur(18px) saturate(1.18);
@@ -83,11 +107,11 @@
 }
 
 .copis-agent-session [data-input-mode="agent"] > div:first-child.plan-mode-input {
-  background-color: rgb(43 33 55 / 0.70) !important;
+  background-color: var(--ui-primary-background) !important;
 }
 
 :root.ui-modern.dark:not(.theme-terminal-dark) .copis-agent-session [data-input-mode="agent"] > div:first-child.plan-mode-input {
-  background-color: rgb(43 33 55 / 0.70) !important;
+  background-color: var(--ui-primary-background) !important;
 }
 
 @media (max-width: 720px) {

@@ -42,7 +42,7 @@ import { getAdapter, fetchTitle } from '@copis/core'
 import { getFetchFn } from './proxy-fetch'
 import { getEffectiveProxyUrl } from './proxy-settings-service'
 import { appendSDKMessages, updateAgentSessionMeta, getAgentSessionMeta, getAgentSessionMessages, removeSDKErrorMessage, resolveAgentCwd, getAgentCwdMode } from './agent-session-manager'
-import { ensureAgentWorkspaceContextDir, ensureAgentWorkspaceWritableRoot, getAgentWorkspace, getAgentWorkspaceBySlug, getAgentWorkspaceReadableRoots, getAgentWorkspaceWritableRoot, getLocalProjectRootStatus, getProjectFilesPath, getWorkspaceMcpConfig, getWorkspaceAttachedDirectories, getWorkspaceAttachedFiles } from './agent-workspace-manager'
+import { ensureAgentWorkspaceContextDir, ensureAgentWorkspaceWritableRoot, getAgentWorkspace, getAgentWorkspaceBySlug, getAgentWorkspaceReadableRoots, getLocalProjectRootStatus, getProjectFilesPath, getWorkspaceMcpConfig, getWorkspaceAttachedDirectories, getWorkspaceAttachedFiles } from './agent-workspace-manager'
 import { getWorkingApiClient } from './working-api-service'
 import { getAgentWorkspacePath, getAgentSessionWorkspacePath, getSdkConfigDir, getWorkspaceSkillsDir } from './config-paths'
 import { isPathWithinRootsAllowMissing } from './file-access-policy'
@@ -311,14 +311,14 @@ function escapePromptXml(value: string): string {
 
 function buildPiAdditionalDirectoriesPrompt(
   directories: string[],
-  workspaceWriteRoot?: string,
+  workspaceWriteRoots?: string[],
 ): string {
   if (directories.length === 0) return ''
   const directoryLines = directories
     .map((dir, index) => `  <directory index="${index + 1}">${escapePromptXml(dir)}</directory>`)
     .join('\n')
-  const writeInstruction = workspaceWriteRoot
-    ? `工作区原始目录保持只读；需要创建或修改工作区文件时，只能写入 ${workspaceWriteRoot}。`
+  const writeInstruction = workspaceWriteRoots?.length
+    ? `工作区原始目录保持只读；需要创建或修改工作区文件时，只能写入 ${workspaceWriteRoots.join(' 或 ')}。`
     : '这些目录的读写权限仍受当前会话权限模式约束。'
   return `
 
@@ -1103,6 +1103,7 @@ export class AgentOrchestrator {
     let workspaceSlug: string | undefined
     let workspace: import('@copis/shared').AgentWorkspace | undefined
     let workspaceWriteRoot: string | undefined
+    let workspaceProjectRoot: string | undefined
     let workspaceWriteRestricted = false
 
     try {
@@ -1120,10 +1121,9 @@ export class AgentOrchestrator {
         agentCwd = resolveAgentCwd(ws, sessionId, sessionMeta?.agentCwdMode) ?? homedir()
         workspaceSlug = ws.slug
         workspace = ws
-        workspaceWriteRestricted = ws.allowWorkspaceWrite === false
-        workspaceWriteRoot = workspaceWriteRestricted
-          ? ensureAgentWorkspaceWritableRoot(ws)
-          : getAgentWorkspaceWritableRoot(ws)
+        workspaceWriteRestricted = true
+        workspaceWriteRoot = ensureAgentWorkspaceWritableRoot(ws)
+        workspaceProjectRoot = getProjectFilesPath(ws.slug)
         ensureAgentWorkspaceContextDir(ws)
         console.log(`[Agent 编排] 使用 ${getAgentCwdMode(sessionMeta)} cwd: ${agentCwd} (${ws.name}/${sessionId})`)
 
@@ -1287,8 +1287,8 @@ export class AgentOrchestrator {
       const getPermissionMode = (): CopisPermissionMode =>
         this.sessionPermissionModes.get(sessionId) ?? initialPermissionMode
 
-      const restrictedWriteRoots = workspaceWriteRestricted && workspaceWriteRoot && workspaceSlug
-        ? [workspaceWriteRoot, getAgentSessionWorkspacePath(workspaceSlug, sessionId)]
+      const restrictedWriteRoots = workspaceWriteRestricted && workspaceWriteRoot && workspaceProjectRoot && workspaceSlug
+        ? [workspaceWriteRoot, workspaceProjectRoot, getAgentSessionWorkspacePath(workspaceSlug, sessionId)]
         : []
       const resolveToolFilePath = (filePath: string): string => {
         const baseDir = agentCwd ?? process.cwd()
@@ -1298,8 +1298,8 @@ export class AgentOrchestrator {
         if (!workspaceWriteRestricted || restrictedWriteRoots.length === 0) return true
         return isPathWithinRootsAllowMissing(resolveToolFilePath(filePath), restrictedWriteRoots)
       }
-      const restrictedWriteDeniedMessage = workspaceWriteRoot
-        ? `当前工作区原始目录只读，Agent 只能写入 ${workspaceWriteRoot}。`
+      const restrictedWriteDeniedMessage = workspaceWriteRoot && workspaceProjectRoot
+        ? `当前工作区原始目录只读，Agent 只能写入 ${workspaceWriteRoot} 或 ${workspaceProjectRoot}。`
         : '当前工作区原始目录只读，Agent 只能写入 Copis 受控目录。'
 
       // ExitPlanMode 拦截器：plan 模式下走 UI 审批流程
@@ -1434,7 +1434,7 @@ export class AgentOrchestrator {
         if (workspaceWriteRestricted && toolName === 'Bash') {
           const command = typeof input.command === 'string' ? input.command : ''
           if (!isBashCommandReadOnly(command)) {
-            return { behavior: 'deny' as const, message: `${restrictedWriteDeniedMessage} Bash 写操作请改用 Write/Edit 写入 copis/。` }
+            return { behavior: 'deny' as const, message: `${restrictedWriteDeniedMessage} Bash 写操作请改用 Write/Edit 写入 project/ 或 copis/。` }
           }
         }
 
@@ -1695,7 +1695,12 @@ export class AgentOrchestrator {
         ...(maxTurns != null && { maxTurns }),
         permissionMode: initialPermissionMode,
         canUseTool,
-        systemPrompt: systemPromptAppend + buildPiAdditionalDirectoriesPrompt(allAdditionalDirectories, workspaceWriteRestricted ? workspaceWriteRoot : undefined),
+        systemPrompt: systemPromptAppend + buildPiAdditionalDirectoriesPrompt(
+          allAdditionalDirectories,
+          workspaceWriteRestricted && workspaceWriteRoot && workspaceProjectRoot
+            ? [workspaceWriteRoot, workspaceProjectRoot]
+            : undefined,
+        ),
         resumeSessionId: existingSdkSessionId,
         piAgentDir: getSdkConfigDir(),
         piSessionDir: join(getSdkConfigDir(), 'sessions'),

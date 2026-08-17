@@ -82,7 +82,7 @@ mock.module('./http-api-server', () => ({
 
 mock.module('./agent-workspace-manager', () => ({
   getAgentWorkspace: (id: string) => (id === workspace.id ? workspace : undefined),
-  getAgentWorkspaceWritableRoot: () => workspace.projectRootPath,
+  getAgentWorkspaceWritableRoot: () => '/tmp/copis-expert-team-tool/copis',
   getAgentWorkspaceAgentsPath: () => '/tmp/.copis/agent-workspaces/test-workspace/AGENTS.md',
 }))
 

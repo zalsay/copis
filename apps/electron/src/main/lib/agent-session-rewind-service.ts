@@ -60,7 +60,7 @@ function resolveLocalProjectRootForRewind(
   }
 
   try {
-    accessSync(projectRootPath, constants.R_OK | constants.W_OK | constants.X_OK)
+    accessSync(projectRootPath, constants.R_OK | constants.X_OK)
     const realRoot = realpathSync(projectRootPath)
     const normalizedRoot = normalizePathForCompare(realRoot) || realRoot
     return process.platform === 'win32' ? normalizedRoot.toLowerCase() : normalizedRoot

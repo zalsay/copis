@@ -14,6 +14,7 @@ import { UPDATER_IPC_CHANNELS } from './updater-types'
 import { createIdleInstallScheduler } from './idle-install-scheduler'
 import { checkAppUpdateViaRustApi } from '../app-update-service'
 import { autoInstallDownloadedUpdate } from '../auto-install-update'
+import { migrateLegacyAgentWorkspaceProjectDirectories } from '../agent-workspace-manager'
 
 /** 当前更新状态 */
 let currentStatus: UpdateStatus = { status: 'idle' }
@@ -76,6 +77,13 @@ export function getUpdateStatus(): UpdateStatus {
 
 /** 通过 Rust API 手动检查主程序更新 */
 export async function checkForUpdates(): Promise<void> {
+  // 每次进入更新检查入口都尝试迁移旧工作区目录；迁移失败不得阻断更新状态机。
+  try {
+    migrateLegacyAgentWorkspaceProjectDirectories()
+  } catch (error) {
+    console.error('[更新] 工作区旧项目目录迁移失败（更新检查继续）:', error)
+  }
+
   // 已在下载中或已下载完成，不重复检查
   if (currentStatus.status === 'downloading' || currentStatus.status === 'downloaded') {
     console.log('[更新] 跳过检查：已在下载中或已下载完成')

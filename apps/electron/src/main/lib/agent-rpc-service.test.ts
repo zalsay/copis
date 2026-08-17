@@ -41,7 +41,8 @@ mock.module('./agent-session-manager', () => ({
 
 mock.module('./agent-workspace-manager', () => ({
   ensureAgentWorkspaceContextDir: () => '/tmp/copis-agent-rpc-test/workspace-1/.context',
-  ensureAgentWorkspaceWritableRoot: () => '/tmp/copis-agent-rpc-test/project',
+  ensureAgentWorkspaceWritableRoot: () => '/tmp/copis-agent-rpc-test/copis',
+  getAgentWorkspaceCopisPath: () => '/tmp/copis-agent-rpc-test/copis',
   getAgentWorkspace: (workspaceId: string) => workspaceId === 'workspace-1'
     ? {
       id: 'workspace-1',
@@ -53,7 +54,7 @@ mock.module('./agent-workspace-manager', () => ({
       updatedAt: 1,
     }
     : undefined,
-  getAgentWorkspaceWritableRoot: () => '/tmp/copis-agent-rpc-test/project',
+  getAgentWorkspaceWritableRoot: () => '/tmp/copis-agent-rpc-test/copis',
   getAgentWorkspaceBySlug: (slug: string) => slug === 'test-workspace'
     ? {
       id: 'workspace-1',
@@ -65,7 +66,7 @@ mock.module('./agent-workspace-manager', () => ({
       updatedAt: 1,
     }
     : undefined,
-  getAgentWorkspaceContextDir: () => '/tmp/copis-agent-rpc-test/project/.context',
+  getAgentWorkspaceContextDir: () => '/tmp/copis-agent-rpc-test/copis/.context',
   getAgentWorkspaceReadableRoots: () => ['/tmp/copis-agent-rpc-test/project'],
   getProjectFilesPath: () => '/tmp/copis-agent-rpc-test/project',
   getWorkspaceAttachedDirectories: () => [],
@@ -313,6 +314,8 @@ describe('Agent RPC 工作区边界', () => {
       expect(policy).toBeDefined()
       expect(policy?.readFiles).toContain(attachedFile)
       expect(policy?.readRoots).not.toContain('/tmp/copis-agent-rpc-test/external')
+      expect(policy?.writeRoots).toContain('/tmp/copis-agent-rpc-test/project')
+      expect(policy?.writeRoots).toContain('/tmp/copis-agent-rpc-test/copis')
     } finally {
       rpcSession.attachedFiles = originalAttachedFiles
     }

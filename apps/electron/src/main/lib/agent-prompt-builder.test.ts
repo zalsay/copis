@@ -6,8 +6,8 @@ mock.module('./user-profile-service', () => ({
 
 mock.module('./agent-workspace-manager', () => ({
   getAgentWorkspaceBySlug: () => undefined,
-  getAgentWorkspaceContextDir: () => '/tmp/sample-project/.context',
-  getAgentWorkspaceWritableRoot: () => '/tmp/sample-project',
+  getAgentWorkspaceContextDir: () => '/tmp/sample-project/copis/.context',
+  getAgentWorkspaceWritableRoot: () => '/tmp/sample-project/copis',
   getProjectFilesPath: () => '/tmp/sample-project',
   getWorkspaceMcpConfig: () => ({ servers: {} }),
 }))

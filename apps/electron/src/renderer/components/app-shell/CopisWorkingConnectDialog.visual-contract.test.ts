@@ -23,24 +23,10 @@ describe('创建工作区弹窗视觉契约', () => {
     expect(pickerIconRule).toContain('var(--ui-primary)')
   })
 
-  test('Given 创建工作区弹窗 When 查看勾选态与焦点态 Then 不残留旧紫色强调值', () => {
-    const checkedRule = ruleBody('\\.copis-working-connect-check input\\:checked \\+ \\.copis-working-connect-check-box')
-    const focusRule = ruleBody('\\.copis-working-connect-check input\\:focus-visible \\+ \\.copis-working-connect-check-box')
-
-    expect(checkedRule).toContain('var(--ui-primary)')
-    expect(focusRule).toContain('var(--ui-primary)')
+  test('Given 创建工作区弹窗 When 查看强调色 Then 不残留旧紫色强调值', () => {
     expect(dialogStyles).not.toContain('#c8a7ff')
     expect(dialogStyles).not.toContain('rgba(200, 167, 255')
     expect(dialogStyles).not.toContain('linear-gradient(180deg, rgba(200, 167, 255')
-  })
-
-  test('Given 创建工作区弹窗 When 查看权限说明 note Then border/background/color 使用 primary tokens 且无橙色残留', () => {
-    const noteRule = ruleBody('\\.copis-working-connect-note')
-
-    expect(noteRule).toContain('var(--ui-primary)')
-    expect(noteRule).toContain('var(--ui-primary-background)')
-    expect(dialogStyles).not.toContain('rgba(245, 158, 11')
-    expect(dialogStyles).not.toContain('#f7c46a')
   })
 
   test('Given 创建工作区弹窗 When 查看底部创建按钮 Then 使用 primary 实色背景与 primary-foreground 前景且无白色背景', () => {
@@ -58,7 +44,9 @@ describe('创建工作区弹窗视觉契约', () => {
 
   test('Given 创建工作区弹窗 When 检查交互入口 Then 保留目录选择与创建回调', () => {
     expect(dialogSource).toContain('window.electronAPI.openFolderDialog()')
-    expect(dialogSource).toContain('onConfirm(selection, allowWorkspaceWrite)')
+    expect(dialogSource).toContain('onConfirm(selection)')
+    expect(dialogSource).not.toContain('allowWorkspaceWrite')
+    expect(dialogSource).not.toContain('Agent 可读取所选目录中的文件，并仅可写入同级 copis/ 与 project/ 目录。')
     expect(dialogSource).toContain('onClick={onClose}')
   })
 

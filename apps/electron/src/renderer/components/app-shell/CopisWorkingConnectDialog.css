@@ -58,8 +58,7 @@
   height: 20px;
 }
 
-.copis-working-connect-header strong,
-.copis-working-connect-check strong {
+.copis-working-connect-header strong {
   display: block;
 }
 
@@ -203,89 +202,6 @@
   font-size: 12px;
   font-weight: 700;
   white-space: nowrap;
-}
-
-.copis-working-connect-check {
-  margin-top: 14px;
-  display: grid;
-  grid-template-columns: 20px minmax(0, 1fr);
-  gap: 10px;
-  align-items: start;
-  padding: 14px;
-  border: 1px solid hsl(var(--border));
-  border-radius: 12px;
-  background: hsl(var(--muted));
-  color: hsl(var(--card-foreground));
-  cursor: pointer;
-  transition:
-    border-color 0.15s ease,
-    background-color 0.15s ease;
-}
-
-.copis-working-connect-check:hover {
-  border-color: color-mix(in srgb, var(--ui-primary) 38%, transparent);
-}
-
-.copis-working-connect-check input {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  opacity: 0;
-  pointer-events: none;
-}
-
-.copis-working-connect-check-box {
-  width: 18px;
-  height: 18px;
-  margin-top: 1px;
-  display: grid;
-  place-items: center;
-  border: 1px solid color-mix(in srgb, hsl(var(--foreground)) 34%, transparent);
-  border-radius: 5px;
-  background: hsl(var(--card));
-  color: transparent;
-  transition:
-    border-color 0.15s ease,
-    background-color 0.15s ease,
-    color 0.15s ease;
-}
-
-.copis-working-connect-check input:checked + .copis-working-connect-check-box {
-  border-color: var(--ui-primary);
-  background: var(--ui-primary);
-  color: var(--ui-primary-foreground);
-}
-
-.copis-working-connect-check input:focus-visible + .copis-working-connect-check-box {
-  outline: 2px solid color-mix(in srgb, var(--ui-primary) 55%, transparent);
-  outline-offset: 2px;
-}
-
-.copis-working-connect-check-box svg {
-  width: 13px;
-  height: 13px;
-  stroke-width: 3;
-}
-
-.copis-working-connect-check strong {
-  padding-top: 1px;
-  font-size: 14px;
-  line-height: 1.35;
-}
-
-.copis-working-connect-check > span:last-child {
-  min-width: 0;
-}
-
-.copis-working-connect-note {
-  margin-top: 10px;
-  padding: 11px 13px;
-  border: 1px solid color-mix(in srgb, var(--ui-primary) 32%, transparent);
-  border-radius: 11px;
-  background: var(--ui-primary-background);
-  color: var(--ui-primary);
-  font-size: 13px;
-  line-height: 1.5;
 }
 
 .copis-working-connect-actions {
