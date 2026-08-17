@@ -1,9 +1,8 @@
 /**
  * AgentHistorySelectionLayer — Agent 历史选区引用入口
  *
- * 在 Agent 历史消息里划选文本后，提供两个轻量动作：
- * 1. 添加到当前 Agent 输入框引用
- * 2. 打开 Agent 右侧问答 Tab，用选区作为上下文提问
+ * 在 Agent 历史消息里划选文本后，提供添加到当前 Agent 输入框的引用动作，
+ * 普通 Agent 还可以打开右侧问答 Tab；浏览器 Agent 会隐藏后者。
  */
 
 import * as React from 'react'
@@ -28,6 +27,7 @@ interface AgentHistorySelection {
 interface AgentHistorySelectionLayerProps {
   sessionId: string
   rootRef: React.RefObject<HTMLDivElement>
+  allowAgentQuestion?: boolean
 }
 
 function getElementFromNode(node: Node | null): Element | null {
@@ -49,6 +49,7 @@ function getRoleLabel(role?: string): string {
 export function AgentHistorySelectionLayer({
   sessionId,
   rootRef,
+  allowAgentQuestion = true,
 }: AgentHistorySelectionLayerProps): React.ReactElement {
   const setQuotedSelectionMap = useSetAtom(quotedSelectionMapAtom)
   const openAgentQuestion = useOpenAgentQuestion()
@@ -226,7 +227,7 @@ export function AgentHistorySelectionLayer({
           x={selection.x}
           y={selection.y}
           onAddToAgent={handleAddToAgent}
-          onOpenAgentQuestion={handleOpenAgentQuestion}
+          onOpenAgentQuestion={allowAgentQuestion ? handleOpenAgentQuestion : undefined}
         />
       )}
     </>

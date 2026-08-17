@@ -1,11 +1,11 @@
 import * as React from 'react'
-import { Bot, MessageCircle } from 'lucide-react'
+import { Bot } from 'lucide-react'
 
 interface SelectionActionPopoverProps {
   x: number
   y: number
   onAddToAgent: () => void
-  onOpenAgentQuestion: () => void | Promise<void>
+  onOpenAgentQuestion?: () => void | Promise<void>
 }
 
 export function SelectionActionPopover({
@@ -30,16 +30,17 @@ export function SelectionActionPopover({
           <Bot className="size-4" />
           为 Agent 引用
         </button>
-        <button
-          type="button"
-          className="inline-flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-[13px] font-medium transition-colors hover:bg-muted"
-          onClick={() => {
-            void onOpenAgentQuestion()
-          }}
-        >
-          <MessageCircle className="size-4" />
-          在 Agent 问答中提问
-        </button>
+        {onOpenAgentQuestion ? (
+          <button
+            type="button"
+            className="inline-flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-[13px] font-medium transition-colors hover:bg-muted"
+            onClick={() => {
+              void onOpenAgentQuestion()
+            }}
+          >
+            在 Agent 问答中提问
+          </button>
+        ) : null}
       </div>
     </div>
   )

@@ -1,5 +1,5 @@
 /**
- * ModelSelector - 模型选择器（Dialog + Command 搜索）
+ * ModelSelector - 模型选择器（Dialog / Composer 抽屉 + 搜索）
  *
  * 现代化设计：
  * - 大尺寸 Dialog，宽敞易读
@@ -23,6 +23,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from '@/components/ui/tooltip'
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import {
   selectedModelAtom,
   channelsAtom,
@@ -108,6 +109,8 @@ interface ModelSelectorProps {
   excludedProviders?: readonly ProviderType[]
   /** 是否使用全局 modelSelectorOpenAtom 控制打开状态（用于外部拉起，如错误提示按钮） */
   useSharedOpenState?: boolean
+  /** 模型列表展示位置；Composer 使用紧贴输入框并向上展开的抽屉。 */
+  placement?: 'dialog' | 'composer'
 }
 
 export function ModelSelector({
@@ -121,6 +124,7 @@ export function ModelSelector({
   useCopisLogo = false,
   excludedProviders,
   useSharedOpenState = false,
+  placement = 'dialog',
 }: ModelSelectorProps = {}): React.ReactElement {
   const setGlobalModel = useSetAtom(selectedModelAtom)
   const globalSelectedModel = useAtomValue(selectedModelAtom)
@@ -134,6 +138,7 @@ export function ModelSelector({
   const [modelTooltipOpen, setModelTooltipOpen] = React.useState(false)
   const [search, setSearch] = React.useState('')
   const [latencies, setLatencies] = React.useState<WorkingModelLatencyMap>({})
+  const pickerListId = React.useId()
 
   // 外部模型优先；未传入时使用全局默认模型，避免依赖旧 Chat 会话状态。
   const selectedModel = externalSelectedModel !== undefined ? externalSelectedModel : globalSelectedModel
@@ -257,6 +262,111 @@ export function ModelSelector({
     }
   }
 
+  const pickerContent = (
+    <>
+      {/* 搜索栏 */}
+      <div className="flex items-center gap-2.5 px-4 py-3 border-b border-border/60">
+        <Search aria-hidden="true" className="size-5 text-muted-foreground/60 flex-shrink-0" />
+        <input
+          type="text"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          onKeyDown={handleSearchKeyDown}
+          placeholder="搜索模型..."
+          aria-label="搜索模型"
+          className="flex-1 bg-transparent text-base outline-none placeholder:text-muted-foreground/50"
+          autoFocus
+        />
+      </div>
+
+      {/* 模型列表 */}
+      <div id={pickerListId} role="listbox" aria-label="可用模型" className="max-h-[420px] overflow-y-auto pb-3 scrollbar-thin">
+        {filteredGrouped.size === 0 ? (
+          <div className="py-10 text-center text-sm text-muted-foreground">
+            未找到模型
+          </div>
+        ) : (
+          (() => {
+            let flatIndex = 0
+            return Array.from(filteredGrouped.entries()).map(([channelId, options]) => {
+              const first = options[0]
+              if (!first) return null
+              const channel = availableChannels.find((c) => c.id === channelId)
+              const useDeepSeekLogo = first.channelId === COPIS_WORKING_DEEPSEEK_CHANNEL_ID
+
+              return (
+                <div key={channelId}>
+                  {/* 供应商标题行 - 灰色背景 */}
+                  <div className="flex items-center gap-2 px-4 py-2 bg-muted/50 border-b border-border/30">
+                    <img
+                      src={useDeepSeekLogo
+                        ? getModelLogo(first.modelId, first.provider)
+                        : useCopisLogo ? CopisTemplateLogo : channel ? getChannelLogo(channel) : DefaultLogo}
+                      alt={first.channelName}
+                      className="size-5 rounded object-cover"
+                    />
+                    <span className="min-w-0 truncate text-sm font-medium text-muted-foreground">
+                      {first.channelName}
+                    </span>
+                    {channel ? <ChannelPlanQuotaBadge channel={channel} /> : null}
+                  </div>
+
+                  {/* 该渠道下的模型列表 */}
+                  {options.map((option) => {
+                    const modelDescription = getModelDescription(option)
+                    const isSelected =
+                      selectedModel?.channelId === option.channelId &&
+                      selectedModel?.modelId === option.modelId
+                    const currentFlatIndex = flatIndex++
+                    const isHighlighted = currentFlatIndex === highlightIndex
+
+                    return (
+                      <button
+                        key={`${option.channelId}:${option.modelId}`}
+                        ref={(el) => {
+                          if (el) itemRefs.current.set(currentFlatIndex, el)
+                          else itemRefs.current.delete(currentFlatIndex)
+                        }}
+                        type="button"
+                        role="option"
+                        aria-selected={isSelected}
+                        onClick={() => handleSelect(option)}
+                        onMouseEnter={() => setHighlightIndex(currentFlatIndex)}
+                        className={cn(
+                          'flex items-center gap-3 w-[calc(100%-1rem)] px-4 py-1.5 mx-2 rounded-lg text-left transition-colors',
+                          'hover:bg-accent',
+                          isHighlighted && 'bg-accent',
+                          isSelected && 'bg-foreground/10 border-l-3 border-l-primary'
+                        )}
+                      >
+                        {renderModelIcon(option, useCopisLogo, 'size-5 flex-shrink-0')}
+                        <span className="flex min-w-0 flex-1 items-center gap-2">
+                          <span className={cn(
+                            'min-w-0 flex-1 truncate text-sm',
+                            isSelected ? 'font-medium text-foreground' : 'text-foreground/80'
+                          )}>
+                            {option.modelName}
+                            {placement === 'dialog' && modelDescription ? `(${modelDescription})` : ''}
+                          </span>
+                          {placement === 'dialog' ? (
+                            <ModelLatencySignal
+                              averageMs={latencies[option.modelId]}
+                              className="shrink-0"
+                            />
+                          ) : null}
+                        </span>
+                      </button>
+                    )
+                  })}
+                </div>
+              )
+            })
+          })()
+        )}
+      </div>
+    </>
+  )
+
   if (channelsLoaded && modelOptions.length === 0) {
     return (
       <div className="flex items-center gap-1.5 text-xs text-muted-foreground px-2 py-1">
@@ -268,141 +378,89 @@ export function ModelSelector({
 
   return (
     <>
-      {/* 触发按钮 */}
-      <Tooltip
-        open={!modelTooltipDisabled && modelTooltipOpen}
-        onOpenChange={(nextOpen) => {
-          if (!modelTooltipDisabled) setModelTooltipOpen(nextOpen)
-        }}
-      >
-        <TooltipTrigger asChild>
-          <button
-            type="button"
-            onClick={() => setOpen(true)}
-            className="model-selector-trigger flex items-center gap-1.5 rounded-md px-2 py-1 text-xs text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+      {placement === 'composer' ? (
+        <Popover open={open} onOpenChange={setOpen}>
+          <Tooltip
+            open={!modelTooltipDisabled && modelTooltipOpen}
+            onOpenChange={(nextOpen) => {
+              if (!modelTooltipDisabled) setModelTooltipOpen(nextOpen)
+            }}
           >
-            {displayModelInfo ? (
-              renderModelIcon(displayModelInfo, useCopisLogo, 'size-4 shrink-0')
-            ) : (
-              <Cpu className="size-3.5" />
-            )}
-            <span className="max-w-[200px] truncate">
-              {displayModelInfo
-                ? (showChannelInTrigger
-                  ? `${triggerChannelName ?? displayModelInfo.channelName} · ${displayModelInfo.modelName}`
-                  : displayModelInfo.modelName)
-                : '选择模型'}
-            </span>
-            <ChevronDown className="size-3" />
-          </button>
-        </TooltipTrigger>
-        <TooltipContent side="top">渠道：{triggerChannelName ?? displayModelInfo?.channelName}</TooltipContent>
-      </Tooltip>
+            <TooltipTrigger asChild>
+              <PopoverTrigger asChild>
+                <button
+                  type="button"
+                  aria-haspopup="listbox"
+                  aria-expanded={open}
+                  aria-controls={open ? pickerListId : undefined}
+                  className="model-selector-trigger flex items-center gap-1.5 rounded-md px-2 py-1 text-xs text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+                >
+                  {displayModelInfo ? renderModelIcon(displayModelInfo, useCopisLogo, 'size-4 shrink-0') : <Cpu className="size-3.5" />}
+                  <span className="max-w-[200px] truncate">
+                    {displayModelInfo
+                      ? (showChannelInTrigger
+                        ? `${triggerChannelName ?? displayModelInfo.channelName} · ${displayModelInfo.modelName}`
+                        : displayModelInfo.modelName)
+                      : '选择模型'}
+                  </span>
+                  <ChevronDown aria-hidden="true" className="size-3" />
+                </button>
+              </PopoverTrigger>
+            </TooltipTrigger>
+            <TooltipContent side="top">渠道：{triggerChannelName ?? displayModelInfo?.channelName}</TooltipContent>
+          </Tooltip>
+          <PopoverContent
+            side="top"
+            align="end"
+            sideOffset={8}
+            className="w-[min(220px,calc(100vw-2rem))] max-w-[calc(100vw-1rem)] overflow-hidden p-0"
+          >
+            {pickerContent}
+          </PopoverContent>
+        </Popover>
+      ) : (
+        <>
+          {/* 触发按钮 */}
+          <Tooltip
+            open={!modelTooltipDisabled && modelTooltipOpen}
+            onOpenChange={(nextOpen) => {
+              if (!modelTooltipDisabled) setModelTooltipOpen(nextOpen)
+            }}
+          >
+            <TooltipTrigger asChild>
+              <button
+                type="button"
+                onClick={() => setOpen(true)}
+                aria-haspopup="listbox"
+                aria-expanded={open}
+                aria-controls={open ? pickerListId : undefined}
+                className="model-selector-trigger flex items-center gap-1.5 rounded-md px-2 py-1 text-xs text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+              >
+                {displayModelInfo ? renderModelIcon(displayModelInfo, useCopisLogo, 'size-4 shrink-0') : <Cpu className="size-3.5" />}
+                <span className="max-w-[200px] truncate">
+                  {displayModelInfo
+                    ? (showChannelInTrigger
+                      ? `${triggerChannelName ?? displayModelInfo.channelName} · ${displayModelInfo.modelName}`
+                      : displayModelInfo.modelName)
+                    : '选择模型'}
+                </span>
+                <ChevronDown aria-hidden="true" className="size-3" />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="top">渠道：{triggerChannelName ?? displayModelInfo?.channelName}</TooltipContent>
+          </Tooltip>
 
-      {/* 模型选择 Dialog */}
-      <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent className="p-0 gap-0 max-w-lg" aria-describedby={undefined}>
-          <DialogHeader className="sr-only">
-            <DialogTitle>选择模型</DialogTitle>
-          </DialogHeader>
-
-          {/* 搜索栏 */}
-          <div className="flex items-center gap-2.5 px-4 py-3 border-b border-border/60">
-            <Search className="size-5 text-muted-foreground/60 flex-shrink-0" />
-            <input
-              type="text"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              onKeyDown={handleSearchKeyDown}
-              placeholder="搜索模型..."
-              className="flex-1 bg-transparent text-base outline-none placeholder:text-muted-foreground/50"
-              autoFocus
-            />
-          </div>
-
-          {/* 模型列表 */}
-          <div className="max-h-[420px] overflow-y-auto pb-3 scrollbar-thin">
-            {filteredGrouped.size === 0 ? (
-              <div className="py-10 text-center text-sm text-muted-foreground">
-                未找到模型
-              </div>
-            ) : (
-              (() => {
-                let flatIndex = 0
-                return Array.from(filteredGrouped.entries()).map(([channelId, options]) => {
-                const first = options[0]
-                if (!first) return null
-                const channel = availableChannels.find((c) => c.id === channelId)
-                const useDeepSeekLogo = first.channelId === COPIS_WORKING_DEEPSEEK_CHANNEL_ID
-
-                return (
-                  <div key={channelId}>
-                    {/* 供应商标题行 - 灰色背景 */}
-                    <div className="flex items-center gap-2 px-4 py-2 bg-muted/50 border-b border-border/30">
-                      <img
-                        src={useDeepSeekLogo
-                          ? getModelLogo(first.modelId, first.provider)
-                          : useCopisLogo ? CopisTemplateLogo : channel ? getChannelLogo(channel) : DefaultLogo}
-                        alt={first.channelName}
-                        className="size-5 rounded object-cover"
-                      />
-                      <span className="min-w-0 truncate text-sm font-medium text-muted-foreground">
-                        {first.channelName}
-                      </span>
-                      {channel ? <ChannelPlanQuotaBadge channel={channel} /> : null}
-                    </div>
-
-                    {/* 该渠道下的模型列表 */}
-                    {options.map((option) => {
-                      const modelDescription = getModelDescription(option)
-                      const isSelected =
-                        selectedModel?.channelId === option.channelId &&
-                        selectedModel?.modelId === option.modelId
-                      const currentFlatIndex = flatIndex++
-                      const isHighlighted = currentFlatIndex === highlightIndex
-
-                      return (
-                        <button
-                          key={`${option.channelId}:${option.modelId}`}
-                          ref={(el) => {
-                            if (el) itemRefs.current.set(currentFlatIndex, el)
-                            else itemRefs.current.delete(currentFlatIndex)
-                          }}
-                          type="button"
-                          onClick={() => handleSelect(option)}
-                          onMouseEnter={() => setHighlightIndex(currentFlatIndex)}
-                          className={cn(
-                            'flex items-center gap-3 w-[calc(100%-1rem)] px-4 py-1.5 mx-2 rounded-lg text-left transition-colors',
-                            'hover:bg-accent',
-                            isHighlighted && 'bg-accent',
-                            isSelected && 'bg-foreground/10 border-l-3 border-l-primary'
-                          )}
-                        >
-                          {renderModelIcon(option, useCopisLogo, 'size-5 flex-shrink-0')}
-                          <span className="flex min-w-0 flex-1 items-center gap-2">
-                            <span className={cn(
-                              'min-w-0 flex-1 truncate text-sm',
-                              isSelected ? 'font-medium text-foreground' : 'text-foreground/80'
-                            )}>
-                              {option.modelName}
-                              {modelDescription ? `(${modelDescription})` : ''}
-                            </span>
-                            <ModelLatencySignal
-                              averageMs={latencies[option.modelId]}
-                              className="shrink-0"
-                            />
-                          </span>
-                        </button>
-                      )
-                    })}
-                  </div>
-                )
-              })
-              })()
-            )}
-          </div>
-        </DialogContent>
-      </Dialog>
+          {/* 模型选择 Dialog */}
+          <Dialog open={open} onOpenChange={setOpen}>
+            <DialogContent className="p-0 gap-0 max-w-lg" aria-describedby={undefined}>
+              <DialogHeader className="sr-only">
+                <DialogTitle>选择模型</DialogTitle>
+              </DialogHeader>
+              {pickerContent}
+            </DialogContent>
+          </Dialog>
+        </>
+      )}
     </>
   )
 }
