@@ -12,6 +12,7 @@ import {
   tabsAtom,
   activeTabIdAtom,
   activeTabAtom,
+  resolveRenderedTabId,
 } from '@/atoms/tab-atoms'
 import { Panel } from '@/components/app-shell/Panel'
 import { WelcomeView } from '@/components/welcome/WelcomeView'
@@ -49,6 +50,7 @@ export function MainArea(): React.ReactElement {
   // DiffTabContent → ProseMirror editor mount + Shiki tokenize）让出主线程，避免点击 tab
   // 后必须等主区域渲染完才能看到 tab 切换效果
   const deferredActiveTabId = React.useDeferredValue(activeTabId)
+  const renderedActiveTabId = resolveRenderedTabId(tabs, activeTabId, deferredActiveTabId)
 
   const previewOpenMap = useAtomValue(previewPanelOpenMapAtom)
   const [splitRatio, setSplitRatio] = useAtom(previewSplitRatioAtom)
@@ -191,9 +193,9 @@ export function MainArea(): React.ReactElement {
                   <AutomationFormView />
                 ) : tabs.length === 0 ? (
                   <WelcomeView />
-                ) : deferredActiveTabId ? (
+                ) : renderedActiveTabId ? (
                   <div className="flex-1 min-h-0 titlebar-no-drag">
-                    <TabContent tabId={deferredActiveTabId} />
+                    <TabContent tabId={renderedActiveTabId} />
                   </div>
                 ) : null}
               </>

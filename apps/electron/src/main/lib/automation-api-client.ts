@@ -47,8 +47,17 @@ function resolveAutomationApiBaseUrl(): string {
   return `http://${COPIS_HTTP_API_HOST}:${port}`
 }
 
-export function createAutomationApiClient(baseUrl = resolveAutomationApiBaseUrl()): AutomationApiClient {
-  async function request<T>(path: string, init?: RequestInit): Promise<T> {
+const STARTUP_RETRY_COUNT = 20
+const STARTUP_RETRY_DELAY_MS = 250
+
+export function createAutomationApiClient(
+  baseUrl = resolveAutomationApiBaseUrl(),
+  options: { retryCount?: number; retryDelayMs?: number } = {},
+): AutomationApiClient {
+  const retryCount = options.retryCount ?? STARTUP_RETRY_COUNT
+  const retryDelayMs = options.retryDelayMs ?? STARTUP_RETRY_DELAY_MS
+
+  async function requestOnce<T>(path: string, init?: RequestInit): Promise<T> {
     let response: Response
     try {
       response = await fetch(`${baseUrl}${path}`, init)
@@ -63,6 +72,23 @@ export function createAutomationApiClient(baseUrl = resolveAutomationApiBaseUrl(
     throw new AutomationApiClientError(message, response.status, code)
   }
 
+  async function request<T>(path: string, init?: RequestInit, retryOnUnavailable = false): Promise<T> {
+    if (!retryOnUnavailable) return requestOnce(path, init)
+
+    let lastError: unknown
+    for (let attempt = 0; attempt <= retryCount; attempt += 1) {
+      try {
+        return await requestOnce(path, init)
+      } catch (error) {
+        const retryable = error instanceof AutomationApiClientError && error.code === 'automation_service_unavailable'
+        if (!retryable || attempt >= retryCount) throw error
+        lastError = error
+        await new Promise<void>((resolveDelay) => setTimeout(resolveDelay, retryDelayMs))
+      }
+    }
+    throw lastError
+  }
+
   function jsonRequest<T>(path: string, method: 'POST' | 'PATCH', body: unknown): Promise<T> {
     return request<T>(path, {
       method,
@@ -72,7 +98,7 @@ export function createAutomationApiClient(baseUrl = resolveAutomationApiBaseUrl(
   }
 
   return {
-    list: () => request<Automation[]>('/api/automations'),
+    list: () => request<Automation[]>('/api/automations', undefined, true),
     async get(id) {
       try { return await request<Automation>(`/api/automations/${encodeURIComponent(id)}`) } catch (error) {
         if (error instanceof AutomationApiClientError && error.status === 404) return undefined

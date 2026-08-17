@@ -9,7 +9,7 @@ import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'nod
 import { existsSync, realpathSync, rmSync, readFileSync, writeFileSync, mkdirSync, statSync } from 'node:fs'
 import { writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, ATTACHMENT_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, INSTALLER_IPC_CHANNELS, FUNCTIONAL_MODULE_IPC_CHANNELS, PROXY_IPC_CHANNELS, GITHUB_RELEASE_IPC_CHANNELS, SYSTEM_PROMPT_IPC_CHANNELS, AGENT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, WECHAT_IPC_CHANNELS, AUTOMATION_IPC_CHANNELS, PLANNING_IPC_CHANNELS, PLANNING_CONFLICT_ERROR, WORKING_IPC_CHANNELS, WEB_IPC_CHANNELS, BROWSER_WORKFLOW_IPC_CHANNELS, COPIS_WORKING_CHANNEL_ID, isCopisPermissionMode, isCopisWorkingChannelId, isWorkingMode, normalizePathForCompare } from '@copis/shared'
+import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, ATTACHMENT_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, FUNCTIONAL_MODULE_IPC_CHANNELS, PROXY_IPC_CHANNELS, SYSTEM_PROMPT_IPC_CHANNELS, AGENT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, WECHAT_IPC_CHANNELS, AUTOMATION_IPC_CHANNELS, PLANNING_IPC_CHANNELS, PLANNING_CONFLICT_ERROR, WORKING_IPC_CHANNELS, WEB_IPC_CHANNELS, BROWSER_WORKFLOW_IPC_CHANNELS, COPIS_WORKING_CHANNEL_ID, isCopisPermissionMode, isCopisWorkingChannelId, isWorkingMode, normalizePathForCompare } from '@copis/shared'
 import { USER_PROFILE_IPC_CHANNELS, SETTINGS_IPC_CHANNELS, SCRATCH_PAD_IPC_CHANNELS, QUICK_TASK_IPC_CHANNELS, VOICE_DICTATION_IPC_CHANNELS, APP_ICON_IPC_CHANNELS, DOCK_BADGE_IPC_CHANNELS, STORAGE_IPC_CHANNELS } from '../types'
 import type {
   QuickTaskSubmitInput,
@@ -26,6 +26,7 @@ import type {
   MicPermissionResult,
 } from '../types'
 import type {
+  AppInfo,
   RuntimeStatus,
   GitRepoStatus,
   Channel,
@@ -61,17 +62,12 @@ import type {
   FileEntry,
   FileSearchResult,
   EnvironmentCheckResult,
-  InstallerManifest,
-  InstallerDownloadRequest,
-  InstallerDownloadResult,
   FunctionalModuleInstallInput,
   FunctionalModuleProgressPayload,
   FunctionalModuleStartupProgressPayload,
   FunctionalModuleStatus,
   ProxyConfig,
   SystemProxyDetectResult,
-  GitHubRelease,
-  GitHubReleaseListOptions,
   PermissionResponse,
   CopisPermissionMode,
   AskUserResponse,
@@ -228,12 +224,6 @@ import {
 } from './lib/web-project-association-service'
 
 import { checkEnvironment } from './lib/environment-checker'
-import { fetchInstallerManifest, findInstallerSource } from './lib/installer-manifest'
-import {
-  cancelInstallerDownload,
-  downloadInstaller,
-  launchInstaller,
-} from './lib/installer-downloader'
 import {
   checkFunctionalModule,
   getFunctionalModuleStatuses,
@@ -339,11 +329,6 @@ import {
   updateAppendSetting,
   setDefaultPrompt,
 } from './lib/system-prompt-manager'
-import {
-  getLatestRelease,
-  listReleases as listGitHubReleases,
-  getReleaseByTag,
-} from './lib/github-release-service'
 import { watchAttachedDirectory, unwatchAttachedDirectory } from './lib/workspace-watcher'
 import { filterAttachedPaths, requireAttachedPath } from './lib/attached-paths'
 import {
@@ -363,6 +348,7 @@ import { dingtalkBridgeManager } from './lib/dingtalk-bridge-manager'
 import { getWeChatConfig } from './lib/wechat-config'
 import { wechatBridge } from './lib/wechat-bridge'
 import { getWorkingApiClient } from './lib/working-api-service'
+import { getWorkingModelLatencies } from './lib/working-model-latencies'
 import { assertWorkingWorkspaceCreationAllowed } from './lib/working-workspace-limit'
 import type {
   WorkingLoginInput,
@@ -372,6 +358,7 @@ import type {
   WorkingSendVerificationCodeInput,
   WorkingVerifyPasswordResetCodeInput,
   WorkingWorkspaceInput,
+  WorkingModelLatencyMap,
 } from '@copis/shared'
 
 /** 文件浏览器中需要隐藏的系统文件 */
@@ -975,6 +962,9 @@ export function registerIpcHandlers(): void {
     if (input.groupId !== undefined && input.groupId !== null && typeof input.groupId !== 'string') {
       throw new Error('网页收藏分组参数不正确')
     }
+    if (input.faviconUrl !== undefined && input.faviconUrl !== null && typeof input.faviconUrl !== 'string') {
+      throw new Error('网页收藏图标参数不正确')
+    }
     return saveWebBookmark(input)
   })
   ipcMain.handle(WEB_IPC_CHANNELS.BOOKMARKS_REMOVE, (_event, bookmarkId: string) => {
@@ -1248,7 +1238,23 @@ export function registerIpcHandlers(): void {
     return getWorkingApiClient().cancelDiamondPayment(paymentId)
   })
 
-  // ===== 运行时相关 =====
+  ipcMain.handle(
+    WORKING_IPC_CHANNELS.GET_MODEL_LATENCIES,
+    async (): Promise<WorkingModelLatencyMap> => {
+      return getWorkingModelLatencies()
+    }
+  )
+
+  // ===== 主程序与运行时相关 =====
+
+  // 获取主程序版本与运行环境信息
+  ipcMain.handle(
+    IPC_CHANNELS.GET_APP_INFO,
+    async (): Promise<AppInfo> => ({
+      version: app.getVersion(),
+      packaged: app.isPackaged,
+    })
+  )
 
   // 获取运行时状态
   ipcMain.handle(
@@ -2024,46 +2030,6 @@ export function registerIpcHandlers(): void {
         lastEnvironmentCheck: result,
       })
       return result
-    }
-  )
-
-  // ===== 第三方安装包（Git / Node.js）相关 =====
-
-  ipcMain.handle(
-    INSTALLER_IPC_CHANNELS.MANIFEST,
-    async (): Promise<InstallerManifest> => {
-      return fetchInstallerManifest()
-    }
-  )
-
-  ipcMain.handle(
-    INSTALLER_IPC_CHANNELS.DOWNLOAD,
-    async (event, req: InstallerDownloadRequest): Promise<InstallerDownloadResult> => {
-      const manifest = await fetchInstallerManifest()
-      const source = findInstallerSource(manifest, req.id, req.arch)
-      if (!source) {
-        throw new Error(`未找到安装包：id=${req.id}, arch=${req.arch}`)
-      }
-      const window = BrowserWindow.fromWebContents(event.sender)
-      if (!window) {
-        throw new Error('发起下载的窗口已关闭')
-      }
-      const key = `${req.id}:${req.arch}`
-      return downloadInstaller(source, key, window)
-    }
-  )
-
-  ipcMain.handle(
-    INSTALLER_IPC_CHANNELS.CANCEL,
-    async (_event, key: string): Promise<boolean> => {
-      return cancelInstallerDownload(key)
-    }
-  )
-
-  ipcMain.handle(
-    INSTALLER_IPC_CHANNELS.LAUNCH,
-    async (_event, filePath: string): Promise<void> => {
-      await launchInstaller(filePath)
     }
   )
 
@@ -4049,32 +4015,6 @@ export function registerIpcHandlers(): void {
     SYSTEM_PROMPT_IPC_CHANNELS.SET_DEFAULT,
     async (_, id: string | null): Promise<void> => {
       return setDefaultPrompt(id)
-    }
-  )
-
-  // ===== GitHub Release =====
-
-  // 获取最新 Release
-  ipcMain.handle(
-    GITHUB_RELEASE_IPC_CHANNELS.GET_LATEST_RELEASE,
-    async (): Promise<GitHubRelease | null> => {
-      return getLatestRelease()
-    }
-  )
-
-  // 获取 Release 列表
-  ipcMain.handle(
-    GITHUB_RELEASE_IPC_CHANNELS.LIST_RELEASES,
-    async (_, options?: GitHubReleaseListOptions): Promise<GitHubRelease[]> => {
-      return listGitHubReleases(options)
-    }
-  )
-
-  // 获取指定版本的 Release
-  ipcMain.handle(
-    GITHUB_RELEASE_IPC_CHANNELS.GET_RELEASE_BY_TAG,
-    async (_, tag: string): Promise<GitHubRelease | null> => {
-      return getReleaseByTag(tag)
     }
   )
 

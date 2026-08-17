@@ -1,16 +1,19 @@
 /**
- * 自动更新核心模块
+ * 主程序自动更新核心模块
  *
- * 检测新版本 → 自动后台下载 → 用户选择立即或空闲时重启安装。
- * 自动更新仅在打包后的生产环境中启用。
+ * 检查更新通过本地 Rust HTTP API 读取统一 client manifest；
+ * 下载安装包后由用户选择立即或空闲时打开安装程序。
  */
 
-import { autoUpdater } from 'electron-updater'
-import { BrowserWindow, app } from 'electron'
+import { createHash } from 'node:crypto'
+import { mkdir, open, rm } from 'node:fs/promises'
+import { basename, join } from 'node:path'
+import { BrowserWindow, app, shell } from 'electron'
 import type { UpdateStatus } from './updater-types'
 import { UPDATER_IPC_CHANNELS } from './updater-types'
 import { createIdleInstallScheduler } from './idle-install-scheduler'
-import { getUpdaterFeedUrl } from './updater-feed'
+import { checkAppUpdateViaRustApi } from '../app-update-service'
+import { autoInstallDownloadedUpdate } from '../auto-install-update'
 
 /** 当前更新状态 */
 let currentStatus: UpdateStatus = { status: 'idle' }
@@ -25,7 +28,7 @@ let checkInterval: ReturnType<typeof setInterval> | null = null
 let hasActiveAgents = (): boolean | Promise<boolean> => false
 
 /**
- * 用户选择「空闲时更新」后，等待所有 Agent 结束再安装。
+ * 用户选择「空闲时更新」后，等待所有 Agent 结束再打开安装包。
  *
  * 状态检查留在主进程，避免渲染进程漏掉后台运行或其他窗口中的 Agent。
  */
@@ -41,8 +44,8 @@ const idleInstallScheduler = createIdleInstallScheduler({
     }
   },
   install: () => {
-    console.log('[更新] 当前没有运行中的 Agent，开始安装已下载更新')
-    void quitAndInstall()
+    console.log('[更新] 当前没有运行中的 Agent，开始自动安装已下载更新')
+    void installDownloadedUpdate()
   },
 })
 
@@ -71,7 +74,7 @@ export function getUpdateStatus(): UpdateStatus {
   return currentStatus
 }
 
-/** 手动触发检查更新 */
+/** 通过 Rust API 手动检查主程序更新 */
 export async function checkForUpdates(): Promise<void> {
   // 已在下载中或已下载完成，不重复检查
   if (currentStatus.status === 'downloading' || currentStatus.status === 'downloaded') {
@@ -81,9 +84,21 @@ export async function checkForUpdates(): Promise<void> {
 
   try {
     setStatus({ status: 'checking' })
-    await autoUpdater.checkForUpdates()
+    const result = await checkAppUpdateViaRustApi()
+    if (!result.available || !result.version || !result.url) {
+      setStatus({ status: 'not-available' })
+      return
+    }
+    setStatus({
+      status: 'available',
+      version: result.version,
+      releaseNotes: result.releaseNotes,
+      downloadUrl: result.url,
+      fileSha256: result.sha256,
+      fileSize: result.size,
+    })
   } catch (err) {
-    console.error('[更新] 检查更新失败:', err)
+    console.error('[更新] Rust API 检查更新失败:', err)
     setStatus({
       status: 'error',
       error: err instanceof Error ? err.message : String(err),
@@ -91,8 +106,88 @@ export async function checkForUpdates(): Promise<void> {
   }
 }
 
+/** 下载主程序更新安装包 */
+export async function downloadAppUpdate(): Promise<void> {
+  if (currentStatus.status !== 'available' || !currentStatus.downloadUrl) {
+    throw new Error('没有可下载的更新，请先检查更新')
+  }
+  const { version, downloadUrl, fileSha256, fileSize } = currentStatus
+  const total = fileSize ?? 0
+  const startedAt = Date.now()
+  setStatus({
+    status: 'downloading',
+    version,
+    progress: { percent: 0, transferred: 0, total, bytesPerSecond: 0 },
+  })
+
+  try {
+    const response = await fetch(downloadUrl, { signal: AbortSignal.timeout(20 * 60 * 1000) })
+    if (!response.ok) {
+      throw new Error(`更新下载失败（HTTP ${response.status}）`)
+    }
+    if (!response.body) {
+      throw new Error('更新下载响应没有内容')
+    }
+
+    const fileName = basename(new URL(downloadUrl).pathname) || `Copis-${version}.dmg`
+    const downloadDir = join(app.getPath('userData'), 'downloads')
+    await mkdir(downloadDir, { recursive: true })
+    const filePath = join(downloadDir, fileName)
+    const hash = createHash('sha256')
+    const reader = response.body.getReader()
+    const fileHandle = await open(filePath, 'w')
+    let transferred = 0
+    let lastProgressAt = 0
+
+    try {
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        hash.update(value)
+        await fileHandle.write(value)
+        transferred += value.byteLength
+        const now = Date.now()
+        if (now - lastProgressAt >= 250 || transferred === total) {
+          lastProgressAt = now
+          const seconds = Math.max(1, (now - startedAt) / 1000)
+          setStatus({
+            status: 'downloading',
+            version,
+            progress: {
+              percent: total > 0 ? Math.min(100, (transferred / total) * 100) : 0,
+              transferred,
+              total,
+              bytesPerSecond: transferred / seconds,
+            },
+          })
+        }
+      }
+      await fileHandle.close()
+    } catch (error) {
+      await fileHandle.close().catch(() => undefined)
+      await rm(filePath, { force: true })
+      throw error
+    }
+
+    if (fileSha256 && hash.digest('hex') !== fileSha256.toLowerCase()) {
+      await rm(filePath, { force: true })
+      throw new Error('更新安装包校验失败，请重新下载')
+    }
+    if (fileSize !== undefined && transferred !== fileSize) {
+      await rm(filePath, { force: true })
+      throw new Error('更新安装包大小不一致，请重新下载')
+    }
+
+    setStatus({ status: 'downloaded', version, filePath })
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    setStatus({ status: 'error', error: message })
+    throw error
+  }
+}
+
 /**
- * 请求在没有运行中 Agent 时安装已下载的更新。
+ * 请求在没有运行中 Agent 时打开已下载的安装包。
  *
  * @returns 是否已接受请求；仅 downloaded 状态可排队。
  */
@@ -114,14 +209,14 @@ export function cancelIdleInstall(): void {
 }
 
 /**
- * 退出并安装已下载的更新。
+ * 自动安装已下载的更新。
  *
- * 所有安装入口最终都经过这里：即使调用方绕过空闲调度器，也不会在 Agent
- * 运行时退出；在真正安装前再次检查一次，避免检查与退出之间启动新 Agent。
+ * 所有安装入口最终都经过这里：即使调用方绕过空闲调度器，也会在 Agent
+ * 运行时等待；在真正安装前再次检查一次，避免检查与退出之间启动新 Agent。
  */
-async function quitAndInstall(): Promise<void> {
-  if (!app.isPackaged) {
-    console.warn('[更新] 开发环境不支持安装更新')
+async function installDownloadedUpdate(): Promise<void> {
+  if (currentStatus.status !== 'downloaded' || !currentStatus.filePath) {
+    console.warn('[更新] 没有可安装的已下载更新')
     return
   }
 
@@ -139,27 +234,31 @@ async function quitAndInstall(): Promise<void> {
     return
   }
 
-  // 延迟调用确保 IPC 响应已发送回渲染进程；回调内再次检查防止竞态。
-  setImmediate(() => {
-    void Promise.resolve(hasActiveAgents())
-      .then((active) => {
-        if (active) {
-          console.log('[更新] 安装前出现新的运行中 Agent，继续等待空闲')
-          installWhenIdle()
-          return
-        }
+  const filePath = currentStatus.filePath
+  let result
+  try {
+    result = await autoInstallDownloadedUpdate(filePath, process.platform)
+  } catch (error) {
+    console.error('[更新] 自动安装失败，改为打开安装包:', error)
+    const openError = await shell.openPath(filePath)
+    if (openError) {
+      console.error('[更新] 打开安装包失败:', openError)
+    }
+    return
+  }
+  if (!result.installed) {
+    const error = await shell.openPath(filePath)
+    if (error) {
+      console.error('[更新] 打开安装包失败:', error)
+    }
+    return
+  }
 
-        // 移除所有窗口的 close 监听器，避免 preventDefault 阻止退出。
-        for (const w of BrowserWindow.getAllWindows()) {
-          w.removeAllListeners('close')
-        }
-        autoUpdater.quitAndInstall(true, true)
-      })
-      .catch((error: unknown) => {
-        console.warn('[更新] Pi Worker 状态读取失败，继续等待空闲:', error)
-        installWhenIdle()
-      })
-  })
+  console.log('[更新] 已安装新版本，准备重启 Copis')
+  if (app.isPackaged) {
+    app.relaunch()
+    app.exit(0)
+  }
 }
 
 /** 清理更新器资源（定时器等） */
@@ -179,82 +278,16 @@ export function cleanupUpdater(): void {
 export function initAutoUpdater(mainWindow: BrowserWindow): void {
   configureUpdater(mainWindow)
 
-  const feedUrl = getUpdaterFeedUrl()
-  autoUpdater.setFeedURL({ provider: 'generic', url: feedUrl })
-  console.log('[更新] 已配置 COS 更新源:', feedUrl)
-
-  autoUpdater.logger = {
-    info: (...args: unknown[]) => console.log('[更新-updater]', ...args),
-    warn: (...args: unknown[]) => console.warn('[更新-updater]', ...args),
-    error: (...args: unknown[]) => console.error('[更新-updater]', ...args),
-    debug: (...args: unknown[]) => console.log('[更新-updater:debug]', ...args),
-  }
-
-  // 自动下载，但不在用户正常退出时自动安装，避免重启应用后被动进入更新流程。
-  autoUpdater.autoDownload = true
-  autoUpdater.autoInstallOnAppQuit = false
-
-  // 监听更新事件
-  autoUpdater.on('checking-for-update', () => {
-    console.log('[更新] 正在检查更新...')
-    setStatus({ status: 'checking' })
-  })
-
-  autoUpdater.on('update-available', (info) => {
-    console.log('[更新] 发现新版本:', info.version)
-    setStatus({
-      status: 'available',
-      version: info.version,
-      releaseNotes: typeof info.releaseNotes === 'string'
-        ? info.releaseNotes
-        : undefined,
-    })
-  })
-
-  autoUpdater.on('download-progress', (progress) => {
-    setStatus({
-      status: 'downloading',
-      version: (currentStatus as { version?: string }).version || '',
-      progress: {
-        percent: progress.percent,
-        transferred: progress.transferred,
-        total: progress.total,
-        bytesPerSecond: progress.bytesPerSecond,
-      },
-    })
-  })
-
-  autoUpdater.on('update-downloaded', (info) => {
-    console.log('[更新] 下载完成:', info.version)
-    setStatus({
-      status: 'downloaded',
-      version: info.version,
-    })
-  })
-
-  autoUpdater.on('update-not-available', () => {
-    console.log('[更新] 已是最新版本')
-    setStatus({ status: 'not-available' })
-  })
-
-  autoUpdater.on('error', (err) => {
-    console.error('[更新] 更新出错:', err)
-    setStatus({
-      status: 'error',
-      error: err.message,
-    })
-  })
-
   // 启动后延迟 10 秒首次检查
   setTimeout(() => {
     console.log('[更新] 首次自动检查更新')
-    checkForUpdates()
+    void checkForUpdates()
   }, 10_000)
 
   // 每 4 小时自动检查一次
   checkInterval = setInterval(() => {
     console.log('[更新] 定时自动检查更新')
-    checkForUpdates()
+    void checkForUpdates()
   }, 4 * 60 * 60 * 1000)
 
   // 窗口关闭时清理定时器
@@ -267,5 +300,5 @@ export function initAutoUpdater(mainWindow: BrowserWindow): void {
     win = null
   })
 
-  console.log('[更新] 自动更新模块已初始化（自动下载，支持空闲时安装）')
+  console.log('[更新] 自动更新模块已初始化（Rust API 检查）')
 }

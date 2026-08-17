@@ -11,6 +11,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 mod agent_files;
 mod alipay_bot;
+mod app_update;
 mod automation;
 mod automation_scheduler;
 mod expert_teams;
@@ -20,6 +21,7 @@ mod payment_workspace;
 mod pi_rpc;
 mod runtime;
 mod skill_market;
+mod working_model;
 mod working_payment;
 mod workspace_dev;
 mod workspace_mcp;
@@ -1184,6 +1186,30 @@ fn handle_connection(
         return;
     }
 
+    if request.method == "GET" && path == "/api/internal/app-update/check" {
+        if !is_internal_token_valid(&request) {
+            send_json_response(
+                &mut stream,
+                403,
+                r#"{"error":"内部更新检查接口未授权","code":"internal_token_required"}"#,
+                origin,
+            );
+            let _ = stream.shutdown(Shutdown::Both);
+            return;
+        }
+        let query = parse_query_parameters(&request.target).unwrap_or_default();
+        let current_version = query.get("client_version").map(String::as_str).unwrap_or("");
+        match app_update::check_app_update(current_version, &app_update::resolve_manifest_url()) {
+            Ok(body) => send_json_response(&mut stream, 200, &body.to_string(), origin),
+            Err(error) => {
+                let body = json!({ "available": false, "error": error }).to_string();
+                send_json_response(&mut stream, 502, &body, origin);
+            }
+        }
+        let _ = stream.shutdown(Shutdown::Both);
+        return;
+    }
+
     if path == "/api/memory" || path.starts_with("/api/memory/") {
         handle_memory_route(&mut stream, &request, origin, &memory_store);
         let _ = stream.shutdown(Shutdown::Both);
@@ -1425,6 +1451,28 @@ fn handle_connection(
                     );
                     send_json_response(&mut stream, status, &body, origin);
                 }
+            }
+        }
+        let _ = stream.shutdown(Shutdown::Both);
+        return;
+    }
+
+    if request.method == "GET" && path == "/api/internal/working-model/first-token-latencies" {
+        if !is_web_token_valid(&request) {
+            send_json_response(
+                &mut stream,
+                403,
+                r#"{"error":"模型延迟接口未授权","code":"web_token_required"}"#,
+                origin,
+            );
+            let _ = stream.shutdown(Shutdown::Both);
+            return;
+        }
+        match working_model::working_model_latencies(&skill_market_state) {
+            Ok(body) => send_json_response(&mut stream, 200, &body.to_string(), origin),
+            Err(message) => {
+                let body = json!({ "error": message, "code": "working_model_latency_failed" }).to_string();
+                send_json_response(&mut stream, 502, &body, origin);
             }
         }
         let _ = stream.shutdown(Shutdown::Both);
@@ -2856,6 +2904,14 @@ mod tests;
 #[cfg(test)]
 #[path = "automation_test.rs"]
 mod automation_test;
+
+#[cfg(test)]
+#[path = "app_update_test.rs"]
+mod app_update_test;
+
+#[cfg(test)]
+#[path = "working_model_test.rs"]
+mod working_model_test;
 
 #[cfg(test)]
 #[path = "automation_scheduler_test.rs"]

@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
-import type { FunctionalModuleArchitecture, FunctionalModulePlatform } from '@copis/shared'
+import type { FunctionalModuleArchitecture, FunctionalModuleClientUpdate, FunctionalModulePlatform } from '@copis/shared'
 import { buildFunctionalModuleRelease, type FunctionalModuleBinaryInput } from './functional-module-publisher'
 import { resolveFunctionalModulePrefix } from './functional-module-prefix'
 import { applyFunctionalModuleVersionLocks, loadFunctionalModuleVersionLocks } from './functional-module-version-lock'
@@ -106,6 +106,7 @@ const release = buildFunctionalModuleRelease({
   clientMinVersion: getOption('--client-min-version')
     ?? process.env.COPIS_MODULE_CLIENT_MIN_VERSION
     ?? packageMetadata.version,
+  clientUpdate: readClientUpdate(),
   publicBaseUrl,
   prefix,
   modules: applyFunctionalModuleVersionLocks(modules, loadFunctionalModuleVersionLocks()),
@@ -140,4 +141,27 @@ function parsePlatform(value: string): FunctionalModulePlatform {
 function parseArchitecture(value: string): FunctionalModuleArchitecture {
   if (value === 'arm64' || value === 'x64') return value
   throw new Error(`当前架构不支持功能模块发布: ${value}`)
+}
+
+function readClientUpdate(): FunctionalModuleClientUpdate | undefined {
+  const version = getOption('--app-update-version') ?? process.env.COPIS_APP_UPDATE_VERSION
+  const url = getOption('--app-update-url') ?? process.env.COPIS_APP_UPDATE_URL
+  const sha256 = getOption('--app-update-sha256') ?? process.env.COPIS_APP_UPDATE_SHA256
+  const size = getOption('--app-update-size') ?? process.env.COPIS_APP_UPDATE_SIZE
+  const releaseNotes = getOption('--app-update-notes') ?? process.env.COPIS_APP_UPDATE_NOTES
+  if (!version && !url && !sha256 && !size && !releaseNotes) return undefined
+  if (!version || !url || !sha256 || !size) {
+    throw new Error('发布主程序更新时缺少 --app-update-version/url/sha256/size')
+  }
+  const parsedSize = Number(size)
+  if (!Number.isSafeInteger(parsedSize) || parsedSize <= 0) {
+    throw new Error('主程序更新 size 不合法')
+  }
+  return {
+    version,
+    url,
+    sha256: sha256.toLowerCase(),
+    size: parsedSize,
+    ...(releaseNotes ? { releaseNotes } : {}),
+  }
 }

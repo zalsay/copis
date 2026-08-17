@@ -84,7 +84,6 @@ import {
 import type { FeishuBotBridgeState, FeishuBridgeState, DingTalkBotBridgeState, DingTalkBridgeState, WorkingAuthState } from '@copis/shared'
 import { Toaster } from './components/ui/sonner'
 import { toast } from 'sonner'
-import { ArrowUpRight } from 'lucide-react'
 import { diffCapabilities } from '@copis/shared'
 import type { WorkspaceCapabilities } from '@copis/shared'
 import { showCapabilityChangeToasts } from './lib/capabilities-toast'
@@ -418,16 +417,7 @@ function UpdaterInitializer(): null {
           >
             取消
           </button>
-          <div className="flex items-center gap-1">
-            <button
-              type="button"
-              className="flex h-7 items-center gap-1 rounded-md px-2 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground active:scale-[0.96]"
-              onClick={() => { void window.electronAPI.openExternal('https://github.com/zalsay/copis/releases') }}
-            >
-              查看更新
-              <ArrowUpRight size={13} />
-            </button>
-            <button
+          <button
               type="button"
               className="h-7 rounded-md bg-primary px-2.5 text-xs font-medium text-primary-foreground shadow-sm transition-colors hover:bg-primary/90 active:scale-[0.96]"
               onClick={() => {
@@ -474,7 +464,6 @@ function UpdaterInitializer(): null {
             >
               空闲时更新
             </button>
-          </div>
         </div>
       </div>
     ), {
@@ -557,13 +546,25 @@ function AutomationInitializer(): null {
   const setAgentSessions = useSetAtom(agentSessionsAtom)
 
   useEffect(() => {
+    let disposed = false
     const load = (): void => {
+      if (disposed) return
       window.electronAPI.listAutomations().then(setAutomations).catch(console.error)
       window.electronAPI.listAgentSessions().then(setAgentSessions).catch(console.error)
     }
-    load()
+
+    // 等待系统核心服务就绪后再拉取定时任务，避免窗口创建早于 Rust API 健康检查。
+    void window.electronAPI.ensureRequiredFunctionalModules()
+      .catch((error: unknown) => {
+        console.error('[自动化] 等待系统核心服务失败:', error)
+      })
+      .finally(() => { load() })
+
     const unsub = window.electronAPI.onAutomationChanged(load)
-    return unsub
+    return () => {
+      disposed = true
+      unsub()
+    }
   }, [setAutomations, setAgentSessions])
 
   return null

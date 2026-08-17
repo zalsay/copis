@@ -6,10 +6,12 @@
  */
 
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
-import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, ATTACHMENT_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, INSTALLER_IPC_CHANNELS, FUNCTIONAL_MODULE_IPC_CHANNELS, PROXY_IPC_CHANNELS, GITHUB_RELEASE_IPC_CHANNELS, SYSTEM_PROMPT_IPC_CHANNELS, AGENT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, WECHAT_IPC_CHANNELS, AUTOMATION_IPC_CHANNELS, PLANNING_IPC_CHANNELS, WORKING_IPC_CHANNELS, WEB_IPC_CHANNELS, BROWSER_WORKFLOW_IPC_CHANNELS } from '@copis/shared'
+import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, ATTACHMENT_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, FUNCTIONAL_MODULE_IPC_CHANNELS, PROXY_IPC_CHANNELS, SYSTEM_PROMPT_IPC_CHANNELS, AGENT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, WECHAT_IPC_CHANNELS, AUTOMATION_IPC_CHANNELS, PLANNING_IPC_CHANNELS, WORKING_IPC_CHANNELS, WEB_IPC_CHANNELS, BROWSER_WORKFLOW_IPC_CHANNELS } from '@copis/shared'
 import { USER_PROFILE_IPC_CHANNELS, SETTINGS_IPC_CHANNELS, SCRATCH_PAD_IPC_CHANNELS, APP_ICON_IPC_CHANNELS, DOCK_BADGE_IPC_CHANNELS, STORAGE_IPC_CHANNELS } from '../types'
 import { agentHttpStreamClient } from '../renderer/lib/agent-http-stream'
+import { COPIS_HTTP_API_HOST } from '@copis/shared/config'
 import type {
+  AppInfo,
   RuntimeStatus,
   GitRepoStatus,
   Channel,
@@ -54,10 +56,6 @@ import type {
   FileEntry,
   FileSearchResult,
   EnvironmentCheckResult,
-  InstallerManifest,
-  InstallerDownloadRequest,
-  InstallerDownloadResult,
-  InstallerProgressPayload,
   FunctionalModuleInstallInput,
   FunctionalModuleName,
   FunctionalModuleProgressPayload,
@@ -65,8 +63,6 @@ import type {
   FunctionalModuleStatus,
   ProxyConfig,
   SystemProxyDetectResult,
-  GitHubRelease,
-  GitHubReleaseListOptions,
   PermissionRequest,
   PermissionResponse,
   CopisPermissionMode,
@@ -145,6 +141,7 @@ import type {
   WorkingPaymentCheckResult,
   WorkingPaymentIdentifier,
   WorkingPendingDiamondPurchase,
+  WorkingModelLatencyMap,
   WorkingDiamondPackage,
   WorkingDiamondPurchaseResult,
   WorkingPasswordResetInput,
@@ -179,6 +176,18 @@ import type {
 } from '@copis/shared'
 
 const HTTP_API_WEB_TOKEN_ARGUMENT_PREFIX = '--copis-http-api-web-token='
+const HTTP_API_PORT_ARGUMENT_PREFIX = '--copis-http-api-port='
+
+function configureAgentHttpApiPortFromArguments(): void {
+  const argument = process.argv.find((value) => value.startsWith(HTTP_API_PORT_ARGUMENT_PREFIX))
+  if (!argument) return
+  const port = Number(argument.slice(HTTP_API_PORT_ARGUMENT_PREFIX.length))
+  if (Number.isInteger(port) && port >= 1 && port <= 65535) {
+    agentHttpStreamClient.setBaseUrl(`http://${COPIS_HTTP_API_HOST}:${port}`)
+  }
+}
+
+configureAgentHttpApiPortFromArguments()
 import type {
   UserProfile,
   AppSettings,
@@ -214,6 +223,11 @@ export interface ElectronAPI {
    * 渲染层直连 Rust HTTP API 时通过 x-copis-web-token 请求头携带。
    */
   getHttpApiWebToken: () => string
+
+  /**
+   * 获取主程序版本与运行环境信息
+   */
+  getAppInfo: () => Promise<AppInfo>
 
   /**
    * 获取运行时状态
@@ -366,6 +380,7 @@ export interface ElectronAPI {
   getWorkingOrderPayment: (orderId: WorkingPaymentIdentifier) => Promise<WorkingOrderPayment>
   checkWorkingPayment: (paymentId: WorkingPaymentIdentifier) => Promise<WorkingPaymentCheckResult>
   cancelWorkingDiamondPayment: (paymentId: WorkingPaymentIdentifier) => Promise<WorkingPaymentCancelResult>
+  getWorkingModelLatencies: () => Promise<WorkingModelLatencyMap>
   /** 订阅 VIP 到账后的 Working 账户更新。 */
   onWorkingAuthUpdated: (callback: (state: WorkingAuthState) => void) => () => void
 
@@ -495,25 +510,6 @@ export interface ElectronAPI {
 
   /** 执行环境检测 */
   checkEnvironment: () => Promise<EnvironmentCheckResult>
-
-  // ===== 第三方安装包（Git / Node.js）相关 =====
-
-  /** 获取安装包清单（远程，失败回退内置） */
-  fetchInstallerManifest: () => Promise<InstallerManifest>
-
-  /** 开始下载指定安装包，resolve 时文件已落地并通过 sha256 校验 */
-  downloadInstaller: (req: InstallerDownloadRequest) => Promise<InstallerDownloadResult>
-
-  /** 取消指定 key 的进行中下载 */
-  cancelInstallerDownload: (key: string) => Promise<boolean>
-
-  /** 拉起已下载的安装程序（等效双击） */
-  launchInstaller: (filePath: string) => Promise<void>
-
-  /** 订阅下载进度事件，返回取消订阅函数 */
-  onInstallerProgress: (
-    callback: (payload: InstallerProgressPayload) => void,
-  ) => () => void
 
   // ===== Copis 功能模块相关 =====
 
@@ -957,10 +953,15 @@ export interface ElectronAPI {
   /** 更新 API */
   updater?: {
     checkForUpdates: () => Promise<void>
+    downloadUpdate: () => Promise<void>
     getStatus: () => Promise<{
       status: 'idle' | 'checking' | 'available' | 'downloading' | 'downloaded' | 'not-available' | 'error'
       version?: string
       releaseNotes?: string
+      downloadUrl?: string
+      fileSha256?: string
+      fileSize?: number
+      filePath?: string
       progress?: { percent: number; transferred: number; total: number; bytesPerSecond: number }
       error?: string
     }>
@@ -968,6 +969,10 @@ export interface ElectronAPI {
       status: 'idle' | 'checking' | 'available' | 'downloading' | 'downloaded' | 'not-available' | 'error'
       version?: string
       releaseNotes?: string
+      downloadUrl?: string
+      fileSha256?: string
+      fileSize?: number
+      filePath?: string
       progress?: { percent: number; transferred: number; total: number; bytesPerSecond: number }
       error?: string
     }) => void) => () => void
@@ -976,11 +981,6 @@ export interface ElectronAPI {
     /** 取消尚未执行的空闲安装请求 */
     cancelIdleInstall: () => Promise<void>
   }
-
-  // GitHub Release
-  getLatestRelease: () => Promise<GitHubRelease | null>
-  listReleases: (options?: GitHubReleaseListOptions) => Promise<GitHubRelease[]>
-  getReleaseByTag: (tag: string) => Promise<GitHubRelease | null>
 
   // 工作区文件变化通知
   onCapabilitiesChanged: (callback: () => void) => () => void
@@ -1266,6 +1266,10 @@ const electronAPI: ElectronAPI = {
     return argument ? argument.slice(HTTP_API_WEB_TOKEN_ARGUMENT_PREFIX.length) : ''
   },
 
+  getAppInfo: () => {
+    return ipcRenderer.invoke(IPC_CHANNELS.GET_APP_INFO)
+  },
+
   getRuntimeStatus: () => {
     return ipcRenderer.invoke(IPC_CHANNELS.GET_RUNTIME_STATUS)
   },
@@ -1425,6 +1429,7 @@ const electronAPI: ElectronAPI = {
   getWorkingOrderPayment: (orderId: WorkingPaymentIdentifier) => ipcRenderer.invoke(WORKING_IPC_CHANNELS.GET_ORDER_PAYMENT, orderId),
   checkWorkingPayment: (paymentId: WorkingPaymentIdentifier) => ipcRenderer.invoke(WORKING_IPC_CHANNELS.CHECK_PAYMENT, paymentId),
   cancelWorkingDiamondPayment: (paymentId: WorkingPaymentIdentifier) => ipcRenderer.invoke(WORKING_IPC_CHANNELS.CANCEL_DIAMOND_PAYMENT, paymentId),
+  getWorkingModelLatencies: () => ipcRenderer.invoke(WORKING_IPC_CHANNELS.GET_MODEL_LATENCIES),
   onWorkingAuthUpdated: (callback: (state: WorkingAuthState) => void) => {
     const listener = (_event: Electron.IpcRendererEvent, state: WorkingAuthState): void => callback(state)
     ipcRenderer.on(WORKING_IPC_CHANNELS.AUTH_UPDATED, listener)
@@ -1592,25 +1597,6 @@ const electronAPI: ElectronAPI = {
   // 环境检测
   checkEnvironment: () => {
     return ipcRenderer.invoke(ENVIRONMENT_IPC_CHANNELS.CHECK)
-  },
-
-  // 第三方安装包（Git / Node.js）
-  fetchInstallerManifest: () => {
-    return ipcRenderer.invoke(INSTALLER_IPC_CHANNELS.MANIFEST)
-  },
-  downloadInstaller: (req: InstallerDownloadRequest) => {
-    return ipcRenderer.invoke(INSTALLER_IPC_CHANNELS.DOWNLOAD, req)
-  },
-  cancelInstallerDownload: (key: string) => {
-    return ipcRenderer.invoke(INSTALLER_IPC_CHANNELS.CANCEL, key)
-  },
-  launchInstaller: (filePath: string) => {
-    return ipcRenderer.invoke(INSTALLER_IPC_CHANNELS.LAUNCH, filePath)
-  },
-  onInstallerProgress: (callback: (payload: InstallerProgressPayload) => void) => {
-    const listener = (_: unknown, payload: InstallerProgressPayload) => callback(payload)
-    ipcRenderer.on(INSTALLER_IPC_CHANNELS.PROGRESS, listener)
-    return () => ipcRenderer.off(INSTALLER_IPC_CHANNELS.PROGRESS, listener)
   },
 
   // Copis 功能模块
@@ -2234,6 +2220,7 @@ const electronAPI: ElectronAPI = {
   // 自动更新
   updater: {
     checkForUpdates: () => ipcRenderer.invoke('updater:check'),
+    downloadUpdate: () => ipcRenderer.invoke('updater:download'),
     getStatus: () => ipcRenderer.invoke('updater:get-status'),
     onStatusChanged: (callback) => {
       const listener = (_event: Electron.IpcRendererEvent, status: Parameters<typeof callback>[0]): void => callback(status)
@@ -2242,19 +2229,6 @@ const electronAPI: ElectronAPI = {
     },
     installWhenIdle: () => ipcRenderer.invoke('updater:install-when-idle'),
     cancelIdleInstall: () => ipcRenderer.invoke('updater:cancel-idle-install'),
-  },
-
-  // GitHub Release
-  getLatestRelease: () => {
-    return ipcRenderer.invoke(GITHUB_RELEASE_IPC_CHANNELS.GET_LATEST_RELEASE)
-  },
-
-  listReleases: (options) => {
-    return ipcRenderer.invoke(GITHUB_RELEASE_IPC_CHANNELS.LIST_RELEASES, options)
-  },
-
-  getReleaseByTag: (tag) => {
-    return ipcRenderer.invoke(GITHUB_RELEASE_IPC_CHANNELS.GET_RELEASE_BY_TAG, tag)
   },
 
   // ===== 飞书集成 =====

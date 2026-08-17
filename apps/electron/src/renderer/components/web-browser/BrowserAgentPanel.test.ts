@@ -16,3 +16,8 @@ test('Given 网页 Agent Header When 渲染项目切换 Then 使用第一行单�
   expect(source).toContain('<FolderKanban className="size-4" />')
   expect(source).toContain('[&>svg:last-child]:hidden')
 })
+
+test('Given 切换网页 Agent 项目 When 面板发起切换 Then 由宿主创建或切换目标工作区会话，不再迁移当前会话', () => {
+  expect(source).toContain('onSwitchProject')
+  expect(source).not.toContain('moveAgentSessionToWorkspace')
+})

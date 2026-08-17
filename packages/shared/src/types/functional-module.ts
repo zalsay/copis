@@ -26,12 +26,23 @@ export interface FunctionalModuleManifestPlatform {
   modules: Record<string, FunctionalModuleManifestArtifact>
 }
 
+export interface FunctionalModuleClientUpdate {
+  version: string
+  url: string
+  sha256: string
+  size: number
+  releaseNotes?: string
+}
+
+export interface FunctionalModuleClientConfig {
+  minVersion?: string
+  update?: FunctionalModuleClientUpdate
+}
+
 export interface FunctionalModuleManifest {
   schema: number
   channel: string
-  client?: {
-    minVersion?: string
-  }
+  client?: FunctionalModuleClientConfig
   platforms: Record<string, FunctionalModuleManifestPlatform>
 }
 

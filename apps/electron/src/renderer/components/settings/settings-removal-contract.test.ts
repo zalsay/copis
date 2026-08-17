@@ -44,7 +44,6 @@ describe('本地设置旧入口清理契约', () => {
       'Agent 工具',
       '远程连接',
       '快捷键管理',
-      '关于/更新',
       'Copis 教程',
     ] as const) {
       expect(workingPanelSource).not.toContain(legacyLabel)

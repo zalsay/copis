@@ -26,6 +26,13 @@ interface FileDropZoneProps {
 export function FileDropZone({ workspaceSlug, sessionId, target = 'session', onFilesUploaded, onFilesAttached, onAttachFolder, onFoldersDropped }: FileDropZoneProps): React.ReactElement {
   const [isDragOver, setIsDragOver] = React.useState<'left' | 'right' | null>(null)
   const [isUploading, setIsUploading] = React.useState(false)
+  const [leftTooltipOpen, setLeftTooltipOpen] = React.useState(false)
+  const [rightTooltipOpen, setRightTooltipOpen] = React.useState(false)
+
+  React.useEffect(() => {
+    if (isDragOver === 'left') setLeftTooltipOpen(false)
+    if (isDragOver === 'right') setRightTooltipOpen(false)
+  }, [isDragOver])
 
   const isWorkspace = target === 'workspace'
 
@@ -286,7 +293,12 @@ export function FileDropZone({ workspaceSlug, sessionId, target = 'session', onF
       ) : (
         <>
           {/* 添加文件 */}
-          <Tooltip open={isDragOver === 'left' ? false : undefined}>
+          <Tooltip
+            open={isDragOver !== 'left' && leftTooltipOpen}
+            onOpenChange={(nextOpen) => {
+              if (isDragOver !== 'left') setLeftTooltipOpen(nextOpen)
+            }}
+          >
             <TooltipTrigger asChild>
               <div
                 role="button"
@@ -307,7 +319,12 @@ export function FileDropZone({ workspaceSlug, sessionId, target = 'session', onF
               <p>{isWorkspace ? '添加文件到项目文件目录' : '将文件放入 Agent 工作文件夹'}</p>
             </TooltipContent>
           </Tooltip>
-          <Tooltip open={isDragOver === 'right' ? false : undefined}>
+          <Tooltip
+            open={isDragOver !== 'right' && rightTooltipOpen}
+            onOpenChange={(nextOpen) => {
+              if (isDragOver !== 'right') setRightTooltipOpen(nextOpen)
+            }}
+          >
             <TooltipTrigger asChild>
               <div
                 role="button"

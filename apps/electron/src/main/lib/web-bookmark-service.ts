@@ -42,6 +42,13 @@ function readGroups(value: unknown): WebBookmarkGroup[] {
   })
 }
 
+function readFaviconUrl(value: unknown): string | null {
+  if (typeof value !== 'string') return null
+
+  const normalized = value.trim()
+  return /^https?:\/\//i.test(normalized) || /^data:image\//i.test(normalized) ? normalized : null
+}
+
 function readBookmarks(value: unknown, groups: WebBookmarkGroup[]): WebBookmark[] {
   if (!Array.isArray(value)) return []
   const groupIds = new Set(groups.map((group) => group.id))
@@ -61,7 +68,7 @@ function readBookmarks(value: unknown, groups: WebBookmarkGroup[]): WebBookmark[
     if (!id || !title || !url || !Number.isFinite(item.createdAt)) return []
 
     const groupId = typeof item.groupId === 'string' && groupIds.has(item.groupId) ? item.groupId : null
-    return [{ id, title, url, createdAt: item.createdAt, groupId }]
+    return [{ id, title, url, faviconUrl: readFaviconUrl(item.faviconUrl), createdAt: item.createdAt, groupId }]
   })
 }
 
@@ -106,6 +113,16 @@ function validateUrl(url: string): string {
   }
 }
 
+function validateFaviconUrl(faviconUrl: SaveWebBookmarkInput['faviconUrl']): string | null | undefined {
+  if (faviconUrl === undefined || faviconUrl === null) return faviconUrl
+
+  const normalized = faviconUrl.trim()
+  if (!/^https?:\/\//i.test(normalized) && !/^data:image\//i.test(normalized)) {
+    throw new Error('网页图标地址无效')
+  }
+  return normalized
+}
+
 function validateGroupName(name: string): string {
   const normalized = name.trim()
   if (!normalized) throw new Error('收藏分组名称不能为空')
@@ -145,6 +162,7 @@ export function getWebBookmarks(): WebBookmarksSnapshot {
 export function saveWebBookmark(input: SaveWebBookmarkInput): WebBookmarksSnapshot {
   const url = validateUrl(input.url)
   const title = input.title.trim() || url
+  const faviconUrl = validateFaviconUrl(input.faviconUrl)
   const current = readSnapshot()
   const existing = current.bookmarks.find((bookmark) => bookmark.url === url)
   const groupId = resolveGroupId(input.groupId, current, existing)
@@ -153,7 +171,7 @@ export function saveWebBookmark(input: SaveWebBookmarkInput): WebBookmarksSnapsh
     return writeSnapshot({
       groups: current.groups,
       bookmarks: current.bookmarks.map((bookmark) => bookmark.id === existing.id
-        ? { ...bookmark, title, url, groupId }
+        ? { ...bookmark, title, url, faviconUrl: faviconUrl === undefined ? bookmark.faviconUrl : faviconUrl, groupId }
         : bookmark),
     })
   }
@@ -162,6 +180,7 @@ export function saveWebBookmark(input: SaveWebBookmarkInput): WebBookmarksSnapsh
     id: randomUUID(),
     title,
     url,
+    faviconUrl: faviconUrl ?? null,
     createdAt: Date.now(),
     groupId,
   }

@@ -98,7 +98,6 @@ import {
   allPendingExitPlanRequestsAtom,
   finalizeStreamingActivities,
 } from '@/atoms/agent-atoms'
-import { browserWorkflowStatusAtom } from '@/atoms/browser-agent'
 import type { AgentContextStatus } from '@/atoms/agent-atoms'
 import { longTextPasteAsAttachmentEnabledAtom } from '@/atoms/ui-preferences'
 import { channelsAtom } from '@/atoms/model-atoms'
@@ -259,35 +258,10 @@ export function AgentConversationSurface({ sessionId, variant = 'main' }: AgentC
   // 软空闲态：本轮主体已结束、UI 可输入，但 SDK 通道仍开着等后台任务唤醒。
   // 此时服务端 activeSessions 仍保留，新消息须走注入通道而非新建 run。
   const backgroundWaiting = streamState?.backgroundWaiting ?? false
-  const browserWorkflowStatus = useAtomValue(browserWorkflowStatusAtom)
   const stoppedByUserSessions = useAtomValue(stoppedByUserSessionsAtom)
   const sendWithCmdEnter = useAtomValue(sendWithCmdEnterAtom)
   const longTextPasteAsAttachmentEnabled = useAtomValue(longTextPasteAsAttachmentEnabledAtom)
   const stoppedByUser = stoppedByUserSessions.has(sessionId)
-  // Browser Workflow 停止录制后自动发起 Agent 总结时，同步进入 streaming 模式
-  // 以确保 Composer 发送按钮切换为停止按钮（Square 图标）
-  React.useEffect(() => {
-    if (variant !== 'browser') return
-    const status = browserWorkflowStatus
-    const s = status.state
-    if (s === 'awaiting_summary' || s === 'recording') {
-      setStreamingStates((prev) => {
-        const next = new Map(prev)
-        const current = next.get(sessionId) || { running: false, content: '', toolActivities: [], model: undefined, startedAt: 0, inputTokens: 0, contextWindow: 0 }
-        next.set(sessionId, { ...current, running: true })
-        return next
-      })
-    } else if (s === 'idle') {
-      setStreamingStates((prev) => {
-        const next = new Map(prev)
-        const current = next.get(sessionId)
-        if (current) {
-          next.set(sessionId, { ...current, running: false })
-        }
-        return next
-      })
-    }
-  }, [variant, browserWorkflowStatus.state, sessionId, setStreamingStates])
   const liveMessagesMap = useAtomValue(liveMessagesMapAtom)
   const setLiveMessagesMap = useSetAtom(liveMessagesMapAtom)
   // 稳定化空数组引用，避免 ?? [] 每次创建新引用导致下游 useMemo 链不必要重算

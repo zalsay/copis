@@ -13,6 +13,7 @@ import {
 } from './functional-module-publisher'
 import type {
   FunctionalModuleArchitecture,
+  FunctionalModuleClientUpdate,
   FunctionalModuleManifest,
   FunctionalModulePlatform,
 } from '@copis/shared'
@@ -131,6 +132,7 @@ async function main(): Promise<void> {
       clientMinVersion: getOption('--client-min-version')
         ?? process.env.COPIS_MODULE_CLIENT_MIN_VERSION?.trim()
         ?? packageMetadata.version,
+      clientUpdate: readClientUpdate(),
       publicBaseUrl,
       prefix,
       modules,
@@ -219,6 +221,29 @@ function getOption(name: string): string | undefined {
   const index = process.argv.indexOf(name)
   const value = index >= 0 ? process.argv[index + 1] : undefined
   return value?.trim() || undefined
+}
+
+function readClientUpdate(): FunctionalModuleClientUpdate | undefined {
+  const version = getOption('--app-update-version') ?? process.env.COPIS_APP_UPDATE_VERSION?.trim()
+  const url = getOption('--app-update-url') ?? process.env.COPIS_APP_UPDATE_URL?.trim()
+  const sha256 = getOption('--app-update-sha256') ?? process.env.COPIS_APP_UPDATE_SHA256?.trim()
+  const size = getOption('--app-update-size') ?? process.env.COPIS_APP_UPDATE_SIZE?.trim()
+  const releaseNotes = getOption('--app-update-notes') ?? process.env.COPIS_APP_UPDATE_NOTES?.trim()
+  if (!version && !url && !sha256 && !size && !releaseNotes) return undefined
+  if (!version || !url || !sha256 || !size) {
+    throw new Error('发布主程序更新时缺少 --app-update-version/url/sha256/size')
+  }
+  const parsedSize = Number(size)
+  if (!Number.isSafeInteger(parsedSize) || parsedSize <= 0) {
+    throw new Error('主程序更新 size 不合法')
+  }
+  return {
+    version,
+    url,
+    sha256: sha256.toLowerCase(),
+    size: parsedSize,
+    ...(releaseNotes ? { releaseNotes } : {}),
+  }
 }
 
 function hasFlag(name: string): boolean {

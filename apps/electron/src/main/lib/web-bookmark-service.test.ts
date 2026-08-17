@@ -39,7 +39,7 @@ describe('网页收藏夹存储', () => {
 
     expect(service.getWebBookmarks()).toEqual({
       groups: [],
-      bookmarks: [{ id: 'legacy', title: '旧页面', url: 'https://copis.example.com/', createdAt: 1, groupId: null }],
+      bookmarks: [{ id: 'legacy', title: '旧页面', url: 'https://copis.example.com/', faviconUrl: null, createdAt: 1, groupId: null }],
     })
   })
 
@@ -54,6 +54,27 @@ describe('网页收藏夹存储', () => {
     const updated = service.saveWebBookmark({ title: 'Copis 首页', url: 'https://copis.example.com/', groupId: null })
     expect(updated.bookmarks).toHaveLength(1)
     expect(updated.bookmarks[0]).toMatchObject({ title: 'Copis 首页', url: 'https://copis.example.com/', groupId: null })
+  })
+
+  test('Given 已加载网站图标的网页 When 保存收藏并仅移动分组 Then 持久化并保留该图标', () => {
+    const group = service.createWebBookmarkGroup({ name: '常用网站' }).groups[0]!
+    const faviconUrl = 'https://copis.example.com/favicon.ico'
+    const saved = service.saveWebBookmark({
+      title: 'Copis',
+      url: 'https://copis.example.com/',
+      faviconUrl,
+    })
+
+    expect(saved.bookmarks[0]).toMatchObject({ faviconUrl })
+
+    const moved = service.saveWebBookmark({
+      title: 'Copis',
+      url: 'https://copis.example.com/',
+      groupId: group.id,
+    })
+
+    expect(moved.bookmarks[0]).toMatchObject({ groupId: group.id, faviconUrl })
+    expect(JSON.parse(readFileSync(bookmarksPath, 'utf-8'))).toEqual(moved)
   })
 
   test('支持创建、重命名和删除分组，删除分组不删除收藏', () => {

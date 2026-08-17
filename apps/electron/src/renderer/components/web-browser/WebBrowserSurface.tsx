@@ -4,7 +4,7 @@ import { ArrowLeft, ArrowRight, CircleStop, ExternalLink, Globe2, RotateCw, Shie
 import type { WebTabsSnapshot } from '@copis/shared'
 import { browserAgentPanelOpenAtom, browserAgentPanelWidthAtom, browserAgentSessionIdAtom, browserWorkflowStatusAtom } from '@/atoms/browser-agent'
 import { activeWebTabAtom, activeWebTabIdAtom, webTabsAtom } from '@/atoms/web-tabs'
-import { agentChannelIdAtom, agentModelIdAtom, agentSessionsAtom, agentWorkspacesAtom, currentAgentWorkspaceIdAtom } from '@/atoms/agent-atoms'
+import { agentChannelIdAtom, agentModelIdAtom, agentSessionsAtom, agentStreamingStatesAtom, agentWorkspacesAtom, currentAgentWorkspaceIdAtom } from '@/atoms/agent-atoms'
 import { draftSessionIdsAtom } from '@/atoms/draft-session-atoms'
 import { Button } from '@/components/ui/button'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
@@ -57,6 +57,7 @@ export function WebBrowserSurface(): React.ReactElement {
   const currentWorkspaceId = useAtomValue(currentAgentWorkspaceIdAtom)
   const agentSessions = useAtomValue(agentSessionsAtom)
   const setAgentSessions = useSetAtom(agentSessionsAtom)
+  const setStreamingStates = useSetAtom(agentStreamingStatesAtom)
   const setDraftSessionIds = useSetAtom(draftSessionIdsAtom)
   const browserAgentSessionId = useAtomValue(browserAgentSessionIdAtom)
   const setBrowserAgentSessionId = useSetAtom(browserAgentSessionIdAtom)
@@ -295,6 +296,20 @@ export function WebBrowserSurface(): React.ReactElement {
       toast.error('录制已停止，但当前没有可用的 Agent 渠道')
       return
     }
+    setStreamingStates((prev) => {
+      const map = new Map(prev)
+      const current = prev.get(sessionId) ?? {
+        running: false,
+        content: '',
+        toolActivities: [],
+        model: session?.modelId ?? agentModelId ?? undefined,
+        startedAt: Date.now(),
+        inputTokens: 0,
+        contextWindow: 0,
+      }
+      map.set(sessionId, { ...current, running: true, content: '', toolActivities: [] })
+      return map
+    })
     void window.electronAPI.sendAgentMessage({
       sessionId,
       userMessage: '请读取刚刚完成的网页操作 JSONL，并总结为待审核的 Browser Workflow 草稿。先调用 BrowserWorkflowRecordingGet，再调用 BrowserWorkflowDraft；不要直接保存。',
@@ -305,9 +320,16 @@ export function WebBrowserSurface(): React.ReactElement {
       triggeredBy: 'user',
     }).catch((error) => {
       console.error('[Browser Workflow] 请求 Agent 总结录制失败:', error)
+      setStreamingStates((prev) => {
+        const current = prev.get(sessionId)
+        if (!current) return prev
+        const map = new Map(prev)
+        map.set(sessionId, { ...current, running: false })
+        return map
+      })
       toast.error(error instanceof Error ? error.message : '无法请求 Agent 总结网页操作')
     })
-  }, [agentChannelId, agentModelId, agentSessions, currentWorkspaceId])
+  }, [agentChannelId, agentModelId, agentSessions, currentWorkspaceId, setStreamingStates])
 
   const handleStartRecording = React.useCallback(async (): Promise<void> => {
     if (!browserWorkflowEnabled || browserActionPendingRef.current) return
@@ -521,6 +543,90 @@ export function WebBrowserSurface(): React.ReactElement {
     }
   }, [activeTab, activeTabId, agentChannelId, agentModelId, agentSessions, browserAgentBindingQueue, browserAgentSessionId, browserWorkflowEnabled, createBrowserAgentDraftSession, resolveBrowserAgentProjectId, setAgentSessions, setBrowserAgentPanelOpen, setBrowserAgentSessionId, setBrowserWorkflowStatus])
 
+  const handleSwitchProject = React.useCallback(async (nextProjectId: string): Promise<void> => {
+    if (!browserWorkflowEnabled || browserActionPendingRef.current || !activeTabId || !activeTab) {
+      throw new Error('当前没有可用的网页页签')
+    }
+
+    const requestId = browserAgentActionRequestIdRef.current + 1
+    browserAgentActionRequestIdRef.current = requestId
+    const requestedTarget: BrowserAgentTarget = {
+      tabId: activeTabId,
+      pageUrl: activeTab.url,
+    }
+    browserActionPendingRef.current = true
+    setBrowserActionPending(true)
+    try {
+      let currentSession = browserAgentSessionId
+        ? agentSessions.find((session) => session.id === browserAgentSessionId)
+        : undefined
+      if (browserAgentSessionId && !currentSession) {
+        const sessions = await window.electronAPI.listAgentSessions()
+        setAgentSessions(sessions)
+        currentSession = sessions.find((session) => session.id === browserAgentSessionId)
+      }
+      const channelId = currentSession?.channelId ?? agentChannelId
+      if (!channelId) throw new Error('请先配置 Agent 渠道')
+
+      const result = await createAndSwitchBrowserAgentSession(
+        browserAgentSessionId,
+        () => createBrowserAgentDraftSession(
+          nextProjectId,
+          channelId,
+          currentSession?.modelId ?? agentModelId ?? undefined,
+        ),
+        async (sessionId) => {
+          await browserAgentBindingQueue.bind(sessionId, activeTabId)
+        },
+        (sessionId) => browserAgentBindingQueue.unbindAfterPending(sessionId),
+        () => shouldCommitBrowserAgentAction(
+          requestId,
+          browserAgentActionRequestIdRef.current,
+          browserAgentMountedRef.current,
+          requestedTarget,
+          browserAgentTargetRef.current,
+        ),
+      )
+      if (!shouldCommitBrowserAgentAction(
+        requestId,
+        browserAgentActionRequestIdRef.current,
+        browserAgentMountedRef.current,
+        requestedTarget,
+        browserAgentTargetRef.current,
+      )) return
+
+      browserAgentSessionIdRef.current = result.sessionId
+      setBrowserAgentSessionId(result.sessionId)
+      setBrowserWorkflowStatus({ sessionId: result.sessionId, state: 'idle' })
+      setBrowserAgentPanelOpen(true)
+      if (activeTab.url !== 'about:blank') {
+        await window.electronAPI.webTabs.saveProjectAssociation({
+          url: activeTab.url,
+          workspaceId: nextProjectId,
+        }).catch((error) => {
+          console.error('[网页项目关联] 切换网页 Agent 项目后保存页面关联失败:', error)
+        })
+      }
+      if (!result.previousBindingReleased) {
+        console.error('[Browser Workflow] 切换项目后旧页面绑定未能解除:', result.previousSessionId)
+      }
+    } catch (error) {
+      if (shouldCommitBrowserAgentAction(
+        requestId,
+        browserAgentActionRequestIdRef.current,
+        browserAgentMountedRef.current,
+        requestedTarget,
+        browserAgentTargetRef.current,
+      )) {
+        console.error('[Browser Workflow] 切换网页 Agent 项目失败:', error)
+        throw error instanceof Error ? error : new Error('切换网页 Agent 项目失败')
+      }
+    } finally {
+      browserActionPendingRef.current = false
+      if (browserAgentMountedRef.current) setBrowserActionPending(false)
+    }
+  }, [activeTab, activeTabId, agentChannelId, agentModelId, agentSessions, browserAgentBindingQueue, browserAgentSessionId, browserWorkflowEnabled, createBrowserAgentDraftSession, setAgentSessions, setBrowserAgentPanelOpen, setBrowserAgentSessionId, setBrowserWorkflowStatus])
+
   const handleBrowserToolbarClick = React.useCallback((): void => {
     const action = getBrowserWorkflowToolbarAction(browserWorkflowStatus)
     if (action === 'stop-recording') {
@@ -709,14 +815,13 @@ export function WebBrowserSurface(): React.ReactElement {
             />
             <BrowserAgentPanel
               sessionId={browserAgentSessionId}
-              tabId={activeTabId}
-              pageUrl={activeTab.url}
               tabTitle={activeTab.title}
               workspaceId={browserAgentSession?.workspaceId}
               width={browserAgentPanelWidth}
               onStartRecording={handleStartRecording}
               onStopRecording={handleStopRecording}
               onStartNewSession={handleStartNewBrowserAgentSession}
+              onSwitchProject={handleSwitchProject}
               onClose={handleCloseBrowserAgent}
             />
           </>

@@ -1,5 +1,5 @@
 // 浏览器模式的普通 API 走 Vite 代理；Agent 流式请求直接连接 Rust SSE 服务。
-import type { AgentExpertTeamSession, AgentQueueMessageInput, AgentStreamCompletePayload, AgentStreamEvent, AgentSendInput, MemoryExportFileInput } from '@copis/shared'
+import type { AgentExpertTeamSession, AgentQueueMessageInput, AgentStreamCompletePayload, AgentStreamEvent, AgentSendInput, MemoryExportFileInput, WorkingModelLatencyMap } from '@copis/shared'
 import {
   normalizeWorkingDiamondPackages,
   normalizeWorkingDiamondPurchaseResult,
@@ -169,6 +169,10 @@ function createHttpMethods(): Record<string, HttpMethod> {
       .then((value) => normalizeWorkingPayment(() => normalizeWorkingPaymentCheckResult(value))),
     cancelWorkingDiamondPayment: (args) => request(`/api/working/diamond-purchases/${encodeURIComponent(String(getArgument<number | string>(args, 0)))}/cancel`, 'POST', {})
       .then((value) => normalizeWorkingPayment(() => normalizeWorkingPaymentCancelResult(value))),
+    getWorkingModelLatencies: async () => {
+      const payload = await request<{ data?: WorkingModelLatencyMap }>('/api/internal/working-model/first-token-latencies')
+      return payload.data ?? {}
+    },
     // ===== 应用设置 =====
     getSettings: () => request('/api/settings'),
     updateSettings: (args) => request('/api/settings', 'PATCH', getArgument(args, 0)),

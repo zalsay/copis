@@ -6,17 +6,15 @@
  */
 
 import * as React from 'react'
-import { useAtom, useSetAtom } from 'jotai'
+import { useAtom, useAtomValue } from 'jotai'
 import { Loader2, RefreshCw } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { EnvironmentCheckCard } from './EnvironmentCheckCard'
 import {
-  installerManifestAtom,
   runtimeStatusAtom,
   isShellEnvironmentOkAtom,
   isNodeJsOkAtom,
 } from '@/atoms/environment'
-import { useAtomValue } from 'jotai'
 
 interface EnvironmentCheckPanelProps {
   /** 首次挂载时是否自动跑一次检测（Onboarding 用），Dialog 场景可设 false */
@@ -27,7 +25,6 @@ export function EnvironmentCheckPanel({
   autoDetectOnMount = true,
 }: EnvironmentCheckPanelProps) {
   const [runtime, setRuntime] = useAtom(runtimeStatusAtom)
-  const setManifest = useSetAtom(installerManifestAtom)
   const shellOk = useAtomValue(isShellEnvironmentOkAtom)
   const nodeOk = useAtomValue(isNodeJsOkAtom)
   const [isChecking, setIsChecking] = React.useState(false)
@@ -35,18 +32,14 @@ export function EnvironmentCheckPanel({
   const refresh = React.useCallback(async () => {
     setIsChecking(true)
     try {
-      const [status, manifest] = await Promise.all([
-        window.electronAPI.reinitRuntime(),
-        window.electronAPI.fetchInstallerManifest(),
-      ])
+      const status = await window.electronAPI.reinitRuntime()
       setRuntime(status)
-      setManifest(manifest)
     } catch (error) {
       console.error('[EnvironmentCheckPanel] 检测失败:', error)
     } finally {
       setIsChecking(false)
     }
-  }, [setRuntime, setManifest])
+  }, [setRuntime])
 
   React.useEffect(() => {
     if (autoDetectOnMount) {
@@ -56,10 +49,6 @@ export function EnvironmentCheckPanel({
       window.electronAPI.getRuntimeStatus().then((status) => {
         if (status) setRuntime(status)
       })
-      window.electronAPI
-        .fetchInstallerManifest()
-        .then((m) => setManifest(m))
-        .catch(() => {})
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
@@ -135,7 +124,7 @@ export function EnvironmentCheckPanel({
           statusText={shellStatusText}
           action={
             shellStatus === 'error'
-              ? { type: 'download', installerId: 'git-for-windows' }
+              ? { type: 'openExternal', url: 'https://gitforwindows.org/', label: '下载 Git for Windows' }
               : { type: 'none' }
           }
         />
@@ -147,7 +136,7 @@ export function EnvironmentCheckPanel({
           statusText={nodeStatusText}
           action={
             nodeStatus === 'warning'
-              ? { type: 'download', installerId: 'nodejs' }
+              ? { type: 'openExternal', url: 'https://nodejs.org/', label: '下载 Node.js' }
               : { type: 'none' }
           }
         />

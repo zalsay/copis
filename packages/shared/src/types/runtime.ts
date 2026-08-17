@@ -334,10 +334,20 @@ export interface ShellEnvResult {
   error: string | null
 }
 
+/** 主程序版本与运行环境信息 */
+export interface AppInfo {
+  /** 当前主程序版本 */
+  version: string
+  /** 是否正式打包版本（开发环境不启用在线自动更新） */
+  packaged: boolean
+}
+
 /**
  * IPC 通道名称常量
  */
 export const IPC_CHANNELS = {
+  /** 获取主程序版本与运行环境信息 */
+  GET_APP_INFO: 'app:get-info',
   /** 获取运行时状态 */
   GET_RUNTIME_STATUS: 'runtime:get-status',
   /** 重新初始化运行时（用户安装完 Git/Node 后触发） */

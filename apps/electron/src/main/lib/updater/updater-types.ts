@@ -4,13 +4,30 @@
  * 检测新版本 → 自动下载 → 用户选择立即或空闲时重启安装
  */
 
+/** Rust API 返回的主程序更新信息 */
+export interface AppUpdateInfo {
+  available: boolean
+  version?: string
+  url?: string
+  sha256?: string
+  size?: number
+  releaseNotes?: string
+}
+
 /** 更新状态 */
 export type UpdateStatus =
   | { status: 'idle' }
   | { status: 'checking' }
-  | { status: 'available'; version: string; releaseNotes?: string }
+  | {
+      status: 'available'
+      version: string
+      releaseNotes?: string
+      downloadUrl?: string
+      fileSha256?: string
+      fileSize?: number
+    }
   | { status: 'downloading'; version: string; progress: DownloadProgress }
-  | { status: 'downloaded'; version: string }
+  | { status: 'downloaded'; version: string; filePath?: string }
   | { status: 'not-available' }
   | { status: 'error'; error: string }
 
@@ -29,6 +46,7 @@ export interface DownloadProgress {
 /** 更新 IPC 通道常量 */
 export const UPDATER_IPC_CHANNELS = {
   CHECK_FOR_UPDATES: 'updater:check',
+  DOWNLOAD: 'updater:download',
   GET_STATUS: 'updater:get-status',
   ON_STATUS_CHANGED: 'updater:status-changed',
   INSTALL_WHEN_IDLE: 'updater:install-when-idle',

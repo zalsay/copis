@@ -217,7 +217,6 @@ bun run build:node-runtime-module # 将当前平台 Node.js + npm 打包为功�
 - `SYSTEM_PROMPT_IPC_CHANNELS` - 系统提示词
 - `CHAT_TOOL_IPC_CHANNELS` - Chat 工具
 - `FEISHU_IPC_CHANNELS` - 飞书集成
-- `GITHUB_RELEASE_IPC_CHANNELS` - GitHub 发布
 
 ### 主进程服务层（`main/lib/`）
 

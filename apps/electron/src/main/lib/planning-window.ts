@@ -5,7 +5,7 @@ import type { MainWindowState } from '../../types'
 import { getPersistableMainWindowState } from './main-window-lifecycle'
 import { getSettings, updateSettings } from './settings-service'
 import { getCustomWindowChromeOptions } from './window-chrome'
-import { httpApiWebTokenArgument } from './http-api-web-token'
+import { httpApiPortArgument, httpApiWebTokenArgument } from './http-api-web-token'
 
 const DEFAULT_WIDTH = 1180
 const DEFAULT_HEIGHT = 820
@@ -95,7 +95,7 @@ function createPlanningWindow(): BrowserWindow {
       preload: join(__dirname, 'preload.cjs'),
       contextIsolation: true,
       nodeIntegration: false,
-      additionalArguments: [httpApiWebTokenArgument()],
+      additionalArguments: [httpApiWebTokenArgument(), httpApiPortArgument()],
     },
     ...titleBarOptions,
   })

@@ -20,6 +20,7 @@ describe('Working 设置菜单契约', () => {
       ['migration', '数据迁移'],
       ['storage', '磁盘管理'],
       ['appearance', '外观设置'],
+      ['about', '关于/更新'],
     ] as const
 
     for (const [id, label] of requiredSections) {
@@ -126,6 +127,14 @@ describe('Working 设置菜单契约', () => {
     expect(panelSource).toContain("'专家团扣费'")
     expect(panelStyles).toContain('grid-template-columns: repeat(3, minmax(0, 1fr))')
     expect(panelStyles).toContain('color: var(--ui-primary);')
+  })
+
+  test('Given 检测到新版本 When 渲染设置菜单 Then 关于/更新菜单显示小红点提醒', () => {
+    expect(panelSource).toContain("import { hasUpdateAtom } from '@/atoms/updater'")
+    expect(panelSource).toContain('const hasUpdate = useAtomValue(hasUpdateAtom)')
+    expect(panelSource).toContain("item.id === 'about' && hasUpdate")
+    expect(panelSource).toContain('copis-working-settings-nav-update-dot')
+    expect(panelStyles).toContain('.copis-working-settings-nav-update-dot')
   })
 
   test('Given Working 查看使用教程 When 打开菜单 Then 通过现有教程 Tab 和 IPC 加载页面', () => {

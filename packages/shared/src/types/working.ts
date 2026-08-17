@@ -534,6 +534,9 @@ export interface WorkingPaymentCancelResult {
 /** Renderer 可见的登录结果，不包含 token。 */
 export type WorkingLoginResponse = WorkingAuthState
 
+/** 模型 ID 到平均首 token 延迟（毫秒）的映射。 */
+export type WorkingModelLatencyMap = Record<string, number>
+
 /** Renderer 只接收归一化后的支付结果，不包含支付 proof、payment_needed 或资源诊断数据。 */
 export const WORKING_IPC_CHANNELS = {
   GET_CONFIG: 'working:get-config',
@@ -563,6 +566,7 @@ export const WORKING_IPC_CHANNELS = {
   GET_ORDER_PAYMENT: 'working:get-order-payment',
   CHECK_PAYMENT: 'working:check-payment',
   CANCEL_DIAMOND_PAYMENT: 'working:cancel-diamond-payment',
+  GET_MODEL_LATENCIES: 'working:get-model-latencies',
   /** VIP 到账后主进程向 Renderer 推送最新账户资料。 */
   AUTH_UPDATED: 'working:auth-updated',
 } as const

@@ -23,7 +23,7 @@ export function mergeFunctionalModuleManifests(
     }
   }
 
-  const client = selectMinimumClientVersion(existing.client, incoming.client)
+  const client = mergeClientConfig(existing.client, incoming.client)
   return {
     ...incoming,
     ...(client ? { client } : {}),
@@ -31,13 +31,26 @@ export function mergeFunctionalModuleManifests(
   }
 }
 
-function selectMinimumClientVersion(
+function mergeClientConfig(
   existing: FunctionalModuleManifest['client'],
   incoming: FunctionalModuleManifest['client'],
 ): FunctionalModuleManifest['client'] {
-  if (!existing?.minVersion) return incoming
-  if (!incoming?.minVersion) return existing
-  return compareVersions(existing.minVersion, incoming.minVersion) >= 0 ? existing : incoming
+  const minVersion = pickMinimumClientVersion(existing?.minVersion, incoming?.minVersion)
+  const update = incoming?.update ?? existing?.update
+  if (!minVersion && !update) return undefined
+  return {
+    ...(minVersion ? { minVersion } : {}),
+    ...(update ? { update } : {}),
+  }
+}
+
+function pickMinimumClientVersion(
+  existing: string | undefined,
+  incoming: string | undefined,
+): string | undefined {
+  if (!existing) return incoming
+  if (!incoming) return existing
+  return compareVersions(existing, incoming) >= 0 ? existing : incoming
 }
 
 function compareVersions(left: string, right: string): number {

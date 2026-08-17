@@ -38,9 +38,10 @@ import {
   COPIS_WORKING_EXPERT_MODEL_ID,
   COPIS_WORKING_FAST_MODEL_ID,
 } from '@copis/shared'
-import type { Channel, ModelOption, ProviderType } from '@copis/shared'
+import type { Channel, ModelOption, ProviderType, WorkingModelLatencyMap } from '@copis/shared'
 import { ChannelPlanQuotaBadge } from './ChannelPlanQuotaBadge'
 import { buildModelOptions } from './model-selector-utils'
+import { ModelLatencySignal } from './ModelLatencySignal'
 
 /** 按渠道分组模型选项 */
 function groupByChannel(options: ModelOption[]): Map<string, ModelOption[]> {
@@ -130,7 +131,9 @@ export function ModelSelector({
   const [sharedOpen, setSharedOpen] = useAtom(modelSelectorOpenAtom)
   const open = useSharedOpenState ? sharedOpen : localOpen
   const setOpen = useSharedOpenState ? setSharedOpen : setLocalOpen
+  const [modelTooltipOpen, setModelTooltipOpen] = React.useState(false)
   const [search, setSearch] = React.useState('')
+  const [latencies, setLatencies] = React.useState<WorkingModelLatencyMap>({})
 
   // 外部模型优先；未传入时使用全局默认模型，避免依赖旧 Chat 会话状态。
   const selectedModel = externalSelectedModel !== undefined ? externalSelectedModel : globalSelectedModel
@@ -140,6 +143,10 @@ export function ModelSelector({
     if (open) {
       window.electronAPI.listChannels().then(setChannels).catch(console.error)
       setSearch('')
+      setLatencies({})
+      window.electronAPI.getWorkingModelLatencies()
+        .then(setLatencies)
+        .catch(() => setLatencies({}))
     }
   }, [open, setChannels])
 
@@ -215,6 +222,11 @@ export function ModelSelector({
   const stableModelInfoRef = React.useRef(currentModelInfo)
   if (currentModelInfo) stableModelInfoRef.current = currentModelInfo
   const displayModelInfo = currentModelInfo ?? stableModelInfoRef.current
+  const modelTooltipDisabled = open || !displayModelInfo
+
+  React.useEffect(() => {
+    if (modelTooltipDisabled) setModelTooltipOpen(false)
+  }, [modelTooltipDisabled])
 
   /** 选择模型并持久化到当前对话 */
   const handleSelect = (option: ModelOption): void => {
@@ -257,7 +269,12 @@ export function ModelSelector({
   return (
     <>
       {/* 触发按钮 */}
-      <Tooltip open={open || !displayModelInfo ? false : undefined}>
+      <Tooltip
+        open={!modelTooltipDisabled && modelTooltipOpen}
+        onOpenChange={(nextOpen) => {
+          if (!modelTooltipDisabled) setModelTooltipOpen(nextOpen)
+        }}
+      >
         <TooltipTrigger asChild>
           <button
             type="button"
@@ -362,12 +379,18 @@ export function ModelSelector({
                           )}
                         >
                           {renderModelIcon(option, useCopisLogo, 'size-5 flex-shrink-0')}
-                          <span className={cn(
-                            'flex-1 text-sm truncate',
-                            isSelected ? 'font-medium text-foreground' : 'text-foreground/80'
-                          )}>
-                            {option.modelName}
-                            {modelDescription ? `(${modelDescription})` : ''}
+                          <span className="flex min-w-0 flex-1 items-center gap-2">
+                            <span className={cn(
+                              'min-w-0 flex-1 truncate text-sm',
+                              isSelected ? 'font-medium text-foreground' : 'text-foreground/80'
+                            )}>
+                              {option.modelName}
+                              {modelDescription ? `(${modelDescription})` : ''}
+                            </span>
+                            <ModelLatencySignal
+                              averageMs={latencies[option.modelId]}
+                              className="shrink-0"
+                            />
                           </span>
                         </button>
                       )

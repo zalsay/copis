@@ -1,8 +1,8 @@
 import * as React from 'react'
 import { Check, CircleStop, FolderKanban, Play, Plus, X } from 'lucide-react'
 import type { BrowserWorkflowVersion } from '@copis/shared'
-import { useAtom, useAtomValue, useSetAtom } from 'jotai'
-import { agentSessionsAtom, agentWorkspacesAtom } from '@/atoms/agent-atoms'
+import { useAtom, useAtomValue } from 'jotai'
+import { agentWorkspacesAtom } from '@/atoms/agent-atoms'
 import { browserWorkflowDraftAtom, browserWorkflowStatusAtom } from '@/atoms/browser-agent'
 import { AgentConversationSurface } from '@/components/agent/AgentConversationSurface'
 import { Button } from '@/components/ui/button'
@@ -18,14 +18,13 @@ import { toast } from 'sonner'
 
 interface BrowserAgentPanelProps {
   sessionId: string
-  tabId: string
-  pageUrl: string
   tabTitle: string
   workspaceId: string | undefined
   width: number
   onStartRecording: () => Promise<void>
   onStopRecording: () => Promise<void>
   onStartNewSession: () => Promise<void>
+  onSwitchProject: (workspaceId: string) => Promise<void>
   onClose: () => void
 }
 
@@ -49,10 +48,9 @@ function getPageOriginLabel(pageOrigin: string | undefined): string {
   }
 }
 
-export function BrowserAgentPanel({ sessionId, tabId, pageUrl, tabTitle, workspaceId, width, onStartRecording, onStopRecording, onStartNewSession, onClose }: BrowserAgentPanelProps): React.ReactElement {
+export function BrowserAgentPanel({ sessionId, tabTitle, workspaceId, width, onStartRecording, onStopRecording, onStartNewSession, onSwitchProject, onClose }: BrowserAgentPanelProps): React.ReactElement {
   const [status, setStatus] = useAtom(browserWorkflowStatusAtom)
   const [draft, setDraft] = useAtom(browserWorkflowDraftAtom)
-  const setAgentSessions = useSetAtom(agentSessionsAtom)
   const workspaces = useAtomValue(agentWorkspacesAtom)
   const [isActionPending, setIsActionPending] = React.useState(false)
   const [unattendedAllowed, setUnattendedAllowed] = React.useState(false)
@@ -111,20 +109,7 @@ export function BrowserAgentPanel({ sessionId, tabId, pageUrl, tabTitle, workspa
     setSelectedProjectId(nextProjectId)
     setIsActionPending(true)
     try {
-      await window.electronAPI.moveAgentSessionToWorkspace({
-        sessionId,
-        targetWorkspaceId: nextProjectId,
-      })
-      setAgentSessions((sessions) => sessions.map((session) => (
-        session.id === sessionId ? { ...session, workspaceId: nextProjectId, sdkSessionId: undefined } : session
-      )))
-      await window.electronAPI.browserWorkflow.bindContext(sessionId, { tabId })
-      if (pageUrl !== 'about:blank') {
-        await window.electronAPI.webTabs.saveProjectAssociation({
-          url: pageUrl,
-          workspaceId: nextProjectId,
-        })
-      }
+      await onSwitchProject(nextProjectId)
       toast.success(`当前页面已关联到项目「${nextProject.name}」`)
     } catch (error) {
       setSelectedProjectId(previousProjectId)
@@ -132,7 +117,7 @@ export function BrowserAgentPanel({ sessionId, tabId, pageUrl, tabTitle, workspa
     } finally {
       setIsActionPending(false)
     }
-  }, [pageUrl, selectedProjectId, sessionId, setAgentSessions, tabId, workspaces])
+  }, [onSwitchProject, selectedProjectId, workspaces])
 
   const projectSelectionLocked = isActionPending || (status.state !== 'idle' && status.state !== 'error')
 

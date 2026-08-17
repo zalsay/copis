@@ -156,6 +156,18 @@ export const tabIndicatorMapAtom = atom<Map<string, SessionIndicatorStatus>>((ge
 
 // ===== 操作函数 =====
 
+/** 解析主内容区实际渲染的标签；deferred 值落后于 tabs 变更时回退到当前激活值。 */
+export function resolveRenderedTabId(
+  tabs: TabItem[],
+  activeTabId: string | null,
+  deferredTabId: string | null,
+): string | null {
+  const exists = (id: string | null): id is string => id !== null && tabs.some((tab) => tab.id === id)
+  if (exists(deferredTabId)) return deferredTabId
+  if (exists(activeTabId)) return activeTabId
+  return null
+}
+
 export function createPreviewTabId(sessionId: string): string {
   return `${PREVIEW_TAB_PREFIX}${sessionId}`
 }

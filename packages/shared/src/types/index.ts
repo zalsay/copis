@@ -32,14 +32,8 @@ export * from './agent-provider'
 // 环境检测相关类型
 export * from './environment'
 
-// 第三方安装包（Git、Node.js 等）相关类型
-export * from './installer'
-
 // 可独立安装和更新的 Copis 功能模块
 export * from './functional-module'
-
-// GitHub Release 相关类型
-export * from './github'
 
 // 系统提示词相关类型
 export * from './system-prompt'

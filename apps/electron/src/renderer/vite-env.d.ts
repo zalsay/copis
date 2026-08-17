@@ -22,6 +22,10 @@ interface UpdateStatus {
   status: 'idle' | 'checking' | 'available' | 'downloading' | 'downloaded' | 'not-available' | 'error'
   version?: string
   releaseNotes?: string
+  downloadUrl?: string
+  fileSha256?: string
+  fileSize?: number
+  filePath?: string
   progress?: { percent: number; transferred: number; total: number; bytesPerSecond: number }
   error?: string
 }
@@ -29,9 +33,10 @@ interface UpdateStatus {
 /** 更新 API */
 interface UpdaterAPI {
   checkForUpdates: () => Promise<void>
+  downloadUpdate: () => Promise<void>
   getStatus: () => Promise<UpdateStatus>
   onStatusChanged: (callback: (status: UpdateStatus) => void) => () => void
-  /** 在所有运行中的 Agent 结束后重启并安装更新 */
+  /** 在所有运行中的 Agent 结束后打开并安装更新 */
   installWhenIdle: () => Promise<boolean>
   /** 取消尚未执行的空闲安装请求 */
   cancelIdleInstall: () => Promise<void>

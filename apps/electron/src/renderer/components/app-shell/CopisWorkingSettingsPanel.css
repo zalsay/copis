@@ -79,6 +79,7 @@
 }
 
 .copis-working-settings-nav-button {
+  position: relative;
   display: flex;
   width: 100%;
   min-height: 40px;
@@ -106,6 +107,18 @@
   flex: 0 0 17px;
   width: 17px;
   height: 17px;
+}
+
+.copis-working-settings-nav-update-dot {
+  position: absolute;
+  top: 50%;
+  right: 10px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: hsl(var(--destructive));
+  transform: translateY(-50%);
+  box-shadow: 0 0 0 2px hsl(var(--sidebar-surface));
 }
 
 .copis-working-settings-main {

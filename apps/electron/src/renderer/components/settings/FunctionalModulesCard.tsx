@@ -97,10 +97,7 @@ export function FunctionalModulesCard(): React.ReactElement {
       <div className="flex items-center justify-between border-b p-4">
         <div className="flex items-center gap-2">
           <PackageCheck className="h-4 w-4 text-muted-foreground" />
-          <div>
-            <h3 className="text-sm font-medium">本地能力</h3>
-            <p className="mt-1 text-xs text-muted-foreground">Copis 会自动管理使用所需的本地能力</p>
-          </div>
+          <h3 className="text-sm font-medium">本地能力</h3>
         </div>
         <CheckCircle2 className={`h-4 w-4 ${requiredInstalled ? 'text-green-600' : 'text-muted-foreground'}`} />
       </div>

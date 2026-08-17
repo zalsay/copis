@@ -13,6 +13,12 @@ export interface FunctionalModuleDefinition {
 
 export const FUNCTIONAL_MODULE_DEFINITIONS: readonly FunctionalModuleDefinition[] = [
   {
+    name: 'node-runtime',
+    displayName: 'Node.js 运行环境',
+    description: '为工作区项目提供 npm 安装和本地运行环境',
+    required: true,
+  },
+  {
     name: 'rust-http-api',
     displayName: '系统核心模块',
     description: 'Copis 的核心运行能力，负责本地服务和智能功能',

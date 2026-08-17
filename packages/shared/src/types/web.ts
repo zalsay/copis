@@ -38,6 +38,8 @@ export interface WebBookmark {
   id: string
   title: string
   url: string
+  /** 收藏时网页提供的 favicon 地址；没有可用图标时为 null。 */
+  faviconUrl: string | null
   createdAt: number
   /** 所属分组；null 表示未分组。 */
   groupId: string | null
@@ -69,6 +71,8 @@ export interface SaveWebPageProjectAssociationInput {
 export interface SaveWebBookmarkInput {
   title: string
   url: string
+  /** 网页 favicon 地址；未传时保留已有收藏的图标，null 表示清除。 */
+  faviconUrl?: string | null
   /** 未传时保留已有收藏的分组；null 表示移动到未分组。 */
   groupId?: string | null
 }

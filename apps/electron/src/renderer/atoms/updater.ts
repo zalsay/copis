@@ -20,6 +20,10 @@ export interface UpdateStatus {
   status: 'idle' | 'checking' | 'available' | 'downloading' | 'downloaded' | 'not-available' | 'error'
   version?: string
   releaseNotes?: string
+  downloadUrl?: string
+  fileSha256?: string
+  fileSize?: number
+  filePath?: string
   progress?: DownloadProgress
   error?: string
 }
@@ -66,4 +70,9 @@ export function initializeUpdater(
 /** 手动检查更新 */
 export async function checkForUpdates(): Promise<void> {
   await window.electronAPI?.updater?.checkForUpdates()
+}
+
+/** 下载主程序更新 */
+export async function downloadUpdate(): Promise<void> {
+  await window.electronAPI?.updater?.downloadUpdate()
 }

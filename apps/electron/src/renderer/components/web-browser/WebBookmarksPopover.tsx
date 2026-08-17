@@ -6,6 +6,7 @@ import {
   ChevronRight,
   Folder,
   FolderOpen,
+  Globe2,
   List,
   LoaderCircle,
   MoreHorizontal,
@@ -50,6 +51,28 @@ function applyBookmarkSnapshot(
 
 function isBookmarkableUrl(url: string): boolean {
   return /^https?:\/\//i.test(url)
+}
+
+function BookmarkIcon({ faviconUrl }: Pick<WebBookmark, 'faviconUrl'>): React.ReactElement {
+  const [failedFavicon, setFailedFavicon] = React.useState<string | null>(null)
+
+  React.useEffect(() => {
+    setFailedFavicon(null)
+  }, [faviconUrl])
+
+  if (!faviconUrl || failedFavicon === faviconUrl) {
+    return <Globe2 className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+  }
+
+  return (
+    <img
+      src={faviconUrl}
+      alt=""
+      aria-hidden="true"
+      className="size-3.5 shrink-0 rounded-sm object-contain"
+      onError={() => setFailedFavicon(faviconUrl)}
+    />
+  )
 }
 
 const UNGROUPED_TREE_ID = '__ungrouped__'
@@ -174,12 +197,15 @@ function BookmarkTreeGroup({
               <div key={bookmark.id} role="treeitem" aria-level={2} className="group/bookmark flex min-w-0 items-center gap-1 rounded-md px-1 py-0.5 hover:bg-muted/60">
                 <button
                   type="button"
-                  className="min-w-0 flex-1 px-1 py-1 text-left"
+                  className="flex min-w-0 flex-1 items-center gap-2 px-1 py-1 text-left"
                   aria-label={`打开收藏 ${bookmark.title}`}
                   onClick={() => onNavigateBookmark(bookmark)}
                 >
-                  <span className="block truncate text-xs font-medium">{bookmark.title}</span>
-                  <span className="block truncate text-[10px] text-muted-foreground">{bookmark.url}</span>
+                  <BookmarkIcon faviconUrl={bookmark.faviconUrl} />
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-xs font-medium">{bookmark.title}</span>
+                    <span className="block truncate text-[10px] text-muted-foreground">{bookmark.url}</span>
+                  </span>
                 </button>
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
@@ -330,6 +356,7 @@ export function WebBookmarksPopover({ activeTab, onNavigate, standalone = false,
       const snapshot = await window.electronAPI.webTabs.bookmarksSave({
         title: activeTab.title || activeTab.url,
         url: activeTab.url,
+        faviconUrl: activeTab.faviconUrl,
         groupId: saveGroupId,
       })
       applyBookmarkSnapshot(snapshot, setBookmarks, setGroups)

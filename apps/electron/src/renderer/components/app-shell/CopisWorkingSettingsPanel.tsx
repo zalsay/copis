@@ -12,6 +12,7 @@ import {
   GraduationCap,
   HardDrive,
   HardDriveDownload,
+  Info,
   LogOut,
   MessageSquare,
   Mic,
@@ -40,6 +41,8 @@ import {
   workingPaymentRefreshAtom,
 } from '@/atoms/working-payment-atoms'
 import { activeTabIdAtom, openTab, tabsAtom, TUTORIAL_TAB_ID, TUTORIAL_TAB_TITLE } from '@/atoms/tab-atoms'
+import { hasUpdateAtom } from '@/atoms/updater'
+import { AboutUpdatesSettings } from '@/components/settings/AboutUpdatesSettings'
 import { AppearanceSettings } from '@/components/settings/AppearanceSettings'
 import { MigrationSettings } from '@/components/settings/MigrationSettings'
 import { StorageSettings } from '@/components/settings/StorageSettings'
@@ -112,6 +115,12 @@ export const WORKING_SETTINGS_MENU: readonly WorkingSettingsMenuItem[] = [
     description: '调整主题、界面风格、字体、预览和应用图标。',
     icon: Palette,
   },
+  {
+    id: 'about',
+    label: '关于/更新',
+    description: '查看主程序与本地模块版本，并检查、下载和安装更新。',
+    icon: Info,
+  },
 ] as const
 
 interface CopisWorkingSettingsPanelProps {
@@ -137,6 +146,7 @@ export function CopisWorkingSettingsPanel({ onClose }: CopisWorkingSettingsPanel
   const [error, setError] = React.useState('')
   const [notice, setNotice] = React.useState('')
   const [copiedLabel, setCopiedLabel] = React.useState('')
+  const hasUpdate = useAtomValue(hasUpdateAtom)
 
   const user = settings?.user ?? authState?.user
   const activeSectionDefinition = WORKING_SETTINGS_MENU.find((item) => item.id === activeSection) ?? WORKING_SETTINGS_MENU[0]!
@@ -270,9 +280,13 @@ export function CopisWorkingSettingsPanel({ onClose }: CopisWorkingSettingsPanel
                   className={`copis-working-settings-nav-button ${isActive ? 'active' : ''}`}
                   onClick={() => item.id === 'tutorial' ? handleOpenTutorial() : setActiveSection(item.id)}
                   aria-current={isActive ? 'page' : undefined}
+                  aria-label={item.id === 'about' && hasUpdate ? '关于/更新，有可用更新' : undefined}
                 >
                   <item.icon aria-hidden="true" />
                   <span>{item.label}</span>
+                  {item.id === 'about' && hasUpdate && (
+                    <span className="copis-working-settings-nav-update-dot" aria-label="有可用更新" />
+                  )}
                 </button>
               )
             })}
@@ -335,6 +349,7 @@ export function CopisWorkingSettingsPanel({ onClose }: CopisWorkingSettingsPanel
             {activeSection === 'migration' && <MigrationSettings />}
             {activeSection === 'storage' && <StorageSettings />}
             {activeSection === 'appearance' && <AppearanceSettings />}
+            {activeSection === 'about' && <AboutUpdatesSettings />}
           </div>
         </main>
       </div>

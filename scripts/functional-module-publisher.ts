@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 import { readFileSync, statSync } from 'node:fs'
 import type {
   FunctionalModuleArchitecture,
+  FunctionalModuleClientUpdate,
   FunctionalModuleFormat,
   FunctionalModuleManifest,
   FunctionalModuleName,
@@ -22,6 +23,7 @@ export interface FunctionalModuleBinaryInput {
 export interface FunctionalModuleReleaseInput {
   channel: string
   clientMinVersion?: string
+  clientUpdate?: FunctionalModuleClientUpdate
   publicBaseUrl: string
   prefix?: string
   modules: readonly FunctionalModuleBinaryInput[]
@@ -121,10 +123,14 @@ export function buildFunctionalModuleRelease(input: FunctionalModuleReleaseInput
     })
   }
 
+  const client = {
+    ...(input.clientMinVersion ? { minVersion: input.clientMinVersion } : {}),
+    ...(input.clientUpdate ? { update: input.clientUpdate } : {}),
+  }
   const manifest: FunctionalModuleManifest = {
     schema: 1,
     channel: input.channel,
-    ...(input.clientMinVersion ? { client: { minVersion: input.clientMinVersion } } : {}),
+    ...(Object.keys(client).length > 0 ? { client } : {}),
     platforms,
   }
   const manifestEntry = buildFunctionalModuleManifestUpload({
@@ -305,6 +311,9 @@ function validateReleaseInput(input: FunctionalModuleReleaseInput): void {
   if (input.clientMinVersion !== undefined && !isSemver(input.clientMinVersion)) {
     throw new Error(`发布 clientMinVersion 不合法: ${input.clientMinVersion}`)
   }
+  if (input.clientUpdate !== undefined) {
+    validateClientUpdate(input.clientUpdate)
+  }
   for (const module of input.modules) {
     if (!isSafeSegment(module.module)) throw new Error(`功能模块名称不合法: ${module.module}`)
     if (!isSemver(module.version)) throw new Error(`功能模块版本不合法: ${module.version}`)
@@ -330,6 +339,9 @@ function validateManifestUploadInput(input: FunctionalModuleManifestUploadInput)
   }
   if (manifest.client?.minVersion !== undefined && !isSemver(manifest.client.minVersion)) {
     throw new Error(`发布 manifest client.minVersion 不合法: ${manifest.client.minVersion}`)
+  }
+  if (manifest.client?.update !== undefined) {
+    validateClientUpdate(manifest.client.update)
   }
 
   const platforms = manifest.platforms as unknown
@@ -363,6 +375,24 @@ function validateManifestUploadArtifact(name: string, value: unknown): void {
     throw new Error(`发布 manifest 模块 entrypoint 不安全: ${name}`)
   }
   if (typeof value.required !== 'boolean') throw new Error(`发布 manifest 模块 required 不合法: ${name}`)
+}
+
+function validateClientUpdate(update: FunctionalModuleClientUpdate): void {
+  if (!isSemver(update.version)) {
+    throw new Error(`发布 client.update.version 不合法: ${update.version}`)
+  }
+  if (!update.url.startsWith('https://')) {
+    throw new Error('发布 client.update.url 必须使用 HTTPS')
+  }
+  if (typeof update.sha256 !== 'string' || !/^[a-f0-9]{64}$/i.test(update.sha256)) {
+    throw new Error('发布 client.update.sha256 不合法')
+  }
+  if (!Number.isSafeInteger(update.size) || update.size <= 0) {
+    throw new Error('发布 client.update.size 不合法')
+  }
+  if (update.releaseNotes !== undefined && typeof update.releaseNotes !== 'string') {
+    throw new Error('发布 client.update.releaseNotes 不合法')
+  }
 }
 
 function readBinaryMetadata(path: string): { size: number; sha256: string } {

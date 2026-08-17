@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { getPersistableTabState, openTab } from './tab-atoms'
+import { getPersistableTabState, openTab, resolveRenderedTabId } from './tab-atoms'
 import type { TabItem } from './tab-atoms'
 
 describe('会话入口持久化', () => {
@@ -33,6 +33,16 @@ describe('会话入口持久化', () => {
       tabs: [{ id: 'agent-1', type: 'agent', sessionId: 'agent-1', title: '新会话' }],
       activeTabId: 'agent-1',
     })
+  })
+
+  test('Given deferred 值指向已删除标签 When tabs 已更新 Then 回退到当前激活标签', () => {
+    const current: TabItem = { id: 'agent-2', type: 'agent', sessionId: 'agent-2', title: '新会话' }
+
+    expect(resolveRenderedTabId([current], 'agent-2', 'agent-1')).toBe('agent-2')
+  })
+
+  test('Given 当前激活标签也不存在 When tabs 已清空 Then 不渲染不存在的标签', () => {
+    expect(resolveRenderedTabId([], 'agent-1', 'agent-1')).toBeNull()
   })
 
   test('Given 查看使用教程 When 打开教程 Tab Then 教程入口不写入会话持久化状态', () => {

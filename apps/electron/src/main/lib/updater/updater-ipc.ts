@@ -10,6 +10,7 @@ import type { UpdateStatus } from './updater-types'
 import {
   cancelIdleInstall,
   checkForUpdates,
+  downloadAppUpdate,
   getUpdateStatus,
   installWhenIdle,
 } from './auto-updater'
@@ -22,6 +23,13 @@ export function registerUpdaterIpc(): void {
     UPDATER_IPC_CHANNELS.CHECK_FOR_UPDATES,
     async (): Promise<void> => {
       await checkForUpdates()
+    }
+  )
+
+  ipcMain.handle(
+    UPDATER_IPC_CHANNELS.DOWNLOAD,
+    async (): Promise<void> => {
+      await downloadAppUpdate()
     }
   )
 
