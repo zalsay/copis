@@ -203,6 +203,8 @@ interface AgentMessagesProps {
   onCompact?: () => void
   /** 是否显示助手头像头部，默认 true */
   showHeader?: boolean
+  /** 是否在历史选区菜单中显示 Agent 问答入口，默认 true */
+  allowAgentQuestion?: boolean
 }
 
 /** 空状态引导 — 使用 WelcomeEmptyState */
@@ -488,7 +490,7 @@ function AgentRunningIndicator({ startedAt }: { startedAt?: number }): React.Rea
   )
 }
 
-export function AgentMessages({ sessionId, sessionModelId, messagesLoaded, persistedSDKMessages, streaming, streamState, liveMessages, sessionPath, attachedDirs, stoppedByUser, onRetry, onRetryInNewSession, onRelinkProjectRoot, onRestoreProjectRoot, onFork, onRewind, onCreateTodo, onCompact, showHeader = true }: AgentMessagesProps): React.ReactElement {
+export function AgentMessages({ sessionId, sessionModelId, messagesLoaded, persistedSDKMessages, streaming, streamState, liveMessages, sessionPath, attachedDirs, stoppedByUser, onRetry, onRetryInNewSession, onRelinkProjectRoot, onRestoreProjectRoot, onFork, onRewind, onCreateTodo, onCompact, showHeader = true, allowAgentQuestion = true }: AgentMessagesProps): React.ReactElement {
   const userProfile = useAtomValue(userProfileAtom)
   const setMinimapCache = useSetAtom(tabMinimapCacheAtom)
   const historySelectionRootRef = React.useRef<HTMLDivElement>(null)
@@ -812,7 +814,7 @@ export function AgentMessages({ sessionId, sessionModelId, messagesLoaded, persi
           <StickyUserMessage userMessages={allUserMessagesData} />
         )}
       </Conversation>
-      <AgentHistorySelectionLayer sessionId={sessionId} rootRef={historySelectionRootRef} />
+      <AgentHistorySelectionLayer sessionId={sessionId} rootRef={historySelectionRootRef} allowAgentQuestion={allowAgentQuestion} />
     </div>
     </BasePathsProvider>
   )

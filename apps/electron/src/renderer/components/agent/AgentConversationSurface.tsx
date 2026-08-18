@@ -2800,7 +2800,8 @@ export function AgentConversationSurface({ sessionId, variant = 'main' }: AgentC
           onModelSelect={handleModelSelect}
           showChannelInTrigger
           useCopisLogo
-          useSharedOpenState
+          useSharedOpenState={!compact}
+          placement={compact ? 'composer' : 'dialog'}
         />
       </div>
       {sendControl}
@@ -2851,6 +2852,7 @@ export function AgentConversationSurface({ sessionId, variant = 'main' }: AgentC
             onRewind={handleRewindRequest}
             onCreateTodo={handleOpenReplyTodoDialog}
             onCompact={handleCompact}
+            allowAgentQuestion={!compact}
             showHeader={!compact}
           />
         )}
