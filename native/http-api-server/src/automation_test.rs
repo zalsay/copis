@@ -56,6 +56,44 @@ fn given_create_input_when_persisted_then_keeps_legacy_automations_json_contract
 }
 
 #[test]
+fn given_task_created_without_session_mode_when_persisted_then_defaults_to_reusing_its_session() {
+    let config_dir = temporary_config_dir("default-session-reuse");
+    let store = AutomationStore::open(config_dir.clone());
+
+    let created = store.create(create_input()).unwrap();
+
+    assert_eq!(created["sessionMode"], "reuse");
+    let raw: serde_json::Value = serde_json::from_str(&fs::read_to_string(config_dir.join("automations.json")).unwrap()).unwrap();
+    assert_eq!(raw["automations"][0]["sessionMode"], "reuse");
+    let _ = fs::remove_dir_all(config_dir);
+}
+
+#[test]
+fn given_legacy_daily_task_when_loaded_then_it_is_persisted_as_session_reuse() {
+    let config_dir = temporary_config_dir("migrate-session-reuse");
+    fs::write(
+        config_dir.join("automations.json"),
+        serde_json::to_vec_pretty(&json!({
+            "version": 2,
+            "automations": [{
+                "id": "automation-1", "name": "每日汇总", "prompt": "整理今日进展", "active": true,
+                "scheduleType": "daily", "intervalMinutes": 10, "timeOfDay": "09:30",
+                "channelId": "channel-1", "workspaceId": "workspace-1", "sessionMode": "daily",
+                "createdAt": 1, "updatedAt": 1, "nextRunAt": 2, "runHistory": []
+            }]
+        })).unwrap(),
+    ).unwrap();
+    let store = AutomationStore::open(config_dir.clone());
+
+    let listed = store.list().unwrap();
+
+    assert_eq!(listed[0]["sessionMode"], "reuse");
+    let raw: serde_json::Value = serde_json::from_str(&fs::read_to_string(config_dir.join("automations.json")).unwrap()).unwrap();
+    assert_eq!(raw["automations"][0]["sessionMode"], "reuse");
+    let _ = fs::remove_dir_all(config_dir);
+}
+
+#[test]
 fn given_completed_once_run_when_appended_then_disables_the_automation() {
     let config_dir = temporary_config_dir("run");
     let store = AutomationStore::open(config_dir.clone());

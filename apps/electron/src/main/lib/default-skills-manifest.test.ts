@@ -97,6 +97,8 @@ describe('默认 Skills 清单', () => {
     for (const requiredText of [
       'BrowserPageNavigate',
       'BrowserPageOpenTab',
+      'incognito: true',
+      '无痕页签不复用普通页签登录态',
       'BrowserPageObserve',
       'BrowserPageClick',
       'BrowserPageUpload',
@@ -129,6 +131,8 @@ describe('默认 Skills 清单', () => {
     expect(content).toContain('Composer“高级授权”')
     expect(content).toContain('直接执行敏感字段操作')
     expect(content).toContain('BrowserPageUpload')
+    expect(content).toContain('incognito: true')
+    expect(content).toContain('不复用普通页签登录态')
     expect(content).not.toContain('敏感字段必须由用户亲自处理')
     expect(content).not.toContain('跨站地址仍需用户单次确认')
   })

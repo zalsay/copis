@@ -256,6 +256,8 @@ export interface BrowserWorkflowApproval {
   approvedAt?: number
   approvedBySessionId?: string
   draftHash?: string
+  /** 已确认 Playwright 脚本内容的 SHA-256 摘要。 */
+  playwrightScriptSha256?: string
 }
 
 export interface BrowserWorkflowVersion {

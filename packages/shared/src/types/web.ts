@@ -18,6 +18,10 @@ export interface WebTabState {
   canGoBack: boolean
   /** 是否可以前进。 */
   canGoForward: boolean
+  /** 是否为无痕页签。 */
+  isIncognito: boolean
+  /** 是否可以将当前空白页签切换为无痕页签。 */
+  canActivateIncognito: boolean
 }
 
 /** 网页页签集合及当前激活项。 */
@@ -94,6 +98,8 @@ export interface CreateWebTabInput {
   url?: string
   /** 主进程内部可选的 Chromium Session partition；Renderer 输入会被主进程校验。 */
   partition?: string
+  /** 是否创建使用临时 Session 的无痕页签。 */
+  incognito?: boolean
   /** 是否创建后立即激活，缺省为 true。 */
   activate?: boolean
 }
@@ -134,6 +140,7 @@ export const WEB_IPC_CHANNELS = {
   LIST: 'web-tabs:list',
   CREATE: 'web-tabs:create',
   ACTIVATE: 'web-tabs:activate',
+  INCOGNITO_ACTIVATE: 'web-tabs:incognito-activate',
   CLOSE: 'web-tabs:close',
   NAVIGATE: 'web-tabs:navigate',
   UPDATE_BOUNDS: 'web-tabs:update-bounds',

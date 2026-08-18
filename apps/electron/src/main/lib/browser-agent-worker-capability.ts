@@ -1,8 +1,6 @@
 import { randomBytes, timingSafeEqual } from 'node:crypto'
 import type { PiWorkerBrowserCapability } from './agent-rpc-protocol'
 
-const BROWSER_AGENT_CAPABILITY_TTL_MS = 30 * 60_000
-
 export type BrowserAgentCapabilityTrigger = 'user' | 'automation' | 'delegation'
 
 interface BrowserAgentWorkerCapabilityRecord {
@@ -10,7 +8,6 @@ interface BrowserAgentWorkerCapabilityRecord {
   tabId?: string
   token: string
   triggeredBy: BrowserAgentCapabilityTrigger
-  expiresAt: number
 }
 
 export class BrowserAgentWorkerCapabilityError extends Error {
@@ -49,7 +46,6 @@ export function issueBrowserAgentWorkerCapability(input: {
     tabId: input.tabId,
     token,
     triggeredBy: input.triggeredBy,
-    expiresAt: Date.now() + BROWSER_AGENT_CAPABILITY_TTL_MS,
   })
   return { endpoint: '/api/internal/agent/browser-tool', token }
 }
@@ -62,10 +58,6 @@ export function assertBrowserAgentWorkerCapability(input: {
   const record = capabilities.get(input.sessionId)
   if (!record) {
     throw new BrowserAgentWorkerCapabilityError('browser_capability_stale', 'AI浏览器 capability 已失效')
-  }
-  if (record.expiresAt <= Date.now()) {
-    capabilities.delete(input.sessionId)
-    throw new BrowserAgentWorkerCapabilityError('browser_capability_stale', 'AI浏览器 capability 已过期')
   }
   if (record.sessionId !== input.sessionId || record.tabId !== input.tabId || !tokensMatch(record.token, input.token)) {
     throw new BrowserAgentWorkerCapabilityError('browser_capability_invalid', 'AI浏览器 capability 不正确')

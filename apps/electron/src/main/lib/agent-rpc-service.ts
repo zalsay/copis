@@ -39,8 +39,8 @@ import {
   updateAgentSessionMeta,
   getAgentSessionSDKMessages,
 } from './agent-session-manager'
-import { getSessionContextUsageRatio } from './agent-session-usage'
 import {
+  ensureAgentWorkspaceBrowserSessionPath,
   ensureAgentWorkspaceContextDir,
   getAgentWorkspace,
   getAgentWorkspaceCopisPath,
@@ -298,17 +298,19 @@ function buildRustFileAccessPolicy(input: {
 }): PiWorkerFileAccessPolicy {
   const projectRoot = getProjectFilesPath(input.workspace.slug)
   const sessionWorkspaceRoot = getAgentSessionWorkspacePath(input.workspace.slug, input.sessionId)
+  const browserSessionRoot = ensureAgentWorkspaceBrowserSessionPath(input.workspace, input.sessionId)
   const workspaceReadRoots = [
     input.agentCwd,
     ...getAgentWorkspaceReadableRoots(input.workspace),
     input.workspaceWriteRoot,
+    browserSessionRoot,
     sessionWorkspaceRoot,
     input.workspaceSkillsDir,
     ...input.additionalDirectories,
     ...getWorkspaceAttachedDirectories(input.workspace.slug),
   ]
   const workspaceCopisRoot = getAgentWorkspaceCopisPath(input.workspace)
-  const writeRoots = [projectRoot, workspaceCopisRoot, sessionWorkspaceRoot]
+  const writeRoots = [projectRoot, workspaceCopisRoot, browserSessionRoot, sessionWorkspaceRoot]
 
   return {
     readRoots: uniqueAbsolutePaths(workspaceReadRoots),
@@ -317,6 +319,7 @@ function buildRustFileAccessPolicy(input: {
       ...getWorkspaceAttachedFiles(input.workspace.slug),
     ]),
     writeRoots: uniqueAbsolutePaths(writeRoots),
+    browserSessionRoot,
     permissionMode: input.permissionMode,
     advancedAuthorization: input.advancedAuthorization,
   }
@@ -548,6 +551,8 @@ export async function prepareAgentRpcRun(input: AgentSendInput): Promise<PiWorke
     workspaceWriteRoot,
     permissionMode: effectivePermissionMode,
     collaborationAvailable: false,
+    // 与 Pi 内置工具保持一致：只有用户主会话可使用专家团队，委派/自动化会话只执行成员或任务本身。
+    expertTeamAvailable: (input.triggeredBy ?? 'user') === 'user' && Boolean(workspaceId && workspaceSlug),
     currentModelId: modelId,
     workingMode,
     memoryPolicy,
@@ -634,14 +639,6 @@ export async function prepareAgentRpcRun(input: AgentSendInput): Promise<PiWorke
   return { sessionId: input.sessionId, query }
 }
 
-function isSameLocalDay(left: number, right: number): boolean {
-  const leftDate = new Date(left)
-  const rightDate = new Date(right)
-  return leftDate.getFullYear() === rightDate.getFullYear()
-    && leftDate.getMonth() === rightDate.getMonth()
-    && leftDate.getDate() === rightDate.getDate()
-}
-
 function automationContext(automation: Automation): string {
   return `这是 Copis 定时任务「${automation.name}」的自动执行（ID: ${automation.id}）。这本身就是定时任务，不要建议用户再创建定时任务。直接执行任务即可。如发现本任务连续失败、输出价值低、频率不合适或提示词不完整，可以使用 automation 工具读取并更新当前任务。`
 }
@@ -662,15 +659,7 @@ export async function prepareAutomationRpcRun(
   const lastSession = automation.lastSessionId
     ? getAgentSessionMeta(automation.lastSessionId)
     : undefined
-  if (lastSession && !lastSession.automationGraduated) {
-    if (automation.sessionMode === 'reuse') {
-      sessionId = lastSession.id
-    } else if (automation.lastRunAt
-      && isSameLocalDay(automation.lastRunAt, runAt)) {
-      const usage = getSessionContextUsageRatio(lastSession.id)
-      if (usage === undefined || usage < 0.7) sessionId = lastSession.id
-    }
-  }
+  if (lastSession && !lastSession.automationGraduated) sessionId = lastSession.id
 
   if (!sessionId) {
     const session = createAgentSession(

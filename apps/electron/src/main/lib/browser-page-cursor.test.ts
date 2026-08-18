@@ -67,6 +67,12 @@ describe('AI 浏览器模拟鼠标脚本', () => {
     expect(resultIndex).toBeGreaterThan(moveIndex)
   })
 
+  test('Given WebContentsView 未调度动画帧 When 注入指针 Then 独立计时器仍会结束等待', () => {
+    const source = buildBrowserPageCursorSource({ phase: 'move', x: 120, y: 80 })
+
+    expect(source).toContain('window.setTimeout(finish, 120)')
+  })
+
   test('Given 透明矢量指针素材 When 注入页面 Then 使用 SVG data URL 且不嵌入 PNG 背景', () => {
     const source = buildBrowserPageCursorSource({ phase: 'move', x: 120, y: 80 })
 

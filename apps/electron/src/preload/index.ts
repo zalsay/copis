@@ -282,6 +282,8 @@ export interface ElectronAPI {
     create: (input?: CreateWebTabInput) => Promise<WebTabsSnapshot>
     /** 激活网页页签，传 null 返回 Copis 首页。 */
     activate: (tabId: string | null) => Promise<WebTabsSnapshot>
+    /** 将未访问地址的空白页签切换为无痕页签。 */
+    activateIncognito: (tabId: string) => Promise<WebTabsSnapshot>
     /** 关闭网页页签。 */
     close: (tabId: string) => Promise<WebTabsSnapshot>
     /** 导航到网页地址。 */
@@ -1332,6 +1334,7 @@ const electronAPI: ElectronAPI = {
     list: () => ipcRenderer.invoke(WEB_IPC_CHANNELS.LIST) as Promise<WebTabsSnapshot>,
     create: (input?: CreateWebTabInput) => ipcRenderer.invoke(WEB_IPC_CHANNELS.CREATE, input) as Promise<WebTabsSnapshot>,
     activate: (tabId: string | null) => ipcRenderer.invoke(WEB_IPC_CHANNELS.ACTIVATE, tabId) as Promise<WebTabsSnapshot>,
+    activateIncognito: (tabId: string) => ipcRenderer.invoke(WEB_IPC_CHANNELS.INCOGNITO_ACTIVATE, tabId) as Promise<WebTabsSnapshot>,
     close: (tabId: string) => ipcRenderer.invoke(WEB_IPC_CHANNELS.CLOSE, tabId) as Promise<WebTabsSnapshot>,
     navigate: (input: NavigateWebTabInput) => ipcRenderer.invoke(WEB_IPC_CHANNELS.NAVIGATE, input) as Promise<WebTabsSnapshot>,
     updateBounds: (input: UpdateWebTabBoundsInput) => ipcRenderer.invoke(WEB_IPC_CHANNELS.UPDATE_BOUNDS, input) as Promise<void>,

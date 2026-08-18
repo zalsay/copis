@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process'
+import { execFileSync, spawn } from 'node:child_process'
 import { existsSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
@@ -9,6 +9,15 @@ const tempRoot = mkdtempSync(join(tmpdir(), 'copis-browser-workflow-e2e-'))
 const bundledMain = join(tempRoot, 'browser-workflow-e2e-main.cjs')
 const esbuildBinary = join(repositoryRoot, 'node_modules/.bin/esbuild')
 const electronBinary = process.env.ELECTRON_BINARY ?? join(repositoryRoot, 'node_modules/.bin/electron')
+
+function resolveNodeExecutable(): string {
+  if (process.env.COPIS_E2E_NODE_EXECUTABLE) return process.env.COPIS_E2E_NODE_EXECUTABLE
+  const lookup = process.platform === 'win32' ? 'where.exe' : 'which'
+  const output = execFileSync(lookup, ['node'], { encoding: 'utf8' }).trim()
+  const executable = output.split(/\r?\n/, 1)[0]
+  if (!executable) throw new Error('找不到 E2E 所需的 Node.js 运行时')
+  return executable
+}
 
 function run(
   command: string,
@@ -58,6 +67,7 @@ try {
   } else {
     const e2eUserData = join(tempRoot, 'user-data')
     const e2eHome = join(tempRoot, 'home')
+    const nodeExecutable = resolveNodeExecutable()
     exitCode = await run(
       electronBinary,
       [bundledMain],
@@ -68,6 +78,7 @@ try {
         COPIS_BROWSER_WORKFLOW_E2E: '1',
         COPIS_BROWSER_WORKFLOW_E2E_VISIBLE: '1',
         COPIS_E2E_USER_DATA: e2eUserData,
+        COPIS_E2E_NODE_EXECUTABLE: nodeExecutable,
         COPIS_REPO_ROOT: repositoryRoot,
         ELECTRON_DISABLE_SECURITY_WARNINGS: '1',
       },

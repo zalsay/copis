@@ -134,6 +134,7 @@ describe('Browser Agent 主进程工具 dispatcher', () => {
       tabId: 'tab-2',
       url,
       title: '小红书',
+      incognito: false,
     }))
     const requestSingleApproval = mock(async () => false)
     const service = createBrowserAgentToolService({
@@ -157,7 +158,36 @@ describe('Browser Agent 主进程工具 dispatcher', () => {
       }),
     })
     expect(requestSingleApproval).not.toHaveBeenCalled()
-    expect(openBrowserAgentTab).toHaveBeenCalledWith('browser-session', 'https://www.xiaohongshu.com/')
+    expect(openBrowserAgentTab).toHaveBeenCalledWith('browser-session', 'https://www.xiaohongshu.com/', false)
+  })
+
+  test('Given incognito=true When Agent opens a tab Then dispatcher requests an isolated session', async () => {
+    const capability = issueBrowserAgentWorkerCapability({
+      sessionId: 'browser-session',
+      triggeredBy: 'user',
+    })
+    const openBrowserAgentTab = mock((_sessionId: string, url: string, incognito?: boolean) => ({
+      tabId: 'tab-2',
+      url,
+      title: '无痕页签',
+      incognito: incognito === true,
+    }))
+    const service = createBrowserAgentToolService({
+      openBrowserAgentTab,
+      getBrowserAgentContext: () => undefined,
+      requestSingleApproval: mock(async () => false),
+    })
+
+    await expect(service.executeWorker({
+      sessionId: 'browser-session',
+      capabilityToken: capability.token,
+      toolCallId: 'open-incognito-tab-call',
+      toolName: 'BrowserPageOpenTab',
+      toolInput: { url: 'https://private.example.test/', incognito: true },
+    })).resolves.toMatchObject({
+      value: expect.objectContaining({ ok: true, incognito: true, message: expect.stringContaining('无痕') }),
+    })
+    expect(openBrowserAgentTab).toHaveBeenCalledWith('browser-session', 'https://private.example.test/', true)
   })
 
   for (const triggeredBy of ['automation', 'delegation'] as const) {
@@ -170,6 +200,7 @@ describe('Browser Agent 主进程工具 dispatcher', () => {
         tabId: 'tab-2',
         url: 'https://www.xiaohongshu.com/',
         title: '小红书',
+        incognito: false,
       }))
       const requestSingleApproval = mock(async () => true)
       const service = createBrowserAgentToolService({
@@ -487,6 +518,7 @@ describe('Browser Agent 主进程工具 dispatcher', () => {
       tabId: 'tab-2',
       url,
       title: 'New tab',
+      incognito: false,
     }))
     const requestSingleApproval = mock(async () => true)
     const service = createBrowserAgentToolService({
@@ -518,7 +550,7 @@ describe('Browser Agent 主进程工具 dispatcher', () => {
       }),
     })
     expect(requestSingleApproval).not.toHaveBeenCalled()
-    expect(openBrowserAgentTab).toHaveBeenCalledWith('browser-session', 'https://example.com/new?token=secret')
+    expect(openBrowserAgentTab).toHaveBeenCalledWith('browser-session', 'https://example.com/new?token=secret', false)
   })
 
   test('Given a user Agent opens a cross-origin tab When page controls are authorized Then it opens the new tab without a single approval', async () => {
@@ -531,6 +563,7 @@ describe('Browser Agent 主进程工具 dispatcher', () => {
       tabId: 'tab-2',
       url,
       title: 'Other tab',
+      incognito: false,
     }))
     const requestSingleApproval = mock(async () => false)
     const service = createBrowserAgentToolService({
@@ -557,7 +590,7 @@ describe('Browser Agent 主进程工具 dispatcher', () => {
       value: expect.objectContaining({ ok: true, tabId: 'tab-2', url: 'https://other.example.test/new', title: 'Other tab' }),
     })
     expect(requestSingleApproval).not.toHaveBeenCalled()
-    expect(openBrowserAgentTab).toHaveBeenCalledWith('browser-session', 'https://other.example.test/new')
+    expect(openBrowserAgentTab).toHaveBeenCalledWith('browser-session', 'https://other.example.test/new', false)
   })
 
   test('Given an automation Agent opens a cross-origin tab When approval is rejected Then it does not open the new tab', async () => {
@@ -570,6 +603,7 @@ describe('Browser Agent 主进程工具 dispatcher', () => {
       tabId: 'tab-2',
       url: 'https://other.example.test/new',
       title: 'Other tab',
+      incognito: false,
     }))
     const requestSingleApproval = mock(async () => false)
     const service = createBrowserAgentToolService({
@@ -603,7 +637,7 @@ describe('Browser Agent 主进程工具 dispatcher', () => {
       tabId: 'tab-1',
       triggeredBy: 'user',
     })
-    const openBrowserAgentTab = mock(() => ({ tabId: 'tab-2', url: 'https://other.example.test', title: 'Other tab' }))
+    const openBrowserAgentTab = mock(() => ({ tabId: 'tab-2', url: 'https://other.example.test', title: 'Other tab', incognito: false }))
     const service = createBrowserAgentToolService({
       openBrowserAgentTab,
       getBrowserAgentContext: () => ({ tabId: 'tab-1' }),

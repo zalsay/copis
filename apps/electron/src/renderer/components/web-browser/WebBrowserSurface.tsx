@@ -1,6 +1,6 @@
 import * as React from 'react'
 import { useAtom, useAtomValue, useSetAtom } from 'jotai'
-import { ArrowLeft, ArrowRight, CircleStop, ExternalLink, Globe2, RotateCw, ShieldCheck } from 'lucide-react'
+import { ArrowLeft, ArrowRight, CircleStop, ExternalLink, Glasses, Globe2, RotateCw, ShieldCheck } from 'lucide-react'
 import type { WebTabsSnapshot } from '@copis/shared'
 import { browserAgentPanelOpenAtom, browserAgentPanelWidthAtom, browserAgentSessionIdAtom, browserWorkflowStatusAtom } from '@/atoms/browser-agent'
 import { activeWebTabAtom, activeWebTabIdAtom, webTabsAtom } from '@/atoms/web-tabs'
@@ -30,6 +30,7 @@ import {
 import { toast } from 'sonner'
 import { WebBookmarksPopover } from './WebBookmarksPopover'
 import { BrowserAgentPanel } from './BrowserAgentPanel'
+import { getIncognitoActionState } from './browser-incognito-ui'
 
 function applySnapshot(
   snapshot: WebTabsSnapshot,
@@ -210,6 +211,18 @@ export function WebBrowserSurface(): React.ReactElement {
     if (!activeTabId) return
     apply(await window.electronAPI.webTabs.reload(activeTabId))
   }, [activeTabId, apply])
+
+  const incognitoAction = React.useMemo(() => getIncognitoActionState(activeTab), [activeTab])
+
+  const handleActivateIncognito = React.useCallback(async (): Promise<void> => {
+    if (!activeTabId || incognitoAction.disabled || incognitoAction.active) return
+    try {
+      apply(await window.electronAPI.webTabs.activateIncognito(activeTabId))
+      toast.success('已启用无痕模式')
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : '无法启用无痕模式')
+    }
+  }, [activeTabId, apply, incognitoAction.active, incognitoAction.disabled])
 
   const handleOpenExternal = React.useCallback((): void => {
     if (!activeTab || activeTab.url === 'about:blank') return
@@ -761,7 +774,12 @@ export function WebBrowserSurface(): React.ReactElement {
         <WebBookmarksPopover activeTab={activeTab} onNavigate={handleBookmarkNavigate} />
 
         <form className="ml-1 flex min-w-0 flex-1 items-center" onSubmit={(event) => void handleNavigate(event)}>
-          <div className="flex h-8 min-w-0 flex-1 items-center gap-2 rounded-md border border-border/70 bg-input-surface px-3 shadow-xs focus-within:border-primary/50 focus-within:ring-2 focus-within:ring-ring/20">
+          <div
+            className={cn(
+              'flex h-8 min-w-0 flex-1 items-center gap-2 rounded-md border border-border/70 pl-3 pr-0 shadow-xs',
+              activeTab.isIncognito ? 'bg-[var(--ui-primary-background)]' : 'bg-input-surface',
+            )}
+          >
             {activeTab.url.startsWith('https://') ? (
               <ShieldCheck className="size-3.5 shrink-0 text-emerald-600 dark:text-emerald-400" />
             ) : (
@@ -776,6 +794,32 @@ export function WebBrowserSurface(): React.ReactElement {
               placeholder="输入网址或搜索内容"
               spellCheck={false}
             />
+            {incognitoAction.visible ? (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon-sm"
+                    aria-label={incognitoAction.label}
+                    disabled={incognitoAction.disabled}
+                    className={cn(
+                      'size-7 shrink-0 rounded-sm hover:bg-transparent',
+                      incognitoAction.active
+                        ? 'text-[var(--ui-primary)] hover:text-[var(--ui-primary)]'
+                        : 'text-muted-foreground',
+                    )}
+                    onClick={() => void handleActivateIncognito()}
+                  >
+                    <Glasses className="size-4" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">
+                  <div>{incognitoAction.label}</div>
+                  <div className="text-muted-foreground">{incognitoAction.description}</div>
+                </TooltipContent>
+              </Tooltip>
+            ) : null}
           </div>
         </form>
 

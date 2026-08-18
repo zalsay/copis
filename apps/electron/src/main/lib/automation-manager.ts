@@ -14,6 +14,7 @@ import { getAutomationsPath } from './config-paths'
 import {
   AUTOMATION_MAX_HISTORY,
   AUTOMATION_DEFAULT_PERMISSION_MODE,
+  AUTOMATION_DEFAULT_SESSION_MODE,
   type Automation,
   type AutomationRun,
   type AutomationWorkflowRunReference,
@@ -32,10 +33,9 @@ const pendingWorkflowRuns = new Map<string, AutomationWorkflowRunReference[]>()
 
 /**
  * 兼容历史字段：
- * - sessionMode：v1 用过的 'new' 值统一改为 'daily'。
+ * - sessionMode：历史值统一改为 'reuse'。
  * - permissionMode：已移除的 'auto' 统一改为默认完全自动模式。
- * - v1 默认值 'new' 的语义是「每次新建会话」；v2 的 'daily' 默认行为是「同日复用、跨日新建」，
- *   高频任务可少占左侧栏 tab，低频任务（间隔 ≥ 24h）的实际行为等价于「每次新建」，对用户无负面影响。
+ * - 定时任务首次执行创建专属会话，后续触发持续复用，确保长期任务上下文连续。
  * - 同时把 index.version bump 到当前值，避免下次启动反复迁移。
  * 返回是否发生改动，由调用方决定是否写回磁盘。
  */
@@ -46,8 +46,8 @@ function migrateLegacyFields(data: AutomationsIndex): boolean {
       a.agentRuntime = 'pi'
       changed = true
     }
-    if ((a.sessionMode as string | undefined) === 'new') {
-      a.sessionMode = 'daily'
+    if (a.sessionMode !== 'reuse') {
+      a.sessionMode = AUTOMATION_DEFAULT_SESSION_MODE
       changed = true
     }
     const permissionMode = a.permissionMode as string | undefined
@@ -106,7 +106,7 @@ function readIndex(): AutomationsIndex {
   cachedIndex = data
   if (migrated) {
     writeIndex(data)
-    console.log('[定时任务] 索引已迁移至最新版本（旧 runtime → pi，sessionMode: new → daily，permissionMode: auto → bypassPermissions）')
+    console.log('[定时任务] 索引已迁移至最新版本（旧 runtime → pi，sessionMode → reuse，permissionMode: auto → bypassPermissions）')
   }
   return cachedIndex
 }
@@ -284,7 +284,7 @@ export function createAutomation(input: CreateAutomationInput): Automation {
     modelId: input.modelId,
     workspaceId: input.workspaceId,
     permissionMode: input.permissionMode ?? AUTOMATION_DEFAULT_PERMISSION_MODE,
-    sessionMode: input.sessionMode,
+    sessionMode: AUTOMATION_DEFAULT_SESSION_MODE,
     notificationTargets: input.notificationTargets,
     sourceSessionId: input.sourceSessionId,
     createdAt: now,
@@ -317,7 +317,7 @@ export function updateAutomation(input: UpdateAutomationInput): Automation | und
     target.workspaceId = input.workspaceId || undefined
   }
   if (input.permissionMode !== undefined) target.permissionMode = input.permissionMode
-  if (input.sessionMode !== undefined) target.sessionMode = input.sessionMode
+  if (input.sessionMode !== undefined) target.sessionMode = AUTOMATION_DEFAULT_SESSION_MODE
   if (input.notificationTargets !== undefined) target.notificationTargets = input.notificationTargets
   if (input.maxRuns !== undefined) applyMaxRunsUpdate(target, input.maxRuns)
 

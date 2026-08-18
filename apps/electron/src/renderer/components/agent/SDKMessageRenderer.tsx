@@ -58,7 +58,6 @@ import { agentSessionPendingFilesAtom, agentSessionsAtom, agentWorkspacesAtom } 
 import { activeSessionIdAtom } from '@/atoms/tab-atoms'
 import { automationsAtom, automationFormAtom, automationToDraft } from '@/atoms/automation-atoms'
 import { activeViewAtom } from '@/atoms/active-view'
-import { planningTabAtom } from '@/atoms/planning-atoms'
 import { environmentCheckDialogOpenAtom } from '@/atoms/environment'
 import { workingSettingsOpenAtom } from '@/atoms/working-atoms'
 import { useOpenPreview } from '@/components/diff/preview-opener'
@@ -889,7 +888,6 @@ function ScheduledRunBadge(): React.ReactElement {
   const automations = useAtomValue(automationsAtom)
   const setForm = useSetAtom(automationFormAtom)
   const setActiveView = useSetAtom(activeViewAtom)
-  const setPlanningTab = useSetAtom(planningTabAtom)
 
   const session = sessions.find((s) => s.id === activeSessionId)
   const automation = session?.sourceAutomationId && !session.sourceDelegationId
@@ -898,8 +896,7 @@ function ScheduledRunBadge(): React.ReactElement {
 
   const handleClick = (): void => {
     if (!automation) return
-    setActiveView('planning')
-    setPlanningTab('automations')
+    setActiveView('automations')
     setForm({
       open: true,
       draft: automationToDraft(automation),

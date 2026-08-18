@@ -33,6 +33,7 @@ const MODULE_DEFINITIONS: readonly FunctionalModuleDefinition[] = [
   { name: 'rust-http-api', displayName: '系统核心模块', required: true },
   { name: 'officecli', displayName: 'Office 文档支持', required: true },
   { name: 'alipay-bot', displayName: '支付宝智能体 CLI', required: true },
+  { name: 'playwright-core', displayName: '浏览器自动化内核', required: true },
 ]
 
 export type FunctionalModuleFetch = (

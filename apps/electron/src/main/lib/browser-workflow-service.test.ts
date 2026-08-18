@@ -2,7 +2,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, mock, test } from 'b
 import { mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { AgentSessionMeta, AgentWorkspace } from '@copis/shared'
+import type { AgentSessionMeta, AgentWorkspace, BrowserWorkflowSaveInput } from '@copis/shared'
 import { assertBrowserAgentWorkerCapability, issueBrowserAgentWorkerCapability } from './browser-agent-worker-capability'
 
 interface TestBrowserPageAuthorizations {
@@ -45,12 +45,44 @@ const updateSettings = mock((updates: { browserPageAuthorizations?: TestBrowserP
   Object.assign(settings, updates)
   return settings
 })
-let currentTab = { id: 'tab-1', url: 'https://example.com/account?tab=1', title: 'Account' }
+let currentTab: { id: string; url: string; title: string; isIncognito?: boolean } = { id: 'tab-1', url: 'https://example.com/account?tab=1', title: 'Account', isIncognito: false }
+const createdWebTabInputs: Array<{ url?: string; incognito?: boolean; activate?: boolean }> = []
 const unavailableTabIds = new Set<string>()
+const rustRecordingStarts: Array<Record<string, unknown>> = []
+const promotedWorkflowTabIds: string[] = []
+let lifecycleListener: ((event: { type: string; tabId: string; snapshot: { tabs: unknown[]; activeTabId: string | null } }) => void) | undefined
+let cdpEventSubscriptionCount = 0
+let cdpDetachSubscriptionCount = 0
+let rustRecordingContent: string | undefined
+const persistenceEvents: string[] = []
+const writeBrowserWorkflowDraftMarkdown = mock((_workspaceId: string) => {
+  persistenceEvents.push('draft')
+})
+const saveBrowserWorkflow = mock((input: BrowserWorkflowSaveInput) => {
+  persistenceEvents.push('json')
+  return {
+    schemaVersion: 1 as const,
+    id: input.version.workflowId,
+    workspaceId: input.workspaceId,
+    name: input.name,
+    description: input.description,
+    status: 'ready' as const,
+    currentVersion: input.version.version,
+    profileId: 'copis-web',
+    allowedOrigins: input.allowedOrigins,
+    unattendedAllowed: input.unattendedAllowed === true,
+    createdAt: input.version.createdAt,
+    updatedAt: input.version.createdAt,
+  }
+})
+const promoteBrowserWorkflowDraftMarkdown = mock((_workspaceId: string, _workflowId: string) => {
+  persistenceEvents.push('workflow')
+})
 
 mock.module('./agent-session-manager', () => ({ getAgentSessionMeta, updateAgentSessionMeta }))
 mock.module('./settings-service', () => ({ getSettings, updateSettings }))
 mock.module('./agent-workspace-manager', () => ({
+  ensureAgentWorkspaceBrowserSessionPath: (_workspace: AgentWorkspace, sessionId: string) => join(uploadProjectDir, 'browser', 'agent-workspaces', sessionId),
   getAgentWorkspace: () => workspace,
   getAgentWorkspaceWritableRoot: () => uploadProjectDir,
   getProjectFilesPath: () => uploadProjectDir,
@@ -62,25 +94,54 @@ mock.module('./config-paths', () => ({
 }))
 mock.module('./browser-workflow-store', () => ({
   getBrowserWorkflow: () => undefined,
-  saveBrowserWorkflow: () => undefined,
+  saveBrowserWorkflow,
+  writeBrowserWorkflowDraftMarkdown,
+  promoteBrowserWorkflowDraftMarkdown,
 }))
 mock.module('./rust-browser-recording-client', () => ({
   appendRustBrowserRecordingEvent: () => Promise.resolve(),
   cancelRustBrowserRecording: () => Promise.resolve(),
   finishRustBrowserRecording: () => Promise.resolve(),
-  readRustBrowserRecording: () => Promise.resolve(undefined),
-  startRustBrowserRecording: () => Promise.resolve(undefined),
+  readRustBrowserRecording: () => Promise.resolve(rustRecordingContent),
+  releaseRustBrowserRecording: () => Promise.resolve(),
+  startRustBrowserRecording: (input: Record<string, unknown>) => {
+    rustRecordingStarts.push(input)
+    return Promise.resolve(undefined)
+  },
 }))
 mock.module('./web-tab-manager', () => ({
-  createWebTab: (input: { url?: string } = {}) => {
-    currentTab = { id: 'tab-2', url: input.url ?? 'https://new.example.test', title: 'New tab' }
+  createWebTab: (input: { url?: string; incognito?: boolean; activate?: boolean } = {}) => {
+    createdWebTabInputs.push(input)
+    currentTab = { id: 'tab-2', url: input.url ?? 'https://new.example.test', title: 'New tab', isIncognito: input.incognito === true }
     return { tabs: [currentTab], activeTabId: 'tab-2' }
   },
   getWebTabState: (tabId: string) => unavailableTabIds.has(tabId) ? undefined : currentTab,
-  sendWebTabCdpCommandInternal: () => Promise.resolve(undefined),
-  subscribeWebTabCdpEvents: () => () => undefined,
-  subscribeWebTabCdpDetach: () => () => undefined,
-  subscribeWebTabLifecycle: () => () => undefined,
+  promoteWorkflowWebTab: (tabId: string) => {
+    promotedWorkflowTabIds.push(tabId)
+    currentTab = { id: tabId, url: 'https://example.com/account?tab=1', title: 'Workflow failure' }
+    return currentTab
+  },
+  sendWebTabCdpCommandInternal: (command: { method: string }) => {
+    if (command.method === 'Page.getFrameTree') {
+      return Promise.resolve({ frameTree: { frame: { id: 'frame-1' } } })
+    }
+    if (command.method === 'Page.createIsolatedWorld') {
+      return Promise.resolve({ executionContextId: 1 })
+    }
+    return Promise.resolve(undefined)
+  },
+  subscribeWebTabCdpEvents: () => {
+    cdpEventSubscriptionCount += 1
+    return () => undefined
+  },
+  subscribeWebTabCdpDetach: () => {
+    cdpDetachSubscriptionCount += 1
+    return () => undefined
+  },
+  subscribeWebTabLifecycle: (listener: typeof lifecycleListener) => {
+    lifecycleListener = listener
+    return () => { lifecycleListener = undefined }
+  },
 }))
 
 let bindBrowserAgentContext: typeof import('./browser-workflow-service')['bindBrowserAgentContext']
@@ -91,6 +152,11 @@ let getBrowserAgentSessionIdForTab: typeof import('./browser-workflow-service')[
 let getBrowserPageControlMode: typeof import('./browser-workflow-service')['getBrowserPageControlMode']
 let setBrowserPageControlMode: typeof import('./browser-workflow-service')['setBrowserPageControlMode']
 let openBrowserAgentTab: typeof import('./browser-workflow-service')['openBrowserAgentTab']
+let handoffBrowserWorkflowFailure: (sessionId: string, tabId: string) => { tabId: string; url: string; title: string; incognito: boolean }
+let startBrowserWorkflowRecording: typeof import('./browser-workflow-service')['startBrowserWorkflowRecording']
+let stopBrowserWorkflowRecording: typeof import('./browser-workflow-service')['stopBrowserWorkflowRecording']
+let submitBrowserWorkflowDraft: typeof import('./browser-workflow-service')['submitBrowserWorkflowDraft']
+let approveBrowserWorkflowDraft: typeof import('./browser-workflow-service')['approveBrowserWorkflowDraft']
 let resolveBrowserPageUploadPaths: (sessionId: string, paths: string[]) => string[]
 let refreshBrowserWorkflowStatus: typeof import('./browser-workflow-service')['refreshBrowserWorkflowStatus']
 let subscribeBrowserWorkflowStatus: typeof import('./browser-workflow-service')['subscribeBrowserWorkflowStatus']
@@ -105,6 +171,13 @@ beforeAll(async () => {
   getBrowserPageControlMode = service.getBrowserPageControlMode
   setBrowserPageControlMode = service.setBrowserPageControlMode
   openBrowserAgentTab = service.openBrowserAgentTab
+  handoffBrowserWorkflowFailure = (service as unknown as {
+    handoffBrowserWorkflowFailure: (sessionId: string, tabId: string) => { tabId: string; url: string; title: string; incognito: boolean }
+  }).handoffBrowserWorkflowFailure
+  startBrowserWorkflowRecording = service.startBrowserWorkflowRecording
+  stopBrowserWorkflowRecording = service.stopBrowserWorkflowRecording
+  submitBrowserWorkflowDraft = service.submitBrowserWorkflowDraft
+  approveBrowserWorkflowDraft = service.approveBrowserWorkflowDraft
   resolveBrowserPageUploadPaths = (service as unknown as {
     resolveBrowserPageUploadPaths: (sessionId: string, paths: string[]) => string[]
   }).resolveBrowserPageUploadPaths
@@ -118,8 +191,19 @@ afterAll(() => {
 
 beforeEach(() => {
   settings.browserPageAuthorizations = {}
-  currentTab = { id: 'tab-1', url: 'https://example.com/account?tab=1', title: 'Account' }
+  currentTab = { id: 'tab-1', url: 'https://example.com/account?tab=1', title: 'Account', isIncognito: false }
+  createdWebTabInputs.length = 0
   unavailableTabIds.clear()
+  rustRecordingStarts.length = 0
+  promotedWorkflowTabIds.length = 0
+  lifecycleListener = undefined
+  cdpEventSubscriptionCount = 0
+  cdpDetachSubscriptionCount = 0
+  rustRecordingContent = undefined
+  persistenceEvents.length = 0
+  writeBrowserWorkflowDraftMarkdown.mockClear()
+  saveBrowserWorkflow.mockClear()
+  promoteBrowserWorkflowDraftMarkdown.mockClear()
   delete sessionMeta.advancedAuthorization
   delete sessionMeta.sourceAutomationId
   delete sessionMeta.sourceDelegationId
@@ -128,6 +212,50 @@ beforeEach(() => {
 })
 
 describe('Browser Agent Context 绑定', () => {
+  test('Given 浏览器会话 When 开始录制 Then 将该会话的 browser 目录传给 Rust', async () => {
+    bindBrowserAgentContext('browser-session', { tabId: 'tab-1' })
+
+    await startBrowserWorkflowRecording('browser-session')
+
+    expect(rustRecordingStarts).toHaveLength(1)
+    expect(rustRecordingStarts[0]).toMatchObject({
+      recordingDirectory: join(uploadProjectDir, 'browser', 'agent-workspaces', 'browser-session'),
+    })
+
+    unbindBrowserAgentContext('browser-session')
+  })
+
+  test('Given 已完成录制的 Agent 总结 When 用户确认 Workflow Then 先写 draft.md 再保存 JSON 并提升 workflow.md', async () => {
+    rustRecordingContent = '{"type":"click","url":"https://example.com/account"}\n'
+    bindBrowserAgentContext('browser-session', { tabId: 'tab-1' })
+    await startBrowserWorkflowRecording('browser-session')
+    await stopBrowserWorkflowRecording('browser-session')
+
+    const draft = submitBrowserWorkflowDraft('browser-session', {
+      schemaVersion: 1,
+      start: { tabAlias: 'main', url: 'https://example.com/account', origin: 'https://example.com' },
+      variables: [],
+      steps: [{
+        id: 'step-1',
+        type: 'click',
+        tabAlias: 'main',
+        origin: 'https://example.com',
+        target: {
+          framePath: { frameIds: [] },
+          strategies: [{ kind: 'id', value: 'submit' }],
+          fingerprint: { tagName: 'button', visible: true, enabled: true },
+        },
+      }],
+    })
+    approveBrowserWorkflowDraft('browser-session', '提交资料')
+
+    expect(writeBrowserWorkflowDraftMarkdown).toHaveBeenCalledWith('workspace-1', draft)
+    expect(promoteBrowserWorkflowDraftMarkdown).toHaveBeenCalledWith('workspace-1', draft.workflowId)
+    expect(persistenceEvents).toEqual(['draft', 'json', 'workflow'])
+
+    unbindBrowserAgentContext('browser-session')
+  })
+
   test('Given 当前工作区文件 When Agent 上传页面文件 Then 仅解析工作区范围内的常规文件', () => {
     bindBrowserAgentContext('browser-session', { tabId: 'tab-1' })
     try {
@@ -162,6 +290,7 @@ describe('Browser Agent Context 绑定', () => {
       tabId: 'tab-2',
       url: 'https://new.example.test/',
       title: 'New tab',
+      incognito: false,
     })
     expect(assertBrowserAgentWorkerCapability({
       sessionId: 'browser-session',
@@ -173,6 +302,77 @@ describe('Browser Agent Context 绑定', () => {
       tabId: 'tab-1',
       token: capability.token,
     })).toThrow(expect.objectContaining({ code: 'browser_capability_invalid' }))
+
+    unbindBrowserAgentContext('browser-session')
+  })
+
+  test('Given incognito=true When Agent opens a tab Then it uses an isolated tab and marks the result', () => {
+    const result = openBrowserAgentTab('browser-session', 'https://new.example.test', true)
+
+    expect(createdWebTabInputs.at(-1)).toEqual({ url: 'https://new.example.test', activate: true, incognito: true })
+    expect(result.incognito).toBe(true)
+  })
+
+  test('Given incognito is omitted When Agent opens a tab Then it remains a normal tab', () => {
+    const result = openBrowserAgentTab('browser-session', 'https://new.example.test')
+
+    expect(createdWebTabInputs.at(-1)).toEqual({ url: 'https://new.example.test', activate: true, incognito: false })
+    expect(result.incognito).toBe(false)
+  })
+
+  test('Given recording page is recreated When lifecycle emits recreated Then CDP recording is reattached on the same tab without revoking capability', async () => {
+    rustRecordingContent = '{"type":"click","url":"https://example.com/account"}\n'
+    bindBrowserAgentContext('browser-session', { tabId: 'tab-1' })
+    const capability = issueBrowserAgentWorkerCapability({
+      sessionId: 'browser-session',
+      tabId: 'tab-1',
+      triggeredBy: 'user',
+    })
+    await startBrowserWorkflowRecording('browser-session')
+    const beforeSubscriptions = { cdpEvent: cdpEventSubscriptionCount, cdpDetach: cdpDetachSubscriptionCount }
+
+    lifecycleListener?.({
+      type: 'recreated',
+      tabId: 'tab-1',
+      snapshot: { tabs: [currentTab], activeTabId: 'tab-1' },
+    })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(cdpEventSubscriptionCount).toBeGreaterThan(beforeSubscriptions.cdpEvent)
+    expect(cdpDetachSubscriptionCount).toBeGreaterThan(beforeSubscriptions.cdpDetach)
+    expect(assertBrowserAgentWorkerCapability({
+      sessionId: 'browser-session',
+      tabId: 'tab-1',
+      token: capability.token,
+    })).toEqual({ triggeredBy: 'user' })
+
+    await stopBrowserWorkflowRecording('browser-session')
+    unbindBrowserAgentContext('browser-session')
+  })
+
+  test('Given 用户运行 Workflow 的专用失败页面 When 接管现场 Then 页面成为当前 Browser Context 且当前 Worker token 跟随它', () => {
+    bindBrowserAgentContext('browser-session', { tabId: 'tab-1' })
+    const capability = issueBrowserAgentWorkerCapability({
+      sessionId: 'browser-session',
+      tabId: 'tab-1',
+      triggeredBy: 'user',
+    })
+
+    const result = handoffBrowserWorkflowFailure('browser-session', 'workflow-tab')
+
+    expect(result).toEqual({
+      tabId: 'workflow-tab',
+      url: 'https://example.com/account?tab=1',
+      title: 'Workflow failure',
+      incognito: false,
+    })
+    expect(promotedWorkflowTabIds).toEqual(['workflow-tab'])
+    expect(getBrowserAgentContext('browser-session')).toEqual({ tabId: 'workflow-tab' })
+    expect(assertBrowserAgentWorkerCapability({
+      sessionId: 'browser-session',
+      tabId: 'workflow-tab',
+      token: capability.token,
+    })).toEqual({ triggeredBy: 'user' })
 
     unbindBrowserAgentContext('browser-session')
   })
@@ -189,6 +389,7 @@ describe('Browser Agent Context 绑定', () => {
       tabId: 'tab-2',
       url: 'https://www.xiaohongshu.com/',
       title: 'New tab',
+      incognito: false,
     })
     expect(getBrowserAgentContext('browser-session')).toEqual({ tabId: 'tab-2' })
     expect(assertBrowserAgentWorkerCapability({

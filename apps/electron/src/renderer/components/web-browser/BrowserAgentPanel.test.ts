@@ -21,3 +21,16 @@ test('Given 切换网页 Agent 项目 When 面板发起切换 Then 由宿主创�
   expect(source).toContain('onSwitchProject')
   expect(source).not.toContain('moveAgentSessionToWorkspace')
 })
+
+test('Given Workflow 草稿待审核 When 渲染审核条 Then 仅显示 URL、步骤数和确认操作', () => {
+  expect(source).toContain('{draft.start.url}自动化流程草稿')
+  expect(source).toContain('{draft.steps.length} 步')
+  expect(source).toContain('useState(true)')
+  expect(source).toContain('setUnattendedAllowed(true)')
+  expect(source).toContain('accent-[var(--ui-primary)]')
+  expect(source).toContain('取消（不做更新）')
+  expect(source).toContain('确认（更新为确认后版本）')
+  expect(source).not.toContain('draft.variables.length')
+  expect(source).not.toContain('draftOrigins(draft)')
+  expect(source).not.toContain("step.type === 'manual'")
+})

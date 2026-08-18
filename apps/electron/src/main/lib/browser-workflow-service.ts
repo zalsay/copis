@@ -23,6 +23,7 @@ import {
 import { getAgentSessionMeta, updateAgentSessionMeta } from './agent-session-manager'
 import {
   getAgentWorkspace,
+  ensureAgentWorkspaceBrowserSessionPath,
   getAgentWorkspaceWritableRoot,
   getProjectFilesPath,
   getWorkspaceAttachedDirectories,
@@ -31,18 +32,25 @@ import {
 import { getAgentSessionWorkspacePath } from './config-paths'
 import { isPathWithinAuthorizedRoots, realpathOrResolve } from './file-access-policy'
 import { getSettings, updateSettings } from './settings-service'
-import { getBrowserWorkflow, saveBrowserWorkflow } from './browser-workflow-store'
+import {
+  getBrowserWorkflow,
+  promoteBrowserWorkflowDraftMarkdown,
+  saveBrowserWorkflow,
+  writeBrowserWorkflowDraftMarkdown,
+} from './browser-workflow-store'
 import { assertBrowserWorkflowVersion } from './browser-workflow-schema'
 import {
   appendRustBrowserRecordingEvent,
   cancelRustBrowserRecording,
   finishRustBrowserRecording,
   readRustBrowserRecording,
+  releaseRustBrowserRecording,
   startRustBrowserRecording,
 } from './rust-browser-recording-client'
 import {
   createWebTab,
   getWebTabState,
+  promoteWorkflowWebTab,
   sendWebTabCdpCommandInternal,
   subscribeWebTabCdpEvents,
   subscribeWebTabCdpDetach,
@@ -84,6 +92,7 @@ interface RecordingPage {
 
 interface ActiveRecording {
   recordingId: string
+  recordingDirectory: string
   nonce: string
   sessionId: string
   workspaceId: string
@@ -652,8 +661,35 @@ async function installRecordingPage(recording: ActiveRecording, page: RecordingP
     await installRecorder(page, recording)
   } catch (error) {
     page.removeCdpListener()
+    page.removeCdpDetachListener()
     recording.pages.delete(page.tabId)
     throw error
+  }
+}
+
+/** WebContentsView 重建后重挂载录制注入；页签 ID 和 Worker capability 保持不变。 */
+async function remountRecordingPage(recording: ActiveRecording, previousPage: RecordingPage): Promise<void> {
+  previousPage.removeCdpListener()
+  previousPage.removeCdpDetachListener()
+  recording.pages.delete(previousPage.tabId)
+
+  try {
+    const page = attachRecordingPage(recording, previousPage.tabId, previousPage.tabAlias)
+    await installRecordingPage(recording, page)
+    emitStatus(recording.sessionId, {
+      ...currentStatus(recording.sessionId),
+      tabId: page.tabId,
+      state: 'recording',
+      error: undefined,
+    })
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    emitStatus(recording.sessionId, {
+      ...currentStatus(recording.sessionId),
+      tabId: previousPage.tabId,
+      state: 'paused_cdp_detached',
+      error: `网页页签重建后录制注入失败：${message}`,
+    })
   }
 }
 
@@ -797,11 +833,12 @@ export interface BrowserPageOpenTabResult {
   tabId: string
   url: string
   title: string
+  incognito: boolean
 }
 
 /** 打开新的用户网页页签，并把当前 AI浏览器会话绑定到新页签。 */
-export function openBrowserAgentTab(sessionId: string, url: string): BrowserPageOpenTabResult {
-  const snapshot = createWebTab({ url, activate: true })
+export function openBrowserAgentTab(sessionId: string, url: string, incognito = false): BrowserPageOpenTabResult {
+  const snapshot = createWebTab({ url, activate: true, incognito })
   const tabId = snapshot.activeTabId
   if (!tabId) throw new Error('新网页页签创建失败')
   const tab = getWebTabState(tabId)
@@ -810,7 +847,15 @@ export function openBrowserAgentTab(sessionId: string, url: string): BrowserPage
   }
   bindBrowserAgentContext(sessionId, { tabId }, undefined, { preserveWorkerCapability: true })
   updateBrowserAgentWorkerCapabilityTabId(sessionId, tabId)
-  return { tabId, url: sanitizeBrowserWorkflowUrl(tab.url), title: tab.title }
+  return { tabId, url: sanitizeBrowserWorkflowUrl(tab.url), title: tab.title, incognito: tab.isIncognito === true }
+}
+
+/** Workflow 运行失败时，将专用页面移交给当前 Browser Agent 重新分析。 */
+export function handoffBrowserWorkflowFailure(sessionId: string, tabId: string): BrowserPageOpenTabResult {
+  const tab = promoteWorkflowWebTab(tabId)
+  bindBrowserAgentContext(sessionId, { tabId: tab.id }, undefined, { preserveWorkerCapability: true })
+  updateBrowserAgentWorkerCapabilityTabId(sessionId, tab.id)
+  return { tabId: tab.id, url: sanitizeBrowserWorkflowUrl(tab.url), title: tab.title, incognito: tab.isIncognito === true }
 }
 
 export function getBrowserPageControlMode(sessionId: string): BrowserPageControlMode {
@@ -869,10 +914,13 @@ export async function startBrowserWorkflowRecording(sessionId: string): Promise<
   }
   const binding = bindings.get(sessionId)
   if (!binding) throw new Error('AI浏览器尚未绑定网页页签')
+  const workspace = getAgentWorkspace(binding.workspaceId)
+  if (!workspace) throw new Error('AI浏览器工作区不存在')
   const tab = getWebTabState(binding.context.tabId)
   if (!tab || !normalizeBrowserPageOrigin(tab.url)) throw new Error('当前页签不是可录制的 HTTP(S) 网页')
   const recording: ActiveRecording = {
     recordingId: randomUUID(),
+    recordingDirectory: ensureAgentWorkspaceBrowserSessionPath(workspace, sessionId),
     nonce: randomUUID(),
     sessionId,
     workspaceId: binding.workspaceId,
@@ -887,11 +935,19 @@ export async function startBrowserWorkflowRecording(sessionId: string): Promise<
     startedAt: Date.now(),
     nextAliasIndex: 2,
   }
+  const previousFinished = finishedRecordings.get(sessionId)
   finishedRecordings.delete(sessionId)
+  if (previousFinished) {
+    await releaseRustBrowserRecording(previousFinished).catch((error: unknown) => {
+      console.warn('[网页 Workflow] 释放上一份 Rust 录制 JSONL 失败:', error)
+    })
+  }
   activeRecordingSessionId = sessionId
   try {
     await startRustBrowserRecording({
       recordingId: recording.recordingId,
+      recordingDirectory: recording.recordingDirectory,
+      sessionId: recording.sessionId,
       workspaceSlug: recording.workspaceSlug,
       startTabAlias: 'main',
       startUrl: recording.startUrl,
@@ -916,6 +972,10 @@ export async function startBrowserWorkflowRecording(sessionId: string): Promise<
         void installRecordingPage(recording, newPage).catch((error: unknown) => {
           console.warn('[网页 Workflow] 新页签录制注入失败:', error)
         })
+      } else if (event.type === 'recreated') {
+        const recreatedPage = recording.pages.get(event.tabId)
+        if (!recreatedPage) return
+        void remountRecordingPage(recording, recreatedPage)
       } else if (event.type === 'activated') {
         const activatedPage = recording.pages.get(event.tabId)
         if (activatedPage && event.tabId !== recording.activeTabId) {
@@ -1152,6 +1212,7 @@ export function submitBrowserWorkflowDraft(sessionId: string, value: unknown): B
   })
   validateDraftAgainstRecording(candidate, finished)
   candidate.approval = { ...candidate.approval, draftHash: calculateDraftHash(candidate) }
+  writeBrowserWorkflowDraftMarkdown(session.workspaceId, candidate)
   drafts.set(sessionId, candidate)
   emitStatus(sessionId, {
     sessionId,
@@ -1190,6 +1251,7 @@ export function submitBrowserWorkflowRepairDraft(
     throw new Error('修复草稿包含未批准的 Origin，请先扩展 Origin 并重新审核')
   }
   candidate.approval = { ...candidate.approval, draftHash: calculateDraftHash(candidate) }
+  writeBrowserWorkflowDraftMarkdown(session.workspaceId, candidate)
   drafts.set(sessionId, candidate)
   emitStatus(sessionId, {
     sessionId,
@@ -1236,8 +1298,15 @@ export function approveBrowserWorkflowDraft(
     unattendedAllowed,
     version: approvedVersion,
   })
+  promoteBrowserWorkflowDraftMarkdown(session.workspaceId, manifest.id)
   drafts.delete(sessionId)
+  const finished = finishedRecordings.get(sessionId)
   finishedRecordings.delete(sessionId)
+  if (finished) {
+    void releaseRustBrowserRecording(finished).catch((error: unknown) => {
+      console.warn('[网页 Workflow] 保存 Workflow 后释放 Rust 录制 JSONL 失败:', error)
+    })
+  }
   emitStatus(sessionId, { ...currentStatus(sessionId), state: 'idle' })
   return manifest
 }
@@ -1261,7 +1330,13 @@ export function stopAllBrowserWorkflowRecordings(): void {
 export function clearBrowserWorkflowSession(sessionId: string): void {
   void cancelBrowserWorkflowRecording(sessionId)
   drafts.delete(sessionId)
+  const finished = finishedRecordings.get(sessionId)
   finishedRecordings.delete(sessionId)
+  if (finished) {
+    void releaseRustBrowserRecording(finished).catch((error: unknown) => {
+      console.warn('[网页 Workflow] 清理会话时释放 Rust 录制 JSONL 失败:', error)
+    })
+  }
   bindings.delete(sessionId)
   statuses.delete(sessionId)
 }

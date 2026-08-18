@@ -107,6 +107,7 @@ struct Bridge {
     writer: Mutex<BufWriter<io::Stdout>>,
     pending: Mutex<HashMap<u64, mpsc::Sender<Result<BridgeResponse, String>>>>,
     recording_locks: Mutex<HashMap<String, Arc<Mutex<()>>>>,
+    recording_paths: Mutex<HashMap<(String, String), PathBuf>>,
 }
 
 struct BridgeVipPaymentRefresher {
@@ -154,6 +155,7 @@ impl Bridge {
             writer: Mutex::new(BufWriter::new(io::stdout())),
             pending: Mutex::new(HashMap::new()),
             recording_locks: Mutex::new(HashMap::new()),
+            recording_paths: Mutex::new(HashMap::new()),
         }
     }
 
@@ -882,17 +884,101 @@ fn is_safe_path_component(value: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
 }
 
-fn recording_path(workspace: &str, recording_id: &str) -> Result<PathBuf, &'static str> {
+fn recording_path_key(
+    workspace: &str,
+    recording_id: &str,
+) -> Result<(String, String), &'static str> {
     if !is_safe_path_component(workspace) || !is_safe_path_component(recording_id) {
         return Err("录制路径参数不正确");
     }
 
-    let config_dir = std::env::var("COPIS_CONFIG_DIR").map_err(|_| "Copis 配置目录未设置")?;
-    Ok(PathBuf::from(config_dir)
-        .join("agent-workspaces")
-        .join(workspace)
-        .join("browser-recordings")
-        .join(format!("{}.jsonl", recording_id)))
+    Ok((workspace.to_string(), recording_id.to_string()))
+}
+
+fn recording_path(
+    bridge: &Bridge,
+    workspace: &str,
+    recording_id: &str,
+) -> Result<PathBuf, &'static str> {
+    let key = recording_path_key(workspace, recording_id)?;
+    bridge
+        .recording_paths
+        .lock()
+        .map_err(|_| "录制路径锁不可用")?
+        .get(&key)
+        .cloned()
+        .ok_or("录制会话不存在")
+}
+
+fn prepare_recording_path(
+    recording_directory: &str,
+    recording_id: &str,
+    session_id: &str,
+) -> Result<PathBuf, &'static str> {
+    if !is_safe_path_component(recording_id) || !is_safe_path_component(session_id) {
+        return Err("录制路径参数不正确");
+    }
+    let directory = PathBuf::from(recording_directory);
+    if !directory.is_absolute() {
+        return Err("录制目录必须是绝对路径");
+    }
+    let directory = fs::canonicalize(directory).map_err(|_| "录制目录不可用")?;
+    if !directory.is_dir() {
+        return Err("录制目录不可用");
+    }
+    let is_session_directory = directory.file_name().and_then(|name| name.to_str())
+        == Some(session_id)
+        && directory
+            .parent()
+            .and_then(Path::file_name)
+            .and_then(|name| name.to_str())
+            == Some("agent-workspaces")
+        && directory
+            .parent()
+            .and_then(Path::parent)
+            .and_then(Path::file_name)
+            .and_then(|name| name.to_str())
+            == Some("browser");
+    if !is_session_directory {
+        return Err("录制目录必须是当前会话的 browser/agent-workspaces 目录");
+    }
+    Ok(directory.join(format!("{}.jsonl", recording_id)))
+}
+
+fn register_recording_path(
+    bridge: &Bridge,
+    workspace: &str,
+    recording_id: &str,
+    path: PathBuf,
+) -> Result<(), &'static str> {
+    let key = recording_path_key(workspace, recording_id)?;
+    bridge
+        .recording_paths
+        .lock()
+        .map_err(|_| "录制路径锁不可用")?
+        .insert(key, path);
+    Ok(())
+}
+
+fn remove_recording_path(
+    bridge: &Bridge,
+    workspace: &str,
+    recording_id: &str,
+) -> Result<(), &'static str> {
+    let key = recording_path_key(workspace, recording_id)?;
+    let path = bridge
+        .recording_paths
+        .lock()
+        .map_err(|_| "录制路径锁不可用")?
+        .remove(&key);
+    if let Some(path) = path {
+        bridge
+            .recording_locks
+            .lock()
+            .map_err(|_| "录制路径锁不可用")?
+            .remove(&path.to_string_lossy().into_owned());
+    }
+    Ok(())
 }
 
 fn recording_lock(bridge: &Bridge, path: &Path) -> Arc<Mutex<()>> {
@@ -1037,17 +1123,31 @@ fn handle_internal_recording_request(
 ) -> Result<InternalRecordingResponse, (u16, &'static str)> {
     let route =
         parse_internal_recording_route(&request.target).ok_or((404, "录制 API 路径不存在"))?;
-    let path =
-        recording_path(route.workspace, route.recording_id).map_err(|message| (400, message))?;
-
     match (request.method.as_str(), route.action) {
         ("POST", "start") => {
-            let body = if request.body.is_empty() {
-                return Err((400, "录制开始元数据不能为空"));
-            } else {
-                request.body.as_slice()
-            };
-            append_recording_line(bridge, &path, body, true).map_err(|message| (500, message))?;
+            let mut payload: Value = serde_json::from_slice(&request.body)
+                .map_err(|_| (400, "录制开始元数据格式不正确"))?;
+            let object = payload
+                .as_object_mut()
+                .ok_or((400, "录制开始元数据格式不正确"))?;
+            let recording_directory = object
+                .remove("recordingDirectory")
+                .and_then(|value| value.as_str().map(str::to_string))
+                .filter(|value| !value.trim().is_empty())
+                .ok_or((400, "录制目录不能为空"))?;
+            let session_id = object
+                .remove("sessionId")
+                .and_then(|value| value.as_str().map(str::to_string))
+                .filter(|value| !value.trim().is_empty())
+                .ok_or((400, "录制会话 ID 不能为空"))?;
+            let path =
+                prepare_recording_path(&recording_directory, route.recording_id, &session_id)
+                    .map_err(|message| (400, message))?;
+            let body =
+                serde_json::to_vec(&payload).map_err(|_| (400, "录制开始元数据格式不正确"))?;
+            append_recording_line(bridge, &path, &body, true).map_err(|message| (500, message))?;
+            register_recording_path(bridge, route.workspace, route.recording_id, path)
+                .map_err(|message| (500, message))?;
             Ok(InternalRecordingResponse {
                 status: 201,
                 body: Some("{\"ok\":true}".to_string()),
@@ -1055,6 +1155,8 @@ fn handle_internal_recording_request(
             })
         }
         ("POST", "event") => {
+            let path = recording_path(bridge, route.workspace, route.recording_id)
+                .map_err(|message| (404, message))?;
             append_recording_line(bridge, &path, &request.body, false)
                 .map_err(|message| (500, message))?;
             Ok(InternalRecordingResponse {
@@ -1064,6 +1166,8 @@ fn handle_internal_recording_request(
             })
         }
         ("POST", "finish") => {
+            let path = recording_path(bridge, route.workspace, route.recording_id)
+                .map_err(|message| (404, message))?;
             let marker = recording_marker(route.recording_id, "recording_finished");
             append_recording_line(bridge, &path, &marker, false)
                 .map_err(|message| (500, message))?;
@@ -1074,8 +1178,12 @@ fn handle_internal_recording_request(
             })
         }
         ("POST", "cancel") => {
+            let path = recording_path(bridge, route.workspace, route.recording_id)
+                .map_err(|message| (404, message))?;
             let marker = recording_marker(route.recording_id, "recording_cancelled");
             append_recording_line(bridge, &path, &marker, false)
+                .map_err(|message| (500, message))?;
+            remove_recording_path(bridge, route.workspace, route.recording_id)
                 .map_err(|message| (500, message))?;
             Ok(InternalRecordingResponse {
                 status: 200,
@@ -1084,6 +1192,8 @@ fn handle_internal_recording_request(
             })
         }
         ("GET", "content") => {
+            let path = recording_path(bridge, route.workspace, route.recording_id)
+                .map_err(|message| (404, message))?;
             let lock = recording_lock(bridge, &path);
             let _guard = lock.lock().unwrap();
             let metadata = fs::metadata(&path).map_err(|_| (404, "录制 JSONL 不存在"))?;
@@ -1094,6 +1204,17 @@ fn handle_internal_recording_request(
             Ok(InternalRecordingResponse {
                 status: 200,
                 body: Some(content),
+                json: false,
+            })
+        }
+        ("POST", "release") => {
+            recording_path(bridge, route.workspace, route.recording_id)
+                .map_err(|message| (404, message))?;
+            remove_recording_path(bridge, route.workspace, route.recording_id)
+                .map_err(|message| (500, message))?;
+            Ok(InternalRecordingResponse {
+                status: 204,
+                body: None,
                 json: false,
             })
         }
@@ -2583,7 +2704,15 @@ pub(crate) fn finalize_worker_run(bridge: &Arc<Bridge>, frame: &Value) -> Result
     let body =
         serde_json::to_vec(&body).map_err(|error| format!("Agent 完成帧序列化失败: {}", error))?;
     let response = send_internal_request(bridge, "/api/internal/agent/complete", body)?;
-    ensure_internal_success_with_body(response)
+    let body = ensure_internal_success_with_body(response)?;
+    Ok(body
+        .as_deref()
+        .and_then(|body| serde_json::from_str::<Value>(body).ok())
+        .and_then(|body| {
+            body.get("title")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        }))
 }
 
 pub(crate) fn ensure_internal_success(response: BridgeResponse) -> Result<(), String> {
@@ -2596,16 +2725,7 @@ pub(crate) fn ensure_internal_success_with_body(response: BridgeResponse) -> Res
             .body
             .unwrap_or_else(|| format!("Electron 内部接口返回 {}", response.status)));
     }
-    let title = response
-        .body
-        .as_deref()
-        .and_then(|body| serde_json::from_str::<Value>(body).ok())
-        .and_then(|body| {
-            body.get("title")
-                .and_then(Value::as_str)
-                .map(str::to_string)
-        });
-    Ok(title)
+    Ok(response.body)
 }
 
 fn send_bridge_response(stream: &mut TcpStream, response: BridgeResponse, origin: Option<&str>) {

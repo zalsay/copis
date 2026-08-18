@@ -83,6 +83,7 @@ struct FileAccessPolicy {
     read_roots: Vec<PathBuf>,
     read_files: Vec<PathBuf>,
     write_roots: Vec<PathBuf>,
+    browser_session_root: Option<PathBuf>,
     base_dir: PathBuf,
     permission_mode: String,
     advanced_authorization: bool,
@@ -461,6 +462,11 @@ impl FileAccessPolicy {
             read_roots: parse_roots(object, "readRoots", &base_dir, true)?,
             read_files: parse_roots(object, "readFiles", &base_dir, false)?,
             write_roots: parse_roots(object, "writeRoots", &base_dir, true)?,
+            browser_session_root: parse_optional_directory(
+                object,
+                "browserSessionRoot",
+                &base_dir,
+            )?,
             base_dir,
             permission_mode: permission_mode.to_string(),
             advanced_authorization: object
@@ -513,6 +519,20 @@ impl FileAccessPolicy {
     }
 
     fn ensure_read(&self, target: &Path) -> Result<(), AgentFileError> {
+        if let Some(browser_session_root) = &self.browser_session_root {
+            if let Some(browser_sessions_root) = browser_session_root.parent() {
+                let is_browser_session_path =
+                    target == browser_sessions_root || target.starts_with(browser_sessions_root);
+                let is_current_session_path =
+                    target == browser_session_root || target.starts_with(browser_session_root);
+                if is_browser_session_path && !is_current_session_path {
+                    return Err(AgentFileError::forbidden(
+                        "read_not_allowed",
+                        "当前会话不允许读取其他 Agent 会话的浏览器录制文件",
+                    ));
+                }
+            }
+        }
         if self
             .read_roots
             .iter()
@@ -954,6 +974,34 @@ fn parse_roots(
             Ok(canonical)
         })
         .collect()
+}
+
+fn parse_optional_directory(
+    object: &serde_json::Map<String, Value>,
+    key: &str,
+    base_dir: &Path,
+) -> Result<Option<PathBuf>, AgentFileError> {
+    let Some(value) = object.get(key) else {
+        return Ok(None);
+    };
+    let path = value
+        .as_str()
+        .filter(|path| !path.trim().is_empty())
+        .ok_or_else(|| {
+            AgentFileError::bad_request(format!("fileAccessPolicy.{key} 包含无效路径"))
+        })?;
+    let path = absolute_without_parent(Path::new(path), Some(base_dir))?;
+    let canonical = fs::canonicalize(&path).map_err(|error| {
+        if error.kind() == std::io::ErrorKind::NotFound {
+            AgentFileError::bad_request("权限策略路径不存在")
+        } else {
+            io_error(error)
+        }
+    })?;
+    if !fs::metadata(&canonical).map_err(io_error)?.is_dir() {
+        return Err(AgentFileError::bad_request("权限策略根目录不是目录"));
+    }
+    Ok(Some(canonical))
 }
 
 fn absolute_without_parent(

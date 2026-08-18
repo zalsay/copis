@@ -1,8 +1,7 @@
 /**
  * Automation（定时任务）相关类型
  *
- * 用户用自然语言描述一个任务，调度器按设定间隔在后台自动新建子会话执行。
- * 每次执行都新建独立子会话（不污染来源会话，规避 orchestrator 同会话并发守卫）。
+ * 用户用自然语言描述一个任务，调度器按设定间隔在后台创建并持续复用专属 Agent 会话执行。
  */
 
 /** 自动化运行中调用的固定 Browser Workflow，可用于追踪具体版本和执行产物。 */
@@ -17,7 +16,7 @@ export interface AutomationWorkflowRunReference {
 export interface AutomationRun {
   /** 本次触发的时间戳 */
   runAt: number
-  /** 本轮新建的子会话 ID（可点进去查看执行详情） */
+  /** 本任务专属的执行会话 ID（可点进去查看执行详情） */
   sessionId: string
   /** 本轮执行过的固定 Browser Workflow；旧记录可能没有该字段。 */
   workflowRuns?: AutomationWorkflowRunReference[]
@@ -50,13 +49,13 @@ export const AUTOMATION_DEFAULT_PERMISSION_MODE: AutomationPermissionMode = 'byp
 
 /**
  * 定时任务的会话模式
- * - daily：同一自然日内的触发写入同一个子会话，跨日时自动新建（默认，兼顾上下文连续性与成本控制）
- * - reuse：始终复用同一个子会话（保留长期上下文，会话越长 token 成本越高，由用户自行承担）
+ * - daily：历史兼容值，读取后统一迁移为 reuse
+ * - reuse：始终复用同一个子会话
  */
 export type AutomationSessionMode = 'daily' | 'reuse'
 
 /** 定时任务默认会话模式 */
-export const AUTOMATION_DEFAULT_SESSION_MODE: AutomationSessionMode = 'daily'
+export const AUTOMATION_DEFAULT_SESSION_MODE: AutomationSessionMode = 'reuse'
 
 /** 定时任务通知触发条件 */
 export type AutomationNotificationTrigger = 'always' | 'success' | 'error'
@@ -113,7 +112,7 @@ export interface Automation {
   workspaceId?: string
   /** 权限模式（无人值守运行时的工具审批策略，默认 bypassPermissions） */
   permissionMode?: AutomationPermissionMode
-  /** 会话模式：daily=同一自然日内复用子会话，跨日新建（默认）；reuse=始终复用同一个子会话 */
+  /** 会话模式：统一复用首次创建的执行会话；daily 是历史兼容值。 */
   sessionMode?: AutomationSessionMode
   /** 运行完成后的外部通知目标 */
   notificationTargets?: AutomationNotificationTarget[]
@@ -125,7 +124,7 @@ export interface Automation {
   updatedAt: number
   /** 下次应触发的绝对时间戳（调度核心，避免长 interval 漂移） */
   nextRunAt: number
-  /** 最近一次运行创建的会话 ID（每次运行都会新建会话，此字段仅用于跳转和排查） */
+  /** 本任务专属的执行会话 ID；首次运行创建，后续运行持续复用。 */
   lastSessionId?: string
   /** 上次运行时间 */
   lastRunAt?: number

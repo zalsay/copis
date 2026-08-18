@@ -83,7 +83,7 @@ describe('Browser Agent Worker capability', () => {
     revokeBrowserAgentWorkerCapability('session-bound')
   })
 
-  test('Given capability When revoked or expired Then it is rejected as stale', () => {
+  test('Given capability When revoked Then it is rejected as stale', () => {
     const capability = issueBrowserAgentWorkerCapability({
       sessionId: 'session-1',
       tabId: 'tab-1',
@@ -98,7 +98,7 @@ describe('Browser Agent Worker capability', () => {
     })).toThrow(expect.objectContaining({ code: 'browser_capability_stale' }))
   })
 
-  test('Given issued capability When the TTL has elapsed Then it is rejected as stale', () => {
+  test('Given issued capability When a long-running Agent exceeds the previous TTL Then it remains valid until revoked', () => {
     const originalDateNow = Date.now
     const issuedAt = originalDateNow()
     Date.now = () => issuedAt
@@ -111,11 +111,11 @@ describe('Browser Agent Worker capability', () => {
     try {
       Date.now = () => issuedAt + 30 * 60_000 + 1
 
-      expect(() => assertBrowserAgentWorkerCapability({
+      expect(assertBrowserAgentWorkerCapability({
         sessionId: 'session-expiring',
         tabId: 'tab-1',
         token: capability.token,
-      })).toThrow(expect.objectContaining({ code: 'browser_capability_stale' }))
+      })).toEqual({ triggeredBy: 'automation' })
     } finally {
       Date.now = originalDateNow
       revokeBrowserAgentWorkerCapability('session-expiring')

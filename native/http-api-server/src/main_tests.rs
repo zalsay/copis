@@ -12,10 +12,11 @@ use super::pi_rpc::{
 use super::automation::WorkerAutomationContext;
 use super::{
     append_recording_line, bind_automation_create_input, decode_hex, encode_hex, find_subslice, handle_connection,
+    ensure_internal_success_with_body,
     is_allowed_origin, is_internal_agent_alipay_bot_path, is_internal_agent_shell_path,
     is_internal_path, is_internal_token_valid, is_safe_path_component, is_skill_market_path,
     is_vite_dev_origin, is_web_route_authorized, is_working_payment_path, is_workspace_dev_route,
-    parse_internal_recording_route, recording_marker, Bridge, HttpRequest,
+    handle_internal_recording_request, parse_internal_recording_route, recording_marker, Bridge, BridgeResponse, HttpRequest,
 };
 
 #[test]
@@ -63,6 +64,17 @@ fn rejects_malformed_hex() {
 }
 
 #[test]
+fn given_prepare_run_response_without_title_when_validated_then_keeps_the_config_body() {
+    let body = r#"{"sessionId":"session-1","config":{"query":{}}}"#.to_string();
+    let response = BridgeResponse {
+        status: 200,
+        body: Some(body.clone()),
+    };
+
+    assert_eq!(ensure_internal_success_with_body(response).unwrap(), Some(body));
+}
+
+#[test]
 fn finds_http_delimiter() {
     assert_eq!(
         find_subslice(b"GET / HTTP/1.1\r\n\r\n", b"\r\n\r\n"),
@@ -98,6 +110,72 @@ fn recording_markers_are_single_jsonl_lines() {
     assert!(marker.ends_with('}'));
     assert!(!marker.contains('\n'));
     assert!(marker.contains("recording-1"));
+}
+
+#[test]
+fn stores_recording_in_registered_session_directory_without_exposing_absolute_path() {
+    let root = std::env::temp_dir().join(format!(
+        "copis-browser-recording-session-{}",
+        std::process::id()
+    ));
+    let directory = root.join("browser/agent-workspaces/session-1");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&directory).unwrap();
+    let directory_text = directory.to_string_lossy();
+    let bridge = Bridge::new();
+    let start = HttpRequest {
+        method: "POST".to_string(),
+        target: "/internal/browser-workflows/recordings/workspace-1/recording-1/start".to_string(),
+        headers: HashMap::new(),
+        body: serde_json::to_vec(&serde_json::json!({
+            "kind": "recording_started",
+            "recordingId": "recording-1",
+            "recordingDirectory": directory_text,
+            "sessionId": "session-1",
+        }))
+        .unwrap(),
+    };
+
+    assert_eq!(handle_internal_recording_request(&start, &bridge).unwrap().status, 201);
+    let event = HttpRequest {
+        method: "POST".to_string(),
+        target: "/internal/browser-workflows/recordings/workspace-1/recording-1/event".to_string(),
+        headers: HashMap::new(),
+        body: br#"{"type":"click"}"#.to_vec(),
+    };
+    assert_eq!(handle_internal_recording_request(&event, &bridge).unwrap().status, 204);
+
+    let content = std::fs::read_to_string(directory.join("recording-1.jsonl")).unwrap();
+    assert!(content.contains(r#""kind":"recording_started""#));
+    assert!(content.contains(r#""type":"click""#));
+    assert!(!content.contains(directory_text.as_ref()));
+
+    let finish = HttpRequest {
+        method: "POST".to_string(),
+        target: "/internal/browser-workflows/recordings/workspace-1/recording-1/finish".to_string(),
+        headers: HashMap::new(),
+        body: Vec::new(),
+    };
+    assert_eq!(handle_internal_recording_request(&finish, &bridge).unwrap().status, 200);
+    let read = HttpRequest {
+        method: "GET".to_string(),
+        target: "/internal/browser-workflows/recordings/workspace-1/recording-1/content".to_string(),
+        headers: HashMap::new(),
+        body: Vec::new(),
+    };
+    assert_eq!(handle_internal_recording_request(&read, &bridge).unwrap().status, 200);
+    assert!(!bridge.recording_paths.lock().unwrap().is_empty());
+    assert!(!bridge.recording_locks.lock().unwrap().is_empty());
+    let release = HttpRequest {
+        method: "POST".to_string(),
+        target: "/internal/browser-workflows/recordings/workspace-1/recording-1/release".to_string(),
+        headers: HashMap::new(),
+        body: Vec::new(),
+    };
+    assert_eq!(handle_internal_recording_request(&release, &bridge).unwrap().status, 204);
+    assert!(bridge.recording_paths.lock().unwrap().is_empty());
+    assert!(bridge.recording_locks.lock().unwrap().is_empty());
+    let _ = std::fs::remove_dir_all(root);
 }
 
 #[test]

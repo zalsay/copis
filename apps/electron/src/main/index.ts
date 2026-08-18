@@ -2,6 +2,7 @@ import { app, BrowserWindow, dialog, Menu, nativeTheme, protocol, screen, shell 
 import { join } from 'path'
 import { existsSync } from 'fs'
 import { httpApiPortArgument, httpApiWebTokenArgument } from './lib/http-api-web-token'
+import { configurePlaywrightCdpEndpoint } from './lib/playwright-cdp-endpoint'
 
 app.setName('Copis')
 if (process.platform === 'win32') {
@@ -13,6 +14,9 @@ if (process.platform === 'win32') {
 if (!app.isPackaged) {
   app.setPath('userData', process.env.COPIS_ELECTRON_USER_DATA ?? join(app.getPath('appData'), '@copis/electron-dev'))
 }
+
+// 必须在 app.whenReady() 前让 Chromium 分配临时 CDP 端口；endpoint 只由主进程内部读取。
+configurePlaywrightCdpEndpoint(app)
 
 // 单实例锁：防止重复启动同一个版本（dev/prod 因 userData 已隔离，互不影响）
 //

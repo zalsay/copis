@@ -1,6 +1,8 @@
+import { spawn } from 'node:child_process'
 import { createServer, type Server } from 'node:http'
 import { once } from 'node:events'
-import { readFileSync } from 'node:fs'
+import { createHash } from 'node:crypto'
+import { readFileSync, statSync, symlinkSync, unlinkSync } from 'node:fs'
 import { join } from 'node:path'
 import { app, BrowserWindow } from 'electron'
 import type {
@@ -29,6 +31,15 @@ import {
 import { subscribeBrowserWorkflowStatus } from '../src/main/lib/browser-workflow-service'
 import { saveBrowserWorkflow } from '../src/main/lib/browser-workflow-store'
 import { ensureDefaultWorkspace } from '../src/main/lib/agent-workspace-manager'
+import { getFunctionalModulesDir } from '../src/main/lib/config-paths'
+import { configurePlaywrightCdpEndpoint, getPlaywrightCdpEndpoint } from '../src/main/lib/playwright-cdp-endpoint'
+import {
+  activateFunctionalModule,
+  assembleFunctionalModule,
+  cacheFunctionalModule,
+  getFunctionalModulePaths,
+  type FunctionalModulePackage,
+} from '../src/main/lib/functional-module-store'
 
 interface FixtureServers {
   readonly mainOrigin: string
@@ -67,8 +78,11 @@ async function runPageControlE2E(
     },
   })
 
+  logE2EStage('等待用户页签加载')
   await waitForWebTabLoad(tabId, 10_000)
+  logE2EStage('读取用户页面元素')
   const first = await service.observe('browser-page-control-e2e')
+  logE2EStage('用户页面元素读取完成')
   const email = first.elements.find((element) => element.name === 'Email')
   const goNext = first.elements.find((element) => element.name === 'Go next')
   if (!email || !goNext) throw new Error('page control E2E did not observe expected elements')
@@ -82,12 +96,14 @@ async function runPageControlE2E(
   if (!askRejected) throw new Error('page control E2E did not reject mutation in ask mode')
 
   authorizedOrigin = fixtures.mainOrigin
+  logE2EStage('输入页面字段')
   await service.typeText('browser-page-control-e2e', email.ref, 'browser-agent@example.test')
   const typedSnapshot = await service.observe('browser-page-control-e2e')
   const typed = typedSnapshot.text.includes('Email: browser-agent@example.test')
   if (!typed) throw new Error('page control E2E did not update React controlled input')
 
   await service.navigate('browser-page-control-e2e', `${fixtures.frameOrigin}/popup`)
+  logE2EStage('等待跨域导航完成')
   await waitForWebTabLoad(tabId, 10_000)
   const crossOriginRevoked = resolveBrowserPageControlState(
     getWebTabState(tabId)?.url ?? '',
@@ -100,9 +116,64 @@ async function runPageControlE2E(
 
 const userDataDir = process.env.COPIS_E2E_USER_DATA
 if (userDataDir) app.setPath('userData', userDataDir)
+configurePlaywrightCdpEndpoint(app)
 
 function sleep(milliseconds: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, milliseconds))
+}
+
+function logE2EStage(stage: string): void {
+  console.log(`[Browser Workflow E2E] ${stage}`)
+}
+
+async function verifyNodeCdpProtocol(): Promise<void> {
+  const nodeExecutable = process.env.COPIS_E2E_NODE_EXECUTABLE
+  if (!nodeExecutable) throw new Error('E2E 缺少 Node.js 运行时路径')
+  const endpoint = await getPlaywrightCdpEndpoint()
+  const probeSource = `
+const endpoint = process.env.COPIS_E2E_CDP_ENDPOINT;
+const finish = (code) => process.exit(code);
+const timer = setTimeout(() => finish(1), 2000);
+fetch(endpoint + '/json/version').then((response) => response.json()).then((details) => {
+  const socket = new WebSocket(details.webSocketDebuggerUrl);
+  socket.addEventListener('open', () => socket.send(JSON.stringify({ id: 1, method: 'Browser.getVersion' })));
+  socket.addEventListener('message', () => { clearTimeout(timer); socket.close(); finish(0); });
+  socket.addEventListener('error', () => finish(1));
+}).catch(() => finish(1));
+`
+  await new Promise<void>((resolve, reject) => {
+    const child = spawn(nodeExecutable, ['-e', probeSource], {
+      env: { ...process.env, COPIS_E2E_CDP_ENDPOINT: endpoint },
+      stdio: ['ignore', 'ignore', 'ignore'],
+    })
+    child.once('error', () => reject(new Error('E2E Node CDP 探针无法启动')))
+    child.once('exit', (code) => code === 0
+      ? resolve()
+      : reject(new Error('E2E Node CDP Browser.getVersion 未返回')))
+  })
+}
+
+/** E2E 使用同一套模块存储协议登记 Electron 的 Node 兼容运行时。 */
+async function prepareNodeRuntimeForE2E(): Promise<void> {
+  const source = process.env.COPIS_E2E_NODE_EXECUTABLE
+  if (!source) throw new Error('E2E 缺少 Node.js 运行时路径')
+  const sourceStats = statSync(source)
+  const packageInfo: FunctionalModulePackage = {
+    name: 'node-runtime',
+    version: 'e2e',
+    sha256: createHash('sha256').update(readFileSync(source)).digest('hex'),
+    size: sourceStats.size,
+    format: 'binary',
+    entrypoint: process.platform === 'win32' ? 'bin/node.exe' : 'bin/node',
+    required: true,
+  }
+  const paths = getFunctionalModulePaths(getFunctionalModulesDir())
+  await cacheFunctionalModule(paths, packageInfo, source)
+  const versionDir = await assembleFunctionalModule(paths, packageInfo)
+  await activateFunctionalModule(paths, packageInfo, versionDir)
+  const entrypoint = join(versionDir, packageInfo.entrypoint)
+  unlinkSync(entrypoint)
+  symlinkSync(source, entrypoint)
 }
 
 async function listen(server: Server): Promise<number> {
@@ -374,21 +445,31 @@ async function main(): Promise<E2EResult> {
   let window: BrowserWindow | undefined
   try {
     await app.whenReady()
+    logE2EStage('Electron 已就绪')
     window = new BrowserWindow({ show: true, width: 1280, height: 900 })
     window.focus()
     setWebTabHostWindow(window)
+    await prepareNodeRuntimeForE2E()
+    logE2EStage('Node 运行时已准备')
     const userTabSnapshot = createWebTab({ url: `${fixtures.mainOrigin}/start`, activate: true })
     const userTab = userTabSnapshot.tabs.at(-1)
     if (!userTab) throw new Error('E2E user tab was not created')
     updateWebTabBounds({ tabId: userTab.id, bounds: { x: 0, y: 0, width: 1200, height: 820 } })
 
     const workspace = ensureDefaultWorkspace()
+    logE2EStage('验证 Node CDP 协议')
+    await verifyNodeCdpProtocol()
+    logE2EStage('开始页面控制验证')
     const pageControl = await runPageControlE2E(userTab.id, fixtures)
+    logE2EStage('开始主流程验证')
     const workflow = await runMainWorkflow(workspace.id, fixtures)
+    logE2EStage('开始歧义元素验证')
     const ambiguousError = await runAmbiguousWorkflow(workspace.id, fixtures.mainOrigin)
+    logE2EStage('开始 CDP 断开恢复验证')
     const detachWorkflow = await runDetachWorkflow(workspace.id, fixtures.mainOrigin)
     return { pageControl, workflow, ambiguousError, detachWorkflow: detachWorkflow.summary, detachPaused: detachWorkflow.paused }
   } finally {
+    logE2EStage('开始清理测试资源')
     disposeWebTabs()
     if (window && !window.isDestroyed()) window.destroy()
     await Promise.all([

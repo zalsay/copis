@@ -26,6 +26,13 @@ interface GitHubRelease {
   assets: GitHubReleaseAsset[]
 }
 
+interface PublicOfficeCliArtifact {
+  version: string
+  url: string
+  sha256: string
+  size: number
+}
+
 interface OfficeCliCacheMetadata {
   version: string
   assetName: string
@@ -37,6 +44,7 @@ export interface PrepareOfficeCliModuleInput {
   arch: FunctionalModuleArchitecture
   output: string
   releaseApiUrl?: string
+  publicManifestUrl?: string
 }
 
 export interface PreparedOfficeCliModule {
@@ -46,19 +54,53 @@ export interface PreparedOfficeCliModule {
   size: number
 }
 
+const MAX_ERROR_BODY_LENGTH = 2000
+
 if (import.meta.main) await main()
 
 export async function prepareOfficeCliModule(
   input: PrepareOfficeCliModuleInput,
 ): Promise<PreparedOfficeCliModule> {
+  const expectedVersion = releaseVersion(OFFICECLI_RELEASE_TAG)
+  const assetName = officeCliAssetName(input.platform, input.arch)
+  const output = resolve(input.output)
+  const cached = readVerifiedCache(output, expectedVersion, assetName)
+  if (cached) return cached
+
+  const publicArtifact = await tryFetchPublicOfficeCliArtifact(
+    input.publicManifestUrl,
+    input.platform,
+    input.arch,
+  )
+  if (publicArtifact?.version === expectedVersion) {
+    console.log(
+      `[prepare:officecli-module] COS OfficeCLI v${publicArtifact.version} 与构建版本一致，复用公网模块`,
+    )
+    const binary = await fetchBinary(
+      publicArtifact.url,
+      assetName,
+      `下载 COS OfficeCLI 失败: ${assetName}`,
+    )
+    const sha256 = createHash('sha256').update(binary).digest('hex')
+    if (binary.byteLength !== publicArtifact.size) {
+      throw new Error(
+        `COS OfficeCLI 大小校验失败: ${assetName}，期望 ${publicArtifact.size}，实际 ${binary.byteLength}`,
+      )
+    }
+    if (sha256 !== publicArtifact.sha256) {
+      throw new Error(`COS OfficeCLI SHA256 校验失败: ${assetName}`)
+    }
+    writeBinary(output, binary, input.platform)
+    writeCacheMetadata(output, { version: expectedVersion, assetName, sha256 })
+    return { path: output, version: expectedVersion, sha256, size: binary.byteLength }
+  }
+
   const release = await fetchGitHubRelease(input.releaseApiUrl ?? DEFAULT_RELEASE_API)
   const version = releaseVersion(release.tagName)
-  const assetName = officeCliAssetName(input.platform, input.arch)
   const binaryAsset = release.assets.find((asset) => asset.name === assetName)
   if (!binaryAsset) throw new Error(`OfficeCLI release 缺少目标二进制: ${assetName}`)
-  const output = resolve(input.output)
-  const cached = readVerifiedCache(output, version, assetName)
-  if (cached) return cached
+  const releaseCached = readVerifiedCache(output, version, assetName)
+  if (releaseCached) return releaseCached
 
   const expectedSha256 = assetDigest(binaryAsset)
     ?? await checksumFromReleaseAsset(release.assets, assetName)
@@ -92,20 +134,162 @@ async function main(): Promise<void> {
     arch,
     output,
     releaseApiUrl: option('--release-api-url') ?? process.env.COPIS_OFFICECLI_RELEASE_API?.trim(),
+    publicManifestUrl: option('--public-manifest-url') ?? process.env.COPIS_OFFICECLI_PUBLIC_MANIFEST_URL?.trim(),
   })
   console.log(
     `[prepare:officecli-module] 已准备 OfficeCLI v${prepared.version}: ${prepared.path} sha256=${prepared.sha256} size=${prepared.size}`,
   )
 }
 
+async function fetchWithDiagnostics(
+  url: string,
+  failurePrefix: string,
+  init: RequestInit,
+): Promise<Response> {
+  let response: Response
+  try {
+    response = await fetch(url, init)
+  } catch (error) {
+    throw new Error([
+      `${failurePrefix}: 请求异常: ${formatThrownError(error)}`,
+      `URL: ${redactUrl(url)}`,
+    ].join('\n'))
+  }
+
+  if (response.ok) return response
+
+  const lines = [
+    `${failurePrefix}: HTTP ${response.status}`,
+    `URL: ${redactUrl(url)}`,
+  ]
+  const contentType = response.headers.get('content-type')?.trim()
+  if (contentType) lines.push(`响应类型: ${contentType}`)
+
+  const remaining = response.headers.get('x-ratelimit-remaining')
+  const limit = response.headers.get('x-ratelimit-limit')
+  const used = response.headers.get('x-ratelimit-used')
+  const reset = response.headers.get('x-ratelimit-reset')
+  if (remaining || limit || used || reset) {
+    lines.push(
+      `GitHub rate limit: remaining=${remaining ?? '?'}/${limit ?? '?'}, used=${used ?? '?'}, reset=${reset ?? '?'}`,
+    )
+  }
+
+  const retryAfter = response.headers.get('retry-after')?.trim()
+  if (retryAfter) lines.push(`Retry-After: ${retryAfter}`)
+
+  const requestId = response.headers.get('x-github-request-id')?.trim()
+  if (requestId) lines.push(`GitHub request id: ${requestId}`)
+
+  try {
+    lines.push(`响应体: ${formatResponseBody(await response.text())}`)
+  } catch (error) {
+    lines.push(`响应体读取失败: ${formatThrownError(error)}`)
+  }
+
+  throw new Error(lines.join('\n'))
+}
+
+function formatResponseBody(body: string): string {
+  const normalized = body.replace(/\s+/g, ' ').trim()
+  if (!normalized) return '(empty)'
+  if (normalized.length <= MAX_ERROR_BODY_LENGTH) return normalized
+  return `${normalized.slice(0, MAX_ERROR_BODY_LENGTH)}... [已截断]`
+}
+
+function redactUrl(value: string): string {
+  try {
+    const url = new URL(value)
+    url.username = ''
+    url.password = ''
+    return url.toString()
+  } catch {
+    return value.replace(/(\/\/)[^\/\s@]+@/, '$1<redacted>@')
+  }
+}
+
+function formatThrownError(error: unknown): string {
+  if (error instanceof Error) {
+    const cause = error.cause
+    if (cause instanceof Error) return `${error.name}: ${error.message} (cause: ${cause.name}: ${cause.message})`
+    if (cause !== undefined) return `${error.name}: ${error.message} (cause: ${String(cause)})`
+    return `${error.name}: ${error.message}`
+  }
+  return String(error)
+}
+
+async function tryFetchPublicOfficeCliArtifact(
+  manifestUrl: string | undefined,
+  platform: FunctionalModulePlatform,
+  arch: FunctionalModuleArchitecture,
+): Promise<PublicOfficeCliArtifact | undefined> {
+  if (!manifestUrl?.trim()) return undefined
+  try {
+    const response = await fetchWithDiagnostics(manifestUrl, '读取 COS 功能模块 manifest 失败', {
+      headers: { Accept: 'application/json', 'User-Agent': 'Copis-functional-module-release' },
+    })
+    let value: unknown
+    try {
+      value = await response.json() as unknown
+    } catch (error) {
+      throw new Error('COS 功能模块 manifest JSON 无效', { cause: error })
+    }
+    return parsePublicOfficeCliArtifact(value, platform, arch)
+  } catch (error) {
+    console.warn(
+      `[prepare:officecli-module] COS manifest 查询失败，回退 GitHub release: ${formatThrownError(error)}`,
+    )
+    return undefined
+  }
+}
+
+function parsePublicOfficeCliArtifact(
+  value: unknown,
+  platform: FunctionalModulePlatform,
+  arch: FunctionalModuleArchitecture,
+): PublicOfficeCliArtifact | undefined {
+  if (!isRecord(value) || !isRecord(value.platforms)) {
+    throw new Error('COS 功能模块 manifest 格式无效')
+  }
+  const platformValue = value.platforms[`${platform}-${arch}`]
+  if (!isRecord(platformValue) || !isRecord(platformValue.modules)) return undefined
+  const artifact = platformValue.modules.officecli
+  if (!isRecord(artifact)) return undefined
+  if (artifact.format !== 'binary') throw new Error('COS OfficeCLI artifact 格式不是 binary')
+  if (typeof artifact.version !== 'string') throw new Error('COS OfficeCLI artifact 缺少合法版本')
+  if (typeof artifact.url !== 'string' || !isHttpUrl(artifact.url)) {
+    throw new Error('COS OfficeCLI artifact URL 不合法')
+  }
+  if (typeof artifact.sha256 !== 'string' || !/^[a-f0-9]{64}$/i.test(artifact.sha256)) {
+    throw new Error('COS OfficeCLI artifact SHA256 不合法')
+  }
+  if (!Number.isSafeInteger(artifact.size) || artifact.size < 0) {
+    throw new Error('COS OfficeCLI artifact size 不合法')
+  }
+  return {
+    version: releaseVersion(artifact.version),
+    url: artifact.url,
+    sha256: artifact.sha256.toLowerCase(),
+    size: artifact.size,
+  }
+}
+
+function isHttpUrl(value: string): boolean {
+  try {
+    const url = new URL(value)
+    return url.protocol === 'http:' || url.protocol === 'https:'
+  } catch {
+    return false
+  }
+}
+
 async function fetchGitHubRelease(url: string): Promise<GitHubRelease> {
-  const response = await fetch(url, {
+  const response = await fetchWithDiagnostics(url, '读取 OfficeCLI GitHub release 失败', {
     headers: {
       Accept: 'application/vnd.github+json',
       'User-Agent': 'Copis-functional-module-release',
     },
   })
-  if (!response.ok) throw new Error(`读取 OfficeCLI GitHub release 失败: HTTP ${response.status}`)
 
   const value = await response.json() as unknown
   if (!isRecord(value) || typeof value.tag_name !== 'string' || !Array.isArray(value.assets)) {
@@ -128,15 +312,21 @@ function parseReleaseAsset(value: unknown): GitHubReleaseAsset {
   }
 }
 
-async function fetchBinary(url: string, name: string): Promise<Buffer> {
-  const response = await fetch(url, { headers: { 'User-Agent': 'Copis-functional-module-release' } })
-  if (!response.ok) throw new Error(`下载 OfficeCLI 失败: ${name} HTTP ${response.status}`)
+async function fetchBinary(
+  url: string,
+  name: string,
+  failurePrefix = `下载 OfficeCLI 失败: ${name}`,
+): Promise<Buffer> {
+  const response = await fetchWithDiagnostics(url, failurePrefix, {
+    headers: { 'User-Agent': 'Copis-functional-module-release' },
+  })
   return Buffer.from(await response.arrayBuffer())
 }
 
 async function fetchText(url: string, name: string): Promise<string> {
-  const response = await fetch(url, { headers: { 'User-Agent': 'Copis-functional-module-release' } })
-  if (!response.ok) throw new Error(`下载 OfficeCLI 校验文件失败: ${name} HTTP ${response.status}`)
+  const response = await fetchWithDiagnostics(url, `下载 OfficeCLI 校验文件失败: ${name}`, {
+    headers: { 'User-Agent': 'Copis-functional-module-release' },
+  })
   return response.text()
 }
 

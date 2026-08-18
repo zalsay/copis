@@ -22,6 +22,7 @@ import { useTrackSessionView } from '@/hooks/useTrackSessionView'
 import { TabBar } from './TabBar'
 import { TabContent } from './TabContent'
 import { AutomationFormView } from '@/components/automation/AutomationFormView'
+import { AutomationsListView } from '@/components/automation/AutomationsListView'
 import { PlanningView } from '@/components/planning/PlanningView'
 import { AgentSkillsView } from '@/components/agent-skills/AgentSkillsView'
 import { MemoryView } from '@/components/memory/MemoryView'
@@ -170,10 +171,12 @@ export function MainArea(): React.ReactElement {
           >
             {activeView === 'conversations' && workingHistorySelection ? (
               <WorkingSessionHistoryView />
-            ) : activeView === 'planning' ? (
+            ) : activeView === 'planning' || activeView === 'automations' ? (
               automationFormOpen ? (
-                // 自动化设置页：与任务/日程同层级替换中间区，不经过 TabBar。
+                // 自动化设置页：与日程和定时任务同层级替换中间区，不经过 TabBar。
                 <AutomationFormView />
+              ) : activeView === 'automations' ? (
+                <AutomationsListView />
               ) : (
                 <PlanningView />
               )

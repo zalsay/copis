@@ -258,6 +258,46 @@ describe('Agent 工作区创建', () => {
     expect(existsSync(expectedProjectRoot)).toBe(true)
   })
 
+  test('Given 本地工作区会话 When 初始化浏览器目录 Then 仅创建该会话的 browser 受控目录', () => {
+    const projectRootPath = join(tempHome, 'browser-session-project')
+    mkdirSync(projectRootPath, { recursive: true })
+    const workspace = manager.createAgentWorkspace({ name: '浏览器项目', projectRootPath })
+    const browserManager = manager as typeof manager & {
+      ensureAgentWorkspaceBrowserSessionPath?: (workspace: { slug: string; projectRootPath?: string }, sessionId: string) => string
+    }
+
+    expect(browserManager.ensureAgentWorkspaceBrowserSessionPath).toBeDefined()
+    if (!browserManager.ensureAgentWorkspaceBrowserSessionPath) return
+
+    const sessionPath = browserManager.ensureAgentWorkspaceBrowserSessionPath(workspace, 'session-1')
+
+    expect(sessionPath).toBe(join(workspace.projectRootPath!, 'browser', 'agent-workspaces', 'session-1'))
+    expect(existsSync(sessionPath)).toBe(true)
+    expect(existsSync(join(workspace.projectRootPath!, 'browser', 'agent-workspaces', 'session-2'))).toBe(false)
+  })
+
+  test('Given 本地项目根已删除 When 初始化浏览器目录 Then 拒绝且不重建用户目录', () => {
+    const projectRootPath = join(tempHome, 'missing-browser-project')
+    mkdirSync(projectRootPath, { recursive: true })
+    const workspace = manager.createAgentWorkspace({ name: '缺失浏览器项目', projectRootPath })
+    rmSync(projectRootPath, { recursive: true, force: true })
+
+    expect(() => manager.ensureAgentWorkspaceBrowserSessionPath(workspace, 'session-1')).toThrow('本地项目根目录不可用')
+    expect(existsSync(projectRootPath)).toBe(false)
+  })
+
+  test('Given browser 目录是指向项目外的符号链接 When 初始化浏览器目录 Then 拒绝写入外部目录', () => {
+    const projectRootPath = join(tempHome, 'browser-symlink-project')
+    const outsideRoot = join(tempHome, 'browser-symlink-outside')
+    mkdirSync(projectRootPath, { recursive: true })
+    mkdirSync(outsideRoot, { recursive: true })
+    const workspace = manager.createAgentWorkspace({ name: '浏览器链接项目', projectRootPath })
+    symlinkSync(outsideRoot, join(projectRootPath, 'browser'), 'dir')
+
+    expect(() => manager.ensureAgentWorkspaceBrowserSessionPath(workspace, 'session-1')).toThrow('browser 目录不能是符号链接')
+    expect(existsSync(join(outsideRoot, 'agent-workspaces', 'session-1'))).toBe(false)
+  })
+
   test('Given 本地项目 When 初始化项目级 Context Then 写入 copis/.context', () => {
     const projectRootPath = join(tempHome, 'readonly-context-project')
     mkdirSync(projectRootPath, { recursive: true })

@@ -21,6 +21,7 @@ import {
   Search,
   Settings,
   Sparkles,
+  Timer,
   Trash2,
   UsersRound,
 } from 'lucide-react'
@@ -518,6 +519,14 @@ export function CopisWorkingSidebar({ width, noTransition = false }: CopisWorkin
         </button>
         <button
           type="button"
+          className={cn('copis-working-sidebar-icon-button', activeView === 'automations' && 'active')}
+          aria-label="定时任务"
+          onClick={() => { setWorkingHistorySelection(null); setAppMode('agent'); setActiveView('automations') }}
+        >
+          <Timer aria-hidden="true" />
+        </button>
+        <button
+          type="button"
           className={cn('copis-working-sidebar-icon-button', activeView === 'expert-team' && 'active')}
           aria-label="专家团队"
           onClick={() => { setWorkingHistorySelection(null); setAppMode('agent'); setActiveView('expert-team') }}
@@ -545,6 +554,10 @@ export function CopisWorkingSidebar({ width, noTransition = false }: CopisWorkin
           <button type="button" className="copis-working-menu-button" onClick={() => { setWorkingHistorySelection(null); setAppMode('agent'); setPlanningTab('schedule'); setActiveView('planning') }}>
             <CalendarClock aria-hidden="true" />
             <span>日程表</span>
+          </button>
+          <button type="button" className={cn('copis-working-menu-button', activeView === 'automations' && 'active')} onClick={() => { setWorkingHistorySelection(null); setAppMode('agent'); setActiveView('automations') }}>
+            <Timer aria-hidden="true" />
+            <span>定时任务</span>
           </button>
           <button type="button" className={cn('copis-working-menu-button', activeView === 'memory' && 'active')} onClick={handleOpenMemory}>
             <BookOpen aria-hidden="true" />

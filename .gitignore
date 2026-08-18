@@ -16,6 +16,7 @@ apps/electron/resources/pi-extensions/
 # 工作区项目 Node runtime 功能模块归档（build:node-runtime-module 生成，打包时现拷，不进 git）
 apps/electron/resources/node-runtime/
 apps/electron/resources/alipay-bot/
+apps/electron/resources/playwright-core/
 # 根目录误提交的 esbuild 打包产物（真实入口是 apps/electron/dist/main.cjs）
 /main.cjs
 # bun build --compile 的临时中间产物

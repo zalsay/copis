@@ -26,6 +26,8 @@ interface WebTabRecord {
   state: WebTabState
   view: WebContentsView
   bounds: WebTabBounds
+  isIncognito: boolean
+  hasOpenedAddress: boolean
   workflowOwned?: boolean
   workflowVisible?: boolean
   mainFrameLoadError?: string
@@ -106,6 +108,25 @@ function isAllowedWebUrl(url: string): boolean {
   return /^https?:\/\//i.test(url) || url === DEFAULT_URL
 }
 
+function isHttpWebUrl(url: string): boolean {
+  return /^https?:\/\//i.test(url)
+}
+
+function canActivateIncognito(record: WebTabRecord): boolean {
+  return !record.workflowOwned
+    && !record.isIncognito
+    && !record.hasOpenedAddress
+    && record.state.url === DEFAULT_URL
+}
+
+function getPublicState(record: WebTabRecord): WebTabState {
+  return {
+    ...record.state,
+    isIncognito: record.isIncognito,
+    canActivateIncognito: canActivateIncognito(record),
+  }
+}
+
 /** 将地址栏输入转换成可导航的 HTTP(S) 地址。 */
 export function normalizeWebTabUrl(input: string): string {
   const value = input.trim()
@@ -144,7 +165,7 @@ function getSnapshot(): WebTabsSnapshot {
   return {
     tabs: Array.from(records.values())
       .filter((record) => !record.workflowOwned)
-      .map((record) => ({ ...record.state })),
+      .map((record) => getPublicState(record)),
     activeTabId,
   }
 }
@@ -153,12 +174,13 @@ function persistTabs(): void {
   if (isRestoringPersistedTabs || isDisposingWebTabs) return
 
   const snapshot = getSnapshot()
+  const tabs = snapshot.tabs.filter((tab) => !tab.isIncognito)
   const activeTabIndex = snapshot.activeTabId === null
     ? null
-    : snapshot.tabs.findIndex((tab) => tab.id === snapshot.activeTabId)
+    : tabs.findIndex((tab) => tab.id === snapshot.activeTabId)
   try {
     savePersistedWebTabs({
-      tabs: snapshot.tabs.map((tab) => ({ url: tab.url })),
+      tabs: tabs.map((tab) => ({ url: tab.url })),
       activeTabIndex: activeTabIndex !== null && activeTabIndex >= 0 ? activeTabIndex : null,
     })
   } catch (error) {
@@ -284,6 +306,7 @@ function installWebContentsHandlers(record: WebTabRecord): void {
   })
 
   contents.on('did-navigate', (_event, url) => {
+    if (isHttpWebUrl(url)) record.hasOpenedAddress = true
     refreshState(record, {
       url,
       isLoading: false,
@@ -295,6 +318,7 @@ function installWebContentsHandlers(record: WebTabRecord): void {
 
   contents.on('did-navigate-in-page', (_event, url, isMainFrame) => {
     if (isMainFrame) {
+      if (isHttpWebUrl(url)) record.hasOpenedAddress = true
       refreshState(record, { url })
       emitWebTabLifecycle({ type: 'navigated', tabId: record.state.id, workflowOwned: record.workflowOwned, url, snapshot: getSnapshot() })
     }
@@ -321,7 +345,7 @@ function installWebContentsHandlers(record: WebTabRecord): void {
   })
 
   contents.on('destroyed', () => {
-    if (records.get(record.state.id) !== record) return
+    if (records.get(record.state.id) !== record || record.view.webContents !== contents) return
     records.delete(record.state.id)
     if (!record.workflowOwned && activeTabId === record.state.id) activeTabId = null
     if (!record.workflowOwned) {
@@ -345,7 +369,12 @@ function installWebContentsHandlers(record: WebTabRecord): void {
     if (isAllowedWebUrl(url)) {
       try {
         createWebTabInternal(
-          { url, partition: record.partition, activate: !record.workflowOwned },
+          {
+            url,
+            partition: record.partition,
+            incognito: record.isIncognito,
+            activate: !record.workflowOwned,
+          },
           record.workflowOwned === true,
           record.state.id,
         )
@@ -503,6 +532,20 @@ export function closeWebBookmarksWindow(): void {
   if (window && !window.isDestroyed()) window.close()
 }
 
+function clearIncognitoSession(record: WebTabRecord): void {
+  if (!record.isIncognito) return
+  let clearStorageData: Promise<void> | void
+  try {
+    clearStorageData = record.view.webContents.session.clearStorageData()
+  } catch (error) {
+    console.warn('[网页页签] 清理无痕 Session 失败:', error)
+    return
+  }
+  void Promise.resolve(clearStorageData).catch((error: unknown) => {
+    console.warn('[网页页签] 清理无痕 Session 失败:', error)
+  })
+}
+
 /** 保存当前网页页签，供应用退出前调用。 */
 export function saveWebTabsSession(): void {
   persistTabs()
@@ -518,6 +561,7 @@ export function disposeWebTabs(): void {
 
   try {
     for (const record of records.values()) {
+      clearIncognitoSession(record)
       try {
         if (currentHost && !currentHost.isDestroyed()) {
           currentHost.contentView.removeChildView(record.view)
@@ -545,7 +589,7 @@ export function disposeWebTabs(): void {
 }
 
 export interface WebTabLifecycleEvent {
-  type: 'created' | 'activated' | 'closed' | 'navigated'
+  type: 'created' | 'activated' | 'closed' | 'navigated' | 'recreated'
   tabId: string
   openerTabId?: string
   workflowOwned?: boolean
@@ -576,13 +620,8 @@ function normalizeWebTabPartition(partition: string | undefined): string {
   return 'persist:copis-web'
 }
 
-/** 创建网页 WebContentsView；Workflow-owned 视图不进入用户页签和持久化会话。 */
-function createWebTabInternal(input: CreateWebTabInput, workflowOwned: boolean, openerTabId?: string): WebTabRecord {
-  if (!isHostAvailable()) throw new Error('主窗口尚未准备好')
-
-  const url = normalizeWebTabUrl(input.url ?? DEFAULT_URL)
-  const partition = normalizeWebTabPartition(input.partition)
-  const view = new WebContentsView({
+function createWebTabView(partition: string): WebContentsView {
+  return new WebContentsView({
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
@@ -591,6 +630,18 @@ function createWebTabInternal(input: CreateWebTabInput, workflowOwned: boolean, 
       partition,
     },
   })
+}
+
+/** 创建网页 WebContentsView；Workflow-owned 视图不进入用户页签和持久化会话。 */
+function createWebTabInternal(input: CreateWebTabInput, workflowOwned: boolean, openerTabId?: string): WebTabRecord {
+  if (!isHostAvailable()) throw new Error('主窗口尚未准备好')
+
+  const url = normalizeWebTabUrl(input.url ?? DEFAULT_URL)
+  const isIncognito = input.incognito === true
+  const partition = isIncognito
+    ? `copis-incognito-${randomUUID()}`
+    : normalizeWebTabPartition(input.partition)
+  const view = createWebTabView(partition)
   const id = `web-${randomUUID()}`
   const showWorkflowForE2E = workflowOwned && process.env.COPIS_BROWSER_WORKFLOW_E2E_VISIBLE === '1'
   const record: WebTabRecord = {
@@ -602,14 +653,20 @@ function createWebTabInternal(input: CreateWebTabInput, workflowOwned: boolean, 
       isLoading: url !== DEFAULT_URL,
       canGoBack: false,
       canGoForward: false,
+      isIncognito,
+      canActivateIncognito: false,
     },
     view,
     bounds: { x: 0, y: 0, width: 0, height: 0 },
+    isIncognito,
+    hasOpenedAddress: isHttpWebUrl(url),
     workflowOwned,
     workflowVisible: showWorkflowForE2E,
     partition,
     cdpDetachListeners: new Set(),
   }
+
+  record.state.canActivateIncognito = canActivateIncognito(record)
 
   records.set(id, record)
   if (showWorkflowForE2E && activeTabId) {
@@ -619,7 +676,7 @@ function createWebTabInternal(input: CreateWebTabInput, workflowOwned: boolean, 
   hostWindow!.contentView.addChildView(view)
   view.setVisible(false)
   installWebContentsHandlers(record)
-  attachCdp(record)
+  if (!workflowOwned) attachCdp(record)
 
   if (!workflowOwned && input.activate !== false) activeTabId = id
   persistTabs()
@@ -648,7 +705,7 @@ export function createWebTab(input: CreateWebTabInput = {}): WebTabsSnapshot {
 /** 创建仅供固定 Workflow 使用的隔离网页视图，不出现在用户页签或恢复文件中。 */
 export function createWorkflowWebTab(input: CreateWebTabInput = {}): WebTabState {
   const record = createWebTabInternal({ ...input, activate: false }, true)
-  return { ...record.state }
+  return getPublicState(record)
 }
 
 /** 关闭 Workflow-owned 网页视图并释放 CDP。 */
@@ -656,6 +713,7 @@ export function closeWorkflowWebTab(tabId: string): void {
   const record = records.get(tabId)
   if (!record || !record.workflowOwned) return
   records.delete(tabId)
+  clearIncognitoSession(record)
   try {
     hostWindow?.contentView.removeChildView(record.view)
   } catch {
@@ -671,6 +729,23 @@ export function closeWorkflowWebTab(tabId: string): void {
   if (!record.view.webContents.isDestroyed()) record.view.webContents.close({ waitForBeforeUnload: false })
   applyActiveView()
 }
+
+/** 将失败的 Workflow 专用页面提升为普通网页页签，供当前 Agent 重新观察和操作。 */
+export function promoteWorkflowWebTab(tabId: string): WebTabState {
+  const record = records.get(tabId)
+  if (!record?.workflowOwned) throw new Error('Workflow 失败页面不存在或不能接管')
+  const activeRecord = activeTabId ? records.get(activeTabId) : undefined
+  if (activeRecord && !activeRecord.workflowOwned) record.bounds = { ...activeRecord.bounds }
+  record.workflowOwned = false
+  record.workflowVisible = false
+  activeTabId = tabId
+  persistTabs()
+  applyActiveView()
+  emitSnapshot()
+  emitWebTabLifecycle({ type: 'activated', tabId, snapshot: getSnapshot() })
+  return getPublicState(record)
+}
+
 export function activateWebTab(tabId: string | null): WebTabsSnapshot {
   if (tabId !== null && !records.has(tabId)) {
     throw new Error('网页页签不存在')
@@ -680,6 +755,72 @@ export function activateWebTab(tabId: string | null): WebTabsSnapshot {
   applyActiveView()
   emitSnapshot()
   if (tabId) emitWebTabLifecycle({ type: 'activated', tabId, snapshot: getSnapshot() })
+  return getSnapshot()
+}
+
+/** 将尚未访问地址的普通空白页签切换为独立无痕 Session。 */
+export function activateWebTabIncognito(tabId: string): WebTabsSnapshot {
+  const record = records.get(tabId)
+  if (!record) throw new Error('网页页签不存在')
+  if (!canActivateIncognito(record)) throw new Error('当前网页页签不能切换为无痕模式')
+
+  const previousView = record.view
+  const partition = `copis-incognito-${randomUUID()}`
+  const nextView = createWebTabView(partition)
+  const nextRecord: WebTabRecord = {
+    ...record,
+    state: {
+      ...record.state,
+      isIncognito: true,
+      canActivateIncognito: false,
+    },
+    view: nextView,
+    isIncognito: true,
+    partition,
+    cdpDetachHandler: undefined,
+  }
+
+  try {
+    hostWindow!.contentView.addChildView(nextView)
+    nextView.setVisible(false)
+    installWebContentsHandlers(nextRecord)
+    attachCdp(nextRecord)
+  } catch (error) {
+    clearIncognitoSession(nextRecord)
+    try {
+      hostWindow!.contentView.removeChildView(nextView)
+    } catch {
+      // 新视图未完整挂载时忽略移除错误。
+    }
+    try {
+      const cdp = nextView.webContents.debugger
+      if (cdp.isAttached()) cdp.detach()
+    } catch {
+      // 新视图初始化失败时忽略 CDP 清理错误。
+    }
+    if (!nextView.webContents.isDestroyed()) nextView.webContents.close({ waitForBeforeUnload: false })
+    throw error
+  }
+
+  records.set(tabId, nextRecord)
+  try {
+    hostWindow!.contentView.removeChildView(previousView)
+  } catch {
+    // 主窗口正在销毁时，Electron 会自动移除旧视图。
+  }
+  try {
+    const cdp = previousView.webContents.debugger
+    if (record.cdpDetachHandler) cdp.removeListener('detach', record.cdpDetachHandler)
+    if (cdp.isAttached()) cdp.detach()
+  } catch {
+    // 旧网页进程可能已经退出，忽略替换阶段清理错误。
+  }
+  if (!previousView.webContents.isDestroyed()) previousView.webContents.close({ waitForBeforeUnload: false })
+
+  persistTabs()
+  applyActiveView()
+  emitSnapshot()
+  emitWebTabLifecycle({ type: 'recreated', tabId, snapshot: getSnapshot() })
   return getSnapshot()
 }
 
@@ -698,6 +839,8 @@ export function closeWebTab(tabId: string): WebTabsSnapshot {
   if (wasActive) {
     activeTabId = tabIds[tabIndex - 1] ?? tabIds[tabIndex + 1] ?? null
   }
+
+  clearIncognitoSession(record)
 
   try {
     hostWindow?.contentView.removeChildView(record.view)
@@ -727,6 +870,7 @@ export function navigateWebTab(input: NavigateWebTabInput): WebTabsSnapshot {
   if (!record) throw new Error('网页页签不存在')
 
   const url = normalizeWebTabUrl(input.url)
+  if (isHttpWebUrl(url)) record.hasOpenedAddress = true
   record.mainFrameLoadError = undefined
   record.state = {
     ...record.state,
@@ -856,7 +1000,18 @@ export function getWebTabLoadError(tabId: string): string | undefined {
 
 export function getWebTabState(tabId: string): WebTabState | undefined {
   const record = records.get(tabId)
-  return record ? { ...record.state } : undefined
+  return record ? getPublicState(record) : undefined
+}
+
+/** 获取指定 WebContentsView 的 CDP target ID，供主进程生成的 Workflow 脚本精确选页。 */
+export async function getWebTabCdpTargetId(tabId: string): Promise<string> {
+  const record = records.get(tabId)
+  if (!record) throw new Error('网页页签不存在')
+  const targetId = record.view.webContents.getOrCreateDevToolsTargetId()
+  if (typeof targetId !== 'string' || !targetId.trim()) {
+    throw new Error('网页 CDP target ID 不可用')
+  }
+  return targetId
 }
 
 /** 订阅指定网页页签的 CDP 事件；监听器只在主进程内部使用。 */
@@ -879,6 +1034,7 @@ export function detachWebTabCdpForTest(tabId: string): void {
   if (!record) throw new Error('网页页签不存在')
   const cdp = record.view.webContents.debugger
   if (cdp.isAttached()) cdp.detach()
+  else for (const listener of record.cdpDetachListeners) listener('E2E 模拟 CDP 断开')
 }
 
 /** 向主进程内部的网页 CDP 会话发送命令，禁止通过 Renderer/HTTP 暴露。 */

@@ -6,7 +6,6 @@ import type { CalendarEvent } from '@copis/shared'
 import { cn } from '@/lib/utils'
 import { agentWorkspacesAtom } from '@/atoms/agent-atoms'
 import { calendarEventsAtom, planningCalendarCreateRequestAtom, planningSelectedCalendarEventIdAtom, planningTabAtom, type PlanningTab } from '@/atoms/planning-atoms'
-import { AutomationsListView } from '@/components/automation/AutomationsListView'
 import { CalendarWorkspace, getCalendarEventEndAt, getCalendarStatus } from '@/components/planning/CalendarWorkspace'
 import { Button } from '@/components/ui/button'
 import { useShortcut } from '@/hooks/useShortcut'
@@ -15,7 +14,6 @@ import { detectIsWindows, WINDOW_CONTROLS_INSET_RIGHT } from '@/lib/platform'
 const TABS: Array<{ id: PlanningTab; label: string }> = [
   { id: 'schedule', label: '日程表' },
   { id: 'calendar', label: '日历' },
-  { id: 'automations', label: '定时任务' },
 ]
 
 const STATUS_LABELS = {
@@ -167,8 +165,8 @@ export function PlanningView({ standalone = false }: { standalone?: boolean } = 
   }, [requestCalendarCreate, setTab])
   useShortcut('new-session', triggerCalendarCreate, true, { exclusive: true })
 
-  const pageTitle = tab === 'schedule' ? '日程表' : tab === 'calendar' ? '日历' : '定时任务'
-  const pageDescription = tab === 'schedule' || tab === 'calendar' ? '个人安排，可关联工作区' : '管理自动运行的任务'
+  const pageTitle = tab === 'schedule' ? '日程表' : '日历'
+  const pageDescription = '个人安排，可关联工作区'
 
   return (
     <div className="flex h-full flex-col overflow-hidden bg-content-area">
@@ -184,11 +182,10 @@ export function PlanningView({ standalone = false }: { standalone?: boolean } = 
           {TABS.map((item) => <button key={item.id} type="button" onClick={() => setTab(item.id)} className={cn('min-h-9 rounded-lg px-3 text-sm transition-colors', tab === item.id ? 'bg-background font-medium text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground')}>{item.label}</button>)}
         </nav>
       </div>
-      <main className={cn('min-h-0 flex-1 titlebar-no-drag', standalone ? 'px-5 pb-5 pt-4' : 'px-6 pb-8 pt-6 sm:px-8 xl:px-10', tab === 'schedule' || tab === 'calendar' ? 'overflow-hidden' : 'overflow-y-auto')}>
-        <div className={cn('h-full w-full', (tab === 'schedule' || tab === 'calendar') && 'min-h-0')}>
+      <main className={cn('min-h-0 flex-1 overflow-hidden titlebar-no-drag', standalone ? 'px-5 pb-5 pt-4' : 'px-6 pb-8 pt-6 sm:px-8 xl:px-10')}>
+        <div className="h-full min-h-0 w-full">
           {tab === 'schedule' && <CalendarScheduleList />}
           {tab === 'calendar' && <CalendarWorkspace />}
-          {tab === 'automations' && <AutomationsListView />}
         </div>
       </main>
     </div>

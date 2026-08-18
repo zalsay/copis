@@ -122,6 +122,7 @@ describe('功能模块发布边界', () => {
     expect(rootPackage.scripts?.['prepare:officecli-module']).toBeDefined()
     expect(deployShellScript).toContain('prepare:officecli-module')
     expect(deployShellScript).toContain('--officecli-version "$OFFICECLI_VERSION"')
+    expect(deployShellScript).toContain('--public-manifest-url "$OFFICECLI_PUBLIC_MANIFEST_URL"')
     expect(deployShellScript).toContain('resolve_node_runtime_source')
     expect(deployShellScript).toContain('v24.*')
     expect(deployShellScript).toContain('--source "$NODE_RUNTIME_SOURCE"')

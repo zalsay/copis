@@ -15,8 +15,8 @@ describe('登录后功能模块更新页模型', () => {
   })
 
   test('Given 必要组件列表 When 生成启动页模型 Then Rust 实现显示为系统核心模块', () => {
-    expect(getStartupModuleRows().map((row) => row.name)).toEqual(['rust-http-api', 'officecli', 'alipay-bot'])
-    expect(getStartupModuleRows().map((row) => row.displayName)).toEqual(['系统核心模块', 'Office 文档支持', '支付宝智能体 CLI'])
+    expect(getStartupModuleRows().map((row) => row.name)).toEqual(['rust-http-api', 'officecli', 'alipay-bot', 'playwright-core'])
+    expect(getStartupModuleRows().map((row) => row.displayName)).toEqual(['系统核心模块', 'Office 文档支持', '支付宝智能体 CLI', '浏览器自动化内核'])
     expect(getStartupModuleRows().every((row) => !/Rust|HTTP|API|health/.test(`${row.displayName} ${row.description}`))).toBe(true)
   })
 

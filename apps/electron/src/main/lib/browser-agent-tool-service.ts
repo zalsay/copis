@@ -135,6 +135,12 @@ function optionalNumber(input: Record<string, unknown>, key: string): number | u
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined
 }
 
+function optionalBoolean(input: Record<string, unknown>, key: string): boolean | undefined {
+  if (!(key in input) || input[key] === undefined) return undefined
+  if (typeof input[key] !== 'boolean') throw new Error(`${key} 必须是布尔值`)
+  return input[key]
+}
+
 function requiredStringList(input: Record<string, unknown>, key: string): string[] {
   const value = input[key]
   if (!Array.isArray(value) || value.length === 0 || value.length > 20) {
@@ -412,6 +418,7 @@ export function createBrowserAgentToolService(
       }
       case 'BrowserPageOpenTab': {
         const url = requiredString(input.toolInput, 'url')
+        const incognito = optionalBoolean(input.toolInput, 'incognito') ?? false
         let targetUrl: string
         try {
           const parsed = new URL(url)
@@ -426,8 +433,10 @@ export function createBrowserAgentToolService(
             kind: 'json',
             value: {
               ok: true,
-              ...(await dependencies.openBrowserAgentTab(input.sessionId, targetUrl)),
-              message: '已打开新的 HTTP(S) 网页页签并切换当前 AI浏览器绑定。',
+              ...(await dependencies.openBrowserAgentTab(input.sessionId, targetUrl, incognito)),
+              message: incognito
+                ? '已打开新的无痕 HTTP(S) 网页页签并切换当前 AI浏览器绑定。无痕页签不复用普通页签登录态。'
+                : '已打开新的 HTTP(S) 网页页签并切换当前 AI浏览器绑定。',
             },
           }
         }
@@ -449,8 +458,10 @@ export function createBrowserAgentToolService(
           kind: 'json',
           value: {
             ok: true,
-            ...(await dependencies.openBrowserAgentTab(input.sessionId, targetUrl)),
-            message: '已打开新的 HTTP(S) 网页页签并切换当前 AI浏览器绑定。',
+            ...(await dependencies.openBrowserAgentTab(input.sessionId, targetUrl, incognito)),
+            message: incognito
+              ? '已打开新的无痕 HTTP(S) 网页页签并切换当前 AI浏览器绑定。无痕页签不复用普通页签登录态。'
+              : '已打开新的 HTTP(S) 网页页签并切换当前 AI浏览器绑定。',
           },
         }
       }

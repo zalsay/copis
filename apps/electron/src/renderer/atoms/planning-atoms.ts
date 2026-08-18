@@ -1,7 +1,7 @@
 import { atom } from 'jotai'
 import type { ActivePlanningReminder, CalendarEvent, PlanningGroup, PlanningTag, Todo } from '@copis/shared'
 
-export type PlanningTab = 'schedule' | 'calendar' | 'automations'
+export type PlanningTab = 'schedule' | 'calendar'
 
 export const todosAtom = atom<Todo[]>([])
 export const calendarEventsAtom = atom<CalendarEvent[]>([])

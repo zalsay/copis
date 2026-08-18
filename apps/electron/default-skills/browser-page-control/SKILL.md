@@ -14,6 +14,7 @@ version: "1.0.3"
 ## 打开新页签
 
 - 没有 Browser Context 时，用户主会话可直接调用 `BrowserPageOpenTab` 传入 HTTP(S) 地址；它会创建并激活 Copis 内部网页页签，并将当前 AI浏览器会话绑定到新页签。
+- 需要隔离登录态时，调用 `BrowserPageOpenTab` 时显式传入 `incognito: true`；无痕页签使用独立临时会话，不复用普通页签登录态，关闭或重启应用后不会恢复。
 - 用户主会话明确要求的 HTTP(S) 地址可直接通过 `BrowserPageOpenTab` 或 `BrowserPageNavigate` 打开，包括首次建页和跨 Origin 地址，不再单独审批。已绑定页面仍须处于授权模式，导航后按现有页面授权状态重新处理。
 
 ## 观察与元素引用

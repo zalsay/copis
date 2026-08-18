@@ -36,6 +36,12 @@ import { buildPiCollaborationTools } from '../agent-collaboration-tools'
 import { buildExpertTeamTools } from '../expert-team-agent-tool'
 import { getVisionRelayRouteLabel, inspectImageWithVisionRelay, isVisionRelayConfigured, isVisionRelayEligibleForModel } from '../vision-relay-service'
 import {
+  BROWSER_WORKFLOW_DRAFT_PARAMETERS,
+  BROWSER_WORKFLOW_DRAFT_PROMPT,
+  BROWSER_WORKFLOW_RUN_DESCRIPTION,
+  BROWSER_WORKFLOW_RUN_PROMPT,
+} from './browser-workflow-draft-schema'
+import {
   listTodos,
   getTodo,
   createTodo,
@@ -317,9 +323,12 @@ function buildBrowserPageOpenTabTool(sdk: PiSdk, ctx: PiBuiltinToolsContext): To
   return sdk.defineTool({
     name: 'BrowserPageOpenTab',
     label: '打开新页签',
-    description: '打开一个新的 Copis 内部 HTTP(S) 网页页签，并把当前 AI浏览器会话绑定到新页签。用户主会话可在没有 Browser Context 时直接建页，明确要求的跨站地址不请求单次确认。',
-    promptSnippet: 'BrowserPageOpenTab: 用户要求打开新网页、没有 Browser Context 或需要保留原页面时使用；新页签会自动成为当前绑定页。',
-    parameters: Type.Object({ url: Type.String({ description: 'HTTP(S) 地址' }) }),
+    description: '打开一个新的 Copis 内部 HTTP(S) 网页页签，并把当前 AI浏览器会话绑定到新页签。用户主会话可在没有 Browser Context 时直接建页，明确要求的跨站地址不请求单次确认；需要隔离登录态时传入 incognito: true。',
+    promptSnippet: 'BrowserPageOpenTab: 用户要求打开新网页、没有 Browser Context 或需要保留原页面时使用；需要隔离登录态时显式传 incognito: true；无痕页签不复用普通页签登录态。',
+    parameters: Type.Object({
+      url: Type.String({ description: 'HTTP(S) 地址' }),
+      incognito: Type.Optional(Type.Boolean({ description: '是否使用独立的临时无痕浏览会话，默认 false' })),
+    }),
     async execute(toolCallId: string, params: unknown, signal?: AbortSignal) {
       return executeBrowserAgentTool(ctx, toolCallId, 'BrowserPageOpenTab', params, signal)
     },
@@ -442,11 +451,9 @@ function buildBrowserWorkflowTools(sdk: PiSdk, ctx: PiBuiltinToolsContext): Tool
     sdk.defineTool({
       name: 'BrowserWorkflowDraft',
       label: '提炼网页 Workflow 草稿',
-      description: '根据 BrowserWorkflowRecordingGet 返回的脱敏操作 JSONL 生成待审核 Workflow 草稿；也可以读取当前已提交的草稿。只生成草稿，不直接批准保存。',
-      promptSnippet: 'BrowserWorkflowDraft: 先读取网页操作 JSONL，再总结为固定步骤、变量、Origin 和人工检查点；提交后等待用户审核。',
-      parameters: Type.Object({
-        workflow: Type.Optional(Type.Unknown({ description: '根据网页操作 JSONL 提炼出的 BrowserWorkflowVersion 草稿 JSON' })),
-      }),
+      description: '根据 BrowserWorkflowRecordingGet 返回的脱敏操作 JSONL 生成待审核 Workflow 草稿；必须使用 schema 中的完整结构化步骤，主进程会补齐版本元数据。也可以读取当前已提交的草稿。',
+      promptSnippet: BROWSER_WORKFLOW_DRAFT_PROMPT,
+      parameters: BROWSER_WORKFLOW_DRAFT_PARAMETERS,
       async execute(toolCallId: string, params: unknown, signal?: AbortSignal) {
         return executeBrowserAgentTool(ctx, toolCallId, 'BrowserWorkflowDraft', params, signal)
       },
@@ -516,8 +523,8 @@ function buildBrowserWorkflowTools(sdk: PiSdk, ctx: PiBuiltinToolsContext): Tool
     sdk.defineTool({
       name: 'BrowserWorkflowRun',
       label: '运行网页 Workflow',
-      description: '按已批准且版本固定的 Browser Workflow 执行跨页面自动化。不会临场自由点击；遇到敏感信息或失败会暂停并返回原因。',
-      promptSnippet: 'BrowserWorkflowRun: 只有用户明确要求运行已保存 Workflow 时调用，并先确认 Workflow ID、变量和影响范围。',
+      description: BROWSER_WORKFLOW_RUN_DESCRIPTION,
+      promptSnippet: BROWSER_WORKFLOW_RUN_PROMPT,
       parameters: Type.Object({
         workflowId: Type.String({ description: 'Workflow ID' }),
         version: Type.Optional(Type.Number({ description: '可选版本号' })),

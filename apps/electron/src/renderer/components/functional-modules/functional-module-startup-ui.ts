@@ -26,6 +26,11 @@ export const STARTUP_MODULE_ROWS: readonly StartupModuleRow[] = [
     displayName: '支付宝智能体 CLI',
     description: '为默认项目提供支付宝付款能力',
   },
+  {
+    name: 'playwright-core',
+    displayName: '浏览器自动化内核',
+    description: '为 Browser Workflow 提供页面自动化能力',
+  },
 ]
 
 export type StartupGateAction = 'retry'

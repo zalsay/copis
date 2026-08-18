@@ -104,6 +104,7 @@ export interface PiWorkerFileAccessPolicy {
   readRoots: string[]
   readFiles: string[]
   writeRoots: string[]
+  browserSessionRoot?: string
   permissionMode: CopisPermissionMode
   advancedAuthorization?: boolean
 }

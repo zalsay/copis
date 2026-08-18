@@ -5,6 +5,8 @@ const MAX_RECORDING_CONTENT_BYTES = 8 * 1024 * 1024
 
 export interface RustBrowserRecordingStartInput {
   recordingId: string
+  recordingDirectory: string
+  sessionId: string
   workspaceSlug: string
   startTabAlias: string
   startUrl: string
@@ -67,6 +69,8 @@ export async function startRustBrowserRecording(input: RustBrowserRecordingStart
     JSON.stringify({
       kind: 'recording_started',
       recordingId: input.recordingId,
+      recordingDirectory: input.recordingDirectory,
+      sessionId: input.sessionId,
       startTabAlias: input.startTabAlias,
       startUrl: input.startUrl,
       startedAt: input.startedAt,
@@ -91,6 +95,12 @@ export async function cancelRustBrowserRecording(
   input: Pick<RustBrowserRecordingStartInput, 'workspaceSlug' | 'recordingId'>,
 ): Promise<void> {
   await request('POST', recordingPath(input, 'cancel'))
+}
+
+export async function releaseRustBrowserRecording(
+  input: Pick<RustBrowserRecordingStartInput, 'workspaceSlug' | 'recordingId'>,
+): Promise<void> {
+  await request('POST', recordingPath(input, 'release'))
 }
 
 export async function readRustBrowserRecording(

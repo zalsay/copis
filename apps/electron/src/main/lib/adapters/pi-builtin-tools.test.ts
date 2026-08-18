@@ -160,6 +160,28 @@ describe('Pi Browser 工具复用主进程 dispatcher', () => {
     }))
   })
 
+  test('Given direct Pi BrowserPageOpenTab schema When incognito is supplied Then it accepts an optional boolean', async () => {
+    const sdk = {
+      defineTool: <T>(definition: T): T => definition,
+    } as unknown as typeof import('@earendil-works/pi-coding-agent')
+    const result = await buildPiBuiltinTools(sdk, {
+      sessionId: 'browser-session',
+      channelId: 'channel-1',
+      workspaceId: 'workspace-1',
+      memoryPolicy: 'off',
+      triggeredBy: 'user',
+    })
+    const openTab = result.tools.find((tool) => tool.name === 'BrowserPageOpenTab') as unknown as {
+      description?: string
+      promptSnippet?: string
+      parameters?: { properties?: Record<string, unknown> }
+    }
+
+    expect(openTab.parameters?.properties?.incognito).toBeDefined()
+    expect(openTab.description).toContain('incognito: true')
+    expect(openTab.promptSnippet).toContain('不复用普通页签登录态')
+  })
+
   test('Given Pi has no Browser Context When tools are built Then it still exposes BrowserPageOpenTab for a user to create the first tab', async () => {
     browserAgentContext = undefined
     const sdk = {
@@ -199,6 +221,62 @@ describe('Pi Browser 工具复用主进程 dispatcher', () => {
 
     expect(text).toContain('高级授权开启时可包含敏感值')
     expect(text).not.toContain('不得包含')
+  })
+
+  test('Given BrowserWorkflowDraft When direct Pi tools are built Then it exposes the same structured workflow draft contract', async () => {
+    const sdk = {
+      defineTool: <T>(definition: T): T => definition,
+    } as unknown as typeof import('@earendil-works/pi-coding-agent')
+    const result = await buildPiBuiltinTools(sdk, {
+      sessionId: 'browser-session',
+      channelId: 'channel-1',
+      workspaceId: 'workspace-1',
+      memoryPolicy: 'off',
+      triggeredBy: 'user',
+    })
+    const draft = result.tools.find((tool) => tool.name === 'BrowserWorkflowDraft') as unknown as {
+      promptSnippet?: string
+      parameters?: {
+        properties?: {
+          workflow?: {
+            properties?: {
+              schemaVersion?: { const?: number }
+              start?: { properties?: { tabAlias?: unknown; url?: unknown; origin?: unknown } }
+              variables?: { type?: string }
+              steps?: { type?: string; minItems?: number; items?: { anyOf?: unknown[] } }
+            }
+          }
+        }
+      }
+    } | undefined
+    const workflow = draft?.parameters?.properties?.workflow
+
+    expect(workflow?.properties?.schemaVersion?.const).toBe(1)
+    expect(workflow?.properties?.start?.properties).toMatchObject({ tabAlias: {}, url: {}, origin: {} })
+    expect(workflow?.properties?.variables?.type).toBe('array')
+    expect(workflow?.properties?.steps).toMatchObject({ type: 'array', minItems: 1 })
+    expect(workflow?.properties?.steps?.items?.anyOf).toBeArray()
+    expect(draft?.promptSnippet).toContain('不得传 workflowId')
+    expect(draft?.promptSnippet).toContain('target.locator')
+    expect(draft?.promptSnippet).toContain('submit 事件不生成独立步骤')
+  })
+
+  test('Given BrowserWorkflowRun When direct Pi tools are built Then it forbids bypassing the main-process Playwright runner', async () => {
+    const sdk = {
+      defineTool: <T>(definition: T): T => definition,
+    } as unknown as typeof import('@earendil-works/pi-coding-agent')
+    const result = await buildPiBuiltinTools(sdk, {
+      sessionId: 'browser-session',
+      channelId: 'channel-1',
+      workspaceId: 'workspace-1',
+      memoryPolicy: 'off',
+      triggeredBy: 'user',
+    })
+    const run = result.tools.find((tool) => tool.name === 'BrowserWorkflowRun') as unknown as { promptSnippet?: string }
+
+    expect(run.promptSnippet).toContain('已校验的 Playwright 脚本')
+    expect(run.promptSnippet).toContain('只能调用 `BrowserWorkflowRun`')
+    expect(run.promptSnippet).toContain('不得通过 `bash`、Node.js')
   })
 })
 

@@ -57,6 +57,15 @@ describe('项目与会话工作台提示词', () => {
     })
 
     expect(prompt).toContain('用户主会话明确要求的 HTTP(S) 地址可直接通过 `BrowserPageOpenTab` 或 `BrowserPageNavigate` 打开')
+    expect(prompt).toContain('显式传 `incognito: true`')
+    expect(prompt).toContain('不复用普通页签登录态')
+    expect(prompt).toContain('Workflow 是经用户确认的流程意图摘要')
+    expect(prompt).toContain('`BrowserWorkflowGet` 和 `BrowserPageObserve`')
+    expect(prompt).toContain('已批准 Workflow 的执行由 Copis 主进程统一调用已校验的 Playwright 脚本')
+    expect(prompt).toContain('只能调用 `BrowserWorkflowRun`')
+    expect(prompt).toContain('不得通过 `bash`、Node.js')
+    expect(prompt).toContain('历史步骤缺少 description')
+    expect(prompt).toContain('不得对自动化或委派运行进行动态恢复')
     expect(prompt).not.toContain('跨 Origin 导航必须等待 Copis 的单次确认')
   })
 
@@ -97,7 +106,7 @@ describe('项目与会话工作台提示词', () => {
     expect(prompt).not.toContain('Read、Write、Edit、Bash、Grep、Glob、LS、Skill')
   })
 
-  test('Given 专家团队服务工具 When 构建系统提示词 Then 强制主理人汇总团队交付成果', () => {
+  test('Given 专家团队服务工具 When 构建普通系统提示词 Then 保持 Agent 身份并等待用户明确启动', () => {
     const prompt = buildSystemPrompt({
       agentRuntime: 'pi',
       sessionId: 'session-expert-team',
@@ -108,6 +117,10 @@ describe('项目与会话工作台提示词', () => {
     expect(prompt).toContain('## 专家团队服务')
     expect(prompt).toContain('expert_team_run')
     expect(prompt).toContain('团队成员不直接面向用户')
+    expect(prompt).toContain('只有用户明确提出使用、启动或组建专家团队时')
+    expect(prompt).toContain('# Copis Agent')
+    expect(prompt).toContain('自称 Copis Agent')
+    expect(prompt).not.toContain('# 专家团队主理人')
   })
 
   test('Given 专家团队上下文 When 构建系统提示词 Then 注入受管控工作区规范与冻结团队阵容', () => {
@@ -139,6 +152,8 @@ describe('项目与会话工作台提示词', () => {
     expect(prompt).toContain('research-v1')
     expect(prompt).toContain('a'.repeat(64))
     expect(prompt).toContain('不能改变 Copis 的基础服务规则')
+    expect(prompt).toContain('# Copis Agent')
+    expect(prompt).not.toContain('# 专家团队主理人')
   })
 
   test('Given 专家团队主理人会话 When 构建系统提示词 Then 明确这是专属服务对话', () => {
@@ -179,6 +194,8 @@ describe('项目与会话工作台提示词', () => {
     expect(prompt).toContain('先向用户了解本次服务目标')
     expect(prompt).toContain('复制创建专家团队')
     expect(prompt).toContain('团队成员不直接面向用户')
+    expect(prompt).toContain('# 专家团队主理人')
+    expect(prompt).not.toContain('自称 Copis Agent')
   })
 
   test('Given 普通会话 When 构建系统提示词 Then 不注入筹备会话指令', () => {

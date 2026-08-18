@@ -18,6 +18,14 @@ describe('macOS 构建脚本固定安装程序发布', () => {
     expect(rootPackage.scripts?.['publish:macos-installer']).toBeDefined()
   })
 
+  test('固定安装包上传配置在检查前加载根目录 .env', () => {
+    const loadCall = buildScript.indexOf('load_dotenv "$ROOT_DIR/.env"')
+    const configCheck = buildScript.indexOf('if [[ -z "${COS_PUBLIC_BASE_URL:-}" || -z "${COS_BUCKET_URL:-}" ]]')
+
+    expect(loadCall).toBeGreaterThanOrEqual(0)
+    expect(configCheck).toBeGreaterThan(loadCall)
+  })
+
   test('固定文件名不包含版本号', () => {
     const fixedLine = buildScript.split('\n').find((line) => line.includes('FIXED_DMG='))
 

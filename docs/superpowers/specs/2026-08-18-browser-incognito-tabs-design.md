@@ -20,7 +20,7 @@
 
 ### 共享类型
 
-`WebTabState` 增加 `isIncognito: boolean`，用于页签栏、地址栏和 Agent 结果展示。
+`WebTabState` 增加 `isIncognito: boolean` 和 `canActivateIncognito: boolean`，分别用于页签模式展示和地址栏按钮状态。`canActivateIncognito` 由主进程根据页签生命周期历史计算，Renderer 不自行推断。
 
 `CreateWebTabInput` 增加可选 `incognito?: boolean`。已有 `partition` 仍只作为主进程内部受控参数；当 `incognito` 为 true 时，主进程忽略外部 partition 并生成唯一临时 partition。
 
@@ -32,9 +32,9 @@
 - `hasOpenedAddress`：页签生命周期内是否曾经打开过 HTTP(S) 地址。
 - 当前 `partition`、WebContentsView、CDP listeners 和现有状态。
 
-创建普通页签时，partition 继续使用 `persist:copis-web`。创建 Agent Workflow 专用页签时，继续使用现有 Workflow partition 规则。创建无痕页签时，生成类似 `copis-incognito-{uuid}` 的非持久 partition，每个页签唯一。
+创建普通页签时，partition 继续使用 `persist:copis-web`。创建 Agent Workflow 专用页签时，继续使用现有 Workflow partition 规则。创建无痕页签时，生成 `copis-incognito-{uuid}` 格式的非持久 partition，每个页签唯一。
 
-`hasOpenedAddress` 在以下情况下设置为 true：初始 URL 是 HTTP(S)、导航目标是 HTTP(S)，或 HTTP(S) 导航已提交。该状态只存在于当前运行的页签记录，不写入恢复文件；恢复出来的普通地址页签在创建时直接标记为 true。
+`hasOpenedAddress` 在以下情况下设置为 true：初始 URL 是 HTTP(S)、导航目标是 HTTP(S)，或 HTTP(S) 导航已提交。该状态只存在于当前运行的页签记录，不写入恢复文件；恢复出来的普通地址页签在创建时直接标记为 true。对外状态的 `canActivateIncognito` 只在普通、当前为 `about:blank` 且 `hasOpenedAddress` 为 false 时为 true。
 
 ### 人工转换
 

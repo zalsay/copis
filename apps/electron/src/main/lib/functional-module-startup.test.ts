@@ -150,6 +150,33 @@ describe('登录后功能模块启动契约', () => {
     expect(() => assertRequiredModuleArtifacts(artifacts)).toThrow('Office 文档支持必须是必要组件')
   })
 
+  test('启动清单缺少浏览器自动化内核时拒绝启动', () => {
+    const artifacts: FunctionalModuleArtifact[] = [
+      {
+        name: 'officecli', version: '1.0.143', platform: 'darwin', arch: 'arm64',
+        url: 'https://download.example.com/officecli', sha256: 'a'.repeat(64), size: 10,
+        format: 'binary', entrypoint: 'bin/officecli', required: true,
+      },
+      {
+        name: 'rust-http-api', version: '0.1.2', platform: 'darwin', arch: 'arm64',
+        url: 'https://download.example.com/rust', sha256: 'b'.repeat(64), size: 10,
+        format: 'binary', entrypoint: 'bin/copis-http-api-server', required: true,
+      },
+      {
+        name: 'node-runtime', version: '24.19.4', platform: 'darwin', arch: 'arm64',
+        url: 'https://download.example.com/node', sha256: 'c'.repeat(64), size: 10,
+        format: 'tar.gz', entrypoint: 'bin/node', required: true,
+      },
+      {
+        name: 'alipay-bot', version: '0.3.40', platform: 'darwin', arch: 'arm64',
+        url: 'https://download.example.com/alipay', sha256: 'd'.repeat(64), size: 10,
+        format: 'tar.gz', entrypoint: 'bin/alipay-bot', required: true,
+      },
+    ]
+
+    expect(() => assertRequiredModuleArtifacts(artifacts)).toThrow('浏览器自动化内核')
+  })
+
   test('自动启动流程拒绝可选 OfficeCLI manifest', async () => {
     const rootDir = mkdtempSync(join(tmpdir(), 'copis-functional-module-startup-'))
     try {
@@ -250,6 +277,10 @@ describe('登录后功能模块启动契约', () => {
       'bin/alipay-bot': 'alipay-bot-launcher',
       'runtime/dist/cli.js': 'alipay-bot-cli',
     })
+    const playwrightCoreContent = createTarGz({
+      'node_modules/playwright-core/index.js': 'playwright-core-driver',
+      'node_modules/playwright-core/package.json': '{"name":"playwright-core","version":"1.62.1"}',
+    })
     const moduleArtifact = (name: 'officecli' | 'rust-http-api', version: string, content: string) => ({
       version,
       url: `https://download.example.com/${name}-${version}`,
@@ -285,6 +316,15 @@ describe('登录后功能模块启动契约', () => {
               required: true,
             },
             'rust-http-api': moduleArtifact('rust-http-api', '0.1.2', rustContent),
+            'playwright-core': {
+              version: '1.62.1',
+              url: 'https://download.example.com/playwright-core-1.62.1.tar.gz',
+              sha256: createHash('sha256').update(playwrightCoreContent).digest('hex'),
+              size: playwrightCoreContent.byteLength,
+              format: 'tar.gz' as const,
+              entrypoint: 'node_modules/playwright-core/index.js',
+              required: true,
+            },
           },
         },
       },
@@ -327,6 +367,9 @@ describe('登录后功能模块启动契约', () => {
       if (input.endsWith('/alipay-bot-0.3.40.tar.gz')) {
         return new Response(new Uint8Array(alipayBotContent), { status: 200, headers: { 'content-length': String(alipayBotContent.byteLength) } })
       }
+      if (input.endsWith('/playwright-core-1.62.1.tar.gz')) {
+        return new Response(new Uint8Array(playwrightCoreContent), { status: 200, headers: { 'content-length': String(playwrightCoreContent.byteLength) } })
+      }
       return new Response('not found', { status: 404 })
     }
 
@@ -349,6 +392,7 @@ describe('登录后功能模块启动契约', () => {
         ['rust-http-api', true, true],
         ['officecli', true, true],
         ['alipay-bot', true, true],
+        ['playwright-core', true, true],
       ])
       expect(progress.some((item) => item.phase === 'modules' && item.progress === 0.95)).toBe(true)
       expect(progress.some((item) => item.phase === 'health' && item.progress >= 0.95)).toBe(true)
@@ -376,9 +420,13 @@ describe('登录后功能模块启动契约', () => {
       'bin/alipay-bot': 'new-alipay-bot',
       'runtime/dist/cli.js': 'new-cli',
     })
+    const playwrightCoreContent = createTarGz({
+      'node_modules/playwright-core/index.js': 'playwright-core-driver',
+      'node_modules/playwright-core/package.json': '{"name":"playwright-core","version":"1.62.1"}',
+    })
     const rustContent = 'stable-rust-http-api'
     const packageArtifact = (
-      name: 'node-runtime' | 'alipay-bot' | 'rust-http-api',
+      name: 'node-runtime' | 'alipay-bot' | 'rust-http-api' | 'playwright-core',
       version: string,
       content: Buffer | string,
     ) => ({
@@ -388,7 +436,13 @@ describe('登录后功能模块启动契约', () => {
       sha256: createHash('sha256').update(content).digest('hex'),
       size: Buffer.byteLength(content),
       format: (name === 'rust-http-api' ? 'binary' : 'tar.gz') as 'binary' | 'tar.gz',
-      entrypoint: name === 'rust-http-api' ? 'bin/copis-http-api-server' : name === 'alipay-bot' ? 'bin/alipay-bot' : 'bin/node',
+      entrypoint: name === 'rust-http-api'
+        ? 'bin/copis-http-api-server'
+        : name === 'alipay-bot'
+          ? 'bin/alipay-bot'
+          : name === 'playwright-core'
+            ? 'node_modules/playwright-core/index.js'
+            : 'bin/node',
       required: true,
     })
     const oldNode = packageArtifact('node-runtime', '24.19.3', oldNodeContent)
@@ -396,6 +450,7 @@ describe('登录后功能模块启动契约', () => {
     const oldAlipayBot = packageArtifact('alipay-bot', '0.3.39', oldAlipayBotContent)
     const newAlipayBot = packageArtifact('alipay-bot', '0.3.40', newAlipayBotContent)
     const rust = packageArtifact('rust-http-api', '0.1.2', rustContent)
+    const playwrightCore = packageArtifact('playwright-core', '1.62.1', playwrightCoreContent)
     const manifest = {
       schema: 1,
       channel: 'stable',
@@ -414,6 +469,7 @@ describe('登录后功能模块启动契约', () => {
             },
             'alipay-bot': newAlipayBot,
             'rust-http-api': rust,
+            'playwright-core': playwrightCore,
           },
         },
       },
@@ -439,6 +495,7 @@ describe('登录后功能模块启动契约', () => {
       if (input.includes('/api/health')) return new Response(JSON.stringify({ ok: true, service: 'copis-http-api' }), { status: 200 })
       if (input.endsWith('/node-runtime-24.19.4')) return new Response(new Uint8Array(newNodeContent), { status: 200 })
       if (input.endsWith('/alipay-bot-0.3.40')) return new Response(new Uint8Array(newAlipayBotContent), { status: 200 })
+      if (input.endsWith('/playwright-core-1.62.1')) return new Response(new Uint8Array(playwrightCoreContent), { status: 200 })
       if (input.endsWith('/officecli-1.0.143')) return new Response('officecli', { status: 200 })
       return new Response('not found', { status: 404 })
     }
@@ -456,6 +513,7 @@ describe('登录后功能模块启动契约', () => {
       }, 'officecli')
       await activateModuleVersion(modulesRoot, oldAlipayBot, oldAlipayBotContent)
       await activateModuleVersion(modulesRoot, rust, rustContent)
+      await activateModuleVersion(modulesRoot, playwrightCore, playwrightCoreContent)
       startHttpApiServer({
         rootDir: modulesRoot,
         spawnImpl,

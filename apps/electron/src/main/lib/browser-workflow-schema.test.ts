@@ -185,6 +185,25 @@ describe('Browser Workflow schema', () => {
     expect(validateBrowserWorkflowVersion(validVersion).valid).toBe(true)
   })
 
+  test('Given 敏感目标携带固定值 When 校验 Workflow Then 拒绝把凭据写入脚本', () => {
+    const sensitiveVersion = {
+      ...version,
+      steps: [{
+        ...version.steps[0],
+        target: {
+          ...locator,
+          fingerprint: { ...locator.fingerprint, inputType: 'password', accessibleName: '登录密码' },
+        },
+        value: { kind: 'literal', value: 'password-secret' },
+      }],
+    }
+    const result = validateBrowserWorkflowVersion(sensitiveVersion)
+
+    expect(result.valid).toBe(false)
+    expect(result.errors.some((error) => error.includes('敏感页面目标'))).toBe(true)
+    expect(JSON.stringify(sensitiveVersion)).toContain('password-secret')
+  })
+
 
   test('Given 重复步骤 ID When 校验 Then 返回明确错误', () => {
     const invalid = {

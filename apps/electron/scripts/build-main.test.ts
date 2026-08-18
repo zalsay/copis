@@ -5,11 +5,16 @@ import { join } from 'node:path'
 import {
   DEFAULT_FUNCTIONAL_MODULE_MANIFEST_URL,
   DEFAULT_UPDATER_URL,
+  MAIN_PROCESS_EXTERNAL_PACKAGES,
   loadBuildEnvironment,
   resolveManifestBuildConfig,
 } from './build-main'
 
 describe('Electron 主进程构建配置', () => {
+  test('主进程 external 运行时依赖包含 Playwright Core', () => {
+    expect(MAIN_PROCESS_EXTERNAL_PACKAGES).toContain('playwright-core')
+  })
+
   test('优先使用构建环境中的功能模块 manifest 地址并注入 define', () => {
     expect(resolveManifestBuildConfig({
       COPIS_FUNCTIONAL_MODULE_MANIFEST_URL: 'https://build.example.com/stable/manifest.json',

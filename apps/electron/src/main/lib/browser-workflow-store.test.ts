@@ -1,20 +1,27 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, mock, test } from 'bun:test'
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { createHash } from 'node:crypto'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import type { BrowserLocatorBundle, BrowserWorkflowVersion } from '@copis/shared'
+import type { BrowserLocatorBundle, BrowserWorkflowRunSummary, BrowserWorkflowVersion } from '@copis/shared'
 
 type WorkflowStoreModule = typeof import('./browser-workflow-store')
 let store: WorkflowStoreModule
 let tempDir: string
 let workflowRoot: string
+let browserWorkflowRoot: string
+let primaryUnavailable = false
 
 mock.module('./config-paths', () => ({
   getWorkspaceBrowserWorkflowsDir: (slug: string) => join(workflowRoot, slug),
 }))
 
 mock.module('./agent-workspace-manager', () => ({
+  getAgentWorkspaceBrowserWorkflowsDir: () => {
+    if (primaryUnavailable) throw new Error('本地项目根目录不可用')
+    return browserWorkflowRoot
+  },
   getAgentWorkspace: (workspaceId: string) => workspaceId === 'workspace-1'
     ? { id: workspaceId, slug: 'demo-workspace' }
     : undefined,
@@ -24,6 +31,27 @@ const locator: BrowserLocatorBundle = {
   framePath: { frameIds: [] },
   strategies: [{ kind: 'id', value: 'email' }],
   fingerprint: { tagName: 'input', inputType: 'text', visible: true, enabled: true },
+}
+
+function writeLegacyWorkflow(workflowId: string): void {
+  const dir = join(workflowRoot, 'demo-workspace', workflowId)
+  const version = createVersion(workflowId)
+  mkdirSync(join(dir, 'versions'), { recursive: true })
+  writeFileSync(join(dir, 'workflow.json'), JSON.stringify({
+    schemaVersion: 1,
+    id: workflowId,
+    workspaceId: 'workspace-1',
+    workspaceSlug: 'demo-workspace',
+    name: '历史 Workflow',
+    status: 'ready',
+    currentVersion: 1,
+    profileId: 'copis-web',
+    allowedOrigins: ['https://example.com'],
+    unattendedAllowed: false,
+    createdAt: version.createdAt,
+    updatedAt: version.createdAt,
+  }))
+  writeFileSync(join(dir, 'versions', 'v1.json'), JSON.stringify(version))
 }
 
 function createVersion(workflowId = 'workflow-1'): BrowserWorkflowVersion {
@@ -51,11 +79,14 @@ function createVersion(workflowId = 'workflow-1'): BrowserWorkflowVersion {
 beforeAll(async () => {
   tempDir = mkdtempSync(join(tmpdir(), 'copis-browser-workflow-store-'))
   workflowRoot = join(tempDir, 'browser-workflows')
+  browserWorkflowRoot = join(tempDir, 'project', 'browser', 'browser-workflows')
   store = await import('./browser-workflow-store')
 })
 
 beforeEach(() => {
+  primaryUnavailable = false
   rmSync(workflowRoot, { recursive: true, force: true })
+  rmSync(browserWorkflowRoot, { recursive: true, force: true })
 })
 
 afterAll(() => {
@@ -75,7 +106,52 @@ describe('Browser Workflow 存储', () => {
     expect(manifest.status).toBe('ready')
     expect(store.listBrowserWorkflows('workspace-1')).toHaveLength(1)
     expect(store.getBrowserWorkflow('workspace-1', 'workflow-1').version.version).toBe(1)
-    expect(existsSync(join(workflowRoot, 'demo-workspace', 'workflow-1', 'versions', 'v1.json'))).toBe(true)
+    expect(existsSync(join(browserWorkflowRoot, 'workflow-1', 'versions', 'v1.json'))).toBe(true)
+    const savedVersion = store.getBrowserWorkflow('workspace-1', 'workflow-1').version
+    const script = readFileSync(join(browserWorkflowRoot, 'workflow-1', 'playwright', 'v1.mjs'))
+    expect(savedVersion.approval.playwrightScriptSha256).toBe(createHash('sha256').update(script).digest('hex'))
+  })
+
+  test('Given Agent 已提交待审核总结 When 写入草稿 Markdown Then 工作区保留可读 draft.md', () => {
+    const draft: BrowserWorkflowVersion = {
+      ...createVersion(),
+      approval: { status: 'pending', draftHash: 'a'.repeat(64) },
+    }
+
+    store.writeBrowserWorkflowDraftMarkdown('workspace-1', draft)
+
+    const draftPath = join(browserWorkflowRoot, 'workflow-1', 'draft.md')
+    expect(existsSync(draftPath)).toBe(true)
+    expect(readFileSync(draftPath, 'utf8')).toContain('# 待审核 Browser Workflow')
+    expect(readFileSync(draftPath, 'utf8')).toContain('状态：待审核')
+    expect(readFileSync(draftPath, 'utf8')).toContain('来源录制：`recording-1`')
+    expect(readFileSync(draftPath, 'utf8')).toContain('### 1. fill')
+    expect(existsSync(join(browserWorkflowRoot, 'workflow-1', 'workflow.md'))).toBe(false)
+  })
+
+  test('Given 用户确认待审核总结 When 提升草稿 Markdown Then 仅保留带名称的 workflow.md', () => {
+    const draft: BrowserWorkflowVersion = {
+      ...createVersion(),
+      approval: { status: 'pending', draftHash: 'a'.repeat(64) },
+    }
+    store.writeBrowserWorkflowDraftMarkdown('workspace-1', draft)
+    store.saveBrowserWorkflow({
+      workspaceId: 'workspace-1',
+      sessionId: 'session-1',
+      name: '登录 Workflow',
+      description: '登录后填写账户资料',
+      allowedOrigins: ['https://example.com'],
+      version: createVersion(),
+    })
+
+    store.promoteBrowserWorkflowDraftMarkdown('workspace-1', 'workflow-1')
+
+    const workflowPath = join(browserWorkflowRoot, 'workflow-1', 'workflow.md')
+    expect(existsSync(workflowPath)).toBe(true)
+    expect(existsSync(join(browserWorkflowRoot, 'workflow-1', 'draft.md'))).toBe(false)
+    expect(readFileSync(workflowPath, 'utf8')).toContain('# 登录 Workflow')
+    expect(readFileSync(workflowPath, 'utf8')).toContain('状态：已确认')
+    expect(readFileSync(workflowPath, 'utf8')).toContain('登录后填写账户资料')
   })
 
   test('Given 已保存版本 When 再保存同一 Workflow Then 旧版本不变并追加新版本', () => {
@@ -110,6 +186,55 @@ describe('Browser Workflow 存储', () => {
     })).toThrow('ID 不合法')
   })
 
+  test('Given 新目录没有历史 Workflow When 读取或列出 Then 回退到旧 Copis 配置目录', () => {
+    writeLegacyWorkflow('legacy-workflow')
+
+    expect(store.getBrowserWorkflow('workspace-1', 'legacy-workflow').version.workflowId).toBe('legacy-workflow')
+    expect(store.listBrowserWorkflows('workspace-1').map((item) => item.manifest.id)).toContain('legacy-workflow')
+  })
+
+  test('Given 本地项目根不可用且存在历史 Workflow When 读取或列出 Then 仍回退到旧 Copis 配置目录', () => {
+    writeLegacyWorkflow('legacy-workflow')
+    primaryUnavailable = true
+
+    expect(store.getBrowserWorkflow('workspace-1', 'legacy-workflow').version.workflowId).toBe('legacy-workflow')
+    expect(store.listBrowserWorkflows('workspace-1').map((item) => item.manifest.id)).toContain('legacy-workflow')
+  })
+
+  test('Given 历史 Workflow When 新目录写入最新运行摘要 Then 列表显示该摘要', () => {
+    writeLegacyWorkflow('legacy-workflow')
+    const latestRun: BrowserWorkflowRunSummary = {
+      runId: 'run-1',
+      workflowId: 'legacy-workflow',
+      version: 1,
+      status: 'completed',
+      startedAt: Date.now() - 1_000,
+      finishedAt: Date.now(),
+    }
+
+    store.saveLatestBrowserWorkflowRun('workspace-1', 'legacy-workflow', latestRun)
+
+    expect(store.listBrowserWorkflows('workspace-1').find((item) => item.manifest.id === 'legacy-workflow')?.latestRun).toEqual(latestRun)
+    expect(existsSync(join(browserWorkflowRoot, 'legacy-workflow', 'latest-run.json'))).toBe(true)
+  })
+
+  test('Given 历史 Workflow When 保存后续版本 Then 新目录续存版本且旧版本仍可读取', () => {
+    writeLegacyWorkflow('legacy-workflow')
+
+    const manifest = store.saveBrowserWorkflow({
+      workspaceId: 'workspace-1',
+      sessionId: 'session-2',
+      name: '历史 Workflow 修复版',
+      allowedOrigins: ['https://example.com'],
+      version: { ...createVersion('legacy-workflow'), createdBySessionId: 'session-2' },
+    })
+
+    expect(manifest.currentVersion).toBe(2)
+    expect(store.getBrowserWorkflow('workspace-1', 'legacy-workflow', 1).version.createdBySessionId).toBe('session-1')
+    expect(store.getBrowserWorkflow('workspace-1', 'legacy-workflow', 2).version.createdBySessionId).toBe('session-2')
+    expect(existsSync(join(browserWorkflowRoot, 'legacy-workflow', 'versions', 'v2.json'))).toBe(true)
+  })
+
   test('Given 运行诊断 When 写入超限 artifact Then 保存脱敏文件并拒绝超大内容', () => {
     store.saveBrowserWorkflow({
       workspaceId: 'workspace-1',
@@ -121,7 +246,7 @@ describe('Browser Workflow 存储', () => {
 
     const path = store.writeBrowserWorkflowArtifact('workspace-1', 'workflow-1', 'run-1', 'failure.json', '{"text":"redacted"}')
     expect(path).toBe('artifacts/run-1/failure.json')
-    expect(readFileSync(join(workflowRoot, 'demo-workspace', 'workflow-1', path!), 'utf8')).toContain('redacted')
+    expect(readFileSync(join(browserWorkflowRoot, 'workflow-1', path!), 'utf8')).toContain('redacted')
     expect(store.writeBrowserWorkflowArtifact(
       'workspace-1',
       'workflow-1',
@@ -149,7 +274,7 @@ describe('Browser Workflow 存储', () => {
     store.appendBrowserWorkflowRunEvent('workspace-1', 'workflow-1', { ...base, type: 'started' })
     store.appendBrowserWorkflowRunEvent('workspace-1', 'workflow-1', { ...base, type: 'completed', timestamp: base.timestamp + 1, status: 'completed' })
 
-    const path = join(workflowRoot, 'demo-workspace', 'workflow-1', 'runs', 'run-1.jsonl')
+    const path = join(browserWorkflowRoot, 'workflow-1', 'runs', 'run-1.jsonl')
     expect(readFileSync(path, 'utf8').trim().split('\n')).toHaveLength(2)
   })
 })

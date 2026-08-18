@@ -137,7 +137,15 @@ export function buildBrowserPageCursorSource(input: BrowserPageCursorInput): str
     }, ${CURSOR_AUTO_HIDE_DELAY_MS});
   };
   const waitForCursorPaint = () => new Promise((resolve) => {
-    const finish = () => window.setTimeout(resolve, 80);
+    let completed = false;
+    let fallbackTimer;
+    const finish = () => {
+      if (completed) return;
+      completed = true;
+      window.clearTimeout(fallbackTimer);
+      window.setTimeout(resolve, 80);
+    };
+    fallbackTimer = window.setTimeout(finish, 120);
     if (typeof window.requestAnimationFrame !== 'function') {
       finish();
       return;

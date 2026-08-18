@@ -146,6 +146,29 @@ function checkWorkflowValue(value: unknown, field: string, errors: string[], var
   return valid
 }
 
+function locatorLooksSensitive(value: unknown): boolean {
+  if (!isRecord(value)) return false
+  const fingerprint = isRecord(value.fingerprint) ? value.fingerprint : {}
+  if (String(fingerprint.inputType ?? '').toLowerCase() === 'password') return true
+  const values = [
+    fingerprint.accessibleName,
+    fingerprint.placeholder,
+    fingerprint.nearbyText,
+    ...(Array.isArray(value.strategies)
+      ? value.strategies.flatMap((strategy) => isRecord(strategy)
+        ? [strategy.value, strategy.name, strategy.role]
+        : [])
+      : []),
+  ].filter((item): item is string => typeof item === 'string')
+  return values.some((item) => /(password|passwd|token|secret|authorization|otp|verification|verify|captcha|cvv|cvc|credit|card|payment|bank|验证码|密码|口令|令牌|密钥|支付|银行卡|信用卡)/i.test(item))
+}
+
+function rejectSensitiveLiteral(target: unknown, value: unknown, field: string, errors: string[]): void {
+  if (isRecord(value) && value.kind === 'literal' && locatorLooksSensitive(target)) {
+    errors.push(`${field} 的敏感页面目标必须使用 Workflow 变量或人工步骤`)
+  }
+}
+
 function checkOutcome(value: unknown, field: string, aliases: Set<string>, errors: string[]): boolean {
   if (value === undefined) return true
   if (!isRecord(value) || typeof value.type !== 'string') {
@@ -242,6 +265,7 @@ function checkStep(
     case 'fill':
       if (!checkLocator(value.target, `${field}.target`, errors)) valid = false
       if (!checkWorkflowValue(value.value, `${field}.value`, errors, variableKeys)) valid = false
+      rejectSensitiveLiteral(value.target, value.value, `${field}.value`, errors)
       break
     case 'press':
       if (!stringValue(value.key, `${field}.key`, errors)) valid = false
@@ -250,6 +274,7 @@ function checkStep(
     case 'select':
       if (!checkLocator(value.target, `${field}.target`, errors)) valid = false
       if (!checkWorkflowValue(value.value, `${field}.value`, errors, variableKeys)) valid = false
+      rejectSensitiveLiteral(value.target, value.value, `${field}.value`, errors)
       break
     case 'wait':
       if (!checkCondition(value.condition, `${field}.condition`, 'wait', errors)) valid = false
@@ -387,8 +412,13 @@ export function validateBrowserWorkflowVersion(value: unknown): BrowserWorkflowV
   }
   if (!isRecord(value.approval) || !['pending', 'approved', 'rejected'].includes(String(value.approval.status))) {
     errors.push('version.approval 无效')
-  } else if (value.approval.draftHash !== undefined && (typeof value.approval.draftHash !== 'string' || !/^[a-f0-9]{64}$/.test(value.approval.draftHash))) {
-    errors.push('version.approval.draftHash 必须是 SHA-256 十六进制摘要')
+  } else {
+    if (value.approval.draftHash !== undefined && (typeof value.approval.draftHash !== 'string' || !/^[a-f0-9]{64}$/.test(value.approval.draftHash))) {
+      errors.push('version.approval.draftHash 必须是 SHA-256 十六进制摘要')
+    }
+    if (value.approval.playwrightScriptSha256 !== undefined && (typeof value.approval.playwrightScriptSha256 !== 'string' || !/^[a-f0-9]{64}$/.test(value.approval.playwrightScriptSha256))) {
+      errors.push('version.approval.playwrightScriptSha256 必须是 SHA-256 十六进制摘要')
+    }
   }
   return { valid: errors.length === 0, errors }
 }

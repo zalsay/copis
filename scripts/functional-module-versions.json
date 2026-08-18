@@ -1,4 +1,5 @@
 {
   "node-runtime": "24.19.4",
-  "alipay-bot": "0.3.40"
+  "alipay-bot": "0.3.40",
+  "playwright-core": "1.62.1"
 }

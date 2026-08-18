@@ -23,8 +23,9 @@ const rustOnly = hasFlag('--rust') || process.env.COPIS_RUST_ONLY === '1'
 const officeCliOnly = hasFlag('--officecli') || process.env.COPIS_OFFICECLI_ONLY === '1'
 const nodeRuntimeOnly = hasFlag('--node-runtime') || process.env.COPIS_NODE_RUNTIME_ONLY === '1'
 const alipayBotOnly = hasFlag('--alipay-bot') || process.env.COPIS_ALIPAY_BOT_ONLY === '1'
-if (Number(rustOnly) + Number(officeCliOnly) + Number(nodeRuntimeOnly) + Number(alipayBotOnly) > 1) {
-  throw new Error('--rust、--officecli、--node-runtime 与 --alipay-bot 不能同时使用')
+const playwrightCoreOnly = hasFlag('--playwright-core') || process.env.COPIS_PLAYWRIGHT_CORE_ONLY === '1'
+if (Number(rustOnly) + Number(officeCliOnly) + Number(nodeRuntimeOnly) + Number(alipayBotOnly) + Number(playwrightCoreOnly) > 1) {
+  throw new Error('--rust、--officecli、--node-runtime、--alipay-bot 与 --playwright-core 不能同时使用')
 }
 const prefix = resolveFunctionalModulePrefix({
   cliPrefix: getOption('--prefix'),
@@ -41,7 +42,7 @@ if (!publicBaseUrl) throw new Error('缺少 COS_PUBLIC_BASE_URL 或 --public-bas
 
 const modules: FunctionalModuleBinaryInput[] = []
 
-if (!officeCliOnly && !nodeRuntimeOnly && !alipayBotOnly) {
+if (!officeCliOnly && !nodeRuntimeOnly && !alipayBotOnly && !playwrightCoreOnly) {
   const rustBinary = getOption('--rust-binary')
     ?? process.env.COPIS_RUST_HTTP_API_BINARY
     ?? join(repoRoot, 'native/http-api-server/target/release', binaryName('copis-http-api-server', platform))
@@ -55,7 +56,7 @@ if (!officeCliOnly && !nodeRuntimeOnly && !alipayBotOnly) {
   })
 }
 
-if (!rustOnly && !nodeRuntimeOnly && !alipayBotOnly) {
+if (!rustOnly && !nodeRuntimeOnly && !alipayBotOnly && !playwrightCoreOnly) {
   const officeCliBinary = getOption('--officecli-binary')
     ?? process.env.COPIS_OFFICECLI_BINARY
     ?? join(electronDir, 'resources/bin', binaryName('officecli', platform))
@@ -69,7 +70,7 @@ if (!rustOnly && !nodeRuntimeOnly && !alipayBotOnly) {
   })
 }
 
-if (!rustOnly && !officeCliOnly && !alipayBotOnly) {
+if (!rustOnly && !officeCliOnly && !alipayBotOnly && !playwrightCoreOnly) {
   const nodeRuntimeArchive = getOption('--node-runtime-archive')
     ?? process.env.COPIS_NODE_RUNTIME_ARCHIVE
     ?? join(electronDir, 'resources/node-runtime', `${platform}-${arch}.tar.gz`)
@@ -85,7 +86,7 @@ if (!rustOnly && !officeCliOnly && !alipayBotOnly) {
   })
 }
 
-if (!rustOnly && !officeCliOnly && !nodeRuntimeOnly) {
+if (!rustOnly && !officeCliOnly && !nodeRuntimeOnly && !playwrightCoreOnly) {
   const alipayBotArchive = getOption('--alipay-bot-archive')
     ?? process.env.COPIS_ALIPAY_BOT_ARCHIVE
     ?? join(electronDir, 'resources/alipay-bot', `${platform}-${arch}.tar.gz`)
@@ -97,6 +98,22 @@ if (!rustOnly && !officeCliOnly && !nodeRuntimeOnly) {
     binaryPath: alipayBotArchive,
     format: 'tar.gz',
     entrypoint: `bin/${platform === 'win32' ? 'alipay-bot.cmd' : 'alipay-bot'}`,
+    required: true,
+  })
+}
+
+if (!rustOnly && !officeCliOnly && !nodeRuntimeOnly && !alipayBotOnly) {
+  const playwrightCoreArchive = getOption('--playwright-core-archive')
+    ?? process.env.COPIS_PLAYWRIGHT_CORE_ARCHIVE
+    ?? join(electronDir, 'resources/playwright-core/playwright-core.tar.gz')
+  modules.push({
+    module: 'playwright-core',
+    version: getOption('--playwright-core-version') ?? process.env.COPIS_PLAYWRIGHT_CORE_VERSION ?? version,
+    platform,
+    arch,
+    binaryPath: playwrightCoreArchive,
+    format: 'tar.gz',
+    entrypoint: 'node_modules/playwright-core/index.js',
     required: true,
   })
 }

@@ -8,6 +8,13 @@ export const MANIFEST_URL_DEFINE = '__COPIS_FUNCTIONAL_MODULE_MANIFEST_URL__'
 export const DEFAULT_FUNCTIONAL_MODULE_MANIFEST_URL = 'https://download.meetlife.com.cn/copis/client/stable/manifest.json'
 export const UPDATER_URL_DEFINE = '__COPIS_UPDATER_URL__'
 export const DEFAULT_UPDATER_URL = 'https://download.meetlife.com.cn/copis/updates/stable'
+export const MAIN_PROCESS_EXTERNAL_PACKAGES = [
+  'electron',
+  '@earendil-works/pi-coding-agent',
+  '@earendil-works/pi-agent-core',
+  '@earendil-works/pi-ai',
+  'playwright-core',
+] as const
 
 export function loadBuildEnvironment(
   envFilePath: string,
@@ -40,12 +47,7 @@ if (import.meta.main) {
     platform: 'node',
     format: 'cjs',
     outfile: join(appDir, 'dist/main.cjs'),
-    external: [
-      'electron',
-      '@earendil-works/pi-coding-agent',
-      '@earendil-works/pi-agent-core',
-      '@earendil-works/pi-ai',
-    ],
+    external: [...MAIN_PROCESS_EXTERNAL_PACKAGES],
     define: resolveManifestBuildConfig(buildEnvironment),
   }
   if (process.argv.includes('--watch')) {

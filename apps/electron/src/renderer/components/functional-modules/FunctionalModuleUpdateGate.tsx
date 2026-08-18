@@ -61,16 +61,16 @@ export function FunctionalModuleUpdateGate({ children }: FunctionalModuleUpdateG
   const runStartup = React.useCallback(async (): Promise<void> => {
     setReleased(false)
     setStartup({ ...INITIAL_PROGRESS, error: null })
-    setBusy({ 'officecli': true, 'alipay-bot': true, 'rust-http-api': true })
+    setBusy({ 'node-runtime': true, 'officecli': true, 'alipay-bot': true, 'rust-http-api': true, 'playwright-core': true })
     try {
       const nextStatuses = await window.electronAPI.ensureRequiredFunctionalModules()
       setStatuses((current) => mergeStatuses(current, nextStatuses))
-      setBusy({ 'officecli': false, 'alipay-bot': false, 'rust-http-api': false })
+      setBusy({ 'node-runtime': false, 'officecli': false, 'alipay-bot': false, 'rust-http-api': false, 'playwright-core': false })
       setStartup({ phase: 'ready', detail: '本地服务运行正常', progress: 1, error: null })
       window.setTimeout(() => setReleased(true), 260)
     } catch (error) {
       const message = error instanceof Error ? error.message : '必要组件准备失败，请重试'
-      setBusy({ 'officecli': false, 'alipay-bot': false, 'rust-http-api': false })
+      setBusy({ 'node-runtime': false, 'officecli': false, 'alipay-bot': false, 'rust-http-api': false, 'playwright-core': false })
       setStartup((current) => ({
         ...current,
         phase: 'error',
@@ -121,7 +121,7 @@ export function FunctionalModuleUpdateGate({ children }: FunctionalModuleUpdateG
   const phaseLabel = getStartupPhaseLabel(startup)
   const isError = startup.phase === 'error'
   const activeModule = startup.activeModule
-  const bytes = activeModule === 'rust-http-api' || activeModule === 'officecli' || activeModule === 'alipay-bot'
+  const bytes = activeModule === 'rust-http-api' || activeModule === 'officecli' || activeModule === 'alipay-bot' || activeModule === 'playwright-core'
     ? `${formatStartupBytes(startup.downloadedBytes)}${startup.totalBytes ? ` / ${formatStartupBytes(startup.totalBytes)}` : ''}`
     : ''
 

@@ -1,6 +1,5 @@
 import * as React from 'react'
 import { Check, CircleStop, FolderKanban, Play, Plus, X } from 'lucide-react'
-import type { BrowserWorkflowVersion } from '@copis/shared'
 import { useAtom, useAtomValue } from 'jotai'
 import { agentWorkspacesAtom } from '@/atoms/agent-atoms'
 import { browserWorkflowDraftAtom, browserWorkflowStatusAtom } from '@/atoms/browser-agent'
@@ -28,17 +27,6 @@ interface BrowserAgentPanelProps {
   onClose: () => void
 }
 
-function draftOrigins(draft: BrowserWorkflowVersion): string[] {
-  const origins = new Set<string>()
-  try {
-    origins.add(new URL(draft.start.url).origin)
-  } catch {
-    // 主进程会再次校验草稿地址。
-  }
-  for (const step of draft.steps) origins.add(step.origin)
-  return [...origins]
-}
-
 function getPageOriginLabel(pageOrigin: string | undefined): string {
   if (!pageOrigin) return ''
   try {
@@ -53,7 +41,7 @@ export function BrowserAgentPanel({ sessionId, tabTitle, workspaceId, width, onS
   const [draft, setDraft] = useAtom(browserWorkflowDraftAtom)
   const workspaces = useAtomValue(agentWorkspacesAtom)
   const [isActionPending, setIsActionPending] = React.useState(false)
-  const [unattendedAllowed, setUnattendedAllowed] = React.useState(false)
+  const [unattendedAllowed, setUnattendedAllowed] = React.useState(true)
   const defaultWorkspaceId = workspaces.find((workspace) => workspace.slug === 'default')?.id ?? workspaces[0]?.id ?? ''
   const [selectedProjectId, setSelectedProjectId] = React.useState(workspaceId ?? defaultWorkspaceId)
   const pageOriginLabel = getPageOriginLabel(status.pageOrigin)
@@ -72,7 +60,7 @@ export function BrowserAgentPanel({ sessionId, tabTitle, workspaceId, width, onS
   React.useEffect(() => {
     let active = true
     setDraft(null)
-    setUnattendedAllowed(false)
+    setUnattendedAllowed(true)
     void window.electronAPI.browserWorkflow.getStatus(sessionId).then((next) => {
       if (active) setStatus(next)
     }).catch((error) => {
@@ -89,6 +77,7 @@ export function BrowserAgentPanel({ sessionId, tabTitle, workspaceId, width, onS
       return
     }
     let active = true
+    setUnattendedAllowed(true)
     void window.electronAPI.browserWorkflow.getDraft(sessionId).then((next) => {
       if (active) setDraft(next ?? null)
     }).catch((error) => {
@@ -305,20 +294,13 @@ export function BrowserAgentPanel({ sessionId, tabTitle, workspaceId, width, onS
           {draft ? (
             <>
               <div className="flex items-center justify-between gap-2 font-medium">
-                <span>Workflow 草稿待审核</span>
-                <span>{draft.steps.length} 步 · {draft.variables.length} 个变量</span>
-              </div>
-              <div className="mt-1 truncate">Origin：{draftOrigins(draft).join('、')}</div>
-              <div className="mt-1 max-h-20 space-y-0.5 overflow-y-auto text-muted-foreground">
-                {draft.steps.map((step, index) => (
-                  <div key={step.id} className="truncate">
-                    {index + 1}. {step.type}{step.type === 'manual' ? '（需人工确认）' : ''} · {step.origin}
-                  </div>
-                ))}
+                <span className="min-w-0 truncate">{draft.start.url}自动化流程草稿</span>
+                <span className="shrink-0">{draft.steps.length} 步</span>
               </div>
               <label className="mt-2 flex items-center gap-1.5 text-foreground">
                 <input
                   type="checkbox"
+                  className="size-3 accent-[var(--ui-primary)]"
                   checked={unattendedAllowed}
                   onChange={(event) => setUnattendedAllowed(event.target.checked)}
                   disabled={isActionPending}
@@ -327,10 +309,10 @@ export function BrowserAgentPanel({ sessionId, tabTitle, workspaceId, width, onS
               </label>
               <div className="mt-1.5 flex justify-end gap-1.5">
                 <Button type="button" variant="ghost" size="sm" className="h-6 px-2 text-[10px]" disabled={isActionPending} onClick={() => void rejectDraft()}>
-                  丢弃
+                  取消（不做更新）
                 </Button>
                 <Button type="button" variant="outline" size="sm" className="h-6 px-2 text-[10px]" disabled={isActionPending} onClick={() => void approveDraft()}>
-                  保存
+                  确认（更新为确认后版本）
                 </Button>
               </div>
             </>

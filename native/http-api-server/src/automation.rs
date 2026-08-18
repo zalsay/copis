@@ -284,7 +284,7 @@ impl AutomationStore {
             "modelId": input.model_id,
             "workspaceId": input.workspace_id,
             "permissionMode": "bypassPermissions",
-            "sessionMode": input.session_mode.unwrap_or_else(|| "daily".to_string()),
+            "sessionMode": "reuse",
             "notificationTargets": input.notification_targets,
             "sourceSessionId": input.source_session_id,
             "createdAt": now,
@@ -450,8 +450,11 @@ impl AutomationStore {
         let value: Value = serde_json::from_str(&raw).map_err(|_| AutomationError::Storage("定时任务索引不是合法 JSON".to_string()))?;
         let version = value.get("version").and_then(Value::as_u64).unwrap_or(INDEX_VERSION);
         let mut automations = value.get("automations").and_then(Value::as_array).cloned().unwrap_or_default();
-        for automation in &mut automations { migrate_legacy_fields(automation); }
-        Ok(AutomationIndex { version: version.max(INDEX_VERSION), automations })
+        let mut migrated = false;
+        for automation in &mut automations { migrated |= migrate_legacy_fields(automation); }
+        let index = AutomationIndex { version: version.max(INDEX_VERSION), automations };
+        if migrated { self.write_index(&index)?; }
+        Ok(index)
     }
 
     fn write_index(&self, index: &AutomationIndex) -> Result<(), AutomationError> {
@@ -525,20 +528,25 @@ fn apply_update(target: &mut Value, input: AutomationUpdateInput) {
     set_optional!("modelId", input.model_id);
     set_optional!("workspaceId", input.workspace_id);
     set_optional!("permissionMode", input.permission_mode);
-    set_optional!("sessionMode", input.session_mode);
+    if input.session_mode.is_some() {
+        // 为兼容旧客户端保留输入字段，但所有任务都统一复用首次创建的会话。
+        object.insert("sessionMode".to_string(), json!("reuse"));
+    }
     set_optional!("notificationTargets", input.notification_targets);
     set_optional!("active", input.active);
     object.insert("agentRuntime".to_string(), json!("pi"));
 }
 
-fn migrate_legacy_fields(automation: &mut Value) {
-    let Some(object) = automation.as_object_mut() else { return; };
-    object.insert("agentRuntime".to_string(), json!("pi"));
-    if object.get("sessionMode").and_then(Value::as_str) == Some("new") { object.insert("sessionMode".to_string(), json!("daily")); }
-    if object.get("permissionMode").and_then(Value::as_str).is_some_and(|value| value != "bypassPermissions") { object.insert("permissionMode".to_string(), json!("bypassPermissions")); }
-    object.entry("runHistory".to_string()).or_insert_with(|| json!([]));
-    object.entry("runCount".to_string()).or_insert_with(|| json!(0));
-    object.entry("consecutiveFailures".to_string()).or_insert_with(|| json!(0));
+fn migrate_legacy_fields(automation: &mut Value) -> bool {
+    let Some(object) = automation.as_object_mut() else { return false; };
+    let mut changed = false;
+    if object.get("agentRuntime").and_then(Value::as_str) != Some("pi") { object.insert("agentRuntime".to_string(), json!("pi")); changed = true; }
+    if object.get("sessionMode").and_then(Value::as_str) != Some("reuse") { object.insert("sessionMode".to_string(), json!("reuse")); changed = true; }
+    if object.get("permissionMode").and_then(Value::as_str).is_some_and(|value| value != "bypassPermissions") { object.insert("permissionMode".to_string(), json!("bypassPermissions")); changed = true; }
+    if !object.contains_key("runHistory") { object.insert("runHistory".to_string(), json!([])); changed = true; }
+    if !object.contains_key("runCount") { object.insert("runCount".to_string(), json!(0)); changed = true; }
+    if !object.contains_key("consecutiveFailures") { object.insert("consecutiveFailures".to_string(), json!(0)); changed = true; }
+    changed
 }
 
 fn next_run_at(schedule_type: &str, interval_minutes: u64, time_of_day: Option<&str>, day_of_week: Option<u64>, day_of_month: Option<u64>, scheduled_at: Option<u64>, from: u64) -> u64 {

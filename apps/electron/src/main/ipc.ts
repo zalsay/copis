@@ -180,6 +180,7 @@ import { setBuiltinMcpUserEnabled } from './lib/builtin-mcp/settings'
 import { setDockBadgeCount } from './lib/dock-badge-service'
 import {
   activateWebTab,
+  activateWebTabIncognito,
   closeWebTab,
   createWebTab,
   goBackWebTab,
@@ -937,6 +938,10 @@ export function registerIpcHandlers(): void {
   ipcMain.handle(WEB_IPC_CHANNELS.LIST, () => listWebTabs())
   ipcMain.handle(WEB_IPC_CHANNELS.CREATE, (_event, input?: CreateWebTabInput) => createWebTab(input))
   ipcMain.handle(WEB_IPC_CHANNELS.ACTIVATE, (_event, tabId: string | null) => activateWebTab(tabId))
+  ipcMain.handle(WEB_IPC_CHANNELS.INCOGNITO_ACTIVATE, (_event, tabId: string) => {
+    if (typeof tabId !== 'string' || !tabId.trim()) throw new Error('无痕页签参数不正确')
+    return activateWebTabIncognito(tabId)
+  })
   ipcMain.handle(WEB_IPC_CHANNELS.CLOSE, (_event, tabId: string) => closeWebTab(tabId))
   ipcMain.handle(WEB_IPC_CHANNELS.NAVIGATE, (_event, input: NavigateWebTabInput) => navigateWebTab(input))
   ipcMain.handle(WEB_IPC_CHANNELS.UPDATE_BOUNDS, (_event, input: UpdateWebTabBoundsInput) => updateWebTabBounds(input))

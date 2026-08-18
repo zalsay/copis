@@ -36,6 +36,12 @@ export const FUNCTIONAL_MODULE_DEFINITIONS: readonly FunctionalModuleDefinition[
     description: '为默认项目提供支付宝付款能力',
     required: true,
   },
+  {
+    name: 'playwright-core',
+    displayName: '浏览器自动化内核',
+    description: '为 Browser Workflow 提供页面自动化能力',
+    required: true,
+  },
 ]
 
 export function createEmptyFunctionalModuleStatus(

@@ -189,13 +189,23 @@ describe('COS 功能模块统一管理', () => {
     expect(calls.filter((url) => url === officeUrl)).toHaveLength(1)
   })
 
-  test('模块状态注册表包含四个必要模块', () => {
+  test('模块状态注册表包含五个必要模块', () => {
     const statuses = getFunctionalModuleStatuses(createRoot())
 
-    expect(statuses.map((item) => item.name)).toEqual(['node-runtime', 'rust-http-api', 'officecli', 'alipay-bot'])
+    expect(statuses.map((item) => item.name)).toEqual(['node-runtime', 'rust-http-api', 'officecli', 'alipay-bot', 'playwright-core'])
     expect(statuses.find((item) => item.name === 'node-runtime')?.required).toBe(true)
     expect(statuses.find((item) => item.name === 'rust-http-api')?.required).toBe(true)
     expect(statuses.find((item) => item.name === 'officecli')?.required).toBe(true)
     expect(statuses.find((item) => item.name === 'alipay-bot')?.required).toBe(true)
+  })
+
+  test('模块状态注册表包含浏览器自动化内核且标记为必选', () => {
+    const status = getFunctionalModuleStatuses(createRoot()).find((item) => item.name === 'playwright-core')
+
+    expect(status).toMatchObject({
+      name: 'playwright-core',
+      displayName: '浏览器自动化内核',
+      required: true,
+    })
   })
 })

@@ -1,6 +1,6 @@
 import * as React from 'react'
 import { useAtomValue, useSetAtom } from 'jotai'
-import { Globe2, LoaderCircle, Plus, X } from 'lucide-react'
+import { Glasses, Globe2, LoaderCircle, Plus, X } from 'lucide-react'
 import type { WebTabsSnapshot } from '@copis/shared'
 import { activeWebTabIdAtom, webTabsAtom } from '@/atoms/web-tabs'
 import { cn } from '@/lib/utils'
@@ -203,7 +203,9 @@ function WebTabItem({
       )}
       onClick={onActivate}
     >
-      {tab.isLoading ? (
+      {tab.isIncognito ? (
+        <Glasses className="size-3.5 shrink-0 text-primary" />
+      ) : tab.isLoading ? (
         <LoaderCircle className="size-3.5 shrink-0 animate-spin text-primary" />
       ) : (
         <WebTabIcon tab={tab} />

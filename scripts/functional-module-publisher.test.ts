@@ -53,6 +53,31 @@ describe('COS 功能模块发布器', () => {
     expect(release.manifestEntry.key).toBe('stable/manifest.json')
   })
 
+  test('发布器生成必选的 Playwright 平台归档 artifact', () => {
+    const archivePath = createFixture('playwright-core-archive', 'playwright-core.tar.gz')
+
+    const release = buildFunctionalModuleRelease({
+      channel: 'stable',
+      publicBaseUrl: 'https://download.example.com/copis/modules',
+      modules: [{
+        module: 'playwright-core',
+        version: '1.62.1',
+        platform: 'darwin',
+        arch: 'arm64',
+        binaryPath: archivePath,
+        format: 'tar.gz',
+        entrypoint: 'node_modules/playwright-core/index.js',
+        required: true,
+      }],
+    })
+
+    expect(release.manifest.platforms['darwin-arm64']?.modules['playwright-core']).toMatchObject({
+      format: 'tar.gz',
+      entrypoint: 'node_modules/playwright-core/index.js',
+      required: true,
+    })
+  })
+
   test('拒绝同一平台重复发布同名模块', () => {
     const binaryPath = createFixture('duplicate', 'module')
     expect(() => buildFunctionalModuleRelease({

@@ -79,7 +79,7 @@
 }
 
 .copis-agent-session:not(.new-conversation) > .relative.flex.min-h-0.flex-1.flex-col {
-  padding-bottom: 128px;
+  padding-bottom: var(--agent-composer-reserve-space, 128px);
 }
 
 /* Composer：保持半透明背景，让底层内容透过毛玻璃材质可见。 */

@@ -118,6 +118,51 @@ fn readonly_workspace_can_read_but_only_copis_root_can_write() {
 }
 
 #[test]
+fn browser_recordings_are_isolated_between_agent_sessions() {
+    let root = temp_dir("browser-session-isolation");
+    let recordings = root.join("browser/agent-workspaces");
+    let current_session = recordings.join("session-1");
+    let other_session = recordings.join("session-2");
+    fs::create_dir_all(&current_session).unwrap();
+    fs::create_dir_all(&other_session).unwrap();
+    let own_file = current_session.join("recording.jsonl");
+    let other_file = other_session.join("recording.jsonl");
+    fs::write(&own_file, "own").unwrap();
+    fs::write(&other_file, "other").unwrap();
+
+    let store = AgentFilePolicyStore::new();
+    let mut query = Map::new();
+    query.insert(
+        "cwd".to_string(),
+        Value::String(root.to_string_lossy().into_owned()),
+    );
+    query.insert("useRustFileApi".to_string(), Value::Bool(true));
+    query.insert(
+        "fileAccessPolicy".to_string(),
+        json!({
+            "readRoots": [root, current_session],
+            "browserSessionRoot": current_session,
+            "readFiles": [],
+            "writeRoots": [current_session],
+            "permissionMode": "bypassPermissions"
+        }),
+    );
+    let session = store.register_from_query("session-1", &mut query).unwrap();
+
+    assert!(store
+        .handle("read", "POST", &body("session-1", &own_file))
+        .is_ok());
+    assert_eq!(
+        store
+            .handle("read", "POST", &body("session-1", &other_file))
+            .unwrap_err()
+            .code,
+        "read_not_allowed"
+    );
+    assert!(!session.is_empty());
+}
+
+#[test]
 fn rejects_traversal_and_symlink() {
     let root = temp_dir("symlink");
     let outside = temp_dir("outside");

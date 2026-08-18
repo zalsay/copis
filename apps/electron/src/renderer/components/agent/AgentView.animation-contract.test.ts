@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 const agentStyles = readFileSync(join(import.meta.dir, 'AgentView.css'), 'utf8')
+const agentConversationSurface = readFileSync(join(import.meta.dir, 'AgentConversationSurface.tsx'), 'utf8')
 const globalStyles = readFileSync(join(import.meta.dir, '../../styles/globals.css'), 'utf8')
 
 describe('Agent 思考状态动画契约', () => {
@@ -17,10 +18,12 @@ describe('Agent 思考状态动画契约', () => {
     expect(agentStyles).toContain('background-position: 0 0;')
   })
 
-  test('Given Agent composer When 显示输入区域 Then 使用半透明毛玻璃背景', () => {
+  test('Given Agent composer 高度变化 When 显示输入区域 Then 消息滚动区按实际高度预留空间', () => {
     expect(agentStyles).toContain('background: hsl(var(--background) / 0.42) !important;')
     expect(agentStyles).toContain('position: absolute;')
-    expect(agentStyles).toContain('padding-bottom: 128px;')
+    expect(agentStyles).toContain('padding-bottom: var(--agent-composer-reserve-space, 128px);')
+    expect(agentConversationSurface).toContain("style.setProperty('--agent-composer-reserve-space'")
+    expect(agentConversationSurface).toContain('new ResizeObserver(updateComposerReserveSpace)')
     expect(agentStyles).toContain('backdrop-filter: blur(18px) saturate(1.12);')
     expect(agentStyles).toContain('-webkit-backdrop-filter: blur(18px) saturate(1.12);')
   })

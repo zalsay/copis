@@ -38,6 +38,7 @@ const REQUIRED_MODULES: readonly FunctionalModuleName[] = [
   'officecli',
   'alipay-bot',
   'rust-http-api',
+  'playwright-core',
 ]
 
 export interface FunctionalModuleStartupOptions {
@@ -121,6 +122,13 @@ export function assertRequiredModuleArtifacts(
   const alipayBotEntrypoint = alipayBot.platform === 'win32' ? 'bin/alipay-bot.cmd' : 'bin/alipay-bot'
   if (alipayBot.format !== 'tar.gz' || alipayBot.entrypoint !== alipayBotEntrypoint) {
     throw new Error('支付宝智能体 CLI 模块格式不正确')
+  }
+
+  const playwrightCore = byName.get('playwright-core')
+  if (!playwrightCore) throw new Error('组件清单缺少必要的浏览器自动化内核')
+  if (!playwrightCore.required) throw new Error('浏览器自动化内核必须是必要组件')
+  if (playwrightCore.format !== 'tar.gz' || playwrightCore.entrypoint !== 'node_modules/playwright-core/index.js') {
+    throw new Error('浏览器自动化内核模块格式不正确')
   }
 }
 
@@ -216,7 +224,7 @@ async function runRequiredModuleStartup(
             artifactOverride: artifact,
             onProgress: emitModuleProgress,
           })
-          if (name === 'node-runtime' || name === 'officecli' || name === 'alipay-bot') {
+          if (name === 'node-runtime' || name === 'officecli' || name === 'alipay-bot' || name === 'playwright-core') {
             httpApiRuntimeDependenciesUpdated = true
           }
         }
@@ -358,6 +366,8 @@ function createHttpApiOptions(options: FunctionalModuleStartupOptions & { rootDi
 function displayName(name: FunctionalModuleName): string {
   if (name === 'node-runtime') return 'Node.js 运行环境'
   if (name === 'officecli') return 'Office 文档支持'
+  if (name === 'alipay-bot') return '支付宝智能体 CLI'
+  if (name === 'playwright-core') return '浏览器自动化内核'
   return '系统核心模块'
 }
 

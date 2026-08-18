@@ -31,6 +31,26 @@ function serializedLogs(logs: CapturedConsoleLogs): string {
 }
 
 describe('Pi Browser Agent tool client', () => {
+  test('Given BrowserPageOpenTab schema When incognito is supplied Then the optional boolean is accepted and documented', () => {
+    const definitions: Array<{ name: string; description?: string; promptSnippet?: string; parameters?: { properties?: Record<string, unknown> } }> = []
+    const sdk = {
+      defineTool: <T>(definition: T): T => {
+        definitions.push(definition as typeof definitions[number])
+        return definition
+      },
+    } as unknown as typeof import('@earendil-works/pi-coding-agent')
+
+    buildPiBrowserAgentTools(sdk, {
+      sessionId: 'session-1',
+      capability: { endpoint: '/api/internal/agent/browser-tool', token: 'capability-1' },
+    })
+
+    const openTab = definitions.find((definition) => definition.name === 'BrowserPageOpenTab')
+    expect(openTab?.parameters?.properties?.incognito).toBeDefined()
+    expect(openTab?.description).toContain('incognito: true')
+    expect(openTab?.promptSnippet).toContain('不复用普通页签登录态')
+  })
+
   test('Given opaque capability When BrowserPageObserve executes Then it posts only the fixed bridge request shape', async () => {
     const requests: Array<{ url: string; init?: RequestInit }> = []
     const definitions: Array<{ name: string; execute: (toolCallId: string, params: unknown, signal?: AbortSignal) => Promise<unknown> }> = []
@@ -164,6 +184,70 @@ describe('Pi Browser Agent tool client', () => {
     } | undefined)?.properties?.text?.description
     expect(text).toContain('高级授权开启时可包含敏感值')
     expect(text).not.toContain('不得包含')
+  })
+
+  test('Given BrowserWorkflowDraft When Browser Agent tools are built Then it requires a structured workflow draft instead of an unknown object', () => {
+    const definitions: Array<{
+      name: string
+      promptSnippet?: string
+      parameters?: {
+        properties?: {
+          workflow?: {
+            properties?: {
+              schemaVersion?: { const?: number }
+              start?: { properties?: { tabAlias?: unknown; url?: unknown; origin?: unknown } }
+              variables?: { type?: string }
+              steps?: { type?: string; minItems?: number; items?: { anyOf?: unknown[] } }
+            }
+          }
+        }
+      }
+    }> = []
+    const sdk = {
+      defineTool: <T>(definition: T): T => {
+        definitions.push(definition as typeof definitions[number])
+        return definition
+      },
+    } as unknown as typeof import('@earendil-works/pi-coding-agent')
+
+    buildPiBrowserAgentTools(sdk, {
+      sessionId: 'session-1',
+      capability: { endpoint: '/api/internal/agent/browser-tool', token: 'capability-1' },
+    })
+
+    const draft = definitions.find((definition) => definition.name === 'BrowserWorkflowDraft')
+    const workflow = draft?.parameters?.properties?.workflow
+    expect(workflow?.properties?.schemaVersion?.const).toBe(1)
+    expect(workflow?.properties?.start?.properties).toMatchObject({ tabAlias: {}, url: {}, origin: {} })
+    expect(workflow?.properties?.variables?.type).toBe('array')
+    expect(workflow?.properties?.steps).toMatchObject({ type: 'array', minItems: 1 })
+    expect(workflow?.properties?.steps?.items?.anyOf).toBeArray()
+    expect(draft?.promptSnippet).toContain('不得传 workflowId')
+    expect(draft?.promptSnippet).toContain('target.locator')
+    expect(draft?.promptSnippet).toContain('每个步骤都要填写 description')
+    expect(draft?.promptSnippet).toContain('submit 事件不生成独立步骤')
+  })
+
+  test('Given 用户运行 Workflow When 工具定义提供执行提示 Then 失败后指引 Agent 基于当前页面重新分析', () => {
+    const definitions: Array<{ name: string; promptSnippet?: string }> = []
+    const sdk = {
+      defineTool: <T>(definition: T): T => {
+        definitions.push(definition as typeof definitions[number])
+        return definition
+      },
+    } as unknown as typeof import('@earendil-works/pi-coding-agent')
+
+    buildPiBrowserAgentTools(sdk, {
+      sessionId: 'session-1',
+      capability: { endpoint: '/api/internal/agent/browser-tool', token: 'capability-1' },
+    })
+
+    expect(definitions.find((definition) => definition.name === 'BrowserWorkflowRun')?.promptSnippet)
+      .toContain('BrowserPageObserve')
+    expect(definitions.find((definition) => definition.name === 'BrowserWorkflowRun')?.promptSnippet)
+      .toContain('只能调用 `BrowserWorkflowRun`')
+    expect(definitions.find((definition) => definition.name === 'BrowserWorkflowRun')?.promptSnippet)
+      .toContain('不得通过 `bash`、Node.js')
   })
 
   test('Given fetch abort When browser tool executes Then logs the fetch abort stage without request values', async () => {

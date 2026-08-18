@@ -279,6 +279,7 @@ function createWebTabsFallback(): Record<string, unknown> {
     list: () => Promise.resolve(emptySnapshot()),
     create: () => Promise.reject(new Error('浏览器模式不支持内嵌 Chromium 页签')),
     activate: () => Promise.resolve(emptySnapshot()),
+    activateIncognito: () => Promise.reject(new Error('浏览器模式不支持内嵌 Chromium 页签')),
     close: () => Promise.resolve(emptySnapshot()),
     navigate: () => Promise.reject(new Error('浏览器模式不支持内嵌 Chromium 页签')),
     updateBounds: () => Promise.resolve(),

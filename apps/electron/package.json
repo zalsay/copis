@@ -131,6 +131,7 @@
     "markdown-it": "^14.1.0",
     "officeparser": "4.2.0",
     "pdf-parse": "1.1.1",
+    "playwright-core": "1.62.1",
     "pngjs": "^7.0.0",
     "postcss": "^8.4.49",
     "qrcode": "^1.5.4",

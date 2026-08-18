@@ -1,7 +1,7 @@
 /**
  * 定时任务列表视图（codex Automations 风格）
  *
- * 由侧边栏 Automations 入口触发显示，全屏占据中间内容区（隐藏 TabBar）。
+ * 由侧边栏“定时任务”入口触发显示，全屏占据中间内容区（隐藏 TabBar）。
  *
  * 结构：
  * - 顶部：标题 "定时任务" + 「+ 新建」按钮
@@ -60,7 +60,7 @@ function formatNextRun(a: Automation): string {
   return `下次 ${new Date(a.nextRunAt).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false })}`
 }
 
-/** 定时任务列表嵌入统一的任务/日程页，页头由父级提供。 */
+/** 定时任务独立页面。 */
 export function AutomationsListView(): React.ReactElement {
   const automations = useAtomValue(automationsAtom)
   const [pendingDeletion, setPendingDeletion] = React.useState<Automation | null>(null)
@@ -114,8 +114,22 @@ export function AutomationsListView(): React.ReactElement {
 
   return (
     <div className="h-full flex flex-col overflow-hidden">
-      {/* 列表内容 */}
-      <div className="flex-1 min-h-0 overflow-y-auto">
+      <header className="relative flex shrink-0 items-center justify-between gap-4 px-6 pb-5 pt-8 titlebar-no-drag sm:px-8 xl:px-10">
+        <div className="absolute inset-y-0 left-0 right-0 titlebar-drag-region" />
+        <div className="relative z-[1]">
+          <h1 className="text-2xl font-semibold text-wrap-balance">定时任务</h1>
+          <p className="mt-1 text-sm text-muted-foreground">管理按计划自动运行的任务</p>
+        </div>
+        <button
+          type="button"
+          onClick={handleCreate}
+          className="relative z-[1] titlebar-no-drag ui-primary-button inline-flex min-h-10 items-center gap-1.5 rounded-lg px-3 text-sm font-medium shadow-sm transition-colors active:scale-[0.96]"
+        >
+          <Plus size={16} />
+          新建任务
+        </button>
+      </header>
+      <div className="min-h-0 flex-1 overflow-y-auto px-6 pb-8 sm:px-8 xl:px-10">
         {automations.length === 0 ? (
           <EmptyState onCreate={handleCreate} />
         ) : (
@@ -162,7 +176,7 @@ function Section({ title, automations, onEdit, onRefresh, onDelete }: SectionPro
       return
     }
     toast.success(`已开始运行「${a.name}」`, {
-      description: '本次任务会创建新的 Agent 会话，可在左侧会话列表查看',
+      description: '任务会使用其专属 Agent 会话，可在左侧会话列表查看',
     })
     try {
       await window.electronAPI.runAutomationNow(a.id)

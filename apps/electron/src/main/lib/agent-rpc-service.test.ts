@@ -1,5 +1,5 @@
 import { describe, expect, mock, test } from 'bun:test'
-import type { AgentSessionMeta, SDKMessage } from '@copis/shared'
+import type { AgentSessionMeta, Automation, SDKMessage } from '@copis/shared'
 
 const rpcSession: AgentSessionMeta = {
   id: 'session-1',
@@ -20,7 +20,11 @@ mock.module('./agent-session-manager', () => ({
     appendedRpcMessages.push(...messages)
     persistedRpcMessages.push(...messages)
   },
-  getAgentSessionMeta: (sessionId: string) => sessionId === rpcSession.id ? rpcSession : undefined,
+  getAgentSessionMeta: (sessionId: string) => {
+    if (sessionId === rpcSession.id) return rpcSession
+    if (sessionId === 'automation-session-1') return { ...rpcSession, id: 'automation-session-1' }
+    return undefined
+  },
   getAgentSessionSDKMessages: () => persistedRpcMessages,
   createAgentSession: (
     title?: string,
@@ -40,6 +44,7 @@ mock.module('./agent-session-manager', () => ({
 }))
 
 mock.module('./agent-workspace-manager', () => ({
+  ensureAgentWorkspaceBrowserSessionPath: () => '/tmp/copis-agent-rpc-test/project/browser/agent-workspaces/session-1',
   ensureAgentWorkspaceContextDir: () => '/tmp/copis-agent-rpc-test/workspace-1/.context',
   ensureAgentWorkspaceWritableRoot: () => '/tmp/copis-agent-rpc-test/copis',
   getAgentWorkspaceCopisPath: () => '/tmp/copis-agent-rpc-test/copis',
@@ -67,6 +72,7 @@ mock.module('./agent-workspace-manager', () => ({
     }
     : undefined,
   getAgentWorkspaceContextDir: () => '/tmp/copis-agent-rpc-test/copis/.context',
+  getAgentWorkspaceBrowserPath: () => '/tmp/copis-agent-rpc-test/project/browser',
   getAgentWorkspaceReadableRoots: () => ['/tmp/copis-agent-rpc-test/project'],
   getProjectFilesPath: () => '/tmp/copis-agent-rpc-test/project',
   getWorkspaceAttachedDirectories: () => [],
@@ -209,6 +215,31 @@ describe('Agent RPC mention 参数', () => {
   })
 })
 
+describe('Agent RPC 定时任务会话复用', () => {
+  test('Given 定时任务已有上次运行会话 When 下次触发 Then 跨日仍复用该会话', async () => {
+    const { prepareAutomationRpcRun } = await import('./agent-rpc-service')
+    const automation: Automation = {
+      id: 'automation-1',
+      name: '每日汇总',
+      prompt: '整理今日进展',
+      active: true,
+      scheduleType: 'daily',
+      intervalMinutes: 10,
+      channelId: 'channel-1',
+      workspaceId: 'workspace-1',
+      createdAt: 1,
+      updatedAt: 1,
+      nextRunAt: 1,
+      lastSessionId: rpcSession.id,
+      runHistory: [],
+    }
+
+    const prepared = await prepareAutomationRpcRun(automation, 2_000_000_000_000)
+
+    expect(prepared.sessionId).toBe(rpcSession.id)
+  })
+})
+
 describe('Agent RPC 专家团队上下文解析边界', () => {
   const validContext = {
     schemaId: 'team-a',
@@ -316,6 +347,10 @@ describe('Agent RPC 工作区边界', () => {
       expect(policy?.readRoots).not.toContain('/tmp/copis-agent-rpc-test/external')
       expect(policy?.writeRoots).toContain('/tmp/copis-agent-rpc-test/project')
       expect(policy?.writeRoots).toContain('/tmp/copis-agent-rpc-test/copis')
+      expect(policy?.readRoots).toContain('/tmp/copis-agent-rpc-test/project/browser/agent-workspaces/session-1')
+      expect(policy?.writeRoots).toContain('/tmp/copis-agent-rpc-test/project/browser/agent-workspaces/session-1')
+      expect(policy?.writeRoots).not.toContain('/tmp/copis-agent-rpc-test/project/browser')
+      expect(policy?.browserSessionRoot).toBe('/tmp/copis-agent-rpc-test/project/browser/agent-workspaces/session-1')
     } finally {
       rpcSession.attachedFiles = originalAttachedFiles
     }
@@ -392,6 +427,10 @@ describe('Agent RPC 专家团队上下文', () => {
     expect(resolvedRpcContexts[0]).toMatchObject({
       workspace: expect.objectContaining({ slug: 'test-workspace' }),
     })
+    expect(run.query.systemPrompt).toContain('## 专家团队服务')
+    expect(run.query.systemPrompt).toContain('# Copis Agent')
+    expect(run.query.systemPrompt).toContain('只有用户明确提出使用、启动或组建专家团队时')
+    expect(run.query.systemPrompt).not.toContain('# 专家团队主理人')
     expect(run.query.systemPrompt).toContain('<copis_expert_team_agents_md>')
     expect(run.query.systemPrompt).toContain('team-a')
   })

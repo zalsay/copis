@@ -23,6 +23,8 @@ param(
     [switch]$NodeRuntimeOnly,
     [Alias('alipay-bot')]
     [switch]$AlipayBotOnly,
+    [Alias('playwright-core')]
+    [switch]$PlaywrightCoreOnly,
     [ValidateSet('win32', 'darwin', 'linux')]
     [string]$Platform,
     [ValidateSet('x64', 'arm64')]
@@ -38,7 +40,9 @@ param(
     [string]$NodeRuntimeArchive,
     [string]$NodeRuntimeVersion,
     [string]$AlipayBotArchive,
-    [string]$AlipayBotVersion
+    [string]$AlipayBotVersion,
+    [string]$PlaywrightCoreArchive,
+    [string]$PlaywrightCoreVersion
 )
 
 $ErrorActionPreference = 'Stop'
@@ -94,6 +98,7 @@ if ($env:COPIS_RUST_ONLY -eq '1') { $RustOnly = $true }
 if ($env:COPIS_OFFICECLI_ONLY -eq '1') { $OfficeCliOnly = $true }
 if ($env:COPIS_NODE_RUNTIME_ONLY -eq '1') { $NodeRuntimeOnly = $true }
 if ($env:COPIS_ALIPAY_BOT_ONLY -eq '1') { $AlipayBotOnly = $true }
+if ($env:COPIS_PLAYWRIGHT_CORE_ONLY -eq '1') { $PlaywrightCoreOnly = $true }
 
 for ($index = 0; $index -lt $LegacyArguments.Count; $index++) {
     $argument = $LegacyArguments[$index]
@@ -102,6 +107,7 @@ for ($index = 0; $index -lt $LegacyArguments.Count; $index++) {
         '--officecli' { $OfficeCliOnly = $true }
         '--node-runtime' { $NodeRuntimeOnly = $true }
         '--alipay-bot' { $AlipayBotOnly = $true }
+        '--playwright-core' { $PlaywrightCoreOnly = $true }
         '--build-app' { $BuildApp = $true }
         '--skip-install' { $SkipInstall = $true }
         '--skip-rust-build' { $SkipRustBuild = $true }
@@ -120,12 +126,14 @@ for ($index = 0; $index -lt $LegacyArguments.Count; $index++) {
         '--node-runtime-version' { $NodeRuntimeVersion = Get-LegacyValue $LegacyArguments $index $argument; $index++ }
         '--alipay-bot-archive' { $AlipayBotArchive = Get-LegacyValue $LegacyArguments $index $argument; $index++ }
         '--alipay-bot-version' { $AlipayBotVersion = Get-LegacyValue $LegacyArguments $index $argument; $index++ }
+        '--playwright-core-archive' { $PlaywrightCoreArchive = Get-LegacyValue $LegacyArguments $index $argument; $index++ }
+        '--playwright-core-version' { $PlaywrightCoreVersion = Get-LegacyValue $LegacyArguments $index $argument; $index++ }
         default { throw "Unsupported argument: $argument. Use PowerShell parameters such as -RustOnly." }
     }
 }
 
-if ((@($RustOnly, $OfficeCliOnly, $NodeRuntimeOnly, $AlipayBotOnly) | Where-Object { $_ }).Count -gt 1) {
-    throw '-RustOnly, -OfficeCliOnly, -NodeRuntimeOnly, and -AlipayBotOnly cannot be used together.'
+if ((@($RustOnly, $OfficeCliOnly, $NodeRuntimeOnly, $AlipayBotOnly, $PlaywrightCoreOnly) | Where-Object { $_ }).Count -gt 1) {
+    throw '-RustOnly, -OfficeCliOnly, -NodeRuntimeOnly, -AlipayBotOnly, and -PlaywrightCoreOnly cannot be used together.'
 }
 if (-not (Test-Path -LiteralPath (Join-Path $rootDir 'package.json') -PathType Leaf) -or
     -not (Test-Path -LiteralPath (Join-Path $appDir 'package.json') -PathType Leaf)) {
@@ -140,7 +148,8 @@ $Arch = Set-FromEnvironment $Arch 'COPIS_MODULE_ARCH' $currentArch
 $Channel = Set-FromEnvironment $Channel 'COPIS_MODULE_CHANNEL' 'stable'
 $Version = Set-FromEnvironment $Version 'COPIS_MODULE_VERSION'
 $ClientMinVersion = Set-FromEnvironment $ClientMinVersion 'COPIS_MODULE_CLIENT_MIN_VERSION'
-$PublicBaseUrl = Set-FromEnvironment $PublicBaseUrl 'COS_PUBLIC_BASE_URL'
+$publicBaseUrlFromEnvironment = $env:COS_PUBLIC_BASE_URL
+$PublicBaseUrl = Set-FromEnvironment $PublicBaseUrl 'COS_PUBLIC_BASE_URL' $publicBaseUrlFromEnvironment
 $ObjectPrefixPath = Set-FromEnvironment $ObjectPrefixPath 'OBJECT_PREFIX_PATH'
 $RustBinary = Set-FromEnvironment $RustBinary 'COPIS_RUST_HTTP_API_BINARY'
 $OfficeCliBinary = Set-FromEnvironment $OfficeCliBinary 'COPIS_OFFICECLI_BINARY'
@@ -149,6 +158,8 @@ $NodeRuntimeArchive = Set-FromEnvironment $NodeRuntimeArchive 'COPIS_NODE_RUNTIM
 $NodeRuntimeVersion = Set-FromEnvironment $NodeRuntimeVersion 'COPIS_NODE_RUNTIME_VERSION'
 $AlipayBotArchive = Set-FromEnvironment $AlipayBotArchive 'COPIS_ALIPAY_BOT_ARCHIVE'
 $AlipayBotVersion = Set-FromEnvironment $AlipayBotVersion 'COPIS_ALIPAY_BOT_VERSION'
+$PlaywrightCoreArchive = Set-FromEnvironment $PlaywrightCoreArchive 'COPIS_PLAYWRIGHT_CORE_ARCHIVE'
+$PlaywrightCoreVersion = Set-FromEnvironment $PlaywrightCoreVersion 'COPIS_PLAYWRIGHT_CORE_VERSION'
 $nodeRuntimeSource = [System.Environment]::GetEnvironmentVariable('COPIS_NODE_RUNTIME_SOURCE', 'Process')
 
 if ($Platform -notin @('win32', 'darwin', 'linux')) { throw "Unsupported functional module platform: $Platform" }
@@ -194,6 +205,18 @@ function Resolve-PathFromRoot {
     if ([string]::IsNullOrWhiteSpace($Path)) { return $null }
     if ([System.IO.Path]::IsPathRooted($Path)) { return $Path }
     return Join-Path $rootDir $Path
+}
+
+function Resolve-FunctionalModuleManifestUrl {
+    param(
+        [string]$BaseUrl,
+        [string]$Prefix,
+        [Parameter(Mandatory = $true)][string]$Channel
+    )
+
+    if ([string]::IsNullOrWhiteSpace($BaseUrl)) { return $null }
+    $normalizedPrefix = if ([string]::IsNullOrWhiteSpace($Prefix)) { 'copis/modules' } else { $Prefix.Trim('/') }
+    return "$($BaseUrl.TrimEnd('/'))/$normalizedPrefix/$Channel/manifest.json"
 }
 
 function Get-NodePathFromRoot {
@@ -272,7 +295,7 @@ if (-not $SkipInstall) {
 }
 
 $rustBinaryPath = $null
-if (-not $OfficeCliOnly -and -not $NodeRuntimeOnly -and -not $AlipayBotOnly) {
+if (-not $OfficeCliOnly -and -not $NodeRuntimeOnly -and -not $AlipayBotOnly -and -not $PlaywrightCoreOnly) {
     $rustFileName = if ($Platform -eq 'win32') { 'copis-http-api-server.exe' } else { 'copis-http-api-server' }
     $defaultRustBinary = Join-Path $rootDir "native\http-api-server\target\release\$rustFileName"
     if (-not $SkipRustBuild) {
@@ -291,13 +314,18 @@ if (-not $OfficeCliOnly -and -not $NodeRuntimeOnly -and -not $AlipayBotOnly) {
 
 $officeCliBinaryPath = $null
 $officeCliVersionValue = $null
-if (-not $RustOnly -and -not $NodeRuntimeOnly -and -not $AlipayBotOnly) {
+if (-not $RustOnly -and -not $NodeRuntimeOnly -and -not $AlipayBotOnly -and -not $PlaywrightCoreOnly) {
     $officeCliBinaryPath = Resolve-PathFromRoot $OfficeCliBinary
     $officeCliFileName = if ($Platform -eq 'win32') { 'officecli.exe' } else { 'officecli' }
     if (-not $officeCliBinaryPath) { $officeCliBinaryPath = Join-Path $appDir "resources\bin\$officeCliFileName" }
     if (-not (Test-Path -LiteralPath $officeCliBinaryPath -PathType Leaf)) {
-        Write-Host 'Preparing OfficeCLI module from its GitHub release...'
-        Invoke-BunCommand $rootDir @('run', 'prepare:officecli-module', '--', '--platform', $Platform, '--arch', $Arch, '--output', $officeCliBinaryPath) 'OfficeCLI module preparation failed'
+        Write-Host 'Checking the OfficeCLI functional module version from COS...'
+        $prepareArguments = @('run', 'prepare:officecli-module', '--', '--platform', $Platform, '--arch', $Arch, '--output', $officeCliBinaryPath)
+        $publicManifestUrl = Resolve-FunctionalModuleManifestUrl -BaseUrl $PublicBaseUrl -Prefix $ObjectPrefixPath -Channel $Channel
+        if (-not [string]::IsNullOrWhiteSpace($publicManifestUrl)) {
+            $prepareArguments += @('--public-manifest-url', $publicManifestUrl)
+        }
+        Invoke-BunCommand $rootDir $prepareArguments 'OfficeCLI module preparation failed'
     }
     if (-not (Test-Path -LiteralPath $officeCliBinaryPath -PathType Leaf)) { throw "OfficeCLI binary was not found: $officeCliBinaryPath" }
     $officeCliBinaryPath = (Resolve-Path -LiteralPath $officeCliBinaryPath).Path
@@ -306,7 +334,7 @@ if (-not $RustOnly -and -not $NodeRuntimeOnly -and -not $AlipayBotOnly) {
 
 $nodeRuntimeArchivePath = $null
 $nodeRuntimeVersionValue = $null
-if (-not $RustOnly -and -not $OfficeCliOnly -and -not $AlipayBotOnly) {
+if (-not $RustOnly -and -not $OfficeCliOnly -and -not $AlipayBotOnly -and -not $PlaywrightCoreOnly) {
     $nodeRuntimeArchivePath = Resolve-PathFromRoot $NodeRuntimeArchive
     if (-not $nodeRuntimeArchivePath) { $nodeRuntimeArchivePath = Join-Path $appDir "resources\node-runtime\$Platform-$Arch.tar.gz" }
     if (-not (Test-Path -LiteralPath $nodeRuntimeArchivePath -PathType Leaf)) {
@@ -325,7 +353,7 @@ if (-not $RustOnly -and -not $OfficeCliOnly -and -not $AlipayBotOnly) {
 
 $alipayBotArchivePath = $null
 $alipayBotVersionValue = $null
-if (-not $RustOnly -and -not $OfficeCliOnly -and -not $NodeRuntimeOnly) {
+if (-not $RustOnly -and -not $OfficeCliOnly -and -not $NodeRuntimeOnly -and -not $PlaywrightCoreOnly) {
     $alipayBotArchivePath = Resolve-PathFromRoot $AlipayBotArchive
     if (-not $alipayBotArchivePath) { $alipayBotArchivePath = Join-Path $appDir "resources\alipay-bot\$Platform-$Arch.tar.gz" }
     if (-not (Test-Path -LiteralPath $alipayBotArchivePath -PathType Leaf) -or $env:COPIS_REFRESH_ALIPAY_BOT_CLI -eq '1') {
@@ -348,6 +376,20 @@ if (-not $RustOnly -and -not $OfficeCliOnly -and -not $NodeRuntimeOnly) {
     $alipayBotVersionValue = if ([string]::IsNullOrWhiteSpace($AlipayBotVersion)) { $releaseVersion } else { $AlipayBotVersion.Trim() }
 }
 
+$playwrightCoreArchivePath = $null
+$playwrightCoreVersionValue = $null
+if (-not $RustOnly -and -not $OfficeCliOnly -and -not $NodeRuntimeOnly -and -not $AlipayBotOnly) {
+    $playwrightCoreArchivePath = Resolve-PathFromRoot $PlaywrightCoreArchive
+    if (-not $playwrightCoreArchivePath) { $playwrightCoreArchivePath = Join-Path $appDir 'resources\playwright-core\playwright-core.tar.gz' }
+    if (-not (Test-Path -LiteralPath $playwrightCoreArchivePath -PathType Leaf)) {
+        Write-Host 'Packaging Playwright Core module (without downloading browsers)...'
+        Invoke-BunCommand $rootDir @('run', 'build:playwright-core-module', '--', '--output', $playwrightCoreArchivePath) 'Playwright Core module build failed'
+    }
+    if (-not (Test-Path -LiteralPath $playwrightCoreArchivePath -PathType Leaf)) { throw "Playwright Core archive was not found: $playwrightCoreArchivePath" }
+    $playwrightCoreArchivePath = (Resolve-Path -LiteralPath $playwrightCoreArchivePath).Path
+    $playwrightCoreVersionValue = if ([string]::IsNullOrWhiteSpace($PlaywrightCoreVersion)) { '1.62.1' } else { $PlaywrightCoreVersion.Trim() }
+}
+
 if ($BuildApp) {
     if ($Platform -ne $currentPlatform) { throw '-BuildApp can only build the current platform Electron application.' }
     Write-Host 'Building Electron application...'
@@ -359,15 +401,17 @@ if ($BuildApp) {
 if (-not $SkipPublish) {
     if ([string]::IsNullOrWhiteSpace($PublicBaseUrl)) { throw 'COS_PUBLIC_BASE_URL or -PublicBaseUrl is required to publish functional modules.' }
     $releaseArguments = @('--platform', $Platform, '--arch', $Arch, '--channel', $Channel, '--version', $releaseVersion, '--client-min-version', $minimumClientVersion, '--public-base-url', $PublicBaseUrl)
-    if (-not $OfficeCliOnly -and -not $NodeRuntimeOnly -and -not $AlipayBotOnly) { $releaseArguments += @('--rust-binary', $rustBinaryPath) }
-    if (-not $RustOnly -and -not $NodeRuntimeOnly -and -not $AlipayBotOnly) { $releaseArguments += @('--officecli-binary', $officeCliBinaryPath, '--officecli-version', $officeCliVersionValue) }
-    if (-not $RustOnly -and -not $OfficeCliOnly -and -not $AlipayBotOnly) { $releaseArguments += @('--node-runtime-archive', $nodeRuntimeArchivePath, '--node-runtime-version', $nodeRuntimeVersionValue) }
-    if (-not $RustOnly -and -not $OfficeCliOnly -and -not $NodeRuntimeOnly) { $releaseArguments += @('--alipay-bot-archive', $alipayBotArchivePath, '--alipay-bot-version', $alipayBotVersionValue) }
+    if (-not $OfficeCliOnly -and -not $NodeRuntimeOnly -and -not $AlipayBotOnly -and -not $PlaywrightCoreOnly) { $releaseArguments += @('--rust-binary', $rustBinaryPath) }
+    if (-not $RustOnly -and -not $NodeRuntimeOnly -and -not $AlipayBotOnly -and -not $PlaywrightCoreOnly) { $releaseArguments += @('--officecli-binary', $officeCliBinaryPath, '--officecli-version', $officeCliVersionValue) }
+    if (-not $RustOnly -and -not $OfficeCliOnly -and -not $AlipayBotOnly -and -not $PlaywrightCoreOnly) { $releaseArguments += @('--node-runtime-archive', $nodeRuntimeArchivePath, '--node-runtime-version', $nodeRuntimeVersionValue) }
+    if (-not $RustOnly -and -not $OfficeCliOnly -and -not $NodeRuntimeOnly -and -not $PlaywrightCoreOnly) { $releaseArguments += @('--alipay-bot-archive', $alipayBotArchivePath, '--alipay-bot-version', $alipayBotVersionValue) }
+    if (-not $RustOnly -and -not $OfficeCliOnly -and -not $NodeRuntimeOnly -and -not $AlipayBotOnly) { $releaseArguments += @('--playwright-core-archive', $playwrightCoreArchivePath, '--playwright-core-version', $playwrightCoreVersionValue) }
     if (-not [string]::IsNullOrWhiteSpace($ObjectPrefixPath)) { $releaseArguments += @('--prefix', $ObjectPrefixPath.Trim()) }
     if ($RustOnly) { $releaseArguments += '--rust' }
     if ($OfficeCliOnly) { $releaseArguments += '--officecli' }
     if ($NodeRuntimeOnly) { $releaseArguments += '--node-runtime' }
     if ($AlipayBotOnly) { $releaseArguments += '--alipay-bot' }
+    if ($PlaywrightCoreOnly) { $releaseArguments += '--playwright-core' }
 
     $manifestPath = Join-Path $appDir 'dist\functional-modules\manifest.json'
     Write-Host 'Generating functional module manifest...'

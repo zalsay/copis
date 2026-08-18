@@ -246,6 +246,8 @@ export interface AgentConversationSurfaceProps {
 
 export function AgentConversationSurface({ sessionId, variant = 'main' }: AgentConversationSurfaceProps): React.ReactElement {
   const compact = variant === 'browser'
+  const sessionSurfaceRef = React.useRef<HTMLDivElement>(null)
+  const composerRef = React.useRef<HTMLDivElement>(null)
   const [persistedSDKMessages, setPersistedSDKMessages] = React.useState<SDKMessage[]>([])
   const persistedSDKMessagesRef = React.useRef<SDKMessage[]>([])
   persistedSDKMessagesRef.current = persistedSDKMessages
@@ -2822,10 +2824,31 @@ export function AgentConversationSurface({ sessionId, variant = 'main' }: AgentC
     [pendingImageFiles, handleAttachmentEditComplete]
   )
 
+  React.useLayoutEffect(() => {
+    const sessionSurface = sessionSurfaceRef.current
+    const composer = composerRef.current
+    if (!sessionSurface || !composer) {
+      sessionSurface?.style.removeProperty('--agent-composer-reserve-space')
+      return
+    }
+
+    const updateComposerReserveSpace = (): void => {
+      sessionSurface.style.setProperty('--agent-composer-reserve-space', `${Math.ceil(composer.getBoundingClientRect().height)}px`)
+    }
+
+    updateComposerReserveSpace()
+    const observer = new ResizeObserver(updateComposerReserveSpace)
+    observer.observe(composer)
+    return () => {
+      observer.disconnect()
+      sessionSurface.style.removeProperty('--agent-composer-reserve-space')
+    }
+  }, [hasBannerOverlay, isNewConversation])
+
   return (
     <>
     <AgentSessionProvider sessionId={sessionId}>
-      <div className={cn('copis-agent-session flex h-full min-h-0 flex-1 min-w-0 max-w-[min(72rem,100%)] flex-col overflow-hidden mx-auto', compact && 'copis-agent-session-compact', isNewConversation && 'new-conversation')}>
+      <div ref={sessionSurfaceRef} className={cn('copis-agent-session flex h-full min-h-0 flex-1 min-w-0 max-w-[min(72rem,100%)] flex-col overflow-hidden mx-auto', compact && 'copis-agent-session-compact', isNewConversation && 'new-conversation')}>
         {!compact && <AgentHeader sessionId={sessionId} />}
 
         {isNewConversation ? (
@@ -2869,7 +2892,7 @@ export function AgentConversationSurface({ sessionId, variant = 'main' }: AgentC
 
         {/* 输入区域 — 交互横幅显示时隐藏，由横幅替代 */}
         {!hasBannerOverlay && (
-        <div className={cn('mx-auto w-full max-w-[760px] px-2.5 pb-2.5 md:px-[18px] md:pb-[18px]', isNewConversation && 'copis-agent-new-session-input')} data-input-mode="agent">
+        <div ref={composerRef} className={cn('mx-auto w-full max-w-[760px] px-2.5 pb-2.5 md:px-[18px] md:pb-[18px]', isNewConversation && 'copis-agent-new-session-input')} data-input-mode="agent">
           <div
             className={cn(
               'rounded-[17px] border-[0.5px] border-border bg-background/70 backdrop-blur-sm transition-all duration-200',

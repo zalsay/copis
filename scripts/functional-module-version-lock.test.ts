@@ -8,8 +8,12 @@ import {
 const locks = loadFunctionalModuleVersionLocks()
 
 describe('功能模块版本锁', () => {
-  test('Given 版本锁配置 When 读取 Then 固定 Node runtime 与支付宝模块版本', () => {
-    expect(locks).toEqual({ 'node-runtime': '24.19.4', 'alipay-bot': '0.3.40' })
+  test('Given 版本锁配置 When 读取 Then 固定 Node runtime、支付宝模块与 Playwright Core 版本', () => {
+    expect(locks).toEqual({
+      'node-runtime': '24.19.4',
+      'alipay-bot': '0.3.40',
+      'playwright-core': '1.62.1',
+    })
   })
 
   test('Given 部署参数包含动态版本 When 应用版本锁 Then 始终使用配置版本', () => {

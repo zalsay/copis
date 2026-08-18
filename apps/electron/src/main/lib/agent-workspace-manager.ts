@@ -303,12 +303,84 @@ export function getAgentWorkspaceAgentsPath(workspaceSlug: string): string {
 
 /** 工作区内由 Copis 管理的受控目录名称。 */
 export const COPIS_WORKSPACE_WRITE_DIR = 'copis'
+const BROWSER_WORKSPACE_DIR = 'browser'
+const BROWSER_AGENT_WORKSPACES_DIR = 'agent-workspaces'
+const BROWSER_WORKFLOWS_DIR = 'browser-workflows'
 
 /** 返回工作区内 Copis 可写目录。 */
 export function getAgentWorkspaceCopisPath(
   workspace: Pick<AgentWorkspace, 'slug' | 'projectRootPath'>,
 ): string {
   return join(getAgentWorkspaceSourceRoot(workspace), COPIS_WORKSPACE_WRITE_DIR)
+}
+
+/** 返回用户工作区中的浏览器受控目录。 */
+export function getAgentWorkspaceBrowserPath(
+  workspace: Pick<AgentWorkspace, 'slug' | 'projectRootPath'>,
+): string {
+  return join(getAgentWorkspaceSourceRoot(workspace), BROWSER_WORKSPACE_DIR)
+}
+
+/** 返回指定 Agent 会话的浏览器文件目录。 */
+export function getAgentWorkspaceBrowserSessionPath(
+  workspace: Pick<AgentWorkspace, 'slug' | 'projectRootPath'>,
+  sessionId: string,
+): string {
+  if (!/^[A-Za-z0-9_-]+$/.test(sessionId)) throw new Error('Agent 会话 ID 不合法')
+  return join(getAgentWorkspaceBrowserPath(workspace), BROWSER_AGENT_WORKSPACES_DIR, sessionId)
+}
+
+/** 确保指定 Agent 会话的浏览器文件目录存在。 */
+export function ensureAgentWorkspaceBrowserSessionPath(
+  workspace: Pick<AgentWorkspace, 'slug' | 'projectRootPath'>,
+  sessionId: string,
+): string {
+  if (!/^[A-Za-z0-9_-]+$/.test(sessionId)) throw new Error('Agent 会话 ID 不合法')
+  return ensureSafeBrowserDirectory(workspace, [
+    BROWSER_WORKSPACE_DIR,
+    BROWSER_AGENT_WORKSPACES_DIR,
+    sessionId,
+  ])
+}
+
+/** 返回工作区中已批准浏览器 Workflow 的主存储目录。 */
+export function getAgentWorkspaceBrowserWorkflowsDir(
+  workspace: Pick<AgentWorkspace, 'slug' | 'projectRootPath'>,
+): string {
+  return ensureSafeBrowserDirectory(workspace, [BROWSER_WORKSPACE_DIR, BROWSER_WORKFLOWS_DIR])
+}
+
+/** 在仍可用的工作区来源根下创建浏览器目录，拒绝路径中的符号链接。 */
+function ensureSafeBrowserDirectory(
+  workspace: Pick<AgentWorkspace, 'slug' | 'projectRootPath'>,
+  segments: string[],
+): string {
+  if (workspace.projectRootPath) {
+    const status = getLocalProjectRootStatus(workspace.projectRootPath)
+    if (status !== 'available') throw new Error(`本地项目根目录不可用：${workspace.projectRootPath}`)
+  }
+
+  const sourceRoot = resolve(getAgentWorkspaceSourceRoot(workspace))
+  if (isSymlinkEntry(sourceRoot) || !isDirectoryEntry(sourceRoot)) {
+    throw new Error(`工作区来源根目录不可用：${sourceRoot}`)
+  }
+  const sourceRootReal = realpathSync(sourceRoot)
+  let current = sourceRootReal
+  for (const segment of segments) {
+    current = join(current, segment)
+    if (isSymlinkEntry(current)) throw new Error(`browser 目录不能是符号链接：${current}`)
+    if (existsSync(current)) {
+      if (!isDirectoryEntry(current)) throw new Error(`browser 目录不是文件夹：${current}`)
+    } else {
+      mkdirSync(current)
+    }
+    const currentReal = realpathSync(current)
+    if (!isPathWithin(sourceRootReal, currentReal)) {
+      throw new Error(`browser 目录不能指向工作区来源根之外：${current}`)
+    }
+    current = currentReal
+  }
+  return current
 }
 
 /**

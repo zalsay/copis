@@ -497,7 +497,7 @@ export function AutomationFormView({ standalone = false }: { standalone?: boolea
 
     setRunningNow(true)
     toast.success('已开始运行定时任务', {
-      description: '本次任务会创建新的 Agent 会话，可在左侧会话列表查看',
+      description: '任务会使用其专属 Agent 会话，可在左侧会话列表查看',
     })
     try {
       const automationId = await persistDraft(latest)
@@ -1046,8 +1046,7 @@ export function AutomationFormView({ standalone = false }: { standalone?: boolea
             )}
           </div>
 
-          {/* 会话模式选择已隐藏：默认采用 daily（同日复用、跨日新建）。
-              schema/scheduler/Agent 工具层仍保留 reuse 模式，方便老配置和高级用户继续使用。 */}
+          {/* 会话模式选择已隐藏：首次运行创建专属会话，后续触发持续复用。 */}
 
           <div className="flex gap-2 rounded-lg bg-amber-500/10 p-3 text-xs text-amber-700 dark:text-amber-400">
             <AlertTriangle className="size-4 shrink-0 mt-0.5" />
