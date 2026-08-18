@@ -45,18 +45,34 @@ import {
   normalizeWorkingPendingDiamondPurchase,
   WorkingPaymentNormalizationError,
 } from '@copis/shared'
-import type { WorkingTokenStore } from './working-auth-store'
+import type { WorkingAuthProvider, WorkingTokenStore } from './working-auth-store'
+import { discoverWorkingOidc, exchangeWorkingRefreshToken, WorkingOAuthError, WorkingOidcClient, type WorkingOAuthTokenSet } from './working-oidc-client'
 import { DEFAULT_COPIS_BACKEND_URL } from './backend-endpoint-resolver'
 
 export { DEFAULT_COPIS_BACKEND_URL }
 
 const WORKING_TOKEN_REFRESH_BUFFER_MS = 5 * 60 * 1000
 const WORKING_REFRESH_RETRY_DELAY_MS = 60 * 1000
+export const DEFAULT_COPIS_AUTH_ISSUER = 'https://edu-api.meetlife.com.cn:9001/module/auth'
+export const COPIS_AUTH_CLIENT_ID = 'copis-desktop'
+export const COPIS_AUTH_REDIRECT_URI = 'http://127.0.0.1:43123/oauth/callback'
+
+export type WorkingOidcClientFactory = (openExternal: (url: string) => Promise<void>) => Pick<WorkingOidcClient, 'authorize'>
 
 export interface WorkingApiClientOptions {
   baseUrl?: string
   fetchImpl?: (input: string, init?: RequestInit) => Promise<Response>
   tokenStore: WorkingTokenStore
+  authIssuer?: string
+  authClientId?: string
+  authRedirectUri?: string
+  oidcClientFactory?: WorkingOidcClientFactory
+}
+
+export interface WorkingRustRequest {
+  method: string
+  path: string
+  body?: string
 }
 
 export class WorkingApiError extends Error {
@@ -86,6 +102,21 @@ function resolveBackendUrl(value?: string): string {
     throw new Error('COPIS_BACKEND_URL 只支持 http 或 https')
   }
   return normalized
+}
+
+function resolveAuthIssuer(baseUrl: string, configured?: string): string {
+  const rawConfigured = configured?.trim() || process.env.COPIS_AUTH_ISSUER?.trim()
+  if (rawConfigured) {
+    const parsed = new URL(rawConfigured)
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') throw new Error('COPIS_AUTH_ISSUER 只支持 http 或 https')
+    return rawConfigured.replace(/\/+$/, '')
+  }
+  if (baseUrl === DEFAULT_COPIS_BACKEND_URL) return DEFAULT_COPIS_AUTH_ISSUER
+  const parsed = new URL(baseUrl)
+  parsed.pathname = '/module/auth'
+  parsed.search = ''
+  parsed.hash = ''
+  return parsed.toString().replace(/\/+$/, '')
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -197,6 +228,15 @@ function normalizeWorkingLoginResult(value: unknown): WorkingLoginResult {
   }
 }
 
+function isAllowedRustWorkingPath(pathname: string): boolean {
+  return pathname === '/api/working'
+    || pathname.startsWith('/api/working/')
+    || pathname.startsWith('/api/pay/')
+    || pathname.startsWith('/api/users/orders/')
+    || pathname.startsWith('/api/internal/working-desktop/')
+    || pathname.startsWith('/api/internal/working-model/')
+}
+
 function normalizeWorkspace(value: unknown): WorkingWorkspace {
   const item = (value && typeof value === 'object' ? value : {}) as Record<string, unknown>
   return {
@@ -257,16 +297,6 @@ function normalizeNumber(value: unknown, fallback = 0): number {
     if (Number.isFinite(parsed)) return parsed
   }
   return fallback
-}
-
-async function syncRustWorkingToken(token: string | null): Promise<void> {
-  if (!process.versions.electron) return
-  try {
-    const { syncWorkingAccessToken } = await import('./http-api-server')
-    await syncWorkingAccessToken(token)
-  } catch (error) {
-    console.warn('[Copis Working] 同步 Rust 技能市场认证失败:', error)
-  }
 }
 
 function normalizeVip(value: unknown): WorkingVipStatus | null {
@@ -439,15 +469,23 @@ function normalizeWorkingImageGenerationResult(value: unknown): WorkingImageGene
 
 export class WorkingApiClient {
   readonly baseUrl: string
+  readonly authIssuer: string
   private readonly fetchImpl: (input: string, init?: RequestInit) => Promise<Response>
   private readonly tokenStore: WorkingTokenStore
+  private readonly authClientId: string
+  private readonly authRedirectUri: string
+  private readonly oidcClientFactory?: WorkingOidcClientFactory
   private refreshTimer: ReturnType<typeof setTimeout> | null = null
   private refreshPromise: Promise<string> | null = null
 
   constructor(options: WorkingApiClientOptions) {
     this.baseUrl = resolveBackendUrl(options.baseUrl)
+    this.authIssuer = resolveAuthIssuer(this.baseUrl, options.authIssuer)
     this.fetchImpl = options.fetchImpl ?? ((input, init) => fetch(input, init))
     this.tokenStore = options.tokenStore
+    this.authClientId = options.authClientId?.trim() || COPIS_AUTH_CLIENT_ID
+    this.authRedirectUri = options.authRedirectUri?.trim() || COPIS_AUTH_REDIRECT_URI
+    this.oidcClientFactory = options.oidcClientFactory
     this.scheduleAutomaticRefresh()
   }
 
@@ -492,10 +530,51 @@ export class WorkingApiClient {
     return user
   }
 
+  async requestFromRust(input: WorkingRustRequest): Promise<unknown> {
+    const method = input.method.trim().toUpperCase()
+    if (!['GET', 'POST', 'DELETE'].includes(method)) {
+      throw new WorkingApiError('Rust Working 请求方法不支持', 405, 'method_not_allowed')
+    }
+    if (!input.path.startsWith('/')) {
+      throw new WorkingApiError('Rust Working 请求路径不正确', 400, 'invalid_path')
+    }
+    let url: URL
+    try {
+      url = new URL(input.path, 'http://copis-working-bridge.invalid')
+    } catch {
+      throw new WorkingApiError('Rust Working 请求路径不正确', 400, 'invalid_path')
+    }
+    if (!isAllowedRustWorkingPath(url.pathname)) {
+      throw new WorkingApiError('Rust Working 请求路径不允许', 403, 'path_not_allowed')
+    }
+    if (method === 'GET' || method === 'DELETE') {
+      if (input.body !== undefined && input.body.trim()) {
+        throw new WorkingApiError('Rust Working 请求体不允许存在', 400, 'invalid_request_body')
+      }
+    } else if (input.body !== undefined) {
+      try {
+        JSON.parse(input.body)
+      } catch {
+        throw new WorkingApiError('Rust Working 请求体不是有效 JSON', 400, 'invalid_json')
+      }
+    }
+    return this.request<unknown>(input.path, {
+      method,
+      auth: true,
+      unwrap: false,
+      ...(input.body !== undefined ? { body: input.body } : {}),
+    })
+  }
+
   clearAuth(): void {
     this.stopAutomaticRefresh()
     this.tokenStore.clear()
-    void syncRustWorkingToken(null)
+  }
+
+  private getAuthProvider(): WorkingAuthProvider {
+    const persisted = this.tokenStore.getProvider?.()
+    if (persisted === 'oidc' || persisted === 'legacy') return persisted
+    return 'legacy'
   }
 
   async login(input: WorkingLoginInput): Promise<WorkingLoginResult> {
@@ -522,24 +601,54 @@ export class WorkingApiClient {
         mustChangePassword: result.mustChangePassword,
       })
       : null
-    this.tokenStore.save(result.token, loginUser, result.refreshToken ?? null)
+    this.tokenStore.save(result.token, loginUser, result.refreshToken ?? null, 'legacy')
     this.scheduleAutomaticRefresh()
     try {
       const currentUser = await this.getCurrentUser()
       const user = normalizeWorkingUser(currentUser, loginUser ?? {}) ?? currentUser
-      this.tokenStore.save(result.token, user)
+      this.tokenStore.save(result.token, user, undefined, 'legacy')
       this.scheduleAutomaticRefresh()
-      await syncRustWorkingToken(result.token)
       return { ...result, user }
     } catch (error) {
       if (error instanceof WorkingApiError && error.status === 401) {
         this.clearAuth()
         throw error
       }
-      this.tokenStore.save(result.token, loginUser)
+      this.tokenStore.save(result.token, loginUser, undefined, 'legacy')
       this.scheduleAutomaticRefresh()
-      await syncRustWorkingToken(result.token)
       return { ...result, ...(loginUser ? { user: loginUser } : {}) }
+    }
+  }
+
+  async loginWithOAuth(openExternal: (url: string) => Promise<void>): Promise<WorkingLoginResult> {
+    const oidcClient = this.oidcClientFactory?.(openExternal) ?? new WorkingOidcClient({
+      issuer: this.authIssuer,
+      clientId: this.authClientId,
+      redirectUri: this.authRedirectUri,
+      openExternal,
+      fetchImpl: this.fetchImpl,
+    })
+    const tokens: WorkingOAuthTokenSet = await oidcClient.authorize()
+    const result: WorkingLoginResult = {
+      token: tokens.accessToken,
+      refreshToken: tokens.refreshToken,
+    }
+    this.tokenStore.save(result.token, null, result.refreshToken, 'oidc')
+    this.scheduleAutomaticRefresh()
+    try {
+      const currentUser = await this.getCurrentUser()
+      const user = normalizeWorkingUser(currentUser) ?? currentUser
+      this.tokenStore.save(result.token, user, undefined, 'oidc')
+      this.scheduleAutomaticRefresh()
+      return { ...result, user }
+    } catch (error) {
+      if (error instanceof WorkingApiError && error.status === 401) {
+        this.clearAuth()
+        throw error
+      }
+      this.tokenStore.save(result.token, null, undefined, 'oidc')
+      this.scheduleAutomaticRefresh()
+      return result
     }
   }
 
@@ -552,34 +661,53 @@ export class WorkingApiClient {
   }
 
   /** VIP 到账后的 Rust bridge 调用。refresh token 留在 Electron 加密存储，不反向请求正在等待的 Rust 进程。 */
-  async refreshAfterVipPayment(): Promise<{ token: string; userId: string; isVip: boolean }> {
-    const token = await this.performRefreshAccessToken(false)
+  async refreshAfterVipPayment(): Promise<{ userId: string; isVip: boolean }> {
+    const token = await this.performRefreshAccessToken()
     const user = await this.getCurrentUser()
     this.tokenStore.save(token, user)
     this.scheduleAutomaticRefresh()
-    return { token, userId: String(user.id), isVip: user.isVip === true }
+    return { userId: String(user.id), isVip: user.isVip === true }
   }
 
-  private async performRefreshAccessToken(syncRust = true): Promise<string> {
+  private async performRefreshAccessToken(): Promise<string> {
     const refreshToken = this.tokenStore.getRefreshToken()
     if (!refreshToken) throw new WorkingApiError('登录状态缺少 refresh token', 401, 'missing_refresh_token')
 
     try {
-      const rawResult = await this.request<unknown>('/api/auth/refresh', {
-        method: 'POST',
-        auth: false,
-        body: JSON.stringify({ refresh_token: refreshToken }),
-      })
-      const result = normalizeWorkingLoginResult(rawResult)
-      if (!result.token) {
-        throw new WorkingApiError('刷新响应缺少 token', 200, 'invalid_refresh_response', rawResult)
+      let token: string
+      let nextRefreshToken: string | null = refreshToken
+      if (this.getAuthProvider() === 'oidc') {
+        const discovery = await discoverWorkingOidc(this.authIssuer, this.fetchImpl)
+        const result = await exchangeWorkingRefreshToken({
+          tokenEndpoint: discovery.tokenEndpoint,
+          clientId: this.authClientId,
+          refreshToken,
+          fetchImpl: this.fetchImpl,
+        })
+        token = result.accessToken
+        nextRefreshToken = result.refreshToken ?? refreshToken
+      } else {
+        const rawResult = await this.request<unknown>('/api/auth/refresh', {
+          method: 'POST',
+          auth: false,
+          body: JSON.stringify({ refresh_token: refreshToken }),
+        })
+        const result = normalizeWorkingLoginResult(rawResult)
+        if (!result.token) {
+          throw new WorkingApiError('刷新响应缺少 token', 200, 'invalid_refresh_response', rawResult)
+        }
+        token = result.token
+        nextRefreshToken = result.refreshToken ?? refreshToken
       }
-      this.tokenStore.save(result.token, this.tokenStore.getUser(), result.refreshToken ?? refreshToken)
+      this.tokenStore.save(token, this.tokenStore.getUser(), nextRefreshToken, this.getAuthProvider())
       this.scheduleAutomaticRefresh()
-      if (syncRust) await syncRustWorkingToken(result.token)
-      return result.token
+      return token
     } catch (error) {
       if (error instanceof WorkingApiError && error.status === 401) this.clearAuth()
+      if (error instanceof WorkingOAuthError) {
+        if (error.status === 400 || error.status === 401 || error.code === 'invalid_grant') this.clearAuth()
+        throw new WorkingApiError(error.message, error.status ?? 0, error.code)
+      }
       throw error
     }
   }
@@ -1003,7 +1131,6 @@ export class WorkingApiClient {
     const token = await this.getValidToken()
     if (!token) throw new WorkingApiError('请先登录 Copis Working', 401, 'unauthorized')
 
-    await syncRustWorkingToken(token)
     const baseUrl = await this.resolveRustApiBaseUrl()
     const headers = new Headers(requestInit.headers)
     headers.set('Accept', 'application/json')

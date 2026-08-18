@@ -123,7 +123,7 @@ describe('Rust HTTP API 业务桥契约', () => {
   })
 
   test('VIP 到账后通过 Rust 业务桥刷新认证并返回新的用户等级', async () => {
-    const refreshAfterVipPayment = async () => ({ token: 'refreshed-token', userId: '7', isVip: true })
+    const refreshAfterVipPayment = async () => ({ userId: '7', isVip: true })
     const authUpdates: unknown[] = []
     const response = await handleHttpApiRequest({
       method: 'POST',
@@ -141,13 +141,37 @@ describe('Rust HTTP API 业务桥契约', () => {
 
     expect(response).toEqual({
       status: 200,
-      body: { token: 'refreshed-token', userId: '7', isVip: true },
+      body: { userId: '7', isVip: true },
     })
     expect(authUpdates).toEqual([{
       authenticated: true,
       user: { id: 7, isVip: true, vipExpiresAt: '2026-09-12T00:00:00Z' },
       backendUrl: 'https://backend.example.test',
     }])
+  })
+
+  test('Rust Working 业务桥由主进程代发请求且只返回业务响应', async () => {
+    const requests: unknown[] = []
+    const response = await handleHttpApiRequest({
+      method: 'POST',
+      path: '/api/internal/working-auth/request',
+      body: JSON.stringify({ method: 'GET', path: '/api/working/expert-skills' }),
+    }, {
+      ...createDependencies(),
+      getWorkingClient: (() => ({
+        baseUrl: 'https://backend.example.test',
+        requestFromRust: async (input: unknown) => {
+          requests.push(input)
+          return { data: [{ id: 12, slug: 'weekly-report' }] }
+        },
+      })) as unknown as HttpApiDependencies['getWorkingClient'],
+    })
+
+    expect(response).toEqual({
+      status: 200,
+      body: { data: [{ id: 12, slug: 'weekly-report' }] },
+    })
+    expect(requests).toEqual([{ method: 'GET', path: '/api/working/expert-skills' }])
   })
 
   test('文件文本读写路由将上下文转发给文件服务', async () => {

@@ -358,6 +358,7 @@ export interface ElectronAPI {
   getWorkingConfig: () => Promise<WorkingClientConfig>
   getWorkingAuthState: () => Promise<WorkingAuthState>
   loginWorking: (input: WorkingLoginInput) => Promise<WorkingAuthState>
+  loginWorkingWithOAuth: () => Promise<WorkingAuthState>
   registerWorking: (input: WorkingRegisterInput) => Promise<WorkingUser | null>
   sendWorkingVerificationCode: (input: WorkingSendVerificationCodeInput) => Promise<void>
   verifyWorkingPasswordResetCode: (input: WorkingVerifyPasswordResetCodeInput) => Promise<WorkingPasswordResetVerificationResult>
@@ -1408,6 +1409,7 @@ const electronAPI: ElectronAPI = {
   getWorkingConfig: () => ipcRenderer.invoke(WORKING_IPC_CHANNELS.GET_CONFIG),
   getWorkingAuthState: () => ipcRenderer.invoke(WORKING_IPC_CHANNELS.GET_AUTH_STATE),
   loginWorking: (input: WorkingLoginInput) => ipcRenderer.invoke(WORKING_IPC_CHANNELS.LOGIN, input),
+  loginWorkingWithOAuth: () => ipcRenderer.invoke(WORKING_IPC_CHANNELS.LOGIN_OIDC),
   registerWorking: (input: WorkingRegisterInput) => ipcRenderer.invoke(WORKING_IPC_CHANNELS.REGISTER, input),
   sendWorkingVerificationCode: (input: WorkingSendVerificationCodeInput) => ipcRenderer.invoke(WORKING_IPC_CHANNELS.SEND_VERIFICATION_CODE, input),
   verifyWorkingPasswordResetCode: (input: WorkingVerifyPasswordResetCodeInput) => ipcRenderer.invoke(WORKING_IPC_CHANNELS.VERIFY_PASSWORD_RESET_CODE, input),

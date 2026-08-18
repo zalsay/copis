@@ -43,7 +43,6 @@ import {
   type HttpApiResponse,
 } from './http-api-handler'
 import { getOrCreateHttpApiWebToken } from './http-api-web-token'
-import { getWorkingTokenStore } from './working-auth-store'
 import {
   MODEL_BASE_URL_ENV,
   resolveCopisBackendEndpoints,
@@ -66,8 +65,6 @@ function resolvePiExtensionsDir(): string | undefined {
 const RUST_HTTP_API_BINARY = 'copis-http-api-server'
 const HEALTH_POLL_INTERVAL_MS = 100
 const DEFAULT_HEALTH_TIMEOUT_MS = 5_000
-const WORKING_TOKEN_SYNC_RETRY_COUNT = 20
-const WORKING_TOKEN_SYNC_RETRY_DELAY_MS = 100
 
 export type HttpApiSpawn = (
   file: string,
@@ -129,13 +126,6 @@ function encodeHex(value: string): string {
 function decodeHex(value: string): string | undefined {
   if (!/^(?:[0-9a-f]{2})*$/i.test(value)) return undefined
   return Buffer.from(value, 'hex').toString('utf8')
-}
-
-function getWorkingUserId(): string | null {
-  const userId = getWorkingTokenStore().getUser()?.id
-  if (userId === undefined || userId === null) return null
-  const value = String(userId).trim()
-  return value || null
 }
 
 export function resolvePaymentWorkspaceRuntime(
@@ -403,7 +393,6 @@ function spawnManagedProcess(
   const officeCli = resolveOfficeCli(options)
   const alipayBotCli = resolveAlipayBotCli(options)
   const alipayBotNode = resolveAlipayBotNode(nodeRuntimeRoot)
-  const workingUserId = getWorkingUserId()
   let paymentRuntime: PaymentWorkspaceRuntime
   try {
     paymentRuntime = resolvePaymentWorkspaceRuntime(options.paymentWorkspace ?? ensureDefaultWorkspace())
@@ -428,8 +417,6 @@ function spawnManagedProcess(
         COPIS_MEMORY_DIR: join(getConfigDir(), 'memory'),
         COPIS_HTTP_API_INTERNAL_TOKEN: internalToken,
         COPIS_HTTP_API_WEB_TOKEN: getOrCreateHttpApiWebToken(),
-        COPIS_WORKING_ACCESS_TOKEN: getWorkingTokenStore().getToken() ?? '',
-        ...(workingUserId ? { COPIS_WORKING_USER_ID: workingUserId } : {}),
         ...paymentRuntime,
         ...(options.backendUrl || process.env.COPIS_BACKEND_URL
           ? { COPIS_BACKEND_URL: options.backendUrl ?? process.env.COPIS_BACKEND_URL }
@@ -726,38 +713,6 @@ export async function updateHttpApiServer(options: HttpApiServerOptions = {}): P
 
 export function getHttpApiInternalToken(): string | null {
   return httpApiInternalToken
-}
-
-/** 将 Electron 保存的 Working token 同步到 Rust，技能市场业务不再经过 Electron 业务桥。 */
-export async function syncWorkingAccessToken(token: string | null): Promise<void> {
-  const internalToken = getHttpApiInternalToken()
-  if (!internalToken) return
-
-  let lastError: unknown
-  for (let attempt = 0; attempt < WORKING_TOKEN_SYNC_RETRY_COUNT; attempt += 1) {
-    try {
-      const response = await fetch(`http://${HTTP_API_HOST}:${HTTP_API_PORT}/internal/working-auth/token`, {
-        method: 'POST',
-        headers: {
-          Accept: 'application/json',
-          'Content-Type': 'application/json',
-          'X-Copis-Internal-Token': internalToken,
-        },
-        body: JSON.stringify({ token, userId: getWorkingUserId() }),
-      })
-      if (response.ok) return
-      lastError = new Error(`HTTP ${response.status}`)
-      // 非网络错误通常不会因重试改变；保留一次重试窗口只用于 Rust 启动竞态。
-      if (response.status >= 400 && response.status < 500) break
-    } catch (error) {
-      lastError = error
-    }
-    if (attempt + 1 < WORKING_TOKEN_SYNC_RETRY_COUNT) {
-      await new Promise<void>((resolve) => setTimeout(resolve, WORKING_TOKEN_SYNC_RETRY_DELAY_MS))
-    }
-  }
-  // Rust 重启或更新期间可能暂时没有监听；重试结束后保留日志，下一次认证操作会再次同步。
-  console.warn('[HTTP API] 同步 Working token 到 Rust 失败:', lastError)
 }
 
 export function shouldInstallMissingHttpApiModule(isPackaged: boolean): boolean {

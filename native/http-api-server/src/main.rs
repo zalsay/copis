@@ -44,7 +44,10 @@ use pi_rpc::{
 };
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::{json, Value};
-use skill_market::{handle_request as handle_skill_market_request, SkillMarketState};
+use skill_market::{
+    handle_request as handle_skill_market_request, request_working_with_capability,
+    SkillMarketError, SkillMarketState, WorkingBackend,
+};
 use working_payment::{
     handle_request as handle_working_payment_request, start_desktop_payment_poller,
     RefreshedWorkingAuth, VipPaymentRefresher, WorkingPaymentState,
@@ -65,8 +68,7 @@ const INTERNAL_TOKEN_HEADER: &str = "x-copis-internal-token";
 const WEB_TOKEN_HEADER: &str = "x-copis-web-token";
 const AGENT_FILE_TOKEN_HEADER: &str = "x-copis-agent-file-token";
 const INTERNAL_RECORDING_PREFIX: &str = "/internal/browser-workflows/recordings/";
-const INTERNAL_WORKING_AUTH_PATH: &str = "/internal/working-auth/token";
-const WORKING_USER_ID_ENV: &str = "COPIS_WORKING_USER_ID";
+const DISABLED_WORKING_AUTH_SYNC_PATH: &str = "/internal/working-auth/token";
 const INTERNAL_AGENT_FILES_PREFIX: &str = "/api/internal/agent/files/";
 const INTERNAL_AGENT_SHELL_PATH: &str = "/api/internal/agent/shell";
 const INTERNAL_AGENT_ALIPAY_BOT_PATH: &str = "/api/internal/agent/alipay-bot";
@@ -110,6 +112,42 @@ struct Bridge {
     recording_paths: Mutex<HashMap<(String, String), PathBuf>>,
 }
 
+struct BridgeWorkingBackend {
+    bridge: Arc<Bridge>,
+}
+
+impl WorkingBackend for BridgeWorkingBackend {
+    fn request(
+        &self,
+        method: &str,
+        path: &str,
+        body: Option<&str>,
+    ) -> Result<Value, SkillMarketError> {
+        let response = self
+            .bridge
+            .send_request(&HttpRequest {
+                method: "POST".to_string(),
+                target: "/api/internal/working-auth/request".to_string(),
+                headers: HashMap::new(),
+                body: working_bridge_request_body(method, path, body),
+            })
+            .map_err(|message| SkillMarketError::new(503, "working_bridge_unavailable", message))?;
+        parse_working_bridge_response(response)
+    }
+
+    fn request_with_capability(
+        &self,
+        method: &str,
+        path: &str,
+        capability: &str,
+        body: Option<&str>,
+    ) -> Result<Value, SkillMarketError> {
+        // Electron bridge 不承载 Authorization；wdpc capability 只在 Rust 内存中短期使用，
+        // 由 backend 的 capability 请求路径发送给对应的 Working 内部接口。
+        request_working_with_capability(method, path, capability, body)
+    }
+}
+
 struct BridgeVipPaymentRefresher {
     bridge: Arc<Bridge>,
 }
@@ -130,21 +168,62 @@ impl VipPaymentRefresher for BridgeVipPaymentRefresher {
             .ok_or_else(|| "Electron 刷新账户状态缺少响应".to_string())?;
         let value: Value = serde_json::from_str(&body)
             .map_err(|_| "Electron 刷新账户状态响应格式不正确".to_string())?;
-        let token = value
-            .get("token")
-            .and_then(Value::as_str)
-            .filter(|value| !value.trim().is_empty())
-            .ok_or_else(|| "Electron 刷新账户状态缺少 token".to_string())?;
+        if ["token", "access_token", "refresh_token"]
+            .iter()
+            .any(|field| value.get(*field).is_some())
+        {
+            return Err("Electron 刷新账户状态响应不应包含用户认证凭据".to_string());
+        }
         let user_id = value
             .get("userId")
             .and_then(Value::as_str)
             .filter(|value| !value.trim().is_empty())
             .ok_or_else(|| "Electron 刷新账户状态缺少用户标识".to_string())?;
         Ok(RefreshedWorkingAuth {
-            token: token.to_string(),
             user_id: user_id.to_string(),
         })
     }
+}
+
+fn working_bridge_request_body(method: &str, path: &str, body: Option<&str>) -> Vec<u8> {
+    let mut request = json!({ "method": method, "path": path });
+    if let Some(body) = body {
+        request["body"] = Value::String(body.to_string());
+    }
+    serde_json::to_vec(&request).expect("Working bridge 请求体序列化失败")
+}
+
+fn parse_working_bridge_response(response: BridgeResponse) -> Result<Value, SkillMarketError> {
+    let status = response.status;
+    let body = response.body.unwrap_or_default();
+    if status == 204 && body.trim().is_empty() {
+        return Ok(Value::Null);
+    }
+    let payload = if body.trim().is_empty() {
+        Value::Null
+    } else {
+        serde_json::from_str::<Value>(&body).map_err(|_| {
+            SkillMarketError::new(
+                502,
+                "working_bridge_invalid_response",
+                "Electron Working 业务桥响应格式不正确",
+            )
+        })?
+    };
+    if !(200..300).contains(&status) {
+        let message = payload
+            .get("error")
+            .or_else(|| payload.get("message"))
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .unwrap_or_else(|| format!("Working 后端请求失败（HTTP {}）", status));
+        let code = payload
+            .get("code")
+            .and_then(Value::as_str)
+            .unwrap_or("working_backend_error");
+        return Err(SkillMarketError::new(status, code, message));
+    }
+    Ok(payload)
 }
 
 impl Bridge {
@@ -1503,41 +1582,13 @@ fn handle_connection(
         return;
     }
 
-    if path == INTERNAL_WORKING_AUTH_PATH {
-        if !is_internal_token_valid(&request) {
-            send_json_response(
-                &mut stream,
-                403,
-                r#"{"error":"内部 Working 认证接口未授权","code":"internal_token_required"}"#,
-                None,
-            );
-        } else {
-            match serde_json::from_slice::<Value>(&request.body) {
-                Ok(value)
-                    if value
-                        .get("token")
-                        .map(|token| token.is_null() || token.is_string())
-                        .unwrap_or(false) =>
-                {
-                    let token = value
-                        .get("token")
-                        .and_then(Value::as_str)
-                        .map(str::to_string);
-                    let user_id = value
-                        .get("userId")
-                        .and_then(Value::as_str)
-                        .map(str::to_string);
-                    skill_market_state.set_working_auth(token, user_id);
-                    send_empty_response(&mut stream, 204, origin);
-                }
-                _ => send_json_response(
-                    &mut stream,
-                    400,
-                    r#"{"error":"Working token 请求格式不正确","code":"invalid_request"}"#,
-                    origin,
-                ),
-            }
-        }
+    if path == DISABLED_WORKING_AUTH_SYNC_PATH {
+        send_json_response(
+            &mut stream,
+            410,
+            r#"{"error":"Working 认证同步接口已禁用","code":"working_auth_sync_disabled"}"#,
+            origin,
+        );
         let _ = stream.shutdown(Shutdown::Both);
         return;
     }
@@ -2933,11 +2984,11 @@ fn main() {
             process::exit(1);
         }
     };
-    let skill_market_state = Arc::new(SkillMarketState::new(None));
-    skill_market_state.set_working_auth(
-        std::env::var("COPIS_WORKING_ACCESS_TOKEN").ok(),
-        std::env::var(WORKING_USER_ID_ENV).ok(),
-    );
+    let skill_market_state = Arc::new(SkillMarketState::production(Arc::new(
+        BridgeWorkingBackend {
+            bridge: Arc::clone(&bridge),
+        },
+    )));
     let working_payment_state = Arc::new(WorkingPaymentState::new());
     working_payment_state.set_vip_payment_refresher(Arc::new(BridgeVipPaymentRefresher {
         bridge: Arc::clone(&bridge),

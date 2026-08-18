@@ -1,7 +1,5 @@
-#[cfg(test)]
-use crate::skill_market::remote_json_raw;
 use crate::skill_market::{
-    percent_decode, remote_json, SkillMarketError, SkillMarketResponse, SkillMarketState,
+    percent_decode, SkillMarketError, SkillMarketResponse, SkillMarketState,
 };
 use crate::{
     payment_workspace::PaymentWorkspace,
@@ -95,11 +93,10 @@ struct WorkingDesktopPaymentFlow {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RefreshedWorkingAuth {
-    pub token: String,
     pub user_id: String,
 }
 
-/// refresh token 仅由 Electron 的加密存储持有；Rust 在 VIP 到账后只请求其刷新并接收新的 access token。
+/// refresh token 仅由 Electron 的加密存储持有；Rust 只接收刷新后的用户身份状态。
 pub trait VipPaymentRefresher: Send + Sync {
     fn refresh_after_vip_payment(&self) -> Result<RefreshedWorkingAuth, String>;
 }
@@ -188,7 +185,7 @@ impl WorkingPaymentState {
             return;
         };
         match refresher.refresh_after_vip_payment() {
-            Ok(auth) => skill_market_state.set_working_auth(Some(auth.token), Some(auth.user_id)),
+            Ok(auth) => skill_market_state.set_working_user_id(Some(auth.user_id)),
             Err(error) => eprintln!("[支付] VIP 到账后刷新账户状态失败: {}", error),
         }
     }
@@ -253,21 +250,20 @@ pub fn start_desktop_payment_poller(
     let result = thread::Builder::new()
         .name("copis-payment-poller".to_string())
         .spawn(move || loop {
-            let Some(token) = skill_market_state.access_token() else {
+            let _ = recover_pending_desktop_payment(&payment_state, skill_market_state.as_ref());
+            if payment_state.payment_ids().is_empty() {
+                thread::sleep(DESKTOP_PAYMENT_POLL_INTERVAL);
+                continue;
+            }
+            let Ok(account_key) = skill_market_state.ensure_payment_account_key() else {
                 thread::sleep(DESKTOP_PAYMENT_POLL_INTERVAL);
                 continue;
             };
-            let Some(account_key) = skill_market_state.payment_account_key() else {
-                thread::sleep(DESKTOP_PAYMENT_POLL_INTERVAL);
-                continue;
-            };
-            let _ = recover_pending_desktop_payment(&payment_state, &token);
             let failures = poll_desktop_payments_once(
                 &payment_state,
                 worker.as_ref(),
                 workspace.as_ref(),
                 skill_market_state.as_ref(),
-                &token,
                 &account_key,
             );
             if failures > 0 {
@@ -284,17 +280,17 @@ pub fn start_desktop_payment_poller(
 /// edu-api 仅允许保留一笔待支付钻石订单，因此无需将交易标识暴露给 Agent。
 pub fn recover_pending_desktop_payment(
     payment_state: &WorkingPaymentState,
-    working_token: &str,
+    skill_market_state: &SkillMarketState,
 ) -> Result<bool, SkillMarketError> {
     if !payment_state.payment_ids().is_empty() {
         return Ok(false);
     }
-    let pending = pending_diamond_payment(working_token)?;
+    let pending = pending_diamond_payment(skill_market_state)?;
     let payment = required_object_field(&pending, "payment", "没有待恢复的支付会话")?;
     if is_terminal_payment_status(&payment) {
         return Ok(false);
     }
-    rehydrate_desktop_payment_flow_from_pending(payment_state, working_token, pending)?;
+    rehydrate_desktop_payment_flow_from_pending(payment_state, skill_market_state, pending)?;
     Ok(true)
 }
 
@@ -304,7 +300,6 @@ pub fn poll_desktop_payments_once<P: PaymentWorker>(
     worker: &P,
     workspace: &PaymentWorkspace,
     skill_market_state: &SkillMarketState,
-    working_token: &str,
     payment_account_key: &str,
 ) -> usize {
     payment_state
@@ -316,7 +311,6 @@ pub fn poll_desktop_payments_once<P: PaymentWorker>(
                 worker,
                 workspace,
                 skill_market_state,
-                working_token,
                 payment_account_key,
                 payment_id,
             )
@@ -340,19 +334,24 @@ pub fn handle_request<P: PaymentWorker>(
     let route = parse_working_payment_route(method, target).map_err(|message| {
         SkillMarketError::new(400, "invalid_working_payment_request", message)
     })?;
-    let token = state
-        .access_token()
-        .ok_or_else(|| SkillMarketError::new(401, "unauthorized", "请先登录 Copis Working"))?;
-    let payment_account_key = state.payment_account_key();
+    let payment_account_key = if matches!(
+        &route,
+        WorkingPaymentRoute::CreateDiamondPurchase
+            | WorkingPaymentRoute::CreateVipUpgrade
+            | WorkingPaymentRoute::CheckPayment { .. }
+    ) {
+        Some(state.ensure_payment_account_key()?)
+    } else {
+        None
+    };
 
     let response = match route {
         WorkingPaymentRoute::ListDiamondPackages => {
-            remote_json("GET", "/api/pay/alipay/diamond-packages", &token, None)?
+            state.request_data("GET", "/api/pay/alipay/diamond-packages", None)?
         }
-        WorkingPaymentRoute::PendingDiamondPurchase => remote_json(
+        WorkingPaymentRoute::PendingDiamondPurchase => state.request_data(
             "GET",
             "/api/pay/alipay/diamond-purchases/pending",
-            &token,
             None,
         )?,
         WorkingPaymentRoute::CreateDiamondPurchase => {
@@ -361,7 +360,7 @@ pub fn handle_request<P: PaymentWorker>(
                 payment_state,
                 worker,
                 workspace,
-                &token,
+                state,
                 required_payment_account_key(payment_account_key.as_deref())?,
                 DesktopPaymentFlowKind::Diamond,
                 Some(package_id),
@@ -371,15 +370,14 @@ pub fn handle_request<P: PaymentWorker>(
             payment_state,
             worker,
             workspace,
-            &token,
+            state,
             required_payment_account_key(payment_account_key.as_deref())?,
             DesktopPaymentFlowKind::Vip,
             None,
         )?,
-        WorkingPaymentRoute::GetOrderPayment { order_id } => remote_json(
+        WorkingPaymentRoute::GetOrderPayment { order_id } => state.request_data(
             "GET",
             &format!("/api/users/orders/{}/payment", encode_identifier(&order_id)),
-            &token,
             None,
         )?,
         WorkingPaymentRoute::CheckPayment { payment_id } => {
@@ -388,13 +386,12 @@ pub fn handle_request<P: PaymentWorker>(
                 worker,
                 workspace,
                 state,
-                &token,
                 required_payment_account_key(payment_account_key.as_deref())?,
                 &payment_id,
             )?
         }
         WorkingPaymentRoute::CancelDiamondPayment { payment_id } => {
-            cancel_desktop_payment(payment_state, &payment_id)?
+            cancel_desktop_payment(payment_state, state, &payment_id)?
         }
     };
 
@@ -408,7 +405,7 @@ fn create_desktop_payment<P: PaymentWorker>(
     payment_state: &WorkingPaymentState,
     worker: &P,
     workspace: &PaymentWorkspace,
-    working_token: &str,
+    skill_market_state: &SkillMarketState,
     payment_account_key: &str,
     flow_kind: DesktopPaymentFlowKind,
     package_id: Option<u64>,
@@ -420,14 +417,14 @@ fn create_desktop_payment<P: PaymentWorker>(
     // prepare 会为 capability 绑定旧会话，并可能把会话状态写回 created；先保存待支付快照，
     // 才能继续展示原二维码而不是误判为异常订单。
     let pending_snapshot = if flow_kind == DesktopPaymentFlowKind::Diamond {
-        Some(pending_diamond_payment(working_token)?)
+        Some(pending_diamond_payment(skill_market_state)?)
     } else {
         None
     };
     // 旧会话异常时只取消并重新准备一次，避免无限重试或重复创建支付订单。
     for attempt in 0..2 {
-        let capability = issue_desktop_capability(working_token, flow_kind)?;
-        let prepared = remote_json(
+        let capability = issue_desktop_capability(skill_market_state, flow_kind)?;
+        let prepared = skill_market_state.request_with_capability_data(
             "POST",
             flow_kind.prepare_path(),
             &capability,
@@ -449,6 +446,7 @@ fn create_desktop_payment<P: PaymentWorker>(
         if flow_kind == DesktopPaymentFlowKind::Diamond && pending_existing {
             if let Some(result) = reuse_pending_diamond_payment(
                 payment_state,
+                skill_market_state,
                 &capability,
                 &payment_id,
                 package.clone(),
@@ -456,7 +454,7 @@ fn create_desktop_payment<P: PaymentWorker>(
             )? {
                 return Ok(result);
             }
-            cancel_prepared_diamond_payment(&capability, &payment_id)?;
+            cancel_prepared_diamond_payment(skill_market_state, &capability, &payment_id)?;
             if attempt == 0 {
                 continue;
             }
@@ -477,7 +475,7 @@ fn create_desktop_payment<P: PaymentWorker>(
             ));
         }
 
-        let context = remote_json(
+        let context = skill_market_state.request_with_capability_data(
             "POST",
             "/api/internal/working-desktop/alipay/payment-context",
             &capability,
@@ -495,7 +493,7 @@ fn create_desktop_payment<P: PaymentWorker>(
             .map_err(payment_worker_error)?;
         ensure_worker_succeeded(&worker_result, "生成支付宝支付二维码失败")?;
 
-        let started = remote_json(
+        let started = skill_market_state.request_with_capability_data(
             "POST",
             "/api/internal/working-desktop/alipay/payment-started",
             &capability,
@@ -531,6 +529,7 @@ fn create_desktop_payment<P: PaymentWorker>(
 /// 复用已有的待支付订单，只恢复本机检查上下文，绝不再次启动支付或生成新二维码。
 fn reuse_pending_diamond_payment(
     payment_state: &WorkingPaymentState,
+    skill_market_state: &SkillMarketState,
     capability: &str,
     payment_id: &str,
     package: Value,
@@ -557,7 +556,7 @@ fn reuse_pending_diamond_payment(
         return Ok(None);
     }
 
-    let context = remote_json(
+    let context = skill_market_state.request_with_capability_data(
         "POST",
         "/api/internal/working-desktop/alipay/payment-context",
         capability,
@@ -583,8 +582,12 @@ fn reuse_pending_diamond_payment(
     )))
 }
 
-fn cancel_prepared_diamond_payment(capability: &str, payment_id: &str) -> Result<(), SkillMarketError> {
-    let finalized = remote_json(
+fn cancel_prepared_diamond_payment(
+    skill_market_state: &SkillMarketState,
+    capability: &str,
+    payment_id: &str,
+) -> Result<(), SkillMarketError> {
+    let finalized = skill_market_state.request_with_capability_data(
         "POST",
         "/api/internal/working-desktop/alipay/payment-finalize",
         capability,
@@ -606,7 +609,6 @@ fn check_desktop_payment<P: PaymentWorker>(
     worker: &P,
     workspace: &PaymentWorkspace,
     skill_market_state: &SkillMarketState,
-    working_token: &str,
     payment_account_key: &str,
     payment_id: &str,
 ) -> Result<Value, SkillMarketError> {
@@ -619,7 +621,7 @@ fn check_desktop_payment<P: PaymentWorker>(
     })?;
     let flow = match payment_state.flow(payment_id) {
         Some(flow) => flow,
-        None => rehydrate_desktop_payment_flow(payment_state, working_token, payment_id)?,
+        None => rehydrate_desktop_payment_flow(payment_state, skill_market_state, payment_id)?,
     };
     if flow.out_shake_no.is_none() && flow.trade_no.is_none() {
         return Err(SkillMarketError::new(
@@ -642,7 +644,7 @@ fn check_desktop_payment<P: PaymentWorker>(
         .map_err(payment_worker_error)?;
     ensure_worker_succeeded(&worker_result, "检查支付宝支付状态失败")?;
     let check_result = payment_check_result(&worker_result)?;
-    let finalized = remote_json(
+    let finalized = skill_market_state.request_with_capability_data(
         "POST",
         "/api/internal/working-desktop/alipay/payment-finalize",
         &flow.capability,
@@ -673,10 +675,10 @@ fn check_desktop_payment<P: PaymentWorker>(
 /// 进程重启后，Agent 仍只需传入 payment_id；Rust 重新取得并绑定短期 capability，绝不让 Agent 接触交易标识。
 fn rehydrate_desktop_payment_flow(
     payment_state: &WorkingPaymentState,
-    working_token: &str,
+    skill_market_state: &SkillMarketState,
     payment_id: &str,
 ) -> Result<WorkingDesktopPaymentFlow, SkillMarketError> {
-    let pending = pending_diamond_payment(working_token)?;
+    let pending = pending_diamond_payment(skill_market_state)?;
     let pending_payment = required_object_field(&pending, "payment", "支付会话不存在或已结束")?;
     let pending_payment_id = required_string_field(
         &pending_payment,
@@ -690,21 +692,22 @@ fn rehydrate_desktop_payment_flow(
             "支付会话不存在或已结束",
         ));
     }
-    rehydrate_desktop_payment_flow_from_pending(payment_state, working_token, pending)
+    rehydrate_desktop_payment_flow_from_pending(payment_state, skill_market_state, pending)
 }
 
-fn pending_diamond_payment(working_token: &str) -> Result<Value, SkillMarketError> {
-    remote_json(
+fn pending_diamond_payment(
+    skill_market_state: &SkillMarketState,
+) -> Result<Value, SkillMarketError> {
+    skill_market_state.request_data(
         "GET",
         "/api/pay/alipay/diamond-purchases/pending",
-        working_token,
         None,
     )
 }
 
 fn rehydrate_desktop_payment_flow_from_pending(
     payment_state: &WorkingPaymentState,
-    working_token: &str,
+    skill_market_state: &SkillMarketState,
     pending: Value,
 ) -> Result<WorkingDesktopPaymentFlow, SkillMarketError> {
     let pending_payment = required_object_field(&pending, "payment", "支付会话不存在或已结束")?;
@@ -727,8 +730,8 @@ fn rehydrate_desktop_payment_flow_from_pending(
         DesktopPaymentFlowKind::Vip => json!({}),
     };
 
-    let capability = issue_desktop_capability(working_token, flow_kind)?;
-    let prepared = remote_json(
+    let capability = issue_desktop_capability(skill_market_state, flow_kind)?;
+    let prepared = skill_market_state.request_with_capability_data(
         "POST",
         flow_kind.prepare_path(),
         &capability,
@@ -748,7 +751,7 @@ fn rehydrate_desktop_payment_flow_from_pending(
         ));
     }
 
-    let context = remote_json(
+    let context = skill_market_state.request_with_capability_data(
         "POST",
         "/api/internal/working-desktop/alipay/payment-context",
         &capability,
@@ -781,6 +784,7 @@ fn pending_payment_flow_kind(pending: &Value) -> Result<DesktopPaymentFlowKind, 
 
 fn cancel_desktop_payment(
     payment_state: &WorkingPaymentState,
+    skill_market_state: &SkillMarketState,
     payment_id: &str,
 ) -> Result<Value, SkillMarketError> {
     let flow = payment_state.flow(payment_id).ok_or_else(|| {
@@ -797,7 +801,7 @@ fn cancel_desktop_payment(
             "VIP 支付订单不支持取消",
         ));
     }
-    let finalized = remote_json(
+    let finalized = skill_market_state.request_with_capability_data(
         "POST",
         "/api/internal/working-desktop/alipay/payment-finalize",
         &flow.capability,
@@ -809,13 +813,12 @@ fn cancel_desktop_payment(
 }
 
 fn issue_desktop_capability(
-    working_token: &str,
+    skill_market_state: &SkillMarketState,
     flow_kind: DesktopPaymentFlowKind,
 ) -> Result<String, SkillMarketError> {
-    let response = remote_json(
+    let response = skill_market_state.request_data(
         "POST",
         "/api/internal/working-desktop/payment-capabilities",
-        working_token,
         Some(&json!({ "flow_kind": flow_kind.as_str() }).to_string()),
     )?;
     let capability = required_string_field(&response, "capability", "支付能力响应格式不正确")?;
@@ -1053,26 +1056,21 @@ fn legacy_handle_request(
     let route = parse_working_payment_route(method, target).map_err(|message| {
         SkillMarketError::new(400, "invalid_working_payment_request", message)
     })?;
-    let token = state
-        .access_token()
-        .ok_or_else(|| SkillMarketError::new(401, "unauthorized", "请先登录 Copis Working"))?;
     let response = match route {
         WorkingPaymentRoute::CreateDiamondPurchase => {
             let package_id = parse_package_id(body)?;
-            remote_json(
+            state.request_data(
                 "POST",
                 "/api/pay/alipay/diamond-purchases",
-                &token,
                 Some(&json!({ "package_id": package_id }).to_string()),
             )?
         }
-        WorkingPaymentRoute::CheckPayment { payment_id } => remote_json_raw(
+        WorkingPaymentRoute::CheckPayment { payment_id } => state.request_raw(
             "POST",
             &format!(
                 "/api/pay/alipay/diamond-purchases/{}/check",
                 encode_identifier(&payment_id)
             ),
-            &token,
             Some("{}"),
         )?,
         _ => {

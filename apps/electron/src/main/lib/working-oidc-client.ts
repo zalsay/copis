@@ -198,6 +198,19 @@ export function validateWorkingDiscovery(issuer: string, value: unknown): Workin
   }
 }
 
+export async function discoverWorkingOidc(issuer: string, fetchImpl: FetchLike = fetch): Promise<WorkingOidcDiscovery> {
+  const normalizedIssuer = normalizeIssuer(issuer)
+  const response = await fetchImpl(`${normalizedIssuer}/.well-known/openid-configuration`, {
+    headers: { Accept: 'application/json' },
+  })
+  const payload = await readJsonResponse(response)
+  if (!response.ok) {
+    const detail = responseError(payload, `OIDC discovery 请求失败（HTTP ${response.status}）`)
+    throw new WorkingOAuthError(detail.message, response.status, detail.code)
+  }
+  return validateWorkingDiscovery(normalizedIssuer, payload)
+}
+
 export function parseWorkingOAuthCallback(callbackUrl: string, expectedState: string): { code: string } {
   let url: URL
   try {
@@ -375,15 +388,7 @@ export class WorkingOidcClient {
   async authorize(): Promise<WorkingOAuthTokenSet> {
     const issuer = normalizeIssuer(this.options.issuer)
     const fetchImpl = this.options.fetchImpl ?? fetch
-    const discoveryResponse = await fetchImpl(`${issuer}/.well-known/openid-configuration`, {
-      headers: { Accept: 'application/json' },
-    })
-    const discoveryPayload = await readJsonResponse(discoveryResponse)
-    if (!discoveryResponse.ok) {
-      const detail = responseError(discoveryPayload, `OIDC discovery 请求失败（HTTP ${discoveryResponse.status}）`)
-      throw new WorkingOAuthError(detail.message, discoveryResponse.status, detail.code)
-    }
-    const discovery = validateWorkingDiscovery(issuer, discoveryPayload)
+    const discovery = await discoverWorkingOidc(issuer, fetchImpl)
     const pair = await createPkcePair(this.options.randomBytes)
     const authorizationUrl = buildWorkingAuthorizationUrl({
       authorizationEndpoint: discovery.authorizationEndpoint,

@@ -365,6 +365,24 @@ fn bridge_request_times_out_and_cleans_pending() {
 }
 
 #[test]
+fn working_bridge_request_body_does_not_contain_user_credentials() {
+    let body = super::working_bridge_request_body(
+        "POST",
+        "/api/internal/working-desktop/payment-context",
+        Some(r#"{"payment_id":"payment-1"}"#),
+    );
+    let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+    assert_eq!(value["method"], "POST");
+    assert_eq!(value["path"], "/api/internal/working-desktop/payment-context");
+    assert_eq!(value["body"], r#"{"payment_id":"payment-1"}"#);
+    let encoded = value.to_string();
+    for forbidden in ["Authorization", "access_token", "refresh_token"] {
+        assert!(!encoded.contains(forbidden), "bridge 请求不应包含 {}", forbidden);
+    }
+}
+
+#[test]
 fn slow_connection_is_closed_by_read_timeout() {
     let previous = std::env::var("COPIS_HTTP_API_READ_TIMEOUT_MS").ok();
     std::env::set_var("COPIS_HTTP_API_READ_TIMEOUT_MS", "80");

@@ -5,23 +5,27 @@ interface FakeStore {
   token: string | null
   refreshToken: string | null
   user: import('@copis/shared').WorkingUser | null
+  provider: 'legacy' | 'oidc' | null
 }
 
-function createStore(initialToken: string | null = null, initialRefreshToken: string | null = null): FakeStore & import('./working-auth-store').WorkingTokenStore {
-  const state: FakeStore = { token: initialToken, refreshToken: initialRefreshToken, user: null }
+function createStore(initialToken: string | null = null, initialRefreshToken: string | null = null, initialProvider: FakeStore['provider'] = null): FakeStore & import('./working-auth-store').WorkingTokenStore {
+  const state: FakeStore = { token: initialToken, refreshToken: initialRefreshToken, user: null, provider: initialProvider }
   return {
     getToken: () => state.token,
     getRefreshToken: () => state.refreshToken,
     getUser: () => state.user,
-    save: (token, user = null, refreshToken) => {
+    getProvider: () => state.provider,
+    save: (token, user = null, refreshToken, provider) => {
       state.token = token
       state.user = user
       if (refreshToken !== undefined) state.refreshToken = refreshToken
+      if (provider !== undefined) state.provider = provider
     },
-    clear: () => { state.token = null; state.refreshToken = null; state.user = null },
+    clear: () => { state.token = null; state.refreshToken = null; state.user = null; state.provider = null },
     get token() { return state.token },
     get refreshToken() { return state.refreshToken },
     get user() { return state.user },
+    get provider() { return state.provider },
   }
 }
 
@@ -98,6 +102,134 @@ describe('Copis Working API client', () => {
     expect(store.refreshToken).toBe('new-refresh-token')
   })
 
+  test('通过 OIDC 授权登录并以 oidc provider 保存凭据', async () => {
+    const store = createStore()
+    let openedUrl = ''
+    const client = new WorkingApiClient({
+      baseUrl: 'https://backend.example.test',
+      tokenStore: store,
+      oidcClientFactory: (openExternal) => ({
+        authorize: async () => {
+          await openExternal('https://auth.example.test/oauth/authorize?state=test')
+          return {
+            accessToken: 'oidc-access-token',
+            refreshToken: 'oidc-refresh-token',
+            tokenType: 'Bearer',
+            expiresIn: 900,
+          }
+        },
+      }),
+      fetchImpl: async (url, init) => {
+        expect(url).toBe('https://backend.example.test/api/users/me')
+        expect(new Headers(init?.headers).get('Authorization')).toBe('Bearer oidc-access-token')
+        return jsonResponse({ data: { ID: 7, Email: 'oidc@example.com', Nickname: 'OIDC 用户' } })
+      },
+    })
+
+    const result = await client.loginWithOAuth(async (url) => { openedUrl = url })
+
+    expect(openedUrl).toContain('https://auth.example.test/oauth/authorize')
+    expect(result.token).toBe('oidc-access-token')
+    expect(result.refreshToken).toBe('oidc-refresh-token')
+    expect(store.token).toBe('oidc-access-token')
+    expect(store.refreshToken).toBe('oidc-refresh-token')
+    expect(store.provider).toBe('oidc')
+    expect(store.user).toEqual(expect.objectContaining({ id: 7, email: 'oidc@example.com' }))
+  })
+
+  test('OIDC access token 刷新调用 Auth token endpoint 并保存轮换后的 refresh token', async () => {
+    const store = createStore('oidc-access-token', 'oidc-refresh-token', 'oidc')
+    let requestUrl = ''
+    let requestInit: RequestInit | undefined
+    const client = new WorkingApiClient({
+      baseUrl: 'https://backend.example.test',
+      authIssuer: 'https://auth.example.test/module/auth',
+      tokenStore: store,
+      fetchImpl: async (url, init) => {
+        requestUrl = url
+        requestInit = init
+        if (url === 'https://auth.example.test/module/auth/.well-known/openid-configuration') {
+          return jsonResponse({
+            issuer: 'https://auth.example.test/module/auth',
+            authorization_endpoint: 'https://auth.example.test/module/auth/oauth/authorize',
+            token_endpoint: 'https://auth.example.test/module/auth/oauth/token',
+          })
+        }
+        expect(url).toBe('https://auth.example.test/module/auth/oauth/token')
+        return jsonResponse({ access_token: 'rotated-access-token', refresh_token: 'rotated-refresh-token', token_type: 'Bearer', expires_in: 900 })
+      },
+    })
+
+    await expect(client.refreshAccessToken()).resolves.toBe('rotated-access-token')
+    expect(requestUrl).toBe('https://auth.example.test/module/auth/oauth/token')
+    expect(requestInit?.method).toBe('POST')
+    expect(new Headers(requestInit?.headers).get('Authorization')).toBeNull()
+    expect(new Headers(requestInit?.headers).get('Content-Type')).toBe('application/x-www-form-urlencoded')
+    const body = new URLSearchParams(String(requestInit?.body))
+    expect(body.get('grant_type')).toBe('refresh_token')
+    expect(body.get('client_id')).toBe('copis-desktop')
+    expect(body.get('refresh_token')).toBe('oidc-refresh-token')
+    expect(store.token).toBe('rotated-access-token')
+    expect(store.refreshToken).toBe('rotated-refresh-token')
+    expect(store.provider).toBe('oidc')
+  })
+
+  test('OIDC refresh 先读取 discovery 的 token endpoint，并保留未轮换的 refresh token', async () => {
+    const store = createStore('oidc-access-token', 'oidc-refresh-token', 'oidc')
+    const calls: string[] = []
+    const client = new WorkingApiClient({
+      baseUrl: 'https://backend.example.test',
+      authIssuer: 'https://auth.example.test/module/auth',
+      tokenStore: store,
+      fetchImpl: async (url, init) => {
+        calls.push(url)
+        if (url === 'https://auth.example.test/module/auth/.well-known/openid-configuration') {
+          expect(init?.method).toBeUndefined()
+          return jsonResponse({
+            issuer: 'https://auth.example.test/module/auth',
+            authorization_endpoint: 'https://auth.example.test/module/auth/oauth/authorize',
+            token_endpoint: 'https://auth.example.test/module/auth/oauth2/token',
+          })
+        }
+        expect(url).toBe('https://auth.example.test/module/auth/oauth2/token')
+        return jsonResponse({ access_token: 'rotated-access-token', token_type: 'Bearer', expires_in: 900 })
+      },
+    })
+
+    await expect(client.refreshAccessToken()).resolves.toBe('rotated-access-token')
+    expect(calls).toEqual([
+      'https://auth.example.test/module/auth/.well-known/openid-configuration',
+      'https://auth.example.test/module/auth/oauth2/token',
+    ])
+    expect(store.token).toBe('rotated-access-token')
+    expect(store.refreshToken).toBe('oidc-refresh-token')
+    expect(store.provider).toBe('oidc')
+  })
+
+  test('OIDC invalid_grant refresh 失败时清理本地认证状态', async () => {
+    const store = createStore('oidc-access-token', 'revoked-refresh-token', 'oidc')
+    const client = new WorkingApiClient({
+      baseUrl: 'https://backend.example.test',
+      authIssuer: 'https://auth.example.test/module/auth',
+      tokenStore: store,
+      fetchImpl: async (url) => {
+        if (url.endsWith('/.well-known/openid-configuration')) {
+          return jsonResponse({
+            issuer: 'https://auth.example.test/module/auth',
+            authorization_endpoint: 'https://auth.example.test/module/auth/oauth/authorize',
+            token_endpoint: 'https://auth.example.test/module/auth/oauth/token',
+          })
+        }
+        return jsonResponse({ error: 'invalid_grant', error_description: 'refresh token 已失效' }, 400)
+      },
+    })
+
+    await expect(client.refreshAccessToken()).rejects.toMatchObject({ status: 400, code: 'invalid_grant' })
+    expect(store.token).toBeNull()
+    expect(store.refreshToken).toBeNull()
+    expect(store.provider).toBeNull()
+  })
+
   test('refreshes credentials and user level immediately after VIP payment is fulfilled', async () => {
     const store = createStore('old-access-token', 'refresh-secret')
     const client = new WorkingApiClient({
@@ -117,7 +249,6 @@ describe('Copis Working API client', () => {
     })
 
     await expect(client.refreshAfterVipPayment()).resolves.toEqual({
-      token: 'vip-access-token',
       userId: '7',
       isVip: true,
     })

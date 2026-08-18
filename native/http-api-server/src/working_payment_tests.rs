@@ -61,7 +61,7 @@ fn parses_all_working_payment_routes() {
 }
 
 #[test]
-fn payment_account_key_remains_stable_when_access_token_refreshes() {
+fn payment_account_key_remains_stable_when_auth_state_refreshes() {
     let state = SkillMarketState::new(Some("access-token-1".to_string()));
     state.set_working_auth(Some("access-token-1".to_string()), Some("user-7".to_string()));
     let initial_account_key = state.payment_account_key().unwrap();
@@ -69,7 +69,6 @@ fn payment_account_key_remains_stable_when_access_token_refreshes() {
     state.set_working_auth(Some("access-token-2".to_string()), Some("user-7".to_string()));
 
     assert_eq!(state.payment_account_key().as_deref(), Some(initial_account_key.as_str()));
-    assert_eq!(state.access_token().as_deref(), Some("access-token-2"));
 }
 
 #[test]
@@ -117,7 +116,6 @@ impl super::VipPaymentRefresher for FakeVipPaymentRefresher {
     fn refresh_after_vip_payment(&self) -> Result<super::RefreshedWorkingAuth, String> {
         *self.calls.lock().unwrap() += 1;
         Ok(super::RefreshedWorkingAuth {
-            token: "refreshed-token".to_string(),
             user_id: "user-7".to_string(),
         })
     }
@@ -136,7 +134,7 @@ fn vip_resource_ready_refreshes_auth_but_diamond_or_pending_does_not() {
 
     state.refresh_after_payment(super::DesktopPaymentFlowKind::Vip, "resource_ready", &auth_state);
     assert_eq!(*refresher.calls.lock().unwrap(), 1);
-    assert_eq!(auth_state.access_token().as_deref(), Some("refreshed-token"));
+    assert!(auth_state.payment_account_key().is_some());
 }
 
 fn read_request(stream: &mut TcpStream) -> (String, String, String, Vec<u8>) {
@@ -431,7 +429,6 @@ fn desktop_diamond_payment_is_automatically_checked_by_rust_and_never_calls_lega
         &worker,
         &fixture.workspace,
         &state,
-        "payment-token",
         "account-7",
     );
 
@@ -712,7 +709,6 @@ fn desktop_payment_forwards_paid_status_without_payment_proof_for_go_api_fallbac
         &worker,
         &fixture.workspace,
         &SkillMarketState::new(Some("payment-token".to_string())),
-        "payment-token",
         "account-7",
         "pay-7",
     )
@@ -784,7 +780,6 @@ fn desktop_payment_prefers_out_shake_no_and_forwards_paid_status_without_payment
         &worker,
         &fixture.workspace,
         &SkillMarketState::new(Some("payment-token".to_string())),
-        "payment-token",
         "account-7",
         "pay-7",
     )
@@ -898,14 +893,13 @@ fn rust_automatically_recovers_pending_payment_after_restart() {
     }))]);
     let payment_state = WorkingPaymentState::new();
 
-    let recovered = recover_pending_desktop_payment(&payment_state, "payment-token").unwrap();
     let auth_state = SkillMarketState::new(Some("payment-token".to_string()));
+    let recovered = recover_pending_desktop_payment(&payment_state, &auth_state).unwrap();
     let failures = poll_desktop_payments_once(
         &payment_state,
         &worker,
         &fixture.workspace,
         &auth_state,
-        "payment-token",
         "account-7",
     );
 
@@ -996,14 +990,13 @@ fn rust_recovers_pending_vip_payment_and_refreshes_auth_after_fulfillment() {
     let refresher = std::sync::Arc::new(FakeVipPaymentRefresher::new());
     payment_state.set_vip_payment_refresher(refresher.clone());
 
-    assert!(recover_pending_desktop_payment(&payment_state, "payment-token").unwrap());
+    assert!(recover_pending_desktop_payment(&payment_state, &auth_state).unwrap());
     assert_eq!(
         poll_desktop_payments_once(
             &payment_state,
             &worker,
             &fixture.workspace,
             &auth_state,
-            "payment-token",
             "account-7",
         ),
         0,
@@ -1013,7 +1006,10 @@ fn rust_recovers_pending_vip_payment_and_refreshes_auth_after_fulfillment() {
     restore_backend_url(previous_backend);
 
     assert_eq!(*refresher.calls.lock().unwrap(), 1);
-    assert_eq!(auth_state.access_token().as_deref(), Some("refreshed-token"));
+    assert_eq!(
+        auth_state.payment_account_key().as_deref(),
+        Some(crate::skill_market::stable_payment_account_key("user-7").as_str())
+    );
 }
 
 #[test]

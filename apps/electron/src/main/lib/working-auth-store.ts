@@ -1,7 +1,7 @@
-import { existsSync, readFileSync, unlinkSync } from 'node:fs'
+import { chmodSync, existsSync, readFileSync, unlinkSync } from 'node:fs'
 import { safeStorage } from 'electron'
 import type { WorkingUser } from '@copis/shared'
-import { getWorkingAuthPath } from './config-paths'
+import { getConfigDir, getWorkingAuthPath } from './config-paths'
 import { writeJsonFileAtomic } from './safe-file'
 
 interface PersistedWorkingAuth {
@@ -9,32 +9,45 @@ interface PersistedWorkingAuth {
   tokenEncoding?: 'safe-storage' | 'plain'
   refreshToken?: string
   refreshTokenEncoding?: 'safe-storage' | 'plain'
+  provider?: WorkingAuthProvider
   user?: WorkingUser | null
   updatedAt?: number
+}
+
+export type WorkingAuthProvider = 'legacy' | 'oidc'
+
+interface VolatileWorkingAuth {
+	token: string
+	refreshToken: string | null
+	provider: WorkingAuthProvider
+	user: WorkingUser | null
 }
 
 export interface WorkingTokenStore {
   getToken(): string | null
   getRefreshToken(): string | null
   getUser(): WorkingUser | null
-  save(token: string, user?: WorkingUser | null, refreshToken?: string | null): void
+  getProvider?(): WorkingAuthProvider | null
+  save(token: string, user?: WorkingUser | null, refreshToken?: string | null, provider?: WorkingAuthProvider): void
   clear(): void
 }
 
-function encryptToken(token: string): { value: string; encoding: 'safe-storage' | 'plain' } {
-  if (!safeStorage.isEncryptionAvailable()) {
-    console.warn('[Copis Working] safeStorage 不可用，将以兼容格式保存认证信息')
-    return { value: token, encoding: 'plain' }
-  }
-  return {
-    value: safeStorage.encryptString(token).toString('base64'),
-    encoding: 'safe-storage',
-  }
+function encryptToken(token: string): string | null {
+	if (!safeStorage.isEncryptionAvailable()) {
+		return null
+	}
+	try {
+		return safeStorage.encryptString(token).toString('base64')
+	} catch (error) {
+		console.error('[Copis Working] 加密认证信息失败:', error)
+		return null
+	}
 }
 
 function decryptToken(value: string, encoding: PersistedWorkingAuth['tokenEncoding']): string | null {
-  if (!value) return null
-  if (encoding !== 'safe-storage' || !safeStorage.isEncryptionAvailable()) return value
+	if (!value) return null
+	if (encoding !== 'safe-storage') return value
+	if (!safeStorage.isEncryptionAvailable()) return null
   try {
     return safeStorage.decryptString(Buffer.from(value, 'base64'))
   } catch (error) {
@@ -56,38 +69,69 @@ function readPersistedAuth(): PersistedWorkingAuth {
 }
 
 export function createWorkingTokenStore(): WorkingTokenStore {
-  return {
-    getToken: () => {
-      const persisted = readPersistedAuth()
-      return decryptToken(persisted.token ?? '', persisted.tokenEncoding)
-    },
-    getRefreshToken: () => {
-      const persisted = readPersistedAuth()
-      return decryptToken(persisted.refreshToken ?? '', persisted.refreshTokenEncoding)
-    },
-    getUser: () => readPersistedAuth().user ?? null,
-    save: (token, user = null, refreshToken) => {
-      const persisted = readPersistedAuth()
-      const previousRefreshToken = decryptToken(persisted.refreshToken ?? '', persisted.refreshTokenEncoding)
-      const nextRefreshToken = refreshToken === undefined ? previousRefreshToken : refreshToken
-      const encrypted = encryptToken(token)
-      const refreshEncrypted = nextRefreshToken ? encryptToken(nextRefreshToken) : null
-      writeJsonFileAtomic(getWorkingAuthPath(), {
-        token: encrypted.value,
-        tokenEncoding: encrypted.encoding,
-        ...(refreshEncrypted && {
-          refreshToken: refreshEncrypted.value,
-          refreshTokenEncoding: refreshEncrypted.encoding,
-        }),
-        user,
-        updatedAt: Date.now(),
-      })
-    },
-    clear: () => {
-      const filePath = getWorkingAuthPath()
-      if (existsSync(filePath)) unlinkSync(filePath)
-    },
-  }
+	let volatileAuth: VolatileWorkingAuth | null = null
+	const filePath = getWorkingAuthPath()
+
+	const removeAuthArtifacts = () => {
+		for (const suffix of ['', '.bak', '.tmp']) {
+			const path = filePath + suffix
+			if (existsSync(path)) unlinkSync(path)
+		}
+	}
+
+	return {
+		getToken: () => {
+			if (volatileAuth) return volatileAuth.token
+			const persisted = readPersistedAuth()
+			return decryptToken(persisted.token ?? '', persisted.tokenEncoding)
+		},
+		getRefreshToken: () => {
+			if (volatileAuth) return volatileAuth.refreshToken
+			const persisted = readPersistedAuth()
+			return decryptToken(persisted.refreshToken ?? '', persisted.refreshTokenEncoding)
+		},
+		getUser: () => volatileAuth?.user ?? readPersistedAuth().user ?? null,
+		getProvider: () => volatileAuth?.provider ?? readPersistedAuth().provider ?? 'legacy',
+		save: (token, user = null, refreshToken, provider) => {
+			const persisted = readPersistedAuth()
+			const previousRefreshToken = volatileAuth?.refreshToken ?? decryptToken(persisted.refreshToken ?? '', persisted.refreshTokenEncoding)
+			const nextRefreshToken = refreshToken === undefined ? previousRefreshToken : refreshToken
+			const nextProvider = provider ?? volatileAuth?.provider ?? persisted.provider ?? 'legacy'
+			const encrypted = encryptToken(token)
+			const refreshEncrypted = nextRefreshToken ? encryptToken(nextRefreshToken) : null
+			if (!encrypted || (nextRefreshToken && !refreshEncrypted)) {
+				console.warn('[Copis Working] safeStorage 不可用，认证信息仅保存在当前进程，不写入磁盘')
+				volatileAuth = { token, refreshToken: nextRefreshToken, provider: nextProvider, user }
+				removeAuthArtifacts()
+				return
+			}
+			volatileAuth = null
+			try {
+				chmodSync(getConfigDir(), 0o700)
+			} catch {
+				// 配置目录权限由系统或已有安装负责时，不能阻塞登录。
+			}
+			writeJsonFileAtomic(getWorkingAuthPath(), {
+				token: encrypted,
+				tokenEncoding: 'safe-storage',
+				...(refreshEncrypted && {
+					refreshToken: refreshEncrypted,
+					refreshTokenEncoding: 'safe-storage',
+				}),
+				provider: nextProvider,
+				user,
+				updatedAt: Date.now(),
+			}, true, 0o600)
+			for (const suffix of ['.bak', '.tmp']) {
+				const path = filePath + suffix
+				if (existsSync(path)) unlinkSync(path)
+			}
+		},
+		clear: () => {
+			volatileAuth = null
+			removeAuthArtifacts()
+		},
+	}
 }
 
 const workingTokenStore = createWorkingTokenStore()

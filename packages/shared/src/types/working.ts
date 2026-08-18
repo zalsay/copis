@@ -542,6 +542,7 @@ export const WORKING_IPC_CHANNELS = {
   GET_CONFIG: 'working:get-config',
   GET_AUTH_STATE: 'working:get-auth-state',
   LOGIN: 'working:login',
+  LOGIN_OIDC: 'working:login-oidc',
   LOGOUT: 'working:logout',
   GET_CURRENT_USER: 'working:get-current-user',
   REGISTER: 'working:register',

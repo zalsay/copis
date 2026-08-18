@@ -1,14 +1,16 @@
 use super::{
     backend_env_test_lock, civil_date_from_days, extract_skill_archive, handle_request,
-    parse_skill_market_route, validate_skill_slug, SkillMarketRoute, SkillMarketState,
-    MARKET_SOURCE_FILE,
+    parse_skill_market_route, validate_skill_slug, SkillMarketError, SkillMarketRoute,
+    SkillMarketState, WorkingBackend, MARKET_SOURCE_FILE,
 };
 use std::fs;
 use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{mpsc, Arc};
+use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
+
+use serde_json::{json, Value};
 
 use zip::write::SimpleFileOptions;
 use zip::ZipWriter;
@@ -404,6 +406,83 @@ fn local_install_failure_keeps_remote_when_other_workspace_uses_skill() {
         Some(value) => std::env::set_var("COPIS_BACKEND_URL", value),
         None => std::env::remove_var("COPIS_BACKEND_URL"),
     }
+    match previous_config {
+        Some(value) => std::env::set_var("COPIS_CONFIG_DIR", value),
+        None => std::env::remove_var("COPIS_CONFIG_DIR"),
+    }
+    let _ = fs::remove_dir_all(config_dir);
+}
+
+struct RecordingWorkingBackend {
+    calls: Mutex<Vec<(String, String, Option<String>)>>,
+}
+
+impl RecordingWorkingBackend {
+    fn new() -> Self {
+        Self {
+            calls: Mutex::new(Vec::new()),
+        }
+    }
+}
+
+impl WorkingBackend for RecordingWorkingBackend {
+    fn request(
+        &self,
+        method: &str,
+        path: &str,
+        body: Option<&str>,
+    ) -> Result<Value, SkillMarketError> {
+        self.calls.lock().unwrap().push((
+            method.to_string(),
+            path.to_string(),
+            body.map(str::to_string),
+        ));
+        Ok(json!({
+            "data": [{
+                "id": 12,
+                "slug": "weekly-report",
+                "installed": false
+            }]
+        }))
+    }
+}
+
+#[test]
+fn production_backend_requests_working_data_without_user_credentials() {
+    let _env_guard = backend_env_test_lock().lock().unwrap();
+    let suffix = format!("{}-{}", std::process::id(), super::unique_suffix());
+    let config_dir = std::env::temp_dir().join(format!("copis-skill-market-bridge-{}", suffix));
+    let workspace_dir = config_dir.join("agent-workspaces").join("demo");
+    fs::create_dir_all(&workspace_dir).unwrap();
+    fs::write(
+        config_dir.join("agent-workspaces.json"),
+        r#"{"version":2,"workspaces":[{"slug":"demo"}]}"#,
+    )
+    .unwrap();
+
+    let previous_config = std::env::var("COPIS_CONFIG_DIR").ok();
+    std::env::set_var("COPIS_CONFIG_DIR", &config_dir);
+    let backend = Arc::new(RecordingWorkingBackend::new());
+    let state = SkillMarketState::production(backend.clone());
+
+    let response = handle_request(
+        &state,
+        "GET",
+        "/api/working/skill-market?workspaceSlug=demo",
+        &[],
+    )
+    .unwrap();
+
+    assert_eq!(response.status, 200);
+    assert_eq!(
+        backend.calls.lock().unwrap().as_slice(),
+        &[(
+            "GET".to_string(),
+            "/api/working/expert-skills".to_string(),
+            None,
+        )]
+    );
+
     match previous_config {
         Some(value) => std::env::set_var("COPIS_CONFIG_DIR", value),
         None => std::env::remove_var("COPIS_CONFIG_DIR"),

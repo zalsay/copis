@@ -1118,6 +1118,16 @@ export function registerIpcHandlers(): void {
     }
   })
 
+  ipcMain.handle(WORKING_IPC_CHANNELS.LOGIN_OIDC, async () => {
+    const client = getWorkingApiClient()
+    const result = await client.loginWithOAuth((url) => shell.openExternal(url))
+    return {
+      authenticated: true,
+      user: result.user ?? client.getCachedUser(),
+      backendUrl: client.baseUrl,
+    }
+  })
+
   ipcMain.handle(WORKING_IPC_CHANNELS.REGISTER, async (_, input: WorkingRegisterInput) => {
     if (!input || typeof input !== 'object' || typeof input.email !== 'string' || typeof input.password !== 'string') {
       throw new Error('注册参数不正确')

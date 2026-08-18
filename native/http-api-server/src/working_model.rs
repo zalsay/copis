@@ -1,16 +1,13 @@
-use crate::skill_market::{remote_json, remote_json_raw, SkillMarketState};
+use crate::skill_market::SkillMarketState;
 use serde_json::Value;
 
 const WORKING_MODEL_ALIASES: [&str; 3] = ["fast", "export", "deepseek-v4-flash"];
 
 pub fn working_model_latencies(state: &SkillMarketState) -> Result<Value, String> {
-    let token = state
-        .access_token()
-        .ok_or_else(|| "请先登录 Copis Working".to_string())?;
-    let mut payload = remote_json_raw(
+    let mut payload = state
+        .request_raw(
         "GET",
         "/api/internal/working-model/first-token-latencies",
-        &token,
         None,
     )
     .map_err(|error| error.message)?;
@@ -18,7 +15,7 @@ pub fn working_model_latencies(state: &SkillMarketState) -> Result<Value, String
     let mut configs = Vec::new();
     for alias in WORKING_MODEL_ALIASES {
         let path = format!("/api/internal/working-model/config?alias={}", alias);
-        if let Ok(config) = remote_json("GET", &path, &token, None) {
+        if let Ok(config) = state.request_data("GET", &path, None) {
             configs.push(config);
         }
     }

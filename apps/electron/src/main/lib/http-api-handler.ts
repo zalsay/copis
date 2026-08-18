@@ -84,6 +84,7 @@ interface WorkingApiFacade {
   readonly baseUrl: string
   getToken(): string | null
   getCachedUser(): ReturnType<WorkingApiClient['getCachedUser']>
+  requestFromRust(input: import('./working-api-client').WorkingRustRequest): ReturnType<WorkingApiClient['requestFromRust']>
   refreshAfterVipPayment(): ReturnType<WorkingApiClient['refreshAfterVipPayment']>
   login(input: WorkingLoginInput): ReturnType<WorkingApiClient['login']>
   register(input: WorkingRegisterInput): ReturnType<WorkingApiClient['register']>
@@ -1164,6 +1165,23 @@ export async function handleHttpApiRequest(
         backendUrl: workingClient.baseUrl,
       })
       return { status: 200, body: refreshed }
+    }
+    if (segments[1] === 'internal' && segments[2] === 'working-auth' && segments[3] === 'request' && request.method === 'POST') {
+      const workingClient = dependencies.getWorkingClient()
+      const body = requireRecord(await readJsonBody(request))
+      const method = requireString(body, 'method', 'Rust Working 请求方法不正确')
+      const path = requireString(body, 'path', 'Rust Working 请求路径不正确')
+      if (body.body !== undefined && typeof body.body !== 'string') {
+        throw new HttpApiRequestError('Rust Working 请求体不正确', 400, 'invalid_request_body')
+      }
+      return {
+        status: 200,
+        body: await workingClient.requestFromRust({
+          method,
+          path,
+          ...(typeof body.body === 'string' ? { body: body.body } : {}),
+        }),
+      }
     }
     if (segments[1] === 'internal' && segments[2] === 'automation') {
       return await handleAutomationInternalRequest(request, segments)
