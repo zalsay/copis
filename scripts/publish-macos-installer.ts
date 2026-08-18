@@ -21,6 +21,9 @@ export const DEFAULT_MACOS_ARM64_INSTALLER_OBJECT_KEY =
 export const DEFAULT_MACOS_X64_INSTALLER_OBJECT_KEY =
   DEFAULT_MACOS_INSTALLER_OBJECT_KEYS.x64
 
+const MACOS_INSTALLER_VERIFY_ATTEMPTS = 5
+const MACOS_INSTALLER_VERIFY_RETRY_DELAY_MS = 1_000
+
 interface CosSdkConstructor {
   new (options: Record<string, string>): FunctionalModuleCosSdkClient
 }
@@ -86,9 +89,17 @@ export async function publishMacosInstaller(
     allowOverwrite: true,
   }, { allowOverwrite: true })
 
-  const remote = await client.headObject({ key: upload.key })
+  let remote = await client.headObject({ key: upload.key })
+  for (let attempt = 1; attempt < MACOS_INSTALLER_VERIFY_ATTEMPTS; attempt += 1) {
+    if (remote.size === upload.size && remote.sha256?.toLowerCase() === upload.sha256) return
+    await new Promise((resolve) => setTimeout(resolve, MACOS_INSTALLER_VERIFY_RETRY_DELAY_MS))
+    remote = await client.headObject({ key: upload.key })
+  }
   if (remote.size !== upload.size || remote.sha256?.toLowerCase() !== upload.sha256) {
-    throw new Error(`macOS 安装程序远端校验失败：${upload.key}`)
+    throw new Error(
+      `macOS 安装程序远端校验失败：${upload.key}（期望 size=${upload.size}, sha256=${upload.sha256}；`
+      + `实际 size=${remote.size}, sha256=${remote.sha256 ?? '缺失'}）`,
+    )
   }
 }
 

@@ -82,6 +82,28 @@ describe('macOS 固定安装程序发布', () => {
     })
   })
 
+  test('覆盖后 HEAD 短暂返回旧对象时有限重试并最终通过', async () => {
+    const upload = buildMacosInstallerUpload({
+      filePath: createInstallerFile('Copis-arm64.dmg'),
+      arch: 'arm64',
+      objectKey: DEFAULT_MACOS_ARM64_INSTALLER_OBJECT_KEY,
+      publicBaseUrl: 'https://download.example.com',
+    })
+    let headCount = 0
+    const client: FunctionalModuleObjectClient = {
+      async putObject() {},
+      async headObject() {
+        headCount += 1
+        if (headCount === 1) return { size: 1, sha256: '0'.repeat(64) }
+        return { size: upload.size, sha256: upload.sha256 }
+      },
+    }
+
+    await publishMacosInstaller(upload, client)
+
+    expect(headCount).toBe(2)
+  })
+
   test('拒绝带目录穿越或查询字符的 COS key', () => {
     expect(() => buildMacosInstallerUpload({
       filePath: createInstallerFile('Copis-arm64.dmg'),
