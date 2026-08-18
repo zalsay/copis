@@ -19,9 +19,20 @@ import type { BrowserAgentToolResult } from './browser-agent-tool-service'
 import { redactSensitiveLogValue, shortLogId } from './bridge-log-redaction'
 import type { AppSettings } from '../../types'
 import {
+  assertWorkingCustomModelSelection,
+  filterWorkingModelCatalogUpdate,
+  getWorkingModelCatalog,
+  getWorkingModelCatalogOwnerId,
+  redactWorkingModelCatalog,
+  saveWorkingModelCatalog,
+} from './working-model-catalog'
+import {
   COPIS_WORKING_CHANNEL_ID,
+  COPIS_WORKING_DEEPSEEK_CHANNEL_ID,
+  COPIS_WORKING_DEEPSEEK_FAST_MODEL_ID,
   COPIS_WORKING_EXPERT_MODEL_ID,
   COPIS_WORKING_FAST_MODEL_ID,
+  isWorkingCustomModelChannelId,
   WORKING_IPC_CHANNELS,
 } from '@copis/shared'
 import { resolveCopisHttpApiPort } from '@copis/shared/config'
@@ -110,6 +121,8 @@ export interface HttpApiDependencies {
   getWorkingClient: () => WorkingApiFacade
   getAppSettings: () => AppSettings
   updateAppSettings: (updates: Partial<AppSettings>) => AppSettings
+  getWorkingModelCatalog?: (isVip: boolean, ownerId?: string) => import('@copis/shared').WorkingModelCatalog
+  saveWorkingModelCatalog?: (value: unknown, isVip: boolean, ownerId?: string) => import('@copis/shared').WorkingModelCatalog
   /** Rust 后台支付确认后，向主渲染进程广播最新 Working 账户资料。 */
   notifyWorkingAuthUpdated?: (state: WorkingAuthState) => void
   getAgentApi?: () => Promise<AgentHttpFacade>
@@ -130,6 +143,7 @@ export interface AgentHttpFacade {
   getAgentSessionMeta: (id: string) => AgentSessionMeta | undefined
   deleteAgentSession: (id: string) => void
   clearAgentCompletionState: (id: string) => AgentSessionMeta
+  updateAgentSessionModel: (id: string, channelId?: string, modelId?: string) => AgentSessionMeta
   createAgentSession: (
     title?: string,
     channelId?: string,
@@ -161,6 +175,8 @@ const defaultDependencies: HttpApiDependencies = {
   getWorkingClient: getWorkingApiClient,
   getAppSettings: getSettings,
   updateAppSettings: updateSettings,
+  getWorkingModelCatalog,
+  saveWorkingModelCatalog,
   notifyWorkingAuthUpdated: (state) => {
     void import('../index').then(({ getMainWindow }) => {
       const mainWindow = getMainWindow()
@@ -199,6 +215,10 @@ function getDefaultAgentApi(): Promise<AgentHttpFacade> {
           ? sessionManager.updateAgentSessionMeta(id, updates)
           : current
       },
+      updateAgentSessionModel: (id: string, channelId?: string, modelId?: string) => sessionManager.updateAgentSessionMeta(id, {
+        channelId,
+        modelId,
+      }),
       createAgentSession: sessionManager.createAgentSession,
       getAgentSessionSDKMessages: sessionManager.getAgentSessionSDKMessages,
       runAgentHeadless: agentService.runAgentHeadless,
@@ -327,6 +347,13 @@ function sendError(error: unknown): HttpApiResponse {
     }
   }
 
+  if (isRecord(error) && error.code === 'vip_required' && typeof error.message === 'string') {
+    return {
+      status: 403,
+      body: { error: error.message, code: 'vip_required' },
+    }
+  }
+
   if (isRecord(error) && typeof error.status === 'number' && typeof error.message === 'string') {
     return {
       status: error.status >= 400 && error.status <= 599 ? error.status : 500,
@@ -351,8 +378,86 @@ function sanitizeAppSettings(settings: AppSettings): Omit<AppSettings, 'voiceDic
 }
 
 function sanitizeAppSettingsUpdates(value: Record<string, unknown>): Partial<AppSettings> {
-  const { voiceDictation: _voiceDictation, ...safeUpdates } = value
+  const {
+    voiceDictation: _voiceDictation,
+    workingModelApiKeys: _workingModelApiKeys,
+    workingModelCatalogOwnerId: _workingModelCatalogOwnerId,
+    ...safeUpdates
+  } = value
   return safeUpdates as Partial<AppSettings>
+}
+
+function getWorkingAccountId(dependencies: HttpApiDependencies): string | undefined {
+  return getWorkingModelCatalogOwnerId(dependencies.getWorkingClient().getCachedUser())
+}
+
+function isWorkingVip(dependencies: HttpApiDependencies): boolean {
+  return dependencies.getWorkingClient().getCachedUser()?.isVip === true
+}
+
+function isSupportedWorkingAgentChannel(channelId: string | undefined): boolean {
+  return channelId === COPIS_WORKING_CHANNEL_ID
+    || channelId === COPIS_WORKING_DEEPSEEK_CHANNEL_ID
+    || isWorkingCustomModelChannelId(channelId)
+}
+
+function resolveWorkingAgentChannelId(requestedChannelId: string | undefined, fallbackChannelId: string): string {
+  return requestedChannelId && isSupportedWorkingAgentChannel(requestedChannelId)
+    ? requestedChannelId
+    : fallbackChannelId
+}
+
+function resolveWorkingAgentModelId(
+  channelId: string,
+  requestedModelId: string | undefined,
+  fallbackModelId: string | undefined,
+): string | undefined {
+  if (isWorkingCustomModelChannelId(channelId)) return requestedModelId ?? fallbackModelId
+  if (channelId === COPIS_WORKING_DEEPSEEK_CHANNEL_ID) {
+    return requestedModelId === COPIS_WORKING_DEEPSEEK_FAST_MODEL_ID
+      ? requestedModelId
+      : COPIS_WORKING_DEEPSEEK_FAST_MODEL_ID
+  }
+  if (channelId === COPIS_WORKING_CHANNEL_ID) {
+    return requestedModelId === COPIS_WORKING_EXPERT_MODEL_ID
+      ? COPIS_WORKING_EXPERT_MODEL_ID
+      : COPIS_WORKING_FAST_MODEL_ID
+  }
+  return requestedModelId ?? fallbackModelId
+}
+
+function assertHttpWorkingCustomModelSelection(
+  dependencies: HttpApiDependencies,
+  channelId: string | undefined,
+  modelId: string | undefined,
+): void {
+  if (!isWorkingCustomModelChannelId(channelId)) return
+  assertWorkingCustomModelSelection(
+    channelId,
+    modelId,
+    isWorkingVip(dependencies),
+    getWorkingAccountId(dependencies),
+  )
+}
+
+function redactHttpApiSettings(
+  dependencies: HttpApiDependencies,
+  isVip: boolean,
+  ownerId: string | undefined,
+): Omit<AppSettings, 'voiceDictation'> {
+  const safeSettings = redactWorkingModelCatalog(
+    sanitizeAppSettings(dependencies.getAppSettings()),
+    isVip,
+    ownerId,
+  )
+  if (isVip && ownerId && !safeSettings.workingModelCatalog) {
+    const getCatalog = dependencies.getWorkingModelCatalog ?? getWorkingModelCatalog
+    return {
+      ...safeSettings,
+      workingModelCatalog: getCatalog(true, ownerId),
+    }
+  }
+  return safeSettings
 }
 
 function makeAuthState(client: WorkingApiFacade): {
@@ -438,15 +543,16 @@ async function handleAgentRequest(
       throw new HttpApiRequestError('Agent 项目不存在', 404, 'agent_workspace_not_found')
     }
 
+    const requestedChannelId = optionalString(bodyRecord ?? {}, 'channelId')
+    const channelId = resolveWorkingAgentChannelId(requestedChannelId, COPIS_WORKING_CHANNEL_ID)
     const requestedModelId = optionalString(bodyRecord ?? {}, 'modelId')
-    const modelId = requestedModelId === COPIS_WORKING_EXPERT_MODEL_ID
-      ? COPIS_WORKING_EXPERT_MODEL_ID
-      : COPIS_WORKING_FAST_MODEL_ID
+    assertHttpWorkingCustomModelSelection(dependencies, channelId, requestedModelId)
+    const modelId = resolveWorkingAgentModelId(channelId, requestedModelId, undefined)
     const expertTeamSession = optionalExpertTeamSession(bodyRecord ?? {})
     const expertTeamSetup = optionalExpertTeamSetup(bodyRecord ?? {})
     const session = api.createAgentSession(
       optionalString(bodyRecord ?? {}, 'title'),
-      COPIS_WORKING_CHANNEL_ID,
+      channelId,
       workspace.id,
       modelId,
       'pi',
@@ -483,27 +589,44 @@ async function handleAgentRequest(
     return { status: 200, body: api.clearAgentCompletionState(sessionId) }
   }
 
+  if (sessionAction === 'model' && method === 'PATCH') {
+    const requestedChannelId = optionalString(bodyRecord ?? {}, 'channelId')
+    if (requestedChannelId !== undefined && !isSupportedWorkingAgentChannel(requestedChannelId)) {
+      throw new HttpApiRequestError('浏览器 Agent 不支持该模型渠道', 400, 'unsupported_agent_channel')
+    }
+    const requestedModelId = optionalString(bodyRecord ?? {}, 'modelId')
+    assertHttpWorkingCustomModelSelection(dependencies, requestedChannelId, requestedModelId)
+    return {
+      status: 200,
+      body: api.updateAgentSessionModel(sessionId, requestedChannelId, requestedModelId),
+    }
+  }
+
   if (sessionAction === 'messages' && method === 'POST') {
     const userMessage = requireString(bodyRecord ?? {}, 'userMessage', 'Agent 消息不能为空')
     const startedAt = Date.now()
     let runError: string | undefined
+    const requestedChannelId = optionalString(bodyRecord ?? {}, 'channelId')
+    const channelId = resolveWorkingAgentChannelId(
+      requestedChannelId,
+      session.channelId ?? COPIS_WORKING_CHANNEL_ID,
+    )
     const requestedModelId = optionalString(bodyRecord ?? {}, 'modelId')
-    const modelId = requestedModelId === COPIS_WORKING_EXPERT_MODEL_ID
-      ? COPIS_WORKING_EXPERT_MODEL_ID
-      : requestedModelId === COPIS_WORKING_FAST_MODEL_ID
-        ? COPIS_WORKING_FAST_MODEL_ID
-        : session.modelId ?? COPIS_WORKING_FAST_MODEL_ID
-    const workingMode = modelId === COPIS_WORKING_EXPERT_MODEL_ID ? 'expert' : 'fast'
+    assertHttpWorkingCustomModelSelection(dependencies, channelId, requestedModelId)
+    const modelId = resolveWorkingAgentModelId(channelId, requestedModelId, session.modelId)
+    const workingMode = channelId === COPIS_WORKING_CHANNEL_ID
+      ? (modelId === COPIS_WORKING_EXPERT_MODEL_ID ? 'expert' : 'fast')
+      : undefined
 
     const input: AgentSendInput = {
       sessionId,
       userMessage,
       rawUserMessage: userMessage,
-      channelId: session.channelId ?? COPIS_WORKING_CHANNEL_ID,
-      modelId,
+      channelId,
+      ...(modelId ? { modelId } : {}),
       agentRuntime: 'pi',
       workspaceId: session.workspaceId,
-      workingMode,
+      ...(workingMode ? { workingMode } : {}),
       permissionModeOverride: 'bypassPermissions',
       startedAt,
       triggeredBy: 'user',
@@ -1125,13 +1248,41 @@ export async function handleHttpApiRequest(
     }
 
     if (url.pathname === '/api/settings' && request.method === 'GET') {
-      return { status: 200, body: sanitizeAppSettings(dependencies.getAppSettings()) }
+      const isVip = isWorkingVip(dependencies)
+      const ownerId = getWorkingAccountId(dependencies)
+      return {
+        status: 200,
+        body: redactHttpApiSettings(dependencies, isVip, ownerId),
+      }
     }
 
     if (url.pathname === '/api/settings' && (request.method === 'PATCH' || request.method === 'PUT')) {
       const body = requireRecord(await readJsonBody(request))
-      const updated = dependencies.updateAppSettings(sanitizeAppSettingsUpdates(body))
-      return { status: 200, body: sanitizeAppSettings(updated) }
+      const isVip = isWorkingVip(dependencies)
+      const ownerId = getWorkingAccountId(dependencies)
+      const safeUpdates = sanitizeAppSettingsUpdates(body)
+      const catalogValue = body.workingModelCatalog
+      const { workingModelCatalog: _workingModelCatalog, ...ordinaryUpdates } = safeUpdates
+      const filteredOrdinaryUpdates = filterWorkingModelCatalogUpdate(
+        ordinaryUpdates,
+        isVip,
+        ownerId,
+      )
+      if (catalogValue !== undefined && !isVip) {
+        throw new HttpApiRequestError('仅 VIP 用户可使用模型管理', 403, 'vip_required')
+      }
+      let updated = Object.keys(filteredOrdinaryUpdates).length > 0
+        ? dependencies.updateAppSettings(filteredOrdinaryUpdates)
+        : dependencies.getAppSettings()
+      if (catalogValue !== undefined) {
+        const saveCatalog = dependencies.saveWorkingModelCatalog ?? saveWorkingModelCatalog
+        const catalog = saveCatalog(catalogValue, isVip, ownerId)
+        updated = { ...updated, workingModelCatalog: catalog }
+      }
+      return {
+        status: 200,
+        body: redactWorkingModelCatalog(sanitizeAppSettings(updated), isVip, ownerId),
+      }
     }
 
     if (url.pathname === '/api/tutorial' && request.method === 'GET') {

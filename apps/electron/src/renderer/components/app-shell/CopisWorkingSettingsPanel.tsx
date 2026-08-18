@@ -19,6 +19,7 @@ import {
   Palette,
   RefreshCw,
   Sparkles,
+  SlidersHorizontal,
   UserRound,
 } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
@@ -47,6 +48,7 @@ import { AppearanceSettings } from '@/components/settings/AppearanceSettings'
 import { MigrationSettings } from '@/components/settings/MigrationSettings'
 import { StorageSettings } from '@/components/settings/StorageSettings'
 import { VoiceInputSettings } from '@/components/settings/VoiceInputSettings'
+import { ModelManagementSettings } from '@/components/settings/ModelManagementSettings'
 import {
   formatWorkingLedgerDescription,
   isWorkingModelDeduction,
@@ -72,6 +74,12 @@ export const WORKING_SETTINGS_MENU: readonly WorkingSettingsMenuItem[] = [
     label: '账户设置',
     description: '查看账户余额、VIP 权益、邀请信息和钻石流水。',
     icon: UserRound,
+  },
+  {
+    id: 'model-management',
+    label: '模型管理',
+    description: '配置 VIP 专属的自定义模型、协议和 Composer 分类。',
+    icon: SlidersHorizontal,
   },
   {
     id: 'messages',
@@ -149,6 +157,7 @@ export function CopisWorkingSettingsPanel({ onClose }: CopisWorkingSettingsPanel
   const hasUpdate = useAtomValue(hasUpdateAtom)
 
   const user = settings?.user ?? authState?.user
+  const isVip = settings?.vip?.isVip ?? user?.isVip === true
   const activeSectionDefinition = WORKING_SETTINGS_MENU.find((item) => item.id === activeSection) ?? WORKING_SETTINGS_MENU[0]!
   const ActiveIcon = activeSectionDefinition.icon
 
@@ -336,6 +345,16 @@ export function CopisWorkingSettingsPanel({ onClose }: CopisWorkingSettingsPanel
                 onCopyInvite={() => void handleCopyInvite()}
                 onOpenDiamonds={() => openPayment({ mode: 'diamonds' })}
                 onOpenVip={() => openPayment({ mode: 'vip' })}
+              />
+            )}
+            {activeSection === 'model-management' && (
+              <ModelManagementSettings
+                isVip={isVip}
+                accountId={user?.id === undefined && user?.userId === undefined
+                  ? undefined
+                  : String(user.id ?? user.userId)}
+                onOpenVip={() => openPayment({ mode: 'vip' })}
+                onNotice={setNotice}
               />
             )}
             {activeSection === 'messages' && (

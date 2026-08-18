@@ -44,6 +44,10 @@ import {
   unviewedCompletedSessionIdsAtom,
 } from './atoms/agent-atoms'
 import { workingAuthStateAtom, workingClientConfigAtom, workingVipStatusAtom } from './atoms/working-atoms'
+import {
+  resetWorkingModelCatalog,
+  workingModelCatalogAtom,
+} from './atoms/working-model-catalog-atoms'
 import { workingPaymentRefreshAtom } from './atoms/working-payment-atoms'
 import { updateStatusAtom, initializeUpdater } from './atoms/updater'
 import { automationsAtom } from './atoms/automation-atoms'
@@ -78,10 +82,13 @@ import { dingtalkBotStatesAtom } from './atoms/dingtalk-atoms'
 import { channelsAtom, channelsLoadedAtom, selectedModelAtom } from './atoms/model-atoms'
 import { appModeAtom, normalizeAppMode } from './atoms/app-mode'
 import {
+  EMPTY_WORKING_MODEL_CATALOG,
   COPIS_WORKING_DEEPSEEK_CHANNEL_ID,
   COPIS_WORKING_DEEPSEEK_FAST_MODEL_ID,
+  isWorkingCustomModelChannelId,
+  workingCustomModelChannelIdFor,
 } from '@copis/shared'
-import type { FeishuBotBridgeState, FeishuBridgeState, DingTalkBotBridgeState, DingTalkBridgeState, WorkingAuthState } from '@copis/shared'
+import type { FeishuBotBridgeState, FeishuBridgeState, DingTalkBotBridgeState, DingTalkBridgeState, WorkingAuthState, WorkingModelCatalog } from '@copis/shared'
 import { Toaster } from './components/ui/sonner'
 import { toast } from 'sonner'
 import { diffCapabilities } from '@copis/shared'
@@ -108,6 +115,36 @@ const isDetachedPreviewWindow = new URLSearchParams(window.location.search).get(
 const isPlanningWindow = new URLSearchParams(window.location.search).get('window') === 'planning'
 const isWebBookmarksWindow = new URLSearchParams(window.location.search).get('window') === 'web-bookmarks'
 const isMainWindow = !isQuickTaskWindow && !isVoiceDictationIndicatorWindow && !isDetachedPreviewWindow && !isPlanningWindow && !isWebBookmarksWindow
+
+type WorkingDefaultModelSettings = {
+  agentChannelId?: string
+  agentModelId?: string
+}
+
+function getWorkingAccountKey(state: WorkingAuthState | null): string {
+  if (!state?.authenticated) return 'anonymous'
+  const accountId = state.user?.id ?? state.user?.userId
+  return accountId === undefined || accountId === null
+    ? 'authenticated'
+    : `authenticated:${String(accountId)}`
+}
+
+function resolveWorkingDefaultModel(
+  settings: WorkingDefaultModelSettings,
+  catalog: WorkingModelCatalog,
+): { channelId: string; modelId: string } {
+  const storedChannelId = settings.agentChannelId
+  const storedCustomModel = isWorkingCustomModelChannelId(storedChannelId)
+    ? catalog.models.find((model) => (
+      workingCustomModelChannelIdFor(model.id) === storedChannelId
+      && model.apiKeyConfigured
+    ))
+    : undefined
+
+  return storedCustomModel
+    ? { channelId: storedChannelId!, modelId: storedCustomModel.modelId }
+    : { channelId: COPIS_WORKING_DEEPSEEK_CHANNEL_ID, modelId: COPIS_WORKING_DEEPSEEK_FAST_MODEL_ID }
+}
 
 // 主窗口和独立规划窗口均由内部面板管理滚动，避免页面本身出现第二层滚动。
 if (isMainWindow || isPlanningWindow) {
@@ -198,7 +235,12 @@ function AgentSettingsInitializer(): null {
   const setWorkingClientConfig = useSetAtom(workingClientConfigAtom)
   const setWorkingAuthState = useSetAtom(workingAuthStateAtom)
   const setWorkingVipStatus = useSetAtom(workingVipStatusAtom)
+  const setWorkingModelCatalog = useSetAtom(workingModelCatalogAtom)
   const bumpWorkingPaymentRefresh = useSetAtom(workingPaymentRefreshAtom)
+  const workingAuthState = useAtomValue(workingAuthStateAtom)
+  const workingAccountId = workingAuthState?.user?.id ?? workingAuthState?.user?.userId
+  const workingModelRequestIdRef = useRef(0)
+  const workingAuthSnapshotRequestIdRef = useRef(0)
 
   const setAgentSettingsReady = useSetAtom(agentSettingsReadyAtom)
   const setChannels = useSetAtom(channelsAtom)
@@ -216,9 +258,16 @@ function AgentSettingsInitializer(): null {
 
   useEffect(() => {
     const unsubscribeWorkingAuth = window.electronAPI.onWorkingAuthUpdated((state: WorkingAuthState) => {
+      const requestId = ++workingAuthSnapshotRequestIdRef.current
+      const accountKey = getWorkingAccountKey(state)
       setWorkingAuthState(state)
       bumpWorkingPaymentRefresh((value) => value + 1)
       void window.electronAPI.getWorkingSettingsSnapshot().then((snapshot) => {
+        const currentState = store.get(workingAuthStateAtom)
+        if (
+          requestId !== workingAuthSnapshotRequestIdRef.current
+          || getWorkingAccountKey(currentState) !== accountKey
+        ) return
         setWorkingAuthState((current) => current ? { ...current, user: snapshot.user } : state)
         setWorkingVipStatus(snapshot.vip)
       }).catch((error: unknown) => {
@@ -227,9 +276,64 @@ function AgentSettingsInitializer(): null {
     })
 
     return unsubscribeWorkingAuth
-  }, [bumpWorkingPaymentRefresh, setWorkingAuthState, setWorkingVipStatus])
+  }, [bumpWorkingPaymentRefresh, setWorkingAuthState, setWorkingVipStatus, store])
 
   useEffect(() => {
+    const requestId = ++workingModelRequestIdRef.current
+    const accountKey = getWorkingAccountKey(workingAuthState)
+    resetWorkingModelCatalog(setWorkingModelCatalog)
+    const applyDefaultModel = (settings: WorkingDefaultModelSettings, catalog: WorkingModelCatalog): void => {
+      if (
+        requestId !== workingModelRequestIdRef.current
+        || getWorkingAccountKey(store.get(workingAuthStateAtom)) !== accountKey
+      ) return
+
+      const defaultModel = resolveWorkingDefaultModel(settings, catalog)
+      setAgentChannelId(defaultModel.channelId)
+      setAgentModelId(defaultModel.modelId)
+
+      if (
+        settings.agentChannelId === defaultModel.channelId
+        && settings.agentModelId === defaultModel.modelId
+      ) return
+
+      void window.electronAPI.updateSettings({
+        agentChannelId: defaultModel.channelId,
+        agentModelId: defaultModel.modelId,
+      }).catch((error: unknown) => {
+        console.error('[AgentSettings] 保存 Working 默认模型失败:', error)
+      })
+    }
+
+    if (!workingAuthState?.authenticated || workingAuthState.user?.isVip !== true) {
+      setAgentChannelId(COPIS_WORKING_DEEPSEEK_CHANNEL_ID)
+      setAgentModelId(COPIS_WORKING_DEEPSEEK_FAST_MODEL_ID)
+      return
+    }
+
+    void Promise.all([
+      window.electronAPI.getSettings(),
+      window.electronAPI.getWorkingModelCatalog(),
+    ]).then(([settings, catalog]) => {
+      if (
+        requestId !== workingModelRequestIdRef.current
+        || getWorkingAccountKey(store.get(workingAuthStateAtom)) !== accountKey
+      ) return
+      setWorkingModelCatalog(catalog)
+      applyDefaultModel(settings, catalog)
+    }).catch((error: unknown) => {
+      if (
+        requestId !== workingModelRequestIdRef.current
+        || getWorkingAccountKey(store.get(workingAuthStateAtom)) !== accountKey
+      ) return
+      setWorkingModelCatalog(EMPTY_WORKING_MODEL_CATALOG)
+      applyDefaultModel({}, EMPTY_WORKING_MODEL_CATALOG)
+      console.error('[模型管理] 加载当前账号模型配置失败:', error)
+    })
+  }, [setAgentChannelId, setAgentModelId, setWorkingModelCatalog, store, workingAccountId, workingAuthState?.authenticated, workingAuthState?.user?.isVip])
+
+  useEffect(() => {
+    const initialWorkingModelRequestId = workingModelRequestIdRef.current
     // 并行加载渠道列表和设置，确保两者都就绪后再验证渠道有效性
     Promise.all([
       window.electronAPI.listChannels(),
@@ -264,20 +368,9 @@ function AgentSettingsInitializer(): null {
         || agentChannelIds.some((id, index) => id !== storedAgentChannelIds[index])
       if (whitelistChanged) updates.agentChannelIds = agentChannelIds
 
-      // Working Agent 不使用用户渠道；新 Composer 默认使用 DeepSeek 快速模型。
-      setAgentChannelId(COPIS_WORKING_DEEPSEEK_CHANNEL_ID)
-      setAgentModelId(COPIS_WORKING_DEEPSEEK_FAST_MODEL_ID)
-      if (
-        settings.agentChannelId !== COPIS_WORKING_DEEPSEEK_CHANNEL_ID
-        || settings.agentModelId !== COPIS_WORKING_DEEPSEEK_FAST_MODEL_ID
-        || settings.agentRuntime !== defaultAgentRuntime
-      ) {
-        updates.agentChannelId = COPIS_WORKING_DEEPSEEK_CHANNEL_ID
-        updates.agentModelId = COPIS_WORKING_DEEPSEEK_FAST_MODEL_ID
-        updates.agentRuntime = defaultAgentRuntime
-      }
+      if (settings.agentRuntime !== defaultAgentRuntime) updates.agentRuntime = defaultAgentRuntime
 
-      if (Object.keys(updates).length > 0) {
+      if (Object.keys(updates).length > 0 && initialWorkingModelRequestId === workingModelRequestIdRef.current) {
         window.electronAPI.updateSettings(updates).catch(console.error)
       }
 

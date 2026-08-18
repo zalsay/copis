@@ -22,6 +22,7 @@ import {
   COPIS_WORKING_MODEL_SOURCE_TYPE_HEADER,
   COPIS_WORKING_MODEL_SOURCE_TYPE_COPIS_AGENT,
   isCopisWorkingChannelId,
+  isWorkingCustomModelChannelId,
 } from '@copis/shared'
 import {
   getCopisUserAgent,
@@ -57,6 +58,25 @@ const DEFAULT_MAX_TOKENS = 64_000
 const VOLCENGINE_GLM_52_MAX_TOKENS = 128_000
 const CODEX_BASE_URL = 'https://chatgpt.com/backend-api'
 const CODEX_MAX_TOKENS = 128_000
+
+/**
+ * 自定义 Responses 端点没有 Pi catalog 元数据，仍需把 Composer 的思考档位
+ * 映射为 Responses API 可识别的 reasoning.effort；否则 off 会被发送成非法的
+ * `off`，而 xhigh/max 也不会被 Pi 视为可用档位。
+ */
+const WORKING_CUSTOM_RESPONSES_THINKING_LEVEL_MAP = {
+  off: 'none',
+  minimal: 'minimal',
+  low: 'low',
+  medium: 'medium',
+  high: 'high',
+  xhigh: 'xhigh',
+  max: 'max',
+} satisfies NonNullable<PiCatalogModel['thinkingLevelMap']>
+
+export function getWorkingCustomResponsesThinkingLevelMap(): PiCatalogModel['thinkingLevelMap'] {
+  return { ...WORKING_CUSTOM_RESPONSES_THINKING_LEVEL_MAP }
+}
 /**
  * 将 Codex 已标记的 GPT-5.x 上下文窗口外推到同名第三方模型。
  *
@@ -700,6 +720,11 @@ export async function buildModel(sdk: PiSdk, input: PiAgentQueryOptions) {
   const modelRuntime = await sdk.ModelRuntime.create({ allowModelNetwork: false })
   const api = normalizePiApi(input.provider)
   const modelDefaults = await resolvePiModelDefaults({ ...input, model: resolvedModelId })
+  if (input.provider === 'openai-responses'
+    && isWorkingCustomModelChannelId(input.channelId)
+    && !modelDefaults.thinkingLevelMap) {
+    modelDefaults.thinkingLevelMap = getWorkingCustomResponsesThinkingLevelMap()
+  }
   const baseUrl = normalizePiBaseUrl(input.baseUrl, input.provider)
   if (!baseUrl) {
     throw new Error(`渠道 ${input.channelName ?? input.provider} 缺少 Base URL`)

@@ -142,6 +142,8 @@ import type {
   WorkingPaymentIdentifier,
   WorkingPendingDiamondPurchase,
   WorkingModelLatencyMap,
+  WorkingModelCatalog,
+  WorkingModelCatalogSaveInput,
   WorkingDiamondPackage,
   WorkingDiamondPurchaseResult,
   WorkingPasswordResetInput,
@@ -384,6 +386,8 @@ export interface ElectronAPI {
   checkWorkingPayment: (paymentId: WorkingPaymentIdentifier) => Promise<WorkingPaymentCheckResult>
   cancelWorkingDiamondPayment: (paymentId: WorkingPaymentIdentifier) => Promise<WorkingPaymentCancelResult>
   getWorkingModelLatencies: () => Promise<WorkingModelLatencyMap>
+  getWorkingModelCatalog: () => Promise<WorkingModelCatalog>
+  saveWorkingModelCatalog: (catalog: WorkingModelCatalogSaveInput) => Promise<WorkingModelCatalog>
   /** 订阅 VIP 到账后的 Working 账户更新。 */
   onWorkingAuthUpdated: (callback: (state: WorkingAuthState) => void) => () => void
 
@@ -1435,6 +1439,8 @@ const electronAPI: ElectronAPI = {
   checkWorkingPayment: (paymentId: WorkingPaymentIdentifier) => ipcRenderer.invoke(WORKING_IPC_CHANNELS.CHECK_PAYMENT, paymentId),
   cancelWorkingDiamondPayment: (paymentId: WorkingPaymentIdentifier) => ipcRenderer.invoke(WORKING_IPC_CHANNELS.CANCEL_DIAMOND_PAYMENT, paymentId),
   getWorkingModelLatencies: () => ipcRenderer.invoke(WORKING_IPC_CHANNELS.GET_MODEL_LATENCIES),
+  getWorkingModelCatalog: () => ipcRenderer.invoke(WORKING_IPC_CHANNELS.GET_MODEL_CATALOG),
+  saveWorkingModelCatalog: (catalog: WorkingModelCatalogSaveInput) => ipcRenderer.invoke(WORKING_IPC_CHANNELS.SAVE_MODEL_CATALOG, catalog),
   onWorkingAuthUpdated: (callback: (state: WorkingAuthState) => void) => {
     const listener = (_event: Electron.IpcRendererEvent, state: WorkingAuthState): void => callback(state)
     ipcRenderer.on(WORKING_IPC_CHANNELS.AUTH_UPDATED, listener)

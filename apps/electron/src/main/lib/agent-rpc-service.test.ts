@@ -14,6 +14,7 @@ const rpcSession: AgentSessionMeta = {
 const persistedRpcMessages: SDKMessage[] = []
 const appendedRpcMessages: SDKMessage[] = []
 let browserContext: { tabId: string } | undefined
+const customModelChannelId = 'copis-custom-custom-model'
 
 mock.module('./agent-session-manager', () => ({
   appendSDKMessages: (_sessionId: string, messages: SDKMessage[]) => {
@@ -99,6 +100,42 @@ mock.module('./channel-manager', () => ({
 
 mock.module('./proxy-settings-service', () => ({
   getEffectiveProxyUrl: async () => undefined,
+}))
+
+mock.module('./working-api-service', () => ({
+  getWorkingApiClient: () => ({
+    baseUrl: 'https://working.example.com',
+    getCachedUser: () => ({ id: 'vip-account', isVip: true }),
+  }),
+}))
+
+mock.module('./working-model-catalog', () => ({
+  getWorkingModelCatalogOwnerId: (user: { id?: string } | null | undefined) => user?.id,
+  getWorkingCustomModelRuntime: (channelId: string, isVip: boolean) => {
+    if (!isVip || channelId !== customModelChannelId) throw new Error('自定义模型测试配置不正确')
+    return {
+      model: {
+        id: 'custom-model',
+        name: '自定义 Responses',
+        baseUrl: 'https://models.example.com/v1',
+        modelId: 'gpt-5.5',
+        protocol: 'openai-responses',
+        thinkingLevel: 'xhigh',
+        apiKeyConfigured: true,
+      },
+      apiKey: 'custom-api-key',
+      channel: {
+        id: customModelChannelId,
+        name: '自定义 Responses',
+        provider: 'openai-responses',
+        baseUrl: 'https://models.example.com/v1',
+        models: [{ id: 'gpt-5.5', name: '自定义 Responses', enabled: true, source: 'manual' }],
+        enabled: true,
+        createdAt: 1,
+        updatedAt: 1,
+      },
+    }
+  },
 }))
 
 const resolvedRpcContexts: unknown[] = []
@@ -237,6 +274,44 @@ describe('Agent RPC 定时任务会话复用', () => {
     const prepared = await prepareAutomationRpcRun(automation, 2_000_000_000_000)
 
     expect(prepared.sessionId).toBe(rpcSession.id)
+  })
+})
+
+describe('Agent RPC VIP 自定义模型', () => {
+  test('Given VIP 用户选择 Responses 自定义模型 When 准备 Pi Worker Then 透传连接参数和思考深度', async () => {
+    const { prepareAgentRpcRun } = await import('./agent-rpc-service')
+
+    const run = await prepareAgentRpcRun({
+      sessionId: rpcSession.id,
+      userMessage: '测试自定义模型',
+      channelId: customModelChannelId,
+      modelId: 'gpt-5.5',
+      agentRuntime: 'pi',
+    })
+
+    expect(run.query).toMatchObject({
+      channelId: customModelChannelId,
+      provider: 'openai-responses',
+      baseUrl: 'https://models.example.com/v1',
+      apiKey: 'custom-api-key',
+      model: 'gpt-5.5',
+      thinkingLevel: 'xhigh',
+      openAIThinkingLevel: 'xhigh',
+    })
+  })
+
+  test('Given 旧会话携带过期 Model ID When 准备自定义模型运行 Then 使用目录中的最新 Model ID', async () => {
+    const { prepareAgentRpcRun } = await import('./agent-rpc-service')
+
+    const run = await prepareAgentRpcRun({
+      sessionId: rpcSession.id,
+      userMessage: '使用最新模型 ID',
+      channelId: customModelChannelId,
+      modelId: 'stale-model-id',
+      agentRuntime: 'pi',
+    })
+
+    expect(run.query.model).toBe('gpt-5.5')
   })
 })
 

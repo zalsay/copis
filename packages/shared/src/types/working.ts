@@ -6,6 +6,8 @@
  */
 
 import type { Channel } from './channel'
+import type { ModelOption } from './model'
+import type { AgentThinkingLevel } from './agent'
 
 export interface WorkingUser {
   id: number | string
@@ -23,6 +25,79 @@ export interface WorkingUser {
   createdAt?: string
   updatedAt?: string
   [key: string]: unknown
+}
+
+/** Composer 自定义模型分类。 */
+export interface WorkingCustomModelCategory {
+  id: string
+  name: string
+}
+
+/** Composer 自定义模型使用的 Provider 协议。 */
+export type WorkingCustomModelProtocol = 'openai-responses' | 'anthropic-messages'
+
+/** Renderer 可见的 Composer 自定义模型配置；API Key 永不明文返回。 */
+export interface WorkingCustomModel {
+  id: string
+  name: string
+  categoryId?: string
+  baseUrl: string
+  modelId: string
+  protocol: WorkingCustomModelProtocol
+  thinkingLevel: AgentThinkingLevel
+  /** 主进程是否已配置加密 API Key。 */
+  apiKeyConfigured: boolean
+}
+
+/** 保存模型时 renderer 提交的输入；apiKey 省略表示保留现有密钥，空字符串表示清除。 */
+export interface WorkingCustomModelSaveInput extends Omit<WorkingCustomModel, 'apiKeyConfigured'> {
+  apiKey?: string
+}
+
+/** Renderer 可见的模型管理配置。 */
+export interface WorkingModelCatalog {
+  models: WorkingCustomModel[]
+  categories: WorkingCustomModelCategory[]
+}
+
+/** renderer 提交的模型管理配置。 */
+export interface WorkingModelCatalogSaveInput {
+  models: WorkingCustomModelSaveInput[]
+  categories: WorkingCustomModelCategory[]
+}
+
+/** 模型选择器使用的自定义模型选项，附带分类、协议与思考深度。 */
+export interface WorkingCustomModelOption extends ModelOption {
+  categoryId?: string
+  categoryName?: string
+  /** 展示分组键；未指定分类时使用内置的“未分类”分组。 */
+  groupKey?: string
+  groupName?: string
+  thinkingLevel: AgentThinkingLevel
+  protocol: WorkingCustomModelProtocol
+}
+
+/** 空模型管理配置。 */
+export const EMPTY_WORKING_MODEL_CATALOG: WorkingModelCatalog = {
+  models: [],
+  categories: [],
+}
+
+/** 自定义模型在 Pi runtime 动态注册时使用的虚拟渠道 ID 前缀。 */
+export const COPIS_CUSTOM_CHANNEL_ID_PREFIX = 'copis-custom-'
+
+export function workingCustomModelChannelIdFor(modelId: string): string {
+  return `${COPIS_CUSTOM_CHANNEL_ID_PREFIX}${modelId}`
+}
+
+export function isWorkingCustomModelChannelId(channelId: string | null | undefined): channelId is string {
+  return Boolean(channelId && channelId.startsWith(COPIS_CUSTOM_CHANNEL_ID_PREFIX))
+}
+
+export function workingCustomModelIdFromChannelId(channelId: string | null | undefined): string | undefined {
+  if (!isWorkingCustomModelChannelId(channelId)) return undefined
+  const modelId = channelId!.slice(COPIS_CUSTOM_CHANNEL_ID_PREFIX.length)
+  return modelId || undefined
 }
 
 export interface WorkingLoginInput {
@@ -568,6 +643,8 @@ export const WORKING_IPC_CHANNELS = {
   CHECK_PAYMENT: 'working:check-payment',
   CANCEL_DIAMOND_PAYMENT: 'working:cancel-diamond-payment',
   GET_MODEL_LATENCIES: 'working:get-model-latencies',
+  GET_MODEL_CATALOG: 'working:get-model-catalog',
+  SAVE_MODEL_CATALOG: 'working:save-model-catalog',
   /** VIP 到账后主进程向 Renderer 推送最新账户资料。 */
   AUTH_UPDATED: 'working:auth-updated',
 } as const

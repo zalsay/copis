@@ -1,5 +1,5 @@
 // 浏览器模式的普通 API 走 Vite 代理；Agent 流式请求直接连接 Rust SSE 服务。
-import type { AgentExpertTeamSession, AgentQueueMessageInput, AgentStreamCompletePayload, AgentStreamEvent, AgentSendInput, MemoryExportFileInput, WorkingModelLatencyMap } from '@copis/shared'
+import type { AgentExpertTeamSession, AgentQueueMessageInput, AgentStreamCompletePayload, AgentStreamEvent, AgentSendInput, MemoryExportFileInput, WorkingModelCatalog, WorkingModelLatencyMap } from '@copis/shared'
 import {
   normalizeWorkingDiamondPackages,
   normalizeWorkingDiamondPurchaseResult,
@@ -173,6 +173,18 @@ function createHttpMethods(): Record<string, HttpMethod> {
       const payload = await request<{ data?: WorkingModelLatencyMap }>('/api/internal/working-model/first-token-latencies')
       return payload.data ?? {}
     },
+    getWorkingModelCatalog: async () => {
+      const settings = await request<{ workingModelCatalog?: WorkingModelCatalog }>('/api/settings')
+      if (!settings.workingModelCatalog) throw new Error('仅 VIP 用户可使用模型管理')
+      return settings.workingModelCatalog
+    },
+    saveWorkingModelCatalog: async (args) => {
+      const settings = await request<{ workingModelCatalog?: WorkingModelCatalog }>('/api/settings', 'PATCH', {
+        workingModelCatalog: getArgument(args, 0),
+      })
+      if (!settings.workingModelCatalog) throw new Error('仅 VIP 用户可使用模型管理')
+      return settings.workingModelCatalog
+    },
     // ===== 应用设置 =====
     getSettings: () => request('/api/settings'),
     updateSettings: (args) => request('/api/settings', 'PATCH', getArgument(args, 0)),
@@ -190,11 +202,21 @@ function createHttpMethods(): Record<string, HttpMethod> {
     },
     createAgentSession: (args) => request('/api/agent/sessions', 'POST', {
       ...(getArgument<string | undefined>(args, 0) ? { title: getArgument<string>(args, 0) } : {}),
+      ...(getArgument<string | undefined>(args, 1) ? { channelId: getArgument<string>(args, 1) } : {}),
       ...(getArgument<string | undefined>(args, 2) ? { workspaceId: getArgument<string>(args, 2) } : {}),
       ...(getArgument<string | undefined>(args, 3) ? { modelId: getArgument<string>(args, 3) } : {}),
       ...(getArgument<AgentExpertTeamSession | undefined>(args, 4) ? { expertTeamSession: getArgument<AgentExpertTeamSession>(args, 4) } : {}),
       ...(getArgument<boolean | undefined>(args, 5) ? { expertTeamSetup: getArgument<boolean>(args, 5) } : {}),
     }),
+    updateAgentSessionModel: (args) => {
+      const sessionId = encodeURIComponent(getArgument<string>(args, 0))
+      const channelId = getArgument<string | undefined>(args, 1)
+      const modelId = getArgument<string | undefined>(args, 2)
+      return request(`/api/agent/sessions/${sessionId}/model`, 'PATCH', {
+        ...(channelId ? { channelId } : {}),
+        ...(modelId ? { modelId } : {}),
+      })
+    },
     deleteAgentSession: (args) => {
       const sessionId = encodeURIComponent(getArgument<string>(args, 0))
       return request(`/api/agent/sessions/${sessionId}`, 'DELETE')

@@ -70,3 +70,10 @@ export {
   normalizeWorkingPendingDiamondPurchase,
   WorkingPaymentNormalizationError,
 } from './working-payment'
+export {
+  normalizeWorkingModelCatalogInput,
+  normalizeWorkingModelCatalog,
+  toWorkingModelCatalogView,
+  workingCustomModelProtocolToProvider,
+  workingModelCatalogToOptions,
+} from './working-model-catalog'

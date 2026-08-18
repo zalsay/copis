@@ -4,7 +4,7 @@
  * 主题模式、IPC 通道等设置相关定义。
  */
 
-import type { AgentRuntime, EnvironmentCheckResult, ThinkingConfig, AgentEffort, AgentThinkingLevel, FeishuSessionMirrorSettings, WindowsShellPreference, MemoryPolicy } from '@copis/shared'
+import type { AgentRuntime, EnvironmentCheckResult, ThinkingConfig, AgentEffort, AgentThinkingLevel, FeishuSessionMirrorSettings, WindowsShellPreference, MemoryPolicy, WorkingModelCatalog } from '@copis/shared'
 
 /** 通知音场景类型 */
 export type NotificationSoundType = 'taskComplete' | 'permissionRequest' | 'exitPlanMode' | 'planningReminder'
@@ -334,6 +334,12 @@ export interface AppSettings {
   planningWindowState?: MainWindowState
   /** 工作区开发项目列表中固定到「我的项目」分组的项目路径，按工作区 slug 分组 */
   pinnedDevProjects?: Record<string, string[]>
+  /** 旧版 VIP 模型目录字段，仅用于迁移到 working-model-catalog.json。 */
+  workingModelCatalog?: WorkingModelCatalog
+  /** 旧版模型目录归属字段，仅用于迁移。 */
+  workingModelCatalogOwnerId?: string
+  /** 旧版模型 API Key safeStorage 加密态，仅用于迁移；不返回 Renderer。 */
+  workingModelApiKeys?: Record<string, string>
 }
 
 /** 主窗口大小、位置和最大化状态 */

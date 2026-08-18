@@ -103,6 +103,7 @@ import { longTextPasteAsAttachmentEnabledAtom } from '@/atoms/ui-preferences'
 import { channelsAtom } from '@/atoms/model-atoms'
 import { todoPlanningGroupsAtom } from '@/atoms/planning-atoms'
 import { workingClientConfigAtom, workingSettingsOpenAtom } from '@/atoms/working-atoms'
+import { workingModelCatalogAtom } from '@/atoms/working-model-catalog-atoms'
 import { useOpenSession } from '@/hooks/useOpenSession'
 import { AgentSessionProvider } from '@/contexts/session-context'
 import { draftSessionIdsAtom } from '@/atoms/draft-session-atoms'
@@ -126,8 +127,10 @@ import {
   inferAgentContextWindow,
   inferContextWindow,
   isCodexFastModeSupportedModel,
+  isWorkingCustomModelChannelId,
   MAX_ATTACHMENT_SIZE,
   toFileApiContext,
+  workingModelCatalogToOptions,
   workingModeToModelId,
 } from '@copis/shared'
 import { fileToBase64, formatFileNames, getFileParentPath } from '@/lib/file-utils'
@@ -306,16 +309,32 @@ export function AgentConversationSurface({ sessionId, variant = 'main' }: AgentC
   )
   const workingMode: WorkingMode = sessionMeta?.workingMode
     ?? (sessionMetaChannelId === COPIS_WORKING_CHANNEL_ID && sessionMetaModelId === COPIS_WORKING_EXPERT_MODEL_ID ? 'expert' : 'fast')
+  const workingModelCatalog = useAtomValue(workingModelCatalogAtom)
+  const customModelOptions = React.useMemo(
+    () => workingModelCatalogToOptions(workingModelCatalog),
+    [workingModelCatalog],
+  )
   const configuredChannelId = sessionChannelMap.get(sessionId)
     ?? sessionMetaChannelId
     ?? (!hasSessionMeta ? defaultChannelId : undefined)
-  // Agent 当前只展示 Copis 内置渠道；保留普通渠道会话的兼容回退，同时允许 DeepSeek 虚拟渠道恢复。
-  const agentChannelId = configuredChannelId === COPIS_WORKING_DEEPSEEK_CHANNEL_ID
-    ? COPIS_WORKING_DEEPSEEK_CHANNEL_ID
-    : COPIS_WORKING_CHANNEL_ID
+  const candidateChannelId = configuredChannelId ?? undefined
+  // Agent 默认使用 Copis 内置渠道，同时允许 VIP 自定义模型虚拟渠道恢复。
+  const agentChannelId = isWorkingCustomModelChannelId(candidateChannelId)
+    ? candidateChannelId
+    : candidateChannelId === COPIS_WORKING_DEEPSEEK_CHANNEL_ID
+      ? COPIS_WORKING_DEEPSEEK_CHANNEL_ID
+      : COPIS_WORKING_CHANNEL_ID
+  const selectedCustomModel = React.useMemo(
+    () => isWorkingCustomModelChannelId(agentChannelId)
+      ? customModelOptions.find((item) => item.channelId === agentChannelId)
+      : undefined,
+    [agentChannelId, customModelOptions],
+  )
   const agentModelId = agentChannelId === COPIS_WORKING_DEEPSEEK_CHANNEL_ID
     ? sessionModelMap.get(sessionId) ?? sessionMetaModelId ?? COPIS_WORKING_DEEPSEEK_FAST_MODEL_ID
-    : workingModeToModelId(workingMode)
+    : isWorkingCustomModelChannelId(agentChannelId)
+      ? selectedCustomModel?.modelId ?? sessionModelMap.get(sessionId) ?? sessionMetaModelId ?? ''
+      : workingModeToModelId(workingMode)
   const setWorkingSettingsOpen = useSetAtom(workingSettingsOpenAtom)
   const setDraftSessionIds = useSetAtom(draftSessionIdsAtom)
   const globalWorkspaceId = useAtomValue(currentAgentWorkspaceIdAtom)
@@ -531,8 +550,24 @@ export function AgentConversationSurface({ sessionId, variant = 'main' }: AgentC
       ? workingChannel
       : stableChannelId === COPIS_WORKING_DEEPSEEK_CHANNEL_ID
         ? deepSeekChannel
-      : stableChannelId ? globalChannels.find((channel) => channel.id === stableChannelId) : undefined,
-    [deepSeekChannel, globalChannels, stableChannelId, workingChannel],
+        : isWorkingCustomModelChannelId(stableChannelId)
+          ? (() => {
+            const option = selectedCustomModel
+            if (!option) return undefined
+            return {
+              id: option.channelId,
+              name: option.channelName,
+              provider: option.provider,
+              baseUrl: '',
+              apiKey: '',
+              models: [{ id: option.modelId, name: option.modelName, enabled: true, source: 'manual' as const }],
+              enabled: true,
+              createdAt: 0,
+              updatedAt: 0,
+            }
+          })()
+          : stableChannelId ? globalChannels.find((channel) => channel.id === stableChannelId) : undefined,
+    [deepSeekChannel, globalChannels, selectedCustomModel, stableChannelId, workingChannel],
   )
   const planQuotaChannelId = stableChannel && supportsChannelPlanQuota(stableChannel)
     ? stableChannel.id
@@ -2804,6 +2839,7 @@ export function AgentConversationSurface({ sessionId, variant = 'main' }: AgentC
           useCopisLogo
           useSharedOpenState={!compact}
           placement={compact ? 'composer' : 'dialog'}
+          customModelOptions={customModelOptions}
         />
       </div>
       {sendControl}

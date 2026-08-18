@@ -79,6 +79,78 @@ describe('Rust HTTP API 业务桥契约', () => {
     })
   })
 
+  test('Given 非 VIP 用户 When 读取或保存模型目录 Then 隐藏目录并返回 vip_required', async () => {
+    const settings = {
+      themeMode: 'dark' as const,
+      workingModelCatalog: {
+        categories: [],
+        models: [],
+      },
+      workingModelApiKeys: { 'model-1': 'encrypted-secret' },
+    }
+    let updateCalls = 0
+    const dependencies: HttpApiDependencies = {
+      ...createDependencies(),
+      getWorkingClient: (() => ({
+        baseUrl: 'https://backend.example.test',
+        getCachedUser: () => ({ id: 1, isVip: false }),
+      })) as unknown as HttpApiDependencies['getWorkingClient'],
+      getAppSettings: () => settings,
+      updateAppSettings: () => {
+        updateCalls += 1
+        return settings
+      },
+    }
+
+    await expect(handleHttpApiRequest({ method: 'GET', path: '/api/settings' }, dependencies)).resolves.toEqual({
+      status: 200,
+      body: { themeMode: 'dark' },
+    })
+    await expect(handleHttpApiRequest({
+      method: 'PATCH',
+      path: '/api/settings',
+      body: JSON.stringify({ themeMode: 'light', workingModelCatalog: { categories: [], models: [] } }),
+    }, dependencies)).resolves.toEqual({
+      status: 403,
+      body: { error: '仅 VIP 用户可使用模型管理', code: 'vip_required' },
+    })
+    expect(updateCalls).toBe(0)
+    expect(settings.themeMode).toBe('dark')
+
+    await expect(handleHttpApiRequest({
+      method: 'PATCH',
+      path: '/api/settings',
+      body: JSON.stringify({
+        agentChannelId: 'copis-custom-ghost',
+        agentModelId: 'ghost',
+      }),
+    }, dependencies)).resolves.toEqual({
+      status: 403,
+      body: { error: '仅 VIP 用户可使用模型管理', code: 'vip_required' },
+    })
+    expect(updateCalls).toBe(0)
+  })
+
+  test('Given VIP 用户尚未保存模型目录 When 通过 HTTP 读取设置 Then 返回空模型目录', async () => {
+    const dependencies: HttpApiDependencies = {
+      ...createDependencies(),
+      getWorkingClient: (() => ({
+        baseUrl: 'https://backend.example.test',
+        getCachedUser: () => ({ id: 7, isVip: true }),
+      })) as unknown as HttpApiDependencies['getWorkingClient'],
+      getAppSettings: () => ({ themeMode: 'dark' }),
+      getWorkingModelCatalog: () => ({ categories: [], models: [] }),
+    }
+
+    await expect(handleHttpApiRequest({ method: 'GET', path: '/api/settings' }, dependencies)).resolves.toEqual({
+      status: 200,
+      body: {
+        themeMode: 'dark',
+        workingModelCatalog: { categories: [], models: [] },
+      },
+    })
+  })
+
   test('MCP 测试路由缺少 entry 时返回 400', async () => {
     const response = await handleHttpApiRequest({
       method: 'POST',
@@ -254,6 +326,68 @@ describe('Rust HTTP API 业务桥契约', () => {
       undefined,
       { runId: 'run-1', schemaId: 'research-v1', schemaRevisionId: 8 },
     ]])
+  })
+
+  test('Given 非 VIP 用户 When 浏览器请求创建自定义模型会话 Then 在写入会话前拒绝', async () => {
+    const workspace = { id: 'workspace-1', slug: 'project-a' } as AgentWorkspace
+    let createCalls = 0
+    const dependencies: HttpApiDependencies = {
+      ...createDependencies(),
+      getWorkingClient: (() => ({
+        baseUrl: 'https://backend.example.test',
+        getCachedUser: () => ({ id: 7, isVip: false }),
+      })) as unknown as HttpApiDependencies['getWorkingClient'],
+      getAgentApi: async (): Promise<AgentHttpFacade> => ({
+        ensureDefaultWorkspace: () => workspace,
+        listAgentWorkspaces: () => [workspace],
+        createAgentSession: () => {
+          createCalls += 1
+          return { id: 'session-1' } as AgentSessionMeta
+        },
+      } as unknown as AgentHttpFacade),
+    }
+
+    await expect(handleHttpApiRequest({
+      method: 'POST',
+      path: '/api/agent/sessions',
+      body: JSON.stringify({
+        channelId: 'copis-custom-model-1',
+        modelId: 'provider-model-1',
+        workspaceId: workspace.id,
+      }),
+    }, dependencies)).resolves.toEqual({
+      status: 403,
+      body: { error: '仅 VIP 用户可使用模型管理', code: 'vip_required' },
+    })
+    expect(createCalls).toBe(0)
+  })
+
+  test('Given 非 VIP 用户 When 浏览器持久化自定义模型选择 Then 在写入会话前拒绝', async () => {
+    const dependencies: HttpApiDependencies = {
+      ...createDependencies(),
+      getWorkingClient: (() => ({
+        baseUrl: 'https://backend.example.test',
+        getCachedUser: () => ({ id: 7, isVip: false }),
+      })) as unknown as HttpApiDependencies['getWorkingClient'],
+      getAgentApi: async (): Promise<AgentHttpFacade> => ({
+        getAgentSessionMeta: () => ({ id: 'session-1' } as AgentSessionMeta),
+        updateAgentSessionModel: () => {
+          throw new Error('不应写入会话')
+        },
+      } as unknown as AgentHttpFacade),
+    }
+
+    await expect(handleHttpApiRequest({
+      method: 'PATCH',
+      path: '/api/agent/sessions/session-1/model',
+      body: JSON.stringify({
+        channelId: 'copis-custom-model-1',
+        modelId: 'provider-model-1',
+      }),
+    }, dependencies)).resolves.toEqual({
+      status: 403,
+      body: { error: '仅 VIP 用户可使用模型管理', code: 'vip_required' },
+    })
   })
 
   test('删除 Agent 会话路由只删除指定会话并返回 204', async () => {

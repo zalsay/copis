@@ -15,9 +15,12 @@ import {
   COPIS_WORKING_EXPERT_MODEL_ID,
   createCopisWorkingChannel,
   createCopisWorkingDeepSeekChannel,
+  workingModelCatalogToOptions,
   workingModeToModelId,
 } from '@copis/shared'
+import { useSetAtom } from 'jotai'
 import { workingClientConfigAtom } from '@/atoms/working-atoms'
+import { initializeWorkingModelCatalog, workingModelCatalogAtom } from '@/atoms/working-model-catalog-atoms'
 import { ModelSelector } from '@/components/model/ModelSelector'
 import { RichTextInput } from '@/components/ai-elements/rich-text-input'
 import { InputToolbarOverflow, type ToolbarItem } from '@/components/ai-elements/InputToolbarOverflow'
@@ -69,6 +72,8 @@ export function WelcomeComposer(): React.ReactElement {
   const [error, setError] = React.useState<string | null>(null)
   const sessionRef = React.useRef<AgentSessionMeta | null>(null)
   const workingClientConfig = useAtomValue(workingClientConfigAtom)
+  const workingModelCatalog = useAtomValue(workingModelCatalogAtom)
+  const setWorkingModelCatalog = useSetAtom(workingModelCatalogAtom)
   const workingChannel = React.useMemo(
     () => workingClientConfig ? createCopisWorkingChannel(workingClientConfig.backendUrl) : null,
     [workingClientConfig],
@@ -77,11 +82,22 @@ export function WelcomeComposer(): React.ReactElement {
     () => workingClientConfig ? createCopisWorkingDeepSeekChannel(workingClientConfig.backendUrl) : null,
     [workingClientConfig],
   )
-  const [selectedModel, setSelectedModel] = React.useState<{ channelId: string; modelId: string }>({
+  const [selectedModel, setSelectedModel] = React.useState<{
+    channelId: string
+    modelId: string
+  }>({
     channelId: COPIS_WORKING_DEEPSEEK_CHANNEL_ID,
     modelId: COPIS_WORKING_DEEPSEEK_FAST_MODEL_ID,
   })
   const selectedModelId = selectedModel.modelId
+  const customModelOptions = React.useMemo(
+    () => workingModelCatalogToOptions(workingModelCatalog),
+    [workingModelCatalog],
+  )
+
+  React.useEffect(() => {
+    void initializeWorkingModelCatalog(setWorkingModelCatalog)
+  }, [setWorkingModelCatalog])
 
   React.useEffect(() => {
     let disposed = false
@@ -179,7 +195,10 @@ export function WelcomeComposer(): React.ReactElement {
     }
     if (option.channelId === COPIS_WORKING_DEEPSEEK_CHANNEL_ID
       && option.modelId !== COPIS_WORKING_DEEPSEEK_FAST_MODEL_ID) return
-    setSelectedModel({ channelId: option.channelId, modelId: option.modelId })
+    setSelectedModel({
+      channelId: option.channelId,
+      modelId: option.modelId,
+    })
   }, [])
 
   const toolbarItems = React.useMemo<ToolbarItem[]>(() => [
@@ -231,6 +250,7 @@ export function WelcomeComposer(): React.ReactElement {
         showChannelInTrigger
         useCopisLogo
         useSharedOpenState
+        customModelOptions={customModelOptions}
       />
       {sending ? (
         <Button

@@ -25,6 +25,7 @@ export const workingVipStatusAtom = atom<WorkingVipStatus | null>(null)
 /** Working 设置面板当前区块 */
 export type WorkingSettingsSectionId =
   | 'settings'
+  | 'model-management'
   | 'messages'
   | 'orders'
   | 'tutorial'

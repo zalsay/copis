@@ -39,23 +39,47 @@ import {
   COPIS_WORKING_EXPERT_MODEL_ID,
   COPIS_WORKING_FAST_MODEL_ID,
 } from '@copis/shared'
-import type { Channel, ModelOption, ProviderType, WorkingModelLatencyMap } from '@copis/shared'
+import type { Channel, ModelOption, ProviderType, WorkingCustomModelOption, WorkingModelLatencyMap } from '@copis/shared'
 import { ChannelPlanQuotaBadge } from './ChannelPlanQuotaBadge'
 import { buildModelOptions } from './model-selector-utils'
 import { ModelLatencySignal } from './ModelLatencySignal'
 
-/** 按渠道分组模型选项 */
-function groupByChannel(options: ModelOption[]): Map<string, ModelOption[]> {
-  const groups = new Map<string, ModelOption[]>()
+const EMPTY_CUSTOM_MODEL_OPTIONS: readonly WorkingCustomModelOption[] = []
 
-  for (const option of options) {
+interface ModelGroup {
+  key: string
+  name: string
+  isCustom: boolean
+  options: ModelOption[]
+}
+
+/** 内置模型按渠道分组，自定义模型按用户配置的分类分组。 */
+function groupModelOptions(
+  baseOptions: ModelOption[],
+  customOptions: readonly WorkingCustomModelOption[],
+): ModelGroup[] {
+  const groups = new Map<string, ModelGroup>()
+
+  for (const option of baseOptions) {
     const key = option.channelId
-    const group = groups.get(key) ?? []
-    group.push(option)
+    const group = groups.get(key) ?? { key, name: option.channelName, isCustom: false, options: [] }
+    group.options.push(option)
     groups.set(key, group)
   }
 
-  return groups
+  for (const option of customOptions) {
+    const key = option.groupKey ?? option.categoryId ?? `custom:${option.modelId}`
+    const group = groups.get(key) ?? {
+      key,
+      name: option.groupName ?? option.categoryName ?? '未分类',
+      isCustom: true,
+      options: [],
+    }
+    group.options.push(option)
+    groups.set(key, group)
+  }
+
+  return [...groups.values()]
 }
 
 function getModelDescription(option: Pick<ModelOption, 'channelId' | 'modelId'>): string | undefined {
@@ -111,6 +135,8 @@ interface ModelSelectorProps {
   useSharedOpenState?: boolean
   /** 模型列表展示位置；Composer 使用紧贴输入框并向上展开的抽屉。 */
   placement?: 'dialog' | 'composer'
+  /** Composer 自定义模型配置，按用户分类分组展示；选择后仍走现有 Working 请求链。 */
+  customModelOptions?: readonly WorkingCustomModelOption[]
 }
 
 export function ModelSelector({
@@ -125,6 +151,7 @@ export function ModelSelector({
   excludedProviders,
   useSharedOpenState = false,
   placement = 'dialog',
+  customModelOptions,
 }: ModelSelectorProps = {}): React.ReactElement {
   const setGlobalModel = useSetAtom(selectedModelAtom)
   const globalSelectedModel = useAtomValue(selectedModelAtom)
@@ -166,24 +193,32 @@ export function ModelSelector({
     () => buildModelOptions(availableChannels, filterChannelId, filterChannelIds, excludedProviders),
     [availableChannels, filterChannelId, filterChannelIds, excludedProviders],
   )
-  const grouped = React.useMemo(() => groupByChannel(modelOptions), [modelOptions])
+  const customOptions = customModelOptions ?? EMPTY_CUSTOM_MODEL_OPTIONS
+  const allOptions = React.useMemo(
+    () => [...modelOptions, ...customOptions],
+    [customOptions, modelOptions],
+  )
+  const grouped = React.useMemo(
+    () => groupModelOptions(modelOptions, customOptions),
+    [customOptions, modelOptions],
+  )
 
   // 搜索过滤
   const filteredGrouped = React.useMemo(() => {
     if (!search.trim()) return grouped
 
     const query = search.toLowerCase()
-    const filtered = new Map<string, ModelOption[]>()
+    const filtered: ModelGroup[] = []
 
-    for (const [channelId, options] of grouped.entries()) {
-      const matchedOptions = options.filter(
+    for (const group of grouped) {
+      const matchedOptions = group.options.filter(
         (o) =>
           o.modelName.toLowerCase().includes(query) ||
           getModelDescription(o)?.toLowerCase().includes(query) ||
           o.channelName.toLowerCase().includes(query)
       )
-      if (matchedOptions.length > 0) {
-        filtered.set(channelId, matchedOptions)
+      if (matchedOptions.length > 0 || group.name.toLowerCase().includes(query)) {
+        filtered.push({ ...group, options: matchedOptions.length > 0 ? matchedOptions : group.options })
       }
     }
 
@@ -193,8 +228,8 @@ export function ModelSelector({
   // 扁平化过滤后的模型列表，用于键盘导航
   const flatOptions = React.useMemo(() => {
     const result: ModelOption[] = []
-    for (const options of filteredGrouped.values()) {
-      result.push(...options)
+    for (const group of filteredGrouped) {
+      result.push(...group.options)
     }
     return result
   }, [filteredGrouped])
@@ -218,10 +253,10 @@ export function ModelSelector({
   // 查找当前选中的模型信息
   const currentModelInfo = React.useMemo(() => {
     if (!selectedModel) return null
-    return modelOptions.find(
+    return allOptions.find(
       (o) => o.channelId === selectedModel.channelId && o.modelId === selectedModel.modelId
     ) ?? null
-  }, [selectedModel, modelOptions])
+  }, [allOptions, selectedModel])
 
   // 保持上次有效的模型信息，避免渠道未加载时闪烁"选择模型"
   const stableModelInfoRef = React.useRef(currentModelInfo)
@@ -281,38 +316,42 @@ export function ModelSelector({
 
       {/* 模型列表 */}
       <div id={pickerListId} role="listbox" aria-label="可用模型" className="max-h-[420px] overflow-y-auto pb-3 scrollbar-thin">
-        {filteredGrouped.size === 0 ? (
+        {filteredGrouped.length === 0 ? (
           <div className="py-10 text-center text-sm text-muted-foreground">
             未找到模型
           </div>
         ) : (
           (() => {
             let flatIndex = 0
-            return Array.from(filteredGrouped.entries()).map(([channelId, options]) => {
-              const first = options[0]
+            return filteredGrouped.map((group) => {
+              const first = group.options[0]
               if (!first) return null
-              const channel = availableChannels.find((c) => c.id === channelId)
+              const channel = group.isCustom ? undefined : availableChannels.find((c) => c.id === group.key)
               const useDeepSeekLogo = first.channelId === COPIS_WORKING_DEEPSEEK_CHANNEL_ID
 
               return (
-                <div key={channelId}>
+                <div key={group.key}>
                   {/* 供应商标题行 - 灰色背景 */}
                   <div className="flex items-center gap-2 px-4 py-2 bg-muted/50 border-b border-border/30">
-                    <img
-                      src={useDeepSeekLogo
-                        ? getModelLogo(first.modelId, first.provider)
-                        : useCopisLogo ? CopisTemplateLogo : channel ? getChannelLogo(channel) : DefaultLogo}
-                      alt={first.channelName}
-                      className="size-5 rounded object-cover"
-                    />
+                    {group.isCustom ? (
+                      <Cpu aria-hidden="true" className="size-5 text-muted-foreground" />
+                    ) : (
+                      <img
+                        src={useDeepSeekLogo
+                          ? getModelLogo(first.modelId, first.provider)
+                          : useCopisLogo ? CopisTemplateLogo : channel ? getChannelLogo(channel) : DefaultLogo}
+                        alt={first.channelName}
+                        className="size-5 rounded object-cover"
+                      />
+                    )}
                     <span className="min-w-0 truncate text-sm font-medium text-muted-foreground">
-                      {first.channelName}
+                      {group.name}
                     </span>
-                    {channel ? <ChannelPlanQuotaBadge channel={channel} /> : null}
+                    {!group.isCustom && channel ? <ChannelPlanQuotaBadge channel={channel} /> : null}
                   </div>
 
                   {/* 该渠道下的模型列表 */}
-                  {options.map((option) => {
+                  {group.options.map((option) => {
                     const modelDescription = getModelDescription(option)
                     const isSelected =
                       selectedModel?.channelId === option.channelId &&
@@ -367,7 +406,7 @@ export function ModelSelector({
     </>
   )
 
-  if (channelsLoaded && modelOptions.length === 0) {
+  if (channelsLoaded && allOptions.length === 0) {
     return (
       <div className="flex items-center gap-1.5 text-xs text-muted-foreground px-2 py-1">
         <Cpu className="size-3.5" />

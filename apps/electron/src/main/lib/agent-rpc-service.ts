@@ -8,6 +8,7 @@ import {
   createCopisWorkingChannelForId,
   isCopisPermissionMode,
   isCopisWorkingChannelId,
+  isWorkingCustomModelChannelId,
   normalizeWorkingMode,
   workingModeToModelId,
   type AgentQueueMessageInput,
@@ -31,6 +32,7 @@ import {
   resolveXaiOAuthCredentials,
 } from './channel-manager'
 import { getWorkingApiClient } from './working-api-service'
+import { getWorkingCustomModelRuntime, getWorkingModelCatalogOwnerId } from './working-model-catalog'
 import {
   appendSDKMessages,
   createAgentSession,
@@ -454,21 +456,33 @@ export async function prepareAgentRpcRun(input: AgentSendInput): Promise<PiWorke
 
   const channelId = input.channelId ?? session.channelId ?? COPIS_WORKING_CHANNEL_ID
   const workingClient = isCopisWorkingChannelId(channelId) ? getWorkingApiClient() : undefined
+  const workingUser = getWorkingApiClient().getCachedUser()
+  const customModelRuntime = isWorkingCustomModelChannelId(channelId)
+    ? getWorkingCustomModelRuntime(
+      channelId,
+      workingUser?.isVip === true,
+      getWorkingModelCatalogOwnerId(workingUser),
+    )
+    : undefined
   const channel = workingClient
     ? createCopisWorkingChannelForId(workingClient.baseUrl, channelId)
-    : getChannelById(channelId)
+    : customModelRuntime?.channel ?? getChannelById(channelId)
   if (!channel) throw new Error(`渠道不存在: ${channelId}`)
   if (!channel.enabled) throw new Error('当前渠道已禁用')
 
   const workingMode = channelId === COPIS_WORKING_CHANNEL_ID
     ? normalizeWorkingMode(input.workingMode ?? session.workingMode)
     : undefined
-  const modelId = workingClient
+  const modelId = customModelRuntime
+    ? customModelRuntime.model.modelId
+    : workingClient
     ? channelId === COPIS_WORKING_CHANNEL_ID
       ? workingModeToModelId(workingMode ?? 'fast')
       : input.modelId ?? channel.models[0]?.id ?? DEFAULT_PI_MODEL_ID
     : input.modelId ?? session.modelId ?? DEFAULT_PI_MODEL_ID
-  const credentials = await resolveWorkerCredentials(channelId, channel.provider)
+  const credentials = customModelRuntime
+    ? { apiKey: customModelRuntime.apiKey }
+    : await resolveWorkerCredentials(channelId, channel.provider)
   const settings = getSettings()
   const workspaceSlug = workspace.slug
   const browserBinding = getBrowserAgentContext(input.sessionId)
@@ -603,7 +617,11 @@ export async function prepareAgentRpcRun(input: AgentSendInput): Promise<PiWorke
     ...(session.codexFastMode && channel.provider === 'openai-codex' ? { codexFastMode: true } : {}),
     ...(credentials.codexOAuthCredentials ? { codexOAuthCredentials: credentials.codexOAuthCredentials } : {}),
     ...(credentials.xaiOAuthCredentials ? { xaiOAuthCredentials: credentials.xaiOAuthCredentials } : {}),
-    thinkingLevel: settings.agentEffort === 'max' ? 'xhigh' : settings.agentEffort ?? 'high',
+    ...(customModelRuntime?.model.protocol === 'openai-responses'
+      ? { openAIThinkingLevel: customModelRuntime.model.thinkingLevel }
+      : {}),
+    thinkingLevel: customModelRuntime?.model.thinkingLevel
+      ?? (settings.agentEffort === 'max' ? 'xhigh' : settings.agentEffort ?? 'high'),
     retryRunStartedAt: startedAt,
     ...(fileAccessPolicy ? { fileAccessPolicy, useRustFileApi: true } : {}),
     browserPageControl: issueBrowserAgentWorkerCapability({

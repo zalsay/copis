@@ -264,6 +264,11 @@ export function getWorkingAuthPath(): string {
   return join(getConfigDir(), 'working-auth.json')
 }
 
+/** Copis Working 自定义模型目录路径；按 Working 账号保存模型和加密密钥。 */
+export function getWorkingModelCatalogPath(): string {
+  return join(getConfigDir(), 'working-model-catalog.json')
+}
+
 /**
  * 获取系统默认 App 探测缓存路径
  *

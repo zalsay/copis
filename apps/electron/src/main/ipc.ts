@@ -351,6 +351,15 @@ import { wechatBridge } from './lib/wechat-bridge'
 import { getWorkingApiClient } from './lib/working-api-service'
 import { getWorkingModelLatencies } from './lib/working-model-latencies'
 import { assertWorkingWorkspaceCreationAllowed } from './lib/working-workspace-limit'
+import {
+  assertWorkingCustomModelSelection,
+  assertWorkingModelCatalogVip,
+  filterWorkingModelCatalogUpdate,
+  getWorkingModelCatalogOwnerId,
+  getWorkingModelCatalog,
+  redactWorkingModelCatalog,
+  saveWorkingModelCatalog,
+} from './lib/working-model-catalog'
 import type {
   WorkingLoginInput,
   WorkingPasswordResetInput,
@@ -360,6 +369,7 @@ import type {
   WorkingVerifyPasswordResetCodeInput,
   WorkingWorkspaceInput,
   WorkingModelLatencyMap,
+  WorkingModelCatalogSaveInput,
 } from '@copis/shared'
 
 /** 文件浏览器中需要隐藏的系统文件 */
@@ -931,6 +941,14 @@ async function assertBrowserWorkflowMainWindow(senderId: number): Promise<void> 
   }
 }
 
+function getWorkingModelCatalogAccess(): { isVip: boolean; ownerId?: string } {
+  const user = getWorkingApiClient().getCachedUser()
+  return {
+    isVip: user?.isVip === true,
+    ownerId: getWorkingModelCatalogOwnerId(user),
+  }
+}
+
 export function registerIpcHandlers(): void {
   console.log('[IPC] 正在注册 IPC 处理器...')
 
@@ -1259,6 +1277,18 @@ export function registerIpcHandlers(): void {
       return getWorkingModelLatencies()
     }
   )
+
+  ipcMain.handle(WORKING_IPC_CHANNELS.GET_MODEL_CATALOG, async () => {
+    const access = getWorkingModelCatalogAccess()
+    assertWorkingModelCatalogVip(access.isVip)
+    return getWorkingModelCatalog(access.isVip, access.ownerId)
+  })
+
+  ipcMain.handle(WORKING_IPC_CHANNELS.SAVE_MODEL_CATALOG, async (_, catalog: WorkingModelCatalogSaveInput) => {
+    const access = getWorkingModelCatalogAccess()
+    assertWorkingModelCatalogVip(access.isVip)
+    return saveWorkingModelCatalog(catalog, access.isVip, access.ownerId)
+  })
 
   // ===== 主程序与运行时相关 =====
 
@@ -1821,7 +1851,8 @@ export function registerIpcHandlers(): void {
   ipcMain.handle(
     SETTINGS_IPC_CHANNELS.GET,
     async (): Promise<AppSettings> => {
-      return getSettings()
+      const access = getWorkingModelCatalogAccess()
+      return redactWorkingModelCatalog(getSettings(), access.isVip, access.ownerId)
     }
   )
 
@@ -1829,13 +1860,19 @@ export function registerIpcHandlers(): void {
   ipcMain.handle(
     SETTINGS_IPC_CHANNELS.UPDATE,
     async (event, updates: Partial<AppSettings>): Promise<AppSettings> => {
-      const result = await updateSettings(updates)
+      const access = getWorkingModelCatalogAccess()
+      const safeUpdates = filterWorkingModelCatalogUpdate(
+        updates,
+        access.isVip,
+        access.ownerId,
+      )
+      const result = await updateSettings(safeUpdates)
 
-      if (updates.feishuSessionMirror !== undefined) {
+      if (safeUpdates.feishuSessionMirror !== undefined) {
         syncFeishuSyncSleepBlocker(result)
       }
       // 主题相关设置变化时，广播给所有窗口（跨窗口同步，如 Quick Task 面板）
-      if (updates.themeMode !== undefined || updates.themeStyle !== undefined || updates.interfaceVariant !== undefined) {
+      if (safeUpdates.themeMode !== undefined || safeUpdates.themeStyle !== undefined || safeUpdates.interfaceVariant !== undefined) {
         const payload = {
           themeMode: result.themeMode,
           themeStyle: result.themeStyle,
@@ -1849,7 +1886,7 @@ export function registerIpcHandlers(): void {
         })
       }
 
-      return result
+      return redactWorkingModelCatalog(result, access.isVip, access.ownerId)
     }
   )
 
@@ -1858,8 +1895,14 @@ export function registerIpcHandlers(): void {
     SETTINGS_IPC_CHANNELS.UPDATE_SYNC,
     (event, updates: Partial<AppSettings>) => {
       try {
-        const result = updateSettings(updates)
-        if (updates.feishuSessionMirror !== undefined) {
+        const access = getWorkingModelCatalogAccess()
+        const safeUpdates = filterWorkingModelCatalogUpdate(
+          updates,
+          access.isVip,
+          access.ownerId,
+        )
+        const result = updateSettings(safeUpdates)
+        if (safeUpdates.feishuSessionMirror !== undefined) {
           syncFeishuSyncSleepBlocker(result)
         }
         event.returnValue = true
@@ -2151,6 +2194,8 @@ export function registerIpcHandlers(): void {
   ipcMain.handle(
     AGENT_IPC_CHANNELS.CREATE_SESSION,
     async (_, title?: string, channelId?: string, workspaceId?: string, modelId?: string, expertTeamSession?: AgentExpertTeamSession, expertTeamSetup?: boolean): Promise<AgentSessionMeta> => {
+      const access = getWorkingModelCatalogAccess()
+      assertWorkingCustomModelSelection(channelId, modelId, access.isVip, access.ownerId)
       const session = createAgentSession(title, channelId, workspaceId, modelId, getSettings().agentRuntime ?? 'pi', undefined, expertTeamSession, expertTeamSetup)
       feishuBridgeManager.ensureSessionMirror(session).catch((error) => {
         console.error('[飞书 Session 镜像] 新会话建群失败:', error)
@@ -2192,6 +2237,8 @@ export function registerIpcHandlers(): void {
     AGENT_IPC_CHANNELS.UPDATE_SESSION_MODEL,
     async (_, id: string, channelId?: string, modelId?: string): Promise<AgentSessionMeta> => {
       // 模型切换允许在运行中提交；当前 query 继续使用启动时的模型，下一轮读取新配置。
+      const access = getWorkingModelCatalogAccess()
+      assertWorkingCustomModelSelection(channelId, modelId, access.isVip, access.ownerId)
       return updateAgentSessionMeta(id, { channelId, modelId })
     }
   )
@@ -2367,6 +2414,8 @@ export function registerIpcHandlers(): void {
   ipcMain.handle(
     AGENT_IPC_CHANNELS.CREATE_PROJECT,
     async (_, input: import('@copis/shared').CreateAgentWorkspaceInput, channelId?: string, modelId?: string): Promise<import('@copis/shared').CreateAgentProjectResult> => {
+      const access = getWorkingModelCatalogAccess()
+      assertWorkingCustomModelSelection(channelId, modelId, access.isVip, access.ownerId)
       assertWorkingWorkspaceCreationAllowed(
         listAgentWorkspaces(),
         getWorkingApiClient().getCachedUser()?.isVip,
@@ -2816,6 +2865,8 @@ export function registerIpcHandlers(): void {
       if (await isAgentSessionActive(sessionId)) {
         throw new Error('Agent 正在运行，完成后再切换 Working 模式')
       }
+      const access = getWorkingModelCatalogAccess()
+      assertWorkingCustomModelSelection(channelId, modelId, access.isVip, access.ownerId)
       const updates: Partial<Pick<AgentSessionMeta, 'channelId' | 'modelId' | 'workingMode'>> = { workingMode: mode }
       if (channelId !== undefined) updates.channelId = channelId
       if (modelId !== undefined) updates.modelId = modelId
@@ -4901,6 +4952,8 @@ export function registerIpcHandlers(): void {
     if (!isPlanningTimestamp(input.expectedUpdatedAt)) throw new Error('Todo expectedUpdatedAt 非法')
     if (typeof input.channelId !== 'string' || !input.channelId.trim()) throw new Error('Agent 渠道必填')
     if (input.modelId !== undefined && (typeof input.modelId !== 'string' || !input.modelId.trim())) throw new Error('Agent 模型非法')
+    const access = getWorkingModelCatalogAccess()
+    assertWorkingCustomModelSelection(input.channelId, input.modelId, access.isVip, access.ownerId)
     if (!getAgentWorkspace(input.workspaceId)) throw new Error('所选项目已不可用，请重新选择')
 
     const existing = getTodo(input.todoId)
