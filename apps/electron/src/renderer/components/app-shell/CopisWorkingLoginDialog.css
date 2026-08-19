@@ -1,4 +1,5 @@
-.copis-working-auth-backdrop {
+.copis-working-auth-backdrop,
+.copis-working-reset-backdrop {
   position: fixed;
   inset: 0;
   z-index: 100;
@@ -34,7 +35,8 @@
   background: hsl(var(--dialog));
 }
 
-.copis-working-auth-modal {
+.copis-working-auth-modal,
+.copis-working-reset-modal {
   width: min(100%, 500px);
   max-height: calc(100dvh - 40px);
   overflow: auto;
@@ -100,17 +102,55 @@
   opacity: 0.55;
 }
 
-.copis-working-auth-oauth:focus-visible {
+.copis-working-auth-switch {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+  margin-top: 18px;
+  padding: 4px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 10px;
+  background: rgba(127, 127, 127, 0.08);
+}
+
+.copis-working-auth-switch button {
+  display: inline-flex;
+  min-height: 38px;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: #b8b8c0;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.copis-working-auth-switch button.active {
+  background: #3a3a40;
+  color: #f2f2f3;
+  box-shadow: 0 5px 16px rgba(0, 0, 0, 0.16);
+}
+
+.copis-working-auth-switch button:focus-visible,
+.copis-working-auth-link:focus-visible,
+.copis-working-auth-footer-link:focus-visible,
+.copis-working-auth-submit:focus-visible,
+.copis-working-auth-secondary:focus-visible,
+.copis-working-auth-code-row button:focus-visible {
   outline: 2px solid var(--ui-primary);
   outline-offset: 2px;
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--ui-primary) 22%, transparent);
 }
 
 .copis-working-auth-header {
-  margin: 22px 0 18px;
+  margin: 22px 0;
 }
 
-.copis-working-auth-header h1 {
+.copis-working-auth-header h1,
+.copis-working-reset-modal h2 {
   margin: 0 0 7px;
   color: #f2f2f3;
   font-size: 30px;
@@ -118,7 +158,8 @@
   letter-spacing: 0;
 }
 
-.copis-working-auth-header p {
+.copis-working-auth-header p,
+.copis-working-reset-modal .copis-working-auth-top p {
   margin: 0;
   color: #b8b8c0;
   font-size: 13px;
@@ -126,41 +167,146 @@
   line-height: 1.6;
 }
 
-.copis-working-auth-oauth-card {
-  display: flex;
-  align-items: flex-start;
-  gap: 12px;
-  padding: 16px;
-  border: 1px solid color-mix(in srgb, var(--ui-primary) 24%, rgba(255, 255, 255, 0.14));
-  border-radius: 12px;
-  background: color-mix(in srgb, var(--ui-primary) 8%, transparent);
-}
-
-.copis-working-auth-oauth-mark {
+.copis-working-auth-form,
+.copis-working-reset-body {
   display: grid;
-  width: 40px;
-  height: 40px;
-  flex: 0 0 auto;
-  place-items: center;
-  border-radius: 10px;
-  background: var(--ui-primary);
-  color: var(--ui-primary-foreground);
+  gap: 17px;
 }
 
-.copis-working-auth-oauth-card strong {
-  display: block;
-  margin-top: 1px;
+.copis-working-auth-field {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+}
+
+.copis-working-auth-field > span {
   color: #f2f2f3;
-  font-size: 14px;
-  font-weight: 850;
+  font-size: 13px;
+  font-weight: 800;
 }
 
-.copis-working-auth-oauth-card p {
-  margin: 5px 0 0;
+.copis-working-auth-field > span small {
   color: #b8b8c0;
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 600;
-  line-height: 1.55;
+}
+
+.copis-working-auth-field > input,
+.copis-working-auth-code-row > input {
+  width: 100%;
+  min-height: 48px;
+  box-sizing: border-box;
+  padding: 0 13px;
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  border-radius: 9px;
+  background: #35353a;
+  color: #f2f2f3;
+  font: inherit;
+  font-size: 14px;
+  outline: 0;
+}
+
+.copis-working-auth-input-wrap {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  min-height: 48px;
+  padding: 0 13px;
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  border-radius: 9px;
+  background: #35353a;
+  color: #b8b8c0;
+}
+
+.copis-working-auth-input-wrap input {
+  width: 100%;
+  min-height: 46px;
+  box-sizing: border-box;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: #f2f2f3;
+  font: inherit;
+  font-size: 14px;
+  outline: 0;
+}
+
+.copis-working-auth-input-wrap input:-webkit-autofill,
+.copis-working-auth-input-wrap input:-webkit-autofill:hover,
+.copis-working-auth-input-wrap input:-webkit-autofill:focus,
+.copis-working-auth-input-wrap input:-webkit-autofill:active {
+  background-color: #35353a !important;
+  border-radius: 0;
+  -webkit-box-shadow: 0 0 0 1000px #35353a inset;
+  box-shadow: 0 0 0 1000px #35353a inset;
+  -webkit-text-fill-color: #f2f2f3;
+  caret-color: #f2f2f3;
+}
+
+.copis-working-auth-field > input::placeholder,
+.copis-working-auth-code-row > input::placeholder,
+.copis-working-auth-input-wrap input::placeholder {
+  color: #b8b8c0;
+  opacity: 0.72;
+}
+
+.copis-working-auth-field > input:focus,
+.copis-working-auth-code-row > input:focus,
+.copis-working-auth-input-wrap:focus-within {
+  border-color: var(--ui-primary);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--ui-primary) 22%, transparent);
+}
+
+.copis-working-auth-field > input:disabled,
+.copis-working-auth-code-row > input:disabled,
+.copis-working-auth-input-wrap:has(input:disabled),
+.copis-working-auth-code-row button:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.copis-working-auth-link {
+  justify-self: end;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #b8b8c0;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 750;
+  cursor: pointer;
+}
+
+.copis-working-auth-link:hover,
+.copis-working-auth-footer-link:hover {
+  color: var(--ui-primary);
+}
+
+.copis-working-auth-code-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+}
+
+.copis-working-auth-code-row button {
+  min-width: 106px;
+  padding: 0 12px;
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  border-radius: 9px;
+  background: transparent;
+  color: #f2f2f3;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 800;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.copis-working-auth-code-row button:hover:not(:disabled),
+.copis-working-auth-secondary:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.08);
 }
 
 .copis-working-auth-persisted-note {
@@ -185,7 +331,7 @@
 }
 
 .copis-working-auth-message {
-  margin: 14px 0 0;
+  margin: -5px 0 0;
   font-size: 12px;
   line-height: 1.5;
 }
@@ -198,11 +344,9 @@
   color: var(--ui-primary);
 }
 
-.copis-working-auth-oauth {
-  width: 100%;
+.copis-working-auth-submit {
   display: inline-flex;
   min-height: 50px;
-  margin-top: 18px;
   align-items: center;
   justify-content: center;
   gap: 8px;
@@ -216,13 +360,87 @@
   cursor: pointer;
 }
 
-.copis-working-auth-oauth:hover:not(:disabled) {
+.copis-working-auth-submit:hover:not(:disabled) {
   filter: brightness(1.08);
 }
 
-.copis-working-auth-oauth:disabled {
+.copis-working-auth-submit:disabled {
   cursor: not-allowed;
   opacity: 0.58;
+}
+
+.copis-working-auth-footer-link {
+  width: 100%;
+  min-height: 40px;
+  margin-top: 12px;
+  border: 0;
+  background: transparent;
+  color: #b8b8c0;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 750;
+  cursor: pointer;
+}
+
+.copis-working-auth-footer-link:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.copis-working-reset-backdrop {
+  z-index: 101;
+  background: rgba(14, 15, 17, 0.52);
+}
+
+.copis-working-reset-modal {
+  width: min(100%, 450px);
+}
+
+.copis-working-reset-modal h2 {
+  margin-bottom: 7px;
+  font-size: 22px;
+}
+
+.copis-working-reset-steps {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 7px;
+  margin: 20px 0;
+}
+
+.copis-working-reset-steps span {
+  display: grid;
+  min-height: 30px;
+  place-items: center;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 7px;
+  color: #b8b8c0;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.copis-working-reset-steps span.active {
+  border-color: var(--ui-primary);
+  background: var(--ui-primary);
+  color: var(--ui-primary-foreground);
+}
+
+.copis-working-reset-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.copis-working-auth-secondary {
+  min-height: 50px;
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  border-radius: 9px;
+  background: transparent;
+  color: #f2f2f3;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 800;
+  cursor: pointer;
 }
 
 @media (max-width: 980px) {
@@ -262,12 +480,14 @@
 }
 
 @media (max-width: 520px) {
-  .copis-working-auth-backdrop:not(.copis-working-auth-page) {
+  .copis-working-auth-backdrop:not(.copis-working-auth-page),
+  .copis-working-reset-backdrop {
     align-items: flex-end;
     padding: 12px;
   }
 
-  .copis-working-auth-backdrop:not(.copis-working-auth-page) .copis-working-auth-modal {
+  .copis-working-auth-backdrop:not(.copis-working-auth-page) .copis-working-auth-modal,
+  .copis-working-reset-modal {
     max-height: calc(100dvh - 24px);
     padding: 20px;
     border-radius: 16px 16px 12px 12px;

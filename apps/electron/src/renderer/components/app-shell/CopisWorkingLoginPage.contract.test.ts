@@ -57,21 +57,28 @@ describe('Working 登录页轮播行为契约', () => {
     expect(showcaseRule).toContain('background: hsl(var(--dialog))')
   })
 
-  test('Given OAuth 登录入口 When 查看认证头部 Then 不在 Copis 内收集密码或注册信息', () => {
-    expect(dialogSource).not.toContain('AuthMode')
-    expect(dialogSource).not.toContain('创建 Copis 账户')
-    expect(dialogSource).not.toContain('window.electronAPI.registerWorking')
-    expect(dialogSource).not.toContain('window.electronAPI.sendWorkingVerificationCode')
-    expect(dialogSource).toContain('使用 ai-edu 账号登录')
+  test('Given 原生登录入口 When 查看认证表单 Then 在 Copis 内提供登录注册和找回密码', () => {
+    expect(dialogSource).toContain("type AuthMode = 'login' | 'register'")
+    expect(dialogSource).toContain('忘记密码？')
+    expect(dialogSource).toContain('window.electronAPI.loginWorking')
+    expect(dialogSource).toContain('window.electronAPI.registerWorking')
+    expect(dialogSource).toContain('window.electronAPI.sendWorkingVerificationCode')
+    expect(dialogSource).toContain('window.electronAPI.verifyWorkingPasswordResetCode')
+    expect(dialogSource).toContain('window.electronAPI.resetWorkingPassword')
+    expect(dialogSource).not.toContain('loginWorkingWithOAuth')
+    expect(dialogSource).not.toContain('使用 ai-edu 账号登录')
     expect(dialogSource).toContain('<h1 id="copis-working-auth-title">欢迎回来</h1>')
     expect(dialogSource).toContain('登录后继续进入你的工作空间。')
   })
 
-  test('Given Copis 尚未登录 When 挂载认证入口 Then 组合全屏轮播与 OAuth 登录按钮', () => {
+  test('Given Copis 尚未登录 When 挂载认证入口 Then 默认显示登录表单并保留认证切换布局', () => {
     expect(dialogSource).toContain("from './CopisWorkingLoginShowcase'")
     expect(dialogSource).toContain('copis-working-auth-page')
     expect(dialogSource).toContain('dismissible ?')
-    expect(dialogSource).toContain('window.electronAPI.loginWorkingWithOAuth')
-    expect(dialogSource).toContain('copis-working-auth-oauth')
+    expect(dialogSource).toContain('className="copis-working-auth-form"')
+    expect(dialogSource).toContain('copis-working-auth-switch')
+    expect(dialogSource).toContain('copis-working-reset-modal')
+    expect(dialogStyles).toContain('.copis-working-auth-submit')
+    expect(dialogStyles).toContain('.copis-working-auth-switch')
   })
 })
