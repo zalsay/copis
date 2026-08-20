@@ -6,13 +6,13 @@
  * - 读取：主文件 → .tmp 残留 → .bak 回退，多层容错
  */
 
-import { writeFileSync, renameSync, existsSync, copyFileSync, readFileSync, unlinkSync } from 'node:fs'
+import { writeFileSync, renameSync, existsSync, copyFileSync, readFileSync, unlinkSync, chmodSync } from 'node:fs'
 
 /**
  * 原子写入 JSON 文件：write-to-temp → rename
  * 写入前自动保留 .bak 备份
  */
-export function writeJsonFileAtomic(filePath: string, data: object, skipBackup = false): void {
+export function writeJsonFileAtomic(filePath: string, data: object, skipBackup = false, mode?: number): void {
   const tmpPath = filePath + '.tmp'
   const bakPath = filePath + '.bak'
 
@@ -25,11 +25,17 @@ export function writeJsonFileAtomic(filePath: string, data: object, skipBackup =
     }
   }
 
-  // 写入临时文件
-  writeFileSync(tmpPath, JSON.stringify(data, null, 2), 'utf-8')
+	// 写入临时文件；认证文件需要在重命名前就收紧权限。
+	if (mode === undefined) {
+		writeFileSync(tmpPath, JSON.stringify(data, null, 2), 'utf-8')
+	} else {
+		writeFileSync(tmpPath, JSON.stringify(data, null, 2), { encoding: 'utf-8', mode })
+		chmodSync(tmpPath, mode)
+	}
 
-  // 原子重命名（POSIX rename 是原子操作）
-  renameSync(tmpPath, filePath)
+	// 原子重命名（POSIX rename 是原子操作）
+	renameSync(tmpPath, filePath)
+	if (mode !== undefined) chmodSync(filePath, mode)
 }
 
 /** 原子重写文本文件（用于 JSONL 会话等非单个 JSON 文档）。 */

@@ -6,7 +6,7 @@
  */
 
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
-import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, ATTACHMENT_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, FUNCTIONAL_MODULE_IPC_CHANNELS, PROXY_IPC_CHANNELS, SYSTEM_PROMPT_IPC_CHANNELS, AGENT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, WECHAT_IPC_CHANNELS, AUTOMATION_IPC_CHANNELS, PLANNING_IPC_CHANNELS, WORKING_IPC_CHANNELS, WEB_IPC_CHANNELS, BROWSER_WORKFLOW_IPC_CHANNELS } from '@copis/shared'
+import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, ATTACHMENT_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, FUNCTIONAL_MODULE_IPC_CHANNELS, PROXY_IPC_CHANNELS, AGENT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, WECHAT_IPC_CHANNELS, AUTOMATION_IPC_CHANNELS, PLANNING_IPC_CHANNELS, WORKING_IPC_CHANNELS, WEB_IPC_CHANNELS, BROWSER_WORKFLOW_IPC_CHANNELS } from '@copis/shared'
 import { USER_PROFILE_IPC_CHANNELS, SETTINGS_IPC_CHANNELS, SCRATCH_PAD_IPC_CHANNELS, APP_ICON_IPC_CHANNELS, DOCK_BADGE_IPC_CHANNELS, STORAGE_IPC_CHANNELS } from '../types'
 import { agentHttpStreamClient } from '../renderer/lib/agent-http-stream'
 import { COPIS_HTTP_API_HOST } from '@copis/shared/config'
@@ -69,10 +69,6 @@ import type {
   AskUserRequest,
   AskUserResponse,
   ExitPlanModeResponse,
-  SystemPromptConfig,
-  SystemPrompt,
-  SystemPromptCreateInput,
-  SystemPromptUpdateInput,
   AgentToolInfo,
   AgentToolState,
   AgentToolMeta,
@@ -157,6 +153,7 @@ import type {
   WorkingVerifyPasswordResetCodeInput,
   CreateWebTabInput,
   NavigateWebTabInput,
+  ReorderWebTabInput,
   OpenWebBookmarksWindowInput,
   ResizeWebBookmarksWindowInput,
   SaveWebBookmarkInput,
@@ -290,6 +287,8 @@ export interface ElectronAPI {
     close: (tabId: string) => Promise<WebTabsSnapshot>
     /** 导航到网页地址。 */
     navigate: (input: NavigateWebTabInput) => Promise<WebTabsSnapshot>
+    /** 重排网页页签，并在拖动结束后激活被移动页签。 */
+    reorder: (input: ReorderWebTabInput) => Promise<WebTabsSnapshot>
     /** 同步网页原生视图尺寸。 */
     updateBounds: (input: UpdateWebTabBoundsInput) => Promise<void>
     /** 打开原生收藏夹浮层窗口。 */
@@ -935,26 +934,6 @@ export interface ElectronAPI {
   /** 搜索工作区文件（用于 @ 引用，支持附加目录） */
   searchWorkspaceFiles: (rootPath: string, query: string, limit?: number, additionalPaths?: string[], sessionPaths?: string[]) => Promise<FileSearchResult>
 
-  // ===== 系统提示词管理 =====
-
-  /** 获取系统提示词配置 */
-  getSystemPromptConfig: () => Promise<SystemPromptConfig>
-
-  /** 创建提示词 */
-  createSystemPrompt: (input: SystemPromptCreateInput) => Promise<SystemPrompt>
-
-  /** 更新提示词 */
-  updateSystemPrompt: (id: string, input: SystemPromptUpdateInput) => Promise<SystemPrompt>
-
-  /** 删除提示词 */
-  deleteSystemPrompt: (id: string) => Promise<void>
-
-  /** 更新追加日期时间和用户名开关 */
-  updateAppendSetting: (enabled: boolean) => Promise<void>
-
-  /** 设置默认提示词 */
-  setDefaultPrompt: (id: string | null) => Promise<void>
-
   // ===== 自动更新 =====
 
   /** 更新 API */
@@ -1342,6 +1321,7 @@ const electronAPI: ElectronAPI = {
     activateIncognito: (tabId: string) => ipcRenderer.invoke(WEB_IPC_CHANNELS.INCOGNITO_ACTIVATE, tabId) as Promise<WebTabsSnapshot>,
     close: (tabId: string) => ipcRenderer.invoke(WEB_IPC_CHANNELS.CLOSE, tabId) as Promise<WebTabsSnapshot>,
     navigate: (input: NavigateWebTabInput) => ipcRenderer.invoke(WEB_IPC_CHANNELS.NAVIGATE, input) as Promise<WebTabsSnapshot>,
+    reorder: (input: ReorderWebTabInput) => ipcRenderer.invoke(WEB_IPC_CHANNELS.REORDER, input) as Promise<WebTabsSnapshot>,
     updateBounds: (input: UpdateWebTabBoundsInput) => ipcRenderer.invoke(WEB_IPC_CHANNELS.UPDATE_BOUNDS, input) as Promise<void>,
     bookmarksOpen: (input: OpenWebBookmarksWindowInput) => ipcRenderer.invoke(WEB_IPC_CHANNELS.BOOKMARKS_WINDOW_OPEN, input) as Promise<void>,
     bookmarksClose: () => ipcRenderer.invoke(WEB_IPC_CHANNELS.BOOKMARKS_WINDOW_CLOSE) as Promise<void>,
@@ -2201,31 +2181,6 @@ const electronAPI: ElectronAPI = {
 
   searchWorkspaceFiles: (rootPath: string, query: string, limit = 20, additionalPaths?: string[], sessionPaths?: string[]) => {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.SEARCH_WORKSPACE_FILES, rootPath, query, limit, additionalPaths, sessionPaths)
-  },
-
-  // 系统提示词管理
-  getSystemPromptConfig: () => {
-    return ipcRenderer.invoke(SYSTEM_PROMPT_IPC_CHANNELS.GET_CONFIG)
-  },
-
-  createSystemPrompt: (input: SystemPromptCreateInput) => {
-    return ipcRenderer.invoke(SYSTEM_PROMPT_IPC_CHANNELS.CREATE, input)
-  },
-
-  updateSystemPrompt: (id: string, input: SystemPromptUpdateInput) => {
-    return ipcRenderer.invoke(SYSTEM_PROMPT_IPC_CHANNELS.UPDATE, id, input)
-  },
-
-  deleteSystemPrompt: (id: string) => {
-    return ipcRenderer.invoke(SYSTEM_PROMPT_IPC_CHANNELS.DELETE, id)
-  },
-
-  updateAppendSetting: (enabled: boolean) => {
-    return ipcRenderer.invoke(SYSTEM_PROMPT_IPC_CHANNELS.UPDATE_APPEND_SETTING, enabled)
-  },
-
-  setDefaultPrompt: (id: string | null) => {
-    return ipcRenderer.invoke(SYSTEM_PROMPT_IPC_CHANNELS.SET_DEFAULT, id)
   },
 
   // 自动更新

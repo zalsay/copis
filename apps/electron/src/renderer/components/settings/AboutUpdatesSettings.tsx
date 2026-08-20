@@ -112,7 +112,7 @@ export function AboutUpdatesSettings(): React.ReactElement {
                 variant="ghost"
                 size="sm"
                 className="h-8 text-xs"
-                onClick={() => void window.electronAPI.openExternal('https://github.com/zalsay/copis/releases')}
+                onClick={() => void window.electronAPI.openExternal('https://copis.meetlife.com.cn')}
               >
                 <ExternalLink className="mr-1.5 h-3.5 w-3.5" />
                 查看发布页

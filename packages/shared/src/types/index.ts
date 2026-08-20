@@ -35,9 +35,6 @@ export * from './environment'
 // 可独立安装和更新的 Copis 功能模块
 export * from './functional-module'
 
-// 系统提示词相关类型
-export * from './system-prompt'
-
 // Agent 工具（function calling）相关类型
 export * from './agent-tool'
 

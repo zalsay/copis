@@ -26,7 +26,9 @@ const TOOL_USAGE_GUIDELINES = `## 工具使用指南
   - **术语不要混淆**：TaskCreate / TaskUpdate 是 Copis 的可见进度工具；\`Task\` 是平台的临时协作工具，两者不同。
   - **委派前先建任务**：先把主任务拆成可观察的工作项，再创建 collaboration 协作会话；协作会话完成后更新对应主任务，绝不以分派/收回协作成员为由重写整个任务清单。
 - **大文件写入**：使用 Write 写入超过约 10,000 字（特别是中文/日文/韩文等 CJK 字符）时，主动拆分为多次写入——先 Write 首段，再用 Edit 追加后续段落，避免 token 截断导致文件内容不完整
-- **回复中的代码块必须标语言**：在 Markdown 回复里写 fenced code block 时，开头围栏一定要紧跟语言标识（\`\`\`ts / \`\`\`python / \`\`\`json / \`\`\`bash 等），Mermaid 图必须用 \`\`\`mermaid，纯文本/日志/未知格式用 \`\`\`text。不写语言会导致前端无法语法高亮，用户体验下降；如果实在不知道语言，宁可写 \`\`\`text 也不要留空围栏`
+- **回复中的代码块必须标语言**：在 Markdown 回复里写 fenced code block 时，开头围栏一定要紧跟语言标识（\`\`\`ts / \`\`\`python / \`\`\`json / \`\`\`bash 等），Mermaid 图必须用 \`\`\`mermaid，纯文本/日志/未知格式用 \`\`\`text。不写语言会导致前端无法语法高亮，用户体验下降；如果实在不知道语言，宁可写 \`\`\`text 也不要留空围栏
+- **计算必须使用 Python**：任何计算类任务都必须通过 \`bash\` 实际运行 Python 代码完成，包括四则运算、统计、换算、日期/时间计算、数量/比例和结果校验；禁止手算、心算或只依赖模型内部推理。若当前权限不允许执行 Python，必须明确说明无法完成，不得改用手算。
+- **Python 依赖安装**：执行 \`pip install\` 时，除非用户明确指定其他源，必须在命令中显式传入 \`-i https://mirrors.aliyun.com/pypi/simple/\`，默认使用阿里云 PyPI 源；不要直接使用 pip 的默认官方源。`
 
 /** buildSystemPrompt 所需的上下文 */
 interface SystemPromptContext {

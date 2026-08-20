@@ -1,4 +1,7 @@
-use super::{active_runtime_dir, is_safe_version, runtime_path, runtime_roots, ExternalRuntime};
+use super::{
+    active_runtime_dir, inject_python_runtime_config_for_root, is_safe_version, runtime_path,
+    runtime_roots, ExternalRuntime,
+};
 use serde_json::json;
 use std::fs;
 use std::path::PathBuf;
@@ -101,6 +104,54 @@ fn prepends_external_runtime_directories_to_path() {
     let path = runtime_path(&root);
     assert!(path.starts_with(&root.join("node").to_string_lossy().to_string()));
     assert!(path.contains(&root.join("git").join("cmd").to_string_lossy().to_string()));
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn prepends_python_runtime_directories_to_path() {
+    let root = std::env::temp_dir().join(format!(
+        "copis-python-runtime-path-test-{}",
+        std::process::id()
+    ));
+    fs::create_dir_all(root.join("bin")).expect("create python bin directory");
+    fs::create_dir_all(root.join("lib")).expect("create python lib directory");
+    let path =
+        super::runtime_path_with_python(PathBuf::from("/runtime/current").as_path(), Some(&root));
+    let entries = std::env::split_paths(&path).collect::<Vec<_>>();
+    assert_eq!(entries.first(), Some(&root.join("bin")));
+    assert!(entries.contains(&root));
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn injects_python_runtime_into_compiled_worker_config() {
+    let root = std::env::temp_dir().join(format!(
+        "copis-python-runtime-config-test-{}",
+        std::process::id()
+    ));
+    fs::create_dir_all(root.join("bin")).expect("create python bin directory");
+    fs::create_dir_all(root.join("lib")).expect("create python lib directory");
+    let mut config = json!({
+        "query": {
+            "runtimeEnv": {
+                "env": { "PATH": "/system/bin:/usr/local/bin" }
+            }
+        }
+    });
+
+    inject_python_runtime_config_for_root(&mut config, &root).expect("inject Python runtime");
+
+    let env = &config["query"]["runtimeEnv"]["env"];
+    let path = env["PATH"].as_str().expect("Python PATH");
+    let entries = std::env::split_paths(std::ffi::OsStr::new(path)).collect::<Vec<_>>();
+    assert_eq!(entries.first(), Some(&root.join("bin")));
+    assert!(entries.contains(&PathBuf::from("/system/bin")));
+    assert_eq!(
+        env["COPIS_PYTHON_RUNTIME_ROOT"],
+        root.to_string_lossy().as_ref()
+    );
+    assert_eq!(env["PYTHONHOME"], root.to_string_lossy().as_ref());
+
     let _ = fs::remove_dir_all(root);
 }
 

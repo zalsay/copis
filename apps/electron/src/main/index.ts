@@ -93,7 +93,7 @@ for (const key of Object.keys(process.env)) {
 
 import { createApplicationMenu } from './menu'
 import { registerIpcHandlers } from './ipc'
-import { ensureHttpApiServer, stopHttpApiServer } from './lib/http-api-server'
+import { ensureRustHttpApiServerReady, stopHttpApiServer } from './lib/http-api-server'
 import { createTray, destroyTray, getTray } from './tray'
 import { initializeRuntime } from './lib/runtime-init'
 import { seedDefaultSkills } from './lib/config-paths'
@@ -509,8 +509,9 @@ async function bootstrap(): Promise<void> {
   process.env.COPIS_PACKAGED = app.isPackaged ? '1' : '0'
   setCopisVersion(copisVersion)
 
-  // HTTP API 由 Electron 统一确保 active 模块和进程生命周期；网络安装失败不阻断 UI 启动。
-  void safeAwait('ensureHttpApiServer', () => ensureHttpApiServer())
+  // 登录页依赖 Working API；先校验/更新 Rust 模块并通过 health，再创建窗口。
+  // 旧模块不再有机会先接收登录请求。
+  await ensureRustHttpApiServerReady()
 
   // Runtime 检测在 Rust 子进程中异步执行，不阻塞窗口创建和 Electron 主进程。
   void safeAwait('initializeRuntime', () => initializeRuntime())

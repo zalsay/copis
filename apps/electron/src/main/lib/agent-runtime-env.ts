@@ -20,6 +20,8 @@ export interface BuildAgentRuntimeEnvOptions {
   windowsShellPreference?: WindowsShellPreference
   bundledCliPath?: string
   officeCliPath?: string
+  /** 已激活 Python runtime 的入口文件（bin/python 或 bin/python.exe）。 */
+  pythonRuntimePath?: string
   processEnv?: NodeJS.ProcessEnv
   platform?: NodeJS.Platform
   pathDelimiter?: string
@@ -34,6 +36,8 @@ const CASE_INSENSITIVE_MERGE_KEYS = new Set([
   'all_proxy',
   'no_proxy',
   'copis_cli',
+  'copis_python_runtime_root',
+  'pythonhome',
   'shell',
   'copis_windows_shell',
   'copis_wsl_distro',
@@ -209,6 +213,15 @@ export function buildAgentRuntimeEnv(options: BuildAgentRuntimeEnvOptions = {}):
       pathDelimiter,
       platform,
     )
+  }
+  if (options.pythonRuntimePath) {
+    const pythonBinPath = dirnameForPlatform(options.pythonRuntimePath, platform)
+    const pythonHome = platform === 'win32'
+      ? pythonBinPath
+      : dirnameForPlatform(pythonBinPath, platform)
+    enhancedPath = prependPathEntry(enhancedPath, pythonBinPath, pathDelimiter, platform)
+    env.COPIS_PYTHON_RUNTIME_ROOT = pythonHome
+    env.PYTHONHOME = pythonHome
   }
   if (enhancedPath) {
     env[pathKey] = enhancedPath

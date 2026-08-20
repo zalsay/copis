@@ -16,9 +16,11 @@ import {
   type FunctionalModulePackage,
 } from './functional-module-store'
 
+let packaged = false
+
 mock.module('electron', () => ({
   app: {
-    isPackaged: false,
+    get isPackaged() { return packaged },
     getPath: () => '/tmp/copis-http-api-runtime-test',
   },
   BrowserWindow: class {},
@@ -48,6 +50,7 @@ const {
   startHttpApiServer,
   stopHttpApiServer,
   shouldInstallMissingHttpApiModule,
+  ensureRustHttpApiServerReady,
   updateHttpApiServer,
   waitForHttpApiHealth,
 } = await import('./http-api-server')
@@ -522,6 +525,60 @@ describe('Rust HTTP API 功能模块生命周期', () => {
     expect(records[1]?.options.env?.COPIS_HTTP_API_PORT).toBe('51741')
     expect(records[2]?.options.env?.COPIS_HTTP_API_PORT).toBe('51740')
     expect(records[0]?.child.killed).toBe(true)
+  })
+
+  test('正式启动前发现 Rust API 旧版本时，先更新并健康检查再启动正式端口', async () => {
+    const root = createRoot()
+    const oldPackage = rustPackage('0.1.0', 'old-rust-api')
+    const newContent = 'new-rust-api-before-window'
+    await activateRustVersion(root, oldPackage, 'old-rust-api')
+    const records: SpawnRecord[] = []
+    const manifestUrl = 'https://download.example.com/manifest.json'
+    const previousResourcesPath = (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath
+
+    packaged = true
+    Object.defineProperty(process, 'resourcesPath', {
+      configurable: true,
+      value: '/tmp/copis-test-resources',
+    })
+    try {
+      await ensureRustHttpApiServerReady({
+        rootDir: join(root, 'modules'),
+        paymentWorkspace: paymentWorkspaceFor(root),
+        manifestUrl,
+        platform: 'darwin',
+        arch: 'arm64',
+        clientVersion: '0.16.17',
+        spawnImpl: spawnFixture(records),
+        fetchImpl: fetchFixture(manifestFor('0.2.0', newContent), newContent, () => true),
+        healthTimeoutMs: 100,
+        stopTimeoutMs: 5,
+        workerLaunch: {
+          kind: 'executable',
+          path: '/tmp/copis-test-runtime',
+        },
+      })
+
+      const active = readActiveFunctionalModule(getFunctionalModulePaths(join(root, 'modules')), 'rust-http-api')
+      expect(active?.version).toBe('0.2.0')
+      expect(records).toHaveLength(2)
+      expect(records[0]?.options.env?.COPIS_HTTP_API_PORT).toBe('51741')
+      expect(records[1]?.options.env?.COPIS_HTTP_API_PORT).toBe('51740')
+      expect(records[0]?.child.killed).toBe(true)
+    } finally {
+      packaged = false
+      if (previousResourcesPath === undefined) {
+        Object.defineProperty(process, 'resourcesPath', {
+          configurable: true,
+          value: undefined,
+        })
+      } else {
+        Object.defineProperty(process, 'resourcesPath', {
+          configurable: true,
+          value: previousResourcesPath,
+        })
+      }
+    }
   })
 
   test('候选健康检查失败时保留旧版本并终止候选进程', async () => {

@@ -110,6 +110,13 @@ export interface NavigateWebTabInput {
   url: string
 }
 
+/** 拖动重排网页页签的参数。 */
+export interface ReorderWebTabInput {
+  tabId: string
+  /** 移除源页签后，在公开页签列表中的目标索引。 */
+  targetIndex: number
+}
+
 /** 原生 WebContentsView 的窗口坐标。 */
 export interface WebTabBounds {
   x: number
@@ -143,6 +150,7 @@ export const WEB_IPC_CHANNELS = {
   INCOGNITO_ACTIVATE: 'web-tabs:incognito-activate',
   CLOSE: 'web-tabs:close',
   NAVIGATE: 'web-tabs:navigate',
+  REORDER: 'web-tabs:reorder',
   UPDATE_BOUNDS: 'web-tabs:update-bounds',
   BOOKMARKS_WINDOW_OPEN: 'web-bookmarks:window-open',
   BOOKMARKS_WINDOW_CLOSE: 'web-bookmarks:window-close',

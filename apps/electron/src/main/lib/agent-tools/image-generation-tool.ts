@@ -2,7 +2,7 @@
  * Copis 图片生成工具模块（Agent 模式）
  *
  * 图片生成与计费由 Copis 后端（edu-api /api/working/images/generate）提供：
- * - 客户端带 Working JWT 调用后端，后端解析图片模型、生成、扣钻石并返回图片字节；
+ * - 本机 Rust Gateway 负责认证、模型调用、生成、扣钻石并返回图片字节；
  * - 本模块把返回的 data_url 保存到本地附件，绝不编造图片 URL。
  */
 
@@ -10,7 +10,6 @@ import type { ToolCall, ToolResult, ToolDefinition } from '@copis/core'
 import type { AgentToolMeta, FileAttachment } from '@copis/shared'
 import { randomUUID } from 'node:crypto'
 import { getWorkingApiClient } from '../working-api-service'
-import { getWorkingTokenStore } from '../working-auth-store'
 import { saveAttachment } from '../attachment-service'
 
 // ===== 工具执行上下文 =====
@@ -85,7 +84,7 @@ export const NANO_BANANA_TOOL_DEFINITIONS: ToolDefinition[] = [
  * 检查 Copis 图片生成是否可用（已登录 Copis Working，后端提供模型与计费）
  */
 export function isNanoBananaAvailable(): boolean {
-  return !!getWorkingTokenStore().getToken()
+  return getWorkingApiClient().getCachedUser() !== null
 }
 
 // ===== 工具执行 =====
@@ -154,7 +153,7 @@ export async function executeNanoBananaTool(
       }
     }
 
-    console.log(`[Copis 图片生成] 请求 edu-api: prompt="${prompt.slice(0, 50)}..."`)
+    console.log('[Copis 图片生成] 请求本机 Rust Gateway')
     const result = await getWorkingApiClient().generateWorkingImage({
       prompt,
       size: size || undefined,

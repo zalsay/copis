@@ -96,7 +96,7 @@ pub struct RefreshedWorkingAuth {
     pub user_id: String,
 }
 
-/// refresh token 仅由 Electron 的加密存储持有；Rust 只接收刷新后的用户身份状态。
+/// access/refresh token 由 Rust AuthSession 管理；支付恢复只接收刷新后的用户身份状态。
 pub trait VipPaymentRefresher: Send + Sync {
     fn refresh_after_vip_payment(&self) -> Result<RefreshedWorkingAuth, String>;
 }

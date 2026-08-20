@@ -189,10 +189,10 @@ describe('COS 功能模块统一管理', () => {
     expect(calls.filter((url) => url === officeUrl)).toHaveLength(1)
   })
 
-  test('模块状态注册表包含五个必要模块', () => {
+  test('模块状态注册表包含六个必要模块', () => {
     const statuses = getFunctionalModuleStatuses(createRoot())
 
-    expect(statuses.map((item) => item.name)).toEqual(['node-runtime', 'rust-http-api', 'officecli', 'alipay-bot', 'playwright-core'])
+    expect(statuses.map((item) => item.name)).toEqual(['node-runtime', 'rust-http-api', 'officecli', 'alipay-bot', 'playwright-core', 'python-runtime'])
     expect(statuses.find((item) => item.name === 'node-runtime')?.required).toBe(true)
     expect(statuses.find((item) => item.name === 'rust-http-api')?.required).toBe(true)
     expect(statuses.find((item) => item.name === 'officecli')?.required).toBe(true)
@@ -205,6 +205,16 @@ describe('COS 功能模块统一管理', () => {
     expect(status).toMatchObject({
       name: 'playwright-core',
       displayName: '浏览器自动化内核',
+      required: true,
+    })
+  })
+
+  test('模块状态注册表包含 Python 3.12 运行环境且标记为必选', () => {
+    const status = getFunctionalModuleStatuses(createRoot()).find((item) => item.name === 'python-runtime')
+
+    expect(status).toMatchObject({
+      name: 'python-runtime',
+      displayName: 'Python 3.12 运行环境',
       required: true,
     })
   })

@@ -1,9 +1,4 @@
-import type { FunctionalModuleFetch } from './functional-module-manager'
-
-export const DEFAULT_COPIS_BACKEND_URL = 'https://edu-api.meetlife.com.cn:9001'
-export const DEFAULT_MODEL_ENDPOINTS_URL =
-  'https://download.meetlife.com.cn/working-model-endpoints.json'
-export const MODEL_ENDPOINTS_URL_ENV = 'WORKING_AGENT_MODEL_ENDPOINTS_URL'
+export const DEFAULT_COPIS_BACKEND_URL = 'https://pie.meetlife.com.cn/pi-api'
 export const MODEL_BASE_URL_ENV = 'WORKING_AGENT_MODEL_BASE_URL'
 
 const MODEL_ENDPOINT_PATH = '/api/internal/working-model'
@@ -14,14 +9,14 @@ export interface CopisBackendEndpointResolution {
   backendUrl: string
   /** 远端 working-model 地址，保留完整候选路径供 Rust/Pi runtime 使用。 */
   modelBaseUrl: string
-  source: 'remote' | 'configured'
+  source: 'configured'
 }
 
 export interface ResolveCopisBackendEndpointsOptions {
   configuredBackendUrl?: string
   configuredModelBaseUrl?: string
   endpointConfigUrl?: string
-  fetchImpl?: FunctionalModuleFetch
+  fetchImpl?: unknown
   timeoutMs?: number
 }
 
@@ -90,135 +85,21 @@ export function deriveCopisBackendUrl(modelUrl: string, fallback: string): strin
   }
 }
 
-function responseIsSuccessful(response: Response): boolean {
-  return response.status >= 200 && response.status < 300
-}
-
-function uniqueCandidates(values: readonly string[]): string[] {
-  const seen = new Set<string>()
-  const result: string[] = []
-  for (const value of values) {
-    const normalized = trimTrailingSlashes(value)
-    if (!normalized || seen.has(normalized)) continue
-    seen.add(normalized)
-    result.push(normalized)
-  }
-  return result
-}
-
-async function fetchWithDeadline(
-  fetchImpl: FunctionalModuleFetch,
-  input: string,
-  deadline: number,
-  controller: AbortController,
-): Promise<Response> {
-  const remaining = deadline - Date.now()
-  if (remaining <= 0) throw new Error('远端 endpoint 探测超时')
-
-  let timer: ReturnType<typeof setTimeout> | undefined
-  try {
-    const timeout = new Promise<never>((_, reject) => {
-      timer = setTimeout(() => {
-        controller.abort()
-        reject(new Error('远端 endpoint 探测超时'))
-      }, remaining)
-    })
-    return await Promise.race([
-      fetchImpl(input, {
-        headers: { Accept: 'application/json' },
-        signal: controller.signal,
-      }),
-      timeout,
-    ])
-  } finally {
-    if (timer) clearTimeout(timer)
-  }
-}
-
-async function fetchRemoteCandidates(
-  fetchImpl: FunctionalModuleFetch,
-  configUrl: string,
-  deadline: number,
-  controller: AbortController,
-): Promise<string[]> {
-  const response = await fetchWithDeadline(fetchImpl, configUrl, deadline, controller)
-  if (!responseIsSuccessful(response)) throw new Error(`endpoint 列表 HTTP ${response.status}`)
-  const remaining = deadline - Date.now()
-  if (remaining <= 0) throw new Error('远端 endpoint 列表读取超时')
-  let timer: ReturnType<typeof setTimeout> | undefined
-  const payload: unknown = await Promise.race([
-    response.json(),
-    new Promise<never>((_, reject) => {
-      timer = setTimeout(() => {
-        controller.abort()
-        reject(new Error('远端 endpoint 列表读取超时'))
-      }, remaining)
-    }),
-  ]).finally(() => {
-    if (timer) clearTimeout(timer)
-  })
-  if (!isRecord(payload)) return []
-  const config = payload as ModelEndpointsConfig
-  if (!Array.isArray(config.base_urls)) return []
-  return config.base_urls.filter((value): value is string => typeof value === 'string')
-}
-
-async function isEndpointHealthy(
-  fetchImpl: FunctionalModuleFetch,
-  candidate: string,
-  deadline: number,
-  controller: AbortController,
-): Promise<boolean> {
-  const probeUrl = healthProbeUrl(candidate)
-  if (!probeUrl) return false
-  try {
-    const response = await fetchWithDeadline(fetchImpl, probeUrl, deadline, controller)
-    return responseIsSuccessful(response)
-  } catch {
-    return false
-  }
-}
-
 export async function resolveCopisBackendEndpoints(
   options: ResolveCopisBackendEndpointsOptions = {},
 ): Promise<CopisBackendEndpointResolution> {
   const backendUrl = configuredBackendUrl(options.configuredBackendUrl)
-  const configuredModelUrl = configuredModelBaseUrl(
+  const modelBaseUrl = configuredModelBaseUrl(
     options.configuredModelBaseUrl,
     backendUrl,
     options.configuredBackendUrl,
   )
-  const fetchImpl = options.fetchImpl ?? fetch
-  const configUrl = trimTrailingSlashes(
-    options.endpointConfigUrl?.trim()
-      || process.env[MODEL_ENDPOINTS_URL_ENV]?.trim()
-      || DEFAULT_MODEL_ENDPOINTS_URL,
-  )
-  const timeoutMs = Math.max(1, options.timeoutMs ?? DEFAULT_RESOLUTION_TIMEOUT_MS)
-  const controller = new AbortController()
-  const deadline = Date.now() + timeoutMs
 
-  try {
-    const remoteCandidates = await fetchRemoteCandidates(fetchImpl, configUrl, deadline, controller)
-    const candidates = uniqueCandidates([...remoteCandidates, configuredModelUrl])
-    for (const candidate of candidates) {
-      if (await isEndpointHealthy(fetchImpl, candidate, deadline, controller)) {
-        return {
-          backendUrl: deriveCopisBackendUrl(candidate, backendUrl),
-          modelBaseUrl: candidate,
-          source: 'remote',
-        }
-      }
-    }
-  } catch {
-    // 列表服务不可用时保留本地配置，不能阻断 Copis 本地 Rust API 启动。
-  } finally {
-    controller.abort()
-  }
-
+  // 远端 endpoint 发现和健康探测由 Rust EduApiClient 统一负责；Electron 只向 Rust
+  // 注入配置，避免主进程直接连接 edu-api。
   return {
     backendUrl,
-    modelBaseUrl: configuredModelUrl,
+    modelBaseUrl,
     source: 'configured',
   }
 }

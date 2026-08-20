@@ -6,6 +6,7 @@ import { join } from 'node:path'
 import {
   buildFunctionalModuleManifestUpload,
   buildFunctionalModuleRelease,
+  advanceFunctionalModuleVersions,
   markFunctionalModuleRequired,
   publishFunctionalModuleRelease,
   resolveImmutableModuleVersions,
@@ -78,6 +79,30 @@ describe('COS 功能模块发布器', () => {
     })
   })
 
+  test('发布器为 Python runtime 归档生成统一默认入口', () => {
+    const archivePath = createFixture('python-runtime-archive', 'python-runtime.tar.gz')
+
+    const release = buildFunctionalModuleRelease({
+      channel: 'stable',
+      publicBaseUrl: 'https://download.example.com/copis/modules',
+      modules: [{
+        module: 'python-runtime',
+        version: '3.12.14',
+        platform: 'darwin',
+        arch: 'arm64',
+        binaryPath: archivePath,
+        format: 'tar.gz',
+        required: true,
+      }],
+    })
+
+    expect(release.manifest.platforms['darwin-arm64']?.modules['python-runtime']).toMatchObject({
+      format: 'tar.gz',
+      entrypoint: 'bin/python',
+      required: true,
+    })
+  })
+
   test('拒绝同一平台重复发布同名模块', () => {
     const binaryPath = createFixture('duplicate', 'module')
     expect(() => buildFunctionalModuleRelease({
@@ -135,6 +160,52 @@ describe('COS 功能模块发布器', () => {
 
     expect(resolved.release.binaries[0]?.key).toContain('rust-http-api-0.0.36')
     expect(resolved.versionBumps).toEqual([])
+  })
+
+  test('Rust 单模块发布始终在 COS 已有版本之后递增 patch', () => {
+    const rustPath = createFixture('rust-api-forced-bump', 'copis-http-api-server')
+    const officePath = createFixture('officecli-unchanged', 'officecli')
+    const modules = advanceFunctionalModuleVersions([
+      {
+        module: 'rust-http-api',
+        version: '0.0.63',
+        platform: 'darwin',
+        arch: 'arm64',
+        binaryPath: rustPath,
+        required: true,
+      },
+      {
+        module: 'officecli',
+        version: '1.0.0',
+        platform: 'darwin',
+        arch: 'arm64',
+        binaryPath: officePath,
+        required: true,
+      },
+    ], {
+      schema: 1,
+      channel: 'stable',
+      platforms: {
+        'darwin-arm64': {
+          modules: {
+            'rust-http-api': {
+              version: '0.0.66',
+              url: 'https://download.example.com/rust-http-api-0.0.66',
+              sha256: 'a'.repeat(64),
+              size: 1,
+              format: 'binary',
+              entrypoint: 'bin/rust-http-api',
+              required: true,
+            },
+          },
+        },
+      },
+    }, 'darwin', 'arm64', ['rust-http-api'])
+
+    expect(modules.map((module) => [module.module, module.version])).toEqual([
+      ['rust-http-api', '0.0.67'],
+      ['officecli', '1.0.0'],
+    ])
   })
 
   test('锁定模块同版本对象内容变化时要求先修改版本锁配置', async () => {

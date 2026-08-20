@@ -86,6 +86,34 @@ describe('AgentRpcGateway', () => {
     ])
   })
 
+  test('Given 网关在 bootstrap 前创建 When 正式包标记在请求前设置 Then 使用正式 HTTP API 端口', async () => {
+    const previousPackaged = process.env.COPIS_PACKAGED
+    const previousPort = process.env.COPIS_HTTP_API_PORT
+    const requests: string[] = []
+
+    delete process.env.COPIS_PACKAGED
+    delete process.env.COPIS_HTTP_API_PORT
+    try {
+      const gateway = new AgentRpcGateway({
+        fetchImpl: async (url) => {
+          requests.push(String(url))
+          return Response.json({ active: false })
+        },
+      })
+      process.env.COPIS_PACKAGED = '1'
+
+      await expect(gateway.isActive('session-1')).resolves.toBe(false)
+      expect(requests).toEqual([
+        'http://127.0.0.1:51730/api/agent/sessions/session-1/status',
+      ])
+    } finally {
+      if (previousPackaged === undefined) delete process.env.COPIS_PACKAGED
+      else process.env.COPIS_PACKAGED = previousPackaged
+      if (previousPort === undefined) delete process.env.COPIS_HTTP_API_PORT
+      else process.env.COPIS_HTTP_API_PORT = previousPort
+    }
+  })
+
   test('Given 正在运行的会话 When queue、stop 或更新权限模式 Then仅调用 Rust API', async () => {
     const requests: Array<{ url: string; init?: RequestInit }> = []
     const gateway = new AgentRpcGateway({

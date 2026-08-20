@@ -11,10 +11,12 @@ import { join } from 'node:path'
 import { WEB_IPC_CHANNELS } from '@copis/shared'
 import { getPersistedWebTabs, savePersistedWebTabs } from './web-tab-session-service'
 import { httpApiPortArgument, httpApiWebTokenArgument } from './http-api-web-token'
+import { moveWebTab } from './web-tab-order'
 import type {
   CreateWebTabInput,
   NavigateWebTabInput,
   OpenWebBookmarksWindowInput,
+  ReorderWebTabInput,
   ResizeWebBookmarksWindowInput,
   UpdateWebTabBoundsInput,
   WebTabBounds,
@@ -755,6 +757,31 @@ export function activateWebTab(tabId: string | null): WebTabsSnapshot {
   applyActiveView()
   emitSnapshot()
   if (tabId) emitWebTabLifecycle({ type: 'activated', tabId, snapshot: getSnapshot() })
+  return getSnapshot()
+}
+
+/** 按公开页签顺序移动网页 Tab，并在拖动结束后激活它。 */
+export function reorderWebTab(input: ReorderWebTabInput): WebTabsSnapshot {
+  const record = records.get(input.tabId)
+  if (!record || record.workflowOwned) throw new Error('网页页签不存在')
+
+  const publicRecords = Array.from(records.values()).filter((item) => !item.workflowOwned)
+  const fromIndex = publicRecords.findIndex((item) => item.state.id === input.tabId)
+  if (!Number.isInteger(input.targetIndex) || input.targetIndex < 0 || input.targetIndex >= publicRecords.length) {
+    throw new Error('网页页签目标位置无效')
+  }
+
+  const reorderedRecords = moveWebTab(publicRecords, fromIndex, input.targetIndex)
+  const workflowRecords = Array.from(records.values()).filter((item) => item.workflowOwned)
+  records.clear()
+  for (const nextRecord of reorderedRecords) records.set(nextRecord.state.id, nextRecord)
+  for (const workflowRecord of workflowRecords) records.set(workflowRecord.state.id, workflowRecord)
+
+  activeTabId = input.tabId
+  persistTabs()
+  applyActiveView()
+  emitSnapshot()
+  emitWebTabLifecycle({ type: 'activated', tabId: input.tabId, snapshot: getSnapshot() })
   return getSnapshot()
 }
 

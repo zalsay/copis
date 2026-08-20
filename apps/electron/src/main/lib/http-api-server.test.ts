@@ -178,8 +178,10 @@ describe('Rust HTTP API 业务桥契约', () => {
       path: '/api/working/skill-market?workspaceSlug=default-project',
     }, createDependencies())
 
-    expect(response.status).toBe(404)
-    expect(response.body).toEqual({ error: 'Working API 路径不存在', code: 'not_found' })
+    expect(response).toEqual({
+      status: 410,
+      body: { error: 'Working 业务桥已禁用，请通过本机 Rust API 请求', code: 'working_bridge_disabled' },
+    })
   })
 
   test('Working 支付路由不再由 Electron 业务桥处理', async () => {
@@ -189,61 +191,46 @@ describe('Rust HTTP API 业务桥契约', () => {
     }, createDependencies())
 
     expect(response).toEqual({
-      status: 404,
-      body: { error: 'Working API 路径不存在', code: 'not_found' },
+      status: 410,
+      body: { error: 'Working 业务桥已禁用，请通过本机 Rust API 请求', code: 'working_bridge_disabled' },
     })
   })
 
-  test('VIP 到账后通过 Rust 业务桥刷新认证并返回新的用户等级', async () => {
-    const refreshAfterVipPayment = async () => ({ userId: '7', isVip: true })
-    const authUpdates: unknown[] = []
+  test('Rust 认证状态桥只广播无凭据状态', async () => {
+    const updates: unknown[] = []
     const response = await handleHttpApiRequest({
       method: 'POST',
-      path: '/api/internal/working-auth/refresh-after-vip',
-      body: '{}',
+      path: '/api/internal/auth-state/changed',
+      body: JSON.stringify({
+        authenticated: true,
+        user: { id: 7, email: 'user@example.com' },
+        expiresAt: 1_900_000_000,
+      }),
     }, {
       ...createDependencies(),
-      getWorkingClient: (() => ({
-        baseUrl: 'https://backend.example.test',
-        refreshAfterVipPayment,
-        getCachedUser: () => ({ id: 7, isVip: true, vipExpiresAt: '2026-09-12T00:00:00Z' }),
-      })) as unknown as HttpApiDependencies['getWorkingClient'],
-      notifyWorkingAuthUpdated: (payload: unknown) => authUpdates.push(payload),
+      notifyWorkingAuthUpdated: (state) => updates.push(state),
     })
 
-    expect(response).toEqual({
-      status: 200,
-      body: { userId: '7', isVip: true },
-    })
-    expect(authUpdates).toEqual([{
+    expect(response).toEqual({ status: 204 })
+    expect(updates).toEqual([{
       authenticated: true,
-      user: { id: 7, isVip: true, vipExpiresAt: '2026-09-12T00:00:00Z' },
+      user: { id: 7, email: 'user@example.com' },
       backendUrl: 'https://backend.example.test',
+      expiresAt: 1_900_000_000,
     }])
   })
 
-  test('Rust Working 业务桥由主进程代发请求且只返回业务响应', async () => {
-    const requests: unknown[] = []
+  test('Rust 认证状态桥拒绝凭据字段', async () => {
     const response = await handleHttpApiRequest({
       method: 'POST',
-      path: '/api/internal/working-auth/request',
-      body: JSON.stringify({ method: 'GET', path: '/api/working/expert-skills' }),
-    }, {
-      ...createDependencies(),
-      getWorkingClient: (() => ({
-        baseUrl: 'https://backend.example.test',
-        requestFromRust: async (input: unknown) => {
-          requests.push(input)
-          return { data: [{ id: 12, slug: 'weekly-report' }] }
-        },
-      })) as unknown as HttpApiDependencies['getWorkingClient'],
-    })
+      path: '/api/internal/auth-state/changed',
+      body: JSON.stringify({ authenticated: true, accessToken: 'must-not-cross-bridge' }),
+    }, createDependencies())
 
     expect(response).toEqual({
-      status: 200,
-      body: { data: [{ id: 12, slug: 'weekly-report' }] },
+      status: 400,
+      body: { error: '认证状态通知不得包含凭据', code: 'credential_leak' },
     })
-    expect(requests).toEqual([{ method: 'GET', path: '/api/working/expert-skills' }])
   })
 
   test('文件文本读写路由将上下文转发给文件服务', async () => {

@@ -72,12 +72,17 @@ function toComplete(frame: Extract<AgentRpcWorkerFrame, { type: 'complete' }>): 
 }
 
 export class AgentRpcGateway {
-  private readonly baseUrl: string
+  private readonly configuredBaseUrl: string | undefined
   private readonly fetchImpl: FetchImplementation
 
   constructor(options: AgentRpcGatewayOptions = {}) {
-    this.baseUrl = resolveBaseUrl(options.baseUrl)
+    this.configuredBaseUrl = options.baseUrl
     this.fetchImpl = options.fetchImpl ?? fetch
+  }
+
+  // 网关实例可能早于 bootstrap 创建，默认地址必须在请求时读取运行环境。
+  private get baseUrl(): string {
+    return resolveBaseUrl(this.configuredBaseUrl)
   }
 
   async isActive(sessionId: string): Promise<boolean> {

@@ -10,6 +10,7 @@ import {
   requireExistingAlipayBot,
   requireExistingOfficeCli,
   requireExistingNodeRuntime,
+  requireExistingPythonRuntime,
   requireExistingRustApi,
   writePublishedManifest,
 } from './publish-functional-modules'
@@ -82,6 +83,28 @@ describe('功能模块发布脚本 --rust', () => {
     })])
   })
 
+  test('Python runtime-only 输入使用 tar.gz 归档并保留稳定入口', () => {
+    const modules = buildFunctionalModuleBinaryInputs({
+      rustOnly: false,
+      pythonRuntimeOnly: true,
+      rustBinary: '/tmp/rust-api-does-not-exist',
+      rustVersion: '0.2.0',
+      officeCliBinary: '/tmp/officecli-does-not-exist',
+      officeCliVersion: '1.0.143',
+      pythonRuntimeArchive: '/tmp/python-runtime.tar.gz',
+      pythonRuntimeVersion: '3.12.14',
+      platform: 'darwin',
+      arch: 'arm64',
+    })
+
+    expect(modules).toEqual([expect.objectContaining({
+      module: 'python-runtime',
+      format: 'tar.gz',
+      entrypoint: 'bin/python',
+      binaryPath: '/tmp/python-runtime.tar.gz',
+    })])
+  })
+
   test('支付宝智能体 CLI-only 输入使用 tar.gz 归档并保留稳定入口', () => {
     const modules = buildFunctionalModuleBinaryInputs({
       rustOnly: false,
@@ -129,6 +152,31 @@ describe('功能模块发布脚本 --rust', () => {
     requireExistingOfficeCli(manifest, 'darwin', 'arm64')
     requireExistingRustApi(manifest, 'darwin', 'arm64')
     expect(() => requireExistingNodeRuntime(manifest, 'darwin', 'arm64')).toThrow('缺少 node-runtime')
+  })
+
+  test('Python runtime artifact 要求 tar.gz 和统一 Python 入口', () => {
+    const manifest: FunctionalModuleManifest = {
+      schema: 1,
+      channel: 'stable',
+      platforms: {
+        'darwin-arm64': {
+          modules: {
+            'python-runtime': {
+              version: '3.12.14',
+              url: 'https://download.example.com/python-runtime.tar.gz',
+              sha256: 'a'.repeat(64),
+              size: 1,
+              format: 'tar.gz',
+              entrypoint: 'bin/python',
+              required: true,
+            },
+          },
+        },
+      },
+    }
+
+    expect(requireExistingPythonRuntime(manifest, 'darwin', 'arm64')).toBe(true)
+    expect(() => requireExistingPythonRuntime(manifest, 'win32', 'x64')).toThrow('缺少 python-runtime')
   })
 
   test('支付宝智能体 CLI-only 发布要求 COS 已有兼容归档模块', () => {

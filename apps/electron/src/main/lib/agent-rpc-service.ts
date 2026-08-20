@@ -349,6 +349,7 @@ function buildRuntimeEnv(
     runtimeStatus: getRuntimeStatus(),
     windowsShellPreference: settings.windowsShellPreference,
     officeCliPath: getFunctionalModulePath('officecli'),
+    pythonRuntimePath: getFunctionalModulePath('python-runtime'),
   })
   if (!workspace || !workspaceSlug) return base
   const workspaceEnv = {
@@ -424,9 +425,8 @@ async function resolveWorkerCredentials(channelId: string, provider: string): Pr
   xaiOAuthCredentials?: Awaited<ReturnType<typeof resolveXaiOAuthCredentials>>
 }> {
   if (isCopisWorkingChannelId(channelId)) {
-    const token = await getWorkingApiClient().getValidToken()
-    if (!token) throw new Error('请先登录 Copis Working')
-    return { apiKey: token }
+    // Rust PiWorkerManager 启动时注入一次性本地 Working model capability。
+    return { apiKey: '' }
   }
   if (provider === 'openai-codex') {
     const credentials = await resolveCodexOAuthCredentials(channelId)

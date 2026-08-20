@@ -5,6 +5,7 @@ import { dirname, join, resolve } from 'node:path'
 import {
   buildFunctionalModuleManifestUpload,
   buildFunctionalModuleRelease,
+  advanceFunctionalModuleVersions,
   markFunctionalModuleRequired,
   publishFunctionalModuleManifest,
   publishFunctionalModuleRelease,
@@ -45,8 +46,9 @@ async function main(): Promise<void> {
   const nodeRuntimeOnly = hasFlag('--node-runtime') || process.env.COPIS_NODE_RUNTIME_ONLY === '1'
   const alipayBotOnly = hasFlag('--alipay-bot') || process.env.COPIS_ALIPAY_BOT_ONLY === '1'
   const playwrightCoreOnly = hasFlag('--playwright-core') || process.env.COPIS_PLAYWRIGHT_CORE_ONLY === '1'
-  if (Number(rustOnly) + Number(officeCliOnly) + Number(nodeRuntimeOnly) + Number(alipayBotOnly) + Number(playwrightCoreOnly) > 1) {
-    throw new Error('--rust、--officecli、--node-runtime、--alipay-bot 与 --playwright-core 不能同时使用')
+  const pythonRuntimeOnly = hasFlag('--python-runtime') || process.env.COPIS_PYTHON_RUNTIME_ONLY === '1'
+  if (Number(rustOnly) + Number(officeCliOnly) + Number(nodeRuntimeOnly) + Number(alipayBotOnly) + Number(playwrightCoreOnly) + Number(pythonRuntimeOnly) > 1) {
+    throw new Error('--rust、--officecli、--node-runtime、--alipay-bot、--playwright-core 与 --python-runtime 不能同时使用')
   }
 
   const secretId = requiredEnv('COS_SECRET_ID')
@@ -79,7 +81,7 @@ async function main(): Promise<void> {
   if (hasFlag('--manifest-only')) {
     const manifestPath = requiredOption('--manifest-file', 'COPIS_FUNCTIONAL_MODULE_MANIFEST_FILE')
     const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as FunctionalModuleManifest
-    const requiredManifest = ['node-runtime', 'officecli', 'alipay-bot', 'rust-http-api', 'playwright-core'].reduce<FunctionalModuleManifest>(
+    const requiredManifest = ['node-runtime', 'python-runtime', 'officecli', 'alipay-bot', 'rust-http-api', 'playwright-core'].reduce<FunctionalModuleManifest>(
       (value, name) => markFunctionalModuleRequired(value, name),
       manifest,
     )
@@ -92,32 +94,40 @@ async function main(): Promise<void> {
     await publishFunctionalModuleManifest(manifestEntry, client)
     console.log(`[publish:functional-modules] 已覆盖发布 manifest: ${manifestEntry.key}`)
   } else {
-    const rustBinary = officeCliOnly || nodeRuntimeOnly || alipayBotOnly || playwrightCoreOnly
+    const rustBinary = officeCliOnly || nodeRuntimeOnly || alipayBotOnly || playwrightCoreOnly || pythonRuntimeOnly
       ? ''
       : getOption('--rust-binary')
         ?? process.env.COPIS_RUST_HTTP_API_BINARY?.trim()
         ?? join(repoRoot, 'native/http-api-server/target/release', binaryName('copis-http-api-server', platform))
-    const officeCliBinary = rustOnly || nodeRuntimeOnly || alipayBotOnly || playwrightCoreOnly
+    const officeCliBinary = rustOnly || nodeRuntimeOnly || alipayBotOnly || playwrightCoreOnly || pythonRuntimeOnly
       ? undefined
       : getOption('--officecli-binary')
         ?? process.env.COPIS_OFFICECLI_BINARY?.trim()
         ?? join(electronDir, 'resources/bin', binaryName('officecli', platform))
     const nodeRuntimeArchive = rustOnly || officeCliOnly || alipayBotOnly || playwrightCoreOnly
+      || pythonRuntimeOnly
       ? undefined
       : getOption('--node-runtime-archive')
         ?? process.env.COPIS_NODE_RUNTIME_ARCHIVE?.trim()
         ?? join(electronDir, 'resources/node-runtime', `${platform}-${arch}.tar.gz`)
     const alipayBotArchive = rustOnly || officeCliOnly || nodeRuntimeOnly || playwrightCoreOnly
+      || pythonRuntimeOnly
       ? undefined
       : getOption('--alipay-bot-archive')
         ?? process.env.COPIS_ALIPAY_BOT_ARCHIVE?.trim()
         ?? join(electronDir, 'resources/alipay-bot', `${platform}-${arch}.tar.gz`)
+    const pythonRuntimeArchive = rustOnly || officeCliOnly || nodeRuntimeOnly || alipayBotOnly || playwrightCoreOnly
+      ? undefined
+      : getOption('--python-runtime-archive')
+        ?? process.env.COPIS_PYTHON_RUNTIME_ARCHIVE?.trim()
+        ?? join(electronDir, 'resources/python-runtime', `${platform}-${arch}.tar.gz`)
     const modules = applyFunctionalModuleVersionLocks(buildFunctionalModuleBinaryInputs({
       rustOnly,
       officeCliOnly,
       nodeRuntimeOnly,
       alipayBotOnly,
       playwrightCoreOnly,
+      pythonRuntimeOnly,
       rustBinary,
       rustVersion: getOption('--rust-version') ?? process.env.COPIS_RUST_HTTP_API_VERSION?.trim() ?? version,
       officeCliBinary,
@@ -131,6 +141,10 @@ async function main(): Promise<void> {
         ?? join(electronDir, 'resources/playwright-core/playwright-core.tar.gz'),
       playwrightCoreVersion: getOption('--playwright-core-version')
         ?? process.env.COPIS_PLAYWRIGHT_CORE_VERSION?.trim()
+        ?? version,
+      pythonRuntimeArchive,
+      pythonRuntimeVersion: getOption('--python-runtime-version')
+        ?? process.env.COPIS_PYTHON_RUNTIME_VERSION?.trim()
         ?? version,
       platform,
       arch,
@@ -154,6 +168,7 @@ async function main(): Promise<void> {
       nodeRuntimeOnly,
       alipayBotOnly,
       playwrightCoreOnly,
+      pythonRuntimeOnly,
       platform,
       arch,
     })
@@ -168,8 +183,23 @@ async function main(): Promise<void> {
     for (const module of skippedLockedModules) {
       console.log(`[publish:functional-modules] ${module.module} 版本锁定为 ${module.version}，COS 已是相同或更高版本，跳过发布`)
     }
+    const modulesForRelease = rustOnly
+      ? advanceFunctionalModuleVersions(
+        modulesToPublish,
+        existingManifest,
+        platform,
+        arch,
+        ['rust-http-api'],
+      )
+      : modulesToPublish
+    if (rustOnly) {
+      const rustModule = modulesForRelease.find((module) => module.module === 'rust-http-api')
+      if (rustModule) {
+        console.log(`[publish:functional-modules] --rust 强制更新 rust-http-api 版本：${rustModule.version}`)
+      }
+    }
     const resolvedRelease = await resolveImmutableModuleVersions(
-      { ...releaseInput, modules: modulesToPublish },
+      { ...releaseInput, modules: modulesForRelease },
       client,
       { lockedModules: lockedFunctionalModuleNames() },
     )
@@ -341,7 +371,29 @@ export function requireExistingPlaywrightCore(
   return true
 }
 
+export function requireExistingPythonRuntime(
+  manifest: FunctionalModuleManifest | undefined,
+  platform: FunctionalModulePlatform,
+  arch: FunctionalModuleArchitecture,
+  options: PythonRuntimeValidationOptions = {},
+): boolean {
+  const platformKey = `${platform}-${arch}`
+  const artifact = manifest?.platforms[platformKey]?.modules['python-runtime']
+  if (!artifact) {
+    if (options.allowMissing) return false
+    throw new Error(`COS manifest 当前平台/架构缺少 python-runtime: ${platformKey}，单模块发布已停止`)
+  }
+  if (artifact.required !== true || artifact.format !== 'tar.gz' || artifact.entrypoint !== `bin/${binaryName('python', platform)}`) {
+    throw new Error(`COS manifest 当前平台/架构的 python-runtime 无效: ${platformKey}，单模块发布已停止`)
+  }
+  return true
+}
+
 interface NodeRuntimeValidationOptions {
+  allowMissing?: boolean
+}
+
+interface PythonRuntimeValidationOptions {
   allowMissing?: boolean
 }
 
@@ -352,6 +404,7 @@ interface SingleModuleReleaseValidationOptions {
   nodeRuntimeOnly: boolean
   alipayBotOnly: boolean
   playwrightCoreOnly?: boolean
+  pythonRuntimeOnly?: boolean
   platform: FunctionalModulePlatform
   arch: FunctionalModuleArchitecture
 }
@@ -367,6 +420,7 @@ export function validateExistingModulesForSingleModuleRelease(
     nodeRuntimeOnly,
     alipayBotOnly,
     playwrightCoreOnly = false,
+    pythonRuntimeOnly = false,
     platform,
     arch,
   } = options
@@ -381,6 +435,10 @@ export function validateExistingModulesForSingleModuleRelease(
     if (!hasPlaywrightCore) {
       console.warn(`[publish:functional-modules] COS manifest 当前平台/架构缺少 playwright-core: ${platform}-${arch}，--rust 将继续发布；请随后执行 --playwright-core 补齐`)
     }
+    const hasPythonRuntime = requireExistingPythonRuntime(manifest, platform, arch, { allowMissing: true })
+    if (!hasPythonRuntime) {
+      console.warn(`[publish:functional-modules] COS manifest 当前平台/架构缺少 python-runtime: ${platform}-${arch}，--rust 将继续发布；请随后执行 --python-runtime 补齐`)
+    }
     return
   }
   if (officeCliOnly) {
@@ -388,6 +446,7 @@ export function validateExistingModulesForSingleModuleRelease(
     requireExistingNodeRuntime(manifest, platform, arch)
     requireExistingAlipayBot(manifest, platform, arch)
     requireExistingPlaywrightCore(manifest, platform, arch)
+    requireExistingPythonRuntime(manifest, platform, arch)
     return
   }
   if (nodeRuntimeOnly) {
@@ -395,6 +454,7 @@ export function validateExistingModulesForSingleModuleRelease(
     requireExistingOfficeCli(manifest, platform, arch)
     requireExistingAlipayBot(manifest, platform, arch)
     requireExistingPlaywrightCore(manifest, platform, arch)
+    requireExistingPythonRuntime(manifest, platform, arch)
     return
   }
   if (alipayBotOnly) {
@@ -402,6 +462,7 @@ export function validateExistingModulesForSingleModuleRelease(
     requireExistingOfficeCli(manifest, platform, arch)
     requireExistingNodeRuntime(manifest, platform, arch)
     requireExistingPlaywrightCore(manifest, platform, arch)
+    requireExistingPythonRuntime(manifest, platform, arch)
     return
   }
   if (playwrightCoreOnly) {
@@ -409,6 +470,15 @@ export function validateExistingModulesForSingleModuleRelease(
     requireExistingOfficeCli(manifest, platform, arch)
     requireExistingNodeRuntime(manifest, platform, arch)
     requireExistingAlipayBot(manifest, platform, arch)
+    requireExistingPythonRuntime(manifest, platform, arch)
+    return
+  }
+  if (pythonRuntimeOnly) {
+    requireExistingRustApi(manifest, platform, arch)
+    requireExistingOfficeCli(manifest, platform, arch)
+    requireExistingNodeRuntime(manifest, platform, arch)
+    requireExistingAlipayBot(manifest, platform, arch)
+    requireExistingPlaywrightCore(manifest, platform, arch)
   }
 }
 
@@ -418,6 +488,7 @@ interface FunctionalModuleBinaryInputOptions {
   nodeRuntimeOnly?: boolean
   alipayBotOnly?: boolean
   playwrightCoreOnly?: boolean
+  pythonRuntimeOnly?: boolean
   rustBinary: string
   rustVersion: string
   officeCliBinary?: string
@@ -428,6 +499,8 @@ interface FunctionalModuleBinaryInputOptions {
   alipayBotVersion?: string
   playwrightCoreArchive?: string
   playwrightCoreVersion?: string
+  pythonRuntimeArchive?: string
+  pythonRuntimeVersion?: string
   platform: FunctionalModulePlatform
   arch: FunctionalModuleArchitecture
 }
@@ -439,11 +512,12 @@ export function buildFunctionalModuleBinaryInputs(
   const nodeRuntimeOnly = input.nodeRuntimeOnly ?? false
   const alipayBotOnly = input.alipayBotOnly ?? false
   const playwrightCoreOnly = input.playwrightCoreOnly ?? false
-  if (Number(input.rustOnly) + Number(officeCliOnly) + Number(nodeRuntimeOnly) + Number(alipayBotOnly) + Number(playwrightCoreOnly) > 1) {
-    throw new Error('--rust、--officecli、--node-runtime、--alipay-bot 与 --playwright-core 不能同时使用')
+  const pythonRuntimeOnly = input.pythonRuntimeOnly ?? false
+  if (Number(input.rustOnly) + Number(officeCliOnly) + Number(nodeRuntimeOnly) + Number(alipayBotOnly) + Number(playwrightCoreOnly) + Number(pythonRuntimeOnly) > 1) {
+    throw new Error('--rust、--officecli、--node-runtime、--alipay-bot、--playwright-core 与 --python-runtime 不能同时使用')
   }
   const modules: FunctionalModuleBinaryInput[] = []
-  if (!officeCliOnly && !nodeRuntimeOnly && !alipayBotOnly && !playwrightCoreOnly) {
+  if (!officeCliOnly && !nodeRuntimeOnly && !alipayBotOnly && !playwrightCoreOnly && !pythonRuntimeOnly) {
     modules.push({
       module: 'rust-http-api',
       version: input.rustVersion,
@@ -453,7 +527,7 @@ export function buildFunctionalModuleBinaryInputs(
       required: true,
     })
   }
-  if (!input.rustOnly && !nodeRuntimeOnly && !alipayBotOnly && !playwrightCoreOnly) {
+  if (!input.rustOnly && !nodeRuntimeOnly && !alipayBotOnly && !playwrightCoreOnly && !pythonRuntimeOnly) {
     if (!input.officeCliBinary) throw new Error('正常发布或 OfficeCLI-only 发布需要提供 OfficeCLI 二进制路径')
     modules.push({
       module: 'officecli',
@@ -464,7 +538,7 @@ export function buildFunctionalModuleBinaryInputs(
       required: true,
     })
   }
-  if (!input.rustOnly && !officeCliOnly && !alipayBotOnly && !playwrightCoreOnly) {
+  if (!input.rustOnly && !officeCliOnly && !alipayBotOnly && !playwrightCoreOnly && !pythonRuntimeOnly) {
     if (!input.nodeRuntimeArchive) throw new Error('正常发布或 Node.js runtime-only 发布需要提供 Node.js runtime 归档')
     modules.push({
       module: 'node-runtime',
@@ -477,7 +551,7 @@ export function buildFunctionalModuleBinaryInputs(
       required: true,
     })
   }
-  if (!input.rustOnly && !officeCliOnly && !nodeRuntimeOnly && !playwrightCoreOnly) {
+  if (!input.rustOnly && !officeCliOnly && !nodeRuntimeOnly && !playwrightCoreOnly && !pythonRuntimeOnly) {
     if (!input.alipayBotArchive) throw new Error('正常发布或支付宝智能体 CLI-only 发布需要提供 alipay-bot 归档')
     modules.push({
       module: 'alipay-bot',
@@ -490,7 +564,7 @@ export function buildFunctionalModuleBinaryInputs(
       required: true,
     })
   }
-  if (!input.rustOnly && !officeCliOnly && !nodeRuntimeOnly && !alipayBotOnly) {
+  if (!input.rustOnly && !officeCliOnly && !nodeRuntimeOnly && !alipayBotOnly && !pythonRuntimeOnly) {
     if (!input.playwrightCoreArchive) throw new Error('正常发布或 Playwright-only 发布需要提供 playwright-core 归档')
     modules.push({
       module: 'playwright-core',
@@ -500,6 +574,19 @@ export function buildFunctionalModuleBinaryInputs(
       binaryPath: input.playwrightCoreArchive,
       format: 'tar.gz',
       entrypoint: 'node_modules/playwright-core/index.js',
+      required: true,
+    })
+  }
+  if (!input.rustOnly && !officeCliOnly && !nodeRuntimeOnly && !alipayBotOnly && !playwrightCoreOnly) {
+    if (!input.pythonRuntimeArchive) throw new Error('正常发布或 Python runtime-only 发布需要提供 Python runtime 归档')
+    modules.push({
+      module: 'python-runtime',
+      version: input.pythonRuntimeVersion ?? input.rustVersion,
+      platform: input.platform,
+      arch: input.arch,
+      binaryPath: input.pythonRuntimeArchive,
+      format: 'tar.gz',
+      entrypoint: `bin/${binaryName('python', input.platform)}`,
       required: true,
     })
   }

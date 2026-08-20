@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from 'bun:test'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { lstatSync, mkdirSync, mkdtempSync, readlinkSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { gzipSync } from 'node:zlib'
@@ -47,6 +47,15 @@ function createTarGzWithRootDirectory(files: Record<string, string>): Buffer {
   return gzipSync(Buffer.concat([...entries, Buffer.alloc(1024)]))
 }
 
+function createTarGzWithSymlink(linkPath: string, linkTarget: string): Buffer {
+  return gzipSync(Buffer.concat([
+    createTarDirectoryEntry('./'),
+    createTarFileEntry('./bin/python3.12', 'python-runtime-binary'),
+    createTarSymlinkEntry(`./${linkPath}`, linkTarget),
+    Buffer.alloc(1024),
+  ]))
+}
+
 function createTarGzWithPaxMetadata(files: Record<string, string>): Buffer {
   const entries = [createTarPaxHeader('./PaxHeader/currentdir'), createTarDirectoryEntry('./')]
   for (const [path, content] of Object.entries(files)) {
@@ -70,6 +79,14 @@ function createTarFileEntry(path: string, content: string): Buffer {
   header[156] = '0'.charCodeAt(0)
   const padding = Buffer.alloc((512 - (body.byteLength % 512)) % 512)
   return Buffer.concat([header, body, padding])
+}
+
+function createTarSymlinkEntry(path: string, target: string): Buffer {
+  const header = Buffer.alloc(512)
+  header.write(path)
+  header.write(target, 157)
+  header[156] = '2'.charCodeAt(0)
+  return header
 }
 
 function createTarPaxHeader(path: string): Buffer {
@@ -167,6 +184,52 @@ describe('Copis 功能模块存储', () => {
     await activateFunctionalModule(paths, packageInfo, versionDir)
 
     expect(readActiveFunctionalModule(paths, 'node-runtime')?.path).toBe(join(versionDir, 'bin/node'))
+  })
+
+  test('Given Unix Python runtime 归档包含相对 symlink When 组装 Then 保留链接语义并激活入口', async () => {
+    const root = createRoot()
+    const archive = createTarGzWithSymlink('bin/python', 'python3.12')
+    const source = join(root, 'python-runtime.tar.gz')
+    writeFileSync(source, archive)
+    const paths = getFunctionalModulePaths(join(root, 'modules'))
+    const packageInfo: FunctionalModulePackage = {
+      name: 'python-runtime',
+      version: '3.12.14',
+      sha256: 'f'.repeat(64),
+      size: archive.byteLength,
+      format: 'tar.gz',
+      entrypoint: 'bin/python',
+      required: true,
+    }
+
+    await cacheFunctionalModule(paths, packageInfo, source)
+    const versionDir = await assembleFunctionalModule(paths, packageInfo)
+    await activateFunctionalModule(paths, packageInfo, versionDir)
+
+    expect(lstatSync(join(versionDir, 'bin/python')).isSymbolicLink()).toBe(true)
+    expect(readlinkSync(join(versionDir, 'bin/python'))).toBe('python3.12')
+    expect(readActiveFunctionalModule(paths, 'python-runtime')?.path).toBe(join(versionDir, 'bin/python'))
+  })
+
+  test('Given Python runtime symlink 指向目标目录外 When 组装 Then 拒绝解包', async () => {
+    const root = createRoot()
+    const archive = createTarGzWithSymlink('bin/python', '../../outside')
+    const source = join(root, 'python-runtime-unsafe.tar.gz')
+    writeFileSync(source, archive)
+    const paths = getFunctionalModulePaths(join(root, 'modules'))
+    const packageInfo: FunctionalModulePackage = {
+      name: 'python-runtime',
+      version: '3.12.14',
+      sha256: '0'.repeat(64),
+      size: archive.byteLength,
+      format: 'tar.gz',
+      entrypoint: 'bin/python',
+      required: true,
+    }
+
+    await cacheFunctionalModule(paths, packageInfo, source)
+
+    await expect(assembleFunctionalModule(paths, packageInfo)).rejects.toThrow('符号链接目标超出目标目录')
   })
 
   test('Given 带目录穿越的入口路径 When 写入模块缓存 Then 拒绝不安全模块', async () => {

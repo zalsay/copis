@@ -106,6 +106,24 @@ describe('项目与会话工作台提示词', () => {
     expect(prompt).not.toContain('Read、Write、Edit、Bash、Grep、Glob、LS、Skill')
   })
 
+  test('Given 计算类任务 When 构建 Agent 系统提示词 Then 必须使用 Python 执行且禁止手算', () => {
+    const prompt = buildPrompt('/tmp/sample-project')
+
+    expect(prompt).toContain('任何计算类任务')
+    expect(prompt).toContain('必须使用 Python')
+    expect(prompt).toContain('禁止手算')
+    expect(prompt).toContain('不得改用手算')
+  })
+
+  test('Given Python 依赖安装 When 构建 Agent 系统提示词 Then 默认使用阿里云 PyPI 源', () => {
+    const prompt = buildPrompt('/tmp/sample-project')
+
+    expect(prompt).toContain('pip install')
+    expect(prompt).toContain('https://mirrors.aliyun.com/pypi/simple/')
+    expect(prompt).toContain('显式传入 `-i https://mirrors.aliyun.com/pypi/simple/`')
+    expect(prompt).toContain('除非用户明确指定其他源')
+  })
+
   test('Given 专家团队服务工具 When 构建普通系统提示词 Then 保持 Agent 身份并等待用户明确启动', () => {
     const prompt = buildSystemPrompt({
       agentRuntime: 'pi',

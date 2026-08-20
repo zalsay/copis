@@ -4,7 +4,7 @@
  * Skill 只描述能力和调用规则，模块负责提供实际的 CLI 或其他运行时组件。
  */
 
-export type FunctionalModuleName = 'officecli' | 'rust-http-api' | (string & {})
+export type FunctionalModuleName = 'officecli' | 'rust-http-api' | 'python-runtime' | (string & {})
 
 export type FunctionalModulePlatform = 'darwin' | 'linux' | 'win32'
 

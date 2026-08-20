@@ -29,6 +29,7 @@ import {
   getFunctionalModulePath,
   installFunctionalModule,
   prepareFunctionalModule,
+  resolveFunctionalModuleArtifact,
   type FunctionalModuleFetch,
 } from './functional-module-manager'
 import {
@@ -48,6 +49,7 @@ import {
   resolveCopisBackendEndpoints,
   type CopisBackendEndpointResolution,
 } from './backend-endpoint-resolver'
+import { redactSensitiveLogValue } from './bridge-log-redaction'
 
 export const HTTP_API_HOST = COPIS_HTTP_API_HOST
 export const HTTP_API_PORT = resolveCopisHttpApiPort({
@@ -252,6 +254,18 @@ function resolveNodeRuntimeRoot(options: HttpApiServerOptions): string | undefin
   return dirname(dirname(active.path))
 }
 
+function resolvePythonRuntimeRoot(options: HttpApiServerOptions): string | undefined {
+  const active = readActiveFunctionalModule(
+    getFunctionalModulePaths(getRootDir(options)),
+    'python-runtime',
+  )
+  const entrypoint = process.platform === 'win32' ? 'bin/python.exe' : 'bin/python'
+  if (!active || active.entrypoint !== entrypoint) return undefined
+  const root = dirname(dirname(active.path))
+  // Windows install_only 包的完整 Python 安装树位于 bin，PYTHONHOME 必须指向该目录才能找到 Lib 和 DLL。
+  return process.platform === 'win32' ? join(root, 'bin') : root
+}
+
 function resolveOfficeCli(options: HttpApiServerOptions): string | undefined {
   const active = readActiveFunctionalModule(
     getFunctionalModulePaths(getRootDir(options)),
@@ -361,16 +375,38 @@ function writeBridgeResponse(
   }))
 }
 
+function isAuthBridgeRequest(path: string): boolean {
+  return path.startsWith('/api/internal/auth-storage/') || path === '/api/internal/auth-state/changed'
+}
+
 function dispatchBridgeRequest(child: ChildProcessWithoutNullStreams, request: RustBridgeRequest): void {
+  const diagnostic = isAuthBridgeRequest(request.path)
+  if (diagnostic) {
+    console.info('[HTTP API][认证桥] 请求开始', {
+      id: request.id,
+      method: request.method,
+      path: request.path,
+      bodyBytes: Buffer.byteLength(request.body ?? '', 'utf8'),
+    })
+  }
   const input: HttpApiRequest = {
     method: request.method,
     path: request.path,
     ...(request.body === undefined ? {} : { body: request.body }),
   }
   void handleHttpApiRequest(input).then(
-    (response) => writeBridgeResponse(child, request.id, response),
+    (response) => {
+      if (diagnostic) {
+        console.info('[HTTP API][认证桥] 请求完成', {
+          id: request.id,
+          status: response.status,
+          responseBodyBytes: response.body === undefined ? 0 : Buffer.byteLength(JSON.stringify(response.body), 'utf8'),
+        })
+      }
+      writeBridgeResponse(child, request.id, response)
+    },
     (error: unknown) => {
-      console.error('[HTTP API] 业务桥处理失败:', error)
+      console.error('[HTTP API] 业务桥处理失败:', redactSensitiveLogValue(error))
       writeBridgeResponse(child, request.id, {
         status: 500,
         body: { error: 'HTTP API 请求失败', code: 'internal_error' },
@@ -390,6 +426,7 @@ function spawnManagedProcess(
   const useDevelopmentScriptRuntime = workerLaunch?.kind === 'script' && !app.isPackaged
   const piExtensionsDir = resolvePiExtensionsDir()
   const nodeRuntimeRoot = resolveNodeRuntimeRoot(options)
+  const pythonRuntimeRoot = resolvePythonRuntimeRoot(options)
   const officeCli = resolveOfficeCli(options)
   const alipayBotCli = resolveAlipayBotCli(options)
   const alipayBotNode = resolveAlipayBotNode(nodeRuntimeRoot)
@@ -417,6 +454,7 @@ function spawnManagedProcess(
         COPIS_MEMORY_DIR: join(getConfigDir(), 'memory'),
         COPIS_HTTP_API_INTERNAL_TOKEN: internalToken,
         COPIS_HTTP_API_WEB_TOKEN: getOrCreateHttpApiWebToken(),
+        COPIS_HTTP_API_BRIDGE_ENABLED: bridgeEnabled ? '1' : '0',
         ...paymentRuntime,
         ...(options.backendUrl || process.env.COPIS_BACKEND_URL
           ? { COPIS_BACKEND_URL: options.backendUrl ?? process.env.COPIS_BACKEND_URL }
@@ -426,6 +464,7 @@ function spawnManagedProcess(
           : {}),
         ...(piExtensionsDir ? { COPIS_PI_EXTENSIONS_DIR: piExtensionsDir } : {}),
         ...(nodeRuntimeRoot ? { COPIS_RUNTIME_ROOT: nodeRuntimeRoot } : {}),
+        ...(pythonRuntimeRoot ? { COPIS_PYTHON_RUNTIME_ROOT: pythonRuntimeRoot } : {}),
         ...(officeCli ? { COPIS_OFFICECLI: officeCli } : {}),
         ...(alipayBotCli ? { COPIS_ALIPAY_BOT_CLI: alipayBotCli } : {}),
         ...(alipayBotNode ? { COPIS_ALIPAY_BOT_NODE: alipayBotNode } : {}),
@@ -709,6 +748,53 @@ export async function updateHttpApiServer(options: HttpApiServerOptions = {}): P
   }
   console.warn('[HTTP API] 新 Rust 模块正式端口健康检查失败，已恢复旧版本')
   return false
+}
+
+/**
+ * 启动窗口前只校验并切换 Rust API，避免登录页先连到不兼容的旧模块。
+ * 其他功能模块仍由登录后的完整启动 Gate 负责准备。
+ */
+export async function ensureRustHttpApiServerReady(options: HttpApiServerOptions = {}): Promise<void> {
+  const runtimeOptions = await prepareHttpApiBackend(options)
+  const rootDir = getRootDir(runtimeOptions)
+  const paths = getFunctionalModulePaths(rootDir)
+
+  if (!app.isPackaged) {
+    startHttpApiServer({ ...runtimeOptions, rootDir })
+    return
+  }
+
+  const artifact = await resolveFunctionalModuleArtifact('rust-http-api', {
+    rootDir,
+    manifestUrl: runtimeOptions.manifestUrl,
+    platform: runtimeOptions.platform,
+    arch: runtimeOptions.arch,
+    clientVersion: runtimeOptions.clientVersion,
+    fetchImpl: runtimeOptions.fetchImpl,
+  })
+  const active = readActiveFunctionalModule(paths, 'rust-http-api')
+  const needsUpdate = !active
+    || active.version !== artifact.version
+    || active.sha256.toLowerCase() !== artifact.sha256.toLowerCase()
+
+  if (needsUpdate) {
+    const updated = await updateHttpApiServer({
+      ...runtimeOptions,
+      rootDir,
+      artifactOverride: artifact,
+    })
+    if (!updated) throw new Error('系统核心模块更新后运行检查未通过')
+    return
+  }
+
+  startHttpApiServer({ ...runtimeOptions, rootDir })
+  if (!await waitForHttpApiHealth(HTTP_API_PORT, runtimeOptions)) {
+    await stopHttpApiServer(runtimeOptions.stopTimeoutMs)
+    startHttpApiServer({ ...runtimeOptions, rootDir })
+    if (!await waitForHttpApiHealth(HTTP_API_PORT, runtimeOptions)) {
+      throw new Error('系统核心模块未通过运行检查')
+    }
+  }
 }
 
 export function getHttpApiInternalToken(): string | null {

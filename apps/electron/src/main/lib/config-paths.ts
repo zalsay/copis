@@ -312,15 +312,6 @@ export function getProxySettingsPath(): string {
 }
 
 /**
- * 获取系统提示词配置文件路径
- *
- * @returns ~/.copis/system-prompts.json
- */
-export function getSystemPromptsPath(): string {
-  return join(getConfigDir(), 'system-prompts.json')
-}
-
-/**
  * 获取 Agent 工具配置文件路径
  *
  * @returns ~/.copis/chat-tools.json

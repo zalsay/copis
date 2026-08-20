@@ -45,34 +45,21 @@ import {
   normalizeWorkingPendingDiamondPurchase,
   WorkingPaymentNormalizationError,
 } from '@copis/shared'
-import type { WorkingAuthProvider, WorkingTokenStore } from './working-auth-store'
-import { discoverWorkingOidc, exchangeWorkingRefreshToken, WorkingOAuthError, WorkingOidcClient, type WorkingOAuthTokenSet } from './working-oidc-client'
-import { DEFAULT_COPIS_BACKEND_URL } from './backend-endpoint-resolver'
+import type { WorkingTokenStore } from './working-auth-store'
+import { resolveCopisHttpApiPort } from '@copis/shared/config'
 
-export { DEFAULT_COPIS_BACKEND_URL }
-
-const WORKING_TOKEN_REFRESH_BUFFER_MS = 5 * 60 * 1000
-const WORKING_REFRESH_RETRY_DELAY_MS = 60 * 1000
-export const DEFAULT_COPIS_AUTH_ISSUER = 'https://edu-api.meetlife.com.cn:9001/module/auth'
-export const COPIS_AUTH_CLIENT_ID = 'copis-desktop'
-export const COPIS_AUTH_REDIRECT_URI = 'http://127.0.0.1:43123/oauth/callback'
-
-export type WorkingOidcClientFactory = (openExternal: (url: string) => Promise<void>) => Pick<WorkingOidcClient, 'authorize'>
+const DEFAULT_LOCAL_RUST_API_URL = `http://127.0.0.1:${resolveCopisHttpApiPort({
+  configuredPort: process.env.COPIS_HTTP_API_PORT,
+  isPackaged: process.defaultApp === false,
+})}`
+const AUTH_STATE_STARTUP_RETRY_COUNT = 20
+const AUTH_STATE_STARTUP_RETRY_DELAY_MS = 250
 
 export interface WorkingApiClientOptions {
+  /** 仅测试或本地嵌入调用可注入地址；生产默认固定为 127.0.0.1 Rust API。 */
   baseUrl?: string
   fetchImpl?: (input: string, init?: RequestInit) => Promise<Response>
   tokenStore: WorkingTokenStore
-  authIssuer?: string
-  authClientId?: string
-  authRedirectUri?: string
-  oidcClientFactory?: WorkingOidcClientFactory
-}
-
-export interface WorkingRustRequest {
-  method: string
-  path: string
-  body?: string
 }
 
 export class WorkingApiError extends Error {
@@ -89,34 +76,21 @@ export class WorkingApiError extends Error {
   }
 }
 
-function resolveBackendUrl(value?: string): string {
-  const raw = value?.trim() || process.env.COPIS_BACKEND_URL?.trim() || DEFAULT_COPIS_BACKEND_URL
-  const normalized = raw.replace(/\/+$/, '')
+function resolveLocalRustApiUrl(value?: string, allowInjectedUrl = false): string {
+  const normalized = (value?.trim() || DEFAULT_LOCAL_RUST_API_URL).replace(/\/+$/, '')
   let parsed: URL
   try {
     parsed = new URL(normalized)
   } catch {
-    throw new Error('COPIS_BACKEND_URL 不是有效的 URL')
+    throw new Error('本机 Rust HTTP API 地址不正确')
   }
   if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-    throw new Error('COPIS_BACKEND_URL 只支持 http 或 https')
+    throw new Error('本机 Rust HTTP API 只支持 HTTP 或 HTTPS')
+  }
+  if (!allowInjectedUrl && !['127.0.0.1', 'localhost', '::1'].includes(parsed.hostname)) {
+    throw new Error('Working facade 只允许访问本机 Rust HTTP API')
   }
   return normalized
-}
-
-function resolveAuthIssuer(baseUrl: string, configured?: string): string {
-  const rawConfigured = configured?.trim() || process.env.COPIS_AUTH_ISSUER?.trim()
-  if (rawConfigured) {
-    const parsed = new URL(rawConfigured)
-    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') throw new Error('COPIS_AUTH_ISSUER 只支持 http 或 https')
-    return rawConfigured.replace(/\/+$/, '')
-  }
-  if (baseUrl === DEFAULT_COPIS_BACKEND_URL) return DEFAULT_COPIS_AUTH_ISSUER
-  const parsed = new URL(baseUrl)
-  parsed.pathname = '/module/auth'
-  parsed.search = ''
-  parsed.hash = ''
-  return parsed.toString().replace(/\/+$/, '')
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -194,18 +168,6 @@ function normalizeWorkingUser(value: unknown, fallback: Partial<WorkingUser> = {
   return user
 }
 
-function getJwtExpiryMs(token: string): number | null {
-  const encodedPayload = token.split('.')[1]
-  if (!encodedPayload) return null
-  try {
-    const payload = JSON.parse(Buffer.from(encodedPayload, 'base64url').toString('utf8')) as unknown
-    if (!isRecord(payload) || typeof payload.exp !== 'number' || !Number.isFinite(payload.exp)) return null
-    return payload.exp * 1000
-  } catch {
-    return null
-  }
-}
-
 function normalizeWorkingLoginResult(value: unknown): WorkingLoginResult {
   const item = isRecord(value) ? value : {}
   const token = firstDefined(item, ['token', 'access_token', 'accessToken'])
@@ -226,15 +188,6 @@ function normalizeWorkingLoginResult(value: unknown): WorkingLoginResult {
     ...(typeof mustChangePassword === 'boolean' ? { mustChangePassword } : {}),
     ...(user ? { user } : {}),
   }
-}
-
-function isAllowedRustWorkingPath(pathname: string): boolean {
-  return pathname === '/api/working'
-    || pathname.startsWith('/api/working/')
-    || pathname.startsWith('/api/pay/')
-    || pathname.startsWith('/api/users/orders/')
-    || pathname.startsWith('/api/internal/working-desktop/')
-    || pathname.startsWith('/api/internal/working-model/')
 }
 
 function normalizeWorkspace(value: unknown): WorkingWorkspace {
@@ -469,253 +422,92 @@ function normalizeWorkingImageGenerationResult(value: unknown): WorkingImageGene
 
 export class WorkingApiClient {
   readonly baseUrl: string
-  readonly authIssuer: string
   private readonly fetchImpl: (input: string, init?: RequestInit) => Promise<Response>
   private readonly tokenStore: WorkingTokenStore
-  private readonly authClientId: string
-  private readonly authRedirectUri: string
-  private readonly oidcClientFactory?: WorkingOidcClientFactory
-  private refreshTimer: ReturnType<typeof setTimeout> | null = null
-  private refreshPromise: Promise<string> | null = null
+  private cachedUser: WorkingUser | null
 
   constructor(options: WorkingApiClientOptions) {
-    this.baseUrl = resolveBackendUrl(options.baseUrl)
-    this.authIssuer = resolveAuthIssuer(this.baseUrl, options.authIssuer)
+    this.baseUrl = resolveLocalRustApiUrl(options.baseUrl, options.fetchImpl !== undefined)
     this.fetchImpl = options.fetchImpl ?? ((input, init) => fetch(input, init))
     this.tokenStore = options.tokenStore
-    this.authClientId = options.authClientId?.trim() || COPIS_AUTH_CLIENT_ID
-    this.authRedirectUri = options.authRedirectUri?.trim() || COPIS_AUTH_REDIRECT_URI
-    this.oidcClientFactory = options.oidcClientFactory
-    this.scheduleAutomaticRefresh()
+    this.cachedUser = normalizeWorkingUser(this.tokenStore.getUser())
   }
 
+  /** Working access token 只存在 Rust AuthSession；Electron facade 永不读取 token。 */
   getToken(): string | null {
-    return this.tokenStore.getToken()
+    return null
   }
 
   async getValidToken(): Promise<string | null> {
-    const token = this.tokenStore.getToken()
-    if (!token) return null
-
-    const expiresAt = getJwtExpiryMs(token)
-    const shouldRefresh = expiresAt !== null && expiresAt - Date.now() <= WORKING_TOKEN_REFRESH_BUFFER_MS
-    if (!shouldRefresh || !this.tokenStore.getRefreshToken()) return token
-
-    try {
-      return await this.refreshAccessToken()
-    } catch (error) {
-      if (error instanceof WorkingApiError && error.status === 401) {
-        this.clearAuth()
-        throw error
-      }
-      // 网络短暂异常时，只要旧 token 尚未过期，继续使用它完成本次请求。
-      if (expiresAt > Date.now()) {
-        console.warn('[Copis Working] 自动刷新 token 失败，将暂时使用现有 token:', error)
-        return token
-      }
-      throw error
-    }
+    return null
   }
 
   getCachedUser(): WorkingUser | null {
-    const rawUser = this.tokenStore.getUser()
-    const user = normalizeWorkingUser(rawUser)
-    if (!user) return null
-
-    // 清理旧版本可能把后端 User 原对象（含 Password hash）写入认证文件的情况。
-    const hasSensitiveFields = isRecord(rawUser)
-      && Object.keys(rawUser).some((key) => /password|secret|credential/i.test(key))
-    const token = this.tokenStore.getToken()
-    if (token && hasSensitiveFields) this.tokenStore.save(token, user)
-    return user
-  }
-
-  async requestFromRust(input: WorkingRustRequest): Promise<unknown> {
-    const method = input.method.trim().toUpperCase()
-    if (!['GET', 'POST', 'DELETE'].includes(method)) {
-      throw new WorkingApiError('Rust Working 请求方法不支持', 405, 'method_not_allowed')
-    }
-    if (!input.path.startsWith('/')) {
-      throw new WorkingApiError('Rust Working 请求路径不正确', 400, 'invalid_path')
-    }
-    let url: URL
-    try {
-      url = new URL(input.path, 'http://copis-working-bridge.invalid')
-    } catch {
-      throw new WorkingApiError('Rust Working 请求路径不正确', 400, 'invalid_path')
-    }
-    if (!isAllowedRustWorkingPath(url.pathname)) {
-      throw new WorkingApiError('Rust Working 请求路径不允许', 403, 'path_not_allowed')
-    }
-    if (method === 'GET' || method === 'DELETE') {
-      if (input.body !== undefined && input.body.trim()) {
-        throw new WorkingApiError('Rust Working 请求体不允许存在', 400, 'invalid_request_body')
-      }
-    } else if (input.body !== undefined) {
-      try {
-        JSON.parse(input.body)
-      } catch {
-        throw new WorkingApiError('Rust Working 请求体不是有效 JSON', 400, 'invalid_json')
-      }
-    }
-    return this.request<unknown>(input.path, {
-      method,
-      auth: true,
-      unwrap: false,
-      ...(input.body !== undefined ? { body: input.body } : {}),
-    })
+    return this.cachedUser ?? normalizeWorkingUser(this.tokenStore.getUser())
   }
 
   clearAuth(): void {
-    this.stopAutomaticRefresh()
+    this.cachedUser = null
     this.tokenStore.clear()
-  }
-
-  private getAuthProvider(): WorkingAuthProvider {
-    const persisted = this.tokenStore.getProvider?.()
-    if (persisted === 'oidc' || persisted === 'legacy') return persisted
-    return 'legacy'
   }
 
   async login(input: WorkingLoginInput): Promise<WorkingLoginResult> {
     const email = input.email.trim()
     if (!email || !input.password) throw new Error('请输入邮箱和密码')
-
-    const rawResult = await this.request<unknown>('/api/auth/login', {
+    const rawState = await this.request<unknown>('/api/working/login', {
       method: 'POST',
       auth: false,
       body: JSON.stringify({ email, password: input.password }),
     })
-    const result = normalizeWorkingLoginResult(rawResult)
-    if (!result || typeof result.token !== 'string' || result.token.length === 0) {
-      throw new WorkingApiError('登录响应缺少 token', 200, 'invalid_login_response', rawResult)
+    const state = isRecord(rawState) ? rawState : {}
+    const user = normalizeWorkingUser(state.user, { email })
+    if (state.authenticated !== true) {
+      throw new WorkingApiError('登录响应格式不正确', 200, 'invalid_login_response', rawState)
     }
-
-    const loginUser = result.user || result.userId !== undefined
-      ? normalizeWorkingUser(result.user, {
-        id: result.userId,
-        email,
-        isAdmin: result.isAdmin,
-        accountType: result.accountType,
-        role: result.role,
-        mustChangePassword: result.mustChangePassword,
-      })
-      : null
-    this.tokenStore.save(result.token, loginUser, result.refreshToken ?? null, 'legacy')
-    this.scheduleAutomaticRefresh()
-    try {
-      const currentUser = await this.getCurrentUser()
-      const user = normalizeWorkingUser(currentUser, loginUser ?? {}) ?? currentUser
-      this.tokenStore.save(result.token, user, undefined, 'legacy')
-      this.scheduleAutomaticRefresh()
-      return { ...result, user }
-    } catch (error) {
-      if (error instanceof WorkingApiError && error.status === 401) {
-        this.clearAuth()
-        throw error
-      }
-      this.tokenStore.save(result.token, loginUser, undefined, 'legacy')
-      this.scheduleAutomaticRefresh()
-      return { ...result, ...(loginUser ? { user: loginUser } : {}) }
+    this.cachedUser = user
+    return {
+      token: '',
+      ...(user ? { user } : {}),
+      ...(user?.id !== undefined ? { userId: user.id } : {}),
     }
   }
 
   async loginWithOAuth(openExternal: (url: string) => Promise<void>): Promise<WorkingLoginResult> {
-    const oidcClient = this.oidcClientFactory?.(openExternal) ?? new WorkingOidcClient({
-      issuer: this.authIssuer,
-      clientId: this.authClientId,
-      redirectUri: this.authRedirectUri,
-      openExternal,
-      fetchImpl: this.fetchImpl,
+    const rawStart = await this.requestWithStartupRetry<unknown>('/api/working/login-oidc', {
+      method: 'POST',
+      auth: false,
     })
-    const tokens: WorkingOAuthTokenSet = await oidcClient.authorize()
-    const result: WorkingLoginResult = {
-      token: tokens.accessToken,
-      refreshToken: tokens.refreshToken,
+    const start = isRecord(rawStart) ? rawStart : {}
+    const authorizationUrl = typeof start.authorizationUrl === 'string' ? start.authorizationUrl.trim() : ''
+    if (!authorizationUrl) {
+      throw new WorkingApiError('OIDC 登录响应缺少授权地址', 502, 'invalid_oidc_response', rawStart)
     }
-    this.tokenStore.save(result.token, null, result.refreshToken, 'oidc')
-    this.scheduleAutomaticRefresh()
-    try {
-      const currentUser = await this.getCurrentUser()
-      const user = normalizeWorkingUser(currentUser) ?? currentUser
-      this.tokenStore.save(result.token, user, undefined, 'oidc')
-      this.scheduleAutomaticRefresh()
-      return { ...result, user }
-    } catch (error) {
-      if (error instanceof WorkingApiError && error.status === 401) {
-        this.clearAuth()
-        throw error
+    await openExternal(authorizationUrl)
+    const deadline = Date.now() + 5 * 60 * 1000
+    while (Date.now() < deadline) {
+      const state = await this.getAuthState()
+      if (state.authenticated) {
+        this.cachedUser = state.user
+        return { token: '', ...(state.user ? { user: state.user } : {}) }
       }
-      this.tokenStore.save(result.token, null, undefined, 'oidc')
-      this.scheduleAutomaticRefresh()
-      return result
+      await new Promise<void>((resolve) => setTimeout(resolve, 250))
     }
+    throw new WorkingApiError('OIDC 登录超时', 408, 'oidc_timeout')
   }
 
   async refreshAccessToken(): Promise<string> {
-    if (this.refreshPromise) return this.refreshPromise
-    this.refreshPromise = this.performRefreshAccessToken().finally(() => {
-      this.refreshPromise = null
-    })
-    return this.refreshPromise
+    throw new WorkingApiError('认证刷新由 Rust AuthSession 管理', 410, 'rust_auth_session_owned')
   }
 
-  /** VIP 到账后的 Rust bridge 调用。refresh token 留在 Electron 加密存储，不反向请求正在等待的 Rust 进程。 */
   async refreshAfterVipPayment(): Promise<{ userId: string; isVip: boolean }> {
-    const token = await this.performRefreshAccessToken()
     const user = await this.getCurrentUser()
-    this.tokenStore.save(token, user)
-    this.scheduleAutomaticRefresh()
     return { userId: String(user.id), isVip: user.isVip === true }
-  }
-
-  private async performRefreshAccessToken(): Promise<string> {
-    const refreshToken = this.tokenStore.getRefreshToken()
-    if (!refreshToken) throw new WorkingApiError('登录状态缺少 refresh token', 401, 'missing_refresh_token')
-
-    try {
-      let token: string
-      let nextRefreshToken: string | null = refreshToken
-      if (this.getAuthProvider() === 'oidc') {
-        const discovery = await discoverWorkingOidc(this.authIssuer, this.fetchImpl)
-        const result = await exchangeWorkingRefreshToken({
-          tokenEndpoint: discovery.tokenEndpoint,
-          clientId: this.authClientId,
-          refreshToken,
-          fetchImpl: this.fetchImpl,
-        })
-        token = result.accessToken
-        nextRefreshToken = result.refreshToken ?? refreshToken
-      } else {
-        const rawResult = await this.request<unknown>('/api/auth/refresh', {
-          method: 'POST',
-          auth: false,
-          body: JSON.stringify({ refresh_token: refreshToken }),
-        })
-        const result = normalizeWorkingLoginResult(rawResult)
-        if (!result.token) {
-          throw new WorkingApiError('刷新响应缺少 token', 200, 'invalid_refresh_response', rawResult)
-        }
-        token = result.token
-        nextRefreshToken = result.refreshToken ?? refreshToken
-      }
-      this.tokenStore.save(token, this.tokenStore.getUser(), nextRefreshToken, this.getAuthProvider())
-      this.scheduleAutomaticRefresh()
-      return token
-    } catch (error) {
-      if (error instanceof WorkingApiError && error.status === 401) this.clearAuth()
-      if (error instanceof WorkingOAuthError) {
-        if (error.status === 400 || error.status === 401 || error.code === 'invalid_grant') this.clearAuth()
-        throw new WorkingApiError(error.message, error.status ?? 0, error.code)
-      }
-      throw error
-    }
   }
 
   async register(input: WorkingRegisterInput): Promise<WorkingUser | null> {
     const email = input.email.trim().toLowerCase()
     if (!email || !input.password) throw new Error('请输入邮箱和密码')
-    const data = await this.request<unknown>('/api/auth/register', {
+    const data = await this.request<unknown>('/api/working/register', {
       method: 'POST',
       auth: false,
       body: JSON.stringify({
@@ -732,7 +524,7 @@ export class WorkingApiClient {
   async sendVerificationCode(input: WorkingSendVerificationCodeInput): Promise<void> {
     const email = input.email.trim().toLowerCase()
     if (!email) throw new Error('请输入邮箱地址')
-    await this.request('/api/auth/send-code', {
+    await this.request('/api/working/send-verification-code', {
       method: 'POST',
       auth: false,
       body: JSON.stringify({ email, ...(input.purpose ? { purpose: input.purpose } : {}) }),
@@ -740,7 +532,7 @@ export class WorkingApiClient {
   }
 
   async verifyPasswordResetCode(input: WorkingVerifyPasswordResetCodeInput): Promise<WorkingPasswordResetVerificationResult> {
-    const data = await this.request<unknown>('/api/auth/verify-code', {
+    const data = await this.request<unknown>('/api/working/verify-password-reset-code', {
       method: 'POST',
       auth: false,
       body: JSON.stringify({ email: input.email.trim().toLowerCase(), code: input.code.trim(), purpose: 'password_reset' }),
@@ -754,7 +546,7 @@ export class WorkingApiClient {
   }
 
   async resetPassword(input: WorkingPasswordResetInput): Promise<void> {
-    await this.request('/api/auth/password/reset', {
+    await this.request('/api/working/reset-password', {
       method: 'POST',
       auth: false,
       body: JSON.stringify({
@@ -765,79 +557,87 @@ export class WorkingApiClient {
     })
   }
 
-  logout(): void {
-    this.clearAuth()
+  async logout(): Promise<void> {
+    try {
+      await this.request('/api/working/logout', { method: 'POST', auth: false })
+    } finally {
+      this.clearAuth()
+    }
+  }
+
+  private async requestAuthStateWithStartupRetry(): Promise<unknown> {
+    return this.requestWithStartupRetry('/api/working/auth-state', { auth: false })
+  }
+
+  /**
+   * 正式版启动时 Rust API 可能仍在启动或切换功能模块。
+   * 只重试无法建立本机连接的情况，HTTP 业务错误必须原样返回。
+   */
+  private async requestWithStartupRetry<T>(
+    path: string,
+    options: RequestInit & { auth?: boolean; unwrap?: boolean; includePayload?: boolean } = {},
+  ): Promise<T> {
+    for (let retry = 0; ; retry += 1) {
+      try {
+        return await this.request<T>(path, options)
+      } catch (error: unknown) {
+        const isStartupNetworkError = error instanceof WorkingApiError && error.code === 'network_error'
+        if (!isStartupNetworkError || retry >= AUTH_STATE_STARTUP_RETRY_COUNT) throw error
+        await new Promise<void>((resolve) => setTimeout(resolve, AUTH_STATE_STARTUP_RETRY_DELAY_MS))
+      }
+    }
+  }
+
+  async getAuthState(): Promise<{ authenticated: boolean; user: WorkingUser | null; expiresAt?: number }> {
+    const rawState = await this.requestAuthStateWithStartupRetry()
+    const state = isRecord(rawState) ? rawState : {}
+    const user = normalizeWorkingUser(state.user)
+    this.cachedUser = user
+    return {
+      authenticated: state.authenticated === true,
+      user,
+      ...(typeof state.expiresAt === 'number' ? { expiresAt: state.expiresAt } : {}),
+    }
   }
 
   async getCurrentUser(): Promise<WorkingUser> {
-    const rawUser = await this.request<unknown>('/api/users/me')
+    const rawUser = await this.request<unknown>('/api/working/current-user')
     const user = normalizeWorkingUser(rawUser)
     if (!user) {
       throw new WorkingApiError('当前账号响应格式不正确', 200, 'invalid_user_response', rawUser)
     }
-    const token = this.tokenStore.getToken()
-    if (token) this.tokenStore.save(token, user)
+    this.cachedUser = user
     return user
   }
 
   async getSettingsSnapshot(): Promise<WorkingSettingsSnapshot> {
-    const mePayload = await this.request<unknown>('/api/users/me', { unwrap: false })
-    const meItem = isRecord(mePayload) && isRecord(mePayload.data) ? mePayload.data : mePayload
-    const user = normalizeWorkingUser(meItem)
+    const rawSettings = await this.request<unknown>('/api/working/settings')
+    const settings = isRecord(rawSettings) ? rawSettings : {}
+    const user = normalizeWorkingUser(settings.user ?? rawSettings)
     if (!user) {
-      throw new WorkingApiError('当前账号响应格式不正确', 200, 'invalid_user_response', mePayload)
+      throw new WorkingApiError('当前账号响应格式不正确', 200, 'invalid_user_response', rawSettings)
     }
-
-    const meEnvelope = isRecord(mePayload) ? mePayload : {}
-    const [invitedResult, walletResult, ledgerResult, ordersResult, inviteResult, receiveChannelResult] = await Promise.allSettled([
-      this.request<unknown>('/api/users/invited'),
-      this.request<unknown>('/api/family/wallet'),
-      this.request<unknown>('/api/users/billing-ledger'),
-      this.request<unknown>('/api/users/orders?page=1&page_size=50'),
-      this.request<unknown>('/api/users/invite-code', { method: 'POST', body: JSON.stringify({}), unwrap: false }),
-      this.request<unknown>('/api/working/receive-channel'),
-    ])
-
-    const invitedUsers = invitedResult.status === 'fulfilled' && Array.isArray(invitedResult.value)
-      ? invitedResult.value.map(normalizeInvitedUser)
+    this.cachedUser = user
+    const invitedUsers = Array.isArray(settings.invitedUsers)
+      ? settings.invitedUsers.map(normalizeInvitedUser)
       : []
-    const wallet = walletResult.status === 'fulfilled' && isRecord(walletResult.value) ? walletResult.value : {}
-    const members = Array.isArray(wallet.members) ? wallet.members.map(normalizeWalletMember) : []
-    const familyLedger = Array.isArray(wallet.ledger) ? wallet.ledger.map(normalizeLedgerEntry) : []
-    const billingLedger = ledgerResult.status === 'fulfilled' && Array.isArray(ledgerResult.value)
-      ? ledgerResult.value.map(normalizeLedgerEntry)
-      : []
-    const ordersPayload = ordersResult.status === 'fulfilled' && isRecord(ordersResult.value) ? ordersResult.value : {}
-    const orders = Array.isArray(ordersPayload.items) ? ordersPayload.items.map(normalizeOrder) : []
-    const invitePayload = inviteResult.status === 'fulfilled' && isRecord(inviteResult.value) ? inviteResult.value : {}
-    const inviteData = isRecord(invitePayload.data) ? invitePayload.data : {}
-    const receiveChannel = receiveChannelResult.status === 'fulfilled'
-      ? normalizeReceiveChannel(receiveChannelResult.value)
-      : null
-    const vip = normalizeVip(meEnvelope.vip)
-    const token = this.tokenStore.getToken()
-    if (token) this.tokenStore.save(token, user)
-
+    const members = Array.isArray(settings.members) ? settings.members.map(normalizeWalletMember) : []
+    const ledger = Array.isArray(settings.ledger) ? settings.ledger.map(normalizeLedgerEntry) : []
     return {
       user,
-      hasCheckedIn: Boolean(meEnvelope.has_checked_in ?? meEnvelope.hasCheckedIn),
-      vip,
+      hasCheckedIn: Boolean(settings.hasCheckedIn ?? settings.has_checked_in),
+      vip: normalizeVip(settings.vip),
       invitedUsers,
-      inviteCode: typeof (inviteData.Code ?? inviteData.code) === 'string'
-        ? String(inviteData.Code ?? inviteData.code)
-        : undefined,
-      inviteLink: typeof invitePayload.invite_link === 'string' ? invitePayload.invite_link : undefined,
+      inviteCode: typeof settings.inviteCode === 'string' ? settings.inviteCode : undefined,
+      inviteLink: typeof settings.inviteLink === 'string' ? settings.inviteLink : undefined,
       members,
-      ledger: [
-        ...purchaseLedgerFromOrders(orders, user.id),
-        ...mergeSettingsLedger(familyLedger, billingLedger),
-      ].sort((left, right) => ledgerCreatedAt(right) - ledgerCreatedAt(left)),
-      receiveChannel,
+      ledger,
+      receiveChannel: normalizeReceiveChannel(settings.receiveChannel),
     }
   }
 
   async checkIn(): Promise<WorkingCheckInResult> {
-    const data = await this.request<unknown>('/api/users/checkin', {
+    const data = await this.request<unknown>('/api/working/check-in', {
       method: 'POST',
       body: JSON.stringify({}),
     })
@@ -865,7 +665,7 @@ export class WorkingApiClient {
   async listOrders(page = 1, pageSize = 20): Promise<WorkingOrdersPage> {
     const safePage = Math.max(1, Math.floor(page))
     const safePageSize = Math.min(50, Math.max(1, Math.floor(pageSize)))
-    const data = await this.request<unknown>(`/api/users/orders?page=${safePage}&page_size=${safePageSize}`)
+    const data = await this.request<unknown>(`/api/working/orders?page=${safePage}&page_size=${safePageSize}`)
     const item = isRecord(data) ? data : {}
     const rawPagination = isRecord(item.pagination) ? item.pagination : {}
     return {
@@ -882,7 +682,7 @@ export class WorkingApiClient {
   async deleteOrder(orderId: number | string): Promise<void> {
     const value = String(orderId).trim()
     if (!value) throw new Error('订单 ID 不能为空')
-    await this.request<unknown>(`/api/users/orders/${encodeURIComponent(value)}`, { method: 'DELETE' })
+    await this.request<unknown>(`/api/working/orders/${encodeURIComponent(value)}`, { method: 'DELETE' })
   }
 
   async listDiamondPackages(): Promise<WorkingDiamondPackage[]> {
@@ -974,11 +774,11 @@ export class WorkingApiClient {
     return normalizeWorkspace(data)
   }
 
-  /** 调用 edu-api /api/working/images/generate 生成图片（Copis 图片生成） */
+  /** 调用本机 Rust Gateway 生成图片（Copis 图片生成）。 */
   async generateWorkingImage(input: { prompt: string; size?: string; runId?: string }): Promise<WorkingImageGenerationResult> {
     const prompt = input.prompt.trim()
     if (!prompt) throw new Error('图片生成提示词不能为空')
-    const data = await this.request<unknown>('/api/working/images/generate', {
+    const data = await this.request<unknown>('/api/working/image', {
       method: 'POST',
       body: JSON.stringify({
         prompt,
@@ -1004,13 +804,13 @@ export class WorkingApiClient {
   }
 
   async listSkills(): Promise<WorkingSkill[]> {
-    const data = await this.request<unknown>('/api/working/expert-skills/runtime')
+    const data = await this.request<unknown>('/api/working/skills')
     if (!Array.isArray(data)) throw new WorkingApiError('技能响应格式不正确', 200, 'invalid_skills_response', data)
     return data.map(normalizeSkill)
   }
 
   async createFeedback(input: WorkingFeedbackInput): Promise<WorkingFeedbackResult> {
-    const data = await this.request<unknown>('/api/feedback/', {
+    const data = await this.request<unknown>('/api/working/feedback', {
       method: 'POST',
       body: JSON.stringify({
         page_key: input.pageKey,
@@ -1046,54 +846,24 @@ export class WorkingApiClient {
     }
   }
 
-  private scheduleAutomaticRefresh(retryDelayMs?: number): void {
-    this.stopAutomaticRefresh()
-    const token = this.tokenStore.getToken()
-    if (!token || !this.tokenStore.getRefreshToken()) return
-
-    const expiresAt = getJwtExpiryMs(token)
-    if (expiresAt === null) return
-    const delay = retryDelayMs ?? Math.max(0, expiresAt - Date.now() - WORKING_TOKEN_REFRESH_BUFFER_MS)
-    this.refreshTimer = setTimeout(() => {
-      this.refreshTimer = null
-      void this.refreshAccessToken().catch((error) => {
-        if (error instanceof WorkingApiError && error.status === 401) return
-        console.warn('[Copis Working] 定时刷新 token 失败，将在稍后重试:', error)
-        this.scheduleAutomaticRefresh(WORKING_REFRESH_RETRY_DELAY_MS)
-      })
-    }, delay)
-  }
-
-  private stopAutomaticRefresh(): void {
-    if (this.refreshTimer !== null) {
-      clearTimeout(this.refreshTimer)
-      this.refreshTimer = null
-    }
-  }
-
   private async request<T>(
     path: string,
     options: RequestInit & { auth?: boolean; unwrap?: boolean; includePayload?: boolean } = {},
-    retryOnUnauthorized = true,
   ): Promise<T> {
-    const { auth = true, unwrap = true, includePayload = true, ...requestInit } = options
+    const { unwrap = true, includePayload = true, ...requestInit } = options
     const headers = new Headers(requestInit.headers)
     headers.set('Accept', 'application/json')
     if (requestInit.body !== undefined) headers.set('Content-Type', 'application/json')
-    if (auth) {
-      const token = await this.getValidToken()
-      if (!token) throw new WorkingApiError('请先登录 Copis Working', 401, 'unauthorized')
-      headers.set('Authorization', `Bearer ${token}`)
-    }
 
     let response: Response
     try {
-      response = await this.fetchImpl(`${this.baseUrl}${path.startsWith('/') ? path : `/${path}`}`, {
+      const requestUrl = new URL(path.startsWith('/') ? path : `/${path}`, `${this.baseUrl}/`).toString()
+      response = await this.fetchImpl(requestUrl, {
         ...requestInit,
         headers,
       })
     } catch (error) {
-      throw new WorkingApiError(error instanceof Error ? error.message : '无法连接 Working 后端', 0, 'network_error', error)
+      throw new WorkingApiError(`无法连接本机 Rust HTTP API（${this.baseUrl}）`, 0, 'network_error', error)
     }
 
     const text = await response.text()
@@ -1106,17 +876,7 @@ export class WorkingApiClient {
       }
     }
     if (!response.ok) {
-      if (response.status === 401 && auth && retryOnUnauthorized && this.tokenStore.getRefreshToken()) {
-        try {
-          await this.refreshAccessToken()
-          return this.request(path, options, false)
-        } catch (error) {
-          if (error instanceof WorkingApiError && error.status === 401) this.clearAuth()
-          throw error
-        }
-      }
-      if (response.status === 401 && auth) this.clearAuth()
-      const detail = errorMessage(payload, `Working 后端请求失败（HTTP ${response.status}）`)
+      const detail = errorMessage(payload, `Rust HTTP API 请求失败（HTTP ${response.status}）`)
       throw new WorkingApiError(detail.message, response.status, detail.code, includePayload ? payload : undefined)
     }
     return unwrap ? unwrapData<T>(payload) : payload as T
@@ -1125,57 +885,7 @@ export class WorkingApiClient {
   private async requestRust<T>(
     path: string,
     options: RequestInit & { unwrap?: boolean; includePayload?: boolean } = {},
-    retryOnUnauthorized = true,
   ): Promise<T> {
-    const { unwrap = true, includePayload = true, ...requestInit } = options
-    const token = await this.getValidToken()
-    if (!token) throw new WorkingApiError('请先登录 Copis Working', 401, 'unauthorized')
-
-    const baseUrl = await this.resolveRustApiBaseUrl()
-    const headers = new Headers(requestInit.headers)
-    headers.set('Accept', 'application/json')
-    if (requestInit.body !== undefined) headers.set('Content-Type', 'application/json')
-
-    let response: Response
-    try {
-      response = await this.fetchImpl(`${baseUrl}${path.startsWith('/') ? path : `/${path}`}`, {
-        ...requestInit,
-        headers,
-      })
-    } catch (error) {
-      throw new WorkingApiError(error instanceof Error ? error.message : '无法连接本地 Rust HTTP API', 0, 'network_error', error)
-    }
-
-    const text = await response.text()
-    let payload: unknown = null
-    if (text.trim()) {
-      try {
-        payload = JSON.parse(text) as unknown
-      } catch {
-        payload = text
-      }
-    }
-    if (!response.ok) {
-      if (response.status === 401 && retryOnUnauthorized && this.tokenStore.getRefreshToken()) {
-        try {
-          await this.refreshAccessToken()
-          return this.requestRust(path, options, false)
-        } catch (error) {
-          if (error instanceof WorkingApiError && error.status === 401) this.clearAuth()
-          throw error
-        }
-      }
-      if (response.status === 401) this.clearAuth()
-      const detail = errorMessage(payload, `Rust HTTP API 请求失败（HTTP ${response.status}）`)
-      throw new WorkingApiError(detail.message, response.status, detail.code, includePayload ? payload : undefined)
-    }
-    return unwrap ? unwrapData<T>(payload) : payload as T
-  }
-
-  private async resolveRustApiBaseUrl(): Promise<string> {
-    const configured = process.env.COPIS_HTTP_API_BASE_URL?.trim()
-    if (configured) return resolveBackendUrl(configured)
-    const { HTTP_API_HOST, HTTP_API_PORT } = await import('./http-api-server')
-    return `http://${HTTP_API_HOST}:${HTTP_API_PORT}`
+    return this.request<T>(path, options)
   }
 }

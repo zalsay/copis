@@ -391,6 +391,7 @@ export interface WorkingAuthState {
   authenticated: boolean
   user: WorkingUser | null
   backendUrl: string
+  expiresAt?: number | null
 }
 
 export interface WorkingClientConfig {

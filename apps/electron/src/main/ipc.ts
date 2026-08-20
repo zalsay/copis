@@ -9,7 +9,7 @@ import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'nod
 import { existsSync, realpathSync, rmSync, readFileSync, writeFileSync, mkdirSync, statSync } from 'node:fs'
 import { writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, ATTACHMENT_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, FUNCTIONAL_MODULE_IPC_CHANNELS, PROXY_IPC_CHANNELS, SYSTEM_PROMPT_IPC_CHANNELS, AGENT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, WECHAT_IPC_CHANNELS, AUTOMATION_IPC_CHANNELS, PLANNING_IPC_CHANNELS, PLANNING_CONFLICT_ERROR, WORKING_IPC_CHANNELS, WEB_IPC_CHANNELS, BROWSER_WORKFLOW_IPC_CHANNELS, COPIS_WORKING_CHANNEL_ID, isCopisPermissionMode, isCopisWorkingChannelId, isWorkingMode, normalizePathForCompare } from '@copis/shared'
+import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, ATTACHMENT_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, FUNCTIONAL_MODULE_IPC_CHANNELS, PROXY_IPC_CHANNELS, AGENT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, WECHAT_IPC_CHANNELS, AUTOMATION_IPC_CHANNELS, PLANNING_IPC_CHANNELS, PLANNING_CONFLICT_ERROR, WORKING_IPC_CHANNELS, WEB_IPC_CHANNELS, BROWSER_WORKFLOW_IPC_CHANNELS, COPIS_WORKING_CHANNEL_ID, isCopisPermissionMode, isCopisWorkingChannelId, isWorkingMode, normalizePathForCompare } from '@copis/shared'
 import { USER_PROFILE_IPC_CHANNELS, SETTINGS_IPC_CHANNELS, SCRATCH_PAD_IPC_CHANNELS, QUICK_TASK_IPC_CHANNELS, VOICE_DICTATION_IPC_CHANNELS, APP_ICON_IPC_CHANNELS, DOCK_BADGE_IPC_CHANNELS, STORAGE_IPC_CHANNELS } from '../types'
 import type {
   QuickTaskSubmitInput,
@@ -72,10 +72,6 @@ import type {
   CopisPermissionMode,
   AskUserResponse,
   ExitPlanModeResponse,
-  SystemPromptConfig,
-  SystemPrompt,
-  SystemPromptCreateInput,
-  SystemPromptUpdateInput,
   AgentToolInfo,
   AgentToolState,
   AgentToolMeta,
@@ -135,6 +131,7 @@ import type {
   WorkingReceiveChannel,
   CreateWebTabInput,
   NavigateWebTabInput,
+  ReorderWebTabInput,
   OpenWebBookmarksWindowInput,
   ResizeWebBookmarksWindowInput,
   SaveWebBookmarkInput,
@@ -191,6 +188,7 @@ import {
   resizeWebBookmarksWindow,
   closeWebBookmarksWindow,
   reloadWebTab,
+  reorderWebTab,
   updateWebTabBounds,
 } from './lib/web-tab-manager'
 import {
@@ -322,14 +320,6 @@ import {
 import { movePathSafely } from './lib/file-move-service'
 import { getAllAgentToolInfos } from './lib/agent-tool-registry'
 import { updateAgentToolState, updateAgentToolCredentials, getAgentToolCredentials, addCustomAgentTool, deleteCustomAgentTool } from './lib/agent-tool-config'
-import {
-  getSystemPromptConfig,
-  createSystemPrompt,
-  updateSystemPrompt,
-  deleteSystemPrompt,
-  updateAppendSetting,
-  setDefaultPrompt,
-} from './lib/system-prompt-manager'
 import { watchAttachedDirectory, unwatchAttachedDirectory } from './lib/workspace-watcher'
 import { filterAttachedPaths, requireAttachedPath } from './lib/attached-paths'
 import {
@@ -962,6 +952,12 @@ export function registerIpcHandlers(): void {
   })
   ipcMain.handle(WEB_IPC_CHANNELS.CLOSE, (_event, tabId: string) => closeWebTab(tabId))
   ipcMain.handle(WEB_IPC_CHANNELS.NAVIGATE, (_event, input: NavigateWebTabInput) => navigateWebTab(input))
+  ipcMain.handle(WEB_IPC_CHANNELS.REORDER, (_event, input: ReorderWebTabInput) => {
+    if (!input || typeof input !== 'object' || typeof input.tabId !== 'string' || !input.tabId.trim() || !Number.isInteger(input.targetIndex)) {
+      throw new Error('网页页签重排参数不正确')
+    }
+    return reorderWebTab(input)
+  })
   ipcMain.handle(WEB_IPC_CHANNELS.UPDATE_BOUNDS, (_event, input: UpdateWebTabBoundsInput) => updateWebTabBounds(input))
   ipcMain.handle(WEB_IPC_CHANNELS.BOOKMARKS_WINDOW_OPEN, (_event, input: OpenWebBookmarksWindowInput) => {
     if (!input || typeof input !== 'object' || !input.bounds || typeof input.bounds !== 'object') {
@@ -1117,8 +1113,7 @@ export function registerIpcHandlers(): void {
   ipcMain.handle(WORKING_IPC_CHANNELS.GET_AUTH_STATE, async () => {
     const client = getWorkingApiClient()
     return {
-      authenticated: Boolean(client.getToken()),
-      user: client.getCachedUser(),
+      ...(await client.getAuthState()),
       backendUrl: client.baseUrl,
     }
   })
@@ -1128,10 +1123,10 @@ export function registerIpcHandlers(): void {
       throw new Error('登录参数不正确')
     }
     const client = getWorkingApiClient()
-    const result = await client.login(input)
+    await client.login(input)
+    const state = await client.getAuthState()
     return {
-      authenticated: true,
-      user: result.user ?? client.getCachedUser(),
+      ...state,
       backendUrl: client.baseUrl,
     }
   })
@@ -1176,7 +1171,7 @@ export function registerIpcHandlers(): void {
 
   ipcMain.handle(WORKING_IPC_CHANNELS.LOGOUT, async () => {
     const client = getWorkingApiClient()
-    client.logout()
+    await client.logout()
     return { authenticated: false, user: null, backendUrl: client.baseUrl }
   })
 
@@ -3012,9 +3007,8 @@ export function registerIpcHandlers(): void {
       }
       // Copis 图片生成工具测试（图片生成由 edu-api 提供，仅校验登录态）
       if (toolId === 'nano-banana') {
-        const { getWorkingTokenStore } = await import('./lib/working-auth-store')
-        const token = getWorkingTokenStore().getToken()
-        return token
+        const authState = await getWorkingApiClient().getAuthState()
+        return authState.authenticated
           ? { success: true, message: '已登录 Copis Working，图片生成由 edu-api 提供' }
           : { success: false, message: '请先登录 Copis Working' }
       }
@@ -4031,56 +4025,6 @@ export function registerIpcHandlers(): void {
         sessionEntries: sessionSlice,
         workspaceEntries: workspaceSlice,
       }
-    }
-  )
-
-  // ===== 系统提示词管理 =====
-
-  // 获取系统提示词配置
-  ipcMain.handle(
-    SYSTEM_PROMPT_IPC_CHANNELS.GET_CONFIG,
-    async (): Promise<SystemPromptConfig> => {
-      return getSystemPromptConfig()
-    }
-  )
-
-  // 创建提示词
-  ipcMain.handle(
-    SYSTEM_PROMPT_IPC_CHANNELS.CREATE,
-    async (_, input: SystemPromptCreateInput): Promise<SystemPrompt> => {
-      return createSystemPrompt(input)
-    }
-  )
-
-  // 更新提示词
-  ipcMain.handle(
-    SYSTEM_PROMPT_IPC_CHANNELS.UPDATE,
-    async (_, id: string, input: SystemPromptUpdateInput): Promise<SystemPrompt> => {
-      return updateSystemPrompt(id, input)
-    }
-  )
-
-  // 删除提示词
-  ipcMain.handle(
-    SYSTEM_PROMPT_IPC_CHANNELS.DELETE,
-    async (_, id: string): Promise<void> => {
-      return deleteSystemPrompt(id)
-    }
-  )
-
-  // 更新追加日期时间和用户名开关
-  ipcMain.handle(
-    SYSTEM_PROMPT_IPC_CHANNELS.UPDATE_APPEND_SETTING,
-    async (_, enabled: boolean): Promise<void> => {
-      return updateAppendSetting(enabled)
-    }
-  )
-
-  // 设置默认提示词
-  ipcMain.handle(
-    SYSTEM_PROMPT_IPC_CHANNELS.SET_DEFAULT,
-    async (_, id: string | null): Promise<void> => {
-      return setDefaultPrompt(id)
     }
   )
 

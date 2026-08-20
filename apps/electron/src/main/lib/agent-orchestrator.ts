@@ -379,6 +379,7 @@ export class AgentOrchestrator {
       runtimeStatus: getRuntimeStatus(),
       windowsShellPreference: getSettings().windowsShellPreference,
       officeCliPath: getFunctionalModulePath('officecli'),
+      pythonRuntimePath: getFunctionalModulePath('python-runtime'),
       processEnv,
     })
 
@@ -501,10 +502,12 @@ export class AgentOrchestrator {
       return fallbackTitle
     }
 
+    if (isCopisWorkingChannelId(channelId)) {
+      return createFallbackTitle(userMessage)
+    }
+
     try {
-      const apiKey = isCopisWorkingChannelId(channelId)
-        ? await getWorkingApiClient().getValidToken()
-        : await resolveChannelRuntimeApiKey(channelId)
+      const apiKey = await resolveChannelRuntimeApiKey(channelId)
       if (!apiKey) return createFallbackTitle(userMessage)
       const providerAdapter = getAdapter(channel.provider)
       const request = providerAdapter.buildTitleRequest({
@@ -911,8 +914,7 @@ export class AgentOrchestrator {
       }
     }
 
-    // 2. 获取渠道信息并解密 API Key。Working 渠道是内存虚拟渠道，
-    // Pi 直接将用户 JWT 发送给 edu-api Responses proxy。
+    // Working 渠道通过本机 Rust 模型代理访问 edu-api；Electron 不把用户凭据交给 Pi。
     const workingClient = isCopisWorkingChannelId(channelId) ? getWorkingApiClient() : undefined
     const channel = workingClient
       ? createCopisWorkingChannelForId(workingClient.baseUrl, channelId)
@@ -935,27 +937,29 @@ export class AgentOrchestrator {
     let xaiOAuthCredentials: XaiOAuthCredentials | undefined
     if (workingClient) {
       try {
-        apiKey = (await workingClient.getValidToken()) ?? ''
+        const authState = await workingClient.getAuthState()
+        if (!authState.authenticated) {
+          reportPreflightError({
+            code: 'working_auth_required',
+            title: '请先登录 Copis Working',
+            message: '本地 Agent 的模型请求需要使用 Copis Working 账号登录 edu-api。',
+            actions: [],
+            canRetry: false,
+          })
+          return
+        }
       } catch (error) {
         reportPreflightError({
-          code: 'token_expired',
-          title: 'Copis Working 登录已失效',
-          message: error instanceof Error ? error.message : '无法刷新 Copis Working 登录状态，请重新登录。',
-          actions: [],
-          canRetry: false,
-        })
-        return
-      }
-      if (!apiKey) {
-        reportPreflightError({
           code: 'working_auth_required',
-          title: '请先登录 Copis Working',
-          message: '本地 Agent 的模型请求需要使用 Copis Working 账号登录 edu-api。',
+          title: 'Copis Working 登录状态不可用',
+          message: error instanceof Error ? error.message : '无法读取 Copis Working 登录状态，请重试。',
           actions: [],
           canRetry: false,
         })
         return
       }
+      // Rust PiWorkerManager 会在启动前注入一次性本地模型 capability，Electron 不持有 JWT。
+      apiKey = ''
     } else {
       try {
         // 订阅 OAuth 渠道必须保留完整凭据给 Pi runtime，才能在执行中按真实 expires

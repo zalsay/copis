@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc" viewBox="0 0 256 256">
+  <title id="title">Pi AI learning partner logo</title>
+  <desc id="desc">A simple yellow-green Pi app icon for an AI learning partner.</desc>
+  <defs>
+    <linearGradient id="bg" x1="40" y1="32" x2="216" y2="224" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFE45C"/>
+      <stop offset="0.62" stop-color="#B7F36A"/>
+      <stop offset="1" stop-color="#6EE7D8"/>
+    </linearGradient>
+  </defs>
+  <rect x="22" y="22" width="212" height="212" rx="50" fill="url(#bg)" stroke="#1F2937" stroke-width="10"/>
+  <path d="M58 72h53c37 0 62 23 62 58s-25 58-62 58H91v36H58V72Zm50 86c20 0 32-10 32-28s-12-28-32-28H91v56h17Z" fill="#1F2937"/>
+  <path d="M177 122h34v102h-34V122Zm-2-39c0-12 9-21 19-21 11 0 20 9 20 21 0 11-9 20-20 20-10 0-19-9-19-20Z" fill="#1F2937"/>
+</svg>

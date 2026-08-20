@@ -1,7 +1,9 @@
 import { describe, expect, mock, test } from 'bun:test'
 import * as React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { Provider } from 'jotai'
+import { createStore, Provider } from 'jotai'
+import type { WebTabState } from '@copis/shared'
+import { webTabsAtom } from '@/atoms/web-tabs'
 
 mock.module('@/lib/platform', () => ({
   detectIsMac: () => false,
@@ -34,6 +36,33 @@ describe('WebTabBar Windows 标题栏', () => {
     expect(html).toContain('pointer-events-none absolute inset-y-0 left-0 titlebar-drag-region right-[126px]')
     expect(html).toContain('pr-[126px]')
     expect(html).not.toContain('text-foreground titlebar-drag-region')
+  })
+
+  test('Given网页 Tab When渲染 Then暴露拖动语义并保持固定 Tab 尺寸', () => {
+    const store = createStore()
+    const tab: WebTabState = {
+      id: 'web-tab-1',
+      title: '示例网页',
+      url: 'https://example.com/',
+      faviconUrl: null,
+      isLoading: false,
+      canGoBack: false,
+      canGoForward: false,
+      isIncognito: false,
+      canActivateIncognito: false,
+    }
+    store.set(webTabsAtom, [tab])
+
+    const html = renderToStaticMarkup(
+      <Provider store={store}>
+        <WebTabBar />
+      </Provider>,
+    )
+
+    expect(html).toContain('data-web-tab-id="web-tab-1"')
+    expect(html).toContain('touch-none')
+    expect(html).toContain('min-w-[144px]')
+    expect(html).toContain('max-w-[240px]')
   })
 
   test('Given Copis 首页页签 When 渲染 Logo Then 使用熊猫 Logo', () => {

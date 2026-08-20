@@ -42,6 +42,12 @@ export const FUNCTIONAL_MODULE_DEFINITIONS: readonly FunctionalModuleDefinition[
     description: '为 Browser Workflow 提供页面自动化能力',
     required: true,
   },
+  {
+    name: 'python-runtime',
+    displayName: 'Python 3.12 运行环境',
+    description: '为自动化任务和工作区工具提供稳定的 Python 运行环境',
+    required: true,
+  },
 ]
 
 export function createEmptyFunctionalModuleStatus(

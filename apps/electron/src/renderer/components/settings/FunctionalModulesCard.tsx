@@ -110,27 +110,54 @@ export function FunctionalModulesCard(): React.ReactElement {
           const progressPercent = Math.round((progress?.progress ?? 0) * 100)
           const actionLabel = status.updateAvailable ? '更新' : status.installed ? '检查更新' : '安装'
           const ActionIcon = status.installed && !status.updateAvailable ? RefreshCw : Download
+          const stateText = isBusy && progress
+            ? getFunctionalModuleProgressText(progress)
+            : getFunctionalModuleStateText(status)
 
           return (
             <div key={definition.name} className="flex items-start gap-3 rounded-lg bg-card p-3 shadow-sm">
               <PackageCheck className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
-              <div className="min-w-0 flex-1">
-                <div className="flex items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <h4 className="text-sm font-medium">{definition.displayName}</h4>
-                      {status.required && <span className="text-[10px] text-muted-foreground">必需</span>}
-                    </div>
-                    <p className={`truncate text-xs ${status.error ? 'text-destructive' : 'text-muted-foreground'}`}>
-                      {getFunctionalModuleStateText(status)}
-                    </p>
+              <div className="grid min-w-0 flex-1 grid-cols-[minmax(0,1fr)_auto] items-start gap-x-4 gap-y-3">
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <h4 className="text-sm font-medium">{definition.displayName}</h4>
+                    {status.required && <span className="text-[10px] text-muted-foreground">必需</span>}
                   </div>
-                  {status.error && <AlertCircle className="h-4 w-4 shrink-0 text-destructive" />}
+                  <p className="mt-1.5 text-[11px] text-muted-foreground">{definition.description}</p>
                 </div>
-                <p className="mt-1.5 text-[11px] text-muted-foreground">{definition.description}</p>
+
+                <div className="flex min-w-0 flex-col items-end gap-2">
+                  <div
+                    className={`flex max-w-[15rem] items-start justify-end gap-1.5 text-right text-xs ${
+                      status.error && !isBusy ? 'text-destructive' : 'text-muted-foreground'
+                    }`}
+                  >
+                    {isBusy ? (
+                      <Loader2 className="mt-0.5 h-3.5 w-3.5 shrink-0 animate-spin" />
+                    ) : status.error ? (
+                      <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                    ) : null}
+                    <span className="break-words">{stateText}</span>
+                  </div>
+
+                  <div className="flex min-h-7 items-center justify-end">
+                    {!isBusy && !status.updateAvailable && status.installed && (
+                      <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => void runCheck(definition)}>
+                        <RefreshCw className="mr-1.5 h-3 w-3" />
+                        检查更新
+                      </Button>
+                    )}
+                    {!isBusy && (!status.installed || status.updateAvailable) && (
+                      <Button size="sm" className="h-7 text-xs" onClick={() => void runInstall(definition)}>
+                        <ActionIcon className="mr-1.5 h-3 w-3" />
+                        {actionLabel}
+                      </Button>
+                    )}
+                  </div>
+                </div>
 
                 {isBusy && progress && (
-                  <div className="mt-3 space-y-1.5">
+                  <div className="col-span-2 space-y-1.5">
                     <div className="flex items-center justify-between text-[11px] text-muted-foreground">
                       <span className="flex min-w-0 items-center gap-1.5 truncate">
                         <Loader2 className="h-3 w-3 shrink-0 animate-spin" />
@@ -143,21 +170,6 @@ export function FunctionalModulesCard(): React.ReactElement {
                     </div>
                   </div>
                 )}
-
-                <div className="mt-3 flex flex-wrap gap-2">
-                  {!isBusy && !status.updateAvailable && status.installed && (
-                    <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => void runCheck(definition)}>
-                      <RefreshCw className="mr-1.5 h-3 w-3" />
-                      检查更新
-                    </Button>
-                  )}
-                  {!isBusy && (!status.installed || status.updateAvailable) && (
-                    <Button size="sm" className="h-7 text-xs" onClick={() => void runInstall(definition)}>
-                      <ActionIcon className="mr-1.5 h-3 w-3" />
-                      {actionLabel}
-                    </Button>
-                  )}
-                </div>
               </div>
             </div>
           )

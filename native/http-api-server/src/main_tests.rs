@@ -4,23 +4,25 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
+use super::automation::WorkerAutomationContext;
 use super::pi_rpc::{
     format_sse_event, is_agent_messages_route, is_agent_queue_route, is_agent_status_route,
     is_agent_stop_route, is_agent_workers_status_route, is_agent_workers_stop_all_route,
     parse_worker_frame, sse_headers,
 };
-use super::automation::WorkerAutomationContext;
 use super::{
-    append_recording_line, bind_automation_create_input, decode_hex, encode_hex, find_subslice, handle_connection,
-    ensure_internal_success_with_body,
-    is_allowed_origin, is_internal_agent_alipay_bot_path, is_internal_agent_shell_path,
-    is_internal_path, is_internal_token_valid, is_safe_path_component, is_skill_market_path,
-    is_vite_dev_origin, is_web_route_authorized, is_working_payment_path, is_workspace_dev_route,
-    handle_internal_recording_request, parse_internal_recording_route, recording_marker, Bridge, BridgeResponse, HttpRequest,
+    append_recording_line, bind_automation_create_input, decode_hex, encode_hex,
+    ensure_internal_success_with_body, find_subslice, handle_connection,
+    handle_internal_recording_request, is_allowed_origin, is_internal_agent_alipay_bot_path,
+    is_internal_agent_shell_path, is_internal_path, is_internal_token_valid,
+    is_private_auth_bridge_path, is_safe_path_component, is_skill_market_path, is_vite_dev_origin,
+    is_web_route_authorized, is_working_payment_path, is_workspace_dev_route,
+    parse_internal_recording_route, recording_marker, Bridge, BridgeResponse, HttpRequest,
 };
 
 #[test]
-fn given_daily_tool_payload_without_protected_fields_when_binding_then_capability_context_is_used() {
+fn given_daily_tool_payload_without_protected_fields_when_binding_then_capability_context_is_used()
+{
     let input = serde_json::json!({
         "name": "每日检查钻石余额",
         "prompt": "提醒用户：请检查 Copis 钻石余额。",
@@ -43,8 +45,31 @@ fn given_daily_tool_payload_without_protected_fields_when_binding_then_capabilit
     assert_eq!(created.time_of_day.as_deref(), Some("08:00"));
     assert_eq!(created.channel_id, "capability-channel");
     assert_eq!(created.model_id.as_deref(), Some("capability-model"));
-    assert_eq!(created.workspace_id.as_deref(), Some("capability-workspace"));
+    assert_eq!(
+        created.workspace_id.as_deref(),
+        Some("capability-workspace")
+    );
     assert_eq!(created.source_session_id.as_deref(), Some("session-1"));
+}
+
+#[test]
+fn auth_storage_bridge_paths_are_private_to_stdio() {
+    assert!(is_private_auth_bridge_path(
+        "/api/internal/auth-storage/load"
+    ));
+    assert!(is_private_auth_bridge_path(
+        "/api/internal/auth-storage/save"
+    ));
+    assert!(is_private_auth_bridge_path(
+        "/api/internal/auth-storage/clear"
+    ));
+    assert!(is_private_auth_bridge_path(
+        "/api/internal/auth-state/changed"
+    ));
+    assert!(!is_private_auth_bridge_path("/api/working/auth-state"));
+    assert!(!is_private_auth_bridge_path(
+        "/api/internal/auth-storage/load?x=1"
+    ));
 }
 
 #[test]
@@ -71,7 +96,10 @@ fn given_prepare_run_response_without_title_when_validated_then_keeps_the_config
         body: Some(body.clone()),
     };
 
-    assert_eq!(ensure_internal_success_with_body(response).unwrap(), Some(body));
+    assert_eq!(
+        ensure_internal_success_with_body(response).unwrap(),
+        Some(body)
+    );
 }
 
 #[test]
@@ -136,14 +164,24 @@ fn stores_recording_in_registered_session_directory_without_exposing_absolute_pa
         .unwrap(),
     };
 
-    assert_eq!(handle_internal_recording_request(&start, &bridge).unwrap().status, 201);
+    assert_eq!(
+        handle_internal_recording_request(&start, &bridge)
+            .unwrap()
+            .status,
+        201
+    );
     let event = HttpRequest {
         method: "POST".to_string(),
         target: "/internal/browser-workflows/recordings/workspace-1/recording-1/event".to_string(),
         headers: HashMap::new(),
         body: br#"{"type":"click"}"#.to_vec(),
     };
-    assert_eq!(handle_internal_recording_request(&event, &bridge).unwrap().status, 204);
+    assert_eq!(
+        handle_internal_recording_request(&event, &bridge)
+            .unwrap()
+            .status,
+        204
+    );
 
     let content = std::fs::read_to_string(directory.join("recording-1.jsonl")).unwrap();
     assert!(content.contains(r#""kind":"recording_started""#));
@@ -156,23 +194,40 @@ fn stores_recording_in_registered_session_directory_without_exposing_absolute_pa
         headers: HashMap::new(),
         body: Vec::new(),
     };
-    assert_eq!(handle_internal_recording_request(&finish, &bridge).unwrap().status, 200);
+    assert_eq!(
+        handle_internal_recording_request(&finish, &bridge)
+            .unwrap()
+            .status,
+        200
+    );
     let read = HttpRequest {
         method: "GET".to_string(),
-        target: "/internal/browser-workflows/recordings/workspace-1/recording-1/content".to_string(),
+        target: "/internal/browser-workflows/recordings/workspace-1/recording-1/content"
+            .to_string(),
         headers: HashMap::new(),
         body: Vec::new(),
     };
-    assert_eq!(handle_internal_recording_request(&read, &bridge).unwrap().status, 200);
+    assert_eq!(
+        handle_internal_recording_request(&read, &bridge)
+            .unwrap()
+            .status,
+        200
+    );
     assert!(!bridge.recording_paths.lock().unwrap().is_empty());
     assert!(!bridge.recording_locks.lock().unwrap().is_empty());
     let release = HttpRequest {
         method: "POST".to_string(),
-        target: "/internal/browser-workflows/recordings/workspace-1/recording-1/release".to_string(),
+        target: "/internal/browser-workflows/recordings/workspace-1/recording-1/release"
+            .to_string(),
         headers: HashMap::new(),
         body: Vec::new(),
     };
-    assert_eq!(handle_internal_recording_request(&release, &bridge).unwrap().status, 204);
+    assert_eq!(
+        handle_internal_recording_request(&release, &bridge)
+            .unwrap()
+            .status,
+        204
+    );
     assert!(bridge.recording_paths.lock().unwrap().is_empty());
     assert!(bridge.recording_locks.lock().unwrap().is_empty());
     let _ = std::fs::remove_dir_all(root);
@@ -365,24 +420,6 @@ fn bridge_request_times_out_and_cleans_pending() {
 }
 
 #[test]
-fn working_bridge_request_body_does_not_contain_user_credentials() {
-    let body = super::working_bridge_request_body(
-        "POST",
-        "/api/internal/working-desktop/payment-context",
-        Some(r#"{"payment_id":"payment-1"}"#),
-    );
-    let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
-
-    assert_eq!(value["method"], "POST");
-    assert_eq!(value["path"], "/api/internal/working-desktop/payment-context");
-    assert_eq!(value["body"], r#"{"payment_id":"payment-1"}"#);
-    let encoded = value.to_string();
-    for forbidden in ["Authorization", "access_token", "refresh_token"] {
-        assert!(!encoded.contains(forbidden), "bridge 请求不应包含 {}", forbidden);
-    }
-}
-
-#[test]
 fn slow_connection_is_closed_by_read_timeout() {
     let previous = std::env::var("COPIS_HTTP_API_READ_TIMEOUT_MS").ok();
     std::env::set_var("COPIS_HTTP_API_READ_TIMEOUT_MS", "80");
@@ -442,6 +479,7 @@ fn slow_connection_is_closed_by_read_timeout() {
         handle_connection(
             stream,
             bridge,
+            None,
             workers,
             memory_store,
             expert_team_store,
@@ -474,6 +512,18 @@ fn slow_connection_is_closed_by_read_timeout() {
         Some(value) => std::env::set_var("COPIS_HTTP_API_READ_TIMEOUT_MS", value),
         None => std::env::remove_var("COPIS_HTTP_API_READ_TIMEOUT_MS"),
     }
+}
+
+#[test]
+fn recognizes_openai_responses_working_model_route() {
+    assert!(super::is_working_model_route(
+        "POST",
+        "/api/internal/working-model/v1/responses"
+    ));
+    assert!(!super::is_working_model_route(
+        "GET",
+        "/api/internal/working-model/v1/responses"
+    ));
 }
 
 #[test]

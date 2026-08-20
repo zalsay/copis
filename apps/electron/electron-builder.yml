@@ -7,6 +7,8 @@ copyright: Copyright © 2024-2026 Copis contributors
 
 # Electron 版本（CI 环境 bun workspace 下无法自动检测，需显式指定）
 electronVersion: 43.2.0
+# 复用 workspace 安装的 Electron 分发目录，避免 electron-builder 每次重新下载压缩包。
+electronDist: ../../node_modules/electron/dist
 
 # 目录配置
 directories:

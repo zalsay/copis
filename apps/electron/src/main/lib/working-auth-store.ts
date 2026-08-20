@@ -12,6 +12,15 @@ interface PersistedWorkingAuth {
   provider?: WorkingAuthProvider
   user?: WorkingUser | null
   updatedAt?: number
+  expiresAt?: number | null
+}
+
+export interface RustWorkingAuthRecord {
+  accessToken: string
+  refreshToken?: string | null
+  provider: WorkingAuthProvider
+  user?: WorkingUser | null
+  expiresAt?: number | null
 }
 
 export type WorkingAuthProvider = 'legacy' | 'oidc'
@@ -21,6 +30,7 @@ interface VolatileWorkingAuth {
 	refreshToken: string | null
 	provider: WorkingAuthProvider
 	user: WorkingUser | null
+	expiresAt: number | null
 }
 
 export interface WorkingTokenStore {
@@ -28,7 +38,8 @@ export interface WorkingTokenStore {
   getRefreshToken(): string | null
   getUser(): WorkingUser | null
   getProvider?(): WorkingAuthProvider | null
-  save(token: string, user?: WorkingUser | null, refreshToken?: string | null, provider?: WorkingAuthProvider): void
+  getExpiresAt?(): number | null
+  save(token: string, user?: WorkingUser | null, refreshToken?: string | null, provider?: WorkingAuthProvider, expiresAt?: number | null): void
   clear(): void
 }
 
@@ -92,16 +103,28 @@ export function createWorkingTokenStore(): WorkingTokenStore {
 		},
 		getUser: () => volatileAuth?.user ?? readPersistedAuth().user ?? null,
 		getProvider: () => volatileAuth?.provider ?? readPersistedAuth().provider ?? 'legacy',
-		save: (token, user = null, refreshToken, provider) => {
+		getExpiresAt: () => volatileAuth?.expiresAt ?? readPersistedAuth().expiresAt ?? null,
+		save: (token, user = null, refreshToken, provider, expiresAt) => {
 			const persisted = readPersistedAuth()
 			const previousRefreshToken = volatileAuth?.refreshToken ?? decryptToken(persisted.refreshToken ?? '', persisted.refreshTokenEncoding)
 			const nextRefreshToken = refreshToken === undefined ? previousRefreshToken : refreshToken
 			const nextProvider = provider ?? volatileAuth?.provider ?? persisted.provider ?? 'legacy'
+			const nextExpiresAt = expiresAt === undefined ? (volatileAuth?.expiresAt ?? persisted.expiresAt ?? null) : expiresAt
+			const saveVolatile = (message: string, error?: unknown) => {
+				volatileAuth = { token, refreshToken: nextRefreshToken, provider: nextProvider, user, expiresAt: nextExpiresAt }
+				if (existsSync(filePath + '.tmp')) {
+					try { unlinkSync(filePath + '.tmp') } catch { /* 临时文件清理失败不影响当前会话 */ }
+				}
+				if (error === undefined) {
+					console.warn(`[Copis Working] ${message}`)
+				} else {
+					console.warn(`[Copis Working] ${message}`, error instanceof Error ? error.message : error)
+				}
+			}
 			const encrypted = encryptToken(token)
 			const refreshEncrypted = nextRefreshToken ? encryptToken(nextRefreshToken) : null
 			if (!encrypted || (nextRefreshToken && !refreshEncrypted)) {
-				console.warn('[Copis Working] safeStorage 不可用，认证信息仅保存在当前进程，不写入磁盘')
-				volatileAuth = { token, refreshToken: nextRefreshToken, provider: nextProvider, user }
+				saveVolatile('safeStorage 不可用，认证信息仅保存在当前进程，不写入磁盘')
 				removeAuthArtifacts()
 				return
 			}
@@ -111,20 +134,25 @@ export function createWorkingTokenStore(): WorkingTokenStore {
 			} catch {
 				// 配置目录权限由系统或已有安装负责时，不能阻塞登录。
 			}
-			writeJsonFileAtomic(getWorkingAuthPath(), {
-				token: encrypted,
-				tokenEncoding: 'safe-storage',
-				...(refreshEncrypted && {
-					refreshToken: refreshEncrypted,
-					refreshTokenEncoding: 'safe-storage',
-				}),
-				provider: nextProvider,
-				user,
-				updatedAt: Date.now(),
-			}, true, 0o600)
-			for (const suffix of ['.bak', '.tmp']) {
-				const path = filePath + suffix
-				if (existsSync(path)) unlinkSync(path)
+			try {
+				writeJsonFileAtomic(getWorkingAuthPath(), {
+					token: encrypted,
+					tokenEncoding: 'safe-storage',
+					...(refreshEncrypted && {
+						refreshToken: refreshEncrypted,
+						refreshTokenEncoding: 'safe-storage',
+					}),
+					provider: nextProvider,
+					user,
+					expiresAt: nextExpiresAt,
+					updatedAt: Date.now(),
+				}, true, 0o600)
+				for (const suffix of ['.bak', '.tmp']) {
+					const path = filePath + suffix
+					if (existsSync(path)) unlinkSync(path)
+				}
+			} catch (error) {
+				saveVolatile('本地认证文件写入失败，认证信息仅保存在当前进程', error)
 			}
 		},
 		clear: () => {
@@ -138,4 +166,49 @@ const workingTokenStore = createWorkingTokenStore()
 
 export function getWorkingTokenStore(): WorkingTokenStore {
   return workingTokenStore
+}
+
+function sanitizeWorkingUserForRust(value: WorkingUser | null): WorkingUser | null {
+  if (!value || typeof value !== 'object') return null
+  const sanitized: Record<string, unknown> = {}
+  for (const [key, field] of Object.entries(value as unknown as Record<string, unknown>)) {
+    if (/password|secret|credential|token/i.test(key)) continue
+    sanitized[key] = field
+  }
+  return sanitized as WorkingUser
+}
+
+/** 仅供 Rust stdio bridge 使用的 safeStorage 适配器；不执行任何远端请求。 */
+export function loadWorkingAuthForRust(): RustWorkingAuthRecord | null {
+  const token = workingTokenStore.getToken()
+  if (!token) return null
+  return {
+    accessToken: token,
+    refreshToken: workingTokenStore.getRefreshToken(),
+    provider: workingTokenStore.getProvider?.() ?? 'legacy',
+    user: sanitizeWorkingUserForRust(workingTokenStore.getUser()),
+    expiresAt: workingTokenStore.getExpiresAt?.() ?? null,
+  }
+}
+
+/** 仅供 Rust stdio bridge 使用；认证凭据仍由 safeStorage 加密后落盘。 */
+export function saveWorkingAuthFromRust(record: RustWorkingAuthRecord): void {
+  if (!record || typeof record.accessToken !== 'string' || !record.accessToken.trim()) {
+    throw new Error('Rust 认证记录缺少 access token')
+  }
+  if (record.provider !== 'legacy' && record.provider !== 'oidc') {
+    throw new Error('Rust 认证 provider 不正确')
+  }
+  workingTokenStore.save(
+    record.accessToken,
+    sanitizeWorkingUserForRust(record.user ?? null),
+    record.refreshToken ?? null,
+    record.provider,
+    record.expiresAt ?? null,
+  )
+}
+
+/** 仅供 Rust stdio bridge 使用。 */
+export function clearWorkingAuthFromRust(): void {
+  workingTokenStore.clear()
 }

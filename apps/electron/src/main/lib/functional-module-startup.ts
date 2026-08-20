@@ -22,12 +22,10 @@ import {
   HTTP_API_PORT,
   startHttpApiServer,
   stopHttpApiServer,
-  syncWorkingAccessToken,
   updateHttpApiServer,
   waitForHttpApiHealth,
   type HttpApiSpawn,
 } from './http-api-server'
-import { getWorkingTokenStore } from './working-auth-store'
 
 const MODULE_PROGRESS_START = 0.05
 const MODULE_PROGRESS_END = 0.95
@@ -39,6 +37,7 @@ const REQUIRED_MODULES: readonly FunctionalModuleName[] = [
   'alipay-bot',
   'rust-http-api',
   'playwright-core',
+  'python-runtime',
 ]
 
 export interface FunctionalModuleStartupOptions {
@@ -130,6 +129,14 @@ export function assertRequiredModuleArtifacts(
   if (playwrightCore.format !== 'tar.gz' || playwrightCore.entrypoint !== 'node_modules/playwright-core/index.js') {
     throw new Error('浏览器自动化内核模块格式不正确')
   }
+
+  const pythonRuntime = byName.get('python-runtime')
+  if (!pythonRuntime) throw new Error('组件清单缺少必要的 Python 3.12 运行环境')
+  if (!pythonRuntime.required) throw new Error('Python 3.12 运行环境必须是必要组件')
+  const pythonEntrypoint = pythonRuntime.platform === 'win32' ? 'bin/python.exe' : 'bin/python'
+  if (pythonRuntime.format !== 'tar.gz' || pythonRuntime.entrypoint !== pythonEntrypoint) {
+    throw new Error('Python 3.12 运行环境模块格式不正确')
+  }
 }
 
 export function ensureRequiredFunctionalModules(
@@ -176,7 +183,6 @@ async function runRequiredModuleStartup(
     )
     let completedWeight = 0
     let httpApiRuntimeDependenciesUpdated = false
-    let rustHttpApiUpdated = false
 
     publish({ phase: 'modules', detail: '正在准备必要组件', progress: MODULE_PROGRESS_START })
     for (const name of REQUIRED_MODULES) {
@@ -217,14 +223,13 @@ async function runRequiredModuleStartup(
             },
           })
           if (!updated) throw new Error('系统核心模块更新后运行检查未通过')
-          rustHttpApiUpdated = true
         } else {
           await installFunctionalModule({ name }, {
             ...moduleOptions,
             artifactOverride: artifact,
             onProgress: emitModuleProgress,
           })
-          if (name === 'node-runtime' || name === 'officecli' || name === 'alipay-bot' || name === 'playwright-core') {
+          if (name === 'node-runtime' || name === 'officecli' || name === 'alipay-bot' || name === 'playwright-core' || name === 'python-runtime') {
             httpApiRuntimeDependenciesUpdated = true
           }
         }
@@ -241,13 +246,12 @@ async function runRequiredModuleStartup(
     }
 
     publish({ phase: 'modules', detail: '必要组件已准备完成', progress: MODULE_PROGRESS_END })
-    if (httpApiRuntimeDependenciesUpdated && !rustHttpApiUpdated) {
+    if (httpApiRuntimeDependenciesUpdated) {
       await stopHttpApiServer(options.stopTimeoutMs)
     }
     if (!await ensureFormalHttpApiHealth(options, publish)) {
       throw new Error('系统核心模块未通过运行检查')
     }
-    await syncWorkingAccessToken(getWorkingTokenStore().getToken())
     const statuses = getFunctionalModuleStatuses(options.rootDir).map((status) => {
       const artifact = artifactByName.get(status.name)
       return {
@@ -368,6 +372,7 @@ function displayName(name: FunctionalModuleName): string {
   if (name === 'officecli') return 'Office 文档支持'
   if (name === 'alipay-bot') return '支付宝智能体 CLI'
   if (name === 'playwright-core') return '浏览器自动化内核'
+  if (name === 'python-runtime') return 'Python 3.12 运行环境'
   return '系统核心模块'
 }
 

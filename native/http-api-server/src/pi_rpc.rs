@@ -12,6 +12,9 @@ use crate::automation::{issue_worker_capability, revoke_worker_capability};
 use crate::payment_capability::PaymentCapabilityStore;
 use crate::payment_workspace::PaymentWorkspace;
 use crate::runtime;
+use crate::working_model_proxy::{
+    WorkingModelCapability, WorkingModelError, WorkingModelProxy, WorkingModelResponse,
+};
 
 pub fn is_agent_messages_route(method: &str, path: &str) -> bool {
     method.eq_ignore_ascii_case("POST")
@@ -123,6 +126,7 @@ pub struct PiWorkerManager {
     worker_statuses: Mutex<HashMap<String, PiWorkerStatusSnapshot>>,
     file_policies: Arc<AgentFilePolicyStore>,
     payment_capabilities: Arc<PaymentCapabilityStore>,
+    working_model_proxy: Mutex<Option<Arc<WorkingModelProxy>>>,
 }
 
 pub struct PiWorkerRun {
@@ -213,6 +217,7 @@ impl PiWorkerManager {
             worker_statuses: Mutex::new(HashMap::new()),
             file_policies: Arc::new(AgentFilePolicyStore::new()),
             payment_capabilities: Arc::new(PaymentCapabilityStore::new()),
+            working_model_proxy: Mutex::new(None),
         }
     }
 
@@ -222,6 +227,24 @@ impl PiWorkerManager {
 
     pub fn payment_capabilities(&self) -> Arc<PaymentCapabilityStore> {
         Arc::clone(&self.payment_capabilities)
+    }
+    pub fn set_working_model_proxy(&self, proxy: Arc<WorkingModelProxy>) {
+        *self.working_model_proxy.lock().unwrap() = Some(proxy);
+    }
+
+    pub fn working_model_request(
+        &self,
+        _session_id: &str,
+        capability: &str,
+        request_body: &[u8],
+    ) -> Result<WorkingModelResponse, WorkingModelError> {
+        let proxy = self
+            .working_model_proxy
+            .lock()
+            .unwrap()
+            .clone()
+            .ok_or(WorkingModelError::Unauthorized)?;
+        proxy.proxy_with_capability(capability, request_body)
     }
 
     pub fn session_status(&self, session_id: &str) -> Option<PiWorkerStatusSnapshot> {
@@ -245,6 +268,53 @@ impl PiWorkerManager {
         statuses
     }
 
+    fn prepare_working_model_config(
+        &self,
+        session_id: &str,
+        config: &mut Value,
+    ) -> Result<Option<WorkingModelCapability>, String> {
+        let query = config
+            .get_mut("query")
+            .and_then(Value::as_object_mut)
+            .ok_or_else(|| "Pi worker 配置缺少 query".to_string())?;
+        let channel_id = query
+            .get("channelId")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        if channel_id != "copis-working" && channel_id != "copis-working-deepseek" {
+            return Ok(None);
+        }
+        let model_id = query
+            .get("model")
+            .and_then(Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+            .ok_or_else(|| "Working Pi worker 配置缺少 model".to_string())?;
+        let proxy = self
+            .working_model_proxy
+            .lock()
+            .unwrap()
+            .clone()
+            .ok_or_else(|| "Working 模型代理尚未初始化".to_string())?;
+        let capability = proxy
+            .issue(session_id, model_id)
+            .map_err(|error| format!("Working 模型 capability 创建失败: {}", error))?;
+        query.insert(
+            "apiKey".to_string(),
+            Value::String(capability.capability.clone()),
+        );
+        query.insert(
+            "workingModelCapability".to_string(),
+            Value::String(capability.capability.clone()),
+        );
+        Ok(Some(capability))
+    }
+
+    fn revoke_working_model_capability(&self, session_id: &str) {
+        if let Some(proxy) = self.working_model_proxy.lock().unwrap().clone() {
+            proxy.revoke(session_id);
+        }
+    }
+
     pub fn start(&self, session_id: &str, mut config: Value) -> Result<PiWorkerRun, String> {
         let (permission_mode, triggered_by, automation_enabled, file_api_token) = {
             let query = config
@@ -263,9 +333,15 @@ impl PiWorkerManager {
                 .filter(|value| matches!(*value, "user" | "automation" | "delegation"))
                 .unwrap_or("user")
                 .to_string();
-            let automation_enabled = query.get("automationEnabled").and_then(Value::as_bool) != Some(false);
+            let automation_enabled =
+                query.get("automationEnabled").and_then(Value::as_bool) != Some(false);
             let file_api_token = self.file_policies.register_from_query(session_id, query)?;
-            (permission_mode, triggered_by, automation_enabled, file_api_token)
+            (
+                permission_mode,
+                triggered_by,
+                automation_enabled,
+                file_api_token,
+            )
         };
         if file_api_token.is_empty() {
             return Err("Pi Worker 未收到 Rust 文件能力令牌".to_string());
@@ -330,6 +406,12 @@ impl PiWorkerManager {
                 return Err(error);
             }
         }
+        // Python runtime 与 Pi Worker 的 Bun/Node 启动方式无关，必须在所有分支注入。
+        // 编译 Worker 和开发 Bun 不会创建 external_runtime，不能因此回退到系统 Python。
+        if let Err(error) = runtime::inject_python_runtime_config(&mut config) {
+            self.file_policies.remove(session_id);
+            return Err(error);
+        }
         if automation_enabled {
             let query = config
                 .get_mut("query")
@@ -338,10 +420,23 @@ impl PiWorkerManager {
             let automation_capability = issue_worker_capability(
                 session_id,
                 &triggered_by,
-                query.get("channelId").and_then(Value::as_str).unwrap_or_default().to_string(),
-                query.get("model").and_then(Value::as_str).map(str::to_string),
-                query.get("workspaceId").and_then(Value::as_str).map(str::to_string),
-                query.get("sourceAutomationId").and_then(Value::as_str).map(str::to_string),
+                query
+                    .get("channelId")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string(),
+                query
+                    .get("model")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
+                query
+                    .get("workspaceId")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
+                query
+                    .get("sourceAutomationId")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
             );
             query.insert(
                 "automationControl".to_string(),
@@ -349,6 +444,16 @@ impl PiWorkerManager {
                     .map_err(|_| "定时任务 capability 编码失败".to_string())?,
             );
         }
+        let _working_model_capability =
+            match self.prepare_working_model_config(session_id, &mut config) {
+                Ok(capability) => capability,
+                Err(error) => {
+                    self.file_policies.remove(session_id);
+                    revoke_worker_capability(session_id);
+                    self.revoke_working_model_capability(session_id);
+                    return Err(error);
+                }
+            };
         let mut command = Command::new(&launch.program);
         command.args(&launch.args);
         configure_worker_file_capability(&mut command, &file_api_token);
@@ -356,6 +461,17 @@ impl PiWorkerManager {
             command.env("PATH", external_runtime.path_value());
             command.env("COPIS_RUNTIME_ROOT", &external_runtime.runtime_root);
             command.env("COPIS_RUNTIME_DIR", &external_runtime.active_dir);
+        }
+        if let Some(python_root) = runtime::python_runtime_root() {
+            let base_path = external_runtime
+                .as_ref()
+                .map(|runtime| runtime.path_value())
+                .or_else(|| std::env::var("PATH").ok());
+            if let Some(path) = runtime::prepend_python_runtime_path(base_path.as_deref()) {
+                command.env("PATH", path);
+            }
+            command.env("COPIS_PYTHON_RUNTIME_ROOT", &python_root);
+            command.env("PYTHONHOME", &python_root);
         }
         command.env_remove("ELECTRON_RUN_AS_NODE");
         if let Some(external_runtime) = external_runtime.as_ref() {
@@ -381,6 +497,7 @@ impl PiWorkerManager {
             Err(error) => {
                 self.file_policies.remove(session_id);
                 revoke_worker_capability(session_id);
+                self.revoke_working_model_capability(session_id);
                 return Err(format!("Pi worker 启动失败: {}", error));
             }
         };
@@ -388,12 +505,14 @@ impl PiWorkerManager {
         let stdin = child.stdin.take().ok_or_else(|| {
             self.file_policies.remove(session_id);
             revoke_worker_capability(session_id);
+            self.revoke_working_model_capability(session_id);
             let _ = child.kill();
             "Pi worker stdin 不可用".to_string()
         })?;
         let stdout = child.stdout.take().ok_or_else(|| {
             self.file_policies.remove(session_id);
             revoke_worker_capability(session_id);
+            self.revoke_working_model_capability(session_id);
             let _ = child.kill();
             "Pi worker stdout 不可用".to_string()
         })?;
@@ -409,6 +528,7 @@ impl PiWorkerManager {
             if workers.contains_key(session_id) {
                 self.file_policies.remove(session_id);
                 revoke_worker_capability(session_id);
+                self.revoke_working_model_capability(session_id);
                 let _ = child.kill();
                 return Err("该 Agent 会话已有运行中的 Pi worker".to_string());
             }
@@ -433,6 +553,7 @@ impl PiWorkerManager {
             self.worker_statuses.lock().unwrap().remove(session_id);
             self.file_policies.remove(session_id);
             revoke_worker_capability(session_id);
+            self.revoke_working_model_capability(session_id);
             let _ = child.kill();
             return Err(format!("Pi worker run 命令发送失败: {}", error));
         }
@@ -577,6 +698,7 @@ impl PiWorkerManager {
         write_json_line(&control, &stop_command(session_id))
             .map_err(|error| format!("Pi worker 停止命令发送失败: {}", error))?;
         self.mark_stopping(session_id);
+        self.revoke_working_model_capability(session_id);
         Ok(true)
     }
 
@@ -613,6 +735,7 @@ impl PiWorkerManager {
             match write_json_line(control, &stop_command(session_id)) {
                 Ok(()) => {
                     self.mark_stopping(session_id);
+                    self.revoke_working_model_capability(session_id);
                     stopped += 1;
                 }
                 Err(error) => errors.push(format!("{}: {}", session_id, error)),
@@ -688,6 +811,7 @@ impl PiWorkerManager {
         self.worker_statuses.lock().unwrap().remove(&run.session_id);
         self.file_policies.remove(&run.session_id);
         revoke_worker_capability(&run.session_id);
+        self.revoke_working_model_capability(&run.session_id);
         if run.child.try_wait().ok().flatten().is_none() {
             let _ = run.child.kill();
         }

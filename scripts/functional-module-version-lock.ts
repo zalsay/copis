@@ -5,11 +5,12 @@ import { resolve } from 'node:path'
 import type { FunctionalModuleManifest, FunctionalModuleName, FunctionalModulePlatform, FunctionalModuleArchitecture } from '@copis/shared'
 import type { FunctionalModuleBinaryInput } from './functional-module-publisher'
 
-const LOCKED_MODULES = ['node-runtime', 'alipay-bot', 'playwright-core'] as const
+const LOCKED_MODULES = ['node-runtime', 'python-runtime', 'alipay-bot', 'playwright-core'] as const
 type LockedModuleName = (typeof LOCKED_MODULES)[number]
 
 export interface FunctionalModuleVersionLocks {
   'node-runtime': string
+  'python-runtime': string
   'alipay-bot': string
   'playwright-core': string
 }
@@ -32,6 +33,7 @@ export function loadFunctionalModuleVersionLocks(
 
   return {
     'node-runtime': validateVersion(value['node-runtime'], 'node-runtime', path),
+    'python-runtime': validateVersion(value['python-runtime'], 'python-runtime', path),
     'alipay-bot': validateVersion(value['alipay-bot'], 'alipay-bot', path),
     'playwright-core': validateVersion(value['playwright-core'], 'playwright-core', path),
   }

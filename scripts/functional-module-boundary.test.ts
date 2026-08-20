@@ -127,4 +127,15 @@ describe('功能模块发布边界', () => {
     expect(deployShellScript).toContain('v24.*')
     expect(deployShellScript).toContain('--source "$NODE_RUNTIME_SOURCE"')
   })
+
+  test('PowerShell 部署支持单独准备和发布 Python 3.12 runtime', () => {
+    expect(rootPackage.scripts?.['prepare:python-runtime-module']).toBeDefined()
+    expect(deployScript).toContain('[switch]$PythonRuntimeOnly')
+    expect(deployScript).toContain('[string]$PythonRuntimeArchive')
+    expect(deployScript).toContain('[string]$PythonRuntimeVersion')
+    expect(deployScript).toContain('prepare:python-runtime-module')
+    expect(deployScript).toContain('--python-runtime-archive')
+    expect(deployScript).toContain('--python-runtime-version')
+    expect(deployScript).toContain("$releaseArguments += '--python-runtime'")
+  })
 })

@@ -281,6 +281,10 @@ describe('登录后功能模块启动契约', () => {
       'node_modules/playwright-core/index.js': 'playwright-core-driver',
       'node_modules/playwright-core/package.json': '{"name":"playwright-core","version":"1.62.1"}',
     })
+    const pythonRuntimeContent = createTarGz({
+      'bin/python': 'python-runtime',
+      'bin/python3.12': 'python-runtime-3.12',
+    })
     const moduleArtifact = (name: 'officecli' | 'rust-http-api', version: string, content: string) => ({
       version,
       url: `https://download.example.com/${name}-${version}`,
@@ -325,6 +329,15 @@ describe('登录后功能模块启动契约', () => {
               entrypoint: 'node_modules/playwright-core/index.js',
               required: true,
             },
+            'python-runtime': {
+              version: '3.12.14',
+              url: 'https://download.example.com/python-runtime-3.12.14.tar.gz',
+              sha256: createHash('sha256').update(pythonRuntimeContent).digest('hex'),
+              size: pythonRuntimeContent.byteLength,
+              format: 'tar.gz' as const,
+              entrypoint: 'bin/python',
+              required: true,
+            },
           },
         },
       },
@@ -334,6 +347,7 @@ describe('登录后功能模块启动契约', () => {
       child: StartupFakeChild
       port: string | undefined
       runtimeRoot?: string
+      pythonRuntimeRoot?: string
       alipayBotCli?: string
       alipayBotNode?: string
     }> = []
@@ -344,6 +358,7 @@ describe('登录后功能模块启动契约', () => {
         child,
         port: options.env?.COPIS_HTTP_API_PORT,
         runtimeRoot: typeof options.env?.COPIS_RUNTIME_ROOT === 'string' ? options.env.COPIS_RUNTIME_ROOT : undefined,
+        pythonRuntimeRoot: typeof options.env?.COPIS_PYTHON_RUNTIME_ROOT === 'string' ? options.env.COPIS_PYTHON_RUNTIME_ROOT : undefined,
         alipayBotCli: typeof options.env?.COPIS_ALIPAY_BOT_CLI === 'string' ? options.env.COPIS_ALIPAY_BOT_CLI : undefined,
         alipayBotNode: typeof options.env?.COPIS_ALIPAY_BOT_NODE === 'string' ? options.env.COPIS_ALIPAY_BOT_NODE : undefined,
       })
@@ -370,6 +385,9 @@ describe('登录后功能模块启动契约', () => {
       if (input.endsWith('/playwright-core-1.62.1.tar.gz')) {
         return new Response(new Uint8Array(playwrightCoreContent), { status: 200, headers: { 'content-length': String(playwrightCoreContent.byteLength) } })
       }
+      if (input.endsWith('/python-runtime-3.12.14.tar.gz')) {
+        return new Response(new Uint8Array(pythonRuntimeContent), { status: 200, headers: { 'content-length': String(pythonRuntimeContent.byteLength) } })
+      }
       return new Response('not found', { status: 404 })
     }
 
@@ -393,14 +411,16 @@ describe('登录后功能模块启动契约', () => {
         ['officecli', true, true],
         ['alipay-bot', true, true],
         ['playwright-core', true, true],
+        ['python-runtime', true, true],
       ])
       expect(progress.some((item) => item.phase === 'modules' && item.progress === 0.95)).toBe(true)
       expect(progress.some((item) => item.phase === 'health' && item.progress >= 0.95)).toBe(true)
       expect(progress.at(-1)).toMatchObject({ phase: 'ready', progress: 1 })
-      expect(records.map((record) => record.port)).toEqual(['51741', '51740'])
+      expect(records.map((record) => record.port)).toEqual(['51741', '51740', '51740'])
       expect(records.some((record) => record.runtimeRoot?.includes('/node-runtime/'))).toBe(true)
       expect(records.some((record) => record.alipayBotCli?.includes('/alipay-bot/'))).toBe(true)
       expect(records.some((record) => record.alipayBotNode?.endsWith('/bin/node'))).toBe(true)
+      expect(records.some((record) => record.pythonRuntimeRoot?.includes('/python-runtime/'))).toBe(true)
     } finally {
       await stopHttpApiServer(5)
       rmSync(rootDir, { recursive: true, force: true })
@@ -424,9 +444,10 @@ describe('登录后功能模块启动契约', () => {
       'node_modules/playwright-core/index.js': 'playwright-core-driver',
       'node_modules/playwright-core/package.json': '{"name":"playwright-core","version":"1.62.1"}',
     })
+    const pythonRuntimeContent = createTarGz({ 'bin/python': 'python-runtime' })
     const rustContent = 'stable-rust-http-api'
     const packageArtifact = (
-      name: 'node-runtime' | 'alipay-bot' | 'rust-http-api' | 'playwright-core',
+      name: 'node-runtime' | 'alipay-bot' | 'rust-http-api' | 'playwright-core' | 'python-runtime',
       version: string,
       content: Buffer | string,
     ) => ({
@@ -442,7 +463,9 @@ describe('登录后功能模块启动契约', () => {
           ? 'bin/alipay-bot'
           : name === 'playwright-core'
             ? 'node_modules/playwright-core/index.js'
-            : 'bin/node',
+            : name === 'python-runtime'
+              ? 'bin/python'
+              : 'bin/node',
       required: true,
     })
     const oldNode = packageArtifact('node-runtime', '24.19.3', oldNodeContent)
@@ -451,6 +474,7 @@ describe('登录后功能模块启动契约', () => {
     const newAlipayBot = packageArtifact('alipay-bot', '0.3.40', newAlipayBotContent)
     const rust = packageArtifact('rust-http-api', '0.1.2', rustContent)
     const playwrightCore = packageArtifact('playwright-core', '1.62.1', playwrightCoreContent)
+    const pythonRuntime = packageArtifact('python-runtime', '3.12.14', pythonRuntimeContent)
     const manifest = {
       schema: 1,
       channel: 'stable',
@@ -470,6 +494,7 @@ describe('登录后功能模块启动契约', () => {
             'alipay-bot': newAlipayBot,
             'rust-http-api': rust,
             'playwright-core': playwrightCore,
+            'python-runtime': pythonRuntime,
           },
         },
       },
@@ -496,6 +521,7 @@ describe('登录后功能模块启动契约', () => {
       if (input.endsWith('/node-runtime-24.19.4')) return new Response(new Uint8Array(newNodeContent), { status: 200 })
       if (input.endsWith('/alipay-bot-0.3.40')) return new Response(new Uint8Array(newAlipayBotContent), { status: 200 })
       if (input.endsWith('/playwright-core-1.62.1')) return new Response(new Uint8Array(playwrightCoreContent), { status: 200 })
+      if (input.endsWith('/python-runtime-3.12.14')) return new Response(new Uint8Array(pythonRuntimeContent), { status: 200 })
       if (input.endsWith('/officecli-1.0.143')) return new Response('officecli', { status: 200 })
       return new Response('not found', { status: 404 })
     }
@@ -514,6 +540,7 @@ describe('登录后功能模块启动契约', () => {
       await activateModuleVersion(modulesRoot, oldAlipayBot, oldAlipayBotContent)
       await activateModuleVersion(modulesRoot, rust, rustContent)
       await activateModuleVersion(modulesRoot, playwrightCore, playwrightCoreContent)
+      await activateModuleVersion(modulesRoot, pythonRuntime, pythonRuntimeContent)
       startHttpApiServer({
         rootDir: modulesRoot,
         spawnImpl,

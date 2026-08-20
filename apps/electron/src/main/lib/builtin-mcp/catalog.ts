@@ -9,7 +9,7 @@
 
 import type { BuiltinMcpServerSummary } from '@copis/shared'
 import { getAgentToolState } from '../agent-tool-config'
-import { getWorkingTokenStore } from '../working-auth-store'
+import { getWorkingApiClient } from '../working-api-service'
 import { getBuiltinMcpDefinitions, type BuiltinMcpDefinition } from './baseline'
 import { isBuiltinMcpDefaultDisabled, isBuiltinMcpUserEnabled } from './settings'
 
@@ -48,7 +48,7 @@ function resolveAvailability(
 
   if (item.id === 'nano-banana') {
     const state = getAgentToolState('nano-banana')
-    const available = state.enabled && !!getWorkingTokenStore().getToken()
+    const available = state.enabled && getWorkingApiClient().getCachedUser() !== null
     return {
       enabled: true,
       available,

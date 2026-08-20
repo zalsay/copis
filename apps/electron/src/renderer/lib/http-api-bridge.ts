@@ -55,7 +55,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
-async function fetchWithStartupRetry(url: string, init: RequestInit): Promise<Response> {
+export async function fetchStartupHealthWithRetry(url: string, init: RequestInit): Promise<Response> {
   let lastError: unknown
   for (let attempt = 0; attempt < HTTP_API_STARTUP_RETRY_COUNT; attempt += 1) {
     try {
@@ -74,8 +74,13 @@ async function fetchWithStartupRetry(url: string, init: RequestInit): Promise<Re
   throw lastError instanceof Error ? lastError : new Error('HTTP API 服务未启动')
 }
 
+/** 业务请求只执行一次；是否重试由调用方根据业务语义显式决定。 */
+export function fetchBusinessOnce(url: string, init: RequestInit): Promise<Response> {
+  return fetch(url, init)
+}
+
 async function request<T>(path: string, method = 'GET', body?: unknown): Promise<T> {
-  const response = await fetchWithStartupRetry(`${HTTP_API_BASE_URL}${path}`, withHttpApiWebToken({
+  const response = await fetchBusinessOnce(`${HTTP_API_BASE_URL}${path}`, withHttpApiWebToken({
     method,
     headers: {
       Accept: 'application/json',
@@ -304,6 +309,7 @@ function createWebTabsFallback(): Record<string, unknown> {
     activateIncognito: () => Promise.reject(new Error('浏览器模式不支持内嵌 Chromium 页签')),
     close: () => Promise.resolve(emptySnapshot()),
     navigate: () => Promise.reject(new Error('浏览器模式不支持内嵌 Chromium 页签')),
+    reorder: () => Promise.reject(new Error('浏览器模式不支持内嵌 Chromium 页签')),
     updateBounds: () => Promise.resolve(),
     bookmarksOpen: () => Promise.resolve(),
     bookmarksClose: () => Promise.resolve(),

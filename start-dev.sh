@@ -13,7 +13,7 @@ if ! command -v bun >/dev/null 2>&1; then
 fi
 
 # 与 ai-education/frontend/.env.development 保持一致，也允许本地临时覆盖。
-export COPIS_BACKEND_URL="${COPIS_BACKEND_URL:-https://edu-api.meetlife.com.cn:9001}"
+export COPIS_BACKEND_URL="${COPIS_BACKEND_URL:-https://pie.meetlife.com.cn/pi-api}"
 # 开发 Rust API 使用独立端口，避免连接到正式 App 的 51730 服务。
 export COPIS_HTTP_API_PORT="${COPIS_HTTP_API_PORT:-51740}"
 

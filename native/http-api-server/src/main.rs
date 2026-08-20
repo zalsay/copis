@@ -12,8 +12,10 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 mod agent_files;
 mod alipay_bot;
 mod app_update;
+mod auth_session;
 mod automation;
 mod automation_scheduler;
+mod edu_api_client;
 mod expert_teams;
 mod memory;
 mod payment_capability;
@@ -21,14 +23,21 @@ mod payment_workspace;
 mod pi_rpc;
 mod runtime;
 mod skill_market;
+mod working_gateway;
 mod working_model;
+mod working_model_proxy;
 mod working_payment;
 mod workspace_dev;
 mod workspace_mcp;
 mod workspace_skills;
 
-use automation::{AutomationCreateInput, AutomationError, AutomationRunInput, AutomationStore, AutomationUpdateInput};
+use auth_session::{AuthError, AuthSession, AuthStorage, PersistedAuth};
+use automation::{
+    AutomationCreateInput, AutomationError, AutomationRunInput, AutomationStore,
+    AutomationUpdateInput,
+};
 use automation_scheduler::AutomationScheduler;
+use edu_api_client::{EduApiClient, EduApiResponse, DEFAULT_MAX_CONCURRENT_REQUESTS};
 use expert_teams::{ExpertTeamError, ExpertTeamStore};
 use memory::{
     MemoryCaptureBatchInput, MemoryCaptureInput, MemoryContextInput, MemoryError,
@@ -45,9 +54,15 @@ use pi_rpc::{
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::{json, Value};
 use skill_market::{
-    handle_request as handle_skill_market_request, request_working_with_capability,
-    SkillMarketError, SkillMarketState, WorkingBackend,
+    handle_request as handle_skill_market_request, SkillMarketError, SkillMarketState,
+    WorkingBackend,
 };
+use working_gateway::{
+    handle_working_gateway_request, is_working_gateway_path, is_working_oauth_callback_path,
+    is_working_oauth_failure_path, is_working_oauth_success_path, oidc_failure_page,
+    oidc_success_page, GatewayError, WorkingGateway,
+};
+use working_model_proxy::{WorkingModelError, WorkingModelProxy};
 use working_payment::{
     handle_request as handle_working_payment_request, start_desktop_payment_poller,
     RefreshedWorkingAuth, VipPaymentRefresher, WorkingPaymentState,
@@ -79,6 +94,14 @@ const BRIDGE_TIMEOUT_MESSAGE: &str = "HTTP API 业务桥响应超时";
 // 慢速/半开连接在读取请求时占用线程，设置读超时避免长期占用（slowloris 防护）。
 const CONNECTION_READ_TIMEOUT_SECS: u64 = 30;
 const MAX_CONCURRENT_CONNECTIONS: usize = 64;
+
+fn is_working_model_route(method: &str, path: &str) -> bool {
+    method == "POST"
+        && matches!(
+            path,
+            "/api/internal/working-model/v1" | "/api/internal/working-model/v1/responses"
+        )
+}
 
 fn bridge_request_timeout() -> Duration {
     let millis = std::env::var("COPIS_HTTP_API_BRIDGE_TIMEOUT_MS")
@@ -112,11 +135,11 @@ struct Bridge {
     recording_paths: Mutex<HashMap<(String, String), PathBuf>>,
 }
 
-struct BridgeWorkingBackend {
-    bridge: Arc<Bridge>,
+struct AuthWorkingBackend {
+    auth: Arc<AuthSession>,
 }
 
-impl WorkingBackend for BridgeWorkingBackend {
+impl WorkingBackend for AuthWorkingBackend {
     fn request(
         &self,
         method: &str,
@@ -124,113 +147,246 @@ impl WorkingBackend for BridgeWorkingBackend {
         body: Option<&str>,
     ) -> Result<Value, SkillMarketError> {
         let response = self
-            .bridge
-            .send_request(&HttpRequest {
-                method: "POST".to_string(),
-                target: "/api/internal/working-auth/request".to_string(),
-                headers: HashMap::new(),
-                body: working_bridge_request_body(method, path, body),
-            })
-            .map_err(|message| SkillMarketError::new(503, "working_bridge_unavailable", message))?;
-        parse_working_bridge_response(response)
+            .auth
+            .authenticated_request(method, path, body.map(str::to_string))
+            .map_err(|error| {
+                let gateway_error = GatewayError::from(error);
+                SkillMarketError::new(
+                    gateway_error.status,
+                    gateway_error.code,
+                    gateway_error.message,
+                )
+            })?;
+        parse_auth_working_response(response)
     }
 
     fn request_with_capability(
         &self,
         method: &str,
         path: &str,
-        capability: &str,
+        _capability: &str,
         body: Option<&str>,
     ) -> Result<Value, SkillMarketError> {
-        // Electron bridge 不承载 Authorization；wdpc capability 只在 Rust 内存中短期使用，
-        // 由 backend 的 capability 请求路径发送给对应的 Working 内部接口。
-        request_working_with_capability(method, path, capability, body)
+        // 支付 capability 已由 Rust payment service 校验；上游认证始终取 AuthSession 的 token。
+        self.request(method, path, body)
     }
 }
 
-struct BridgeVipPaymentRefresher {
+fn parse_auth_working_response(response: EduApiResponse) -> Result<Value, SkillMarketError> {
+    if response.status == 204 || response.body.is_empty() {
+        return Ok(Value::Null);
+    }
+    serde_json::from_slice(&response.body).map_err(|_| {
+        SkillMarketError::new(
+            502,
+            "invalid_working_response",
+            "Working 后端响应格式不正确",
+        )
+    })
+}
+
+struct BridgeAuthStorage {
     bridge: Arc<Bridge>,
 }
 
-impl VipPaymentRefresher for BridgeVipPaymentRefresher {
-    fn refresh_after_vip_payment(&self) -> Result<RefreshedWorkingAuth, String> {
-        let response = self.bridge.send_request(&HttpRequest {
-            method: "POST".to_string(),
-            target: "/api/internal/working-auth/refresh-after-vip".to_string(),
-            headers: HashMap::new(),
-            body: b"{}".to_vec(),
-        })?;
+impl AuthStorage for BridgeAuthStorage {
+    fn load(&self) -> Result<Option<PersistedAuth>, AuthError> {
+        let bridge_available = self.bridge.available.load(Ordering::Acquire);
+        eprintln!(
+            "[HTTP API][认证存储] load 开始 bridge_available={}",
+            bridge_available
+        );
+        if !bridge_available {
+            eprintln!("[HTTP API][认证存储] load 跳过：业务桥不可用");
+            return Ok(None);
+        }
+        let response = match self.bridge.send_request(&HttpRequest {
+                method: "GET".to_string(),
+                target: "/api/internal/auth-storage/load".to_string(),
+                headers: HashMap::new(),
+                body: Vec::new(),
+            }) {
+                Ok(response) => response,
+                Err(error) => {
+                    eprintln!("[HTTP API][认证存储] load 业务桥失败: {}", error);
+                    return Err(AuthError::Storage(error));
+                }
+            };
+        let body = response.body.unwrap_or_default();
+        eprintln!(
+            "[HTTP API][认证存储] load 响应 status={} body_bytes={}",
+            response.status,
+            body.len()
+        );
+        if response.status == 404 || response.status == 204 {
+            return Ok(None);
+        }
         if response.status != 200 {
-            return Err(format!("Electron 刷新账户状态失败（HTTP {}）", response.status));
+            eprintln!(
+                "[HTTP API][认证存储] load 失败：Electron 返回 HTTP {}",
+                response.status
+            );
+            return Err(AuthError::Storage("认证存储加载失败".to_string()));
         }
-        let body = response
-            .body
-            .ok_or_else(|| "Electron 刷新账户状态缺少响应".to_string())?;
-        let value: Value = serde_json::from_str(&body)
-            .map_err(|_| "Electron 刷新账户状态响应格式不正确".to_string())?;
-        if ["token", "access_token", "refresh_token"]
-            .iter()
-            .any(|field| value.get(*field).is_some())
-        {
-            return Err("Electron 刷新账户状态响应不应包含用户认证凭据".to_string());
+        if body.trim().is_empty() || body.trim() == "null" {
+            eprintln!("[HTTP API][认证存储] load 结果为空");
+            return Ok(None);
         }
+        match serde_json::from_str::<Option<PersistedAuth>>(&body) {
+            Ok(auth) => {
+                eprintln!(
+                    "[HTTP API][认证存储] load 成功 authenticated={} provider={}",
+                    auth.is_some(),
+                    auth.as_ref().map(|value| value.provider.as_str()).unwrap_or("-")
+                );
+                Ok(auth)
+            }
+            Err(_) => {
+                eprintln!("[HTTP API][认证存储] load 失败：响应 JSON 格式不正确");
+                Err(AuthError::Storage("认证存储格式不正确".to_string()))
+            }
+        }
+    }
+
+    fn save(&self, auth: &PersistedAuth) -> Result<(), AuthError> {
+        let body = serde_json::to_vec(auth)
+            .map_err(|_| AuthError::Storage("认证存储序列化失败".to_string()))?;
+        eprintln!(
+            "[HTTP API][认证存储] save 开始 provider={} has_refresh_token={} has_user={} body_bytes={}",
+            auth.provider,
+            auth.refresh_token.is_some(),
+            auth.user.is_some(),
+            body.len()
+        );
+        let response = match self.bridge.send_request(&HttpRequest {
+                method: "POST".to_string(),
+                target: "/api/internal/auth-storage/save".to_string(),
+                headers: HashMap::new(),
+                body,
+            }) {
+                Ok(response) => response,
+                Err(error) => {
+                    eprintln!("[HTTP API][认证存储] save 业务桥失败: {}", error);
+                    return Err(AuthError::Storage(error));
+                }
+            };
+        eprintln!(
+            "[HTTP API][认证存储] save 响应 status={} body_bytes={}",
+            response.status,
+            response.body.as_ref().map(String::len).unwrap_or(0)
+        );
+        if !(200..300).contains(&response.status) {
+            eprintln!(
+                "[HTTP API][认证存储] save 失败：Electron 返回 HTTP {}",
+                response.status
+            );
+            return Err(AuthError::Storage("认证存储保存失败".to_string()));
+        }
+        eprintln!("[HTTP API][认证存储] save 成功");
+        self.notify_state_changed(true, auth.user.as_ref(), auth.expires_at);
+        Ok(())
+    }
+
+    fn clear(&self) -> Result<(), AuthError> {
+        eprintln!("[HTTP API][认证存储] clear 开始");
+        let response = match self.bridge.send_request(&HttpRequest {
+                method: "POST".to_string(),
+                target: "/api/internal/auth-storage/clear".to_string(),
+                headers: HashMap::new(),
+                body: b"{}".to_vec(),
+            }) {
+                Ok(response) => response,
+                Err(error) => {
+                    eprintln!("[HTTP API][认证存储] clear 业务桥失败: {}", error);
+                    return Err(AuthError::Storage(error));
+                }
+            };
+        eprintln!(
+            "[HTTP API][认证存储] clear 响应 status={} body_bytes={}",
+            response.status,
+            response.body.as_ref().map(String::len).unwrap_or(0)
+        );
+        if !(200..300).contains(&response.status) {
+            eprintln!(
+                "[HTTP API][认证存储] clear 失败：Electron 返回 HTTP {}",
+                response.status
+            );
+            return Err(AuthError::Storage("认证存储清理失败".to_string()));
+        }
+        eprintln!("[HTTP API][认证存储] clear 成功");
+        self.notify_state_changed(false, None, None);
+        Ok(())
+    }
+}
+
+impl BridgeAuthStorage {
+    fn notify_state_changed(
+        &self,
+        authenticated: bool,
+        user: Option<&Value>,
+        expires_at: Option<u64>,
+    ) {
+        let body = serde_json::to_vec(&json!({
+            "authenticated": authenticated,
+            "user": user,
+            "expiresAt": expires_at,
+        }));
+        let Ok(body) = body else {
+            eprintln!("[HTTP API] 认证状态通知序列化失败");
+            return;
+        };
+        let result = self.bridge.send_request(&HttpRequest {
+            method: "POST".to_string(),
+            target: "/api/internal/auth-state/changed".to_string(),
+            headers: HashMap::new(),
+            body,
+        });
+        match result {
+            Ok(_) => eprintln!("[HTTP API][认证状态] changed 通知成功 authenticated={}", authenticated),
+            Err(error) => eprintln!("[HTTP API][认证状态] changed 通知失败: {}", error),
+        }
+    }
+}
+
+struct AuthVipPaymentRefresher {
+    auth: Arc<AuthSession>,
+}
+
+impl VipPaymentRefresher for AuthVipPaymentRefresher {
+    fn refresh_after_vip_payment(&self) -> Result<RefreshedWorkingAuth, String> {
+        let response = self
+            .auth
+            .authenticated_request("GET", "/api/users/me", None)
+            .map_err(|error| format!("刷新 Working 账户状态失败: {}", error))?;
+        let value: Value = serde_json::from_slice(&response.body)
+            .map_err(|_| "刷新 Working 账户状态响应格式不正确".to_string())?;
+        let value = value.get("data").unwrap_or(&value);
         let user_id = value
             .get("userId")
-            .and_then(Value::as_str)
+            .or_else(|| value.get("user_id"))
+            .or_else(|| value.get("id"))
+            .and_then(|value| {
+                value
+                    .as_str()
+                    .map(str::to_string)
+                    .or_else(|| value.as_i64().map(|id| id.to_string()))
+            })
             .filter(|value| !value.trim().is_empty())
-            .ok_or_else(|| "Electron 刷新账户状态缺少用户标识".to_string())?;
-        Ok(RefreshedWorkingAuth {
-            user_id: user_id.to_string(),
-        })
+            .ok_or_else(|| "刷新 Working 账户状态缺少用户标识".to_string())?;
+        Ok(RefreshedWorkingAuth { user_id })
     }
-}
-
-fn working_bridge_request_body(method: &str, path: &str, body: Option<&str>) -> Vec<u8> {
-    let mut request = json!({ "method": method, "path": path });
-    if let Some(body) = body {
-        request["body"] = Value::String(body.to_string());
-    }
-    serde_json::to_vec(&request).expect("Working bridge 请求体序列化失败")
-}
-
-fn parse_working_bridge_response(response: BridgeResponse) -> Result<Value, SkillMarketError> {
-    let status = response.status;
-    let body = response.body.unwrap_or_default();
-    if status == 204 && body.trim().is_empty() {
-        return Ok(Value::Null);
-    }
-    let payload = if body.trim().is_empty() {
-        Value::Null
-    } else {
-        serde_json::from_str::<Value>(&body).map_err(|_| {
-            SkillMarketError::new(
-                502,
-                "working_bridge_invalid_response",
-                "Electron Working 业务桥响应格式不正确",
-            )
-        })?
-    };
-    if !(200..300).contains(&status) {
-        let message = payload
-            .get("error")
-            .or_else(|| payload.get("message"))
-            .and_then(Value::as_str)
-            .map(str::to_string)
-            .unwrap_or_else(|| format!("Working 后端请求失败（HTTP {}）", status));
-        let code = payload
-            .get("code")
-            .and_then(Value::as_str)
-            .unwrap_or("working_backend_error");
-        return Err(SkillMarketError::new(status, code, message));
-    }
-    Ok(payload)
 }
 
 impl Bridge {
     fn new() -> Self {
         Self {
             next_id: AtomicU64::new(1),
-            available: AtomicBool::new(true),
+            available: AtomicBool::new(
+                std::env::var("COPIS_HTTP_API_BRIDGE_ENABLED")
+                    .ok()
+                    .as_deref()
+                    != Some("0"),
+            ),
             writer: Mutex::new(BufWriter::new(io::stdout())),
             pending: Mutex::new(HashMap::new()),
             recording_locks: Mutex::new(HashMap::new()),
@@ -1140,6 +1296,16 @@ fn unix_timestamp_millis() -> u128 {
         .unwrap_or(0)
 }
 
+pub fn is_private_auth_bridge_path(path: &str) -> bool {
+    matches!(
+        path,
+        "/api/internal/auth-storage/load"
+            | "/api/internal/auth-storage/save"
+            | "/api/internal/auth-storage/clear"
+            | "/api/internal/auth-state/changed"
+    )
+}
+
 fn is_internal_token_valid(request: &HttpRequest) -> bool {
     let Ok(expected) = std::env::var("COPIS_HTTP_API_INTERNAL_TOKEN") else {
         return false;
@@ -1304,6 +1470,7 @@ fn handle_internal_recording_request(
 fn handle_connection(
     mut stream: TcpStream,
     bridge: Arc<Bridge>,
+    working_gateway: Option<Arc<WorkingGateway>>,
     workers: Arc<PiWorkerManager>,
     memory_store: Arc<MemoryStore>,
     expert_team_store: Arc<ExpertTeamStore>,
@@ -1372,6 +1539,17 @@ fn handle_connection(
         let _ = stream.shutdown(Shutdown::Both);
         return;
     }
+    if is_private_auth_bridge_path(path) {
+        send_json_response(
+            &mut stream,
+            404,
+            r#"{"error":"认证存储桥仅允许 Rust stdio 调用","code":"private_bridge_only"}"#,
+            origin,
+        );
+        let _ = stream.shutdown(Shutdown::Both);
+        return;
+    }
+
     if request.method == "GET" && path == "/api/health" {
         let memory_available = memory_store.integrity_check().is_ok();
         let expert_teams_available = expert_team_store.integrity_check().is_ok();
@@ -1398,7 +1576,10 @@ fn handle_connection(
             return;
         }
         let query = parse_query_parameters(&request.target).unwrap_or_default();
-        let current_version = query.get("client_version").map(String::as_str).unwrap_or("");
+        let current_version = query
+            .get("client_version")
+            .map(String::as_str)
+            .unwrap_or("");
         match app_update::check_app_update(current_version, &app_update::resolve_manifest_url()) {
             Ok(body) => send_json_response(&mut stream, 200, &body.to_string(), origin),
             Err(error) => {
@@ -1417,7 +1598,13 @@ fn handle_connection(
     }
 
     if path == "/api/automations" || path.starts_with("/api/automations/") {
-        handle_automation_route(&mut stream, &request, origin, &automation_store, &automation_scheduler);
+        handle_automation_route(
+            &mut stream,
+            &request,
+            origin,
+            &automation_store,
+            &automation_scheduler,
+        );
         let _ = stream.shutdown(Shutdown::Both);
         return;
     }
@@ -1629,6 +1816,32 @@ fn handle_connection(
         return;
     }
 
+    if is_working_model_route(&request.method, path) {
+        let capability = request
+            .headers
+            .get("authorization")
+            .and_then(|value| value.strip_prefix("Bearer "))
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        let Some(capability) = capability else {
+            send_json_response(
+                &mut stream,
+                401,
+                r#"{"error":"Working 模型代理未授权","code":"unauthorized"}"#,
+                origin,
+            );
+            let _ = stream.shutdown(Shutdown::Both);
+            return;
+        };
+        match workers.working_model_request("", capability, &request.body) {
+            Ok(response) => {
+                send_working_model_response(&mut stream, response.status, &response.body, origin)
+            }
+            Err(error) => send_working_model_error(&mut stream, error, origin),
+        }
+        let _ = stream.shutdown(Shutdown::Both);
+        return;
+    }
     if request.method == "GET" && path == "/api/internal/working-model/first-token-latencies" {
         if !is_web_token_valid(&request) {
             send_json_response(
@@ -1643,7 +1856,8 @@ fn handle_connection(
         match working_model::working_model_latencies(&skill_market_state) {
             Ok(body) => send_json_response(&mut stream, 200, &body.to_string(), origin),
             Err(message) => {
-                let body = json!({ "error": message, "code": "working_model_latency_failed" }).to_string();
+                let body =
+                    json!({ "error": message, "code": "working_model_latency_failed" }).to_string();
                 send_json_response(&mut stream, 502, &body, origin);
             }
         }
@@ -1698,6 +1912,65 @@ fn handle_connection(
             Err(error) => {
                 let body = json!({ "error": error.message, "code": error.code }).to_string();
                 send_json_response(&mut stream, error.status, &body, origin);
+            }
+        }
+        let _ = stream.shutdown(Shutdown::Both);
+        return;
+    }
+
+    if let Some(gateway) = working_gateway
+        .as_ref()
+        .filter(|_| is_working_gateway_path(path))
+    {
+        let body = if request.body.is_empty() {
+            None
+        } else {
+            match String::from_utf8(request.body.clone()) {
+                Ok(body) => Some(body),
+                Err(_) => {
+                    send_json_response(
+                        &mut stream,
+                        400,
+                        r#"{"error":"请求体不是有效 UTF-8","code":"invalid_request_body"}"#,
+                        origin,
+                    );
+                    let _ = stream.shutdown(Shutdown::Both);
+                    return;
+                }
+            }
+        };
+        match handle_working_gateway_request(
+            gateway,
+            &request.method,
+            &request.target,
+            body.as_deref(),
+        ) {
+            Ok(response) => {
+                if response.status == 200
+                    && (is_working_oauth_callback_path(path)
+                        || is_working_oauth_success_path(path)
+                        || is_working_oauth_failure_path(path))
+                {
+                    let page = if is_working_oauth_failure_path(path) {
+                        oidc_failure_page()
+                    } else {
+                        oidc_success_page()
+                    };
+                    send_html_response(&mut stream, response.status, page, origin);
+                } else if let Some(body) = response.body {
+                    let body = serde_json::to_string(&body).unwrap_or_else(|_| "null".to_string());
+                    send_json_response(&mut stream, response.status, &body, origin);
+                } else {
+                    send_empty_response(&mut stream, response.status, origin);
+                }
+            }
+            Err(error) => {
+                if is_working_oauth_callback_path(path) {
+                    send_html_response(&mut stream, error.status, oidc_failure_page(), origin);
+                } else {
+                    let body = json!({ "error": error.message, "code": error.code }).to_string();
+                    send_json_response(&mut stream, error.status, &body, origin);
+                }
             }
         }
         let _ = stream.shutdown(Shutdown::Both);
@@ -1894,25 +2167,57 @@ fn handle_automation_route(
     let parts: Vec<&str> = path.split('/').filter(|part| !part.is_empty()).collect();
     let result = match (request.method.as_str(), parts.as_slice()) {
         ("GET", ["api", "automations"]) => store.list().map(|automations| json!(automations)),
-        ("POST", ["api", "automations"]) => serde_json::from_slice::<AutomationCreateInput>(&request.body)
-            .map_err(|_| AutomationError::Validation("定时任务请求格式不正确".to_string()))
-            .and_then(|input| store.create(input)),
-        ("GET", ["api", "automations", id]) => store.get(id).and_then(|automation| automation.ok_or(AutomationError::NotFound)),
-        ("PATCH", ["api", "automations", id]) => serde_json::from_slice::<AutomationUpdateInput>(&request.body)
-            .map_err(|_| AutomationError::Validation("定时任务请求格式不正确".to_string()))
-            .and_then(|input| store.update(id, input)),
-        ("DELETE", ["api", "automations", id]) => store.delete(id).map(|deleted| json!({ "deleted": deleted })),
-        ("POST", ["api", "automations", id, "runs"]) => serde_json::from_slice::<AutomationRunInput>(&request.body)
-            .map_err(|_| AutomationError::Validation("定时任务运行记录格式不正确".to_string()))
-            .and_then(|input| store.append_run(id, input)),
-        ("POST", ["api", "automations", id, "next-run"]) => match serde_json::from_slice::<Value>(&request.body).ok().and_then(|body| body.get("nextRunAt").and_then(Value::as_u64)) {
-            Some(next_run_at) => store.set_next_run_at(id, next_run_at).map(|_| json!({ "updated": true })),
-            None => Err(AutomationError::Validation("nextRunAt 参数不正确".to_string())),
-        },
-        ("POST", ["api", "automations", id, "last-session"]) => match serde_json::from_slice::<Value>(&request.body).ok().and_then(|body| body.get("sessionId").and_then(Value::as_str).filter(|value| !value.trim().is_empty()).map(str::to_string)) {
-            Some(session_id) => store.set_last_session_id(id, &session_id).map(|_| json!({ "updated": true })),
-            None => Err(AutomationError::Validation("sessionId 参数不正确".to_string())),
-        },
+        ("POST", ["api", "automations"]) => {
+            serde_json::from_slice::<AutomationCreateInput>(&request.body)
+                .map_err(|_| AutomationError::Validation("定时任务请求格式不正确".to_string()))
+                .and_then(|input| store.create(input))
+        }
+        ("GET", ["api", "automations", id]) => store
+            .get(id)
+            .and_then(|automation| automation.ok_or(AutomationError::NotFound)),
+        ("PATCH", ["api", "automations", id]) => {
+            serde_json::from_slice::<AutomationUpdateInput>(&request.body)
+                .map_err(|_| AutomationError::Validation("定时任务请求格式不正确".to_string()))
+                .and_then(|input| store.update(id, input))
+        }
+        ("DELETE", ["api", "automations", id]) => store
+            .delete(id)
+            .map(|deleted| json!({ "deleted": deleted })),
+        ("POST", ["api", "automations", id, "runs"]) => {
+            serde_json::from_slice::<AutomationRunInput>(&request.body)
+                .map_err(|_| AutomationError::Validation("定时任务运行记录格式不正确".to_string()))
+                .and_then(|input| store.append_run(id, input))
+        }
+        ("POST", ["api", "automations", id, "next-run"]) => {
+            match serde_json::from_slice::<Value>(&request.body)
+                .ok()
+                .and_then(|body| body.get("nextRunAt").and_then(Value::as_u64))
+            {
+                Some(next_run_at) => store
+                    .set_next_run_at(id, next_run_at)
+                    .map(|_| json!({ "updated": true })),
+                None => Err(AutomationError::Validation(
+                    "nextRunAt 参数不正确".to_string(),
+                )),
+            }
+        }
+        ("POST", ["api", "automations", id, "last-session"]) => {
+            match serde_json::from_slice::<Value>(&request.body)
+                .ok()
+                .and_then(|body| {
+                    body.get("sessionId")
+                        .and_then(Value::as_str)
+                        .filter(|value| !value.trim().is_empty())
+                        .map(str::to_string)
+                }) {
+                Some(session_id) => store
+                    .set_last_session_id(id, &session_id)
+                    .map(|_| json!({ "updated": true })),
+                None => Err(AutomationError::Validation(
+                    "sessionId 参数不正确".to_string(),
+                )),
+            }
+        }
         ("POST", ["api", "automations", id, "run"]) => scheduler
             .run_now(id)
             .map(|started| json!({ "started": started })),
@@ -1921,7 +2226,12 @@ fn handle_automation_route(
     send_automation_result(stream, result, origin);
 }
 
-fn handle_internal_automation_tool(stream: &mut TcpStream, request: &HttpRequest, origin: Option<&str>, store: &AutomationStore) {
+fn handle_internal_automation_tool(
+    stream: &mut TcpStream,
+    request: &HttpRequest,
+    origin: Option<&str>,
+    store: &AutomationStore,
+) {
     if request.method != "POST" {
         send_automation_result(stream, Err(AutomationError::NotFound), origin);
         return;
@@ -1929,12 +2239,21 @@ fn handle_internal_automation_tool(stream: &mut TcpStream, request: &HttpRequest
     let body = match serde_json::from_slice::<Value>(&request.body) {
         Ok(body) => body,
         Err(_) => {
-            send_automation_result(stream, Err(AutomationError::Validation("定时任务工具请求格式不正确".to_string())), origin);
+            send_automation_result(
+                stream,
+                Err(AutomationError::Validation(
+                    "定时任务工具请求格式不正确".to_string(),
+                )),
+                origin,
+            );
             return;
         }
     };
     let session_id = body.get("sessionId").and_then(Value::as_str).unwrap_or("");
-    let token = body.get("capabilityToken").and_then(Value::as_str).unwrap_or("");
+    let token = body
+        .get("capabilityToken")
+        .and_then(Value::as_str)
+        .unwrap_or("");
     let action = body.get("action").and_then(Value::as_str).unwrap_or("");
     let input = body.get("input").cloned().unwrap_or_else(|| json!({}));
     let context = match automation::worker_automation_context(session_id, token) {
@@ -1945,29 +2264,63 @@ fn handle_internal_automation_tool(stream: &mut TcpStream, request: &HttpRequest
         }
     };
     let result = match action {
-        "list" => store.list().map(|automations| json!({ "automations": automations })),
-        "get" => input.get("id").and_then(Value::as_str).or_else(|| {
-            (context.triggered_by == "automation").then(|| context.source_automation_id.as_deref()).flatten()
-        }).map_or_else(
-            || Err(AutomationError::Validation("id 必填".to_string())),
-            |id| store.get(id).and_then(|automation| automation.ok_or(AutomationError::NotFound)).map(|automation| json!({ "automation": automation })),
-        ),
-        "create" => bind_automation_create_input(input, &context, session_id)
-            .and_then(|create| {
-                store
-                    .create_for_session(create, &context.triggered_by)
-                    .map(|automation| json!({ "automation": automation }))
-            }),
+        "list" => store
+            .list()
+            .map(|automations| json!({ "automations": automations })),
+        "get" => input
+            .get("id")
+            .and_then(Value::as_str)
+            .or_else(|| {
+                (context.triggered_by == "automation")
+                    .then(|| context.source_automation_id.as_deref())
+                    .flatten()
+            })
+            .map_or_else(
+                || Err(AutomationError::Validation("id 必填".to_string())),
+                |id| {
+                    store
+                        .get(id)
+                        .and_then(|automation| automation.ok_or(AutomationError::NotFound))
+                        .map(|automation| json!({ "automation": automation }))
+                },
+            ),
+        "create" => bind_automation_create_input(input, &context, session_id).and_then(|create| {
+            store
+                .create_for_session(create, &context.triggered_by)
+                .map(|automation| json!({ "automation": automation }))
+        }),
         "update" => {
-            let id = input.get("id").and_then(Value::as_str).or_else(|| {
-                (context.triggered_by == "automation").then(|| context.source_automation_id.as_deref()).flatten()
-            }).ok_or_else(|| AutomationError::Validation("id 必填；只有定时任务自动执行中才可以省略 id".to_string()));
+            let id = input
+                .get("id")
+                .and_then(Value::as_str)
+                .or_else(|| {
+                    (context.triggered_by == "automation")
+                        .then(|| context.source_automation_id.as_deref())
+                        .flatten()
+                })
+                .ok_or_else(|| {
+                    AutomationError::Validation(
+                        "id 必填；只有定时任务自动执行中才可以省略 id".to_string(),
+                    )
+                });
             match id {
-                Ok(id) => serde_json::from_value::<AutomationUpdateInput>(input.get("changes").cloned().unwrap_or_else(|| json!({}))).map_err(|_| AutomationError::Validation("修改定时任务参数不正确".to_string())).and_then(|update| store.update(id, update)).map(|automation| json!({ "automation": automation })),
+                Ok(id) => serde_json::from_value::<AutomationUpdateInput>(
+                    input.get("changes").cloned().unwrap_or_else(|| json!({})),
+                )
+                .map_err(|_| AutomationError::Validation("修改定时任务参数不正确".to_string()))
+                .and_then(|update| store.update(id, update))
+                .map(|automation| json!({ "automation": automation })),
                 Err(error) => Err(error),
             }
         }
-        "delete" => input.get("id").and_then(Value::as_str).map_or_else(|| Err(AutomationError::Validation("id 必填".to_string())), |id| store.delete(id).map(|deleted| json!({ "deleted": deleted }))),
+        "delete" => input.get("id").and_then(Value::as_str).map_or_else(
+            || Err(AutomationError::Validation("id 必填".to_string())),
+            |id| {
+                store
+                    .delete(id)
+                    .map(|deleted| json!({ "deleted": deleted }))
+            },
+        ),
         _ => Err(AutomationError::NotFound),
     };
     send_automation_result(stream, result, origin);
@@ -1991,7 +2344,11 @@ fn bind_automation_create_input(
         .map_err(|_| AutomationError::Validation("创建定时任务参数不正确".to_string()))
 }
 
-fn send_automation_result(stream: &mut TcpStream, result: Result<Value, AutomationError>, origin: Option<&str>) {
+fn send_automation_result(
+    stream: &mut TcpStream,
+    result: Result<Value, AutomationError>,
+    origin: Option<&str>,
+) {
     match result {
         Ok(value) => send_json_response(stream, 200, &value.to_string(), origin),
         Err(error) => {
@@ -2204,6 +2561,69 @@ fn is_allowed_origin(origin: &str) -> bool {
     )
 }
 
+fn send_working_model_response(
+    stream: &mut TcpStream,
+    status: u16,
+    body: &[u8],
+    origin: Option<&str>,
+) {
+    let cors = origin
+        .filter(|value| is_allowed_origin(value))
+        .map(|value| {
+            format!(
+                "Access-Control-Allow-Origin: {}\r\nAccess-Control-Allow-Methods: POST,OPTIONS\r\nAccess-Control-Allow-Headers: Content-Type, Authorization, x-copis-web-token\r\n",
+                value
+            )
+        })
+        .unwrap_or_default();
+    let header = format!(
+        "HTTP/1.1 {} {}\r\nVary: Origin\r\n{}Content-Type: text/event-stream; charset=utf-8\r\nCache-Control: no-cache\r\nConnection: close\r\nContent-Length: {}\r\n\r\n",
+        status,
+        reason_phrase(status),
+        cors,
+        body.len(),
+    );
+    let _ = stream.write_all(header.as_bytes());
+    let _ = stream.write_all(body);
+    let _ = stream.flush();
+}
+
+fn send_working_model_error(
+    stream: &mut TcpStream,
+    error: WorkingModelError,
+    origin: Option<&str>,
+) {
+    let (status, code, message): (u16, String, String) = match error {
+        WorkingModelError::InvalidRequest(message) => (400, "invalid_request".to_string(), message),
+        WorkingModelError::Unauthorized => (
+            401,
+            "unauthorized".to_string(),
+            "请先登录 Copis Working".to_string(),
+        ),
+        WorkingModelError::CapabilityExpired => (
+            401,
+            "capability_expired".to_string(),
+            "模型代理 capability 已过期".to_string(),
+        ),
+        WorkingModelError::CapabilityMismatch => (
+            403,
+            "capability_mismatch".to_string(),
+            "模型代理 capability 不匹配".to_string(),
+        ),
+        WorkingModelError::Upstream {
+            status,
+            code,
+            message,
+        } => (status, code, message),
+        WorkingModelError::InvalidResponse => (
+            502,
+            "invalid_upstream_response".to_string(),
+            "Working 模型响应格式不正确".to_string(),
+        ),
+    };
+    let body = json!({ "error": message, "code": code }).to_string();
+    send_json_response(stream, status, &body, origin);
+}
 fn send_json_response(stream: &mut TcpStream, status: u16, body: &str, origin: Option<&str>) {
     send_response(stream, status, Some(body), origin, true);
 }
@@ -2721,13 +3141,20 @@ pub(crate) fn persist_worker_event(bridge: &Arc<Bridge>, frame: &Value) -> Resul
     )?)
 }
 
-pub(crate) fn persist_worker_frame(bridge: &Arc<Bridge>, target: &str, frame: &Value) -> Result<(), String> {
+pub(crate) fn persist_worker_frame(
+    bridge: &Arc<Bridge>,
+    target: &str,
+    frame: &Value,
+) -> Result<(), String> {
     let body =
         serde_json::to_vec(frame).map_err(|error| format!("Agent RPC 帧序列化失败: {}", error))?;
     ensure_internal_success(send_internal_request(bridge, target, body)?)
 }
 
-pub(crate) fn finalize_worker_run(bridge: &Arc<Bridge>, frame: &Value) -> Result<Option<String>, String> {
+pub(crate) fn finalize_worker_run(
+    bridge: &Arc<Bridge>,
+    frame: &Value,
+) -> Result<Option<String>, String> {
     let session_id = frame
         .get("sessionId")
         .and_then(Value::as_str)
@@ -2770,7 +3197,9 @@ pub(crate) fn ensure_internal_success(response: BridgeResponse) -> Result<(), St
     ensure_internal_success_with_body(response).map(|_| ())
 }
 
-pub(crate) fn ensure_internal_success_with_body(response: BridgeResponse) -> Result<Option<String>, String> {
+pub(crate) fn ensure_internal_success_with_body(
+    response: BridgeResponse,
+) -> Result<Option<String>, String> {
     if !(200..300).contains(&response.status) {
         return Err(response
             .body
@@ -2809,12 +3238,41 @@ fn send_text_response(stream: &mut TcpStream, status: u16, body: &str, origin: O
     send_response(stream, status, Some(body), origin, false);
 }
 
+fn send_html_response(stream: &mut TcpStream, status: u16, body: &str, origin: Option<&str>) {
+    send_response_with_content_type(
+        stream,
+        status,
+        Some(body),
+        origin,
+        Some("text/html; charset=utf-8"),
+        true,
+    );
+}
+
 fn send_response(
     stream: &mut TcpStream,
     status: u16,
     body: Option<&str>,
     origin: Option<&str>,
     json: bool,
+) {
+    let content_type = if json {
+        Some("application/json; charset=utf-8")
+    } else if body.is_some() {
+        Some("application/x-ndjson; charset=utf-8")
+    } else {
+        None
+    };
+    send_response_with_content_type(stream, status, body, origin, content_type, false);
+}
+
+fn send_response_with_content_type(
+    stream: &mut TcpStream,
+    status: u16,
+    body: Option<&str>,
+    origin: Option<&str>,
+    content_type: Option<&str>,
+    no_store: bool,
 ) {
     let body_bytes = body.map(str::as_bytes).unwrap_or(&[]);
     let mut response = format!(
@@ -2831,10 +3289,11 @@ fn send_response(
         response.push_str("Access-Control-Allow-Headers: Content-Type, x-copis-web-token\r\n");
         response.push_str("Access-Control-Max-Age: 600\r\n");
     }
-    if json && !body_bytes.is_empty() {
-        response.push_str("Content-Type: application/json; charset=utf-8\r\n");
-    } else if !json && !body_bytes.is_empty() {
-        response.push_str("Content-Type: application/x-ndjson; charset=utf-8\r\n");
+    if let Some(content_type) = content_type.filter(|_| !body_bytes.is_empty()) {
+        response.push_str(&format!("Content-Type: {content_type}\r\n"));
+    }
+    if no_store {
+        response.push_str("Cache-Control: no-store\r\n");
     }
     response.push_str(&format!(
         "Content-Length: {}\r\nConnection: close\r\n\r\n",
@@ -2969,7 +3428,38 @@ fn main() {
     };
 
     let bridge = Arc::new(Bridge::new());
+    if bridge.available.load(Ordering::Acquire) {
+        let response_bridge = Arc::clone(&bridge);
+        thread::spawn(move || read_bridge_responses(response_bridge));
+    }
+    let edu_client = match EduApiClient::from_environment(DEFAULT_MAX_CONCURRENT_REQUESTS) {
+        Ok(client) => Arc::new(client),
+        Err(error) => {
+            eprintln!("[HTTP API] edu-api client 初始化失败: {}", error);
+            process::exit(1);
+        }
+    };
+    let auth_storage: Arc<dyn AuthStorage> = Arc::new(BridgeAuthStorage {
+        bridge: Arc::clone(&bridge),
+    });
+    let auth_client = match EduApiClient::from_auth_environment(DEFAULT_MAX_CONCURRENT_REQUESTS) {
+        Ok(client) => Arc::new(client),
+        Err(error) => {
+            eprintln!("[HTTP API] Auth OIDC client 初始化失败: {}", error);
+            process::exit(1);
+        }
+    };
+    let auth_session = match AuthSession::new_with_oidc(edu_client, auth_storage, Some(auth_client))
+    {
+        Ok(session) => Arc::new(session),
+        Err(error) => {
+            eprintln!("[HTTP API] Working 认证会话初始化失败: {}", error);
+            process::exit(1);
+        }
+    };
+    let working_gateway = Arc::new(WorkingGateway::new(Arc::clone(&auth_session)));
     let workers = Arc::new(PiWorkerManager::new());
+    workers.set_working_model_proxy(Arc::new(WorkingModelProxy::new(Arc::clone(&auth_session))));
     let memory_store = match MemoryStore::open(resolve_memory_directory()) {
         Ok(store) => Arc::new(store),
         Err(error) => {
@@ -2984,14 +3474,12 @@ fn main() {
             process::exit(1);
         }
     };
-    let skill_market_state = Arc::new(SkillMarketState::production(Arc::new(
-        BridgeWorkingBackend {
-            bridge: Arc::clone(&bridge),
-        },
-    )));
+    let skill_market_state = Arc::new(SkillMarketState::production(Arc::new(AuthWorkingBackend {
+        auth: Arc::clone(&auth_session),
+    })));
     let working_payment_state = Arc::new(WorkingPaymentState::new());
-    working_payment_state.set_vip_payment_refresher(Arc::new(BridgeVipPaymentRefresher {
-        bridge: Arc::clone(&bridge),
+    working_payment_state.set_vip_payment_refresher(Arc::new(AuthVipPaymentRefresher {
+        auth: Arc::clone(&auth_session),
     }));
     let payment_workspace = match PaymentWorkspace::from_environment() {
         Ok(workspace) => Arc::new(workspace),
@@ -3016,8 +3504,6 @@ fn main() {
         Arc::clone(&workers),
     ));
     automation_scheduler.start();
-    let response_bridge = Arc::clone(&bridge);
-    thread::spawn(move || read_bridge_responses(response_bridge));
 
     eprintln!("[HTTP API] Rust 服务监听 http://{}:{}", HOST, port);
     let active_connections = Arc::new(AtomicUsize::new(0));
@@ -3030,6 +3516,7 @@ fn main() {
                 }
                 active_connections.fetch_add(1, Ordering::Relaxed);
                 let connection_bridge = Arc::clone(&bridge);
+                let connection_working_gateway = Arc::clone(&working_gateway);
                 let connection_workers = Arc::clone(&workers);
                 let connection_memory = Arc::clone(&memory_store);
                 let connection_expert_teams = Arc::clone(&expert_team_store);
@@ -3047,6 +3534,7 @@ fn main() {
                     handle_connection(
                         stream,
                         connection_bridge,
+                        Some(connection_working_gateway),
                         connection_workers,
                         connection_memory,
                         connection_expert_teams,
@@ -3073,16 +3561,28 @@ fn main() {
 mod tests;
 
 #[cfg(test)]
+#[path = "auth_session_tests.rs"]
+mod auth_session_tests;
+
+#[cfg(test)]
 #[path = "automation_test.rs"]
 mod automation_test;
+
+#[cfg(test)]
+#[path = "edu_api_client_tests.rs"]
+mod edu_api_client_tests;
+
+#[cfg(test)]
+#[path = "working_gateway_tests.rs"]
+mod working_gateway_tests;
 
 #[cfg(test)]
 #[path = "app_update_test.rs"]
 mod app_update_test;
 
 #[cfg(test)]
-#[path = "working_model_test.rs"]
-mod working_model_test;
+#[path = "working_model_proxy_tests.rs"]
+mod working_model_proxy_tests;
 
 #[cfg(test)]
 #[path = "automation_scheduler_test.rs"]

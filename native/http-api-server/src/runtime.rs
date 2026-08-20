@@ -113,6 +113,14 @@ impl ExternalRuntime {
             "COPIS_RUNTIME_DIR".to_string(),
             Value::String(self.active_dir.to_string_lossy().into_owned()),
         );
+        if let Some(python_root) = python_runtime_root() {
+            let python_root = python_root.to_string_lossy().into_owned();
+            env.insert(
+                "COPIS_PYTHON_RUNTIME_ROOT".to_string(),
+                Value::String(python_root.clone()),
+            );
+            env.insert("PYTHONHOME".to_string(), Value::String(python_root));
+        }
         if let Some(path) = &self.node_path {
             env.insert(
                 "COPIS_NODE_PATH".to_string(),
@@ -515,6 +523,11 @@ fn read_child_output(child: &mut Child) -> Result<String, String> {
 }
 
 fn runtime_path(active_dir: &Path) -> String {
+    let python_root = env::var_os("COPIS_PYTHON_RUNTIME_ROOT").map(PathBuf::from);
+    runtime_path_with_python(active_dir, python_root.as_deref())
+}
+
+fn runtime_path_with_python(active_dir: &Path, python_root: Option<&Path>) -> String {
     let prefixes = [
         active_dir.join("bin"),
         active_dir.join("node"),
@@ -529,10 +542,80 @@ fn runtime_path(active_dir: &Path) -> String {
         .filter(|path| path.is_dir())
         .map(|path| path.to_string_lossy().into_owned())
         .collect();
-    if let Some(existing) = env::var_os("PATH") {
-        values.push(existing.to_string_lossy().into_owned());
+    append_python_runtime_paths(&mut values, python_root);
+    append_path_entries(&mut values, env::var_os("PATH").as_deref());
+    values.join(&PATH_SEPARATOR.to_string())
+}
+
+fn append_python_runtime_paths(values: &mut Vec<String>, root: Option<&Path>) {
+    let Some(root) = root else { return };
+    for path in [root.join("bin"), root.join("Scripts"), root.to_path_buf()] {
+        if path.is_dir() {
+            append_path_entry(values, path);
+        }
+    }
+}
+
+fn append_path_entries(values: &mut Vec<String>, raw: Option<&std::ffi::OsStr>) {
+    let Some(raw) = raw else { return };
+    for path in env::split_paths(raw) {
+        append_path_entry(values, path);
+    }
+}
+
+fn append_path_entry(values: &mut Vec<String>, path: PathBuf) {
+    let value = path.to_string_lossy().into_owned();
+    if !value.is_empty() && !values.iter().any(|item| item == &value) {
+        values.push(value);
+    }
+}
+
+pub(crate) fn python_runtime_root() -> Option<PathBuf> {
+    env::var_os("COPIS_PYTHON_RUNTIME_ROOT")
+        .map(PathBuf::from)
+        .filter(|path| path.is_dir())
+}
+
+pub(crate) fn prepend_python_runtime_path(base_path: Option<&str>) -> Option<String> {
+    let root = python_runtime_root()?;
+    Some(prepend_python_runtime_path_for_root(&root, base_path))
+}
+
+fn prepend_python_runtime_path_for_root(root: &Path, base_path: Option<&str>) -> String {
+    let mut values = Vec::new();
+    append_python_runtime_paths(&mut values, Some(root));
+    if let Some(base_path) = base_path {
+        append_path_entries(&mut values, Some(std::ffi::OsStr::new(base_path)));
+    } else {
+        append_path_entries(&mut values, env::var_os("PATH").as_deref());
     }
     values.join(&PATH_SEPARATOR.to_string())
+}
+
+pub(crate) fn inject_python_runtime_config(config: &mut Value) -> Result<(), String> {
+    let Some(root) = python_runtime_root() else {
+        return Ok(());
+    };
+    inject_python_runtime_config_for_root(config, &root)
+}
+
+fn inject_python_runtime_config_for_root(config: &mut Value, root: &Path) -> Result<(), String> {
+    let query = config
+        .get_mut("query")
+        .and_then(Value::as_object_mut)
+        .ok_or_else(|| "Pi worker 配置缺少 query 对象".to_string())?;
+    let runtime_env = ensure_object(query, "runtimeEnv");
+    let env = ensure_object(runtime_env, "env");
+    let base_path = env.get("PATH").and_then(Value::as_str);
+    let path = prepend_python_runtime_path_for_root(root, base_path);
+    env.insert("PATH".to_string(), Value::String(path));
+    let root = root.to_string_lossy().into_owned();
+    env.insert(
+        "COPIS_PYTHON_RUNTIME_ROOT".to_string(),
+        Value::String(root.clone()),
+    );
+    env.insert("PYTHONHOME".to_string(), Value::String(root));
+    Ok(())
 }
 
 fn normalize_node_version(value: &str) -> String {

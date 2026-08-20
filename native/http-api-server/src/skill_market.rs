@@ -4,17 +4,16 @@ use std::collections::{HashMap, HashSet};
 use std::fs::{self, OpenOptions};
 use std::io::{Cursor, Read, Write};
 use std::path::{Component, Path, PathBuf};
-#[cfg(test)]
-use std::sync::OnceLock;
 use std::sync::{Arc, Mutex};
+#[cfg(test)]
+#[path = "skill_market_test_backend.rs"]
+mod test_backend;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use zip::ZipArchive;
 
-const DEFAULT_BACKEND_URL: &str = "https://edu-api.meetlife.com.cn:9001";
 const MAX_PACKAGE_BYTES: usize = 20 * 1024 * 1024;
 const MAX_UNCOMPRESSED_BYTES: usize = 50 * 1024 * 1024;
 const MAX_PACKAGE_FILES: usize = 512;
-const MAX_REMOTE_BODY_BYTES: u64 = 10 * 1024 * 1024;
 const MARKET_SOURCE_FILE: &str = ".market.json";
 
 #[derive(Debug, PartialEq, Eq)]
@@ -56,8 +55,8 @@ pub struct SkillMarketResponse {
 
 /// Working 业务请求的统一出口。
 ///
-/// 普通请求由生产实现转发给 Electron，由 Electron 在主进程内使用加密凭据完成认证。
-/// capability 请求是独立的短期支付能力，不属于用户 access/refresh token。
+/// 生产实现直接复用 Rust AuthSession，由 EduApiClient 负责认证请求；短期支付
+/// capability 只用于本地支付上下文校验，不会把用户 token 放进业务请求体。
 pub trait WorkingBackend: Send + Sync {
     fn request(
         &self,
@@ -83,13 +82,12 @@ pub struct SkillMarketState {
     payment_account_key: Mutex<Option<String>>,
     install_locks: Mutex<HashMap<String, Arc<Mutex<()>>>>,
     #[cfg(test)]
-    legacy_backend: Arc<LegacyHttpWorkingBackend>,
+    test_backend: Option<Arc<test_backend::TestBackend>>,
 }
 
 #[cfg(test)]
 pub(crate) fn backend_env_test_lock() -> &'static Mutex<()> {
-    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-    LOCK.get_or_init(|| Mutex::new(()))
+    test_backend::backend_env_test_lock()
 }
 
 impl SkillMarketState {
@@ -99,18 +97,18 @@ impl SkillMarketState {
             payment_account_key: Mutex::new(None),
             install_locks: Mutex::new(HashMap::new()),
             #[cfg(test)]
-            legacy_backend: Arc::new(LegacyHttpWorkingBackend::new(None)),
+            test_backend: None,
         }
     }
 
     #[cfg(test)]
     pub fn new(initial_token: Option<String>) -> Self {
-        let legacy_backend = Arc::new(LegacyHttpWorkingBackend::new(initial_token));
+        let test_backend = Arc::new(test_backend::TestBackend::new(initial_token));
         Self {
-            backend: legacy_backend.clone(),
+            backend: test_backend.clone(),
             payment_account_key: Mutex::new(None),
             install_locks: Mutex::new(HashMap::new()),
-            legacy_backend,
+            test_backend: Some(test_backend),
         }
     }
 
@@ -150,9 +148,9 @@ impl SkillMarketState {
         capability: &str,
         body: Option<&str>,
     ) -> Result<Value, SkillMarketError> {
-        Ok(unwrap_data(self.request_with_capability(
-            method, path, capability, body,
-        )?))
+        Ok(unwrap_data(
+            self.request_with_capability(method, path, capability, body)?,
+        ))
     }
 
     /// 支付钱包只绑定到稳定的 Working 用户身份，不绑定用户认证凭据。
@@ -168,12 +166,12 @@ impl SkillMarketState {
         }
         let user = self.request_data("GET", "/api/users/me", None)?;
         let user_id = string_value(&user, &["id", "userId", "user_id"]).ok_or_else(|| {
-                SkillMarketError::new(
-                    409,
-                    "desktop_payment_identity_missing",
-                    "Working 用户响应缺少用户标识，请重新登录 Copis Working 后重试",
-                )
-            })?;
+            SkillMarketError::new(
+                409,
+                "desktop_payment_identity_missing",
+                "Working 用户响应缺少用户标识，请重新登录 Copis Working 后重试",
+            )
+        })?;
         self.set_working_user_id(Some(user_id));
         self.payment_account_key().ok_or_else(|| {
             SkillMarketError::new(
@@ -186,7 +184,9 @@ impl SkillMarketState {
 
     #[cfg(test)]
     pub fn set_working_auth(&self, token: Option<String>, user_id: Option<String>) {
-        self.legacy_backend.set_token(token);
+        if let Some(test_backend) = &self.test_backend {
+            test_backend.set_token(token);
+        }
         self.set_working_user_id(user_id);
     }
 
@@ -200,54 +200,6 @@ impl SkillMarketState {
             .entry(key.to_string())
             .or_insert_with(|| Arc::new(Mutex::new(())))
             .clone()
-    }
-}
-
-#[cfg(test)]
-struct LegacyHttpWorkingBackend {
-    access_token: Mutex<Option<String>>,
-}
-
-#[cfg(test)]
-impl LegacyHttpWorkingBackend {
-    fn new(token: Option<String>) -> Self {
-        Self {
-            access_token: Mutex::new(token.filter(|value| !value.trim().is_empty())),
-        }
-    }
-
-    fn set_token(&self, token: Option<String>) {
-        *self.access_token.lock().unwrap() =
-            token.filter(|value| !value.trim().is_empty());
-    }
-
-    fn access_token(&self) -> Option<String> {
-        self.access_token.lock().unwrap().clone()
-    }
-}
-
-#[cfg(test)]
-impl WorkingBackend for LegacyHttpWorkingBackend {
-    fn request(
-        &self,
-        method: &str,
-        path: &str,
-        body: Option<&str>,
-    ) -> Result<Value, SkillMarketError> {
-        let token = self.access_token().ok_or_else(|| {
-            SkillMarketError::new(401, "unauthorized", "请先登录 Copis Working")
-        })?;
-        request_working_http(method, path, Some(&token), body)
-    }
-
-    fn request_with_capability(
-        &self,
-        method: &str,
-        path: &str,
-        capability: &str,
-        body: Option<&str>,
-    ) -> Result<Value, SkillMarketError> {
-        request_working_http(method, path, Some(capability), body)
     }
 }
 
@@ -1034,106 +986,6 @@ fn is_local_http_url(value: &str) -> bool {
         .or_else(|| authority.rsplit_once(':').map(|(host, _)| host))
         .unwrap_or(authority);
     matches!(host, "127.0.0.1" | "localhost" | "::1")
-}
-
-pub(crate) fn request_working_with_capability(
-    method: &str,
-    path: &str,
-    capability: &str,
-    body: Option<&str>,
-) -> Result<Value, SkillMarketError> {
-    request_working_http(method, path, Some(capability), body)
-}
-
-fn request_working_http(
-    method: &str,
-    path: &str,
-    bearer: Option<&str>,
-    body: Option<&str>,
-) -> Result<Value, SkillMarketError> {
-    let base = std::env::var("COPIS_BACKEND_URL")
-        .ok()
-        .filter(|value| !value.trim().is_empty())
-        .unwrap_or_else(|| DEFAULT_BACKEND_URL.to_string())
-        .trim_end_matches('/')
-        .to_string();
-    let url = format!("{}{}", base, path);
-    let agent = ureq::Agent::config_builder()
-        .timeout_global(Some(Duration::from_secs(30)))
-        .http_status_as_error(false)
-        .build()
-        .new_agent();
-    let mut response = match method {
-        "GET" => {
-            let mut request = agent.get(&url).header("Accept", "application/json");
-            if let Some(bearer) = bearer {
-                request = request.header("Authorization", format!("Bearer {}", bearer));
-            }
-            request.call()
-        }
-        "POST" => {
-            let mut request = agent
-                .post(&url)
-                .header("Accept", "application/json")
-                .header("Content-Type", "application/json");
-            if let Some(bearer) = bearer {
-                request = request.header("Authorization", format!("Bearer {}", bearer));
-            }
-            request.send(body.unwrap_or("{}"))
-        }
-        "DELETE" => {
-            let mut request = agent.delete(&url).header("Accept", "application/json");
-            if let Some(bearer) = bearer {
-                request = request.header("Authorization", format!("Bearer {}", bearer));
-            }
-            request.call()
-        }
-        _ => {
-            return Err(SkillMarketError::new(
-                405,
-                "method_not_allowed",
-                "技能市场请求方法不支持",
-            ))
-        }
-    }
-    .map_err(|error| {
-        SkillMarketError::new(
-            502,
-            "working_backend_unavailable",
-            format!("Working 后端请求失败: {}", error),
-        )
-    })?;
-
-    let status = response.status().as_u16();
-    let text = response
-        .body_mut()
-        .with_config()
-        .limit(MAX_REMOTE_BODY_BYTES)
-        .read_to_string()
-        .map_err(|error| {
-            SkillMarketError::new(
-                502,
-                "working_backend_unavailable",
-                format!("读取 Working 响应失败: {}", error),
-            )
-        })?;
-    let payload = if text.trim().is_empty() {
-        Value::Null
-    } else {
-        serde_json::from_str::<Value>(&text).unwrap_or_else(|_| Value::String(text.clone()))
-    };
-    if !(200..300).contains(&status) {
-        return Err(remote_error(status, &payload));
-    }
-    Ok(payload)
-}
-
-fn remote_error(status: u16, payload: &Value) -> SkillMarketError {
-    let message = string_value(payload, &["error", "message"])
-        .unwrap_or_else(|| format!("Working 后端请求失败（HTTP {}）", status));
-    let code =
-        string_value(payload, &["code"]).unwrap_or_else(|| "working_backend_error".to_string());
-    SkillMarketError::new(status, code, message)
 }
 
 fn unwrap_data(value: Value) -> Value {

@@ -186,6 +186,34 @@ export async function resolveImmutableModuleVersions(
   throw new Error('功能模块版本自动递增超过 100 次，已停止发布')
 }
 
+/**
+ * 为指定模块生成一次强制的新 patch 版本。
+ *
+ * 单模块 Rust 发布不能因为二进制内容相同而复用旧版本；同时需要保证
+ * 本次版本高于 COS 当前平台已经发布的版本，避免客户端把新发布误判为旧版本。
+ */
+export function advanceFunctionalModuleVersions(
+  modules: readonly FunctionalModuleBinaryInput[],
+  manifest: FunctionalModuleManifest | undefined,
+  platform: FunctionalModulePlatform,
+  arch: FunctionalModuleArchitecture,
+  moduleNames: readonly FunctionalModuleName[],
+): FunctionalModuleBinaryInput[] {
+  const names = new Set(moduleNames)
+  const existingModules = manifest?.platforms[`${platform}-${arch}`]?.modules
+  return modules.map((module) => {
+    if (!names.has(module.module)) return { ...module }
+    const remoteVersion = existingModules?.[module.module]?.version
+    const baseline = remoteVersion && compareStableVersions(remoteVersion, module.version) > 0
+      ? remoteVersion
+      : module.version
+    return {
+      ...module,
+      version: incrementPatchVersion(baseline),
+    }
+  })
+}
+
 export interface FunctionalModuleManifestUploadInput {
   channel: string
   publicBaseUrl: string
@@ -296,6 +324,22 @@ function incrementPatchVersion(version: string): string {
     throw new Error(`无法自动递增非稳定版功能模块版本: ${version}`)
   }
   return `${match[1]}.${match[2]}.${(BigInt(match[3]!) + 1n).toString()}`
+}
+
+function compareStableVersions(left: string, right: string): number {
+  const leftMatch = /^(\d+)\.(\d+)\.(\d+)$/.exec(left)
+  const rightMatch = /^(\d+)\.(\d+)\.(\d+)$/.exec(right)
+  if (!leftMatch || !rightMatch) {
+    throw new Error(`功能模块版本必须是稳定三段式版本：${!leftMatch ? left : right}`)
+  }
+  const leftParts = leftMatch.slice(1).map((part) => BigInt(part))
+  const rightParts = rightMatch.slice(1).map((part) => BigInt(part))
+  for (let index = 0; index < leftParts.length; index += 1) {
+    if (leftParts[index]! !== rightParts[index]!) {
+      return leftParts[index]! > rightParts[index]! ? 1 : -1
+    }
+  }
+  return 0
 }
 
 function isNotFoundError(error: unknown): boolean {
@@ -455,6 +499,7 @@ function normalizePrefix(value: string | undefined): string {
 function getModuleEntrypoint(name: FunctionalModuleName, suffix: string): string {
   if (name === 'officecli') return `bin/officecli${suffix}`
   if (name === 'node-runtime') return `bin/node${suffix}`
+  if (name === 'python-runtime') return `bin/python${suffix}`
   return `bin/copis-http-api-server${suffix}`
 }
 

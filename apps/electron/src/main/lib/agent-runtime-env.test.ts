@@ -113,4 +113,35 @@ describe('Agent Windows Shell 运行环境', () => {
       PATH: '/Users/test/.copis/modules/versions/officecli/1.0.143/bin',
     })
   })
+
+  test('Given Python runtime 功能模块已安装 When 构建 Agent 环境 Then Python bin 优先于系统 PATH', () => {
+    const result = buildAgentRuntimeEnv({
+      bundledCliPath: '',
+      pythonRuntimePath: '/Users/test/.copis/modules/versions/python-runtime/3.12.14/bin/python',
+      platform: 'darwin',
+      processEnv: { PATH: '/usr/bin:/bin' },
+    })
+
+    expect(result.env).toMatchObject({
+      COPIS_PYTHON_RUNTIME_ROOT: '/Users/test/.copis/modules/versions/python-runtime/3.12.14',
+      PYTHONHOME: '/Users/test/.copis/modules/versions/python-runtime/3.12.14',
+      PATH: '/Users/test/.copis/modules/versions/python-runtime/3.12.14/bin:/usr/bin:/bin',
+    })
+  })
+
+  test('Given Windows Python runtime 入口 When 构建 Agent 环境 Then Python home 指向 bin 目录', () => {
+    const result = buildAgentRuntimeEnv({
+      bundledCliPath: '',
+      pythonRuntimePath: 'C:\\Copis\\modules\\python-runtime\\bin\\python.exe',
+      platform: 'win32',
+      pathDelimiter: ';',
+      processEnv: { Path: 'C:\\Windows\\System32' },
+    })
+
+    expect(result.env).toMatchObject({
+      COPIS_PYTHON_RUNTIME_ROOT: 'C:\\Copis\\modules\\python-runtime\\bin',
+      PYTHONHOME: 'C:\\Copis\\modules\\python-runtime\\bin',
+      Path: 'C:\\Copis\\modules\\python-runtime\\bin;C:\\Windows\\System32',
+    })
+  })
 })

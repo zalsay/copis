@@ -137,10 +137,12 @@ mock.module('./web-tab-session-service', () => ({
 const {
   activateWebTabIncognito,
   createWebTab,
+  createWorkflowWebTab,
   closeWebTab,
   disposeWebTabs,
   getWebTabState,
   listWebTabs,
+  reorderWebTab,
   resolveWebTabFaviconUrl,
   setWebTabHostWindow,
   subscribeWebTabLifecycle,
@@ -287,5 +289,56 @@ describe('网页页签无痕生命周期', () => {
 
     expect(view.webContents.session.clearStorageDataCalls).toBe(1)
     expect(view.webContents.closed).toBe(true)
+  })
+})
+
+describe('网页页签拖动排序', () => {
+  test('Given A、B、C When 将 A 移到末位 Then 顺序和激活状态都更新', () => {
+    setupHost()
+    const first = createWebTab({ url: 'https://a.example', activate: false })
+    const second = createWebTab({ url: 'https://b.example', activate: false })
+    const third = createWebTab({ url: 'https://c.example', activate: false })
+
+    const result = reorderWebTab({ tabId: first.tabs[0]!.id, targetIndex: 2 })
+
+    expect(result.tabs.map((tab) => tab.url)).toEqual([
+      'https://b.example/',
+      'https://c.example/',
+      'https://a.example/',
+    ])
+    expect(result.activeTabId).toBe(first.tabs[0]!.id)
+    expect(persistedSessions.at(-1)).toEqual({
+      tabs: [
+        { url: 'https://b.example/' },
+        { url: 'https://c.example/' },
+        { url: 'https://a.example/' },
+      ],
+      activeTabIndex: 2,
+    })
+    expect(second.tabs[1]!.id).toBe(result.tabs[0]!.id)
+    expect(third.tabs[2]!.id).toBe(result.tabs[1]!.id)
+  })
+
+  test('Given公开页签和 workflow-owned 页签 When重排公开页签 Then workflow 页签不参与目标索引', () => {
+    setupHost()
+    const first = createWebTab({ url: 'https://a.example', activate: false })
+    const workflow = createWorkflowWebTab({ url: 'https://workflow.example' })
+    const second = createWebTab({ url: 'https://b.example', activate: false })
+
+    const result = reorderWebTab({ tabId: second.tabs[1]!.id, targetIndex: 0 })
+
+    expect(result.tabs.map((tab) => tab.id)).toEqual([second.tabs[1]!.id, first.tabs[0]!.id])
+    expect(result.tabs.some((tab) => tab.id === workflow.id)).toBe(false)
+  })
+
+  test('Given不存在的页签或无效目标索引 When重排 Then拒绝请求且不改变顺序', () => {
+    setupHost()
+    const first = createWebTab({ url: 'https://a.example', activate: false })
+    createWebTab({ url: 'https://b.example', activate: false })
+    const before = listWebTabs()
+
+    expect(() => reorderWebTab({ tabId: 'missing-tab', targetIndex: 0 })).toThrow('网页页签不存在')
+    expect(() => reorderWebTab({ tabId: first.tabs[0]!.id, targetIndex: 2 })).toThrow('网页页签目标位置无效')
+    expect(listWebTabs()).toEqual(before)
   })
 })

@@ -895,6 +895,14 @@ fn configure_project_command_environment_with_officecli(
         command.env("COPIS_OFFICECLI", path);
     }
 
+    if let Some(path) = std::env::var_os("COPIS_PYTHON_RUNTIME_ROOT")
+        .map(PathBuf::from)
+        .and_then(valid_python_runtime_root)
+    {
+        command.env("COPIS_PYTHON_RUNTIME_ROOT", &path);
+        command.env("PYTHONHOME", &path);
+    }
+
     // 项目命令必须优先使用 Copis 管理的 Node.js/npm 和 OfficeCLI，不能依赖用户的系统 PATH。
     let runtime_path = crate::runtime::resolve_runtime().path_value();
     let mut path_entries = configured_officecli
@@ -909,6 +917,13 @@ fn configure_project_command_environment_with_officecli(
     if let Ok(path) = std::env::join_paths(path_entries) {
         command.env("PATH", path);
     }
+}
+
+fn valid_python_runtime_root(path: PathBuf) -> Option<PathBuf> {
+    if !path.is_absolute() || !path.is_dir() {
+        return None;
+    }
+    fs::canonicalize(path).ok()
 }
 
 fn valid_officecli_path(path: &Path) -> Option<PathBuf> {

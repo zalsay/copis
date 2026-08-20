@@ -1,6 +1,12 @@
 import { app } from 'electron'
 import type { WorkingApiClient } from './working-api-client'
 import { getWorkingApiClient } from './working-api-service'
+import {
+  clearWorkingAuthFromRust,
+  loadWorkingAuthForRust,
+  saveWorkingAuthFromRust,
+  type RustWorkingAuthRecord,
+} from './working-auth-store'
 import { getSettings, updateSettings } from './settings-service'
 import {
   finalizeAgentRpcRun,
@@ -95,7 +101,6 @@ interface WorkingApiFacade {
   readonly baseUrl: string
   getToken(): string | null
   getCachedUser(): ReturnType<WorkingApiClient['getCachedUser']>
-  requestFromRust(input: import('./working-api-client').WorkingRustRequest): ReturnType<WorkingApiClient['requestFromRust']>
   refreshAfterVipPayment(): ReturnType<WorkingApiClient['refreshAfterVipPayment']>
   login(input: WorkingLoginInput): ReturnType<WorkingApiClient['login']>
   register(input: WorkingRegisterInput): ReturnType<WorkingApiClient['register']>
@@ -466,7 +471,7 @@ function makeAuthState(client: WorkingApiFacade): {
   backendUrl: string
 } {
   return {
-    authenticated: Boolean(client.getToken()),
+    authenticated: client.getCachedUser() !== null,
     user: client.getCachedUser(),
     backendUrl: client.baseUrl,
   }
@@ -1295,6 +1300,76 @@ export async function handleHttpApiRequest(
       throw new HttpApiRequestError('HTTP API 路径不存在', 404, 'not_found')
     }
 
+    if (segments[1] === 'internal' && segments[2] === 'auth-storage') {
+      if (segments[3] === 'load' && request.method === 'GET') {
+        const record = loadWorkingAuthForRust()
+        console.info('[HTTP API][认证存储] load 完成', {
+          authenticated: record !== null,
+          provider: record?.provider ?? '-',
+          hasRefreshToken: Boolean(record?.refreshToken),
+          hasUser: record?.user !== null && record?.user !== undefined,
+        })
+        return { status: 200, body: record }
+      }
+      if (segments[3] === 'save' && request.method === 'POST') {
+        const body = await readJsonBody(request)
+        if (!isRecord(body)) throw new HttpApiRequestError('认证存储记录不正确', 400, 'invalid_auth_storage')
+        console.info('[HTTP API][认证存储] save 收到请求', {
+          provider: body.provider ?? '-',
+          hasAccessToken: typeof body.accessToken === 'string' && body.accessToken.length > 0,
+          hasRefreshToken: typeof body.refreshToken === 'string' && body.refreshToken.length > 0,
+          hasUser: body.user !== null && body.user !== undefined,
+          bodyKeys: Object.keys(body).filter((key) => !/token|secret|password|credential/i.test(key)),
+        })
+        try {
+          saveWorkingAuthFromRust(body as unknown as RustWorkingAuthRecord)
+        } catch (error) {
+          console.error('[HTTP API][认证存储] save 失败', redactSensitiveLogValue(error))
+          throw error
+        }
+        console.info('[HTTP API][认证存储] save 完成')
+        return { status: 204 }
+      }
+      if (segments[3] === 'clear' && request.method === 'POST') {
+        console.info('[HTTP API][认证存储] clear 收到请求')
+        try {
+          clearWorkingAuthFromRust()
+        } catch (error) {
+          console.error('[HTTP API][认证存储] clear 失败', redactSensitiveLogValue(error))
+          throw error
+        }
+        console.info('[HTTP API][认证存储] clear 完成')
+        return { status: 204 }
+      }
+      throw new HttpApiRequestError('认证存储路径不存在', 404, 'not_found')
+    }
+    if (segments[1] === 'internal' && segments[2] === 'auth-state' && segments[3] === 'changed' && request.method === 'POST') {
+      const body = await readJsonBody(request)
+      if (!isRecord(body) || typeof body.authenticated !== 'boolean') {
+        throw new HttpApiRequestError('认证状态通知格式不正确', 400, 'invalid_auth_state')
+      }
+      if ('accessToken' in body || 'refreshToken' in body || 'token' in body) {
+        throw new HttpApiRequestError('认证状态通知不得包含凭据', 400, 'credential_leak')
+      }
+      const user = body.user === null || body.user === undefined
+        ? null
+        : isRecord(body.user) ? body.user as WorkingAuthState['user'] : null
+      const expiresAt = typeof body.expiresAt === 'number' && Number.isFinite(body.expiresAt)
+        ? body.expiresAt
+        : null
+      dependencies.notifyWorkingAuthUpdated?.({
+        authenticated: body.authenticated,
+        user,
+        backendUrl: dependencies.getWorkingClient().baseUrl,
+        expiresAt,
+      })
+      console.info('[HTTP API][认证状态] changed 完成', {
+        authenticated: body.authenticated,
+        hasUser: user !== null,
+        expiresAtPresent: expiresAt !== null,
+      })
+      return { status: 204 }
+    }
     if (segments[1] === 'workspaces' && segments[2] && segments[3] === 'mcp') {
       return await handleWorkspaceMcpRequest(request, segments)
     }
@@ -1307,32 +1382,8 @@ export async function handleHttpApiRequest(
     if (segments[1] === 'internal' && segments[2] === 'agent') {
       return await handleAgentRpcInternalRequest(request, segments, dependencies)
     }
-    if (segments[1] === 'internal' && segments[2] === 'working-auth' && segments[3] === 'refresh-after-vip' && request.method === 'POST') {
-      const workingClient = dependencies.getWorkingClient()
-      const refreshed = await workingClient.refreshAfterVipPayment()
-      dependencies.notifyWorkingAuthUpdated?.({
-        authenticated: true,
-        user: workingClient.getCachedUser(),
-        backendUrl: workingClient.baseUrl,
-      })
-      return { status: 200, body: refreshed }
-    }
-    if (segments[1] === 'internal' && segments[2] === 'working-auth' && segments[3] === 'request' && request.method === 'POST') {
-      const workingClient = dependencies.getWorkingClient()
-      const body = requireRecord(await readJsonBody(request))
-      const method = requireString(body, 'method', 'Rust Working 请求方法不正确')
-      const path = requireString(body, 'path', 'Rust Working 请求路径不正确')
-      if (body.body !== undefined && typeof body.body !== 'string') {
-        throw new HttpApiRequestError('Rust Working 请求体不正确', 400, 'invalid_request_body')
-      }
-      return {
-        status: 200,
-        body: await workingClient.requestFromRust({
-          method,
-          path,
-          ...(typeof body.body === 'string' ? { body: body.body } : {}),
-        }),
-      }
+    if (segments[1] === 'internal' && segments[2] === 'working-auth') {
+      throw new HttpApiRequestError('Working 业务桥已禁用，请通过本机 Rust API 请求', 410, 'working_bridge_disabled')
     }
     if (segments[1] === 'internal' && segments[2] === 'automation') {
       return await handleAutomationInternalRequest(request, segments)
@@ -1344,7 +1395,7 @@ export async function handleHttpApiRequest(
       return await handleAgentRequest(request, url, segments, dependencies)
     }
     if (segments[1] === 'working') {
-      return await handleWorkingRequest(request, url, segments, dependencies)
+      throw new HttpApiRequestError('Working 业务桥已禁用，请通过本机 Rust API 请求', 410, 'working_bridge_disabled')
     }
     throw new HttpApiRequestError('HTTP API 路径不存在', 404, 'not_found')
   } catch (error: unknown) {

@@ -1,4 +1,4 @@
-import { chmod, copyFile, mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
+import { chmod, copyFile, lstat, mkdir, readFile, realpath, rename, rm, stat, symlink, writeFile } from 'node:fs/promises'
 import { existsSync, readFileSync } from 'node:fs'
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { gunzipSync } from 'node:zlib'
@@ -8,6 +8,7 @@ const ARCHIVE_PAYLOAD_FILE = '.artifact.tar.gz'
 const MAX_ARCHIVE_UNPACKED_BYTES = 512 * 1024 * 1024
 const TAR_TYPE_PAX_GLOBAL_EXTENDED_HEADER = 'g'.charCodeAt(0)
 const TAR_TYPE_PAX_EXTENDED_HEADER = 'x'.charCodeAt(0)
+const TAR_TYPE_SYMLINK = '2'.charCodeAt(0)
 
 export interface FunctionalModulePackage {
   name: string
@@ -173,7 +174,8 @@ export async function assembleFunctionalModule(
     await rename(temporaryDir, versionDir)
   } catch (error) {
     if (moduleVersionComplete(versionDir, packageInfo)) return versionDir
-    throw new Error(`组装功能模块版本失败: ${packageInfo.name}`, { cause: error })
+    const detail = error instanceof Error ? `: ${error.message}` : `: ${String(error)}`
+    throw new Error(`组装功能模块版本失败: ${packageInfo.name}${detail}`, { cause: error })
   } finally {
     await rm(temporaryDir, { recursive: true, force: true })
   }
@@ -388,14 +390,20 @@ async function extractTarGz(sourcePath: string, targetDir: string): Promise<void
     throw new Error(`无法解压 tar.gz 功能模块: ${error instanceof Error ? error.message : String(error)}`)
   }
 
+  await mkdir(targetDir, { recursive: true })
+  const symlinks: Array<{ path: string; target: string }> = []
   let offset = 0
   while (offset + 512 <= tar.length) {
     const header = tar.subarray(offset, offset + 512)
-    if (header.every((byte) => byte === 0)) return
+    if (header.every((byte) => byte === 0)) {
+      await validateArchiveSymlinks(targetDir, symlinks)
+      return
+    }
 
     const name = readTarString(header, 0, 100)
     const prefix = readTarString(header, 345, 155)
     const path = [prefix, name].filter(Boolean).join('/')
+    const linkName = readTarString(header, 157, 100)
     const size = readTarSize(header)
     const type = header[156] ?? 0
     const dataStart = offset + 512
@@ -423,11 +431,24 @@ async function extractTarGz(sourcePath: string, targetDir: string): Promise<void
     }
 
     if (type === 0 || type === 48) {
-      await mkdir(dirname(targetPath), { recursive: true })
+      await ensureArchiveParentInside(targetDir, targetPath)
+      await rejectExistingSymlink(targetPath, path)
       await writeFile(targetPath, tar.subarray(dataStart, dataEnd))
       if (normalizedPath.startsWith('bin/')) await markExecutable(targetPath)
     } else if (type === 53) {
+      await ensureArchiveParentInside(targetDir, targetPath)
+      await rejectExistingSymlink(targetPath, path)
       await mkdir(targetPath, { recursive: true })
+    } else if (type === TAR_TYPE_SYMLINK) {
+      const normalizedLinkName = linkName.replaceAll('\\', '/')
+      const linkTargetPath = validateArchiveSymlinkTarget(targetDir, targetPath, normalizedLinkName, path)
+      await ensureArchiveParentInside(targetDir, targetPath)
+      await rejectExistingSymlink(targetPath, path)
+      if (await pathExists(targetPath)) {
+        throw new Error(`tar.gz 功能模块符号链接路径重复: ${path}`)
+      }
+      await symlink(normalizedLinkName, targetPath)
+      symlinks.push({ path: targetPath, target: linkTargetPath })
     } else {
       throw new Error(`tar.gz 功能模块不支持的条目类型: ${String.fromCharCode(type)}`)
     }
@@ -435,6 +456,78 @@ async function extractTarGz(sourcePath: string, targetDir: string): Promise<void
   }
 
   throw new Error('tar.gz 功能模块缺少结束标记')
+}
+
+async function ensureArchiveParentInside(root: string, targetPath: string): Promise<void> {
+  const parent = dirname(targetPath)
+  if (!isPathWithin(root, parent)) {
+    throw new Error(`tar.gz 功能模块父目录超出目标目录: ${parent}`)
+  }
+  const relativeParent = relative(resolve(root), resolve(parent))
+  let current = resolve(root)
+  for (const part of relativeParent.split(sep)) {
+    if (!part || part === '.') continue
+    current = join(current, part)
+    const existing = await lstat(current).catch(() => undefined)
+    if (existing?.isSymbolicLink()) {
+      throw new Error(`tar.gz 功能模块父目录不能是符号链接: ${current}`)
+    }
+    if (existing) {
+      if (!existing.isDirectory()) throw new Error(`tar.gz 功能模块父路径不是目录: ${current}`)
+      continue
+    }
+    await mkdir(current)
+  }
+}
+
+async function rejectExistingSymlink(targetPath: string, archivePath: string): Promise<void> {
+  const existing = await lstat(targetPath).catch(() => undefined)
+  if (existing?.isSymbolicLink()) {
+    throw new Error(`tar.gz 功能模块路径经过符号链接: ${archivePath}`)
+  }
+}
+
+function validateArchiveSymlinkTarget(
+  root: string,
+  linkPath: string,
+  linkName: string,
+  archivePath: string,
+): string {
+  if (!linkName || linkName.includes('\0') || isAbsolute(linkName) || /^[a-zA-Z]:[\\/]/.test(linkName)) {
+    throw new Error(`tar.gz 功能模块符号链接目标不安全: ${archivePath}`)
+  }
+  const resolvedTarget = resolve(dirname(linkPath), linkName)
+  if (!isPathWithin(root, resolvedTarget)) {
+    throw new Error(`tar.gz 功能模块符号链接目标超出目标目录: ${archivePath}`)
+  }
+  return resolvedTarget
+}
+
+async function pathExists(path: string): Promise<boolean> {
+  return lstat(path).then(() => true).catch(() => false)
+}
+
+async function validateArchiveSymlinks(
+  root: string,
+  symlinks: ReadonlyArray<{ path: string; target: string }>,
+): Promise<void> {
+  const realRoot = await realpath(root).catch(() => resolve(root))
+  for (const link of symlinks) {
+    const targetRealPath = await realpath(link.target).catch(() => undefined)
+    if (!targetRealPath) {
+      throw new Error(`tar.gz 功能模块符号链接目标不存在: ${link.path}`)
+    }
+    if (!isPathWithin(realRoot, targetRealPath)) {
+      throw new Error(`tar.gz 功能模块符号链接目标超出目标目录: ${link.path}`)
+    }
+    const linkRealPath = await realpath(link.path).catch(() => undefined)
+    if (!linkRealPath) {
+      throw new Error(`tar.gz 功能模块符号链接目标不存在: ${link.path}`)
+    }
+    if (!isPathWithin(realRoot, linkRealPath)) {
+      throw new Error(`tar.gz 功能模块符号链接目标超出目标目录: ${link.path}`)
+    }
+  }
 }
 
 function readTarString(header: Buffer, start: number, length: number): string {
