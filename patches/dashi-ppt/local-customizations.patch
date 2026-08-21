@@ -1,0 +1,305 @@
+diff --git a/SKILL.md b/SKILL.md
+index 9b22161..8f6edaa 100644
+--- a/SKILL.md
++++ b/SKILL.md
+@@ -1,6 +1,10 @@
+ ---
+ name: dashi-ppt
+-description: 制作 PPT、演示文稿、幻灯片、汇报材料时使用。Dashi PPT 基于预置视觉主题组合页面,生成可离线打开、可在浏览器编辑的 HTML 演示,支持导出 PPTX / PDF 文件。
++displayName: Dashi PPT
++description: 制作 PPT、演示文稿、幻灯片、汇报材料时使用。Dashi PPT 基于预置视觉主题组合页面，生成可离线打开、可在浏览器编辑的 HTML 演示，支持导出 PPTX / PDF 文件。
++group: 系统内置
++version: "0.4.11"
++license: AGPL-3.0-only
+ ---
+ 
+ # Dashi PPT
+@@ -15,7 +19,7 @@ Dashi PPT 生成静态 HTML 横向翻页 PPT。使用本 skill 时,先把用户
+ 每次完成用户请求、准备最终回复前,运行:
+ 
+ ```bash
+-node <skill-root>/scripts/check_latest_version.mjs
++copis dashi-ppt check-latest-version
+ ```
+ 
+ 如果脚本有输出,把输出内容附在最终回复末尾提醒用户更新;如果脚本无输出或检查失败,保持静默,不要提版本检查。
+@@ -30,7 +34,7 @@ node <skill-root>/scripts/check_latest_version.mjs
+ 
+ 渲染脚本:
+ 
+-- macOS / Linux: `<skill-root>/scripts/render_goal_deck.sh`
++- macOS / Linux: `copis dashi-ppt render --`
+ - Windows PowerShell: `<skill-root>/scripts/render_goal_deck.ps1`
+ 
+ 版本检查脚本:
+@@ -73,11 +77,11 @@ node <skill-root>/scripts/check_latest_version.mjs
+ <!-- theme-choice-hints:end -->
+ - 不使用旧 token、旧主题、旧媒体槽、旧风格分支或旧入场动画控制。
+ - 先冻结本页 `slide.content.presentation`,再按真实容量传入 `--title-chars`、`--summary-chars`、`--takeaway-chars`、`--item-count`、`--value-item-count`、`--raw-numeric-item-count`、`--textual-value-item-count`、`--nested-depth` 和 `--priority`,例如 `npm --prefix <skill-root>/project run layout:query -- --theme <themePack> --item-count 4 --value-item-count 4 --textual-value-item-count 4 --priority metrics --limit 12 --seed <randomSeed>:slide-<n>`。标题、items、`value/displayValue` 和明确媒体是硬条件;摘要、结论、detail、unit、focus 和 role 只影响排序。每页选择 3 个结构家族不同的 layout,整份 deck 统一分配,不重复同一组三布局。需要媒体槽时加 `--needs-media`、`--planned-images <n>`、`--provided-images <n>` 或 `--image-gen`。
+-- 字段不清楚、对象/数组/count、图片/媒体:先运行 `npm --prefix <skill-root>/project run inspect:layout -- --compact <layout...>` 检查该页 3 个模板方案。scaffold 同时识别数组容器和重复标量槽组,只把完整 `items` 投影到唯一主容器;辅助可见容器可隐藏时设为 0,不能隐藏且没有合法支持内容时该 layout 退出候选。不要让 Agent 手写 30 份 `contentMap`;只有用户显式指定复杂 layout 时才按 `goal.fill-plan.json` 补该页映射。写对象、数组、数量或图片 props:运行 `props:safe`,整份 goal 用 `props:safe -- --goal <file> --write`。
++- 字段不清楚、对象/数组/count、图片/媒体:先运行 `copis dashi-ppt inspect:layout -- --compact <layout...>` 检查该页 3 个模板方案。scaffold 同时识别数组容器和重复标量槽组,只把完整 `items` 投影到唯一主容器;辅助可见容器可隐藏时设为 0,不能隐藏且没有合法支持内容时该 layout 退出候选。不要让 Agent 手写 30 份 `contentMap`;只有用户显式指定复杂 layout 时才按 `goal.fill-plan.json` 补该页映射。写对象、数组、数量或图片 props:运行 `props:safe`,整份 goal 用 `props:safe -- --goal <file> --write`。
+ - 把 `layout:query` / `inspect:layout` 的 JSON 管道给程序解析时,改用 `node <skill-root>/project/scripts/layout-query.mjs` / `node <skill-root>/project/scripts/inspect-layout.mjs`:`npm run` 会在 stdout 前打印生命周期 banner,污染 JSON。
+ - 长 deck:先写逐页 brief JSON,每页包含 `role`、`priority` 和唯一的 `content`,再用 `npm --prefix <skill-root>/project run goal:scaffold -- --title <title> --goal <goal> --theme <themePack> --pages <n> --content-briefs <briefs.json> --layout-variants 3 --seed <randomSeed> --workflow-run-id <workflowRunId> --chunk-size 5 --out output/<deck-name>/goal.json`。scaffold 按内容容量和字段能力选 3 个模板,并追加可直接渲染的主题化 v4 初稿。
+ - 文案长度和数组数量:优先按 `fillPlan.text[].maxChars`、`fillPlan.arrays[].visibleCount`、`fillPlan.arrays[].nestedArrays` 写;`display` / `metric` 字段只写短词、短句或数字。
+-- Html 字段(如 `headlineHtml` / `quoteHtml`)写文案只用 `<br>` 换行加 `<b>` / `<em>` 行内强调,禁止 `<span>` 等自由 HTML;主题默认值里的 `<span class>` 依赖主题 CSS,只是占位,不要照抄。`validate:goal-spec` 会拦截自由 HTML。
++- Html 字段(如 `headlineHtml` / `quoteHtml`)写文案只用 `<br>` 换行加 `<b>` / `<em>` 行内强调,禁止 `<span>` 等自由 HTML;主题默认值里的 `<span class>` 依赖主题 CSS,只是占位,不要照抄。`copis dashi-ppt validate:goal-spec` 会拦截自由 HTML。
+ - 可见数组项必须写实文案;被 count/显隐控制隐藏的尾项可保留“请输入文本”占位。
+ - 元素出现动画使用页面组件自带的原生效果。
+ - 页面切换动画可以在预览控制面板里调整。
+@@ -101,7 +105,7 @@ node <skill-root>/scripts/check_latest_version.mjs
+ - 输出目录写在当前会话工作目录,不要写入 `<skill-root>/project/output`。
+ - HTML 交付:给用户的预览地址只给 `http://127.0.0.1:<port>/`(不给 https 或 .local 变体);本机 HTTP 可导出 HTML/PDF/PPTX,本地 HTML 或 `file://` 不能导出可编辑 PPTX。不要返回 `theme-preview`。在自带浏览器的 Agent APP(如 Codex)里生成时,提醒用户导出 PDF/PPTX 前把该地址在系统浏览器中打开。
+ - PPTX 交付:调用 `/api/export-editable-pptx`;最终只给 PPTX 文件路径或下载结果。
+-- 无浏览器会话、脚本直调、或预览导出接口返回 403/5xx 时:改用 `npm run export:pptx -- <deck>/ppt <out.pptx>`(PDF 用 `export:pdf`)直接产出文件,不需要先起浏览器会话。
++- 无浏览器会话、脚本直调、或预览导出接口返回 403/5xx 时:改用 `copis dashi-ppt export:pptx -- <deck>/ppt <out.pptx>`(PDF 用 `export:pdf`)直接产出文件,不需要先起浏览器会话。
+ - 如果输出正文里出现与用户主题无关的默认文案,例如 AI Capital / 投融资 / SoundWave / 声浪 / Key Metrics / Roadmap / End of Report 等,必须重写 JSON 后重新渲染,不能交付。
+ 
+ ## 媒体工作流
+@@ -119,15 +123,15 @@ node <skill-root>/scripts/check_latest_version.mjs
+ 3. 判断图片意图:无图但需要视觉素材时先问是否预留图片槽;用户给本地素材先 `media:stage`;明确生图时用 image-gen。
+ 4. 一次写完整份 deck 的逐页 brief 和 `content.presentation` 文案包;前三个模板共享 required facts 和关键数字,标题/摘要提供 full/short 两档。把硬容量和软偏好一次传给 `goal:scaffold`,不逐页试错换主题。
+ 5. scaffold 对整份 deck 一次完成候选查询、唯一主容器投影、辅助容器处理、三布局组合分配和 v4 主题化初稿;3 个模板直接物化同一文案包,不逐页手工补 `contentMap`。Agent 使用 `baoyu-design` 先定整稿设计论点、节奏和每页视觉焦点,再在既有 `compositionFamily` 与主题 recipe 上批量绘制 v4,禁止清空初稿后逐页临时都退化成卡片网格。
+-6. 把 schema v2 JSON 写入本次工作目录的 `output/<deck-name>/goal.json`;每页写 `selectedVariant: "v1"` 和恰好 3 template + 1 bespoke。渲染前运行 `npm --prefix <skill-root>/project run props:safe -- --goal output/<deck-name>/goal.json --write` 和 goal spec 校验。`--write` 后核对 3 个模板方案的 `layoutChanges`;不认可替换就改回并换页。
++6. 把 schema v2 JSON 写入本次工作目录的 `output/<deck-name>/goal.json`;每页写 `selectedVariant: "v1"` 和恰好 3 template + 1 bespoke。渲染前运行 `copis dashi-ppt props:safe -- --goal output/<deck-name>/goal.json --write` 和 goal spec 校验。`--write` 后核对 3 个模板方案的 `layoutChanges`;不认可替换就改回并换页。
+ 7. 图表页填入自己的数据后,页内 insight/读图/结论类文案字段必须据新数据一并改写,不保留默认结论。
+ 8. 运行渲染脚本输出 `output/<deck-name>/ppt/index.html`;脚本会使用 Skill 内置生成器,不要切回外部项目目录。
+ 9. 渲染后核对素材路径,缺失时补最终 `ppt/assets`。
+-10. 确认脚本完成 `validate:swiss`、`validate:goal-copy` 和 `validate:four-variant-quality` 校验;后者在同一浏览器会话批量检查并截图每页 v4。一次用户生成任务只创建一个 `workflowRunId`,所有 scaffold attempts 和后续阶段复用它。
++10. 确认脚本完成 `copis dashi-ppt validate:swiss`、`copis dashi-ppt validate:goal-copy` 和 `copis dashi-ppt validate:four-variant-quality` 校验;后者在同一浏览器会话批量检查并截图每页 v4。一次用户生成任务只创建一个 `workflowRunId`,所有 scaffold attempts 和后续阶段复用它。
+ 11. 渲染脚本会启动本地 HTTP 预览服务并输出 `http://127.0.0.1:<port>/`;需要指定端口时设置 `DASHI_PPT_PREVIEW_PORT` 后再运行脚本(端口用 5200-5999 段,4178/4300/4400 为用户保留端口不可用)。只能用该预览服务,不得用 `python -m http.server`、`npx serve` 等静态服务器替代:静态服务器没有导出和自动保存接口。预览服务下编辑自动保存到 `index.html` 本体;`file://` 打开的本地文件不自动保存,交付前需导出。
+ 12. 对最终产物执行成果验收:模板方案只做一次批量内容映射、尺寸和运行时检查;浏览器视觉验收一次查看全部 v4 截图。
+ 13. v4 待修正时只修改失败页并重新渲染一次;不重新选模板,不重写其余页面,不重复整稿视觉检查。
+-14. 运行 `node <skill-root>/scripts/check_latest_version.mjs` 做静默版本检查。
++14. 运行 `copis dashi-ppt check-latest-version` 做静默版本检查。
+ 15. 验收通过后按交付格式回复:HTML 只给 `http://127.0.0.1:<port>/`;PPTX 调用 `/api/export-editable-pptx` 后只给文件路径或下载结果。
+ 
+ ## 成果验收与返工
+@@ -148,7 +152,7 @@ node <skill-root>/scripts/check_latest_version.mjs
+ 示例命令(macOS / Linux):
+ 
+ ```bash
+-<skill-root>/scripts/render_goal_deck.sh \
++copis dashi-ppt render -- \
+   output/client-review/goal.json \
+   output/client-review/ppt/index.html
+ ```
+@@ -156,7 +160,7 @@ node <skill-root>/scripts/check_latest_version.mjs
+ Windows PowerShell:
+ 
+ ```powershell
+-& "<skill-root>/scripts/render_goal_deck.ps1" `
++copis dashi-ppt render -- `
+   "output/client-review/goal.json" `
+   "output/client-review/ppt/index.html"
+ ```
+@@ -244,7 +248,7 @@ Windows PowerShell:
+ 
+ ## 页面属性契约
+ 
+-普通生成不要读 `layout-manifest.json`。先用 `layout:query` 输出的候选摘要。只有需要更细契约时,再用 `npm --prefix <skill-root>/project run inspect:layout -- --compact <layout...>` 看页面契约:
++普通生成不要读 `layout-manifest.json`。先用 `layout:query` 输出的候选摘要。只有需要更细契约时,再用 `copis dashi-ppt inspect:layout -- --compact <layout...>` 看页面契约:
+ 
+ - `copyKeys`: 可安全改写的文案/数据字段。
+ - `copyBudgets`: 文案长度预算;`display` / `metric` 超长会被 goal spec 拦截。
+@@ -257,7 +261,7 @@ Windows PowerShell:
+ 
+ ## 校验
+ 
+-- 渲染前必须运行 `validate:goal-spec`。
+-- 输出后必须运行 `validate:swiss`。
+-- 输出后必须运行 `validate:goal-copy`。
++- 渲染前必须运行 `copis dashi-ppt validate:goal-spec`。
++- 输出后必须运行 `copis dashi-ppt validate:swiss`。
++- 输出后必须运行 `copis dashi-ppt validate:goal-copy`。
+ - 改动展示 demo 后运行 `npm run showcase:update`。
+diff --git a/project/assets/template-swiss.html b/project/assets/template-swiss.html
+index ca49766..1ad259c 100644
+--- a/project/assets/template-swiss.html
++++ b/project/assets/template-swiss.html
+@@ -7966,47 +7966,32 @@ refreshRailCatalog();
+   // 截图发生在用户自己打开预览页的浏览器(正常桌面进程,不受宿主沙箱影响),
+   // 服务器只用 pdf-lib 做纯 JS 合成。可手动调用,也由 __exportDeckPdf 自动降级触发。
+   async function runBrowserPptxExportInFrame(options){
+-    const frame = document.createElement('iframe');
+-    frame.style.cssText = 'position:fixed;left:-20020px;top:0;width:1920px;height:1080px;border:0;visibility:hidden;pointer-events:none';
+-    frame.setAttribute('aria-hidden', 'true');
+-    frame.src = location.pathname + location.search;
+-    document.body.appendChild(frame);
+-    try {
+-      await new Promise((resolve, reject) => {
+-        const timer = setTimeout(() => reject(new Error(window.__deckI18n.ui('导出环境加载超时'))), 30000);
+-        frame.onload = () => { clearTimeout(timer); resolve(); };
+-        frame.onerror = () => { clearTimeout(timer); reject(new Error(window.__deckI18n.ui('导出环境加载失败'))); };
+-      });
+-      const win = frame.contentWindow;
+-      const doc = frame.contentDocument;
+-      // 等 iframe 内 deck 就绪
++    const win = window;
++    const doc = document;
++    for(const [src, ready] of [
++      ['assets/vendor/html-to-image.js', () => win.htmlToImage],
++      ['assets/vendor/pptxgen.bundle.js', () => typeof win.PptxGenJS === 'function'],
++      ['assets/vendor/editable-pptx-browser.js', () => win.__editablePptxBrowser?.exportEditablePptxInBrowser],
++    ]){
++      if(ready()) continue;
+       await new Promise((resolve, reject) => {
+-        const deadline = Date.now() + 30000;
+-        (function poll(){
+-          if(doc.querySelector('#deck > .slide.active') && typeof win.go === 'function') return resolve();
+-          if(Date.now() > deadline) return reject(new Error(window.__deckI18n.ui('导出环境的页面未就绪')));
+-          setTimeout(poll, 120);
+-        })();
++        const script = doc.createElement('script');
++        script.src = src;
++        script.onload = () => resolve();
++        script.onerror = () => reject(new Error(window.__deckI18n.ui('无法加载组件 {src}', {src: src})));
++        doc.head.appendChild(script);
+       });
+-      // 注入导出组件
+-      for(const [src, ready] of [
+-        ['assets/vendor/html-to-image.js', () => win.htmlToImage],
+-        ['assets/vendor/pptxgen.bundle.js', () => typeof win.PptxGenJS === 'function'],
+-        ['assets/vendor/editable-pptx-browser.js', () => win.__editablePptxBrowser?.exportEditablePptxInBrowser],
+-      ]){
+-        if(ready()) continue;
+-        await new Promise((resolve, reject) => {
+-          const script = doc.createElement('script');
+-          script.src = src;
+-          script.onload = () => resolve();
+-          script.onerror = () => reject(new Error(window.__deckI18n.ui('无法加载组件 {src}', {src: src})));
+-          doc.head.appendChild(script);
+-        });
+-      }
+-      return await win.__editablePptxBrowser.exportEditablePptxInBrowser(options);
+-    } finally {
+-      frame.remove();
+     }
++    const sandboxSafeHtmlToImage = {
++      toPng(node, captureOptions = {}){
++        const capture = win.htmlToImage.toPng(node, {...captureOptions, skipFonts: true});
++        const timeout = new Promise((_, reject) => setTimeout(() => {
++          reject(new Error(window.__deckI18n.ui('页面视觉采集超时')));
++        }, 30000));
++        return Promise.race([capture, timeout]);
++      },
++    };
++    return await win.__editablePptxBrowser.exportEditablePptxInBrowser({...options, htmlToImage: sandboxSafeHtmlToImage});
+   }
+ 
+   // 浏览器内可编辑 PPTX 导出:服务器在沙箱型宿主里起不了无头浏览器时的降级——
+@@ -8240,12 +8225,7 @@ refreshRailCatalog();
+ 
+   window.__exportDeckPptx = async function(){
+     if(window.__deckExportLocked) return;
+-    if(isCodexInAppBrowser()){
+-      const message = window.__deckI18n.ui('codex 自带浏览器不支持导出，需要复制地址到浏览器再进行操作');
+-      window.__codexExportBlockedMessage = message;
+-      alert(message);
+-      return;
+-    }
++
+     // Export is HTTP-service only (file:// has no editable-PPTX server, and a
+     // client-side export can't match server fidelity).
+     if(!isExportServiceContext()) return showExportServiceRequired();
+diff --git a/project/scripts/browser-pptx-export.test.mjs b/project/scripts/browser-pptx-export.test.mjs
+new file mode 100644
+index 0000000..decd164
+--- /dev/null
++++ b/project/scripts/browser-pptx-export.test.mjs
+@@ -0,0 +1,23 @@
++import assert from 'node:assert/strict';
++import { readFile } from 'node:fs/promises';
++import test from 'node:test';
++
++const templateUrl = new URL('../assets/template-swiss.html', import.meta.url);
++
++test('editable PPTX export runs inside the sandboxed preview document', async () => {
++  const template = await readFile(templateUrl, 'utf8');
++
++  assert.doesNotMatch(template, /frame\.src = location\.pathname \+ location\.search/);
++  assert.doesNotMatch(template, /frame\.contentDocument/);
++  assert.doesNotMatch(template, /if\(isCodexInAppBrowser\(\)\)/);
++  assert.match(template, /const win = window;/);
++  assert.match(template, /const doc = document;/);
++});
++
++test('editable PPTX visual capture cannot hang on sandboxed font loading', async () => {
++  const template = await readFile(templateUrl, 'utf8');
++
++  assert.match(template, /skipFonts: true/);
++  assert.match(template, /页面视觉采集超时/);
++  assert.match(template, /htmlToImage: sandboxSafeHtmlToImage/);
++});
+diff --git a/project/scripts/chrome-path.mjs b/project/scripts/chrome-path.mjs
+index 9f15aba..0e60025 100644
+--- a/project/scripts/chrome-path.mjs
++++ b/project/scripts/chrome-path.mjs
+@@ -30,6 +30,15 @@ function lookupCommand(command) {
+ }
+ 
+ function playwrightChromiumPath() {
++  if (process.env.COPIS_PLAYWRIGHT_CORE_ENTRY) {
++    try {
++      const pw = require(process.env.COPIS_PLAYWRIGHT_CORE_ENTRY);
++      const exe = pw.chromium?.executablePath?.();
++      if (exe) return resolveExistingPath(exe);
++    } catch {
++      // ignore
++    }
++  }
+   for (const packageName of ['playwright', 'playwright-core']) {
+     try {
+       return resolveExistingPath(require(packageName).chromium.executablePath());
+@@ -115,6 +124,10 @@ function playwrightCacheRoots() {
+ // "Failed to create a ProcessSingleton"),而 headless shell 没有这套机制,同一沙箱下
+ // 可正常启动——导出(headless 截图/CDP)场景优先使用它。
+ export function resolveHeadlessShellPath() {
++  if (process.env.COPIS_PLAYWRIGHT_HEADLESS_SHELL) {
++    const explicit = resolveExistingPath(process.env.COPIS_PLAYWRIGHT_HEADLESS_SHELL);
++    if (explicit) return explicit;
++  }
+   // 平台目录/可执行名差异:macOS 是 chrome-headless-shell-mac-*/chrome-headless-shell,
+   // Linux 是 chrome-linux/headless_shell,Windows 是 chrome-win/*.exe——
+   // 必须按候选集匹配,只按单一平台命名过滤会漏掉 Linux(曾致导出零浏览器可用)。
+@@ -152,11 +165,18 @@ export function resolveHeadlessShellPath() {
+ 
+ // 导出链路的浏览器解析:CHROME_PATH 显式覆盖 > headless shell > 常规完整版链路。
+ export function getExportBrowserPath() {
++  if (process.env.COPIS_PLAYWRIGHT_HEADLESS_SHELL) {
++    const explicit = resolveExistingPath(process.env.COPIS_PLAYWRIGHT_HEADLESS_SHELL);
++    if (explicit) return explicit;
++  }
+   if (process.env.CHROME_PATH) {
+     const explicit = resolveExistingPath(process.env.CHROME_PATH);
+     if (explicit) return explicit;
+   }
+   const shell = resolveHeadlessShellPath();
+   if (shell) return shell;
++  if (process.env.COPIS_RUNTIME_ROOT || process.env.COPIS_CLI) {
++    throw new Error('未找到已准备的 Chromium headless shell，请重新准备浏览器运行时');
++  }
+   return getChromeExecutablePath();
+ }
+diff --git a/scripts/render_goal_deck.sh b/scripts/render_goal_deck.sh
+index 51b42f1..9911efd 100755
+--- a/scripts/render_goal_deck.sh
++++ b/scripts/render_goal_deck.sh
+@@ -4,6 +4,7 @@ set -euo pipefail
+ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ PROJECT_ROOT="${DASHI_PPT_PROJECT_ROOT:-$(cd "$SCRIPT_DIR/../project" && pwd)}"
+ CALLER_CWD="$(pwd)"
++export PLAYWRIGHT_BROWSERS_PATH="${PLAYWRIGHT_BROWSERS_PATH:-$PROJECT_ROOT/.playwright-browsers}"
+ 
+ if [[ $# -ne 2 ]]; then
+   echo "Usage: render_goal_deck.sh <goal-spec.json> <output/ppt/index.html>" >&2
+@@ -39,7 +40,9 @@ fi
+ if grep -q 'registry=https://registry.npmmirror.com' .npmrc 2>/dev/null; then
+   export PLAYWRIGHT_DOWNLOAD_HOST="${PLAYWRIGHT_DOWNLOAD_HOST:-https://cdn.npmmirror.com/binaries/playwright}"
+ fi
+-npx --no-install playwright-core install chromium-headless-shell >/dev/null 2>&1 || true
++if ! compgen -G "$PLAYWRIGHT_BROWSERS_PATH/chromium_headless_shell-*" >/dev/null; then
++  npx --no-install playwright-core install chromium-headless-shell >/dev/null 2>&1 || true
++fi
+ mkdir -p "$(dirname "$OUT_PATH")"
+ npm run props:safe -- --goal "$SPEC_PATH" --write
+ npm run render:goal -- "$SPEC_PATH" "$OUT_PATH"

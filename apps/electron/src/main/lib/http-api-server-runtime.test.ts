@@ -173,10 +173,16 @@ function manifestFor(version: string, content: string): Record<string, unknown> 
   }
 }
 
-function spawnFixture(records: SpawnRecord[]): HttpApiSpawn {
+function encodeHex(value: string): string {
+  return Buffer.from(value, 'utf8').toString('hex')
+}
+
+function spawnFixture(records: SpawnRecord[], onSpawn?: (record: SpawnRecord) => void): HttpApiSpawn {
   return ((file: string, args: readonly string[], options: SpawnOptions) => {
     const child = new FakeChild()
-    records.push({ file, args, options, child })
+    const record = { file, args, options, child }
+    records.push(record)
+    onSpawn?.(record)
     return child as unknown as ReturnType<HttpApiSpawn>
   }) as HttpApiSpawn
 }
@@ -286,16 +292,6 @@ describe('Rust HTTP API 功能模块生命周期', () => {
         rootDir: join(root, 'modules'),
         backendUrl: 'https://configured.example.test',
         modelBaseUrl: 'https://configured.example.test/api/internal/working-model',
-        endpointConfigUrl: 'https://config.example.test/endpoints.json',
-        fetchImpl: async (input) => {
-          if (input.endsWith('/endpoints.json')) {
-            return new Response(JSON.stringify({
-              base_urls: ['https://healthy.example.test/api/internal/working-model'],
-            }), { status: 200 })
-          }
-          if (input === 'https://healthy.example.test/health') return new Response('', { status: 200 })
-          return new Response('', { status: 404 })
-        },
       })
       startHttpApiServer({
         ...options,
@@ -303,9 +299,9 @@ describe('Rust HTTP API 功能模块生命周期', () => {
         spawnImpl: spawnFixture(records),
       })
 
-      expect(records[0]?.options.env?.COPIS_BACKEND_URL).toBe('https://healthy.example.test')
+      expect(records[0]?.options.env?.COPIS_BACKEND_URL).toBe('https://configured.example.test')
       expect(records[0]?.options.env?.WORKING_AGENT_MODEL_BASE_URL).toBe(
-        'https://healthy.example.test/api/internal/working-model',
+        'https://configured.example.test/api/internal/working-model',
       )
     } finally {
       if (previousBackendUrl === undefined) delete process.env.COPIS_BACKEND_URL
@@ -525,6 +521,50 @@ describe('Rust HTTP API 功能模块生命周期', () => {
     expect(records[1]?.options.env?.COPIS_HTTP_API_PORT).toBe('51741')
     expect(records[2]?.options.env?.COPIS_HTTP_API_PORT).toBe('51740')
     expect(records[0]?.child.killed).toBe(true)
+  })
+
+  test('正式版本健康检查期间收到业务桥请求时，响应不会因尚未完成切换而丢失', async () => {
+    const root = createRoot()
+    const oldPackage = rustPackage('0.1.0', 'old-rust-api')
+    await activateRustVersion(root, oldPackage, 'old-rust-api')
+    const newContent = 'new-rust-api-with-bridge'
+    const records: SpawnRecord[] = []
+    let bridgeResponse = ''
+
+    startHttpApiServer({
+      rootDir: join(root, 'modules'),
+      paymentWorkspace: paymentWorkspaceFor(root),
+      spawnImpl: spawnFixture(records),
+    })
+    const updated = await updateHttpApiServer({
+      rootDir: join(root, 'modules'),
+      paymentWorkspace: paymentWorkspaceFor(root),
+      manifestUrl: 'https://download.example.com/manifest.json',
+      platform: 'darwin',
+      arch: 'arm64',
+      clientVersion: '0.16.17',
+      spawnImpl: spawnFixture(records, (record) => {
+        if (record.options.env?.COPIS_HTTP_API_PORT !== '51740') return
+        record.child.stdin.setEncoding('utf8')
+        record.child.stdin.on('data', (chunk) => { bridgeResponse += String(chunk) })
+        setTimeout(() => {
+          record.child.stdout.write(
+            `1\t${encodeHex('GET')}\t${encodeHex('/api/internal/auth-storage/load')}\t\n`,
+          )
+        }, 0)
+      }),
+      fetchImpl: fetchFixture(
+        manifestFor('0.2.0', newContent),
+        newContent,
+        () => true,
+      ),
+      healthTimeoutMs: 100,
+      stopTimeoutMs: 5,
+    })
+
+    await new Promise((resolveDelay) => setTimeout(resolveDelay, 10))
+    expect(updated).toBe(true)
+    expect(bridgeResponse).toMatch(/^1\t200\t/)
   })
 
   test('正式启动前发现 Rust API 旧版本时，先更新并健康检查再启动正式端口', async () => {

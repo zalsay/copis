@@ -1,0 +1,5 @@
+[submodule "third_party/dashi-ppt-skill"]
+	path = third_party/dashi-ppt-skill
+	url = https://github.com/chuspeeism/dashi-ppt-skill.git
+	branch = main
+	shallow = true

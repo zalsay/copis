@@ -251,6 +251,8 @@ export interface MemoryMaintenanceRunnerInput {
   provider: ProviderType
   baseUrl?: string
   apiKey: string
+  /** 主进程隐藏维护回合使用的 Rust 内部令牌；Pi Worker 不应传入。 */
+  internalToken?: string
   modelId: string
   proxyUrl?: string
   force: boolean
@@ -267,6 +269,7 @@ export function createMemoryMaintenanceRunner(input: MemoryMaintenanceRunnerInpu
         provider: input.provider,
         baseUrl: input.baseUrl,
         apiKey: input.apiKey,
+        ...(input.internalToken ? { internalToken: input.internalToken } : {}),
         modelId: input.modelId,
         proxyUrl: input.proxyUrl,
         prompt: buildMemoryMaintenancePrompt(workspaceSlug, expectedCaptureCount, entries),

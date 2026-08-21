@@ -72,6 +72,7 @@ import { MemoryAutoCapture, extractMemoryFactsWithProvider } from './adapters/pi
 import { createMemoryMaintenanceRunner, sharedMemoryMaintenanceService, MemoryMaintenanceService } from './adapters/pi-memory-maintenance'
 import { buildAgentRuntimeEnv, type AgentRuntimeEnv } from './agent-runtime-env'
 import { getFunctionalModulePath } from './functional-module-manager'
+import { getHttpApiInternalToken } from './http-api-server'
 import { isVisibleRunMessage } from './agent-run-message-visibility'
 import { resolvePiThinkingLevel } from './agent-thinking-level'
 import { resolvePiReasoningCapability } from './adapters/pi-model-registry'
@@ -1665,6 +1666,9 @@ export class AgentOrchestrator {
           provider: channel.provider,
           baseUrl: channel.baseUrl,
           apiKey,
+          ...(isCopisWorkingChannelId(channelId)
+            ? { internalToken: getHttpApiInternalToken() ?? undefined }
+            : {}),
           modelId: selectedModelId,
           proxyUrl,
           force: true,
@@ -1678,6 +1682,9 @@ export class AgentOrchestrator {
           provider: channel.provider,
           baseUrl: channel.baseUrl,
           apiKey,
+          ...(isCopisWorkingChannelId(channelId)
+            ? { internalToken: getHttpApiInternalToken() ?? undefined }
+            : {}),
           modelId: selectedModelId,
           proxyUrl,
           force: false,
@@ -2257,6 +2264,9 @@ export class AgentOrchestrator {
                 provider: channel.provider,
                 baseUrl: channel.baseUrl,
                 apiKey,
+                ...(isCopisWorkingChannelId(channelId)
+                  ? { internalToken: getHttpApiInternalToken() ?? undefined }
+                  : {}),
                 modelId: selectedModelId,
                 proxyUrl,
                 turns,

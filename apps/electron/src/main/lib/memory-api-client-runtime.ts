@@ -186,7 +186,26 @@ export function createMemoryApiClient(baseUrl: string): MemoryApiClient {
     },
 
     captureBatch(input: MemoryCaptureBatchInput, signal?: AbortSignal): Promise<MemoryCaptureBatchResponse> {
+      console.log(
+        `[Memory API] capture-batch 开始 base_url=${baseUrl}, `
+          + `workspace=${input.workspaceSlug}, items=${input.items.length}`,
+      )
       return jsonRequest<MemoryCaptureBatchResponse>('/api/memory/capture-batch', input, signal)
+        .then((response) => {
+          console.log(
+            `[Memory API] capture-batch 完成 workspace=${input.workspaceSlug}, `
+              + `added=${response.added}, deduplicated=${response.deduplicated}`,
+          )
+          return response
+        })
+        .catch((error) => {
+          console.warn(
+            `[Memory API] capture-batch 失败 workspace=${input.workspaceSlug}, `
+              + `items=${input.items.length}:`,
+            error,
+          )
+          throw error
+        })
     },
 
     rewrite(id: string, input: MemoryAgentRewriteInput, signal?: AbortSignal): Promise<MemoryEntry> {

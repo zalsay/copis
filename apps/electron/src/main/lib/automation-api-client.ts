@@ -51,16 +51,17 @@ const STARTUP_RETRY_COUNT = 20
 const STARTUP_RETRY_DELAY_MS = 250
 
 export function createAutomationApiClient(
-  baseUrl = resolveAutomationApiBaseUrl(),
+  baseUrl: string | undefined = undefined,
   options: { retryCount?: number; retryDelayMs?: number } = {},
 ): AutomationApiClient {
   const retryCount = options.retryCount ?? STARTUP_RETRY_COUNT
   const retryDelayMs = options.retryDelayMs ?? STARTUP_RETRY_DELAY_MS
+  const resolveBaseUrl = (): string => baseUrl?.trim().replace(/\/$/, '') || resolveAutomationApiBaseUrl()
 
   async function requestOnce<T>(path: string, init?: RequestInit): Promise<T> {
     let response: Response
     try {
-      response = await fetch(`${baseUrl}${path}`, init)
+      response = await fetch(`${resolveBaseUrl()}${path}`, init)
     } catch (error) {
       throw new AutomationApiClientError(error instanceof Error ? error.message : '定时任务 API 服务不可用', 503, 'automation_service_unavailable')
     }

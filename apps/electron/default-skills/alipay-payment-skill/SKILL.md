@@ -1,7 +1,7 @@
 ---
 name: alipay-payment-skill
 displayName: Copis 支付
-description: Copis Working 钻石购买与 VIP 升级支付流程。
+description: Copis 钻石购买与 VIP 升级支付流程。
 group: 系统内置
 icon: credit-card
 version: 0.0.11

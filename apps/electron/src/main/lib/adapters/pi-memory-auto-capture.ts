@@ -165,7 +165,17 @@ export async function runMemoryTextTurn(input: {
   proxyUrl?: string
   prompt: string
   extraHeaders?: Record<string, string>
+  /** 主进程隐藏回合使用的 Rust 内部令牌；Pi Worker 不应传入。 */
+  internalToken?: string
 }): Promise<string> {
+  if (!input.internalToken && !input.apiKey.trim()) {
+    throw new Error('Memory 模型请求凭据不可用，Working 请求需要 Rust 内部令牌')
+  }
+  console.log(
+    `[Memory] 隐藏抽取请求开始 provider=${input.provider}, model=${input.modelId}, `
+      + `auth=${input.internalToken ? 'rust-internal' : input.apiKey ? 'api-key' : 'empty'}, `
+      + `has_proxy=${Boolean(input.proxyUrl)}`,
+  )
   const adapter = getAdapter(input.provider)
   const request = increaseExtractionBudget(adapter.buildTitleRequest({
     baseUrl: input.baseUrl ?? '',
@@ -176,15 +186,33 @@ export async function runMemoryTextTurn(input: {
   if (input.extraHeaders) {
     Object.assign(request.headers, input.extraHeaders)
   }
+  if (input.internalToken) {
+    let parsedUrl: URL
+    try {
+      parsedUrl = new URL(request.url)
+    } catch {
+      throw new Error('Memory Working 抽取地址不正确')
+    }
+    if (!['127.0.0.1', 'localhost', '[::1]', '::1'].includes(parsedUrl.hostname)) {
+      throw new Error('Memory Working 抽取必须通过本机 Rust API')
+    }
+    delete request.headers.Authorization
+    request.headers['X-Copis-Internal-Token'] = input.internalToken
+  }
   const response = await getFetchFn(input.proxyUrl)(request.url, {
     method: 'POST',
     headers: request.headers,
     body: request.body,
     signal: AbortSignal.timeout(30_000),
   })
-  if (!response.ok) throw new Error(`记忆抽取请求失败（HTTP ${response.status}）`)
+  if (!response.ok) {
+    console.warn(`[Memory] 隐藏抽取请求失败 status=${response.status}`)
+    throw new Error(`记忆抽取请求失败（HTTP ${response.status}）`)
+  }
   const payload = await response.json() as unknown
-  return adapter.parseTitleResponse(payload) ?? ''
+  const result = adapter.parseTitleResponse(payload) ?? ''
+  console.log(`[Memory] 隐藏抽取请求完成 status=${response.status}, output_chars=${result.length}`)
+  return result
 }
 
 export async function extractMemoryFactsWithProvider(input: {
@@ -195,6 +223,7 @@ export async function extractMemoryFactsWithProvider(input: {
   proxyUrl?: string
   turns: readonly CompletedAgentTurn[]
   extraHeaders?: Record<string, string>
+  internalToken?: string
 }): Promise<string> {
   return runMemoryTextTurn({
     ...input,
@@ -237,7 +266,18 @@ export class MemoryAutoCapture {
   }
 
   async onTurnEnd(turn: CompletedAgentTurn): Promise<void> {
-    if (turn.memoryPolicy !== 'writable' || !turn.workspaceSlug || !turn.userInput.trim() || !turn.assistantReply.trim()) return
+    if (turn.memoryPolicy !== 'writable') {
+      console.log(`[Memory] 自动捕获跳过 reason=policy, workspace=${turn.workspaceSlug || '-'}`)
+      return
+    }
+    if (!turn.workspaceSlug) {
+      console.log('[Memory] 自动捕获跳过 reason=workspace_missing')
+      return
+    }
+    if (!turn.userInput.trim() || !turn.assistantReply.trim()) {
+      console.log(`[Memory] 自动捕获跳过 reason=empty_turn, workspace=${turn.workspaceSlug}`)
+      return
+    }
 
     const key = stateKey(turn)
     const state = this.bursts.get(key) ?? { key, workspaceSlug: turn.workspaceSlug, turns: [] }
@@ -298,21 +338,40 @@ export class MemoryAutoCapture {
     }
 
     const run = (async () => {
+      let stage = 'extract'
       try {
+        console.log(
+          `[Memory] 自动捕获开始 workspace=${state.workspaceSlug}, reason=${reason}, turns=${turns.length}`,
+        )
         const output = await extractor(turns)
+        stage = 'parse'
         const parsedFacts = parseMemoryFacts(output)
         const facts = turns.every((turn) => turn.autonomous)
           ? parsedFacts.filter((fact) => fact.kind === 'scratch')
           : parsedFacts
+        console.log(
+          `[Memory] 自动捕获解析完成 workspace=${state.workspaceSlug}, `
+            + `parsed=${parsedFacts.length}, accepted=${facts.length}, output_chars=${output.length}`,
+        )
         if (facts.length > 0) {
-          await this.captureBatch({ workspaceSlug: state.workspaceSlug, items: toBatchItems(facts) })
+          stage = 'capture-batch'
+          const result = await this.captureBatch({ workspaceSlug: state.workspaceSlug, items: toBatchItems(facts) })
           await turns.at(-1)?.maintenanceRunner?.()
-          console.log(`[Memory] 自动捕获完成: workspace=${state.workspaceSlug}, reason=${reason}, facts=${facts.length}`)
+          const response = result && typeof result === 'object' ? result as Record<string, unknown> : undefined
+          console.log(
+            `[Memory] 自动捕获写入完成 workspace=${state.workspaceSlug}, reason=${reason}, `
+              + `items=${facts.length}, added=${typeof response?.added === 'number' ? response.added : '-'}, `
+              + `deduplicated=${typeof response?.deduplicated === 'number' ? response.deduplicated : '-'}`,
+          )
         } else {
           console.log(`[Memory] 自动捕获无可沉淀事实: workspace=${state.workspaceSlug}, reason=${reason}`)
         }
       } catch (error) {
-        console.warn('[Memory] 自动捕获抽取失败，本次不写入记忆:', error)
+        console.warn(
+          `[Memory] 自动捕获失败 stage=${stage}, workspace=${state.workspaceSlug}, `
+            + `reason=${reason}:`,
+          error,
+        )
       } finally {
         this.bursts.delete(state.key)
       }

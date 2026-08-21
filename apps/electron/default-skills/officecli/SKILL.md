@@ -3,13 +3,15 @@ name: officecli
 displayName: 办公文档
 description: Create, analyze, proofread, and modify Office documents (.docx, .xlsx, .pptx) using the officecli CLI tool. Use when the user wants to create, inspect, check formatting, find issues, add charts, or modify Office documents.
 group: 系统内置
-version: "1.0.146"
+version: "1.0.147"
 license: Apache-2.0
 ---
 
 # officecli
 
-> Copis 统一的 Office 文档 Skill。`.docx`、`.xlsx`、`.pptx` 均使用本 Skill 和官方 `officecli` CLI，不再按文件格式选择独立 Skill。
+> Copis 统一的 Office 文档 Skill。`.docx`、`.xlsx`、`.pptx` 的读取、检查与结构化编辑均使用本 Skill 和官方 `officecli` CLI。
+>
+> 制作或生成新的视觉演示文稿（PPT / HTML Presentation）请使用 `dashi-ppt` Skill；已有 Office 文档与 `.pptx` 文件的结构、文字、图表修改请使用本 Skill。
 >
 > 内容基于 [iOfficeAI/OfficeCLI](https://github.com/iOfficeAI/OfficeCLI) 官方 `SKILL.md`，按 Apache-2.0 授权分发。
 

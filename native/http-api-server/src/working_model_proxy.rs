@@ -96,24 +96,23 @@ impl WorkingModelProxy {
         };
         self.proxy(&session_id, capability, request_body)
     }
+
+    /// Electron 主进程的隐藏回合使用内部令牌进入这里；不创建或暴露 Pi Worker capability。
+    pub fn proxy_internal(
+        &self,
+        request_body: &[u8],
+    ) -> Result<WorkingModelResponse, WorkingModelError> {
+        validate_model_request(request_body)?;
+        self.forward(request_body)
+    }
+
     pub fn proxy(
         &self,
         session_id: &str,
         capability: &str,
         request_body: &[u8],
     ) -> Result<WorkingModelResponse, WorkingModelError> {
-        if request_body.len() > MAX_MODEL_REQUEST_BYTES {
-            return Err(WorkingModelError::InvalidRequest(
-                "模型请求体过大".to_string(),
-            ));
-        }
-        let request = serde_json::from_slice::<Value>(request_body).map_err(|_| {
-            WorkingModelError::InvalidRequest("模型请求体不是有效 JSON".to_string())
-        })?;
-        let model_id = request
-            .get("model")
-            .and_then(Value::as_str)
-            .ok_or_else(|| WorkingModelError::InvalidRequest("模型请求缺少 model".to_string()))?;
+        let model_id = validate_model_request(request_body)?;
         let stored = self
             .capabilities
             .lock()
@@ -131,6 +130,10 @@ impl WorkingModelProxy {
             return Err(WorkingModelError::CapabilityMismatch);
         }
 
+        self.forward(request_body)
+    }
+
+    fn forward(&self, request_body: &[u8]) -> Result<WorkingModelResponse, WorkingModelError> {
         let response = self
             .auth
             .authenticated_request(
@@ -150,6 +153,23 @@ impl WorkingModelProxy {
             content_type,
         })
     }
+}
+
+fn validate_model_request(request_body: &[u8]) -> Result<String, WorkingModelError> {
+    if request_body.len() > MAX_MODEL_REQUEST_BYTES {
+        return Err(WorkingModelError::InvalidRequest(
+            "模型请求体过大".to_string(),
+        ));
+    }
+    let request = serde_json::from_slice::<Value>(request_body).map_err(|_| {
+        WorkingModelError::InvalidRequest("模型请求体不是有效 JSON".to_string())
+    })?;
+    request
+        .get("model")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .map(str::to_string)
+        .ok_or_else(|| WorkingModelError::InvalidRequest("模型请求缺少 model".to_string()))
 }
 
 fn map_auth_error(error: AuthError) -> WorkingModelError {

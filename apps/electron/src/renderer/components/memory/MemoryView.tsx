@@ -1,6 +1,6 @@
 import * as React from 'react'
 import { useAtom, useAtomValue, useSetAtom } from 'jotai'
-import { BookOpen, Loader2 } from 'lucide-react'
+import { Loader2 } from 'lucide-react'
 import type { MemoryEntry, MemoryPolicy, MemoryRevision, MemoryStats } from '@copis/shared'
 import {
   memoryConflictAtom,
@@ -369,10 +369,7 @@ export function MemoryView(): React.ReactElement {
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden bg-content-area">
       <header className="titlebar-no-drag flex shrink-0 items-center justify-between px-6 pb-3 pt-14">
-        <div className="flex items-center gap-3">
-          <div className="flex size-9 items-center justify-center rounded-lg bg-primary/10 text-primary">
-            <BookOpen className="size-5" />
-          </div>
+        <div className="flex min-w-0 items-center">
           <div>
             <h1 className="text-xl font-semibold text-foreground">记忆</h1>
             <p className="mt-0.5 text-xs text-foreground/45">

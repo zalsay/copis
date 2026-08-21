@@ -731,17 +731,27 @@ export async function updateHttpApiServer(options: HttpApiServerOptions = {}): P
   }
 
   const next = spawnManagedProcess(candidatePath, formalPort, runtimeOptions, true)
+  if (next) {
+    // 正式进程启动阶段可能立刻通过 stdio 请求认证存储；先登记进程，
+    // 否则 writeBridgeResponse 会把健康检查前到达的响应丢弃。
+    httpApiProcess = next.child
+    httpApiInternalToken = next.internalToken
+  }
   if (next && await waitForHttpApiHealth(formalPort, {
     ...runtimeOptions,
     onHealthProgress: runtimeOptions.onHealthProgress,
   })) {
-    httpApiProcess = next.child
-    httpApiInternalToken = next.internalToken
     console.log(`[HTTP API] Rust 模块已切换到 v${prepared.artifact.version}`)
     return true
   }
 
-  if (next) await stopManagedProcess(next.child, runtimeOptions.stopTimeoutMs)
+  if (next) {
+    if (httpApiProcess === next.child) {
+      httpApiProcess = null
+      httpApiInternalToken = null
+    }
+    await stopManagedProcess(next.child, runtimeOptions.stopTimeoutMs)
+  }
   if (previous) {
     await restoreFunctionalModule(paths, previous)
     startHttpApiServer({ ...runtimeOptions, rootDir })

@@ -19,12 +19,18 @@ import type {
   MemoryScopeFilter,
   MemoryStats,
 } from '@copis/shared'
+import { isHttpApiBridgeActive } from './http-api-bridge'
 import { RENDERER_HTTP_API_BASE_URL } from './http-api-base-url'
 import { withHttpApiWebToken } from './http-api-web-token'
 
 const MEMORY_API_BASE_URL = RENDERER_HTTP_API_BASE_URL
 const STARTUP_RETRY_COUNT = 20
 const STARTUP_RETRY_DELAY_MS = 300
+
+/** 普通浏览器必须走同源 /api 代理；Electron Renderer 才直连带令牌的本地 Rust API。 */
+function resolveMemoryApiBaseUrl(): string {
+  return isHttpApiBridgeActive() ? '' : MEMORY_API_BASE_URL
+}
 
 export interface MemoryListOptions {
   workspaceSlug?: string
@@ -86,7 +92,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   let lastError: unknown
   for (let attempt = 0; attempt < STARTUP_RETRY_COUNT; attempt += 1) {
     try {
-      const response = await fetch(`${MEMORY_API_BASE_URL}${path}`, withHttpApiWebToken({
+      const response = await fetch(`${resolveMemoryApiBaseUrl()}${path}`, withHttpApiWebToken({
         ...init,
         headers: {
           Accept: 'application/json',

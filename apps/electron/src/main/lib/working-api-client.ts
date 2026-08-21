@@ -48,10 +48,6 @@ import {
 import type { WorkingTokenStore } from './working-auth-store'
 import { resolveCopisHttpApiPort } from '@copis/shared/config'
 
-const DEFAULT_LOCAL_RUST_API_URL = `http://127.0.0.1:${resolveCopisHttpApiPort({
-  configuredPort: process.env.COPIS_HTTP_API_PORT,
-  isPackaged: process.defaultApp === false,
-})}`
 const AUTH_STATE_STARTUP_RETRY_COUNT = 20
 const AUTH_STATE_STARTUP_RETRY_DELAY_MS = 250
 
@@ -60,6 +56,8 @@ export interface WorkingApiClientOptions {
   baseUrl?: string
   fetchImpl?: (input: string, init?: RequestInit) => Promise<Response>
   tokenStore: WorkingTokenStore
+  /** 主进程显式传入，不能使用 Electron 的 process.defaultApp 判断生产环境。 */
+  isPackaged?: boolean
 }
 
 export class WorkingApiError extends Error {
@@ -76,8 +74,20 @@ export class WorkingApiError extends Error {
   }
 }
 
-function resolveLocalRustApiUrl(value?: string, allowInjectedUrl = false): string {
-  const normalized = (value?.trim() || DEFAULT_LOCAL_RUST_API_URL).replace(/\/+$/, '')
+function resolveDefaultLocalRustApiUrl(isPackaged?: boolean): string {
+  const port = resolveCopisHttpApiPort({
+    configuredPort: process.env.COPIS_HTTP_API_PORT,
+    isPackaged: isPackaged ?? process.env.COPIS_PACKAGED === '1',
+  })
+  return `http://127.0.0.1:${port}`
+}
+
+function resolveLocalRustApiUrl(
+  value?: string,
+  allowInjectedUrl = false,
+  isPackaged?: boolean,
+): string {
+  const normalized = (value?.trim() || resolveDefaultLocalRustApiUrl(isPackaged)).replace(/\/+$/, '')
   let parsed: URL
   try {
     parsed = new URL(normalized)
@@ -310,7 +320,24 @@ function normalizeLedgerEntry(value: unknown): WorkingLedgerEntry {
       ? undefined
       : String(item.alias ?? item.model_alias ?? item.modelAlias),
     memo: item.memo == null ? undefined : String(item.memo),
-    deductionMultiplier: normalizeNumber(item.deduction_multiplier ?? item.deductionMultiplier),
+    discount: item.discount != null
+      ? normalizeNumber(item.discount)
+      : item.discount_percent != null
+        ? normalizeNumber(item.discount_percent)
+        : item.discount_percentage != null
+          ? normalizeNumber(item.discount_percentage)
+          : item.discount_rate != null
+            ? normalizeNumber(item.discount_rate)
+            : undefined,
+    deductionMultiplier: normalizeNumber(
+      item.deduction_multiplier ??
+      item.deductionMultiplier ??
+      item.multiplier ??
+      item.discount ??
+      item.discount_percent ??
+      item.discount_percentage ??
+      item.discount_rate,
+    ),
     payerBalanceAfter: normalizeNumber(item.payer_balance_after ?? item.payerBalanceAfter),
     payeeBalanceAfter: normalizeNumber(item.payee_balance_after ?? item.payeeBalanceAfter),
     createdAt: item.created_at == null && item.createdAt == null ? undefined : String(item.created_at ?? item.createdAt),
@@ -427,7 +454,7 @@ export class WorkingApiClient {
   private cachedUser: WorkingUser | null
 
   constructor(options: WorkingApiClientOptions) {
-    this.baseUrl = resolveLocalRustApiUrl(options.baseUrl, options.fetchImpl !== undefined)
+    this.baseUrl = resolveLocalRustApiUrl(options.baseUrl, options.fetchImpl !== undefined, options.isPackaged)
     this.fetchImpl = options.fetchImpl ?? ((input, init) => fetch(input, init))
     this.tokenStore = options.tokenStore
     this.cachedUser = normalizeWorkingUser(this.tokenStore.getUser())

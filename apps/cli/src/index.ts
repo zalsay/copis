@@ -25,16 +25,16 @@ import './commands/info'
 import './commands/outline'
 import './commands/search'
 import './commands/export'
+import './commands/dashi-ppt'
 
 function printHelp(): void {
-  info('copis — Copis 会话渐进式读取 CLI\n')
-  info('用法: copis session <command> [args] [--flags]\n')
+  info('copis — Copis CLI\n')
+  info('用法: copis <command> [args] [--flags]\n')
   info('命令:')
   for (const c of allCommands()) {
     info(`  ${c.usage.padEnd(64)} ${c.summary}`)
   }
   info('\n全局 flag: --json  --config-dir DIR  --dev')
-  info('\n渐进式读取建议: 先 info/outline 看结构 → search 定位 → export --turns 取片段')
 }
 
 async function main(): Promise<number> {
@@ -61,7 +61,8 @@ async function main(): Promise<number> {
     return EXIT_USAGE
   }
 
-  const parsed = parseArgs(rest.slice(1))
+  const rawArgs = rest.slice(1)
+  const parsed = parseArgs(rawArgs)
   const pathOpts: PathOptions = {
     configDir: strFlag(parsed.flags, 'config-dir'),
     dev: boolFlag(parsed.flags, 'dev'),
@@ -69,7 +70,7 @@ async function main(): Promise<number> {
   const json = boolFlag(parsed.flags, 'json')
 
   try {
-    return await command.run({ args: parsed, pathOpts, json })
+    return await command.run({ rawArgs, args: parsed, pathOpts, json })
   } catch (err) {
     if (err instanceof UsageError) {
       errorLine(err.message)

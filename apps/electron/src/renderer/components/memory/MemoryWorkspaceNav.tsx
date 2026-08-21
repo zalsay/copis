@@ -18,7 +18,6 @@ const NAV_ITEMS: Array<{ page: MemoryPage; label: string; description: string; i
 export function MemoryWorkspaceNav({ page, onPageChange }: MemoryWorkspaceNavProps): React.ReactElement {
   return (
     <nav aria-label="Memory 页面导航" className="w-52 shrink-0 border-r border-border/45 bg-background/25 px-3 py-4">
-      <div className="px-2 pb-3 text-[11px] font-medium uppercase tracking-[0.08em] text-foreground/35">Memory</div>
       <div className="space-y-1">
         {NAV_ITEMS.map((item) => {
           const Icon = item.icon

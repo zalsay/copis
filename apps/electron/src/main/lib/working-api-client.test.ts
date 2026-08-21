@@ -197,4 +197,57 @@ describe('Copis Rust Working facade', () => {
     const client = new WorkingApiClient({ tokenStore: createStore() })
     expect(new URL(client.baseUrl).hostname).toBe('127.0.0.1')
   })
+
+  test('Given 正式 App 继承开发端口变量 When 创建 Working facade Then 使用 51730', () => {
+    const previousPort = process.env.COPIS_HTTP_API_PORT
+    process.env.COPIS_HTTP_API_PORT = '51740'
+    try {
+      const client = new WorkingApiClient({
+        tokenStore: createStore(),
+        isPackaged: true,
+      })
+      expect(client.baseUrl).toBe('http://127.0.0.1:51730')
+    } finally {
+      if (previousPort === undefined) delete process.env.COPIS_HTTP_API_PORT
+      else process.env.COPIS_HTTP_API_PORT = previousPort
+    }
+  })
+
+  test('Given 后端返回带有 discount 字段的流水 When 读取设置快照 Then 正确解析 discount 与 deductionMultiplier', async () => {
+    const client = createClient(async (url) => {
+      if (url.endsWith('/api/working/settings')) {
+        return jsonResponse({
+          user: { id: 7, email: 'user@example.com', tokens: 100 },
+          ledger: [
+            {
+              id: 'ledger-80',
+              payer_user_id: 7,
+              amount_tokens: 1.5,
+              type: 'charge',
+              source_type: 'working_model',
+              alias: 'fast',
+              discount: 80,
+            },
+            {
+              id: 'ledger-60',
+              payer_user_id: 7,
+              amount_tokens: 2.0,
+              type: 'charge',
+              source_type: 'copis-agent-model',
+              alias: 'export',
+              discount_percent: 60,
+            },
+          ],
+        })
+      }
+      throw new Error(`unexpected url: ${url}`)
+    })
+
+    const snapshot = await client.getSettingsSnapshot()
+    expect(snapshot.ledger).toHaveLength(2)
+    expect(snapshot.ledger[0]?.discount).toBe(80)
+    expect(snapshot.ledger[0]?.deductionMultiplier).toBe(80)
+    expect(snapshot.ledger[1]?.discount).toBe(60)
+    expect(snapshot.ledger[1]?.deductionMultiplier).toBe(60)
+  })
 })

@@ -247,6 +247,19 @@ impl PiWorkerManager {
         proxy.proxy_with_capability(capability, request_body)
     }
 
+    pub fn working_model_internal_request(
+        &self,
+        request_body: &[u8],
+    ) -> Result<WorkingModelResponse, WorkingModelError> {
+        let proxy = self
+            .working_model_proxy
+            .lock()
+            .unwrap()
+            .clone()
+            .ok_or(WorkingModelError::Unauthorized)?;
+        proxy.proxy_internal(request_body)
+    }
+
     pub fn session_status(&self, session_id: &str) -> Option<PiWorkerStatusSnapshot> {
         self.worker_statuses
             .lock()

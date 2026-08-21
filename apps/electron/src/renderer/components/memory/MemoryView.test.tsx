@@ -82,6 +82,18 @@ describe('Memory 页面 BDD', () => {
     expect(html).toContain('维护 10/10')
   })
 
+  test('Given 打开 Memory 页面 When 查看标题区 Then 不显示左侧图标且项目标签与下拉框使用统一高度', () => {
+    const html = renderMemory({
+      workspace: { id: 'workspace-a', slug: 'workspace-a', name: 'Copis', createdAt: 1, updatedAt: 1 },
+      memoryWorkspaceSlug: 'workspace-a',
+      policy: 'writable',
+    })
+
+    expect(html).not.toContain('lucide-book-open')
+    expect(html).toContain('flex h-9 min-w-0 items-center gap-2 text-xs leading-none')
+    expect(html).toContain('text-sm leading-none text-foreground/80')
+  })
+
   test('Given 没有工作区 When 打开 Memory 页面 Then 只显示用户记忆并可关闭自动记忆', () => {
     const html = renderMemory({ memoryWorkspaceSlug: null, policy: 'off' })
 

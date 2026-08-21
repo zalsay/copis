@@ -137,3 +137,19 @@ fn model_proxy_keeps_sse_order_and_uses_auth_session_token() {
     );
     assert_eq!(calls.len(), 2);
 }
+
+#[test]
+fn internal_model_proxy_uses_auth_session_without_worker_capability() {
+    let (auth, transport) = setup();
+    let proxy = WorkingModelProxy::new(auth);
+    let response = proxy
+        .proxy_internal(br#"{"model":"model-internal","messages":[]}"#)
+        .unwrap();
+
+    assert_eq!(response.status, 200);
+    assert_eq!(response.body, b"data: {\"id\":\"chunk-1\"}\n\n");
+    let calls = transport.calls.lock().unwrap();
+    let model_request = calls.last().unwrap();
+    assert_eq!(model_request.path, "/api/internal/working-model/v1/responses");
+    assert_eq!(model_request.access_token.as_deref(), Some("header.eyJleHAiOjQxMDAuMH0.sig"));
+}

@@ -1,6 +1,6 @@
 {
   "name": "@copis/electron",
-  "version": "0.0.64",
+  "version": "0.0.65",
   "description": "Copis Working desktop client - Electron App",
   "main": "dist/main.cjs",
   "author": {
@@ -26,6 +26,9 @@
     "build:http-api-server": "bun run scripts/build-http-api-server.ts",
     "test:browser-workflow:e2e": "bun run scripts/browser-workflow-e2e.ts",
     "build:cli": "bun run scripts/build-cli.ts",
+    "sync:dashi-ppt": "bash scripts/sync-dashi-ppt-skill.sh --write",
+    "check:dashi-ppt": "bash scripts/sync-dashi-ppt-skill.sh --check",
+    "test:dashi-ppt-sync": "bash scripts/test-dashi-ppt-sync.sh",
     "sync:runtime-deps": "bun run scripts/sync-runtime-deps.ts",
     "sync:runtime-deps:dev": "bun run scripts/sync-runtime-deps.ts --no-clean",
     "copy:pi-extensions": "bun run scripts/copy-pi-extensions.ts",

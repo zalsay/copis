@@ -142,7 +142,7 @@ describe('默认 Skills 清单', () => {
     expect(frontmatter.get('name')).toBe('find-skills')
     expect(frontmatter.get('displayName')).toBe('技能发现')
     expect(frontmatter.get('group')).toBe('系统内置')
-    expect(frontmatter.get('version')?.replace(/^['"]|['"]$/g, '')).toBe('1.0.4')
+    expect(frontmatter.get('version')?.replace(/^['"]|['"]$/g, '')).toBe('1.0.5')
     expect(frontmatter.get('description')).toContain('在 SkillHub 平台查找/搜索 Skill 技能')
 
     const content = readFileSync(join(DEFAULT_SKILLS_DIR, 'find-skills', 'SKILL.md'), 'utf8')
@@ -154,6 +154,31 @@ describe('默认 Skills 清单', () => {
     expect(content).not.toMatch(/\bnpx\s+skills\b/i)
     expect(content).not.toContain('skills.sh')
     expect(content).not.toContain('install npx skills')
+  })
+
+  test('Dashi PPT 包含系统内置元数据与受限命令契约', () => {
+    const bundled = new Set(bundledSkillSlugs())
+    expect(bundled.has('dashi-ppt')).toBe(true)
+
+    const frontmatter = readFrontmatter('dashi-ppt')
+    expect(frontmatter.get('name')).toBe('dashi-ppt')
+    expect(frontmatter.get('displayName')).toBe('Dashi PPT')
+    expect(frontmatter.get('group')).toBe('系统内置')
+    expect(frontmatter.get('version')?.replace(/^['"]|['"]$/g, '')).toBe('0.4.11')
+    expect(frontmatter.get('license')).toBe('AGPL-3.0-only')
+
+    const dashiContent = readFileSync(join(DEFAULT_SKILLS_DIR, 'dashi-ppt', 'SKILL.md'), 'utf8')
+    expect(dashiContent).toContain('copis dashi-ppt')
+    expect(dashiContent).toContain('project/output')
+    expect(dashiContent).toContain('copis dashi-ppt render')
+    expect(dashiContent).toContain('copis dashi-ppt validate:goal-spec')
+    expect(dashiContent).toContain('copis dashi-ppt validate:swiss')
+    expect(dashiContent).toContain('copis dashi-ppt validate:goal-copy')
+
+    const officeContent = readFileSync(join(DEFAULT_SKILLS_DIR, 'officecli', 'SKILL.md'), 'utf8')
+    expect(officeContent).toContain('officecli')
+    expect(officeContent).toContain('dashi-ppt')
+    expect(officeContent).not.toContain('pptx/SKILL.md')
   })
 
   test('find-skills 包含 SkillHub 源引用文件', () => {
@@ -174,6 +199,8 @@ describe('默认 Skills 清单', () => {
     const frontmatter = readFrontmatter('alipay-payment-skill')
     expect(frontmatter.get('name')).toBe('alipay-payment-skill')
     expect(frontmatter.get('displayName')).toBe('Copis 支付')
+    expect(frontmatter.get('description')).toBe('Copis 钻石购买与 VIP 升级支付流程。')
+    expect(frontmatter.get('description')).not.toContain('Working')
     expect(frontmatter.get('group')).toBe('系统内置')
     expect(frontmatter.get('version')?.replace(/^['"]|['"]$/g, '')).toBe('0.0.11')
 

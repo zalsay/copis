@@ -6,6 +6,42 @@ export interface WorkingLedgerPage {
   totalPages: number
 }
 
+export function formatWorkingDiscount(value?: number): string {
+  if (value === undefined || value === null || !Number.isFinite(value)) {
+    return ''
+  }
+  if (value <= 0 || value === 1 || value >= 100) {
+    return ''
+  }
+  let discountNum: number
+  if (value > 0 && value < 1) {
+    discountNum = Number((value * 10).toFixed(2))
+  } else if (value >= 10 && value < 100) {
+    discountNum = Number((value / 10).toFixed(2))
+  } else if (value >= 2 && value <= 9.5) {
+    discountNum = Number(value.toFixed(2))
+  } else {
+    return ''
+  }
+  if (discountNum <= 0 || discountNum >= 10) {
+    return ''
+  }
+  return `${discountNum}折`
+}
+
+export function formatWorkingLedgerTitle(entry: WorkingLedgerEntry): string {
+  if (entry.type === 'purchase') return '获取钻石'
+  if (entry.type === 'transfer') return '成员转账'
+  if (entry.type === 'reward' || entry.sourceType === 'daily_checkin') return '每日签到'
+  // pi_office_model 保留为专家团模型专用分类；Copis 内置 Agent 模型使用 copis-agent-model。
+  if (entry.sourceType === 'pi_office_model') return '专家团扣费'
+  if (isWorkingModelDeduction(entry) && entry.modelAlias) {
+    const discount = formatWorkingDiscount(entry.discount ?? entry.deductionMultiplier)
+    return discount ? `Copis 模型扣费（${discount}）` : 'Copis 模型扣费'
+  }
+  return 'AI 扣费'
+}
+
 export function formatWorkingLedgerDescription(entry: WorkingLedgerEntry, payer: string): string {
   if (isWorkingModelDeduction(entry) && entry.modelAlias) {
     const alias = entry.modelAlias.trim()

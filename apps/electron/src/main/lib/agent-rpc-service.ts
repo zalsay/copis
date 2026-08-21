@@ -66,6 +66,7 @@ import { buildReferencedPlanningPrompt } from './planning-reference-context'
 import { buildMentionedToolsPrompt } from './agent-mentioned-tools-prompt'
 import { buildAgentRuntimeEnv, mergeRuntimeEnv } from './agent-runtime-env'
 import { getFunctionalModulePath } from './functional-module-manager'
+import { getHttpApiInternalToken } from './http-api-server'
 import { getEffectiveProxyUrl } from './proxy-settings-service'
 import { getRuntimeStatus } from './runtime-init'
 import { getSettings } from './settings-service'
@@ -117,6 +118,8 @@ interface PendingAgentRpcRun {
   readonly provider: ProviderType
   readonly baseUrl?: string
   readonly apiKey: string
+  /** 仅主进程隐藏 Memory 回合使用；绝不传入 Pi Worker。 */
+  readonly internalToken?: string
   readonly proxyUrl?: string
   readonly workspaceSlug?: string
   readonly memoryPolicy: MemoryPolicy
@@ -483,6 +486,9 @@ export async function prepareAgentRpcRun(input: AgentSendInput): Promise<PiWorke
   const credentials = customModelRuntime
     ? { apiKey: customModelRuntime.apiKey }
     : await resolveWorkerCredentials(channelId, channel.provider)
+  const internalToken = isCopisWorkingChannelId(channelId)
+    ? getHttpApiInternalToken() ?? undefined
+    : undefined
   const settings = getSettings()
   const workspaceSlug = workspace.slug
   const browserBinding = getBrowserAgentContext(input.sessionId)
@@ -648,6 +654,7 @@ export async function prepareAgentRpcRun(input: AgentSendInput): Promise<PiWorke
     provider: channel.provider,
     baseUrl: channel.baseUrl,
     apiKey: credentials.apiKey,
+    ...(internalToken ? { internalToken } : {}),
     ...(proxyUrl ? { proxyUrl } : {}),
     ...(workspaceSlug ? { workspaceSlug } : {}),
     memoryPolicy,
@@ -771,6 +778,7 @@ function scheduleRpcMemoryCapture(
       provider: pending.provider,
       baseUrl: pending.baseUrl,
       apiKey: pending.apiKey,
+      ...(pending.internalToken ? { internalToken: pending.internalToken } : {}),
       modelId: pending.modelId,
       proxyUrl: pending.proxyUrl,
       force: false,
@@ -783,6 +791,7 @@ function scheduleRpcMemoryCapture(
       provider: pending.provider,
       baseUrl: pending.baseUrl,
       apiKey: pending.apiKey,
+      ...(pending.internalToken ? { internalToken: pending.internalToken } : {}),
       modelId: pending.modelId,
       proxyUrl: pending.proxyUrl,
       turns,

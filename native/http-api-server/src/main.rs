@@ -753,7 +753,24 @@ fn handle_memory_route(
                 return;
             }
         };
-        send_memory_result(stream, store.capture_batch(input), origin);
+        let workspace_slug = input.workspace_slug.clone();
+        let item_count = input.items.len();
+        eprintln!(
+            "[HTTP API][Memory] capture-batch 开始 workspace={} items={}",
+            workspace_slug, item_count
+        );
+        let result = store.capture_batch(input);
+        match &result {
+            Ok(response) => eprintln!(
+                "[HTTP API][Memory] capture-batch 完成 workspace={} items={} added={} deduplicated={}",
+                workspace_slug, item_count, response.added, response.deduplicated
+            ),
+            Err(error) => eprintln!(
+                "[HTTP API][Memory] capture-batch 失败 workspace={} items={} error={}",
+                workspace_slug, item_count, error
+            ),
+        }
+        send_memory_result(stream, result, origin);
         return;
     }
 
@@ -1817,6 +1834,28 @@ fn handle_connection(
     }
 
     if is_working_model_route(&request.method, path) {
+        if is_internal_token_valid(&request) {
+            eprintln!(
+                "[HTTP API][Working 模型] Electron 内部请求开始 body_bytes={}",
+                request.body.len()
+            );
+            match workers.working_model_internal_request(&request.body) {
+                Ok(response) => {
+                    eprintln!(
+                        "[HTTP API][Working 模型] Electron 内部请求完成 status={} body_bytes={}",
+                        response.status,
+                        response.body.len()
+                    );
+                    send_working_model_response(&mut stream, response.status, &response.body, origin)
+                }
+                Err(error) => {
+                    eprintln!("[HTTP API][Working 模型] Electron 内部请求失败: {}", error);
+                    send_working_model_error(&mut stream, error, origin)
+                }
+            }
+            let _ = stream.shutdown(Shutdown::Both);
+            return;
+        }
         let capability = request
             .headers
             .get("authorization")

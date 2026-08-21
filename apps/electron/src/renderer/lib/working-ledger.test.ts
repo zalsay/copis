@@ -2,7 +2,9 @@ import { describe, expect, test } from 'bun:test'
 import type { WorkingLedgerEntry, WorkingOrder } from '@copis/shared'
 import {
   createDiamondPurchaseLedgerEntries,
+  formatWorkingDiscount,
   formatWorkingLedgerDescription,
+  formatWorkingLedgerTitle,
   paginateWorkingLedgerEntries,
   selectWorkingConsumptionLedgerEntries,
 } from './working-ledger'
@@ -54,7 +56,6 @@ describe('Working 钻石流水文案', () => {
     expect(formatWorkingLedgerDescription({ ...modelEntry('fast'), sourceType: 'copis-agent-model', memo: 'Copis Agent 模型消耗' }, '官方')).toBe('模型 · Copis 快速 Token消耗')
   })
 })
-
 describe('Working 钻石流水分栏', () => {
   test('Given 混合流水 When 选择消耗 Then 仅保留扣费记录', () => {
     const entries: WorkingLedgerEntry[] = [
@@ -87,5 +88,71 @@ describe('Working 钻石流水分栏', () => {
       page: 2,
       totalPages: 2,
     })
+  })
+})
+
+describe('Working 钻石扣费折扣与标题', () => {
+  test('Given 各种扣费系数与百分比 When 格式化折扣 Then 返回对应中文折数', () => {
+    // 后端返回整数百分比（如 80、60、85、20）
+    expect(formatWorkingDiscount(80)).toBe('8折')
+    expect(formatWorkingDiscount(60)).toBe('6折')
+    expect(formatWorkingDiscount(85)).toBe('8.5折')
+    expect(formatWorkingDiscount(50)).toBe('5折')
+    expect(formatWorkingDiscount(20)).toBe('2折')
+    expect(formatWorkingDiscount(75)).toBe('7.5折')
+    expect(formatWorkingDiscount(100)).toBe('')
+
+    // 浮点比例（如 0.8、0.6）
+    expect(formatWorkingDiscount(0.8)).toBe('8折')
+    expect(formatWorkingDiscount(0.6)).toBe('6折')
+    expect(formatWorkingDiscount(0.85)).toBe('8.5折')
+    expect(formatWorkingDiscount(0.5)).toBe('5折')
+    expect(formatWorkingDiscount(0.2)).toBe('2折')
+    expect(formatWorkingDiscount(0.75)).toBe('7.5折')
+    expect(formatWorkingDiscount(1)).toBe('')
+    expect(formatWorkingDiscount(1.2)).toBe('')
+    expect(formatWorkingDiscount(0)).toBe('')
+    expect(formatWorkingDiscount(-0.5)).toBe('')
+    expect(formatWorkingDiscount(undefined)).toBe('')
+    expect(formatWorkingDiscount(NaN)).toBe('')
+  })
+
+  test('Given 带有折扣的 Copis 模型扣费 When 格式化标题 Then 在 Copis 模型扣费 后面追加折扣', () => {
+    // 后端返回 80 折扣
+    const entryDiscount80 = { ...modelEntry('fast'), discount: 80 }
+    expect(formatWorkingLedgerTitle(entryDiscount80)).toBe('Copis 模型扣费（8折）')
+
+    // 后端返回 60 折扣
+    const entryDiscount60 = { ...modelEntry('export'), discount: 60 }
+    expect(formatWorkingLedgerTitle(entryDiscount60)).toBe('Copis 模型扣费（6折）')
+
+    const entry80 = { ...modelEntry('fast'), deductionMultiplier: 0.8 }
+    expect(formatWorkingLedgerTitle(entry80)).toBe('Copis 模型扣费（8折）')
+
+    const entry85 = { ...modelEntry('export'), deductionMultiplier: 0.85 }
+    expect(formatWorkingLedgerTitle(entry85)).toBe('Copis 模型扣费（8.5折）')
+
+    const entry50 = { ...modelEntry('deepseek-v4-flash'), deductionMultiplier: 50 }
+    expect(formatWorkingLedgerTitle(entry50)).toBe('Copis 模型扣费（5折）')
+  })
+
+  test('Given 无折扣或标准扣费 When 格式化标题 Then 显示 Copis 模型扣费', () => {
+    const entryStandard100 = { ...modelEntry('fast'), discount: 100 }
+    expect(formatWorkingLedgerTitle(entryStandard100)).toBe('Copis 模型扣费')
+
+    const entryStandard = { ...modelEntry('fast'), deductionMultiplier: 1 }
+    expect(formatWorkingLedgerTitle(entryStandard)).toBe('Copis 模型扣费')
+
+    const entryNoMultiplier = modelEntry('fast')
+    expect(formatWorkingLedgerTitle(entryNoMultiplier)).toBe('Copis 模型扣费')
+  })
+
+  test('Given 非 Copis 模型扣费类型 When 格式化标题 Then 保持对应标题不变', () => {
+    expect(formatWorkingLedgerTitle({ ...modelEntry(), type: 'purchase' })).toBe('获取钻石')
+    expect(formatWorkingLedgerTitle({ ...modelEntry(), type: 'transfer' })).toBe('成员转账')
+    expect(formatWorkingLedgerTitle({ ...modelEntry(), type: 'reward' })).toBe('每日签到')
+    expect(formatWorkingLedgerTitle({ ...modelEntry(), sourceType: 'daily_checkin' })).toBe('每日签到')
+    expect(formatWorkingLedgerTitle({ ...modelEntry(), sourceType: 'pi_office_model' })).toBe('专家团扣费')
+    expect(formatWorkingLedgerTitle({ ...modelEntry(), modelAlias: undefined })).toBe('AI 扣费')
   })
 })

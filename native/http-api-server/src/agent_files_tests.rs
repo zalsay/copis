@@ -512,6 +512,63 @@ fn project_shell_allows_workspace_git_commands_but_blocks_scope_escape() {
 }
 
 #[test]
+fn project_shell_allows_copis_dashi_ppt_whitelisted_subcommands_and_rejects_escape() {
+    assert!(validate_project_command("copis dashi-ppt version").is_ok());
+    assert!(validate_project_command("copis dashi-ppt layout:query --theme theme01").is_ok());
+    assert!(validate_project_command("copis dashi-ppt inspect:layout --compact theme01_page001").is_ok());
+    assert!(validate_project_command("copis dashi-ppt props:safe --goal goal.json --write").is_ok());
+    assert!(validate_project_command("copis dashi-ppt goal:scaffold --title test --pages 8").is_ok());
+    assert!(validate_project_command("copis dashi-ppt media:stage ./output img.png").is_ok());
+    assert!(validate_project_command("copis dashi-ppt render --goal goal.json --output ppt/index.html").is_ok());
+    assert!(validate_project_command("copis dashi-ppt validate:goal-spec goal.json").is_ok());
+    assert!(validate_project_command("copis dashi-ppt validate:swiss ppt/index.html").is_ok());
+    assert!(validate_project_command("copis dashi-ppt validate:goal-copy goal.json ppt/index.html").is_ok());
+    assert!(validate_project_command("copis dashi-ppt validate:four-variant-quality").is_ok());
+    assert!(validate_project_command("copis dashi-ppt preview --port 8765").is_ok());
+    assert!(validate_project_command("copis dashi-ppt export:pptx ppt out.pptx").is_ok());
+    assert!(validate_project_command("copis dashi-ppt export:pdf ppt out.pdf").is_ok());
+    assert!(validate_project_command("copis dashi-ppt check-latest-version").is_ok());
+    assert!(validate_project_command("copis.exe dashi-ppt version").is_ok());
+
+    assert_eq!(
+        validate_project_command("copis")
+            .unwrap_err()
+            .code,
+        "command_not_allowed"
+    );
+    assert_eq!(
+        validate_project_command("copis session list")
+            .unwrap_err()
+            .code,
+        "command_not_allowed"
+    );
+    assert_eq!(
+        validate_project_command("copis __pi-worker")
+            .unwrap_err()
+            .code,
+        "command_not_allowed"
+    );
+    assert_eq!(
+        validate_project_command("copis dashi-ppt unknown-subcommand")
+            .unwrap_err()
+            .code,
+        "command_not_allowed"
+    );
+    assert_eq!(
+        validate_project_command("copis dashi-ppt render --goal goal.json | cat")
+            .unwrap_err()
+            .code,
+        "command_syntax_not_allowed"
+    );
+    assert_eq!(
+        validate_project_command("copis dashi-ppt render --goal goal.json ; rm -rf /")
+            .unwrap_err()
+            .code,
+        "command_syntax_not_allowed"
+    );
+}
+
+#[test]
 fn project_shell_requires_advanced_authorization_for_git_ssh_curl_and_python() {
     let root = temp_dir("advanced-auth");
     fs::create_dir_all(&root).unwrap();
@@ -707,7 +764,7 @@ fn project_command_environment_resolves_officecli_from_the_controlled_module_pat
     fs::set_permissions(&officecli, permissions).unwrap();
 
     let mut command = Command::new("/bin/sh");
-    command.args(["-lc", "officecli --version"]);
+    command.args(["-c", "officecli --version"]);
     configure_project_command_environment_with_officecli(&mut command, Some(&officecli));
     let output = command.output().unwrap();
 

@@ -3,6 +3,33 @@ import type { Automation } from '@copis/shared'
 import { createAutomationApiClient } from './automation-api-client'
 
 describe('AutomationApiClient', () => {
+  test('Given 正式 App 在 bootstrap 前创建客户端 When bootstrap 设置正式标记后请求 Then 使用 51730', async () => {
+    const previousFetch = globalThis.fetch
+    const previousPackaged = process.env.COPIS_PACKAGED
+    const previousPort = process.env.COPIS_HTTP_API_PORT
+    const requests: string[] = []
+    delete process.env.COPIS_PACKAGED
+    process.env.COPIS_HTTP_API_PORT = '51740'
+
+    globalThis.fetch = (async (url) => {
+      requests.push(String(url))
+      return Response.json([])
+    }) as typeof fetch
+
+    try {
+      const client = createAutomationApiClient(undefined, { retryCount: 0 })
+      process.env.COPIS_PACKAGED = '1'
+      await expect(client.list()).resolves.toEqual([])
+      expect(requests[0]).toBe('http://127.0.0.1:51730/api/automations')
+    } finally {
+      globalThis.fetch = previousFetch
+      if (previousPackaged === undefined) delete process.env.COPIS_PACKAGED
+      else process.env.COPIS_PACKAGED = previousPackaged
+      if (previousPort === undefined) delete process.env.COPIS_HTTP_API_PORT
+      else process.env.COPIS_HTTP_API_PORT = previousPort
+    }
+  })
+
   test('Given Rust 尚未就绪 When 首次拉取列表 Then 网络错误后自动重试到服务可用', async () => {
     const previousFetch = globalThis.fetch
     let attempts = 0

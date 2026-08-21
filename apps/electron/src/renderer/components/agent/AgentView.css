@@ -7,7 +7,7 @@
 }
 
 .copis-agent-session-compact [data-input-mode="agent"] > div:first-child {
-  border-radius: 10px;
+  border-radius: 8px;
 }
 
 /* Agent 思考状态：复刻 Working 的灰白高光，从右向左扫过。 */
@@ -94,7 +94,7 @@
 /* 深色现代主题使用更饱和的炭灰材质，避免输入区在暗背景中发白。 */
 :root.ui-modern.dark:not(.theme-terminal-dark) .copis-agent-session [data-input-mode="agent"] > div:first-child:not(.border-dashed) {
   border-color: rgba(255, 255, 255, 0.07);
-  border-radius: 19px;
+  border-radius: 8px;
   background: rgba(47, 47, 47, 0.46) !important;
   background-clip: padding-box;
   box-shadow: 0 20px 60px rgba(0, 0, 0, 0.26);

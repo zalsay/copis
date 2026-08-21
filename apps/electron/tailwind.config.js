@@ -84,8 +84,11 @@ export default {
         DEFAULT: 'calc(var(--radius) - 2px)',
         md: 'calc(var(--radius) - 2px)',
         lg: 'var(--radius)',
-        xl: 'calc(var(--radius) + var(--radius-xl-extra, 2px))',
-        '2xl': 'calc(var(--radius) + var(--radius-2xl-extra, 4px))',
+        xl: 'calc(var(--radius) + var(--radius-xl-extra, 0px))',
+        '2xl': 'calc(var(--radius) + var(--radius-2xl-extra, 0px))',
+        card: 'var(--radius-card, var(--radius))',
+        dialog: 'var(--radius-dialog, var(--radius))',
+        modal: 'var(--radius-modal, var(--radius))',
       },
       // ===== 阴影：覆写 Tailwind 内置的 sm/md/lg/xl/DEFAULT =====
       // 现有 78 处 shadow-md / shadow-lg 等代码无需改动，自动吃多层柔阴影 + 主题自适应

@@ -144,4 +144,25 @@ describe('Agent Windows Shell 运行环境', () => {
       Path: 'C:\\Copis\\modules\\python-runtime\\bin;C:\\Windows\\System32',
     })
   })
+
+  test('Given Dashi PPT 运行时配置 When 构建 Agent 环境 Then 注入 Dashi 相关环境变量', () => {
+    const result = buildAgentRuntimeEnv({
+      bundledCliPath: '',
+      dashiPptRoot: '/Users/test/.copis/default-skills/dashi-ppt',
+      dashiPptProjectRoot: '/Users/test/.copis/default-skills/dashi-ppt/project',
+      nodeModulesRoot: '/Users/test/.copis/modules/node-runtime/node_modules',
+      playwrightCoreEntrypoint: '/Users/test/.copis/modules/playwright-core/index.js',
+      chromiumHeadlessShell: '/Users/test/.cache/ms-playwright/chromium_headless_shell-1100/chrome-mac/headless_shell',
+      platform: 'darwin',
+      processEnv: {},
+    })
+
+    expect(result.env).toMatchObject({
+      COPIS_DASHI_PPT_ROOT: '/Users/test/.copis/default-skills/dashi-ppt',
+      COPIS_DASHI_PPT_PROJECT_ROOT: '/Users/test/.copis/default-skills/dashi-ppt/project',
+      COPIS_NODE_MODULES_ROOT: '/Users/test/.copis/modules/node-runtime/node_modules',
+      COPIS_PLAYWRIGHT_CORE_ENTRY: '/Users/test/.copis/modules/playwright-core/index.js',
+      COPIS_PLAYWRIGHT_HEADLESS_SHELL: '/Users/test/.cache/ms-playwright/chromium_headless_shell-1100/chrome-mac/headless_shell',
+    })
+  })
 })

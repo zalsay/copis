@@ -14,7 +14,7 @@
   overflow: auto;
   padding: 20px;
   border: 1px solid rgba(255, 255, 255, 0.1);
-  border-radius: 12px;
+  border-radius: 8px;
   background: #202020;
   color: #f4f4f5;
   box-shadow: 0 24px 70px rgba(0, 0, 0, 0.44);
@@ -100,7 +100,7 @@
   width: 100%;
   box-sizing: border-box;
   border: 1px solid rgba(255, 255, 255, 0.13);
-  border-radius: 7px;
+  border-radius: 8px;
   background: #292929;
   color: #f4f4f5;
   font: inherit;
@@ -167,7 +167,7 @@
 .copis-working-feedback-message {
   margin-top: 14px;
   padding: 10px 11px;
-  border-radius: 7px;
+  border-radius: 8px;
   font-size: 13px;
   line-height: 1.45;
 }
@@ -193,7 +193,7 @@
   min-height: 36px;
   padding: 0 13px;
   border: 1px solid rgba(255, 255, 255, 0.12);
-  border-radius: 7px;
+  border-radius: 8px;
   background: #292929;
   color: #eeeeef;
   font: inherit;

@@ -50,6 +50,7 @@ import { StorageSettings } from '@/components/settings/StorageSettings'
 import { VoiceInputSettings } from '@/components/settings/VoiceInputSettings'
 import { ModelManagementSettings } from '@/components/settings/ModelManagementSettings'
 import {
+  formatWorkingDiscount,
   formatWorkingLedgerDescription,
   isWorkingModelDeduction,
   paginateWorkingLedgerEntries,
@@ -581,7 +582,10 @@ function getLedgerTitle(entry: WorkingLedgerEntry): string {
   if (entry.type === 'reward' || entry.sourceType === 'daily_checkin') return '每日签到'
   // pi_office_model 保留为专家团模型专用分类；Copis 内置 Agent 模型使用 copis-agent-model。
   if (entry.sourceType === 'pi_office_model') return '专家团扣费'
-  if (isWorkingModelDeduction(entry) && entry.modelAlias) return 'Copis 模型扣费'
+  if (isWorkingModelDeduction(entry) && entry.modelAlias) {
+    const discount = formatWorkingDiscount(entry.discount ?? entry.deductionMultiplier)
+    return discount ? `Copis 模型扣费（${discount}）` : 'Copis 模型扣费'
+  }
   return 'AI 扣费'
 }
 

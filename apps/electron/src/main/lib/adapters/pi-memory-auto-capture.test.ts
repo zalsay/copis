@@ -1,9 +1,16 @@
-import { describe, expect, test } from 'bun:test'
+import { afterEach, describe, expect, test } from 'bun:test'
 import {
   MemoryAutoCapture,
   MEMORY_CAPTURE_MAX_TURNS,
   parseMemoryFacts,
+  runMemoryTextTurn,
 } from './pi-memory-auto-capture'
+
+const originalFetch = globalThis.fetch
+
+afterEach(() => {
+  globalThis.fetch = originalFetch
+})
 
 function turn(index: number, autonomous = false) {
   return {
@@ -17,6 +24,47 @@ function turn(index: number, autonomous = false) {
 }
 
 describe('Pi Memory per-turn 自动捕获', () => {
+  test('Given Working 隐藏抽取 When携带 Rust 内部令牌 Then不发送空 Bearer 并请求本机 Rust API', async () => {
+    let requestUrl = ''
+    let requestInit: RequestInit | undefined
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      requestUrl = String(input)
+      requestInit = init
+      return Response.json({ output_text: 'NONE' })
+    }) as unknown as typeof fetch
+
+    await runMemoryTextTurn({
+      provider: 'openai-responses',
+      baseUrl: 'http://127.0.0.1:51740/api/internal/working-model/v1',
+      apiKey: '',
+      modelId: 'fast',
+      prompt: '抽取记忆',
+      internalToken: 'internal-token',
+    })
+
+    expect(requestUrl).toBe('http://127.0.0.1:51740/api/internal/working-model/v1/responses')
+    const headers = new Headers(requestInit?.headers)
+    expect(headers.get('X-Copis-Internal-Token')).toBe('internal-token')
+    expect(headers.get('Authorization')).toBeNull()
+  })
+
+  test('Given Working 隐藏抽取缺少 Rust 内部令牌 When执行 Then在发请求前失败', async () => {
+    let fetchCount = 0
+    globalThis.fetch = (async () => {
+      fetchCount += 1
+      return Response.json({ output_text: 'NONE' })
+    }) as unknown as typeof fetch
+
+    await expect(runMemoryTextTurn({
+      provider: 'openai-responses',
+      baseUrl: 'http://127.0.0.1:51740/api/internal/working-model/v1',
+      apiKey: '',
+      modelId: 'fast',
+      prompt: '抽取记忆',
+    })).rejects.toThrow('Rust 内部令牌')
+    expect(fetchCount).toBe(0)
+  })
+
   test('Given 9 个成功 turn When 第 9 轮结束 Then 不调用隐藏抽取', async () => {
     let extractionCount = 0
     let captureCount = 0

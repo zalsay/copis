@@ -118,8 +118,10 @@ describe('Working 设置菜单契约', () => {
     expect(panelStyles).not.toContain('hsl(43')
   })
 
-  test('Given 账户流水 When 显示模型扣费 Then 使用 alias 文案并将快速和专家映射为 Copis 名称', () => {
+  test('Given 账户流水 When 显示模型扣费 Then 使用 alias 文案并将快速和专家映射为 Copis 名称，扣费支持展示折扣', () => {
     expect(panelSource).toContain('formatWorkingLedgerDescription(entry, payer)')
+    expect(panelSource).toContain('formatWorkingDiscount')
+    expect(panelSource).toContain('Copis 模型扣费（${discount}）')
     expect(ledgerSource).toContain('模型 · ${displayAlias} Token消耗')
     expect(ledgerSource).toContain("alias === 'fast' ? 'Copis 快速'")
     expect(ledgerSource).toContain("alias === 'export' ? 'Copis 专家'")

@@ -467,6 +467,7 @@ export interface WorkingLedgerEntry {
   sourceType?: string
   modelAlias?: string
   memo?: string
+  discount?: number
   deductionMultiplier?: number
   payerBalanceAfter?: number
   payeeBalanceAfter?: number

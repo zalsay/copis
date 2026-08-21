@@ -652,6 +652,27 @@ fn validate_project_command(command: &str) -> Result<(), AgentFileError> {
         "python" | "python3" => true,
         "pip" | "pip3" => operation == "install",
         "uv" => matches!(operation, "sync" | "run" | "pip"),
+        "copis" | "copis.exe" => {
+            arguments.get(1).copied() == Some("dashi-ppt")
+                && matches!(
+                    arguments.get(2).copied().unwrap_or_default(),
+                    "version"
+                        | "layout:query"
+                        | "inspect:layout"
+                        | "props:safe"
+                        | "goal:scaffold"
+                        | "media:stage"
+                        | "render"
+                        | "validate:goal-spec"
+                        | "validate:swiss"
+                        | "validate:goal-copy"
+                        | "validate:four-variant-quality"
+                        | "preview"
+                        | "export:pptx"
+                        | "export:pdf"
+                        | "check-latest-version"
+                )
+        }
         "officecli" => matches!(
             operation,
             "" | "open"
@@ -783,7 +804,7 @@ fn run_project_command(
         command_process
     } else {
         let mut command_process = Command::new("/bin/sh");
-        command_process.args(["-lc", command]);
+        command_process.args(["-c", command]);
         command_process
     };
     process

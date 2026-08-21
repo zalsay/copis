@@ -51,7 +51,7 @@
   width: 34px;
   height: 34px;
   place-items: center;
-  border-radius: 9px;
+  border-radius: 8px;
   background: var(--ui-primary-background);
   color: var(--ui-primary);
 }

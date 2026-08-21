@@ -22,6 +22,12 @@ export interface BuildAgentRuntimeEnvOptions {
   officeCliPath?: string
   /** 已激活 Python runtime 的入口文件（bin/python 或 bin/python.exe）。 */
   pythonRuntimePath?: string
+  /** Dashi PPT 相关环境配置。 */
+  dashiPptRoot?: string
+  dashiPptProjectRoot?: string
+  nodeModulesRoot?: string
+  playwrightCoreEntrypoint?: string
+  chromiumHeadlessShell?: string
   processEnv?: NodeJS.ProcessEnv
   platform?: NodeJS.Platform
   pathDelimiter?: string
@@ -37,6 +43,11 @@ const CASE_INSENSITIVE_MERGE_KEYS = new Set([
   'no_proxy',
   'copis_cli',
   'copis_python_runtime_root',
+  'copis_dashi_ppt_root',
+  'copis_dashi_ppt_project_root',
+  'copis_node_modules_root',
+  'copis_playwright_core_entry',
+  'copis_playwright_headless_shell',
   'pythonhome',
   'shell',
   'copis_windows_shell',
@@ -223,6 +234,11 @@ export function buildAgentRuntimeEnv(options: BuildAgentRuntimeEnvOptions = {}):
     env.COPIS_PYTHON_RUNTIME_ROOT = pythonHome
     env.PYTHONHOME = pythonHome
   }
+  if (options.dashiPptRoot) env.COPIS_DASHI_PPT_ROOT = options.dashiPptRoot
+  if (options.dashiPptProjectRoot) env.COPIS_DASHI_PPT_PROJECT_ROOT = options.dashiPptProjectRoot
+  if (options.nodeModulesRoot) env.COPIS_NODE_MODULES_ROOT = options.nodeModulesRoot
+  if (options.playwrightCoreEntrypoint) env.COPIS_PLAYWRIGHT_CORE_ENTRY = options.playwrightCoreEntrypoint
+  if (options.chromiumHeadlessShell) env.COPIS_PLAYWRIGHT_HEADLESS_SHELL = options.chromiumHeadlessShell
   if (enhancedPath) {
     env[pathKey] = enhancedPath
   }

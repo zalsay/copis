@@ -6,6 +6,7 @@ import type { PathOptions } from './paths'
 import { type CommandExit, UsageError } from './output'
 
 export interface CommandContext {
+  rawArgs?: string[]
   args: ParsedArgs
   /** 从全局 flag 解析出的路径选项（--config-dir / --dev / COPIS_DEV）。 */
   pathOpts: PathOptions
