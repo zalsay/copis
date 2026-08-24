@@ -77,6 +77,12 @@ describe('功能模块发布边界', () => {
     expect(deployScript).toContain('实际模块版本：')
   })
 
+  test('Windows 发布后的 manifest 按 UTF-8 解析', () => {
+    expect(deployScript).toContain(
+      '$manifest = Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json',
+    )
+  })
+
   test('OfficeCLI-only 部署入口不要求本地 Rust API', () => {
     expect(buildManifestScript).toContain('--officecli')
     expect(deployShellScript).toContain('--officecli')

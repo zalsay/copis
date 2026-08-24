@@ -445,7 +445,7 @@ if (-not $SkipPublish) {
     Write-Host 'Publishing functional modules and manifest to COS...'
     Invoke-BunCommand $rootDir (@('run', 'publish:functional-modules', '--') + $releaseArguments + @('--manifest-output', $manifestPath)) 'Functional module COS publish failed'
 
-    $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+    $manifest = Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
     $platformProperty = $manifest.platforms.PSObject.Properties["$Platform-$Arch"]
     if ($null -eq $platformProperty -or $null -eq $platformProperty.Value.modules) { throw "Published manifest lacks platform: $Platform-$Arch" }
     $versions = @($platformProperty.Value.modules.PSObject.Properties | ForEach-Object { "$($_.Name)=$($_.Value.version)" } | Sort-Object)
