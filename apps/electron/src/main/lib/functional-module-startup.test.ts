@@ -172,9 +172,15 @@ describe('登录后功能模块启动契约', () => {
         url: 'https://download.example.com/alipay', sha256: 'd'.repeat(64), size: 10,
         format: 'tar.gz', entrypoint: 'bin/alipay-bot', required: true,
       },
+      {
+        name: 'python-runtime', version: '3.12.14', platform: 'darwin', arch: 'arm64',
+        url: 'https://download.example.com/python', sha256: 'e'.repeat(64), size: 10,
+        format: 'tar.gz', entrypoint: 'bin/python', required: true,
+      },
     ]
 
     expect(() => assertRequiredModuleArtifacts(artifacts)).toThrow('浏览器自动化内核')
+    expect(() => assertRequiredModuleArtifacts(artifacts, { allowMissingPlaywrightCore: true })).not.toThrow()
   })
 
   test('自动启动流程拒绝可选 OfficeCLI manifest', async () => {

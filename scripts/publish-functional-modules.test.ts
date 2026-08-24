@@ -12,10 +12,26 @@ import {
   requireExistingNodeRuntime,
   requireExistingPythonRuntime,
   requireExistingRustApi,
+  assertPublishedManifestComplete,
   writePublishedManifest,
 } from './publish-functional-modules'
 
 describe('功能模块发布脚本 --rust', () => {
+  test('发布前拒绝当前平台缺少必要模块的 manifest', () => {
+    const manifest: FunctionalModuleManifest = {
+      schema: 1,
+      channel: 'stable',
+      platforms: {
+        'darwin-x64': { modules: { 'rust-http-api': {
+          version: '0.0.70', url: 'https://download.example.com/rust', sha256: 'a'.repeat(64), size: 1,
+          format: 'binary', entrypoint: 'bin/copis-http-api-server', required: true,
+        } } },
+      },
+    }
+
+    expect(() => assertPublishedManifestComplete(manifest, 'darwin', 'x64')).toThrow('缺少必要模块')
+  })
+
   test('自动升版后将最终 manifest 写回本地构建目录', () => {
     const root = mkdtempSync(join(tmpdir(), 'copis-functional-module-manifest-'))
     const output = join(root, 'nested', 'manifest.json')

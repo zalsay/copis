@@ -13,4 +13,14 @@ describe('Playwright runtime 入口', () => {
 
     expect(entrypoint.endsWith(join('playwright-core', 'index.js'))).toBe(true)
   })
+
+  test('正式模式缺少 active 指针时回退到随应用打包的 driver', () => {
+    const entrypoint = resolvePlaywrightCoreEntrypoint({
+      isPackaged: true,
+      modulesRoot: join('/tmp', 'copis-missing-modules'),
+      bundledEntrypoint: '/Applications/Copis.app/Contents/Resources/app.asar/node_modules/playwright-core/index.js',
+    })
+
+    expect(entrypoint).toContain('node_modules/playwright-core/index.js')
+  })
 })

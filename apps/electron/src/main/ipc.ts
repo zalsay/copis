@@ -2142,6 +2142,7 @@ export function registerIpcHandlers(): void {
       }
       return ensureRequiredFunctionalModules({
         skipModuleUpdates: app.isPackaged !== true,
+        allowBundledPlaywrightCore: app.isPackaged === true,
         onProgress: sendStartupProgress,
         onModuleProgress: sendModuleProgress,
       })

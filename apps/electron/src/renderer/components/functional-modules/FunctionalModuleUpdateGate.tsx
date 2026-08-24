@@ -45,7 +45,7 @@ export function FunctionalModuleUpdateGate({ children }: FunctionalModuleUpdateG
     setStartup((current) => ({
       ...current,
       ...payload,
-      progress: Math.max(current.progress, progress),
+      progress: payload.phase === 'error' ? 0 : Math.max(current.progress, progress),
       error: payload.phase === 'error' ? payload.error ?? payload.detail : null,
     }))
   }, [setStartup])
@@ -75,6 +75,7 @@ export function FunctionalModuleUpdateGate({ children }: FunctionalModuleUpdateG
         ...current,
         phase: 'error',
         detail: message,
+        progress: 0,
         error: message,
       }))
     }

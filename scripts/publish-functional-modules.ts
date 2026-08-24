@@ -39,6 +39,14 @@ interface CosSdkConstructor {
 const repoRoot = resolve(import.meta.dir, '..')
 const electronDir = join(repoRoot, 'apps/electron')
 const packageMetadata = JSON.parse(readFileSync(join(electronDir, 'package.json'), 'utf8')) as { version: string }
+const REQUIRED_PUBLISHED_MODULES = [
+  'node-runtime',
+  'officecli',
+  'alipay-bot',
+  'rust-http-api',
+  'playwright-core',
+  'python-runtime',
+] as const
 
 async function main(): Promise<void> {
   const rustOnly = hasFlag('--rust') || process.env.COPIS_RUST_ONLY === '1'
@@ -85,6 +93,7 @@ async function main(): Promise<void> {
       (value, name) => markFunctionalModuleRequired(value, name),
       manifest,
     )
+    assertPublishedManifestComplete(requiredManifest, platform, arch)
     const manifestEntry = buildFunctionalModuleManifestUpload({
       channel,
       publicBaseUrl,
@@ -208,6 +217,7 @@ async function main(): Promise<void> {
       console.log(`[publish:functional-modules] 检测到不可变对象内容变化，${bump.module} 自动递增版本：${bump.fromVersion} → ${bump.toVersion}`)
     }
     const mergedManifest = mergeFunctionalModuleManifests(existingManifest, release.manifest)
+    assertPublishedManifestComplete(mergedManifest, platform, arch)
     const mergedManifestBody = Buffer.from(`${JSON.stringify(mergedManifest, null, 2)}\n`, 'utf8')
     const releaseToPublish = {
       ...release,
@@ -242,6 +252,20 @@ export function writePublishedManifest(outputPath: string, body: Buffer): void {
   const path = resolve(outputPath)
   mkdirSync(dirname(path), { recursive: true })
   writeFileSync(path, body)
+}
+
+/** 发布前校验当前平台的完整清单，避免安装包启动后卡在 manifest 检查阶段。 */
+export function assertPublishedManifestComplete(
+  manifest: FunctionalModuleManifest,
+  platform: FunctionalModulePlatform,
+  arch: FunctionalModuleArchitecture,
+): void {
+  const platformKey = `${platform}-${arch}`
+  const modules = manifest.platforms[platformKey]?.modules
+  const missing = REQUIRED_PUBLISHED_MODULES.filter((name) => modules?.[name] === undefined)
+  if (missing.length > 0) {
+    throw new Error(`发布前检查失败：${platformKey} 缺少必要模块: ${missing.join(', ')}`)
+  }
 }
 
 function requiredEnv(name: string): string {

@@ -18,6 +18,7 @@ import {
   getFunctionalModulePaths,
   readActiveFunctionalModule,
 } from './functional-module-store'
+import { resolvePlaywrightCoreEntrypoint } from './playwright-core-runtime'
 import {
   HTTP_API_PORT,
   startHttpApiServer,
@@ -51,6 +52,8 @@ export interface FunctionalModuleStartupOptions {
   healthTimeoutMs?: number
   stopTimeoutMs?: number
   spawnImpl?: HttpApiSpawn
+  /** 兼容旧版远端 manifest：Playwright Core 已随当前应用打包时可直接使用。 */
+  allowBundledPlaywrightCore?: boolean
   onProgress?: (payload: FunctionalModuleStartupProgressPayload) => void
   onModuleProgress?: (payload: FunctionalModuleProgressPayload) => void
 }
@@ -97,6 +100,7 @@ export function toStartupError(error: unknown): string {
 
 export function assertRequiredModuleArtifacts(
   artifacts: readonly FunctionalModuleArtifact[],
+  options: { allowMissingPlaywrightCore?: boolean } = {},
 ): void {
   const byName = new Map(artifacts.map((artifact) => [artifact.name, artifact]))
   const officeCli = byName.get('officecli')
@@ -124,10 +128,13 @@ export function assertRequiredModuleArtifacts(
   }
 
   const playwrightCore = byName.get('playwright-core')
-  if (!playwrightCore) throw new Error('组件清单缺少必要的浏览器自动化内核')
-  if (!playwrightCore.required) throw new Error('浏览器自动化内核必须是必要组件')
-  if (playwrightCore.format !== 'tar.gz' || playwrightCore.entrypoint !== 'node_modules/playwright-core/index.js') {
-    throw new Error('浏览器自动化内核模块格式不正确')
+  if (playwrightCore) {
+    if (!playwrightCore.required) throw new Error('浏览器自动化内核必须是必要组件')
+    if (playwrightCore.format !== 'tar.gz' || playwrightCore.entrypoint !== 'node_modules/playwright-core/index.js') {
+      throw new Error('浏览器自动化内核模块格式不正确')
+    }
+  } else if (!options.allowMissingPlaywrightCore) {
+    throw new Error('组件清单缺少必要的浏览器自动化内核')
   }
 
   const pythonRuntime = byName.get('python-runtime')
@@ -174,7 +181,11 @@ async function runRequiredModuleStartup(
     publish({ phase: 'checking', detail: '正在检查必要组件版本', progress: 0.02 })
     const moduleOptions = createModuleOptions(options)
     const artifacts = await fetchFunctionalModuleManifest(moduleOptions)
-    assertRequiredModuleArtifacts(artifacts)
+    const bundledPlaywrightCoreAvailable = options.allowBundledPlaywrightCore
+      && canUseBundledPlaywrightCore(options.rootDir)
+    assertRequiredModuleArtifacts(artifacts, {
+      allowMissingPlaywrightCore: bundledPlaywrightCoreAvailable,
+    })
     const artifactByName = new Map(artifacts.map((artifact) => [artifact.name, artifact]))
     const paths = getFunctionalModulePaths(options.rootDir)
     const totalWeight = Math.max(
@@ -187,6 +198,15 @@ async function runRequiredModuleStartup(
     publish({ phase: 'modules', detail: '正在准备必要组件', progress: MODULE_PROGRESS_START })
     for (const name of REQUIRED_MODULES) {
       const artifact = artifactByName.get(name)
+      if (!artifact && name === 'playwright-core' && bundledPlaywrightCoreAvailable) {
+        publish({
+          phase: 'modules',
+          detail: '浏览器自动化内核已随应用准备完成',
+          progress: MODULE_PROGRESS_END,
+          activeModule: name,
+        })
+        continue
+      }
       if (!artifact) throw new Error(`组件清单缺少必要组件: ${name}`)
 
       const moduleStart = completedWeight / totalWeight
@@ -345,6 +365,15 @@ function createModuleOptions(options: FunctionalModuleStartupOptions & { rootDir
     ...(options.arch ? { arch: options.arch } : {}),
     ...(options.clientVersion ? { clientVersion: options.clientVersion } : {}),
     ...(options.fetchImpl ? { fetchImpl: options.fetchImpl } : {}),
+  }
+}
+
+function canUseBundledPlaywrightCore(rootDir: string): boolean {
+  try {
+    resolvePlaywrightCoreEntrypoint({ isPackaged: true, modulesRoot: rootDir })
+    return true
+  } catch {
+    return false
   }
 }
 
