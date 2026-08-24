@@ -46,7 +46,7 @@
       "id": "nano-banana",
       "name": "copis_image",
       "displayName": "Copis 图片生成",
-      "description": "使用 Copis 内置的图片生成服务，登录 Copis Working 后即可生成图片。",
+      "description": "使用 Copis 内置的图片生成服务，登录 Copis 后即可生成图片。",
       "category": "media",
       "kind": "internal",
       "deletable": false,

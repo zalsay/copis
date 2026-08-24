@@ -378,11 +378,13 @@ function ledgerCreatedAt(entry: WorkingLedgerEntry): number {
 
 function normalizeReceiveChannel(value: unknown): WorkingReceiveChannelSettings | null {
   if (!isRecord(value)) return null
-  const channel = value.channel === 'feishu' ? 'feishu' : 'weixin'
+  const rawChannel = String(value.channel ?? '')
+  const channel: WorkingReceiveChannel = rawChannel === 'feishu' ? 'feishu' : (rawChannel === 'dingtalk' ? 'dingtalk' : 'weixin')
   return {
     channel,
     weixinBound: Boolean(value.weixin_bound ?? value.weixinBound),
     feishuBound: Boolean(value.feishu_bound ?? value.feishuBound),
+    dingtalkBound: Boolean(value.dingtalk_bound ?? value.dingtalkBound),
   }
 }
 

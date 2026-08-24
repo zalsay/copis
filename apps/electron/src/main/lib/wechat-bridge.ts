@@ -459,7 +459,7 @@ class WeChatBridge {
       const qrResp = await this.fetchQRCode()
       // qrcode_img_content 是扫码 URL，用 qrcode 库在 main 进程中生成二维码 data URL
       const scanUrl = qrResp.qrcode_img_content
-      const qrDataUrl = await QRCode.toDataURL(scanUrl, { width: 280, margin: 2 })
+      const qrDataUrl = await QRCode.toDataURL(scanUrl, { width: 280, margin: 2, errorCorrectionLevel: 'H' })
       this.updateStatus({
         status: 'waiting_scan',
         qrCodeData: qrDataUrl,

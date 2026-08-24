@@ -1,3 +1,5 @@
+import { stripBridgeEnvelope } from '@copis/session-core'
+
 /** 标题生成 Prompt */
 export const TITLE_PROMPT = '根据用户的第一条消息，生成一个简短的对话标题（10字以内）。只输出标题，不要有任何其他内容、标点符号或引号。如果消息内容过短或无明确主题，直接使用原始消息作为标题。\n\n用户消息：'
 
@@ -10,6 +12,15 @@ export const MAX_TITLE_LENGTH = 20
 const TITLE_PUNCTUATION = /^["'“”‘’「《]+|["'“”‘’」》]+$/g
 const MARKDOWN_PREFIX = /^(?:[#>*\-\d.)]\s*)+/
 const WHITESPACE = /\s+/g
+
+/**
+ * 清理用于标题生成的用户消息文本，去除飞书/微信等桥接信封与提示注释
+ */
+export function cleanUserMessageForTitle(userMessage: string): string {
+  if (!userMessage) return ''
+  const stripped = stripBridgeEnvelope(userMessage).trim()
+  return stripped || userMessage.trim()
+}
 
 /**
  * 从模型返回的原始标题内容中提取文本。
@@ -52,11 +63,12 @@ export function sanitizeGeneratedTitle(title: string | unknown): string | null {
  * 避免会话长期停留在“新 Agent 会话”。
  */
 export function createFallbackTitle(userMessage: string): string | null {
-  const firstLine = userMessage
+  const cleanMessage = cleanUserMessageForTitle(userMessage)
+  const firstLine = cleanMessage
     .split(/\r?\n/)
     .map((line) => line.trim())
     .find(Boolean)
-    ?? userMessage.trim()
+    ?? cleanMessage.trim()
 
   const cleaned = firstLine
     .replace(MARKDOWN_PREFIX, '')

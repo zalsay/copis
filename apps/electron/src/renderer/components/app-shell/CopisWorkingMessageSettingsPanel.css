@@ -4,29 +4,13 @@
   color: var(--foreground);
 }
 
-.copis-working-message-header {
-  display: flex;
-  align-items: start;
-  justify-content: space-between;
-  gap: 16px;
-  margin-bottom: 20px;
-}
-
-.copis-working-message-header h2 {
-  margin: 0;
-  font-size: 18px;
-  font-weight: 650;
-}
-
-.copis-working-message-header p,
 .copis-working-message-note {
-  margin: 6px 0 0;
+  margin: 14px 0 0;
   color: var(--muted-foreground);
   font-size: 13px;
   line-height: 1.55;
 }
 
-.copis-working-message-sync-state,
 .copis-working-message-binding {
   display: inline-flex;
   align-items: center;
@@ -73,10 +57,16 @@
   height: 40px;
   place-items: center;
   border-radius: 8px;
-  background: color-mix(in srgb, var(--primary) 15%, var(--muted));
-  color: var(--primary);
-  font-size: 15px;
-  font-weight: 700;
+  background: color-mix(in srgb, var(--muted) 40%, transparent);
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.copis-working-message-channel-logo {
+  width: 36px;
+  height: 36px;
+  object-fit: contain;
+  border-radius: 6px;
 }
 
 .copis-working-message-channel-copy {
@@ -104,21 +94,70 @@
   font-size: 12px;
 }
 
-.copis-working-message-channel-action {
-  min-height: 32px;
-  padding: 0 11px;
-  border: 1px solid color-mix(in srgb, var(--primary) 42%, transparent);
-  border-radius: 8px;
-  background: color-mix(in srgb, var(--primary) 14%, transparent);
-  color: var(--foreground);
-  font: inherit;
-  font-size: 12px;
-  cursor: pointer;
+.copis-working-message-channel-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
-.copis-working-message-channel-action:disabled {
+.copis-working-message-channel-rebind-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 32px;
+  padding: 0 12px;
+  border: 1px solid hsl(var(--border) / 0.8);
+  border-radius: 8px;
+  background: hsl(var(--card) / 0.7);
+  color: hsl(var(--foreground));
+  font: inherit;
+  font-size: 12px;
+  font-weight: 550;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.copis-working-message-channel-rebind-btn:hover {
+  border-color: color-mix(in srgb, var(--ui-primary) 50%, hsl(var(--border)));
+  background: hsl(var(--accent));
+  color: hsl(var(--foreground));
+}
+
+.copis-working-message-channel-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 32px;
+  padding: 0 12px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: var(--ui-primary);
+  color: var(--ui-primary-foreground);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 550;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.15s ease;
+}
+
+.copis-working-message-channel-action:hover:not(:disabled) {
+  opacity: 0.92;
+  filter: brightness(1.04);
+}
+
+.copis-working-message-channel-action.selected {
+  border: 1px solid color-mix(in srgb, var(--ui-primary) 35%, transparent);
+  background: var(--ui-primary-background);
+  color: var(--ui-primary);
+  font-weight: 600;
   cursor: default;
-  opacity: .56;
+  opacity: 1;
+}
+
+.copis-working-message-channel-action:disabled:not(.selected) {
+  cursor: not-allowed;
+  opacity: 0.56;
 }
 
 @media (max-width: 640px) {
@@ -126,8 +165,9 @@
     grid-template-columns: 40px minmax(0, 1fr);
   }
 
-  .copis-working-message-channel-action {
+  .copis-working-message-channel-actions {
     grid-column: 2;
     justify-self: start;
+    flex-wrap: wrap;
   }
 }

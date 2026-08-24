@@ -184,6 +184,7 @@ export function workingModelCatalogToOptions(
 
   return catalog.models.filter((model) => model.apiKeyConfigured).map((model) => {
     const category = model.categoryId ? categories.get(model.categoryId) : undefined
+    const categoryName = category?.name ?? channelName
     return {
       channelId: workingCustomModelChannelIdFor(model.id),
       channelName,
@@ -191,11 +192,11 @@ export function workingModelCatalogToOptions(
       modelName: model.name,
       provider: model.protocol === 'anthropic-messages' ? 'anthropic-compatible' : 'openai-responses',
       categoryId: model.categoryId,
-      categoryName: category?.name,
+      categoryName,
       groupKey: model.categoryId
         ? `${CUSTOM_CATEGORY_GROUP_KEY_PREFIX}${model.categoryId}`
         : UNCATEGORIZED_GROUP_KEY,
-      groupName: category?.name ?? '未分类',
+      groupName: categoryName,
       thinkingLevel: model.thinkingLevel,
       protocol: model.protocol,
     }

@@ -732,6 +732,14 @@ export interface AgentSessionMeta {
   permissionMode?: CopisPermissionMode
   /** 是否已在 Composer 中开启高级授权；未开启时 Git/SSH/curl/Python 命令会被拒绝 */
   advancedAuthorization?: boolean
+  /** 来源渠道类型（feishu / wechat / dingtalk / desktop / automation 等） */
+  source?: 'feishu' | 'wechat' | 'dingtalk' | 'desktop' | 'automation' | string
+  /** 是否为飞书专属会话（用于会话列表展示「飞书」标签并与飞书桥接路由关联） */
+  feishuDedicated?: boolean
+  /** 是否为微信专属会话（用于会话列表展示「微信」标签并与微信桥接路由关联） */
+  wechatDedicated?: boolean
+  /** 是否为钉钉专属会话（用于会话列表展示「钉钉」标签并与钉钉桥接路由关联） */
+  dingtalkDedicated?: boolean
   /** 来源定时任务 ID（该会话由定时任务自动创建/复用时标记，用于侧栏显示钟表图标 + 跳转设置） */
   sourceAutomationId?: string
   /**

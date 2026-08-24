@@ -12,7 +12,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 const DATABASE_FILE: &str = "expert-teams.db";
 const BUILTIN_SCHEMA_ID: &str = "ai-education-research-writer-reviewer";
-const BUILTIN_TEMPLATE_VERSION: i64 = 2;
+const BUILTIN_TEMPLATE_VERSION: i64 = 3;
 const MAX_SCHEMA_NAME: usize = 160;
 const MAX_NODE_ID: usize = 128;
 const MAX_WORKSPACE_SLUG: usize = 128;
@@ -125,7 +125,7 @@ fn builtin_schema_input() -> ExpertSchemaInput {
     ExpertSchemaInput {
         id: Some(BUILTIN_SCHEMA_ID.to_string()),
         name: "深入研究团队".to_string(),
-        description: Some("本地 Pi Agent 资料搜集、总结和结果检验 DAG 模板".to_string()),
+        description: Some("Copis 专家团队资料搜集、总结和结果检验".to_string()),
         nodes: vec![
             ExpertSchemaNodeInput {
                 id: "researcher".to_string(),

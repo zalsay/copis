@@ -23,6 +23,7 @@ export {
   extractMeta,
   isUserInputMessage,
   stripScheduledRunMarker,
+  stripBridgeEnvelope,
   type MessageGroup,
   type AssistantTurn,
   type MessageMeta,

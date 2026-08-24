@@ -112,6 +112,24 @@ export interface DingTalkTestResult {
   message: string
 }
 
+// ===== 钉钉 OAuth 扫码授权 =====
+
+export interface DingTalkOAuthExchangeInput {
+  authCode: string
+  clientId?: string
+  clientSecret?: string
+}
+
+export interface DingTalkOAuthExchangeResult {
+  success: boolean
+  accessToken?: string
+  openId?: string
+  unionId?: string
+  nick?: string
+  avatarUrl?: string
+  message?: string
+}
+
 // ===== IPC 通道常量 =====
 
 export const DINGTALK_IPC_CHANNELS = {
@@ -131,6 +149,11 @@ export const DINGTALK_IPC_CHANNELS = {
   GET_STATUS: 'dingtalk:get-status',
   /** Bridge 状态变化（主进程 → 渲染进程推送） */
   STATUS_CHANGED: 'dingtalk:status-changed',
+
+  // ===== OAuth 扫码授权 =====
+
+  /** 钉钉 OAuth Code 凭证换取与绑定 */
+  OAUTH_EXCHANGE_CODE: 'dingtalk:oauth-exchange-code',
 
   // ===== 多 Bot（v2）=====
 

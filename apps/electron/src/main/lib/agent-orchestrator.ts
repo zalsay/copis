@@ -77,7 +77,7 @@ import { isVisibleRunMessage } from './agent-run-message-visibility'
 import { resolvePiThinkingLevel } from './agent-thinking-level'
 import { resolvePiReasoningCapability } from './adapters/pi-model-registry'
 import { generateCodexTitle } from './adapters/pi-codex-title-generator'
-import { createFallbackTitle, sanitizeGeneratedTitle, TITLE_PROMPT } from './title-generation'
+import { createFallbackTitle, cleanUserMessageForTitle, sanitizeGeneratedTitle, TITLE_PROMPT } from './title-generation'
 import { filterAttachedPaths, getAttachedFileDirectories } from './attached-paths'
 import { getBrowserAgentPlanToolDenial, resolveBrowserAgentPermissionMode, resolveBrowserAgentSkillMentions } from './browser-agent-skill'
 import { agentSessionRewindService } from './agent-session-rewind-service'
@@ -253,7 +253,26 @@ function getRetryDelayMs(attempt: number, elapsedRetryDelayMs: number): number {
   return Math.min(remainingMs, Math.max(0, Math.round(base + jitter)))
 }
 
-/** 默认会话标题（用于判断是否需要自动生成） */
+/** 判断会话标题是否为默认/未命名/桥接初始标题（需要自动生成） */
+function isDefaultSessionTitle(title: string | undefined): boolean {
+  if (!title) return true
+  const trimmed = title.trim()
+  return (
+    trimmed === '新 Agent 会话' ||
+    trimmed === '新会话' ||
+    trimmed === '未命名会话' ||
+    trimmed === '飞书会话' ||
+    trimmed === '飞书专属会话' ||
+    trimmed === '微信会话' ||
+    trimmed === '微信专属会话' ||
+    trimmed === '钉钉会话' ||
+    trimmed === '钉钉专属会话' ||
+    trimmed.startsWith('<!--') ||
+    trimmed.startsWith('<bridge_context>')
+  )
+}
+
+/** 默认会话标题 */
 const DEFAULT_SESSION_TITLE = '新 Agent 会话'
 
 /** 默认模型 ID */
@@ -447,7 +466,8 @@ export class AgentOrchestrator {
    * 使用 Provider 适配器系统，支持所有渠道。任何错误返回 null。
    */
   async generateTitle(input: AgentGenerateTitleInput, signal?: AbortSignal): Promise<string | null> {
-    const { userMessage, channelId, modelId } = input
+    const { channelId, modelId } = input
+    const userMessage = cleanUserMessageForTitle(input.userMessage)
     if (signal?.aborted) return null
     console.log('[Agent 标题生成] 开始生成标题:', { channelId, modelId, userMessage: userMessage.slice(0, 50) })
 
@@ -558,14 +578,15 @@ export class AgentOrchestrator {
     if (signal?.aborted) return
     try {
       const meta = getAgentSessionMeta(sessionId)
-      if (!meta || meta.title !== DEFAULT_SESSION_TITLE) return
+      if (!meta || !isDefaultSessionTitle(meta.title)) return
 
-      const title = await this.generateTitle({ userMessage, channelId, modelId }, signal)
+      const cleanUserMessage = cleanUserMessageForTitle(userMessage)
+      const title = await this.generateTitle({ userMessage: cleanUserMessage, channelId, modelId }, signal)
       if (!title || signal?.aborted) return
 
       // 标题请求是异步的；请求期间用户可能已手动重命名，不能用旧结果覆盖。
       const latestMeta = getAgentSessionMeta(sessionId)
-      if (!latestMeta || latestMeta.title !== DEFAULT_SESSION_TITLE) return
+      if (!latestMeta || !isDefaultSessionTitle(latestMeta.title)) return
 
       updateAgentSessionMeta(sessionId, { title })
       callbacks.onTitleUpdated(title)

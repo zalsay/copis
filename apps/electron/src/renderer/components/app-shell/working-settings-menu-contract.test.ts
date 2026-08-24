@@ -13,7 +13,7 @@ describe('Working 设置菜单契约', () => {
   test('Given Working 设置 When 读取菜单定义 Then 保留旧菜单并包含四个迁移页面', () => {
     const requiredSections = [
       ['settings', '账户设置'],
-      ['messages', '工作消息接收方式'],
+      ['messages', 'App 连接器'],
       ['orders', '我的订单'],
       ['tutorial', '查看使用教程'],
       ['voice-input', '语音输入'],
@@ -59,6 +59,41 @@ describe('Working 设置菜单契约', () => {
     expect(existsSync(join(import.meta.dir, 'CopisWorkingOrdersPanel.css'))).toBe(true)
     expect(panelSource).toContain('CopisWorkingMessageSettingsPanel')
     expect(panelSource).toContain('CopisWorkingOrdersPanel')
+  })
+
+  test('Given App 连接器页面 When 渲染设置面板 Then 不重复包含外层标题与描述且使用微信和飞书 logo 并支持重新绑定功能', () => {
+    const messagePanelSource = readFileSync(join(import.meta.dir, 'CopisWorkingMessageSettingsPanel.tsx'), 'utf8')
+    expect(messagePanelSource).not.toContain('<h2>App 连接器</h2>')
+    expect(messagePanelSource).not.toContain('<h2>工作消息接收方式</h2>')
+    expect(messagePanelSource).not.toContain('选择 Working 工作消息的接收渠道，变更会同步到当前 Working 账户。')
+    expect(messagePanelSource).toContain('assets/bots/wechat.png')
+    expect(messagePanelSource).toContain('assets/bots/feishu.png')
+    expect(messagePanelSource).toContain('assets/bots/dingding.png')
+    expect(messagePanelSource).toContain('copis-working-message-channel-logo')
+    expect(messagePanelSource).toContain('copis-working-message-channel-rebind-btn')
+    expect(messagePanelSource).toContain('重新绑定')
+    expect(messagePanelSource).toContain('getWorkingSettingsSnapshot')
+  })
+
+  test('Given 我的订单页面 When 渲染设置面板 Then 不重复包含多余 header 标题', () => {
+    const ordersPanelSource = readFileSync(join(import.meta.dir, 'CopisWorkingOrdersPanel.tsx'), 'utf8')
+    expect(ordersPanelSource).not.toContain('<h2>我的订单</h2>')
+    expect(ordersPanelSource).not.toContain('copis-working-orders-header')
+  })
+
+  test('Given Working 设置顶栏 When 渲染操作区 Then 刷新按钮位于退出按钮左侧且不局限于账户设置', () => {
+    const freshPanelSource = readFileSync(join(import.meta.dir, 'CopisWorkingSettingsPanel.tsx'), 'utf8')
+    const actionsStart = freshPanelSource.indexOf('<div className="copis-working-settings-actions">')
+    const actionsEnd = freshPanelSource.indexOf('</header>', actionsStart)
+    expect(actionsStart).toBeGreaterThanOrEqual(0)
+    expect(actionsEnd).toBeGreaterThan(actionsStart)
+
+    const actionsSource = freshPanelSource.slice(actionsStart, actionsEnd)
+    const refreshIndex = actionsSource.indexOf("<span>{loading ? '同步中...' : '刷新'}</span>")
+    const logoutIndex = actionsSource.indexOf("<span>{loggingOut ? '退出中...' : '退出'}</span>")
+    expect(refreshIndex).toBeGreaterThanOrEqual(0)
+    expect(logoutIndex).toBeGreaterThan(refreshIndex)
+    expect(actionsSource).not.toContain("{activeSection === 'settings' && (\n                <button type=\"button\" onClick=")
   })
 
   test('Given 恢复账户总览 When 渲染钻石和流水卡片 Then JSX 使用的视觉类都有对应样式', () => {

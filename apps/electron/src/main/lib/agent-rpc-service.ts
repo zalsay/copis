@@ -822,7 +822,20 @@ export function finalizeAgentRpcRun(input: {
     stoppedByUser: input.stoppedByUser,
   }
   let title: string | undefined
-  if (pending && current.title === '新 Agent 会话') {
+  const isDefaultTitle = !current.title
+    || current.title === '新 Agent 会话'
+    || current.title === '新会话'
+    || current.title === '未命名会话'
+    || current.title === '飞书会话'
+    || current.title === '飞书专属会话'
+    || current.title === '微信会话'
+    || current.title === '微信专属会话'
+    || current.title === '钉钉会话'
+    || current.title === '钉钉专属会话'
+    || current.title.startsWith('<!--')
+    || current.title.startsWith('<bridge_context>')
+
+  if (pending && isDefaultTitle) {
     title = createFallbackTitle(pending.userMessage) ?? undefined
     if (title) updates.title = title
   }

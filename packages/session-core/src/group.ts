@@ -263,14 +263,45 @@ export function stripScheduledRunMarker(text: string): string {
 }
 
 /**
+ * 剥除飞书/微信等 Bridge 协议注入的包装 XML 块与 HTML 注释，
+ * 还原纯净的用户真实提问文本。
+ */
+export function stripBridgeEnvelope(text: string): string {
+  if (!text) return ''
+
+  // 1. 先剥除 HTML 注释 (如 BRIDGE_USER_MESSAGE_PRELUDE 注释，防止注释内的示例标签干扰后续匹配)
+  let result = text.replace(/<!--[\s\S]*?-->/g, '')
+
+  // 2. 如果存在 <user_message>...</user_message>，优先提取其中的真实用户文本
+  const userMessageMatch = result.match(/<user_message>\n?([\s\S]*?)\n?<\/user_message>/)
+  if (userMessageMatch && userMessageMatch[1]?.trim()) {
+    return userMessageMatch[1].trim()
+  }
+
+  // 3. 剥除 bridge_context, interactive_card, group_extra, quoted_message, attached_files 等元数据标签
+  result = result.replace(/<bridge_context>[\s\S]*?<\/bridge_context>/g, '')
+  result = result.replace(/<interactive_card>[\s\S]*?<\/interactive_card>/g, '')
+  result = result.replace(/<group_extra>[\s\S]*?<\/group_extra>/g, '')
+  result = result.replace(/<quoted_message[^>]*>[\s\S]*?<\/quoted_message>/g, '')
+  result = result.replace(/<attached_files>[\s\S]*?<\/attached_files>/g, '')
+  result = result.replace(/<\/?user_message>/g, '')
+
+  return result.trim()
+}
+
+/**
  * 从 MessageGroup 中提取纯文本预览，供迷你地图 / outline 使用
  */
 export function getGroupPreview(group: MessageGroup): string {
   if (group.type === 'user') {
-    return stripScheduledRunMarker(extractUserText(group.message) ?? '')
-      .replace(/<attached_files>[\s\S]*?<\/attached_files>\n*/, '')
+    const rawText = extractUserText(group.message) ?? ''
+    const withoutSchedule = stripScheduledRunMarker(rawText)
+    const cleanedText = stripBridgeEnvelope(withoutSchedule)
+    return cleanedText
+      .replace(/<attached_files>[\s\S]*?<\/attached_files>\n*/g, '')
       .replace(/<quoted_file[^>]*>[\s\S]*?<\/quoted_file>\n*/g, '')
       .replace(/<quoted_context[^>]*>[\s\S]*?<\/quoted_context>\n*/g, '')
+      .trim()
       .slice(0, 200)
   }
   if (group.type === 'system') {

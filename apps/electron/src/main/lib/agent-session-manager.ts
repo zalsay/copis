@@ -252,9 +252,177 @@ function writeIndex(index: AgentSessionsIndex): void {
 }
 
 /**
+ * 确保默认工作区包含飞书专属会话
+ */
+export function ensureDefaultFeishuSession(): AgentSessionMeta | null {
+  const defaultWs = getAgentWorkspace('default')
+  if (!defaultWs) return null
+
+  const index = readIndex()
+  const existing = index.sessions.find(
+    (s) => s.workspaceId === defaultWs.id && (s.source === 'feishu' || s.feishuDedicated || s.title === '飞书专属会话' || s.title === '飞书会话'),
+  )
+  if (existing) {
+    let changed = false
+    if (existing.source !== 'feishu') {
+      existing.source = 'feishu'
+      changed = true
+    }
+    if (!existing.feishuDedicated) {
+      existing.feishuDedicated = true
+      changed = true
+    }
+    if (changed) {
+      writeIndex(index)
+    }
+    return existing
+  }
+
+  const settings = getSettings()
+  const defaultThinkingLevel = settings.defaultOpenAIThinkingLevel
+    ?? resolvePiThinkingLevel(settings, undefined, 'openai-codex')
+  const now = Date.now()
+  const meta: AgentSessionMeta = {
+    id: randomUUID(),
+    title: '飞书专属会话',
+    channelId: settings.agentChannelId,
+    modelId: settings.agentModelId,
+    workspaceId: defaultWs.id,
+    source: 'feishu',
+    feishuDedicated: true,
+    agentCwdMode: 'project',
+    agentRuntime: 'pi',
+    reasoningLevel: defaultThinkingLevel,
+    workingMode: 'fast',
+    createdAt: now,
+    updatedAt: now,
+  }
+
+  ensureAgentWorkspaceWritableRoot(defaultWs)
+
+  index.sessions.push(meta)
+  writeIndex(index)
+  console.log(`[Agent 会话] 已在默认项目创建飞书专属会话: ${meta.id}`)
+  return meta
+}
+
+/**
+ * 确保默认工作区包含微信专属会话
+ */
+export function ensureDefaultWeChatSession(): AgentSessionMeta | null {
+  const defaultWs = getAgentWorkspace('default')
+  if (!defaultWs) return null
+
+  const index = readIndex()
+  const existing = index.sessions.find(
+    (s) => s.workspaceId === defaultWs.id && (s.source === 'wechat' || s.wechatDedicated || s.title === '微信专属会话' || s.title === '微信会话'),
+  )
+  if (existing) {
+    let changed = false
+    if (existing.source !== 'wechat') {
+      existing.source = 'wechat'
+      changed = true
+    }
+    if (!existing.wechatDedicated) {
+      existing.wechatDedicated = true
+      changed = true
+    }
+    if (changed) {
+      writeIndex(index)
+    }
+    return existing
+  }
+
+  const settings = getSettings()
+  const defaultThinkingLevel = settings.defaultOpenAIThinkingLevel
+    ?? resolvePiThinkingLevel(settings, undefined, 'openai-codex')
+  const now = Date.now()
+  const meta: AgentSessionMeta = {
+    id: randomUUID(),
+    title: '微信专属会话',
+    channelId: settings.agentChannelId,
+    modelId: settings.agentModelId,
+    workspaceId: defaultWs.id,
+    source: 'wechat',
+    wechatDedicated: true,
+    agentCwdMode: 'project',
+    agentRuntime: 'pi',
+    reasoningLevel: defaultThinkingLevel,
+    workingMode: 'fast',
+    createdAt: now,
+    updatedAt: now,
+  }
+
+  ensureAgentWorkspaceWritableRoot(defaultWs)
+
+  index.sessions.push(meta)
+  writeIndex(index)
+  console.log(`[Agent 会话] 已在默认项目创建微信专属会话: ${meta.id}`)
+  return meta
+}
+
+/**
+ * 确保默认工作区包含钉钉专属会话
+ */
+export function ensureDefaultDingTalkSession(): AgentSessionMeta | null {
+  const defaultWs = getAgentWorkspace('default')
+  if (!defaultWs) return null
+
+  const index = readIndex()
+  const existing = index.sessions.find(
+    (s) => s.workspaceId === defaultWs.id && (s.source === 'dingtalk' || s.dingtalkDedicated || s.title === '钉钉专属会话' || s.title === '钉钉会话'),
+  )
+  if (existing) {
+    let changed = false
+    if (existing.source !== 'dingtalk') {
+      existing.source = 'dingtalk'
+      changed = true
+    }
+    if (!existing.dingtalkDedicated) {
+      existing.dingtalkDedicated = true
+      changed = true
+    }
+    if (changed) {
+      writeIndex(index)
+    }
+    return existing
+  }
+
+  const settings = getSettings()
+  const defaultThinkingLevel = settings.defaultOpenAIThinkingLevel
+    ?? resolvePiThinkingLevel(settings, undefined, 'openai-codex')
+  const now = Date.now()
+  const meta: AgentSessionMeta = {
+    id: randomUUID(),
+    title: '钉钉专属会话',
+    channelId: settings.agentChannelId,
+    modelId: settings.agentModelId,
+    workspaceId: defaultWs.id,
+    source: 'dingtalk',
+    dingtalkDedicated: true,
+    agentCwdMode: 'project',
+    agentRuntime: 'pi',
+    reasoningLevel: defaultThinkingLevel,
+    workingMode: 'fast',
+    createdAt: now,
+    updatedAt: now,
+  }
+
+  ensureAgentWorkspaceWritableRoot(defaultWs)
+
+  index.sessions.push(meta)
+  writeIndex(index)
+  console.log(`[Agent 会话] 已在默认项目创建钉钉专属会话: ${meta.id}`)
+  return meta
+}
+
+/**
  * 获取所有会话（按 updatedAt 降序）
  */
 export function listAgentSessions(): AgentSessionMeta[] {
+  ensureDefaultFeishuSession()
+  ensureDefaultWeChatSession()
+  ensureDefaultDingTalkSession()
   const index = readIndex()
   return index.sessions.sort((a, b) => b.updatedAt - a.updatedAt)
 }
@@ -304,6 +472,7 @@ export function createAgentSession(
   agentCwdMode?: AgentCwdMode,
   expertTeamSession?: AgentExpertTeamSession,
   expertTeamSetup?: boolean,
+  extraOptions?: { source?: string; feishuDedicated?: boolean; wechatDedicated?: boolean; dingtalkDedicated?: boolean; sourceAutomationId?: string },
 ): AgentSessionMeta {
   const index = readIndex()
   const now = Date.now()
@@ -319,6 +488,11 @@ export function createAgentSession(
     workspaceId,
     ...(expertTeamSession ? { expertTeamSession } : {}),
     ...(expertTeamSetup ? { expertTeamSetup: true } : {}),
+    ...(extraOptions?.source ? { source: extraOptions.source } : {}),
+    ...(extraOptions?.feishuDedicated ? { feishuDedicated: true } : {}),
+    ...(extraOptions?.wechatDedicated ? { wechatDedicated: true } : {}),
+    ...(extraOptions?.dingtalkDedicated ? { dingtalkDedicated: true } : {}),
+    ...(extraOptions?.sourceAutomationId ? { sourceAutomationId: extraOptions.sourceAutomationId } : {}),
     agentCwdMode: workspaceId ? agentCwdMode ?? 'project' : undefined,
     agentRuntime,
     // 新会话继承已持久化的全局思考偏好，之后仍可按会话单独调整。

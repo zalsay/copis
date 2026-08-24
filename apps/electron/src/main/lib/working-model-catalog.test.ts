@@ -1,10 +1,17 @@
 import { describe, expect, mock, test } from 'bun:test'
 
 mock.module('electron', () => ({
+  app: {
+    isPackaged: true,
+    getPath: () => '/mock/app/support',
+  },
   safeStorage: {
     isEncryptionAvailable: () => false,
     encryptString: (value: string) => Buffer.from(value),
     decryptString: (value: Buffer) => value.toString('utf8'),
+  },
+  shell: {
+    openExternal: async () => undefined,
   },
 }))
 
@@ -15,6 +22,7 @@ const {
   getWorkingModelCatalog,
   redactWorkingModelCatalog,
   saveWorkingModelCatalog,
+  testWorkingCustomModelConnection,
 } = await import('./working-model-catalog')
 
 describe('VIP 自定义模型目录主进程门禁', () => {
@@ -88,5 +96,25 @@ describe('VIP 自定义模型目录主进程门禁', () => {
       },
     })
     expect(redactWorkingModelCatalog(settings, true, 'account-1')).not.toHaveProperty('workingModelApiKeys')
+  })
+
+  test('Given 非 VIP 用户 When 测试自定义模型连接 Then 统一抛出 vip_required', async () => {
+    await expect(testWorkingCustomModelConnection({
+      protocol: 'openai-responses',
+      baseUrl: 'https://api.openai.com/v1',
+      modelId: 'gpt-4o',
+      apiKey: 'sk-test',
+    }, false)).rejects.toThrow('仅 VIP 用户可使用模型管理')
+  })
+
+  test('Given 未提供 API Key 且未保存过密钥 When 测试连接 Then 返回提示错误', async () => {
+    const result = await testWorkingCustomModelConnection({
+      protocol: 'openai-responses',
+      baseUrl: 'https://api.openai.com/v1',
+      modelId: 'gpt-4o',
+    }, true, 'account-1')
+
+    expect(result.success).toBe(false)
+    expect(result.message).toContain('请先填写 API 密钥')
   })
 })

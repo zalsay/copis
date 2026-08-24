@@ -32,10 +32,11 @@ import {
   extractMeta,
   isUserInputMessage,
   stripScheduledRunMarker,
+  stripBridgeEnvelope,
   type MessageGroup,
   type AssistantTurn,
 } from '@copis/session-core'
-export { groupIntoTurns, getGroupPreview, extractUserText } from '@copis/session-core'
+export { groupIntoTurns, getGroupPreview, extractUserText, stripBridgeEnvelope } from '@copis/session-core'
 export type { MessageGroup, AssistantTurn } from '@copis/session-core'
 import { DurationBadge } from './AgentMessages'
 import {
@@ -742,27 +743,40 @@ export interface AttachedFileRef {
 /** 解析的引用文件 */
 export type QuotedFileRef = ParsedQuotedSelectionRef
 
-/** 解析消息中的 <attached_files>、<quoted_file> 和 <quoted_context> 块，返回文件列表、引用列表和剩余文本 */
+/** 解析消息中的 <attached_files>、<quoted_file>、<quoted_context> 和飞书桥接 XML 块，返回文件列表、引用列表和干净的纯文本 */
 export function parseAttachedFiles(content: string): { files: AttachedFileRef[]; quotes: QuotedFileRef[]; text: string } {
   const parsedQuotes = parseQuotedSelectionRefs(content)
-  const quotes: QuotedFileRef[] = parsedQuotes.quotes
+  const quotes: QuotedFileRef[] = [...parsedQuotes.quotes]
 
   const regex = /<attached_files>\n?([\s\S]*?)\n?<\/attached_files>\n*/
   const match = content.match(regex)
-  if (!match) {
-    return { files: [], quotes, text: parsedQuotes.text }
-  }
-
   const files: AttachedFileRef[] = []
-  const lines = match[1]!.split('\n')
-  for (const line of lines) {
-    const lineMatch = line.match(/^-\s+(.+?):\s+(.+)$/)
-    if (lineMatch) {
-      files.push({ filename: lineMatch[1]!.trim(), path: lineMatch[2]!.trim() })
+  if (match) {
+    const lines = match[1]!.split('\n')
+    for (const line of lines) {
+      const lineMatch = line.match(/^-\s+(.+?):\s+(.+)$/)
+      if (lineMatch) {
+        files.push({ filename: lineMatch[1]!.trim(), path: lineMatch[2]!.trim() })
+      }
     }
   }
 
-  const text = parsedQuotes.text.replace(regex, '').trim()
+  // 提取飞书等桥接引用消息 <quoted_message> 块作为 quote
+  const quotedMessageRegex = /<quoted_message(?:\s+[^>]*)?>\n?([\s\S]*?)\n?<\/quoted_message>/g
+  let qMatch: RegExpExecArray | null
+  while ((qMatch = quotedMessageRegex.exec(content)) !== null) {
+    if (qMatch[1]?.trim()) {
+      quotes.push({
+        path: 'feishu-quote',
+        filename: '引用回复',
+        sourceType: 'file',
+        label: qMatch[1].trim().slice(0, 50),
+      })
+    }
+  }
+
+  const textWithoutAttachments = parsedQuotes.text.replace(regex, '')
+  const text = stripBridgeEnvelope(textWithoutAttachments)
   return { files, quotes, text }
 }
 

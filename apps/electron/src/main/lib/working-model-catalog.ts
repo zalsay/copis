@@ -10,9 +10,11 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { safeStorage } from 'electron'
 import type {
   Channel,
+  ChannelTestResult,
   WorkingCustomModel,
   WorkingModelCatalog,
   WorkingModelCatalogSaveInput,
+  WorkingTestCustomModelInput,
   WorkingUser,
 } from '@copis/shared'
 import {
@@ -25,6 +27,7 @@ import {
   workingCustomModelProtocolToProvider,
 } from '@copis/shared'
 import type { AppSettings } from '../../types'
+import { testChannelDirect } from './channel-manager'
 import { getWorkingModelCatalogPath } from './config-paths'
 import { getSettings, updateSettings } from './settings-service'
 
@@ -345,4 +348,47 @@ export function assertWorkingCustomModelSelection(
   if (modelId !== undefined && modelId !== runtime.model.modelId) {
     throw new Error('自定义模型 ID 已更新，请刷新模型管理后重试')
   }
+}
+
+/**
+ * 测试自定义模型连接。
+ *
+ * 支持直接传入明文 API Key 进行即时测试，也支持读取已安全保存的本地密钥进行连通性测试。
+ */
+export async function testWorkingCustomModelConnection(
+  input: WorkingTestCustomModelInput,
+  isVip: boolean,
+  ownerId?: string,
+): Promise<ChannelTestResult> {
+  assertWorkingModelCatalogVip(isVip)
+
+  let apiKey = input.apiKey?.trim()
+  if (!apiKey && input.id && ownerId) {
+    const settings = getSettings()
+    const account = readWorkingModelCatalogAccount(settings, ownerId.trim()).account
+    const encryptedKey = account?.apiKeys[input.id]
+    if (encryptedKey) {
+      apiKey = decryptApiKey(encryptedKey)
+    }
+  }
+
+  if (!apiKey) {
+    return { success: false, message: '请先填写 API 密钥' }
+  }
+
+  if (!input.baseUrl?.trim()) {
+    return { success: false, message: '请填写服务地址 (Base URL)' }
+  }
+
+  if (!input.modelId?.trim()) {
+    return { success: false, message: '请填写模型标识 (Model ID)' }
+  }
+
+  const provider = workingCustomModelProtocolToProvider(input.protocol)
+  return testChannelDirect({
+    provider,
+    baseUrl: input.baseUrl.trim(),
+    apiKey,
+    modelId: input.modelId.trim(),
+  })
 }

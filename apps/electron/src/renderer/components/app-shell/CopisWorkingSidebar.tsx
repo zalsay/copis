@@ -154,7 +154,7 @@ export function CopisWorkingSidebar({ width, noTransition = false }: CopisWorkin
       if (!state.authenticated) setWorkingHistorySelection(null)
     } catch (error) {
       console.error('[Copis Working] 加载账号状态失败:', error)
-      toast.error(error instanceof Error ? error.message : 'Working 数据加载失败')
+      toast.error(error instanceof Error ? error.message : 'Copis 数据加载失败')
     } finally {
       setLoading(false)
     }
@@ -199,7 +199,7 @@ export function CopisWorkingSidebar({ width, noTransition = false }: CopisWorkin
       setAuth(await window.electronAPI.logoutWorking())
       setWorkingHistorySelection(null)
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : '退出 Working 失败')
+      toast.error(error instanceof Error ? error.message : '退出 Copis 失败')
     } finally {
       setBusy(false)
     }
@@ -454,15 +454,42 @@ export function CopisWorkingSidebar({ width, noTransition = false }: CopisWorkin
               const streamState = streamingStates.get(session.id)
               const sessionTitle = session.title || '未命名会话'
               const isExpertTeamSession = session.expertTeamSession !== undefined || session.expertTeamSetup === true
+              const isFeishuSession = session.source === 'feishu'
+                || session.feishuDedicated === true
+                || (session as unknown as { sourceChannel?: string }).sourceChannel === 'feishu'
+                || sessionTitle === '飞书专属会话'
+                || sessionTitle === '飞书会话'
+                || sessionTitle.startsWith('飞书')
+              const isWeChatSession = session.source === 'wechat'
+                || session.wechatDedicated === true
+                || (session as unknown as { sourceChannel?: string }).sourceChannel === 'wechat'
+                || sessionTitle === '微信专属会话'
+                || sessionTitle === '微信会话'
+                || sessionTitle.startsWith('微信')
+              const isDingTalkSession = session.source === 'dingtalk'
+                || session.dingtalkDedicated === true
+                || (session as unknown as { sourceChannel?: string }).sourceChannel === 'dingtalk'
+                || sessionTitle === '钉钉专属会话'
+                || sessionTitle === '钉钉会话'
+                || sessionTitle.startsWith('钉钉')
               const displaySessionTitle = isExpertTeamSession
                 ? sessionTitle.replace(/^专家团队\s*·\s*/, '')
+                : isFeishuSession
+                ? sessionTitle.replace(/^(?:飞书专属会话|飞书会话|飞书\s*·\s*|\[飞书\]\s*)/, (m) => (m === '飞书专属会话' || m === '飞书会话') ? '专属会话' : '')
+                : isWeChatSession
+                ? sessionTitle.replace(/^(?:微信专属会话|微信会话|微信\s*·\s*|\[微信\]\s*)/, (m) => (m === '微信专属会话' || m === '微信会话') ? '专属会话' : '')
+                : isDingTalkSession
+                ? sessionTitle.replace(/^(?:钉钉专属会话|钉钉会话|钉钉\s*·\s*|\[钉钉\]\s*)/, (m) => (m === '钉钉专属会话' || m === '钉钉会话') ? '专属会话' : '')
                 : sessionTitle
               return (
                 <div key={session.id} className={cn('copis-working-conversation-row', session.id === currentSessionId && 'active')}>
                   <button type="button" className="copis-working-conversation-main" onClick={() => selectLocalSession(session.id, workspace.id, sessionTitle)}>
                     <span className="copis-working-conversation-label">
                       {isExpertTeamSession && <small className="ui-primary-badge">{session.expertTeamSession ? '专家团队' : '组建中'}</small>}
-                      <span>{displaySessionTitle}</span>
+                      {isFeishuSession && <small className="ui-feishu-badge">飞书</small>}
+                      {isWeChatSession && <small className="ui-wechat-badge">微信</small>}
+                      {isDingTalkSession && <small className="ui-dingtalk-badge">钉钉</small>}
+                      <span>{displaySessionTitle || sessionTitle}</span>
                     </span>
                   </button>
                   <span className="copis-working-conversation-meta">
@@ -542,7 +569,7 @@ export function CopisWorkingSidebar({ width, noTransition = false }: CopisWorkin
   return (
     <aside className={cn('copis-working-sidebar', !noTransition && 'transition-width')} style={{ width }}>
       <div className="copis-working-sidebar-body">
-        <nav className="copis-working-sidebar-nav" aria-label="Working 菜单">
+        <nav className="copis-working-sidebar-nav" aria-label="Copis 菜单">
           <button type="button" className="copis-working-menu-button" onClick={() => void handleNewSession()}>
             <Plus aria-hidden="true" />
             <span>新任务</span>
@@ -671,7 +698,7 @@ export function CopisWorkingSidebar({ width, noTransition = false }: CopisWorkin
             <span className="copis-working-account-copy"><strong>设置</strong><small>{accountName}</small></span>
             <span className="copis-working-account-balance" title="当前积分" aria-label={`当前积分 ${tokenBalance}`}><Gem aria-hidden="true" /><b>{tokenBalance}</b></span>
           </button>
-          <button type="button" className="copis-working-logout" aria-label="退出 Working" title="退出 Working" disabled={busy || loading} onClick={() => void handleLogout()}>
+          <button type="button" className="copis-working-logout" aria-label="退出 Copis" title="退出 Copis" disabled={busy || loading} onClick={() => void handleLogout()}>
             <LogOut aria-hidden="true" />
           </button>
         </div>

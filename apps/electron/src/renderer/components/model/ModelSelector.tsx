@@ -68,10 +68,10 @@ function groupModelOptions(
   }
 
   for (const option of customOptions) {
-    const key = option.groupKey ?? option.categoryId ?? `custom:${option.modelId}`
+    const key = option.groupKey ?? option.categoryId ?? 'custom:default'
     const group = groups.get(key) ?? {
       key,
-      name: option.groupName ?? option.categoryName ?? '未分类',
+      name: option.groupName ?? option.categoryName ?? '自定义模型',
       isCustom: true,
       options: [],
     }

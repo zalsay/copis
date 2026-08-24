@@ -353,7 +353,7 @@ class WorkingHistoryParser {
   }
 
   private addError(message: string, timestamp: unknown, stopped = false): void {
-    const text = message.trim() || (stopped ? '运行已中断' : 'Working 运行失败')
+    const text = message.trim() || (stopped ? '运行已中断' : 'Copis 运行失败')
     this.messageIndex += 1
     this.messages.push(makeAssistant([], this.messageIndex, timestampValue(timestamp), this.sessionId, undefined, text))
     this.status = stopped ? 'stopped' : 'failed'

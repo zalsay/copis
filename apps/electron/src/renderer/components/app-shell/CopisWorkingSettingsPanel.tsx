@@ -38,6 +38,7 @@ import {
 import {
   closeWorkingPaymentAtom,
   openWorkingPaymentAtom,
+  requestWorkingPaymentRefreshAtom,
   workingPaymentNoticeAtom,
   workingPaymentRefreshAtom,
 } from '@/atoms/working-payment-atoms'
@@ -79,13 +80,13 @@ export const WORKING_SETTINGS_MENU: readonly WorkingSettingsMenuItem[] = [
   {
     id: 'model-management',
     label: '模型管理',
-    description: '配置 VIP 专属的自定义模型、协议和 Composer 分类。',
+    description: '配置 VIP 专属的私有大模型与 API 密钥。',
     icon: SlidersHorizontal,
   },
   {
     id: 'messages',
-    label: '工作消息接收方式',
-    description: '选择 Working 工作消息的接收渠道并查看绑定状态。',
+    label: 'App 连接器',
+    description: '选择 Copis 工作消息的接收渠道并查看绑定状态。',
     icon: MessageSquare,
   },
   {
@@ -146,6 +147,7 @@ export function CopisWorkingSettingsPanel({ onClose }: CopisWorkingSettingsPanel
   const paymentRefresh = useAtomValue(workingPaymentRefreshAtom)
   const paymentNotice = useAtomValue(workingPaymentNoticeAtom)
   const setPaymentNotice = useSetAtom(workingPaymentNoticeAtom)
+  const requestPaymentRefresh = useSetAtom(requestWorkingPaymentRefreshAtom)
   const paymentRefreshRef = React.useRef(paymentRefresh)
   const [settings, setSettings] = React.useState<WorkingSettingsSnapshot | null>(null)
   const [activeSection, setActiveSection] = useAtom(workingSettingsSectionAtom)
@@ -175,12 +177,17 @@ export function CopisWorkingSettingsPanel({ onClose }: CopisWorkingSettingsPanel
         backendUrl: current?.backendUrl ?? '',
       }))
     } catch (loadError) {
-      console.error('[Working 设置] 加载账户设置失败:', loadError)
-      setError(loadError instanceof Error ? loadError.message : '加载 Working 设置失败')
+      console.error('[Copis 设置] 加载账户设置失败:', loadError)
+      setError(loadError instanceof Error ? loadError.message : '加载 Copis 设置失败')
     } finally {
       setLoading(false)
     }
   }, [setAuthState, setWorkingVipStatus])
+
+  const handleRefresh = React.useCallback(async (): Promise<void> => {
+    requestPaymentRefresh()
+    await loadSettings()
+  }, [loadSettings, requestPaymentRefresh])
 
   React.useEffect(() => {
     void loadSettings()
@@ -276,7 +283,7 @@ export function CopisWorkingSettingsPanel({ onClose }: CopisWorkingSettingsPanel
     <div className="copis-working-settings-view">
       <div className="copis-working-settings-shell">
         <aside className="copis-working-settings-sidebar">
-          <nav className="copis-working-settings-nav" aria-label="Working 设置菜单">
+          <nav className="copis-working-settings-nav" aria-label="Copis 设置菜单">
             <button type="button" className="copis-working-settings-nav-button" onClick={onClose}>
               <ArrowLeft aria-hidden="true" />
               <span>返回对话</span>
@@ -320,12 +327,10 @@ export function CopisWorkingSettingsPanel({ onClose }: CopisWorkingSettingsPanel
                   <span>{checkingIn ? '签到中...' : settings?.hasCheckedIn ? '已签到' : '每日签到'}</span>
                 </button>
               )}
-              {activeSection === 'settings' && (
-                <button type="button" onClick={() => void loadSettings()} disabled={loading || loggingOut}>
-                  <RefreshCw aria-hidden="true" className={loading ? 'spinning' : undefined} />
-                  <span>{loading ? '同步中...' : '刷新'}</span>
-                </button>
-              )}
+              <button type="button" onClick={() => void handleRefresh()} disabled={loading || loggingOut}>
+                <RefreshCw aria-hidden="true" className={loading ? 'spinning' : undefined} />
+                <span>{loading ? '同步中...' : '刷新'}</span>
+              </button>
               <button type="button" className="danger" onClick={() => void handleLogout()} disabled={loading || loggingOut}>
                 <LogOut aria-hidden="true" />
                 <span>{loggingOut ? '退出中...' : '退出'}</span>
@@ -362,6 +367,7 @@ export function CopisWorkingSettingsPanel({ onClose }: CopisWorkingSettingsPanel
               <CopisWorkingMessageSettingsPanel
                 settings={settings?.receiveChannel ?? null}
                 onSettingsChange={handleReceiveChannelChange}
+                onRefresh={loadSettings}
               />
             )}
             {activeSection === 'orders' && <CopisWorkingOrdersPanel />}

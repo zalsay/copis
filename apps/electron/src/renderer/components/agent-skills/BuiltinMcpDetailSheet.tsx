@@ -35,7 +35,7 @@ function getConfigInfo(server: BuiltinMcpServerSummary): BuiltinMcpConfigInfo {
   if (server.id === 'nano-banana') {
     return {
       source: 'Copis 内置服务',
-      description: '登录 Copis Working 后即可使用图片生成功能，无需额外配置。',
+      description: '登录 Copis 后即可使用图片生成功能，无需额外配置。',
     }
   }
   if (server.id === 'collaboration') {

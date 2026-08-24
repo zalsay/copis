@@ -120,6 +120,31 @@ export class BridgeCommandHandler {
   }
 
   /**
+   * 解析客户端上用户上次调用的渠道与模型（全局设置优先，其次最近活跃会话，再回退 binding）
+   */
+  private resolveClientLatestModelAndChannel(binding?: BridgeChatBinding): {
+    channelId: string
+    modelId?: string
+  } {
+    const settings = getSettings()
+    let channelId = settings.agentChannelId
+    let modelId = settings.agentModelId
+
+    if (!channelId || !modelId) {
+      const recentSession = listAgentSessions().find((s) => s.channelId && s.modelId)
+      if (recentSession) {
+        channelId = channelId || recentSession.channelId
+        modelId = modelId || recentSession.modelId
+      }
+    }
+
+    channelId = channelId || binding?.channelId || ''
+    modelId = modelId ?? binding?.modelId
+
+    return { channelId, modelId }
+  }
+
+  /**
    * 获取或自动创建 chatId 对应的 binding
    * 用于 Bridge 在保存图片/文件前预先拿到 sessionId 和 workspaceId
    * 如果未配置 Agent 渠道，返回 null
@@ -128,18 +153,29 @@ export class BridgeCommandHandler {
     const existing = this.getValidBinding(chatId)
     if (existing) return existing
 
-    const settings = getSettings()
-    const channelId = settings.agentChannelId
+    const { channelId, modelId } = this.resolveClientLatestModelAndChannel()
     if (!channelId) return null
 
+    const settings = getSettings()
     const workspaceId = this.resolveValidWorkspaceId(settings.agentWorkspaceId)
+    const isWeChat = this.config.platformName.startsWith('微信')
+    const isDingTalk = this.config.platformName.startsWith('钉钉')
+    const source = isWeChat ? 'wechat' : (isDingTalk ? 'dingtalk' : 'bridge')
 
     const session = createAgentSession(
-      `${this.config.platformName}会话`,
+      isDingTalk ? '钉钉专属会话' : `${this.config.platformName}专属会话`,
       channelId,
       workspaceId || undefined,
-      undefined,
+      modelId,
       settings.agentRuntime ?? 'pi',
+      'project',
+      undefined,
+      undefined,
+      {
+        source,
+        wechatDedicated: isWeChat,
+        dingtalkDedicated: isDingTalk,
+      },
     )
 
     const binding: BridgeChatBinding = {
@@ -147,7 +183,7 @@ export class BridgeCommandHandler {
       sessionId: session.id,
       workspaceId,
       channelId,
-      modelId: settings.agentModelId ?? undefined,
+      modelId,
     }
     this.chatBindings.set(chatId, binding)
     this.sessionToChat.set(session.id, chatId)
@@ -346,22 +382,34 @@ export class BridgeCommandHandler {
   }
 
   private async createNewSession(chatId: string, title?: string, contextData?: unknown): Promise<void> {
-    const settings = getSettings()
-    const channelId = settings.agentChannelId
+    const isWeChat = this.config.platformName.startsWith('微信')
+    const isDingTalk = this.config.platformName.startsWith('钉钉')
+    const source = isWeChat ? 'wechat' : (isDingTalk ? 'dingtalk' : 'bridge')
+
+    const { channelId, modelId } = this.resolveClientLatestModelAndChannel()
     if (!channelId) {
       await this.send(chatId, '请先在 Copis 设置中选择 Agent 渠道。', contextData)
       return
     }
 
     // 确定工作区；若设置仍指向已删除项目，回退到现存项目而不是创建孤儿会话。
+    const settings = getSettings()
     const workspaceId = this.resolveValidWorkspaceId(settings.agentWorkspaceId)
 
     const session = createAgentSession(
-      title || '新会话',
+      title || (isDingTalk ? '钉钉专属会话' : `${this.config.platformName}专属会话`),
       channelId,
       workspaceId || undefined,
-      undefined,
+      modelId,
       settings.agentRuntime ?? 'pi',
+      'project',
+      undefined,
+      undefined,
+      {
+        source,
+        wechatDedicated: isWeChat,
+        dingtalkDedicated: isDingTalk,
+      },
     )
 
     // 清理旧绑定
@@ -375,7 +423,7 @@ export class BridgeCommandHandler {
       sessionId: session.id,
       workspaceId,
       channelId,
-      modelId: settings.agentModelId ?? undefined,
+      modelId,
     }
     this.chatBindings.set(chatId, binding)
     this.sessionToChat.set(session.id, chatId)
@@ -560,10 +608,8 @@ export class BridgeCommandHandler {
     if (binding) {
       const session = getAgentSessionMeta(binding.sessionId)
       lines.push(`会话: ${session?.title ?? '未知'} (${binding.sessionId.slice(0, 8)})`)
-      // 与发送路径同序解析：binding > 应用设置
-      const nowSettings = getSettings()
-      const effChannelId = binding.channelId || nowSettings.agentChannelId
-      const effModelId = binding.modelId ?? nowSettings.agentModelId
+      // 与发送路径同序解析：优先使用客户端上用户上次调用的渠道与模型
+      const { channelId: effChannelId, modelId: effModelId } = this.resolveClientLatestModelAndChannel(binding)
       const modelInfo = describeBindingModel(effChannelId, effModelId)
       lines.push(`模型: ${modelInfo.channelName} / ${modelInfo.modelName}${modelInfo.valid ? '' : '（已失效）'}`)
     } else {
@@ -774,10 +820,12 @@ export class BridgeCommandHandler {
       startedAt: Date.now(),
     })
 
-    // 渠道/模型解析：binding（per-chat 用户在 IM 里切过的）优先，其次全局设置
-    const latestSettings = getSettings()
-    const latestChannelId = binding.channelId || latestSettings.agentChannelId || ''
-    const modelId = binding.modelId ?? latestSettings.agentModelId
+    // 渠道/模型解析：优先使用客户端上用户上次调用的模型与渠道
+    const { channelId: latestChannelId, modelId } = this.resolveClientLatestModelAndChannel(binding)
+
+    // 保持 binding 记录中的渠道与模型与当前实际调用的一致
+    if (latestChannelId) binding.channelId = latestChannelId
+    if (modelId) binding.modelId = modelId
 
     // 如果有附件，拼接 <attached_files> 块到用户消息前
     const fileReferences = attachments?.length
@@ -804,7 +852,9 @@ export class BridgeCommandHandler {
       onComplete: () => {
         // complete 由 EventBus listener 处理
       },
-      onTitleUpdated: () => {},
+      onTitleUpdated: (newTitle) => {
+        this.notifySessionCreated(binding!.sessionId, newTitle)
+      },
     }).catch((error) => {
       this.log(`Agent 运行异常: ${error}`)
     })

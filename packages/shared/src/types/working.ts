@@ -484,12 +484,13 @@ export interface WorkingImageGenerationResult {
   balanceAfter?: number
 }
 
-export type WorkingReceiveChannel = 'weixin' | 'feishu'
+export type WorkingReceiveChannel = 'weixin' | 'feishu' | 'dingtalk'
 
 export interface WorkingReceiveChannelSettings {
   channel: WorkingReceiveChannel
   weixinBound: boolean
   feishuBound: boolean
+  dingtalkBound: boolean
 }
 
 export interface WorkingSettingsSnapshot {
@@ -647,6 +648,17 @@ export const WORKING_IPC_CHANNELS = {
   GET_MODEL_LATENCIES: 'working:get-model-latencies',
   GET_MODEL_CATALOG: 'working:get-model-catalog',
   SAVE_MODEL_CATALOG: 'working:save-model-catalog',
+  TEST_MODEL_CONNECTION: 'working:test-model-connection',
   /** VIP 到账后主进程向 Renderer 推送最新账户资料。 */
   AUTH_UPDATED: 'working:auth-updated',
 } as const
+
+/** 测试自定义模型连接的输入参数 */
+export interface WorkingTestCustomModelInput {
+  id?: string
+  name?: string
+  protocol: WorkingCustomModelProtocol
+  baseUrl: string
+  modelId: string
+  apiKey?: string
+}

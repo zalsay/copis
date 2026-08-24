@@ -469,4 +469,69 @@ describe('Working 侧边栏视觉契约', () => {
     expect(updateDotRule).toContain('background: hsl(var(--destructive))')
     expect(updateDotRule).toContain('border-radius: 50%')
   })
+
+  test('Given 飞书专属会话 When 在侧栏展示 Then 显示「飞书」专属标签', () => {
+    const feishuBadgeRule = sidebarStyles.match(
+      /\.copis-working-conversation-label > small\.ui-feishu-badge\s*\{([^}]*)\}/s,
+    )?.[1]
+
+    expect(feishuBadgeRule).toBeDefined()
+    expect(sidebarSource).toContain('{isFeishuSession && <small className="ui-feishu-badge">飞书</small>}')
+    expect(feishuBadgeRule).toContain('border-radius: 999px')
+    expect(feishuBadgeRule).toContain('#3370ff')
+  })
+
+  test('Given 微信专属会话 When 在侧栏展示 Then 显示「微信」绿色专属标签', () => {
+    const wechatBadgeRule = sidebarStyles.match(
+      /\.copis-working-conversation-label > small\.ui-wechat-badge\s*\{([^}]*)\}/s,
+    )?.[1]
+
+    expect(wechatBadgeRule).toBeDefined()
+    expect(sidebarSource).toContain('{isWeChatSession && <small className="ui-wechat-badge">微信</small>}')
+    expect(wechatBadgeRule).toContain('border-radius: 999px')
+    expect(wechatBadgeRule).toContain('#07c160')
+  })
+
+  test('Given 钉钉专属会话 When 在侧栏展示 Then 显示「钉钉」专属标签', () => {
+    const dingtalkBadgeRule = sidebarStyles.match(
+      /\.copis-working-conversation-label > small\.ui-dingtalk-badge\s*\{([^}]*)\}/s,
+    )?.[1]
+
+    expect(dingtalkBadgeRule).toBeDefined()
+    expect(sidebarSource).toContain('{isDingTalkSession && <small className="ui-dingtalk-badge">钉钉</small>}')
+    expect(dingtalkBadgeRule).toContain('border-radius: 999px')
+    expect(dingtalkBadgeRule).toContain('#0089ff')
+  })
+
+  test('Given 会话标题过长 When 在列表行渲染 Then 标题文本省略截断且不与末尾时间重叠', () => {
+    const mainRule = sidebarStyles.match(
+      /\.copis-working-conversation-main\s*\{([^}]*)\}/s,
+    )?.[1]
+    const labelRule = sidebarStyles.match(
+      /\.copis-working-conversation-label\s*\{([^}]*)\}/s,
+    )?.[1]
+    const labelSpanRule = sidebarStyles.match(
+      /\.copis-working-conversation-label\s*>\s*span\s*\{([^}]*)\}/s,
+    )?.[1]
+    const metaRule = sidebarStyles.match(
+      /\.copis-working-conversation-meta\s*\{([^}]*)\}/s,
+    )?.[1]
+
+    expect(mainRule).toBeDefined()
+    expect(mainRule).toContain('overflow: hidden')
+    expect(mainRule).toContain('max-width: 100%')
+
+    expect(labelRule).toBeDefined()
+    expect(labelRule).toContain('display: flex')
+    expect(labelRule).toContain('overflow: hidden')
+
+    expect(labelSpanRule).toBeDefined()
+    expect(labelSpanRule).toContain('overflow: hidden')
+    expect(labelSpanRule).toContain('text-overflow: ellipsis')
+    expect(labelSpanRule).toContain('white-space: nowrap')
+    expect(labelSpanRule).toContain('min-width: 0')
+
+    expect(metaRule).toBeDefined()
+    expect(metaRule).toContain('white-space: nowrap')
+  })
 })

@@ -1825,7 +1825,7 @@ export function AgentConversationSurface({ sessionId, variant = 'main' }: AgentC
         .catch((error) => {
           console.error('[AgentView] 从模型菜单切换 Working 模式失败:', error)
           setAgentSessions((prev) => prev.map((item) => item.id === sessionId ? previousSessionMeta : item))
-          toast.error('Working 模式切换失败', { description: getErrorMessage(error) })
+          toast.error('Copis 模式切换失败', { description: getErrorMessage(error) })
         })
       return
     }

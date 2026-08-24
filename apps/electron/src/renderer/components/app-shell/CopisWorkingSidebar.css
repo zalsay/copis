@@ -576,6 +576,9 @@
 .copis-working-conversation-main {
   min-width: 0;
   width: 100%;
+  max-width: 100%;
+  display: flex;
+  align-items: center;
   padding: 0;
   border: 0;
   background: transparent;
@@ -583,6 +586,7 @@
   text-align: left;
   font: inherit;
   cursor: pointer;
+  overflow: hidden;
 }
 
 .copis-working-conversation-main:focus-visible {
@@ -591,12 +595,16 @@
 
 .copis-working-conversation-label {
   min-width: 0;
-  display: inline-flex;
+  width: 100%;
+  max-width: 100%;
+  display: flex;
   align-items: center;
   gap: 6px;
+  overflow: hidden;
 }
 
 .copis-working-conversation-label > span {
+  flex: 1 1 0%;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -619,12 +627,71 @@
   line-height: 1.2;
 }
 
+.copis-working-conversation-label > small.ui-feishu-badge {
+  flex: 0 0 auto;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: rgba(51, 112, 255, 0.12);
+  color: #3370ff;
+  border: 1px solid rgba(51, 112, 255, 0.28);
+  font-size: 10px;
+  font-weight: 520;
+  line-height: 1.2;
+}
+
+:root[data-theme='dark'] .copis-working-conversation-label > small.ui-feishu-badge,
+.dark .copis-working-conversation-label > small.ui-feishu-badge {
+  background: rgba(51, 112, 255, 0.18);
+  color: #4e88ff;
+  border: 1px solid rgba(51, 112, 255, 0.38);
+}
+
+.copis-working-conversation-label > small.ui-wechat-badge {
+  flex: 0 0 auto;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: rgba(7, 193, 96, 0.12);
+  color: #07c160;
+  border: 1px solid rgba(7, 193, 96, 0.28);
+  font-size: 10px;
+  font-weight: 520;
+  line-height: 1.2;
+}
+
+:root[data-theme='dark'] .copis-working-conversation-label > small.ui-wechat-badge,
+.dark .copis-working-conversation-label > small.ui-wechat-badge {
+  background: rgba(7, 193, 96, 0.18);
+  color: #10d66c;
+  border: 1px solid rgba(7, 193, 96, 0.38);
+}
+
+.copis-working-conversation-label > small.ui-dingtalk-badge {
+  flex: 0 0 auto;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: rgba(0, 137, 255, 0.12);
+  color: #0089ff;
+  border: 1px solid rgba(0, 137, 255, 0.28);
+  font-size: 10px;
+  font-weight: 520;
+  line-height: 1.2;
+}
+
+:root[data-theme='dark'] .copis-working-conversation-label > small.ui-dingtalk-badge,
+.dark .copis-working-conversation-label > small.ui-dingtalk-badge {
+  background: rgba(0, 137, 255, 0.18);
+  color: #2e9eff;
+  border: 1px solid rgba(0, 137, 255, 0.38);
+}
+
 .copis-working-conversation-meta {
   min-width: 0;
+  flex: 0 0 auto;
   display: inline-flex;
   align-items: center;
   justify-content: flex-end;
   gap: 6px;
+  white-space: nowrap;
 }
 
 .copis-working-conversation-row small {

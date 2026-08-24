@@ -68,7 +68,7 @@ function roleLabel(role: string | undefined): string {
   if (role === 'writer') return '总结员'
   if (role === 'reviewer') return '审查员'
   if (role === 'executor') return '执行员'
-  return role || 'Agent'
+  return role || '专家'
 }
 
 function roleCode(role: string | undefined): string {
@@ -125,11 +125,11 @@ function NodeDetailsPopover({ node, status, dependencies, pinned, style, onClose
       </div>
       <p className="text-xs leading-5 text-[#9fa3a6]">{node.description || `${roleLabel(node.role)}负责当前专家团队中的受控工作。`}</p>
       <dl className="mt-3 grid gap-2 text-xs">
-        <div><dt className="text-[#858b8e]">节点 ID</dt><dd className="mt-0.5 break-all font-mono text-[#dfe4e1]">{node.id}</dd></div>
-        <div><dt className="text-[#858b8e]">角色 / 状态</dt><dd className="mt-0.5 text-[#dfe4e1]">{roleLabel(node.role)} · {nodeStatusLabels[status]}</dd></div>
-        <div><dt className="text-[#858b8e]">依赖</dt><dd className="mt-0.5 break-words text-[#dfe4e1]">{dependencies.length > 0 ? dependencies.join('、') : '无前置节点'}</dd></div>
+        <div><dt className="text-[#858b8e]">专家标识</dt><dd className="mt-0.5 break-all font-mono text-[#dfe4e1]">{node.id}</dd></div>
+        <div><dt className="text-[#858b8e]">分工职责 / 状态</dt><dd className="mt-0.5 text-[#dfe4e1]">{roleLabel(node.role)} · {nodeStatusLabels[status]}</dd></div>
+        <div><dt className="text-[#858b8e]">前置协作</dt><dd className="mt-0.5 break-words text-[#dfe4e1]">{dependencies.length > 0 ? `承接 ${dependencies.join('、')}` : '首发协作（无前置）'}</dd></div>
       </dl>
-      {node.path && <div className="mt-3 rounded-md bg-[#151515] px-3 py-2 text-[10px] text-[#858b8e]">产物路径：<span className="break-all text-[#dfe4e1]">{node.path}</span></div>}
+      {node.path && <div className="mt-3 rounded-md bg-[#151515] px-3 py-2 text-[10px] text-[#858b8e]">交付成果路径：<span className="break-all text-[#dfe4e1]">{node.path}</span></div>}
     </div>
   )
 }
@@ -199,7 +199,7 @@ export function ExpertTeamView(): React.ReactElement {
       setSchemaId(nextId)
       setCurrentSchemaId(nextId)
     } catch (nextError) {
-      setError(nextError instanceof Error ? nextError.message : '加载专家团队失败')
+      setError(nextError instanceof Error ? nextError.message : '加载专家团队方案失败')
     } finally {
       setLoadState((state) => ({ ...state, schemas: false }))
     }
@@ -253,7 +253,7 @@ export function ExpertTeamView(): React.ReactElement {
       const detail = await expertTeamApi.getSchema(nextId)
       setSchemas((items) => items.map((item) => item.id === nextId ? detail : item))
     } catch (nextError) {
-      setError(nextError instanceof Error ? nextError.message : '加载 schema 详情失败')
+      setError(nextError instanceof Error ? nextError.message : '加载团队方案详情失败')
     } finally {
       setLoadState((state) => ({ ...state, schema: false }))
     }
@@ -282,7 +282,7 @@ export function ExpertTeamView(): React.ReactElement {
 
   const bindWorkspaceToSchema = React.useCallback(async (workspace: AgentWorkspace): Promise<ExpertTeamWorkspaceBinding> => {
     if (!currentSchema) {
-      const message = '请先选择一个 Schema'
+      const message = '请先选择一个团队方案'
       setWorkspaceActionError(message)
       toast.error(message)
       throw new Error(message)
@@ -386,7 +386,7 @@ export function ExpertTeamView(): React.ReactElement {
       })
       if (!sessionId) throw new Error('创建主理人会话失败')
       setNewExpertTeamDialogOpen(false)
-      toast.success(`已创建「${workspace.name}」的新专家团会话，主理人将先了解你的需求`)
+      toast.success(`已创建「${workspace.name}」的专家团队筹备会话，主理人将为你定制方案`)
     } catch (nextError) {
       const message = nextError instanceof Error ? nextError.message : '创建新专家团失败'
       setNewExpertTeamError(message)
@@ -471,7 +471,7 @@ export function ExpertTeamView(): React.ReactElement {
             expertTeamSetup: true,
           })
           if (!sessionId) throw new Error('创建主理人会话失败')
-          toast.success(`已创建「${workspace.name}」的新专家团会话，主理人将先了解你的需求`)
+          toast.success(`已创建「${workspace.name}」的专家团队筹备会话，主理人将为你定制方案`)
           return
         }
         const nextBinding = await bindWorkspaceToSchema(workspace)
@@ -525,8 +525,8 @@ export function ExpertTeamView(): React.ReactElement {
             新专家团
           </button>
           <div className="mb-3 flex items-center justify-between"><span className="text-xs font-semibold uppercase tracking-wide text-[#858b8e]">专家团队</span><span className="text-xs text-[#858b8e]">{schemas.length}</span></div>
-          {loadState.schemas && schemas.length === 0 ? <div className="flex items-center gap-2 py-6 text-xs text-[#858b8e]"><Loader2 className="size-4 animate-spin text-[#f0a15a]" />加载中</div> : schemas.length === 0 ? <div className="py-6 text-xs text-[#858b8e]">暂无可用 Schema</div> : <div className="space-y-1">{schemas.map((schema) => <button key={schema.id} type="button" onClick={() => void selectSchema(schema.id)} className={cn('flex w-full items-center justify-between rounded-md px-3 py-2 text-left text-sm text-[#dfe4e1] transition-colors hover:bg-white/5', schema.id === schemaId && 'ui-primary-surface')}><span className="min-w-0 truncate">{schema.name}</span><ChevronRight className="size-3.5 shrink-0 text-[#858b8e]" /></button>)}</div>}
-          <div className="mt-6 border-t border-white/10 pt-4"><div className="mb-3 text-xs font-semibold uppercase tracking-wide text-[#858b8e]">最近运行</div>{runs.length === 0 ? <p className="text-xs text-[#858b8e]">提交后会显示运行记录</p> : <div className="space-y-1.5">{runs.slice(0, 8).map((run) => <button key={run.id} type="button" onClick={() => { setCurrentRunId(run.id); void loadRun(run.id) }} className={cn('w-full rounded-md px-2.5 py-2 text-left text-[#dfe4e1] hover:bg-white/5', run.id === currentRun?.id && 'bg-[#f0a15a]/10')}><div className="flex items-center justify-between gap-2"><span className="truncate text-xs font-medium">{formatRunDisplayName(currentSchema?.name, run)}</span><span className={cn('rounded px-1.5 py-0.5 text-[10px]', statusClass(run.status))}>{statusLabels[run.status]}</span></div><div className="mt-1 text-[10px] text-[#858b8e]">{formatTime(run.createdAt)}</div></button>)}</div>}</div>
+          {loadState.schemas && schemas.length === 0 ? <div className="flex items-center gap-2 py-6 text-xs text-[#858b8e]"><Loader2 className="size-4 animate-spin text-[#f0a15a]" />加载中</div> : schemas.length === 0 ? <div className="py-6 text-xs text-[#858b8e]">暂无可用的团队方案</div> : <div className="space-y-1">{schemas.map((schema) => <button key={schema.id} type="button" onClick={() => void selectSchema(schema.id)} className={cn('flex w-full items-center justify-between rounded-md px-3 py-2 text-left text-sm text-[#dfe4e1] transition-colors hover:bg-white/5', schema.id === schemaId && 'ui-primary-surface')}><span className="min-w-0 truncate">{schema.name}</span><ChevronRight className="size-3.5 shrink-0 text-[#858b8e]" /></button>)}</div>}
+          <div className="mt-6 border-t border-white/10 pt-4"><div className="mb-3 text-xs font-semibold uppercase tracking-wide text-[#858b8e]">最近运行</div>{runs.length === 0 ? <p className="text-xs text-[#858b8e]">启动专家团队后将在此记录运行历史</p> : <div className="space-y-1.5">{runs.slice(0, 8).map((run) => <button key={run.id} type="button" onClick={() => { setCurrentRunId(run.id); void loadRun(run.id) }} className={cn('w-full rounded-md px-2.5 py-2 text-left text-[#dfe4e1] hover:bg-white/5', run.id === currentRun?.id && 'bg-[#f0a15a]/10')}><div className="flex items-center justify-between gap-2"><span className="truncate text-xs font-medium">{formatRunDisplayName(currentSchema?.name, run)}</span><span className={cn('rounded px-1.5 py-0.5 text-[10px]', statusClass(run.status))}>{statusLabels[run.status]}</span></div><div className="mt-1 text-[10px] text-[#858b8e]">{formatTime(run.createdAt)}</div></button>)}</div>}</div>
       </aside>
 
       <div className="min-w-0 flex-1 overflow-y-auto bg-[#151515]" aria-label="专家团队右侧工作台">
@@ -535,9 +535,9 @@ export function ExpertTeamView(): React.ReactElement {
             <div className="min-w-0">
               <h1 className="flex min-w-0 flex-wrap items-center gap-2 text-xl font-semibold">
                 <span className="truncate">{currentSchema?.name ?? '专家团队'}</span>
-                <span className="inline-flex min-h-6 items-center rounded-md ui-primary-badge px-2 text-[11px] font-medium text-[#f5c18e]">revision {schemaRevision ?? '--'}</span>
+                <span className="inline-flex min-h-6 items-center rounded-md ui-primary-badge px-2 text-[11px] font-medium text-[#f5c18e]">方案版本 {schemaRevision ? `v${schemaRevision}` : '--'}</span>
               </h1>
-              <p className="mt-1 max-w-2xl text-xs leading-5 text-[#9fa3a6]">{currentSchema?.description || '查看由主 Agent 调度的本地 Pi 专家团队运行'}</p>
+              <p className="mt-1 max-w-2xl text-xs leading-5 text-[#9fa3a6]">{currentSchema?.description || '由多位专业 AI 专家协同分工，自主规划并交付复杂任务成果'}</p>
             </div>
           </div>
           <div className="flex shrink-0 items-center gap-2">
@@ -550,18 +550,18 @@ export function ExpertTeamView(): React.ReactElement {
           <DialogContent className="border-[#f0a15a]/25 bg-[#1d1e1f] text-[#f2f3f3]" hideClose={workspaceActionLoading}>
             <DialogHeader>
               <DialogTitle className="text-[#f1f3f2]">选择工作区</DialogTitle>
-              <DialogDescription className="text-[#9fa3a6]">选择已有工作区，或从左侧创建工作区后绑定当前 Schema。</DialogDescription>
+              <DialogDescription className="text-[#9fa3a6]">选择一个已有工作区，或新建工作区以启动此专家团队方案。</DialogDescription>
             </DialogHeader>
 
             <div className="space-y-5">
               <section aria-label="已有工作区">
                 <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-[#f0a15a]">已有工作区</div>
-                {workspaces.length === 0 ? <p className="rounded-md bg-[#151515] px-3 py-3 text-xs text-[#858b8e]">暂无本地工作区，请先创建工作区。</p> : <div className="max-h-48 space-y-1 overflow-y-auto">{workspaces.map((workspace) => <Button key={workspace.id} type="button" variant="ghost" className="h-auto min-h-10 w-full justify-between rounded-md bg-[#151515] px-3 py-2 text-left text-[#dfe4e1] hover:bg-[#f0a15a]/10 hover:text-[#f5c18e]" onClick={() => void handleSelectWorkspace(workspace)} disabled={workspaceActionLoading}><span className="min-w-0"><span className="block truncate text-sm font-medium">{workspace.name}</span><span className="mt-0.5 block truncate text-[10px] text-[#858b8e]">{workspace.projectRootPath || 'Copis 托管工作区'}</span></span><ChevronRight className="size-4 shrink-0 text-[#858b8e]" /></Button>)}</div>}
+                {workspaces.length === 0 ? <p className="rounded-md bg-[#151515] px-3 py-3 text-xs text-[#858b8e]">暂无可用的项目工作区，请先创建工作区。</p> : <div className="max-h-48 space-y-1 overflow-y-auto">{workspaces.map((workspace) => <Button key={workspace.id} type="button" variant="ghost" className="h-auto min-h-10 w-full justify-between rounded-md bg-[#151515] px-3 py-2 text-left text-[#dfe4e1] hover:bg-[#f0a15a]/10 hover:text-[#f5c18e]" onClick={() => void handleSelectWorkspace(workspace)} disabled={workspaceActionLoading}><span className="min-w-0"><span className="block truncate text-sm font-medium">{workspace.name}</span><span className="mt-0.5 block truncate text-[10px] text-[#858b8e]">{workspace.projectRootPath || 'Copis 托管工作区'}</span></span><ChevronRight className="size-4 shrink-0 text-[#858b8e]" /></Button>)}</div>}
               </section>
 
               <section className="border-t border-white/10 pt-4" aria-label="创建工作区">
                 <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-[#f0a15a]">创建工作区</div>
-                <p className="text-xs leading-5 text-[#858b8e]">关闭当前选择窗口后，从左侧“创建工作区”入口选择本地目录和 Agent 写入权限。</p>
+                <p className="text-xs leading-5 text-[#858b8e]">创建新的项目工作区，专家团队将在该工作区中为你开展工作与交付成果。</p>
                 <div className="mt-3 flex flex-wrap gap-2">
                   <Button type="button" size="sm" className="bg-[var(--ui-primary-background)] text-[var(--ui-primary)] hover:bg-[var(--ui-primary-background)] hover:text-[var(--ui-primary)]" onClick={handleOpenCreateWorkspace} disabled={workspaceActionLoading}><FolderOpen className="size-3.5" />创建工作区</Button>
                 </div>
@@ -589,34 +589,34 @@ export function ExpertTeamView(): React.ReactElement {
         {error && <div className="mx-6 mt-4 flex items-start gap-2 rounded-md bg-red-500/10 px-3 py-2 text-sm text-red-200" role="alert"><CircleAlert className="mt-0.5 size-4 shrink-0" />{error}</div>}
 
         <main className="min-h-0 p-6">
-          {!currentSchema ? <div className="flex h-full items-center justify-center text-sm text-[#858b8e]">选择一个 Schema 开始编排</div> : <div className="mx-auto max-w-6xl space-y-5">
+          {!currentSchema ? <div className="flex h-full items-center justify-center text-sm text-[#858b8e]">请从左侧选择一个团队方案开始协作</div> : <div className="mx-auto max-w-6xl space-y-5">
             <section className="rounded-lg bg-[#1d1e1f] p-5 shadow-sm ring-1 ring-white/10" aria-label="专家团队执行阵容">
-              <div className="flex items-end justify-between gap-4"><h2 className="text-lg font-semibold text-[#f1f3f2]">执行阵容</h2><span className="text-xs text-[#858b8e]">{currentSchema.version ? `v${currentSchema.version}` : '未指定版本'} · {currentSchema.nodes.length} 个节点</span></div>
+              <div className="flex items-end justify-between gap-4"><h2 className="text-lg font-semibold text-[#f1f3f2]">执行阵容</h2><span className="text-xs text-[#858b8e]">{currentSchema.version ? `v${currentSchema.version}` : '标准版'} · {currentSchema.nodes.length} 位团队专家</span></div>
               <div className="mt-4 grid gap-2 sm:grid-cols-2 xl:grid-cols-3" role="list" aria-label="Schema 节点列表" onMouseLeave={hideNodeDetails}>
                 {currentSchema.nodes.map((node) => {
                   const state = nodeStates.get(node.id) ?? 'pending'
-                  return <div className={cn('flex min-w-0 cursor-pointer items-center gap-3 rounded-md border border-white/10 bg-[#151515] px-3 py-3 transition-colors', hoveredNodeId === node.id && 'border-[#f0a15a]/40')} key={node.id} role="listitem" onMouseEnter={(event) => showNodeDetails(node.id, event)} onClick={(event) => togglePinNode(node.id, event)}><span className="grid size-8 shrink-0 place-items-center rounded-full border border-[#f0a15a]/35 bg-[#2b211a] text-[#f0a15a]"><NodeRoleIcon role={node.role} /></span><span className="min-w-0"><strong className="block truncate text-xs font-semibold text-[#e9ecea]">{node.name}</strong><small className="mt-1 block truncate text-[10px] text-[#858b8e]">{roleCode(node.role)} · {roleLabel(node.role)} · {nodeStatusLabels[state]}</small></span></div>
+                  return <div className={cn('flex min-w-0 cursor-pointer items-center gap-3 rounded-md border border-white/10 bg-[#151515] px-3 py-3 transition-colors', hoveredNodeId === node.id && 'border-[#f0a15a]/40')} key={node.id} role="listitem" onMouseEnter={(event) => showNodeDetails(node.id, event)} onClick={(event) => togglePinNode(node.id, event)}><span className="grid size-8 shrink-0 place-items-center rounded-full border border-[#f0a15a]/35 bg-[#2b211a] text-[#f0a15a]"><NodeRoleIcon role={node.role} /></span><span className="min-w-0"><strong className="block truncate text-xs font-semibold text-[#e9ecea]">{node.name}</strong><small className="mt-1 block truncate text-[10px] text-[#858b8e]">{roleLabel(node.role)} · {nodeStatusLabels[state]}</small></span></div>
                 })}
               </div>
             </section>
 
             <section className="rounded-lg bg-[#1d1e1f] p-5 shadow-sm ring-1 ring-white/10" aria-label="专家团队依赖编排">
-                <div className="flex items-end justify-between gap-4"><h2 className="text-lg font-semibold text-[#f1f3f2]">任务路径</h2><span className="rounded-md bg-[#f0a15a]/10 px-2 py-1 text-[11px] font-medium text-[#f5c18e]">{currentRun ? statusLabels[currentRun.status] : '等待运行'}</span></div>
+                <div className="flex items-end justify-between gap-4"><h2 className="text-lg font-semibold text-[#f1f3f2]">任务路径</h2><span className="rounded-md bg-[#f0a15a]/10 px-2 py-1 text-[11px] font-medium text-[#f5c18e]">{currentRun ? statusLabels[currentRun.status] : '就绪待命'}</span></div>
                 <div className="mt-4 overflow-x-auto rounded-md bg-[#151515] p-4 ring-1 ring-white/10">
                   <div className="flex min-w-max items-center gap-3" onMouseLeave={hideNodeDetails}>
                     {currentSchema.nodes.map((node, index) => {
                       const state = nodeStates.get(node.id) ?? 'pending'
                       const dependencies = node.dependsOn?.length ? node.dependsOn : schemaEdges.filter((edge) => edge.to === node.id).map((edge) => edge.from)
-                      return <React.Fragment key={node.id}><div className={cn('w-44 cursor-pointer rounded-md border px-3 py-3 transition-colors', state === 'running' ? 'border-[#f0a15a]/70 bg-[#f0a15a]/10' : hoveredNodeId === node.id ? 'border-[#f0a15a]/50 bg-[#f0a15a]/5' : 'border-white/10 bg-[#1d1e1f]')} onMouseEnter={(event) => showNodeDetails(node.id, event)} onClick={(event) => togglePinNode(node.id, event)}><div className="flex items-center gap-2"><span className="grid size-7 shrink-0 place-items-center rounded-full bg-[#2b211a] text-[#f0a15a]"><NodeRoleIcon role={node.role} /></span><span className="min-w-0 truncate text-xs font-semibold text-[#e9ecea]">{node.name}</span></div><div className="mt-2 text-[10px] text-[#858b8e]">{roleCode(node.role)} · {roleLabel(node.role)} · {nodeStatusLabels[state]}</div>{dependencies.length > 0 && <div className="mt-1 truncate text-[10px] text-[#858b8e]">依赖 {dependencies.join('、')}</div>}</div>{index < currentSchema.nodes.length - 1 && <ChevronRight className="size-4 shrink-0 text-[#f0a15a]" />}</React.Fragment>
+                      return <React.Fragment key={node.id}><div className={cn('w-44 cursor-pointer rounded-md border px-3 py-3 transition-colors', state === 'running' ? 'border-[#f0a15a]/70 bg-[#f0a15a]/10' : hoveredNodeId === node.id ? 'border-[#f0a15a]/50 bg-[#f0a15a]/5' : 'border-white/10 bg-[#1d1e1f]')} onMouseEnter={(event) => showNodeDetails(node.id, event)} onClick={(event) => togglePinNode(node.id, event)}><div className="flex items-center gap-2"><span className="grid size-7 shrink-0 place-items-center rounded-full bg-[#2b211a] text-[#f0a15a]"><NodeRoleIcon role={node.role} /></span><span className="min-w-0 truncate text-xs font-semibold text-[#e9ecea]">{node.name}</span></div><div className="mt-2 text-[10px] text-[#858b8e]">{roleLabel(node.role)} · {nodeStatusLabels[state]}</div>{dependencies.length > 0 && <div className="mt-1 truncate text-[10px] text-[#858b8e]">承接 {dependencies.join('、')}</div>}</div>{index < currentSchema.nodes.length - 1 && <ChevronRight className="size-4 shrink-0 text-[#f0a15a]" />}</React.Fragment>
                     })}
                   </div>
                 </div>
-                <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-[10px] text-[#858b8e]"><span>{schemaEdges.length > 0 ? `${schemaEdges.length} 条 edges` : '按节点 dependsOn 编排'}</span><span>nodeStates 已同步</span><span>子结果回传主 Agent</span><span>revision {schemaRevision ?? '--'}</span></div>
+                <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-[10px] text-[#858b8e]"><span>{schemaEdges.length > 0 ? `${schemaEdges.length} 条协作流` : '多角色按序协同'}</span><span>多角色协同推进</span><span>自动化交付成果</span><span>方案版本 {schemaRevision ? `v${schemaRevision}` : '--'}</span></div>
             </section>
 
             <section className="rounded-lg bg-[#1d1e1f] p-5 shadow-sm ring-1 ring-white/10" aria-label="专家团队运行历史">
               <div className="mb-4 flex items-center justify-between gap-3"><div><span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-[#f0a15a]">运行历史</span><h2 className="mt-1 text-lg font-semibold text-[#f1f3f2]">{currentRun ? formatRunDisplayName(currentSchema?.name, currentRun) : '尚未运行'}</h2></div>{currentRun && <div className="flex items-center gap-2"><span className={cn('rounded px-2 py-1 text-[11px]', statusClass(currentRun.status))}>{statusLabels[currentRun.status]}</span>{currentRun.status === 'queued' && <Button variant="outline" size="sm" className="border-white/15 bg-transparent text-[#dfe4e1] hover:bg-white/5" onClick={() => void cancelRun()} disabled={loadState.run}><Square className="size-3.5" />取消运行</Button>}</div>}</div>
-              {!currentRun ? <p className="text-xs text-[#858b8e]">选择左侧运行记录后查看状态、事件和产物。</p> : <div className="grid gap-5 lg:grid-cols-2"><div><h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-[#858b8e]">事件流</h3>{events.length === 0 ? <p className="text-xs text-[#858b8e]">等待执行器上报事件，当前状态为 {statusLabels[currentRun.status]}。</p> : <div className="space-y-2">{events.map((event) => <div key={`${event.id}-${event.sequence ?? ''}`} className="flex gap-2 text-xs text-[#dfe4e1]"><span className="w-12 shrink-0 text-[#858b8e]">{formatTime(event.timestamp)}</span><span className="font-medium">{event.type}</span>{event.message && <span className="text-[#858b8e]">{event.message}</span>}</div>)}</div>}</div><div><h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-[#858b8e]">产物</h3>{artifacts.length === 0 ? <p className="text-xs text-[#858b8e]">暂无产物</p> : <div className="space-y-2">{artifacts.map((artifact) => <div key={artifact.id} className="flex items-center justify-between rounded bg-[#151515] px-3 py-2 text-xs"><span className="truncate text-[#dfe4e1]">{artifact.name}</span><span className="ml-3 shrink-0 text-[#858b8e]">{artifact.path || artifact.mimeType || '--'}</span></div>)}</div>}</div></div>}
+              {!currentRun ? <p className="text-xs text-[#858b8e]">选择左侧运行记录查看详细协作动态与交付成果。</p> : <div className="grid gap-5 lg:grid-cols-2"><div><h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-[#858b8e]">协作动态</h3>{events.length === 0 ? <p className="text-xs text-[#858b8e]">等待专家团队更新协作动态，当前状态为 {statusLabels[currentRun.status]}。</p> : <div className="space-y-2">{events.map((event) => <div key={`${event.id}-${event.sequence ?? ''}`} className="flex gap-2 text-xs text-[#dfe4e1]"><span className="w-12 shrink-0 text-[#858b8e]">{formatTime(event.timestamp)}</span><span className="font-medium">{event.type}</span>{event.message && <span className="text-[#858b8e]">{event.message}</span>}</div>)}</div>}</div><div><h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-[#858b8e]">交付成果</h3>{artifacts.length === 0 ? <p className="text-xs text-[#858b8e]">暂无交付成果文件</p> : <div className="space-y-2">{artifacts.map((artifact) => <div key={artifact.id} className="flex items-center justify-between rounded bg-[#151515] px-3 py-2 text-xs"><span className="truncate text-[#dfe4e1]">{artifact.name}</span><span className="ml-3 shrink-0 text-[#858b8e]">{artifact.path || artifact.mimeType || '--'}</span></div>)}</div>}</div></div>}
             </section>
           </div>}
         </main>

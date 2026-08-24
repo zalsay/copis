@@ -745,7 +745,7 @@ class FeishuBridge {
       return
     }
 
-    const existingBinding = this.chatBindings.get(chatId)
+    const existingBinding = this.getValidBinding(chatId)
     const isSessionMirrorGroup = existingBinding?.source === 'session-mirror'
 
     if (chatType === 'group') {
@@ -1067,6 +1067,57 @@ class FeishuBridge {
 
   // ===== 会话管理 =====
 
+  /**
+   * 检查绑定是否有效（对应本地会话必须仍然存在）
+   */
+  private isBindingValid(binding: FeishuChatBinding): boolean {
+    const session = getAgentSessionMeta(binding.sessionId)
+    return Boolean(session)
+  }
+
+  /**
+   * 获取有效绑定；若绑定的本地会话已被用户删除，则自动清理失效映射并返回 undefined，以便重新创建新会话
+   */
+  private getValidBinding(chatId: string): FeishuChatBinding | undefined {
+    const binding = this.chatBindings.get(chatId)
+    if (!binding) return undefined
+    if (this.isBindingValid(binding)) return binding
+
+    console.log(`[飞书 Bridge] 检测到绑定的本地会话已不存在 (${binding.sessionId})，自动清理失效绑定以重新创建: chatId=${chatId}`)
+    this.chatBindings.delete(chatId)
+    if (this.sessionToChat.get(binding.sessionId) === chatId) {
+      this.sessionToChat.delete(binding.sessionId)
+    }
+    this.saveBindings()
+    this.updateStatus({ activeBindings: this.getActiveBindingCount() })
+    return undefined
+  }
+
+  /**
+   * 解析客户端上用户上次调用的渠道与模型（全局设置优先，其次最近活跃会话，再回退 Bot 配置或 binding）
+   */
+  private resolveClientLatestModelAndChannel(binding?: FeishuChatBinding): {
+    channelId: string
+    modelId?: string
+  } {
+    const settings = getSettings()
+    let channelId = settings.agentChannelId
+    let modelId = settings.agentModelId
+
+    if (!channelId || !modelId) {
+      const recentSession = listAgentSessions().find((s) => s.channelId && s.modelId)
+      if (recentSession) {
+        channelId = channelId || recentSession.channelId
+        modelId = modelId || recentSession.modelId
+      }
+    }
+
+    channelId = channelId || binding?.channelId || this.botConfig.defaultChannelId || ''
+    modelId = modelId || binding?.modelId || this.botConfig.defaultModelId
+
+    return { channelId, modelId }
+  }
+
   private async createNewSession(
     msgCtx: FeishuMessageContext,
     title?: string,
@@ -1088,8 +1139,8 @@ class FeishuBridge {
       return
     }
 
-    // 渠道/模型：Bot 配置 > 应用设置
-    const channelId = this.botConfig.defaultChannelId ?? appSettings.agentChannelId
+    // 渠道/模型解析：优先使用客户端上用户上次调用的渠道与模型
+    const { channelId, modelId } = this.resolveClientLatestModelAndChannel()
     if (!channelId) {
       await this.sendMessage(chatId, '请先在 Copis Agent 设置中选择渠道。')
       return
@@ -1100,8 +1151,12 @@ class FeishuBridge {
       title,
       channelId,
       workspaceId,
-      undefined,
+      modelId,
       'pi',
+      'project',
+      undefined,
+      undefined,
+      { source: 'feishu', feishuDedicated: true },
     )
 
     // 绑定
@@ -1112,7 +1167,7 @@ class FeishuBridge {
       sessionId: session.id,
       workspaceId,
       channelId,
-      modelId: this.botConfig.defaultModelId ?? appSettings.agentModelId ?? undefined,
+      modelId,
       source: 'feishu',
       chatType: msgCtx.chatType,
       groupName: msgCtx.groupName,
@@ -1138,8 +1193,13 @@ class FeishuBridge {
 
   private findBindingBySessionId(sessionId: string): FeishuChatBinding | undefined {
     const chatId = this.sessionToChat.get(sessionId)
-    if (chatId) return this.chatBindings.get(chatId)
-    return Array.from(this.chatBindings.values()).find((binding) => binding.sessionId === sessionId)
+    if (chatId) return this.getValidBinding(chatId)
+    const found = Array.from(this.chatBindings.values()).find((binding) => binding.sessionId === sessionId)
+    if (found && !this.isBindingValid(found)) {
+      this.getValidBinding(found.chatId)
+      return undefined
+    }
+    return found
   }
 
   private resolveMirrorUserOpenId(): string | null {
@@ -1270,7 +1330,7 @@ class FeishuBridge {
 
   private async handleStopCommand(msgCtx: FeishuMessageContext): Promise<void> {
     const { chatId } = msgCtx
-    const binding = this.chatBindings.get(chatId)
+    const binding = this.getValidBinding(chatId)
     if (!binding) {
       await this.sendMessage(chatId, '当前没有绑定的会话。')
       return
@@ -1297,7 +1357,7 @@ class FeishuBridge {
     }
 
     // 清理旧绑定的反向索引
-    const oldBinding = this.chatBindings.get(chatId)
+    const oldBinding = this.getValidBinding(chatId)
     if (oldBinding) {
       this.sessionToChat.delete(oldBinding.sessionId)
     }
@@ -1328,7 +1388,7 @@ class FeishuBridge {
   private async handleWorkspaceCommand(msgCtx: FeishuMessageContext, arg?: string): Promise<void> {
     const { chatId } = msgCtx
     const workspaces = listAgentWorkspacesByUpdatedAt()
-    const binding = this.chatBindings.get(chatId)
+    const binding = this.getValidBinding(chatId)
     const currentWorkspaceId = binding?.workspaceId
 
     // 无参数 → 列出所有工作区供选择
@@ -1404,10 +1464,8 @@ class FeishuBridge {
       const session = getAgentSessionMeta(binding.sessionId)
       lines.push(`**会话**: ${session?.title ?? '未知'} (\`${binding.sessionId.slice(0, 8)}\`)`)
 
-      // 模型信息（与发送路径同序解析：binding > Bot 配置 > 应用设置）
-      const nowSettings = getSettings()
-      const effChannelId = binding.channelId || this.botConfig.defaultChannelId || nowSettings.agentChannelId
-      const effModelId = binding.modelId || this.botConfig.defaultModelId || nowSettings.agentModelId
+      // 模型信息（优先展示客户端用户上次调用的渠道与模型）
+      const { channelId: effChannelId, modelId: effModelId } = this.resolveClientLatestModelAndChannel(binding)
       const modelInfo = describeBindingModel(effChannelId, effModelId)
       lines.push(`**模型**: ${modelInfo.channelName} / ${modelInfo.modelName}${modelInfo.valid ? '' : '（已失效）'}`)
     } else {
@@ -1513,7 +1571,7 @@ class FeishuBridge {
     }
 
     const parts = arg.split(/\s+/).filter(Boolean)
-    const binding = this.chatBindings.get(chatId)
+    const binding = this.getValidBinding(chatId)
 
     // /model — 列出渠道
     if (parts.length === 0) {
@@ -1563,7 +1621,7 @@ class FeishuBridge {
     let targetBinding = binding
     if (!targetBinding) {
       await this.createNewSession(msgCtx)
-      targetBinding = this.chatBindings.get(chatId)
+      targetBinding = this.getValidBinding(chatId)
       if (!targetBinding) {
         await this.sendMessage(chatId, '请先发送一条消息创建会话，或在 Copis 设置中选择 Agent 渠道。')
         return
@@ -1587,12 +1645,12 @@ class FeishuBridge {
     parentMessageId?: string,
   ): Promise<void> {
     const { chatId } = msgCtx
-    let binding = this.chatBindings.get(chatId)
+    let binding = this.getValidBinding(chatId)
 
-    // 自动创建会话
+    // 自动创建会话（若尚未绑定，或绑定的本地会话已被用户删除）
     if (!binding) {
       await this.createNewSession(msgCtx)
-      binding = this.chatBindings.get(chatId)
+      binding = this.getValidBinding(chatId)
       if (!binding) return
     }
 
@@ -1728,10 +1786,17 @@ class FeishuBridge {
       groupExtraBlock,
     })
 
-    // 渠道/模型解析：binding（per-chat 用户在 IM 里切过的）优先，其次 Bot 配置、应用设置
-    const latestSettings = getSettings()
-    const channelId = binding.channelId || this.botConfig.defaultChannelId || latestSettings.agentChannelId || ''
-    const modelId = binding.modelId || this.botConfig.defaultModelId || latestSettings.agentModelId
+    // 渠道/模型解析：优先使用客户端上用户上次调用的渠道与模型
+    const { channelId, modelId } = this.resolveClientLatestModelAndChannel(binding)
+
+    if (!channelId) {
+      await this.sendMessage(chatId, '请先在 Copis 设置中选择 Agent 渠道和模型。')
+      return
+    }
+
+    // 保持 binding 记录中的渠道与模型与当前实际调用的一致
+    binding.channelId = channelId
+    binding.modelId = modelId
 
     const input: AgentSendInput = {
       sessionId: binding.sessionId,
@@ -1950,7 +2015,7 @@ class FeishuBridge {
     }
 
     // 群聊时，将 @Name 转换为飞书 <at> 标签
-    const binding = this.chatBindings.get(chatId)
+    const binding = this.getValidBinding(chatId)
     const processedResult: FormattedAgentResult = {
       ...result,
       text: binding?.chatType === 'group'
@@ -2361,7 +2426,7 @@ class FeishuBridge {
    * 用于在每条回复的飞书消息开头标注来源，方便用户区分。
    */
   private resolveContextPrefix(chatId: string): string {
-    const binding = this.chatBindings.get(chatId)
+    const binding = this.getValidBinding(chatId)
     if (!binding) return ''
 
     const workspace = binding.workspaceId ? getAgentWorkspace(binding.workspaceId) : undefined
@@ -2375,7 +2440,7 @@ class FeishuBridge {
 
   /** 获取卡片 header subtitle 用的上下文描述 */
   private resolveContextSubtitle(chatId: string): string {
-    const binding = this.chatBindings.get(chatId)
+    const binding = this.getValidBinding(chatId)
     if (!binding) return ''
 
     const workspace = binding.workspaceId ? getAgentWorkspace(binding.workspaceId) : undefined

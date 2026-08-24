@@ -28,7 +28,7 @@ describe('专家团队页头视觉契约', () => {
       'researcher',
       'summary',
       'reviewer',
-      '子结果回传主 Agent',
+      '自动化交付成果',
     ]) {
       expect(viewSource).toContain(label)
     }
@@ -64,8 +64,8 @@ describe('专家团队页头视觉契约', () => {
     expect(viewSource).toContain('text-[#f0a15a]')
     expect(viewSource).toContain('<h1 className="flex min-w-0 flex-wrap items-center gap-2 text-xl font-semibold">')
     expect((viewSource.match(/<h1\b/g) ?? []).length).toBe(1)
-    expect(viewSource).toMatch(/<h1 className="flex min-w-0 flex-wrap items-center gap-2 text-xl font-semibold">[\s\S]*revision \{schemaRevision/)
-    expect(viewSource).toContain('revision')
+    expect(viewSource).toMatch(/<h1 className="flex min-w-0 flex-wrap items-center gap-2 text-xl font-semibold">[\s\S]*方案版本/)
+    expect(viewSource).toContain('方案版本')
     expect(viewSource).not.toContain('<span className="text-[11px] font-semibold tracking-[0.06em] text-[#f0a15a]">{currentSchema?.name ?? \'专家团队\'}</span>')
     expect(viewSource).toContain('role="status"')
     expect(viewSource).toContain('>执行阵容</h2>')

@@ -39,7 +39,7 @@ export function CopisWorkingNewExpertTeamDialog({
             新专家团
           </DialogTitle>
           <DialogDescription className="text-[#9fa3a6]">
-            选择工作区后，主理人 Agent 会先了解你的需求，再为你组建并启动专家团队。
+            选择工作区后，主理人将先与你沟通具体需求，再为你量身组建并启动专属专家团队。
           </DialogDescription>
         </DialogHeader>
 
@@ -47,7 +47,7 @@ export function CopisWorkingNewExpertTeamDialog({
           <section aria-label="已有工作区">
             <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-[#f0a15a]">选择工作区</div>
             {workspaces.length === 0
-              ? <p className="rounded-md bg-[#151515] px-3 py-3 text-xs text-[#858b8e]">暂无本地工作区，请先创建工作区。</p>
+              ? <p className="rounded-md bg-[#151515] px-3 py-3 text-xs text-[#858b8e]">暂无可用的项目工作区，请先创建工作区。</p>
               : (
                 <div className="max-h-48 space-y-1 overflow-y-auto">
                   {workspaces.map((workspace) => (
@@ -77,7 +77,7 @@ export function CopisWorkingNewExpertTeamDialog({
 
           <section className="border-t border-white/10 pt-4" aria-label="创建工作区">
             <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-[#f0a15a]">没有合适的工作区？</div>
-            <p className="text-xs leading-5 text-[#858b8e]">创建一个新工作区，主理人 Agent 会在其中询问需求并组建专家团队。</p>
+            <p className="text-xs leading-5 text-[#858b8e]">创建一个新项目工作区，主理人将在其中为你规划并组建专家团队。</p>
             <div className="mt-3">
               <Button
                 type="button"
@@ -95,7 +95,7 @@ export function CopisWorkingNewExpertTeamDialog({
           {busy && (
             <div className="flex items-center gap-2 rounded-md bg-[#151515] px-3 py-2 text-xs text-[#f0a15a]" role="status">
               <Loader2 className="size-3.5 animate-spin" />
-              正在创建主理人会话...
+              正在为你准备主理人会话...
             </div>
           )}
           {error && (

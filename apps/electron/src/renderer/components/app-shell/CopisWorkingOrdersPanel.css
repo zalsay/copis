@@ -3,21 +3,6 @@
   margin: 0 auto;
 }
 
-.copis-working-orders-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  margin-bottom: 18px;
-}
-
-.copis-working-orders-header h2 {
-  margin: 0;
-  font-size: 18px;
-  font-weight: 650;
-}
-
-.copis-working-orders-header span,
 .copis-working-order-identity small,
 .copis-working-order-identity time,
 .copis-working-order-payment small,
@@ -31,7 +16,6 @@
   white-space: nowrap;
 }
 
-.copis-working-orders-refresh,
 .copis-working-orders-error button,
 .copis-working-orders-pagination button {
   min-height: 34px;
@@ -49,25 +33,17 @@
   cursor: pointer;
 }
 
-.copis-working-orders-refresh {
-  width: 34px;
-  padding: 0;
-}
-
-.copis-working-orders-refresh:disabled,
 .copis-working-orders-pagination button:disabled {
   cursor: default;
   opacity: .5;
 }
 
-.copis-working-orders-refresh svg,
 .copis-working-orders-error button svg,
 .copis-working-orders-pagination button svg {
   width: 15px;
   height: 15px;
 }
 
-.copis-working-orders-refresh svg.spinning,
 .copis-working-order-delete svg.spinning {
   animation: copis-working-orders-spin .8s linear infinite;
 }

@@ -42,7 +42,7 @@ export function WorkingSessionHistoryView(): React.ReactElement | null {
       })
       .catch((error: unknown) => {
         if (disposed) return
-        setState({ status: 'error', error: error instanceof Error ? error.message : 'Working 历史加载失败' })
+        setState({ status: 'error', error: error instanceof Error ? error.message : 'Copis 历史加载失败' })
       })
     return () => { disposed = true }
   }, [loadVersion, runId, sessionId])
@@ -70,7 +70,7 @@ export function WorkingSessionHistoryView(): React.ReactElement | null {
           <TooltipTrigger asChild>
             <button
               type="button"
-              aria-label="关闭 Working 历史"
+              aria-label="关闭 Copis 历史"
               className="rounded-md p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground"
               onClick={() => clearSelection(null)}
             >
@@ -90,7 +90,7 @@ export function WorkingSessionHistoryView(): React.ReactElement | null {
           <TooltipTrigger asChild>
             <button
               type="button"
-              aria-label="重新加载 Working 历史"
+              aria-label="重新加载 Copis 历史"
               className="rounded-md p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-50"
               disabled={state.status === 'loading'}
               onClick={() => setLoadVersion((value) => value + 1)}
@@ -105,7 +105,7 @@ export function WorkingSessionHistoryView(): React.ReactElement | null {
       {state.status === 'loading' && (
         <div className="flex flex-1 items-center justify-center gap-2 text-sm text-muted-foreground">
           <Loader2 size={16} className="animate-spin" />
-          正在加载 Working 历史
+          正在加载 Copis 历史
         </div>
       )}
 

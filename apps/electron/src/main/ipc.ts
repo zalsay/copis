@@ -349,6 +349,7 @@ import {
   getWorkingModelCatalog,
   redactWorkingModelCatalog,
   saveWorkingModelCatalog,
+  testWorkingCustomModelConnection,
 } from './lib/working-model-catalog'
 import type {
   WorkingLoginInput,
@@ -360,6 +361,7 @@ import type {
   WorkingWorkspaceInput,
   WorkingModelLatencyMap,
   WorkingModelCatalogSaveInput,
+  WorkingTestCustomModelInput,
 } from '@copis/shared'
 
 /** 文件浏览器中需要隐藏的系统文件 */
@@ -1283,6 +1285,12 @@ export function registerIpcHandlers(): void {
     const access = getWorkingModelCatalogAccess()
     assertWorkingModelCatalogVip(access.isVip)
     return saveWorkingModelCatalog(catalog, access.isVip, access.ownerId)
+  })
+
+  ipcMain.handle(WORKING_IPC_CHANNELS.TEST_MODEL_CONNECTION, async (_, input: WorkingTestCustomModelInput) => {
+    const access = getWorkingModelCatalogAccess()
+    assertWorkingModelCatalogVip(access.isVip)
+    return testWorkingCustomModelConnection(input, access.isVip, access.ownerId)
   })
 
   // ===== 主程序与运行时相关 =====
@@ -4335,6 +4343,15 @@ export function registerIpcHandlers(): void {
       const states = dingtalkBridgeManager.getStates()
       const first = Object.values(states.bots)[0]
       return first ?? { status: 'disconnected' }
+    }
+  )
+
+  // 钉钉 OAuth Code 交换
+  ipcMain.handle(
+    DINGTALK_IPC_CHANNELS.OAUTH_EXCHANGE_CODE,
+    async (_, input: import('@copis/shared').DingTalkOAuthExchangeInput) => {
+      const { exchangeDingTalkAuthCode } = await import('./lib/dingtalk-oauth-service')
+      return exchangeDingTalkAuthCode(input)
     }
   )
 

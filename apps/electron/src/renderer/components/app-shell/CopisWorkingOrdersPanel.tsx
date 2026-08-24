@@ -77,16 +77,6 @@ export function CopisWorkingOrdersPanel(): React.ReactElement {
 
   return (
     <section className="copis-working-orders-panel" aria-label="我的订单">
-      <header className="copis-working-orders-header">
-        <div>
-          <h2>我的订单</h2>
-          {!loading && !error && <span>共 {pagination.total} 笔</span>}
-        </div>
-        <button type="button" className="copis-working-orders-refresh" onClick={() => void loadOrders(page)} disabled={loading} aria-label="刷新订单" title="刷新订单">
-          <RefreshCw aria-hidden="true" className={loading ? 'spinning' : undefined} />
-        </button>
-      </header>
-
       {actionError && <div className="copis-working-orders-action-error" role="alert">{actionError}</div>}
 
       {loading ? (
@@ -112,7 +102,7 @@ export function CopisWorkingOrdersPanel(): React.ReactElement {
                   <span className={`copis-working-order-type ${order.orderType}`}>
                     {order.orderType === 'vip_upgrade' ? 'VIP 升级' : '钻石充值'}
                   </span>
-                  <strong>{order.title || 'Working 订单'}</strong>
+                  <strong>{order.title || 'Copis 订单'}</strong>
                 </div>
                 <small>订单号：{order.outTradeNo || '--'}</small>
                 <time dateTime={order.createdAt}>{formatOrderTime(order.createdAt)}</time>

@@ -140,6 +140,7 @@ import type {
   WorkingModelLatencyMap,
   WorkingModelCatalog,
   WorkingModelCatalogSaveInput,
+  WorkingTestCustomModelInput,
   WorkingDiamondPackage,
   WorkingDiamondPurchaseResult,
   WorkingPasswordResetInput,
@@ -387,6 +388,7 @@ export interface ElectronAPI {
   getWorkingModelLatencies: () => Promise<WorkingModelLatencyMap>
   getWorkingModelCatalog: () => Promise<WorkingModelCatalog>
   saveWorkingModelCatalog: (catalog: WorkingModelCatalogSaveInput) => Promise<WorkingModelCatalog>
+  testWorkingModelConnection: (input: WorkingTestCustomModelInput) => Promise<ChannelTestResult>
   /** 订阅 VIP 到账后的 Working 账户更新。 */
   onWorkingAuthUpdated: (callback: (state: WorkingAuthState) => void) => () => void
 
@@ -1046,6 +1048,9 @@ export interface ElectronAPI {
   /** 订阅钉钉 Bridge 状态变化 */
   onDingTalkStatusChanged: (callback: (state: DingTalkBridgeState) => void) => () => void
 
+  /** 交换钉钉 OAuth authCode 并绑定 */
+  exchangeDingTalkAuthCode: (input: import('@copis/shared').DingTalkOAuthExchangeInput) => Promise<import('@copis/shared').DingTalkOAuthExchangeResult>
+
   // --- 钉钉多 Bot v2 API ---
 
   /** 获取多 Bot 配置 */
@@ -1421,6 +1426,7 @@ const electronAPI: ElectronAPI = {
   getWorkingModelLatencies: () => ipcRenderer.invoke(WORKING_IPC_CHANNELS.GET_MODEL_LATENCIES),
   getWorkingModelCatalog: () => ipcRenderer.invoke(WORKING_IPC_CHANNELS.GET_MODEL_CATALOG),
   saveWorkingModelCatalog: (catalog: WorkingModelCatalogSaveInput) => ipcRenderer.invoke(WORKING_IPC_CHANNELS.SAVE_MODEL_CATALOG, catalog),
+  testWorkingModelConnection: (input: WorkingTestCustomModelInput) => ipcRenderer.invoke(WORKING_IPC_CHANNELS.TEST_MODEL_CONNECTION, input),
   onWorkingAuthUpdated: (callback: (state: WorkingAuthState) => void) => {
     const listener = (_event: Electron.IpcRendererEvent, state: WorkingAuthState): void => callback(state)
     ipcRenderer.on(WORKING_IPC_CHANNELS.AUTH_UPDATED, listener)
@@ -2367,6 +2373,10 @@ const electronAPI: ElectronAPI = {
     const listener = (_event: Electron.IpcRendererEvent, state: DingTalkBridgeState): void => callback(state)
     ipcRenderer.on(DINGTALK_IPC_CHANNELS.STATUS_CHANGED, listener)
     return () => { ipcRenderer.removeListener(DINGTALK_IPC_CHANNELS.STATUS_CHANGED, listener) }
+  },
+
+  exchangeDingTalkAuthCode: (input: import('@copis/shared').DingTalkOAuthExchangeInput) => {
+    return ipcRenderer.invoke(DINGTALK_IPC_CHANNELS.OAUTH_EXCHANGE_CODE, input)
   },
 
   // --- 钉钉多 Bot v2 API ---

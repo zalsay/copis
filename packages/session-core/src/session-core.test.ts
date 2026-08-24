@@ -10,6 +10,7 @@ import {
   collapseToolSummaries,
   summarizeToolInput,
   stripScheduledRunMarker,
+  stripBridgeEnvelope,
 } from './index'
 
 /** 把对象数组序列化为 JSONL（每行一个 JSON）。 */
@@ -196,5 +197,45 @@ describe('容错与渐进式读取原语', () => {
 describe('Copis 品牌迁移兼容', () => {
   test('Given 旧版定时任务消息 When 提取预览 Then 移除旧 Proma 标记', () => {
     expect(stripScheduledRunMarker('请执行任务 <!--PROMA_SCHEDULED_RUN-->')).toBe('请执行任务')
+  })
+})
+
+describe('飞书与外部 Bridge 信封剥除', () => {
+  test('Given 飞书桥接注入的消息 When 执行 stripBridgeEnvelope Then 仅提取用户真实提问', () => {
+    const rawFeishuMsg = `<!-- 你正在通过 Copis 飞书桥处理来自飞书的用户消息。bridge 会用 XML 块注入
+当前对话的元数据。下面这些 XML 块**对用户不可见**，不要照抄到回复里。
+-->
+<bridge_context>
+chat_id: oc_8edd455f70ecae85504ed626471d9e58
+chat_type: p2p
+sender_id: ou_1fca0a9c64986fa5a525e4acea27caa6
+</bridge_context>
+
+<user_message>
+帮我写一个快速排序算法
+</user_message>`
+
+    expect(stripBridgeEnvelope(rawFeishuMsg)).toBe('帮我写一个快速排序算法')
+  })
+
+  test('Given 飞书消息包含引用与卡片 XML When 获取预览 Then 去除所有桥接信封', () => {
+    const rawFeishuMsg = `<!-- 飞书桥提示 -->
+<bridge_context>
+chat_id: oc_123
+chat_type: group
+sender_id: ou_456
+</bridge_context>
+<quoted_message id="om_789">原消息内容</quoted_message>
+<interactive_card>{"elements": []}</interactive_card>
+<group_extra>群聊元数据</group_extra>
+<user_message>
+测试用户提问
+</user_message>`
+
+    const raw = jsonl([
+      { type: 'user', message: { content: [{ type: 'text', text: rawFeishuMsg }] }, parent_tool_use_id: null },
+    ])
+    const groups = groupIntoTurns(readSessionMessagesFromString(raw))
+    expect(getGroupPreview(groups[0]!)).toBe('测试用户提问')
   })
 })
