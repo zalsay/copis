@@ -607,7 +607,13 @@ export class AgentOrchestrator {
       const latestMeta = getAgentSessionMeta(sessionId)
       if (!latestMeta || !isDefaultSessionTitle(latestMeta.title)) return
 
-      updateAgentSessionMeta(sessionId, { title })
+      updateAgentSessionMeta(sessionId, {
+        title,
+        ...(latestMeta.source ? { source: latestMeta.source } : {}),
+        ...(latestMeta.feishuDedicated ? { feishuDedicated: true } : {}),
+        ...(latestMeta.wechatDedicated ? { wechatDedicated: true } : {}),
+        ...(latestMeta.dingtalkDedicated ? { dingtalkDedicated: true } : {}),
+      })
       callbacks.onTitleUpdated(title)
       console.log(`[Agent 编排] 自动标题生成完成: "${title}"`)
     } catch (error) {

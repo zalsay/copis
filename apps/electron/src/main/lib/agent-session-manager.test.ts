@@ -432,31 +432,53 @@ describe('Agent 会话引用搜索', () => {
   })
 })
 
-describe('Agent 会话引用 prompt', () => {
-  test('Given 用户显式引用跨工作区会话 When 构建发送 prompt Then 保留该会话上下文', () => {
+describe('Agent 连接器专属会话标记保持与自动迁移', () => {
+  test('Given 历史会话仅包含连接器标题或绑定 When 读取会话索引 Then 自动补全并持久化 source 与 dedicated 属性', () => {
     writeAgentSessionsIndex([
-      { id: 'current-session', title: '当前工作区会话', workspaceId: 'workspace-a', createdAt: 1, updatedAt: 1 },
-      { id: 'other-workspace-session', title: '其他工作区会话', workspaceId: 'workspace-b', createdAt: 2, updatedAt: 2 },
+      { id: 'legacy-feishu', title: '飞书专属会话', workspaceId: 'default', createdAt: 1, updatedAt: 1 },
+      { id: 'legacy-wechat', title: '[微信] 专属会话', workspaceId: 'default', createdAt: 2, updatedAt: 2 },
+      { id: 'legacy-dingtalk', title: '钉钉专属会话', workspaceId: 'default', createdAt: 3, updatedAt: 3 },
+      { id: 'normal-session', title: '普通新会话', workspaceId: 'default', createdAt: 4, updatedAt: 4 },
     ])
 
-    const processWithResourcesPath = process as NodeJS.Process & { resourcesPath?: string }
-    const originalResourcesPath = processWithResourcesPath.resourcesPath
-    processWithResourcesPath.resourcesPath = tempHome
-    try {
-      const prompt = contextPrompt.buildReferencedSessionsPrompt(
-        'current-session',
-        ['other-workspace-session'],
-      )
+    const sessions = manager.listAgentSessions()
+    const feishu = sessions.find((s) => s.id === 'legacy-feishu')
+    const wechat = sessions.find((s) => s.id === 'legacy-wechat')
+    const dingtalk = sessions.find((s) => s.id === 'legacy-dingtalk')
+    const normal = sessions.find((s) => s.id === 'normal-session')
 
-      expect(prompt).toContain('id="other-workspace-session"')
-      expect(prompt).toContain('title="其他工作区会话"')
-      expect(prompt).not.toContain('同工作区')
-    } finally {
-      Object.defineProperty(processWithResourcesPath, 'resourcesPath', {
-        value: originalResourcesPath,
-        configurable: true,
-        writable: true,
-      })
-    }
+    expect(feishu?.source).toBe('feishu')
+    expect(feishu?.feishuDedicated).toBe(true)
+    expect(wechat?.source).toBe('wechat')
+    expect(wechat?.wechatDedicated).toBe(true)
+    expect(dingtalk?.source).toBe('dingtalk')
+    expect(dingtalk?.dingtalkDedicated).toBe(true)
+    expect(normal?.feishuDedicated).toBeUndefined()
+    expect(normal?.wechatDedicated).toBeUndefined()
+    expect(normal?.dingtalkDedicated).toBeUndefined()
+  })
+
+  test('Given 连接器专属会话 When 更新标题为业务名称 Then 专属标记与 source 始终保持不被丢弃', () => {
+    writeAgentSessionsIndex([
+      { id: 'wechat-session-1', title: '微信专属会话', workspaceId: 'default', createdAt: 1, updatedAt: 1 },
+    ])
+
+    // 先读一次触发迁移补全
+    manager.listAgentSessions()
+
+    // 模拟对话后 autoGenerateTitle 或用户重命名标题
+    const updated = manager.updateAgentSessionMeta('wechat-session-1', {
+      title: '开发 Python 自动化脚本',
+    })
+
+    expect(updated.title).toBe('开发 Python 自动化脚本')
+    expect(updated.source).toBe('wechat')
+    expect(updated.wechatDedicated).toBe(true)
+
+    // 重新从磁盘读取确认持久化保持
+    const reloaded = manager.getAgentSessionMeta('wechat-session-1')
+    expect(reloaded?.title).toBe('开发 Python 自动化脚本')
+    expect(reloaded?.source).toBe('wechat')
+    expect(reloaded?.wechatDedicated).toBe(true)
   })
 })

@@ -21,6 +21,8 @@ import {
   getAgentSessionWorkspacePath,
   getAgentWorkspacePath,
   getSdkConfigDir,
+  getFeishuBindingsPath,
+  getWeChatBindingsPath,
 } from './config-paths'
 import {
   ensureAgentWorkspaceWritableRoot,
@@ -202,6 +204,100 @@ function migrateLegacyOpenAIThinkingDefault(index: AgentSessionsIndex): boolean 
   return true
 }
 
+function migrateLegacyConnectorSessions(index: AgentSessionsIndex): boolean {
+  let changed = false
+  const feishuSessionIds = new Set<string>()
+  const wechatSessionIds = new Set<string>()
+
+  try {
+    const feishuBindingsPath = getFeishuBindingsPath()
+    const feishuBindings = readJsonFileSafe<Array<{ sessionId?: string }>>(feishuBindingsPath)
+    if (Array.isArray(feishuBindings)) {
+      for (const b of feishuBindings) {
+        if (b.sessionId) feishuSessionIds.add(b.sessionId)
+      }
+    }
+  } catch {
+    // 忽略异常
+  }
+
+  try {
+    const wechatBindingsPath = getWeChatBindingsPath()
+    const wechatBindings = readJsonFileSafe<Array<{ sessionId?: string }>>(wechatBindingsPath)
+    if (Array.isArray(wechatBindings)) {
+      for (const b of wechatBindings) {
+        if (b.sessionId) wechatSessionIds.add(b.sessionId)
+      }
+    }
+  } catch {
+    // 忽略异常
+  }
+
+  for (const session of index.sessions) {
+    const title = session.title || ''
+    // 飞书专属会话识别
+    if (
+      feishuSessionIds.has(session.id) ||
+      session.source === 'feishu' ||
+      session.feishuDedicated === true ||
+      title === '飞书专属会话' ||
+      title === '飞书会话' ||
+      title.startsWith('飞书') ||
+      title.startsWith('[飞书]')
+    ) {
+      if (session.source !== 'feishu') {
+        session.source = 'feishu'
+        changed = true
+      }
+      if (!session.feishuDedicated) {
+        session.feishuDedicated = true
+        changed = true
+      }
+    }
+
+    // 微信专属会话识别
+    if (
+      wechatSessionIds.has(session.id) ||
+      session.source === 'wechat' ||
+      session.wechatDedicated === true ||
+      title === '微信专属会话' ||
+      title === '微信会话' ||
+      title.startsWith('微信') ||
+      title.startsWith('[微信]')
+    ) {
+      if (session.source !== 'wechat') {
+        session.source = 'wechat'
+        changed = true
+      }
+      if (!session.wechatDedicated) {
+        session.wechatDedicated = true
+        changed = true
+      }
+    }
+
+    // 钉钉专属会话识别
+    if (
+      session.source === 'dingtalk' ||
+      session.dingtalkDedicated === true ||
+      title === '钉钉专属会话' ||
+      title === '钉钉会话' ||
+      title.startsWith('钉钉') ||
+      title.startsWith('[钉钉]')
+    ) {
+      if (session.source !== 'dingtalk') {
+        session.source = 'dingtalk'
+        changed = true
+      }
+      if (!session.dingtalkDedicated) {
+        session.dingtalkDedicated = true
+        changed = true
+      }
+    }
+  }
+
+  return changed
+}
+
 /**
  * 读取会话索引文件
  */
@@ -213,7 +309,8 @@ function readIndex(): AgentSessionsIndex {
     const agentRuntimeMigrated = migrateLegacyAgentRuntime(data)
     const thinkingDefaultMigrated = migrateLegacyOpenAIThinkingDefault(data)
     const attachedPathsMigrated = normalizePersistedAttachedPaths(data)
-    if (permissionModeMigrated || agentRuntimeMigrated || thinkingDefaultMigrated || attachedPathsMigrated) {
+    const connectorSessionsMigrated = migrateLegacyConnectorSessions(data)
+    if (permissionModeMigrated || agentRuntimeMigrated || thinkingDefaultMigrated || attachedPathsMigrated || connectorSessionsMigrated) {
       writeIndex(data)
       if (permissionModeMigrated) {
         console.log('[Agent 会话] 已迁移历史权限模式 auto → bypassPermissions')
@@ -226,6 +323,9 @@ function readIndex(): AgentSessionsIndex {
       }
       if (attachedPathsMigrated) {
         console.log('[Agent 会话] 已清理历史会话中的非法附加路径')
+      }
+      if (connectorSessionsMigrated) {
+        console.log('[Agent 会话] 已迁移并补充连接器专属会话标签属性')
       }
     }
     return data
@@ -260,7 +360,7 @@ export function ensureDefaultFeishuSession(): AgentSessionMeta | null {
 
   const index = readIndex()
   const existing = index.sessions.find(
-    (s) => s.workspaceId === defaultWs.id && (s.source === 'feishu' || s.feishuDedicated || s.title === '飞书专属会话' || s.title === '飞书会话'),
+    (s) => s.workspaceId === defaultWs.id && (s.source === 'feishu' || s.feishuDedicated || s.title === '飞书专属会话' || s.title === '飞书会话' || s.title.startsWith('飞书') || s.title.startsWith('[飞书]')),
   )
   if (existing) {
     let changed = false
@@ -315,7 +415,7 @@ export function ensureDefaultWeChatSession(): AgentSessionMeta | null {
 
   const index = readIndex()
   const existing = index.sessions.find(
-    (s) => s.workspaceId === defaultWs.id && (s.source === 'wechat' || s.wechatDedicated || s.title === '微信专属会话' || s.title === '微信会话'),
+    (s) => s.workspaceId === defaultWs.id && (s.source === 'wechat' || s.wechatDedicated || s.title === '微信专属会话' || s.title === '微信会话' || s.title.startsWith('微信') || s.title.startsWith('[微信]')),
   )
   if (existing) {
     let changed = false
@@ -370,7 +470,7 @@ export function ensureDefaultDingTalkSession(): AgentSessionMeta | null {
 
   const index = readIndex()
   const existing = index.sessions.find(
-    (s) => s.workspaceId === defaultWs.id && (s.source === 'dingtalk' || s.dingtalkDedicated || s.title === '钉钉专属会话' || s.title === '钉钉会话'),
+    (s) => s.workspaceId === defaultWs.id && (s.source === 'dingtalk' || s.dingtalkDedicated || s.title === '钉钉专属会话' || s.title === '钉钉会话' || s.title.startsWith('钉钉') || s.title.startsWith('[钉钉]')),
   )
   if (existing) {
     let changed = false
@@ -684,7 +784,7 @@ export function getAgentSessionSDKMessages(id: string): SDKMessage[] {
  */
 export function updateAgentSessionMeta(
   id: string,
-  updates: Partial<Pick<AgentSessionMeta, 'title' | 'channelId' | 'modelId' | 'sdkSessionId' | 'piSessionFile' | 'piEntryBindings' | 'agentRuntime' | 'codexFastMode' | 'workingMode' | 'reasoningLevel' | 'openAIThinkingLevel' | 'workspaceId' | 'expertTeamSession' | 'expertTeamSetup' | 'pinned' | 'starred' | 'archived' | 'attachedDirectories' | 'attachedFiles' | 'forkSourceDir' | 'forkSourceSdkSessionId' | 'resumeAtMessageUuid' | 'stoppedByUser' | 'permissionMode' | 'advancedAuthorization' | 'completedButUnconfirmed' | 'sourceAutomationId' | 'automationGraduated' | 'parentSessionId' | 'rootSessionId' | 'sourceDelegationId' | 'delegationRole' | 'delegationStatus' | 'delegationDepth' | 'delegationGoal'>>,
+  updates: Partial<Pick<AgentSessionMeta, 'title' | 'channelId' | 'modelId' | 'sdkSessionId' | 'piSessionFile' | 'piEntryBindings' | 'agentRuntime' | 'codexFastMode' | 'workingMode' | 'reasoningLevel' | 'openAIThinkingLevel' | 'workspaceId' | 'expertTeamSession' | 'expertTeamSetup' | 'pinned' | 'starred' | 'archived' | 'attachedDirectories' | 'attachedFiles' | 'forkSourceDir' | 'forkSourceSdkSessionId' | 'resumeAtMessageUuid' | 'stoppedByUser' | 'permissionMode' | 'advancedAuthorization' | 'completedButUnconfirmed' | 'sourceAutomationId' | 'automationGraduated' | 'parentSessionId' | 'rootSessionId' | 'sourceDelegationId' | 'delegationRole' | 'delegationStatus' | 'delegationDepth' | 'delegationGoal' | 'source' | 'feishuDedicated' | 'wechatDedicated' | 'dingtalkDedicated'>>,
 ): AgentSessionMeta {
   const index = readIndex()
   const idx = index.sessions.findIndex((s) => s.id === id)
@@ -710,6 +810,11 @@ export function updateAgentSessionMeta(
   const updated: AgentSessionMeta = {
     ...existing,
     ...normalizedUpdates,
+    // 保护专属连接器会话标记不被常规更新丢失
+    ...(existing.feishuDedicated && normalizedUpdates.feishuDedicated === undefined ? { feishuDedicated: true } : {}),
+    ...(existing.wechatDedicated && normalizedUpdates.wechatDedicated === undefined ? { wechatDedicated: true } : {}),
+    ...(existing.dingtalkDedicated && normalizedUpdates.dingtalkDedicated === undefined ? { dingtalkDedicated: true } : {}),
+    ...(existing.source && normalizedUpdates.source === undefined ? { source: existing.source } : {}),
     ...(autoUnarchive ? { archived: false } : {}),
     updatedAt: isStarredOnly ? existing.updatedAt : Date.now(),
   }
