@@ -10,6 +10,7 @@ import type {
 import { cn } from '@/lib/utils'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
+import { AppSelect } from '@/components/ui/select'
 import { persistWorkingModelCatalog, workingModelCatalogAtom } from '@/atoms/working-model-catalog-atoms'
 
 const PROTOCOL_OPTIONS: Array<{ value: WorkingCustomModelProtocol; label: string }> = [
@@ -129,17 +130,16 @@ function SelectField({
   hint?: string
 }): React.ReactElement {
   return (
-    <label className="min-w-0 space-y-1.5">
+    <div className="min-w-0 space-y-1.5">
       <span className="text-xs font-medium text-foreground/80">{label}</span>
-      <select
+      <AppSelect
         value={value}
-        onChange={(event) => onChange(event.target.value)}
-        className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm outline-none transition-colors focus-visible:ring-1 focus-visible:ring-ring"
-      >
-        {options.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-      </select>
+        onValueChange={onChange}
+        options={options}
+        triggerClassName="w-full h-9 bg-background"
+      />
       {hint && <span className="block text-[11px] text-muted-foreground">{hint}</span>}
-    </label>
+    </div>
   )
 }
 

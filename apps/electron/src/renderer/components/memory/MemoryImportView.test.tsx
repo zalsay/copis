@@ -26,11 +26,7 @@ describe('Memory 导入页面 BDD', () => {
     expect(html).toContain('网页链接抓取 (URL)')
     expect(html).toContain('结构化文件导入 (JSON/Markdown)')
     expect(html).toContain('当前项目（Copis）')
-    expect(html).toContain('用户记忆（全局通用）')
     expect(html).toContain('事实 (fact)')
-    expect(html).toContain('偏好 (preference)')
-    expect(html).toContain('决策 (decision)')
-    expect(html).toContain('项目 (project)')
     expect(html).toContain('点击或拖拽文档到此处（PDF / Word / Office / TXT）')
   })
 

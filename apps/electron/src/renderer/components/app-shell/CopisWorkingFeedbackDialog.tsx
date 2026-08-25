@@ -1,6 +1,7 @@
 import * as React from 'react'
 import { createPortal } from 'react-dom'
-import { ChevronDown, X } from 'lucide-react'
+import { X } from 'lucide-react'
+import { AppSelect } from '@/components/ui/select'
 import './CopisWorkingFeedbackDialog.css'
 
 interface CopisWorkingFeedbackDialogProps {
@@ -123,24 +124,26 @@ export function CopisWorkingFeedbackDialog({ open, onClose }: CopisWorkingFeedba
         </header>
 
         <div className="copis-working-feedback-grid">
-          <label>
+          <div className="flex flex-col gap-1.5 text-xs text-foreground/80">
             <span>类型</span>
-            <span className="copis-working-feedback-select-wrap">
-              <select value={feedbackType} onChange={(event) => setFeedbackType(event.target.value)} disabled={submitting}>
-                {feedbackTypeOptions.map((option) => <option value={option.value} key={option.value}>{option.label}</option>)}
-              </select>
-              <ChevronDown aria-hidden="true" />
-            </span>
-          </label>
-          <label>
+            <AppSelect
+              value={feedbackType}
+              onValueChange={setFeedbackType}
+              disabled={submitting}
+              triggerClassName="h-9 w-full bg-background"
+              options={feedbackTypeOptions.map((o) => ({ value: o.value, label: o.label }))}
+            />
+          </div>
+          <div className="flex flex-col gap-1.5 text-xs text-foreground/80">
             <span>严重程度</span>
-            <span className="copis-working-feedback-select-wrap">
-              <select value={severity} onChange={(event) => setSeverity(event.target.value)} disabled={submitting}>
-                {severityOptions.map((option) => <option value={option.value} key={option.value}>{option.label}</option>)}
-              </select>
-              <ChevronDown aria-hidden="true" />
-            </span>
-          </label>
+            <AppSelect
+              value={severity}
+              onValueChange={setSeverity}
+              disabled={submitting}
+              triggerClassName="h-9 w-full bg-background"
+              options={severityOptions.map((o) => ({ value: o.value, label: o.label }))}
+            />
+          </div>
         </div>
 
         <label className="copis-working-feedback-field">

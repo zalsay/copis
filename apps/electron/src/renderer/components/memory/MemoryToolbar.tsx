@@ -1,6 +1,7 @@
 import * as React from 'react'
 import { Plus, RefreshCw, Search } from 'lucide-react'
 import type { MemoryKindFilter, MemoryMaintenanceState, MemoryPolicy, MemoryScopeFilter, MemoryStats } from '@copis/shared'
+import { AppSelect } from '@/components/ui/select'
 import { cn } from '@/lib/utils'
 
 interface MemoryToolbarProps {
@@ -56,43 +57,56 @@ export function MemoryToolbar({
         />
       </div>
 
-      <select
+      <AppSelect
         value={scope}
-        onChange={(event) => onScopeChange(event.target.value as MemoryScopeFilter)}
+        onValueChange={(val) => onScopeChange(val as MemoryScopeFilter)}
         aria-label="记忆范围"
-        className="h-9 rounded-lg bg-muted/60 px-2.5 text-sm text-foreground/75 outline-none focus:ring-1 focus:ring-primary/40"
-      >
-        <option value="all">全部范围</option>
-        <option value="user">用户记忆</option>
-        <option value="workspace">工作区记忆</option>
-      </select>
+        size="sm"
+        triggerClassName="h-9 w-auto bg-muted/60"
+        options={[
+          { value: 'all', label: '全部范围' },
+          { value: 'user', label: '用户记忆' },
+          { value: 'workspace', label: '工作区记忆' },
+        ]}
+      />
 
-      <select
+      <AppSelect
         value={workspaceAvailable ? (memoryPolicyOverride ?? 'inherit') : memoryPolicy}
         disabled={!workspaceAvailable}
-        onChange={(event) => onMemoryPolicyChange(event.target.value === 'inherit' ? null : event.target.value as MemoryPolicy)}
+        onValueChange={(val) => onMemoryPolicyChange(val === 'inherit' ? null : (val as MemoryPolicy))}
         aria-label="Memory 策略"
-        className="h-9 rounded-lg bg-muted/60 px-2.5 text-sm text-foreground/75 outline-none focus:ring-1 focus:ring-primary/40"
-      >
-        {workspaceAvailable && <option value="inherit">记忆：{memoryDefaultPolicy === 'writable' ? '可写' : memoryDefaultPolicy === 'visible' ? '只读' : '关闭'}（继承全局）</option>}
-        <option value="writable">记忆：可写</option>
-        <option value="visible">记忆：只读</option>
-        <option value="off">记忆：关闭</option>
-      </select>
+        size="sm"
+        triggerClassName="h-9 w-auto bg-muted/60"
+        options={[
+          ...(workspaceAvailable
+            ? [
+                {
+                  value: 'inherit',
+                  label: `记忆：${memoryDefaultPolicy === 'writable' ? '可写' : memoryDefaultPolicy === 'visible' ? '只读' : '关闭'}（继承全局）`,
+                },
+              ]
+            : []),
+          { value: 'writable', label: '记忆：可写' },
+          { value: 'visible', label: '记忆：只读' },
+          { value: 'off', label: '记忆：关闭' },
+        ]}
+      />
 
-      <select
+      <AppSelect
         value={kind}
-        onChange={(event) => onKindChange(event.target.value as MemoryKindFilter)}
+        onValueChange={(val) => onKindChange(val as MemoryKindFilter)}
         aria-label="记忆类型"
-        className="h-9 rounded-lg bg-muted/60 px-2.5 text-sm text-foreground/75 outline-none focus:ring-1 focus:ring-primary/40"
-      >
-        <option value="all">全部类型</option>
-        <option value="fact">事实</option>
-        <option value="preference">偏好</option>
-        <option value="decision">决策</option>
-        <option value="project">项目</option>
-        <option value="scratch">草稿</option>
-      </select>
+        size="sm"
+        triggerClassName="h-9 w-auto bg-muted/60"
+        options={[
+          { value: 'all', label: '全部类型' },
+          { value: 'fact', label: '事实' },
+          { value: 'preference', label: '偏好' },
+          { value: 'decision', label: '决策' },
+          { value: 'project', label: '项目' },
+          { value: 'scratch', label: '草稿' },
+        ]}
+      />
 
       <label className="flex h-9 items-center gap-2 px-2 text-xs text-foreground/60">
         <input

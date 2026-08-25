@@ -26,11 +26,8 @@ describe('Memory 导出页面 BDD', () => {
       </Provider>,
     )
 
-    expect(html).toContain('当前项目')
-    expect(html).toContain('全部项目')
-    expect(html).toContain('用户记忆')
+    expect(html).toContain('当前项目：Copis')
     expect(html).toContain('JSON')
-    expect(html).toContain('Markdown')
     expect(html).toContain('包含归档条目')
     expect(html).toContain('包含 revision history')
   })

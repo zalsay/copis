@@ -1,5 +1,6 @@
 import * as React from 'react'
 import type { MemoryPolicy } from '@copis/shared'
+import { AppSelect } from '@/components/ui/select'
 
 interface MemoryGlobalSettingsProps {
   policy: MemoryPolicy
@@ -21,23 +22,25 @@ export function MemoryGlobalSettings({ policy, onChange, saving = false }: Memor
         <p className="mt-1 text-sm text-foreground/50">没有项目覆盖策略时，Memory 会使用这里的默认值。</p>
 
         <div className="mt-6 rounded-lg bg-card/55 p-5 shadow-sm ring-1 ring-border/35">
-          <label className="flex items-center justify-between gap-4">
-            <span>
+          <div className="flex items-center justify-between gap-4">
+            <div>
               <span className="block text-sm font-medium text-foreground">默认 Memory 策略</span>
               <span className="mt-1 block text-xs leading-5 text-foreground/45">项目设置为“继承全局”时生效。当前值：{policyLabel(policy)}。</span>
-            </span>
-            <select
+            </div>
+            <AppSelect
               aria-label="全局默认 Memory 策略"
               value={policy}
               disabled={saving}
-              onChange={(event) => onChange(event.target.value as MemoryPolicy)}
-              className="h-9 shrink-0 rounded-lg bg-muted/65 px-2.5 text-sm text-foreground/80 outline-none focus:ring-1 focus:ring-primary/40 disabled:opacity-60"
-            >
-              <option value="writable">可写</option>
-              <option value="visible">只读</option>
-              <option value="off">关闭</option>
-            </select>
-          </label>
+              onValueChange={(val) => onChange(val as MemoryPolicy)}
+              size="sm"
+              triggerClassName="h-9 w-28 shrink-0 bg-muted/65"
+              options={[
+                { value: 'writable', label: '可写' },
+                { value: 'visible', label: '只读' },
+                { value: 'off', label: '关闭' },
+              ]}
+            />
+          </div>
         </div>
 
         <div className="mt-4 space-y-3 text-sm leading-6 text-foreground/55">

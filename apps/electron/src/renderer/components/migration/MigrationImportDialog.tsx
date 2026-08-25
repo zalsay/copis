@@ -15,6 +15,7 @@ import {
   DialogTitle,
   DialogDescription,
 } from '@/components/ui/dialog'
+import { AppSelect } from '@/components/ui/select'
 import { cn } from '@/lib/utils'
 import {
   migrationImportDialogOpenAtom,
@@ -152,16 +153,16 @@ export function MigrationImportDialog(): React.ReactElement {
                         {!r.exists && (
                           <div className="flex items-center gap-2 pl-5">
                             <span className="text-xs text-muted-foreground">处理方式：</span>
-                            <select
+                            <AppSelect
                               value={pathMappings[r.path] === null ? '__remove' : (pathMappings[r.path] ?? '__remove')}
-                              onChange={(e) => handlePathMapping(r.path, e.target.value === '__remove' ? null : e.target.value)}
-                              className="text-xs border border-border rounded px-2 py-1 bg-background"
-                            >
-                              <option value="__remove">移除（推荐）</option>
-                              {r.suggested && (
-                                <option value={r.suggested}>推断路径：{r.suggested}</option>
-                              )}
-                            </select>
+                              onValueChange={(val) => handlePathMapping(r.path, val === '__remove' ? null : val)}
+                              size="sm"
+                              triggerClassName="h-7 w-40 bg-background text-xs"
+                              options={[
+                                { value: '__remove', label: '移除（推荐）' },
+                                ...(r.suggested ? [{ value: r.suggested, label: `推断路径：${r.suggested}` }] : []),
+                              ]}
+                            />
                           </div>
                         )}
                       </div>
@@ -328,12 +329,12 @@ function V2ContentSummary({ preview, workspaceMappings, localWorkspaces, onWorks
                     </span>
                   )}
                 </div>
-                <div className="flex items-center gap-2 pl-5">
+                <div className="flex flex-wrap items-center gap-2 pl-5">
                   <span className="text-xs text-muted-foreground">操作：</span>
-                  <select
+                  <AppSelect
                     value={action}
-                    onChange={(e) => {
-                      const newAction = e.target.value as 'merge' | 'create' | 'skip'
+                    onValueChange={(newVal) => {
+                      const newAction = newVal as 'merge' | 'create' | 'skip'
                       if (newAction === 'merge' && ws.existsLocally) {
                         onWorkspaceMapping(ws.workspaceSlug, { action: 'merge', targetWorkspaceId: ws.localWorkspaceId })
                       } else if (newAction === 'merge') {
@@ -344,29 +345,31 @@ function V2ContentSummary({ preview, workspaceMappings, localWorkspaces, onWorks
                         onWorkspaceMapping(ws.workspaceSlug, { action: 'skip' })
                       }
                     }}
-                    className="text-xs border border-border rounded px-2 py-1 bg-background"
-                  >
-                    {ws.existsLocally && (
-                      <option value="merge">合并到已有项目</option>
-                    )}
-                    {!ws.existsLocally && localWorkspaces.length > 0 && (
-                      <option value="merge">合并到现有项目...</option>
-                    )}
-                    <option value="create">创建新项目</option>
-                    <option value="skip">跳过</option>
-                  </select>
+                    size="sm"
+                    triggerClassName="h-7 w-36 bg-background text-xs"
+                    options={[
+                      ...(ws.existsLocally ? [{ value: 'merge', label: '合并到已有项目' }] : []),
+                      ...(!ws.existsLocally && localWorkspaces.length > 0
+                        ? [{ value: 'merge', label: '合并到现有项目...' }]
+                        : []),
+                      { value: 'create', label: '创建新项目' },
+                      { value: 'skip', label: '跳过' },
+                    ]}
+                  />
 
                   {action === 'merge' && !ws.existsLocally && (
-                    <select
-                      value={mapping?.targetWorkspaceId ?? ''}
-                      onChange={(e) => onWorkspaceMapping(ws.workspaceSlug, { action: 'merge', targetWorkspaceId: e.target.value })}
-                      className="text-xs border border-border rounded px-2 py-1 bg-background"
-                    >
-                      <option value="">选择项目...</option>
-                      {localWorkspaces.map((lw) => (
-                        <option key={lw.id} value={lw.id}>{lw.name}</option>
-                      ))}
-                    </select>
+                    <AppSelect
+                      value={mapping?.targetWorkspaceId ?? '__none__'}
+                      onValueChange={(val) =>
+                        onWorkspaceMapping(ws.workspaceSlug, { action: 'merge', targetWorkspaceId: val === '__none__' ? undefined : val })
+                      }
+                      size="sm"
+                      triggerClassName="h-7 w-36 bg-background text-xs"
+                      options={[
+                        { value: '__none__', label: '选择项目...' },
+                        ...localWorkspaces.map((lw) => ({ value: lw.id, label: lw.name })),
+                      ]}
+                    />
                   )}
                 </div>
               </div>
@@ -384,14 +387,16 @@ function V2ContentSummary({ preview, workspaceMappings, localWorkspaces, onWorks
             </p>
             <div className="flex items-center gap-2">
               <span className="text-xs text-amber-600 dark:text-amber-500">冲突处理：</span>
-              <select
+              <AppSelect
                 value={conflictResolution}
-                onChange={(e) => onConflictResolutionChange(e.target.value as 'overwrite' | 'skip')}
-                className="text-xs border border-amber-300 dark:border-amber-700 rounded px-2 py-1 bg-background"
-              >
-                <option value="overwrite">用导入版本覆盖本地（推荐）</option>
-                <option value="skip">保留本地版本，跳过冲突项</option>
-              </select>
+                onValueChange={(val) => onConflictResolutionChange(val as 'overwrite' | 'skip')}
+                size="sm"
+                triggerClassName="h-7 w-56 border-amber-300 bg-background text-xs dark:border-amber-700"
+                options={[
+                  { value: 'overwrite', label: '用导入版本覆盖本地（推荐）' },
+                  { value: 'skip', label: '保留本地版本，跳过冲突项' },
+                ]}
+              />
             </div>
           </div>
         </div>

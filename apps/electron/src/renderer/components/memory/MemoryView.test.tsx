@@ -92,7 +92,7 @@ describe('Memory 页面 BDD', () => {
 
     expect(html).not.toContain('lucide-book-open')
     expect(html).toContain('flex h-9 min-w-0 items-center gap-2 text-xs leading-none')
-    expect(html).toContain('text-sm leading-none text-foreground/80')
+    expect(html).toContain('min-w-36 max-w-[min(22rem,45vw)] bg-muted/60')
   })
 
   test('Given 没有工作区 When 打开 Memory 页面 Then 只显示用户记忆并可关闭自动记忆', () => {

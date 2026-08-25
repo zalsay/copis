@@ -2,6 +2,7 @@ import * as React from 'react'
 import { Archive, Check, Edit3, Save, X } from 'lucide-react'
 import type { MemoryEntry, MemoryKind, MemoryRevision, MemoryScope } from '@copis/shared'
 import type { MemoryConflictState, MemoryDraft, MemoryEditorMode } from '@/atoms/memory-atoms'
+import { AppSelect } from '@/components/ui/select'
 import { MemoryHistory } from './MemoryHistory'
 
 const KIND_OPTIONS: Array<{ value: MemoryKind; label: string }> = [
@@ -114,30 +115,32 @@ export function MemoryEditor({
         {mode === 'create' && (
           <div className="flex flex-wrap items-center gap-3 rounded-lg bg-muted/45 px-3 py-2.5 text-xs text-foreground/60">
             <span>范围</span>
-            <select
+            <AppSelect
               value={draft.scope}
-              onChange={(event) => updateDraft({ scope: event.target.value as MemoryScope })}
-              className="rounded-md bg-background px-2 py-1 text-xs text-foreground/75 outline-none"
-            >
-              <option value="user">用户记忆</option>
-              <option value="workspace" disabled={!workspaceSlug}>当前工作区</option>
-            </select>
+              onValueChange={(val) => updateDraft({ scope: val as MemoryScope })}
+              size="sm"
+              triggerClassName="h-7 w-28 bg-background text-xs"
+              options={[
+                { value: 'user', label: '用户记忆' },
+                { value: 'workspace', label: '当前工作区', disabled: !workspaceSlug },
+              ]}
+            />
             {!workspaceSlug && <span className="text-amber-600 dark:text-amber-400">选择工作区后才能新建工作区记忆</span>}
           </div>
         )}
 
         <div className="flex flex-wrap items-center gap-3 text-xs text-foreground/50">
-          <label className="flex items-center gap-2">
-            类型
-            <select
+          <div className="flex items-center gap-2">
+            <span>类型</span>
+            <AppSelect
               value={draft.kind}
               disabled={readOnly}
-              onChange={(event) => updateDraft({ kind: event.target.value as MemoryKind })}
-              className="rounded-md bg-muted/60 px-2 py-1.5 text-xs text-foreground/75 outline-none disabled:opacity-70"
-            >
-              {KIND_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-            </select>
-          </label>
+              onValueChange={(val) => updateDraft({ kind: val as MemoryKind })}
+              size="sm"
+              triggerClassName="h-8 w-24 bg-muted/60 text-xs"
+              options={KIND_OPTIONS}
+            />
+          </div>
           <label className="flex min-w-[220px] flex-1 items-center gap-2">
             标签
             <input

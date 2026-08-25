@@ -24,6 +24,7 @@ import {
 } from '@/atoms/memory-atoms'
 import { memoryApi } from '@/lib/memory-api'
 import { parseMemoryImportFile, parseMarkdownImport } from '@/lib/memory-import-parser'
+import { AppSelect } from '@/components/ui/select'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
 
@@ -346,33 +347,40 @@ export function MemoryImportView({ workspaceSlug, workspaces }: MemoryImportView
           <div className="mt-4 grid gap-4 sm:grid-cols-2">
             <div>
               <label className="text-xs font-medium text-foreground/70">导入目标范围</label>
-              <select
+              <AppSelect
                 value={scope}
-                onChange={(e) => setScope(e.target.value as 'current-workspace' | 'user')}
+                onValueChange={(val) => setScope(val as 'current-workspace' | 'user')}
                 aria-label="导入范围"
-                className="mt-1.5 h-9 w-full rounded-lg border border-border/50 bg-background px-3 text-sm text-foreground/80 outline-none focus:border-primary focus:ring-1 focus:ring-primary"
-              >
-                {workspaceSlug && (
-                  <option value="current-workspace">当前项目（{currentWorkspace?.name ?? workspaceSlug}）</option>
-                )}
-                <option value="user">用户记忆（全局通用）</option>
-              </select>
+                triggerClassName="mt-1.5 h-9 w-full bg-background"
+                options={[
+                  ...(workspaceSlug
+                    ? [
+                        {
+                          value: 'current-workspace',
+                          label: `当前项目（${currentWorkspace?.name ?? workspaceSlug}）`,
+                        },
+                      ]
+                    : []),
+                  { value: 'user', label: '用户记忆（全局通用）' },
+                ]}
+              />
             </div>
 
             <div>
               <label className="text-xs font-medium text-foreground/70">默认知识分类</label>
-              <select
+              <AppSelect
                 value={defaultKind}
-                onChange={(e) => setDefaultKind(e.target.value as MemoryKind)}
+                onValueChange={(val) => setDefaultKind(val as MemoryKind)}
                 aria-label="默认知识分类"
-                className="mt-1.5 h-9 w-full rounded-lg border border-border/50 bg-background px-3 text-sm text-foreground/80 outline-none focus:border-primary focus:ring-1 focus:ring-primary"
-              >
-                <option value="fact">事实 (fact)</option>
-                <option value="preference">偏好 (preference)</option>
-                <option value="decision">决策 (decision)</option>
-                <option value="project">项目 (project)</option>
-                <option value="scratch">草稿 (scratch)</option>
-              </select>
+                triggerClassName="mt-1.5 h-9 w-full bg-background"
+                options={[
+                  { value: 'fact', label: '事实 (fact)' },
+                  { value: 'preference', label: '偏好 (preference)' },
+                  { value: 'decision', label: '决策 (decision)' },
+                  { value: 'project', label: '项目 (project)' },
+                  { value: 'scratch', label: '草稿 (scratch)' },
+                ]}
+              />
             </div>
           </div>
         </div>

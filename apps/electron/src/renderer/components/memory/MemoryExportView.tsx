@@ -2,6 +2,7 @@ import * as React from 'react'
 import { Download, Loader2 } from 'lucide-react'
 import { useAtom, useAtomValue } from 'jotai'
 import type { AgentWorkspace, MemoryExportFormat, MemoryExportInput, MemoryExportScope, MemoryStats } from '@copis/shared'
+import { AppSelect } from '@/components/ui/select'
 import {
   memoryExportEntryCountAtom,
   memoryExportErrorAtom,
@@ -145,32 +146,39 @@ export function MemoryExportView({ workspaceSlug, workspaces }: MemoryExportView
         <p className="mt-1 text-sm text-foreground/50">导出只读，不会改变条目、归档状态或 revision。</p>
 
         <div className="mt-6 space-y-4 rounded-lg bg-card/55 p-5 shadow-sm ring-1 ring-border/35">
-          <label className="flex items-center justify-between gap-4 text-sm">
+          <div className="flex items-center justify-between gap-4 text-sm">
             <span className="font-medium text-foreground">导出范围</span>
-            <select
+            <AppSelect
               aria-label="导出范围"
               value={scope}
-              onChange={(event) => setScope(event.target.value as MemoryExportScope)}
-              className="h-9 min-w-48 rounded-lg bg-muted/65 px-2.5 text-sm text-foreground/80 outline-none focus:ring-1 focus:ring-primary/40"
-            >
-              <option value="current-workspace">当前项目{workspaceSlug ? `：${workspaces.find((workspace) => workspace.slug === workspaceSlug)?.name ?? ''}` : ''}</option>
-              <option value="all-workspaces">全部项目</option>
-              <option value="user">用户记忆</option>
-            </select>
-          </label>
+              onValueChange={(val) => setScope(val as MemoryExportScope)}
+              size="sm"
+              triggerClassName="h-9 min-w-48 bg-muted/65"
+              options={[
+                {
+                  value: 'current-workspace',
+                  label: `当前项目${workspaceSlug ? `：${workspaces.find((w) => w.slug === workspaceSlug)?.name ?? ''}` : ''}`,
+                },
+                { value: 'all-workspaces', label: '全部项目' },
+                { value: 'user', label: '用户记忆' },
+              ]}
+            />
+          </div>
 
-          <label className="flex items-center justify-between gap-4 text-sm">
+          <div className="flex items-center justify-between gap-4 text-sm">
             <span className="font-medium text-foreground">导出格式</span>
-            <select
+            <AppSelect
               aria-label="导出格式"
               value={format}
-              onChange={(event) => setFormat(event.target.value as MemoryExportFormat)}
-              className="h-9 min-w-48 rounded-lg bg-muted/65 px-2.5 text-sm text-foreground/80 outline-none focus:ring-1 focus:ring-primary/40"
-            >
-              <option value="json">JSON</option>
-              <option value="markdown">Markdown</option>
-            </select>
-          </label>
+              onValueChange={(val) => setFormat(val as MemoryExportFormat)}
+              size="sm"
+              triggerClassName="h-9 min-w-48 bg-muted/65"
+              options={[
+                { value: 'json', label: 'JSON' },
+                { value: 'markdown', label: 'Markdown' },
+              ]}
+            />
+          </div>
 
           <label className="flex items-center gap-2 text-sm text-foreground/70">
             <input type="checkbox" checked={includeArchived} onChange={(event) => setIncludeArchived(event.target.checked)} className="size-3.5 accent-primary" />

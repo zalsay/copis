@@ -152,6 +152,95 @@ const SelectSeparator = React.forwardRef<
 ))
 SelectSeparator.displayName = SelectPrimitive.Separator.displayName
 
+export interface AppSelectOption {
+  value: string
+  label: React.ReactNode
+  disabled?: boolean
+  icon?: string | React.ReactNode
+}
+
+export interface AppSelectProps {
+  value?: string
+  defaultValue?: string
+  onValueChange?: (value: string) => void
+  options?: AppSelectOption[]
+  placeholder?: string
+  disabled?: boolean
+  className?: string
+  triggerClassName?: string
+  contentClassName?: string
+  size?: 'sm' | 'default'
+  'aria-label'?: string
+  title?: string
+  children?: React.ReactNode
+}
+
+export function AppSelect({
+  value,
+  defaultValue,
+  onValueChange,
+  options,
+  placeholder,
+  disabled,
+  className,
+  triggerClassName,
+  contentClassName,
+  size = 'default',
+  'aria-label': ariaLabel,
+  title,
+  children,
+}: AppSelectProps): React.ReactElement {
+  const selectedOption = React.useMemo(
+    () => (options ? options.find((opt) => opt.value === value) : undefined),
+    [options, value],
+  )
+
+  return (
+    <Select value={value} defaultValue={defaultValue} onValueChange={onValueChange} disabled={disabled}>
+      <SelectTrigger
+        aria-label={ariaLabel}
+        title={title}
+        className={cn(
+          size === 'sm' && 'h-8 px-2.5 text-xs',
+          className,
+          triggerClassName,
+        )}
+      >
+        <SelectValue placeholder={placeholder}>
+          {selectedOption ? (
+            <span className="flex items-center gap-1.5 truncate">
+              {typeof selectedOption.icon === 'string' ? (
+                <img src={selectedOption.icon} alt="" className="size-3.5 shrink-0 rounded-xs object-contain" />
+              ) : (
+                selectedOption.icon
+              )}
+              <span className="truncate">{selectedOption.label}</span>
+            </span>
+          ) : (
+            placeholder
+          )}
+        </SelectValue>
+      </SelectTrigger>
+      <SelectContent className={contentClassName}>
+        {options
+          ? options.map((opt) => (
+              <SelectItem key={opt.value} value={opt.value} disabled={opt.disabled}>
+                <span className="flex items-center gap-1.5">
+                  {typeof opt.icon === 'string' ? (
+                    <img src={opt.icon} alt="" className="size-3.5 shrink-0 rounded-xs object-contain" />
+                  ) : (
+                    opt.icon
+                  )}
+                  <span>{opt.label}</span>
+                </span>
+              </SelectItem>
+            ))
+          : children}
+      </SelectContent>
+    </Select>
+  )
+}
+
 export {
   Select,
   SelectGroup,
