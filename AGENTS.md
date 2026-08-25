@@ -414,6 +414,15 @@ Copis 参考 YC QM 项目的结构化长期记忆管理思路（`notebook` / `ca
   - `writable`（读写管理）：暴露 `memory_recall`、`memory_read`、`memory_capture`（主动沉淀）、`memory_rewrite`（更新重写与归档）。
 - **受控设计**：Agent 无法通过工具参数越权访问任意内部目录，记忆读写完全由当前会话的工作区边界约束。
 
+#### 4. 知识库导入与导出 (`MemoryImportView` / `MemoryExportView` / `memory-import-parser.ts`)
+
+- **多格式解析导入**：
+  - 支持解析 Copis / QM 导出的标准 JSON 数据包、Markdown 分级笔记（`# H1 / ## H2`）与 QM Bullet 列表（`- [fact] ... #tag`）；
+  - 自动识别条目分类前缀与提取行内标签，支持手动设定默认分类；
+- **事务去重与初始快照**：
+  - 导入请求调用 `POST /api/memory/import`，在 Rust SQLite 事务中完成等价内容去重校验，并为每条新增知识生成初始 Revision 1 快照；
+  - 前端提供解析卡片即时预览与导入结果统计报告（成功新增数、自动去重跳过数、总数）。
+
 ### 本地文件存储（`~/.copis/`）
 
 ```

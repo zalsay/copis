@@ -164,6 +164,7 @@ Copis 深度参考了 YC QM 项目的结构化长期记忆设计，将其完整�
   - **智能排队整理与提炼**：上下文 Token 超过整理阈值时自动触发维护队列，执行临时记忆提炼（`promote`）、合并重写（`rewrite`）与旧记忆归档（`archive`），助力上下文压缩（Compaction）；
   - **动态 Top-K 注入**：新会话与对话轮次开始时，按当前工作区与语义关键词自动召回最相关记忆注入 Agent 系统提示词。
 - **版本控制与受控工具集**：全量操作记录于 `memory_revisions` 表，支持乐观锁版本控制；Agent 通过受控的 `memory_recall`、`memory_read`、`memory_capture`、`memory_rewrite` 工具协同，无法越权访问底层内部路径。
+- **知识库导入与导出**：支持导入 Copis / QM 导出的 JSON 数据包，以及 Markdown 分级笔记或 Bullet 事实列表（自动识别分类与 `#tag` 标签），并在本地 Rust SQLite 事务中完成智能去重与 Revision 快照记录；支持导出 Markdown / JSON 格式知识包。
 
 ## 本地数据
 
