@@ -3,6 +3,7 @@ import type { WorkingReceiveChannel, WorkingReceiveChannelSettings } from '@copi
 import {
   AlertCircle,
   CheckCircle2,
+  ExternalLink,
   Loader2,
   RefreshCw,
   Smartphone,
@@ -73,7 +74,7 @@ export function CopisWorkingMessageSettingsPanel({
   const [dingtalkClientId, setDingtalkClientId] = React.useState('')
   const [dingtalkClientSecret, setDingtalkClientSecret] = React.useState('')
   const [dingtalkBotName, setDingtalkBotName] = React.useState('钉钉助手')
-  const [dingtalkMode, setDingtalkMode] = React.useState<'qrcode' | 'manual'>('qrcode')
+  const [dingtalkMode, setDingtalkMode] = React.useState<'qrcode' | 'manual'>('manual')
   const [testingDingtalk, setTestingDingtalk] = React.useState(false)
 
   const activeRebindOption = messageChannels.find((item) => item.id === rebindChannel)
@@ -83,8 +84,13 @@ export function CopisWorkingMessageSettingsPanel({
     if (rebindChannel !== 'dingtalk' || dingtalkMode !== 'qrcode') return undefined
 
     let isMounted = true
-    const cid = dingtalkClientId.trim() || 'dingxxxxxxxxxxxxxxxx'
-    const oauthUrl = `https://login.dingtalk.com/oauth2/auth?client_id=${cid}&response_type=code&scope=openid+corpid&prompt=consent&redirect_uri=https://copis.ai/callback&state=${Date.now()}`
+    const cid = dingtalkClientId.trim()
+    if (!cid) {
+      setQrCodeDataUrl('')
+      return undefined
+    }
+
+    const oauthUrl = `https://login.dingtalk.com/oauth2/auth?client_id=${encodeURIComponent(cid)}&response_type=code&scope=openid+corpid&prompt=consent&redirect_uri=https://copis.ai/callback&state=${Date.now()}`
 
     QRCode.toDataURL(oauthUrl, { width: 280, margin: 2, errorCorrectionLevel: 'M' })
       .then((url) => {
@@ -528,7 +534,7 @@ export function CopisWorkingMessageSettingsPanel({
                   <Input
                     value={dingtalkClientId}
                     onChange={(e) => setDingtalkClientId(e.target.value)}
-                    placeholder="dingxxxxxxxxxxxxxxxx"
+                    placeholder="例如：dingxxxxxxxxxxxxxxxx"
                     className="h-8 border-white/10 bg-white/5 text-xs text-[#f1f3f2]"
                   />
                 </div>
@@ -545,8 +551,18 @@ export function CopisWorkingMessageSettingsPanel({
 
                 {/* 配置指引 */}
                 <div className="mt-2 rounded-lg border border-white/5 bg-white/[0.02] p-3 text-left">
-                  <div className="flex items-center gap-1 text-[11px] font-medium text-[#dfe4e1]">
-                    <span>📌 钉钉自建机器人配置步骤：</span>
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-1 text-[11px] font-medium text-[#dfe4e1]">
+                      <span>📌 钉钉自建机器人配置步骤：</span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => window.electronAPI.openExternal?.('https://open.dingtalk.com')}
+                      className="flex items-center gap-1 text-[11px] text-[var(--ui-primary)] hover:underline"
+                    >
+                      <span>打开钉钉开放平台</span>
+                      <ExternalLink className="size-3" />
+                    </button>
                   </div>
                   <ol className="mt-1.5 list-decimal list-inside space-y-1 text-[11px] leading-relaxed text-[#9fa3a6]">
                     <li>登录<strong>钉钉开放平台</strong> (open.dingtalk.com)，创建<strong>企业内部应用</strong>并添加机器人</li>
@@ -577,81 +593,101 @@ export function CopisWorkingMessageSettingsPanel({
           ) : (
             <div className="space-y-4 py-1">
               <div className="flex flex-col items-center justify-center rounded-xl border border-white/10 bg-[#121314] p-5 text-center shadow-inner">
-                {/* 二维码容器 */}
-                <div className="relative flex size-44 items-center justify-center rounded-lg border border-slate-200/90 bg-white p-2 shadow-md">
-                  {qrCodeDataUrl ? (
-                    <img
-                      src={qrCodeDataUrl}
-                      alt={`${activeRebindOption?.name || ''} 授权绑定二维码`}
-                      className="size-full rounded object-contain"
-                    />
-                  ) : (
-                    <div className="flex flex-col items-center justify-center gap-2 text-slate-500">
-                      <Loader2 className="size-6 animate-spin text-[var(--ui-primary)]" />
-                      <span className="text-[11px]">
-                        {rebindChannel === 'feishu'
-                          ? '正在生成飞书官方二维码...'
-                          : rebindChannel === 'dingtalk'
-                          ? '正在生成钉钉授权二维码...'
-                          : '正在获取微信机器人二维码...'}
-                      </span>
-                    </div>
-                  )}
-                  {/* 居中 Logo 徽标 */}
-                  {qrCodeDataUrl && activeRebindOption && (
-                    <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-                      <div className="flex size-8 items-center justify-center rounded-md border border-slate-200 bg-white p-0.5 shadow">
-                        <img src={activeRebindOption.icon} alt="" className="size-full rounded object-contain" />
-                      </div>
-                    </div>
-                  )}
-                </div>
-
-                {/* 实时扫码状态指示器 */}
-                <div className="mt-3 flex items-center gap-1.5 text-xs text-[#9fa3a6]">
-                  <Loader2 className="size-3.5 animate-spin text-[var(--ui-primary)]" />
-                  <span>
-                    等待手机
-                    {rebindChannel === 'feishu'
-                      ? '飞书'
-                      : rebindChannel === 'dingtalk'
-                      ? '钉钉'
-                      : '微信'}
-                    扫码授权中...
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => setQrSeed(Date.now())}
-                    className="ml-1 text-[11px] text-[var(--ui-primary)] hover:underline"
-                    title="刷新二维码"
-                  >
-                    刷新
-                  </button>
-                </div>
-
-                {/* 步骤说明 */}
-                <div className="mt-3 w-full rounded-lg border border-white/5 bg-white/[0.02] p-3 text-left">
-                  <div className="flex items-center gap-1 text-[11px] font-medium text-[#dfe4e1]">
-                    <Smartphone className="size-3.5 text-[var(--ui-primary)]" />
-                    <span>扫码操作步骤：</span>
+                {rebindChannel === 'dingtalk' && !dingtalkClientId.trim() ? (
+                  <div className="flex flex-col items-center justify-center gap-2 py-4 text-center">
+                    <AlertCircle className="size-8 text-amber-400" />
+                    <span className="text-sm font-medium text-[#f1f3f2]">未配置钉钉企业应用 Client ID</span>
+                    <p className="text-xs text-[#9fa3a6] max-w-xs leading-relaxed">
+                      钉钉扫码授权需指定您企业的有效 AppKey，请先在凭证设置中填入 Client ID 与 Client Secret。
+                    </p>
+                    <Button
+                      type="button"
+                      size="sm"
+                      className="mt-2 bg-[var(--ui-primary)] text-black hover:opacity-90 text-xs"
+                      onClick={() => setDingtalkMode('manual')}
+                    >
+                      前往配置凭证
+                    </Button>
                   </div>
-                  <ol className="mt-1.5 list-decimal list-inside space-y-1 text-[11px] leading-relaxed text-[#9fa3a6]">
-                    <li>
-                      打开手机
-                      <strong>
+                ) : (
+                  <>
+                    {/* 二维码容器 */}
+                    <div className="relative flex size-44 items-center justify-center rounded-lg border border-slate-200/90 bg-white p-2 shadow-md">
+                      {qrCodeDataUrl ? (
+                        <img
+                          src={qrCodeDataUrl}
+                          alt={`${activeRebindOption?.name || ''} 授权绑定二维码`}
+                          className="size-full rounded object-contain"
+                        />
+                      ) : (
+                        <div className="flex flex-col items-center justify-center gap-2 text-slate-500">
+                          <Loader2 className="size-6 animate-spin text-[var(--ui-primary)]" />
+                          <span className="text-[11px]">
+                            {rebindChannel === 'feishu'
+                              ? '正在生成飞书官方二维码...'
+                              : rebindChannel === 'dingtalk'
+                              ? '正在生成钉钉授权二维码...'
+                              : '正在获取微信机器人二维码...'}
+                          </span>
+                        </div>
+                      )}
+                      {/* 居中 Logo 徽标 */}
+                      {qrCodeDataUrl && activeRebindOption && (
+                        <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                          <div className="flex size-8 items-center justify-center rounded-md border border-slate-200 bg-white p-0.5 shadow">
+                            <img src={activeRebindOption.icon} alt="" className="size-full rounded object-contain" />
+                          </div>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* 实时扫码状态指示器 */}
+                    <div className="mt-3 flex items-center gap-1.5 text-xs text-[#9fa3a6]">
+                      <Loader2 className="size-3.5 animate-spin text-[var(--ui-primary)]" />
+                      <span>
+                        等待手机
                         {rebindChannel === 'feishu'
                           ? '飞书'
                           : rebindChannel === 'dingtalk'
                           ? '钉钉'
-                          : '微信'}{' '}
-                        App
-                      </strong>
-                      ，点击右上角<strong>「扫一扫」</strong>
-                    </li>
-                    <li>扫描上方二维码，在手机端点击<strong>「确认授权绑定」</strong></li>
-                    <li>授权完成后系统将<strong>自动识别并完成绑定</strong></li>
-                  </ol>
-                </div>
+                          : '微信'}
+                        扫码授权中...
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setQrSeed(Date.now())}
+                        className="ml-1 text-[11px] text-[var(--ui-primary)] hover:underline"
+                        title="刷新二维码"
+                      >
+                        刷新
+                      </button>
+                    </div>
+
+                    {/* 步骤说明 */}
+                    <div className="mt-3 w-full rounded-lg border border-white/5 bg-white/[0.02] p-3 text-left">
+                      <div className="flex items-center gap-1 text-[11px] font-medium text-[#dfe4e1]">
+                        <Smartphone className="size-3.5 text-[var(--ui-primary)]" />
+                        <span>扫码操作步骤：</span>
+                      </div>
+                      <ol className="mt-1.5 list-decimal list-inside space-y-1 text-[11px] leading-relaxed text-[#9fa3a6]">
+                        <li>
+                          打开手机
+                          <strong>
+                            {rebindChannel === 'feishu'
+                              ? '飞书'
+                              : rebindChannel === 'dingtalk'
+                              ? '钉钉'
+                              : '微信'}{' '}
+                            App
+                          </strong>
+                          ，点击右上角<strong>「扫一扫」</strong>
+                        </li>
+                        <li>扫描上方二维码，在手机端点击<strong>「确认授权绑定」</strong></li>
+                        <li>授权完成后系统将<strong>自动识别并完成绑定</strong></li>
+                      </ol>
+                    </div>
+                  </>
+                )}
               </div>
 
               {feedback && (
@@ -677,13 +713,19 @@ export function CopisWorkingMessageSettingsPanel({
           <DialogFooter className="flex-row items-center justify-between sm:justify-between">
             {rebindChannel === 'dingtalk' && dingtalkMode === 'manual' ? (
               <>
-                <button
-                  type="button"
-                  onClick={() => { setDingtalkMode('qrcode'); setFeedback(null) }}
-                  className="text-[11px] text-[var(--ui-primary)] hover:underline"
-                >
-                  ← 返回扫码绑定
-                </button>
+                {dingtalkClientId.trim() ? (
+                  <button
+                    type="button"
+                    onClick={() => { setDingtalkMode('qrcode'); setFeedback(null) }}
+                    className="text-[11px] text-[var(--ui-primary)] hover:underline"
+                  >
+                    查看扫码授权二维码 →
+                  </button>
+                ) : (
+                  <span className="text-[11px] text-[#858b8e]">
+                    支持钉钉 Stream 模式直连
+                  </span>
+                )}
                 <div className="flex items-center gap-2">
                   <Button
                     type="button"
