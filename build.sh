@@ -43,8 +43,13 @@ load_dotenv() {
 load_dotenv "$ROOT_DIR/.env"
 
 SKIP_COS_UPLOAD="${COPIS_SKIP_COS_UPLOAD:-0}"
+NEW_VERSION=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --new)
+      NEW_VERSION=1
+      shift
+      ;;
     --skip-cos-upload)
       SKIP_COS_UPLOAD=1
       shift
@@ -83,6 +88,11 @@ case "$(uname -m)" in
 esac
 
 export CSC_IDENTITY_AUTO_DISCOVERY="${CSC_IDENTITY_AUTO_DISCOVERY:-false}"
+
+if [[ "$NEW_VERSION" -eq 1 ]]; then
+  NEW_APP_VERSION="$(cd "$ROOT_DIR" && bun scripts/bump-electron-version.ts --new)"
+  echo "[Copis] Electron 应用版本已更新为 $NEW_APP_VERSION"
+fi
 
 APP_VERSION="$(cd "$APP_DIR" && bun -e "console.log(JSON.parse(await Bun.file('package.json').text()).version)")"
 

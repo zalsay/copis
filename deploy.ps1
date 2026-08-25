@@ -58,10 +58,10 @@ function Import-DotEnvFile {
 
     if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return }
     $processEnvironment = [System.Environment]::GetEnvironmentVariables('Process')
-    foreach ($line in Get-Content -LiteralPath $Path) {
+    foreach ($line in Get-Content -LiteralPath $Path -Encoding UTF8) {
         $entry = $line.Trim()
         if ([string]::IsNullOrWhiteSpace($entry) -or $entry.StartsWith('#')) { continue }
-        if ($entry.StartsWith('export ')) { $entry = $entry.Substring(7).TrimStart() }
+        $entry = $entry -replace '^export\s+', ''
         if ($entry -notmatch '^(?<name>[A-Za-z_][A-Za-z0-9_]*)\s*=\s*(?<value>.*)$') { continue }
 
         $key = $Matches['name']
@@ -96,6 +96,32 @@ function Get-LegacyValue {
     return $Arguments[$Index + 1]
 }
 
+function Show-Help {
+    @'
+用法：deploy.ps1 [选项]
+
+默认行为：构建当前平台功能模块、生成 manifest 并发布到 COS；应用包需要显式传入 -BuildApp。
+
+选项：
+  -SkipInstall / --skip-install       跳过 bun install --frozen-lockfile
+  -BuildApp / --build-app              同时构建当前平台 Electron 应用包
+  -SkipRustBuild / --skip-rust-build   使用已有 Rust 二进制
+  -RustOnly / --rust                   只发布 Rust HTTP API；每次自动递增 rust-http-api 版本
+  -OfficeCliOnly / --officecli         只发布 OfficeCLI
+  -NodeRuntimeOnly / --node-runtime    只发布 Node.js runtime
+  -AlipayBotOnly / --alipay-bot        只发布支付宝智能体 CLI
+  -PlaywrightCoreOnly / --playwright-core 只发布 Playwright Core
+  -PythonRuntimeOnly / --python-runtime 只发布 Python runtime
+  -SkipPublish / --skip-publish        只构建，不发布 COS
+  -Platform <name> / --platform <name> 目标平台
+  -Arch <name> / --arch <name>         目标架构
+  -Channel <name> / --channel <name>   发布 channel
+  -Version <version> / --version <version> 功能模块版本
+  -PublicBaseUrl <url> / --public-base-url <url> COS 公共地址
+  -h, --help                           显示帮助
+'@ | Write-Host
+}
+
 Import-DotEnvFile -Path (Join-Path $rootDir '.env')
 
 if ($env:COPIS_RUST_ONLY -eq '1') { $RustOnly = $true }
@@ -108,6 +134,8 @@ if ($env:COPIS_PYTHON_RUNTIME_ONLY -eq '1') { $PythonRuntimeOnly = $true }
 for ($index = 0; $index -lt $LegacyArguments.Count; $index++) {
     $argument = $LegacyArguments[$index]
     switch ($argument) {
+        '-h' { Show-Help; exit 0 }
+        '--help' { Show-Help; exit 0 }
         '--rust' { $RustOnly = $true }
         '--officecli' { $OfficeCliOnly = $true }
         '--node-runtime' { $NodeRuntimeOnly = $true }
@@ -177,7 +205,7 @@ if ($Arch -notin @('x64', 'arm64')) { throw "Unsupported functional module archi
 if ([string]::IsNullOrWhiteSpace($Channel)) { throw 'Release channel cannot be empty.' }
 
 $electronPackagePath = Join-Path $appDir 'package.json'
-$electronPackage = Get-Content -LiteralPath $electronPackagePath -Raw | ConvertFrom-Json
+$electronPackage = Get-Content -LiteralPath $electronPackagePath -Raw -Encoding UTF8 | ConvertFrom-Json
 $appVersion = [string]$electronPackage.version
 if ([string]::IsNullOrWhiteSpace($appVersion)) { throw "Cannot read Electron version: $electronPackagePath" }
 $releaseVersion = if ([string]::IsNullOrWhiteSpace($Version)) { $appVersion } else { $Version.Trim() }
@@ -293,6 +321,25 @@ function Read-OfficeCliVersion {
     return $match.Value
 }
 
+function Read-AlipayBotVersion {
+    param([Parameter(Mandatory = $true)][string]$Archive)
+
+    $runtimeMetadata = try { (& tar.exe '-xOf' $Archive './runtime/package.json' 2>$null | Out-String).Trim() } catch { '' }
+    if ([string]::IsNullOrWhiteSpace($runtimeMetadata)) {
+        throw "Cannot read Alipay Bot CLI archive version: $Archive"
+    }
+
+    try {
+        $metadata = $runtimeMetadata | ConvertFrom-Json
+    } catch {
+        throw "Alipay Bot CLI archive has invalid runtime/package.json: $Archive"
+    }
+    if ($metadata.version -isnot [string] -or $metadata.version -notmatch '^\d+\.\d+\.\d+') {
+        throw "Alipay Bot CLI runtime/package.json has no valid version: $Archive"
+    }
+    return [string]$metadata.version
+}
+
 $bunPath = Resolve-BunPath
 if (-not $bunPath) { throw 'Bun was not found in PATH, BUN_INSTALL, or the current user profile.' }
 $env:PATH = "$(Split-Path -Parent $bunPath)$([System.IO.Path]::PathSeparator)$env:PATH"
@@ -375,7 +422,7 @@ if (-not $RustOnly -and -not $OfficeCliOnly -and -not $NodeRuntimeOnly -and -not
             Write-Host 'Preparing Alipay Bot CLI module from the official installer...'
             Invoke-BunCommand $rootDir @('run', 'prepare:alipay-bot-module', '--', '--platform', $Platform, '--arch', $Arch, '--output', $alipayBotArchivePath, '--metadata', $metadataPath) 'Alipay Bot CLI module preparation failed'
             if ([string]::IsNullOrWhiteSpace($AlipayBotVersion)) {
-                $AlipayBotVersion = [string](Get-Content -LiteralPath $metadataPath -Raw | ConvertFrom-Json).version
+                $AlipayBotVersion = [string](Get-Content -LiteralPath $metadataPath -Raw -Encoding UTF8 | ConvertFrom-Json).version
             }
         } finally {
             if (Test-Path -LiteralPath $metadataPath -PathType Leaf) { Remove-Item -LiteralPath $metadataPath -Force }
@@ -383,7 +430,7 @@ if (-not $RustOnly -and -not $OfficeCliOnly -and -not $NodeRuntimeOnly -and -not
     }
     if (-not (Test-Path -LiteralPath $alipayBotArchivePath -PathType Leaf)) { throw "Alipay Bot CLI archive was not found: $alipayBotArchivePath" }
     $alipayBotArchivePath = (Resolve-Path -LiteralPath $alipayBotArchivePath).Path
-    $alipayBotVersionValue = if ([string]::IsNullOrWhiteSpace($AlipayBotVersion)) { $releaseVersion } else { $AlipayBotVersion.Trim() }
+    $alipayBotVersionValue = if ([string]::IsNullOrWhiteSpace($AlipayBotVersion)) { Read-AlipayBotVersion $alipayBotArchivePath } else { $AlipayBotVersion.Trim() }
 }
 
 $playwrightCoreArchivePath = $null

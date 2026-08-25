@@ -6,12 +6,17 @@ import type { FunctionalModuleCosSdkClient } from './functional-module-cos-clien
 import {
   createFunctionalModuleCosClient,
   parseFunctionalModuleCosBucketUrl,
+  type FunctionalModuleCosUploadProgress,
 } from './functional-module-cos-client'
 import type { FunctionalModuleObjectClient } from './functional-module-publisher'
 
 interface CosSdkConstructor {
-  new (options: Record<string, string>): FunctionalModuleCosSdkClient
+  new (options: Record<string, string | number>): FunctionalModuleCosSdkClient
 }
+
+const DEFAULT_COS_UPLOAD_TIMEOUT_MS = 30 * 60 * 1000
+const MIN_COS_UPLOAD_TIMEOUT_MS = 30 * 1000
+const MAX_COS_UPLOAD_TIMEOUT_MS = 2 * 60 * 60 * 1000
 
 export const DEFAULT_WINDOWS_INSTALLER_OBJECT_KEY =
   'copis/downloads/stable/win32-x64/Copis-Setup.exe'
@@ -108,8 +113,19 @@ async function main(): Promise<void> {
   const cosModule = await import('cos-nodejs-sdk-v5') as unknown as { default?: CosSdkConstructor }
   const Cos = cosModule.default
   if (!Cos) throw new Error('COS SDK 初始化失败')
-  const cos = new Cos({ SecretId: secretId, SecretKey: secretKey, Region: region })
-  const client = createFunctionalModuleCosClient(cos, { bucket, region })
+  const timeoutMs = resolveCosUploadTimeoutMs()
+  const cos = new Cos({ SecretId: secretId, SecretKey: secretKey, Region: region, Timeout: timeoutMs })
+  let lastProgressLogAt = 0
+  const client = createFunctionalModuleCosClient(cos, { bucket, region }, {
+    onUploadProgress: (progress) => {
+      const now = Date.now()
+      if (progress.percent !== undefined && progress.percent >= 100 || now - lastProgressLogAt >= 5_000) {
+        lastProgressLogAt = now
+        console.log(`[publish-windows-installer] 上传进度：${formatUploadProgress(progress, upload.size)}`)
+      }
+    },
+  })
+  console.log(`[publish-windows-installer] 开始上传安装包：${formatBytes(upload.size)}，请求超时：${Math.round(timeoutMs / 1000)} 秒`)
   await publishWindowsInstaller(upload, client)
 
   console.log(`[publish-windows-installer] 已上传固定安装包：${upload.key}`)
@@ -121,6 +137,31 @@ function requiredEnv(name: string): string {
   const value = process.env[name]?.trim()
   if (!value) throw new Error(`缺少环境变量 ${name}`)
   return value
+}
+
+function resolveCosUploadTimeoutMs(): number {
+  const raw = process.env.COPIS_COS_UPLOAD_TIMEOUT_MS?.trim()
+  if (!raw) return DEFAULT_COS_UPLOAD_TIMEOUT_MS
+  if (!/^\d+$/.test(raw)) throw new Error('COPIS_COS_UPLOAD_TIMEOUT_MS 必须是毫秒整数')
+  const value = Number(raw)
+  if (!Number.isSafeInteger(value) || value < MIN_COS_UPLOAD_TIMEOUT_MS || value > MAX_COS_UPLOAD_TIMEOUT_MS) {
+    throw new Error(`COPIS_COS_UPLOAD_TIMEOUT_MS 必须在 ${MIN_COS_UPLOAD_TIMEOUT_MS} 到 ${MAX_COS_UPLOAD_TIMEOUT_MS} 之间`)
+  }
+  return value
+}
+
+function formatUploadProgress(progress: FunctionalModuleCosUploadProgress, fallbackTotal: number): string {
+  const total = progress.total && progress.total > 0 ? progress.total : fallbackTotal
+  const percent = progress.percent ?? (total > 0 ? progress.loaded / total * 100 : 0)
+  const speed = progress.speed && progress.speed > 0 ? `，速度 ${formatBytes(progress.speed)}/s` : ''
+  return `${percent.toFixed(1)}%（${formatBytes(progress.loaded)}/${formatBytes(total)}${speed}）`
+}
+
+function formatBytes(value: number): string {
+  if (value < 1024) return `${value} B`
+  if (value < 1024 ** 2) return `${(value / 1024).toFixed(1)} KB`
+  if (value < 1024 ** 3) return `${(value / 1024 ** 2).toFixed(1)} MB`
+  return `${(value / 1024 ** 3).toFixed(2)} GB`
 }
 
 function requiredOption(option: string, envName: string): string {

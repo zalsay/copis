@@ -139,4 +139,32 @@ describe('功能模块 COS SDK client', () => {
       ContentDisposition: 'attachment; filename="Copis-Setup.exe"',
     })
   })
+
+  test('透传 COS 上传进度回调', async () => {
+    let progress: unknown
+    const sdk: FunctionalModuleCosSdkClient = {
+      putObject(params, callback) {
+        progress = params.onProgress
+        callback(null, {})
+      },
+      headObject(_params, callback) {
+        callback(null, { ContentLength: 4, headers: { 'x-cos-meta-sha256': 'abcd' } })
+      },
+    }
+    const reported: Array<{ loaded: number; total?: number; percent?: number }> = []
+    const client = createFunctionalModuleCosClient(sdk, { bucket: 'copis-1250000000', region: 'ap-shanghai' }, {
+      onUploadProgress: (value) => reported.push(value),
+    })
+
+    await client.putObject({
+      key: 'copis/downloads/stable/win32-x64/Copis-Setup.exe',
+      body: Buffer.from('test'),
+      contentType: 'application/vnd.microsoft.portable-executable',
+      metadata: { sha256: 'abcd' },
+      allowOverwrite: true,
+    })
+    expect(typeof progress).toBe('function')
+    ;(progress as (value: unknown) => void)({ loaded: 3, total: 4, percent: 75 })
+    expect(reported).toEqual([{ loaded: 3, total: 4, percent: 75 }])
+  })
 })

@@ -1,5 +1,9 @@
 ﻿[CmdletBinding()]
 param(
+    [Parameter(Position = 0, ValueFromRemainingArguments = $true)]
+    [string[]]$LegacyArguments,
+    [Alias('New')]
+    [switch]$NewVersion,
     [switch]$SkipInstall,
     [string]$FunctionalModuleManifestUrl,
     [switch]$SkipCosUpload,
@@ -15,6 +19,54 @@ $rootDir = (Resolve-Path -LiteralPath $PSScriptRoot).Path
 $appDir = Join-Path $rootDir 'apps\electron'
 $outDir = Join-Path $appDir 'out'
 
+foreach ($argument in $LegacyArguments) {
+    switch ($argument) {
+        '--new' { $NewVersion = $true }
+        '--skip-cos-upload' { $SkipCosUpload = $true }
+        default { throw "未知参数：$argument" }
+    }
+}
+
+function Import-DotEnvFile {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return }
+    $processEnvironment = [System.Environment]::GetEnvironmentVariables('Process')
+    foreach ($line in Get-Content -LiteralPath $Path -Encoding UTF8) {
+        $entry = $line.Trim()
+        if ([string]::IsNullOrWhiteSpace($entry) -or $entry.StartsWith('#')) { continue }
+        $entry = $entry -replace '^export\s+', ''
+        if ($entry -notmatch '^(?<name>[A-Za-z_][A-Za-z0-9_]*)\s*=\s*(?<value>.*)$') { continue }
+
+        $key = $Matches['name']
+        if ($processEnvironment.ContainsKey($key)) { continue }
+        $value = $Matches['value'].Trim()
+        if ($value.Length -ge 2) {
+            $quote = $value[0]
+            if (($quote -eq '"' -or $quote -eq "'") -and $value[$value.Length - 1] -eq $quote) {
+                $value = $value.Substring(1, $value.Length - 2)
+            }
+        }
+        [System.Environment]::SetEnvironmentVariable($key, $value, 'Process')
+        $processEnvironment[$key] = $value
+    }
+}
+
+function Set-FromEnvironment {
+    param([string]$Current, [string]$Name)
+
+    if (-not [string]::IsNullOrWhiteSpace($Current)) { return $Current.Trim() }
+    $environmentValue = [System.Environment]::GetEnvironmentVariable($Name, 'Process')
+    if (-not [string]::IsNullOrWhiteSpace($environmentValue)) { return $environmentValue.Trim() }
+    return ''
+}
+
+Import-DotEnvFile -Path (Join-Path $rootDir '.env')
+if ($env:COPIS_SKIP_COS_UPLOAD -eq '1') { $SkipCosUpload = $true }
+$CosPublicBaseUrl = Set-FromEnvironment $CosPublicBaseUrl 'COS_PUBLIC_BASE_URL'
+$CosBucketUrl = Set-FromEnvironment $CosBucketUrl 'COS_BUCKET_URL'
+$InstallerObjectKey = Set-FromEnvironment $InstallerObjectKey 'COPIS_WINDOWS_INSTALLER_OBJECT_KEY'
+
 if (-not (Test-Path -LiteralPath (Join-Path $rootDir 'package.json') -PathType Leaf)) {
     throw "未找到项目根目录 package.json：$rootDir"
 }
@@ -24,37 +76,10 @@ if (-not (Test-Path -LiteralPath $electronPackagePath -PathType Leaf)) {
     throw "未找到 Electron 包 package.json：$electronPackagePath"
 }
 
-$electronPackage = Get-Content -LiteralPath $electronPackagePath -Raw | ConvertFrom-Json
-$appVersion = [string]$electronPackage.version
-if ([string]::IsNullOrWhiteSpace($appVersion)) {
-    throw "无法从 Electron 包 package.json 读取版本号：$electronPackagePath"
+$manifestUrl = Set-FromEnvironment $FunctionalModuleManifestUrl 'COPIS_FUNCTIONAL_MODULE_MANIFEST_URL'
+if (-not [string]::IsNullOrWhiteSpace($manifestUrl)) {
+    $env:COPIS_FUNCTIONAL_MODULE_MANIFEST_URL = $manifestUrl
 }
-
-$manifestUrl = ([string]$FunctionalModuleManifestUrl).Trim()
-if ([string]::IsNullOrWhiteSpace($manifestUrl)) {
-    $manifestUrl = $env:COPIS_FUNCTIONAL_MODULE_MANIFEST_URL
-}
-if ([string]::IsNullOrWhiteSpace($manifestUrl)) {
-    $envPath = Join-Path $rootDir '.env'
-    if (Test-Path -LiteralPath $envPath -PathType Leaf) {
-        foreach ($line in Get-Content -LiteralPath $envPath) {
-            if ($line -match '^\s*(?:export\s+)?COPIS_FUNCTIONAL_MODULE_MANIFEST_URL\s*=\s*(?<value>.*)\s*$') {
-                $manifestUrl = $Matches['value'].Trim()
-                if ($manifestUrl.Length -ge 2) {
-                    $quote = $manifestUrl[0]
-                    if (($quote -eq '"' -or $quote -eq "'") -and $manifestUrl[$manifestUrl.Length - 1] -eq $quote) {
-                        $manifestUrl = $manifestUrl.Substring(1, $manifestUrl.Length - 2)
-                    }
-                }
-                break
-            }
-        }
-    }
-}
-if ([string]::IsNullOrWhiteSpace($manifestUrl)) {
-    throw '功能模块 manifest 地址未配置。请提供 -FunctionalModuleManifestUrl 或 COPIS_FUNCTIONAL_MODULE_MANIFEST_URL。'
-}
-$env:COPIS_FUNCTIONAL_MODULE_MANIFEST_URL = $manifestUrl.Trim()
 
 $bunPath = $null
 $bunCommand = Get-Command bun -ErrorAction SilentlyContinue
@@ -84,8 +109,27 @@ $bunBinDir = Split-Path -Parent $bunPath
 $pathSeparator = [System.IO.Path]::PathSeparator
 $env:PATH = "$bunBinDir$pathSeparator$env:PATH"
 
+if ($NewVersion) {
+    $versionScriptPath = Join-Path $rootDir 'scripts\bump-electron-version.ts'
+    $newAppVersion = (& $bunPath $versionScriptPath '--new' | Out-String).Trim()
+    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($newAppVersion)) {
+        throw "Electron 应用版本更新失败，退出码：$LASTEXITCODE"
+    }
+    Write-Host "Electron 应用版本已更新为：$newAppVersion"
+}
+
+$electronPackage = Get-Content -LiteralPath $electronPackagePath -Raw -Encoding UTF8 | ConvertFrom-Json
+$appVersion = [string]$electronPackage.version
+if ([string]::IsNullOrWhiteSpace($appVersion)) {
+    throw "无法从 Electron 包 package.json 读取版本号：$electronPackagePath"
+}
+
 Write-Host "使用 Bun：$bunPath"
-Write-Host '已配置功能模块 manifest 地址。'
+if ([string]::IsNullOrWhiteSpace($manifestUrl)) {
+    Write-Host '未指定功能模块 manifest 地址，将使用应用内默认地址。'
+} else {
+    Write-Host '已配置功能模块 manifest 地址。'
+}
 
 if (-not $SkipInstall) {
     Write-Host '正在按 bun.lock 安装依赖...'
@@ -101,7 +145,7 @@ if (-not $SkipInstall) {
     }
 }
 
-Write-Host '正在构建 Windows EXE（不编译 Rust HTTP API，不执行 COS 发布）...'
+Write-Host '正在构建 Windows EXE（不编译 Rust HTTP API；安装程序 COS 上传可通过 -SkipCosUpload 跳过）...'
 Push-Location $appDir
 try {
     & $bunPath run dist:win

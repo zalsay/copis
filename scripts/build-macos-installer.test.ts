@@ -32,4 +32,9 @@ describe('macOS 构建脚本固定安装程序发布', () => {
     expect(fixedLine).toContain('Copis-$MAC_ARCH.dmg')
     expect(fixedLine).not.toContain('$APP_VERSION')
   })
+
+  test('支持 --new 自动递增 Electron 应用 patch 版本', () => {
+    expect(buildScript).toContain('--new)')
+    expect(buildScript).toContain('bump-electron-version.ts --new')
+  })
 })

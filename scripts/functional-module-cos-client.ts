@@ -20,6 +20,17 @@ export interface FunctionalModuleCosBucket {
   region: string
 }
 
+export interface FunctionalModuleCosUploadProgress {
+  loaded: number
+  total?: number
+  speed?: number
+  percent?: number
+}
+
+export interface FunctionalModuleCosClientOptions {
+  onUploadProgress?: (progress: FunctionalModuleCosUploadProgress) => void
+}
+
 export function parseFunctionalModuleCosBucketUrl(value: string): FunctionalModuleCosBucket {
   const url = new URL(value)
   if (url.protocol !== 'https:' && url.protocol !== 'http:') {
@@ -44,10 +55,11 @@ interface CosHeadObjectResponse {
 export function createFunctionalModuleCosClient(
   sdk: FunctionalModuleCosSdkClient,
   bucket: FunctionalModuleCosBucket,
+  clientOptions: FunctionalModuleCosClientOptions = {},
 ): FunctionalModuleObjectClient {
   const client: FunctionalModuleObjectClient = {
-    putObject: async (input, options: FunctionalModulePutObjectOptions = {}) => {
-      const allowOverwrite = options.allowOverwrite === true || input.allowOverwrite === true
+    putObject: async (input, putOptions: FunctionalModulePutObjectOptions = {}) => {
+      const allowOverwrite = putOptions.allowOverwrite === true || input.allowOverwrite === true
       if (!allowOverwrite) {
         let existing: { size: number; sha256?: string } | undefined
         try {
@@ -78,6 +90,17 @@ export function createFunctionalModuleCosClient(
       if (input.cacheControl) params.CacheControl = input.cacheControl
       if (input.contentDisposition) params.ContentDisposition = input.contentDisposition
       if (!allowOverwrite) params['x-cos-forbid-overwrite'] = 'true'
+      if (clientOptions.onUploadProgress) {
+        params.onProgress = (value: unknown) => {
+          if (!isRecord(value) || typeof value.loaded !== 'number') return
+          clientOptions.onUploadProgress?.({
+            loaded: value.loaded,
+            ...(typeof value.total === 'number' ? { total: value.total } : {}),
+            ...(typeof value.speed === 'number' ? { speed: value.speed } : {}),
+            ...(typeof value.percent === 'number' ? { percent: value.percent } : {}),
+          })
+        }
+      }
       await callCos(sdk.putObject.bind(sdk), params)
     },
     headObject: async (input) => {
