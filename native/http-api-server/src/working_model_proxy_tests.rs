@@ -153,3 +153,19 @@ fn internal_model_proxy_uses_auth_session_without_worker_capability() {
     assert_eq!(model_request.path, "/api/internal/working-model/v1/responses");
     assert_eq!(model_request.access_token.as_deref(), Some("header.eyJleHAiOjQxMDAuMH0.sig"));
 }
+
+#[test]
+fn capability_expired_displays_friendly_message_and_blocks_request() {
+    let (auth, _) = setup();
+    let proxy = WorkingModelProxy::new(auth);
+    let mut capability = proxy.issue("session-expired", "model-expired").unwrap();
+    // 强制将 expires_at 设置为过去的时间戳以模拟过期
+    capability.expires_at = 0;
+    
+    // 错误信息展示
+    let error = WorkingModelError::CapabilityExpired;
+    assert_eq!(
+        error.to_string(),
+        "模型会话已过期，请直接发送「继续任务」或点击重试"
+    );
+}

@@ -2666,7 +2666,7 @@ fn send_working_model_error(
         WorkingModelError::CapabilityExpired => (
             401,
             "capability_expired".to_string(),
-            "模型代理 capability 已过期".to_string(),
+            "模型会话已过期，请直接发送「继续任务」或点击重试".to_string(),
         ),
         WorkingModelError::CapabilityMismatch => (
             403,

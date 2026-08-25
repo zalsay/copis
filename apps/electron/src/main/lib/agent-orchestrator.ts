@@ -911,31 +911,6 @@ export class AgentOrchestrator {
       }
     }
 
-    // 1. Windows 平台：检查 Shell 环境可用性
-    if (process.platform === 'win32') {
-      const runtimeStatus = getRuntimeStatus()
-      const shellStatus = runtimeStatus?.shell
-
-      if (shellStatus && !shellStatus.gitBash?.available && !shellStatus.wsl?.available) {
-        reportPreflightError({
-          code: 'windows_shell_missing',
-          title: 'Windows 环境未就绪',
-          message:
-            '需要 Git Bash 或 WSL 才能运行 Agent。建议安装 Git for Windows（自带 Git Bash），安装完成后点「打开环境检测」刷新状态。',
-          details: [
-            `Git Bash: ${shellStatus.gitBash?.error || '未检测到'}`,
-            `WSL: ${shellStatus.wsl?.error || '未检测到'}`,
-          ],
-          actions: [
-            { key: 'e', label: '打开环境检测', action: 'open_environment_check' },
-            { key: 'g', label: '去官方下载 Git', action: 'open_external', payload: 'https://git-scm.com/download/win' },
-          ],
-          canRetry: false,
-        })
-        return
-      }
-    }
-
     // Working 渠道通过本机 Rust 模型代理访问 edu-api；Electron 不把用户凭据交给 Pi。
     const workingClient = isCopisWorkingChannelId(channelId) ? getWorkingApiClient() : undefined
     const channel = workingClient

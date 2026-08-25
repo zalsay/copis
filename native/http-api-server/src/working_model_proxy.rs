@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-const CAPABILITY_TTL_SECS: u64 = 15 * 60;
+const CAPABILITY_TTL_SECS: u64 = 2 * 60 * 60;
 const MAX_MODEL_REQUEST_BYTES: usize = 2 * 1024 * 1024;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -174,7 +174,7 @@ fn validate_model_request(request_body: &[u8]) -> Result<String, WorkingModelErr
 
 fn map_auth_error(error: AuthError) -> WorkingModelError {
     match error {
-        AuthError::NotAuthenticated => WorkingModelError::Unauthorized,
+        AuthError::NotAuthenticated | AuthError::RefreshFailed => WorkingModelError::Unauthorized,
         AuthError::Upstream {
             status,
             code,
@@ -189,6 +189,12 @@ fn map_auth_error(error: AuthError) -> WorkingModelError {
             code: "auth_operation_busy".to_string(),
             message: "认证操作正在进行，请稍后重试".to_string(),
         },
+        AuthError::Network(message) => WorkingModelError::Upstream {
+            status: 504,
+            code: "upstream_network_error".to_string(),
+            message: format!("连接 Copis Working 服务器网络异常或超时：{}", message),
+        },
+        AuthError::InvalidInput(message) => WorkingModelError::InvalidRequest(message),
         _ => WorkingModelError::InvalidResponse,
     }
 }
@@ -225,7 +231,7 @@ impl std::fmt::Display for WorkingModelError {
         match self {
             Self::InvalidRequest(message) => formatter.write_str(message),
             Self::Unauthorized => formatter.write_str("Working 模型代理未授权"),
-            Self::CapabilityExpired => formatter.write_str("Working 模型代理 capability 已过期"),
+            Self::CapabilityExpired => formatter.write_str("模型会话已过期，请直接发送「继续任务」或点击重试"),
             Self::CapabilityMismatch => formatter.write_str("Working 模型代理 capability 不匹配"),
             Self::Upstream {
                 status, message, ..

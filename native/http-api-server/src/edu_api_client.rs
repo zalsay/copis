@@ -201,35 +201,80 @@ impl Drop for RequestPermit {
     }
 }
 
+pub const MAX_STREAM_TIMEOUT_SECS: u64 = 300;
+pub const DEFAULT_STREAM_TIMEOUT_SECS: u64 = 300;
+pub const DEFAULT_API_TIMEOUT_SECS: u64 = 30;
+
+pub fn resolve_stream_timeout_secs() -> u64 {
+    std::env::var("COPIS_STREAM_TIMEOUT_SECS")
+        .or_else(|_| std::env::var("COPIS_MODEL_STREAM_TIMEOUT_SECS"))
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|value| *value > 0)
+        .map(|value| value.min(MAX_STREAM_TIMEOUT_SECS))
+        .unwrap_or(DEFAULT_STREAM_TIMEOUT_SECS)
+}
+
+pub fn resolve_api_timeout_secs() -> u64 {
+    std::env::var("COPIS_EDU_API_TIMEOUT_SECS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|value| *value > 0)
+        .map(|value| value.min(MAX_STREAM_TIMEOUT_SECS))
+        .unwrap_or(DEFAULT_API_TIMEOUT_SECS)
+}
+
+fn is_stream_path(path: &str) -> bool {
+    path.starts_with("/api/internal/working-model") || path.contains("/responses")
+}
+
 struct UreqEduApiTransport {
     base_url: String,
-    agent: ureq::Agent,
+    api_agent: ureq::Agent,
+    stream_agent: ureq::Agent,
 }
 
 impl UreqEduApiTransport {
     fn new(base_url: &str) -> Result<Self, EduApiError> {
         let base_url = normalize_base_url(base_url)?;
-        let agent = ureq::Agent::config_builder()
-            .timeout_global(Some(std::time::Duration::from_secs(30)))
+        let api_timeout_secs = resolve_api_timeout_secs();
+        let stream_timeout_secs = resolve_stream_timeout_secs();
+
+        let api_agent = ureq::Agent::config_builder()
+            .timeout_global(Some(std::time::Duration::from_secs(api_timeout_secs)))
             .http_status_as_error(false)
             .build()
             .new_agent();
-        if let Some(proxy) = agent.config().proxy() {
+
+        let stream_agent = ureq::Agent::config_builder()
+            .timeout_global(Some(std::time::Duration::from_secs(stream_timeout_secs)))
+            .http_status_as_error(false)
+            .build()
+            .new_agent();
+
+        if let Some(proxy) = stream_agent.config().proxy() {
             eprintln!(
-                "[HTTP API][edu-api] transport 初始化 base_url={} proxy={}://{}:{} from_env={}",
+                "[HTTP API][edu-api] transport 初始化 base_url={} proxy={}://{}:{} api_timeout={}s stream_timeout={}s",
                 base_url,
                 proxy.protocol(),
                 proxy.host(),
                 proxy.port(),
-                proxy.is_from_env()
+                api_timeout_secs,
+                stream_timeout_secs
             );
         } else {
             eprintln!(
-                "[HTTP API][edu-api] transport 初始化 base_url={} proxy=none",
-                base_url
+                "[HTTP API][edu-api] transport 初始化 base_url={} proxy=none api_timeout={}s stream_timeout={}s",
+                base_url,
+                api_timeout_secs,
+                stream_timeout_secs
             );
         }
-        Ok(Self { base_url, agent })
+        Ok(Self {
+            base_url,
+            api_agent,
+            stream_agent,
+        })
     }
 }
 
@@ -261,7 +306,13 @@ impl EduApiTransport for UreqEduApiTransport {
         let http_request = builder
             .body(request.body.unwrap_or_default())
             .map_err(|_| EduApiError::InvalidConfiguration("edu-api 请求构造失败".to_string()))?;
-        let mut response = self.agent.run(http_request).map_err(|error| {
+        let is_stream = is_stream_path(&request.path);
+        let agent = if is_stream {
+            &self.stream_agent
+        } else {
+            &self.api_agent
+        };
+        let mut response = agent.run(http_request).map_err(|error| {
             let message = sanitize_transport_error(&error.to_string());
             if diagnostic {
                 eprintln!(

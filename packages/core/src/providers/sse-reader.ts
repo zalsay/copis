@@ -191,9 +191,20 @@ function normalizeToolCallOutputIndex(value: unknown): string | undefined {
   return undefined
 }
 
+export const DEFAULT_STREAM_TIMEOUT_MS = 60_000
+export const MAX_STREAM_TIMEOUT_MS = 300_000
+
+export function resolveStreamTimeoutMs(configuredTimeoutMs?: number): number {
+  if (typeof configuredTimeoutMs === 'number' && Number.isFinite(configuredTimeoutMs) && configuredTimeoutMs > 0) {
+    return Math.min(configuredTimeoutMs, MAX_STREAM_TIMEOUT_MS)
+  }
+  return DEFAULT_STREAM_TIMEOUT_MS
+}
+
 /** 单次 SSE 流式尝试（不含重试逻辑） */
 async function runStreamAttempt(options: StreamSSEOptions): Promise<StreamSSEResult> {
-  const { request, adapter, onEvent, signal, fetchFn = fetch, timeoutMs = 30_000 } = options
+  const { request, adapter, onEvent, signal, fetchFn = fetch, timeoutMs = DEFAULT_STREAM_TIMEOUT_MS } = options
+  const effectiveTimeoutMs = resolveStreamTimeoutMs(timeoutMs)
 
   // 真正的"首字节超时"：仅在等待 HTTP 响应期间计时，收到响应后立即清除。
   // 使用 setTimeout + clearTimeout 而非 AbortSignal.timeout() 因为后者是绝对超时，
@@ -201,7 +212,7 @@ async function runStreamAttempt(options: StreamSSEOptions): Promise<StreamSSERes
   // 超时产生的 AbortError 会被外层 streamSSE 的 isRetriableError 识别为可重试，
   // 从而触发指数退避重试（最多 5 次 / 30s 预算）。
   const timeoutController = new AbortController()
-  const timer = setTimeout(() => timeoutController.abort(new DOMException('First byte timeout', 'TimeoutError')), timeoutMs)
+  const timer = setTimeout(() => timeoutController.abort(new DOMException('First byte timeout', 'TimeoutError')), effectiveTimeoutMs)
   const effectiveSignal = signal
     ? AbortSignal.any([signal, timeoutController.signal])
     : timeoutController.signal

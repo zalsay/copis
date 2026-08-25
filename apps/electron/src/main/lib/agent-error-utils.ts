@@ -11,6 +11,7 @@ import { TRANSIENT_NETWORK_PATTERN, isMalformedResponseError } from './error-pat
 const FRIENDLY_ERROR_MESSAGES: Array<{ pattern: RegExp; message: string }> = [
   { pattern: /not logged in|please run \/login/i, message: '请检查是否选择了正确的 Copis 供应渠道和模型' },
   { pattern: /validation error/i, message: 'API 请求格式校验失败，请重试或开启新会话' },
+  { pattern: /capability_expired|capability.*expired|模型.*capability.*过期|模型会话已过期/i, message: '模型会话已过期，您可以直接发送「继续任务」或点击下方「重试」继续。' },
 ]
 
 const MAX_ERROR_MESSAGE_LENGTH = 5000
@@ -84,6 +85,24 @@ export function mapSDKErrorToTypedError(
       message: THINKING_SIGNATURE_ERROR_MESSAGE,
       actions: [
         { key: 'n', label: '在新对话继续', action: 'retry_in_new_session' },
+        { key: 'r', label: '重试', action: 'retry' },
+      ],
+      canRetry: true,
+      retryDelayMs: 1000,
+      originalError,
+    }
+  }
+
+  if (
+    errorCode === 'capability_expired' ||
+    /capability_expired|capability.*expired|模型.*capability.*过期|模型会话已过期/i.test(detailedMessage) ||
+    /capability_expired|capability.*expired|模型.*capability.*过期|模型会话已过期/i.test(originalError)
+  ) {
+    return {
+      code: 'service_error',
+      title: '会话已过期',
+      message: '模型会话已过期，您可以直接发送「继续任务」或点击下方「重试」继续。',
+      actions: [
         { key: 'r', label: '重试', action: 'retry' },
       ],
       canRetry: true,

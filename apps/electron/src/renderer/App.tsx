@@ -24,7 +24,6 @@ export default function App(): React.ReactElement {
   const [showOnboarding, setShowOnboarding] = React.useState(false)
 
   // 初始化：检查是否需要显示 Onboarding
-  // Windows 上仍需 Git Bash/WSL，由 Onboarding Step 2 与聊天错误卡片引导用户安装。
   React.useEffect(() => {
     const initialize = async () => {
       try {

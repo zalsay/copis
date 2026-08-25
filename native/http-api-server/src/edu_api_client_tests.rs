@@ -210,3 +210,42 @@ fn client_constructor_rejects_invalid_base_url() {
     let transport = Arc::new(RecordingTransport::new(ok_response()));
     assert!(EduApiClient::new("not a url", transport, 1).is_err());
 }
+
+#[test]
+fn stream_timeout_resolution_respects_max_300s_limit() {
+    use super::edu_api_client::{
+        resolve_api_timeout_secs, resolve_stream_timeout_secs, DEFAULT_API_TIMEOUT_SECS,
+        DEFAULT_STREAM_TIMEOUT_SECS, MAX_STREAM_TIMEOUT_SECS,
+    };
+
+    // 默认值断言
+    assert_eq!(DEFAULT_STREAM_TIMEOUT_SECS, 300);
+    assert_eq!(DEFAULT_API_TIMEOUT_SECS, 30);
+    assert_eq!(MAX_STREAM_TIMEOUT_SECS, 300);
+
+    // 测试未设置环境变量时的默认值
+    std::env::remove_var("COPIS_STREAM_TIMEOUT_SECS");
+    std::env::remove_var("COPIS_MODEL_STREAM_TIMEOUT_SECS");
+    std::env::remove_var("COPIS_EDU_API_TIMEOUT_SECS");
+    assert_eq!(resolve_stream_timeout_secs(), 300);
+    assert_eq!(resolve_api_timeout_secs(), 30);
+
+    // 测试设置小于 300 的值
+    std::env::set_var("COPIS_STREAM_TIMEOUT_SECS", "120");
+    assert_eq!(resolve_stream_timeout_secs(), 120);
+
+    std::env::set_var("COPIS_EDU_API_TIMEOUT_SECS", "45");
+    assert_eq!(resolve_api_timeout_secs(), 45);
+
+    // 测试设置大于 300 的值被限制在 300
+    std::env::set_var("COPIS_STREAM_TIMEOUT_SECS", "600");
+    assert_eq!(resolve_stream_timeout_secs(), 300);
+
+    std::env::set_var("COPIS_EDU_API_TIMEOUT_SECS", "600");
+    assert_eq!(resolve_api_timeout_secs(), 300);
+
+    // 清理测试环境变量
+    std::env::remove_var("COPIS_STREAM_TIMEOUT_SECS");
+    std::env::remove_var("COPIS_EDU_API_TIMEOUT_SECS");
+}
+
