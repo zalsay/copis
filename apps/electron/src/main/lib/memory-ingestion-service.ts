@@ -2,7 +2,7 @@
  * 知识库多源资料摄取服务 (Memory Ingestion Service)
  *
  * 负责将非结构化外部资料（本地文档、网页抓取）通过解析与 LLM 抽取，
- * 转化为符合 QM 规范的结构化原子知识卡片。
+ * 转化为符合 Copis 规范的结构化原子知识卡片。
  */
 
 import type {
@@ -126,7 +126,7 @@ export class MemoryIngestionService {
   }
 
   /**
-   * 使用当前启用的 AI 模型从长文本中抽取 QM 结构化原子知识
+   * 使用当前启用的 AI 模型从长文本中抽取 Copis 结构化原子知识
    */
   async extractKnowledgeFromText(input: MemoryExtractKnowledgeInput): Promise<MemoryExtractKnowledgeResult> {
     const text = input.text.trim()
@@ -160,7 +160,7 @@ export class MemoryIngestionService {
     const modelId = enabledModel?.id || activeChannel.models[0]?.id || 'gpt-4o'
 
     const prompt = `<copis_knowledge_extraction>
-你是一个专业的知识库架构师。请仔细阅读以下外部原始资料，并按照 QM 知识库规范提炼出高价值、长期有效、独立的原子知识卡片。
+你是一个专业的知识库架构师。请仔细阅读以下外部原始资料，并按照 Copis 知识库规范提炼出高价值、长期有效、独立的原子知识卡片。
 
 输出格式要求：
 - 只输出 Markdown Bullet 列表，每行一条，格式为：- [fact|preference|decision|project|scratch] 标题: 核心内容 #标签1 #标签2

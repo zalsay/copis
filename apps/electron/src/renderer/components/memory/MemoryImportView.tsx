@@ -172,7 +172,7 @@ export function MemoryImportView({ workspaceSlug, workspaces }: MemoryImportView
         throw new Error('未能从文档中提取到文字内容')
       }
 
-      setIngestionStage('正在调用 AI 模型提炼高价值知识点（QM 抽取协议）...')
+      setIngestionStage('正在调用 AI 模型提炼高价值知识点（Copis 抽取协议）...')
       if (window.electronAPI.extractKnowledgeFromText) {
         const extractRes = await window.electronAPI.extractKnowledgeFromText({
           text: extractedText,
@@ -294,7 +294,7 @@ export function MemoryImportView({ workspaceSlug, workspaces }: MemoryImportView
         <div>
           <h1 className="text-xl font-semibold tracking-tight text-foreground">导入与沉淀知识库</h1>
           <p className="mt-1 text-sm text-foreground/60">
-            通过结构化文件、本地原始文档 AI 提炼或在线网页抓取，将外部资料转换为 QM 原子知识库。
+            通过结构化文件、本地原始文档 AI 提炼或在线网页抓取，将外部资料转换为 Copis 原子知识库。
           </p>
         </div>
 

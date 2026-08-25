@@ -66,7 +66,7 @@ Tags: ui
     expect(items[2]!.tags).toContain('ui')
   })
 
-  test('Given QM Bullet 列表 Markdown When 解析 Then 逐行抽取事实与标签', () => {
+  test('Given Copis Bullet 列表 Markdown When 解析 Then 逐行抽取事实与标签', () => {
     const mdStr = `
 - [fact] 部署端口：本地开发默认固定为 5173 #dev #port
 - [preference] 编码偏好：优先使用中文注释和日志
