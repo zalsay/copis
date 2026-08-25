@@ -481,4 +481,20 @@ describe('Agent 连接器专属会话标记保持与自动迁移', () => {
     expect(reloaded?.source).toBe('wechat')
     expect(reloaded?.wechatDedicated).toBe(true)
   })
+
+  test('Given 新建会话 When 不指定 advancedAuthorization Then 默认开启高级授权 (true)', () => {
+    const session = manager.createAgentSession('新默认会话')
+    expect(session.advancedAuthorization).toBe(true)
+    expect(manager.getAgentSessionMeta(session.id)?.advancedAuthorization).toBe(true)
+  })
+
+  test('Given 历史会话未包含 advancedAuthorization 字段 When 读取会话索引 Then 自动迁移为开启 (true)', () => {
+    writeAgentSessionsIndex([
+      { id: 'legacy-session-no-auth', title: '历史会话', workspaceId: 'default', createdAt: 1, updatedAt: 1 },
+    ])
+
+    const sessions = manager.listAgentSessions()
+    const migrated = sessions.find((s) => s.id === 'legacy-session-no-auth')
+    expect(migrated?.advancedAuthorization).toBe(true)
+  })
 })

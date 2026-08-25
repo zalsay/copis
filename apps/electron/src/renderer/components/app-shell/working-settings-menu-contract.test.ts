@@ -73,6 +73,9 @@ describe('Working 设置菜单契约', () => {
     expect(messagePanelSource).toContain('copis-working-message-channel-rebind-btn')
     expect(messagePanelSource).toContain('重新绑定')
     expect(messagePanelSource).toContain('getWorkingSettingsSnapshot')
+    expect(messagePanelSource).toContain('Agent 邮箱 (QQ 邮箱)')
+    expect(messagePanelSource).toContain('getAgentMailStatus')
+    expect(messagePanelSource).toContain('startAgentMailLogin')
   })
 
   test('Given 我的订单页面 When 渲染设置面板 Then 不重复包含多余 header 标题', () => {

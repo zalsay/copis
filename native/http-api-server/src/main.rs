@@ -10,6 +10,7 @@ use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 mod agent_files;
+mod agent_mail;
 mod alipay_bot;
 mod app_update;
 mod auth_session;
@@ -87,6 +88,7 @@ const DISABLED_WORKING_AUTH_SYNC_PATH: &str = "/internal/working-auth/token";
 const INTERNAL_AGENT_FILES_PREFIX: &str = "/api/internal/agent/files/";
 const INTERNAL_AGENT_SHELL_PATH: &str = "/api/internal/agent/shell";
 const INTERNAL_AGENT_ALIPAY_BOT_PATH: &str = "/api/internal/agent/alipay-bot";
+const INTERNAL_AGENT_MAIL_PATH: &str = "/api/internal/agent/agent-mail";
 const VITE_DEV_ORIGINS: [&str; 2] = ["http://127.0.0.1:5174", "http://localhost:5174"];
 // 业务桥请求等待 Electron 响应的上限，超时后清理 pending 避免线程永久挂起。
 const BRIDGE_REQUEST_TIMEOUT_SECS: u64 = 60;
@@ -1390,6 +1392,10 @@ fn is_internal_agent_alipay_bot_path(path: &str) -> bool {
     path == INTERNAL_AGENT_ALIPAY_BOT_PATH
 }
 
+fn is_internal_agent_agent_mail_path(path: &str) -> bool {
+    path == INTERNAL_AGENT_MAIL_PATH
+}
+
 /// 浏览器 Origin 请求必须携带 web 令牌；Vite 开发来源与无 Origin 的本地进程请求除外。
 /// 内部路由与健康检查继续由各自逻辑放行，不在此处校验。
 fn is_web_route_authorized(origin: Option<&str>, request: &HttpRequest, path: &str) -> bool {
@@ -1708,6 +1714,12 @@ fn handle_connection(
 
     if is_internal_agent_alipay_bot_path(path) {
         handle_internal_agent_alipay_bot(&mut stream, &request, origin, workers.as_ref());
+        let _ = stream.shutdown(Shutdown::Both);
+        return;
+    }
+
+    if is_internal_agent_agent_mail_path(path) {
+        handle_internal_agent_agent_mail(&mut stream, &request, origin, workers.as_ref());
         let _ = stream.shutdown(Shutdown::Both);
         return;
     }
@@ -2847,6 +2859,39 @@ fn handle_internal_agent_alipay_bot(
         &request.method,
         agent_worker_token.map(String::as_str),
         payment_capability_token.map(String::as_str),
+        &request.body,
+    ) {
+        Ok(response) => {
+            send_json_response(stream, response.status, &response.body.to_string(), origin)
+        }
+        Err(error) => {
+            let body = json!({ "error": error.message, "code": error.code }).to_string();
+            send_json_response(stream, error.status, &body, origin);
+        }
+    }
+}
+
+fn handle_internal_agent_agent_mail(
+    stream: &mut TcpStream,
+    request: &HttpRequest,
+    origin: Option<&str>,
+    workers: &PiWorkerManager,
+) {
+    let agent_worker_token = request.headers.get(AGENT_FILE_TOKEN_HEADER);
+    if agent_worker_token.is_none() {
+        send_json_response(
+            stream,
+            403,
+            r#"{"error":"Agent Mail 能力令牌缺失","code":"agent_file_token_required"}"#,
+            None,
+        );
+        return;
+    }
+
+    match agent_mail::handle_request(
+        workers.file_policies().as_ref(),
+        &request.method,
+        agent_worker_token.map(String::as_str),
         &request.body,
     ) {
         Ok(response) => {

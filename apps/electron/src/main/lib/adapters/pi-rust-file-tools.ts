@@ -21,6 +21,7 @@ export interface RustFileToolOperations {
   read: ReadOperations
   edit: EditOperations
   write: WriteOperations
+  realPath: (path: string) => Promise<string>
 }
 
 interface RustFileReadResponse {
@@ -30,6 +31,10 @@ interface RustFileReadResponse {
 
 interface RustFileWriteResponse {
   revision: string
+}
+
+interface RustFileRealPathResponse {
+  realPath: string
 }
 
 interface RustShellResponse {
@@ -94,7 +99,7 @@ class RustFileToolClient {
   }
 
   private async request<T>(
-    action: 'access' | 'read' | 'write',
+    action: 'access' | 'read' | 'write' | 'realpath',
     method: 'POST' | 'PUT',
     body: Record<string, unknown>,
     signal?: AbortSignal,
@@ -209,6 +214,14 @@ class RustFileToolClient {
     this.revisions.set(path, result.revision)
   }
 
+  async realPath(path: string): Promise<string> {
+    const result = await this.request<RustFileRealPathResponse>('realpath', 'POST', { path })
+    if (!result || typeof result.realPath !== 'string') {
+      throw new Error('Rust 文件真实路径响应不正确')
+    }
+    return result.realPath
+  }
+
   async executeShell(
     command: string,
     cwd: string,
@@ -252,6 +265,7 @@ export function createRustFileToolOperations(options: RustFileToolClientOptions)
       mkdir: async () => {},
       writeFile: (path, content) => client.writeFile(path, content),
     },
+    realPath: (path) => client.realPath(path),
   }
 }
 

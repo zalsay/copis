@@ -1424,7 +1424,7 @@ export class AgentOrchestrator {
           return validationFailure
         }
 
-        // ── Composer 高级授权：Git/SSH/curl/Python 命令必须显式开启后才允许执行 ──
+        // ── Composer 高级授权：Git/SSH/curl/Python 命令必须开启后才允许执行 ──
         if (toolName === 'Bash') {
           const command = typeof input.command === 'string' ? input.command : ''
           const advancedAuthorization = getAgentSessionMeta(sessionId)?.advancedAuthorization === true

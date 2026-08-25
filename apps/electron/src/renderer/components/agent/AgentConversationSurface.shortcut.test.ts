@@ -34,3 +34,9 @@ test('Given AI浏览器中的紧凑 Composer When 渲染工具栏 Then 保留高
   expect(compactConditionEnd).toBeGreaterThan(compactConditionStart)
   expect(advancedAuthorizationStart).toBeGreaterThan(compactConditionEnd)
 })
+
+test('Given AgentConversationSurface When 渲染 Composer Then 绑定 inputHistory 并支持记录输入历史', () => {
+  expect(source).toContain('composerInputHistory')
+  expect(source).toContain('inputHistory={composerInputHistory}')
+  expect(source).toContain('setGlobalInputHistory((prev) => appendHistoryEntry(prev, effectiveText))')
+})

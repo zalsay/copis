@@ -99,6 +99,12 @@ import {
   finalizeStreamingActivities,
 } from '@/atoms/agent-atoms'
 import type { AgentContextStatus } from '@/atoms/agent-atoms'
+import {
+  composerInputHistoryAtom,
+  appendHistoryEntry,
+  extractUserHistoryFromMessages,
+  mergeSessionAndGlobalHistory,
+} from '@/atoms/composer-history'
 import { longTextPasteAsAttachmentEnabledAtom } from '@/atoms/ui-preferences'
 import { channelsAtom } from '@/atoms/model-atoms'
 import { todoPlanningGroupsAtom } from '@/atoms/planning-atoms'
@@ -278,6 +284,20 @@ export function AgentConversationSurface({ sessionId, variant = 'main' }: AgentC
   const setSessionModelMap = useSetAtom(agentSessionModelMapAtom)
   const [defaultChannelId, setDefaultChannelId] = useAtom(agentChannelIdAtom)
   const [defaultModelId, setDefaultModelId] = useAtom(agentModelIdAtom)
+  const [globalInputHistory, setGlobalInputHistory] = useAtom(composerInputHistoryAtom)
+
+  // 提取当前会话历史中的真实用户输入
+  const sessionUserHistory = React.useMemo(
+    () => extractUserHistoryFromMessages(persistedSDKMessages),
+    [persistedSDKMessages],
+  )
+
+  // 合并全局历史与会话历史
+  const composerInputHistory = React.useMemo(
+    () => mergeSessionAndGlobalHistory(globalInputHistory, sessionUserHistory),
+    [globalInputHistory, sessionUserHistory],
+  )
+
   const sessions = useAtomValue(agentSessionsAtom)
   const planningGroups = useAtomValue(todoPlanningGroupsAtom)
   const [todoDialogOpen, setTodoDialogOpen] = React.useState(false)
@@ -579,7 +599,7 @@ export function AgentConversationSurface({ sessionId, variant = 'main' }: AgentC
     && agentChannelProvider === 'openai-codex'
     && isCodexFastModeSupportedModel(agentModelId ?? undefined)
   const codexFastModeEnabled = isCodexFastModeAvailable && sessionMeta?.codexFastMode === true
-  const advancedAuthorizationEnabled = sessionMeta?.advancedAuthorization === true
+  const advancedAuthorizationEnabled = sessionMeta?.advancedAuthorization !== false
 
   // 检查 Agent 渠道列表中是否存在可用的模型（渠道 enabled + 模型 enabled）
   const hasAvailableModel = Boolean(stableChannel?.enabled && stableChannel.models.some((model) => model.enabled))
@@ -1947,6 +1967,11 @@ export function AgentConversationSurface({ sessionId, variant = 'main' }: AgentC
       })
       return
     }
+
+    if (effectiveText) {
+      setGlobalInputHistory((prev) => appendHistoryEntry(prev, effectiveText))
+    }
+
     const additionalDirectoriesForRun = createBaseAdditionalDirectories()
 
     if (streaming) {
@@ -3045,6 +3070,7 @@ export function AgentConversationSurface({ sessionId, variant = 'main' }: AgentC
               htmlValue={inputHtmlContent}
               onHtmlChange={setInputHtmlContent}
               sendWithCmdEnter={sendWithCmdEnter}
+              inputHistory={composerInputHistory}
             />
 
             {/* Footer 工具栏 — 容器变窄时尾部按钮自动折叠进「更多」Popover */}

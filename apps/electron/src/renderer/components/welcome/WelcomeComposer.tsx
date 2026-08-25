@@ -5,7 +5,7 @@
  */
 
 import * as React from 'react'
-import { useAtomValue } from 'jotai'
+import { useAtom, useAtomValue, useSetAtom } from 'jotai'
 import { CornerDownLeft, Loader2, Paperclip, Square, Zap } from 'lucide-react'
 import type { AgentSessionMeta, AgentWorkspace, ModelOption, SDKMessage, WorkingMode } from '@copis/shared'
 import {
@@ -18,9 +18,9 @@ import {
   workingModelCatalogToOptions,
   workingModeToModelId,
 } from '@copis/shared'
-import { useSetAtom } from 'jotai'
 import { workingClientConfigAtom } from '@/atoms/working-atoms'
 import { initializeWorkingModelCatalog, workingModelCatalogAtom } from '@/atoms/working-model-catalog-atoms'
+import { composerInputHistoryAtom, appendHistoryEntry } from '@/atoms/composer-history'
 import { ModelSelector } from '@/components/model/ModelSelector'
 import { RichTextInput } from '@/components/ai-elements/rich-text-input'
 import { InputToolbarOverflow, type ToolbarItem } from '@/components/ai-elements/InputToolbarOverflow'
@@ -70,6 +70,7 @@ export function WelcomeComposer(): React.ReactElement {
   const [sending, setSending] = React.useState(false)
   const [workingMode, setWorkingMode] = React.useState<WorkingMode>('fast')
   const [error, setError] = React.useState<string | null>(null)
+  const [history, setHistory] = useAtom(composerInputHistoryAtom)
   const sessionRef = React.useRef<AgentSessionMeta | null>(null)
   const workingClientConfig = useAtomValue(workingClientConfigAtom)
   const workingModelCatalog = useAtomValue(workingModelCatalogAtom)
@@ -137,6 +138,7 @@ export function WelcomeComposer(): React.ReactElement {
     const userMessage = content.trim()
     if (!userMessage || sending || !workspace) return
 
+    setHistory((previous) => appendHistoryEntry(previous, userMessage))
     setContent('')
     setError(null)
     setEntries((previous) => [...previous, { role: 'user', text: userMessage }])
@@ -317,6 +319,7 @@ export function WelcomeComposer(): React.ReactElement {
           workspacePath={workspace?.projectRootPath ?? null}
           workspaceSlug={workspace?.slug ?? null}
           sessionId={session?.id ?? null}
+          inputHistory={history}
         />
         <InputToolbarOverflow items={toolbarItems} trailing={trailingNode} />
       </div>

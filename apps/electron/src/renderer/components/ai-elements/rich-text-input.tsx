@@ -31,6 +31,7 @@ import { lowlight } from '@/lib/lowlight'
 import { htmlToMarkdown } from '@/lib/markdown-rich-text'
 import { resolveMentionSuggestionChar } from './mention-utils'
 import { richTextRenderingEnabledAtom } from '@/atoms/ui-preferences'
+import { composerInputHistoryAtom } from '@/atoms/composer-history'
 import { createFileMentionSuggestion } from '@/components/file-browser/file-mention-suggestion'
 import { getFilePanelDragData, type FilePanelDragItem } from '@/lib/file-panel-drag'
 import {
@@ -147,6 +148,8 @@ interface RichTextInputProps {
   onHtmlChange?: (html: string) => void
   /** 是否使用 Cmd/Ctrl+Enter 发送（而非 Enter） */
   sendWithCmdEnter?: boolean
+  /** 输入历史列表（时间升序：旧 -> 新），支持按 Up/Down 箭头键唤起和导航 */
+  inputHistory?: string[]
   className?: string
 }
 
@@ -184,7 +187,22 @@ export const RichTextInput = forwardRef<RichTextInputHandle, RichTextInputProps>
   htmlValue,
   onHtmlChange,
   sendWithCmdEnter = false,
+  inputHistory,
 }: RichTextInputProps, ref: React.Ref<RichTextInputHandle>): React.ReactElement {
+  const defaultHistory = useAtomValue(composerInputHistoryAtom)
+  const effectiveHistory = inputHistory ?? defaultHistory
+  const inputHistoryRef = useRef<string[]>(effectiveHistory)
+  inputHistoryRef.current = effectiveHistory
+
+  // 历史记录导航状态：当前指向的索引（null 表示未进入历史导航）
+  const historyIndexRef = useRef<number | null>(null)
+  // 进入历史导航前暂存的草稿文本
+  const historyDraftRef = useRef<string | null>(null)
+  // 进入历史导航前暂存的草稿 HTML
+  const historyDraftHtmlRef = useRef<string | null>(null)
+  // 标记本次编辑器更新是否来自历史导航（避免 onUpdate 误把程序更新当作手动修改而重置 index）
+  const isNavigatingHistoryRef = useRef(false)
+
   const [isExpanded, setIsExpanded] = useState(false)
   const inputIdRef = useRef(`rich-text-input-${Math.random().toString(36).slice(2)}`)
   const voicePreviewRef = useRef<{ sessionId: string; from: number; to: number } | null>(null)
@@ -577,6 +595,9 @@ export const RichTextInput = forwardRef<RichTextInputHandle, RichTextInputProps>
           const isSend = cmdEnterMode ? hasCmd : (!hasShift && !hasCmd)
 
           if (isSend) {
+            historyIndexRef.current = null
+            historyDraftRef.current = null
+            historyDraftHtmlRef.current = null
             event.preventDefault()
             onSubmitRef.current()
             return true
@@ -614,6 +635,86 @@ export const RichTextInput = forwardRef<RichTextInputHandle, RichTextInputProps>
           return true
         }
 
+        // 上下箭头输入历史导航：在输入框为空或正在历史导航时，按 Up/Down 切换历史
+        if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
+          if (
+            !event.shiftKey &&
+            !event.metaKey &&
+            !event.ctrlKey &&
+            !event.altKey &&
+            !isComposingRef.current &&
+            !event.isComposing &&
+            !view.dom.querySelector('[data-decoration-id]')
+          ) {
+            const history = inputHistoryRef.current ?? []
+            if (history.length > 0) {
+              const { state } = view
+              const docText = state.doc.textContent
+
+              if (historyIndexRef.current === null) {
+                // 未处于历史导航中：仅当输入框为空且按下 ArrowUp 时进入历史导航
+                if (event.key === 'ArrowUp' && (docText.length === 0 || value.trim() === '')) {
+                  event.preventDefault()
+                  historyDraftRef.current = value
+                  historyDraftHtmlRef.current = htmlValue || editor?.getHTML() || ''
+                  const targetIndex = history.length - 1
+                  const targetItem = history[targetIndex]
+                  if (targetItem !== undefined) {
+                    historyIndexRef.current = targetIndex
+                    applyHistoryContentRef.current?.(targetItem)
+                  }
+                  return true
+                }
+              } else {
+                // 处于历史导航中
+                if (event.key === 'ArrowUp') {
+                  event.preventDefault()
+                  if (historyIndexRef.current > 0) {
+                    const targetIndex = historyIndexRef.current - 1
+                    const targetItem = history[targetIndex]
+                    if (targetItem !== undefined) {
+                      historyIndexRef.current = targetIndex
+                      applyHistoryContentRef.current?.(targetItem)
+                    }
+                  }
+                  return true
+                } else if (event.key === 'ArrowDown') {
+                  event.preventDefault()
+                  if (historyIndexRef.current < history.length - 1) {
+                    const targetIndex = historyIndexRef.current + 1
+                    const targetItem = history[targetIndex]
+                    if (targetItem !== undefined) {
+                      historyIndexRef.current = targetIndex
+                      applyHistoryContentRef.current?.(targetItem)
+                    }
+                  } else {
+                    // 越过最新一条记录，退出历史导航并恢复进入前草稿
+                    const draft = historyDraftRef.current ?? ''
+                    const draftHtml = historyDraftHtmlRef.current ?? ''
+                    historyIndexRef.current = null
+                    historyDraftRef.current = null
+                    historyDraftHtmlRef.current = null
+                    applyDraftContentRef.current?.(draft, draftHtml)
+                  }
+                  return true
+                }
+              }
+            }
+          }
+        }
+
+        // Escape 键：如果在历史导航中，按 Escape 退出历史导航并恢复草稿
+        if (event.key === 'Escape' && historyIndexRef.current !== null) {
+          event.preventDefault()
+          const draft = historyDraftRef.current ?? ''
+          const draftHtml = historyDraftHtmlRef.current ?? ''
+          historyIndexRef.current = null
+          historyDraftRef.current = null
+          historyDraftHtmlRef.current = null
+          applyDraftContentRef.current?.(draft, draftHtml)
+          return true
+        }
+
         // Backspace：空列表项时退出列表
         if (event.key === 'Backspace') {
           const { state } = view
@@ -638,6 +739,16 @@ export const RichTextInput = forwardRef<RichTextInputHandle, RichTextInputProps>
       },
     },
     onUpdate: ({ editor: ed }) => {
+      if (isNavigatingHistoryRef.current) {
+        // 历史导航触发的更新，重置标记并保持当前 historyIndexRef
+        isNavigatingHistoryRef.current = false
+      } else {
+        // 用户手动输入或修改了文本，退出历史导航状态
+        historyIndexRef.current = null
+        historyDraftRef.current = null
+        historyDraftHtmlRef.current = null
+      }
+
       const html = ed.getHTML()
       if (html === '<p></p>') {
         lastEditorValueRef.current = ''
@@ -649,7 +760,6 @@ export const RichTextInput = forwardRef<RichTextInputHandle, RichTextInputProps>
         }
         setIsManuallyCollapsed(false)
       } else {
-        // 纯文本模式下跳过 markdown 特殊字符转义，保持用户所见即所得
         // 纯文本模式下跳过 markdown 特殊字符转义，保持用户所见即所得
         const markdown = htmlToMarkdown(html, { skipMarkdownEscape: !richTextEnabled })
         lastEditorValueRef.current = markdown
@@ -672,6 +782,52 @@ export const RichTextInput = forwardRef<RichTextInputHandle, RichTextInputProps>
       }
     },
   }, [richTextEnabled])
+
+  const applyHistoryContent = useCallback((text: string): void => {
+    if (!editor) return
+    isNavigatingHistoryRef.current = true
+    const html = text
+      .split(/\n\n+/)
+      .map((para) => `<p>${para.replace(/\n/g, '<br>')}</p>`)
+      .join('')
+    editor.commands.setContent(html || '<p></p>')
+    editor.commands.focus('end')
+    lastEditorValueRef.current = text
+    onChange(text)
+    onHtmlChangeRef.current?.(html)
+  }, [editor, onChange])
+
+  const applyDraftContent = useCallback((text: string, html: string): void => {
+    if (!editor) return
+    isNavigatingHistoryRef.current = true
+    if (html) {
+      editor.commands.setContent(html)
+    } else if (text) {
+      const generatedHtml = text
+        .split(/\n\n+/)
+        .map((para) => `<p>${para.replace(/\n/g, '<br>')}</p>`)
+        .join('')
+      editor.commands.setContent(generatedHtml)
+    } else {
+      editor.commands.clearContent()
+    }
+    editor.commands.focus('end')
+    lastEditorValueRef.current = text
+    onChange(text)
+    onHtmlChangeRef.current?.(html)
+  }, [editor, onChange])
+
+  const applyHistoryContentRef = useRef(applyHistoryContent)
+  applyHistoryContentRef.current = applyHistoryContent
+  const applyDraftContentRef = useRef(applyDraftContent)
+  applyDraftContentRef.current = applyDraftContent
+
+  // 切换会话或外部重置焦点时重置历史导航状态
+  useEffect(() => {
+    historyIndexRef.current = null
+    historyDraftRef.current = null
+    historyDraftHtmlRef.current = null
+  }, [autoFocusTrigger, sessionId])
 
   // 卸载时取消未触发的 rAF 行数检查，避免泄漏 / 在卸载组件上 setState
   useEffect(() => {
@@ -700,6 +856,9 @@ export const RichTextInput = forwardRef<RichTextInputHandle, RichTextInputProps>
       if (controllerValue === '') {
         editor.commands.clearContent()
         lastEditorValueRef.current = ''
+        historyIndexRef.current = null
+        historyDraftRef.current = null
+        historyDraftHtmlRef.current = null
         isExpandedRef.current = false
         setIsExpanded(false)
         setIsManuallyCollapsed(false)

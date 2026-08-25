@@ -298,6 +298,17 @@ function migrateLegacyConnectorSessions(index: AgentSessionsIndex): boolean {
   return changed
 }
 
+function migrateLegacyAdvancedAuthorization(data: AgentSessionsIndex): boolean {
+  let changed = false
+  for (const session of data.sessions) {
+    if (session.advancedAuthorization === undefined) {
+      session.advancedAuthorization = true
+      changed = true
+    }
+  }
+  return changed
+}
+
 /**
  * 读取会话索引文件
  */
@@ -310,7 +321,8 @@ function readIndex(): AgentSessionsIndex {
     const thinkingDefaultMigrated = migrateLegacyOpenAIThinkingDefault(data)
     const attachedPathsMigrated = normalizePersistedAttachedPaths(data)
     const connectorSessionsMigrated = migrateLegacyConnectorSessions(data)
-    if (permissionModeMigrated || agentRuntimeMigrated || thinkingDefaultMigrated || attachedPathsMigrated || connectorSessionsMigrated) {
+    const advancedAuthorizationMigrated = migrateLegacyAdvancedAuthorization(data)
+    if (permissionModeMigrated || agentRuntimeMigrated || thinkingDefaultMigrated || attachedPathsMigrated || connectorSessionsMigrated || advancedAuthorizationMigrated) {
       writeIndex(data)
       if (permissionModeMigrated) {
         console.log('[Agent 会话] 已迁移历史权限模式 auto → bypassPermissions')
@@ -326,6 +338,9 @@ function readIndex(): AgentSessionsIndex {
       }
       if (connectorSessionsMigrated) {
         console.log('[Agent 会话] 已迁移并补充连接器专属会话标签属性')
+      }
+      if (advancedAuthorizationMigrated) {
+        console.log('[Agent 会话] 已将历史会话的高级授权默认迁移为开启')
       }
     }
     return data
@@ -599,6 +614,8 @@ export function createAgentSession(
     reasoningLevel: defaultThinkingLevel,
     // Copis Working 默认使用快速模式；用户可按会话切换到专家模式。
     workingMode: 'fast',
+    // 默认开启高级授权（允许 Git/SSH 和 AI浏览器全部页面操作）
+    advancedAuthorization: true,
     createdAt: now,
     updatedAt: now,
   }

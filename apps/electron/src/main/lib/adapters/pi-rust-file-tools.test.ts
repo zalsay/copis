@@ -48,6 +48,28 @@ describe('Pi Rust 文件工具桥接', () => {
     expect(writeBody).not.toHaveProperty('writeRoots')
   })
 
+  test('Given 开启高级授权时 When 调用 realPath Then 返回真实物理绝对路径', async () => {
+    const requests: Array<{ url: string; init?: RequestInit }> = []
+    const operations = createRustFileToolOperations({
+      sessionId: 'session-1',
+      baseUrl: 'http://127.0.0.1:51730',
+      fileToken: 'test-token',
+      fetchImpl: async (url, init) => {
+        requests.push({ url: String(url), init })
+        return response({ realPath: '/Volumes/RC500/dev/copis/project/src/main.ts' })
+      },
+    })
+
+    const realPath = await operations.realPath('src/main.ts')
+    expect(realPath).toBe('/Volumes/RC500/dev/copis/project/src/main.ts')
+    expect(new URL(requests[0]!.url).pathname).toBe('/api/internal/agent/files/realpath')
+    expect(JSON.parse(String(requests[0]!.init?.body))).toEqual({
+      sessionId: 'session-1',
+      path: 'src/main.ts',
+    })
+    expect((requests[0]!.init?.headers as Record<string, string>)['x-copis-agent-file-token']).toBe('test-token')
+  })
+
   test('Given Rust 拒绝越界路径 When Pi 执行操作 Then 直接返回拒绝错误', async () => {
     const operations = createRustFileToolOperations({
       sessionId: 'session-1',

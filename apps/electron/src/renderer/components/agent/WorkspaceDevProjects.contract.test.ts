@@ -9,7 +9,7 @@ describe('项目开发列表契约', () => {
   test('Given 右侧文件区 When 用户查看第一个标签 Then 展示项目列表与启动控制', () => {
     expect(sidePanelSource).toContain('>\n                  项目列表\n                </button>')
     expect(sidePanelSource).toContain('<WorkspaceDevProjects workspaceSlug={workspaceSlug} />')
-    expect(sidePanelSource).toContain('项目文件')
+    expect(sidePanelSource).toContain('工作区')
     expect(projectListSource).toContain('startWorkspaceDevProject')
     expect(projectListSource).toContain('stopWorkspaceDevProject')
     expect(projectListSource).toContain('window.electronAPI.webTabs.create({ url: updated.url, activate: true })')

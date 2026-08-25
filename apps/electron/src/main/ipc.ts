@@ -9,7 +9,7 @@ import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'nod
 import { existsSync, realpathSync, rmSync, readFileSync, writeFileSync, mkdirSync, statSync } from 'node:fs'
 import { writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, ATTACHMENT_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, FUNCTIONAL_MODULE_IPC_CHANNELS, PROXY_IPC_CHANNELS, AGENT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, WECHAT_IPC_CHANNELS, AUTOMATION_IPC_CHANNELS, PLANNING_IPC_CHANNELS, PLANNING_CONFLICT_ERROR, WORKING_IPC_CHANNELS, WEB_IPC_CHANNELS, BROWSER_WORKFLOW_IPC_CHANNELS, MEMORY_IPC_CHANNELS, COPIS_WORKING_CHANNEL_ID, isCopisPermissionMode, isCopisWorkingChannelId, isWorkingMode, normalizePathForCompare } from '@copis/shared'
+import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, ATTACHMENT_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, FUNCTIONAL_MODULE_IPC_CHANNELS, PROXY_IPC_CHANNELS, AGENT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, WECHAT_IPC_CHANNELS, AGENT_MAIL_IPC_CHANNELS, AUTOMATION_IPC_CHANNELS, PLANNING_IPC_CHANNELS, PLANNING_CONFLICT_ERROR, WORKING_IPC_CHANNELS, WEB_IPC_CHANNELS, BROWSER_WORKFLOW_IPC_CHANNELS, MEMORY_IPC_CHANNELS, COPIS_WORKING_CHANNEL_ID, isCopisPermissionMode, isCopisWorkingChannelId, isWorkingMode, normalizePathForCompare } from '@copis/shared'
 import { USER_PROFILE_IPC_CHANNELS, SETTINGS_IPC_CHANNELS, SCRATCH_PAD_IPC_CHANNELS, QUICK_TASK_IPC_CHANNELS, VOICE_DICTATION_IPC_CHANNELS, APP_ICON_IPC_CHANNELS, DOCK_BADGE_IPC_CHANNELS, STORAGE_IPC_CHANNELS } from '../types'
 import type {
   QuickTaskSubmitInput,
@@ -153,6 +153,7 @@ import { registerCopisFilePath } from './lib/local-file-protocol'
 import { isPathWithinAuthorizedRoots, realpathOrResolve } from './lib/file-access-policy'
 import { shouldShowProjectFileTreeEntry } from './lib/file-tree-filter'
 import { registerUpdaterIpc } from './lib/updater/updater-ipc'
+import { AgentMailService } from './lib/agent-mail-service'
 import {
   listChannels,
   createChannel,
@@ -276,7 +277,7 @@ import { runAgent, stopAgent, generateAgentTitle, saveFilesToAgentSession, saveF
 import { permissionService } from './lib/agent-permission-service'
 import { askUserService } from './lib/agent-ask-user-service'
 import { exitPlanService } from './lib/agent-exit-plan-service'
-import { getAgentSessionWorkspacePath, getAgentWorkspacesDir, getWorkspaceSkillsDir, getScratchPadPath } from './lib/config-paths'
+import { getAgentSessionWorkspacePath, getAgentWorkspacesDir, getWorkspaceSkillsDir, getScratchPadPath, getWorkspaceFilesDir } from './lib/config-paths'
 import { getCachedDefaultAppInfo, saveCachedDefaultAppInfo } from './lib/default-app-cache'
 import { calculateStorageStats, cleanupStorage, cleanupTempFiles } from './lib/storage-service'
 import type { CleanupOptions } from './lib/storage-service'
@@ -297,6 +298,7 @@ import {
   getAgentWorkspace,
   getAgentWorkspaceBySlug,
   getAgentWorkspaceReadableRoots,
+  getAgentWorkspaceSourceRoot,
   getProjectFilesPath,
   deleteWorkspaceSkill,
   importSkillFromWorkspace,
@@ -3121,7 +3123,10 @@ export function registerIpcHandlers(): void {
   ipcMain.handle(
     AGENT_IPC_CHANNELS.GET_WORKSPACE_FILES_PATH,
     async (_, workspaceSlug: string): Promise<string> => {
-      return getProjectFilesPath(workspaceSlug)
+      const workspace = getAgentWorkspaceBySlug(workspaceSlug)
+      return workspace
+        ? getAgentWorkspaceSourceRoot(workspace)
+        : getWorkspaceFilesDir(workspaceSlug)
     }
   )
 
@@ -3919,7 +3924,7 @@ export function registerIpcHandlers(): void {
           if (ignoreDirs.has(name)) return
 
           target.push({
-            name: name === 'workspace-files' ? '项目文件' : name,
+            name: name === 'workspace-files' ? '工作区' : name,
             path: attachedPath,
             type: 'dir',
             source,
@@ -4477,6 +4482,23 @@ export function registerIpcHandlers(): void {
       return wechatBridge.getStatus()
     }
   )
+
+  // ===== Agent Mail (QQ 邮箱) =====
+  ipcMain.handle(AGENT_MAIL_IPC_CHANNELS.GET_STATUS, async () => {
+    return AgentMailService.getInstance().getStatus()
+  })
+
+  ipcMain.handle(AGENT_MAIL_IPC_CHANNELS.START_LOGIN, async () => {
+    return AgentMailService.getInstance().startLogin()
+  })
+
+  ipcMain.handle(AGENT_MAIL_IPC_CHANNELS.CANCEL_LOGIN, async () => {
+    AgentMailService.getInstance().cancelLogin()
+  })
+
+  ipcMain.handle(AGENT_MAIL_IPC_CHANNELS.LOGOUT, async () => {
+    return AgentMailService.getInstance().logout()
+  })
 
   console.log('[IPC] IPC 处理器注册完成')
 
