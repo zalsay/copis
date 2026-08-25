@@ -216,7 +216,9 @@ bun run build:node-runtime-module # 将当前平台 Node.js + npm 打包为功�
 - `PROXY_IPC_CHANNELS` - 代理设置
 - `SYSTEM_PROMPT_IPC_CHANNELS` - 系统提示词
 - `CHAT_TOOL_IPC_CHANNELS` - Chat 工具
-- `FEISHU_IPC_CHANNELS` - 飞书集成
+- `FEISHU_IPC_CHANNELS` - 飞书集成与 Hermes 扫码注册
+- `WECHAT_IPC_CHANNELS` - 微信 iLink Bot 扫码登录与长连接
+- `DINGTALK_IPC_CHANNELS` - 钉钉 Stream 直连与 OAuth 扫码授权
 
 ### 主进程服务层（`main/lib/`）
 
@@ -224,8 +226,8 @@ bun run build:node-runtime-module # 将当前平台 Node.js + npm 打包为功�
 
 | 服务 | 职责 |
 |------|------|
-| `agent-orchestrator.ts` | Agent 核心编排层：并发守卫、渠道查找、Pi runtime 环境构建、消息持久化、事件流处理、错误处理、自动标题生成 |
-| `agent-session-manager.ts` | Agent 会话管理：SDK 消息持久化、会话元数据 CRUD、JSONL 存储 |
+| `agent-orchestrator.ts` | Agent 核心编排层：并发守卫、渠道查找、Pi runtime 环境构建、消息持久化、事件流处理、错误处理、自动标题生成（支持剥除飞书/微信/钉钉桥接信封提取真实用户消息） |
+| `agent-session-manager.ts` | Agent 会话管理：SDK 消息持久化、会话元数据 CRUD、JSONL 存储、飞书/微信/钉钉专属会话管理与模型继承 |
 | `agent-prompt-builder.ts` | Agent 系统提示词构建（18KB）：动态上下文构建、内置 Agent 构建、工作区上下文注入 |
 | `agent-permission-service.ts` | Agent 权限管理：工具权限检查、权限模式管理 |
 | `agent-ask-user-service.ts` | Agent 用户交互：AskUser 请求处理 |
@@ -235,11 +237,15 @@ bun run build:node-runtime-module # 将当前平台 Node.js + npm 打包为功�
 | `conversation-manager.ts` | 对话管理（13KB）：对话 CRUD、JSONL 消息存储、置顶、上下文分割 |
 | `channel-manager.ts` | 渠道管理（16KB）：渠道 CRUD、API Key AES-256-GCM 加密（safeStorage）、连接测试、模型获取 |
 
-#### 集成服务
+#### 集成服务与远程机器人
 
 | 服务 | 职责 |
 |------|------|
-| `feishu-bridge.ts` | 飞书集成（68KB）：消息同步、任务通知、OAuth 认证 |
+| `feishu-bridge.ts` | 飞书集成：Hermes 一键扫码注册、消息双向同步、任务通知 |
+| `wechat-bridge.ts` | 微信集成：腾讯 iLink Bot 官方扫码登录、长连接监听与消息分发 |
+| `dingtalk-bridge-manager.ts` | 钉钉多 Bot 桥接：Stream 模式 WebSocket 直连、免公网服务器收发消息 |
+| `dingtalk-oauth-service.ts` | 钉钉 OAuth 2.0 授权：Code 交换与账号绑定 |
+| `bridge-command-handler.ts` | 统一桥接命令路由：专属会话维护、权限交互指令、消息格式标准化 |
 
 #### 工具与文件
 
