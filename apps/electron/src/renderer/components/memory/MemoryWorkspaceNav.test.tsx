@@ -13,6 +13,7 @@ describe('Memory 页面导航 BDD', () => {
     expect(html).toContain('当前项目')
     expect(html).toContain('全部项目')
     expect(html).toContain('全局设置')
+    expect(html).toContain('导入知识库')
     expect(html).toContain('导出记忆')
   })
 })

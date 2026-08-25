@@ -193,3 +193,23 @@ export interface MemoryMaintenanceApplyResponse {
   entries: MemoryEntry[]
   state: MemoryMaintenanceState
 }
+
+export interface MemoryImportItemInput {
+  kind: MemoryKind
+  title: string
+  content: string
+  tags?: string[]
+}
+
+export interface MemoryImportInput {
+  scope: MemoryScope
+  workspaceSlug?: string
+  items: MemoryImportItemInput[]
+}
+
+export interface MemoryImportResponse {
+  entries: MemoryEntry[]
+  imported: number
+  deduplicated: number
+  total: number
+}

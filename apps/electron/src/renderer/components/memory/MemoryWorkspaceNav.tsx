@@ -1,5 +1,5 @@
 import * as React from 'react'
-import { Download, FolderKanban, Layers3, Settings2 } from 'lucide-react'
+import { Download, FolderKanban, Layers3, Settings2, Upload } from 'lucide-react'
 import type { MemoryPage } from '@/atoms/memory-atoms'
 import { cn } from '@/lib/utils'
 
@@ -12,6 +12,7 @@ const NAV_ITEMS: Array<{ page: MemoryPage; label: string; description: string; i
   { page: 'current', label: '当前项目', description: '管理当前项目和用户记忆', icon: FolderKanban },
   { page: 'all', label: '全部项目', description: '查看项目记忆概览', icon: Layers3 },
   { page: 'global', label: '全局设置', description: '管理默认 Memory 策略', icon: Settings2 },
+  { page: 'import', label: '导入知识库', description: '导入 JSON 或 Markdown', icon: Upload },
   { page: 'export', label: '导出记忆', description: '导出 JSON 或 Markdown', icon: Download },
 ]
 

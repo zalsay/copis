@@ -41,7 +41,7 @@ use edu_api_client::{EduApiClient, EduApiResponse, DEFAULT_MAX_CONCURRENT_REQUES
 use expert_teams::{ExpertTeamError, ExpertTeamStore};
 use memory::{
     MemoryCaptureBatchInput, MemoryCaptureInput, MemoryContextInput, MemoryError,
-    MemoryExportInput, MemoryKind, MemoryMaintenanceApplyInput, MemoryRestoreInput,
+    MemoryExportInput, MemoryImportInput, MemoryKind, MemoryMaintenanceApplyInput, MemoryRestoreInput,
     MemoryRewriteInput, MemoryScope, MemoryStore, DEFAULT_LIST_LIMIT, DEFAULT_RECALL_LIMIT,
 };
 use payment_capability::PAYMENT_CAPABILITY_TOKEN_HEADER;
@@ -768,6 +768,30 @@ fn handle_memory_route(
             Err(error) => eprintln!(
                 "[HTTP API][Memory] capture-batch 失败 workspace={} items={} error={}",
                 workspace_slug, item_count, error
+            ),
+        }
+        send_memory_result(stream, result, origin);
+        return;
+    }
+
+    if request.method == "POST" && parts.as_slice() == ["import"] {
+        let input = match parse_memory_body::<MemoryImportInput>(request) {
+            Ok(input) => input,
+            Err(error) => {
+                send_memory_error(stream, error, origin);
+                return;
+            }
+        };
+        let item_count = input.items.len();
+        let result = store.import(input);
+        match &result {
+            Ok(response) => eprintln!(
+                "[HTTP API][Memory] import 完成 items={} imported={} deduplicated={}",
+                item_count, response.imported, response.deduplicated
+            ),
+            Err(error) => eprintln!(
+                "[HTTP API][Memory] import 失败 items={} error={}",
+                item_count, error
             ),
         }
         send_memory_result(stream, result, origin);

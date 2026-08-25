@@ -254,6 +254,34 @@ pub struct MemoryCaptureBatchResponse {
     pub deduplicated: usize,
 }
 
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MemoryImportItemInput {
+    pub kind: MemoryKind,
+    pub title: String,
+    pub content: String,
+    #[serde(default)]
+    pub tags: Vec<String>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MemoryImportInput {
+    pub scope: MemoryScope,
+    #[serde(default)]
+    pub workspace_slug: Option<String>,
+    pub items: Vec<MemoryImportItemInput>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MemoryImportResponse {
+    pub entries: Vec<MemoryEntry>,
+    pub imported: usize,
+    pub deduplicated: usize,
+    pub total: usize,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MemoryListResponse {
@@ -517,6 +545,79 @@ impl MemoryStore {
             entries,
             added,
             deduplicated,
+        })
+    }
+
+    pub fn import(&self, input: MemoryImportInput) -> Result<MemoryImportResponse, MemoryError> {
+        let workspace_slug = match input.scope {
+            MemoryScope::Workspace => {
+                let slug = normalize_workspace_slug(input.workspace_slug)?
+                    .ok_or_else(|| MemoryError::Validation("workspace scope 必须提供 workspaceSlug".to_string()))?;
+                Some(slug)
+            }
+            MemoryScope::User => {
+                if let Some(slug) = input.workspace_slug {
+                    normalize_workspace_slug(Some(slug))?;
+                }
+                None
+            }
+        };
+
+        if input.items.is_empty() {
+            return Err(MemoryError::Validation("items 不能为空".to_string()));
+        }
+        const MAX_IMPORT_ITEMS: usize = 500;
+        if input.items.len() > MAX_IMPORT_ITEMS {
+            return Err(MemoryError::Validation("单次导入数量不能超过 500 条".to_string()));
+        }
+
+        let total = input.items.len();
+        let mut connection = self.lock_connection_mut()?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(storage_error)?;
+        let mut entries = Vec::with_capacity(total);
+        let mut imported = 0;
+        let mut deduplicated = 0;
+
+        for item in input.items {
+            let normalized = MemoryCaptureInput {
+                workspace_slug: workspace_slug.clone(),
+                scope: input.scope,
+                kind: item.kind,
+                title: item.title,
+                content: item.content,
+                tags: item.tags,
+                source: MemorySource::Import,
+            };
+            let normalized = normalize_capture_input(normalized)?;
+            if let Some(existing) = find_duplicate(&transaction, &normalized)? {
+                deduplicated += 1;
+                entries.push(existing);
+                continue;
+            }
+            let entry = new_entry(
+                normalized.scope,
+                normalized.workspace_slug,
+                normalized.kind,
+                normalized.title,
+                normalized.content,
+                normalized.tags,
+                normalized.source,
+            );
+            insert_entry(&transaction, &entry)?;
+            insert_revision(&transaction, &entry, MemoryOperation::Capture, None)?;
+            increment_capture_count_if_scratch(&transaction, &entry)?;
+            imported += 1;
+            entries.push(entry);
+        }
+
+        transaction.commit().map_err(storage_error)?;
+        Ok(MemoryImportResponse {
+            entries,
+            imported,
+            deduplicated,
+            total,
         })
     }
 

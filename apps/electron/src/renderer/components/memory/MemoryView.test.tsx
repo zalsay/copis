@@ -77,6 +77,7 @@ describe('Memory 页面 BDD', () => {
     expect(html).toContain('当前项目')
     expect(html).toContain('全部项目')
     expect(html).toContain('全局设置')
+    expect(html).toContain('导入知识库')
     expect(html).toContain('导出记忆')
     expect(html).toContain('记忆：可写')
     expect(html).toContain('维护 10/10')

@@ -37,6 +37,7 @@ import { MemoryProjectSelector } from './MemoryProjectSelector'
 import { MemoryProjectOverview } from './MemoryProjectOverview'
 import { MemoryGlobalSettings } from './MemoryGlobalSettings'
 import { MemoryExportView } from './MemoryExportView'
+import { MemoryImportView } from './MemoryImportView'
 import { toast } from 'sonner'
 
 function draftFromEntry(entry: MemoryEntry): MemoryDraft {
@@ -449,6 +450,7 @@ export function MemoryView(): React.ReactElement {
           {page === 'global' && (
             <MemoryGlobalSettings policy={defaultMemoryPolicy} onChange={(value) => { void handleDefaultPolicyChange(value) }} />
           )}
+          {page === 'import' && <MemoryImportView workspaceSlug={workspaceSlug} workspaces={workspaces} />}
           {page === 'export' && <MemoryExportView workspaceSlug={workspaceSlug} workspaces={workspaces} />}
         </div>
       </div>

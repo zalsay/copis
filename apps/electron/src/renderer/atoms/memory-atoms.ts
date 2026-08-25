@@ -1,6 +1,8 @@
 import { atom } from 'jotai'
 import type {
   MemoryEntry,
+  MemoryImportItemInput,
+  MemoryImportResponse,
   MemoryKind,
   MemoryKindFilter,
   MemoryMaintenanceState,
@@ -13,7 +15,7 @@ import type {
 
 export type MemoryEditorMode = 'view' | 'edit' | 'create'
 
-export type MemoryPage = 'current' | 'all' | 'global' | 'export'
+export type MemoryPage = 'current' | 'all' | 'global' | 'export' | 'import'
 
 export interface MemoryDraft {
   scope: MemoryScope
@@ -62,3 +64,9 @@ export const memoryExportPreviewLoadingAtom = atom(false)
 export const memoryExportErrorAtom = atom<string | null>(null)
 export const memoryProjectStatsAtom = atom<Record<string, MemoryStats>>({})
 export const memoryProjectStatsLoadingAtom = atom(false)
+
+export const memoryImportScopeAtom = atom<'current-workspace' | 'user'>('current-workspace')
+export const memoryImportItemsAtom = atom<MemoryImportItemInput[]>([])
+export const memoryImportLoadingAtom = atom(false)
+export const memoryImportErrorAtom = atom<string | null>(null)
+export const memoryImportResultAtom = atom<MemoryImportResponse | null>(null)

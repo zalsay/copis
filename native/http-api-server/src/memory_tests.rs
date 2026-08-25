@@ -555,3 +555,75 @@ fn export_markdown_prefers_project_display_name_over_slug() {
     assert!(!result.content.contains("## 项目：project-a"));
     assert!(result.content.contains("项目标识：project-a"));
 }
+
+#[test]
+fn test_import_user_and_workspace_with_deduplication() {
+    let temp_dir = TestDirectory::new();
+    let store = MemoryStore::open(&temp_dir.0).unwrap();
+
+    // 1. 批量导入工作区知识
+    let import_res = store
+        .import(MemoryImportInput {
+            scope: MemoryScope::Workspace,
+            workspace_slug: Some("workspace-a".to_string()),
+            items: vec![
+                MemoryImportItemInput {
+                    kind: MemoryKind::Fact,
+                    title: "前端技术栈".to_string(),
+                    content: "Vue 3 + Vite + Tailwind".to_string(),
+                    tags: vec!["vue".to_string(), "frontend".to_string()],
+                },
+                MemoryImportItemInput {
+                    kind: MemoryKind::Decision,
+                    title: "状态管理".to_string(),
+                    content: "采用 Pinia 管理前端状态".to_string(),
+                    tags: vec!["pinia".to_string()],
+                },
+            ],
+        })
+        .unwrap();
+
+    assert_eq!(import_res.imported, 2);
+    assert_eq!(import_res.deduplicated, 0);
+    assert_eq!(import_res.total, 2);
+
+    // 2. 再次导入相同内容，触发去重
+    let duplicate_res = store
+        .import(MemoryImportInput {
+            scope: MemoryScope::Workspace,
+            workspace_slug: Some("workspace-a".to_string()),
+            items: vec![
+                MemoryImportItemInput {
+                    kind: MemoryKind::Fact,
+                    title: "前端技术栈".to_string(),
+                    content: "Vue 3 + Vite + Tailwind".to_string(),
+                    tags: vec!["vue".to_string()],
+                },
+                MemoryImportItemInput {
+                    kind: MemoryKind::Project,
+                    title: "端口规范".to_string(),
+                    content: "本地开发端口固定为 5173".to_string(),
+                    tags: vec!["port".to_string()],
+                },
+            ],
+        })
+        .unwrap();
+
+    assert_eq!(duplicate_res.imported, 1);
+    assert_eq!(duplicate_res.deduplicated, 1);
+    assert_eq!(duplicate_res.total, 2);
+
+    // 3. 验证列表查询
+    let list_res = store
+        .list(
+            Some("workspace-a"),
+            None,
+            Some(MemoryScope::Workspace),
+            None,
+            false,
+            50,
+        )
+        .unwrap();
+    assert_eq!(list_res.entries.len(), 3);
+    assert_eq!(list_res.entries[0].source, MemorySource::Import);
+}

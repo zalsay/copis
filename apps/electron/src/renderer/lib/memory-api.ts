@@ -9,6 +9,8 @@ import type {
   MemoryExportInput,
   MemoryExportResponse,
   MemoryHistoryResponse,
+  MemoryImportInput,
+  MemoryImportResponse,
   MemoryKindFilter,
   MemoryListResponse,
   MemoryMaintenanceState,
@@ -206,6 +208,13 @@ export const memoryApi = {
 
   captureBatch(input: MemoryCaptureBatchInput): Promise<MemoryCaptureBatchResponse> {
     return request<MemoryCaptureBatchResponse>('/api/memory/capture-batch', {
+      method: 'POST',
+      body: JSON.stringify(input),
+    })
+  },
+
+  import(input: MemoryImportInput): Promise<MemoryImportResponse> {
+    return request<MemoryImportResponse>('/api/memory/import', {
       method: 'POST',
       body: JSON.stringify(input),
     })
