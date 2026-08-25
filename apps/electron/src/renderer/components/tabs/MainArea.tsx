@@ -26,6 +26,7 @@ import { AutomationsListView } from '@/components/automation/AutomationsListView
 import { PlanningView } from '@/components/planning/PlanningView'
 import { AgentSkillsView } from '@/components/agent-skills/AgentSkillsView'
 import { MemoryView } from '@/components/memory/MemoryView'
+import { KnowledgeView } from '@/components/knowledge/KnowledgeView'
 import { ExpertTeamView } from '@/components/expert-team/ExpertTeamView'
 import { automationFormAtom } from '@/atoms/automation-atoms'
 import { activeViewAtom } from '@/atoms/active-view'
@@ -186,6 +187,9 @@ export function MainArea(): React.ReactElement {
             ) : activeView === 'memory' ? (
               // Copis Memory：独立于 Chat/Agent 模式的长期记忆视图。
               <MemoryView />
+            ) : activeView === 'knowledge' ? (
+              // Copis 知识库：独立知识库与资料智能摄取中心。
+              <KnowledgeView />
             ) : activeView === 'expert-team' ? (
               <ExpertTeamView />
             ) : (

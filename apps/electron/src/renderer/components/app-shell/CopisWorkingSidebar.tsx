@@ -3,6 +3,7 @@ import { useAtom, useAtomValue, useSetAtom } from 'jotai'
 import {
   CalendarClock,
   BookOpen,
+  Brain,
   ChevronDown,
   ChevronRight,
   CircleCheck,
@@ -321,6 +322,11 @@ export function CopisWorkingSidebar({ width, noTransition = false }: CopisWorkin
     setActiveView('memory')
   }
 
+  const handleOpenKnowledge = (): void => {
+    setWorkingHistorySelection(null)
+    setActiveView('knowledge')
+  }
+
   const handleOpenCreateWorkspace = React.useCallback((): void => {
     openCreateWorkspaceDialog('sidebar')
   }, [openCreateWorkspaceDialog])
@@ -539,9 +545,18 @@ export function CopisWorkingSidebar({ width, noTransition = false }: CopisWorkin
         <button
           type="button"
           className={cn('copis-working-sidebar-icon-button', activeView === 'memory' && 'active')}
+          aria-label="记忆"
+          title="记忆"
+          onClick={handleOpenMemory}
+        >
+          <Brain aria-hidden="true" />
+        </button>
+        <button
+          type="button"
+          className={cn('copis-working-sidebar-icon-button', activeView === 'knowledge' && 'active')}
           aria-label="知识库"
           title="知识库"
-          onClick={handleOpenMemory}
+          onClick={handleOpenKnowledge}
         >
           <BookOpen aria-hidden="true" />
         </button>
@@ -588,6 +603,10 @@ export function CopisWorkingSidebar({ width, noTransition = false }: CopisWorkin
             <span>定时任务</span>
           </button>
           <button type="button" className={cn('copis-working-menu-button', activeView === 'memory' && 'active')} onClick={handleOpenMemory}>
+            <Brain aria-hidden="true" />
+            <span>记忆</span>
+          </button>
+          <button type="button" className={cn('copis-working-menu-button', activeView === 'knowledge' && 'active')} onClick={handleOpenKnowledge}>
             <BookOpen aria-hidden="true" />
             <span>知识库</span>
           </button>

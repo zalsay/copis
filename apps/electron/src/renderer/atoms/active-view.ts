@@ -7,12 +7,20 @@
  * - automations: 定时任务独立视图
  * - agent-skills: Agent 技能（Skills/MCP）全屏管理视图
  * - memory: Copis Memory 长期记忆管理视图
+ * - knowledge: 独立知识库管理与资料摄取视图
  * - expert-team: 专家团队运行工作台
  */
 
 import { atom } from 'jotai'
 
-export type ActiveView = 'conversations' | 'planning' | 'automations' | 'agent-skills' | 'memory' | 'expert-team'
+export type ActiveView =
+  | 'conversations'
+  | 'planning'
+  | 'automations'
+  | 'agent-skills'
+  | 'memory'
+  | 'knowledge'
+  | 'expert-team'
 export type AgentSkillsCapabilityTab = 'skills' | 'mcp'
 
 /** 当前活跃视图（不持久化，每次启动默认显示对话） */

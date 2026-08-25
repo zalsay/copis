@@ -85,6 +85,13 @@ describe('Working 侧边栏视觉契约', () => {
     expect(sidebarSource).not.toContain('expertTeamSetup: true')
   })
 
+  test('Given 主侧边栏 When 查看菜单 Then 同时提供记忆与知识库两个独立入口', () => {
+    expect(sidebarSource).toContain('<span>记忆</span>')
+    expect(sidebarSource).toContain('<span>知识库</span>')
+    expect(sidebarSource).toContain("activeView === 'memory'")
+    expect(sidebarSource).toContain("activeView === 'knowledge'")
+  })
+
   test('Given Working footer When 检查账户图标标记 Then 使用 primary 背景与图标颜色', () => {
     const accountMarkRule = sidebarStyles.match(
       /\.copis-working-account-mark\s*\{([^}]*)\}/s,
