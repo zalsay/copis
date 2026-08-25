@@ -48,6 +48,12 @@ export const FUNCTIONAL_MODULE_DEFINITIONS: readonly FunctionalModuleDefinition[
     description: '为自动化任务和工作区工具提供稳定的 Python 运行环境',
     required: true,
   },
+  {
+    name: 'agently-cli',
+    displayName: 'Agent QQ 邮箱 CLI',
+    description: '为 Copis 提供 Agent 原生邮箱 (@agent.qq.com) 收发与管理能力',
+    required: true,
+  },
 ]
 
 export function createEmptyFunctionalModuleStatus(

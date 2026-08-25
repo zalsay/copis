@@ -63,6 +63,7 @@ import { createOpenAIReasoningRequestExtension } from './pi-openai-reasoning-req
 import { buildPiBrowserAgentTools } from './pi-browser-agent-tools'
 import { buildPiAutomationTools } from './pi-automation-tools'
 import { buildPiAlipayBotTools } from './pi-alipay-bot-tool'
+import { buildPiAgentMailTools } from './pi-agent-mail-tool'
 import { buildPiWorkingPaymentTools } from './pi-working-payment-tool'
 import { createRustBashToolOperations, createRustFileToolOperations } from './pi-rust-file-tools'
 import { resolveDefaultPiExtensionEntries } from './pi-default-extensions'
@@ -1323,6 +1324,23 @@ export function buildBuiltinToolDefinitions(
       : createCopisBashToolOptions(runtimeEnv)),
     sdk.createEditToolDefinition(cwd, rustFileTools ? { operations: rustFileTools.edit } : undefined),
     sdk.createWriteToolDefinition(cwd, rustFileTools ? { operations: rustFileTools.write } : undefined),
+    ...(rustFileTools ? [
+      sdk.defineTool({
+        name: 'RealPath',
+        label: '获取真实路径',
+        description: '获取指定文件或目录在系统文件系统中的真实绝对物理路径。需要用户在 Composer 中开启高级授权后才能使用。',
+        promptSnippet: '获取文件或目录在系统中的真实绝对物理路径。',
+        parameters: Type.Object({
+          path: Type.String({ description: '要解析真实物理路径的文件或目录路径（工作区相对路径或已授权路径）。' }),
+        }),
+        async execute(_toolCallId, params) {
+          const input = params as { path?: string }
+          if (!input.path?.trim()) throw new Error('path 必填')
+          const realPath = await rustFileTools.realPath(input.path.trim())
+          return createJsonToolResult({ realPath, path: input.path.trim() })
+        },
+      }),
+    ] : []),
     ...(!rustFileTools ? [
       sdk.createGrepToolDefinition(cwd),
       sdk.createFindToolDefinition(cwd),
@@ -1338,6 +1356,7 @@ export function buildBuiltinToolDefinitions(
       ? buildPiAutomationTools(sdk, { sessionId: options.sessionId, capability: options.automationControl })
       : []),
     ...buildPiAlipayBotTools(sdk, { sessionId: options.sessionId }),
+    ...buildPiAgentMailTools(sdk, { sessionId: options.sessionId }),
     ...buildPiWorkingPaymentTools(sdk),
   ] as unknown as ToolDefinition[]
 

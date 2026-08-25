@@ -68,3 +68,6 @@ export * from './file-api'
 
 // 专家团队工作台与 Rust HTTP API
 export * from './expert-team'
+
+// Agent 原生邮箱 (QQ 邮箱) 相关类型
+export * from './agent-mail'

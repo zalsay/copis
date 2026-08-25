@@ -398,8 +398,8 @@ function currentStatus(sessionId: string): BrowserWorkflowStatus {
 export function isBrowserPageAdvancedAuthorizationEnabled(sessionId: string): boolean {
   const session = getAgentSessionMeta(sessionId)
   return session?.advancedAuthorization === true
-    && !session.sourceAutomationId
-    && !session.sourceDelegationId
+    && !session?.sourceAutomationId
+    && !session?.sourceDelegationId
 }
 
 function withBrowserPageControlState(

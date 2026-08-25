@@ -367,4 +367,51 @@ describe('项目与会话工作台提示词', () => {
     expect(prompt).toContain('累计 10 个回合')
     expect(prompt).toContain('自动任务或委派回合只保留 `scratch`')
   })
+
+  test('Given App 连接器会话 When allWorkspacesAccess 开启 Then 注入全工作区调用权限与操作规范', () => {
+    const prompt = buildSystemPrompt({
+      agentRuntime: 'pi',
+      workspaceName: '主项目',
+      workspaceSlug: 'main-project',
+      sessionId: 'session-feishu-1',
+      agentCwd: '/tmp/main-project',
+      permissionMode: 'bypassPermissions',
+      allWorkspacesAccess: true,
+      allWorkspaces: [
+        {
+          id: 'ws-1',
+          name: '主项目',
+          slug: 'main-project',
+          projectRootPath: '/projects/main-project',
+          allowWorkspaceWrite: true,
+          createdAt: 1,
+          updatedAt: 1,
+        },
+        {
+          id: 'ws-2',
+          name: '营销官网',
+          slug: 'marketing-site',
+          allowWorkspaceWrite: true,
+          createdAt: 2,
+          updatedAt: 2,
+        },
+      ],
+    })
+
+    expect(prompt).toContain('## App 连接器全工作区调用权限 (All Workspaces Access)')
+    expect(prompt).toContain('当前会话由 **App 连接器（飞书 / 微信 / 钉钉）** 接入')
+    expect(prompt).toContain('**主项目**')
+    expect(prompt).toContain('`main-project`')
+    expect(prompt).toContain('**营销官网**')
+    expect(prompt).toContain('`marketing-site`')
+    expect(prompt).toContain('全工作区读写权限')
+    expect(prompt).toContain('跨项目命令执行')
+    expect(prompt).toContain('跨工作区技能与工具')
+  })
+
+  test('Given 普通桌面会话 When allWorkspacesAccess 为 false 或未传 Then 不注入全工作区调用权限', () => {
+    const prompt = buildPrompt('/tmp/sample-project')
+
+    expect(prompt).not.toContain('## App 连接器全工作区调用权限')
+  })
 })

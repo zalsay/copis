@@ -303,7 +303,7 @@ export function FileDropZone({ workspaceSlug, sessionId, target = 'session', onF
               <div
                 role="button"
                 tabIndex={0}
-                aria-label={isWorkspace ? '添加文件到项目文件目录' : '添加文件到会话文件夹'}
+                aria-label={isWorkspace ? '添加文件到工作区目录' : '添加文件到会话文件夹'}
                 className={zoneClass('left')}
                 onDragOver={(e) => handleDragOver(e, 'left')}
                 onDragLeave={handleDragLeave}
@@ -316,7 +316,7 @@ export function FileDropZone({ workspaceSlug, sessionId, target = 'session', onF
               </div>
             </TooltipTrigger>
             <TooltipContent side="bottom">
-              <p>{isWorkspace ? '添加文件到项目文件目录' : '将文件放入 Agent 工作文件夹'}</p>
+              <p>{isWorkspace ? '添加文件到工作区目录' : '将文件放入 Agent 工作文件夹'}</p>
             </TooltipContent>
           </Tooltip>
           <Tooltip
@@ -329,7 +329,7 @@ export function FileDropZone({ workspaceSlug, sessionId, target = 'session', onF
               <div
                 role="button"
                 tabIndex={0}
-                aria-label={isWorkspace ? '附加项目文件夹' : '附加文件夹'}
+                aria-label={isWorkspace ? '附加工作区文件夹' : '附加文件夹'}
                 className={zoneClass('right')}
                 onDragOver={(e) => handleDragOver(e, 'right')}
                 onDragLeave={handleDragLeave}
@@ -342,7 +342,7 @@ export function FileDropZone({ workspaceSlug, sessionId, target = 'session', onF
               </div>
             </TooltipTrigger>
             <TooltipContent side="bottom">
-              <p>{isWorkspace ? '将外部文件夹作为项目引用；也可拖入外部文件作为引用' : '告知 Agent 你想处理的文件夹'}</p>
+              <p>{isWorkspace ? '将外部文件夹作为工作区引用；也可拖入外部文件作为引用' : '告知 Agent 你想处理的文件夹'}</p>
             </TooltipContent>
           </Tooltip>
         </>

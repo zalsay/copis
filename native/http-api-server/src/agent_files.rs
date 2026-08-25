@@ -397,6 +397,17 @@ impl AgentFilePolicyStore {
                 entries.sort();
                 Ok(Some(json!({ "entries": entries })))
             }
+            ("realpath" | "real-path", "POST") => {
+                if !policy.advanced_authorization {
+                    return Err(AgentFileError::forbidden(
+                        "advanced_authorization_required",
+                        "获取文件真实路径需要先在 Composer 开启高级授权",
+                    ));
+                }
+                let target = policy.resolve(&request.path, false)?;
+                policy.ensure_read(&target)?;
+                Ok(Some(json!({ "realPath": target.to_string_lossy() })))
+            }
             _ => Err(AgentFileError {
                 status: 404,
                 code: "route_not_found",

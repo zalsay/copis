@@ -21,6 +21,7 @@ import {
   type ProviderType,
   type SDKMessage,
   type WorkingMode,
+  isAppConnectorSession,
 } from '@copis/shared'
 import type { AppSettings } from '../../types'
 import {
@@ -52,6 +53,7 @@ import {
   getWorkspaceAttachedDirectories,
   getWorkspaceAttachedFiles,
   getLocalProjectRootStatus,
+  listAgentWorkspacesByUpdatedAt,
 } from './agent-workspace-manager'
 import { getAgentSessionWorkspacePath, getAgentWorkspacePath, getSdkConfigDir, getWorkspaceSkillsDir } from './config-paths'
 import { buildDynamicContext, buildSystemPrompt } from './agent-prompt-builder'
@@ -270,12 +272,22 @@ function uniqueDirectories(
   input: AgentSendInput,
   session: AgentSessionMeta | undefined,
   workspace: AgentWorkspace | undefined,
+  isAppConnector?: boolean,
 ): string[] {
   const attachedDirectories = filterAttachedPaths(session?.attachedDirectories)
   const workspaceAttachedDirectories = workspace ? getWorkspaceAttachedDirectories(workspace.slug) : []
+  let allWorkspacesAttachedDirs: string[] = []
+  if (isAppConnector) {
+    try {
+      allWorkspacesAttachedDirs = listAgentWorkspacesByUpdatedAt().flatMap((ws) => getWorkspaceAttachedDirectories(ws.slug))
+    } catch {
+      allWorkspacesAttachedDirs = []
+    }
+  }
   const authorizedDirectories = [
     ...attachedDirectories,
     ...workspaceAttachedDirectories,
+    ...allWorkspacesAttachedDirs,
   ].map((path) => resolve(path))
   const authorizedSet = new Set(authorizedDirectories)
   const requestedDirectories = filterAttachedPaths(input.additionalDirectories).map((path) => resolve(path))
@@ -300,6 +312,7 @@ function buildRustFileAccessPolicy(input: {
   additionalDirectories: string[]
   permissionMode: CopisPermissionMode
   advancedAuthorization: boolean
+  isAppConnector?: boolean
 }): PiWorkerFileAccessPolicy {
   const projectRoot = getProjectFilesPath(input.workspace.slug)
   const sessionWorkspaceRoot = getAgentSessionWorkspacePath(input.workspace.slug, input.sessionId)
@@ -317,11 +330,45 @@ function buildRustFileAccessPolicy(input: {
   const workspaceCopisRoot = getAgentWorkspaceCopisPath(input.workspace)
   const writeRoots = [projectRoot, workspaceCopisRoot, browserSessionRoot, sessionWorkspaceRoot]
 
+  let allAttachedFiles: string[] = []
+  if (input.isAppConnector) {
+    let allWorkspaces: AgentWorkspace[] = []
+    try {
+      allWorkspaces = listAgentWorkspacesByUpdatedAt()
+    } catch {
+      allWorkspaces = []
+    }
+    for (const ws of allWorkspaces) {
+      try {
+        workspaceReadRoots.push(
+          getProjectFilesPath(ws.slug),
+          getAgentWorkspaceCopisPath(ws),
+          getAgentWorkspacePath(ws.slug),
+          getWorkspaceSkillsDir(ws.slug),
+          ...getAgentWorkspaceReadableRoots(ws),
+          ...getWorkspaceAttachedDirectories(ws.slug),
+        )
+        if (ws.projectRootPath) {
+          workspaceReadRoots.push(ws.projectRootPath)
+        }
+        writeRoots.push(
+          getProjectFilesPath(ws.slug),
+          getAgentWorkspaceCopisPath(ws),
+          getAgentWorkspacePath(ws.slug),
+        )
+      } catch {
+        // ignore missing directory
+      }
+    }
+    allAttachedFiles = allWorkspaces.flatMap((ws) => getWorkspaceAttachedFiles(ws.slug))
+  }
+
   return {
     readRoots: uniqueAbsolutePaths(workspaceReadRoots),
     readFiles: uniqueAbsolutePaths([
       ...filterAttachedPaths(input.session.attachedFiles),
       ...getWorkspaceAttachedFiles(input.workspace.slug),
+      ...allAttachedFiles,
     ]),
     writeRoots: uniqueAbsolutePaths(writeRoots),
     browserSessionRoot,
@@ -508,7 +555,8 @@ export async function prepareAgentRpcRun(input: AgentSendInput): Promise<PiWorke
   const workspaceSkillsDir = getWorkspaceSkillsDir(workspaceSlug)
   const startedAt = input.startedAt ?? Date.now()
   const existingSdkSessionId = session.sdkSessionId
-  const directories = uniqueDirectories(input, session, workspace)
+  const isAppConnector = isAppConnectorSession(session, input.triggeredBy ?? (input as { source?: string }).source)
+  const directories = uniqueDirectories(input, session, workspace, isAppConnector)
   const proxyUrl = await getEffectiveProxyUrl()
   const runtimeEnv = buildRuntimeEnv(settings, proxyUrl, workspace, workspaceSlug)
   const compactRequest = input.userMessage.trim() === '/compact'
@@ -527,6 +575,7 @@ export async function prepareAgentRpcRun(input: AgentSendInput): Promise<PiWorke
     additionalDirectories: directories,
     permissionMode: effectivePermissionMode,
     advancedAuthorization: session.advancedAuthorization === true,
+    isAppConnector,
   })
   const memoryPolicy = workspace.memoryPolicy ?? settings.defaultMemoryPolicy ?? 'writable'
   const dynamicContext = buildDynamicContext({
@@ -576,6 +625,7 @@ export async function prepareAgentRpcRun(input: AgentSendInput): Promise<PiWorke
     currentModelId: modelId,
     workingMode,
     memoryPolicy,
+    allWorkspacesAccess: isAppConnector,
     ...(session.expertTeamSession ? { expertTeamSession: session.expertTeamSession } : {}),
     ...(session.expertTeamSetup ? { expertTeamSetup: true } : {}),
     ...(expertTeamContext ? { expertTeamContext } : {}),
@@ -590,6 +640,25 @@ export async function prepareAgentRpcRun(input: AgentSendInput): Promise<PiWorke
       }
       : {}),
   }) + (input.automationContext ? `\n\n## 定时任务执行上下文\n\n${input.automationContext}` : '')
+
+  const allSkillPaths: string[] = []
+  if (workspaceSlug) {
+    allSkillPaths.push(workspaceSkillsDir)
+  }
+  if (isAppConnector) {
+    let allWs: AgentWorkspace[] = []
+    try {
+      allWs = listAgentWorkspacesByUpdatedAt()
+    } catch {
+      allWs = []
+    }
+    for (const ws of allWs) {
+      const sDir = getWorkspaceSkillsDir(ws.slug)
+      if (!allSkillPaths.includes(sDir)) {
+        allSkillPaths.push(sDir)
+      }
+    }
+  }
 
   const maxTurns = settings.agentMaxTurns && settings.agentMaxTurns > 0 ? settings.agentMaxTurns : undefined
   const query: PiWorkerQueryConfig = {
@@ -610,7 +679,7 @@ export async function prepareAgentRpcRun(input: AgentSendInput): Promise<PiWorke
     piSessionDir: join(getSdkConfigDir(), 'sessions'),
     ...(settings.agentMaxBudgetUsd && settings.agentMaxBudgetUsd > 0 ? { maxBudgetUsd: settings.agentMaxBudgetUsd } : {}),
     ...(directories.length > 0 ? { additionalDirectories: directories } : {}),
-    ...(workspaceSlug ? { additionalSkillPaths: [workspaceSkillsDir] } : {}),
+    ...(allSkillPaths.length > 0 ? { additionalSkillPaths: allSkillPaths } : {}),
     ...(effectiveSkillMentions?.length ? { skillMentions: effectiveSkillMentions } : {}),
     ...(workspaceSlug ? { workspaceSlug } : {}),
     ...(workspace?.id ? { workspaceId: workspace.id } : {}),

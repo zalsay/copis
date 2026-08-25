@@ -9,6 +9,13 @@ describe('agent-error-utils', () => {
       expect(friendly).toContain('继续任务')
       expect(friendly).toContain('重试')
     })
+
+    test('Given invalid_upstream_response 原始错误 Then 返回友好的重试与继续任务提示', () => {
+      const rawError = 'API Error: 502 {"error":"模型服务响应异常，请直接发送「继续任务」或点击重试","code":"invalid_upstream_response"}'
+      const friendly = friendlyErrorMessage(rawError)
+      expect(friendly).toContain('继续任务')
+      expect(friendly).toContain('重试')
+    })
   })
 
   describe('mapSDKErrorToTypedError', () => {
@@ -33,6 +40,18 @@ describe('agent-error-utils', () => {
       expect(typed.title).toBe('会话已过期')
       expect(typed.message).toContain('继续任务')
       expect(typed.canRetry).toBe(true)
+    })
+
+    test('Given invalid_upstream_response 错误码 Then 映射为可重试的 TypedError 并提示发送继续任务', () => {
+      const typed = mapSDKErrorToTypedError(
+        'invalid_upstream_response',
+        '模型服务响应异常',
+        'HTTP 502 invalid_upstream_response',
+      )
+      expect(typed.title).toBe('模型响应异常')
+      expect(typed.message).toContain('继续任务')
+      expect(typed.canRetry).toBe(true)
+      expect(typed.actions).toEqual([{ key: 'r', label: '重试', action: 'retry' }])
     })
   })
 })

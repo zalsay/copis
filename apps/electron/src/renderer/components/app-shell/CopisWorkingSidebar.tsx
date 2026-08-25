@@ -466,18 +466,21 @@ export function CopisWorkingSidebar({ width, noTransition = false }: CopisWorkin
                 || sessionTitle === '飞书专属会话'
                 || sessionTitle === '飞书会话'
                 || sessionTitle.startsWith('飞书')
+                || sessionTitle.startsWith('[飞书]')
               const isWeChatSession = session.source === 'wechat'
                 || session.wechatDedicated === true
                 || (session as unknown as { sourceChannel?: string }).sourceChannel === 'wechat'
                 || sessionTitle === '微信专属会话'
                 || sessionTitle === '微信会话'
                 || sessionTitle.startsWith('微信')
+                || sessionTitle.startsWith('[微信]')
               const isDingTalkSession = session.source === 'dingtalk'
                 || session.dingtalkDedicated === true
                 || (session as unknown as { sourceChannel?: string }).sourceChannel === 'dingtalk'
                 || sessionTitle === '钉钉专属会话'
                 || sessionTitle === '钉钉会话'
                 || sessionTitle.startsWith('钉钉')
+                || sessionTitle.startsWith('[钉钉]')
               const displaySessionTitle = isExpertTeamSession
                 ? sessionTitle.replace(/^专家团队\s*·\s*/, '')
                 : isFeishuSession

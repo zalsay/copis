@@ -531,7 +531,7 @@ export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange, widt
                   aria-selected={fileSourceFilter === 'project'}
                   onClick={() => setFileSourceFilter('project')}
                 >
-                  项目文件
+                  工作区
                 </button>
               </div>
               {showSessionFiles ? (
@@ -604,7 +604,7 @@ export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange, widt
                     )}
                     {showProjectFiles && isProjectRootUnavailable && (
                       <div className="mx-2 my-2 px-3 py-2 text-xs text-destructive bg-destructive/10 rounded-md">
-                        本地项目根目录不可用；当前会话文件仍可访问。
+                        本地工作区根目录不可用；当前会话文件仍可访问。
                       </div>
                     )}
                     <FileBrowser

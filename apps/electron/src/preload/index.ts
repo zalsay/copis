@@ -6,7 +6,7 @@
  */
 
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
-import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, ATTACHMENT_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, FUNCTIONAL_MODULE_IPC_CHANNELS, PROXY_IPC_CHANNELS, AGENT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, WECHAT_IPC_CHANNELS, AUTOMATION_IPC_CHANNELS, PLANNING_IPC_CHANNELS, WORKING_IPC_CHANNELS, WEB_IPC_CHANNELS, BROWSER_WORKFLOW_IPC_CHANNELS, MEMORY_IPC_CHANNELS } from '@copis/shared'
+import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, ATTACHMENT_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, FUNCTIONAL_MODULE_IPC_CHANNELS, PROXY_IPC_CHANNELS, AGENT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, WECHAT_IPC_CHANNELS, AGENT_MAIL_IPC_CHANNELS, AUTOMATION_IPC_CHANNELS, PLANNING_IPC_CHANNELS, WORKING_IPC_CHANNELS, WEB_IPC_CHANNELS, BROWSER_WORKFLOW_IPC_CHANNELS, MEMORY_IPC_CHANNELS } from '@copis/shared'
 import { USER_PROFILE_IPC_CHANNELS, SETTINGS_IPC_CHANNELS, SCRATCH_PAD_IPC_CHANNELS, APP_ICON_IPC_CHANNELS, DOCK_BADGE_IPC_CHANNELS, STORAGE_IPC_CHANNELS } from '../types'
 import { agentHttpStreamClient } from '../renderer/lib/agent-http-stream'
 import { COPIS_HTTP_API_HOST } from '@copis/shared/config'
@@ -132,6 +132,7 @@ import type {
   WorkingFeedbackResult,
   WorkingReceiveChannel,
   WorkingReceiveChannelSettings,
+  AgentMailStatus,
   WorkingSettingsSnapshot,
   WorkingLoginInput,
   WorkingOrdersPage,
@@ -1095,6 +1096,13 @@ export interface ElectronAPI {
   getWeChatStatus: () => Promise<WeChatBridgeState>
   /** 订阅微信 Bridge 状态变化 */
   onWeChatStatusChanged: (callback: (state: WeChatBridgeState) => void) => () => void
+
+  // ===== Agent Mail (QQ 邮箱) =====
+  getAgentMailStatus: () => Promise<AgentMailStatus>
+  startAgentMailLogin: () => Promise<{ authUrl: string; qrCodeDataUrl: string }>
+  cancelAgentMailLogin: () => Promise<void>
+  logoutAgentMail: () => Promise<AgentMailStatus>
+  onAgentMailStatusChanged: (callback: (status: AgentMailStatus) => void) => () => void
 
   /** 订阅菜单关闭标签页事件（Cmd+W 被菜单拦截后转发） */
   onMenuCloseTab: (callback: () => void) => () => void
@@ -2348,6 +2356,29 @@ const electronAPI: ElectronAPI = {
     const listener = (_event: Electron.IpcRendererEvent, state: WeChatBridgeState): void => callback(state)
     ipcRenderer.on(WECHAT_IPC_CHANNELS.STATUS_CHANGED, listener)
     return () => { ipcRenderer.removeListener(WECHAT_IPC_CHANNELS.STATUS_CHANGED, listener) }
+  },
+
+  // ===== Agent Mail (QQ 邮箱) =====
+  getAgentMailStatus: () => {
+    return ipcRenderer.invoke(AGENT_MAIL_IPC_CHANNELS.GET_STATUS)
+  },
+
+  startAgentMailLogin: () => {
+    return ipcRenderer.invoke(AGENT_MAIL_IPC_CHANNELS.START_LOGIN)
+  },
+
+  cancelAgentMailLogin: () => {
+    return ipcRenderer.invoke(AGENT_MAIL_IPC_CHANNELS.CANCEL_LOGIN)
+  },
+
+  logoutAgentMail: () => {
+    return ipcRenderer.invoke(AGENT_MAIL_IPC_CHANNELS.LOGOUT)
+  },
+
+  onAgentMailStatusChanged: (callback: (status: AgentMailStatus) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, status: AgentMailStatus): void => callback(status)
+    ipcRenderer.on(AGENT_MAIL_IPC_CHANNELS.STATUS_CHANGED, listener)
+    return () => { ipcRenderer.removeListener(AGENT_MAIL_IPC_CHANNELS.STATUS_CHANGED, listener) }
   },
 
   // ===== 钉钉集成 =====

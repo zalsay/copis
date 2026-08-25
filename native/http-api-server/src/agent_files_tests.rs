@@ -793,3 +793,108 @@ fn project_command_environment_ignores_invalid_officecli_path() {
         Some(crate::runtime::resolve_runtime().path_value().as_str())
     );
 }
+
+#[test]
+fn realpath_requires_advanced_authorization_and_resolves_canonical_path() {
+    let root = temp_dir("realpath-test");
+    let file = root.join("demo.txt");
+    fs::write(&file, "demo-content").unwrap();
+    let sub_dir = root.join("sub");
+    fs::create_dir_all(&sub_dir).unwrap();
+
+    let store = AgentFilePolicyStore::new();
+
+    // 1. 未开启高级授权：返回 403 advanced_authorization_required
+    let mut standard_query = Map::new();
+    standard_query.insert(
+        "cwd".to_string(),
+        Value::String(root.to_string_lossy().into_owned()),
+    );
+    standard_query.insert("useRustFileApi".to_string(), Value::Bool(true));
+    standard_query.insert(
+        "fileAccessPolicy".to_string(),
+        json!({
+            "readRoots": [root],
+            "readFiles": [],
+            "writeRoots": [root],
+            "permissionMode": "bypassPermissions",
+            "advancedAuthorization": false,
+        }),
+    );
+    let standard_token = store
+        .register_from_query("session-standard", &mut standard_query)
+        .unwrap();
+
+    let request_body = serde_json::to_vec(&json!({
+        "sessionId": "session-standard",
+        "path": "demo.txt",
+    }))
+    .unwrap();
+    let error = store
+        .handle_with_worker_token("realpath", "POST", &standard_token, &request_body)
+        .unwrap_err();
+    assert_eq!(error.status, 403);
+    assert_eq!(error.code, "advanced_authorization_required");
+
+    // 2. 开启高级授权：返回 200 realPath
+    let mut advanced_query = Map::new();
+    advanced_query.insert(
+        "cwd".to_string(),
+        Value::String(root.to_string_lossy().into_owned()),
+    );
+    advanced_query.insert("useRustFileApi".to_string(), Value::Bool(true));
+    advanced_query.insert(
+        "fileAccessPolicy".to_string(),
+        json!({
+            "readRoots": [root],
+            "readFiles": [],
+            "writeRoots": [root],
+            "permissionMode": "bypassPermissions",
+            "advancedAuthorization": true,
+        }),
+    );
+    let advanced_token = store
+        .register_from_query("session-advanced", &mut advanced_query)
+        .unwrap();
+
+    // 相对路径
+    let advanced_request = serde_json::to_vec(&json!({
+        "sessionId": "session-advanced",
+        "path": "demo.txt",
+    }))
+    .unwrap();
+    let result = store
+        .handle_with_worker_token("realpath", "POST", &advanced_token, &advanced_request)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        result["realPath"],
+        fs::canonicalize(&file).unwrap().to_string_lossy().as_ref()
+    );
+
+    // 目录路径（使用 real-path 别名）
+    let dir_request = serde_json::to_vec(&json!({
+        "sessionId": "session-advanced",
+        "path": "sub",
+    }))
+    .unwrap();
+    let dir_result = store
+        .handle_with_worker_token("real-path", "POST", &advanced_token, &dir_request)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        dir_result["realPath"],
+        fs::canonicalize(&sub_dir).unwrap().to_string_lossy().as_ref()
+    );
+
+    // 不存在的文件返回 404
+    let missing_request = serde_json::to_vec(&json!({
+        "sessionId": "session-advanced",
+        "path": "non-existent.txt",
+    }))
+    .unwrap();
+    let missing_error = store
+        .handle_with_worker_token("realpath", "POST", &advanced_token, &missing_request)
+        .unwrap_err();
+    assert_eq!(missing_error.status, 404);
+}

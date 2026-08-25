@@ -1,10 +1,11 @@
 import * as React from 'react'
-import type { WorkingReceiveChannel, WorkingReceiveChannelSettings } from '@copis/shared'
+import type { WorkingReceiveChannel, WorkingReceiveChannelSettings, AgentMailStatus } from '@copis/shared'
 import {
   AlertCircle,
   CheckCircle2,
   ExternalLink,
   Loader2,
+  Mail,
   RefreshCw,
   Smartphone,
 } from 'lucide-react'
@@ -64,11 +65,16 @@ export function CopisWorkingMessageSettingsPanel({
 }: CopisWorkingMessageSettingsPanelProps): React.ReactElement {
   const [savingChannel, setSavingChannel] = React.useState<WorkingReceiveChannel | null>(null)
   const [error, setError] = React.useState('')
-  const [rebindChannel, setRebindChannel] = React.useState<WorkingReceiveChannel | null>(null)
+  const [rebindChannel, setRebindChannel] = React.useState<WorkingReceiveChannel | 'agent-mail' | null>(null)
   const [checkingBinding, setCheckingBinding] = React.useState(false)
   const [feedback, setFeedback] = React.useState<{ type: 'success' | 'error'; message: string } | null>(null)
   const [qrCodeDataUrl, setQrCodeDataUrl] = React.useState<string>('')
   const [qrSeed, setQrSeed] = React.useState<number>(Date.now())
+
+  // Agent Mail 状态
+  const [agentMailStatus, setAgentMailStatus] = React.useState<AgentMailStatus | null>(null)
+  const [agentMailAuthUrl, setAgentMailAuthUrl] = React.useState<string>('')
+  const [loggingOutMail, setLoggingOutMail] = React.useState(false)
 
   // 钉钉表单状态
   const [dingtalkClientId, setDingtalkClientId] = React.useState('')
@@ -305,6 +311,77 @@ export function CopisWorkingMessageSettingsPanel({
     }
   }, [rebindChannel])
 
+  // Agent Mail 状态加载与事件监听
+  React.useEffect(() => {
+    let isMounted = true
+    window.electronAPI.getAgentMailStatus?.()
+      .then((status) => {
+        if (isMounted && status) setAgentMailStatus(status)
+      })
+      .catch(console.error)
+
+    const unsubscribe = window.electronAPI.onAgentMailStatusChanged?.((status) => {
+      if (!isMounted) return
+      setAgentMailStatus(status)
+      if (status.status === 'connected' && rebindChannel === 'agent-mail') {
+        setFeedback({ type: 'success', message: `Agent 邮箱绑定成功！已关联 ${status.email || ''}` })
+        setTimeout(() => {
+          setRebindChannel(null)
+          setFeedback(null)
+        }, 1000)
+      }
+    })
+
+    return () => {
+      isMounted = false
+      unsubscribe?.()
+    }
+  }, [rebindChannel])
+
+  // Agent Mail 发起登录
+  React.useEffect(() => {
+    if (rebindChannel !== 'agent-mail') return undefined
+    let isMounted = true
+    setQrCodeDataUrl('')
+    setAgentMailAuthUrl('')
+
+    window.electronAPI.startAgentMailLogin?.()
+      .then((res) => {
+        if (!isMounted) return
+        setAgentMailAuthUrl(res.authUrl)
+        setQrCodeDataUrl(res.qrCodeDataUrl)
+      })
+      .catch((err) => {
+        if (!isMounted) return
+        const msg = err instanceof Error ? err.message : String(err)
+        if (!msg.includes('abort') && !msg.includes('cancel')) {
+          setFeedback({ type: 'error', message: `启动授权失败: ${msg}` })
+        }
+      })
+
+    return () => {
+      isMounted = false
+      window.electronAPI.cancelAgentMailLogin?.().catch(() => {})
+    }
+  }, [rebindChannel, qrSeed])
+
+  const handleLogoutAgentMail = async (): Promise<void> => {
+    setLoggingOutMail(true)
+    try {
+      const nextStatus = await window.electronAPI.logoutAgentMail()
+      setAgentMailStatus(nextStatus)
+      setFeedback({ type: 'success', message: '已成功退出 Agent 邮箱登录' })
+      setTimeout(() => setFeedback(null), 1500)
+    } catch (err) {
+      setFeedback({
+        type: 'error',
+        message: err instanceof Error ? err.message : '退出登录失败',
+      })
+    } finally {
+      setLoggingOutMail(false)
+    }
+  }
+
   const handleSaveDingTalk = async (): Promise<void> => {
     if (!dingtalkClientId.trim() || !dingtalkClientSecret.trim()) {
       setFeedback({ type: 'error', message: '请填写 Client ID (AppKey) 和 Client Secret (AppSecret)' })
@@ -367,7 +444,7 @@ export function CopisWorkingMessageSettingsPanel({
     }
   }
 
-  const handleOpenRebind = (channel: WorkingReceiveChannel): void => {
+  const handleOpenRebind = (channel: WorkingReceiveChannel | 'agent-mail'): void => {
     setRebindChannel(channel)
     setFeedback(null)
     setQrSeed(Date.now())
@@ -403,6 +480,24 @@ export function CopisWorkingMessageSettingsPanel({
     setCheckingBinding(true)
     setFeedback(null)
     try {
+      if (rebindChannel === 'agent-mail') {
+        const mailStatus = await window.electronAPI.getAgentMailStatus?.()
+        if (mailStatus?.loggedIn) {
+          setAgentMailStatus(mailStatus)
+          setFeedback({ type: 'success', message: `已完成 Agent 邮箱绑定 (${mailStatus.email || ''})` })
+          setTimeout(() => {
+            setRebindChannel(null)
+            setFeedback(null)
+          }, 800)
+        } else {
+          setFeedback({
+            type: 'error',
+            message: '尚未检测到授权，请在微信/QQ扫码或在浏览器中同意授权后重试。',
+          })
+        }
+        return
+      }
+
       const isBound = await checkStatusSilently(rebindChannel)
       if (isBound) {
         setRebindChannel(null)
@@ -490,6 +585,48 @@ export function CopisWorkingMessageSettingsPanel({
             </article>
           )
         })}
+
+        {/* Agent 原生邮箱 (QQ 邮箱) */}
+        <article className="copis-working-message-channel">
+          <div className="copis-working-message-channel-icon" aria-hidden="true">
+            <Mail className="size-5 text-[var(--ui-primary)]" />
+          </div>
+          <div className="copis-working-message-channel-copy">
+            <div className="copis-working-message-channel-title">
+              <strong>Agent 邮箱 (QQ 邮箱)</strong>
+              <span className={`copis-working-message-binding ${agentMailStatus?.loggedIn ? 'bound' : 'unbound'}`}>
+                {agentMailStatus?.loggedIn ? `已绑定${agentMailStatus.email ? ` (${agentMailStatus.email})` : ''}` : '未绑定'}
+              </span>
+            </div>
+            <p>通过 Agent 原生邮箱 (@agent.qq.com) 授权收发与管理邮件。</p>
+          </div>
+          <div className="copis-working-message-channel-actions">
+            {agentMailStatus?.loggedIn && (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="copis-working-message-channel-rebind-btn text-red-400 hover:text-red-300"
+                onClick={() => void handleLogoutAgentMail()}
+                disabled={loggingOutMail}
+              >
+                {loggingOutMail ? <Loader2 className="mr-1.5 size-3 animate-spin" /> : null}
+                退出登录
+              </Button>
+            )}
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="copis-working-message-channel-rebind-btn"
+              onClick={() => handleOpenRebind('agent-mail')}
+              title={agentMailStatus?.loggedIn ? '重新授权 Agent 邮箱' : '立即连接 Agent 邮箱'}
+            >
+              <RefreshCw className="mr-1.5 size-3" />
+              {agentMailStatus?.loggedIn ? '重新授权' : '立即连接'}
+            </Button>
+          </div>
+        </article>
       </div>
 
       <p className="copis-working-message-note">未绑定渠道不能接收消息，请先在对应渠道完成绑定。</p>
@@ -499,15 +636,28 @@ export function CopisWorkingMessageSettingsPanel({
         <DialogContent className="border-[#f0a15a]/20 bg-[#191a1b] text-[#f2f3f3] sm:max-w-md">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2 text-base font-medium text-[#f1f3f2]">
-              {activeRebindOption && (
-                <img src={activeRebindOption.icon} alt="" className="size-5 rounded object-contain" />
+              {rebindChannel === 'agent-mail' ? (
+                <>
+                  <div className="flex size-5 items-center justify-center rounded bg-white/10">
+                    <Mail className="size-3.5 text-[var(--ui-primary)]" />
+                  </div>
+                  <span>{agentMailStatus?.loggedIn ? '重新授权 Agent 邮箱' : '连接 Agent QQ 邮箱'}</span>
+                </>
+              ) : (
+                <>
+                  {activeRebindOption && (
+                    <img src={activeRebindOption.icon} alt="" className="size-5 rounded object-contain" />
+                  )}
+                  {activeRebindOption
+                    ? `${settings?.[activeRebindOption.boundKey] ? '重新绑定' : '绑定'}${activeRebindOption.name}消息渠道`
+                    : '渠道绑定'}
+                </>
               )}
-              {activeRebindOption
-                ? `${settings?.[activeRebindOption.boundKey] ? '重新绑定' : '绑定'}${activeRebindOption.name}消息渠道`
-                : '渠道绑定'}
             </DialogTitle>
             <DialogDescription className="text-xs text-[#9fa3a6]">
-              {rebindChannel === 'feishu'
+              {rebindChannel === 'agent-mail'
+                ? '使用手机微信/QQ扫码或在浏览器中完成 OAuth 授权，绑定 Agent 原生邮箱 (@agent.qq.com)。'
+                : rebindChannel === 'feishu'
                 ? '使用手机飞书「扫一扫」扫描下方二维码，即可完成授权绑定。'
                 : rebindChannel === 'dingtalk' && dingtalkMode === 'manual'
                 ? '配置钉钉企业内部机器人 Client ID 与 Client Secret，启用 Stream 模式连接。'
@@ -517,7 +667,94 @@ export function CopisWorkingMessageSettingsPanel({
             </DialogDescription>
           </DialogHeader>
 
-          {rebindChannel === 'dingtalk' && dingtalkMode === 'manual' ? (
+          {rebindChannel === 'agent-mail' ? (
+            <div className="space-y-4 py-1">
+              <div className="flex flex-col items-center justify-center rounded-xl border border-white/10 bg-[#121314] p-5 text-center shadow-inner">
+                {/* 二维码容器 */}
+                <div className="relative flex size-44 items-center justify-center rounded-lg border border-slate-200/90 bg-white p-2 shadow-md">
+                  {qrCodeDataUrl ? (
+                    <img
+                      src={qrCodeDataUrl}
+                      alt="Agent 邮箱授权二维码"
+                      className="size-full rounded object-contain"
+                    />
+                  ) : (
+                    <div className="flex flex-col items-center justify-center gap-2 text-slate-500">
+                      <Loader2 className="size-6 animate-spin text-[var(--ui-primary)]" />
+                      <span className="text-[11px]">正在生成授权二维码...</span>
+                    </div>
+                  )}
+                  {qrCodeDataUrl && (
+                    <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                      <div className="flex size-8 items-center justify-center rounded-md border border-slate-200 bg-white p-0.5 shadow">
+                        <Mail className="size-5 text-[var(--ui-primary)]" />
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* 状态指示 */}
+                <div className="mt-3 flex items-center gap-1.5 text-xs text-[#9fa3a6]">
+                  <Loader2 className="size-3.5 animate-spin text-[var(--ui-primary)]" />
+                  <span>等待微信/QQ扫码或浏览器授权中...</span>
+                  <button
+                    type="button"
+                    onClick={() => setQrSeed(Date.now())}
+                    className="ml-1 text-[11px] text-[var(--ui-primary)] hover:underline"
+                    title="刷新二维码"
+                  >
+                    刷新
+                  </button>
+                </div>
+
+                {/* 浏览器直达按钮 */}
+                {agentMailAuthUrl && (
+                  <div className="mt-3 w-full">
+                    <Button
+                      type="button"
+                      size="sm"
+                      className="w-full bg-[var(--ui-primary)] text-black hover:opacity-90 text-xs font-medium"
+                      onClick={() => window.electronAPI.openExternal?.(agentMailAuthUrl)}
+                    >
+                      <ExternalLink className="mr-1.5 size-3.5" />
+                      在浏览器中打开授权页面
+                    </Button>
+                  </div>
+                )}
+
+                {/* 步骤说明 */}
+                <div className="mt-3 w-full rounded-lg border border-white/5 bg-white/[0.02] p-3 text-left">
+                  <div className="flex items-center gap-1 text-[11px] font-medium text-[#dfe4e1]">
+                    <Smartphone className="size-3.5 text-[var(--ui-primary)]" />
+                    <span>操作步骤：</span>
+                  </div>
+                  <ol className="mt-1.5 list-decimal list-inside space-y-1 text-[11px] leading-relaxed text-[#9fa3a6]">
+                    <li>使用<strong>微信</strong>或<strong>QQ</strong>「扫一扫」扫描二维码，或点击上方按钮在浏览器中完成授权</li>
+                    <li>在腾讯 QQ 邮箱授权页中点击<strong>「同意授权」</strong></li>
+                    <li>授权成功后系统将<strong>自动识别并完成绑定</strong></li>
+                  </ol>
+                </div>
+              </div>
+
+              {feedback && (
+                <div
+                  className={`flex items-start gap-2 rounded-md p-2.5 text-xs ${
+                    feedback.type === 'success'
+                      ? 'bg-emerald-500/10 text-emerald-300 border border-emerald-500/20'
+                      : 'bg-red-500/10 text-red-300 border border-red-500/20'
+                  }`}
+                  role="status"
+                >
+                  {feedback.type === 'success' ? (
+                    <CheckCircle2 className="size-4 shrink-0 text-emerald-400 mt-0.5" />
+                  ) : (
+                    <AlertCircle className="size-4 shrink-0 text-red-400 mt-0.5" />
+                  )}
+                  <span>{feedback.message}</span>
+                </div>
+              )}
+            </div>
+          ) : rebindChannel === 'dingtalk' && dingtalkMode === 'manual' ? (
             <div className="space-y-4 py-1">
               <div className="rounded-xl border border-white/10 bg-[#121314] p-4 text-left shadow-inner space-y-3">
                 <div className="space-y-1.5">
@@ -794,6 +1031,8 @@ export function CopisWorkingMessageSettingsPanel({
                         <Loader2 className="mr-1.5 size-3.5 animate-spin" />
                         核验中...
                       </>
+                    ) : rebindChannel === 'agent-mail' ? (
+                      '核验授权'
                     ) : (
                       '我已在手机确认'
                     )}

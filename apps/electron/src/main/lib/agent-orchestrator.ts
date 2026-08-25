@@ -18,12 +18,13 @@ import { randomUUID } from 'node:crypto'
 import { homedir } from 'node:os'
 import { join, isAbsolute, relative, resolve } from 'node:path'
 import { existsSync, mkdirSync } from 'node:fs'
-import { COPIS_WORKING_CHANNEL_ID, COPIS_WORKING_MODEL_SOURCE_TYPE_HEADER, COPIS_WORKING_MODEL_SOURCE_TYPE_COPIS_AGENT, createCopisWorkingChannelForId, isCopisWorkingChannelId, normalizeWorkingMode, type AgentRuntime, type AgentSendInput, type AgentMessage, type AgentGenerateTitleInput, type AgentProviderAdapter, type AgentSessionMeta, type CodexOAuthCredentials, type XaiOAuthCredentials, type TypedError, type RetryAttempt, type SDKMessage, type SDKAssistantMessage, type AgentStreamPayload, type RewindSessionResult, type ProviderType, workingModeToModelId } from '@copis/shared'
+import { COPIS_WORKING_CHANNEL_ID, COPIS_WORKING_MODEL_SOURCE_TYPE_HEADER, COPIS_WORKING_MODEL_SOURCE_TYPE_COPIS_AGENT, createCopisWorkingChannelForId, isCopisWorkingChannelId, normalizeWorkingMode, type AgentRuntime, type AgentSendInput, type AgentMessage, type AgentGenerateTitleInput, type AgentProviderAdapter, type AgentSessionMeta, type AgentWorkspace, type CodexOAuthCredentials, type XaiOAuthCredentials, type TypedError, type RetryAttempt, type SDKMessage, type SDKAssistantMessage, type AgentStreamPayload, type RewindSessionResult, type ProviderType, workingModeToModelId } from '@copis/shared'
 import {
   COPIS_DEFAULT_PERMISSION_MODE,
   THINKING_SIGNATURE_ERROR_CODE,
   THINKING_SIGNATURE_ERROR_MESSAGE,
   THINKING_SIGNATURE_ERROR_TITLE,
+  isAppConnectorSession,
   isPersistableSDKSystemMessage,
   normalizeMcpTransportType,
   inferAgentContextWindow,
@@ -42,7 +43,7 @@ import { getAdapter, fetchTitle } from '@copis/core'
 import { getFetchFn } from './proxy-fetch'
 import { getEffectiveProxyUrl } from './proxy-settings-service'
 import { appendSDKMessages, updateAgentSessionMeta, getAgentSessionMeta, getAgentSessionMessages, removeSDKErrorMessage, resolveAgentCwd, getAgentCwdMode } from './agent-session-manager'
-import { ensureAgentWorkspaceContextDir, ensureAgentWorkspaceWritableRoot, getAgentWorkspace, getAgentWorkspaceBySlug, getAgentWorkspaceReadableRoots, getLocalProjectRootStatus, getProjectFilesPath, getWorkspaceMcpConfig, getWorkspaceAttachedDirectories, getWorkspaceAttachedFiles } from './agent-workspace-manager'
+import { ensureAgentWorkspaceContextDir, ensureAgentWorkspaceWritableRoot, getAgentWorkspace, getAgentWorkspaceBySlug, getAgentWorkspaceReadableRoots, getLocalProjectRootStatus, getProjectFilesPath, getWorkspaceMcpConfig, getWorkspaceAttachedDirectories, getWorkspaceAttachedFiles, listAgentWorkspacesByUpdatedAt } from './agent-workspace-manager'
 import { getWorkingApiClient } from './working-api-service'
 import { getAgentWorkspacePath, getAgentSessionWorkspacePath, getSdkConfigDir, getWorkspaceSkillsDir } from './config-paths'
 import { isPathWithinRootsAllowMissing } from './file-access-policy'
@@ -295,8 +296,9 @@ function collectAttachedDirectories(params: {
   sessionMeta?: AgentSessionMeta
   workspaceSlug?: string
   extraDirs?: string[]
+  isAppConnector?: boolean
 }): string[] {
-  const { sessionMeta, workspaceSlug, extraDirs } = params
+  const { sessionMeta, workspaceSlug, extraDirs, isAppConnector } = params
   const result: string[] = []
   const push = (dir: string | undefined | null) => {
     if (!dir) return
@@ -316,6 +318,23 @@ function collectAttachedDirectories(params: {
       for (const root of getAgentWorkspaceReadableRoots(workspace)) push(root)
     } else {
       push(getProjectFilesPath(workspaceSlug))
+    }
+  }
+
+  if (isAppConnector) {
+    let allWorkspaces: AgentWorkspace[] = []
+    try {
+      allWorkspaces = listAgentWorkspacesByUpdatedAt()
+    } catch {
+      allWorkspaces = []
+    }
+    for (const ws of allWorkspaces) {
+      for (const root of getAgentWorkspaceReadableRoots(ws)) push(root)
+      push(getProjectFilesPath(ws.slug))
+      push(getAgentWorkspacePath(ws.slug))
+      if (ws.projectRootPath) push(ws.projectRootPath)
+      for (const d of filterAttachedPaths(getWorkspaceAttachedDirectories(ws.slug))) push(d)
+      for (const dir of getAttachedFileDirectories(getWorkspaceAttachedFiles(ws.slug))) push(dir)
     }
   }
 
@@ -588,7 +607,13 @@ export class AgentOrchestrator {
       const latestMeta = getAgentSessionMeta(sessionId)
       if (!latestMeta || !isDefaultSessionTitle(latestMeta.title)) return
 
-      updateAgentSessionMeta(sessionId, { title })
+      updateAgentSessionMeta(sessionId, {
+        title,
+        ...(latestMeta.source ? { source: latestMeta.source } : {}),
+        ...(latestMeta.feishuDedicated ? { feishuDedicated: true } : {}),
+        ...(latestMeta.wechatDedicated ? { wechatDedicated: true } : {}),
+        ...(latestMeta.dingtalkDedicated ? { dingtalkDedicated: true } : {}),
+      })
       callbacks.onTitleUpdated(title)
       console.log(`[Agent 编排] 自动标题生成完成: "${title}"`)
     } catch (error) {
@@ -1138,11 +1163,17 @@ export class AgentOrchestrator {
       // 9.4.1 Fork session JSONL 迁移已在 forkAgentSession 中完成；fork 的 cwd 语义
       // 从源会话继承并持久化，避免历史相对路径在恢复时切换到另一文件根。
 
+      const isAppConnector = isAppConnectorSession(
+        sessionMeta,
+        (input as { source?: string }).source ?? (input.triggeredBy as string),
+      )
+
       // 必须与 runtime 接收的附加目录保持一致；视觉助手据此限制允许外发的图片路径。
       const allAdditionalDirectories = collectAttachedDirectories({
         extraDirs: additionalDirectories,
         sessionMeta,
         workspaceSlug,
+        isAppConnector,
       })
 
       // 9.6 直接信任已保存的 sdkSessionId，跳过 listSessions 预验证
@@ -1393,7 +1424,7 @@ export class AgentOrchestrator {
           return validationFailure
         }
 
-        // ── Composer 高级授权：Git/SSH/curl/Python 命令必须显式开启后才允许执行 ──
+        // ── Composer 高级授权：Git/SSH/curl/Python 命令必须开启后才允许执行 ──
         if (toolName === 'Bash') {
           const command = typeof input.command === 'string' ? input.command : ''
           const advancedAuthorization = getAgentSessionMeta(sessionId)?.advancedAuthorization === true
@@ -1594,6 +1625,7 @@ export class AgentOrchestrator {
         currentModelId: selectedModelId,
         workingMode,
         memoryPolicy,
+        allWorkspacesAccess: isAppConnector,
         ...(sessionMeta?.expertTeamSession ? { expertTeamSession: sessionMeta.expertTeamSession } : {}),
         ...(sessionMeta?.expertTeamSetup ? { expertTeamSetup: true } : {}),
         ...(expertTeamContext ? { expertTeamContext } : {}),
@@ -1686,6 +1718,25 @@ export class AgentOrchestrator {
           force: false,
         })
         : undefined
+      const allSkillPaths: string[] = []
+      if (workspaceSlug) {
+        allSkillPaths.push(getWorkspaceSkillsDir(workspaceSlug))
+      }
+      if (isAppConnector) {
+        let allWs: AgentWorkspace[] = []
+        try {
+          allWs = listAgentWorkspacesByUpdatedAt()
+        } catch {
+          allWs = []
+        }
+        for (const ws of allWs) {
+          const sDir = getWorkspaceSkillsDir(ws.slug)
+          if (!allSkillPaths.includes(sDir)) {
+            allSkillPaths.push(sDir)
+          }
+        }
+      }
+
       const queryOptions: PiAgentQueryOptions = {
         agentRuntime: 'pi',
         sessionId,
@@ -1712,7 +1763,7 @@ export class AgentOrchestrator {
         piAgentDir: getSdkConfigDir(),
         piSessionDir: join(getSdkConfigDir(), 'sessions'),
         ...(allAdditionalDirectories.length > 0 && { additionalDirectories: allAdditionalDirectories }),
-        ...(workspaceSlug ? { additionalSkillPaths: [getWorkspaceSkillsDir(workspaceSlug)] } : {}),
+        ...(allSkillPaths.length > 0 && { additionalSkillPaths: allSkillPaths }),
         ...(effectiveSkillMentions?.length ? { skillMentions: effectiveSkillMentions } : {}),
         ...(workspaceSlug ? { workspaceSlug } : {}),
         memoryPolicy,
