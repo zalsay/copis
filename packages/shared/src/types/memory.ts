@@ -213,3 +213,27 @@ export interface MemoryImportResponse {
   deduplicated: number
   total: number
 }
+
+export const MEMORY_IPC_CHANNELS = {
+  PARSE_DOCUMENT_FILE: 'memory:parse-document-file',
+  FETCH_URL_CONTENT: 'memory:fetch-url-content',
+  EXTRACT_KNOWLEDGE: 'memory:extract-knowledge',
+} as const
+
+export type MemoryIpcChannel = (typeof MEMORY_IPC_CHANNELS)[keyof typeof MEMORY_IPC_CHANNELS]
+
+export interface MemoryExtractKnowledgeInput {
+  text: string
+  defaultKind?: MemoryKind
+}
+
+export interface MemoryExtractKnowledgeResult {
+  items: MemoryImportItemInput[]
+  rawOutput: string
+}
+
+export interface MemoryFetchUrlResult {
+  url: string
+  title: string
+  content: string
+}

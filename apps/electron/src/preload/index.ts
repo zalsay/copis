@@ -6,7 +6,7 @@
  */
 
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
-import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, ATTACHMENT_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, FUNCTIONAL_MODULE_IPC_CHANNELS, PROXY_IPC_CHANNELS, AGENT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, WECHAT_IPC_CHANNELS, AUTOMATION_IPC_CHANNELS, PLANNING_IPC_CHANNELS, WORKING_IPC_CHANNELS, WEB_IPC_CHANNELS, BROWSER_WORKFLOW_IPC_CHANNELS } from '@copis/shared'
+import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, ATTACHMENT_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, FUNCTIONAL_MODULE_IPC_CHANNELS, PROXY_IPC_CHANNELS, AGENT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, WECHAT_IPC_CHANNELS, AUTOMATION_IPC_CHANNELS, PLANNING_IPC_CHANNELS, WORKING_IPC_CHANNELS, WEB_IPC_CHANNELS, BROWSER_WORKFLOW_IPC_CHANNELS, MEMORY_IPC_CHANNELS } from '@copis/shared'
 import { USER_PROFILE_IPC_CHANNELS, SETTINGS_IPC_CHANNELS, SCRATCH_PAD_IPC_CHANNELS, APP_ICON_IPC_CHANNELS, DOCK_BADGE_IPC_CHANNELS, STORAGE_IPC_CHANNELS } from '../types'
 import { agentHttpStreamClient } from '../renderer/lib/agent-http-stream'
 import { COPIS_HTTP_API_HOST } from '@copis/shared/config'
@@ -122,6 +122,9 @@ import type {
   CreatePlanningGroupInput,
   UpdatePlanningGroupInput,
   SnoozePlanningReminderInput,
+  MemoryExtractKnowledgeInput,
+  MemoryExtractKnowledgeResult,
+  MemoryFetchUrlResult,
   WorkingAuthState,
   WorkingCheckInResult,
   WorkingClientConfig,
@@ -935,6 +938,14 @@ export interface ElectronAPI {
 
   /** 搜索工作区文件（用于 @ 引用，支持附加目录） */
   searchWorkspaceFiles: (rootPath: string, query: string, limit?: number, additionalPaths?: string[], sessionPaths?: string[]) => Promise<FileSearchResult>
+
+  // ===== 知识库多源资料摄取 =====
+  /** 解析本地文档文件（PDF、Word、Excel、PPT、RTF、TXT、MD 等） */
+  parseDocumentFile: (filePath: string) => Promise<string>
+  /** 抓取网页 URL 内容并提取纯正文 */
+  fetchUrlContent: (url: string) => Promise<MemoryFetchUrlResult>
+  /** 调用 AI 模型按 QM 规范从文本中抽取结构化原子知识卡片 */
+  extractKnowledgeFromText: (input: MemoryExtractKnowledgeInput) => Promise<MemoryExtractKnowledgeResult>
 
   // ===== 自动更新 =====
 
@@ -2684,6 +2695,11 @@ const electronAPI: ElectronAPI = {
     ipcRenderer.on(PLANNING_IPC_CHANNELS.AGENT_OPERATION, listener)
     return () => { ipcRenderer.removeListener(PLANNING_IPC_CHANNELS.AGENT_OPERATION, listener) }
   },
+
+  // ===== 知识库摄取 =====
+  parseDocumentFile: (filePath: string) => ipcRenderer.invoke(MEMORY_IPC_CHANNELS.PARSE_DOCUMENT_FILE, filePath),
+  fetchUrlContent: (url: string) => ipcRenderer.invoke(MEMORY_IPC_CHANNELS.FETCH_URL_CONTENT, url),
+  extractKnowledgeFromText: (input: MemoryExtractKnowledgeInput) => ipcRenderer.invoke(MEMORY_IPC_CHANNELS.EXTRACT_KNOWLEDGE, input),
 
 }
 

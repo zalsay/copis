@@ -539,7 +539,8 @@ export function CopisWorkingSidebar({ width, noTransition = false }: CopisWorkin
         <button
           type="button"
           className={cn('copis-working-sidebar-icon-button', activeView === 'memory' && 'active')}
-          aria-label="记忆"
+          aria-label="知识库"
+          title="知识库"
           onClick={handleOpenMemory}
         >
           <BookOpen aria-hidden="true" />
@@ -588,7 +589,7 @@ export function CopisWorkingSidebar({ width, noTransition = false }: CopisWorkin
           </button>
           <button type="button" className={cn('copis-working-menu-button', activeView === 'memory' && 'active')} onClick={handleOpenMemory}>
             <BookOpen aria-hidden="true" />
-            <span>记忆</span>
+            <span>知识库</span>
           </button>
           <button type="button" className={cn('copis-working-menu-button', activeView === 'expert-team' && 'active')} onClick={() => { setWorkingHistorySelection(null); setAppMode('agent'); setActiveView('expert-team') }}>
             <UsersRound aria-hidden="true" />

@@ -9,7 +9,7 @@ import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'nod
 import { existsSync, realpathSync, rmSync, readFileSync, writeFileSync, mkdirSync, statSync } from 'node:fs'
 import { writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, ATTACHMENT_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, FUNCTIONAL_MODULE_IPC_CHANNELS, PROXY_IPC_CHANNELS, AGENT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, WECHAT_IPC_CHANNELS, AUTOMATION_IPC_CHANNELS, PLANNING_IPC_CHANNELS, PLANNING_CONFLICT_ERROR, WORKING_IPC_CHANNELS, WEB_IPC_CHANNELS, BROWSER_WORKFLOW_IPC_CHANNELS, COPIS_WORKING_CHANNEL_ID, isCopisPermissionMode, isCopisWorkingChannelId, isWorkingMode, normalizePathForCompare } from '@copis/shared'
+import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, ATTACHMENT_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, FUNCTIONAL_MODULE_IPC_CHANNELS, PROXY_IPC_CHANNELS, AGENT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, WECHAT_IPC_CHANNELS, AUTOMATION_IPC_CHANNELS, PLANNING_IPC_CHANNELS, PLANNING_CONFLICT_ERROR, WORKING_IPC_CHANNELS, WEB_IPC_CHANNELS, BROWSER_WORKFLOW_IPC_CHANNELS, MEMORY_IPC_CHANNELS, COPIS_WORKING_CHANNEL_ID, isCopisPermissionMode, isCopisWorkingChannelId, isWorkingMode, normalizePathForCompare } from '@copis/shared'
 import { USER_PROFILE_IPC_CHANNELS, SETTINGS_IPC_CHANNELS, SCRATCH_PAD_IPC_CHANNELS, QUICK_TASK_IPC_CHANNELS, VOICE_DICTATION_IPC_CHANNELS, APP_ICON_IPC_CHANNELS, DOCK_BADGE_IPC_CHANNELS, STORAGE_IPC_CHANNELS } from '../types'
 import type {
   QuickTaskSubmitInput,
@@ -141,8 +141,12 @@ import type {
   UpdateWebTabBoundsInput,
   BrowserAgentContext,
   BrowserPageControlMode,
+  MemoryExtractKnowledgeInput,
+  MemoryExtractKnowledgeResult,
+  MemoryFetchUrlResult,
 } from '@copis/shared'
 import type { UserProfile, AppSettings } from '../types'
+import { memoryIngestionService } from './lib/memory-ingestion-service'
 import { getRuntimeStatus, getGitRepoStatus, reinitializeRuntime } from './lib/runtime-init'
 import { getUnstagedChanges, getFileDiff, getUntrackedContent, revertFile, getDiffContents, listWorktrees, getWorktreeChanges, getMainRepoRoot } from './lib/git-diff-service'
 import { registerCopisFilePath } from './lib/local-file-protocol'
@@ -5222,6 +5226,28 @@ export function registerIpcHandlers(): void {
     async (_, id: string): Promise<void> => {
       if (!isNonEmptyString(id)) throw new Error('id 必填')
       await runtimeAutomationApiClient.runNow(id)
+    }
+  )
+
+  // ===== Memory 知识库摄取通道 =====
+  ipcMain.handle(
+    MEMORY_IPC_CHANNELS.PARSE_DOCUMENT_FILE,
+    async (_, filePath: string): Promise<string> => {
+      return memoryIngestionService.parseDocumentFile(filePath)
+    }
+  )
+
+  ipcMain.handle(
+    MEMORY_IPC_CHANNELS.FETCH_URL_CONTENT,
+    async (_, url: string): Promise<MemoryFetchUrlResult> => {
+      return memoryIngestionService.fetchWebpageContent(url)
+    }
+  )
+
+  ipcMain.handle(
+    MEMORY_IPC_CHANNELS.EXTRACT_KNOWLEDGE,
+    async (_, input: MemoryExtractKnowledgeInput): Promise<MemoryExtractKnowledgeResult> => {
+      return memoryIngestionService.extractKnowledgeFromText(input)
     }
   )
 }

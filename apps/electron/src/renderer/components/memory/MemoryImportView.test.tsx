@@ -21,15 +21,17 @@ describe('Memory 导入页面 BDD', () => {
       </Provider>,
     )
 
-    expect(html).toContain('导入知识库')
+    expect(html).toContain('导入与沉淀知识库')
+    expect(html).toContain('文档智能抽取 (PDF/Word/Office)')
+    expect(html).toContain('网页链接抓取 (URL)')
+    expect(html).toContain('结构化文件导入 (JSON/Markdown)')
     expect(html).toContain('当前项目（Copis）')
     expect(html).toContain('用户记忆（全局通用）')
     expect(html).toContain('事实 (fact)')
     expect(html).toContain('偏好 (preference)')
     expect(html).toContain('决策 (decision)')
     expect(html).toContain('项目 (project)')
-    expect(html).toContain('点击或拖拽文件到此处')
-    expect(html).toContain('或者直接粘贴 Markdown / 文本内容')
+    expect(html).toContain('点击或拖拽文档到此处（PDF / Word / Office / TXT）')
   })
 
   test('Given 构造工作区导入请求 When 执行 buildMemoryImportInput Then 返回符合规范的请求体', () => {
