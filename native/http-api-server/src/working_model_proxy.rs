@@ -242,7 +242,7 @@ impl std::fmt::Display for WorkingModelError {
                     status, message
                 )
             }
-            Self::InvalidResponse => formatter.write_str("Working 模型响应格式不正确"),
+            Self::InvalidResponse => formatter.write_str("模型服务响应异常，请直接发送「继续任务」或点击重试"),
         }
     }
 }

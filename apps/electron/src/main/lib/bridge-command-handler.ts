@@ -843,7 +843,14 @@ export class BridgeCommandHandler {
       permissionModeOverride: 'bypassPermissions' as const,
     }
 
+    const bridgeSource = this.config.platformName === '微信'
+      ? 'wechat'
+      : this.config.platformName === '钉钉'
+      ? 'dingtalk'
+      : 'bridge'
+
     runAgentHeadless(input, {
+      source: bridgeSource,
       onError: (error) => {
         this.log(`Agent 错误: ${error}`)
         this.send(chatId, `❌ Agent 错误: ${error}`, contextData).catch((sendError) => console.error(`[${this.config.platformName} Bridge] 发送错误消息失败:`, redactSensitiveLogValue(sendError)))

@@ -77,3 +77,4 @@ export {
   workingCustomModelProtocolToProvider,
   workingModelCatalogToOptions,
 } from './working-model-catalog'
+export { isAppConnectorSession } from './agent-connector'

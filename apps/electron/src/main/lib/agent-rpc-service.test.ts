@@ -42,6 +42,13 @@ mock.module('./agent-session-manager', () => ({
   }),
   resolveAgentCwd: () => '/tmp/copis-agent-rpc-test/project',
   updateAgentSessionMeta: () => rpcSession,
+  rewindPiAgentSession: async () => {},
+  listAgentSessions: () => [],
+  truncateSDKMessages: () => [],
+  removeSDKErrorMessage: () => true,
+  getAgentSessionMessages: () => [],
+  appendAgentMessage: () => {},
+  deleteAgentSession: () => {},
 }))
 
 mock.module('./agent-workspace-manager', () => ({
@@ -81,9 +88,22 @@ mock.module('./agent-workspace-manager', () => ({
   getWorkspaceMcpConfig: () => ({ servers: {} }),
   getLocalProjectRootStatus: () => 'available',
   listAgentWorkspaces: () => [],
+  listAgentWorkspacesByUpdatedAt: () => [],
+  getWorkspaceCapabilities: () => ({ mcpServers: [], skills: [] }),
+  ensureDefaultWorkspace: () => ({
+    id: 'workspace-1',
+    name: '测试项目',
+    slug: 'test-workspace',
+    projectRootPath: '/tmp/copis-agent-rpc-test/project',
+    allowWorkspaceWrite: true,
+    createdAt: 1,
+    updatedAt: 1,
+  }),
+  getAgentWorkspaceSourceRoot: () => '/tmp/copis-agent-rpc-test/project',
 }))
 
 mock.module('./channel-manager', () => ({
+  listChannels: () => [],
   getChannelById: () => ({
     id: 'channel-1',
     name: '测试渠道',
@@ -91,6 +111,7 @@ mock.module('./channel-manager', () => ({
     enabled: true,
     baseUrl: 'https://example.com/v1',
   }),
+  decryptApiKey: () => 'api-key',
   persistCodexOAuthCredentials: () => {},
   persistXaiOAuthCredentials: () => {},
   resolveCodexOAuthCredentials: async () => ({ access: 'access', refresh: 'refresh' }),
@@ -111,6 +132,12 @@ mock.module('./working-api-service', () => ({
 
 mock.module('./working-model-catalog', () => ({
   getWorkingModelCatalogOwnerId: (user: { id?: string } | null | undefined) => user?.id,
+  getWorkingModelCatalog: () => ({ models: [] }),
+  saveWorkingModelCatalog: () => ({ models: [] }),
+  assertWorkingModelCatalogVip: () => {},
+  assertWorkingCustomModelSelection: () => {},
+  filterWorkingModelCatalogUpdate: () => {},
+  redactWorkingModelCatalog: (s: unknown) => s,
   getWorkingCustomModelRuntime: (channelId: string, isVip: boolean) => {
     if (!isVip || channelId !== customModelChannelId) throw new Error('自定义模型测试配置不正确')
     return {
@@ -170,6 +197,14 @@ mock.module('./expert-team-context', () => ({
 
 mock.module('./functional-module-manager', () => ({
   getFunctionalModulePath: () => undefined,
+  getFunctionalModuleStatus: () => undefined,
+  getFunctionalModuleStatuses: () => [],
+  prepareFunctionalModule: async () => undefined,
+  activatePreparedFunctionalModule: async () => undefined,
+  checkFunctionalModule: async () => undefined,
+  installFunctionalModule: async () => undefined,
+  resolveFunctionalModuleArtifact: async () => undefined,
+  fetchFunctionalModuleManifest: async () => undefined,
 }))
 
 mock.module('./browser-workflow-service', () => ({

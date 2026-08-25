@@ -2681,7 +2681,7 @@ fn send_working_model_error(
         WorkingModelError::InvalidResponse => (
             502,
             "invalid_upstream_response".to_string(),
-            "Working 模型响应格式不正确".to_string(),
+            "模型服务响应异常，请直接发送「继续任务」或点击重试".to_string(),
         ),
     };
     let body = json!({ "error": message, "code": code }).to_string();

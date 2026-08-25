@@ -8,11 +8,11 @@
  * - 动态 per-message 上下文（buildDynamicContext）：注入到用户消息前，每次实时读取磁盘
  */
 
-import { COPIS_WORKING_DEEPSEEK_FAST_MODEL_ID, normalizeWorkingMode, type AgentExpertTeamSession, type AgentRuntime, type CopisPermissionMode, type ExpertTeamPromptContext, type MemoryPolicy, type WorkingMode } from '@copis/shared'
+import { COPIS_WORKING_DEEPSEEK_FAST_MODEL_ID, normalizeWorkingMode, type AgentExpertTeamSession, type AgentRuntime, type AgentWorkspace, type CopisPermissionMode, type ExpertTeamPromptContext, type MemoryPolicy, type WorkingMode } from '@copis/shared'
 import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { getUserProfile } from './user-profile-service'
-import { getAgentWorkspaceBySlug, getAgentWorkspaceContextDir, getAgentWorkspaceWritableRoot, getProjectFilesPath, getWorkspaceMcpConfig } from './agent-workspace-manager'
+import { getAgentWorkspaceBySlug, getAgentWorkspaceContextDir, getAgentWorkspaceWritableRoot, getProjectFilesPath, getWorkspaceMcpConfig, listAgentWorkspacesByUpdatedAt } from './agent-workspace-manager'
 import { getConfigDirName } from './config-paths'
 import { buildGitAttributionPromptSection, isGitAttributionEnabled } from './agent-git-attribution'
 import { getSettings } from './settings-service'
@@ -31,7 +31,7 @@ const TOOL_USAGE_GUIDELINES = `## 工具使用指南
 - **Python 依赖安装**：执行 \`pip install\` 时，除非用户明确指定其他源，必须在命令中显式传入 \`-i https://mirrors.aliyun.com/pypi/simple/\`，默认使用阿里云 PyPI 源；不要直接使用 pip 的默认官方源。`
 
 /** buildSystemPrompt 所需的上下文 */
-interface SystemPromptContext {
+export interface SystemPromptContext {
   agentRuntime?: AgentRuntime
   workspaceName?: string
   workspaceSlug?: string
@@ -61,6 +61,10 @@ interface SystemPromptContext {
   workingMode?: WorkingMode
   /** 当前 Agent 的 Memory 策略。 */
   memoryPolicy?: MemoryPolicy
+  /** 是否为 App 连接器会话，单独提供可调用所有工作区的权限 */
+  allWorkspacesAccess?: boolean
+  /** 传入的所有工作区列表（可选） */
+  allWorkspaces?: AgentWorkspace[]
 }
 
 function buildWorkspacePromptPaths(workspaceSlug: string, sessionId: string, agentCwd?: string) {
@@ -328,6 +332,47 @@ ${JSON.stringify(schema.nodes)}
 - **可启动项目结构**：在项目开发目录中为每个前端创建独立目录（例如 \`frontend/\` 或 \`<项目名>/\`），其中 \`package.json\` 的 \`scripts.dev\` 必须调用 \`vite\`。完成后自行安装依赖，并执行 \`npm run build\` 验证；需要持续运行的 \`npm run dev\` 由 Copis 项目列表启动并为其分配独立端口。
 - Python 后端可以与 Vue 3 前端组成简单前后端项目，建议使用 \`frontend/\` 和 \`backend/\` 清晰分层；不要用单文件 HTML 替代前端工程。
 - 项目来源目录只作为参考；新项目文件、依赖配置和启动脚本都写入项目开发目录，不要把它当作可随意清理的临时目录`)
+  }
+
+  // App 连接器多工作区调用权限
+  if (ctx.allWorkspacesAccess) {
+    let allWorkspaces = ctx.allWorkspaces
+    if (!allWorkspaces) {
+      try {
+        allWorkspaces = listAgentWorkspacesByUpdatedAt()
+      } catch {
+        allWorkspaces = []
+      }
+    }
+    const workspaceRows = allWorkspaces.map((ws, idx) => {
+      let pRoot = ''
+      try {
+        pRoot = getProjectFilesPath(ws.slug)
+      } catch {
+        pRoot = ws.slug
+      }
+      const isLocal = Boolean(ws.projectRootPath)
+      const srcRoot = ws.projectRootPath ?? pRoot
+      return `| ${idx + 1} | **${ws.name}** | \`${ws.slug}\` | \`${ws.id}\` | \`${pRoot}\` | \`${srcRoot}\` (${isLocal ? '本地目录' : '托管'}) |`
+    })
+
+    sections.push(`## App 连接器全工作区调用权限 (All Workspaces Access)
+
+当前会话由 **App 连接器（飞书 / 微信 / 钉钉）** 接入。作为远程移动端中枢，当前会话已单独获得**调用本机所有工作区的最高权限**：
+
+### 本机所有可用工作区列表
+| 序号 | 项目名称 | Slug | 标识 (ID) | 项目开发根目录 (可读写) | 本地来源目录 |
+|---|---|---|---|---|---|
+${workspaceRows.length > 0 ? workspaceRows.join('\n') : '| - | 暂无其他工作区 | - | - | - | - |'}
+
+### 跨工作区操作指引与规范
+1. **全工作区读写权限**：你拥有直接读取、搜索、编写与修改上述任意工作区文件的完整权限。当用户要求处理某个项目时，请直接定位到该项目的对应路径进行操作（使用绝对路径或在对应目录下操作）。
+2. **跨项目命令执行**：可在任意工作区目录下执行 Bash 命令（例如通过 \`cd <项目开发根目录> && npm test\` 或在对应工作区目录下执行依赖安装与脚本）。
+3. **跨工作区技能与工具**：所有工作区的 Skills 与配置已全局挂载，你可以跨项目调用各个工作区沉淀的专有技能。
+4. **任务与日程归属**：创建 Todo 或日程规划时，可传入对应项目的 \`workspaceId\` 进行归属。
+5. **智能项目定位**：
+   - 若用户未显式指定项目，默认在当前绑定项目（${ctx.workspaceName ?? '默认项目'}）中执行；
+   - 若用户在消息中提及了某个项目名称（如“帮我看看 XX 项目”、“在 YY 项目里加上 ZZ 功能”），请主动识别并直接在对应工作区路径下开展工作，并在回复中明确说明所操作的项目与路径。`)
   }
 
   // 自主执行与最小澄清策略
