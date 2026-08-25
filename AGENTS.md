@@ -376,6 +376,44 @@ bun test apps/electron/src/main/lib/web-tab-session-service.test.ts
 
 两个网页测试文件都会 mock `./config-paths`，必须分两个 Bun 进程运行，避免 module mock 互相覆盖产生假失败。完成自动化验证后，由用户在 Electron 实际窗口中打开普通网页并确认 UI 交互与视觉结果，不能只验证 `about:blank` 或主渲染进程 DOM；Agent 不得使用截图方案代替该用户确认。
 
+### QM 风格结构化记忆系统（Memory System）
+
+Copis 参考 YC QM 项目的结构化长期记忆管理思路（`notebook` / `capture` / `recall` / `read` / `rewrite` / `revision` 乐观锁 / `scope` 隔离 / `consolidation` 记忆整合 / `scratch` 临时记忆自动提炼），建立了本地化、受控且全自动的长期记忆系统。
+
+#### 1. 核心架构与服务模块
+
+- **存储底座与 API Gateway (`native/http-api-server/src/memory.rs`)**：
+  - 本地 Rust HTTP API 服务（`127.0.0.1:51730/api/memory`）基于本地 SQLite 驱动；
+  - 核心表结构包括 `memory_entries`、`memory_revisions`（全量变更历史与快照）与 `memory_maintenance_state`（维护状态）；
+  - 支持 `revision` 乐观锁版本并发控制，确保 Agent 多任务并发写入时的数据一致性。
+- **数据客户端运行时 (`apps/electron/src/main/lib/memory-api-client-runtime.ts`)**：
+  - 主进程中对 Rust Memory HTTP API 的封装，支持按 scope、kind、tags 精确检索与批量原子操作。
+- **上下文动态注入 (`apps/electron/src/main/lib/memory-context-builder.ts`)**：
+  - 在 Agent 系统提示词构建时，根据当前会话内容与所属工作区，动态召回最相关的 Top-K 长期记忆并注入上下文。
+- **Per-turn 自动感知与捕获 (`apps/electron/src/main/lib/adapters/pi-memory-auto-capture.ts`)**：
+  - 对话流结束后，后台异步执行轻量抽取模型，自动从用户交互中提取偏好、项目事实与关键决策，无需用户手动保存。
+- **智能维护与压缩整理 (`apps/electron/src/main/lib/adapters/pi-memory-organization.ts` / `pi-memory-maintenance.ts`)**：
+  - 当上下文 Token 超过整理阈值（`PI_MEMORY_ORGANIZATION_THRESHOLD_TOKENS`）或触发维护周期时，排队执行记忆提炼（`promote`）、合并重写（`rewrite`）与旧记忆归档（`archive`），协助上下文压缩（Compaction）。
+
+#### 2. 分级 Scope 与记忆分类
+
+- **Scope 隔离**：
+  - `user`：全局用户记忆（如用户编程偏好、语言习惯、个人通用配置）；
+  - `workspace`：按工作区 `workspace_slug` 严格隔离的项目记忆，防止跨项目上下文污染。
+- **记忆类型 (`kind`)**：
+  - `fact`：客观事实与技术栈特性；
+  - `preference`：用户个人偏好与编码规范；
+  - `decision`：架构设计、技术选型与业务决策；
+  - `project`：项目目录结构、构建方式与环境变量要求；
+  - `scratch`：短期临时笔记与临时状态（14 天保留期，过期或自动提炼 promote 为长期事实）。
+
+#### 3. Agent 记忆工具与策略权限 (`MemoryPolicy`)
+
+- **策略权限**：
+  - `visible`（只读检索）：仅暴露 `memory_recall`（关键词检索）、`memory_read`（精确读取）；
+  - `writable`（读写管理）：暴露 `memory_recall`、`memory_read`、`memory_capture`（主动沉淀）、`memory_rewrite`（更新重写与归档）。
+- **受控设计**：Agent 无法通过工具参数越权访问任意内部目录，记忆读写完全由当前会话的工作区边界约束。
+
 ### 本地文件存储（`~/.copis/`）
 
 ```

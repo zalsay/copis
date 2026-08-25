@@ -21,7 +21,7 @@ Copis 是一个本地优先的 AI 桌面应用，把多模型 Chat、通用 Agen
 - **协作与任务**：复杂任务可拆分为可追踪的协作子 Agent / Task，并在消息流中展示调用过程和结果。
 - **Skills、MCP 与项目根目录**：每个 Copis 项目独立配置 Skills 与 MCP Server。项目文件可使用用户选择的本地项目根目录，也可使用 Copis 托管的空白项目目录；本地项目配置不会被自动导入。工作区的 `project/` 目录用于 Agent 创建和维护用户项目。
 - **远程机器人与 App 连接器**：支持飞书（Hermes 扫码一键注册）、微信（腾讯 iLink Bot 扫码登录）与钉钉（Stream 直连 / OAuth 扫码授权）机器人桥接；侧边栏提供对应平台色彩专属 Tag 徽标，会话自动剥除信封并提取真实用户提问作为标题，支持用手机随时随地触发本机 Agent 工作流。
-- **记忆与工具**：Chat 和 Agent 可共享记忆能力，并支持联网搜索、内置 Chat 工具、Agent 推荐等辅助能力。
+- **QM 风格结构化记忆**：参考 YC QM 项目设计，由本地 Rust HTTP API 与 SQLite 驱动；支持用户全局与工作区专属两级 Scope 隔离、Per-turn 自动事实抽取、Token 阈值排队整理、版本历史追溯（Revision 乐观锁）以及 Agent 受控记忆读写工具集。
 - **本地优先**：会话、工作区、附件、配置、Skills 等默认存储在 `~/.copis/`，使用 JSON / JSONL 文件组织，不依赖本地数据库。
 - **桌面体验**：自动更新、代理设置、文件预览、全局快捷键、快速任务窗口、语音输入、亮色 / 暗色 / 跟随系统主题。
 
@@ -153,7 +153,17 @@ Copis 的 Agent 模式统一使用 Pi Agent Runtime，基于 `@earendil-works/pi
 
 每个 Pi Agent 会话默认内置 [pi-web-access](https://github.com/nicobailon/pi-web-access) 扩展，无需手动 `pi install`，即可使用 `web_search`（联网搜索）、`fetch_content`（网页抓取）、`source_check`（来源核查）和 `get_search_content`（结果检索）工具。搜索供应商优先复用当前 OpenAI 渠道或环境变量中的 API Key（如 `OPENAI_API_KEY`、`TAVILY_API_KEY`、`EXA_API_KEY`），也可通过 `~/.pi/web-search.json` 配置；未配置任何供应商时，工具会返回配置引导而非报错中断。
 
-> **Kimi Coding Plan 用户须知**：Copis 已获得 Kimi 官方白名单支持，使用 Copis 连接 Kimi Coding Plan 不会触发第三方客户端封号策略，可放心使用。
+### QM 风格结构化记忆系统
+
+Copis 深度参考了 YC QM 项目的结构化长期记忆设计，将其完整落地为由本地 Rust HTTP API 和本地 SQLite 驱动的高性能、可追溯记忆系统：
+
+- **分级 Scope 隔离**：分为 `user`（全局用户偏好、语言习惯、个人通用知识）与 `workspace`（工作区专属项目知识、环境配置、业务决策）两级边界，严格杜绝跨项目上下文污染。
+- **结构化记忆类型**：划分 `fact`（客观事实）、`preference`（个人偏好）、`decision`（架构与业务决策）、`project`（项目结构与技术栈）及 `scratch`（短期临时笔记，14 天保留期）。
+- **全自动感知与维护**：
+  - **Per-turn 自动抽取**：对话流结束后，后台轻量模型自动提取用户对话中的新事实与偏好并完成沉淀；
+  - **智能排队整理与提炼**：上下文 Token 超过整理阈值时自动触发维护队列，执行临时记忆提炼（`promote`）、合并重写（`rewrite`）与旧记忆归档（`archive`），助力上下文压缩（Compaction）；
+  - **动态 Top-K 注入**：新会话与对话轮次开始时，按当前工作区与语义关键词自动召回最相关记忆注入 Agent 系统提示词。
+- **版本控制与受控工具集**：全量操作记录于 `memory_revisions` 表，支持乐观锁版本控制；Agent 通过受控的 `memory_recall`、`memory_read`、`memory_capture`、`memory_rewrite` 工具协同，无法越权访问底层内部路径。
 
 ## 本地数据
 
