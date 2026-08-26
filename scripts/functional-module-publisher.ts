@@ -37,6 +37,7 @@ export interface FunctionalModuleUploadEntry {
   size: number
   sha256: string
   contentType: string
+  cacheControl?: string
   allowOverwrite?: boolean
 }
 
@@ -236,6 +237,7 @@ export function buildFunctionalModuleManifestUpload(
     size: body.byteLength,
     sha256: sha256(body),
     contentType: 'application/json',
+    cacheControl: 'no-cache, max-age=0, must-revalidate',
     allowOverwrite: true,
   }
 }
@@ -296,6 +298,7 @@ async function uploadAndVerify(
     key: entry.key,
     body,
     contentType: entry.contentType,
+    ...(entry.cacheControl ? { cacheControl: entry.cacheControl } : {}),
     metadata: { sha256: entry.sha256 },
     ...(entry.allowOverwrite ? { allowOverwrite: true } : {}),
   }, options)

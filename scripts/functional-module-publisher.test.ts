@@ -353,6 +353,7 @@ describe('COS 功能模块发布器', () => {
     })
 
     expect(entry.key).toBe('copis/client/stable/manifest.json')
+    expect(entry.cacheControl).toBe('no-cache, max-age=0, must-revalidate')
     expect(JSON.parse(entry.body?.toString('utf8') ?? '{}')).toMatchObject({
       platforms: { 'darwin-arm64': { modules: { officecli: { required: true } } } },
     })

@@ -9,6 +9,7 @@ describe('Windows 构建脚本固定安装程序发布', () => {
     expect(buildScript).toContain("'Copis-Setup.exe'")
     expect(buildScript).toContain('Move-Item -LiteralPath $installerPath -Destination $fixedInstallerPath -Force')
     expect(buildScript).toContain("'publish:windows-installer'")
+    expect(buildScript).toContain("'publish:client-update'")
     expect(buildScript).toContain('[switch]$SkipCosUpload')
   })
 
@@ -32,5 +33,9 @@ describe('Windows 构建脚本固定安装程序发布', () => {
     const bumpCall = buildScript.indexOf('bump-electron-version.ts')
     const versionRead = buildScript.indexOf('Get-Content -LiteralPath $electronPackagePath -Raw -Encoding UTF8 | ConvertFrom-Json')
     expect(versionRead).toBeGreaterThan(bumpCall)
+  })
+
+  test('安装包上传成功后再更新客户端 manifest', () => {
+    expect(buildScript.indexOf("'publish:windows-installer'")).toBeLessThan(buildScript.indexOf("'publish:client-update'"))
   })
 })

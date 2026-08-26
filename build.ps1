@@ -193,7 +193,7 @@ $installerObjectKeyValue = if (-not [string]::IsNullOrWhiteSpace($InstallerObjec
 } elseif (-not [string]::IsNullOrWhiteSpace($InstallerFileName)) {
     "copis/downloads/stable/win32-x64/$installerFileNameValue"
 } else {
-    $null
+    'copis/downloads/stable/win32-x64/Copis-Setup.exe'
 }
 
 Write-Host '构建完成，EXE 产物：'
@@ -230,6 +230,29 @@ if ($SkipCosUpload) {
         & $bunPath @uploadArguments
         if ($LASTEXITCODE -ne 0) {
             throw "Windows 安装程序 COS 上传失败，退出码：$LASTEXITCODE"
+        }
+
+        $clientUpdateArguments = @(
+            'run',
+            'publish:client-update',
+            '--',
+            '--file',
+            $fixedInstallerPath,
+            '--object-key',
+            $installerObjectKeyValue,
+            '--version',
+            $appVersion
+        )
+        if (-not [string]::IsNullOrWhiteSpace($CosPublicBaseUrl)) {
+            $clientUpdateArguments += @('--public-base-url', $CosPublicBaseUrl.Trim())
+        }
+        if (-not [string]::IsNullOrWhiteSpace($CosBucketUrl)) {
+            $clientUpdateArguments += @('--bucket-url', $CosBucketUrl.Trim())
+        }
+        Write-Host '正在更新客户端自动更新 manifest...'
+        & $bunPath @clientUpdateArguments
+        if ($LASTEXITCODE -ne 0) {
+            throw "客户端自动更新 manifest 发布失败，退出码：$LASTEXITCODE"
         }
     }
     finally {

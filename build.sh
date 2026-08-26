@@ -123,6 +123,12 @@ if [[ "$SKIP_COS_UPLOAD" -eq 0 ]]; then
     --version "$APP_VERSION" \
     --public-base-url "$COS_PUBLIC_BASE_URL" \
     --bucket-url "$COS_BUCKET_URL")
+  (cd "$ROOT_DIR" && bun run publish:client-update -- \
+    --file "$FIXED_DMG" \
+    --object-key "copis/downloads/stable/darwin-$MAC_ARCH/Copis-$MAC_ARCH.dmg" \
+    --version "$APP_VERSION" \
+    --public-base-url "$COS_PUBLIC_BASE_URL" \
+    --bucket-url "$COS_BUCKET_URL")
 fi
 
 echo "[Copis] 构建完成，产物目录: $APP_DIR/out"
