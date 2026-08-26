@@ -10,6 +10,7 @@ mock.module('./agent-workspace-manager', () => ({
   getAgentWorkspaceWritableRoot: () => '/tmp/sample-project/copis',
   getProjectFilesPath: () => '/tmp/sample-project',
   getWorkspaceMcpConfig: () => ({ servers: {} }),
+  listAgentWorkspacesByUpdatedAt: () => [],
 }))
 
 mock.module('./config-paths', () => ({
@@ -322,6 +323,36 @@ describe('项目与会话工作台提示词', () => {
     expect(prompt).not.toContain('## Working 专家模式')
   })
 
+  test('Given DeepSeek v4 Pro When 构建系统提示词 Then 使用 DeepSeek 专业模型能力约束', () => {
+    const prompt = buildSystemPrompt({
+      agentRuntime: 'pi',
+      sessionId: 'session-deepseek-pro',
+      permissionMode: 'bypassPermissions',
+      currentModelId: 'deepseek-v4-pro',
+    })
+
+    expect(prompt).toContain('## DeepSeek 专业模型')
+    expect(prompt).toContain('DeepSeek 最强模型')
+    expect(prompt).toContain('不支持图片识别')
+    expect(prompt).not.toContain('## Working 快速模式')
+    expect(prompt).not.toContain('## Working 专家模式')
+  })
+
+  test('Given Copis 通识模型 When 构建系统提示词 Then 使用通识模型提示词约束', () => {
+    const prompt = buildSystemPrompt({
+      agentRuntime: 'pi',
+      sessionId: 'session-copis-global',
+      permissionMode: 'bypassPermissions',
+      currentModelId: 'global',
+    })
+
+    expect(prompt).toContain('## Copis 通识模型')
+    expect(prompt).toContain('对应 edu-api 的 `global` alias')
+    expect(prompt).toContain('通晓世界知识')
+    expect(prompt).not.toContain('## Working 快速模式')
+    expect(prompt).not.toContain('## Working 专家模式')
+  })
+
   test('Given visible Memory policy When构建系统提示词 Then标明参考资料边界且不引导旧文件记忆', () => {
     const prompt = buildSystemPrompt({
       agentRuntime: 'pi',
@@ -414,4 +445,17 @@ describe('项目与会话工作台提示词', () => {
 
     expect(prompt).not.toContain('## App 连接器全工作区调用权限')
   })
+
+  test('Given 系统提示词构建 When buildSystemPrompt Then 末尾包含下一步建议与标准 JSON 输出规范', () => {
+    const prompt = buildPrompt('/tmp/sample-project')
+
+    expect(prompt).toContain('## 下一步建议 (Next Steps Recommendations)')
+    expect(prompt).toContain('```json:next-steps')
+    expect(prompt).toContain('summarize-workflow | session-summary | automation')
+    expect(prompt).toContain('总结工作流 (`summarize-workflow`)')
+    expect(prompt).toContain('会话总结 (`session-summary`)')
+    expect(prompt).toContain('自动化办公 (`automation`)')
+    expect(prompt).toContain('非强制输出')
+  })
 })
+

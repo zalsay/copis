@@ -11,7 +11,7 @@
 
 import * as React from 'react'
 import { useAtom, useAtomValue, useSetAtom } from 'jotai'
-import { Brain, ChevronDown, Cpu, Search, Zap } from 'lucide-react'
+import { Brain, ChevronDown, Cpu, Globe, Search, Zap } from 'lucide-react'
 import {
   Dialog,
   DialogContent,
@@ -30,14 +30,21 @@ import {
   channelsLoadedAtom,
   modelSelectorOpenAtom,
 } from '@/atoms/model-atoms'
+import { workingClientConfigAtom } from '@/atoms/working-atoms'
+import { workingModelCatalogAtom } from '@/atoms/working-model-catalog-atoms'
 import { CopisTemplateLogo, getModelLogo, getChannelLogo, DefaultLogo } from '@/lib/model-logo'
 import { cn } from '@/lib/utils'
 import {
   COPIS_WORKING_CHANNEL_ID,
   COPIS_WORKING_DEEPSEEK_CHANNEL_ID,
   COPIS_WORKING_DEEPSEEK_FAST_MODEL_ID,
+  COPIS_WORKING_DEEPSEEK_PRO_MODEL_ID,
   COPIS_WORKING_EXPERT_MODEL_ID,
   COPIS_WORKING_FAST_MODEL_ID,
+  COPIS_WORKING_GLOBAL_MODEL_ID,
+  createCopisWorkingChannel,
+  createCopisWorkingDeepSeekChannel,
+  workingModelCatalogToOptions,
 } from '@copis/shared'
 import type { Channel, ModelOption, ProviderType, WorkingCustomModelOption, WorkingModelLatencyMap } from '@copis/shared'
 import { ChannelPlanQuotaBadge } from './ChannelPlanQuotaBadge'
@@ -83,13 +90,18 @@ function groupModelOptions(
 }
 
 function getModelDescription(option: Pick<ModelOption, 'channelId' | 'modelId'>): string | undefined {
-  if (option.channelId === COPIS_WORKING_DEEPSEEK_CHANNEL_ID
-    && option.modelId === COPIS_WORKING_DEEPSEEK_FAST_MODEL_ID) {
-    return 'v4 Flash，思考速度快，不支持图片识别'
+  if (option.channelId === COPIS_WORKING_DEEPSEEK_CHANNEL_ID) {
+    if (option.modelId === COPIS_WORKING_DEEPSEEK_FAST_MODEL_ID) {
+      return 'v4 Flash，思考速度快，不支持图片识别'
+    }
+    if (option.modelId === COPIS_WORKING_DEEPSEEK_PRO_MODEL_ID) {
+      return 'v4Pro，DeepSeek 最强模型，不支持图片识别'
+    }
   }
   if (option.channelId !== COPIS_WORKING_CHANNEL_ID) return undefined
   if (option.modelId === COPIS_WORKING_FAST_MODEL_ID) return '速度快，思考能力一般'
   if (option.modelId === COPIS_WORKING_EXPERT_MODEL_ID) return '知识面广，深度思考，消耗更多钻石'
+  if (option.modelId === COPIS_WORKING_GLOBAL_MODEL_ID) return '通晓世界知识，适合教育、探索等场景'
   return undefined
 }
 
@@ -99,6 +111,9 @@ function renderModelIcon(option: ModelOption, useCopisLogo: boolean, className: 
   }
   if (option.channelId === COPIS_WORKING_CHANNEL_ID && option.modelId === COPIS_WORKING_EXPERT_MODEL_ID) {
     return <Brain aria-hidden="true" className={cn(className, 'text-violet-400')} />
+  }
+  if (option.channelId === COPIS_WORKING_CHANNEL_ID && option.modelId === COPIS_WORKING_GLOBAL_MODEL_ID) {
+    return <Globe aria-hidden="true" className={cn(className, 'text-sky-400')} />
   }
   return (
     <img
@@ -121,6 +136,8 @@ interface ModelSelectorProps {
   filterChannelIds?: string[]
   /** 外部选中模型（不传则用内部 selectedModelAtom） */
   externalSelectedModel?: { channelId: string; modelId: string } | null
+  /** 自定义触发按钮 className */
+  triggerClassName?: string
   /** 外部选择回调 */
   onModelSelect?: (option: ModelOption) => void
   /** 触发按钮是否显示「渠道 · 模型」（默认只显示模型名） */
@@ -151,6 +168,7 @@ export function ModelSelector({
   excludedProviders,
   useSharedOpenState = false,
   placement = 'dialog',
+  triggerClassName,
   customModelOptions,
 }: ModelSelectorProps = {}): React.ReactElement {
   const setGlobalModel = useSetAtom(selectedModelAtom)
@@ -170,93 +188,123 @@ export function ModelSelector({
   // 外部模型优先；未传入时使用全局默认模型，避免依赖旧 Chat 会话状态。
   const selectedModel = externalSelectedModel !== undefined ? externalSelectedModel : globalSelectedModel
 
-  // 每次打开 Dialog 时刷新渠道列表，确保最新
+  const workingClientConfig = useAtomValue(workingClientConfigAtom)
+  const workingModelCatalog = useAtomValue(workingModelCatalogAtom)
+
+  const backendUrl = workingClientConfig?.backendUrl || 'http://127.0.0.1:9000'
+  const defaultWorkingChannel = React.useMemo(
+    () => createCopisWorkingChannel(backendUrl),
+    [backendUrl],
+  )
+  const defaultDeepSeekChannel = React.useMemo(
+    () => createCopisWorkingDeepSeekChannel(backendUrl),
+    [backendUrl],
+  )
+  const defaultCustomModelOptions = React.useMemo(
+    () => workingModelCatalogToOptions(workingModelCatalog),
+    [workingModelCatalog],
+  )
+
+  // 挂载时刷新渠道（若尚未加载）
   React.useEffect(() => {
-    if (open) {
-      window.electronAPI.listChannels().then(setChannels).catch(console.error)
-      setSearch('')
-      setLatencies({})
-      window.electronAPI.getWorkingModelLatencies()
-        .then(setLatencies)
-        .catch(() => setLatencies({}))
+    if (!channelsLoaded) {
+      window.electronAPI.listChannels().then((chs) => {
+        setChannels(chs)
+      }).catch(console.error)
     }
-  }, [open, setChannels])
+  }, [channelsLoaded, setChannels])
 
+  // 可用渠道（合并外部透传或默认 Working / DeepSeek 渠道）
   const availableChannels = React.useMemo(() => {
-    if (!additionalChannels || additionalChannels.length === 0) return channels
-    const byId = new Map(channels.map((channel) => [channel.id, channel]))
-    for (const channel of additionalChannels) byId.set(channel.id, channel)
-    return [...byId.values()]
-  }, [additionalChannels, channels])
+    let list = [...channels]
+    const extraChannels = additionalChannels !== undefined
+      ? additionalChannels
+      : [defaultWorkingChannel, defaultDeepSeekChannel].filter((c): c is NonNullable<typeof c> => c !== null)
 
-  const modelOptions = React.useMemo(
-    () => buildModelOptions(availableChannels, filterChannelId, filterChannelIds, excludedProviders),
-    [availableChannels, filterChannelId, filterChannelIds, excludedProviders],
-  )
-  const customOptions = customModelOptions ?? EMPTY_CUSTOM_MODEL_OPTIONS
-  const allOptions = React.useMemo(
-    () => [...modelOptions, ...customOptions],
-    [customOptions, modelOptions],
-  )
-  const grouped = React.useMemo(
-    () => groupModelOptions(modelOptions, customOptions),
-    [customOptions, modelOptions],
-  )
+    if (extraChannels.length > 0) {
+      const existingIds = new Set(list.map((c) => c.id))
+      for (const ch of extraChannels) {
+        if (!existingIds.has(ch.id)) {
+          list.push(ch)
+        }
+      }
+    }
+    return list
+  }, [channels, additionalChannels, defaultWorkingChannel, defaultDeepSeekChannel])
+
+  const resolvedCustomModelOptions = customModelOptions !== undefined
+    ? customModelOptions
+    : defaultCustomModelOptions
+
+  // 构建全部模型选项（已启用渠道中已启用的模型）
+  const allOptions = React.useMemo(() => {
+    return buildModelOptions(availableChannels, filterChannelId, filterChannelIds, excludedProviders)
+  }, [availableChannels, filterChannelId, filterChannelIds, excludedProviders])
+
+  // 按供应商/渠道分组（包含用户自定义 Working 模型）
+  const grouped = React.useMemo(() => {
+    return groupModelOptions(allOptions, resolvedCustomModelOptions ?? EMPTY_CUSTOM_MODEL_OPTIONS)
+  }, [allOptions, resolvedCustomModelOptions])
 
   // 搜索过滤
   const filteredGrouped = React.useMemo(() => {
     if (!search.trim()) return grouped
-
-    const query = search.toLowerCase()
-    const filtered: ModelGroup[] = []
-
-    for (const group of grouped) {
-      const matchedOptions = group.options.filter(
-        (o) =>
-          o.modelName.toLowerCase().includes(query) ||
-          getModelDescription(o)?.toLowerCase().includes(query) ||
-          o.channelName.toLowerCase().includes(query)
-      )
-      if (matchedOptions.length > 0 || group.name.toLowerCase().includes(query)) {
-        filtered.push({ ...group, options: matchedOptions.length > 0 ? matchedOptions : group.options })
-      }
-    }
-
-    return filtered
+    const q = search.toLowerCase()
+    return grouped
+      .map((g) => ({
+        ...g,
+        options: g.options.filter(
+          (o) =>
+            o.modelName.toLowerCase().includes(q) ||
+            o.modelId.toLowerCase().includes(q) ||
+            o.channelName.toLowerCase().includes(q)
+        ),
+      }))
+      .filter((g) => g.options.length > 0)
   }, [grouped, search])
 
-  // 扁平化过滤后的模型列表，用于键盘导航
-  const flatOptions = React.useMemo(() => {
-    const result: ModelOption[] = []
-    for (const group of filteredGrouped) {
-      result.push(...group.options)
-    }
-    return result
-  }, [filteredGrouped])
+  // 扁平列表（供键盘导航）
+  const flatOptions = React.useMemo(
+    () => filteredGrouped.flatMap((g) => g.options),
+    [filteredGrouped]
+  )
 
   // 键盘高亮索引
   const [highlightIndex, setHighlightIndex] = React.useState(-1)
   const itemRefs = React.useRef<Map<number, HTMLButtonElement>>(new Map())
 
-  // 搜索变化时重置高亮
+  // 弹窗打开时重置状态并拉取延迟
   React.useEffect(() => {
-    setHighlightIndex(-1)
-  }, [search])
+    if (open) {
+      setSearch('')
+      setHighlightIndex(-1)
+      setLatencies({})
+      window.electronAPI.getWorkingModelLatencies()
+        .then(setLatencies)
+        .catch(() => setLatencies({}))
+    }
+  }, [open])
 
-  // 高亮项变化时滚动到可见区域
+  // 键盘高亮项自动滚动到可见区域
   React.useEffect(() => {
-    if (highlightIndex < 0) return
-    const el = itemRefs.current.get(highlightIndex)
-    el?.scrollIntoView({ block: 'nearest' })
+    if (highlightIndex >= 0) {
+      itemRefs.current.get(highlightIndex)?.scrollIntoView({ block: 'nearest' })
+    }
   }, [highlightIndex])
 
-  // 查找当前选中的模型信息
+  // 当前选中模型的展示信息
   const currentModelInfo = React.useMemo(() => {
     if (!selectedModel) return null
-    return allOptions.find(
-      (o) => o.channelId === selectedModel.channelId && o.modelId === selectedModel.modelId
-    ) ?? null
-  }, [allOptions, selectedModel])
+    return (
+      (resolvedCustomModelOptions ?? EMPTY_CUSTOM_MODEL_OPTIONS).find(
+        (o) => o.channelId === selectedModel.channelId && o.modelId === selectedModel.modelId
+      ) ??
+      allOptions.find(
+        (o) => o.channelId === selectedModel.channelId && o.modelId === selectedModel.modelId
+      ) ??
+      null
+    )
+  }, [selectedModel, allOptions, resolvedCustomModelOptions])
 
   // 保持上次有效的模型信息，避免渠道未加载时闪烁"选择模型"
   const stableModelInfoRef = React.useRef(currentModelInfo)
@@ -317,8 +365,14 @@ export function ModelSelector({
       {/* 模型列表 */}
       <div id={pickerListId} role="listbox" aria-label="可用模型" className="max-h-[420px] overflow-y-auto pb-3 scrollbar-thin">
         {filteredGrouped.length === 0 ? (
-          <div className="py-10 text-center text-sm text-muted-foreground">
-            未找到模型
+          <div className="py-12 px-6 text-center text-sm text-muted-foreground flex flex-col items-center justify-center gap-2">
+            <Cpu className="size-8 opacity-40 text-muted-foreground" />
+            <span className="font-medium text-foreground/80">
+              {search.trim() ? '未找到匹配的模型' : '暂无可用模型'}
+            </span>
+            <span className="text-xs text-muted-foreground/70">
+              {search.trim() ? '请尝试更换关键词搜索' : '请先在「设置 - 模型渠道」中添加并启用 AI 渠道'}
+            </span>
           </div>
         ) : (
           (() => {
@@ -406,14 +460,11 @@ export function ModelSelector({
     </>
   )
 
-  if (channelsLoaded && allOptions.length === 0) {
-    return (
-      <div className="flex items-center gap-1.5 text-xs text-muted-foreground px-2 py-1">
-        <Cpu className="size-3.5" />
-        <span>暂无可用模型</span>
-      </div>
-    )
-  }
+  const triggerLabel = displayModelInfo
+    ? (showChannelInTrigger
+      ? `${triggerChannelName ?? displayModelInfo.channelName} · ${displayModelInfo.modelName}`
+      : displayModelInfo.modelName)
+    : '暂无可用模型'
 
   return (
     <>
@@ -432,21 +483,22 @@ export function ModelSelector({
                   aria-haspopup="listbox"
                   aria-expanded={open}
                   aria-controls={open ? pickerListId : undefined}
-                  className="model-selector-trigger flex items-center gap-1.5 rounded-md px-2 py-1 text-xs text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+                  className={cn(
+                    'model-selector-trigger flex items-center gap-1.5 rounded-md px-2 py-1 text-xs text-muted-foreground hover:text-foreground hover:bg-accent transition-colors',
+                    triggerClassName
+                  )}
                 >
                   {displayModelInfo ? renderModelIcon(displayModelInfo, useCopisLogo, 'size-4 shrink-0') : <Cpu className="size-3.5" />}
                   <span className="max-w-[200px] truncate">
-                    {displayModelInfo
-                      ? (showChannelInTrigger
-                        ? `${triggerChannelName ?? displayModelInfo.channelName} · ${displayModelInfo.modelName}`
-                        : displayModelInfo.modelName)
-                      : '选择模型'}
+                    {triggerLabel}
                   </span>
                   <ChevronDown aria-hidden="true" className="size-3" />
                 </button>
               </PopoverTrigger>
             </TooltipTrigger>
-            <TooltipContent side="top">渠道：{triggerChannelName ?? displayModelInfo?.channelName}</TooltipContent>
+            <TooltipContent side="top">
+              {displayModelInfo ? `渠道：${triggerChannelName ?? displayModelInfo.channelName}` : '点击选择或配置可用模型'}
+            </TooltipContent>
           </Tooltip>
           <PopoverContent
             side="top"
@@ -473,20 +525,21 @@ export function ModelSelector({
                 aria-haspopup="listbox"
                 aria-expanded={open}
                 aria-controls={open ? pickerListId : undefined}
-                className="model-selector-trigger flex items-center gap-1.5 rounded-md px-2 py-1 text-xs text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+                className={cn(
+                  'model-selector-trigger flex items-center gap-1.5 rounded-md px-2 py-1 text-xs text-muted-foreground hover:text-foreground hover:bg-accent transition-colors',
+                  triggerClassName
+                )}
               >
                 {displayModelInfo ? renderModelIcon(displayModelInfo, useCopisLogo, 'size-4 shrink-0') : <Cpu className="size-3.5" />}
                 <span className="max-w-[200px] truncate">
-                  {displayModelInfo
-                    ? (showChannelInTrigger
-                      ? `${triggerChannelName ?? displayModelInfo.channelName} · ${displayModelInfo.modelName}`
-                      : displayModelInfo.modelName)
-                    : '选择模型'}
+                  {triggerLabel}
                 </span>
                 <ChevronDown aria-hidden="true" className="size-3" />
               </button>
             </TooltipTrigger>
-            <TooltipContent side="top">渠道：{triggerChannelName ?? displayModelInfo?.channelName}</TooltipContent>
+            <TooltipContent side="top">
+              {displayModelInfo ? `渠道：${triggerChannelName ?? displayModelInfo.channelName}` : '点击选择或配置可用模型'}
+            </TooltipContent>
           </Tooltip>
 
           {/* 模型选择 Dialog */}

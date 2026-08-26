@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import * as React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { Provider } from 'jotai'
+import { TooltipProvider } from '@/components/ui/tooltip'
 import { KnowledgeNav } from './KnowledgeNav'
 import { KnowledgeView } from './KnowledgeView'
 import { agentWorkspacesAtom } from '@/atoms/agent-atoms'
@@ -21,7 +22,9 @@ describe('知识库独立功能页面 BDD', () => {
   test('Given 打开知识库视图 When 初始渲染 Then 默认呈现资料智能摄取并支持三大模式', () => {
     const html = renderToStaticMarkup(
       <Provider>
-        <KnowledgeView />
+        <TooltipProvider>
+          <KnowledgeView />
+        </TooltipProvider>
       </Provider>,
     )
 

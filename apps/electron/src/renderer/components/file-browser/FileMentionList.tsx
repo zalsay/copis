@@ -16,6 +16,7 @@ import * as React from 'react'
 import { cn } from '@/lib/utils'
 import type { FileIndexEntry } from '@copis/shared'
 import { FileTypeIcon } from './FileTypeIcon'
+import { getWorkspaceFolderDisplayName } from './workspace-folder-mapping'
 import { ChevronRight } from 'lucide-react'
 import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from '@/components/ui/tooltip'
 
@@ -446,7 +447,19 @@ function TreeNodeList({
           />
 
           {/* 名称 */}
-          <span className="truncate flex-1">{node.name}</span>
+          {(() => {
+            const nodeDisplayName = node.type === 'dir' && node.source === 'workspace' && node.depth === 0
+              ? getWorkspaceFolderDisplayName(node.name)
+              : node.name
+            return (
+              <span
+                className="truncate flex-1"
+                title={nodeDisplayName !== node.name ? `${nodeDisplayName} (${node.name})` : node.name}
+              >
+                {nodeDisplayName}
+              </span>
+            )
+          })()}
           {node.source === 'session' && (
             <span className="rounded-md bg-muted px-1.5 py-0.5 text-[10px] leading-none text-muted-foreground shrink-0">会话文件</span>
           )}

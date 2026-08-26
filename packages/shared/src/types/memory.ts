@@ -225,6 +225,8 @@ export type MemoryIpcChannel = (typeof MEMORY_IPC_CHANNELS)[keyof typeof MEMORY_
 export interface MemoryExtractKnowledgeInput {
   text: string
   defaultKind?: MemoryKind
+  channelId?: string
+  modelId?: string
 }
 
 export interface MemoryExtractKnowledgeResult {

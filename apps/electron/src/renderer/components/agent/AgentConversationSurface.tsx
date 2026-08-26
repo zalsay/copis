@@ -26,6 +26,9 @@ import { PermissionBanner } from './PermissionBanner'
 import { PermissionModeSelector } from './PermissionModeSelector'
 import { AskUserBanner } from './AskUserBanner'
 import { ExitPlanModeBanner } from './ExitPlanModeBanner'
+import { NextStepsChips } from './NextStepsChips'
+import { NewSessionFeatureChips, type CopisFeatureItem } from './NewSessionFeatureChips'
+import { extractLatestAssistantNextSteps, type NextStepSuggestion } from './next-steps-parser'
 import { ModelSelector } from '@/components/model/ModelSelector'
 import { AttachmentPreviewItem } from '@/components/attachments/AttachmentPreviewItem'
 import { QuotedSelectionChip } from '@/components/diff/QuotedSelectionChip'
@@ -128,6 +131,7 @@ import {
   COPIS_WORKING_DEEPSEEK_CHANNEL_ID,
   COPIS_WORKING_DEEPSEEK_FAST_MODEL_ID,
   COPIS_WORKING_EXPERT_MODEL_ID,
+  COPIS_WORKING_GLOBAL_MODEL_ID,
   createCopisWorkingChannel,
   createCopisWorkingDeepSeekChannel,
   inferAgentContextWindow,
@@ -354,7 +358,9 @@ export function AgentConversationSurface({ sessionId, variant = 'main' }: AgentC
     ? sessionModelMap.get(sessionId) ?? sessionMetaModelId ?? COPIS_WORKING_DEEPSEEK_FAST_MODEL_ID
     : isWorkingCustomModelChannelId(agentChannelId)
       ? selectedCustomModel?.modelId ?? sessionModelMap.get(sessionId) ?? sessionMetaModelId ?? ''
-      : workingModeToModelId(workingMode)
+      : sessionModelMap.get(sessionId) === COPIS_WORKING_GLOBAL_MODEL_ID || sessionMetaModelId === COPIS_WORKING_GLOBAL_MODEL_ID
+        ? COPIS_WORKING_GLOBAL_MODEL_ID
+        : workingModeToModelId(workingMode)
   const setWorkingSettingsOpen = useSetAtom(workingSettingsOpenAtom)
   const setDraftSessionIds = useSetAtom(draftSessionIdsAtom)
   const globalWorkspaceId = useAtomValue(currentAgentWorkspaceIdAtom)
@@ -2686,8 +2692,47 @@ export function AgentConversationSurface({ sessionId, variant = 'main' }: AgentC
     return registerShortcut('toggle-preview-panel', togglePreviewPanel)
   }, [togglePreviewPanel])
 
+  // ===== Next Steps 下一步建议 =====
+  const allMessagesForNextSteps = React.useMemo(() => {
+    return liveMessages.length > 0
+      ? [...persistedSDKMessages, ...liveMessages]
+      : persistedSDKMessages
+  }, [persistedSDKMessages, liveMessages])
+
+  const [dismissedStepsKey, setDismissedStepsKey] = React.useState<string | null>(null)
+
+  const rawNextSteps = React.useMemo(() => {
+    return extractLatestAssistantNextSteps(allMessagesForNextSteps)
+  }, [allMessagesForNextSteps])
+
+  const nextStepsSignature = React.useMemo(() => {
+    if (rawNextSteps.length === 0) return null
+    return `${rawNextSteps.map((s) => `${s.type ?? ''}:${s.title}`).join('|')}:${allMessagesForNextSteps.length}`
+  }, [rawNextSteps, allMessagesForNextSteps.length])
+
+  const nextSteps = React.useMemo(() => {
+    if (!nextStepsSignature || dismissedStepsKey === nextStepsSignature) return []
+    return rawNextSteps
+  }, [rawNextSteps, nextStepsSignature, dismissedStepsKey])
+
+  const handleDismissNextSteps = React.useCallback(() => {
+    if (nextStepsSignature) {
+      setDismissedStepsKey(nextStepsSignature)
+    }
+  }, [nextStepsSignature])
+
+  const handleExecuteNextStep = React.useCallback((step: NextStepSuggestion) => {
+    const promptText = step.action?.trim() || step.title.trim()
+    if (!promptText) return
+    handleSend(promptText)
+  }, [handleSend])
+
+  const handleSelectFeature = React.useCallback((feature: CopisFeatureItem) => {
+    handleSend(feature.prompt)
+  }, [handleSend])
+
   const hasTextInput = inputContent.trim().length > 0
-  const canSend = messagesLoaded && (streaming || !messagesRefreshing) && (hasTextInput || pendingFiles.length > 0 || !!suggestion) && agentChannelId !== null && hasAvailableModel && (!streaming || hasTextInput)
+  const canSend = messagesLoaded && (streaming || !messagesRefreshing) && (hasTextInput || pendingFiles.length > 0 || !!suggestion || nextSteps.length > 0) && agentChannelId !== null && hasAvailableModel && (!streaming || hasTextInput)
 
   const inputToolbarItems = React.useMemo<ToolbarItem[]>(() => [
     ...(isCodexFastModeAvailable ? [{
@@ -2954,9 +2999,20 @@ export function AgentConversationSurface({ sessionId, variant = 'main' }: AgentC
         {/* 输入区域 — 交互横幅显示时隐藏，由横幅替代 */}
         {!hasBannerOverlay && (
         <div ref={composerRef} className={cn('mx-auto w-full max-w-[760px] px-2.5 pb-2.5 md:px-[18px] md:pb-[18px]', isNewConversation && 'copis-agent-new-session-input')} data-input-mode="agent">
+          {/* 优先展示 Next Steps 建议；无 Next Steps 时（包括新会话或会话中未产生建议）展示快捷入口 */}
+          {nextSteps.length > 0 && !streaming ? (
+            <NextStepsChips
+              items={nextSteps}
+              onSelect={handleExecuteNextStep}
+              onDismiss={handleDismissNextSteps}
+            />
+          ) : !streaming ? (
+            <NewSessionFeatureChips onSelect={handleSelectFeature} />
+          ) : null}
+
           <div
             className={cn(
-              'rounded-[17px] border-[0.5px] border-border bg-background/70 backdrop-blur-sm transition-all duration-200',
+              'copis-agent-composer-card rounded-[17px] border-[0.5px] border-border bg-background/70 backdrop-blur-sm transition-all duration-200',
               (isPlanMode || isPermissionPlanMode) && !isDragOver && 'plan-mode-input',
               isDragOver && 'border-[2px] border-dashed border-[#2ecc71] bg-[#2ecc71]/[0.03]'
             )}
@@ -3014,32 +3070,6 @@ export function AgentConversationSurface({ sessionId, variant = 'main' }: AgentC
               onRemove={handleRemoveQueuedMessage}
               onMove={handleMoveQueuedMessage}
             />
-
-            {/* Agent 建议提示 */}
-            {suggestion && !streaming && (
-              <div className="px-3 pt-2.5 pb-1.5">
-                <button
-                  type="button"
-                  className="group flex items-start gap-2 w-full rounded-lg border border-dashed border-primary/30 bg-primary/[0.03] px-3 py-2.5 text-left text-sm transition-colors hover:border-primary/50 hover:bg-primary/[0.06]"
-                  onClick={() => handleSend(suggestion)}
-                >
-                  <Sparkles className="size-4 shrink-0 mt-0.5 text-primary/60 group-hover:text-primary/80" />
-                  <span className="flex-1 min-w-0 text-foreground/80 group-hover:text-foreground line-clamp-3">{suggestion}</span>
-                  <X
-                    className="size-3.5 shrink-0 mt-0.5 text-muted-foreground/40 hover:text-foreground transition-colors"
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      setPromptSuggestions((prev) => {
-                        if (!prev.has(sessionId)) return prev
-                        const map = new Map(prev)
-                        map.delete(sessionId)
-                        return map
-                      })
-                    }}
-                  />
-                </button>
-              </div>
-            )}
 
             <RichTextInput
               ref={richTextInputRef}

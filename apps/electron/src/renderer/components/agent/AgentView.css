@@ -83,7 +83,7 @@
 }
 
 /* Composer：保持半透明背景，让底层内容透过毛玻璃材质可见。 */
-.copis-agent-session [data-input-mode="agent"] > div:first-child:not(.border-dashed) {
+.copis-agent-session [data-input-mode="agent"] .copis-agent-composer-card:not(.border-dashed) {
   background: hsl(var(--background) / 0.42) !important;
   background-clip: padding-box;
   box-shadow: 0 16px 48px hsl(0 0% 0% / 0.14);
@@ -92,7 +92,7 @@
 }
 
 /* 深色现代主题使用更饱和的炭灰材质，避免输入区在暗背景中发白。 */
-:root.ui-modern.dark:not(.theme-terminal-dark) .copis-agent-session [data-input-mode="agent"] > div:first-child:not(.border-dashed) {
+:root.ui-modern.dark:not(.theme-terminal-dark) .copis-agent-session [data-input-mode="agent"] .copis-agent-composer-card:not(.border-dashed) {
   border-color: rgba(255, 255, 255, 0.07);
   border-radius: 8px;
   background: rgba(47, 47, 47, 0.46) !important;
@@ -102,16 +102,25 @@
   -webkit-backdrop-filter: blur(18px) saturate(1.18);
 }
 
-.copis-agent-session [data-input-mode="agent"] > div:first-child.border-dashed {
+.copis-agent-session [data-input-mode="agent"] .copis-agent-composer-card.border-dashed {
   background-color: rgba(46, 204, 113, 0.03) !important;
 }
 
-.copis-agent-session [data-input-mode="agent"] > div:first-child.plan-mode-input {
+.copis-agent-session [data-input-mode="agent"] .copis-agent-composer-card.plan-mode-input {
   background-color: var(--ui-primary-background) !important;
 }
 
-:root.ui-modern.dark:not(.theme-terminal-dark) .copis-agent-session [data-input-mode="agent"] > div:first-child.plan-mode-input {
+:root.ui-modern.dark:not(.theme-terminal-dark) .copis-agent-session [data-input-mode="agent"] .copis-agent-composer-card.plan-mode-input {
   background-color: var(--ui-primary-background) !important;
+}
+
+.copis-agent-starter-chips,
+.copis-agent-next-steps-chips {
+  background: transparent !important;
+  box-shadow: none !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  border: none !important;
 }
 
 @media (max-width: 720px) {

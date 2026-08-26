@@ -18,7 +18,32 @@ import { randomUUID } from 'node:crypto'
 import { homedir } from 'node:os'
 import { join, isAbsolute, relative, resolve } from 'node:path'
 import { existsSync, mkdirSync } from 'node:fs'
-import { COPIS_WORKING_CHANNEL_ID, COPIS_WORKING_MODEL_SOURCE_TYPE_HEADER, COPIS_WORKING_MODEL_SOURCE_TYPE_COPIS_AGENT, createCopisWorkingChannelForId, isCopisWorkingChannelId, normalizeWorkingMode, type AgentRuntime, type AgentSendInput, type AgentMessage, type AgentGenerateTitleInput, type AgentProviderAdapter, type AgentSessionMeta, type AgentWorkspace, type CodexOAuthCredentials, type XaiOAuthCredentials, type TypedError, type RetryAttempt, type SDKMessage, type SDKAssistantMessage, type AgentStreamPayload, type RewindSessionResult, type ProviderType, workingModeToModelId } from '@copis/shared'
+import {
+  COPIS_WORKING_CHANNEL_ID,
+  COPIS_WORKING_GLOBAL_MODEL_ID,
+  COPIS_WORKING_MODEL_SOURCE_TYPE_HEADER,
+  COPIS_WORKING_MODEL_SOURCE_TYPE_COPIS_AGENT,
+  createCopisWorkingChannelForId,
+  isCopisWorkingChannelId,
+  normalizeWorkingMode,
+  type AgentRuntime,
+  type AgentSendInput,
+  type AgentMessage,
+  type AgentGenerateTitleInput,
+  type AgentProviderAdapter,
+  type AgentSessionMeta,
+  type AgentWorkspace,
+  type CodexOAuthCredentials,
+  type XaiOAuthCredentials,
+  type TypedError,
+  type RetryAttempt,
+  type SDKMessage,
+  type SDKAssistantMessage,
+  type AgentStreamPayload,
+  type RewindSessionResult,
+  type ProviderType,
+  workingModeToModelId,
+} from '@copis/shared'
 import {
   COPIS_DEFAULT_PERMISSION_MODE,
   THINKING_SIGNATURE_ERROR_CODE,
@@ -1029,7 +1054,9 @@ export class AgentOrchestrator {
     const agentRuntime: AgentRuntime = 'pi'
     const workingModelId = workingClient
       ? channelId === COPIS_WORKING_CHANNEL_ID
-        ? workingModeToModelId(workingMode ?? 'fast')
+        ? modelId === COPIS_WORKING_GLOBAL_MODEL_ID
+          ? COPIS_WORKING_GLOBAL_MODEL_ID
+          : workingModeToModelId(workingMode ?? 'fast')
         : modelId ?? channel.models[0]?.id
       : undefined
     const needsWorkingSessionMigration = Boolean(

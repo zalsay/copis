@@ -10,6 +10,7 @@ import { useSetAtom } from 'jotai'
 import { Search, Loader2 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { FileTypeIcon } from './FileTypeIcon'
+import { getWorkspaceFolderDisplayName } from './workspace-folder-mapping'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { fileBrowserAutoRevealAtom } from '@/atoms/agent-atoms'
 import type { FileIndexEntry } from '@copis/shared'
@@ -316,6 +317,23 @@ function ResultItem({
     return entry.path
   }, [entry.path, entry.name])
 
+  const displayName = React.useMemo(() => {
+    if (entry.type === 'dir' && entry.source === 'workspace' && (entry.path === 'browser' || entry.path === 'project')) {
+      return getWorkspaceFolderDisplayName(entry.name)
+    }
+    return entry.name
+  }, [entry.name, entry.path, entry.source, entry.type])
+
+  const displayDirPath = React.useMemo(() => {
+    if (!dirPath) return ''
+    if (entry.source === 'workspace') {
+      return dirPath
+        .replace(/^browser(\/|\\|$)/, '浏览器数据$1')
+        .replace(/^project(\/|\\|$)/, '项目开发$1')
+    }
+    return dirPath
+  }, [dirPath, entry.source])
+
   return (
     <Tooltip delayDuration={500}>
       <TooltipTrigger asChild>
@@ -329,17 +347,20 @@ function ResultItem({
           onMouseEnter={onHover}
         >
           <FileTypeIcon name={entry.name} isDirectory={entry.type === 'dir'} size={12} />
-          <span className="text-[11px] font-medium truncate max-w-[90px]">
-            {entry.name}
+          <span
+            className="text-[11px] font-medium truncate max-w-[90px]"
+            title={displayName !== entry.name ? `${displayName} (${entry.name})` : entry.name}
+          >
+            {displayName}
           </span>
           {showSessionBadge && entry.source === 'session' && (
             <span className="flex-shrink-0 rounded-md bg-muted px-1.5 py-0.5 text-[10px] leading-none text-muted-foreground">会话文件</span>
           )}
-          {dirPath && (
+          {displayDirPath && (
             <span
               className="text-[10px] text-muted-foreground/55 truncate flex-1 min-w-0"
             >
-              {dirPath}
+              {displayDirPath}
             </span>
           )}
         </button>

@@ -3,8 +3,10 @@ import {
   COPIS_WORKING_CHANNEL_ID,
   COPIS_WORKING_DEEPSEEK_CHANNEL_ID,
   COPIS_WORKING_DEEPSEEK_FAST_MODEL_ID,
+  COPIS_WORKING_DEEPSEEK_PRO_MODEL_ID,
   COPIS_WORKING_FAST_MODEL_ID,
   COPIS_WORKING_EXPERT_MODEL_ID,
+  COPIS_WORKING_GLOBAL_MODEL_ID,
   createCopisWorkingChannelForId,
   createCopisWorkingDeepSeekChannel,
   createCopisWorkingChannel,
@@ -39,24 +41,38 @@ describe('Working 模式契约', () => {
     expect(channel.models.map((model) => model.id)).toEqual([
       COPIS_WORKING_FAST_MODEL_ID,
       COPIS_WORKING_EXPERT_MODEL_ID,
+      COPIS_WORKING_GLOBAL_MODEL_ID,
+    ])
+    expect(channel.models.map((model) => model.name)).toEqual([
+      '快速',
+      '专家',
+      '通识',
     ])
     expect(workingModeToModelId('fast')).toBe(COPIS_WORKING_FAST_MODEL_ID)
     expect(workingModeToModelId('expert')).toBe(COPIS_WORKING_EXPERT_MODEL_ID)
   })
 
-  test('Given DeepSeek 虚拟渠道 When 构造模型列表 Then 暴露 v4 Flash 快速模型并复用 Working endpoint', () => {
+  test('Given DeepSeek 虚拟渠道 When 构造模型列表 Then 暴露 v4 Flash 快速与 v4 Pro 专业模型并复用 Working endpoint', () => {
     const channel = createCopisWorkingDeepSeekChannel('http://127.0.0.1:9000/module/edu-api/')
 
     expect(channel.id).toBe(COPIS_WORKING_DEEPSEEK_CHANNEL_ID)
     expect(channel.name).toBe('DeepSeek')
     expect(channel.provider).toBe('openai-responses')
     expect(channel.baseUrl).toBe('http://127.0.0.1:9000/module/edu-api/api/internal/working-model/v1')
-    expect(channel.models).toEqual([{
-      id: COPIS_WORKING_DEEPSEEK_FAST_MODEL_ID,
-      name: '快速',
-      enabled: true,
-      source: 'manual',
-    }])
+    expect(channel.models).toEqual([
+      {
+        id: COPIS_WORKING_DEEPSEEK_FAST_MODEL_ID,
+        name: '快速',
+        enabled: true,
+        source: 'manual',
+      },
+      {
+        id: COPIS_WORKING_DEEPSEEK_PRO_MODEL_ID,
+        name: '专业',
+        enabled: true,
+        source: 'manual',
+      },
+    ])
   })
 
   test('Given Copis 内置渠道 ID When 构造渠道 Then 只接受两个受支持的虚拟渠道', () => {

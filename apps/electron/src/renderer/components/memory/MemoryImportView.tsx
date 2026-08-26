@@ -11,8 +11,12 @@ import {
   Upload,
   X,
 } from 'lucide-react'
-import { useAtom, useSetAtom } from 'jotai'
-import type { AgentWorkspace, MemoryImportInput, MemoryImportItemInput, MemoryKind } from '@copis/shared'
+import { useAtom, useAtomValue, useSetAtom } from 'jotai'
+import {
+  COPIS_WORKING_DEEPSEEK_CHANNEL_ID,
+  COPIS_WORKING_DEEPSEEK_FAST_MODEL_ID,
+} from '@copis/shared'
+import type { AgentWorkspace, MemoryImportInput, MemoryImportItemInput, MemoryKind, ModelOption } from '@copis/shared'
 import {
   memoryImportErrorAtom,
   memoryImportItemsAtom,
@@ -22,6 +26,9 @@ import {
   memoryPageAtom,
   memoryRefreshTokenAtom,
 } from '@/atoms/memory-atoms'
+import { selectedModelAtom, channelsAtom } from '@/atoms/model-atoms'
+import { agentChannelIdAtom, agentModelIdAtom } from '@/atoms/agent-atoms'
+import { ModelSelector } from '@/components/model/ModelSelector'
 import { memoryApi } from '@/lib/memory-api'
 import { parseMemoryImportFile, parseMarkdownImport } from '@/lib/memory-import-parser'
 import { AppSelect } from '@/components/ui/select'
@@ -71,6 +78,62 @@ export function MemoryImportView({ workspaceSlug, workspaces }: MemoryImportView
   const [result, setResult] = useAtom(memoryImportResultAtom)
   const setPage = useSetAtom(memoryPageAtom)
   const setRefreshToken = useSetAtom(memoryRefreshTokenAtom)
+
+  const globalModel = useAtomValue(selectedModelAtom)
+  const agentChannelId = useAtomValue(agentChannelIdAtom)
+  const agentModelId = useAtomValue(agentModelIdAtom)
+  const channels = useAtomValue(channelsAtom)
+
+  const [selectedExtractionModel, setSelectedExtractionModel] = React.useState<{ channelId: string; modelId: string } | null>(() => {
+    if (globalModel?.channelId && globalModel?.modelId) {
+      return globalModel
+    }
+    if (agentChannelId && agentModelId) {
+      return { channelId: agentChannelId, modelId: agentModelId }
+    }
+    const firstEnabledChannel = channels.find((c) => c.enabled)
+    if (firstEnabledChannel) {
+      const firstEnabledModel = firstEnabledChannel.models.find((m) => m.enabled) || firstEnabledChannel.models[0]
+      if (firstEnabledModel) {
+        return { channelId: firstEnabledChannel.id, modelId: firstEnabledModel.id }
+      }
+    }
+    return {
+      channelId: COPIS_WORKING_DEEPSEEK_CHANNEL_ID,
+      modelId: COPIS_WORKING_DEEPSEEK_FAST_MODEL_ID,
+    }
+  })
+
+  React.useEffect(() => {
+    if (selectedExtractionModel) return
+    if (globalModel?.channelId && globalModel?.modelId) {
+      setSelectedExtractionModel(globalModel)
+      return
+    }
+    if (agentChannelId && agentModelId) {
+      setSelectedExtractionModel({ channelId: agentChannelId, modelId: agentModelId })
+      return
+    }
+    const firstEnabledChannel = channels.find((c) => c.enabled)
+    if (firstEnabledChannel) {
+      const firstEnabledModel = firstEnabledChannel.models.find((m) => m.enabled) || firstEnabledChannel.models[0]
+      if (firstEnabledModel) {
+        setSelectedExtractionModel({ channelId: firstEnabledChannel.id, modelId: firstEnabledModel.id })
+        return
+      }
+    }
+    setSelectedExtractionModel({
+      channelId: COPIS_WORKING_DEEPSEEK_CHANNEL_ID,
+      modelId: COPIS_WORKING_DEEPSEEK_FAST_MODEL_ID,
+    })
+  }, [selectedExtractionModel, globalModel, agentChannelId, agentModelId, channels])
+
+  const handleModelSelect = (option: ModelOption): void => {
+    setSelectedExtractionModel({
+      channelId: option.channelId,
+      modelId: option.modelId,
+    })
+  }
 
   const [activeTab, setActiveTab] = React.useState<ImportTabMode>('doc_ai')
   const [defaultKind, setDefaultKind] = React.useState<MemoryKind>('fact')
@@ -177,6 +240,8 @@ export function MemoryImportView({ workspaceSlug, workspaces }: MemoryImportView
         const extractRes = await window.electronAPI.extractKnowledgeFromText({
           text: extractedText,
           defaultKind,
+          channelId: selectedExtractionModel?.channelId,
+          modelId: selectedExtractionModel?.modelId,
         })
         setItems(extractRes.items)
         if (extractRes.items.length === 0) {
@@ -224,6 +289,8 @@ export function MemoryImportView({ workspaceSlug, workspaces }: MemoryImportView
       const extractRes = await window.electronAPI.extractKnowledgeFromText({
         text: `# ${fetchRes.title}\nURL: ${fetchRes.url}\n\n${fetchRes.content}`,
         defaultKind,
+        channelId: selectedExtractionModel?.channelId,
+        modelId: selectedExtractionModel?.modelId,
       })
 
       setItems(extractRes.items)
@@ -343,8 +410,8 @@ export function MemoryImportView({ workspaceSlug, workspaces }: MemoryImportView
 
         {/* 导入设置卡片 */}
         <div className="rounded-xl border border-border/50 bg-card/60 p-5 shadow-xs">
-          <h2 className="text-sm font-medium text-foreground">目标范围与默认分类</h2>
-          <div className="mt-4 grid gap-4 sm:grid-cols-2">
+          <h2 className="text-sm font-medium text-foreground">目标范围与提炼配置</h2>
+          <div className="mt-4 grid gap-4 sm:grid-cols-3">
             <div>
               <label className="text-xs font-medium text-foreground/70">导入目标范围</label>
               <AppSelect
@@ -380,6 +447,16 @@ export function MemoryImportView({ workspaceSlug, workspaces }: MemoryImportView
                   { value: 'project', label: '项目 (project)' },
                   { value: 'scratch', label: '草稿 (scratch)' },
                 ]}
+              />
+            </div>
+
+            <div>
+              <label className="text-xs font-medium text-foreground/70">AI 知识提炼模型</label>
+              <ModelSelector
+                externalSelectedModel={selectedExtractionModel}
+                showChannelInTrigger
+                onModelSelect={handleModelSelect}
+                triggerClassName="mt-1.5 h-9 w-full justify-between border border-input bg-background px-3 py-1.5 text-xs text-foreground/90 shadow-2xs hover:bg-muted/50"
               />
             </div>
           </div>

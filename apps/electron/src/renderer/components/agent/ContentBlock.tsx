@@ -28,6 +28,7 @@ import { PreviewOpenButton } from './tool-result-renderers/preview-open-button'
 import { getTaskGetStatusLabel, parseTaskGetResult, type ParsedTaskGetResult } from './tool-result-renderers/task-get-result'
 import { parseTaskListResult, type ParsedTaskListItem } from './tool-result-renderers/task-list-result'
 import { formatDuration } from './AgentMessages'
+import { stripNextStepsBlock } from './next-steps-parser'
 import type {
   SDKContentBlock,
   SDKMessage,
@@ -657,8 +658,10 @@ export function ContentBlock({ block, allMessages, basePath, basePaths, animate 
   if (block.type === 'text') {
     const textBlock = block as SDKTextBlock
     if (!textBlock.text) return null
+    const cleanedText = stripNextStepsBlock(textBlock.text)
+    if (!cleanedText) return null
     return (
-      <MessageResponse basePath={basePath} basePaths={basePaths}>{textBlock.text}</MessageResponse>
+      <MessageResponse basePath={basePath} basePaths={basePaths}>{cleanedText}</MessageResponse>
     )
   }
 

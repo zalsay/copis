@@ -47,6 +47,7 @@ import {
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
 import { workspaceFilesVersionAtom, fileBrowserAutoRevealAtom, recentlyModifiedPathsAtom, currentAgentSessionIdAtom } from '@/atoms/agent-atoms'
+import { getFileEntryDisplayName } from './workspace-folder-mapping'
 import type { FileAccessOptions, FileEntry } from '@copis/shared'
 import { FileTypeIcon } from './FileTypeIcon'
 import { DefaultAppMenuItem } from './DefaultAppMenuItem'
@@ -546,6 +547,10 @@ function FileTreeItem({
   const [childrenLoaded, setChildrenLoaded] = React.useState(false)
   const rowRef = React.useRef<HTMLDivElement>(null)
   const supportsTerminalFolderOpen = typeof navigator !== 'undefined' && navigator.userAgent.includes('Mac')
+  const displayName = React.useMemo(
+    () => getFileEntryDisplayName(entry, depth),
+    [depth, entry],
+  )
 
   // 当 refreshVersion 变化时，已展开的文件夹自动重新加载子项
   React.useEffect(() => {
@@ -835,7 +840,12 @@ function FileTreeItem({
           </div>
         ) : (
           <>
-            <span className="relative z-10 truncate text-xs flex-1">{entry.name}</span>
+            <span
+              className="relative z-10 truncate text-xs flex-1"
+              title={displayName !== entry.name ? `${displayName} (${entry.name})` : entry.name}
+            >
+              {displayName}
+            </span>
             {showSessionBadge && entry.scope === 'session' && (
               <span className="relative z-10 flex-shrink-0 rounded-md bg-muted px-1.5 py-0.5 text-[10px] leading-none text-muted-foreground">
                 会话文件

@@ -3,6 +3,7 @@ import { join, resolve } from 'node:path'
 import {
   COPIS_DEFAULT_PERMISSION_MODE,
   COPIS_WORKING_CHANNEL_ID,
+  COPIS_WORKING_GLOBAL_MODEL_ID,
   COPIS_WORKING_MODEL_SOURCE_TYPE_HEADER,
   COPIS_WORKING_MODEL_SOURCE_TYPE_COPIS_AGENT,
   createCopisWorkingChannelForId,
@@ -527,7 +528,9 @@ export async function prepareAgentRpcRun(input: AgentSendInput): Promise<PiWorke
     ? customModelRuntime.model.modelId
     : workingClient
     ? channelId === COPIS_WORKING_CHANNEL_ID
-      ? workingModeToModelId(workingMode ?? 'fast')
+      ? (input.modelId ?? session.modelId) === COPIS_WORKING_GLOBAL_MODEL_ID
+        ? COPIS_WORKING_GLOBAL_MODEL_ID
+        : workingModeToModelId(workingMode ?? 'fast')
       : input.modelId ?? channel.models[0]?.id ?? DEFAULT_PI_MODEL_ID
     : input.modelId ?? session.modelId ?? DEFAULT_PI_MODEL_ID
   const credentials = customModelRuntime

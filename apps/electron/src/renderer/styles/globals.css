@@ -1090,7 +1090,8 @@
   z-index: 1;
 }
 
-[data-input-mode] > div:first-child {
+[data-input-mode] > .copis-agent-composer-card,
+[data-input-mode] > div:first-child:not(.copis-agent-starter-chips):not(.copis-agent-next-steps-chips) {
   background-color: hsl(var(--input-surface)) !important;
 }
 
@@ -1145,7 +1146,8 @@
   border-color: hsl(var(--border) / 0.5) !important;
 }
 
-.ui-classic [data-input-mode] > div:first-child {
+.ui-classic [data-input-mode] > .copis-agent-composer-card,
+.ui-classic [data-input-mode] > div:first-child:not(.copis-agent-starter-chips):not(.copis-agent-next-steps-chips) {
   background-color: hsl(var(--background) / 0.7) !important;
 }
 
@@ -2256,7 +2258,8 @@
 /* ===== CRT 终端：UI 组件终端化 ===== */
 
 /* 输入框容器：去掉圆角、毛玻璃和半透明背景，改用直角实色背景 + 实线边框 */
-.theme-terminal-dark [data-input-mode] > div:first-child {
+.theme-terminal-dark [data-input-mode] > .copis-agent-composer-card,
+.theme-terminal-dark [data-input-mode] > div:first-child:not(.copis-agent-starter-chips):not(.copis-agent-next-steps-chips) {
   border-radius: 0 !important;
   border: 1px solid hsl(var(--border)) !important;
   border-top-width: 1px !important;

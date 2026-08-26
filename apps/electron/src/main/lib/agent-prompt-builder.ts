@@ -8,7 +8,19 @@
  * - 动态 per-message 上下文（buildDynamicContext）：注入到用户消息前，每次实时读取磁盘
  */
 
-import { COPIS_WORKING_DEEPSEEK_FAST_MODEL_ID, normalizeWorkingMode, type AgentExpertTeamSession, type AgentRuntime, type AgentWorkspace, type CopisPermissionMode, type ExpertTeamPromptContext, type MemoryPolicy, type WorkingMode } from '@copis/shared'
+import {
+  COPIS_WORKING_DEEPSEEK_FAST_MODEL_ID,
+  COPIS_WORKING_DEEPSEEK_PRO_MODEL_ID,
+  COPIS_WORKING_GLOBAL_MODEL_ID,
+  normalizeWorkingMode,
+  type AgentExpertTeamSession,
+  type AgentRuntime,
+  type AgentWorkspace,
+  type CopisPermissionMode,
+  type ExpertTeamPromptContext,
+  type MemoryPolicy,
+  type WorkingMode,
+} from '@copis/shared'
 import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { getUserProfile } from './user-profile-service'
@@ -196,6 +208,22 @@ export function buildSystemPrompt(ctx: SystemPromptContext): string {
 
 - 优先直接处理用户目标，减少不必要的探索和往返。
 - 不要把图片识别作为本模型可完成的能力；需要处理图片时应明确告知用户限制。`)
+  } else if (ctx.currentModelId === COPIS_WORKING_DEEPSEEK_PRO_MODEL_ID) {
+    sections.push(`## DeepSeek 专业模型
+
+当前使用 DeepSeek v4 Pro 专业模型（DeepSeek 最强模型），具备深度思考与强大的推理能力，但不支持图片识别。本次运行在本地执行工具和文件操作，模型请求直接发送到 edu-api 的 Working Responses 接口，不上传本地工作区文件。
+
+- 先拆解任务和关键约束，再执行必要的工具操作。
+- 对重要结论、文件修改和外部影响做实际验证；遇到不确定点时优先检查事实。
+- 不要把图片识别作为本模型可完成的能力；需要处理图片时应明确告知用户限制。`)
+  } else if (ctx.currentModelId === COPIS_WORKING_GLOBAL_MODEL_ID) {
+    sections.push(`## Copis 通识模型
+
+当前使用 Copis 通识模型（对应 edu-api 的 \`global\` alias），通晓世界知识，适合教育、探索等通用场景。本次运行在本地执行工具和文件操作，模型请求直接发送到 edu-api 的 Working Responses 接口，不上传本地工作区文件。
+
+- 结合宽广的通识与教育知识背景，深入浅出地理解并解答用户问题。
+- 在涉及跨领域探索、概念讲解和综合分析时，提供清晰结构化的阐述。
+- 保留完成任务所需的必要检查与事实核验。`)
   } else if (workingMode !== undefined) {
     sections.push(workingMode === 'expert'
       ? `## Working 专家模式
@@ -467,6 +495,48 @@ ${identityRule}
    如果只是纯提醒/闹钟、需要用户实时参与判断、或现在就该做完即终结的事，明确告诉用户不建议创建定时任务。
    创建后，用户可以在侧边栏的自动任务按钮进入定时任务管理页面查看和编辑。`)
 
+  // 下一步建议（由模型智能判断在适当时机输出标准 JSON 建议块）
+  sections.push(`## 下一步建议 (Next Steps Recommendations)
+
+在每轮回复结束时，根据当前会话的进展状态与上下文自主判断：如果当前任务已阶段性完成、沉淀了有效经验，或具备长期/自动化价值，可在回复的最末尾附带一个标准的 JSON 代码块（语言标识为 \`\`\`json:next-steps\`\`\`），为用户提供 1~3 项切实可行的下一步行动建议。
+
+### 输出格式规范
+
+必须严格遵循以下 JSON 结构：
+
+\`\`\`json:next-steps
+{
+  "next_steps": [
+    {
+      "type": "summarize-workflow | session-summary | automation",
+      "title": "简明建议标题",
+      "description": "简要说明为什么建议此步骤或该步骤的预期收益",
+      "action": "推荐用户执行的操作或触发指令"
+    }
+  ]
+}
+\`\`\`
+
+### 可选建议类型与触发判断标准
+
+1. **总结工作流 (\`summarize-workflow\`)**：
+   - **适用场景**：本次会话刚刚完成了一项复杂的技术实施、环境搭建、新功能开发、疑难 Bug 排查修复或第三方系统对接，并且形成了完整有效的操作步骤与技术经验。
+   - **建议目的**：引导用户将本次实施过程、关键架构决策与踩坑教训沉淀为可复用的标准作业程序（SOP，使用 \`summarize-workflow\` 技能）。
+   - **示例**：\`{ "type": "summarize-workflow", "title": "总结工作流", "description": "本次功能集成已调试通过，建议提炼标准 SOP 与避坑要点以便后续复用", "action": "总结这次任务的工作流与实施要点" }\`
+
+2. **会话总结 (\`session-summary\`)**：
+   - **适用场景**：当前会话探讨了多个技术点、跨越了较多轮次、或者主要讨论与规划已完成，准备进行阶段性收尾。
+   - **建议目的**：引导用户对本次长对话的要点、关键结论与后续待办进行结构化归纳。
+   - **示例**：\`{ "type": "session-summary", "title": "会话总结", "description": "当前讨论已达成共识，建议对核心结论与行动清单进行结构化归纳", "action": "总结本次会话的核心要点与待办" }\`
+
+3. **自动化办公 (\`automation\`)**：
+   - **适用场景**：本次任务具有明显的周期性（如每日检查、每周报表、定期拉取）、未来需要延时/定时无人值守执行（如“3 小时后检查”、“每周一汇总”），或具有例行监控与维护价值。
+   - **建议目的**：引导用户使用 Copis 内置的 \`automation\` Skill 创建定时任务。
+   - **示例**：\`{ "type": "automation", "title": "自动化办公", "description": "该检查流程具备例行执行价值，建议创建 Copis 定时任务实现无人值守自动运行", "action": "将该流程创建为 Copis 定时任务" }\`
+
+### 约束规则
+- **非强制输出**：仅当模型判断当前会话上下文确实适合给出上述建议时才输出；简单单轮问答、任务执行中途、或无需进一步行动时，**不要输出** \`json:next-steps\` 代码块。
+- **JSON 语法规范**：输出的 JSON 必须符合标准 JSON 语法，字段齐全。`)
 
   return sections.join('\n\n')
 }

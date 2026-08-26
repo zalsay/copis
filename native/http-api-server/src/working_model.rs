@@ -1,7 +1,7 @@
 use crate::skill_market::SkillMarketState;
 use serde_json::Value;
 
-const WORKING_MODEL_ALIASES: [&str; 3] = ["fast", "export", "deepseek-v4-flash"];
+const WORKING_MODEL_ALIASES: [&str; 5] = ["fast", "export", "global", "deepseek-v4-flash", "deepseek-v4-pro"];
 
 pub fn working_model_latencies(state: &SkillMarketState) -> Result<Value, String> {
     let mut payload = state

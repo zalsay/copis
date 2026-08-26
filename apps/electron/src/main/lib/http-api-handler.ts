@@ -36,8 +36,10 @@ import {
   COPIS_WORKING_CHANNEL_ID,
   COPIS_WORKING_DEEPSEEK_CHANNEL_ID,
   COPIS_WORKING_DEEPSEEK_FAST_MODEL_ID,
+  COPIS_WORKING_DEEPSEEK_PRO_MODEL_ID,
   COPIS_WORKING_EXPERT_MODEL_ID,
   COPIS_WORKING_FAST_MODEL_ID,
+  COPIS_WORKING_GLOBAL_MODEL_ID,
   isWorkingCustomModelChannelId,
   WORKING_IPC_CHANNELS,
 } from '@copis/shared'
@@ -419,14 +421,18 @@ function resolveWorkingAgentModelId(
 ): string | undefined {
   if (isWorkingCustomModelChannelId(channelId)) return requestedModelId ?? fallbackModelId
   if (channelId === COPIS_WORKING_DEEPSEEK_CHANNEL_ID) {
-    return requestedModelId === COPIS_WORKING_DEEPSEEK_FAST_MODEL_ID
-      ? requestedModelId
+    return requestedModelId === COPIS_WORKING_DEEPSEEK_PRO_MODEL_ID
+      ? COPIS_WORKING_DEEPSEEK_PRO_MODEL_ID
       : COPIS_WORKING_DEEPSEEK_FAST_MODEL_ID
   }
   if (channelId === COPIS_WORKING_CHANNEL_ID) {
-    return requestedModelId === COPIS_WORKING_EXPERT_MODEL_ID
-      ? COPIS_WORKING_EXPERT_MODEL_ID
-      : COPIS_WORKING_FAST_MODEL_ID
+    if (requestedModelId === COPIS_WORKING_EXPERT_MODEL_ID) {
+      return COPIS_WORKING_EXPERT_MODEL_ID
+    }
+    if (requestedModelId === COPIS_WORKING_GLOBAL_MODEL_ID) {
+      return COPIS_WORKING_GLOBAL_MODEL_ID
+    }
+    return COPIS_WORKING_FAST_MODEL_ID
   }
   return requestedModelId ?? fallbackModelId
 }

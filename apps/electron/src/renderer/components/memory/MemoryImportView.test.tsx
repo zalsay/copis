@@ -3,6 +3,7 @@ import * as React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import type { AgentWorkspace } from '@copis/shared'
 import { Provider } from 'jotai'
+import { TooltipProvider } from '@/components/ui/tooltip'
 import { buildMemoryImportInput, MemoryImportView } from './MemoryImportView'
 
 const workspace: AgentWorkspace = {
@@ -17,7 +18,9 @@ describe('Memory 导入页面 BDD', () => {
   test('Given 当前项目 When 打开导入页面 Then 渲染目标范围选择、分类和上传区', () => {
     const html = renderToStaticMarkup(
       <Provider>
-        <MemoryImportView workspaceSlug="project-a" workspaces={[workspace]} />
+        <TooltipProvider>
+          <MemoryImportView workspaceSlug="project-a" workspaces={[workspace]} />
+        </TooltipProvider>
       </Provider>,
     )
 
@@ -27,6 +30,7 @@ describe('Memory 导入页面 BDD', () => {
     expect(html).toContain('结构化文件导入 (JSON/Markdown)')
     expect(html).toContain('当前项目（Copis）')
     expect(html).toContain('事实 (fact)')
+    expect(html).toContain('AI 知识提炼模型')
     expect(html).toContain('点击或拖拽文档到此处（PDF / Word / Office / TXT）')
   })
 

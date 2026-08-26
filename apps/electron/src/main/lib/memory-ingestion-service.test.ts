@@ -39,4 +39,11 @@ describe('Memory Ingestion Service / cleanHtmlContent 测试', () => {
     expect(content).toContain('Copis 是一款集成通用 AI Agent 的桌面应用。& 强大。')
     expect(content).toContain('支持本地 SQLite 长期记忆')
   })
+
+  test('Given 空文本 When extractKnowledgeFromText Then 直接返回空结果且不发起 LLM 调用', async () => {
+    const { MemoryIngestionService } = await import('./memory-ingestion-service')
+    const service = new MemoryIngestionService()
+    const result = await service.extractKnowledgeFromText({ text: '   ' })
+    expect(result).toEqual({ items: [], rawOutput: '' })
+  })
 })

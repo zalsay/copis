@@ -3693,5 +3693,9 @@ mod app_update_test;
 mod working_model_proxy_tests;
 
 #[cfg(test)]
+#[path = "working_model_test.rs"]
+mod working_model_test;
+
+#[cfg(test)]
 #[path = "automation_scheduler_test.rs"]
 mod automation_scheduler_test;

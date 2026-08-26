@@ -184,7 +184,9 @@ export const COPIS_WORKING_DEEPSEEK_CHANNEL_ID = 'copis-working-deepseek'
 export const COPIS_WORKING_MODEL_ENDPOINT_PATH = '/api/internal/working-model/v1'
 export const COPIS_WORKING_FAST_MODEL_ID = 'fast'
 export const COPIS_WORKING_EXPERT_MODEL_ID = 'export'
+export const COPIS_WORKING_GLOBAL_MODEL_ID = 'global'
 export const COPIS_WORKING_DEEPSEEK_FAST_MODEL_ID = 'deepseek-v4-flash'
+export const COPIS_WORKING_DEEPSEEK_PRO_MODEL_ID = 'deepseek-v4-pro'
 /** Working 模型计费来源头：官方 Copis 客户端标记请求属于 Copis Agent 模型。 */
 export const COPIS_WORKING_MODEL_SOURCE_TYPE_HEADER = 'X-Working-Model-Source-Type'
 /** Working 模型计费来源值：Copis 内置 Agent 模型统一标记为 copis-agent-model。 */
@@ -192,9 +194,11 @@ export const COPIS_WORKING_MODEL_SOURCE_TYPE_COPIS_AGENT = 'copis-agent-model'
 export const COPIS_WORKING_MODEL_IDS = [
   COPIS_WORKING_FAST_MODEL_ID,
   COPIS_WORKING_EXPERT_MODEL_ID,
+  COPIS_WORKING_GLOBAL_MODEL_ID,
 ] as const
 export const COPIS_WORKING_DEEPSEEK_MODEL_IDS = [
   COPIS_WORKING_DEEPSEEK_FAST_MODEL_ID,
+  COPIS_WORKING_DEEPSEEK_PRO_MODEL_ID,
 ] as const
 export const COPIS_WORKING_CHANNEL_IDS = [
   COPIS_WORKING_CHANNEL_ID,
@@ -236,7 +240,11 @@ export function createCopisWorkingChannel(backendUrl: string, now = 0): Channel 
     apiKey: '',
     models: COPIS_WORKING_MODEL_IDS.map((id) => ({
       id,
-      name: id === COPIS_WORKING_FAST_MODEL_ID ? '快速' : '专家',
+      name: id === COPIS_WORKING_FAST_MODEL_ID
+        ? '快速'
+        : id === COPIS_WORKING_EXPERT_MODEL_ID
+          ? '专家'
+          : '通识',
       enabled: true,
       source: 'manual' as const,
     })),
@@ -257,12 +265,20 @@ export function createCopisWorkingDeepSeekChannel(backendUrl: string, now = 0): 
     provider: 'openai-responses',
     baseUrl: `${baseUrl}${COPIS_WORKING_MODEL_ENDPOINT_PATH}`,
     apiKey: '',
-    models: [{
-      id: COPIS_WORKING_DEEPSEEK_FAST_MODEL_ID,
-      name: '快速',
-      enabled: true,
-      source: 'manual',
-    }],
+    models: [
+      {
+        id: COPIS_WORKING_DEEPSEEK_FAST_MODEL_ID,
+        name: '快速',
+        enabled: true,
+        source: 'manual',
+      },
+      {
+        id: COPIS_WORKING_DEEPSEEK_PRO_MODEL_ID,
+        name: '专业',
+        enabled: true,
+        source: 'manual',
+      },
+    ],
     enabled: true,
     createdAt: now,
     updatedAt: now,

@@ -235,4 +235,31 @@ describe('默认 Skills 清单', () => {
 
     expect(readdirSync(join(DEFAULT_SKILLS_DIR, 'alipay-payment-skill')).sort()).toEqual(['SKILL.md'])
   })
+
+  test('会话总结 Skill 包含标准结构与五要素提炼规范', () => {
+    const bundled = new Set(bundledSkillSlugs())
+    expect(bundled.has('summarize-workflow')).toBe(true)
+
+    const frontmatter = readFrontmatter('summarize-workflow')
+    expect(frontmatter.get('name')).toBe('summarize-workflow')
+    expect(frontmatter.get('displayName')).toBe('会话总结')
+    expect(frontmatter.get('group')).toBe('系统内置')
+    expect(frontmatter.get('version')?.replace(/^['"]|['"]$/g, '')).toBe('1.0.1')
+    expect(frontmatter.get('description')).toContain('会话总结')
+
+    const content = readFileSync(join(DEFAULT_SKILLS_DIR, 'summarize-workflow', 'SKILL.md'), 'utf8')
+    for (const requiredText of [
+      '核心提炼五要素',
+      '目标与适用边界',
+      '标准作业程序',
+      '关键技术决策与实施要点',
+      '踩坑记录与避坑指南',
+      '验证与交付清单',
+      '标准工作流输出模板',
+      '交付与存储策略',
+    ]) {
+      expect(content).toContain(requiredText)
+    }
+  })
 })
+

@@ -12,6 +12,7 @@ import {
   COPIS_WORKING_CHANNEL_ID,
   COPIS_WORKING_DEEPSEEK_CHANNEL_ID,
   COPIS_WORKING_DEEPSEEK_FAST_MODEL_ID,
+  COPIS_WORKING_DEEPSEEK_PRO_MODEL_ID,
   COPIS_WORKING_EXPERT_MODEL_ID,
   createCopisWorkingChannel,
   createCopisWorkingDeepSeekChannel,
@@ -196,7 +197,8 @@ export function WelcomeComposer(): React.ReactElement {
       setWorkingMode(option.modelId === COPIS_WORKING_EXPERT_MODEL_ID ? 'expert' : 'fast')
     }
     if (option.channelId === COPIS_WORKING_DEEPSEEK_CHANNEL_ID
-      && option.modelId !== COPIS_WORKING_DEEPSEEK_FAST_MODEL_ID) return
+      && option.modelId !== COPIS_WORKING_DEEPSEEK_FAST_MODEL_ID
+      && option.modelId !== COPIS_WORKING_DEEPSEEK_PRO_MODEL_ID) return
     setSelectedModel({
       channelId: option.channelId,
       modelId: option.modelId,

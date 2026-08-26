@@ -138,26 +138,72 @@ export class MemoryIngestionService {
     const truncatedText = text.length > MAX_INGESTION_TEXT_CHARS ? `${text.slice(0, MAX_INGESTION_TEXT_CHARS)}\n...(内容过长已截断)` : text
 
     // 获取当前可用渠道与模型
-    const { listChannels, decryptApiKey } = await import('./channel-manager')
-    const channels = listChannels().filter((c) => c.enabled)
-    const activeChannel = channels[0]
-    if (!activeChannel) {
-      throw new Error('未找到已启用的 AI 渠道，请在设置中先配置并启用模型渠道')
+    const {
+      isCopisWorkingChannelId,
+      isWorkingCustomModelChannelId,
+      createCopisWorkingChannelForId,
+      COPIS_WORKING_CHANNEL_ID,
+      COPIS_WORKING_MODEL_SOURCE_TYPE_HEADER,
+      COPIS_WORKING_MODEL_SOURCE_TYPE_COPIS_AGENT,
+    } = await import('@copis/shared')
+    const { listChannels, getChannelById, resolveChannelRuntimeApiKey } = await import('./channel-manager')
+
+    let channelId = input.channelId
+    if (!channelId) {
+      const { getSettings } = await import('./settings-service')
+      channelId = getSettings().agentChannelId || COPIS_WORKING_CHANNEL_ID
     }
 
+    let targetChannel: import('@copis/shared').Channel | undefined
     let apiKey = ''
-    try {
-      apiKey = decryptApiKey(activeChannel.id)
-    } catch {
-      apiKey = ''
+    let internalToken: string | undefined
+    let extraHeaders: Record<string, string> | undefined
+
+    if (isCopisWorkingChannelId(channelId)) {
+      const { getWorkingApiClient } = await import('./working-api-service')
+      const { getHttpApiInternalToken } = await import('./http-api-server')
+      const workingClient = getWorkingApiClient()
+      targetChannel = createCopisWorkingChannelForId(workingClient.baseUrl, channelId)
+      internalToken = getHttpApiInternalToken() ?? undefined
+      apiKey = internalToken ? 'working-internal' : ''
+      extraHeaders = { [COPIS_WORKING_MODEL_SOURCE_TYPE_HEADER]: COPIS_WORKING_MODEL_SOURCE_TYPE_COPIS_AGENT }
+    } else if (isWorkingCustomModelChannelId(channelId)) {
+      const { getWorkingApiClient } = await import('./working-api-service')
+      const { getWorkingCustomModelRuntime, getWorkingModelCatalogOwnerId } = await import('./working-model-catalog')
+      const workingUser = getWorkingApiClient().getCachedUser()
+      const customModelRuntime = getWorkingCustomModelRuntime(
+        channelId,
+        workingUser?.isVip === true,
+        getWorkingModelCatalogOwnerId(workingUser),
+      )
+      targetChannel = customModelRuntime?.channel
+      apiKey = customModelRuntime?.apiKey ?? ''
+    } else {
+      const allChannels = listChannels()
+      const enabledChannels = allChannels.filter((c) => c.enabled)
+      targetChannel = allChannels.find((c) => c.id === channelId) || getChannelById(channelId) || enabledChannels[0] || allChannels[0]
+      if (targetChannel) {
+        try {
+          apiKey = await resolveChannelRuntimeApiKey(targetChannel.id)
+        } catch {
+          apiKey = ''
+        }
+      }
     }
 
-    if (!apiKey) {
-      throw new Error(`渠道「${activeChannel.name}」未配置有效的 API Key`)
+    if (!targetChannel) {
+      throw new Error('未找到已配置的 AI 渠道，请在导入页面选择模型或在设置中配置模型渠道')
     }
 
-    const enabledModel = activeChannel.models.find((m) => m.enabled)
-    const modelId = enabledModel?.id || activeChannel.models[0]?.id || 'gpt-4o'
+    if (!internalToken && !apiKey) {
+      throw new Error(`渠道「${targetChannel.name}」未配置有效的 API Key 或认证凭据`)
+    }
+
+    let modelId = input.modelId
+    if (!modelId || !targetChannel.models.some((m) => m.id === modelId)) {
+      const enabledModel = targetChannel.models.find((m) => m.enabled)
+      modelId = enabledModel?.id || targetChannel.models[0]?.id || 'gpt-4o'
+    }
 
     const prompt = `<copis_knowledge_extraction>
 你是一个专业的知识库架构师。请仔细阅读以下外部原始资料，并按照 Copis 知识库规范提炼出高价值、长期有效、独立的原子知识卡片。
@@ -182,11 +228,13 @@ ${truncatedText}
 
     try {
       const rawOutput = await runMemoryTextTurn({
-        provider: activeChannel.provider,
-        baseUrl: activeChannel.baseUrl,
+        provider: targetChannel.provider,
+        baseUrl: targetChannel.baseUrl,
         apiKey,
         modelId,
         prompt,
+        internalToken,
+        extraHeaders,
       })
 
       const items: MemoryImportItemInput[] = parseMarkdownImport(rawOutput, defaultKind)
