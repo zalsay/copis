@@ -8,6 +8,7 @@ import {
   buildFunctionalModuleBinaryInputs,
   validateExistingModulesForSingleModuleRelease,
   requireExistingAlipayBot,
+  requireExistingAgentlyCli,
   requireExistingOfficeCli,
   requireExistingNodeRuntime,
   requireExistingPythonRuntime,
@@ -121,30 +122,6 @@ describe('功能模块发布脚本 --rust', () => {
     })])
   })
 
-  test('Agent QQ 邮箱 CLI-only 输入使用 Windows 原生二进制入口', () => {
-    const modules = buildFunctionalModuleBinaryInputs({
-      rustOnly: false,
-      agentlyCliOnly: true,
-      rustBinary: '/tmp/rust-api-does-not-exist',
-      rustVersion: '0.2.0',
-      officeCliBinary: '/tmp/officecli-does-not-exist',
-      officeCliVersion: '1.0.143',
-      agentlyCliBinary: '/tmp/agently-cli.exe',
-      agentlyCliVersion: '1.0.17',
-      platform: 'win32',
-      arch: 'x64',
-    })
-
-    expect(modules).toHaveLength(1)
-    expect(modules[0]).toMatchObject({
-      module: 'agently-cli',
-      version: '1.0.17',
-      binaryPath: '/tmp/agently-cli.exe',
-    })
-    expect(modules[0]?.format).toBeUndefined()
-    expect(modules[0]?.entrypoint).toBeUndefined()
-  })
-
   test('支付宝智能体 CLI-only 输入使用 tar.gz 归档并保留稳定入口', () => {
     const modules = buildFunctionalModuleBinaryInputs({
       rustOnly: false,
@@ -166,6 +143,28 @@ describe('功能模块发布脚本 --rust', () => {
       format: 'tar.gz',
       entrypoint: 'bin/alipay-bot',
       binaryPath: '/tmp/alipay-bot.tar.gz',
+    })])
+  })
+
+  test('Agent QQ 邮箱 CLI-only 输入使用 tar.gz 归档并保留稳定入口', () => {
+    const modules = buildFunctionalModuleBinaryInputs({
+      rustOnly: false,
+      agentlyCliOnly: true,
+      rustBinary: '/tmp/rust-api-does-not-exist',
+      rustVersion: '0.2.0',
+      officeCliBinary: '/tmp/officecli-does-not-exist',
+      officeCliVersion: '1.0.143',
+      agentlyCliArchive: '/tmp/agently-cli.tar.gz',
+      agentlyCliVersion: '1.0.17',
+      platform: 'darwin',
+      arch: 'x64',
+    })
+
+    expect(modules).toEqual([expect.objectContaining({
+      module: 'agently-cli',
+      format: 'tar.gz',
+      entrypoint: 'bin/agently-cli',
+      binaryPath: '/tmp/agently-cli.tar.gz',
     })])
   })
 
@@ -237,6 +236,26 @@ describe('功能模块发布脚本 --rust', () => {
 
     requireExistingAlipayBot(manifest, 'darwin', 'arm64')
     expect(() => requireExistingAlipayBot(manifest, 'win32', 'x64')).toThrow('缺少 alipay-bot')
+  })
+
+  test('Agent QQ 邮箱 CLI artifact 要求兼容归档模块', () => {
+    const manifest: FunctionalModuleManifest = {
+      schema: 1,
+      channel: 'stable',
+      platforms: {
+        'darwin-x64': {
+          modules: {
+            'agently-cli': {
+              version: '1.0.17', url: 'https://download.example.com/agently-cli.tar.gz', sha256: 'a'.repeat(64), size: 1,
+              format: 'tar.gz', entrypoint: 'bin/agently-cli', required: true,
+            },
+          },
+        },
+      },
+    }
+
+    expect(requireExistingAgentlyCli(manifest, 'darwin', 'x64')).toBe(true)
+    expect(() => requireExistingAgentlyCli(manifest, 'win32', 'x64')).toThrow('缺少 agently-cli')
   })
 
   test('Rust-only 发布允许远端暂时缺少 Node runtime', () => {

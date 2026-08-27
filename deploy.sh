@@ -75,7 +75,7 @@ PLAYWRIGHT_CORE_ARCHIVE="${COPIS_PLAYWRIGHT_CORE_ARCHIVE:-}"
 PLAYWRIGHT_CORE_VERSION="${COPIS_PLAYWRIGHT_CORE_VERSION:-}"
 PYTHON_RUNTIME_ARCHIVE="${COPIS_PYTHON_RUNTIME_ARCHIVE:-}"
 PYTHON_RUNTIME_VERSION="${COPIS_PYTHON_RUNTIME_VERSION:-}"
-AGENTLY_CLI_BINARY="${COPIS_AGENTLY_CLI_BINARY:-}"
+AGENTLY_CLI_ARCHIVE="${COPIS_AGENTLY_CLI_ARCHIVE:-}"
 AGENTLY_CLI_VERSION="${COPIS_AGENTLY_CLI_VERSION:-}"
 
 fail() {
@@ -120,8 +120,8 @@ show_help() {
   --playwright-core-version <version> 指定 playwright-core 模块版本
   --python-runtime-archive <path> 指定已打包的 Python 3.12 runtime tar.gz
   --python-runtime-version <version> 指定 Python runtime 模块版本
-  --agently-cli-binary <path> 指定已有 Agent QQ 邮箱 CLI 二进制路径
-  --agently-cli-version <version> 指定 Agent QQ 邮箱 CLI 模块版本
+  --agently-cli-archive <path> 指定已打包的 agently-cli tar.gz
+  --agently-cli-version <version> 指定 agently-cli 模块版本，默认读取官方 runtime 版本
   -h, --help           显示帮助
 EOF
 }
@@ -257,9 +257,9 @@ while [[ $# -gt 0 ]]; do
       PYTHON_RUNTIME_VERSION="$2"
       shift
       ;;
-    --agently-cli-binary)
+    --agently-cli-archive)
       require_value "$1" "${2:-}"
-      AGENTLY_CLI_BINARY="$2"
+      AGENTLY_CLI_ARCHIVE="$2"
       shift
       ;;
     --agently-cli-version)
@@ -404,17 +404,6 @@ read_officecli_version() {
   fail "无法读取 OfficeCLI 版本：$binary"
 }
 
-read_agently_cli_version() {
-  local binary="$1"
-  local version
-  version="$("$binary" --version 2>/dev/null || true)"
-  if [[ "$version" =~ ([0-9]+\.[0-9]+\.[0-9]+) ]]; then
-    printf '%s\n' "${BASH_REMATCH[1]}"
-    return
-  fi
-  fail "无法读取 Agent QQ 邮箱 CLI 版本：$binary"
-}
-
 resolve_functional_module_manifest_url() {
   local base_url="$1"
   local prefix="${2:-copis/modules}"
@@ -435,6 +424,22 @@ read_alipay_bot_version() {
     const metadata = JSON.parse(process.argv[1])
     if (typeof metadata.version !== "string" || !/^\d+\.\d+\.\d+/.test(metadata.version)) {
       throw new Error("runtime package.json 缺少 version")
+    }
+    console.log(metadata.version)
+  ' "$runtime_metadata"
+}
+
+read_agently_cli_version() {
+  local archive runtime_metadata
+  archive="$1"
+  runtime_metadata="$(LC_ALL=C tar -xOf "$archive" ./runtime/node_modules/@tencent-qqmail/agently-cli/package.json 2>/dev/null)"
+  if [[ -z "$runtime_metadata" ]]; then
+    fail "无法读取 Agent QQ 邮箱 CLI 归档版本：$archive"
+  fi
+  "$BUN_BIN" -e '
+    const metadata = JSON.parse(process.argv[1])
+    if (typeof metadata.version !== "string" || !/^\d+\.\d+\.\d+/.test(metadata.version)) {
+      throw new Error("agently-cli package.json 缺少 version")
     }
     console.log(metadata.version)
   ' "$runtime_metadata"
@@ -568,26 +573,25 @@ if [[ "$RUST_ONLY" != '1' && "$OFFICECLI_ONLY" != '1' && "$NODE_RUNTIME_ONLY" !=
 fi
 
 if [[ "$RUST_ONLY" != '1' && "$OFFICECLI_ONLY" != '1' && "$NODE_RUNTIME_ONLY" != '1' && "$ALIPAY_BOT_ONLY" != '1' && "$PLAYWRIGHT_CORE_ONLY" != '1' && "$PYTHON_RUNTIME_ONLY" != '1' ]]; then
-  if [[ -n "$AGENTLY_CLI_BINARY" && "$AGENTLY_CLI_BINARY" != /* ]]; then
-    AGENTLY_CLI_BINARY="$ROOT_DIR/$AGENTLY_CLI_BINARY"
+  if [[ -n "$AGENTLY_CLI_ARCHIVE" && "$AGENTLY_CLI_ARCHIVE" != /* ]]; then
+    AGENTLY_CLI_ARCHIVE="$ROOT_DIR/$AGENTLY_CLI_ARCHIVE"
   fi
-  AGENTLY_CLI_BINARY="${AGENTLY_CLI_BINARY:-$APP_DIR/resources/bin/agently-cli}"
-  if [[ "$PLATFORM" == 'win32' ]]; then
-    if [[ "$AGENTLY_CLI_BINARY" != *.exe ]]; then AGENTLY_CLI_BINARY+='.exe'; fi
-  fi
-  if [[ ! -f "$AGENTLY_CLI_BINARY" || "${COPIS_REFRESH_AGENTLY_CLI:-0}" == '1' ]]; then
+  AGENTLY_CLI_ARCHIVE="${AGENTLY_CLI_ARCHIVE:-$APP_DIR/resources/agently-cli/${PLATFORM}-${ARCH}.tar.gz}"
+  if [[ ! -f "$AGENTLY_CLI_ARCHIVE" || "${COPIS_REFRESH_AGENTLY_CLI:-0}" == '1' ]]; then
     if [[ "$PLATFORM" != "$CURRENT_PLATFORM" || "$ARCH" != "$CURRENT_ARCH" ]]; then
-      fail 'Agent QQ 邮箱 CLI 必须在目标平台和架构准备，跨平台请传入 --agently-cli-binary。'
+      fail 'Agent QQ 邮箱 CLI 必须在目标平台和架构准备，跨平台请传入 --agently-cli-archive。'
     fi
-    echo '[Copis] 正在通过官方 npm 包准备 Agent QQ 邮箱 CLI 功能模块...'
+    AGENTLY_CLI_METADATA="$(mktemp "${TMPDIR:-/tmp}/copis-agently-cli-metadata.XXXXXX")"
+    echo '[Copis] 正在准备官方 Agent QQ 邮箱 CLI 功能模块...'
     run_bun "$ROOT_DIR" 'Agent QQ 邮箱 CLI 功能模块准备失败' run prepare:agently-cli-module -- \
-      --platform "$PLATFORM" --arch "$ARCH" --output "$AGENTLY_CLI_BINARY"
+      --platform "$PLATFORM" --arch "$ARCH" --output "$AGENTLY_CLI_ARCHIVE" --metadata "$AGENTLY_CLI_METADATA"
+    AGENTLY_CLI_VERSION="${AGENTLY_CLI_VERSION:-$(cd "$ROOT_DIR" && "$BUN_BIN" -e 'const metadata = JSON.parse(await Bun.file(process.argv[1]).text()); console.log(metadata.version)' "$AGENTLY_CLI_METADATA")}"
+    rm -f "$AGENTLY_CLI_METADATA"
   fi
-  if [[ ! -f "$AGENTLY_CLI_BINARY" ]]; then
-    fail "未找到 Agent QQ 邮箱 CLI 二进制：$AGENTLY_CLI_BINARY"
+  if [[ ! -f "$AGENTLY_CLI_ARCHIVE" ]]; then
+    fail "未找到 Agent QQ 邮箱 CLI 归档：$AGENTLY_CLI_ARCHIVE"
   fi
-  AGENTLY_CLI_BINARY="$(cd "$(dirname "$AGENTLY_CLI_BINARY")" && pwd)/$(basename "$AGENTLY_CLI_BINARY")"
-  AGENTLY_CLI_VERSION="${AGENTLY_CLI_VERSION:-$(read_agently_cli_version "$AGENTLY_CLI_BINARY")}"
+  AGENTLY_CLI_VERSION="${AGENTLY_CLI_VERSION:-$(read_agently_cli_version "$AGENTLY_CLI_ARCHIVE")}"
 fi
 
 if [[ "$BUILD_APP" -eq 1 ]]; then
@@ -635,6 +639,9 @@ if [[ "$SKIP_PUBLISH" -eq 0 ]]; then
   fi
   if [[ "$RUST_ONLY" != '1' && "$OFFICECLI_ONLY" != '1' && "$NODE_RUNTIME_ONLY" != '1' && "$ALIPAY_BOT_ONLY" != '1' && "$PLAYWRIGHT_CORE_ONLY" != '1' && "$AGENTLY_CLI_ONLY" != '1' ]]; then
     RELEASE_ARGS+=(--python-runtime-archive "$PYTHON_RUNTIME_ARCHIVE" --python-runtime-version "$PYTHON_RUNTIME_VERSION")
+  fi
+  if [[ "$RUST_ONLY" != '1' && "$OFFICECLI_ONLY" != '1' && "$NODE_RUNTIME_ONLY" != '1' && "$ALIPAY_BOT_ONLY" != '1' && "$PLAYWRIGHT_CORE_ONLY" != '1' && "$PYTHON_RUNTIME_ONLY" != '1' ]]; then
+    RELEASE_ARGS+=(--agently-cli-archive "$AGENTLY_CLI_ARCHIVE" --agently-cli-version "$AGENTLY_CLI_VERSION")
   fi
   if [[ -n "$OBJECT_PREFIX_PATH" ]]; then
     RELEASE_ARGS+=(--prefix "$OBJECT_PREFIX_PATH")

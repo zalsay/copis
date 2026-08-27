@@ -36,3 +36,10 @@ test('Given 主进程渠道列表已加载 When Composer 构建模型选项 Then
   expect(welcomeComposerSource).not.toContain('additionalChannels=')
   expect(welcomeComposerSource).toContain('COPIS_WORKING_CHANNEL_IDS')
 })
+
+test('Given Z.ai 分组与 GLM 模型 When Composer 使用 Copis 标识 Then 仍展示智谱 Logo', () => {
+  expect(selectorSource).toContain('COPIS_WORKING_ZHIPU_CHANNEL_ID')
+  expect(selectorSource).toContain('function usesZhipuLogo')
+  expect(selectorSource).toContain('!usesZhipuLogo(option)')
+  expect(selectorSource).toContain('const useZhipuLogo = usesZhipuLogo(first)')
+})

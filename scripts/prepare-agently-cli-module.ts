@@ -1,135 +1,164 @@
 #!/usr/bin/env bun
-
 import { createHash } from 'node:crypto'
 import { execFileSync } from 'node:child_process'
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, statSync } from 'node:fs'
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  renameSync,
+  rmSync,
+  statSync,
+  utimesSync,
+  writeFileSync,
+} from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
+import { gzipSync } from 'node:zlib'
 import type { FunctionalModuleArchitecture, FunctionalModulePlatform } from '@copis/shared'
 
-export const AGENTLY_CLI_VERSION = '1.0.17'
 export const AGENTLY_CLI_PACKAGE = '@tencent-qqmail/agently-cli'
+export const AGENTLY_CLI_VERSION = '1.0.17'
+export const AGENTLY_CLI_INTEGRITY = 'sha512-caBBFdnswGon/oXLSFnKfeztX7nmMvCs2OjREPReJicVypMMZcOLwDByBMUsJzHH6jCjCiZi+UhaIacOf8OIcw=='
+export const AGENTLY_CLI_ENTRYPOINT = 'bin/agently-cli'
+const AGENTLY_CLI_RUNTIME_ENTRYPOINT = 'node_modules/@tencent-qqmail/agently-cli/scripts/run.js'
 
-const PLATFORM_PACKAGES: Record<FunctionalModulePlatform, Record<FunctionalModuleArchitecture, string>> = {
-  darwin: {
-    arm64: '@tencent-qqmail/agently-cli-darwin-arm64',
-    x64: '@tencent-qqmail/agently-cli-darwin-x64',
-  },
-  linux: {
-    arm64: '@tencent-qqmail/agently-cli-linux-arm64',
-    x64: '@tencent-qqmail/agently-cli-linux-x64',
-  },
-  win32: {
-    arm64: '@tencent-qqmail/agently-cli-win32-arm64',
-    x64: '@tencent-qqmail/agently-cli-win32-x64',
-  },
+interface PreparedAgentlyCliModuleMetadata {
+  version: string
+  package: string
+  path: string
 }
 
-const PLATFORM_PACKAGE_INTEGRITIES: Record<string, string> = {
-  '@tencent-qqmail/agently-cli-darwin-arm64': 'sha512-tNmPWYEMt/xpuVMrea9W3C+RrizlyhnnJ6nmZuOol7OPrOHZw0zllM8wDzc0/V22GJqPUDKRR8r2AmQx/Jl9uQ==',
-  '@tencent-qqmail/agently-cli-darwin-x64': 'sha512-dQ+x/N1aaGvpcT+tirJRv9707RSmxm/7OciP0tBhptyERTRIKaK4gEeojoucDT1LjUgEEDEcKBp4P30eTpXG7A==',
-  '@tencent-qqmail/agently-cli-linux-arm64': 'sha512-iiSLtpzFMvTCSBL1ssfmUvWNnQCWR5H8ZhYIIuhrohu3oI23/VB7j+ZKzls5sLzW9Ka4hfjm/VBE1f+ynBm2vQ==',
-  '@tencent-qqmail/agently-cli-linux-x64': 'sha512-FBfBI2iOJ31hBpyVM4vt2jSB96hIuAhhtjKC0tPp8llOMHPfSH3r1nAl5YDwFJCX/OH0lbjvjjr7NqKpPivCMA==',
-  '@tencent-qqmail/agently-cli-win32-arm64': 'sha512-iLbPyBeIcMagjcgYppBygY7o6Prcw/2naX+h2PPYCCCob/rlRWUGJCFFh3d+nUwfSuTPnlPY+bne8mJkrOt5yw==',
-  '@tencent-qqmail/agently-cli-win32-x64': 'sha512-l8epPXmwoFJ3hQIo8Fd4KLt1WJTbqt5gCy+7KxnkIAUg+4zvtwfROkRlu79UKKxi3rgxJhGhAc5p2DAe58tXYg==',
-}
+if (import.meta.main) main()
 
-export interface PrepareAgentlyCliModuleOptions {
-  platform: FunctionalModulePlatform
-  arch: FunctionalModuleArchitecture
-  output: string
-  version?: string
-  npmCommand?: string
-}
-
-export function getAgentlyCliPlatformPackage(
-  platform: FunctionalModulePlatform,
-  arch: FunctionalModuleArchitecture,
-): string {
-  return PLATFORM_PACKAGES[platform][arch]
-}
-
-export function getAgentlyCliEntrypoint(platform: FunctionalModulePlatform): string {
-  return `bin/agently-cli${platform === 'win32' ? '.exe' : ''}`
-}
-
-export function getAgentlyCliPackageIntegrity(packageName: string): string {
-  const integrity = PLATFORM_PACKAGE_INTEGRITIES[packageName]
-  if (!integrity || integrity.endsWith('PLACEHOLDER')) {
-    throw new Error(`未配置 agently-cli 官方包完整性：${packageName}`)
+export function main(): void {
+  const platform = parsePlatform(option('--platform') ?? process.platform)
+  const arch = parseArchitecture(option('--arch') ?? process.arch)
+  if (platform !== process.platform || arch !== process.arch) {
+    throw new Error('Agent QQ 邮箱 CLI 只能在当前本机平台和架构准备')
   }
-  return integrity
+
+  const output = resolve(option('--output') ?? `apps/electron/resources/agently-cli/${platform}-${arch}.tar.gz`)
+  const metadataOutput = option('--metadata')
+  const staging = mkdtempSync(join(tmpdir(), 'copis-agently-cli-module-'))
+  try {
+    const moduleRoot = join(staging, 'module')
+    const runtimeRoot = join(moduleRoot, 'runtime')
+    installOfficialCli(runtimeRoot, join(staging, 'package-cache'))
+    if (!isFile(join(runtimeRoot, AGENTLY_CLI_RUNTIME_ENTRYPOINT))) {
+      throw new Error(`官方 Agent QQ 邮箱 CLI 缺少入口文件: ${AGENTLY_CLI_RUNTIME_ENTRYPOINT}`)
+    }
+    writeLaunchers(moduleRoot, platform)
+    normalizeTimestamps(moduleRoot)
+    createArchive(moduleRoot, output)
+
+    if (metadataOutput) {
+      const metadata: PreparedAgentlyCliModuleMetadata = {
+        version: AGENTLY_CLI_VERSION,
+        package: AGENTLY_CLI_PACKAGE,
+        path: output,
+      }
+      const path = resolve(metadataOutput)
+      mkdirSync(dirname(path), { recursive: true })
+      writeFileSync(path, `${JSON.stringify(metadata, null, 2)}\n`, 'utf8')
+    }
+    console.log(`[prepare:agently-cli-module] 已生成 ${output}（agently-cli v${AGENTLY_CLI_VERSION}）`)
+  } finally {
+    rmSync(staging, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 })
+  }
 }
 
-export function prepareAgentlyCliModule(options: PrepareAgentlyCliModuleOptions): string {
-  const packageName = getAgentlyCliPlatformPackage(options.platform, options.arch)
-  const version = options.version?.trim() || AGENTLY_CLI_VERSION
-  if (!/^\d+\.\d+\.\d+$/.test(version)) throw new Error(`agently-cli 版本不合法：${version}`)
-
-  const output = resolve(options.output)
-  const staging = mkdtempSync(join(tmpdir(), 'copis-agently-cli-module-'))
-  const packageCache = join(staging, 'package-cache')
-  const extractDir = join(staging, 'extracted')
-  const temporaryOutput = `${output}.${process.pid}.tmp`
+function installOfficialCli(runtimeRoot: string, packageCache: string): void {
+  mkdirSync(runtimeRoot, { recursive: true })
   mkdirSync(packageCache, { recursive: true })
-  mkdirSync(extractDir, { recursive: true })
+  const npmPath = resolveNpmPath()
+  const packageTarball = downloadOfficialPackage(npmPath, packageCache)
+  verifyOfficialPackage(packageTarball)
+  execFileSync(npmPath, [
+    'install',
+    '--ignore-scripts',
+    '--omit=dev',
+    '--no-audit',
+    '--no-fund',
+    '--no-package-lock',
+    '--no-save',
+    packageTarball,
+  ], { cwd: runtimeRoot, stdio: 'inherit' })
+}
 
+function downloadOfficialPackage(npmPath: string, packageCache: string): string {
+  const output = execFileSync(npmPath, [
+    'pack',
+    '--silent',
+    `${AGENTLY_CLI_PACKAGE}@${AGENTLY_CLI_VERSION}`,
+  ], { cwd: packageCache, encoding: 'utf8' }).trim()
+  const packageName = output.split(/\r?\n/).at(-1)?.trim()
+  if (!packageName) throw new Error('下载官方 Agent QQ 邮箱 CLI 失败')
+  const packageTarball = join(packageCache, packageName)
+  if (!isFile(packageTarball)) throw new Error('官方 Agent QQ 邮箱 CLI 归档不存在')
+  return packageTarball
+}
+
+function verifyOfficialPackage(packageTarball: string): void {
+  const actualIntegrity = `sha512-${createHash('sha512').update(readFileSync(packageTarball)).digest('base64')}`
+  if (actualIntegrity !== AGENTLY_CLI_INTEGRITY) {
+    throw new Error('官方 Agent QQ 邮箱 CLI 完整性校验失败')
+  }
+}
+
+function writeLaunchers(moduleRoot: string, platform: FunctionalModulePlatform): void {
+  const bin = join(moduleRoot, 'bin')
+  mkdirSync(bin, { recursive: true })
+  if (platform === 'win32') {
+    writeFileSync(
+      join(bin, 'agently-cli.cmd'),
+      '@echo off\r\nif "%COPIS_AGENTLY_CLI_NODE%"=="" (echo 未配置 Copis Node.js runtime >&2 & exit /b 1)\r\n"%COPIS_AGENTLY_CLI_NODE%" "%~dp0..\\runtime\\node_modules\\@tencent-qqmail\\agently-cli\\scripts\\run.js" %*\r\n',
+      'utf8',
+    )
+    return
+  }
+
+  const launcher = join(bin, 'agently-cli')
+  writeFileSync(
+    launcher,
+    '#!/bin/sh\nif [ -z "${COPIS_AGENTLY_CLI_NODE:-}" ]; then\n  echo "未配置 Copis Node.js runtime" >&2\n  exit 1\nfi\nSCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)\nexec "$COPIS_AGENTLY_CLI_NODE" "$SCRIPT_DIR/../runtime/node_modules/@tencent-qqmail/agently-cli/scripts/run.js" "$@"\n',
+    { encoding: 'utf8', mode: 0o755 },
+  )
+  chmodSync(launcher, 0o755)
+}
+
+function createArchive(moduleRoot: string, output: string): void {
+  const archiveTar = join(dirname(moduleRoot), 'agently-cli.tar')
+  const temporaryOutput = `${output}.${process.pid}.tmp`
+  mkdirSync(dirname(output), { recursive: true })
   try {
-    const npmCommand = options.npmCommand ?? (process.platform === 'win32' ? 'npm.cmd' : 'npm')
-    const packedName = execFileSync(npmCommand, [
-      'pack',
-      `${packageName}@${version}`,
-      '--pack-destination',
-      packageCache,
-      '--silent',
-    ], { cwd: packageCache, encoding: 'utf8' }).trim().split(/\r?\n/).at(-1)?.trim()
-    if (!packedName) throw new Error(`下载 agently-cli 官方包失败：${packageName}@${version}`)
-
-    const packageTarball = join(packageCache, packedName)
-    if (!isFile(packageTarball)) throw new Error(`agently-cli 官方包归档不存在：${packageTarball}`)
-    verifyIntegrity(packageTarball, getAgentlyCliPackageIntegrity(packageName))
-
-    execFileSync('tar', ['-xzf', packageTarball, '-C', extractDir], { stdio: 'ignore' })
-    const source = join(extractDir, 'package', ...getAgentlyCliEntrypoint(options.platform).split('/'))
-    if (!isFile(source)) throw new Error(`agently-cli 官方包缺少入口：${getAgentlyCliEntrypoint(options.platform)}`)
-
-    mkdirSync(dirname(output), { recursive: true })
-    copyFileSync(source, temporaryOutput)
-    if (options.platform !== 'win32') {
-      execFileSync('chmod', ['755', temporaryOutput], { stdio: 'ignore' })
-    }
+    execFileSync('tar', ['--format=pax', '-cf', archiveTar, '-C', moduleRoot, '.'], {
+      stdio: 'inherit',
+      env: { ...process.env, LC_ALL: 'C' },
+    })
+    writeFileSync(temporaryOutput, gzipSync(readFileSync(archiveTar), { mtime: 0 }), { mode: 0o644 })
     renameSync(temporaryOutput, output)
-
-    if (options.platform === process.platform && options.arch === normalizeCurrentArchitecture(process.arch)) {
-      const actualVersion = readAgentlyCliVersion(output)
-      if (actualVersion !== version) {
-        throw new Error(`agently-cli 可执行文件版本不匹配：期望 ${version}，实际 ${actualVersion}`)
-      }
-    }
-    return output
   } finally {
     if (existsSync(temporaryOutput)) rmSync(temporaryOutput, { force: true })
-    rmSync(staging, { recursive: true, force: true })
   }
 }
 
-export function readAgentlyCliVersion(binaryPath: string): string {
-  const output = execFileSync(resolve(binaryPath), ['--version'], { encoding: 'utf8', windowsHide: true }).trim()
-  const match = /(?:^|\s)(\d+\.\d+\.\d+)(?:\s|$)/.exec(output)
-  if (!match?.[1]) throw new Error(`无法读取 agently-cli 版本：${binaryPath}`)
-  return match[1]
+function normalizeTimestamps(path: string): void {
+  for (const entry of readdirSync(path).sort()) {
+    const entryPath = join(path, entry)
+    if (statSync(entryPath).isDirectory()) normalizeTimestamps(entryPath)
+    utimesSync(entryPath, new Date(0), new Date(0))
+  }
+  utimesSync(path, new Date(0), new Date(0))
 }
 
-function verifyIntegrity(path: string, expected: string): void {
-  const [algorithm, expectedDigest] = expected.split('-', 2)
-  if (algorithm !== 'sha512' || !expectedDigest) throw new Error(`agently-cli 完整性配置不合法：${expected}`)
-  const actualDigest = createHash(algorithm).update(readFileSync(path)).digest('base64')
-  if (actualDigest !== expectedDigest) throw new Error(`agently-cli 官方包完整性校验失败：${path}`)
-}
-
-function normalizeCurrentArchitecture(value: string): FunctionalModuleArchitecture {
-  if (value === 'arm64' || value === 'x64') return value
-  throw new Error(`当前架构不支持 agently-cli：${value}`)
+function resolveNpmPath(): string {
+  const nodePath = execFileSync('node', ['-p', 'process.execPath'], { encoding: 'utf8' }).trim()
+  const npmPath = process.platform === 'win32' ? join(dirname(nodePath), 'npm.cmd') : join(dirname(nodePath), 'npm')
+  if (!isFile(npmPath)) throw new Error('未找到与 Node.js 配套的 npm')
+  return npmPath
 }
 
 function isFile(path: string): boolean {
@@ -138,29 +167,16 @@ function isFile(path: string): boolean {
 
 function option(name: string): string | undefined {
   const index = process.argv.indexOf(name)
-  const value = index >= 0 ? process.argv[index + 1]?.trim() : undefined
-  return value || undefined
+  const value = index >= 0 ? process.argv[index + 1] : undefined
+  return value?.trim() || undefined
 }
 
 function parsePlatform(value: string): FunctionalModulePlatform {
   if (value === 'darwin' || value === 'linux' || value === 'win32') return value
-  throw new Error(`当前平台不支持 agently-cli：${value}`)
+  throw new Error(`当前平台不支持 Agent QQ 邮箱 CLI 模块: ${value}`)
 }
 
 function parseArchitecture(value: string): FunctionalModuleArchitecture {
   if (value === 'arm64' || value === 'x64') return value
-  throw new Error(`当前架构不支持 agently-cli：${value}`)
-}
-
-if (import.meta.main) {
-  const platform = parsePlatform(option('--platform') ?? process.platform)
-  const arch = parseArchitecture(option('--arch') ?? process.arch)
-  const output = option('--output') ?? `apps/electron/resources/bin/agently-cli${platform === 'win32' ? '.exe' : ''}`
-  const result = prepareAgentlyCliModule({
-    platform,
-    arch,
-    output,
-    version: option('--cli-version') ?? process.env.COPIS_AGENTLY_CLI_VERSION,
-  })
-  console.log(`[prepare:agently-cli-module] 已生成 ${result}（agently-cli v${option('--cli-version') ?? process.env.COPIS_AGENTLY_CLI_VERSION ?? AGENTLY_CLI_VERSION}）`)
+  throw new Error(`当前架构不支持 Agent QQ 邮箱 CLI 模块: ${value}`)
 }

@@ -25,6 +25,7 @@ const deployShellScript = readFileSync(join(repoRoot, 'deploy.sh'), 'utf8')
 const startDevScript = readFileSync(join(repoRoot, 'start-dev.sh'), 'utf8')
 const buildManifestScript = readFileSync(join(repoRoot, 'scripts/build-functional-module-manifest.ts'), 'utf8')
 const prepareAlipayBotScript = readFileSync(join(repoRoot, 'scripts/prepare-alipay-bot-module.ts'), 'utf8')
+const prepareAgentlyCliScript = readFileSync(join(repoRoot, 'scripts/prepare-agently-cli-module.ts'), 'utf8')
 
 describe('功能模块发布边界', () => {
   test('Electron 只负责下载，COS 上传工具属于仓库级开发脚本', () => {
@@ -101,6 +102,21 @@ describe('功能模块发布边界', () => {
     expect(buildManifestScript).toContain('--alipay-bot')
     expect(deployScript).toContain('[switch]$AlipayBotOnly')
     expect(deployScript).toContain("'--alipay-bot'")
+  })
+
+  test('部署入口支持准备和单独发布 Agent QQ 邮箱 CLI', () => {
+    expect(rootPackage.scripts?.['prepare:agently-cli-module']).toBeDefined()
+    expect(deployShellScript).toContain('--agently-cli')
+    expect(deployShellScript).toContain('prepare:agently-cli-module')
+    expect(deployShellScript).toContain('--agently-cli-archive')
+    expect(deployShellScript).toContain('Agent QQ 邮箱 CLI 必须在目标平台和架构准备')
+    expect(deployShellScript).toContain('read_agently_cli_version')
+    expect(buildManifestScript).toContain('--agently-cli')
+    expect(deployScript).toContain('[switch]$AgentlyCliOnly')
+    expect(deployScript).toContain("'--agently-cli'")
+    expect(prepareAgentlyCliScript).toContain("AGENTLY_CLI_PACKAGE = '@tencent-qqmail/agently-cli'")
+    expect(prepareAgentlyCliScript).toContain('verifyOfficialPackage')
+    expect(prepareAgentlyCliScript).toContain('COPIS_AGENTLY_CLI_NODE')
   })
 
   test('start-dev 会准备隔离的支付宝智能体 CLI 并传入开发 Rust API', () => {

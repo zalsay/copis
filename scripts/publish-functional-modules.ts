@@ -130,13 +130,13 @@ async function main(): Promise<void> {
     const pythonRuntimeArchive = rustOnly || officeCliOnly || nodeRuntimeOnly || alipayBotOnly || playwrightCoreOnly || agentlyCliOnly
       ? undefined
       : getOption('--python-runtime-archive')
-        ?? process.env.COPIS_PYTHON_RUNTIME_ARCHIVE?.trim()
-        ?? join(electronDir, 'resources/python-runtime', `${platform}-${arch}.tar.gz`)
-    const agentlyCliBinary = rustOnly || officeCliOnly || nodeRuntimeOnly || alipayBotOnly || playwrightCoreOnly || pythonRuntimeOnly
+      ?? process.env.COPIS_PYTHON_RUNTIME_ARCHIVE?.trim()
+      ?? join(electronDir, 'resources/python-runtime', `${platform}-${arch}.tar.gz`)
+    const agentlyCliArchive = rustOnly || officeCliOnly || nodeRuntimeOnly || alipayBotOnly || playwrightCoreOnly || pythonRuntimeOnly
       ? undefined
-      : getOption('--agently-cli-binary')
-        ?? process.env.COPIS_AGENTLY_CLI_BINARY?.trim()
-        ?? join(electronDir, 'resources/bin', binaryName('agently-cli', platform))
+      : getOption('--agently-cli-archive')
+        ?? process.env.COPIS_AGENTLY_CLI_ARCHIVE?.trim()
+        ?? join(electronDir, 'resources/agently-cli', `${platform}-${arch}.tar.gz`)
     const modules = applyFunctionalModuleVersionLocks(buildFunctionalModuleBinaryInputs({
       rustOnly,
       officeCliOnly,
@@ -163,10 +163,10 @@ async function main(): Promise<void> {
       pythonRuntimeVersion: getOption('--python-runtime-version')
         ?? process.env.COPIS_PYTHON_RUNTIME_VERSION?.trim()
         ?? version,
-      agentlyCliBinary,
+      agentlyCliArchive,
       agentlyCliVersion: getOption('--agently-cli-version')
         ?? process.env.COPIS_AGENTLY_CLI_VERSION?.trim()
-        ?? '1.0.17',
+        ?? version,
       platform,
       arch,
     }), versionLocks)
@@ -357,6 +357,32 @@ export function requireExistingAlipayBot(
   }
 }
 
+export function requireExistingAgentlyCli(
+  manifest: FunctionalModuleManifest | undefined,
+  platform: FunctionalModulePlatform,
+  arch: FunctionalModuleArchitecture,
+  options: AgentlyCliValidationOptions = {},
+): boolean {
+  const platformKey = `${platform}-${arch}`
+  const artifact = manifest?.platforms[platformKey]?.modules['agently-cli']
+  const contracts = platform === 'win32'
+    ? [
+        { format: 'tar.gz', entrypoint: 'bin/agently-cli.cmd' },
+        { format: 'binary', entrypoint: 'bin/agently-cli.exe' },
+      ]
+    : [{ format: 'tar.gz', entrypoint: 'bin/agently-cli' }]
+  if (!artifact) {
+    if (options.allowMissing) return false
+    throw new Error(`COS manifest 当前平台/架构缺少 agently-cli: ${platformKey}，单模块发布已停止`)
+  }
+  if (artifact.required !== true || !contracts.some((contract) => (
+    artifact.format === contract.format && artifact.entrypoint === contract.entrypoint
+  ))) {
+    throw new Error(`COS manifest 当前平台/架构的 agently-cli 无效: ${platformKey}，单模块发布已停止`)
+  }
+  return true
+}
+
 export function requireExistingRustApi(
   manifest: FunctionalModuleManifest | undefined,
   platform: FunctionalModulePlatform,
@@ -434,6 +460,10 @@ interface PythonRuntimeValidationOptions {
   allowMissing?: boolean
 }
 
+interface AgentlyCliValidationOptions {
+  allowMissing?: boolean
+}
+
 interface SingleModuleReleaseValidationOptions {
   manifest: FunctionalModuleManifest | undefined
   rustOnly: boolean
@@ -478,6 +508,10 @@ export function validateExistingModulesForSingleModuleRelease(
     if (!hasPythonRuntime) {
       console.warn(`[publish:functional-modules] COS manifest 当前平台/架构缺少 python-runtime: ${platform}-${arch}，--rust 将继续发布；请随后执行 --python-runtime 补齐`)
     }
+    const hasAgentlyCli = requireExistingAgentlyCli(manifest, platform, arch, { allowMissing: true })
+    if (!hasAgentlyCli) {
+      console.warn(`[publish:functional-modules] COS manifest 当前平台/架构缺少 agently-cli: ${platform}-${arch}，--rust 将继续发布；请随后执行 --agently-cli 补齐`)
+    }
     return
   }
   if (officeCliOnly) {
@@ -486,6 +520,7 @@ export function validateExistingModulesForSingleModuleRelease(
     requireExistingAlipayBot(manifest, platform, arch)
     requireExistingPlaywrightCore(manifest, platform, arch)
     requireExistingPythonRuntime(manifest, platform, arch)
+    requireExistingAgentlyCli(manifest, platform, arch)
     return
   }
   if (nodeRuntimeOnly) {
@@ -494,6 +529,7 @@ export function validateExistingModulesForSingleModuleRelease(
     requireExistingAlipayBot(manifest, platform, arch)
     requireExistingPlaywrightCore(manifest, platform, arch)
     requireExistingPythonRuntime(manifest, platform, arch)
+    requireExistingAgentlyCli(manifest, platform, arch)
     return
   }
   if (alipayBotOnly) {
@@ -502,6 +538,7 @@ export function validateExistingModulesForSingleModuleRelease(
     requireExistingNodeRuntime(manifest, platform, arch)
     requireExistingPlaywrightCore(manifest, platform, arch)
     requireExistingPythonRuntime(manifest, platform, arch)
+    requireExistingAgentlyCli(manifest, platform, arch)
     return
   }
   if (playwrightCoreOnly) {
@@ -510,6 +547,7 @@ export function validateExistingModulesForSingleModuleRelease(
     requireExistingNodeRuntime(manifest, platform, arch)
     requireExistingAlipayBot(manifest, platform, arch)
     requireExistingPythonRuntime(manifest, platform, arch)
+    requireExistingAgentlyCli(manifest, platform, arch)
     return
   }
   if (pythonRuntimeOnly) {
@@ -518,6 +556,7 @@ export function validateExistingModulesForSingleModuleRelease(
     requireExistingNodeRuntime(manifest, platform, arch)
     requireExistingAlipayBot(manifest, platform, arch)
     requireExistingPlaywrightCore(manifest, platform, arch)
+    requireExistingAgentlyCli(manifest, platform, arch)
     return
   }
   if (agentlyCliOnly) {
@@ -550,7 +589,7 @@ interface FunctionalModuleBinaryInputOptions {
   playwrightCoreVersion?: string
   pythonRuntimeArchive?: string
   pythonRuntimeVersion?: string
-  agentlyCliBinary?: string
+  agentlyCliArchive?: string
   agentlyCliVersion?: string
   platform: FunctionalModulePlatform
   arch: FunctionalModuleArchitecture
@@ -643,13 +682,15 @@ export function buildFunctionalModuleBinaryInputs(
     })
   }
   if (!input.rustOnly && !officeCliOnly && !nodeRuntimeOnly && !alipayBotOnly && !playwrightCoreOnly && !pythonRuntimeOnly) {
-    if (!input.agentlyCliBinary) throw new Error('正常发布或 Agent QQ 邮箱 CLI-only 发布需要提供 agently-cli 二进制路径')
+    if (!input.agentlyCliArchive) throw new Error('正常发布或 Agent QQ 邮箱 CLI-only 发布需要提供 agently-cli 归档')
     modules.push({
       module: 'agently-cli',
       version: input.agentlyCliVersion ?? input.rustVersion,
       platform: input.platform,
       arch: input.arch,
-      binaryPath: input.agentlyCliBinary,
+      binaryPath: input.agentlyCliArchive,
+      format: 'tar.gz',
+      entrypoint: `bin/${input.platform === 'win32' ? 'agently-cli.cmd' : 'agently-cli'}`,
       required: true,
     })
   }

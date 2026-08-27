@@ -40,6 +40,7 @@ import {
   COPIS_WORKING_DEEPSEEK_PRO_MODEL_ID,
   COPIS_WORKING_FAST_MODEL_ID,
   COPIS_WORKING_GLOBAL_MODEL_ID,
+  COPIS_WORKING_ZHIPU_CHANNEL_ID,
   workingModelCatalogToOptions,
 } from '@copis/shared'
 import type { ModelOption, ProviderType, WorkingCustomModelOption, WorkingModelLatencyMap } from '@copis/shared'
@@ -100,6 +101,10 @@ function getModelDescription(option: Pick<ModelOption, 'channelId' | 'modelId'>)
   return undefined
 }
 
+function usesZhipuLogo(option: Pick<ModelOption, 'channelId' | 'provider'>): boolean {
+  return option.channelId === COPIS_WORKING_ZHIPU_CHANNEL_ID || option.provider === 'zhipu'
+}
+
 function renderModelIcon(option: ModelOption, useCopisLogo: boolean, className: string): React.ReactElement {
   if (option.channelId === COPIS_WORKING_CHANNEL_ID && option.modelId === COPIS_WORKING_FAST_MODEL_ID) {
     return <Zap aria-hidden="true" className={cn(className, 'text-amber-400')} />
@@ -109,7 +114,7 @@ function renderModelIcon(option: ModelOption, useCopisLogo: boolean, className: 
   }
   return (
     <img
-      src={useCopisLogo && option.channelId !== COPIS_WORKING_DEEPSEEK_CHANNEL_ID
+      src={useCopisLogo && option.channelId !== COPIS_WORKING_DEEPSEEK_CHANNEL_ID && !usesZhipuLogo(option)
         ? CopisTemplateLogo
         : getModelLogo(option.modelId, option.provider)}
       alt={option.modelName}
@@ -357,6 +362,7 @@ export function ModelSelector({
               if (!first) return null
               const channel = group.isCustom ? undefined : availableChannels.find((c) => c.id === group.key)
               const useDeepSeekLogo = first.channelId === COPIS_WORKING_DEEPSEEK_CHANNEL_ID
+              const useZhipuLogo = usesZhipuLogo(first)
 
               return (
                 <div key={group.key}>
@@ -368,7 +374,9 @@ export function ModelSelector({
                       <img
                         src={useDeepSeekLogo
                           ? getModelLogo(first.modelId, first.provider)
-                          : useCopisLogo ? CopisTemplateLogo : channel ? getChannelLogo(channel) : DefaultLogo}
+                          : useZhipuLogo
+                            ? getModelLogo(first.modelId, first.provider)
+                            : useCopisLogo ? CopisTemplateLogo : channel ? getChannelLogo(channel) : DefaultLogo}
                         alt={first.channelName}
                         className="size-5 rounded object-cover"
                       />

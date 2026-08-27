@@ -8,12 +8,13 @@ import {
 const locks = loadFunctionalModuleVersionLocks()
 
 describe('功能模块版本锁', () => {
-  test('Given 版本锁配置 When 读取 Then 固定 Node/Python runtime、支付宝模块与 Playwright Core 版本', () => {
+  test('Given 版本锁配置 When 读取 Then 固定 Node/Python runtime、支付宝、Playwright Core 与 Agent QQ 邮箱 CLI 版本', () => {
     expect(locks).toEqual({
       'node-runtime': '24.19.4',
       'python-runtime': '3.12.14',
       'alipay-bot': '0.3.40',
       'playwright-core': '1.62.1',
+      'agently-cli': '1.0.17',
     })
   })
 
@@ -68,5 +69,39 @@ describe('功能模块版本锁', () => {
     }
 
     expect(excludeUnchangedLockedModules(modules, manifest, 'darwin', 'arm64', upgradedLocks)).toEqual(modules)
+  })
+
+  test('Given COS 中 Agent QQ 邮箱 CLI 同版本但仍是旧 exe When deploy Then 允许迁移到新版归档', () => {
+    const modules = [{
+      module: 'agently-cli' as const,
+      version: 'ignored',
+      platform: 'win32' as const,
+      arch: 'x64' as const,
+      binaryPath: '/tmp/agently-cli.tar.gz',
+      format: 'tar.gz' as const,
+      entrypoint: 'bin/agently-cli.cmd',
+      required: true,
+    }]
+    const manifest = {
+      schema: 1,
+      channel: 'stable',
+      platforms: {
+        'win32-x64': {
+          modules: {
+            'agently-cli': {
+              version: '1.0.17',
+              url: 'https://example/agently-cli-1.0.17.exe',
+              sha256: 'a'.repeat(64),
+              size: 1,
+              format: 'binary' as const,
+              entrypoint: 'bin/agently-cli.exe',
+              required: true,
+            },
+          },
+        },
+      },
+    }
+
+    expect(excludeUnchangedLockedModules(modules, manifest, 'win32', 'x64', locks)).toEqual(modules)
   })
 })

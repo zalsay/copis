@@ -210,6 +210,10 @@ fn worker_requires_node(
         && !use_system_runtime
 }
 
+fn is_copis_working_channel_id(channel_id: &str) -> bool {
+    channel_id.starts_with("copis-working")
+}
+
 impl PiWorkerManager {
     pub fn new() -> Self {
         Self {
@@ -294,7 +298,7 @@ impl PiWorkerManager {
             .get("channelId")
             .and_then(Value::as_str)
             .unwrap_or_default();
-        if channel_id != "copis-working" && channel_id != "copis-working-deepseek" {
+        if !is_copis_working_channel_id(channel_id) {
             return Ok(None);
         }
         let model_id = query

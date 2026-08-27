@@ -386,8 +386,8 @@ describe('COS 功能模块发布器', () => {
     expect(release.manifestEntry.key).toBe('copis/modules/stable/manifest.json')
   })
 
-  test('为 Agent QQ 邮箱 CLI 生成独立 Windows 入口，不混用支付宝模块入口', () => {
-    const agentlyPath = createFixture('agently-cli-windows', 'agently-cli.exe')
+  test('为 Agent QQ 邮箱 CLI 生成独立 Windows 归档入口，不混用支付宝模块入口', () => {
+    const agentlyPath = createFixture('agently-cli-windows', 'agently-cli.tar.gz')
 
     const release = buildFunctionalModuleRelease({
       channel: 'stable',
@@ -399,15 +399,17 @@ describe('COS 功能模块发布器', () => {
         platform: 'win32',
         arch: 'x64',
         binaryPath: agentlyPath,
+        format: 'tar.gz',
+        entrypoint: 'bin/agently-cli.cmd',
         required: true,
       }],
     })
 
     const artifact = release.manifest.platforms['win32-x64']?.modules['agently-cli']
     expect(artifact).toMatchObject({
-      url: 'https://download.example.com/copis/client/stable/win32-x64/agently-cli-1.0.17.exe',
-      format: 'binary',
-      entrypoint: 'bin/agently-cli.exe',
+      url: 'https://download.example.com/copis/client/stable/win32-x64/agently-cli-1.0.17.tar.gz',
+      format: 'tar.gz',
+      entrypoint: 'bin/agently-cli.cmd',
     })
     expect(artifact?.entrypoint).not.toContain('alipay')
   })

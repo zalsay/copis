@@ -137,15 +137,17 @@ if (!rustOnly && !officeCliOnly && !nodeRuntimeOnly && !alipayBotOnly && !playwr
 }
 
 if (!rustOnly && !officeCliOnly && !nodeRuntimeOnly && !alipayBotOnly && !playwrightCoreOnly && !pythonRuntimeOnly) {
-  const agentlyCliBinary = getOption('--agently-cli-binary')
-    ?? process.env.COPIS_AGENTLY_CLI_BINARY
-    ?? join(electronDir, 'resources/bin', binaryName('agently-cli', platform))
+  const agentlyCliArchive = getOption('--agently-cli-archive')
+    ?? process.env.COPIS_AGENTLY_CLI_ARCHIVE
+    ?? join(electronDir, 'resources/agently-cli', `${platform}-${arch}.tar.gz`)
   modules.push({
     module: 'agently-cli',
-    version: getOption('--agently-cli-version') ?? process.env.COPIS_AGENTLY_CLI_VERSION ?? '1.0.17',
+    version: getOption('--agently-cli-version') ?? process.env.COPIS_AGENTLY_CLI_VERSION ?? version,
     platform,
     arch,
-    binaryPath: agentlyCliBinary,
+    binaryPath: agentlyCliArchive,
+    format: 'tar.gz',
+    entrypoint: `bin/${platform === 'win32' ? 'agently-cli.cmd' : 'agently-cli'}`,
     required: true,
   })
 }

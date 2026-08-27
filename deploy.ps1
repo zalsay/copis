@@ -49,7 +49,7 @@ param(
     [string]$PlaywrightCoreVersion,
     [string]$PythonRuntimeArchive,
     [string]$PythonRuntimeVersion,
-    [string]$AgentlyCliBinary,
+    [string]$AgentlyCliArchive,
     [string]$AgentlyCliVersion
 )
 
@@ -116,14 +116,14 @@ function Show-Help {
   -AlipayBotOnly / --alipay-bot        只发布支付宝智能体 CLI
   -PlaywrightCoreOnly / --playwright-core 只发布 Playwright Core
   -PythonRuntimeOnly / --python-runtime 只发布 Python runtime
-  -AgentlyCliOnly / --agently-cli      只发布 Agent QQ 邮箱 CLI
+  -AgentlyCliOnly / --agently-cli        只发布 Agent QQ 邮箱 CLI
   -SkipPublish / --skip-publish        只构建，不发布 COS
   -Platform <name> / --platform <name> 目标平台
   -Arch <name> / --arch <name>         目标架构
   -Channel <name> / --channel <name>   发布 channel
   -Version <version> / --version <version> 功能模块版本
   -PublicBaseUrl <url> / --public-base-url <url> COS 公共地址
-  -AgentlyCliBinary <path> / --agently-cli-binary Agent QQ 邮箱 CLI 二进制路径
+  -AgentlyCliArchive <path> / --agently-cli-archive Agent QQ 邮箱 CLI tar.gz 归档路径
   -AgentlyCliVersion <version> / --agently-cli-version Agent QQ 邮箱 CLI 模块版本
   -h, --help                           显示帮助
 '@ | Write-Host
@@ -173,7 +173,7 @@ for ($index = 0; $index -lt $LegacyArguments.Count; $index++) {
         '--playwright-core-version' { $PlaywrightCoreVersion = Get-LegacyValue $LegacyArguments $index $argument; $index++ }
         '--python-runtime-archive' { $PythonRuntimeArchive = Get-LegacyValue $LegacyArguments $index $argument; $index++ }
         '--python-runtime-version' { $PythonRuntimeVersion = Get-LegacyValue $LegacyArguments $index $argument; $index++ }
-        '--agently-cli-binary' { $AgentlyCliBinary = Get-LegacyValue $LegacyArguments $index $argument; $index++ }
+        '--agently-cli-archive' { $AgentlyCliArchive = Get-LegacyValue $LegacyArguments $index $argument; $index++ }
         '--agently-cli-version' { $AgentlyCliVersion = Get-LegacyValue $LegacyArguments $index $argument; $index++ }
         default { throw "Unsupported argument: $argument. Use PowerShell parameters such as -RustOnly." }
     }
@@ -209,7 +209,7 @@ $PlaywrightCoreArchive = Set-FromEnvironment $PlaywrightCoreArchive 'COPIS_PLAYW
 $PlaywrightCoreVersion = Set-FromEnvironment $PlaywrightCoreVersion 'COPIS_PLAYWRIGHT_CORE_VERSION'
 $PythonRuntimeArchive = Set-FromEnvironment $PythonRuntimeArchive 'COPIS_PYTHON_RUNTIME_ARCHIVE'
 $PythonRuntimeVersion = Set-FromEnvironment $PythonRuntimeVersion 'COPIS_PYTHON_RUNTIME_VERSION'
-$AgentlyCliBinary = Set-FromEnvironment $AgentlyCliBinary 'COPIS_AGENTLY_CLI_BINARY'
+$AgentlyCliArchive = Set-FromEnvironment $AgentlyCliArchive 'COPIS_AGENTLY_CLI_ARCHIVE'
 $AgentlyCliVersion = Set-FromEnvironment $AgentlyCliVersion 'COPIS_AGENTLY_CLI_VERSION'
 $nodeRuntimeSource = [System.Environment]::GetEnvironmentVariable('COPIS_NODE_RUNTIME_SOURCE', 'Process')
 
@@ -354,12 +354,21 @@ function Read-AlipayBotVersion {
 }
 
 function Read-AgentlyCliVersion {
-    param([Parameter(Mandatory = $true)][string]$Binary)
+    param([Parameter(Mandatory = $true)][string]$Archive)
 
-    $output = try { (& $Binary '--version' 2>$null | Out-String).Trim() } catch { '' }
-    $match = [regex]::Match($output, '\b\d+\.\d+\.\d+\b')
-    if (-not $match.Success) { throw "无法读取 Agent QQ 邮箱 CLI 版本：$Binary" }
-    return $match.Value
+    $runtimeMetadata = try { (& tar.exe '-xOf' $Archive './runtime/node_modules/@tencent-qqmail/agently-cli/package.json' 2>$null | Out-String).Trim() } catch { '' }
+    if ([string]::IsNullOrWhiteSpace($runtimeMetadata)) {
+        throw "无法读取 Agent QQ 邮箱 CLI 归档版本：$Archive"
+    }
+    try {
+        $metadata = $runtimeMetadata | ConvertFrom-Json
+    } catch {
+        throw "Agent QQ 邮箱 CLI 归档 package.json 无效：$Archive"
+    }
+    if ($metadata.version -isnot [string] -or $metadata.version -notmatch '^\d+\.\d+\.\d+') {
+        throw "Agent QQ 邮箱 CLI package.json 缺少合法版本：$Archive"
+    }
+    return [string]$metadata.version
 }
 
 $bunPath = Resolve-BunPath
@@ -483,22 +492,29 @@ if (-not $RustOnly -and -not $OfficeCliOnly -and -not $NodeRuntimeOnly -and -not
     $pythonRuntimeVersionValue = if ([string]::IsNullOrWhiteSpace($PythonRuntimeVersion)) { '3.12.14' } else { $PythonRuntimeVersion.Trim() }
 }
 
-$agentlyCliBinaryPath = $null
+$agentlyCliArchivePath = $null
 $agentlyCliVersionValue = $null
 if (-not $RustOnly -and -not $OfficeCliOnly -and -not $NodeRuntimeOnly -and -not $AlipayBotOnly -and -not $PlaywrightCoreOnly -and -not $PythonRuntimeOnly) {
-    $agentlyCliBinaryPath = Resolve-PathFromRoot $AgentlyCliBinary
-    $agentlyCliFileName = if ($Platform -eq 'win32') { 'agently-cli.exe' } else { 'agently-cli' }
-    if (-not $agentlyCliBinaryPath) { $agentlyCliBinaryPath = Join-Path $appDir "resources\bin\$agentlyCliFileName" }
-    if (-not (Test-Path -LiteralPath $agentlyCliBinaryPath -PathType Leaf) -or $env:COPIS_REFRESH_AGENTLY_CLI -eq '1') {
+    $agentlyCliArchivePath = Resolve-PathFromRoot $AgentlyCliArchive
+    if (-not $agentlyCliArchivePath) { $agentlyCliArchivePath = Join-Path $appDir "resources\agently-cli\$Platform-$Arch.tar.gz" }
+    if (-not (Test-Path -LiteralPath $agentlyCliArchivePath -PathType Leaf) -or $env:COPIS_REFRESH_AGENTLY_CLI -eq '1') {
         if ($Platform -ne $currentPlatform -or $Arch -ne $currentArch) {
-            throw 'Agent QQ 邮箱 CLI 必须在目标平台和架构准备，跨平台请传入 -AgentlyCliBinary。'
+            throw 'Agent QQ Mail CLI must be prepared on the target platform and architecture. Provide -AgentlyCliArchive for cross-platform artifacts.'
         }
-        Write-Host '正在通过官方 npm 包准备 Agent QQ 邮箱 CLI 功能模块...'
-        Invoke-BunCommand $rootDir @('run', 'prepare:agently-cli-module', '--', '--platform', $Platform, '--arch', $Arch, '--output', $agentlyCliBinaryPath) 'Agent QQ 邮箱 CLI 功能模块准备失败'
+        $metadataPath = Join-Path ([System.IO.Path]::GetTempPath()) "copis-agently-cli-$([Guid]::NewGuid().ToString('N')).json"
+        try {
+            Write-Host 'Preparing official Agent QQ Mail CLI module...'
+            Invoke-BunCommand $rootDir @('run', 'prepare:agently-cli-module', '--', '--platform', $Platform, '--arch', $Arch, '--output', $agentlyCliArchivePath, '--metadata', $metadataPath) 'Agent QQ Mail CLI module preparation failed'
+            if ([string]::IsNullOrWhiteSpace($AgentlyCliVersion)) {
+                $AgentlyCliVersion = [string](Get-Content -LiteralPath $metadataPath -Raw -Encoding UTF8 | ConvertFrom-Json).version
+            }
+        } finally {
+            if (Test-Path -LiteralPath $metadataPath -PathType Leaf) { Remove-Item -LiteralPath $metadataPath -Force }
+        }
     }
-    if (-not (Test-Path -LiteralPath $agentlyCliBinaryPath -PathType Leaf)) { throw "未找到 Agent QQ 邮箱 CLI 二进制：$agentlyCliBinaryPath" }
-    $agentlyCliBinaryPath = (Resolve-Path -LiteralPath $agentlyCliBinaryPath).Path
-    $agentlyCliVersionValue = if ([string]::IsNullOrWhiteSpace($AgentlyCliVersion)) { Read-AgentlyCliVersion $agentlyCliBinaryPath } else { $AgentlyCliVersion.Trim() }
+    if (-not (Test-Path -LiteralPath $agentlyCliArchivePath -PathType Leaf)) { throw "Agent QQ Mail CLI archive was not found: $agentlyCliArchivePath" }
+    $agentlyCliArchivePath = (Resolve-Path -LiteralPath $agentlyCliArchivePath).Path
+    $agentlyCliVersionValue = if ([string]::IsNullOrWhiteSpace($AgentlyCliVersion)) { Read-AgentlyCliVersion $agentlyCliArchivePath } else { $AgentlyCliVersion.Trim() }
 }
 
 if ($BuildApp) {
@@ -518,7 +534,7 @@ if (-not $SkipPublish) {
     if (-not $RustOnly -and -not $OfficeCliOnly -and -not $NodeRuntimeOnly -and -not $PlaywrightCoreOnly -and -not $PythonRuntimeOnly -and -not $AgentlyCliOnly) { $releaseArguments += @('--alipay-bot-archive', $alipayBotArchivePath, '--alipay-bot-version', $alipayBotVersionValue) }
     if (-not $RustOnly -and -not $OfficeCliOnly -and -not $NodeRuntimeOnly -and -not $AlipayBotOnly -and -not $PythonRuntimeOnly -and -not $AgentlyCliOnly) { $releaseArguments += @('--playwright-core-archive', $playwrightCoreArchivePath, '--playwright-core-version', $playwrightCoreVersionValue) }
     if (-not $RustOnly -and -not $OfficeCliOnly -and -not $NodeRuntimeOnly -and -not $AlipayBotOnly -and -not $PlaywrightCoreOnly -and -not $AgentlyCliOnly) { $releaseArguments += @('--python-runtime-archive', $pythonRuntimeArchivePath, '--python-runtime-version', $pythonRuntimeVersionValue) }
-    if (-not $RustOnly -and -not $OfficeCliOnly -and -not $NodeRuntimeOnly -and -not $AlipayBotOnly -and -not $PlaywrightCoreOnly -and -not $PythonRuntimeOnly) { $releaseArguments += @('--agently-cli-binary', $agentlyCliBinaryPath, '--agently-cli-version', $agentlyCliVersionValue) }
+    if (-not $RustOnly -and -not $OfficeCliOnly -and -not $NodeRuntimeOnly -and -not $AlipayBotOnly -and -not $PlaywrightCoreOnly -and -not $PythonRuntimeOnly) { $releaseArguments += @('--agently-cli-archive', $agentlyCliArchivePath, '--agently-cli-version', $agentlyCliVersionValue) }
     if (-not [string]::IsNullOrWhiteSpace($ObjectPrefixPath)) { $releaseArguments += @('--prefix', $ObjectPrefixPath.Trim()) }
     if ($RustOnly) { $releaseArguments += '--rust' }
     if ($OfficeCliOnly) { $releaseArguments += '--officecli' }

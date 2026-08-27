@@ -400,6 +400,7 @@ function displayName(name: FunctionalModuleName): string {
   if (name === 'node-runtime') return 'Node.js 运行环境'
   if (name === 'officecli') return 'Office 文档支持'
   if (name === 'alipay-bot') return '支付宝智能体 CLI'
+  if (name === 'agently-cli') return 'Agent QQ 邮箱 CLI'
   if (name === 'playwright-core') return '浏览器自动化内核'
   if (name === 'python-runtime') return 'Python 3.12 运行环境'
   return '系统核心模块'
