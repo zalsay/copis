@@ -36,12 +36,17 @@ import {
   parseXaiCredentials,
   serializeXaiCredentials,
   isXaiCredentialExpired,
+  withDefaultProviderModels,
+  createBuiltinChannelForId,
+  createBuiltinChannels,
+  isCopisWorkingChannelId,
 } from '@copis/shared'
 import { refreshCodexOAuth } from './codex-oauth-service'
 import { refreshXaiOAuth } from './xai-oauth-service'
 import { refreshXaiOAuthCredentialsSerial, rememberXaiOAuthCredentials } from './xai-oauth-credentials'
 import { parseCodexPlanQuotaResponse } from './codex-plan-quota'
 import { listCodexModels, listXaiModels } from './adapters/pi-model-registry'
+import { getWorkingApiClient } from './working-api-service'
 import { getFetchFn } from './proxy-fetch'
 import { getEffectiveProxyUrl } from './proxy-settings-service'
 import {
@@ -104,6 +109,11 @@ function withTimeout(init: RequestInit, timeoutMs = CHANNEL_TEST_TIMEOUT_MS): Re
 
 function cloneModels(models: ChannelModel[]): ChannelModel[] {
   return models.map((model) => ({ ...model }))
+}
+
+function withProviderDefaults(channel: Channel): Channel {
+  const models = withDefaultProviderModels(channel.provider, channel.models)
+  return models === channel.models ? channel : { ...channel, models }
 }
 
 function createPresetModelsResult(providerName: string, models: ChannelModel[]): FetchModelsResult {
@@ -288,39 +298,20 @@ function decryptKey(encryptedKey: string): string {
   }
 }
 
+/** 返回用户配置文件中的渠道，不包含代码内置渠道。 */
+export function listConfiguredChannels(): Channel[] {
+  return readConfig().channels.map(withProviderDefaults)
+}
+
 /**
- * 获取所有渠道
+ * 获取所有渠道。
  *
- * 返回的渠道中 apiKey 保持加密状态。
- * 首次调用时，如果没有任何 DeepSeek 渠道，自动创建预设渠道。
+ * 内置渠道由代码统一定义并按当前 Working endpoint 即时构造；用户渠道
+ * 仍从 channels.json 读取。返回的渠道中 apiKey 保持加密状态。
  */
 export function listChannels(): Channel[] {
-  const config = readConfig()
-
-  // 首次使用：如果没有 DeepSeek 渠道，自动创建预设
-  const hasDeepSeek = config.channels.some(
-    (c) => c.provider === 'deepseek' || c.baseUrl.includes('api.deepseek.com'),
-  )
-  if (!hasDeepSeek) {
-    const now = Date.now()
-    const presetChannel: Channel = {
-      id: randomUUID(),
-      name: 'DeepSeek',
-      provider: 'deepseek',
-      baseUrl: PROVIDER_DEFAULT_URLS.deepseek,
-      apiKey: encryptApiKey(''),
-      models: cloneModels(DEEPSEEK_PRESET_MODELS),
-      enabled: false,
-      createdAt: now,
-      updatedAt: now,
-    }
-    config.channels.push(presetChannel)
-    writeConfig(config)
-    console.log('[渠道管理] 已自动创建 DeepSeek 预设渠道')
-    return config.channels
-  }
-
-  return config.channels
+  const builtinChannels = createBuiltinChannels(getWorkingApiClient().baseUrl)
+  return [...builtinChannels, ...listConfiguredChannels()]
 }
 
 /**
@@ -329,8 +320,9 @@ export function listChannels(): Channel[] {
  * 返回的渠道中 apiKey 保持加密状态。
  */
 export function getChannelById(id: string): Channel | undefined {
-  const config = readConfig()
-  return config.channels.find((c) => c.id === id)
+  const builtinChannel = createBuiltinChannelForId(getWorkingApiClient().baseUrl, id)
+  if (builtinChannel) return builtinChannel
+  return listConfiguredChannels().find((channel) => channel.id === id)
 }
 
 /**
@@ -349,7 +341,7 @@ export function createChannel(input: ChannelCreateInput): Channel {
     provider: input.provider,
     baseUrl: input.baseUrl,
     apiKey: encryptApiKey(input.apiKey),
-    models: input.models,
+    models: withDefaultProviderModels(input.provider, input.models),
     enabled: input.enabled,
     createdAt: now,
     updatedAt: now,
@@ -385,7 +377,10 @@ export function updateChannel(id: string, input: ChannelUpdateInput): Channel {
     provider: input.provider ?? existing.provider,
     baseUrl: input.baseUrl ?? existing.baseUrl,
     apiKey: input.apiKey ? encryptApiKey(input.apiKey) : existing.apiKey,
-    models: input.models ?? existing.models,
+    models: withDefaultProviderModels(
+      input.provider ?? existing.provider,
+      input.models ?? existing.models,
+    ),
     enabled: input.enabled ?? existing.enabled,
     updatedAt: Date.now(),
   }
@@ -544,6 +539,8 @@ export async function resolveXaiAccessToken(channelId: string): Promise<string> 
  * OAuth 凭据 JSON，运行时必须取出 access token 并按需刷新。
  */
 export async function resolveChannelRuntimeApiKey(channelId: string): Promise<string> {
+  if (isCopisWorkingChannelId(channelId)) return ''
+
   const channel = getChannelById(channelId)
   if (!channel) {
     throw new Error(`渠道不存在: ${channelId}`)

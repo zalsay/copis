@@ -5,7 +5,8 @@
  * Electron main process 直接调用 Pi SDK，不通过 Working 远程 run API。
  */
 
-import type { Channel } from './channel'
+import { ZHIPU_DEFAULT_MODEL_ID, ZHIPU_DEFAULT_MODEL_NAME } from './channel'
+import type { Channel, ChannelModel } from './channel'
 import type { ModelOption } from './model'
 import type { AgentThinkingLevel } from './agent'
 
@@ -181,6 +182,7 @@ export interface WorkingSessionHistory {
 /** Copis Working 只在主进程中使用的虚拟渠道标识，不会写入 channels.json。 */
 export const COPIS_WORKING_CHANNEL_ID = 'copis-working'
 export const COPIS_WORKING_DEEPSEEK_CHANNEL_ID = 'copis-working-deepseek'
+export const COPIS_WORKING_ZHIPU_CHANNEL_ID = 'copis-working-zhipu'
 export const COPIS_WORKING_MODEL_ENDPOINT_PATH = '/api/internal/working-model/v1'
 export const COPIS_WORKING_FAST_MODEL_ID = 'fast'
 export const COPIS_WORKING_EXPERT_MODEL_ID = 'export'
@@ -193,7 +195,6 @@ export const COPIS_WORKING_MODEL_SOURCE_TYPE_HEADER = 'X-Working-Model-Source-Ty
 export const COPIS_WORKING_MODEL_SOURCE_TYPE_COPIS_AGENT = 'copis-agent-model'
 export const COPIS_WORKING_MODEL_IDS = [
   COPIS_WORKING_FAST_MODEL_ID,
-  COPIS_WORKING_EXPERT_MODEL_ID,
   COPIS_WORKING_GLOBAL_MODEL_ID,
 ] as const
 export const COPIS_WORKING_DEEPSEEK_MODEL_IDS = [
@@ -203,11 +204,13 @@ export const COPIS_WORKING_DEEPSEEK_MODEL_IDS = [
 export const COPIS_WORKING_CHANNEL_IDS = [
   COPIS_WORKING_CHANNEL_ID,
   COPIS_WORKING_DEEPSEEK_CHANNEL_ID,
+  COPIS_WORKING_ZHIPU_CHANNEL_ID,
 ] as const
-export type CopisWorkingModelId = (typeof COPIS_WORKING_MODEL_IDS)[number]
+/** export 仍作为旧会话/旧接口的兼容 alias，不再出现在内置模型列表。 */
+export type CopisWorkingModelId = (typeof COPIS_WORKING_MODEL_IDS)[number] | typeof COPIS_WORKING_EXPERT_MODEL_ID
 
 export function isCopisWorkingChannelId(value: string | undefined): boolean {
-  return value === COPIS_WORKING_CHANNEL_ID || value === COPIS_WORKING_DEEPSEEK_CHANNEL_ID
+  return value != null && (COPIS_WORKING_CHANNEL_IDS as readonly string[]).includes(value)
 }
 
 /** Working Composer 的执行模式。edu-api 使用 fast/export alias；Copis 保留 fast/expert UI 语义。 */
@@ -227,62 +230,126 @@ export function workingModeToModelId(mode: WorkingMode): CopisWorkingModelId {
   return mode === 'expert' ? COPIS_WORKING_EXPERT_MODEL_ID : COPIS_WORKING_FAST_MODEL_ID
 }
 
-/** 构造仅供 Agent UI 和主进程使用的 Working Responses 渠道。 */
-export function createCopisWorkingChannel(backendUrl: string, now = 0): Channel {
+interface BuiltinModelDefinition {
+  id: string
+  name: string
+}
+
+interface BuiltinChannelGroupDefinition {
+  name: string
+  models: readonly BuiltinModelDefinition[]
+}
+
+/**
+ * 内置渠道的统一定义。
+ *
+ * `groups` 使用 channel ID 作为 key，分组内容只负责描述名称和模型；
+ * provider、endpoint、认证占位符、启用状态等相同配置集中在 `common`，新增
+ * 内置模型时只需添加一个分组或模型定义。
+ */
+export const BUILTIN_CHANNEL_DEFINITIONS = {
+  common: {
+    provider: 'openai-responses',
+    endpointPath: COPIS_WORKING_MODEL_ENDPOINT_PATH,
+    apiKey: '',
+    channelEnabled: true,
+    modelEnabled: true,
+    modelSource: 'manual',
+  },
+  groups: {
+    [COPIS_WORKING_CHANNEL_ID]: {
+      name: '内置模型',
+      models: [
+        { id: COPIS_WORKING_FAST_MODEL_ID, name: '快速' },
+        { id: COPIS_WORKING_GLOBAL_MODEL_ID, name: '通识' },
+      ],
+    },
+    [COPIS_WORKING_DEEPSEEK_CHANNEL_ID]: {
+      name: 'DeepSeek',
+      models: [
+        { id: COPIS_WORKING_DEEPSEEK_FAST_MODEL_ID, name: '快速' },
+        { id: COPIS_WORKING_DEEPSEEK_PRO_MODEL_ID, name: '专业' },
+      ],
+    },
+    [COPIS_WORKING_ZHIPU_CHANNEL_ID]: {
+      name: 'Z.ai（智谱）',
+      models: [
+        { id: ZHIPU_DEFAULT_MODEL_ID, name: ZHIPU_DEFAULT_MODEL_NAME },
+      ],
+    },
+  },
+} as const satisfies {
+  common: {
+    provider: 'openai-responses'
+    endpointPath: string
+    apiKey: string
+    channelEnabled: boolean
+    modelEnabled: boolean
+    modelSource: ChannelModel['source']
+  }
+  groups: Record<string, BuiltinChannelGroupDefinition>
+}
+
+function normalizeBuiltinBackendUrl(backendUrl: string): string {
   const baseUrl = backendUrl.trim().replace(/\/+$/, '')
   if (!baseUrl) throw new Error('Copis Working 后端地址不能为空')
+  return baseUrl
+}
 
+function createBuiltinChannel(
+  backendUrl: string,
+  channelId: string,
+  group: BuiltinChannelGroupDefinition,
+  now: number,
+): Channel {
   return {
-    id: COPIS_WORKING_CHANNEL_ID,
-    name: '内置模型',
-    provider: 'openai-responses',
-    baseUrl: `${baseUrl}${COPIS_WORKING_MODEL_ENDPOINT_PATH}`,
-    apiKey: '',
-    models: COPIS_WORKING_MODEL_IDS.map((id) => ({
-      id,
-      name: id === COPIS_WORKING_FAST_MODEL_ID
-        ? '快速'
-        : id === COPIS_WORKING_EXPERT_MODEL_ID
-          ? '专家'
-          : '通识',
-      enabled: true,
-      source: 'manual' as const,
+    id: channelId,
+    name: group.name,
+    provider: BUILTIN_CHANNEL_DEFINITIONS.common.provider,
+    baseUrl: `${backendUrl}${BUILTIN_CHANNEL_DEFINITIONS.common.endpointPath}`,
+    apiKey: BUILTIN_CHANNEL_DEFINITIONS.common.apiKey,
+    models: group.models.map((model): ChannelModel => ({
+      id: model.id,
+      name: model.name,
+      enabled: BUILTIN_CHANNEL_DEFINITIONS.common.modelEnabled,
+      source: BUILTIN_CHANNEL_DEFINITIONS.common.modelSource,
     })),
-    enabled: true,
+    enabled: BUILTIN_CHANNEL_DEFINITIONS.common.channelEnabled,
     createdAt: now,
     updatedAt: now,
   }
 }
 
+/** 根据统一定义构造全部内置渠道。 */
+export function createBuiltinChannels(backendUrl: string, now = 0): Channel[] {
+  const baseUrl = normalizeBuiltinBackendUrl(backendUrl)
+  return Object.entries(BUILTIN_CHANNEL_DEFINITIONS.groups).map(([channelId, group]) =>
+    createBuiltinChannel(baseUrl, channelId, group, now)
+  )
+}
+
+/** 根据统一定义构造单个内置渠道。 */
+export function createBuiltinChannelForId(
+  backendUrl: string,
+  channelId: string,
+  now = 0,
+): Channel | undefined {
+  const groups = BUILTIN_CHANNEL_DEFINITIONS.groups
+  const group = Object.prototype.hasOwnProperty.call(groups, channelId)
+    ? groups[channelId as keyof typeof groups]
+    : undefined
+  if (!group) return undefined
+  return createBuiltinChannel(normalizeBuiltinBackendUrl(backendUrl), channelId, group, now)
+}
+
+/** 构造仅供 Agent UI 和主进程使用的 Working Responses 渠道。 */
+export function createCopisWorkingChannel(backendUrl: string, now = 0): Channel {
+  return createBuiltinChannelForId(backendUrl, COPIS_WORKING_CHANNEL_ID, now)!
+}
+
 /** 构造仅供 Agent UI 和主进程使用的 DeepSeek 虚拟渠道。 */
 export function createCopisWorkingDeepSeekChannel(backendUrl: string, now = 0): Channel {
-  const baseUrl = backendUrl.trim().replace(/\/+$/, '')
-  if (!baseUrl) throw new Error('Copis Working 后端地址不能为空')
-
-  return {
-    id: COPIS_WORKING_DEEPSEEK_CHANNEL_ID,
-    name: 'DeepSeek',
-    provider: 'openai-responses',
-    baseUrl: `${baseUrl}${COPIS_WORKING_MODEL_ENDPOINT_PATH}`,
-    apiKey: '',
-    models: [
-      {
-        id: COPIS_WORKING_DEEPSEEK_FAST_MODEL_ID,
-        name: '快速',
-        enabled: true,
-        source: 'manual',
-      },
-      {
-        id: COPIS_WORKING_DEEPSEEK_PRO_MODEL_ID,
-        name: '专业',
-        enabled: true,
-        source: 'manual',
-      },
-    ],
-    enabled: true,
-    createdAt: now,
-    updatedAt: now,
-  }
+  return createBuiltinChannelForId(backendUrl, COPIS_WORKING_DEEPSEEK_CHANNEL_ID, now)!
 }
 
 /** 根据虚拟渠道 ID 构造 Copis Working 内置渠道。 */
@@ -291,9 +358,7 @@ export function createCopisWorkingChannelForId(
   channelId: string,
   now = 0,
 ): Channel | undefined {
-  if (channelId === COPIS_WORKING_CHANNEL_ID) return createCopisWorkingChannel(backendUrl, now)
-  if (channelId === COPIS_WORKING_DEEPSEEK_CHANNEL_ID) return createCopisWorkingDeepSeekChannel(backendUrl, now)
-  return undefined
+  return createBuiltinChannelForId(backendUrl, channelId, now)
 }
 
 /**

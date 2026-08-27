@@ -11,7 +11,7 @@
 
 import * as React from 'react'
 import { useAtom, useAtomValue, useSetAtom } from 'jotai'
-import { Brain, ChevronDown, Cpu, Globe, Search, Zap } from 'lucide-react'
+import { ChevronDown, Cpu, Globe, Search, Zap } from 'lucide-react'
 import {
   Dialog,
   DialogContent,
@@ -30,7 +30,6 @@ import {
   channelsLoadedAtom,
   modelSelectorOpenAtom,
 } from '@/atoms/model-atoms'
-import { workingClientConfigAtom } from '@/atoms/working-atoms'
 import { workingModelCatalogAtom } from '@/atoms/working-model-catalog-atoms'
 import { CopisTemplateLogo, getModelLogo, getChannelLogo, DefaultLogo } from '@/lib/model-logo'
 import { cn } from '@/lib/utils'
@@ -39,14 +38,11 @@ import {
   COPIS_WORKING_DEEPSEEK_CHANNEL_ID,
   COPIS_WORKING_DEEPSEEK_FAST_MODEL_ID,
   COPIS_WORKING_DEEPSEEK_PRO_MODEL_ID,
-  COPIS_WORKING_EXPERT_MODEL_ID,
   COPIS_WORKING_FAST_MODEL_ID,
   COPIS_WORKING_GLOBAL_MODEL_ID,
-  createCopisWorkingChannel,
-  createCopisWorkingDeepSeekChannel,
   workingModelCatalogToOptions,
 } from '@copis/shared'
-import type { Channel, ModelOption, ProviderType, WorkingCustomModelOption, WorkingModelLatencyMap } from '@copis/shared'
+import type { ModelOption, ProviderType, WorkingCustomModelOption, WorkingModelLatencyMap } from '@copis/shared'
 import { ChannelPlanQuotaBadge } from './ChannelPlanQuotaBadge'
 import { buildModelOptions } from './model-selector-utils'
 import { ModelLatencySignal } from './ModelLatencySignal'
@@ -100,7 +96,6 @@ function getModelDescription(option: Pick<ModelOption, 'channelId' | 'modelId'>)
   }
   if (option.channelId !== COPIS_WORKING_CHANNEL_ID) return undefined
   if (option.modelId === COPIS_WORKING_FAST_MODEL_ID) return '速度快，思考能力一般'
-  if (option.modelId === COPIS_WORKING_EXPERT_MODEL_ID) return '知识面广，深度思考，消耗更多钻石'
   if (option.modelId === COPIS_WORKING_GLOBAL_MODEL_ID) return '通晓世界知识，适合教育、探索等场景'
   return undefined
 }
@@ -108,9 +103,6 @@ function getModelDescription(option: Pick<ModelOption, 'channelId' | 'modelId'>)
 function renderModelIcon(option: ModelOption, useCopisLogo: boolean, className: string): React.ReactElement {
   if (option.channelId === COPIS_WORKING_CHANNEL_ID && option.modelId === COPIS_WORKING_FAST_MODEL_ID) {
     return <Zap aria-hidden="true" className={cn(className, 'text-amber-400')} />
-  }
-  if (option.channelId === COPIS_WORKING_CHANNEL_ID && option.modelId === COPIS_WORKING_EXPERT_MODEL_ID) {
-    return <Brain aria-hidden="true" className={cn(className, 'text-violet-400')} />
   }
   if (option.channelId === COPIS_WORKING_CHANNEL_ID && option.modelId === COPIS_WORKING_GLOBAL_MODEL_ID) {
     return <Globe aria-hidden="true" className={cn(className, 'text-sky-400')} />
@@ -130,8 +122,6 @@ function renderModelIcon(option: ModelOption, useCopisLogo: boolean, className: 
 interface ModelSelectorProps {
   /** 仅显示此渠道的模型 */
   filterChannelId?: string
-  /** 仅供 Agent 等专用场景追加的内存渠道，不会写入全局渠道配置。 */
-  additionalChannels?: Channel[]
   /** 仅显示这些渠道的模型（多渠道过滤） */
   filterChannelIds?: string[]
   /** 外部选中模型（不传则用内部 selectedModelAtom） */
@@ -152,13 +142,14 @@ interface ModelSelectorProps {
   useSharedOpenState?: boolean
   /** 模型列表展示位置；Composer 使用紧贴输入框并向上展开的抽屉。 */
   placement?: 'dialog' | 'composer'
+  /** Agent/欢迎页 Composer 使用的渠道范围与产品分组名。 */
+  composerMode?: boolean
   /** Composer 自定义模型配置，按用户分类分组展示；选择后仍走现有 Working 请求链。 */
   customModelOptions?: readonly WorkingCustomModelOption[]
 }
 
 export function ModelSelector({
   filterChannelId,
-  additionalChannels,
   filterChannelIds,
   externalSelectedModel,
   onModelSelect,
@@ -169,6 +160,7 @@ export function ModelSelector({
   useSharedOpenState = false,
   placement = 'dialog',
   triggerClassName,
+  composerMode = false,
   customModelOptions,
 }: ModelSelectorProps = {}): React.ReactElement {
   const setGlobalModel = useSetAtom(selectedModelAtom)
@@ -188,18 +180,7 @@ export function ModelSelector({
   // 外部模型优先；未传入时使用全局默认模型，避免依赖旧 Chat 会话状态。
   const selectedModel = externalSelectedModel !== undefined ? externalSelectedModel : globalSelectedModel
 
-  const workingClientConfig = useAtomValue(workingClientConfigAtom)
   const workingModelCatalog = useAtomValue(workingModelCatalogAtom)
-
-  const backendUrl = workingClientConfig?.backendUrl || 'http://127.0.0.1:9000'
-  const defaultWorkingChannel = React.useMemo(
-    () => createCopisWorkingChannel(backendUrl),
-    [backendUrl],
-  )
-  const defaultDeepSeekChannel = React.useMemo(
-    () => createCopisWorkingDeepSeekChannel(backendUrl),
-    [backendUrl],
-  )
   const defaultCustomModelOptions = React.useMemo(
     () => workingModelCatalogToOptions(workingModelCatalog),
     [workingModelCatalog],
@@ -214,23 +195,8 @@ export function ModelSelector({
     }
   }, [channelsLoaded, setChannels])
 
-  // 可用渠道（合并外部透传或默认 Working / DeepSeek 渠道）
-  const availableChannels = React.useMemo(() => {
-    let list = [...channels]
-    const extraChannels = additionalChannels !== undefined
-      ? additionalChannels
-      : [defaultWorkingChannel, defaultDeepSeekChannel].filter((c): c is NonNullable<typeof c> => c !== null)
-
-    if (extraChannels.length > 0) {
-      const existingIds = new Set(list.map((c) => c.id))
-      for (const ch of extraChannels) {
-        if (!existingIds.has(ch.id)) {
-          list.push(ch)
-        }
-      }
-    }
-    return list
-  }, [channels, additionalChannels, defaultWorkingChannel, defaultDeepSeekChannel])
+  // 渠道唯一来自主进程 listChannels() 的结果；内置渠道也由该列表统一提供。
+  const availableChannels = channels
 
   const resolvedCustomModelOptions = customModelOptions !== undefined
     ? customModelOptions
@@ -238,8 +204,17 @@ export function ModelSelector({
 
   // 构建全部模型选项（已启用渠道中已启用的模型）
   const allOptions = React.useMemo(() => {
-    return buildModelOptions(availableChannels, filterChannelId, filterChannelIds, excludedProviders)
-  }, [availableChannels, filterChannelId, filterChannelIds, excludedProviders])
+    return buildModelOptions(
+      availableChannels,
+      filterChannelId,
+      filterChannelIds,
+      excludedProviders,
+      {
+        includeProviders: composerMode ? ['zhipu'] : undefined,
+        useComposerProviderLabels: composerMode,
+      },
+    )
+  }, [availableChannels, composerMode, filterChannelId, filterChannelIds, excludedProviders])
 
   // 按供应商/渠道分组（包含用户自定义 Working 模型）
   const grouped = React.useMemo(() => {

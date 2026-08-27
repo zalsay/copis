@@ -31,7 +31,7 @@ import {
   getChatToolsConfigPath,
 } from './config-paths'
 import { listAgentWorkspaces, getAgentWorkspace, getAllWorkspaceSkills, getWorkspaceMcpConfig } from './agent-workspace-manager'
-import { listChannels, decryptApiKey } from './channel-manager'
+import { listConfiguredChannels, decryptApiKey } from './channel-manager'
 import type { AgentWorkspace } from '@copis/shared'
 
 // ─── 类型定义 ────────────────────────────────────────────────────────────────
@@ -468,7 +468,7 @@ function _addChannels(zip: AdmZip, mode: MigrationMode) {
   if (!existsSync(channelsPath)) return
 
   if (mode === 'personal') {
-    const channels = listChannels()
+    const channels = listConfiguredChannels()
     const decrypted = channels.map((ch) => {
       try { return { ...ch, apiKey: decryptApiKey(ch.id) } }
       catch { return { ...ch, apiKey: '' } }
@@ -476,7 +476,7 @@ function _addChannels(zip: AdmZip, mode: MigrationMode) {
     const config = readJsonSafe<{ version: number }>(channelsPath) ?? { version: 1 }
     zip.addFile('config/channels.json', Buffer.from(JSON.stringify({ ...config, channels: decrypted }, null, 2), 'utf-8'))
   } else {
-    const channels = listChannels().map((ch) => ({ ...ch, apiKey: '' }))
+    const channels = listConfiguredChannels().map((ch) => ({ ...ch, apiKey: '' }))
     const config = readJsonSafe<{ version: number }>(channelsPath) ?? { version: 1 }
     zip.addFile('config/channels.json', Buffer.from(JSON.stringify({ ...config, channels }, null, 2), 'utf-8'))
   }

@@ -1,5 +1,11 @@
 import { describe, expect, mock, test } from 'bun:test'
-import { COPIS_WORKING_FAST_MODEL_ID, type AgentSessionMeta, type AgentWorkspace } from '@copis/shared'
+import {
+  COPIS_WORKING_FAST_MODEL_ID,
+  COPIS_WORKING_ZHIPU_CHANNEL_ID,
+  ZHIPU_DEFAULT_MODEL_ID,
+  type AgentSessionMeta,
+  type AgentWorkspace,
+} from '@copis/shared'
 import type { AgentHttpFacade, HttpApiDependencies } from './http-api-handler'
 
 // Bun 测试环境没有 Electron 原生模块，健康检查测试不需要真实凭证存储。
@@ -312,6 +318,44 @@ describe('Rust HTTP API 业务桥契约', () => {
       'pi',
       undefined,
       { runId: 'run-1', schemaId: 'research-v1', schemaRevisionId: 8 },
+    ]])
+  })
+
+  test('Given Composer 选择内置 Z.ai When 通过 Rust HTTP API 创建会话 Then 保留 Z.ai 渠道和模型', async () => {
+    const workspace = { id: 'workspace-1', slug: 'project-a' } as AgentWorkspace
+    const calls: unknown[][] = []
+    const dependencies: HttpApiDependencies = {
+      ...createDependencies(),
+      getAgentApi: async (): Promise<AgentHttpFacade> => ({
+        ensureDefaultWorkspace: () => workspace,
+        listAgentWorkspaces: () => [workspace],
+        createAgentSession: (...args: Parameters<AgentHttpFacade['createAgentSession']>) => {
+          calls.push(args)
+          return { id: 'session-1' } as AgentSessionMeta
+        },
+      } as unknown as AgentHttpFacade),
+    }
+
+    const response = await handleHttpApiRequest({
+      method: 'POST',
+      path: '/api/agent/sessions',
+      body: JSON.stringify({
+        channelId: COPIS_WORKING_ZHIPU_CHANNEL_ID,
+        modelId: ZHIPU_DEFAULT_MODEL_ID,
+        workspaceId: workspace.id,
+      }),
+    }, dependencies)
+
+    expect(response).toMatchObject({ status: 201, body: { id: 'session-1' } })
+    expect(calls).toEqual([[
+      undefined,
+      COPIS_WORKING_ZHIPU_CHANNEL_ID,
+      workspace.id,
+      ZHIPU_DEFAULT_MODEL_ID,
+      'pi',
+      undefined,
+      undefined,
+      undefined,
     ]])
   })
 

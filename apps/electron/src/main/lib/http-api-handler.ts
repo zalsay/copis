@@ -40,6 +40,7 @@ import {
   COPIS_WORKING_EXPERT_MODEL_ID,
   COPIS_WORKING_FAST_MODEL_ID,
   COPIS_WORKING_GLOBAL_MODEL_ID,
+  isCopisWorkingChannelId,
   isWorkingCustomModelChannelId,
   WORKING_IPC_CHANNELS,
 } from '@copis/shared'
@@ -403,8 +404,7 @@ function isWorkingVip(dependencies: HttpApiDependencies): boolean {
 }
 
 function isSupportedWorkingAgentChannel(channelId: string | undefined): boolean {
-  return channelId === COPIS_WORKING_CHANNEL_ID
-    || channelId === COPIS_WORKING_DEEPSEEK_CHANNEL_ID
+  return isCopisWorkingChannelId(channelId)
     || isWorkingCustomModelChannelId(channelId)
 }
 

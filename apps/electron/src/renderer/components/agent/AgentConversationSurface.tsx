@@ -128,6 +128,7 @@ import type { AgentRuntime, AgentSendInput, AgentPendingFile, FileDialogLargeFil
 import './AgentView.css'
 import {
   COPIS_WORKING_CHANNEL_ID,
+  COPIS_WORKING_CHANNEL_IDS,
   COPIS_WORKING_DEEPSEEK_CHANNEL_ID,
   COPIS_WORKING_DEEPSEEK_FAST_MODEL_ID,
   COPIS_WORKING_EXPERT_MODEL_ID,
@@ -137,6 +138,7 @@ import {
   inferAgentContextWindow,
   inferContextWindow,
   isCodexFastModeSupportedModel,
+  isCopisWorkingChannelId,
   isWorkingCustomModelChannelId,
   MAX_ATTACHMENT_SIZE,
   toFileApiContext,
@@ -322,6 +324,7 @@ export function AgentConversationSurface({ sessionId, variant = 'main' }: AgentC
   const sessionMetaChannelId = sessionMeta?.channelId
   const sessionMetaModelId = sessionMeta?.modelId
   const hasSessionMeta = Boolean(sessionMeta)
+  const globalChannels = useAtomValue(channelsAtom)
   const workingClientConfig = useAtomValue(workingClientConfigAtom)
   const workingChannel = React.useMemo(
     () => workingClientConfig ? createCopisWorkingChannel(workingClientConfig.backendUrl) : null,
@@ -342,12 +345,17 @@ export function AgentConversationSurface({ sessionId, variant = 'main' }: AgentC
     ?? sessionMetaChannelId
     ?? (!hasSessionMeta ? defaultChannelId : undefined)
   const candidateChannelId = configuredChannelId ?? undefined
-  // Agent 默认使用 Copis 内置渠道，同时允许 VIP 自定义模型虚拟渠道恢复。
+  const candidateChannel = candidateChannelId
+    ? globalChannels.find((channel) => channel.id === candidateChannelId)
+    : undefined
+  // Agent 默认使用 Copis 内置渠道，同时允许已配置 zhipu 渠道和 VIP 自定义模型虚拟渠道恢复。
   const agentChannelId = isWorkingCustomModelChannelId(candidateChannelId)
     ? candidateChannelId
-    : candidateChannelId === COPIS_WORKING_DEEPSEEK_CHANNEL_ID
-      ? COPIS_WORKING_DEEPSEEK_CHANNEL_ID
-      : COPIS_WORKING_CHANNEL_ID
+    : isCopisWorkingChannelId(candidateChannelId)
+      ? candidateChannelId
+      : candidateChannel?.provider === 'zhipu'
+        ? candidateChannel.id
+        : COPIS_WORKING_CHANNEL_ID
   const selectedCustomModel = React.useMemo(
     () => isWorkingCustomModelChannelId(agentChannelId)
       ? customModelOptions.find((item) => item.channelId === agentChannelId)
@@ -358,9 +366,14 @@ export function AgentConversationSurface({ sessionId, variant = 'main' }: AgentC
     ? sessionModelMap.get(sessionId) ?? sessionMetaModelId ?? COPIS_WORKING_DEEPSEEK_FAST_MODEL_ID
     : isWorkingCustomModelChannelId(agentChannelId)
       ? selectedCustomModel?.modelId ?? sessionModelMap.get(sessionId) ?? sessionMetaModelId ?? ''
-      : sessionModelMap.get(sessionId) === COPIS_WORKING_GLOBAL_MODEL_ID || sessionMetaModelId === COPIS_WORKING_GLOBAL_MODEL_ID
-        ? COPIS_WORKING_GLOBAL_MODEL_ID
-        : workingModeToModelId(workingMode)
+      : agentChannelId === COPIS_WORKING_CHANNEL_ID
+        ? sessionModelMap.get(sessionId) === COPIS_WORKING_GLOBAL_MODEL_ID || sessionMetaModelId === COPIS_WORKING_GLOBAL_MODEL_ID
+          ? COPIS_WORKING_GLOBAL_MODEL_ID
+          : workingModeToModelId(workingMode)
+        : sessionModelMap.get(sessionId)
+          ?? sessionMetaModelId
+          ?? candidateChannel?.models.find((model) => model.enabled)?.id
+          ?? ''
   const setWorkingSettingsOpen = useSetAtom(workingSettingsOpenAtom)
   const setDraftSessionIds = useSetAtom(draftSessionIdsAtom)
   const globalWorkspaceId = useAtomValue(currentAgentWorkspaceIdAtom)
@@ -570,7 +583,6 @@ export function AgentConversationSurface({ sessionId, variant = 'main' }: AgentC
   }, [pendingFiles])
 
   // 渠道已选但模型未选时，自动选择第一个可用模型
-  const globalChannels = useAtomValue(channelsAtom)
   const stableChannel = React.useMemo(
     () => stableChannelId === COPIS_WORKING_CHANNEL_ID
       ? workingChannel
@@ -1816,10 +1828,9 @@ export function AgentConversationSurface({ sessionId, variant = 'main' }: AgentC
 
   /** ModelSelector 选择回调 */
   const handleModelSelect = React.useCallback((option: ModelOption): void => {
-    // Working 的两个模型选项只是 fast/expert alias；保持模式字段和模型字段同步，
-    // 避免从模型菜单切回 fast 时仍被旧的 expert 模式覆盖。
+    // Working 内置模型选项切换时同步回 fast 模式，避免旧的 expert 模式覆盖新选择。
     if (option.channelId === COPIS_WORKING_CHANNEL_ID) {
-      const nextMode: WorkingMode = option.modelId === COPIS_WORKING_EXPERT_MODEL_ID ? 'expert' : 'fast'
+      const nextMode: WorkingMode = 'fast'
       if (streaming || backgroundWaiting || !sessionMeta) return
       const previousSessionMeta = sessionMeta
 
@@ -2901,14 +2912,14 @@ export function AgentConversationSurface({ sessionId, variant = 'main' }: AgentC
     <>
       <div className="flex min-w-0 items-center gap-1 [&_.model-selector-trigger>span]:max-w-[min(12rem,30vw)]">
         <ModelSelector
-          filterChannelIds={[COPIS_WORKING_CHANNEL_ID, COPIS_WORKING_DEEPSEEK_CHANNEL_ID]}
-          additionalChannels={[workingChannel, deepSeekChannel].filter((channel): channel is NonNullable<typeof channel> => channel !== null)}
+          filterChannelIds={[...COPIS_WORKING_CHANNEL_IDS]}
           externalSelectedModel={externalSelectedModel}
           onModelSelect={handleModelSelect}
           showChannelInTrigger
           useCopisLogo
           useSharedOpenState={!compact}
           placement={compact ? 'composer' : 'dialog'}
+          composerMode
           customModelOptions={customModelOptions}
         />
       </div>

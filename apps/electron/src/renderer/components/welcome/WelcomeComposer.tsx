@@ -10,16 +10,13 @@ import { CornerDownLeft, Loader2, Paperclip, Square, Zap } from 'lucide-react'
 import type { AgentSessionMeta, AgentWorkspace, ModelOption, SDKMessage, WorkingMode } from '@copis/shared'
 import {
   COPIS_WORKING_CHANNEL_ID,
+  COPIS_WORKING_CHANNEL_IDS,
   COPIS_WORKING_DEEPSEEK_CHANNEL_ID,
   COPIS_WORKING_DEEPSEEK_FAST_MODEL_ID,
   COPIS_WORKING_DEEPSEEK_PRO_MODEL_ID,
-  COPIS_WORKING_EXPERT_MODEL_ID,
-  createCopisWorkingChannel,
-  createCopisWorkingDeepSeekChannel,
   workingModelCatalogToOptions,
   workingModeToModelId,
 } from '@copis/shared'
-import { workingClientConfigAtom } from '@/atoms/working-atoms'
 import { initializeWorkingModelCatalog, workingModelCatalogAtom } from '@/atoms/working-model-catalog-atoms'
 import { composerInputHistoryAtom, appendHistoryEntry } from '@/atoms/composer-history'
 import { ModelSelector } from '@/components/model/ModelSelector'
@@ -73,17 +70,8 @@ export function WelcomeComposer(): React.ReactElement {
   const [error, setError] = React.useState<string | null>(null)
   const [history, setHistory] = useAtom(composerInputHistoryAtom)
   const sessionRef = React.useRef<AgentSessionMeta | null>(null)
-  const workingClientConfig = useAtomValue(workingClientConfigAtom)
   const workingModelCatalog = useAtomValue(workingModelCatalogAtom)
   const setWorkingModelCatalog = useSetAtom(workingModelCatalogAtom)
-  const workingChannel = React.useMemo(
-    () => workingClientConfig ? createCopisWorkingChannel(workingClientConfig.backendUrl) : null,
-    [workingClientConfig],
-  )
-  const deepSeekChannel = React.useMemo(
-    () => workingClientConfig ? createCopisWorkingDeepSeekChannel(workingClientConfig.backendUrl) : null,
-    [workingClientConfig],
-  )
   const [selectedModel, setSelectedModel] = React.useState<{
     channelId: string
     modelId: string
@@ -194,7 +182,7 @@ export function WelcomeComposer(): React.ReactElement {
 
   const handleModelSelect = React.useCallback((option: ModelOption): void => {
     if (option.channelId === COPIS_WORKING_CHANNEL_ID) {
-      setWorkingMode(option.modelId === COPIS_WORKING_EXPERT_MODEL_ID ? 'expert' : 'fast')
+      setWorkingMode('fast')
     }
     if (option.channelId === COPIS_WORKING_DEEPSEEK_CHANNEL_ID
       && option.modelId !== COPIS_WORKING_DEEPSEEK_FAST_MODEL_ID
@@ -247,13 +235,13 @@ export function WelcomeComposer(): React.ReactElement {
   const trailingNode = (
     <>
       <ModelSelector
-        filterChannelIds={[COPIS_WORKING_CHANNEL_ID, COPIS_WORKING_DEEPSEEK_CHANNEL_ID]}
-        additionalChannels={[workingChannel, deepSeekChannel].filter((channel): channel is NonNullable<typeof channel> => channel !== null)}
+        filterChannelIds={[...COPIS_WORKING_CHANNEL_IDS]}
         externalSelectedModel={selectedModel}
         onModelSelect={handleModelSelect}
         showChannelInTrigger
         useCopisLogo
         useSharedOpenState
+        composerMode
         customModelOptions={customModelOptions}
       />
       {sending ? (

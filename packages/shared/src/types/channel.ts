@@ -291,6 +291,31 @@ export interface ChannelModel {
   source?: 'manual' | 'fetched'
 }
 
+/** Z.ai（智谱）渠道在未拉取模型列表时使用的默认模型。 */
+export const ZHIPU_DEFAULT_MODEL_ID = 'glm-5.3-flash'
+export const ZHIPU_DEFAULT_MODEL_NAME = 'GLM 5.3 Flash(智谱家族性价比之王)'
+export const ZHIPU_COMPOSER_GROUP_NAME = 'Z.ai（智谱）'
+
+/** 为指定供应商补齐默认模型；已配置同 ID 模型时保留用户配置。 */
+export function withDefaultProviderModels(
+  provider: ProviderType,
+  models: ChannelModel[],
+): ChannelModel[] {
+  if (provider !== 'zhipu' || models.some((model) => model.id === ZHIPU_DEFAULT_MODEL_ID)) {
+    return models
+  }
+
+  return [
+    {
+      id: ZHIPU_DEFAULT_MODEL_ID,
+      name: ZHIPU_DEFAULT_MODEL_NAME,
+      enabled: true,
+      source: 'manual',
+    },
+    ...models,
+  ]
+}
+
 /**
  * 渠道配置
  *
