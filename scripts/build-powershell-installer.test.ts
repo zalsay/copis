@@ -19,6 +19,18 @@ describe('Windows 构建脚本固定安装程序发布', () => {
     expect(buildScript).toContain("'--skip-cos-upload' { $SkipCosUpload = $true }")
   })
 
+  test('帮助输出列出所有 PowerShell 与兼容命令行参数', () => {
+    expect(buildScript).toContain('function Show-BuildHelp')
+    expect(buildScript).toContain('-SkipInstall')
+    expect(buildScript).toContain('-FunctionalModuleManifestUrl <url>')
+    expect(buildScript).toContain('-InstallerFileName <name>')
+    expect(buildScript).toContain('-InstallerObjectKey <key>')
+    expect(buildScript).toContain('-CosPublicBaseUrl <url>')
+    expect(buildScript).toContain('-CosBucketUrl <url>')
+    expect(buildScript).toContain('-ShowHelp, -Help, -h, --help')
+    expect(buildScript).toContain("'--help' { $ShowHelp = $true }")
+  })
+
   test('manifest 地址可选，缺省时保留应用内默认地址', () => {
     expect(buildScript).toContain("Set-FromEnvironment $FunctionalModuleManifestUrl 'COPIS_FUNCTIONAL_MODULE_MANIFEST_URL'")
     expect(buildScript).toContain('未指定功能模块 manifest 地址，将使用应用内默认地址。')

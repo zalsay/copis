@@ -6,6 +6,21 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_DIR="$ROOT_DIR/apps/electron"
 
+show_help() {
+  cat <<'EOF'
+Copis macOS 构建脚本
+
+用法：
+  ./build.sh [选项]
+
+选项：
+  --new               当当前版本已满足 darwin-当前架构的最低版本时，递增 patch 版本。
+                      当前版本低于该门槛时，无论是否传入此参数都会自动对齐。
+  --skip-cos-upload   只构建 DMG，不上传固定安装包或更新客户端 manifest。
+  -h, --help          显示本帮助并退出。
+EOF
+}
+
 load_dotenv() {
   local env_file="$1"
   local line key value
@@ -54,8 +69,12 @@ while [[ $# -gt 0 ]]; do
       SKIP_COS_UPLOAD=1
       shift
       ;;
+    -h|--help)
+      show_help
+      exit 0
+      ;;
     *)
-      echo "[Copis] 未知参数: $1" >&2
+      echo "[Copis] 未知参数: $1；请使用 --help 查看可用参数。" >&2
       exit 1
       ;;
   esac

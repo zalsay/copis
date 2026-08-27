@@ -10,7 +10,9 @@ param(
     [string]$InstallerFileName,
     [string]$InstallerObjectKey,
     [string]$CosPublicBaseUrl,
-    [string]$CosBucketUrl
+    [string]$CosBucketUrl,
+    [Alias('Help', 'h')]
+    [switch]$ShowHelp
 )
 
 $ErrorActionPreference = 'Stop'
@@ -19,12 +21,48 @@ $rootDir = (Resolve-Path -LiteralPath $PSScriptRoot).Path
 $appDir = Join-Path $rootDir 'apps\electron'
 $outDir = Join-Path $appDir 'out'
 
+function Show-BuildHelp {
+    @'
+Copis Windows 构建脚本
+
+用法：
+  powershell -ExecutionPolicy Bypass -File .\build.ps1 [选项]
+
+选项：
+  -NewVersion, -New, --new
+      当前版本已满足 win32-x64 最低版本时，递增 patch 版本；低于该门槛时自动对齐。
+  -SkipInstall
+      跳过 bun install --frozen-lockfile。
+  -FunctionalModuleManifestUrl <url>
+      指定功能模块 manifest 地址，覆盖 COPIS_FUNCTIONAL_MODULE_MANIFEST_URL。
+  -SkipCosUpload, --skip-cos-upload
+      只构建 EXE，不上传固定安装包或更新客户端 manifest。
+  -InstallerFileName <name>
+      指定固定 EXE 文件名，默认 Copis-Setup.exe。
+  -InstallerObjectKey <key>
+      指定固定安装包的 COS 对象 key。
+  -CosPublicBaseUrl <url>
+      覆盖 COS_PUBLIC_BASE_URL。
+  -CosBucketUrl <url>
+      覆盖 COS_BUCKET_URL。
+  -ShowHelp, -Help, -h, --help
+      显示本帮助并退出。
+'@ | Write-Output
+}
+
 foreach ($argument in $LegacyArguments) {
     switch ($argument) {
         '--new' { $NewVersion = $true }
         '--skip-cos-upload' { $SkipCosUpload = $true }
-        default { throw "未知参数：$argument" }
+        '-h' { $ShowHelp = $true }
+        '--help' { $ShowHelp = $true }
+        default { throw "未知参数：$argument；请使用 --help 查看可用参数。" }
     }
+}
+
+if ($ShowHelp) {
+    Show-BuildHelp
+    exit 0
 }
 
 function Import-DotEnvFile {

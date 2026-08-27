@@ -65,6 +65,13 @@ describe('macOS 构建脚本固定安装程序发布', () => {
     expect(fixedLine).not.toContain('$APP_VERSION')
   })
 
+  test('帮助输出列出所有命令行参数', () => {
+    expect(buildScript).toContain('show_help()')
+    expect(buildScript).toContain('--new               当当前版本已满足')
+    expect(buildScript).toContain('--skip-cos-upload   只构建 DMG')
+    expect(buildScript).toContain('-h, --help          显示本帮助并退出。')
+  })
+
   test('低于 Darwin 门槛时自动对齐，--new 仅在已对齐后递增 patch', () => {
     expect(buildScript).toContain('--new)')
     expect(buildScript).toContain('bump-electron-version.ts --new')
