@@ -363,10 +363,12 @@ describe('Rust HTTP API 功能模块生命周期', () => {
     const rust = rustPackage('0.1.0', 'payment-rust-api')
     const node = binaryPackage('node-runtime', '24.0.0', 'bin/node', 'node-runtime')
     const alipayBot = binaryPackage('alipay-bot', '0.3.40', 'bin/alipay-bot', 'alipay-bot')
+    const agentlyCli = binaryPackage('agently-cli', '1.0.17', 'bin/agently-cli', 'agently-cli')
     const officeCli = binaryPackage('officecli', '1.0.143', 'bin/officecli', 'officecli')
     await activateRustVersion(root, rust, 'payment-rust-api')
     const nodePath = await activateModuleVersion(modulesRoot, node, 'node-runtime')
     const alipayBotPath = await activateModuleVersion(modulesRoot, alipayBot, 'alipay-bot')
+    const agentlyCliPath = await activateModuleVersion(modulesRoot, agentlyCli, 'agently-cli')
     const officeCliPath = await activateModuleVersion(modulesRoot, officeCli, 'officecli')
 
     startHttpApiServer({
@@ -378,6 +380,8 @@ describe('Rust HTTP API 功能模块生命周期', () => {
     expect(records[0]?.options.env).toMatchObject({
       COPIS_ALIPAY_BOT_CLI: alipayBotPath,
       COPIS_ALIPAY_BOT_NODE: nodePath,
+      COPIS_AGENTLY_CLI: agentlyCliPath,
+      COPIS_AGENTLY_CLI_NODE: nodePath,
       COPIS_OFFICECLI: officeCliPath,
     })
   })

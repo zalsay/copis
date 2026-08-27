@@ -2,5 +2,6 @@
   "node-runtime": "24.19.4",
   "python-runtime": "3.12.14",
   "alipay-bot": "0.3.40",
-  "playwright-core": "1.62.1"
+  "playwright-core": "1.62.1",
+  "agently-cli": "1.0.17"
 }
