@@ -14,6 +14,30 @@ export function incrementPatchVersion(version: string): string {
   return `${match[1]}.${match[2]}.${patch + 1}`
 }
 
+export function validateElectronVersion(version: string): string {
+  const normalized = version.trim()
+  if (!/^\d+\.\d+\.\d+$/.test(normalized)) {
+    throw new Error(`Electron 应用版本必须是三段式 semver：${version}`)
+  }
+  return normalized
+}
+
+export async function setElectronVersion(
+  version: string,
+  packagePath = join(import.meta.dir, '..', 'apps', 'electron', 'package.json'),
+): Promise<string> {
+  const packageFile = Bun.file(packagePath)
+  const packageJson = await packageFile.json() as { version?: unknown; [key: string]: unknown }
+  if (typeof packageJson.version !== 'string' || packageJson.version.trim() === '') {
+    throw new Error(`Electron package.json 缺少有效 version：${packagePath}`)
+  }
+
+  const nextVersion = validateElectronVersion(version)
+  packageJson.version = nextVersion
+  await Bun.write(packagePath, `${JSON.stringify(packageJson, null, 2)}\n`)
+  return nextVersion
+}
+
 export async function bumpElectronVersion(packagePath = join(import.meta.dir, '..', 'apps', 'electron', 'package.json')): Promise<string> {
   const packageFile = Bun.file(packagePath)
   const packageJson = await packageFile.json() as { version?: unknown; [key: string]: unknown }
@@ -29,8 +53,11 @@ export async function bumpElectronVersion(packagePath = join(import.meta.dir, '.
 
 if (import.meta.main) {
   const args = process.argv.slice(2)
-  if (args.length !== 1 || args[0] !== '--new') {
-    throw new Error('用法：bun scripts/bump-electron-version.ts --new')
+  if (args.length === 1 && args[0] === '--new') {
+    console.log(await bumpElectronVersion())
+  } else if (args.length === 2 && args[0] === '--set') {
+    console.log(await setElectronVersion(args[1]!))
+  } else {
+    throw new Error('用法：bun scripts/bump-electron-version.ts --new 或 --set <version>')
   }
-  console.log(await bumpElectronVersion())
 }

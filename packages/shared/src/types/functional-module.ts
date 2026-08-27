@@ -23,6 +23,7 @@ export interface FunctionalModuleManifestArtifact {
 }
 
 export interface FunctionalModuleManifestPlatform {
+  minClientVersion?: string
   modules: Record<string, FunctionalModuleManifestArtifact>
 }
 

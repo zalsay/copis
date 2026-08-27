@@ -68,6 +68,9 @@ describe('macOS 构建脚本固定安装程序发布', () => {
   test('支持 --new 自动递增 Electron 应用 patch 版本', () => {
     expect(buildScript).toContain('--new)')
     expect(buildScript).toContain('bump-electron-version.ts --new')
+    expect(buildScript).toContain('query-functional-module-min-version.ts')
+    expect(buildScript).toContain('--platform darwin --arch "$MAC_ARCH"')
+    expect(buildScript).toContain('bump-electron-version.ts --set "$PLATFORM_MIN_VERSION"')
   })
 
   test('安装包上传成功后再更新客户端 manifest', () => {

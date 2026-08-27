@@ -105,6 +105,29 @@ describe('COS 功能模块 manifest 解析', () => {
       .toThrow('Copis 版本过低')
   })
 
+  test('优先使用当前平台的最低版本，不被其他平台门槛误伤', () => {
+    const platformManifest = {
+      ...manifest,
+      client: { minVersion: '0.0.70' },
+      platforms: {
+        ...manifest.platforms,
+        'darwin-arm64': {
+          ...manifest.platforms['darwin-arm64'],
+          minClientVersion: '0.0.67',
+        },
+        'linux-x64': {
+          ...manifest.platforms['linux-x64'],
+          minClientVersion: '0.0.70',
+        },
+      },
+    }
+
+    expect(() => parseFunctionalModuleManifest(JSON.stringify(platformManifest), '0.0.67', 'darwin', 'arm64'))
+      .not.toThrow()
+    expect(() => parseFunctionalModuleManifest(JSON.stringify(platformManifest), '0.0.67', 'linux', 'x64'))
+      .toThrow('需要至少 0.0.70')
+  })
+
   test('拒绝 HTTP 远程 URL', () => {
     const platform = {
       ...manifest.platforms['darwin-arm64'],

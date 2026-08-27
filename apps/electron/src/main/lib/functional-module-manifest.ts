@@ -29,13 +29,14 @@ export function parseFunctionalModuleManifest(
   if (manifest.schema !== SUPPORTED_SCHEMA) {
     throw new Error(`功能模块 manifest 版本不支持: ${String(manifest.schema)}`)
   }
-  if (manifest.client?.minVersion && compareSemver(clientVersion, manifest.client.minVersion) < 0) {
-    throw new Error(`Copis 版本过低，需要至少 ${manifest.client.minVersion}`)
-  }
 
   const platformKey = `${platform}-${arch}`
   const target = manifest.platforms[platformKey]
   if (!target) throw new Error(`manifest 没有当前平台的功能模块: ${platformKey}`)
+  const minClientVersion = target.minClientVersion ?? manifest.client?.minVersion
+  if (minClientVersion && compareSemver(clientVersion, minClientVersion) < 0) {
+    throw new Error(`Copis 版本过低，需要至少 ${minClientVersion}`)
+  }
 
   return Object.entries(target.modules).map(([name, artifact]) => {
     validateModuleName(name)
@@ -77,12 +78,16 @@ function asManifest(value: unknown): FunctionalModuleManifest {
   }
   if (!isRecord(value.platforms)) throw new Error('功能模块 manifest 缺少 platforms')
 
-  const platforms: Record<string, { modules: Record<string, FunctionalModuleManifestArtifact> }> = {}
+  const platforms: Record<string, { minClientVersion?: string; modules: Record<string, FunctionalModuleManifestArtifact> }> = {}
   for (const [platformKey, platformValue] of Object.entries(value.platforms)) {
     if (!isRecord(platformValue) || !isRecord(platformValue.modules)) {
       throw new Error(`功能模块平台缺少 modules: ${platformKey}`)
     }
+    if (platformValue.minClientVersion !== undefined && typeof platformValue.minClientVersion !== 'string') {
+      throw new Error(`功能模块平台最低客户端版本不合法: ${platformKey}`)
+    }
     platforms[platformKey] = {
+      ...(typeof platformValue.minClientVersion === 'string' ? { minClientVersion: platformValue.minClientVersion } : {}),
       modules: platformValue.modules as Record<string, FunctionalModuleManifestArtifact>,
     }
   }

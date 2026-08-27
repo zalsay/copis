@@ -87,14 +87,57 @@ case "$(uname -m)" in
     ;;
 esac
 
-export CSC_IDENTITY_AUTO_DISCOVERY="${CSC_IDENTITY_AUTO_DISCOVERY:-false}"
-
-if [[ "$NEW_VERSION" -eq 1 ]]; then
-  NEW_APP_VERSION="$(cd "$ROOT_DIR" && bun scripts/bump-electron-version.ts --new)"
-  echo "[Copis] Electron 应用版本已更新为 $NEW_APP_VERSION"
+FUNCTIONAL_MODULE_MANIFEST_URL="${COPIS_FUNCTIONAL_MODULE_MANIFEST_URL:-}"
+if [[ -z "$FUNCTIONAL_MODULE_MANIFEST_URL" && -n "${COS_PUBLIC_BASE_URL:-}" ]]; then
+  MANIFEST_PREFIX="${OBJECT_PREFIX_PATH:-copis/modules}"
+  MANIFEST_CHANNEL="${COPIS_MODULE_CHANNEL:-stable}"
+  FUNCTIONAL_MODULE_MANIFEST_URL="${COS_PUBLIC_BASE_URL%/}/${MANIFEST_PREFIX#/}/${MANIFEST_CHANNEL}/manifest.json"
 fi
 
+export CSC_IDENTITY_AUTO_DISCOVERY="${CSC_IDENTITY_AUTO_DISCOVERY:-false}"
+
 APP_VERSION="$(cd "$APP_DIR" && bun -e "console.log(JSON.parse(await Bun.file('package.json').text()).version)")"
+
+compare_client_versions() {
+  (cd "$ROOT_DIR" && bun -e '
+    import { compareClientVersions } from "./scripts/query-functional-module-min-version.ts"
+    const [left, right] = process.argv.slice(1)
+    console.log(compareClientVersions(left, right))
+  ' "$1" "$2")
+}
+
+PLATFORM_MIN_VERSION=""
+VERSION_ALIGNED_TO_MIN=0
+if [[ -n "$FUNCTIONAL_MODULE_MANIFEST_URL" ]]; then
+  if ! PLATFORM_MIN_VERSION="$(cd "$ROOT_DIR" && bun scripts/query-functional-module-min-version.ts \
+    --url "$FUNCTIONAL_MODULE_MANIFEST_URL" --platform darwin --arch "$MAC_ARCH")"; then
+    echo "[Copis] 无法查询 darwin-$MAC_ARCH 的功能模块最低客户端版本。" >&2
+    exit 1
+  fi
+  if [[ -n "$PLATFORM_MIN_VERSION" ]]; then
+    echo "[Copis] darwin-$MAC_ARCH 功能模块最低客户端版本：$PLATFORM_MIN_VERSION"
+    if [[ "$(compare_client_versions "$APP_VERSION" "$PLATFORM_MIN_VERSION")" -lt 0 ]]; then
+      if [[ "$NEW_VERSION" -eq 1 ]]; then
+        APP_VERSION="$(cd "$ROOT_DIR" && bun scripts/bump-electron-version.ts --set "$PLATFORM_MIN_VERSION")"
+        VERSION_ALIGNED_TO_MIN=1
+        echo "[Copis] Electron 应用版本已对齐 darwin-$MAC_ARCH 最低版本：$APP_VERSION"
+      else
+        echo "[Copis] 当前 Electron 版本 $APP_VERSION 低于 darwin-$MAC_ARCH 最低版本 $PLATFORM_MIN_VERSION，请使用 --new 对齐版本。" >&2
+        exit 1
+      fi
+    fi
+  else
+    echo "[Copis] darwin-$MAC_ARCH manifest 未声明最低客户端版本。"
+  fi
+else
+  echo "[Copis] 未配置功能模块 manifest 地址，跳过最低客户端版本检查。"
+fi
+
+if [[ "$NEW_VERSION" -eq 1 && "$VERSION_ALIGNED_TO_MIN" -eq 0 ]]; then
+  NEW_APP_VERSION="$(cd "$ROOT_DIR" && bun scripts/bump-electron-version.ts --new)"
+  APP_VERSION="$NEW_APP_VERSION"
+  echo "[Copis] Electron 应用版本已更新为 $NEW_APP_VERSION"
+fi
 
 cd "$APP_DIR"
 echo "[Copis] 默认构建仅包含 macOS 应用，不编译 Rust API。"

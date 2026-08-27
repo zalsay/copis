@@ -124,6 +124,12 @@ export function buildFunctionalModuleRelease(input: FunctionalModuleReleaseInput
     })
   }
 
+  if (input.clientMinVersion) {
+    for (const platform of Object.values(platforms)) {
+      platform.minClientVersion = input.clientMinVersion
+    }
+  }
+
   const client = {
     ...(input.clientMinVersion ? { minVersion: input.clientMinVersion } : {}),
     ...(input.clientUpdate ? { update: input.clientUpdate } : {}),
@@ -398,6 +404,9 @@ function validateManifestUploadInput(input: FunctionalModuleManifestUploadInput)
   for (const [platformKey, platformValue] of Object.entries(platforms)) {
     if (!isSafeSegment(platformKey) || !isRecord(platformValue) || !isRecord(platformValue.modules)) {
       throw new Error(`发布 manifest 平台不合法: ${platformKey}`)
+    }
+    if (platformValue.minClientVersion !== undefined && !isSemver(platformValue.minClientVersion)) {
+      throw new Error(`发布 manifest 平台最低客户端版本不合法: ${platformKey}`)
     }
     for (const [moduleName, artifactValue] of Object.entries(platformValue.modules)) {
       validateManifestUploadArtifact(moduleName, artifactValue)

@@ -109,19 +109,65 @@ $bunBinDir = Split-Path -Parent $bunPath
 $pathSeparator = [System.IO.Path]::PathSeparator
 $env:PATH = "$bunBinDir$pathSeparator$env:PATH"
 
-if ($NewVersion) {
-    $versionScriptPath = Join-Path $rootDir 'scripts\bump-electron-version.ts'
-    $newAppVersion = (& $bunPath $versionScriptPath '--new' | Out-String).Trim()
-    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($newAppVersion)) {
-        throw "Electron 应用版本更新失败，退出码：$LASTEXITCODE"
-    }
-    Write-Host "Electron 应用版本已更新为：$newAppVersion"
-}
-
 $electronPackage = Get-Content -LiteralPath $electronPackagePath -Raw -Encoding UTF8 | ConvertFrom-Json
 $appVersion = [string]$electronPackage.version
 if ([string]::IsNullOrWhiteSpace($appVersion)) {
     throw "无法从 Electron 包 package.json 读取版本号：$electronPackagePath"
+}
+
+function Compare-ClientVersions {
+    param([Parameter(Mandatory = $true)][string]$Left, [Parameter(Mandatory = $true)][string]$Right)
+
+    $leftParts = (($Left.Trim() -split '-', 2)[0] -split '\.') | ForEach-Object { [int64]$_ }
+    $rightParts = (($Right.Trim() -split '-', 2)[0] -split '\.') | ForEach-Object { [int64]$_ }
+    $partCount = [Math]::Max($leftParts.Count, $rightParts.Count)
+    for ($index = 0; $index -lt $partCount; $index++) {
+        $leftValue = if ($index -lt $leftParts.Count) { $leftParts[$index] } else { 0 }
+        $rightValue = if ($index -lt $rightParts.Count) { $rightParts[$index] } else { 0 }
+        if ($leftValue -lt $rightValue) { return -1 }
+        if ($leftValue -gt $rightValue) { return 1 }
+    }
+    return 0
+}
+
+$targetPlatform = 'win32'
+$targetArch = 'x64'
+$platformMinVersion = ''
+if (-not [string]::IsNullOrWhiteSpace($manifestUrl)) {
+    $minVersionScriptPath = Join-Path $rootDir 'scripts\query-functional-module-min-version.ts'
+    $platformMinVersion = (& $bunPath $minVersionScriptPath '--url' $manifestUrl '--platform' $targetPlatform '--arch' $targetArch | Out-String).Trim()
+    if ($LASTEXITCODE -ne 0) {
+        throw "无法查询 $targetPlatform-$targetArch 的功能模块最低客户端版本，退出码：$LASTEXITCODE"
+    }
+    if ([string]::IsNullOrWhiteSpace($platformMinVersion)) {
+        Write-Host "${targetPlatform}-${targetArch} manifest 未声明最低客户端版本。"
+    } else {
+        Write-Host "${targetPlatform}-${targetArch} 功能模块最低客户端版本：$platformMinVersion"
+    }
+} else {
+    Write-Host '未配置功能模块 manifest 地址，跳过最低客户端版本检查。'
+}
+
+$versionAlignedToMin = $false
+if ($NewVersion) {
+    if (-not [string]::IsNullOrWhiteSpace($platformMinVersion) -and (Compare-ClientVersions $appVersion $platformMinVersion) -lt 0) {
+        $versionScriptPath = Join-Path $rootDir 'scripts\bump-electron-version.ts'
+        $appVersion = (& $bunPath $versionScriptPath '--set' $platformMinVersion | Out-String).Trim()
+        if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($appVersion)) {
+            throw "Electron 应用版本对齐失败，退出码：$LASTEXITCODE"
+        }
+        $versionAlignedToMin = $true
+        Write-Host "Electron 应用版本已对齐 ${targetPlatform}-${targetArch} 最低版本：$appVersion"
+    }
+
+    if (-not $versionAlignedToMin) {
+        $versionScriptPath = Join-Path $rootDir 'scripts\bump-electron-version.ts'
+        $appVersion = (& $bunPath $versionScriptPath '--new' | Out-String).Trim()
+        if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($appVersion)) {
+            throw "Electron 应用版本更新失败，退出码：$LASTEXITCODE"
+        }
+        Write-Host "Electron 应用版本已更新为：$appVersion"
+    }
 }
 
 Write-Host "使用 Bun：$bunPath"

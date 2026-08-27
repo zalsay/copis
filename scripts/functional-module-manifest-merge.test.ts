@@ -96,4 +96,27 @@ describe('功能模块 manifest 合并', () => {
 
     expect(merged.client?.minVersion).toBe('0.0.52')
   })
+
+  test('不同平台分别合并最低客户端版本，不交叉覆盖', () => {
+    const existing: FunctionalModuleManifest = {
+      schema: 1,
+      channel: 'stable',
+      platforms: {
+        'darwin-x64': { minClientVersion: '0.0.67', modules: {} },
+        'win32-x64': { minClientVersion: '0.0.70', modules: {} },
+      },
+    }
+    const incoming: FunctionalModuleManifest = {
+      schema: 1,
+      channel: 'stable',
+      platforms: {
+        'darwin-x64': { minClientVersion: '0.0.68', modules: {} },
+      },
+    }
+
+    const merged = mergeFunctionalModuleManifests(existing, incoming)
+
+    expect(merged.platforms['darwin-x64']?.minClientVersion).toBe('0.0.68')
+    expect(merged.platforms['win32-x64']?.minClientVersion).toBe('0.0.70')
+  })
 })

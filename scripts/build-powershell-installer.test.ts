@@ -30,9 +30,14 @@ describe('Windows 构建脚本固定安装程序发布', () => {
     expect(buildScript).toContain('bump-electron-version.ts')
     expect(buildScript).toContain("[switch]$NewVersion")
 
-    const bumpCall = buildScript.indexOf('bump-electron-version.ts')
     const versionRead = buildScript.indexOf('Get-Content -LiteralPath $electronPackagePath -Raw -Encoding UTF8 | ConvertFrom-Json')
-    expect(versionRead).toBeGreaterThan(bumpCall)
+    const queryCall = buildScript.indexOf('query-functional-module-min-version.ts')
+    const setCall = buildScript.indexOf("'--set' $platformMinVersion")
+    expect(queryCall).toBeGreaterThan(versionRead)
+    expect(setCall).toBeGreaterThan(queryCall)
+    expect(buildScript).toContain('query-functional-module-min-version.ts')
+    expect(buildScript).toContain("'--platform' $targetPlatform '--arch' $targetArch")
+    expect(buildScript).toContain("'--set' $platformMinVersion")
   })
 
   test('安装包上传成功后再更新客户端 manifest', () => {

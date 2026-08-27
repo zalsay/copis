@@ -43,6 +43,7 @@ describe('COS 功能模块发布器', () => {
     })
 
     const platform = release.manifest.platforms['darwin-arm64']
+    expect(platform?.minClientVersion).toBe('0.16.18')
     expect(platform?.modules.officecli).toMatchObject({
       version: '1.2.3',
       url: 'https://download.example.com/copis/modules/stable/darwin-arm64/officecli-1.2.3',

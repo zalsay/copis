@@ -15,7 +15,12 @@ export function mergeFunctionalModuleManifests(
   const platforms = { ...existing.platforms }
   for (const [platformKey, incomingPlatform] of Object.entries(incoming.platforms)) {
     const existingPlatform = platforms[platformKey]
+    const minClientVersion = pickMinimumClientVersion(
+      existingPlatform?.minClientVersion,
+      incomingPlatform.minClientVersion,
+    )
     platforms[platformKey] = {
+      ...(minClientVersion ? { minClientVersion } : {}),
       modules: {
         ...(existingPlatform?.modules ?? {}),
         ...incomingPlatform.modules,
