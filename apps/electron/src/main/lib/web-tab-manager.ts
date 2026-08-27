@@ -33,6 +33,7 @@ interface WebTabRecord {
   workflowOwned?: boolean
   workflowVisible?: boolean
   mainFrameLoadError?: string
+  faviconRequestId: number
   partition: string
   cdpDetachListeners: Set<(reason: string) => void>
   cdpDetachHandler?: (event: Electron.Event, reason: string) => void
@@ -47,6 +48,8 @@ interface BookmarksWindowState {
 const DEFAULT_URL = 'about:blank'
 const DEFAULT_TITLE = '新标签页'
 const SEARCH_URL = 'https://www.google.com/search?q='
+const MAX_WEB_TAB_FAVICON_BYTES = 512 * 1024
+const FAVICON_ACCEPT_HEADER = 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8'
 
 let hostWindow: BrowserWindow | null = null
 let activeTabId: string | null = null
@@ -75,6 +78,79 @@ function selectFaviconUrl(favicons: string[]): string | null {
     const normalized = favicon.trim()
     if (/^https?:\/\//i.test(normalized) || /^data:image\//i.test(normalized)) {
       return normalized
+    }
+  }
+  return null
+}
+
+interface WebTabFaviconResponse {
+  ok: boolean
+  headers: { get(name: string): string | null }
+  arrayBuffer(): Promise<ArrayBuffer>
+}
+
+type WebTabFaviconFetch = (url: string, init: RequestInit) => Promise<WebTabFaviconResponse>
+
+function normalizeDataImageUrl(value: string): string | null {
+  const normalized = value.trim()
+  const separatorIndex = normalized.indexOf(',')
+  if (separatorIndex <= 5) return null
+
+  const metadata = normalized.slice(5, separatorIndex)
+  const [mimeType, ...parameters] = metadata.split(';')
+  const normalizedMimeType = mimeType?.trim()
+  if (!normalizedMimeType || !/^image\/[a-z0-9.+-]+$/i.test(normalizedMimeType)) return null
+
+  const payload = normalized.slice(separatorIndex + 1)
+  try {
+    const byteLength = parameters.some((parameter) => parameter.trim().toLowerCase() === 'base64')
+      ? Buffer.from(payload, 'base64').byteLength
+      : Buffer.byteLength(decodeURIComponent(payload))
+    return byteLength > 0 && byteLength <= MAX_WEB_TAB_FAVICON_BYTES ? normalized : null
+  } catch {
+    return null
+  }
+}
+
+function getImageMimeType(contentType: string | null): string | null {
+  const mimeType = contentType?.split(';', 1)[0]?.trim().toLowerCase()
+  return mimeType && /^image\/[a-z0-9.+-]+$/.test(mimeType) ? mimeType : null
+}
+
+/**
+ * 使用网页自身的 Session 读取 favicon，避免渲染进程跨会话请求时丢失 Cookie 或 Referer。
+ */
+export async function resolveWebTabFaviconDataUrl(
+  favicons: string[],
+  fetchFavicon: WebTabFaviconFetch,
+  pageUrl: string,
+): Promise<string | null> {
+  for (const favicon of favicons) {
+    const normalized = favicon.trim()
+    const dataImageUrl = normalizeDataImageUrl(normalized)
+    if (dataImageUrl) return dataImageUrl
+    if (!/^https?:\/\//i.test(normalized)) continue
+
+    try {
+      const response = await fetchFavicon(normalized, {
+        redirect: 'follow',
+        referrer: isHttpWebUrl(pageUrl) ? pageUrl : undefined,
+        credentials: 'include',
+        headers: { Accept: FAVICON_ACCEPT_HEADER },
+      })
+      if (!response.ok) continue
+
+      const mimeType = getImageMimeType(response.headers.get('content-type'))
+      if (!mimeType) continue
+
+      const declaredSize = Number(response.headers.get('content-length'))
+      if (Number.isFinite(declaredSize) && declaredSize > MAX_WEB_TAB_FAVICON_BYTES) continue
+
+      const icon = Buffer.from(await response.arrayBuffer())
+      if (icon.byteLength === 0 || icon.byteLength > MAX_WEB_TAB_FAVICON_BYTES) continue
+      return `data:${mimeType};base64,${icon.toString('base64')}`
+    } catch {
+      // 单个候选图标失败后继续尝试页面提供的其他候选。
     }
   }
   return null
@@ -291,6 +367,7 @@ function installWebContentsHandlers(record: WebTabRecord): void {
 
   contents.on('did-start-loading', () => {
     record.mainFrameLoadError = undefined
+    record.faviconRequestId += 1
     refreshState(record, {
       isLoading: true,
       faviconUrl: resolveWebTabFaviconUrl(record.state.faviconUrl, { type: 'loading-started' }),
@@ -302,8 +379,22 @@ function installWebContentsHandlers(record: WebTabRecord): void {
   })
 
   contents.on('page-favicon-updated', (_event, favicons) => {
-    refreshState(record, {
-      faviconUrl: resolveWebTabFaviconUrl(record.state.faviconUrl, { type: 'favicon-updated', favicons }),
+    const requestId = ++record.faviconRequestId
+    const pageUrl = contents.getURL() || record.state.url
+    void resolveWebTabFaviconDataUrl(
+      favicons,
+      (url, init) => contents.session.fetch(url, init),
+      pageUrl,
+    ).then((faviconUrl) => {
+      if (
+        records.get(record.state.id) !== record
+        || record.view.webContents !== contents
+        || contents.isDestroyed()
+        || record.faviconRequestId !== requestId
+      ) {
+        return
+      }
+      refreshState(record, { faviconUrl })
     })
   })
 
@@ -334,6 +425,7 @@ function installWebContentsHandlers(record: WebTabRecord): void {
   contents.on('did-fail-load', (_event, _errorCode, errorDescription, validatedURL, isMainFrame) => {
     if (!isMainFrame) return
     record.mainFrameLoadError = errorDescription || '网页加载失败'
+    record.faviconRequestId += 1
     refreshState(record, {
       url: validatedURL || record.state.url,
       title: errorDescription || '网页加载失败',
@@ -343,6 +435,7 @@ function installWebContentsHandlers(record: WebTabRecord): void {
   })
 
   contents.on('render-process-gone', () => {
+    record.faviconRequestId += 1
     refreshState(record, { title: '网页进程已退出', isLoading: false, faviconUrl: null })
   })
 
@@ -664,6 +757,7 @@ function createWebTabInternal(input: CreateWebTabInput, workflowOwned: boolean, 
     hasOpenedAddress: isHttpWebUrl(url),
     workflowOwned,
     workflowVisible: showWorkflowForE2E,
+    faviconRequestId: 0,
     partition,
     cdpDetachListeners: new Set(),
   }
@@ -899,6 +993,7 @@ export function navigateWebTab(input: NavigateWebTabInput): WebTabsSnapshot {
   const url = normalizeWebTabUrl(input.url)
   if (isHttpWebUrl(url)) record.hasOpenedAddress = true
   record.mainFrameLoadError = undefined
+  record.faviconRequestId += 1
   record.state = {
     ...record.state,
     url,

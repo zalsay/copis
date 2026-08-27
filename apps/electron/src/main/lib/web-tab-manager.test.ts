@@ -27,11 +27,42 @@ class FakeDebugger extends EventEmitter {
 
 class FakeSession {
   clearStorageDataCalls = 0
+  fetchCalls: Array<{ url: string; init: RequestInit }> = []
+  fetchImpl: ((url: string, init: RequestInit) => Promise<FakeFaviconResponse>) | undefined
 
   clearStorageData(): Promise<void> {
     this.clearStorageDataCalls += 1
     return Promise.resolve()
   }
+
+  fetch(url: string, init: RequestInit): Promise<FakeFaviconResponse> {
+    this.fetchCalls.push({ url, init })
+    return this.fetchImpl?.(url, init) ?? Promise.reject(new Error('未配置 favicon 响应'))
+  }
+}
+
+interface FakeFaviconResponse {
+  ok: boolean
+  headers: Headers
+  arrayBuffer(): Promise<ArrayBuffer>
+}
+
+function createFaviconResponse(
+  body: Uint8Array,
+  options: { ok?: boolean; contentType?: string; contentLength?: number } = {},
+): FakeFaviconResponse {
+  const headers = new Headers()
+  if (options.contentType) headers.set('content-type', options.contentType)
+  if (options.contentLength !== undefined) headers.set('content-length', String(options.contentLength))
+  return {
+    ok: options.ok ?? true,
+    headers,
+    arrayBuffer: async () => body.buffer.slice(body.byteOffset, body.byteOffset + body.byteLength) as ArrayBuffer,
+  }
+}
+
+function waitForAsyncTasks(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 0))
 }
 
 class FakeWebContents extends EventEmitter {
@@ -143,6 +174,7 @@ const {
   getWebTabState,
   listWebTabs,
   reorderWebTab,
+  resolveWebTabFaviconDataUrl,
   resolveWebTabFaviconUrl,
   setWebTabHostWindow,
   subscribeWebTabLifecycle,
@@ -186,6 +218,105 @@ describe('网页页签 favicon 生命周期', () => {
   test('Given 页面没有 favicon When 导航提交 Then favicon 保持为空', () => {
     const favicon = resolveWebTabFaviconUrl(null, { type: 'navigation-committed' })
     expect(favicon).toBeNull()
+  })
+})
+
+describe('网页页签 favicon 解析', () => {
+  test('Given 第一个远程候选不可用且第二个是图片 When 解析 favicon Then 继续尝试并返回 data URL', async () => {
+    const requestedUrls: string[] = []
+
+    const favicon = await resolveWebTabFaviconDataUrl(
+      ['https://first.example/favicon.ico', 'https://second.example/favicon.png'],
+      async (url) => {
+        requestedUrls.push(url)
+        return url.includes('first')
+          ? createFaviconResponse(new Uint8Array(), { ok: false })
+          : createFaviconResponse(new Uint8Array([0, 1, 2]), { contentType: 'image/png' })
+      },
+      'https://page.example/article',
+    )
+
+    expect(requestedUrls).toEqual(['https://first.example/favicon.ico', 'https://second.example/favicon.png'])
+    expect(favicon).toBe('data:image/png;base64,AAEC')
+  })
+
+  test('Given 候选响应不是图片 When 后续候选是图片 Then 跳过非图片响应', async () => {
+    const favicon = await resolveWebTabFaviconDataUrl(
+      ['https://page.example/not-an-icon', 'https://page.example/favicon.svg'],
+      async (url) => url.endsWith('.svg')
+        ? createFaviconResponse(new Uint8Array([3]), { contentType: 'image/svg+xml' })
+        : createFaviconResponse(new Uint8Array([1]), { contentType: 'text/html' }),
+      'https://page.example',
+    )
+
+    expect(favicon).toBe('data:image/svg+xml;base64,Aw==')
+  })
+
+  test('Given 候选图片超过大小上限 When 解析 favicon Then 忽略该响应', async () => {
+    const favicon = await resolveWebTabFaviconDataUrl(
+      ['https://page.example/oversized.png'],
+      async () => createFaviconResponse(new Uint8Array([1]), {
+        contentType: 'image/png',
+        contentLength: 512 * 1024 + 1,
+      }),
+      'https://page.example',
+    )
+
+    expect(favicon).toBeNull()
+  })
+
+  test('Given 页面直接提供 data 图片 When 解析 favicon Then 保留原始 data URL', async () => {
+    const favicon = await resolveWebTabFaviconDataUrl(
+      ['data:image/png;base64,AAAA'],
+      async () => {
+        throw new Error('data URL 不应发起网络请求')
+      },
+      'https://page.example',
+    )
+
+    expect(favicon).toBe('data:image/png;base64,AAAA')
+  })
+
+  test('Given 网页页签提供远程 favicon When page-favicon-updated 触发 Then 使用该页签 Session 并写入 data URL', async () => {
+    setupHost()
+    const initial = createWebTab({ url: 'https://page.example' })
+    const tabId = initial.tabs[0]!.id
+    const view = createdViews[0]!
+    view.webContents.session.fetchImpl = async () => createFaviconResponse(
+      new Uint8Array([4, 5]),
+      { contentType: 'image/png' },
+    )
+
+    view.webContents.emit('page-favicon-updated', {}, ['https://cdn.example/favicon.png'])
+    await waitForAsyncTasks()
+
+    expect(view.webContents.session.fetchCalls).toEqual([
+      expect.objectContaining({
+        url: 'https://cdn.example/favicon.png',
+        init: expect.objectContaining({ credentials: 'include', referrer: 'https://page.example/' }),
+      }),
+    ])
+    expect(getWebTabState(tabId)?.faviconUrl).toBe('data:image/png;base64,BAU=')
+  })
+
+  test('Given 旧页面图标仍在异步读取 When 导航到新页面 Then 不写回旧 favicon', async () => {
+    setupHost()
+    const initial = createWebTab({ url: 'https://old.example' })
+    const tabId = initial.tabs[0]!.id
+    const view = createdViews[0]!
+    let resolveResponse: ((response: FakeFaviconResponse) => void) | undefined
+    view.webContents.session.fetchImpl = () => new Promise((resolve) => {
+      resolveResponse = resolve
+    })
+
+    view.webContents.emit('page-favicon-updated', {}, ['https://old.example/favicon.png'])
+    await Promise.resolve()
+    navigateWebTab({ tabId, url: 'https://new.example' })
+    resolveResponse?.(createFaviconResponse(new Uint8Array([9]), { contentType: 'image/png' }))
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(getWebTabState(tabId)?.faviconUrl).toBeNull()
   })
 })
 
