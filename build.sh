@@ -106,7 +106,10 @@ bunx electron-builder --mac --"$MAC_ARCH" --config.mac.target=dmg
 VERSIONED_DMG="$APP_DIR/out/Copis-$APP_VERSION-$MAC_ARCH.dmg"
 FIXED_DMG="$APP_DIR/out/Copis-$MAC_ARCH.dmg"
 if [[ ! -f "$VERSIONED_DMG" ]]; then
-  echo "[Copis] 未找到当前版本安装包：$VERSIONED_DMG" >&2
+  VERSIONED_DMG="$APP_DIR/out/Copis-$APP_VERSION.dmg"
+fi
+if [[ ! -f "$VERSIONED_DMG" ]]; then
+  echo "[Copis] 未找到当前版本安装包，已检查带架构和默认命名：$APP_DIR/out/Copis-$APP_VERSION*.dmg" >&2
   exit 1
 fi
 cp -f "$VERSIONED_DMG" "$FIXED_DMG"
