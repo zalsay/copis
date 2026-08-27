@@ -361,13 +361,23 @@ describe('Rust HTTP API 功能模块生命周期', () => {
     const modulesRoot = join(root, 'modules')
     const records: SpawnRecord[] = []
     const rust = rustPackage('0.1.0', 'payment-rust-api')
-    const node = binaryPackage('node-runtime', '24.0.0', 'bin/node', 'node-runtime')
-    const alipayBot = binaryPackage('alipay-bot', '0.3.40', 'bin/alipay-bot', 'alipay-bot')
-    const officeCli = binaryPackage('officecli', '1.0.143', 'bin/officecli', 'officecli')
+    const nodeEntrypoint = process.platform === 'win32' ? 'bin/node.exe' : 'bin/node'
+    const alipayBotEntrypoint = process.platform === 'win32' ? 'bin/alipay-bot.cmd' : 'bin/alipay-bot'
+    const officeCliEntrypoint = process.platform === 'win32' ? 'bin/officecli.exe' : 'bin/officecli'
+    const node = binaryPackage('node-runtime', '24.0.0', nodeEntrypoint, 'node-runtime')
+    const alipayBot = binaryPackage('alipay-bot', '0.3.40', alipayBotEntrypoint, 'alipay-bot')
+    const officeCli = binaryPackage('officecli', '1.0.143', officeCliEntrypoint, 'officecli')
+    const agentlyCli = binaryPackage(
+      'agently-cli',
+      '1.0.17',
+      process.platform === 'win32' ? 'bin/agently-cli.exe' : 'bin/agently-cli',
+      'agently-cli',
+    )
     await activateRustVersion(root, rust, 'payment-rust-api')
     const nodePath = await activateModuleVersion(modulesRoot, node, 'node-runtime')
     const alipayBotPath = await activateModuleVersion(modulesRoot, alipayBot, 'alipay-bot')
     const officeCliPath = await activateModuleVersion(modulesRoot, officeCli, 'officecli')
+    const agentlyCliPath = await activateModuleVersion(modulesRoot, agentlyCli, 'agently-cli')
 
     startHttpApiServer({
       rootDir: modulesRoot,
@@ -379,6 +389,7 @@ describe('Rust HTTP API 功能模块生命周期', () => {
       COPIS_ALIPAY_BOT_CLI: alipayBotPath,
       COPIS_ALIPAY_BOT_NODE: nodePath,
       COPIS_OFFICECLI: officeCliPath,
+      COPIS_AGENTLY_CLI: agentlyCliPath,
     })
   })
 

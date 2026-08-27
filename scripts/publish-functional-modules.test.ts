@@ -121,6 +121,30 @@ describe('功能模块发布脚本 --rust', () => {
     })])
   })
 
+  test('Agent QQ 邮箱 CLI-only 输入使用 Windows 原生二进制入口', () => {
+    const modules = buildFunctionalModuleBinaryInputs({
+      rustOnly: false,
+      agentlyCliOnly: true,
+      rustBinary: '/tmp/rust-api-does-not-exist',
+      rustVersion: '0.2.0',
+      officeCliBinary: '/tmp/officecli-does-not-exist',
+      officeCliVersion: '1.0.143',
+      agentlyCliBinary: '/tmp/agently-cli.exe',
+      agentlyCliVersion: '1.0.17',
+      platform: 'win32',
+      arch: 'x64',
+    })
+
+    expect(modules).toHaveLength(1)
+    expect(modules[0]).toMatchObject({
+      module: 'agently-cli',
+      version: '1.0.17',
+      binaryPath: '/tmp/agently-cli.exe',
+    })
+    expect(modules[0]?.format).toBeUndefined()
+    expect(modules[0]?.entrypoint).toBeUndefined()
+  })
+
   test('支付宝智能体 CLI-only 输入使用 tar.gz 归档并保留稳定入口', () => {
     const modules = buildFunctionalModuleBinaryInputs({
       rustOnly: false,

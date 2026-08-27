@@ -25,8 +25,9 @@ const nodeRuntimeOnly = hasFlag('--node-runtime') || process.env.COPIS_NODE_RUNT
 const alipayBotOnly = hasFlag('--alipay-bot') || process.env.COPIS_ALIPAY_BOT_ONLY === '1'
 const playwrightCoreOnly = hasFlag('--playwright-core') || process.env.COPIS_PLAYWRIGHT_CORE_ONLY === '1'
 const pythonRuntimeOnly = hasFlag('--python-runtime') || process.env.COPIS_PYTHON_RUNTIME_ONLY === '1'
-if (Number(rustOnly) + Number(officeCliOnly) + Number(nodeRuntimeOnly) + Number(alipayBotOnly) + Number(playwrightCoreOnly) + Number(pythonRuntimeOnly) > 1) {
-  throw new Error('--rust、--officecli、--node-runtime、--alipay-bot、--playwright-core 与 --python-runtime 不能同时使用')
+const agentlyCliOnly = hasFlag('--agently-cli') || process.env.COPIS_AGENTLY_CLI_ONLY === '1'
+if (Number(rustOnly) + Number(officeCliOnly) + Number(nodeRuntimeOnly) + Number(alipayBotOnly) + Number(playwrightCoreOnly) + Number(pythonRuntimeOnly) + Number(agentlyCliOnly) > 1) {
+  throw new Error('--rust、--officecli、--node-runtime、--alipay-bot、--playwright-core、--python-runtime 与 --agently-cli 不能同时使用')
 }
 const prefix = resolveFunctionalModulePrefix({
   cliPrefix: getOption('--prefix'),
@@ -43,7 +44,7 @@ if (!publicBaseUrl) throw new Error('缺少 COS_PUBLIC_BASE_URL 或 --public-bas
 
 const modules: FunctionalModuleBinaryInput[] = []
 
-if (!officeCliOnly && !nodeRuntimeOnly && !alipayBotOnly && !playwrightCoreOnly && !pythonRuntimeOnly) {
+if (!officeCliOnly && !nodeRuntimeOnly && !alipayBotOnly && !playwrightCoreOnly && !pythonRuntimeOnly && !agentlyCliOnly) {
   const rustBinary = getOption('--rust-binary')
     ?? process.env.COPIS_RUST_HTTP_API_BINARY
     ?? join(repoRoot, 'native/http-api-server/target/release', binaryName('copis-http-api-server', platform))
@@ -57,7 +58,7 @@ if (!officeCliOnly && !nodeRuntimeOnly && !alipayBotOnly && !playwrightCoreOnly 
   })
 }
 
-if (!rustOnly && !nodeRuntimeOnly && !alipayBotOnly && !playwrightCoreOnly && !pythonRuntimeOnly) {
+if (!rustOnly && !nodeRuntimeOnly && !alipayBotOnly && !playwrightCoreOnly && !pythonRuntimeOnly && !agentlyCliOnly) {
   const officeCliBinary = getOption('--officecli-binary')
     ?? process.env.COPIS_OFFICECLI_BINARY
     ?? join(electronDir, 'resources/bin', binaryName('officecli', platform))
@@ -71,7 +72,7 @@ if (!rustOnly && !nodeRuntimeOnly && !alipayBotOnly && !playwrightCoreOnly && !p
   })
 }
 
-if (!rustOnly && !officeCliOnly && !alipayBotOnly && !playwrightCoreOnly && !pythonRuntimeOnly) {
+if (!rustOnly && !officeCliOnly && !alipayBotOnly && !playwrightCoreOnly && !pythonRuntimeOnly && !agentlyCliOnly) {
   const nodeRuntimeArchive = getOption('--node-runtime-archive')
     ?? process.env.COPIS_NODE_RUNTIME_ARCHIVE
     ?? join(electronDir, 'resources/node-runtime', `${platform}-${arch}.tar.gz`)
@@ -87,7 +88,7 @@ if (!rustOnly && !officeCliOnly && !alipayBotOnly && !playwrightCoreOnly && !pyt
   })
 }
 
-if (!rustOnly && !officeCliOnly && !nodeRuntimeOnly && !playwrightCoreOnly && !pythonRuntimeOnly) {
+if (!rustOnly && !officeCliOnly && !nodeRuntimeOnly && !playwrightCoreOnly && !pythonRuntimeOnly && !agentlyCliOnly) {
   const alipayBotArchive = getOption('--alipay-bot-archive')
     ?? process.env.COPIS_ALIPAY_BOT_ARCHIVE
     ?? join(electronDir, 'resources/alipay-bot', `${platform}-${arch}.tar.gz`)
@@ -103,7 +104,7 @@ if (!rustOnly && !officeCliOnly && !nodeRuntimeOnly && !playwrightCoreOnly && !p
   })
 }
 
-if (!rustOnly && !officeCliOnly && !nodeRuntimeOnly && !alipayBotOnly && !pythonRuntimeOnly) {
+if (!rustOnly && !officeCliOnly && !nodeRuntimeOnly && !alipayBotOnly && !pythonRuntimeOnly && !agentlyCliOnly) {
   const playwrightCoreArchive = getOption('--playwright-core-archive')
     ?? process.env.COPIS_PLAYWRIGHT_CORE_ARCHIVE
     ?? join(electronDir, 'resources/playwright-core/playwright-core.tar.gz')
@@ -119,7 +120,7 @@ if (!rustOnly && !officeCliOnly && !nodeRuntimeOnly && !alipayBotOnly && !python
   })
 }
 
-if (!rustOnly && !officeCliOnly && !nodeRuntimeOnly && !alipayBotOnly && !playwrightCoreOnly) {
+if (!rustOnly && !officeCliOnly && !nodeRuntimeOnly && !alipayBotOnly && !playwrightCoreOnly && !agentlyCliOnly) {
   const pythonRuntimeArchive = getOption('--python-runtime-archive')
     ?? process.env.COPIS_PYTHON_RUNTIME_ARCHIVE
     ?? join(electronDir, 'resources/python-runtime', `${platform}-${arch}.tar.gz`)
@@ -131,6 +132,20 @@ if (!rustOnly && !officeCliOnly && !nodeRuntimeOnly && !alipayBotOnly && !playwr
     binaryPath: pythonRuntimeArchive,
     format: 'tar.gz',
     entrypoint: `bin/${binaryName('python', platform)}`,
+    required: true,
+  })
+}
+
+if (!rustOnly && !officeCliOnly && !nodeRuntimeOnly && !alipayBotOnly && !playwrightCoreOnly && !pythonRuntimeOnly) {
+  const agentlyCliBinary = getOption('--agently-cli-binary')
+    ?? process.env.COPIS_AGENTLY_CLI_BINARY
+    ?? join(electronDir, 'resources/bin', binaryName('agently-cli', platform))
+  modules.push({
+    module: 'agently-cli',
+    version: getOption('--agently-cli-version') ?? process.env.COPIS_AGENTLY_CLI_VERSION ?? '1.0.17',
+    platform,
+    arch,
+    binaryPath: agentlyCliBinary,
     required: true,
   })
 }

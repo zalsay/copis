@@ -512,6 +512,7 @@ function getModuleEntrypoint(name: FunctionalModuleName, suffix: string): string
   if (name === 'officecli') return `bin/officecli${suffix}`
   if (name === 'node-runtime') return `bin/node${suffix}`
   if (name === 'python-runtime') return `bin/python${suffix}`
+  if (name === 'agently-cli') return `bin/agently-cli${suffix}`
   return `bin/copis-http-api-server${suffix}`
 }
 

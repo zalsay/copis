@@ -20,6 +20,7 @@
     "build:playwright-core-module": "bun run scripts/build-playwright-core-module.ts",
     "prepare:python-runtime-module": "bun run scripts/prepare-python-runtime-module.ts",
     "prepare:alipay-bot-module": "bun run scripts/prepare-alipay-bot-module.ts",
+    "prepare:agently-cli-module": "bun run scripts/prepare-agently-cli-module.ts",
     "prepare:officecli-module": "bun run scripts/prepare-officecli-module.ts",
     "build:functional-module-manifest": "bun run scripts/build-functional-module-manifest.ts",
     "publish:functional-modules": "bun run scripts/publish-functional-modules.ts",

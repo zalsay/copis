@@ -55,6 +55,7 @@ NODE_RUNTIME_ONLY="${COPIS_NODE_RUNTIME_ONLY:-0}"
 ALIPAY_BOT_ONLY="${COPIS_ALIPAY_BOT_ONLY:-0}"
 PLAYWRIGHT_CORE_ONLY="${COPIS_PLAYWRIGHT_CORE_ONLY:-0}"
 PYTHON_RUNTIME_ONLY="${COPIS_PYTHON_RUNTIME_ONLY:-0}"
+AGENTLY_CLI_ONLY="${COPIS_AGENTLY_CLI_ONLY:-0}"
 PLATFORM="${COPIS_MODULE_PLATFORM:-}"
 ARCH="${COPIS_MODULE_ARCH:-}"
 CHANNEL="${COPIS_MODULE_CHANNEL:-stable}"
@@ -74,6 +75,8 @@ PLAYWRIGHT_CORE_ARCHIVE="${COPIS_PLAYWRIGHT_CORE_ARCHIVE:-}"
 PLAYWRIGHT_CORE_VERSION="${COPIS_PLAYWRIGHT_CORE_VERSION:-}"
 PYTHON_RUNTIME_ARCHIVE="${COPIS_PYTHON_RUNTIME_ARCHIVE:-}"
 PYTHON_RUNTIME_VERSION="${COPIS_PYTHON_RUNTIME_VERSION:-}"
+AGENTLY_CLI_BINARY="${COPIS_AGENTLY_CLI_BINARY:-}"
+AGENTLY_CLI_VERSION="${COPIS_AGENTLY_CLI_VERSION:-}"
 
 fail() {
   echo "[Copis] $*" >&2
@@ -97,6 +100,7 @@ show_help() {
   --alipay-bot         只发布官方支付宝智能体 CLI，保留 COS 中已有其他必要模块
   --playwright-core    只发布 Playwright 浏览器自动化内核，保留 COS 中已有其他必要模块
   --python-runtime     只发布 Python 3.12 运行环境，保留 COS 中已有其他必要模块
+  --agently-cli        只发布 Agent QQ 邮箱 CLI，保留 COS 中已有其他必要模块
   --skip-publish       只构建二进制，不发布 COS
   --platform <name>    win32、darwin 或 linux
   --arch <name>        x64 或 arm64
@@ -116,6 +120,8 @@ show_help() {
   --playwright-core-version <version> 指定 playwright-core 模块版本
   --python-runtime-archive <path> 指定已打包的 Python 3.12 runtime tar.gz
   --python-runtime-version <version> 指定 Python runtime 模块版本
+  --agently-cli-binary <path> 指定已有 Agent QQ 邮箱 CLI 二进制路径
+  --agently-cli-version <version> 指定 Agent QQ 邮箱 CLI 模块版本
   -h, --help           显示帮助
 EOF
 }
@@ -154,6 +160,9 @@ while [[ $# -gt 0 ]]; do
       ;;
     --python-runtime)
       PYTHON_RUNTIME_ONLY=1
+      ;;
+    --agently-cli)
+      AGENTLY_CLI_ONLY=1
       ;;
     --skip-publish)
       SKIP_PUBLISH=1
@@ -248,6 +257,16 @@ while [[ $# -gt 0 ]]; do
       PYTHON_RUNTIME_VERSION="$2"
       shift
       ;;
+    --agently-cli-binary)
+      require_value "$1" "${2:-}"
+      AGENTLY_CLI_BINARY="$2"
+      shift
+      ;;
+    --agently-cli-version)
+      require_value "$1" "${2:-}"
+      AGENTLY_CLI_VERSION="$2"
+      shift
+      ;;
     -h|--help)
       show_help
       exit 0
@@ -259,8 +278,8 @@ while [[ $# -gt 0 ]]; do
   shift
 done
 
-if [[ $((RUST_ONLY + OFFICECLI_ONLY + NODE_RUNTIME_ONLY + ALIPAY_BOT_ONLY + PLAYWRIGHT_CORE_ONLY + PYTHON_RUNTIME_ONLY)) -gt 1 ]]; then
-  fail '--rust、--officecli、--node-runtime、--alipay-bot、--playwright-core 与 --python-runtime 不能同时使用。'
+if [[ $((RUST_ONLY + OFFICECLI_ONLY + NODE_RUNTIME_ONLY + ALIPAY_BOT_ONLY + PLAYWRIGHT_CORE_ONLY + PYTHON_RUNTIME_ONLY + AGENTLY_CLI_ONLY)) -gt 1 ]]; then
+  fail '--rust、--officecli、--node-runtime、--alipay-bot、--playwright-core、--python-runtime 与 --agently-cli 不能同时使用。'
 fi
 
 if ! command -v bun >/dev/null 2>&1; then
@@ -385,6 +404,17 @@ read_officecli_version() {
   fail "无法读取 OfficeCLI 版本：$binary"
 }
 
+read_agently_cli_version() {
+  local binary="$1"
+  local version
+  version="$("$binary" --version 2>/dev/null || true)"
+  if [[ "$version" =~ ([0-9]+\.[0-9]+\.[0-9]+) ]]; then
+    printf '%s\n' "${BASH_REMATCH[1]}"
+    return
+  fi
+  fail "无法读取 Agent QQ 邮箱 CLI 版本：$binary"
+}
+
 resolve_functional_module_manifest_url() {
   local base_url="$1"
   local prefix="${2:-copis/modules}"
@@ -421,7 +451,7 @@ else
   DEFAULT_RUST_BINARY="$ROOT_DIR/native/http-api-server/target/release/copis-http-api-server"
 fi
 
-if [[ "$OFFICECLI_ONLY" != '1' && "$NODE_RUNTIME_ONLY" != '1' && "$ALIPAY_BOT_ONLY" != '1' && "$PLAYWRIGHT_CORE_ONLY" != '1' && "$PYTHON_RUNTIME_ONLY" != '1' && "$SKIP_RUST_BUILD" -eq 0 ]]; then
+if [[ "$OFFICECLI_ONLY" != '1' && "$NODE_RUNTIME_ONLY" != '1' && "$ALIPAY_BOT_ONLY" != '1' && "$PLAYWRIGHT_CORE_ONLY" != '1' && "$PYTHON_RUNTIME_ONLY" != '1' && "$AGENTLY_CLI_ONLY" != '1' && "$SKIP_RUST_BUILD" -eq 0 ]]; then
   if [[ "$PLATFORM" != "$CURRENT_PLATFORM" || "$ARCH" != "$CURRENT_ARCH" ]]; then
     fail 'deploy.sh 默认只能在当前平台和架构编译 Rust API；跨平台产物请传入 --skip-rust-build 和 --rust-binary。'
   fi
@@ -429,7 +459,7 @@ if [[ "$OFFICECLI_ONLY" != '1' && "$NODE_RUNTIME_ONLY" != '1' && "$ALIPAY_BOT_ON
   run_bun "$APP_DIR" 'Rust HTTP API 构建失败' run build:http-api-server
 fi
 
-if [[ "$OFFICECLI_ONLY" != '1' && "$NODE_RUNTIME_ONLY" != '1' && "$ALIPAY_BOT_ONLY" != '1' && "$PLAYWRIGHT_CORE_ONLY" != '1' && "$PYTHON_RUNTIME_ONLY" != '1' ]]; then
+if [[ "$OFFICECLI_ONLY" != '1' && "$NODE_RUNTIME_ONLY" != '1' && "$ALIPAY_BOT_ONLY" != '1' && "$PLAYWRIGHT_CORE_ONLY" != '1' && "$PYTHON_RUNTIME_ONLY" != '1' && "$AGENTLY_CLI_ONLY" != '1' ]]; then
   if [[ -n "$RUST_BINARY" && "$RUST_BINARY" != /* ]]; then
     RUST_BINARY="$ROOT_DIR/$RUST_BINARY"
   fi
@@ -440,7 +470,7 @@ if [[ "$OFFICECLI_ONLY" != '1' && "$NODE_RUNTIME_ONLY" != '1' && "$ALIPAY_BOT_ON
   RUST_BINARY="$(cd "$(dirname "$RUST_BINARY")" && pwd)/$(basename "$RUST_BINARY")"
 fi
 
-if [[ "$RUST_ONLY" != '1' && "$NODE_RUNTIME_ONLY" != '1' && "$ALIPAY_BOT_ONLY" != '1' && "$PLAYWRIGHT_CORE_ONLY" != '1' && "$PYTHON_RUNTIME_ONLY" != '1' ]]; then
+if [[ "$RUST_ONLY" != '1' && "$NODE_RUNTIME_ONLY" != '1' && "$ALIPAY_BOT_ONLY" != '1' && "$PLAYWRIGHT_CORE_ONLY" != '1' && "$PYTHON_RUNTIME_ONLY" != '1' && "$AGENTLY_CLI_ONLY" != '1' ]]; then
   if [[ -n "$OFFICECLI_BINARY" && "$OFFICECLI_BINARY" != /* ]]; then
     OFFICECLI_BINARY="$ROOT_DIR/$OFFICECLI_BINARY"
   fi
@@ -464,7 +494,7 @@ if [[ "$RUST_ONLY" != '1' && "$NODE_RUNTIME_ONLY" != '1' && "$ALIPAY_BOT_ONLY" !
   OFFICECLI_VERSION="${OFFICECLI_VERSION:-$(read_officecli_version "$OFFICECLI_BINARY")}"
 fi
 
-if [[ "$RUST_ONLY" != '1' && "$OFFICECLI_ONLY" != '1' && "$ALIPAY_BOT_ONLY" != '1' && "$PLAYWRIGHT_CORE_ONLY" != '1' && "$PYTHON_RUNTIME_ONLY" != '1' ]]; then
+if [[ "$RUST_ONLY" != '1' && "$OFFICECLI_ONLY" != '1' && "$ALIPAY_BOT_ONLY" != '1' && "$PLAYWRIGHT_CORE_ONLY" != '1' && "$PYTHON_RUNTIME_ONLY" != '1' && "$AGENTLY_CLI_ONLY" != '1' ]]; then
   if [[ "$PLATFORM" != "$CURRENT_PLATFORM" || "$ARCH" != "$CURRENT_ARCH" ]]; then
     fail 'Node.js runtime 必须在目标平台和架构构建，跨平台请传入 --node-runtime-archive。'
   fi
@@ -481,7 +511,7 @@ if [[ "$RUST_ONLY" != '1' && "$OFFICECLI_ONLY" != '1' && "$ALIPAY_BOT_ONLY" != '
   NODE_RUNTIME_VERSION="${NODE_RUNTIME_VERSION:-$VERSION}"
 fi
 
-if [[ "$RUST_ONLY" != '1' && "$OFFICECLI_ONLY" != '1' && "$NODE_RUNTIME_ONLY" != '1' && "$PLAYWRIGHT_CORE_ONLY" != '1' && "$PYTHON_RUNTIME_ONLY" != '1' ]]; then
+if [[ "$RUST_ONLY" != '1' && "$OFFICECLI_ONLY" != '1' && "$NODE_RUNTIME_ONLY" != '1' && "$PLAYWRIGHT_CORE_ONLY" != '1' && "$PYTHON_RUNTIME_ONLY" != '1' && "$AGENTLY_CLI_ONLY" != '1' ]]; then
   if [[ -n "$ALIPAY_BOT_ARCHIVE" && "$ALIPAY_BOT_ARCHIVE" != /* ]]; then
     ALIPAY_BOT_ARCHIVE="$ROOT_DIR/$ALIPAY_BOT_ARCHIVE"
   fi
@@ -505,7 +535,7 @@ if [[ "$RUST_ONLY" != '1' && "$OFFICECLI_ONLY" != '1' && "$NODE_RUNTIME_ONLY" !=
   ALIPAY_BOT_VERSION="${ALIPAY_BOT_VERSION:-$(read_alipay_bot_version "$ALIPAY_BOT_ARCHIVE")}"
 fi
 
-if [[ "$RUST_ONLY" != '1' && "$OFFICECLI_ONLY" != '1' && "$NODE_RUNTIME_ONLY" != '1' && "$ALIPAY_BOT_ONLY" != '1' && "$PYTHON_RUNTIME_ONLY" != '1' ]]; then
+if [[ "$RUST_ONLY" != '1' && "$OFFICECLI_ONLY" != '1' && "$NODE_RUNTIME_ONLY" != '1' && "$ALIPAY_BOT_ONLY" != '1' && "$PYTHON_RUNTIME_ONLY" != '1' && "$AGENTLY_CLI_ONLY" != '1' ]]; then
   if [[ -n "$PLAYWRIGHT_CORE_ARCHIVE" && "$PLAYWRIGHT_CORE_ARCHIVE" != /* ]]; then
     PLAYWRIGHT_CORE_ARCHIVE="$ROOT_DIR/$PLAYWRIGHT_CORE_ARCHIVE"
   fi
@@ -521,7 +551,7 @@ if [[ "$RUST_ONLY" != '1' && "$OFFICECLI_ONLY" != '1' && "$NODE_RUNTIME_ONLY" !=
   PLAYWRIGHT_CORE_VERSION="${PLAYWRIGHT_CORE_VERSION:-1.62.1}"
 fi
 
-if [[ "$RUST_ONLY" != '1' && "$OFFICECLI_ONLY" != '1' && "$NODE_RUNTIME_ONLY" != '1' && "$ALIPAY_BOT_ONLY" != '1' && "$PLAYWRIGHT_CORE_ONLY" != '1' ]]; then
+if [[ "$RUST_ONLY" != '1' && "$OFFICECLI_ONLY" != '1' && "$NODE_RUNTIME_ONLY" != '1' && "$ALIPAY_BOT_ONLY" != '1' && "$PLAYWRIGHT_CORE_ONLY" != '1' && "$AGENTLY_CLI_ONLY" != '1' ]]; then
   if [[ -n "$PYTHON_RUNTIME_ARCHIVE" && "$PYTHON_RUNTIME_ARCHIVE" != /* ]]; then
     PYTHON_RUNTIME_ARCHIVE="$ROOT_DIR/$PYTHON_RUNTIME_ARCHIVE"
   fi
@@ -535,6 +565,29 @@ if [[ "$RUST_ONLY" != '1' && "$OFFICECLI_ONLY" != '1' && "$NODE_RUNTIME_ONLY" !=
     fail "未找到 Python 3.12 runtime 归档：$PYTHON_RUNTIME_ARCHIVE"
   fi
   PYTHON_RUNTIME_VERSION="${PYTHON_RUNTIME_VERSION:-3.12.14}"
+fi
+
+if [[ "$RUST_ONLY" != '1' && "$OFFICECLI_ONLY" != '1' && "$NODE_RUNTIME_ONLY" != '1' && "$ALIPAY_BOT_ONLY" != '1' && "$PLAYWRIGHT_CORE_ONLY" != '1' && "$PYTHON_RUNTIME_ONLY" != '1' ]]; then
+  if [[ -n "$AGENTLY_CLI_BINARY" && "$AGENTLY_CLI_BINARY" != /* ]]; then
+    AGENTLY_CLI_BINARY="$ROOT_DIR/$AGENTLY_CLI_BINARY"
+  fi
+  AGENTLY_CLI_BINARY="${AGENTLY_CLI_BINARY:-$APP_DIR/resources/bin/agently-cli}"
+  if [[ "$PLATFORM" == 'win32' ]]; then
+    if [[ "$AGENTLY_CLI_BINARY" != *.exe ]]; then AGENTLY_CLI_BINARY+='.exe'; fi
+  fi
+  if [[ ! -f "$AGENTLY_CLI_BINARY" || "${COPIS_REFRESH_AGENTLY_CLI:-0}" == '1' ]]; then
+    if [[ "$PLATFORM" != "$CURRENT_PLATFORM" || "$ARCH" != "$CURRENT_ARCH" ]]; then
+      fail 'Agent QQ 邮箱 CLI 必须在目标平台和架构准备，跨平台请传入 --agently-cli-binary。'
+    fi
+    echo '[Copis] 正在通过官方 npm 包准备 Agent QQ 邮箱 CLI 功能模块...'
+    run_bun "$ROOT_DIR" 'Agent QQ 邮箱 CLI 功能模块准备失败' run prepare:agently-cli-module -- \
+      --platform "$PLATFORM" --arch "$ARCH" --output "$AGENTLY_CLI_BINARY"
+  fi
+  if [[ ! -f "$AGENTLY_CLI_BINARY" ]]; then
+    fail "未找到 Agent QQ 邮箱 CLI 二进制：$AGENTLY_CLI_BINARY"
+  fi
+  AGENTLY_CLI_BINARY="$(cd "$(dirname "$AGENTLY_CLI_BINARY")" && pwd)/$(basename "$AGENTLY_CLI_BINARY")"
+  AGENTLY_CLI_VERSION="${AGENTLY_CLI_VERSION:-$(read_agently_cli_version "$AGENTLY_CLI_BINARY")}"
 fi
 
 if [[ "$BUILD_APP" -eq 1 ]]; then
@@ -565,22 +618,22 @@ if [[ "$SKIP_PUBLISH" -eq 0 ]]; then
     --public-base-url "$PUBLIC_BASE_URL"
   )
   MANIFEST_OUTPUT="$APP_DIR/dist/functional-modules/manifest.json"
-  if [[ "$OFFICECLI_ONLY" != '1' && "$NODE_RUNTIME_ONLY" != '1' && "$ALIPAY_BOT_ONLY" != '1' && "$PLAYWRIGHT_CORE_ONLY" != '1' && "$PYTHON_RUNTIME_ONLY" != '1' ]]; then
+  if [[ "$OFFICECLI_ONLY" != '1' && "$NODE_RUNTIME_ONLY" != '1' && "$ALIPAY_BOT_ONLY" != '1' && "$PLAYWRIGHT_CORE_ONLY" != '1' && "$PYTHON_RUNTIME_ONLY" != '1' && "$AGENTLY_CLI_ONLY" != '1' ]]; then
     RELEASE_ARGS+=(--rust-binary "$RUST_BINARY")
   fi
-  if [[ "$RUST_ONLY" != '1' && "$NODE_RUNTIME_ONLY" != '1' && "$ALIPAY_BOT_ONLY" != '1' && "$PLAYWRIGHT_CORE_ONLY" != '1' && "$PYTHON_RUNTIME_ONLY" != '1' ]]; then
+  if [[ "$RUST_ONLY" != '1' && "$NODE_RUNTIME_ONLY" != '1' && "$ALIPAY_BOT_ONLY" != '1' && "$PLAYWRIGHT_CORE_ONLY" != '1' && "$PYTHON_RUNTIME_ONLY" != '1' && "$AGENTLY_CLI_ONLY" != '1' ]]; then
     RELEASE_ARGS+=(--officecli-binary "$OFFICECLI_BINARY" --officecli-version "$OFFICECLI_VERSION")
   fi
-  if [[ "$RUST_ONLY" != '1' && "$OFFICECLI_ONLY" != '1' && "$ALIPAY_BOT_ONLY" != '1' && "$PLAYWRIGHT_CORE_ONLY" != '1' && "$PYTHON_RUNTIME_ONLY" != '1' ]]; then
+  if [[ "$RUST_ONLY" != '1' && "$OFFICECLI_ONLY" != '1' && "$ALIPAY_BOT_ONLY" != '1' && "$PLAYWRIGHT_CORE_ONLY" != '1' && "$PYTHON_RUNTIME_ONLY" != '1' && "$AGENTLY_CLI_ONLY" != '1' ]]; then
     RELEASE_ARGS+=(--node-runtime-archive "$NODE_RUNTIME_ARCHIVE" --node-runtime-version "$NODE_RUNTIME_VERSION")
   fi
-  if [[ "$RUST_ONLY" != '1' && "$OFFICECLI_ONLY" != '1' && "$NODE_RUNTIME_ONLY" != '1' && "$PLAYWRIGHT_CORE_ONLY" != '1' && "$PYTHON_RUNTIME_ONLY" != '1' ]]; then
+  if [[ "$RUST_ONLY" != '1' && "$OFFICECLI_ONLY" != '1' && "$NODE_RUNTIME_ONLY" != '1' && "$PLAYWRIGHT_CORE_ONLY" != '1' && "$PYTHON_RUNTIME_ONLY" != '1' && "$AGENTLY_CLI_ONLY" != '1' ]]; then
     RELEASE_ARGS+=(--alipay-bot-archive "$ALIPAY_BOT_ARCHIVE" --alipay-bot-version "$ALIPAY_BOT_VERSION")
   fi
-  if [[ "$RUST_ONLY" != '1' && "$OFFICECLI_ONLY" != '1' && "$NODE_RUNTIME_ONLY" != '1' && "$ALIPAY_BOT_ONLY" != '1' && "$PYTHON_RUNTIME_ONLY" != '1' ]]; then
+  if [[ "$RUST_ONLY" != '1' && "$OFFICECLI_ONLY" != '1' && "$NODE_RUNTIME_ONLY" != '1' && "$ALIPAY_BOT_ONLY" != '1' && "$PYTHON_RUNTIME_ONLY" != '1' && "$AGENTLY_CLI_ONLY" != '1' ]]; then
     RELEASE_ARGS+=(--playwright-core-archive "$PLAYWRIGHT_CORE_ARCHIVE" --playwright-core-version "$PLAYWRIGHT_CORE_VERSION")
   fi
-  if [[ "$RUST_ONLY" != '1' && "$OFFICECLI_ONLY" != '1' && "$NODE_RUNTIME_ONLY" != '1' && "$ALIPAY_BOT_ONLY" != '1' && "$PLAYWRIGHT_CORE_ONLY" != '1' ]]; then
+  if [[ "$RUST_ONLY" != '1' && "$OFFICECLI_ONLY" != '1' && "$NODE_RUNTIME_ONLY" != '1' && "$ALIPAY_BOT_ONLY" != '1' && "$PLAYWRIGHT_CORE_ONLY" != '1' && "$AGENTLY_CLI_ONLY" != '1' ]]; then
     RELEASE_ARGS+=(--python-runtime-archive "$PYTHON_RUNTIME_ARCHIVE" --python-runtime-version "$PYTHON_RUNTIME_VERSION")
   fi
   if [[ -n "$OBJECT_PREFIX_PATH" ]]; then
@@ -603,6 +656,9 @@ if [[ "$SKIP_PUBLISH" -eq 0 ]]; then
   fi
   if [[ "$PYTHON_RUNTIME_ONLY" == '1' ]]; then
     RELEASE_ARGS+=(--python-runtime)
+  fi
+  if [[ "$AGENTLY_CLI_ONLY" == '1' ]]; then
+    RELEASE_ARGS+=(--agently-cli)
   fi
 
   echo '[Copis] 正在生成功能模块 manifest...'

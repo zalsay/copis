@@ -3,6 +3,10 @@ import QRCode from 'qrcode'
 import type { AgentMailAlias, AgentMailStatus } from '@copis/shared'
 import { AGENT_MAIL_IPC_CHANNELS } from '@copis/shared'
 import { spawn, type ChildProcess } from 'node:child_process'
+import { existsSync } from 'node:fs'
+import { isAbsolute } from 'node:path'
+import { getFunctionalModulesDir } from './config-paths'
+import { getFunctionalModulePath } from './functional-module-manager'
 
 const DEFAULT_HTTP_API_PORT = 51730
 const AGENT_MAIL_ENDPOINT = '/api/internal/agent/agent-mail'
@@ -125,7 +129,7 @@ export class AgentMailService {
   async startLogin(): Promise<{ authUrl: string; qrCodeDataUrl: string }> {
     this.cancelLogin()
 
-    const cliCommand = process.env.COPIS_AGENTLY_CLI || 'agently-cli'
+    const cliCommand = resolveAgentlyCliCommand()
 
     return new Promise<{ authUrl: string; qrCodeDataUrl: string }>((resolve, reject) => {
       let resolved = false
@@ -237,4 +241,14 @@ export class AgentMailService {
     this.broadcastStatus(nextStatus)
     return nextStatus
   }
+}
+
+function resolveAgentlyCliCommand(): string {
+  const activePath = getFunctionalModulePath('agently-cli', getFunctionalModulesDir())
+  if (activePath) return activePath
+
+  const configuredPath = process.env.COPIS_AGENTLY_CLI?.trim()
+  if (configuredPath && isAbsolute(configuredPath) && existsSync(configuredPath)) return configuredPath
+
+  throw new Error('未找到 Agent QQ 邮箱 CLI，请先安装 agently-cli 功能模块')
 }

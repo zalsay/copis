@@ -276,6 +276,16 @@ function resolveOfficeCli(options: HttpApiServerOptions): string | undefined {
   return prepareBinary(active.path)
 }
 
+function resolveAgentlyCli(options: HttpApiServerOptions): string | undefined {
+  const active = readActiveFunctionalModule(
+    getFunctionalModulePaths(getRootDir(options)),
+    'agently-cli',
+  )
+  const entrypoint = process.platform === 'win32' ? 'bin/agently-cli.exe' : 'bin/agently-cli'
+  if (active?.entrypoint !== entrypoint) return undefined
+  return prepareBinary(active.path)
+}
+
 function resolveAlipayBotCli(options: HttpApiServerOptions): string | undefined {
   const configuredPath = process.env.COPIS_ALIPAY_BOT_CLI?.trim()
   if (!app.isPackaged && configuredPath && existsSync(configuredPath)) {
@@ -428,6 +438,7 @@ function spawnManagedProcess(
   const nodeRuntimeRoot = resolveNodeRuntimeRoot(options)
   const pythonRuntimeRoot = resolvePythonRuntimeRoot(options)
   const officeCli = resolveOfficeCli(options)
+  const agentlyCli = resolveAgentlyCli(options)
   const alipayBotCli = resolveAlipayBotCli(options)
   const alipayBotNode = resolveAlipayBotNode(nodeRuntimeRoot)
   let paymentRuntime: PaymentWorkspaceRuntime
@@ -466,6 +477,7 @@ function spawnManagedProcess(
         ...(nodeRuntimeRoot ? { COPIS_RUNTIME_ROOT: nodeRuntimeRoot } : {}),
         ...(pythonRuntimeRoot ? { COPIS_PYTHON_RUNTIME_ROOT: pythonRuntimeRoot } : {}),
         ...(officeCli ? { COPIS_OFFICECLI: officeCli } : {}),
+        ...(agentlyCli ? { COPIS_AGENTLY_CLI: agentlyCli } : {}),
         ...(alipayBotCli ? { COPIS_ALIPAY_BOT_CLI: alipayBotCli } : {}),
         ...(alipayBotNode ? { COPIS_ALIPAY_BOT_NODE: alipayBotNode } : {}),
         ...(app.isPackaged ? { COPIS_PI_RPC_COMPILED_RUNTIME: '1' } : {}),
