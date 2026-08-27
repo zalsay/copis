@@ -1,12 +1,22 @@
 use super::{
     configure_payment_worker_capability, configure_worker_file_capability,
-    parse_payment_worker_result, payment_worker_command, permission_mode_command,
-    resolve_worker_launch, stop_command, worker_requires_node, PaymentWorkerAction,
-    PiWorkerManager, PiWorkerRunState, PiWorkerStatusSnapshot, WorkerLaunch,
+    is_copis_working_channel_id, parse_payment_worker_result, payment_worker_command,
+    permission_mode_command, resolve_worker_launch, stop_command, worker_requires_node,
+    PaymentWorkerAction, PiWorkerManager, PiWorkerRunState, PiWorkerStatusSnapshot, WorkerLaunch,
 };
 use serde_json::json;
 use std::path::PathBuf;
 use std::process::Command;
+
+#[test]
+fn given_copis_working_channel_family_when_checking_working_model_then_match_prefix() {
+    assert!(is_copis_working_channel_id("copis-working"));
+    assert!(is_copis_working_channel_id("copis-working-deepseek"));
+    assert!(is_copis_working_channel_id("copis-working-zhipu"));
+    assert!(is_copis_working_channel_id("copis-working-custom"));
+    assert!(!is_copis_working_channel_id("custom-copis-working"));
+    assert!(!is_copis_working_channel_id("working"));
+}
 
 #[test]
 fn worker_only_receives_session_file_capability() {
