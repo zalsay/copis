@@ -65,12 +65,13 @@ describe('macOS 构建脚本固定安装程序发布', () => {
     expect(fixedLine).not.toContain('$APP_VERSION')
   })
 
-  test('支持 --new 自动递增 Electron 应用 patch 版本', () => {
+  test('低于 Darwin 门槛时自动对齐，--new 仅在已对齐后递增 patch', () => {
     expect(buildScript).toContain('--new)')
     expect(buildScript).toContain('bump-electron-version.ts --new')
     expect(buildScript).toContain('query-functional-module-min-version.ts')
     expect(buildScript).toContain('--platform darwin --arch "$MAC_ARCH"')
     expect(buildScript).toContain('bump-electron-version.ts --set "$PLATFORM_MIN_VERSION"')
+    expect(buildScript).not.toContain('请使用 --new 对齐版本')
   })
 
   test('安装包上传成功后再更新客户端 manifest', () => {

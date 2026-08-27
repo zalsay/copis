@@ -25,7 +25,7 @@ describe('Windows 构建脚本固定安装程序发布', () => {
     expect(buildScript).not.toContain('功能模块 manifest 地址未配置')
   })
 
-  test('支持 --new 自动递增 Electron 应用 patch 版本', () => {
+  test('低于 Windows 门槛时自动对齐，--new 仅在已对齐后递增 patch', () => {
     expect(buildScript).toContain("'--new' { $NewVersion = $true }")
     expect(buildScript).toContain('bump-electron-version.ts')
     expect(buildScript).toContain("[switch]$NewVersion")
@@ -38,6 +38,7 @@ describe('Windows 构建脚本固定安装程序发布', () => {
     expect(buildScript).toContain('query-functional-module-min-version.ts')
     expect(buildScript).toContain("'--platform' $targetPlatform '--arch' $targetArch")
     expect(buildScript).toContain("'--set' $platformMinVersion")
+    expect(buildScript.indexOf('if ($NewVersion -and -not $versionAlignedToMin)')).toBeGreaterThan(setCall)
   })
 
   test('安装包上传成功后再更新客户端 manifest', () => {

@@ -149,25 +149,23 @@ if (-not [string]::IsNullOrWhiteSpace($manifestUrl)) {
 }
 
 $versionAlignedToMin = $false
-if ($NewVersion) {
-    if (-not [string]::IsNullOrWhiteSpace($platformMinVersion) -and (Compare-ClientVersions $appVersion $platformMinVersion) -lt 0) {
-        $versionScriptPath = Join-Path $rootDir 'scripts\bump-electron-version.ts'
-        $appVersion = (& $bunPath $versionScriptPath '--set' $platformMinVersion | Out-String).Trim()
-        if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($appVersion)) {
-            throw "Electron 应用版本对齐失败，退出码：$LASTEXITCODE"
-        }
-        $versionAlignedToMin = $true
-        Write-Host "Electron 应用版本已对齐 ${targetPlatform}-${targetArch} 最低版本：$appVersion"
+if (-not [string]::IsNullOrWhiteSpace($platformMinVersion) -and (Compare-ClientVersions $appVersion $platformMinVersion) -lt 0) {
+    $versionScriptPath = Join-Path $rootDir 'scripts\bump-electron-version.ts'
+    $appVersion = (& $bunPath $versionScriptPath '--set' $platformMinVersion | Out-String).Trim()
+    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($appVersion)) {
+        throw "Electron 应用版本对齐失败，退出码：$LASTEXITCODE"
     }
+    $versionAlignedToMin = $true
+    Write-Host "Electron 应用版本已对齐 ${targetPlatform}-${targetArch} 最低版本：$appVersion"
+}
 
-    if (-not $versionAlignedToMin) {
-        $versionScriptPath = Join-Path $rootDir 'scripts\bump-electron-version.ts'
-        $appVersion = (& $bunPath $versionScriptPath '--new' | Out-String).Trim()
-        if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($appVersion)) {
-            throw "Electron 应用版本更新失败，退出码：$LASTEXITCODE"
-        }
-        Write-Host "Electron 应用版本已更新为：$appVersion"
+if ($NewVersion -and -not $versionAlignedToMin) {
+    $versionScriptPath = Join-Path $rootDir 'scripts\bump-electron-version.ts'
+    $appVersion = (& $bunPath $versionScriptPath '--new' | Out-String).Trim()
+    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($appVersion)) {
+        throw "Electron 应用版本更新失败，退出码：$LASTEXITCODE"
     }
+    Write-Host "Electron 应用版本已更新为：$appVersion"
 }
 
 Write-Host "使用 Bun：$bunPath"
