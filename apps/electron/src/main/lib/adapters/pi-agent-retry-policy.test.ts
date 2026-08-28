@@ -1,7 +1,10 @@
 import { describe, expect, test } from 'bun:test'
 import { AgentSession } from '@earendil-works/pi-coding-agent'
 import type { AssistantMessage } from '@earendil-works/pi-ai/compat'
-import { createPiAssistantUuidTracker } from './pi-agent-adapter'
+import {
+  createPiAssistantUuidTracker,
+  PI_NATIVE_MAX_TOTAL_DELAY_MS,
+} from './pi-agent-adapter'
 
 interface NativeRetrySettings {
   enabled: boolean
@@ -104,6 +107,10 @@ function createTestSession(settings: NativeRetrySettings): {
 }
 
 describe('patched Pi AgentSession retry policy', () => {
+  test('uses a 20 minute cumulative wait budget for native recovery', () => {
+    expect(PI_NATIVE_MAX_TOTAL_DELAY_MS).toBe(20 * 60_000)
+  })
+
   test('emits scheduled before actual retry start and preserves native continue', async () => {
     const { session, events, getContinueCalls } = createTestSession({
       enabled: true,
