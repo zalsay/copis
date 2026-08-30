@@ -42,7 +42,10 @@ function result(value: unknown): AgentToolResult<unknown> {
 }
 
 const scheduleFields = {
-  scheduleType: Type.Union([Type.Literal('interval'), Type.Literal('daily'), Type.Literal('weekly'), Type.Literal('monthly'), Type.Literal('once')]),
+  scheduleType: Type.String({
+    enum: ['interval', 'daily', 'weekly', 'monthly', 'once'],
+    description: '定时任务周期类型',
+  }),
   intervalMinutes: Type.Optional(Type.Number()),
   timeOfDay: Type.Optional(Type.String()),
   dayOfWeek: Type.Optional(Type.Number()),
@@ -50,7 +53,10 @@ const scheduleFields = {
   scheduledAt: Type.Optional(Type.Number()),
   maxRuns: Type.Optional(Type.Number()),
   active: Type.Optional(Type.Boolean()),
-  sessionMode: Type.Optional(Type.Union([Type.Literal('daily'), Type.Literal('reuse')])),
+  sessionMode: Type.Optional(Type.String({
+    enum: ['daily', 'reuse'],
+    description: '会话模式',
+  })),
 }
 
 const descriptors: ToolDescriptor[] = [

@@ -6,6 +6,7 @@ import {
   convertResultMessage,
   getPiAssistantErrorDetails,
   hasPiAssistantTextContent,
+  sanitizeSessionMessagesForTurn,
   stripPiAssistantError,
 } from './pi-message-adapter'
 
@@ -133,5 +134,79 @@ describe('convertPiMessage', () => {
     expect(partialStop.errors).toBeUndefined()
     expect(terminalError.subtype).toBe('error_during_execution')
     expect(terminalError.errors).toEqual([providerError])
+  })
+})
+
+describe('sanitizeSessionMessagesForTurn', () => {
+  test('drops orphaned tool calls with no matching toolResult', () => {
+    const messages = [
+      { role: 'user', content: '形成记忆' },
+      {
+        role: 'assistant',
+        content: [
+          { type: 'text', text: '正在提取记忆...' },
+          { type: 'toolCall', id: 'call_hah19svs5igdkubumrnliyh8', name: 'memory_recall', arguments: {} },
+        ],
+        stopReason: 'toolUse',
+      },
+    ]
+
+    const sanitized = sanitizeSessionMessagesForTurn(messages as any)
+    expect(sanitized.length).toBe(2)
+    const assistant = sanitized[1] as AssistantMessage
+    expect(assistant.content).toEqual([{ type: 'text', text: '正在提取记忆...' }])
+  })
+
+  test('drops trailing assistant message entirely if it only contained orphaned tool calls', () => {
+    const messages = [
+      { role: 'user', content: '形成记忆' },
+      {
+        role: 'assistant',
+        content: [
+          { type: 'toolCall', id: 'call_hah19svs5igdkubumrnliyh8', name: 'memory_recall', arguments: {} },
+        ],
+        stopReason: 'toolUse',
+      },
+    ]
+
+    const sanitized = sanitizeSessionMessagesForTurn(messages as any)
+    expect(sanitized.length).toBe(1)
+    expect(sanitized[0]?.role).toBe('user')
+  })
+
+  test('drops trailing error/aborted assistant messages', () => {
+    const messages = [
+      { role: 'user', content: 'hello' },
+      { role: 'assistant', content: [{ type: 'text', text: 'hi' }], stopReason: 'stop' },
+      { role: 'user', content: 'do something' },
+      { role: 'assistant', content: [], stopReason: 'error', errorMessage: '400 Bad request' },
+    ]
+
+    const sanitized = sanitizeSessionMessagesForTurn(messages as any)
+    expect(sanitized.length).toBe(3)
+    expect(sanitized[2]?.role).toBe('user')
+  })
+
+  test('preserves valid tool calls that have matching toolResult', () => {
+    const messages = [
+      { role: 'user', content: 'read file' },
+      {
+        role: 'assistant',
+        content: [
+          { type: 'toolCall', id: 'call_1', name: 'read', arguments: { path: 'a.txt' } },
+        ],
+        stopReason: 'toolUse',
+      },
+      {
+        role: 'toolResult',
+        toolCallId: 'call_1',
+        toolName: 'read',
+        content: [{ type: 'text', text: 'file content' }],
+      },
+    ]
+
+    const sanitized = sanitizeSessionMessagesForTurn(messages as any)
+    expect(sanitized.length).toBe(3)
+    expect((sanitized[1] as AssistantMessage).content[0]?.type).toBe('toolCall')
   })
 })

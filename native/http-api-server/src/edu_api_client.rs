@@ -488,9 +488,19 @@ fn public_error_message(status: u16, body: &[u8]) -> String {
         .and_then(|value| {
             value
                 .get("message")
-                .or_else(|| value.get("error"))
                 .and_then(Value::as_str)
                 .map(str::to_string)
+                .or_else(|| {
+                    value.get("error").and_then(|err| {
+                        if let Some(s) = err.as_str() {
+                            Some(s.to_string())
+                        } else if let Some(m) = err.get("message").and_then(Value::as_str) {
+                            Some(m.to_string())
+                        } else {
+                            None
+                        }
+                    })
+                })
         })
         .filter(|message| !message.trim().is_empty())
         .map(|message| message.chars().take(512).collect())

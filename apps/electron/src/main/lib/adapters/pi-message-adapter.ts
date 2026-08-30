@@ -189,6 +189,86 @@ export function dropTrailingAbortedAssistant(messages: AgentMessage[]): AgentMes
   return lastMessage && isAbortedAssistantMessage(lastMessage) ? messages.slice(0, -1) : messages
 }
 
+/**
+ * 校验并清理会话消息历史中的孤立 toolCall 与异常尾部 assistant，避免下游 LLM Provider
+ * （如 DeepSeek / OpenAI / Console Go）在发起新 turn 时抛出：
+ * `No tool output found for tool call call_xxx` 或 `Invalid message sequence`。
+ */
+export function sanitizeSessionMessagesForTurn(messages: AgentMessage[]): AgentMessage[] {
+  if (!messages || messages.length === 0) return []
+
+  // 1. 收集所有已存在的 toolResult 消息的 toolCallId
+  const completedToolCallIds = new Set<string>()
+  for (const msg of messages) {
+    if (msg && typeof msg === 'object' && 'role' in msg && msg.role === 'toolResult') {
+      const tr = msg as ToolResultMessage
+      if (tr.toolCallId) {
+        completedToolCallIds.add(tr.toolCallId)
+      }
+    }
+  }
+
+  // 2. 遍历所有消息，清理没有结果的 toolCall
+  const sanitized: AgentMessage[] = []
+  for (let i = 0; i < messages.length; i++) {
+    const msg = messages[i]
+    if (!msg || typeof msg !== 'object' || !('role' in msg)) continue
+
+    if (msg.role === 'assistant') {
+      const assistant = msg as AssistantMessage
+      const content = Array.isArray(assistant.content) ? assistant.content : []
+
+      // 检查该 assistant message 是否包含未完成的 toolCall
+      const validContent = content.filter((block) => {
+        if (block && typeof block === 'object' && block.type === 'toolCall') {
+          const tcId = (block as { id?: string }).id
+          return tcId && completedToolCallIds.has(tcId)
+        }
+        return true
+      })
+
+      const hasMeaningfulContent = validContent.some((block) => {
+        if (block.type === 'text') return typeof block.text === 'string' && block.text.trim().length > 0
+        if (block.type === 'thinking') return typeof block.thinking === 'string' && block.thinking.trim().length > 0
+        if (block.type === 'toolCall') return true
+        return false
+      })
+
+      const isLast = i === messages.length - 1
+      if (isLast && (assistant.stopReason === 'error' || assistant.stopReason === 'aborted' || !hasMeaningfulContent)) {
+        continue
+      }
+
+      if (hasMeaningfulContent) {
+        sanitized.push({
+          ...assistant,
+          content: validContent,
+        } as AssistantMessage)
+      }
+    } else {
+      sanitized.push(msg)
+    }
+  }
+
+  // 3. 再次检查尾部是否仍留有 aborted / error / 孤立 assistant
+  while (sanitized.length > 0) {
+    const last = sanitized[sanitized.length - 1]
+    if (last && typeof last === 'object' && 'role' in last && last.role === 'assistant') {
+      const assistant = last as AssistantMessage
+      const content = Array.isArray(assistant.content) ? assistant.content : []
+      const toolCalls = content.filter((b) => b.type === 'toolCall')
+      const allToolCallsHaveResult = toolCalls.every((tc) => tc.id && completedToolCallIds.has(tc.id))
+      if (assistant.stopReason === 'error' || assistant.stopReason === 'aborted' || !allToolCallsHaveResult) {
+        sanitized.pop()
+        continue
+      }
+    }
+    break
+  }
+
+  return sanitized
+}
+
 function usageFromAssistant(message: AssistantMessage): {
   input_tokens: number
   output_tokens: number

@@ -249,27 +249,29 @@ pub fn start_desktop_payment_poller(
 ) {
     let result = thread::Builder::new()
         .name("copis-payment-poller".to_string())
-        .spawn(move || loop {
+        .spawn(move || {
             let _ = recover_pending_desktop_payment(&payment_state, skill_market_state.as_ref());
-            if payment_state.payment_ids().is_empty() {
+            loop {
+                if payment_state.payment_ids().is_empty() {
+                    thread::sleep(DESKTOP_PAYMENT_POLL_INTERVAL);
+                    continue;
+                }
+                let Ok(account_key) = skill_market_state.ensure_payment_account_key() else {
+                    thread::sleep(DESKTOP_PAYMENT_POLL_INTERVAL);
+                    continue;
+                };
+                let failures = poll_desktop_payments_once(
+                    &payment_state,
+                    worker.as_ref(),
+                    workspace.as_ref(),
+                    skill_market_state.as_ref(),
+                    &account_key,
+                );
+                if failures > 0 {
+                    eprintln!("[支付] 自动查询暂时失败，将继续重试");
+                }
                 thread::sleep(DESKTOP_PAYMENT_POLL_INTERVAL);
-                continue;
             }
-            let Ok(account_key) = skill_market_state.ensure_payment_account_key() else {
-                thread::sleep(DESKTOP_PAYMENT_POLL_INTERVAL);
-                continue;
-            };
-            let failures = poll_desktop_payments_once(
-                &payment_state,
-                worker.as_ref(),
-                workspace.as_ref(),
-                skill_market_state.as_ref(),
-                &account_key,
-            );
-            if failures > 0 {
-                eprintln!("[支付] 自动查询暂时失败，将继续重试");
-            }
-            thread::sleep(DESKTOP_PAYMENT_POLL_INTERVAL);
         });
     if result.is_err() {
         eprintln!("[支付] 无法启动自动查询任务");

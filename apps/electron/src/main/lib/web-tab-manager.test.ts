@@ -107,6 +107,11 @@ class FakeWebContents extends EventEmitter {
     return Promise.resolve()
   }
 
+  reload(): void {
+    this.emit('did-start-loading')
+    this.emit('did-stop-loading')
+  }
+
   close(): void {
     this.closed = true
     this.destroyed = true
@@ -170,12 +175,17 @@ const {
   createWebTab,
   createWorkflowWebTab,
   closeWebTab,
+  detachWebTabCdp,
   disposeWebTabs,
+  ensureWebTabCdpAttached,
   getWebTabState,
+  isWebTabCdpAttached,
   listWebTabs,
   reorderWebTab,
   resolveWebTabFaviconDataUrl,
   resolveWebTabFaviconUrl,
+  reloadWebTab,
+  sendWebTabCdpCommandInternal,
   setWebTabHostWindow,
   subscribeWebTabLifecycle,
   updateWebTabBounds,
@@ -203,9 +213,9 @@ describe('网页页签 favicon 生命周期', () => {
     expect(favicon).toBe('https://example.com/favicon.ico')
   })
 
-  test('Given 页签已有 favicon When 开始下一次导航 Then 清空旧 favicon', () => {
+  test('Given 页签已有 favicon When 开始加载/刷新 Then 保留已有 favicon 不被清空', () => {
     const favicon = resolveWebTabFaviconUrl('https://old.example.com/favicon.ico', { type: 'loading-started' })
-    expect(favicon).toBeNull()
+    expect(favicon).toBe('https://old.example.com/favicon.ico')
   })
 
   test('Given 常规时序 favicon-updated 晚于 did-navigate When 图标到达 Then 设置新 favicon', () => {
@@ -317,6 +327,28 @@ describe('网页页签 favicon 解析', () => {
     await Promise.resolve()
 
     expect(getWebTabState(tabId)?.faviconUrl).toBeNull()
+  })
+
+  test('Given 网页页签已有 favicon When 触发刷新 reloadWebTab 且 Chromium 不重复派发 page-favicon-updated Then 保持原有 favicon 不被重置为默认图标', async () => {
+    setupHost()
+    const initial = createWebTab({ url: 'https://page.example' })
+    const tabId = initial.tabs[0]!.id
+    const view = createdViews[0]!
+    view.webContents.session.fetchImpl = async () => createFaviconResponse(
+      new Uint8Array([4, 5]),
+      { contentType: 'image/png' },
+    )
+
+    view.webContents.emit('page-favicon-updated', {}, ['https://cdn.example/favicon.png'])
+    await waitForAsyncTasks()
+    expect(getWebTabState(tabId)?.faviconUrl).toBe('data:image/png;base64,BAU=')
+
+    // 触发刷新 reload
+    reloadWebTab(tabId)
+    await waitForAsyncTasks()
+
+    // 刷新完成后，即使没有再次触发 page-favicon-updated，favicon 依然被完整保留
+    expect(getWebTabState(tabId)?.faviconUrl).toBe('data:image/png;base64,BAU=')
   })
 })
 
@@ -473,3 +505,40 @@ describe('网页页签拖动排序', () => {
     expect(listWebTabs()).toEqual(before)
   })
 })
+
+describe('网页页签 CDP 按需生命周期', () => {
+  test('Given 新建普通页签 When 初始创建 Then 默认不挂载 CDP', () => {
+    setupHost()
+    const snapshot = createWebTab({ url: 'https://example.com' })
+    expect(isWebTabCdpAttached(snapshot.activeTabId!)).toBe(false)
+  })
+
+  test('Given 未挂载 CDP 的页签 When 显式调用 ensureWebTabCdpAttached Then 挂载 CDP', () => {
+    setupHost()
+    const snapshot = createWebTab({ url: 'https://example.com' })
+    expect(isWebTabCdpAttached(snapshot.activeTabId!)).toBe(false)
+
+    ensureWebTabCdpAttached(snapshot.activeTabId!)
+    expect(isWebTabCdpAttached(snapshot.activeTabId!)).toBe(true)
+  })
+
+  test('Given 已挂载 CDP 的页签 When 显式调用 detachWebTabCdp Then 释放 CDP', () => {
+    setupHost()
+    const snapshot = createWebTab({ url: 'https://example.com' })
+    ensureWebTabCdpAttached(snapshot.activeTabId!)
+    expect(isWebTabCdpAttached(snapshot.activeTabId!)).toBe(true)
+
+    detachWebTabCdp(snapshot.activeTabId!)
+    expect(isWebTabCdpAttached(snapshot.activeTabId!)).toBe(false)
+  })
+
+  test('Given 未挂载 CDP 的页签 When 执行内部 CDP 指令 Then 自动懒加载挂载 CDP', async () => {
+    setupHost()
+    const snapshot = createWebTab({ url: 'https://example.com' })
+    expect(isWebTabCdpAttached(snapshot.activeTabId!)).toBe(false)
+
+    await sendWebTabCdpCommandInternal({ tabId: snapshot.activeTabId!, method: 'Runtime.enable' })
+    expect(isWebTabCdpAttached(snapshot.activeTabId!)).toBe(true)
+  })
+})
+

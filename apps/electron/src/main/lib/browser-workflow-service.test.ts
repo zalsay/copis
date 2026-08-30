@@ -109,12 +109,21 @@ mock.module('./rust-browser-recording-client', () => ({
     return Promise.resolve(undefined)
   },
 }))
+const attachedCdpTabIds = new Set<string>()
+
 mock.module('./web-tab-manager', () => ({
   createWebTab: (input: { url?: string; incognito?: boolean; activate?: boolean } = {}) => {
     createdWebTabInputs.push(input)
     currentTab = { id: 'tab-2', url: input.url ?? 'https://new.example.test', title: 'New tab', isIncognito: input.incognito === true }
     return { tabs: [currentTab], activeTabId: 'tab-2' }
   },
+  ensureWebTabCdpAttached: (tabId: string) => {
+    attachedCdpTabIds.add(tabId)
+  },
+  detachWebTabCdp: (tabId: string) => {
+    attachedCdpTabIds.delete(tabId)
+  },
+  isWebTabCdpAttached: (tabId: string) => attachedCdpTabIds.has(tabId),
   getWebTabState: (tabId: string) => unavailableTabIds.has(tabId) ? undefined : currentTab,
   promoteWorkflowWebTab: (tabId: string) => {
     promotedWorkflowTabIds.push(tabId)
@@ -600,4 +609,32 @@ describe('Browser Agent Context 绑定', () => {
 
     expect(() => bindBrowserAgentContext('browser-session', { tabId: 'tab-1' })).toThrow('HTTP(S)')
   })
+
+  test('Given a session binds to tab-1 When binding Then CDP is attached to tab-1', () => {
+    currentTab = { id: 'tab-1', url: 'https://example.com/account', title: 'Account' }
+    attachedCdpTabIds.clear()
+
+    bindBrowserAgentContext('browser-session', { tabId: 'tab-1' })
+    expect(attachedCdpTabIds.has('tab-1')).toBe(true)
+
+    unbindBrowserAgentContext('browser-session')
+    expect(attachedCdpTabIds.has('tab-1')).toBe(false)
+  })
+
+  test('Given a session switches binding from tab-1 to tab-2 When re-binding Then tab-1 CDP is detached and tab-2 CDP is attached', () => {
+    currentTab = { id: 'tab-1', url: 'https://example.com/page1', title: 'Page 1' }
+    attachedCdpTabIds.clear()
+
+    bindBrowserAgentContext('browser-session', { tabId: 'tab-1' })
+    expect(attachedCdpTabIds.has('tab-1')).toBe(true)
+
+    currentTab = { id: 'tab-2', url: 'https://example.com/page2', title: 'Page 2' }
+    bindBrowserAgentContext('browser-session', { tabId: 'tab-2' })
+    expect(attachedCdpTabIds.has('tab-1')).toBe(false)
+    expect(attachedCdpTabIds.has('tab-2')).toBe(true)
+
+    unbindBrowserAgentContext('browser-session')
+    expect(attachedCdpTabIds.has('tab-2')).toBe(false)
+  })
 })
+

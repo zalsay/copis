@@ -16,6 +16,7 @@ import type {
   MemoryPolicy,
   MemoryKind,
 } from '@copis/shared'
+import { buildPiMemoryTools } from './pi-memory-tools'
 import { runtimeMemoryApiClient as memoryApiClient } from '../memory-api-client-runtime'
 import { memoryToolNamesForPolicy } from './memory-tool-policy'
 import { getBrowserAgentContext } from '../browser-workflow-service'
@@ -162,128 +163,10 @@ function memoryTags(value: unknown): string[] | undefined {
 }
 
 function buildMemoryTools(sdk: PiSdk, ctx: PiBuiltinToolsContext): ToolDefinition[] {
-  const memoryToolNames = memoryToolNamesForPolicy(ctx.memoryPolicy ?? 'writable')
-  const kindSchema = Type.Union([
-    Type.Literal('fact'),
-    Type.Literal('preference'),
-    Type.Literal('decision'),
-    Type.Literal('project'),
-    Type.Literal('scratch'),
-  ])
-
-  const tools: ToolDefinition[] = [
-    sdk.defineTool({
-      name: 'memory_recall',
-      label: '检索记忆',
-      description: '检索当前可见的 Copis 长期记忆。工作区会同时看到用户记忆和当前工作区记忆；没有工作区时只看到用户记忆。先检索，再按需读取完整内容。',
-      parameters: Type.Object({
-        query: Type.String({ description: '要检索的事实、偏好、决策或项目经验关键词' }),
-        limit: Type.Optional(Type.Number({ description: '返回数量，默认 8，最大 8' })),
-      }),
-      async execute(_toolCallId: string, params: unknown, signal?: AbortSignal) {
-        const args = params as { query?: unknown; limit?: unknown }
-        const query = assertNonBlank(typeof args.query === 'string' ? args.query : undefined, 'query')
-        const limit = args.limit === undefined ? undefined : args.limit
-        if (limit !== undefined && (!isFiniteInt(limit) || limit < 1 || limit > 8)) {
-          throw new Error('limit 必须是 1 到 8 之间的整数')
-        }
-        const response = await memoryApiClient.recall({
-            ...(ctx.workspaceSlug ? { workspaceSlug: ctx.workspaceSlug } : {}),
-            query,
-            ...(limit === undefined ? {} : { limit }),
-          }, signal)
-        return jsonToolResult(response)
-      },
-    }),
-    sdk.defineTool({
-      name: 'memory_read',
-      label: '读取记忆',
-      description: '读取一条已经通过 memory_recall 得到的当前可见 Copis 记忆的完整内容。不能读取其他工作区的记忆。',
-      parameters: Type.Object({
-        id: Type.String({ description: 'memory_recall 返回的记忆 ID' }),
-      }),
-      async execute(_toolCallId: string, params: unknown, signal?: AbortSignal) {
-        const rawId = (params as { id?: unknown }).id
-        const id = assertNonBlank(typeof rawId === 'string' ? rawId : undefined, 'id')
-        const entry = await memoryApiClient.read(id, ctx.workspaceSlug, signal)
-        return jsonToolResult({ entry })
-      },
-    }),
-  ] as unknown as ToolDefinition[]
-
-  if (memoryToolNames.includes('memory_capture')) {
-    tools.push(
-      sdk.defineTool({
-        name: 'memory_capture',
-        label: '记录记忆',
-        description: '把稳定、可复用且有足够证据的经验记录到当前工作区。scope 固定为当前工作区，不能写入其他工作区；没有工作区时不可写入。',
-        parameters: Type.Object({
-          title: Type.String({ description: '简短的记忆标题' }),
-          content: Type.String({ description: '稳定、可复用的事实、偏好、决策或项目经验' }),
-          kind: kindSchema,
-          tags: Type.Optional(Type.Array(Type.String(), { description: '用于后续检索的标签' })),
-        }),
-        async execute(_toolCallId: string, params: unknown, signal?: AbortSignal) {
-          if (!ctx.workspaceSlug) throw new Error('当前没有工作区，不能写入工作区记忆')
-          const args = params as { title?: unknown; content?: unknown; kind?: unknown; tags?: unknown }
-          const kind = args.kind
-          if (!isMemoryKind(kind)) throw new Error('kind 参数不正确')
-          const tags = memoryTags(args.tags)
-          const response = await memoryApiClient.capture({
-            workspaceSlug: ctx.workspaceSlug,
-            title: assertNonBlank(typeof args.title === 'string' ? args.title : undefined, 'title'),
-            content: assertNonBlank(typeof args.content === 'string' ? args.content : undefined, 'content'),
-            kind,
-            ...(tags === undefined ? {} : { tags }),
-          }, signal)
-          return jsonToolResult(response)
-        },
-      }) as unknown as ToolDefinition,
-      sdk.defineTool({
-        name: 'memory_rewrite',
-        label: '修订记忆',
-        description: '修订当前工作区可见的 Copis 记忆。必须携带 memory_read 得到的 expectedRevision；发生冲突时先读取当前记录再重新判断，不能追加相反条目。',
-        parameters: Type.Object({
-          id: Type.String({ description: '要修订的记忆 ID' }),
-          title: Type.Optional(Type.String({ description: '新的标题' })),
-          content: Type.Optional(Type.String({ description: '新的记忆内容' })),
-          tags: Type.Optional(Type.Array(Type.String(), { description: '新的标签数组；传空数组可清空标签' })),
-          expectedRevision: Type.Number({ description: 'memory_read 返回的当前 revision' }),
-        }),
-        async execute(_toolCallId: string, params: unknown, signal?: AbortSignal) {
-          if (!ctx.workspaceSlug) throw new Error('当前没有工作区，不能修订工作区记忆')
-          const args = params as {
-            id?: unknown
-            title?: unknown
-            content?: unknown
-            tags?: unknown
-            expectedRevision?: unknown
-          }
-          const expectedRevision = args.expectedRevision
-          if (!isFiniteInt(expectedRevision) || expectedRevision < 1) {
-            throw new Error('expectedRevision 必须是正整数')
-          }
-          const title = optionalString(args.title, 'title')
-          const content = optionalString(args.content, 'content')
-          const tags = memoryTags(args.tags)
-          if (title === undefined && content === undefined && tags === undefined) {
-            throw new Error('至少提供 title、content 或 tags 之一')
-          }
-          const id = assertNonBlank(typeof args.id === 'string' ? args.id : undefined, 'id')
-          const entry = await memoryApiClient.rewrite(id, {
-            workspaceSlug: ctx.workspaceSlug,
-            ...(title === undefined ? {} : { title }),
-            ...(content === undefined ? {} : { content }),
-            ...(tags === undefined ? {} : { tags }),
-            expectedRevision,
-          }, signal)
-          return jsonToolResult({ entry })
-        },
-      }) as unknown as ToolDefinition,
-    )
-  }
-
-  return tools
+  return buildPiMemoryTools(sdk, {
+    workspaceSlug: ctx.workspaceSlug,
+    memoryPolicy: ctx.memoryPolicy,
+  })
 }
 
 // ===== Browser Workflow 工具 =====
@@ -528,7 +411,7 @@ function buildBrowserWorkflowTools(sdk: PiSdk, ctx: PiBuiltinToolsContext): Tool
       parameters: Type.Object({
         workflowId: Type.String({ description: 'Workflow ID' }),
         version: Type.Optional(Type.Number({ description: '可选版本号' })),
-        variables: Type.Optional(Type.Record(Type.String(), Type.Union([Type.String(), Type.Number(), Type.Boolean()]))),
+        variables: Type.Optional(Type.Record(Type.String(), Type.Any({ description: '变量值' }), { description: '执行变量键值对' })),
       }),
       async execute(toolCallId, params, signal) {
         return executeBrowserAgentTool(ctx, toolCallId, 'BrowserWorkflowRun', params, signal)
@@ -588,7 +471,10 @@ function buildWebTools(sdk: PiSdk): ToolDefinition[] {
       parameters: Type.Object({
         query: Type.String({ description: 'Search query. Keep it concise and avoid including private local file contents, API keys, tokens, or secrets.' }),
         maxResults: Type.Optional(Type.Number({ description: 'Maximum number of results to return. Default 5, max 10.' })),
-        searchDepth: Type.Optional(Type.Union([Type.Literal('basic'), Type.Literal('advanced')], { description: 'Search depth. Use basic by default; advanced costs more but may improve recall.' })),
+        searchDepth: Type.Optional(Type.String({
+          enum: ['basic', 'advanced'],
+          description: 'Search depth. Use basic by default; advanced costs more but may improve recall.',
+        })),
         includeDomains: Type.Optional(Type.Array(Type.String({ description: 'Domain to include, e.g. example.com' }), { description: 'Optional allowlist of domains.' })),
         excludeDomains: Type.Optional(Type.Array(Type.String({ description: 'Domain to exclude, e.g. example.com' }), { description: 'Optional blocklist of domains.' })),
       }),
@@ -615,7 +501,10 @@ function buildWebTools(sdk: PiSdk): ToolDefinition[] {
       parameters: Type.Object({
         url: Type.String({ description: 'HTTP/HTTPS URL to fetch.' }),
         prompt: Type.Optional(Type.String({ description: 'Optional extraction focus or question. Use when only part of a page is relevant.' })),
-        extractDepth: Type.Optional(Type.Union([Type.Literal('basic'), Type.Literal('advanced')], { description: 'Extraction depth. Use basic by default; advanced may handle difficult pages better.' })),
+        extractDepth: Type.Optional(Type.String({
+          enum: ['basic', 'advanced'],
+          description: 'Extraction depth. Use basic by default; advanced may handle difficult pages better.',
+        })),
         maxChars: Type.Optional(Type.Number({ description: 'Maximum characters returned to the model. Default 20000.' })),
       }),
       async execute(_toolCallId, params, signal) {
@@ -655,7 +544,10 @@ function buildPlanningTools(sdk: PiSdk, ctx: PiBuiltinToolsContext): ToolDefinit
       name: 'mcp__planning__list_todos', label: '列出 Todo',
       description: '列出 Copis 本地 Todo。适合在安排工作、检查今天待办、维护任务状态前使用。仅 Pi Agent 可用。',
       parameters: Type.Object({
-        status: Type.Optional(Type.Union([Type.Literal('open'), Type.Literal('completed')])),
+        status: Type.Optional(Type.String({
+          enum: ['open', 'completed'],
+          description: 'Todo 状态',
+        })),
         dueBefore: Type.Optional(Type.Number({ description: '仅返回此截止时间之前的 Todo，Unix 毫秒时间戳' })),
         limit: Type.Optional(Type.Number({ description: '最多返回数量，默认 50，最大 100' })),
       }),
@@ -678,7 +570,7 @@ function buildPlanningTools(sdk: PiSdk, ctx: PiBuiltinToolsContext): ToolDefinit
     sdk.defineTool({
       name: 'mcp__planning__create_todo', label: '创建 Todo',
       description: '创建 Copis 本地 Todo。调用前必须先用 list_todos(status=open) 检查重复，并用 list_groups 查询并优先复用 Todo 分组；用户明确提出待办，或可合理确定下一步时使用。未传 dueAt 时默认当天结束前；仅 Pi Agent 可用。',
-      parameters: Type.Object({ title: Type.String(), ...optionalPlanningFields, priority: Type.Optional(Type.Union([Type.Literal('low'), Type.Literal('medium'), Type.Literal('high')])), dueAt: Type.Optional(Type.Number({ description: '截止时间 Unix 毫秒时间戳' })) }),
+      parameters: Type.Object({ title: Type.String(), ...optionalPlanningFields, priority: Type.Optional(Type.String({ enum: ['low', 'medium', 'high'], description: '优先级' })), dueAt: Type.Optional(Type.Number({ description: '截止时间 Unix 毫秒时间戳' })) }),
       async execute(_id: string, params: unknown) {
         const args = params as Record<string, unknown>
         const title = assertNonBlank(args.title as string, 'title')
@@ -693,7 +585,7 @@ function buildPlanningTools(sdk: PiSdk, ctx: PiBuiltinToolsContext): ToolDefinit
     sdk.defineTool({
       name: 'mcp__planning__update_todo', label: '更新 Todo',
       description: '更新 Todo 的标题、说明、优先级或截止时间。仅 Pi Agent 可用。',
-      parameters: Type.Object({ id: Type.String(), title: Type.Optional(Type.String()), notes: Type.Optional(Type.String()), priority: Type.Optional(Type.Union([Type.Literal('low'), Type.Literal('medium'), Type.Literal('high')])), dueAt: Type.Optional(Type.Union([Type.Number(), Type.Null()])), groupId: Type.Optional(Type.Union([Type.String(), Type.Null()])), tagIds: Type.Optional(Type.Array(Type.String())), status: Type.Optional(Type.Union([Type.Literal('open'), Type.Literal('completed')])) }),
+      parameters: Type.Object({ id: Type.String(), title: Type.Optional(Type.String()), notes: Type.Optional(Type.String()), priority: Type.Optional(Type.String({ enum: ['low', 'medium', 'high'], description: '优先级' })), dueAt: Type.Optional(Type.Number()), groupId: Type.Optional(Type.String()), tagIds: Type.Optional(Type.Array(Type.String())), status: Type.Optional(Type.String({ enum: ['open', 'completed'], description: '状态' })) }),
       async execute(_id: string, params: unknown) {
         const args = params as Record<string, unknown>
         const updated = updateTodo({ id: assertNonBlank(args.id as string, 'id'), title: args.title as string | undefined, notes: args.notes as string | undefined, priority: args.priority as 'low' | 'medium' | 'high' | undefined, dueAt: args.dueAt as number | null | undefined, groupId: args.groupId as string | null | undefined, tagIds: args.tagIds as string[] | undefined, status: args.status as 'open' | 'completed' | undefined })
@@ -776,7 +668,7 @@ function buildPlanningTools(sdk: PiSdk, ctx: PiBuiltinToolsContext): ToolDefinit
     sdk.defineTool({
       name: 'mcp__planning__update_calendar_event', label: '更新日程',
       description: '更新日程时间或内容。仅 Pi Agent 可用。',
-      parameters: Type.Object({ id: Type.String(), title: Type.Optional(Type.String()), notes: Type.Optional(Type.String()), startAt: Type.Optional(Type.Number()), endAt: Type.Optional(Type.Union([Type.Number(), Type.Null()])), allDay: Type.Optional(Type.Boolean()), workspaceId: Type.Optional(Type.Union([Type.String(), Type.Null()])), tagIds: Type.Optional(Type.Array(Type.String())), todoId: Type.Optional(Type.Union([Type.String(), Type.Null()])) }),
+      parameters: Type.Object({ id: Type.String(), title: Type.Optional(Type.String()), notes: Type.Optional(Type.String()), startAt: Type.Optional(Type.Number()), endAt: Type.Optional(Type.Number()), allDay: Type.Optional(Type.Boolean()), workspaceId: Type.Optional(Type.String()), tagIds: Type.Optional(Type.Array(Type.String())), todoId: Type.Optional(Type.String()) }),
       async execute(_id: string, params: unknown) {
         const args = params as Record<string, unknown>
         if (args.workspaceId === null) throw new Error('日程必须绑定工作区')
@@ -824,7 +716,7 @@ function buildPlanningTools(sdk: PiSdk, ctx: PiBuiltinToolsContext): ToolDefinit
     sdk.defineTool({
       name: 'mcp__planning__update_group', label: '更新 Todo 分组',
       description: '更新 Todo 分组。仅 Pi Agent 可用。',
-      parameters: Type.Object({ id: Type.String(), name: Type.Optional(Type.String()), color: Type.Optional(Type.Union([Type.String(), Type.Null()])), sortOrder: Type.Optional(Type.Number()) }),
+      parameters: Type.Object({ id: Type.String(), name: Type.Optional(Type.String()), color: Type.Optional(Type.String()), sortOrder: Type.Optional(Type.Number()) }),
       async execute(_id: string, params: unknown) {
         const args = params as Record<string, unknown>
         const group = updatePlanningGroup({ id: assertNonBlank(args.id as string, 'id'), scope: 'todo', name: args.name as string | undefined, color: args.color as string | null | undefined, sortOrder: args.sortOrder as number | undefined })
@@ -857,7 +749,7 @@ function buildPlanningTools(sdk: PiSdk, ctx: PiBuiltinToolsContext): ToolDefinit
     sdk.defineTool({
       name: 'mcp__planning__update_tag', label: '更新标签',
       description: '更新标签名称或颜色。仅 Pi Agent 可用。',
-      parameters: Type.Object({ id: Type.String(), name: Type.Optional(Type.String()), color: Type.Optional(Type.Union([Type.String(), Type.Null()])) }),
+      parameters: Type.Object({ id: Type.String(), name: Type.Optional(Type.String()), color: Type.Optional(Type.String()) }),
       async execute(_id: string, params: unknown) { const args = params as Record<string, unknown>; const tag = updatePlanningTag({ id: assertNonBlank(args.id as string, 'id'), name: args.name as string | undefined, color: args.color as string | null | undefined }); if (!tag) throw new Error('标签不存在'); broadcastPlanningChanged(['tags', 'todos', 'calendar_events', 'reminders']); return jsonToolResult({ tag }) },
     }),
     sdk.defineTool({
@@ -875,7 +767,7 @@ function buildPlanningTools(sdk: PiSdk, ctx: PiBuiltinToolsContext): ToolDefinit
     sdk.defineTool({
       name: 'mcp__planning__create_reminder', label: '创建提醒',
       description: '为 Todo 或日程创建指定时点的提醒。仅在用户要求提醒且时点明确时使用。仅 Pi Agent 可用。',
-      parameters: Type.Object({ targetType: Type.Union([Type.Literal('todo'), Type.Literal('calendar_event')]), targetId: Type.String(), triggerAt: Type.Number({ description: '提醒触发 Unix 毫秒时间戳' }) }),
+      parameters: Type.Object({ targetType: Type.String({ enum: ['todo', 'calendar_event'], description: '提醒目标类型' }), targetId: Type.String(), triggerAt: Type.Number({ description: '提醒触发 Unix 毫秒时间戳' }) }),
       async execute(_id: string, params: unknown) { const args = params as { targetType: 'todo' | 'calendar_event'; targetId: string; triggerAt: number }; const reminder = createPlanningReminder({ targetType: args.targetType, targetId: assertNonBlank(args.targetId, 'targetId'), triggerAt: args.triggerAt }); broadcastPlanningChanged(['todos', 'calendar_events', 'reminders']); return jsonToolResult({ reminder }) },
     }),
     sdk.defineTool({

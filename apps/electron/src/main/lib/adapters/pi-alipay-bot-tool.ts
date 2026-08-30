@@ -188,20 +188,26 @@ export function buildPiAlipayBotTools(
       description: '通过 Rust capability 调用受控的 alipay-bot，处理钱包开通、支付宝支付和支付状态查询。不得执行 shell。',
       promptSnippet: '使用 alipay_bot 处理支付宝钱包和付费资源支付，不要直接执行 shell。',
       parameters: Type.Object({
-        action: Type.Union([
-          Type.Literal('wallet.check'),
-          Type.Literal('wallet.apply'),
-          Type.Literal('wallet.bind'),
-          Type.Literal('wallet.close'),
-          Type.Literal('payment.start'),
-          Type.Literal('payment.check'),
-          Type.Literal('payment.ack'),
-        ]),
+        action: Type.String({
+          enum: [
+            'wallet.check',
+            'wallet.apply',
+            'wallet.bind',
+            'wallet.close',
+            'payment.start',
+            'payment.check',
+            'payment.ack',
+          ],
+          description: '支付宝操作类型',
+        }),
         agentName: Type.Optional(Type.String({ description: '申请钱包时显示的 Agent 名称。' })),
         bindCode: Type.Optional(Type.String({ description: '用户从支付宝授权页提供的绑定码。' })),
         paymentNeeded: Type.Optional(Type.String({ description: '卖家 402 响应的 Payment-Needed 内容。' })),
         resourceUrl: Type.Optional(Type.String({ description: '需要支付的资源 URL。' })),
-        method: Type.Optional(Type.Union([Type.Literal('GET'), Type.Literal('POST')])),
+        method: Type.Optional(Type.String({
+          enum: ['GET', 'POST'],
+          description: '请求方法',
+        })),
         data: Type.Optional(Type.String({ description: '支付资源请求体。' })),
         headers: Type.Optional(Type.Array(Type.Object({
           name: Type.String({ description: '请求头名称。' }),

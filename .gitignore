@@ -69,3 +69,5 @@ pnpm-workspace.yaml
 .pi/
 .env
 .superpowers/
+.agents/
+skills-lock.json

@@ -347,7 +347,7 @@ const BROWSER_TOOL_DEFINITIONS: BrowserToolDefinition[] = [
     parameters: Type.Object({
       workflowId: Type.String({ description: 'Workflow ID' }),
       version: Type.Optional(Type.Number({ description: '可选版本号' })),
-      variables: Type.Optional(Type.Record(Type.String(), Type.Union([Type.String(), Type.Number(), Type.Boolean()]))),
+      variables: Type.Optional(Type.Record(Type.String(), Type.Any({ description: '变量值' }), { description: '执行变量键值对' })),
     }),
   },
   {

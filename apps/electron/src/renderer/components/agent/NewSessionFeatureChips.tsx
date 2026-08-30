@@ -5,6 +5,7 @@ import {
   Bot,
   LayoutGrid,
   Users,
+  Brain,
   Sparkles,
   ArrowRight,
 } from 'lucide-react'
@@ -39,6 +40,15 @@ export const COPIS_STARTER_FEATURES: CopisFeatureItem[] = [
     icon: ListChecks,
     iconColorClass: 'text-emerald-500/85 group-hover:text-emerald-500',
     bgHoverClass: 'hover:border-emerald-500/60',
+  },
+  {
+    id: 'form-memory',
+    title: '形成记忆',
+    description: '回顾并总结对话中的关键结论、项目规则与重要偏好，沉淀为长期记忆',
+    prompt: '请回顾并总结我们对话中的关键结论、项目规则与重要偏好，沉淀为长期记忆',
+    icon: Brain,
+    iconColorClass: 'text-teal-500/85 group-hover:text-teal-500',
+    bgHoverClass: 'hover:border-teal-500/60',
   },
   {
     id: 'automation',

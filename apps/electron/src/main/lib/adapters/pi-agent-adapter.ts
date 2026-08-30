@@ -65,6 +65,7 @@ import { buildPiAutomationTools } from './pi-automation-tools'
 import { buildPiAlipayBotTools } from './pi-alipay-bot-tool'
 import { buildPiAgentMailTools } from './pi-agent-mail-tool'
 import { buildPiWorkingPaymentTools } from './pi-working-payment-tool'
+import { buildPiMemoryTools } from './pi-memory-tools'
 import { createRustBashToolOperations, createRustFileToolOperations } from './pi-rust-file-tools'
 import { resolveDefaultPiExtensionEntries } from './pi-default-extensions'
 import { mergeRuntimeEnv, type AgentRuntimeEnv } from '../agent-runtime-env'
@@ -79,6 +80,7 @@ import {
   isAssistantPiMessage,
   normalizePermissionInput,
   restorePiInput,
+  sanitizeSessionMessagesForTurn,
 } from './pi-message-adapter'
 import { DEFAULT_CONTEXT_WINDOW, buildModel } from './pi-model-registry'
 import { createPartialMessageCoalescer, type PartialMessageCoalescer } from './pi-streaming-control'
@@ -1085,15 +1087,10 @@ function buildCopisProductToolDefinitions(sdk: PiSdk, canUseTool: PiAgentQueryOp
       promptSnippet: '更新可见进度任务。',
       parameters: Type.Object({
         taskId: Type.String({ description: '任务 ID。' }),
-        status: Type.Optional(Type.Union([
-          Type.Literal('pending'),
-          Type.Literal('in_progress'),
-          Type.Literal('completed'),
-          Type.Literal('blocked'),
-          Type.Literal('cancelled'),
-          Type.Literal('error'),
-          Type.Literal('deleted'),
-        ])),
+        status: Type.Optional(Type.String({
+          enum: ['pending', 'in_progress', 'completed', 'blocked', 'cancelled', 'error', 'deleted'],
+          description: '任务状态',
+        })),
         subject: Type.Optional(Type.String({ description: '新的任务标题。' })),
         description: Type.Optional(Type.String({ description: '新的任务说明。' })),
         activeForm: Type.Optional(Type.String({ description: '当前活动形态或阶段。' })),
@@ -1311,7 +1308,7 @@ export function buildBuiltinToolDefinitions(
   cwd: string,
   canUseTool: PiAgentQueryOptions['canUseTool'],
   runtimeEnv: AgentRuntimeEnv | undefined,
-  options: Pick<PiAgentQueryOptions, 'sessionId' | 'useRustFileApi' | 'browserPageControl' | 'automationControl'>,
+  options: Pick<PiAgentQueryOptions, 'sessionId' | 'useRustFileApi' | 'browserPageControl' | 'automationControl' | 'workspaceSlug' | 'memoryPolicy'>,
 ): ToolDefinition[] {
   const rustFileTools = options.useRustFileApi
     ? createRustFileToolOperations({ sessionId: options.sessionId })
@@ -1346,6 +1343,10 @@ export function buildBuiltinToolDefinitions(
       sdk.createFindToolDefinition(cwd),
       sdk.createLsToolDefinition(cwd),
     ] : []),
+    ...buildPiMemoryTools(sdk, {
+      workspaceSlug: options.workspaceSlug,
+      memoryPolicy: options.memoryPolicy,
+    }),
     ...(options.browserPageControl
       ? buildPiBrowserAgentTools(sdk, {
         sessionId: options.sessionId,
@@ -1564,6 +1565,7 @@ export class PiAgentAdapter implements AgentProviderAdapter {
         customTools,
       })
       session.agent.toolExecution = 'sequential'
+      session.agent.state.messages = sanitizeSessionMessagesForTurn(session.agent.state.messages)
       if (piAi && input.codexFastMode && input.provider === 'openai-codex' && isCodexFastModeSupportedModel(input.model)) {
         // Pi 的通用 streamSimple 会丢弃 provider 专属 serviceTier；这里直接走
         // provider stream，确保 request body 与 usage.cost 都使用 priority tier。
@@ -1941,6 +1943,7 @@ export class PiAgentAdapter implements AgentProviderAdapter {
                 return
               }
               currentInterrupt?.resolveAccepted()
+              session.agent.state.messages = sanitizeSessionMessagesForTurn(session.agent.state.messages)
               await session.prompt(prompt, { source: 'rpc' })
               persistPiEntryBindings()
               if (memoryOrganizationScheduled && !active.abortRequested) {
@@ -2005,9 +2008,7 @@ export class PiAgentAdapter implements AgentProviderAdapter {
                 pendingTerminalResult = undefined
               }
             } finally {
-              if (active.interrupting) {
-                session.agent.state.messages = dropTrailingAbortedAssistant(session.agent.state.messages)
-              }
+              session.agent.state.messages = sanitizeSessionMessagesForTurn(session.agent.state.messages)
               active.interrupting = false
             }
             if (active.abortRequested) {

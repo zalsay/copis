@@ -171,7 +171,10 @@ export function buildPiWorkingPaymentTools(
     description: '查询 Copis 钻石套餐与待支付订单，创建钻石或 VIP 的钱包支付会话。',
     promptSnippet: '购买 Copis 钻石时，先用 orders.pending 查询是否已有待支付订单；若返回可用二维码，则继续该订单且不得创建新订单。没有待支付订单时，依次执行钱包检查、套餐复核、创建订单和等待到账。升级 Copis VIP 时，先检查钱包，再使用 vip.create 创建支付订单并等待到账。用户确认已支付或询问进度时，必须使用当前 paymentId 调用 order.check，并根据返回状态明确回复到账、处理中、未支付或失败结果。',
     parameters: Type.Object({
-      action: Type.Union([Type.Literal('packages.list'), Type.Literal('orders.pending'), Type.Literal('order.create'), Type.Literal('vip.create'), Type.Literal('order.check')]),
+      action: Type.String({
+        enum: ['packages.list', 'orders.pending', 'order.create', 'vip.create', 'order.check'],
+        description: '支付操作类型',
+      }),
       packageId: Type.Optional(Type.Integer({ minimum: 1, description: '已由用户明确确认的 Copis 钻石套餐 ID。' })),
       paymentId: Type.Optional(Type.String({ minLength: 1, description: 'order.create 返回的 payment.paymentId，仅用于本地 Rust 受控查询。' })),
     }),

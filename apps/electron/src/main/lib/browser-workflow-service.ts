@@ -49,6 +49,8 @@ import {
 } from './rust-browser-recording-client'
 import {
   createWebTab,
+  detachWebTabCdp,
+  ensureWebTabCdpAttached,
   getWebTabState,
   promoteWorkflowWebTab,
   sendWebTabCdpCommandInternal,
@@ -724,6 +726,20 @@ function assertDraftHash(version: BrowserWorkflowVersion): void {
   }
 }
 
+function isTabReferenced(tabId: string, excludeSessionId?: string): boolean {
+  for (const [sid, binding] of bindings.entries()) {
+    if (sid !== excludeSessionId && binding.context.tabId === tabId) {
+      return true
+    }
+  }
+  for (const [sid, recording] of recordings.entries()) {
+    if (sid !== excludeSessionId && recording.pages.has(tabId)) {
+      return true
+    }
+  }
+  return false
+}
+
 export function bindBrowserAgentContext(
   sessionId: string,
   context: BrowserAgentContext,
@@ -747,8 +763,13 @@ export function bindBrowserAgentContext(
   ) {
     throw new Error('Browser Workflow session 已绑定到其它渲染进程')
   }
-  if (previousBinding && previousBinding.context.tabId !== context.tabId && !options.preserveWorkerCapability) {
-    revokeBrowserAgentWorkerCapability(sessionId)
+  if (previousBinding && previousBinding.context.tabId !== context.tabId) {
+    if (!options.preserveWorkerCapability) {
+      revokeBrowserAgentWorkerCapability(sessionId)
+    }
+    if (!isTabReferenced(previousBinding.context.tabId, sessionId)) {
+      detachWebTabCdp(previousBinding.context.tabId)
+    }
   }
   const authorizedOrigins = loadBrowserPageAuthorizations(sessionId)
   if (session.permissionMode !== 'bypassPermissions') {
@@ -763,6 +784,7 @@ export function bindBrowserAgentContext(
     context,
     authorizedOrigins,
   })
+  ensureWebTabCdpAttached(context.tabId)
   const status = { ...currentStatus(sessionId), sessionId, tabId: tab.id, tabTitle: tab.title }
   emitStatus(sessionId, status)
   return status
@@ -773,7 +795,11 @@ export function unbindBrowserAgentContext(sessionId: string, ownerWebContentsId?
   revokeBrowserAgentWorkerCapability(sessionId)
   const recording = recordings.get(sessionId)
   if (recording) void cancelBrowserWorkflowRecording(sessionId)
+  const previousBinding = bindings.get(sessionId)
   bindings.delete(sessionId)
+  if (previousBinding && !isTabReferenced(previousBinding.context.tabId, sessionId)) {
+    detachWebTabCdp(previousBinding.context.tabId)
+  }
   emitStatus(sessionId, { sessionId, state: 'idle' })
 }
 

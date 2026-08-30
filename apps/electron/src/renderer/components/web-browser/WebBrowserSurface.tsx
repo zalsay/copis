@@ -1,11 +1,12 @@
 import * as React from 'react'
 import { useAtom, useAtomValue, useSetAtom } from 'jotai'
-import { ArrowLeft, ArrowRight, CircleStop, ExternalLink, Glasses, Globe2, RotateCw, ShieldCheck } from 'lucide-react'
+import { ArrowLeft, ArrowRight, CircleStop, ExternalLink, Glasses, Globe2, Languages, RotateCw, ShieldCheck } from 'lucide-react'
 import type { WebTabsSnapshot } from '@copis/shared'
 import { browserAgentPanelOpenAtom, browserAgentPanelWidthAtom, browserAgentSessionIdAtom, browserWorkflowStatusAtom } from '@/atoms/browser-agent'
 import { activeWebTabAtom, activeWebTabIdAtom, webTabsAtom } from '@/atoms/web-tabs'
 import { agentChannelIdAtom, agentModelIdAtom, agentSessionsAtom, agentStreamingStatesAtom, agentWorkspacesAtom, currentAgentWorkspaceIdAtom } from '@/atoms/agent-atoms'
 import { draftSessionIdsAtom } from '@/atoms/draft-session-atoms'
+import { liveTranslateActiveAtom, liveTranslateOpenAtom } from '@/atoms/live-translate-atoms'
 import { Button } from '@/components/ui/button'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
@@ -30,6 +31,7 @@ import {
 import { toast } from 'sonner'
 import { WebBookmarksPopover } from './WebBookmarksPopover'
 import { BrowserAgentPanel } from './BrowserAgentPanel'
+import { LiveTranslatePanel, LiveSubtitleOverlay } from './index'
 import { getIncognitoActionState } from './browser-incognito-ui'
 
 function applySnapshot(
@@ -67,6 +69,8 @@ export function WebBrowserSurface(): React.ReactElement {
   const setBrowserAgentPanelOpen = useSetAtom(browserAgentPanelOpenAtom)
   const browserWorkflowStatus = useAtomValue(browserWorkflowStatusAtom)
   const setBrowserWorkflowStatus = useSetAtom(browserWorkflowStatusAtom)
+  const [liveTranslateOpen, setLiveTranslateOpen] = useAtom(liveTranslateOpenAtom)
+  const liveTranslateActive = useAtomValue(liveTranslateActiveAtom)
   const browserAgentSession = agentSessions.find((session) => session.id === browserAgentSessionId)
   const addressInputRef = React.useRef<HTMLInputElement>(null)
   const hostRef = React.useRef<HTMLDivElement>(null)
@@ -842,12 +846,38 @@ export function WebBrowserSurface(): React.ReactElement {
           </BrowserToolbarButton>
         ) : null}
 
+        <BrowserToolbarButton
+          label={liveTranslateActive ? 'Gemini 实时语音同传 (运行中)' : 'Gemini 实时语音同传'}
+          onClick={() => setLiveTranslateOpen((prev) => !prev)}
+        >
+          <div className="relative flex items-center justify-center">
+            <Languages
+              className={cn(
+                'size-4 transition-colors',
+                (liveTranslateActive || liveTranslateOpen)
+                  ? 'text-[var(--ui-primary)]'
+                  : 'text-foreground',
+              )}
+            />
+            {liveTranslateActive ? (
+              <span
+                className="absolute -top-0.5 -right-0.5 size-2 rounded-full ring-2 ring-muted animate-pulse"
+                style={{ backgroundColor: 'var(--ui-primary)' }}
+              />
+            ) : null}
+          </div>
+        </BrowserToolbarButton>
+
         <BrowserToolbarButton label="在系统浏览器打开" disabled={activeTab.url === 'about:blank'} onClick={handleOpenExternal}>
           <ExternalLink className="size-4" />
         </BrowserToolbarButton>
       </div>
-      <div className="flex min-h-0 flex-1">
+      <div className="relative flex min-h-0 flex-1 overflow-hidden">
         <div ref={hostRef} className="relative min-w-0 flex-1 bg-white dark:bg-zinc-950" />
+        <LiveSubtitleOverlay />
+        {liveTranslateOpen ? (
+          <LiveTranslatePanel onClose={() => setLiveTranslateOpen(false)} />
+        ) : null}
         {browserWorkflowEnabled && browserAgentSessionId && browserAgentPanelOpen && activeTabId ? (
           <>
             <div

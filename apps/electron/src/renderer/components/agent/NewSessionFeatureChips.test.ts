@@ -2,14 +2,16 @@ import { describe, expect, test } from 'bun:test'
 import { COPIS_STARTER_FEATURES } from './NewSessionFeatureChips'
 
 describe('NewSessionFeatureChips', () => {
-  test('必须包含 Copis 的 5 大核心主打功能快捷入口', () => {
+  test('必须包含 Copis 的核心主打功能快捷入口', () => {
     const titles = COPIS_STARTER_FEATURES.map((f) => f.title)
     expect(titles).toContain('学习网页操作')
     expect(titles).toContain('生成工作流')
     expect(titles).toContain('定时任务')
     expect(titles).toContain('创作个人工作台')
     expect(titles).toContain('专家团队')
-    expect(COPIS_STARTER_FEATURES).toHaveLength(5)
+    expect(titles).toContain('形成记忆')
+    expect(COPIS_STARTER_FEATURES).toHaveLength(6)
+    expect(COPIS_STARTER_FEATURES[2]?.title).toBe('形成记忆')
   })
 
   test('每个入口都具备完整 title, description 与可执行 prompt', () => {

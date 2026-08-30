@@ -159,9 +159,10 @@ export async function resolveWebTabFaviconDataUrl(
 /**
  * 主框架加载生命周期事件对 favicon 的纯状态转换，便于单元测试。
  *
- * 事件顺序约束：从收藏夹导航已加载页签时，Chromium 可能在 did-navigate（导航提交）
- * 之前触发 page-favicon-updated；导航提交阶段不应清空刚收到的图标，
- * 旧图标由下一次导航开始（loading-started）负责清空。
+ * 事件顺序约束：
+ * 1. 刷新或同页面加载时，Chromium 通常不重复派发 page-favicon-updated，loading-started 不应清空已有图标；
+ * 2. 导航已加载页签时，Chromium 可能在 did-navigate 之前或之后触发 page-favicon-updated，各阶段均应保留有效图标；
+ * 3. 页面加载失败或异常崩溃时，由错误处理例程负责显式清空图标。
  */
 export type WebTabFaviconLifecycleEvent =
   | { type: 'loading-started' }
@@ -174,7 +175,7 @@ export function resolveWebTabFaviconUrl(
 ): string | null {
   switch (event.type) {
     case 'loading-started':
-      return null
+      return previous
     case 'favicon-updated':
       return selectFaviconUrl(event.favicons)
     case 'navigation-committed':
@@ -359,6 +360,21 @@ function attachCdp(record: WebTabRecord): void {
     if (!cdp.isAttached()) cdp.attach('1.3')
   } catch (error) {
     console.warn('[网页页签] 自动连接 CDP 失败:', error)
+  }
+}
+
+function detachCdp(record: WebTabRecord): void {
+  const cdp = record.view.webContents.debugger
+  if (record.cdpDetachHandler) {
+    cdp.removeListener('detach', record.cdpDetachHandler)
+    record.cdpDetachHandler = undefined
+  }
+  if (cdp.isAttached()) {
+    try {
+      cdp.detach()
+    } catch {
+      // 忽略已销毁视图的断开异常
+    }
   }
 }
 
@@ -772,7 +788,6 @@ function createWebTabInternal(input: CreateWebTabInput, workflowOwned: boolean, 
   hostWindow!.contentView.addChildView(view)
   view.setVisible(false)
   installWebContentsHandlers(record)
-  if (!workflowOwned) attachCdp(record)
 
   if (!workflowOwned && input.activate !== false) activeTabId = id
   persistTabs()
@@ -905,7 +920,9 @@ export function activateWebTabIncognito(tabId: string): WebTabsSnapshot {
     hostWindow!.contentView.addChildView(nextView)
     nextView.setVisible(false)
     installWebContentsHandlers(nextRecord)
-    attachCdp(nextRecord)
+    if (previousView.webContents.debugger.isAttached()) {
+      attachCdp(nextRecord)
+    }
   } catch (error) {
     clearIncognitoSession(nextRecord)
     try {
@@ -1169,3 +1186,24 @@ export async function sendWebTabCdpCommandInternal(input: WebTabCdpCommandInput)
   if (!cdp.isAttached()) throw new Error('网页 CDP 未连接')
   return cdp.sendCommand(input.method, input.params)
 }
+
+/** 确保指定网页页签挂载 CDP，供 AI 浏览器抽屉绑定或 Agent 交互时按需调用。 */
+export function ensureWebTabCdpAttached(tabId: string): void {
+  const record = records.get(tabId)
+  if (!record) throw new Error('网页页签不存在')
+  attachCdp(record)
+}
+
+/** 断开指定网页页签的 CDP 挂载并释放资源。 */
+export function detachWebTabCdp(tabId: string): void {
+  const record = records.get(tabId)
+  if (!record) return
+  detachCdp(record)
+}
+
+/** 查询指定网页页签当前是否处于 CDP 挂载状态。 */
+export function isWebTabCdpAttached(tabId: string): boolean {
+  const record = records.get(tabId)
+  return record ? record.view.webContents.debugger.isAttached() : false
+}
+
