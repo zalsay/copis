@@ -90,7 +90,7 @@ describe('默认 Skills 清单', () => {
     expect(frontmatter.get('name')).toBe('browser-workflow-automation')
     expect(frontmatter.get('displayName')).toBe('网页工作流自动化')
     expect(frontmatter.get('group')).toBe('系统内置')
-    expect(frontmatter.get('version')?.replace(/^['"]|['"]$/g, '')).toBe('1.0.2')
+    expect(frontmatter.get('version')?.replace(/^['"]|['"]$/g, '')).toBe('1.0.3')
     expect(frontmatter.get('license')).toBe('AGPL-3.0-only')
 
     const content = readFileSync(join(DEFAULT_SKILLS_DIR, 'browser-workflow-automation', 'SKILL.md'), 'utf8')
@@ -124,7 +124,7 @@ describe('默认 Skills 清单', () => {
 
   test('网页控制 Skill 保持首次建页和跨站直接执行的用户主会话边界', () => {
     const frontmatter = readFrontmatter('browser-page-control')
-    expect(frontmatter.get('version')?.replace(/^['"]|['"]$/g, '')).toBe('1.0.3')
+    expect(frontmatter.get('version')?.replace(/^['"]|['"]$/g, '')).toBe('1.0.4')
 
     const content = readFileSync(join(DEFAULT_SKILLS_DIR, 'browser-page-control', 'SKILL.md'), 'utf8')
     expect(content).toContain('用户主会话明确要求的 HTTP(S) 地址可直接通过 `BrowserPageOpenTab` 或 `BrowserPageNavigate` 打开')
@@ -261,5 +261,22 @@ describe('默认 Skills 清单', () => {
       expect(content).toContain(requiredText)
     }
   })
+
+  test('deepseek-v4-flash-vision-rag 包含系统内置元数据与模型配置', () => {
+    const bundled = new Set(bundledSkillSlugs())
+    expect(bundled.has('deepseek-v4-flash-vision-rag')).toBe(true)
+
+    const frontmatter = readFrontmatter('deepseek-v4-flash-vision-rag')
+    expect(frontmatter.get('name')).toBe('deepseek-v4-flash-vision-rag')
+    expect(frontmatter.get('displayName')).toBe('视觉知识库问答')
+    expect(frontmatter.get('group')).toBe('系统内置')
+    expect(frontmatter.get('version')?.replace(/^['"]|['"]$/g, '')).toBe('1.0.0')
+
+    const content = readFileSync(join(DEFAULT_SKILLS_DIR, 'deepseek-v4-flash-vision-rag', 'SKILL.md'), 'utf8')
+    expect(content).toContain('deepseek-v4-flash-vision-exp')
+    expect(content).toContain('ingest.py')
+    expect(content).toContain('ask.py')
+  })
 })
+
 
