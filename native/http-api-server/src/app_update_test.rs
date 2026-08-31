@@ -28,7 +28,7 @@ fn platform_manifest() -> Vec<u8> {
         "client": {
             "update": {
                 "version": "0.0.65",
-                "url": "https://download.example.com/legacy.dmg",
+                "url": "https://download.example.com/Copis-Setup.exe",
                 "sha256": "c".repeat(64),
                 "size": 64
             },
@@ -38,6 +38,12 @@ fn platform_manifest() -> Vec<u8> {
                     "url": "https://download.example.com/Copis-arm64.dmg",
                     "sha256": "a".repeat(64),
                     "size": 128
+                },
+                "darwin-x64": {
+                    "version": "0.0.74",
+                    "url": "https://download.example.com/Copis-x64.dmg",
+                    "sha256": "d".repeat(64),
+                    "size": 251228743
                 },
                 "win32-x64": {
                     "version": "0.0.64",
@@ -125,6 +131,16 @@ fn given_platform_manifest_when_parse_then_selects_matching_installer() {
         "https://download.example.com/Copis-arm64.dmg"
     );
 
+    let intel_mac_result = parse_app_update(&platform_manifest(), "0.0.73", Some("darwin-x64"))
+        .expect("Intel macOS manifest should parse");
+    assert_eq!(intel_mac_result["version"], "0.0.74");
+    assert_eq!(
+        intel_mac_result["url"],
+        "https://download.example.com/Copis-x64.dmg"
+    );
+    assert_eq!(intel_mac_result["sha256"], "d".repeat(64));
+    assert_eq!(intel_mac_result["size"], 251228743);
+
     let windows_result = parse_app_update(&platform_manifest(), "0.0.62", Some("win32-x64"))
         .expect("Windows manifest should parse");
     assert_eq!(
@@ -135,7 +151,7 @@ fn given_platform_manifest_when_parse_then_selects_matching_installer() {
 
 #[test]
 fn given_platform_manifest_without_current_platform_when_parse_then_returns_not_available() {
-    let result = parse_app_update(&platform_manifest(), "0.0.62", Some("darwin-x64"))
+    let result = parse_app_update(&platform_manifest(), "0.0.62", Some("linux-x64"))
         .expect("manifest should parse");
     assert_eq!(result["available"], false);
 }
