@@ -1,10 +1,12 @@
 import { afterEach, describe, expect, mock, test } from 'bun:test'
 import type { JavascriptDialogOpeningInput, JavascriptDialogResult } from './web-tab-javascript-dialog'
 
+const showMessageBox = mock(async (_hostWindow: unknown, _options: Record<string, unknown>) => ({ response: 0 }))
+
 mock.module('electron', () => ({
   app: { isPackaged: false },
   BrowserWindow: class {},
-  dialog: { showMessageBox: mock(async () => ({ response: 0 })) },
+  dialog: { showMessageBox },
 }))
 
 type Listener = (...args: unknown[]) => void
@@ -12,7 +14,12 @@ type Listener = (...args: unknown[]) => void
 class FakeDebugger {
   attached = false
   destroyed = false
-  readonly sendCommand = mock(async (_method: string, _params?: Record<string, unknown>) => undefined)
+  currentDialog: { type: string; message: string } | undefined
+  readonly handledDialogs: Array<{ message: string; accept: boolean }> = []
+  readonly sendCommand = mock(async (method: string, params?: Record<string, unknown>) => {
+    if (method === 'Page.handleJavaScriptDialog') this.handleCurrentDialog(params)
+    return undefined
+  })
   private listeners = new Map<string, Listener[]>()
 
   on(event: string, listener: Listener): this {
@@ -29,7 +36,18 @@ class FakeDebugger {
 
   attach(): void { this.attached = true }
 
+  handleCurrentDialog(params?: Record<string, unknown>): void {
+    if (!this.currentDialog) throw new Error('没有 current dialog')
+    this.handledDialogs.push({ message: this.currentDialog.message, accept: params?.accept === true })
+    this.currentDialog = undefined
+  }
+
   emit(event: string, ...args: unknown[]): void {
+    if (event === 'message' && args[1] === 'Page.javascriptDialogOpening' && args[2] && typeof args[2] === 'object') {
+      const params = args[2] as Record<string, unknown>
+      this.currentDialog = { type: String(params.type), message: String(params.message) }
+    }
+    if (event === 'message' && args[1] === 'Page.javascriptDialogClosed') this.currentDialog = undefined
     for (const listener of [...(this.listeners.get(event) ?? [])]) listener(...args)
   }
 
@@ -90,6 +108,7 @@ describe('网页 JavaScript 对话框 CDP bridge', () => {
     debuggerInstance.emit('message', {}, 'Page.javascriptDialogOpening', {
       type: 'confirm', message: '确定删除？', hasBrowserHandler: false,
     })
+    await flushPromises()
     debuggerInstance.emit('message', {}, 'Page.javascriptDialogOpening', {
       type: 'beforeunload', message: '确定离开？', hasBrowserHandler: false,
     })
@@ -134,7 +153,7 @@ describe('网页 JavaScript 对话框 CDP bridge', () => {
     expect(debuggerInstance.sendCommand).not.toHaveBeenCalledWith('Page.handleJavaScriptDialog', expect.anything())
   })
 
-  test('Given 第一个对话框未完成 When 第二个到达 Then 在同一 WebContents 顺序展示', async () => {
+  test('Given 第一个对话框完成并关闭 When 第二个到达 Then 在同一 WebContents 顺序展示', async () => {
     const { debuggerInstance, present, bridge } = createBridgeHarness()
     let releaseFirst: ((result: { accept: boolean }) => void) | undefined
     present
@@ -146,12 +165,14 @@ describe('网页 JavaScript 对话框 CDP bridge', () => {
     debuggerInstance.emit('message', {}, 'Page.javascriptDialogOpening', {
       type: 'confirm', message: '第一项', hasBrowserHandler: false,
     })
-    debuggerInstance.emit('message', {}, 'Page.javascriptDialogOpening', {
-      type: 'alert', message: '第二项', hasBrowserHandler: false,
-    })
     await flushPromises()
     expect(present).toHaveBeenCalledTimes(1)
     releaseFirst?.({ accept: false })
+    await flushPromises()
+
+    debuggerInstance.emit('message', {}, 'Page.javascriptDialogOpening', {
+      type: 'alert', message: '第二项', hasBrowserHandler: false,
+    })
     await flushPromises()
 
     expect(present).toHaveBeenCalledTimes(2)
@@ -219,7 +240,7 @@ describe('网页 JavaScript 对话框 CDP bridge', () => {
     expect(debuggerInstance.sendCommand).not.toHaveBeenCalledWith('Page.handleJavaScriptDialog', { accept: false })
   })
 
-  test('Given detach 快速重复且重连期间出现新 dialog When reconnect Then 只拒绝旧 dialog 一次且不拒绝新 dialog', async () => {
+  test('Given detach 快速重复且重连期间出现新 dialog When reconnect Then 不得把旧拒绝作用于新的 current dialog', async () => {
     const { debuggerInstance, present, bridge } = createBridgeHarness()
     present.mockImplementation(() => new Promise(() => undefined))
     bridges.push(bridge)
@@ -232,8 +253,11 @@ describe('网页 JavaScript 对话框 CDP bridge', () => {
 
     let pageEnableCalls = 0
     let releaseReconnect: (() => void) | undefined
-    debuggerInstance.sendCommand.mockImplementation((method) => {
-      if (method !== 'Page.enable') return Promise.resolve(undefined)
+    debuggerInstance.sendCommand.mockImplementation((method, params) => {
+      if (method !== 'Page.enable') {
+        if (method === 'Page.handleJavaScriptDialog') debuggerInstance.handleCurrentDialog(params)
+        return Promise.resolve(undefined)
+      }
       pageEnableCalls += 1
       if (pageEnableCalls === 1) {
         return new Promise<undefined>((resolve) => { releaseReconnect = () => resolve(undefined) })
@@ -252,11 +276,12 @@ describe('网页 JavaScript 对话框 CDP bridge', () => {
     await flushPromises()
 
     expect(pageEnableCalls).toBe(1)
-    expect(debuggerInstance.sendCommand.mock.calls.filter(([, params]) => params?.accept === false)).toHaveLength(1)
+    expect(debuggerInstance.sendCommand.mock.calls.filter(([, params]) => params?.accept === false)).toHaveLength(0)
     expect(debuggerInstance.sendCommand).toHaveBeenCalledWith('Page.handleJavaScriptDialog', { accept: true })
+    expect(debuggerInstance.handledDialogs).toEqual([{ message: '新 dialog', accept: true }])
   })
 
-  test('Given 旧 dialog detach 后重连中出现新 dialog When reconnect completes Then 旧 dialog 只拒绝一次且新 dialog 使用自身 presenter 结果', async () => {
+  test('Given 旧 dialog detach 后重连中出现新 dialog When reconnect completes Then 旧候选失效且新 dialog 使用自身 presenter 结果', async () => {
     const { debuggerInstance, present, bridge } = createBridgeHarness()
     present
       .mockImplementationOnce(() => new Promise(() => undefined))
@@ -270,8 +295,11 @@ describe('网页 JavaScript 对话框 CDP bridge', () => {
     await flushPromises()
 
     let releaseReconnect: (() => void) | undefined
-    debuggerInstance.sendCommand.mockImplementation((method) => {
-      if (method !== 'Page.enable') return Promise.resolve(undefined)
+    debuggerInstance.sendCommand.mockImplementation((method, params) => {
+      if (method !== 'Page.enable') {
+        if (method === 'Page.handleJavaScriptDialog') debuggerInstance.handleCurrentDialog(params)
+        return Promise.resolve(undefined)
+      }
       return new Promise<undefined>((resolve) => { releaseReconnect = () => resolve(undefined) })
     })
     debuggerInstance.attached = false
@@ -284,11 +312,125 @@ describe('网页 JavaScript 对话框 CDP bridge', () => {
     releaseReconnect?.()
     await flushPromises()
 
-    expect(debuggerInstance.sendCommand).toHaveBeenCalledWith('Page.handleJavaScriptDialog', { accept: false })
+    expect(debuggerInstance.sendCommand).not.toHaveBeenCalledWith('Page.handleJavaScriptDialog', { accept: false })
     expect(debuggerInstance.sendCommand).toHaveBeenCalledWith('Page.handleJavaScriptDialog', { accept: true })
-    expect(debuggerInstance.sendCommand.mock.calls.filter(([, params]) => params?.accept === false)).toHaveLength(1)
+    expect(debuggerInstance.sendCommand.mock.calls.filter(([, params]) => params?.accept === false)).toHaveLength(0)
     expect(debuggerInstance.sendCommand.mock.calls.filter(([, params]) => params?.accept === true)).toHaveLength(1)
+    expect(debuggerInstance.handledDialogs).toEqual([{ message: '新 dialog', accept: true }])
     expect(present).toHaveBeenNthCalledWith(2, expect.objectContaining({ message: '新 dialog' }), expect.any(AbortSignal))
+  })
+
+  test('Given detach 后恢复候选存在 When 新的浏览器处理器 Opening 到达 Then 不得拒绝新的 current dialog', async () => {
+    const { debuggerInstance, present, bridge } = createBridgeHarness()
+    present.mockImplementation(() => new Promise(() => undefined))
+    bridges.push(bridge)
+    await bridge.start()
+
+    debuggerInstance.emit('message', {}, 'Page.javascriptDialogOpening', {
+      type: 'confirm', message: '旧 dialog', hasBrowserHandler: false,
+    })
+    await flushPromises()
+
+    let releaseEnable: (() => void) | undefined
+    debuggerInstance.sendCommand.mockImplementation((method, params) => {
+      if (method === 'Page.enable') return new Promise<undefined>((resolve) => { releaseEnable = () => resolve(undefined) })
+      if (method === 'Page.handleJavaScriptDialog') {
+        debuggerInstance.handleCurrentDialog(params)
+      }
+      return Promise.resolve(undefined)
+    })
+    debuggerInstance.attached = false
+    debuggerInstance.emit('detach', {}, '旧 dialog 断开')
+    await flushPromises()
+
+    debuggerInstance.emit('message', {}, 'Page.javascriptDialogOpening', {
+      type: 'alert', message: '浏览器处理中的新 dialog', hasBrowserHandler: true,
+    })
+    releaseEnable?.()
+    await flushPromises()
+
+    expect(debuggerInstance.currentDialog?.message).toBe('浏览器处理中的新 dialog')
+    expect(debuggerInstance.sendCommand.mock.calls.filter(([, params]) => params?.accept === false)).toHaveLength(0)
+  })
+
+  test('Given detach 后恢复候选存在 When javascriptDialogClosed 到达 Then 清除候选且不发送恢复拒绝', async () => {
+    const { debuggerInstance, present, bridge } = createBridgeHarness()
+    present.mockImplementation(() => new Promise(() => undefined))
+    bridges.push(bridge)
+    await bridge.start()
+
+    debuggerInstance.emit('message', {}, 'Page.javascriptDialogOpening', {
+      type: 'confirm', message: '旧 dialog', hasBrowserHandler: false,
+    })
+    await flushPromises()
+
+    let releaseEnable: (() => void) | undefined
+    debuggerInstance.sendCommand.mockImplementation((method, params) => {
+      if (method === 'Page.enable') return new Promise<undefined>((resolve) => { releaseEnable = () => resolve(undefined) })
+      if (method === 'Page.handleJavaScriptDialog') {
+        debuggerInstance.handleCurrentDialog(params)
+      }
+      return Promise.resolve(undefined)
+    })
+    debuggerInstance.attached = false
+    debuggerInstance.emit('detach', {}, '旧 dialog 断开')
+    await flushPromises()
+    debuggerInstance.emit('message', {}, 'Page.javascriptDialogClosed', {})
+    releaseEnable?.()
+    await flushPromises()
+
+    expect(debuggerInstance.currentDialog).toBeUndefined()
+    expect(debuggerInstance.sendCommand.mock.calls.filter(([, params]) => params?.accept === false)).toHaveLength(0)
+  })
+
+  test('Given Page.enable 连续失败 When detach recovery 重试耗尽 Then 有界结束并清理候选', async () => {
+    const { debuggerInstance, present, bridge } = createBridgeHarness()
+    present.mockImplementation(() => new Promise(() => undefined))
+    bridges.push(bridge)
+    await bridge.start()
+
+    debuggerInstance.emit('message', {}, 'Page.javascriptDialogOpening', {
+      type: 'confirm', message: '等待恢复', hasBrowserHandler: false,
+    })
+    await flushPromises()
+    debuggerInstance.sendCommand.mockImplementation(async (method) => {
+      if (method === 'Page.enable') throw new Error('暂时不可用')
+      return undefined
+    })
+    debuggerInstance.attached = false
+    debuggerInstance.emit('detach', {}, '重连失败')
+    await flushPromises()
+    await new Promise((resolve) => setTimeout(resolve, 30))
+
+    const enableCalls = debuggerInstance.sendCommand.mock.calls.filter(([method]) => method === 'Page.enable')
+    expect(enableCalls.length).toBeGreaterThan(1)
+    expect(enableCalls.length).toBeLessThanOrEqual(4)
+
+    debuggerInstance.attached = false
+    debuggerInstance.emit('detach', {}, '候选应已清理')
+    await flushPromises()
+    expect(debuggerInstance.sendCommand.mock.calls.filter(([, params]) => params?.accept === false)).toHaveLength(0)
+  })
+
+  test('Given 原生 alert When presenter 收到 signal Then message box 使用同一 signal 并在 abort 时取消', async () => {
+    const hostWindow = { isDestroyed: () => false, webContents: { isDestroyed: () => false } }
+    let rejectMessageBox: ((error: Error) => void) | undefined
+    showMessageBox.mockImplementationOnce(async (_window, options) => {
+      const signal = options.signal as AbortSignal
+      expect(signal).toBeInstanceOf(AbortSignal)
+      return new Promise((_, reject) => {
+        rejectMessageBox = reject
+        signal.addEventListener('abort', () => reject(new Error('message box aborted')), { once: true })
+      })
+    })
+    const { createDefaultJavascriptDialogPresenter } = await import('./web-tab-javascript-dialog')
+    const presenter = createDefaultJavascriptDialogPresenter(hostWindow as never)
+    const controller = new AbortController()
+    const resultPromise = presenter.present({ type: 'alert', message: '可取消' }, controller.signal)
+    controller.abort()
+    rejectMessageBox?.(new Error('message box aborted'))
+    await expect(resultPromise).resolves.toEqual({ accept: false })
+    expect(showMessageBox).toHaveBeenCalledWith(hostWindow, expect.objectContaining({ signal: controller.signal }))
   })
 
   test('Given 旧 dialog detach 后重连中出现的新 dialog 又被第二次 detach 取消 When 恢复完成并再次断开 Then 不重复拒绝已取消项且后续新 dialog 只使用自身结果', async () => {
