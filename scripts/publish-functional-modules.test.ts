@@ -17,6 +17,36 @@ import {
   writePublishedManifest,
 } from './publish-functional-modules'
 
+function createCompleteManifest(): FunctionalModuleManifest {
+  const artifact = (format: 'binary' | 'tar.gz', entrypoint: string) => ({
+    version: '1.0.0',
+    url: `https://download.example.com/${entrypoint}`,
+    sha256: 'a'.repeat(64),
+    size: 1,
+    format,
+    entrypoint,
+    required: true,
+  })
+
+  return {
+    schema: 1,
+    channel: 'stable',
+    platforms: {
+      'darwin-arm64': {
+        modules: {
+          'rust-http-api': artifact('binary', 'bin/copis-http-api-server'),
+          officecli: artifact('binary', 'bin/officecli'),
+          'node-runtime': artifact('tar.gz', 'bin/node'),
+          'alipay-bot': artifact('tar.gz', 'bin/alipay-bot'),
+          'playwright-core': artifact('tar.gz', 'node_modules/playwright-core/index.js'),
+          'python-runtime': artifact('tar.gz', 'bin/python'),
+          'agently-cli': artifact('tar.gz', 'bin/agently-cli'),
+        },
+      },
+    },
+  }
+}
+
 describe('功能模块发布脚本 --rust', () => {
   test('发布前拒绝当前平台缺少必要模块的 manifest', () => {
     const manifest: FunctionalModuleManifest = {
@@ -258,50 +288,35 @@ describe('功能模块发布脚本 --rust', () => {
     expect(() => requireExistingAgentlyCli(manifest, 'win32', 'x64')).toThrow('缺少 agently-cli')
   })
 
-  test('Rust-only 发布允许远端暂时缺少 Node runtime', () => {
-    const manifest: FunctionalModuleManifest = {
-      schema: 1,
-      channel: 'stable',
-      platforms: {
-        'darwin-arm64': {
-          modules: {
-            officecli: {
-              version: '1.0.143',
-              url: 'https://download.example.com/officecli',
-              sha256: 'b'.repeat(64),
-              size: 1,
-              format: 'binary',
-              entrypoint: 'bin/officecli',
-              required: true,
-            },
-          },
-        },
-      },
-    }
+  test('Rust-only 发布前置校验拒绝缺少任一必要远端模块', () => {
+    const requiredExistingModules = [
+      'officecli',
+      'node-runtime',
+      'alipay-bot',
+      'playwright-core',
+      'python-runtime',
+      'agently-cli',
+    ] as const
 
-    expect(requireExistingNodeRuntime(manifest, 'darwin', 'arm64', { allowMissing: true })).toBe(false)
+    for (const missingModule of requiredExistingModules) {
+      const manifest = createCompleteManifest()
+      delete manifest.platforms['darwin-arm64']!.modules[missingModule]
+
+      expect(() => validateExistingModulesForSingleModuleRelease({
+        manifest,
+        rustOnly: true,
+        officeCliOnly: false,
+        nodeRuntimeOnly: false,
+        alipayBotOnly: false,
+        platform: 'darwin',
+        arch: 'arm64',
+      })).toThrow(`缺少 ${missingModule}`)
+    }
   })
 
-  test('Rust-only 发布允许远端暂时缺少支付宝智能体 CLI', () => {
-    const manifest: FunctionalModuleManifest = {
-      schema: 1,
-      channel: 'stable',
-      platforms: {
-        'darwin-arm64': {
-          modules: {
-            officecli: {
-              version: '1.0.143',
-              url: 'https://download.example.com/officecli',
-              sha256: 'b'.repeat(64),
-              size: 1,
-              format: 'binary',
-              entrypoint: 'bin/officecli',
-              required: true,
-            },
-          },
-        },
-      },
-    }
+  test('Rust-only 发布前置校验拒绝契约无效的 OfficeCLI artifact', () => {
+    const manifest = createCompleteManifest()
+    manifest.platforms['darwin-arm64']!.modules.officecli.entrypoint = 'bin/not-officecli'
 
     expect(() => validateExistingModulesForSingleModuleRelease({
       manifest,
@@ -311,7 +326,7 @@ describe('功能模块发布脚本 --rust', () => {
       alipayBotOnly: false,
       platform: 'darwin',
       arch: 'arm64',
-    })).not.toThrow()
+    })).toThrow('officecli 无效')
   })
 
   test('合并 Rust 发布时保留远端当前平台的 OfficeCLI artifact', () => {

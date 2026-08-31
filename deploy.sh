@@ -94,7 +94,7 @@ show_help() {
   --skip-install       跳过 bun install --frozen-lockfile
   --build-app          同时构建当前平台 Electron 应用包
   --skip-rust-build    使用已有 Rust 二进制
-  --rust               只发布 Rust HTTP API；每次自动递增 rust-http-api 版本，缺失其他模块时仍可继续发布
+  --rust               只发布 Rust HTTP API；每次自动递增 rust-http-api 版本，并校验 COS 中已有其他必要模块
   --officecli          只发布 OfficeCLI，保留 COS 中已有其他必要模块
   --node-runtime       只发布 Node.js runtime，保留 COS 中已有其他必要模块
   --alipay-bot         只发布官方支付宝智能体 CLI，保留 COS 中已有其他必要模块

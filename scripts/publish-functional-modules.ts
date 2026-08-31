@@ -342,6 +342,19 @@ export function requireExistingOfficeCli(
   }
 }
 
+function requireExistingOfficeCliContract(
+  manifest: FunctionalModuleManifest | undefined,
+  platform: FunctionalModulePlatform,
+  arch: FunctionalModuleArchitecture,
+): void {
+  requireExistingOfficeCli(manifest, platform, arch)
+  const platformKey = `${platform}-${arch}`
+  const artifact = manifest?.platforms[platformKey]?.modules.officecli
+  if (artifact?.format !== 'binary' || artifact.entrypoint !== `bin/${binaryName('officecli', platform)}`) {
+    throw new Error(`COS manifest 当前平台/架构的 officecli 无效: ${platformKey}，单模块发布已停止`)
+  }
+}
+
 export function requireExistingAlipayBot(
   manifest: FunctionalModuleManifest | undefined,
   platform: FunctionalModulePlatform,
@@ -496,23 +509,12 @@ export function validateExistingModulesForSingleModuleRelease(
   } = options
 
   if (rustOnly) {
-    requireExistingOfficeCli(manifest, platform, arch)
-    const hasNodeRuntime = requireExistingNodeRuntime(manifest, platform, arch, { allowMissing: true })
-    if (!hasNodeRuntime) {
-      console.warn(`[publish:functional-modules] COS manifest 当前平台/架构缺少 node-runtime: ${platform}-${arch}，--rust 将继续发布；请随后执行 --node-runtime 补齐`)
-    }
-    const hasPlaywrightCore = requireExistingPlaywrightCore(manifest, platform, arch, { allowMissing: true })
-    if (!hasPlaywrightCore) {
-      console.warn(`[publish:functional-modules] COS manifest 当前平台/架构缺少 playwright-core: ${platform}-${arch}，--rust 将继续发布；请随后执行 --playwright-core 补齐`)
-    }
-    const hasPythonRuntime = requireExistingPythonRuntime(manifest, platform, arch, { allowMissing: true })
-    if (!hasPythonRuntime) {
-      console.warn(`[publish:functional-modules] COS manifest 当前平台/架构缺少 python-runtime: ${platform}-${arch}，--rust 将继续发布；请随后执行 --python-runtime 补齐`)
-    }
-    const hasAgentlyCli = requireExistingAgentlyCli(manifest, platform, arch, { allowMissing: true })
-    if (!hasAgentlyCli) {
-      console.warn(`[publish:functional-modules] COS manifest 当前平台/架构缺少 agently-cli: ${platform}-${arch}，--rust 将继续发布；请随后执行 --agently-cli 补齐`)
-    }
+    requireExistingOfficeCliContract(manifest, platform, arch)
+    requireExistingNodeRuntime(manifest, platform, arch)
+    requireExistingAlipayBot(manifest, platform, arch)
+    requireExistingPlaywrightCore(manifest, platform, arch)
+    requireExistingPythonRuntime(manifest, platform, arch)
+    requireExistingAgentlyCli(manifest, platform, arch)
     return
   }
   if (officeCliOnly) {
