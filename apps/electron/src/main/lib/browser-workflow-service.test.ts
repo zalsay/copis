@@ -97,6 +97,9 @@ mock.module('./browser-workflow-store', () => ({
   saveBrowserWorkflow,
   writeBrowserWorkflowDraftMarkdown,
   promoteBrowserWorkflowDraftMarkdown,
+  appendBrowserWorkflowRunEvent: () => undefined,
+  saveLatestBrowserWorkflowRun: () => undefined,
+  writeBrowserWorkflowArtifact: () => undefined,
 }))
 mock.module('./rust-browser-recording-client', () => ({
   appendRustBrowserRecordingEvent: () => Promise.resolve(),
@@ -214,6 +217,13 @@ mock.module('./web-tab-manager', () => ({
     lifecycleListener = listener
     return () => { lifecycleListener = undefined }
   },
+  navigateWebTab: () => undefined,
+  closeWorkflowWebTab: () => undefined,
+  createWorkflowWebTab: () => ({ id: 'workflow-tab-1', url: 'https://example.com', title: '', isLoading: false }),
+  getWebTabLoadError: () => undefined,
+  setWorkflowWebTabVisible: () => undefined,
+  subscribeWorkflowWebTabOpened: () => () => undefined,
+  waitForWebTabLoad: () => Promise.resolve(),
 }))
 
 let bindBrowserAgentContext: typeof import('./browser-workflow-service')['bindBrowserAgentContext']

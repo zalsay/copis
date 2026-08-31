@@ -192,16 +192,65 @@ describe('CdpSessionRouter & BrowserPagePort', () => {
     expect(target.listenerCount()).toBe(0)
   })
 
-  test('Given debugger 意外 detach When owner 仍持有 lease Then 通知 owner 但不静默重连', () => {
+  test('Given debugger 意外 detach When owner 仍持有 lease Then 旧 lease 终态失效且清理 activeLeases，未自动 attach，重新 acquire 才 attach 且代际/epoch 递增', async () => {
     const target = new MockCdpTarget(101)
     router.registerTarget('tab-1', target)
-    const port = router.acquire('tab-1', 'workflow')
-    const reasons: string[] = []
-    port.onDetached((reason) => reasons.push(reason))
+    const leaseStateChanges: boolean[] = []
+    let falseListenerReacquireError: Error | undefined
+    let onDetachedReacquireError: Error | undefined
 
+    router.onLeaseStateChange('tab-1', (active) => {
+      leaseStateChanges.push(active)
+      if (!active) {
+        try {
+          router.acquire('tab-1', 'workflow')
+        } catch (err) {
+          falseListenerReacquireError = err as Error
+        }
+      }
+    })
+
+    const port = router.acquire('tab-1', 'workflow')
+    expect(leaseStateChanges).toEqual([true])
+    expect(router.hasLease('tab-1')).toBe(true)
+    expect(router.getLeaseCount('tab-1')).toBe(1)
+    expect(port.generation).toBe(1)
+    expect(port.documentEpoch).toBe(1)
+
+    const reasons: string[] = []
+    port.onDetached((reason) => {
+      reasons.push(reason)
+      try {
+        router.acquire('tab-1', 'workflow')
+      } catch (err) {
+        onDetachedReacquireError = err as Error
+      }
+    })
+
+    // 触发意外 detach
     target.emitDetach('target closed')
     expect(reasons).toEqual(['target closed'])
+    // 验证在 detach 处理过渡期同步重入 acquire 被明确拒绝
+    expect(falseListenerReacquireError?.message).toBe('网页页签正在断开连接')
+    expect(onDetachedReacquireError?.message).toBe('网页页签正在断开连接')
+
+    // 验证 leaseState 通知 false、leaseCount 为 0、未自动 attach
+    expect(leaseStateChanges).toEqual([true, false])
+    expect(router.hasLease('tab-1')).toBe(false)
+    expect(router.getLeaseCount('tab-1')).toBe(0)
     expect(target.attachCalls).toBe(1)
+
+    // 验证旧 port 不可用
+    expect(() => port.getSnapshot()).toThrow('CDP lease 已失效')
+    await expect(port.send('Page.enable')).rejects.toThrow('CDP lease 已失效')
+
+    // detach 处理结束后，下一次显式 acquire 正常 attach，并且代际和 epoch 仅递增 1 次
+    const newPort = router.acquire('tab-1', 'workflow')
+    expect(target.attachCalls).toBe(2)
+    expect(newPort.generation).toBe(2)
+    expect(newPort.documentEpoch).toBe(2)
+    expect(leaseStateChanges).toEqual([true, false, true])
+    expect(router.hasLease('tab-1')).toBe(true)
   })
 
   test('Given router dispose When 多页签有活动 lease Then reject pending、detach 并拒绝新 acquire', async () => {
@@ -617,36 +666,37 @@ describe('CdpSessionRouter & BrowserPagePort', () => {
 
   // === 修复轮次 2 缺陷 3: 监听器异常隔离 ===
   test('Given 监听器中存在抛出异常的 listener When 分发 onDetached 或 onDestroyed Then 隔离异常且后续监听器正常执行', () => {
-    const target = new MockCdpTarget(101)
-    router.registerTarget('tab-1', target)
-    const port = router.acquire('tab-1', 'workflow')
+    const target1 = new MockCdpTarget(101)
+    router.registerTarget('tab-1', target1)
+    const port1 = router.acquire('tab-1', 'workflow')
 
     let secondDetachRan = false
-    let secondDestroyRan = false
-
-    port.onDetached(() => {
+    port1.onDetached(() => {
       throw new Error('第一个 onDetached 抛错')
     })
-    port.onDetached(() => {
+    port1.onDetached(() => {
       secondDetachRan = true
     })
 
-    port.onDestroyed(() => {
+    target1.emitDetach('test-detach')
+    expect(secondDetachRan).toBe(true)
+
+    const target2 = new MockCdpTarget(102)
+    router.registerTarget('tab-2', target2)
+    const port2 = router.acquire('tab-2', 'workflow')
+
+    let secondDestroyRan = false
+    port2.onDestroyed(() => {
       throw new Error('第一个 onDestroyed 抛错')
     })
-    port.onDestroyed(() => {
+    port2.onDestroyed(() => {
       secondDestroyRan = true
     })
 
-    // 触发意外 detach
-    target.emitDetach('test-detach')
-    expect(secondDetachRan).toBe(true)
-
-    // 触发 destroyed
-    target.emitDestroyed()
+    target2.emitDestroyed()
     expect(secondDestroyRan).toBe(true)
-    expect(() => port.getSnapshot()).toThrow('网页页签已销毁')
-    expect(target.listenerCount()).toBe(0)
+    expect(() => port2.getSnapshot()).toThrow('网页页签已销毁')
+    expect(target2.listenerCount()).toBe(0)
   })
 
   // === 修复轮次 3 问题 1: terminal lifecycle callback 重入安全性 ===
@@ -980,5 +1030,110 @@ describe('CdpSessionRouter & BrowserPagePort', () => {
     expect(() => router.acquire('tab-1', 'agent')).toThrow('原始 attach 错误')
     expect(router.hasLease('tab-1')).toBe(false)
     expect(router.getLeaseCount('tab-1')).toBe(0)
+  })
+
+  // === 修复轮次 4 Item A: isCurrent 回归防护 ===
+  test('Given replaceTarget 过渡窗口中触发旧 detach callback When 执行 Then 旧回调被 isCurrent 忽略且 generation/epoch 仅 +1，新 target 正常工作', () => {
+    const firstTarget = new MockCdpTarget(101)
+    const secondTarget = new MockCdpTarget(202)
+
+    let capturedOldDetachListener: ((reason: string) => void) | undefined
+    const origDetach = firstTarget.onDetach.bind(firstTarget)
+    firstTarget.onDetach = (listener) => {
+      capturedOldDetachListener = listener
+      return origDetach(listener)
+    }
+
+    router.registerTarget('tab-1', firstTarget)
+    const oldPort = router.acquire('tab-1', 'agent')
+
+    // 在 false listener（replaceTarget 过渡窗口）中触发捕获的旧 detach 回调
+    let invokedOldDetachDuringReplace = false
+    router.onLeaseStateChange('tab-1', (active) => {
+      if (!active && !invokedOldDetachDuringReplace) {
+        invokedOldDetachDuringReplace = true
+        // 尝试重入旧 detach
+        capturedOldDetachListener?.('旧 target 延迟断开')
+      }
+    })
+
+    router.replaceTarget('tab-1', secondTarget)
+
+    expect(invokedOldDetachDuringReplace).toBe(true)
+
+    // replaceTarget 应该使得代际与 epoch 从 1 递增为 2（而不是因为旧 detach 额外递增到 3）
+    const newPort = router.acquire('tab-1', 'agent')
+    expect(newPort.generation).toBe(2)
+    expect(newPort.documentEpoch).toBe(2)
+    expect(newPort.getSnapshot().title).toBe('测试页面')
+  })
+
+  test('Given unexpected detach 处理过程中触发嵌套 detach callback When 执行 Then 嵌套调用被 isCurrent 忽略，generation/epoch 仅递增 1 次', () => {
+    const target = new MockCdpTarget(101)
+    let capturedDetachListener: ((reason: string) => void) | undefined
+    const origDetach = target.onDetach.bind(target)
+    target.onDetach = (listener) => {
+      capturedDetachListener = listener
+      return origDetach(listener)
+    }
+
+    router.registerTarget('tab-1', target)
+    const port = router.acquire('tab-1', 'agent')
+
+    let nestedDetachInvoked = false
+    router.onLeaseStateChange('tab-1', (active) => {
+      if (!active && !nestedDetachInvoked) {
+        nestedDetachInvoked = true
+        // 在 detaching 状态期间再次调用 detach callback
+        capturedDetachListener?.('嵌套断开通知')
+      }
+    })
+
+    // 触发 unexpected detach
+    target.emitDetach('底层意外断开')
+
+    expect(nestedDetachInvoked).toBe(true)
+
+    // detach 完成后重新 acquire，generation 应为 2（只递增 1 次，非 3）
+    const newPort = router.acquire('tab-1', 'agent')
+    expect(newPort.generation).toBe(2)
+    expect(newPort.documentEpoch).toBe(2)
+    expect(newPort.getSnapshot().title).toBe('测试页面')
+  })
+
+  // === 修复: unexpected detach detaching 期间 target 同步 destroyed ===
+  test('Given unexpected detach 处理过程中 target 同步触发 destroyed When 执行 Then 旧 port terminal、entry 状态置为 destroyed 且 target listeners 清零', () => {
+    const target = new MockCdpTarget(101)
+    const leaseStateChanges: boolean[] = []
+
+    router.registerTarget('tab-1', target)
+    router.onLeaseStateChange('tab-1', (active) => {
+      leaseStateChanges.push(active)
+    })
+
+    const port = router.acquire('tab-1', 'agent')
+    expect(leaseStateChanges).toEqual([true])
+
+    // 在 onDetached 回调中同步触发 target.emitDestroyed
+    port.onDetached(() => {
+      target.emitDestroyed()
+    })
+
+    // 触发 unexpected detach
+    target.emitDetach('意外断开')
+
+    // 验证旧 port 进入终态
+    expect(() => port.getSnapshot()).toThrow('CDP lease 已失效')
+
+    // 验证 leaseStateChange(false) 仅分发 1 次，不重复分发
+    expect(leaseStateChanges).toEqual([true, false])
+    expect(router.hasLease('tab-1')).toBe(false)
+    expect(router.getLeaseCount('tab-1')).toBe(0)
+
+    // 验证 target 事件监听器被完全清理（清零）
+    expect(target.listenerCount()).toBe(0)
+
+    // 验证 entry 变为 destroyed 状态，拒绝后续 acquire
+    expect(() => router.acquire('tab-1', 'agent')).toThrow('网页页签已销毁')
   })
 })

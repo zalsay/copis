@@ -15,7 +15,7 @@ interface PendingSend {
   reject: (err: Error) => void
 }
 
-type TabLifecycleStatus = 'active' | 'replacing' | 'unregistering' | 'destroyed'
+type TabLifecycleStatus = 'active' | 'replacing' | 'unregistering' | 'detaching' | 'destroyed'
 
 interface TabEntry {
   target: BrowserCdpTarget
@@ -334,6 +334,10 @@ class CdpSessionRouterImpl implements CdpSessionRouter {
       throw new Error('网页页签正在注销')
     }
 
+    if (entry.status === 'detaching') {
+      throw new Error('网页页签正在断开连接')
+    }
+
     if (entry.status === 'destroyed' || entry.target.isDestroyed()) {
       throw new Error('网页页签已销毁')
     }
@@ -457,6 +461,10 @@ class CdpSessionRouterImpl implements CdpSessionRouter {
       throw new Error('网页页签正在注销')
     }
 
+    if (entry.status === 'detaching') {
+      throw new Error('网页页签正在断开连接')
+    }
+
     if (entry.status === 'destroyed' || entry.target.isDestroyed()) {
       throw new Error('网页页签已销毁')
     }
@@ -492,6 +500,10 @@ class CdpSessionRouterImpl implements CdpSessionRouter {
 
     if (entry.status === 'unregistering') {
       throw new Error('网页页签正在注销')
+    }
+
+    if (entry.status === 'detaching') {
+      throw new Error('网页页签正在断开连接')
     }
 
     if (entry.status === 'destroyed' || entry.target.isDestroyed()) {
@@ -571,7 +583,6 @@ class CdpSessionRouterImpl implements CdpSessionRouter {
   private bindTargetEvents(tabId: string, entry: TabEntry): void {
     const boundTarget = entry.target
     const boundIdentity = boundTarget.identity
-    const boundGeneration = entry.generation
 
     const isCurrent = (): boolean => {
       const current = this.entries.get(tabId)
@@ -580,7 +591,6 @@ class CdpSessionRouterImpl implements CdpSessionRouter {
         current === entry &&
         entry.target === boundTarget &&
         entry.target.identity === boundIdentity &&
-        entry.generation === boundGeneration &&
         entry.status === 'active'
       )
     }
@@ -588,7 +598,7 @@ class CdpSessionRouterImpl implements CdpSessionRouter {
     const unsubMsg = boundTarget.onMessage((method, params, sessionId) => {
       if (!isCurrent()) return
       for (const lease of Array.from(entry.activeLeases)) {
-        if (lease.generation === boundGeneration) {
+        if (lease.generation === entry.generation) {
           lease.dispatchMessage(method, params, sessionId)
         }
       }
@@ -596,11 +606,29 @@ class CdpSessionRouterImpl implements CdpSessionRouter {
 
     const unsubDetach = boundTarget.onDetach((reason) => {
       if (!isCurrent()) return
-      // 意外 detach 时拒绝所有 pending 命令，通知各 owner 但不静默重连
-      this.rejectPendingCommands(entry, new Error(`CDP 会话已断开: ${reason}`))
-      for (const lease of Array.from(entry.activeLeases)) {
-        if (lease.generation === boundGeneration) {
-          lease.dispatchDetached(reason)
+      const previousStatus = entry.status
+      entry.status = 'detaching'
+      try {
+        const hadLeases = entry.activeLeases.size > 0
+        // 意外 detach 时拒绝所有 pending 命令，通知各 owner 但不静默重连
+        this.rejectPendingCommands(entry, new Error(`CDP 会话已断开: ${reason}`))
+        if (hadLeases) {
+          this.notifyLeaseStateChange(tabId, false)
+        }
+        for (const lease of Array.from(entry.activeLeases)) {
+          lease.dispatchTerminalDetached(reason, 'invalidated')
+        }
+        entry.activeLeases.clear()
+        entry.generation += 1
+        entry.documentEpoch += 1
+      } finally {
+        if (entry.status === 'detaching') {
+          if (previousStatus === 'destroyed' || boundTarget.isDestroyed()) {
+            entry.status = 'destroyed'
+            entry.cleanupTargetListeners()
+          } else {
+            entry.status = 'active'
+          }
         }
       }
     })
