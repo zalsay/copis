@@ -418,7 +418,6 @@ export function createWebTabJavascriptDialogBridge(input: WebTabJavascriptDialog
           if (!disposed && !isDestroyed()) console.warn('[网页对话框] 重连后拒绝 CDP 对话框失败:', error)
           if (
             pendingDismissal?.item === dismissal.item
-            && pendingDismissal.generation === dismissal.generation
             && pendingDismissal.protocolGeneration === protocolGeneration
             && dismissal.protocolGeneration === protocolGeneration
           ) {

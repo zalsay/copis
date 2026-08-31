@@ -420,6 +420,45 @@ describe('网页 JavaScript 对话框 CDP bridge', () => {
     expect(exhausted.debuggerInstance.handledDialogs).toEqual([])
   })
 
+  test('Given 每次恢复拒绝命令在途时都 detach 并失败 When 恢复重试 Then 三次失败后停止且不忙循环', async () => {
+    const { debuggerInstance, present, bridge } = createBridgeHarness()
+    present.mockImplementation(() => new Promise(() => undefined))
+    bridges.push(bridge)
+    await bridge.start()
+
+    debuggerInstance.emit('message', {}, 'Page.javascriptDialogOpening', {
+      type: 'confirm', message: '在途断开', hasBrowserHandler: false,
+    })
+    await flushPromises()
+
+    let recoveryAttempts = 0
+    debuggerInstance.sendCommand.mockImplementation(async (method, params) => {
+      if (method === 'Page.enable') {
+        debuggerInstance.pageEnabled = true
+        return undefined
+      }
+      if (method === 'Page.handleJavaScriptDialog' && params?.accept === false) {
+        recoveryAttempts += 1
+        await new Promise((resolve) => setTimeout(resolve, 0))
+        debuggerInstance.attached = false
+        debuggerInstance.emit('detach', {}, `恢复拒绝命令 ${recoveryAttempts} 在途断开`)
+        throw new Error(`恢复拒绝命令 ${recoveryAttempts} 失败`)
+      }
+      return undefined
+    })
+
+    debuggerInstance.attached = false
+    debuggerInstance.emit('detach', {}, '恢复开始')
+    await new Promise((resolve) => setTimeout(resolve, 30))
+    const attemptsAfterBudget = recoveryAttempts
+    await new Promise((resolve) => setTimeout(resolve, 30))
+
+    expect(attemptsAfterBudget).toBe(3)
+    expect(recoveryAttempts).toBe(attemptsAfterBudget)
+    expect(debuggerInstance.currentDialog?.message).toBe('在途断开')
+    expect(debuggerInstance.handledDialogs).toEqual([])
+  })
+
   test('Given 结果命令已发出但本地 finally 尚未完成 When CDP detach Then 不发送过期拒绝', async () => {
     const { debuggerInstance, present, bridge } = createBridgeHarness()
     let detached = false
