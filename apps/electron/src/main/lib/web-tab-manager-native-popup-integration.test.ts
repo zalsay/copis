@@ -184,7 +184,11 @@ describe('网页页签 manager 原生子窗口组合回归', () => {
     const restoredHost = new FakeBrowserWindow()
     manager.setWebTabHostWindow(restoredHost as never)
     const restoredContents = restoredHost.contentView.views[0]!.webContents
-    expect(restoredContents.windowOpenHandler?.({ url: 'https://restored-popup.example' } as never)).toMatchObject({ action: 'allow' })
+    const restoredPopup = restoredContents.windowOpenHandler?.({ url: 'https://restored-popup.example' } as never)
+    const restoredPopupWindow = new FakeBrowserWindow(restoredPopup?.overrideBrowserWindowOptions as Record<string, unknown>)
+    expect(restoredPopup).toMatchObject({ action: 'allow' })
+    expect(restoredPopup?.overrideBrowserWindowOptions?.webPreferences?.session).toBe(restoredContents.session as never)
+    expect(restoredPopupWindow.webContents.session).toBe(restoredContents.session)
 
     const blank = manager.createWebTab({ activate: false })
     const blankId = blank.tabs.find((tab) => tab.url === 'about:blank')!.id
