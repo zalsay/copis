@@ -151,7 +151,7 @@ export function showWebJavascriptPromptWindow(input: ShowWebJavascriptPromptWind
   const onDestroyed = (): void => cancelAndClose()
   const onRenderProcessGone = (): void => cancelAndClose()
   const onAbort = (): void => cancelAndClose()
-  let onWillNavigate: ((event: Electron.Event, url: string) => void) | undefined
+  let onPromptEntryNavigation: ((event: Electron.Event, url: string) => void) | undefined
   const onReadyToShow = (): void => {
     if (!pendingPrompts.has(requestId) || !isUsableWindow(promptWindow)) return
     promptWindow.show()
@@ -169,7 +169,10 @@ export function showWebJavascriptPromptWindow(input: ShowWebJavascriptPromptWind
     promptWindow.webContents.removeListener('did-fail-load', onDidFailLoad)
     promptWindow.webContents.removeListener('destroyed', onDestroyed)
     promptWindow.webContents.removeListener('render-process-gone', onRenderProcessGone)
-    if (onWillNavigate) promptWindow.webContents.removeListener('will-navigate', onWillNavigate)
+    if (onPromptEntryNavigation) {
+      promptWindow.webContents.removeListener('will-navigate', onPromptEntryNavigation)
+      promptWindow.webContents.removeListener('will-redirect', onPromptEntryNavigation)
+    }
     input.signal?.removeEventListener('abort', onAbort)
   }
 
@@ -189,10 +192,11 @@ export function showWebJavascriptPromptWindow(input: ShowWebJavascriptPromptWind
           return url.toString()
         })()
       : resolveWebJavascriptPromptUrl(requestId)
-    onWillNavigate = (event, url): void => {
+    onPromptEntryNavigation = (event, url): void => {
       if (url !== initialEntryUrl) event.preventDefault()
     }
-    promptWindow.webContents.on('will-navigate', onWillNavigate)
+    promptWindow.webContents.on('will-navigate', onPromptEntryNavigation)
+    promptWindow.webContents.on('will-redirect', onPromptEntryNavigation)
 
     if (app.isPackaged) {
       void promptWindow.loadFile(rendererPath, {

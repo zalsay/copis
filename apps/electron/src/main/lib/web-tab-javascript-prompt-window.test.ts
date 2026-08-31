@@ -7,6 +7,7 @@ class FakeWebContents {
   destroyed = false
   windowOpenHandler: ((details: unknown) => unknown) | null = null
   willNavigateHandler: ((event: { preventDefault(): void }, url: string) => void) | null = null
+  willRedirectHandler: ((event: { preventDefault(): void }, url: string) => void) | null = null
   private listeners = new Map<string, Listener[]>()
 
   constructor(id: number) {
@@ -19,6 +20,9 @@ class FakeWebContents {
     this.listeners.set(event, [...(this.listeners.get(event) ?? []), listener])
     if (event === 'will-navigate') {
       this.willNavigateHandler = listener as (event: { preventDefault(): void }, url: string) => void
+    }
+    if (event === 'will-redirect') {
+      this.willRedirectHandler = listener as (event: { preventDefault(): void }, url: string) => void
     }
     return this
   }
@@ -166,20 +170,26 @@ describe('网页 JavaScript prompt 原生窗口', () => {
     expect(url.searchParams.get('requestId')).toBe('request-id')
   })
 
-  test('Given prompt 窗口 When 收到 window.open 和外来导航 Then 拒绝两者但允许初始 entry URL', async () => {
+  test('Given prompt 窗口 When 收到 window.open、外来导航和 3xx 重定向 Then 拒绝外来目标但允许初始 entry URL', async () => {
     const resultPromise = manager.showWebJavascriptPromptWindow({ hostWindow: hostWindow as never, message: '安全检查' })
     const win = windows[0]!
     const initialUrl = win.loadedUrls[0]!
     const openResult = win.webContents.windowOpenHandler?.({ url: 'https://evil.example' })
     const foreignNavigation = { preventDefault: mock(() => undefined) }
     const initialNavigation = { preventDefault: mock(() => undefined) }
+    const foreignRedirect = { preventDefault: mock(() => undefined) }
+    const initialRedirect = { preventDefault: mock(() => undefined) }
 
     win.webContents.willNavigateHandler?.(foreignNavigation, 'https://evil.example')
     win.webContents.willNavigateHandler?.(initialNavigation, initialUrl)
+    win.webContents.willRedirectHandler?.(foreignRedirect, 'https://evil.example')
+    win.webContents.willRedirectHandler?.(initialRedirect, initialUrl)
 
     expect(openResult).toEqual({ action: 'deny' })
     expect(foreignNavigation.preventDefault).toHaveBeenCalledTimes(1)
     expect(initialNavigation.preventDefault).not.toHaveBeenCalled()
+    expect(foreignRedirect.preventDefault).toHaveBeenCalledTimes(1)
+    expect(initialRedirect.preventDefault).not.toHaveBeenCalled()
 
     win.emit('closed')
     await expect(resultPromise).resolves.toEqual({ accept: false })
@@ -249,6 +259,8 @@ describe('网页 JavaScript prompt 原生窗口', () => {
     expect(manager.getWebJavascriptPromptRequest(requestId, win.webContents.id)).toBeNull()
     expect(win.close).toHaveBeenCalledTimes(1)
     expect(win.listenerCount('closed')).toBe(0)
+    expect(win.webContents.listenerCount('will-navigate')).toBe(0)
+    expect(win.webContents.listenerCount('will-redirect')).toBe(0)
   })
 
   test('Given 两个宿主窗口各有 prompt When 仅取消一个 signal Then 不关闭另一个宿主的子窗口', async () => {
