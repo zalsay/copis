@@ -219,7 +219,7 @@ describe('网页 JavaScript 对话框 CDP bridge', () => {
     expect(debuggerInstance.sendCommand).not.toHaveBeenCalledWith('Page.handleJavaScriptDialog', { accept: false })
   })
 
-  test('Given detach 快速重复且重连期间出现新 dialog When reconnect Then 只运行一条链且不拒绝新 dialog', async () => {
+  test('Given detach 快速重复且重连期间出现新 dialog When reconnect Then 只拒绝旧 dialog 一次且不拒绝新 dialog', async () => {
     const { debuggerInstance, present, bridge } = createBridgeHarness()
     present.mockImplementation(() => new Promise(() => undefined))
     bridges.push(bridge)
@@ -252,8 +252,43 @@ describe('网页 JavaScript 对话框 CDP bridge', () => {
     await flushPromises()
 
     expect(pageEnableCalls).toBe(1)
-    expect(debuggerInstance.sendCommand).not.toHaveBeenCalledWith('Page.handleJavaScriptDialog', { accept: false })
+    expect(debuggerInstance.sendCommand.mock.calls.filter(([, params]) => params?.accept === false)).toHaveLength(1)
     expect(debuggerInstance.sendCommand).toHaveBeenCalledWith('Page.handleJavaScriptDialog', { accept: true })
+  })
+
+  test('Given 旧 dialog detach 后重连中出现新 dialog When reconnect completes Then 旧 dialog 只拒绝一次且新 dialog 使用自身 presenter 结果', async () => {
+    const { debuggerInstance, present, bridge } = createBridgeHarness()
+    present
+      .mockImplementationOnce(() => new Promise(() => undefined))
+      .mockResolvedValueOnce({ accept: true })
+    bridges.push(bridge)
+    await bridge.start()
+
+    debuggerInstance.emit('message', {}, 'Page.javascriptDialogOpening', {
+      type: 'confirm', message: '旧 dialog', hasBrowserHandler: false,
+    })
+    await flushPromises()
+
+    let releaseReconnect: (() => void) | undefined
+    debuggerInstance.sendCommand.mockImplementation((method) => {
+      if (method !== 'Page.enable') return Promise.resolve(undefined)
+      return new Promise<undefined>((resolve) => { releaseReconnect = () => resolve(undefined) })
+    })
+    debuggerInstance.attached = false
+    debuggerInstance.emit('detach', {}, '旧 dialog 断开')
+    await flushPromises()
+
+    debuggerInstance.emit('message', {}, 'Page.javascriptDialogOpening', {
+      type: 'alert', message: '新 dialog', hasBrowserHandler: false,
+    })
+    releaseReconnect?.()
+    await flushPromises()
+
+    expect(debuggerInstance.sendCommand).toHaveBeenCalledWith('Page.handleJavaScriptDialog', { accept: false })
+    expect(debuggerInstance.sendCommand).toHaveBeenCalledWith('Page.handleJavaScriptDialog', { accept: true })
+    expect(debuggerInstance.sendCommand.mock.calls.filter(([, params]) => params?.accept === false)).toHaveLength(1)
+    expect(debuggerInstance.sendCommand.mock.calls.filter(([, params]) => params?.accept === true)).toHaveLength(1)
+    expect(present).toHaveBeenNthCalledWith(2, expect.objectContaining({ message: '新 dialog' }), expect.any(AbortSignal))
   })
 
   test('Given bridge dispose When prompt presenter 未完成 Then 通过窄 signal 取消 presenter', async () => {

@@ -232,7 +232,11 @@ export function createWebTabJavascriptDialogBridge(input: WebTabJavascriptDialog
     if (disposed) return
     const generation = ++detachGeneration
     const outstanding = chromiumOutstanding?.chromiumOutstanding ? chromiumOutstanding : undefined
-    if (outstanding) pendingDismissal = { generation, item: outstanding }
+    if (pendingDismissal) {
+      pendingDismissal = { ...pendingDismissal, generation }
+    } else if (outstanding) {
+      pendingDismissal = { generation, item: outstanding }
+    }
     cancelPending()
     if (reconnectPromise) return
 
@@ -241,15 +245,10 @@ export function createWebTabJavascriptDialogBridge(input: WebTabJavascriptDialog
       if (!await enablePage()) return
       const dismissal = pendingDismissal
       pendingDismissal = undefined
-      if (
-        !dismissal ||
-        dismissal.generation !== detachGeneration ||
-        chromiumOutstanding !== dismissal.item ||
-        !dismissal.item.chromiumOutstanding
-      ) return
+      if (!dismissal || dismissal.generation !== detachGeneration) return
       if (disposed || isDestroyed()) return
       dismissal.item.chromiumOutstanding = false
-      chromiumOutstanding = undefined
+      if (chromiumOutstanding === dismissal.item) chromiumOutstanding = undefined
       try {
         await sendCommand('Page.handleJavaScriptDialog', { accept: false })
       } catch (error) {
