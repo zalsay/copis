@@ -131,6 +131,7 @@ describe('网页页签 manager 原生子窗口组合回归', () => {
       action: 'allow',
       overrideBrowserWindowOptions: { parent: host, show: false, modal: false },
     })
+    expect(response?.overrideBrowserWindowOptions?.webPreferences?.session).toBe(owner.session as never)
     owner.emit('did-create-window', popup, { url: 'https://popup.example' })
 
     expect(manager.listWebTabs()).toEqual(before)
@@ -147,7 +148,9 @@ describe('网页页签 manager 原生子窗口组合回归', () => {
     manager.setWebTabHostWindow(host as never)
     manager.createWebTab({ url: 'https://created.example' })
     const createdContents = host.contentView.views[0]!.webContents
-    expect(createdContents.windowOpenHandler?.({ url: 'https://created-popup.example' } as never)).toMatchObject({ action: 'allow' })
+    const createdPopup = createdContents.windowOpenHandler?.({ url: 'https://created-popup.example' } as never)
+    expect(createdPopup).toMatchObject({ action: 'allow' })
+    expect(createdPopup?.overrideBrowserWindowOptions?.webPreferences?.session).toBe(createdContents.session as never)
 
     manager.disposeWebTabs()
     persistedSession = { tabs: [{ url: 'https://restored.example' }], activeTabIndex: 0 }
@@ -160,7 +163,10 @@ describe('网页页签 manager 原生子窗口组合回归', () => {
     const blankId = blank.tabs.find((tab) => tab.url === 'about:blank')!.id
     manager.activateWebTabIncognito(blankId)
     const incognitoContents = restoredHost.contentView.views.at(-1)!.webContents
-    expect(incognitoContents.windowOpenHandler?.({ url: 'https://incognito-popup.example' } as never)).toMatchObject({ action: 'allow' })
+    const incognitoPopup = incognitoContents.windowOpenHandler?.({ url: 'https://incognito-popup.example' } as never)
+    expect(incognitoPopup).toMatchObject({ action: 'allow' })
+    expect(incognitoPopup?.overrideBrowserWindowOptions?.webPreferences?.session).toBe(incognitoContents.session as never)
+    expect(incognitoPopup?.overrideBrowserWindowOptions?.webPreferences?.session).not.toBe(createdContents.session as never)
   })
 
   test('关闭普通页签后 bridge dispose，之后 CDP detach 不会重连或发命令', async () => {
