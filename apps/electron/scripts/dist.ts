@@ -39,6 +39,19 @@ interface DistOptions {
   platform: 'mac' | 'win' | 'linux'
 }
 
+export interface VisualDistributionCommandOptions {
+  verbose: boolean
+  env?: Record<string, string>
+  skip?: boolean
+}
+
+export type VisualDistributionCommandRunner = (
+  name: string,
+  command: string,
+  args: string[],
+  options: VisualDistributionCommandOptions,
+) => StepResult
+
 export type VisualDistributionVariant = 'visual' | 'fast' | 'debug'
 
 export interface VisualDistributionBuildStep {
@@ -175,8 +188,7 @@ function runStep(
 // 主流程
 // ============================================
 
-function parseArgs(): DistOptions {
-  const args = process.argv.slice(2)
+function parseArgs(args: string[] = process.argv.slice(2)): DistOptions {
   return {
     currentArch: args.includes('--current-arch'),
     verbose: args.includes('--verbose'),
@@ -220,9 +232,10 @@ function runVisualDistributionBuildStep(
   buildStep: VisualDistributionBuildStep,
   opts: DistOptions,
   arch: string,
+  runner: VisualDistributionCommandRunner = runStep,
 ): StepResult {
   if (buildStep.command !== 'electron-builder') {
-    return runStep(buildStep.name, 'bun', ['run', buildStep.command], { verbose: opts.verbose })
+    return runner(buildStep.name, 'bun', ['run', buildStep.command], { verbose: opts.verbose })
   }
 
   // 签名环境变量
@@ -234,14 +247,18 @@ function runVisualDistributionBuildStep(
     builderEnv['DEBUG'] = 'electron-builder,electron-builder:*'
   }
 
-  return runStep(buildStep.name, 'bunx', getElectronBuilderArgs(opts, arch), {
+  return runner(buildStep.name, 'bunx', getElectronBuilderArgs(opts, arch), {
     verbose: true, // 打包步骤始终显示输出
     env: builderEnv,
   })
 }
 
-function main(): void {
-  const opts = parseArgs()
+/** 执行可视化发布流程；默认 runner 保持直接脚本入口的真实命令行为。 */
+export function runVisualDistributionBuild(
+  args: string[] = process.argv.slice(2),
+  runner: VisualDistributionCommandRunner = runStep,
+): StepResult[] {
+  const opts = parseArgs(args)
   const arch = process.arch // arm64 或 x64
   const results: StepResult[] = []
   const buildPlan = getVisualDistributionBuildPlan(
@@ -263,15 +280,19 @@ function main(): void {
   for (const buildStep of buildPlan) {
     step++
     printStepStart(step, totalSteps, buildStep.label)
-    results.push(runVisualDistributionBuildStep(buildStep, opts, arch))
+    results.push(runVisualDistributionBuildStep(buildStep, opts, arch, runner))
     printStepResult(results[results.length - 1])
     // 保持原流程语义：资源复制失败时仍继续尝试执行 electron-builder。
     if (!results[results.length - 1].success && buildStep.command !== 'build:resources') {
-      return printSummary(results)
+      return results
     }
   }
 
-  printSummary(results)
+  return results
+}
+
+function main(): void {
+  printSummary(runVisualDistributionBuild())
 }
 
 /** 打印汇总报告 */
