@@ -13,6 +13,8 @@ import { getPersistedWebTabs, savePersistedWebTabs } from './web-tab-session-ser
 import { httpApiPortArgument, httpApiWebTokenArgument } from './http-api-web-token'
 import { moveWebTab } from './web-tab-order'
 import { createWebTabWindowOpenHandler, installNativeWebPopupWindow } from './web-tab-native-popup'
+import { createWebTabJavascriptDialogBridge } from './web-tab-javascript-dialog'
+import type { WebTabJavascriptDialogBridge } from './web-tab-javascript-dialog'
 import type {
   CreateWebTabInput,
   NavigateWebTabInput,
@@ -36,6 +38,7 @@ interface WebTabRecord {
   mainFrameLoadError?: string
   faviconRequestId: number
   partition: string
+  javascriptDialogBridge?: WebTabJavascriptDialogBridge
   cdpDetachListeners: Set<(reason: string) => void>
   cdpDetachHandler?: (event: Electron.Event, reason: string) => void
 }
@@ -379,6 +382,40 @@ function detachCdp(record: WebTabRecord): void {
   }
 }
 
+function disposeJavascriptDialogBridge(record: WebTabRecord): void {
+  const bridge = record.javascriptDialogBridge
+  record.javascriptDialogBridge = undefined
+  bridge?.dispose()
+}
+
+function startJavascriptDialogBridge(record: WebTabRecord): void {
+  if (record.workflowOwned || record.javascriptDialogBridge) return
+  const cdp = record.view.webContents.debugger
+  const subscribe = (listener: (method: string, params: Record<string, unknown>) => void): (() => void) => {
+    const handler = (_event: Electron.Event, method: string, params: Record<string, unknown>): void => listener(method, params)
+    cdp.on('message', handler)
+    return () => cdp.removeListener('message', handler)
+  }
+  const subscribeDetach = (listener: (reason: string) => void): (() => void) => {
+    const handler = (_event: Electron.Event, reason: string): void => listener(reason)
+    cdp.on('detach', handler)
+    return () => cdp.removeListener('detach', handler)
+  }
+  const bridge = createWebTabJavascriptDialogBridge({
+    hostWindow,
+    debugger: cdp,
+    attach: () => attachCdp(record),
+    sendCommand: (method, params) => cdp.sendCommand(method, params),
+    subscribe,
+    subscribeDetach,
+    isDestroyed: () => record.view.webContents.isDestroyed(),
+  })
+  record.javascriptDialogBridge = bridge
+  void bridge.start().catch((error: unknown) => {
+    console.warn('[网页对话框] 启动 CDP bridge 失败:', error)
+  })
+}
+
 function installWebContentsHandlers(record: WebTabRecord): void {
   const contents = record.view.webContents
 
@@ -458,6 +495,7 @@ function installWebContentsHandlers(record: WebTabRecord): void {
 
   contents.on('destroyed', () => {
     if (records.get(record.state.id) !== record || record.view.webContents !== contents) return
+    disposeJavascriptDialogBridge(record)
     records.delete(record.state.id)
     if (!record.workflowOwned && activeTabId === record.state.id) activeTabId = null
     if (!record.workflowOwned) {
@@ -666,6 +704,7 @@ export function disposeWebTabs(): void {
   try {
     for (const record of records.values()) {
       clearIncognitoSession(record)
+      disposeJavascriptDialogBridge(record)
       try {
         if (currentHost && !currentHost.isDestroyed()) {
           currentHost.contentView.removeChildView(record.view)
@@ -778,9 +817,28 @@ function createWebTabInternal(input: CreateWebTabInput, workflowOwned: boolean, 
     const activeRecord = records.get(activeTabId)
     if (activeRecord) record.bounds = { ...activeRecord.bounds }
   }
-  hostWindow!.contentView.addChildView(view)
-  view.setVisible(false)
-  installWebContentsHandlers(record)
+  try {
+    hostWindow!.contentView.addChildView(view)
+    view.setVisible(false)
+    installWebContentsHandlers(record)
+    startJavascriptDialogBridge(record)
+  } catch (error) {
+    disposeJavascriptDialogBridge(record)
+    records.delete(id)
+    try {
+      hostWindow!.contentView.removeChildView(view)
+    } catch {
+      // 创建回滚时视图可能尚未挂载。
+    }
+    try {
+      const cdp = view.webContents.debugger
+      if (cdp.isAttached()) cdp.detach()
+    } catch {
+      // 创建回滚时忽略已退出视图的 CDP 清理错误。
+    }
+    if (!view.webContents.isDestroyed()) view.webContents.close({ waitForBeforeUnload: false })
+    throw error
+  }
 
   if (!workflowOwned && input.activate !== false) activeTabId = id
   persistTabs()
@@ -818,6 +876,7 @@ export function closeWorkflowWebTab(tabId: string): void {
   if (!record || !record.workflowOwned) return
   records.delete(tabId)
   clearIncognitoSession(record)
+  disposeJavascriptDialogBridge(record)
   try {
     hostWindow?.contentView.removeChildView(record.view)
   } catch {
@@ -906,6 +965,7 @@ export function activateWebTabIncognito(tabId: string): WebTabsSnapshot {
     view: nextView,
     isIncognito: true,
     partition,
+    javascriptDialogBridge: undefined,
     cdpDetachHandler: undefined,
   }
 
@@ -913,11 +973,13 @@ export function activateWebTabIncognito(tabId: string): WebTabsSnapshot {
     hostWindow!.contentView.addChildView(nextView)
     nextView.setVisible(false)
     installWebContentsHandlers(nextRecord)
+    startJavascriptDialogBridge(nextRecord)
     if (previousView.webContents.debugger.isAttached()) {
       attachCdp(nextRecord)
     }
   } catch (error) {
     clearIncognitoSession(nextRecord)
+    disposeJavascriptDialogBridge(nextRecord)
     try {
       hostWindow!.contentView.removeChildView(nextView)
     } catch {
@@ -946,6 +1008,7 @@ export function activateWebTabIncognito(tabId: string): WebTabsSnapshot {
   } catch {
     // 旧网页进程可能已经退出，忽略替换阶段清理错误。
   }
+  disposeJavascriptDialogBridge(record)
   if (!previousView.webContents.isDestroyed()) previousView.webContents.close({ waitForBeforeUnload: false })
 
   persistTabs()
@@ -972,6 +1035,7 @@ export function closeWebTab(tabId: string): WebTabsSnapshot {
   }
 
   clearIncognitoSession(record)
+  disposeJavascriptDialogBridge(record)
 
   try {
     hostWindow?.contentView.removeChildView(record.view)
