@@ -39,6 +39,49 @@ interface DistOptions {
   platform: 'mac' | 'win' | 'linux'
 }
 
+export type VisualDistributionVariant = 'visual' | 'fast' | 'debug'
+
+export interface VisualDistributionBuildStep {
+  name: string
+  command: string
+  label: string
+}
+
+const VISUAL_DISTRIBUTION_BUILD_STEPS: readonly VisualDistributionBuildStep[] = [
+  { name: '构建主进程', command: 'build:main', label: '构建主进程 (esbuild)' },
+  { name: '构建 Preload', command: 'build:preload', label: '构建 Preload (esbuild)' },
+  {
+    name: '构建 Prompt Preload',
+    command: 'build:web-javascript-prompt-preload',
+    label: '构建 Prompt Preload (esbuild)',
+  },
+  { name: '构建渲染进程', command: 'build:renderer', label: '构建渲染进程 (Vite)' },
+  { name: '编译 copis CLI', command: 'build:cli', label: '编译 copis CLI (bun --compile)' },
+  { name: '复制资源文件', command: 'build:resources', label: '复制资源文件' },
+  { name: 'Electron Builder', command: 'electron-builder', label: 'Electron Builder 打包' },
+]
+
+const VISUAL_DISTRIBUTION_BUILD_PLANS: Record<
+  VisualDistributionVariant,
+  readonly VisualDistributionBuildStep[]
+> = {
+  visual: VISUAL_DISTRIBUTION_BUILD_STEPS,
+  fast: VISUAL_DISTRIBUTION_BUILD_STEPS,
+  debug: VISUAL_DISTRIBUTION_BUILD_STEPS,
+}
+
+/** 返回指定可视化发布变体的纯构建步骤计划。 */
+export function getVisualDistributionBuildPlan(
+  variant: VisualDistributionVariant,
+): VisualDistributionBuildStep[] {
+  return VISUAL_DISTRIBUTION_BUILD_PLANS[variant].map((step) => ({ ...step }))
+}
+
+/** 返回默认可视化发布的构建步骤计划。 */
+export function createVisualDistributionBuildPlan(): VisualDistributionBuildStep[] {
+  return getVisualDistributionBuildPlan('visual')
+}
+
 // ============================================
 // 工具函数
 // ============================================
@@ -153,71 +196,7 @@ function parseArgs(): DistOptions {
   }
 }
 
-function main(): void {
-  const opts = parseArgs()
-  const arch = process.arch // arm64 或 x64
-  const results: StepResult[] = []
-
-  // 打印配置信息
-  console.log(`\n${color.bgBlue}${color.bold} Copis 打包工具 ${color.reset}\n`)
-  console.log(`  ${color.bold}平台${color.reset}:     ${opts.platform}`)
-  console.log(`  ${color.bold}架构${color.reset}:     ${opts.currentArch ? arch + ' (仅当前)' : 'arm64 + x64'}`)
-  console.log(`  ${color.bold}格式${color.reset}:     ${opts.targetFormat}`)
-  console.log(`  ${color.bold}签名${color.reset}:     ${opts.noSign ? '跳过' : '启用'}`)
-  console.log(`  ${color.bold}详细日志${color.reset}: ${opts.verbose ? '开启' : '关闭'}`)
-  printSeparator()
-
-  const totalSteps = 6
-  let step = 0
-
-  // ── 步骤 1: 构建主进程 ──
-  step++
-  printStepStart(step, totalSteps, '构建主进程 (esbuild)')
-  results.push(
-    runStep('构建主进程', 'bun', ['run', 'build:main'], { verbose: opts.verbose })
-  )
-  printStepResult(results[results.length - 1])
-  if (!results[results.length - 1].success) return printSummary(results)
-
-  // ── 步骤 2: 构建 Preload ──
-  step++
-  printStepStart(step, totalSteps, '构建 Preload (esbuild)')
-  results.push(
-    runStep('构建 Preload', 'bun', ['run', 'build:preload'], { verbose: opts.verbose })
-  )
-  printStepResult(results[results.length - 1])
-  if (!results[results.length - 1].success) return printSummary(results)
-
-  // ── 步骤 3: 构建渲染进程 ──
-  step++
-  printStepStart(step, totalSteps, '构建渲染进程 (Vite)')
-  results.push(
-    runStep('构建渲染进程', 'bun', ['run', 'build:renderer'], { verbose: opts.verbose })
-  )
-  printStepResult(results[results.length - 1])
-  if (!results[results.length - 1].success) return printSummary(results)
-
-  // ── 步骤 4: 编译 copis CLI 二进制 ──
-  step++
-  printStepStart(step, totalSteps, '编译 copis CLI (bun --compile)')
-  results.push(
-    runStep('编译 copis CLI', 'bun', ['run', 'build:cli'], { verbose: opts.verbose })
-  )
-  printStepResult(results[results.length - 1])
-  if (!results[results.length - 1].success) return printSummary(results)
-
-  // ── 步骤 5: 复制资源文件 ──
-  step++
-  printStepStart(step, totalSteps, '复制资源文件')
-  results.push(
-    runStep('复制资源文件', 'bun', ['run', 'build:resources'], { verbose: opts.verbose })
-  )
-  printStepResult(results[results.length - 1])
-
-  // ── 步骤 6: electron-builder 打包 ──
-  step++
-  printStepStart(step, totalSteps, 'Electron Builder 打包')
-
+function getElectronBuilderArgs(opts: DistOptions, arch: string): string[] {
   const builderArgs = ['electron-builder', `--${opts.platform}`]
 
   // 只构建当前架构
@@ -234,6 +213,18 @@ function main(): void {
     builderArgs.push('--dir')
   }
 
+  return builderArgs
+}
+
+function runVisualDistributionBuildStep(
+  buildStep: VisualDistributionBuildStep,
+  opts: DistOptions,
+  arch: string,
+): StepResult {
+  if (buildStep.command !== 'electron-builder') {
+    return runStep(buildStep.name, 'bun', ['run', buildStep.command], { verbose: opts.verbose })
+  }
+
   // 签名环境变量
   const builderEnv: Record<string, string> = {}
   if (opts.noSign) {
@@ -243,13 +234,42 @@ function main(): void {
     builderEnv['DEBUG'] = 'electron-builder,electron-builder:*'
   }
 
-  results.push(
-    runStep('Electron Builder', 'bunx', builderArgs, {
-      verbose: true, // 打包步骤始终显示输出
-      env: builderEnv,
-    })
+  return runStep(buildStep.name, 'bunx', getElectronBuilderArgs(opts, arch), {
+    verbose: true, // 打包步骤始终显示输出
+    env: builderEnv,
+  })
+}
+
+function main(): void {
+  const opts = parseArgs()
+  const arch = process.arch // arm64 或 x64
+  const results: StepResult[] = []
+  const buildPlan = getVisualDistributionBuildPlan(
+    opts.verbose ? 'debug' : opts.currentArch && opts.targetFormat === 'dmg' ? 'fast' : 'visual',
   )
-  printStepResult(results[results.length - 1])
+
+  // 打印配置信息
+  console.log(`\n${color.bgBlue}${color.bold} Copis 打包工具 ${color.reset}\n`)
+  console.log(`  ${color.bold}平台${color.reset}:     ${opts.platform}`)
+  console.log(`  ${color.bold}架构${color.reset}:     ${opts.currentArch ? arch + ' (仅当前)' : 'arm64 + x64'}`)
+  console.log(`  ${color.bold}格式${color.reset}:     ${opts.targetFormat}`)
+  console.log(`  ${color.bold}签名${color.reset}:     ${opts.noSign ? '跳过' : '启用'}`)
+  console.log(`  ${color.bold}详细日志${color.reset}: ${opts.verbose ? '开启' : '关闭'}`)
+  printSeparator()
+
+  const totalSteps = buildPlan.length
+  let step = 0
+
+  for (const buildStep of buildPlan) {
+    step++
+    printStepStart(step, totalSteps, buildStep.label)
+    results.push(runVisualDistributionBuildStep(buildStep, opts, arch))
+    printStepResult(results[results.length - 1])
+    // 保持原流程语义：资源复制失败时仍继续尝试执行 electron-builder。
+    if (!results[results.length - 1].success && buildStep.command !== 'build:resources') {
+      return printSummary(results)
+    }
+  }
 
   printSummary(results)
 }
@@ -284,4 +304,6 @@ function printSummary(results: StepResult[]): void {
   process.exit(allSuccess ? 0 : 1)
 }
 
-main()
+if (import.meta.main) {
+  main()
+}
