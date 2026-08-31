@@ -125,6 +125,12 @@ export function createWebTabJavascriptDialogBridge(input: WebTabJavascriptDialog
   // pending 包含尚未走完本地 Promise 的项，只有该引用代表 Chromium 当前暂停的 dialog。
   let chromiumOutstanding: PendingDialog | undefined
 
+  const clearChromiumOutstanding = (item: PendingDialog): void => {
+    item.chromiumOutstanding = false
+    if (chromiumOutstanding !== item) return
+    chromiumOutstanding = undefined
+  }
+
   const isDestroyed = (): boolean => Boolean(input.isDestroyed?.())
 
   const sendCommand = async (method: string, params?: Record<string, unknown>): Promise<unknown> => {
@@ -158,15 +164,20 @@ export function createWebTabJavascriptDialogBridge(input: WebTabJavascriptDialog
 
   const cancelPending = (): void => {
     for (const item of pending) {
-      if (item.settled) continue
+      if (item.settled) {
+        clearChromiumOutstanding(item)
+        continue
+      }
       item.settled = true
       item.abortController.abort()
       item.cancelResolve({ accept: false })
+      clearChromiumOutstanding(item)
     }
   }
 
   const processDialog = async (opening: JavascriptDialogOpeningInput, item: PendingDialog): Promise<void> => {
     if (item.settled || disposed || isDestroyed()) {
+      clearChromiumOutstanding(item)
       pending.delete(item)
       return
     }
@@ -182,11 +193,13 @@ export function createWebTabJavascriptDialogBridge(input: WebTabJavascriptDialog
         }),
         item.cancel,
       ])
-      if (item.settled || disposed || isDestroyed()) return
+      if (item.settled || disposed || isDestroyed()) {
+        clearChromiumOutstanding(item)
+        return
+      }
       const params: Record<string, unknown> = { accept: presented.accept }
       if (opening.type === 'prompt' && presented.accept) params.promptText = presented.promptText ?? ''
-      item.chromiumOutstanding = false
-      if (chromiumOutstanding === item) chromiumOutstanding = undefined
+      clearChromiumOutstanding(item)
       try {
         await sendCommand('Page.handleJavaScriptDialog', params)
       } catch (error) {
@@ -213,10 +226,7 @@ export function createWebTabJavascriptDialogBridge(input: WebTabJavascriptDialog
       settled: false,
       chromiumOutstanding: false,
     }
-    if (chromiumOutstanding?.settled) {
-      chromiumOutstanding.chromiumOutstanding = false
-      chromiumOutstanding = undefined
-    }
+    if (chromiumOutstanding?.settled) clearChromiumOutstanding(chromiumOutstanding)
     if (!chromiumOutstanding) {
       item.chromiumOutstanding = true
       chromiumOutstanding = item
@@ -231,7 +241,10 @@ export function createWebTabJavascriptDialogBridge(input: WebTabJavascriptDialog
   const onDetach = (_reason?: string): void => {
     if (disposed) return
     const generation = ++detachGeneration
-    const outstanding = chromiumOutstanding?.chromiumOutstanding ? chromiumOutstanding : undefined
+    if (chromiumOutstanding?.settled) clearChromiumOutstanding(chromiumOutstanding)
+    const outstanding = chromiumOutstanding?.chromiumOutstanding && !chromiumOutstanding.settled
+      ? chromiumOutstanding
+      : undefined
     if (pendingDismissal) {
       pendingDismissal = { ...pendingDismissal, generation }
     } else if (outstanding) {
