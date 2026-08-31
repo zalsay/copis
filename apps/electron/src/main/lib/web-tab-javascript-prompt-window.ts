@@ -1,6 +1,7 @@
 import { app, BrowserWindow } from 'electron'
 import { randomUUID } from 'node:crypto'
 import { join } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import type { WebJavascriptPromptRequest, WebJavascriptPromptResolveInput } from '@copis/shared'
 
 export interface ShowWebJavascriptPromptWindowInput {
@@ -13,6 +14,10 @@ export interface ShowWebJavascriptPromptWindowInput {
 
 export type WebJavascriptPromptResult = { accept: boolean; promptText?: string }
 
+interface WebJavascriptPromptEnvironment {
+  COPIS_DEV_SERVER_URL?: string
+}
+
 interface PendingPrompt {
   request: WebJavascriptPromptRequest
   senderId: number
@@ -23,6 +28,7 @@ interface PendingPrompt {
 
 const pendingPrompts = new Map<string, PendingPrompt>()
 const hostCleanup = new Map<BrowserWindow, () => void>()
+const DEFAULT_DEV_SERVER_URL = 'http://127.0.0.1:5174'
 
 function isUsableWindow(window: BrowserWindow | null | undefined): window is BrowserWindow {
   return Boolean(window && !window.isDestroyed() && !window.webContents.isDestroyed())
@@ -85,8 +91,14 @@ function watchHost(hostWindow: BrowserWindow): void {
   })
 }
 
-function getPromptUrl(requestId: string): string {
-  return `http://127.0.0.1:5174/?window=web-javascript-prompt&requestId=${encodeURIComponent(requestId)}`
+export function resolveWebJavascriptPromptUrl(
+  requestId: string,
+  envSource: WebJavascriptPromptEnvironment | NodeJS.ProcessEnv = process.env,
+): string {
+  const url = new URL(envSource.COPIS_DEV_SERVER_URL ?? DEFAULT_DEV_SERVER_URL)
+  url.searchParams.set('window', 'web-javascript-prompt')
+  url.searchParams.set('requestId', requestId)
+  return url.toString()
 }
 
 /** 创建由主窗口托管的最小权限 prompt 输入窗口。 */
@@ -139,6 +151,7 @@ export function showWebJavascriptPromptWindow(input: ShowWebJavascriptPromptWind
   const onDestroyed = (): void => cancelAndClose()
   const onRenderProcessGone = (): void => cancelAndClose()
   const onAbort = (): void => cancelAndClose()
+  let onWillNavigate: ((event: Electron.Event, url: string) => void) | undefined
   const onReadyToShow = (): void => {
     if (!pendingPrompts.has(requestId) || !isUsableWindow(promptWindow)) return
     promptWindow.show()
@@ -149,12 +162,14 @@ export function showWebJavascriptPromptWindow(input: ShowWebJavascriptPromptWind
   promptWindow.webContents.on('did-fail-load', onDidFailLoad)
   promptWindow.webContents.on('destroyed', onDestroyed)
   promptWindow.webContents.on('render-process-gone', onRenderProcessGone)
+  promptWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
   cleanupPromptListeners = (): void => {
     promptWindow.removeListener('closed', onClosed)
     promptWindow.removeListener('ready-to-show', onReadyToShow)
     promptWindow.webContents.removeListener('did-fail-load', onDidFailLoad)
     promptWindow.webContents.removeListener('destroyed', onDestroyed)
     promptWindow.webContents.removeListener('render-process-gone', onRenderProcessGone)
+    if (onWillNavigate) promptWindow.webContents.removeListener('will-navigate', onWillNavigate)
     input.signal?.removeEventListener('abort', onAbort)
   }
 
@@ -165,12 +180,26 @@ export function showWebJavascriptPromptWindow(input: ShowWebJavascriptPromptWind
   }
 
   try {
+    const rendererPath = join(__dirname, 'renderer', 'index.html')
+    const initialEntryUrl = app.isPackaged
+      ? (() => {
+          const url = pathToFileURL(rendererPath)
+          url.searchParams.set('window', 'web-javascript-prompt')
+          url.searchParams.set('requestId', requestId)
+          return url.toString()
+        })()
+      : resolveWebJavascriptPromptUrl(requestId)
+    onWillNavigate = (event, url): void => {
+      if (url !== initialEntryUrl) event.preventDefault()
+    }
+    promptWindow.webContents.on('will-navigate', onWillNavigate)
+
     if (app.isPackaged) {
-      void promptWindow.loadFile(join(__dirname, 'renderer', 'index.html'), {
+      void promptWindow.loadFile(rendererPath, {
         query: { window: 'web-javascript-prompt', requestId },
       }).catch(cancelAndClose)
     } else {
-      void promptWindow.loadURL(getPromptUrl(requestId)).catch(cancelAndClose)
+      void promptWindow.loadURL(initialEntryUrl).catch(cancelAndClose)
     }
   } catch (error) {
     console.error('[网页 prompt] 加载输入窗口失败:', error)

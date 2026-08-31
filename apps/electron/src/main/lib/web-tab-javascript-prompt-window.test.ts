@@ -5,6 +5,8 @@ type Listener = (...args: unknown[]) => void
 class FakeWebContents {
   id: number
   destroyed = false
+  windowOpenHandler: ((details: unknown) => unknown) | null = null
+  willNavigateHandler: ((event: { preventDefault(): void }, url: string) => void) | null = null
   private listeners = new Map<string, Listener[]>()
 
   constructor(id: number) {
@@ -15,7 +17,14 @@ class FakeWebContents {
 
   on(event: string, listener: Listener): this {
     this.listeners.set(event, [...(this.listeners.get(event) ?? []), listener])
+    if (event === 'will-navigate') {
+      this.willNavigateHandler = listener as (event: { preventDefault(): void }, url: string) => void
+    }
     return this
+  }
+
+  setWindowOpenHandler(handler: (details: unknown) => unknown): void {
+    this.windowOpenHandler = handler
   }
 
   removeListener(event: string, listener: Listener): this {
@@ -133,6 +142,47 @@ describe('网页 JavaScript prompt 原生窗口', () => {
 
   afterEach(() => {
     manager.disposeWebJavascriptPromptWindows()
+  })
+
+  test('Given 自定义开发服务地址 When 解析 prompt URL Then 保留 origin、端口和路径并覆盖窗口查询参数', () => {
+    const url = new URL(manager.resolveWebJavascriptPromptUrl('request id', {
+      COPIS_DEV_SERVER_URL: 'https://dev.example:6111/custom/renderer?theme=dark&window=old&requestId=old#entry',
+    }))
+
+    expect(url.origin).toBe('https://dev.example:6111')
+    expect(url.pathname).toBe('/custom/renderer')
+    expect(url.hash).toBe('#entry')
+    expect(url.searchParams.get('theme')).toBe('dark')
+    expect(url.searchParams.get('window')).toBe('web-javascript-prompt')
+    expect(url.searchParams.get('requestId')).toBe('request id')
+  })
+
+  test('Given 未配置开发服务地址 When 解析 prompt URL Then 使用 5174 默认地址', () => {
+    const url = new URL(manager.resolveWebJavascriptPromptUrl('request-id', {}))
+
+    expect(url.origin).toBe('http://127.0.0.1:5174')
+    expect(url.pathname).toBe('/')
+    expect(url.searchParams.get('window')).toBe('web-javascript-prompt')
+    expect(url.searchParams.get('requestId')).toBe('request-id')
+  })
+
+  test('Given prompt 窗口 When 收到 window.open 和外来导航 Then 拒绝两者但允许初始 entry URL', async () => {
+    const resultPromise = manager.showWebJavascriptPromptWindow({ hostWindow: hostWindow as never, message: '安全检查' })
+    const win = windows[0]!
+    const initialUrl = win.loadedUrls[0]!
+    const openResult = win.webContents.windowOpenHandler?.({ url: 'https://evil.example' })
+    const foreignNavigation = { preventDefault: mock(() => undefined) }
+    const initialNavigation = { preventDefault: mock(() => undefined) }
+
+    win.webContents.willNavigateHandler?.(foreignNavigation, 'https://evil.example')
+    win.webContents.willNavigateHandler?.(initialNavigation, initialUrl)
+
+    expect(openResult).toEqual({ action: 'deny' })
+    expect(foreignNavigation.preventDefault).toHaveBeenCalledTimes(1)
+    expect(initialNavigation.preventDefault).not.toHaveBeenCalled()
+
+    win.emit('closed')
+    await expect(resultPromise).resolves.toEqual({ accept: false })
   })
 
   test('创建受控窗口并仅允许匹配 webContents 身份的请求读取和确认', async () => {
