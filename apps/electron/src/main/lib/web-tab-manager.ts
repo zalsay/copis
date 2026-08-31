@@ -522,7 +522,7 @@ function installWebContentsHandlers(record: WebTabRecord): void {
       console.warn('[网页页签] 打开外部协议失败:', error)
     },
   }
-  contents.setWindowOpenHandler(createWebTabWindowOpenHandler(nativePopupContext))
+  contents.setWindowOpenHandler(createWebTabWindowOpenHandler(nativePopupContext, contents))
   contents.on('did-create-window', (window) => {
     installNativeWebPopupWindow({
       ...nativePopupContext,

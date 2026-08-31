@@ -4,9 +4,14 @@ import { createWebTabWindowOpenHandler, installNativeWebPopupWindow } from './we
 
 class FakeWebContents extends EventEmitter {
   destroyed = false
+  readonly session: Electron.Session
   windowOpenHandler: ((details: Electron.HandlerDetails) => Electron.WindowOpenHandlerResponse) | null = null
   willNavigateHandler: ((event: { preventDefault(): void }, url: string) => void) | null = null
   willRedirectHandler: ((event: { preventDefault(): void }, url: string) => void) | null = null
+  constructor(session: Electron.Session = {} as Electron.Session) {
+    super()
+    this.session = session
+  }
   setWindowOpenHandler(handler: (details: Electron.HandlerDetails) => Electron.WindowOpenHandlerResponse): void {
     this.windowOpenHandler = handler
   }
@@ -63,11 +68,13 @@ function createContext(hostWindow: FakeWindow) {
 }
 
 describe('网页原生子窗口策略', () => {
-  test('Given HTTP(S) window.open When 请求新窗口 Then allow 并固定 parent 与安全 WebPreferences', () => {
+  test('Given 常规页签 HTTP(S) window.open When 请求新窗口 Then 继承 opener session 并固定 parent 与安全 WebPreferences', () => {
     const hostWindow = new FakeWindow()
     const context = createContext(hostWindow)
+    const regularSession = {} as unknown as Electron.Session
+    const opener = new FakeWebContents(regularSession)
 
-    const response = createWebTabWindowOpenHandler(context)({ url: 'https://login.example' } as never)
+    const response = createWebTabWindowOpenHandler(context, opener as never)({ url: 'https://login.example' } as never)
 
     expect(response).toEqual(expect.objectContaining({
       action: 'allow',
@@ -80,9 +87,21 @@ describe('网页原生子窗口策略', () => {
           contextIsolation: true,
           nodeIntegration: false,
           sandbox: true,
+          session: regularSession,
         }),
       }),
     }))
+  })
+
+  test('Given 无痕页签 HTTP(S) window.open When 请求新窗口 Then 使用该无痕页签的独立 session', () => {
+    const hostWindow = new FakeWindow()
+    const context = createContext(hostWindow)
+    const incognitoSession = {} as unknown as Electron.Session
+    const opener = new FakeWebContents(incognitoSession)
+
+    const response = createWebTabWindowOpenHandler(context, opener as never)({ url: 'https://login.example' } as never)
+
+    expect(response.overrideBrowserWindowOptions?.webPreferences?.session).toBe(incognitoSession)
   })
 
   test('Given 非 HTTP(S) window.open When 请求新窗口 Then deny 并打开外部协议', async () => {
@@ -120,6 +139,9 @@ describe('网页原生子窗口策略', () => {
     popup.webContents.emit('did-create-window', child, { url: 'https://child.example' })
     expect(child.webContents.windowOpenHandler).toBeFunction()
     expect(child.webContents.willNavigateHandler).toBeFunction()
+
+    const nestedPopup = child.webContents.windowOpenHandler!({ url: 'https://nested.example' } as never)
+    expect(nestedPopup.overrideBrowserWindowOptions?.webPreferences?.session).toBe(child.webContents.session)
   })
 
   test('Given 原生子窗口收到 HTTP(S) 导航 When 触发 will-navigate Then 不阻止页内跳转且不交给外部协议处理', () => {

@@ -53,6 +53,7 @@ function installNavigationPolicy(input: NativePopupContext, contents: Electron.W
 
 export function createWebTabWindowOpenHandler(
   input: NativePopupContext,
+  opener?: Electron.WebContents | null,
 ): (details: Electron.HandlerDetails) => Electron.WindowOpenHandlerResponse {
   return ({ url }: Electron.HandlerDetails): Electron.WindowOpenHandlerResponse => {
     if (!isHttpWebUrl(url)) {
@@ -75,6 +76,7 @@ export function createWebTabWindowOpenHandler(
           contextIsolation: true,
           nodeIntegration: false,
           sandbox: true,
+          ...(opener && !opener.isDestroyed() ? { session: opener.session } : {}),
         },
       },
     }
@@ -106,7 +108,7 @@ export function installNativeWebPopupWindow(input: NativePopupInstallInput): voi
     if (popup.isDestroyed()) cleanup()
   }
 
-  contents.setWindowOpenHandler(createWebTabWindowOpenHandler(input))
+  contents.setWindowOpenHandler(createWebTabWindowOpenHandler(input, contents))
   installNavigationPolicy(input, contents)
   contents.on('did-create-window', (childWindow) => {
     installNativeWebPopupWindow({
