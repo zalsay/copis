@@ -4,11 +4,11 @@ import {
   isBrowserPageAdvancedAuthorizationEnabled,
   getBrowserPageControlMode,
   resolveBrowserPageUploadPaths,
+  sendBrowserPageControlCdpCommand,
 } from './browser-workflow-service'
 import {
   getWebTabState,
   navigateWebTab,
-  sendWebTabCdpCommandInternal,
 } from './web-tab-manager'
 
 export const browserPageControl = createBrowserPageControlService({
@@ -17,7 +17,7 @@ export const browserPageControl = createBrowserPageControlService({
   isAdvancedAuthorizationEnabled: isBrowserPageAdvancedAuthorizationEnabled,
   resolveUploadPaths: resolveBrowserPageUploadPaths,
   getTab: getWebTabState,
-  sendCommand: sendWebTabCdpCommandInternal,
+  sendCommand: sendBrowserPageControlCdpCommand,
   navigate(tabId, url) {
     navigateWebTab({ tabId, url })
   },

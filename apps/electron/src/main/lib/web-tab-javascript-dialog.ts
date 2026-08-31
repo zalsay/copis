@@ -176,7 +176,7 @@ export function createWebTabJavascriptDialogBridge(input: WebTabJavascriptDialog
     if (disposed || isDestroyed()) return
     if (input.attach) {
       await input.attach()
-    } else if (input.debugger.isAttached && !input.debugger.isAttached()) {
+    } else if (!input.subscribeDetach && input.debugger.isAttached && !input.debugger.isAttached()) {
       input.debugger.attach?.('1.3')
     }
   }
@@ -318,7 +318,7 @@ export function createWebTabJavascriptDialogBridge(input: WebTabJavascriptDialog
   }
 
   const onDetach = (_reason?: string, recoveryCandidate?: PendingDialog): void => {
-    if (disposed || isDestroyed()) {
+    if (disposed || isDestroyed() || input.subscribeDetach) {
       pendingDismissal = undefined
       cancelPending()
       return

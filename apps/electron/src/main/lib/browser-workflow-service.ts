@@ -49,16 +49,12 @@ import {
 } from './rust-browser-recording-client'
 import {
   createWebTab,
-  detachWebTabCdp,
-  ensureWebTabCdpAttached,
   getWebTabState,
   promoteWorkflowWebTab,
-  sendWebTabCdpCommandInternal,
-  subscribeWebTabCdpEvents,
-  subscribeWebTabCdpDetach,
+  acquireWebTabPagePort,
   subscribeWebTabLifecycle,
-  type WebTabCdpEventListener,
 } from './web-tab-manager'
+import type { BrowserCdpMethod, BrowserPagePort } from './browser-page-port'
 import {
   revokeBrowserAgentWorkerCapability,
   updateBrowserAgentWorkerCapabilityTabId,
@@ -71,6 +67,7 @@ interface BrowserAgentBinding {
   ownerWebContentsId?: number
   context: BrowserAgentContext
   authorizedOrigins: Set<string>
+  cdpPort: BrowserPagePort
 }
 
 interface RecordingPayload {
@@ -86,10 +83,13 @@ interface RecordingPage {
   tabId: string
   tabAlias: string
   origin: string
+  cdpPort: BrowserPagePort
   removeCdpListener: () => void
   removeCdpDetachListener: () => void
+  removeCdpDestroyedListener: () => void
   scriptId?: string
   worldName?: string
+  released?: boolean
 }
 
 interface ActiveRecording {
@@ -389,7 +389,13 @@ function parsePayload(value: string | undefined): RecordingPayload | undefined {
 function emitStatus(sessionId: string, status: BrowserWorkflowStatus): void {
   const next = withBrowserPageControlState(sessionId, status)
   statuses.set(sessionId, next)
-  for (const listener of listeners) listener(sessionId, next)
+  for (const listener of Array.from(listeners)) {
+    try {
+      listener(sessionId, next)
+    } catch (error) {
+      console.warn('[网页 Workflow] 状态监听器执行失败:', error)
+    }
+  }
 }
 
 function currentStatus(sessionId: string): BrowserWorkflowStatus {
@@ -533,12 +539,9 @@ function handleNavigationEvent(recording: ActiveRecording, page: RecordingPage, 
 }
 
 async function installRecorder(page: RecordingPage, recording: ActiveRecording): Promise<void> {
-  await sendWebTabCdpCommandInternal({ tabId: page.tabId, method: 'Runtime.enable' })
-  await sendWebTabCdpCommandInternal({ tabId: page.tabId, method: 'Page.enable' })
-  const frameTreeResult = await sendWebTabCdpCommandInternal({
-    tabId: page.tabId,
-    method: 'Page.getFrameTree',
-  })
+  await page.cdpPort.send('Runtime.enable')
+  await page.cdpPort.send('Page.enable')
+  const frameTreeResult = await page.cdpPort.send('Page.getFrameTree')
   const frameTree = isRecord(frameTreeResult) && isRecord(frameTreeResult.frameTree) ? frameTreeResult.frameTree : undefined
   const frame = frameTree && isRecord(frameTree.frame) ? frameTree.frame : undefined
   const frameId = frame && typeof frame.id === 'string' ? frame.id : undefined
@@ -546,10 +549,10 @@ async function installRecorder(page: RecordingPage, recording: ActiveRecording):
 
   const worldName = `copis-browser-workflow-${recording.recordingId}`
   page.worldName = worldName
-  const worldResult = await sendWebTabCdpCommandInternal({
-    tabId: page.tabId,
-    method: 'Page.createIsolatedWorld',
-    params: { frameId, worldName, grantUniversalAccess: false },
+  const worldResult = await page.cdpPort.send('Page.createIsolatedWorld', {
+    frameId,
+    worldName,
+    grantUniversalAccess: false,
   })
   const executionContextId = isRecord(worldResult) && typeof worldResult.executionContextId === 'number'
     ? worldResult.executionContextId
@@ -557,39 +560,41 @@ async function installRecorder(page: RecordingPage, recording: ActiveRecording):
   if (executionContextId === undefined) throw new Error('无法创建网页录制隔离环境')
 
   const source = RECORDING_SOURCE.replaceAll('__COPIS_RECORDING_NONCE__', recording.nonce)
-  await sendWebTabCdpCommandInternal({
-    tabId: page.tabId,
-    method: 'Runtime.addBinding',
-    params: { name: RECORDING_BINDING, executionContextName: worldName },
+  await page.cdpPort.send('Runtime.addBinding', {
+    name: RECORDING_BINDING,
+    executionContextName: worldName,
   })
-  const result = await sendWebTabCdpCommandInternal({
-    tabId: page.tabId,
-    method: 'Page.addScriptToEvaluateOnNewDocument',
-    params: { source, worldName },
+  const result = await page.cdpPort.send('Page.addScriptToEvaluateOnNewDocument', {
+    source,
+    worldName,
   })
   if (isRecord(result) && typeof result.identifier === 'string') page.scriptId = result.identifier
-  await sendWebTabCdpCommandInternal({
-    tabId: page.tabId,
-    method: 'Runtime.evaluate',
-    params: { expression: source, contextId: executionContextId, returnByValue: true },
+  await page.cdpPort.send('Runtime.evaluate', {
+    expression: source,
+    contextId: executionContextId,
+    returnByValue: true,
   })
 }
 
 async function removeRecorder(page: RecordingPage): Promise<void> {
   page.removeCdpListener()
   page.removeCdpDetachListener()
-  if (page.scriptId) {
-    await sendWebTabCdpCommandInternal({
-      tabId: page.tabId,
-      method: 'Page.removeScriptToEvaluateOnNewDocument',
-      params: { identifier: page.scriptId },
+  page.removeCdpDestroyedListener()
+  try {
+    if (page.scriptId) {
+      await page.cdpPort.send('Page.removeScriptToEvaluateOnNewDocument', {
+        identifier: page.scriptId,
+      }).catch(() => undefined)
+    }
+    await page.cdpPort.send('Runtime.removeBinding', {
+      name: RECORDING_BINDING,
     }).catch(() => undefined)
+  } finally {
+    if (!page.released) {
+      page.released = true
+      page.cdpPort.release()
+    }
   }
-  await sendWebTabCdpCommandInternal({
-    tabId: page.tabId,
-    method: 'Runtime.removeBinding',
-    params: { name: RECORDING_BINDING },
-  }).catch(() => undefined)
 }
 
 function actionIdForEvent(recording: ActiveRecording, page: RecordingPage, type: RecordingPayload['type']): string | undefined {
@@ -634,25 +639,30 @@ function attachRecordingPage(recording: ActiveRecording, tabId: string, tabAlias
   const activeUrl = getWebTabState(recording.activeTabId)?.url
   const origin = normalizeBrowserPageOrigin(tab.url) || (activeUrl ? normalizeBrowserPageOrigin(activeUrl) : undefined)
   if (!origin) throw new Error(`网页页签不是 HTTP(S): ${tabId}`)
+  const cdpPort = acquireWebTabPagePort(tabId, 'recording')
   const page: RecordingPage = {
     tabId,
     tabAlias,
     origin,
+    cdpPort,
     removeCdpListener: () => undefined,
     removeCdpDetachListener: () => undefined,
+    removeCdpDestroyedListener: () => undefined,
   }
-  const listener: WebTabCdpEventListener = (method, params) => {
+  page.removeCdpListener = cdpPort.onMessage((method, params) => {
     if (method === 'Runtime.bindingCalled') handleBindingEvent(recording, page, params)
     if (method === 'Page.frameNavigated') handleNavigationEvent(recording, page, params)
-  }
-  page.removeCdpListener = subscribeWebTabCdpEvents(tabId, listener)
-  page.removeCdpDetachListener = subscribeWebTabCdpDetach(tabId, (reason) => {
+  })
+  page.removeCdpDetachListener = cdpPort.onDetached((reason) => {
     emitStatus(recording.sessionId, {
       ...currentStatus(recording.sessionId),
       tabId,
       state: 'paused_cdp_detached',
       error: `网页 CDP 会话已断开：${reason || '未知原因'}`,
     })
+  })
+  page.removeCdpDestroyedListener = cdpPort.onDestroyed(() => {
+    // 页面销毁后由生命周期监听器负责处理
   })
   recording.pages.set(tabId, page)
   return page
@@ -662,18 +672,21 @@ async function installRecordingPage(recording: ActiveRecording, page: RecordingP
   try {
     await installRecorder(page, recording)
   } catch (error) {
-    page.removeCdpListener()
-    page.removeCdpDetachListener()
     recording.pages.delete(page.tabId)
+    await removeRecorder(page).catch(() => {
+      if (!page.released) {
+        page.released = true
+        page.cdpPort.release()
+      }
+    })
     throw error
   }
 }
 
 /** WebContentsView 重建后重挂载录制注入；页签 ID 和 Worker capability 保持不变。 */
 async function remountRecordingPage(recording: ActiveRecording, previousPage: RecordingPage): Promise<void> {
-  previousPage.removeCdpListener()
-  previousPage.removeCdpDetachListener()
   recording.pages.delete(previousPage.tabId)
+  await removeRecorder(previousPage).catch(() => undefined)
 
   try {
     const page = attachRecordingPage(recording, previousPage.tabId, previousPage.tabAlias)
@@ -726,26 +739,13 @@ function assertDraftHash(version: BrowserWorkflowVersion): void {
   }
 }
 
-function isTabReferenced(tabId: string, excludeSessionId?: string): boolean {
-  for (const [sid, binding] of bindings.entries()) {
-    if (sid !== excludeSessionId && binding.context.tabId === tabId) {
-      return true
-    }
-  }
-  for (const [sid, recording] of recordings.entries()) {
-    if (sid !== excludeSessionId && recording.pages.has(tabId)) {
-      return true
-    }
-  }
-  return false
-}
-
 export function bindBrowserAgentContext(
   sessionId: string,
   context: BrowserAgentContext,
   ownerWebContentsId?: number,
   options: { preserveWorkerCapability?: boolean } = {},
 ): BrowserWorkflowStatus {
+  // 1. 前置准备与校验全部在 acquire 前完成
   const session = getAgentSessionMeta(sessionId)
   if (!session) throw new Error('AI浏览器会话不存在')
   if (!session.workspaceId) throw new Error('AI浏览器会话必须绑定工作区')
@@ -763,28 +763,56 @@ export function bindBrowserAgentContext(
   ) {
     throw new Error('Browser Workflow session 已绑定到其它渲染进程')
   }
+  const authorizedOrigins = loadBrowserPageAuthorizations(sessionId)
+
+  // 2. 申请新 Port，并提供安全的回滚机制
+  let newPort: BrowserPagePort | undefined
+  try {
+    newPort = acquireWebTabPagePort(context.tabId, 'agent')
+
+    if (session.permissionMode !== 'bypassPermissions') {
+      // AI浏览器的网页控制授权由 Browser Page 工具负责，不继承工作区只读会话的 plan 模式。
+      updateAgentSessionMeta(sessionId, { permissionMode: 'bypassPermissions' })
+    }
+
+    const nextBinding: BrowserAgentBinding = {
+      sessionId,
+      workspaceId: session.workspaceId,
+      workspaceSlug: workspace.slug,
+      ownerWebContentsId: ownerWebContentsId ?? previousBinding?.ownerWebContentsId,
+      context,
+      authorizedOrigins,
+      cdpPort: newPort,
+    }
+
+    // 3. 只有在新 binding 安装成功后，才提交并替换 bindings 映射
+    bindings.set(sessionId, nextBinding)
+  } catch (error) {
+    if (newPort) {
+      try {
+        newPort.release()
+      } catch {
+        // 隔离 release 异常
+      }
+    }
+    throw error
+  }
+
+  // 4. 提交成功后处理副作用并释放旧 port
   if (previousBinding && previousBinding.context.tabId !== context.tabId) {
     if (!options.preserveWorkerCapability) {
       revokeBrowserAgentWorkerCapability(sessionId)
     }
-    if (!isTabReferenced(previousBinding.context.tabId, sessionId)) {
-      detachWebTabCdp(previousBinding.context.tabId)
+  }
+
+  if (previousBinding) {
+    try {
+      previousBinding.cdpPort.release()
+    } catch {
+      // 隔离旧 port release 异常
     }
   }
-  const authorizedOrigins = loadBrowserPageAuthorizations(sessionId)
-  if (session.permissionMode !== 'bypassPermissions') {
-    // AI浏览器的网页控制授权由 Browser Page 工具负责，不继承工作区只读会话的 plan 模式。
-    updateAgentSessionMeta(sessionId, { permissionMode: 'bypassPermissions' })
-  }
-  bindings.set(sessionId, {
-    sessionId,
-    workspaceId: session.workspaceId,
-    workspaceSlug: workspace.slug,
-    ownerWebContentsId: ownerWebContentsId ?? previousBinding?.ownerWebContentsId,
-    context,
-    authorizedOrigins,
-  })
-  ensureWebTabCdpAttached(context.tabId)
+
   const status = { ...currentStatus(sessionId), sessionId, tabId: tab.id, tabTitle: tab.title }
   emitStatus(sessionId, status)
   return status
@@ -797,10 +825,58 @@ export function unbindBrowserAgentContext(sessionId: string, ownerWebContentsId?
   if (recording) void cancelBrowserWorkflowRecording(sessionId)
   const previousBinding = bindings.get(sessionId)
   bindings.delete(sessionId)
-  if (previousBinding && !isTabReferenced(previousBinding.context.tabId, sessionId)) {
-    detachWebTabCdp(previousBinding.context.tabId)
+  if (previousBinding) {
+    previousBinding.cdpPort.release()
   }
   emitStatus(sessionId, { sessionId, state: 'idle' })
+}
+
+const ALLOWED_BROWSER_CDP_METHODS = new Set<BrowserCdpMethod>([
+  'DOM.setFileInputFiles',
+  'Input.dispatchKeyEvent',
+  'Input.dispatchMouseEvent',
+  'Input.insertText',
+  'Page.addScriptToEvaluateOnNewDocument',
+  'Page.captureScreenshot',
+  'Page.createIsolatedWorld',
+  'Page.enable',
+  'Page.getFrameTree',
+  'Page.handleJavaScriptDialog',
+  'Page.removeScriptToEvaluateOnNewDocument',
+  'Runtime.addBinding',
+  'Runtime.enable',
+  'Runtime.evaluate',
+  'Runtime.releaseObject',
+  'Runtime.removeBinding',
+])
+
+function isBrowserCdpMethod(method: string): method is BrowserCdpMethod {
+  return ALLOWED_BROWSER_CDP_METHODS.has(method as BrowserCdpMethod)
+}
+
+/** 仅供主进程内部页面控制服务使用的受控指令发送函数，按 bound tab 查找 port。 */
+export async function sendBrowserPageControlCdpCommand(input: {
+  tabId: string
+  method: string
+  params?: Record<string, unknown>
+}): Promise<unknown> {
+  if (!isBrowserCdpMethod(input.method)) {
+    throw new Error(`不支持的 CDP 指令: ${input.method}`)
+  }
+
+  let targetBinding: BrowserAgentBinding | undefined
+  for (const binding of bindings.values()) {
+    if (binding.context.tabId === input.tabId) {
+      targetBinding = binding
+      break
+    }
+  }
+
+  if (!targetBinding) {
+    throw new Error(`页签未绑定到有效的 AI 浏览器会话: ${input.tabId}`)
+  }
+
+  return targetBinding.cdpPort.send(input.method, input.params)
 }
 
 export function getBrowserAgentContext(sessionId: string): BrowserAgentContext | undefined {

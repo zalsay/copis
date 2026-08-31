@@ -49,6 +49,7 @@ const bridgeDisposes = mock(() => undefined)
 mock.module('electron', () => ({
   app: { isPackaged: false },
   BrowserWindow: FakeHostWindow,
+  dialog: { showMessageBox: mock(async () => ({ response: 0 })) },
   WebContentsView: FakeWebContentsView,
   shell: { openExternal: mock(async () => undefined) },
 }))
@@ -70,22 +71,33 @@ mock.module('./web-tab-native-popup', () => ({
   installNativeWebPopupWindow: () => undefined,
 }))
 
-const { createWorkflowWebTab, disposeWebTabs, promoteWorkflowWebTab, setWebTabHostWindow } = await import('./web-tab-manager')
+const {
+  acquireWebTabPagePort,
+  createWorkflowWebTab,
+  disposeWebTabs,
+  promoteWorkflowWebTab,
+  setWebTabHostWindow,
+} = await import('./web-tab-manager')
 
-describe('Workflow 网页页签提升后的 JavaScript dialog bridge', () => {
+describe('Workflow 网页页签提升与 Lease 生命周期', () => {
   afterEach(() => {
     disposeWebTabs()
     bridgeStarts.mockClear()
     bridgeDisposes.mockClear()
   })
 
-  test('Given workflow-owned view When 提升为公开页签 Then 仅启动一次 dialog bridge', () => {
+  test('Given workflow-owned view When 提升为公开页签 Then 默认保持 0 lease 且不启动 bridge，仅在 acquire 后启动 bridge并在 release 时 dispose', () => {
     setWebTabHostWindow(new FakeHostWindow() as never)
     const workflowTab = createWorkflowWebTab({ url: 'https://workflow.example' })
 
     expect(bridgeStarts).not.toHaveBeenCalled()
     promoteWorkflowWebTab(workflowTab.id)
+    expect(bridgeStarts).not.toHaveBeenCalled()
 
+    const port = acquireWebTabPagePort(workflowTab.id, 'agent')
     expect(bridgeStarts).toHaveBeenCalledTimes(1)
+
+    port.release()
+    expect(bridgeDisposes).toHaveBeenCalledTimes(1)
   })
 })
