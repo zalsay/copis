@@ -243,11 +243,13 @@ let resolveBrowserPageUploadPaths: (sessionId: string, paths: string[]) => strin
 let sendBrowserPageControlCdpCommand: (input: { tabId: string; method: string; params?: Record<string, unknown> }) => Promise<unknown>
 let refreshBrowserWorkflowStatus: typeof import('./browser-workflow-service')['refreshBrowserWorkflowStatus']
 let subscribeBrowserWorkflowStatus: typeof import('./browser-workflow-service')['subscribeBrowserWorkflowStatus']
+let clearBrowserWorkflowSession: typeof import('./browser-workflow-service')['clearBrowserWorkflowSession']
 
 beforeAll(async () => {
   const service = await import('./browser-workflow-service')
   bindBrowserAgentContext = service.bindBrowserAgentContext
   unbindBrowserAgentContext = service.unbindBrowserAgentContext
+  clearBrowserWorkflowSession = service.clearBrowserWorkflowSession
   assertBrowserWorkflowSessionOwner = service.assertBrowserWorkflowSessionOwner
   getBrowserAgentContext = service.getBrowserAgentContext
   getBrowserAgentSessionIdForTab = service.getBrowserAgentSessionIdForTab
@@ -1029,5 +1031,29 @@ describe('Browser Agent Context 绑定', () => {
     await expect(sendBrowserPageControlCdpCommand({ tabId: 'tab-1', method: 'Page.enable' })).resolves.toBeUndefined()
 
     unbindBrowserAgentContext('browser-session')
+  })
+
+  test('Given 已有 Agent binding 与录制状态 When clearBrowserWorkflowSession Then 释放当前 Agent lease exactly-once 且取消录制与删除 binding', async () => {
+    currentTab = { id: 'tab-1', url: 'https://example.com/account', title: 'Account' }
+    bindBrowserAgentContext('browser-session', { tabId: 'tab-1' })
+    const lease = mockLeases.find((l) => l.tabId === 'tab-1' && l.owner === 'agent' && !l.released)!
+    expect(lease).toBeDefined()
+    expect(lease.releaseCalls).toBe(0)
+    expect(getActiveLeaseOwners('tab-1')).toEqual(['agent'])
+
+    // 执行 clearBrowserWorkflowSession
+    clearBrowserWorkflowSession('browser-session')
+
+    // 断言 Agent lease 必须被 exactly-once 释放
+    expect(lease.released).toBe(true)
+    expect(lease.releaseCalls).toBe(1)
+    expect(getActiveLeaseOwners('tab-1')).toEqual([])
+
+    // 断言 binding 已删除，后续发送 CDP 指令被拒绝
+    await expect(sendBrowserPageControlCdpCommand({ tabId: 'tab-1', method: 'Page.enable' })).rejects.toThrow('页签未绑定到有效的 AI 浏览器会话')
+
+    // 再次调用 clearBrowserWorkflowSession 幂等安全
+    expect(() => clearBrowserWorkflowSession('browser-session')).not.toThrow()
+    expect(lease.releaseCalls).toBe(1)
   })
 })

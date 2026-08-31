@@ -1439,6 +1439,14 @@ export function clearBrowserWorkflowSession(sessionId: string): void {
       console.warn('[网页 Workflow] 清理会话时释放 Rust 录制 JSONL 失败:', error)
     })
   }
+  const previousBinding = bindings.get(sessionId)
   bindings.delete(sessionId)
+  if (previousBinding) {
+    try {
+      previousBinding.cdpPort.release()
+    } catch {
+      // 隔离释放异常
+    }
+  }
   statuses.delete(sessionId)
 }

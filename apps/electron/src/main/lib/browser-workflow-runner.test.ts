@@ -61,6 +61,13 @@ const popupListeners = new Map<string, Set<(tab: WebTabState) => void>>()
 const tabStore = new Map<string, MockTabRecord>()
 const tabGenerations = new Map<string, number>()
 const portStore = new Map<string, MockPortRecord[]>()
+const lifecycleListeners = new Set<(event: { type: string; tabId: string }) => void>()
+
+function emitLifecycleEvent(event: { type: string; tabId: string }): void {
+  for (const listener of Array.from(lifecycleListeners)) {
+    listener(event)
+  }
+}
 
 let tabIdCounter = 1
 let browserContext: { tabId: string } | undefined
@@ -70,6 +77,7 @@ let screenshotBase64Data: string | undefined = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB
 let profileLeaseReleaseCalls = 0
 let shouldThrowOnWriteArtifact = false
 let acquirePortHook: ((tabId: string) => void) | undefined
+let publishStatusHook: ((status: BrowserWorkflowStatus) => void) | undefined
 
 function emitPopup(parentTabId: string, tab: WebTabState): void {
   const listeners = popupListeners.get(parentTabId)
@@ -93,6 +101,17 @@ function emitDetachOnTab(tabId: string, reason: string): void {
       listener(reason)
     }
   }
+}
+
+function emitDestroyOnTab(tabId: string): void {
+  tabStore.delete(tabId)
+  const portRecord = getLatestPortRecord(tabId)
+  if (portRecord) {
+    for (const listener of Array.from(portRecord.destroyListeners)) {
+      listener()
+    }
+  }
+  emitLifecycleEvent({ type: 'closed', tabId })
 }
 
 function createMockPort(tabId: string, owner: BrowserCdpOwner): BrowserPagePort {
@@ -200,6 +219,7 @@ mock.module('./web-tab-manager', () => ({
       cleanupSequence.push('tab:close')
       closedTabs.push(tabId)
       tabStore.delete(tabId)
+      emitLifecycleEvent({ type: 'closed', tabId })
     }
   },
   getWebTabState: (tabId: string) => {
@@ -246,6 +266,12 @@ mock.module('./web-tab-manager', () => ({
       }
     }
   },
+  subscribeWebTabLifecycle: (listener: (event: { type: string; tabId: string }) => void) => {
+    lifecycleListeners.add(listener)
+    return () => {
+      lifecycleListeners.delete(listener)
+    }
+  },
   acquireWebTabPagePort: (tabId: string, owner: BrowserCdpOwner) => {
     acquirePortHook?.(tabId)
     return createMockPort(tabId, owner)
@@ -277,6 +303,7 @@ mock.module('./browser-workflow-service', () => ({
   },
   publishBrowserWorkflowStatus: (_sessionId: string, status: BrowserWorkflowStatus) => {
     workflowStatuses.push(status)
+    publishStatusHook?.(status)
   },
 }))
 
@@ -344,6 +371,7 @@ beforeEach(() => {
   workflowFailureHandoffs.length = 0
   writtenArtifacts.length = 0
   popupListeners.clear()
+  lifecycleListeners.clear()
   tabStore.clear()
   tabGenerations.clear()
   portStore.clear()
@@ -356,6 +384,7 @@ beforeEach(() => {
   shouldThrowOnAppendEvent = false
   waitForLoadHook = undefined
   acquirePortHook = undefined
+  publishStatusHook = undefined
 })
 
 async function waitUntilStatus(
@@ -1921,5 +1950,89 @@ describe('Browser Workflow Runner (确定性 CDP 主进程编排)', () => {
 
     expect(summary.status).toBe('completed')
     expect(executedSteps.map((s) => s.stepId)).toEqual(['step-click-sub', 'step-click-main'])
+  })
+
+  test('Given 步骤执行中发生 CDP detach 进入 paused_cdp_detached When 暂停期间该页签被销毁 Then 无需 continue 即可快速以失败结束并清理全部资源', async () => {
+    const version: BrowserWorkflowVersion = {
+      schemaVersion: 1,
+      workflowId: 'workflow-1',
+      version: 1,
+      start: { tabAlias: 'main', url: 'https://example.com/start', origin: 'https://example.com' },
+      variables: [],
+      steps: [
+        {
+          id: 'step-click',
+          type: 'click',
+          tabAlias: 'main',
+          origin: 'https://example.com',
+          target: {
+            framePath: { frameIds: [] },
+            strategies: [{ kind: 'id', value: 'btn' }],
+            fingerprint: { tagName: 'button', accessibleName: '确定', visible: true, enabled: true },
+          },
+        } satisfies BrowserClickStep,
+      ],
+      createdAt: 1,
+      createdBySessionId: 'session-1',
+      approval: { status: 'approved' },
+    }
+    workflow = createReadyWorkflow(version)
+
+    pageExecutorHook = async (input) => {
+      if (input.step.id === 'step-click') {
+        emitDetachOnTab('workflow-tab-1', 'CDP 意外中断')
+        throw new Error('CDP 已断开')
+      }
+      return { fallbackUsed: false }
+    }
+
+    const runPromise = runBrowserWorkflow({
+      workspaceId: 'workspace-1',
+      sessionId: 'session-1',
+      workflowId: 'workflow-1',
+      source: 'automation',
+    })
+
+    await waitUntilStatus((s) => s.state === 'paused_cdp_detached')
+
+    // 在处于 paused_cdp_detached 期间直接销毁页签
+    emitDestroyOnTab('workflow-tab-1')
+
+    await expect(runPromise).rejects.toThrow('网页页签已销毁: workflow-tab-1')
+
+    const latestStatus = workflowStatuses.at(-1)
+    expect(latestStatus?.state).toBe('error')
+    expect(latestStatus?.run?.status).toBe('failed')
+    expect(latestStatus?.run?.error).toContain('网页页签已销毁')
+
+    // 断言资源全部释放，无需外部 continue 或 stop
+    // CDP detach 已令 router 中的 workflow lease 终态失效，finally 的重复 release 为幂等无副作用。
+    expect(releasedPorts).toEqual([])
+    expect(profileLeaseReleaseCalls).toBe(1)
+  })
+
+  test('Given 状态订阅在 paused_cdp_detached 时同步关闭页签 When Workflow 正等待恢复 Then 以销毁错误收口而非触发 TDZ', async () => {
+    workflow = createReadyWorkflow(createBasicVersion())
+
+    pageExecutorHook = async () => {
+      emitDetachOnTab('workflow-tab-1', 'CDP 意外中断')
+      throw new Error('CDP 已断开')
+    }
+    publishStatusHook = (status) => {
+      if (status.state === 'paused_cdp_detached') {
+        emitDestroyOnTab('workflow-tab-1')
+      }
+    }
+
+    await expect(
+      runBrowserWorkflow({
+        workspaceId: 'workspace-1',
+        sessionId: 'session-1',
+        workflowId: 'workflow-1',
+        source: 'automation',
+      }),
+    ).rejects.toThrow('网页页签已销毁: workflow-tab-1')
+
+    expect(profileLeaseReleaseCalls).toBe(1)
   })
 })

@@ -13,6 +13,7 @@ import {
   getWebTabState,
   navigateWebTab,
   setWorkflowWebTabVisible,
+  subscribeWebTabLifecycle,
   subscribeWorkflowWebTabOpened,
   waitForWebTabLoad,
 } from './web-tab-manager'
@@ -344,21 +345,77 @@ async function handleTabDetachedPauseAndReacquire(
   onTabDetached: (alias: string, reason: string) => void,
   onDestroyed: (alias: string) => void,
 ): Promise<TabAliasEntry> {
+  if (entry.destroyed || !getWebTabState(entry.tabId)) {
+    entry.destroyed = true
+    onDestroyed(tabAlias)
+    throw new Error(`网页页签已销毁: ${entry.tabId}`)
+  }
+
   publishRun(runContext, 'paused', entry.detachReason || '网页 CDP 会话已断开')
+
   await new Promise<void>((resolve, reject) => {
-    const onAbort = (): void => {
+    let settled = false
+    let removeLifecycleSub: (() => void) | undefined
+
+    const cleanup = (): void => {
+      if (settled) return
+      settled = true
       controller.signal.removeEventListener('abort', onAbort)
+      removeLifecycleSub?.()
+      removeLifecycleSub = undefined
       activeEntry.resumeCdp = undefined
+    }
+
+    const onAbort = (): void => {
+      cleanup()
       reject(new Error('Browser Workflow 已取消'))
     }
-    controller.signal.addEventListener('abort', onAbort)
+
+    const onTabClosed = (): void => {
+      entry.destroyed = true
+      onDestroyed(tabAlias)
+      cleanup()
+      reject(new Error(`网页页签已销毁: ${entry.tabId}`))
+    }
+
+    if (controller.signal.aborted) {
+      onAbort()
+      return
+    }
+
+    if (entry.destroyed || !getWebTabState(entry.tabId)) {
+      onTabClosed()
+      return
+    }
+
+    controller.signal.addEventListener('abort', onAbort, { once: true })
+
+    const lifecycleSub = subscribeWebTabLifecycle((event) => {
+      if (event.type === 'closed' && event.tabId === entry.tabId) {
+        onTabClosed()
+      }
+    })
+    if (settled) lifecycleSub()
+    else removeLifecycleSub = lifecycleSub
+
     activeEntry.resumeCdp = (): void => {
-      controller.signal.removeEventListener('abort', onAbort)
-      activeEntry.resumeCdp = undefined
+      if (entry.destroyed || !getWebTabState(entry.tabId)) {
+        onTabClosed()
+        return
+      }
+      cleanup()
       resolve()
     }
   })
+
   entry.cleanupListeners()
+
+  if (entry.destroyed || !getWebTabState(entry.tabId)) {
+    entry.destroyed = true
+    onDestroyed(tabAlias)
+    throw new Error(`网页页签已销毁: ${entry.tabId}`)
+  }
+
   const freshPort = acquireWebTabPagePort(entry.tabId, 'workflow')
   allPorts.push(freshPort)
   const newEntry = registerTabAlias(tabAlias, entry.tabId, freshPort, onTabDetached, onDestroyed)
