@@ -12,6 +12,7 @@ import { WEB_IPC_CHANNELS } from '@copis/shared'
 import { getPersistedWebTabs, savePersistedWebTabs } from './web-tab-session-service'
 import { httpApiPortArgument, httpApiWebTokenArgument } from './http-api-web-token'
 import { moveWebTab } from './web-tab-order'
+import { createWebTabWindowOpenHandler, installNativeWebPopupWindow } from './web-tab-native-popup'
 import type {
   CreateWebTabInput,
   NavigateWebTabInput,
@@ -476,28 +477,20 @@ function installWebContentsHandlers(record: WebTabRecord): void {
     })
   })
 
-  contents.setWindowOpenHandler(({ url }) => {
-    if (isAllowedWebUrl(url)) {
-      try {
-        createWebTabInternal(
-          {
-            url,
-            partition: record.partition,
-            incognito: record.isIncognito,
-            activate: !record.workflowOwned,
-          },
-          record.workflowOwned === true,
-          record.state.id,
-        )
-      } catch (error) {
-        console.error('[网页页签] 创建 window.open 页签失败:', error)
-      }
-    } else if (url) {
-      void shell.openExternal(url).catch((error: unknown) => {
-        console.warn('[网页页签] 打开外部协议失败:', error)
-      })
-    }
-    return { action: 'deny' }
+  const nativePopupContext = {
+    getHostWindow: () => hostWindow,
+    openExternal: (url: string) => shell.openExternal(url),
+    logExternalFailure: (error: unknown) => {
+      console.warn('[网页页签] 打开外部协议失败:', error)
+    },
+  }
+  contents.setWindowOpenHandler(createWebTabWindowOpenHandler(nativePopupContext))
+  contents.on('did-create-window', (window) => {
+    installNativeWebPopupWindow({
+      ...nativePopupContext,
+      window,
+      opener: contents,
+    })
   })
 
 }
