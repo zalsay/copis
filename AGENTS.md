@@ -22,26 +22,26 @@ Copis 是一个集成通用 AI Agent 的下一代人工智能软件，采用 Ele
 Bun workspace monorepo：
 
 ```
-copis-v2/
+copis/
 ├── packages/
-│   ├── shared/     # 共享类型、IPC 通道常量、配置、工具函数 (v0.1.63)
-│   ├── core/       # AI Provider 适配器、代码高亮服务 (v0.2.18)
-│   └── ui/         # 共享 UI 组件 (CodeBlock, MermaidBlock) (v0.1.10)
-└── apps/
-    └── electron/   # Electron 桌面应用 (v0.0.39)
-        └── src/
-            ├── main/       # 主进程 + 服务层 (main/lib/)
-            ├── preload/    # IPC 上下文桥接
-            └── renderer/   # React UI (Vite + Tailwind + Radix UI)
+│   ├── shared/        # 共享类型、IPC 通道常量、配置、工具函数 (v0.1.71)
+│   ├── core/          # AI Provider 适配器、代码高亮服务 (v0.2.18)
+│   ├── session-core/  # 无头会话解析、过滤、搜索与 Markdown 渲染核心 (v0.1.2)
+│   └── ui/            # 共享 UI 组件 (CodeBlock, MermaidBlock) (v0.1.10)
+├── apps/
+│   ├── electron/      # Electron 桌面应用主体 (v0.0.74)
+│   └── cli/           # Copis 命令行工具（渐进式会话提取与导出） (v0.1.1)
+└── native/
+    └── http-api-server/ # 本地 Rust HTTP API（记忆、调度、更新、项目端口分配）
 ```
 
-**包命名规范**：`@copis/*` 作用域（`@copis/core`、`@copis/shared`、`@copis/ui`、`@copis/electron`）
+**包命名规范**：`@copis/*` 作用域（`@copis/core`、`@copis/shared`、`@copis/session-core`、`@copis/ui`、`@copis/electron`、`@copis/cli`）
 
 **依赖管理**：package.json 中使用 `workspace:*` 引用内部包
 
 ### 包职责详解
 
-#### @copis/shared (v0.1.63)
+#### @copis/shared (v0.1.71)
 - **导出模块**：`./types`、`./config`、`./utils`、`./constants/permission-rules`
 - **关键类型**：`AgentMessage`、`ChatMessage`、`Channel`、`PermissionRequest`、`FeishuConfig`
 - **依赖**：无运行时依赖（仅 TypeScript）
@@ -52,19 +52,28 @@ copis-v2/
 - **依赖**：`@copis/shared`、`shiki`
 - **Peer 依赖**：`@anthropic-ai/sdk`、`@modelcontextprotocol/sdk`
 
+#### @copis/session-core (v0.1.2)
+- **导出模块**：`.`、`./node`
+- **关键功能**：无头会话解析、会话索引与元数据读取、分轮次过滤提取、语义/关键词搜索、Markdown 渲染导出（Electron 与 CLI 共享）
+- **依赖**：`@copis/shared`
+
 #### @copis/ui (v0.1.10)
 - **关键组件**：共享 React UI 组件库
 - **依赖**：`@copis/core`、`beautiful-mermaid`、`mermaid`、`shiki`
 - **Peer 依赖**：`react@^18.3.0`、`react-dom@^18.3.0`
 
-#### @copis/electron (v0.0.39)
+#### @copis/cli (v0.1.1)
+- **职责**：面向终端用户及有限上下文 Agent 消费者的命令行工具，支持会话的渐进式读取与导出（`list` / `info` / `outline` / `search` / `export`）
+- **依赖**：`@copis/session-core`、`@copis/shared`
+
+#### @copis/electron (v0.0.74)
 - **职责**：Electron 桌面应用主体，集成所有包
 - **关键依赖**：
-  - `@earendil-works/pi-coding-agent@0.82.1`、`pi-agent-core@0.82.1`、`pi-ai@0.82.1` - Pi Agent runtime
-  - `pi-web-access@0.18.0` - 默认内置的 Pi 扩展（联网搜索、网页抓取、来源核查）
+  - `@earendil-works/pi-coding-agent@0.84.1`、`pi-agent-core@0.84.1`、`pi-ai@0.84.1` - Pi Agent runtime
+  - `pi-web-access@0.22.0` - 默认内置的 Pi 扩展（联网搜索、网页抓取、来源核查）
   - `@larksuiteoapi/node-sdk` - 飞书集成
   - Radix UI、TipTap、Tailwind CSS
-  - 文件解析：`pdf-parse`、`officeparser`、`word-extractor`
+  - 文件解析：`pdfjs-dist`、`officeparser`、`word-extractor`、`mammoth`
 
 ## 常用命令
 
@@ -138,11 +147,11 @@ bash ./build.sh
 - `deploy.ps1`、`deploy.sh` 默认负责 Rust API 二进制、功能模块 manifest 和 COS 发布；Electron 应用包只有传入 `-BuildApp` 或 `--build-app` 时才构建。
 - 发布前需要通过 `.env` 或参数提供 `COS_SECRET_ID`、`COS_SECRET_KEY`、`COS_BUCKET_URL`、`COS_PUBLIC_BASE_URL`；禁止把密钥写入 manifest、日志或构建产物。
 - `deploy.ps1` 适用于 Windows x64 Rust 构建；跨平台部署应在目标平台执行对应的 `deploy.sh`，或使用 `-SkipRustBuild` / `--skip-rust-build` 配合已经验证的目标二进制。
-- 功能模块发布包含 `node-runtime`、`rust-http-api` 和可选的 `officecli`。`node-runtime` 是按目标平台和架构打包的 Node.js + npm `tar.gz` 归档，终端用户无需自行安装 Node.js 或 npm；OfficeCLI 是外部单文件二进制，需要通过 `COPIS_OFFICECLI_BINARY` 或 `apps/electron/resources/bin/officecli.exe` 提供，并通过 `COPIS_OFFICECLI_VERSION` 指定独立于 Electron 的模块版本。
-- `deploy.ps1` / `deploy.sh` 默认会构建并发布 Node runtime；单模块发布可使用 `-NodeRuntimeOnly` / `--node-runtime`，已有归档可通过 `-NodeRuntimeArchive` / `--node-runtime-archive` 提供，模块版本可通过 `-NodeRuntimeVersion` / `--node-runtime-version` 指定。单模块发布会校验同一平台和架构的其他必要模块仍存在于远端 manifest。
+- 功能模块发布包含 `node-runtime`、`rust-http-api`、`officecli`、`playwright-core`、`python-runtime`、`alipay-bot` 与 `agently-cli`。`node-runtime` 是按目标平台和架构打包的 Node.js + npm `tar.gz` 归档，终端用户无需自行安装 Node.js 或 npm；OfficeCLI 是外部单文件二进制，需要通过 `COPIS_OFFICECLI_BINARY` 或 `apps/electron/resources/bin/officecli.exe` 提供，并通过 `COPIS_OFFICECLI_VERSION` 指定独立于 Electron 的模块版本。
+- `deploy.ps1` / `deploy.sh` 默认会构建并发布全部功能模块；单模块发布可使用 `--rust`、`--officecli`、`--node-runtime`、`--playwright-core`、`--python-runtime`、`--alipay-bot` 或 `--agently-cli`，并可配合对应的 `--*-archive` / `--*-version` 参数指定。单模块发布会校验同一平台和架构的其他必要模块仍存在于远端 manifest。
 - 发布单个平台时必须合并 COS 中已有 manifest，保留其他平台和模块；二进制对象使用不可变版本 key，只有 manifest 允许更新。
 - `build.ps1` 和 `bun run --filter='@copis/electron' dist:win` 会在 Windows x64 构建中执行 `build:cli`；macOS ARM/Intel 需在对应 runner 上执行 `build.sh` 或 `dist:mac`，不能用其他平台的 `copis` 产物代替。
-- `--rust` / `--officecli` / `--node-runtime` 是功能模块的单模块 COS 发布选项；它们与应用内的 `copis` 组合运行时构建无关，不能用功能模块二进制替代组合运行时。
+- `--rust` / `--officecli` / `--node-runtime` 等是功能模块的单模块 COS 发布选项；它们与应用内的 `copis` 组合运行时构建无关，不能用功能模块二进制替代组合运行时。
 
 常用部署选项：`-SkipInstall` / `--skip-install`、`-SkipRustBuild` / `--skip-rust-build`、`-SkipPublish` / `--skip-publish`、版本、平台、架构、channel、COS 前缀和已有 Rust 二进制路径。当前 stable 的 Windows x64 OfficeCLI 模块版本为 `1.0.143`。
 
@@ -190,8 +199,10 @@ bun run build:node-runtime-module # 将当前平台 Node.js + npm 打包为功�
 | **构建工具** | Vite | 6.0.3 |
 | **打包工具** | esbuild | 0.24.0+ |
 | **分发工具** | Electron Builder | 25.1.8 |
-| **Pi Agent SDK** | `@earendil-works/pi-coding-agent`、`pi-agent-core`、`pi-ai` | 0.82.1 |
+| **Pi Agent SDK** | `@earendil-works/pi-coding-agent`、`pi-agent-core`、`pi-ai` | 0.84.1 |
+| **默认 Pi 扩展** | `pi-web-access` | 0.22.0 |
 | **飞书 SDK** | @larksuiteoapi/node-sdk | 最新 |
+| **后端与原生能力** | Rust HTTP API Server (`native/http-api-server`) + SQLite | 最新 |
 
 ## 核心架构
 
@@ -548,7 +559,7 @@ Copis 参考 YC QM 项目的结构化长期记忆管理思路（`notebook` / `ca
 
 ## Pi Agent SDK 集成架构
 
-Copis 的 Agent 模式基于 `@earendil-works/pi-coding-agent@0.82.1`、`pi-agent-core@0.82.1` 和 `pi-ai@0.82.1`，与 Chat 模式共享 Provider 配置，但由 Pi 负责 Agent session、工具调用、推理和上下文压缩。
+Copis 的 Agent 模式基于 `@earendil-works/pi-coding-agent@0.84.1`、`pi-agent-core@0.84.1` 和 `pi-ai@0.84.1`，与 Chat 模式共享 Provider 配置，但由 Pi 负责 Agent session、工具调用、推理和上下文压缩。
 
 ### 核心流程
 
