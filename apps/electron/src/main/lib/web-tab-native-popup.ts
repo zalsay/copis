@@ -32,17 +32,23 @@ function openExternalSafely(input: NativePopupContext, url: string): void {
 }
 
 function closeWindowSafely(window: Electron.BrowserWindow): void {
-  if (!window.isDestroyed()) window.close()
+  if (window.isDestroyed()) return
+  window.close()
+  // beforeunload 可以取消 close；owner/host 销毁时必须保证 popup 不会遗留。
+  if (!window.isDestroyed()) window.destroy()
 }
 
 function installNavigationPolicy(input: NativePopupContext, contents: Electron.WebContents): void {
   if (contents.isDestroyed()) return
 
-  contents.on('will-navigate', (event, url) => {
+  const handleNavigation = (event: Electron.Event, url: string): void => {
     if (contents.isDestroyed() || isHttpWebUrl(url)) return
     event.preventDefault()
     openExternalSafely(input, url)
-  })
+  }
+
+  contents.on('will-navigate', handleNavigation)
+  contents.on('will-redirect', handleNavigation)
 }
 
 export function createWebTabWindowOpenHandler(
@@ -97,7 +103,7 @@ export function installNativeWebPopupWindow(input: NativePopupInstallInput): voi
   }
   const closePopup = (): void => {
     closeWindowSafely(popup)
-    cleanup()
+    if (popup.isDestroyed()) cleanup()
   }
 
   contents.setWindowOpenHandler(createWebTabWindowOpenHandler(input))

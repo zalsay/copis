@@ -6,6 +6,7 @@ class FakeWebContents extends EventEmitter {
   destroyed = false
   windowOpenHandler: ((details: Electron.HandlerDetails) => Electron.WindowOpenHandlerResponse) | null = null
   willNavigateHandler: ((event: { preventDefault(): void }, url: string) => void) | null = null
+  willRedirectHandler: ((event: { preventDefault(): void }, url: string) => void) | null = null
   setWindowOpenHandler(handler: (details: Electron.HandlerDetails) => Electron.WindowOpenHandlerResponse): void {
     this.windowOpenHandler = handler
   }
@@ -14,6 +15,7 @@ class FakeWebContents extends EventEmitter {
   }
   override on(event: string, listener: (...args: any[]) => void): this {
     if (event === 'will-navigate') this.willNavigateHandler = listener
+    if (event === 'will-redirect') this.willRedirectHandler = listener
     return super.on(event, listener)
   }
 }
@@ -23,6 +25,8 @@ class FakeWindow extends EventEmitter {
   visible = false
   focused = false
   closeCalls = 0
+  destroyCalls = 0
+  cancelClose = false
   readonly webContents = new FakeWebContents()
   isDestroyed(): boolean {
     return this.destroyed
@@ -35,8 +39,18 @@ class FakeWindow extends EventEmitter {
   }
   close(): void {
     this.closeCalls += 1
+    if (this.cancelClose) return
+    this.dispose()
+  }
+  destroy(): void {
+    this.destroyCalls += 1
+    this.dispose()
+  }
+  private dispose(): void {
+    if (this.destroyed) return
     this.destroyed = true
     this.webContents.destroyed = true
+    this.emit('closed')
   }
 }
 
@@ -96,6 +110,7 @@ describe('网页原生子窗口策略', () => {
     expect(popup.focused).toBe(true)
     expect(popup.webContents.windowOpenHandler).toBeFunction()
     expect(popup.webContents.willNavigateHandler).toBeFunction()
+    expect(popup.webContents.willRedirectHandler).toBeFunction()
 
     const navigationEvent = { preventDefault: mock(() => undefined) }
     popup.webContents.willNavigateHandler!(navigationEvent, 'file:///tmp/private.html')
@@ -105,6 +120,25 @@ describe('网页原生子窗口策略', () => {
     popup.webContents.emit('did-create-window', child, { url: 'https://child.example' })
     expect(child.webContents.windowOpenHandler).toBeFunction()
     expect(child.webContents.willNavigateHandler).toBeFunction()
+  })
+
+  test('Given 原生子窗口收到非 HTTP(S) 重定向 When 触发 will-redirect Then 阻止页内跳转并交给外部协议处理', () => {
+    const hostWindow = new FakeWindow()
+    const popup = new FakeWindow()
+    const context = createContext(hostWindow)
+
+    installNativeWebPopupWindow({ ...context, window: popup as never })
+
+    const externalRedirectEvent = { preventDefault: mock(() => undefined) }
+    popup.webContents.willRedirectHandler!(externalRedirectEvent, 'mailto:owner@example.com')
+
+    expect(externalRedirectEvent.preventDefault).toHaveBeenCalledTimes(1)
+    expect(context.openExternal).toHaveBeenCalledWith('mailto:owner@example.com')
+
+    const httpRedirectEvent = { preventDefault: mock(() => undefined) }
+    popup.webContents.willRedirectHandler!(httpRedirectEvent, 'https://inside.example/next')
+
+    expect(httpRedirectEvent.preventDefault).not.toHaveBeenCalled()
   })
 
   test('Given 原生子窗口 When host 或 opener 销毁 Then 安全关闭且不访问已销毁 webContents', () => {
@@ -120,5 +154,25 @@ describe('网页原生子窗口策略', () => {
     popup.webContents.destroyed = true
     hostWindow.emit('closed')
     expect(popup.closeCalls).toBe(1)
+  })
+
+  test('Given popup 页面取消 beforeunload When owner 或 host 销毁 Then 仍强制销毁 popup 且保留生命周期清理', () => {
+    const hostWindow = new FakeWindow()
+    const owner = new FakeWebContents()
+    const popup = new FakeWindow()
+    popup.cancelClose = true
+    const context = createContext(hostWindow)
+
+    installNativeWebPopupWindow({ ...context, window: popup as never, opener: owner as never })
+    owner.emit('destroyed')
+
+    expect(popup.closeCalls).toBe(1)
+    expect(popup.destroyCalls).toBe(1)
+    expect(popup.isDestroyed()).toBe(true)
+    expect(popup.listenerCount('closed')).toBe(0)
+
+    hostWindow.emit('closed')
+    expect(popup.closeCalls).toBe(1)
+    expect(popup.destroyCalls).toBe(1)
   })
 })
