@@ -14,12 +14,29 @@ class FakeDebugger extends EventEmitter {
   }
 }
 
-class FakeWebContents extends EventEmitter {
-  readonly debugger = new FakeDebugger()
-  readonly session = {
+interface FakeSession {
+  fetch: ReturnType<typeof mock>
+  clearStorageData: ReturnType<typeof mock>
+}
+
+const sessionsByPartition = new Map<string, FakeSession>()
+
+function getSessionForPartition(partition: string | undefined): FakeSession {
+  const key = partition ?? 'default'
+  const existing = sessionsByPartition.get(key)
+  if (existing) return existing
+
+  const session = {
     fetch: mock(async () => ({ ok: false, headers: new Headers(), arrayBuffer: async () => new ArrayBuffer(0) })),
     clearStorageData: mock(async () => undefined),
   }
+  sessionsByPartition.set(key, session)
+  return session
+}
+
+class FakeWebContents extends EventEmitter {
+  readonly debugger = new FakeDebugger()
+  readonly session: FakeSession
   readonly id: number
   private static nextId = 1
   private url = 'about:blank'
@@ -28,9 +45,10 @@ class FakeWebContents extends EventEmitter {
   windowOpenHandler: ((details: Electron.HandlerDetails) => Electron.WindowOpenHandlerResponse) | undefined
   readonly send = mock((_channel: string, _value: unknown) => undefined)
 
-  constructor() {
+  constructor(session = getSessionForPartition(undefined)) {
     super()
     this.id = FakeWebContents.nextId++
+    this.session = session
   }
 
   getURL(): string { return this.url }
@@ -54,13 +72,18 @@ class FakeWebContents extends EventEmitter {
 }
 
 class FakeWebContentsView {
-  readonly webContents = new FakeWebContents()
+  readonly webContents: FakeWebContents
+
+  constructor(options: { webPreferences?: { partition?: string } } = {}) {
+    this.webContents = new FakeWebContents(getSessionForPartition(options.webPreferences?.partition))
+  }
+
   setVisible(): void {}
   setBounds(): void {}
 }
 
 class FakeBrowserWindow extends EventEmitter {
-  readonly webContents = new FakeWebContents()
+  readonly webContents: FakeWebContents
   readonly contentView = {
     views: [] as FakeWebContentsView[],
     addChildView: (view: FakeWebContentsView) => { this.contentView.views.push(view) },
@@ -77,6 +100,8 @@ class FakeBrowserWindow extends EventEmitter {
   constructor(options: Record<string, unknown> = {}) {
     super()
     this.options = options
+    const webPreferences = options.webPreferences as { session?: FakeSession } | undefined
+    this.webContents = new FakeWebContents(webPreferences?.session)
   }
 
   isDestroyed(): boolean { return this.destroyed }
@@ -117,6 +142,7 @@ describe('网页页签 manager 原生子窗口组合回归', () => {
     manager.disposeWebTabs()
     persistedSession = { tabs: [], activeTabIndex: null }
     savePersistedWebTabs.mockClear()
+    sessionsByPartition.clear()
   })
 
   test('普通页签 window.open 创建原生子窗口时不改变快照或恢复持久化', () => {
@@ -132,6 +158,7 @@ describe('网页页签 manager 原生子窗口组合回归', () => {
       overrideBrowserWindowOptions: { parent: host, show: false, modal: false },
     })
     expect(response?.overrideBrowserWindowOptions?.webPreferences?.session).toBe(owner.session as never)
+    expect(popup.webContents.session).toBe(owner.session)
     owner.emit('did-create-window', popup, { url: 'https://popup.example' })
 
     expect(manager.listWebTabs()).toEqual(before)
@@ -164,9 +191,11 @@ describe('网页页签 manager 原生子窗口组合回归', () => {
     manager.activateWebTabIncognito(blankId)
     const incognitoContents = restoredHost.contentView.views.at(-1)!.webContents
     const incognitoPopup = incognitoContents.windowOpenHandler?.({ url: 'https://incognito-popup.example' } as never)
+    const incognitoPopupWindow = new FakeBrowserWindow(incognitoPopup?.overrideBrowserWindowOptions as Record<string, unknown>)
     expect(incognitoPopup).toMatchObject({ action: 'allow' })
     expect(incognitoPopup?.overrideBrowserWindowOptions?.webPreferences?.session).toBe(incognitoContents.session as never)
-    expect(incognitoPopup?.overrideBrowserWindowOptions?.webPreferences?.session).not.toBe(createdContents.session as never)
+    expect(incognitoContents.session).not.toBe(restoredContents.session)
+    expect(incognitoPopupWindow.webContents.session).toBe(incognitoContents.session)
   })
 
   test('关闭普通页签后 bridge dispose，之后 CDP detach 不会重连或发命令', async () => {
