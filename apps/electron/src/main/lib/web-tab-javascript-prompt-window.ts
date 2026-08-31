@@ -7,6 +7,8 @@ export interface ShowWebJavascriptPromptWindowInput {
   hostWindow: BrowserWindow
   message: string
   defaultPrompt?: string
+  /** 仅取消本次 prompt，避免按宿主窗口误关其它网页页签的对话框。 */
+  signal?: AbortSignal
 }
 
 export type WebJavascriptPromptResult = { accept: boolean; promptText?: string }
@@ -90,7 +92,7 @@ function getPromptUrl(requestId: string): string {
 /** 创建由主窗口托管的最小权限 prompt 输入窗口。 */
 export function showWebJavascriptPromptWindow(input: ShowWebJavascriptPromptWindowInput): Promise<WebJavascriptPromptResult> {
   const hostWindow = input.hostWindow
-  if (!isUsableWindow(hostWindow)) return Promise.resolve({ accept: false })
+  if (!isUsableWindow(hostWindow) || input.signal?.aborted) return Promise.resolve({ accept: false })
 
   const requestId = randomUUID()
   let resolveResult: (result: WebJavascriptPromptResult) => void = () => undefined
@@ -136,6 +138,7 @@ export function showWebJavascriptPromptWindow(input: ShowWebJavascriptPromptWind
   const onDidFailLoad = (): void => cancelAndClose()
   const onDestroyed = (): void => cancelAndClose()
   const onRenderProcessGone = (): void => cancelAndClose()
+  const onAbort = (): void => cancelAndClose()
   const onReadyToShow = (): void => {
     if (!pendingPrompts.has(requestId) || !isUsableWindow(promptWindow)) return
     promptWindow.show()
@@ -152,6 +155,13 @@ export function showWebJavascriptPromptWindow(input: ShowWebJavascriptPromptWind
     promptWindow.webContents.removeListener('did-fail-load', onDidFailLoad)
     promptWindow.webContents.removeListener('destroyed', onDestroyed)
     promptWindow.webContents.removeListener('render-process-gone', onRenderProcessGone)
+    input.signal?.removeEventListener('abort', onAbort)
+  }
+
+  if (input.signal?.aborted) {
+    cancelAndClose()
+  } else {
+    input.signal?.addEventListener('abort', onAbort, { once: true })
   }
 
   try {

@@ -48,7 +48,7 @@ const flushPromises = async (): Promise<void> => {
 
 function createBridgeHarness() {
   const debuggerInstance = new FakeDebugger()
-  const present = mock<(input: JavascriptDialogOpeningInput) => Promise<JavascriptDialogResult>>(async () => ({ accept: true }))
+  const present = mock<(input: JavascriptDialogOpeningInput, signal?: AbortSignal) => Promise<JavascriptDialogResult>>(async () => ({ accept: true }))
   const bridge = createWebTabJavascriptDialogBridge({
     debugger: debuggerInstance,
     attach: () => debuggerInstance.attach(),
@@ -77,7 +77,7 @@ describe('网页 JavaScript 对话框 CDP bridge', () => {
     })
     await flushPromises()
 
-    expect(present).toHaveBeenCalledWith(expect.objectContaining({ type: 'alert', message: '已保存' }))
+    expect(present).toHaveBeenCalledWith(expect.objectContaining({ type: 'alert', message: '已保存' }), expect.any(AbortSignal))
     expect(debuggerInstance.sendCommand).toHaveBeenCalledWith('Page.handleJavaScriptDialog', { accept: true })
   })
 
@@ -113,7 +113,7 @@ describe('网页 JavaScript 对话框 CDP bridge', () => {
 
     expect(present).toHaveBeenCalledWith(expect.objectContaining({
       type: 'prompt', message: '请输入名称', defaultPrompt: '默认值',
-    }))
+    }), expect.any(AbortSignal))
     expect(debuggerInstance.sendCommand).toHaveBeenCalledWith('Page.handleJavaScriptDialog', {
       accept: true,
       promptText: 'Copis',
@@ -176,6 +176,42 @@ describe('网页 JavaScript 对话框 CDP bridge', () => {
     expect(debuggerInstance.sendCommand).not.toHaveBeenCalledWith('Page.handleJavaScriptDialog', expect.anything())
     bridge.dispose()
     expect(debuggerInstance.sendCommand).not.toHaveBeenCalledWith('Page.handleJavaScriptDialog', expect.anything())
+  })
+
+  test('Given 可恢复的 CDP detach When 对话框正在打开 Then 重连启用 Page 后拒绝 Chromium 对话框', async () => {
+    const { debuggerInstance, present, bridge } = createBridgeHarness()
+    present.mockImplementation(() => new Promise(() => undefined))
+    bridges.push(bridge)
+    await bridge.start()
+
+    debuggerInstance.emit('message', {}, 'Page.javascriptDialogOpening', {
+      type: 'confirm', message: '等待操作', hasBrowserHandler: false,
+    })
+    await flushPromises()
+    debuggerInstance.attached = false
+    debuggerInstance.emit('detach', {}, '意外断开')
+    await flushPromises()
+
+    expect(debuggerInstance.sendCommand).toHaveBeenNthCalledWith(2, 'Page.enable')
+    expect(debuggerInstance.sendCommand).toHaveBeenCalledTimes(3)
+    expect(debuggerInstance.sendCommand).toHaveBeenLastCalledWith('Page.handleJavaScriptDialog', { accept: false })
+  })
+
+  test('Given bridge dispose When prompt presenter 未完成 Then 通过窄 signal 取消 presenter', async () => {
+    const { debuggerInstance, present, bridge } = createBridgeHarness()
+    let presenterSignal: AbortSignal | undefined
+    present.mockImplementation((_input, signal) => {
+      presenterSignal = signal
+      return new Promise(() => undefined)
+    })
+    await bridge.start()
+    debuggerInstance.emit('message', {}, 'Page.javascriptDialogOpening', {
+      type: 'prompt', message: '输入', hasBrowserHandler: false,
+    })
+    await flushPromises()
+
+    bridge.dispose()
+    expect(presenterSignal?.aborted).toBe(true)
   })
 
   test('Given CDP 意外 detach When debugger 重新可用 Then 重新 attach 并启用 Page 域', async () => {

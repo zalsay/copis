@@ -183,6 +183,52 @@ describe('网页 JavaScript prompt 原生窗口', () => {
     expect(manager.resolveWebJavascriptPromptRequest({ requestId, accept: true }, win.webContents.id)).toBe(false)
   })
 
+  test('Given bridge 的 AbortSignal When prompt 仍未完成 Then 仅关闭对应子窗口并清理映射', async () => {
+    const controller = new AbortController()
+    const resultPromise = manager.showWebJavascriptPromptWindow({
+      hostWindow: hostWindow as never,
+      message: '桥接取消',
+      signal: controller.signal,
+    })
+    const win = windows[0]!
+    const requestId = new URL(win.loadedUrls[0]!).searchParams.get('requestId')!
+
+    controller.abort()
+
+    await expect(resultPromise).resolves.toEqual({ accept: false })
+    expect(manager.getWebJavascriptPromptRequest(requestId, win.webContents.id)).toBeNull()
+    expect(win.close).toHaveBeenCalledTimes(1)
+    expect(win.listenerCount('closed')).toBe(0)
+  })
+
+  test('Given 两个宿主窗口各有 prompt When 仅取消一个 signal Then 不关闭另一个宿主的子窗口', async () => {
+    const otherHost = new FakeBrowserWindow({})
+    const firstController = new AbortController()
+    const first = manager.showWebJavascriptPromptWindow({
+      hostWindow: hostWindow as never,
+      message: '第一个',
+      signal: firstController.signal,
+    })
+    const second = manager.showWebJavascriptPromptWindow({
+      hostWindow: otherHost as never,
+      message: '第二个',
+    })
+    const firstWindow = windows[0]!
+    const secondWindow = windows[1]!
+    const secondRequestId = new URL(secondWindow.loadedUrls[0]!).searchParams.get('requestId')!
+
+    firstController.abort()
+
+    await expect(first).resolves.toEqual({ accept: false })
+    expect(secondWindow.close).not.toHaveBeenCalled()
+    expect(manager.getWebJavascriptPromptRequest(secondRequestId, secondWindow.webContents.id)).not.toBeNull()
+    expect(firstWindow.close).toHaveBeenCalledTimes(1)
+
+    // 通过宿主销毁收尾，确保该测试不留下未决 prompt。
+    otherHost.emit('closed')
+    await expect(second).resolves.toEqual({ accept: false })
+  })
+
   test('加载失败或宿主窗口关闭时取消请求', async () => {
     const loadFailure = manager.showWebJavascriptPromptWindow({ hostWindow: hostWindow as never, message: '加载失败' })
     const failedWindow = windows[0]!

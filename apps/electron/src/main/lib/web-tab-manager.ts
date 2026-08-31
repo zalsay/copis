@@ -901,6 +901,7 @@ export function promoteWorkflowWebTab(tabId: string): WebTabState {
   if (activeRecord && !activeRecord.workflowOwned) record.bounds = { ...activeRecord.bounds }
   record.workflowOwned = false
   record.workflowVisible = false
+  startJavascriptDialogBridge(record)
   activeTabId = tabId
   persistTabs()
   applyActiveView()

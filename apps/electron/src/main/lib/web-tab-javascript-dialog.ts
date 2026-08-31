@@ -15,7 +15,7 @@ export interface JavascriptDialogResult {
 }
 
 export interface JavascriptDialogPresenter {
-  present(input: JavascriptDialogOpeningInput): Promise<JavascriptDialogResult>
+  present(input: JavascriptDialogOpeningInput, signal?: AbortSignal): Promise<JavascriptDialogResult>
 }
 
 interface CdpDebuggerLike {
@@ -50,6 +50,7 @@ export interface WebTabJavascriptDialogBridge {
 interface PendingDialog {
   cancel: Promise<JavascriptDialogResult>
   cancelResolve: (result: JavascriptDialogResult) => void
+  abortController: AbortController
   settled: boolean
 }
 
@@ -73,13 +74,14 @@ function isUsableHostWindow(window: BrowserWindow | null | undefined): window is
 /** 主窗口关联的默认网页 JavaScript 对话框呈现器。 */
 export function createDefaultJavascriptDialogPresenter(hostWindow: BrowserWindow | null | undefined): JavascriptDialogPresenter {
   return {
-    async present(input): Promise<JavascriptDialogResult> {
+    async present(input, signal): Promise<JavascriptDialogResult> {
       if (input.type === 'prompt') {
         if (!isUsableHostWindow(hostWindow)) return { accept: false }
         return showWebJavascriptPromptWindow({
           hostWindow,
           message: input.message,
           defaultPrompt: input.defaultPrompt,
+          signal,
         })
       }
 
@@ -117,6 +119,7 @@ export function createWebTabJavascriptDialogBridge(input: WebTabJavascriptDialog
   let removeMessageListener: (() => void) | undefined
   let removeDetachListener: (() => void) | undefined
   let reconnectPromise: Promise<void> | undefined
+  let pendingDismissalsAfterReconnect = 0
 
   const isDestroyed = (): boolean => Boolean(input.isDestroyed?.())
 
@@ -136,21 +139,25 @@ export function createWebTabJavascriptDialogBridge(input: WebTabJavascriptDialog
     }
   }
 
-  const enablePage = async (): Promise<void> => {
-    if (disposed || isDestroyed()) return
+  const enablePage = async (): Promise<boolean> => {
+    if (disposed || isDestroyed()) return false
     try {
       await attach()
-      if (disposed || isDestroyed()) return
+      if (disposed || isDestroyed()) return false
       await sendCommand('Page.enable')
+      return true
     } catch (error) {
       if (!disposed && !isDestroyed()) console.warn('[网页对话框] 启用 CDP Page 域失败:', error)
+      return false
     }
   }
 
-  const cancelPending = (): void => {
+  const cancelPending = (dismissAfterReconnect = false): void => {
     for (const item of pending) {
       if (item.settled) continue
       item.settled = true
+      if (dismissAfterReconnect) pendingDismissalsAfterReconnect += 1
+      item.abortController.abort()
       item.cancelResolve({ accept: false })
     }
   }
@@ -162,7 +169,7 @@ export function createWebTabJavascriptDialogBridge(input: WebTabJavascriptDialog
     }
     try {
       const presented = await Promise.race([
-        presenter.present(opening).catch((error) => {
+        presenter.present(opening, item.abortController.signal).catch((error) => {
           if (!disposed && !isDestroyed()) console.warn('[网页对话框] 呈现原生窗口失败:', error)
           return { accept: false } satisfies JavascriptDialogResult
         }),
@@ -190,7 +197,7 @@ export function createWebTabJavascriptDialogBridge(input: WebTabJavascriptDialog
 
     let cancelResolve: (result: JavascriptDialogResult) => void = () => undefined
     const cancel = new Promise<JavascriptDialogResult>((resolve) => { cancelResolve = resolve })
-    const item: PendingDialog = { cancel, cancelResolve, settled: false }
+    const item: PendingDialog = { cancel, cancelResolve, abortController: new AbortController(), settled: false }
     pending.add(item)
     queue = queue.then(() => processDialog(opening, item)).catch((error) => {
       if (!disposed && !isDestroyed()) console.warn('[网页对话框] 处理 CDP 对话框失败:', error)
@@ -200,8 +207,20 @@ export function createWebTabJavascriptDialogBridge(input: WebTabJavascriptDialog
 
   const onDetach = (_reason?: string): void => {
     if (disposed) return
-    cancelPending()
-    reconnectPromise = (reconnectPromise ?? Promise.resolve()).then(enablePage).catch((error) => {
+    cancelPending(true)
+    reconnectPromise = (reconnectPromise ?? Promise.resolve()).then(async () => {
+      if (!await enablePage()) return
+      const dismissals = pendingDismissalsAfterReconnect
+      pendingDismissalsAfterReconnect = 0
+      for (let index = 0; index < dismissals; index += 1) {
+        if (disposed || isDestroyed()) return
+        try {
+          await sendCommand('Page.handleJavaScriptDialog', { accept: false })
+        } catch (error) {
+          if (!disposed && !isDestroyed()) console.warn('[网页对话框] 重连后拒绝 CDP 对话框失败:', error)
+        }
+      }
+    }).catch((error) => {
       if (!disposed && !isDestroyed()) console.warn('[网页对话框] CDP 断开后重连失败:', error)
     }).finally(() => { reconnectPromise = undefined })
   }
@@ -229,7 +248,7 @@ export function createWebTabJavascriptDialogBridge(input: WebTabJavascriptDialog
       if (started) return startPromise
       started = true
       subscribe()
-      startPromise = enablePage()
+      startPromise = enablePage().then(() => undefined)
       await startPromise
     },
     dispose(): void {
