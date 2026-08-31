@@ -16,6 +16,7 @@ interface PendingPrompt {
   senderId: number
   window: BrowserWindow
   resolve: (result: WebJavascriptPromptResult) => void
+  cleanup: () => void
 }
 
 const pendingPrompts = new Map<string, PendingPrompt>()
@@ -29,6 +30,22 @@ function getParentWindow(window: BrowserWindow): BrowserWindow | null {
   return typeof window.getParentWindow === 'function' ? window.getParentWindow() : null
 }
 
+function closePromptWindow(window: BrowserWindow): void {
+  if (window.isDestroyed()) return
+  try {
+    window.close()
+  } catch (error) {
+    console.error('[网页 prompt] 关闭输入窗口失败:', error)
+    if (!window.isDestroyed() && typeof window.destroy === 'function') {
+      try {
+        window.destroy()
+      } catch (destroyError) {
+        console.error('[网页 prompt] 销毁输入窗口失败:', destroyError)
+      }
+    }
+  }
+}
+
 function cleanupHost(hostWindow: BrowserWindow): void {
   const cleanup = hostCleanup.get(hostWindow)
   if (!cleanup) return
@@ -40,8 +57,9 @@ function settlePrompt(requestId: string, result: WebJavascriptPromptResult, clos
   const pending = pendingPrompts.get(requestId)
   if (!pending) return false
   pendingPrompts.delete(requestId)
+  pending.cleanup()
   pending.resolve(result)
-  if (closeWindow && isUsableWindow(pending.window)) pending.window.close()
+  if (closeWindow) closePromptWindow(pending.window)
   const parent = getParentWindow(pending.window)
   if (parent && ![...pendingPrompts.values()].some((item) => getParentWindow(item.window) === parent)) cleanupHost(parent)
   return true
@@ -52,7 +70,7 @@ function watchHost(hostWindow: BrowserWindow): void {
   const cancelForHost = (): void => {
     for (const pending of [...pendingPrompts.values()]) {
       if (getParentWindow(pending.window) === hostWindow) {
-        settlePrompt(pending.request.requestId, { accept: false }, false)
+        settlePrompt(pending.request.requestId, { accept: false }, true)
       }
     }
     cleanupHost(hostWindow)
@@ -102,18 +120,39 @@ export function showWebJavascriptPromptWindow(input: ShowWebJavascriptPromptWind
     message: String(input.message ?? ''),
     defaultPrompt: String(input.defaultPrompt ?? ''),
   }
-  pendingPrompts.set(requestId, { request, senderId: promptWindow.webContents.id, window: promptWindow, resolve: resolveResult })
+  let cleanupPromptListeners = (): void => undefined
+  pendingPrompts.set(requestId, {
+    request,
+    senderId: promptWindow.webContents.id,
+    window: promptWindow,
+    resolve: resolveResult,
+    cleanup: () => cleanupPromptListeners(),
+  })
   watchHost(hostWindow)
 
   const cancel = (): void => { settlePrompt(requestId, { accept: false }, false) }
   const cancelAndClose = (): void => { settlePrompt(requestId, { accept: false }, true) }
-  promptWindow.once('closed', cancel)
-  promptWindow.webContents.on('did-fail-load', cancelAndClose)
-  promptWindow.once('ready-to-show', () => {
+  const onClosed = (): void => cancel()
+  const onDidFailLoad = (): void => cancelAndClose()
+  const onDestroyed = (): void => cancelAndClose()
+  const onRenderProcessGone = (): void => cancelAndClose()
+  const onReadyToShow = (): void => {
     if (!pendingPrompts.has(requestId) || !isUsableWindow(promptWindow)) return
     promptWindow.show()
     promptWindow.focus()
-  })
+  }
+  promptWindow.on('closed', onClosed)
+  promptWindow.on('ready-to-show', onReadyToShow)
+  promptWindow.webContents.on('did-fail-load', onDidFailLoad)
+  promptWindow.webContents.on('destroyed', onDestroyed)
+  promptWindow.webContents.on('render-process-gone', onRenderProcessGone)
+  cleanupPromptListeners = (): void => {
+    promptWindow.removeListener('closed', onClosed)
+    promptWindow.removeListener('ready-to-show', onReadyToShow)
+    promptWindow.webContents.removeListener('did-fail-load', onDidFailLoad)
+    promptWindow.webContents.removeListener('destroyed', onDestroyed)
+    promptWindow.webContents.removeListener('render-process-gone', onRenderProcessGone)
+  }
 
   try {
     if (app.isPackaged) {
@@ -125,7 +164,7 @@ export function showWebJavascriptPromptWindow(input: ShowWebJavascriptPromptWind
     }
   } catch (error) {
     console.error('[网页 prompt] 加载输入窗口失败:', error)
-    cancel()
+    cancelAndClose()
   }
   return result
 }

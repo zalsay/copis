@@ -34,16 +34,16 @@ export function WebJavascriptPromptWindowApp(): React.ReactElement {
   }, [requestId])
 
   const cancel = React.useCallback((): void => {
-    if (submitting || !requestId) return
+    if (submitting || !requestId || !request) return
     setSubmitting(true)
     void window.webJavascriptPrompt.cancel(requestId)
-  }, [requestId, submitting])
+  }, [request, requestId, submitting])
 
   const resolve = React.useCallback((): void => {
-    if (submitting || !requestId) return
+    if (submitting || !requestId || !request) return
     setSubmitting(true)
     void window.webJavascriptPrompt.resolve({ requestId, accept: true, promptText: value })
-  }, [requestId, submitting, value])
+  }, [request, requestId, submitting, value])
 
   const handleKeyDown = (event: React.KeyboardEvent<HTMLInputElement>): void => {
     if (event.key === 'Enter') {
