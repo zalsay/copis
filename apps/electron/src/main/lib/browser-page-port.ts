@@ -9,6 +9,8 @@ export type BrowserCdpOwner = 'agent' | 'recording' | 'workflow'
  * 允许在主进程内部调用的受控 CDP 方法白名单
  */
 export type BrowserCdpMethod =
+  | 'DOM.getBoxModel'
+  | 'DOM.getFrameOwner'
   | 'DOM.setFileInputFiles'
   | 'Input.dispatchKeyEvent'
   | 'Input.dispatchMouseEvent'
