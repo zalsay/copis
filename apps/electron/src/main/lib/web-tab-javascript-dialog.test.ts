@@ -14,9 +14,15 @@ type Listener = (...args: unknown[]) => void
 class FakeDebugger {
   attached = false
   destroyed = false
+  pageEnabled = false
+  enforcePageDomain = false
   currentDialog: { type: string; message: string } | undefined
   readonly handledDialogs: Array<{ message: string; accept: boolean }> = []
   readonly sendCommand = mock(async (method: string, params?: Record<string, unknown>) => {
+    if (method === 'Page.enable') {
+      this.pageEnabled = true
+      return undefined
+    }
     if (method === 'Page.handleJavaScriptDialog') this.handleCurrentDialog(params)
     return undefined
   })
@@ -44,6 +50,7 @@ class FakeDebugger {
 
   emit(event: string, ...args: unknown[]): void {
     if (event === 'message' && args[1] === 'Page.javascriptDialogOpening' && args[2] && typeof args[2] === 'object') {
+      if (this.enforcePageDomain && !this.pageEnabled) return
       const params = args[2] as Record<string, unknown>
       this.currentDialog = { type: String(params.type), message: String(params.message) }
     }
@@ -64,8 +71,9 @@ const flushPromises = async (): Promise<void> => {
   await Promise.resolve()
 }
 
-function createBridgeHarness() {
+function createBridgeHarness(options: { enforcePageDomain?: boolean } = {}) {
   const debuggerInstance = new FakeDebugger()
+  debuggerInstance.enforcePageDomain = options.enforcePageDomain === true
   const present = mock<(input: JavascriptDialogOpeningInput, signal?: AbortSignal) => Promise<JavascriptDialogResult>>(async () => ({ accept: true }))
   const bridge = createWebTabJavascriptDialogBridge({
     debugger: debuggerInstance,
@@ -83,6 +91,91 @@ describe('网页 JavaScript 对话框 CDP bridge', () => {
 
   afterEach(() => {
     for (const bridge of bridges.splice(0)) bridge.dispose()
+  })
+
+  test('Given accept 命令失败且 current dialog 仍存在 When bridge 恢复 Then 重新启用 Page 并只发送拒绝处理', async () => {
+    const { debuggerInstance, present, bridge } = createBridgeHarness({ enforcePageDomain: true })
+    let rejectAccept = true
+    debuggerInstance.sendCommand.mockImplementation(async (method, params) => {
+      if (method === 'Page.enable') {
+        debuggerInstance.pageEnabled = true
+        return undefined
+      }
+      if (method === 'Page.handleJavaScriptDialog' && params?.accept === true && rejectAccept) {
+        rejectAccept = false
+        debuggerInstance.attached = false
+        throw new Error('accept 暂时失败')
+      }
+      if (method === 'Page.handleJavaScriptDialog') debuggerInstance.handleCurrentDialog(params)
+      return undefined
+    })
+    present.mockResolvedValue({ accept: true })
+    bridges.push(bridge)
+    await bridge.start()
+
+    debuggerInstance.emit('message', {}, 'Page.javascriptDialogOpening', {
+      type: 'alert', message: '需要恢复', hasBrowserHandler: false,
+    })
+    await flushPromises()
+
+    expect(debuggerInstance.sendCommand.mock.calls.map(([method, params]) => [method, params])).toEqual([
+      ['Page.enable', undefined],
+      ['Page.handleJavaScriptDialog', { accept: true }],
+      ['Page.enable', undefined],
+      ['Page.handleJavaScriptDialog', { accept: false }],
+    ])
+    expect(debuggerInstance.handledDialogs).toEqual([{ message: '需要恢复', accept: false }])
+    expect(debuggerInstance.currentDialog).toBeUndefined()
+  })
+
+  test('Given start 初次 Page.enable 失败 When 有界重试随后成功 Then 后续 dialog 仍可展示并处理', async () => {
+    const { debuggerInstance, present, bridge } = createBridgeHarness({ enforcePageDomain: true })
+    let enableAttempts = 0
+    debuggerInstance.sendCommand.mockImplementation(async (method, params) => {
+      if (method === 'Page.enable') {
+        enableAttempts += 1
+        if (enableAttempts === 1) throw new Error('Page 暂时不可用')
+        debuggerInstance.pageEnabled = true
+        return undefined
+      }
+      if (method === 'Page.handleJavaScriptDialog') debuggerInstance.handleCurrentDialog(params)
+      return undefined
+    })
+    bridges.push(bridge)
+    await bridge.start()
+
+    debuggerInstance.emit('message', {}, 'Page.javascriptDialogOpening', {
+      type: 'confirm', message: '重试后可用', hasBrowserHandler: false,
+    })
+    await flushPromises()
+
+    expect(enableAttempts).toBe(2)
+    expect(present).toHaveBeenCalledTimes(1)
+    expect(debuggerInstance.handledDialogs).toEqual([{ message: '重试后可用', accept: true }])
+  })
+
+  test('Given start Page.enable 有界重试耗尽 When 后续 dialog 到达 Then 不发送处理命令且不保留恢复候选', async () => {
+    const { debuggerInstance, bridge } = createBridgeHarness({ enforcePageDomain: true })
+    let enableAttempts = 0
+    debuggerInstance.sendCommand.mockImplementation(async (method) => {
+      if (method === 'Page.enable') {
+        enableAttempts += 1
+        throw new Error('Page 持续不可用')
+      }
+      throw new Error('不应发送 dialog 命令')
+    })
+    bridges.push(bridge)
+    await bridge.start()
+
+    debuggerInstance.emit('message', {}, 'Page.javascriptDialogOpening', {
+      type: 'alert', message: '不可达', hasBrowserHandler: false,
+    })
+    await flushPromises()
+
+    expect(enableAttempts).toBe(3)
+    expect(debuggerInstance.currentDialog).toBeUndefined()
+    expect(debuggerInstance.handledDialogs).toEqual([])
+    expect(debuggerInstance.sendCommand.mock.calls.some(([method]) => method === 'Page.handleJavaScriptDialog')).toBe(false)
   })
 
   test('Given 无浏览器处理器的 alert When CDP 事件到达 Then 展示 presenter 并确认 dialog', async () => {
