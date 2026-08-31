@@ -122,6 +122,48 @@ describe('网页原生子窗口策略', () => {
     expect(child.webContents.willNavigateHandler).toBeFunction()
   })
 
+  test('Given 原生子窗口收到 HTTP(S) 导航 When 触发 will-navigate Then 不阻止页内跳转且不交给外部协议处理', () => {
+    const hostWindow = new FakeWindow()
+    const popup = new FakeWindow()
+    const context = createContext(hostWindow)
+
+    installNativeWebPopupWindow({ ...context, window: popup as never })
+
+    const httpNavigateEvent = { preventDefault: mock(() => undefined) }
+    popup.webContents.willNavigateHandler!(httpNavigateEvent, 'https://inside.example/next')
+
+    expect(httpNavigateEvent.preventDefault).not.toHaveBeenCalled()
+    expect(context.openExternal).not.toHaveBeenCalled()
+  })
+
+  test('Given 原生子窗口收到非 HTTP(S) 导航 When 触发 will-navigate Then 阻止页内跳转并交给外部协议处理', () => {
+    const hostWindow = new FakeWindow()
+    const popup = new FakeWindow()
+    const context = createContext(hostWindow)
+
+    installNativeWebPopupWindow({ ...context, window: popup as never })
+
+    const externalNavigateEvent = { preventDefault: mock(() => undefined) }
+    popup.webContents.willNavigateHandler!(externalNavigateEvent, 'file:///tmp/private.html')
+
+    expect(externalNavigateEvent.preventDefault).toHaveBeenCalledTimes(1)
+    expect(context.openExternal).toHaveBeenCalledWith('file:///tmp/private.html')
+  })
+
+  test('Given 原生子窗口收到 HTTP(S) 重定向 When 触发 will-redirect Then 不阻止页内跳转且不交给外部协议处理', () => {
+    const hostWindow = new FakeWindow()
+    const popup = new FakeWindow()
+    const context = createContext(hostWindow)
+
+    installNativeWebPopupWindow({ ...context, window: popup as never })
+
+    const httpRedirectEvent = { preventDefault: mock(() => undefined) }
+    popup.webContents.willRedirectHandler!(httpRedirectEvent, 'https://inside.example/next')
+
+    expect(httpRedirectEvent.preventDefault).not.toHaveBeenCalled()
+    expect(context.openExternal).not.toHaveBeenCalled()
+  })
+
   test('Given 原生子窗口收到非 HTTP(S) 重定向 When 触发 will-redirect Then 阻止页内跳转并交给外部协议处理', () => {
     const hostWindow = new FakeWindow()
     const popup = new FakeWindow()
@@ -134,11 +176,6 @@ describe('网页原生子窗口策略', () => {
 
     expect(externalRedirectEvent.preventDefault).toHaveBeenCalledTimes(1)
     expect(context.openExternal).toHaveBeenCalledWith('mailto:owner@example.com')
-
-    const httpRedirectEvent = { preventDefault: mock(() => undefined) }
-    popup.webContents.willRedirectHandler!(httpRedirectEvent, 'https://inside.example/next')
-
-    expect(httpRedirectEvent.preventDefault).not.toHaveBeenCalled()
   })
 
   test('Given 原生子窗口 When host 或 opener 销毁 Then 安全关闭且不访问已销毁 webContents', () => {
@@ -156,6 +193,34 @@ describe('网页原生子窗口策略', () => {
     expect(popup.closeCalls).toBe(1)
   })
 
+  test('Given owner 与 host 各有独立 popup When 分别销毁 Then 各自关闭 popup 并清理对应生命周期监听器', () => {
+    const ownerHostWindow = new FakeWindow()
+    const owner = new FakeWebContents()
+    const ownerPopup = new FakeWindow()
+    const ownerContext = createContext(ownerHostWindow)
+
+    installNativeWebPopupWindow({ ...ownerContext, window: ownerPopup as never, opener: owner as never })
+    owner.emit('destroyed')
+
+    expect(ownerPopup.closeCalls).toBe(1)
+    expect(ownerPopup.isDestroyed()).toBe(true)
+    expect(owner.listenerCount('destroyed')).toBe(0)
+    expect(ownerHostWindow.listenerCount('closed')).toBe(0)
+
+    const hostWindow = new FakeWindow()
+    const hostOwner = new FakeWebContents()
+    const hostPopup = new FakeWindow()
+    const hostContext = createContext(hostWindow)
+
+    installNativeWebPopupWindow({ ...hostContext, window: hostPopup as never, opener: hostOwner as never })
+    hostWindow.emit('closed')
+
+    expect(hostPopup.closeCalls).toBe(1)
+    expect(hostPopup.isDestroyed()).toBe(true)
+    expect(hostOwner.listenerCount('destroyed')).toBe(0)
+    expect(hostWindow.listenerCount('closed')).toBe(0)
+  })
+
   test('Given popup 页面取消 beforeunload When owner 或 host 销毁 Then 仍强制销毁 popup 且保留生命周期清理', () => {
     const hostWindow = new FakeWindow()
     const owner = new FakeWebContents()
@@ -170,6 +235,8 @@ describe('网页原生子窗口策略', () => {
     expect(popup.destroyCalls).toBe(1)
     expect(popup.isDestroyed()).toBe(true)
     expect(popup.listenerCount('closed')).toBe(0)
+    expect(owner.listenerCount('destroyed')).toBe(0)
+    expect(hostWindow.listenerCount('closed')).toBe(0)
 
     hostWindow.emit('closed')
     expect(popup.closeCalls).toBe(1)
