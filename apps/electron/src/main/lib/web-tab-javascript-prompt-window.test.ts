@@ -352,6 +352,35 @@ describe('网页 JavaScript prompt 原生窗口', () => {
     expect(hostWindow.webContents.listenerCount('destroyed')).toBe(0)
   })
 
+  test('宿主 render-process-gone 时仅取消该宿主的所有 prompt 并关闭子窗口', async () => {
+    const otherHost = new FakeBrowserWindow({})
+    const first = manager.showWebJavascriptPromptWindow({ hostWindow: hostWindow as never, message: '第一个' })
+    const second = manager.showWebJavascriptPromptWindow({ hostWindow: hostWindow as never, message: '第二个' })
+    const other = manager.showWebJavascriptPromptWindow({ hostWindow: otherHost as never, message: '其它宿主' })
+    const firstWindow = windows[0]!
+    const secondWindow = windows[1]!
+    const otherWindow = windows[2]!
+    const firstRequestId = new URL(firstWindow.loadedUrls[0]!).searchParams.get('requestId')!
+    const secondRequestId = new URL(secondWindow.loadedUrls[0]!).searchParams.get('requestId')!
+    const otherRequestId = new URL(otherWindow.loadedUrls[0]!).searchParams.get('requestId')!
+
+    expect(hostWindow.webContents.listenerCount('render-process-gone')).toBe(1)
+    hostWindow.webContents.emit('render-process-gone', { reason: 'crashed' })
+
+    await expect(first).resolves.toEqual({ accept: false })
+    await expect(second).resolves.toEqual({ accept: false })
+    expect(manager.getWebJavascriptPromptRequest(firstRequestId, firstWindow.webContents.id)).toBeNull()
+    expect(manager.getWebJavascriptPromptRequest(secondRequestId, secondWindow.webContents.id)).toBeNull()
+    expect(firstWindow.close).toHaveBeenCalledTimes(1)
+    expect(secondWindow.close).toHaveBeenCalledTimes(1)
+    expect(hostWindow.webContents.listenerCount('render-process-gone')).toBe(0)
+    expect(otherWindow.close).not.toHaveBeenCalled()
+    expect(manager.getWebJavascriptPromptRequest(otherRequestId, otherWindow.webContents.id)).not.toBeNull()
+
+    otherHost.emit('closed')
+    await expect(other).resolves.toEqual({ accept: false })
+  })
+
   test('同步 loadURL 异常时关闭窗口并取消请求', async () => {
     FakeBrowserWindow.throwOnLoadURL = true
     const originalConsoleError = console.error

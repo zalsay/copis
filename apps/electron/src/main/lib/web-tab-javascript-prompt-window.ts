@@ -85,9 +85,11 @@ function watchHost(hostWindow: BrowserWindow): void {
   }
   hostWindow.on('closed', cancelForHost)
   hostWindow.webContents.on('destroyed', cancelForHost)
+  hostWindow.webContents.on('render-process-gone', cancelForHost)
   hostCleanup.set(hostWindow, () => {
     hostWindow.removeListener('closed', cancelForHost)
     hostWindow.webContents.removeListener('destroyed', cancelForHost)
+    hostWindow.webContents.removeListener('render-process-gone', cancelForHost)
   })
 }
 
