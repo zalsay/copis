@@ -115,6 +115,59 @@ describe('网页原生子窗口策略', () => {
     expect(context.openExternal).toHaveBeenCalledWith('mailto:owner@example.com')
   })
 
+  test('Given Google OAuth window.open When 请求新窗口 Then deny 并用精确 URL 打开外部浏览器', () => {
+    const hostWindow = new FakeWindow()
+    const context = createContext(hostWindow)
+    const oauthUrl = 'https://accounts.google.com/o/oauth2/v2/auth?client_id=copis&redirect_uri=http%3A%2F%2Flocalhost%2Fcallback'
+
+    const response = createWebTabWindowOpenHandler(context)({ url: oauthUrl } as never)
+
+    expect(response).toEqual({ action: 'deny' })
+    expect(context.openExternal).toHaveBeenCalledWith(oauthUrl)
+  })
+
+  test('Given 原生子窗口 When 导航或重定向到 Google OAuth Then 阻止导航、打开精确 URL 并关闭窗口', () => {
+    for (const event of ['will-navigate', 'will-redirect'] as const) {
+      const hostWindow = new FakeWindow()
+      const popup = new FakeWindow()
+      const context = createContext(hostWindow)
+      const oauthUrl = `https://accounts.google.com/o/oauth2/v2/auth?state=${event}`
+
+      installNativeWebPopupWindow({ ...context, window: popup as never })
+      const navigationEvent = { preventDefault: mock(() => undefined) }
+      const handler = event === 'will-navigate'
+        ? popup.webContents.willNavigateHandler
+        : popup.webContents.willRedirectHandler
+
+      handler!(navigationEvent, oauthUrl)
+
+      expect(navigationEvent.preventDefault).toHaveBeenCalledTimes(1)
+      expect(context.openExternal).toHaveBeenCalledWith(oauthUrl)
+      expect(popup.closeCalls).toBe(1)
+      expect(popup.isDestroyed()).toBe(true)
+      expect(hostWindow.listenerCount('closed')).toBe(0)
+      expect(hostWindow.webContents.listenerCount('destroyed')).toBe(0)
+      expect(hostWindow.webContents.listenerCount('render-process-gone')).toBe(0)
+    }
+  })
+
+  test('Given accounts.google.com.evil.example When window.open 或导航 Then 保持普通 HTTP(S) popup 行为', () => {
+    const hostWindow = new FakeWindow()
+    const popup = new FakeWindow()
+    const context = createContext(hostWindow)
+    const attackerUrl = 'https://accounts.google.com.evil.example/o/oauth2/v2/auth'
+
+    const response = createWebTabWindowOpenHandler(context)({ url: attackerUrl } as never)
+    installNativeWebPopupWindow({ ...context, window: popup as never })
+    const navigationEvent = { preventDefault: mock(() => undefined) }
+    popup.webContents.willNavigateHandler!(navigationEvent, attackerUrl)
+
+    expect(response.action).toBe('allow')
+    expect(navigationEvent.preventDefault).not.toHaveBeenCalled()
+    expect(context.openExternal).not.toHaveBeenCalled()
+    expect(popup.closeCalls).toBe(0)
+  })
+
   test('Given 原生子窗口 When ready-to-show Then 显示聚焦且递归安装新窗口和导航策略', () => {
     const hostWindow = new FakeWindow()
     const owner = new FakeWebContents()

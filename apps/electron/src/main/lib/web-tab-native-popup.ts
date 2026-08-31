@@ -19,6 +19,15 @@ function isHttpWebUrl(url: string): boolean {
   return /^https?:\/\//i.test(url)
 }
 
+function isGoogleOAuthUrl(url: string): boolean {
+  try {
+    const parsed = new URL(url)
+    return parsed.protocol === 'https:' && parsed.hostname === 'accounts.google.com'
+  } catch {
+    return false
+  }
+}
+
 function openExternalSafely(input: NativePopupContext, url: string): void {
   if (!url) return
   try {
@@ -38,11 +47,22 @@ function closeWindowSafely(window: Electron.BrowserWindow): void {
   if (!window.isDestroyed()) window.destroy()
 }
 
-function installNavigationPolicy(input: NativePopupContext, contents: Electron.WebContents): void {
+function installNavigationPolicy(
+  input: NativePopupContext,
+  contents: Electron.WebContents,
+  closePopup: () => void,
+): void {
   if (contents.isDestroyed()) return
 
   const handleNavigation = (event: Electron.Event, url: string): void => {
-    if (contents.isDestroyed() || isHttpWebUrl(url)) return
+    if (contents.isDestroyed()) return
+    if (isGoogleOAuthUrl(url)) {
+      event.preventDefault()
+      openExternalSafely(input, url)
+      closePopup()
+      return
+    }
+    if (isHttpWebUrl(url)) return
     event.preventDefault()
     openExternalSafely(input, url)
   }
@@ -56,6 +76,10 @@ export function createWebTabWindowOpenHandler(
   opener?: Electron.WebContents | null,
 ): (details: Electron.HandlerDetails) => Electron.WindowOpenHandlerResponse {
   return ({ url }: Electron.HandlerDetails): Electron.WindowOpenHandlerResponse => {
+    if (isGoogleOAuthUrl(url)) {
+      openExternalSafely(input, url)
+      return { action: 'deny' }
+    }
     if (!isHttpWebUrl(url)) {
       openExternalSafely(input, url)
       return { action: 'deny' }
@@ -114,7 +138,7 @@ export function installNativeWebPopupWindow(input: NativePopupInstallInput): voi
   }
 
   contents.setWindowOpenHandler(createWebTabWindowOpenHandler(input, contents))
-  installNavigationPolicy(input, contents)
+  installNavigationPolicy(input, contents, closePopup)
   contents.on('did-create-window', (childWindow) => {
     installNativeWebPopupWindow({
       ...input,
