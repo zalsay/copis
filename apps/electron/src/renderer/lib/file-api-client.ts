@@ -42,7 +42,8 @@ export class FileApiError extends Error {
 export class FileApiClient {
   private baseUrl = RENDERER_HTTP_API_BASE_URL
 
-  constructor(private readonly fetchImpl: typeof fetch = fetch) {}
+  // 浏览器原生 fetch 依赖 Window 的调用上下文，不能作为未绑定方法直接调用。
+  constructor(private readonly fetchImpl: typeof fetch = globalThis.fetch.bind(globalThis)) {}
 
   setBaseUrl(baseUrl: string): void {
     this.baseUrl = baseUrl.replace(/\/$/, '')

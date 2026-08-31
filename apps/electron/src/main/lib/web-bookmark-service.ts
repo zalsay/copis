@@ -42,11 +42,25 @@ function readGroups(value: unknown): WebBookmarkGroup[] {
   })
 }
 
-function readFaviconUrl(value: unknown): string | null {
-  if (typeof value !== 'string') return null
+function resolveDefaultFaviconUrl(rawUrl?: string | null): string | null {
+  if (!rawUrl) return null
+  try {
+    const parsed = new URL(rawUrl)
+    if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
+      return `${parsed.origin}/favicon.ico`
+    }
+  } catch {}
+  return null
+}
 
-  const normalized = value.trim()
-  return /^https?:\/\//i.test(normalized) || /^data:image\//i.test(normalized) ? normalized : null
+function readFaviconUrl(value: unknown, url?: string): string | null {
+  if (typeof value === 'string') {
+    const normalized = value.trim()
+    if (/^https?:\/\//i.test(normalized) || /^data:image\//i.test(normalized)) {
+      return normalized
+    }
+  }
+  return resolveDefaultFaviconUrl(url)
 }
 
 function readBookmarks(value: unknown, groups: WebBookmarkGroup[]): WebBookmark[] {
@@ -68,7 +82,7 @@ function readBookmarks(value: unknown, groups: WebBookmarkGroup[]): WebBookmark[
     if (!id || !title || !url || !Number.isFinite(item.createdAt)) return []
 
     const groupId = typeof item.groupId === 'string' && groupIds.has(item.groupId) ? item.groupId : null
-    return [{ id, title, url, faviconUrl: readFaviconUrl(item.faviconUrl), createdAt: item.createdAt, groupId }]
+    return [{ id, title, url, faviconUrl: readFaviconUrl(item.faviconUrl, url), createdAt: item.createdAt, groupId }]
   })
 }
 
@@ -162,16 +176,21 @@ export function getWebBookmarks(): WebBookmarksSnapshot {
 export function saveWebBookmark(input: SaveWebBookmarkInput): WebBookmarksSnapshot {
   const url = validateUrl(input.url)
   const title = input.title.trim() || url
-  const faviconUrl = validateFaviconUrl(input.faviconUrl)
+  const fallbackFavicon = resolveDefaultFaviconUrl(url)
+  const validatedFavicon = validateFaviconUrl(input.faviconUrl)
+  const faviconUrl = validatedFavicon === undefined ? undefined : (validatedFavicon ?? fallbackFavicon)
   const current = readSnapshot()
   const existing = current.bookmarks.find((bookmark) => bookmark.url === url)
   const groupId = resolveGroupId(input.groupId, current, existing)
 
   if (existing) {
+    const nextFavicon = faviconUrl === undefined
+      ? (existing.faviconUrl ?? fallbackFavicon)
+      : faviconUrl
     return writeSnapshot({
       groups: current.groups,
       bookmarks: current.bookmarks.map((bookmark) => bookmark.id === existing.id
-        ? { ...bookmark, title, url, faviconUrl: faviconUrl === undefined ? bookmark.faviconUrl : faviconUrl, groupId }
+        ? { ...bookmark, title, url, faviconUrl: nextFavicon, groupId }
         : bookmark),
     })
   }
@@ -180,7 +199,7 @@ export function saveWebBookmark(input: SaveWebBookmarkInput): WebBookmarksSnapsh
     id: randomUUID(),
     title,
     url,
-    faviconUrl: faviconUrl ?? null,
+    faviconUrl: faviconUrl ?? fallbackFavicon,
     createdAt: Date.now(),
     groupId,
   }

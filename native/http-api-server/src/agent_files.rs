@@ -432,9 +432,14 @@ impl FileAccessPolicy {
             ));
         }
         validate_project_command(&request.command)?;
+        let read_only = is_read_only_project_command(&request.command);
         let cwd = self.resolve(&request.cwd, false)?;
         self.ensure_read(&cwd)?;
-        self.ensure_write(&cwd)?;
+        if read_only {
+            self.validate_read_only_command_paths(&request.command)?;
+        } else {
+            self.ensure_write(&cwd)?;
+        }
         if !fs::metadata(&cwd).map_err(io_error)?.is_dir() {
             return Err(AgentFileError::forbidden(
                 "not_a_directory",
@@ -448,6 +453,47 @@ impl FileAccessPolicy {
             ));
         }
         run_project_command(&request.command, &cwd, Duration::from_millis(timeout_ms))
+    }
+
+    fn validate_read_only_command_paths(&self, command: &str) -> Result<(), AgentFileError> {
+        // 先检查所有明确的绝对/越级路径，即使它出现在搜索表达式或选项值中，也不能
+        // 让 shell 通过展开语义触碰未授权目录。
+        for argument in command.split_whitespace().skip(1) {
+            let candidate = argument.trim_matches(['\'', '"']);
+            let candidate = if candidate.starts_with('-') {
+                candidate
+                    .split_once('=')
+                    .map(|(_, value)| value)
+                    .unwrap_or(candidate)
+            } else {
+                candidate
+            };
+            if candidate.starts_with('$') || candidate.starts_with('~') {
+                return Err(AgentFileError::forbidden(
+                    "command_scope_not_allowed",
+                    "只读命令不能通过变量或波浪号扩展绕过文件权限范围",
+                ));
+            }
+            if is_explicit_command_path(candidate) {
+                self.validate_read_only_command_path(candidate)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_read_only_command_path(&self, argument: &str) -> Result<(), AgentFileError> {
+        let candidate = argument.trim_matches(['\'', '"']);
+        if candidate.is_empty() || candidate == "-" || candidate.starts_with('-') {
+            return Ok(());
+        }
+        if candidate.contains('$') || candidate.starts_with('~') {
+            return Err(AgentFileError::forbidden(
+                "command_scope_not_allowed",
+                "只读命令不能通过变量或波浪号扩展绕过文件权限范围",
+            ));
+        }
+        let target = self.resolve(candidate, true)?;
+        self.ensure_read(&target)
     }
 
     fn from_value(value: &Value, cwd: Option<&Value>) -> Result<Self, AgentFileError> {
@@ -590,7 +636,104 @@ fn requires_advanced_authorization(command: &str) -> bool {
     )
 }
 
-/// 仅开放项目依赖、构建、本地开发、Office 文档操作、工作区 Git 与高级授权的 SSH/curl/Python 命令；通用 Shell 语法会绕过路径策略。
+/// 只读检查命令可以在只读项目来源目录中执行；其路径参数仍由 Rust 文件策略逐个校验。
+fn is_read_only_project_command(command: &str) -> bool {
+    let arguments = command.split_whitespace().collect::<Vec<_>>();
+    let Some(executable) = arguments.first().copied() else {
+        return false;
+    };
+    if executable == "git" && is_read_only_git_status(&arguments) {
+        return true;
+    }
+    if executable == "pwd" {
+        return arguments
+            .iter()
+            .skip(1)
+            .all(|argument| matches!(*argument, "-L" | "-P"));
+    }
+    if arguments.iter().skip(1).any(|argument| {
+        matches!(
+            *argument,
+            "-L" | "--follow"
+                | "-H"
+                | "-delete"
+                | "-exec"
+                | "-execdir"
+                | "-ok"
+                | "-okdir"
+                | "-fls"
+                | "-fprint"
+                | "-fprint0"
+                | "-fprintf"
+                | "--pre"
+                | "--pre-glob"
+                | "--files-from"
+        ) || argument.starts_with("-exec")
+            || argument.starts_with("-ok")
+            || argument.starts_with("-fprint")
+            || argument.starts_with("--pre=")
+            || argument.starts_with("--pre-glob=")
+    }) {
+        return false;
+    }
+    match executable {
+        "ls" | "dir" | "cat" | "head" | "tail" | "wc" | "file" | "stat" | "du" | "tree" => true,
+        "find" | "rg" | "grep" => true,
+        _ => false,
+    }
+}
+
+/// 允许 Git 仅查询指定工作区的状态；`-C` 的目录仍需由文件权限策略校验。
+fn is_read_only_git_status(arguments: &[&str]) -> bool {
+    let mut index = 1;
+    let mut found_status = false;
+    while index < arguments.len() {
+        match arguments[index] {
+            "-C" => {
+                if index + 1 >= arguments.len() {
+                    return false;
+                }
+                index += 2;
+            }
+            "--no-pager" | "--no-optional-locks" => index += 1,
+            "status" => {
+                found_status = true;
+                index += 1;
+                break;
+            }
+            _ => return false,
+        }
+    }
+    if !found_status || index > arguments.len() {
+        return false;
+    }
+
+    arguments[index..].iter().all(|argument| {
+        matches!(
+            *argument,
+            "--short"
+                | "--porcelain"
+                | "--branch"
+                | "--long"
+                | "--show-stash"
+                | "--ahead-behind"
+                | "--no-ahead-behind"
+                | "--renames"
+                | "--no-renames"
+                | "--find-renames"
+                | "--no-optional-locks"
+        )
+    })
+}
+
+fn is_explicit_command_path(argument: &str) -> bool {
+    Path::new(argument).is_absolute()
+        || argument
+            .split(['/', '\\'])
+            .any(|component| matches!(component, "." | ".."))
+}
+
+/// 仅开放只读检查、项目依赖、构建、本地开发、Office 文档操作、工作区 Git 与高级授权的 SSH/curl/Python 命令；通用 Shell 语法会绕过路径策略。
 fn validate_project_command(command: &str) -> Result<(), AgentFileError> {
     let command = command.trim();
     if command.is_empty() || command.len() > 16 * 1024 {
@@ -608,12 +751,12 @@ fn validate_project_command(command: &str) -> Result<(), AgentFileError> {
     let Some(executable) = arguments.first() else {
         return Err(AgentFileError::bad_request("项目命令不能为空"));
     };
+    let allow_read_only_git_c = is_read_only_git_status(&arguments);
     if arguments.iter().skip(1).any(|argument| {
         matches!(
             *argument,
             "-g" | "--global"
                 | "--system"
-                | "-C"
                 | "--git-dir"
                 | "--work-tree"
                 | "--prefix"
@@ -621,7 +764,8 @@ fn validate_project_command(command: &str) -> Result<(), AgentFileError> {
                 | "--userconfig"
                 | "--target"
                 | "--user"
-        ) || (*executable != "python" && *executable != "python3" && *argument == "-c")
+        ) || (*argument == "-C" && !(*executable == "git" && allow_read_only_git_c))
+            || (*executable != "python" && *executable != "python3" && *argument == "-c")
             || argument.starts_with("--git-dir=")
             || argument.starts_with("--work-tree=")
             || argument.starts_with("--config-env=")
@@ -719,12 +863,13 @@ fn validate_project_command(command: &str) -> Result<(), AgentFileError> {
         "git" | "ssh" | "curl" => true,
         _ => false,
     };
+    let allowed = is_read_only_project_command(command) || allowed;
     if allowed {
         Ok(())
     } else {
         Err(AgentFileError::forbidden(
             "command_not_allowed",
-            "仅支持工作区内的依赖安装、构建、测试、本地开发、Office 文档操作与 Git 命令",
+            "仅支持工作区内的只读检查、依赖安装、构建、测试、本地开发、Office 文档操作与 Git 命令",
         ))
     }
 }

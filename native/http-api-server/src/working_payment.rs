@@ -250,8 +250,14 @@ pub fn start_desktop_payment_poller(
     let result = thread::Builder::new()
         .name("copis-payment-poller".to_string())
         .spawn(move || {
-            let _ = recover_pending_desktop_payment(&payment_state, skill_market_state.as_ref());
+            // 仅启动时查询一次远端待支付订单；后续只轮询已经在本机登记的支付会话。
+            let mut startup_recovery_pending = true;
             loop {
+                let _ = try_recover_pending_desktop_payment_once(
+                    &payment_state,
+                    skill_market_state.as_ref(),
+                    &mut startup_recovery_pending,
+                );
                 if payment_state.payment_ids().is_empty() {
                     thread::sleep(DESKTOP_PAYMENT_POLL_INTERVAL);
                     continue;
@@ -276,6 +282,19 @@ pub fn start_desktop_payment_poller(
     if result.is_err() {
         eprintln!("[支付] 无法启动自动查询任务");
     }
+}
+
+/// 控制启动恢复只执行一次，避免没有待支付订单时持续请求远端 pending 接口。
+fn try_recover_pending_desktop_payment_once(
+    payment_state: &WorkingPaymentState,
+    skill_market_state: &SkillMarketState,
+    startup_recovery_pending: &mut bool,
+) -> Result<bool, SkillMarketError> {
+    if !*startup_recovery_pending {
+        return Ok(false);
+    }
+    *startup_recovery_pending = false;
+    recover_pending_desktop_payment(payment_state, skill_market_state)
 }
 
 /// 服务重启后恢复一笔待支付的钻石订单，使原有订单也由 Rust 接管状态同步。

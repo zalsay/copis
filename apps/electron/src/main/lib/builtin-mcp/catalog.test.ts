@@ -7,6 +7,10 @@ let configPath = ''
 let settingsPath = ''
 let settings: Record<string, unknown> = {}
 
+mock.module('electron', () => ({
+  app: { isPackaged: false },
+}))
+
 mock.module('../config-paths', () => ({
   getChatToolsConfigPath: () => configPath,
   getSettingsPath: () => settingsPath,
@@ -16,7 +20,10 @@ mock.module('../settings-service', () => ({
   updateSettings: () => settings,
 }))
 mock.module('../working-auth-store', () => ({
-  getWorkingTokenStore: () => ({ getToken: () => 'working-token' }),
+  getWorkingTokenStore: () => ({
+    getToken: () => 'working-token',
+    getUser: () => ({ id: 'working-user' }),
+  }),
 }))
 
 type BuiltinMcpCatalogModule = typeof import('./catalog')

@@ -40,6 +40,7 @@ import { setAgentStopper, setHeadlessAgentRunner } from './agent-headless-runner
 import { getHeadlessAgentRunTarget } from './agent-headless-run-target'
 import { sendAgentStreamComplete } from './agent-completion-payload'
 import { getHttpApiInternalToken } from './http-api-server'
+import { registerTrustedAgentExternalSource } from './agent-rpc-source-context'
 
 // ===== 实例创建 =====
 
@@ -279,6 +280,9 @@ export async function runAgentHeadless(
     registerWebContents(runInput.sessionId, wc)
   }
 
+  const releaseTrustedSource = callbacks.source
+    ? registerTrustedAgentExternalSource(runInput.sessionId, callbacks.source)
+    : undefined
   let errorSent = false
   let completeSent = false
   try {
@@ -348,6 +352,7 @@ export async function runAgentHeadless(
       }
     }
   } finally {
+    releaseTrustedSource?.()
     sessionWebContents.delete(runInput.sessionId)
   }
 }

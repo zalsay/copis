@@ -1,5 +1,5 @@
 import { describe, expect, mock, test } from 'bun:test'
-import type { AgentSessionMeta, Automation, SDKMessage } from '@copis/shared'
+import type { AgentSessionMeta, AgentWorkspace, Automation, SDKMessage } from '@copis/shared'
 
 const rpcSession: AgentSessionMeta = {
   id: 'session-1',
@@ -14,6 +14,7 @@ const rpcSession: AgentSessionMeta = {
 const persistedRpcMessages: SDKMessage[] = []
 const appendedRpcMessages: SDKMessage[] = []
 let browserContext: { tabId: string } | undefined
+let appConnectorWorkspaces: AgentWorkspace[] = []
 const customModelChannelId = 'copis-custom-custom-model'
 
 mock.module('./agent-session-manager', () => ({
@@ -55,7 +56,9 @@ mock.module('./agent-workspace-manager', () => ({
   ensureAgentWorkspaceBrowserSessionPath: () => '/tmp/copis-agent-rpc-test/project/browser/agent-workspaces/session-1',
   ensureAgentWorkspaceContextDir: () => '/tmp/copis-agent-rpc-test/workspace-1/.context',
   ensureAgentWorkspaceWritableRoot: () => '/tmp/copis-agent-rpc-test/copis',
-  getAgentWorkspaceCopisPath: () => '/tmp/copis-agent-rpc-test/copis',
+  getAgentWorkspaceCopisPath: (workspace?: { slug?: string }) => workspace?.slug === 'missing-cross-workspace'
+    ? '/tmp/copis-agent-rpc-test/missing-cross-workspace/copis'
+    : '/tmp/copis-agent-rpc-test/copis',
   getAgentWorkspace: (workspaceId: string) => workspaceId === 'workspace-1'
     ? {
       id: 'workspace-1',
@@ -81,14 +84,18 @@ mock.module('./agent-workspace-manager', () => ({
     : undefined,
   getAgentWorkspaceContextDir: () => '/tmp/copis-agent-rpc-test/copis/.context',
   getAgentWorkspaceBrowserPath: () => '/tmp/copis-agent-rpc-test/project/browser',
-  getAgentWorkspaceReadableRoots: () => ['/tmp/copis-agent-rpc-test/project'],
-  getProjectFilesPath: () => '/tmp/copis-agent-rpc-test/project',
+  getAgentWorkspaceReadableRoots: (workspace?: { slug?: string }) => workspace?.slug === 'missing-cross-workspace'
+    ? ['/tmp/copis-agent-rpc-test/missing-cross-workspace/project']
+    : ['/tmp/copis-agent-rpc-test/project'],
+  getProjectFilesPath: (slug?: string) => slug === 'missing-cross-workspace'
+    ? '/tmp/copis-agent-rpc-test/missing-cross-workspace/project'
+    : '/tmp/copis-agent-rpc-test/project',
   getWorkspaceAttachedDirectories: () => [],
   getWorkspaceAttachedFiles: () => [],
   getWorkspaceMcpConfig: () => ({ servers: {} }),
   getLocalProjectRootStatus: () => 'available',
   listAgentWorkspaces: () => [],
-  listAgentWorkspacesByUpdatedAt: () => [],
+  listAgentWorkspacesByUpdatedAt: () => appConnectorWorkspaces,
   getWorkspaceCapabilities: () => ({ mcpServers: [], skills: [] }),
   ensureDefaultWorkspace: () => ({
     id: 'workspace-1',
@@ -436,10 +443,87 @@ describe('Agent RPC queue UUID 幂等性', () => {
 })
 
 describe('Agent RPC 工作区边界', () => {
+  test('Given 没有飞书元数据的旧会话由飞书桥接触发 When 准备 Rust 文件策略 Then 授权所有有效工作区读取并在释放后恢复普通边界', async () => {
+    const { prepareAgentRpcRun, registerTrustedAgentExternalSource } = await import('./agent-rpc-service')
+    const crossWorkspaceRoot = '/tmp'
+    appConnectorWorkspaces = [{
+      id: 'workspace-cross',
+      name: 'Downloads Grok',
+      slug: 'test-workspace',
+      projectRootPath: crossWorkspaceRoot,
+      allowWorkspaceWrite: true,
+      createdAt: 1,
+      updatedAt: 1,
+    }]
+    const releaseSource = registerTrustedAgentExternalSource(rpcSession.id, 'feishu')
+
+    try {
+      const result = await prepareAgentRpcRun({
+        sessionId: rpcSession.id,
+        userMessage: '读取跨工作区项目',
+        channelId: 'channel-1',
+        modelId: rpcSession.modelId,
+        agentRuntime: 'pi',
+      })
+
+      expect(result.query.fileAccessPolicy?.readRoots).toContain(crossWorkspaceRoot)
+      expect(result.query.systemPrompt).toContain('调用本机所有工作区的最高权限')
+    } finally {
+      releaseSource()
+      appConnectorWorkspaces = []
+    }
+
+    const ordinaryResult = await prepareAgentRpcRun({
+      sessionId: rpcSession.id,
+      userMessage: '读取当前工作区',
+      channelId: 'channel-1',
+      modelId: rpcSession.modelId,
+      agentRuntime: 'pi',
+    })
+    expect(ordinaryResult.query.fileAccessPolicy?.readRoots).not.toContain(crossWorkspaceRoot)
+  })
+
+  test('Given 飞书会话包含已失效的其他工作区 When 准备 Rust 文件策略 Then 忽略不存在的跨工作区路径', async () => {
+    const { prepareAgentRpcRun } = await import('./agent-rpc-service')
+    const originalFeishuDedicated = rpcSession.feishuDedicated
+    const missingWorkspaceRoot = '/tmp/copis-agent-rpc-test/missing-cross-workspace'
+    rpcSession.feishuDedicated = true
+    appConnectorWorkspaces = [{
+      id: 'workspace-2',
+      name: '已失效项目',
+      slug: 'missing-cross-workspace',
+      projectRootPath: `${missingWorkspaceRoot}/source`,
+      allowWorkspaceWrite: true,
+      createdAt: 1,
+      updatedAt: 1,
+    }]
+
+    try {
+      const result = await prepareAgentRpcRun({
+        sessionId: rpcSession.id,
+        userMessage: '读取其他项目',
+        channelId: 'channel-1',
+        modelId: rpcSession.modelId,
+        agentRuntime: 'pi',
+      })
+      const policy = result.query.fileAccessPolicy
+
+      expect(policy).toBeDefined()
+      expect(policy?.readRoots).not.toContain(`${missingWorkspaceRoot}/project`)
+      expect(policy?.readRoots).not.toContain(`${missingWorkspaceRoot}/copis`)
+      expect(policy?.readRoots).not.toContain(`${missingWorkspaceRoot}/source`)
+      expect(policy?.writeRoots).not.toContain(`${missingWorkspaceRoot}/project`)
+      expect(policy?.writeRoots).not.toContain(`${missingWorkspaceRoot}/copis`)
+    } finally {
+      rpcSession.feishuDedicated = originalFeishuDedicated
+      appConnectorWorkspaces = []
+    }
+  })
+
   test('Given 只附加一个文件 When 准备 Rust 文件策略 Then 不授权该文件的父目录', async () => {
     const { prepareAgentRpcRun } = await import('./agent-rpc-service')
     const originalAttachedFiles = rpcSession.attachedFiles
-    const attachedFile = '/tmp/copis-agent-rpc-test/external/allowed.txt'
+    const attachedFile = process.execPath
     rpcSession.attachedFiles = [attachedFile]
 
     try {

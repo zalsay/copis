@@ -42,10 +42,15 @@ function mergeClientConfig(
 ): FunctionalModuleManifest['client'] {
   const minVersion = pickMinimumClientVersion(existing?.minVersion, incoming?.minVersion)
   const update = incoming?.update ?? existing?.update
-  if (!minVersion && !update) return undefined
+  const updates = {
+    ...(existing?.updates ?? {}),
+    ...(incoming?.updates ?? {}),
+  }
+  if (!minVersion && !update && Object.keys(updates).length === 0) return undefined
   return {
     ...(minVersion ? { minVersion } : {}),
     ...(update ? { update } : {}),
+    ...(Object.keys(updates).length > 0 ? { updates } : {}),
   }
 }
 

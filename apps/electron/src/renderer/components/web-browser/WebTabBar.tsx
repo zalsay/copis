@@ -347,24 +347,36 @@ function WebHomeTab({ active, onClick }: { active: boolean; onClick: () => void 
   )
 }
 
+function resolveDefaultFaviconUrl(rawUrl?: string | null): string | null {
+  if (!rawUrl) return null
+  try {
+    const parsed = new URL(rawUrl)
+    if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
+      return `${parsed.origin}/favicon.ico`
+    }
+  } catch {}
+  return null
+}
+
 function WebTabIcon({ tab }: { tab: WebTabsSnapshot['tabs'][number] }): React.ReactElement {
   const [failedFavicon, setFailedFavicon] = React.useState<string | null>(null)
+  const candidateFaviconUrl = tab.faviconUrl || resolveDefaultFaviconUrl(tab.url)
 
   React.useEffect(() => {
     setFailedFavicon(null)
-  }, [tab.faviconUrl])
+  }, [candidateFaviconUrl])
 
-  if (!tab.faviconUrl || failedFavicon === tab.faviconUrl) {
+  if (!candidateFaviconUrl || failedFavicon === candidateFaviconUrl) {
     return <Globe2 className="size-3.5 shrink-0" />
   }
 
   return (
     <img
-      src={tab.faviconUrl}
+      src={candidateFaviconUrl}
       alt=""
       aria-hidden="true"
       className="size-3.5 shrink-0 rounded-sm object-contain"
-      onError={() => setFailedFavicon(tab.faviconUrl)}
+      onError={() => setFailedFavicon(candidateFaviconUrl)}
     />
   )
 }

@@ -186,6 +186,8 @@ if [[ "$SKIP_COS_UPLOAD" -eq 0 ]]; then
   (cd "$ROOT_DIR" && bun run publish:client-update -- \
     --file "$FIXED_DMG" \
     --object-key "copis/downloads/stable/darwin-$MAC_ARCH/Copis-$MAC_ARCH.dmg" \
+    --platform darwin \
+    --arch "$MAC_ARCH" \
     --version "$APP_VERSION" \
     --public-base-url "$COS_PUBLIC_BASE_URL" \
     --bucket-url "$COS_BUCKET_URL")

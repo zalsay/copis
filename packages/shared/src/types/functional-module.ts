@@ -37,6 +37,9 @@ export interface FunctionalModuleClientUpdate {
 
 export interface FunctionalModuleClientConfig {
   minVersion?: string
+  /** 按 platform-arch 保存客户端安装包，避免不同系统互相覆盖。 */
+  updates?: Record<string, FunctionalModuleClientUpdate>
+  /** 旧版全局更新字段，仅用于兼容历史 manifest。 */
   update?: FunctionalModuleClientUpdate
 }
 

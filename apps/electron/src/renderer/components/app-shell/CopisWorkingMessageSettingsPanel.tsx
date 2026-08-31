@@ -1,5 +1,5 @@
 import * as React from 'react'
-import type { WorkingReceiveChannel, WorkingReceiveChannelSettings, AgentMailStatus } from '@copis/shared'
+import type { WorkingReceiveChannel, WorkingReceiveChannelSettings, AgentMailStatus, FeishuRegisterAppResult } from '@copis/shared'
 import {
   AlertCircle,
   CheckCircle2,
@@ -70,6 +70,10 @@ export function CopisWorkingMessageSettingsPanel({
   const [feedback, setFeedback] = React.useState<{ type: 'success' | 'error'; message: string } | null>(null)
   const [qrCodeDataUrl, setQrCodeDataUrl] = React.useState<string>('')
   const [qrSeed, setQrSeed] = React.useState<number>(Date.now())
+  const [feishuAppId, setFeishuAppId] = React.useState('')
+  const [feishuRegistrationStarted, setFeishuRegistrationStarted] = React.useState(false)
+  const [feishuRegistrationResult, setFeishuRegistrationResult] = React.useState<FeishuRegisterAppResult | null>(null)
+  const [confirmingFeishuBinding, setConfirmingFeishuBinding] = React.useState(false)
 
   // Agent Mail 状态
   const [agentMailStatus, setAgentMailStatus] = React.useState<AgentMailStatus | null>(null)
@@ -145,7 +149,7 @@ export function CopisWorkingMessageSettingsPanel({
 
   // 飞书官方 SDK 扫码一键注册与授权 (Hermes 协议)
   React.useEffect(() => {
-    if (rebindChannel !== 'feishu') return undefined
+    if (rebindChannel !== 'feishu' || !feishuRegistrationStarted) return undefined
 
     let isMounted = true
     setQrCodeDataUrl('')
@@ -171,43 +175,11 @@ export function CopisWorkingMessageSettingsPanel({
     })
 
     // 发起官方飞书扫码注册流程
-    window.electronAPI.registerFeishuApp?.()
-      .then(async (result) => {
+    window.electronAPI.registerFeishuApp(feishuAppId.trim() || undefined)
+      .then((result) => {
         if (!isMounted) return
-        setFeedback({ type: 'success', message: '飞书授权成功！正在保存配置...' })
-
-        try {
-          if (result?.appId && result?.appSecret) {
-            const bot = await window.electronAPI.saveFeishuBotConfig?.({
-              name: result.tenantBrand ? `飞书助手 (${result.tenantBrand})` : '飞书助手',
-              appId: result.appId,
-              appSecret: result.appSecret,
-              enabled: true,
-            })
-            if (bot?.id) {
-              await window.electronAPI.startFeishuBot?.(bot.id)
-            }
-          }
-
-          // 同步接收渠道
-          const nextSettings = await window.electronAPI.setWorkingReceiveChannel('feishu')
-          onSettingsChange(nextSettings)
-          if (onRefresh) {
-            await onRefresh()
-          }
-
-          // 授权成功立即关闭弹窗
-          if (isMounted) {
-            setRebindChannel(null)
-            setFeedback(null)
-          }
-        } catch (saveErr) {
-          console.error('[飞书扫码] 保存飞书配置失败:', saveErr)
-          setFeedback({
-            type: 'error',
-            message: saveErr instanceof Error ? saveErr.message : '保存飞书配置失败，请重试',
-          })
-        }
+        setFeishuRegistrationResult(result)
+        setFeedback({ type: 'success', message: '飞书授权成功！请确认绑定' })
       })
       .catch((regErr) => {
         if (!isMounted) return
@@ -227,7 +199,7 @@ export function CopisWorkingMessageSettingsPanel({
       unsubscribeStatus?.()
       window.electronAPI.cancelFeishuRegistration?.().catch(() => {})
     }
-  }, [rebindChannel, qrSeed, onRefresh, onSettingsChange])
+  }, [rebindChannel, feishuRegistrationStarted, feishuAppId, qrSeed])
 
   // 微信官方 iLink Bot 扫码授权与登录
   React.useEffect(() => {
@@ -448,6 +420,61 @@ export function CopisWorkingMessageSettingsPanel({
     setRebindChannel(channel)
     setFeedback(null)
     setQrSeed(Date.now())
+    if (channel === 'feishu') {
+      setFeishuAppId('')
+      setFeishuRegistrationStarted(false)
+      setFeishuRegistrationResult(null)
+      setConfirmingFeishuBinding(false)
+    }
+  }
+
+  const handleStartFeishuRegistration = (): void => {
+    setQrCodeDataUrl('')
+    setFeedback(null)
+    setFeishuRegistrationStarted(true)
+  }
+
+  const handleRefreshFeishuRegistration = (): void => {
+    setFeishuRegistrationResult(null)
+    setFeedback(null)
+    setQrSeed(Date.now())
+  }
+
+  const handleConfirmFeishuBinding = async (): Promise<void> => {
+    const result = feishuRegistrationResult
+    if (!result || confirmingFeishuBinding) return
+
+    setConfirmingFeishuBinding(true)
+    try {
+      if (result.appId && result.appSecret) {
+        const bot = await window.electronAPI.saveFeishuBotConfig?.({
+          name: result.tenantBrand ? `飞书助手 (${result.tenantBrand})` : '飞书助手',
+          appId: result.appId,
+          appSecret: result.appSecret,
+          enabled: true,
+          operatorOpenId: result.operatorOpenId,
+        })
+        if (bot?.id) {
+          await window.electronAPI.startFeishuBot?.(bot.id)
+        }
+      }
+
+      const nextSettings = await window.electronAPI.setWorkingReceiveChannel('feishu')
+      onSettingsChange(nextSettings)
+      if (onRefresh) {
+        await onRefresh()
+      }
+      setRebindChannel(null)
+      setFeedback(null)
+    } catch (saveErr) {
+      console.error('[飞书扫码] 保存飞书配置失败:', saveErr)
+      setFeedback({
+        type: 'error',
+        message: saveErr instanceof Error ? saveErr.message : '保存飞书配置失败，请重试',
+      })
+    } finally {
+      setConfirmingFeishuBinding(false)
+    }
   }
 
   // 轮询检查绑定状态
@@ -754,6 +781,132 @@ export function CopisWorkingMessageSettingsPanel({
                 </div>
               )}
             </div>
+          ) : rebindChannel === 'feishu' ? (
+            <div className="space-y-4 py-1">
+              <div className="rounded-xl border border-white/10 bg-[#121314] p-4 text-left shadow-inner">
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between gap-2">
+                    <Label htmlFor="feishu-app-id" className="text-xs text-[#dfe4e1]">
+                      已有飞书智能体 App ID（可选）
+                    </Label>
+                    <button
+                      type="button"
+                      onClick={() => window.electronAPI.openExternal?.('https://open.feishu.cn/')}
+                      className="inline-flex shrink-0 items-center gap-1 text-[11px] text-[var(--ui-primary)] hover:underline"
+                    >
+                      <span>打开飞书开放平台</span>
+                      <ExternalLink className="size-3" aria-hidden="true" />
+                    </button>
+                  </div>
+                  <Input
+                    id="feishu-app-id"
+                    value={feishuAppId}
+                    onChange={(event) => setFeishuAppId(event.target.value)}
+                    placeholder="例如：cli_xxxxxxxxxxxxxxxx"
+                    disabled={feishuRegistrationStarted}
+                    className="h-8 border-white/10 bg-white/5 text-xs text-[#f1f3f2]"
+                  />
+                  <p className="text-[11px] leading-relaxed text-[#858b8e]">
+                    填写后将复用已有智能体应用；留空则创建新的飞书智能体应用。
+                  </p>
+                </div>
+
+                {!feishuRegistrationStarted ? (
+                  <Button
+                    type="button"
+                    size="sm"
+                    className="mt-4 w-full bg-[var(--ui-primary)] text-black hover:opacity-90 text-xs font-medium"
+                    onClick={handleStartFeishuRegistration}
+                  >
+                    <Smartphone className="mr-1.5 size-3.5" />
+                    开始生成二维码
+                  </Button>
+                ) : (
+                  <div className="mt-4 flex flex-col items-center justify-center border-t border-white/10 pt-4 text-center">
+                    <div className="relative flex size-44 items-center justify-center overflow-hidden rounded-lg border border-slate-200/90 bg-white p-2 shadow-md">
+                      {qrCodeDataUrl ? (
+                        <img
+                          src={qrCodeDataUrl}
+                          alt="飞书授权绑定二维码"
+                          className="size-full rounded object-contain"
+                        />
+                      ) : (
+                        <div className="flex flex-col items-center justify-center gap-2 text-slate-500">
+                          <Loader2 className="size-6 animate-spin text-[var(--ui-primary)]" />
+                          <span className="text-[11px]">正在生成飞书官方二维码...</span>
+                        </div>
+                      )}
+                      {qrCodeDataUrl && (
+                        <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                          <div className="flex size-8 items-center justify-center rounded-md border border-slate-200 bg-white p-0.5 shadow">
+                            <img src={feishuLogo} alt="" className="size-full rounded object-contain" />
+                          </div>
+                        </div>
+                      )}
+                      {feishuRegistrationResult && (
+                        <div className="absolute inset-0 z-10 flex items-center justify-center bg-white/60 backdrop-blur-[1px] pointer-events-none">
+                          <div className="flex items-center gap-1.5 rounded-md bg-white/90 px-3 py-2 text-xs font-medium text-emerald-700 shadow-md">
+                            <CheckCircle2 className="size-4" />
+                            <span>授权成功</span>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                    <div className="mt-3 flex items-center gap-1.5 text-xs text-[#9fa3a6]">
+                      {feishuRegistrationResult ? (
+                        <>
+                          <CheckCircle2 className="size-3.5 text-emerald-400" />
+                          <span>飞书授权成功！请确认绑定</span>
+                        </>
+                      ) : (
+                        <>
+                          <Loader2 className="size-3.5 animate-spin text-[var(--ui-primary)]" />
+                          <span>等待手机飞书扫码确认中...</span>
+                        </>
+                      )}
+                      <button
+                        type="button"
+                        onClick={handleRefreshFeishuRegistration}
+                        className="ml-1 text-[11px] text-[var(--ui-primary)] hover:underline"
+                        title="刷新二维码"
+                        disabled={confirmingFeishuBinding}
+                      >
+                        刷新
+                      </button>
+                    </div>
+                    <div className="mt-3 w-full rounded-lg border border-white/5 bg-white/[0.02] p-3 text-left">
+                      <div className="flex items-center gap-1 text-[11px] font-medium text-[#dfe4e1]">
+                        <Smartphone className="size-3.5 text-[var(--ui-primary)]" />
+                        <span>扫码操作步骤：</span>
+                      </div>
+                      <ol className="mt-1.5 list-decimal list-inside space-y-1 text-[11px] leading-relaxed text-[#9fa3a6]">
+                        <li>打开手机<strong>飞书 App</strong>，点击右上角<strong>「扫一扫」</strong></li>
+                        <li>扫描上方二维码，在手机端点击<strong>「确认授权绑定」</strong></li>
+                        <li>授权完成后系统将<strong>自动识别并完成绑定</strong></li>
+                      </ol>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {feedback && (
+                <div
+                  className={`flex items-start gap-2 rounded-md p-2.5 text-xs ${
+                    feedback.type === 'success'
+                      ? 'bg-emerald-500/10 text-emerald-300 border border-emerald-500/20'
+                      : 'bg-red-500/10 text-red-300 border border-red-500/20'
+                  }`}
+                  role="status"
+                >
+                  {feedback.type === 'success' ? (
+                    <CheckCircle2 className="size-4 shrink-0 text-emerald-400 mt-0.5" />
+                  ) : (
+                    <AlertCircle className="size-4 shrink-0 text-red-400 mt-0.5" />
+                  )}
+                  <span>{feedback.message}</span>
+                </div>
+              )}
+            </div>
           ) : rebindChannel === 'dingtalk' && dingtalkMode === 'manual' ? (
             <div className="space-y-4 py-1">
               <div className="rounded-xl border border-white/10 bg-[#121314] p-4 text-left shadow-inner space-y-3">
@@ -860,9 +1013,7 @@ export function CopisWorkingMessageSettingsPanel({
                         <div className="flex flex-col items-center justify-center gap-2 text-slate-500">
                           <Loader2 className="size-6 animate-spin text-[var(--ui-primary)]" />
                           <span className="text-[11px]">
-                            {rebindChannel === 'feishu'
-                              ? '正在生成飞书官方二维码...'
-                              : rebindChannel === 'dingtalk'
+                            {rebindChannel === 'dingtalk'
                               ? '正在生成钉钉授权二维码...'
                               : '正在获取微信机器人二维码...'}
                           </span>
@@ -883,9 +1034,7 @@ export function CopisWorkingMessageSettingsPanel({
                       <Loader2 className="size-3.5 animate-spin text-[var(--ui-primary)]" />
                       <span>
                         等待手机
-                        {rebindChannel === 'feishu'
-                          ? '飞书'
-                          : rebindChannel === 'dingtalk'
+                        {rebindChannel === 'dingtalk'
                           ? '钉钉'
                           : '微信'}
                         扫码授权中...
@@ -910,9 +1059,7 @@ export function CopisWorkingMessageSettingsPanel({
                         <li>
                           打开手机
                           <strong>
-                            {rebindChannel === 'feishu'
-                              ? '飞书'
-                              : rebindChannel === 'dingtalk'
+                            {rebindChannel === 'dingtalk'
                               ? '钉钉'
                               : '微信'}{' '}
                             App
@@ -948,7 +1095,43 @@ export function CopisWorkingMessageSettingsPanel({
           )}
 
           <DialogFooter className="flex-row items-center justify-between sm:justify-between">
-            {rebindChannel === 'dingtalk' && dingtalkMode === 'manual' ? (
+            {rebindChannel === 'feishu' ? (
+              <>
+                <span className="text-[11px] text-[#858b8e]">
+                  {feishuRegistrationResult ? '授权信息已准备好，请确认绑定' : '支持绑定已有飞书智能体应用'}
+                </span>
+                <div className="flex items-center gap-2">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="border-white/15 bg-transparent text-[#dfe4e1] hover:bg-white/5"
+                    onClick={() => setRebindChannel(null)}
+                    disabled={checkingBinding || confirmingFeishuBinding}
+                  >
+                    取消
+                  </Button>
+                  {feishuRegistrationStarted && (
+                    <Button
+                      type="button"
+                      size="sm"
+                      className="bg-[var(--ui-primary)] text-black hover:opacity-90 font-medium"
+                      onClick={() => void (feishuRegistrationResult ? handleConfirmFeishuBinding() : handleManualCheck())}
+                      disabled={checkingBinding || confirmingFeishuBinding}
+                    >
+                      {confirmingFeishuBinding ? (
+                        <>
+                          <Loader2 className="mr-1.5 size-3.5 animate-spin" />
+                          保存中...
+                        </>
+                      ) : (
+                        '我已在手机确认'
+                      )}
+                    </Button>
+                  )}
+                </div>
+              </>
+            ) : rebindChannel === 'dingtalk' && dingtalkMode === 'manual' ? (
               <>
                 {dingtalkClientId.trim() ? (
                   <button

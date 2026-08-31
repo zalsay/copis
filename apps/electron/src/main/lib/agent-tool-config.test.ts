@@ -23,7 +23,10 @@ mock.module('./attachment-service', () => ({
   isImageAttachment: () => false,
 }))
 mock.module('./working-auth-store', () => ({
-  getWorkingTokenStore: () => ({ getToken: () => 'working-token' }),
+  getWorkingTokenStore: () => ({
+    getToken: () => 'working-token',
+    getUser: () => ({ id: 'working-user' }),
+  }),
 }))
 
 type AgentToolConfigModule = typeof import('./agent-tool-config')

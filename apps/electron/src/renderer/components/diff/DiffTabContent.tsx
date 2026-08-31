@@ -27,6 +27,7 @@ import { FileApiError, fileApiClient } from '@/lib/file-api-client'
 import { DiffView } from './DiffView'
 import { MarkdownRichEditor } from './MarkdownRichEditor'
 import { getPreviewCandidateBasePaths, isAbsoluteFilePath } from './preview-open-path'
+import { loadPreviewText } from './preview-text-loader'
 import { PreviewFindBar } from './PreviewFindBar'
 import { MarkdownToc } from './MarkdownToc'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
@@ -263,6 +264,7 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
   const scrollContainerRef = React.useRef<HTMLDivElement>(null)
   const [findOpen, setFindOpen] = React.useState(false)
   const [loading, setLoading] = React.useState(true)
+  const [loadError, setLoadError] = React.useState<string | null>(null)
   const [copied, setCopied] = React.useState(false)
   const refreshVersionMap = useAtomValue(agentDiffRefreshVersionAtom)
   const setRefreshVersionMap = useSetAtom(agentDiffRefreshVersionAtom)
@@ -533,6 +535,7 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
     setImageZoom(0.25)
     setImageNaturalSize({ w: 0, h: 0 })
     setLoading(!isLegacyOffice)
+    setLoadError(null)
     setMarkdownEditing(false)
     setMarkdownSourceMode(false)
     setMarkdownDraft('')
@@ -597,9 +600,14 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
       setPdfZoom(100)
       setImagePath(cached.imagePath ?? '')
       setImageDataUrl(cached.imageDataUrl ?? '')
-      if (cached.revision) fileRevisionsRef.current.set(filePath, cached.revision)
+      if (cached.revision) {
+        fileRevisionsRef.current.set(filePath, cached.revision)
+      } else {
+        fileRevisionsRef.current.delete(filePath)
+      }
       setImageZoom(0.25)
       setImageNaturalSize({ w: 0, h: 0 })
+      setLoadError(null)
       setLoading(false)
       return // 缓存命中，直接返回，不执行 load()
     } else {
@@ -615,6 +623,7 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
       setImageDataUrl('')
       setImageZoom(0.25)
       setImageNaturalSize({ w: 0, h: 0 })
+      setLoadError(null)
       lastNewContentRef.current = ''
       lastOldContentRef.current = ''
       // 内容缓存被 LRU 淘汰但滚动位置仍在时（如切走会话后预览 Tab 重建），
@@ -674,14 +683,31 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
             if (isLegacyOffice) {
               return
             }
-            const result = await fileApiClient.readText({
-              path: filePath,
-              ...toFileApiContext(fileAccess),
+            const result = await loadPreviewText({
+              readViaHttp: () => fileApiClient.readText({
+                path: filePath,
+                ...toFileApiContext(fileAccess),
+              }),
+              readViaIpc: () => window.electronAPI.resolveAndReadFile(filePath, fileAccess),
+              shouldAbort: () => cancelled,
             })
             if (cancelled) return
+            if (result.source === 'error') {
+              setLoadError('文件预览加载失败，请点击刷新重试')
+              return
+            }
             content = result.content
-            fileRevisionsRef.current.set(filePath, result.revision)
-            cacheSet(cacheKey, { oldContent: '', newContent: content, revision: result.revision })
+            if (result.revision) {
+              fileRevisionsRef.current.set(filePath, result.revision)
+            } else {
+              // 旧 IPC 响应没有 revision，避免把当前文件的过期版本带入后续保存。
+              fileRevisionsRef.current.delete(filePath)
+            }
+            cacheSet(cacheKey, {
+              oldContent: '',
+              newContent: content,
+              ...(result.revision ? { revision: result.revision } : {}),
+            })
           } else {
             const result = await window.electronAPI.getDiffContents({ dirPath, filePath, gitRoot, sessionId, baseRef })
             if (cancelled) return
@@ -1257,6 +1283,10 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
         <div ref={scrollContainerRef} onScroll={handleScroll} className="h-full flex-1 min-w-0 overflow-auto scrollbar-thin relative">
           {loading ? (
             <div className="flex items-center justify-center h-full text-muted-foreground text-[12px]">加载中...</div>
+          ) : loadError ? (
+            <div className="flex h-full items-center justify-center px-6 text-center text-[12px] text-muted-foreground">
+              {loadError}
+            </div>
           ) : previewOnly ? (
             isPdf ? (
               pdfSrc ? (

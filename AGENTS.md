@@ -518,6 +518,7 @@ Copis 参考 YC QM 项目的结构化长期记忆管理思路（`notebook` / `ca
 
 ## 代码风格
 
+- **单文件行数上限**：源代码文件不超过 600 行（不含自动生成的文件）。新增代码必须遵守；改动存量超大文件时应顺势拆分，拆分方案见 `docs/large-file-split-plan.md`（前 5 大文件：`main/ipc.ts`、`native/http-api-server/src/main.rs`、`AgentConversationSurface.tsx`、`agent-orchestrator.ts`、`preload/index.ts`）。
 - 永远不要使用 `any` 类型 — 创建合适的 interface
 - 对象类型优先使用 interface 而不是 type
 - 尽可能使用 `import type` 进行仅类型导入

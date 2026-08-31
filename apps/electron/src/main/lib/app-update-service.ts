@@ -20,7 +20,12 @@ export async function checkAppUpdateViaRustApi(): Promise<AppUpdateInfo> {
     configuredPort: process.env.COPIS_HTTP_API_PORT,
     isPackaged: app.isPackaged,
   })
-  const url = `http://${COPIS_HTTP_API_HOST}:${port}/api/internal/app-update/check?client_version=${encodeURIComponent(app.getVersion())}`
+  const params = new URLSearchParams({
+    client_version: app.getVersion(),
+    platform: process.platform,
+    arch: process.arch,
+  })
+  const url = `http://${COPIS_HTTP_API_HOST}:${port}/api/internal/app-update/check?${params.toString()}`
   const response = await fetch(url, {
     headers: {
       Accept: 'application/json',

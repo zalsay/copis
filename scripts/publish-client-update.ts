@@ -2,7 +2,12 @@
 import { createHash } from 'node:crypto'
 import { readFileSync, statSync } from 'node:fs'
 import { resolve } from 'node:path'
-import type { FunctionalModuleClientUpdate, FunctionalModuleManifest } from '@copis/shared'
+import type {
+  FunctionalModuleArchitecture,
+  FunctionalModuleClientUpdate,
+  FunctionalModuleManifest,
+  FunctionalModulePlatform,
+} from '@copis/shared'
 import type { FunctionalModuleCosSdkClient } from './functional-module-cos-client'
 import { createFunctionalModuleCosClient, parseFunctionalModuleCosBucketUrl } from './functional-module-cos-client'
 import {
@@ -23,6 +28,8 @@ export interface ClientUpdatePublishInput {
   version: string
   installerUrl: string
   publicBaseUrl: string
+  platform: FunctionalModulePlatform
+  arch: FunctionalModuleArchitecture
   manifestPrefix?: string
   channel?: string
   manifestUrl?: string
@@ -40,12 +47,20 @@ export interface ClientUpdatePublishResult {
 export function buildClientUpdateManifest(
   existing: FunctionalModuleManifest,
   update: FunctionalModuleClientUpdate,
+  platform: FunctionalModulePlatform,
+  arch: FunctionalModuleArchitecture,
 ): FunctionalModuleManifest {
+  const updates = { ...(existing.client?.updates ?? {}) }
+  const legacyPlatformKey = existing.client?.update && inferPlatformKey(existing.client.update.url)
+  if (legacyPlatformKey && !updates[legacyPlatformKey]) {
+    updates[legacyPlatformKey] = existing.client.update
+  }
+
   return {
     ...existing,
     client: {
       ...(existing.client ?? {}),
-      update,
+      updates: { ...updates, [`${platform}-${arch}`]: update },
     },
   }
 }
@@ -61,6 +76,7 @@ export async function publishClientUpdate(
   const body = readFileSync(installerPath)
   const version = input.version.trim()
   const installerUrl = normalizeHttpsUrl(input.installerUrl, '主程序安装包 URL')
+  validateInstallerUrlPlatform(installerUrl, input.platform)
   const publicBaseUrl = normalizeHttpUrl(input.publicBaseUrl, 'COS_PUBLIC_BASE_URL').replace(/\/+$/, '')
   const channel = normalizeSegment(input.channel ?? DEFAULT_CLIENT_MANIFEST_CHANNEL, '发布 channel')
   const prefix = normalizePrefix(input.manifestPrefix ?? DEFAULT_CLIENT_MANIFEST_PREFIX)
@@ -80,7 +96,11 @@ export async function publishClientUpdate(
     throw new Error(`客户端 manifest 不是有效的 JSON：${manifestUrl}`, { cause: error })
   }
   validateExistingManifest(existing, channel)
-  const existingVersion = existing.client?.update?.version
+  const platformKey = `${input.platform}-${input.arch}`
+  const existingVersion = existing.client?.updates?.[platformKey]?.version
+    ?? (inferPlatformKey(existing.client?.update?.url ?? '') === platformKey
+      ? existing.client?.update?.version
+      : undefined)
   if (existingVersion && compareVersions(existingVersion, version) > 0) {
     throw new Error(`客户端 manifest 已是更高版本 ${existingVersion}，拒绝降级到 ${version}`)
   }
@@ -92,7 +112,7 @@ export async function publishClientUpdate(
     size: body.byteLength,
     ...(input.releaseNotes?.trim() ? { releaseNotes: input.releaseNotes.trim() } : {}),
   }
-  const manifest = buildClientUpdateManifest(existing, update)
+  const manifest = buildClientUpdateManifest(existing, update, input.platform, input.arch)
   const entry = buildFunctionalModuleManifestUpload({
     channel,
     publicBaseUrl,
@@ -131,6 +151,8 @@ async function main(): Promise<void> {
     ?? process.env.COPIS_APP_UPDATE_MANIFEST_URL?.trim()
     ?? process.env.COPIS_FUNCTIONAL_MODULE_MANIFEST_URL?.trim()
   const version = requiredOption('--version', 'COPIS_CLIENT_UPDATE_VERSION')
+  const platform = requiredPlatformOption('--platform', 'COPIS_CLIENT_UPDATE_PLATFORM')
+  const arch = requiredArchitectureOption('--arch', 'COPIS_CLIENT_UPDATE_ARCH')
 
   const cosModule = await import('cos-nodejs-sdk-v5') as unknown as { default?: CosSdkConstructor }
   if (!cosModule.default) throw new Error('COS SDK 初始化失败')
@@ -145,6 +167,8 @@ async function main(): Promise<void> {
     version,
     installerUrl,
     publicBaseUrl,
+    platform,
+    arch,
     manifestPrefix,
     manifestUrl,
     releaseNotes: getOption('--release-notes') ?? process.env.COPIS_CLIENT_UPDATE_NOTES,
@@ -163,6 +187,22 @@ function requiredEnv(name: string): string {
 function requiredOption(option: string, envName: string): string {
   const value = getOption(option) ?? process.env[envName]?.trim()
   if (!value) throw new Error(`缺少 ${option} 或环境变量 ${envName}`)
+  return value
+}
+
+function requiredPlatformOption(option: string, envName: string): FunctionalModulePlatform {
+  const value = requiredOption(option, envName)
+  if (value !== 'darwin' && value !== 'linux' && value !== 'win32') {
+    throw new Error(`需要有效的客户端平台（${option} 或 ${envName}）：darwin/linux/win32`)
+  }
+  return value
+}
+
+function requiredArchitectureOption(option: string, envName: string): FunctionalModuleArchitecture {
+  const value = requiredOption(option, envName)
+  if (value !== 'arm64' && value !== 'x64') {
+    throw new Error(`需要有效的客户端架构（${option} 或 ${envName}）：arm64/x64`)
+  }
   return value
 }
 
@@ -205,6 +245,27 @@ function normalizeHttpsUrl(value: string, label: string): string {
   const url = new URL(value.trim())
   if (url.protocol !== 'https:') throw new Error(`${label} 必须使用 HTTPS`)
   return value.trim()
+}
+
+function validateInstallerUrlPlatform(url: string, platform: FunctionalModulePlatform): void {
+  const path = new URL(url).pathname.toLowerCase()
+  const isCompatible = platform === 'win32'
+    ? path.endsWith('.exe')
+    : platform === 'darwin'
+      ? path.endsWith('.dmg')
+      : path.endsWith('.appimage') || path.endsWith('.deb') || path.endsWith('.rpm')
+  if (!isCompatible) {
+    throw new Error(`客户端安装包 URL 与平台不匹配：${platform} -> ${url}`)
+  }
+}
+
+function inferPlatformKey(url: string): string | undefined {
+  try {
+    const match = /\/(darwin|linux|win32)-(arm64|x64)(?:\/|$)/.exec(new URL(url).pathname)
+    return match ? `${match[1]}-${match[2]}` : undefined
+  } catch {
+    return undefined
+  }
 }
 
 function validateExistingManifest(manifest: FunctionalModuleManifest, channel: string): void {

@@ -238,6 +238,22 @@ describe('Working 侧边栏视觉契约', () => {
     expect(sidebarSource).not.toContain('window.confirm(`确定删除项目')
   })
 
+  test('Given 工作区菜单 When 点击打开文件夹 Then 打开工作区来源根目录并携带工作区授权', () => {
+    expect(sidebarSource).toContain('const handleOpenWorkspaceFolder')
+    expect(sidebarSource).toContain('getWorkspaceFilesPath(workspace.slug)')
+    expect(sidebarSource).toContain('openFile(folderPath, { workspaceSlug: workspace.slug })')
+    expect(sidebarSource).toContain('打开文件夹')
+    expect(sidebarSource).toContain("toast.error(error instanceof Error ? error.message : '打开工作区文件夹失败')")
+  })
+
+  test('Given 工作区菜单 When 查看菜单项 Then 打开文件夹使用默认色且删除项保持危险色', () => {
+    expect(sidebarStyles).toContain('.copis-working-project-menu button {')
+    expect(sidebarStyles).toContain('color: hsl(var(--foreground));')
+    expect(sidebarStyles).toContain('.copis-working-project-menu .copis-working-project-delete {')
+    expect(sidebarStyles).toContain('color: hsl(var(--destructive));')
+    expect(sidebarSource).toContain('className="copis-working-project-delete"')
+  })
+
   test('Given 最后一个项目靠近侧栏底部 When 打开项目菜单 Then 菜单向上弹出避免被下方组件遮盖', () => {
     expect(sidebarSource).toContain('getBoundingClientRect()')
     expect(sidebarSource).toContain('setOpenMenuDirection')

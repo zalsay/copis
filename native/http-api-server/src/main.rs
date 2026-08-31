@@ -1627,7 +1627,19 @@ fn handle_connection(
             .get("client_version")
             .map(String::as_str)
             .unwrap_or("");
-        match app_update::check_app_update(current_version, &app_update::resolve_manifest_url()) {
+        let platform_key = query
+            .get("platform")
+            .and_then(|platform| {
+                query
+                    .get("arch")
+                    .and_then(|arch| app_update::platform_key(platform, arch))
+            })
+            .unwrap_or_else(app_update::current_platform_key);
+        match app_update::check_app_update(
+            current_version,
+            &app_update::resolve_manifest_url(),
+            &platform_key,
+        ) {
             Ok(body) => send_json_response(&mut stream, 200, &body.to_string(), origin),
             Err(error) => {
                 let body = json!({ "available": false, "error": error }).to_string();

@@ -80,6 +80,34 @@ describe('COS 功能模块发布器', () => {
     })
   })
 
+  test('带目标平台时将主程序更新写入对应 client.updates 条目', () => {
+    const binaryPath = createFixture('runtime', 'runtime')
+
+    const release = buildFunctionalModuleRelease({
+      channel: 'stable',
+      clientMinVersion: '0.16.18',
+      clientUpdate: {
+        version: '0.0.70',
+        url: 'https://download.example.com/Copis-arm64.dmg',
+        sha256: 'a'.repeat(64),
+        size: 10,
+      },
+      clientUpdatePlatform: { platform: 'darwin', arch: 'arm64' },
+      publicBaseUrl: 'https://download.example.com/copis/modules',
+      modules: [{
+        module: 'officecli',
+        version: '1.2.3',
+        platform: 'darwin',
+        arch: 'arm64',
+        binaryPath,
+        required: true,
+      }],
+    })
+
+    expect(release.manifest.client?.update).toBeUndefined()
+    expect(release.manifest.client?.updates?.['darwin-arm64']?.version).toBe('0.0.70')
+  })
+
   test('发布器为 Python runtime 归档生成统一默认入口', () => {
     const archivePath = createFixture('python-runtime-archive', 'python-runtime.tar.gz')
 

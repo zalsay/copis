@@ -24,6 +24,10 @@ export interface FunctionalModuleReleaseInput {
   channel: string
   clientMinVersion?: string
   clientUpdate?: FunctionalModuleClientUpdate
+  clientUpdatePlatform?: {
+    platform: FunctionalModulePlatform
+    arch: FunctionalModuleArchitecture
+  }
   publicBaseUrl: string
   prefix?: string
   modules: readonly FunctionalModuleBinaryInput[]
@@ -130,10 +134,11 @@ export function buildFunctionalModuleRelease(input: FunctionalModuleReleaseInput
     }
   }
 
-  const client = {
-    ...(input.clientMinVersion ? { minVersion: input.clientMinVersion } : {}),
-    ...(input.clientUpdate ? { update: input.clientUpdate } : {}),
-  }
+  const client = input.clientUpdate
+    ? buildClientUpdateConfig(input)
+    : input.clientMinVersion
+      ? { minVersion: input.clientMinVersion }
+      : {}
   const manifest: FunctionalModuleManifest = {
     schema: 1,
     channel: input.channel,
@@ -148,6 +153,13 @@ export function buildFunctionalModuleRelease(input: FunctionalModuleReleaseInput
   })
 
   return { manifest, binaries, manifestEntry }
+}
+
+function buildClientUpdateConfig(input: FunctionalModuleReleaseInput): NonNullable<FunctionalModuleManifest['client']> {
+  const minVersion = input.clientMinVersion ? { minVersion: input.clientMinVersion } : {}
+  if (!input.clientUpdatePlatform) return { ...minVersion, update: input.clientUpdate! }
+  const key = `${input.clientUpdatePlatform.platform}-${input.clientUpdatePlatform.arch}`
+  return { ...minVersion, updates: { [key]: input.clientUpdate! } }
 }
 
 /**
@@ -396,6 +408,14 @@ function validateManifestUploadInput(input: FunctionalModuleManifestUploadInput)
   if (manifest.client?.update !== undefined) {
     validateClientUpdate(manifest.client.update)
   }
+  if (manifest.client?.updates !== undefined) {
+    for (const [platformKey, update] of Object.entries(manifest.client.updates)) {
+      if (!/^(darwin|linux|win32)-(arm64|x64)$/.test(platformKey)) {
+        throw new Error(`发布 manifest client.updates 平台不合法: ${platformKey}`)
+      }
+      validateClientUpdate(update, `client.updates.${platformKey}`)
+    }
+  }
 
   const platforms = manifest.platforms as unknown
   if (!isRecord(platforms) || Object.keys(platforms).length === 0) {
@@ -433,21 +453,21 @@ function validateManifestUploadArtifact(name: string, value: unknown): void {
   if (typeof value.required !== 'boolean') throw new Error(`发布 manifest 模块 required 不合法: ${name}`)
 }
 
-function validateClientUpdate(update: FunctionalModuleClientUpdate): void {
+function validateClientUpdate(update: FunctionalModuleClientUpdate, field = 'client.update'): void {
   if (!isSemver(update.version)) {
-    throw new Error(`发布 client.update.version 不合法: ${update.version}`)
+    throw new Error(`发布 ${field}.version 不合法: ${update.version}`)
   }
   if (!update.url.startsWith('https://')) {
-    throw new Error('发布 client.update.url 必须使用 HTTPS')
+    throw new Error(`发布 ${field}.url 必须使用 HTTPS`)
   }
   if (typeof update.sha256 !== 'string' || !/^[a-f0-9]{64}$/i.test(update.sha256)) {
-    throw new Error('发布 client.update.sha256 不合法')
+    throw new Error(`发布 ${field}.sha256 不合法`)
   }
   if (!Number.isSafeInteger(update.size) || update.size <= 0) {
-    throw new Error('发布 client.update.size 不合法')
+    throw new Error(`发布 ${field}.size 不合法`)
   }
   if (update.releaseNotes !== undefined && typeof update.releaseNotes !== 'string') {
-    throw new Error('发布 client.update.releaseNotes 不合法')
+    throw new Error(`发布 ${field}.releaseNotes 不合法`)
   }
 }
 

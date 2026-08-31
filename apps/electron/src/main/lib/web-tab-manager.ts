@@ -32,6 +32,7 @@ interface WebTabRecord {
   view: WebContentsView
   bounds: WebTabBounds
   isIncognito: boolean
+  isReloading: boolean
   hasOpenedAddress: boolean
   workflowOwned?: boolean
   workflowVisible?: boolean
@@ -77,11 +78,28 @@ function getFallbackTitle(url: string): string {
   }
 }
 
-function selectFaviconUrl(favicons: string[]): string | null {
+export function resolveDefaultFaviconUrl(rawUrl?: string | null): string | null {
+  if (!rawUrl) return null
+  try {
+    const parsed = new URL(rawUrl)
+    if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
+      return `${parsed.origin}/favicon.ico`
+    }
+  } catch {}
+  return null
+}
+
+function selectFaviconUrl(favicons: string[], baseUrl?: string): string | null {
   for (const favicon of favicons) {
     const normalized = favicon.trim()
     if (/^https?:\/\//i.test(normalized) || /^data:image\//i.test(normalized)) {
       return normalized
+    }
+    if (baseUrl && /^https?:\/\//i.test(baseUrl)) {
+      try {
+        const resolved = new URL(normalized, baseUrl).toString()
+        if (/^https?:\/\//i.test(resolved)) return resolved
+      } catch {}
     }
   }
   return null
@@ -163,15 +181,16 @@ export async function resolveWebTabFaviconDataUrl(
 /**
  * 主框架加载生命周期事件对 favicon 的纯状态转换，便于单元测试。
  *
- * 事件顺序约束：
- * 1. 刷新或同页面加载时，Chromium 通常不重复派发 page-favicon-updated，loading-started 不应清空已有图标；
- * 2. 导航已加载页签时，Chromium 可能在 did-navigate 之前或之后触发 page-favicon-updated，各阶段均应保留有效图标；
- * 3. 页面加载失败或异常崩溃时，由错误处理例程负责显式清空图标。
+ * 事件顺序约束：从收藏夹导航已加载页签时，Chromium 可能在 did-navigate（导航提交）
+ * 之前或之后触发 page-favicon-updated；导航提交阶段不应清空刚收到的图标。
+ * 普通导航开始时清空旧图标，显式刷新时保留当前图标，避免 Chromium 未重复发送缓存 favicon
+ * 时 Tab 回退到默认图标；页面加载失败或异常崩溃时，由错误处理例程显式清空图标。
+ * 页面未提供特殊 favicon 时，回退到该站点的根目录 favicon.ico。
  */
 export type WebTabFaviconLifecycleEvent =
-  | { type: 'loading-started' }
-  | { type: 'favicon-updated'; favicons: string[] }
-  | { type: 'navigation-committed' }
+  | { type: 'loading-started'; preserveFavicon?: boolean }
+  | { type: 'favicon-updated'; favicons: string[]; baseUrl?: string }
+  | { type: 'navigation-committed'; url?: string }
 
 export function resolveWebTabFaviconUrl(
   previous: string | null,
@@ -179,11 +198,11 @@ export function resolveWebTabFaviconUrl(
 ): string | null {
   switch (event.type) {
     case 'loading-started':
-      return previous
+      return event.preserveFavicon ? previous : null
     case 'favicon-updated':
-      return selectFaviconUrl(event.favicons)
+      return selectFaviconUrl(event.favicons, event.baseUrl) ?? (event.baseUrl ? resolveDefaultFaviconUrl(event.baseUrl) : previous)
     case 'navigation-committed':
-      return previous
+      return previous ?? resolveDefaultFaviconUrl(event.url)
   }
 }
 
@@ -424,11 +443,15 @@ function installWebContentsHandlers(record: WebTabRecord): void {
     record.faviconRequestId += 1
     refreshState(record, {
       isLoading: true,
-      faviconUrl: resolveWebTabFaviconUrl(record.state.faviconUrl, { type: 'loading-started' }),
+      faviconUrl: resolveWebTabFaviconUrl(record.state.faviconUrl, {
+        type: 'loading-started',
+        preserveFavicon: record.isReloading,
+      }),
     })
   })
 
   contents.on('did-stop-loading', () => {
+    record.isReloading = false
     refreshState(record, { isLoading: false })
   })
 
@@ -448,7 +471,13 @@ function installWebContentsHandlers(record: WebTabRecord): void {
       ) {
         return
       }
-      refreshState(record, { faviconUrl })
+      refreshState(record, {
+        faviconUrl: faviconUrl ?? resolveWebTabFaviconUrl(record.state.faviconUrl, {
+          type: 'favicon-updated',
+          favicons,
+          baseUrl: pageUrl,
+        }),
+      })
     })
   })
 
@@ -458,7 +487,7 @@ function installWebContentsHandlers(record: WebTabRecord): void {
       url,
       isLoading: false,
       title: getFallbackTitle(url),
-      faviconUrl: resolveWebTabFaviconUrl(record.state.faviconUrl, { type: 'navigation-committed' }),
+      faviconUrl: resolveWebTabFaviconUrl(record.state.faviconUrl, { type: 'navigation-committed', url }),
     })
     emitWebTabLifecycle({ type: 'navigated', tabId: record.state.id, workflowOwned: record.workflowOwned, url, snapshot: getSnapshot() })
   })
@@ -478,6 +507,7 @@ function installWebContentsHandlers(record: WebTabRecord): void {
 
   contents.on('did-fail-load', (_event, _errorCode, errorDescription, validatedURL, isMainFrame) => {
     if (!isMainFrame) return
+    record.isReloading = false
     record.mainFrameLoadError = errorDescription || '网页加载失败'
     record.faviconRequestId += 1
     refreshState(record, {
@@ -490,6 +520,7 @@ function installWebContentsHandlers(record: WebTabRecord): void {
 
   contents.on('render-process-gone', () => {
     record.faviconRequestId += 1
+    record.isReloading = false
     refreshState(record, { title: '网页进程已退出', isLoading: false, faviconUrl: null })
   })
 
@@ -802,6 +833,7 @@ function createWebTabInternal(input: CreateWebTabInput, workflowOwned: boolean, 
     view,
     bounds: { x: 0, y: 0, width: 0, height: 0 },
     isIncognito,
+    isReloading: false,
     hasOpenedAddress: isHttpWebUrl(url),
     workflowOwned,
     workflowVisible: showWorkflowForE2E,
@@ -1066,6 +1098,7 @@ export function navigateWebTab(input: NavigateWebTabInput): WebTabsSnapshot {
   if (!record) throw new Error('网页页签不存在')
 
   const url = normalizeWebTabUrl(input.url)
+  record.isReloading = false
   if (isHttpWebUrl(url)) record.hasOpenedAddress = true
   record.mainFrameLoadError = undefined
   record.faviconRequestId += 1
@@ -1074,7 +1107,7 @@ export function navigateWebTab(input: NavigateWebTabInput): WebTabsSnapshot {
     url,
     title: getFallbackTitle(url),
     isLoading: url !== DEFAULT_URL,
-    faviconUrl: null,
+    faviconUrl: resolveDefaultFaviconUrl(url),
     canGoBack: record.view.webContents.canGoBack(),
     canGoForward: record.view.webContents.canGoForward(),
   }
@@ -1152,7 +1185,10 @@ export function setWorkflowWebTabVisible(tabId: string, visible: boolean): void 
 export function goBackWebTab(tabId: string): WebTabsSnapshot {
   const record = records.get(tabId)
   if (!record) throw new Error('网页页签不存在')
-  if (record.view.webContents.canGoBack()) record.view.webContents.goBack()
+  if (record.view.webContents.canGoBack()) {
+    record.isReloading = false
+    record.view.webContents.goBack()
+  }
   return getSnapshot()
 }
 
@@ -1160,7 +1196,10 @@ export function goBackWebTab(tabId: string): WebTabsSnapshot {
 export function goForwardWebTab(tabId: string): WebTabsSnapshot {
   const record = records.get(tabId)
   if (!record) throw new Error('网页页签不存在')
-  if (record.view.webContents.canGoForward()) record.view.webContents.goForward()
+  if (record.view.webContents.canGoForward()) {
+    record.isReloading = false
+    record.view.webContents.goForward()
+  }
   return getSnapshot()
 }
 
@@ -1168,7 +1207,13 @@ export function goForwardWebTab(tabId: string): WebTabsSnapshot {
 export function reloadWebTab(tabId: string): WebTabsSnapshot {
   const record = records.get(tabId)
   if (!record) throw new Error('网页页签不存在')
-  record.view.webContents.reload()
+  record.isReloading = true
+  try {
+    record.view.webContents.reload()
+  } catch (error) {
+    record.isReloading = false
+    throw error
+  }
   return getSnapshot()
 }
 
@@ -1264,4 +1309,3 @@ export function isWebTabCdpAttached(tabId: string): boolean {
   const record = records.get(tabId)
   return record ? record.view.webContents.debugger.isAttached() : false
 }
-

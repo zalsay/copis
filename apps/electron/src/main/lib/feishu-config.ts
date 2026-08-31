@@ -116,6 +116,7 @@ export function getFeishuBotById(botId: string): FeishuBotConfig | undefined {
 /** 保存单个 Bot 配置（新建或更新），返回保存后的 Bot 配置 */
 export function saveFeishuBotConfig(input: FeishuBotConfigInput): FeishuBotConfig {
   const config = readRawConfig()
+  const normalizedAppId = input.appId.trim()
 
   if (input.id) {
     // 更新现有 Bot
@@ -128,7 +129,7 @@ export function saveFeishuBotConfig(input: FeishuBotConfigInput): FeishuBotConfi
       id: input.id,
       name: input.name,
       enabled: input.enabled,
-      appId: input.appId.trim(),
+      appId: normalizedAppId,
       appSecret: input.appSecret ? encryptSecret(input.appSecret) : existing.appSecret,
       defaultWorkspaceId: input.defaultWorkspaceId ?? existing.defaultWorkspaceId,
       defaultChannelId: input.defaultChannelId ?? existing.defaultChannelId,
@@ -140,12 +141,34 @@ export function saveFeishuBotConfig(input: FeishuBotConfigInput): FeishuBotConfi
     return updated
   }
 
+  // 扫码绑定已有应用时复用本地同 App ID 的 Bot，避免重复创建配置。
+  const existingAppIdx = normalizedAppId
+    ? config.bots.findIndex((bot) => bot.appId.trim() === normalizedAppId)
+    : -1
+  if (existingAppIdx !== -1) {
+    const existing = config.bots[existingAppIdx]!
+    const updated: FeishuBotConfig = {
+      id: existing.id,
+      name: input.name,
+      enabled: input.enabled,
+      appId: normalizedAppId,
+      appSecret: input.appSecret ? encryptSecret(input.appSecret) : existing.appSecret,
+      defaultWorkspaceId: input.defaultWorkspaceId ?? existing.defaultWorkspaceId,
+      defaultChannelId: input.defaultChannelId ?? existing.defaultChannelId,
+      defaultModelId: input.defaultModelId ?? existing.defaultModelId,
+    }
+    config.bots[existingAppIdx] = updated
+    writeMultiConfig(config)
+    console.log(`[飞书配置] Bot "${updated.name}" 已按 App ID 复用更新`)
+    return updated
+  }
+
   // 新建 Bot
   const bot: FeishuBotConfig = {
     id: randomUUID(),
     name: input.name,
     enabled: input.enabled,
-    appId: input.appId.trim(),
+    appId: normalizedAppId,
     appSecret: input.appSecret ? encryptSecret(input.appSecret) : '',
     defaultWorkspaceId: input.defaultWorkspaceId,
     defaultChannelId: input.defaultChannelId,

@@ -10,6 +10,10 @@ describe('Windows 构建脚本固定安装程序发布', () => {
     expect(buildScript).toContain('Move-Item -LiteralPath $installerPath -Destination $fixedInstallerPath -Force')
     expect(buildScript).toContain("'publish:windows-installer'")
     expect(buildScript).toContain("'publish:client-update'")
+    expect(buildScript).toContain("'--platform'")
+    expect(buildScript).toContain("'win32'")
+    expect(buildScript).toContain("'--arch'")
+    expect(buildScript).toContain("'x64'")
     expect(buildScript).toContain('[switch]$SkipCosUpload')
   })
 

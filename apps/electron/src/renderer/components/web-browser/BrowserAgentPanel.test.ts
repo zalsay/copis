@@ -34,3 +34,7 @@ test('Given Workflow 草稿待审核 When 渲染审核条 Then 仅显示 URL、�
   expect(source).not.toContain('draftOrigins(draft)')
   expect(source).not.toContain("step.type === 'manual'")
 })
+
+test('Given 网页 Agent 会话表面 When 嵌入面板 Then 传入 variant="browser" 以激活专用快捷入口', () => {
+  expect(source).toContain('<AgentConversationSurface sessionId={sessionId} variant="browser" />')
+})

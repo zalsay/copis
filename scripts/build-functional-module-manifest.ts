@@ -158,6 +158,7 @@ const release = buildFunctionalModuleRelease({
     ?? process.env.COPIS_MODULE_CLIENT_MIN_VERSION
     ?? packageMetadata.version,
   clientUpdate: readClientUpdate(),
+  clientUpdatePlatform: { platform, arch },
   publicBaseUrl,
   prefix,
   modules: applyFunctionalModuleVersionLocks(modules, loadFunctionalModuleVersionLocks()),

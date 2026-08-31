@@ -3,8 +3,8 @@ import { beforeAll, describe, expect, mock, test } from 'bun:test'
 let contextCalls = 0
 let contextImpl = async () => ({ text: '用户偏好：中文', entries: [], generatedAt: 1 })
 
-mock.module('./memory-api-client', () => ({
-    memoryApiClient: {
+mock.module('./memory-api-client-runtime', () => ({
+    runtimeMemoryApiClient: {
       context: async () => {
         contextCalls += 1
         return contextImpl()

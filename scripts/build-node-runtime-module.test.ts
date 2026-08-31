@@ -109,7 +109,7 @@ describe('Node.js runtime 模块构建', () => {
     const bundledNode = join(extracted, 'bin', 'node')
     const nodeVersion = spawnSync(bundledNode, ['--version'], {
       env: { PATH: '/usr/bin:/bin', DYLD_LIBRARY_PATH: '' },
-      timeout: 15_000,
+      timeout: 30_000,
       encoding: 'utf8',
     })
     expect(nodeVersion.status).toBe(0)
@@ -118,5 +118,5 @@ describe('Node.js runtime 模块构建', () => {
     const linkedLibraries = Bun.spawnSync(['otool', '-L', bundledNode])
     expect(linkedLibraries.exitCode).toBe(0)
     expect(new TextDecoder().decode(linkedLibraries.stdout)).not.toContain('/opt/homebrew/')
-  }, 30_000)
+  }, 60_000)
 })

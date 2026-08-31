@@ -90,7 +90,7 @@ interface PendingDeleteWorkspace {
 
 const CONVERSATION_PREVIEW_LIMIT = 5
 /** 项目菜单的估算高度，用于判断向下弹出是否会超出侧栏底部。 */
-const PROJECT_MENU_ESTIMATED_HEIGHT = 44
+const PROJECT_MENU_ESTIMATED_HEIGHT = 76
 
 function formatSessionTime(timestamp: number): string {
   const date = new Date(timestamp)
@@ -284,6 +284,16 @@ export function CopisWorkingSidebar({ width, noTransition = false }: CopisWorkin
     if (!sessionId) toast.error('新建 Agent 会话失败')
   }
 
+  const handleOpenWorkspaceFolder = async (workspace: AgentWorkspace): Promise<void> => {
+    setOpenMenuWorkspaceId(null)
+    try {
+      const folderPath = await window.electronAPI.getWorkspaceFilesPath(workspace.slug)
+      await window.electronAPI.openFile(folderPath, { workspaceSlug: workspace.slug })
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : '打开工作区文件夹失败')
+    }
+  }
+
   const requestRemoveSession = (sessionId: string, title: string): void => {
     const session = localSessions.find((item) => item.id === sessionId)
     if (!session) return
@@ -427,30 +437,33 @@ export function CopisWorkingSidebar({ width, noTransition = false }: CopisWorkin
           <button type="button" className="copis-working-project-collapse" aria-label={isWorkspaceExpanded ? '折叠项目会话' : '展开项目会话'} aria-expanded={isWorkspaceExpanded} onClick={(event) => { event.stopPropagation(); toggleWorkspace(workspace.id) }}>
             {isWorkspaceExpanded ? <ChevronDown aria-hidden="true" /> : <ChevronRight aria-hidden="true" />}
           </button>
-          {workspace.slug !== 'default' && (
-            <button type="button" className="copis-working-project-menu-trigger" aria-label={`${workspace.name} 项目菜单`} aria-haspopup="menu" aria-expanded={isMenuOpen} onClick={(event) => {
-              event.stopPropagation()
-              if (isMenuOpen) {
-                setOpenMenuWorkspaceId(null)
-                return
-              }
-              // 靠近侧栏底部时向下弹出会被下方组件遮挡，改为向上弹出。
-              const triggerRect = event.currentTarget.getBoundingClientRect()
-              const spaceBelow = window.innerHeight - triggerRect.bottom
-              setOpenMenuDirection(spaceBelow < PROJECT_MENU_ESTIMATED_HEIGHT ? 'up' : 'down')
-              setOpenMenuWorkspaceId(workspace.id)
-            }}>
-              <MoreHorizontal aria-hidden="true" />
-            </button>
-          )}
+          <button type="button" className="copis-working-project-menu-trigger" aria-label={`${workspace.name} 项目菜单`} aria-haspopup="menu" aria-expanded={isMenuOpen} onClick={(event) => {
+            event.stopPropagation()
+            if (isMenuOpen) {
+              setOpenMenuWorkspaceId(null)
+              return
+            }
+            // 靠近侧栏底部时向下弹出会被下方组件遮挡，改为向上弹出。
+            const triggerRect = event.currentTarget.getBoundingClientRect()
+            const spaceBelow = window.innerHeight - triggerRect.bottom
+            setOpenMenuDirection(spaceBelow < PROJECT_MENU_ESTIMATED_HEIGHT ? 'up' : 'down')
+            setOpenMenuWorkspaceId(workspace.id)
+          }}>
+            <MoreHorizontal aria-hidden="true" />
+          </button>
           <button type="button" className="copis-working-project-new-task" aria-label={`在 ${workspace.name} 发起新会话`} title="新会话" onClick={(event) => { event.stopPropagation(); void handleNewSessionForWorkspace(workspace.id) }}>
             <PencilLine aria-hidden="true" />
           </button>
-          {isMenuOpen && workspace.slug !== 'default' && (
+          {isMenuOpen && (
             <div className="copis-working-project-menu" role="menu">
-              <button type="button" role="menuitem" disabled={busy || localWorkspaces.length <= 1} onClick={(event) => { event.stopPropagation(); requestRemoveWorkspace(workspace.id) }}>
-                删除工作区
+              <button type="button" role="menuitem" onClick={(event) => { event.stopPropagation(); void handleOpenWorkspaceFolder(workspace) }}>
+                打开文件夹
               </button>
+              {workspace.slug !== 'default' && (
+                <button type="button" className="copis-working-project-delete" role="menuitem" disabled={busy || localWorkspaces.length <= 1} onClick={(event) => { event.stopPropagation(); requestRemoveWorkspace(workspace.id) }}>
+                  删除工作区
+                </button>
+              )}
             </div>
           )}
         </div>

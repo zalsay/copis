@@ -8,6 +8,7 @@ const ledgerSource = readFileSync(join(import.meta.dir, '..', '..', 'lib', 'work
 const globalStyles = readFileSync(join(import.meta.dir, '..', '..', 'styles', 'globals.css'), 'utf8')
 const tabAtomsSource = readFileSync(join(import.meta.dir, '..', '..', 'atoms', 'tab-atoms.ts'), 'utf8')
 const tabContentSource = readFileSync(join(import.meta.dir, '..', 'tabs', 'TabContent.tsx'), 'utf8')
+const ipcSource = readFileSync(join(import.meta.dir, '..', '..', '..', 'main', 'ipc.ts'), 'utf8')
 
 describe('Working 设置菜单契约', () => {
   test('Given Working 设置 When 读取菜单定义 Then 保留旧菜单并包含四个迁移页面', () => {
@@ -76,6 +77,25 @@ describe('Working 设置菜单契约', () => {
     expect(messagePanelSource).toContain('Agent 邮箱 (QQ 邮箱)')
     expect(messagePanelSource).toContain('getAgentMailStatus')
     expect(messagePanelSource).toContain('startAgentMailLogin')
+  })
+
+  test('Given 飞书授权成功 When 展示授权反馈 Then 提示用户确认绑定', () => {
+    const messagePanelSource = readFileSync(join(import.meta.dir, 'CopisWorkingMessageSettingsPanel.tsx'), 'utf8')
+    expect(messagePanelSource).toContain('飞书授权成功！请确认绑定')
+    expect(messagePanelSource).toContain('bg-white/60')
+    expect(messagePanelSource).toContain('feishuRegistrationResult')
+    expect(messagePanelSource).toContain('我已在手机确认')
+    expect(messagePanelSource).not.toContain('飞书授权成功！正在保存配置...')
+  })
+
+  test('Given 飞书已有智能体 When 绑定消息渠道 Then 提供 App ID 输入并将其传入扫码授权流程', () => {
+    const messagePanelSource = readFileSync(join(import.meta.dir, 'CopisWorkingMessageSettingsPanel.tsx'), 'utf8')
+    expect(messagePanelSource).toContain('feishuAppId')
+    expect(messagePanelSource).toContain('已有飞书智能体 App ID')
+    expect(messagePanelSource).toContain('registerFeishuApp(feishuAppId.trim() || undefined)')
+    expect(messagePanelSource).toContain('打开飞书开放平台')
+    expect(messagePanelSource).toContain("window.electronAPI.openExternal?.('https://open.feishu.cn/')")
+    expect(ipcSource).toContain('appId: normalizedAppId')
   })
 
   test('Given 我的订单页面 When 渲染设置面板 Then 不重复包含多余 header 标题', () => {

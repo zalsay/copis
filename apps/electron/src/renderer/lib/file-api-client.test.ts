@@ -6,6 +6,27 @@ function withFetchProperties<T extends (...args: never[]) => Promise<Response>>(
 }
 
 describe('FileApiClient', () => {
+  test('Given 使用默认 fetch When 发起请求 Then 保持 Window 的调用上下文', async () => {
+    const originalFetch = globalThis.fetch
+    let receiver: unknown
+    globalThis.fetch = function (this: unknown) {
+      receiver = this
+      return Promise.resolve(new Response(JSON.stringify({
+        resolvedPath: '/workspace/notes.md',
+        content: '# 计划',
+        revision: 'v1',
+      }), { status: 200 }))
+    } as unknown as typeof fetch
+
+    try {
+      const client = new FileApiClient()
+      await client.readText({ path: '/workspace/notes.md' })
+      expect(receiver).toBe(globalThis)
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+
   test('Given 文本读取 When 调用 Then 使用 JSON body 而不把路径放进 URL', async () => {
     const fetchMock = mock(async (url: string | URL | Request, init?: RequestInit) => {
       expect(String(url)).toBe('http://127.0.0.1:4321/api/files/read-text')

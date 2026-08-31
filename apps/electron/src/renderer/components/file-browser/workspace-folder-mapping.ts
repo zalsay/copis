@@ -6,8 +6,8 @@
  * 工作区根目录下的特殊系统目录在 web 层的中文映射名称
  */
 export function getWorkspaceFolderDisplayName(name: string): string {
-  if (name === 'browser') return '浏览器数据'
-  if (name === 'project') return '项目开发'
+  if (name === 'browser') return 'browser(AI 浏览器)'
+  if (name === 'project') return 'project(项目开发)'
   return name
 }
 

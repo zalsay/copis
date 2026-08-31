@@ -1,8 +1,10 @@
 import { randomUUID } from 'node:crypto'
+import { existsSync, statSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import {
   COPIS_DEFAULT_PERMISSION_MODE,
   COPIS_WORKING_CHANNEL_ID,
+  COPIS_WORKING_EXPERT_MODEL_ID,
   COPIS_WORKING_GLOBAL_MODEL_ID,
   COPIS_WORKING_MODEL_SOURCE_TYPE_HEADER,
   COPIS_WORKING_MODEL_SOURCE_TYPE_COPIS_AGENT,
@@ -103,6 +105,7 @@ import {
   shouldCaptureRpcRun,
 } from './agent-rpc-memory'
 import { filterAttachedPaths } from './attached-paths'
+import { getTrustedAgentExternalSource } from './agent-rpc-source-context'
 import type {
   AgentRpcWorkerFrame,
   PiWorkerFileAccessPolicy,
@@ -162,6 +165,8 @@ export interface PreparedAutomationRpcRun {
 const pendingAgentRpcRuns = new Map<string, PendingAgentRpcRun>()
 const rpcMemoryAutoCapture = new MemoryAutoCapture()
 const rpcMemoryMaintenance = sharedMemoryMaintenanceService
+
+export { registerTrustedAgentExternalSource } from './agent-rpc-source-context'
 
 function stringArray(value: unknown): string[] | undefined {
   const values = filterAttachedPaths(value)
@@ -289,18 +294,35 @@ function uniqueDirectories(
     ...attachedDirectories,
     ...workspaceAttachedDirectories,
     ...allWorkspacesAttachedDirs,
-  ].map((path) => resolve(path))
-  const authorizedSet = new Set(authorizedDirectories)
+  ]
+  const existingAuthorizedDirectories = existingAbsoluteDirectories(authorizedDirectories)
+  const authorizedSet = new Set(existingAuthorizedDirectories)
   const requestedDirectories = filterAttachedPaths(input.additionalDirectories).map((path) => resolve(path))
   const ignoredDirectories = requestedDirectories.filter((path) => !authorizedSet.has(path))
   if (ignoredDirectories.length > 0) {
     console.warn(`[Agent RPC] 忽略未在工作区授权清单中的附加目录: ${ignoredDirectories.join(', ')}`)
   }
-  return Array.from(new Set(authorizedDirectories))
+  return existingAuthorizedDirectories
 }
 
 function uniqueAbsolutePaths(paths: readonly string[]): string[] {
   return Array.from(new Set(paths.filter((path) => path.trim().length > 0).map((path) => resolve(path))))
+}
+
+/** Rust 权限策略会 canonicalize 每一条路径；旧配置中的失效路径必须在发送前过滤。 */
+function existingAbsolutePaths(paths: readonly string[]): string[] {
+  return uniqueAbsolutePaths(paths).filter((path) => existsSync(path))
+}
+
+/** 目录权限根必须确实是目录，避免文件或断开的符号链接进入 Rust 策略。 */
+function existingAbsoluteDirectories(paths: readonly string[]): string[] {
+  return uniqueAbsolutePaths(paths).filter((path) => {
+    try {
+      return statSync(path).isDirectory()
+    } catch {
+      return false
+    }
+  })
 }
 
 function buildRustFileAccessPolicy(input: {
@@ -325,8 +347,8 @@ function buildRustFileAccessPolicy(input: {
     browserSessionRoot,
     sessionWorkspaceRoot,
     input.workspaceSkillsDir,
-    ...input.additionalDirectories,
-    ...getWorkspaceAttachedDirectories(input.workspace.slug),
+    ...existingAbsoluteDirectories(input.additionalDirectories),
+    ...existingAbsoluteDirectories(getWorkspaceAttachedDirectories(input.workspace.slug)),
   ]
   const workspaceCopisRoot = getAgentWorkspaceCopisPath(input.workspace)
   const writeRoots = [projectRoot, workspaceCopisRoot, browserSessionRoot, sessionWorkspaceRoot]
@@ -341,24 +363,24 @@ function buildRustFileAccessPolicy(input: {
     }
     for (const ws of allWorkspaces) {
       try {
-        workspaceReadRoots.push(
+        workspaceReadRoots.push(...existingAbsoluteDirectories([
           getProjectFilesPath(ws.slug),
           getAgentWorkspaceCopisPath(ws),
           getAgentWorkspacePath(ws.slug),
           getWorkspaceSkillsDir(ws.slug),
           ...getAgentWorkspaceReadableRoots(ws),
           ...getWorkspaceAttachedDirectories(ws.slug),
-        )
+        ]))
         if (ws.projectRootPath) {
-          workspaceReadRoots.push(ws.projectRootPath)
+          workspaceReadRoots.push(...existingAbsoluteDirectories([ws.projectRootPath]))
         }
-        writeRoots.push(
+        writeRoots.push(...existingAbsoluteDirectories([
           getProjectFilesPath(ws.slug),
           getAgentWorkspaceCopisPath(ws),
           getAgentWorkspacePath(ws.slug),
-        )
+        ]))
       } catch {
-        // ignore missing directory
+        // 单个历史工作区异常时不影响当前 App 连接器会话。
       }
     }
     allAttachedFiles = allWorkspaces.flatMap((ws) => getWorkspaceAttachedFiles(ws.slug))
@@ -366,7 +388,7 @@ function buildRustFileAccessPolicy(input: {
 
   return {
     readRoots: uniqueAbsolutePaths(workspaceReadRoots),
-    readFiles: uniqueAbsolutePaths([
+    readFiles: existingAbsolutePaths([
       ...filterAttachedPaths(input.session.attachedFiles),
       ...getWorkspaceAttachedFiles(input.workspace.slug),
       ...allAttachedFiles,
@@ -530,7 +552,9 @@ export async function prepareAgentRpcRun(input: AgentSendInput): Promise<PiWorke
     ? channelId === COPIS_WORKING_CHANNEL_ID
       ? (input.modelId ?? session.modelId) === COPIS_WORKING_GLOBAL_MODEL_ID
         ? COPIS_WORKING_GLOBAL_MODEL_ID
-        : workingModeToModelId(workingMode ?? 'fast')
+        : (input.modelId ?? session.modelId) === COPIS_WORKING_EXPERT_MODEL_ID
+          ? COPIS_WORKING_EXPERT_MODEL_ID
+          : workingModeToModelId(workingMode ?? 'fast')
       : input.modelId ?? channel.models[0]?.id ?? DEFAULT_PI_MODEL_ID
     : input.modelId ?? session.modelId ?? DEFAULT_PI_MODEL_ID
   const credentials = customModelRuntime
@@ -558,7 +582,7 @@ export async function prepareAgentRpcRun(input: AgentSendInput): Promise<PiWorke
   const workspaceSkillsDir = getWorkspaceSkillsDir(workspaceSlug)
   const startedAt = input.startedAt ?? Date.now()
   const existingSdkSessionId = session.sdkSessionId
-  const isAppConnector = isAppConnectorSession(session, input.triggeredBy ?? (input as { source?: string }).source)
+  const isAppConnector = isAppConnectorSession(session, getTrustedAgentExternalSource(input.sessionId))
   const directories = uniqueDirectories(input, session, workspace, isAppConnector)
   const proxyUrl = await getEffectiveProxyUrl()
   const runtimeEnv = buildRuntimeEnv(settings, proxyUrl, workspace, workspaceSlug)

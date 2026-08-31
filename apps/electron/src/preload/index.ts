@@ -1032,8 +1032,8 @@ export interface ElectronAPI {
 
   // --- 扫码注册 ---
 
-  /** 启动扫码注册流程，等待用户扫码 + 飞书确认后返回 App ID/Secret */
-  registerFeishuApp: () => Promise<import('@copis/shared').FeishuRegisterAppResult>
+  /** 启动扫码绑定流程；传入已有 App ID 时复用该智能体应用 */
+  registerFeishuApp: (appId?: string) => Promise<import('@copis/shared').FeishuRegisterAppResult>
   /** 取消正在进行的扫码注册流程 */
   cancelFeishuRegistration: () => Promise<void>
   /** 监听二维码 URL 生成 */
@@ -2306,8 +2306,8 @@ const electronAPI: ElectronAPI = {
 
   // --- 扫码注册 ---
 
-  registerFeishuApp: () => {
-    return ipcRenderer.invoke(FEISHU_IPC_CHANNELS.REGISTER_APP_START)
+  registerFeishuApp: (appId?: string) => {
+    return ipcRenderer.invoke(FEISHU_IPC_CHANNELS.REGISTER_APP_START, appId ? { appId } : undefined)
   },
 
   cancelFeishuRegistration: () => {

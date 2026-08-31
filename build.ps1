@@ -322,6 +322,10 @@ if ($SkipCosUpload) {
             $fixedInstallerPath,
             '--object-key',
             $installerObjectKeyValue,
+            '--platform',
+            'win32',
+            '--arch',
+            'x64',
             '--version',
             $appVersion
         )

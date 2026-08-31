@@ -363,6 +363,173 @@ fn project_shell_requires_writable_mode_and_authorized_cwd() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn project_shell_allows_read_only_inspection_in_cross_workspace_read_roots() {
+    let root = temp_dir("shell-readonly-root");
+    let cross_workspace = temp_dir("shell-readonly-cross");
+    let write_root = root.join("copis");
+    fs::create_dir_all(&write_root).unwrap();
+    fs::write(cross_workspace.join("grok.txt"), "grok-content\n").unwrap();
+
+    let store = AgentFilePolicyStore::new();
+    let mut query = Map::new();
+    query.insert(
+        "cwd".to_string(),
+        Value::String(root.to_string_lossy().into_owned()),
+    );
+    query.insert("useRustFileApi".to_string(), Value::Bool(true));
+    query.insert(
+        "fileAccessPolicy".to_string(),
+        json!({
+            "readRoots": [root, &cross_workspace],
+            "readFiles": [],
+            "writeRoots": [write_root],
+            "permissionMode": "bypassPermissions"
+        }),
+    );
+    let token = store
+        .register_from_query("shell-readonly", &mut query)
+        .unwrap();
+
+    for command in [
+        "pwd",
+        "ls .",
+        "find . -maxdepth 1 -type f",
+        "cat /tmp/copis-agent-files-shell-readonly-cross-should-not-match",
+    ] {
+        assert!(
+            validate_project_command(command).is_ok(),
+            "只读检查命令应通过校验: {command}"
+        );
+    }
+    for command in [
+        "find . -exec cat {} \\;",
+        "find . -delete",
+        "ls /etc/passwd > copied.txt",
+    ] {
+        assert!(
+            validate_project_command(command).is_err(),
+            "带有潜在写入或执行副作用的命令应拒绝: {command}"
+        );
+    }
+
+    let list_request = serde_json::to_vec(&json!({
+        "sessionId": "shell-readonly",
+        "command": format!("ls -la {}", cross_workspace.display()),
+        "cwd": root,
+    }))
+    .unwrap();
+    let list_result = store
+        .handle_shell_with_worker_token(&token, &list_request)
+        .unwrap();
+    assert!(list_result["output"]
+        .as_str()
+        .unwrap_or_default()
+        .contains("grok.txt"));
+
+    let read_request = serde_json::to_vec(&json!({
+        "sessionId": "shell-readonly",
+        "command": format!("cat {}/grok.txt", cross_workspace.display()),
+        "cwd": root,
+    }))
+    .unwrap();
+    let read_result = store
+        .handle_shell_with_worker_token(&token, &read_request)
+        .unwrap();
+    assert_eq!(read_result["output"], "grok-content\n");
+
+    let find_request = serde_json::to_vec(&json!({
+        "sessionId": "shell-readonly",
+        "command": format!("find {} -name grok.txt", cross_workspace.display()),
+        "cwd": root,
+    }))
+    .unwrap();
+    let find_result = store
+        .handle_shell_with_worker_token(&token, &find_request)
+        .unwrap();
+    assert!(find_result["output"]
+        .as_str()
+        .unwrap_or_default()
+        .contains("grok.txt"));
+
+    let outside = temp_dir("shell-readonly-outside");
+    fs::write(outside.join("secret.txt"), "secret\n").unwrap();
+    let outside_request = serde_json::to_vec(&json!({
+        "sessionId": "shell-readonly",
+        "command": format!("ls {}", outside.display()),
+        "cwd": root,
+    }))
+    .unwrap();
+    assert_eq!(
+        store
+            .handle_shell_with_worker_token(&token, &outside_request)
+            .unwrap_err()
+            .code,
+        "read_not_allowed"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn project_shell_allows_read_only_git_status_in_cross_workspace_root() {
+    let root = temp_dir("shell-git-root");
+    let cross_workspace = temp_dir("shell-git-cross");
+    let write_root = root.join("copis");
+    fs::create_dir_all(&write_root).unwrap();
+    let git_init = Command::new("git")
+        .args(["init", "--quiet"])
+        .current_dir(&cross_workspace)
+        .output()
+        .unwrap();
+    assert!(git_init.status.success());
+
+    let store = AgentFilePolicyStore::new();
+    let mut query = Map::new();
+    query.insert(
+        "cwd".to_string(),
+        Value::String(root.to_string_lossy().into_owned()),
+    );
+    query.insert("useRustFileApi".to_string(), Value::Bool(true));
+    query.insert(
+        "fileAccessPolicy".to_string(),
+        json!({
+            "readRoots": [root, &cross_workspace],
+            "readFiles": [],
+            "writeRoots": [write_root],
+            "permissionMode": "bypassPermissions",
+            "advancedAuthorization": true
+        }),
+    );
+    let token = store.register_from_query("shell-git", &mut query).unwrap();
+
+    let request = serde_json::to_vec(&json!({
+        "sessionId": "shell-git",
+        "command": format!("git -C {} status --short", cross_workspace.display()),
+        "cwd": root,
+    }))
+    .unwrap();
+    let result = store
+        .handle_shell_with_worker_token(&token, &request)
+        .unwrap();
+    assert_eq!(result["exitCode"].as_i64(), Some(0));
+
+    let outside = temp_dir("shell-git-outside");
+    let outside_request = serde_json::to_vec(&json!({
+        "sessionId": "shell-git",
+        "command": format!("git -C {} status", outside.display()),
+        "cwd": root,
+    }))
+    .unwrap();
+    assert_eq!(
+        store
+            .handle_shell_with_worker_token(&token, &outside_request)
+            .unwrap_err()
+            .code,
+        "read_not_allowed"
+    );
+}
+
 #[test]
 fn project_shell_rejects_composition_and_global_package_targets() {
     assert_eq!(
@@ -485,12 +652,7 @@ fn project_shell_allows_workspace_git_commands_but_blocks_scope_escape() {
             .code,
         "command_scope_not_allowed"
     );
-    assert_eq!(
-        validate_project_command("git -C /tmp status")
-            .unwrap_err()
-            .code,
-        "command_scope_not_allowed"
-    );
+    assert!(validate_project_command("git -C /tmp status").is_ok());
     assert_eq!(
         validate_project_command("git --git-dir=/tmp/repo status")
             .unwrap_err()

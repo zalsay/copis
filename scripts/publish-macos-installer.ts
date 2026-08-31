@@ -103,6 +103,21 @@ export async function publishMacosInstaller(
   }
 }
 
+export async function publishMacosInstallerBestEffort(
+  upload: MacosInstallerUpload,
+  client: FunctionalModuleObjectClient,
+  logger: Pick<Console, 'error'> = console,
+): Promise<boolean> {
+  try {
+    await publishMacosInstaller(upload, client)
+    return true
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    logger.error(`[publish-macos-installer] 上传失败，已跳过：${message}`)
+    return false
+  }
+}
+
 async function main(): Promise<void> {
   const filePath = requiredOption('--file', 'COPIS_MACOS_INSTALLER_FILE')
   const arch = requiredArchOption('--arch', 'COPIS_MACOS_INSTALLER_ARCH')
@@ -133,7 +148,8 @@ async function main(): Promise<void> {
   if (!Cos) throw new Error('COS SDK 初始化失败')
   const cos = new Cos({ SecretId: secretId, SecretKey: secretKey, Region: region })
   const client = createFunctionalModuleCosClient(cos, { bucket, region })
-  await publishMacosInstaller(upload, client)
+  const published = await publishMacosInstallerBestEffort(upload, client)
+  if (!published) return
 
   console.log(`[publish-macos-installer] 已上传固定安装包：${upload.key}`)
   console.log(`[publish-macos-installer] 版本：${upload.version ?? '未指定'}，大小：${upload.size}，sha256：${upload.sha256}`)

@@ -49,28 +49,40 @@ function applyBookmarkSnapshot(
   setGroups(snapshot.groups)
 }
 
+function resolveDefaultFaviconUrl(rawUrl?: string | null): string | null {
+  if (!rawUrl) return null
+  try {
+    const parsed = new URL(rawUrl)
+    if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
+      return `${parsed.origin}/favicon.ico`
+    }
+  } catch {}
+  return null
+}
+
 function isBookmarkableUrl(url: string): boolean {
   return /^https?:\/\//i.test(url)
 }
 
-function BookmarkIcon({ faviconUrl }: Pick<WebBookmark, 'faviconUrl'>): React.ReactElement {
+function BookmarkIcon({ faviconUrl, url }: { faviconUrl?: string | null; url?: string }): React.ReactElement {
   const [failedFavicon, setFailedFavicon] = React.useState<string | null>(null)
+  const candidateFaviconUrl = faviconUrl || resolveDefaultFaviconUrl(url)
 
   React.useEffect(() => {
     setFailedFavicon(null)
-  }, [faviconUrl])
+  }, [candidateFaviconUrl])
 
-  if (!faviconUrl || failedFavicon === faviconUrl) {
+  if (!candidateFaviconUrl || failedFavicon === candidateFaviconUrl) {
     return <Globe2 className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
   }
 
   return (
     <img
-      src={faviconUrl}
+      src={candidateFaviconUrl}
       alt=""
       aria-hidden="true"
       className="size-3.5 shrink-0 rounded-sm object-contain"
-      onError={() => setFailedFavicon(faviconUrl)}
+      onError={() => setFailedFavicon(candidateFaviconUrl)}
     />
   )
 }
@@ -201,7 +213,7 @@ function BookmarkTreeGroup({
                   aria-label={`打开收藏 ${bookmark.title}`}
                   onClick={() => onNavigateBookmark(bookmark)}
                 >
-                  <BookmarkIcon faviconUrl={bookmark.faviconUrl} />
+                  <BookmarkIcon faviconUrl={bookmark.faviconUrl} url={bookmark.url} />
                   <span className="min-w-0 flex-1">
                     <span className="block truncate text-xs font-medium">{bookmark.title}</span>
                     <span className="block truncate text-[10px] text-muted-foreground">{bookmark.url}</span>
@@ -356,7 +368,7 @@ export function WebBookmarksPopover({ activeTab, onNavigate, standalone = false,
       const snapshot = await window.electronAPI.webTabs.bookmarksSave({
         title: activeTab.title || activeTab.url,
         url: activeTab.url,
-        faviconUrl: activeTab.faviconUrl,
+        faviconUrl: activeTab.faviconUrl || resolveDefaultFaviconUrl(activeTab.url),
         groupId: saveGroupId,
       })
       applyBookmarkSnapshot(snapshot, setBookmarks, setGroups)

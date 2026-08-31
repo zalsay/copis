@@ -369,7 +369,9 @@ export function AgentConversationSurface({ sessionId, variant = 'main' }: AgentC
       : agentChannelId === COPIS_WORKING_CHANNEL_ID
         ? sessionModelMap.get(sessionId) === COPIS_WORKING_GLOBAL_MODEL_ID || sessionMetaModelId === COPIS_WORKING_GLOBAL_MODEL_ID
           ? COPIS_WORKING_GLOBAL_MODEL_ID
-          : workingModeToModelId(workingMode)
+          : sessionModelMap.get(sessionId) === COPIS_WORKING_EXPERT_MODEL_ID || sessionMetaModelId === COPIS_WORKING_EXPERT_MODEL_ID
+            ? COPIS_WORKING_EXPERT_MODEL_ID
+            : workingModeToModelId(workingMode)
         : sessionModelMap.get(sessionId)
           ?? sessionMetaModelId
           ?? candidateChannel?.models.find((model) => model.enabled)?.id
@@ -1828,9 +1830,9 @@ export function AgentConversationSurface({ sessionId, variant = 'main' }: AgentC
 
   /** ModelSelector 选择回调 */
   const handleModelSelect = React.useCallback((option: ModelOption): void => {
-    // Working 内置模型选项切换时同步回 fast 模式，避免旧的 expert 模式覆盖新选择。
+    // Working 内置模型选项切换时同步回对应模式，避免模式与模型不一致。
     if (option.channelId === COPIS_WORKING_CHANNEL_ID) {
-      const nextMode: WorkingMode = 'fast'
+      const nextMode: WorkingMode = option.modelId === COPIS_WORKING_EXPERT_MODEL_ID ? 'expert' : 'fast'
       if (streaming || backgroundWaiting || !sessionMeta) return
       const previousSessionMeta = sessionMeta
 
@@ -3018,7 +3020,7 @@ export function AgentConversationSurface({ sessionId, variant = 'main' }: AgentC
               onDismiss={handleDismissNextSteps}
             />
           ) : !streaming ? (
-            <NewSessionFeatureChips onSelect={handleSelectFeature} />
+            <NewSessionFeatureChips variant={variant} onSelect={handleSelectFeature} />
           ) : null}
 
           <div

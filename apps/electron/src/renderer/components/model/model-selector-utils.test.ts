@@ -8,6 +8,7 @@ import {
   COPIS_WORKING_CHANNEL_IDS,
   COPIS_WORKING_DEEPSEEK_FAST_MODEL_ID,
   COPIS_WORKING_DEEPSEEK_PRO_MODEL_ID,
+  COPIS_WORKING_EXPERT_MODEL_ID,
   COPIS_WORKING_GLOBAL_MODEL_ID,
   ZHIPU_DEFAULT_MODEL_ID,
   ZHIPU_DEFAULT_MODEL_NAME,
@@ -34,7 +35,7 @@ describe('模型选择器内置渠道', () => {
     })
   })
 
-  test('Given Copis 和 DeepSeek 虚拟渠道 When 构建模型选项 Then 保留两个分类及 Copis 通识 / DeepSeek v4 Flash / Pro', () => {
+  test('Given Copis 和 DeepSeek 虚拟渠道 When 构建模型选项 Then 保留两个分类及 Copis 专家 / 通识 / DeepSeek v4 Flash / Pro', () => {
     const options = buildModelOptions([
       createCopisWorkingChannel('http://127.0.0.1:9000'),
       createCopisWorkingDeepSeekChannel('http://127.0.0.1:9000'),
@@ -44,6 +45,12 @@ describe('模型选择器内置渠道', () => {
       COPIS_WORKING_CHANNEL_ID,
       COPIS_WORKING_DEEPSEEK_CHANNEL_ID,
     ]))
+    expect(options.find((option) => option.modelId === COPIS_WORKING_EXPERT_MODEL_ID)).toMatchObject({
+      channelId: COPIS_WORKING_CHANNEL_ID,
+      channelName: '内置模型',
+      modelName: '专家',
+      provider: 'openai-responses',
+    })
     expect(options.find((option) => option.modelId === COPIS_WORKING_GLOBAL_MODEL_ID)).toMatchObject({
       channelId: COPIS_WORKING_CHANNEL_ID,
       channelName: '内置模型',

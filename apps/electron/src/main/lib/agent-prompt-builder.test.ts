@@ -40,6 +40,7 @@ function buildPrompt(agentCwd: string, memoryPolicy?: 'off' | 'visible' | 'writa
     workspaceSlug: 'sample-project',
     sessionId: 'session-1',
     agentCwd,
+    workspaceWriteRoot: '/tmp/sample-project/copis',
     permissionMode: 'bypassPermissions',
     memoryPolicy,
   })
@@ -253,6 +254,15 @@ describe('项目与会话工作台提示词', () => {
     expect(prompt).not.toContain('项目根始终是 cwd')
   })
 
+  test('Given Agent 生成普通产物 When 构建系统提示词 Then 默认写入 Copis 目录且长期 Context 仍写入 copis/.context', () => {
+    const prompt = buildPrompt('/tmp/sample-project')
+
+    expect(prompt).toContain('默认产物输出目录: /tmp/sample-project/copis')
+    expect(prompt).toContain('普通产物（报告、导出文件、附件等）默认写入该目录')
+    expect(prompt).toContain('长期 Context 继续写入项目级 Context 的绝对路径 `/tmp/sample-project/copis/.context`')
+    expect(prompt).toContain('新项目代码、依赖配置和启动脚本仍写入项目开发目录')
+  })
+
   test('Given 工作区前端任务 When 构建提示词 Then 强制使用可启动的 Vue 3 Vite 项目', () => {
     const prompt = buildPrompt('/tmp/sample-project')
 
@@ -435,8 +445,8 @@ describe('项目与会话工作台提示词', () => {
     expect(prompt).toContain('`main-project`')
     expect(prompt).toContain('**营销官网**')
     expect(prompt).toContain('`marketing-site`')
-    expect(prompt).toContain('全工作区读写权限')
-    expect(prompt).toContain('跨项目命令执行')
+    expect(prompt).toContain('全工作区读取与受控写入')
+    expect(prompt).toContain('跨项目只读命令执行')
     expect(prompt).toContain('跨工作区技能与工具')
   })
 
@@ -458,4 +468,3 @@ describe('项目与会话工作台提示词', () => {
     expect(prompt).toContain('非强制输出')
   })
 })
-

@@ -328,8 +328,8 @@ function ResultItem({
     if (!dirPath) return ''
     if (entry.source === 'workspace') {
       return dirPath
-        .replace(/^browser(\/|\\|$)/, '浏览器数据$1')
-        .replace(/^project(\/|\\|$)/, '项目开发$1')
+        .replace(/^browser(\/|\\|$)/, 'browser(AI 浏览器)$1')
+        .replace(/^project(\/|\\|$)/, 'project(项目开发)$1')
     }
     return dirPath
   }, [dirPath, entry.source])

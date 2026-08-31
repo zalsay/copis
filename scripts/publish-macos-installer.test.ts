@@ -8,6 +8,7 @@ import {
   DEFAULT_MACOS_X64_INSTALLER_OBJECT_KEY,
   buildMacosInstallerUpload,
   publishMacosInstaller,
+  publishMacosInstallerBestEffort,
 } from './publish-macos-installer'
 
 const temporaryDirectories: string[] = []
@@ -102,6 +103,33 @@ describe('macOS 固定安装程序发布', () => {
     await publishMacosInstaller(upload, client)
 
     expect(headCount).toBe(2)
+  })
+
+  test('COS 上传失败时只输出错误提醒且不抛出异常', async () => {
+    const upload = buildMacosInstallerUpload({
+      filePath: createInstallerFile('Copis-arm64.dmg'),
+      arch: 'arm64',
+      publicBaseUrl: 'https://download.example.com',
+    })
+    const messages: string[] = []
+    const client: FunctionalModuleObjectClient = {
+      async putObject() {
+        throw new Error('RequestTimeout: COS 请求超时')
+      },
+      async headObject() {
+        throw new Error('不应在上传失败后继续校验')
+      },
+    }
+
+    await expect(publishMacosInstallerBestEffort(upload, client, {
+      error(message: string) {
+        messages.push(message)
+      },
+    })).resolves.toBe(false)
+
+    expect(messages).toEqual([
+      '[publish-macos-installer] 上传失败，已跳过：RequestTimeout: COS 请求超时',
+    ])
   })
 
   test('拒绝带目录穿越或查询字符的 COS key', () => {

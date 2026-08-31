@@ -534,11 +534,15 @@
   border: 0;
   border-radius: 6px;
   background: transparent;
-  color: hsl(var(--destructive));
+  color: hsl(var(--foreground));
   text-align: left;
   font: inherit;
   font-size: 13px;
   cursor: pointer;
+}
+
+.copis-working-project-menu .copis-working-project-delete {
+  color: hsl(var(--destructive));
 }
 
 .copis-working-project-menu button:hover:not(:disabled) {
@@ -862,7 +866,6 @@
   right: -2px;
   width: 8px;
   height: 8px;
-  border: 1.5px solid hsl(var(--background));
   border-radius: 50%;
   background: hsl(var(--destructive));
 }

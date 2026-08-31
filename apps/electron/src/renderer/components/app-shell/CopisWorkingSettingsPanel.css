@@ -118,7 +118,6 @@
   border-radius: 50%;
   background: hsl(var(--destructive));
   transform: translateY(-50%);
-  box-shadow: 0 0 0 2px hsl(var(--sidebar-surface));
 }
 
 .copis-working-settings-main {

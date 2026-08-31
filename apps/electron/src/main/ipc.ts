@@ -91,6 +91,7 @@ import type {
   FeishuUpdateBindingInput,
   FeishuRegisterAppQRCode,
   FeishuRegisterAppStatus,
+  FeishuRegisterAppInput,
   FeishuRegisterAppResult,
   DingTalkConfigInput,
   DingTalkConfig,
@@ -4243,13 +4244,14 @@ export function registerIpcHandlers(): void {
 
   ipcMain.handle(
     FEISHU_IPC_CHANNELS.REGISTER_APP_START,
-    async (event): Promise<FeishuRegisterAppResult> => {
+    async (event, input?: FeishuRegisterAppInput): Promise<FeishuRegisterAppResult> => {
       // 同一时间只允许一个注册流程
       if (activeRegisterAbort) {
         activeRegisterAbort.abort()
       }
       const abort = new AbortController()
       activeRegisterAbort = abort
+      const normalizedAppId = input?.appId?.trim() ?? ''
 
       try {
         const lark = await import('@larksuiteoapi/node-sdk')
@@ -4257,6 +4259,7 @@ export function registerIpcHandlers(): void {
         const result = await lark.registerApp({
           source: 'copis',
           signal: abort.signal,
+          ...(normalizedAppId ? { appId: normalizedAppId } : {}),
           onQRCodeReady: async (info) => {
             if (event.sender.isDestroyed()) return
             try {

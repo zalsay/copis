@@ -73,13 +73,15 @@ describe('Working 模式契约', () => {
     expect(channel.apiKey).toBe('')
     expect(channel.models.map((model) => model.id)).toEqual([
       COPIS_WORKING_FAST_MODEL_ID,
+      COPIS_WORKING_EXPERT_MODEL_ID,
       COPIS_WORKING_GLOBAL_MODEL_ID,
     ])
     expect(channel.models.map((model) => model.name)).toEqual([
       '快速',
+      '专家',
       '通识',
     ])
-    expect(channel.models.some((model) => model.id === COPIS_WORKING_EXPERT_MODEL_ID)).toBe(false)
+    expect(channel.models.some((model) => model.id === COPIS_WORKING_EXPERT_MODEL_ID)).toBe(true)
     expect(workingModeToModelId('fast')).toBe(COPIS_WORKING_FAST_MODEL_ID)
     expect(workingModeToModelId('expert')).toBe(COPIS_WORKING_EXPERT_MODEL_ID)
   })

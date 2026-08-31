@@ -6,6 +6,26 @@ pub const DEFAULT_APP_UPDATE_MANIFEST_URL: &str =
     "https://download.meetlife.com.cn/copis/client/stable/manifest.json";
 const MAX_MANIFEST_BYTES: u64 = 1024 * 1024;
 
+pub fn current_platform_key() -> String {
+    platform_key(std::env::consts::OS, std::env::consts::ARCH)
+        .unwrap_or_else(|| format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH))
+}
+
+pub fn platform_key(platform: &str, arch: &str) -> Option<String> {
+    let platform = match platform {
+        "darwin" | "macos" => "darwin",
+        "win32" | "windows" => "win32",
+        "linux" => "linux",
+        _ => return None,
+    };
+    let arch = match arch {
+        "arm64" | "aarch64" => "arm64",
+        "x64" | "x86_64" => "x64",
+        _ => return None,
+    };
+    Some(format!("{}-{}", platform, arch))
+}
+
 pub fn resolve_manifest_url() -> String {
     std::env::var("COPIS_APP_UPDATE_MANIFEST_URL")
         .ok()
@@ -18,7 +38,11 @@ pub fn resolve_manifest_url() -> String {
         .unwrap_or_else(|| DEFAULT_APP_UPDATE_MANIFEST_URL.to_string())
 }
 
-pub fn check_app_update(current_version: &str, manifest_url: &str) -> Result<Value, String> {
+pub fn check_app_update(
+    current_version: &str,
+    manifest_url: &str,
+    platform_key: &str,
+) -> Result<Value, String> {
     let agent = ureq::Agent::config_builder()
         .timeout_global(Some(Duration::from_secs(15)))
         .http_status_as_error(false)
@@ -39,17 +63,19 @@ pub fn check_app_update(current_version: &str, manifest_url: &str) -> Result<Val
         .limit(MAX_MANIFEST_BYTES)
         .read_to_vec()
         .map_err(|error| format!("读取更新 manifest 失败: {}", error))?;
-    parse_app_update(&body, current_version)
+    parse_app_update(&body, current_version, Some(platform_key))
 }
 
-pub fn parse_app_update(body: &[u8], current_version: &str) -> Result<Value, String> {
-    let value: Value = serde_json::from_slice(body)
-        .map_err(|_| "更新 manifest 不是有效的 JSON".to_string())?;
+pub fn parse_app_update(
+    body: &[u8],
+    current_version: &str,
+    platform_key: Option<&str>,
+) -> Result<Value, String> {
+    let value: Value =
+        serde_json::from_slice(body).map_err(|_| "更新 manifest 不是有效的 JSON".to_string())?;
     let client = value.get("client").and_then(Value::as_object);
-    let Some(update) = client
-        .and_then(|client| client.get("update"))
-        .and_then(Value::as_object)
-    else {
+    let update = client.and_then(|client| select_client_update(client, platform_key));
+    let Some(update) = update else {
         return Ok(json!({ "available": false, "currentVersion": current_version }));
     };
 
@@ -71,6 +97,11 @@ pub fn parse_app_update(body: &[u8], current_version: &str) -> Result<Value, Str
     }
     if !url.starts_with("https://") {
         return Err("更新下载地址必须使用 HTTPS".to_string());
+    }
+    if let Some(platform_key) = platform_key {
+        if !is_compatible_installer_url(url, platform_key) {
+            return Ok(json!({ "available": false, "currentVersion": current_version }));
+        }
     }
 
     let mut result = serde_json::Map::new();
@@ -96,6 +127,30 @@ pub fn parse_app_update(body: &[u8], current_version: &str) -> Result<Value, Str
         }
     }
     Ok(Value::Object(result))
+}
+
+fn select_client_update<'a>(
+    client: &'a serde_json::Map<String, Value>,
+    platform_key: Option<&str>,
+) -> Option<&'a serde_json::Map<String, Value>> {
+    if let Some(updates) = client.get("updates").and_then(Value::as_object) {
+        return platform_key
+            .and_then(|key| updates.get(key))
+            .and_then(Value::as_object);
+    }
+    client.get("update").and_then(Value::as_object)
+}
+
+fn is_compatible_installer_url(url: &str, platform_key: &str) -> bool {
+    let path = url.split('?').next().unwrap_or(url).to_ascii_lowercase();
+    match platform_key.split_once('-').map(|(platform, _)| platform) {
+        Some("win32") => path.ends_with(".exe"),
+        Some("darwin") => path.ends_with(".dmg"),
+        Some("linux") => {
+            path.ends_with(".appimage") || path.ends_with(".deb") || path.ends_with(".rpm")
+        }
+        _ => false,
+    }
 }
 
 fn is_newer_version(candidate: &str, current: &str) -> bool {

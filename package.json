@@ -30,7 +30,7 @@
     "publish:client-update": "bun run scripts/publish-client-update.ts",
     "build": "bun run --filter='*' build",
     "typecheck": "bun run --filter='*' typecheck",
-    "test": "bun test --isolate"
+    "test": "bun run scripts/run-tests-isolated.ts"
   },
   "devDependencies": {
     "@types/bun": "latest",

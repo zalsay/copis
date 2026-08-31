@@ -78,6 +78,44 @@ describe('功能模块 manifest 合并', () => {
     expect(merged.client?.update?.url).toBe('https://download.example.com/new.dmg')
   })
 
+  test('合并功能模块 manifest 时按平台保留 client.updates', () => {
+    const existing: FunctionalModuleManifest = {
+      schema: 1,
+      channel: 'stable',
+      client: {
+        updates: {
+          'darwin-arm64': {
+            version: '0.0.63',
+            url: 'https://download.example.com/Copis-arm64.dmg',
+            sha256: 'b'.repeat(64),
+            size: 10,
+          },
+        },
+      },
+      platforms: {},
+    }
+    const incoming: FunctionalModuleManifest = {
+      schema: 1,
+      channel: 'stable',
+      client: {
+        updates: {
+          'win32-x64': {
+            version: '0.0.64',
+            url: 'https://download.example.com/Copis-Setup.exe',
+            sha256: 'c'.repeat(64),
+            size: 20,
+          },
+        },
+      },
+      platforms: {},
+    }
+
+    const merged = mergeFunctionalModuleManifests(existing, incoming)
+
+    expect(merged.client?.updates?.['darwin-arm64']?.version).toBe('0.0.63')
+    expect(merged.client?.updates?.['win32-x64']?.version).toBe('0.0.64')
+  })
+
   test('新 manifest 未提高版本门槛时保留已有最低客户端版本', () => {
     const existing: FunctionalModuleManifest = {
       schema: 1,

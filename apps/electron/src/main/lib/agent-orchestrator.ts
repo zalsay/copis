@@ -42,6 +42,7 @@ import {
   type AgentStreamPayload,
   type RewindSessionResult,
   type ProviderType,
+  COPIS_WORKING_EXPERT_MODEL_ID,
   workingModeToModelId,
 } from '@copis/shared'
 import {
@@ -1056,7 +1057,9 @@ export class AgentOrchestrator {
       ? channelId === COPIS_WORKING_CHANNEL_ID
         ? modelId === COPIS_WORKING_GLOBAL_MODEL_ID
           ? COPIS_WORKING_GLOBAL_MODEL_ID
-          : workingModeToModelId(workingMode ?? 'fast')
+          : modelId === COPIS_WORKING_EXPERT_MODEL_ID
+            ? COPIS_WORKING_EXPERT_MODEL_ID
+            : workingModeToModelId(workingMode ?? 'fast')
         : modelId ?? channel.models[0]?.id
       : undefined
     const needsWorkingSessionMigration = Boolean(

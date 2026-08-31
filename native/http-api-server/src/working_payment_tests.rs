@@ -1,17 +1,23 @@
 use super::{
     handle_request, legacy_handle_request, parse_working_payment_route, poll_desktop_payments_once,
-    recover_pending_desktop_payment, PaymentWorker, WorkingPaymentRoute, WorkingPaymentState,
+    recover_pending_desktop_payment, try_recover_pending_desktop_payment_once, PaymentWorker,
+    WorkingPaymentRoute, WorkingPaymentState,
 };
 use crate::payment_workspace::PaymentWorkspace;
 use crate::pi_rpc::PaymentWorkerAction;
-use crate::skill_market::{backend_env_test_lock, SkillMarketState};
-use serde_json::json;
+use crate::skill_market::{
+    backend_env_test_lock, SkillMarketError, SkillMarketState, WorkingBackend,
+};
+use serde_json::{json, Value};
 use std::collections::VecDeque;
 use std::fs;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::{
+    atomic::{AtomicUsize, Ordering},
+    Arc, Mutex,
+};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[test]
@@ -110,6 +116,57 @@ impl FakeVipPaymentRefresher {
             calls: Mutex::new(0),
         }
     }
+}
+
+struct PendingRecoveryProbe {
+    calls: Arc<AtomicUsize>,
+}
+
+impl WorkingBackend for PendingRecoveryProbe {
+    fn request(
+        &self,
+        method: &str,
+        path: &str,
+        _body: Option<&str>,
+    ) -> Result<Value, SkillMarketError> {
+        assert_eq!(method, "GET");
+        assert_eq!(path, "/api/pay/alipay/diamond-purchases/pending");
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        Ok(Value::Null)
+    }
+
+    fn request_with_capability(
+        &self,
+        method: &str,
+        path: &str,
+        _capability: &str,
+        body: Option<&str>,
+    ) -> Result<Value, SkillMarketError> {
+        self.request(method, path, body)
+    }
+}
+
+#[test]
+fn startup_pending_recovery_is_attempted_only_once_without_a_local_payment() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let state = SkillMarketState::production(Arc::new(PendingRecoveryProbe {
+        calls: Arc::clone(&calls),
+    }));
+    let payment_state = WorkingPaymentState::new();
+    let mut startup_recovery_pending = true;
+
+    let _ = try_recover_pending_desktop_payment_once(
+        &payment_state,
+        &state,
+        &mut startup_recovery_pending,
+    );
+    let _ = try_recover_pending_desktop_payment_once(
+        &payment_state,
+        &state,
+        &mut startup_recovery_pending,
+    );
+
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
 }
 
 impl super::VipPaymentRefresher for FakeVipPaymentRefresher {

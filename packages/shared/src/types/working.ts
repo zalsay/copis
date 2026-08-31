@@ -195,6 +195,7 @@ export const COPIS_WORKING_MODEL_SOURCE_TYPE_HEADER = 'X-Working-Model-Source-Ty
 export const COPIS_WORKING_MODEL_SOURCE_TYPE_COPIS_AGENT = 'copis-agent-model'
 export const COPIS_WORKING_MODEL_IDS = [
   COPIS_WORKING_FAST_MODEL_ID,
+  COPIS_WORKING_EXPERT_MODEL_ID,
   COPIS_WORKING_GLOBAL_MODEL_ID,
 ] as const
 export const COPIS_WORKING_DEEPSEEK_MODEL_IDS = [
@@ -206,8 +207,7 @@ export const COPIS_WORKING_CHANNEL_IDS = [
   COPIS_WORKING_DEEPSEEK_CHANNEL_ID,
   COPIS_WORKING_ZHIPU_CHANNEL_ID,
 ] as const
-/** export 仍作为旧会话/旧接口的兼容 alias，不再出现在内置模型列表。 */
-export type CopisWorkingModelId = (typeof COPIS_WORKING_MODEL_IDS)[number] | typeof COPIS_WORKING_EXPERT_MODEL_ID
+export type CopisWorkingModelId = (typeof COPIS_WORKING_MODEL_IDS)[number]
 
 export function isCopisWorkingChannelId(value: string | undefined): boolean {
   return value != null && (COPIS_WORKING_CHANNEL_IDS as readonly string[]).includes(value)
@@ -261,6 +261,7 @@ export const BUILTIN_CHANNEL_DEFINITIONS = {
       name: '内置模型',
       models: [
         { id: COPIS_WORKING_FAST_MODEL_ID, name: '快速' },
+        { id: COPIS_WORKING_EXPERT_MODEL_ID, name: '专家' },
         { id: COPIS_WORKING_GLOBAL_MODEL_ID, name: '通识' },
       ],
     },

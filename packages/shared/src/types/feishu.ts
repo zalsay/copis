@@ -336,8 +336,14 @@ export interface FeishuRegisterAppStatus {
   interval?: number
 }
 
+/** 飞书扫码绑定输入；留空 App ID 时创建新的智能体应用 */
+export interface FeishuRegisterAppInput {
+  /** 已有飞书智能体应用的 App ID（如 cli_xxx） */
+  appId?: string
+}
+
 export interface FeishuRegisterAppResult {
-  /** 创建出的飞书应用 App ID */
+  /** 绑定或创建出的飞书应用 App ID */
   appId: string
   /** 应用 App Secret（明文，仅一次性返回）*/
   appSecret: string

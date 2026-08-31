@@ -176,6 +176,7 @@ async function main(): Promise<void> {
         ?? process.env.COPIS_MODULE_CLIENT_MIN_VERSION?.trim()
         ?? packageMetadata.version,
       clientUpdate: readClientUpdate(),
+      clientUpdatePlatform: { platform, arch },
       publicBaseUrl,
       prefix,
       modules,

@@ -1,6 +1,21 @@
-import { describe, expect, test } from 'bun:test'
+import { beforeAll, describe, expect, mock, test } from 'bun:test'
 import { isAppConnectorSession } from '@copis/shared'
-import { buildSystemPrompt } from './agent-prompt-builder'
+
+mock.module('electron', () => ({
+  app: { isPackaged: false, getPath: () => '/tmp/copis-agent-app-connector-test' },
+  safeStorage: {
+    isEncryptionAvailable: () => false,
+    encryptString: (value: string) => Buffer.from(value),
+    decryptString: (value: Buffer) => value.toString('utf8'),
+  },
+  shell: { openExternal: async () => undefined },
+}))
+
+let buildSystemPrompt: typeof import('./agent-prompt-builder').buildSystemPrompt
+
+beforeAll(async () => {
+  ({ buildSystemPrompt } = await import('./agent-prompt-builder'))
+})
 
 describe('App 连接器全工作区调用权限 (BDD)', () => {
   const workspaces = [
@@ -90,8 +105,8 @@ describe('App 连接器全工作区调用权限 (BDD)', () => {
     expect(prompt).toContain('`doc-center`')
 
     // 跨项目操作规范
-    expect(prompt).toContain('1. **全工作区读写权限**')
-    expect(prompt).toContain('2. **跨项目命令执行**')
+    expect(prompt).toContain('1. **全工作区读取与受控写入**')
+    expect(prompt).toContain('2. **跨项目只读命令执行**')
     expect(prompt).toContain('3. **跨工作区技能与工具**')
     expect(prompt).toContain('4. **任务与日程归属**')
     expect(prompt).toContain('5. **智能项目定位**')

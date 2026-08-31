@@ -15,6 +15,8 @@ describe('macOS 构建脚本固定安装程序发布', () => {
     expect(buildScript).toContain('Copis-$MAC_ARCH.dmg')
     expect(buildScript).toContain('publish:macos-installer')
     expect(buildScript).toContain('publish:client-update')
+    expect(buildScript).toContain('--platform darwin')
+    expect(buildScript).toContain('--arch "$MAC_ARCH"')
     expect(buildScript).toContain('--skip-cos-upload')
     expect(rootPackage.scripts?.['publish:macos-installer']).toBeDefined()
   })

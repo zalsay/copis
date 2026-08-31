@@ -1,6 +1,7 @@
 import * as React from 'react'
 import {
   Compass,
+  FileText,
   ListChecks,
   Bot,
   LayoutGrid,
@@ -79,11 +80,35 @@ export const COPIS_STARTER_FEATURES: CopisFeatureItem[] = [
   },
 ]
 
+export const COPIS_BROWSER_STARTER_FEATURES: CopisFeatureItem[] = [
+  {
+    id: 'summarize-webpage',
+    title: '总结网页',
+    description: '分析并提取当前网页的核心内容、关键要点与结构',
+    prompt: '帮我总结当前网页的核心内容与关键要点',
+    icon: FileText,
+    iconColorClass: 'text-sky-500/85 group-hover:text-sky-500',
+    bgHoverClass: 'hover:border-sky-500/60',
+  },
+  {
+    id: 'learn-browser-actions',
+    title: '学习你的操作，下次自动执行',
+    description: '记录并学习接下来的网页交互操作，提炼为自动化流程以便下次自动执行',
+    prompt: '学习我接下来的网页操作流程，下次自动执行',
+    icon: Compass,
+    iconColorClass: 'text-emerald-500/85 group-hover:text-emerald-500',
+    bgHoverClass: 'hover:border-emerald-500/60',
+  },
+]
+
 interface NewSessionFeatureChipsProps {
+  variant?: 'main' | 'browser'
   onSelect: (feature: CopisFeatureItem) => void
 }
 
-export function NewSessionFeatureChips({ onSelect }: NewSessionFeatureChipsProps): React.ReactElement {
+export function NewSessionFeatureChips({ variant = 'main', onSelect }: NewSessionFeatureChipsProps): React.ReactElement {
+  const features = variant === 'browser' ? COPIS_BROWSER_STARTER_FEATURES : COPIS_STARTER_FEATURES
+
   return (
     <div className="copis-agent-starter-chips flex flex-wrap items-center justify-center gap-1.5 px-1 pb-2.5 select-none animate-in fade-in slide-in-from-bottom-1 duration-200">
       <div className="flex items-center gap-1 text-[11px] font-medium text-muted-foreground/75 mr-0.5 select-none">
@@ -91,7 +116,7 @@ export function NewSessionFeatureChips({ onSelect }: NewSessionFeatureChipsProps
         <span>快捷入口</span>
       </div>
 
-      {COPIS_STARTER_FEATURES.map((item) => {
+      {features.map((item) => {
         const Icon = item.icon
         return (
           <Tooltip key={item.id}>

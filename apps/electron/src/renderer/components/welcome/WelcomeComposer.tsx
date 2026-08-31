@@ -14,6 +14,7 @@ import {
   COPIS_WORKING_DEEPSEEK_CHANNEL_ID,
   COPIS_WORKING_DEEPSEEK_FAST_MODEL_ID,
   COPIS_WORKING_DEEPSEEK_PRO_MODEL_ID,
+  COPIS_WORKING_EXPERT_MODEL_ID,
   workingModelCatalogToOptions,
   workingModeToModelId,
 } from '@copis/shared'
@@ -182,7 +183,7 @@ export function WelcomeComposer(): React.ReactElement {
 
   const handleModelSelect = React.useCallback((option: ModelOption): void => {
     if (option.channelId === COPIS_WORKING_CHANNEL_ID) {
-      setWorkingMode('fast')
+      setWorkingMode(option.modelId === COPIS_WORKING_EXPERT_MODEL_ID ? 'expert' : 'fast')
     }
     if (option.channelId === COPIS_WORKING_DEEPSEEK_CHANNEL_ID
       && option.modelId !== COPIS_WORKING_DEEPSEEK_FAST_MODEL_ID

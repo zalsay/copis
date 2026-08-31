@@ -334,7 +334,8 @@ ${JSON.stringify(schema.nodes)}
 - 项目名称: ${ctx.workspaceName}
 - Copis 工作区目录: ${workspacePaths?.workspaceRoot}（存放 MCP、Skills、Copis 工作区指令与 Memory 等配置）
 - 项目来源目录: ${workspacePaths?.projectSourceRoot}（${workspacePaths?.isLocalProject ? '用户选择的本地文件夹，可读取已有资料' : 'Copis 托管的工作区来源目录'}）
-- 项目开发目录: ${workspacePaths?.projectRoot}（默认可写，用户新建项目统一放在这里）
+- 项目开发目录: ${workspacePaths?.projectRoot}（用于可运行项目代码、依赖配置和启动脚本；用户新建项目统一放在这里）
+- 默认产物输出目录: ${workspaceWriteRoot}（普通产物（报告、导出文件、附件等）默认写入该目录；生成的图片和其他交付物也放在这里；不要默认写入项目来源根目录）
 - Agent 可写目录: ${workspaceWriteRoot}、${workspacePaths?.projectRoot}（项目来源目录保持只读）
 - 会话工作台目录: ${workspacePaths?.sessionDir}（存放当前会话的私有临时文件与会话级 Context）
 - 实际工作目录（cwd）: ${workspacePaths?.agentCwd}（${workspacePaths?.isProjectCwd ? '当前会话直接在项目根目录中工作' : '当前会话仍使用私有会话工作台，不等同于项目根目录'}；以每条消息的 \`<working_directory>\` 为准）
@@ -347,7 +348,7 @@ ${JSON.stringify(schema.nodes)}
 
 存在两个 \`.context/\` 目录，用途不同：
 - **会话级** \`${sessionContextDir}\`：当前会话的临时工作台，存放本次任务的 todo.md、plan/、临时笔记等
-- **项目级** \`${workspaceContextDir}\`：跨会话共享的持久文档，存放长期 note.md、项目级知识等；始终以这里提供的绝对路径为准（来源目录保持只读时使用来源目录下的 \`copis/.context\`）
+- **项目级** \`${workspaceContextDir}\`：跨会话共享的持久文档，存放长期 note.md、项目级知识等；长期 Context 继续写入项目级 Context 的绝对路径 \`${workspaceContextDir}\`，也就是对应 Copis 目录下的 \`.context/\`（来源目录保持只读时仍使用来源目录下的 \`copis/.context\`）
 
 项目来源目录与项目开发目录可能不同：新会话通常在项目开发目录运行，历史会话可能仍在会话工作台运行，始终以“实际工作目录”和每条消息的 \`<working_directory>\` 为准。
 
@@ -359,7 +360,7 @@ ${JSON.stringify(schema.nodes)}
 - **前端项目强制规范**：所有需要在 Copis 中展示或启动的前端，必须使用 **Vue 3 + Vite** 构建，优先使用 TypeScript。不得只交付单独的 \`.html\` 文件或静态 HTML 页面；\`index.html\` 只能作为 Vite 项目的入口文件，必须与 \`package.json\`、\`src/\`、Vue 组件和依赖配置一起存在。
 - **可启动项目结构**：在项目开发目录中为每个前端创建独立目录（例如 \`frontend/\` 或 \`<项目名>/\`），其中 \`package.json\` 的 \`scripts.dev\` 必须调用 \`vite\`。完成后自行安装依赖，并执行 \`npm run build\` 验证；需要持续运行的 \`npm run dev\` 由 Copis 项目列表启动并为其分配独立端口。
 - Python 后端可以与 Vue 3 前端组成简单前后端项目，建议使用 \`frontend/\` 和 \`backend/\` 清晰分层；不要用单文件 HTML 替代前端工程。
-- 项目来源目录只作为参考；新项目文件、依赖配置和启动脚本都写入项目开发目录，不要把它当作可随意清理的临时目录`)
+- 项目来源目录只作为参考；新项目代码、依赖配置和启动脚本仍写入项目开发目录，不要把它当作可随意清理的临时目录`)
   }
 
   // App 连接器多工作区调用权限
@@ -389,13 +390,13 @@ ${JSON.stringify(schema.nodes)}
 当前会话由 **App 连接器（飞书 / 微信 / 钉钉）** 接入。作为远程移动端中枢，当前会话已单独获得**调用本机所有工作区的最高权限**：
 
 ### 本机所有可用工作区列表
-| 序号 | 项目名称 | Slug | 标识 (ID) | 项目开发根目录 (可读写) | 本地来源目录 |
+| 序号 | 项目名称 | Slug | 标识 (ID) | 项目开发根目录 (受控读写) | 本地来源目录 (只读) |
 |---|---|---|---|---|---|
 ${workspaceRows.length > 0 ? workspaceRows.join('\n') : '| - | 暂无其他工作区 | - | - | - | - |'}
 
 ### 跨工作区操作指引与规范
-1. **全工作区读写权限**：你拥有直接读取、搜索、编写与修改上述任意工作区文件的完整权限。当用户要求处理某个项目时，请直接定位到该项目的对应路径进行操作（使用绝对路径或在对应目录下操作）。
-2. **跨项目命令执行**：可在任意工作区目录下执行 Bash 命令（例如通过 \`cd <项目开发根目录> && npm test\` 或在对应工作区目录下执行依赖安装与脚本）。
+1. **全工作区读取与受控写入**：你可以直接读取和搜索上述任意工作区文件；写入与修改仅限对应工作区的项目开发目录、Copis 目录和当前会话工作台。本地来源目录保持只读。
+2. **跨项目只读命令执行**：可使用 \`ls\`、\`find\`、\`rg\`、\`grep\`、\`cat\` 等只读 Bash 命令，并将已授权项目路径作为绝对路径传入。不要使用 \`cd &&\`、管道、重定向或命令串联；需要修改文件时使用 Write/Edit 写入对应工作区的受控目录。
 3. **跨工作区技能与工具**：所有工作区的 Skills 与配置已全局挂载，你可以跨项目调用各个工作区沉淀的专有技能。
 4. **任务与日程归属**：创建 Todo 或日程规划时，可传入对应项目的 \`workspaceId\` 进行归属。
 5. **智能项目定位**：

@@ -11,7 +11,7 @@
 
 import * as React from 'react'
 import { useAtom, useAtomValue, useSetAtom } from 'jotai'
-import { ChevronDown, Cpu, Globe, Search, Zap } from 'lucide-react'
+import { Brain, ChevronDown, Cpu, Globe, Search, Zap } from 'lucide-react'
 import {
   Dialog,
   DialogContent,
@@ -38,6 +38,7 @@ import {
   COPIS_WORKING_DEEPSEEK_CHANNEL_ID,
   COPIS_WORKING_DEEPSEEK_FAST_MODEL_ID,
   COPIS_WORKING_DEEPSEEK_PRO_MODEL_ID,
+  COPIS_WORKING_EXPERT_MODEL_ID,
   COPIS_WORKING_FAST_MODEL_ID,
   COPIS_WORKING_GLOBAL_MODEL_ID,
   COPIS_WORKING_ZHIPU_CHANNEL_ID,
@@ -97,6 +98,7 @@ function getModelDescription(option: Pick<ModelOption, 'channelId' | 'modelId'>)
   }
   if (option.channelId !== COPIS_WORKING_CHANNEL_ID) return undefined
   if (option.modelId === COPIS_WORKING_FAST_MODEL_ID) return '速度快，思考能力一般'
+  if (option.modelId === COPIS_WORKING_EXPERT_MODEL_ID) return '全球领先，知识面广，深度思考，消耗更多钻石'
   if (option.modelId === COPIS_WORKING_GLOBAL_MODEL_ID) return '通晓世界知识，适合教育、探索等场景'
   return undefined
 }
@@ -108,6 +110,9 @@ function usesZhipuLogo(option: Pick<ModelOption, 'channelId' | 'provider'>): boo
 function renderModelIcon(option: ModelOption, useCopisLogo: boolean, className: string): React.ReactElement {
   if (option.channelId === COPIS_WORKING_CHANNEL_ID && option.modelId === COPIS_WORKING_FAST_MODEL_ID) {
     return <Zap aria-hidden="true" className={cn(className, 'text-amber-400')} />
+  }
+  if (option.channelId === COPIS_WORKING_CHANNEL_ID && option.modelId === COPIS_WORKING_EXPERT_MODEL_ID) {
+    return <Brain aria-hidden="true" className={cn(className, 'text-violet-400')} />
   }
   if (option.channelId === COPIS_WORKING_CHANNEL_ID && option.modelId === COPIS_WORKING_GLOBAL_MODEL_ID) {
     return <Globe aria-hidden="true" className={cn(className, 'text-sky-400')} />
