@@ -200,6 +200,65 @@ describe('网页原生子窗口策略', () => {
     expect(context.openExternal).toHaveBeenCalledWith('mailto:owner@example.com')
   })
 
+  test('Given 原生子窗口 When 自身 webContents 丢失渲染器 Then 关闭并清理生命周期监听器', () => {
+    for (const event of ['destroyed', 'render-process-gone'] as const) {
+      const hostWindow = new FakeWindow()
+      const owner = new FakeWebContents()
+      const popup = new FakeWindow()
+      const context = createContext(hostWindow)
+
+      installNativeWebPopupWindow({ ...context, window: popup as never, opener: owner as never })
+      popup.webContents.destroyed = true
+      popup.webContents.emit(event)
+
+      expect(popup.closeCalls).toBe(1)
+      expect(popup.isDestroyed()).toBe(true)
+      expect(popup.listenerCount('closed')).toBe(0)
+      expect(owner.listenerCount('destroyed')).toBe(0)
+      expect(owner.listenerCount('render-process-gone')).toBe(0)
+      expect(hostWindow.webContents.listenerCount('destroyed')).toBe(0)
+      expect(hostWindow.webContents.listenerCount('render-process-gone')).toBe(0)
+    }
+  })
+
+  test('Given 原生子窗口 When opener webContents 丢失渲染器 Then 关闭并清理生命周期监听器', () => {
+    const hostWindow = new FakeWindow()
+    const owner = new FakeWebContents()
+    const popup = new FakeWindow()
+    const context = createContext(hostWindow)
+
+    installNativeWebPopupWindow({ ...context, window: popup as never, opener: owner as never })
+    owner.emit('render-process-gone', { reason: 'crashed' })
+
+    expect(popup.closeCalls).toBe(1)
+    expect(popup.isDestroyed()).toBe(true)
+    expect(owner.listenerCount('destroyed')).toBe(0)
+    expect(owner.listenerCount('render-process-gone')).toBe(0)
+    expect(hostWindow.webContents.listenerCount('destroyed')).toBe(0)
+    expect(hostWindow.webContents.listenerCount('render-process-gone')).toBe(0)
+  })
+
+  test('Given 原生子窗口 When host webContents 丢失渲染器 Then 关闭并清理生命周期监听器', () => {
+    for (const event of ['destroyed', 'render-process-gone'] as const) {
+      const hostWindow = new FakeWindow()
+      const owner = new FakeWebContents()
+      const popup = new FakeWindow()
+      const context = createContext(hostWindow)
+
+      installNativeWebPopupWindow({ ...context, window: popup as never, opener: owner as never })
+      hostWindow.webContents.destroyed = true
+      hostWindow.webContents.emit(event, { reason: 'crashed' })
+
+      expect(popup.closeCalls).toBe(1)
+      expect(popup.isDestroyed()).toBe(true)
+      expect(owner.listenerCount('destroyed')).toBe(0)
+      expect(owner.listenerCount('render-process-gone')).toBe(0)
+      expect(hostWindow.listenerCount('closed')).toBe(0)
+      expect(hostWindow.webContents.listenerCount('destroyed')).toBe(0)
+      expect(hostWindow.webContents.listenerCount('render-process-gone')).toBe(0)
+    }
+  })
+
   test('Given 原生子窗口 When host 或 opener 销毁 Then 安全关闭且不访问已销毁 webContents', () => {
     const hostWindow = new FakeWindow()
     const owner = new FakeWebContents()

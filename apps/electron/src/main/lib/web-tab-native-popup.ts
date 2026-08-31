@@ -101,7 +101,12 @@ export function installNativeWebPopupWindow(input: NativePopupInstallInput): voi
     if (cleanupDone) return
     cleanupDone = true
     input.opener?.removeListener('destroyed', closePopup)
+    input.opener?.removeListener('render-process-gone', closePopup)
     host.removeListener('closed', closePopup)
+    host.webContents.removeListener('destroyed', closePopup)
+    host.webContents.removeListener('render-process-gone', closePopup)
+    contents.removeListener('destroyed', closePopup)
+    contents.removeListener('render-process-gone', closePopup)
   }
   const closePopup = (): void => {
     closeWindowSafely(popup)
@@ -124,6 +129,11 @@ export function installNativeWebPopupWindow(input: NativePopupInstallInput): voi
     if (!popup.isDestroyed()) popup.focus()
   })
   popup.once('closed', cleanup)
+  contents.once('destroyed', closePopup)
+  contents.once('render-process-gone', closePopup)
   input.opener?.once('destroyed', closePopup)
+  input.opener?.once('render-process-gone', closePopup)
   host.once('closed', closePopup)
+  host.webContents.once('destroyed', closePopup)
+  host.webContents.once('render-process-gone', closePopup)
 }
