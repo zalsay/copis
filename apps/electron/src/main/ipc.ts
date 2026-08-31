@@ -226,6 +226,11 @@ import {
   getWebPageProjectAssociation,
   saveWebPageProjectAssociation,
 } from './lib/web-project-association-service'
+import {
+  cancelWebJavascriptPromptRequest,
+  getWebJavascriptPromptRequest,
+  resolveWebJavascriptPromptRequest,
+} from './lib/web-tab-javascript-prompt-window'
 
 import { checkEnvironment } from './lib/environment-checker'
 import {
@@ -1029,6 +1034,15 @@ export function registerIpcHandlers(): void {
     }
     return saveWebPageProjectAssociation(input)
   })
+  ipcMain.handle(WEB_IPC_CHANNELS.JAVASCRIPT_PROMPT_GET, (event, requestId: string) => (
+    getWebJavascriptPromptRequest(requestId, event.sender.id)
+  ))
+  ipcMain.handle(WEB_IPC_CHANNELS.JAVASCRIPT_PROMPT_RESOLVE, (event, input) => (
+    resolveWebJavascriptPromptRequest(input, event.sender.id)
+  ))
+  ipcMain.handle(WEB_IPC_CHANNELS.JAVASCRIPT_PROMPT_CANCEL, (event, requestId: string) => (
+    cancelWebJavascriptPromptRequest(requestId, event.sender.id)
+  ))
 
   // ===== Browser Workflow（仅高层能力；CDP 不通过 IPC 暴露） =====
   ipcMain.handle(BROWSER_WORKFLOW_IPC_CHANNELS.BIND_CONTEXT, async (event, sessionId: string, context: BrowserAgentContext) => {

@@ -142,6 +142,20 @@ export interface ResizeWebBookmarksWindowInput {
   height: number
 }
 
+/** 网页 JavaScript prompt 窗口请求。 */
+export interface WebJavascriptPromptRequest {
+  requestId: string
+  message: string
+  defaultPrompt: string
+}
+
+/** 网页 JavaScript prompt 窗口结果。 */
+export interface WebJavascriptPromptResolveInput {
+  requestId: string
+  accept: boolean
+  promptText?: string
+}
+
 /** 网页页签相关 IPC 通道。 */
 export const WEB_IPC_CHANNELS = {
   LIST: 'web-tabs:list',
@@ -167,6 +181,9 @@ export const WEB_IPC_CHANNELS = {
   BOOKMARK_GROUP_REMOVE: 'web-bookmarks:group-remove',
   PROJECT_ASSOCIATION_GET: 'web-tabs:project-association-get',
   PROJECT_ASSOCIATION_SAVE: 'web-tabs:project-association-save',
+  JAVASCRIPT_PROMPT_GET: 'web-tabs:javascript-prompt-get',
+  JAVASCRIPT_PROMPT_RESOLVE: 'web-tabs:javascript-prompt-resolve',
+  JAVASCRIPT_PROMPT_CANCEL: 'web-tabs:javascript-prompt-cancel',
 } as const
 
 /** 网页页签 IPC 通道类型。 */

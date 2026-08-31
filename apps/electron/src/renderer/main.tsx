@@ -106,15 +106,15 @@ import './styles/globals.css'
 import 'katex/dist/katex.min.css'
 
 // ===== 窗口类型检测 =====
-// 普通浏览器没有 Electron Preload，改用本地 HTTP API 兼容层；Electron 环境保持原有 IPC。
-installHttpApiBridge()
-
 const isQuickTaskWindow = new URLSearchParams(window.location.search).get('window') === 'quick-task'
 const isVoiceDictationIndicatorWindow = new URLSearchParams(window.location.search).get('window') === 'voice-dictation-indicator'
 const isDetachedPreviewWindow = new URLSearchParams(window.location.search).get('window') === 'detached-preview'
 const isPlanningWindow = new URLSearchParams(window.location.search).get('window') === 'planning'
 const isWebBookmarksWindow = new URLSearchParams(window.location.search).get('window') === 'web-bookmarks'
-const isMainWindow = !isQuickTaskWindow && !isVoiceDictationIndicatorWindow && !isDetachedPreviewWindow && !isPlanningWindow && !isWebBookmarksWindow
+const isWebJavascriptPromptWindow = new URLSearchParams(window.location.search).get('window') === 'web-javascript-prompt'
+// 普通浏览器没有 Electron Preload，改用本地 HTTP API 兼容层；专用 prompt 入口不安装完整桥接。
+if (!isWebJavascriptPromptWindow) installHttpApiBridge()
+const isMainWindow = !isQuickTaskWindow && !isVoiceDictationIndicatorWindow && !isDetachedPreviewWindow && !isPlanningWindow && !isWebBookmarksWindow && !isWebJavascriptPromptWindow
 
 type WorkingDefaultModelSettings = {
   agentChannelId?: string
@@ -1130,6 +1130,10 @@ if (isQuickTaskWindow) {
         <WebBookmarksWindowApp />
       </React.StrictMode>
     )
+  })
+} else if (isWebJavascriptPromptWindow) {
+  import('./components/web-browser/WebJavascriptPromptWindowApp').then(({ WebJavascriptPromptWindowApp }) => {
+    ReactDOM.createRoot(document.getElementById('root')!).render(<WebJavascriptPromptWindowApp />)
   })
 } else {
   // ===== 主窗口：完整渲染 =====
