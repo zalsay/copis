@@ -301,31 +301,60 @@ export function createWebTabJavascriptDialogBridge(input: WebTabJavascriptDialog
 
     let chain: Promise<void>
     chain = Promise.resolve().then(async () => {
-      const enabled = await enablePage(3)
-      const dismissal = pendingDismissal
-      if (!enabled) {
-        if (dismissal && dismissal.generation === detachGeneration && pendingDismissal?.item === dismissal.item) {
-          pendingDismissal = undefined
-          if (!disposed && !isDestroyed()) console.warn('[网页对话框] 重连后恢复对话框失败，已清理过期候选')
+      while (!disposed && !isDestroyed()) {
+        // 每轮固定一个候选。旧恢复命令在队列中完成后，再检查是否有更新的 generation。
+        let dismissal = pendingDismissal
+
+        const enabled = await enablePage(3)
+        if (!enabled) {
+          if (
+            dismissal
+            && pendingDismissal?.item === dismissal.item
+            && pendingDismissal.generation === dismissal.generation
+          ) {
+            pendingDismissal = undefined
+            if (!disposed && !isDestroyed()) console.warn('[网页对话框] 重连后恢复对话框失败，已清理过期候选')
+          }
+          if (!pendingDismissal) return
+          continue
         }
-        return
-      }
-      if (!dismissal || dismissal.generation !== detachGeneration || dismissal.protocolGeneration !== protocolGeneration) return
-      if (disposed || isDestroyed()) return
-      try {
-        const sent = await enqueueCommand('Page.handleJavaScriptDialog', { accept: false }, () => (
-          pendingDismissal?.item === dismissal.item
-          && pendingDismissal.generation === dismissal.generation
-          && pendingDismissal.protocolGeneration === protocolGeneration
-          && dismissal.protocolGeneration === protocolGeneration
-          && !disposed
-          && !isDestroyed()
-        ), () => { dismissal.item.commandSent = true })
-        if (sent) clearChromiumOutstanding(dismissal.item)
-      } catch (error) {
-        if (!disposed && !isDestroyed()) console.warn('[网页对话框] 重连后拒绝 CDP 对话框失败:', error)
-      } finally {
-        if (pendingDismissal?.item === dismissal.item) pendingDismissal = undefined
+        if (!dismissal) {
+          if (!pendingDismissal) return
+          continue
+        }
+        const latestDismissal = pendingDismissal
+        if (
+          latestDismissal?.item === dismissal.item
+          && latestDismissal.protocolGeneration === dismissal.protocolGeneration
+        ) {
+          // 重复 detach 只更新同一候选的 generation；沿用已完成的 Page.enable，避免重复恢复链。
+          dismissal = latestDismissal
+        }
+        if (
+          pendingDismissal?.item !== dismissal.item
+          || pendingDismissal.generation !== dismissal.generation
+          || pendingDismissal.protocolGeneration !== protocolGeneration
+          || dismissal.protocolGeneration !== protocolGeneration
+        ) {
+          if (!pendingDismissal) return
+          continue
+        }
+        try {
+          const sent = await enqueueCommand('Page.handleJavaScriptDialog', { accept: false }, () => (
+            pendingDismissal?.item === dismissal.item
+            && pendingDismissal.generation === dismissal.generation
+            && pendingDismissal.protocolGeneration === protocolGeneration
+            && dismissal.protocolGeneration === protocolGeneration
+            && !disposed
+            && !isDestroyed()
+          ), () => { dismissal.item.commandSent = true })
+          if (sent) clearChromiumOutstanding(dismissal.item)
+        } catch (error) {
+          if (!disposed && !isDestroyed()) console.warn('[网页对话框] 重连后拒绝 CDP 对话框失败:', error)
+        } finally {
+          if (pendingDismissal?.item === dismissal.item) pendingDismissal = undefined
+        }
+        if (!pendingDismissal) return
       }
     }).catch((error) => {
       if (!disposed && !isDestroyed()) console.warn('[网页对话框] CDP 断开后重连失败:', error)

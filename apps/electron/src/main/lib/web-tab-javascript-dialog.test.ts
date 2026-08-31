@@ -383,6 +383,56 @@ describe('网页 JavaScript 对话框 CDP bridge', () => {
     expect(debuggerInstance.sendCommand.mock.calls.filter(([, params]) => params?.accept === false)).toHaveLength(0)
   })
 
+  test('Given 旧恢复拒绝命令仍在执行 When 新对话框再次 detach Then 旧链完成后继续恢复最新候选', async () => {
+    const { debuggerInstance, present, bridge } = createBridgeHarness()
+    present.mockImplementation(() => new Promise(() => undefined))
+    bridges.push(bridge)
+    await bridge.start()
+
+    debuggerInstance.emit('message', {}, 'Page.javascriptDialogOpening', {
+      type: 'confirm', message: '旧 dialog', hasBrowserHandler: false,
+    })
+    await flushPromises()
+
+    let recoveryDismissals = 0
+    let releaseFirstDismissal: (() => void) | undefined
+    debuggerInstance.sendCommand.mockImplementation((method, params) => {
+      if (method === 'Page.enable') return Promise.resolve(undefined)
+      if (method === 'Page.handleJavaScriptDialog' && params?.accept === false) {
+        recoveryDismissals += 1
+        debuggerInstance.handleCurrentDialog(params)
+        if (recoveryDismissals === 1) {
+          return new Promise<undefined>((resolve) => { releaseFirstDismissal = () => resolve(undefined) })
+        }
+      }
+      return Promise.resolve(undefined)
+    })
+
+    debuggerInstance.attached = false
+    debuggerInstance.emit('detach', {}, '旧 dialog 断开')
+    await flushPromises()
+    expect(recoveryDismissals).toBe(1)
+    expect(debuggerInstance.handledDialogs).toEqual([{ message: '旧 dialog', accept: false }])
+
+    debuggerInstance.emit('message', {}, 'Page.javascriptDialogOpening', {
+      type: 'alert', message: '新 dialog', hasBrowserHandler: false,
+    })
+    await flushPromises()
+    debuggerInstance.attached = false
+    debuggerInstance.emit('detach', {}, '新 dialog 断开')
+    await flushPromises()
+
+    expect(recoveryDismissals).toBe(1)
+    releaseFirstDismissal?.()
+    await flushPromises()
+
+    expect(recoveryDismissals).toBe(2)
+    expect(debuggerInstance.handledDialogs).toEqual([
+      { message: '旧 dialog', accept: false },
+      { message: '新 dialog', accept: false },
+    ])
+  })
+
   test('Given Page.enable 连续失败 When detach recovery 重试耗尽 Then 有界结束并清理候选', async () => {
     const { debuggerInstance, present, bridge } = createBridgeHarness()
     present.mockImplementation(() => new Promise(() => undefined))
@@ -410,6 +460,61 @@ describe('网页 JavaScript 对话框 CDP bridge', () => {
     debuggerInstance.emit('detach', {}, '候选应已清理')
     await flushPromises()
     expect(debuggerInstance.sendCommand.mock.calls.filter(([, params]) => params?.accept === false)).toHaveLength(0)
+  })
+
+  test('Given 旧候选的 Page.enable 三次失败 When 新候选等待后续恢复 Then 只拒绝新 current dialog', async () => {
+    const { debuggerInstance, present, bridge } = createBridgeHarness()
+    present.mockImplementation(() => new Promise(() => undefined))
+    bridges.push(bridge)
+    await bridge.start()
+
+    debuggerInstance.emit('message', {}, 'Page.javascriptDialogOpening', {
+      type: 'confirm', message: '已耗尽候选', hasBrowserHandler: false,
+    })
+    await flushPromises()
+
+    let recoveryEnableCalls = 0
+    let releaseThirdFailure: (() => void) | undefined
+    debuggerInstance.sendCommand.mockImplementation(async (method, params) => {
+      if (method === 'Page.enable') {
+        recoveryEnableCalls += 1
+        if (recoveryEnableCalls <= 2) throw new Error('暂时不可用')
+        if (recoveryEnableCalls === 3) {
+          await new Promise<void>((_, reject) => {
+            releaseThirdFailure = () => reject(new Error('暂时不可用'))
+          })
+        }
+      }
+      if (method === 'Page.handleJavaScriptDialog') debuggerInstance.handleCurrentDialog(params)
+      return undefined
+    })
+    debuggerInstance.attached = false
+    debuggerInstance.emit('detach', {}, '旧候选恢复中')
+    await flushPromises()
+
+    expect(recoveryEnableCalls).toBe(3)
+    debuggerInstance.emit('message', {}, 'Page.javascriptDialogOpening', {
+      type: 'alert', message: '新候选', hasBrowserHandler: false,
+    })
+    await flushPromises()
+    debuggerInstance.attached = false
+    debuggerInstance.emit('detach', {}, '新候选等待恢复')
+    await flushPromises()
+    releaseThirdFailure?.()
+    await flushPromises()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    await flushPromises()
+
+    debuggerInstance.attached = false
+    debuggerInstance.emit('detach', {}, '后续恢复')
+    await flushPromises()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    await flushPromises()
+
+    expect(recoveryEnableCalls).toBeGreaterThanOrEqual(4)
+    expect(debuggerInstance.currentDialog).toBeUndefined()
+    expect(debuggerInstance.handledDialogs).toEqual([{ message: '新候选', accept: false }])
+    expect(debuggerInstance.handledDialogs).not.toContainEqual({ message: '已耗尽候选', accept: false })
   })
 
   test('Given 原生 alert When presenter 收到 signal Then message box 使用同一 signal 并在 abort 时取消', async () => {
