@@ -311,6 +311,115 @@ describe('网页 JavaScript 对话框 CDP bridge', () => {
     expect(debuggerInstance.sendCommand).toHaveBeenLastCalledWith('Page.handleJavaScriptDialog', { accept: false })
   })
 
+  test('Given 正常结果命令正在执行 When detach 后命令拒绝 Then 仍恢复并拒绝当前 Chromium 对话框', async () => {
+    const { debuggerInstance, present, bridge } = createBridgeHarness()
+    let rejectNormalResult: ((error: Error) => void) | undefined
+    debuggerInstance.sendCommand.mockImplementation(async (method, params) => {
+      if (method === 'Page.enable') {
+        debuggerInstance.pageEnabled = true
+        return undefined
+      }
+      if (method === 'Page.handleJavaScriptDialog' && params?.accept === true) {
+        await new Promise<never>((_resolve, reject) => { rejectNormalResult = reject })
+      }
+      if (method === 'Page.handleJavaScriptDialog') debuggerInstance.handleCurrentDialog(params)
+      return undefined
+    })
+    present.mockResolvedValue({ accept: true })
+    bridges.push(bridge)
+    await bridge.start()
+
+    debuggerInstance.emit('message', {}, 'Page.javascriptDialogOpening', {
+      type: 'alert', message: '传输不确定', hasBrowserHandler: false,
+    })
+    await flushPromises()
+    expect(rejectNormalResult).toBeDefined()
+
+    debuggerInstance.attached = false
+    debuggerInstance.emit('detach', {}, '结果命令执行中断开')
+    rejectNormalResult?.(new Error('结果命令传输失败'))
+    await flushPromises()
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    await flushPromises()
+
+    expect(debuggerInstance.handledDialogs).toEqual([{ message: '传输不确定', accept: false }])
+    expect(debuggerInstance.currentDialog).toBeUndefined()
+  })
+
+  test('Given 恢复拒绝命令失败 When bounded retry Then 成功后耗尽候选且不再发送后续命令', async () => {
+    const first = createBridgeHarness()
+    first.present.mockImplementation(() => new Promise(() => undefined))
+    bridges.push(first.bridge)
+    await first.bridge.start()
+    first.debuggerInstance.emit('message', {}, 'Page.javascriptDialogOpening', {
+      type: 'confirm', message: '恢复重试', hasBrowserHandler: false,
+    })
+    await flushPromises()
+
+    let recoveryAttempts = 0
+    first.debuggerInstance.sendCommand.mockImplementation(async (method, params) => {
+      if (method === 'Page.enable') {
+        first.debuggerInstance.pageEnabled = true
+        return undefined
+      }
+      if (method === 'Page.handleJavaScriptDialog' && params?.accept === false) {
+        recoveryAttempts += 1
+        if (recoveryAttempts === 1) throw new Error('恢复拒绝暂时失败')
+        first.debuggerInstance.handleCurrentDialog(params)
+      }
+      return undefined
+    })
+    first.debuggerInstance.attached = false
+    first.debuggerInstance.emit('detach', {}, '恢复拒绝失败')
+    await flushPromises()
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    await flushPromises()
+
+    expect(recoveryAttempts).toBe(2)
+    expect(first.debuggerInstance.handledDialogs).toEqual([{ message: '恢复重试', accept: false }])
+    expect(first.debuggerInstance.currentDialog).toBeUndefined()
+
+    const exhausted = createBridgeHarness()
+    exhausted.present.mockImplementation(() => new Promise(() => undefined))
+    bridges.push(exhausted.bridge)
+    await exhausted.bridge.start()
+    exhausted.debuggerInstance.emit('message', {}, 'Page.javascriptDialogOpening', {
+      type: 'confirm', message: '恢复耗尽', hasBrowserHandler: false,
+    })
+    await flushPromises()
+
+    let exhaustedAttempts = 0
+    exhausted.debuggerInstance.sendCommand.mockImplementation(async (method, params) => {
+      if (method === 'Page.enable') {
+        exhausted.debuggerInstance.pageEnabled = true
+        return undefined
+      }
+      if (method === 'Page.handleJavaScriptDialog' && params?.accept === false) {
+        exhaustedAttempts += 1
+        throw new Error('恢复拒绝持续失败')
+      }
+      return undefined
+    })
+    exhausted.debuggerInstance.attached = false
+    exhausted.debuggerInstance.emit('detach', {}, '恢复候选耗尽')
+    await flushPromises()
+    await new Promise((resolve) => setTimeout(resolve, 30))
+    await flushPromises()
+    const attemptsAfterExhaustion = exhaustedAttempts
+
+    exhausted.debuggerInstance.attached = false
+    exhausted.debuggerInstance.emit('detach', {}, '耗尽后再次断开')
+    await flushPromises()
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    await flushPromises()
+
+    expect(attemptsAfterExhaustion).toBeGreaterThan(0)
+    expect(attemptsAfterExhaustion).toBeLessThanOrEqual(3)
+    expect(exhaustedAttempts).toBe(attemptsAfterExhaustion)
+    expect(exhausted.debuggerInstance.currentDialog?.message).toBe('恢复耗尽')
+    expect(exhausted.debuggerInstance.handledDialogs).toEqual([])
+  })
+
   test('Given 结果命令已发出但本地 finally 尚未完成 When CDP detach Then 不发送过期拒绝', async () => {
     const { debuggerInstance, present, bridge } = createBridgeHarness()
     let detached = false

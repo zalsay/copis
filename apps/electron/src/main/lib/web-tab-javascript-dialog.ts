@@ -57,6 +57,8 @@ interface PendingDialog {
   /** 命令成功处理 Chromium 对话框后置位；命令发送中的状态单独记录。 */
   commandSent: boolean
   commandInFlight: boolean
+  /** detach 期间命令仍在传输中，结果未知；与本地 settled 状态分离。 */
+  transportUncertain: boolean
 }
 
 function isDialogType(value: unknown): value is JavascriptDialogType {
@@ -128,7 +130,13 @@ export function createWebTabJavascriptDialogBridge(input: WebTabJavascriptDialog
   let reconnectPromise: Promise<void> | undefined
   let detachGeneration = 0
   let protocolGeneration = 0
-  let pendingDismissal: { generation: number; protocolGeneration: number; item: PendingDialog } | undefined
+  const maxRecoveryDismissalAttempts = 3
+  let pendingDismissal: {
+    generation: number
+    protocolGeneration: number
+    item: PendingDialog
+    attempts: number
+  } | undefined
   // pending 包含尚未走完本地 Promise 的项，只有该引用代表 Chromium 当前暂停的 dialog。
   let chromiumOutstanding: PendingDialog | undefined
 
@@ -236,6 +244,7 @@ export function createWebTabJavascriptDialogBridge(input: WebTabJavascriptDialog
       if (sent) {
         item.commandInFlight = false
         item.commandSent = true
+        item.transportUncertain = false
         clearChromiumOutstanding(item)
       } else {
         cancelItem(item)
@@ -246,6 +255,15 @@ export function createWebTabJavascriptDialogBridge(input: WebTabJavascriptDialog
         console.warn('[网页对话框] 回传对话框结果失败:', error)
       }
       if (
+        item.transportUncertain
+        && !item.commandSent
+        && item.protocolGeneration === protocolGeneration
+        && !disposed
+        && !isDestroyed()
+      ) {
+        item.transportUncertain = false
+        onDetach('结果命令失败', item)
+      } else if (
         !item.settled
         && !item.commandSent
         && chromiumOutstanding === item
@@ -285,6 +303,7 @@ export function createWebTabJavascriptDialogBridge(input: WebTabJavascriptDialog
       protocolGeneration,
       commandSent: false,
       commandInFlight: false,
+      transportUncertain: false,
     }
     if (chromiumOutstanding?.settled) clearChromiumOutstanding(chromiumOutstanding)
     if (!chromiumOutstanding) {
@@ -298,10 +317,28 @@ export function createWebTabJavascriptDialogBridge(input: WebTabJavascriptDialog
     })
   }
 
-  const onDetach = (_reason?: string): void => {
-    if (disposed) return
+  const onDetach = (_reason?: string, recoveryCandidate?: PendingDialog): void => {
+    if (disposed || isDestroyed()) {
+      pendingDismissal = undefined
+      cancelPending()
+      return
+    }
     const generation = ++detachGeneration
     if (chromiumOutstanding?.settled) clearChromiumOutstanding(chromiumOutstanding)
+    if (
+      chromiumOutstanding
+      && !chromiumOutstanding.settled
+      && !chromiumOutstanding.commandSent
+      && chromiumOutstanding.commandInFlight
+    ) {
+      chromiumOutstanding.transportUncertain = true
+    }
+    const uncertainCandidate = recoveryCandidate
+      && !recoveryCandidate.commandSent
+      && !recoveryCandidate.commandInFlight
+      && recoveryCandidate.protocolGeneration === protocolGeneration
+      ? recoveryCandidate
+      : undefined
     const outstanding = chromiumOutstanding?.chromiumOutstanding
       && !chromiumOutstanding.settled
       && !chromiumOutstanding.commandSent
@@ -310,8 +347,13 @@ export function createWebTabJavascriptDialogBridge(input: WebTabJavascriptDialog
       : undefined
     if (pendingDismissal) {
       pendingDismissal = { ...pendingDismissal, generation }
-    } else if (outstanding) {
-      pendingDismissal = { generation, protocolGeneration, item: outstanding }
+    } else if (outstanding || uncertainCandidate) {
+      pendingDismissal = {
+        generation,
+        protocolGeneration,
+        item: outstanding ?? uncertainCandidate!,
+        attempts: 0,
+      }
     }
     cancelPending()
     if (reconnectPromise) return
@@ -369,12 +411,27 @@ export function createWebTabJavascriptDialogBridge(input: WebTabJavascriptDialog
             dismissal.item.commandInFlight = false
             dismissal.item.commandSent = true
             clearChromiumOutstanding(dismissal.item)
+            if (pendingDismissal?.item === dismissal.item) pendingDismissal = undefined
           }
         } catch (error) {
           dismissal.item.commandInFlight = false
           if (!disposed && !isDestroyed()) console.warn('[网页对话框] 重连后拒绝 CDP 对话框失败:', error)
-        } finally {
-          if (pendingDismissal?.item === dismissal.item) pendingDismissal = undefined
+          if (
+            pendingDismissal?.item === dismissal.item
+            && pendingDismissal.generation === dismissal.generation
+            && pendingDismissal.protocolGeneration === protocolGeneration
+            && dismissal.protocolGeneration === protocolGeneration
+          ) {
+            const attempts = pendingDismissal.attempts + 1
+            if (attempts >= maxRecoveryDismissalAttempts) {
+              pendingDismissal = undefined
+              if (!disposed && !isDestroyed()) {
+                console.warn('[网页对话框] 重连后拒绝 CDP 对话框失败，已耗尽有界重试')
+              }
+            } else {
+              pendingDismissal = { ...pendingDismissal, attempts }
+            }
+          }
         }
         if (!pendingDismissal) return
       }
@@ -419,6 +476,7 @@ export function createWebTabJavascriptDialogBridge(input: WebTabJavascriptDialog
     dispose(): void {
       if (disposed) return
       disposed = true
+      pendingDismissal = undefined
       removeMessageListener?.()
       removeDetachListener?.()
       removeMessageListener = undefined
