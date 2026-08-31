@@ -1,5 +1,4 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, mock, test } from 'bun:test'
-import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -108,8 +107,8 @@ describe('Browser Workflow 存储', () => {
     expect(store.getBrowserWorkflow('workspace-1', 'workflow-1').version.version).toBe(1)
     expect(existsSync(join(browserWorkflowRoot, 'workflow-1', 'versions', 'v1.json'))).toBe(true)
     const savedVersion = store.getBrowserWorkflow('workspace-1', 'workflow-1').version
-    const script = readFileSync(join(browserWorkflowRoot, 'workflow-1', 'playwright', 'v1.mjs'))
-    expect(savedVersion.approval.playwrightScriptSha256).toBe(createHash('sha256').update(script).digest('hex'))
+    expect(savedVersion.approval.playwrightScriptSha256).toBeUndefined()
+    expect(existsSync(join(browserWorkflowRoot, 'workflow-1', 'playwright'))).toBe(false)
   })
 
   test('Given Agent 已提交待审核总结 When 写入草稿 Markdown Then 工作区保留可读 draft.md', () => {
@@ -127,6 +126,7 @@ describe('Browser Workflow 存储', () => {
     expect(readFileSync(draftPath, 'utf8')).toContain('来源录制：`recording-1`')
     expect(readFileSync(draftPath, 'utf8')).toContain('### 1. fill')
     expect(existsSync(join(browserWorkflowRoot, 'workflow-1', 'workflow.md'))).toBe(false)
+    expect(existsSync(join(browserWorkflowRoot, 'workflow-1', 'playwright', 'draft.mjs'))).toBe(false)
   })
 
   test('Given 用户确认待审核总结 When 提升草稿 Markdown Then 仅保留带名称的 workflow.md', () => {
@@ -276,5 +276,58 @@ describe('Browser Workflow 存储', () => {
 
     const path = join(browserWorkflowRoot, 'workflow-1', 'runs', 'run-1.jsonl')
     expect(readFileSync(path, 'utf8').trim().split('\n')).toHaveLength(2)
+  })
+
+  test('Given 历史版本包含 playwrightScriptSha256 When 读取 Workflow Then 原样保留 hash 且 steps 不变', () => {
+    const dir = join(workflowRoot, 'demo-workspace', 'legacy-hashed')
+    const legacyVersion: BrowserWorkflowVersion = {
+      ...createVersion('legacy-hashed'),
+      approval: {
+        status: 'approved',
+        playwrightScriptSha256: 'a'.repeat(64),
+      },
+    }
+    mkdirSync(join(dir, 'versions'), { recursive: true })
+    writeFileSync(join(dir, 'workflow.json'), JSON.stringify({
+      schemaVersion: 1,
+      id: 'legacy-hashed',
+      workspaceId: 'workspace-1',
+      workspaceSlug: 'demo-workspace',
+      name: '带旧 Hash 的历史 Workflow',
+      status: 'ready',
+      currentVersion: 1,
+      profileId: 'copis-web',
+      allowedOrigins: ['https://example.com'],
+      unattendedAllowed: false,
+      createdAt: legacyVersion.createdAt,
+      updatedAt: legacyVersion.createdAt,
+    }))
+    writeFileSync(join(dir, 'versions', 'v1.json'), JSON.stringify(legacyVersion))
+
+    const loaded = store.getBrowserWorkflow('workspace-1', 'legacy-hashed')
+    expect(loaded.manifest.id).toBe('legacy-hashed')
+    expect(loaded.version.approval.playwrightScriptSha256).toBe('a'.repeat(64))
+    expect(loaded.version.steps).toEqual(legacyVersion.steps)
+  })
+
+  test('Given 输入版本包含旧版 playwrightScriptSha256 When 保存新版本 Then 清除旧运行产物 hash 字段', () => {
+    const legacyInputVersion: BrowserWorkflowVersion = {
+      ...createVersion('legacy-clean-test'),
+      approval: {
+        status: 'approved',
+        playwrightScriptSha256: 'b'.repeat(64),
+      },
+    }
+    store.saveBrowserWorkflow({
+      workspaceId: 'workspace-1',
+      sessionId: 'session-1',
+      name: '新保存 Workflow',
+      allowedOrigins: ['https://example.com'],
+      version: legacyInputVersion,
+    })
+
+    const loaded = store.getBrowserWorkflow('workspace-1', 'legacy-clean-test')
+    expect(loaded.version.approval.playwrightScriptSha256).toBeUndefined()
+    expect(existsSync(join(browserWorkflowRoot, 'legacy-clean-test', 'playwright'))).toBe(false)
   })
 })
