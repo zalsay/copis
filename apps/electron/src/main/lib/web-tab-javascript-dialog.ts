@@ -52,6 +52,7 @@ interface PendingDialog {
   cancelResolve: (result: JavascriptDialogResult) => void
   abortController: AbortController
   settled: boolean
+  chromiumOutstanding: boolean
 }
 
 function isDialogType(value: unknown): value is JavascriptDialogType {
@@ -119,7 +120,10 @@ export function createWebTabJavascriptDialogBridge(input: WebTabJavascriptDialog
   let removeMessageListener: (() => void) | undefined
   let removeDetachListener: (() => void) | undefined
   let reconnectPromise: Promise<void> | undefined
-  let pendingDismissalsAfterReconnect = 0
+  let detachGeneration = 0
+  let pendingDismissal: { generation: number; item: PendingDialog } | undefined
+  // pending 包含尚未走完本地 Promise 的项，只有该引用代表 Chromium 当前暂停的 dialog。
+  let chromiumOutstanding: PendingDialog | undefined
 
   const isDestroyed = (): boolean => Boolean(input.isDestroyed?.())
 
@@ -152,11 +156,10 @@ export function createWebTabJavascriptDialogBridge(input: WebTabJavascriptDialog
     }
   }
 
-  const cancelPending = (dismissAfterReconnect = false): void => {
+  const cancelPending = (): void => {
     for (const item of pending) {
       if (item.settled) continue
       item.settled = true
-      if (dismissAfterReconnect) pendingDismissalsAfterReconnect += 1
       item.abortController.abort()
       item.cancelResolve({ accept: false })
     }
@@ -166,6 +169,10 @@ export function createWebTabJavascriptDialogBridge(input: WebTabJavascriptDialog
     if (item.settled || disposed || isDestroyed()) {
       pending.delete(item)
       return
+    }
+    if (!chromiumOutstanding) {
+      item.chromiumOutstanding = true
+      chromiumOutstanding = item
     }
     try {
       const presented = await Promise.race([
@@ -178,6 +185,8 @@ export function createWebTabJavascriptDialogBridge(input: WebTabJavascriptDialog
       if (item.settled || disposed || isDestroyed()) return
       const params: Record<string, unknown> = { accept: presented.accept }
       if (opening.type === 'prompt' && presented.accept) params.promptText = presented.promptText ?? ''
+      item.chromiumOutstanding = false
+      if (chromiumOutstanding === item) chromiumOutstanding = undefined
       try {
         await sendCommand('Page.handleJavaScriptDialog', params)
       } catch (error) {
@@ -197,7 +206,21 @@ export function createWebTabJavascriptDialogBridge(input: WebTabJavascriptDialog
 
     let cancelResolve: (result: JavascriptDialogResult) => void = () => undefined
     const cancel = new Promise<JavascriptDialogResult>((resolve) => { cancelResolve = resolve })
-    const item: PendingDialog = { cancel, cancelResolve, abortController: new AbortController(), settled: false }
+    const item: PendingDialog = {
+      cancel,
+      cancelResolve,
+      abortController: new AbortController(),
+      settled: false,
+      chromiumOutstanding: false,
+    }
+    if (chromiumOutstanding?.settled) {
+      chromiumOutstanding.chromiumOutstanding = false
+      chromiumOutstanding = undefined
+    }
+    if (!chromiumOutstanding) {
+      item.chromiumOutstanding = true
+      chromiumOutstanding = item
+    }
     pending.add(item)
     queue = queue.then(() => processDialog(opening, item)).catch((error) => {
       if (!disposed && !isDestroyed()) console.warn('[网页对话框] 处理 CDP 对话框失败:', error)
@@ -207,22 +230,37 @@ export function createWebTabJavascriptDialogBridge(input: WebTabJavascriptDialog
 
   const onDetach = (_reason?: string): void => {
     if (disposed) return
-    cancelPending(true)
-    reconnectPromise = (reconnectPromise ?? Promise.resolve()).then(async () => {
+    const generation = ++detachGeneration
+    const outstanding = chromiumOutstanding?.chromiumOutstanding ? chromiumOutstanding : undefined
+    if (outstanding) pendingDismissal = { generation, item: outstanding }
+    cancelPending()
+    if (reconnectPromise) return
+
+    let chain: Promise<void>
+    chain = Promise.resolve().then(async () => {
       if (!await enablePage()) return
-      const dismissals = pendingDismissalsAfterReconnect
-      pendingDismissalsAfterReconnect = 0
-      for (let index = 0; index < dismissals; index += 1) {
-        if (disposed || isDestroyed()) return
-        try {
-          await sendCommand('Page.handleJavaScriptDialog', { accept: false })
-        } catch (error) {
-          if (!disposed && !isDestroyed()) console.warn('[网页对话框] 重连后拒绝 CDP 对话框失败:', error)
-        }
+      const dismissal = pendingDismissal
+      pendingDismissal = undefined
+      if (
+        !dismissal ||
+        dismissal.generation !== detachGeneration ||
+        chromiumOutstanding !== dismissal.item ||
+        !dismissal.item.chromiumOutstanding
+      ) return
+      if (disposed || isDestroyed()) return
+      dismissal.item.chromiumOutstanding = false
+      chromiumOutstanding = undefined
+      try {
+        await sendCommand('Page.handleJavaScriptDialog', { accept: false })
+      } catch (error) {
+        if (!disposed && !isDestroyed()) console.warn('[网页对话框] 重连后拒绝 CDP 对话框失败:', error)
       }
     }).catch((error) => {
       if (!disposed && !isDestroyed()) console.warn('[网页对话框] CDP 断开后重连失败:', error)
-    }).finally(() => { reconnectPromise = undefined })
+    }).finally(() => {
+      if (reconnectPromise === chain) reconnectPromise = undefined
+    })
+    reconnectPromise = chain
   }
 
   const subscribe = (): void => {
