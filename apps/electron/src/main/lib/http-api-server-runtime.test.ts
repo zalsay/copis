@@ -706,10 +706,92 @@ describe('Rust HTTP API 功能模块生命周期', () => {
     expect(readFileSync(active?.path ?? '', 'utf8')).toBe('old-rust-api')
   })
 
-  test('打包模式下 manifest 要求更高客户端版本时，返回结构化更新状态且不安装或启动进程', async () => {
+  test('打包模式下 manifest 要求更高客户端版本时，启动已有 active 旧模块并返回结构化更新状态', async () => {
     const root = createRoot()
     const oldPackage = rustPackage('0.1.0', 'old-rust-api')
-    await activateRustVersion(root, oldPackage, 'old-rust-api')
+    const oldModulePath = await activateRustVersion(root, oldPackage, 'old-rust-api')
+    const records: SpawnRecord[] = []
+    const manifestUrl = 'https://download.example.com/manifest.json'
+    const newContent = 'incompatible-rust-api'
+    let artifactRequested = false
+    const higherMinClientManifest = {
+      schema: 1,
+      channel: 'stable',
+      client: { minVersion: '0.18.0' },
+      platforms: {
+        'darwin-arm64': {
+          minClientVersion: '0.18.0',
+          modules: {
+            'rust-http-api': {
+              version: '0.3.0',
+              url: 'https://download.example.com/rust-http-api-0.3.0',
+              sha256: createHash('sha256').update(newContent).digest('hex'),
+              size: Buffer.byteLength(newContent),
+              format: 'binary',
+              entrypoint: 'bin/copis-http-api-server',
+              required: true,
+            },
+          },
+        },
+      },
+    }
+
+    const previousResourcesPath = (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath
+
+    packaged = true
+    Object.defineProperty(process, 'resourcesPath', {
+      configurable: true,
+      value: '/tmp/copis-test-resources',
+    })
+    try {
+      const baseFetch = fetchFixture(higherMinClientManifest, newContent, () => true)
+      const result = await ensureRustHttpApiServerReady({
+        rootDir: join(root, 'modules'),
+        paymentWorkspace: paymentWorkspaceFor(root),
+        manifestUrl,
+        platform: 'darwin',
+        arch: 'arm64',
+        clientVersion: '0.16.17',
+        spawnImpl: spawnFixture(records),
+        fetchImpl: async (input, init) => {
+          if (input.startsWith('https://download.example.com/rust-http-api-')) artifactRequested = true
+          return baseFetch(input, init)
+        },
+        healthTimeoutMs: 100,
+        stopTimeoutMs: 5,
+        workerLaunch: { kind: 'executable', path: '/tmp/copis-test-runtime' },
+      })
+
+      expect(result).toEqual({
+        status: 'update_required',
+        clientVersion: '0.16.17',
+        minClientVersion: '0.18.0',
+      })
+      expect(records).toHaveLength(1)
+      expect(records[0]?.file).toBe(oldModulePath)
+      expect(records[0]?.options.env?.COPIS_HTTP_API_PORT).toBe('51740')
+      expect(artifactRequested).toBe(false)
+      const active = readActiveFunctionalModule(getFunctionalModulePaths(join(root, 'modules')), 'rust-http-api')
+      expect(active?.version).toBe('0.1.0')
+      expect(readFileSync(active?.path ?? '', 'utf8')).toBe('old-rust-api')
+    } finally {
+      packaged = false
+      if (previousResourcesPath === undefined) {
+        Object.defineProperty(process, 'resourcesPath', {
+          configurable: true,
+          value: undefined,
+        })
+      } else {
+        Object.defineProperty(process, 'resourcesPath', {
+          configurable: true,
+          value: previousResourcesPath,
+        })
+      }
+    }
+  })
+
+  test('打包模式下 manifest 要求更高客户端版本且无 active 模块时，返回结构化更新状态且不安装或启动进程', async () => {
+    const root = createRoot()
     const records: SpawnRecord[] = []
     const manifestUrl = 'https://download.example.com/manifest.json'
     const newContent = 'incompatible-rust-api'
@@ -757,7 +839,7 @@ describe('Rust HTTP API 功能模块生命周期', () => {
       })
       expect(records).toHaveLength(0)
       const active = readActiveFunctionalModule(getFunctionalModulePaths(join(root, 'modules')), 'rust-http-api')
-      expect(active?.version).toBe('0.1.0')
+      expect(active).toBeUndefined()
     } finally {
       packaged = false
     }
@@ -790,6 +872,151 @@ describe('Rust HTTP API 功能模块生命周期', () => {
       expect(records).toHaveLength(0)
     } finally {
       packaged = false
+    }
+  })
+
+  test('打包模式下 manifest 要求更高客户端版本时，旧模块首次健康检查失败会重试', async () => {
+    const root = createRoot()
+    const oldPackage = rustPackage('0.1.0', 'old-rust-api')
+    await activateRustVersion(root, oldPackage, 'old-rust-api')
+    const records: SpawnRecord[] = []
+    const manifestUrl = 'https://download.example.com/manifest.json'
+    const newContent = 'incompatible-rust-api'
+    let probeCount = 0
+    const higherMinClientManifest = {
+      schema: 1,
+      channel: 'stable',
+      client: { minVersion: '0.18.0' },
+      platforms: {
+        'darwin-arm64': {
+          minClientVersion: '0.18.0',
+          modules: {
+            'rust-http-api': {
+              version: '0.3.0',
+              url: 'https://download.example.com/rust-http-api-0.3.0',
+              sha256: createHash('sha256').update(newContent).digest('hex'),
+              size: Buffer.byteLength(newContent),
+              format: 'binary',
+              entrypoint: 'bin/copis-http-api-server',
+              required: true,
+            },
+          },
+        },
+      },
+    }
+
+    const previousResourcesPath = (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath
+
+    packaged = true
+    Object.defineProperty(process, 'resourcesPath', {
+      configurable: true,
+      value: '/tmp/copis-test-resources',
+    })
+    try {
+      const result = await ensureRustHttpApiServerReady({
+        rootDir: join(root, 'modules'),
+        paymentWorkspace: paymentWorkspaceFor(root),
+        manifestUrl,
+        platform: 'darwin',
+        arch: 'arm64',
+        clientVersion: '0.16.17',
+        spawnImpl: spawnFixture(records),
+        fetchImpl: fetchFixture(higherMinClientManifest, newContent, (port) => port === '51740' && probeCount++ > 0),
+        healthTimeoutMs: 50,
+        stopTimeoutMs: 5,
+        workerLaunch: { kind: 'executable', path: '/tmp/copis-test-runtime' },
+      })
+
+      expect(result).toEqual({
+        status: 'update_required',
+        clientVersion: '0.16.17',
+        minClientVersion: '0.18.0',
+      })
+      expect(records).toHaveLength(2)
+      expect(records[0]?.child.killed).toBe(true)
+      expect(records[1]?.options.env?.COPIS_HTTP_API_PORT).toBe('51740')
+    } finally {
+      packaged = false
+      if (previousResourcesPath === undefined) {
+        Object.defineProperty(process, 'resourcesPath', {
+          configurable: true,
+          value: undefined,
+        })
+      } else {
+        Object.defineProperty(process, 'resourcesPath', {
+          configurable: true,
+          value: previousResourcesPath,
+        })
+      }
+    }
+  })
+
+  test('打包模式下 manifest 要求更高客户端版本时，旧模块健康检查彻底失败抛出异常', async () => {
+    const root = createRoot()
+    const oldPackage = rustPackage('0.1.0', 'old-rust-api')
+    await activateRustVersion(root, oldPackage, 'old-rust-api')
+    const records: SpawnRecord[] = []
+    const manifestUrl = 'https://download.example.com/manifest.json'
+    const newContent = 'incompatible-rust-api'
+    const higherMinClientManifest = {
+      schema: 1,
+      channel: 'stable',
+      client: { minVersion: '0.18.0' },
+      platforms: {
+        'darwin-arm64': {
+          minClientVersion: '0.18.0',
+          modules: {
+            'rust-http-api': {
+              version: '0.3.0',
+              url: 'https://download.example.com/rust-http-api-0.3.0',
+              sha256: createHash('sha256').update(newContent).digest('hex'),
+              size: Buffer.byteLength(newContent),
+              format: 'binary',
+              entrypoint: 'bin/copis-http-api-server',
+              required: true,
+            },
+          },
+        },
+      },
+    }
+
+    const previousResourcesPath = (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath
+
+    packaged = true
+    Object.defineProperty(process, 'resourcesPath', {
+      configurable: true,
+      value: '/tmp/copis-test-resources',
+    })
+    try {
+      await expect(ensureRustHttpApiServerReady({
+        rootDir: join(root, 'modules'),
+        paymentWorkspace: paymentWorkspaceFor(root),
+        manifestUrl,
+        platform: 'darwin',
+        arch: 'arm64',
+        clientVersion: '0.16.17',
+        spawnImpl: spawnFixture(records),
+        fetchImpl: fetchFixture(higherMinClientManifest, newContent, () => false),
+        healthTimeoutMs: 50,
+        stopTimeoutMs: 5,
+        workerLaunch: { kind: 'executable', path: '/tmp/copis-test-runtime' },
+      })).rejects.toThrow('系统核心模块未通过运行检查')
+      expect(records).toHaveLength(2)
+      expect(records[0]?.child.killed).toBe(true)
+      expect(records[1]?.child.killed).toBe(false)
+    } finally {
+      packaged = false
+      if (previousResourcesPath === undefined) {
+        Object.defineProperty(process, 'resourcesPath', {
+          configurable: true,
+          value: undefined,
+        })
+      } else {
+        Object.defineProperty(process, 'resourcesPath', {
+          configurable: true,
+          value: previousResourcesPath,
+        })
+      }
     }
   })
 })

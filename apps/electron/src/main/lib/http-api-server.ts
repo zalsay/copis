@@ -781,7 +781,8 @@ export type EnsureRustHttpApiServerReadyResult =
   | RustHttpApiServerUpdateRequiredStatus
 
 /**
- * 启动窗口前只校验并切换 Rust API，避免登录页先连到不兼容的旧模块。
+ * 启动窗口前校验并切换 Rust API。远端要求更高客户端版本时不更新模块，
+ * 但已有的 active 模块仍会启动，用于获取桌面端升级。
  * 其他功能模块仍由登录后的完整启动 Gate 负责准备。
  */
 export async function ensureRustHttpApiServerReady(
@@ -796,7 +797,8 @@ export async function ensureRustHttpApiServerReady(
     return { status: 'ready' }
   }
 
-  let artifact: FunctionalModuleArtifact
+  let artifact: FunctionalModuleArtifact | undefined
+  let updateRequired: RustHttpApiServerUpdateRequiredStatus | undefined
   try {
     artifact = await resolveFunctionalModuleArtifact('rust-http-api', {
       rootDir,
@@ -811,39 +813,47 @@ export async function ensureRustHttpApiServerReady(
       console.warn(
         `[HTTP API] 当前 Copis 版本 (v${error.clientVersion}) 低于功能模块要求的最低版本 (v${error.minClientVersion})，跳过 Rust 模块更新并提示升级`,
       )
-      return {
+      updateRequired = {
         status: 'update_required',
         clientVersion: error.clientVersion,
         minClientVersion: error.minClientVersion,
       }
+    } else {
+      throw error
     }
-    throw error
   }
 
   const active = readActiveFunctionalModule(paths, 'rust-http-api')
-  const needsUpdate = !active
-    || active.version !== artifact.version
-    || active.sha256.toLowerCase() !== artifact.sha256.toLowerCase()
+  if (updateRequired) {
+    if (!active) {
+      return updateRequired
+    }
+  } else if (artifact) {
+    const needsUpdate = !active
+      || active.version !== artifact.version
+      || active.sha256.toLowerCase() !== artifact.sha256.toLowerCase()
 
-  if (needsUpdate) {
-    const updated = await updateHttpApiServer({
-      ...runtimeOptions,
-      rootDir,
-      artifactOverride: artifact,
-    })
-    if (!updated) throw new Error('系统核心模块更新后运行检查未通过')
-    return { status: 'ready' }
+    if (needsUpdate) {
+      const updated = await updateHttpApiServer({
+        ...runtimeOptions,
+        rootDir,
+        artifactOverride: artifact,
+      })
+      if (!updated) throw new Error('系统核心模块更新后运行检查未通过')
+      return { status: 'ready' }
+    }
   }
 
+  const formalPort = runtimeOptions.port ?? HTTP_API_PORT
   startHttpApiServer({ ...runtimeOptions, rootDir })
-  if (!await waitForHttpApiHealth(HTTP_API_PORT, runtimeOptions)) {
+  if (!await waitForHttpApiHealth(formalPort, runtimeOptions)) {
     await stopHttpApiServer(runtimeOptions.stopTimeoutMs)
     startHttpApiServer({ ...runtimeOptions, rootDir })
-    if (!await waitForHttpApiHealth(HTTP_API_PORT, runtimeOptions)) {
+    if (!await waitForHttpApiHealth(formalPort, runtimeOptions)) {
       throw new Error('系统核心模块未通过运行检查')
     }
   }
-  return { status: 'ready' }
+  return updateRequired ?? { status: 'ready' }
 }
 
 export function getHttpApiInternalToken(): string | null {
