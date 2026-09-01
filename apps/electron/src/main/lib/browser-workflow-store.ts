@@ -13,11 +13,6 @@ import type {
 import { getWorkspaceBrowserWorkflowsDir } from './config-paths'
 import { getAgentWorkspace, getAgentWorkspaceBrowserWorkflowsDir } from './agent-workspace-manager'
 import { assertBrowserWorkflowManifest, assertBrowserWorkflowVersion } from './browser-workflow-schema'
-import {
-  getBrowserWorkflowPlaywrightScriptSha256,
-  writeBrowserWorkflowPlaywrightDraft,
-  writeBrowserWorkflowPlaywrightVersion,
-} from './browser-workflow-playwright-script'
 
 interface StoredWorkflowManifest extends BrowserWorkflowManifest {
   workspaceSlug: string
@@ -273,13 +268,7 @@ export function saveBrowserWorkflow(input: BrowserWorkflowSaveInput): BrowserWor
       status: 'approved',
       approvedAt: input.version.approval.approvedAt ?? Date.now(),
       approvedBySessionId: input.version.approval.approvedBySessionId ?? input.sessionId,
-    },
-  }
-  const version: BrowserWorkflowVersion = {
-    ...baseVersion,
-    approval: {
-      ...baseVersion.approval,
-      playwrightScriptSha256: getBrowserWorkflowPlaywrightScriptSha256(baseVersion),
+      playwrightScriptSha256: undefined,
     },
   }
   const manifest: StoredWorkflowManifest = {
@@ -299,8 +288,7 @@ export function saveBrowserWorkflow(input: BrowserWorkflowSaveInput): BrowserWor
   }
   if (manifest.allowedOrigins.length === 0) throw new Error('Browser Workflow 至少需要一个允许的 Origin')
   assertBrowserWorkflowManifest(manifest)
-  writeBrowserWorkflowPlaywrightVersion(input.workspaceId, version)
-  writeJson(join(versionsDir, `v${versionNumber}.json`), version)
+  writeJson(join(versionsDir, `v${versionNumber}.json`), baseVersion)
   writeJson(join(dir, 'workflow.json'), manifest)
   return manifest
 }
@@ -313,7 +301,6 @@ export function writeBrowserWorkflowDraftMarkdown(
   const workflowDir = resolveWorkflowDir(workspaceId, version.workflowId)
   mkdirSync(workflowDir, { recursive: true })
   writeFileAtomically(join(workflowDir, 'draft.md'), renderBrowserWorkflowMarkdown(version))
-  writeBrowserWorkflowPlaywrightDraft(workspaceId, version)
 }
 
 export function promoteBrowserWorkflowDraftMarkdown(workspaceId: string, workflowId: string): void {

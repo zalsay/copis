@@ -202,19 +202,27 @@ describe('网页页签 manager 原生子窗口组合回归', () => {
     expect(incognitoPopupWindow.webContents.session).toBe(incognitoContents.session)
   })
 
-  test('关闭普通页签后 bridge dispose，之后 CDP detach 不会重连或发命令', async () => {
+  test('普通页签默认不启动 bridge；获得 Agent lease 后启动 bridge，release/close 后 bridge dispose 且 detach 后不发命令', async () => {
     const host = new FakeBrowserWindow()
     manager.setWebTabHostWindow(host as never)
     const snapshot = manager.createWebTab({ url: 'https://dialog-owner.example' })
     const contents = host.contentView.views[0]!.webContents
     await new Promise((resolve) => setTimeout(resolve, 0))
+
+    // 普通页签 0 lease 时不启用 Page
+    expect(contents.debugger.sendCommand.mock.calls.some(([method]) => method === 'Page.enable')).toBe(false)
+
+    // acquire Agent lease 后 bridge 启动并启用 Page
+    const port = manager.acquireWebTabPagePort(snapshot.tabs[0]!.id, 'agent')
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(contents.debugger.sendCommand.mock.calls.some(([method]) => method === 'Page.enable')).toBe(true)
     const commandCountBeforeClose = contents.debugger.sendCommand.mock.calls.length
 
+    port.release()
     manager.closeWebTab(snapshot.tabs[0]!.id)
     contents.debugger.emit('detach', {}, 'late detach')
     await new Promise((resolve) => setTimeout(resolve, 0))
 
     expect(contents.debugger.sendCommand.mock.calls.length).toBe(commandCountBeforeClose)
-    expect(contents.debugger.sendCommand.mock.calls.some(([method]) => method === 'Page.enable')).toBe(true)
   })
 })

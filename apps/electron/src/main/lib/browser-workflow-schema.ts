@@ -416,6 +416,7 @@ export function validateBrowserWorkflowVersion(value: unknown): BrowserWorkflowV
     if (value.approval.draftHash !== undefined && (typeof value.approval.draftHash !== 'string' || !/^[a-f0-9]{64}$/.test(value.approval.draftHash))) {
       errors.push('version.approval.draftHash 必须是 SHA-256 十六进制摘要')
     }
+    // 旧版 Playwright 运行产物摘要，仅用于读取兼容；新版本不再生成
     if (value.approval.playwrightScriptSha256 !== undefined && (typeof value.approval.playwrightScriptSha256 !== 'string' || !/^[a-f0-9]{64}$/.test(value.approval.playwrightScriptSha256))) {
       errors.push('version.approval.playwrightScriptSha256 必须是 SHA-256 十六进制摘要')
     }
