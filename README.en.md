@@ -11,12 +11,14 @@ It is not just another chat box. Copis is meant to become a long-lived Agent wor
 ## What Copis Can Do
 
 - **Chat mode**: multi-model conversations, attachments, image input, Markdown / Mermaid / KaTeX / code highlighting, parallel conversations, system prompts, and context controls.
-- **Agent mode**: a unified Pi Agent SDK runtime with workspace isolation, permission modes, file operations, streaming output, plan confirmation, and ask-user interactions. Pi can call Anthropic, Claude, OpenAI, Google, and compatible model channels.
-- **Collaboration and tasks**: complex work can be split into traceable collaboration agents and tasks, with calls and results shown in the message stream.
-- **Skills, MCP, and project roots**: each Copis project manages its own Skills and MCP servers. Project files can use a user-selected local project root or a Copis-managed blank-project directory; local project configuration is not imported automatically.
-- **Remote bots**: Lark / Feishu bot bridging is supported, with DingTalk and WeChat bridge entry points also present in the app.
-- **Memory and tools**: Chat and Agent can share memory, with web search, built-in Chat tools, and Agent recommendation helpers.
-- **Local-first data**: conversations, workspaces, attachments, settings, and Skills are stored under `~/.copis/` as JSON / JSONL files, without a local database.
+- **Agent mode**: a unified Pi Agent SDK runtime with workspace isolation, permission modes, file operations, streaming output, plan confirmation, and ask-user interactions. Pi can call Anthropic, Claude, OpenAI, Google, and compatible model channels, with built-in web search and scraping via `pi-web-access`.
+- **Collaboration and Expert Teams**: complex work can be split into traceable collaboration agents and tasks, supporting expert teams and sub-agents with execution details displayed in the message stream.
+- **Skills, MCP, and project roots**: each Copis project manages its own Skills and MCP servers. Project files can use a user-selected local project root or a Copis-managed blank-project directory; local project configuration is not imported automatically. The `project/` directory inside workspaces is used by Agents to create and run user projects.
+- **Embedded AI Web Browser & Workflows**: native multi-tab Chromium browser with session binding and standalone bookmarks popover; supports web interaction, high-level permission shields, and Playwright-based browser recording and workflow execution (Browser Workflow).
+- **Copis CLI & Progressive Session Reading**: includes the `@copis/cli` tool for end users and limited-context Agent consumers to progressively inspect, search, outline, and export sessions (`list` / `info` / `outline` / `search` / `export`).
+- **Remote bots & App connectors**: supports Feishu (Hermes one-click QR code registration), WeChat (Tencent iLink Bot QR code login), and DingTalk (Stream direct connection / OAuth QR code authorization) bot bridges with platform-colored tags and real query extraction.
+- **QM-style Structured Memory**: inspired by YC QM, driven by a local Rust HTTP API and SQLite with two-tier scope isolation (`user` / `workspace`), per-turn auto capture, compaction consolidation, revision optimistic locking, and controlled memory toolsets.
+- **Local-first data**: conversations, workspaces, attachments, settings, and Skills are stored under `~/.copis/` as JSON / JSONL files, without relying on external databases.
 - **Desktop experience**: auto-update, proxy settings, file preview, global shortcuts, quick task window, voice input, and light / dark / system themes.
 
 ## Getting Started
@@ -155,23 +157,29 @@ API keys are encrypted through Electron `safeStorage` before being written to `c
 Copis is a Bun workspace monorepo.
 
 ```text
-copis-v2/
+copis/
 ├── packages/
-│   ├── shared/     # shared types, IPC constants, config, utilities
-│   ├── core/       # Provider Adapters, SSE, code highlighting
-│   └── ui/         # shared React UI components
-└── apps/
-    └── electron/   # Electron desktop app
+│   ├── shared/        # shared types, IPC constants, config, utilities (v0.1.71)
+│   ├── core/          # Provider Adapters, SSE, code highlighting (v0.2.18)
+│   ├── session-core/  # headless session parsing, search, filtering & export core (v0.1.2)
+│   └── ui/            # shared React UI components (v0.1.10)
+├── apps/
+│   ├── electron/      # Electron desktop app (v0.0.74)
+│   └── cli/           # Copis CLI tool (progressive session extraction & export) (v0.1.1)
+└── native/
+    └── http-api-server/ # local Rust HTTP API (memory, scheduler, updates, project dev ports)
 ```
 
 Current package versions:
 
 | Package | Version | Responsibility |
 | --- | --- | --- |
-| `@copis/electron` | `0.15.0` | Electron desktop app |
-| `@copis/shared` | `0.1.42` | shared types, IPC constants, config, utilities |
-| `@copis/core` | `0.2.15` | Provider Adapters, SSE, Shiki highlighting |
-| `@copis/ui` | `0.1.9` | shared React UI components |
+| `@copis/electron` | `0.0.74` | Main Electron desktop application |
+| `@copis/shared` | `0.1.71` | Shared types, IPC constants, config, utilities |
+| `@copis/core` | `0.2.18` | Provider Adapters, SSE, Shiki highlighting |
+| `@copis/session-core` | `0.1.2` | Headless session parsing, search, and Markdown rendering core |
+| `@copis/ui` | `0.1.10` | Shared React UI components |
+| `@copis/cli` | `0.1.1` | Progressive session reading and export CLI for terminals & agents |
 
 Common commands:
 
@@ -193,6 +201,12 @@ bun run typecheck
 
 # Test
 bun test
+
+# Compile Copis CLI binary
+bun run build:cli
+
+# Package Node.js + npm runtime functional module for workspace projects
+bun run build:node-runtime-module -- --output /tmp/copis-node-runtime.tar.gz
 ```
 
 More granular scripts are available inside the Electron app:
@@ -205,6 +219,7 @@ bun run dev:electron
 bun run build:main
 bun run build:preload
 bun run build:renderer
+bun run copy:pi-extensions   # copy default Pi extensions (pi-web-access) into resources/pi-extensions/
 bun run dist:fast
 ```
 
@@ -222,7 +237,9 @@ bun run dist:fast
 | Code highlighting | Shiki |
 | Build | Vite + esbuild |
 | Distribution | electron-builder |
-| Agent runtime | Pi: `@earendil-works/pi-coding-agent`, `pi-agent-core`, and `pi-ai` `@0.82.1` |
+| Agent runtime | Pi: `@earendil-works/pi-coding-agent`, `pi-agent-core`, and `pi-ai` `@0.84.1` |
+| Default Pi extension | `pi-web-access` `@0.22.0` (web search, web fetching, source check) |
+| Backend & Native | Rust HTTP API Server (`native/http-api-server`) + SQLite |
 
 ## Architecture
 
@@ -249,7 +266,11 @@ Main-process services live in `apps/electron/src/main/lib/`:
 
 Renderer state is managed with Jotai. Key atoms live in `apps/electron/src/renderer/atoms/`. Agent IPC listeners are mounted globally at the app root so streaming events, permission requests, and background tasks survive view changes.
 
-## Packaging Notes
+## Packaging and Functional Modules
+
+Copis provides a modular functional module architecture consisting of `rust-http-api`, `officecli`, `node-runtime`, `playwright-core`, `python-runtime`, `alipay-bot`, and `agently-cli`. The `node-runtime` module is a pre-packaged Node.js and npm `tar.gz` archive per platform and architecture, downloaded, verified, unpacked, and activated on first launch—end users do not need to install Node.js separately.
+
+When publishing functional modules, `deploy.sh` / `deploy.ps1` builds and uploads all module archives to COS and generates the unified manifest. Single-module publishing is supported via `--rust`, `--officecli`, `--node-runtime`, `--playwright-core`, `--python-runtime`, `--alipay-bot`, or `--agently-cli`.
 
 The Pi runtime runs as esbuild external dependencies in the main process. Before invoking `electron-builder`, the Electron packaging scripts run `bun run sync:runtime-deps` to copy these runtime dependency closures into the app directory:
 

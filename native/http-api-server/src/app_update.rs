@@ -133,10 +133,15 @@ fn select_client_update<'a>(
     client: &'a serde_json::Map<String, Value>,
     platform_key: Option<&str>,
 ) -> Option<&'a serde_json::Map<String, Value>> {
-    if let Some(updates) = client.get("updates").and_then(Value::as_object) {
-        return platform_key
-            .and_then(|key| updates.get(key))
-            .and_then(Value::as_object);
+    match client.get("updates") {
+        Some(Value::Object(updates)) => {
+            return platform_key
+                .and_then(|key| updates.get(key))
+                .and_then(Value::as_object);
+        }
+        // 新格式存在但不合法时，不能退回可能属于其他平台的旧默认安装包。
+        Some(_) => return None,
+        None => {}
     }
     client.get("update").and_then(Value::as_object)
 }

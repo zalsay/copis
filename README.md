@@ -18,8 +18,10 @@ Copis 是一个本地优先的 AI 桌面应用，把多模型 Chat、通用 Agen
 
 - **Chat 模式**：多模型对话、附件解析、图片输入、Markdown / Mermaid / KaTeX / 代码高亮、并排对话、系统提示词、上下文管理。
 - **Agent 模式**：基于 Pi Agent SDK 的统一运行时；支持工作区隔离、权限模式、文件操作、长任务流式输出、计划确认和用户追问。可通过 Pi 调用 Anthropic、Claude、OpenAI、Google 及兼容渠道的模型，且每个会话默认内置联网搜索与网页抓取扩展（pi-web-access）。
-- **协作与任务**：复杂任务可拆分为可追踪的协作子 Agent / Task，并在消息流中展示调用过程和结果。
+- **协作与多 Agent 专家团队**：复杂任务可拆分为可追踪的协作子 Agent / Task，支持专家团队（Expert Team）与多 Agent 协同，并在消息流中展示调用过程和结果。
 - **Skills、MCP 与项目根目录**：每个 Copis 项目独立配置 Skills 与 MCP Server。项目文件可使用用户选择的本地项目根目录，也可使用 Copis 托管的空白项目目录；本地项目配置不会被自动导入。工作区的 `project/` 目录用于 Agent 创建和维护用户项目。
+- **内嵌 AI 浏览器与自动化工作流**：原生多页签 Chromium 浏览器，支持会话绑定与独立收藏夹浮层；提供网页元素交互、高级授权护盾，以及基于 Playwright 的浏览器操作录制与工作流执行（Browser Workflow）。
+- **Copis CLI 与命令行会话能力**：内置 `@copis/cli` 工具，面向终端用户和有限上下文的 Agent 消费者，提供会话的渐进式读取、搜索与导出（`list` / `info` / `outline` / `search` / `export`）。
 - **远程机器人与 App 连接器**：支持飞书（Hermes 扫码一键注册）、微信（腾讯 iLink Bot 扫码登录）与钉钉（Stream 直连 / OAuth 扫码授权）机器人桥接；侧边栏提供对应平台色彩专属 Tag 徽标，会话自动剥除信封并提取真实用户提问作为标题，支持用手机随时随地触发本机 Agent 工作流。
 - **QM 风格结构化记忆**：参考 YC QM 项目设计，由本地 Rust HTTP API 与 SQLite 驱动；支持用户全局与工作区专属两级 Scope 隔离、Per-turn 自动事实抽取、Token 阈值排队整理、版本历史追溯（Revision 乐观锁）以及 Agent 受控记忆读写工具集。
 - **本地优先**：会话、工作区、附件、配置、Skills 等默认存储在 `~/.copis/`，使用 JSON / JSONL 文件组织，不依赖本地数据库。
@@ -198,23 +200,29 @@ API Key 会通过 Electron `safeStorage` 加密后写入 `channels.json`。Copis
 Copis 是 Bun workspace monorepo。
 
 ```text
-copis-v2/
+copis/
 ├── packages/
-│   ├── shared/     # 共享类型、IPC 常量、配置、工具函数
-│   ├── core/       # Provider Adapter、SSE、代码高亮
-│   └── ui/         # 共享 React UI 组件
-└── apps/
-    └── electron/   # Electron 桌面应用
+│   ├── shared/        # 共享类型、IPC 常量、配置、工具函数 (v0.1.71)
+│   ├── core/          # Provider Adapter、SSE、代码高亮 (v0.2.18)
+│   ├── session-core/  # 无头会话解析、搜索、过滤与 Markdown 导出核心 (v0.1.2)
+│   └── ui/            # 共享 React UI 组件 (v0.1.10)
+├── apps/
+│   ├── electron/      # Electron 桌面应用 (v0.0.74)
+│   └── cli/           # Copis 命令行工具（渐进式会话提取与导出） (v0.1.1)
+└── native/
+    └── http-api-server/ # 本地 Rust HTTP API（记忆、调度、更新、项目端口分配）
 ```
 
 当前主要包版本：
 
 | 包 | 版本 | 职责 |
 | --- | --- | --- |
-| `@copis/electron` | `0.0.39` | Electron 桌面应用 |
-| `@copis/shared` | `0.1.63` | 共享类型、IPC 常量、配置和工具 |
+| `@copis/electron` | `0.0.74` | Electron 桌面应用主体 |
+| `@copis/shared` | `0.1.71` | 共享类型、IPC 常量、配置和工具 |
 | `@copis/core` | `0.2.18` | Provider Adapter、SSE、Shiki 高亮 |
+| `@copis/session-core` | `0.1.2` | 无头会话解析、过滤、搜索与 Markdown 渲染核心 |
 | `@copis/ui` | `0.1.10` | 共享 React UI 组件 |
+| `@copis/cli` | `0.1.1` | 面向终端与 Agent 的会话渐进式读取与导出 CLI |
 
 常用命令：
 
@@ -236,6 +244,9 @@ bun run typecheck
 
 # 测试
 bun test
+
+# 编译 Copis CLI 二进制产物
+bun run build:cli
 
 # 打包工作区项目所需的 Node.js + npm runtime 功能模块
 bun run build:node-runtime-module -- --output /tmp/copis-node-runtime.tar.gz
@@ -269,8 +280,9 @@ bun run dist:fast
 | 代码高亮 | Shiki |
 | 构建 | Vite + esbuild |
 | 分发 | electron-builder |
-| Agent Runtime | Pi: `@earendil-works/pi-coding-agent`、`pi-agent-core`、`pi-ai` `@0.82.1` |
-| 默认 Pi 扩展 | `pi-web-access` `@0.18.0`（联网搜索、网页抓取、来源核查） |
+| Agent Runtime | Pi: `@earendil-works/pi-coding-agent`、`pi-agent-core`、`pi-ai` `@0.84.1` |
+| 默认 Pi 扩展 | `pi-web-access` `@0.22.0`（联网搜索、网页抓取、来源核查） |
+| 后端与原生能力 | Rust HTTP API Server (`native/http-api-server`) + SQLite |
 
 ## 架构概览
 
@@ -297,11 +309,11 @@ shared 类型和 IPC 常量
 
 渲染进程以 Jotai 管理状态，关键 atoms 位于 `apps/electron/src/renderer/atoms/`。Agent IPC 监听器在应用顶层全局挂载，避免切换页面时丢失流式事件、权限请求或后台任务状态。
 
-## 打包注意事项
+## 打包与功能模块
 
-Copis 的功能模块包含 `node-runtime`、`rust-http-api` 和 `officecli`。`node-runtime` 是按目标平台打包的 Node.js 与 npm `tar.gz` 归档，应用首次启动时自动下载、校验、解包并激活。终端用户不需要自行安装 Node.js 或 npm。
+Copis 的功能模块体系包含 `rust-http-api`、`officecli`、`node-runtime`、`playwright-core`、`python-runtime`、`alipay-bot` 与 `agently-cli`。其中 `node-runtime` 是按目标平台打包的 Node.js 与 npm `tar.gz` 归档，应用首次启动时自动下载、校验、解包并激活。终端用户不需要自行安装 Node.js 或 npm。
 
-部署功能模块时，`deploy.sh` / `deploy.ps1` 会在当前目标平台生成 Node runtime 归档并与 Rust API、OfficeCLI 一起发布；发布后最终 manifest 会记录三个模块的实际版本。单模块发布使用 `--rust`、`--officecli` 或 `--node-runtime`，每种模式都会校验其他必要模块已存在于远端 manifest。
+部署功能模块时，`deploy.sh` / `deploy.ps1` 会在当前目标平台生成各模块归档并统一发布；发布后最终 manifest 会记录所有模块的实际版本。单模块发布支持 `--rust`、`--officecli`、`--node-runtime`、`--playwright-core`、`--python-runtime`、`--alipay-bot` 或 `--agently-cli`，每种模式都会校验其他必要模块已存在于远端 manifest。
 
 Pi runtime 在主进程中作为 esbuild external 依赖运行。`apps/electron` 的打包脚本会在 `electron-builder` 前执行 `bun run sync:runtime-deps`，把下列依赖及其运行时闭包复制到应用目录：
 
