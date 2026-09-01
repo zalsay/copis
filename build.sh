@@ -117,11 +117,16 @@ export CSC_IDENTITY_AUTO_DISCOVERY="${CSC_IDENTITY_AUTO_DISCOVERY:-false}"
 
 APP_VERSION="$(cd "$APP_DIR" && bun -e "console.log(JSON.parse(await Bun.file('package.json').text()).version)")"
 
-compare_client_versions() {
+is_client_version_below_min() {
   (cd "$ROOT_DIR" && bun -e '
     import { compareClientVersions } from "./scripts/query-functional-module-min-version.ts"
     const [left, right] = process.argv.slice(1)
-    console.log(compareClientVersions(left, right))
+    const comparison = compareClientVersions(left, right)
+    if (!Number.isFinite(comparison)) {
+      console.error("Electron 版本比较失败")
+      process.exit(2)
+    }
+    process.exit(comparison < 0 ? 0 : 1)
   ' "$1" "$2")
 }
 
@@ -135,10 +140,16 @@ if [[ -n "$FUNCTIONAL_MODULE_MANIFEST_URL" ]]; then
   fi
   if [[ -n "$PLATFORM_MIN_VERSION" ]]; then
     echo "[Copis] darwin-$MAC_ARCH 功能模块最低客户端版本：$PLATFORM_MIN_VERSION"
-    if [[ "$(compare_client_versions "$APP_VERSION" "$PLATFORM_MIN_VERSION")" -lt 0 ]]; then
+    if is_client_version_below_min "$APP_VERSION" "$PLATFORM_MIN_VERSION"; then
       APP_VERSION="$(cd "$ROOT_DIR" && bun scripts/bump-electron-version.ts --set "$PLATFORM_MIN_VERSION")"
       VERSION_ALIGNED_TO_MIN=1
       echo "[Copis] Electron 应用版本已对齐 darwin-$MAC_ARCH 最低版本：$APP_VERSION"
+    else
+      COMPARISON_EXIT_CODE=$?
+      if [[ "$COMPARISON_EXIT_CODE" -ne 1 ]]; then
+        echo "[Copis] Electron 版本比较失败，无法判断是否需要对齐最低版本。" >&2
+        exit "$COMPARISON_EXIT_CODE"
+      fi
     fi
   else
     echo "[Copis] darwin-$MAC_ARCH manifest 未声明最低客户端版本。"

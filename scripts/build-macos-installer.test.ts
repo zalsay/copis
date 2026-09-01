@@ -83,6 +83,14 @@ describe('macOS 构建脚本固定安装程序发布', () => {
     expect(buildScript).not.toContain('请使用 --new 对齐版本')
   })
 
+  test('版本比较通过退出码判断，避免 stdout 污染触发 Bash operand 错误', () => {
+    expect(buildScript).toContain('is_client_version_below_min()')
+    expect(buildScript).toContain('process.exit(comparison < 0 ? 0 : 1)')
+    expect(buildScript).toContain('if is_client_version_below_min "$APP_VERSION" "$PLATFORM_MIN_VERSION"; then')
+    expect(buildScript).toContain('COMPARISON_EXIT_CODE=$?')
+    expect(buildScript).not.toContain('CLIENT_VERSION_COMPARISON=')
+  })
+
   test('安装包上传成功后再更新客户端 manifest', () => {
     expect(buildScript.indexOf('publish:macos-installer')).toBeLessThan(buildScript.indexOf('publish:client-update'))
   })
