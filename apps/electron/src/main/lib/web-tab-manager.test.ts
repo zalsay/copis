@@ -650,7 +650,7 @@ describe('网页页签 CDP 会话路由与按需 Lease 生命周期', () => {
     expect(openedTabs).toHaveLength(0)
   })
 
-  test('Given Workflow 页签 promote 为普通页签 When 后续触发 window.open Then 恢复为普通 popup（返回 allow）而非拦截为 workflow tab', () => {
+  test('Given Workflow 页签 promote 为普通页签 When 后续触发 window.open Then 创建默认页签且不启用 CDP', () => {
     setupHost()
     const workflowTab = createWorkflowWebTab({ url: 'https://parent.example' })
     const parentView = createdViews.at(-1)!
@@ -662,9 +662,14 @@ describe('网页页签 CDP 会话路由与按需 Lease 生命周期', () => {
 
     promoteWorkflowWebTab(workflowTab.id)
 
-    // promote 后重新触发 windowOpenHandler，应返回 allow 触发普通弹窗流程
+    // promote 后重新触发 windowOpenHandler，应创建常规默认页签。
     const promotedDecision = handler!({ url: 'https://popup.example/after-promotion' })
-    expect(promotedDecision).toMatchObject({ action: 'allow' })
+    expect(promotedDecision).toEqual({ action: 'deny' })
+
+    const openedTab = listWebTabs().tabs.find((tab) => tab.url === 'https://popup.example/after-promotion')
+    expect(openedTab).toBeDefined()
+    expect(createdViews.at(-1)?.partition).toBe('persist:copis-web')
+    expect(isWebTabCdpAttached(openedTab!.id)).toBe(false)
   })
 
   test('Given activateWebTabIncognito 挂载新视图抛出异常 When 发生错误 Then 回滚 replaceTarget 到旧 target', () => {

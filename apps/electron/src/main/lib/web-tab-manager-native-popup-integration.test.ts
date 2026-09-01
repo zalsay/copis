@@ -82,6 +82,14 @@ class FakeWebContentsView {
   setBounds(): void {}
 }
 
+let createdBrowserWindows: FakeBrowserWindow[] = []
+let persistedSession: { tabs: Array<{ url: string }>; activeTabIndex: number | null } = {
+  tabs: [],
+  activeTabIndex: null,
+}
+const savePersistedWebTabs = mock((_session: typeof persistedSession) => undefined)
+const openExternalMock = mock(async (_url: string) => undefined)
+
 class FakeBrowserWindow extends EventEmitter {
   readonly webContents: FakeWebContents
   readonly contentView = {
@@ -102,6 +110,7 @@ class FakeBrowserWindow extends EventEmitter {
     this.options = options
     const webPreferences = options.webPreferences as { session?: FakeSession } | undefined
     this.webContents = new FakeWebContents(webPreferences?.session)
+    createdBrowserWindows.push(this)
   }
 
   isDestroyed(): boolean { return this.destroyed }
@@ -116,18 +125,12 @@ class FakeBrowserWindow extends EventEmitter {
   destroy(): void { this.close() }
 }
 
-let persistedSession: { tabs: Array<{ url: string }>; activeTabIndex: number | null } = {
-  tabs: [],
-  activeTabIndex: null,
-}
-const savePersistedWebTabs = mock((_session: typeof persistedSession) => undefined)
-
 mock.module('electron', () => ({
   app: { isPackaged: false },
   BrowserWindow: FakeBrowserWindow,
   WebContentsView: FakeWebContentsView,
   dialog: { showMessageBox: mock(async () => ({ response: 0 })) },
-  shell: { openExternal: mock(async () => undefined) },
+  shell: { openExternal: openExternalMock },
 }))
 
 mock.module('./web-tab-session-service', () => ({
@@ -137,69 +140,135 @@ mock.module('./web-tab-session-service', () => ({
 
 const manager = await import('./web-tab-manager')
 
-describe('网页页签 manager 原生子窗口组合回归', () => {
+describe('网页页签 manager window.open 组合回归', () => {
   afterEach(() => {
     manager.disposeWebTabs()
     persistedSession = { tabs: [], activeTabIndex: null }
     savePersistedWebTabs.mockClear()
+    openExternalMock.mockClear()
     sessionsByPartition.clear()
+    createdBrowserWindows = []
   })
 
-  test('普通页签 window.open 创建原生子窗口时不改变快照或恢复持久化', () => {
+  test('普通页签 window.open HTTP(S) 时创建并激活默认页签，且不启用 CDP、不构造原生 popup', () => {
     const host = new FakeBrowserWindow()
     manager.setWebTabHostWindow(host as never)
     const before = manager.createWebTab({ url: 'https://owner.example' })
     const owner = host.contentView.views[0]!.webContents
     const response = owner.windowOpenHandler?.({ url: 'https://popup.example' } as never)
-    const popup = new FakeBrowserWindow(response?.overrideBrowserWindowOptions as Record<string, unknown>)
 
-    expect(response).toMatchObject({
-      action: 'allow',
-      overrideBrowserWindowOptions: { parent: host, show: false, modal: false },
-    })
-    expect(response?.overrideBrowserWindowOptions?.webPreferences?.session).toBe(owner.session as never)
-    expect(popup.webContents.session).toBe(owner.session)
-    owner.emit('did-create-window', popup, { url: 'https://popup.example' })
+    expect(response).toEqual({ action: 'deny' })
 
-    expect(manager.listWebTabs()).toEqual(before)
-    expect(savePersistedWebTabs).toHaveBeenCalledTimes(1)
-    expect(popup.webContents.windowOpenHandler?.({ url: 'https://nested.example' } as never)).toMatchObject({ action: 'allow' })
-    expect(popup.options.parent).toBe(host)
-
-    manager.closeWebTab(before.tabs[0]!.id)
-    expect(popup.destroyed).toBe(true)
+    const after = manager.listWebTabs()
+    const opened = after.tabs.find((tab) => tab.url === 'https://popup.example/')
+    expect(after.tabs).toHaveLength(before.tabs.length + 1)
+    expect(opened).toBeDefined()
+    expect(after.activeTabId).toBe(opened!.id)
+    expect(host.contentView.views).toHaveLength(2)
+    expect(host.contentView.views[1]!.webContents.session).toBe(owner.session)
+    expect(host.contentView.views[1]!.webContents.debugger.sendCommand).not.toHaveBeenCalled()
+    expect(createdBrowserWindows).toHaveLength(1)
+    expect(savePersistedWebTabs).toHaveBeenCalledTimes(2)
   })
 
-  test('新建、恢复和无痕替换路径都安装同一原生子窗口策略', () => {
+  test('新建、恢复和无痕页签 window.open HTTP(S) 时都创建默认页签', () => {
     const host = new FakeBrowserWindow()
     manager.setWebTabHostWindow(host as never)
     manager.createWebTab({ url: 'https://created.example' })
     const createdContents = host.contentView.views[0]!.webContents
-    const createdPopup = createdContents.windowOpenHandler?.({ url: 'https://created-popup.example' } as never)
-    expect(createdPopup).toMatchObject({ action: 'allow' })
-    expect(createdPopup?.overrideBrowserWindowOptions?.webPreferences?.session).toBe(createdContents.session as never)
+    expect(createdContents.windowOpenHandler?.({ url: 'https://created-popup.example' } as never)).toEqual({ action: 'deny' })
+    expect(host.contentView.views.at(-1)!.webContents.session).toBe(createdContents.session)
 
     manager.disposeWebTabs()
     persistedSession = { tabs: [{ url: 'https://restored.example' }], activeTabIndex: 0 }
     const restoredHost = new FakeBrowserWindow()
     manager.setWebTabHostWindow(restoredHost as never)
     const restoredContents = restoredHost.contentView.views[0]!.webContents
-    const restoredPopup = restoredContents.windowOpenHandler?.({ url: 'https://restored-popup.example' } as never)
-    const restoredPopupWindow = new FakeBrowserWindow(restoredPopup?.overrideBrowserWindowOptions as Record<string, unknown>)
-    expect(restoredPopup).toMatchObject({ action: 'allow' })
-    expect(restoredPopup?.overrideBrowserWindowOptions?.webPreferences?.session).toBe(restoredContents.session as never)
-    expect(restoredPopupWindow.webContents.session).toBe(restoredContents.session)
+    expect(restoredContents.windowOpenHandler?.({ url: 'https://restored-popup.example' } as never)).toEqual({ action: 'deny' })
+    expect(restoredHost.contentView.views.at(-1)!.webContents.session).toBe(restoredContents.session)
 
     const blank = manager.createWebTab({ activate: false })
     const blankId = blank.tabs.find((tab) => tab.url === 'about:blank')!.id
     manager.activateWebTabIncognito(blankId)
     const incognitoContents = restoredHost.contentView.views.at(-1)!.webContents
-    const incognitoPopup = incognitoContents.windowOpenHandler?.({ url: 'https://incognito-popup.example' } as never)
-    const incognitoPopupWindow = new FakeBrowserWindow(incognitoPopup?.overrideBrowserWindowOptions as Record<string, unknown>)
-    expect(incognitoPopup).toMatchObject({ action: 'allow' })
-    expect(incognitoPopup?.overrideBrowserWindowOptions?.webPreferences?.session).toBe(incognitoContents.session as never)
+    expect(incognitoContents.windowOpenHandler?.({ url: 'https://incognito-popup.example' } as never)).toEqual({ action: 'deny' })
+    const openedFromIncognito = restoredHost.contentView.views.at(-1)!.webContents
+    expect(openedFromIncognito.session).toBe(restoredContents.session)
     expect(incognitoContents.session).not.toBe(restoredContents.session)
-    expect(incognitoPopupWindow.webContents.session).toBe(incognitoContents.session)
+  })
+
+  test('Google OAuth window.open（仅 accounts.google.com）沿用系统外部打开且不新增 Manager 页签', () => {
+    const host = new FakeBrowserWindow()
+    manager.setWebTabHostWindow(host as never)
+    const before = manager.createWebTab({ url: 'https://owner.example' })
+    const owner = host.contentView.views[0]!.webContents
+    const oauthUrl = 'https://accounts.google.com/o/oauth2/v2/auth?client_id=copis&redirect_uri=http%3A%2F%2Flocalhost%2Fcallback'
+
+    const response = owner.windowOpenHandler?.({ url: oauthUrl } as never)
+
+    expect(response).toEqual({ action: 'deny' })
+    expect(openExternalMock).toHaveBeenCalledWith(oauthUrl)
+    expect(manager.listWebTabs().tabs).toHaveLength(before.tabs.length)
+    expect(createdBrowserWindows).toHaveLength(1)
+  })
+
+  test('非 accounts.google.com 域名（如 accounts.google.com.evil.example）window.open 视为普通 HTTP(S) 创建新页签', () => {
+    const host = new FakeBrowserWindow()
+    manager.setWebTabHostWindow(host as never)
+    const before = manager.createWebTab({ url: 'https://owner.example' })
+    const owner = host.contentView.views[0]!.webContents
+    const evilUrl = 'https://accounts.google.com.evil.example/o/oauth2/v2/auth'
+
+    const response = owner.windowOpenHandler?.({ url: evilUrl } as never)
+
+    expect(response).toEqual({ action: 'deny' })
+    expect(openExternalMock).not.toHaveBeenCalled()
+    const after = manager.listWebTabs()
+    expect(after.tabs).toHaveLength(before.tabs.length + 1)
+    expect(after.tabs.some((tab) => tab.url.startsWith('https://accounts.google.com.evil.example'))).toBe(true)
+  })
+
+  test('非 HTTP(S) URL window.open 沿用外部打开策略且不新增 Manager 页签', () => {
+    const host = new FakeBrowserWindow()
+    manager.setWebTabHostWindow(host as never)
+    const before = manager.createWebTab({ url: 'https://owner.example' })
+    const owner = host.contentView.views[0]!.webContents
+    const mailtoUrl = 'mailto:owner@example.com'
+
+    const response = owner.windowOpenHandler?.({ url: mailtoUrl } as never)
+
+    expect(response).toEqual({ action: 'deny' })
+    expect(openExternalMock).toHaveBeenCalledWith(mailtoUrl)
+    expect(manager.listWebTabs().tabs).toHaveLength(before.tabs.length)
+    expect(createdBrowserWindows).toHaveLength(1)
+  })
+
+  test('workflow-owned 页签 window.open HTTP(S) 时创建 workflow-owned 页签并通知订阅者，不影响公开快照与 activeTabId', () => {
+    const host = new FakeBrowserWindow()
+    manager.setWebTabHostWindow(host as never)
+    const regularSnapshot = manager.createWebTab({ url: 'https://regular.example' })
+    const initialActiveTabId = regularSnapshot.activeTabId
+    const workflowTab = manager.createWorkflowWebTab({ url: 'https://workflow-parent.example', partition: 'persist:copis-workflow-test' })
+    const openedWorkflowTabs: Array<{ id: string; url: string }> = []
+    const unsubscribe = manager.subscribeWorkflowWebTabOpened(workflowTab.id, (tab) => {
+      openedWorkflowTabs.push(tab as { id: string; url: string })
+    })
+
+    const workflowView = host.contentView.views.find((v) => v.webContents.getURL().startsWith('https://workflow-parent.example'))!
+    const response = workflowView.webContents.windowOpenHandler?.({ url: 'https://workflow-popup.example' } as never)
+
+    expect(response).toEqual({ action: 'deny' })
+    expect(openedWorkflowTabs).toHaveLength(1)
+    expect(openedWorkflowTabs[0]?.url).toBe('https://workflow-popup.example/')
+
+    const childWorkflowView = host.contentView.views.find((v) => v.webContents.getURL().startsWith('https://workflow-popup.example'))!
+    expect(childWorkflowView.webContents.session).toBe(workflowView.webContents.session)
+    expect(childWorkflowView.webContents.debugger.sendCommand).not.toHaveBeenCalled()
+    expect(manager.listWebTabs().tabs).toHaveLength(1)
+    expect(manager.listWebTabs().activeTabId).toBe(initialActiveTabId)
+    expect(createdBrowserWindows).toHaveLength(1)
+
+    unsubscribe()
   })
 
   test('普通页签默认不启动 bridge；获得 Agent lease 后启动 bridge，release/close 后 bridge dispose 且 detach 后不发命令', async () => {

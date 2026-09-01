@@ -686,7 +686,9 @@ function installWebContentsHandlers(record: WebTabRecord): void {
 
   contents.setWindowOpenHandler((details) => {
     const decision = defaultHandler(details)
-    if (record.workflowOwned && decision.action === 'allow') {
+    if (decision.action !== 'allow') return decision
+
+    if (record.workflowOwned) {
       const createdRecord = createWebTabInternal(
         { url: details.url, partition: record.partition },
         true,
@@ -695,7 +697,9 @@ function installWebContentsHandlers(record: WebTabRecord): void {
       emitWorkflowWebTabOpened(record.state.id, getPublicState(createdRecord))
       return { action: 'deny' }
     }
-    return decision
+
+    createWebTabInternal({ url: details.url }, false, record.state.id)
+    return { action: 'deny' }
   })
 
   contents.on('did-create-window', (window) => {
