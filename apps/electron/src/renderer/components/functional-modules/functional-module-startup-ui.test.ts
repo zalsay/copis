@@ -1,11 +1,15 @@
 import { describe, expect, test } from 'bun:test'
 import {
+  COPIS_DOWNLOAD_URL,
   getStartupActions,
+  getStartupClientUpdateDialog,
   getStartupErrorLabel,
   getStartupModuleDetail,
   getStartupModuleRows,
   getStartupModuleRowsForMode,
   getStartupPhaseLabel,
+  isStartupClientUpdateRequired,
+  parseStartupClientUpdateRequired,
 } from './functional-module-startup-ui'
 
 describe('登录后功能模块更新页模型', () => {
@@ -48,8 +52,41 @@ describe('登录后功能模块更新页模型', () => {
     expect(getStartupErrorLabel('Rust HTTP API 未通过 health 检查')).toBe('必要组件暂未准备完成，请重试')
   })
 
+  test('Given 客户端版本过低错误 When 生成错误文案 Then 提取最低版本并显示友好升级提示', () => {
+    expect(getStartupErrorLabel('Copis 版本过低，需要至少 0.16.13')).toBe('当前 Copis 版本过低，需要至少 v0.16.13，请下载最新版本')
+    expect(getStartupErrorLabel('Copis 版本过低，需要至少 v0.18.0')).toBe('当前 Copis 版本过低，需要至少 v0.18.0，请下载最新版本')
+  })
+
   test('Given 失败状态 When 生成操作 Then 只能重试不能继续进入', () => {
     expect(getStartupActions('error')).toEqual(['retry'])
     expect(getStartupActions('health')).toEqual([])
+  })
+
+  test('Given 客户端版本过低错误 When 生成操作 Then 提供下载最新版本动作而非重试', () => {
+    expect(getStartupActions('error', 'Copis 版本过低，需要至少 0.16.13')).toEqual(['download_update'])
+    expect(getStartupActions('error', '网络连接超时')).toEqual(['retry'])
+    expect(getStartupActions('ready', 'Copis 版本过低，需要至少 0.16.13')).toEqual([])
+  })
+
+  test('Given 客户端更新地址 When 读取常量 Then 指向官方下载页面', () => {
+    expect(COPIS_DOWNLOAD_URL).toBe('https://copis.meetlife.com.cn')
+  })
+
+  test('Given 客户端版本过低错误 When 生成检测页弹窗 Then 显示升级说明和下载动作', () => {
+    expect(getStartupClientUpdateDialog('Copis 版本过低，需要至少 0.16.13')).toEqual({
+      minClientVersion: '0.16.13',
+      title: '需要更新 Copis',
+      description: '必要组件要求 Copis v0.16.13 或更高版本。下载最新版本后重新打开应用。',
+      actionLabel: '下载最新版本',
+    })
+    expect(getStartupClientUpdateDialog('网络连接超时')).toBeNull()
+  })
+
+  test('Given 版本检查辅助方法 When 解析错误信息 Then 正确识别并解析最低版本', () => {
+    expect(parseStartupClientUpdateRequired('Copis 版本过低，需要至少 0.16.13')).toEqual({ minClientVersion: '0.16.13' })
+    expect(isStartupClientUpdateRequired('Copis 版本过低，需要至少 0.16.13')).toBe(true)
+    expect(isStartupClientUpdateRequired('普通错误')).toBe(false)
+    expect(isStartupClientUpdateRequired(null)).toBe(false)
+    expect(isStartupClientUpdateRequired(undefined)).toBe(false)
   })
 })

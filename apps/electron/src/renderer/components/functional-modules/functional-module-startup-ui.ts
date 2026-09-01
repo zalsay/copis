@@ -38,7 +38,41 @@ export const STARTUP_MODULE_ROWS: readonly StartupModuleRow[] = [
   },
 ]
 
-export type StartupGateAction = 'retry'
+export type StartupGateAction = 'retry' | 'download_update'
+
+export const COPIS_DOWNLOAD_URL = 'https://copis.meetlife.com.cn'
+
+export interface StartupClientUpdateRequired {
+  minClientVersion: string
+}
+
+export interface StartupClientUpdateDialog extends StartupClientUpdateRequired {
+  title: string
+  description: string
+  actionLabel: string
+}
+
+const CLIENT_UPDATE_REQUIRED_PATTERN = /^Copis 版本过低，需要至少 v?([^\s]+)$/
+
+export function parseStartupClientUpdateRequired(error?: string | null): StartupClientUpdateRequired | null {
+  const match = error?.trim().match(CLIENT_UPDATE_REQUIRED_PATTERN)
+  return match ? { minClientVersion: match[1]! } : null
+}
+
+export function isStartupClientUpdateRequired(error?: string | null): boolean {
+  return parseStartupClientUpdateRequired(error) !== null
+}
+
+export function getStartupClientUpdateDialog(error?: string | null): StartupClientUpdateDialog | null {
+  const clientUpdate = parseStartupClientUpdateRequired(error)
+  if (!clientUpdate) return null
+  return {
+    ...clientUpdate,
+    title: '需要更新 Copis',
+    description: `必要组件要求 Copis v${clientUpdate.minClientVersion} 或更高版本。下载最新版本后重新打开应用。`,
+    actionLabel: '下载最新版本',
+  }
+}
 
 export function getStartupPhaseLabel(progress: Pick<FunctionalModuleStartupProgressPayload, 'phase' | 'progress'>): string {
   if (progress.phase === 'ready') return '本地服务运行正常'
@@ -63,7 +97,11 @@ export function getStartupModuleDetail(
   return '正在准备'
 }
 
-export function getStartupErrorLabel(_error?: string | null): string {
+export function getStartupErrorLabel(error?: string | null): string {
+  const clientUpdate = parseStartupClientUpdateRequired(error)
+  if (clientUpdate) {
+    return `当前 Copis 版本过低，需要至少 v${clientUpdate.minClientVersion}，请下载最新版本`
+  }
   return '必要组件暂未准备完成，请重试'
 }
 
@@ -75,8 +113,12 @@ export function getStartupModuleRowsForMode(isDevelopment: boolean): readonly St
   return isDevelopment ? [] : STARTUP_MODULE_ROWS
 }
 
-export function getStartupActions(phase: FunctionalModuleStartupProgressPayload['phase']): StartupGateAction[] {
-  return phase === 'error' ? ['retry'] : []
+export function getStartupActions(
+  phase: FunctionalModuleStartupProgressPayload['phase'],
+  error?: string | null,
+): StartupGateAction[] {
+  if (phase !== 'error') return []
+  return isStartupClientUpdateRequired(error) ? ['download_update'] : ['retry']
 }
 
 export function formatStartupBytes(value: number | undefined): string {

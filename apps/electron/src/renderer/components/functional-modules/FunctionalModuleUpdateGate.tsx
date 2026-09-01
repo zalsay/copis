@@ -1,6 +1,6 @@
 import * as React from 'react'
 import { useAtom, useAtomValue, useSetAtom } from 'jotai'
-import { AlertCircle, CheckCircle2, Loader2, PackageCheck, RefreshCw, ShieldCheck } from 'lucide-react'
+import { AlertCircle, CheckCircle2, Download, Loader2, PackageCheck, RefreshCw, ShieldCheck } from 'lucide-react'
 import type {
   FunctionalModuleProgressPayload,
   FunctionalModuleStartupProgressPayload,
@@ -12,7 +12,18 @@ import { CopisAppLogo } from '@/lib/model-logo'
 import { detectIsWindows, WINDOW_CONTROLS_INSET_RIGHT } from '@/lib/platform'
 import { cn } from '@/lib/utils'
 import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
+import {
+  COPIS_DOWNLOAD_URL,
   formatStartupBytes,
+  getStartupClientUpdateDialog,
   getStartupErrorLabel,
   getStartupModuleDetail,
   getStartupModuleRowsForMode,
@@ -121,6 +132,7 @@ export function FunctionalModuleUpdateGate({ children }: FunctionalModuleUpdateG
   const percentage = Math.round(clamp01(startup.progress) * 100)
   const phaseLabel = getStartupPhaseLabel(startup)
   const isError = startup.phase === 'error'
+  const clientUpdateDialog = getStartupClientUpdateDialog(startup.error)
   const activeModule = startup.activeModule
   const bytes = activeModule === 'rust-http-api' || activeModule === 'officecli' || activeModule === 'alipay-bot' || activeModule === 'playwright-core' || activeModule === 'python-runtime'
     ? `${formatStartupBytes(startup.downloadedBytes)}${startup.totalBytes ? ` / ${formatStartupBytes(startup.totalBytes)}` : ''}`
@@ -157,10 +169,14 @@ export function FunctionalModuleUpdateGate({ children }: FunctionalModuleUpdateG
                 {isError ? '启动遇到问题' : phaseLabel}
               </p>
               <h1 className="mt-2 text-2xl font-semibold tracking-tight sm:text-3xl">
-                {isError ? 'Copis 暂时无法启动' : '正在准备 Copis'}
+                {isError ? (clientUpdateDialog ? clientUpdateDialog.title : 'Copis 暂时无法启动') : '正在准备 Copis'}
               </h1>
               <p className="mt-3 text-sm leading-6 text-muted-foreground">
-                {isError ? '必要组件暂未准备完成，请重试后继续使用。' : '正在检查并准备本地能力，完成后会自动进入工作区。'}
+                {isError
+                  ? (clientUpdateDialog
+                    ? clientUpdateDialog.description
+                    : '必要组件暂未准备完成，请重试后继续使用。')
+                  : '正在检查并准备本地能力，完成后会自动进入工作区。'}
               </p>
             </div>
           </header>
@@ -211,7 +227,7 @@ export function FunctionalModuleUpdateGate({ children }: FunctionalModuleUpdateG
             </div>
           )}
 
-          {isError && (
+          {isError && !clientUpdateDialog && (
             <div className="mt-8 flex flex-col gap-4 rounded-lg bg-destructive/10 p-4" role="alert">
               <div className="flex items-start gap-3">
                 <AlertCircle className="mt-0.5 size-4 shrink-0 text-destructive" aria-hidden="true" />
@@ -236,6 +252,27 @@ export function FunctionalModuleUpdateGate({ children }: FunctionalModuleUpdateG
           )}
         </section>
       </div>
+      <AlertDialog open={clientUpdateDialog !== null}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{clientUpdateDialog?.title}</AlertDialogTitle>
+            <AlertDialogDescription>{clientUpdateDialog?.description}</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogAction
+              className="gap-2"
+              onClick={() => {
+                void window.electronAPI.openExternal(COPIS_DOWNLOAD_URL).catch((error: unknown) => {
+                  console.error('[功能模块] 打开 Copis 下载页失败:', error)
+                })
+              }}
+            >
+              <Download className="size-4" aria-hidden="true" />
+              {clientUpdateDialog?.actionLabel}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </main>
   )
 }
