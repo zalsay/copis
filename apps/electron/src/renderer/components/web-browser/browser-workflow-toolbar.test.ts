@@ -1,4 +1,6 @@
 import { describe, expect, test } from 'bun:test'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import type { BrowserWorkflowStatus } from '@copis/shared'
 import {
   createBrowserAgentBindingQueue,
@@ -9,6 +11,8 @@ import {
   type BrowserAgentContextRequest,
   type BrowserAgentTarget,
 } from './browser-workflow-toolbar'
+
+const webBrowserSurfaceSource = readFileSync(join(import.meta.dir, 'WebBrowserSurface.tsx'), 'utf8')
 
 function status(state: BrowserWorkflowStatus['state'], run = false): BrowserWorkflowStatus {
   return {
@@ -25,6 +29,19 @@ function status(state: BrowserWorkflowStatus['state'], run = false): BrowserWork
 }
 
 describe('网页工具栏 Browser Workflow 状态', () => {
+  test('Given 已绑定页签被激活 When 恢复网页 Agent 会话 Then 不自动展开面板，显式打开逻辑保持不变', () => {
+    const restoreStart = webBrowserSurfaceSource.indexOf('getSessionIdForTab(activeTabId)')
+    const restoreEnd = webBrowserSurfaceSource.indexOf('React.useEffect', restoreStart)
+    const restoreEffect = webBrowserSurfaceSource.slice(restoreStart, restoreEnd)
+    const explicitOpenStart = webBrowserSurfaceSource.indexOf('const handleOpenBrowserAgent')
+    const explicitOpenEnd = webBrowserSurfaceSource.indexOf('const handleStartNewBrowserAgentSession', explicitOpenStart)
+    const explicitOpenHandler = webBrowserSurfaceSource.slice(explicitOpenStart, explicitOpenEnd)
+
+    expect(restoreEffect).toContain('setBrowserAgentSessionId(sessionId)')
+    expect(restoreEffect).not.toContain('setBrowserAgentPanelOpen(true)')
+    expect(explicitOpenHandler).toContain('setBrowserAgentPanelOpen(true)')
+  })
+
   test('Given 当前没有录制 When 点击 Copis 按钮 Then 只打开 AI浏览器抽屉', () => {
     expect(getBrowserWorkflowToolbarAction(status('idle'))).toBe('open-agent')
     expect(getBrowserWorkflowToolbarAction(status('error'))).toBe('open-agent')

@@ -137,7 +137,6 @@ export function WebBrowserSurface(): React.ReactElement {
       if (!active || !sessionId) return
       browserAgentSessionIdRef.current = sessionId
       setBrowserAgentSessionId(sessionId)
-      setBrowserAgentPanelOpen(true)
     }).catch((error) => {
       if (active) console.error('[Browser Workflow] 恢复网页 Agent 绑定失败:', error)
     }).finally(() => {
@@ -148,7 +147,7 @@ export function WebBrowserSurface(): React.ReactElement {
     return () => {
       active = false
     }
-  }, [activeTabId, setBrowserAgentPanelOpen, setBrowserAgentSessionId])
+  }, [activeTabId, setBrowserAgentSessionId])
 
   React.useEffect(() => {
     setAddress(activeTab?.url ?? '')
