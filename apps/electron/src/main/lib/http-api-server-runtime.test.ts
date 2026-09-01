@@ -705,4 +705,91 @@ describe('Rust HTTP API 功能模块生命周期', () => {
     expect(records[3]?.options.env?.COPIS_HTTP_API_PORT).toBe('51740')
     expect(readFileSync(active?.path ?? '', 'utf8')).toBe('old-rust-api')
   })
+
+  test('打包模式下 manifest 要求更高客户端版本时，返回结构化更新状态且不安装或启动进程', async () => {
+    const root = createRoot()
+    const oldPackage = rustPackage('0.1.0', 'old-rust-api')
+    await activateRustVersion(root, oldPackage, 'old-rust-api')
+    const records: SpawnRecord[] = []
+    const manifestUrl = 'https://download.example.com/manifest.json'
+    const newContent = 'incompatible-rust-api'
+    const higherMinClientManifest = {
+      schema: 1,
+      channel: 'stable',
+      client: { minVersion: '0.18.0' },
+      platforms: {
+        'darwin-arm64': {
+          minClientVersion: '0.18.0',
+          modules: {
+            'rust-http-api': {
+              version: '0.3.0',
+              url: 'https://download.example.com/rust-http-api-0.3.0',
+              sha256: createHash('sha256').update(newContent).digest('hex'),
+              size: Buffer.byteLength(newContent),
+              format: 'binary',
+              entrypoint: 'bin/copis-http-api-server',
+              required: true,
+            },
+          },
+        },
+      },
+    }
+
+    packaged = true
+    try {
+      const result = await ensureRustHttpApiServerReady({
+        rootDir: join(root, 'modules'),
+        paymentWorkspace: paymentWorkspaceFor(root),
+        manifestUrl,
+        platform: 'darwin',
+        arch: 'arm64',
+        clientVersion: '0.16.17',
+        spawnImpl: spawnFixture(records),
+        fetchImpl: fetchFixture(higherMinClientManifest, newContent, () => true),
+        healthTimeoutMs: 100,
+        stopTimeoutMs: 5,
+      })
+
+      expect(result).toEqual({
+        status: 'update_required',
+        clientVersion: '0.16.17',
+        minClientVersion: '0.18.0',
+      })
+      expect(records).toHaveLength(0)
+      const active = readActiveFunctionalModule(getFunctionalModulePaths(join(root, 'modules')), 'rust-http-api')
+      expect(active?.version).toBe('0.1.0')
+    } finally {
+      packaged = false
+    }
+  })
+
+  test('打包模式下 manifest 格式错误或其他非版本不兼容错误时，保持 reject 失败语义', async () => {
+    const root = createRoot()
+    const records: SpawnRecord[] = []
+    const manifestUrl = 'https://download.example.com/manifest.json'
+    const invalidManifest = {
+      schema: 999,
+      channel: 'stable',
+      platforms: {},
+    }
+
+    packaged = true
+    try {
+      await expect(ensureRustHttpApiServerReady({
+        rootDir: join(root, 'modules'),
+        paymentWorkspace: paymentWorkspaceFor(root),
+        manifestUrl,
+        platform: 'darwin',
+        arch: 'arm64',
+        clientVersion: '0.16.17',
+        spawnImpl: spawnFixture(records),
+        fetchImpl: fetchFixture(invalidManifest, '', () => true),
+        healthTimeoutMs: 100,
+        stopTimeoutMs: 5,
+      })).rejects.toThrow('功能模块 manifest 版本不支持')
+      expect(records).toHaveLength(0)
+    } finally {
+      packaged = false
+    }
+  })
 })

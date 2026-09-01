@@ -12,6 +12,31 @@ const SUPPORTED_SCHEMA = 1
 const MANIFEST_ENV = 'COPIS_FUNCTIONAL_MODULE_MANIFEST_URL'
 declare const __COPIS_FUNCTIONAL_MODULE_MANIFEST_URL__: string | undefined
 
+export class FunctionalModuleIncompatibleClientError extends Error {
+  readonly clientVersion: string
+  readonly minClientVersion: string
+
+  constructor(clientVersion: string, minClientVersion: string) {
+    super(`Copis 版本过低，需要至少 ${minClientVersion}`)
+    this.name = 'FunctionalModuleIncompatibleClientError'
+    this.clientVersion = clientVersion
+    this.minClientVersion = minClientVersion
+  }
+}
+
+export function isFunctionalModuleIncompatibleClientError(
+  error: unknown,
+): error is FunctionalModuleIncompatibleClientError {
+  if (error instanceof FunctionalModuleIncompatibleClientError) return true
+  if (typeof error === 'object' && error !== null) {
+    const candidate = error as unknown as Record<string, unknown>
+    return candidate.name === 'FunctionalModuleIncompatibleClientError'
+      && typeof candidate.clientVersion === 'string'
+      && typeof candidate.minClientVersion === 'string'
+  }
+  return false
+}
+
 export function parseFunctionalModuleManifest(
   json: string,
   clientVersion: string,
@@ -35,7 +60,7 @@ export function parseFunctionalModuleManifest(
   if (!target) throw new Error(`manifest 没有当前平台的功能模块: ${platformKey}`)
   const minClientVersion = target.minClientVersion ?? manifest.client?.minVersion
   if (minClientVersion && compareSemver(clientVersion, minClientVersion) < 0) {
-    throw new Error(`Copis 版本过低，需要至少 ${minClientVersion}`)
+    throw new FunctionalModuleIncompatibleClientError(clientVersion, minClientVersion)
   }
 
   return Object.entries(target.modules).map(([name, artifact]) => {

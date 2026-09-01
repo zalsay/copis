@@ -492,6 +492,34 @@ function sendToMainWindow(channel: string, data?: unknown): void {
   }
 }
 
+function promptClientUpdateRequired(
+  win: BrowserWindow,
+  currentVersion: string,
+  minClientVersion: string,
+): void {
+  const showPrompt = (): void => {
+    if (win.isDestroyed()) return
+    void dialog.showMessageBox(win, {
+      type: 'warning',
+      title: '版本更新提示',
+      message: '当前 Copis 版本过低',
+      detail: `当前版本为 v${currentVersion}，功能模块要求最低版本为 v${minClientVersion}。请升级 Copis 以获得完整功能支持。`,
+      buttons: ['确定'],
+      defaultId: 0,
+      cancelId: 0,
+      noLink: true,
+    }).catch((error: unknown) => {
+      console.error('[启动] 显示版本更新提示失败:', error)
+    })
+  }
+
+  if (win.webContents.isLoading()) {
+    win.webContents.once('did-finish-load', showPrompt)
+  } else {
+    showPrompt()
+  }
+}
+
 app.whenReady().then(bootstrap).catch(handleBootstrapFailure)
 
 /**
@@ -505,9 +533,9 @@ async function bootstrap(): Promise<void> {
   process.env.COPIS_PACKAGED = app.isPackaged ? '1' : '0'
   setCopisVersion(copisVersion)
 
-  // 登录页依赖 Working API；先校验/更新 Rust 模块并通过 health，再创建窗口。
-  // 旧模块不再有机会先接收登录请求。
-  await ensureRustHttpApiServerReady()
+  // 登录页依赖 Working API；正常情况下先校验/更新 Rust 模块并通过 health，再创建窗口。
+  // 仅当远端声明的最低客户端版本更高时降级为升级提示，避免阻断主窗口启动。
+  const rustHttpApiReadyResult = await ensureRustHttpApiServerReady()
 
   // Runtime 检测在 Rust 子进程中异步执行，不阻塞窗口创建和 Electron 主进程。
   void safeAwait('initializeRuntime', () => initializeRuntime())
@@ -560,6 +588,15 @@ async function bootstrap(): Promise<void> {
 
   // Create main window (will be shown when ready)
   createWindow()
+
+  // 客户端版本低于远端功能模块要求时，在主窗口就绪后非阻塞提示用户升级
+  if (mainWindow && rustHttpApiReadyResult.status === 'update_required') {
+    promptClientUpdateRequired(
+      mainWindow,
+      rustHttpApiReadyResult.clientVersion,
+      rustHttpApiReadyResult.minClientVersion,
+    )
+  }
 
   // Create system tray icon
   createTray({

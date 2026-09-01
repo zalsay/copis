@@ -1,5 +1,10 @@
 import { describe, expect, test } from 'bun:test'
-import { getFunctionalModuleManifestUrl, parseFunctionalModuleManifest } from './functional-module-manifest'
+import {
+  FunctionalModuleIncompatibleClientError,
+  getFunctionalModuleManifestUrl,
+  isFunctionalModuleIncompatibleClientError,
+  parseFunctionalModuleManifest,
+} from './functional-module-manifest'
 
 const manifest = {
   schema: 1,
@@ -100,9 +105,33 @@ describe('COS 功能模块 manifest 解析', () => {
       .toThrow('没有当前平台的功能模块')
   })
 
-  test('当前 Copis 版本低于 manifest 门槛时拒绝安装', () => {
-    expect(() => parseFunctionalModuleManifest(manifestJson(), '0.16.12', 'darwin', 'arm64'))
-      .toThrow('Copis 版本过低')
+  test('当前 Copis 版本低于 manifest 门槛时抛出结构化版本不兼容错误', () => {
+    let capturedError: unknown
+    try {
+      parseFunctionalModuleManifest(manifestJson(), '0.16.12', 'darwin', 'arm64')
+    } catch (error) {
+      capturedError = error
+    }
+
+    expect(capturedError).toBeInstanceOf(FunctionalModuleIncompatibleClientError)
+    expect(isFunctionalModuleIncompatibleClientError(capturedError)).toBe(true)
+    if (isFunctionalModuleIncompatibleClientError(capturedError)) {
+      expect(capturedError.clientVersion).toBe('0.16.12')
+      expect(capturedError.minClientVersion).toBe('0.16.13')
+      expect(capturedError.message).toBe('Copis 版本过低，需要至少 0.16.13')
+    }
+  })
+
+  test('非版本不兼容错误不会被误判为 FunctionalModuleIncompatibleClientError', () => {
+    let capturedError: unknown
+    try {
+      parseFunctionalModuleManifest(manifestJson(), '0.16.17', 'win32', 'x64')
+    } catch (error) {
+      capturedError = error
+    }
+
+    expect(capturedError).toBeInstanceOf(Error)
+    expect(isFunctionalModuleIncompatibleClientError(capturedError)).toBe(false)
   })
 
   test('优先使用当前平台的最低版本，不被其他平台门槛误伤', () => {
