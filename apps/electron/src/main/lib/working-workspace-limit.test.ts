@@ -5,11 +5,11 @@ import {
 } from './working-workspace-limit'
 
 describe('Working 项目额度', () => {
-  test('Given 非 VIP 仅有默认项目 When 创建项目 Then 允许创建一个额外项目', () => {
+  test('Given 非 VIP 仅有默认工作区 When 创建项目 Then 允许创建一个额外项目', () => {
     expect(() => assertWorkingWorkspaceCreationAllowed([{ slug: 'default' }], false)).not.toThrow()
   })
 
-  test('Given 非 VIP 已有默认项目和一个额外项目 When 再创建项目 Then 拒绝创建', () => {
+  test('Given 非 VIP 已有默认工作区和一个额外项目 When 再创建项目 Then 拒绝创建', () => {
     expect(() => assertWorkingWorkspaceCreationAllowed([
       { slug: 'default' },
       { slug: 'my-project' },

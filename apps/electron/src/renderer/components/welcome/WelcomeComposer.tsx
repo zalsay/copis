@@ -1,7 +1,7 @@
 /**
  * WelcomeComposer — 欢迎页默认 Agent 输入区域。
  *
- * 浏览器模式通过本地 HTTP API 创建 Agent 会话，始终绑定默认项目。
+ * 浏览器模式通过本地 HTTP API 创建 Agent 会话，始终绑定默认工作区。
  */
 
 import * as React from 'react'
@@ -98,7 +98,7 @@ export function WelcomeComposer(): React.ReactElement {
       try {
         const workspaces = await new Promise<AgentWorkspace[]>((resolve, reject) => {
           timeoutId = window.setTimeout(() => {
-            reject(new Error('默认项目连接超时，请刷新页面后重试。'))
+            reject(new Error('默认工作区连接超时，请刷新页面后重试。'))
           }, DEFAULT_WORKSPACE_LOAD_TIMEOUT_MS)
           window.electronAPI.listAgentWorkspaces().then(resolve, reject)
         })
@@ -107,7 +107,7 @@ export function WelcomeComposer(): React.ReactElement {
         const selected = workspaces.find((item) => item.slug === 'default')
           ?? workspaces[0]
         if (!selected) {
-          setError('默认项目暂不可用，请重启 Copis 后重试。')
+          setError('默认工作区暂不可用，请重启 Copis 后重试。')
           return
         }
         setWorkspace(selected)
@@ -301,7 +301,7 @@ export function WelcomeComposer(): React.ReactElement {
           onChange={setContent}
           onSubmit={() => { void handleSend() }}
           placeholder={loading
-            ? '正在连接默认项目...'
+            ? '正在连接默认工作区...'
             : '输入消息...（@ 引用文件，/ 调用 Skill，# 使用 MCP，& 引用会话，～ 引用待办/日程；Enter 发送）'}
           autoFocusTrigger="welcome-agent-composer"
           disabled={loading || sending || !workspace}

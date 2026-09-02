@@ -43,6 +43,7 @@ import {
   workingPaymentRefreshAtom,
 } from '@/atoms/working-payment-atoms'
 import { activeTabIdAtom, openTab, tabsAtom, TUTORIAL_TAB_ID, TUTORIAL_TAB_TITLE } from '@/atoms/tab-atoms'
+import { leftSidebarWidthAtom } from '@/atoms/sidebar-atoms'
 import { hasUpdateAtom } from '@/atoms/updater'
 import { AboutUpdatesSettings } from '@/components/settings/AboutUpdatesSettings'
 import { AppearanceSettings } from '@/components/settings/AppearanceSettings'
@@ -279,35 +280,43 @@ export function CopisWorkingSettingsPanel({ onClose }: CopisWorkingSettingsPanel
     }
   }
 
+  const leftSidebarWidth = useAtomValue(leftSidebarWidthAtom)
+  const sidebarWidth = Math.max(300, Math.min(420, leftSidebarWidth || 300))
+
   return (
     <div className="copis-working-settings-view">
       <div className="copis-working-settings-shell">
-        <aside className="copis-working-settings-sidebar">
-          <nav className="copis-working-settings-nav" aria-label="Copis 设置菜单">
-            <button type="button" className="copis-working-settings-nav-button" onClick={onClose}>
-              <ArrowLeft aria-hidden="true" />
-              <span>返回对话</span>
-            </button>
-            {WORKING_SETTINGS_MENU.map((item) => {
-              const isActive = item.id === activeSection
-              return (
-                <button
-                  key={item.id}
-                  type="button"
-                  className={`copis-working-settings-nav-button ${isActive ? 'active' : ''}`}
-                  onClick={() => item.id === 'tutorial' ? handleOpenTutorial() : setActiveSection(item.id)}
-                  aria-current={isActive ? 'page' : undefined}
-                  aria-label={item.id === 'about' && hasUpdate ? '关于/更新，有可用更新' : undefined}
-                >
-                  <item.icon aria-hidden="true" />
-                  <span>{item.label}</span>
-                  {item.id === 'about' && hasUpdate && (
-                    <span className="copis-working-settings-nav-update-dot" aria-label="有可用更新" />
-                  )}
-                </button>
-              )
-            })}
-          </nav>
+        <aside className="copis-working-settings-sidebar" style={{ width: sidebarWidth, minWidth: sidebarWidth }}>
+          <div className="copis-working-settings-sidebar-body">
+            <nav className="copis-working-settings-nav" aria-label="Copis 设置菜单">
+              <button type="button" className="copis-working-settings-nav-button" onClick={onClose}>
+                <ArrowLeft aria-hidden="true" />
+                <span>返回对话</span>
+              </button>
+              <div className="copis-working-settings-nav-divider" />
+              {WORKING_SETTINGS_MENU.map((item) => {
+                const isActive = item.id === activeSection
+                return (
+                  <button
+                    key={item.id}
+                    type="button"
+                    className={`copis-working-settings-nav-button ${isActive ? 'active' : ''}`}
+                    onClick={() => item.id === 'tutorial' ? handleOpenTutorial() : setActiveSection(item.id)}
+                    aria-current={isActive ? 'page' : undefined}
+                    aria-label={item.id === 'about' && hasUpdate ? '关于/更新，有可用更新' : undefined}
+                  >
+                    <item.icon aria-hidden="true" />
+                    <div className="copis-working-settings-nav-label-wrap">
+                      <span>{item.label}</span>
+                      {item.id === 'about' && hasUpdate && (
+                        <span className="copis-working-settings-nav-update-dot" aria-label="有可用更新" />
+                      )}
+                    </div>
+                  </button>
+                )
+              })}
+            </nav>
+          </div>
         </aside>
 
         <main className="copis-working-settings-main">

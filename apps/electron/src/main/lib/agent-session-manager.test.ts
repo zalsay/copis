@@ -148,7 +148,7 @@ describe('Agent 会话 runtime 元数据', () => {
     expect(result.session.title).toBe('Agent 问答')
   })
 
-  test('Given Pi 会话运行在项目 cwd When 创建会话 Then 初始化 project 下的项目级和会话级 .context', () => {
+  test('Given Pi 会话运行在项目 cwd When 创建会话 Then 初始化项目级 context 且不预建会话级 .context', () => {
     const projectRootPath = join(tempHome, 'context-project')
     mkdirSync(projectRootPath, { recursive: true })
     writeAgentWorkspacesIndex([{
@@ -171,7 +171,7 @@ describe('Agent 会话 runtime 元数据', () => {
 
     expect(existsSync(join(projectRootPath, 'copis', '.context'))).toBe(true)
     expect(existsSync(join(projectRootPath, 'project', '.context'))).toBe(false)
-    expect(existsSync(join(tempHome, '.copis', 'agent-workspaces', 'context-workspace', session.id, '.context'))).toBe(true)
+    expect(existsSync(join(tempHome, '.copis', 'agent-workspaces', 'context-workspace', session.id, '.context'))).toBe(false)
   })
 
   test('Given 历史索引包含非法附加路径 When 读取会话 Then 清理非法值后再返回', () => {

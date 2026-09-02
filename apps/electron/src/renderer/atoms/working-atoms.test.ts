@@ -17,7 +17,7 @@ describe('Working 创建工作区入口', () => {
       user: { id: 7, isVip: false },
     })
     store.set(agentWorkspacesAtom, [
-      { id: 'default', slug: 'default', name: '默认项目', createdAt: 1, updatedAt: 1 },
+      { id: 'default', slug: 'default', name: '默认工作区', createdAt: 1, updatedAt: 1 },
     ])
 
     store.set(openCreateWorkspaceDialogAtom, 'sidebar')
@@ -34,7 +34,7 @@ describe('Working 创建工作区入口', () => {
       user: { id: 7, isVip: false },
     })
     store.set(agentWorkspacesAtom, [
-      { id: 'default', slug: 'default', name: '默认项目', createdAt: 1, updatedAt: 1 },
+      { id: 'default', slug: 'default', name: '默认工作区', createdAt: 1, updatedAt: 1 },
       { id: 'workspace-1', slug: 'workspace-1', name: '第一个项目', createdAt: 1, updatedAt: 1 },
     ])
 

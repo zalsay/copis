@@ -38,7 +38,7 @@ describe('WebTabBar Windows 标题栏', () => {
     expect(html).not.toContain('text-foreground titlebar-drag-region')
   })
 
-  test('Given网页 Tab When渲染 Then暴露拖动语义并保持固定 Tab 尺寸', () => {
+  test('Given 网页 Tab When 渲染 Then 具备 Chrome 风格弹性自适应尺寸与拖动语义', () => {
     const store = createStore()
     const tab: WebTabState = {
       id: 'web-tab-1',
@@ -61,11 +61,13 @@ describe('WebTabBar Windows 标题栏', () => {
 
     expect(html).toContain('data-web-tab-id="web-tab-1"')
     expect(html).toContain('touch-none')
-    expect(html).toContain('min-w-[144px]')
+    expect(html).toContain('flex-1')
+    expect(html).toContain('min-w-[36px]')
     expect(html).toContain('max-w-[240px]')
+    expect(html).toContain('truncate')
   })
 
-  test('Given Copis 首页页签 When 渲染 Logo Then 使用熊猫 Logo', () => {
+  test('Given Copis 首页页签 When 渲染 Then 具备弹性自适应尺寸并使用熊猫 Logo', () => {
     const html = renderToStaticMarkup(
       <Provider>
         <WebTabBar />
@@ -74,5 +76,34 @@ describe('WebTabBar Windows 标题栏', () => {
 
     expect(html).toContain('src="copis-logo.png"')
     expect(html).not.toContain('copis-template-logo.png')
+    expect(html).toContain('min-w-[36px]')
+    expect(html).toContain('max-w-[180px]')
+    expect(html).toContain('flex-1')
+  })
+
+  test('Given 网页 Tab 与首页 Tab When 渲染 Then 包含 hover Tooltip 用于展示完整文字与 URL', () => {
+    const store = createStore()
+    const tab: WebTabState = {
+      id: 'web-tab-2',
+      title: '非常长的一个网页标题用于测试悬浮展示',
+      url: 'https://developer.mozilla.org/zh-CN/docs/Web/HTML',
+      faviconUrl: null,
+      isLoading: false,
+      canGoBack: false,
+      canGoForward: false,
+      isIncognito: false,
+      canActivateIncognito: false,
+    }
+    store.set(webTabsAtom, [tab])
+
+    const html = renderToStaticMarkup(
+      <Provider store={store}>
+        <WebTabBar />
+      </Provider>,
+    )
+
+    expect(html).toContain('非常长的一个网页标题用于测试悬浮展示')
+    expect(html).toContain('https://developer.mozilla.org/zh-CN/docs/Web/HTML')
+    expect(html).toContain('Copis 首页')
   })
 })

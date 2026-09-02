@@ -393,7 +393,7 @@ export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange, widt
 
   const fileSourceFilterMap = useAtomValue(agentFileSourceFilterMapAtom)
   const setFileSourceFilterMap = useSetAtom(agentFileSourceFilterMapAtom)
-  const fileSourceFilter = fileSourceFilterMap[sessionId] ?? 'session'
+  const fileSourceFilter = fileSourceFilterMap[sessionId] ?? 'project'
   const setFileSourceFilter = React.useCallback((source: AgentFileSourceFilter) => {
     setFileSourceFilterMap((prev) => {
       if (prev[sessionId] === source) return prev
@@ -510,20 +510,6 @@ export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange, widt
                   role="tab"
                   className={cn(
                     'relative flex-1 h-7 px-2 text-[11px] transition-colors select-none',
-                    fileSourceFilter === 'session'
-                      ? 'app-tab-active text-foreground'
-                      : 'app-tab-inactive text-muted-foreground hover:text-foreground',
-                  )}
-                  aria-selected={fileSourceFilter === 'session'}
-                  onClick={() => setFileSourceFilter('session')}
-                >
-                  项目列表
-                </button>
-                <button
-                  type="button"
-                  role="tab"
-                  className={cn(
-                    'relative flex-1 h-7 px-2 text-[11px] transition-colors select-none',
                     fileSourceFilter === 'project'
                       ? 'app-tab-active text-foreground'
                       : 'app-tab-inactive text-muted-foreground hover:text-foreground',
@@ -532,6 +518,20 @@ export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange, widt
                   onClick={() => setFileSourceFilter('project')}
                 >
                   工作区
+                </button>
+                <button
+                  type="button"
+                  role="tab"
+                  className={cn(
+                    'relative flex-1 h-7 px-2 text-[11px] transition-colors select-none',
+                    fileSourceFilter === 'session'
+                      ? 'app-tab-active text-foreground'
+                      : 'app-tab-inactive text-muted-foreground hover:text-foreground',
+                  )}
+                  aria-selected={fileSourceFilter === 'session'}
+                  onClick={() => setFileSourceFilter('session')}
+                >
+                  项目列表
                 </button>
               </div>
               {showSessionFiles ? (

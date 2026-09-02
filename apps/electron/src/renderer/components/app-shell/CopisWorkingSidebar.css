@@ -867,7 +867,7 @@
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  background: hsl(var(--destructive));
+  background: var(--ui-primary);
 }
 
 .copis-working-sidebar-account strong,

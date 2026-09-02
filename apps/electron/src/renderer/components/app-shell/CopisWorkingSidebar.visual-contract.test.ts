@@ -489,7 +489,7 @@ describe('Working 侧边栏视觉契约', () => {
     expect(sidebarSource).toContain('const hasUpdate = useAtomValue(hasUpdateAtom)')
     expect(sidebarSource).toContain("aria-label={hasUpdate ? '设置，有可用更新' : '设置'}")
     expect(sidebarSource).toContain('hasUpdate && <span className="copis-working-update-dot" aria-hidden="true" />')
-    expect(updateDotRule).toContain('background: hsl(var(--destructive))')
+    expect(updateDotRule).toContain('background: var(--ui-primary)')
     expect(updateDotRule).toContain('border-radius: 50%')
   })
 

@@ -54,16 +54,16 @@ export function BotDefaultSettings(): React.ReactElement {
         <SettingsCard>
           {workspaceOptions.length > 0 ? (
             <SettingsSelect
-              label="默认项目"
-              description="通过机器人发起新会话时自动使用的项目"
+              label="默认工作区"
+              description="通过机器人发起新会话时自动使用的项目工作区"
               value={defaultWorkspaceId}
               onValueChange={setDefaultWorkspaceId}
               options={workspaceOptions}
-              placeholder="选择项目"
+              placeholder="选择工作区"
             />
           ) : (
             <div className="py-3 text-sm text-muted-foreground">
-              暂无项目。请先在「配置」中创建项目。
+              暂无工作区。请先在「配置」中创建工作区。
             </div>
           )}
         </SettingsCard>
@@ -95,7 +95,7 @@ export function BotDefaultSettings(): React.ReactElement {
               <code className="text-foreground/80 font-mono">/switch (/sw)</code>
               <span>切换到已有会话（序号）</span>
               <code className="text-foreground/80 font-mono">/workspace (/ws)</code>
-              <span>设置默认项目</span>
+              <span>设置默认工作区</span>
               <code className="text-foreground/80 font-mono">/model (/m)</code>
               <span>查看或切换渠道 / 模型</span>
               <code className="text-foreground/80 font-mono">/now</code>

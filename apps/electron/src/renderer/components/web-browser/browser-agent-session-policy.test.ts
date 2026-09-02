@@ -45,7 +45,7 @@ describe('AI浏览器会话策略', () => {
     })).toEqual({ sessionId: null, shouldCreate: true })
   })
 
-  test('Given 页面项目关联存在 When 解析当前项目 Then 优先使用有效关联，否则回退现有默认项目', () => {
+  test('Given 页面项目关联存在 When 解析当前项目 Then 优先使用有效关联，否则回退现有默认工作区', () => {
     const workspaces = [
       { id: 'workspace-default', slug: 'default' },
       { id: 'workspace-current', slug: 'current' },

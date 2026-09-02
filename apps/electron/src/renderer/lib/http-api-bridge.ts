@@ -198,7 +198,7 @@ function createHttpMethods(): Record<string, HttpMethod> {
       return result.content
     },
 
-    // ===== Agent 默认项目 =====
+    // ===== Agent 默认工作区 =====
     listAgentWorkspaces: () => request('/api/agent/workspaces'),
     listAgentSessions: () => request('/api/agent/sessions'),
     clearAgentCompletionState: (args) => {

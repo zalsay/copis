@@ -43,7 +43,7 @@ export function selectBrowserAgentSession(
     : { sessionId: null, shouldCreate: true }
 }
 
-/** 按当前网页关联、默认项目、当前项目的既有顺序解析 AI浏览器项目。 */
+/** 按当前网页关联、默认工作区、当前项目的既有顺序解析 AI浏览器项目。 */
 export function resolveBrowserAgentWorkspaceId(
   associatedWorkspaceId: string | null | undefined,
   workspaces: readonly BrowserAgentWorkspaceCandidate[],

@@ -14,7 +14,7 @@ mock.module('./agent-workspace-manager', () => ({
   getAgentWorkspace: (id: string) => id === 'workspace-default' || id === 'workspace-other'
     ? {
         id,
-        name: id === 'workspace-default' ? '默认项目' : '其他项目',
+        name: id === 'workspace-default' ? '默认工作区' : '其他项目',
         slug: id === 'workspace-default' ? 'default' : 'other',
         createdAt: 1,
         updatedAt: 1,

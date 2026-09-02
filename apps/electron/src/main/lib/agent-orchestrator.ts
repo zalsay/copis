@@ -59,7 +59,7 @@ import {
   isAdvancedAuthorizationCommand,
 } from '@copis/shared'
 import type { CopisPermissionMode, AskUserRequest, ExitPlanModeRequest, SDKSystemMessage } from '@copis/shared'
-import { isPromptTooLongError, isThinkingSignatureError, friendlyErrorMessage, mapSDKErrorToTypedError, shouldKeepChannelOpen } from './agent-error-utils'
+import { isPromptTooLongError, isThinkingSignatureError, is400ApiError, OPENAI_400_ERROR_TITLE, OPENAI_400_FRIENDLY_MESSAGE, friendlyErrorMessage, mapSDKErrorToTypedError, shouldKeepChannelOpen } from './agent-error-utils'
 import type { PiAgentQueryOptions } from './adapters/pi-agent-adapter'
 import { getPiAssistantErrorDetails, hasPiAssistantTextContent, stripPiAssistantError } from './adapters/pi-message-adapter'
 import { isTransientNetworkError, isMalformedResponseError, isSessionNotFoundError } from './error-patterns'
@@ -196,6 +196,24 @@ function extractApiError(stderr: string): { statusCode: number; message: string 
     } catch {
       // JSON 解析失败
     }
+  }
+
+  // 模式 2.1：OpenAI API error 格式 - "OpenAI API error (400): ..."
+  const openAiApiErrorMatch = stderr.match(/(?:(?:OpenAI|OpenAl)\s+)?API\s+error\s*\((\d{3})\)[:\s]+(.+?)(?:\n|$)/is)
+  if (openAiApiErrorMatch) {
+    const statusCode = parseInt(openAiApiErrorMatch[1]!)
+    const rawMsg = openAiApiErrorMatch[2]!.trim()
+    try {
+      const jsonMatch = rawMsg.match(/(\{.*\})/s)
+      if (jsonMatch) {
+        const parsed = JSON.parse(jsonMatch[1]!)
+        const message = parsed.error?.message || parsed.message || rawMsg
+        return { statusCode, message }
+      }
+    } catch {
+      // JSON 解析失败使用原始消息
+    }
+    return { statusCode, message: rawMsg }
   }
 
   // 模式 3：直接的状态码 + 消息
@@ -2502,27 +2520,46 @@ export class AgentOrchestrator {
               error instanceof Error ? (error.stack ?? error.message) : String(error),
               stderrOutput,
             )
+            const is400 = is400ApiError(
+              apiError?.message ?? '',
+              userFacingError,
+              rawErrorMessage,
+              error instanceof Error ? (error.stack ?? error.message) : String(error),
+              stderrOutput,
+            ) || apiError?.statusCode === 400
             const errorCode = isPromptTooLong
               ? 'prompt_too_long'
               : isThinkingSignature
                 ? THINKING_SIGNATURE_ERROR_CODE
-                : 'unknown_error'
+                : is400
+                  ? 'invalid_request'
+                  : 'unknown_error'
             const errorTitle = isPromptTooLong
               ? '上下文过长'
               : isThinkingSignature
                 ? THINKING_SIGNATURE_ERROR_TITLE
-                : '执行错误'
+                : is400
+                  ? OPENAI_400_ERROR_TITLE
+                  : '执行错误'
             const errorContent = isPromptTooLong
               ? '上下文过长：当前对话的上下文已超出模型限制，请压缩上下文或开启新会话'
               : isThinkingSignature
                 ? `${THINKING_SIGNATURE_ERROR_TITLE}：${THINKING_SIGNATURE_ERROR_MESSAGE}`
-                : userFacingError
+                : is400
+                  ? OPENAI_400_FRIENDLY_MESSAGE
+                  : userFacingError
             const errorActions = isThinkingSignature
               ? [
                   { key: 'n', label: '在新对话继续', action: 'retry_in_new_session' },
                   { key: 'r', label: '重试', action: 'retry' },
                 ]
-              : undefined
+              : is400
+                ? [
+                    { key: 'n', label: '在新对话继续', action: 'retry_in_new_session' },
+                    { key: 'r', label: '重试', action: 'retry' },
+                    { key: 's', label: '设置', action: 'settings' },
+                  ]
+                : undefined
             userFacingError = errorContent
             if (isPromptTooLong) {
               try { updateAgentSessionMeta(sessionId, { sdkSessionId: undefined }) } catch { /* 忽略 */ }

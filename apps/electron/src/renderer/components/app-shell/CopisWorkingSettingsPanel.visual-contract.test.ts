@@ -40,4 +40,25 @@ describe('Working 设置页 VIP 摘要', () => {
     expect(settingsSource).toContain('有效期至 {formatDate(vipExpiresAt)}')
     expect(settingsSource).toContain("isVip ? '续费 VIP' : '升级 VIP'")
   })
+
+  test('Given 设置页侧栏 When 检查菜单 UI 定义 Then 与首页侧栏保持完全一致（网格布局、按钮尺寸、颜色及滚动条）', () => {
+    // 侧栏容器与底色
+    expect(settingsStyles).toContain('background: hsl(var(--muted));')
+    expect(settingsStyles).toContain('padding: 12px 12px 0;')
+    expect(settingsStyles).toContain('width: 300px;')
+    // 滚动区域与细滚动条
+    expect(settingsStyles).toContain('.copis-working-settings-sidebar-body {')
+    expect(settingsStyles).toContain('scrollbar-width: thin;')
+    // 菜单按钮网格与尺寸
+    expect(settingsStyles).toContain('display: grid;')
+    expect(settingsStyles).toContain('grid-template-columns: 18px minmax(0, 1fr);')
+    expect(settingsStyles).toContain('min-height: 31px;')
+    expect(settingsStyles).toContain('padding: 5px 8px;')
+    expect(settingsStyles).toContain('gap: 8px;')
+    expect(settingsStyles).toContain('border-radius: 7px;')
+    // 状态色彩
+    expect(settingsStyles).toContain('background: hsl(var(--foreground) / 0.07);')
+    expect(settingsStyles).toContain('background: var(--ui-primary-background);')
+    expect(settingsStyles).toContain('color: var(--ui-primary);')
+  })
 })

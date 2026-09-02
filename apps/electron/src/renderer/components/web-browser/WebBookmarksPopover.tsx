@@ -557,8 +557,8 @@ export function WebBookmarksPopover({ activeTab, onNavigate, standalone = false,
           sideOffset={standalone ? 0 : 6}
           avoidCollisions={!standalone}
           data-web-bookmarks-panel="true"
-          className="z-[9999] w-96 p-2 duration-100"
-          style={{ animationDuration: '100ms' }}
+          className="z-[9999] w-96 rounded-lg p-2 duration-75"
+          style={{ animationDuration: '60ms', borderRadius: '8px' }}
           onOpenAutoFocus={(event) => event.preventDefault()}
         >
           <div className="flex items-center justify-between px-1 pb-2">
@@ -617,7 +617,7 @@ export function WebBookmarksPopover({ activeTab, onNavigate, standalone = false,
           </div>
 
           <div className="border-b border-border/60 py-2">
-            <div className="flex items-center gap-2 rounded-md bg-muted/45 px-2 py-1.5">
+            <div className="flex items-center gap-2 rounded-md bg-muted/45 px-2 py-1.5" style={{ borderRadius: '6px' }}>
               <div className="min-w-0 flex-1">
                 <p className="truncate text-xs font-medium">{activeTab.title || '当前网页'}</p>
                 <p className="truncate text-[10px] text-muted-foreground">{activeTab.url}</p>

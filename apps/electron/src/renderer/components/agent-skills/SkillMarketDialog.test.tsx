@@ -28,13 +28,13 @@ describe('技能市场当前项目', () => {
         open
         onOpenChange={() => undefined}
         currentWorkspaceSlug="current-project"
-        currentWorkspaceName="默认项目"
+        currentWorkspaceName="默认工作区"
         onChanged={() => undefined}
       />,
     )
 
     expect(html).toContain('技能市场暂时没有可用内容')
-    expect(html).toContain('默认项目')
+    expect(html).toContain('默认工作区')
     expect(html).not.toContain('从 Working 官方技能市场安装专家能力到当前项目')
     expect(html).not.toContain('目标项目')
     expect(html).not.toContain('role="combobox"')

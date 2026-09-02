@@ -106,7 +106,7 @@ export function TabBarItem({
 
   return (
     <div
-      className="relative min-w-[132px] max-w-[240px] flex-[1_0_132px] titlebar-no-drag"
+      className="relative min-w-[44px] max-w-[240px] flex-1 titlebar-no-drag"
       onMouseEnter={onHoverEnter}
       onMouseLeave={onHoverLeave}
     >

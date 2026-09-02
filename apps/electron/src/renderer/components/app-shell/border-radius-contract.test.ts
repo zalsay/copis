@@ -13,6 +13,7 @@ const paymentModalCss = readFileSync(join(import.meta.dir, 'CopisWorkingPaymentM
 const messageSettingsCss = readFileSync(join(import.meta.dir, 'CopisWorkingMessageSettingsPanel.css'), 'utf8')
 const voiceInputCss = readFileSync(join(import.meta.dir, '../settings/VoiceInputSettings.css'), 'utf8')
 const agentViewCss = readFileSync(join(import.meta.dir, '../agent/AgentView.css'), 'utf8')
+const webBookmarksPopoverTsx = readFileSync(join(import.meta.dir, '../web-browser/WebBookmarksPopover.tsx'), 'utf8')
 
 describe('UI 卡片与弹窗圆角统一契约（对齐账户设置--个人钻石卡片 8px 标准）', () => {
   test('Given globals.css When 检查全局圆角 Token Then 基准与语义变量均统一定义为 8px (0.5rem)', () => {
@@ -91,5 +92,12 @@ describe('UI 卡片与弹窗圆角统一契约（对齐账户设置--个人钻�
     const compactInputRule = agentViewCss.match(/\.copis-agent-session-compact\s+\[data-input-mode="agent"\]\s*>\s*div:first-child\s*\{([^}]*)\}/s)?.[1]
     expect(compactInputRule).toBeDefined()
     expect(compactInputRule).toContain('border-radius: 8px;')
+  })
+
+  test('Given 网页收藏夹弹窗 When 检查弹窗容器与卡片圆角 Then 对齐主页 8px (rounded-lg) 标准', () => {
+    expect(webBookmarksPopoverTsx).toContain('data-web-bookmarks-panel="true"')
+    expect(webBookmarksPopoverTsx).toContain('className="z-[9999] w-96 rounded-lg p-2 duration-75"')
+    expect(webBookmarksPopoverTsx).toContain("borderRadius: '8px'")
+    expect(webBookmarksPopoverTsx).toContain('flex items-center gap-2 rounded-md bg-muted/45 px-2 py-1.5')
   })
 })

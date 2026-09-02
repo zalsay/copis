@@ -560,7 +560,22 @@ function migrateLegacyProjectDirectory(sourceRoot: string, workspaceLabel: strin
 }
 
 /**
- * 在每次更新检查前幂等迁移所有工作区的旧 project 目录。
+ * 清理根目录直接残留的旧版 .context 目录（长期上下文统一位于 copis/.context）。
+ */
+function removeLegacyRootContextDirectory(sourceRoot: string, workspaceLabel: string): void {
+  const legacyContextPath = resolve(sourceRoot, '.context')
+  if (existsSync(legacyContextPath)) {
+    try {
+      rmSyncWithRetry(legacyContextPath, { recursive: true, force: true })
+      console.log(`[Agent 工作区] 已清理根目录残留的 .context 目录 (${workspaceLabel}): ${legacyContextPath}`)
+    } catch (error) {
+      console.warn(`[Agent 工作区] 清理根目录 .context 失败 (${workspaceLabel}):`, error)
+    }
+  }
+}
+
+/**
+ * 在每次更新检查及应用启动时幂等迁移所有工作区的旧 project 目录与根目录残留 .context。
  * 迁移自身吞掉错误，调用方即使遇到文件系统竞态也必须继续更新检查。
  */
 export function migrateLegacyAgentWorkspaceProjectDirectories(): void {
@@ -598,6 +613,10 @@ export function migrateLegacyAgentWorkspaceProjectDirectories(): void {
         continue
       }
       migrateLegacyProjectDirectory(sourceRoot, workspace.slug)
+      removeLegacyRootContextDirectory(sourceRoot, workspace.slug)
+      if (workspace.projectPath) {
+        removeLegacyRootContextDirectory(workspace.projectPath, workspace.slug)
+      }
     } catch (error) {
       console.warn(`[Agent 工作区] 旧项目迁移失败，继续处理更新 (${workspace.slug}):`, error)
     }
@@ -617,6 +636,14 @@ export function ensureAgentWorkspaceContextDir(
 ): string | undefined {
   if (workspace.projectRootPath && getLocalProjectRootStatus(workspace.projectRootPath) !== 'available') {
     return undefined
+  }
+
+  // 兼容性清理：根目录直接存在的 .context 属于旧版残留，需自动清理（长期上下文位于 copis/.context）
+  if (workspace.projectRootPath) {
+    removeLegacyRootContextDirectory(workspace.projectRootPath, workspace.slug)
+  }
+  if (workspace.projectPath) {
+    removeLegacyRootContextDirectory(workspace.projectPath, workspace.slug)
   }
 
   const contextDir = getAgentWorkspaceContextDir(workspace)
@@ -827,7 +854,7 @@ export function deleteAgentWorkspace(id: string): void {
 
   const target = index.workspaces[idx]!
   if (target.slug === 'default') {
-    throw new Error('默认项目不能删除')
+    throw new Error('默认工作区不能删除')
   }
 
   const workspacesRoot = resolve(getAgentWorkspacesDir())
@@ -855,14 +882,14 @@ export function deleteAgentWorkspace(id: string): void {
   console.log(`[Agent 工作区] 已删除工作区: ${removed.name} (slug: ${removed.slug})`)
 }
 
-/** 确保默认项目的本地根目录存在且可读取。 */
+/** 确保默认工作区的本地根目录存在且可读取。 */
 function ensureDefaultProjectRootPath(): string {
   const projectRootPath = getDefaultProjectRootPath()
   mkdirSync(projectRootPath, { recursive: true })
 
   const status = getLocalProjectRootStatus(projectRootPath)
   if (status !== 'available') {
-    throw new Error(`默认项目目录不可用: ${projectRootPath}（${status ?? 'unknown'}）`)
+    throw new Error(`默认工作区目录不可用: ${projectRootPath}（${status ?? 'unknown'}）`)
   }
 
   return realpathSync(resolve(projectRootPath))
@@ -878,7 +905,7 @@ export function ensureDefaultWorkspace(): AgentWorkspace {
     const projectRootPath = ensureDefaultProjectRootPath()
     defaultWs = {
       id: randomUUID(),
-      name: '默认项目',
+      name: '默认工作区',
       slug: 'default',
       projectRootPath,
       projectPath: join(projectRootPath, COPIS_PROJECT_DIR),
@@ -893,11 +920,16 @@ export function ensureDefaultWorkspace(): AgentWorkspace {
     index.workspaces.push(defaultWs)
     writeIndex(index)
 
-    console.log('[Agent 工作区] 已创建默认项目')
+    console.log('[Agent 工作区] 已创建默认工作区')
   } else {
     let needsWrite = false
 
-    // 旧版本默认项目没有本地项目根，迁移到用户文稿下的 Copis 目录。
+    if (defaultWs.name === '默认项目') {
+      defaultWs.name = '默认工作区'
+      needsWrite = true
+    }
+
+    // 旧版本默认工作区没有本地项目根，迁移到用户文稿下的 Copis 目录。
     // 已经重新关联过其他目录的用户配置保持不变。
     if (!defaultWs.projectRootPath) {
       defaultWs.projectRootPath = ensureDefaultProjectRootPath()
@@ -915,7 +947,7 @@ export function ensureDefaultWorkspace(): AgentWorkspace {
     if (needsWrite) {
       defaultWs.updatedAt = Date.now()
       writeIndex(index)
-      console.log(`[Agent 工作区] 已迁移默认项目: ${defaultWs.projectRootPath}`)
+      console.log(`[Agent 工作区] 已迁移默认工作区: ${defaultWs.projectRootPath}`)
     }
   }
 

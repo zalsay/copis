@@ -35,7 +35,7 @@ interface VipBenefitRow {
 
 const VIP_BENEFITS: readonly VipBenefitRow[] = [
   { label: '钻石消耗', free: '标准消耗', vip: '节省 20%' },
-  { label: '工作区限制', free: '默认项目外 1 个', vip: '不限' },
+  { label: '工作区限制', free: '默认工作区外 1 个', vip: '不限' },
   { label: '专家团队', free: '不可用', vip: '可使用' },
   { label: '定时任务', free: '不可用', vip: '可使用' },
 ]

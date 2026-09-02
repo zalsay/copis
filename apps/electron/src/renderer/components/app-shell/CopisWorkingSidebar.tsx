@@ -351,7 +351,7 @@ export function CopisWorkingSidebar({ width, noTransition = false }: CopisWorkin
   const requestRemoveWorkspace = (workspaceId: string): void => {
     const workspace = localWorkspaces.find((item) => item.id === workspaceId)
     if (!workspace || workspace.slug === 'default') {
-      toast.error('默认项目不能删除')
+      toast.error('默认工作区不能删除')
       return
     }
     setPendingDeleteWorkspace({ id: workspace.id, name: workspace.name })

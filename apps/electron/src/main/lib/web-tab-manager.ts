@@ -837,7 +837,7 @@ export function openWebBookmarksWindow(input: OpenWebBookmarksWindowInput): void
     }
   })()).catch((error: unknown) => {
     console.error('[网页收藏夹] 浮层窗口加载失败:', error)
-    closeWebBookmarksWindow()
+    closeWebBookmarksWindow(true)
   })
 }
 
@@ -854,12 +854,21 @@ export function resizeWebBookmarksWindow(input: ResizeWebBookmarksWindowInput): 
   positionBookmarksWindow()
 }
 
-/** 关闭原生收藏夹浮层。 */
-export function closeWebBookmarksWindow(): void {
+/** 关闭原生收藏夹浮层。默认隐藏以保持预热极速弹出；destroy 为 true 时真正销毁。 */
+export function closeWebBookmarksWindow(destroy = false): void {
   const window = bookmarksWindow
-  bookmarksWindow = null
-  bookmarksWindowState = null
-  if (window && !window.isDestroyed()) window.close()
+  if (!window || window.isDestroyed()) {
+    bookmarksWindow = null
+    bookmarksWindowState = null
+    return
+  }
+  if (destroy) {
+    bookmarksWindow = null
+    bookmarksWindowState = null
+    window.close()
+  } else {
+    window.hide()
+  }
 }
 
 function clearIncognitoSession(record: WebTabRecord): void {
@@ -884,7 +893,7 @@ export function saveWebTabsSession(): void {
 /** 释放所有网页页签及原生视图。 */
 export function disposeWebTabs(): void {
   isDisposingWebTabs = true
-  closeWebBookmarksWindow()
+  closeWebBookmarksWindow(true)
   const currentHost = hostWindow
   hostWindow = null
   activeTabId = null

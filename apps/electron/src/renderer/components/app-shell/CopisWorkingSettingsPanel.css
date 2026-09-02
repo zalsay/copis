@@ -14,110 +14,107 @@
 }
 
 .copis-working-settings-sidebar {
-  display: flex;
-  flex-direction: column;
-  width: 252px;
-  min-width: 252px;
-  gap: 22px;
-  padding: 24px 14px 16px;
-  border-right: 1px solid hsl(var(--border) / 0.72);
-  background: hsl(var(--sidebar-surface));
-}
-
-.copis-working-settings-account {
-  display: flex;
-  min-width: 0;
-  align-items: center;
-  gap: 10px;
-  padding: 4px 8px;
-}
-
-.copis-working-settings-account-icon {
-  display: grid;
-  flex: 0 0 34px;
-  width: 34px;
-  height: 34px;
-  place-items: center;
-  border-radius: 8px;
-  background: var(--ui-primary-background);
-  color: var(--ui-primary);
-}
-
-.copis-working-settings-account-icon svg {
-  width: 17px;
-  height: 17px;
-}
-
-.copis-working-settings-account-copy {
-  display: flex;
-  min-width: 0;
-  flex-direction: column;
-  gap: 2px;
-}
-
-.copis-working-settings-account-copy strong,
-.copis-working-settings-account-copy span {
+  box-sizing: border-box;
+  min-height: 100%;
+  height: 100%;
+  padding: 12px 12px 0;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 300px;
+  min-width: 300px;
+  background: hsl(var(--muted));
+  color: hsl(var(--foreground));
+  border-radius: 0;
 }
 
-.copis-working-settings-account-copy strong {
-  font-size: 13px;
-  font-weight: 650;
-}
-
-.copis-working-settings-account-copy span {
-  color: hsl(var(--muted-foreground));
-  font-size: 11px;
+.copis-working-settings-sidebar-body {
+  min-height: 0;
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  scrollbar-width: thin;
+  scrollbar-color: hsl(var(--foreground) / 0.2) transparent;
 }
 
 .copis-working-settings-nav {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 2px;
+}
+
+.copis-working-settings-nav-divider {
+  height: 1px;
+  margin: 4px 0;
+  background: hsl(var(--border) / 0.4);
 }
 
 .copis-working-settings-nav-button {
-  position: relative;
-  display: flex;
   width: 100%;
-  min-height: 40px;
-  align-items: center;
-  gap: 10px;
-  padding: 0 11px;
+  min-width: 0;
   border: 0;
-  border-radius: 8px;
   background: transparent;
-  color: hsl(var(--muted-foreground));
-  font: inherit;
-  font-size: 13px;
-  font-weight: 600;
+  color: hsl(var(--foreground));
   text-align: left;
   cursor: pointer;
+  min-height: 31px;
+  padding: 5px 8px;
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  border-radius: 7px;
+  font-size: 14px;
+  font-weight: 400;
+  line-height: 1.25;
 }
 
 .copis-working-settings-nav-button:hover,
+.copis-working-settings-nav-button:focus-visible {
+  background: hsl(var(--foreground) / 0.07);
+  outline: 0;
+}
+
 .copis-working-settings-nav-button.active {
   background: var(--ui-primary-background);
-  color: hsl(var(--foreground));
+  color: var(--ui-primary);
+  font-weight: 600;
 }
 
 .copis-working-settings-nav-button svg {
-  flex: 0 0 17px;
-  width: 17px;
-  height: 17px;
+  width: 15px;
+  height: 15px;
+  color: hsl(var(--muted-foreground));
+}
+
+.copis-working-settings-nav-button.active > svg {
+  color: var(--ui-primary);
+}
+
+.copis-working-settings-nav-label-wrap {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-width: 0;
+  width: 100%;
+}
+
+.copis-working-settings-nav-label-wrap span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .copis-working-settings-nav-update-dot {
-  position: absolute;
-  top: 50%;
-  right: 10px;
-  width: 8px;
-  height: 8px;
+  width: 7px;
+  height: 7px;
   border-radius: 50%;
-  background: hsl(var(--destructive));
-  transform: translateY(-50%);
+  background: var(--ui-primary);
+  flex-shrink: 0;
+  margin-left: 6px;
 }
 
 .copis-working-settings-main {

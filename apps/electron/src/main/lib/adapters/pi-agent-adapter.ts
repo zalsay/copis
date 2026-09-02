@@ -37,6 +37,13 @@ import {
   THINKING_SIGNATURE_ERROR_MESSAGE,
   THINKING_SIGNATURE_ERROR_TITLE,
   isThinkingSignatureError as matchesThinkingSignatureError,
+  OPENAI_400_FRIENDLY_MESSAGE,
+  OPENAI_400_ERROR_TITLE,
+  HTTP_STATUS_ERROR_MAP,
+  extractHttpStatusFromErrorText as matchesExtractHttpStatusFromErrorText,
+  is400ApiError as matchesIs400ApiError,
+  isPromptTooLongError as matchesPromptTooLongError,
+  friendlyErrorMessage as sharedFriendlyErrorMessage,
 } from '@copis/shared'
 import type { CanUseToolOptions, PermissionResult } from '../agent-permission-service'
 import { TRANSIENT_NETWORK_PATTERN, isMalformedResponseError } from '../error-patterns'
@@ -363,8 +370,12 @@ const FRIENDLY_ERROR_MESSAGES: Array<{ pattern: RegExp; message: string }> = [
     message: '请检查是否选择了正确的 Copis 供应渠道和模型',
   },
   {
+    pattern: /(?:(?:OpenAI|OpenAl)\s+)?API\s+(?:error|错误|Error)(?:\s*\(\s*400\s*\)|:\s*400|\s+400\b)|\b400\s+Bad\s+Request|\b400\s+\{[^}]*"error"|invalid_request_error.*400/i,
+    message: '模型调用失败 (400)：API 请求参数或上下文格式异常，建议开启新会话解决。',
+  },
+  {
     pattern: /validation|schema/i,
-    message: 'API 请求格式校验失败，请重试或开启新会话',
+    message: 'API 请求格式校验失败，建议开启新会话解决。',
   },
 ]
 
@@ -446,14 +457,7 @@ async function waitForActiveSession(active: ActivePiSession): Promise<AgentSessi
 }
 
 export function friendlyErrorMessage(raw: string): string {
-  const isLong = raw.length > MAX_ERROR_MESSAGE_LENGTH
-  const sample = isLong ? raw.slice(0, MAX_ERROR_MESSAGE_LENGTH) : raw
-  for (const { pattern, message } of FRIENDLY_ERROR_MESSAGES) {
-    if (pattern.test(sample)) return message
-  }
-  return isLong
-    ? sample + `\n\n[错误详情过长 (${(raw.length / 1024).toFixed(0)}KB)，已截断]`
-    : raw
+  return sharedFriendlyErrorMessage(raw)
 }
 
 export function isPromptTooLongError(...messages: Array<string | undefined>): boolean {
@@ -461,7 +465,7 @@ export function isPromptTooLongError(...messages: Array<string | undefined>): bo
     .filter((message): message is string => typeof message === 'string')
     .join(' ')
     .toLowerCase()
-  return PROMPT_TOO_LONG_PATTERNS.some((pattern) => text.includes(pattern))
+  return matchesPromptTooLongError(text)
 }
 
 export function isThinkingSignatureError(message: string, originalError?: string): boolean {
@@ -511,21 +515,21 @@ export function extractErrorDetails(error: {
     ? error.errors.map((item) => stringifyErrorContent(item)).filter(Boolean).join('\n')
     : undefined
   if (fromErrors) return { detailedMessage: fromErrors, originalError: fromErrors }
-  return { detailedMessage: 'Agent 执行失败', originalError: undefined }
+  return { detailedMessage: 'Agent 执行失败，请重试。', originalError: undefined }
 }
 
 /** 各错误码对应的标题与是否可重试（用于构建差异化 TypedError） */
 const ERROR_CODE_META: Partial<Record<ErrorCode, { title: string; canRetry: boolean }>> = {
   invalid_api_key: { title: '认证失败', canRetry: true },
-  billing_error: { title: '账单错误', canRetry: false },
+  billing_error: { title: '账单错误', canRetry: true },
   rate_limited: { title: '请求频率限制', canRetry: true },
   prompt_too_long: { title: '上下文过长', canRetry: false },
-  invalid_request: { title: '请求无效', canRetry: false },
+  invalid_request: { title: OPENAI_400_ERROR_TITLE, canRetry: true },
   service_unavailable: { title: '服务暂时不可用', canRetry: true },
   service_error: { title: '服务错误', canRetry: true },
   provider_error: { title: '服务繁忙', canRetry: true },
   network_error: { title: '网络异常', canRetry: true },
-  invalid_model: { title: '模型不可用', canRetry: false },
+  invalid_model: { title: '模型不可用', canRetry: true },
   agent_runtime_not_found: { title: 'Agent 核心未就绪', canRetry: false },
 }
 
@@ -543,19 +547,7 @@ export function isRuntimeNotFoundError(text: string): boolean {
 
 /** 从错误文本中兜底提取 HTTP 状态码（锚定在明确的状态码上下文，避免误匹配正文数字） */
 function extractHttpStatusFromErrorText(...messages: Array<string | undefined>): number | null {
-  const combined = messages.filter(Boolean).join('\n')
-  const patterns = [
-    /API Error:\s*(\d{3})/i,
-    /API error[^:]*:\s+(\d{3})/i,
-    /\b(?:HTTP|status|statusCode)\s*[:=]?\s*(\d{3})\b/i,
-    /\b(\d{3})\s+\{[^}]*"error"/is,
-  ]
-  for (const pattern of patterns) {
-    const match = combined.match(pattern)
-    const statusCode = match?.[1] ? parseInt(match[1], 10) : NaN
-    if (statusCode >= 400 && statusCode < 600) return statusCode
-  }
-  return null
+  return matchesExtractHttpStatusFromErrorText(...messages)
 }
 
 export function mapSDKErrorToTypedError(errorCode: string, message: string, originalError?: string): TypedError {
@@ -603,7 +595,7 @@ export function mapSDKErrorToTypedError(errorCode: string, message: string, orig
   } else if (httpStatus === 500 || httpStatus === 502 || (httpStatus != null && httpStatus >= 500)) {
     // HTTP 5xx（含 500 内部错误 / 502 网关异常）通常为上游瞬时故障，可重试
     code = 'service_error'
-  } else if (/invalid request|bad request|400|schema|validation/i.test(diagnosticText)) {
+  } else if (/invalid request|bad request|400|schema|validation/i.test(diagnosticText) || httpStatus === 400 || matchesIs400ApiError(diagnosticText)) {
     code = 'invalid_request'
   } else if (/network|fetch|socket|terminated|ECONNRESET/i.test(diagnosticText)) {
     code = 'network_error'
@@ -611,25 +603,37 @@ export function mapSDKErrorToTypedError(errorCode: string, message: string, orig
     code = 'invalid_model'
   }
 
-  const meta = ERROR_CODE_META[code] ?? { title: 'Agent 执行失败', canRetry: false }
+  const is400 = httpStatus === 400 || code === 'invalid_request' || matchesIs400ApiError(diagnosticText)
+  const statusMeta = httpStatus != null ? HTTP_STATUS_ERROR_MAP[httpStatus] : undefined
+  const meta = ERROR_CODE_META[code] ?? { title: '服务错误', canRetry: true }
+  const title = is400
+    ? OPENAI_400_ERROR_TITLE
+    : statusMeta?.title ?? meta.title
+  const messageText = is400
+    ? OPENAI_400_FRIENDLY_MESSAGE
+    : statusMeta?.message ?? friendlyErrorMessage(message)
+
   // 认证/渠道配置类错误友好化后文案固定，引导用户直接重新选择模型，而非跳转设置
-  const isInvalidChannelOrModel = /请检查是否选择了正确的 Copis 供应渠道和模型/.test(message)
+  const isInvalidChannelOrModel = /请检查是否选择了正确的 Copis 供应渠道和模型/.test(messageText)
 
   const actions: RecoveryAction[] = [
     isInvalidChannelOrModel
       ? { key: 'm', label: '重新选择模型', action: 'select_model' }
       : { key: 's', label: '设置', action: 'settings' },
-    ...(meta.canRetry ? [{ key: 'r', label: '重试', action: 'retry' }] : []),
-    ...(code === 'prompt_too_long' ? [{ key: 'c', label: '压缩上下文', action: 'compact' }] : []),
+    ...(is400 || code === 'invalid_request'
+      ? [{ key: 'n', label: '在新对话继续', action: 'retry_in_new_session' as const }]
+      : []),
+    ...(meta.canRetry || is400 ? [{ key: 'r', label: '重试', action: 'retry' as const }] : []),
+    ...(code === 'prompt_too_long' ? [{ key: 'c', label: '压缩上下文', action: 'compact' as const }, { key: 'n', label: '在新对话继续', action: 'retry_in_new_session' as const }] : []),
   ]
 
   return {
     code,
-    title: meta.title,
-    message,
+    title,
+    message: messageText,
     actions,
-    canRetry: meta.canRetry,
-    retryDelayMs: meta.canRetry ? 1000 : undefined,
+    canRetry: meta.canRetry || is400,
+    retryDelayMs: (meta.canRetry || is400) ? 1000 : undefined,
     originalError,
   }
 }

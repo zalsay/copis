@@ -92,7 +92,7 @@ describe('Agent 工作区 MCP 配置', () => {
 })
 
 describe('项目术语迁移', () => {
-  test('Given 新安装 When 创建默认项目 Then 初始化同级 project 与 copis 受控目录', () => {
+  test('Given 新安装 When 创建默认工作区 Then 初始化同级 project 与 copis 受控目录', () => {
     const defaultSkillsDir = configPaths.getDefaultSkillsDir()
     const officialSkillDir = join(defaultSkillsDir, 'alipay-payment-skill')
     const retiredSkillDir = join(defaultSkillsDir, 'alipay-ai-buyer-agent')
@@ -104,7 +104,7 @@ describe('项目术语迁移', () => {
     const workspace = manager.ensureDefaultWorkspace()
     const expectedProjectRootPath = realpathSync(join(tempHome, 'Documents', 'Copis'))
 
-    expect(workspace.name).toBe('默认项目')
+    expect(workspace.name).toBe('默认工作区')
     expect(workspace.projectRootPath).toBe(expectedProjectRootPath)
     expect(workspace.projectPath).toBe(join(expectedProjectRootPath, 'project'))
     expect(existsSync(workspace.projectRootPath!)).toBe(true)
@@ -115,7 +115,7 @@ describe('项目术语迁移', () => {
     expect(existsSync(join(configPaths.getWorkspaceSkillsDir('default'), 'alipay-ai-buyer-agent'))).toBe(false)
   })
 
-  test('Given 旧版本默认项目缺少本地根目录 When 启动迁移 Then 补齐同级受控目录配置', () => {
+  test('Given 旧版本默认项目缺少本地根目录 When 启动迁移 Then 补齐同级受控目录配置并将名称迁移为默认工作区', () => {
     const legacyWorkspace = {
       id: 'legacy-default-id',
       name: '默认项目',
@@ -132,18 +132,20 @@ describe('项目术语迁移', () => {
     const workspace = manager.ensureDefaultWorkspace()
     const expectedProjectRootPath = realpathSync(join(tempHome, 'Documents', 'Copis'))
     const persisted = JSON.parse(readFileSync(configPaths.getAgentWorkspacesIndexPath(), 'utf-8')) as {
-      workspaces: Array<{ id: string; projectRootPath?: string; projectPath?: string; allowWorkspaceWrite?: boolean }>
+      workspaces: Array<{ id: string; name?: string; projectRootPath?: string; projectPath?: string; allowWorkspaceWrite?: boolean }>
     }
 
     expect(workspace.id).toBe('legacy-default-id')
+    expect(workspace.name).toBe('默认工作区')
     expect(workspace.projectRootPath).toBe(expectedProjectRootPath)
     expect(workspace.projectPath).toBe(join(expectedProjectRootPath, 'project'))
+    expect(persisted.workspaces[0]?.name).toBe('默认工作区')
     expect(persisted.workspaces[0]?.projectRootPath).toBe(expectedProjectRootPath)
     expect(persisted.workspaces[0]?.projectPath).toBe(join(expectedProjectRootPath, 'project'))
     expect(persisted.workspaces[0]?.allowWorkspaceWrite).toBeUndefined()
   })
 
-  test('Given 已有默认项目仍加载旧支付宝买家 Skill When 升级默认 Skills Then 注入官方支付 Skill 并移除旧 Skill', () => {
+  test('Given 已有默认工作区仍加载旧支付宝买家 Skill When 升级默认 Skills Then 注入官方支付 Skill 并移除旧 Skill', () => {
     const workspace = manager.ensureDefaultWorkspace()
     const defaultSkillsDir = configPaths.getDefaultSkillsDir()
     const officialSkillDir = join(defaultSkillsDir, 'alipay-payment-skill')
@@ -159,7 +161,7 @@ describe('项目术语迁移', () => {
     expect(existsSync(join(activeSkillsDir, 'alipay-ai-buyer-agent'))).toBe(false)
   })
 
-  test('Given 默认项目保留旧版支付宝支付 Skill When 升级默认 Skills Then 覆盖为当前规则', () => {
+  test('Given 默认工作区保留旧版支付宝支付 Skill When 升级默认 Skills Then 覆盖为当前规则', () => {
     const workspace = manager.ensureDefaultWorkspace()
     const defaultSkillsDir = configPaths.getDefaultSkillsDir()
     const officialSkillDir = join(defaultSkillsDir, 'alipay-payment-skill')
@@ -310,6 +312,20 @@ describe('Agent 工作区创建', () => {
     if (!contextDir) throw new Error('项目级 Context 路径未初始化')
     expect(existsSync(contextDir)).toBe(true)
     expect(existsSync(join(projectRootPath, '.context'))).toBe(false)
+  })
+
+  test('Given 本地项目根目录已存在旧 .context 目录 When 确保项目级 Context Then 自动删除根目录下的 .context 且保留 copis/.context', () => {
+    const projectRootPath = join(tempHome, 'legacy-root-context-project')
+    const legacyRootContext = join(projectRootPath, '.context')
+    mkdirSync(legacyRootContext, { recursive: true })
+    writeFileSync(join(legacyRootContext, 'old.md'), 'old content', 'utf-8')
+
+    const workspace = manager.createAgentWorkspace({ name: '旧根Context项目', projectRootPath })
+    const contextDir = manager.ensureAgentWorkspaceContextDir(workspace)
+
+    expect(contextDir).toBe(join(workspace.projectRootPath!, 'copis', '.context'))
+    expect(existsSync(contextDir!)).toBe(true)
+    expect(existsSync(legacyRootContext)).toBe(false)
   })
 
   test('Given 本地项目 When 创建工作区 Then 默认使用同级 project 开发目录', () => {
@@ -486,6 +502,40 @@ describe('Agent 工作区创建', () => {
     expect(existsSync(legacyProjectPath)).toBe(true)
     expect(existsSync(join(outsideRoot, 'outside.txt'))).toBe(true)
     expect(existsSync(join(projectRootPath, 'project'))).toBe(false)
+  })
+
+  test('Given 工作区根目录与会话目录存在旧 .context When 执行工作区迁移 Then 自动删除根目录下的 .context 并保留会话目录下的 .context', () => {
+    const slug = 'context-cleanup-workspace'
+    const projectRootPath = join(tempHome, 'context-cleanup-project')
+    const rootContext = join(projectRootPath, '.context')
+    const sessionDir = join(tempHome, '.copis', 'agent-workspaces', slug, 'session-123')
+    const sessionContext = join(sessionDir, '.context')
+
+    mkdirSync(rootContext, { recursive: true })
+    mkdirSync(sessionContext, { recursive: true })
+    writeFileSync(join(rootContext, 'legacy.md'), 'root', 'utf-8')
+    writeFileSync(join(sessionContext, 'todo.md'), 'session', 'utf-8')
+
+    writeFileSync(
+      configPaths.getAgentWorkspacesIndexPath(),
+      JSON.stringify({
+        version: 3,
+        workspaces: [{
+          id: 'cleanup-id',
+          name: '清理上下文测试项目',
+          slug,
+          projectRootPath,
+          createdAt: 1,
+          updatedAt: 1,
+        }],
+      }),
+      'utf-8',
+    )
+
+    manager.migrateLegacyAgentWorkspaceProjectDirectories()
+
+    expect(existsSync(rootContext)).toBe(false)
+    expect(existsSync(sessionContext)).toBe(true)
   })
 
   test('Given 项目名称是 Windows 保留设备名 When 创建工作区 Then slug 避免直接使用保留名', () => {

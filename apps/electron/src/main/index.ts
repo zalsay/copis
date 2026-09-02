@@ -93,7 +93,7 @@ import { ensureRustHttpApiServerReady, stopHttpApiServer } from './lib/http-api-
 import { createTray, destroyTray, getTray } from './tray'
 import { initializeRuntime } from './lib/runtime-init'
 import { seedDefaultSkills } from './lib/config-paths'
-import { ensureDefaultWorkspace, upgradeDefaultSkillsInWorkspaces } from './lib/agent-workspace-manager'
+import { ensureDefaultWorkspace, upgradeDefaultSkillsInWorkspaces, migrateLegacyAgentWorkspaceProjectDirectories } from './lib/agent-workspace-manager'
 import { hasActiveAgentSessions, stopAllAgents, cleanupAgentRuntimeResources } from './lib/agent-service'
 import { disposePiMcpConnections } from './lib/adapters/pi-mcp-tools'
 import { markRunningDelegationsAsInterrupted } from './lib/agent-session-manager'
@@ -522,8 +522,8 @@ async function bootstrap(): Promise<void> {
   // 启动早期幂等清理旧 Chat 数据，避免旧目录被后续初始化重新创建。
   safeRun('cleanupLegacyChatData', cleanupLegacyChatData)
 
-  // 确保默认 Agent 项目绑定到用户文稿下的 Copis 目录，并允许 Agent 写入。
-  // 同时固定新会话的默认项目，避免渲染进程只依赖工作区列表顺序。
+  // 确保默认工作区绑定到用户文稿下的 Copis 目录，并允许 Agent 写入。
+  // 同时固定新会话的默认工作区，避免渲染进程只依赖工作区列表顺序。
   safeRun('ensureDefaultWorkspace', () => {
     const defaultWorkspace = ensureDefaultWorkspace()
     if (getSettings().agentWorkspaceId !== defaultWorkspace.id) {
@@ -533,6 +533,9 @@ async function bootstrap(): Promise<void> {
 
   // 升级所有工作区中版本过旧的默认 Skills
   safeRun('upgradeDefaultSkillsInWorkspaces', upgradeDefaultSkillsInWorkspaces)
+
+  // 迁移所有工作区的旧 project 目录并清理旧根目录 .context 残留
+  safeRun('migrateLegacyAgentWorkspaceProjectDirectories', migrateLegacyAgentWorkspaceProjectDirectories)
 
   // Create application menu
   const menu = createApplicationMenu()

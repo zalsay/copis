@@ -42,7 +42,7 @@ describe('Working 支付视觉契约', () => {
     expect(paymentSource).not.toContain('云盘容量')
     expect(paymentSource).not.toContain('会话等待')
     expect(paymentSource).not.toContain('高峰期排队')
-    expect(paymentSource).toContain("{ label: '工作区限制', free: '默认项目外 1 个', vip: '不限' }")
+    expect(paymentSource).toContain("{ label: '工作区限制', free: '默认工作区外 1 个', vip: '不限' }")
     expect(paymentSource).toContain("{ label: '专家团队', free: '不可用', vip: '可使用' }")
     expect(paymentSource).toContain("{ label: '定时任务', free: '不可用', vip: '可使用' }")
     expect(paymentSource).toContain('解锁专家团队和定时任务。')
@@ -61,7 +61,7 @@ describe('Working 支付视觉契约', () => {
     expect(paymentSource).toContain('待支付订单已失效，请重新选择套餐。')
   })
 
-  test('Given VIP 支付会话创建成功 When 进入默认项目对话 Then 关闭 VIP 弹窗', () => {
+  test('Given VIP 支付会话创建成功 When 进入默认工作区对话 Then 关闭 VIP 弹窗', () => {
     expect(paymentSource).toContain('await onStartVipUpgrade()\n      handleClose()')
   })
 })

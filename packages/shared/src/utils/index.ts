@@ -38,6 +38,18 @@ export {
   formatThinkingSignatureError,
   normalizeThinkingSignatureError,
 } from './thinking-signature-error'
+export {
+  OPENAI_400_FRIENDLY_MESSAGE,
+  OPENAI_400_ERROR_TITLE,
+  HTTP_STATUS_ERROR_MAP,
+  extractHttpStatusFromErrorText,
+  is400ApiError,
+  isPromptTooLongError,
+  isTransientNetworkErrorText,
+  isMalformedResponseErrorText,
+  friendlyErrorMessage,
+  type HttpStatusErrorDetail,
+} from './agent-error-format'
 export { normalizePathForCompare } from './normalize-path'
 export {
   AUTOMATION_OCCURRENCE_SAMPLES_PER_DAY,

@@ -44,13 +44,13 @@ export function buildCopisVipUpgradePrompt(): string {
 
 function findDefaultWorkspace(workspaces: readonly AgentWorkspace[]): AgentWorkspace | undefined {
   return workspaces.find((workspace) => workspace.slug === DEFAULT_WORKSPACE_SLUG)
-    ?? workspaces.find((workspace) => workspace.name === '默认项目')
+    ?? workspaces.find((workspace) => workspace.name === '默认工作区' || workspace.name === '默认项目')
 }
 
 export type StartCopisDiamondPurchase = (packageValue: WorkingDiamondPackage) => Promise<void>
 export type StartCopisVipUpgrade = () => Promise<void>
 
-/** 在独立的默认项目会话中提交已确认的钻石套餐，避免打断用户正在进行的项目对话。 */
+/** 在独立的默认工作区会话中提交已确认的钻石套餐，避免打断用户正在进行的项目对话。 */
 export function useStartCopisDiamondPurchase(): StartCopisDiamondPurchase {
   const startPurchaseConversation = useStartCopisPurchaseConversation()
 
@@ -84,7 +84,7 @@ function useStartCopisPurchaseConversation(): StartCopisPurchaseConversation {
 
     const workspaces = await window.electronAPI.listAgentWorkspaces()
     const workspace = findDefaultWorkspace(workspaces)
-    if (!workspace) throw new Error('未找到默认项目，无法发起支付对话')
+    if (!workspace) throw new Error('未找到默认工作区，无法发起支付对话')
 
     setAgentWorkspaces(workspaces)
     setCurrentWorkspaceId(workspace.id)

@@ -76,8 +76,8 @@ import type {
   SDKToolUseBlock,
   SDKToolResultBlock,
   RecoveryAction,
+  AgentPendingFile,
 } from '@copis/shared'
-import type { AgentPendingFile } from '@copis/shared'
 import {
   getSDKCompactStatus,
   inferAgentContextWindow,
@@ -86,6 +86,12 @@ import {
   THINKING_SIGNATURE_ERROR_TITLE,
   THINKING_SIGNATURE_ERROR_MESSAGE,
   isThinkingSignatureError,
+  HTTP_STATUS_ERROR_MAP,
+  extractHttpStatusFromErrorText,
+  is400ApiError,
+  OPENAI_400_ERROR_TITLE,
+  OPENAI_400_FRIENDLY_MESSAGE,
+  friendlyErrorMessage,
 } from '@copis/shared'
 import type { ToolActivity } from '@/atoms/agent-atoms'
 
@@ -1137,8 +1143,23 @@ export function AssistantErrorTail({
   const bodyText = errorText
   const isThinkingSignature = errorCode === THINKING_SIGNATURE_ERROR_CODE ||
     isThinkingSignatureError(bodyText, errorText)
-  const displayTitle = errorTitle ?? (isThinkingSignature ? THINKING_SIGNATURE_ERROR_TITLE : undefined)
-  const displayContentText = isThinkingSignature ? THINKING_SIGNATURE_ERROR_MESSAGE : bodyText
+  const httpStatus = extractHttpStatusFromErrorText(bodyText, errorText)
+  const is400Error = errorCode === 'invalid_request' || httpStatus === 400 || is400ApiError(bodyText, errorText)
+  const statusMeta = httpStatus != null ? HTTP_STATUS_ERROR_MAP[httpStatus] : undefined
+  const displayTitle = errorTitle ?? (
+    isThinkingSignature ? THINKING_SIGNATURE_ERROR_TITLE :
+    is400Error ? OPENAI_400_ERROR_TITLE :
+    statusMeta?.title ?? undefined
+  )
+  let displayContentText = isThinkingSignature
+    ? THINKING_SIGNATURE_ERROR_MESSAGE
+    : is400Error
+      ? OPENAI_400_FRIENDLY_MESSAGE
+      : statusMeta?.message ?? friendlyErrorMessage(bodyText)
+
+  if (is400Error && !displayContentText.includes('建议开启新会话解决')) {
+    displayContentText = OPENAI_400_FRIENDLY_MESSAGE
+  }
   const displayedErrorActions = (errorActions ?? []).filter((action) => {
     if (action.action === 'retry' && !onRetry) return false
     if (action.action === 'compact' && !onCompact) return false
@@ -1296,13 +1317,23 @@ export function AssistantErrorTail({
               在新对话继续
             </Button>
           )}
+          {!hasStructuredActions && is400Error && onRetryInNewSession && (
+            <Button
+              size="sm"
+              onClick={onRetryInNewSession}
+              title="新建对话并引用当前会话继续"
+            >
+              <Plus className="size-3.5 mr-1.5" />
+              在新对话继续
+            </Button>
+          )}
           {!hasStructuredActions && onRetry && (
-            <Button size="sm" variant={isPromptTooLong || isThinkingSignature ? 'outline' : 'default'} onClick={() => onRetry(typeof message.uuid === 'string' ? message.uuid : undefined)}>
+            <Button size="sm" variant={isPromptTooLong || isThinkingSignature || is400Error ? 'outline' : 'default'} onClick={() => onRetry(typeof message.uuid === 'string' ? message.uuid : undefined)}>
               <RotateCw className="size-3.5 mr-1.5" />
               重试
             </Button>
           )}
-          {!hasStructuredActions && !isThinkingSignature && onRetryInNewSession && (
+          {!hasStructuredActions && !isThinkingSignature && !is400Error && onRetryInNewSession && (
             <Button
               size="sm"
               variant="outline"

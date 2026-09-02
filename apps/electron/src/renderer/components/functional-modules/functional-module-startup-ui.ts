@@ -24,7 +24,7 @@ export const STARTUP_MODULE_ROWS: readonly StartupModuleRow[] = [
   {
     name: 'alipay-bot',
     displayName: '支付宝智能体 CLI',
-    description: '为默认项目提供支付宝付款能力',
+    description: '为默认工作区提供支付宝付款能力',
   },
   {
     name: 'playwright-core',

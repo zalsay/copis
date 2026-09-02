@@ -329,21 +329,26 @@ export function WebTabBar(): React.ReactElement {
 
 function WebHomeTab({ active, onClick }: { active: boolean; onClick: () => void }): React.ReactElement {
   return (
-    <button
-      type="button"
-      aria-label="打开 Copis 首页"
-      aria-current={active ? 'page' : undefined}
-      className={cn(
-        'web-tab-shape titlebar-no-drag group relative mb-0 flex h-[34px] min-w-[144px] max-w-[220px] shrink-0 items-center gap-2 px-3 text-xs transition-colors',
-        active
-          ? 'bg-muted text-foreground shadow-[0_-1px_0_hsl(var(--border)/0.6)]'
-          : 'bg-content-area text-muted-foreground hover:bg-accent/70 hover:text-foreground',
-      )}
-      onClick={onClick}
-    >
-      <img src={CopisLogo} alt="" className="size-3.5 shrink-0 rounded object-cover" />
-      <span className="min-w-0 flex-1 truncate text-left font-medium">Copis 首页</span>
-    </button>
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <button
+          type="button"
+          aria-label="打开 Copis 首页"
+          aria-current={active ? 'page' : undefined}
+          className={cn(
+            'web-tab-shape titlebar-no-drag group relative mb-0 flex h-[34px] min-w-[36px] max-w-[180px] flex-1 items-center gap-2 px-2.5 text-xs transition-colors',
+            active
+              ? 'bg-muted text-foreground shadow-[0_-1px_0_hsl(var(--border)/0.6)]'
+              : 'bg-content-area text-muted-foreground hover:bg-accent/70 hover:text-foreground',
+          )}
+          onClick={onClick}
+        >
+          <img src={CopisLogo} alt="" className="size-3.5 shrink-0 rounded object-cover" />
+          <span className="min-w-0 flex-1 truncate text-left font-medium">Copis 首页</span>
+        </button>
+      </TooltipTrigger>
+      <TooltipContent side="bottom">Copis 首页</TooltipContent>
+    </Tooltip>
   )
 }
 
@@ -405,50 +410,62 @@ function WebTabItem({
     onClose()
   }
 
+  const tabTitle = tab.title || '新标签页'
+
   return (
-    <button
-      type="button"
-      aria-label={`打开 ${tab.title}`}
-      aria-current={active ? 'page' : undefined}
-      aria-grabbed={isDragging}
-      data-web-tab-id={tab.id}
-      draggable={false}
-      className={cn(
-        'web-tab-shape titlebar-no-drag touch-none select-none group relative mb-0 flex h-[34px] min-w-[144px] max-w-[240px] shrink-0 items-center gap-2 px-3 text-xs transition-colors',
-        active
-          ? 'bg-muted text-foreground shadow-[0_-1px_0_hsl(var(--border)/0.6)]'
-          : 'bg-content-area text-muted-foreground hover:bg-accent/70 hover:text-foreground',
-        isDragging && 'z-20 shadow-xl',
-      )}
-      style={dragOffset ? { transform: `translate3d(${dragOffset.x}px, 0, 0)`, zIndex: 20 } : undefined}
-      ref={buttonRef}
-      onClick={onActivate}
-      onPointerDown={onPointerDown}
-    >
-      {tab.isIncognito ? (
-        <Glasses className="size-3.5 shrink-0 text-primary" />
-      ) : tab.isLoading ? (
-        <LoaderCircle className="size-3.5 shrink-0 animate-spin text-primary" />
-      ) : (
-        <WebTabIcon tab={tab} />
-      )}
-      <span className="min-w-0 flex-1 truncate text-left">{tab.title || '新标签页'}</span>
-      <span
-        role="button"
-        tabIndex={-1}
-        aria-label={`关闭 ${tab.title}`}
-        className={cn(
-          'flex size-5 shrink-0 items-center justify-center rounded-sm text-muted-foreground opacity-0 transition-colors hover:bg-muted-foreground/15 hover:text-foreground group-hover:opacity-100',
-          active && 'opacity-70',
+    <Tooltip open={isDragging ? false : undefined}>
+      <TooltipTrigger asChild>
+        <button
+          type="button"
+          aria-label={`打开 ${tabTitle}`}
+          aria-current={active ? 'page' : undefined}
+          aria-grabbed={isDragging}
+          data-web-tab-id={tab.id}
+          draggable={false}
+          className={cn(
+            'web-tab-shape titlebar-no-drag touch-none select-none group relative mb-0 flex h-[34px] min-w-[36px] max-w-[240px] flex-1 items-center gap-2 px-2.5 text-xs transition-colors',
+            active
+              ? 'bg-muted text-foreground shadow-[0_-1px_0_hsl(var(--border)/0.6)]'
+              : 'bg-content-area text-muted-foreground hover:bg-accent/70 hover:text-foreground',
+            isDragging && 'z-20 shadow-xl',
+          )}
+          style={dragOffset ? { transform: `translate3d(${dragOffset.x}px, 0, 0)`, zIndex: 20 } : undefined}
+          ref={buttonRef}
+          onClick={onActivate}
+          onPointerDown={onPointerDown}
+        >
+          {tab.isIncognito ? (
+            <Glasses className="size-3.5 shrink-0 text-primary" />
+          ) : tab.isLoading ? (
+            <LoaderCircle className="size-3.5 shrink-0 animate-spin text-primary" />
+          ) : (
+            <WebTabIcon tab={tab} />
+          )}
+          <span className="min-w-0 flex-1 truncate text-left">{tabTitle}</span>
+          <span
+            role="button"
+            tabIndex={-1}
+            aria-label={`关闭 ${tabTitle}`}
+            className={cn(
+              'flex size-5 shrink-0 items-center justify-center rounded-sm text-muted-foreground transition-colors hover:bg-muted-foreground/15 hover:text-foreground',
+              active ? 'opacity-70 group-hover:opacity-100' : 'opacity-0 group-hover:opacity-100',
+            )}
+            onClick={handleClose}
+            onPointerDown={(event) => event.stopPropagation()}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter' || event.key === ' ') handleClose(event as unknown as React.MouseEvent)
+            }}
+          >
+            <X className="size-3" />
+          </span>
+        </button>
+      </TooltipTrigger>
+      <TooltipContent side="bottom" className="max-w-[360px] break-all">
+        <p className="font-medium">{tabTitle}</p>
+        {tab.url && tab.url !== 'about:blank' && (
+          <p className="text-[11px] text-muted-foreground truncate opacity-80">{tab.url}</p>
         )}
-        onClick={handleClose}
-        onPointerDown={(event) => event.stopPropagation()}
-        onKeyDown={(event) => {
-          if (event.key === 'Enter' || event.key === ' ') handleClose(event as unknown as React.MouseEvent)
-        }}
-      >
-        <X className="size-3" />
-      </span>
-    </button>
+      </TooltipContent>
+    </Tooltip>
   )
 }

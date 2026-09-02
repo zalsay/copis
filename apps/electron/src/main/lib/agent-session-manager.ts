@@ -417,7 +417,7 @@ export function ensureDefaultFeishuSession(): AgentSessionMeta | null {
 
   index.sessions.push(meta)
   writeIndex(index)
-  console.log(`[Agent 会话] 已在默认项目创建飞书专属会话: ${meta.id}`)
+  console.log(`[Agent 会话] 已在默认工作区创建飞书专属会话: ${meta.id}`)
   return meta
 }
 
@@ -472,7 +472,7 @@ export function ensureDefaultWeChatSession(): AgentSessionMeta | null {
 
   index.sessions.push(meta)
   writeIndex(index)
-  console.log(`[Agent 会话] 已在默认项目创建微信专属会话: ${meta.id}`)
+  console.log(`[Agent 会话] 已在默认工作区创建微信专属会话: ${meta.id}`)
   return meta
 }
 
@@ -527,7 +527,7 @@ export function ensureDefaultDingTalkSession(): AgentSessionMeta | null {
 
   index.sessions.push(meta)
   writeIndex(index)
-  console.log(`[Agent 会话] 已在默认项目创建钉钉专属会话: ${meta.id}`)
+  console.log(`[Agent 会话] 已在默认工作区创建钉钉专属会话: ${meta.id}`)
   return meta
 }
 
@@ -635,11 +635,7 @@ export function createAgentSession(
   if (workspaceId) {
     const ws = getAgentWorkspace(workspaceId)
     if (ws) {
-      const sessionDir = getAgentSessionWorkspacePath(ws.slug, meta.id)
-
-      // .context 是 Copis 的会话工作台，本地项目同样需要。
-      const contextDir = join(sessionDir, '.context')
-      if (!existsSync(contextDir)) mkdirSync(contextDir, { recursive: true })
+      getAgentSessionWorkspacePath(ws.slug, meta.id)
 
       // Pi 新会话默认在项目根 cwd 工作，项目级 Context 也必须先存在。
       ensureAgentWorkspaceContextDir(ws)

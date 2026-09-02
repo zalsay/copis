@@ -2432,7 +2432,7 @@ class FeishuBridge {
     const workspace = binding.workspaceId ? getAgentWorkspace(binding.workspaceId) : undefined
     const session = getAgentSessionMeta(binding.sessionId)
 
-    const wsName = workspace?.name ?? '默认项目'
+    const wsName = workspace?.name ?? '默认工作区'
     const sessName = session?.title ?? binding.sessionId.slice(0, 8)
 
     return `[${wsName}]->[${sessName}]：`
@@ -2446,7 +2446,7 @@ class FeishuBridge {
     const workspace = binding.workspaceId ? getAgentWorkspace(binding.workspaceId) : undefined
     const session = getAgentSessionMeta(binding.sessionId)
 
-    const wsName = workspace?.name ?? '默认项目'
+    const wsName = workspace?.name ?? '默认工作区'
     const sessName = session?.title ?? binding.sessionId.slice(0, 8)
 
     return `${wsName} · ${sessName}`
