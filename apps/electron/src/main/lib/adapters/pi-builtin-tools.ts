@@ -12,6 +12,7 @@ import type { ToolDefinition } from '@earendil-works/pi-coding-agent'
 import type { AgentToolResult } from '@earendil-works/pi-agent-core'
 import type {
   AgentRuntime,
+  BrowserPageSnapshot,
   CopisPermissionMode,
   MemoryPolicy,
   MemoryKind,
@@ -20,6 +21,7 @@ import { buildPiMemoryTools } from './pi-memory-tools'
 import { runtimeMemoryApiClient as memoryApiClient } from '../memory-api-client-runtime'
 import { memoryToolNamesForPolicy } from './memory-tool-policy'
 import { getBrowserAgentContext } from '../browser-workflow-service'
+import { renderBrowserSnapshot } from '../browser-page-control-service'
 import {
   browserAgentToolService,
   type BrowserAgentToolApprovalRequester,
@@ -172,9 +174,21 @@ function buildMemoryTools(sdk: PiSdk, ctx: PiBuiltinToolsContext): ToolDefinitio
 // ===== Browser Workflow 工具 =====
 
 function toPiBrowserAgentToolResult(result: BrowserAgentToolResult): AgentToolResult<unknown> {
-  return result.kind === 'json'
-    ? jsonToolResult(result.value)
-    : textToolResult(typeof result.value === 'string' ? result.value : String(result.value), result.value)
+  if (result.kind === 'text') {
+    return textToolResult(typeof result.value === 'string' ? result.value : String(result.value), result.value)
+  }
+  if (
+    typeof result.value === 'object'
+    && result.value !== null
+    && (result.value as { kind?: string }).kind === 'untrusted_browser_page'
+    && Array.isArray((result.value as { elements?: unknown }).elements)
+  ) {
+    return {
+      content: [{ type: 'text', text: renderBrowserSnapshot(result.value as BrowserPageSnapshot) }],
+      details: result.value,
+    } as AgentToolResult<unknown>
+  }
+  return jsonToolResult(result.value)
 }
 
 async function executeBrowserAgentTool(

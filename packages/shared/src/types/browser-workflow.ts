@@ -351,6 +351,9 @@ export interface BrowserPageElement {
   enabled: boolean
   sensitiveReason?: BrowserPageSensitiveReason
   requiresConfirmation: boolean
+  checked?: boolean
+  selected?: boolean
+  expanded?: boolean
 }
 
 export interface BrowserPageSnapshot {

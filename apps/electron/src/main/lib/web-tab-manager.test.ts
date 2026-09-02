@@ -233,6 +233,39 @@ describe('网页页签 favicon 生命周期', () => {
     const favicon = resolveWebTabFaviconUrl(null, { type: 'navigation-committed' })
     expect(favicon).toBeNull()
   })
+
+  test('Given 页签已有 Data URL favicon When 快捷键或同源重新加载 Then 整个生命周期保留 favicon', () => {
+    const currentFavicon = 'data:image/svg+xml;base64,PHN2Zz48L3N2Zz4='
+    const currentUrl = 'https://github.com/copis/repo'
+    // 1. 开始加载
+    let favicon = resolveWebTabFaviconUrl(currentFavicon, {
+      type: 'loading-started',
+      currentUrl,
+      targetUrl: currentUrl,
+    })
+    expect(favicon).toBe(currentFavicon)
+
+    // 2. 导航提交
+    favicon = resolveWebTabFaviconUrl(favicon, {
+      type: 'navigation-committed',
+      url: currentUrl,
+      previousUrl: currentUrl,
+    })
+    expect(favicon).toBe(currentFavicon)
+  })
+
+  test('Given 页签导航至不同域名 When 开始加载 Then 清空旧域名 favicon 避免错位', () => {
+    const currentFavicon = 'data:image/png;base64,AAAA'
+    const currentUrl = 'https://github.com/copis/repo'
+    const targetUrl = 'https://google.com/search'
+
+    const favicon = resolveWebTabFaviconUrl(currentFavicon, {
+      type: 'loading-started',
+      currentUrl,
+      targetUrl,
+    })
+    expect(favicon).toBeNull()
+  })
 })
 
 describe('网页页签 favicon 解析', () => {

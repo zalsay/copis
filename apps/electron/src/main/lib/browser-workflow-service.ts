@@ -191,8 +191,83 @@ const RECORDING_SOURCE = `(() => {
       }
     } catch (_) {}
   };
-  const text = (element) => (element.innerText || element.textContent || '').trim().replace(/\\s+/g, ' ').slice(0, 160);
-  const role = (element) => element.getAttribute('role') || ({ BUTTON: 'button', A: 'link', SELECT: 'combobox', TEXTAREA: 'textbox' }[element.tagName] || (element.tagName === 'INPUT' ? 'textbox' : undefined));
+  const cleanLong = (value, max) => String(value || '').replace(/\\s+/gu, ' ').trim().slice(0, max);
+  const INTERACTIVE_ROLES = new Set([
+    'button', 'checkbox', 'combobox', 'link', 'menuitem',
+    'menuitemcheckbox', 'menuitemradio', 'option', 'radio',
+    'searchbox', 'slider', 'spinbutton', 'switch', 'tab',
+    'textbox', 'treeitem',
+  ]);
+  const role = (element) => {
+    const tag = element.tagName.toLowerCase();
+    if (tag === 'a' && element.hasAttribute('href')) return 'link';
+    if (tag === 'button') return 'button';
+    if (tag === 'select') return 'combobox';
+    if (tag === 'textarea' || element.isContentEditable) return 'textbox';
+    if (tag === 'input') {
+      const type = String(element.getAttribute('type') || 'text').toLowerCase();
+      if (type === 'hidden') return null;
+      if (type === 'checkbox') return 'checkbox';
+      if (type === 'radio') return 'radio';
+      if (type === 'range') return 'slider';
+      if (type === 'number') return 'spinbutton';
+      if (['button', 'submit', 'reset', 'image', 'file'].includes(type)) return 'button';
+      return type === 'search' ? 'searchbox' : 'textbox';
+    }
+    const r = String(element.getAttribute('role') || '').toLowerCase();
+    if (INTERACTIVE_ROLES.has(r)) return r;
+    if (element.hasAttribute('onclick')) return 'button';
+    const tabIndexValue = element.getAttribute('tabindex');
+    if (tabIndexValue === null) return null;
+    const tabIndex = Number(tabIndexValue);
+    return Number.isInteger(tabIndex) && tabIndex >= 0 ? 'interactive' : null;
+  };
+  const accessibleName = (element) => {
+    const ariaLabel = element.getAttribute('aria-label');
+    if (ariaLabel && ariaLabel.trim()) return cleanLong(ariaLabel, 160);
+
+    const labelledBy = element.getAttribute('aria-labelledby');
+    if (labelledBy) {
+      const ids = labelledBy.trim().split(/\\s+/);
+      const texts = ids.map((id) => {
+        const el = document.getElementById(id);
+        return el ? (el.innerText || el.textContent || '') : '';
+      }).filter(Boolean).join(' ');
+      if (texts.trim()) return cleanLong(texts, 160);
+    }
+
+    if (element.labels && element.labels.length > 0) {
+      const labelText = Array.from(element.labels).map((l) => l.innerText || l.textContent || '').join(' ').trim();
+      if (labelText) return cleanLong(labelText, 160);
+    }
+    const id = element.id;
+    if (id) {
+      const labelEl = document.querySelector('label[for="' + CSS.escape(id) + '"]');
+      if (labelEl) {
+        const labelText = (labelEl.innerText || labelEl.textContent || '').trim();
+        if (labelText) return cleanLong(labelText, 160);
+      }
+    }
+
+    const alt = element.getAttribute('alt');
+    if (alt && alt.trim()) return cleanLong(alt, 160);
+
+    const title = element.getAttribute('title');
+    if (title && title.trim()) return cleanLong(title, 160);
+
+    if (element instanceof HTMLInputElement && ['button', 'submit', 'reset'].includes(String(element.type || '').toLowerCase())) {
+      const val = element.value;
+      if (val && val.trim()) return cleanLong(val, 160);
+    }
+
+    const text = (element.innerText || element.textContent || '').trim();
+    if (text) return cleanLong(text, 160);
+
+    const placeholder = element.getAttribute('placeholder');
+    if (placeholder && placeholder.trim()) return cleanLong(placeholder, 160);
+
+    return '';
+  };
   const css = (element) => {
     if (element.id) return '#' + CSS.escape(element.id);
     const parts = [];
@@ -261,14 +336,15 @@ const RECORDING_SOURCE = `(() => {
       strategies.push({ kind: 'testId', attribute, value: testId })
     };
     const elementRole = role(element);
-    const accessibleName = element.getAttribute('aria-label') || element.getAttribute('aria-labelledby') || element.getAttribute('title') || text(element).slice(0, 100);
-    if (elementRole) strategies.push({ kind: 'role', role: elementRole, name: accessibleName || undefined });
-    const label = element.labels && element.labels[0] ? text(element.labels[0]) : '';
+    const name = accessibleName(element);
+    if (elementRole) strategies.push({ kind: 'role', role: elementRole, name: name || undefined });
+    const label = element.labels && element.labels[0] ? cleanLong(element.labels[0].innerText || element.labels[0].textContent, 160) : '';
     if (label) strategies.push({ kind: 'label', value: label });
-    if (fieldName) strategies.push({ kind: 'name', value: fieldName });
-    if (fieldId) strategies.push({ kind: 'id', value: fieldId });
-    if (accessibleName) strategies.push({ kind: 'text', value: accessibleName, exact: true });
+    if (fieldName) strategies.push({ kind: 'name', value: cleanLong(fieldName, 64) });
+    if (fieldId) strategies.push({ kind: 'id', value: cleanLong(fieldId, 64) });
+    if (name) strategies.push({ kind: 'text', value: name, exact: true });
     strategies.push({ kind: 'css', value: css(element) });
+    const placeholder = element.getAttribute('placeholder');
     return {
       locator: {
         framePath: framePath(),
@@ -276,11 +352,11 @@ const RECORDING_SOURCE = `(() => {
         fingerprint: {
           tagName: element.tagName.toLowerCase(),
           inputType,
-          accessibleName: accessibleName || undefined,
-          placeholder: element.getAttribute('placeholder') || undefined,
+          accessibleName: name || undefined,
+          placeholder: placeholder ? cleanLong(placeholder, 120) : undefined,
           href: element instanceof HTMLAnchorElement ? element.href : undefined,
           parentRole: element.parentElement ? role(element.parentElement) : undefined,
-          nearbyText: element.parentElement ? text(element.parentElement) : undefined,
+          nearbyText: element.parentElement ? cleanLong(element.parentElement.innerText || element.parentElement.textContent, 160) : undefined,
           visible: !!(element.offsetWidth || element.offsetHeight || element.getClientRects().length),
           enabled: !(element instanceof HTMLButtonElement || element instanceof HTMLInputElement || element instanceof HTMLSelectElement || element instanceof HTMLTextAreaElement) || !element.disabled,
         },

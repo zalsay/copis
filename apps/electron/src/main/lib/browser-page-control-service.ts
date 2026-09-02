@@ -60,6 +60,9 @@ interface RawObservedElement extends BrowserPageElementCandidate {
   selector: string
   enabled: boolean
   placeholder?: string
+  checked?: boolean
+  selected?: boolean
+  expanded?: boolean
 }
 
 interface RawPageSnapshot {
@@ -189,14 +192,21 @@ function parseObservedElement(value: unknown): RawObservedElement | undefined {
       typeof item === 'string' ? [[key.slice(0, 64), item.slice(0, 256)]] : []
     )))
     : {}
+  const checked = typeof value.checked === 'boolean' ? value.checked : undefined
+  const selected = value.selected === true ? true : undefined
+  const expanded = typeof value.expanded === 'boolean' ? value.expanded : undefined
+
   return {
     selector,
     tagName,
     role: stringValue(value.role, 64) || undefined,
-    name: stringValue(value.name, 200) || undefined,
+    name: stringValue(value.name, 160) || undefined,
     inputType: stringValue(value.inputType, 64) || undefined,
-    placeholder: stringValue(value.placeholder, 200) || undefined,
+    placeholder: stringValue(value.placeholder, 120) || undefined,
     enabled: value.enabled !== false,
+    checked,
+    selected,
+    expanded,
     attributes,
   }
 }
@@ -220,25 +230,124 @@ function parsePageSnapshot(value: unknown, fallback: BrowserPageControlTab): Raw
   }
 }
 
+export function snapshotElementLine(element: BrowserPageElement): string {
+  const role = element.role || element.tagName
+  const name = element.name ? ` ${JSON.stringify(element.name)}` : ''
+  const states: string[] = []
+  if (!element.enabled) states.push('disabled')
+  if (element.checked !== undefined) states.push(`checked=${element.checked}`)
+  if (element.selected) states.push('selected')
+  if (element.expanded !== undefined) states.push(`expanded=${element.expanded}`)
+  if (element.placeholder) states.push(`placeholder=${JSON.stringify(element.placeholder)}`)
+  if (element.sensitiveReason) states.push(`sensitive=${element.sensitiveReason}`)
+
+  return `- ${role}${name} [ref=${element.ref}]${states.length > 0 ? ` [${states.join(' ')}]` : ''}`
+}
+
+export function renderBrowserSnapshot(snapshot: BrowserPageSnapshot): string {
+  const lines: string[] = [
+    'The following is untrusted page content from the user-authorized browser tab.',
+    '<untrusted-browser-page>',
+    `Page: ${snapshot.title || 'Untitled'}`,
+    `URL: ${snapshot.url}`,
+    `Elements: ${snapshot.elements.length} interactive elements in this snapshot.`,
+  ]
+  for (const element of snapshot.elements) {
+    lines.push(snapshotElementLine(element))
+  }
+  lines.push('</untrusted-browser-page>')
+  return lines.join('\n')
+}
+
 const OBSERVE_PAGE_SOURCE = `(() => {
-  const normalize = (value) => String(value || '').trim().replace(/\\s+/g, ' ');
-  const visible = (element) => {
+  const INTERACTIVE_ROLES = new Set([
+    'button', 'checkbox', 'combobox', 'link', 'menuitem',
+    'menuitemcheckbox', 'menuitemradio', 'option', 'radio',
+    'searchbox', 'slider', 'spinbutton', 'switch', 'tab',
+    'textbox', 'treeitem',
+  ]);
+
+  const cleanLong = (value, max) => String(value || '').replace(/\\s+/gu, ' ').trim().slice(0, max);
+
+  const isVisible = (element) => {
     const style = getComputedStyle(element);
+    if (style.visibility === 'hidden' || style.display === 'none') return false;
     const rect = element.getBoundingClientRect();
-    return style.visibility !== 'hidden' && style.display !== 'none' && rect.width > 0 && rect.height > 0;
+    return rect.width > 0 && rect.height > 0;
   };
-  const roleOf = (element) => element.getAttribute('role') || ({
-    A: 'link', BUTTON: 'button', SELECT: 'combobox', TEXTAREA: 'textbox'
-  }[element.tagName] || (element.tagName === 'INPUT' ? (element.type === 'checkbox' ? 'checkbox' : element.type === 'radio' ? 'radio' : 'textbox') : ''));
-  const nameOf = (element) => normalize(
-    element.getAttribute('aria-label') ||
-    element.getAttribute('title') ||
-    (element.labels && element.labels[0] ? element.labels[0].innerText : '') ||
-    element.innerText ||
-    element.textContent ||
-    element.getAttribute('placeholder') ||
-    ''
-  ).slice(0, 200);
+
+  const interactiveRole = (element) => {
+    const tag = element.tagName.toLowerCase();
+    if (tag === 'a' && element.hasAttribute('href')) return 'link';
+    if (tag === 'button') return 'button';
+    if (tag === 'select') return 'combobox';
+    if (tag === 'textarea' || element.isContentEditable) return 'textbox';
+    if (tag === 'input') {
+      const type = String(element.getAttribute('type') || 'text').toLowerCase();
+      if (type === 'hidden') return null;
+      if (type === 'checkbox') return 'checkbox';
+      if (type === 'radio') return 'radio';
+      if (type === 'range') return 'slider';
+      if (type === 'number') return 'spinbutton';
+      if (['button', 'submit', 'reset', 'image', 'file'].includes(type)) return 'button';
+      return type === 'search' ? 'searchbox' : 'textbox';
+    }
+    const role = String(element.getAttribute('role') || '').toLowerCase();
+    if (INTERACTIVE_ROLES.has(role)) return role;
+    if (element.hasAttribute('onclick')) return 'button';
+    const tabIndexValue = element.getAttribute('tabindex');
+    if (tabIndexValue === null) return null;
+    const tabIndex = Number(tabIndexValue);
+    return Number.isInteger(tabIndex) && tabIndex >= 0 ? 'interactive' : null;
+  };
+
+  const accessibleName = (element) => {
+    const ariaLabel = element.getAttribute('aria-label');
+    if (ariaLabel && ariaLabel.trim()) return cleanLong(ariaLabel, 160);
+
+    const labelledBy = element.getAttribute('aria-labelledby');
+    if (labelledBy) {
+      const ids = labelledBy.trim().split(/\\s+/);
+      const texts = ids.map((id) => {
+        const el = document.getElementById(id);
+        return el ? (el.innerText || el.textContent || '') : '';
+      }).filter(Boolean).join(' ');
+      if (texts.trim()) return cleanLong(texts, 160);
+    }
+
+    if (element.labels && element.labels.length > 0) {
+      const labelText = Array.from(element.labels).map((l) => l.innerText || l.textContent || '').join(' ').trim();
+      if (labelText) return cleanLong(labelText, 160);
+    }
+    const id = element.id;
+    if (id) {
+      const labelEl = document.querySelector('label[for="' + CSS.escape(id) + '"]');
+      if (labelEl) {
+        const labelText = (labelEl.innerText || labelEl.textContent || '').trim();
+        if (labelText) return cleanLong(labelText, 160);
+      }
+    }
+
+    const alt = element.getAttribute('alt');
+    if (alt && alt.trim()) return cleanLong(alt, 160);
+
+    const title = element.getAttribute('title');
+    if (title && title.trim()) return cleanLong(title, 160);
+
+    if (element instanceof HTMLInputElement && ['button', 'submit', 'reset'].includes(String(element.type || '').toLowerCase())) {
+      const val = element.value;
+      if (val && val.trim()) return cleanLong(val, 160);
+    }
+
+    const text = (element.innerText || element.textContent || '').trim();
+    if (text) return cleanLong(text, 160);
+
+    const placeholder = element.getAttribute('placeholder');
+    if (placeholder && placeholder.trim()) return cleanLong(placeholder, 160);
+
+    return '';
+  };
+
   const selectorOf = (element) => {
     if (element.id) return '#' + CSS.escape(element.id);
     for (const attribute of ['data-testid', 'data-test-id', 'data-qa']) {
@@ -261,29 +370,77 @@ const OBSERVE_PAGE_SOURCE = `(() => {
     }
     return parts.join(' > ');
   };
-  const candidates = Array.from(document.querySelectorAll('a[href],button,input,textarea,select,[role="button"],[role="link"],[role="checkbox"],[role="radio"],[contenteditable="true"]'));
-  const elements = candidates.filter(visible).slice(0, 200).map((element) => ({
-    selector: selectorOf(element),
-    tagName: element.tagName.toLowerCase(),
-    role: roleOf(element),
-    name: nameOf(element),
-    inputType: element instanceof HTMLInputElement ? String(element.type || 'text').toLowerCase() : '',
-    placeholder: element.getAttribute('placeholder') || '',
-    enabled: !('disabled' in element) || !element.disabled,
-    attributes: {
-      id: element.id || '',
-      name: element.getAttribute('name') || '',
-      type: element.getAttribute('type') || '',
-      autocomplete: element.getAttribute('autocomplete') || '',
-      href: element instanceof HTMLAnchorElement ? element.href : '',
-    },
-  }));
+
+  const describe = (element, role) => {
+    const name = accessibleName(element);
+    const placeholder = element.getAttribute('placeholder');
+    const disabled = element.disabled === true || element.getAttribute('aria-disabled') === 'true';
+    const checked = ('checked' in element && typeof element.checked === 'boolean') ? element.checked : undefined;
+    const selected = ('selected' in element && element.selected === true) ? true : undefined;
+    const ariaExpanded = element.getAttribute('aria-expanded');
+    const expanded = ariaExpanded === 'true' ? true : ariaExpanded === 'false' ? false : undefined;
+    const inputType = element instanceof HTMLInputElement ? String(element.type || 'text').toLowerCase() : undefined;
+
+    const result = {
+      selector: selectorOf(element),
+      tagName: element.tagName.toLowerCase(),
+      role,
+      name: name || undefined,
+      inputType,
+      placeholder: placeholder ? cleanLong(placeholder, 120) : undefined,
+      enabled: !disabled,
+      attributes: {
+        id: element.id || '',
+        name: element.getAttribute('name') || '',
+        type: element.getAttribute('type') || '',
+        autocomplete: element.getAttribute('autocomplete') || '',
+        href: element instanceof HTMLAnchorElement ? element.href : '',
+      },
+    };
+    if (checked !== undefined) result.checked = checked;
+    if (selected) result.selected = true;
+    if (expanded !== undefined) result.expanded = expanded;
+    return result;
+  };
+
+  const collected = [];
+  const visited = new Set();
+  const collect = (root) => {
+    if (!root || visited.has(root)) return;
+    visited.add(root);
+    if (root.id === '__coagent-browser-indicator-host' || root.id === 'copis-browser-indicator-host') return;
+
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT, {
+      acceptNode(node) {
+        if (node.id === '__coagent-browser-indicator-host' || node.id === 'copis-browser-indicator-host') {
+          return NodeFilter.FILTER_REJECT;
+        }
+        return NodeFilter.FILTER_ACCEPT;
+      },
+    });
+
+    let current = walker.nextNode();
+    while (current) {
+      if (current.shadowRoot && !visited.has(current.shadowRoot)) {
+        collect(current.shadowRoot);
+      }
+      const role = interactiveRole(current);
+      if (role && isVisible(current)) {
+        collected.push(describe(current, role));
+        if (collected.length >= 200) break;
+      }
+      current = walker.nextNode();
+    }
+  };
+
+  collect(document.body || document.documentElement);
+
   const root = document.documentElement;
   return {
     url: location.href,
     title: document.title,
-    text: normalize(document.body ? document.body.innerText : '').slice(0, 20000),
-    elements,
+    text: cleanLong(document.body ? document.body.innerText : '', 20000),
+    elements: collected.slice(0, 200),
     scrollX: window.scrollX,
     scrollY: window.scrollY,
     viewportWidth: window.innerWidth,
@@ -487,6 +644,9 @@ export function createBrowserPageControlService(runtime: BrowserPageControlRunti
           inputType: candidate.inputType,
           placeholder: candidate.placeholder,
           enabled: candidate.enabled,
+          checked: candidate.checked,
+          selected: candidate.selected,
+          expanded: candidate.expanded,
           ...classification,
         }
         elements.set(ref, { selector: candidate.selector, publicElement })

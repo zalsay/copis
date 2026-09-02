@@ -185,6 +185,17 @@ export async function resolveWebTabFaviconDataUrl(
   return null
 }
 
+export function isSameOrigin(urlA?: string | null, urlB?: string | null): boolean {
+  if (!urlA || !urlB) return false
+  try {
+    const a = new URL(urlA)
+    const b = new URL(urlB)
+    return a.origin === b.origin
+  } catch {
+    return false
+  }
+}
+
 /**
  * 主框架加载生命周期事件对 favicon 的纯状态转换，便于单元测试。
  *
@@ -195,9 +206,9 @@ export async function resolveWebTabFaviconDataUrl(
  * 页面未提供特殊 favicon 时，回退到该站点的根目录 favicon.ico。
  */
 export type WebTabFaviconLifecycleEvent =
-  | { type: 'loading-started'; preserveFavicon?: boolean }
+  | { type: 'loading-started'; preserveFavicon?: boolean; currentUrl?: string; targetUrl?: string }
   | { type: 'favicon-updated'; favicons: string[]; baseUrl?: string }
-  | { type: 'navigation-committed'; url?: string }
+  | { type: 'navigation-committed'; url?: string; previousUrl?: string }
 
 export function resolveWebTabFaviconUrl(
   previous: string | null,
@@ -205,11 +216,17 @@ export function resolveWebTabFaviconUrl(
 ): string | null {
   switch (event.type) {
     case 'loading-started':
+      if (event.preserveFavicon || (event.currentUrl && event.targetUrl && isSameOrigin(event.currentUrl, event.targetUrl))) {
+        return previous
+      }
       return event.preserveFavicon ? previous : null
     case 'favicon-updated':
       return selectFaviconUrl(event.favicons, event.baseUrl) ?? (event.baseUrl ? resolveDefaultFaviconUrl(event.baseUrl) : previous)
     case 'navigation-committed':
-      return previous ?? resolveDefaultFaviconUrl(event.url)
+      if (previous && event.previousUrl && event.url && isSameOrigin(event.previousUrl, event.url)) {
+        return previous
+      }
+      return previous ?? (event.url ? resolveDefaultFaviconUrl(event.url) : null)
   }
 }
 
@@ -566,11 +583,15 @@ function installWebContentsHandlers(record: WebTabRecord): void {
   contents.on('did-start-loading', () => {
     record.mainFrameLoadError = undefined
     record.faviconRequestId += 1
+    const currentUrl = record.state.url
+    const targetUrl = contents.getURL() || currentUrl
     refreshState(record, {
       isLoading: true,
       faviconUrl: resolveWebTabFaviconUrl(record.state.faviconUrl, {
         type: 'loading-started',
-        preserveFavicon: record.isReloading,
+        preserveFavicon: record.isReloading || isSameOrigin(currentUrl, targetUrl),
+        currentUrl,
+        targetUrl,
       }),
     })
   })
@@ -606,13 +627,77 @@ function installWebContentsHandlers(record: WebTabRecord): void {
     })
   })
 
+  const fetchDomFavicons = async () => {
+    if (contents.isDestroyed() || !isHttpWebUrl(contents.getURL())) return
+    const requestId = record.faviconRequestId
+    const pageUrl = contents.getURL() || record.state.url
+    try {
+      const favicons = await contents.executeJavaScript(`
+        (() => {
+          try {
+            const selectors = [
+              'link[rel*="icon"]',
+              'link[rel="shortcut icon"]',
+              'link[rel~="apple-touch-icon"]',
+              'link[rel="apple-touch-icon-precomposed"]'
+            ];
+            const links = Array.from(document.querySelectorAll(selectors.join(',')));
+            return links.map(el => el.href).filter(Boolean);
+          } catch {
+            return [];
+          }
+        })()
+      `).catch(() => [])
+
+      const candidates = Array.isArray(favicons) && favicons.length > 0
+        ? favicons
+        : [resolveDefaultFaviconUrl(pageUrl)].filter((url): url is string => Boolean(url))
+
+      if (candidates.length === 0) return
+
+      const dataUrl = await resolveWebTabFaviconDataUrl(
+        candidates,
+        (url, init) => contents.session.fetch(url, init),
+        pageUrl,
+      )
+
+      if (
+        records.get(record.state.id) !== record
+        || record.view.webContents !== contents
+        || contents.isDestroyed()
+        || record.faviconRequestId !== requestId
+      ) {
+        return
+      }
+
+      if (dataUrl) {
+        refreshState(record, { faviconUrl: dataUrl })
+      }
+    } catch {
+      // 页面未完成渲染或受 CSP 限制时静默捕获
+    }
+  }
+
+  contents.on('dom-ready', () => {
+    void fetchDomFavicons()
+  })
+
+  contents.on('did-finish-load', () => {
+    void fetchDomFavicons()
+  })
+
   contents.on('did-navigate', (_event, url) => {
     if (isHttpWebUrl(url)) record.hasOpenedAddress = true
+    const previousUrl = record.state.url
     refreshState(record, {
       url,
       isLoading: false,
       title: getFallbackTitle(url),
-      faviconUrl: resolveWebTabFaviconUrl(record.state.faviconUrl, { type: 'navigation-committed', url }),
+      faviconUrl: resolveWebTabFaviconUrl(record.state.faviconUrl, {
+        type: 'navigation-committed',
+        url,
+        previousUrl,
+      }),
     })
     emitWebTabLifecycle({ type: 'navigated', tabId: record.state.id, workflowOwned: record.workflowOwned, url, snapshot: getSnapshot() })
   })
@@ -1251,7 +1336,8 @@ export function navigateWebTab(input: NavigateWebTabInput): WebTabsSnapshot {
   if (!record) throw new Error('网页页签不存在')
 
   const url = normalizeWebTabUrl(input.url)
-  record.isReloading = false
+  const isSameOriginNav = isSameOrigin(record.state.url, url)
+  record.isReloading = isSameOriginNav
   if (isHttpWebUrl(url)) record.hasOpenedAddress = true
   record.mainFrameLoadError = undefined
   record.faviconRequestId += 1
@@ -1260,7 +1346,7 @@ export function navigateWebTab(input: NavigateWebTabInput): WebTabsSnapshot {
     url,
     title: getFallbackTitle(url),
     isLoading: url !== DEFAULT_URL,
-    faviconUrl: resolveDefaultFaviconUrl(url),
+    faviconUrl: isSameOriginNav ? record.state.faviconUrl : resolveDefaultFaviconUrl(url),
     canGoBack: record.view.webContents.canGoBack(),
     canGoForward: record.view.webContents.canGoForward(),
   }

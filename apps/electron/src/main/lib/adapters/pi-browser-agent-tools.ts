@@ -14,6 +14,8 @@ import {
   BROWSER_WORKFLOW_RUN_DESCRIPTION,
   BROWSER_WORKFLOW_RUN_PROMPT,
 } from './browser-workflow-draft-schema'
+import { renderBrowserSnapshot } from '../browser-page-control-service'
+import type { BrowserPageSnapshot } from '@copis/shared'
 
 type PiSdk = typeof import('@earendil-works/pi-coding-agent')
 type FetchImplementation = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>
@@ -69,9 +71,18 @@ function parseToolResult(value: unknown): BrowserAgentToolResult | undefined {
 }
 
 function toAgentToolResult(result: BrowserAgentToolResult): AgentToolResult<unknown> {
-  const text = result.kind === 'text'
-    ? typeof result.value === 'string' ? result.value : String(result.value)
-    : JSON.stringify(result.value, null, 2)
+  let text: string
+  if (result.kind === 'text') {
+    text = typeof result.value === 'string' ? result.value : String(result.value)
+  } else if (
+    isRecord(result.value)
+    && result.value.kind === 'untrusted_browser_page'
+    && Array.isArray(result.value.elements)
+  ) {
+    text = renderBrowserSnapshot(result.value as unknown as BrowserPageSnapshot)
+  } else {
+    text = JSON.stringify(result.value, null, 2)
+  }
   return {
     content: [{ type: 'text', text }],
     details: result.value,
