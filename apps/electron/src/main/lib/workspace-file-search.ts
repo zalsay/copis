@@ -34,7 +34,7 @@ export async function searchWorkspaceFiles(
       for (const item of items) {
         if (target.length >= BROWSE_LIMIT_PER_GROUP) break
         if (ignoredFiles.has(item.name)) continue
-        if (item.isDirectory() && ignoredDirectories.has(item.name)) continue
+        if ((item.isDirectory() || item.isSymbolicLink()) && ignoredDirectories.has(item.name)) continue
 
         const fullPath = resolve(dir, item.name)
         const entryPath = useAbsPath ? fullPath : relative(baseRoot, fullPath)

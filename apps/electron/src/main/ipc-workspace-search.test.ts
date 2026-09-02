@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { searchWorkspaceFiles } from './lib/workspace-file-search'
@@ -85,5 +85,18 @@ describe('工作区文件搜索 (SEARCH_WORKSPACE_FILES)', () => {
       (entry) => entry.name === '.copis' || entry.path.includes('.copis'),
     )
     expect(copisEntries).toHaveLength(0)
+  })
+
+  test('Given .copis 是指向运行时目录的符号链接 When 搜索根目录 Then 不显示该链接', async () => {
+    const copisPath = join(tempWorkspaceDir, '.copis')
+    const runtimeDirectory = join(tempWorkspaceDir, 'copis-runtime')
+    rmSync(copisPath, { recursive: true, force: true })
+    mkdirSync(runtimeDirectory, { recursive: true })
+    writeFileSync(join(runtimeDirectory, 'session.json'), '{"id": "runtime"}')
+    symlinkSync(runtimeDirectory, copisPath, 'dir')
+
+    const result = await searchWorkspaceFiles(tempWorkspaceDir, '', 20)
+
+    expect(result.entries.filter((entry) => entry.name === '.copis' || entry.path === '.copis')).toHaveLength(0)
   })
 })
