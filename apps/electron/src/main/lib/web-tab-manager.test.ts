@@ -214,8 +214,11 @@ describe('网页页签 favicon 生命周期', () => {
     expect(favicon).toBe('https://example.com/favicon.ico')
   })
 
-  test('Given 页签已有 favicon When 开始加载/刷新 Then 保留已有 favicon 不被清空', () => {
-    const favicon = resolveWebTabFaviconUrl('https://old.example.com/favicon.ico', { type: 'loading-started' })
+  test('Given 页签已有 favicon When 显式刷新开始加载 Then 保留已有 favicon 不被清空', () => {
+    const favicon = resolveWebTabFaviconUrl('https://old.example.com/favicon.ico', {
+      type: 'loading-started',
+      preserveFavicon: true,
+    })
     expect(favicon).toBe('https://old.example.com/favicon.ico')
   })
 
@@ -310,7 +313,7 @@ describe('网页页签 favicon 解析', () => {
     expect(getWebTabState(tabId)?.faviconUrl).toBe('data:image/png;base64,BAU=')
   })
 
-  test('Given 旧页面图标仍在异步读取 When 导航到新页面 Then 不写回旧 favicon', async () => {
+  test('Given 旧页面图标仍在异步读取 When 导航到新页面 Then 不写回旧 favicon 并使用新页面默认图标', async () => {
     setupHost()
     const initial = createWebTab({ url: 'https://old.example' })
     const tabId = initial.tabs[0]!.id
@@ -327,7 +330,7 @@ describe('网页页签 favicon 解析', () => {
     await Promise.resolve()
     await Promise.resolve()
 
-    expect(getWebTabState(tabId)?.faviconUrl).toBeNull()
+    expect(getWebTabState(tabId)?.faviconUrl).toBe('https://new.example/favicon.ico')
   })
 
   test('Given 网页页签已有 favicon When 触发刷新 reloadWebTab 且 Chromium 不重复派发 page-favicon-updated Then 保持原有 favicon 不被重置为默认图标', async () => {

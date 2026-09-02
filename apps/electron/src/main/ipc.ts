@@ -60,7 +60,6 @@ import type {
   SkillFileContent,
   WorkspaceCapabilities,
   FileEntry,
-  FileSearchResult,
   EnvironmentCheckResult,
   FunctionalModuleInstallInput,
   FunctionalModuleProgressPayload,
@@ -153,6 +152,7 @@ import { getUnstagedChanges, getFileDiff, getUntrackedContent, revertFile, getDi
 import { registerCopisFilePath } from './lib/local-file-protocol'
 import { isPathWithinAuthorizedRoots, realpathOrResolve } from './lib/file-access-policy'
 import { shouldShowProjectFileTreeEntry } from './lib/file-tree-filter'
+import { searchWorkspaceFiles } from './lib/workspace-file-search'
 import { registerUpdaterIpc } from './lib/updater/updater-ipc'
 import { AgentMailService } from './lib/agent-mail-service'
 import {
@@ -3869,196 +3869,8 @@ export function registerIpcHandlers(): void {
   // 搜索工作区文件（用于 @ 引用，递归扫描，支持附加目录）
   ipcMain.handle(
     AGENT_IPC_CHANNELS.SEARCH_WORKSPACE_FILES,
-    async (_, rootPath: string, query: string, limit = 20, additionalPaths?: string[], sessionPaths?: string[]): Promise<FileSearchResult> => {
-      const { readdirSync, statSync } = await import('node:fs')
-      const { resolve, relative, basename } = await import('node:path')
-
-      const safeRoot = resolve(rootPath)
-      const ignoreDirs = new Set(['node_modules', '.git', 'dist', '.next', '__pycache__', '.venv', 'build', '.cache'])
-      const ignoreFiles = new Set(['.DS_Store', '.Spotlight-V100', '.Trashes', 'Thumbs.db', 'desktop.ini'])
-      const BROWSE_LIMIT_PER_GROUP = 2000
-      const BROWSE_TOTAL_CAP = 3000
-
-      // 按来源分组收集文件
-      type Entry = { name: string; path: string; type: 'file' | 'dir'; source: 'session' | 'workspace' }
-      const rootEntries: Entry[] = []
-      const workspaceEntries: Entry[] = []
-
-      function scan(
-        dir: string,
-        depth: number,
-        baseRoot: string,
-        target: Entry[],
-        useAbsPath: boolean,
-        source: 'session' | 'workspace',
-      ): void {
-        if (depth > 10 || target.length >= BROWSE_LIMIT_PER_GROUP) return
-        try {
-          const items = readdirSync(dir, { withFileTypes: true })
-          for (const item of items) {
-            if (target.length >= BROWSE_LIMIT_PER_GROUP) break
-            if (ignoreFiles.has(item.name)) continue
-            if (item.isDirectory() && ignoreDirs.has(item.name)) continue
-
-            const fullPath = resolve(dir, item.name)
-            const entryPath = useAbsPath ? fullPath : relative(baseRoot, fullPath)
-            target.push({
-              name: item.name,
-              path: entryPath,
-              type: item.isDirectory() ? 'dir' : 'file',
-              source,
-            })
-
-            if (item.isDirectory()) {
-              scan(fullPath, depth + 1, baseRoot, target, useAbsPath, source)
-            }
-          }
-        } catch {
-          // 忽略无权限的目录
-        }
-      }
-
-      function addAttachedPath(pathValue: string, target: Entry[], source: 'session' | 'workspace'): void {
-        try {
-          const attachedPath = resolve(pathValue)
-          const name = basename(attachedPath)
-          if (ignoreFiles.has(name)) return
-
-          const stats = statSync(attachedPath)
-          if (stats.isFile()) {
-            target.push({
-              name,
-              path: attachedPath,
-              type: 'file',
-              source,
-            })
-            return
-          }
-
-          if (!stats.isDirectory()) return
-          if (ignoreDirs.has(name)) return
-
-          target.push({
-            name: name === 'workspace-files' ? '工作区' : name,
-            path: attachedPath,
-            type: 'dir',
-            source,
-          })
-          scan(attachedPath, 0, attachedPath, target, true, source)
-        } catch {
-          // 忽略不存在或无权限的附加路径
-        }
-      }
-
-      // session 目录：相对路径
-      scan(safeRoot, 0, safeRoot, rootEntries, false, 'session')
-
-      // 会话级附加路径：绝对路径，标记为 session（归入会话文件分组）
-      if (sessionPaths && sessionPaths.length > 0) {
-        for (const sp of sessionPaths) {
-          addAttachedPath(sp, rootEntries, 'session')
-        }
-      }
-
-      // 工作区文件 + 工作区级附加路径：绝对路径，标记为 workspace
-      if (additionalPaths && additionalPaths.length > 0) {
-        for (const addPath of additionalPaths) {
-          addAttachedPath(addPath, workspaceEntries, 'workspace')
-        }
-      }
-
-      // 连续排序：来源仅用于解析与 badge，不作为结果分组依据。
-      function sortEntries(entries: Entry[], q: string): void {
-        entries.sort((a, b) => {
-          const aStartsWith = a.name.toLowerCase().startsWith(q) ? 0 : 1
-          const bStartsWith = b.name.toLowerCase().startsWith(q) ? 0 : 1
-          if (aStartsWith !== bStartsWith) return aStartsWith - bStartsWith
-          if (a.type === 'dir' && b.type !== 'dir') return -1
-          if (a.type !== 'dir' && b.type === 'dir') return 1
-          const byPathLength = a.path.length - b.path.length
-          if (byPathLength !== 0) return byPathLength
-          const byName = a.name.localeCompare(b.name)
-          if (byName !== 0) return byName
-          return a.path.localeCompare(b.path)
-        })
-      }
-
-      function matchEntries(entries: Entry[], q: string): Entry[] {
-        return entries.filter((entry) => {
-          const nameLower = entry.name.toLowerCase()
-          const pathLower = entry.path.toLowerCase()
-          if (nameLower.startsWith(q)) return true
-          if (nameLower.includes(q) || pathLower.includes(q)) return true
-          let qi = 0
-          for (let i = 0; i < nameLower.length && qi < q.length; i++) {
-            if (nameLower[i] === q[qi]) qi++
-          }
-          return qi === q.length
-        })
-      }
-
-      // 目录优先排序：确保截断前所有目录（特别是顶层目录）排在前面
-      function sortDirsFirst(entries: Entry[]): void {
-        entries.sort((a, b) => {
-          if (a.type === 'dir' && b.type !== 'dir') return -1
-          if (a.type !== 'dir' && b.type === 'dir') return 1
-          return a.path.length - b.path.length || a.name.localeCompare(b.name)
-        })
-      }
-
-      const q = query.toLowerCase()
-
-      if (!q) {
-        // 空 query：目录优先排序后再截断，保证文件夹结构完整可见
-        sortDirsFirst(rootEntries)
-        sortDirsFirst(workspaceEntries)
-        const maxPerGroup = Math.max(limit, BROWSE_LIMIT_PER_GROUP)
-        const sessionSlice = rootEntries.slice(0, maxPerGroup)
-        const workspaceSlice = workspaceEntries.slice(0, maxPerGroup)
-        const combined = [...sessionSlice, ...workspaceSlice]
-        sortEntries(combined, '')
-        const capped = combined.length > BROWSE_TOTAL_CAP ? combined.slice(0, BROWSE_TOTAL_CAP) : combined
-        return {
-          entries: capped,
-          total: rootEntries.length + workspaceEntries.length,
-          sessionEntries: sessionSlice,
-          workspaceEntries: workspaceSlice,
-        }
-      }
-
-      const sessionMatched = matchEntries(rootEntries, q)
-      const workspaceMatched = matchEntries(workspaceEntries, q)
-      sortEntries(sessionMatched, q)
-      sortEntries(workspaceMatched, q)
-
-      const totalMatched = sessionMatched.length + workspaceMatched.length
-      let sessionSlice: Entry[]
-      let workspaceSlice: Entry[]
-      if (totalMatched <= limit) {
-        sessionSlice = sessionMatched
-        workspaceSlice = workspaceMatched
-      } else {
-        const sessionQuota = Math.max(
-          sessionMatched.length > 0 ? 1 : 0,
-          Math.round(limit * sessionMatched.length / totalMatched),
-        )
-        const workspaceQuota = Math.max(
-          workspaceMatched.length > 0 ? 1 : 0,
-          limit - sessionQuota,
-        )
-        sessionSlice = sessionMatched.slice(0, sessionQuota)
-        workspaceSlice = workspaceMatched.slice(0, workspaceQuota)
-      }
-
-      const entries = [...sessionSlice, ...workspaceSlice]
-      sortEntries(entries, q)
-      return {
-        entries,
-        total: sessionMatched.length + workspaceMatched.length,
-        sessionEntries: sessionSlice,
-        workspaceEntries: workspaceSlice,
-      }
-    }
+    (_, rootPath: string, query: string, limit = 20, additionalPaths?: string[], sessionPaths?: string[]) =>
+      searchWorkspaceFiles(rootPath, query, limit, additionalPaths, sessionPaths),
   )
 
   // ===== 飞书集成 =====
