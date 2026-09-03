@@ -1042,7 +1042,7 @@ function normalizeWebTabPartition(partition: string | undefined): string {
 }
 
 function createWebTabView(partition: string): WebContentsView {
-  return new WebContentsView({
+  const view = new WebContentsView({
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
@@ -1051,6 +1051,12 @@ function createWebTabView(partition: string): WebContentsView {
       partition,
     },
   })
+  try {
+    view.webContents.session.setSpellCheckerLanguages(['zh-CN', 'en-US'])
+  } catch {
+    // 忽略特定单测环境无 spellChecker 支持的场景
+  }
+  return view
 }
 
 /** 创建网页 WebContentsView；Workflow-owned 视图不进入用户页签和持久化会话。 */

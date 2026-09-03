@@ -1,6 +1,6 @@
 import * as React from 'react'
 import { useAtom, useAtomValue, useSetAtom } from 'jotai'
-import { Check, ChevronRight, CircleAlert, FolderOpen, GitBranch, Loader2, MessageSquare, Search, Square, UsersRound, X } from 'lucide-react'
+import { Check, ChevronRight, CircleAlert, FolderOpen, GitBranch, Loader2, MessageSquare, RotateCw, Search, Square, UsersRound, X } from 'lucide-react'
 import type { AgentWorkspace, ExpertTeamEdge, ExpertTeamNode, ExpertTeamNodeStatus, ExpertTeamRun, ExpertTeamRunStatus, ExpertTeamWorkspaceBinding } from '@copis/shared'
 import { toast } from 'sonner'
 import {
@@ -210,6 +210,37 @@ export function ExpertTeamView(): React.ReactElement {
     initialLoadRef.current = true
     void loadSchemas()
   }, [loadSchemas])
+
+  // 监听主进程专家团队变更通知（Agent 创建/发布/绑定团队时直接热更新）
+  React.useEffect(() => {
+    const handleUpdate = async (): Promise<void> => {
+      await loadSchemas()
+      const workspace = workspaces.find((item) => item.id === currentWorkspaceId)
+      if (workspace) {
+        try {
+          const latestBinding = await expertTeamApi.getWorkspaceBinding(workspace.slug)
+          if (latestBinding?.schemaId) {
+            setSchemaId(latestBinding.schemaId)
+            setCurrentSchemaId(latestBinding.schemaId)
+            void loadExpertTeamWorkspaceState({ workspaceSlug: workspace.slug, schemaId: latestBinding.schemaId })
+          }
+        } catch {
+          // 忽略未绑定或离线时的加载错误
+        }
+      }
+    }
+    const unlisten = window.electronAPI?.onExpertTeamsChanged?.(() => {
+      void handleUpdate()
+    })
+    const handleFocus = (): void => {
+      void handleUpdate()
+    }
+    window.addEventListener('focus', handleFocus)
+    return () => {
+      unlisten?.()
+      window.removeEventListener('focus', handleFocus)
+    }
+  }, [currentWorkspaceId, loadExpertTeamWorkspaceState, loadSchemas, setCurrentSchemaId, setSchemaId, workspaces])
 
   React.useEffect(() => {
     if (!currentSchema || !currentWorkspaceId) return
@@ -524,7 +555,21 @@ export function ExpertTeamView(): React.ReactElement {
             <UsersRound className="size-4" />
             新专家团
           </button>
-          <div className="mb-3 flex items-center justify-between"><span className="text-xs font-semibold uppercase tracking-wide text-[#858b8e]">专家团队</span><span className="text-xs text-[#858b8e]">{schemas.length}</span></div>
+          <div className="mb-3 flex items-center justify-between">
+            <span className="text-xs font-semibold uppercase tracking-wide text-[#858b8e]">专家团队</span>
+            <div className="flex items-center gap-1.5">
+              <span className="text-xs text-[#858b8e]">{schemas.length}</span>
+              <button
+                type="button"
+                aria-label="刷新团队列表"
+                title="刷新团队列表"
+                onClick={() => void loadSchemas()}
+                className="rounded p-0.5 text-[#858b8e] transition-colors hover:bg-white/5 hover:text-[#dfe4e1]"
+              >
+                <RotateCw className={cn('size-3', loadState.schemas && 'animate-spin text-[#f0a15a]')} />
+              </button>
+            </div>
+          </div>
           {loadState.schemas && schemas.length === 0 ? <div className="flex items-center gap-2 py-6 text-xs text-[#858b8e]"><Loader2 className="size-4 animate-spin text-[#f0a15a]" />加载中</div> : schemas.length === 0 ? <div className="py-6 text-xs text-[#858b8e]">暂无可用的团队方案</div> : <div className="space-y-1">{schemas.map((schema) => <button key={schema.id} type="button" onClick={() => void selectSchema(schema.id)} className={cn('flex w-full items-center justify-between rounded-md px-3 py-2 text-left text-sm text-[#dfe4e1] transition-colors hover:bg-white/5', schema.id === schemaId && 'ui-primary-surface')}><span className="min-w-0 truncate">{schema.name}</span><ChevronRight className="size-3.5 shrink-0 text-[#858b8e]" /></button>)}</div>}
           <div className="mt-6 border-t border-white/10 pt-4"><div className="mb-3 text-xs font-semibold uppercase tracking-wide text-[#858b8e]">最近运行</div>{runs.length === 0 ? <p className="text-xs text-[#858b8e]">启动专家团队后将在此记录运行历史</p> : <div className="space-y-1.5">{runs.slice(0, 8).map((run) => <button key={run.id} type="button" onClick={() => { setCurrentRunId(run.id); void loadRun(run.id) }} className={cn('w-full rounded-md px-2.5 py-2 text-left text-[#dfe4e1] hover:bg-white/5', run.id === currentRun?.id && 'bg-[#f0a15a]/10')}><div className="flex items-center justify-between gap-2"><span className="truncate text-xs font-medium">{formatRunDisplayName(currentSchema?.name, run)}</span><span className={cn('rounded px-1.5 py-0.5 text-[10px]', statusClass(run.status))}>{statusLabels[run.status]}</span></div><div className="mt-1 text-[10px] text-[#858b8e]">{formatTime(run.createdAt)}</div></button>)}</div>}</div>
       </aside>

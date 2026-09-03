@@ -11,13 +11,19 @@ import { AgentConversationSurface } from './AgentConversationSurface'
 export interface AgentViewProps {
   sessionId: string
   compact?: boolean
+  hideStarterChips?: boolean
 }
 
-export function AgentView({ sessionId, compact = false }: AgentViewProps): ReactElement {
+export function AgentView({
+  sessionId,
+  compact = false,
+  hideStarterChips = false,
+}: AgentViewProps): ReactElement {
   return (
     <AgentConversationSurface
       sessionId={sessionId}
       variant={compact ? 'browser' : 'main'}
+      hideStarterChips={hideStarterChips}
     />
   )
 }

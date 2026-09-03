@@ -982,9 +982,10 @@ export interface ElectronAPI {
     cancelIdleInstall: () => Promise<void>
   }
 
-  // 工作区文件变化通知
+  // 工作区文件与专家团队变化通知
   onCapabilitiesChanged: (callback: () => void) => () => void
   onWorkspaceFilesChanged: (callback: () => void) => () => void
+  onExpertTeamsChanged: (callback: () => void) => () => void
 
   // ===== 飞书集成 =====
 
@@ -2015,6 +2016,12 @@ const electronAPI: ElectronAPI = {
     const listener = (): void => callback()
     ipcRenderer.on(AGENT_IPC_CHANNELS.WORKSPACE_FILES_CHANGED, listener)
     return () => { ipcRenderer.removeListener(AGENT_IPC_CHANNELS.WORKSPACE_FILES_CHANGED, listener) }
+  },
+
+  onExpertTeamsChanged: (callback: () => void) => {
+    const listener = (): void => callback()
+    ipcRenderer.on(AGENT_IPC_CHANNELS.EXPERT_TEAMS_CHANGED, listener)
+    return () => { ipcRenderer.removeListener(AGENT_IPC_CHANNELS.EXPERT_TEAMS_CHANGED, listener) }
   },
 
   // Agent 附件

@@ -477,3 +477,127 @@ fn current_builtin_v2_does_not_create_duplicate_revision() {
         BUILTIN_TEMPLATE_VERSION
     );
 }
+
+#[test]
+fn validate_schema_and_expanded_roles() {
+    let store = store();
+    let mut input = schema(Some("custom-team"), vec!["research"]);
+    input.nodes[0].role = "explore".to_string();
+    input.nodes[1].role = "custom".to_string();
+    let res = store.validate_schema(input).unwrap();
+    assert_eq!(res["valid"], true);
+    assert_eq!(res["nodeCount"], 2);
+    assert_eq!(res["edges"].as_array().unwrap().len(), 1);
+}
+
+#[test]
+fn delete_schema_and_builtin_protection() {
+    let store = store();
+    // 内置团队拒绝删除
+    let err = store.delete_schema(BUILTIN_SCHEMA_ID).unwrap_err();
+    assert!(matches!(err, ExpertTeamError::Validation(_)));
+
+    // 创建自定义团队并成功删除
+    let custom = schema(Some("my-team"), vec!["research"]);
+    store.publish_schema(custom).unwrap();
+    assert!(store.get_schema("my-team").is_ok());
+
+    let deleted = store.delete_schema("my-team").unwrap();
+    assert_eq!(deleted["deleted"], true);
+    assert_eq!(deleted["schemaId"], "my-team");
+    assert!(matches!(
+        store.get_schema("my-team"),
+        Err(ExpertTeamError::NotFound(_))
+    ));
+}
+
+#[test]
+fn delete_schema_rejects_active_runs() {
+    let store = store();
+    let custom = schema(Some("active-team"), vec!["research"]);
+    let pub_res = store.publish_schema(custom).unwrap();
+    let rev_id = pub_res["schemaRevisionId"].as_i64().unwrap();
+
+    // 创建 running/queued run
+    store
+        .create_run(RunCreateInput {
+            workspace_slug: "proj-1".to_string(),
+            schema_id: Some("active-team".to_string()),
+            schema_revision: None,
+            schema_revision_id: Some(rev_id),
+            input: json!({"task": "test"}),
+        })
+        .unwrap();
+
+    // 删除应被拒绝 (409 Conflict)
+    let err = store.delete_schema("active-team").unwrap_err();
+    assert!(matches!(err, ExpertTeamError::Conflict(_)));
+}
+
+#[test]
+fn unbind_workspace_succeeds_and_handles_missing() {
+    let store = store();
+    store
+        .bind_workspace(
+            "proj-a",
+            WorkspaceBindingInput {
+                schema_id: Some(BUILTIN_SCHEMA_ID.to_string()),
+                schema_revision: None,
+                schema_revision_id: None,
+            },
+        )
+        .unwrap();
+
+    let unbound = store.unbind_workspace("proj-a").unwrap();
+    assert_eq!(unbound["unbound"], true);
+    assert_eq!(unbound["workspaceSlug"], "proj-a");
+
+    // 再次解绑返回 NotFound
+    let err = store.unbind_workspace("proj-a").unwrap_err();
+    assert!(matches!(err, ExpertTeamError::NotFound(_)));
+}
+
+#[test]
+fn request_routes_support_validate_delete_and_unbind() {
+    let store = store();
+    // 1. 验证 POST /api/expert-teams/schemas/validate
+    let validate_body = serde_json::to_vec(&schema(Some("test-val"), vec!["research"])).unwrap();
+    let val_resp = handle_request(
+        &store,
+        "POST",
+        "/api/expert-teams/schemas/validate",
+        &validate_body,
+    )
+    .unwrap();
+    assert_eq!(val_resp.status, 200);
+    assert_eq!(val_resp.body["valid"], true);
+
+    // 2. 创建并解绑 DELETE /api/expert-teams/workspaces/:slug/binding
+    store
+        .bind_workspace(
+            "proj-b",
+            WorkspaceBindingInput {
+                schema_id: Some(BUILTIN_SCHEMA_ID.to_string()),
+                schema_revision: None,
+                schema_revision_id: None,
+            },
+        )
+        .unwrap();
+    let unbind_resp = handle_request(
+        &store,
+        "DELETE",
+        "/api/expert-teams/workspaces/proj-b/binding",
+        &[],
+    )
+    .unwrap();
+    assert_eq!(unbind_resp.status, 200);
+    assert_eq!(unbind_resp.body["unbound"], true);
+
+    // 3. 创建并删除 DELETE /api/expert-teams/schemas/:id
+    let pub_body = serde_json::to_vec(&schema(Some("del-team"), vec!["research"])).unwrap();
+    handle_request(&store, "POST", "/api/expert-teams/schemas", &pub_body).unwrap();
+    let del_resp =
+        handle_request(&store, "DELETE", "/api/expert-teams/schemas/del-team", &[]).unwrap();
+    assert_eq!(del_resp.status, 200);
+    assert_eq!(del_resp.body["deleted"], true);
+}

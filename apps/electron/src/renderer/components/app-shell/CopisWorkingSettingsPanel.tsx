@@ -6,6 +6,8 @@ import {
   CircleCheck,
   ChevronLeft,
   ChevronRight,
+  ChevronsLeft,
+  ChevronsRight,
   ClipboardList,
   Crown,
   Gem,
@@ -559,12 +561,44 @@ function WorkingAccountSettings({
         </div>
         {ledgerPagination.totalPages > 1 && (
           <nav className="copis-working-settings-ledger-pagination" aria-label="钻石流水分页">
-            <button type="button" disabled={ledgerPagination.page <= 1} onClick={() => setLedgerPage((page) => page - 1)} aria-label="上一页">
+            <button
+              type="button"
+              disabled={ledgerPagination.page <= 1}
+              onClick={() => setLedgerPage(1)}
+              aria-label="首页"
+              title="首页"
+            >
+              <ChevronsLeft aria-hidden="true" />
+            </button>
+            <button
+              type="button"
+              disabled={ledgerPagination.page <= 1}
+              onClick={() => setLedgerPage((page) => page - 1)}
+              aria-label="上一页"
+              title="上一页"
+            >
               <ChevronLeft aria-hidden="true" />
             </button>
-            <span>第 {ledgerPagination.page} / {ledgerPagination.totalPages} 页</span>
-            <button type="button" disabled={ledgerPagination.page >= ledgerPagination.totalPages} onClick={() => setLedgerPage((page) => page + 1)} aria-label="下一页">
+            <span>
+              第 {ledgerPagination.page} / {ledgerPagination.totalPages} 页（共 {selectedLedger.length} 条）
+            </span>
+            <button
+              type="button"
+              disabled={ledgerPagination.page >= ledgerPagination.totalPages}
+              onClick={() => setLedgerPage((page) => page + 1)}
+              aria-label="下一页"
+              title="下一页"
+            >
               <ChevronRight aria-hidden="true" />
+            </button>
+            <button
+              type="button"
+              disabled={ledgerPagination.page >= ledgerPagination.totalPages}
+              onClick={() => setLedgerPage(ledgerPagination.totalPages)}
+              aria-label="末页"
+              title="末页"
+            >
+              <ChevronsRight aria-hidden="true" />
             </button>
           </nav>
         )}

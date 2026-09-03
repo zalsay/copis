@@ -19,11 +19,11 @@ import {
   RefreshCw,
   ExternalLink,
   FolderSearch,
-  Terminal,
   MoreHorizontal,
   FolderInput,
   Pencil,
   MessageSquarePlus,
+  TextQuote,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { ScrollArea } from '@/components/ui/scroll-area'
@@ -251,11 +251,6 @@ export function FileBrowser({ rootPath, roots, hideToolbar, embedded, hideEmpty,
     window.electronAPI.showInFolder(entry.path, access).catch(console.error)
   }, [access])
 
-  /** 在系统终端中打开文件夹 */
-  const handleOpenInTerminal = React.useCallback((entry: FileEntry) => {
-    window.electronAPI.openFolderInTerminal(entry.path).catch(console.error)
-  }, [])
-
   /** 开始重命名 */
   const handleStartRename = React.useCallback((entry: FileEntry) => {
     setRenamingPath(entry.path)
@@ -392,7 +387,6 @@ export function FileBrowser({ rootPath, roots, hideToolbar, embedded, hideEmpty,
           recentlyModifiedSet={recentlyModifiedSet}
           onSelect={handleSelect}
           onShowInFolder={handleShowInFolder}
-          onOpenInTerminal={handleOpenInTerminal}
           onStartRename={handleStartRename}
           onCancelRename={handleCancelRename}
           onRename={handleRename}
@@ -500,7 +494,6 @@ interface FileTreeItemProps {
   recentlyModifiedSet: Set<string>
   onSelect: (entry: FileEntry, event: React.MouseEvent) => void
   onShowInFolder: (entry: FileEntry) => void
-  onOpenInTerminal: (entry: FileEntry) => void
   onStartRename: (entry: FileEntry) => void
   onCancelRename: () => void
   onRename: (filePath: string, newName: string) => Promise<string | null>
@@ -529,7 +522,6 @@ function FileTreeItem({
   recentlyModifiedSet,
   onSelect,
   onShowInFolder,
-  onOpenInTerminal,
   onStartRename,
   onCancelRename,
   onRename,
@@ -546,7 +538,6 @@ function FileTreeItem({
   const [children, setChildren] = React.useState<ScopedFileEntry[]>([])
   const [childrenLoaded, setChildrenLoaded] = React.useState(false)
   const rowRef = React.useRef<HTMLDivElement>(null)
-  const supportsTerminalFolderOpen = typeof navigator !== 'undefined' && navigator.userAgent.includes('Mac')
   const displayName = React.useMemo(
     () => getFileEntryDisplayName(entry, depth),
     [depth, entry],
@@ -891,7 +882,7 @@ function FileTreeItem({
                       scope: entry.scope,
                     }])}
                   >
-                    <MessageSquarePlus />
+                    <TextQuote className="text-[var(--ui-primary)]" />
                     引用到 Agent
                   </DropdownMenuItem>
                 )}
@@ -911,15 +902,6 @@ function FileTreeItem({
                   >
                     <FolderSearch />
                     在文件夹中显示
-                  </DropdownMenuItem>
-                )}
-                {supportsTerminalFolderOpen && menuSelectedCount === 1 && entry.isDirectory && (
-                  <DropdownMenuItem
-                    className="text-xs py-1 [&>svg]:size-3.5"
-                    onSelect={() => onOpenInTerminal(entry)}
-                  >
-                    <Terminal />
-                    在终端中打开此文件夹
                   </DropdownMenuItem>
                 )}
                 {menuSelectedCount === 1 && !entry.isDirectory && (
@@ -946,14 +928,16 @@ function FileTreeItem({
                     </TooltipContent>
                   </Tooltip>
                 )}
-                <DropdownMenuItem
-                  className="text-xs py-1 [&>svg]:size-3.5"
-                  disabled={moving}
-                  onSelect={() => { void onMove(entry) }}
-                >
-                  <FolderInput />
-                  {menuSelectedCount > 1 ? `移动选中 (${menuSelectedCount})` : '移动到...'}
-                </DropdownMenuItem>
+                {!entry.isDirectory && (
+                  <DropdownMenuItem
+                    className="text-xs py-1 [&>svg]:size-3.5"
+                    disabled={moving}
+                    onSelect={() => { void onMove(entry) }}
+                  >
+                    <FolderInput />
+                    {menuSelectedCount > 1 ? `移动选中 (${menuSelectedCount})` : '移动到...'}
+                  </DropdownMenuItem>
+                )}
                 {menuSelectedCount === 1 && (
                   <DropdownMenuItem
                     className="text-xs py-1 [&>svg]:size-3.5"
@@ -1010,7 +994,6 @@ function FileTreeItem({
               recentlyModifiedSet={recentlyModifiedSet}
               onSelect={onSelect}
               onShowInFolder={onShowInFolder}
-              onOpenInTerminal={onOpenInTerminal}
               onStartRename={onStartRename}
               onCancelRename={onCancelRename}
               onRename={onRename}

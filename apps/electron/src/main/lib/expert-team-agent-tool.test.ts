@@ -149,6 +149,13 @@ function installFetchMock(): void {
         ],
       })
     }
+    if (url.endsWith('/api/expert-teams/schemas') && init?.method === 'POST') {
+      const parsed = JSON.parse(String(init.body ?? '{}')) as Record<string, unknown>
+      return jsonResponse(201, { id: 'new-published-team', ...parsed, revision: 1, schemaRevisionId: 501 })
+    }
+    if (url.includes('/binding') && init?.method === 'POST') {
+      return jsonResponse(200, { bound: true, workspaceSlug: 'test-workspace' })
+    }
     if (url.endsWith('/api/expert-teams/schemas/explicit-team')) {
       schemaRequests.push(url)
       return jsonResponse(200, explicitSchema)
@@ -242,6 +249,63 @@ describe('专家团队工具冻结上下文', () => {
         { id: 'bound-team', name: '深入研究团队', nodeCount: 3 },
         { id: 'explicit-team', name: '显式团队', nodeCount: 1 },
       ],
+    })
+  })
+
+  test('Given 主 Agent 自定义团队 When 执行 expert_team_publish_schema Then 调用 Rust API 并绑定工作区', async () => {
+    installFetchMock()
+    const tools = buildExpertTeamTools(sdkMock(), {
+      sessionId: 'parent-session',
+      channelId: 'channel-1',
+      workspaceId: workspace.id,
+      workspaceSlug: workspace.slug,
+      triggeredBy: 'user',
+    })
+    const publishTool = tools.find((t) => (t as unknown as { name: string }).name === 'expert_team_publish_schema') as unknown as {
+      execute: (id: string, params: unknown) => Promise<unknown>
+    }
+    expect(publishTool).toBeDefined()
+
+    const result = await publishTool.execute('call-publish', {
+      name: '新测试团队',
+      description: '测试流水线',
+      nodes: [
+        { id: 'researcher', role: 'researcher', prompt: '搜集', dependsOn: [], path: 'res.md' },
+      ],
+      bindToCurrentWorkspace: true,
+    })
+
+    expect(result).toMatchObject({
+      details: {
+        published: { id: 'new-published-team' },
+        boundToWorkspace: true,
+      },
+    })
+  })
+
+  test('Given 主 Agent 绑定团队 When 执行 expert_team_bind_workspace Then 成功绑定当前工作区', async () => {
+    installFetchMock()
+    const tools = buildExpertTeamTools(sdkMock(), {
+      sessionId: 'parent-session',
+      channelId: 'channel-1',
+      workspaceId: workspace.id,
+      workspaceSlug: workspace.slug,
+      triggeredBy: 'user',
+    })
+    const bindTool = tools.find((t) => (t as unknown as { name: string }).name === 'expert_team_bind_workspace') as unknown as {
+      execute: (id: string, params: unknown) => Promise<unknown>
+    }
+    expect(bindTool).toBeDefined()
+
+    const result = await bindTool.execute('call-bind', {
+      schemaId: 'bound-team',
+    })
+
+    expect(result).toMatchObject({
+      details: {
+        schemaId: 'bound-team',
+        workspaceSlug: workspace.slug,
+      },
     })
   })
 

@@ -1,5 +1,5 @@
 import * as React from 'react'
-import { CalendarDays, Clock3, CornerDownLeft, FileText, GripVertical, ListTodo, MessageSquareText, Paperclip, Puzzle, Quote, Server, Trash2, Undo2 } from 'lucide-react'
+import { CalendarDays, Clock3, CornerDownLeft, FileText, GripVertical, ListTodo, MessageSquareText, Paperclip, Puzzle, Server, TextQuote, Trash2, Undo2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
@@ -112,7 +112,7 @@ export function AgentMessageQueue({
               <div className="min-w-0 flex-1 text-[13px] leading-5 text-foreground/80">
                 {item.quotedSelection && (
                   <div className="mb-0.5 flex min-w-0 items-center gap-1 text-[11px] leading-4 text-muted-foreground">
-                    <Quote className="size-3 shrink-0" />
+                    <TextQuote className="size-3 shrink-0 text-[var(--ui-primary)]" />
                     <span className="truncate">
                       引用：{item.quotedSelection.sourceLabel ?? item.quotedSelection.filePath}
                     </span>

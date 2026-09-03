@@ -6,7 +6,7 @@
  */
 
 import * as React from 'react'
-import { X, Quote } from 'lucide-react'
+import { X, TextQuote } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
 interface QuotedSelectionChipProps {
@@ -50,18 +50,18 @@ export function QuotedSelectionChip({
     <div
       className={cn(
         'group/chip relative flex min-w-0 max-w-full items-start gap-2',
-        'rounded-lg bg-primary/8 border border-primary/20',
+        'rounded-lg bg-[var(--ui-primary-background)] border border-[color-mix(in_srgb,var(--ui-primary)_24%,transparent)]',
         'pl-2.5 pr-7 py-1.5 text-[13px]',
-        'transition-colors hover:bg-primary/12',
+        'transition-colors hover:border-[color-mix(in_srgb,var(--ui-primary)_40%,transparent)]',
         className,
       )}
     >
-      <Quote className="size-4 shrink-0 mt-0.5 text-primary/60" />
+      <TextQuote className="size-4 shrink-0 mt-0.5 text-[var(--ui-primary)]" />
       <div className="flex flex-col min-w-0">
-        <span className="text-foreground/80 line-clamp-2 leading-snug break-words [overflow-wrap:anywhere]">
+        <span className="text-foreground/85 line-clamp-2 leading-snug break-words [overflow-wrap:anywhere]">
           {truncateText(text)}
         </span>
-        <span className="text-[11px] text-muted-foreground/60 mt-0.5 break-words [overflow-wrap:anywhere]">
+        <span className="text-[11px] text-[var(--ui-primary)] mt-0.5 break-words [overflow-wrap:anywhere] font-medium opacity-85">
           {sourceLabel ?? truncatePath(filePath)}
         </span>
       </div>

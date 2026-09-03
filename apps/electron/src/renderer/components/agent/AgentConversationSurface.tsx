@@ -257,9 +257,14 @@ export type AgentConversationSurfaceVariant = 'main' | 'browser'
 export interface AgentConversationSurfaceProps {
   sessionId: string
   variant?: AgentConversationSurfaceVariant
+  hideStarterChips?: boolean
 }
 
-export function AgentConversationSurface({ sessionId, variant = 'main' }: AgentConversationSurfaceProps): React.ReactElement {
+export function AgentConversationSurface({
+  sessionId,
+  variant = 'main',
+  hideStarterChips = false,
+}: AgentConversationSurfaceProps): React.ReactElement {
   const compact = variant === 'browser'
   const sessionSurfaceRef = React.useRef<HTMLDivElement>(null)
   const composerRef = React.useRef<HTMLDivElement>(null)
@@ -3019,7 +3024,7 @@ export function AgentConversationSurface({ sessionId, variant = 'main' }: AgentC
               onSelect={handleExecuteNextStep}
               onDismiss={handleDismissNextSteps}
             />
-          ) : !streaming ? (
+          ) : !streaming && !hideStarterChips ? (
             <NewSessionFeatureChips variant={variant} onSelect={handleSelectFeature} />
           ) : null}
 

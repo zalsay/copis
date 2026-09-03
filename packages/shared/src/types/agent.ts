@@ -1727,11 +1727,13 @@ export const AGENT_IPC_CHANNELS = {
   /** 标题已更新（首次对话完成后自动生成） */
   TITLE_UPDATED: 'agent:title-updated',
 
-  // 工作区配置变化通知（主进程 → 渲染进程推送）
+  // 工作区配置与专家团队变化通知（主进程 → 渲染进程推送）
   /** 工作区能力变化（MCP/Skills 文件监听触发） */
   CAPABILITIES_CHANGED: 'agent:capabilities-changed',
   /** 工作区文件变化（session 目录文件监听触发，用于文件浏览器刷新） */
   WORKSPACE_FILES_CHANGED: 'agent:workspace-files-changed',
+  /** 专家团队方案或工作区绑定变化通知（用于专家团队工作台热更新） */
+  EXPERT_TEAMS_CHANGED: 'agent:expert-teams-changed',
 
   // 权限系统
   /** 权限响应（渲染进程 → 主进程） */

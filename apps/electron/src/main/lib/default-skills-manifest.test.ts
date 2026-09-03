@@ -277,6 +277,25 @@ describe('默认 Skills 清单', () => {
     expect(content).toContain('ingest.py')
     expect(content).toContain('ask.py')
   })
+
+  test('custom-expert-team 包含系统内置元数据与核心规范', () => {
+    const bundled = new Set(bundledSkillSlugs())
+    expect(bundled.has('custom-expert-team')).toBe(true)
+
+    const frontmatter = readFrontmatter('custom-expert-team')
+    expect(frontmatter.get('name')).toBe('custom-expert-team')
+    expect(frontmatter.get('displayName')).toBe('自定义专家团队')
+    expect(frontmatter.get('group')).toBe('系统内置')
+    expect(frontmatter.get('version')?.replace(/^['"]|['"]$/g, '')).toMatch(/^\d+\.\d+\.\d+$/)
+
+    const content = readFileSync(join(DEFAULT_SKILLS_DIR, 'custom-expert-team', 'SKILL.md'), 'utf8')
+    expect(content).toContain('expert_team_publish_schema')
+    expect(content).toContain('expert_team_run')
+    expect(content).toContain('DAG')
+    expect(content).toContain('references/api.md')
+    expect(content).toContain('references/templates.md')
+  })
 })
+
 
 

@@ -81,7 +81,7 @@ describe('WebTabBar Windows 标题栏', () => {
     expect(html).toContain('flex-1')
   })
 
-  test('Given 网页 Tab 与首页 Tab When 渲染 Then 包含 hover Tooltip 用于展示完整文字与 URL', () => {
+  test('Given 网页 Tab 与首页 Tab When 渲染 Then 包含 hover Tooltip 仅展示完整标题且不展示地址', () => {
     const store = createStore()
     const tab: WebTabState = {
       id: 'web-tab-2',
@@ -103,7 +103,7 @@ describe('WebTabBar Windows 标题栏', () => {
     )
 
     expect(html).toContain('非常长的一个网页标题用于测试悬浮展示')
-    expect(html).toContain('https://developer.mozilla.org/zh-CN/docs/Web/HTML')
+    expect(html).not.toContain('https://developer.mozilla.org/zh-CN/docs/Web/HTML')
     expect(html).toContain('Copis 首页')
   })
 })

@@ -64,6 +64,12 @@ export interface ExpertTeamPublishSchemaInput {
   metadata?: Record<string, unknown>
 }
 
+export interface ExpertTeamValidateSchemaResult {
+  valid: boolean
+  nodeCount: number
+  edges: ExpertTeamEdge[]
+}
+
 export interface ExpertTeamWorkspaceBinding {
   workspaceSlug: string
   schemaId: string

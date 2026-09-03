@@ -39,6 +39,9 @@ function registerProtocolsAndHandlers(): void {
     { scheme: 'copis-file', privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true, stream: true } },
   ])
 
+  // 设置 Chromium 默认语言为简体中文，确保内嵌网页、错误页和 HTTP 请求头优先使用中文
+  app.commandLine.appendSwitch('lang', 'zh-CN')
+
   // Windows: 禁用 LCD 次像素抗锯齿（ClearType），改用灰度 AA。
   // ClearType 是为浅色背景+深色文字设计的，在深色代码块背景下会产生彩色边缘，导致文字模糊。
   if (process.platform === 'win32') {

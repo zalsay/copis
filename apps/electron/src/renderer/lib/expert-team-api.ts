@@ -10,6 +10,7 @@ import type {
   ExpertTeamSchema,
   ExpertTeamSchemaRevision,
   ExpertTeamSchemasResponse,
+  ExpertTeamValidateSchemaResult,
   ExpertTeamWorkspaceBinding,
 } from '@copis/shared'
 import { RENDERER_HTTP_API_BASE_URL } from './http-api-base-url'
@@ -218,12 +219,32 @@ export const expertTeamApi = {
     }).then(normalizeSchema)
   },
 
+  validateSchema(input: ExpertTeamPublishSchemaInput): Promise<ExpertTeamValidateSchemaResult> {
+    return request<ExpertTeamValidateSchemaResult>('/api/expert-teams/schemas/validate', {
+      method: 'POST',
+      body: JSON.stringify(input),
+    })
+  },
+
+  deleteSchema(schemaId: string): Promise<{ deleted: boolean; schemaId: string }> {
+    return request<{ deleted: boolean; schemaId: string }>(`/api/expert-teams/schemas/${encodeURIComponent(schemaId)}`, {
+      method: 'DELETE',
+    })
+  },
+
   async bindWorkspace(workspaceSlug: string, input: ExpertTeamBindWorkspaceInput): Promise<ExpertTeamWorkspaceBinding> {
     const payload = await request<ExpertTeamWorkspaceBinding | { binding: ExpertTeamWorkspaceBinding }>(
       `/api/expert-teams/workspaces/${workspacePath(workspaceSlug)}/binding`,
       { method: 'POST', body: JSON.stringify(input) },
     )
     return unwrapObject<ExpertTeamWorkspaceBinding>(payload, 'binding')
+  },
+
+  unbindWorkspace(workspaceSlug: string): Promise<{ unbound: boolean; workspaceSlug: string }> {
+    return request<{ unbound: boolean; workspaceSlug: string }>(
+      `/api/expert-teams/workspaces/${workspacePath(workspaceSlug)}/binding`,
+      { method: 'DELETE' },
+    )
   },
 
   async getWorkspaceBinding(workspaceSlug: string): Promise<ExpertTeamWorkspaceBinding | null> {

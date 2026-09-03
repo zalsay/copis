@@ -7,7 +7,7 @@
 
 import * as React from 'react'
 import { useAtom, useAtomValue, useSetAtom } from 'jotai'
-import { X, ExternalLink, ChevronRight, MoreHorizontal, FolderSearch, Pencil, FolderInput, MessageSquarePlus } from 'lucide-react'
+import { X, ExternalLink, ChevronRight, MoreHorizontal, FolderSearch, Pencil, FolderInput, MessageSquarePlus, TextQuote } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import {
@@ -721,7 +721,7 @@ function AttachedFilesSection({ title, scope = 'project', showSessionBadge = tru
                       scope,
                     }])}
                   >
-                    <MessageSquarePlus />
+                    <TextQuote className="text-[var(--ui-primary)]" />
                     引用到 Agent
                   </DropdownMenuItem>
                   {onAddToAgent && (
@@ -1289,7 +1289,7 @@ function AttachedDirItem({ entry, depth, selectedPaths, onSelect, refreshVersion
                     scope,
                   }])}
                 >
-                  <MessageSquarePlus />
+                  <TextQuote className="text-[var(--ui-primary)]" />
                   引用到 Agent
                 </DropdownMenuItem>
                 {onAddToAgent && !entry.isDirectory && (
@@ -1324,13 +1324,15 @@ function AttachedDirItem({ entry, depth, selectedPaths, onSelect, refreshVersion
                   <Pencil />
                   重命名
                 </DropdownMenuItem>
-                <DropdownMenuItem
-                  className="text-xs py-1 [&>svg]:size-3.5"
-                  onSelect={handleMove}
-                >
-                  <FolderInput />
-                  移动到...
-                </DropdownMenuItem>
+                {!entry.isDirectory && (
+                  <DropdownMenuItem
+                    className="text-xs py-1 [&>svg]:size-3.5"
+                    onSelect={handleMove}
+                  >
+                    <FolderInput />
+                    移动到...
+                  </DropdownMenuItem>
+                )}
               </DropdownMenuContent>
           </DropdownMenu>
           )}

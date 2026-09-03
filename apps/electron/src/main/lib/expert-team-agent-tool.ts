@@ -3,7 +3,7 @@
 import { Type } from 'typebox'
 import type { ToolDefinition } from '@earendil-works/pi-coding-agent'
 import type { AgentToolResult } from '@earendil-works/pi-agent-core'
-import type { AgentWorkspace, ExpertTeamPromptContext, ExpertTeamSchema, ExpertTeamSchemaRevision } from '@copis/shared'
+import { AGENT_IPC_CHANNELS, type AgentWorkspace, type ExpertTeamPromptContext, type ExpertTeamSchema, type ExpertTeamSchemaRevision } from '@copis/shared'
 import { HTTP_API_HOST, HTTP_API_PORT } from './http-api-server'
 import { getAgentWorkspace, getAgentWorkspaceAgentsPath, getAgentWorkspaceWritableRoot } from './agent-workspace-manager'
 import { updateAgentSessionMeta } from './agent-session-manager'
@@ -18,6 +18,21 @@ import {
 
 const DEFAULT_SCHEMA_ID = 'ai-education-research-writer-reviewer'
 const MAX_GOAL_LENGTH = 20_000
+
+export function broadcastExpertTeamsChanged(): void {
+  try {
+    const electron = require('electron') as typeof import('electron')
+    if (electron?.BrowserWindow) {
+      for (const win of electron.BrowserWindow.getAllWindows()) {
+        if (!win.isDestroyed()) {
+          win.webContents.send(AGENT_IPC_CHANNELS.EXPERT_TEAMS_CHANGED)
+        }
+      }
+    }
+  } catch {
+    // 忽略非 Electron 或测试环境错误
+  }
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -257,6 +272,101 @@ export function buildExpertTeamTools(sdk: typeof import('@earendil-works/pi-codi
       async execute() {
         const schemas = await listAvailableSchemas()
         return jsonToolResult(schemas)
+      },
+    }) as unknown as ToolDefinition,
+    sdk.defineTool({
+      name: 'expert_team_publish_schema',
+      label: '发布自定义专家团队',
+      description: '根据业务需求创建并发布一个新的自定义专家团队阵容（Schema），支持配置多个专业角色节点、Prompt 提示词、产物路径以及 DAG 依赖关系。可选自动绑定到当前工作区。发布成功后会自动通知前端工作台热更新。',
+      parameters: Type.Object({
+        name: Type.String({ description: '专家团队名称，如“全流程内容创作与审查团队”' }),
+        description: Type.Optional(Type.String({ description: '团队整体职责和流程说明' })),
+        nodes: Type.Array(Type.Object({
+          id: Type.String({ description: '节点唯一标识，如 researcher、writer、reviewer' }),
+          role: Type.String({ description: '岗位角色，支持 researcher/writer/reviewer/executor/explore/implement/custom 等' }),
+          prompt: Type.Optional(Type.String({ description: '该节点的专项服务职责提示词' })),
+          dependsOn: Type.Optional(Type.Array(Type.String(), { description: '依赖的前置节点 ID 列表' })),
+          path: Type.Optional(Type.String({ description: '该节点输出的相对产物路径，如 report/research.md' })),
+        }), { description: '专家团队包含的成员节点列表（1~32 个）' }),
+        bindToCurrentWorkspace: Type.Optional(Type.Boolean({ description: '是否同时将该阵容绑定到当前工作区，默认为 true' })),
+      }),
+      async execute(_toolCallId: string, params: unknown) {
+        const args = params as {
+          name?: unknown
+          description?: unknown
+          nodes?: unknown
+          bindToCurrentWorkspace?: unknown
+        }
+        const name = assertNonBlank(args.name, 'name')
+        const description = typeof args.description === 'string' ? args.description.trim() : undefined
+        if (!Array.isArray(args.nodes) || args.nodes.length === 0) {
+          throw new Error('专家团队至少需要包含 1 个成员节点')
+        }
+        const nodes = args.nodes.map((item) => {
+          if (!isRecord(item)) throw new Error('节点格式不正确')
+          return {
+            id: assertNonBlank(item.id, 'node.id'),
+            role: assertNonBlank(item.role, 'node.role'),
+            ...(typeof item.prompt === 'string' && item.prompt.trim() ? { prompt: item.prompt.trim() } : {}),
+            ...(Array.isArray(item.dependsOn) ? { dependsOn: item.dependsOn.filter((d): d is string => typeof d === 'string') } : {}),
+            ...(typeof item.path === 'string' && item.path.trim() ? { path: item.path.trim() } : {}),
+          }
+        })
+        const published = await requestPublic<Record<string, unknown>>('/api/expert-teams/schemas', {
+          method: 'POST',
+          body: JSON.stringify({ name, description, nodes }),
+        })
+        const schemaId = assertNonBlank(published.id, 'published.id')
+        const bind = args.bindToCurrentWorkspace !== false
+        let bindingResult: unknown
+        if (bind && ctx.workspaceId && ctx.workspaceSlug) {
+          const workspace = getAgentWorkspace(ctx.workspaceId)
+          if (workspace) {
+            bindingResult = await requestPublic<Record<string, unknown>>(
+              `/api/expert-teams/workspaces/${encodeURIComponent(workspace.slug)}/binding`,
+              { method: 'POST', body: JSON.stringify({ schemaId }) },
+            )
+            await resolveExpertTeamPromptContext({
+              workspace,
+              reader: new HttpExpertTeamContextReader(),
+            })
+          }
+        }
+        broadcastExpertTeamsChanged()
+        return jsonToolResult({
+          published,
+          boundToWorkspace: bind,
+          binding: bindingResult,
+        })
+      },
+    }) as unknown as ToolDefinition,
+    sdk.defineTool({
+      name: 'expert_team_bind_workspace',
+      label: '绑定专家团队到工作区',
+      description: '将指定的专家团队阵容绑定到当前工作区，并自动更新受管控 AGENTS.md 规范。绑定成功后会自动通知前端工作台热更新。',
+      parameters: Type.Object({
+        schemaId: Type.String({ description: '要绑定的专家团队阵容 ID' }),
+      }),
+      async execute(_toolCallId: string, params: unknown) {
+        const args = params as { schemaId?: unknown }
+        const schemaId = assertNonBlank(args.schemaId, 'schemaId')
+        if (!ctx.workspaceId || !ctx.workspaceSlug) throw new Error('缺少当前工作区上下文')
+        const workspace = getAgentWorkspace(ctx.workspaceId)
+        if (!workspace) throw new Error('当前工作区不存在')
+        const binding = await requestPublic<Record<string, unknown>>(
+          `/api/expert-teams/workspaces/${encodeURIComponent(workspace.slug)}/binding`,
+          { method: 'POST', body: JSON.stringify({ schemaId }) },
+        )
+        await resolveExpertTeamPromptContext({
+          workspace,
+          reader: new HttpExpertTeamContextReader(),
+        })
+        broadcastExpertTeamsChanged()
+        return jsonToolResult({
+          schemaId,
+          workspaceSlug: workspace.slug,
+          binding,
+        })
       },
     }) as unknown as ToolDefinition,
   ]

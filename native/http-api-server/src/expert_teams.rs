@@ -402,6 +402,91 @@ impl ExpertTeamStore {
         }))
     }
 
+    pub fn validate_schema(&self, input: ExpertSchemaInput) -> Result<Value, ExpertTeamError> {
+        validate_schema_input(&input)?;
+        let node_count = input.nodes.len();
+        let mut edges = Vec::new();
+        for node in &input.nodes {
+            for dep in &node.depends_on {
+                edges.push(json!({ "from": dep, "to": node.id }));
+            }
+        }
+        Ok(json!({
+            "valid": true,
+            "nodeCount": node_count,
+            "edges": edges,
+        }))
+    }
+
+    pub fn delete_schema(&self, id: &str) -> Result<Value, ExpertTeamError> {
+        if id == BUILTIN_SCHEMA_ID {
+            return Err(ExpertTeamError::Validation(
+                "内置专家团队不能删除".to_string(),
+            ));
+        }
+        let connection = self.connection.lock().unwrap();
+        let exists: Option<(String, Option<String>)> = connection
+            .query_row(
+                "SELECT s.id, r.snapshot_json
+                   FROM schemas s
+                   LEFT JOIN schema_revisions r ON r.id = s.current_revision_id
+                  WHERE s.id = ?",
+                [id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()
+            .map_err(storage_error)?;
+        let (schema_id, snapshot_json) = match exists {
+            Some(res) => res,
+            None => {
+                return Err(ExpertTeamError::NotFound(
+                    "专家团队 schema 不存在".to_string(),
+                ))
+            }
+        };
+        if let Some(snapshot_json) = snapshot_json {
+            if let Ok(snapshot) = serde_json::from_str::<Value>(&snapshot_json) {
+                if snapshot
+                    .get("metadata")
+                    .and_then(|m| m.get("source"))
+                    .and_then(Value::as_str)
+                    == Some("copis-builtin")
+                {
+                    return Err(ExpertTeamError::Validation(
+                        "内置专家团队不能删除".to_string(),
+                    ));
+                }
+            }
+        }
+        let active_runs: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM runs WHERE schema_id = ? AND status IN ('queued', 'running')",
+                [id],
+                |row| row.get(0),
+            )
+            .map_err(storage_error)?;
+        if active_runs > 0 {
+            return Err(ExpertTeamError::Conflict(
+                "存在正在运行的专家团队任务，无法删除".to_string(),
+            ));
+        }
+        let transaction = connection.unchecked_transaction().map_err(storage_error)?;
+        transaction
+            .execute("DELETE FROM workspace_bindings WHERE schema_id = ?", [id])
+            .map_err(storage_error)?;
+        transaction
+            .execute("DELETE FROM runs WHERE schema_id = ?", [id])
+            .map_err(storage_error)?;
+        transaction
+            .execute("DELETE FROM schema_revisions WHERE schema_id = ?", [id])
+            .map_err(storage_error)?;
+        transaction
+            .execute("DELETE FROM schemas WHERE id = ?", [id])
+            .map_err(storage_error)?;
+        transaction.commit().map_err(storage_error)?;
+        Ok(json!({ "deleted": true, "schemaId": schema_id }))
+    }
+
     pub fn bind_workspace(
         &self,
         workspace_slug: &str,
@@ -432,6 +517,23 @@ impl ExpertTeamStore {
             "sha256": revision.sha256,
             "boundAt": now,
         }))
+    }
+
+    pub fn unbind_workspace(&self, workspace_slug: &str) -> Result<Value, ExpertTeamError> {
+        validate_workspace_slug(workspace_slug)?;
+        let connection = self.connection.lock().unwrap();
+        let rows = connection
+            .execute(
+                "DELETE FROM workspace_bindings WHERE workspace_slug = ?",
+                [workspace_slug],
+            )
+            .map_err(storage_error)?;
+        if rows == 0 {
+            return Err(ExpertTeamError::NotFound(
+                "工作区未绑定专家团队".to_string(),
+            ));
+        }
+        Ok(json!({ "unbound": true, "workspaceSlug": workspace_slug }))
     }
 
     /// 只读返回 workspace 当前的 binding 与冻结 revision，未绑定时返回 NotFound。
@@ -1003,9 +1105,20 @@ pub fn handle_request(
                 body: store.publish_schema(input)?,
             })
         }
+        ("POST", [_, _, resource, action]) if resource == "schemas" && action == "validate" => {
+            let input = parse_body::<ExpertSchemaInput>(body)?;
+            Ok(ExpertTeamResponse {
+                status: 200,
+                body: store.validate_schema(input)?,
+            })
+        }
         ("GET", [_, _, resource, id]) if resource == "schemas" => Ok(ExpertTeamResponse {
             status: 200,
             body: store.get_schema(id)?,
+        }),
+        ("DELETE", [_, _, resource, id]) if resource == "schemas" => Ok(ExpertTeamResponse {
+            status: 200,
+            body: store.delete_schema(id)?,
         }),
         ("POST", [_, _, resource, slug, action])
             if resource == "workspaces" && action == "binding" =>
@@ -1022,6 +1135,14 @@ pub fn handle_request(
             Ok(ExpertTeamResponse {
                 status: 200,
                 body: store.get_workspace_binding(slug)?,
+            })
+        }
+        ("DELETE", [_, _, resource, slug, action])
+            if resource == "workspaces" && action == "binding" =>
+        {
+            Ok(ExpertTeamResponse {
+                status: 200,
+                body: store.unbind_workspace(slug)?,
             })
         }
         ("POST", [_, _, resource]) if resource == "runs" => {
@@ -1107,10 +1228,18 @@ fn validate_schema_input(input: &ExpertSchemaInput) -> Result<(), ExpertTeamErro
         }
         if !matches!(
             node.role.as_str(),
-            "researcher" | "writer" | "reviewer" | "executor"
+            "researcher"
+                | "writer"
+                | "reviewer"
+                | "executor"
+                | "explore"
+                | "research"
+                | "implement"
+                | "review"
+                | "custom"
         ) {
             return Err(ExpertTeamError::Validation(
-                "node role 仅支持 researcher/writer/reviewer/executor".to_string(),
+                "node role 仅支持 researcher/writer/reviewer/executor/explore/implement/custom 等角色".to_string(),
             ));
         }
         if let Some(path) = node.path.as_deref() {

@@ -461,10 +461,7 @@ function WebTabItem({
         </button>
       </TooltipTrigger>
       <TooltipContent side="bottom" className="max-w-[360px] break-all">
-        <p className="font-medium">{tabTitle}</p>
-        {tab.url && tab.url !== 'about:blank' && (
-          <p className="text-[11px] text-muted-foreground truncate opacity-80">{tab.url}</p>
-        )}
+        {tabTitle}
       </TooltipContent>
     </Tooltip>
   )

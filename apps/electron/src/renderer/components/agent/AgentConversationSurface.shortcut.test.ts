@@ -40,3 +40,11 @@ test('Given AgentConversationSurface When 渲染 Composer Then 绑定 inputHisto
   expect(source).toContain('inputHistory={composerInputHistory}')
   expect(source).toContain('setGlobalInputHistory((prev) => appendHistoryEntry(prev, effectiveText))')
 })
+
+test('Given hideStarterChips 为 true（如 Agent 问答） When 渲染 Composer Then 抑制快捷入口 NewSessionFeatureChips', () => {
+  expect(source).toContain('hideStarterChips?: boolean')
+  expect(source).toContain('!streaming && !hideStarterChips ?')
+
+  const questionViewSource = readFileSync(new URL('./AgentQuestionView.tsx', import.meta.url), 'utf8')
+  expect(questionViewSource).toContain('hideStarterChips')
+})

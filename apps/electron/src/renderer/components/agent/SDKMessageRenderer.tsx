@@ -12,7 +12,7 @@
  */
 
 import * as React from 'react'
-import { Loader2, AlertTriangle, FileText, FileImage, Download, RotateCw, Plus, Minimize2, Wrench, Settings, Cpu, ExternalLink, Quote, Clock, FolderInput, FolderPlus, ListTodo } from 'lucide-react'
+import { Loader2, AlertTriangle, FileText, FileImage, Download, RotateCw, Plus, Minimize2, Wrench, Settings, Cpu, ExternalLink, TextQuote, Clock, FolderInput, FolderPlus, ListTodo } from 'lucide-react'
 import { useAtomValue, useSetAtom } from 'jotai'
 import { cn } from '@/lib/utils'
 import { ImageLightbox, type LightboxImage } from '@/components/ui/image-lightbox'
@@ -888,8 +888,8 @@ function AttachedFileChip({ file }: { file: AttachedFileRef }): React.ReactEleme
 function QuoteChip({ quote }: { quote: QuotedFileRef }): React.ReactElement {
   const label = quote.label ?? quote.filename
   return (
-    <div className="inline-flex items-center gap-1.5 rounded-md bg-primary/8 border border-primary/20 px-2.5 py-1 text-[12px] text-muted-foreground">
-      <Quote className="size-3.5 shrink-0 text-primary/60" />
+    <div className="inline-flex items-center gap-1.5 rounded-md bg-[var(--ui-primary-background)] border border-[color-mix(in_srgb,var(--ui-primary)_24%,transparent)] px-2.5 py-1 text-[12px] text-foreground/85">
+      <TextQuote className="size-3.5 shrink-0 text-[var(--ui-primary)]" />
       <span className="truncate max-w-[200px]">{label}</span>
     </div>
   )

@@ -1,5 +1,5 @@
 import * as React from 'react'
-import { Bot } from 'lucide-react'
+import { TextQuote } from 'lucide-react'
 
 interface SelectionActionPopoverProps {
   x: number
@@ -27,7 +27,7 @@ export function SelectionActionPopover({
           className="inline-flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-[13px] font-medium transition-colors hover:bg-muted"
           onClick={onAddToAgent}
         >
-          <Bot className="size-4" />
+          <TextQuote className="size-4 text-[var(--ui-primary)] shrink-0" />
           为 Agent 引用
         </button>
         {onOpenAgentQuestion ? (
