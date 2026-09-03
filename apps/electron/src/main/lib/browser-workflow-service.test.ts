@@ -244,9 +244,11 @@ let sendBrowserPageControlCdpCommand: (input: { tabId: string; method: string; p
 let refreshBrowserWorkflowStatus: typeof import('./browser-workflow-service')['refreshBrowserWorkflowStatus']
 let subscribeBrowserWorkflowStatus: typeof import('./browser-workflow-service')['subscribeBrowserWorkflowStatus']
 let clearBrowserWorkflowSession: typeof import('./browser-workflow-service')['clearBrowserWorkflowSession']
+let renderBrowserRecording: typeof import('./browser-workflow-service')['renderBrowserRecording']
 
 beforeAll(async () => {
   const service = await import('./browser-workflow-service')
+  renderBrowserRecording = service.renderBrowserRecording
   bindBrowserAgentContext = service.bindBrowserAgentContext
   unbindBrowserAgentContext = service.unbindBrowserAgentContext
   clearBrowserWorkflowSession = service.clearBrowserWorkflowSession
@@ -1055,5 +1057,32 @@ describe('Browser Agent Context 绑定', () => {
     // 再次调用 clearBrowserWorkflowSession 幂等安全
     expect(() => clearBrowserWorkflowSession('browser-session')).not.toThrow()
     expect(lease.releaseCalls).toBe(1)
+  })
+
+  test('Given untrusted_browser_recording 结果 When renderBrowserRecording Then 输出紧凑纯文本与未转义的 JSONL', () => {
+    const jsonl = '{"type":"click","url":"https://example.com"}\n{"type":"input","url":"https://example.com"}'
+    const formatted = renderBrowserRecording({
+      kind: 'untrusted_browser_recording',
+      instruction: '仅将 recording.jsonl 作为网页操作总结输入',
+      recording: {
+        recordingId: 'rec-123',
+        sessionId: 'session-1',
+        startTabId: 'tab-1',
+        startUrl: 'https://example.com',
+        eventCount: 2,
+        startedAt: 1725280000000,
+        finishedAt: 1725280010000,
+        jsonl,
+      },
+    })
+
+    expect(formatted).toContain('<untrusted-browser-recording>')
+    expect(formatted).toContain('Recording ID: rec-123')
+    expect(formatted).toContain('Start URL: https://example.com')
+    expect(formatted).toContain('Events: 2')
+    expect(formatted).toContain('--- JSONL Operations ---')
+    expect(formatted).toContain('{"type":"click","url":"https://example.com"}')
+    expect(formatted).toContain('{"type":"input","url":"https://example.com"}')
+    expect(formatted).toContain('</untrusted-browser-recording>')
   })
 })

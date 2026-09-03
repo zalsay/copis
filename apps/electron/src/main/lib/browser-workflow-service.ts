@@ -1298,6 +1298,8 @@ function inspectRecordingJsonl(jsonl: string): { types: Set<string>; origins: Se
   return { types, origins }
 }
 
+export { renderBrowserRecording } from './browser-page-control-service'
+
 function validateDraftAgainstRecording(version: BrowserWorkflowVersion, recording: FinishedRecording): void {
   if (!recording.observedOrigins.has(version.start.origin)) throw new Error('Workflow 起始 Origin 不在录制观察范围内')
   for (const step of version.steps) {

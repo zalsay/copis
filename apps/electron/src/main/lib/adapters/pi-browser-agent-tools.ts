@@ -14,7 +14,7 @@ import {
   BROWSER_WORKFLOW_RUN_DESCRIPTION,
   BROWSER_WORKFLOW_RUN_PROMPT,
 } from './browser-workflow-draft-schema'
-import { renderBrowserSnapshot } from '../browser-page-control-service'
+import { renderBrowserRecording, renderBrowserSnapshot } from '../browser-page-control-service'
 import type { BrowserPageSnapshot } from '@copis/shared'
 
 type PiSdk = typeof import('@earendil-works/pi-coding-agent')
@@ -80,6 +80,13 @@ function toAgentToolResult(result: BrowserAgentToolResult): AgentToolResult<unkn
     && Array.isArray(result.value.elements)
   ) {
     text = renderBrowserSnapshot(result.value as unknown as BrowserPageSnapshot)
+  } else if (
+    isRecord(result.value)
+    && result.value.kind === 'untrusted_browser_recording'
+    && isRecord(result.value.recording)
+    && typeof result.value.recording.jsonl === 'string'
+  ) {
+    text = renderBrowserRecording(result.value)
   } else {
     text = JSON.stringify(result.value, null, 2)
   }

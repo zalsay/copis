@@ -39,6 +39,7 @@ mock.module('../browser-workflow-service', () => ({
   submitBrowserWorkflowDraft: () => undefined,
   submitBrowserWorkflowRepairDraft: () => undefined,
   approveBrowserWorkflowDraft: () => undefined,
+  renderBrowserRecording: (val: unknown) => JSON.stringify(val),
 }))
 mock.module('../browser-page-control-runtime', () => ({ browserPageControl: {} }))
 mock.module('../browser-workflow-runner', () => ({ runBrowserWorkflow: async () => undefined, stopBrowserWorkflowRun: () => {} }))

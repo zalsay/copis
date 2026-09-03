@@ -21,7 +21,7 @@ import { buildPiMemoryTools } from './pi-memory-tools'
 import { runtimeMemoryApiClient as memoryApiClient } from '../memory-api-client-runtime'
 import { memoryToolNamesForPolicy } from './memory-tool-policy'
 import { getBrowserAgentContext } from '../browser-workflow-service'
-import { renderBrowserSnapshot } from '../browser-page-control-service'
+import { renderBrowserRecording, renderBrowserSnapshot } from '../browser-page-control-service'
 import {
   browserAgentToolService,
   type BrowserAgentToolApprovalRequester,
@@ -185,6 +185,17 @@ function toPiBrowserAgentToolResult(result: BrowserAgentToolResult): AgentToolRe
   ) {
     return {
       content: [{ type: 'text', text: renderBrowserSnapshot(result.value as BrowserPageSnapshot) }],
+      details: result.value,
+    } as AgentToolResult<unknown>
+  }
+  if (
+    typeof result.value === 'object'
+    && result.value !== null
+    && (result.value as { kind?: string }).kind === 'untrusted_browser_recording'
+    && typeof (result.value as { recording?: { jsonl?: unknown } }).recording?.jsonl === 'string'
+  ) {
+    return {
+      content: [{ type: 'text', text: renderBrowserRecording(result.value) }],
       details: result.value,
     } as AgentToolResult<unknown>
   }
