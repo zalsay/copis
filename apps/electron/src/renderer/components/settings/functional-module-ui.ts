@@ -54,6 +54,12 @@ export const FUNCTIONAL_MODULE_DEFINITIONS: readonly FunctionalModuleDefinition[
     description: '为 Copis 提供 Agent 原生邮箱 (@agent.qq.com) 收发与管理能力',
     required: true,
   },
+  {
+    name: 'dsh',
+    displayName: 'dsh 运行环境',
+    description: '为 Copis 提供 DeepSeek Harness (dsh) 智能体运行时与工具执行环境',
+    required: true,
+  },
 ]
 
 export function createEmptyFunctionalModuleStatus(

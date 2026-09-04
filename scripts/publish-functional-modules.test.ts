@@ -9,6 +9,7 @@ import {
   validateExistingModulesForSingleModuleRelease,
   requireExistingAlipayBot,
   requireExistingAgentlyCli,
+  requireExistingDsh,
   requireExistingOfficeCli,
   requireExistingNodeRuntime,
   requireExistingPythonRuntime,
@@ -41,6 +42,7 @@ function createCompleteManifest(): FunctionalModuleManifest {
           'playwright-core': artifact('tar.gz', 'node_modules/playwright-core/index.js'),
           'python-runtime': artifact('tar.gz', 'bin/python'),
           'agently-cli': artifact('tar.gz', 'bin/agently-cli'),
+          dsh: artifact('tar.gz', 'bin/dsh'),
         },
       },
     },
@@ -198,6 +200,28 @@ describe('功能模块发布脚本 --rust', () => {
     })])
   })
 
+  test('dsh-only 输入使用 tar.gz 归档并保留稳定入口', () => {
+    const modules = buildFunctionalModuleBinaryInputs({
+      rustOnly: false,
+      dshOnly: true,
+      rustBinary: '/tmp/rust-api-does-not-exist',
+      rustVersion: '0.2.0',
+      officeCliBinary: '/tmp/officecli-does-not-exist',
+      officeCliVersion: '1.0.143',
+      dshArchive: '/tmp/dsh.tar.gz',
+      dshVersion: '0.1.2',
+      platform: 'darwin',
+      arch: 'x64',
+    })
+
+    expect(modules).toEqual([expect.objectContaining({
+      module: 'dsh',
+      format: 'tar.gz',
+      entrypoint: 'bin/dsh',
+      binaryPath: '/tmp/dsh.tar.gz',
+    })])
+  })
+
   test('Node runtime-only 发布要求 COS 已有 Rust 与 OfficeCLI', () => {
     const manifest: FunctionalModuleManifest = {
       schema: 1,
@@ -288,6 +312,26 @@ describe('功能模块发布脚本 --rust', () => {
     expect(() => requireExistingAgentlyCli(manifest, 'win32', 'x64')).toThrow('缺少 agently-cli')
   })
 
+  test('dsh artifact 要求兼容归档模块', () => {
+    const manifest: FunctionalModuleManifest = {
+      schema: 1,
+      channel: 'stable',
+      platforms: {
+        'darwin-x64': {
+          modules: {
+            dsh: {
+              version: '0.1.2', url: 'https://download.example.com/dsh.tar.gz', sha256: 'a'.repeat(64), size: 1,
+              format: 'tar.gz', entrypoint: 'bin/dsh', required: true,
+            },
+          },
+        },
+      },
+    }
+
+    expect(requireExistingDsh(manifest, 'darwin', 'x64')).toBe(true)
+    expect(() => requireExistingDsh(manifest, 'win32', 'x64')).toThrow('缺少 dsh')
+  })
+
   test('Rust-only 发布前置校验拒绝缺少任一必要远端模块', () => {
     const requiredExistingModules = [
       'officecli',
@@ -296,6 +340,7 @@ describe('功能模块发布脚本 --rust', () => {
       'playwright-core',
       'python-runtime',
       'agently-cli',
+      'dsh',
     ] as const
 
     for (const missingModule of requiredExistingModules) {

@@ -21,6 +21,7 @@ export type ActiveView =
   | 'memory'
   | 'knowledge'
   | 'expert-team'
+  | 'fund-stock'
 export type AgentSkillsCapabilityTab = 'skills' | 'mcp'
 
 /** 当前活跃视图（不持久化，每次启动默认显示对话） */

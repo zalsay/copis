@@ -71,3 +71,7 @@ export * from './expert-team'
 
 // Agent 原生邮箱 (QQ 邮箱) 相关类型
 export * from './agent-mail'
+
+// 基金股市（美股、A 股、港股、基金）相关类型与 IPC 通道
+export * from './fund-stock'
+

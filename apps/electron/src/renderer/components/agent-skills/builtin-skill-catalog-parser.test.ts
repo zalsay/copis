@@ -19,4 +19,13 @@ describe('内置 Skill 目录元数据解析', () => {
       enabled: true,
     })
   })
+
+  test('解析包含 category 的 frontmatter', () => {
+    const skill = parseBuiltinSkillMarkdown(
+      '---\nname: trading-cn-risk\ndisplayName: A股风控与投研\ndescription: A股风控\ngroup: 系统内置\ncategory: 投资\nversion: "1.0.0"\n---\n\n正文',
+      'trading-cn-risk',
+    )
+
+    expect(skill.category).toBe('投资')
+  })
 })

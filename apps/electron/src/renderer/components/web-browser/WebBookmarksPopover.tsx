@@ -560,6 +560,12 @@ export function WebBookmarksPopover({ activeTab, onNavigate, standalone = false,
           className="z-[9999] w-96 rounded-lg p-2 duration-75"
           style={{ animationDuration: '60ms', borderRadius: '8px' }}
           onOpenAutoFocus={(event) => event.preventDefault()}
+          onPointerDownOutside={(event) => {
+            if (standalone) event.preventDefault()
+          }}
+          onFocusOutside={(event) => {
+            if (standalone) event.preventDefault()
+          }}
         >
           <div className="flex items-center justify-between px-1 pb-2">
             <div>

@@ -18,17 +18,16 @@ function readFrontmatter(skillSlug: string): Map<string, string> {
   const match = content.match(/^---\s*\n([\s\S]*?)\n---/)
   if (!match?.[1]) throw new Error(`Skill ${skillSlug} 缺少 frontmatter`)
 
-  return new Map(
-    match[1]
-      .split('\n')
-      .map((line) => {
-        const separator = line.indexOf(':')
-        return separator === -1
-          ? null
-          : [line.slice(0, separator).trim(), line.slice(separator + 1).trim()] as const
-      })
-      .filter((entry): entry is readonly [string, string] => entry !== null),
-  )
+  const map = new Map<string, string>()
+  for (const line of match[1].split('\n')) {
+    if (/^\s/.test(line)) continue
+    const separator = line.indexOf(':')
+    if (separator === -1) continue
+    const key = line.slice(0, separator).trim()
+    const val = line.slice(separator + 1).trim()
+    if (key) map.set(key, val)
+  }
+  return map
 }
 
 function bundledSkillSlugs(): string[] {
@@ -57,6 +56,16 @@ describe('默认 Skills 清单', () => {
     const missingDisplayNames = bundledSkillSlugs().filter((slug) => !readFrontmatter(slug).get('displayName'))
 
     expect(missingDisplayNames).toEqual([])
+  })
+
+  test('每个保留的默认 Skill 都有合法的分类（Copis 功能、办公、投资、其他）', () => {
+    const validCategories = new Set(['Copis 功能', '办公', '投资', '其他'])
+    const invalidSkills = bundledSkillSlugs().filter((slug) => {
+      const cat = readFrontmatter(slug).get('category')
+      return !cat || !validCategories.has(cat)
+    })
+
+    expect(invalidSkills).toEqual([])
   })
 
   test('Office 文档统一使用系统内置 officecli Skill', () => {
@@ -294,6 +303,27 @@ describe('默认 Skills 清单', () => {
     expect(content).toContain('DAG')
     expect(content).toContain('references/api.md')
     expect(content).toContain('references/templates.md')
+  })
+
+  test('基金股市 5 大投研 Skill 归入系统内置分组并包含完整元数据', () => {
+    const bundled = new Set(bundledSkillSlugs())
+    const tradingSkills = [
+      { slug: 'trading-cn-risk', displayName: 'A股风控与投研' },
+      { slug: 'trading-us-risk', displayName: '美股风控与投研' },
+      { slug: 'trading-hk-risk', displayName: '港股风控与投研' },
+      { slug: 'trading-fund-analysis', displayName: '基金与ETF穿透分析' },
+      { slug: 'trading-company-analysis', displayName: '上市公司基本面剖析' },
+    ]
+
+    for (const item of tradingSkills) {
+      expect(bundled.has(item.slug)).toBe(true)
+      const fm = readFrontmatter(item.slug)
+      expect(fm.get('name')).toBe(item.slug)
+      expect(fm.get('displayName')).toBe(item.displayName)
+      expect(fm.get('group')).toBe('系统内置')
+      expect(fm.get('version')).toBe('1.0.0')
+      expect(fm.get('description')?.length).toBeGreaterThan(10)
+    }
   })
 })
 

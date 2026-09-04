@@ -3,6 +3,7 @@ name: browser-page-control
 displayName: 网页控制
 description: Copis AI浏览器的网页观察与交互规则，约束页面引用、权限模式和高影响操作确认。
 group: 系统内置
+category: Copis 功能
 icon: globe
 version: "1.0.4"
 ---

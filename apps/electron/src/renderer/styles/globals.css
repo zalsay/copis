@@ -1090,6 +1090,44 @@
   z-index: 1;
 }
 
+/* 基金股市标的页签：激活态底部使用 Chrome 式反向外圆角，与下方内容区 (hsl(var(--background))) 平滑衔接 */
+.fund-tab-shape {
+  position: relative;
+  z-index: 1;
+  isolation: isolate;
+  border-radius: 8px 8px 0 0;
+}
+
+.fund-tab-shape[aria-current='page'] {
+  z-index: 2;
+}
+
+.fund-tab-shape[aria-current='page']::before,
+.fund-tab-shape[aria-current='page']::after {
+  position: absolute;
+  bottom: 0;
+  z-index: 0;
+  width: 12px;
+  height: 12px;
+  content: '';
+  pointer-events: none;
+}
+
+.fund-tab-shape[aria-current='page']::before {
+  left: -12px;
+  background: radial-gradient(circle at top left, transparent 12px, hsl(var(--background)) 12.5px);
+}
+
+.fund-tab-shape[aria-current='page']::after {
+  right: -12px;
+  background: radial-gradient(circle at top right, transparent 12px, hsl(var(--background)) 12.5px);
+}
+
+.fund-tab-shape > * {
+  position: relative;
+  z-index: 1;
+}
+
 [data-input-mode] > .copis-agent-composer-card,
 [data-input-mode] > div:first-child:not(.copis-agent-starter-chips):not(.copis-agent-next-steps-chips) {
   background-color: hsl(var(--input-surface)) !important;
@@ -2449,3 +2487,25 @@
 .ProseMirror-focused .ProseMirror-gapcursor {
   display: block;
 }
+
+/* ===== 基金股市自选跑马灯横向无缝循环动画 ===== */
+@keyframes marquee-scroll {
+  0% {
+    transform: translateX(0%);
+  }
+  100% {
+    transform: translateX(-50%);
+  }
+}
+
+.animate-marquee-scroll {
+  display: flex;
+  width: max-content;
+  animation: marquee-scroll 35s linear infinite;
+  will-change: transform;
+}
+
+.animate-marquee-scroll:hover {
+  animation-play-state: paused;
+}
+

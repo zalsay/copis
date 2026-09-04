@@ -374,10 +374,13 @@ describe('Rust HTTP API 功能模块生命周期', () => {
       agentlyCliEntrypoint,
       'agently-cli',
     )
+    const dshEntrypoint = process.platform === 'win32' ? 'bin/dsh.cmd' : 'bin/dsh'
+    const dsh = binaryPackage('dsh', '0.1.2', dshEntrypoint, 'dsh')
     await activateRustVersion(root, rust, 'payment-rust-api')
     const nodePath = await activateModuleVersion(modulesRoot, node, 'node-runtime')
     const alipayBotPath = await activateModuleVersion(modulesRoot, alipayBot, 'alipay-bot')
     const agentlyCliPath = await activateModuleVersion(modulesRoot, agentlyCli, 'agently-cli')
+    const dshPath = await activateModuleVersion(modulesRoot, dsh, 'dsh')
     const officeCliPath = await activateModuleVersion(modulesRoot, officeCli, 'officecli')
 
     startHttpApiServer({
@@ -391,6 +394,8 @@ describe('Rust HTTP API 功能模块生命周期', () => {
       COPIS_ALIPAY_BOT_NODE: nodePath,
       COPIS_AGENTLY_CLI: agentlyCliPath,
       COPIS_AGENTLY_CLI_NODE: nodePath,
+      COPIS_DSH: dshPath,
+      COPIS_DSH_NODE: nodePath,
       COPIS_OFFICECLI: officeCliPath,
     })
   })

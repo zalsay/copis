@@ -17,6 +17,9 @@ apps/electron/resources/pi-extensions/
 apps/electron/resources/node-runtime/
 apps/electron/resources/alipay-bot/
 apps/electron/resources/playwright-core/
+apps/electron/resources/python-runtime/
+apps/electron/resources/agently-cli/
+apps/electron/resources/dsh/
 # 根目录误提交的 esbuild 打包产物（真实入口是 apps/electron/dist/main.cjs）
 /main.cjs
 # bun build --compile 的临时中间产物

@@ -3,6 +3,7 @@ name: custom-expert-team
 displayName: 自定义专家团队
 description: 当用户提出创建、自定义、配置、修改、设计或管理专家团队（Expert Team / Agent Team / 专家阵容 / 多 Agent 协同流水线）时使用本技能。指导如何根据业务目标设计专业角色分工、任务描述、交付物路径与 DAG 依赖拓扑，并通过 Copis 专家团队内置工具及 Rust HTTP API 校验、发布自定义团队阵容，绑定到工作区并进行验证调度。
 group: 系统内置
+category: Copis 功能
 version: "1.0.0"
 license: AGPL-3.0-only
 ---

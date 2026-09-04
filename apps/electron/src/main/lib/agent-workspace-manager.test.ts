@@ -184,6 +184,24 @@ describe('项目术语迁移', () => {
 
     expect(readFileSync(join(activeSkillDir, 'SKILL.md'), 'utf-8')).toContain('由 Rust 自动轮询。')
   })
+
+  test('Given 新安装 When 调用 ensureInvestmentWorkspace Then 创建「我的投资」固定工作区且绑定 Investment 根目录', () => {
+    const workspace = manager.ensureInvestmentWorkspace()
+    const expectedProjectRootPath = realpathSync(join(tempHome, 'Documents', 'Copis', 'Investment'))
+
+    expect(workspace.name).toBe('我的投资')
+    expect(workspace.slug).toBe('investment')
+    expect(workspace.projectRootPath).toBe(expectedProjectRootPath)
+    expect(workspace.projectPath).toBe(join(expectedProjectRootPath, 'project'))
+    expect(existsSync(workspace.projectRootPath!)).toBe(true)
+    expect(existsSync(workspace.projectPath!)).toBe(true)
+    expect(manager.getAgentWorkspaceWritableRoot(workspace)).toBe(join(expectedProjectRootPath, 'copis'))
+  })
+
+  test('Given 「我的投资」工作区 When 尝试删除 Then 抛出系统固定工作区不能删除错误', () => {
+    const workspace = manager.ensureInvestmentWorkspace()
+    expect(() => manager.deleteAgentWorkspace(workspace.id)).toThrow('系统固定工作区不能删除')
+  })
 })
 
 describe('Agent 工作区创建', () => {

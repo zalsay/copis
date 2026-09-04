@@ -853,11 +853,9 @@ export function openWebBookmarksWindow(input: OpenWebBookmarksWindowInput): void
     height: bookmarksWindowState?.height ?? DEFAULT_BOOKMARKS_WINDOW_HEIGHT,
   }
 
+  // 如果已经打开着，再次点击触发按钮时关闭（toggle 语义）
   if (bookmarksWindow && !bookmarksWindow.isDestroyed()) {
-    bookmarksWindowState = nextState
-    positionBookmarksWindow()
-    bookmarksWindow.show()
-    bookmarksWindow.focus()
+    closeWebBookmarksWindow()
     return
   }
 
@@ -899,10 +897,14 @@ export function openWebBookmarksWindow(input: OpenWebBookmarksWindowInput): void
       bookmarksWindowState = null
     }
   })
+
+  let shownAt = 0
   window.on('blur', () => {
     setTimeout(() => {
+      // 避免窗口刚展示时的焦点交接瞬态误触发关闭
+      if (Date.now() - shownAt < 150) return
       if (!window.isDestroyed() && !window.isFocused()) closeWebBookmarksWindow()
-    }, 0)
+    }, 50)
   })
 
   positionBookmarksWindow()
@@ -911,6 +913,7 @@ export function openWebBookmarksWindow(input: OpenWebBookmarksWindowInput): void
     positionBookmarksWindow()
     window.show()
     window.focus()
+    shownAt = Date.now()
   })
   void window.loadURL((() => {
     try {
@@ -922,7 +925,7 @@ export function openWebBookmarksWindow(input: OpenWebBookmarksWindowInput): void
     }
   })()).catch((error: unknown) => {
     console.error('[网页收藏夹] 浮层窗口加载失败:', error)
-    closeWebBookmarksWindow(true)
+    closeWebBookmarksWindow()
   })
 }
 
@@ -939,21 +942,12 @@ export function resizeWebBookmarksWindow(input: ResizeWebBookmarksWindowInput): 
   positionBookmarksWindow()
 }
 
-/** 关闭原生收藏夹浮层。默认隐藏以保持预热极速弹出；destroy 为 true 时真正销毁。 */
-export function closeWebBookmarksWindow(destroy = false): void {
+/** 关闭原生收藏夹浮层。 */
+export function closeWebBookmarksWindow(): void {
   const window = bookmarksWindow
-  if (!window || window.isDestroyed()) {
-    bookmarksWindow = null
-    bookmarksWindowState = null
-    return
-  }
-  if (destroy) {
-    bookmarksWindow = null
-    bookmarksWindowState = null
-    window.close()
-  } else {
-    window.hide()
-  }
+  bookmarksWindow = null
+  bookmarksWindowState = null
+  if (window && !window.isDestroyed()) window.close()
 }
 
 function clearIncognitoSession(record: WebTabRecord): void {
@@ -978,7 +972,7 @@ export function saveWebTabsSession(): void {
 /** 释放所有网页页签及原生视图。 */
 export function disposeWebTabs(): void {
   isDisposingWebTabs = true
-  closeWebBookmarksWindow(true)
+  closeWebBookmarksWindow()
   const currentHost = hostWindow
   hostWindow = null
   activeTabId = null

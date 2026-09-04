@@ -15,6 +15,7 @@ describe('功能模块版本锁', () => {
       'alipay-bot': '0.3.40',
       'playwright-core': '1.62.1',
       'agently-cli': '1.0.17',
+      dsh: '0.1.2',
     })
   })
 

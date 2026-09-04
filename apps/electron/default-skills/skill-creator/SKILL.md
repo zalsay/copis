@@ -3,6 +3,7 @@ name: skill-creator
 displayName: 技能创建
 description: Create new skills, modify and improve existing skills, and measure skill performance. Use when users want to create a skill from scratch, edit, or optimize an existing skill, run evals to test a skill, benchmark skill performance with variance analysis, or optimize a skill's description for better triggering accuracy.
 group: 系统内置
+category: Copis 功能
 version: "1.1.3"
 ---
 

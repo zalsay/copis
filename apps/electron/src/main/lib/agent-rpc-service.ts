@@ -71,6 +71,7 @@ import { buildReferencedPlanningPrompt } from './planning-reference-context'
 import { buildMentionedToolsPrompt } from './agent-mentioned-tools-prompt'
 import { buildAgentRuntimeEnv, mergeRuntimeEnv } from './agent-runtime-env'
 import { getFunctionalModulePath } from './functional-module-manager'
+import { resolveDshNode } from './dsh-runtime'
 import { getHttpApiInternalToken } from './http-api-server'
 import { getEffectiveProxyUrl } from './proxy-settings-service'
 import { getRuntimeStatus } from './runtime-init'
@@ -423,6 +424,8 @@ function buildRuntimeEnv(
     windowsShellPreference: settings.windowsShellPreference,
     officeCliPath: getFunctionalModulePath('officecli'),
     pythonRuntimePath: getFunctionalModulePath('python-runtime'),
+    dshPath: getFunctionalModulePath('dsh'),
+    dshNodePath: resolveDshNode(),
   })
   if (!workspace || !workspaceSlug) return base
   const workspaceEnv = {

@@ -3,6 +3,7 @@ name: officecli
 displayName: 办公文档
 description: Create, analyze, proofread, and modify Office documents (.docx, .xlsx, .pptx) using the officecli CLI tool. Use when the user wants to create, inspect, check formatting, find issues, add charts, or modify Office documents.
 group: 系统内置
+category: 办公
 version: "1.0.147"
 license: Apache-2.0
 ---

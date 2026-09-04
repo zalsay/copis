@@ -10,6 +10,21 @@
   border-radius: 8px;
 }
 
+.copis-agent-session-compact.new-conversation .copis-agent-new-session-hero {
+  top: calc(50% - 90px);
+  width: calc(100% - 24px);
+}
+
+.copis-agent-session-compact.new-conversation .copis-agent-new-session-hero h1 {
+  font-size: 15px;
+  line-height: 1.4;
+}
+
+.copis-agent-session-compact.new-conversation .copis-agent-new-session-input {
+  top: calc(50% + 20px);
+  width: calc(100% - 16px);
+}
+
 /* Agent 思考状态：复刻 Working 的灰白高光，从右向左扫过。 */
 .agent-thinking-marquee {
   display: inline-block;

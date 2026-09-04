@@ -3,6 +3,7 @@ name: agently-mail
 displayName: Agent 原生邮箱
 description: 通过 agently-cli 与受控 Agent Mail 工具操作邮件：发送、回复、转发、搜索、读取、下载附件与管理收件箱。
 group: 系统内置
+category: 办公
 icon: mail
 version: 1.0.0
 ---

@@ -5,6 +5,7 @@ description: >-
   支付宝官方支付服务开通和授权技能的 Copis 适配版本。用于检查钱包状态、申请开通、展示授权二维码和绑定授权码。
   当支付流程的 wallet.check 返回待授权或未开通时，必须使用此技能接管流程。
 group: 系统内置
+category: Copis 功能
 icon: wallet-cards
 version: 0.0.1
 metadata:

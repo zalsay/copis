@@ -6,7 +6,7 @@
  */
 
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
-import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, ATTACHMENT_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, FUNCTIONAL_MODULE_IPC_CHANNELS, PROXY_IPC_CHANNELS, AGENT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, WECHAT_IPC_CHANNELS, AGENT_MAIL_IPC_CHANNELS, AUTOMATION_IPC_CHANNELS, PLANNING_IPC_CHANNELS, WORKING_IPC_CHANNELS, WEB_IPC_CHANNELS, BROWSER_WORKFLOW_IPC_CHANNELS, MEMORY_IPC_CHANNELS } from '@copis/shared'
+import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, ATTACHMENT_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, FUNCTIONAL_MODULE_IPC_CHANNELS, PROXY_IPC_CHANNELS, AGENT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, WECHAT_IPC_CHANNELS, AGENT_MAIL_IPC_CHANNELS, AUTOMATION_IPC_CHANNELS, PLANNING_IPC_CHANNELS, WORKING_IPC_CHANNELS, WEB_IPC_CHANNELS, BROWSER_WORKFLOW_IPC_CHANNELS, MEMORY_IPC_CHANNELS, FUND_STOCK_IPC_CHANNELS } from '@copis/shared'
 import { USER_PROFILE_IPC_CHANNELS, SETTINGS_IPC_CHANNELS, SCRATCH_PAD_IPC_CHANNELS, APP_ICON_IPC_CHANNELS, DOCK_BADGE_IPC_CHANNELS, STORAGE_IPC_CHANNELS } from '../types'
 import { agentHttpStreamClient } from '../renderer/lib/agent-http-stream'
 import { COPIS_HTTP_API_HOST } from '@copis/shared/config'
@@ -177,6 +177,12 @@ import type {
   WebTabsSnapshot,
   WorkingWorkspace,
   WorkingWorkspaceInput,
+  MarketQuote,
+  KlinePoint,
+  KlinePeriod,
+  FundStockSearchResult,
+  WatchlistItem,
+  FundStockTerminalStatus,
 } from '@copis/shared'
 
 const HTTP_API_WEB_TOKEN_ARGUMENT_PREFIX = '--copis-http-api-web-token='
@@ -1196,7 +1202,7 @@ export interface ElectronAPI {
   migrationParseImportFile: (filePath: string) => Promise<unknown>
   /** 确认导入 */
   migrationConfirmImport: (options: unknown) => Promise<{ success: boolean }>
-  /** 打开文件选择对话框（选择 .copis-backup/.copis-share，也兼容旧版 .proma-backup/.proma-share 文件） */
+  /** 打开文件选择对话框（选择 .copis-backup/.copis-share，也兼容旧版备份文件） */
   migrationOpenFileDialog: () => Promise<string | null>
   /** 打开文件保存对话框（选择导出路径） */
   migrationSaveFileDialog: (mode: string) => Promise<string | null>
@@ -1257,7 +1263,19 @@ export interface ElectronAPI {
   onPlanningChanged: (callback: (change: PlanningChange) => void) => () => void
   onPlanningAgentOperation: (callback: (operation: PlanningAgentOperation) => void) => () => void
 
+  // ===== 基金股市（美股、A 股、港股、基金） =====
+  fundStock: {
+    getQuote: (symbols: string[] | string) => Promise<MarketQuote[]>
+    getKlines: (symbol: string, period?: KlinePeriod, count?: number) => Promise<KlinePoint[]>
+    searchSymbols: (keyword: string) => Promise<FundStockSearchResult[]>
+    getWatchlist: () => Promise<WatchlistItem[]>
+    saveWatchlist: (items: WatchlistItem[]) => Promise<{ success: boolean }>
+    getTerminalStatus: () => Promise<FundStockTerminalStatus>
+    startTerminal: () => Promise<FundStockTerminalStatus>
+    stopTerminal: () => Promise<FundStockTerminalStatus>
+  }
 }
+
 
 interface MigrationExportResult {
   success: boolean
@@ -2739,7 +2757,27 @@ const electronAPI: ElectronAPI = {
   fetchUrlContent: (url: string) => ipcRenderer.invoke(MEMORY_IPC_CHANNELS.FETCH_URL_CONTENT, url),
   extractKnowledgeFromText: (input: MemoryExtractKnowledgeInput) => ipcRenderer.invoke(MEMORY_IPC_CHANNELS.EXTRACT_KNOWLEDGE, input),
 
+  // ===== 基金股市（美股、A 股、港股、基金） =====
+  fundStock: {
+    getQuote: (symbols: string[] | string): Promise<MarketQuote[]> =>
+      ipcRenderer.invoke(FUND_STOCK_IPC_CHANNELS.GET_QUOTE, symbols),
+    getKlines: (symbol: string, period?: KlinePeriod, count?: number): Promise<KlinePoint[]> =>
+      ipcRenderer.invoke(FUND_STOCK_IPC_CHANNELS.GET_KLINES, symbol, period, count),
+    searchSymbols: (keyword: string): Promise<FundStockSearchResult[]> =>
+      ipcRenderer.invoke(FUND_STOCK_IPC_CHANNELS.SEARCH_SYMBOLS, keyword),
+    getWatchlist: (): Promise<WatchlistItem[]> =>
+      ipcRenderer.invoke(FUND_STOCK_IPC_CHANNELS.GET_WATCHLIST),
+    saveWatchlist: (items: WatchlistItem[]): Promise<{ success: boolean }> =>
+      ipcRenderer.invoke(FUND_STOCK_IPC_CHANNELS.SAVE_WATCHLIST, items),
+    getTerminalStatus: (): Promise<FundStockTerminalStatus> =>
+      ipcRenderer.invoke(FUND_STOCK_IPC_CHANNELS.TERMINAL_STATUS),
+    startTerminal: (): Promise<FundStockTerminalStatus> =>
+      ipcRenderer.invoke(FUND_STOCK_IPC_CHANNELS.START_TERMINAL),
+    stopTerminal: (): Promise<FundStockTerminalStatus> =>
+      ipcRenderer.invoke(FUND_STOCK_IPC_CHANNELS.STOP_TERMINAL),
+  },
 }
+
 
 // 将 API 暴露到渲染进程的 window 对象上
 contextBridge.exposeInMainWorld('electronAPI', electronAPI)

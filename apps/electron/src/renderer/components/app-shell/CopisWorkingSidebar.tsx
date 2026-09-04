@@ -24,6 +24,7 @@ import {
   Sparkles,
   Timer,
   Trash2,
+  TrendingUp,
   UsersRound,
 } from 'lucide-react'
 import { toast } from 'sonner'
@@ -459,7 +460,7 @@ export function CopisWorkingSidebar({ width, noTransition = false }: CopisWorkin
               <button type="button" role="menuitem" onClick={(event) => { event.stopPropagation(); void handleOpenWorkspaceFolder(workspace) }}>
                 打开文件夹
               </button>
-              {workspace.slug !== 'default' && (
+              {workspace.slug !== 'default' && workspace.slug !== 'investment' && (
                 <button type="button" className="copis-working-project-delete" role="menuitem" disabled={busy || localWorkspaces.length <= 1} onClick={(event) => { event.stopPropagation(); requestRemoveWorkspace(workspace.id) }}>
                   删除工作区
                 </button>
@@ -633,6 +634,10 @@ export function CopisWorkingSidebar({ width, noTransition = false }: CopisWorkin
           <button type="button" className="copis-working-menu-button" onClick={() => { setWorkingHistorySelection(null); setAppMode('agent'); setActiveView('agent-skills') }}>
             <Puzzle aria-hidden="true" />
             <span>技能市场</span>
+          </button>
+          <button type="button" className={cn('copis-working-menu-button', activeView === 'fund-stock' && 'active')} onClick={() => { setWorkingHistorySelection(null); setAppMode('agent'); setActiveView('fund-stock') }}>
+            <TrendingUp aria-hidden="true" />
+            <span>我的投资</span>
           </button>
         </nav>
 

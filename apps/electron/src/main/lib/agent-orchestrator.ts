@@ -99,6 +99,7 @@ import { MemoryAutoCapture, extractMemoryFactsWithProvider } from './adapters/pi
 import { createMemoryMaintenanceRunner, sharedMemoryMaintenanceService, MemoryMaintenanceService } from './adapters/pi-memory-maintenance'
 import { buildAgentRuntimeEnv, type AgentRuntimeEnv } from './agent-runtime-env'
 import { getFunctionalModulePath } from './functional-module-manager'
+import { resolveDshNode } from './dsh-runtime'
 import { getHttpApiInternalToken } from './http-api-server'
 import { isVisibleRunMessage } from './agent-run-message-visibility'
 import { resolvePiThinkingLevel } from './agent-thinking-level'
@@ -463,6 +464,8 @@ export class AgentOrchestrator {
       windowsShellPreference: getSettings().windowsShellPreference,
       officeCliPath: getFunctionalModulePath('officecli'),
       pythonRuntimePath: getFunctionalModulePath('python-runtime'),
+      dshPath: getFunctionalModulePath('dsh'),
+      dshNodePath: resolveDshNode(),
       processEnv,
     })
 

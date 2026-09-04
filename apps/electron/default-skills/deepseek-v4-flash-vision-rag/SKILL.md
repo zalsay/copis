@@ -3,6 +3,7 @@ name: deepseek-v4-flash-vision-rag
 displayName: 视觉知识库问答
 description: 基于 DeepSeek 视觉大模型（deepseek-v4-flash-vision-exp）的 PDF 深度问答与视觉检索（Vision RAG）。当用户提到 PDF、文档、资料、报告、论文、电子书、手册、说明书，并想提问、查找、搜索、总结或理解其内容，或问"在哪一页"、"引用原文"、要页面截图时，使用本 skill。支持扫描版、图表、表格、代码的视觉理解；回答带物理页码引用，并把命中页原图展示给用户。
 group: 系统内置
+category: Copis 功能
 icon: eye
 version: "1.0.0"
 ---

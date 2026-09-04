@@ -36,6 +36,7 @@ const MODULE_DEFINITIONS: readonly FunctionalModuleDefinition[] = [
   { name: 'playwright-core', displayName: '浏览器自动化内核', required: true },
   { name: 'python-runtime', displayName: 'Python 3.12 运行环境', required: true },
   { name: 'agently-cli', displayName: 'Agent QQ 邮箱 CLI', required: true },
+  { name: 'dsh', displayName: 'dsh 运行环境', required: true },
 ]
 
 export type FunctionalModuleFetch = (

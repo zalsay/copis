@@ -96,7 +96,7 @@ import { ensureRustHttpApiServerReady, stopHttpApiServer } from './lib/http-api-
 import { createTray, destroyTray, getTray } from './tray'
 import { initializeRuntime } from './lib/runtime-init'
 import { seedDefaultSkills } from './lib/config-paths'
-import { ensureDefaultWorkspace, upgradeDefaultSkillsInWorkspaces, migrateLegacyAgentWorkspaceProjectDirectories } from './lib/agent-workspace-manager'
+import { ensureDefaultWorkspace, ensureInvestmentWorkspace, upgradeDefaultSkillsInWorkspaces, migrateLegacyAgentWorkspaceProjectDirectories } from './lib/agent-workspace-manager'
 import { hasActiveAgentSessions, stopAllAgents, cleanupAgentRuntimeResources } from './lib/agent-service'
 import { disposePiMcpConnections } from './lib/adapters/pi-mcp-tools'
 import { markRunningDelegationsAsInterrupted } from './lib/agent-session-manager'
@@ -533,6 +533,9 @@ async function bootstrap(): Promise<void> {
       updateSettings({ agentWorkspaceId: defaultWorkspace.id })
     }
   })
+
+  // 确保「我的投资」固定工作区存在，用于承载基金股市/金融投研全部会话
+  safeRun('ensureInvestmentWorkspace', ensureInvestmentWorkspace)
 
   // 升级所有工作区中版本过旧的默认 Skills
   safeRun('upgradeDefaultSkillsInWorkspaces', upgradeDefaultSkillsInWorkspaces)

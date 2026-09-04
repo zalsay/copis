@@ -964,6 +964,16 @@ export interface SkillMarketSource {
   installedAt: string        // ISO 8601
 }
 
+/** Copis 内置 Skill 分类 */
+export type BuiltinSkillCategory = 'Copis 功能' | '办公' | '投资' | '其他'
+
+export const BUILTIN_SKILL_CATEGORIES: readonly BuiltinSkillCategory[] = [
+  'Copis 功能',
+  '办公',
+  '投资',
+  '其他',
+] as const
+
 /** 工作区 Skill 元数据 */
 export interface SkillMeta {
   slug: string
@@ -973,6 +983,8 @@ export interface SkillMeta {
   description?: string
   /** UI 分组名，用于把 Copis 内嵌 Skills 收拢到同一组 */
   group?: string
+  /** Copis 内置分类（Copis 功能、办公、投资、其他） */
+  category?: BuiltinSkillCategory | string
   icon?: string
   version?: string
   enabled: boolean
@@ -982,6 +994,56 @@ export interface SkillMeta {
   marketSource?: SkillMarketSource
   /** 是否有可用更新（源 Skill 版本 > importSource.sourceVersion） */
   hasUpdate?: boolean
+}
+
+/**
+ * 根据 Skill 的 category 或 slug 解析对应的 Copis 内置分类
+ */
+export function resolveBuiltinSkillCategory(skill: Pick<SkillMeta, 'slug'> & { category?: string }): BuiltinSkillCategory {
+  const explicit = skill.category?.trim()
+  if (explicit === 'Copis 功能' || explicit === '办公' || explicit === '投资' || explicit === '其他') {
+    return explicit
+  }
+
+  // 投资分类
+  if (
+    skill.slug.startsWith('trading-') ||
+    skill.slug === 'crypto-risk-checklist' ||
+    skill.slug === 'trading-notes-setup'
+  ) {
+    return '投资'
+  }
+
+  // 办公分类
+  if (
+    skill.slug === 'officecli' ||
+    skill.slug === 'dashi-ppt' ||
+    skill.slug === 'pdf' ||
+    skill.slug === 'agently-mail' ||
+    skill.slug === 'summarize-workflow' ||
+    skill.slug === 'writing-plans' ||
+    skill.slug === 'executing-plans'
+  ) {
+    return '办公'
+  }
+
+  // Copis 功能分类
+  if (
+    skill.slug === 'automation' ||
+    skill.slug === 'browser-page-control' ||
+    skill.slug === 'browser-workflow-automation' ||
+    skill.slug === 'custom-expert-team' ||
+    skill.slug === 'deepseek-v4-flash-vision-rag' ||
+    skill.slug === 'find-skills' ||
+    skill.slug === 'session-cleaner' ||
+    skill.slug === 'skill-creator' ||
+    skill.slug === 'alipay-authenticate-wallet' ||
+    skill.slug === 'alipay-payment-skill'
+  ) {
+    return 'Copis 功能'
+  }
+
+  return '其他'
 }
 
 /** 其他工作区 Skill 分组（导入对话框用） */

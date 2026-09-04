@@ -258,12 +258,14 @@ export interface AgentConversationSurfaceProps {
   sessionId: string
   variant?: AgentConversationSurfaceVariant
   hideStarterChips?: boolean
+  hideComposer?: boolean
 }
 
 export function AgentConversationSurface({
   sessionId,
   variant = 'main',
   hideStarterChips = false,
+  hideComposer = false,
 }: AgentConversationSurfaceProps): React.ReactElement {
   const compact = variant === 'browser'
   const sessionSurfaceRef = React.useRef<HTMLDivElement>(null)
@@ -2951,7 +2953,7 @@ export function AgentConversationSurface({
   React.useLayoutEffect(() => {
     const sessionSurface = sessionSurfaceRef.current
     const composer = composerRef.current
-    if (!sessionSurface || !composer) {
+    if (!sessionSurface || !composer || hideComposer) {
       sessionSurface?.style.removeProperty('--agent-composer-reserve-space')
       return
     }
@@ -2967,7 +2969,7 @@ export function AgentConversationSurface({
       observer.disconnect()
       sessionSurface.style.removeProperty('--agent-composer-reserve-space')
     }
-  }, [hasBannerOverlay, isNewConversation])
+  }, [hasBannerOverlay, isNewConversation, hideComposer])
 
   return (
     <>
@@ -2976,9 +2978,21 @@ export function AgentConversationSurface({
         {!compact && <AgentHeader sessionId={sessionId} />}
 
         {isNewConversation ? (
-          <div className="copis-agent-new-session-hero">
-            <h1>我们应该在 {workspaceDisplayName} 中创造什么？</h1>
-          </div>
+          hideComposer ? (
+            <div className="flex-1 flex flex-col items-center justify-center p-6 text-center text-muted-foreground gap-2 select-none">
+              <div className="w-8 h-8 rounded-full bg-primary/10 text-primary flex items-center justify-center mb-1">
+                <Sparkles className="w-4 h-4" />
+              </div>
+              <span className="text-xs font-semibold text-foreground/80">AI 投研助手已就绪</span>
+              <p className="text-[11px] text-muted-foreground/70 max-w-[200px] leading-relaxed">
+                点击上方快捷指令，或在底部直接提问，针对当前标的展开全景研判。
+              </p>
+            </div>
+          ) : (
+            <div className="copis-agent-new-session-hero">
+              <h1>我们应该在 {workspaceDisplayName} 中创造什么？</h1>
+            </div>
+          )
         ) : (
           <AgentMessages
             sessionId={sessionId}
@@ -3015,7 +3029,7 @@ export function AgentConversationSurface({
         {hasExitPlanBanner && <ExitPlanModeBanner sessionId={sessionId} />}
 
         {/* 输入区域 — 交互横幅显示时隐藏，由横幅替代 */}
-        {!hasBannerOverlay && (
+        {!hasBannerOverlay && !hideComposer && (
         <div ref={composerRef} className={cn('mx-auto w-full max-w-[760px] px-2.5 pb-2.5 md:px-[18px] md:pb-[18px]', isNewConversation && 'copis-agent-new-session-input')} data-input-mode="agent">
           {/* 优先展示 Next Steps 建议；无 Next Steps 时（包括新会话或会话中未产生建议）展示快捷入口 */}
           {nextSteps.length > 0 && !streaming ? (

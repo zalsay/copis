@@ -3,6 +3,7 @@ name: summarize-workflow
 displayName: 会话总结
 description: 从当前或历史对话上下文中，提炼并总结出结构化、可复用、标准化的任务工作流与实施要点（SOP）。当用户提出“会话总结”、“总结会话”、“总结工作流”、“总结这次任务的实施要点”、“沉淀为 SOP/操作手册”、“提炼关键步骤与避坑指南”、“把刚才的解决过程总结一下”、“整理复盘本次任务流程”时触发此技能。
 group: 系统内置
+category: 办公
 icon: list-checks
 version: "1.0.1"
 ---

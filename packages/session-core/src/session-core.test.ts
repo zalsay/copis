@@ -195,7 +195,7 @@ describe('容错与渐进式读取原语', () => {
 })
 
 describe('Copis 品牌迁移兼容', () => {
-  test('Given 旧版定时任务消息 When 提取预览 Then 移除旧 Proma 标记', () => {
+  test('Given 旧版定时任务消息 When 提取预览 Then 移除旧定时标记', () => {
     expect(stripScheduledRunMarker('请执行任务 <!--PROMA_SCHEDULED_RUN-->')).toBe('请执行任务')
   })
 })

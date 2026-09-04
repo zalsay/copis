@@ -18,7 +18,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 import { SettingsCard } from '@/components/settings/primitives'
 import { SkillFilesPanel } from '@/components/settings/SkillFilesPanel'
 import { cn } from '@/lib/utils'
-import type { SkillMeta } from '@copis/shared'
+import { resolveBuiltinSkillCategory, type SkillMeta } from '@copis/shared'
 import { extractSkillBody, rebuildSkillMd } from './skillMdUtils'
 
 interface SkillDetailSheetProps {
@@ -137,6 +137,8 @@ function SkillDetailBody({
       ? `从 ${skill.importSource.sourceWorkspaceName} 导入`
       : '当前项目'
 
+  const category = isBuiltin ? resolveBuiltinSkillCategory(skill) : skill.category
+
   return (
     <div className="flex h-full flex-col min-h-0">
       {/* 头部 */}
@@ -251,6 +253,7 @@ function SkillDetailBody({
                 </>
               )}
               <MetaRow label="数据源" value={sourceLabel} />
+              {category && <MetaRow label="分类" value={category} />}
               <MetaRow label="位置" value={`.agents/skills/${skill.slug}`} />
             </SettingsCard>
           </div>

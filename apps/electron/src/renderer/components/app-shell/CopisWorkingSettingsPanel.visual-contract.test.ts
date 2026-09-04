@@ -45,7 +45,7 @@ describe('Working 设置页 VIP 摘要', () => {
     // 侧栏容器与底色
     expect(settingsStyles).toContain('background: hsl(var(--muted));')
     expect(settingsStyles).toContain('padding: 12px 12px 0;')
-    expect(settingsStyles).toContain('width: 300px;')
+    expect(settingsStyles).toContain('width: 240px;')
     // 滚动区域与细滚动条
     expect(settingsStyles).toContain('.copis-working-settings-sidebar-body {')
     expect(settingsStyles).toContain('scrollbar-width: thin;')

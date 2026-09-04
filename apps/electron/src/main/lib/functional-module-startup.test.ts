@@ -419,6 +419,7 @@ describe('登录后功能模块启动契约', () => {
         ['playwright-core', true, true],
         ['python-runtime', true, true],
         ['agently-cli', false, true],
+        ['dsh', false, true],
       ])
       expect(progress.some((item) => item.phase === 'modules' && item.progress === 0.95)).toBe(true)
       expect(progress.some((item) => item.phase === 'health' && item.progress >= 0.95)).toBe(true)

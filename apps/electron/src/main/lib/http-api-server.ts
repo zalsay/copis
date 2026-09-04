@@ -17,6 +17,7 @@ import type {
 } from '@copis/shared'
 import { getBundledCliPath, getConfigDir, getFunctionalModulesDir } from './config-paths'
 import { resolveAgentlyCliCommand, resolveAgentlyCliNode } from './agently-cli-runtime'
+import { resolveDshCommand, resolveDshNode } from './dsh-runtime'
 import { isFunctionalModuleIncompatibleClientError } from './functional-module-manifest'
 import { getSystemBunPath, getVendorBunPath } from './bun-finder'
 import { ensureDefaultWorkspace } from './agent-workspace-manager'
@@ -434,6 +435,8 @@ function spawnManagedProcess(
   const alipayBotNode = resolveAlipayBotNode(nodeRuntimeRoot)
   const agentlyCli = resolveAgentlyCliCommand(getRootDir(options))
   const agentlyCliNode = resolveAgentlyCliNode(getRootDir(options))
+  const dsh = resolveDshCommand(getRootDir(options))
+  const dshNode = resolveDshNode(getRootDir(options))
   let paymentRuntime: PaymentWorkspaceRuntime
   try {
     paymentRuntime = resolvePaymentWorkspaceRuntime(options.paymentWorkspace ?? ensureDefaultWorkspace())
@@ -474,6 +477,8 @@ function spawnManagedProcess(
         ...(alipayBotNode ? { COPIS_ALIPAY_BOT_NODE: alipayBotNode } : {}),
         ...(agentlyCli ? { COPIS_AGENTLY_CLI: agentlyCli } : {}),
         ...(agentlyCliNode ? { COPIS_AGENTLY_CLI_NODE: agentlyCliNode } : {}),
+        ...(dsh ? { COPIS_DSH: dsh } : {}),
+        ...(dshNode ? { COPIS_DSH_NODE: dshNode } : {}),
         ...(app.isPackaged ? { COPIS_PI_RPC_COMPILED_RUNTIME: '1' } : {}),
         ...(useDevelopmentScriptRuntime
           ? {

@@ -28,6 +28,7 @@ import { AgentSkillsView } from '@/components/agent-skills/AgentSkillsView'
 import { MemoryView } from '@/components/memory/MemoryView'
 import { KnowledgeView } from '@/components/knowledge/KnowledgeView'
 import { ExpertTeamView } from '@/components/expert-team/ExpertTeamView'
+import { FundStockTerminalView } from '@/components/trading/FundStockTerminalView'
 import { automationFormAtom } from '@/atoms/automation-atoms'
 import { activeViewAtom } from '@/atoms/active-view'
 import { interfaceVariantAtom } from '@/atoms/theme'
@@ -192,6 +193,8 @@ export function MainArea(): React.ReactElement {
               <KnowledgeView />
             ) : activeView === 'expert-team' ? (
               <ExpertTeamView />
+            ) : activeView === 'fund-stock' ? (
+              <FundStockTerminalView />
             ) : (
               <>
                 <TabBar />

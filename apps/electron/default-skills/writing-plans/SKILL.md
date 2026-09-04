@@ -3,6 +3,7 @@ name: writing-plans
 displayName: 编写实施计划
 description: Use when you have a spec or requirements for a multi-step task, before touching code
 group: 系统内置
+category: 办公
 version: "1.0.4"
 ---
 # Writing Plans

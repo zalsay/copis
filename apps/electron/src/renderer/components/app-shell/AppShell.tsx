@@ -37,10 +37,11 @@ function clampRightPanelWidth(width: number): number {
   return Math.max(MIN_RIGHT_PANEL_WIDTH, Math.min(MAX_RIGHT_PANEL_WIDTH, width))
 }
 
-const MIN_LEFT_SIDEBAR_WIDTH = 300
-const MAX_LEFT_SIDEBAR_WIDTH = 420
+export const MIN_LEFT_SIDEBAR_WIDTH = 200
+export const MAX_LEFT_SIDEBAR_WIDTH = 400
+export const DEFAULT_LEFT_SIDEBAR_WIDTH = 240
 
-function clampLeftSidebarWidth(width: number): number {
+export function clampLeftSidebarWidth(width: number): number {
   return Math.max(MIN_LEFT_SIDEBAR_WIDTH, Math.min(MAX_LEFT_SIDEBAR_WIDTH, width))
 }
 
@@ -67,7 +68,7 @@ export function AppShell({ contextValue }: AppShellProps): React.ReactElement {
   // 定时任务表单打开时隐藏右侧文件面板，让中间区域扩展到全宽（表单内含自己的右栏配置）
   const activeView = useAtomValue(activeViewAtom)
   const workingHistorySelection = useAtomValue(workingHistorySelectionAtom)
-  const showRightPanel = appMode === 'agent' && !!currentSessionId && !workingHistorySelection && !automationForm.open && activeView !== 'planning' && activeView !== 'automations' && activeView !== 'agent-skills' && activeView !== 'memory' && activeView !== 'expert-team'
+  const showRightPanel = appMode === 'agent' && !!currentSessionId && !workingHistorySelection && !automationForm.open && activeView !== 'planning' && activeView !== 'automations' && activeView !== 'agent-skills' && activeView !== 'memory' && activeView !== 'expert-team' && activeView !== 'fund-stock'
   const isWindows = React.useMemo(() => detectIsWindows(), [])
   const activeWebTabId = useAtomValue(activeWebTabIdAtom)
 
@@ -86,6 +87,11 @@ export function AppShell({ contextValue }: AppShellProps): React.ReactElement {
   const clampedLeftSidebarWidth = clampLeftSidebarWidth(leftSidebarWidth)
 
   React.useEffect(() => {
+    // 若持久化存储为旧版的 300px 默认值，平滑自动收敛为更紧凑的 240px 默认值
+    if (leftSidebarWidth === 300) {
+      setLeftSidebarWidth(DEFAULT_LEFT_SIDEBAR_WIDTH)
+      return
+    }
     if (clampedLeftSidebarWidth !== leftSidebarWidth) {
       setLeftSidebarWidth(clampedLeftSidebarWidth)
     }

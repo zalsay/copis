@@ -473,7 +473,7 @@ export function MigrationSettings(): React.ReactElement {
       {/* ── 导入区块 ──────────────────────────────── */}
       <SettingsSection
         title="导入备份"
-        description="从备份文件导入数据，支持 .copis-backup 和 .copis-share；也兼容旧版 .proma-backup 和 .proma-share 文件"
+        description="从备份文件导入数据，支持 .copis-backup 和 .copis-share 文件（也兼容旧版备份文件）"
       >
         <button
           onClick={() => setMigrationImportDialogOpen(true)}

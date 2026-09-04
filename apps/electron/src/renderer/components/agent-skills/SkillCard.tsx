@@ -9,7 +9,7 @@ import { Puzzle, RefreshCw, ShieldCheck, ArrowDownToLine, Download } from 'lucid
 import { Switch } from '@/components/ui/switch'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
-import type { SkillMeta } from '@copis/shared'
+import { resolveBuiltinSkillCategory, type SkillMeta } from '@copis/shared'
 
 interface SkillCardProps {
   skill: SkillMeta
@@ -22,6 +22,7 @@ interface SkillCardProps {
 
 export function SkillCard({ skill, isBuiltin, updating, onOpen, onToggle, onUpdate }: SkillCardProps): React.ReactElement {
   const title = skill.displayName?.trim() || skill.name
+  const category = isBuiltin ? resolveBuiltinSkillCategory(skill) : skill.category
 
   return (
     <div
@@ -69,9 +70,16 @@ export function SkillCard({ skill, isBuiltin, updating, onOpen, onToggle, onUpda
 
       <div className="mt-auto flex items-center gap-2">
         {isBuiltin ? (
-          <span className="flex items-center gap-1 rounded-md bg-primary/10 px-1.5 py-0.5 text-[11px] font-medium text-primary">
-            <ShieldCheck size={12} /> Copis 内置
-          </span>
+          <>
+            <span className="flex items-center gap-1 rounded-md bg-primary/10 px-1.5 py-0.5 text-[11px] font-medium text-primary">
+              <ShieldCheck size={12} /> Copis 内置
+            </span>
+            {category && (
+              <span className="rounded-md bg-muted px-1.5 py-0.5 text-[11px] font-medium text-muted-foreground">
+                {category}
+              </span>
+            )}
+          </>
         ) : skill.marketSource ? (
           <span className="flex items-center gap-1 rounded-md bg-primary/10 px-1.5 py-0.5 text-[11px] font-medium text-primary">
             <Download size={12} /> 社区市场

@@ -283,7 +283,7 @@ export function CopisWorkingSettingsPanel({ onClose }: CopisWorkingSettingsPanel
   }
 
   const leftSidebarWidth = useAtomValue(leftSidebarWidthAtom)
-  const sidebarWidth = Math.max(300, Math.min(420, leftSidebarWidth || 300))
+  const sidebarWidth = Math.max(200, Math.min(400, leftSidebarWidth || 240))
 
   return (
     <div className="copis-working-settings-view">

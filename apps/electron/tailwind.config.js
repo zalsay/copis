@@ -118,11 +118,16 @@ export default {
           '0%': { opacity: '1', transform: 'translateX(0)' },
           '100%': { opacity: '0', transform: 'translateX(100%)' },
         },
+        'marquee': {
+          '0%': { transform: 'translateX(0%)' },
+          '100%': { transform: 'translateX(-50%)' },
+        },
       },
       animation: {
         'in': 'slide-in-from-top 0.3s ease-out',
         'out': 'slide-out-to-right 0.2s ease-in',
         'preview-slide-out': 'preview-slide-out 0.25s ease-out forwards',
+        'marquee': 'marquee 30s linear infinite',
       },
     },
   },

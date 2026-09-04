@@ -70,7 +70,7 @@ export function MigrationImportDialog(): React.ReactElement {
         <DialogHeader>
           <DialogTitle>导入配置</DialogTitle>
           <DialogDescription>
-            从备份文件导入数据，支持 .copis-backup 和 .copis-share；也兼容旧版 .proma-backup 和 .proma-share 文件
+            从备份文件导入数据，支持 .copis-backup 和 .copis-share 文件（也兼容旧版备份文件）
           </DialogDescription>
         </DialogHeader>
 
@@ -82,7 +82,7 @@ export function MigrationImportDialog(): React.ReactElement {
                 <FolderOpen size={28} className="text-muted-foreground" />
               </div>
               <p className="text-sm text-muted-foreground text-center">
-                选择 .copis-backup、.copis-share 或旧版 .proma-backup、.proma-share 文件开始导入
+                选择 .copis-backup、.copis-share 或旧版备份文件开始导入
               </p>
               <button
                 onClick={handleSelectImportFile}

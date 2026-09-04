@@ -853,8 +853,8 @@ export function deleteAgentWorkspace(id: string): void {
   }
 
   const target = index.workspaces[idx]!
-  if (target.slug === 'default') {
-    throw new Error('默认工作区不能删除')
+  if (target.slug === 'default' || target.slug === 'investment') {
+    throw new Error('系统固定工作区不能删除')
   }
 
   const workspacesRoot = resolve(getAgentWorkspacesDir())
@@ -882,6 +882,8 @@ export function deleteAgentWorkspace(id: string): void {
   console.log(`[Agent 工作区] 已删除工作区: ${removed.name} (slug: ${removed.slug})`)
 }
 
+export const INVESTMENT_WORKSPACE_SLUG = 'investment'
+
 /** 确保默认工作区的本地根目录存在且可读取。 */
 function ensureDefaultProjectRootPath(): string {
   const projectRootPath = getDefaultProjectRootPath()
@@ -890,6 +892,20 @@ function ensureDefaultProjectRootPath(): string {
   const status = getLocalProjectRootStatus(projectRootPath)
   if (status !== 'available') {
     throw new Error(`默认工作区目录不可用: ${projectRootPath}（${status ?? 'unknown'}）`)
+  }
+
+  return realpathSync(resolve(projectRootPath))
+}
+
+/** 确保「我的投资」工作区的本地根目录存在且可读取。 */
+function ensureInvestmentProjectRootPath(): string {
+  const baseRoot = getDefaultProjectRootPath()
+  const projectRootPath = join(baseRoot, 'Investment')
+  mkdirSync(projectRootPath, { recursive: true })
+
+  const status = getLocalProjectRootStatus(projectRootPath)
+  if (status !== 'available') {
+    return realpathSync(resolve(baseRoot))
   }
 
   return realpathSync(resolve(projectRootPath))
@@ -952,6 +968,70 @@ export function ensureDefaultWorkspace(): AgentWorkspace {
   }
 
   return defaultWs
+}
+
+/** 确保「我的投资」固定工作区存在（slug: investment），用于承载基金股市/金融投研全部会话。 */
+export function ensureInvestmentWorkspace(): AgentWorkspace {
+  const index = readIndex()
+  let investmentWs = index.workspaces.find(
+    (w) => w.slug === INVESTMENT_WORKSPACE_SLUG || w.name === '我的投资'
+  )
+
+  if (!investmentWs) {
+    const now = Date.now()
+    const projectRootPath = ensureInvestmentProjectRootPath()
+    investmentWs = {
+      id: randomUUID(),
+      name: '我的投资',
+      slug: INVESTMENT_WORKSPACE_SLUG,
+      projectRootPath,
+      projectPath: join(projectRootPath, COPIS_PROJECT_DIR),
+      createdAt: now,
+      updatedAt: now,
+    }
+
+    getAgentWorkspacePath(INVESTMENT_WORKSPACE_SLUG)
+    copyDefaultSkills(INVESTMENT_WORKSPACE_SLUG)
+    ensureAgentWorkspaceWritableRoot(investmentWs)
+
+    index.workspaces.push(investmentWs)
+    writeIndex(index)
+
+    console.log('[Agent 工作区] 已创建「我的投资」固定工作区')
+  } else {
+    let needsWrite = false
+
+    if (investmentWs.name !== '我的投资') {
+      investmentWs.name = '我的投资'
+      needsWrite = true
+    }
+
+    if (investmentWs.slug !== INVESTMENT_WORKSPACE_SLUG) {
+      investmentWs.slug = INVESTMENT_WORKSPACE_SLUG
+      needsWrite = true
+    }
+
+    if (!investmentWs.projectRootPath) {
+      investmentWs.projectRootPath = ensureInvestmentProjectRootPath()
+      investmentWs.projectPath = join(investmentWs.projectRootPath, COPIS_PROJECT_DIR)
+      needsWrite = true
+    }
+
+    if (!investmentWs.projectPath) {
+      investmentWs.projectPath = join(investmentWs.projectRootPath, COPIS_PROJECT_DIR)
+      needsWrite = true
+    }
+
+    ensureAgentWorkspaceWritableRoot(investmentWs)
+
+    if (needsWrite) {
+      investmentWs.updatedAt = Date.now()
+      writeIndex(index)
+      console.log(`[Agent 工作区] 已更新「我的投资」工作区: ${investmentWs.projectRootPath}`)
+    }
+  }
+
+  return investmentWs
 }
 
 // ===== 默认 Skills 自动升级 =====
@@ -1206,7 +1286,7 @@ function parseSkillFrontmatter(content: string, slug: string, enabled: boolean):
   const yaml = fmMatch[1]
   if (!yaml) return meta
 
-  const validKeys = new Set(['name', 'displayName', 'description', 'group', 'icon', 'version'])
+  const validKeys = new Set(['name', 'displayName', 'description', 'group', 'icon', 'version', 'category'])
   const entries: Record<string, string> = {}
   let currentKey = ''
   let isFolded = false
@@ -1247,6 +1327,7 @@ function parseSkillFrontmatter(content: string, slug: string, enabled: boolean):
   if (entries.group) meta.group = entries.group.trim()
   if (entries.icon) meta.icon = entries.icon.trim()
   if (entries.version) meta.version = entries.version.trim()
+  if (entries.category) meta.category = entries.category.trim()
 
   return meta
 }

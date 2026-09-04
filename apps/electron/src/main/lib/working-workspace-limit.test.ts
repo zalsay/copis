@@ -9,9 +9,17 @@ describe('Working 项目额度', () => {
     expect(() => assertWorkingWorkspaceCreationAllowed([{ slug: 'default' }], false)).not.toThrow()
   })
 
+  test('Given 非 VIP 仅有默认工作区与「我的投资」固定工作区 When 创建项目 Then 允许创建一个额外项目', () => {
+    expect(() => assertWorkingWorkspaceCreationAllowed([
+      { slug: 'default' },
+      { slug: 'investment' },
+    ], false)).not.toThrow()
+  })
+
   test('Given 非 VIP 已有默认工作区和一个额外项目 When 再创建项目 Then 拒绝创建', () => {
     expect(() => assertWorkingWorkspaceCreationAllowed([
       { slug: 'default' },
+      { slug: 'investment' },
       { slug: 'my-project' },
     ], false)).toThrow(NON_VIP_WORKSPACE_LIMIT_ERROR)
   })

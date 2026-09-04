@@ -165,4 +165,20 @@ describe('Agent Windows Shell 运行环境', () => {
       COPIS_PLAYWRIGHT_HEADLESS_SHELL: '/Users/test/.cache/ms-playwright/chromium_headless_shell-1100/chrome-mac/headless_shell',
     })
   })
+
+  test('Given dsh 功能模块已安装 When 构建 Agent 环境 Then 注入模块命令、Node 与 PATH', () => {
+    const result = buildAgentRuntimeEnv({
+      bundledCliPath: '',
+      dshPath: '/Users/test/.copis/modules/versions/dsh/0.1.2/bin/dsh',
+      dshNodePath: '/Users/test/.copis/modules/versions/node-runtime/20.18.0/bin/node',
+      platform: 'darwin',
+      processEnv: { PATH: '/usr/bin:/bin' },
+    })
+
+    expect(result.env).toMatchObject({
+      COPIS_DSH: '/Users/test/.copis/modules/versions/dsh/0.1.2/bin/dsh',
+      COPIS_DSH_NODE: '/Users/test/.copis/modules/versions/node-runtime/20.18.0/bin/node',
+      PATH: '/Users/test/.copis/modules/versions/dsh/0.1.2/bin:/usr/bin:/bin',
+    })
+  })
 })

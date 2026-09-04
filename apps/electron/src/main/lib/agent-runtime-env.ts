@@ -20,6 +20,10 @@ export interface BuildAgentRuntimeEnvOptions {
   windowsShellPreference?: WindowsShellPreference
   bundledCliPath?: string
   officeCliPath?: string
+  /** 已激活 dsh 的入口文件（bin/dsh 或 bin/dsh.cmd）。 */
+  dshPath?: string
+  /** dsh 使用的 Node.js 运行时路径。 */
+  dshNodePath?: string
   /** 已激活 Python runtime 的入口文件（bin/python 或 bin/python.exe）。 */
   pythonRuntimePath?: string
   /** Dashi PPT 相关环境配置。 */
@@ -42,6 +46,8 @@ const CASE_INSENSITIVE_MERGE_KEYS = new Set([
   'all_proxy',
   'no_proxy',
   'copis_cli',
+  'copis_dsh',
+  'copis_dsh_node',
   'copis_python_runtime_root',
   'copis_dashi_ppt_root',
   'copis_dashi_ppt_project_root',
@@ -214,10 +220,12 @@ export function buildAgentRuntimeEnv(options: BuildAgentRuntimeEnvOptions = {}):
 
   if (bundledCliPath) env.COPIS_CLI = bundledCliPath
   if (options.officeCliPath) env.COPIS_OFFICECLI = options.officeCliPath
+  if (options.dshPath) env.COPIS_DSH = options.dshPath
+  if (options.dshNodePath) env.COPIS_DSH_NODE = options.dshNodePath
 
   const pathKey = getPathKey(processEnv)
   let enhancedPath = processEnv[pathKey]
-  for (const binaryPath of [bundledCliPath, options.officeCliPath]) {
+  for (const binaryPath of [bundledCliPath, options.officeCliPath, options.dshPath]) {
     enhancedPath = prependPathEntry(
       enhancedPath,
       binaryPath ? dirnameForPlatform(binaryPath, platform) : undefined,

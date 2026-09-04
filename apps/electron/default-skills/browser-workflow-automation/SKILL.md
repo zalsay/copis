@@ -3,6 +3,7 @@ name: browser-workflow-automation
 displayName: 网页工作流自动化
 description: 当用户要求打开网页并连续完成操作，或运行已保存的网页 Workflow 时，指导主对话使用 Copis 内部 AI浏览器完成可审计的自动化流程。
 group: 系统内置
+category: Copis 功能
 icon: workflow
 version: "1.0.3"
 license: AGPL-3.0-only

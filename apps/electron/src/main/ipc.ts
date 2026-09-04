@@ -9,7 +9,7 @@ import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'nod
 import { existsSync, realpathSync, rmSync, readFileSync, writeFileSync, mkdirSync, statSync } from 'node:fs'
 import { writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, ATTACHMENT_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, FUNCTIONAL_MODULE_IPC_CHANNELS, PROXY_IPC_CHANNELS, AGENT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, WECHAT_IPC_CHANNELS, AGENT_MAIL_IPC_CHANNELS, AUTOMATION_IPC_CHANNELS, PLANNING_IPC_CHANNELS, PLANNING_CONFLICT_ERROR, WORKING_IPC_CHANNELS, WEB_IPC_CHANNELS, BROWSER_WORKFLOW_IPC_CHANNELS, MEMORY_IPC_CHANNELS, COPIS_WORKING_CHANNEL_ID, isCopisPermissionMode, isCopisWorkingChannelId, isWorkingMode, normalizePathForCompare } from '@copis/shared'
+import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, ATTACHMENT_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, FUNCTIONAL_MODULE_IPC_CHANNELS, PROXY_IPC_CHANNELS, AGENT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, WECHAT_IPC_CHANNELS, AGENT_MAIL_IPC_CHANNELS, AUTOMATION_IPC_CHANNELS, PLANNING_IPC_CHANNELS, PLANNING_CONFLICT_ERROR, WORKING_IPC_CHANNELS, WEB_IPC_CHANNELS, BROWSER_WORKFLOW_IPC_CHANNELS, MEMORY_IPC_CHANNELS, FUND_STOCK_IPC_CHANNELS, COPIS_WORKING_CHANNEL_ID, isCopisPermissionMode, isCopisWorkingChannelId, isWorkingMode, normalizePathForCompare } from '@copis/shared'
 import { USER_PROFILE_IPC_CHANNELS, SETTINGS_IPC_CHANNELS, SCRATCH_PAD_IPC_CHANNELS, QUICK_TASK_IPC_CHANNELS, VOICE_DICTATION_IPC_CHANNELS, APP_ICON_IPC_CHANNELS, DOCK_BADGE_IPC_CHANNELS, STORAGE_IPC_CHANNELS } from '../types'
 import type {
   QuickTaskSubmitInput,
@@ -144,9 +144,13 @@ import type {
   MemoryExtractKnowledgeInput,
   MemoryExtractKnowledgeResult,
   MemoryFetchUrlResult,
+  KlinePeriod,
+  WatchlistItem,
 } from '@copis/shared'
 import type { UserProfile, AppSettings } from '../types'
 import { memoryIngestionService } from './lib/memory-ingestion-service'
+import { fetchMarketQuotes, fetchKlines, searchSymbols, getWatchlist, saveWatchlist } from './lib/trading-quote-service'
+import { getDshTradingStatus, startDshTradingServer, stopDshTradingServer } from './lib/dsh-trading-service'
 import { getRuntimeStatus, getGitRepoStatus, reinitializeRuntime } from './lib/runtime-init'
 import { getUnstagedChanges, getFileDiff, getUntrackedContent, revertFile, getDiffContents, listWorktrees, getWorktreeChanges, getMainRepoRoot } from './lib/git-diff-service'
 import { registerCopisFilePath } from './lib/local-file-protocol'
@@ -289,6 +293,7 @@ import { calculateStorageStats, cleanupStorage, cleanupTempFiles } from './lib/s
 import type { CleanupOptions } from './lib/storage-service'
 import {
   listAgentWorkspaces,
+  ensureInvestmentWorkspace,
   createAgentWorkspace,
   updateAgentWorkspace,
   relinkAgentWorkspaceProjectRoot,
@@ -2413,6 +2418,7 @@ export function registerIpcHandlers(): void {
   ipcMain.handle(
     AGENT_IPC_CHANNELS.LIST_WORKSPACES,
     async (): Promise<AgentWorkspace[]> => {
+      ensureInvestmentWorkspace()
       const workspaces = listAgentWorkspaces()
       for (const workspace of workspaces) {
         if (workspace.projectRootPath) watchAttachedDirectory(workspace.projectRootPath)
@@ -2508,8 +2514,8 @@ export function registerIpcHandlers(): void {
 
       // 守卫前置：在删除任何会话/自动任务前就拦截不可删除的工作区，
       // 否则会先把绑定数据删光、再由 deleteAgentWorkspace 抛错，造成数据丢失与状态不一致
-      if (deletingWorkspace.slug === 'default') {
-        throw new Error('默认工作区不能删除')
+      if (deletingWorkspace.slug === 'default' || deletingWorkspace.slug === 'investment') {
+        throw new Error('系统固定工作区不能删除')
       }
 
       const affectedSessionIds = listAgentSessions()
@@ -5101,4 +5107,64 @@ export function registerIpcHandlers(): void {
       return memoryIngestionService.extractKnowledgeFromText(input)
     }
   )
+
+  // ===== 基金股市（美股、A 股、港股、基金）通道 =====
+  ipcMain.handle(
+    FUND_STOCK_IPC_CHANNELS.GET_QUOTE,
+    async (_, symbols: string[] | string) => {
+      const list = Array.isArray(symbols) ? symbols : [symbols]
+      return fetchMarketQuotes(list)
+    }
+  )
+
+  ipcMain.handle(
+    FUND_STOCK_IPC_CHANNELS.GET_KLINES,
+    async (_, symbol: string, period?: KlinePeriod, count?: number) => {
+      return fetchKlines(symbol, period, count)
+    }
+  )
+
+  ipcMain.handle(
+    FUND_STOCK_IPC_CHANNELS.SEARCH_SYMBOLS,
+    async (_, keyword: string) => {
+      return searchSymbols(keyword)
+    }
+  )
+
+  ipcMain.handle(
+    FUND_STOCK_IPC_CHANNELS.GET_WATCHLIST,
+    () => {
+      return getWatchlist()
+    }
+  )
+
+  ipcMain.handle(
+    FUND_STOCK_IPC_CHANNELS.SAVE_WATCHLIST,
+    (_, items: WatchlistItem[]) => {
+      saveWatchlist(items)
+      return { success: true }
+    }
+  )
+
+  ipcMain.handle(
+    FUND_STOCK_IPC_CHANNELS.TERMINAL_STATUS,
+    () => {
+      return getDshTradingStatus()
+    }
+  )
+
+  ipcMain.handle(
+    FUND_STOCK_IPC_CHANNELS.START_TERMINAL,
+    async () => {
+      return startDshTradingServer()
+    }
+  )
+
+  ipcMain.handle(
+    FUND_STOCK_IPC_CHANNELS.STOP_TERMINAL,
+    () => {
+      return stopDshTradingServer()
+    }
+  )
 }
+

@@ -34,7 +34,14 @@ mock.module('@/components/web-browser', () => ({
   WebTabBar: () => <div data-testid="web-tab-bar" />,
 }))
 
-const { AppShell } = await import('./AppShell')
+const {
+  AppShell,
+  MIN_LEFT_SIDEBAR_WIDTH,
+  MAX_LEFT_SIDEBAR_WIDTH,
+  DEFAULT_LEFT_SIDEBAR_WIDTH,
+  clampLeftSidebarWidth,
+} = await import('./AppShell')
+
 
 function renderAppShell({
   workingSettingsOpen = false,
@@ -94,3 +101,21 @@ describe('AppShell 网页标签与设置层', () => {
     expect(html).toContain('data-upgrade-amount="49.90"')
   })
 })
+
+describe('AppShell 左侧主菜单栏宽度契约', () => {
+  test('Given 左侧边栏宽度限制 When 检查区间与默认值 Then 默认宽度为 240px，区间为 200px~400px', () => {
+    expect(DEFAULT_LEFT_SIDEBAR_WIDTH).toBe(240)
+    expect(MIN_LEFT_SIDEBAR_WIDTH).toBe(200)
+    expect(MAX_LEFT_SIDEBAR_WIDTH).toBe(400)
+    expect(clampLeftSidebarWidth(150)).toBe(200)
+    expect(clampLeftSidebarWidth(240)).toBe(240)
+    expect(clampLeftSidebarWidth(500)).toBe(400)
+  })
+
+  test('Given 侧边栏宽度 Atom When 获取初始值 Then 为 240px', async () => {
+    const { leftSidebarWidthAtom } = await import('@/atoms/sidebar-atoms')
+    const store = createStore()
+    expect(store.get(leftSidebarWidthAtom)).toBe(240)
+  })
+})
+

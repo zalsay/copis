@@ -12,7 +12,7 @@
 import * as React from 'react'
 import { useAtom, useSetAtom } from 'jotai'
 import { toast } from 'sonner'
-import { Blocks, ChevronDown, Search, Plus, Store, FolderOpen, Check } from 'lucide-react'
+import { Blocks, ChevronDown, Search, Plus, Store, FolderOpen, Check, Sparkles, Briefcase, TrendingUp, Folder } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import {
   Popover,
@@ -24,7 +24,13 @@ import { workspaceCapabilitiesVersionAtom } from '@/atoms/agent-atoms'
 import { agentSkillsTabAtom } from '@/atoms/active-view'
 import { useProjectActions } from '@/hooks/useProjectActions'
 import { LocalProjectBadge } from '@/components/agent/LocalProjectBadge'
-import type { BuiltinMcpServerSummary, McpServerEntry, SkillMeta } from '@copis/shared'
+import {
+  BUILTIN_SKILL_CATEGORIES,
+  resolveBuiltinSkillCategory,
+  type BuiltinMcpServerSummary,
+  type McpServerEntry,
+  type SkillMeta,
+} from '@copis/shared'
 import { useAgentSkillsData } from './useAgentSkillsData'
 import { SkillCard } from './SkillCard'
 import { McpCard } from './McpCard'
@@ -59,10 +65,13 @@ export function AgentSkillsView(): React.ReactElement {
   const filteredSkills = React.useMemo(() => {
     return data.skills.filter((s) => {
       if (!q) return true
+      const cat = resolveBuiltinSkillCategory(s)
       return s.name.toLowerCase().includes(q) ||
         s.slug.toLowerCase().includes(q) ||
         (s.description ?? '').toLowerCase().includes(q) ||
-        (s.group ?? '').toLowerCase().includes(q)
+        (s.group ?? '').toLowerCase().includes(q) ||
+        (s.category ?? '').toLowerCase().includes(q) ||
+        cat.toLowerCase().includes(q)
     })
   }, [data.skills, q])
 
@@ -425,25 +434,151 @@ interface SkillSectionProps {
 }
 
 function SkillSection({ title, skills, isBuiltin, updatingSkill, onOpen, onToggle, onUpdate }: SkillSectionProps): React.ReactElement {
+  const isBuiltinSection = title === 'Copis 内置'
+  const [selectedCategory, setSelectedCategory] = React.useState<string>('全部')
+
+  // 计算各内置分类的数量
+  const categoryCounts = React.useMemo(() => {
+    if (!isBuiltinSection) return {}
+    const counts: Record<string, number> = {
+      '全部': skills.length,
+      'Copis 功能': 0,
+      '办公': 0,
+      '投资': 0,
+      '其他': 0,
+    }
+    for (const s of skills) {
+      const cat = resolveBuiltinSkillCategory(s)
+      counts[cat] = (counts[cat] ?? 0) + 1
+    }
+    return counts
+  }, [isBuiltinSection, skills])
+
+  // 按全部时的分类分组
+  const categoriesWithSkills = React.useMemo(() => {
+    if (!isBuiltinSection || selectedCategory !== '全部') return []
+    return BUILTIN_SKILL_CATEGORIES.map((cat) => ({
+      category: cat,
+      items: skills.filter((s) => resolveBuiltinSkillCategory(s) === cat),
+    })).filter((group) => group.items.length > 0)
+  }, [isBuiltinSection, selectedCategory, skills])
+
+  // 单选某分类时的列表
+  const categoryFilteredSkills = React.useMemo(() => {
+    if (!isBuiltinSection || selectedCategory === '全部') return skills
+    return skills.filter((s) => resolveBuiltinSkillCategory(s) === selectedCategory)
+  }, [isBuiltinSection, selectedCategory, skills])
+
+  const categoryIcons: Record<string, React.ReactNode> = {
+    'Copis 功能': <Sparkles className="size-3.5 text-primary" />,
+    '办公': <Briefcase className="size-3.5 text-blue-500 dark:text-blue-400" />,
+    '投资': <TrendingUp className="size-3.5 text-emerald-500 dark:text-emerald-400" />,
+    '其他': <Folder className="size-3.5 text-muted-foreground" />,
+  }
+
   return (
     <div className="flex flex-col gap-3">
-      <div className="flex items-center gap-2 px-1">
-        <span className="text-[13px] font-medium text-foreground/55">{title}</span>
-        <span className="text-[12px] tabular-nums text-foreground/35">{skills.length}</span>
+      <div className="flex flex-col gap-2 px-1">
+        <div className="flex items-center gap-2">
+          <span className="text-[13px] font-medium text-foreground/65">{title}</span>
+          <span className="text-[12px] tabular-nums text-foreground/35">{skills.length}</span>
+        </div>
+
+        {/* Copis 内置 分类筛选条 */}
+        {isBuiltinSection && (
+          <div className="flex items-center gap-1.5 flex-wrap pt-0.5">
+            {(['全部', ...BUILTIN_SKILL_CATEGORIES] as const).map((cat) => {
+              const count = categoryCounts[cat] ?? 0
+              if (cat === '其他' && count === 0 && selectedCategory !== '其他') return null
+              const isSelected = selectedCategory === cat
+              return (
+                <button
+                  key={cat}
+                  type="button"
+                  onClick={() => setSelectedCategory(cat)}
+                  className={cn(
+                    'inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium transition-colors select-none cursor-pointer',
+                    isSelected
+                      ? 'bg-primary text-primary-foreground shadow-xs'
+                      : 'bg-muted/70 text-muted-foreground hover:bg-muted hover:text-foreground border border-border/40'
+                  )}
+                >
+                  {cat !== '全部' && categoryIcons[cat]}
+                  <span>{cat}</span>
+                  <span
+                    className={cn(
+                      'text-[10px] tabular-nums px-1 rounded-full',
+                      isSelected
+                        ? 'bg-primary-foreground/20 text-primary-foreground'
+                        : 'text-muted-foreground/70'
+                    )}
+                  >
+                    {count}
+                  </span>
+                </button>
+              )
+            })}
+          </div>
+        )}
       </div>
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-        {skills.map((skill) => (
-          <SkillCard
-            key={skill.slug}
-            skill={skill}
-            isBuiltin={isBuiltin(skill.slug)}
-            updating={updatingSkill === skill.slug}
-            onOpen={() => onOpen(skill.slug)}
-            onToggle={(enabled) => onToggle(skill.slug, enabled)}
-            onUpdate={() => onUpdate(skill.slug)}
-          />
-        ))}
-      </div>
+
+      {/* 当未选择特定分类且是内置区时，按分类分组展示 */}
+      {isBuiltinSection && selectedCategory === '全部' && categoriesWithSkills.length > 0 ? (
+        <div className="flex flex-col gap-6 pt-1">
+          {categoriesWithSkills.map(({ category, items }) => (
+            <div key={category} className="flex flex-col gap-2.5">
+              <div className="flex items-center gap-1.5 px-1 text-xs font-semibold text-foreground/80">
+                {categoryIcons[category]}
+                <span>{category}</span>
+                <span className="text-[11px] tabular-nums font-normal text-muted-foreground">
+                  ({items.length})
+                </span>
+              </div>
+              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                {items.map((skill) => (
+                  <SkillCard
+                    key={skill.slug}
+                    skill={skill}
+                    isBuiltin={isBuiltin(skill.slug)}
+                    updating={updatingSkill === skill.slug}
+                    onOpen={() => onOpen(skill.slug)}
+                    onToggle={(enabled) => onToggle(skill.slug, enabled)}
+                    onUpdate={() => onUpdate(skill.slug)}
+                  />
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : isBuiltinSection && selectedCategory !== '全部' ? (
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          {categoryFilteredSkills.map((skill) => (
+            <SkillCard
+              key={skill.slug}
+              skill={skill}
+              isBuiltin={isBuiltin(skill.slug)}
+              updating={updatingSkill === skill.slug}
+              onOpen={() => onOpen(skill.slug)}
+              onToggle={(enabled) => onToggle(skill.slug, enabled)}
+              onUpdate={() => onUpdate(skill.slug)}
+            />
+          ))}
+        </div>
+      ) : (
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          {skills.map((skill) => (
+            <SkillCard
+              key={skill.slug}
+              skill={skill}
+              isBuiltin={isBuiltin(skill.slug)}
+              updating={updatingSkill === skill.slug}
+              onOpen={() => onOpen(skill.slug)}
+              onToggle={(enabled) => onToggle(skill.slug, enabled)}
+              onUpdate={() => onUpdate(skill.slug)}
+            />
+          ))}
+        </div>
+      )}
     </div>
   )
 }
