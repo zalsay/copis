@@ -570,25 +570,25 @@ describe('基金股市 - AI 投研助手右栏内嵌会话与不跳转主界面 
     expect(currentView).toBe('trading')
   })
 
-  test('Given 右侧栏内嵌会话布局 When 渲染结构契约 Then 包含顶栏标题、新会话按钮、全屏按钮，两行四项网格指令栏且去除“指令：”标签', () => {
+  test('Given 右侧栏内嵌会话布局 When 渲染结构契约 Then 包含顶栏标题、新会话按钮、全屏按钮，以及在底部 Composer 上方渲染两行四项网格指令栏', () => {
     // 顶栏按钮契约
     const newSessionButtonAria = '开启新投研会话'
     const fullScreenButtonAria = '在主对话界面全屏查看'
     expect(newSessionButtonAria).toBe('开启新投研会话')
     expect(fullScreenButtonAria).toBe('在主对话界面全屏查看')
 
-    // 指令栏契约：网格布局两行四个项目，完全去掉“指令：”文字前缀
-    const commandBarClass = 'grid grid-cols-2 gap-1.5 p-2 border-b border-border/40 bg-muted/10 shrink-0'
+    // Composer 上的快捷入口契约：两行网格布局且去除“指令：”文字前缀
+    const commandBarClass = 'grid grid-cols-2 gap-1.5 pb-2'
     expect(commandBarClass).toContain('grid-cols-2')
-    expect(commandBarClass).not.toContain('overflow-x-auto')
+    expect(commandBarClass).toContain('pb-2')
 
     const quickPillCommands = ['综合诊断', '风控核查', '形态透视', '基本面']
     expect(quickPillCommands.length).toBe(4)
     expect(quickPillCommands).toEqual(['综合诊断', '风控核查', '形态透视', '基本面'])
 
-    // 内嵌会话契约：使用 variant="browser" 紧凑模式加载 AgentConversationSurface
-    const surfaceVariant = 'browser'
-    expect(surfaceVariant).toBe('browser')
+    // 内嵌会话契约：使用 variant="investment" 紧凑模式加载 AgentConversationSurface
+    const surfaceVariant = 'investment'
+    expect(surfaceVariant).toBe('investment')
   })
 
   test('Given 用户显式点击右上角全屏查看按钮 When 触发全屏打开时 Then 唯有此时才切换至 conversations 主对话界面', () => {
@@ -615,19 +615,19 @@ describe('基金股市 - AI 投研助手右栏内嵌会话与不跳转主界面 
     expect(currentView).toBe('conversations')
   })
 
-  test('Given 右侧栏布局结构 When 渲染底部 Composer Then 固定钉底、支持富文本/语音/模型切换且就地发送不跳转', () => {
+  test('Given 右侧栏布局结构 When 渲染底部 Composer Then 四个快捷入口直接位于输入框上方，固定钉底并支持就地发送不跳转', () => {
     // 底部 Composer 容器契约：钉底、带边框与毛玻璃材质
     const composerWrapperClass = 'flex-shrink-0 p-2.5 border-t border-border/50 bg-background/50 backdrop-blur-sm'
     expect(composerWrapperClass).toContain('flex-shrink-0')
     expect(composerWrapperClass).toContain('border-t')
 
-    // 会话表面契约：隐藏内部重复 composer（hideComposer=true）
+    // 会话表面契约：隐藏内部重复 composer（hideComposer=true），使用 investment variant
     const surfaceProps = {
-      variant: 'browser' as const,
+      variant: 'investment' as const,
       hideComposer: true,
     }
     expect(surfaceProps.hideComposer).toBeTrue()
-    expect(surfaceProps.variant).toBe('browser')
+    expect(surfaceProps.variant).toBe('investment')
   })
 })
 

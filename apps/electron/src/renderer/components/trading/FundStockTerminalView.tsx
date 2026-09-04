@@ -1549,56 +1549,12 @@ export function FundStockTerminalView(): React.ReactElement {
             </div>
           </header>
 
-          {/* 快速投研快捷指令栏（两行四个网格布局，已去掉“指令：”前缀） */}
-          <div className="grid grid-cols-2 gap-1.5 p-2 border-b border-border/40 bg-muted/10 shrink-0">
-            <button
-              type="button"
-              onClick={() => void handleSendToAgent('diagnose')}
-              disabled={!activeTab}
-              className="flex items-center justify-center gap-1.5 h-6.5 px-2 rounded-md text-[11px] font-medium bg-background/85 border border-border/60 hover:border-primary/50 hover:text-primary transition-colors disabled:opacity-40 disabled:pointer-events-none shadow-2xs select-none"
-              title="一键综合诊断当前标的"
-            >
-              <Flame className="w-3 h-3 text-amber-500 shrink-0" />
-              <span className="truncate">综合诊断</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => void handleSendToAgent('risk')}
-              disabled={!activeTab}
-              className="flex items-center justify-center gap-1.5 h-6.5 px-2 rounded-md text-[11px] font-medium bg-background/85 border border-border/60 hover:border-primary/50 hover:text-primary transition-colors disabled:opacity-40 disabled:pointer-events-none shadow-2xs select-none"
-              title="盘前风控清单核对"
-            >
-              <ShieldAlert className="w-3 h-3 text-red-500 shrink-0" />
-              <span className="truncate">风控核查</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => void handleSendToAgent('tech')}
-              disabled={!activeTab}
-              className="flex items-center justify-center gap-1.5 h-6.5 px-2 rounded-md text-[11px] font-medium bg-background/85 border border-border/60 hover:border-primary/50 hover:text-primary transition-colors disabled:opacity-40 disabled:pointer-events-none shadow-2xs select-none"
-              title="K线形态量价解析"
-            >
-              <BarChart3 className="w-3 h-3 text-blue-500 shrink-0" />
-              <span className="truncate">形态透视</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => void handleSendToAgent('financial')}
-              disabled={!activeTab}
-              className="flex items-center justify-center gap-1.5 h-6.5 px-2 rounded-md text-[11px] font-medium bg-background/85 border border-border/60 hover:border-primary/50 hover:text-primary transition-colors disabled:opacity-40 disabled:pointer-events-none shadow-2xs select-none"
-              title="商业壁垒与财务体检"
-            >
-              <Bookmark className="w-3 h-3 text-purple-500 shrink-0" />
-              <span className="truncate">基本面</span>
-            </button>
-          </div>
-
           {/* 会话表面：直接在右栏显示，不跳转到主界面 */}
           <div className="min-h-0 flex-1 overflow-hidden flex flex-col">
             {tradingSessionId ? (
               <AgentConversationSurface
                 sessionId={tradingSessionId}
-                variant="browser"
+                variant="investment"
                 hideComposer
               />
             ) : (
@@ -1609,8 +1565,52 @@ export function FundStockTerminalView(): React.ReactElement {
             )}
           </div>
 
-          {/* 底部固定 Composer 紧凑版（参考 browserAgentpanel 的紧凑版，默认在右栏就地提问） */}
+          {/* 底部固定 Composer 紧凑版（默认在右栏就地提问） */}
           <div className="flex-shrink-0 p-2.5 border-t border-border/50 bg-background/50 backdrop-blur-sm">
+            {/* composer 上的快捷入口（四个快捷指令：两行网格布局） */}
+            <div className="grid grid-cols-2 gap-1.5 pb-2">
+              <button
+                type="button"
+                onClick={() => void handleSendToAgent('diagnose')}
+                disabled={!activeTab}
+                className="flex items-center justify-center gap-1.5 h-6.5 px-2 rounded-md text-[11px] font-medium bg-background/85 border border-border/60 hover:border-primary/50 hover:text-primary transition-colors disabled:opacity-40 disabled:pointer-events-none shadow-2xs select-none"
+                title="一键综合诊断当前标的"
+              >
+                <Flame className="w-3 h-3 text-amber-500 shrink-0" />
+                <span className="truncate">综合诊断</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleSendToAgent('risk')}
+                disabled={!activeTab}
+                className="flex items-center justify-center gap-1.5 h-6.5 px-2 rounded-md text-[11px] font-medium bg-background/85 border border-border/60 hover:border-primary/50 hover:text-primary transition-colors disabled:opacity-40 disabled:pointer-events-none shadow-2xs select-none"
+                title="盘前风控清单核对"
+              >
+                <ShieldAlert className="w-3 h-3 text-red-500 shrink-0" />
+                <span className="truncate">风控核查</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleSendToAgent('tech')}
+                disabled={!activeTab}
+                className="flex items-center justify-center gap-1.5 h-6.5 px-2 rounded-md text-[11px] font-medium bg-background/85 border border-border/60 hover:border-primary/50 hover:text-primary transition-colors disabled:opacity-40 disabled:pointer-events-none shadow-2xs select-none"
+                title="K线形态量价解析"
+              >
+                <BarChart3 className="w-3 h-3 text-blue-500 shrink-0" />
+                <span className="truncate">形态透视</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleSendToAgent('financial')}
+                disabled={!activeTab}
+                className="flex items-center justify-center gap-1.5 h-6.5 px-2 rounded-md text-[11px] font-medium bg-background/85 border border-border/60 hover:border-primary/50 hover:text-primary transition-colors disabled:opacity-40 disabled:pointer-events-none shadow-2xs select-none"
+                title="商业壁垒与财务体检"
+              >
+                <Bookmark className="w-3 h-3 text-purple-500 shrink-0" />
+                <span className="truncate">基本面</span>
+              </button>
+            </div>
+
             <div className="rounded-xl border border-border/70 bg-background/80 shadow-sm focus-within:border-foreground/25 transition-colors">
               <RichTextInput
                 value={composerInput}

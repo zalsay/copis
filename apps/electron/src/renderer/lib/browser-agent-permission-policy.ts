@@ -1,6 +1,6 @@
 import type { CopisPermissionMode } from '@copis/shared'
 
-export type AgentConversationSurfaceVariant = 'main' | 'browser'
+export type AgentConversationSurfaceVariant = 'main' | 'browser' | 'investment'
 
 /** Browser 对话表面固定使用完全自动模式，避免会话元数据或 stale atom 污染 UI。 */
 export function resolveAgentConversationPermissionMode(

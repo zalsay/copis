@@ -252,7 +252,7 @@ function isStaleAgentQueueError(error: unknown): boolean {
     message.includes('无活跃消息通道可注入队列消息')
 }
 
-export type AgentConversationSurfaceVariant = 'main' | 'browser'
+export type AgentConversationSurfaceVariant = 'main' | 'browser' | 'investment'
 
 export interface AgentConversationSurfaceProps {
   sessionId: string
@@ -267,7 +267,7 @@ export function AgentConversationSurface({
   hideStarterChips = false,
   hideComposer = false,
 }: AgentConversationSurfaceProps): React.ReactElement {
-  const compact = variant === 'browser'
+  const compact = variant === 'browser' || variant === 'investment'
   const sessionSurfaceRef = React.useRef<HTMLDivElement>(null)
   const composerRef = React.useRef<HTMLDivElement>(null)
   const [persistedSDKMessages, setPersistedSDKMessages] = React.useState<SDKMessage[]>([])
@@ -2985,7 +2985,7 @@ export function AgentConversationSurface({
               </div>
               <span className="text-xs font-semibold text-foreground/80">AI 投研助手已就绪</span>
               <p className="text-[11px] text-muted-foreground/70 max-w-[200px] leading-relaxed">
-                点击上方快捷指令，或在底部直接提问，针对当前标的展开全景研判。
+                点击下方快捷指令，或在底部直接提问，针对当前标的展开全景研判。
               </p>
             </div>
           ) : (
@@ -3039,7 +3039,16 @@ export function AgentConversationSurface({
               onDismiss={handleDismissNextSteps}
             />
           ) : !streaming && !hideStarterChips ? (
-            <NewSessionFeatureChips variant={variant} onSelect={handleSelectFeature} />
+            <NewSessionFeatureChips
+              variant={
+                variant === 'investment' ||
+                currentWorkspace?.slug === 'investment' ||
+                currentWorkspace?.name === '我的投资'
+                  ? 'investment'
+                  : variant
+              }
+              onSelect={handleSelectFeature}
+            />
           ) : null}
 
           <div

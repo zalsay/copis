@@ -9,6 +9,10 @@ import {
   Brain,
   Sparkles,
   ArrowRight,
+  Flame,
+  ShieldAlert,
+  BarChart3,
+  Bookmark,
 } from 'lucide-react'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
@@ -101,13 +105,59 @@ export const COPIS_BROWSER_STARTER_FEATURES: CopisFeatureItem[] = [
   },
 ]
 
+export const COPIS_INVESTMENT_STARTER_FEATURES: CopisFeatureItem[] = [
+  {
+    id: 'diagnose',
+    title: '综合诊断',
+    description: '对当前标的进行全维度综合投研诊断，涵盖技术走势、估值边际与操作建议',
+    prompt: '请对当前关注的标的进行全维度综合投研诊断，涵盖当前技术走势、估值安全边际与操作建议',
+    icon: Flame,
+    iconColorClass: 'text-amber-500/85 group-hover:text-amber-500',
+    bgHoverClass: 'hover:border-amber-500/60',
+  },
+  {
+    id: 'risk',
+    title: '风控核查',
+    description: '盘前风控清单核对，重点评估质押、重大解禁、商誉、流动性与监管风险',
+    prompt: '请对当前关注的标的执行系统级风控核查，重点评估质押回购、重大解禁、商誉减值、流动性枯竭与监管异动风险',
+    icon: ShieldAlert,
+    iconColorClass: 'text-red-500/85 group-hover:text-red-500',
+    bgHoverClass: 'hover:border-red-500/60',
+  },
+  {
+    id: 'tech',
+    title: '形态透视',
+    description: 'K线形态量价解析，分析阻力位、支撑位及短期突破/回调概率',
+    prompt: '请结合当前最新价及 K 线形态量价结构，分析阻力位、支撑位及短期突破/回调概率',
+    icon: BarChart3,
+    iconColorClass: 'text-blue-500/85 group-hover:text-blue-500',
+    bgHoverClass: 'hover:border-blue-500/60',
+  },
+  {
+    id: 'financial',
+    title: '基本面',
+    description: '商业壁垒与财务体检，分析行业格局、核心优势及主要财务指标健康度',
+    prompt: '请分析当前标的的行业竞争格局、核心商业壁垒、毛利率/净利率趋势及主要财务健康状况',
+    icon: Bookmark,
+    iconColorClass: 'text-purple-500/85 group-hover:text-purple-500',
+    bgHoverClass: 'hover:border-purple-500/60',
+  },
+]
+
+export type StarterChipsVariant = 'main' | 'browser' | 'investment'
+
 interface NewSessionFeatureChipsProps {
-  variant?: 'main' | 'browser'
+  variant?: StarterChipsVariant
   onSelect: (feature: CopisFeatureItem) => void
 }
 
 export function NewSessionFeatureChips({ variant = 'main', onSelect }: NewSessionFeatureChipsProps): React.ReactElement {
-  const features = variant === 'browser' ? COPIS_BROWSER_STARTER_FEATURES : COPIS_STARTER_FEATURES
+  const features =
+    variant === 'investment'
+      ? COPIS_INVESTMENT_STARTER_FEATURES
+      : variant === 'browser'
+      ? COPIS_BROWSER_STARTER_FEATURES
+      : COPIS_STARTER_FEATURES
 
   return (
     <div className="copis-agent-starter-chips flex flex-wrap items-center justify-center gap-1.5 px-1 pb-2.5 select-none animate-in fade-in slide-in-from-bottom-1 duration-200">
