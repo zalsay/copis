@@ -129,4 +129,16 @@ describe('AI 浏览器模拟鼠标脚本', () => {
     expect(source).toContain('cursorState.x = x')
     expect(source).toContain('cursorState.y = y')
   })
+
+  test('Given 外部资源完全不存在（如打包自包含 Pi Worker 环境） When 初始化指针 Then 使用内置默认 SVG 且绝不抛出异常', () => {
+    expect(resolveBrowserPageCursorResourcePath({
+      resourcesPath: '/non-existent-resources-path',
+      moduleDir: '/$bunfs/root',
+      cwd: '/non-existent-cwd',
+      exists: () => false,
+    })).toBeUndefined()
+
+    // 验证即使资源路径不存在，buildBrowserPageCursorSource 也正常返回有效脚本，不崩溃
+    expect(() => buildBrowserPageCursorSource({ phase: 'move', x: 50, y: 50 })).not.toThrow()
+  })
 })

@@ -44,6 +44,15 @@ describe('关于/更新设置页契约', () => {
     expect(versionCopyMatches).toHaveLength(1)
   })
 
+  test('Given 桌面端卡片 When 检查更新或跨版本发现新版本 Then 支持展示最新版本并常驻刷新按钮', () => {
+    const source = readIfPresent(join(settingsRoot, 'AboutUpdatesSettings.tsx'))
+
+    expect(source).toContain('最新版本')
+    expect(source).toContain('RefreshCw')
+    expect(source).toContain('checkForUpdates()')
+    expect(source).toContain('targetLatestVersion')
+  })
+
   test('Given 本地能力卡片 When 查看说明 Then 不显示自动管理描述', () => {
     const moduleSource = readIfPresent(join(settingsRoot, 'FunctionalModulesCard.tsx'))
 

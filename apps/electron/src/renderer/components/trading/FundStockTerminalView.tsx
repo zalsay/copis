@@ -80,6 +80,14 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { FundStockSearchDialog } from './FundStockSearchDialog'
+import { TradingViewKlineChart } from './TradingViewKlineChart'
+import { FundStockOrderbookPane } from './FundStockOrderbookPane'
+import {
+  fmtChange,
+  fmtCompact,
+  fmtPercent,
+  fmtPrice,
+} from './trading-chart-utils'
 
 export function FundStockTerminalView(): React.ReactElement {
   const [watchlist, setWatchlist] = useAtom(tradingWatchlistAtom)
@@ -94,6 +102,8 @@ export function FundStockTerminalView(): React.ReactElement {
   const [searchOpen, setSearchOpen] = useState(false)
   const [refreshing, setRefreshing] = useState(false)
   const [hoverKlineIndex, setHoverKlineIndex] = useState<number | null>(null)
+  const [hoveredKlinePoint, setHoveredKlinePoint] = useState<KlinePoint | null>(null)
+  const [maVisible, setMaVisible] = useState({ ma5: true, ma10: true, ma20: true, ma30: true })
   const [aiDockWidth, setAiDockWidth] = useAtom(tradingAiDockWidthAtom)
 
   const tabListRef = useRef<HTMLDivElement>(null)
@@ -859,58 +869,41 @@ export function FundStockTerminalView(): React.ReactElement {
     </div>
   )
 
-  // 计算 K 线图渲染尺寸与比例尺
-  const klineChartData = useMemo(() => {
-    if (!klines.length) return null
-    let minPrice = Infinity
-    let maxPrice = -Infinity
-    let maxVolume = 0
+  // 悬停或最新位置的数据点、涨跌统计与均线读数（富途牛牛 / dsh-trading 同源读数体系）
+  const activePoint = hoveredKlinePoint || (klines.length > 0 ? klines[klines.length - 1] : null)
+  const activePointIndex = hoverKlineIndex !== null ? hoverKlineIndex : (klines.length > 0 ? klines.length - 1 : -1)
 
-    // 计算均线 (MA5, MA10, MA20)
-    const ma5: (number | null)[] = []
-    const ma10: (number | null)[] = []
-    const ma20: (number | null)[] = []
-
-    for (let i = 0; i < klines.length; i++) {
-      const p = klines[i]
-      if (!p) continue
-      if (p.low < minPrice) minPrice = p.low
-      if (p.high > maxPrice) maxPrice = p.high
-      if (p.volume > maxVolume) maxVolume = p.volume
-
-      // MA5
-      if (i >= 4) {
-        const sum = klines.slice(i - 4, i + 1).reduce((acc, curr) => acc + curr.close, 0)
-        ma5.push(sum / 5)
-      } else {
-        ma5.push(null)
-      }
-      // MA10
-      if (i >= 9) {
-        const sum = klines.slice(i - 9, i + 1).reduce((acc, curr) => acc + curr.close, 0)
-        ma10.push(sum / 10)
-      } else {
-        ma10.push(null)
-      }
-      // MA20
-      if (i >= 19) {
-        const sum = klines.slice(i - 19, i + 1).reduce((acc, curr) => acc + curr.close, 0)
-        ma20.push(sum / 20)
-      } else {
-        ma20.push(null)
-      }
+  const pointStats = useMemo(() => {
+    if (!activePoint || activePointIndex < 0) {
+      return { change: 0, changePct: 0, isUp: true }
     }
-
-    const padding = (maxPrice - minPrice) * 0.08 || 1
+    const prevClose = activePointIndex > 0 ? klines[activePointIndex - 1]?.close : activePoint.open
+    const change = prevClose ? activePoint.close - prevClose : 0
+    const changePct = prevClose ? (change / prevClose) * 100 : 0
     return {
-      minPrice: minPrice - padding,
-      maxPrice: maxPrice + padding,
-      maxVolume: maxVolume || 1,
-      ma5,
-      ma10,
-      ma20,
+      change,
+      changePct,
+      isUp: change >= 0,
     }
-  }, [klines])
+  }, [activePoint, activePointIndex, klines])
+
+  const maValues = useMemo(() => {
+    if (!klines.length || activePointIndex < 0) {
+      return { ma5: null, ma10: null, ma20: null, ma30: null }
+    }
+    const getMa = (p: number) => {
+      if (activePointIndex < p - 1) return null
+      const slice = klines.slice(activePointIndex - p + 1, activePointIndex + 1)
+      const sum = slice.reduce((acc, curr) => acc + curr.close, 0)
+      return sum / p
+    }
+    return {
+      ma5: getMa(5),
+      ma10: getMa(10),
+      ma20: getMa(20),
+      ma30: getMa(30),
+    }
+  }, [klines, activePointIndex])
 
   return (
     <div className="flex flex-col h-full bg-background select-none text-foreground overflow-hidden">
@@ -1265,10 +1258,14 @@ export function FundStockTerminalView(): React.ReactElement {
                 {/* 交互式 K 线区域 */}
                 <div className="flex-1 flex flex-col p-4 overflow-hidden border-r border-border/40">
                   {/* 周期切换与指标提示 */}
-                  <div className="flex items-center justify-between pb-3">
-                    <div className="inline-flex h-8 items-center gap-1 rounded-lg bg-muted/60 p-1 text-xs font-medium">
+                  <div className="flex items-center justify-between pb-2.5">
+                    <div className="inline-flex h-8 items-center gap-0.5 rounded-lg bg-muted/60 p-1 text-xs font-medium">
                       {[
                         { id: '1m', label: '分时' },
+                        { id: '5m', label: '5分' },
+                        { id: '15m', label: '15分' },
+                        { id: '30m', label: '30分' },
+                        { id: '60m', label: '60分' },
                         { id: 'day', label: '日 K' },
                         { id: 'week', label: '周 K' },
                         { id: 'month', label: '月 K' },
@@ -1278,7 +1275,7 @@ export function FundStockTerminalView(): React.ReactElement {
                           type="button"
                           onClick={() => setPeriod(item.id as KlinePeriod)}
                           className={cn(
-                            'inline-flex h-6 items-center justify-center whitespace-nowrap rounded-md px-3 text-xs font-medium leading-none transition-all select-none',
+                            'inline-flex h-6 items-center justify-center whitespace-nowrap rounded-md px-2.5 text-xs font-medium leading-none transition-all select-none',
                             period === item.id
                               ? 'bg-background text-foreground shadow-xs font-semibold'
                               : 'text-muted-foreground hover:text-foreground'
@@ -1289,187 +1286,155 @@ export function FundStockTerminalView(): React.ReactElement {
                       ))}
                     </div>
 
-                    {/* 指标图例 */}
-                    <div className="flex items-center gap-3 text-xs font-mono">
-                      <span className="text-amber-500 font-medium">MA5</span>
-                      <span className="text-purple-500 font-medium">MA10</span>
-                      <span className="text-blue-500 font-medium">MA20</span>
+                    {/* 指标图例与切换按钮 */}
+                    <div className="flex items-center gap-1.5 text-xs font-mono select-none">
+                      <button
+                        type="button"
+                        onClick={() => setMaVisible((v) => ({ ...v, ma5: !v.ma5 }))}
+                        className={cn(
+                          'px-2 py-0.5 rounded text-[11px] font-semibold transition-opacity',
+                          maVisible.ma5
+                            ? 'text-[#e6b800] bg-[#e6b800]/15 hover:opacity-80'
+                            : 'text-muted-foreground/40 hover:text-muted-foreground line-through'
+                        )}
+                        title="切换 MA5 均线"
+                      >
+                        MA5
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setMaVisible((v) => ({ ...v, ma10: !v.ma10 }))}
+                        className={cn(
+                          'px-2 py-0.5 rounded text-[11px] font-semibold transition-opacity',
+                          maVisible.ma10
+                            ? 'text-[#4a90e2] bg-[#4a90e2]/15 hover:opacity-80'
+                            : 'text-muted-foreground/40 hover:text-muted-foreground line-through'
+                        )}
+                        title="切换 MA10 均线"
+                      >
+                        MA10
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setMaVisible((v) => ({ ...v, ma20: !v.ma20 }))}
+                        className={cn(
+                          'px-2 py-0.5 rounded text-[11px] font-semibold transition-opacity',
+                          maVisible.ma20
+                            ? 'text-[#c05fd8] bg-[#c05fd8]/15 hover:opacity-80'
+                            : 'text-muted-foreground/40 hover:text-muted-foreground line-through'
+                        )}
+                        title="切换 MA20 均线"
+                      >
+                        MA20
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setMaVisible((v) => ({ ...v, ma30: !v.ma30 }))}
+                        className={cn(
+                          'px-2 py-0.5 rounded text-[11px] font-semibold transition-opacity',
+                          maVisible.ma30
+                            ? 'text-[#2ba471] bg-[#2ba471]/15 hover:opacity-80'
+                            : 'text-muted-foreground/40 hover:text-muted-foreground line-through'
+                        )}
+                        title="切换 MA30 均线"
+                      >
+                        MA30
+                      </button>
                     </div>
                   </div>
 
+                  {/* 富途牛牛 / dsh-trading 同款实时行情读数行 (OHLCV + MA Readout) */}
+                  {activePoint && (
+                    <div className="flex items-center gap-3 pb-2 text-[11px] font-mono text-muted-foreground/90 overflow-x-auto select-none border-b border-border/30 mb-2 whitespace-nowrap">
+                      <span className="text-foreground/80 font-medium">
+                        {activePoint.time}
+                      </span>
+                      <span className="flex items-center gap-1">
+                        <span className="text-muted-foreground/60">开:</span>
+                        <span className="text-foreground font-semibold">{fmtPrice(activePoint.open)}</span>
+                      </span>
+                      <span className="flex items-center gap-1">
+                        <span className="text-muted-foreground/60">高:</span>
+                        <span className="text-red-500 font-semibold">{fmtPrice(activePoint.high)}</span>
+                      </span>
+                      <span className="flex items-center gap-1">
+                        <span className="text-muted-foreground/60">低:</span>
+                        <span className="text-emerald-500 font-semibold">{fmtPrice(activePoint.low)}</span>
+                      </span>
+                      <span className="flex items-center gap-1">
+                        <span className="text-muted-foreground/60">收:</span>
+                        <span className={cn('font-bold', pointStats.isUp ? 'text-red-500' : 'text-emerald-500')}>
+                          {fmtPrice(activePoint.close)}
+                        </span>
+                      </span>
+                      <span className="flex items-center gap-1">
+                        <span className="text-muted-foreground/60">涨跌:</span>
+                        <span className={cn('font-semibold', pointStats.isUp ? 'text-red-500' : 'text-emerald-500')}>
+                          {fmtChange(pointStats.change)} ({fmtPercent(pointStats.changePct)})
+                        </span>
+                      </span>
+                      <span className="flex items-center gap-1">
+                        <span className="text-muted-foreground/60">量:</span>
+                        <span className="text-foreground font-semibold">{fmtCompact(activePoint.volume)}</span>
+                      </span>
+
+                      {/* 均线当前读数 */}
+                      {maVisible.ma5 && maValues.ma5 !== null && (
+                        <span className="flex items-center gap-1 text-[#e6b800]">
+                          <span>MA5:</span>
+                          <span className="font-semibold">{fmtPrice(maValues.ma5)}</span>
+                        </span>
+                      )}
+                      {maVisible.ma10 && maValues.ma10 !== null && (
+                        <span className="flex items-center gap-1 text-[#4a90e2]">
+                          <span>MA10:</span>
+                          <span className="font-semibold">{fmtPrice(maValues.ma10)}</span>
+                        </span>
+                      )}
+                      {maVisible.ma20 && maValues.ma20 !== null && (
+                        <span className="flex items-center gap-1 text-[#c05fd8]">
+                          <span>MA20:</span>
+                          <span className="font-semibold">{fmtPrice(maValues.ma20)}</span>
+                        </span>
+                      )}
+                      {maVisible.ma30 && maValues.ma30 !== null && (
+                        <span className="flex items-center gap-1 text-[#2ba471]">
+                          <span>MA30:</span>
+                          <span className="font-semibold">{fmtPrice(maValues.ma30)}</span>
+                        </span>
+                      )}
+                    </div>
+                  )}
+
                   {/* K 线图表视口 */}
-                  <div className="flex-1 min-h-0 relative rounded-xl border border-border/60 bg-card/40 p-2 overflow-hidden flex flex-col shadow-inner">
+                  <div className="flex-1 min-h-0 relative rounded-xl border border-border/60 bg-card/40 overflow-hidden flex flex-col shadow-inner">
                     {klinesLoading ? (
                       <div className="flex-1 flex items-center justify-center text-muted-foreground text-xs gap-2">
                         <RefreshCw className="w-4 h-4 animate-spin text-primary" />
                         <span>K 线数据加载中...</span>
                       </div>
-                    ) : !klines.length || !klineChartData ? (
+                    ) : !klines.length ? (
                       <div className="flex-1 flex items-center justify-center text-muted-foreground text-xs">
                         <span>暂无该周期 K 线历史数据</span>
                       </div>
                     ) : (
-                      <div className="flex-1 relative flex flex-col">
-                        {/* 悬停信息条 */}
-                        {hoverKlineIndex !== null && klines[hoverKlineIndex] && (
-                          <div className="absolute left-2 top-2 z-10 bg-background/90 border border-border/70 backdrop-blur px-2.5 py-1 rounded-md text-[11px] font-mono flex items-center gap-3 shadow-md">
-                            <span className="text-muted-foreground">{klines[hoverKlineIndex].time}</span>
-                            <span>开: {klines[hoverKlineIndex].open.toFixed(2)}</span>
-                            <span>高: {klines[hoverKlineIndex].high.toFixed(2)}</span>
-                            <span>低: {klines[hoverKlineIndex].low.toFixed(2)}</span>
-                            <span>收: {klines[hoverKlineIndex].close.toFixed(2)}</span>
-                            <span>量: {(klines[hoverKlineIndex].volume / 1000).toFixed(0)}k</span>
-                          </div>
-                        )}
-
-                        {/* SVG 矢量蜡烛图 */}
-                        <svg
-                          className="w-full h-full cursor-crosshair select-none"
-                          onMouseLeave={() => setHoverKlineIndex(null)}
-                        >
-                          {/* 绘制背景水平参考线 */}
-                          {[0.2, 0.4, 0.6, 0.8].map((ratio) => (
-                            <line
-                              key={ratio}
-                              x1="0"
-                              x2="100%"
-                              y1={`${ratio * 80}%`}
-                              y2={`${ratio * 80}%`}
-                              stroke="currentColor"
-                              className="text-border/30"
-                              strokeDasharray="4 4"
-                            />
-                          ))}
-
-                          {/* 绘制蜡烛图 */}
-                          {klines.map((p, idx) => {
-                            const n = klines.length
-                            const candleWidth = Math.max(2, Math.min(12, 600 / n))
-                            const xPercent = (idx + 0.5) / n
-                            const isUp = p.close >= p.open
-
-                            // 价格映射到 0% ~ 75% 高度
-                            const priceRange = klineChartData.maxPrice - klineChartData.minPrice
-                            const yHigh =
-                              ((klineChartData.maxPrice - p.high) / priceRange) * 75
-                            const yLow =
-                              ((klineChartData.maxPrice - p.low) / priceRange) * 75
-                            const yOpen =
-                              ((klineChartData.maxPrice - p.open) / priceRange) * 75
-                            const yClose =
-                              ((klineChartData.maxPrice - p.close) / priceRange) * 75
-
-                            const top = Math.min(yOpen, yClose)
-                            const bodyHeight = Math.max(1.5, Math.abs(yOpen - yClose))
-
-                            // 成交量映射到 80% ~ 98%
-                            const volHeight =
-                              (p.volume / klineChartData.maxVolume) * 18
-
-                            return (
-                              <g
-                                key={idx}
-                                onMouseEnter={() => setHoverKlineIndex(idx)}
-                                className="transition-opacity hover:opacity-80"
-                              >
-                                {/* 影线 */}
-                                <line
-                                  x1={`${xPercent * 100}%`}
-                                  x2={`${xPercent * 100}%`}
-                                  y1={`${yHigh}%`}
-                                  y2={`${yLow}%`}
-                                  stroke="currentColor"
-                                  strokeWidth="1"
-                                  className={isUp ? 'text-red-500' : 'text-emerald-500'}
-                                />
-                                {/* 实体 */}
-                                <rect
-                                  x={`calc(${xPercent * 100}% - ${candleWidth / 2}px)`}
-                                  y={`${top}%`}
-                                  width={candleWidth}
-                                  height={`${bodyHeight}%`}
-                                  className={
-                                    isUp
-                                      ? 'fill-red-500 stroke-red-500'
-                                      : 'fill-emerald-500 stroke-emerald-500'
-                                  }
-                                />
-                                {/* 成交量柱状图 */}
-                                <rect
-                                  x={`calc(${xPercent * 100}% - ${candleWidth / 2}px)`}
-                                  y={`${98 - volHeight}%`}
-                                  width={candleWidth}
-                                  height={`${volHeight}%`}
-                                  className={
-                                    isUp
-                                      ? 'fill-red-500/40'
-                                      : 'fill-emerald-500/40'
-                                  }
-                                />
-                              </g>
-                            )
-                          })}
-                        </svg>
-                      </div>
+                      <TradingViewKlineChart
+                        klines={klines}
+                        period={period}
+                        activeSymbol={activeSymbol}
+                        maVisible={maVisible}
+                        onHoverPoint={(point, idx) => {
+                          setHoveredKlinePoint(point)
+                          setHoverKlineIndex(idx)
+                        }}
+                        className="w-full h-full"
+                      />
                     )}
                   </div>
                 </div>
 
-                {/* 盘口买卖五档 (~200px) */}
-                <div className="w-52 p-3 flex flex-col bg-card/10 text-xs font-mono">
-                  <div className="font-semibold text-muted-foreground pb-2 border-b border-border/40 text-[11px]">
-                    实时五档买卖盘口
-                  </div>
-
-                  {currentQuote?.asks && currentQuote?.bids ? (
-                    <div className="flex-1 flex flex-col justify-center gap-1 my-2">
-                      {/* 卖五 ~ 卖一 (倒序) */}
-                      <div className="flex flex-col gap-1 pb-2 border-b border-border/30">
-                        {currentQuote.asks
-                          .slice(0, 5)
-                          .reverse()
-                          .map((ask, i) => (
-                            <div key={`ask-${i}`} className="flex items-center justify-between text-[11px]">
-                              <span className="text-muted-foreground">卖{5 - i}</span>
-                              <span className="text-emerald-500">{ask.price.toFixed(2)}</span>
-                              <span className="text-muted-foreground">{ask.volume}</span>
-                            </div>
-                          ))}
-                      </div>
-
-                      {/* 现价指示 */}
-                      <div className="py-1 text-center font-bold text-sm text-foreground bg-muted/30 rounded">
-                        {currentQuote.price.toFixed(2)}
-                      </div>
-
-                      {/* 买一 ~ 买五 */}
-                      <div className="flex flex-col gap-1 pt-2">
-                        {currentQuote.bids.slice(0, 5).map((bid, i) => (
-                          <div key={`bid-${i}`} className="flex items-center justify-between text-[11px]">
-                            <span className="text-muted-foreground">买{i + 1}</span>
-                            <span className="text-red-500">{bid.price.toFixed(2)}</span>
-                            <span className="text-muted-foreground">{bid.volume}</span>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="flex-1 flex flex-col items-center justify-center text-muted-foreground text-center text-[11px] p-4">
-                      <span>
-                        {!currentQuote
-                          ? '正在获取分时盘口撮合档位...'
-                          : '该市场/标的仅提供毫秒逐笔与分时撮合'}
-                      </span>
-                    </div>
-                  )}
-
-                  <div className="pt-2 border-t border-border/40 text-[10px] text-muted-foreground text-center">
-                    更新时间:{' '}
-                    {currentQuote?.updatedAt
-                      ? new Date(currentQuote.updatedAt).toLocaleTimeString()
-                      : '--:--:--'}
-                  </div>
-                </div>
+                {/* 盘口买卖五档与买卖力道比（对齐 dsh-trading / 富途牛牛风格） */}
+                <FundStockOrderbookPane currentQuote={currentQuote} activeSymbol={activeSymbol} />
               </div>
             </>
           ) : (

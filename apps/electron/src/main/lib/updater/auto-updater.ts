@@ -93,13 +93,18 @@ export async function checkForUpdates(): Promise<void> {
   try {
     setStatus({ status: 'checking' })
     const result = await checkAppUpdateViaRustApi()
+    const latestVersion = result.latestVersion ?? result.version
     if (!result.available || !result.version || !result.url) {
-      setStatus({ status: 'not-available' })
+      setStatus({
+        status: 'not-available',
+        ...(latestVersion ? { latestVersion, version: latestVersion } : {}),
+      })
       return
     }
     setStatus({
       status: 'available',
       version: result.version,
+      ...(latestVersion ? { latestVersion } : {}),
       releaseNotes: result.releaseNotes,
       downloadUrl: result.url,
       fileSha256: result.sha256,
@@ -119,12 +124,13 @@ export async function downloadAppUpdate(): Promise<void> {
   if (currentStatus.status !== 'available' || !currentStatus.downloadUrl) {
     throw new Error('没有可下载的更新，请先检查更新')
   }
-  const { version, downloadUrl, fileSha256, fileSize } = currentStatus
+  const { version, latestVersion, downloadUrl, fileSha256, fileSize } = currentStatus
   const total = fileSize ?? 0
   const startedAt = Date.now()
   setStatus({
     status: 'downloading',
     version,
+    ...(latestVersion ? { latestVersion } : {}),
     progress: { percent: 0, transferred: 0, total, bytesPerSecond: 0 },
   })
 
@@ -186,7 +192,12 @@ export async function downloadAppUpdate(): Promise<void> {
       throw new Error('更新安装包大小不一致，请重新下载')
     }
 
-    setStatus({ status: 'downloaded', version, filePath })
+    setStatus({
+      status: 'downloaded',
+      version,
+      ...(latestVersion ? { latestVersion } : {}),
+      filePath,
+    })
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
     setStatus({ status: 'error', error: message })

@@ -9,6 +9,7 @@ import { SettingsCard, SettingsSection } from './primitives'
 import { FunctionalModulesCard } from './FunctionalModulesCard'
 
 function getAppUpdateStatusText(status: UpdateStatus, appInfo: AppInfo | null): string {
+  const latest = status.latestVersion ?? status.version
   switch (status.status) {
     case 'checking':
       return '正在检查更新'
@@ -19,7 +20,9 @@ function getAppUpdateStatusText(status: UpdateStatus, appInfo: AppInfo | null): 
     case 'downloaded':
       return `v${status.version} 已下载，可在空闲时安装`
     case 'not-available':
-      return appInfo ? `当前已是 v${appInfo.version}，没有可用更新` : '当前没有可用更新'
+      return latest
+        ? `当前已是最新版 v${latest}，没有可用更新`
+        : appInfo ? `当前已是 v${appInfo.version}，没有可用更新` : '当前没有可用更新'
     case 'error':
       return status.error || '检查更新失败，请稍后重试'
     default:
@@ -51,6 +54,13 @@ export function AboutUpdatesSettings(): React.ReactElement {
   const progressPercent = isDownloading
     ? Math.round(Math.min(100, Math.max(0, updateStatus.progress?.percent ?? 0)))
     : 0
+  const targetLatestVersion = updateStatus.latestVersion ?? updateStatus.version
+  const hasDifferentLatest = Boolean(
+    targetLatestVersion
+      && appInfo?.version
+      && appInfo.version !== '-'
+      && targetLatestVersion !== appInfo.version
+  )
 
   return (
     <div className="space-y-6">
@@ -66,48 +76,55 @@ export function AboutUpdatesSettings(): React.ReactElement {
                 <h3 className="text-sm font-medium">Copis 桌面端</h3>
                 <p className="mt-0.5 text-xs text-muted-foreground">
                   当前版本 <span className="font-mono tabular-nums">{appInfo ? `v${appInfo.version}` : '正在读取'}</span>
+                  {targetLatestVersion && (
+                    <span className="ml-2.5">
+                      最新版本 <span className="font-mono tabular-nums">v{targetLatestVersion}</span>
+                      {!hasDifferentLatest && appInfo?.version && appInfo.version !== '-' && (
+                        <span className="ml-1 text-[11px] text-green-600 dark:text-green-500">（已是最新）</span>
+                      )}
+                    </span>
+                  )}
                 </p>
               </div>
             </div>
             <div className="flex flex-wrap items-center gap-2">
-              {onlineUpdateAvailable ? (
-                <>
-                  {updateStatus.status === 'available' && (
-                    <Button size="sm" className="h-8 text-xs" onClick={() => void downloadUpdate()}>
-                      <Download className="mr-1.5 h-3.5 w-3.5" />
-                      下载更新
-                    </Button>
-                  )}
-                  {updateStatus.status === 'downloaded' && (
-                    <Button size="sm" className="h-8 text-xs" onClick={() => void window.electronAPI.updater?.installWhenIdle()}>
-                      <Download className="mr-1.5 h-3.5 w-3.5" />
-                      空闲时安装
-                    </Button>
-                  )}
-                  {updateStatus.status !== 'available' && updateStatus.status !== 'downloaded' && (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="h-8 text-xs"
-                      onClick={() => void checkForUpdates()}
-                      disabled={updateStatus.status === 'checking' || updateStatus.status === 'downloading'}
-                    >
-                      {updateStatus.status === 'checking' ? (
-                        <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
-                      ) : updateStatus.status === 'downloading' ? (
-                        <Download className="mr-1.5 h-3.5 w-3.5" />
-                      ) : (
-                        <RefreshCw className="mr-1.5 h-3.5 w-3.5" />
-                      )}
-                      {updateStatus.status === 'checking' ? '检查中' : updateStatus.status === 'downloading' ? '下载中' : '检查更新'}
-                    </Button>
-                  )}
-                </>
-              ) : (
-                <Button variant="outline" size="sm" className="h-8 text-xs" disabled>
-                  开发版不支持在线更新
+              {updateStatus.status === 'available' && (
+                onlineUpdateAvailable ? (
+                  <Button size="sm" className="h-8 text-xs" onClick={() => void downloadUpdate()}>
+                    <Download className="mr-1.5 h-3.5 w-3.5" />
+                    下载更新
+                  </Button>
+                ) : (
+                  <Button
+                    size="sm"
+                    className="h-8 text-xs"
+                    onClick={() => void window.electronAPI.openExternal(updateStatus.downloadUrl || 'https://copis.meetlife.com.cn')}
+                  >
+                    <Download className="mr-1.5 h-3.5 w-3.5" />
+                    下载最新版本
+                  </Button>
+                )
+              )}
+              {updateStatus.status === 'downloaded' && onlineUpdateAvailable && (
+                <Button size="sm" className="h-8 text-xs" onClick={() => void window.electronAPI.updater?.installWhenIdle()}>
+                  <Download className="mr-1.5 h-3.5 w-3.5" />
+                  空闲时安装
                 </Button>
               )}
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-8 text-xs"
+                onClick={() => void checkForUpdates()}
+                disabled={updateStatus.status === 'checking' || updateStatus.status === 'downloading'}
+              >
+                {updateStatus.status === 'checking' ? (
+                  <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <RefreshCw className="mr-1.5 h-3.5 w-3.5" />
+                )}
+                {updateStatus.status === 'checking' ? '检查中' : '检查更新'}
+              </Button>
               <Button
                 variant="ghost"
                 size="sm"

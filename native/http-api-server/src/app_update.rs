@@ -51,6 +51,8 @@ pub fn check_app_update(
     let mut response = agent
         .get(manifest_url)
         .header("Accept", "application/json")
+        .header("Cache-Control", "no-cache")
+        .header("Pragma", "no-cache")
         .call()
         .map_err(|error| format!("更新 manifest 获取失败: {}", error))?;
     let status = response.status().as_u16();
@@ -74,9 +76,15 @@ pub fn parse_app_update(
     let value: Value =
         serde_json::from_slice(body).map_err(|_| "更新 manifest 不是有效的 JSON".to_string())?;
     let client = value.get("client").and_then(Value::as_object);
+    let global_latest_version = client.and_then(resolve_max_client_version);
     let update = client.and_then(|client| select_client_update(client, platform_key));
     let Some(update) = update else {
-        return Ok(json!({ "available": false, "currentVersion": current_version }));
+        let mut result = json!({ "available": false, "currentVersion": current_version });
+        if let Some(latest) = global_latest_version {
+            result["latestVersion"] = json!(latest);
+            result["version"] = json!(latest);
+        }
+        return Ok(result);
     };
 
     let version = update
@@ -89,24 +97,45 @@ pub fn parse_app_update(
         .and_then(Value::as_str)
         .unwrap_or("")
         .trim();
+    let latest_version = global_latest_version
+        .filter(|latest| is_newer_version(latest, version))
+        .unwrap_or_else(|| version.to_string());
+
     if version.is_empty() || url.is_empty() {
-        return Ok(json!({ "available": false, "currentVersion": current_version }));
+        let mut result = json!({ "available": false, "currentVersion": current_version });
+        if !latest_version.is_empty() {
+            result["latestVersion"] = json!(latest_version);
+            result["version"] = json!(latest_version);
+        }
+        return Ok(result);
     }
     if !is_newer_version(version, current_version) {
-        return Ok(json!({ "available": false, "currentVersion": current_version }));
+        let result = json!({
+            "available": false,
+            "currentVersion": current_version,
+            "version": version,
+            "latestVersion": latest_version
+        });
+        return Ok(result);
     }
     if !url.starts_with("https://") {
         return Err("更新下载地址必须使用 HTTPS".to_string());
     }
     if let Some(platform_key) = platform_key {
         if !is_compatible_installer_url(url, platform_key) {
-            return Ok(json!({ "available": false, "currentVersion": current_version }));
+            return Ok(json!({
+                "available": false,
+                "currentVersion": current_version,
+                "version": version,
+                "latestVersion": latest_version
+            }));
         }
     }
 
     let mut result = serde_json::Map::new();
     result.insert("available".to_string(), json!(true));
     result.insert("version".to_string(), json!(version));
+    result.insert("latestVersion".to_string(), json!(latest_version));
     result.insert("url".to_string(), json!(url));
     result.insert("currentVersion".to_string(), json!(current_version));
     if let Some(sha256) = update.get("sha256").and_then(Value::as_str) {
@@ -127,6 +156,40 @@ pub fn parse_app_update(
         }
     }
     Ok(Value::Object(result))
+}
+
+fn resolve_max_client_version(client: &serde_json::Map<String, Value>) -> Option<String> {
+    let mut max_version: Option<String> = None;
+    if let Some(update) = client.get("update").and_then(Value::as_object) {
+        if let Some(v) = update.get("version").and_then(Value::as_str) {
+            let v = v.trim();
+            if !v.is_empty() {
+                max_version = Some(v.to_string());
+            }
+        }
+    }
+    if let Some(updates) = client.get("updates").and_then(Value::as_object) {
+        for update_val in updates.values() {
+            if let Some(update) = update_val.as_object() {
+                if let Some(v) = update.get("version").and_then(Value::as_str) {
+                    let v = v.trim();
+                    if !v.is_empty() {
+                        match &max_version {
+                            Some(current_max) => {
+                                if is_newer_version(v, current_max) {
+                                    max_version = Some(v.to_string());
+                                }
+                            }
+                            None => {
+                                max_version = Some(v.to_string());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    max_version
 }
 
 fn select_client_update<'a>(

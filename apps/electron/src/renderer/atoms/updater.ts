@@ -19,6 +19,7 @@ export interface DownloadProgress {
 export interface UpdateStatus {
   status: 'idle' | 'checking' | 'available' | 'downloading' | 'downloaded' | 'not-available' | 'error'
   version?: string
+  latestVersion?: string
   releaseNotes?: string
   downloadUrl?: string
   fileSha256?: string

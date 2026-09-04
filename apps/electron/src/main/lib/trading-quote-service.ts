@@ -230,10 +230,13 @@ function mapPeriodToTencent(period: KlinePeriod): string {
       return 'month'
     case '1m':
     case '5m':
-    case '15m':
-    case '30m':
-    case '60m':
       return 'm5'
+    case '15m':
+      return 'm15'
+    case '30m':
+      return 'm30'
+    case '60m':
+      return 'm60'
     case 'day':
     default:
       return 'day'

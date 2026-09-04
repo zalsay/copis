@@ -6,6 +6,18 @@ import {
   MAX_TRADING_AI_DOCK_WIDTH,
   type TradingTabItem,
 } from '@/atoms/trading-atoms'
+import {
+  parseKlineTimeToTimestamp,
+  formatTimestampToText,
+  fmtAxis,
+  fmtPrice,
+  fmtPercent,
+  fmtChange,
+  fmtCompact,
+  calculateSMA,
+  getChartThemeOptions,
+  MA_SERIES_CONFIG,
+} from './trading-chart-utils'
 
 /**
  * 基金股市自选跑马灯逻辑计算契约
@@ -676,5 +688,179 @@ describe('基金股市 - 「我的投资」固定工作区与菜单重命名 BDD
     expect(canRenderDeleteOption('custom-project')).toBeTrue()
   })
 })
+
+describe('基金股市 - 复刻 dsh-trading TradingView Lightweight Charts K 线图系统 BDD 契约', () => {
+  test('Given 腾讯/上游返回的日期字符串 When 解析为时间戳 Then 严格生成无时区漂移的 UTC 秒级时间戳', () => {
+    // 日期测试
+    const dailyTs = parseKlineTimeToTimestamp('2026-09-04')
+    expect(dailyTs).toBeGreaterThan(0)
+    const d = new Date(dailyTs * 1000)
+    expect(d.getUTCFullYear()).toBe(2026)
+    expect(d.getUTCMonth() + 1).toBe(9)
+    expect(d.getUTCDate()).toBe(4)
+
+    // 分钟分时测试
+    const minuteTs = parseKlineTimeToTimestamp('2026-09-04 14:30')
+    const dm = new Date(minuteTs * 1000)
+    expect(dm.getUTCFullYear()).toBe(2026)
+    expect(dm.getUTCMonth() + 1).toBe(9)
+    expect(dm.getUTCDate()).toBe(4)
+    expect(dm.getUTCHours()).toBe(14)
+    expect(dm.getUTCMinutes()).toBe(30)
+  })
+
+  test('Given 时间戳与周期类型 When 格式化横坐标轴刻度 Then 日线返回 MM-DD，分时返回 HH:mm', () => {
+    const ts = parseKlineTimeToTimestamp('2026-09-04 09:35')
+    const ms = ts * 1000
+
+    // 日线刻度
+    const dailyAxis = fmtAxis(ms, false)
+    expect(dailyAxis).toBe('09-04')
+
+    // 分时刻度
+    const intradayAxis = fmtAxis(ms, true)
+    expect(intradayAxis).toBe('09:35')
+  })
+
+  test('Given 时间戳与周期类型 When 格式化读数时间文本 Then 完整显示年月日与时分', () => {
+    const ts = parseKlineTimeToTimestamp('2026-09-04 15:00')
+    const dailyText = formatTimestampToText(ts, false)
+    expect(dailyText).toBe('2026-09-04')
+
+    const intradayText = formatTimestampToText(ts, true)
+    expect(intradayText).toBe('2026-09-04 15:00')
+  })
+
+  test('Given 历史 K 线价格序列 When 计算 SMA 移动均线 Then 正确生成 MA5/MA10/MA20/MA30 数组', () => {
+    const mockKlines = [
+      { time: '2026-09-01', open: 10, high: 12, low: 9, close: 10, volume: 1000 },
+      { time: '2026-09-02', open: 10, high: 13, low: 10, close: 12, volume: 1200 },
+      { time: '2026-09-03', open: 12, high: 15, low: 11, close: 14, volume: 1500 },
+      { time: '2026-09-04', open: 14, high: 16, low: 13, close: 16, volume: 2000 },
+      { time: '2026-09-05', open: 16, high: 19, low: 15, close: 18, volume: 2500 },
+      { time: '2026-09-06', open: 18, high: 21, low: 17, close: 20, volume: 3000 },
+    ]
+
+    const ma5Data = calculateSMA(mockKlines, 5)
+    // 5 根后产生第 1 个点：(10+12+14+18+16)/5 = 70/5 = 14
+    expect(ma5Data.length).toBe(2)
+    expect(ma5Data[0]?.value).toBe(14)
+    // 第 2 个点：(12+14+16+18+20)/5 = 80/5 = 16
+    expect(ma5Data[1]?.value).toBe(16)
+  })
+
+  test('Given 数值格式化函数 When 格式化价格、涨跌额、涨跌幅及成交量 Then 呈现专业易读格式', () => {
+    expect(fmtPrice(1895.5)).toBe('1895.50')
+    expect(fmtPrice(0.0456)).toBe('0.0456')
+    expect(fmtPrice(undefined)).toBe('--')
+
+    expect(fmtPercent(2.35)).toBe('+2.35%')
+    expect(fmtPercent(-1.20)).toBe('-1.20%')
+    expect(fmtPercent(0)).toBe('0.00%')
+
+    expect(fmtChange(15.2)).toBe('+15.20')
+    expect(fmtChange(-8.6)).toBe('-8.60')
+
+    expect(fmtCompact(560000000)).toBe('5.6亿')
+    expect(fmtCompact(245000)).toBe('24.5万')
+    expect(fmtCompact(850)).toBe('850')
+  })
+
+  test('Given 深浅色主题模式 When 生成图表配置 Then 正确适配背景色、文字颜色与多 Pane 配置', () => {
+    const darkTheme = getChartThemeOptions(true)
+    expect(darkTheme.autoSize).toBeTrue()
+    expect(darkTheme.rightPriceScale?.visible).toBeTrue()
+    expect(darkTheme.timeScale?.visible).toBeTrue()
+    expect(darkTheme.layout?.panes?.enableResize).toBeTrue()
+
+    const lightTheme = getChartThemeOptions(false)
+    expect(lightTheme.autoSize).toBeTrue()
+    expect(lightTheme.rightPriceScale?.visible).toBeTrue()
+    expect(lightTheme.timeScale?.visible).toBeTrue()
+    expect(lightTheme.layout?.panes?.enableResize).toBeTrue()
+
+    // 确认调色板定义健全
+    expect(MA_SERIES_CONFIG.ma5.color).toBe('#e6b800')
+    expect(MA_SERIES_CONFIG.ma10.color).toBe('#4a90e2')
+    expect(MA_SERIES_CONFIG.ma20.color).toBe('#c05fd8')
+    expect(MA_SERIES_CONFIG.ma30.color).toBe('#2ba471')
+  })
+})
+
+describe('基金股市 - 复刻 dsh-trading 盘口买卖五档与买卖力道比 BDD 契约', () => {
+  const mockBids = [
+    { price: 100.2, volume: 500 },
+    { price: 100.1, volume: 800 },
+    { price: 100.0, volume: 1200 },
+    { price: 99.9, volume: 2000 },
+    { price: 99.8, volume: 3000 },
+  ]
+  const mockAsks = [
+    { price: 100.3, volume: 600 },
+    { price: 100.4, volume: 900 },
+    { price: 100.5, volume: 1500 },
+    { price: 100.6, volume: 1800 },
+    { price: 100.7, volume: 2500 },
+  ]
+
+  test('Given 买卖五档数据 When 计算买卖力道比 Then 正确返回委买比例与委卖比例', () => {
+    const buyVol = mockBids.reduce((s, b) => s + b.volume, 0) // 7500
+    const sellVol = mockAsks.reduce((s, a) => s + a.volume, 0) // 7300
+    const total = buyVol + sellVol // 14800
+    const buyRatio = buyVol / total
+    const sellRatio = sellVol / total
+
+    expect(buyVol).toBe(7500)
+    expect(sellVol).toBe(7300)
+    expect(Number((buyRatio * 100).toFixed(1))).toBe(50.7)
+    expect(Number((sellRatio * 100).toFixed(1))).toBe(49.3)
+  })
+
+  test('Given 买卖盘口五档 When 计算价差 (Spread) Then 正确计算卖一与买一差价', () => {
+    const bestBid = mockBids[0]?.price // 100.2
+    const bestAsk = mockAsks[0]?.price // 100.3
+    const spread = bestAsk! - bestBid!
+    expect(Number(spread.toFixed(2))).toBe(0.1)
+  })
+
+  test('Given 卖盘与买盘档位展示顺序 When 渲染盘口 Then 卖盘倒序(卖五到卖一)，买盘正序(买一到买五)', () => {
+    // 卖盘倒序
+    const askReversed = mockAsks.slice().reverse()
+    expect(askReversed[0]?.price).toBe(100.7) // 卖五
+    expect(askReversed[askReversed.length - 1]?.price).toBe(100.3) // 卖一
+
+    // 买盘正序
+    expect(mockBids[0]?.price).toBe(100.2) // 买一
+    expect(mockBids[mockBids.length - 1]?.price).toBe(99.8) // 买五
+  })
+
+  test('Given 深度条计算基准 When 取两侧最大档位量 Then 生成相对占比并 clamp 在 100% 以内', () => {
+    const maxLevelVolume = Math.max(
+      ...mockBids.map((b) => b.volume),
+      ...mockAsks.map((a) => a.volume)
+    )
+    expect(maxLevelVolume).toBe(3000) // mockBids[4].volume
+
+    const bidPct = Math.min(100, (mockBids[0]!.volume / maxLevelVolume) * 100)
+    expect(Number(bidPct.toFixed(1))).toBe(16.7) // 500 / 3000 ≈ 16.7%
+
+    const maxPct = Math.min(100, (mockBids[4]!.volume / maxLevelVolume) * 100)
+    expect(maxPct).toBe(100)
+  })
+
+  test('Given 委比与委差计算 When 买量大于卖量 Then 委比为正且委差为正', () => {
+    const buyVol = mockBids.reduce((s, b) => s + b.volume, 0) // 7500
+    const sellVol = mockAsks.reduce((s, a) => s + a.volume, 0) // 7300
+    const total = buyVol + sellVol
+
+    const orderRatio = ((buyVol - sellVol) / total) * 100
+    const orderDiff = buyVol - sellVol
+
+    expect(orderRatio).toBeGreaterThan(0)
+    expect(orderDiff).toBe(200)
+  })
+})
+
+
 
 

@@ -69,6 +69,7 @@ fn given_newer_manifest_when_parse_then_returns_update() {
     .expect("manifest should parse");
     assert_eq!(result["available"], true);
     assert_eq!(result["version"], "0.0.63");
+    assert_eq!(result["latestVersion"], "0.0.63");
     assert_eq!(
         result["url"],
         "https://download.example.com/copis-0.0.63.dmg"
@@ -88,7 +89,18 @@ fn given_same_or_older_manifest_when_parse_then_returns_not_available() {
         )
         .expect("manifest should parse");
         assert_eq!(result["available"], false);
+        assert_eq!(result["version"], version);
+        assert_eq!(result["latestVersion"], version);
     }
+}
+
+#[test]
+fn given_cross_version_manifest_when_parse_then_reports_global_latest_version() {
+    let result = parse_app_update(&platform_manifest(), "0.0.60", Some("win32-x64"))
+        .expect("manifest should parse");
+    assert_eq!(result["available"], true);
+    assert_eq!(result["version"], "0.0.64");
+    assert_eq!(result["latestVersion"], "0.0.74");
 }
 
 #[test]

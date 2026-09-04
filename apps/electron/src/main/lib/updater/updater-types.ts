@@ -8,6 +8,7 @@
 export interface AppUpdateInfo {
   available: boolean
   version?: string
+  latestVersion?: string
   url?: string
   sha256?: string
   size?: number
@@ -21,15 +22,16 @@ export type UpdateStatus =
   | {
       status: 'available'
       version: string
+      latestVersion?: string
       releaseNotes?: string
       downloadUrl?: string
       fileSha256?: string
       fileSize?: number
     }
-  | { status: 'downloading'; version: string; progress: DownloadProgress }
-  | { status: 'downloaded'; version: string; filePath?: string }
-  | { status: 'not-available' }
-  | { status: 'error'; error: string }
+  | { status: 'downloading'; version: string; latestVersion?: string; progress: DownloadProgress }
+  | { status: 'downloaded'; version: string; latestVersion?: string; filePath?: string }
+  | { status: 'not-available'; version?: string; latestVersion?: string }
+  | { status: 'error'; error: string; latestVersion?: string }
 
 /** 下载进度 */
 export interface DownloadProgress {

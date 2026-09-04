@@ -45,14 +45,48 @@ export function resolveBrowserPageCursorResourcePath(
   return resourcePath
 }
 
+const DEFAULT_CURSOR_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024" fill="none">
+  <defs>
+    <linearGradient id="rainbow" x1="350" y1="280" x2="650" y2="735" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ff1744"/>
+      <stop offset="0.18" stop-color="#ff4d00"/>
+      <stop offset="0.34" stop-color="#ffe600"/>
+      <stop offset="0.48" stop-color="#4dff00"/>
+      <stop offset="0.63" stop-color="#00d9ff"/>
+      <stop offset="0.78" stop-color="#2374ff"/>
+      <stop offset="0.9" stop-color="#9b36ff"/>
+      <stop offset="1" stop-color="#ff1685"/>
+    </linearGradient>
+    <filter id="rainbow-glow" x="-35%" y="-35%" width="170%" height="170%" color-interpolation-filters="sRGB">
+      <feGaussianBlur in="SourceGraphic" stdDeviation="24" result="wide-glow"/>
+      <feGaussianBlur in="SourceGraphic" stdDeviation="8" result="near-glow"/>
+      <feMerge>
+        <feMergeNode in="wide-glow"/>
+        <feMergeNode in="near-glow"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <path id="cursor-shape" d="M365 290C348 278 329 287 329 309L332 630C332 655 360 666 378 647L453 560L523 708C534 732 561 741 584 729L626 708C649 697 658 672 647 648L578 504L692 476C720 469 727 434 703 417L365 290Z"/>
+  </defs>
+
+  <use href="#cursor-shape" fill="#ffffff" stroke="url(#rainbow)" stroke-width="70" stroke-linejoin="round" opacity="0.88" filter="url(#rainbow-glow)"/>
+  <use href="#cursor-shape" fill="#ffffff" stroke="url(#rainbow)" stroke-width="34" stroke-linejoin="round"/>
+  <use href="#cursor-shape" fill="none" stroke="#ffffff" stroke-width="5" stroke-linejoin="round" opacity="0.88"/>
+</svg>
+`
+
 function loadCursorSvgDataUrl(): string {
   const resourcePath = resolveBrowserPageCursorResourcePath()
 
-  if (!resourcePath) {
-    throw new Error(`AI 浏览器指针资源不存在: ${CURSOR_RESOURCE_NAME}`)
+  if (resourcePath) {
+    try {
+      return `data:image/svg+xml;base64,${readFileSync(resourcePath).toString('base64')}`
+    } catch {
+      // 读取外部资源失败时回退到内置默认素材
+    }
   }
 
-  return `data:image/svg+xml;base64,${readFileSync(resourcePath).toString('base64')}`
+  return `data:image/svg+xml;base64,${Buffer.from(DEFAULT_CURSOR_SVG, 'utf8').toString('base64')}`
 }
 
 const CURSOR_SVG_DATA_URL = loadCursorSvgDataUrl()

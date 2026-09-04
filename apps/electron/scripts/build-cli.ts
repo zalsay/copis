@@ -127,6 +127,15 @@ try {
   if (smoke.error || smoke.status !== 0) {
     fail(`编译产物无法执行 --help: ${smoke.error?.message ?? `exit ${smoke.status ?? 'unknown'}`}`)
   }
+  const workerSmoke = spawnSync(outFile, ['__pi-worker'], {
+    cwd: repoRoot,
+    input: '{"type":"run","requestId":"__smoke__","config":{"sessionId":"__smoke__","query":{"sessionId":"__smoke__","useRustFileApi":true}}}\n',
+    encoding: 'utf8',
+    windowsHide: true,
+  })
+  if (workerSmoke.error || (workerSmoke.stderr && workerSmoke.stderr.includes('error:'))) {
+    fail(`编译产物无法正常启动 __pi-worker: ${workerSmoke.error?.message ?? workerSmoke.stderr}`)
+  }
   for (const asset of resolveCompiledRuntimeAssets({ photonWasmSource, outDir: targetDir })) {
     copyFileSync(asset.source, asset.destination)
   }

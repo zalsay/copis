@@ -589,10 +589,12 @@ async function bootstrap(): Promise<void> {
   // 启动 Agent 工具配置文件监听（自定义工具变化后通知渲染进程）
   safeRun('startAgentToolsWatcher', startAgentToolsWatcher)
 
-  // 自动更新仅在生产环境启用，并由主进程统一检测 Agent 是否空闲。
-  if (app.isPackaged && mainWindow) {
+  // 更新器配置为主窗口绑定引用；定时检查和自动安装仅在生产环境启用。
+  if (mainWindow) {
     configureUpdater(mainWindow, { hasActiveAgents: hasActiveAgentSessions })
-    safeRun('initAutoUpdater', () => initAutoUpdater(mainWindow!))
+    if (app.isPackaged) {
+      safeRun('initAutoUpdater', () => initAutoUpdater(mainWindow!))
+    }
   }
 
   // 预创建快速任务窗口（隐藏状态，首次唤起秒开）
