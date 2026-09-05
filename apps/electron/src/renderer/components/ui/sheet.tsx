@@ -20,7 +20,7 @@ const SheetOverlay = React.forwardRef<
 >(({ className, ...props }, ref) => (
   <SheetPrimitive.Overlay
     className={cn(
-      "fixed inset-0 z-[100] bg-black/40 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0",
+      "fixed inset-0 z-[100] bg-black/40 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 duration-200 data-[state=closed]:duration-150",
       className
     )}
     {...props}
@@ -31,7 +31,8 @@ SheetOverlay.displayName = SheetPrimitive.Overlay.displayName
 
 const sheetVariants = cva(
   // shadow-xl 多层柔阴影 + dialog 背景 token + hairline 边框。z-[100] 与 Overlay 对齐，高于 AppShell z-[60]
-  "fixed z-[100] gap-4 bg-dialog text-dialog-foreground p-6 shadow-xl transition ease-in-out data-[state=closed]:duration-300 data-[state=open]:duration-500 data-[state=open]:animate-in data-[state=closed]:animate-out",
+  // 抽屉动画优化：打开 200ms ease-out，收起 150ms ease-in，提供桌面原生级的即时流畅响应
+  "fixed z-[100] gap-4 bg-dialog text-dialog-foreground p-6 shadow-xl transition ease-out data-[state=closed]:duration-150 data-[state=closed]:ease-in data-[state=open]:duration-200 data-[state=open]:animate-in data-[state=closed]:animate-out",
   {
     variants: {
       side: {

@@ -62,12 +62,12 @@ export function FundStockOrderbookPane({
   return (
     <div
       className={cn(
-        'w-56 p-3 flex flex-col bg-card/20 border-l border-border/40 text-xs font-mono select-none overflow-hidden',
+        'w-56 p-4 flex flex-col bg-card/20 border-l border-border/40 text-xs font-mono select-none overflow-hidden',
         className
       )}
     >
-      {/* 盘口顶栏 Head */}
-      <div className="flex items-center justify-between pb-2 border-b border-border/40">
+      {/* 盘口顶栏 Head (上对齐，与左侧 K 线周期栏统一高度与下边距) */}
+      <div className="flex items-center justify-between pb-2.5 border-b border-border/40 min-h-8">
         <div className="flex items-center gap-1.5 font-semibold text-[11px] text-foreground/90">
           <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
           <span>实时盘口</span>
@@ -78,7 +78,7 @@ export function FundStockOrderbookPane({
       </div>
 
       {!hasOrderbook ? (
-        <div className="flex-1 flex flex-col items-center justify-center text-center text-[11px] text-muted-foreground/70 p-4 gap-2">
+        <div className="flex-1 flex flex-col items-center justify-start text-center text-[11px] text-muted-foreground/70 py-4 gap-2">
           {!currentQuote ? (
             <>
               <div className="w-4 h-4 border-2 border-primary border-t-transparent rounded-full animate-spin" />
@@ -94,9 +94,9 @@ export function FundStockOrderbookPane({
           )}
         </div>
       ) : (
-        <div className="flex-1 flex flex-col justify-between my-2 overflow-y-auto">
+        <div className="flex-1 flex flex-col justify-start gap-2.5 my-2 overflow-y-auto trading-scrollbar">
           {/* 买卖力道比 Depth Meter（富途牛牛 / dsh-trading 同款双色填充槽） */}
-          <div className="flex flex-col gap-1 pb-2">
+          <div className="flex flex-col gap-1 pb-1">
             <div className="h-1.5 w-full bg-muted/40 rounded-full overflow-hidden flex">
               <div
                 className="h-full bg-red-500 transition-all duration-300"

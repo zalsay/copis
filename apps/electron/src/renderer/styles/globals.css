@@ -15,14 +15,14 @@
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   text-rendering: optimizeLegibility;
-  --ui-primary: #f3af6b;
+  --ui-primary: #f09a43;
   --ui-primary-foreground: #2b2137;
-  --ui-primary-background: rgb(240 161 90 / 10%);
+  --ui-primary-background: rgb(240 161 90 / 20%);
 }
 
-/* 浅色主题提高 primary 激活背景的层次，深色主题继续继承基础值。 */
+/* 浅色主题提高 primary 激活背景的层次与深度，深色主题继续继承基础值。 */
 :root:not(.dark) {
-  --ui-primary-background: rgb(240 161 90 / 16%);
+  --ui-primary-background: rgb(240 161 90 / 20%);
 }
 
 .ui-primary-surface {
@@ -194,6 +194,7 @@
   }
 
   .dark {
+    color-scheme: dark;
     --background: 0 0% 10%;                /* 侧栏锚点，略亮于内容区 */
     --foreground: 0 0% 98%;
     --muted: 0 0% 17%;
@@ -1115,10 +1116,19 @@
 
 .fund-tab-shape[aria-current='page']::before {
   left: -12px;
-  background: radial-gradient(circle at top left, transparent 12px, hsl(var(--background)) 12.5px);
+  background: radial-gradient(circle at top left, transparent 12px, hsl(var(--muted)) 12.5px);
 }
 
 .fund-tab-shape[aria-current='page']::after {
+  right: -12px;
+  background: radial-gradient(circle at top right, transparent 12px, hsl(var(--muted)) 12.5px);
+}
+
+.dark .fund-tab-shape[aria-current='page']::before {
+  background: radial-gradient(circle at top left, transparent 12px, hsl(var(--background)) 12.5px);
+}
+
+.dark .fund-tab-shape[aria-current='page']::after {
   right: -12px;
   background: radial-gradient(circle at top right, transparent 12px, hsl(var(--background)) 12.5px);
 }
@@ -1326,6 +1336,80 @@
 }
 .scrollbar-thin::-webkit-scrollbar-corner,
 .scrollbar-thin > *::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+:root.dark .scrollbar-thin,
+.dark .scrollbar-thin,
+:root.dark .scrollbar-thin > *,
+.dark .scrollbar-thin > * {
+  scrollbar-color: rgba(255, 255, 255, 0.2) transparent;
+}
+:root.dark .scrollbar-thin::-webkit-scrollbar-thumb,
+.dark .scrollbar-thin::-webkit-scrollbar-thumb,
+:root.dark .scrollbar-thin > *::-webkit-scrollbar-thumb,
+.dark .scrollbar-thin > *::-webkit-scrollbar-thumb {
+  background-color: rgba(255, 255, 255, 0.2);
+}
+:root.dark .scrollbar-thin::-webkit-scrollbar-thumb:hover,
+.dark .scrollbar-thin::-webkit-scrollbar-thumb:hover,
+:root.dark .scrollbar-thin > *::-webkit-scrollbar-thumb:hover,
+.dark .scrollbar-thin > *::-webkit-scrollbar-thumb:hover {
+  background-color: rgba(255, 255, 255, 0.35);
+}
+
+/* 基金股市 / K 线图交互区域专用深色滚动条 */
+.trading-scrollbar,
+.trading-scrollbar > * {
+  scrollbar-width: thin;
+  scrollbar-color: hsl(var(--muted-foreground) / 0.3) transparent;
+}
+
+:root.dark .trading-scrollbar,
+.dark .trading-scrollbar,
+:root.dark .trading-scrollbar > *,
+.dark .trading-scrollbar > * {
+  scrollbar-color: #2b364e transparent;
+}
+
+.trading-scrollbar::-webkit-scrollbar,
+.trading-scrollbar > *::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+
+.trading-scrollbar::-webkit-scrollbar-track,
+.trading-scrollbar > *::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.trading-scrollbar::-webkit-scrollbar-thumb,
+.trading-scrollbar > *::-webkit-scrollbar-thumb {
+  background-color: hsl(var(--muted-foreground) / 0.3);
+  border-radius: 9999px;
+}
+
+.trading-scrollbar::-webkit-scrollbar-thumb:hover,
+.trading-scrollbar > *::-webkit-scrollbar-thumb:hover {
+  background-color: hsl(var(--muted-foreground) / 0.5);
+}
+
+:root.dark .trading-scrollbar::-webkit-scrollbar-thumb,
+.dark .trading-scrollbar::-webkit-scrollbar-thumb,
+:root.dark .trading-scrollbar > *::-webkit-scrollbar-thumb,
+.dark .trading-scrollbar > *::-webkit-scrollbar-thumb {
+  background-color: #263147;
+}
+
+:root.dark .trading-scrollbar::-webkit-scrollbar-thumb:hover,
+.dark .trading-scrollbar::-webkit-scrollbar-thumb:hover,
+:root.dark .trading-scrollbar > *::-webkit-scrollbar-thumb:hover,
+.dark .trading-scrollbar > *::-webkit-scrollbar-thumb:hover {
+  background-color: #3b4b6c;
+}
+
+.trading-scrollbar::-webkit-scrollbar-corner,
+.trading-scrollbar > *::-webkit-scrollbar-corner {
   background: transparent;
 }
 

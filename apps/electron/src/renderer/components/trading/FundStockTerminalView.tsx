@@ -19,6 +19,7 @@ import {
   Flame,
   Loader2,
   Maximize2,
+  Menu,
   Plus,
   RefreshCw,
   Search,
@@ -80,6 +81,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { FundStockSearchDialog } from './FundStockSearchDialog'
+import { FundStockWatchlistDrawer } from './FundStockWatchlistDrawer'
 import { TradingViewKlineChart } from './TradingViewKlineChart'
 import { FundStockOrderbookPane } from './FundStockOrderbookPane'
 import {
@@ -100,6 +102,7 @@ export function FundStockTerminalView(): React.ReactElement {
   const [klinesLoading, setKlinesLoading] = useAtom(klinesLoadingAtom)
 
   const [searchOpen, setSearchOpen] = useState(false)
+  const [watchlistDrawerOpen, setWatchlistDrawerOpen] = useState(false)
   const [refreshing, setRefreshing] = useState(false)
   const [hoverKlineIndex, setHoverKlineIndex] = useState<number | null>(null)
   const [hoveredKlinePoint, setHoveredKlinePoint] = useState<KlinePoint | null>(null)
@@ -108,6 +111,7 @@ export function FundStockTerminalView(): React.ReactElement {
 
   const tabListRef = useRef<HTMLDivElement>(null)
   const isResizingRef = useRef(false)
+  const hasInitializedRef = useRef(false)
 
   const setActiveView = useSetAtom(activeViewAtom)
   const openSession = useOpenSession()
@@ -312,14 +316,22 @@ export function FundStockTerminalView(): React.ReactElement {
     }
   }, [activeSymbol])
 
-  // 1. 初始化加载自选列表与默认页签
+  // 1. 初始化加载自选列表与默认页签（仅在挂载时初始化一次，避免关闭最后一个页签时被重复自动恢复打开）
   useEffect(() => {
+    if (hasInitializedRef.current) return
+    hasInitializedRef.current = true
+
     void (async () => {
       try {
         const items = await window.electronAPI.fundStock.getWatchlist()
         setWatchlist(items)
         if (items.length > 0 && !activeSymbol && items[0]) {
-          const initial = items[0]
+          const sorted = [...items].sort((a, b) => {
+            const aPin = a.pinned ? 1 : 0
+            const bPin = b.pinned ? 1 : 0
+            return bPin - aPin
+          })
+          const initial = sorted[0] || items[0]
           setActiveSymbol(initial.symbol)
           setOpenTabs((prev) => {
             if (prev.length > 0) return prev
@@ -480,13 +492,17 @@ export function FundStockTerminalView(): React.ReactElement {
     }
   }, [activeSymbol, getQuote, setQuotesMap])
 
-  // 过滤后的自选列表（按加入时间降序）
+  // 顶部跑马灯轮播标的严格按照「我的自选」排序：置顶项优先，其余严格保持自选列表中的排列次序
   const filteredWatchlist = useMemo(() => {
     const list = watchlist.filter((item) => {
       if (marketFilter === 'all') return true
       return item.market === marketFilter
     })
-    return [...list].sort((a, b) => b.addedAt - a.addedAt)
+    return [...list].sort((a, b) => {
+      const aPin = a.pinned ? 1 : 0
+      const bPin = b.pinned ? 1 : 0
+      return bPin - aPin
+    })
   }, [marketFilter, watchlist])
 
   // 当前激活标的是否已在自选中
@@ -689,12 +705,62 @@ export function FundStockTerminalView(): React.ReactElement {
   }
 
   // 移除自选
-  const handleRemoveFromWatchlist = (symbol: string, e: React.MouseEvent) => {
-    e.stopPropagation()
+  const handleRemoveFromWatchlist = (symbol: string, e?: React.MouseEvent) => {
+    e?.stopPropagation()
     const updated = watchlist.filter((w) => !isSameSymbol(w.symbol, symbol))
     setWatchlist(updated)
     void window.electronAPI.fundStock.saveWatchlist(updated)
   }
+
+  // 切换自选标的置顶
+  const handleTogglePinWatchlist = useCallback(
+    (symbol: string) => {
+      const updated = watchlist.map((item) =>
+        isSameSymbol(item.symbol, symbol) ? { ...item, pinned: !item.pinned } : item
+      )
+      setWatchlist(updated)
+      void window.electronAPI.fundStock.saveWatchlist(updated)
+    },
+    [setWatchlist, watchlist]
+  )
+
+  // 调整自选标的排序（上移/下移）
+  const handleMoveWatchlistItem = useCallback(
+    (symbol: string, direction: 'up' | 'down', targetSymbol?: string) => {
+      const idx = watchlist.findIndex((item) => isSameSymbol(item.symbol, symbol))
+      if (idx === -1) return
+
+      let targetIdx = -1
+      if (targetSymbol) {
+        targetIdx = watchlist.findIndex((item) => isSameSymbol(item.symbol, targetSymbol))
+      } else {
+        targetIdx = direction === 'up' ? idx - 1 : idx + 1
+      }
+
+      if (targetIdx < 0 || targetIdx >= watchlist.length) return
+      const next = [...watchlist]
+      const currentItem = next[idx]
+      const targetItem = next[targetIdx]
+      if (currentItem && targetItem) {
+        if (Boolean(currentItem.pinned) !== Boolean(targetItem.pinned)) {
+          const tempPin = currentItem.pinned
+          currentItem.pinned = targetItem.pinned
+          targetItem.pinned = tempPin
+        }
+        next[idx] = targetItem
+        next[targetIdx] = currentItem
+        setWatchlist(next)
+        void window.electronAPI.fundStock.saveWatchlist(next)
+      }
+    },
+    [setWatchlist, watchlist]
+  )
+
+  // 清空全部自选
+  const handleClearWatchlist = useCallback(() => {
+    setWatchlist([])
+    void window.electronAPI.fundStock.saveWatchlist([])
+  }, [setWatchlist])
 
   // 发给 Agent 分析对话（默认就在右栏显示，不跳转到主界面）
   const handleSendToAgent = useCallback(
@@ -906,7 +972,7 @@ export function FundStockTerminalView(): React.ReactElement {
   }, [klines, activePointIndex])
 
   return (
-    <div className="flex flex-col h-full bg-background select-none text-foreground overflow-hidden">
+    <div className="flex flex-col h-full bg-muted dark:bg-background select-none text-foreground overflow-hidden">
       {/* 顶栏 Header: 主 Tab + 横向自选跑马灯（去文字） + 搜索与刷新工具 */}
       <header className="flex items-center h-11 px-3 border-b border-border/50 bg-card/60 backdrop-blur-md z-20 gap-3">
         {/* 左侧：市场分类主 Tab */}
@@ -926,7 +992,7 @@ export function FundStockTerminalView(): React.ReactElement {
                 className={cn(
                   'inline-flex h-6 items-center justify-center whitespace-nowrap rounded-md px-2 text-xs font-medium leading-none transition-all select-none',
                   marketFilter === tab.id
-                    ? 'bg-background text-foreground shadow-xs font-semibold'
+                    ? 'bg-[var(--ui-primary-background)] text-[var(--ui-primary)] shadow-xs font-semibold'
                     : 'text-muted-foreground hover:text-foreground'
                 )}
               >
@@ -984,17 +1050,27 @@ export function FundStockTerminalView(): React.ReactElement {
           >
             <RefreshCw className={cn('w-4 h-4', refreshing && 'animate-spin text-primary')} />
           </button>
+
+          <button
+            type="button"
+            onClick={() => setWatchlistDrawerOpen(true)}
+            className="p-1.5 rounded-lg text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+            title="我的自选"
+            aria-label="我的自选"
+          >
+            <Menu className="w-4 h-4" />
+          </button>
         </div>
       </header>
 
       {/* 主体两栏容器 */}
       <div className="flex flex-1 min-h-0 overflow-hidden relative">
         {/* 中栏：C 位图表与盘口五档 (flex-1) */}
-        <main className="flex-1 flex flex-col min-w-0 bg-background overflow-hidden">
+        <main className="flex-1 flex flex-col min-w-0 bg-muted dark:bg-background overflow-hidden">
           {/* 内容区标的页签栏 (浏览器页签 Tab 风格，底部两侧外弧圆角与下方内容区无缝融合，去除上边框线) */}
           <div
             ref={tabListRef}
-            className="flex items-end h-9 bg-muted/15 px-3.5 gap-1 overflow-x-auto select-none flex-shrink-0 relative scrollbar-none"
+            className="flex items-end h-9 bg-card/60 backdrop-blur-md px-3.5 gap-1 overflow-x-auto select-none flex-shrink-0 relative scrollbar-none"
           >
             {openTabs.map((tab) => {
               const isActive = isSameSymbol(activeSymbol, tab.symbol)
@@ -1011,11 +1087,18 @@ export function FundStockTerminalView(): React.ReactElement {
                   className={cn(
                     'fund-tab-shape group/tab inline-flex items-center gap-1.5 h-8 px-3 text-xs cursor-pointer transition-colors flex-shrink-0 relative select-none',
                     isActive
-                      ? 'bg-background text-foreground shadow-[0_-1px_0_hsl(var(--border)/0.6)] -mb-px z-10 font-semibold'
-                      : 'bg-transparent text-muted-foreground hover:bg-background/60 hover:text-foreground mb-0.5'
+                      ? 'bg-muted dark:bg-background text-[var(--ui-primary)] dark:text-foreground -mb-px z-10 font-semibold'
+                      : 'bg-transparent text-muted-foreground hover:bg-muted/70 dark:hover:bg-background/60 hover:text-foreground mb-0.5'
                   )}
                 >
-                  <span className="text-[9px] px-1 py-0.2 rounded bg-muted/90 font-mono text-muted-foreground font-normal">
+                  <span
+                    className={cn(
+                      'text-[9px] px-1 py-0.2 rounded font-mono font-normal',
+                      isActive
+                        ? 'bg-[var(--ui-primary)]/15 text-[var(--ui-primary)] dark:bg-muted/90 dark:text-muted-foreground'
+                        : 'bg-muted/90 text-muted-foreground'
+                    )}
+                  >
                     {tab.market === 'cn'
                       ? 'A股'
                       : tab.market === 'hk'
@@ -1032,7 +1115,11 @@ export function FundStockTerminalView(): React.ReactElement {
                         'font-mono text-[11px]',
                         isPos && 'text-red-500 dark:text-red-400',
                         isNeg && 'text-emerald-500 dark:text-emerald-400',
-                        !isPos && !isNeg && 'text-muted-foreground'
+                        !isPos &&
+                          !isNeg &&
+                          (isActive
+                            ? 'text-[var(--ui-primary)]/80 dark:text-muted-foreground'
+                            : 'text-muted-foreground')
                       )}
                     >
                       {q.price.toFixed(tab.market === 'fund' ? 3 : 2)}
@@ -1043,7 +1130,12 @@ export function FundStockTerminalView(): React.ReactElement {
                   <button
                     type="button"
                     onClick={(e) => handleCloseTab(tab.symbol, e)}
-                    className="p-0.5 rounded-sm hover:bg-muted text-muted-foreground hover:text-foreground opacity-0 group-hover/tab:opacity-100 transition-opacity ml-0.5"
+                    className={cn(
+                      'p-0.5 rounded-sm hover:bg-muted opacity-0 group-hover/tab:opacity-100 transition-opacity ml-0.5',
+                      isActive
+                        ? 'text-[var(--ui-primary)] hover:text-[var(--ui-primary)] dark:text-muted-foreground dark:hover:text-foreground'
+                        : 'text-muted-foreground hover:text-foreground'
+                    )}
                     title="关闭页签"
                   >
                     <X className="w-3 h-3" />
@@ -1056,7 +1148,7 @@ export function FundStockTerminalView(): React.ReactElement {
             <button
               type="button"
               onClick={() => setSearchOpen(true)}
-              className="mb-1 ml-0.5 flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-background hover:text-foreground hover:shadow-xs select-none"
+              className="mb-1 ml-0.5 flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted dark:hover:bg-background hover:text-foreground hover:shadow-xs select-none"
               title="添加自选标的"
               aria-label="添加自选标的"
             >
@@ -1073,7 +1165,7 @@ export function FundStockTerminalView(): React.ReactElement {
           {activeTab ? (
             <>
               {/* 标的概览大卡片（与上方激活的浏览器 Tab 无缝融合） */}
-              <div className="p-4 border-b border-border/40 bg-background">
+              <div className="p-4 border-b border-border/40 bg-muted dark:bg-background">
                 <div className="flex flex-wrap items-center justify-between gap-4">
                   <div className="flex items-center gap-3">
                     <div>
@@ -1081,7 +1173,7 @@ export function FundStockTerminalView(): React.ReactElement {
                         <h2 className="text-xl font-bold tracking-tight text-foreground">
                           {currentQuote?.name || activeTab.name}
                         </h2>
-                        <span className="font-mono text-sm px-2 py-0.5 rounded bg-muted text-muted-foreground font-semibold">
+                        <span className="font-mono text-sm px-2 py-0.5 rounded bg-background/80 dark:bg-muted text-muted-foreground font-semibold">
                           {currentQuote?.symbol || activeTab.symbol}
                         </span>
                         <span className="text-xs px-2 py-0.5 rounded-full bg-primary/10 text-primary font-medium">
@@ -1119,7 +1211,7 @@ export function FundStockTerminalView(): React.ReactElement {
                                 market: currentQuote?.market || activeTab.market,
                               })
                             }
-                            className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs border border-primary/40 bg-primary/10 hover:bg-primary/20 text-primary font-medium transition-colors ml-1"
+                            className="ui-primary-button inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-medium transition-colors ml-1 cursor-pointer"
                             title="添加至自选"
                           >
                             <Plus className="w-3 h-3" />
@@ -1256,7 +1348,7 @@ export function FundStockTerminalView(): React.ReactElement {
               {/* 图表与盘口布局 */}
               <div className="flex-1 flex min-h-0 overflow-hidden">
                 {/* 交互式 K 线区域 */}
-                <div className="flex-1 flex flex-col p-4 overflow-hidden border-r border-border/40">
+                <div className="flex-1 flex flex-col p-4 overflow-hidden border-r border-border/40 trading-scrollbar">
                   {/* 周期切换与指标提示 */}
                   <div className="flex items-center justify-between pb-2.5">
                     <div className="inline-flex h-8 items-center gap-0.5 rounded-lg bg-muted/60 p-1 text-xs font-medium">
@@ -1277,7 +1369,7 @@ export function FundStockTerminalView(): React.ReactElement {
                           className={cn(
                             'inline-flex h-6 items-center justify-center whitespace-nowrap rounded-md px-2.5 text-xs font-medium leading-none transition-all select-none',
                             period === item.id
-                              ? 'bg-background text-foreground shadow-xs font-semibold'
+                              ? 'bg-[var(--ui-primary-background)] text-[var(--ui-primary)] shadow-xs font-semibold'
                               : 'text-muted-foreground hover:text-foreground'
                           )}
                         >
@@ -1345,7 +1437,7 @@ export function FundStockTerminalView(): React.ReactElement {
 
                   {/* 富途牛牛 / dsh-trading 同款实时行情读数行 (OHLCV + MA Readout) */}
                   {activePoint && (
-                    <div className="flex items-center gap-3 pb-2 text-[11px] font-mono text-muted-foreground/90 overflow-x-auto select-none border-b border-border/30 mb-2 whitespace-nowrap">
+                    <div className="flex items-center gap-3 pb-2 text-[11px] font-mono text-muted-foreground/90 overflow-x-auto select-none border-b border-border/30 mb-2 whitespace-nowrap trading-scrollbar">
                       <span className="text-foreground/80 font-medium">
                         {activePoint.time}
                       </span>
@@ -1407,7 +1499,7 @@ export function FundStockTerminalView(): React.ReactElement {
                   )}
 
                   {/* K 线图表视口 */}
-                  <div className="flex-1 min-h-0 relative rounded-xl border border-border/60 bg-card/40 overflow-hidden flex flex-col shadow-inner">
+                  <div className="flex-1 min-h-0 relative rounded-xl border border-border/60 bg-card/40 overflow-hidden flex flex-col shadow-inner trading-scrollbar">
                     {klinesLoading ? (
                       <div className="flex-1 flex items-center justify-center text-muted-foreground text-xs gap-2">
                         <RefreshCw className="w-4 h-4 animate-spin text-primary" />
@@ -1607,6 +1699,24 @@ export function FundStockTerminalView(): React.ReactElement {
         onSelect={handleAddToWatchlist}
         quotesMap={quotesMap}
         openSymbols={openTabs.map((t) => t.symbol)}
+      />
+
+      {/* 右侧滑入自选管理抽屉 */}
+      <FundStockWatchlistDrawer
+        open={watchlistDrawerOpen}
+        onOpenChange={setWatchlistDrawerOpen}
+        watchlist={watchlist}
+        quotesMap={quotesMap}
+        activeSymbol={activeSymbol}
+        onSelectSymbol={(sym, name, market) => {
+          handleOpenSymbolTab(sym, name, market)
+          setWatchlistDrawerOpen(false)
+        }}
+        onRemoveSymbol={(sym) => handleRemoveFromWatchlist(sym)}
+        onTogglePin={handleTogglePinWatchlist}
+        onMoveItem={handleMoveWatchlistItem}
+        onClearWatchlist={handleClearWatchlist}
+        onAddSymbolClick={() => setSearchOpen(true)}
       />
     </div>
   )

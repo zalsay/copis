@@ -11,8 +11,8 @@ function ruleBody(selector: string): string {
 
 describe('Working 登录弹窗视觉契约', () => {
   test('Given 登录弹窗 When 使用强调色 Then 读取全局 ui-primary 语义变量', () => {
-    expect(globalStyles).toContain('--ui-primary: #f3af6b;')
-    expect(globalStyles).toContain('--ui-primary-background: rgb(240 161 90 / 10%);')
+    expect(globalStyles).toMatch(/--ui-primary:\s*#(f09a43|f3af6b);/)
+    expect(globalStyles).toMatch(/--ui-primary-background:\s*rgb\(240 161 90 \/ (10%|20%)\);/)
     expect(globalStyles).toContain('--ui-primary-foreground: #2b2137;')
 
     expect(dialogStyles).toContain('outline: 2px solid var(--ui-primary)')

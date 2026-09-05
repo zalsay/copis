@@ -902,7 +902,7 @@
   align-items: center;
   justify-content: flex-end;
   gap: 3px;
-  color: #f5d66b;
+  color: var(--ui-primary);
   font-size: 12px;
   font-weight: 400;
   line-height: 1;

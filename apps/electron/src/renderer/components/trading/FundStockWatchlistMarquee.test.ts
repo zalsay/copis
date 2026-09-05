@@ -30,7 +30,11 @@ function filterAndSortWatchlist(
     if (marketFilter === 'all') return true
     return item.market === marketFilter
   })
-  return [...list].sort((a, b) => b.addedAt - a.addedAt)
+  return [...list].sort((a, b) => {
+    const aPin = a.pinned ? 1 : 0
+    const bPin = b.pinned ? 1 : 0
+    return bPin - aPin
+  })
 }
 
 function buildMarqueeItems(filteredWatchlist: WatchlistItem[]): WatchlistItem[] {
@@ -85,7 +89,7 @@ function closeTabHelper(
 }
 
 const mockWatchlist: WatchlistItem[] = [
-  { id: '1', symbol: '600519', name: '贵州茅台', market: 'cn', addedAt: 1000 },
+  { id: '1', symbol: '600519', name: '贵州茅台', market: 'cn', pinned: true, addedAt: 1000 },
   { id: '2', symbol: '00700', name: '腾讯控股', market: 'hk', addedAt: 2000 },
   { id: '3', symbol: 'AAPL', name: '苹果', market: 'us', addedAt: 3000 },
   { id: '4', symbol: '510300', name: '300ETF', market: 'fund', addedAt: 4000 },
@@ -108,10 +112,17 @@ describe('基金股市 - 顶部横向跑马灯自选栏 BDD 契约', () => {
     expect(fundList[0]?.symbol).toBe('510300')
   })
 
-  test('Given 自选列表 When 排序 Then 按加入时间降序排列（不再置顶）', () => {
+  test('Given 自选列表 When 顶部跑马灯标的排序 Then 严格按照我的自选顺序排列（置顶项优先，其余保持自选列表原本设定的顺序）', () => {
     const allList = filterAndSortWatchlist(mockWatchlist, 'all')
-    expect(allList[0]?.symbol).toBe('000001')
-    expect(allList[allList.length - 1]?.symbol).toBe('600519')
+    expect(allList[0]?.symbol).toBe('600519')
+    expect(allList[0]?.pinned).toBeTrue()
+    expect(allList.map((i) => i.symbol)).toEqual([
+      '600519',
+      '00700',
+      'AAPL',
+      '510300',
+      '000001',
+    ])
   })
 
   test('Given 仅有 1 个或 2 个自选标的 When 构建单组跑马灯 Then 扩增重复次数以填满宽屏', () => {
@@ -189,32 +200,36 @@ describe('基金股市 - 内容区标的页签 Tab BDD 契约', () => {
     expect(activeSymbol).toBe('')
   })
 
-  test('Given 页签激活与未激活状态 When 渲染标的页签 Then 应用浏览器反向外圆角与内容区融合契约', () => {
-    // 激活态：具有 fund-tab-shape、aria-current="page"、-mb-px 融合负边距及 bg-background 实体背景
+  test('Given 页签激活与未激活状态 When 渲染标的页签 Then 应用浏览器反向外圆角契约且激活态在浅色模式采用 bg-muted、深色模式采用 dark:bg-background 与 dark:text-foreground', () => {
+    // 激活态：具有 fund-tab-shape、aria-current="page"、-mb-px 融合负边距及浅色模式 bg-muted、深色模式与下方内容区一致的 dark:bg-background 且深色模式不使用 ui 色 (dark:text-foreground)
     const activeAttrs = {
       'aria-current': 'page' as const,
-      className: 'fund-tab-shape bg-background text-foreground shadow-[0_-1px_0_hsl(var(--border)/0.6)] -mb-px z-10',
+      className: 'fund-tab-shape bg-muted dark:bg-background text-[var(--ui-primary)] dark:text-foreground -mb-px z-10 font-semibold',
     }
     expect(activeAttrs['aria-current']).toBe('page')
     expect(activeAttrs.className).toContain('fund-tab-shape')
-    expect(activeAttrs.className).toContain('bg-background')
+    expect(activeAttrs.className).toContain('bg-muted')
+    expect(activeAttrs.className).toContain('dark:bg-background')
+    expect(activeAttrs.className).toContain('dark:text-foreground')
     expect(activeAttrs.className).toContain('-mb-px')
 
-    // 未激活态：保留 fund-tab-shape 圆角类，aria-current 为 undefined，无负边距
+    // 未激活态：保留 fund-tab-shape 圆角类，aria-current 为 undefined，无负边距，hover 使用浅背景
     const inactiveAttrs = {
       'aria-current': undefined,
-      className: 'fund-tab-shape bg-transparent text-muted-foreground hover:bg-background/60',
+      className: 'fund-tab-shape bg-transparent text-muted-foreground hover:bg-muted/70 dark:hover:bg-background/60 hover:text-foreground mb-0.5',
     }
     expect(inactiveAttrs['aria-current']).toBeUndefined()
     expect(inactiveAttrs.className).toContain('fund-tab-shape')
+    expect(inactiveAttrs.className).toContain('hover:bg-muted/70')
     expect(inactiveAttrs.className).not.toContain('-mb-px')
   })
 
-  test('Given 标的页签栏容器 When 渲染标的页签栏 Then 去除与内容区之间的上边框线以实现无缝融合且背景采用更浅色调', () => {
-    // 页签栏容器契约：去除 border-b 上边框线，背景采用更浅柔和的 bg-muted/15
-    const containerClasses = 'flex items-end h-9 bg-muted/15 px-3.5 gap-1 overflow-x-auto select-none flex-shrink-0 relative scrollbar-none'
+  test('Given 标的页签栏容器 When 渲染标的页签栏 Then 去除与内容区之间的上边框线且背后的那一栏背景色采用与上面一行跑马灯一致的 bg-card/60 backdrop-blur-md', () => {
+    // 页签栏容器契约：去除 border-b 上边框线，背景采用与上面一行跑马灯一致的 bg-card/60 backdrop-blur-md
+    const containerClasses = 'flex items-end h-9 bg-card/60 backdrop-blur-md px-3.5 gap-1 overflow-x-auto select-none flex-shrink-0 relative scrollbar-none'
     expect(containerClasses).not.toContain('border-b')
-    expect(containerClasses).toContain('bg-muted/15')
+    expect(containerClasses).toContain('bg-card/60')
+    expect(containerClasses).toContain('backdrop-blur-md')
   })
 
   test('Given 顶栏 Header 布局 When 渲染自选跑马灯 Then 位于主分类 Tab 与搜索 Icon 之间并去除“我的自选”文字', () => {
@@ -859,7 +874,219 @@ describe('基金股市 - 复刻 dsh-trading 盘口买卖五档与买卖力道比
     expect(orderRatio).toBeGreaterThan(0)
     expect(orderDiff).toBe(200)
   })
+
+  test('Given 实时盘口面板 When 渲染结构与撮合档位 Then 容器与内容均采用上对齐 (justify-start) 紧凑呈现而不是垂直居中或分散拉伸', async () => {
+    const orderbookCode = await Bun.file(
+      new URL('./FundStockOrderbookPane.tsx', import.meta.url).pathname
+    ).text()
+
+    // 容器顶栏与左侧 K 线周期栏统一高度与下边距对齐
+    expect(orderbookCode).toContain('min-h-8')
+    // 档位内容区采用 justify-start 上对齐，紧凑排列
+    expect(orderbookCode).toContain('flex-1 flex flex-col justify-start gap-2.5 my-2 overflow-y-auto trading-scrollbar')
+    // 空状态/加载态同样采用 justify-start 上对齐，不居中漂浮
+    expect(orderbookCode).toContain('flex-1 flex flex-col items-center justify-start text-center')
+  })
 })
+
+describe('基金股市 - K 线图滚动条深色模式规范 BDD 契约', () => {
+  test('Given globals.css 全局样式 When 处于深色模式 Then 交易滚动条 .trading-scrollbar 配置深色 thumb 与透明 track', async () => {
+    const cssContent = await Bun.file(
+      new URL('../../styles/globals.css', import.meta.url).pathname
+    ).text()
+
+    expect(cssContent).toContain('.trading-scrollbar')
+    expect(cssContent).toContain('.dark .trading-scrollbar')
+    expect(cssContent).toContain('#263147')
+    expect(cssContent).toContain('#2b364e')
+    expect(cssContent).toContain('color-scheme: dark;')
+  })
+
+  test('Given K 线图与行情读数行 When 渲染读数与视口 Then 包含 trading-scrollbar 样式类', async () => {
+    const terminalCode = await Bun.file(
+      new URL('./FundStockTerminalView.tsx', import.meta.url).pathname
+    ).text()
+    const chartCode = await Bun.file(
+      new URL('./TradingViewKlineChart.tsx', import.meta.url).pathname
+    ).text()
+    const orderbookCode = await Bun.file(
+      new URL('./FundStockOrderbookPane.tsx', import.meta.url).pathname
+    ).text()
+
+    // 读数行、图表容器与盘口滚动区域均应用 trading-scrollbar
+    expect(terminalCode).toContain('trading-scrollbar')
+    expect(chartCode).toContain('trading-scrollbar')
+    expect(orderbookCode).toContain('trading-scrollbar')
+  })
+})
+
+describe('基金股市 - 打开页签所在那一栏容器背景色与 Tab 融合规范 BDD 契约', () => {
+  test('Given 标的页签栏容器与打开页签 Tab When 渲染页签栏 Then 背后的那一栏背景色使用与上面一行跑马灯一致的 bg-card/60 backdrop-blur-md，浅色模式下激活页签与内容区使用左侧菜单栏背景色 bg-muted', async () => {
+    const terminalCode = await Bun.file(
+      new URL('./FundStockTerminalView.tsx', import.meta.url).pathname
+    ).text()
+    const cssContent = await Bun.file(
+      new URL('../../styles/globals.css', import.meta.url).pathname
+    ).text()
+
+    // 上面一行跑马灯 Header 背景为 bg-card/60 backdrop-blur-md
+    expect(terminalCode).toContain('header className="flex items-center h-11 px-3 border-b border-border/50 bg-card/60 backdrop-blur-md')
+    // 页签背后的那一栏（页签栏容器）背景色采用与上面一行跑马灯一致的 bg-card/60 backdrop-blur-md
+    expect(terminalCode).toContain('flex items-end h-9 bg-card/60 backdrop-blur-md px-3.5 gap-1 overflow-x-auto')
+    // 激活态页签 Tab 自身在浅色模式下使用左侧菜单栏背景色 bg-muted，深色模式使用与下方内容区一致的 dark:bg-background 与 dark:text-foreground，不使用 ui 色
+    expect(terminalCode).toContain('bg-muted dark:bg-background text-[var(--ui-primary)] dark:text-foreground -mb-px z-10 font-semibold')
+    // 标的概览大卡片在浅色模式下使用左侧菜单栏背景色 bg-muted，深色模式使用 dark:bg-background
+    expect(terminalCode).toContain('p-4 border-b border-border/40 bg-muted dark:bg-background')
+    // 市场分类主 Tab 激活态使用 ui-primary 配色
+    expect(terminalCode).toContain('marketFilter === tab.id')
+    expect(terminalCode).toContain("? 'bg-[var(--ui-primary-background)] text-[var(--ui-primary)] shadow-xs font-semibold'")
+    // 未激活态页签 Tab 保持透明并带有 hover 状态
+    expect(terminalCode).toContain('bg-transparent text-muted-foreground hover:bg-muted/70 dark:hover:bg-background/60')
+    // fund-tab-shape 反向圆角渐变在浅色模式下使用 hsl(var(--muted))，深色模式下使用 hsl(var(--background))
+    expect(cssContent).toContain('hsl(var(--muted)) 12.5px')
+    expect(cssContent).toContain('hsl(var(--background)) 12.5px')
+  })
+})
+
+describe('基金股市 - Header 汉堡菜单与右侧自选管理抽屉 BDD 契约', () => {
+  test('Given Header 顶栏工具区 When 渲染右侧工具按钮 Then 在刷新 icon 右侧具备汉堡菜单 icon 并绑定抽屉开关', async () => {
+    const terminalCode = await Bun.file(
+      new URL('./FundStockTerminalView.tsx', import.meta.url).pathname
+    ).text()
+
+    // 引入 Menu 图标
+    expect(terminalCode).toContain('Menu,')
+    // 包含管理自选的抽屉状态
+    expect(terminalCode).toContain('const [watchlistDrawerOpen, setWatchlistDrawerOpen] = useState(false)')
+    // 刷新按钮后存在汉堡菜单按钮
+    expect(terminalCode).toContain('title="我的自选"')
+    expect(terminalCode).toContain('aria-label="我的自选"')
+    expect(terminalCode).toContain('<Menu className="w-4 h-4" />')
+    // 挂载 FundStockWatchlistDrawer
+    expect(terminalCode).toContain('<FundStockWatchlistDrawer')
+  })
+
+  test('Given 右侧滑入抽屉组件 When 渲染抽屉结构 Then 使用 side="right" 具备市场分类、搜索过滤、行情展示，且关闭按钮配置 titlebar-no-drag 与 SheetClose', async () => {
+    const drawerCode = await Bun.file(
+      new URL('./FundStockWatchlistDrawer.tsx', import.meta.url).pathname
+    ).text()
+
+    // 使用 Sheet 并指定 side="right"
+    expect(drawerCode).toContain('side="right"')
+    // 标题为我的自选
+    expect(drawerCode).toContain('我的自选')
+    // 关闭按钮配置了 titlebar-no-drag 与 SheetClose，确保 Electron 顶栏不遮挡点击
+    expect(drawerCode).toContain('titlebar-no-drag')
+    expect(drawerCode).toContain('<SheetClose asChild>')
+    // 支持按市场筛选（全部 / A股 / 港股 / 美股 / 基金）
+    expect(drawerCode).toContain("id: 'all', label: '全部'")
+    expect(drawerCode).toContain("id: 'cn', label: 'A 股'")
+    expect(drawerCode).toContain("id: 'hk', label: '港股'")
+    expect(drawerCode).toContain("id: 'us', label: '美股'")
+    expect(drawerCode).toContain("id: 'fund', label: '基金/ETF'")
+    // 包含搜索筛选框
+    expect(drawerCode).toContain('在自选中快速筛选名称或代码...')
+    // 包含置顶、排序、移出与添加操作
+    expect(drawerCode).toContain('onTogglePin')
+    expect(drawerCode).toContain('onMoveItem')
+    expect(drawerCode).toContain('onRemoveSymbol')
+    expect(drawerCode).toContain('onClearWatchlist')
+    expect(drawerCode).toContain('onAddSymbolClick')
+  })
+
+  test('Given 自选列表与置顶项 When 进行排序计算 Then 置顶项排在最前且支持上下移动', () => {
+    const list: WatchlistItem[] = [
+      { id: '1', symbol: '600519', name: '贵州茅台', market: 'cn', addedAt: 100 },
+      { id: '2', symbol: '00700', name: '腾讯控股', market: 'hk', pinned: true, addedAt: 200 },
+      { id: '3', symbol: 'AAPL', name: '苹果', market: 'us', addedAt: 300 },
+    ]
+
+    // 置顶项优先排在前面
+    const sorted = [...list].sort((a, b) => {
+      const aPin = a.pinned ? 1 : 0
+      const bPin = b.pinned ? 1 : 0
+      return bPin - aPin
+    })
+
+    expect(sorted[0]?.symbol).toBe('00700')
+    expect(sorted[0]?.pinned).toBeTrue()
+
+    // 上移下移逻辑验证
+    const moveItem = (arr: WatchlistItem[], sym: string, dir: 'up' | 'down') => {
+      const idx = arr.findIndex((item) => item.symbol === sym)
+      if (idx === -1) return arr
+      const targetIdx = dir === 'up' ? idx - 1 : idx + 1
+      if (targetIdx < 0 || targetIdx >= arr.length) return arr
+      const next = [...arr]
+      const [moved] = next.splice(idx, 1)
+      if (moved) next.splice(targetIdx, 0, moved)
+      return next
+    }
+
+    const movedDown = moveItem(list, '600519', 'down')
+    expect(movedDown.map((i) => i.symbol)).toEqual(['00700', '600519', 'AAPL'])
+
+    const movedUp = moveItem(movedDown, 'AAPL', 'up')
+    expect(movedUp.map((i) => i.symbol)).toEqual(['00700', 'AAPL', '600519'])
+  })
+
+  test('Given 右侧抽屉动画规范 When 渲染 Sheet 组件 Then 抽屉打开与收起动画时长优化至 <= 200ms 且无 500ms 迟滞', async () => {
+    const sheetCode = await Bun.file(
+      new URL('../ui/sheet.tsx', import.meta.url).pathname
+    ).text()
+
+    // 抽屉打开动效 200ms，退出动效 150ms，且不再含有 500ms 缓慢时长
+    expect(sheetCode).toContain('data-[state=open]:duration-200')
+    expect(sheetCode).toContain('data-[state=closed]:duration-150')
+    expect(sheetCode).not.toContain('duration-500')
+    expect(sheetCode).not.toContain('duration-300')
+  })
+
+  test('Given 右侧抽屉底栏 When 渲染添加自选按钮 Then 同步 ui-primary 配色体系与 ui-primary-button 样式规范', async () => {
+    const drawerCode = await Bun.file(
+      new URL('./FundStockWatchlistDrawer.tsx', import.meta.url).pathname
+    ).text()
+
+    // 抽屉底部添加自选按钮具备 ui-primary-button 以及 ui-primary-background 与 ui-primary
+    expect(drawerCode).toContain('ui-primary-button')
+    expect(drawerCode).toContain('bg-[var(--ui-primary-background)]')
+    expect(drawerCode).toContain('text-[var(--ui-primary)]')
+    expect(drawerCode).toContain('<span>添加自选标的</span>')
+  })
+
+  test('Given 顶部跑马灯标的轮播契约 When 渲染自选跑马灯 Then 严格按照我的自选排序（置顶标的优先，其余保持自选列表原本设定的顺序，不再按加入时间倒序）', async () => {
+    const terminalCode = await Bun.file(
+      new URL('./FundStockTerminalView.tsx', import.meta.url).pathname
+    ).text()
+
+    // 顶部跑马灯 filteredWatchlist 严格按置顶优先 + 自选列表设定顺序排列
+    expect(terminalCode).toContain('const filteredWatchlist = useMemo(() =>')
+    expect(terminalCode).toContain('const aPin = a.pinned ? 1 : 0')
+    expect(terminalCode).toContain('const bPin = b.pinned ? 1 : 0')
+    expect(terminalCode).toContain('return bPin - aPin')
+    // 彻底废除按加入时间倒序强制覆盖用户自选排序的旧逻辑
+    expect(terminalCode).not.toContain('b.addedAt - a.addedAt')
+  })
+
+  test('Given 页签列表仅剩最后一个标的 When 用户点击关闭该页签 Then openTabs 清空且由于 hasInitializedRef 守卫不会被自动再次打开', async () => {
+    // 1. 关闭仅剩的一个页签，状态正常清空
+    const singleTab: TradingTabItem[] = [{ symbol: '600519', name: '贵州茅台', market: 'cn' }]
+    const closed = closeTabHelper(singleTab, '600519', '600519')
+    expect(closed.tabs.length).toBe(0)
+    expect(closed.activeSymbol).toBe('')
+
+    // 2. 契约检查：TerminalView 中必须具备 hasInitializedRef 守卫，杜绝 activeSymbol 置空后触发 useEffect 再次填充页签
+    const terminalCode = await Bun.file(
+      new URL('./FundStockTerminalView.tsx', import.meta.url).pathname
+    ).text()
+
+    expect(terminalCode).toContain('const hasInitializedRef = useRef(false)')
+    expect(terminalCode).toContain('if (hasInitializedRef.current) return')
+    expect(terminalCode).toContain('hasInitializedRef.current = true')
+  })
+})
+
+
 
 
 

@@ -224,7 +224,7 @@ export function getChartThemeOptions(isDark: boolean): DeepPartial<ChartOptions>
   return {
     autoSize: true,
     layout: {
-      background: { type: ColorType.Solid, color: '#ffffff' },
+      background: { type: ColorType.Solid, color: 'transparent' },
       textColor: '#5f6b7c',
       fontSize: 11,
       fontFamily: monoFont,

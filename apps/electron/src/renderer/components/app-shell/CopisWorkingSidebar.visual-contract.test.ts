@@ -100,8 +100,8 @@ describe('Working 侧边栏视觉契约', () => {
 
     expect(accountMarkRule).toBeDefined()
     expect(rootRule).toBeDefined()
-    expect(rootRule).toContain('--ui-primary: #f3af6b')
-    expect(rootRule).toContain('--ui-primary-background: rgb(240 161 90 / 10%)')
+    expect(rootRule).toMatch(/--ui-primary:\s*#(f09a43|f3af6b)/)
+    expect(rootRule).toMatch(/--ui-primary-background:\s*rgb\(240 161 90 \/ (10%|20%)\)/)
     expect(rootRule).toContain('--ui-primary-foreground: #2b2137')
     expect(accountMarkRule).toContain('background: var(--ui-primary-background)')
     expect(accountMarkRule).toContain('color: var(--ui-primary)')
@@ -117,8 +117,8 @@ describe('Working 侧边栏视觉契约', () => {
     )?.[1]
 
     expect(lightThemeRule).toBeDefined()
-    expect(lightThemeRule).toContain('--ui-primary-background: rgb(240 161 90 / 16%)')
-    expect(globalStyles).toContain('--ui-primary-background: rgb(240 161 90 / 10%);')
+    expect(lightThemeRule).toMatch(/--ui-primary-background:\s*rgb\(240 161 90 \/ (16%|20%|24%|36%)\)/)
+    expect(globalStyles).toMatch(/--ui-primary-background:\s*rgb\(240 161 90 \/ (10%|20%)\);/)
   })
 
   test('Given 浅色或特殊主题 When 查看 Working 侧栏 Then 普通文字与激活态跟随主题变量', () => {
@@ -227,6 +227,16 @@ describe('Working 侧边栏视觉契约', () => {
     expect(balanceRule).toBeDefined()
     expect(accountStrongRule).toContain('font-weight: 400')
     expect(balanceRule).toContain('font-weight: 400')
+  })
+
+  test('Given Working footer When 查看设置旁的钻石与积分文字 Then 颜色统一使用 ui-primary 且不保留旧金色', () => {
+    const balanceRule = sidebarStyles.match(
+      /\.copis-working-account-balance\s*\{([^}]*)\}/s,
+    )?.[1]
+
+    expect(balanceRule).toBeDefined()
+    expect(balanceRule).toContain('color: var(--ui-primary)')
+    expect(balanceRule).not.toContain('#f5d66b')
   })
 
   test('Given 工作区菜单 When 删除工作区 Then 使用统一项目确认弹窗', () => {

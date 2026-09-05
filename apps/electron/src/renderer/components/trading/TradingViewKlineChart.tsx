@@ -328,9 +328,9 @@ export function TradingViewKlineChart({
     (klines.length > 0 ? klines[klines.length - 1] : null)
 
   return (
-    <div className={`relative ${className}`}>
+    <div className={`relative trading-scrollbar ${className}`}>
       {/* TradingView Lightweight Charts 容器 */}
-      <div ref={containerRef} className="w-full h-full" />
+      <div ref={containerRef} className="w-full h-full trading-scrollbar" />
 
       {/* Pane 1: VOL 悬停/最新成交量读数（富途牛牛 / dsh-trading 经典悬浮蓝字标签） */}
       {currentVolumePoint && (

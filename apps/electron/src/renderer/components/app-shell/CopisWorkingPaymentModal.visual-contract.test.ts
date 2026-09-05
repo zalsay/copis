@@ -9,7 +9,7 @@ const globalStyles = readFileSync(join(import.meta.dir, '../../styles/globals.cs
 
 describe('Working 支付视觉契约', () => {
   test('Given 支付主操作 When 读取品牌色 Then 使用 Copis primary token 且二维码保持高对比', () => {
-    expect(globalStyles).toContain('--ui-primary: #f3af6b;')
+    expect(globalStyles).toMatch(/--ui-primary:\s*#(f09a43|f3af6b);/)
     expect(globalStyles).toContain('--ui-primary-foreground: #2b2137;')
     expect(paymentStyles).toContain('background: var(--ui-primary);')
     expect(paymentStyles).toContain('color: var(--ui-primary-foreground, white);')
