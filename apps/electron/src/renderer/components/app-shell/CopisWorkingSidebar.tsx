@@ -72,6 +72,7 @@ import {
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { CopisWorkingConnectDialog, type WorkingFolderSelection } from './CopisWorkingConnectDialog'
 import { CopisWorkingFeedbackDialog } from './CopisWorkingFeedbackDialog'
+import { CopisModeSwitcher } from './CopisModeSwitcher'
 import './CopisWorkingSidebar.css'
 
 interface CopisWorkingSidebarProps {
@@ -133,7 +134,7 @@ export function CopisWorkingSidebar({ width, noTransition = false }: CopisWorkin
   const streamingStates = useAtomValue(agentStreamingStatesAtom)
   const pinnedDevProjects = useAtomValue(pinnedDevProjectsAtom)
   const setCurrentWorkspaceId = useSetAtom(currentAgentWorkspaceIdAtom)
-  const setAppMode = useSetAtom(appModeAtom)
+  const [appMode, setAppMode] = useAtom(appModeAtom)
   const setActiveView = useSetAtom(activeViewAtom)
   const setPlanningTab = useSetAtom(planningTabAtom)
   const setWorkingSettingsOpen = useSetAtom(workingSettingsOpenAtom)
@@ -211,7 +212,9 @@ export function CopisWorkingSidebar({ width, noTransition = false }: CopisWorkin
     setWorkingHistorySelection(null)
     setExpandedWorkspaceId(workspaceId)
     setCurrentWorkspaceId(workspaceId)
-    setAppMode('agent')
+    if (appMode !== 'creation') {
+      setAppMode('agent')
+    }
     setActiveView('conversations')
     window.electronAPI.updateSettings({ agentWorkspaceId: workspaceId }).catch(console.error)
   }
@@ -220,7 +223,12 @@ export function CopisWorkingSidebar({ width, noTransition = false }: CopisWorkin
     setWorkingHistorySelection(null)
     setExpandedWorkspaceId(workspaceId)
     setCurrentWorkspaceId(workspaceId)
-    setAppMode('agent')
+    const targetSession = localSessions.find((s) => s.id === sessionId)
+    if (targetSession?.mode === 'creation' || targetSession?.agentRuntime === 'dsh') {
+      setAppMode('creation')
+    } else {
+      setAppMode('agent')
+    }
     setActiveView('conversations')
     window.electronAPI.updateSettings({ agentWorkspaceId: workspaceId }).catch(console.error)
     openSession('agent', sessionId, title)
@@ -271,18 +279,20 @@ export function CopisWorkingSidebar({ width, noTransition = false }: CopisWorkin
   const handleNewSession = async (): Promise<void> => {
     setWorkingHistorySelection(null)
     const sessionId = await createAgent()
-    if (!sessionId) toast.error('新建 Agent 会话失败')
+    if (!sessionId) toast.error(appMode === 'creation' ? '新建创造模式会话失败' : '新建 Agent 会话失败')
   }
 
   const handleNewSessionForWorkspace = async (workspaceId: string): Promise<void> => {
     setExpandedWorkspaceId(workspaceId)
     setCurrentWorkspaceId(workspaceId)
-    setAppMode('agent')
+    if (appMode !== 'creation') {
+      setAppMode('agent')
+    }
     setActiveView('conversations')
     window.electronAPI.updateSettings({ agentWorkspaceId: workspaceId }).catch(console.error)
     setWorkingHistorySelection(null)
     const sessionId = await createAgent({ workspaceId })
-    if (!sessionId) toast.error('新建 Agent 会话失败')
+    if (!sessionId) toast.error(appMode === 'creation' ? '新建创造模式会话失败' : '新建 Agent 会话失败')
   }
 
   const handleOpenWorkspaceFolder = async (workspace: AgentWorkspace): Promise<void> => {
@@ -512,6 +522,11 @@ export function CopisWorkingSidebar({ width, noTransition = false }: CopisWorkin
                       {isFeishuSession && <small className="ui-feishu-badge">飞书</small>}
                       {isWeChatSession && <small className="ui-wechat-badge">微信</small>}
                       {isDingTalkSession && <small className="ui-dingtalk-badge">钉钉</small>}
+                      {(session.mode === 'creation' || session.agentRuntime === 'dsh') && (
+                        <small className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-amber-500/15 text-amber-600 dark:text-amber-400">
+                          创造
+                        </small>
+                      )}
                       <span>{displaySessionTitle || sessionTitle}</span>
                     </span>
                   </button>
@@ -556,6 +571,7 @@ export function CopisWorkingSidebar({ width, noTransition = false }: CopisWorkin
         <button type="button" className="copis-working-sidebar-icon-button" aria-label="展开侧栏" onClick={() => setCollapsed(false)}>
           <PanelLeftOpen aria-hidden="true" />
         </button>
+        <CopisModeSwitcher isCollapsed={true} />
         <button type="button" className="copis-working-sidebar-icon-button" aria-label="搜索" onClick={() => setSearchDialogOpen(true)}>
           <Search aria-hidden="true" />
         </button>
@@ -581,7 +597,7 @@ export function CopisWorkingSidebar({ width, noTransition = false }: CopisWorkin
           type="button"
           className={cn('copis-working-sidebar-icon-button', activeView === 'automations' && 'active')}
           aria-label="定时任务"
-          onClick={() => { setWorkingHistorySelection(null); setAppMode('agent'); setActiveView('automations') }}
+          onClick={() => { setWorkingHistorySelection(null); setActiveView('automations') }}
         >
           <Timer aria-hidden="true" />
         </button>
@@ -589,7 +605,7 @@ export function CopisWorkingSidebar({ width, noTransition = false }: CopisWorkin
           type="button"
           className={cn('copis-working-sidebar-icon-button', activeView === 'expert-team' && 'active')}
           aria-label="专家团队"
-          onClick={() => { setWorkingHistorySelection(null); setAppMode('agent'); setActiveView('expert-team') }}
+          onClick={() => { setWorkingHistorySelection(null); setActiveView('expert-team') }}
         >
           <UsersRound aria-hidden="true" />
         </button>
@@ -602,6 +618,9 @@ export function CopisWorkingSidebar({ width, noTransition = false }: CopisWorkin
   return (
     <aside className={cn('copis-working-sidebar', !noTransition && 'transition-width')} style={{ width }}>
       <div className="copis-working-sidebar-body">
+        <div className="px-3 pt-2.5 pb-1">
+          <CopisModeSwitcher isCollapsed={false} />
+        </div>
         <nav className="copis-working-sidebar-nav" aria-label="Copis 菜单">
           <button type="button" className="copis-working-menu-button" onClick={() => void handleNewSession()}>
             <Plus aria-hidden="true" />
@@ -611,11 +630,11 @@ export function CopisWorkingSidebar({ width, noTransition = false }: CopisWorkin
             <Search aria-hidden="true" />
             <span>搜索</span>
           </button>
-          <button type="button" className="copis-working-menu-button" onClick={() => { setWorkingHistorySelection(null); setAppMode('agent'); setPlanningTab('schedule'); setActiveView('planning') }}>
+          <button type="button" className="copis-working-menu-button" onClick={() => { setWorkingHistorySelection(null); setPlanningTab('schedule'); setActiveView('planning') }}>
             <CalendarClock aria-hidden="true" />
             <span>日程表</span>
           </button>
-          <button type="button" className={cn('copis-working-menu-button', activeView === 'automations' && 'active')} onClick={() => { setWorkingHistorySelection(null); setAppMode('agent'); setActiveView('automations') }}>
+          <button type="button" className={cn('copis-working-menu-button', activeView === 'automations' && 'active')} onClick={() => { setWorkingHistorySelection(null); setActiveView('automations') }}>
             <Timer aria-hidden="true" />
             <span>定时任务</span>
           </button>
@@ -627,15 +646,15 @@ export function CopisWorkingSidebar({ width, noTransition = false }: CopisWorkin
             <BookOpen aria-hidden="true" />
             <span>知识库</span>
           </button>
-          <button type="button" className={cn('copis-working-menu-button', activeView === 'expert-team' && 'active')} onClick={() => { setWorkingHistorySelection(null); setAppMode('agent'); setActiveView('expert-team') }}>
+          <button type="button" className={cn('copis-working-menu-button', activeView === 'expert-team' && 'active')} onClick={() => { setWorkingHistorySelection(null); setActiveView('expert-team') }}>
             <UsersRound aria-hidden="true" />
             <span>专家团队</span>
           </button>
-          <button type="button" className="copis-working-menu-button" onClick={() => { setWorkingHistorySelection(null); setAppMode('agent'); setActiveView('agent-skills') }}>
+          <button type="button" className="copis-working-menu-button" onClick={() => { setWorkingHistorySelection(null); setActiveView('agent-skills') }}>
             <Puzzle aria-hidden="true" />
             <span>技能市场</span>
           </button>
-          <button type="button" className={cn('copis-working-menu-button', activeView === 'fund-stock' && 'active')} onClick={() => { setWorkingHistorySelection(null); setAppMode('agent'); setActiveView('fund-stock') }}>
+          <button type="button" className={cn('copis-working-menu-button', activeView === 'fund-stock' && 'active')} onClick={() => { setWorkingHistorySelection(null); setActiveView('fund-stock') }}>
             <TrendingUp aria-hidden="true" />
             <span>我的投资</span>
           </button>

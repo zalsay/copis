@@ -113,7 +113,12 @@ export function TabBar(): React.ReactElement {
     if (!tab) return
 
     if (tab.type === 'agent' || tab.type === 'preview') {
-      setAppMode('agent')
+      const session = validAgentSessions.find((s) => s.id === tab.sessionId)
+      if (session?.mode === 'creation' || session?.agentRuntime === 'dsh') {
+        setAppMode('creation')
+      } else {
+        setAppMode('agent')
+      }
       setCurrentAgentSessionId(tab.sessionId)
 
       // 用户打开查看后只清除未读角标；是否完成由用户通过对勾确认。
@@ -124,7 +129,6 @@ export function TabBar(): React.ReactElement {
         return next
       })
 
-      const session = validAgentSessions.find((s) => s.id === tab.sessionId)
       if (session?.workspaceId) {
         setCurrentAgentWorkspaceId(session.workspaceId)
         window.electronAPI.updateSettings({

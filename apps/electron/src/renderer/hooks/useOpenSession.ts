@@ -60,7 +60,12 @@ export function useOpenSession(): OpenSessionFn {
       setActiveView('conversations')
 
       if (type === 'agent' || type === 'preview') {
-        setAppMode('agent')
+        const session = agentSessions.find((s) => s.id === sessionId)
+        if (session?.mode === 'creation' || session?.agentRuntime === 'dsh') {
+          setAppMode('creation')
+        } else {
+          setAppMode('agent')
+        }
         setCurrentAgentSessionId(sessionId)
 
         // 用户打开查看后只清除未读角标；是否完成由用户通过对勾确认。
@@ -72,7 +77,6 @@ export function useOpenSession(): OpenSessionFn {
         })
 
         // 同步 workspaceId，确保与 TabBar 切换行为一致
-        const session = agentSessions.find((s) => s.id === sessionId)
         if (session?.workspaceId) {
           setCurrentAgentWorkspaceId(session.workspaceId)
           window.electronAPI.updateSettings({

@@ -61,6 +61,16 @@ export default {
           muted: 'hsl(var(--tooltip-muted) / <alpha-value>)',
         },
         'content-area': 'hsl(var(--content-area) / <alpha-value>)',
+        'ui-primary': {
+          DEFAULT: 'var(--ui-primary)',
+          foreground: 'var(--ui-primary-foreground)',
+          background: 'var(--ui-primary-background)',
+        },
+        'creation-ui-primary': {
+          DEFAULT: 'var(--creation-ui-primary)',
+          foreground: 'var(--creation-ui-primary-foreground)',
+          background: 'var(--creation-ui-primary-background)',
+        },
       },
       // ===== 字体栈：Inter Variable 优先，回退 SF Pro Text / 系统中文字体 =====
       fontFamily: {

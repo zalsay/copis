@@ -178,7 +178,7 @@ function migrateLegacyAgentRuntime(index: AgentSessionsIndex): boolean {
   let changed = false
   for (const session of index.sessions) {
     const rawRuntime = (session as AgentSessionMeta & { agentRuntime?: unknown }).agentRuntime
-    if (rawRuntime === 'pi') continue
+    if (rawRuntime === 'pi' || rawRuntime === 'dsh') continue
 
     session.agentRuntime = 'pi'
     // 旧 session ID 属于已移除的 runtime；保留 Copis JSONL，让 Pi 下一轮从本地上下文继续。
@@ -587,7 +587,7 @@ export function createAgentSession(
   agentCwdMode?: AgentCwdMode,
   expertTeamSession?: AgentExpertTeamSession,
   expertTeamSetup?: boolean,
-  extraOptions?: { source?: string; feishuDedicated?: boolean; wechatDedicated?: boolean; dingtalkDedicated?: boolean; sourceAutomationId?: string },
+  extraOptions?: { source?: string; feishuDedicated?: boolean; wechatDedicated?: boolean; dingtalkDedicated?: boolean; sourceAutomationId?: string; mode?: 'agent' | 'creation' },
 ): AgentSessionMeta {
   const index = readIndex()
   const now = Date.now()
@@ -601,6 +601,7 @@ export function createAgentSession(
     channelId,
     modelId,
     workspaceId,
+    ...(extraOptions?.mode ? { mode: extraOptions.mode } : {}),
     ...(expertTeamSession ? { expertTeamSession } : {}),
     ...(expertTeamSetup ? { expertTeamSetup: true } : {}),
     ...(extraOptions?.source ? { source: extraOptions.source } : {}),

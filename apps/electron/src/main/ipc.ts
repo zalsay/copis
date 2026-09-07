@@ -9,7 +9,7 @@ import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'nod
 import { existsSync, realpathSync, rmSync, readFileSync, writeFileSync, mkdirSync, statSync } from 'node:fs'
 import { writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, ATTACHMENT_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, FUNCTIONAL_MODULE_IPC_CHANNELS, PROXY_IPC_CHANNELS, AGENT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, WECHAT_IPC_CHANNELS, AGENT_MAIL_IPC_CHANNELS, AUTOMATION_IPC_CHANNELS, PLANNING_IPC_CHANNELS, PLANNING_CONFLICT_ERROR, WORKING_IPC_CHANNELS, WEB_IPC_CHANNELS, BROWSER_WORKFLOW_IPC_CHANNELS, MEMORY_IPC_CHANNELS, FUND_STOCK_IPC_CHANNELS, COPIS_WORKING_CHANNEL_ID, isCopisPermissionMode, isCopisWorkingChannelId, isWorkingMode, normalizePathForCompare } from '@copis/shared'
+import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, ATTACHMENT_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, FUNCTIONAL_MODULE_IPC_CHANNELS, PROXY_IPC_CHANNELS, AGENT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, WECHAT_IPC_CHANNELS, AGENT_MAIL_IPC_CHANNELS, AUTOMATION_IPC_CHANNELS, PLANNING_IPC_CHANNELS, PLANNING_CONFLICT_ERROR, WORKING_IPC_CHANNELS, WEB_IPC_CHANNELS, BROWSER_WORKFLOW_IPC_CHANNELS, MEMORY_IPC_CHANNELS, FUND_STOCK_IPC_CHANNELS, DSH_CORDIS_IPC_CHANNELS, COPIS_WORKING_CHANNEL_ID, isCopisPermissionMode, isCopisWorkingChannelId, isWorkingMode, normalizePathForCompare, type DshReadFileResult } from '@copis/shared'
 import { USER_PROFILE_IPC_CHANNELS, SETTINGS_IPC_CHANNELS, SCRATCH_PAD_IPC_CHANNELS, QUICK_TASK_IPC_CHANNELS, VOICE_DICTATION_IPC_CHANNELS, APP_ICON_IPC_CHANNELS, DOCK_BADGE_IPC_CHANNELS, STORAGE_IPC_CHANNELS } from '../types'
 import type {
   QuickTaskSubmitInput,
@@ -151,6 +151,11 @@ import type { UserProfile, AppSettings } from '../types'
 import { memoryIngestionService } from './lib/memory-ingestion-service'
 import { fetchMarketQuotes, fetchKlines, searchSymbols, getWatchlist, saveWatchlist } from './lib/trading-quote-service'
 import { getDshTradingStatus, startDshTradingServer, stopDshTradingServer } from './lib/dsh-trading-service'
+import { getDshCordisStatus, reloadDshCordisPlugins, setDshStatusChangeBroadcaster, startDshCordisServer, stopDshCordisServer, syncCopisModelConfigToDsh } from './lib/dsh-cordis-service'
+import { ensureDshView, updateDshViewBounds, dispatchToDshClient, syncThemeToDshView } from './lib/dsh-view-manager'
+import { syncNativeThemeSource, resolveIsDark } from './lib/theme-sync'
+import type { DshViewBounds, DshClientEvent } from '@copis/shared'
+import { shouldSyncDshCopisDefaults } from './lib/dsh-model-config'
 import { getRuntimeStatus, getGitRepoStatus, reinitializeRuntime } from './lib/runtime-init'
 import { getUnstagedChanges, getFileDiff, getUntrackedContent, revertFile, getDiffContents, listWorktrees, getWorktreeChanges, getMainRepoRoot } from './lib/git-diff-service'
 import { registerCopisFilePath } from './lib/local-file-protocol'
@@ -917,7 +922,7 @@ function cacheNull(key: string): null {
 }
 
 function isAgentRuntime(value: unknown): value is AgentRuntime {
-  return value === 'pi'
+  return value === 'pi' || value === 'dsh'
 }
 
 /**
@@ -1900,8 +1905,20 @@ export function registerIpcHandlers(): void {
       if (safeUpdates.feishuSessionMirror !== undefined) {
         syncFeishuSyncSleepBlocker(result)
       }
-      // 主题相关设置变化时，广播给所有窗口（跨窗口同步，如 Quick Task 面板）
+      if (shouldSyncDshCopisDefaults(safeUpdates)) {
+        void syncCopisModelConfigToDsh({
+          channelId: result.agentChannelId,
+          modelId: result.agentModelId,
+        }).catch((err) => {
+          console.warn('[DSH Cordis Web] 联动同步模型配置失败:', err)
+        })
+      }
+      // 主题相关设置变化时，同步 Electron 原生内核与 DSH 视图，并广播给所有窗口（跨窗口同步，如 Quick Task 面板）
       if (safeUpdates.themeMode !== undefined || safeUpdates.themeStyle !== undefined || safeUpdates.interfaceVariant !== undefined) {
+        syncNativeThemeSource(result.themeMode, result.themeStyle)
+        const isDark = resolveIsDark(result.themeMode, result.themeStyle, nativeTheme.shouldUseDarkColors)
+        syncThemeToDshView(isDark)
+
         const payload = {
           themeMode: result.themeMode,
           themeStyle: result.themeStyle,
@@ -1934,6 +1951,19 @@ export function registerIpcHandlers(): void {
         if (safeUpdates.feishuSessionMirror !== undefined) {
           syncFeishuSyncSleepBlocker(result)
         }
+        if (safeUpdates.themeMode !== undefined || safeUpdates.themeStyle !== undefined) {
+          syncNativeThemeSource(result.themeMode, result.themeStyle)
+          const isDark = resolveIsDark(result.themeMode, result.themeStyle, nativeTheme.shouldUseDarkColors)
+          syncThemeToDshView(isDark)
+        }
+        if (shouldSyncDshCopisDefaults(safeUpdates)) {
+          void syncCopisModelConfigToDsh({
+            channelId: result.agentChannelId,
+            modelId: result.agentModelId,
+          }).catch((err) => {
+            console.warn('[DSH Cordis Web] 联动同步模型配置失败:', err)
+          })
+        }
         event.returnValue = true
       } catch {
         event.returnValue = false
@@ -1949,10 +1979,14 @@ export function registerIpcHandlers(): void {
     }
   )
 
-  // 监听系统主题变化，推送给所有渲染进程窗口
+  // 监听系统主题变化，推送给所有渲染进程窗口并联动 DSH 视图
   nativeTheme.on('updated', () => {
     const isDark = nativeTheme.shouldUseDarkColors
     console.log(`[设置] 系统主题变化: ${isDark ? '深色' : '浅色'}`)
+    const currentSettings = getSettings()
+    if (currentSettings.themeMode === 'system') {
+      syncThemeToDshView(isDark)
+    }
     BrowserWindow.getAllWindows().forEach((win) => {
       win.webContents.send(SETTINGS_IPC_CHANNELS.ON_SYSTEM_THEME_CHANGED, isDark)
     })
@@ -2223,10 +2257,21 @@ export function registerIpcHandlers(): void {
   // 创建 Agent 会话
   ipcMain.handle(
     AGENT_IPC_CHANNELS.CREATE_SESSION,
-    async (_, title?: string, channelId?: string, workspaceId?: string, modelId?: string, expertTeamSession?: AgentExpertTeamSession, expertTeamSetup?: boolean): Promise<AgentSessionMeta> => {
+    async (_, title?: string, channelId?: string, workspaceId?: string, modelId?: string, expertTeamSession?: AgentExpertTeamSession, expertTeamSetup?: boolean, options?: { agentRuntime?: AgentRuntime; mode?: 'agent' | 'creation' }): Promise<AgentSessionMeta> => {
       const access = getWorkingModelCatalogAccess()
       assertWorkingCustomModelSelection(channelId, modelId, access.isVip, access.ownerId)
-      const session = createAgentSession(title, channelId, workspaceId, modelId, getSettings().agentRuntime ?? 'pi', undefined, expertTeamSession, expertTeamSetup)
+      const runtime = options?.agentRuntime ?? getSettings().agentRuntime ?? 'pi'
+      const session = createAgentSession(
+        title,
+        channelId,
+        workspaceId,
+        modelId,
+        runtime,
+        undefined,
+        expertTeamSession,
+        expertTeamSetup,
+        options?.mode ? { mode: options.mode } : undefined,
+      )
       feishuBridgeManager.ensureSessionMirror(session).catch((error) => {
         console.error('[飞书 Session 镜像] 新会话建群失败:', error)
       })
@@ -5166,5 +5211,96 @@ export function registerIpcHandlers(): void {
       return stopDshTradingServer()
     }
   )
-}
 
+  ipcMain.handle(
+    DSH_CORDIS_IPC_CHANNELS.GET_STATUS,
+    () => {
+      return getDshCordisStatus()
+    }
+  )
+
+  ipcMain.handle(
+    DSH_CORDIS_IPC_CHANNELS.START,
+    async () => {
+      return startDshCordisServer()
+    }
+  )
+
+  ipcMain.handle(
+    DSH_CORDIS_IPC_CHANNELS.STOP,
+    () => {
+      return stopDshCordisServer()
+    }
+  )
+
+  ipcMain.handle(
+    DSH_CORDIS_IPC_CHANNELS.RELOAD,
+    async () => {
+      return reloadDshCordisPlugins()
+    }
+  )
+
+  ipcMain.handle(
+    DSH_CORDIS_IPC_CHANNELS.UPDATE_VIEW_BOUNDS,
+    (_event, bounds: DshViewBounds, url?: string) => {
+      if (url) {
+        ensureDshView(url)
+      }
+      updateDshViewBounds(bounds)
+      return true
+    }
+  )
+
+  ipcMain.handle(
+    DSH_CORDIS_IPC_CHANNELS.DISPATCH_EVENT_TO_CLIENT,
+    (_event, payload: unknown) => {
+      dispatchToDshClient(payload)
+      return true
+    }
+  )
+
+  ipcMain.handle(
+    DSH_CORDIS_IPC_CHANNELS.READ_FILE,
+    async (_event, filePath: string, cwd?: string): Promise<DshReadFileResult> => {
+      const { readDshFile } = await import('./lib/dsh-file-service')
+      return readDshFile(filePath, cwd)
+    }
+  )
+
+  ipcMain.handle(
+    DSH_CORDIS_IPC_CHANNELS.SHOW_ITEM_IN_FOLDER,
+    async (_event, filePath: string, cwd?: string): Promise<boolean> => {
+      const { showDshItemInFolder } = await import('./lib/dsh-file-service')
+      return showDshItemInFolder(filePath, cwd)
+    }
+  )
+
+  ipcMain.handle(
+    DSH_CORDIS_IPC_CHANNELS.LIST_DIRECTORY,
+    async (_event, dirPath?: string, cwd?: string): Promise<import('@copis/shared').DshFileEntry[]> => {
+      const { listDshDirectory } = await import('./lib/dsh-file-service')
+      return listDshDirectory(dirPath, cwd)
+    }
+  )
+
+  ipcMain.on(
+    DSH_CORDIS_IPC_CHANNELS.CLIENT_EVENT,
+    (_event, clientEvent: DshClientEvent) => {
+      const windows = BrowserWindow.getAllWindows()
+      for (const win of windows) {
+        if (!win.isDestroyed() && win.webContents) {
+          win.webContents.send(DSH_CORDIS_IPC_CHANNELS.CLIENT_EVENT, clientEvent)
+        }
+      }
+    }
+  )
+
+  setDshStatusChangeBroadcaster((status) => {
+    const windows = BrowserWindow.getAllWindows()
+    for (const win of windows) {
+      if (!win.isDestroyed() && win.webContents) {
+        win.webContents.send(DSH_CORDIS_IPC_CHANNELS.ON_STATUS_CHANGE, status)
+      }
+    }
+  })
+}

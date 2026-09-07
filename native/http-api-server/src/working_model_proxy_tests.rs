@@ -155,6 +155,67 @@ fn internal_model_proxy_uses_auth_session_without_worker_capability() {
 }
 
 #[test]
+fn dsh_capability_is_long_lived_and_can_request_every_working_model() {
+    let (auth, transport) = setup();
+    let proxy = WorkingModelProxy::new(auth);
+    let capability = proxy.issue_dsh_capability(None).unwrap();
+
+    proxy
+        .proxy_with_capability(
+            &capability,
+            br#"{"model":"fast","messages":[]}"#,
+        )
+        .unwrap();
+    proxy
+        .proxy_with_capability(
+            &capability,
+            br#"{"model":"deepseek-v4-pro","messages":[]}"#,
+        )
+        .unwrap();
+
+    let calls = transport.calls.lock().unwrap();
+    assert_eq!(calls.len(), 3);
+    assert_eq!(calls[1].path, "/api/internal/working-model/v1/responses");
+    assert_eq!(calls[2].path, "/api/internal/working-model/v1/responses");
+}
+
+#[test]
+fn dsh_request_uses_copis_reasoning_level() {
+    let (auth, transport) = setup();
+    let proxy = WorkingModelProxy::new(auth);
+    let capability = proxy.issue_dsh_capability(Some("high")).unwrap();
+
+    proxy
+        .proxy_with_capability(
+            &capability,
+            br#"{"model":"fast","messages":[]}"#,
+        )
+        .unwrap();
+
+    let calls = transport.calls.lock().unwrap();
+    let body: serde_json::Value = serde_json::from_str(calls.last().unwrap().body.as_deref().unwrap()).unwrap();
+    assert_eq!(body["reasoning"]["effort"], "high");
+}
+
+#[test]
+fn dsh_request_forces_none_when_copis_thinking_is_disabled() {
+    let (auth, transport) = setup();
+    let proxy = WorkingModelProxy::new(auth);
+    let capability = proxy.issue_dsh_capability(Some("none")).unwrap();
+
+    proxy
+        .proxy_with_capability(
+            &capability,
+            br#"{"model":"fast","reasoning":{"effort":"high"}}"#,
+        )
+        .unwrap();
+
+    let calls = transport.calls.lock().unwrap();
+    let body: serde_json::Value = serde_json::from_str(calls.last().unwrap().body.as_deref().unwrap()).unwrap();
+    assert_eq!(body["reasoning"]["effort"], "none");
+}
+
+#[test]
 fn capability_expired_displays_friendly_message_and_blocks_request() {
     let (auth, _) = setup();
     let proxy = WorkingModelProxy::new(auth);

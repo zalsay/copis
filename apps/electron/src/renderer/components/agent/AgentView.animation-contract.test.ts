@@ -32,4 +32,10 @@ describe('Agent 思考状态动画契约', () => {
     expect(agentStyles).toContain('background-color: var(--ui-primary-background) !important;')
     expect(agentStyles).not.toContain('rgb(43 33 55 / 0.70)')
   })
+
+  test('Given Agent 新会话标语 When 渲染标题 Then 使用语义前景文字 token 保证浅色模式为深色文字', () => {
+    expect(agentStyles).toContain('.copis-agent-new-session-hero h1 {')
+    expect(agentStyles).toContain('color: hsl(var(--foreground));')
+    expect(agentStyles).not.toContain('color: #f4f4f5;')
+  })
 })

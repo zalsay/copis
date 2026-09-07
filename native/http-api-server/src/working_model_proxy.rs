@@ -41,9 +41,15 @@ struct StoredCapability {
     capability: WorkingModelCapability,
 }
 
+struct StoredDshCapability {
+    capability: String,
+    reasoning_effort: Option<String>,
+}
+
 pub struct WorkingModelProxy {
     auth: Arc<AuthSession>,
     capabilities: Mutex<HashMap<String, StoredCapability>>,
+    dsh_capabilities: Mutex<Vec<StoredDshCapability>>,
 }
 
 impl WorkingModelProxy {
@@ -51,7 +57,28 @@ impl WorkingModelProxy {
         Self {
             auth,
             capabilities: Mutex::new(HashMap::new()),
+            dsh_capabilities: Mutex::new(Vec::new()),
         }
+    }
+
+    /// DSH 使用独立的长期 capability；它仅能访问 Working 模型代理，不持有用户登录凭据。
+    /// DSH capability 在签发时固化 Copis 的思考深度，避免运行中的 DSH 被配置变更影响。
+    pub fn issue_dsh_capability(
+        &self,
+        reasoning_effort: Option<&str>,
+    ) -> Result<String, WorkingModelError> {
+        let capability = generate_capability()?;
+        let reasoning_effort = reasoning_effort
+            .map(normalize_reasoning_effort)
+            .transpose()?;
+        self.dsh_capabilities
+            .lock()
+            .unwrap()
+            .push(StoredDshCapability {
+                capability: capability.clone(),
+                reasoning_effort,
+            });
+        Ok(capability)
     }
 
     pub fn issue(
@@ -86,6 +113,18 @@ impl WorkingModelProxy {
         capability: &str,
         request_body: &[u8],
     ) -> Result<WorkingModelResponse, WorkingModelError> {
+        let dsh_reasoning_effort = self
+            .dsh_capabilities
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|stored| tokens_equal(&stored.capability, capability))
+            .map(|stored| stored.reasoning_effort.clone());
+        if let Some(reasoning_effort) = dsh_reasoning_effort {
+            validate_model_request(request_body)?;
+            let request_body = inject_reasoning_effort(request_body, reasoning_effort.as_deref())?;
+            return self.forward(&request_body);
+        }
         let session_id = {
             let capabilities = self.capabilities.lock().unwrap();
             capabilities
@@ -153,6 +192,41 @@ impl WorkingModelProxy {
             content_type,
         })
     }
+}
+
+fn normalize_reasoning_effort(value: &str) -> Result<String, WorkingModelError> {
+    match value.trim() {
+        "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" => Ok(value.trim().to_string()),
+        _ => Err(WorkingModelError::InvalidRequest("DSH 思考深度不正确".to_string())),
+    }
+}
+
+fn inject_reasoning_effort(
+    request_body: &[u8],
+    reasoning_effort: Option<&str>,
+) -> Result<Vec<u8>, WorkingModelError> {
+    let Some(reasoning_effort) = reasoning_effort else {
+        return Ok(request_body.to_vec());
+    };
+    let mut request = serde_json::from_slice::<Value>(request_body)
+        .map_err(|_| WorkingModelError::InvalidRequest("模型请求体不是有效 JSON".to_string()))?;
+    let object = request
+        .as_object_mut()
+        .ok_or_else(|| WorkingModelError::InvalidRequest("模型请求体不是 JSON 对象".to_string()))?;
+    let mut reasoning = object
+        .get("reasoning")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    let has_explicit_effort = reasoning
+        .get("effort")
+        .and_then(Value::as_str)
+        .is_some_and(|value| !value.trim().is_empty());
+    if reasoning_effort == "none" || !has_explicit_effort {
+        reasoning.insert("effort".to_string(), Value::String(reasoning_effort.to_string()));
+    }
+    object.insert("reasoning".to_string(), Value::Object(reasoning));
+    serde_json::to_vec(&request).map_err(|_| WorkingModelError::InvalidResponse)
 }
 
 fn validate_model_request(request_body: &[u8]) -> Result<String, WorkingModelError> {

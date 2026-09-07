@@ -37,7 +37,12 @@ export function useSyncActiveTabSideEffects(): SyncActiveTabSideEffects {
       }
 
       // Agent / 会话预览
-      setAppMode('agent')
+      const session = agentSessions.find((s) => s.id === newActiveTab.sessionId)
+      if (session?.mode === 'creation' || session?.agentRuntime === 'dsh') {
+        setAppMode('creation')
+      } else {
+        setAppMode('agent')
+      }
       setCurrentAgentSessionId(newActiveTab.sessionId)
 
       // 清除该会话的"已完成未查看"标记
@@ -49,7 +54,6 @@ export function useSyncActiveTabSideEffects(): SyncActiveTabSideEffects {
       })
 
       // 同步 workspace
-      const session = agentSessions.find((s) => s.id === newActiveTab.sessionId)
       if (session?.workspaceId) {
         setCurrentAgentWorkspaceId(session.workspaceId)
         window.electronAPI.updateSettings({

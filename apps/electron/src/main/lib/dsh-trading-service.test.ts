@@ -31,7 +31,7 @@ describe('dsh-trading-service', () => {
 
   test('Given 未找到 dsh 运行程序 When 启动服务 Then 优雅降级返回错误信息并不崩溃', async () => {
     const status = await startDshTradingServer({
-      dshCommand: undefined,
+      dshCommand: '',
     })
     expect(status.running).toBe(false)
     expect(status.error).toContain('未找到已激活的 dsh 运行时')

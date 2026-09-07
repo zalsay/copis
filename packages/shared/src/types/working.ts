@@ -189,6 +189,30 @@ export const COPIS_WORKING_EXPERT_MODEL_ID = 'export'
 export const COPIS_WORKING_GLOBAL_MODEL_ID = 'global'
 export const COPIS_WORKING_DEEPSEEK_FAST_MODEL_ID = 'deepseek-v4-flash'
 export const COPIS_WORKING_DEEPSEEK_PRO_MODEL_ID = 'deepseek-v4-pro'
+
+/** Copis Composer 内置模型名称后显示的说明文案。 */
+const COPIS_WORKING_MODEL_DESCRIPTIONS: Readonly<Record<string, string>> = {
+  [`${COPIS_WORKING_CHANNEL_ID}:${COPIS_WORKING_FAST_MODEL_ID}`]: '速度快，思考能力一般',
+  [`${COPIS_WORKING_CHANNEL_ID}:${COPIS_WORKING_EXPERT_MODEL_ID}`]: '全球领先，知识面广，深度思考，消耗更多钻石',
+  [`${COPIS_WORKING_CHANNEL_ID}:${COPIS_WORKING_GLOBAL_MODEL_ID}`]: '通晓世界知识，适合教育、探索等场景',
+  [`${COPIS_WORKING_DEEPSEEK_CHANNEL_ID}:${COPIS_WORKING_DEEPSEEK_FAST_MODEL_ID}`]: 'v4 Flash，思考速度快，不支持图片识别',
+  [`${COPIS_WORKING_DEEPSEEK_CHANNEL_ID}:${COPIS_WORKING_DEEPSEEK_PRO_MODEL_ID}`]: 'v4Pro，DeepSeek 最强模型，不支持图片识别',
+}
+
+export function getCopisWorkingModelDescription(channelId: string, modelId: string): string | undefined {
+  return COPIS_WORKING_MODEL_DESCRIPTIONS[`${channelId}:${modelId}`]
+}
+
+/** 返回与 Copis Composer 对话框一致的模型最终显示名称。 */
+export function getCopisWorkingModelDisplayName(
+  channelId: string,
+  modelId: string,
+  modelName: string,
+): string {
+  const description = getCopisWorkingModelDescription(channelId, modelId)
+  return description ? `${modelName}(${description})` : modelName
+}
+
 /** Working 模型计费来源头：官方 Copis 客户端标记请求属于 Copis Agent 模型。 */
 export const COPIS_WORKING_MODEL_SOURCE_TYPE_HEADER = 'X-Working-Model-Source-Type'
 /** Working 模型计费来源值：Copis 内置 Agent 模型统一标记为 copis-agent-model。 */

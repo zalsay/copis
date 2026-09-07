@@ -15,6 +15,7 @@ mock.module('./agent-workspace-manager', () => ({
 
 mock.module('./config-paths', () => ({
   getConfigDirName: () => '.copis',
+  getDshHomeDir: () => '/mock/dsh/home',
 }))
 
 mock.module('./agent-git-attribution', () => ({
@@ -467,4 +468,28 @@ describe('项目与会话工作台提示词', () => {
     expect(prompt).toContain('自动化办公 (`automation`)')
     expect(prompt).toContain('非强制输出')
   })
+
+  test('Given DSH 创造模式会话 When 构建系统提示词 Then 注入 DSH Cordis 创造模式与自进化规范', () => {
+    const prompt = buildSystemPrompt({
+      agentRuntime: 'dsh',
+      workspaceName: '示例项目',
+      workspaceSlug: 'sample-project',
+      sessionId: 'session-dsh-1',
+      agentCwd: '/tmp/sample-project',
+      workspaceWriteRoot: '/tmp/sample-project/copis',
+      permissionMode: 'bypassPermissions',
+    })
+
+    expect(prompt).toContain('DeepSeek Harness (创造模式)')
+    expect(prompt).toContain('## DSH Runtime（创造模式 / Cordis 模式）')
+    expect(prompt).toContain('Cordis 微内核架构')
+    expect(prompt).toContain('程序化编排')
+    expect(prompt).toContain('Web 界面自进化与自定义')
+    expect(prompt).toContain('dsh-web-evolution')
+    expect(prompt).toContain("patchReload: 'live'")
+    expect(prompt).toContain('dsh-client-hmr')
+    expect(prompt).toContain('details')
+    expect(prompt).toContain('conversation.composer.dock')
+  })
 })
+

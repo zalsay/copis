@@ -31,10 +31,12 @@ import { ExpertTeamView } from '@/components/expert-team/ExpertTeamView'
 import { FundStockTerminalView } from '@/components/trading/FundStockTerminalView'
 import { automationFormAtom } from '@/atoms/automation-atoms'
 import { activeViewAtom } from '@/atoms/active-view'
+import { appModeAtom } from '@/atoms/app-mode'
 import { interfaceVariantAtom } from '@/atoms/theme'
 import { cn } from '@/lib/utils'
 import { workingHistorySelectionAtom } from '@/atoms/working-atoms'
 import { WorkingSessionHistoryView } from '@/components/working/WorkingSessionHistoryView'
+import { CopisCreationWebView } from '@/components/creation/CopisCreationWebView'
 
 export function MainArea(): React.ReactElement {
   // 记录每个会话上次停留的视图（对话 / 预览），供切回时重建预览 Tab
@@ -46,6 +48,7 @@ export function MainArea(): React.ReactElement {
   const activeTab = useAtomValue(activeTabAtom)
   const automationFormOpen = useAtomValue(automationFormAtom).open
   const activeView = useAtomValue(activeViewAtom)
+  const appMode = useAtomValue(appModeAtom)
   const workingHistorySelection = useAtomValue(workingHistorySelectionAtom)
   const interfaceVariant = useAtomValue(interfaceVariantAtom)
   const isClassic = interfaceVariant === 'classic'
@@ -60,7 +63,7 @@ export function MainArea(): React.ReactElement {
   const previewDragging = React.useRef(false)
 
   const previewOpen =
-    activeTab?.type === 'agent' && (previewOpenMap.get(activeTab.sessionId) ?? false)
+    appMode === 'agent' && activeTab?.type === 'agent' && (previewOpenMap.get(activeTab.sessionId) ?? false)
   const previewSessionId = activeTab?.type === 'agent' ? activeTab.sessionId : null
 
   // 关闭动画状态：当 previewOpen 从 true → false 时，播放退出动画再移除 DOM
@@ -85,7 +88,7 @@ export function MainArea(): React.ReactElement {
     prevPreviewStateRef.current = { open: previewOpen, sessionId: previewSessionId }
   }, [previewOpen, previewSessionId])
 
-  const showPreview = (previewOpen || closing) && previewSessionId && activeView === 'conversations'
+  const showPreview = appMode === 'agent' && (previewOpen || closing) && previewSessionId && activeView === 'conversations'
   const showPreviewPane = !!showPreview
 
   const handlePreviewDragStart = React.useCallback((e: React.MouseEvent) => {
@@ -160,7 +163,10 @@ export function MainArea(): React.ReactElement {
     <>
       <Panel
         variant="grow"
-        className={cn('bg-content-area', isClassic && 'rounded-2xl shadow-xl dark:shadow-sm')}
+        className={cn(
+          'bg-content-area',
+          isClassic && appMode !== 'creation' && 'rounded-2xl shadow-xl dark:shadow-sm'
+        )}
       >
         <div className="flex flex-1 min-h-0 relative overflow-hidden" data-split-container>
           {/* 左侧：TabBar + TabContent（始终保持在同一 DOM 位置，避免 Tab 切换时 unmount）
@@ -171,7 +177,9 @@ export function MainArea(): React.ReactElement {
             className={cn('flex flex-col min-w-0 h-full relative', showPreview && 'mr-0.5')}
             style={leftFlexStyle}
           >
-            {activeView === 'conversations' && workingHistorySelection ? (
+            {appMode === 'creation' ? (
+              <CopisCreationWebView />
+            ) : activeView === 'conversations' && workingHistorySelection ? (
               <WorkingSessionHistoryView />
             ) : activeView === 'planning' || activeView === 'automations' ? (
               automationFormOpen ? (

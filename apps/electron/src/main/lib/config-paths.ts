@@ -223,6 +223,23 @@ export function getAttachmentsDir(): string {
 }
 
 /**
+ * 获取 Copis 专有的 DSH 运行时主目录 ($DSH_HOME)
+ *
+ * 默认位于 ~/.copis/dsh/ (开发态 ~/.copis-dev/dsh/)。
+ * 如果目录不存在则自动创建。
+ */
+export function getDshHomeDir(): string {
+  const dir = join(getConfigDir(), 'dsh')
+
+  if (!existsSync(dir)) {
+    mkdirSync(dir, { recursive: true })
+    console.log(`[配置] 已创建 DSH 运行时主目录: ${dir}`)
+  }
+
+  return dir
+}
+
+/**
  * 获取指定附件分组的目录
  *
  * 如果目录不存在则自动创建。
@@ -890,3 +907,4 @@ export function getAutomationsPath(): string {
 export function getPlanningDatabasePath(): string {
   return join(getConfigDir(), 'planning.db')
 }
+

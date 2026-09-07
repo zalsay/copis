@@ -7,8 +7,8 @@
 
 import type { SDKMessage } from './agent'
 
-/** Agent runtime 实现。历史数据中的旧 runtime 值会在读取时归一化为 Pi。 */
-export type AgentRuntime = 'pi'
+/** Agent runtime 实现。支持 Pi Agent runtime 与 DeepSeek Harness (dsh) runtime。 */
+export type AgentRuntime = 'pi' | 'dsh'
 
 /** SDK 用户消息（队列消息注入用，匹配 SDK SDKUserMessage 结构） */
 export interface SDKUserMessageInput {

@@ -15,6 +15,7 @@ import { Loader2 } from 'lucide-react'
 import { currentAgentWorkspaceIdAtom, agentSettingsReadyAtom } from '@/atoms/agent-atoms'
 import { tabsAtom, activeTabIdAtom, openTab } from '@/atoms/tab-atoms'
 import { draftSessionIdsAtom } from '@/atoms/draft-session-atoms'
+import { appModeAtom } from '@/atoms/app-mode'
 import { useCreateSession } from '@/hooks/useCreateSession'
 import { isHttpApiBridgeActive } from '@/lib/http-api-bridge'
 import { WelcomeEmptyState } from './WelcomeEmptyState'
@@ -23,6 +24,7 @@ export function WelcomeView(): React.ReactElement {
   const currentWorkspaceId = useAtomValue(currentAgentWorkspaceIdAtom)
   const agentSettingsReady = useAtomValue(agentSettingsReadyAtom)
   const draftSessionIds = useAtomValue(draftSessionIdsAtom)
+  const appMode = useAtomValue(appModeAtom)
   const [tabs, setTabs] = useAtom(tabsAtom)
   const setActiveTabId = useSetAtom(activeTabIdAtom)
   const { createAgent } = useCreateSession()
@@ -34,6 +36,7 @@ export function WelcomeView(): React.ReactElement {
     tabs,
     draftSessionIds,
     currentWorkspaceId,
+    appMode,
     setTabs,
     setActiveTabId,
     createAgent,
@@ -42,6 +45,7 @@ export function WelcomeView(): React.ReactElement {
     tabs,
     draftSessionIds,
     currentWorkspaceId,
+    appMode,
     setTabs,
     setActiveTabId,
     createAgent,
@@ -53,27 +57,35 @@ export function WelcomeView(): React.ReactElement {
     // Agent 模式需等待 settings 就绪（workspaceId 等异步加载完成）。
     if (!agentSettingsReady) return
 
-    const currentMode = currentWorkspaceId ?? '__default__'
-    if (initRef.current === currentMode) return
-    initRef.current = currentMode
+    const currentKey = `${currentWorkspaceId ?? '__default__'}:${appMode}`
+    if (initRef.current === currentKey) return
+    initRef.current = currentKey
 
     // 从后端 IPC 拿最新数据，避免 HMR 导致 atoms 重置为空时重复创建会话
     window.electronAPI.listAgentSessions().then((freshSessions) => {
-        // 如果 mode 已切换，丢弃过期回调
-        if (initRef.current !== currentMode) return
+        // 如果 key 已切换，丢弃过期回调
+        if (initRef.current !== currentKey) return
         const {
           tabs: currentTabs,
           draftSessionIds: currentDrafts,
           currentWorkspaceId: currentWs,
+          appMode: targetAppMode,
           setTabs: currentSetTabs,
           setActiveTabId: currentSetActiveTabId,
           createAgent: currentCreateAgent,
         } = latestRef.current
 
-        // Agent 模式：按当前工作区过滤
+        const isModeMatch = (s: any): boolean => {
+          if (targetAppMode === 'creation') {
+            return s.mode === 'creation' || s.agentRuntime === 'dsh'
+          }
+          return s.mode !== 'creation' && s.agentRuntime !== 'dsh'
+        }
+
+        // 按当前工作区和运行模式过滤
         // 1. 优先复用现有非归档、非 draft 会话
         const existing = freshSessions.find(
-          (s) => !s.archived && s.workspaceId === currentWs && !currentDrafts.has(s.id),
+          (s) => !s.archived && s.workspaceId === currentWs && !currentDrafts.has(s.id) && isModeMatch(s),
         )
         if (existing) {
           const result = openTab(currentTabs, {
@@ -85,9 +97,9 @@ export function WelcomeView(): React.ReactElement {
           currentSetActiveTabId(result.activeTabId)
           return
         }
-        // 2. 检查是否已有 draft 会话（当前工作区），复用而不是创建新的
+        // 2. 检查是否已有 draft 会话（当前工作区且模式匹配），复用而不是创建新的
         const draftSession = freshSessions.find(
-          (s) => !s.archived && s.workspaceId === currentWs && currentDrafts.has(s.id),
+          (s) => !s.archived && s.workspaceId === currentWs && currentDrafts.has(s.id) && isModeMatch(s),
         )
         if (draftSession) {
           const result = openTab(currentTabs, {
@@ -99,10 +111,14 @@ export function WelcomeView(): React.ReactElement {
           currentSetActiveTabId(result.activeTabId)
           return
         }
-        // 3. 没有任何会话时才创建新的 draft 会话
-        currentCreateAgent({ draft: true })
+        // 3. 没有任何会话时才创建对应模式的新 draft 会话
+        currentCreateAgent({
+          draft: true,
+          mode: targetAppMode,
+          agentRuntime: targetAppMode === 'creation' ? 'dsh' : 'pi',
+        })
     }).catch(console.error)
-  }, [agentSettingsReady, currentWorkspaceId])
+  }, [agentSettingsReady, currentWorkspaceId, appMode])
 
   if (isHttpApiBridgeActive()) return <WelcomeEmptyState />
 

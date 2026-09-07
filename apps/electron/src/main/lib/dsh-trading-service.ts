@@ -66,8 +66,8 @@ export async function startDshTradingServer(options: {
     return { ...state.status }
   }
 
-  const dshCmd = options.dshCommand || resolveDshCommand()
-  const dshNode = options.dshNode || resolveDshNode()
+  const dshCmd = options.dshCommand !== undefined ? options.dshCommand : resolveDshCommand()
+  const dshNode = options.dshNode !== undefined ? options.dshNode : resolveDshNode()
 
   if (!dshCmd) {
     state.status = {

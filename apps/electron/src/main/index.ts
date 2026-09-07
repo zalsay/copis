@@ -67,6 +67,7 @@ function registerProtocolsAndHandlers(): void {
 
 
 import { getSettings, updateSettings } from './lib/settings-service'
+import { syncNativeThemeSource } from './lib/theme-sync'
 import { handleCopisFileRequest } from './lib/local-file-protocol'
 import { cleanupLegacyChatData } from './lib/legacy-chat-cleanup'
 
@@ -100,9 +101,12 @@ import { ensureDefaultWorkspace, ensureInvestmentWorkspace, upgradeDefaultSkills
 import { hasActiveAgentSessions, stopAllAgents, cleanupAgentRuntimeResources } from './lib/agent-service'
 import { disposePiMcpConnections } from './lib/adapters/pi-mcp-tools'
 import { markRunningDelegationsAsInterrupted } from './lib/agent-session-manager'
+import { stopDshTradingServer } from './lib/dsh-trading-service'
+import { stopDshCordisServer, registerDshCordisWebSessionHeaders } from './lib/dsh-cordis-service'
 import { configureUpdater, initAutoUpdater, cleanupUpdater } from './lib/updater/auto-updater'
 import { startWorkspaceWatcher, stopWorkspaceWatcher } from './lib/workspace-watcher'
 import { disposeWebTabs, saveWebTabsSession, setWebTabHostWindow } from './lib/web-tab-manager'
+import { setDshHostWindow, destroyDshView } from './lib/dsh-view-manager'
 import { stopAllBrowserWorkflowRecordings } from './lib/browser-workflow-service'
 import { stopAllBrowserWorkflowRuns } from './lib/browser-workflow-runner'
 import { startAgentToolsWatcher, stopAgentToolsWatcher } from './lib/agent-tools-watcher'
@@ -360,7 +364,9 @@ function createWindow(): void {
     trafficLightPosition: { x: 18, y: 10 },
   })
 
-  const savedState = getSettings().mainWindowState
+  const currentSettings = getSettings()
+  syncNativeThemeSource(currentSettings.themeMode, currentSettings.themeStyle)
+  const savedState = currentSettings.mainWindowState
   const initialBounds = savedState
     ? { width: savedState.width, height: savedState.height, x: savedState.x, y: savedState.y }
     : { width: 1400, height: 900 }
@@ -381,6 +387,7 @@ function createWindow(): void {
     ...titleBarOptions,
   })
   setWebTabHostWindow(mainWindow)
+  setDshHostWindow(mainWindow)
   installWindowsZoomInFallback(mainWindow)
 
   // Load the renderer
@@ -549,6 +556,9 @@ async function bootstrap(): Promise<void> {
 
   // Register IPC handlers
   registerIpcHandlers()
+
+  // 注册 DSH Cordis 创造模式内嵌 Web Session 请求头拦截器
+  safeRun('registerDshCordisWebSessionHeaders', registerDshCordisWebSessionHeaders)
 
   // 收敛上次退出时遗留的运行中委派子会话（内存态丢失，无法续跑）
   safeRun('markRunningDelegationsAsInterrupted', markRunningDelegationsAsInterrupted)
@@ -732,6 +742,10 @@ app.on('before-quit', (event) => {
 
   // 释放 Pi runtime 资源
   cleanupAgentRuntimeResources()
+  // 停止 DSH 创造模式与股市服务
+  destroyDshView()
+  stopDshCordisServer()
+  stopDshTradingServer()
   // 清理更新器定时器
   cleanupUpdater()
   // 停止工作区文件监听

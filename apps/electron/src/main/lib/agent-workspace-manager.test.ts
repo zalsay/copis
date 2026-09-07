@@ -618,3 +618,23 @@ describe('Agent 工作区 Skill 扫描', () => {
     expect(skills.map((skill) => skill.slug).sort()).toEqual(expectedSlugs)
   })
 })
+
+describe('工作区可读根目录与写入根隔离', () => {
+  test('Given 任意工作区 When 获取可读根目录 Then 仅包含工作区来源根与项目根且不泄露应用源码', () => {
+    const workspace = {
+      slug: 'sample-project',
+      projectRootPath: join(tempHome, 'sample-project'),
+      projectPath: join(tempHome, 'sample-project', 'project'),
+    }
+    const readableRoots = manager.getAgentWorkspaceReadableRoots(workspace)
+
+    expect(readableRoots).toContain(workspace.projectRootPath)
+    expect(readableRoots).toContain(workspace.projectPath)
+    expect(readableRoots.length).toBe(2)
+
+    // 验证写入根与来源根保持安全隔离
+    const writableRoot = manager.getAgentWorkspaceWritableRoot(workspace)
+    expect(writableRoot).toBe(join(workspace.projectRootPath, 'copis'))
+  })
+})
+

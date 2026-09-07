@@ -1,0 +1,27 @@
+{
+  "name": "@copis-ext/dsh-template-plugin",
+  "version": "0.1.0",
+  "description": "Template client plugin for DeepSeek Harness / Copis Creation Mode",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    "./client": "./lib/client.js",
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "client": {
+      "platform": "web"
+    }
+  },
+  "scripts": {
+    "build": "bun run build.mjs"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.2",
+    "react": "^18.2.0"
+  },
+  "devDependencies": {
+    "@types/react": "~18.3.1",
+    "typescript": "^5.0.0"
+  }
+}

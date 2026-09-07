@@ -264,6 +264,20 @@ impl PiWorkerManager {
         proxy.proxy_internal(request_body)
     }
 
+    /// 为 DSH 进程签发长期的本机 Working 模型 capability。
+    pub fn issue_dsh_working_model_capability(
+        &self,
+        reasoning_effort: Option<&str>,
+    ) -> Result<String, WorkingModelError> {
+        let proxy = self
+            .working_model_proxy
+            .lock()
+            .unwrap()
+            .clone()
+            .ok_or(WorkingModelError::Unauthorized)?;
+        proxy.issue_dsh_capability(reasoning_effort)
+    }
+
     pub fn session_status(&self, session_id: &str) -> Option<PiWorkerStatusSnapshot> {
         self.worker_statuses
             .lock()

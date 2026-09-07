@@ -451,6 +451,12 @@ struct HttpRequest {
     body: Vec<u8>,
 }
 
+#[derive(Deserialize)]
+struct DshModelCapabilityInput {
+    #[serde(rename = "reasoningEffort")]
+    reasoning_effort: Option<String>,
+}
+
 struct BufferedReader<'a> {
     stream: &'a mut TcpStream,
     buffer: Vec<u8>,
@@ -1875,6 +1881,31 @@ fn handle_connection(
                     );
                     send_json_response(&mut stream, status, &body, origin);
                 }
+            }
+        }
+        let _ = stream.shutdown(Shutdown::Both);
+        return;
+    }
+
+    if request.method == "POST" && path == "/api/internal/dsh-model-capability" {
+        if !is_internal_token_valid(&request) {
+            send_json_response(
+                &mut stream,
+                401,
+                r#"{"error":"DSH 模型 capability 未授权","code":"unauthorized"}"#,
+                origin,
+            );
+        } else {
+            let input = serde_json::from_slice::<DshModelCapabilityInput>(&request.body)
+                .unwrap_or(DshModelCapabilityInput { reasoning_effort: None });
+            match workers.issue_dsh_working_model_capability(input.reasoning_effort.as_deref()) {
+                Ok(capability) => send_json_response(
+                    &mut stream,
+                    200,
+                    &json!({ "capability": capability }).to_string(),
+                    origin,
+                ),
+                Err(error) => send_working_model_error(&mut stream, error, origin),
             }
         }
         let _ = stream.shutdown(Shutdown::Both);

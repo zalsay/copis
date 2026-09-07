@@ -246,7 +246,12 @@ export function TabSwitcher(): ReactElement | null {
         return next
       })
 
-      setAppMode('agent')
+      const targetSession = agentSessions.find((s) => s.id === candidate.id)
+      if (targetSession?.mode === 'creation' || targetSession?.agentRuntime === 'dsh') {
+        setAppMode('creation')
+      } else {
+        setAppMode('agent')
+      }
       setCurrentAgentSessionId(candidate.id)
 
       setUnviewedCompleted((prev) => {

@@ -36,12 +36,11 @@ import { cn } from '@/lib/utils'
 import {
   COPIS_WORKING_CHANNEL_ID,
   COPIS_WORKING_DEEPSEEK_CHANNEL_ID,
-  COPIS_WORKING_DEEPSEEK_FAST_MODEL_ID,
-  COPIS_WORKING_DEEPSEEK_PRO_MODEL_ID,
   COPIS_WORKING_EXPERT_MODEL_ID,
   COPIS_WORKING_FAST_MODEL_ID,
   COPIS_WORKING_GLOBAL_MODEL_ID,
   COPIS_WORKING_ZHIPU_CHANNEL_ID,
+  getCopisWorkingModelDescription,
   workingModelCatalogToOptions,
 } from '@copis/shared'
 import type { ModelOption, ProviderType, WorkingCustomModelOption, WorkingModelLatencyMap } from '@copis/shared'
@@ -88,19 +87,7 @@ function groupModelOptions(
 }
 
 function getModelDescription(option: Pick<ModelOption, 'channelId' | 'modelId'>): string | undefined {
-  if (option.channelId === COPIS_WORKING_DEEPSEEK_CHANNEL_ID) {
-    if (option.modelId === COPIS_WORKING_DEEPSEEK_FAST_MODEL_ID) {
-      return 'v4 Flash，思考速度快，不支持图片识别'
-    }
-    if (option.modelId === COPIS_WORKING_DEEPSEEK_PRO_MODEL_ID) {
-      return 'v4Pro，DeepSeek 最强模型，不支持图片识别'
-    }
-  }
-  if (option.channelId !== COPIS_WORKING_CHANNEL_ID) return undefined
-  if (option.modelId === COPIS_WORKING_FAST_MODEL_ID) return '速度快，思考能力一般'
-  if (option.modelId === COPIS_WORKING_EXPERT_MODEL_ID) return '全球领先，知识面广，深度思考，消耗更多钻石'
-  if (option.modelId === COPIS_WORKING_GLOBAL_MODEL_ID) return '通晓世界知识，适合教育、探索等场景'
-  return undefined
+  return getCopisWorkingModelDescription(option.channelId, option.modelId)
 }
 
 function usesZhipuLogo(option: Pick<ModelOption, 'channelId' | 'provider'>): boolean {

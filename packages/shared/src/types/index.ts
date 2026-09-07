@@ -75,3 +75,6 @@ export * from './agent-mail'
 // 基金股市（美股、A 股、港股、基金）相关类型与 IPC 通道
 export * from './fund-stock'
 
+// DeepSeek Harness (dsh) 与 Cordis 模式相关类型与 IPC 通道
+export * from './dsh'
+

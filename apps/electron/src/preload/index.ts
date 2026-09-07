@@ -6,7 +6,7 @@
  */
 
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
-import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, ATTACHMENT_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, FUNCTIONAL_MODULE_IPC_CHANNELS, PROXY_IPC_CHANNELS, AGENT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, WECHAT_IPC_CHANNELS, AGENT_MAIL_IPC_CHANNELS, AUTOMATION_IPC_CHANNELS, PLANNING_IPC_CHANNELS, WORKING_IPC_CHANNELS, WEB_IPC_CHANNELS, BROWSER_WORKFLOW_IPC_CHANNELS, MEMORY_IPC_CHANNELS, FUND_STOCK_IPC_CHANNELS } from '@copis/shared'
+import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, ATTACHMENT_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, FUNCTIONAL_MODULE_IPC_CHANNELS, PROXY_IPC_CHANNELS, AGENT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, WECHAT_IPC_CHANNELS, AGENT_MAIL_IPC_CHANNELS, AUTOMATION_IPC_CHANNELS, PLANNING_IPC_CHANNELS, WORKING_IPC_CHANNELS, WEB_IPC_CHANNELS, BROWSER_WORKFLOW_IPC_CHANNELS, MEMORY_IPC_CHANNELS, FUND_STOCK_IPC_CHANNELS, DSH_CORDIS_IPC_CHANNELS } from '@copis/shared'
 import { USER_PROFILE_IPC_CHANNELS, SETTINGS_IPC_CHANNELS, SCRATCH_PAD_IPC_CHANNELS, APP_ICON_IPC_CHANNELS, DOCK_BADGE_IPC_CHANNELS, STORAGE_IPC_CHANNELS } from '../types'
 import { agentHttpStreamClient } from '../renderer/lib/agent-http-stream'
 import { COPIS_HTTP_API_HOST } from '@copis/shared/config'
@@ -183,6 +183,9 @@ import type {
   FundStockSearchResult,
   WatchlistItem,
   FundStockTerminalStatus,
+  DshCordisStatus,
+  DshViewBounds,
+  DshClientEvent,
 } from '@copis/shared'
 
 const HTTP_API_WEB_TOKEN_ARGUMENT_PREFIX = '--copis-http-api-web-token='
@@ -570,7 +573,7 @@ export interface ElectronAPI {
   listAgentSessions: () => Promise<AgentSessionMeta[]>
 
   /** 创建 Agent 会话 */
-  createAgentSession: (title?: string, channelId?: string, workspaceId?: string, modelId?: string, expertTeamSession?: AgentExpertTeamSession, expertTeamSetup?: boolean) => Promise<AgentSessionMeta>
+  createAgentSession: (title?: string, channelId?: string, workspaceId?: string, modelId?: string, expertTeamSession?: AgentExpertTeamSession, expertTeamSetup?: boolean, options?: { agentRuntime?: AgentRuntime; mode?: 'agent' | 'creation' }) => Promise<AgentSessionMeta>
 
   /** 创建基于父 Agent 历史的右侧问答子会话 */
   createAgentSideQuestionSession: (input: CreateAgentSideQuestionSessionInput) => Promise<AgentSideQuestionSessionResult>
@@ -1274,6 +1277,18 @@ export interface ElectronAPI {
     startTerminal: () => Promise<FundStockTerminalStatus>
     stopTerminal: () => Promise<FundStockTerminalStatus>
   }
+
+  // ===== DSH 创造模式 Cordis Web =====
+  dshCordis: {
+    getStatus: () => Promise<DshCordisStatus>
+    start: () => Promise<DshCordisStatus>
+    stop: () => Promise<DshCordisStatus>
+    reload: () => Promise<DshCordisStatus>
+    onStatusChange: (callback: (status: DshCordisStatus) => void) => () => void
+    updateViewBounds: (bounds: DshViewBounds, url?: string) => Promise<boolean>
+    dispatchToClient: (payload: unknown) => Promise<boolean>
+    onClientEvent: (callback: (event: DshClientEvent) => void) => () => void
+  }
 }
 
 
@@ -1676,8 +1691,8 @@ const electronAPI: ElectronAPI = {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.LIST_SESSIONS)
   },
 
-  createAgentSession: (title?: string, channelId?: string, workspaceId?: string, modelId?: string, expertTeamSession?: AgentExpertTeamSession, expertTeamSetup?: boolean) => {
-    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.CREATE_SESSION, title, channelId, workspaceId, modelId, expertTeamSession, expertTeamSetup)
+  createAgentSession: (title?: string, channelId?: string, workspaceId?: string, modelId?: string, expertTeamSession?: AgentExpertTeamSession, expertTeamSetup?: boolean, options?: { agentRuntime?: AgentRuntime; mode?: 'agent' | 'creation' }) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.CREATE_SESSION, title, channelId, workspaceId, modelId, expertTeamSession, expertTeamSetup, options)
   },
 
   createAgentSideQuestionSession: (input: CreateAgentSideQuestionSessionInput) => {
@@ -2775,6 +2790,36 @@ const electronAPI: ElectronAPI = {
       ipcRenderer.invoke(FUND_STOCK_IPC_CHANNELS.START_TERMINAL),
     stopTerminal: (): Promise<FundStockTerminalStatus> =>
       ipcRenderer.invoke(FUND_STOCK_IPC_CHANNELS.STOP_TERMINAL),
+  },
+
+  // ===== DSH 创造模式 Cordis Web =====
+  dshCordis: {
+    getStatus: (): Promise<DshCordisStatus> =>
+      ipcRenderer.invoke(DSH_CORDIS_IPC_CHANNELS.GET_STATUS),
+    start: (): Promise<DshCordisStatus> =>
+      ipcRenderer.invoke(DSH_CORDIS_IPC_CHANNELS.START),
+    stop: (): Promise<DshCordisStatus> =>
+      ipcRenderer.invoke(DSH_CORDIS_IPC_CHANNELS.STOP),
+    reload: (): Promise<DshCordisStatus> =>
+      ipcRenderer.invoke(DSH_CORDIS_IPC_CHANNELS.RELOAD),
+    onStatusChange: (callback: (status: DshCordisStatus) => void): (() => void) => {
+      const listener = (_: any, status: DshCordisStatus) => callback(status)
+      ipcRenderer.on(DSH_CORDIS_IPC_CHANNELS.ON_STATUS_CHANGE, listener)
+      return () => {
+        ipcRenderer.removeListener(DSH_CORDIS_IPC_CHANNELS.ON_STATUS_CHANGE, listener)
+      }
+    },
+    updateViewBounds: (bounds: DshViewBounds, url?: string): Promise<boolean> =>
+      ipcRenderer.invoke(DSH_CORDIS_IPC_CHANNELS.UPDATE_VIEW_BOUNDS, bounds, url),
+    dispatchToClient: (payload: unknown): Promise<boolean> =>
+      ipcRenderer.invoke(DSH_CORDIS_IPC_CHANNELS.DISPATCH_EVENT_TO_CLIENT, payload),
+    onClientEvent: (callback: (event: DshClientEvent) => void): (() => void) => {
+      const listener = (_: any, event: DshClientEvent) => callback(event)
+      ipcRenderer.on(DSH_CORDIS_IPC_CHANNELS.CLIENT_EVENT, listener)
+      return () => {
+        ipcRenderer.removeListener(DSH_CORDIS_IPC_CHANNELS.CLIENT_EVENT, listener)
+      }
+    },
   },
 }
 

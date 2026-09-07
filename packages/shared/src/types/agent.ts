@@ -685,8 +685,10 @@ export interface AgentSessionMeta {
   piSessionFile?: string
   /** Copis assistant UI UUID 到 Pi 树状 session entry ID 的持久映射。 */
   piEntryBindings?: Record<string, string>
-  /** 当前会话使用的 Agent runtime；历史会话会在读取时归一化为 Pi。 */
+  /** 当前会话使用的 Agent runtime：'pi' | 'dsh'。 */
   agentRuntime?: import('./agent-provider').AgentRuntime
+  /** 会话模式：标准 Agent 模式或 DSH 创造模式 */
+  mode?: 'agent' | 'creation'
   /** ChatGPT Codex Fast Mode 开关；仅 Pi + ChatGPT OAuth 的受支持模型实际生效。 */
   codexFastMode?: boolean
   /** Copis Working fast/expert 模式；用于本地 Agent 的运行上下文。 */
@@ -1014,8 +1016,10 @@ export function resolveBuiltinSkillCategory(skill: Pick<SkillMeta, 'slug'> & { c
     return '投资'
   }
 
-  // 办公分类
+  // 办公与效率工具分类
   if (
+    explicit === '效率工具' ||
+    skill.slug === 'workspace-builder' ||
     skill.slug === 'officecli' ||
     skill.slug === 'dashi-ppt' ||
     skill.slug === 'pdf' ||

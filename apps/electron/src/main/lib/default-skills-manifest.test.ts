@@ -58,8 +58,8 @@ describe('默认 Skills 清单', () => {
     expect(missingDisplayNames).toEqual([])
   })
 
-  test('每个保留的默认 Skill 都有合法的分类（Copis 功能、办公、投资、其他）', () => {
-    const validCategories = new Set(['Copis 功能', '办公', '投资', '其他'])
+  test('每个保留的默认 Skill 都有合法的分类（Copis 功能、办公、投资、效率工具、其他）', () => {
+    const validCategories = new Set(['Copis 功能', '办公', '投资', '效率工具', '其他'])
     const invalidSkills = bundledSkillSlugs().filter((slug) => {
       const cat = readFrontmatter(slug).get('category')
       return !cat || !validCategories.has(cat)
@@ -324,6 +324,24 @@ describe('默认 Skills 清单', () => {
       expect(fm.get('version')).toBe('1.0.0')
       expect(fm.get('description')?.length).toBeGreaterThan(10)
     }
+  })
+
+  test('个人工作台搭建师 workspace-builder 包含前端构建元数据与核心设计铁律', () => {
+    const bundled = new Set(bundledSkillSlugs())
+    expect(bundled.has('workspace-builder')).toBe(true)
+
+    const fm = readFrontmatter('workspace-builder')
+    expect(fm.get('name')).toBe('workspace-builder')
+    expect(fm.get('displayName')).toBe('个人工作台搭建师')
+    expect(fm.get('group')).toBe('前端构建')
+    expect(fm.get('category')).toBe('效率工具')
+    expect(fm.get('version')?.replace(/^['"]|['"]$/g, '')).toBe('1.0.0')
+
+    const content = readFileSync(join(DEFAULT_SKILLS_DIR, 'workspace-builder', 'SKILL.md'), 'utf8')
+    expect(content).toContain('单文件零依赖')
+    expect(content).toContain('今日待办')
+    expect(content).toContain('DAG 准则')
+    expect(content).toContain('refreshAll()')
   })
 })
 

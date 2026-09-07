@@ -25,7 +25,7 @@ import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { getUserProfile } from './user-profile-service'
 import { getAgentWorkspaceBySlug, getAgentWorkspaceContextDir, getAgentWorkspaceWritableRoot, getProjectFilesPath, getWorkspaceMcpConfig, listAgentWorkspacesByUpdatedAt } from './agent-workspace-manager'
-import { getConfigDirName } from './config-paths'
+import { getConfigDirName, getDshHomeDir } from './config-paths'
 import { buildGitAttributionPromptSection, isGitAttributionEnabled } from './agent-git-attribution'
 import { getSettings } from './settings-service'
 
@@ -121,7 +121,7 @@ export function buildSystemPrompt(ctx: SystemPromptContext): string {
   const profile = getUserProfile()
   const userName = profile.userName || '用户'
   const agentRuntime = ctx.agentRuntime ?? 'pi'
-  const runtimeName = 'Pi Agent SDK'
+  const runtimeName = agentRuntime === 'dsh' ? 'DeepSeek Harness (创造模式)' : 'Pi Agent SDK'
   const currentModelId = ctx.currentModelId?.trim()
   const piDelegationModelInstruction = currentModelId
     ? `**派生子会话的模型**：当前 Agent 选择的模型 ID 是 \`${currentModelId}\`。调用 collaboration 派生子会话时，如果用户没有明确指定目标模型，必须在工具参数中显式传入 \`modelId: "${currentModelId}"\`，复用当前模型；不要自行从可用模型中挑选。只有用户明确要求其他模型时，才先查询可用模型并传入其指定的 \`modelId\`。`
@@ -199,6 +199,23 @@ export function buildSystemPrompt(ctx: SystemPromptContext): string {
 - **组织信息按需读取**：仅当创建、筛选或重新分组时读取 Todo 分组和标签；创建或修改日程时确认目标工作区。日程不再使用分组，标签仍可跨 Todo 与日程复用。
 - **提醒只服务明确时点**：用户提出“提醒我”且有具体时点时，创建关联提醒；提醒到期后用户可以完成 Todo、推迟或确认关闭。不要用 Automation 替代个人提醒。
 - **透明但不打断**：完成一次重要的创建、更新或完成操作后，在回复中简短说明；不要为了例行读取反复向用户报告。`)
+  } else if (agentRuntime === 'dsh') {
+    const dshHome = getDshHomeDir()
+    sections.push(`## DSH Runtime（创造模式 / Cordis 模式）
+
+当前会话运行在 DeepSeek Harness (DSH) 运行底座上（创造模式 · Cordis 模式）。你具备深度程序化工具调用能力与 Cordis 微内核自进化能力：
+
+- **底层架构**：DSH 采用 Cordis 微内核架构。运行时服务、工具与 Web 界面均作为模块化插件进行装配。当前环境启用了 \`patchReload: 'live'\` 与 \`dsh-client-hmr\`，支持微内核配置与 Web 界面的无缝热重载（无需整页刷新）。
+- **DSH 运行时环境**：
+  - DSH 主目录 ($DSH_HOME)：\`${dshHome}\`
+  - 创造模式 Profile 目录：\`${dshHome}/profiles/copis/\`（配置文件包含 \`package.json\` 与 \`cordis.patch.yml\`）
+- **Web 界面自进化与自定义 (自进化生态)**：
+  - 当用户提出需要修改、自定义、扩展创造模式的 DSH Web 界面（例如增加右侧详情面板、在输入框底部添加操作条、注入全局浮层或定制侧边栏等）时，请参考内置技能 \`dsh-web-evolution\`；
+  - **核心插槽 (Slots)**：包括 \`details\`（右侧详情面板）、\`conversation.composer.dock\`（输入框底部停靠区）、\`shell.overlay\`（全局浮层）、\`conversation.chat.turnTail\`（轮次产出文件栏）等；
+  - **开发规范**：严禁直接修改官方预装的 \`@deepseek-ai/*\` 基础包。所有自定义扩展应作为独立的树外插件（独立包）编写在工作区或 \`${dshHome}/profiles/copis/plugins/\` 中，通过导出 \`apply(ctx)\` 使用 \`ctx.slots.inject\` 注册组件，使用内置 \`build.mjs\` 生成 \`lib/client.js\`，并通过 \`cordis.patch.yml\` 挂载并热更新生效；
+  - **色彩与主题**：严格使用系统语义 CSS 变量（如 \`--creation-ui-primary\`、\`--ui-primary\`、\`--dsw-alias-*\`），确保在浅色与深色主题下自适应。
+- **程序化编排**：优先编写高内聚脚本或代码批量完成复杂、多步骤的文件处理、数据聚合或分析任务，减少碎步往返。
+- 坚持高效率输出：中间过程在本地环境内自洽运算，仅输出核心技术决策、结构化结论与交付物。`)
   }
 
   if (ctx.currentModelId === COPIS_WORKING_DEEPSEEK_FAST_MODEL_ID) {

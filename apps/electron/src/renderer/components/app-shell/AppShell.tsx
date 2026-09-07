@@ -216,25 +216,29 @@ export function AppShell({ contextValue }: AppShellProps): React.ReactElement {
             )}
             aria-hidden={workingSettingsOpen || !!activeWebTabId}
           >
-            {/* 左侧边栏：可折叠，可拖拽调整宽度 */}
-            <div className={cn(isClassic ? 'p-2 pr-0' : '', 'relative z-[60] crt-sidebar')}>
-              <CopisWorkingSidebar width={clampedLeftSidebarWidth} noTransition={isDraggingLeftSidebar} />
-              {/* 侧边栏展开时显示拖拽手柄，折叠态隐藏 */}
-              {!sidebarCollapsed && (
-                <div
-                  className={cn(
-                    'absolute right-0 top-0 bottom-0 w-4 translate-x-1/2 cursor-col-resize hover:bg-primary/5 active:bg-primary/50 transition-colors z-20'
+            {/* 左侧边栏：创造模式完全由 dsh web 原生侧边栏承载全部功能，避免外层嵌套与割裂；Agent 模式下正常渲染 Copis 侧边栏 */}
+            {appMode !== 'creation' && (
+              <>
+                <div className={cn(isClassic ? 'p-2 pr-0' : '', 'relative z-[60] crt-sidebar')}>
+                  <CopisWorkingSidebar width={clampedLeftSidebarWidth} noTransition={isDraggingLeftSidebar} />
+                  {/* 侧边栏展开时显示拖拽手柄，折叠态隐藏 */}
+                  {!sidebarCollapsed && (
+                    <div
+                      className={cn(
+                        'absolute right-0 top-0 bottom-0 w-4 translate-x-1/2 cursor-col-resize hover:bg-primary/5 active:bg-primary/50 transition-colors z-20'
+                      )}
+                      onMouseDown={handleLeftSidebarMouseDown}
+                    />
                   )}
-                  onMouseDown={handleLeftSidebarMouseDown}
-                />
-              )}
-            </div>
-            {!isClassic && (
-              <div aria-hidden="true" className="relative z-[61] w-px flex-shrink-0 bg-border/80 dark:bg-border/70" />
+                </div>
+                {!isClassic && (
+                  <div aria-hidden="true" className="relative z-[61] w-px flex-shrink-0 bg-border/80 dark:bg-border/70" />
+                )}
+              </>
             )}
 
             {/* 中间容器：relative z-[60] 使其在 z-50 拖动区域之上 */}
-            <div className={cn('flex-1 min-w-0 relative z-[60]', isClassic && 'p-2')}>
+            <div className={cn('flex-1 min-w-0 relative z-[60]', isClassic && appMode !== 'creation' && 'p-2')}>
               {/* 主内容区域（TabBar + TabContent） */}
               <MainArea />
             </div>

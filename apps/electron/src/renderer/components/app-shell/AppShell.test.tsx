@@ -5,6 +5,8 @@ import { Provider, createStore } from 'jotai'
 import { activeWebTabIdAtom } from '@/atoms/web-tabs'
 import { workingAuthStateAtom, workingSettingsOpenAtom, workingVipStatusAtom } from '@/atoms/working-atoms'
 import { workingPaymentStateAtom } from '@/atoms/working-payment-atoms'
+import { appModeAtom } from '@/atoms/app-mode'
+import { activeViewAtom } from '@/atoms/active-view'
 
 mock.module('./CopisWorkingSidebar', () => ({
   CopisWorkingSidebar: () => <div data-testid="sidebar" />,
@@ -116,6 +118,45 @@ describe('AppShell 左侧主菜单栏宽度契约', () => {
     const { leftSidebarWidthAtom } = await import('@/atoms/sidebar-atoms')
     const store = createStore()
     expect(store.get(leftSidebarWidthAtom)).toBe(240)
+  })
+})
+
+describe('AppShell 模式自适应布局', () => {
+  test('Given appMode 为 creation 且 activeView 为 conversations When 渲染 AppShell Then 外层侧边栏隐藏避免与 dsh 内置菜单双层嵌套', () => {
+    const store = createStore()
+    store.set(appModeAtom, 'creation')
+    store.set(activeViewAtom, 'conversations')
+    const html = renderToStaticMarkup(
+      <Provider store={store}>
+        <AppShell contextValue={{}} />
+      </Provider>,
+    )
+    expect(html).not.toContain('data-testid="sidebar"')
+    expect(html).toContain('data-testid="main-area"')
+  })
+
+  test('Given appMode 为 creation 无论 activeView 处于何种状态 When 渲染 AppShell Then 外层 Agent 侧边栏始终保持隐藏杜绝割裂跳出', () => {
+    const store = createStore()
+    store.set(appModeAtom, 'creation')
+    store.set(activeViewAtom, 'memory')
+    const html = renderToStaticMarkup(
+      <Provider store={store}>
+        <AppShell contextValue={{}} />
+      </Provider>,
+    )
+    expect(html).not.toContain('data-testid="sidebar"')
+    expect(html).toContain('data-testid="main-area"')
+  })
+
+  test('Given appMode 为 agent When 渲染 AppShell Then 外层侧边栏正常显示', () => {
+    const store = createStore()
+    store.set(appModeAtom, 'agent')
+    const html = renderToStaticMarkup(
+      <Provider store={store}>
+        <AppShell contextValue={{}} />
+      </Provider>,
+    )
+    expect(html).toContain('data-testid="sidebar"')
   })
 })
 

@@ -9,13 +9,15 @@ import {
   agentSessionsAtom,
   agentChannelIdAtom,
   agentModelIdAtom,
+  agentRuntimeAtom,
   currentAgentWorkspaceIdAtom,
 } from '@/atoms/agent-atoms'
 import { activeViewAtom } from '@/atoms/active-view'
+import { appModeAtom } from '@/atoms/app-mode'
 import { draftSessionIdsAtom } from '@/atoms/draft-session-atoms'
 import { useOpenSession } from './useOpenSession'
 import { isAgentSessionMeta, sanitizeAgentSessions } from '@/lib/agent-session-list'
-import type { AgentExpertTeamSession } from '@copis/shared'
+import type { AgentExpertTeamSession, AgentRuntime } from '@copis/shared'
 
 interface CreateSessionOptions {
   /** 覆盖默认标题。 */
@@ -32,6 +34,10 @@ interface CreateSessionOptions {
   expertTeamSession?: AgentExpertTeamSession
   /** 由「新专家团」入口创建的筹备会话：主理人 Agent 先询问需求，再组建专家团队。 */
   expertTeamSetup?: boolean
+  /** 会话模式：'agent' | 'creation' */
+  mode?: 'agent' | 'creation'
+  /** 运行时底座：'pi' | 'dsh' */
+  agentRuntime?: AgentRuntime
 }
 
 interface CreateSessionActions {
@@ -49,9 +55,14 @@ export function useCreateSession(): CreateSessionActions {
   const agentChannelId = useAtomValue(agentChannelIdAtom)
   const agentModelId = useAtomValue(agentModelIdAtom)
   const currentWorkspaceId = useAtomValue(currentAgentWorkspaceIdAtom)
+  const currentAppMode = useAtomValue(appModeAtom)
+  const currentAgentRuntime = useAtomValue(agentRuntimeAtom)
 
   const createAgent = async (options?: CreateSessionOptions): Promise<string | undefined> => {
     try {
+      const targetMode = options?.mode ?? currentAppMode
+      const targetRuntime = options?.agentRuntime ?? (targetMode === 'creation' ? 'dsh' : currentAgentRuntime)
+
       const meta = await window.electronAPI.createAgentSession(
         options?.title,
         options?.channelId ?? agentChannelId ?? undefined,
@@ -59,6 +70,7 @@ export function useCreateSession(): CreateSessionActions {
         options?.modelId ?? agentModelId ?? undefined,
         options?.expertTeamSession,
         options?.expertTeamSetup,
+        { agentRuntime: targetRuntime, mode: targetMode },
       )
       if (!isAgentSessionMeta(meta)) throw new Error('创建 Agent 会话未返回有效会话')
       setAgentSessions((prev) => [meta, ...sanitizeAgentSessions(prev)])

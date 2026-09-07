@@ -7,11 +7,12 @@
 
 import * as React from 'react'
 import { useAtomValue, useSetAtom } from 'jotai'
-import { Pencil, Check, X } from 'lucide-react'
+import { Pencil, Check, X, RefreshCw, Wand2 } from 'lucide-react'
 import { agentSessionsAtom } from '@/atoms/agent-atoms'
 import { tabsAtom, updateTabTitle } from '@/atoms/tab-atoms'
 import { replaceAgentSessionInFreshnessOrder } from '@/lib/agent-session-list'
 import { detectIsWindows, WINDOW_CONTROLS_INSET_RIGHT } from '@/lib/platform'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
 
 /** AgentHeader 属性接口 */
@@ -27,6 +28,8 @@ export function AgentHeader({ sessionId }: AgentHeaderProps): React.ReactElement
   const setTabs = useSetAtom(tabsAtom)
   const [editing, setEditing] = React.useState(false)
   const [editTitle, setEditTitle] = React.useState('')
+  const [isReloading, setIsReloading] = React.useState(false)
+  const [justReloaded, setJustReloaded] = React.useState(false)
   const inputRef = React.useRef<HTMLInputElement>(null)
 
   if (!session) return null
@@ -68,6 +71,21 @@ export function AgentHeader({ sessionId }: AgentHeaderProps): React.ReactElement
     }
   }
 
+  /** 触发 DSH Cordis 微内核插件热重载与自更新 */
+  const handleReload = async (): Promise<void> => {
+    if (isReloading) return
+    setIsReloading(true)
+    try {
+      await window.electronAPI.dshCordis.reload()
+      setJustReloaded(true)
+      setTimeout(() => setJustReloaded(false), 2000)
+    } catch (error) {
+      console.warn('[AgentHeader] DSH Cordis 热重载失败:', error)
+    } finally {
+      setIsReloading(false)
+    }
+  }
+
   return (
     <div className="relative z-[51] flex items-center gap-2 px-4 h-[48px]">
       {/* 拖拽层覆盖整行（Windows 避开右上角 WindowControls ~126px），编辑/标题按钮内部已自带 titlebar-no-drag。 */}
@@ -105,6 +123,37 @@ export function AgentHeader({ sessionId }: AgentHeaderProps): React.ReactElement
           <span className="truncate text-sm font-medium text-foreground">
             {session.title}
           </span>
+          {(session.mode === 'creation' || session.agentRuntime === 'dsh') && (
+            <div className="flex items-center gap-1.5 titlebar-no-drag">
+              <span className="flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20 select-none">
+                <span className="w-1.5 h-1.5 rounded-full bg-amber-500" />
+                创造模式 (DSH)
+              </span>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    type="button"
+                    onClick={handleReload}
+                    disabled={isReloading}
+                    className={cn(
+                      'flex items-center gap-1 px-1.5 py-0.5 rounded-md text-xs transition-colors',
+                      'text-muted-foreground hover:text-foreground hover:bg-muted/80',
+                      justReloaded && 'text-emerald-500 font-medium',
+                    )}
+                    aria-label="热重载与自更新"
+                  >
+                    <RefreshCw
+                      className={cn('size-3', isReloading && 'animate-spin text-amber-500')}
+                    />
+                    <span>{isReloading ? '重载中' : justReloaded ? '已热重载' : '自更新'}</span>
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom" sideOffset={4}>
+                  基于 DSH Cordis 微内核热重载 (Live Patch Reload)
+                </TooltipContent>
+              </Tooltip>
+            </div>
+          )}
           <button
             type="button"
             onMouseDown={(e) => e.preventDefault()}

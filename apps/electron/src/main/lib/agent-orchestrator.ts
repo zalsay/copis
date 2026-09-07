@@ -137,8 +137,8 @@ type RecoverableAgentQueryOptions = {
 
 // ===== 工具函数 =====
 
-function normalizeAgentRuntime(_value: unknown): AgentRuntime {
-  return 'pi'
+function normalizeAgentRuntime(value: unknown): AgentRuntime {
+  return value === 'dsh' ? 'dsh' : 'pi'
 }
 
 const EMPTY_RESPONSE_RESULT_SUBTYPE = 'empty_response'
@@ -1073,7 +1073,7 @@ export class AgentOrchestrator {
 
     const appSettings = getSettings()
     const previousAgentRuntime = normalizeAgentRuntime(sessionMeta?.agentRuntime)
-    const agentRuntime: AgentRuntime = 'pi'
+    const agentRuntime: AgentRuntime = normalizeAgentRuntime(sessionMeta?.agentRuntime)
     const workingModelId = workingClient
       ? channelId === COPIS_WORKING_CHANNEL_ID
         ? modelId === COPIS_WORKING_GLOBAL_MODEL_ID
@@ -1789,7 +1789,7 @@ export class AgentOrchestrator {
       }
 
       const queryOptions: PiAgentQueryOptions = {
-        agentRuntime: 'pi',
+        agentRuntime,
         sessionId,
         prompt: finalPrompt,
         model: selectedModelId,
