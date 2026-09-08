@@ -39,7 +39,7 @@ function clampRightPanelWidth(width: number): number {
 
 export const MIN_LEFT_SIDEBAR_WIDTH = 200
 export const MAX_LEFT_SIDEBAR_WIDTH = 400
-export const DEFAULT_LEFT_SIDEBAR_WIDTH = 240
+export const DEFAULT_LEFT_SIDEBAR_WIDTH = 260
 
 export function clampLeftSidebarWidth(width: number): number {
   return Math.max(MIN_LEFT_SIDEBAR_WIDTH, Math.min(MAX_LEFT_SIDEBAR_WIDTH, width))
@@ -87,8 +87,8 @@ export function AppShell({ contextValue }: AppShellProps): React.ReactElement {
   const clampedLeftSidebarWidth = clampLeftSidebarWidth(leftSidebarWidth)
 
   React.useEffect(() => {
-    // 若持久化存储为旧版的 300px 默认值，平滑自动收敛为更紧凑的 240px 默认值
-    if (leftSidebarWidth === 300) {
+    // 若持久化存储为旧版的 240px 或 300px 默认值，平滑自动收敛为保证 tab 内容不换行的 260px 默认值
+    if (leftSidebarWidth === 240 || leftSidebarWidth === 300) {
       setLeftSidebarWidth(DEFAULT_LEFT_SIDEBAR_WIDTH)
       return
     }

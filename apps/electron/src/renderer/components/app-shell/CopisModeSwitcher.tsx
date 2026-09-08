@@ -146,30 +146,30 @@ export function CopisModeSwitcher({
           role="radio"
           aria-checked={currentMode === 'agent'}
           className={cn(
-            'flex-1 flex items-center justify-center gap-1.5 py-1.5 px-2 rounded-lg text-xs font-medium transition-all duration-150',
+            'flex-1 min-w-0 flex items-center justify-center gap-1.5 py-1.5 px-2 rounded-lg text-xs font-medium transition-all duration-150 whitespace-nowrap',
             currentMode === 'agent'
               ? 'bg-card text-foreground shadow-sm font-semibold border border-border/40'
               : 'text-muted-foreground hover:text-foreground hover:bg-muted/40',
           )}
           onClick={() => handleSwitchMode('agent')}
         >
-          <Sparkles className="w-3.5 h-3.5 text-[var(--ui-primary)]" aria-hidden="true" />
-          <span>Agent 模式</span>
+          <Sparkles className="w-3.5 h-3.5 text-[var(--ui-primary)] shrink-0" aria-hidden="true" />
+          <span className="whitespace-nowrap truncate">Agent 模式</span>
         </button>
         <button
           type="button"
           role="radio"
           aria-checked={currentMode === 'creation'}
           className={cn(
-            'flex-1 flex items-center justify-center gap-1.5 py-1.5 px-2 rounded-lg text-xs font-medium transition-all duration-150',
+            'flex-1 min-w-0 flex items-center justify-center gap-1.5 py-1.5 px-2 rounded-lg text-xs font-medium transition-all duration-150 whitespace-nowrap',
             currentMode === 'creation'
               ? 'bg-card text-[var(--creation-ui-primary)] shadow-sm font-semibold border border-border/40'
               : 'text-muted-foreground hover:text-foreground hover:bg-muted/40',
           )}
           onClick={() => handleSwitchMode('creation')}
         >
-          <Lightbulb className="w-3.5 h-3.5 text-[var(--creation-ui-primary)]" aria-hidden="true" />
-          <span>创造模式</span>
+          <Lightbulb className="w-3.5 h-3.5 text-[var(--creation-ui-primary)] shrink-0" aria-hidden="true" />
+          <span className="whitespace-nowrap truncate">创造模式</span>
         </button>
       </div>
       <CopisCreationConfirmDialog

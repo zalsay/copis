@@ -130,4 +130,24 @@ describe('CopisModeSwitcher', () => {
     expect(creationHtml).toContain('bg-[var(--creation-ui-primary)]')
     expect(creationHtml).toContain('text-[var(--creation-ui-primary)]')
   })
+
+  test('Given 展开状态 When 渲染模式切换器 Then tab 按钮与文本具有 whitespace-nowrap 且图标具备 shrink-0 确保文字绝不换行', () => {
+    const store = createStore()
+    store.set(appModeAtom, 'agent')
+
+    const html = renderToStaticMarkup(
+      <Provider store={store}>
+        <TooltipProvider>
+          <CopisModeSwitcher isCollapsed={false} />
+        </TooltipProvider>
+      </Provider>
+    )
+
+    // 两个 tab 按钮都具备 whitespace-nowrap 和 min-w-0
+    expect(html).toContain('whitespace-nowrap')
+    expect(html).toContain('shrink-0')
+    // 文本 span 具备 whitespace-nowrap
+    expect(html).toContain('class="whitespace-nowrap truncate">Agent 模式</span>')
+    expect(html).toContain('class="whitespace-nowrap truncate">创造模式</span>')
+  })
 })
