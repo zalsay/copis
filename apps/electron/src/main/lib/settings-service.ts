@@ -7,8 +7,8 @@
 
 import { readFileSync, writeFileSync, existsSync } from 'node:fs'
 import { getSettingsPath } from './config-paths'
-import { DEFAULT_AGENT_RUNTIME, DEFAULT_INTERFACE_VARIANT, DEFAULT_MEMORY_POLICY, DEFAULT_THEME_MODE } from '../../types'
-import type { AppSettings } from '../../types'
+import { DEFAULT_AGENT_RUNTIME, DEFAULT_APP_MODE, DEFAULT_INTERFACE_VARIANT, DEFAULT_MEMORY_POLICY, DEFAULT_THEME_MODE } from '../../types'
+import type { AppMode, AppSettings } from '../../types'
 import { normalizeMemoryPolicy } from '@copis/shared'
 
 interface ElectronAppModule {
@@ -40,6 +40,7 @@ export function getSettings(): AppSettings {
 
   if (!existsSync(filePath)) {
     return {
+      appMode: DEFAULT_APP_MODE,
       themeMode: DEFAULT_THEME_MODE,
       interfaceVariant: DEFAULT_INTERFACE_VARIANT,
       onboardingCompleted: false,
@@ -52,6 +53,7 @@ export function getSettings(): AppSettings {
       visionRelay: { enabled: false },
       builtinMcpDisabledIds: [],
       pinnedDevProjects: {},
+      hiddenSidebarMenuItems: [],
       agentRuntime: DEFAULT_AGENT_RUNTIME,
       defaultMemoryPolicy: DEFAULT_MEMORY_POLICY,
       windowsShellPreference: 'auto',
@@ -70,6 +72,7 @@ export function getSettings(): AppSettings {
     const { experimentalAgentRuntimeSwitchEnabled: _legacyRuntimeSwitch, ...settings } = data
     return {
       ...settings,
+      appMode: data.appMode === 'creation' ? 'creation' : DEFAULT_APP_MODE,
       themeMode: data.themeMode || DEFAULT_THEME_MODE,
       interfaceVariant: data.interfaceVariant || DEFAULT_INTERFACE_VARIANT,
       onboardingCompleted: data.onboardingCompleted ?? false,
@@ -82,6 +85,7 @@ export function getSettings(): AppSettings {
       visionRelay: data.visionRelay ?? { enabled: false },
       builtinMcpDisabledIds: settings.builtinMcpDisabledIds ?? [],
       pinnedDevProjects: Array.isArray(settings.pinnedDevProjects) ? {} : settings.pinnedDevProjects ?? {},
+      hiddenSidebarMenuItems: Array.isArray(settings.hiddenSidebarMenuItems) ? settings.hiddenSidebarMenuItems : [],
       agentRuntime: data.agentRuntime === 'pi' ? 'pi' : DEFAULT_AGENT_RUNTIME,
       defaultMemoryPolicy: normalizeMemoryPolicy(data.defaultMemoryPolicy),
       windowsShellPreference: settings.windowsShellPreference ?? 'auto',
@@ -91,6 +95,7 @@ export function getSettings(): AppSettings {
   } catch (error) {
     console.error('[设置] 读取失败:', error)
     return {
+      appMode: DEFAULT_APP_MODE,
       themeMode: DEFAULT_THEME_MODE,
       interfaceVariant: DEFAULT_INTERFACE_VARIANT,
       onboardingCompleted: false,
@@ -103,6 +108,7 @@ export function getSettings(): AppSettings {
       visionRelay: { enabled: false },
       builtinMcpDisabledIds: [],
       pinnedDevProjects: {},
+      hiddenSidebarMenuItems: [],
       agentRuntime: DEFAULT_AGENT_RUNTIME,
       defaultMemoryPolicy: DEFAULT_MEMORY_POLICY,
       windowsShellPreference: 'auto',
@@ -119,9 +125,26 @@ export function getSettings(): AppSettings {
  */
 export function updateSettings(updates: Partial<AppSettings>): AppSettings {
   const current = getSettings()
+  const normalizedUpdates = { ...updates }
+  if (normalizedUpdates.appMode !== undefined) {
+    normalizedUpdates.appMode = normalizedUpdates.appMode === 'creation' ? 'creation' : 'agent'
+  }
+  const themeColorKeys: (keyof AppSettings)[] = [
+    'agentThemeColor',
+    'creationThemeColor',
+    'agentThemeColorLight',
+    'agentThemeColorDark',
+    'creationThemeColorLight',
+    'creationThemeColorDark',
+  ]
+  for (const key of themeColorKeys) {
+    if (normalizedUpdates[key] === '' || normalizedUpdates[key] === null) {
+      normalizedUpdates[key] = undefined as any
+    }
+  }
   const updated: AppSettings = {
     ...current,
-    ...updates,
+    ...normalizedUpdates,
   }
   const filePath = getSettingsPath()
 

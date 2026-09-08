@@ -45,5 +45,8 @@ export const setAppModeAndRuntimeAtom = atom(
     } else {
       set(agentRuntimeAtom, 'pi')
     }
+    if (typeof window !== 'undefined' && window.electronAPI?.updateSettings) {
+      window.electronAPI.updateSettings({ appMode: normalized }).catch(console.error)
+    }
   },
 )

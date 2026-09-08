@@ -15,15 +15,18 @@ import {
   HardDrive,
   HardDriveDownload,
   Info,
+  LayoutList,
   LogOut,
   MessageSquare,
   Mic,
   Palette,
   RefreshCw,
+  RotateCcw,
   Sparkles,
   SlidersHorizontal,
   UserRound,
 } from 'lucide-react'
+import { toast } from 'sonner'
 import type { LucideIcon } from 'lucide-react'
 import type {
   WorkingLedgerEntry,
@@ -44,11 +47,16 @@ import {
   workingPaymentNoticeAtom,
   workingPaymentRefreshAtom,
 } from '@/atoms/working-payment-atoms'
+import {
+  hiddenSidebarMenuItemsAtom,
+  showAllSidebarMenuItems,
+} from '@/atoms/sidebar-menu-atoms'
 import { activeTabIdAtom, openTab, tabsAtom, TUTORIAL_TAB_ID, TUTORIAL_TAB_TITLE } from '@/atoms/tab-atoms'
 import { leftSidebarWidthAtom } from '@/atoms/sidebar-atoms'
 import { hasUpdateAtom } from '@/atoms/updater'
 import { AboutUpdatesSettings } from '@/components/settings/AboutUpdatesSettings'
 import { AppearanceSettings } from '@/components/settings/AppearanceSettings'
+import { MenuManagementSettings } from '@/components/settings/MenuManagementSettings'
 import { MigrationSettings } from '@/components/settings/MigrationSettings'
 import { StorageSettings } from '@/components/settings/StorageSettings'
 import { VoiceInputSettings } from '@/components/settings/VoiceInputSettings'
@@ -129,6 +137,12 @@ export const WORKING_SETTINGS_MENU: readonly WorkingSettingsMenuItem[] = [
     icon: Palette,
   },
   {
+    id: 'menu-management',
+    label: '菜单管理',
+    description: '管理左侧边栏导航菜单项的显示与隐藏。',
+    icon: LayoutList,
+  },
+  {
     id: 'about',
     label: '关于/更新',
     description: '查看主程序与本地模块版本，并检查、下载和安装更新。',
@@ -191,6 +205,26 @@ export function CopisWorkingSettingsPanel({ onClose }: CopisWorkingSettingsPanel
     requestPaymentRefresh()
     await loadSettings()
   }, [loadSettings, requestPaymentRefresh])
+
+  const [hiddenMenuItems, setHiddenMenuItems] = useAtom(hiddenSidebarMenuItemsAtom)
+  const [resettingMenus, setResettingMenus] = React.useState(false)
+
+  const handleShowAllMenus = React.useCallback(async (): Promise<void> => {
+    if (hiddenMenuItems.length === 0) {
+      toast.info('所有菜单项已处于显示状态')
+      return
+    }
+    setResettingMenus(true)
+    try {
+      await showAllSidebarMenuItems(setHiddenMenuItems, hiddenMenuItems)
+      toast.success('已恢复全部菜单项显示')
+    } catch (error) {
+      console.error('[菜单管理] 恢复全部菜单失败:', error)
+      toast.error(error instanceof Error ? error.message : '恢复全部菜单显示失败')
+    } finally {
+      setResettingMenus(false)
+    }
+  }, [hiddenMenuItems, setHiddenMenuItems])
 
   React.useEffect(() => {
     void loadSettings()
@@ -338,10 +372,22 @@ export function CopisWorkingSettingsPanel({ onClose }: CopisWorkingSettingsPanel
                   <span>{checkingIn ? '签到中...' : settings?.hasCheckedIn ? '已签到' : '每日签到'}</span>
                 </button>
               )}
-              <button type="button" onClick={() => void handleRefresh()} disabled={loading || loggingOut}>
-                <RefreshCw aria-hidden="true" className={loading ? 'spinning' : undefined} />
-                <span>{loading ? '同步中...' : '刷新'}</span>
-              </button>
+              {activeSection === 'menu-management' ? (
+                <button
+                  type="button"
+                  onClick={() => void handleShowAllMenus()}
+                  disabled={hiddenMenuItems.length === 0 || resettingMenus}
+                  aria-label="全部显示菜单项"
+                >
+                  <RotateCcw aria-hidden="true" className={resettingMenus ? 'spinning' : undefined} />
+                  <span>全部显示</span>
+                </button>
+              ) : (
+                <button type="button" onClick={() => void handleRefresh()} disabled={loading || loggingOut}>
+                  <RefreshCw aria-hidden="true" className={loading ? 'spinning' : undefined} />
+                  <span>{loading ? '同步中...' : '刷新'}</span>
+                </button>
+              )}
               <button type="button" className="danger" onClick={() => void handleLogout()} disabled={loading || loggingOut}>
                 <LogOut aria-hidden="true" />
                 <span>{loggingOut ? '退出中...' : '退出'}</span>
@@ -386,6 +432,7 @@ export function CopisWorkingSettingsPanel({ onClose }: CopisWorkingSettingsPanel
             {activeSection === 'migration' && <MigrationSettings />}
             {activeSection === 'storage' && <StorageSettings />}
             {activeSection === 'appearance' && <AppearanceSettings />}
+            {activeSection === 'menu-management' && <MenuManagementSettings />}
             {activeSection === 'about' && <AboutUpdatesSettings />}
           </div>
         </main>

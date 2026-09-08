@@ -175,10 +175,16 @@ impl WorkingModelProxy {
     fn forward(&self, request_body: &[u8]) -> Result<WorkingModelResponse, WorkingModelError> {
         let response = self
             .auth
-            .authenticated_request(
+            .authenticated_request_with_headers(
                 "POST",
                 "/api/internal/working-model/v1/responses",
                 Some(String::from_utf8_lossy(request_body).into_owned()),
+                vec![
+                    (
+                        "X-Working-Model-Source-Type".to_string(),
+                        "copis-agent-model".to_string(),
+                    ),
+                ],
             )
             .map_err(map_auth_error)?;
         let content_type = response

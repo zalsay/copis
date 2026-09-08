@@ -13,11 +13,13 @@ pub struct EduApiRequest {
     pub path: String,
     pub body: Option<String>,
     pub access_token: Option<String>,
+    pub headers: Vec<(String, String)>,
     pub request_id: String,
 }
 
 impl fmt::Debug for EduApiRequest {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let header_names: Vec<&str> = self.headers.iter().map(|(name, _)| name.as_str()).collect();
         formatter
             .debug_struct("EduApiRequest")
             .field("method", &self.method)
@@ -27,6 +29,7 @@ impl fmt::Debug for EduApiRequest {
                 "access_token",
                 &self.access_token.as_ref().map(|_| "<redacted>"),
             )
+            .field("headers", &header_names)
             .field("request_id", &self.request_id)
             .finish()
     }
@@ -303,6 +306,9 @@ impl EduApiTransport for UreqEduApiTransport {
         if let Some(access_token) = request.access_token {
             builder = builder.header("Authorization", format!("Bearer {}", access_token));
         }
+        for (name, value) in request.headers {
+            builder = builder.header(name, value);
+        }
         let http_request = builder
             .body(request.body.unwrap_or_default())
             .map_err(|_| EduApiError::InvalidConfiguration("edu-api 请求构造失败".to_string()))?;
@@ -408,6 +414,16 @@ fn validate_request(request: &EduApiRequest) -> Result<(), EduApiError> {
         .map(|token| token.contains('\r') || token.contains('\n'))
         .unwrap_or(false)
     {
+        return Err(EduApiError::InvalidHeader);
+    }
+    if request.headers.iter().any(|(name, value)| {
+        name.is_empty()
+            || name
+                .bytes()
+                .any(|byte| !byte.is_ascii() || byte.is_ascii_control() || byte == b' ')
+            || value.contains('\r')
+            || value.contains('\n')
+    }) {
         return Err(EduApiError::InvalidHeader);
     }
     if request.request_id.is_empty()

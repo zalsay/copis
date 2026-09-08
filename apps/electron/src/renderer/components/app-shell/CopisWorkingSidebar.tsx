@@ -1,6 +1,9 @@
 import * as React from 'react'
 import { useAtom, useAtomValue, useSetAtom } from 'jotai'
 import {
+  ArrowDown,
+  ArrowUp,
+  ArrowUpToLine,
   CalendarClock,
   BookOpen,
   Brain,
@@ -16,6 +19,8 @@ import {
   MoreHorizontal,
   PanelLeftOpen,
   PencilLine,
+  Pin,
+  PinOff,
   Plus,
   Puzzle,
   RefreshCw,
@@ -55,6 +60,11 @@ import {
   workingHistorySelectionAtom,
   workingSettingsOpenAtom,
 } from '@/atoms/working-atoms'
+import {
+  hiddenSidebarMenuItemsAtom,
+  hideSidebarMenuItem,
+  type SidebarMenuItemId,
+} from '@/atoms/sidebar-menu-atoms'
 import { useCreateSession } from '@/hooks/useCreateSession'
 import { useCloseTab } from '@/hooks/useCloseTab'
 import { useOpenSession } from '@/hooks/useOpenSession'
@@ -92,7 +102,7 @@ interface PendingDeleteWorkspace {
 
 const CONVERSATION_PREVIEW_LIMIT = 5
 /** 项目菜单的估算高度，用于判断向下弹出是否会超出侧栏底部。 */
-const PROJECT_MENU_ESTIMATED_HEIGHT = 76
+const PROJECT_MENU_ESTIMATED_HEIGHT = 180
 
 function formatSessionTime(timestamp: number): string {
   const date = new Date(timestamp)
@@ -148,6 +158,23 @@ export function CopisWorkingSidebar({ width, noTransition = false }: CopisWorkin
   const { createAgent } = useCreateSession()
   const { executeClose } = useCloseTab()
   const openSession = useOpenSession()
+  const [hiddenMenuItems, setHiddenMenuItems] = useAtom(hiddenSidebarMenuItemsAtom)
+
+  const isMenuHidden = React.useCallback(
+    (id: string): boolean => hiddenMenuItems.includes(id),
+    [hiddenMenuItems],
+  )
+
+  const handleHideMenuItem = React.useCallback((id: SidebarMenuItemId, label: string, targetView?: string): void => {
+    void hideSidebarMenuItem(setHiddenMenuItems, hiddenMenuItems, id).catch((error) => {
+      console.error('[Copis Working] 隐藏菜单失败:', error)
+      toast.error('隐藏菜单失败')
+    })
+    if (targetView && activeView === targetView) {
+      setActiveView('conversations')
+    }
+    toast.success(`已隐藏「${label}」，可在「设置 - 菜单管理」中恢复`)
+  }, [activeView, hiddenMenuItems, setActiveView, setHiddenMenuItems])
 
   const loadWorkingData = React.useCallback(async (): Promise<void> => {
     setLoading(true)
@@ -166,6 +193,21 @@ export function CopisWorkingSidebar({ width, noTransition = false }: CopisWorkin
   React.useEffect(() => {
     void loadWorkingData()
   }, [loadWorkingData])
+
+  React.useEffect(() => {
+    if (!openMenuWorkspaceId) return
+    const handleOutsideClick = (event: MouseEvent): void => {
+      const target = event.target as HTMLElement | null
+      if (target?.closest('.copis-working-project-menu') || target?.closest('.copis-working-project-menu-trigger')) {
+        return
+      }
+      setOpenMenuWorkspaceId(null)
+    }
+    window.addEventListener('click', handleOutsideClick)
+    return () => {
+      window.removeEventListener('click', handleOutsideClick)
+    }
+  }, [openMenuWorkspaceId])
 
   const refreshProjects = React.useCallback(async (): Promise<AgentWorkspace[]> => {
     setRefreshingProjects(true)
@@ -359,7 +401,111 @@ export function CopisWorkingSidebar({ width, noTransition = false }: CopisWorkin
     if (reopenNewExpertTeam) setNewExpertTeamDialogOpen(true)
   }, [setCreateWorkspaceOpen, setWorkspaceCreationSource, workspaceCreationSource])
 
+  const handleTogglePinWorkspace = React.useCallback(async (workspaceId: string): Promise<void> => {
+    setOpenMenuWorkspaceId(null)
+    const ws = localWorkspaces.find((w) => w.id === workspaceId)
+    if (!ws) return
+
+    const willPin = !ws.pinned
+    const updated: AgentWorkspace[] = localWorkspaces.map((item) => {
+      if (item.id !== workspaceId) return item
+      if (willPin) {
+        return { ...item, pinned: true, pinnedAt: Date.now() }
+      }
+      const next: AgentWorkspace = { ...item }
+      delete next.pinned
+      delete next.pinnedAt
+      return next
+    })
+
+    const pinnedList = updated.filter((w) => w.pinned).sort((a, b) => (b.pinnedAt ?? 0) - (a.pinnedAt ?? 0))
+    const unpinnedList = updated.filter((w) => !w.pinned)
+    const reordered = [...pinnedList, ...unpinnedList]
+
+    setLocalWorkspaces(reordered)
+    try {
+      const result = await window.electronAPI.togglePinAgentWorkspace(workspaceId)
+      if (Array.isArray(result) && result.length > 0) {
+        setLocalWorkspaces(result)
+      }
+      toast.success(willPin ? '已置顶工作区' : '已取消置顶')
+    } catch (error) {
+      console.error('切换工作区置顶状态失败:', error)
+      toast.error(willPin ? '置顶工作区失败' : '取消置顶失败')
+      setLocalWorkspaces(localWorkspaces)
+    }
+  }, [localWorkspaces, setLocalWorkspaces])
+
+  const handlePinWorkspaceToTop = handleTogglePinWorkspace
+
+  const handleMoveWorkspaceUp = React.useCallback(async (workspaceId: string): Promise<void> => {
+    setOpenMenuWorkspaceId(null)
+    const fromIdx = localWorkspaces.findIndex((w) => w.id === workspaceId)
+    if (fromIdx <= 0) return
+    const targetIdx = fromIdx - 1
+    const currentWs = localWorkspaces[fromIdx]
+    const targetWs = localWorkspaces[targetIdx]
+    if (!currentWs || !targetWs) return
+    // 不能跨越置顶与未置顶分界
+    if (Boolean(currentWs.pinned) !== Boolean(targetWs.pinned)) return
+
+    const reordered = [...localWorkspaces]
+    const [moved] = reordered.splice(fromIdx, 1)
+    if (!moved) return
+    reordered.splice(targetIdx, 0, moved)
+
+    if (moved.pinned) {
+      const pinnedList = reordered.filter((w) => w.pinned)
+      const now = Date.now()
+      pinnedList.forEach((w, idx) => {
+        w.pinnedAt = now - idx * 1000
+      })
+    }
+
+    setLocalWorkspaces(reordered)
+    try {
+      await window.electronAPI.reorderAgentWorkspaces(reordered.map((w) => w.id))
+    } catch (error) {
+      console.error('上移工作区失败:', error)
+      toast.error('上移工作区失败')
+    }
+  }, [localWorkspaces, setLocalWorkspaces])
+
+  const handleMoveWorkspaceDown = React.useCallback(async (workspaceId: string): Promise<void> => {
+    setOpenMenuWorkspaceId(null)
+    const fromIdx = localWorkspaces.findIndex((w) => w.id === workspaceId)
+    if (fromIdx === -1 || fromIdx >= localWorkspaces.length - 1) return
+    const targetIdx = fromIdx + 1
+    const currentWs = localWorkspaces[fromIdx]
+    const targetWs = localWorkspaces[targetIdx]
+    if (!currentWs || !targetWs) return
+    // 不能跨越置顶与未置顶分界
+    if (Boolean(currentWs.pinned) !== Boolean(targetWs.pinned)) return
+
+    const reordered = [...localWorkspaces]
+    const [moved] = reordered.splice(fromIdx, 1)
+    if (!moved) return
+    reordered.splice(targetIdx, 0, moved)
+
+    if (moved.pinned) {
+      const pinnedList = reordered.filter((w) => w.pinned)
+      const now = Date.now()
+      pinnedList.forEach((w, idx) => {
+        w.pinnedAt = now - idx * 1000
+      })
+    }
+
+    setLocalWorkspaces(reordered)
+    try {
+      await window.electronAPI.reorderAgentWorkspaces(reordered.map((w) => w.id))
+    } catch (error) {
+      console.error('下移工作区失败:', error)
+      toast.error('下移工作区失败')
+    }
+  }, [localWorkspaces, setLocalWorkspaces])
+
   const requestRemoveWorkspace = (workspaceId: string): void => {
+    setOpenMenuWorkspaceId(null)
     const workspace = localWorkspaces.find((item) => item.id === workspaceId)
     if (!workspace || workspace.slug === 'default') {
       toast.error('默认工作区不能删除')
@@ -416,7 +562,15 @@ export function CopisWorkingSidebar({ width, noTransition = false }: CopisWorkin
     return paths.map((projectPath) => ({ workspace, projectPath }))
   })
 
-  const renderWorkspaceGroup = (workspace: AgentWorkspace): React.ReactElement => {
+  const renderWorkspaceGroup = (
+    workspace: AgentWorkspace,
+    index: number,
+    allWorkspaces: AgentWorkspace[],
+  ): React.ReactElement => {
+    const isPinned = Boolean(workspace.pinned)
+    const pinnedCount = allWorkspaces.filter((w) => w.pinned).length
+    const canMoveUp = isPinned ? index > 0 : index > pinnedCount
+    const canMoveDown = isPinned ? index < pinnedCount - 1 : index < allWorkspaces.length - 1
     const workspaceSessions = validLocalSessions
       .filter((session) => !session.archived && session.workspaceId === workspace.id)
       .sort((a, b) => b.updatedAt - a.updatedAt)
@@ -444,6 +598,9 @@ export function CopisWorkingSidebar({ width, noTransition = false }: CopisWorkin
           <button type="button" className="copis-working-project-main" onClick={(event) => { event.stopPropagation(); selectLocalWorkspace(workspace.id) }}>
             <FolderOpen className="copis-working-project-workspace-row-icon" aria-hidden="true" />
             <span>{workspace.name}</span>
+            {isPinned && (
+              <Pin className="copis-working-project-pin-badge" aria-label="已置顶" />
+            )}
           </button>
           <button type="button" className="copis-working-project-collapse" aria-label={isWorkspaceExpanded ? '折叠项目会话' : '展开项目会话'} aria-expanded={isWorkspaceExpanded} onClick={(event) => { event.stopPropagation(); toggleWorkspace(workspace.id) }}>
             {isWorkspaceExpanded ? <ChevronDown aria-hidden="true" /> : <ChevronRight aria-hidden="true" />}
@@ -467,12 +624,76 @@ export function CopisWorkingSidebar({ width, noTransition = false }: CopisWorkin
           </button>
           {isMenuOpen && (
             <div className="copis-working-project-menu" role="menu">
-              <button type="button" role="menuitem" onClick={(event) => { event.stopPropagation(); void handleOpenWorkspaceFolder(workspace) }}>
-                打开文件夹
+              <button
+                type="button"
+                role="menuitem"
+                disabled={busy}
+                onClick={(event) => {
+                  event.stopPropagation()
+                  void handleTogglePinWorkspace(workspace.id)
+                }}
+              >
+                {isPinned ? (
+                  <>
+                    <PinOff aria-hidden="true" />
+                    <span>取消置顶</span>
+                  </>
+                ) : (
+                  <>
+                    <ArrowUpToLine aria-hidden="true" />
+                    <span>置顶</span>
+                  </>
+                )}
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                disabled={busy || !canMoveUp}
+                onClick={(event) => {
+                  event.stopPropagation()
+                  void handleMoveWorkspaceUp(workspace.id)
+                }}
+              >
+                <ArrowUp aria-hidden="true" />
+                <span>上移</span>
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                disabled={busy || !canMoveDown}
+                onClick={(event) => {
+                  event.stopPropagation()
+                  void handleMoveWorkspaceDown(workspace.id)
+                }}
+              >
+                <ArrowDown aria-hidden="true" />
+                <span>下移</span>
+              </button>
+              <div className="copis-working-project-menu-divider" role="separator" />
+              <button
+                type="button"
+                role="menuitem"
+                onClick={(event) => {
+                  event.stopPropagation()
+                  void handleOpenWorkspaceFolder(workspace)
+                }}
+              >
+                <FolderOpen aria-hidden="true" />
+                <span>打开文件夹</span>
               </button>
               {workspace.slug !== 'default' && workspace.slug !== 'investment' && (
-                <button type="button" className="copis-working-project-delete" role="menuitem" disabled={busy || localWorkspaces.length <= 1} onClick={(event) => { event.stopPropagation(); requestRemoveWorkspace(workspace.id) }}>
-                  删除工作区
+                <button
+                  type="button"
+                  className="copis-working-project-delete"
+                  role="menuitem"
+                  disabled={busy || localWorkspaces.length <= 1}
+                  onClick={(event) => {
+                    event.stopPropagation()
+                    requestRemoveWorkspace(workspace.id)
+                  }}
+                >
+                  <Trash2 aria-hidden="true" />
+                  <span>删除工作区</span>
                 </button>
               )}
             </div>
@@ -572,43 +793,53 @@ export function CopisWorkingSidebar({ width, noTransition = false }: CopisWorkin
           <PanelLeftOpen aria-hidden="true" />
         </button>
         <CopisModeSwitcher isCollapsed={true} />
-        <button type="button" className="copis-working-sidebar-icon-button" aria-label="搜索" onClick={() => setSearchDialogOpen(true)}>
-          <Search aria-hidden="true" />
-        </button>
-        <button
-          type="button"
-          className={cn('copis-working-sidebar-icon-button', activeView === 'memory' && 'active')}
-          aria-label="记忆"
-          title="记忆"
-          onClick={handleOpenMemory}
-        >
-          <Brain aria-hidden="true" />
-        </button>
-        <button
-          type="button"
-          className={cn('copis-working-sidebar-icon-button', activeView === 'knowledge' && 'active')}
-          aria-label="知识库"
-          title="知识库"
-          onClick={handleOpenKnowledge}
-        >
-          <BookOpen aria-hidden="true" />
-        </button>
-        <button
-          type="button"
-          className={cn('copis-working-sidebar-icon-button', activeView === 'automations' && 'active')}
-          aria-label="定时任务"
-          onClick={() => { setWorkingHistorySelection(null); setActiveView('automations') }}
-        >
-          <Timer aria-hidden="true" />
-        </button>
-        <button
-          type="button"
-          className={cn('copis-working-sidebar-icon-button', activeView === 'expert-team' && 'active')}
-          aria-label="专家团队"
-          onClick={() => { setWorkingHistorySelection(null); setActiveView('expert-team') }}
-        >
-          <UsersRound aria-hidden="true" />
-        </button>
+        {!isMenuHidden('search') && (
+          <button type="button" className="copis-working-sidebar-icon-button" aria-label="搜索" onClick={() => setSearchDialogOpen(true)}>
+            <Search aria-hidden="true" />
+          </button>
+        )}
+        {!isMenuHidden('memory') && (
+          <button
+            type="button"
+            className={cn('copis-working-sidebar-icon-button', activeView === 'memory' && 'active')}
+            aria-label="记忆"
+            title="记忆"
+            onClick={handleOpenMemory}
+          >
+            <Brain aria-hidden="true" />
+          </button>
+        )}
+        {!isMenuHidden('knowledge') && (
+          <button
+            type="button"
+            className={cn('copis-working-sidebar-icon-button', activeView === 'knowledge' && 'active')}
+            aria-label="知识库"
+            title="知识库"
+            onClick={handleOpenKnowledge}
+          >
+            <BookOpen aria-hidden="true" />
+          </button>
+        )}
+        {!isMenuHidden('automations') && (
+          <button
+            type="button"
+            className={cn('copis-working-sidebar-icon-button', activeView === 'automations' && 'active')}
+            aria-label="定时任务"
+            onClick={() => { setWorkingHistorySelection(null); setActiveView('automations') }}
+          >
+            <Timer aria-hidden="true" />
+          </button>
+        )}
+        {!isMenuHidden('expert-team') && (
+          <button
+            type="button"
+            className={cn('copis-working-sidebar-icon-button', activeView === 'expert-team' && 'active')}
+            aria-label="专家团队"
+            onClick={() => { setWorkingHistorySelection(null); setActiveView('expert-team') }}
+          >
+            <UsersRound aria-hidden="true" />
+          </button>
+        )}
         <Sparkles className="copis-working-sidebar-collapsed-mark" aria-hidden="true" />
         <span className="copis-working-sidebar-session-count">{activeSessionCount}</span>
       </aside>
@@ -622,42 +853,186 @@ export function CopisWorkingSidebar({ width, noTransition = false }: CopisWorkin
           <CopisModeSwitcher isCollapsed={false} />
         </div>
         <nav className="copis-working-sidebar-nav" aria-label="Copis 菜单">
-          <button type="button" className="copis-working-menu-button" onClick={() => void handleNewSession()}>
-            <Plus aria-hidden="true" />
-            <span>新任务</span>
-          </button>
-          <button type="button" className="copis-working-menu-button" onClick={() => setSearchDialogOpen(true)}>
-            <Search aria-hidden="true" />
-            <span>搜索</span>
-          </button>
-          <button type="button" className="copis-working-menu-button" onClick={() => { setWorkingHistorySelection(null); setPlanningTab('schedule'); setActiveView('planning') }}>
-            <CalendarClock aria-hidden="true" />
-            <span>日程表</span>
-          </button>
-          <button type="button" className={cn('copis-working-menu-button', activeView === 'automations' && 'active')} onClick={() => { setWorkingHistorySelection(null); setActiveView('automations') }}>
-            <Timer aria-hidden="true" />
-            <span>定时任务</span>
-          </button>
-          <button type="button" className={cn('copis-working-menu-button', activeView === 'memory' && 'active')} onClick={handleOpenMemory}>
-            <Brain aria-hidden="true" />
-            <span>记忆</span>
-          </button>
-          <button type="button" className={cn('copis-working-menu-button', activeView === 'knowledge' && 'active')} onClick={handleOpenKnowledge}>
-            <BookOpen aria-hidden="true" />
-            <span>知识库</span>
-          </button>
-          <button type="button" className={cn('copis-working-menu-button', activeView === 'expert-team' && 'active')} onClick={() => { setWorkingHistorySelection(null); setActiveView('expert-team') }}>
-            <UsersRound aria-hidden="true" />
-            <span>专家团队</span>
-          </button>
-          <button type="button" className="copis-working-menu-button" onClick={() => { setWorkingHistorySelection(null); setActiveView('agent-skills') }}>
-            <Puzzle aria-hidden="true" />
-            <span>技能市场</span>
-          </button>
-          <button type="button" className={cn('copis-working-menu-button', activeView === 'fund-stock' && 'active')} onClick={() => { setWorkingHistorySelection(null); setActiveView('fund-stock') }}>
-            <TrendingUp aria-hidden="true" />
-            <span>我的投资</span>
-          </button>
+          {!isMenuHidden('new-task') && (
+            <div className="copis-working-menu-item">
+              <button type="button" className="copis-working-menu-button" onClick={() => void handleNewSession()}>
+                <Plus aria-hidden="true" />
+                <span>新任务</span>
+              </button>
+              <button
+                type="button"
+                className="copis-working-menu-hide-btn"
+                onClick={(event) => {
+                  event.stopPropagation()
+                  handleHideMenuItem('new-task', '新任务')
+                }}
+                aria-label="隐藏新任务"
+                title="隐藏此菜单"
+              >
+                隐藏
+              </button>
+            </div>
+          )}
+          {!isMenuHidden('search') && (
+            <div className="copis-working-menu-item">
+              <button type="button" className="copis-working-menu-button" onClick={() => setSearchDialogOpen(true)}>
+                <Search aria-hidden="true" />
+                <span>搜索</span>
+              </button>
+              <button
+                type="button"
+                className="copis-working-menu-hide-btn"
+                onClick={(event) => {
+                  event.stopPropagation()
+                  handleHideMenuItem('search', '搜索')
+                }}
+                aria-label="隐藏搜索"
+                title="隐藏此菜单"
+              >
+                隐藏
+              </button>
+            </div>
+          )}
+          {!isMenuHidden('schedule') && (
+            <div className="copis-working-menu-item">
+              <button type="button" className="copis-working-menu-button" onClick={() => { setWorkingHistorySelection(null); setPlanningTab('schedule'); setActiveView('planning') }}>
+                <CalendarClock aria-hidden="true" />
+                <span>日程表</span>
+              </button>
+              <button
+                type="button"
+                className="copis-working-menu-hide-btn"
+                onClick={(event) => {
+                  event.stopPropagation()
+                  handleHideMenuItem('schedule', '日程表', 'planning')
+                }}
+                aria-label="隐藏日程表"
+                title="隐藏此菜单"
+              >
+                隐藏
+              </button>
+            </div>
+          )}
+          {!isMenuHidden('automations') && (
+            <div className="copis-working-menu-item">
+              <button type="button" className={cn('copis-working-menu-button', activeView === 'automations' && 'active')} onClick={() => { setWorkingHistorySelection(null); setActiveView('automations') }}>
+                <Timer aria-hidden="true" />
+                <span>定时任务</span>
+              </button>
+              <button
+                type="button"
+                className="copis-working-menu-hide-btn"
+                onClick={(event) => {
+                  event.stopPropagation()
+                  handleHideMenuItem('automations', '定时任务', 'automations')
+                }}
+                aria-label="隐藏定时任务"
+                title="隐藏此菜单"
+              >
+                隐藏
+              </button>
+            </div>
+          )}
+          {!isMenuHidden('memory') && (
+            <div className="copis-working-menu-item">
+              <button type="button" className={cn('copis-working-menu-button', activeView === 'memory' && 'active')} onClick={handleOpenMemory}>
+                <Brain aria-hidden="true" />
+                <span>记忆</span>
+              </button>
+              <button
+                type="button"
+                className="copis-working-menu-hide-btn"
+                onClick={(event) => {
+                  event.stopPropagation()
+                  handleHideMenuItem('memory', '记忆', 'memory')
+                }}
+                aria-label="隐藏记忆"
+                title="隐藏此菜单"
+              >
+                隐藏
+              </button>
+            </div>
+          )}
+          {!isMenuHidden('knowledge') && (
+            <div className="copis-working-menu-item">
+              <button type="button" className={cn('copis-working-menu-button', activeView === 'knowledge' && 'active')} onClick={handleOpenKnowledge}>
+                <BookOpen aria-hidden="true" />
+                <span>知识库</span>
+              </button>
+              <button
+                type="button"
+                className="copis-working-menu-hide-btn"
+                onClick={(event) => {
+                  event.stopPropagation()
+                  handleHideMenuItem('knowledge', '知识库', 'knowledge')
+                }}
+                aria-label="隐藏知识库"
+                title="隐藏此菜单"
+              >
+                隐藏
+              </button>
+            </div>
+          )}
+          {!isMenuHidden('expert-team') && (
+            <div className="copis-working-menu-item">
+              <button type="button" className={cn('copis-working-menu-button', activeView === 'expert-team' && 'active')} onClick={() => { setWorkingHistorySelection(null); setActiveView('expert-team') }}>
+                <UsersRound aria-hidden="true" />
+                <span>专家团队</span>
+              </button>
+              <button
+                type="button"
+                className="copis-working-menu-hide-btn"
+                onClick={(event) => {
+                  event.stopPropagation()
+                  handleHideMenuItem('expert-team', '专家团队', 'expert-team')
+                }}
+                aria-label="隐藏专家团队"
+                title="隐藏此菜单"
+              >
+                隐藏
+              </button>
+            </div>
+          )}
+          {!isMenuHidden('agent-skills') && (
+            <div className="copis-working-menu-item">
+              <button type="button" className="copis-working-menu-button" onClick={() => { setWorkingHistorySelection(null); setActiveView('agent-skills') }}>
+                <Puzzle aria-hidden="true" />
+                <span>技能市场</span>
+              </button>
+              <button
+                type="button"
+                className="copis-working-menu-hide-btn"
+                onClick={(event) => {
+                  event.stopPropagation()
+                  handleHideMenuItem('agent-skills', '技能市场', 'agent-skills')
+                }}
+                aria-label="隐藏技能市场"
+                title="隐藏此菜单"
+              >
+                隐藏
+              </button>
+            </div>
+          )}
+          {!isMenuHidden('fund-stock') && (
+            <div className="copis-working-menu-item">
+              <button type="button" className={cn('copis-working-menu-button', activeView === 'fund-stock' && 'active')} onClick={() => { setWorkingHistorySelection(null); setActiveView('fund-stock') }}>
+                <TrendingUp aria-hidden="true" />
+                <span>我的投资</span>
+              </button>
+              <button
+                type="button"
+                className="copis-working-menu-hide-btn"
+                onClick={(event) => {
+                  event.stopPropagation()
+                  handleHideMenuItem('fund-stock', '我的投资', 'fund-stock')
+                }}
+                aria-label="隐藏我的投资"
+                title="隐藏此菜单"
+              >
+                隐藏
+              </button>
+            </div>
+          )}
         </nav>
 
         <section className="copis-working-project-section" aria-label="工作区">

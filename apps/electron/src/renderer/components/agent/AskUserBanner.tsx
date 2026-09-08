@@ -19,6 +19,7 @@ import {
   getLastFocusedVoiceInputId,
   setLastFocusedVoiceInputId,
 } from '@/lib/voice-input-focus'
+import { openLink } from '@/lib/open-link'
 import {
   allPendingAskUserRequestsAtom,
   agentStreamingStatesAtom,
@@ -608,7 +609,27 @@ function QuestionCard({
       {/* 选项 Preview（聚焦或选中时展示） */}
       {previewContent && (
         <div className="mt-2 rounded-lg bg-muted/40 p-3 text-xs prose prose-sm dark:prose-invert max-w-none prose-p:my-0 prose-headings:my-0.5 prose-li:my-0 [&>*:first-child]:mt-0 [&>*:last-child]:mb-0">
-          <Markdown remarkPlugins={PREVIEW_REMARK_PLUGINS} urlTransform={safeUrlTransform}>
+          <Markdown
+            remarkPlugins={PREVIEW_REMARK_PLUGINS}
+            urlTransform={safeUrlTransform}
+            components={{
+              a: ({ href, children: linkChildren, ...linkProps }) => (
+                <a
+                  {...linkProps}
+                  href={href}
+                  onClick={(e) => {
+                    e.preventDefault()
+                    if (href) {
+                      void openLink(href)
+                    }
+                  }}
+                  title={href}
+                >
+                  {linkChildren}
+                </a>
+              ),
+            }}
+          >
             {previewContent}
           </Markdown>
         </div>

@@ -18,6 +18,8 @@ import { dirname, join, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
 import { gzipSync } from 'node:zlib'
 import type { FunctionalModuleArchitecture, FunctionalModulePlatform } from '@copis/shared'
+import { patchDshComposerHistoryRuntime } from '../apps/electron/src/main/lib/dsh-composer-history-patch'
+export { patchDshSidebarRuntime, patchDshSidebarSource } from '../apps/electron/src/main/lib/dsh-sidebar-patch'
 
 export const DSH_PACKAGE = '@deepseek-ai/dsh'
 export const DSH_PACKAGE_VERSION = '0.1.2-rc.1'
@@ -27,6 +29,7 @@ export const DSH_ENTRYPOINT = 'bin/dsh'
 const DSH_RUNTIME_ENTRYPOINT = 'node_modules/@deepseek-ai/dsh/lib/bin.js'
 const DSH_MODEL_SELECTION_CLIENT_ENTRYPOINT = 'node_modules/@deepseek-ai/dsh-client-ui-model-selection/lib/client.js'
 export const DSH_CHAT_CLIENT_ENTRYPOINT = 'node_modules/@deepseek-ai/dsh-client-ui-chat/lib/client.js'
+export const DSH_CORDIS_CLIENT_ENTRYPOINT = 'node_modules/@deepseek-ai/dsh-client-ui-cordis/lib/client.js'
 
 const DSH_MODEL_SELECT_MODEL_LABEL_PATTERN = /^([\t ]*)const modelLabel = waiting \? t\("trigger\.loading"\) : currentChoice\?\.model\.name \?\? \(state\.current === null \? t\("trigger\.fallback"\) : `\$\{state\.current\.provider\}\/\$\{state\.current\.model\}`\);$/gm
 const DSH_MODEL_SELECT_TRIGGER_LABEL_PATTERN = /^([\t ]*)const triggerLabel = effortLabel === void 0 \? modelLabel : `\$\{modelLabel\} · \$\{effortLabel\}`;$/gm
@@ -61,6 +64,9 @@ export function main(): void {
     installOfficialCli(runtimeRoot, join(staging, 'package-cache'))
     patchDshComposerModelSelectionRuntime(runtimeRoot)
     patchDshDetailsPanelFilePreviewRuntime(runtimeRoot)
+    patchDshCordisPanelRuntime(runtimeRoot)
+    patchDshSidebarRuntime(runtimeRoot)
+    if (!patchDshComposerHistoryRuntime(runtimeRoot)) throw new Error('官方 dsh 缺少 Composer 输入组件')
     if (!isFile(join(runtimeRoot, DSH_RUNTIME_ENTRYPOINT))) {
       throw new Error(`官方 dsh 缺少入口文件: ${DSH_RUNTIME_ENTRYPOINT}`)
     }
@@ -138,12 +144,16 @@ export function patchDshDetailsPanelFilePreviewRuntime(runtimeRoot: string): voi
 
 export function patchDshDetailsPanelFilePreviewSource(source: string): string {
   if (source.includes('const [expandedDirs, setExpandedDirs] =')) {
+    let upgraded = source
     const brokenParen = '\t\t\t\t\t\t)\n\t\t\t\t\t\t) : activeTab === "changes" ? ('
     const fixedParen = '\t\t\t\t\t\t)\n\t\t\t\t\t\t: activeTab === "changes" ? ('
-    if (source.includes(brokenParen)) {
-      return source.replace(brokenParen, fixedParen)
+    if (upgraded.includes(brokenParen)) {
+      upgraded = upgraded.replace(brokenParen, fixedParen)
     }
-    return source
+    if (upgraded.includes('stroke: "#f59e0b",')) {
+      upgraded = upgraded.replace('stroke: "#f59e0b",', 'stroke: "var(--creation-ui-primary, #6C00CC)",')
+    }
+    return upgraded
   }
 
   const DECLARATIONS_CHUNK = `const [activeTab, setActiveTab] = (0, react.useState)("files");
@@ -323,7 +333,7 @@ export function patchDshDetailsPanelFilePreviewSource(source: string): string {
 											height: "14",
 											viewBox: "0 0 24 24",
 											fill: "none",
-											stroke: "#f59e0b",
+											stroke: "var(--creation-ui-primary, #6C00CC)",
 											strokeWidth: "1.8",
 											style: { flexShrink: 0 },
 											children: (0, react_jsx_runtime.jsx)("path", { d: isExpanded ? "M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" : "M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 8 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z" })
@@ -1005,6 +1015,40 @@ export function patchDshDetailsPanelFilePreviewSource(source: string): string {
     res = res.replace(target5, repl5)
   }
 
+  return res
+}
+
+/**
+ * 修改 DSH Cordis 插件审批与面板标题：
+ * 将弹窗标题「Cordis 插件」替换为「Copis 请您确认」。
+ */
+export function patchDshCordisPanelRuntime(runtimeRoot: string): void {
+  const entrypoint = join(runtimeRoot, DSH_CORDIS_CLIENT_ENTRYPOINT)
+  if (!isFile(entrypoint)) {
+    throw new Error(`官方 dsh 缺少 Cordis Panel 组件: ${entrypoint}`)
+  }
+  const source = readFileSync(entrypoint, 'utf8')
+  writeFileSync(entrypoint, patchDshCordisPanelSource(source), 'utf8')
+}
+
+export function patchDshCordisPanelSource(source: string): string {
+  if (source.includes('"panel.title": "Copis 请您确认"')) {
+    return source
+  }
+
+  const targetTitle = '"panel.title": "Cordis 插件"'
+  const replTitle = '"panel.title": "Copis 请您确认"'
+  const targetAria = '"panel.plugins.aria": "Cordis 插件"'
+  const replAria = '"panel.plugins.aria": "Copis 请您确认"'
+
+  if (!source.includes(targetTitle)) {
+    throw new Error('DSH Cordis Panel 组件未找到 panel.title 结构')
+  }
+
+  let res = source.replace(targetTitle, replTitle)
+  if (res.includes(targetAria)) {
+    res = res.replace(targetAria, replAria)
+  }
   return res
 }
 

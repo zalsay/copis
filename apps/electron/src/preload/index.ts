@@ -499,6 +499,9 @@ export interface ElectronAPI {
   /** 订阅用户手动切换主题事件（跨窗口同步，返回清理函数） */
   onThemeSettingsChanged: (callback: (payload: { themeMode: string; themeStyle: string; interfaceVariant?: string }) => void) => () => void
 
+  /** 订阅侧边栏隐藏菜单项配置变化事件（跨窗口与模式同步，返回清理函数） */
+  onHiddenSidebarMenuItemsChanged: (callback: (hiddenItems: string[]) => void) => () => void
+
   // ===== Scratch Pad =====
 
   /** 从磁盘加载 scratch-pad.md */
@@ -682,6 +685,9 @@ export interface ElectronAPI {
 
   /** 重排工作区顺序 */
   reorderAgentWorkspaces: (orderedIds: string[]) => Promise<AgentWorkspace[]>
+
+  /** 切换工作区置顶状态 */
+  togglePinAgentWorkspace: (id: string) => Promise<AgentWorkspace[]>
 
   // ===== 工作区能力（MCP + Skill） =====
 
@@ -1609,6 +1615,12 @@ const electronAPI: ElectronAPI = {
     return () => { ipcRenderer.removeListener(SETTINGS_IPC_CHANNELS.ON_THEME_SETTINGS_CHANGED, listener) }
   },
 
+  onHiddenSidebarMenuItemsChanged: (callback: (hiddenItems: string[]) => void) => {
+    const listener = (_: unknown, hiddenItems: string[]): void => callback(Array.isArray(hiddenItems) ? hiddenItems : [])
+    ipcRenderer.on(SETTINGS_IPC_CHANNELS.ON_HIDDEN_SIDEBAR_MENU_ITEMS_CHANGED, listener)
+    return () => { ipcRenderer.removeListener(SETTINGS_IPC_CHANNELS.ON_HIDDEN_SIDEBAR_MENU_ITEMS_CHANGED, listener) }
+  },
+
   // Scratch Pad 持久化
   loadScratchPad: () => {
     return ipcRenderer.invoke(SCRATCH_PAD_IPC_CHANNELS.LOAD)
@@ -1833,6 +1845,10 @@ const electronAPI: ElectronAPI = {
 
   reorderAgentWorkspaces: (orderedIds: string[]) => {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.REORDER_WORKSPACES, orderedIds)
+  },
+
+  togglePinAgentWorkspace: (id: string) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.TOGGLE_PIN_WORKSPACE, id)
   },
 
   // 工作区能力（MCP + Skill）

@@ -10,12 +10,22 @@ import {
   COPIS_WORKING_EXPERT_MODEL_ID,
   COPIS_WORKING_ZHIPU_CHANNEL_ID,
   ZHIPU_DEFAULT_MODEL_ID,
+  type WorkingCustomModel,
+  type WorkingUser,
 } from '@copis/shared'
 
 let tempHome: string
 const originalHome = process.env.HOME
 const originalCopisDev = process.env.COPIS_DEV
 const originalFetch = globalThis.fetch
+let customVip = false
+const customModel: WorkingCustomModel = { id: 'example', name: '我的模型', modelId: 'test-model', protocol: 'anthropic-messages', baseUrl: 'https://example.com', thinkingLevel: 'high', apiKeyConfigured: true }
+let customModels = [customModel]
+mock.module('./working-model-catalog', () => ({
+  getWorkingModelCatalogOwnerId: (user: WorkingUser | null) => user?.id,
+  getWorkingModelCatalog: () => ({ models: customModels, categories: [] }),
+  getWorkingCustomModelRuntime: (channelId: string) => ({ model: customModels.find((model) => `copis-custom-${model.id}` === channelId)!, apiKey: `custom-test-key-${channelId}` }),
+}))
 
 mock.module('electron', () => ({
   app: {
@@ -38,7 +48,7 @@ mock.module('electron', () => ({
 }))
 
 mock.module('./working-api-service', () => ({
-  getWorkingApiClient: () => ({ baseUrl: 'http://127.0.0.1:9000' }),
+  getWorkingApiClient: () => ({ baseUrl: 'http://127.0.0.1:9000', getCachedUser: () => ({ id: '42', isVip: customVip }) }),
 }))
 
 mock.module('./http-api-server', () => ({
@@ -76,6 +86,72 @@ describe('dsh-model-config', () => {
       process.env.COPIS_DEV = originalCopisDev
     }
     rmSync(tempHome, { recursive: true, force: true })
+  })
+
+  test('Given VIP 自定义模型 When 同步 DSH Then 追加到末尾且非 VIP 同步后清除模型和凭据', async () => {
+    const dir = join(tempHome, 'custom-models')
+    customVip = true
+    try {
+      const config = await modelConfigModule.resolveDshUnifiedModelConfig({ channelId: COPIS_WORKING_CHANNEL_ID })
+      modelConfigModule.applyDshModelConfig(config, dir)
+      const providers = parseDocument(readFileSync(join(dir, 'settings.yaml'), 'utf8')).toJS()['llm-pi-ai'].providers
+      expect(Object.keys(providers).at(-1)).toBe('copis-custom-example')
+      expect(providers['copis-custom-example']).toMatchObject({ api: 'anthropic-messages', reasoning: 'high', models: [{ id: 'test-model', name: '我的模型' }] })
+      const credentials = parseDocument(readFileSync(join(dir, '.credentials.yaml'), 'utf8')).toJS()
+      expect(credentials.refs[providers['copis-custom-example'].apiKeyEnv]).toBe('custom-test-key-copis-custom-example')
+      const selected = await modelConfigModule.resolveDshUnifiedModelConfig({ channelId: 'copis-custom-example' })
+      expect(selected.providerRoute).toBe('copis-custom-example')
+      expect(selected.defaultModelId).toBe('test-model')
+      expect(selected.env.COPIS_DSH_WORKING_CAPABILITY).toBe('dsh-test-capability')
+      expect(JSON.stringify(selected.env)).not.toContain('custom-test-key')
+      customVip = false
+      modelConfigModule.applyDshModelConfig(await modelConfigModule.resolveDshUnifiedModelConfig({ channelId: COPIS_WORKING_CHANNEL_ID }), dir)
+      expect(readFileSync(join(dir, 'settings.yaml'), 'utf8')).not.toContain('copis-custom-example')
+      expect(readFileSync(join(dir, '.credentials.yaml'), 'utf8')).not.toContain('custom-test-key')
+    } finally {
+      customVip = false
+    }
+  })
+
+  test('Given VIP 保存多个同名 ID 的不同端点模型 When 修改并删除模型 Then 独立路由保留配置并移除旧凭据', async () => {
+    const dir = join(tempHome, 'custom-model-updates')
+    customVip = true
+    customModels = [customModel, { ...customModel, id: 'responses', protocol: 'openai-responses', baseUrl: 'https://other.example/v1', thinkingLevel: 'low' }]
+    try {
+      const config = await modelConfigModule.resolveDshUnifiedModelConfig({ channelId: 'copis-custom-responses' })
+      modelConfigModule.applyDshModelConfig(config, dir)
+      const providers = parseDocument(readFileSync(join(dir, 'settings.yaml'), 'utf8')).toJS()['llm-pi-ai'].providers
+      expect(Object.keys(providers).slice(-2)).toEqual(['copis-custom-example', 'copis-custom-responses'])
+      expect(providers['copis-custom-responses']).toMatchObject({ api: 'openai-responses', baseURL: 'https://other.example/v1', reasoning: 'low' })
+      expect(providers['copis-custom-responses'].apiKeyEnv).not.toBe(providers['copis-custom-example'].apiKeyEnv)
+      customModels = []
+      modelConfigModule.applyDshModelConfig(await modelConfigModule.resolveDshUnifiedModelConfig({ channelId: 'copis-custom-responses' }), dir)
+      expect(readFileSync(join(dir, 'settings.yaml'), 'utf8')).not.toContain('copis-custom-')
+      expect(readFileSync(join(dir, '.credentials.yaml'), 'utf8')).not.toContain('custom-test-key')
+    } finally {
+      customModels = [customModel]
+      customVip = false
+    }
+  })
+
+  test('Given 自定义模型配置 xhigh 或关闭思考 When 写入 DSH Then 模型能力与默认思考深度一致', async () => {
+    const dir = join(tempHome, 'custom-reasoning')
+    customVip = true
+    customModels = [
+      { ...customModel, modelId: 'gpt-5.6-luna', protocol: 'openai-responses', thinkingLevel: 'xhigh' },
+      { ...customModel, id: 'no-thinking', thinkingLevel: 'off' },
+    ]
+    try {
+      modelConfigModule.applyDshModelConfig(await modelConfigModule.resolveDshUnifiedModelConfig({ channelId: 'copis-custom-example' }), dir)
+      const providers = parseDocument(readFileSync(join(dir, 'settings.yaml'), 'utf8')).toJS()['llm-pi-ai'].providers
+      expect(providers['copis-custom-example'].reasoning).toBe('xhigh')
+      expect(providers['copis-custom-example'].models[0].reasoningEfforts).toEqual({ xhigh: 'xhigh' })
+      expect(providers['copis-custom-no-thinking'].reasoning).toBe('off')
+      expect(providers['copis-custom-no-thinking'].models[0].reasoningEfforts).toBe(false)
+    } finally {
+      customModels = [customModel]
+      customVip = false
+    }
   })
 
   test('Given 默认未配置渠道或 DeepSeek 内置渠道 When 统一解析模型配置 Then 默认生成 copis 自定义 provider 并映射 DeepSeek 闪电模型', async () => {

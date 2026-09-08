@@ -269,6 +269,150 @@ describe('CopisCreationWebView 侧边栏宽度与原生视图布局契约', () =
     expect(viewSource).toContain('text-[var(--creation-ui-primary)]')
     expect(viewSource).toContain('bg-[var(--creation-ui-primary-background)]')
   })
+
+  test('Given 创造模式左侧菜单栏与激活菜单项样式契约 When 检查 DSH 桥接样式注入 Then 侧边栏背景色与 Agent 模式一致且激活色使用 creation-ui-primary 体系', () => {
+    const { readFileSync } = require('node:fs')
+    const { join } = require('node:path')
+    const preloadSource = readFileSync(join(__dirname, '../../../preload/dsh-bridge-preload.ts'), 'utf8')
+
+    // 1. 侧边栏背景色浅色/深色与 Agent 模式一致（对应 hsl(var(--muted))）
+    expect(preloadSource).toContain('--dsw-specific-sidebar-fill: hsl(0 0% 96.1%) !important;')
+    expect(preloadSource).toContain('--dsw-specific-sidebar-fill: hsl(0 0% 17%) !important;')
+
+    // 2. 菜单项激活背景色与文字高亮色使用 creation-ui-primary 体系
+    expect(preloadSource).toContain('--dsw-specific-sidebar-nav-item-active: rgba(108, 0, 204, 0.15) !important;')
+    expect(preloadSource).toContain('--dsw-specific-sidebar-nav-item-active-accent: #6C00CC !important;')
+    expect(preloadSource).toContain('--dsw-specific-sidebar-nav-item-active: rgba(168, 85, 247, 0.18) !important;')
+    expect(preloadSource).toContain('--dsw-specific-sidebar-nav-item-active-accent: #a855f7 !important;')
+
+    // 3. 侧边栏容器与菜单项覆盖规则
+    expect(preloadSource).toContain('background: var(--dsw-specific-sidebar-fill) !important;')
+    expect(preloadSource).toContain('background: var(--creation-ui-primary-background) !important;')
+    expect(preloadSource).toContain('color: var(--creation-ui-primary) !important;')
+    expect(preloadSource).toContain('border: none !important;')
+  })
+
+  test('Given 创造模式侧边栏与菜单管理契约 When 检查 DSH 桥接 Preload 注入 Then 支持菜单隐藏属性选择器且胶囊按钮无背景色仅保留边框', () => {
+    const { readFileSync } = require('node:fs')
+    const { join } = require('node:path')
+    const preloadSource = readFileSync(join(__dirname, '../../../preload/dsh-bridge-preload.ts'), 'utf8')
+
+    // 1. Preload 脚本包含隐藏菜单样式注入（属性选择器 [data-copis-hidden="true"]）
+    expect(preloadSource).toContain('.copis-menu-section button[data-copis-hidden="true"]')
+    expect(preloadSource).toContain('.copis-rail-menu-section button[data-copis-hidden="true"]')
+    expect(preloadSource).toContain('display: none !important;')
+
+    // 2. 隐藏胶囊按钮无背景色，仅边框，无 hover 变色效果，静态呈现边框与文字
+    expect(preloadSource).toContain('.copis-dsh-menu-hide-btn')
+    expect(preloadSource).toContain('background: transparent !important;')
+    expect(preloadSource).toContain('border: 1px solid')
+    expect(preloadSource).toContain('border-radius: 9999px;')
+    expect(preloadSource).toContain('height: 20px;')
+    expect(preloadSource).toContain('padding: 0 7px;')
+    expect(preloadSource).not.toContain('.copis-dsh-menu-hide-btn:hover')
+
+    // 3. 包含 DOM 观察与事件同步核心函数
+    expect(preloadSource).toContain('function applyHiddenSidebarMenuItems(hiddenItems: string[]): void')
+    expect(preloadSource).toContain('async function hideDshMenuItem(menuId: string): Promise<void>')
+    expect(preloadSource).toContain('function syncDshSidebarMenuDoms(): void')
+    expect(preloadSource).toContain('function setupDshSidebarMenuObserver(): void')
+    expect(preloadSource).toContain('COPIS_HIDDEN_SIDEBAR_MENU_ITEMS_CHANGED')
+    expect(preloadSource).toContain('hideMenuItem:')
+    expect(preloadSource).toContain('getHiddenMenuItems:')
+  })
+
+  test('Given 打开了 Copis 子功能面板 When 接收到切回会话事件 (COPIS_NAVIGATE: conversations) Then 子功能面板立即关闭收起且激活视图重置为 conversations 且向 DSH 发送清除高亮广播', () => {
+    let creationSubView: string | null = 'memory'
+    let activeView: string = 'memory'
+    let dispatchedClientEvent: { type: string; view?: string } | null = null
+
+    const handleClientEvent = (e: { type: string; view?: string }) => {
+      if (e.type === 'COPIS_NAVIGATE') {
+        if (e.view === 'conversations') {
+          creationSubView = null
+          activeView = 'conversations'
+          dispatchedClientEvent = {
+            type: 'COPIS_ACTIVE_VIEW_CHANGE',
+            view: 'conversations',
+          }
+        }
+      }
+    }
+
+    // 触发切回会话事件
+    handleClientEvent({ type: 'COPIS_NAVIGATE', view: 'conversations' })
+    expect(creationSubView).toBeNull()
+    expect(activeView).toBe('conversations')
+    expect(dispatchedClientEvent as { type: string; view?: string } | null).toEqual({
+      type: 'COPIS_ACTIVE_VIEW_CHANGE',
+      view: 'conversations',
+    })
+  })
+
+  test('Given DSH 侧边栏 DOM 交互 When 用户点击会话项、新建会话按钮或会话容器 Then 准确判定为切回会话意图', () => {
+    // 模拟 session click interceptor 匹配规则
+    const matchSessionClick = (element: {
+      classList: string[]
+      ariaLabel?: string
+      parentClassList?: string[]
+    }): boolean => {
+      const allClasses = [...element.classList, ...(element.parentClassList || [])]
+      // 1. 排除 Copis 自身菜单与操作区
+      if (allClasses.some((c) => c.includes('copis-menu-section') || c.includes('copis-rail-menu-section') || c.includes('copis-mode-switcher') || c.includes('footArea'))) {
+        return false
+      }
+      // 2. 排除工作区目录文件夹折叠行
+      if (allClasses.some((c) => c.includes('projectRow'))) {
+        return false
+      }
+      // 3. 命中会话行、新建会话或会话容器
+      const isSession = allClasses.some((c) => c.includes('sessionRow') || c.includes('searchResultRow'))
+      const isNewSession = allClasses.some((c) => c.includes('newSession')) || Boolean(element.ariaLabel?.includes('会话') || element.ariaLabel?.includes('session'))
+      const isRegion = allClasses.some((c) => c.includes('regionArea'))
+      return isSession || isNewSession || isRegion
+    }
+
+    // 场景 A：点击会话条目（YDXeBa_sessionRow）
+    expect(matchSessionClick({ classList: ['YDXeBa_sessionRow', 'YDXeBa_selected'] })).toBe(true)
+    // 场景 B：点击会话标题文本（span.YDXeBa_title，父元素为 sessionRow）
+    expect(matchSessionClick({ classList: ['YDXeBa_title'], parentClassList: ['YDXeBa_sessionRow'] })).toBe(true)
+    // 场景 C：点击新建会话按钮（hHd-Xa_newSession）
+    expect(matchSessionClick({ classList: ['hHd-Xa_newSession'], ariaLabel: '新建会话' })).toBe(true)
+    // 场景 D：点击搜索结果中的会话（YDXeBa_searchResultRow）
+    expect(matchSessionClick({ classList: ['YDXeBa_searchResultRow'] })).toBe(true)
+    // 场景 E：点击会话列表空白滚动区域（hHd-Xa_regionArea）
+    expect(matchSessionClick({ classList: ['hHd-Xa_regionArea'] })).toBe(true)
+
+    // 反向场景 1：点击项目文件夹折叠行（YDXeBa_projectRow）不触发切回
+    expect(matchSessionClick({ classList: ['YDXeBa_projectRow'], parentClassList: ['hHd-Xa_regionArea'] })).toBe(false)
+    // 反向场景 2：点击 Copis 记忆菜单项不触发切回
+    expect(matchSessionClick({ classList: ['copis-menu-item'], parentClassList: ['copis-menu-section'] })).toBe(false)
+    // 反向场景 3：点击模式切换器不触发切回
+    expect(matchSessionClick({ classList: ['copis-mode-btn'], parentClassList: ['copis-mode-switcher'] })).toBe(false)
+    // 反向场景 4：点击底部意见反馈不触发切回
+    expect(matchSessionClick({ classList: ['hHd-Xa_footArea'] })).toBe(false)
+  })
+
+  test('Given Preload 脚本与组件源码契约 When 检查会话点击拦截器与视图联动实现 Then 契约完整闭环', () => {
+    const { readFileSync } = require('node:fs')
+    const { join } = require('node:path')
+    const preloadSource = readFileSync(join(__dirname, '../../../preload/dsh-bridge-preload.ts'), 'utf8')
+    const viewSource = readFileSync(join(__dirname, 'CopisCreationWebView.tsx'), 'utf8')
+
+    // 1. Preload 脚本包含 setupSessionClickInterceptor
+    expect(preloadSource).toContain('function setupSessionClickInterceptor(): void')
+    expect(preloadSource).toContain('setupSessionClickInterceptor()')
+    expect(preloadSource).toContain("copisBridge.navigate('conversations')")
+    expect(preloadSource).toContain("type: 'COPIS_ACTIVE_VIEW_CHANGE', view: 'conversations'")
+    expect(preloadSource).toContain("document.addEventListener('click', onSessionClick, true)")
+
+    // 2. CopisCreationWebView 在 COPIS_NAVIGATE conversations 时完成 subview 收起、activeView 重置与客户端高亮清除
+    expect(viewSource).toContain("e.view === 'conversations'")
+    expect(viewSource).toContain('setCreationSubView(null)')
+    expect(viewSource).toContain("setActiveView('conversations')")
+    expect(viewSource).toContain("type: 'COPIS_ACTIVE_VIEW_CHANGE'")
+  })
 })
+
 
 

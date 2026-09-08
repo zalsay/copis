@@ -185,7 +185,9 @@ function slugify(name: string, existingSlugs: Set<string>): string {
 
 export function listAgentWorkspaces(): AgentWorkspace[] {
   const index = readIndex()
-  return index.workspaces.map(withProjectRootStatus)
+  const pinned = index.workspaces.filter((w) => w.pinned).sort((a, b) => (b.pinnedAt ?? 0) - (a.pinnedAt ?? 0))
+  const unpinned = index.workspaces.filter((w) => !w.pinned)
+  return [...pinned, ...unpinned].map(withProjectRootStatus)
 }
 
 /** 按 updatedAt 降序（桥接/飞书列表等与旧版内联 sort 一致；渲染进程仍用 listAgentWorkspaces） */
@@ -217,6 +219,34 @@ function withProjectRootStatus(workspace: AgentWorkspace): AgentWorkspace {
   return projectRootStatus ? { ...workspace, projectRootStatus } : { ...workspace }
 }
 
+/** 切换工作区置顶状态并持久化，置顶工作区按添加时间倒排排在前面 */
+export function togglePinAgentWorkspace(id: string): AgentWorkspace[] {
+  const index = readIndex()
+  const ws = index.workspaces.find((w) => w.id === id)
+  if (!ws) throw new Error(`项目不存在: ${id}`)
+
+  const nowPinned = !ws.pinned
+  ws.pinned = nowPinned
+  if (nowPinned) {
+    ws.pinnedAt = Date.now()
+  } else {
+    delete ws.pinned
+    delete ws.pinnedAt
+  }
+
+  // 排序规则：
+  // 1. 置顶工作区按 pinnedAt 倒排（最新添加置顶排在最前）
+  // 2. 未置顶工作区保留原有相对顺序排在后面
+  const pinnedWorkspaces = index.workspaces
+    .filter((w) => w.pinned)
+    .sort((a, b) => (b.pinnedAt ?? 0) - (a.pinnedAt ?? 0))
+  const unpinnedWorkspaces = index.workspaces.filter((w) => !w.pinned)
+
+  index.workspaces = [...pinnedWorkspaces, ...unpinnedWorkspaces]
+  writeIndex(index)
+  return index.workspaces.map(withProjectRootStatus)
+}
+
 /** 按指定 ID 顺序重排工作区，未列出的追加到末尾 */
 export function reorderAgentWorkspaces(orderedIds: string[]): AgentWorkspace[] {
   const index = readIndex()
@@ -230,9 +260,19 @@ export function reorderAgentWorkspaces(orderedIds: string[]): AgentWorkspace[] {
     }
   }
   for (const ws of byId.values()) reordered.push(ws)
+
+  // 保持置顶工作区的 pinnedAt 与重排后的新顺序一致（按倒排时间戳递减）
+  const pinnedWorkspaces = reordered.filter((w) => w.pinned)
+  if (pinnedWorkspaces.length > 0) {
+    const baseTime = Date.now()
+    pinnedWorkspaces.forEach((w, idx) => {
+      w.pinnedAt = baseTime - idx * 1000
+    })
+  }
+
   index.workspaces = reordered
   writeIndex(index)
-  return reordered
+  return reordered.map(withProjectRootStatus)
 }
 
 export function getAgentWorkspace(id: string): AgentWorkspace | undefined {

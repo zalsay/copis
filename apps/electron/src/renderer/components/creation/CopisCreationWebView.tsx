@@ -190,6 +190,11 @@ export function CopisCreationWebView(): React.ReactElement {
       } else if (e.type === 'COPIS_NAVIGATE') {
         if (e.view === 'conversations') {
           setCreationSubView(null)
+          setActiveView('conversations')
+          void window.electronAPI?.dshCordis?.dispatchToClient?.({
+            type: 'COPIS_ACTIVE_VIEW_CHANGE',
+            view: 'conversations',
+          })
         } else if (e.view) {
           setCreationSubView(e.view as CreationSubView)
           if (e.view === 'planning' && e.tab) {

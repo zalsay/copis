@@ -12,6 +12,7 @@
  */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { createHash } from 'node:crypto'
 import { join } from 'node:path'
 import { Document, parseDocument } from 'yaml'
 import {
@@ -28,6 +29,9 @@ import {
   getCopisWorkingModelDisplayName,
   PROVIDER_DEFAULT_URLS,
   ZHIPU_DEFAULT_MODEL_ID,
+  isWorkingCustomModelChannelId,
+  workingCustomModelChannelIdFor,
+  type AgentThinkingLevel,
 } from '@copis/shared'
 import type { AppSettings } from '../../types'
 import { resolvePiThinkingLevel } from './agent-thinking-level'
@@ -35,6 +39,7 @@ import { getSettings } from './settings-service'
 import { getChannelById, listChannels, resolveChannelRuntimeApiKey } from './channel-manager'
 import { getWorkingApiClient } from './working-api-service'
 import { getDshHomeDir } from './config-paths'
+import { getWorkingModelCatalog, getWorkingModelCatalogOwnerId, getWorkingCustomModelRuntime } from './working-model-catalog'
 
 async function resolveHttpApiInternalToken(): Promise<string> {
   try {
@@ -60,7 +65,8 @@ export interface DshWorkingProviderConfig {
   providerRoute: string
   displayName: string
   apiKeyEnv: string
-  protocol: 'openai-responses'
+  protocol: DshUnifiedModelConfig['protocol']
+  reasoning?: AgentThinkingLevel
   baseURL: string
   models: Array<{ id: string; name: string }>
   defaultContextWindow?: number
@@ -268,6 +274,38 @@ async function resolveDshWorkingProviders(): Promise<DshWorkingProviderConfig[]>
   })
 }
 
+const CUSTOM_KEY_PREFIX = 'COPIS_DSH_CUSTOM_'
+
+/** 与 Agent 共用账号目录和 VIP 访问规则，每个模型保留独立协议及凭据。 */
+function resolveDshCustomProviders(): DshWorkingProviderConfig[] {
+  const user = getWorkingApiClient().getCachedUser()
+  const ownerId = getWorkingModelCatalogOwnerId(user)
+  if (user?.isVip !== true || !ownerId) return []
+  const catalog = getWorkingModelCatalog(true, ownerId)
+  return catalog.models.filter((model) => model.apiKeyConfigured).flatMap((model) => {
+    const providerRoute = workingCustomModelChannelIdFor(model.id)
+    try {
+      const runtime = getWorkingCustomModelRuntime(providerRoute, true, ownerId)
+      const apiKeyEnv = CUSTOM_KEY_PREFIX + createHash('sha256').update(`${ownerId}:${model.id}`).digest('hex').toUpperCase()
+      return [{
+        providerRoute,
+        displayName: catalog.categories.find((category) => category.id === model.categoryId)?.name ?? '自定义模型',
+        protocol: model.protocol,
+        reasoning: model.thinkingLevel,
+        baseURL: model.baseUrl.replace(/\/+$/, ''),
+        models: [{ id: model.modelId, name: model.name }],
+        apiKeyEnv,
+        // 通过 credentials 热更新，不把密钥固化进子进程环境。
+        env: {},
+        credentialsRefs: { [apiKeyEnv]: runtime.apiKey },
+      }]
+    } catch {
+      console.warn('[DSH] 跳过无法读取凭据的自定义模型:', model.id)
+      return []
+    }
+  })
+}
+
 /**
  * 统一解析 Copis 当前激活的 Agent 渠道/模型，返回 DSH 自定义 provider 的结构化配置
  */
@@ -291,6 +329,17 @@ export async function resolveDshUnifiedModelConfig(
     providerConfigs = await resolveDshWorkingProviders()
   } catch (error) {
     console.warn('[DSH Cordis Web] Working 模型路由同步失败:', error)
+  }
+  providerConfigs.push(...resolveDshCustomProviders())
+  const selectedCustom = providerConfigs.find((provider) => provider.providerRoute === targetChannelId && isWorkingCustomModelChannelId(targetChannelId))
+  if (selectedCustom) {
+    return {
+      ...selectedCustom,
+      env: Object.assign({}, ...providerConfigs.map((provider) => provider.env)),
+      defaultModelId: selectedCustom.models[0]!.id,
+      apiKey: selectedCustom.credentialsRefs[selectedCustom.apiKeyEnv] ?? '',
+      providerConfigs,
+    }
   }
 
   // 1. Copis Working 内置快速 / 专家 / 通识渠道
@@ -384,7 +433,7 @@ export async function resolveDshUnifiedModelConfig(
   }
 
   // 组装环境变量与凭据映射
-  const env: Record<string, string> = {}
+  const env: Record<string, string> = Object.assign({}, ...providerConfigs.map((provider) => provider.env))
   const credentialsRefs: Record<string, string> = {}
 
   if (isWorkingRoute && apiKey) {
@@ -481,9 +530,13 @@ export function applyDshModelConfig(
   }
 
   // 将当前默认路由与 Copis Working 内建路由一起注册到 Composer 模型目录。
+  const oldProviders = settingsDoc.toJS()?.['llm-pi-ai']?.providers ?? {}
+  for (const route of Object.keys(oldProviders)) {
+    if (isWorkingCustomModelChannelId(route)) settingsDoc.deleteIn(['llm-pi-ai', 'providers', route])
+  }
   for (const provider of [
-    ...(config.providerConfigs ?? []),
-    {
+    ...(config.providerConfigs ?? []).filter((provider) => !isWorkingCustomModelChannelId(provider.providerRoute)),
+    ...((config.providerConfigs ?? []).some((provider) => provider.providerRoute === config.providerRoute) ? [] : [{
       providerRoute: config.providerRoute,
       displayName: config.displayName,
       apiKeyEnv: config.apiKeyEnv,
@@ -495,14 +548,23 @@ export function applyDshModelConfig(
       ...(config.providerRoute === COPIS_WORKING_DEEPSEEK_CHANNEL_ID
         ? { defaultContextWindow: COPIS_DSH_DEEPSEEK_DEFAULT_CONTEXT_WINDOW }
         : {}),
-    },
+    }]),
+    ...(config.providerConfigs ?? []).filter((provider) => isWorkingCustomModelChannelId(provider.providerRoute)),
   ]) {
     settingsDoc.setIn(['llm-pi-ai', 'providers', provider.providerRoute], {
       displayName: provider.displayName,
       ...(provider.apiKeyEnv ? { apiKeyEnv: provider.apiKeyEnv } : {}),
       api: provider.protocol,
       baseURL: provider.baseURL,
-      models: provider.models.map((model) => ({ id: model.id, name: model.name })),
+      ...('reasoning' in provider && provider.reasoning !== undefined ? { reasoning: provider.reasoning } : {}),
+      models: provider.models.map((model) => ({
+        id: model.id,
+        name: model.name,
+        // 自定义 route 没有内置能力目录，必须声明设置中选用的思考等级。
+        ...(isWorkingCustomModelChannelId(provider.providerRoute) && 'reasoning' in provider && provider.reasoning !== undefined
+          ? { reasoningEfforts: provider.reasoning === 'off' ? false : { [provider.reasoning]: provider.reasoning } }
+          : {}),
+      })),
       ...(provider.defaultContextWindow !== undefined ? { defaultContextWindow: provider.defaultContextWindow } : {}),
     })
   }
@@ -529,7 +591,12 @@ export function applyDshModelConfig(
     credDoc.set('version', 1)
   }
 
-  for (const [key, val] of Object.entries(config.credentialsRefs)) {
+  const oldRefs = credDoc.toJS()?.refs ?? {}
+  for (const key of Object.keys(oldRefs)) {
+    if (key.startsWith(CUSTOM_KEY_PREFIX)) credDoc.deleteIn(['refs', key])
+  }
+  const refs = Object.assign({}, config.credentialsRefs, ...(config.providerConfigs ?? []).map((provider) => provider.credentialsRefs))
+  for (const [key, val] of Object.entries(refs)) {
     credDoc.setIn(['refs', key], val)
   }
 

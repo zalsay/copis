@@ -64,6 +64,7 @@ impl CloneForTest for EduApiRequest {
             path: self.path.clone(),
             body: self.body.clone(),
             access_token: self.access_token.clone(),
+            headers: self.headers.clone(),
             request_id: self.request_id.clone(),
         }
     }
@@ -134,6 +135,15 @@ fn model_proxy_keeps_sse_order_and_uses_auth_session_token() {
     assert_eq!(
         model_request.access_token.as_deref(),
         Some("header.eyJleHAiOjQxMDAuMH0.sig")
+    );
+    assert_eq!(
+        model_request.headers,
+        vec![
+            (
+                "X-Working-Model-Source-Type".to_string(),
+                "copis-agent-model".to_string(),
+            ),
+        ]
     );
     assert_eq!(calls.len(), 2);
 }

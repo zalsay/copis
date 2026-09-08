@@ -73,6 +73,7 @@ fn request(method: &str, path: &str) -> EduApiRequest {
         path: path.to_string(),
         body: None,
         access_token: None,
+        headers: Vec::new(),
         request_id: "req-test-1".to_string(),
     }
 }
@@ -102,6 +103,10 @@ fn forwards_one_bearer_token_without_logging_or_mutating_it() {
     let client = client(transport.clone(), 2);
     let mut input = request("GET", "/api/users/me");
     input.access_token = Some("access-secret".to_string());
+    input.headers = vec![(
+        "X-Working-Model-Source-Type".to_string(),
+        "copis-secret".to_string(),
+    )];
 
     client.request(input).unwrap();
 
@@ -109,6 +114,8 @@ fn forwards_one_bearer_token_without_logging_or_mutating_it() {
     assert_eq!(requests[0].access_token.as_deref(), Some("access-secret"));
     let debug = format!("{:?}", requests[0]);
     assert!(!debug.contains("access-secret"));
+    assert!(debug.contains("X-Working-Model-Source-Type"));
+    assert!(!debug.contains("copis-secret"));
 }
 
 #[test]
@@ -248,4 +255,3 @@ fn stream_timeout_resolution_respects_max_300s_limit() {
     std::env::remove_var("COPIS_STREAM_TIMEOUT_SECS");
     std::env::remove_var("COPIS_EDU_API_TIMEOUT_SECS");
 }
-

@@ -343,6 +343,24 @@ describe('默认 Skills 清单', () => {
     expect(content).toContain('DAG 准则')
     expect(content).toContain('refreshAll()')
   })
+
+  test('方案确认 grill-me 包含系统内置元数据与核心深度追问法则', () => {
+    const bundled = new Set(bundledSkillSlugs())
+    expect(bundled.has('grill-me')).toBe(true)
+
+    const fm = readFrontmatter('grill-me')
+    expect(fm.get('name')).toBe('grill-me')
+    expect(fm.get('displayName')).toBe('方案深度追问与确认')
+    expect(fm.get('group')).toBe('系统内置')
+    expect(fm.get('category')).toBe('办公')
+    expect(fm.get('version')?.replace(/^['"]|['"]$/g, '')).toBe('1.0.0')
+
+    const content = readFileSync(join(DEFAULT_SKILLS_DIR, 'grill-me', 'SKILL.md'), 'utf8')
+    expect(content).toContain('先给推荐，再提问题')
+    expect(content).toContain('单步递进，禁止刷屏')
+    expect(content).toContain('代码库探索先行')
+    expect(content).toContain('writing-plans')
+  })
 })
 
 

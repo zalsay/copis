@@ -638,3 +638,48 @@ describe('工作区可读根目录与写入根隔离', () => {
   })
 })
 
+describe('工作区置顶与多项倒排排序', () => {
+  test('Given 多个工作区 When 依次置顶 Then 置顶工作区排在前面且按添加时间倒排', async () => {
+    const ws1 = manager.createAgentWorkspace({ name: '项目一' })
+    const ws2 = manager.createAgentWorkspace({ name: '项目二' })
+    const ws3 = manager.createAgentWorkspace({ name: '项目三' })
+
+    // 先置顶项目一
+    let list = manager.togglePinAgentWorkspace(ws1.id)
+    expect(list[0]?.id).toBe(ws1.id)
+    expect(list[0]?.pinned).toBe(true)
+
+    // 延时确保时间戳不同
+    await new Promise((resolve) => setTimeout(resolve, 10))
+
+    // 再置顶项目三：项目三后置顶，应排在项目一前面
+    list = manager.togglePinAgentWorkspace(ws3.id)
+    expect(list[0]?.id).toBe(ws3.id)
+    expect(list[0]?.pinned).toBe(true)
+    expect(list[1]?.id).toBe(ws1.id)
+    expect(list[1]?.pinned).toBe(true)
+    expect(list[2]?.id).toBe(ws2.id)
+    expect(list[2]?.pinned).toBeFalsy()
+
+    // 延时后置顶项目二：项目二最新置顶，应排在最前
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    list = manager.togglePinAgentWorkspace(ws2.id)
+    expect(list[0]?.id).toBe(ws2.id)
+    expect(list[1]?.id).toBe(ws3.id)
+    expect(list[2]?.id).toBe(ws1.id)
+    expect(list.every((w) => w.pinned)).toBe(true)
+
+    // 取消置顶项目三：项目三移至未置顶，剩余置顶项保持顺序
+    list = manager.togglePinAgentWorkspace(ws3.id)
+    expect(list[0]?.id).toBe(ws2.id)
+    expect(list[1]?.id).toBe(ws1.id)
+    expect(list[2]?.id).toBe(ws3.id)
+    expect(list[2]?.pinned).toBeFalsy()
+
+    // listAgentWorkspaces() 也返回正确顺序
+    const fetched = manager.listAgentWorkspaces()
+    expect(fetched.map((w) => w.id)).toEqual([ws2.id, ws1.id, ws3.id])
+  })
+})
+
+

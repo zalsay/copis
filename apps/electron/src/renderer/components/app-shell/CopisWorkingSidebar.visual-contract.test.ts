@@ -567,4 +567,79 @@ describe('Working 侧边栏视觉契约', () => {
     expect(metaRule).toBeDefined()
     expect(metaRule).toContain('white-space: nowrap')
   })
+
+  test('Given 左侧菜单栏 When 内容溢出滚动 Then 隐藏滚动条并保留滚动能力', () => {
+    const sidebarBodyRule = sidebarStyles.match(
+      /\.copis-working-sidebar-body\s*\{([^}]*)\}/s,
+    )?.[1]
+    const scrollbarRule = sidebarStyles.match(
+      /\.copis-working-sidebar-body::-webkit-scrollbar\s*\{([^}]*)\}/s,
+    )?.[1]
+    const projectListRule = sidebarStyles.match(
+      /\.copis-working-project-list\s*\{([^}]*)\}/s,
+    )?.[1]
+    const projectListScrollbarRule = sidebarStyles.match(
+      /\.copis-working-project-list::-webkit-scrollbar\s*\{([^}]*)\}/s,
+    )?.[1]
+
+    expect(sidebarBodyRule).toBeDefined()
+    expect(sidebarBodyRule).toContain('overflow-y: auto')
+    expect(sidebarBodyRule).toContain('scrollbar-width: none')
+    expect(sidebarBodyRule).toContain('-ms-overflow-style: none')
+    expect(sidebarBodyRule).not.toContain('scrollbar-width: thin')
+
+    expect(scrollbarRule).toBeDefined()
+    expect(scrollbarRule).toContain('display: none')
+
+    expect(projectListRule).toBeDefined()
+    expect(projectListRule).toContain('scrollbar-width: none')
+    expect(projectListRule).toContain('-ms-overflow-style: none')
+
+    expect(projectListScrollbarRule).toBeDefined()
+    expect(projectListScrollbarRule).toContain('display: none')
+  })
+
+  test('Given 左侧菜单栏菜单项 When 鼠标悬停显示隐藏胶囊按钮 Then 胶囊按钮无背景色仅保留边框且无 hover 变色效果直接静态显示', () => {
+    const hideBtnRule = sidebarStyles.match(
+      /\.copis-working-menu-hide-btn\s*\{([^}]*)\}/s,
+    )?.[1]
+    const hideBtnHoverRule = sidebarStyles.match(
+      /\.copis-working-menu-hide-btn:hover\s*\{([^}]*)\}/s,
+    )?.[1]
+
+    expect(hideBtnRule).toBeDefined()
+    expect(hideBtnRule).toContain('background: transparent')
+    expect(hideBtnRule).toContain('border: 1px solid')
+    expect(hideBtnRule).not.toContain('background: hsl(var(--background)')
+    expect(hideBtnRule).not.toContain('backdrop-filter: blur')
+    // 胶囊自身无 hover 变色规则，直接静态呈现边框与文字
+    expect(hideBtnHoverRule).toBeUndefined()
+  })
+
+  test('Given 工作区菜单 When 查看项目菜单项 Then 支持多项置顶按添加时间倒排并提供取消置顶与边界保护', () => {
+    expect(sidebarSource).toContain('ArrowUpToLine')
+    expect(sidebarSource).toContain('PinOff')
+    expect(sidebarSource).toContain('ArrowUp')
+    expect(sidebarSource).toContain('ArrowDown')
+    expect(sidebarSource).toContain('handleTogglePinWorkspace')
+    expect(sidebarSource).toContain('handleMoveWorkspaceUp')
+    expect(sidebarSource).toContain('handleMoveWorkspaceDown')
+    expect(sidebarSource).toContain('reorderAgentWorkspaces')
+    expect(sidebarSource).toContain('togglePinAgentWorkspace')
+    expect(sidebarSource).toContain('<span>置顶</span>')
+    expect(sidebarSource).toContain('<span>取消置顶</span>')
+    expect(sidebarSource).toContain('<span>上移</span>')
+    expect(sidebarSource).toContain('<span>下移</span>')
+    expect(sidebarSource).toContain('disabled={busy || !canMoveUp}')
+    expect(sidebarSource).toContain('disabled={busy || !canMoveDown}')
+    expect(sidebarSource).toContain('copis-working-project-pin-badge')
+    expect(sidebarStyles).toContain('.copis-working-project-menu button {')
+    expect(sidebarStyles).toContain('display: flex')
+    expect(sidebarStyles).toContain('align-items: center')
+    expect(sidebarStyles).toContain('gap: 8px')
+    expect(sidebarStyles).toContain('.copis-working-project-menu button svg')
+    expect(sidebarStyles).toContain('.copis-working-project-menu-divider')
+    expect(sidebarStyles).toContain('.copis-working-project-pin-badge')
+  })
 })
+

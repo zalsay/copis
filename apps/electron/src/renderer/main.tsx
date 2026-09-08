@@ -17,9 +17,16 @@ import {
   themeModeAtom,
   themeStyleAtom,
   interfaceVariantAtom,
+  agentThemeColorAtom,
+  creationThemeColorAtom,
+  agentThemeColorLightAtom,
+  agentThemeColorDarkAtom,
+  creationThemeColorLightAtom,
+  creationThemeColorDarkAtom,
   systemIsDarkAtom,
   resolvedThemeAtom,
   applyThemeToDOM,
+  applyThemeColorsToDOM,
   applyInterfaceVariantToDOM,
   initializeTheme,
 } from './atoms/theme'
@@ -73,6 +80,10 @@ import {
   pinnedDevProjectsAtom,
   initializePinnedDevProjects,
 } from './atoms/pinned-dev-projects'
+import {
+  hiddenSidebarMenuItemsAtom,
+  initializeHiddenSidebarMenuItems,
+} from './atoms/sidebar-menu-atoms'
 import { useGlobalAgentListeners } from './hooks/useGlobalAgentListeners'
 import { tabsAtom, activeTabIdAtom, getPersistableTabState, sanitizePersistedTabs } from './atoms/tab-atoms'
 import type { TabItem } from './atoms/tab-atoms'
@@ -81,6 +92,7 @@ import { feishuBotStatesAtom } from './atoms/feishu-atoms'
 import { dingtalkBotStatesAtom } from './atoms/dingtalk-atoms'
 import { channelsAtom, channelsLoadedAtom, selectedModelAtom } from './atoms/model-atoms'
 import { appModeAtom, normalizeAppMode } from './atoms/app-mode'
+import { activeViewAtom } from './atoms/active-view'
 import {
   EMPTY_WORKING_MODEL_CATALOG,
   COPIS_WORKING_DEEPSEEK_CHANNEL_ID,
@@ -161,18 +173,38 @@ function ThemeInitializer(): null {
   const setThemeMode = useSetAtom(themeModeAtom)
   const setThemeStyle = useSetAtom(themeStyleAtom)
   const setInterfaceVariant = useSetAtom(interfaceVariantAtom)
+  const setAgentThemeColor = useSetAtom(agentThemeColorAtom)
+  const setCreationThemeColor = useSetAtom(creationThemeColorAtom)
+  const setAgentThemeColorLight = useSetAtom(agentThemeColorLightAtom)
+  const setAgentThemeColorDark = useSetAtom(agentThemeColorDarkAtom)
+  const setCreationThemeColorLight = useSetAtom(creationThemeColorLightAtom)
+  const setCreationThemeColorDark = useSetAtom(creationThemeColorDarkAtom)
   const setSystemIsDark = useSetAtom(systemIsDarkAtom)
   const themeMode = useAtomValue(themeModeAtom)
   const themeStyle = useAtomValue(themeStyleAtom)
   const interfaceVariant = useAtomValue(interfaceVariantAtom)
+  const agentThemeColor = useAtomValue(agentThemeColorAtom)
+  const creationThemeColor = useAtomValue(creationThemeColorAtom)
   const systemIsDark = useAtomValue(systemIsDarkAtom)
+  const resolvedTheme = useAtomValue(resolvedThemeAtom)
 
   // 初始化：从主进程加载设置 + 订阅系统主题变化
   useEffect(() => {
     let isMounted = true
     let cleanup: (() => void) | undefined
 
-    initializeTheme(setThemeMode, setSystemIsDark, setThemeStyle, setInterfaceVariant).then((fn) => {
+    initializeTheme(
+      setThemeMode,
+      setSystemIsDark,
+      setThemeStyle,
+      setInterfaceVariant,
+      setAgentThemeColor,
+      setCreationThemeColor,
+      setAgentThemeColorLight,
+      setAgentThemeColorDark,
+      setCreationThemeColorLight,
+      setCreationThemeColorDark,
+    ).then((fn) => {
       if (isMounted) {
         cleanup = fn
       } else {
@@ -185,7 +217,18 @@ function ThemeInitializer(): null {
       isMounted = false
       cleanup?.()
     }
-  }, [setThemeMode, setSystemIsDark, setThemeStyle, setInterfaceVariant])
+  }, [
+    setThemeMode,
+    setSystemIsDark,
+    setThemeStyle,
+    setInterfaceVariant,
+    setAgentThemeColor,
+    setCreationThemeColor,
+    setAgentThemeColorLight,
+    setAgentThemeColorDark,
+    setCreationThemeColorLight,
+    setCreationThemeColorDark,
+  ])
 
   // 响应式应用主题到 DOM
   // 用 useMemo 计算"实际会影响 DOM 的状态签名"作为唯一依赖：
@@ -205,6 +248,10 @@ function ThemeInitializer(): null {
     applyThemeToDOM(themeMode, themeStyle, systemIsDark)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [themeSignature])
+
+  useEffect(() => {
+    applyThemeColorsToDOM(agentThemeColor, creationThemeColor, resolvedTheme === 'dark')
+  }, [agentThemeColor, creationThemeColor, resolvedTheme])
 
   useEffect(() => {
     applyInterfaceVariantToDOM(interfaceVariant)
@@ -354,9 +401,14 @@ function AgentSettingsInitializer(): null {
         store.set(selectedModelAtom, null)
       }
 
-      // Copis Working 的本地 Agent 固定使用 Pi；模型推理统一经过 edu-api。
+      // Copis Working 的本地 Agent 固定使用 Pi；创造模式固定使用 dsh。
       const defaultAgentRuntime = 'pi' as const
-      setAgentRuntime(defaultAgentRuntime)
+      const currentAppMode = normalizeAppMode(settings.appMode ?? store.get(appModeAtom))
+      if (currentAppMode === 'creation') {
+        setAgentRuntime('dsh')
+      } else {
+        setAgentRuntime(defaultAgentRuntime)
+      }
 
       // 渠道的启用状态是唯一开关：启动时也必须从实际渠道派生可用列表。
       const agentChannelIds = getEnabledAgentChannelIds(channels)
@@ -782,6 +834,29 @@ function PinnedDevProjectsInitializer(): null {
 }
 
 /**
+ * 侧边栏菜单显隐初始化组件
+ *
+ * 从主进程加载用户自定义的侧边栏隐藏菜单项配置。
+ */
+function SidebarMenuItemsInitializer(): null {
+  const setHiddenSidebarMenuItems = useSetAtom(hiddenSidebarMenuItemsAtom)
+
+  useEffect(() => {
+    void initializeHiddenSidebarMenuItems(setHiddenSidebarMenuItems)
+
+    const unsubscribe = window.electronAPI?.onHiddenSidebarMenuItemsChanged?.((items) => {
+      setHiddenSidebarMenuItems(Array.isArray(items) ? items : [])
+    })
+
+    return () => {
+      unsubscribe?.()
+    }
+  }, [setHiddenSidebarMenuItems])
+
+  return null
+}
+
+/**
  * Agent IPC 监听器初始化组件
  *
  * 全局挂载，永不销毁。确保 Agent 流式事件、权限请求
@@ -967,6 +1042,16 @@ function TabStatePersistenceInitializer(): null {
       window.electronAPI.getSettings(),
       window.electronAPI.listAgentSessions(),
     ]).then(([settings, agentSessions]) => {
+      // 优先从 settings.appMode 恢复模式，兜底回退到 localStorage 缓存值
+      const persistedMode = normalizeAppMode(settings.appMode ?? store.get(appModeAtom))
+      store.set(appModeAtom, persistedMode)
+      if (persistedMode === 'creation') {
+        store.set(agentRuntimeAtom, 'dsh')
+        store.set(activeViewAtom, 'conversations')
+      } else {
+        store.set(agentRuntimeAtom, 'pi')
+      }
+
       const tabState = settings.tabState
       const validSessionIds = new Set(agentSessions.map((s) => s.id))
 
@@ -1015,7 +1100,9 @@ function TabStatePersistenceInitializer(): null {
 
       // 同步模式、当前 Agent 会话和工作区。
       if (activeTab?.type === 'agent') {
-        store.set(appModeAtom, 'agent')
+        if (persistedMode !== 'creation') {
+          store.set(appModeAtom, 'agent')
+        }
         store.set(currentAgentSessionIdAtom, activeTab.sessionId)
         const session = agentSessions.find((item) => item.id === activeTab.sessionId)
         if (session?.workspaceId) store.set(currentAgentWorkspaceIdAtom, session.workspaceId)
@@ -1026,16 +1113,18 @@ function TabStatePersistenceInitializer(): null {
       .finally(() => { restoredRef.current = true })
   }, [store])
 
-  // 自动保存：监听 tabsAtom / activeTabIdAtom 变化，防抖写入 settings.json
+  // 自动保存：监听 tabsAtom / activeTabIdAtom / appModeAtom 变化，防抖写入 settings.json
   useEffect(() => {
     let timer: ReturnType<typeof setTimeout> | null = null
 
     const save = (): void => {
       const tabs = store.get(tabsAtom)
       const activeTabId = store.get(activeTabIdAtom)
+      const appMode = store.get(appModeAtom)
       const persistableTabState = getPersistableTabState(tabs, activeTabId)
       window.electronAPI.updateSettings({
         tabState: persistableTabState,
+        appMode,
       }).catch(console.error)
     }
 
@@ -1047,6 +1136,7 @@ function TabStatePersistenceInitializer(): null {
 
     const unsub1 = store.sub(tabsAtom, debouncedSave)
     const unsub2 = store.sub(activeTabIdAtom, debouncedSave)
+    const unsub3 = store.sub(appModeAtom, debouncedSave)
 
     // 窗口关闭前立即刷新，避免最后 500ms 内的变更丢失
     const handleBeforeUnload = (): void => {
@@ -1054,9 +1144,13 @@ function TabStatePersistenceInitializer(): null {
       // 使用同步 IPC 确保关闭前数据写入磁盘
       const tabs = store.get(tabsAtom)
       const activeTabId = store.get(activeTabIdAtom)
+      const appMode = store.get(appModeAtom)
       const persistableTabState = getPersistableTabState(tabs, activeTabId)
-      if (tabs.length > 0 && window.electronAPI.updateSettingsSync) {
-        const ok = window.electronAPI.updateSettingsSync({ tabState: persistableTabState })
+      if (window.electronAPI.updateSettingsSync) {
+        const ok = window.electronAPI.updateSettingsSync({
+          ...(tabs.length > 0 ? { tabState: persistableTabState } : {}),
+          appMode,
+        })
         if (!ok) {
           console.warn('[TabPersist] sync IPC failed, falling back to async save')
           save()
@@ -1070,6 +1164,7 @@ function TabStatePersistenceInitializer(): null {
     return () => {
       unsub1()
       unsub2()
+      unsub3()
       if (timer) clearTimeout(timer)
       window.removeEventListener('beforeunload', handleBeforeUnload)
     }
@@ -1146,6 +1241,7 @@ if (isQuickTaskWindow) {
       <UiPreferencesInitializer />
       <MarkdownFontSizeInitializer />
       <PinnedDevProjectsInitializer />
+      <SidebarMenuItemsInitializer />
       <AgentListenersInitializer />
       <AgentToolInitializer />
       <UpdaterInitializer />

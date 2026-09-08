@@ -53,7 +53,7 @@ import { CopyButton } from '@/components/message/CopyButton'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { formatMessageTime } from '@/components/message/message-format'
-import { CopisAgentLogo } from '@/lib/model-logo'
+import { AssistantLogo } from './CopisAgentAvatar'
 import { modelSelectorOpenAtom } from '@/atoms/model-atoms'
 import { agentSessionPendingFilesAtom, agentSessionsAtom, agentWorkspacesAtom } from '@/atoms/agent-atoms'
 import { activeSessionIdAtom } from '@/atoms/tab-atoms'
@@ -268,18 +268,6 @@ function extractToolResultForTask(message: SDKUserMessage, resultBlock: SDKToolR
 }
 
 // isUserInputMessage 已迁移至 @copis/session-core
-
-// ===== 助手头像 =====
-
-function AssistantLogo(): React.ReactElement {
-  return (
-    <img
-      src={CopisAgentLogo}
-      alt="Copis Agent"
-      className="size-[35px] rounded-[25%] object-cover"
-    />
-  )
-}
 
 // AssistantTurn / MessageGroup 类型已迁移至 @copis/session-core
 

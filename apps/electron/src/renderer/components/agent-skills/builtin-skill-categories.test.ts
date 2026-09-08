@@ -51,6 +51,7 @@ describe('Copis 内置 Skill 分类契约', () => {
       'summarize-workflow',
       'writing-plans',
       'executing-plans',
+      'grill-me',
     ]
 
     for (const slug of officeSlugs) {

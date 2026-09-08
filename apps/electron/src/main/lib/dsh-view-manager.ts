@@ -81,8 +81,9 @@ export function ensureDshView(url: string): WebContentsView | null {
       const settings = getSettings()
       const isDark = resolveIsDark(settings.themeMode, settings.themeStyle, nativeTheme.shouldUseDarkColors)
       syncThemeToDshView(isDark)
+      syncHiddenSidebarMenuItemsToDshView(settings.hiddenSidebarMenuItems)
     } catch (err) {
-      console.warn('[DSH View Manager] 同步主题失败:', err)
+      console.warn('[DSH View Manager] 同步主题与菜单失败:', err)
     }
   }
 
@@ -132,11 +133,13 @@ export function dispatchToDshClient(payload: unknown): void {
   }
 }
 
-/** 向 DSH 视图实时同步主题状态（浅色/深色） */
-export function syncThemeToDshView(isDark: boolean): void {
+/** 向 DSH 视图实时同步主题状态（浅色/深色）及自定义模式主题色 */
+export function syncThemeToDshView(isDark: boolean, agentThemeColor?: string, creationThemeColor?: string): void {
   dispatchToDshClient({
     type: 'COPIS_THEME_CHANGED',
     isDark,
+    agentThemeColor,
+    creationThemeColor,
   })
 
   if (dshView && !dshView.webContents.isDestroyed()) {
@@ -152,6 +155,14 @@ export function syncThemeToDshView(isDark: boolean): void {
     `
     dshView.webContents.executeJavaScript(js).catch(() => {})
   }
+}
+
+/** 向 DSH 视图实时同步隐藏菜单项设置 */
+export function syncHiddenSidebarMenuItemsToDshView(hiddenItems?: string[]): void {
+  dispatchToDshClient({
+    type: 'COPIS_HIDDEN_SIDEBAR_MENU_ITEMS_CHANGED',
+    hiddenSidebarMenuItems: Array.isArray(hiddenItems) ? hiddenItems : [],
+  })
 }
 
 /** 获取当前原生 DSH View 实例 */

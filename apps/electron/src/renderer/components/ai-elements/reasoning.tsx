@@ -24,6 +24,7 @@ import {
 } from '@/components/ui/collapsible'
 import { cn } from '@/lib/utils'
 import { normalizeLatexDelimiters } from '@/lib/normalize-latex'
+import { openLink } from '@/lib/open-link'
 import type { ComponentProps, ReactNode } from 'react'
 
 // ===== 上下文 =====
@@ -226,8 +227,8 @@ export const ReasoningContent = React.memo(
                   href={href}
                   onClick={(e) => {
                     e.preventDefault()
-                    if (href && (href.startsWith('http://') || href.startsWith('https://'))) {
-                      window.electronAPI.openExternal(href)
+                    if (href) {
+                      void openLink(href)
                     }
                   }}
                   title={href}

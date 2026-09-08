@@ -23,7 +23,7 @@ import { ScrollMinimap } from '@/components/ai-elements/scroll-minimap'
 import type { MinimapItem } from '@/components/ai-elements/scroll-minimap'
 import { StickyUserMessage } from '@/components/ai-elements/sticky-user-message'
 import { useSmoothStream } from '@copis/ui'
-import { CopisAgentLogo } from '@/lib/model-logo'
+import { AssistantLogo } from './CopisAgentAvatar'
 import { userProfileAtom } from '@/atoms/user-profile'
 import { tabMinimapCacheAtom } from '@/atoms/tab-atoms'
 import { ScrollPositionManager } from '@/hooks/useScrollPositionMemory'
@@ -210,16 +210,6 @@ interface AgentMessagesProps {
 /** 空状态引导 — 使用 WelcomeEmptyState */
 function EmptyState(): React.ReactElement {
   return <WelcomeEmptyState />
-}
-
-function AssistantLogo(): React.ReactElement {
-  return (
-    <img
-      src={CopisAgentLogo}
-      alt="Copis Agent"
-      className="size-[35px] rounded-[25%] object-cover"
-    />
-  )
 }
 
 /** 重试提示组件 - 折叠式 */

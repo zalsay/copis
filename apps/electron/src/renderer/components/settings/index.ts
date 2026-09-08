@@ -4,6 +4,7 @@
 
 export * from './AboutUpdatesSettings'
 export * from './AppearanceSettings'
+export * from './MenuManagementSettings'
 export * from './MigrationSettings'
 export * from './StorageSettings'
 export * from './VoiceInputSettings'

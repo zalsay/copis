@@ -219,6 +219,50 @@ export type MarkdownFontSize = 'small' | 'medium' | 'large'
 /** 默认 Markdown 字号档位 */
 export const DEFAULT_MARKDOWN_FONT_SIZE: MarkdownFontSize = 'medium'
 
+/** 默认 Agent 模式主题色（浅色与兼容默认值） */
+export const DEFAULT_AGENT_THEME_COLOR = '#f09a43'
+export const DEFAULT_AGENT_THEME_COLOR_LIGHT = '#f09a43'
+
+/** 默认 Agent 模式主题色（深色） */
+export const DEFAULT_AGENT_THEME_COLOR_DARK = '#f09a43'
+
+/** 默认创造模式主题色（浅色） */
+export const DEFAULT_CREATION_THEME_COLOR_LIGHT = '#6C00CC'
+
+/** 默认创造模式主题色（深色） */
+export const DEFAULT_CREATION_THEME_COLOR_DARK = '#a855f7'
+
+/** 主题色预设项 */
+export interface ThemeColorPreset {
+  id: string
+  name: string
+  color: string
+}
+
+/** Agent 模式精选主题色预设 */
+export const AGENT_THEME_COLOR_PRESETS: ThemeColorPreset[] = [
+  { id: 'classic-orange', name: '活力橙 (默认)', color: '#f09a43' },
+  { id: 'tech-blue', name: '科技蓝', color: '#3b82f6' },
+  { id: 'emerald-green', name: '翡翠绿', color: '#10b981' },
+  { id: 'royal-purple', name: '极光紫', color: '#8b5cf6' },
+  { id: 'vibrant-rose', name: '蔷薇红', color: '#f43f5e' },
+  { id: 'cyber-cyan', name: '赛博青', color: '#06b6d4' },
+  { id: 'amber-gold', name: '日落金', color: '#f59e0b' },
+  { id: 'slate-neutral', name: '极简灰', color: '#64748b' },
+]
+
+/** 创造模式精选主题色预设 */
+export const CREATION_THEME_COLOR_PRESETS: ThemeColorPreset[] = [
+  { id: 'classic-purple', name: '专属紫 (默认)', color: '#6C00CC' },
+  { id: 'deep-indigo', name: '幻影靛蓝', color: '#6366f1' },
+  { id: 'electric-blue', name: '灵动蓝', color: '#2563eb' },
+  { id: 'neon-cyan', name: '霓虹青', color: '#0891b2' },
+  { id: 'mint-green', name: '薄荷绿', color: '#059669' },
+  { id: 'coral-pink', name: '珊瑚粉', color: '#ec4899' },
+  { id: 'sunset-orange', name: '晨曦橙', color: '#ea580c' },
+  { id: 'crimson-red', name: '赤焰红', color: '#dc2626' },
+]
+
 /**
  * 给无视觉输入能力的 Agent 使用的独立视觉模型路由。
  * 仅保存用户已有渠道和模型的 ID，凭据继续由渠道加密存储管理。
@@ -234,14 +278,33 @@ export interface BrowserPageAuthorizationMap {
   [sessionId: string]: string[]
 }
 
+/** 应用模式 */
+export type AppMode = 'agent' | 'creation'
+
+export const DEFAULT_APP_MODE: AppMode = 'agent'
+
 /** 应用设置 */
 export interface AppSettings {
+  /** 应用模式（agent: 标准智能体模式，creation: 创造模式） */
+  appMode?: AppMode
   /** 主题模式 */
   themeMode: ThemeMode
   /** 特殊风格主题 */
   themeStyle?: ThemeStyle
   /** 界面风格 */
   interfaceVariant?: InterfaceVariant
+  /** Agent 模式浅色自定义主题色 */
+  agentThemeColorLight?: string
+  /** Agent 模式深色自定义主题色 */
+  agentThemeColorDark?: string
+  /** 创造模式浅色自定义主题色 */
+  creationThemeColorLight?: string
+  /** 创造模式深色自定义主题色 */
+  creationThemeColorDark?: string
+  /** Agent 模式自定义主题色（旧单值兼容） */
+  agentThemeColor?: string
+  /** 创造模式自定义主题色（旧单值兼容） */
+  creationThemeColor?: string
   /** Agent 默认渠道 ID（由当前 Agent Core 解释） — 当前选中的渠道 */
   agentChannelId?: string
   /** Agent 默认模型 ID */
@@ -334,6 +397,8 @@ export interface AppSettings {
   planningWindowState?: MainWindowState
   /** 工作区开发项目列表中固定到「我的项目」分组的项目路径，按工作区 slug 分组 */
   pinnedDevProjects?: Record<string, string[]>
+  /** 左侧边栏隐藏的菜单项 ID 列表 */
+  hiddenSidebarMenuItems?: string[]
   /** 旧版 VIP 模型目录字段，仅用于迁移到 working-model-catalog.json。 */
   workingModelCatalog?: WorkingModelCatalog
   /** 旧版模型目录归属字段，仅用于迁移。 */
@@ -366,6 +431,8 @@ export const SETTINGS_IPC_CHANNELS = {
   ON_SYSTEM_THEME_CHANGED: 'settings:system-theme-changed',
   /** 用户手动切换主题时广播给所有窗口 */
   ON_THEME_SETTINGS_CHANGED: 'settings:theme-settings-changed',
+  /** 隐藏侧边栏菜单项配置变化时广播给所有窗口与视图 */
+  ON_HIDDEN_SIDEBAR_MENU_ITEMS_CHANGED: 'settings:hidden-sidebar-menu-items-changed',
 } as const
 
 /** Scratch Pad IPC 通道 */

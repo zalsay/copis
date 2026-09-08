@@ -28,6 +28,7 @@ import { cn } from '@/lib/utils'
 import { shouldInspectMermaidCodeBlock, shouldRenderMermaidCodeBlock } from '@/lib/mermaid-detection'
 import { normalizeLatexDelimiters } from '@/lib/normalize-latex'
 import { copyTextToClipboard } from '@/lib/clipboard'
+import { openLink } from '@/lib/open-link'
 import { Button } from '@/components/ui/button'
 import { ImageLightbox, type LightboxImage } from '@/components/ui/image-lightbox'
 import {
@@ -325,8 +326,8 @@ const MarkdownLink = React.memo(function MarkdownLink({
       href={href}
       onClick={(e) => {
         e.preventDefault()
-        if (href && (href.startsWith('http://') || href.startsWith('https://'))) {
-          window.electronAPI.openExternal(href)
+        if (href) {
+          void openLink(href)
         }
       }}
       title={href}

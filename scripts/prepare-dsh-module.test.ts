@@ -2,6 +2,8 @@ import { describe, expect, test } from 'bun:test'
 import {
   patchDshComposerModelSelectionSource,
   patchDshDetailsPanelFilePreviewSource,
+  patchDshCordisPanelSource,
+  patchDshSidebarSource,
   DSH_PACKAGE,
   DSH_PACKAGE_VERSION,
   DSH_VERSION,
@@ -161,6 +163,8 @@ children: activeTab === "files" ? (
     expect(patched).toContain('window.copisBridge?.readFile')
     expect(patched).toContain('window.copisBridge?.showItemInFolder')
     expect(patched).toContain('CodeBlock')
+    expect(patched).toContain('stroke: "var(--creation-ui-primary, #6C00CC)"')
+    expect(patched).not.toContain('stroke: "#f59e0b"')
 
     // 幂等性校验
     const secondPass = patchDshDetailsPanelFilePreviewSource(patched)
@@ -217,15 +221,69 @@ children: "old files body"
     expect(upgraded).not.toContain('\t\t\t\t\t\t)\n\t\t\t\t\t\t) : activeTab === "changes" ? (')
   })
 
-  test('DetailsPanel 补丁可自愈修复已存在的多余右括号语法错误', () => {
+  test('DetailsPanel 补丁可自愈修复已存在的多余右括号语法错误并升级文件夹图标主题色', () => {
     const BROKEN_SOURCE = `
 const [expandedDirs, setExpandedDirs] = (0, react.useState)(() => new Set());
 \t\t\t\t\t\t)
 \t\t\t\t\t\t) : activeTab === "changes" ? (
+stroke: "#f59e0b",
 `
     const healed = patchDshDetailsPanelFilePreviewSource(BROKEN_SOURCE)
     expect(healed).not.toContain('\t\t\t\t\t\t)\n\t\t\t\t\t\t) : activeTab === "changes" ? (')
     expect(healed).toContain('\t\t\t\t\t\t)\n\t\t\t\t\t\t: activeTab === "changes" ? (')
+    expect(healed).not.toContain('stroke: "#f59e0b"')
+    expect(healed).toContain('stroke: "var(--creation-ui-primary, #6C00CC)"')
+  })
+
+  test('CordisPanel 补丁拒绝不匹配的官方 bundle', () => {
+    expect(() => patchDshCordisPanelSource('export const foo = 1;')).toThrow(
+      'DSH Cordis Panel 组件未找到 panel.title 结构'
+    )
+  })
+
+  test('CordisPanel 补丁将「Cordis 插件」替换为「Copis 请您确认」', () => {
+    const SAMPLE_SOURCE = `
+const zh = {
+  "panel.plugins.aria": "Cordis 插件",
+  "panel.title": "Cordis 插件",
+  "panel.trigger": "Cordis Plugin",
+};
+`
+    const patched = patchDshCordisPanelSource(SAMPLE_SOURCE)
+    expect(patched).toContain('"panel.title": "Copis 请您确认"')
+    expect(patched).toContain('"panel.plugins.aria": "Copis 请您确认"')
+    expect(patched).not.toContain('"panel.title": "Cordis 插件"')
+    expect(patched).not.toContain('"panel.plugins.aria": "Cordis 插件"')
+
+    // 幂等性校验
+    const secondPass = patchDshCordisPanelSource(patched)
+    expect(secondPass).toBe(patched)
+  })
+
+  test('Sidebar 补丁将侧边栏菜单项激活态背景与颜色设置为 creation-ui-primary 体系并移除边框', () => {
+    const SAMPLE_SIDEBAR = `
+const CopisMenuItem = (props) => {
+  const isActive = activeCopisNav === props.view;
+  return (0, react_jsx_runtime.jsxs)("button", {
+    type: "button",
+    style: {
+      border: isActive ? "0.5px solid rgba(245, 158, 11, 0.35)" : "none",
+      background: isActive ? "var(--dsw-alias-button-elevated-fill, rgba(245, 158, 11, 0.14))" : "transparent",
+      color: isActive ? "#f59e0b" : "var(--dsw-alias-label-secondary)",
+    }
+  });
+};
+`
+    const patched = patchDshSidebarSource(SAMPLE_SIDEBAR)
+    expect(patched).toContain('border: "none"')
+    expect(patched).toContain('background: isActive ? "var(--creation-ui-primary-background, rgba(108, 0, 204, 0.15))" : "transparent"')
+    expect(patched).toContain('color: isActive ? "var(--creation-ui-primary, #6C00CC)" : "var(--dsw-alias-label-secondary)"')
+    expect(patched).not.toContain('rgba(245, 158, 11')
+    expect(patched).not.toContain('#f59e0b')
+
+    // 幂等性校验
+    const secondPass = patchDshSidebarSource(patched)
+    expect(secondPass).toBe(patched)
   })
 })
 

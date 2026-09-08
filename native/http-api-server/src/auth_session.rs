@@ -284,6 +284,7 @@ impl AuthSession {
                 path: "/.well-known/openid-configuration".to_string(),
                 body: None,
                 access_token: None,
+                headers: Vec::new(),
                 request_id: "auth-oidc-discovery".to_string(),
             })
             .map_err(map_edu_error)?;
@@ -374,6 +375,7 @@ impl AuthSession {
                 percent_encode(&pending.code_verifier),
             )),
             access_token: None,
+            headers: Vec::new(),
             request_id: "auth-oidc-token".to_string(),
         }).map_err(map_edu_error)?;
         eprintln!(
@@ -583,12 +585,22 @@ impl AuthSession {
         path: &str,
         body: Option<String>,
     ) -> Result<EduApiResponse, AuthError> {
+        self.authenticated_request_with_headers(method, path, body, Vec::new())
+    }
+
+    pub fn authenticated_request_with_headers(
+        &self,
+        method: &str,
+        path: &str,
+        body: Option<String>,
+        headers: Vec<(String, String)>,
+    ) -> Result<EduApiResponse, AuthError> {
         let token = self.current_access_token()?;
-        match self.request_with_token(method, path, body.clone(), Some(token)) {
+        match self.request_with_token(method, path, body.clone(), Some(token), headers.clone()) {
             Ok(response) => Ok(response),
             Err(error @ AuthError::Upstream { status: 401, .. }) => {
                 let token = self.refresh_single_flight()?;
-                match self.request_with_token(method, path, body, Some(token)) {
+                match self.request_with_token(method, path, body, Some(token), headers) {
                     Ok(response) => Ok(response),
                     Err(replayed @ AuthError::Upstream { status: 401, .. }) => {
                         self.clear_after_auth_failure();
@@ -617,7 +629,13 @@ impl AuthSession {
         path: &str,
         body: Option<Value>,
     ) -> Result<EduApiResponse, AuthError> {
-        self.request_with_token(method, path, body.map(|value| value.to_string()), None)
+        self.request_with_token(
+            method,
+            path,
+            body.map(|value| value.to_string()),
+            None,
+            Vec::new(),
+        )
     }
 
     fn request_with_token(
@@ -626,8 +644,9 @@ impl AuthSession {
         path: &str,
         body: Option<String>,
         access_token: Option<String>,
+        headers: Vec<(String, String)>,
     ) -> Result<EduApiResponse, AuthError> {
-        self.request_with_client(&self.client, method, path, body, access_token)
+        self.request_with_client(&self.client, method, path, body, access_token, headers)
     }
 
     fn request_with_client(
@@ -637,6 +656,7 @@ impl AuthSession {
         path: &str,
         body: Option<String>,
         access_token: Option<String>,
+        headers: Vec<(String, String)>,
     ) -> Result<EduApiResponse, AuthError> {
         let request_id = format!(
             "auth-{}",
@@ -647,6 +667,7 @@ impl AuthSession {
             path: path.to_string(),
             body,
             access_token,
+            headers,
             request_id,
         };
         client.request(request).map_err(map_edu_error)
@@ -674,6 +695,7 @@ impl AuthSession {
                     percent_encode(refresh_token)
                 )),
                 None,
+                Vec::new(),
             )
         } else {
             self.request_public(

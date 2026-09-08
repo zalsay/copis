@@ -43,6 +43,10 @@ export interface AgentWorkspace {
   createdAt: number
   /** 更新时间戳 */
   updatedAt: number
+  /** 是否置顶 */
+  pinned?: boolean
+  /** 置顶时间戳（毫秒），用于多个置顶按添加时间倒排 */
+  pinnedAt?: number
 }
 
 /** 新建项目的输入。 */
@@ -1026,7 +1030,8 @@ export function resolveBuiltinSkillCategory(skill: Pick<SkillMeta, 'slug'> & { c
     skill.slug === 'agently-mail' ||
     skill.slug === 'summarize-workflow' ||
     skill.slug === 'writing-plans' ||
-    skill.slug === 'executing-plans'
+    skill.slug === 'executing-plans' ||
+    skill.slug === 'grill-me'
   ) {
     return '办公'
   }
@@ -1649,6 +1654,8 @@ export const AGENT_IPC_CHANNELS = {
   DELETE_WORKSPACE: 'agent:delete-workspace',
   /** 重排工作区顺序 */
   REORDER_WORKSPACES: 'agent:reorder-workspaces',
+  /** 切换工作区置顶状态 */
+  TOGGLE_PIN_WORKSPACE: 'agent:toggle-pin-workspace',
 
   // 标题生成
   /** 生成 Agent 会话标题 */

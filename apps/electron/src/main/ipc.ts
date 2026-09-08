@@ -152,7 +152,7 @@ import { memoryIngestionService } from './lib/memory-ingestion-service'
 import { fetchMarketQuotes, fetchKlines, searchSymbols, getWatchlist, saveWatchlist } from './lib/trading-quote-service'
 import { getDshTradingStatus, startDshTradingServer, stopDshTradingServer } from './lib/dsh-trading-service'
 import { getDshCordisStatus, reloadDshCordisPlugins, setDshStatusChangeBroadcaster, startDshCordisServer, stopDshCordisServer, syncCopisModelConfigToDsh } from './lib/dsh-cordis-service'
-import { ensureDshView, updateDshViewBounds, dispatchToDshClient, syncThemeToDshView } from './lib/dsh-view-manager'
+import { ensureDshView, updateDshViewBounds, dispatchToDshClient, syncThemeToDshView, syncHiddenSidebarMenuItemsToDshView } from './lib/dsh-view-manager'
 import { syncNativeThemeSource, resolveIsDark } from './lib/theme-sync'
 import type { DshViewBounds, DshClientEvent } from '@copis/shared'
 import { shouldSyncDshCopisDefaults } from './lib/dsh-model-config'
@@ -305,6 +305,7 @@ import {
   restoreAgentWorkspaceProjectRoot,
   deleteAgentWorkspace,
   reorderAgentWorkspaces,
+  togglePinAgentWorkspace,
   getWorkspaceMcpConfig,
   saveWorkspaceMcpConfig,
   getAllWorkspaceSkills,
@@ -1145,8 +1146,13 @@ export function registerIpcHandlers(): void {
 
   ipcMain.handle(WORKING_IPC_CHANNELS.GET_AUTH_STATE, async () => {
     const client = getWorkingApiClient()
+    const previousAccess = JSON.stringify(getWorkingModelCatalogAccess())
+    const state = await client.getAuthState()
+    if (getDshCordisStatus().running && previousAccess !== JSON.stringify(getWorkingModelCatalogAccess())) {
+      await reloadDshCordisPlugins({ startIfNeeded: false })
+    }
     return {
-      ...(await client.getAuthState()),
+      ...state,
       backendUrl: client.baseUrl,
     }
   })
@@ -1158,6 +1164,7 @@ export function registerIpcHandlers(): void {
     const client = getWorkingApiClient()
     await client.login(input)
     const state = await client.getAuthState()
+    if (getDshCordisStatus().running) await reloadDshCordisPlugins({ startIfNeeded: false })
     return {
       ...state,
       backendUrl: client.baseUrl,
@@ -1167,6 +1174,7 @@ export function registerIpcHandlers(): void {
   ipcMain.handle(WORKING_IPC_CHANNELS.LOGIN_OIDC, async () => {
     const client = getWorkingApiClient()
     const result = await client.loginWithOAuth((url) => shell.openExternal(url))
+    if (getDshCordisStatus().running) await reloadDshCordisPlugins({ startIfNeeded: false })
     return {
       authenticated: true,
       user: result.user ?? client.getCachedUser(),
@@ -1205,11 +1213,17 @@ export function registerIpcHandlers(): void {
   ipcMain.handle(WORKING_IPC_CHANNELS.LOGOUT, async () => {
     const client = getWorkingApiClient()
     await client.logout()
+    if (getDshCordisStatus().running) await reloadDshCordisPlugins({ startIfNeeded: false })
     return { authenticated: false, user: null, backendUrl: client.baseUrl }
   })
 
   ipcMain.handle(WORKING_IPC_CHANNELS.GET_CURRENT_USER, async () => {
-    return getWorkingApiClient().getCurrentUser()
+    const previousAccess = JSON.stringify(getWorkingModelCatalogAccess())
+    const user = await getWorkingApiClient().getCurrentUser()
+    if (getDshCordisStatus().running && previousAccess !== JSON.stringify(getWorkingModelCatalogAccess())) {
+      await reloadDshCordisPlugins({ startIfNeeded: false })
+    }
+    return user
   })
 
   ipcMain.handle(WORKING_IPC_CHANNELS.LIST_WORKSPACES, async () => {
@@ -1315,7 +1329,9 @@ export function registerIpcHandlers(): void {
   ipcMain.handle(WORKING_IPC_CHANNELS.SAVE_MODEL_CATALOG, async (_, catalog: WorkingModelCatalogSaveInput) => {
     const access = getWorkingModelCatalogAccess()
     assertWorkingModelCatalogVip(access.isVip)
-    return saveWorkingModelCatalog(catalog, access.isVip, access.ownerId)
+    const saved = saveWorkingModelCatalog(catalog, access.isVip, access.ownerId)
+    if (getDshCordisStatus().running) await reloadDshCordisPlugins({ startIfNeeded: false })
+    return saved
   })
 
   ipcMain.handle(WORKING_IPC_CHANNELS.TEST_MODEL_CONNECTION, async (_, input: WorkingTestCustomModelInput) => {
@@ -1914,20 +1930,56 @@ export function registerIpcHandlers(): void {
         })
       }
       // 主题相关设置变化时，同步 Electron 原生内核与 DSH 视图，并广播给所有窗口（跨窗口同步，如 Quick Task 面板）
-      if (safeUpdates.themeMode !== undefined || safeUpdates.themeStyle !== undefined || safeUpdates.interfaceVariant !== undefined) {
+      if (
+        safeUpdates.themeMode !== undefined ||
+        safeUpdates.themeStyle !== undefined ||
+        safeUpdates.interfaceVariant !== undefined ||
+        safeUpdates.agentThemeColor !== undefined ||
+        safeUpdates.creationThemeColor !== undefined ||
+        safeUpdates.agentThemeColorLight !== undefined ||
+        safeUpdates.agentThemeColorDark !== undefined ||
+        safeUpdates.creationThemeColorLight !== undefined ||
+        safeUpdates.creationThemeColorDark !== undefined
+      ) {
         syncNativeThemeSource(result.themeMode, result.themeStyle)
         const isDark = resolveIsDark(result.themeMode, result.themeStyle, nativeTheme.shouldUseDarkColors)
-        syncThemeToDshView(isDark)
+        const effectiveAgentColor = isDark
+          ? (result.agentThemeColorDark || result.agentThemeColor)
+          : (result.agentThemeColorLight || result.agentThemeColor)
+        const effectiveCreationColor = isDark
+          ? (result.creationThemeColorDark || result.creationThemeColor)
+          : (result.creationThemeColorLight || result.creationThemeColor)
+
+        syncThemeToDshView(isDark, effectiveAgentColor, effectiveCreationColor)
 
         const payload = {
           themeMode: result.themeMode,
           themeStyle: result.themeStyle,
           interfaceVariant: result.interfaceVariant,
+          agentThemeColor: result.agentThemeColor,
+          creationThemeColor: result.creationThemeColor,
+          agentThemeColorLight: result.agentThemeColorLight,
+          agentThemeColorDark: result.agentThemeColorDark,
+          creationThemeColorLight: result.creationThemeColorLight,
+          creationThemeColorDark: result.creationThemeColorDark,
         }
         BrowserWindow.getAllWindows().forEach((win) => {
           // 跳过发起者窗口，避免重复应用
           if (win.webContents.id !== event.sender.id) {
             win.webContents.send(SETTINGS_IPC_CHANNELS.ON_THEME_SETTINGS_CHANGED, payload)
+          }
+        })
+      }
+
+      // 隐藏菜单项配置变化时，同步 DSH 视图并广播给所有窗口
+      if (safeUpdates.hiddenSidebarMenuItems !== undefined) {
+        syncHiddenSidebarMenuItemsToDshView(result.hiddenSidebarMenuItems)
+        BrowserWindow.getAllWindows().forEach((win) => {
+          if (win.webContents.id !== event.sender.id) {
+            win.webContents.send(
+              SETTINGS_IPC_CHANNELS.ON_HIDDEN_SIDEBAR_MENU_ITEMS_CHANGED,
+              result.hiddenSidebarMenuItems,
+            )
           }
         })
       }
@@ -1951,10 +2003,36 @@ export function registerIpcHandlers(): void {
         if (safeUpdates.feishuSessionMirror !== undefined) {
           syncFeishuSyncSleepBlocker(result)
         }
-        if (safeUpdates.themeMode !== undefined || safeUpdates.themeStyle !== undefined) {
+        if (safeUpdates.hiddenSidebarMenuItems !== undefined) {
+          syncHiddenSidebarMenuItemsToDshView(result.hiddenSidebarMenuItems)
+          BrowserWindow.getAllWindows().forEach((win) => {
+            if (win.webContents.id !== event.sender.id) {
+              win.webContents.send(
+                SETTINGS_IPC_CHANNELS.ON_HIDDEN_SIDEBAR_MENU_ITEMS_CHANGED,
+                result.hiddenSidebarMenuItems,
+              )
+            }
+          })
+        }
+        if (
+          safeUpdates.themeMode !== undefined ||
+          safeUpdates.themeStyle !== undefined ||
+          safeUpdates.agentThemeColor !== undefined ||
+          safeUpdates.creationThemeColor !== undefined ||
+          safeUpdates.agentThemeColorLight !== undefined ||
+          safeUpdates.agentThemeColorDark !== undefined ||
+          safeUpdates.creationThemeColorLight !== undefined ||
+          safeUpdates.creationThemeColorDark !== undefined
+        ) {
           syncNativeThemeSource(result.themeMode, result.themeStyle)
           const isDark = resolveIsDark(result.themeMode, result.themeStyle, nativeTheme.shouldUseDarkColors)
-          syncThemeToDshView(isDark)
+          const effectiveAgentColor = isDark
+            ? (result.agentThemeColorDark || result.agentThemeColor)
+            : (result.agentThemeColorLight || result.agentThemeColor)
+          const effectiveCreationColor = isDark
+            ? (result.creationThemeColorDark || result.creationThemeColor)
+            : (result.creationThemeColorLight || result.creationThemeColor)
+          syncThemeToDshView(isDark, effectiveAgentColor, effectiveCreationColor)
         }
         if (shouldSyncDshCopisDefaults(safeUpdates)) {
           void syncCopisModelConfigToDsh({
@@ -2607,6 +2685,14 @@ export function registerIpcHandlers(): void {
     AGENT_IPC_CHANNELS.REORDER_WORKSPACES,
     async (_, orderedIds: string[]): Promise<AgentWorkspace[]> => {
       return reorderAgentWorkspaces(orderedIds)
+    }
+  )
+
+  // 切换工作区置顶状态
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.TOGGLE_PIN_WORKSPACE,
+    async (_, workspaceId: string): Promise<AgentWorkspace[]> => {
+      return togglePinAgentWorkspace(workspaceId)
     }
   )
 
