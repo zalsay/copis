@@ -153,9 +153,12 @@ describe('Working 侧边栏视觉契约', () => {
     expect(menuActiveRule).toContain('background: var(--ui-primary-background)')
     expect(menuActiveRule).toContain('color: var(--ui-primary)')
     expect(sidebarStyles).toContain('.copis-working-menu-button.active > svg')
-    expect(sidebarStyles).toContain('color: var(--ui-primary)')
-    expect(projectActiveRule).toContain('background: var(--ui-primary-background)')
-    expect(projectActiveRule).toContain('color: var(--ui-primary)')
+    // 工作区名称取消主题色与背景色，仅工作区 icon 为主题色
+    expect(projectActiveRule).toContain('background: transparent')
+    expect(projectActiveRule).toContain('color: hsl(var(--foreground))')
+    expect(projectActiveRule).not.toContain('color: var(--ui-primary)')
+    expect(sidebarStyles).toContain('.copis-working-project-row.active .copis-working-project-workspace-row-icon')
+    // 会话标题具有主题色与主题背景色
     expect(conversationActiveRule).toContain('background: var(--ui-primary-background)')
     expect(conversationActiveRule).toContain('color: var(--ui-primary)')
     expect(sidebarStyles).toContain('background: hsl(var(--foreground) / 0.07)')
@@ -640,6 +643,32 @@ describe('Working 侧边栏视觉契约', () => {
     expect(sidebarStyles).toContain('.copis-working-project-menu button svg')
     expect(sidebarStyles).toContain('.copis-working-project-menu-divider')
     expect(sidebarStyles).toContain('.copis-working-project-pin-badge')
+  })
+
+  test('Given 左侧菜单栏激活态 When 渲染当前会话与工作区 Then 会话标题保留主题色与主题背景色，工作区名称取消主题色与背景色且仅工作区图标为主题色', () => {
+    const projectActiveRule = sidebarStyles.match(
+      /\.copis-working-project-row\.active\s*\{([^}]*)\}/s,
+    )?.[1]
+    const conversationActiveRule = sidebarStyles.match(
+      /\.copis-working-conversation-row\.active\s*\{([^}]*)\}/s,
+    )?.[1]
+    const activeWorkspaceIconRule = sidebarStyles.match(
+      /\.copis-working-project-row\.active\s+\.copis-working-project-workspace-row-icon/s,
+    )
+
+    expect(projectActiveRule).toBeDefined()
+    expect(conversationActiveRule).toBeDefined()
+    expect(activeWorkspaceIconRule).not.toBeNull()
+
+    // 工作区名称取消主题背景色与文字主题色，仅图标为主题色
+    expect(projectActiveRule).toContain('background: transparent')
+    expect(projectActiveRule).toContain('color: hsl(var(--foreground))')
+    expect(projectActiveRule).not.toContain('var(--ui-primary-background)')
+    expect(projectActiveRule).not.toContain('var(--ui-primary)')
+
+    // 会话标题具有主题色与主题背景色
+    expect(conversationActiveRule).toContain('background: var(--ui-primary-background)')
+    expect(conversationActiveRule).toContain('color: var(--ui-primary)')
   })
 })
 
