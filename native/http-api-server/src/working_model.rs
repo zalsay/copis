@@ -1,22 +1,24 @@
-use crate::skill_market::SkillMarketState;
+use crate::working_model_proxy::WorkingModelError;
 use serde_json::Value;
 
-const WORKING_MODEL_ALIASES: [&str; 5] = ["fast", "export", "global", "deepseek-v4-flash", "deepseek-v4-pro"];
+const WORKING_MODEL_ALIASES: [&str; 5] = [
+    "fast",
+    "export",
+    "global",
+    "deepseek-v4-flash",
+    "deepseek-v4-pro",
+];
 
-pub fn working_model_latencies(state: &SkillMarketState) -> Result<Value, String> {
-    let mut payload = state
-        .request_raw(
-        "GET",
-        "/api/internal/working-model/first-token-latencies",
-        None,
-    )
-    .map_err(|error| error.message)?;
+pub fn working_model_latencies(
+    mut request: impl FnMut(&str) -> Result<Value, WorkingModelError>,
+) -> Result<Value, String> {
+    let mut payload = request("/first-token-latencies").map_err(|error| error.to_string())?;
 
     let mut configs = Vec::new();
     for alias in WORKING_MODEL_ALIASES {
-        let path = format!("/api/internal/working-model/config?alias={}", alias);
-        if let Ok(config) = state.request_data("GET", &path, None) {
-            configs.push(config);
+        let path = format!("/config?alias={}", alias);
+        if let Ok(config) = request(&path) {
+            configs.push(config.get("data").cloned().unwrap_or(config));
         }
     }
     merge_alias_latencies(&mut payload, &configs);

@@ -220,6 +220,13 @@ const MENTION_STYLES: Record<MentionType, { icon: typeof FileText; className: st
   calendar_event: { icon: CalendarDays, className: 'bg-cyan-500/15 text-cyan-800 dark:text-cyan-200' },
 }
 
+const BUILTIN_MCP_DISPLAY_NAMES: Record<string, string> = {
+  copis_image: 'Copis 图片生成',
+  'nano-banana': 'Copis 图片生成',
+  automation: '定时任务',
+  collaboration: '协作子 Agent',
+}
+
 function MentionChip({ type, value }: { type: MentionType; value: string }): React.ReactElement {
   const style = MENTION_STYLES[type]
   const Icon = style.icon
@@ -235,7 +242,9 @@ function MentionChip({ type, value }: { type: MentionType; value: string }): Rea
         ? (label || `Todo ${referenceId.slice(0, 8)}`)
         : type === 'calendar_event'
           ? (label || `日程 ${referenceId.slice(0, 8)}`)
-          : decoded
+          : type === 'mcp'
+            ? (BUILTIN_MCP_DISPLAY_NAMES[decoded] ?? decoded)
+            : decoded
   return (
     <span
       className={cn(

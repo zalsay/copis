@@ -14,6 +14,7 @@ use crate::payment_workspace::PaymentWorkspace;
 use crate::runtime;
 use crate::working_model_proxy::{
     WorkingModelCapability, WorkingModelError, WorkingModelProxy, WorkingModelResponse,
+    WorkingModelStreamResponse,
 };
 
 pub fn is_agent_messages_route(method: &str, path: &str) -> bool {
@@ -262,6 +263,39 @@ impl PiWorkerManager {
             .clone()
             .ok_or(WorkingModelError::Unauthorized)?;
         proxy.proxy_internal(request_body)
+    }
+
+    pub fn working_model_stream_request(
+        &self,
+        capability: Option<&str>,
+        internal: bool,
+        request_body: &[u8],
+        idempotency_key: Option<&str>,
+    ) -> Result<WorkingModelStreamResponse, WorkingModelError> {
+        let proxy = self
+            .working_model_proxy
+            .lock()
+            .unwrap()
+            .clone()
+            .ok_or(WorkingModelError::Unauthorized)?;
+        if internal {
+            proxy.proxy_stream_internal(request_body, idempotency_key)
+        } else {
+            proxy.proxy_stream_with_capability(
+                capability.ok_or(WorkingModelError::Unauthorized)?,
+                request_body,
+                idempotency_key,
+            )
+        }
+    }
+
+    pub fn working_model_json_get(&self, path: &str) -> Result<Value, WorkingModelError> {
+        self.working_model_proxy
+            .lock()
+            .unwrap()
+            .clone()
+            .ok_or(WorkingModelError::Unauthorized)?
+            .model_json_get(path)
     }
 
     /// 为 DSH 进程签发长期的本机 Working 模型 capability。

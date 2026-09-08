@@ -8,7 +8,6 @@
  */
 
 import type { BuiltinMcpServerSummary } from '@copis/shared'
-import { getAgentToolState } from '../agent-tool-config'
 import { getWorkingApiClient } from '../working-api-service'
 import { getBuiltinMcpDefinitions, type BuiltinMcpDefinition } from './baseline'
 import { isBuiltinMcpDefaultDisabled, isBuiltinMcpUserEnabled } from './settings'
@@ -47,14 +46,11 @@ function resolveAvailability(
   }
 
   if (item.id === 'nano-banana') {
-    const state = getAgentToolState('nano-banana')
-    const available = state.enabled && getWorkingApiClient().getCachedUser() !== null
+    const available = getWorkingApiClient().getCachedUser() !== null
     return {
       enabled: true,
       available,
-      availabilityReason: available
-        ? undefined
-        : state.enabled ? '需要登录 Copis Working' : 'Copis 图片生成未启用',
+      availabilityReason: available ? undefined : '需要登录 Copis Working',
     }
   }
 

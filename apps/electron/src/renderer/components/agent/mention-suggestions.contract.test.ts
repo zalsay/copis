@@ -22,8 +22,10 @@ describe('Mention 建议数据源契约', () => {
     expect(mentionSource).not.toContain('text-blue-600')
   })
 
-  test('Given 输入 # When 展示 MCP 服务 Then 继续通过 Rust HTTP API 读取', () => {
+  test('Given 输入 # When 展示 MCP 服务 Then 继续通过 Rust HTTP API 读取工作区配置与内置 MCP 列表', () => {
     expect(mentionSource).toContain("char: '#'")
     expect(mentionSource).toContain('getWorkspaceMcpConfig(slug)')
+    expect(mentionSource).toContain('listBuiltinMcpServers(slug)')
+    expect(mentionSource).toContain("item.isBuiltin ? '内置' : item.type")
   })
 })

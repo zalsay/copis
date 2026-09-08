@@ -2,6 +2,21 @@ use crate::working_model::merge_alias_latencies;
 use serde_json::{json, Value};
 
 #[test]
+fn given_public_config_envelopes_when_loading_latencies_then_aliases_are_preserved() {
+    let payload = crate::working_model::working_model_latencies(|path| {
+        if path == "/first-token-latencies" {
+            Ok(json!({"data": {"provider-model": 123}}))
+        } else {
+            let alias = path.strip_prefix("/config?alias=").unwrap();
+            Ok(json!({"data": {"alias": alias, "model_id": "provider-model"}}))
+        }
+    })
+    .unwrap();
+    assert_eq!(payload["data"]["fast"], 123);
+    assert_eq!(payload["data"]["global"], 123);
+}
+
+#[test]
 fn given_latencies_and_configs_when_merge_then_aliases_map_to_model_ids() {
     let mut payload = json!({
         "data": {

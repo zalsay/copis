@@ -44,13 +44,19 @@ mock.module('../browser-workflow-service', () => ({
 mock.module('../browser-page-control-runtime', () => ({ browserPageControl: {} }))
 mock.module('../browser-workflow-runner', () => ({ runBrowserWorkflow: async () => undefined, stopBrowserWorkflowRun: () => {} }))
 mock.module('../browser-workflow-store', () => ({ getBrowserWorkflow: () => undefined, listBrowserWorkflows: () => [] }))
+let appSettings = {
+  browserWorkflowEnabled: true,
+  builtinMcpEnabledIds: [] as string[],
+  builtinMcpDisabledIds: [] as string[],
+}
 mock.module('../settings-service', () => ({
-  getSettings: () => ({ browserWorkflowEnabled: true }),
-  updateSettings: () => ({}),
+  getSettings: () => appSettings,
+  updateSettings: (updates: Partial<typeof appSettings>) => {
+    Object.assign(appSettings, updates)
+    return appSettings
+  },
 }))
 
-const nanoBananaUserEnabled = mock(() => false)
-const nanoBananaToolState = mock(() => ({ enabled: false }))
 const nanoBananaAvailable = mock(() => false)
 const executeNanoBanana = mock(async () => ({
   toolCallId: 'call-1',
@@ -64,16 +70,6 @@ const executeNanoBanana = mock(async () => ({
   }],
 }))
 const readAttachmentBase64 = mock(() => 'base64-image-data')
-
-mock.module('../builtin-mcp/settings', () => ({
-  isBuiltinMcpUserEnabled: nanoBananaUserEnabled,
-  isBuiltinMcpDefaultDisabled: (id: string) => id === 'nano-banana',
-  setBuiltinMcpUserEnabled: () => {},
-}))
-mock.module('../agent-tool-config', () => ({
-  getAgentToolState: nanoBananaToolState,
-  getAgentToolCredentials: () => ({}),
-}))
 mock.module('../agent-tools/image-generation-tool', () => ({
   isNanoBananaAvailable: nanoBananaAvailable,
   executeNanoBananaTool: executeNanoBanana,
@@ -335,7 +331,7 @@ describe('Pi Copis 图片生成工具', () => {
   } as unknown as typeof import('@earendil-works/pi-coding-agent')
 
   test('Given 用户未启用内置生图 Then 不注入 generate_image 工具', async () => {
-    nanoBananaUserEnabled.mockReturnValue(false)
+    appSettings.builtinMcpEnabledIds = []
     const result = await buildPiBuiltinTools(sdk, {
       sessionId: 'session-1',
       channelId: 'channel-1',
@@ -347,8 +343,7 @@ describe('Pi Copis 图片生成工具', () => {
   })
 
   test('Given 内置生图已启用且 API Key 已配置 When 执行 generate_image Then 回传文本与图片内容', async () => {
-    nanoBananaUserEnabled.mockReturnValue(true)
-    nanoBananaToolState.mockReturnValue({ enabled: true })
+    appSettings.builtinMcpEnabledIds = ['nano-banana']
     nanoBananaAvailable.mockReturnValue(true)
 
     const result = await buildPiBuiltinTools(sdk, {
@@ -380,8 +375,7 @@ describe('Pi Copis 图片生成工具', () => {
   })
 
   test('Given 生图执行失败 When 工具被调用 Then 抛出错误而不是返回成功', async () => {
-    nanoBananaUserEnabled.mockReturnValue(true)
-    nanoBananaToolState.mockReturnValue({ enabled: true })
+    appSettings.builtinMcpEnabledIds = ['nano-banana']
     nanoBananaAvailable.mockReturnValue(true)
     executeNanoBanana.mockResolvedValue({
       toolCallId: 'call-1',

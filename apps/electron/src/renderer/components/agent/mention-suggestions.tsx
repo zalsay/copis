@@ -11,7 +11,7 @@ import type { SuggestionOptions } from '@tiptap/suggestion'
 import { CalendarDays, ListTodo, MessageSquareText, Puzzle, Server } from 'lucide-react'
 import { MentionList } from './MentionList'
 import type { MentionListRef } from './MentionList'
-import { getWorkspaceMcpConfig } from '@/lib/workspace-mcp-api'
+import { getWorkspaceMcpConfig, listBuiltinMcpServers } from '@/lib/workspace-mcp-api'
 import { listWorkspaceSkills } from '@/lib/workspace-skills-api'
 import { createLatestSuggestionRequestGuard, createMentionPopup, positionPopup, isSuggestionTriggerPresent, shouldSuppressEscTrigger, shouldClearEscSuppressionOnExit, type EscSuppressedTrigger } from './mention-popup-utils'
 import type { AgentSessionReferenceSearchResult } from '@copis/shared'
@@ -246,6 +246,7 @@ export interface McpMentionItem {
   id: string
   name: string
   type: string
+  isBuiltin?: boolean
 }
 
 export function createMcpMentionSuggestion(
@@ -259,18 +260,50 @@ export function createMcpMentionSuggestion(
       headerLabel: 'MCP 服务',
       emptyText: '无匹配 MCP 服务',
       fetchItems: async (slug, q) => {
-        const config = await getWorkspaceMcpConfig(slug)
-        return Object.entries(config.servers ?? {})
+        const [configResult, builtinResult] = await Promise.allSettled([
+          getWorkspaceMcpConfig(slug),
+          listBuiltinMcpServers(slug),
+        ])
+        const config = configResult.status === 'fulfilled' ? configResult.value : { servers: {} }
+        const builtinServers = builtinResult.status === 'fulfilled' ? builtinResult.value : []
+
+        const userItems: McpMentionItem[] = Object.entries(config.servers ?? {})
           .filter(([, entry]) => entry.enabled)
           .filter(([name]) => !q || name.toLowerCase().includes(q))
-          .map(([name, entry]) => ({ id: name, name, type: entry.type }))
+          .map(([name, entry]) => ({ id: name, name, type: entry.type, isBuiltin: false }))
+
+        const builtinItems: McpMentionItem[] = builtinServers
+          .filter((server) => server.enabled)
+          .filter((server) => {
+            if (!q) return true
+            return (
+              server.name.toLowerCase().includes(q) ||
+              server.displayName.toLowerCase().includes(q) ||
+              server.description.toLowerCase().includes(q) ||
+              server.tools.some((tool) =>
+                tool.name.toLowerCase().includes(q) || tool.description.toLowerCase().includes(q),
+              )
+            )
+          })
+          .map((server) => ({
+            id: server.name,
+            name: server.displayName,
+            type: '内置',
+            isBuiltin: true,
+          }))
+
+        const userServerNames = new Set(userItems.map((item) => item.id))
+        const filteredBuiltinItems = builtinItems.filter((item) => !userServerNames.has(item.id))
+        return [...userItems, ...filteredBuiltinItems]
       },
       keyExtractor: (item) => item.id,
       renderItem: (item) => (
         <>
           <Server className="size-3.5 text-emerald-500 flex-shrink-0" />
           <span className="truncate font-medium flex-1 min-w-0">{item.name}</span>
-          <span className="truncate text-[10px] text-muted-foreground/50 max-w-[120px]">{item.type}</span>
+          <span className="truncate text-[10px] text-muted-foreground/50 max-w-[120px]">
+            {item.isBuiltin ? '内置' : item.type}
+          </span>
         </>
       ),
       toCommand: (item) => ({ id: item.id, label: item.name }),

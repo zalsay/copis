@@ -29,7 +29,6 @@ import {
 } from '../browser-agent-tool-service'
 import type { BrowserAgentToolName } from '../agent-rpc-protocol'
 import { isBuiltinMcpUserEnabled } from '../builtin-mcp/settings'
-import { getAgentToolState } from '../agent-tool-config'
 import { readAttachmentAsBase64 } from '../attachment-service'
 import {
   executeNanoBananaTool,
@@ -863,8 +862,7 @@ function buildVisionRelayTools(sdk: PiSdk, ctx: PiBuiltinToolsContext): ToolDefi
 
 function buildNanoBananaTools(sdk: PiSdk, ctx: PiBuiltinToolsContext): ToolDefinition[] {
   // 与内置 MCP 卡片可用性一致：工具配置开关 + Working 登录态都就绪才注入。
-  const toolState = getAgentToolState('nano-banana')
-  if (!toolState.enabled || !isNanoBananaAvailable()) return []
+  if (!isBuiltinMcpUserEnabled('nano-banana') || !isNanoBananaAvailable()) return []
 
   return [
     sdk.defineTool({

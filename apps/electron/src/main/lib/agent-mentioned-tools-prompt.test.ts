@@ -13,4 +13,11 @@ describe('mentioned_tools 提示', () => {
   test('没有引用工具时不注入提示', () => {
     expect(buildMentionedToolsPrompt()).toBe('')
   })
+
+  test('Given 内置 MCP 名称（如 copis_image）When building the prompt Then 注入对应的内置工具指引', () => {
+    const prompt = buildMentionedToolsPrompt(undefined, ['copis_image', 'automation'])
+
+    expect(prompt).toContain('- MCP 工具: Copis 图片生成（请主动调用 generate_image 工具来完成用户的生图或插画需求）')
+    expect(prompt).toContain('- MCP 工具: 定时任务（请使用定时任务相关工具如 create_automation/list_automations 来完成任务）')
+  })
 })

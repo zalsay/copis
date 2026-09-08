@@ -715,6 +715,11 @@ export async function prepareAgentRpcRun(input: AgentSendInput): Promise<PiWorke
     ...(workspace?.id ? { workspaceId: workspace.id } : {}),
     ...(session.sourceAutomationId ? { sourceAutomationId: session.sourceAutomationId } : {}),
     automationEnabled: isBuiltinMcpUserEnabled('automation'),
+    imageGenerationEnabled: Boolean(
+      isBuiltinMcpUserEnabled('nano-banana')
+      || input.mentionedMcpServers?.includes('copis_image')
+      || input.mentionedMcpServers?.includes('nano-banana')
+    ),
     memoryPolicy,
     ...(proxyUrl ? { proxyUrl } : {}),
     runtimeEnv,

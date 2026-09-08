@@ -19,6 +19,8 @@ mod automation_scheduler;
 mod edu_api_client;
 mod expert_teams;
 mod memory;
+mod model_request_client;
+mod model_request_transport;
 mod payment_capability;
 mod payment_workspace;
 mod pi_rpc;
@@ -42,8 +44,9 @@ use edu_api_client::{EduApiClient, EduApiResponse, DEFAULT_MAX_CONCURRENT_REQUES
 use expert_teams::{ExpertTeamError, ExpertTeamStore};
 use memory::{
     MemoryCaptureBatchInput, MemoryCaptureInput, MemoryContextInput, MemoryError,
-    MemoryExportInput, MemoryImportInput, MemoryKind, MemoryMaintenanceApplyInput, MemoryRestoreInput,
-    MemoryRewriteInput, MemoryScope, MemoryStore, DEFAULT_LIST_LIMIT, DEFAULT_RECALL_LIMIT,
+    MemoryExportInput, MemoryImportInput, MemoryKind, MemoryMaintenanceApplyInput,
+    MemoryRestoreInput, MemoryRewriteInput, MemoryScope, MemoryStore, DEFAULT_LIST_LIMIT,
+    DEFAULT_RECALL_LIMIT,
 };
 use payment_capability::PAYMENT_CAPABILITY_TOKEN_HEADER;
 use payment_workspace::PaymentWorkspace;
@@ -203,17 +206,17 @@ impl AuthStorage for BridgeAuthStorage {
             return Ok(None);
         }
         let response = match self.bridge.send_request(&HttpRequest {
-                method: "GET".to_string(),
-                target: "/api/internal/auth-storage/load".to_string(),
-                headers: HashMap::new(),
-                body: Vec::new(),
-            }) {
-                Ok(response) => response,
-                Err(error) => {
-                    eprintln!("[HTTP API][认证存储] load 业务桥失败: {}", error);
-                    return Err(AuthError::Storage(error));
-                }
-            };
+            method: "GET".to_string(),
+            target: "/api/internal/auth-storage/load".to_string(),
+            headers: HashMap::new(),
+            body: Vec::new(),
+        }) {
+            Ok(response) => response,
+            Err(error) => {
+                eprintln!("[HTTP API][认证存储] load 业务桥失败: {}", error);
+                return Err(AuthError::Storage(error));
+            }
+        };
         let body = response.body.unwrap_or_default();
         eprintln!(
             "[HTTP API][认证存储] load 响应 status={} body_bytes={}",
@@ -239,7 +242,9 @@ impl AuthStorage for BridgeAuthStorage {
                 eprintln!(
                     "[HTTP API][认证存储] load 成功 authenticated={} provider={}",
                     auth.is_some(),
-                    auth.as_ref().map(|value| value.provider.as_str()).unwrap_or("-")
+                    auth.as_ref()
+                        .map(|value| value.provider.as_str())
+                        .unwrap_or("-")
                 );
                 Ok(auth)
             }
@@ -261,17 +266,17 @@ impl AuthStorage for BridgeAuthStorage {
             body.len()
         );
         let response = match self.bridge.send_request(&HttpRequest {
-                method: "POST".to_string(),
-                target: "/api/internal/auth-storage/save".to_string(),
-                headers: HashMap::new(),
-                body,
-            }) {
-                Ok(response) => response,
-                Err(error) => {
-                    eprintln!("[HTTP API][认证存储] save 业务桥失败: {}", error);
-                    return Err(AuthError::Storage(error));
-                }
-            };
+            method: "POST".to_string(),
+            target: "/api/internal/auth-storage/save".to_string(),
+            headers: HashMap::new(),
+            body,
+        }) {
+            Ok(response) => response,
+            Err(error) => {
+                eprintln!("[HTTP API][认证存储] save 业务桥失败: {}", error);
+                return Err(AuthError::Storage(error));
+            }
+        };
         eprintln!(
             "[HTTP API][认证存储] save 响应 status={} body_bytes={}",
             response.status,
@@ -292,17 +297,17 @@ impl AuthStorage for BridgeAuthStorage {
     fn clear(&self) -> Result<(), AuthError> {
         eprintln!("[HTTP API][认证存储] clear 开始");
         let response = match self.bridge.send_request(&HttpRequest {
-                method: "POST".to_string(),
-                target: "/api/internal/auth-storage/clear".to_string(),
-                headers: HashMap::new(),
-                body: b"{}".to_vec(),
-            }) {
-                Ok(response) => response,
-                Err(error) => {
-                    eprintln!("[HTTP API][认证存储] clear 业务桥失败: {}", error);
-                    return Err(AuthError::Storage(error));
-                }
-            };
+            method: "POST".to_string(),
+            target: "/api/internal/auth-storage/clear".to_string(),
+            headers: HashMap::new(),
+            body: b"{}".to_vec(),
+        }) {
+            Ok(response) => response,
+            Err(error) => {
+                eprintln!("[HTTP API][认证存储] clear 业务桥失败: {}", error);
+                return Err(AuthError::Storage(error));
+            }
+        };
         eprintln!(
             "[HTTP API][认证存储] clear 响应 status={} body_bytes={}",
             response.status,
@@ -344,7 +349,10 @@ impl BridgeAuthStorage {
             body,
         });
         match result {
-            Ok(_) => eprintln!("[HTTP API][认证状态] changed 通知成功 authenticated={}", authenticated),
+            Ok(_) => eprintln!(
+                "[HTTP API][认证状态] changed 通知成功 authenticated={}",
+                authenticated
+            ),
             Err(error) => eprintln!("[HTTP API][认证状态] changed 通知失败: {}", error),
         }
     }
@@ -1896,8 +1904,11 @@ fn handle_connection(
                 origin,
             );
         } else {
-            let input = serde_json::from_slice::<DshModelCapabilityInput>(&request.body)
-                .unwrap_or(DshModelCapabilityInput { reasoning_effort: None });
+            let input = serde_json::from_slice::<DshModelCapabilityInput>(&request.body).unwrap_or(
+                DshModelCapabilityInput {
+                    reasoning_effort: None,
+                },
+            );
             match workers.issue_dsh_working_model_capability(input.reasoning_effort.as_deref()) {
                 Ok(capability) => send_json_response(
                     &mut stream,
@@ -1913,20 +1924,14 @@ fn handle_connection(
     }
 
     if is_working_model_route(&request.method, path) {
+        let idempotency_key = request.headers.get("idempotency-key").map(String::as_str);
         if is_internal_token_valid(&request) {
             eprintln!(
                 "[HTTP API][Working 模型] Electron 内部请求开始 body_bytes={}",
                 request.body.len()
             );
-            match workers.working_model_internal_request(&request.body) {
-                Ok(response) => {
-                    eprintln!(
-                        "[HTTP API][Working 模型] Electron 内部请求完成 status={} body_bytes={}",
-                        response.status,
-                        response.body.len()
-                    );
-                    send_working_model_response(&mut stream, response.status, &response.body, origin)
-                }
+            match workers.working_model_stream_request(None, true, &request.body, idempotency_key) {
+                Ok(response) => send_working_model_stream_response(&mut stream, response, origin),
                 Err(error) => {
                     eprintln!("[HTTP API][Working 模型] Electron 内部请求失败: {}", error);
                     send_working_model_error(&mut stream, error, origin)
@@ -1951,10 +1956,13 @@ fn handle_connection(
             let _ = stream.shutdown(Shutdown::Both);
             return;
         };
-        match workers.working_model_request("", capability, &request.body) {
-            Ok(response) => {
-                send_working_model_response(&mut stream, response.status, &response.body, origin)
-            }
+        match workers.working_model_stream_request(
+            Some(capability),
+            false,
+            &request.body,
+            idempotency_key,
+        ) {
+            Ok(response) => send_working_model_stream_response(&mut stream, response, origin),
             Err(error) => send_working_model_error(&mut stream, error, origin),
         }
         let _ = stream.shutdown(Shutdown::Both);
@@ -1971,7 +1979,7 @@ fn handle_connection(
             let _ = stream.shutdown(Shutdown::Both);
             return;
         }
-        match working_model::working_model_latencies(&skill_market_state) {
+        match working_model::working_model_latencies(|path| workers.working_model_json_get(path)) {
             Ok(body) => send_json_response(&mut stream, 200, &body.to_string(), origin),
             Err(message) => {
                 let body =
@@ -2699,6 +2707,95 @@ fn send_working_model_response(
         status,
         reason_phrase(status),
         cors,
+        body.len(),
+    );
+    let _ = stream.write_all(header.as_bytes());
+    let _ = stream.write_all(body);
+    let _ = stream.flush();
+}
+
+fn send_working_model_stream_response(
+    stream: &mut TcpStream,
+    mut response: working_model_proxy::WorkingModelStreamResponse,
+    origin: Option<&str>,
+) {
+    if response.body.watch_client(stream).is_err() {
+        return;
+    }
+    let is_sse = response
+        .content_type
+        .as_deref()
+        .is_some_and(|value| value.to_ascii_lowercase().contains("text/event-stream"));
+    if !is_sse {
+        let mut body = Vec::new();
+        if response.body.read_to_end(&mut body).is_ok() {
+            send_working_model_buffered_response(
+                stream,
+                response.status,
+                &body,
+                response.content_type.as_deref(),
+                origin,
+            );
+        } else {
+            send_json_response(
+                stream,
+                502,
+                r#"{"error":"模型服务响应异常","code":"invalid_upstream_response"}"#,
+                origin,
+            );
+        }
+        return;
+    }
+    let cors = origin.filter(|value| is_allowed_origin(value)).map(|value| format!("Access-Control-Allow-Origin: {}\r\nAccess-Control-Allow-Methods: POST,OPTIONS\r\nAccess-Control-Allow-Headers: Content-Type, Authorization, Idempotency-Key, x-copis-web-token\r\n", value)).unwrap_or_default();
+    let header = format!("HTTP/1.1 {} {}\r\nVary: Origin\r\n{}Content-Type: text/event-stream; charset=utf-8\r\nCache-Control: no-cache\r\nConnection: close\r\nTransfer-Encoding: chunked\r\n\r\n", response.status, reason_phrase(response.status), cors);
+    if stream.write_all(header.as_bytes()).is_err() || stream.flush().is_err() {
+        return;
+    }
+    let mut buffer = [0_u8; 16 * 1024];
+    loop {
+        match response.body.read(&mut buffer) {
+            Ok(0) => {
+                let _ = stream.write_all(b"0\r\n\r\n");
+                let _ = stream.flush();
+                break;
+            }
+            Ok(read) => {
+                if stream
+                    .write_all(format!("{read:X}\r\n").as_bytes())
+                    .and_then(|_| stream.write_all(&buffer[..read]))
+                    .and_then(|_| stream.write_all(b"\r\n"))
+                    .and_then(|_| stream.flush())
+                    .is_err()
+                {
+                    break;
+                }
+            }
+            Err(error) => {
+                eprintln!("[HTTP API][Working 模型] SSE 上游读取中断: {}", error);
+                break;
+            }
+        }
+    }
+}
+
+fn send_working_model_buffered_response(
+    stream: &mut TcpStream,
+    status: u16,
+    body: &[u8],
+    content_type: Option<&str>,
+    origin: Option<&str>,
+) {
+    let cors = origin
+        .filter(|value| is_allowed_origin(value))
+        .map(|value| format!("Access-Control-Allow-Origin: {}\r\n", value))
+        .unwrap_or_default();
+    let content_type = content_type.unwrap_or("application/json; charset=utf-8");
+    let header = format!(
+        "HTTP/1.1 {} {}\r\nVary: Origin\r\n{}Content-Type: {}\r\nCache-Control: no-cache\r\nConnection: close\r\nContent-Length: {}\r\n\r\n",
+        status,
+        reason_phrase(status),
+        cors,
+        content_type,
         body.len(),
     );
     let _ = stream.write_all(header.as_bytes());
@@ -3610,7 +3707,14 @@ fn main() {
     };
     let working_gateway = Arc::new(WorkingGateway::new(Arc::clone(&auth_session)));
     let workers = Arc::new(PiWorkerManager::new());
-    workers.set_working_model_proxy(Arc::new(WorkingModelProxy::new(Arc::clone(&auth_session))));
+    let working_model_proxy = match WorkingModelProxy::new(Arc::clone(&auth_session)) {
+        Ok(proxy) => Arc::new(proxy),
+        Err(error) => {
+            eprintln!("[HTTP API] Working 模型代理初始化失败: {}", error);
+            process::exit(1);
+        }
+    };
+    workers.set_working_model_proxy(working_model_proxy);
     let memory_store = match MemoryStore::open(resolve_memory_directory()) {
         Ok(store) => Arc::new(store),
         Err(error) => {
@@ -3734,6 +3838,10 @@ mod app_update_test;
 #[cfg(test)]
 #[path = "working_model_proxy_tests.rs"]
 mod working_model_proxy_tests;
+
+#[cfg(test)]
+#[path = "model_request_client_tests.rs"]
+mod model_request_client_tests;
 
 #[cfg(test)]
 #[path = "working_model_test.rs"]

@@ -73,6 +73,7 @@ import { buildPiAlipayBotTools } from './pi-alipay-bot-tool'
 import { buildPiAgentMailTools } from './pi-agent-mail-tool'
 import { buildPiWorkingPaymentTools } from './pi-working-payment-tool'
 import { buildPiMemoryTools } from './pi-memory-tools'
+import { buildPiImageGenerationTools } from './pi-image-generation-tool'
 import { createRustBashToolOperations, createRustFileToolOperations } from './pi-rust-file-tools'
 import { resolveDefaultPiExtensionEntries } from './pi-default-extensions'
 import { mergeRuntimeEnv, type AgentRuntimeEnv } from '../agent-runtime-env'
@@ -191,6 +192,8 @@ export interface PiAgentQueryOptions extends AgentQueryInput {
   browserPageControl?: PiWorkerBrowserCapability
   /** Rust 在启动 Pi Worker 后签发的定时任务 capability。 */
   automationControl?: PiWorkerAutomationCapability
+  /** 是否启用 Copis 图片生成（generate_image）工具。 */
+  imageGenerationEnabled?: boolean
 }
 
 interface ActivePiSession {
@@ -1312,7 +1315,7 @@ export function buildBuiltinToolDefinitions(
   cwd: string,
   canUseTool: PiAgentQueryOptions['canUseTool'],
   runtimeEnv: AgentRuntimeEnv | undefined,
-  options: Pick<PiAgentQueryOptions, 'sessionId' | 'useRustFileApi' | 'browserPageControl' | 'automationControl' | 'workspaceSlug' | 'memoryPolicy'>,
+  options: Pick<PiAgentQueryOptions, 'sessionId' | 'useRustFileApi' | 'browserPageControl' | 'automationControl' | 'workspaceSlug' | 'memoryPolicy' | 'imageGenerationEnabled'>,
 ): ToolDefinition[] {
   const rustFileTools = options.useRustFileApi
     ? createRustFileToolOperations({ sessionId: options.sessionId })
@@ -1363,6 +1366,9 @@ export function buildBuiltinToolDefinitions(
     ...buildPiAlipayBotTools(sdk, { sessionId: options.sessionId }),
     ...buildPiAgentMailTools(sdk, { sessionId: options.sessionId }),
     ...buildPiWorkingPaymentTools(sdk),
+    ...(options.imageGenerationEnabled
+      ? buildPiImageGenerationTools(sdk, { sessionId: options.sessionId })
+      : []),
   ] as unknown as ToolDefinition[]
 
   if (rustFileTools) {

@@ -57,6 +57,7 @@ export interface PiWorkerQueryConfig {
   workspaceId?: string
   sourceAutomationId?: string
   automationEnabled?: boolean
+  imageGenerationEnabled?: boolean
 }
 
 export const BROWSER_AGENT_TOOL_NAMES = [

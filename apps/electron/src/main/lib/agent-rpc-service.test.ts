@@ -750,4 +750,44 @@ describe('Browser Agent RPC 准备', () => {
       token: expect.any(String),
     })
   })
+
+  test('Given Copis 图片生成开启或被 mention When preparing Pi Worker Then imageGenerationEnabled 为 true', async () => {
+    const { prepareAgentRpcRun } = await import('./agent-rpc-service')
+    const { setBuiltinMcpUserEnabled } = await import('./builtin-mcp/settings')
+
+    // 1. mention copis_image
+    setBuiltinMcpUserEnabled('nano-banana', false)
+    const runWithMention = await prepareAgentRpcRun({
+      sessionId: rpcSession.id,
+      userMessage: '生成小猫图片',
+      channelId: 'channel-1',
+      modelId: rpcSession.modelId,
+      agentRuntime: 'pi',
+      mentionedMcpServers: ['copis_image'],
+    })
+    expect(runWithMention.query.imageGenerationEnabled).toBe(true)
+
+    // 2. 无 mention 且 settings 未开启 nano-banana 时为 false
+    setBuiltinMcpUserEnabled('nano-banana', false)
+    const runWithout = await prepareAgentRpcRun({
+      sessionId: rpcSession.id,
+      userMessage: '普通消息',
+      channelId: 'channel-1',
+      modelId: rpcSession.modelId,
+      agentRuntime: 'pi',
+    })
+    expect(runWithout.query.imageGenerationEnabled).toBe(false)
+
+    // 3. settings 开启 nano-banana 时为 true
+    setBuiltinMcpUserEnabled('nano-banana', true)
+    const runWithSetting = await prepareAgentRpcRun({
+      sessionId: rpcSession.id,
+      userMessage: '普通消息',
+      channelId: 'channel-1',
+      modelId: rpcSession.modelId,
+      agentRuntime: 'pi',
+    })
+    expect(runWithSetting.query.imageGenerationEnabled).toBe(true)
+  })
 })
+
