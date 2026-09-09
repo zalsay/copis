@@ -36,6 +36,9 @@ taskInput.addEventListener('input', () => taskInput.setCustomValidity(''));
 
 document.querySelectorAll('[data-open-contact]').forEach((button) => {
   button.addEventListener('click', () => {
+    if (downloadDialog?.open) {
+      downloadDialog.close();
+    }
     lastContactTrigger = button;
     contactDialog.showModal();
     window.setTimeout(() => contactDialog.querySelector('[data-close-contact]')?.focus(), 0);
@@ -46,7 +49,13 @@ document.querySelectorAll('[data-close-contact]').forEach((button) => {
   button.addEventListener('click', () => contactDialog.close());
 });
 
-contactDialog.addEventListener('close', () => lastContactTrigger?.focus());
+contactDialog.addEventListener('close', () => {
+  if (lastContactTrigger?.isConnected && lastContactTrigger.offsetParent !== null) {
+    lastContactTrigger.focus();
+  } else {
+    document.querySelector('.nav-auth-contact')?.focus();
+  }
+});
 
 contactDialog.addEventListener('click', (event) => {
   if (event.target === contactDialog) contactDialog.close();

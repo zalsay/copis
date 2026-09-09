@@ -243,6 +243,55 @@ describe('landing 下载中心契约', () => {
     expect(js).not.toContain('data-open-auth')
     expect(js).not.toContain('authForm')
   })
+
+  test('下载中心提示文案指向企业部署方案，并包含带下划线的联系我们按钮', () => {
+    const dialogIndex = html.indexOf('id="download-dialog"')
+    expect(dialogIndex).toBeGreaterThan(-1)
+    const dialog = html.slice(dialogIndex, html.indexOf('</dialog>', dialogIndex))
+
+    expect(dialog).not.toContain('以下链接指向当前稳定版安装包')
+    expect(dialog).not.toContain('copis.cool')
+    expect(dialog).toContain('如需企业部署方案，请<button class="download-contact-link" type="button" data-open-contact aria-haspopup="dialog">联系我们</button>。')
+    expect(css).toMatch(/\.download-note\s+button[^{]*\{[^}]*text-decoration:\s*underline/)
+    expect(css).toMatch(/\.download-note\s+button[^{]*\{[^}]*color:\s*var\(--lime\)/)
+  })
+
+  test('在真实浏览器中点击下载中心里的联系我们，下载弹窗关闭并展示联系我们弹窗', async () => {
+    const chromePath = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'
+    const hasChrome = await Bun.file(chromePath).exists()
+    if (!hasChrome) return
+
+    const { chromium } = await import('playwright-core')
+    const browser = await chromium.launch({
+      executablePath: chromePath,
+      headless: true,
+    })
+    try {
+      const page = await browser.newPage()
+      await page.goto(new URL('./index.html', import.meta.url).href)
+
+      // 1. 点击 header 的下载中心打开下载弹窗
+      await page.click('[data-open-download]')
+      await page.waitForSelector('#download-dialog[open]')
+      expect(await page.$eval('#download-dialog', (el: HTMLDialogElement) => el.open)).toBe(true)
+
+      // 2. 点击下载弹窗中的“联系我们”
+      await page.click('.download-contact-link')
+      await page.waitForSelector('#contact-dialog[open]')
+
+      // 3. 下载弹窗应已关闭，联系我们弹窗处于打开状态并展示图片
+      expect(await page.$eval('#download-dialog', (el: HTMLDialogElement) => el.open)).toBe(false)
+      expect(await page.$eval('#contact-dialog', (el: HTMLDialogElement) => el.open)).toBe(true)
+      const imgSrc = await page.$eval('#contact-dialog .contact-image', (el: HTMLImageElement) => el.getAttribute('src'))
+      expect(imgSrc).toBe('./assets/contract.JPG')
+
+      // 4. 关闭联系我们弹窗
+      await page.click('[data-close-contact]')
+      expect(await page.$eval('#contact-dialog', (el: HTMLDialogElement) => el.open)).toBe(false)
+    } finally {
+      await browser.close()
+    }
+  })
 })
 
 describe('landing logo 契约', () => {
