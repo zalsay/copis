@@ -84,12 +84,9 @@ export function WebPasswordKeyPopover({ activeTab }: WebPasswordKeyPopoverProps)
           variant="ghost"
           size="icon-sm"
           aria-label="查看保存的密码"
-          className="size-7 shrink-0 rounded-sm text-[var(--ui-primary)] hover:text-[var(--ui-primary)] hover:bg-[var(--ui-primary-background)] transition-colors"
-          style={{
-            color: 'var(--ui-primary)',
-          }}
+          className="size-7 shrink-0 rounded-sm text-muted-foreground hover:text-foreground hover:bg-muted/60 transition-colors"
         >
-          <KeyRound className="size-3.5 text-[var(--ui-primary)]" style={{ color: 'var(--ui-primary)' }} />
+          <KeyRound className="size-3.5 text-muted-foreground hover:text-foreground" />
         </Button>
       </PopoverTrigger>
 

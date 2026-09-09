@@ -197,11 +197,15 @@ describe('WebPasswordService', () => {
 
     await service.handlePageDomReady('tab-multi', mockWebContents)
 
-    // 应注入检测脚本与常驻回填监听脚本
+    // 应注入检测脚本与常驻待选下拉监听脚本
     expect(executedScripts.length).toBe(2)
     expect(executedScripts[0]).toContain('__copisAutofillDetectionInstalled')
     expect(executedScripts[1]).toContain('MutationObserver')
-    expect(executedScripts[1]).toContain('acc2') // 应该按最近更新的 acc2 进行回填
+    expect(executedScripts[1]).toContain('acc1')
+    expect(executedScripts[1]).toContain('acc2')
+    expect(executedScripts[1]).toContain('showDropdown')
+    expect(executedScripts[1]).toContain('copis-dropdown')
+    expect(executedScripts[1]).not.toContain('tryFill()') // 不在页面加载时直接默认填入
 
     service.dispose()
   })

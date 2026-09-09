@@ -2,12 +2,28 @@
  * 网页密码自动填充与表单捕获注入脚本生成器
  */
 
-export interface AutofillCredentialsPayload {
+export interface AutofillAccountItem {
+  id: string
   username: string
   passwordPlain: string
   usernameElement?: string
   passwordElement?: string
+}
+
+export interface AutofillTheme {
+  primaryColor?: string
+  primaryBackground?: string
+  isDark?: boolean
+}
+
+export interface AutofillCredentialsPayload {
+  username?: string
+  passwordPlain?: string
+  usernameElement?: string
+  passwordElement?: string
   loginId?: string
+  accounts?: AutofillAccountItem[]
+  theme?: AutofillTheme
 }
 
 export interface AutofillSubmitPayload {
@@ -332,107 +348,433 @@ export function buildAutofillWatcherScript(payload: AutofillCredentialsPayload):
 
     ${SHARED_AUTOFILL_HELPERS}
 
+    // 规范化待选账号列表
+    let accounts = Array.isArray(data.accounts) ? data.accounts : [];
+    if (accounts.length === 0 && (data.username || data.passwordPlain)) {
+      accounts.push({
+        id: data.loginId || 'default',
+        username: data.username || '',
+        passwordPlain: data.passwordPlain || '',
+        usernameElement: data.usernameElement,
+        passwordElement: data.passwordElement,
+      });
+    }
+
     if (window.__copisAutofillWatcherCleanup) {
       window.__copisAutofillWatcherCleanup();
     }
 
-    let isCompleted = false;
+    let activeInput = null;
+    let selectedIndex = -1;
     let observer = null;
-    let retryTimers = [];
 
-    function tryFill() {
-      if (isCompleted) return true;
-      const { pwdInput, userInput } = findInputs(data);
-      let usernameFilled = false;
-      let passwordFilled = false;
+    function isRelevantInput(el) {
+      if (!el || el.tagName !== 'INPUT' || !el.isConnected || !isElementVisible(el)) return false;
+      const type = (el.type || 'text').toLowerCase();
+      if (['hidden', 'submit', 'button', 'checkbox', 'radio', 'file', 'image', 'range', 'color', 'reset'].includes(type)) {
+        return false;
+      }
+      if (type === 'password') return true;
 
-      if (userInput && data.username) {
-        usernameFilled = setInputValue(userInput, data.username);
+      const ac = (el.getAttribute('autocomplete') || '').toLowerCase();
+      if (ac.includes('username') || ac.includes('email') || ac.includes('account') || ac.includes('current-password')) {
+        return true;
       }
 
-      if (pwdInput && data.passwordPlain) {
-        passwordFilled = setInputValue(pwdInput, data.passwordPlain);
+      const form = el.form || el.closest('form') || el.closest('div[class*="login" i], div[class*="auth" i], div[class*="form" i], div[class*="card" i], div[class*="modal" i]') || el.parentElement;
+      if (form && form.querySelector('input[type="password"]')) {
+        return true;
       }
 
-      const hasBoth = Boolean(userInput && pwdInput);
-      const filledBoth = Boolean(usernameFilled && passwordFilled);
-      const filledAny = Boolean(usernameFilled || passwordFilled);
-
-      if (filledAny) {
-        sendMsg('autofill-applied', {
-          origin: location.origin,
-          username: data.username,
-          loginId: data.loginId,
-        });
-      }
-
-      if (filledBoth || (!pwdInput && usernameFilled) || (pwdInput && passwordFilled)) {
-        isCompleted = true;
-        cleanup();
+      const str = (el.name + ' ' + el.id + ' ' + (el.placeholder || '') + ' ' + (el.getAttribute('aria-label') || '')).toLowerCase();
+      if (/user|email|login|account|phone|uname|账号|用户名|手机|邮箱/.test(str)) {
         return true;
       }
 
       return false;
     }
 
-    function cleanup() {
-      if (observer) {
-        observer.disconnect();
-        observer = null;
+    function getHost() {
+      let host = document.getElementById('__copis_autofill_dropdown_host__');
+      if (!host) {
+        host = document.createElement('div');
+        host.id = '__copis_autofill_dropdown_host__';
+        host.style.position = 'fixed';
+        host.style.top = '0';
+        host.style.left = '0';
+        host.style.width = '0';
+        host.style.height = '0';
+        host.style.zIndex = '2147483647';
+        host.style.pointerEvents = 'none';
+        (document.body || document.documentElement).appendChild(host);
       }
-      for (const t of retryTimers) {
-        clearTimeout(t);
+      if (!host.shadowRoot) {
+        host.attachShadow({ mode: 'open' });
       }
-      retryTimers = [];
+      return host;
     }
 
-    window.__copisAutofillWatcherCleanup = cleanup;
+    function hideDropdown() {
+      const host = document.getElementById('__copis_autofill_dropdown_host__');
+      if (host && host.shadowRoot) {
+        host.shadowRoot.innerHTML = '';
+      }
+      activeInput = null;
+      selectedIndex = -1;
+      window.removeEventListener('scroll', updatePosition, true);
+      window.removeEventListener('resize', updatePosition);
+      document.removeEventListener('pointerdown', onDocPointerDown, true);
+      document.removeEventListener('keydown', onDocKeyDown, true);
+    }
 
-    // 1. 立即执行一次
-    if (tryFill()) return;
+    function fillAccount(acc, targetEl) {
+      if (!acc) return;
+      const { pwdInput, userInput } = findInputs(acc, targetEl);
+      let usernameFilled = false;
+      let passwordFilled = false;
 
-    // 2. 监听 DOM 变动（针对 React / Vue 等 SPA 异步渲染组件）
+      if (userInput && acc.username) {
+        usernameFilled = setInputValue(userInput, acc.username);
+      }
+      if (pwdInput && acc.passwordPlain) {
+        passwordFilled = setInputValue(pwdInput, acc.passwordPlain);
+      }
+
+      if (usernameFilled || passwordFilled) {
+        sendMsg('autofill-applied', {
+          origin: location.origin,
+          username: acc.username,
+          loginId: acc.id || acc.loginId,
+        });
+      }
+
+      hideDropdown();
+    }
+
+    function updatePosition() {
+      if (!activeInput || !activeInput.isConnected || !isElementVisible(activeInput)) {
+        hideDropdown();
+        return;
+      }
+      const host = getHost();
+      const dropdown = host.shadowRoot ? host.shadowRoot.querySelector('.copis-dropdown') : null;
+      if (!dropdown) return;
+
+      const rect = activeInput.getBoundingClientRect();
+      if (rect.width === 0 && rect.height === 0) {
+        hideDropdown();
+        return;
+      }
+
+      const dHeight = dropdown.offsetHeight || (accounts.length * 48 + 12);
+      const gap = 4;
+      let top = rect.bottom + gap;
+
+      if (top + dHeight > window.innerHeight && rect.top - gap - dHeight > 0) {
+        top = rect.top - gap - dHeight;
+      }
+
+      let left = rect.left;
+      const width = Math.min(Math.max(rect.width, 240), 360);
+      if (left + width > window.innerWidth) {
+        left = Math.max(8, window.innerWidth - width - 8);
+      }
+
+      dropdown.style.top = Math.round(top) + 'px';
+      dropdown.style.left = Math.round(left) + 'px';
+      dropdown.style.width = Math.round(width) + 'px';
+    }
+
+    function onDocPointerDown(e) {
+      if (e.target === activeInput) return;
+      const host = document.getElementById('__copis_autofill_dropdown_host__');
+      if (host && e.composedPath && e.composedPath().includes(host)) return;
+      hideDropdown();
+    }
+
+    function onDocKeyDown(e) {
+      const host = getHost();
+      const dropdown = host.shadowRoot ? host.shadowRoot.querySelector('.copis-dropdown') : null;
+      if (!dropdown) return;
+
+      const items = Array.from(dropdown.querySelectorAll('.copis-item'));
+      if (items.length === 0) return;
+
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        e.stopPropagation();
+        hideDropdown();
+      } else if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        selectedIndex = (selectedIndex + 1) % items.length;
+        renderSelection(items);
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        selectedIndex = (selectedIndex - 1 + items.length) % items.length;
+        renderSelection(items);
+      } else if (e.key === 'Enter' && selectedIndex >= 0 && selectedIndex < items.length) {
+        e.preventDefault();
+        e.stopPropagation();
+        const chosenAcc = accounts[selectedIndex];
+        if (chosenAcc) fillAccount(chosenAcc, activeInput);
+      }
+    }
+
+    function renderSelection(items) {
+      items.forEach((it, idx) => {
+        if (idx === selectedIndex) {
+          it.classList.add('selected');
+          it.scrollIntoView({ block: 'nearest' });
+        } else {
+          it.classList.remove('selected');
+        }
+      });
+    }
+
+    function escapeHtml(str) {
+      return String(str || '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+    }
+
+    function showDropdown(inputEl) {
+      if (!accounts || accounts.length === 0) return;
+      if (activeInput === inputEl && getHost().shadowRoot && getHost().shadowRoot.querySelector('.copis-dropdown')) {
+        updatePosition();
+        return;
+      }
+
+      activeInput = inputEl;
+      selectedIndex = -1;
+
+      const host = getHost();
+      const shadow = host.shadowRoot;
+
+      const theme = data.theme || {};
+      const isDark = typeof theme.isDark === 'boolean'
+        ? theme.isDark
+        : Boolean(
+            document.documentElement.classList.contains('dark') ||
+            (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches)
+          );
+
+      const primaryColor = theme.primaryColor || (window.getComputedStyle(document.documentElement).getPropertyValue('--ui-primary') || '').trim() || '#f09a43';
+      const primaryBackground = theme.primaryBackground || 'rgba(240, 154, 67, 0.2)';
+
+      const themeStyles = isDark ? \`
+        --c-bg: #18181b;
+        --c-fg: #f4f4f5;
+        --c-border: rgba(255, 255, 255, 0.12);
+        --c-sub: #a1a1aa;
+        --c-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.5), 0 8px 10px -6px rgba(0, 0, 0, 0.4);
+      \` : \`
+        --c-bg: #ffffff;
+        --c-fg: #0f172a;
+        --c-border: rgba(0, 0, 0, 0.10);
+        --c-sub: #64748b;
+        --c-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.12), 0 8px 10px -6px rgba(0, 0, 0, 0.08);
+      \`;
+
+      shadow.innerHTML = \`
+        <style>
+          .copis-dropdown {
+            --ui-primary: \${primaryColor};
+            --ui-primary-background: \${primaryBackground};
+            \${themeStyles}
+            position: fixed;
+            pointer-events: auto;
+            box-sizing: border-box;
+            background: var(--c-bg);
+            color: var(--c-fg);
+            border: 1px solid var(--c-border);
+            border-radius: 8px;
+            box-shadow: var(--c-shadow);
+            padding: 4px;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            font-size: 13px;
+            line-height: 1.4;
+            overflow: hidden;
+            user-select: none;
+            z-index: 2147483647;
+            animation: copis-in 0.12s cubic-bezier(0.16, 1, 0.3, 1);
+          }
+          @keyframes copis-in {
+            from { opacity: 0; transform: translateY(-3px); }
+            to { opacity: 1; transform: translateY(0); }
+          }
+          .copis-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 5px 8px 4px 8px;
+            margin-bottom: 3px;
+            border-bottom: 1px solid var(--c-border);
+            font-size: 11px;
+            color: var(--c-sub);
+          }
+          .copis-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            font-weight: 500;
+            color: var(--ui-primary);
+            background: var(--ui-primary-background);
+            padding: 1px 6px;
+            border-radius: 4px;
+          }
+          .copis-item {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 7px 9px;
+            border-radius: 6px;
+            cursor: pointer;
+            transition: background 0.1s ease, border-color 0.1s ease;
+            border: 1px solid transparent;
+          }
+          .copis-item:hover, .copis-item.selected {
+            background: var(--ui-primary-background);
+            border-color: color-mix(in srgb, var(--ui-primary) 30%, transparent);
+          }
+          .copis-item:hover .copis-user, .copis-item.selected .copis-user {
+            color: var(--ui-primary);
+          }
+          .copis-icon {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 26px;
+            height: 26px;
+            border-radius: 50%;
+            background: var(--ui-primary-background);
+            color: var(--ui-primary);
+            flex-shrink: 0;
+            transition: transform 0.12s ease;
+          }
+          .copis-item:hover .copis-icon, .copis-item.selected .copis-icon {
+            transform: scale(1.05);
+          }
+          .copis-info {
+            display: flex;
+            flex-direction: column;
+            min-width: 0;
+            flex: 1;
+          }
+          .copis-user {
+            font-weight: 500;
+            color: var(--c-fg);
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            transition: color 0.1s ease;
+          }
+          .copis-sub {
+            font-size: 11px;
+            color: var(--c-sub);
+            margin-top: 1px;
+          }
+        </style>
+        <div class="copis-dropdown">
+          <div class="copis-header">
+            <span>使用已保存的账号</span>
+            <span class="copis-badge">
+              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M2.586 17.414A2 2 0 0 0 2 18.828V21a1 1 0 0 0 1 1h3a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h1a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h.172a2 2 0 0 0 1.414-.586l.814-.814a6.5 6.5 0 1 0-4-4z"/>
+                <circle cx="16.5" cy="7.5" r=".5" fill="currentColor"/>
+              </svg>
+              Copis
+            </span>
+          </div>
+          \${accounts.map((acc, index) => \`
+            <div class="copis-item" data-index="\${index}">
+              <div class="copis-icon">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M2.586 17.414A2 2 0 0 0 2 18.828V21a1 1 0 0 0 1 1h3a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h1a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h.172a2 2 0 0 0 1.414-.586l.814-.814a6.5 6.5 0 1 0-4-4z"/>
+                  <circle cx="16.5" cy="7.5" r=".5" fill="currentColor"/>
+                </svg>
+              </div>
+              <div class="copis-info">
+                <div class="copis-user">\${escapeHtml(acc.username)}</div>
+                <div class="copis-sub">已保存的密码</div>
+              </div>
+            </div>
+          \`).join('')}
+        </div>
+      \`;
+
+      const itemEls = shadow.querySelectorAll('.copis-item');
+      itemEls.forEach((el, index) => {
+        el.addEventListener('pointerdown', (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          const chosen = accounts[index];
+          if (chosen) fillAccount(chosen, activeInput);
+        });
+      });
+
+      updatePosition();
+
+      window.addEventListener('scroll', updatePosition, { capture: true, passive: true });
+      window.addEventListener('resize', updatePosition, { passive: true });
+      document.addEventListener('pointerdown', onDocPointerDown, true);
+      document.addEventListener('keydown', onDocKeyDown, true);
+    }
+
+    // 用户点击或聚焦到相关输入框时弹出待选下拉浮层
+    const handleInputTrigger = (e) => {
+      const target = e.target;
+      if (isRelevantInput(target)) {
+        showDropdown(target);
+      }
+    };
+
+    document.addEventListener('focusin', handleInputTrigger, { capture: true, passive: true });
+    document.addEventListener('click', handleInputTrigger, { capture: true, passive: true });
+
+    // 输入过程中若值发生变化，可联动过滤或隐藏浮层
+    const handleInputFilter = (e) => {
+      if (e.target !== activeInput) return;
+      const val = (activeInput.value || '').trim().toLowerCase();
+      if (!val) {
+        showDropdown(activeInput);
+        return;
+      }
+      const matched = accounts.filter(a => a.username.toLowerCase().includes(val));
+      if (matched.length === 0) {
+        hideDropdown();
+      }
+    };
+    document.addEventListener('input', handleInputFilter, { capture: true, passive: true });
+
+    // MutationObserver 监听输入框移除并清理浮层
     if (window.MutationObserver) {
-      let debounceTimer = null;
       observer = new MutationObserver(() => {
-        if (debounceTimer) clearTimeout(debounceTimer);
-        debounceTimer = setTimeout(() => {
-          if (tryFill()) cleanup();
-        }, 50);
+        if (activeInput && (!activeInput.isConnected || !isElementVisible(activeInput))) {
+          hideDropdown();
+        }
       });
       observer.observe(document.documentElement, {
         childList: true,
         subtree: true,
-        attributes: true,
-        attributeFilter: ['style', 'class', 'type'],
       });
     }
 
-    // 3. 递增间隔重试序列
-    const intervals = [100, 250, 500, 1000, 2000, 3500, 5000];
-    for (const delay of intervals) {
-      const timer = setTimeout(() => {
-        if (tryFill()) cleanup();
-      }, delay);
-      retryTimers.push(timer);
+    function cleanup() {
+      hideDropdown();
+      if (observer) {
+        observer.disconnect();
+        observer = null;
+      }
+      document.removeEventListener('focusin', handleInputTrigger, true);
+      document.removeEventListener('click', handleInputTrigger, true);
+      document.removeEventListener('input', handleInputFilter, true);
+      const host = document.getElementById('__copis_autofill_dropdown_host__');
+      if (host) host.remove();
     }
 
-    // 4. 监听焦点切入（用户点击/聚焦输入框时快速补充回填）
-    const handleFocusIn = (e) => {
-      const target = e.target;
-      if (!target || target.tagName !== 'INPUT') return;
-      if (target.type === 'password' || target.type === 'email' || target.type === 'text') {
-        if (!target.value) {
-          tryFill();
-        }
-      }
-    };
-    document.addEventListener('focusin', handleFocusIn, { capture: true, passive: true });
-
-    // 10 秒后释放 observer
-    setTimeout(() => {
-      cleanup();
-    }, 10000);
+    window.__copisAutofillWatcherCleanup = cleanup;
   } catch {}
 })();
 `

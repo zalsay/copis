@@ -25,6 +25,20 @@ export default defineConfig({
       '@': resolve(__dirname, 'src/renderer'),
     },
   },
+  optimizeDeps: {
+    include: [
+      'react',
+      'react-dom',
+      'jotai',
+      '@pierre/diffs',
+      '@pierre/diffs/react',
+      'remark-gfm',
+      'remark-math',
+      'rehype-katex',
+      'react-markdown',
+      'lucide-react',
+    ],
+  },
   server: {
     // Chromium can resolve localhost to IPv4 while Vite binds only ::1 on macOS.
     // Use the same explicit IPv4 loopback address as Electron's dev windows.

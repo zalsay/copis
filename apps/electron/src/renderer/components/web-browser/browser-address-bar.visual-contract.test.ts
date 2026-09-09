@@ -33,13 +33,15 @@ describe('浏览器地址栏视觉契约', () => {
     expect(surfaceSource).toContain('addressInputRef.current?.select()')
   })
 
-  test('Given 密码提示与地址栏快捷气泡 When 渲染保存按钮与钥匙图标 Then 均使用 ui-primary 配色', () => {
+  test('Given 密码提示与地址栏快捷气泡 When 渲染保存按钮与钥匙图标 Then 顶部的钥匙为默认次要色且弹层与横幅使用 ui-primary 配色', () => {
     const popoverSource = readFileSync(join(import.meta.dir, 'WebPasswordKeyPopover.tsx'), 'utf8')
     const bannerSource = readFileSync(join(import.meta.dir, 'WebPasswordPromptBanner.tsx'), 'utf8')
 
-    // 地址栏钥匙图标按钮必须始终采用 ui-primary 配色
-    expect(popoverSource).toContain("text-[var(--ui-primary)]")
-    expect(popoverSource).toContain("style={{ color: 'var(--ui-primary)' }}")
+    // 顶部地址栏钥匙图标按钮必须采用默认次要色（text-muted-foreground），悬浮时高亮
+    expect(popoverSource).toContain('className="size-7 shrink-0 rounded-sm text-muted-foreground hover:text-foreground hover:bg-muted/60 transition-colors"')
+    expect(popoverSource).toContain('<KeyRound className="size-3.5 text-muted-foreground hover:text-foreground" />')
+
+    // 展开后的 Popover 内部保存按钮使用 ui-primary 配色
     expect(popoverSource).toContain("backgroundColor: 'var(--ui-primary)'")
 
     // 保存密码横幅提示中的钥匙图标与保存按钮必须采用 ui-primary 配色

@@ -14,12 +14,14 @@ import {
   WEB_PASSWORD_IPC_CHANNELS,
 } from '@copis/shared'
 import { getWebPasswordsDatabasePath } from './config-paths'
+import { getSettings } from './settings-service'
 import {
   buildAutofillDetectionScript,
   buildAutofillExecutionScript,
   buildAutofillWatcherScript,
   COPIS_AUTOFILL_MSG_PREFIX,
   type AutofillSubmitPayload,
+  type AutofillTheme,
 } from './web-password-autofill-script'
 import {
   normalizeOrigin,
@@ -29,6 +31,61 @@ import {
 
 export interface PromptNotifier {
   (tabId: string, prompt: WebPasswordSavePrompt | null): void
+}
+
+function hexToRgba(hex: string, alpha: number): string {
+  const clean = hex.replace('#', '')
+  const num = parseInt(clean.length === 3 ? clean.split('').map((c) => c + c).join('') : clean, 16)
+  if (isNaN(num)) return hex
+  const r = (num >> 16) & 255
+  const g = (num >> 8) & 255
+  const b = num & 255
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`
+}
+
+/**
+ * 获取当前 Copis 激活的主题色、主题背景色与暗黑模式状态
+ */
+export function resolveAutofillTheme(): AutofillTheme {
+  try {
+    const settings = getSettings()
+    let systemIsDark = true
+    try {
+      // 动态安全加载 Electron nativeTheme，避免在单元测试环境中缺失
+      const electron = require('electron')
+      if (electron?.nativeTheme?.shouldUseDarkColors !== undefined) {
+        systemIsDark = Boolean(electron.nativeTheme.shouldUseDarkColors)
+      }
+    } catch {
+      systemIsDark = true
+    }
+
+    let isDark = true
+    if (settings.themeMode === 'light') {
+      isDark = false
+    } else if (settings.themeMode === 'dark') {
+      isDark = true
+    } else if (settings.themeMode === 'special' && settings.themeStyle && settings.themeStyle !== 'default') {
+      isDark = settings.themeStyle.endsWith('-dark')
+    } else {
+      isDark = systemIsDark
+    }
+
+    const customColor = isDark
+      ? (settings.agentThemeColorDark || settings.agentThemeColor)
+      : (settings.agentThemeColorLight || settings.agentThemeColor)
+
+    const primaryColor = (customColor && /^#[0-9a-fA-F]{6}$/.test(customColor)) ? customColor : '#f09a43'
+    const primaryBackground = hexToRgba(primaryColor, 0.2)
+
+    return { primaryColor, primaryBackground, isDark }
+  } catch {
+    return {
+      primaryColor: '#f09a43',
+      primaryBackground: 'rgba(240, 154, 67, 0.2)',
+      isDark: true,
+    }
+  }
 }
 
 export class WebPasswordService {
@@ -266,17 +323,25 @@ export class WebPasswordService {
 
     // 3. 查询当前站点的凭据（按最近使用/更新优先排序）
     const logins = this.db.getLoginsByOrigin(currentUrl)
-    const login = logins[0]
-    if (logins.length >= 1 && login) {
-      // 启动页面常驻智能回填监听（支持 SPA 异步挂载与多轮次重试）
+    if (logins.length >= 1) {
+      // 启动页面常驻点击回填待选监听（不默认自动填入，点击输入框后在下方展示待选账号列表）
       try {
+        const theme = resolveAutofillTheme()
         await contents.executeJavaScript(
           buildAutofillWatcherScript({
-            username: login.username,
-            passwordPlain: login.passwordPlain,
-            usernameElement: login.usernameElement,
-            passwordElement: login.passwordElement,
-            loginId: login.id,
+            accounts: logins.map((l) => ({
+              id: l.id,
+              username: l.username,
+              passwordPlain: l.passwordPlain,
+              usernameElement: l.usernameElement,
+              passwordElement: l.passwordElement,
+            })),
+            theme,
+            username: logins[0]!.username,
+            passwordPlain: logins[0]!.passwordPlain,
+            usernameElement: logins[0]!.usernameElement,
+            passwordElement: logins[0]!.passwordElement,
+            loginId: logins[0]!.id,
           }),
         )
       } catch {
