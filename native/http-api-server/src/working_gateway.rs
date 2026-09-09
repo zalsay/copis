@@ -2,9 +2,16 @@ use super::auth_session::{
     working_oidc_redirect_uri, AuthError, AuthSession, LoginInput, RegisterInput, SendCodeInput,
     VerifyResetCodeInput,
 };
+use super::model_request_client::ModelRequestClient;
 use serde_json::{Map, Value};
 use std::fmt;
+use std::io::Read;
 use std::sync::Arc;
+
+#[path = "image_task_store.rs"]
+mod image_task_store;
+#[path = "image_task_gateway.rs"]
+mod image_task_gateway;
 
 #[derive(Debug)]
 pub struct GatewayResponse {
@@ -49,6 +56,7 @@ pub fn is_working_gateway_path(path: &str) -> bool {
         "/api/working/orders",
         "/api/working/feedback",
         "/api/working/image",
+        "/api/working/image/tasks",
     ]
     .iter()
     .any(|prefix| path == *prefix || path.starts_with(&format!("{}/", prefix)))
@@ -128,11 +136,30 @@ pub fn oidc_failure_page() -> &'static str {
 
 pub struct WorkingGateway {
     auth: Arc<AuthSession>,
+    model_client: Option<ModelRequestClient>,
+    image_store: Result<image_task_store::ImageTaskStore, String>,
 }
 
 impl WorkingGateway {
     pub fn new(auth: Arc<AuthSession>) -> Self {
-        Self { auth }
+        Self {
+            auth,
+            model_client: ModelRequestClient::from_environment().ok(),
+            image_store: image_task_store::ImageTaskStore::open(if cfg!(test) {
+                std::path::PathBuf::from(":memory:")
+            } else {
+                super::resolve_config_directory().join("image-generation-tasks/tasks.sqlite")
+            }),
+        }
+    }
+
+    #[cfg(test)]
+    pub fn with_model_client(auth: Arc<AuthSession>, model_client: ModelRequestClient) -> Self {
+        Self {
+            auth,
+            model_client: Some(model_client),
+            image_store: image_task_store::ImageTaskStore::open(":memory:"),
+        }
     }
 }
 
@@ -154,6 +181,9 @@ pub fn handle_working_gateway_request(
     }
     let resource = segments[2].as_str();
 
+    if resource == "image" && segments.len() >= 4 && segments[3] == "tasks" {
+        return image_task_gateway::handle(gateway, method, &segments, query, body);
+    }
     match resource {
         "config" => {
             require_method(method, "GET")?;
@@ -429,6 +459,28 @@ pub fn handle_working_gateway_request(
     remote_json(gateway, remote_method, &remote_path, remote_body)
 }
 
+fn sanitize_image_task_response(value: Value) -> Value {
+    let source = value.get("data").cloned().unwrap_or(value);
+    let mut data = Map::new();
+    if let Some(object) = source.as_object() {
+        for key in [
+            "task_id",
+            "status",
+            "image_url",
+            "cos_key",
+            "error",
+            "content_type",
+            "deducted_tokens",
+            "balance_after",
+        ] {
+            if let Some(value) = object.get(key) {
+                data.insert(key.to_string(), value.clone());
+            }
+        }
+    }
+    Value::Object(Map::from_iter([("data".to_string(), Value::Object(data))]))
+}
+
 fn settings_snapshot(gateway: &WorkingGateway) -> Result<GatewayResponse, GatewayError> {
     let me = authenticated_json(gateway, "GET", "/api/users/me", None)?;
     let mut settings = object_or_empty(me, "当前用户响应")?;
@@ -503,7 +555,29 @@ fn authenticated_json(
     let response = gateway
         .auth
         .authenticated_request(method, path, body.map(|value| value.to_string()))
-        .map_err(GatewayError::from)?;
+        .map_err(|error| {
+            if path == "/api/working/images/generate" {
+                match error {
+                    AuthError::Network(message) => {
+                        eprintln!("[HTTP API][图片生成] 上游请求传输失败: {}", message);
+                        return GatewayError::new(
+                            502,
+                            "image_generation_upstream_error",
+                            &format!("图片生成上游请求失败: {}", message),
+                        );
+                    }
+                    AuthError::InvalidResponse(message) => {
+                        return GatewayError::new(
+                            502,
+                            "image_generation_upstream_error",
+                            &format!("图片生成上游响应无效: {}", message),
+                        );
+                    }
+                    other => return GatewayError::from(other),
+                }
+            }
+            GatewayError::from(error)
+        })?;
     if response.status == 204 || response.body.is_empty() {
         return Ok(Value::Null);
     }

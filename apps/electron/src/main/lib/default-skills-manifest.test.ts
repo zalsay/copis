@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { readdirSync, readFileSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 const DEFAULT_SKILLS_DIR = join(import.meta.dir, '../../../default-skills')
@@ -151,7 +151,7 @@ describe('默认 Skills 清单', () => {
     expect(frontmatter.get('name')).toBe('find-skills')
     expect(frontmatter.get('displayName')).toBe('技能发现')
     expect(frontmatter.get('group')).toBe('系统内置')
-    expect(frontmatter.get('version')?.replace(/^['"]|['"]$/g, '')).toBe('1.0.5')
+    expect(frontmatter.get('version')?.replace(/^['"]|['"]$/g, '')).toBe('1.0.6')
     expect(frontmatter.get('description')).toContain('在 SkillHub 平台查找/搜索 Skill 技能')
 
     const content = readFileSync(join(DEFAULT_SKILLS_DIR, 'find-skills', 'SKILL.md'), 'utf8')
@@ -360,6 +360,41 @@ describe('默认 Skills 清单', () => {
     expect(content).toContain('单步递进，禁止刷屏')
     expect(content).toContain('代码库探索先行')
     expect(content).toContain('writing-plans')
+  })
+
+  test('设计大师 dashi-design 包含系统内置元数据、13个领域指南与运行时协议', () => {
+    const bundled = new Set(bundledSkillSlugs())
+    expect(bundled.has('dashi-design')).toBe(true)
+
+    const frontmatter = readFrontmatter('dashi-design')
+    expect(frontmatter.get('name')).toBe('dashi-design')
+    expect(frontmatter.get('displayName')).toBe('设计大师')
+    expect(frontmatter.get('group')).toBe('系统内置')
+    expect(frontmatter.get('category')).toBe('效率工具')
+    expect(frontmatter.get('version')?.replace(/^['"]|['"]$/g, '')).toBe('1.0.0')
+    expect(frontmatter.get('license')).toBe('AGPL-3.0-only')
+
+    const content = readFileSync(join(DEFAULT_SKILLS_DIR, 'dashi-design', 'SKILL.md'), 'utf8')
+    expect(content).toContain('copis dashi-design')
+    expect(content).toContain('Design Component')
+    expect(content).toContain('.dc.html')
+    expect(content).toContain('反 AI 默认审美清单')
+    expect(content).toContain('dc-authoring.md')
+    expect(content).toContain('interactive-prototype.md')
+    expect(content).toContain('deck-stage.md')
+
+    const referencesDir = join(DEFAULT_SKILLS_DIR, 'dashi-design', 'references')
+    const references = readdirSync(referencesDir).sort()
+    expect(references).toHaveLength(13)
+    expect(references).toContain('dc-authoring.md')
+    expect(references).toContain('design-tokens.md')
+    expect(references).toContain('hi-fi-design.md')
+    expect(references).toContain('deck-stage.md')
+    expect(references).toContain('interactive-prototype.md')
+
+    const runtimeDir = join(DEFAULT_SKILLS_DIR, 'dashi-design', 'runtime')
+    expect(existsSync(join(runtimeDir, 'support.js'))).toBe(true)
+    expect(existsSync(join(runtimeDir, 'vendor', 'react.production.min.js'))).toBe(true)
   })
 })
 

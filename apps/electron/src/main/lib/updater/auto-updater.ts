@@ -6,8 +6,10 @@
  */
 
 import { createHash } from 'node:crypto'
-import { mkdir, open, rm } from 'node:fs/promises'
-import { basename, join } from 'node:path'
+import { existsSync, readFileSync, statSync, unlinkSync } from 'node:fs'
+import { mkdir, open, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { basename, dirname, join } from 'node:path'
 import { BrowserWindow, app, shell } from 'electron'
 import type { UpdateStatus } from './updater-types'
 import { UPDATER_IPC_CHANNELS } from './updater-types'
@@ -16,8 +18,241 @@ import { checkAppUpdateViaRustApi } from '../app-update-service'
 import { autoInstallDownloadedUpdate } from '../auto-install-update'
 import { migrateLegacyAgentWorkspaceProjectDirectories } from '../agent-workspace-manager'
 
-/** 当前更新状态 */
-let currentStatus: UpdateStatus = { status: 'idle' }
+/** 已下载更新的持久化记录结构 */
+export interface PersistedDownloadedUpdate {
+  version: string
+  filePath: string
+  fileSha256?: string
+  fileSize?: number
+  downloadUrl?: string
+  downloadedAt: number
+}
+
+/** 获取安全的用户数据路径（单测中兜底到 tmpdir） */
+function getUserDataPath(): string {
+  try {
+    return app?.getPath?.('userData') || join(tmpdir(), 'copis-test-userdata')
+  } catch {
+    return join(tmpdir(), 'copis-test-userdata')
+  }
+}
+
+/** 主程序更新包固定存储目录：userData/updates/ */
+export function getUpdatesDir(): string {
+  return join(getUserDataPath(), 'updates')
+}
+
+/** 持久化已下载更新的元数据文件路径：userData/downloaded-update.json */
+export function getPersistedUpdateFilePath(): string {
+  return join(getUserDataPath(), 'downloaded-update.json')
+}
+
+/** 解析 semver 版本号 */
+function parseSemver(value: string): number[] {
+  const [normalized] = value.trim().replace(/^v/i, '').split('-', 1)
+  if (!normalized) return [0, 0, 0]
+  const parts = normalized.split('.')
+  return parts.map((part) => {
+    const num = Number(part)
+    return Number.isSafeInteger(num) ? num : 0
+  })
+}
+
+/**
+ * 比较两个语义化版本号
+ *
+ * @returns left > right 返回正数，相等返回 0，left < right 返回负数
+ */
+export function compareSemver(left: string, right: string): number {
+  const leftParts = parseSemver(left)
+  const rightParts = parseSemver(right)
+  for (let i = 0; i < Math.max(leftParts.length, rightParts.length); i++) {
+    const diff = (leftParts[i] ?? 0) - (rightParts[i] ?? 0)
+    if (diff !== 0) return diff
+  }
+  return 0
+}
+
+/** 保存已下载更新的元数据 */
+export async function savePersistedDownloadedUpdate(info: PersistedDownloadedUpdate): Promise<void> {
+  try {
+    const filePath = getPersistedUpdateFilePath()
+    await mkdir(dirname(filePath), { recursive: true })
+    await writeFile(filePath, JSON.stringify(info, null, 2), 'utf8')
+  } catch (error) {
+    console.error('[更新] 持久化已下载更新信息失败:', error)
+  }
+}
+
+/** 清理已下载更新的元数据及旧安装包 */
+export async function clearPersistedDownloadedUpdate(cleanupFile = false): Promise<void> {
+  const metaPath = getPersistedUpdateFilePath()
+  try {
+    if (cleanupFile && existsSync(metaPath)) {
+      const raw = await readFile(metaPath, 'utf8')
+      const info = JSON.parse(raw) as PersistedDownloadedUpdate
+      if (info?.filePath && existsSync(info.filePath)) {
+        await rm(info.filePath, { force: true })
+      }
+    }
+  } catch {
+    // 忽略清理异常
+  }
+
+  try {
+    if (existsSync(metaPath)) {
+      await rm(metaPath, { force: true })
+    }
+  } catch {
+    // 忽略
+  }
+}
+
+/** 加载并验证已下载更新的持久化记录 */
+export async function loadPersistedDownloadedUpdate(): Promise<PersistedDownloadedUpdate | null> {
+  const metaPath = getPersistedUpdateFilePath()
+  if (!existsSync(metaPath)) return null
+
+  try {
+    const raw = await readFile(metaPath, 'utf8')
+    const info = JSON.parse(raw) as PersistedDownloadedUpdate
+    if (!info?.version || !info?.filePath) return null
+
+    // 检查文件是否存在
+    if (!existsSync(info.filePath)) {
+      console.warn('[更新] 持久化记录的安装包文件不存在，清理记录:', info.filePath)
+      await clearPersistedDownloadedUpdate(false)
+      return null
+    }
+
+    // 检查当前运行 App 版本是否已经高于或等于已下载版本（说明已成功更新过了）
+    const currentAppVersion = app.getVersion()
+    if (currentAppVersion && currentAppVersion !== '0.0.0') {
+      if (compareSemver(currentAppVersion, info.version) >= 0) {
+        console.log(`[更新] 当前运行版本 (v${currentAppVersion}) 已是或高于下载版本 (v${info.version})，清理旧安装包`)
+        await clearPersistedDownloadedUpdate(true)
+        return null
+      }
+    }
+
+    // 检查文件大小是否一致（若有记录）
+    if (info.fileSize) {
+      const fileStat = await stat(info.filePath)
+      if (fileStat.size !== info.fileSize) {
+        console.warn('[更新] 安装包大小不匹配，清理损坏安装包')
+        await clearPersistedDownloadedUpdate(true)
+        return null
+      }
+    }
+
+    return info
+  } catch (error) {
+    console.warn('[更新] 读取持久化更新信息失败:', error)
+    return null
+  }
+}
+
+/** 同步尝试从持久化文件中恢复更新状态 */
+function tryRestorePersistedUpdateSync(): UpdateStatus {
+  try {
+    const metaPath = getPersistedUpdateFilePath()
+    if (!existsSync(metaPath)) return { status: 'idle' }
+    const info = JSON.parse(readFileSync(metaPath, 'utf8')) as PersistedDownloadedUpdate
+    if (!info?.version || !info?.filePath) return { status: 'idle' }
+
+    const currentAppVersion = app.getVersion()
+    if (currentAppVersion && currentAppVersion !== '0.0.0' && compareSemver(currentAppVersion, info.version) >= 0) {
+      // 安装成功后再次启动 app：自动清理已安装版本的安装包与元数据
+      try {
+        if (existsSync(info.filePath)) {
+          unlinkSync(info.filePath)
+          console.log(`[更新] 安装成功后再次启动，已自动清理下载安装包: ${info.filePath}`)
+        }
+        if (existsSync(metaPath)) {
+          unlinkSync(metaPath)
+        }
+      } catch (err) {
+        console.warn('[更新] 同步清理已安装安装包失败:', err)
+      }
+      return { status: 'idle' }
+    }
+
+    if (!existsSync(info.filePath)) return { status: 'idle' }
+
+    if (info.fileSize && statSync(info.filePath).size !== info.fileSize) {
+      return { status: 'idle' }
+    }
+
+    return {
+      status: 'downloaded',
+      version: info.version,
+      filePath: info.filePath,
+      fileSha256: info.fileSha256,
+      fileSize: info.fileSize,
+      downloadUrl: info.downloadUrl,
+    }
+  } catch {
+    return { status: 'idle' }
+  }
+}
+
+/**
+ * 安装成功后再次启动 App 时，自动清理已下载安装包与元数据
+ *
+ * 1. 若元数据记录的安装包版本 <= 当前运行 App 版本，说明已成功安装，自动清理该安装包与元数据
+ * 2. 扫描 updates 目录，清理版本号 <= 当前版本的遗留安装包文件（.dmg / .exe）
+ */
+export async function cleanupDownloadedUpdatesOnStartup(
+  currentVersion = app.getVersion(),
+): Promise<void> {
+  if (!currentVersion || currentVersion === '0.0.0') return
+
+  // 1. 检查并清理元数据指定的安装包
+  const metaPath = getPersistedUpdateFilePath()
+  if (existsSync(metaPath)) {
+    try {
+      const raw = await readFile(metaPath, 'utf8')
+      const info = JSON.parse(raw) as PersistedDownloadedUpdate
+      if (info?.version && compareSemver(currentVersion, info.version) >= 0) {
+        if (info.filePath && existsSync(info.filePath)) {
+          await rm(info.filePath, { force: true })
+          console.log(`[更新] 安装成功后再次启动，已自动清理下载安装包: ${info.filePath}`)
+        }
+        await rm(metaPath, { force: true })
+      }
+    } catch (error) {
+      console.warn('[更新] 清理已安装更新元数据失败:', error)
+    }
+  }
+
+  // 2. 扫描 updates 目录清理已安装版本或更早版本的旧安装包
+  const updatesDir = getUpdatesDir()
+  if (existsSync(updatesDir)) {
+    try {
+      const entries = await readdir(updatesDir, { withFileTypes: true })
+      for (const entry of entries) {
+        if (!entry.isFile()) continue
+        const lower = entry.name.toLowerCase()
+        if (!lower.endsWith('.dmg') && !lower.endsWith('.exe') && !lower.endsWith('.zip')) continue
+
+        const match = entry.name.match(/(\d+\.\d+\.\d+)/)
+        if (match?.[1]) {
+          const fileVersion = match[1]
+          if (compareSemver(currentVersion, fileVersion) >= 0) {
+            const fullPath = join(updatesDir, entry.name)
+            await rm(fullPath, { force: true })
+            console.log(`[更新] 已自动清理已安装的历史安装包: ${fullPath}`)
+          }
+        }
+      }
+    } catch (error) {
+      console.warn('[更新] 扫描清理 updates 目录失败:', error)
+    }
+  }
+}
+
+/** 当前更新状态（启动时同步恢复已下载状态） */
+let currentStatus: UpdateStatus = tryRestorePersistedUpdateSync()
 
 /** 主窗口引用 */
 let win: BrowserWindow | null = null
@@ -68,6 +303,9 @@ export function configureUpdater(
 ): void {
   hasActiveAgents = options?.hasActiveAgents ?? hasActiveAgents
   win = mainWindow
+  if (currentStatus.status !== 'idle') {
+    win?.webContents?.send(UPDATER_IPC_CHANNELS.ON_STATUS_CHANGED, currentStatus)
+  }
 }
 
 /** 获取当前更新状态 */
@@ -84,9 +322,9 @@ export async function checkForUpdates(): Promise<void> {
     console.error('[更新] 工作区旧项目目录迁移失败（更新检查继续）:', error)
   }
 
-  // 已在下载中或已下载完成，不重复检查
-  if (currentStatus.status === 'downloading' || currentStatus.status === 'downloaded') {
-    console.log('[更新] 跳过检查：已在下载中或已下载完成')
+  // 正在下载中，不重复检查
+  if (currentStatus.status === 'downloading') {
+    console.log('[更新] 跳过检查：正在下载中')
     return
   }
 
@@ -95,12 +333,40 @@ export async function checkForUpdates(): Promise<void> {
     const result = await checkAppUpdateViaRustApi()
     const latestVersion = result.latestVersion ?? result.version
     if (!result.available || !result.version || !result.url) {
+      // 远端没有可用更新，说明当前运行版本已是最新，若本地残留已下载的旧包则清理
+      await clearPersistedDownloadedUpdate(true)
       setStatus({
         status: 'not-available',
         ...(latestVersion ? { latestVersion, version: latestVersion } : {}),
       })
       return
     }
+
+    // 检查本地是否已有已下载的安装包
+    const persisted = await loadPersistedDownloadedUpdate()
+    if (persisted && persisted.version) {
+      const cmp = compareSemver(persisted.version, result.version)
+      if (cmp >= 0) {
+        // 已下载版本 >= 远端最新版，说明最新版本已经下载好，保持 downloaded 状态，切换为立即安装
+        console.log(`[更新] 本地已下载版本 (v${persisted.version}) >= 远端最新版 (v${result.version})，保持立即安装状态`)
+        setStatus({
+          status: 'downloaded',
+          version: persisted.version,
+          latestVersion: result.version,
+          filePath: persisted.filePath,
+          fileSha256: persisted.fileSha256,
+          fileSize: persisted.fileSize,
+          downloadUrl: persisted.downloadUrl ?? result.url,
+        })
+        return
+      } else {
+        // 已下载版本低于远端最新版！清理旧安装包，切换为下载更新
+        console.log(`[更新] 本地已下载版本 (v${persisted.version}) 低于远端最新版 (v${result.version})，需要重新下载最新版`)
+        await clearPersistedDownloadedUpdate(true)
+      }
+    }
+
+    // 切换为可下载状态
     setStatus({
       status: 'available',
       version: result.version,
@@ -144,7 +410,7 @@ export async function downloadAppUpdate(): Promise<void> {
     }
 
     const fileName = basename(new URL(downloadUrl).pathname) || `Copis-${version}.dmg`
-    const downloadDir = join(app.getPath('userData'), 'downloads')
+    const downloadDir = getUpdatesDir()
     await mkdir(downloadDir, { recursive: true })
     const filePath = join(downloadDir, fileName)
     const hash = createHash('sha256')
@@ -191,6 +457,16 @@ export async function downloadAppUpdate(): Promise<void> {
       await rm(filePath, { force: true })
       throw new Error('更新安装包大小不一致，请重新下载')
     }
+
+    // 下载并校验成功，持久化已下载记录供重启后使用
+    await savePersistedDownloadedUpdate({
+      version: version || 'unknown',
+      filePath,
+      fileSha256,
+      fileSize: transferred,
+      downloadUrl,
+      downloadedAt: Date.now(),
+    })
 
     setStatus({
       status: 'downloaded',
@@ -296,6 +572,7 @@ export function cleanupUpdater(): void {
  */
 export function initAutoUpdater(mainWindow: BrowserWindow): void {
   configureUpdater(mainWindow)
+  void cleanupDownloadedUpdatesOnStartup()
 
   // 启动后延迟 10 秒首次检查
   setTimeout(() => {

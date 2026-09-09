@@ -69,23 +69,41 @@ fn parses_all_working_payment_routes() {
 #[test]
 fn payment_account_key_remains_stable_when_auth_state_refreshes() {
     let state = SkillMarketState::new(Some("access-token-1".to_string()));
-    state.set_working_auth(Some("access-token-1".to_string()), Some("user-7".to_string()));
+    state.set_working_auth(
+        Some("access-token-1".to_string()),
+        Some("user-7".to_string()),
+    );
     let initial_account_key = state.payment_account_key().unwrap();
 
-    state.set_working_auth(Some("access-token-2".to_string()), Some("user-7".to_string()));
+    state.set_working_auth(
+        Some("access-token-2".to_string()),
+        Some("user-7".to_string()),
+    );
 
-    assert_eq!(state.payment_account_key().as_deref(), Some(initial_account_key.as_str()));
+    assert_eq!(
+        state.payment_account_key().as_deref(),
+        Some(initial_account_key.as_str())
+    );
 }
 
 #[test]
 fn payment_account_key_changes_when_working_user_changes() {
     let state = SkillMarketState::new(Some("access-token-1".to_string()));
-    state.set_working_auth(Some("access-token-1".to_string()), Some("user-7".to_string()));
+    state.set_working_auth(
+        Some("access-token-1".to_string()),
+        Some("user-7".to_string()),
+    );
     let first_account_key = state.payment_account_key().unwrap();
 
-    state.set_working_auth(Some("access-token-2".to_string()), Some("user-8".to_string()));
+    state.set_working_auth(
+        Some("access-token-2".to_string()),
+        Some("user-8".to_string()),
+    );
 
-    assert_ne!(state.payment_account_key().as_deref(), Some(first_account_key.as_str()));
+    assert_ne!(
+        state.payment_account_key().as_deref(),
+        Some(first_account_key.as_str())
+    );
 }
 
 #[test]
@@ -185,11 +203,23 @@ fn vip_resource_ready_refreshes_auth_but_diamond_or_pending_does_not() {
     let refresher = std::sync::Arc::new(FakeVipPaymentRefresher::new());
     state.set_vip_payment_refresher(refresher.clone());
 
-    state.refresh_after_payment(super::DesktopPaymentFlowKind::Diamond, "resource_ready", &auth_state);
-    state.refresh_after_payment(super::DesktopPaymentFlowKind::Vip, "pending_user_pay", &auth_state);
+    state.refresh_after_payment(
+        super::DesktopPaymentFlowKind::Diamond,
+        "resource_ready",
+        &auth_state,
+    );
+    state.refresh_after_payment(
+        super::DesktopPaymentFlowKind::Vip,
+        "pending_user_pay",
+        &auth_state,
+    );
     assert_eq!(*refresher.calls.lock().unwrap(), 0);
 
-    state.refresh_after_payment(super::DesktopPaymentFlowKind::Vip, "resource_ready", &auth_state);
+    state.refresh_after_payment(
+        super::DesktopPaymentFlowKind::Vip,
+        "resource_ready",
+        &auth_state,
+    );
     assert_eq!(*refresher.calls.lock().unwrap(), 1);
     assert!(auth_state.payment_account_key().is_some());
 }
@@ -432,7 +462,9 @@ fn desktop_diamond_payment_is_automatically_checked_by_rust_and_never_calls_lega
                 r#"{"data":{"payment":{"payment_id":"pay-7","out_trade_no":"ORDER-7","trade_no":"trade-7","status":"resource_ready","amount":"9.90","currency":"CNY","cashier_url":"https://cashier.example.test/pay"}}}"#,
             ),
         ];
-        for (method_expected, path_expected, authorization_expected, body_expected, response) in expected {
+        for (method_expected, path_expected, authorization_expected, body_expected, response) in
+            expected
+        {
             let (mut stream, _) = listener.accept().unwrap();
             let (method, path, authorization, body) = read_request(&mut stream);
             assert_eq!(method, method_expected);
@@ -469,7 +501,10 @@ fn desktop_diamond_payment_is_automatically_checked_by_rust_and_never_calls_lega
     ]);
     let payment_state = WorkingPaymentState::new();
     let state = SkillMarketState::new(Some("payment-token".to_string()));
-    state.set_working_auth(Some("payment-token".to_string()), Some("user-7".to_string()));
+    state.set_working_auth(
+        Some("payment-token".to_string()),
+        Some("user-7".to_string()),
+    );
 
     let created = handle_request(
         &state,
@@ -502,7 +537,10 @@ fn desktop_diamond_payment_is_automatically_checked_by_rust_and_never_calls_lega
         .as_str()
         .is_some_and(|value| value.contains("\"protocol\":\"402\"")));
     assert_eq!(calls[1].0, PaymentWorkerAction::PaymentCheck);
-    assert_eq!(calls[1].1["resourceUrl"], "https://seller.example.test/resource");
+    assert_eq!(
+        calls[1].1["resourceUrl"],
+        "https://seller.example.test/resource"
+    );
     assert_eq!(calls[1].1["method"], "POST");
     assert_eq!(calls[1].1["data"], "{}");
     assert_eq!(calls[1].1["headers"][0]["name"], "Content-Type");
@@ -546,7 +584,9 @@ fn desktop_diamond_payment_reuses_a_pending_order_without_starting_a_second_paym
                 r#"{"data":{"payment_id":"pay-existing","payment_needed":{"protocol":"402"},"resource_url":"https://seller.example.test/resource","method":"POST","data":"{}","headers":{"Content-Type":"application/json"}}}"#,
             ),
         ];
-        for (method_expected, path_expected, authorization_expected, body_expected, response) in expected {
+        for (method_expected, path_expected, authorization_expected, body_expected, response) in
+            expected
+        {
             let (mut stream, _) = listener.accept().unwrap();
             let (method, path, authorization, body) = read_request(&mut stream);
             assert_eq!(method, method_expected);
@@ -568,7 +608,10 @@ fn desktop_diamond_payment_reuses_a_pending_order_without_starting_a_second_paym
     let worker = FakePaymentWorker::new(vec![]);
     let payment_state = WorkingPaymentState::new();
     let state = SkillMarketState::new(Some("payment-token".to_string()));
-    state.set_working_auth(Some("payment-token".to_string()), Some("user-7".to_string()));
+    state.set_working_auth(
+        Some("payment-token".to_string()),
+        Some("user-7".to_string()),
+    );
 
     let result = handle_request(
         &state,
@@ -587,7 +630,10 @@ fn desktop_diamond_payment_reuses_a_pending_order_without_starting_a_second_paym
     let body = result.body.unwrap();
     assert_eq!(body["pending_existing"], true);
     assert_eq!(body["payment"]["payment_id"], "pay-existing");
-    assert_eq!(body["payment"]["qrcode_image"], "data:image/png;base64,iVBORw0KGgo=");
+    assert_eq!(
+        body["payment"]["qrcode_image"],
+        "data:image/png;base64,iVBORw0KGgo="
+    );
     assert!(payment_state.flow("pay-existing").is_some());
     assert!(worker.calls.lock().unwrap().is_empty());
 }
@@ -656,7 +702,9 @@ fn desktop_diamond_payment_replaces_an_unusable_pending_order_before_starting_a_
                 r#"{"data":{"payment":{"payment_id":"pay-new","status":"pending_user_pay","qrcode_image":"data:image/png;base64,iVBORw0KGgo="}}}"#,
             ),
         ];
-        for (method_expected, path_expected, authorization_expected, body_expected, response) in expected {
+        for (method_expected, path_expected, authorization_expected, body_expected, response) in
+            expected
+        {
             let (mut stream, _) = listener.accept().unwrap();
             let (method, path, authorization, body) = read_request(&mut stream);
             assert_eq!(method, method_expected);
@@ -683,7 +731,10 @@ fn desktop_diamond_payment_replaces_an_unusable_pending_order_before_starting_a_
     }))]);
     let payment_state = WorkingPaymentState::new();
     let state = SkillMarketState::new(Some("payment-token".to_string()));
-    state.set_working_auth(Some("payment-token".to_string()), Some("user-7".to_string()));
+    state.set_working_auth(
+        Some("payment-token".to_string()),
+        Some("user-7".to_string()),
+    );
 
     let result = handle_request(
         &state,
@@ -970,7 +1021,10 @@ fn rust_automatically_recovers_pending_payment_after_restart() {
     assert_eq!(calls[0].0, PaymentWorkerAction::PaymentCheck);
     assert_eq!(calls[0].1["outShakeNo"], "shake-7");
     assert!(calls[0].1.get("tradeNo").is_none());
-    assert_eq!(calls[0].1["resourceUrl"], "https://seller.example.test/resource");
+    assert_eq!(
+        calls[0].1["resourceUrl"],
+        "https://seller.example.test/resource"
+    );
     assert!(calls[0].1.get("paymentNeeded").is_none());
 }
 
@@ -1017,7 +1071,9 @@ fn rust_recovers_pending_vip_payment_and_refreshes_auth_after_fulfillment() {
                 r#"{"data":{"payment":{"payment_id":"vip-pay-7","status":"resource_ready"}}}"#,
             ),
         ];
-        for (method_expected, path_expected, authorization_expected, body_expected, response) in expected {
+        for (method_expected, path_expected, authorization_expected, body_expected, response) in
+            expected
+        {
             let (mut stream, _) = listener.accept().unwrap();
             let (method, path, authorization, body) = read_request(&mut stream);
             assert_eq!(method, method_expected);
@@ -1125,7 +1181,10 @@ fn desktop_vip_payment_uses_prepare_only_route_and_builds_renderer_package() {
     }))]);
     let payment_state = WorkingPaymentState::new();
     let state = SkillMarketState::new(Some("payment-token".to_string()));
-    state.set_working_auth(Some("payment-token".to_string()), Some("user-7".to_string()));
+    state.set_working_auth(
+        Some("payment-token".to_string()),
+        Some("user-7".to_string()),
+    );
 
     let created = handle_request(
         &state,

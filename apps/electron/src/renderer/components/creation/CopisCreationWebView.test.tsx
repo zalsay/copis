@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test'
+import { isDshModuleMissingError } from './creation-dsh-helper'
 
 describe('CopisCreationWebView 侧边栏宽度与原生视图布局契约', () => {
   test('Given 侧边栏宽度最小限制 When 检查安全展开下限 Then 恒定不低于 264px 避免误折叠', () => {
@@ -412,7 +413,36 @@ describe('CopisCreationWebView 侧边栏宽度与原生视图布局契约', () =
     expect(viewSource).toContain("setActiveView('conversations')")
     expect(viewSource).toContain("type: 'COPIS_ACTIVE_VIEW_CHANGE'")
   })
+
+  test('Given 创造模式启动报错未找到已激活 dsh When 检查判定逻辑 Then 正确识别为缺少 dsh 功能模块', () => {
+    expect(isDshModuleMissingError('未找到已激活的创造模式运行时，请检查功能模块安装状态')).toBe(true)
+    expect(isDshModuleMissingError('未找到已激活的 dsh 运行时，请检查功能模块安装状态')).toBe(true)
+    expect(isDshModuleMissingError('未找到激活的 dsh')).toBe(true)
+    expect(isDshModuleMissingError('未找到激活的创造模式')).toBe(true)
+    expect(isDshModuleMissingError('未找到已激活的dsh运行时')).toBe(true)
+    expect(isDshModuleMissingError('dsh 模块未安装')).toBe(true)
+    expect(isDshModuleMissingError('创造模式未安装')).toBe(true)
+    expect(isDshModuleMissingError('缺少 dsh 运行模块')).toBe(true)
+    expect(isDshModuleMissingError('缺少创造模式运行环境')).toBe(true)
+    expect(isDshModuleMissingError('无法连接到远程服务')).toBe(false)
+    expect(isDshModuleMissingError('端口 53080 已被占用')).toBe(false)
+    expect(isDshModuleMissingError(null)).toBe(false)
+    expect(isDshModuleMissingError(undefined)).toBe(false)
+  })
+
+  test('Given 未安装 dsh 模块报错 When 检查按钮渲染契约 Then 包含安装创造模式模块按钮与安装交互', () => {
+    const { readFileSync } = require('node:fs')
+    const { join } = require('node:path')
+    const viewSource = readFileSync(join(__dirname, 'CopisCreationWebView.tsx'), 'utf8')
+
+    // 1. 包含判定方法与按钮文案
+    expect(viewSource).toContain('isMissingDsh && (')
+    expect(viewSource).toContain('安装创造模式模块')
+    expect(viewSource).toContain('handleInstallModule')
+    expect(viewSource).toContain("installFunctionalModule({ name: 'dsh' })")
+  })
 })
+
 
 
 

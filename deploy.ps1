@@ -12,6 +12,7 @@ param(
     [Parameter(Position = 0, ValueFromRemainingArguments = $true)]
     [string[]]$LegacyArguments,
     [switch]$SkipInstall,
+    [switch]$Install,
     [switch]$BuildApp,
     [switch]$SkipRustBuild,
     [switch]$SkipPublish,
@@ -112,6 +113,7 @@ function Show-Help {
 
 选项：
   -SkipInstall / --skip-install       跳过 bun install --frozen-lockfile
+  -Install / --install                 强制执行 bun install --frozen-lockfile（覆盖 -RustOnly 默认跳过）
   -BuildApp / --build-app              同时构建当前平台 Electron 应用包
   -SkipRustBuild / --skip-rust-build   使用已有 Rust 二进制
   -RustOnly / --rust                   只发布 Rust HTTP API；每次自动递增 rust-http-api 版本
@@ -162,6 +164,7 @@ for ($index = 0; $index -lt $LegacyArguments.Count; $index++) {
         '--dsh' { $DshOnly = $true }
         '--build-app' { $BuildApp = $true }
         '--skip-install' { $SkipInstall = $true }
+        '--install' { $Install = $true }
         '--skip-rust-build' { $SkipRustBuild = $true }
         '--skip-publish' { $SkipPublish = $true }
         '--platform' { $Platform = Get-LegacyValue $LegacyArguments $index $argument; $index++ }
@@ -188,6 +191,15 @@ for ($index = 0; $index -lt $LegacyArguments.Count; $index++) {
         '--dsh-version' { $DshVersion = Get-LegacyValue $LegacyArguments $index $argument; $index++ }
         default { throw "Unsupported argument: $argument. Use PowerShell parameters such as -RustOnly." }
     }
+}
+
+$hasExplicitInstall = $PSBoundParameters.ContainsKey('Install') -or ($LegacyArguments -contains '--install')
+$hasExplicitSkipInstall = $PSBoundParameters.ContainsKey('SkipInstall') -or ($LegacyArguments -contains '--skip-install')
+
+if ($hasExplicitInstall) {
+    $SkipInstall = $false
+} elseif (-not $hasExplicitSkipInstall -and $RustOnly) {
+    $SkipInstall = $true
 }
 
 if ((@($RustOnly, $OfficeCliOnly, $NodeRuntimeOnly, $AlipayBotOnly, $PlaywrightCoreOnly, $PythonRuntimeOnly, $AgentlyCliOnly, $DshOnly) | Where-Object { $_ }).Count -gt 1) {
@@ -232,7 +244,7 @@ if ([string]::IsNullOrWhiteSpace($Channel)) { throw 'Release channel cannot be e
 
 $electronPackagePath = Join-Path $appDir 'package.json'
 $electronPackage = Get-Content -LiteralPath $electronPackagePath -Raw -Encoding UTF8 | ConvertFrom-Json
-$appVersion = [string]$electronPackage.version
+$appVersion = (& $bunPath (Join-Path $rootDir 'scripts\bump-electron-version.ts') '--get' '--platform' $Platform '--arch' $Arch | Out-String).Trim()
 if ([string]::IsNullOrWhiteSpace($appVersion)) { throw "Cannot read Electron version: $electronPackagePath" }
 $releaseVersion = if ([string]::IsNullOrWhiteSpace($Version)) { $appVersion } else { $Version.Trim() }
 $minimumClientVersion = if ([string]::IsNullOrWhiteSpace($ClientMinVersion)) { $releaseVersion } else { $ClientMinVersion.Trim() }

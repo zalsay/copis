@@ -680,6 +680,40 @@ describe('工作区置顶与多项倒排排序', () => {
     const fetched = manager.listAgentWorkspaces()
     expect(fetched.map((w) => w.id)).toEqual([ws2.id, ws1.id, ws3.id])
   })
+
+  test('Given 技能缺失 frontmatter 且同级存在 metadata.json When 扫描工作区技能 Then 自动自愈并返回有效 description', () => {
+    const workspace = manager.createAgentWorkspace({ name: 'Skill Heal Workspace' })
+    const skillsDir = configPaths.getWorkspaceSkillsDir(workspace.slug)
+    const brokenSkillDir = join(skillsDir, 'zhoubao-test')
+    mkdirSync(brokenSkillDir, { recursive: true })
+
+    writeFileSync(
+      join(brokenSkillDir, 'SKILL.md'),
+      '# 周报测试技能\n\n自动汇总周报内容。',
+      'utf-8',
+    )
+    writeFileSync(
+      join(brokenSkillDir, 'metadata.json'),
+      JSON.stringify({
+        displayName: '周报生成测试',
+        description: '自动提取并生成标准化周报文档',
+      }),
+      'utf-8',
+    )
+
+    const skills = manager.getWorkspaceSkills(workspace.slug)
+    const target = skills.find((s) => s.slug === 'zhoubao-test')
+
+    expect(target).toBeDefined()
+    expect(target?.displayName).toBe('周报生成测试')
+    expect(target?.description).toBe('自动提取并生成标准化周报文档')
+
+    // 验证磁盘上的 SKILL.md 已经被自动补全
+    const onDiskContent = readFileSync(join(brokenSkillDir, 'SKILL.md'), 'utf-8')
+    expect(onDiskContent).toContain('---')
+    expect(onDiskContent).toContain('name: zhoubao-test')
+    expect(onDiskContent).toContain('description:')
+  })
 })
 
 

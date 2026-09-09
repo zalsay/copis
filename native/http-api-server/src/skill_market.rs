@@ -216,7 +216,7 @@ struct LocalMarketSkill {
 }
 
 #[derive(Debug, Clone)]
-struct RuntimeSkillPackage {
+pub(crate) struct RuntimeSkillPackage {
     slug: String,
     name: String,
     description: String,
@@ -389,6 +389,8 @@ pub fn extract_skill_archive(archive: &[u8], destination: &Path) -> Result<PathB
     if skill_md != canonical {
         fs::rename(&skill_md, &canonical).map_err(|_| "规范化 SKILL.md 文件名失败".to_string())?;
     }
+    let default_slug = root.file_name().and_then(|n| n.to_str()).unwrap_or("skill");
+    ensure_extracted_skill_frontmatter(&root, None, None, default_slug)?;
     Ok(root)
 }
 
@@ -607,8 +609,11 @@ fn install_into_workspace(
 
     let install_result = (|| -> Result<Value, SkillMarketError> {
         let extracted_root = if let Some(data) = archive {
-            extract_skill_archive(data, &temporary)
-                .map_err(|message| SkillMarketError::new(422, "invalid_skill_package", message))?
+            let root = extract_skill_archive(data, &temporary)
+                .map_err(|message| SkillMarketError::new(422, "invalid_skill_package", message))?;
+            ensure_extracted_skill_frontmatter(&root, Some(market_skill), Some(runtime), &slug)
+                .map_err(|message| SkillMarketError::new(422, "invalid_skill_package", message))?;
+            root
         } else {
             fs::create_dir_all(&temporary).map_err(|_| {
                 SkillMarketError::new(500, "skill_install_failed", "创建临时 Skill 目录失败")
@@ -1015,6 +1020,250 @@ fn format_generated_skill_markdown(
         if name.is_empty() { slug } else { &name },
         runtime.instructions.trim(),
     )
+}
+
+fn parse_frontmatter_info(content: &str) -> Option<(String, String, usize)> {
+    let normalized = content.strip_prefix('\u{feff}').unwrap_or(content);
+    if !normalized.starts_with("---") {
+        return None;
+    }
+    let first_line_end = normalized.find('\n')?;
+    let after_first_line = &normalized[first_line_end + 1..];
+
+    let mut close_start = None;
+    let mut close_len = 0;
+
+    for (i, _) in after_first_line.match_indices('\n') {
+        let candidate = &after_first_line[i + 1..];
+        if candidate.starts_with("---") {
+            close_start = Some(first_line_end + 1 + i + 1);
+            close_len = 3;
+            break;
+        } else if candidate.starts_with("...") {
+            close_start = Some(first_line_end + 1 + i + 1);
+            close_len = 3;
+            break;
+        }
+    }
+
+    let close_start_idx = close_start?;
+    let fm_yaml = &normalized[first_line_end + 1..close_start_idx - 1];
+    let mut after_close = close_start_idx + close_len;
+    if normalized[after_close..].starts_with("\r\n") {
+        after_close += 2;
+    } else if normalized[after_close..].starts_with('\n') {
+        after_close += 1;
+    }
+
+    let mut name = String::new();
+    let mut description = String::new();
+    for line in fm_yaml.lines() {
+        let trimmed = line.trim();
+        if let Some(val) = trimmed.strip_prefix("name:") {
+            name = val.trim().trim_matches(['"', '\'']).to_string();
+        } else if let Some(val) = trimmed.strip_prefix("description:") {
+            description = val.trim().trim_matches(['"', '\'']).to_string();
+        }
+    }
+    Some((name, description, after_close))
+}
+
+fn sanitize_skill_name(raw: &str, fallback: &str) -> String {
+    let source = if raw.trim().is_empty() {
+        fallback
+    } else {
+        raw.trim()
+    };
+    let mut result = String::with_capacity(source.len());
+    let mut last_was_hyphen = false;
+    for ch in source.chars() {
+        if ch.is_ascii_alphanumeric() {
+            result.push(ch.to_ascii_lowercase());
+            last_was_hyphen = false;
+        } else if !last_was_hyphen && !result.is_empty() {
+            result.push('-');
+            last_was_hyphen = true;
+        }
+    }
+    while result.ends_with('-') {
+        result.pop();
+    }
+    if result.len() > 64 {
+        result.truncate(64);
+        while result.ends_with('-') {
+            result.pop();
+        }
+    }
+    if result.is_empty() {
+        "skill".to_string()
+    } else {
+        result
+    }
+}
+
+fn extract_description_from_markdown(body: &str) -> String {
+    let mut in_code_block = false;
+    for line in body.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("```") {
+            in_code_block = !in_code_block;
+            continue;
+        }
+        if in_code_block || trimmed.is_empty() {
+            continue;
+        }
+        if let Some(quote) = trimmed.strip_prefix('>') {
+            let quote_trimmed = quote.trim();
+            if !quote_trimmed.is_empty() {
+                return quote_trimmed.to_string();
+            }
+            continue;
+        }
+        if trimmed.starts_with('#')
+            || trimmed.starts_with('-')
+            || trimmed.starts_with('*')
+            || trimmed.starts_with('+')
+            || trimmed.starts_with('|')
+            || trimmed.starts_with("<!--")
+            || trimmed.starts_with("---")
+            || trimmed.starts_with("***")
+        {
+            continue;
+        }
+        let clean = trimmed.replace(['*', '_', '`'], "");
+        if clean.len() >= 2 {
+            return clean;
+        }
+    }
+    String::new()
+}
+
+pub(crate) fn ensure_extracted_skill_frontmatter(
+    root: &Path,
+    market: Option<&Value>,
+    runtime: Option<&RuntimeSkillPackage>,
+    slug: &str,
+) -> Result<(), String> {
+    let skill_md = root.join("SKILL.md");
+    if !skill_md.is_file() {
+        return Err("技能包缺少 SKILL.md".to_string());
+    }
+    let content = fs::read_to_string(&skill_md).map_err(|_| "读取 SKILL.md 失败".to_string())?;
+    let normalized = content.strip_prefix('\u{feff}').unwrap_or(&content);
+
+    let fm_info = parse_frontmatter_info(normalized);
+    if let Some((ref existing_name, ref existing_desc, _)) = fm_info {
+        if !existing_desc.trim().is_empty() && !existing_name.trim().is_empty() {
+            return Ok(());
+        }
+    }
+
+    let mut description = market
+        .and_then(|m| string_value(m, &["description"]))
+        .or_else(|| runtime.map(|r| r.description.clone()))
+        .unwrap_or_default();
+
+    let mut name = market
+        .and_then(|m| string_value(m, &["name"]))
+        .or_else(|| runtime.map(|r| r.name.clone()))
+        .unwrap_or_default();
+
+    let mut display_name = market
+        .and_then(|m| string_value(m, &["displayName", "display_name"]))
+        .unwrap_or_default();
+
+    let mut version = runtime.map(|r| r.version.clone()).unwrap_or_default();
+
+    let metadata_candidates = [
+        "metadata.json",
+        "_meta.json",
+        "package.json",
+        ".market.json",
+    ];
+    for candidate in metadata_candidates {
+        if !description.trim().is_empty() && !name.trim().is_empty() {
+            break;
+        }
+        let candidate_path = root.join(candidate);
+        if let Ok(raw) = fs::read_to_string(candidate_path) {
+            if let Ok(json) = serde_json::from_str::<Value>(&raw) {
+                if description.trim().is_empty() {
+                    description =
+                        string_value(&json, &["description", "displayName", "desc", "summary"])
+                            .unwrap_or_default();
+                }
+                if name.trim().is_empty() {
+                    name = string_value(&json, &["name", "slug"]).unwrap_or_default();
+                }
+                if display_name.trim().is_empty() {
+                    display_name = string_value(&json, &["displayName"]).unwrap_or_default();
+                }
+                if version.trim().is_empty() {
+                    version = string_value(&json, &["version"]).unwrap_or_default();
+                }
+            }
+        }
+    }
+
+    if let Some((ref existing_name, ref existing_desc, _)) = fm_info {
+        if name.trim().is_empty() && !existing_name.trim().is_empty() {
+            name = existing_name.clone();
+        }
+        if description.trim().is_empty() && !existing_desc.trim().is_empty() {
+            description = existing_desc.clone();
+        }
+    }
+
+    if description.trim().is_empty() {
+        let body = if let Some((_, _, body_start)) = fm_info {
+            &normalized[body_start..]
+        } else {
+            normalized
+        };
+        description = extract_description_from_markdown(body);
+    }
+    if description.trim().is_empty() {
+        description = format!(
+            "{} 技能",
+            if !name.trim().is_empty() { &name } else { slug }
+        );
+    }
+    description = description.replace(['\r', '\n'], " ").trim().to_string();
+    if description.len() > 1024 {
+        description.truncate(1024);
+    }
+
+    let sanitized_name = sanitize_skill_name(&name, slug);
+
+    let new_content = if let Some((_, _, body_start)) = fm_info {
+        let body = &normalized[body_start..];
+        let mut fm = format!("---\nname: {}\n", sanitized_name);
+        if !display_name.trim().is_empty() {
+            fm.push_str(&format!("displayName: {:?}\n", display_name));
+        }
+        fm.push_str(&format!("description: {:?}\n", description));
+        if !version.trim().is_empty() {
+            fm.push_str(&format!("version: {:?}\n", version));
+        }
+        fm.push_str("---\n\n");
+        fm.push_str(body.trim_start());
+        fm
+    } else {
+        let mut fm = format!("---\nname: {}\n", sanitized_name);
+        if !display_name.trim().is_empty() {
+            fm.push_str(&format!("displayName: {:?}\n", display_name));
+        }
+        fm.push_str(&format!("description: {:?}\n", description));
+        if !version.trim().is_empty() {
+            fm.push_str(&format!("version: {:?}\n", version));
+        }
+        fm.push_str("---\n\n");
+        fm.push_str(normalized.trim_start());
+        fm
+    };
+
+    fs::write(&skill_md, new_content).map_err(|_| "写入规范化 SKILL.md 失败".to_string())?;
+    Ok(())
 }
 
 fn normalize_archive_entry(name: &str) -> Result<String, String> {

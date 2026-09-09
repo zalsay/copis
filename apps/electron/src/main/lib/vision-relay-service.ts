@@ -7,7 +7,7 @@
 
 import { basename, extname, isAbsolute, relative, resolve } from 'node:path'
 import { closeSync, constants as fsConstants, fstatSync, lstatSync, openSync, readFileSync, realpathSync } from 'node:fs'
-import type { FileAttachment } from '@copis/shared'
+import { isWorkingCustomModelChannelId, type FileAttachment } from '@copis/shared'
 import { getAdapter, streamSSE, type ImageAttachmentData } from '@copis/core'
 import { getChannelById, resolveChannelRuntimeApiKey } from './channel-manager'
 import { getSettings } from './settings-service'
@@ -215,11 +215,13 @@ export async function inspectImageWithVisionRelay(input: InspectImageInput): Pro
       readImageAttachments,
       thinkingEnabled: false,
     })
+    const isCustomModel = isWorkingCustomModelChannelId(channel.id)
+    const proxyUrl = isCustomModel ? await getEffectiveProxyUrl() : undefined
     const response = await streamSSE({
       request,
       adapter,
       signal: input.signal,
-      fetchFn: getFetchFn(await getEffectiveProxyUrl()),
+      fetchFn: getFetchFn(proxyUrl),
       onEvent: () => undefined,
     })
     return parseVisionResult(response.content.slice(0, MAX_RESULT_CHARS), attachment.filename)

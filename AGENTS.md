@@ -63,7 +63,7 @@ copis/
 - **Peer 依赖**：`react@^18.3.0`、`react-dom@^18.3.0`
 
 #### @copis/cli (v0.1.1)
-- **职责**：面向终端用户及有限上下文 Agent 消费者的命令行工具，支持会话的渐进式读取与导出（`list` / `info` / `outline` / `search` / `export`）
+- **职责**：面向终端用户及有限上下文 Agent 消费者的命令行工具，支持会话的渐进式读取与导出（`list` / `info` / `outline` / `search` / `export`），以及 Dashi PPT (`dashi-ppt`) 与设计大师 (`dashi-design`) 等特定技能受限命令
 - **依赖**：`@copis/session-core`、`@copis/shared`
 
 #### @copis/electron (v0.0.74)
@@ -387,6 +387,32 @@ bun test apps/electron/src/main/lib/web-tab-session-service.test.ts
 
 两个网页测试文件都会 mock `./config-paths`，必须分两个 Bun 进程运行，避免 module mock 互相覆盖产生假失败。完成自动化验证后，由用户在 Electron 实际窗口中打开普通网页并确认 UI 交互与视觉结果，不能只验证 `about:blank` 或主渲染进程 DOM；Agent 不得使用截图方案代替该用户确认。
 
+### 内嵌浏览器本地 SQLite 密码存储与自动填充
+
+参考 Google Chrome 密码管理与自动填充（Autofill & Password Manager）设计，Copis 内嵌浏览器支持本地 SQLite 密码安全存储与表单自动填充：
+
+**核心约束与实现规范：**
+- **存储与加密**：数据库文件位于 `~/.copis/web-passwords.db`。生产环境基于 Node 22 / Electron 43 内置的 `node:sqlite`（`DatabaseSync`），测试环境自动兼容回退到 `bun:sqlite`。密码全生命周期使用 Electron `safeStorage`（系统级钥匙串）加密持久化，渲染进程查询与列表渲染仅获取脱敏信息（`••••••••`），仅在显式点击眼睛图标或单条复制时按需单次解密。
+- **表单捕获与提示**：通过 `contents.executeJavaScript()` 注入表单监听脚本，在用户提交表单或回车登录时捕获凭据，通过控制台消息前缀桥接回主进程 `WebPasswordService`。主进程比对数据库已有凭据，并根据新凭据或密码变更推送保存/更新提示条（`WebPasswordPromptBanner`）。
+- **避让与布局**：提示条渲染在浏览器工具栏下方，位于 `hostRef` 容器上方。由于 `hostRef` 由 `ResizeObserver` 动态监听并同步原生 `WebContentsView` bounds，当提示条出现或关闭时原生网页视口自动下移或恢复，不会产生遮挡、裁切或浮层穿透问题。
+- **钥匙快捷交互（🔑）**：当站存在已存账号或活跃提示时，在地址栏右侧展示钥匙图标（`WebPasswordKeyPopover`），点击弹出当站账号列表、一键填充（自动派发 `input` 与 `change` 合成事件以适配现代前端框架）及“管理密码”跳转。
+- **管理面板**：Copis 设置中心「密码管理」页签（`PasswordManagerSettings`）提供提示开关、自动填充开关、全站凭据搜索、显示/隐藏明文、一键复制与黑名单域名管理。
+
+**BDD 回归场景：**
+
+```text
+Given 用户在内嵌网页中输入用户名和新密码并提交登录
+When 表单触发 submit 或回车登录
+Then 浏览器地址栏下方弹出 Chrome 风格的“保存此网站密码？”提示条
+And 地址栏右侧显示钥匙图标 🔑
+And 原生网页视口高度自适应下移，提示条不被原生 WebContentsView 遮挡
+
+Given 用户点击提示条中的“保存”按钮
+Then 凭据以 safeStorage 操作系统级加密写入 ~/.copis/web-passwords.db
+And 提示条自动消失，原生网页视口恢复原始高度
+And 下次访问该站点时自动填充用户名与密码并触发 input/change 事件
+```
+
 ### QM 风格结构化记忆系统（Memory System）
 
 Copis 参考 YC QM 项目的结构化长期记忆管理思路（`notebook` / `capture` / `recall` / `read` / `rewrite` / `revision` 乐观锁 / `scope` 隔离 / `consolidation` 记忆整合 / `scratch` 临时记忆自动提炼），建立了本地化、受控且全自动的长期记忆系统。
@@ -545,6 +571,26 @@ Copis 参考 YC QM 项目的结构化长期记忆管理思路（`notebook` / `ca
 
 ## 版本管理
 
+### Electron 平台发布版本
+
+`apps/electron/package.json` 的 `copis.platformVersions` 按 `platform-arch` 保存独立发布版本：`darwin-arm64`、`darwin-x64`、`win32-x64`、`linux-x64`。未配置的平台回退到顶层 `version`；修改顶层版本不会覆盖已有的平台配置。
+
+- `scripts/electron-platform-version.ts` 统一解析并校验版本；`scripts/bump-electron-version.ts` 支持 `--get`、`--new`、`--set <version>`，搭配 `--platform` 和 `--arch` 操作指定条目。
+- `build.sh --new` 和 `build.ps1 -NewVersion` 只递增目标平台的 patch；低于该平台功能模块最低客户端版本时先对齐门槛，本次不再额外递增。
+- `pack`、`dist`、`dist:mac`、`dist:win`、`dist:linux` 通过 `apps/electron/scripts/package-electron-builder.ts` 打包，使用 `extraMetadata.version` 写入安装包，并用 `COPIS_BUILD_APP_VERSION` 同步 Vite 的 `__APP_VERSION__`，不改写共享源码版本。
+- 每次打包选择一个平台和架构。直接调用 `electron-builder` 或其他尚未接入包装脚本的入口，不能假定会自动应用平台版本映射。
+- 客户端 manifest 的 `client.updates[platform-arch].version` 必须与对应安装包内版本一致。功能模块版本独立管理，不能仅修改 manifest 声称客户端已升级。
+- 应用检查更新时发送 `app.getVersion()`、`process.platform`、`process.arch`；Rust API 的 `latestVersion` 仅来自当前平台条目，禁止取其他平台的最大版本。此 Rust 变更需单独发布并激活 `rust-http-api` 模块，单独构建 Electron 不会更新已安装的 Rust 服务。
+
+```bash
+# 在仓库根目录查看或设置指定平台版本
+bun scripts/bump-electron-version.ts --get --platform darwin --arch arm64
+bun scripts/bump-electron-version.ts --set 0.0.83 --platform darwin --arch arm64
+bun scripts/bump-electron-version.ts --new --platform win32 --arch x64
+```
+
+### 包版本
+
 提交代码时始终递增受影响包的 patch 版本（如 `0.1.18` → `0.1.19`），影响多个包则都要递增。
 
 ### 默认 Skills 版本契约（`apps/electron/default-skills/`）
@@ -556,6 +602,14 @@ Copis 参考 YC QM 项目的结构化长期记忆管理思路（`notebook` / `ca
 **早期实现曾用"无条件 cpSync"绕开这个约束**，但每次启动同步 4MB+ 文件会阻塞主进程导致启动卡顿，已恢复为 semver 比较（见 `config-paths.ts:seedDefaultSkills`、`agent-workspace-manager.ts:upgradeDefaultSkillsInWorkspaces`）。
 
 **新增 Skill 不需要先注入 default-skills 目录的旧版本**——`upgradeDefaultSkillsInWorkspaces` 会通过"目标缺失即注入"路径让所有老工作区自动获得。
+
+### 核心内置 Skills（`apps/electron/default-skills/`）
+
+- **dashi-design（设计大师）**：基于 Anthropic Claude Design 理念与 Design Component (`.dc.html`) 规范的高级前端视觉与交互设计技能。内置反 AI 模板味审美铁律、13 个专项设计领域参考指南（原型、幻灯片、排版文档、线框图、海报、三折页、邮件、3D 物体、动效与设计系统）、全套离线运行时（`support.js`）及 CLI 工具链（`copis dashi-design`）。
+- **dashi-ppt（Dashi PPT）**：本地 PPT / 演示文稿生成技能，基于预置视觉主题组合页面，支持导出 PPTX / PDF。
+- **workspace-builder（工作台搭建师）**：单文件响应式个人数字工作台构建技能。
+- **custom-expert-team（自定义专家团队）**：多 Agent 专家团队编排与调度技能。
+- **copis-image-generation（图片生成）**：基于 Copis 后端统一鉴权调度的 AI 图片生成技能。
 
 ## Pi Agent SDK 集成架构
 

@@ -551,8 +551,9 @@ impl MemoryStore {
     pub fn import(&self, input: MemoryImportInput) -> Result<MemoryImportResponse, MemoryError> {
         let workspace_slug = match input.scope {
             MemoryScope::Workspace => {
-                let slug = normalize_workspace_slug(input.workspace_slug)?
-                    .ok_or_else(|| MemoryError::Validation("workspace scope 必须提供 workspaceSlug".to_string()))?;
+                let slug = normalize_workspace_slug(input.workspace_slug)?.ok_or_else(|| {
+                    MemoryError::Validation("workspace scope 必须提供 workspaceSlug".to_string())
+                })?;
                 Some(slug)
             }
             MemoryScope::User => {
@@ -568,7 +569,9 @@ impl MemoryStore {
         }
         const MAX_IMPORT_ITEMS: usize = 500;
         if input.items.len() > MAX_IMPORT_ITEMS {
-            return Err(MemoryError::Validation("单次导入数量不能超过 500 条".to_string()));
+            return Err(MemoryError::Validation(
+                "单次导入数量不能超过 500 条".to_string(),
+            ));
         }
 
         let total = input.items.len();

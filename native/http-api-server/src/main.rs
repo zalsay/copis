@@ -117,6 +117,13 @@ fn bridge_request_timeout() -> Duration {
     Duration::from_millis(millis)
 }
 
+fn bridge_request_timeout_for_path(path: &str) -> Duration {
+    if path == "/api/working/images/generate" {
+        return Duration::from_secs(300);
+    }
+    bridge_request_timeout()
+}
+
 fn connection_read_timeout() -> Duration {
     let millis = std::env::var("COPIS_HTTP_API_READ_TIMEOUT_MS")
         .ok()
@@ -433,7 +440,7 @@ impl Bridge {
             return Err(format!("HTTP API 业务桥写入失败: {}", error));
         }
 
-        match receiver.recv_timeout(bridge_request_timeout()) {
+        match receiver.recv_timeout(bridge_request_timeout_for_path(&request.target)) {
             Ok(result) => result,
             Err(mpsc::RecvTimeoutError::Timeout) => {
                 self.pending.lock().unwrap().remove(&id);
@@ -2678,13 +2685,9 @@ fn send_expert_team_error(stream: &mut TcpStream, error: ExpertTeamError, origin
     send_json_response(stream, status, &body.to_string(), origin);
 }
 
-fn is_allowed_origin(origin: &str) -> bool {
-    // 打包后的 Electron renderer 使用 file://，Chromium 会发送 Origin: null。
-    // 服务只监听 127.0.0.1，因此允许该来源不会扩大到远程站点。
-    matches!(
-        origin,
-        "null" | "http://127.0.0.1:5174" | "http://localhost:5174"
-    )
+fn is_allowed_origin(_origin: &str) -> bool {
+    // CORS 允许任意来源；访问权限仍由 web token 和内部 capability 校验控制。
+    true
 }
 
 fn send_working_model_response(
@@ -2695,12 +2698,7 @@ fn send_working_model_response(
 ) {
     let cors = origin
         .filter(|value| is_allowed_origin(value))
-        .map(|value| {
-            format!(
-                "Access-Control-Allow-Origin: {}\r\nAccess-Control-Allow-Methods: POST,OPTIONS\r\nAccess-Control-Allow-Headers: Content-Type, Authorization, x-copis-web-token\r\n",
-                value
-            )
-        })
+        .map(|_| "Access-Control-Allow-Origin: *\r\nAccess-Control-Allow-Methods: POST,OPTIONS\r\nAccess-Control-Allow-Headers: Content-Type, Authorization, x-copis-web-token\r\n".to_string())
         .unwrap_or_default();
     let header = format!(
         "HTTP/1.1 {} {}\r\nVary: Origin\r\n{}Content-Type: text/event-stream; charset=utf-8\r\nCache-Control: no-cache\r\nConnection: close\r\nContent-Length: {}\r\n\r\n",
@@ -2746,7 +2744,7 @@ fn send_working_model_stream_response(
         }
         return;
     }
-    let cors = origin.filter(|value| is_allowed_origin(value)).map(|value| format!("Access-Control-Allow-Origin: {}\r\nAccess-Control-Allow-Methods: POST,OPTIONS\r\nAccess-Control-Allow-Headers: Content-Type, Authorization, Idempotency-Key, x-copis-web-token\r\n", value)).unwrap_or_default();
+    let cors = origin.filter(|value| is_allowed_origin(value)).map(|_| "Access-Control-Allow-Origin: *\r\nAccess-Control-Allow-Methods: POST,OPTIONS\r\nAccess-Control-Allow-Headers: Content-Type, Authorization, Idempotency-Key, x-copis-web-token\r\n".to_string()).unwrap_or_default();
     let header = format!("HTTP/1.1 {} {}\r\nVary: Origin\r\n{}Content-Type: text/event-stream; charset=utf-8\r\nCache-Control: no-cache\r\nConnection: close\r\nTransfer-Encoding: chunked\r\n\r\n", response.status, reason_phrase(response.status), cors);
     if stream.write_all(header.as_bytes()).is_err() || stream.flush().is_err() {
         return;
@@ -2787,7 +2785,7 @@ fn send_working_model_buffered_response(
 ) {
     let cors = origin
         .filter(|value| is_allowed_origin(value))
-        .map(|value| format!("Access-Control-Allow-Origin: {}\r\n", value))
+        .map(|_| "Access-Control-Allow-Origin: *\r\n".to_string())
         .unwrap_or_default();
     let content_type = content_type.unwrap_or("application/json; charset=utf-8");
     let header = format!(
@@ -3528,11 +3526,8 @@ fn send_response_with_content_type(
         status,
         reason_phrase(status),
     );
-    if let Some(origin_value) = origin.filter(|value| is_allowed_origin(value)) {
-        response.push_str(&format!(
-            "Access-Control-Allow-Origin: {}\r\n",
-            origin_value
-        ));
+    if origin.is_some() {
+        response.push_str("Access-Control-Allow-Origin: *\r\n");
         response.push_str("Access-Control-Allow-Methods: GET,POST,PUT,PATCH,DELETE,OPTIONS\r\n");
         response.push_str("Access-Control-Allow-Headers: Content-Type, x-copis-web-token\r\n");
         response.push_str("Access-Control-Max-Age: 600\r\n");

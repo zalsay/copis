@@ -95,12 +95,22 @@ fn given_same_or_older_manifest_when_parse_then_returns_not_available() {
 }
 
 #[test]
-fn given_cross_version_manifest_when_parse_then_reports_global_latest_version() {
+fn given_cross_version_manifest_when_parse_then_reports_platform_latest_version() {
     let result = parse_app_update(&platform_manifest(), "0.0.60", Some("win32-x64"))
         .expect("manifest should parse");
     assert_eq!(result["available"], true);
     assert_eq!(result["version"], "0.0.64");
-    assert_eq!(result["latestVersion"], "0.0.74");
+    assert_eq!(result["latestVersion"], "0.0.64");
+}
+
+#[test]
+fn given_other_platform_newer_when_current_platform_is_latest_then_reports_own_version() {
+    let result = parse_app_update(&platform_manifest(), "0.0.63", Some("darwin-arm64")).unwrap();
+    assert_eq!(result["available"], false);
+    assert_eq!(result["latestVersion"], "0.0.63");
+    let missing = parse_app_update(&platform_manifest(), "0.0.63", Some("linux-x64")).unwrap();
+    assert_eq!(missing["available"], false);
+    assert!(missing.get("latestVersion").is_none());
 }
 
 #[test]

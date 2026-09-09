@@ -14,10 +14,10 @@ describe('mentioned_tools 提示', () => {
     expect(buildMentionedToolsPrompt()).toBe('')
   })
 
-  test('Given 内置 MCP 名称（如 copis_image）When building the prompt Then 注入对应的内置工具指引', () => {
+  test('Given 旧版图片工具名称（如 copis_image）When building the prompt Then 注入兼容的内置 Skill 指引', () => {
     const prompt = buildMentionedToolsPrompt(undefined, ['copis_image', 'automation'])
 
-    expect(prompt).toContain('- MCP 工具: Copis 图片生成（请主动调用 generate_image 工具来完成用户的生图或插画需求）')
+    expect(prompt).toContain('- Skill: copis-image-generation（请使用 Copis 内置图片生成能力完成用户的生图或插画需求）')
     expect(prompt).toContain('- MCP 工具: 定时任务（请使用定时任务相关工具如 create_automation/list_automations 来完成任务）')
   })
 })

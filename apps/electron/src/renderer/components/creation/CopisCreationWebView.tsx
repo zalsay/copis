@@ -17,6 +17,7 @@ import {
   Sparkles,
   Lightbulb,
   AlertCircle,
+  Download,
   X,
 } from 'lucide-react'
 import { dshCordisStatusAtom, normalizeAppMode, setAppModeAndRuntimeAtom } from '@/atoms/app-mode'
@@ -55,6 +56,9 @@ type CreationSubView =
   | 'settings'
   | null
 
+import { isDshModuleMissingError } from './creation-dsh-helper'
+export { isDshModuleMissingError }
+
 export function CopisCreationWebView(): React.ReactElement {
   const [status, setStatus] = useAtom(dshCordisStatusAtom)
   const setAppModeAndRuntime = useSetAtom(setAppModeAndRuntimeAtom)
@@ -75,6 +79,8 @@ export function CopisCreationWebView(): React.ReactElement {
   // 未就绪时默认处于启动/检测状态，避免首帧闪现未就绪/错误页
   const [starting, setStarting] = useState(!status.running || !status.url)
   const [startError, setStartError] = useState<string | null>(null)
+  const [installingModule, setInstallingModule] = useState(false)
+  const [installProgressText, setInstallProgressText] = useState<string | null>(null)
   const [creationSubView, setCreationSubView] = useState<CreationSubView>(null)
   const [dshSidebarWidth, setDshSidebarWidth] = useState(280)
 
@@ -318,6 +324,57 @@ export function CopisCreationWebView(): React.ReactElement {
     }
   }, [status.running, status.url, ensureServiceRunning])
 
+  const handleInstallModule = useCallback(async () => {
+    if (!window.electronAPI?.installFunctionalModule) {
+      setStartError('当前客户端未提供模块安装接口，请在设置中查看。')
+      return
+    }
+
+    try {
+      setInstallingModule(true)
+      setInstallProgressText('正在准备安装创造模式模块...')
+      setStartError(null)
+
+      const moduleStatus = await window.electronAPI.installFunctionalModule({ name: 'dsh' })
+      if (moduleStatus.installed) {
+        setInstallProgressText('模块安装完成，正在启动创造模式...')
+        await ensureServiceRunning()
+      } else {
+        setStartError(moduleStatus.error || '创造模式模块安装未完成，请重试。')
+      }
+    } catch (err) {
+      console.error('[CopisCreationWebView] 安装创造模式模块失败:', err)
+      const errMsg = err instanceof Error ? err.message : String(err)
+      setStartError(`安装创造模式模块失败: ${errMsg}`)
+    } finally {
+      setInstallingModule(false)
+      setInstallProgressText(null)
+    }
+  }, [ensureServiceRunning])
+
+  useEffect(() => {
+    if (!installingModule || !window.electronAPI?.onFunctionalModuleProgress) return
+    const unsubscribe = window.electronAPI.onFunctionalModuleProgress((payload) => {
+      if (payload.name === 'dsh') {
+        const percent = Math.round((payload.progress ?? 0) * 100)
+        if (payload.phase === 'manifest') {
+          setInstallProgressText('正在获取模块更新信息...')
+        } else if (payload.phase === 'download') {
+          setInstallProgressText(`正在下载创造模式模块 (${percent}%)...`)
+        } else if (payload.phase === 'verify') {
+          setInstallProgressText('正在验证模块完整性...')
+        } else if (payload.phase === 'install') {
+          setInstallProgressText('正在解压并安装模块...')
+        } else if (payload.phase === 'activate') {
+          setInstallProgressText('正在激活创造模式模块...')
+        } else if (payload.phase === 'done') {
+          setInstallProgressText('模块准备就绪，正在启动...')
+        }
+      }
+    })
+    return () => unsubscribe()
+  }, [installingModule])
+
   const handleRetry = useCallback(() => {
     setStartError(null)
     setStarting(true)
@@ -325,8 +382,10 @@ export function CopisCreationWebView(): React.ReactElement {
   }, [ensureServiceRunning])
 
   const isReady = status.running && Boolean(status.url)
-  const isActualError = !isReady && !starting && Boolean(startError || status.error)
+  const isActualError = !isReady && !starting && Boolean(startError || status.error || installingModule)
   const isLoading = !isReady && !isActualError
+  const errorMessage = startError || status.error || ''
+  const isMissingDsh = isDshModuleMissingError(errorMessage)
 
   return (
     <div className="flex flex-col w-full h-full bg-background select-none overflow-hidden relative">
@@ -350,20 +409,50 @@ export function CopisCreationWebView(): React.ReactElement {
             </div>
           ) : (
             <div className="flex flex-col items-center justify-center h-full gap-4 text-center px-6">
-              <div className="w-12 h-12 rounded-2xl bg-destructive/10 flex items-center justify-center text-destructive">
-                <AlertCircle className="w-6 h-6" />
+              <div
+                className={cn(
+                  'w-12 h-12 rounded-2xl flex items-center justify-center transition-colors',
+                  installingModule
+                    ? 'bg-[var(--creation-ui-primary-background)] text-[var(--creation-ui-primary)]'
+                    : 'bg-destructive/10 text-destructive',
+                )}
+              >
+                {installingModule ? (
+                  <Loader2 className="w-6 h-6 animate-spin" />
+                ) : (
+                  <AlertCircle className="w-6 h-6" />
+                )}
               </div>
               <div>
-                <h3 className="text-base font-semibold text-foreground">Copis 创造模式启动失败</h3>
+                <h3 className="text-base font-semibold text-foreground">
+                  {installingModule ? '正在安装创造模式模块' : 'Copis 创造模式启动失败'}
+                </h3>
                 <p className="text-xs text-muted-foreground mt-1 max-w-md">
-                  {startError || status.error || '创造模式微内核服务未能成功启动，请点击下方重试。'}
+                  {installProgressText || errorMessage || '创造模式微内核服务未能成功启动，请点击下方重试。'}
                 </p>
               </div>
-              <div className="flex items-center gap-2 mt-2">
+              <div className="flex flex-wrap items-center justify-center gap-2 mt-2">
+                {isMissingDsh && (
+                  <Button
+                    variant="default"
+                    size="sm"
+                    onClick={handleInstallModule}
+                    disabled={installingModule}
+                    className="titlebar-no-drag bg-[var(--creation-ui-primary)] text-white hover:bg-[var(--creation-ui-primary)]/90 shadow-sm"
+                  >
+                    {installingModule ? (
+                      <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />
+                    ) : (
+                      <Download className="w-3.5 h-3.5 mr-1.5" />
+                    )}
+                    {installingModule ? '正在安装创造模式模块...' : '安装创造模式模块'}
+                  </Button>
+                )}
                 <Button
                   variant="outline"
                   size="sm"
                   onClick={handleRetry}
+                  disabled={installingModule}
                   className="titlebar-no-drag"
                 >
                   <RefreshCw className="w-3.5 h-3.5 mr-1.5" />
@@ -373,6 +462,7 @@ export function CopisCreationWebView(): React.ReactElement {
                   variant="ghost"
                   size="sm"
                   onClick={handleBackToAgent}
+                  disabled={installingModule}
                   className="titlebar-no-drag text-muted-foreground hover:text-foreground"
                 >
                   <Sparkles className="w-3.5 h-3.5 mr-1.5 text-[var(--ui-primary)]" />

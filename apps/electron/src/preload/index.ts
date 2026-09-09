@@ -6,9 +6,10 @@
  */
 
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
-import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, ATTACHMENT_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, FUNCTIONAL_MODULE_IPC_CHANNELS, PROXY_IPC_CHANNELS, AGENT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, WECHAT_IPC_CHANNELS, AGENT_MAIL_IPC_CHANNELS, AUTOMATION_IPC_CHANNELS, PLANNING_IPC_CHANNELS, WORKING_IPC_CHANNELS, WEB_IPC_CHANNELS, BROWSER_WORKFLOW_IPC_CHANNELS, MEMORY_IPC_CHANNELS, FUND_STOCK_IPC_CHANNELS, DSH_CORDIS_IPC_CHANNELS } from '@copis/shared'
+import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, ATTACHMENT_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, FUNCTIONAL_MODULE_IPC_CHANNELS, PROXY_IPC_CHANNELS, AGENT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, WECHAT_IPC_CHANNELS, AGENT_MAIL_IPC_CHANNELS, AUTOMATION_IPC_CHANNELS, PLANNING_IPC_CHANNELS, WORKING_IPC_CHANNELS, WEB_IPC_CHANNELS, WEB_PASSWORD_IPC_CHANNELS, BROWSER_WORKFLOW_IPC_CHANNELS, MEMORY_IPC_CHANNELS, FUND_STOCK_IPC_CHANNELS, DSH_CORDIS_IPC_CHANNELS } from '@copis/shared'
 import { USER_PROFILE_IPC_CHANNELS, SETTINGS_IPC_CHANNELS, SCRATCH_PAD_IPC_CHANNELS, APP_ICON_IPC_CHANNELS, DOCK_BADGE_IPC_CHANNELS, STORAGE_IPC_CHANNELS } from '../types'
 import { agentHttpStreamClient } from '../renderer/lib/agent-http-stream'
+import { setHttpApiWebToken } from '../renderer/lib/http-api-web-token'
 import { COPIS_HTTP_API_HOST } from '@copis/shared/config'
 import type {
   AppInfo,
@@ -175,6 +176,11 @@ import type {
   WebBookmarksSnapshot,
   WebPageProjectAssociation,
   WebTabsSnapshot,
+  WebPasswordEntry,
+  WebPasswordSavePrompt,
+  WebPasswordPromptResolveInput,
+  WebPasswordDisabledOrigin,
+  WebPasswordSettings,
   WorkingWorkspace,
   WorkingWorkspaceInput,
   MarketQuote,
@@ -201,6 +207,10 @@ function configureAgentHttpApiPortFromArguments(): void {
 }
 
 configureAgentHttpApiPortFromArguments()
+const httpApiWebTokenArgument = process.argv.find((value) => value.startsWith(HTTP_API_WEB_TOKEN_ARGUMENT_PREFIX))
+if (httpApiWebTokenArgument) {
+  setHttpApiWebToken(httpApiWebTokenArgument.slice(HTTP_API_WEB_TOKEN_ARGUMENT_PREFIX.length))
+}
 import type {
   UserProfile,
   AppSettings,
@@ -336,6 +346,32 @@ export interface ElectronAPI {
     saveProjectAssociation: (input: SaveWebPageProjectAssociationInput) => Promise<WebPageProjectAssociation>
     /** 订阅主进程推送的网页页签状态。 */
     onChanged: (callback: (snapshot: WebTabsSnapshot) => void) => () => void
+  }
+
+  // ===== 内嵌网页密码保存与自动填充 =====
+  webPasswords: {
+    list: (searchQuery?: string) => Promise<WebPasswordEntry[]>
+    getByOrigin: (originUrl: string) => Promise<WebPasswordEntry[]>
+    reveal: (id: string) => Promise<string | null>
+    saveOrUpdate: (input: {
+      originUrl: string
+      username: string
+      passwordPlain: string
+      signonRealm?: string
+      actionUrl?: string
+      usernameElement?: string
+      passwordElement?: string
+    }) => Promise<WebPasswordEntry>
+    remove: (id: string) => Promise<boolean>
+    getActivePrompt: (tabId: string) => Promise<WebPasswordSavePrompt | null>
+    resolvePrompt: (input: WebPasswordPromptResolveInput) => Promise<void>
+    onPromptChanged: (callback: (data: { tabId: string; prompt: WebPasswordSavePrompt | null }) => void) => () => void
+    listDisabledOrigins: () => Promise<WebPasswordDisabledOrigin[]>
+    addDisabledOrigin: (originUrl: string) => Promise<WebPasswordDisabledOrigin>
+    removeDisabledOrigin: (id: string) => Promise<boolean>
+    fillCredentials: (tabId: string, entryId: string) => Promise<boolean>
+    getSettings: () => Promise<WebPasswordSettings>
+    updateSettings: (partial: Partial<WebPasswordSettings>) => Promise<WebPasswordSettings>
   }
 
   // ===== Browser Workflow（仅暴露高层录制控制，不暴露 CDP） =====
@@ -1406,6 +1442,41 @@ const electronAPI: ElectronAPI = {
       ipcRenderer.on(WEB_IPC_CHANNELS.STATE_CHANGED, listener)
       return () => { ipcRenderer.removeListener(WEB_IPC_CHANNELS.STATE_CHANGED, listener) }
     },
+  },
+
+  // 网页密码保存与自动填充
+  webPasswords: {
+    list: (searchQuery?: string) =>
+      ipcRenderer.invoke(WEB_PASSWORD_IPC_CHANNELS.LIST, searchQuery) as Promise<WebPasswordEntry[]>,
+    getByOrigin: (originUrl: string) =>
+      ipcRenderer.invoke(WEB_PASSWORD_IPC_CHANNELS.GET_BY_ORIGIN, originUrl) as Promise<WebPasswordEntry[]>,
+    reveal: (id: string) =>
+      ipcRenderer.invoke(WEB_PASSWORD_IPC_CHANNELS.REVEAL, id) as Promise<string | null>,
+    saveOrUpdate: (input: any) =>
+      ipcRenderer.invoke(WEB_PASSWORD_IPC_CHANNELS.SAVE_OR_UPDATE, input) as Promise<WebPasswordEntry>,
+    remove: (id: string) =>
+      ipcRenderer.invoke(WEB_PASSWORD_IPC_CHANNELS.REMOVE, id) as Promise<boolean>,
+    getActivePrompt: (tabId: string) =>
+      ipcRenderer.invoke(WEB_PASSWORD_IPC_CHANNELS.GET_ACTIVE_PROMPT, tabId) as Promise<WebPasswordSavePrompt | null>,
+    resolvePrompt: (input: WebPasswordPromptResolveInput) =>
+      ipcRenderer.invoke(WEB_PASSWORD_IPC_CHANNELS.RESOLVE_PROMPT, input) as Promise<void>,
+    onPromptChanged: (callback: (data: { tabId: string; prompt: WebPasswordSavePrompt | null }) => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, data: { tabId: string; prompt: WebPasswordSavePrompt | null }): void => callback(data)
+      ipcRenderer.on(WEB_PASSWORD_IPC_CHANNELS.PROMPT_CHANGED, listener)
+      return () => { ipcRenderer.removeListener(WEB_PASSWORD_IPC_CHANNELS.PROMPT_CHANGED, listener) }
+    },
+    listDisabledOrigins: () =>
+      ipcRenderer.invoke(WEB_PASSWORD_IPC_CHANNELS.LIST_DISABLED_ORIGINS) as Promise<WebPasswordDisabledOrigin[]>,
+    addDisabledOrigin: (originUrl: string) =>
+      ipcRenderer.invoke(WEB_PASSWORD_IPC_CHANNELS.ADD_DISABLED_ORIGIN, originUrl) as Promise<WebPasswordDisabledOrigin>,
+    removeDisabledOrigin: (id: string) =>
+      ipcRenderer.invoke(WEB_PASSWORD_IPC_CHANNELS.REMOVE_DISABLED_ORIGIN, id) as Promise<boolean>,
+    fillCredentials: (tabId: string, entryId: string) =>
+      ipcRenderer.invoke(WEB_PASSWORD_IPC_CHANNELS.FILL_CREDENTIALS, { tabId, entryId }) as Promise<boolean>,
+    getSettings: () =>
+      ipcRenderer.invoke(WEB_PASSWORD_IPC_CHANNELS.GET_SETTINGS) as Promise<WebPasswordSettings>,
+    updateSettings: (partial: Partial<WebPasswordSettings>) =>
+      ipcRenderer.invoke(WEB_PASSWORD_IPC_CHANNELS.UPDATE_SETTINGS, partial) as Promise<WebPasswordSettings>,
   },
 
   // Browser Workflow：只暴露录制和状态控制，CDP 命令仅在主进程内部使用。

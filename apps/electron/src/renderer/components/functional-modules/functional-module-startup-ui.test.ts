@@ -72,12 +72,13 @@ describe('登录后功能模块更新页模型', () => {
     expect(COPIS_DOWNLOAD_URL).toBe('https://copis.meetlife.com.cn')
   })
 
-  test('Given 客户端版本过低错误 When 生成检测页弹窗 Then 显示升级说明和下载动作', () => {
+  test('Given 客户端版本过低错误 When 生成检测页弹窗 Then 显示升级说明、下载动作与关闭动作', () => {
     expect(getStartupClientUpdateDialog('Copis 版本过低，需要至少 0.16.13')).toEqual({
       minClientVersion: '0.16.13',
       title: '需要更新 Copis',
       description: '必要组件要求 Copis v0.16.13 或更高版本。下载最新版本后重新打开应用。',
       actionLabel: '下载最新版本',
+      cancelLabel: '关闭',
     })
     expect(getStartupClientUpdateDialog('网络连接超时')).toBeNull()
   })

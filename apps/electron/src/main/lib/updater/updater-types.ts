@@ -29,7 +29,15 @@ export type UpdateStatus =
       fileSize?: number
     }
   | { status: 'downloading'; version: string; latestVersion?: string; progress: DownloadProgress }
-  | { status: 'downloaded'; version: string; latestVersion?: string; filePath?: string }
+  | {
+      status: 'downloaded'
+      version: string
+      latestVersion?: string
+      filePath?: string
+      fileSha256?: string
+      fileSize?: number
+      downloadUrl?: string
+    }
   | { status: 'not-available'; version?: string; latestVersion?: string }
   | { status: 'error'; error: string; latestVersion?: string }
 

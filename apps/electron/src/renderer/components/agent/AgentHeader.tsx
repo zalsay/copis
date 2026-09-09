@@ -127,7 +127,7 @@ export function AgentHeader({ sessionId }: AgentHeaderProps): React.ReactElement
             <div className="flex items-center gap-1.5 titlebar-no-drag">
               <span className="flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20 select-none">
                 <span className="w-1.5 h-1.5 rounded-full bg-amber-500" />
-                创造模式 (DSH)
+                创造模式
               </span>
               <Tooltip>
                 <TooltipTrigger asChild>
@@ -149,7 +149,7 @@ export function AgentHeader({ sessionId }: AgentHeaderProps): React.ReactElement
                   </button>
                 </TooltipTrigger>
                 <TooltipContent side="bottom" sideOffset={4}>
-                  基于 DSH Cordis 微内核热重载 (Live Patch Reload)
+                  基于创造模式微内核热重载 (Live Patch Reload)
                 </TooltipContent>
               </Tooltip>
             </div>

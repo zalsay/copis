@@ -47,6 +47,7 @@ import {
 } from '@copis/shared'
 import type { CanUseToolOptions, PermissionResult } from '../agent-permission-service'
 import { TRANSIENT_NETWORK_PATTERN, isMalformedResponseError } from '../error-patterns'
+import { ensureSkillPathsSanitized } from '../skill-sanitizer'
 
 import type {
   AgentSession,
@@ -1367,7 +1368,7 @@ export function buildBuiltinToolDefinitions(
     ...buildPiAgentMailTools(sdk, { sessionId: options.sessionId }),
     ...buildPiWorkingPaymentTools(sdk),
     ...(options.imageGenerationEnabled
-      ? buildPiImageGenerationTools(sdk, { sessionId: options.sessionId })
+      ? buildPiImageGenerationTools(sdk, { sessionId: options.sessionId, cwd })
       : []),
   ] as unknown as ToolDefinition[]
 
@@ -1541,6 +1542,7 @@ export class PiAgentAdapter implements AgentProviderAdapter {
           ? [createCodexFastModeExtension({ fastMode: true })]
           : []),
       ]
+      ensureSkillPathsSanitized(input.additionalSkillPaths)
       const resourceLoader = new sdk.DefaultResourceLoader({
         cwd,
         agentDir: input.piAgentDir,

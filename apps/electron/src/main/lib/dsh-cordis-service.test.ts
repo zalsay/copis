@@ -106,7 +106,7 @@ describe('dsh-cordis-service', () => {
       dshCommand: '',
     })
     expect(status.running).toBe(false)
-    expect(status.error).toContain('未找到已激活的 dsh 运行时')
+    expect(status.error).toContain('未找到已激活的创造模式运行时')
   })
 
   test('Given 停止服务调用 When 停止 Cordis 服务 Then 状态恢复为未运行', () => {

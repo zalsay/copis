@@ -608,7 +608,7 @@ async function doStartDshCordisServer(options: {
   if (!dshCmd) {
     state.status = {
       running: false,
-      error: '未找到已激活的 dsh 运行时，请检查功能模块安装状态',
+      error: '未找到已激活的创造模式运行时，请检查功能模块安装状态',
     }
     notifyDshCordisStatusChange(state.status)
     return { ...state.status }

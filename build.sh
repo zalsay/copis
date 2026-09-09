@@ -115,7 +115,7 @@ fi
 
 export CSC_IDENTITY_AUTO_DISCOVERY="${CSC_IDENTITY_AUTO_DISCOVERY:-false}"
 
-APP_VERSION="$(cd "$APP_DIR" && bun -e "console.log(JSON.parse(await Bun.file('package.json').text()).version)")"
+APP_VERSION="$(cd "$ROOT_DIR" && bun scripts/bump-electron-version.ts --get --platform darwin --arch "$MAC_ARCH")"
 
 is_client_version_below_min() {
   (cd "$ROOT_DIR" && bun -e '
@@ -141,7 +141,7 @@ if [[ -n "$FUNCTIONAL_MODULE_MANIFEST_URL" ]]; then
   if [[ -n "$PLATFORM_MIN_VERSION" ]]; then
     echo "[Copis] darwin-$MAC_ARCH 功能模块最低客户端版本：$PLATFORM_MIN_VERSION"
     if is_client_version_below_min "$APP_VERSION" "$PLATFORM_MIN_VERSION"; then
-      APP_VERSION="$(cd "$ROOT_DIR" && bun scripts/bump-electron-version.ts --set "$PLATFORM_MIN_VERSION")"
+      APP_VERSION="$(cd "$ROOT_DIR" && bun scripts/bump-electron-version.ts --set "$PLATFORM_MIN_VERSION" --platform darwin --arch "$MAC_ARCH")"
       VERSION_ALIGNED_TO_MIN=1
       echo "[Copis] Electron 应用版本已对齐 darwin-$MAC_ARCH 最低版本：$APP_VERSION"
     else
@@ -159,7 +159,7 @@ else
 fi
 
 if [[ "$NEW_VERSION" -eq 1 && "$VERSION_ALIGNED_TO_MIN" -eq 0 ]]; then
-  NEW_APP_VERSION="$(cd "$ROOT_DIR" && bun scripts/bump-electron-version.ts --new)"
+  NEW_APP_VERSION="$(cd "$ROOT_DIR" && bun scripts/bump-electron-version.ts --new --platform darwin --arch "$MAC_ARCH")"
   APP_VERSION="$NEW_APP_VERSION"
   echo "[Copis] Electron 应用版本已更新为 $NEW_APP_VERSION"
 fi
@@ -169,12 +169,31 @@ echo "[Copis] 默认构建仅包含 macOS 应用，不编译 Rust API。"
 echo "[Copis] 开始构建 macOS $MAC_ARCH DMG"
 bun run build
 bun run sync:runtime-deps
-bunx electron-builder --mac --"$MAC_ARCH" --config.mac.target=dmg
+bun scripts/package-electron-builder.ts --mac --"$MAC_ARCH" --config.mac.target=dmg
+
+# electron-builder 可能复用旧的 out 目录；上传前必须确认应用包内版本与本次构建版本一致。
+APP_BUNDLE="$APP_DIR/out/mac-$MAC_ARCH/Copis.app"
+APP_INFO_PLIST="$APP_BUNDLE/Contents/Info.plist"
+if [[ ! -f "$APP_INFO_PLIST" ]]; then
+  echo "[Copis] 未找到应用版本信息：$APP_INFO_PLIST" >&2
+  exit 1
+fi
+BUILT_APP_VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP_INFO_PLIST" 2>/dev/null || true)"
+if [[ "$BUILT_APP_VERSION" != "$APP_VERSION" ]]; then
+  echo "[Copis] 构建版本不一致：期望 $APP_VERSION，实际应用包为 ${BUILT_APP_VERSION:-<unknown>}。请清理 apps/electron/out 后重试。" >&2
+  exit 1
+fi
 
 VERSIONED_DMG="$APP_DIR/out/Copis-$APP_VERSION-$MAC_ARCH.dmg"
 FIXED_DMG="$APP_DIR/out/Copis-$MAC_ARCH.dmg"
 if [[ ! -f "$VERSIONED_DMG" ]]; then
   VERSIONED_DMG="$APP_DIR/out/Copis-$APP_VERSION.dmg"
+fi
+
+LATEST_MAC_YML="$APP_DIR/out/latest-mac.yml"
+if [[ -f "$LATEST_MAC_YML" ]] && ! grep -q "^version: $APP_VERSION$" "$LATEST_MAC_YML"; then
+  echo "[Copis] latest-mac.yml 版本与本次构建不一致，拒绝上传旧元数据：$LATEST_MAC_YML" >&2
+  exit 1
 fi
 if [[ ! -f "$VERSIONED_DMG" ]]; then
   echo "[Copis] 未找到当前版本安装包，已检查带架构和默认命名：$APP_DIR/out/Copis-$APP_VERSION*.dmg" >&2

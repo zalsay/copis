@@ -677,14 +677,27 @@ fn project_shell_allows_workspace_git_commands_but_blocks_scope_escape() {
 fn project_shell_allows_copis_dashi_ppt_whitelisted_subcommands_and_rejects_escape() {
     assert!(validate_project_command("copis dashi-ppt version").is_ok());
     assert!(validate_project_command("copis dashi-ppt layout:query --theme theme01").is_ok());
-    assert!(validate_project_command("copis dashi-ppt inspect:layout --compact theme01_page001").is_ok());
-    assert!(validate_project_command("copis dashi-ppt props:safe --goal goal.json --write").is_ok());
-    assert!(validate_project_command("copis dashi-ppt goal:scaffold --title test --pages 8").is_ok());
+    assert!(
+        validate_project_command("copis dashi-ppt inspect:layout --compact theme01_page001")
+            .is_ok()
+    );
+    assert!(
+        validate_project_command("copis dashi-ppt props:safe --goal goal.json --write").is_ok()
+    );
+    assert!(
+        validate_project_command("copis dashi-ppt goal:scaffold --title test --pages 8").is_ok()
+    );
     assert!(validate_project_command("copis dashi-ppt media:stage ./output img.png").is_ok());
-    assert!(validate_project_command("copis dashi-ppt render --goal goal.json --output ppt/index.html").is_ok());
+    assert!(validate_project_command(
+        "copis dashi-ppt render --goal goal.json --output ppt/index.html"
+    )
+    .is_ok());
     assert!(validate_project_command("copis dashi-ppt validate:goal-spec goal.json").is_ok());
     assert!(validate_project_command("copis dashi-ppt validate:swiss ppt/index.html").is_ok());
-    assert!(validate_project_command("copis dashi-ppt validate:goal-copy goal.json ppt/index.html").is_ok());
+    assert!(validate_project_command(
+        "copis dashi-ppt validate:goal-copy goal.json ppt/index.html"
+    )
+    .is_ok());
     assert!(validate_project_command("copis dashi-ppt validate:four-variant-quality").is_ok());
     assert!(validate_project_command("copis dashi-ppt preview --port 8765").is_ok());
     assert!(validate_project_command("copis dashi-ppt export:pptx ppt out.pptx").is_ok());
@@ -693,9 +706,7 @@ fn project_shell_allows_copis_dashi_ppt_whitelisted_subcommands_and_rejects_esca
     assert!(validate_project_command("copis.exe dashi-ppt version").is_ok());
 
     assert_eq!(
-        validate_project_command("copis")
-            .unwrap_err()
-            .code,
+        validate_project_command("copis").unwrap_err().code,
         "command_not_allowed"
     );
     assert_eq!(
@@ -1046,7 +1057,10 @@ fn realpath_requires_advanced_authorization_and_resolves_canonical_path() {
         .unwrap();
     assert_eq!(
         dir_result["realPath"],
-        fs::canonicalize(&sub_dir).unwrap().to_string_lossy().as_ref()
+        fs::canonicalize(&sub_dir)
+            .unwrap()
+            .to_string_lossy()
+            .as_ref()
     );
 
     // 不存在的文件返回 404

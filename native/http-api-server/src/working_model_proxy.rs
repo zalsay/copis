@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const CAPABILITY_TTL_SECS: u64 = 2 * 60 * 60;
-const MAX_MODEL_REQUEST_BYTES: usize = 2 * 1024 * 1024;
+const MAX_MODEL_REQUEST_BYTES: usize = 8 * 1024 * 1024;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct WorkingModelCapability {
@@ -63,7 +63,10 @@ pub struct WorkingModelProxy {
 
 impl WorkingModelProxy {
     pub fn new(auth: Arc<AuthSession>) -> Result<Self, WorkingModelError> {
-        Ok(Self::with_model_client(auth, ModelRequestClient::from_environment().map_err(map_model_error)?))
+        Ok(Self::with_model_client(
+            auth,
+            ModelRequestClient::from_environment().map_err(map_model_error)?,
+        ))
     }
 
     pub fn with_model_client(auth: Arc<AuthSession>, model_client: ModelRequestClient) -> Self {
@@ -552,3 +555,20 @@ impl std::fmt::Display for WorkingModelError {
 }
 
 impl std::error::Error for WorkingModelError {}
+
+#[cfg(test)]
+mod request_size_tests {
+    use super::{validate_model_request, WorkingModelError};
+
+    #[test]
+    fn accepts_eight_mib_and_rejects_one_byte_over() {
+        let mut body = br#"{"model":"fast"}"#.to_vec();
+        body.resize(8 * 1024 * 1024, b' ');
+        assert_eq!(validate_model_request(&body).unwrap(), "fast");
+        body.push(b' ');
+        assert!(matches!(
+            validate_model_request(&body),
+            Err(WorkingModelError::InvalidRequest(message)) if message == "模型请求体过大"
+        ));
+    }
+}

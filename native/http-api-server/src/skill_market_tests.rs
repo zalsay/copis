@@ -79,7 +79,43 @@ fn extracts_a_skill_archive_inside_the_destination() {
     let _ = fs::remove_dir_all(&destination);
     let root = extract_skill_archive(archive.get_ref(), &destination).unwrap();
     assert!(root.starts_with(&destination));
-    assert!(root.join("SKILL.md").is_file());
+    let skill_md_content = fs::read_to_string(root.join("SKILL.md")).unwrap();
+    assert!(skill_md_content.contains("description:"));
+    let _ = fs::remove_dir_all(&destination);
+}
+
+#[test]
+fn extracts_a_skill_archive_and_auto_heals_missing_frontmatter_from_metadata_json() {
+    let mut archive = std::io::Cursor::new(Vec::new());
+    {
+        let mut writer = ZipWriter::new(&mut archive);
+        writer
+            .start_file("zhoubao-yuebao/SKILL.md", SimpleFileOptions::default())
+            .unwrap();
+        writer
+            .write_all(b"# \xE5\x91\xA8\xE6\x8A\xA5/\xE6\x9C\x88\xE6\x8A\xA5\xE7\x94\x9F\xE6\x88\x90 Skill\n\n\xE4\xB8\x80\xE9\x94\xAE\xE7\x94\x9F\xE6\x88\x90\xE7\xBB\x93\xE6\x9E\x84\xE5\x8C\x96\xE5\x91\xA8\xE6\x8A\xA5\xE3\x80\x82\n")
+            .unwrap();
+        writer
+            .start_file("zhoubao-yuebao/metadata.json", SimpleFileOptions::default())
+            .unwrap();
+        writer
+            .write_all(
+                r#"{"name":"weekly-report","displayName":"周报月报生成","description":"一键生成结构化周报/月报，基于飞书云文档格式输出"}"#.as_bytes(),
+            )
+            .unwrap();
+        writer.finish().unwrap();
+    }
+    let destination =
+        std::env::temp_dir().join(format!("copis-skill-market-heal-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&destination);
+    let root = extract_skill_archive(archive.get_ref(), &destination).unwrap();
+    assert!(root.starts_with(&destination));
+    let skill_md = fs::read_to_string(root.join("SKILL.md")).unwrap();
+    assert!(skill_md.starts_with("---"));
+    assert!(skill_md.contains("name: weekly-report"));
+    assert!(skill_md.contains("description: \"一键生成结构化周报/月报，基于飞书云文档格式输出\""));
+    assert!(skill_md.contains("displayName: \"周报月报生成\""));
+    assert!(skill_md.contains("# 周报/月报生成 Skill"));
     let _ = fs::remove_dir_all(&destination);
 }
 

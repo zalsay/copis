@@ -6,7 +6,7 @@
  */
 
 import { basename, join, dirname, extname, resolve, posix as pathPosix } from 'node:path'
-import { readFileSync, readdirSync, statSync, mkdirSync, existsSync, writeFileSync, unlinkSync } from 'node:fs'
+import { readFileSync, readdirSync, statSync, mkdirSync, existsSync, writeFileSync, unlinkSync, copyFileSync } from 'node:fs'
 import { tmpdir, homedir } from 'node:os'
 import { createRequire } from 'node:module'
 import { createHash } from 'node:crypto'
@@ -90,6 +90,102 @@ function searchFileInDir(dir: string, targetName: string, maxDepth = 8): string 
   return walk(dir, 0)
 }
 
+function healWorkspaceFile(targetPath: string, sourcePath: string): void {
+  try {
+    const targetDir = dirname(targetPath)
+    if (existsSync(targetDir) && !existsSync(targetPath)) {
+      copyFileSync(sourcePath, targetPath)
+      console.log(`[file-preview-service] 自愈：已将附件图片补齐到工作区 ${targetPath}`)
+    }
+  } catch (err) {
+    console.warn('[file-preview-service] 自愈拷贝失败:', err)
+  }
+}
+
+/**
+ * 尝试从会话附件中回溯查找图片
+ * - 支持根据路径或 basePaths 中包含的 sessionId
+ * - 支持解析 agent-sessions/{sessionId}.jsonl 中的 <generated_images> 映射
+ * - 若找到对应附件且目标工作区目录存在，自动补齐拷贝一份到工作区（自愈）
+ */
+function searchAttachmentForImage(filePath: string, targetName: string, basePaths?: string[]): string | null {
+  const uuidRegex = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i
+  let match = filePath.match(uuidRegex)
+  if (!match && basePaths) {
+    for (const base of basePaths) {
+      match = base.match(uuidRegex)
+      if (match) break
+    }
+  }
+  const sessionId = match ? match[0] : null
+  if (!sessionId) return null
+
+  const home = homedir()
+  const candidateConfigDirs = [
+    join(home, '.copis'),
+    join(home, '.copis-dev'),
+  ]
+
+  for (const configDir of candidateConfigDirs) {
+    const attachmentDir = join(configDir, 'attachments', sessionId)
+    if (!existsSync(attachmentDir)) continue
+
+    // 1. 检查附件目录下是否有同名文件
+    const directNamedFile = join(attachmentDir, targetName)
+    if (existsSync(directNamedFile)) {
+      healWorkspaceFile(filePath, directNamedFile)
+      return existsSync(filePath) ? filePath : directNamedFile
+    }
+
+    // 2. 检查会话 jsonl 中的 <generated_images> 映射
+    const sessionJsonlPath = join(configDir, 'agent-sessions', `${sessionId}.jsonl`)
+    if (existsSync(sessionJsonlPath)) {
+      try {
+        const content = readFileSync(sessionJsonlPath, 'utf-8')
+        if (content.includes(targetName)) {
+          const imgMatches = content.matchAll(/<generated_images>\s*(\[[\s\S]*?\])\s*<\/generated_images>/g)
+          for (const m of imgMatches) {
+            const rawJson = m[1]
+            if (!rawJson) continue
+            try {
+              const metaList = JSON.parse(rawJson) as Array<{ filename?: string; path?: string }>
+              const item = metaList.find((x) => x.filename === targetName)
+              if (item?.path) {
+                const relFile = basename(item.path)
+                const candidateAttachment = join(attachmentDir, relFile)
+                if (existsSync(candidateAttachment)) {
+                  healWorkspaceFile(filePath, candidateAttachment)
+                  return existsSync(filePath) ? filePath : candidateAttachment
+                }
+              }
+            } catch {
+              // ignore json parse error
+            }
+          }
+        }
+      } catch {
+        // ignore read error
+      }
+    }
+
+    // 3. 如果附件目录下只有一个匹配扩展名的文件，且目标文件名形如 copis-image-*.png
+    if (targetName.startsWith('copis-image-')) {
+      try {
+        const files = readdirSync(attachmentDir).filter((f) => extname(f) === extname(targetName))
+        if (files.length === 1 && files[0]) {
+          const fallbackPath = join(attachmentDir, files[0])
+          healWorkspaceFile(filePath, fallbackPath)
+          return existsSync(filePath) ? filePath : fallbackPath
+        }
+      } catch {
+        // ignore
+      }
+    }
+  }
+
+  return null
+}
+
 /**
  * 解析待预览的文件路径
  * - 绝对路径：直接 resolve，不存在时 fallback 搜索
@@ -115,8 +211,18 @@ export function resolveTargetPath(filePath: string, basePaths?: string[]): strin
         if (found) return found
       }
     }
+    const fromAttachment = searchAttachmentForImage(direct, name, basePaths)
+    if (fromAttachment) return fromAttachment
     return direct
   }
+
+  // 检查相对路径是否直接是 attachments 格式：{sessionId}/{filename}
+  const home = homedir()
+  for (const configDir of [join(home, '.copis'), join(home, '.copis-dev')]) {
+    const attachCandidate = resolve(configDir, 'attachments', filePath)
+    if (existsSync(attachCandidate)) return attachCandidate
+  }
+
   if (basePaths && basePaths.length > 0) {
     const firstSegment = filePath.split('/')[0]
     if (firstSegment) {
@@ -133,7 +239,6 @@ export function resolveTargetPath(filePath: string, basePaths?: string[]): strin
       const candidate = resolve(base, filePath)
       if (existsSync(candidate)) return candidate
     }
-    const home = homedir()
     const homeCandidate = resolve(home, filePath)
     if (existsSync(homeCandidate)) return homeCandidate
     const rootCandidate = resolve('/', filePath)
@@ -144,12 +249,16 @@ export function resolveTargetPath(filePath: string, basePaths?: string[]): strin
       const found = searchFileInDir(base, name)
       if (found) return found
     }
+    const fromAttachment = searchAttachmentForImage(filePath, name, basePaths)
+    if (fromAttachment) return fromAttachment
     return resolve(basePaths[0]!, filePath)
   }
   const homeCandidate = resolve(homedir(), filePath)
   if (existsSync(homeCandidate)) return homeCandidate
   const rootCandidate = resolve('/', filePath)
   if (existsSync(rootCandidate)) return rootCandidate
+  const fromAttachment = searchAttachmentForImage(filePath, basename(filePath))
+  if (fromAttachment) return fromAttachment
   return resolve(filePath)
 }
 

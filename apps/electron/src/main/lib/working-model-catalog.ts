@@ -28,6 +28,7 @@ import {
 } from '@copis/shared'
 import type { AppSettings } from '../../types'
 import { testChannelDirect } from './channel-manager'
+import { getEffectiveProxyUrl } from './proxy-settings-service'
 import { getWorkingModelCatalogPath } from './config-paths'
 import { getSettings, updateSettings } from './settings-service'
 
@@ -385,10 +386,11 @@ export async function testWorkingCustomModelConnection(
   }
 
   const provider = workingCustomModelProtocolToProvider(input.protocol)
+  const proxyUrl = await getEffectiveProxyUrl()
   return testChannelDirect({
     provider,
     baseUrl: input.baseUrl.trim(),
     apiKey,
     modelId: input.modelId.trim(),
-  })
+  }, proxyUrl)
 }

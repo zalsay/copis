@@ -40,6 +40,7 @@ import {
   createBuiltinChannelForId,
   createBuiltinChannels,
   isCopisWorkingChannelId,
+  isWorkingCustomModelChannelId,
 } from '@copis/shared'
 import { refreshCodexOAuth } from './codex-oauth-service'
 import { refreshXaiOAuth } from './xai-oauth-service'
@@ -565,7 +566,8 @@ export async function testChannel(channelId: string): Promise<ChannelTestResult>
   }
 
   const apiKey = decryptKey(channel.apiKey)
-  const proxyUrl = await getEffectiveProxyUrl()
+  const isCustom = isWorkingCustomModelChannelId(channelId)
+  const proxyUrl = isCustom ? await getEffectiveProxyUrl() : undefined
   const provider = inferProviderFromBaseUrl(channel.provider, channel.baseUrl)
 
   try {
@@ -1539,8 +1541,11 @@ export async function getChannelPlanQuota(channelId: string): Promise<ChannelPla
  * 使用传入的明文凭证直接向提供商发送测试请求。
  * 适用于创建/编辑渠道时用户在保存前先验证连接。
  */
-export async function testChannelDirect(input: ChannelDirectTestInput): Promise<ChannelTestResult> {
-  const proxyUrl = await getEffectiveProxyUrl()
+export async function testChannelDirect(
+  input: ChannelDirectTestInput,
+  proxyUrlOverride?: string,
+): Promise<ChannelTestResult> {
+  const proxyUrl = proxyUrlOverride?.trim() ? proxyUrlOverride.trim() : undefined
   const provider = inferProviderFromBaseUrl(input.provider, input.baseUrl)
 
   try {

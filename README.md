@@ -20,8 +20,9 @@ Copis 是一个本地优先的 AI 桌面应用，把多模型 Chat、通用 Agen
 - **Agent 模式**：基于 Pi Agent SDK 的统一运行时；支持工作区隔离、权限模式、文件操作、长任务流式输出、计划确认和用户追问。可通过 Pi 调用 Anthropic、Claude、OpenAI、Google 及兼容渠道的模型，且每个会话默认内置联网搜索与网页抓取扩展（pi-web-access）。
 - **协作与多 Agent 专家团队**：复杂任务可拆分为可追踪的协作子 Agent / Task，支持专家团队（Expert Team）与多 Agent 协同，并在消息流中展示调用过程和结果。
 - **Skills、MCP 与项目根目录**：每个 Copis 项目独立配置 Skills 与 MCP Server。项目文件可使用用户选择的本地项目根目录，也可使用 Copis 托管的空白项目目录；本地项目配置不会被自动导入。工作区的 `project/` 目录用于 Agent 创建和维护用户项目。
-- **内嵌 AI 浏览器与自动化工作流**：原生多页签 Chromium 浏览器，支持会话绑定与独立收藏夹浮层；提供网页元素交互、高级授权护盾，以及基于 Playwright 的浏览器操作录制与工作流执行（Browser Workflow）。
-- **Copis CLI 与命令行会话能力**：内置 `@copis/cli` 工具，面向终端用户和有限上下文的 Agent 消费者，提供会话的渐进式读取、搜索与导出（`list` / `info` / `outline` / `search` / `export`）。
+- **内置视觉设计与演示大师技能**：内置基于 Anthropic Claude Design 体系的“设计大师”（`dashi-design`）与“Dashi PPT”（`dashi-ppt`），支持通过 Design Component（`.dc.html`）生成高保真交互原型、演示幻灯片、海报传单、三折页、排版文档、HTML 邮件与 3D 物体，严格践行反 AI 模板味审美，支持本地动态调参与 100% 离线自足单文件导出。
+- **内嵌 AI 浏览器、密码安全管理与自动化工作流**：原生多页签 Chromium 浏览器，支持参考 Google Chrome 的本地 SQLite 安全密码存储（safeStorage 系统级钥匙串加密）、登录智能侦测、表单自动填充与黑名单管理；提供网页元素交互、高级授权护盾，以及基于 Playwright 的浏览器操作录制与工作流执行（Browser Workflow）。
+- **Copis CLI 与命令行工具能力**：内置 `@copis/cli` 工具，面向终端用户和有限上下文的 Agent 消费者，提供会话的渐进式读取、搜索与导出（`list` / `info` / `outline` / `search` / `export`），以及 Dashi PPT 与设计大师（`copis dashi-design`）脚手架生成、离线打包与校验命令。
 - **远程机器人与 App 连接器**：支持飞书（Hermes 扫码一键注册）、微信（腾讯 iLink Bot 扫码登录）与钉钉（Stream 直连 / OAuth 扫码授权）机器人桥接；侧边栏提供对应平台色彩专属 Tag 徽标，会话自动剥除信封并提取真实用户提问作为标题，支持用手机随时随地触发本机 Agent 工作流。
 - **QM 风格结构化记忆**：参考 YC QM 项目设计，由本地 Rust HTTP API 与 SQLite 驱动；支持用户全局与工作区专属两级 Scope 隔离、Per-turn 自动事实抽取、Token 阈值排队整理、版本历史追溯（Revision 乐观锁）以及 Agent 受控记忆读写工具集。
 - **本地优先**：会话、工作区、附件、配置、Skills 等默认存储在 `~/.copis/`，使用 JSON / JSONL 文件组织，不依赖本地数据库。
@@ -310,6 +311,25 @@ shared 类型和 IPC 常量
 渲染进程以 Jotai 管理状态，关键 atoms 位于 `apps/electron/src/renderer/atoms/`。Agent IPC 监听器在应用顶层全局挂载，避免切换页面时丢失流式事件、权限请求或后台任务状态。
 
 ## 打包与功能模块
+
+### 桌面端平台版本
+
+桌面端在 `apps/electron/package.json` 的 `copis.platformVersions` 中按平台和架构独立配置发布版本，分别维护 `darwin-arm64`、`darwin-x64`、`win32-x64`、`linux-x64`。未配置的条目回退到顶层 `version`；修改顶层版本不会覆盖已有的平台版本。
+
+```bash
+# 在仓库根目录查看平台版本
+bun scripts/bump-electron-version.ts --get --platform darwin --arch arm64
+
+# 设置或递增指定平台版本，不影响其他平台
+bun scripts/bump-electron-version.ts --set 0.0.83 --platform darwin --arch arm64
+bun scripts/bump-electron-version.ts --new --platform win32 --arch x64
+```
+
+`build.sh --new` 和 `build.ps1 -NewVersion` 只递增当前目标平台；低于对应平台功能模块最低客户端版本时，先对齐门槛，本次不再额外递增。`pack`、`dist`、`dist:mac`、`dist:win`、`dist:linux` 使用平台打包包装脚本，将同一版本写入安装包和前端编译常量。每次打包选择一个平台和架构；直接调用 `electron-builder` 或其他未接入的入口不会自动应用此配置。
+
+应用内更新使用当前安装包的 `app.getVersion()`，并按平台和架构选择客户端 manifest 条目。Rust 更新接口的 `latestVersion` 只代表当前平台，不使用其他平台的最高版本。发布时必须保证 `client.updates[platform-arch].version` 与实际安装包版本一致。此更新接口变更需要单独发布并激活 `rust-http-api` 功能模块，仅重新构建 Electron 不会更新已安装的 Rust 服务。
+
+### 功能模块发布
 
 Copis 的功能模块体系包含 `rust-http-api`、`officecli`、`node-runtime`、`playwright-core`、`python-runtime`、`alipay-bot` 与 `agently-cli`。其中 `node-runtime` 是按目标平台打包的 Node.js 与 npm `tar.gz` 归档，应用首次启动时自动下载、校验、解包并激活。终端用户不需要自行安装 Node.js 或 npm。
 

@@ -1,12 +1,14 @@
 import * as React from 'react'
 import { useAtom, useAtomValue, useSetAtom } from 'jotai'
-import { AlertCircle, CheckCircle2, Download, Loader2, PackageCheck, RefreshCw, ShieldCheck } from 'lucide-react'
+import { AlertCircle, CheckCircle2, Download, ExternalLink, Loader2, PackageCheck, RefreshCw, ShieldCheck, X } from 'lucide-react'
 import type {
+  AppInfo,
   FunctionalModuleProgressPayload,
   FunctionalModuleStartupProgressPayload,
   FunctionalModuleStatus,
 } from '@copis/shared'
 import { functionalModuleBusyAtom, functionalModuleProgressAtom, functionalModuleStartupAtom, functionalModuleStatusesAtom } from '@/atoms/functional-modules'
+import { appInfoAtom, checkForUpdates, downloadUpdate, onlineUpdateAvailableAtom, updaterAvailableAtom, updateStatusAtom } from '@/atoms/updater'
 import { isHttpApiBridgeActive } from '@/lib/http-api-bridge'
 import { CopisAppLogo } from '@/lib/model-logo'
 import { detectIsWindows, WINDOW_CONTROLS_INSET_RIGHT } from '@/lib/platform'
@@ -14,6 +16,7 @@ import { cn } from '@/lib/utils'
 import {
   AlertDialog,
   AlertDialogAction,
+  AlertDialogCancel,
   AlertDialogContent,
   AlertDialogDescription,
   AlertDialogFooter,
@@ -50,6 +53,36 @@ export function FunctionalModuleUpdateGate({ children }: FunctionalModuleUpdateG
   const setProgress = useSetAtom(functionalModuleProgressAtom)
   const setBusy = useSetAtom(functionalModuleBusyAtom)
   const [released, setReleased] = React.useState(false)
+  const [clientUpdateDismissed, setClientUpdateDismissed] = React.useState(false)
+  const [appInfo, setAppInfo] = useAtom(appInfoAtom)
+  const updateStatus = useAtomValue(updateStatusAtom)
+  const onlineUpdateAvailable = useAtomValue(onlineUpdateAvailableAtom)
+
+  React.useEffect(() => {
+    if (appInfo) return
+    let active = true
+    window.electronAPI?.getAppInfo?.()
+      ?.then((info) => {
+        if (active) setAppInfo(info)
+      })
+      ?.catch(() => {
+        if (active) setAppInfo({ version: '-', packaged: false })
+      })
+    return () => {
+      active = false
+    }
+  }, [appInfo, setAppInfo])
+  const isDownloading = updateStatus.status === 'downloading'
+  const isDownloaded = updateStatus.status === 'downloaded'
+  const isChecking = updateStatus.status === 'checking'
+  const isAvailable = updateStatus.status === 'available'
+  const progressPercent = isDownloading
+    ? Math.round(Math.min(100, Math.max(0, updateStatus.progress?.percent ?? 0)))
+    : 0
+
+  React.useEffect(() => {
+    setClientUpdateDismissed(false)
+  }, [startup.error])
 
   const applyStartupProgress = React.useCallback((payload: FunctionalModuleStartupProgressPayload): void => {
     const progress = clamp01(payload.progress)
@@ -70,6 +103,7 @@ export function FunctionalModuleUpdateGate({ children }: FunctionalModuleUpdateG
   }, [setBusy, setProgress])
 
   const runStartup = React.useCallback(async (): Promise<void> => {
+    setClientUpdateDismissed(false)
     setReleased(false)
     setStartup({ ...INITIAL_PROGRESS, error: null })
     setBusy({ 'node-runtime': true, 'officecli': true, 'alipay-bot': true, 'rust-http-api': true, 'playwright-core': true, 'python-runtime': true })
@@ -127,16 +161,114 @@ export function FunctionalModuleUpdateGate({ children }: FunctionalModuleUpdateG
     }
   }, [applyModuleProgress, applyStartupProgress, developmentMode, runStartup, setStatuses, setStartup])
 
-  if (released) return <>{children}</>
-
   const percentage = Math.round(clamp01(startup.progress) * 100)
   const phaseLabel = getStartupPhaseLabel(startup)
   const isError = startup.phase === 'error'
   const clientUpdateDialog = getStartupClientUpdateDialog(startup.error)
+  const isClientUpdateDialogOpen = clientUpdateDialog !== null && !clientUpdateDismissed
+
+  React.useEffect(() => {
+    if (released) return
+    if (clientUpdateDialog && onlineUpdateAvailable && updateStatus.status === 'idle') {
+      void checkForUpdates().catch((error: unknown) => {
+        console.warn('[功能模块] 检查客户端更新失败:', error)
+      })
+    }
+  }, [clientUpdateDialog, onlineUpdateAvailable, released, updateStatus.status])
+
+  const handleUpdateAction = React.useCallback(async (e?: React.MouseEvent): Promise<void> => {
+    if (!onlineUpdateAvailable) {
+      setClientUpdateDismissed(true)
+      void window.electronAPI.openExternal(updateStatus.downloadUrl || COPIS_DOWNLOAD_URL).catch((error: unknown) => {
+        console.error('[功能模块] 打开 Copis 下载页失败:', error)
+      })
+      return
+    }
+
+    if (updateStatus.status === 'downloaded') {
+      void window.electronAPI.updater?.installWhenIdle()
+      return
+    }
+
+    if (updateStatus.status === 'available') {
+      e?.preventDefault?.()
+      void downloadUpdate().catch((error: unknown) => {
+        console.error('[功能模块] 下载客户端更新失败:', error)
+      })
+      return
+    }
+
+    if (updateStatus.status === 'error' || updateStatus.status === 'idle' || updateStatus.status === 'not-available') {
+      e?.preventDefault?.()
+      try {
+        await checkForUpdates()
+        const current = await window.electronAPI.updater?.getStatus?.()
+        if (current?.status === 'available') {
+          await downloadUpdate()
+        }
+      } catch (error) {
+        console.error('[功能模块] 检查并下载更新失败:', error)
+      }
+    }
+  }, [onlineUpdateAvailable, updateStatus.downloadUrl, updateStatus.status])
+
+  const updateButtonLabel = React.useMemo(() => {
+    if (!onlineUpdateAvailable) {
+      return clientUpdateDialog?.actionLabel ?? '下载最新版本'
+    }
+    switch (updateStatus.status) {
+      case 'downloaded':
+        return '立即安装'
+      case 'downloading':
+        return `正在下载 (${progressPercent}%)`
+      case 'checking':
+        return '检查更新中...'
+      case 'error':
+        return '重试下载更新'
+      case 'available':
+      default:
+        return '下载更新'
+    }
+  }, [clientUpdateDialog?.actionLabel, onlineUpdateAvailable, progressPercent, updateStatus.status])
+
+  const dialogTitle = React.useMemo(() => {
+    if (!clientUpdateDialog) return ''
+    if (!onlineUpdateAvailable) return clientUpdateDialog.title
+    if (isDownloaded) return '更新已下载完成'
+    if (isDownloading) return '正在下载更新'
+    return clientUpdateDialog.title
+  }, [clientUpdateDialog, isDownloaded, isDownloading, onlineUpdateAvailable])
+
+  const dialogDescription = React.useMemo(() => {
+    if (!clientUpdateDialog) return ''
+    if (!onlineUpdateAvailable) return clientUpdateDialog.description
+    if (isDownloaded) {
+      const ver = updateStatus.version ?? clientUpdateDialog.minClientVersion
+      return `Copis v${ver} 已下载完成，点击立即安装并重启应用。`
+    }
+    if (isDownloading) {
+      const ver = updateStatus.version ?? clientUpdateDialog.minClientVersion
+      return `正在下载 Copis v${ver} (${progressPercent}%)，下载完成后可直接安装。`
+    }
+    if (isChecking) {
+      return '正在检查最新版本更新包...'
+    }
+    if (updateStatus.status === 'error') {
+      return `更新检查或下载失败：${updateStatus.error || '网络连接异常'}。您可以重试，或直接前往官网下载最新版本。`
+    }
+    if (isAvailable) {
+      const ver = updateStatus.version ?? clientUpdateDialog.minClientVersion
+      return `必要组件要求 Copis v${clientUpdateDialog.minClientVersion} 或更高版本。发现新版本 v${ver}，点击下载更新。`
+    }
+    return clientUpdateDialog.description
+  }, [clientUpdateDialog, isAvailable, isChecking, isDownloaded, isDownloading, onlineUpdateAvailable, progressPercent, updateStatus.error, updateStatus.status, updateStatus.version])
+
   const activeModule = startup.activeModule
   const bytes = activeModule === 'rust-http-api' || activeModule === 'officecli' || activeModule === 'alipay-bot' || activeModule === 'playwright-core' || activeModule === 'python-runtime'
     ? `${formatStartupBytes(startup.downloadedBytes)}${startup.totalBytes ? ` / ${formatStartupBytes(startup.totalBytes)}` : ''}`
     : ''
+
+  if (released) return <>{children}</>
 
   return (
     <main
@@ -227,20 +359,68 @@ export function FunctionalModuleUpdateGate({ children }: FunctionalModuleUpdateG
             </div>
           )}
 
-          {isError && !clientUpdateDialog && (
+          {isError && (
             <div className="mt-8 flex flex-col gap-4 rounded-lg bg-destructive/10 p-4" role="alert">
               <div className="flex items-start gap-3">
                 <AlertCircle className="mt-0.5 size-4 shrink-0 text-destructive" aria-hidden="true" />
                 <p className="min-w-0 text-sm leading-6 text-destructive">{getStartupErrorLabel(startup.error)}</p>
               </div>
-              <button
-                type="button"
-                className="inline-flex min-h-9 items-center justify-center gap-2 self-start rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50"
-                onClick={() => void runStartup()}
-              >
-                <RefreshCw className="size-4" aria-hidden="true" />
-                重试更新
-              </button>
+              {clientUpdateDialog && isDownloading && (
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between text-xs text-muted-foreground">
+                    <span>正在下载更新</span>
+                    <span className="font-mono tabular-nums">{progressPercent}%</span>
+                  </div>
+                  <div className="h-1.5 w-full overflow-hidden rounded-full bg-secondary">
+                    <div
+                      className="h-full bg-primary transition-all duration-200"
+                      style={{ width: `${progressPercent}%` }}
+                    />
+                  </div>
+                </div>
+              )}
+              <div className="flex flex-wrap items-center gap-3">
+                {clientUpdateDialog && (
+                  <button
+                    type="button"
+                    disabled={isChecking || isDownloading}
+                    className="inline-flex min-h-9 items-center justify-center gap-2 rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50"
+                    onClick={(e) => void handleUpdateAction(e)}
+                  >
+                    {isChecking || isDownloading ? (
+                      <Loader2 className="size-4 animate-spin" aria-hidden="true" />
+                    ) : (
+                      <Download className="size-4" aria-hidden="true" />
+                    )}
+                    {updateButtonLabel}
+                  </button>
+                )}
+                {clientUpdateDialog && updateStatus.status === 'error' && (
+                  <button
+                    type="button"
+                    className="inline-flex min-h-9 items-center justify-center gap-2 rounded-md border border-input bg-background px-4 text-sm font-medium transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50"
+                    onClick={() => {
+                      void window.electronAPI.openExternal(updateStatus.downloadUrl || COPIS_DOWNLOAD_URL)
+                    }}
+                  >
+                    <ExternalLink className="size-4" aria-hidden="true" />
+                    前往官网下载
+                  </button>
+                )}
+                <button
+                  type="button"
+                  className={cn(
+                    'inline-flex min-h-9 items-center justify-center gap-2 rounded-md px-4 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50',
+                    clientUpdateDialog
+                      ? 'border border-input bg-background hover:bg-accent hover:text-accent-foreground'
+                      : 'bg-primary text-primary-foreground hover:bg-primary/90 self-start',
+                  )}
+                  onClick={() => void runStartup()}
+                >
+                  <RefreshCw className="size-4" aria-hidden="true" />
+                  {clientUpdateDialog ? '重新检查' : '重试更新'}
+                </button>
+              </div>
             </div>
           )}
 
@@ -252,23 +432,59 @@ export function FunctionalModuleUpdateGate({ children }: FunctionalModuleUpdateG
           )}
         </section>
       </div>
-      <AlertDialog open={clientUpdateDialog !== null}>
+      <AlertDialog
+        open={isClientUpdateDialogOpen}
+        onOpenChange={(open) => {
+          if (!open) {
+            setClientUpdateDismissed(true)
+          }
+        }}
+      >
         <AlertDialogContent>
+          <button
+            type="button"
+            aria-label="关闭"
+            className="absolute right-4 top-4 rounded-md p-1 opacity-60 transition-all duration-150 hover:opacity-100 hover:bg-accent/60 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring/40 disabled:pointer-events-none"
+            onClick={() => setClientUpdateDismissed(true)}
+          >
+            <X className="h-4 w-4" />
+            <span className="sr-only">关闭</span>
+          </button>
           <AlertDialogHeader>
-            <AlertDialogTitle>{clientUpdateDialog?.title}</AlertDialogTitle>
-            <AlertDialogDescription>{clientUpdateDialog?.description}</AlertDialogDescription>
+            <AlertDialogTitle>{dialogTitle}</AlertDialogTitle>
+            <AlertDialogDescription>{dialogDescription}</AlertDialogDescription>
           </AlertDialogHeader>
+          {isDownloading && (
+            <div className="space-y-1.5 py-2">
+              <div className="flex items-center justify-between text-xs text-muted-foreground">
+                <span>正在下载更新</span>
+                <span className="font-mono tabular-nums">{progressPercent}%</span>
+              </div>
+              <div className="h-1.5 w-full overflow-hidden rounded-full bg-secondary">
+                <div
+                  className="h-full bg-primary transition-all duration-200"
+                  style={{ width: `${progressPercent}%` }}
+                />
+              </div>
+            </div>
+          )}
           <AlertDialogFooter>
+            <AlertDialogCancel
+              onClick={() => setClientUpdateDismissed(true)}
+            >
+              {clientUpdateDialog?.cancelLabel ?? '关闭'}
+            </AlertDialogCancel>
             <AlertDialogAction
               className="gap-2"
-              onClick={() => {
-                void window.electronAPI.openExternal(COPIS_DOWNLOAD_URL).catch((error: unknown) => {
-                  console.error('[功能模块] 打开 Copis 下载页失败:', error)
-                })
-              }}
+              disabled={isChecking || isDownloading}
+              onClick={(e) => void handleUpdateAction(e)}
             >
-              <Download className="size-4" aria-hidden="true" />
-              {clientUpdateDialog?.actionLabel}
+              {isChecking || isDownloading ? (
+                <Loader2 className="size-4 animate-spin" aria-hidden="true" />
+              ) : (
+                <Download className="size-4" aria-hidden="true" />
+              )}
+              {updateButtonLabel}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

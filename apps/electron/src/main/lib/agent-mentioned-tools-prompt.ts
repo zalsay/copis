@@ -1,6 +1,6 @@
 const BUILTIN_MCP_PROMPTS: Record<string, string> = {
-  copis_image: '- MCP 工具: Copis 图片生成（请主动调用 generate_image 工具来完成用户的生图或插画需求）',
-  'nano-banana': '- MCP 工具: Copis 图片生成（请主动调用 generate_image 工具来完成用户的生图或插画需求）',
+  copis_image: '- Skill: copis-image-generation（请使用 Copis 内置图片生成能力完成用户的生图或插画需求）',
+  'nano-banana': '- Skill: copis-image-generation（请使用 Copis 内置图片生成能力完成用户的生图或插画需求）',
   automation: '- MCP 工具: 定时任务（请使用定时任务相关工具如 create_automation/list_automations 来完成任务）',
   collaboration: '- MCP 工具: 协作子 Agent（请使用协作子 Agent 相关工具如 delegate_agent 来完成任务）',
 }

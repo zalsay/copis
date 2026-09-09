@@ -25,6 +25,7 @@ import {
   COPIS_WORKING_MODEL_SOURCE_TYPE_COPIS_AGENT,
   createCopisWorkingChannelForId,
   isCopisWorkingChannelId,
+  isWorkingCustomModelChannelId,
   normalizeWorkingMode,
   type AgentRuntime,
   type AgentSendInput,
@@ -452,7 +453,7 @@ export class AgentOrchestrator {
   }
 
   /** 构建 Pi Agent 使用的 Shell、代理和系统环境。凭证由 Pi 请求层直接接收。 */
-  private buildRuntimeEnv(proxyUrl: string | undefined): AgentRuntimeEnv {
+  private buildRuntimeEnv(proxyUrl: string | undefined, inheritProcessProxy: boolean = false): AgentRuntimeEnv {
     const processEnv: NodeJS.ProcessEnv = { ...process.env }
     for (const key of Object.keys(processEnv)) {
       if (key.startsWith('ANTHROPIC_') || key.startsWith('CLAUDE_')) delete processEnv[key]
@@ -460,6 +461,7 @@ export class AgentOrchestrator {
 
     const runtimeEnv = buildAgentRuntimeEnv({
       proxyUrl,
+      inheritProcessProxy,
       runtimeStatus: getRuntimeStatus(),
       windowsShellPreference: getSettings().windowsShellPreference,
       officeCliPath: getFunctionalModulePath('officecli'),
@@ -608,7 +610,8 @@ export class AgentOrchestrator {
         request.headers[COPIS_WORKING_MODEL_SOURCE_TYPE_HEADER] = COPIS_WORKING_MODEL_SOURCE_TYPE_COPIS_AGENT
       }
 
-      const proxyUrl = await getEffectiveProxyUrl()
+      const isCustomModel = isWorkingCustomModelChannelId(channelId)
+      const proxyUrl = isCustomModel ? await getEffectiveProxyUrl() : undefined
       const fetchFn = getFetchFn(proxyUrl)
       const title = await fetchTitle(request, providerAdapter, fetchFn)
       const result = title ? sanitizeGeneratedTitle(title) : null
@@ -1159,9 +1162,10 @@ export class AgentOrchestrator {
       callbacks.onComplete(messages, opts)
     }
 
-    // 3. 构建 Pi runtime 环境变量。
-    const proxyUrl = await getEffectiveProxyUrl()
-    const runtimeEnv = this.buildRuntimeEnv(proxyUrl)
+    // 3. 构建 Pi runtime 环境变量（仅自定义模型接入代理，其他模型保持直连）。
+    const isCustomModel = isWorkingCustomModelChannelId(channelId)
+    const proxyUrl = isCustomModel ? await getEffectiveProxyUrl() : undefined
+    const runtimeEnv = this.buildRuntimeEnv(proxyUrl, isCustomModel)
 
     // 4. 读取已有的 SDK session ID（用于 resume）
     let existingSdkSessionId = sessionMeta?.sdkSessionId

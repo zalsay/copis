@@ -319,6 +319,11 @@ export function getWebTabsPath(): string {
   return join(getConfigDir(), 'web-tabs.json')
 }
 
+/** 获取内嵌网页密码 SQLite 数据库路径。 */
+export function getWebPasswordsDatabasePath(): string {
+  return join(getConfigDir(), 'web-passwords.db')
+}
+
 /**
  * 获取代理配置文件路径
  *

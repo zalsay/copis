@@ -2,6 +2,7 @@ use super::auth_session::{AuthError, AuthSession, AuthStorage, PersistedAuth};
 use super::edu_api_client::{
     EduApiClient, EduApiError, EduApiRequest, EduApiResponse, EduApiTransport,
 };
+use super::model_request_client::ModelRequestClient;
 use super::working_gateway::{
     handle_working_gateway_request, is_working_oauth_callback_path, is_working_oauth_failure_path,
     is_working_oauth_success_path, oidc_failure_page, oidc_success_page, GatewayError,
@@ -9,7 +10,10 @@ use super::working_gateway::{
 };
 use serde_json::{json, Value};
 use std::collections::VecDeque;
+use std::io::{Read, Write};
+use std::net::TcpListener;
 use std::sync::{Arc, Mutex};
+use std::thread;
 
 static HTTP_API_ENV_LOCK: Mutex<()> = Mutex::new(());
 
@@ -74,6 +78,111 @@ fn gateway(transport: Arc<QueueTransport>) -> WorkingGateway {
     let storage = Arc::new(MemoryStorage::default());
     let auth = Arc::new(AuthSession::new(client, storage).unwrap());
     WorkingGateway::new(auth)
+}
+
+#[test]
+fn image_task_gateway_refreshes_once_and_replays_same_request_without_resubmitting_task() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = thread::spawn(move || {
+        for (index, expected_token) in ["old-token", "new-token"].into_iter().enumerate() {
+            let (mut socket, _) = listener.accept().unwrap();
+            let mut request = Vec::new();
+            let mut byte = [0_u8; 1];
+            while !request.ends_with(b"\r\n\r\n") {
+                socket.read_exact(&mut byte).unwrap();
+                request.push(byte[0]);
+            }
+            let text = String::from_utf8_lossy(&request);
+            assert!(text.starts_with("POST /v1/images/tasks HTTP/1.1"));
+            assert!(text.contains(&format!("authorization: Bearer {expected_token}")));
+            assert!(text.contains("idempotency-key: image-call-1"));
+            let content_length = text
+                .lines()
+                .find_map(|line| line.strip_prefix("content-length: "))
+                .and_then(|value| value.trim().parse::<usize>().ok())
+                .unwrap_or(0);
+            let mut body_bytes = vec![0_u8; content_length];
+            if content_length > 0 {
+                socket.read_exact(&mut body_bytes).unwrap();
+            }
+            let body = if index == 0 {
+                b"".as_slice()
+            } else {
+                br#"{"data":{"task_id":"task-1","status":"queued"}}"#.as_slice()
+            };
+            let head = format!(
+                "HTTP/1.0 {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n",
+                if index == 0 { 401 } else { 202 },
+                body.len()
+            );
+            socket.write_all(head.as_bytes()).unwrap();
+            socket.write_all(body).unwrap();
+        }
+    });
+    let transport = Arc::new(QueueTransport::new(vec![
+        response(
+            200,
+            json!({"token":"old-token", "refresh_token":"refresh-token", "user":{"id":1}}),
+        ),
+        response(
+            200,
+            json!({"token":"new-token", "refresh_token":"new-refresh"}),
+        ),
+    ]));
+    let client =
+        Arc::new(EduApiClient::new("https://edu-api.example.test", transport, 32).unwrap());
+    let auth = Arc::new(AuthSession::new(client, Arc::new(MemoryStorage::default())).unwrap());
+    auth.login(super::auth_session::LoginInput {
+        email: "u@example.com".into(),
+        password: "password".into(),
+    })
+    .unwrap();
+    let model = ModelRequestClient::new(&format!("http://{address}"), 5).unwrap();
+    let gateway = WorkingGateway::with_model_client(auth, model);
+    let result = handle_working_gateway_request(
+        &gateway,
+        "POST",
+        "/api/working/image/tasks",
+        Some(r#"{"prompt":"test","sessionId":"s-1","request_id":"image-call-1"}"#),
+    )
+    .unwrap();
+    assert_eq!(result.status, 202);
+    assert_eq!(result.body.unwrap()["data"]["task_id"], "task-1");
+    let listed = handle_working_gateway_request(&gateway, "GET", "/api/working/image/tasks?session_id=s-1", None).unwrap();
+    assert_eq!(listed.body.unwrap()["data"]["tasks"][0]["request_id"], "image-call-1");
+    server.join().unwrap();
+}
+
+#[test]
+fn image_task_completed_query_uses_sqlite_cache_after_upstream_stops() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = thread::spawn(move || {
+        let (mut socket, _) = listener.accept().unwrap();
+        let mut request = Vec::new();
+        let mut byte = [0];
+        while !request.ends_with(b"\r\n\r\n") { socket.read_exact(&mut byte).unwrap(); request.push(byte[0]); }
+        assert!(String::from_utf8_lossy(&request).starts_with("GET /v1/images/tasks/cached-task HTTP/1.1"));
+        let body = r#"{"data":{"task_id":"cached-task","status":"completed","image_url":"https://cos.example/image?q-sign-time=1%3B4000000000"}}"#;
+        write!(socket, "HTTP/1.0 200 OK\r\nContent-Length: {}\r\n\r\n{}", body.len(), body).unwrap();
+    });
+    let transport = Arc::new(QueueTransport::new(vec![]));
+    let client = Arc::new(EduApiClient::new("https://edu-api.example.test", transport, 32).unwrap());
+    let storage = Arc::new(MemoryStorage::default());
+    *storage.value.lock().unwrap() = Some(PersistedAuth {
+        access_token: "test-access".into(), refresh_token: None, provider: "oidc".into(),
+        user: Some(json!({"ID":42})), expires_at: Some(4000000000),
+    });
+    let auth = Arc::new(AuthSession::new(client, storage).unwrap());
+    let gateway = WorkingGateway::with_model_client(auth.clone(), ModelRequestClient::new(&format!("http://{address}"), 1).unwrap());
+    let first = handle_working_gateway_request(&gateway, "GET", "/api/working/image/tasks/cached-task", None).unwrap();
+    server.join().unwrap();
+    let second = handle_working_gateway_request(&gateway, "GET", "/api/working/image/tasks/cached-task", None).unwrap();
+    assert_eq!(first.body, second.body);
+    assert!(handle_working_gateway_request(&gateway, "GET", "/api/working/image/tasks/cached-task?refresh=1", None).is_err());
+    auth.logout().unwrap();
+    assert!(handle_working_gateway_request(&gateway, "GET", "/api/working/image/tasks/cached-task", None).is_err());
 }
 
 #[test]
@@ -575,4 +684,39 @@ fn maps_upstream_failure_to_public_code_without_forwarding_sensitive_body() {
     assert_eq!(error.status, 503);
     assert_eq!(error.code, "edu_unavailable");
     assert!(!error.message.contains("do-not-return"));
+}
+
+#[test]
+fn maps_upstream_failure_includes_detail_when_present() {
+    let transport = Arc::new(QueueTransport::new(vec![
+        response(200, json!({"token":"access-token","user":{"id":7}})),
+        response(
+            502,
+            json!({
+                "error": "working image generation failed",
+                "detail": "image model request failed: HTTP 401 Unauthorized"
+            }),
+        ),
+    ]));
+    let gateway = gateway(transport);
+    handle_working_gateway_request(
+        &gateway,
+        "POST",
+        "/api/working/login",
+        Some(r#"{"email":"user@example.com","password":"password"}"#),
+    )
+    .unwrap();
+    let error = handle_working_gateway_request(
+        &gateway,
+        "POST",
+        "/api/working/image",
+        Some(r#"{"prompt":"cat"}"#),
+    )
+    .unwrap_err();
+    assert_eq!(error.status, 502);
+    assert_eq!(error.code, "upstream_error");
+    assert_eq!(
+        error.message,
+        "working image generation failed: image model request failed: HTTP 401 Unauthorized"
+    );
 }

@@ -148,7 +148,7 @@ $pathSeparator = [System.IO.Path]::PathSeparator
 $env:PATH = "$bunBinDir$pathSeparator$env:PATH"
 
 $electronPackage = Get-Content -LiteralPath $electronPackagePath -Raw -Encoding UTF8 | ConvertFrom-Json
-$appVersion = [string]$electronPackage.version
+$appVersion = (& $bunPath (Join-Path $rootDir 'scripts\bump-electron-version.ts') '--get' '--platform' 'win32' '--arch' 'x64' | Out-String).Trim()
 if ([string]::IsNullOrWhiteSpace($appVersion)) {
     throw "无法从 Electron 包 package.json 读取版本号：$electronPackagePath"
 }
@@ -189,7 +189,7 @@ if (-not [string]::IsNullOrWhiteSpace($manifestUrl)) {
 $versionAlignedToMin = $false
 if (-not [string]::IsNullOrWhiteSpace($platformMinVersion) -and (Compare-ClientVersions $appVersion $platformMinVersion) -lt 0) {
     $versionScriptPath = Join-Path $rootDir 'scripts\bump-electron-version.ts'
-    $appVersion = (& $bunPath $versionScriptPath '--set' $platformMinVersion | Out-String).Trim()
+    $appVersion = (& $bunPath $versionScriptPath '--set' $platformMinVersion '--platform' $targetPlatform '--arch' $targetArch | Out-String).Trim()
     if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($appVersion)) {
         throw "Electron 应用版本对齐失败，退出码：$LASTEXITCODE"
     }
@@ -199,7 +199,7 @@ if (-not [string]::IsNullOrWhiteSpace($platformMinVersion) -and (Compare-ClientV
 
 if ($NewVersion -and -not $versionAlignedToMin) {
     $versionScriptPath = Join-Path $rootDir 'scripts\bump-electron-version.ts'
-    $appVersion = (& $bunPath $versionScriptPath '--new' | Out-String).Trim()
+    $appVersion = (& $bunPath $versionScriptPath '--new' '--platform' $targetPlatform '--arch' $targetArch | Out-String).Trim()
     if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($appVersion)) {
         throw "Electron 应用版本更新失败，退出码：$LASTEXITCODE"
     }

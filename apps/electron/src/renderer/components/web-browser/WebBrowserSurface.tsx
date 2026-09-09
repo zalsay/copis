@@ -33,6 +33,12 @@ import { WebBookmarksPopover } from './WebBookmarksPopover'
 import { BrowserAgentPanel } from './BrowserAgentPanel'
 import { LiveTranslatePanel, LiveSubtitleOverlay } from './index'
 import { getIncognitoActionState } from './browser-incognito-ui'
+import {
+  activeTabPasswordPromptAtom,
+  refreshActiveTabLoginsAtom,
+} from '@/atoms/web-password-atoms'
+import { WebPasswordPromptBanner } from './WebPasswordPromptBanner'
+import { WebPasswordKeyPopover } from './WebPasswordKeyPopover'
 
 function applySnapshot(
   snapshot: WebTabsSnapshot,
@@ -75,6 +81,27 @@ export function WebBrowserSurface(): React.ReactElement {
   const addressInputRef = React.useRef<HTMLInputElement>(null)
   const hostRef = React.useRef<HTMLDivElement>(null)
   const [address, setAddress] = React.useState('')
+  const [activePrompt, setActivePrompt] = useAtom(activeTabPasswordPromptAtom)
+  const refreshActiveTabLogins = useSetAtom(refreshActiveTabLoginsAtom)
+
+  React.useEffect(() => {
+    if (!window.electronAPI?.webPasswords?.onPromptChanged) return
+    const cleanup = window.electronAPI.webPasswords.onPromptChanged(({ tabId, prompt }) => {
+      if (tabId === activeTabId) {
+        setActivePrompt(prompt)
+      }
+    })
+    return cleanup
+  }, [activeTabId, setActivePrompt])
+
+  React.useEffect(() => {
+    if (!activeTab || !window.electronAPI?.webPasswords) return
+    void refreshActiveTabLogins(activeTab.url)
+    void window.electronAPI.webPasswords.getActivePrompt(activeTab.id).then((prompt) => {
+      setActivePrompt(prompt)
+    })
+  }, [activeTab?.id, activeTab?.url, refreshActiveTabLogins, setActivePrompt])
+
   const [browserWorkflowEnabled, setBrowserWorkflowEnabled] = React.useState<boolean | null>(null)
   const [browserAgentContextLookupTabId, setBrowserAgentContextLookupTabId] = React.useState<string | null>(null)
   const [browserActionPending, setBrowserActionPending] = React.useState(false)
@@ -188,6 +215,33 @@ export function WebBrowserSurface(): React.ReactElement {
   const apply = React.useCallback((snapshot: WebTabsSnapshot): void => {
     applySnapshot(snapshot, setTabs, setActiveTabId)
   }, [setActiveTabId, setTabs])
+
+  const isAddressFocusedRef = React.useRef(false)
+
+  const handleAddressFocus = React.useCallback((event: React.FocusEvent<HTMLInputElement>): void => {
+    event.currentTarget.select()
+  }, [])
+
+  const handleAddressMouseUp = React.useCallback((event: React.MouseEvent<HTMLInputElement>): void => {
+    if (!isAddressFocusedRef.current) {
+      isAddressFocusedRef.current = true
+      event.currentTarget.select()
+    }
+  }, [])
+
+  const handleAddressBlur = React.useCallback((): void => {
+    isAddressFocusedRef.current = false
+  }, [])
+
+  const handleAddressContainerClick = React.useCallback((event: React.MouseEvent<HTMLDivElement>): void => {
+    const target = event.target as HTMLElement | null
+    if (target?.closest('button, [role="button"]')) return
+    if (target !== addressInputRef.current) {
+      addressInputRef.current?.focus()
+      addressInputRef.current?.select()
+      isAddressFocusedRef.current = true
+    }
+  }, [])
 
   const handleNavigate = React.useCallback(async (event: React.FormEvent<HTMLFormElement>): Promise<void> => {
     event.preventDefault()
@@ -779,9 +833,10 @@ export function WebBrowserSurface(): React.ReactElement {
         <form className="ml-1 flex min-w-0 flex-1 items-center" onSubmit={(event) => void handleNavigate(event)}>
           <div
             className={cn(
-              'flex h-8 min-w-0 flex-1 items-center gap-2 rounded-md border border-border/70 pl-3 pr-0 shadow-xs',
+              'flex h-8 min-w-0 flex-1 items-center gap-2 rounded-md border border-border/70 pl-3 pr-0 shadow-xs cursor-text',
               activeTab.isIncognito ? 'bg-[var(--ui-primary-background)]' : 'bg-input-surface',
             )}
+            onClick={handleAddressContainerClick}
           >
             {activeTab.url.startsWith('https://') ? (
               <ShieldCheck className="size-3.5 shrink-0 text-emerald-600 dark:text-emerald-400" />
@@ -792,11 +847,15 @@ export function WebBrowserSurface(): React.ReactElement {
               ref={addressInputRef}
               value={address}
               onChange={(event) => setAddress(event.target.value)}
+              onFocus={handleAddressFocus}
+              onMouseUp={handleAddressMouseUp}
+              onBlur={handleAddressBlur}
               aria-label="网页地址"
               className="min-w-0 flex-1 bg-transparent text-xs text-foreground outline-none placeholder:text-muted-foreground"
               placeholder="输入网址或搜索内容"
               spellCheck={false}
             />
+            <WebPasswordKeyPopover activeTab={activeTab} />
             {incognitoAction.visible ? (
               <Tooltip>
                 <TooltipTrigger asChild>
@@ -871,6 +930,9 @@ export function WebBrowserSurface(): React.ReactElement {
           <ExternalLink className="size-4" />
         </BrowserToolbarButton>
       </div>
+      {activePrompt && activePrompt.tabId === activeTab.id ? (
+        <WebPasswordPromptBanner prompt={activePrompt} />
+      ) : null}
       <div className="relative flex min-h-0 flex-1 overflow-hidden">
         <div ref={hostRef} className="relative min-w-0 flex-1 bg-white dark:bg-zinc-950" />
         <LiveSubtitleOverlay />

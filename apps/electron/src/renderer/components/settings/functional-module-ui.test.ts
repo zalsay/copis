@@ -35,7 +35,7 @@ describe('功能模块设置页模型', () => {
       '浏览器自动化内核',
       'Python 3.12 运行环境',
       'Agent QQ 邮箱 CLI',
-      'dsh 运行环境',
+      '创造模式',
     ])
     expect(FUNCTIONAL_MODULE_DEFINITIONS.every((item) => !/Rust|HTTP|API|Electron/.test(`${item.displayName} ${item.description}`))).toBe(true)
   })

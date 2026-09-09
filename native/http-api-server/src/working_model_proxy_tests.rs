@@ -43,7 +43,9 @@ impl EduApiTransport for FixedTransport {
             .to_string()
             .into_bytes()
         } else if request.path == "/api/auth/refresh" {
-            json!({"token": "refreshed-access", "refresh_token": "refreshed-refresh"}).to_string().into_bytes()
+            json!({"token": "refreshed-access", "refresh_token": "refreshed-refresh"})
+                .to_string()
+                .into_bytes()
         } else {
             b"data: {\"id\":\"chunk-1\"}\n\n".to_vec()
         };
@@ -97,7 +99,9 @@ fn dsh_stream_public_request_keeps_reasoning_and_key_across_401_refresh() {
         let mut requests = Vec::new();
         for status in [401, 200] {
             let (mut socket, _) = listener.accept().unwrap();
-            socket.set_read_timeout(Some(std::time::Duration::from_secs(3))).unwrap();
+            socket
+                .set_read_timeout(Some(std::time::Duration::from_secs(3)))
+                .unwrap();
             let mut headers = Vec::new();
             while !headers.ends_with(b"\r\n\r\n") {
                 let mut byte = [0];
@@ -105,26 +109,51 @@ fn dsh_stream_public_request_keeps_reasoning_and_key_across_401_refresh() {
                 headers.push(byte[0]);
             }
             let headers = String::from_utf8(headers).unwrap();
-            let length: usize = headers.lines().filter_map(|line| line.split_once(':'))
-                .find(|(name, _)| name.eq_ignore_ascii_case("content-length")).unwrap().1.trim().parse().unwrap();
+            let length: usize = headers
+                .lines()
+                .filter_map(|line| line.split_once(':'))
+                .find(|(name, _)| name.eq_ignore_ascii_case("content-length"))
+                .unwrap()
+                .1
+                .trim()
+                .parse()
+                .unwrap();
             let mut body = vec![0; length];
             socket.read_exact(&mut body).unwrap();
-            requests.push((headers, serde_json::from_slice::<serde_json::Value>(&body).unwrap()));
+            requests.push((
+                headers,
+                serde_json::from_slice::<serde_json::Value>(&body).unwrap(),
+            ));
             write!(socket, "HTTP/1.1 {status} OK\r\nContent-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{{}}").unwrap();
         }
         requests
     });
     let (auth, transport) = setup();
-    let client = crate::model_request_client::ModelRequestClient::new(&format!("http://{addr}/model-request"), 5).unwrap();
+    let client = crate::model_request_client::ModelRequestClient::new(
+        &format!("http://{addr}/model-request"),
+        5,
+    )
+    .unwrap();
     let proxy = WorkingModelProxy::with_model_client(auth, client);
     let capability = proxy.issue_dsh_capability(Some("high")).unwrap();
-    let mut response = proxy.proxy_stream_with_capability(&capability, br#"{"model":"fast","input":"hello"}"#, None).unwrap();
+    let mut response = proxy
+        .proxy_stream_with_capability(&capability, br#"{"model":"fast","input":"hello"}"#, None)
+        .unwrap();
     let mut body = String::new();
     response.body.read_to_string(&mut body).unwrap();
     assert_eq!(response.status, 200);
     let requests = server.join().unwrap();
-    let header = |index: usize, name: &str| requests[index].0.lines().filter_map(|line| line.split_once(':'))
-        .find(|(key, _)| key.eq_ignore_ascii_case(name)).unwrap().1.trim().to_string();
+    let header = |index: usize, name: &str| {
+        requests[index]
+            .0
+            .lines()
+            .filter_map(|line| line.split_once(':'))
+            .find(|(key, _)| key.eq_ignore_ascii_case(name))
+            .unwrap()
+            .1
+            .trim()
+            .to_string()
+    };
     for (headers, body) in &requests {
         assert!(headers.starts_with("POST /model-request/v1/responses HTTP/1.1"));
         assert_eq!(body["reasoning"]["effort"], "high");
@@ -132,9 +161,24 @@ fn dsh_stream_public_request_keeps_reasoning_and_key_across_401_refresh() {
     assert_eq!(header(0, "idempotency-key"), header(1, "idempotency-key"));
     assert!(header(0, "idempotency-key").len() >= 16);
     assert_eq!(header(1, "authorization"), "Bearer refreshed-access");
-    assert_eq!(header(0, "x-working-model-source-type"), "copis-agent-model");
-    assert_eq!(header(1, "x-working-model-source-type"), "copis-agent-model");
-    assert_eq!(transport.calls.lock().unwrap().iter().filter(|call| call.path == "/api/auth/refresh").count(), 1);
+    assert_eq!(
+        header(0, "x-working-model-source-type"),
+        "copis-agent-model"
+    );
+    assert_eq!(
+        header(1, "x-working-model-source-type"),
+        "copis-agent-model"
+    );
+    assert_eq!(
+        transport
+            .calls
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|call| call.path == "/api/auth/refresh")
+            .count(),
+        1
+    );
 }
 
 #[test]

@@ -23,4 +23,30 @@ describe('浏览器地址栏视觉契约', () => {
     expect(surfaceSource).not.toContain('focus-within:border-primary/50')
     expect(surfaceSource).not.toContain('focus-within:ring-2')
   })
+
+  test('Given 用户点击地址栏 When 触发聚焦或点击 Then 默认全选地址文本', () => {
+    expect(surfaceSource).toContain('onFocus={handleAddressFocus}')
+    expect(surfaceSource).toContain('onMouseUp={handleAddressMouseUp}')
+    expect(surfaceSource).toContain('onBlur={handleAddressBlur}')
+    expect(surfaceSource).toContain('onClick={handleAddressContainerClick}')
+    expect(surfaceSource).toContain('event.currentTarget.select()')
+    expect(surfaceSource).toContain('addressInputRef.current?.select()')
+  })
+
+  test('Given 密码提示与地址栏快捷气泡 When 渲染保存按钮与钥匙图标 Then 均使用 ui-primary 配色', () => {
+    const popoverSource = readFileSync(join(import.meta.dir, 'WebPasswordKeyPopover.tsx'), 'utf8')
+    const bannerSource = readFileSync(join(import.meta.dir, 'WebPasswordPromptBanner.tsx'), 'utf8')
+
+    // 地址栏钥匙图标按钮必须始终采用 ui-primary 配色
+    expect(popoverSource).toContain("text-[var(--ui-primary)]")
+    expect(popoverSource).toContain("style={{ color: 'var(--ui-primary)' }}")
+    expect(popoverSource).toContain("backgroundColor: 'var(--ui-primary)'")
+
+    // 保存密码横幅提示中的钥匙图标与保存按钮必须采用 ui-primary 配色
+    expect(bannerSource).toContain("<KeyRound className=\"size-4 shrink-0 text-[var(--ui-primary)]\" style={{ color: 'var(--ui-primary)' }} />")
+    expect(bannerSource).toContain("backgroundColor: 'var(--ui-primary)'")
+    expect(bannerSource).toContain("color: 'var(--ui-primary-foreground, #ffffff)'")
+  })
 })
+
+

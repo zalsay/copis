@@ -42,4 +42,12 @@ describe('Windows 部署入口的 .env 加载', () => {
     expect(deployScript).toContain("'./runtime/package.json'")
     expect(deployScript).toContain('Read-AlipayBotVersion $alipayBotArchivePath')
   })
+
+  test('-RustOnly / --rust 默认跳过依赖安装，并支持 -Install / --install 显式开启', () => {
+    expect(deployScript).toContain('[switch]$Install')
+    expect(deployScript).toContain("'--install' { $Install = $true }")
+    expect(deployScript).toContain('$hasExplicitInstall')
+    expect(deployScript).toContain('$hasExplicitSkipInstall')
+    expect(deployScript).toContain('elseif (-not $hasExplicitSkipInstall -and $RustOnly)')
+  })
 })

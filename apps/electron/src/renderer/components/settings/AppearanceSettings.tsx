@@ -403,7 +403,7 @@ export function AppearanceSettings(): React.ReactElement {
           {/* 创造模式主题色 */}
           <ThemeColorPickerBlock
             title={`创造模式主题色（${isTargetDark ? '深色' : '浅色'}）`}
-            description={`用于 ${isTargetDark ? '深色' : '浅色'}模式下创造模式（DSH 工作区）的主题强调色与激活边框`}
+            description={`用于 ${isTargetDark ? '深色' : '浅色'}模式下创造模式的主题强调色与激活边框`}
             currentColor={isTargetDark ? creationColorDark : creationColorLight}
             defaultColor={defaultCreationColor}
             presets={CREATION_THEME_COLOR_PRESETS}

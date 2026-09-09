@@ -304,9 +304,7 @@ impl AuthSession {
         let token_endpoint = validate_oidc_endpoint(&token_endpoint, client.base_url())?;
         eprintln!(
             "[HTTP API][OIDC] discovery 成功 issuer={} authorization_endpoint={} token_endpoint={}",
-            issuer,
-            authorization_endpoint.url,
-            token_endpoint.url
+            issuer, authorization_endpoint.url, token_endpoint.url
         );
         let mut state_bytes = [0_u8; 32];
         let mut verifier_bytes = [0_u8; 32];
@@ -332,7 +330,10 @@ impl AuthSession {
             redirect_uri: redirect_uri.to_string(),
             expires_at: now_secs().saturating_add(5 * 60),
         });
-        eprintln!("[HTTP API][OIDC] 授权地址已生成 redirect_uri={}", redirect_uri);
+        eprintln!(
+            "[HTTP API][OIDC] 授权地址已生成 redirect_uri={}",
+            redirect_uri
+        );
         Ok(authorization_url)
     }
 
@@ -621,6 +622,16 @@ impl AuthSession {
             .as_ref()
             .map(|auth| auth.access_token.clone())
             .ok_or(AuthError::NotAuthenticated)
+    }
+
+    pub(crate) fn image_task_identity(&self) -> Result<(u64, String, Option<u64>), AuthError> {
+        let auth = self.auth.lock().unwrap();
+        let auth = auth.as_ref().ok_or(AuthError::NotAuthenticated)?;
+        let user_id = auth.user.as_ref()
+            .and_then(|user| user.get("ID").or_else(|| user.get("id")).or_else(|| user.get("user_id")))
+            .and_then(Value::as_u64).filter(|id| *id > 0)
+            .ok_or(AuthError::NotAuthenticated)?;
+        Ok((user_id, auth.access_token.clone(), auth.expires_at))
     }
 
     fn request_public(

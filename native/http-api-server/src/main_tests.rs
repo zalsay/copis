@@ -247,10 +247,23 @@ fn appends_valid_jsonl_lines_and_rejects_multiline_payloads() {
 }
 
 #[test]
-fn only_allows_vite_origins() {
+fn cors_allows_any_origin_without_bypassing_auth() {
     assert!(is_allowed_origin("http://127.0.0.1:5174"));
     assert!(is_allowed_origin("http://localhost:5174"));
-    assert!(!is_allowed_origin("http://example.com"));
+    assert!(is_allowed_origin("http://127.0.0.1:5175"));
+    assert!(is_allowed_origin("http://example.com"));
+    let headers = super::pi_rpc::sse_headers_with_origin(200, Some("http://example.com"));
+    assert!(headers.contains("Access-Control-Allow-Origin: *\r\n"));
+    assert!(!headers.contains("Access-Control-Allow-Credentials"));
+    let listener = std::net::TcpListener::bind((super::HOST, 0)).unwrap();
+    assert!(listener.local_addr().unwrap().ip().is_loopback());
+    let mut client = std::net::TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+    let (mut server, _) = listener.accept().unwrap();
+    super::send_empty_response(&mut server, 204, Some("http://127.0.0.1:5175"));
+    drop(server);
+    let mut response = String::new();
+    client.read_to_string(&mut response).unwrap();
+    assert!(response.contains("Access-Control-Allow-Origin: *\r\n"));
 }
 
 #[test]

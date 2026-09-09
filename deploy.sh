@@ -45,7 +45,7 @@ load_dotenv "$ROOT_DIR/.env"
 export BUN_INSTALL="${BUN_INSTALL:-$HOME/.bun}"
 export PATH="$BUN_INSTALL/bin:$PATH"
 
-SKIP_INSTALL=0
+SKIP_INSTALL=""
 BUILD_APP=0
 SKIP_RUST_BUILD=0
 SKIP_PUBLISH=0
@@ -95,9 +95,10 @@ show_help() {
 
 选项：
   --skip-install       跳过 bun install --frozen-lockfile
+  --install            强制执行 bun install --frozen-lockfile（覆盖 --rust 默认跳过）
   --build-app          同时构建当前平台 Electron 应用包
   --skip-rust-build    使用已有 Rust 二进制
-  --rust               只发布 Rust HTTP API；每次自动递增 rust-http-api 版本，并校验 COS 中已有其他必要模块
+  --rust               只发布 Rust HTTP API（默认启用 --skip-install）；每次自动递增 rust-http-api 版本，并校验 COS 中已有其他必要模块
   --officecli          只发布 OfficeCLI，保留 COS 中已有其他必要模块
   --node-runtime       只发布 Node.js runtime，保留 COS 中已有其他必要模块
   --alipay-bot         只发布官方支付宝智能体 CLI，保留 COS 中已有其他必要模块
@@ -142,6 +143,9 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --skip-install)
       SKIP_INSTALL=1
+      ;;
+    --install)
+      SKIP_INSTALL=0
       ;;
     --build-app)
       BUILD_APP=1
@@ -297,6 +301,14 @@ while [[ $# -gt 0 ]]; do
   shift
 done
 
+if [[ -z "$SKIP_INSTALL" ]]; then
+  if [[ "$RUST_ONLY" == '1' ]]; then
+    SKIP_INSTALL=1
+  else
+    SKIP_INSTALL=0
+  fi
+fi
+
 if [[ $((RUST_ONLY + OFFICECLI_ONLY + NODE_RUNTIME_ONLY + ALIPAY_BOT_ONLY + PLAYWRIGHT_CORE_ONLY + PYTHON_RUNTIME_ONLY + AGENTLY_CLI_ONLY + DSH_ONLY)) -gt 1 ]]; then
   fail '--rust、--officecli、--node-runtime、--alipay-bot、--playwright-core、--python-runtime、--agently-cli 与 --dsh 不能同时使用。'
 fi
@@ -355,7 +367,7 @@ if [[ -z "$CHANNEL" ]]; then
   fail '发布 channel 不能为空。'
 fi
 
-APP_VERSION="$(cd "$ROOT_DIR" && "$BUN_BIN" -e 'const pkg = JSON.parse(await Bun.file("apps/electron/package.json").text()); console.log(pkg.version)')"
+APP_VERSION="$(cd "$ROOT_DIR" && "$BUN_BIN" scripts/bump-electron-version.ts --get --platform "$PLATFORM" --arch "$ARCH")"
 VERSION="${VERSION:-$APP_VERSION}"
 CLIENT_MIN_VERSION="${CLIENT_MIN_VERSION:-$VERSION}"
 
@@ -662,7 +674,7 @@ if [[ "$BUILD_APP" -eq 1 ]]; then
   else
     run_bun "$APP_DIR" 'Electron 应用构建失败' run build
     run_bun "$APP_DIR" '运行时依赖同步失败' run sync:runtime-deps
-    run_bun "$APP_DIR" 'Linux Electron 打包失败' x electron-builder --linux
+    run_bun "$APP_DIR" 'Linux Electron 打包失败' scripts/package-electron-builder.ts --linux --"$ARCH"
   fi
 fi
 

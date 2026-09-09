@@ -654,10 +654,12 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
               if (resolved) {
                 setImagePath(filePath)
                 setImageDataUrl(resolved.url)
+                setLoadError(null)
                 cacheSet(cacheKey, { oldContent: '', newContent: '', imagePath: filePath, imageDataUrl: resolved.url })
               } else {
                 setImagePath('')
                 setImageDataUrl('')
+                setLoadError('未找到图片文件或路径无法访问')
                 cacheSet(cacheKey, { oldContent: '', newContent: '', imagePath: '', imageDataUrl: '' })
               }
               return
@@ -801,13 +803,13 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
     } else if (isOfficePreview && !officeHtml) {
       message = `无法加载 ${ext === '.pptx' ? 'PPTX' : 'Excel'} 预览`
     } else if (isImage && !imageDataUrl) {
-      message = '图片文件过大，无法在此预览'
+      message = loadError || '无法在此预览图片'
     }
     if (message) {
       toastedPreviewFailRef.current = key
       toast.warning(message)
     }
-  }, [previewOnly, loading, filePath, ext, isLegacyOffice, isPdf, pdfSrc, isDocx, docxHtml, isOfficePreview, officeHtml, isImage, imageDataUrl])
+  }, [previewOnly, loading, filePath, ext, isLegacyOffice, isPdf, pdfSrc, isDocx, docxHtml, isOfficePreview, officeHtml, isImage, imageDataUrl, loadError])
 
   // scrollPosition persistent: module-level Map keyed by sessionId:filePath
   // content changes (refreshVersion bump) → delete stored position;
@@ -1367,7 +1369,11 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
                   </div>
                 </div>
               </div>
-              ) : null
+              ) : (
+                <div className="flex h-full items-center justify-center px-6 text-center text-[12px] text-muted-foreground">
+                  {loadError || '无法加载图片预览'}
+                </div>
+              )
             ) : isDocx ? (
               docxHtml ? (
                 <div

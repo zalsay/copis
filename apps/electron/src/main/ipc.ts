@@ -8,8 +8,8 @@ import { ipcMain, nativeTheme, shell, dialog, BrowserWindow, app, clipboard, nat
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { existsSync, realpathSync, rmSync, readFileSync, writeFileSync, mkdirSync, statSync } from 'node:fs'
 import { writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
-import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, ATTACHMENT_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, FUNCTIONAL_MODULE_IPC_CHANNELS, PROXY_IPC_CHANNELS, AGENT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, WECHAT_IPC_CHANNELS, AGENT_MAIL_IPC_CHANNELS, AUTOMATION_IPC_CHANNELS, PLANNING_IPC_CHANNELS, PLANNING_CONFLICT_ERROR, WORKING_IPC_CHANNELS, WEB_IPC_CHANNELS, BROWSER_WORKFLOW_IPC_CHANNELS, MEMORY_IPC_CHANNELS, FUND_STOCK_IPC_CHANNELS, DSH_CORDIS_IPC_CHANNELS, COPIS_WORKING_CHANNEL_ID, isCopisPermissionMode, isCopisWorkingChannelId, isWorkingMode, normalizePathForCompare, type DshReadFileResult } from '@copis/shared'
+import { homedir, tmpdir } from 'node:os'
+import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, ATTACHMENT_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, FUNCTIONAL_MODULE_IPC_CHANNELS, PROXY_IPC_CHANNELS, AGENT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, WECHAT_IPC_CHANNELS, AGENT_MAIL_IPC_CHANNELS, AUTOMATION_IPC_CHANNELS, PLANNING_IPC_CHANNELS, PLANNING_CONFLICT_ERROR, WORKING_IPC_CHANNELS, WEB_IPC_CHANNELS, WEB_PASSWORD_IPC_CHANNELS, BROWSER_WORKFLOW_IPC_CHANNELS, MEMORY_IPC_CHANNELS, FUND_STOCK_IPC_CHANNELS, DSH_CORDIS_IPC_CHANNELS, COPIS_WORKING_CHANNEL_ID, isCopisPermissionMode, isCopisWorkingChannelId, isWorkingMode, normalizePathForCompare, type DshReadFileResult, type WebPasswordPromptResolveInput, type WebPasswordSettings } from '@copis/shared'
 import { USER_PROFILE_IPC_CHANNELS, SETTINGS_IPC_CHANNELS, SCRATCH_PAD_IPC_CHANNELS, QUICK_TASK_IPC_CHANNELS, VOICE_DICTATION_IPC_CHANNELS, APP_ICON_IPC_CHANNELS, DOCK_BADGE_IPC_CHANNELS, STORAGE_IPC_CHANNELS } from '../types'
 import type {
   QuickTaskSubmitInput,
@@ -205,7 +205,10 @@ import {
   reloadWebTab,
   reorderWebTab,
   updateWebTabBounds,
+  getWebTabContents,
 } from './lib/web-tab-manager'
+import { getWebPasswordService } from './lib/web-password-service'
+import type { SaveLoginInput } from './lib/web-password-database'
 import {
   bindBrowserAgentContext,
   approveBrowserWorkflowDraft,
@@ -292,7 +295,7 @@ import { runAgent, stopAgent, generateAgentTitle, saveFilesToAgentSession, saveF
 import { permissionService } from './lib/agent-permission-service'
 import { askUserService } from './lib/agent-ask-user-service'
 import { exitPlanService } from './lib/agent-exit-plan-service'
-import { getAgentSessionWorkspacePath, getAgentWorkspacesDir, getWorkspaceSkillsDir, getScratchPadPath, getWorkspaceFilesDir } from './lib/config-paths'
+import { getAgentSessionWorkspacePath, getAgentWorkspacesDir, getAttachmentsDir, getWorkspaceSkillsDir, getScratchPadPath, getWorkspaceFilesDir } from './lib/config-paths'
 import { getCachedDefaultAppInfo, saveCachedDefaultAppInfo } from './lib/default-app-cache'
 import { calculateStorageStats, cleanupStorage, cleanupTempFiles } from './lib/storage-service'
 import type { CleanupOptions } from './lib/storage-service'
@@ -410,8 +413,12 @@ const KNOWN_EDITORS = [
  * 攻击者需要先控制 renderer 才能伪造 basePaths，此时已有更大的攻击面。
  */
 function getAuthorizedRoots(options?: FileAccessOptions): string[] {
+  const home = homedir()
   const roots: string[] = [
     getAgentWorkspacesDir(),
+    getAttachmentsDir(),
+    join(home, '.copis', 'attachments'),
+    join(home, '.copis-dev', 'attachments'),
     join(tmpdir(), 'copis-preview'),
   ]
 
@@ -1055,6 +1062,64 @@ export function registerIpcHandlers(): void {
   ipcMain.handle(WEB_IPC_CHANNELS.JAVASCRIPT_PROMPT_CANCEL, (event, requestId: string) => (
     cancelWebJavascriptPromptRequest(requestId, event.sender.id)
   ))
+
+  // ===== 内嵌网页密码安全存储与自动填充 =====
+  ipcMain.handle(WEB_PASSWORD_IPC_CHANNELS.LIST, (_event, searchQuery?: string) => {
+    return getWebPasswordService().listLogins(searchQuery)
+  })
+
+  ipcMain.handle(WEB_PASSWORD_IPC_CHANNELS.GET_BY_ORIGIN, (_event, originUrl: string) => {
+    if (!originUrl) return []
+    return getWebPasswordService().getLoginsByOrigin(originUrl)
+  })
+
+  ipcMain.handle(WEB_PASSWORD_IPC_CHANNELS.REVEAL, (_event, id: string) => {
+    if (!id) return null
+    return getWebPasswordService().revealPassword(id)
+  })
+
+  ipcMain.handle(WEB_PASSWORD_IPC_CHANNELS.SAVE_OR_UPDATE, (_event, input: SaveLoginInput) => {
+    return getWebPasswordService().saveOrUpdateLogin(input)
+  })
+
+  ipcMain.handle(WEB_PASSWORD_IPC_CHANNELS.REMOVE, (_event, id: string) => {
+    if (!id) return false
+    return getWebPasswordService().removeLogin(id)
+  })
+
+  ipcMain.handle(WEB_PASSWORD_IPC_CHANNELS.GET_ACTIVE_PROMPT, (_event, tabId: string) => {
+    if (!tabId) return null
+    return getWebPasswordService().getActivePrompt(tabId)
+  })
+
+  ipcMain.handle(WEB_PASSWORD_IPC_CHANNELS.RESOLVE_PROMPT, async (_event, input: WebPasswordPromptResolveInput) => {
+    await getWebPasswordService().resolvePrompt(input)
+  })
+
+  ipcMain.handle(WEB_PASSWORD_IPC_CHANNELS.LIST_DISABLED_ORIGINS, () => {
+    return getWebPasswordService().listDisabledOrigins()
+  })
+
+  ipcMain.handle(WEB_PASSWORD_IPC_CHANNELS.ADD_DISABLED_ORIGIN, (_event, originUrl: string) => {
+    return getWebPasswordService().addDisabledOrigin(originUrl)
+  })
+
+  ipcMain.handle(WEB_PASSWORD_IPC_CHANNELS.REMOVE_DISABLED_ORIGIN, (_event, id: string) => {
+    return getWebPasswordService().removeDisabledOrigin(id)
+  })
+
+  ipcMain.handle(WEB_PASSWORD_IPC_CHANNELS.FILL_CREDENTIALS, async (_event, { tabId, entryId }: { tabId: string; entryId: string }) => {
+    const contents = getWebTabContents(tabId)
+    return getWebPasswordService().fillCredentials(tabId, entryId, contents)
+  })
+
+  ipcMain.handle(WEB_PASSWORD_IPC_CHANNELS.GET_SETTINGS, () => {
+    return getWebPasswordService().getSettings()
+  })
+
+  ipcMain.handle(WEB_PASSWORD_IPC_CHANNELS.UPDATE_SETTINGS, (_event, partial: Partial<WebPasswordSettings>) => {
+    return getWebPasswordService().updateSettings(partial)
+  })
 
   // ===== Browser Workflow（仅高层能力；CDP 不通过 IPC 暴露） =====
   ipcMain.handle(BROWSER_WORKFLOW_IPC_CHANNELS.BIND_CONTEXT, async (event, sessionId: string, context: BrowserAgentContext) => {
@@ -3547,10 +3612,12 @@ export function registerIpcHandlers(): void {
   ipcMain.handle(
     AGENT_IPC_CHANNELS.OPEN_FILE,
     async (_, filePath: string, access?: FileAccessOptions): Promise<void> => {
-      const { resolve } = await import('node:path')
+      const { resolveTargetPath } = await import('./lib/file-preview-service')
 
-      const safePath = resolve(filePath)
-      if (!isPathAllowed(safePath, normalizeFileAccessOptions(access))) {
+      const options = normalizeFileAccessOptions(access)
+      const candidateBases = getPreviewCandidateBasePaths(options)
+      const safePath = resolveTargetPath(filePath, candidateBases)
+      if (!isPathAllowed(safePath, options)) {
         throw new Error('访问路径超出当前会话的授权范围')
       }
 

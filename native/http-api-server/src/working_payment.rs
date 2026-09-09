@@ -334,8 +334,7 @@ pub fn poll_desktop_payments_once<P: PaymentWorker>(
                 skill_market_state,
                 payment_account_key,
                 payment_id,
-            )
-            {
+            ) {
                 Ok(_) => false,
                 Err(error) => error.code != "desktop_payment_check_in_progress",
             }
@@ -370,11 +369,9 @@ pub fn handle_request<P: PaymentWorker>(
         WorkingPaymentRoute::ListDiamondPackages => {
             state.request_data("GET", "/api/pay/alipay/diamond-packages", None)?
         }
-        WorkingPaymentRoute::PendingDiamondPurchase => state.request_data(
-            "GET",
-            "/api/pay/alipay/diamond-purchases/pending",
-            None,
-        )?,
+        WorkingPaymentRoute::PendingDiamondPurchase => {
+            state.request_data("GET", "/api/pay/alipay/diamond-purchases/pending", None)?
+        }
         WorkingPaymentRoute::CreateDiamondPurchase => {
             let package_id = parse_package_id(body)?;
             create_desktop_payment(
@@ -401,16 +398,14 @@ pub fn handle_request<P: PaymentWorker>(
             &format!("/api/users/orders/{}/payment", encode_identifier(&order_id)),
             None,
         )?,
-        WorkingPaymentRoute::CheckPayment { payment_id } => {
-            check_desktop_payment(
-                payment_state,
-                worker,
-                workspace,
-                state,
-                required_payment_account_key(payment_account_key.as_deref())?,
-                &payment_id,
-            )?
-        }
+        WorkingPaymentRoute::CheckPayment { payment_id } => check_desktop_payment(
+            payment_state,
+            worker,
+            workspace,
+            state,
+            required_payment_account_key(payment_account_key.as_deref())?,
+            &payment_id,
+        )?,
         WorkingPaymentRoute::CancelDiamondPayment { payment_id } => {
             cancel_desktop_payment(payment_state, state, &payment_id)?
         }
@@ -451,7 +446,8 @@ fn create_desktop_payment<P: PaymentWorker>(
             &capability,
             Some(&prepare_body),
         )?;
-        let prepared_payment = required_object_field(&prepared, "payment", "支付准备响应缺少支付会话")?;
+        let prepared_payment =
+            required_object_field(&prepared, "payment", "支付准备响应缺少支付会话")?;
         let payment_id = required_string_field(
             &prepared_payment,
             "payment_id",
@@ -564,7 +560,8 @@ fn reuse_pending_diamond_payment(
         Some(payment) => payment,
         None => return Ok(None),
     };
-    if required_string_field(&payment, "payment_id", "待支付订单缺少支付会话 ID")? != payment_id {
+    if required_string_field(&payment, "payment_id", "待支付订单缺少支付会话 ID")? != payment_id
+    {
         return Err(SkillMarketError::new(
             409,
             "desktop_payment_context_changed",
@@ -719,11 +716,7 @@ fn rehydrate_desktop_payment_flow(
 fn pending_diamond_payment(
     skill_market_state: &SkillMarketState,
 ) -> Result<Value, SkillMarketError> {
-    skill_market_state.request_data(
-        "GET",
-        "/api/pay/alipay/diamond-purchases/pending",
-        None,
-    )
+    skill_market_state.request_data("GET", "/api/pay/alipay/diamond-purchases/pending", None)
 }
 
 fn rehydrate_desktop_payment_flow_from_pending(
@@ -853,7 +846,9 @@ fn issue_desktop_capability(
     Ok(capability)
 }
 
-fn payment_request_context(context: &Value) -> Result<(String, PaymentRequestContext), SkillMarketError> {
+fn payment_request_context(
+    context: &Value,
+) -> Result<(String, PaymentRequestContext), SkillMarketError> {
     let payment_needed = context
         .get("payment_needed")
         .ok_or_else(|| invalid_desktop_payment_response("支付上下文缺少 Payment-Needed"))?;
@@ -1051,13 +1046,15 @@ fn invalid_desktop_payment_response(message: impl Into<String>) -> SkillMarketEr
 }
 
 fn required_payment_account_key(value: Option<&str>) -> Result<&str, SkillMarketError> {
-    value.filter(|value| !value.trim().is_empty()).ok_or_else(|| {
-        SkillMarketError::new(
-            409,
-            "desktop_payment_identity_missing",
-            "本机支付身份尚未同步，请重新登录 Copis Working 后重试",
-        )
-    })
+    value
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| {
+            SkillMarketError::new(
+                409,
+                "desktop_payment_identity_missing",
+                "本机支付身份尚未同步，请重新登录 Copis Working 后重试",
+            )
+        })
 }
 
 fn is_terminal_payment_status(payment: &Value) -> bool {

@@ -56,4 +56,14 @@ describe('模型管理用户友好、保存与测试连接功能契约', () => {
     expect(settingsSource).toContain('升级 VIP')
     expect(settingsSource).not.toContain('在 Composer 中使用')
   })
+
+  test('Given 模型管理设置源码 When 检查模块构成 Then 包含网络代理设置模块 ProxySettingsCard 且置于顶部', () => {
+    expect(settingsSource).toContain('ProxySettingsCard')
+    expect(settingsSource).toContain('<ProxySettingsCard')
+    const proxyIndex = settingsSource.indexOf('<ProxySettingsCard')
+    const vipPromptIndex = settingsSource.indexOf('自定义模型仅对 VIP 开放')
+    expect(proxyIndex).toBeGreaterThan(0)
+    expect(vipPromptIndex).toBeGreaterThan(proxyIndex)
+  })
 })
+

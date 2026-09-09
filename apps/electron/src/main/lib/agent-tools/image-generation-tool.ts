@@ -9,6 +9,8 @@
 import type { ToolCall, ToolResult, ToolDefinition } from '@copis/core'
 import type { AgentToolMeta, FileAttachment } from '@copis/shared'
 import { randomUUID } from 'node:crypto'
+import { existsSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { getWorkingApiClient } from '../working-api-service'
 import { saveAttachment } from '../attachment-service'
 
@@ -18,6 +20,8 @@ import { saveAttachment } from '../attachment-service'
 export interface NanoBananaContext {
   /** 会话 ID（用于保存附件与后端 run_id） */
   conversationId: string
+  /** 工作区目录路径（用于同步保存图片到工作区） */
+  workspaceDir?: string
 }
 
 // ===== 工具元数据 =====
@@ -184,6 +188,15 @@ export async function executeNanoBananaTool(
       mediaType,
       data: imageBase64,
     })
+
+    if (context.workspaceDir && existsSync(context.workspaceDir)) {
+      try {
+        const workspaceFilePath = join(context.workspaceDir, attachmentResult.attachment.filename)
+        writeFileSync(workspaceFilePath, Buffer.from(imageBase64, 'base64'))
+      } catch (err) {
+        console.warn('[image-generation-tool] 同步图片到工作区失败:', err)
+      }
+    }
 
     const deductionText = result.deductedTokens && result.deductedTokens > 0
       ? `（消耗 ${result.deductedTokens} 钻石${result.balanceAfter != null ? `，余额 ${result.balanceAfter}` : ''}）`

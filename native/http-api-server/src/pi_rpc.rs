@@ -74,12 +74,7 @@ pub fn sse_headers(status: u16) -> String {
 pub fn sse_headers_with_origin(status: u16, origin: Option<&str>) -> String {
     let cors = origin
         .filter(|value| super::is_allowed_origin(value))
-        .map(|value| {
-            format!(
-                "Access-Control-Allow-Origin: {}\r\nAccess-Control-Allow-Methods: GET,POST,PUT,PATCH,DELETE,OPTIONS\r\nAccess-Control-Allow-Headers: Content-Type, x-copis-web-token\r\n",
-                value
-            )
-        })
+        .map(|_| "Access-Control-Allow-Origin: *\r\nAccess-Control-Allow-Methods: GET,POST,PUT,PATCH,DELETE,OPTIONS\r\nAccess-Control-Allow-Headers: Content-Type, x-copis-web-token\r\n".to_string())
         .unwrap_or_default();
     format!(
         "HTTP/1.1 {}\r\nVary: Origin\r\n{}Content-Type: text/event-stream; charset=utf-8\r\nCache-Control: no-cache\r\nConnection: keep-alive\r\nX-Accel-Buffering: no\r\n\r\n",

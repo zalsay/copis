@@ -899,6 +899,7 @@ function buildNanoBananaTools(sdk: PiSdk, ctx: PiBuiltinToolsContext): ToolDefin
           { id: toolCallId, name: 'generate_image', arguments: args },
           {
             conversationId: ctx.sessionId,
+            workspaceDir: ctx.allowedRoots?.[0],
           },
         )
         if (toolResult.isError) {

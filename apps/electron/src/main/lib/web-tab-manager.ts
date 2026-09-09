@@ -5,11 +5,13 @@
  * 网页页签按需挂载 Chrome DevTools Protocol（基于 CdpSessionRouter Per-Tab Lease 引用计数管理）。
  */
 
-import { BrowserWindow, shell, WebContentsView } from 'electron'
+import { BrowserWindow, shell, WebContentsView, type WebContents } from 'electron'
 import { randomUUID } from 'node:crypto'
 import { join } from 'node:path'
-import { WEB_IPC_CHANNELS, type BrowserPageSnapshot } from '@copis/shared'
+import { WEB_IPC_CHANNELS, WEB_PASSWORD_IPC_CHANNELS, type BrowserPageSnapshot } from '@copis/shared'
 import { getPersistedWebTabs, savePersistedWebTabs } from './web-tab-session-service'
+import { getWebPasswordService } from './web-password-service'
+import { normalizeOrigin } from './web-password-database'
 import { httpApiPortArgument, httpApiWebTokenArgument } from './http-api-web-token'
 import { moveWebTab } from './web-tab-order'
 import { createWebTabWindowOpenHandler, installNativeWebPopupWindow } from './web-tab-native-popup'
@@ -680,15 +682,30 @@ function installWebContentsHandlers(record: WebTabRecord): void {
 
   contents.on('dom-ready', () => {
     void fetchDomFavicons()
+    if (!record.workflowOwned) {
+      void getWebPasswordService().handlePageDomReady(record.state.id, contents)
+    }
   })
 
   contents.on('did-finish-load', () => {
     void fetchDomFavicons()
+    if (!record.workflowOwned) {
+      void getWebPasswordService().handlePageDomReady(record.state.id, contents)
+    }
+  })
+
+  contents.on('console-message', (_event, _level, message) => {
+    if (!record.workflowOwned) {
+      getWebPasswordService().handleConsoleMessage(record.state.id, contents, message)
+    }
   })
 
   contents.on('did-navigate', (_event, url) => {
     if (isHttpWebUrl(url)) record.hasOpenedAddress = true
     const previousUrl = record.state.url
+    if (previousUrl && normalizeOrigin(previousUrl) !== normalizeOrigin(url)) {
+      getWebPasswordService().clearPrompt(record.state.id)
+    }
     refreshState(record, {
       url,
       isLoading: false,
@@ -707,6 +724,9 @@ function installWebContentsHandlers(record: WebTabRecord): void {
       if (isHttpWebUrl(url)) record.hasOpenedAddress = true
       refreshState(record, { url })
       emitWebTabLifecycle({ type: 'navigated', tabId: record.state.id, workflowOwned: record.workflowOwned, url, snapshot: getSnapshot() })
+      if (!record.workflowOwned) {
+        void getWebPasswordService().handlePageDomReady(record.state.id, contents)
+      }
     }
   })
 
@@ -809,6 +829,11 @@ function installWebContentsHandlers(record: WebTabRecord): void {
 /** 设置承载 WebContentsView 的主窗口。 */
 export function setWebTabHostWindow(window: BrowserWindow): void {
   hostWindow = window
+  getWebPasswordService().setPromptNotifier((tabId, prompt) => {
+    if (hostWindow && !hostWindow.isDestroyed()) {
+      hostWindow.webContents.send(WEB_PASSWORD_IPC_CHANNELS.PROMPT_CHANGED, { tabId, prompt })
+    }
+  })
   for (const record of records.values()) {
     hostWindow.contentView.addChildView(record.view)
   }
@@ -1323,11 +1348,17 @@ export function closeWebTab(tabId: string): WebTabsSnapshot {
   }
 
   if (!record.view.webContents.isDestroyed()) record.view.webContents.close({ waitForBeforeUnload: false })
+  getWebPasswordService().clearPrompt(tabId)
   persistTabs()
   applyActiveView()
   emitSnapshot()
   emitWebTabLifecycle({ type: 'closed', tabId, snapshot: getSnapshot() })
   return getSnapshot()
+}
+
+/** 获取指定网页页签的 WebContents 实例。 */
+export function getWebTabContents(tabId: string): WebContents | undefined {
+  return records.get(tabId)?.view.webContents
 }
 
 /** 导航到地址栏输入的网页。 */

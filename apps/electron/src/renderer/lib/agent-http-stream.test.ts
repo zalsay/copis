@@ -1,11 +1,13 @@
 import { afterEach, describe, expect, mock, test } from 'bun:test'
 import type { AgentQueueMessageInput } from '@copis/shared'
 import { AgentHttpStreamClient } from './agent-http-stream'
+import { setHttpApiWebToken } from './http-api-web-token'
 
 const originalFetch = globalThis.fetch
 
 afterEach(() => {
   globalThis.fetch = originalFetch
+  setHttpApiWebToken('')
 })
 
 function installFetch(fetchMock: typeof originalFetch): void {
@@ -23,6 +25,17 @@ function queueInput(): AgentQueueMessageInput {
 }
 
 describe('AgentHttpStreamClient queue', () => {
+  test('preload 注入令牌后 Agent 请求携带认证头', async () => {
+    setHttpApiWebToken('preload-agent-token')
+    installFetch(Object.assign(
+      mock(async (_input: RequestInfo | URL, init?: RequestInit) => {
+        expect(new Headers(init?.headers).get('x-copis-web-token')).toBe('preload-agent-token')
+        return new Response(JSON.stringify({ accepted: true, uuid: 'message-1' }), { status: 202 })
+      }),
+      { preconnect: originalFetch.preconnect },
+    ))
+    await expect(new AgentHttpStreamClient().queue(queueInput())).resolves.toBe('message-1')
+  })
   test('Given queue 请求成功 When服务端确认 Then返回消息 UUID 并发送正确请求', async () => {
     const fetchMock = mock(async (input: RequestInfo | URL, init?: RequestInit) => {
       expect(String(input)).toBe('http://127.0.0.1:4321/api/agent/sessions/session%2F1/queue')

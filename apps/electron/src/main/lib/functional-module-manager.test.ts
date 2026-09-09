@@ -211,12 +211,12 @@ describe('COS 功能模块统一管理', () => {
     })
   })
 
-  test('模块状态注册表包含 dsh 运行环境且标记为必选', () => {
+  test('模块状态注册表包含创造模式且标记为必选', () => {
     const status = getFunctionalModuleStatuses(createRoot()).find((item) => item.name === 'dsh')
 
     expect(status).toMatchObject({
       name: 'dsh',
-      displayName: 'dsh 运行环境',
+      displayName: '创造模式',
       required: true,
     })
   })

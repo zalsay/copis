@@ -417,9 +417,11 @@ function buildRuntimeEnv(
   proxyUrl: string | undefined,
   workspace: AgentWorkspace | undefined,
   workspaceSlug: string | undefined,
+  inheritProcessProxy: boolean = false,
 ): ReturnType<typeof buildAgentRuntimeEnv> {
   const base = buildAgentRuntimeEnv({
     proxyUrl,
+    inheritProcessProxy,
     runtimeStatus: getRuntimeStatus(),
     windowsShellPreference: settings.windowsShellPreference,
     officeCliPath: getFunctionalModulePath('officecli'),
@@ -587,8 +589,9 @@ export async function prepareAgentRpcRun(input: AgentSendInput): Promise<PiWorke
   const existingSdkSessionId = session.sdkSessionId
   const isAppConnector = isAppConnectorSession(session, getTrustedAgentExternalSource(input.sessionId))
   const directories = uniqueDirectories(input, session, workspace, isAppConnector)
-  const proxyUrl = await getEffectiveProxyUrl()
-  const runtimeEnv = buildRuntimeEnv(settings, proxyUrl, workspace, workspaceSlug)
+  const isCustomModel = Boolean(customModelRuntime) || isWorkingCustomModelChannelId(channelId)
+  const proxyUrl = isCustomModel ? await getEffectiveProxyUrl() : undefined
+  const runtimeEnv = buildRuntimeEnv(settings, proxyUrl, workspace, workspaceSlug, isCustomModel)
   const compactRequest = input.userMessage.trim() === '/compact'
   const mentionedToolsPrompt = buildMentionedToolsPrompt(input.mentionedSkills, input.mentionedMcpServers)
   const enrichedUserMessage = mentionedToolsPrompt

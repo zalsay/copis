@@ -35,6 +35,13 @@ import { RESERVED_BUILTIN_KEYS } from './builtin-mcp/baseline'
 import { inferMcpTransportType, normalizeMcpTransportType, normalizeOptionalMemoryPolicy } from '@copis/shared'
 import type { AgentWorkspace, CreateAgentWorkspaceInput, LocalProjectRootStatus, MemoryPolicy, UpdateAgentWorkspaceInput, WorkspaceMcpConfig, SkillMeta, SkillImportSource, SkillMarketSource, OtherWorkspaceSkillsGroup, WorkspaceCapabilities, SkillFileNode, SkillFileContent } from '@copis/shared'
 import { filterAttachedPaths, requireAttachedPath } from './attached-paths'
+import {
+  ensureSkillDirectoryFrontmatter,
+  ensureSkillPathsSanitized,
+  parseSkillFrontmatterInfo,
+} from './skill-sanitizer'
+
+export { ensureSkillDirectoryFrontmatter, ensureSkillPathsSanitized } from './skill-sanitizer'
 
 interface AgentWorkspacesIndex {
   version: number
@@ -1315,60 +1322,18 @@ export function getWorkspaceSkills(workspaceSlug: string): SkillMeta[] {
 
 /** 解析 SKILL.md 的 YAML frontmatter，支持单行值、block scalar（`|` / `>`）和多行缩进 */
 function parseSkillFrontmatter(content: string, slug: string, enabled: boolean): SkillMeta {
-  const meta: SkillMeta = { slug, name: slug, enabled }
-
-  // 移除 UTF-8 BOM（﻿），确保 YAML frontmatter 匹配不受 BOM 干扰
-  if (content.charCodeAt(0) === 0xFEFF) content = content.slice(1)
-
-  const fmMatch = content.match(/^---\s*\n([\s\S]*?)\n---/)
-  if (!fmMatch) return meta
-
-  const yaml = fmMatch[1]
-  if (!yaml) return meta
-
-  const validKeys = new Set(['name', 'displayName', 'description', 'group', 'icon', 'version', 'category'])
-  const entries: Record<string, string> = {}
-  let currentKey = ''
-  let isFolded = false
-
-  for (const line of yaml.split('\n')) {
-    const indented = /^\s/.test(line)
-
-    if (!indented) {
-      const colonIdx = line.indexOf(':')
-      if (colonIdx === -1) { currentKey = ''; continue }
-
-      const key = line.slice(0, colonIdx).trim()
-      const raw = line.slice(colonIdx + 1).trim()
-
-      if (!validKeys.has(key)) { currentKey = ''; isFolded = false; continue }
-
-      if (raw === '|' || raw === '>') {
-        currentKey = key
-        isFolded = raw === '>'
-        entries[key] = ''
-        continue
-      }
-
-      currentKey = key
-      isFolded = false
-      entries[key] = raw.replace(/^["']|["']$/g, '')
-    } else if (currentKey) {
-      const text = line.trim()
-      if (!text) { if (entries[currentKey]) entries[currentKey] += '\n'; continue }
-      const sep = isFolded ? ' ' : '\n'
-      entries[currentKey] = entries[currentKey] ? entries[currentKey] + sep + text : text
-    }
+  const info = parseSkillFrontmatterInfo(content)
+  const meta: SkillMeta = {
+    slug,
+    name: info.name || slug,
+    enabled,
+    ...(info.displayName ? { displayName: info.displayName } : {}),
+    ...(info.description ? { description: info.description } : {}),
+    ...(info.group ? { group: info.group } : {}),
+    ...(info.icon ? { icon: info.icon } : {}),
+    ...(info.version ? { version: info.version } : {}),
+    ...(info.category ? { category: info.category } : {}),
   }
-
-  if (entries.name) meta.name = entries.name.trim()
-  if (entries.displayName) meta.displayName = entries.displayName.trim()
-  if (entries.description) meta.description = entries.description.trim()
-  if (entries.group) meta.group = entries.group.trim()
-  if (entries.icon) meta.icon = entries.icon.trim()
-  if (entries.version) meta.version = entries.version.trim()
-  if (entries.category) meta.category = entries.category.trim()
-
   return meta
 }
 
@@ -1421,10 +1386,12 @@ function scanSkillsInDir(dir: string, enabled: boolean): SkillMeta[] {
     for (const entry of entries) {
       if (!isSkillDirectoryEntry(dir, entry)) continue
 
-      const skillMdPath = join(dir, entry.name, 'SKILL.md')
+      const skillDir = join(dir, entry.name)
+      const skillMdPath = join(skillDir, 'SKILL.md')
       if (!existsSync(skillMdPath)) continue
 
       try {
+        ensureSkillDirectoryFrontmatter(skillDir, entry.name)
         const content = readFileSync(skillMdPath, 'utf-8')
         const meta = parseSkillFrontmatter(content, entry.name, enabled)
 
@@ -1706,6 +1673,7 @@ export function writeWorkspaceSkillContent(workspaceSlug: string, skillSlug: str
   const dir = resolveSkillDir(workspaceSlug, skillSlug)
   if (!dir) throw new Error(`Skill 不存在: ${workspaceSlug}/${skillSlug}`)
   writeFileSync(join(dir, 'SKILL.md'), content, 'utf-8')
+  ensureSkillDirectoryFrontmatter(dir, skillSlug)
   console.log(`[Agent 工作区] 已更新 SKILL.md: ${workspaceSlug}/${skillSlug}`)
 }
 

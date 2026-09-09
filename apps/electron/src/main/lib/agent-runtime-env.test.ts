@@ -181,4 +181,33 @@ describe('Agent Windows Shell 运行环境', () => {
       PATH: '/Users/test/.copis/modules/versions/dsh/0.1.2/bin:/usr/bin:/bin',
     })
   })
+
+  test('Given 指定代理 URL When 构建 Agent 环境 Then 注入 HTTP/HTTPS 代理环境变量', () => {
+    const result = buildAgentRuntimeEnv({
+      bundledCliPath: '',
+      proxyUrl: 'http://127.0.0.1:7890',
+      processEnv: {},
+    })
+
+    expect(result.env.HTTP_PROXY).toBe('http://127.0.0.1:7890')
+    expect(result.env.HTTPS_PROXY).toBe('http://127.0.0.1:7890')
+    expect(result.env.ALL_PROXY).toBe('http://127.0.0.1:7890')
+  })
+
+  test('Given 非自定义模型请求 (inheritProcessProxy: false) When 宿主环境配置了代理 Then 隔离并保持直连', () => {
+    const result = buildAgentRuntimeEnv({
+      bundledCliPath: '',
+      proxyUrl: undefined,
+      inheritProcessProxy: false,
+      processEnv: {
+        HTTP_PROXY: 'http://127.0.0.1:8888',
+        HTTPS_PROXY: 'http://127.0.0.1:8888',
+        ALL_PROXY: 'http://127.0.0.1:8888',
+      },
+    })
+
+    expect(result.env.HTTP_PROXY).toBeUndefined()
+    expect(result.env.HTTPS_PROXY).toBeUndefined()
+    expect(result.env.ALL_PROXY).toBeUndefined()
+  })
 })

@@ -16,6 +16,8 @@ export interface AgentRuntimeEnv {
 
 export interface BuildAgentRuntimeEnvOptions {
   proxyUrl?: string
+  /** 当未指定 proxyUrl 时，是否从 process.env 中继承代理环境变量（默认 true，非自定义模型环境应传 false 保持直连） */
+  inheritProcessProxy?: boolean
   runtimeStatus?: RuntimeStatus | null
   windowsShellPreference?: WindowsShellPreference
   bundledCliPath?: string
@@ -96,7 +98,11 @@ function dirnameForPlatform(path: string, platform: NodeJS.Platform): string {
   return platform === 'win32' ? win32.dirname(path) : dirname(path)
 }
 
-function collectProxyEnv(proxyUrl: string | undefined, processEnv: NodeJS.ProcessEnv): Record<string, string> {
+function collectProxyEnv(
+  proxyUrl: string | undefined,
+  processEnv: NodeJS.ProcessEnv,
+  inheritProcessProxy: boolean = true,
+): Record<string, string> {
   const env: Record<string, string> = {}
   const trimmedProxyUrl = proxyUrl?.trim()
   const setProxyEnv = (key: string, value: string): void => {
@@ -108,7 +114,7 @@ function collectProxyEnv(proxyUrl: string | undefined, processEnv: NodeJS.Proces
     for (const key of PROXY_ENV_KEYS) {
       setProxyEnv(key, trimmedProxyUrl)
     }
-  } else {
+  } else if (inheritProcessProxy) {
     for (const key of PROXY_ENV_KEYS) {
       const value = getCaseInsensitiveEnvValue(processEnv, key)
       if (value) setProxyEnv(key, value)
@@ -251,7 +257,7 @@ export function buildAgentRuntimeEnv(options: BuildAgentRuntimeEnvOptions = {}):
     env[pathKey] = enhancedPath
   }
 
-  Object.assign(env, collectProxyEnv(options.proxyUrl, processEnv))
+  Object.assign(env, collectProxyEnv(options.proxyUrl, processEnv, options.inheritProcessProxy ?? true))
 
   if (platform === 'win32') {
     const shellRuntimeEnv = collectWindowsShellEnv(

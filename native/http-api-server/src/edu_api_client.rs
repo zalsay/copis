@@ -7,6 +7,7 @@ pub const DEFAULT_BACKEND_URL: &str = "https://pie.meetlife.com.cn/pi-api";
 pub const MAX_EDU_REQUEST_BODY_BYTES: usize = 10 * 1024 * 1024;
 pub const MAX_EDU_RESPONSE_BODY_BYTES: u64 = 10 * 1024 * 1024;
 pub const DEFAULT_MAX_CONCURRENT_REQUESTS: usize = 32;
+pub const IMAGE_GENERATION_TIMEOUT_SECS: u64 = 300;
 
 pub struct EduApiRequest {
     pub method: String,
@@ -122,6 +123,10 @@ impl EduApiClient {
 
         let code = public_error_code(response.status, &response.body);
         let message = public_error_message(response.status, &response.body);
+        eprintln!(
+            "[HTTP API][edu-api] 上游请求失败 status={} code={} message={}",
+            response.status, code, message
+        );
         Err(EduApiError::Upstream {
             status: response.status,
             code,
@@ -235,6 +240,7 @@ struct UreqEduApiTransport {
     base_url: String,
     api_agent: ureq::Agent,
     stream_agent: ureq::Agent,
+    image_agent: ureq::Agent,
 }
 
 impl UreqEduApiTransport {
@@ -254,6 +260,13 @@ impl UreqEduApiTransport {
             .http_status_as_error(false)
             .build()
             .new_agent();
+        let image_agent = ureq::Agent::config_builder()
+            .timeout_global(Some(std::time::Duration::from_secs(
+                IMAGE_GENERATION_TIMEOUT_SECS,
+            )))
+            .http_status_as_error(false)
+            .build()
+            .new_agent();
 
         if let Some(proxy) = stream_agent.config().proxy() {
             eprintln!(
@@ -265,6 +278,10 @@ impl UreqEduApiTransport {
                 api_timeout_secs,
                 stream_timeout_secs
             );
+            eprintln!(
+                "[HTTP API][edu-api] image_timeout={}s",
+                IMAGE_GENERATION_TIMEOUT_SECS
+            );
         } else {
             eprintln!(
                 "[HTTP API][edu-api] transport 初始化 base_url={} proxy=none api_timeout={}s stream_timeout={}s",
@@ -272,11 +289,16 @@ impl UreqEduApiTransport {
                 api_timeout_secs,
                 stream_timeout_secs
             );
+            eprintln!(
+                "[HTTP API][edu-api] image_timeout={}s",
+                IMAGE_GENERATION_TIMEOUT_SECS
+            );
         }
         Ok(Self {
             base_url,
             api_agent,
             stream_agent,
+            image_agent,
         })
     }
 }
@@ -313,7 +335,9 @@ impl EduApiTransport for UreqEduApiTransport {
             .body(request.body.unwrap_or_default())
             .map_err(|_| EduApiError::InvalidConfiguration("edu-api 请求构造失败".to_string()))?;
         let is_stream = is_stream_path(&request.path);
-        let agent = if is_stream {
+        let agent = if request.path == "/api/working/images/generate" {
+            &self.image_agent
+        } else if is_stream {
             &self.stream_agent
         } else {
             &self.api_agent
@@ -499,8 +523,13 @@ fn public_error_code(status: u16, body: &[u8]) -> String {
 }
 
 fn public_error_message(status: u16, body: &[u8]) -> String {
-    serde_json::from_slice::<Value>(body)
-        .ok()
+    let parsed = serde_json::from_slice::<Value>(body).ok();
+    let detail = parsed
+        .as_ref()
+        .and_then(|value| value.get("detail").and_then(Value::as_str))
+        .filter(|detail| !detail.trim().is_empty());
+    let base_message = parsed
+        .as_ref()
         .and_then(|value| {
             value
                 .get("message")
@@ -518,9 +547,21 @@ fn public_error_message(status: u16, body: &[u8]) -> String {
                     })
                 })
         })
-        .filter(|message| !message.trim().is_empty())
-        .map(|message| message.chars().take(512).collect())
-        .unwrap_or_else(|| format!("edu-api 请求失败（HTTP {}）", status))
+        .filter(|message| !message.trim().is_empty());
+
+    let message = match (base_message, detail) {
+        (Some(base), Some(detail)) => {
+            if base.contains(detail) {
+                base
+            } else {
+                format!("{}: {}", base, detail)
+            }
+        }
+        (Some(base), None) => base,
+        (None, Some(detail)) => detail.to_string(),
+        (None, None) => format!("edu-api 请求失败（HTTP {}）", status),
+    };
+    message.chars().take(512).collect()
 }
 
 fn sanitize_transport_error(message: &str) -> String {

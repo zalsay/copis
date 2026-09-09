@@ -572,11 +572,7 @@ pub fn handle_request(
     }
 }
 
-fn valid_text(
-    value: Option<&str>,
-    name: &str,
-    max_bytes: usize,
-) -> Result<String, AgentMailError> {
+fn valid_text(value: Option<&str>, name: &str, max_bytes: usize) -> Result<String, AgentMailError> {
     let value = value
         .map(str::trim)
         .filter(|value| !value.is_empty())

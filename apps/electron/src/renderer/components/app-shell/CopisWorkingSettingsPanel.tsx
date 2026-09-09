@@ -15,6 +15,7 @@ import {
   HardDrive,
   HardDriveDownload,
   Info,
+  KeyRound,
   LayoutList,
   LogOut,
   MessageSquare,
@@ -61,6 +62,7 @@ import { MigrationSettings } from '@/components/settings/MigrationSettings'
 import { StorageSettings } from '@/components/settings/StorageSettings'
 import { VoiceInputSettings } from '@/components/settings/VoiceInputSettings'
 import { ModelManagementSettings } from '@/components/settings/ModelManagementSettings'
+import { PasswordManagerSettings } from '@/components/settings/PasswordManagerSettings'
 import {
   formatWorkingDiscount,
   formatWorkingLedgerDescription,
@@ -141,6 +143,12 @@ export const WORKING_SETTINGS_MENU: readonly WorkingSettingsMenuItem[] = [
     label: '菜单管理',
     description: '管理左侧边栏导航菜单项的显示与隐藏。',
     icon: LayoutList,
+  },
+  {
+    id: 'passwords',
+    label: '密码管理',
+    description: '管理内嵌浏览器保存的网站账号密码与黑名单。',
+    icon: KeyRound,
   },
   {
     id: 'about',
@@ -433,6 +441,7 @@ export function CopisWorkingSettingsPanel({ onClose }: CopisWorkingSettingsPanel
             {activeSection === 'storage' && <StorageSettings />}
             {activeSection === 'appearance' && <AppearanceSettings />}
             {activeSection === 'menu-management' && <MenuManagementSettings />}
+            {activeSection === 'passwords' && <PasswordManagerSettings />}
             {activeSection === 'about' && <AboutUpdatesSettings />}
           </div>
         </main>

@@ -1,6 +1,6 @@
 {
   "name": "@copis/electron",
-  "version": "0.0.81",
+  "version": "0.0.82",
   "description": "Copis Working desktop client - Electron App",
   "main": "dist/main.cjs",
   "author": {
@@ -40,11 +40,11 @@
     "start": "bun run build && bunx electron .",
     "typecheck": "tsc --noEmit",
     "generate:icons": "cd resources && ./generate-icons.sh",
-    "pack": "bun run build && bun run sync:runtime-deps && electron-builder --dir",
-    "dist": "bun run build && bun run sync:runtime-deps && electron-builder",
-    "dist:mac": "bun run build && bun run sync:runtime-deps && electron-builder --mac",
-    "dist:win": "bun run build && bun run sync:runtime-deps && electron-builder --win",
-    "dist:linux": "bun run build && bun run sync:runtime-deps && electron-builder --linux",
+    "pack": "bun run build && bun run sync:runtime-deps && bun scripts/package-electron-builder.ts --dir",
+    "dist": "bun run build && bun run sync:runtime-deps && bun scripts/package-electron-builder.ts",
+    "dist:mac": "bun run build && bun run sync:runtime-deps && bun scripts/package-electron-builder.ts --mac",
+    "dist:win": "bun run build && bun run sync:runtime-deps && bun scripts/package-electron-builder.ts --win",
+    "dist:linux": "bun run build && bun run sync:runtime-deps && bun scripts/package-electron-builder.ts --linux",
     "dist:visual": "bun run scripts/dist.ts",
     "dist:fast": "bun run scripts/dist.ts --current-arch --dmg",
     "dist:debug": "bun run scripts/dist.ts --current-arch --verbose"
@@ -174,5 +174,12 @@
   "build": {
     "extends": "electron-builder.yml"
   },
-  "copis": {}
+  "copis": {
+    "platformVersions": {
+      "darwin-arm64": "0.0.84",
+      "darwin-x64": "0.0.82",
+      "win32-x64": "0.0.82",
+      "linux-x64": "0.0.82"
+    }
+  }
 }

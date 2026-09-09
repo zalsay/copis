@@ -50,6 +50,7 @@ export interface StartupClientUpdateDialog extends StartupClientUpdateRequired {
   title: string
   description: string
   actionLabel: string
+  cancelLabel: string
 }
 
 const CLIENT_UPDATE_REQUIRED_PATTERN = /^Copis 版本过低，需要至少 v?([^\s]+)$/
@@ -71,6 +72,7 @@ export function getStartupClientUpdateDialog(error?: string | null): StartupClie
     title: '需要更新 Copis',
     description: `必要组件要求 Copis v${clientUpdate.minClientVersion} 或更高版本。下载最新版本后重新打开应用。`,
     actionLabel: '下载最新版本',
+    cancelLabel: '关闭',
   }
 }
 

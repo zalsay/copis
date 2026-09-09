@@ -26,6 +26,7 @@ import './commands/outline'
 import './commands/search'
 import './commands/export'
 import './commands/dashi-ppt'
+import './commands/dashi-design'
 
 function printHelp(): void {
   info('copis — Copis CLI\n')

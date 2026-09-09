@@ -7,6 +7,7 @@
 
 import * as React from 'react'
 import { Download } from 'lucide-react'
+import { ImageLightbox, type LightboxImage } from '@/components/ui/image-lightbox'
 
 interface GeneratedImageMeta {
   filename: string
@@ -43,7 +44,17 @@ function stripGeneratedImagesMeta(result: string): string {
   return result.replace(/\n*<generated_images>\s*\[[\s\S]*?\]\s*<\/generated_images>\s*$/, '').trimEnd()
 }
 
-function GeneratedImageThumb({ image }: { image: GeneratedImageMeta }): React.ReactElement {
+function GeneratedImageThumb({
+  image,
+  index,
+  onOpen,
+  onLoaded,
+}: {
+  image: GeneratedImageMeta
+  index: number
+  onOpen: (index: number) => void
+  onLoaded: (path: string, src: string) => void
+}): React.ReactElement {
   const [src, setSrc] = React.useState<string | null>(null)
 
   React.useEffect(() => {
@@ -51,7 +62,11 @@ function GeneratedImageThumb({ image }: { image: GeneratedImageMeta }): React.Re
     window.electronAPI
       .readAttachment(image.path)
       .then((base64) => {
-        if (alive) setSrc(`data:${image.mediaType};base64,${base64}`)
+        if (alive) {
+          const dataUrl = `data:${image.mediaType};base64,${base64}`
+          setSrc(dataUrl)
+          onLoaded(image.path, dataUrl)
+        }
       })
       .catch((error: unknown) => {
         console.error('[生图结果] 读取图片失败:', error)
@@ -59,7 +74,7 @@ function GeneratedImageThumb({ image }: { image: GeneratedImageMeta }): React.Re
     return () => {
       alive = false
     }
-  }, [image.path, image.mediaType])
+  }, [image.path, image.mediaType, onLoaded])
 
   if (!src) {
     return <div className="h-[140px] w-[200px] shrink-0 animate-pulse rounded-lg bg-muted/30" />
@@ -71,9 +86,7 @@ function GeneratedImageThumb({ image }: { image: GeneratedImageMeta }): React.Re
         src={src}
         alt={image.filename}
         className="max-h-[200px] max-w-[300px] cursor-pointer rounded-lg object-contain"
-        onClick={() => {
-          void window.electronAPI.openFile(image.path)
-        }}
+        onClick={() => onOpen(index)}
       />
       <button
         type="button"
@@ -96,6 +109,35 @@ export function GenerateImageResultRenderer({
   const images = React.useMemo(() => parseGeneratedImages(result), [result])
   const text = React.useMemo(() => stripGeneratedImagesMeta(result), [result])
 
+  const [lightboxOpen, setLightboxOpen] = React.useState(false)
+  const [lightboxIndex, setLightboxIndex] = React.useState(0)
+  const [loadedMap, setLoadedMap] = React.useState<Map<string, string>>(() => new Map())
+
+  const handleImageLoaded = React.useCallback((path: string, src: string): void => {
+    setLoadedMap((prev) => {
+      const next = new Map(prev)
+      next.set(path, src)
+      return next
+    })
+  }, [])
+
+  const lightboxImages: LightboxImage[] = React.useMemo(
+    () =>
+      images
+        .map((img) => ({
+          src: loadedMap.get(img.path) ?? '',
+          filename: img.filename,
+          path: img.path,
+        }))
+        .filter((img) => Boolean(img.src)),
+    [images, loadedMap],
+  )
+
+  const handleOpenLightbox = React.useCallback((index: number) => {
+    setLightboxIndex(index)
+    setLightboxOpen(true)
+  }, [])
+
   if (isError) {
     return (
       <pre className="whitespace-pre-wrap break-all rounded-md bg-destructive/5 p-3 font-mono text-[12px] text-destructive/80">
@@ -109,10 +151,25 @@ export function GenerateImageResultRenderer({
       {text && <p className="whitespace-pre-wrap text-[12px] leading-relaxed text-foreground/80">{text}</p>}
       {images.length > 0 && (
         <div className="flex flex-wrap gap-3">
-          {images.map((image) => (
-            <GeneratedImageThumb key={image.path} image={image} />
+          {images.map((image, index) => (
+            <GeneratedImageThumb
+              key={image.path}
+              image={image}
+              index={index}
+              onOpen={handleOpenLightbox}
+              onLoaded={handleImageLoaded}
+            />
           ))}
         </div>
+      )}
+      {lightboxImages.length > 0 && (
+        <ImageLightbox
+          open={lightboxOpen}
+          onOpenChange={setLightboxOpen}
+          images={lightboxImages}
+          index={lightboxIndex}
+          onIndexChange={setLightboxIndex}
+        />
       )}
     </div>
   )

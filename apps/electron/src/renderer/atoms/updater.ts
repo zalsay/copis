@@ -29,8 +29,13 @@ export interface UpdateStatus {
   error?: string
 }
 
+import type { AppInfo } from '@copis/shared'
+
 /** 更新状态 atom */
 export const updateStatusAtom = atom<UpdateStatus>({ status: 'idle' })
+
+/** 应用信息 atom */
+export const appInfoAtom = atom<AppInfo | null>(null)
 
 /** 是否有可用更新（包含已下载完成） */
 export const hasUpdateAtom = atom((get) => {
@@ -41,6 +46,13 @@ export const hasUpdateAtom = atom((get) => {
 /** updater 是否可用 */
 export const updaterAvailableAtom = atom<boolean>(() => {
   return !!window.electronAPI?.updater
+})
+
+/** 是否支持在线自动更新（updater 可用且未明确为未打包开发模式） */
+export const onlineUpdateAvailableAtom = atom((get) => {
+  const updaterAvailable = get(updaterAvailableAtom)
+  const appInfo = get(appInfoAtom)
+  return updaterAvailable && appInfo?.packaged !== false
 })
 
 /**

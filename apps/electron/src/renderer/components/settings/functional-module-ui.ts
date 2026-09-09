@@ -56,8 +56,8 @@ export const FUNCTIONAL_MODULE_DEFINITIONS: readonly FunctionalModuleDefinition[
   },
   {
     name: 'dsh',
-    displayName: 'dsh 运行环境',
-    description: '为 Copis 提供 DeepSeek Harness (dsh) 智能体运行时与工具执行环境',
+    displayName: '创造模式',
+    description: '为 Copis 提供创造模式智能体运行时与工具执行环境',
     required: true,
   },
 ]

@@ -78,3 +78,6 @@ export * from './fund-stock'
 // DeepSeek Harness (dsh) 与 Cordis 模式相关类型与 IPC 通道
 export * from './dsh'
 
+// 内嵌浏览器密码安全存储与自动填充相关类型与 IPC 通道
+export * from './web-password'
+

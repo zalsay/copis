@@ -44,10 +44,9 @@ fn given_create_input_when_persisted_then_keeps_legacy_automations_json_contract
     let listed = store.list().unwrap();
 
     assert_eq!(listed, vec![created.clone()]);
-    let raw: serde_json::Value = serde_json::from_str(
-        &fs::read_to_string(config_dir.join("automations.json")).unwrap(),
-    )
-    .unwrap();
+    let raw: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(config_dir.join("automations.json")).unwrap())
+            .unwrap();
     assert_eq!(raw["version"], 2);
     assert_eq!(raw["automations"][0]["id"], created["id"]);
     assert_eq!(raw["automations"][0]["agentRuntime"], "pi");
@@ -63,7 +62,9 @@ fn given_task_created_without_session_mode_when_persisted_then_defaults_to_reusi
     let created = store.create(create_input()).unwrap();
 
     assert_eq!(created["sessionMode"], "reuse");
-    let raw: serde_json::Value = serde_json::from_str(&fs::read_to_string(config_dir.join("automations.json")).unwrap()).unwrap();
+    let raw: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(config_dir.join("automations.json")).unwrap())
+            .unwrap();
     assert_eq!(raw["automations"][0]["sessionMode"], "reuse");
     let _ = fs::remove_dir_all(config_dir);
 }
@@ -81,14 +82,18 @@ fn given_legacy_daily_task_when_loaded_then_it_is_persisted_as_session_reuse() {
                 "channelId": "channel-1", "workspaceId": "workspace-1", "sessionMode": "daily",
                 "createdAt": 1, "updatedAt": 1, "nextRunAt": 2, "runHistory": []
             }]
-        })).unwrap(),
-    ).unwrap();
+        }))
+        .unwrap(),
+    )
+    .unwrap();
     let store = AutomationStore::open(config_dir.clone());
 
     let listed = store.list().unwrap();
 
     assert_eq!(listed[0]["sessionMode"], "reuse");
-    let raw: serde_json::Value = serde_json::from_str(&fs::read_to_string(config_dir.join("automations.json")).unwrap()).unwrap();
+    let raw: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(config_dir.join("automations.json")).unwrap())
+            .unwrap();
     assert_eq!(raw["automations"][0]["sessionMode"], "reuse");
     let _ = fs::remove_dir_all(config_dir);
 }
@@ -135,7 +140,9 @@ fn given_automation_run_context_when_creating_then_rejects_recursive_automation(
     let config_dir = temporary_config_dir("recursion");
     let store = AutomationStore::open(config_dir.clone());
 
-    let error = store.create_for_session(create_input(), "automation").unwrap_err();
+    let error = store
+        .create_for_session(create_input(), "automation")
+        .unwrap_err();
 
     assert!(error.to_string().contains("禁止递归创建"));
     let _ = fs::remove_dir_all(config_dir);
@@ -201,13 +208,18 @@ fn given_worker_capability_when_revoked_then_it_is_rejected() {
         Some("automation-1".to_string()),
     );
 
-    assert!(worker_automation_context("automation-capability-test-session", &capability.token).is_ok());
+    assert!(
+        worker_automation_context("automation-capability-test-session", &capability.token).is_ok()
+    );
     revoke_worker_capability("automation-capability-test-session");
-    assert!(worker_automation_context("automation-capability-test-session", &capability.token).is_err());
+    assert!(
+        worker_automation_context("automation-capability-test-session", &capability.token).is_err()
+    );
 }
 
 #[test]
-fn given_overdue_recurring_task_when_scheduler_recovers_then_it_is_deferred_but_once_task_remains_due() {
+fn given_overdue_recurring_task_when_scheduler_recovers_then_it_is_deferred_but_once_task_remains_due(
+) {
     let config_dir = temporary_config_dir("recover-overdue");
     let store = AutomationStore::open(config_dir.clone());
     let recurring = store.create(create_input()).unwrap();
@@ -223,11 +235,26 @@ fn given_overdue_recurring_task_when_scheduler_recovers_then_it_is_deferred_but_
     .unwrap();
     let once = store.create(once).unwrap();
     let now = 2_000_000_000_000u64;
-    store.set_next_run_at(recurring["id"].as_str().unwrap(), 1).unwrap();
+    store
+        .set_next_run_at(recurring["id"].as_str().unwrap(), 1)
+        .unwrap();
 
     store.defer_overdue_recurring(now).unwrap();
 
-    assert!(store.get(recurring["id"].as_str().unwrap()).unwrap().unwrap()["nextRunAt"].as_u64().unwrap() > now);
-    assert!(store.get(once["id"].as_str().unwrap()).unwrap().unwrap()["nextRunAt"].as_u64().unwrap() <= now);
+    assert!(
+        store
+            .get(recurring["id"].as_str().unwrap())
+            .unwrap()
+            .unwrap()["nextRunAt"]
+            .as_u64()
+            .unwrap()
+            > now
+    );
+    assert!(
+        store.get(once["id"].as_str().unwrap()).unwrap().unwrap()["nextRunAt"]
+            .as_u64()
+            .unwrap()
+            <= now
+    );
     let _ = fs::remove_dir_all(config_dir);
 }

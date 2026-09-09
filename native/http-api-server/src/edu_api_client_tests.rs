@@ -255,3 +255,10 @@ fn stream_timeout_resolution_respects_max_300s_limit() {
     std::env::remove_var("COPIS_STREAM_TIMEOUT_SECS");
     std::env::remove_var("COPIS_EDU_API_TIMEOUT_SECS");
 }
+
+#[test]
+fn image_generation_timeout_is_at_least_five_minutes() {
+    use super::edu_api_client::IMAGE_GENERATION_TIMEOUT_SECS;
+
+    assert!(IMAGE_GENERATION_TIMEOUT_SECS >= 300);
+}

@@ -6,11 +6,12 @@ import pkg from './package.json' with { type: 'json' }
 // Vite 配置由 Node 直接加载，不能依赖 workspace 内的 TypeScript 导出。
 // 默认端口需与 @copis/shared/config 中的 COPIS_HTTP_API_DEVELOPMENT_PORT 保持一致。
 const httpApiPort = process.env.COPIS_HTTP_API_PORT?.trim() || '51740'
+const appVersion = process.env.COPIS_BUILD_APP_VERSION?.trim() || pkg.version
 
 export default defineConfig({
   plugins: [react()],
   define: {
-    __APP_VERSION__: JSON.stringify(pkg.version),
+    __APP_VERSION__: JSON.stringify(appVersion),
   },
   root: resolve(__dirname, 'src/renderer'),
   base: './',

@@ -69,6 +69,12 @@ describe('功能模块发布边界', () => {
     expect(deployScript).toContain("'--rust'")
   })
 
+  test('--rust 默认跳过依赖安装，并支持 --install 显式指定', () => {
+    expect(deployShellScript).toContain('--install')
+    expect(deployShellScript).toContain('SKIP_INSTALL=""')
+    expect(deployShellScript).toMatch(/if \[\[ -z "\$SKIP_INSTALL" \]\]; then[\s\S]*if \[\[ "\$RUST_ONLY" == '1' \]\]; then[\s\S]*SKIP_INSTALL=1/)
+  })
+
   test('部署完成日志从最终 manifest 读取实际发布的模块版本', () => {
     expect(deployShellScript).toContain('MANIFEST_OUTPUT="$APP_DIR/dist/functional-modules/manifest.json"')
     expect(deployShellScript).toContain('--manifest-output "$MANIFEST_OUTPUT"')
