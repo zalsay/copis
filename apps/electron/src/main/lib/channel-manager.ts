@@ -566,7 +566,8 @@ export async function testChannel(channelId: string): Promise<ChannelTestResult>
   }
 
   const apiKey = decryptKey(channel.apiKey)
-  const isCustom = isWorkingCustomModelChannelId(channelId)
+  // 非官方 Working 渠道均为自定义渠道，开启代理时使用全局代理
+  const isCustom = !isCopisWorkingChannelId(channelId)
   const proxyUrl = isCustom ? await getEffectiveProxyUrl() : undefined
   const provider = inferProviderFromBaseUrl(channel.provider, channel.baseUrl)
 
@@ -922,7 +923,6 @@ function createUnsupportedPlanQuota(provider: ProviderType, message: string): Ch
 async function queryCodexPlanQuota(
   channelId: string,
   serializedCredentials: string,
-  proxyUrl?: string,
 ): Promise<ChannelPlanQuotaResult> {
   const credentials = parseCodexCredentials(serializedCredentials)
   if (!credentials) {
@@ -942,7 +942,8 @@ async function queryCodexPlanQuota(
   }
 
   try {
-    const response = await getFetchFn(proxyUrl)(
+    // 官方 Codex OAuth 额度查询保持直连，绝不走代理
+    const response = await getFetchFn()(
       'https://chatgpt.com/backend-api/wham/usage',
       withTimeout({ method: 'GET', headers }, CODEX_PLAN_QUOTA_TIMEOUT_MS),
     )
@@ -1491,18 +1492,20 @@ async function queryZhipuPlanQuota(
 }
 
 export async function getChannelPlanQuota(channelId: string): Promise<ChannelPlanQuotaResult> {
-  const channel = getChannelById(channelId)
-  if (!channel) {
-    return createUnsupportedPlanQuota('custom', '渠道不存在')
+  // 官方 Working 渠道由本地 Working 账户与支付服务管理，不走外部 Plan Quota 查询
+  if (isCopisWorkingChannelId(channelId)) {
+    return createUnsupportedPlanQuota('custom', '官方 Working 渠道额度由账户服务管理')
   }
 
+  const channel = getChannelById(channelId)
+  if (!channel) return createUnsupportedPlanQuota('custom', '渠道不存在')
   let provider: ProviderType
   try {
     provider = inferProviderFromBaseUrl(channel.provider, channel.baseUrl)
   } catch {
     provider = channel.provider
   }
-  const proxyUrl = await getEffectiveProxyUrl()
+
   let apiKey: string
   try {
     apiKey = decryptKey(channel.apiKey)
@@ -1511,9 +1514,13 @@ export async function getChannelPlanQuota(channelId: string): Promise<ChannelPla
   }
 
   try {
+    // 官方 ChatGPT Codex OAuth 渠道额度查询保持直连
     if (provider === 'openai-codex') {
-      return await queryCodexPlanQuota(channelId, apiKey, proxyUrl)
+      return await queryCodexPlanQuota(channelId, apiKey)
     }
+
+    // 仅自定义第三方模型渠道查询额度时接入代理
+    const proxyUrl = await getEffectiveProxyUrl()
     if (provider === 'deepseek') {
       return await queryDeepSeekBalance(apiKey, channel.baseUrl, proxyUrl)
     }
@@ -1533,6 +1540,8 @@ export async function getChannelPlanQuota(channelId: string): Promise<ChannelPla
   }
 }
 
+export const queryChannelPlanQuota = getChannelPlanQuota
+
 // ===== 直接测试连接 =====
 
 /**
@@ -1545,7 +1554,9 @@ export async function testChannelDirect(
   input: ChannelDirectTestInput,
   proxyUrlOverride?: string,
 ): Promise<ChannelTestResult> {
-  const proxyUrl = proxyUrlOverride?.trim() ? proxyUrlOverride.trim() : undefined
+  const proxyUrl = proxyUrlOverride !== undefined
+    ? (proxyUrlOverride.trim() || undefined)
+    : await getEffectiveProxyUrl()
   const provider = inferProviderFromBaseUrl(input.provider, input.baseUrl)
 
   try {

@@ -106,9 +106,19 @@ async function runWorker(config: PiWorkerRunConfig): Promise<void> {
     ? undefined
     : parsePiWorkerBrowserCapability(config.query.browserPageControl)
   if (config.query.browserPageControl !== undefined && !browserPageControl) {
+    console.error('[AI浏览器][Pi Worker启动] 接收到的 browserPageControl 参数校验失败', {
+      sessionId: config.sessionId,
+      rawCapability: config.query.browserPageControl,
+    })
     await writeFrame({ type: 'fatal', sessionId: config.sessionId, error: 'AI浏览器 capability 不正确' })
     await flushOutput()
     return
+  }
+  if (browserPageControl) {
+    console.info('[AI浏览器][Pi Worker启动] 成功解析 browserPageControl', {
+      sessionId: config.sessionId,
+      endpoint: browserPageControl.endpoint,
+    })
   }
   const automationControl = config.query.automationControl === undefined
     ? undefined

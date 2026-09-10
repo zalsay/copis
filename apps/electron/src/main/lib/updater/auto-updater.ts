@@ -331,7 +331,8 @@ export async function checkForUpdates(): Promise<void> {
   try {
     setStatus({ status: 'checking' })
     const result = await checkAppUpdateViaRustApi()
-    const latestVersion = result.latestVersion ?? result.version
+    // 兼容旧 Rust 服务：version 是本平台版本，latestVersion 可能来自其他平台。
+    const latestVersion = result.version || result.latestVersion
     if (!result.available || !result.version || !result.url) {
       // 远端没有可用更新，说明当前运行版本已是最新，若本地残留已下载的旧包则清理
       await clearPersistedDownloadedUpdate(true)

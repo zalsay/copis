@@ -48,3 +48,7 @@ test('Given hideStarterChips 为 true（如 Agent 问答） When 渲染 Composer
   const questionViewSource = readFileSync(new URL('./AgentQuestionView.tsx', import.meta.url), 'utf8')
   expect(questionViewSource).toContain('hideStarterChips')
 })
+
+test('Given AgentConversationSurface When 渲染底部 Composer Then 包含 AI 生成内容免责提示小字', () => {
+  expect(source).toContain('内容由 AI 生成，请核实重要信息')
+})

@@ -70,6 +70,7 @@ fn legacy_request(
     let agent = ureq::Agent::config_builder()
         .timeout_global(Some(Duration::from_secs(30)))
         .http_status_as_error(false)
+        .proxy(None)
         .build()
         .new_agent();
     let mut response = match method {

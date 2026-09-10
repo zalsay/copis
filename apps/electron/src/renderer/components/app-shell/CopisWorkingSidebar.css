@@ -393,7 +393,7 @@
 
 .copis-working-project-list {
   min-height: 0;
-  overflow: auto;
+  overflow: visible;
   gap: 10px;
   scrollbar-width: none;
   -ms-overflow-style: none;
@@ -605,6 +605,17 @@
 .copis-working-project-row.menu-up .copis-working-project-menu {
   top: auto;
   bottom: 30px;
+}
+
+.copis-working-project-group.menu-open,
+.copis-working-project-group:has(.menu-open) {
+  position: relative;
+  z-index: 50;
+}
+
+.copis-working-project-row.menu-open {
+  position: relative;
+  z-index: 50;
 }
 
 .copis-working-project-menu button {

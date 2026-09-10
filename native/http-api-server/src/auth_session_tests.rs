@@ -72,8 +72,8 @@ struct BlockingTransport {
 
 impl EduApiTransport for BlockingTransport {
     fn send(&self, request: EduApiRequest) -> Result<EduApiResponse, EduApiError> {
-        self.calls.fetch_add(1, Ordering::SeqCst);
-        let should_block = request.path == self.block_path;
+        let call_idx = self.calls.fetch_add(1, Ordering::SeqCst);
+        let should_block = request.path == self.block_path && call_idx == 0;
         self.requests.lock().unwrap().push(request);
         if should_block {
             self.entered.wait();
@@ -206,6 +206,9 @@ fn twenty_concurrent_refreshes_share_one_upstream_request() {
     for _ in 0..19 {
         let auth = auth.clone();
         waiters.push(thread::spawn(move || auth.refresh_single_flight()));
+    }
+    while auth.refresh_waiters() < 19 {
+        thread::yield_now();
     }
     release.wait();
     assert_eq!(first.join().unwrap().unwrap(), "rotated-access-token");

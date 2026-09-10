@@ -53,6 +53,26 @@ describe('自动更新入口的工作区迁移', () => {
 })
 
 describe('版本比较与已下载更新持久化机制', () => {
+  test('Given 旧接口混入其他平台最高版本 When 检查更新 Then 使用本平台版本展示和下载', async () => {
+    checkAppUpdateMock.mockImplementationOnce(async () => ({
+      available: true,
+      version: '0.0.84',
+      latestVersion: '0.0.85',
+      url: 'https://example.com/Copis-0.0.84.dmg',
+    }))
+    await updaterModule.checkForUpdates()
+    expect(updaterModule.getUpdateStatus()).toMatchObject({
+      status: 'available', version: '0.0.84', latestVersion: '0.0.84',
+      downloadUrl: 'https://example.com/Copis-0.0.84.dmg',
+    })
+    checkAppUpdateMock.mockImplementationOnce(async () => ({
+      available: false, version: '0.0.84', latestVersion: '0.0.85', url: '',
+    }))
+    await updaterModule.checkForUpdates()
+    expect(updaterModule.getUpdateStatus()).toMatchObject({
+      status: 'not-available', version: '0.0.84', latestVersion: '0.0.84',
+    })
+  })
   test('Given 两个版本号 When compareSemver Then 正确比较主次版本与修订号', () => {
     expect(updaterModule.compareSemver('0.0.84', '0.0.83')).toBeGreaterThan(0)
     expect(updaterModule.compareSemver('0.0.84', '0.0.84')).toBe(0)

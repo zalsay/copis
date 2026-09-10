@@ -110,19 +110,24 @@ function collectProxyEnv(
     env[key.toLowerCase()] = value
   }
 
+  const rawNoProxy = getCaseInsensitiveEnvValue(processEnv, 'NO_PROXY')
+
   if (trimmedProxyUrl) {
     for (const key of PROXY_ENV_KEYS) {
       setProxyEnv(key, trimmedProxyUrl)
     }
+    const defaultNoProxy = '127.0.0.1,localhost'
+    const combinedNoProxy = rawNoProxy
+      ? (rawNoProxy.includes('127.0.0.1') ? rawNoProxy : `${rawNoProxy},${defaultNoProxy}`)
+      : defaultNoProxy
+    setProxyEnv('NO_PROXY', combinedNoProxy)
   } else if (inheritProcessProxy) {
     for (const key of PROXY_ENV_KEYS) {
       const value = getCaseInsensitiveEnvValue(processEnv, key)
       if (value) setProxyEnv(key, value)
     }
+    if (rawNoProxy) setProxyEnv('NO_PROXY', rawNoProxy)
   }
-
-  const noProxy = getCaseInsensitiveEnvValue(processEnv, 'NO_PROXY')
-  if (noProxy) setProxyEnv('NO_PROXY', noProxy)
 
   return env
 }

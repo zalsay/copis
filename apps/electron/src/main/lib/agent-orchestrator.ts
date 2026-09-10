@@ -564,16 +564,13 @@ export class AgentOrchestrator {
     if (channel.provider === 'openai-codex') {
       const fallbackTitle = createFallbackTitle(userMessage)
       try {
-        const [credentials, proxyUrl] = await Promise.all([
-          resolveCodexOAuthCredentials(channelId),
-          getEffectiveProxyUrl(),
-        ])
+        const credentials = await resolveCodexOAuthCredentials(channelId)
         if (signal?.aborted) return null
         const generatedTitle = await generateCodexTitle({
           modelId,
           prompt: TITLE_PROMPT + userMessage,
           credentials,
-          proxyUrl,
+          proxyUrl: undefined,
           signal,
           onCredentialsRefreshed: (refreshed) => persistCodexOAuthCredentials(channelId, refreshed),
         })

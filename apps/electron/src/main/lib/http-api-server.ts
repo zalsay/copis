@@ -448,6 +448,21 @@ function spawnManagedProcess(
     spawn(file, args, spawnOptions) as ChildProcessWithoutNullStreams
   ))
   const internalToken = randomBytes(32).toString('hex')
+  const sanitizedEnv: NodeJS.ProcessEnv = { ...process.env }
+  for (const key of Object.keys(sanitizedEnv)) {
+    const lower = key.toLowerCase()
+    if (lower === 'http_proxy' || lower === 'https_proxy' || lower === 'all_proxy') {
+      delete sanitizedEnv[key]
+    }
+  }
+  const existingNoProxy = sanitizedEnv.NO_PROXY || sanitizedEnv.no_proxy || ''
+  const defaultNoProxy = '127.0.0.1,localhost'
+  const finalNoProxy = existingNoProxy
+    ? (existingNoProxy.includes('127.0.0.1') ? existingNoProxy : `${existingNoProxy},${defaultNoProxy}`)
+    : defaultNoProxy
+  sanitizedEnv.NO_PROXY = finalNoProxy
+  sanitizedEnv.no_proxy = finalNoProxy
+
   let child: ChildProcessWithoutNullStreams
   try {
     child = spawnImpl(binaryPath, [], {
@@ -455,7 +470,7 @@ function spawnManagedProcess(
       detached: false,
       windowsHide: true,
       env: {
-        ...process.env,
+        ...sanitizedEnv,
         COPIS_HTTP_API_PORT: String(port),
         COPIS_CONFIG_DIR: getConfigDir(),
         COPIS_MEMORY_DIR: join(getConfigDir(), 'memory'),

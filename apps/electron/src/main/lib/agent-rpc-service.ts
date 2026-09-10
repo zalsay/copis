@@ -91,6 +91,7 @@ import {
   issueBrowserAgentWorkerCapability,
   revokeBrowserAgentWorkerCapability,
 } from './browser-agent-worker-capability'
+import { redactLogOrigin, shortLogId } from './bridge-log-redaction'
 import { createFallbackTitle } from './title-generation'
 import { isVisibleRunMessage } from './agent-run-message-visibility'
 import {
@@ -132,6 +133,7 @@ interface PendingAgentRpcRun {
   readonly memoryPolicy: MemoryPolicy
   readonly triggeredBy?: AgentSendInput['triggeredBy']
   readonly compactRequest: boolean
+  readonly browserCapabilityToken?: string
 }
 
 export interface AgentRpcInputRecord {
@@ -573,6 +575,16 @@ export async function prepareAgentRpcRun(input: AgentSendInput): Promise<PiWorke
   const browserBinding = getBrowserAgentContext(input.sessionId)
   const browserTab = browserBinding ? getWebTabState(browserBinding.tabId) : undefined
   const hasBrowserContext = Boolean(browserBinding && browserTab)
+  console.info('[AI浏览器][prepareAgentRpcRun] 检查页签上下文与绑定状态', {
+    sessionId: input.sessionId,
+    hasBrowserBinding: Boolean(browserBinding),
+    bindingTabId: browserBinding?.tabId,
+    hasBrowserTabState: Boolean(browserTab),
+    browserTabUrl: browserTab?.url ? redactLogOrigin(browserTab.url) : undefined,
+    browserTabTitle: browserTab?.title,
+    hasBrowserContext,
+    targetTabIdForCapability: (browserBinding && browserTab ? browserBinding.tabId : undefined),
+  })
   const browserAdvancedAuthorization = (input.triggeredBy ?? 'user') === 'user'
     && isBrowserPageAdvancedAuthorizationEnabled(input.sessionId)
   const effectivePermissionMode = resolveBrowserAgentPermissionMode(
@@ -694,6 +706,11 @@ export async function prepareAgentRpcRun(input: AgentSendInput): Promise<PiWorke
   }
 
   const maxTurns = settings.agentMaxTurns && settings.agentMaxTurns > 0 ? settings.agentMaxTurns : undefined
+  const browserPageControl = issueBrowserAgentWorkerCapability({
+    sessionId: input.sessionId,
+    ...(browserBinding && browserTab ? { tabId: browserBinding.tabId } : {}),
+    triggeredBy: input.triggeredBy ?? 'user',
+  })
   const query: PiWorkerQueryConfig = {
     sessionId: input.sessionId,
     prompt,
@@ -737,11 +754,7 @@ export async function prepareAgentRpcRun(input: AgentSendInput): Promise<PiWorke
       ?? (settings.agentEffort === 'max' ? 'xhigh' : settings.agentEffort ?? 'high'),
     retryRunStartedAt: startedAt,
     ...(fileAccessPolicy ? { fileAccessPolicy, useRustFileApi: true } : {}),
-    browserPageControl: issueBrowserAgentWorkerCapability({
-      sessionId: input.sessionId,
-      ...(browserBinding && browserTab ? { tabId: browserBinding.tabId } : {}),
-      triggeredBy: input.triggeredBy ?? 'user',
-    }),
+    browserPageControl,
     triggeredBy: input.triggeredBy ?? 'user',
   }
 
@@ -767,6 +780,7 @@ export async function prepareAgentRpcRun(input: AgentSendInput): Promise<PiWorke
     memoryPolicy,
     ...(input.triggeredBy ? { triggeredBy: input.triggeredBy } : {}),
     compactRequest,
+    browserCapabilityToken: browserPageControl.token,
   })
   return { sessionId: input.sessionId, query }
 }
@@ -918,8 +932,14 @@ export function finalizeAgentRpcRun(input: {
   resultSubtype?: string
   resultErrors?: string[]
 }): AgentRpcCompletionResult {
-  revokeBrowserAgentWorkerCapability(input.sessionId)
   const pending = pendingAgentRpcRuns.get(input.sessionId)
+  console.info('[AI浏览器][finalizeAgentRpcRun] 本轮 Run 结束，准备撤销 capability', {
+    sessionId: input.sessionId,
+    stoppedByUser: input.stoppedByUser,
+    resultSubtype: input.resultSubtype,
+    tokenFingerprint: pending?.browserCapabilityToken ? shortLogId(pending.browserCapabilityToken) : undefined,
+  })
+  revokeBrowserAgentWorkerCapability(input.sessionId, pending?.browserCapabilityToken)
   const current = getAgentSessionMeta(input.sessionId)
   if (!current) {
     pendingAgentRpcRuns.delete(input.sessionId)

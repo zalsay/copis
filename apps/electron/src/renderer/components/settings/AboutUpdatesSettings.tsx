@@ -2,33 +2,13 @@ import * as React from 'react'
 import { useAtomValue } from 'jotai'
 import { Download, ExternalLink, Loader2, RefreshCw } from 'lucide-react'
 import type { AppInfo } from '@copis/shared'
-import { checkForUpdates, downloadUpdate, updaterAvailableAtom, updateStatusAtom, type UpdateStatus } from '@/atoms/updater'
+import { checkForUpdates, downloadUpdate, updaterAvailableAtom, updateStatusAtom } from '@/atoms/updater'
 import { CopisAppLogo } from '@/lib/model-logo'
 import { Button } from '@/components/ui/button'
 import { SettingsCard, SettingsSection } from './primitives'
 import { FunctionalModulesCard } from './FunctionalModulesCard'
 
-function getAppUpdateStatusText(status: UpdateStatus, appInfo: AppInfo | null): string {
-  const latest = status.latestVersion ?? status.version
-  switch (status.status) {
-    case 'checking':
-      return '正在检查更新'
-    case 'available':
-      return `发现新版本 v${status.version}，点击下载更新`
-    case 'downloading':
-      return `正在下载 v${status.version}`
-    case 'downloaded':
-      return `v${status.version} 已下载，可在空闲时安装`
-    case 'not-available':
-      return latest
-        ? `当前已是最新版 v${latest}，没有可用更新`
-        : appInfo ? `当前已是 v${appInfo.version}，没有可用更新` : '当前没有可用更新'
-    case 'error':
-      return status.error || '检查更新失败，请稍后重试'
-    default:
-      return '尚未检查更新'
-  }
-}
+import { getAppUpdateStatusText } from './app-update-status'
 
 export function AboutUpdatesSettings(): React.ReactElement {
   const [appInfo, setAppInfo] = React.useState<AppInfo | null>(null)
@@ -47,14 +27,14 @@ export function AboutUpdatesSettings(): React.ReactElement {
     return () => {
       active = false
     }
-  }, [])
+  }, [updateStatus.status])
 
   const onlineUpdateAvailable = updaterAvailable && appInfo?.packaged === true
   const isDownloading = updateStatus.status === 'downloading'
   const progressPercent = isDownloading
     ? Math.round(Math.min(100, Math.max(0, updateStatus.progress?.percent ?? 0)))
     : 0
-  const targetLatestVersion = updateStatus.latestVersion ?? updateStatus.version
+  const targetLatestVersion = updateStatus.version || updateStatus.latestVersion
   const hasDifferentLatest = Boolean(
     targetLatestVersion
       && appInfo?.version

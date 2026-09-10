@@ -1167,10 +1167,10 @@ function createWebTabInternal(input: CreateWebTabInput, workflowOwned: boolean, 
   return record
 }
 
-/** 创建并默认激活一个新的 Chromium 网页页签。 */
-export function createWebTab(input: CreateWebTabInput = {}): WebTabsSnapshot {
-  createWebTabInternal(input, false)
-  return getSnapshot()
+/** 创建并返回 Chromium 网页页签快照，附带本次创建的页签 ID。 */
+export function createWebTab(input: CreateWebTabInput = {}): WebTabsSnapshot & { createdTabId: string } {
+  const record = createWebTabInternal(input, false)
+  return { ...getSnapshot(), createdTabId: record.state.id }
 }
 
 /** 创建仅供固定 Workflow 使用的隔离网页视图，不出现在用户页签或恢复文件中。 */

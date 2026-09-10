@@ -55,3 +55,25 @@ test('Given DSH 侧边栏源码中的新建会话按钮与工作区容器 When �
   expect(patchDshSidebarSource(patched)).toBe(patched)
 })
 
+test('Given DSH 侧边栏源码中包含旧版 CopisLogo When 执行 patchDshSidebarSource Then 升级为全新双环银色 Logo 且保持幂等', () => {
+  const sourceWithLogo = `
+			const CopisLogo = (props) => (0, react_jsx_runtime.jsxs)("svg", {
+				width: props.size || 22,
+				children: [
+					(0, react_jsx_runtime.jsx)("path", {
+						d: "M 433 532 L 417 555 Z",
+						fill: "url(#copisSilverGrad)"
+					})
+				]
+			});
+			const iconSparkles = (0, react_jsx_runtime.jsxs)("svg", {});
+  `
+  const patched = patchDshSidebarSource(sourceWithLogo)
+  expect(patched).toContain('M 725.5 791.5 L 738.5 790.1')
+  expect(patched).toContain('M 563.5 803.5 L 579.5 801.3')
+  expect(patched).not.toContain('M 433 532')
+
+  // 幂等性
+  expect(patchDshSidebarSource(patched)).toBe(patched)
+})
+

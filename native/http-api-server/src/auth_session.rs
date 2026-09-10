@@ -200,6 +200,7 @@ impl Drop for AuthOperationPermit {
 
 struct RefreshState {
     active: bool,
+    waiters: usize,
     result: Option<Result<String, AuthError>>,
 }
 
@@ -249,6 +250,7 @@ impl AuthSession {
             }),
             refresh_state: Mutex::new(RefreshState {
                 active: false,
+                waiters: 0,
                 result: None,
             }),
             refresh_wakeup: Condvar::new(),
@@ -548,9 +550,11 @@ impl AuthSession {
     pub fn refresh_single_flight(&self) -> Result<String, AuthError> {
         let mut state = self.refresh_state.lock().unwrap();
         if state.active {
+            state.waiters += 1;
             while state.active {
                 state = self.refresh_wakeup.wait(state).unwrap();
             }
+            state.waiters -= 1;
             return state
                 .result
                 .clone()
@@ -573,6 +577,11 @@ impl AuthSession {
         state.result = Some(result.clone());
         self.refresh_wakeup.notify_all();
         result
+    }
+
+    #[cfg(test)]
+    pub fn refresh_waiters(&self) -> usize {
+        self.refresh_state.lock().unwrap().waiters
     }
 
     pub fn logout(&self) -> Result<(), AuthError> {

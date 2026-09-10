@@ -19,6 +19,7 @@ import { tmpdir } from 'node:os'
 import { gzipSync } from 'node:zlib'
 import type { FunctionalModuleArchitecture, FunctionalModulePlatform } from '@copis/shared'
 import { patchDshComposerHistoryRuntime } from '../apps/electron/src/main/lib/dsh-composer-history-patch'
+import { patchDshHeroLogoRuntime } from '../apps/electron/src/main/lib/dsh-hero-logo-patch'
 export { patchDshSidebarRuntime, patchDshSidebarSource } from '../apps/electron/src/main/lib/dsh-sidebar-patch'
 
 export const DSH_PACKAGE = '@deepseek-ai/dsh'
@@ -66,6 +67,7 @@ export function main(): void {
     patchDshDetailsPanelFilePreviewRuntime(runtimeRoot)
     patchDshCordisPanelRuntime(runtimeRoot)
     patchDshSidebarRuntime(runtimeRoot)
+    patchDshHeroLogoRuntime(runtimeRoot)
     if (!patchDshComposerHistoryRuntime(runtimeRoot)) throw new Error('官方 dsh 缺少 Composer 输入组件')
     if (!isFile(join(runtimeRoot, DSH_RUNTIME_ENTRYPOINT))) {
       throw new Error(`官方 dsh 缺少入口文件: ${DSH_RUNTIME_ENTRYPOINT}`)

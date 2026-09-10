@@ -455,6 +455,8 @@ export function useGlobalAgentListeners(): void {
     const pendingWriteTools = new Map<string, { path: string; sessionId: string }>()
     /** 正在执行的 git 突变 Bash 命令：toolUseId → sessionId（完成后触发 diff 刷新） */
     const pendingGitMutateTools = new Map<string, string>()
+    /** 正在执行的 AI 浏览器工具：toolUseId → { toolName, sessionId, startedAt } */
+    const pendingBrowserTools = new Map<string, { toolName: string; sessionId: string; startedAt: number }>()
 
     /** 构建导航到指定会话的回调 */
     const makeNavigateToSession = (sessionId: string, sessionTitle: string) => () => {
@@ -880,6 +882,20 @@ export function useGlobalAgentListeners(): void {
             }
           }
 
+          // AI 浏览器工具调用处理与控制台实时追踪
+          if (event.type === 'tool_start' && event.toolName.startsWith('BrowserPage')) {
+            pendingBrowserTools.set(event.toolUseId, {
+              toolName: event.toolName,
+              sessionId,
+              startedAt: Date.now(),
+            })
+            console.info(`[AI浏览器][Renderer] 🛠️ 工具开始执行: ${event.toolName}`, {
+              toolUseId: event.toolUseId,
+              sessionId,
+              input: event.input,
+            })
+          }
+
           // 处理后台任务事件
           if (event.type === 'task_backgrounded') {
             store.set(backgroundTasksAtomFamily(sessionId), (prev) => {
@@ -950,6 +966,25 @@ export function useGlobalAgentListeners(): void {
               store.set(agentDiffRefreshVersionAtom, (prev) => {
                 const m = new Map(prev); m.set(sessionId, (prev.get(sessionId) ?? 0) + 1); return m
               })
+            }
+            // AI 浏览器工具调用完成与结果追踪
+            if (pendingBrowserTools.has(event.toolUseId)) {
+              const info = pendingBrowserTools.get(event.toolUseId)!
+              pendingBrowserTools.delete(event.toolUseId)
+              const durationMs = Date.now() - info.startedAt
+              if (event.isError) {
+                console.error(`[AI浏览器][Renderer] ❌ 工具调用失败: ${info.toolName} (${durationMs}ms)`, {
+                  toolUseId: event.toolUseId,
+                  sessionId,
+                  result: event.result,
+                })
+              } else {
+                console.info(`[AI浏览器][Renderer] ✅ 工具调用成功: ${info.toolName} (${durationMs}ms)`, {
+                  toolUseId: event.toolUseId,
+                  sessionId,
+                  result: event.result,
+                })
+              }
             }
           } else if (event.type === 'shell_killed') {
             store.set(backgroundTasksAtomFamily(sessionId), (prev) => {
@@ -1230,6 +1265,11 @@ export function useGlobalAgentListeners(): void {
           for (const [toolId, sid] of pendingGitMutateTools) {
             if (sid === data.sessionId) {
               pendingGitMutateTools.delete(toolId)
+            }
+          }
+          for (const [toolId, info] of pendingBrowserTools) {
+            if (info.sessionId === data.sessionId) {
+              pendingBrowserTools.delete(toolId)
             }
           }
 

@@ -333,6 +333,48 @@ describe('Rust HTTP API 功能模块生命周期', () => {
     expect(env?.COPIS_PI_RPC_EXECUTABLE).toBeUndefined()
   })
 
+  test('Given 宿主环境配置了网络代理 When 启动 Rust API Then 清洗全部代理变量并确保回环地址免代理', async () => {
+    const root = createRoot()
+    const projectRootPath = join(root, 'default-workspace')
+    const projectPath = join(projectRootPath, 'project')
+    mkdirSync(projectPath, { recursive: true })
+    const records: SpawnRecord[] = []
+    const packageInfo = rustPackage('0.1.0', 'proxy-cleanup-test')
+    await activateRustVersion(root, packageInfo, 'proxy-cleanup-test')
+
+    const originalHttpProxy = process.env.HTTP_PROXY
+    const originalHttpsProxy = process.env.https_proxy
+    const originalAllProxy = process.env.ALL_PROXY
+    try {
+      process.env.HTTP_PROXY = 'http://127.0.0.1:7890'
+      process.env.https_proxy = 'http://127.0.0.1:7890'
+      process.env.ALL_PROXY = 'socks5://127.0.0.1:7890'
+
+      startHttpApiServer({
+        rootDir: join(root, 'modules'),
+        paymentWorkspace: paymentWorkspaceFor(root),
+        spawnImpl: spawnFixture(records),
+      })
+
+      const env = records[0]?.options.env
+      expect(env?.HTTP_PROXY).toBeUndefined()
+      expect(env?.http_proxy).toBeUndefined()
+      expect(env?.HTTPS_PROXY).toBeUndefined()
+      expect(env?.https_proxy).toBeUndefined()
+      expect(env?.ALL_PROXY).toBeUndefined()
+      expect(env?.all_proxy).toBeUndefined()
+      expect(env?.NO_PROXY).toContain('127.0.0.1')
+      expect(env?.no_proxy).toContain('127.0.0.1')
+    } finally {
+      if (originalHttpProxy === undefined) delete process.env.HTTP_PROXY
+      else process.env.HTTP_PROXY = originalHttpProxy
+      if (originalHttpsProxy === undefined) delete process.env.https_proxy
+      else process.env.https_proxy = originalHttpsProxy
+      if (originalAllProxy === undefined) delete process.env.ALL_PROXY
+      else process.env.ALL_PROXY = originalAllProxy
+    }
+  })
+
   test('Given 默认支付项目 When 启动 Rust API Then 注入固定 Pi 工作区环境', async () => {
     const root = createRoot()
     const projectRootPath = join(root, 'default-workspace')

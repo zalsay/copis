@@ -608,7 +608,18 @@ export function createBrowserAgentToolService(
   return {
     async executeWorker(input) {
       const context = dependencies.getBrowserAgentContext(input.sessionId)
+      console.info('[AI浏览器][主进程] executeWorker 接收到工具请求', {
+        sessionId: shortLogId(input.sessionId),
+        toolName: input.toolName,
+        toolCallId: shortLogId(input.toolCallId),
+        hasContext: Boolean(context),
+        contextTabId: context?.tabId,
+      })
       if (!context && input.toolName !== 'BrowserPageOpenTab') {
+        console.warn('[AI浏览器][主进程] executeWorker 拦截: 无 context 且非 BrowserPageOpenTab', {
+          sessionId: shortLogId(input.sessionId),
+          toolName: input.toolName,
+        })
         throw new BrowserAgentWorkerCapabilityError('browser_capability_stale', 'AI浏览器 capability 已失效')
       }
       const { triggeredBy } = dependencies.assertWorkerCapability({

@@ -1127,7 +1127,8 @@ export function registerIpcHandlers(): void {
     if (!sessionId?.trim() || !context || typeof context.tabId !== 'string' || !context.tabId.trim()) {
       throw new Error('AI浏览器页面上下文参数不正确')
     }
-    return bindBrowserAgentContext(sessionId, context, event.sender.id)
+    console.info('[AI浏览器][IPC] 渲染进程请求绑定上下文', { sessionId, tabId: context.tabId })
+    return bindBrowserAgentContext(sessionId, context, event.sender.id, { preserveWorkerCapability: true })
   })
   ipcMain.handle(BROWSER_WORKFLOW_IPC_CHANNELS.UNBIND_CONTEXT, async (event, sessionId: string) => {
     await assertBrowserWorkflowMainWindow(event.sender.id)

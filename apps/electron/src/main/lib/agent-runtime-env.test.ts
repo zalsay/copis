@@ -182,7 +182,7 @@ describe('Agent Windows Shell 运行环境', () => {
     })
   })
 
-  test('Given 指定代理 URL When 构建 Agent 环境 Then 注入 HTTP/HTTPS 代理环境变量', () => {
+  test('Given 指定代理 URL When 构建 Agent 环境 Then 注入 HTTP/HTTPS 代理环境变量且 NO_PROXY 默认包含回环地址', () => {
     const result = buildAgentRuntimeEnv({
       bundledCliPath: '',
       proxyUrl: 'http://127.0.0.1:7890',
@@ -192,6 +192,21 @@ describe('Agent Windows Shell 运行环境', () => {
     expect(result.env.HTTP_PROXY).toBe('http://127.0.0.1:7890')
     expect(result.env.HTTPS_PROXY).toBe('http://127.0.0.1:7890')
     expect(result.env.ALL_PROXY).toBe('http://127.0.0.1:7890')
+    expect(result.env.NO_PROXY).toContain('127.0.0.1')
+    expect(result.env.NO_PROXY).toContain('localhost')
+  })
+
+  test('Given 指定代理 URL 且宿主已有 NO_PROXY When 构建 Agent 环境 Then 合并保留回环地址', () => {
+    const result = buildAgentRuntimeEnv({
+      bundledCliPath: '',
+      proxyUrl: 'http://127.0.0.1:7890',
+      processEnv: {
+        NO_PROXY: 'internal.corp',
+      },
+    })
+
+    expect(result.env.NO_PROXY).toContain('internal.corp')
+    expect(result.env.NO_PROXY).toContain('127.0.0.1')
   })
 
   test('Given 非自定义模型请求 (inheritProcessProxy: false) When 宿主环境配置了代理 Then 隔离并保持直连', () => {
