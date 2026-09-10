@@ -1,6 +1,6 @@
 {
   "name": "@copis/electron",
-  "version": "0.0.82",
+  "version": "0.0.83",
   "description": "Copis Working desktop client - Electron App",
   "main": "dist/main.cjs",
   "author": {
@@ -178,7 +178,7 @@
     "platformVersions": {
       "darwin-arm64": "0.0.84",
       "darwin-x64": "0.0.82",
-      "win32-x64": "0.0.82",
+      "win32-x64": "0.0.84",
       "linux-x64": "0.0.82"
     }
   }
