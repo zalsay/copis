@@ -1,7 +1,14 @@
-import { describe, expect, test, afterEach, beforeEach } from 'bun:test'
-import { existsSync, readFileSync, writeFileSync, rmSync } from 'node:fs'
+import { describe, expect, test, afterEach, beforeEach, afterAll, mock } from 'bun:test'
+import { existsSync, readFileSync, writeFileSync, rmSync, mkdtempSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { getSettingsPath } from './config-paths'
 import { getSettings, updateSettings } from './settings-service'
+
+const tempRoot = mkdtempSync(join(tmpdir(), 'copis-settings-test-'))
+mock.module('./config-paths', () => ({ getSettingsPath: () => join(tempRoot, 'settings.json') }))
+mock.module('electron', () => ({ app: { isPackaged: true } }))
+afterAll(() => rmSync(tempRoot, { recursive: true, force: true }))
 
 describe('settings-service appMode 持久化与归一化', () => {
   let originalSettings: string | undefined
@@ -47,7 +54,7 @@ describe('settings-service appMode 持久化与归一化', () => {
   })
 
   test('Given 调用 updateSettings 传入非法值 When 持久化 Then 安全归一化为 agent 模式', () => {
-    updateSettings({ appMode: 'invalid-mode' as any })
+    updateSettings({ appMode: 'invalid-mode' as unknown as 'agent' })
 
     const settings = getSettings()
     expect(settings.appMode).toBe('agent')

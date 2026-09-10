@@ -8,7 +8,7 @@ const ledgerSource = readFileSync(join(import.meta.dir, '..', '..', 'lib', 'work
 const globalStyles = readFileSync(join(import.meta.dir, '..', '..', 'styles', 'globals.css'), 'utf8')
 const tabAtomsSource = readFileSync(join(import.meta.dir, '..', '..', 'atoms', 'tab-atoms.ts'), 'utf8')
 const tabContentSource = readFileSync(join(import.meta.dir, '..', 'tabs', 'TabContent.tsx'), 'utf8')
-const ipcSource = readFileSync(join(import.meta.dir, '..', '..', '..', 'main', 'ipc.ts'), 'utf8')
+const ipcSource = readFileSync(join(import.meta.dir, '..', '..', '..', 'main', 'ipc', 'feishu.ipc.ts'), 'utf8')
 
 describe('Working 设置菜单契约', () => {
   test('Given Working 设置 When 读取菜单定义 Then 保留旧菜单并包含四个迁移页面', () => {

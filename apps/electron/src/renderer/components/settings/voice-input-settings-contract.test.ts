@@ -6,7 +6,7 @@ const settingsSource = readFileSync(join(import.meta.dir, 'VoiceInputSettings.ts
 const settingsStyles = readFileSync(join(import.meta.dir, 'VoiceInputSettings.css'), 'utf8')
 const settingsTypes = readFileSync(join(import.meta.dir, '..', '..', '..', 'types', 'settings.ts'), 'utf8')
 const serviceSource = readFileSync(join(import.meta.dir, '..', '..', '..', 'main', 'lib', 'voice-dictation-settings-service.ts'), 'utf8')
-const ipcSource = readFileSync(join(import.meta.dir, '..', '..', '..', 'main', 'ipc.ts'), 'utf8')
+const ipcSource = readFileSync(join(import.meta.dir, '..', '..', '..', 'main', 'ipc', 'voice-dictation.ipc.ts'), 'utf8')
 const workingAtomsSource = readFileSync(join(import.meta.dir, '..', '..', 'atoms', 'working-atoms.ts'), 'utf8')
 const speechButtonSource = readFileSync(join(import.meta.dir, '..', 'ai-elements', 'speech-button.tsx'), 'utf8')
 
