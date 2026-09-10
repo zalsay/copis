@@ -23,8 +23,10 @@ if (import.meta.main) {
   const appDir = resolve(import.meta.dir, '..')
   const metadata = JSON.parse(readFileSync(resolve(appDir, 'package.json'), 'utf8')) as ElectronVersionMetadata
   const plan = createPackagingPlan(process.argv.slice(2), metadata)
-  const build = spawnSync('bun', ['run', 'build:renderer'], { cwd: appDir, env: { ...process.env, ...plan.rendererEnv }, stdio: 'inherit' })
+  const build = spawnSync(process.execPath, ['run', 'build:renderer'], { cwd: appDir, env: { ...process.env, ...plan.rendererEnv }, stdio: 'inherit' })
+  if (build.error) throw build.error
   if (build.status !== 0) process.exit(build.status ?? 1)
-  const result = spawnSync('bunx', ['electron-builder', ...plan.builderArgs], { cwd: appDir, env: { ...process.env, ...plan.rendererEnv }, stdio: 'inherit' })
+  const result = spawnSync(process.execPath, ['x', 'electron-builder', ...plan.builderArgs], { cwd: appDir, env: { ...process.env, ...plan.rendererEnv }, stdio: 'inherit' })
+  if (result.error) throw result.error
   process.exit(result.status ?? 1)
 }

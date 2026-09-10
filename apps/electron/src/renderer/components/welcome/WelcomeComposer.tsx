@@ -315,6 +315,10 @@ export function WelcomeComposer(): React.ReactElement {
         <InputToolbarOverflow items={toolbarItems} trailing={trailingNode} />
       </div>
 
+      <p className="text-center text-[11px] leading-tight text-muted-foreground/60 select-none">
+        内容由 AI 生成，请核实重要信息
+      </p>
+
       {error && <p className="px-1 text-xs text-destructive">{error}</p>}
       {session && !error && !sending && entries.length > 0 && (
         <span className="sr-only">Agent 会话已连接</span>

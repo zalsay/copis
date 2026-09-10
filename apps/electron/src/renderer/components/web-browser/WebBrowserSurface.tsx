@@ -733,6 +733,10 @@ export function WebBrowserSurface(): React.ReactElement {
   }, [activeTab?.url, browserAgentSession?.workspaceId, browserAgentSessionId])
 
   React.useEffect(() => {
+    // 只有当 AI 浏览器侧边抽屉显式展开时，才在切页时同步跟随活动页签
+    // 若抽屉未展开（例如用户在主聊天界面对话、或 Agent 在后台非激活页签执行自动化操作），
+    // 绝不能强行篡改 Agent 会话已绑定的目标页签，更不可触发误解绑或破坏 Worker capability
+    if (!browserWorkflowEnabled || !browserAgentPanelOpen) return
     if (!browserAgentSessionId || !activeTabId) return
     if (browserAgentContextLookupTabId === activeTabId) return
     const request: BrowserAgentContextRequest = {
@@ -743,6 +747,11 @@ export function WebBrowserSurface(): React.ReactElement {
     }
     browserAgentContextRequestRef.current = request
     let cancelled = false
+    console.info('[AI浏览器][Renderer][WebBrowserSurface] 侧栏已展开，同步绑定会话到当前活动页签', {
+      sessionId: browserAgentSessionId,
+      tabId: activeTabId,
+      url: activeTab?.url,
+    })
     void browserAgentBindingQueue.bind(browserAgentSessionId, activeTabId).then(({ status }) => {
       if (!isCurrentBrowserAgentContextRequest(
         request,
@@ -750,6 +759,11 @@ export function WebBrowserSurface(): React.ReactElement {
         browserAgentMountedRef.current && !cancelled,
         browserAgentTargetRef.current,
       )) return
+      console.info('[AI浏览器][Renderer][WebBrowserSurface] 活动页签绑定成功', {
+        sessionId: browserAgentSessionId,
+        tabId: activeTabId,
+        status,
+      })
       setBrowserWorkflowStatus(status)
     }).catch((error) => {
       if (!isCurrentBrowserAgentContextRequest(
@@ -758,12 +772,12 @@ export function WebBrowserSurface(): React.ReactElement {
         browserAgentMountedRef.current && !cancelled,
         browserAgentTargetRef.current,
       )) return
-      console.error('[Browser Workflow] 切换绑定页签失败:', error)
+      console.error('[AI浏览器][Renderer][WebBrowserSurface] 切换绑定页签失败:', error)
     })
     return () => {
       cancelled = true
     }
-  }, [activeTab?.url, activeTabId, browserAgentBindingQueue, browserAgentContextLookupTabId, browserAgentSessionId, setBrowserWorkflowStatus])
+  }, [activeTab?.url, activeTabId, browserAgentBindingQueue, browserAgentContextLookupTabId, browserAgentPanelOpen, browserAgentSessionId, browserWorkflowEnabled, setBrowserWorkflowStatus])
 
   React.useEffect(() => {
     browserAgentSessionIdRef.current = browserAgentSessionId

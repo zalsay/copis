@@ -47,4 +47,8 @@ describe('Composer 默认模型', () => {
     expect(settingsInitializerSource).not.toContain('setAgentModelId(')
     expect(settingsInitializerSource).toContain('initialWorkingModelRequestId === workingModelRequestIdRef.current')
   })
+
+  test('Given 欢迎页 Composer When 渲染 Then 包含 AI 生成内容免责提示小字', () => {
+    expect(welcomeComposerSource).toContain('内容由 AI 生成，请核实重要信息')
+  })
 })

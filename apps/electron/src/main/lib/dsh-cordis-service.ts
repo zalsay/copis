@@ -18,6 +18,7 @@ import type { DshCordisStatus } from '@copis/shared'
 import { getDefaultSkillsDir, getDshHomeDir } from './config-paths'
 import { resolveDshCommand, resolveDshNode } from './dsh-runtime'
 import { patchDshComposerHistoryRuntime } from './dsh-composer-history-patch'
+import { patchDshHeroLogoRuntime } from './dsh-hero-logo-patch'
 import { patchDshSidebarRuntime } from './dsh-sidebar-patch'
 import {
   applyDshModelConfig,
@@ -617,6 +618,7 @@ async function doStartDshCordisServer(options: {
   ensureCordisWebProfile(dshHomeDir, profile)
   // 托管模块的 launcher 位于 bin/，同时兼容已安装版本而无需重新下载模块。
   patchDshComposerHistoryRuntime(join(dshCmd, '..', '..', 'runtime'))
+  patchDshHeroLogoRuntime(join(dshCmd, '..', '..', 'runtime'))
   patchDshSidebarRuntime(join(dshCmd, '..', '..', 'runtime'))
   registerDshCordisWebSessionHeaders()
 

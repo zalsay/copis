@@ -17,7 +17,7 @@ describe('AI浏览器会话策略', () => {
 
     expect(selection).toEqual({ sessionId: 'browser-session-1', shouldCreate: false })
     expect(browserAgentUnmountPolicy).toEqual({
-      unbindContext: true,
+      unbindContext: false,
       preserveSessionId: true,
     })
   })

@@ -59,6 +59,7 @@ import {
   revokeBrowserAgentWorkerCapability,
   updateBrowserAgentWorkerCapabilityTabId,
 } from './browser-agent-worker-capability'
+import { redactLogOrigin } from './bridge-log-redaction'
 
 interface BrowserAgentBinding {
   sessionId: string
@@ -822,6 +823,12 @@ export function bindBrowserAgentContext(
   options: { preserveWorkerCapability?: boolean } = {},
 ): BrowserWorkflowStatus {
   // 1. 前置准备与校验全部在 acquire 前完成
+  console.info('[AI浏览器][bindBrowserAgentContext] 绑定会话到页签', {
+    sessionId,
+    tabId: context.tabId,
+    ownerWebContentsId,
+    preserveWorkerCapability: options.preserveWorkerCapability,
+  })
   const session = getAgentSessionMeta(sessionId)
   if (!session) throw new Error('AI浏览器会话不存在')
   if (!session.workspaceId) throw new Error('AI浏览器会话必须绑定工作区')
@@ -889,12 +896,22 @@ export function bindBrowserAgentContext(
     }
   }
 
+  // 同步更新 capability 的 tabId：初次绑定、相同页签重新绑定或保留 Worker capability 的切页均对齐 tabId
+  if (options.preserveWorkerCapability || !previousBinding || previousBinding.context.tabId === context.tabId) {
+    updateBrowserAgentWorkerCapabilityTabId(sessionId, context.tabId)
+  }
+
   const status = { ...currentStatus(sessionId), sessionId, tabId: tab.id, tabTitle: tab.title }
   emitStatus(sessionId, status)
   return status
 }
 
 export function unbindBrowserAgentContext(sessionId: string, ownerWebContentsId?: number): void {
+  console.info('[AI浏览器][unbindBrowserAgentContext] 解绑会话页签上下文', {
+    sessionId,
+    ownerWebContentsId,
+    hadBinding: bindings.has(sessionId),
+  })
   if (ownerWebContentsId !== undefined) assertBindingOwner(sessionId, ownerWebContentsId)
   revokeBrowserAgentWorkerCapability(sessionId)
   const recording = recordings.get(sessionId)
@@ -906,6 +923,21 @@ export function unbindBrowserAgentContext(sessionId: string, ownerWebContentsId?
   }
   emitStatus(sessionId, { sessionId, state: 'idle' })
 }
+
+// 监听 WebTab 生命周期：当页签被用户关闭时，自动解绑关联该页签的所有会话并释放资源
+subscribeWebTabLifecycle((event) => {
+  if (event.type === 'closed') {
+    for (const [sessionId, binding] of Array.from(bindings.entries())) {
+      if (binding.context.tabId === event.tabId) {
+        console.info('[AI浏览器][WebTabLifecycle] 绑定的页签已关闭，自动解绑会话上下文', {
+          sessionId,
+          tabId: event.tabId,
+        })
+        unbindBrowserAgentContext(sessionId)
+      }
+    }
+  }
+})
 
 const ALLOWED_BROWSER_CDP_METHODS = new Set<BrowserCdpMethod>([
   'DOM.setFileInputFiles',
@@ -1014,10 +1046,11 @@ export interface BrowserPageOpenTabResult {
   incognito: boolean
 }
 
-/** 打开新的用户网页页签，并把当前 AI浏览器会话绑定到新页签。 */
+/** 打开新的用户网页页签，并把当前 AI浏览器会话绑定到新页签。默认不抢占激活，保留在 Copis 首页。 */
 export function openBrowserAgentTab(sessionId: string, url: string, incognito = false): BrowserPageOpenTabResult {
-  const snapshot = createWebTab({ url, activate: true, incognito })
-  const tabId = snapshot.activeTabId
+  console.info('[AI浏览器][openBrowserAgentTab] 开始打开新页签 (activate: false)', { sessionId, url: redactLogOrigin(url), incognito })
+  const snapshot = createWebTab({ url, activate: false, incognito })
+  const tabId = (snapshot as { createdTabId?: string }).createdTabId ?? snapshot.tabs.at(-1)?.id
   if (!tabId) throw new Error('新网页页签创建失败')
   const tab = getWebTabState(tabId)
   if (!tab || !normalizeBrowserPageOrigin(tab.url)) {
@@ -1025,6 +1058,12 @@ export function openBrowserAgentTab(sessionId: string, url: string, incognito = 
   }
   bindBrowserAgentContext(sessionId, { tabId }, undefined, { preserveWorkerCapability: true })
   updateBrowserAgentWorkerCapabilityTabId(sessionId, tabId)
+  console.info('[AI浏览器][openBrowserAgentTab] 成功打开新页签并绑定', {
+    sessionId,
+    tabId,
+    url: redactLogOrigin(tab.url),
+    title: tab.title,
+  })
   return { tabId, url: sanitizeBrowserWorkflowUrl(tab.url), title: tab.title, incognito: tab.isIncognito === true }
 }
 

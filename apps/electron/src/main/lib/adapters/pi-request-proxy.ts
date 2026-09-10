@@ -75,10 +75,15 @@ export function createPiRequestProxyDispatcher(options: PiRequestProxyOptions): 
 
   const timeoutMs = options.httpIdleTimeoutMs ?? DEFAULT_HTTP_IDLE_TIMEOUT_MS
   const normalizedTimeoutMs = Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : 0
+  const defaultNoProxy = '127.0.0.1,localhost'
+  const rawNoProxy = options.noProxy?.trim()
+  const effectiveNoProxy = rawNoProxy
+    ? (rawNoProxy.includes('127.0.0.1') ? rawNoProxy : `${rawNoProxy},${defaultNoProxy}`)
+    : defaultNoProxy
   return withUndiciErrorListener(new EnvHttpProxyAgent({
     httpProxy: proxyUrl,
     httpsProxy: proxyUrl,
-    ...(options.noProxy !== undefined && { noProxy: options.noProxy }),
+    noProxy: effectiveNoProxy,
     allowH2: false,
     headersTimeout: normalizedTimeoutMs,
     bodyTimeout: normalizedTimeoutMs,

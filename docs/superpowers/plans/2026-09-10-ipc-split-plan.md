@@ -1,6 +1,6 @@
 # ipc.ts 按业务域拆分实施计划
 
-> 状态：T1–T7 已完成代码迁移与定向验证；全仓测试残留问题及实际窗口待验收项见同目录执行记录。用户已授权提交并合入 main，正在整合验证。
+> 状态：T1–T7 已完成代码迁移与定向验证，已整合最新 main；用户已授权本地合并。全仓测试残留问题及实际窗口待验收项见同目录执行记录。
 > 执行方式：按 executing-plans 技能逐任务执行和验证；每次只迁移一个业务域。
 > 基线：2026-09-10，`apps/electron/src/main/ipc.ts` 为 5459 行，直接包含 376 个 `ipcMain.handle` 和 5 个 `ipcMain.on` 调用；另调用 `registerUpdaterIpc()`。这些是静态调用点数量，不包含更新模块内部注册。
 > 原版对照提交：`03679b6b80bb251623040877207a0f69b3cfa7f4`，对照文件为该提交中的 `apps/electron/src/main/ipc.ts`。可用 `git show 03679b6b80bb251623040877207a0f69b3cfa7f4:apps/electron/src/main/ipc.ts` 读取，后续审查不要随 HEAD 变化替换此基线。
@@ -8,6 +8,8 @@
 > 2026-09-10 增量同步：同步主工作区尚未提交的 `ipc.ts` 更新，来源 HEAD 仍为上述提交，源文件 Git blob hash 为 `2a9a89bc57f0ff5811eaef7bd6875f35d9770c95`（由 `git hash-object apps/electron/src/main/ipc.ts` 获取，并非新提交 hash）。浏览器上下文绑定增加日志并传入 `{ preserveWorkerCapability: true }`，已迁入 `ipc/browser-workflow.ipc.ts`；当前行为对照应使用此源文件版本，原提交保留作为历史迁移基线。
 
 **目标**：将主进程 IPC 入口拆成职责明确、每文件不超过 600 行的模块，保持现有行为、调用接口和初始化顺序。
+
+本地合并对照：`38afd37ac122f9f5712a413fcacf03cad3b2ab66` 已包含上述 IPC 增量，其 `ipc.ts` blob hash 与增量同步记录一致。拆分提交为 `7058ea81`；整合时保留 main 的其他更新，Electron 包 patch 递增至 `0.0.84`。
 
 **架构**：保留 `ipc.ts` 作为唯一对外注册入口，子模块按业务域导出具名注册函数。平台适配、文件访问校验、启动维护任务分别迁移，业务服务仍由现有 `main/lib/` 实现。
 

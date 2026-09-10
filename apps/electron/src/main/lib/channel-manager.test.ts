@@ -16,6 +16,15 @@ mock.module('electron', () => ({
     isPackaged: true,
     getPath: () => join(tempHome, 'Library', 'Application Support'),
   },
+  BrowserWindow: class {},
+  WebContentsView: class {},
+  clipboard: {},
+  dialog: {},
+  nativeImage: { createFromPath: () => ({}) },
+  nativeTheme: {},
+  powerMonitor: {},
+  powerSaveBlocker: {},
+  screen: {},
   safeStorage: {
     isEncryptionAvailable: () => false,
     encryptString: (value: string) => Buffer.from(value),
@@ -107,5 +116,11 @@ describe('统一渠道列表', () => {
 
     await expect(channelManager.resolveChannelRuntimeApiKey(COPIS_WORKING_ZHIPU_CHANNEL_ID)).resolves.toBe('')
     expect(JSON.parse(readFileSync(channelsPath(), 'utf-8')).channels).toHaveLength(0)
+  })
+
+  test('Given 官方 Working 渠道 When 查询 Plan 额度 Then 直接返回无需外部额度查询且不走代理', async () => {
+    const result = await channelManager.queryChannelPlanQuota(COPIS_WORKING_CHANNEL_ID)
+    expect(result.supported).toBe(false)
+    expect(result.message).toContain('官方 Working 渠道')
   })
 })

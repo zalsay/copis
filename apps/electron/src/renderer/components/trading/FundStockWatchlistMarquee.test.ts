@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test'
+import { readFileSync } from 'node:fs'
 import { isSameSymbol, type WatchlistItem, type MarketCategory } from '@copis/shared'
 import {
   DEFAULT_TRADING_AI_DOCK_WIDTH,
@@ -655,6 +656,11 @@ describe('基金股市 - AI 投研助手右栏内嵌会话与不跳转主界面 
     }
     expect(surfaceProps.hideComposer).toBeTrue()
     expect(surfaceProps.variant).toBe('investment')
+  })
+
+  test('Given 投研终端底部 Composer When 渲染 Then 包含 AI 生成内容免责提示小字', () => {
+    const terminalSource = readFileSync(new URL('./FundStockTerminalView.tsx', import.meta.url), 'utf8')
+    expect(terminalSource).toContain('内容由 AI 生成，请核实重要信息')
   })
 })
 

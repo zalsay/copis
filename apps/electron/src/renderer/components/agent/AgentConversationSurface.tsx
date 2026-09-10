@@ -3147,6 +3147,10 @@ export function AgentConversationSurface({
             {/* Footer 工具栏 — 容器变窄时尾部按钮自动折叠进「更多」Popover */}
             <InputToolbarOverflow items={inputToolbarItems} trailing={inputTrailingNode} />
           </div>
+
+          <p className="mt-1.5 text-center text-[11px] leading-tight text-muted-foreground/60 select-none">
+            内容由 AI 生成，请核实重要信息
+          </p>
         </div>
         )}
       </div>

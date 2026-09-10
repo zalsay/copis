@@ -105,6 +105,7 @@ function bridgeLogFields(options: PiBrowserAgentToolOptions, toolCallId: string,
     sessionId: shortLogId(options.sessionId),
     toolCallId: shortLogId(toolCallId),
     toolName,
+    tokenFingerprint: shortLogId(options.capability.token),
   }
 }
 
@@ -114,8 +115,18 @@ class PiBrowserAgentToolClient {
 
   constructor(private readonly options: PiBrowserAgentToolOptions) {
     if (options.capability.endpoint !== '/api/internal/agent/browser-tool' || !options.capability.token.trim()) {
+      console.error('[AI浏览器][Pi Worker] 工具客户端构造失败: capability 参数不正确', {
+        sessionId: shortLogId(options.sessionId),
+        endpoint: options.capability.endpoint,
+        tokenLength: options.capability.token?.length,
+      })
       throw new Error('AI浏览器 capability 不正确')
     }
+    console.info('[AI浏览器][Pi Worker] 工具客户端初始化成功', {
+      sessionId: shortLogId(options.sessionId),
+      endpoint: options.capability.endpoint,
+      tokenFingerprint: shortLogId(options.capability.token),
+    })
     this.baseUrl = resolveBaseUrl(options.baseUrl)
     this.fetchImpl = options.fetchImpl ?? fetch
   }

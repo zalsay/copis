@@ -50,7 +50,10 @@ const createdWebTabInputs: Array<{ url?: string; incognito?: boolean; activate?:
 const unavailableTabIds = new Set<string>()
 const rustRecordingStarts: Array<Record<string, unknown>> = []
 const promotedWorkflowTabIds: string[] = []
-let lifecycleListener: ((event: { type: string; tabId: string; snapshot: { tabs: unknown[]; activeTabId: string | null } }) => void) | undefined
+const lifecycleListeners = new Set<(event: { type: string; tabId: string; snapshot: { tabs: unknown[]; activeTabId: string | null } }) => void>()
+let lifecycleListener: ((event: { type: string; tabId: string; snapshot: { tabs: unknown[]; activeTabId: string | null } }) => void) | undefined = (event) => {
+  for (const listener of Array.from(lifecycleListeners)) listener(event)
+}
 let cdpEventSubscriptionCount = 0
 let cdpDetachSubscriptionCount = 0
 let rustRecordingContent: string | undefined
@@ -136,7 +139,7 @@ mock.module('./web-tab-manager', () => ({
   createWebTab: (input: { url?: string; incognito?: boolean; activate?: boolean } = {}) => {
     createdWebTabInputs.push(input)
     currentTab = { id: 'tab-2', url: input.url ?? 'https://new.example.test', title: 'New tab', isIncognito: input.incognito === true }
-    return { tabs: [currentTab], activeTabId: 'tab-2' }
+    return { tabs: [currentTab], activeTabId: input.activate === false ? null : 'tab-2', createdTabId: 'tab-2' }
   },
   acquireWebTabPagePort: (tabId: string, owner: string) => {
     if (acquirePortOverride) {
@@ -213,9 +216,9 @@ mock.module('./web-tab-manager', () => ({
     currentTab = { id: tabId, url: 'https://example.com/account?tab=1', title: 'Workflow failure' }
     return currentTab
   },
-  subscribeWebTabLifecycle: (listener: typeof lifecycleListener) => {
-    lifecycleListener = listener
-    return () => { lifecycleListener = undefined }
+  subscribeWebTabLifecycle: (listener: (event: { type: string; tabId: string; snapshot: { tabs: unknown[]; activeTabId: string | null } }) => void) => {
+    lifecycleListeners.add(listener)
+    return () => { lifecycleListeners.delete(listener) }
   },
   navigateWebTab: () => undefined,
   closeWorkflowWebTab: () => undefined,
@@ -287,7 +290,9 @@ beforeEach(() => {
   unavailableTabIds.clear()
   rustRecordingStarts.length = 0
   promotedWorkflowTabIds.length = 0
-  lifecycleListener = undefined
+  lifecycleListener = (event) => {
+    for (const listener of Array.from(lifecycleListeners)) listener(event)
+  }
   cdpEventSubscriptionCount = 0
   cdpDetachSubscriptionCount = 0
   rustRecordingContent = undefined
@@ -400,14 +405,14 @@ describe('Browser Agent Context 绑定', () => {
   test('Given incognito=true When Agent opens a tab Then it uses an isolated tab and marks the result', () => {
     const result = openBrowserAgentTab('browser-session', 'https://new.example.test', true)
 
-    expect(createdWebTabInputs.at(-1)).toEqual({ url: 'https://new.example.test', activate: true, incognito: true })
+    expect(createdWebTabInputs.at(-1)).toEqual({ url: 'https://new.example.test', activate: false, incognito: true })
     expect(result.incognito).toBe(true)
   })
 
   test('Given incognito is omitted When Agent opens a tab Then it remains a normal tab', () => {
     const result = openBrowserAgentTab('browser-session', 'https://new.example.test')
 
-    expect(createdWebTabInputs.at(-1)).toEqual({ url: 'https://new.example.test', activate: true, incognito: false })
+    expect(createdWebTabInputs.at(-1)).toEqual({ url: 'https://new.example.test', activate: false, incognito: false })
     expect(result.incognito).toBe(false)
   })
 
@@ -565,6 +570,48 @@ describe('Browser Agent Context 绑定', () => {
       tabId: 'tab-1',
       token: capability.token,
     })).toThrow(expect.objectContaining({ code: 'browser_capability_stale' }))
+  })
+
+  test('Given session bound to a web tab When web tab emits closed lifecycle event Then the session is automatically unbound and capability revoked', () => {
+    bindBrowserAgentContext('browser-session', { tabId: 'tab-1' })
+    const capability = issueBrowserAgentWorkerCapability({
+      sessionId: 'browser-session',
+      tabId: 'tab-1',
+      triggeredBy: 'user',
+    })
+
+    expect(getBrowserAgentContext('browser-session')).toBeDefined()
+
+    // 触发页签关闭事件
+    lifecycleListener?.({
+      type: 'closed',
+      tabId: 'tab-1',
+      snapshot: { tabs: [], activeTabId: null },
+    })
+
+    expect(getBrowserAgentContext('browser-session')).toBeUndefined()
+    expect(() => assertBrowserAgentWorkerCapability({
+      sessionId: 'browser-session',
+      tabId: 'tab-1',
+      token: capability.token,
+    })).toThrow(expect.objectContaining({ code: 'browser_capability_stale' }))
+  })
+
+  test('Given Worker issued capability without tabId When session is bound to a tab Then Worker capability tabId is automatically synchronized', () => {
+    const capability = issueBrowserAgentWorkerCapability({
+      sessionId: 'browser-session',
+      triggeredBy: 'user',
+    })
+
+    bindBrowserAgentContext('browser-session', { tabId: 'tab-1' })
+
+    expect(assertBrowserAgentWorkerCapability({
+      sessionId: 'browser-session',
+      tabId: 'tab-1',
+      token: capability.token,
+    })).toEqual({ triggeredBy: 'user' })
+
+    unbindBrowserAgentContext('browser-session')
   })
 
   test('Given account URL is authorized When settings URL changes path and query Then the same Origin remains authorized', () => {

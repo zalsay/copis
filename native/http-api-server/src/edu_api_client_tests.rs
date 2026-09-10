@@ -1,5 +1,6 @@
 use super::edu_api_client::{
-    EduApiClient, EduApiError, EduApiRequest, EduApiResponse, EduApiTransport, DEFAULT_BACKEND_URL,
+    EduApiClient, EduApiError, EduApiRequest, EduApiResponse, EduApiTransport,
+    UreqEduApiTransport, DEFAULT_BACKEND_URL,
 };
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Barrier, Mutex};
@@ -261,4 +262,26 @@ fn image_generation_timeout_is_at_least_five_minutes() {
     use super::edu_api_client::IMAGE_GENERATION_TIMEOUT_SECS;
 
     assert!(IMAGE_GENERATION_TIMEOUT_SECS >= 300);
+}
+
+#[test]
+fn edu_api_transport_ignores_proxy_environment_variables() {
+    std::env::set_var("HTTP_PROXY", "http://127.0.0.1:9999");
+    std::env::set_var("HTTPS_PROXY", "http://127.0.0.1:9999");
+    std::env::set_var("ALL_PROXY", "socks5://127.0.0.1:9999");
+    std::env::set_var("http_proxy", "http://127.0.0.1:9999");
+    std::env::set_var("https_proxy", "http://127.0.0.1:9999");
+    std::env::set_var("all_proxy", "socks5://127.0.0.1:9999");
+
+    let transport = UreqEduApiTransport::new(DEFAULT_BACKEND_URL).unwrap();
+    assert!(transport.api_proxy().is_none());
+    assert!(transport.stream_proxy().is_none());
+    assert!(transport.image_proxy().is_none());
+
+    std::env::remove_var("HTTP_PROXY");
+    std::env::remove_var("HTTPS_PROXY");
+    std::env::remove_var("ALL_PROXY");
+    std::env::remove_var("http_proxy");
+    std::env::remove_var("https_proxy");
+    std::env::remove_var("all_proxy");
 }

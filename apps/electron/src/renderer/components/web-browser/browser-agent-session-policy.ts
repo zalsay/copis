@@ -20,8 +20,14 @@ export interface BrowserAgentWorkspaceCandidate {
   slug: string
 }
 
+/**
+ * WebBrowserSurface 卸载策略：
+ * - unbindContext: false。React 宿主组件在用户查看对话面板或切换页面时会卸载，
+ *   但网页页签与后台 Agent 依然处于存活执行状态，不能解除绑定或销毁 CDP 会话。
+ *   真实的解绑生命周期由页签关闭（closed）或显式切换会话触发。
+ */
 export const browserAgentUnmountPolicy = {
-  unbindContext: true,
+  unbindContext: false,
   preserveSessionId: true,
 } as const
 

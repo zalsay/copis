@@ -209,7 +209,6 @@
 ### B2：ipc.ts 与 preload 配对迁移
 
 2026-09-10 执行进展：IPC 主入口的 T1–T7 拆分已完成，`ipc.ts` 从 5459 行降至 180 行，注册模块均不超过 406 行。376 handle / 5 on 注册顺序及实现对照通过；preload 本轮只做兼容构建验证，尚未拆分。全仓测试残留问题及用户实际窗口验收见 [执行记录](superpowers/plans/2026-09-10-ipc-split-execution.md)，因此不将整个 B2 标为完成。
-
 当前真实入口是 `registerIpcHandlers(): void`，保留在 `apps/electron/src/main/ipc.ts`；不要沿用旧设计中未存在的 `registerAllIpcHandlers(mainWindow)` 作为对外 API。
 
 拟新增目录及文件（其余域以同样方式逐个登记）：

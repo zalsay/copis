@@ -195,3 +195,24 @@ fn model_client_sends_only_the_supplied_bearer_and_model_headers_to_its_fixed_ba
     assert_eq!(body, "{}");
     server.join().unwrap();
 }
+
+#[test]
+fn model_request_client_ignores_proxy_environment_variables() {
+    let _guard = environment_lock().lock().unwrap();
+    std::env::set_var("HTTP_PROXY", "http://127.0.0.1:9999");
+    std::env::set_var("HTTPS_PROXY", "http://127.0.0.1:9999");
+    std::env::set_var("ALL_PROXY", "socks5://127.0.0.1:9999");
+    std::env::set_var("http_proxy", "http://127.0.0.1:9999");
+    std::env::set_var("https_proxy", "http://127.0.0.1:9999");
+    std::env::set_var("all_proxy", "socks5://127.0.0.1:9999");
+
+    let client = ModelRequestClient::new(DEFAULT_MODEL_REQUEST_URL, 30).unwrap();
+    assert!(client.proxy().is_none());
+
+    std::env::remove_var("HTTP_PROXY");
+    std::env::remove_var("HTTPS_PROXY");
+    std::env::remove_var("ALL_PROXY");
+    std::env::remove_var("http_proxy");
+    std::env::remove_var("https_proxy");
+    std::env::remove_var("all_proxy");
+}

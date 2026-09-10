@@ -584,7 +584,7 @@ export function CopisWorkingSidebar({ width, noTransition = false }: CopisWorkin
     const isMenuOpenUp = isMenuOpen && openMenuDirection === 'up'
 
     return (
-      <div className="copis-working-project-group" key={workspace.id}>
+      <div className={cn('copis-working-project-group', isMenuOpen && 'menu-open')} key={workspace.id}>
         <div
           className={cn(
             'copis-working-project-row',
@@ -611,9 +611,11 @@ export function CopisWorkingSidebar({ width, noTransition = false }: CopisWorkin
               setOpenMenuWorkspaceId(null)
               return
             }
-            // 靠近侧栏底部时向下弹出会被下方组件遮挡，改为向上弹出。
+            // 靠近侧栏滚动容器底部时向下弹出会被遮挡，改为向上弹出。
             const triggerRect = event.currentTarget.getBoundingClientRect()
-            const spaceBelow = window.innerHeight - triggerRect.bottom
+            const bodyEl = event.currentTarget.closest('.copis-working-sidebar-body')
+            const bodyBottom = bodyEl ? bodyEl.getBoundingClientRect().bottom : window.innerHeight
+            const spaceBelow = bodyBottom - triggerRect.bottom
             setOpenMenuDirection(spaceBelow < PROJECT_MENU_ESTIMATED_HEIGHT ? 'up' : 'down')
             setOpenMenuWorkspaceId(workspace.id)
           }}>

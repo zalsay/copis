@@ -1688,6 +1688,10 @@ export function FundStockTerminalView(): React.ReactElement {
                 className="px-2 py-1.5"
               />
             </div>
+
+            <p className="mt-1.5 text-center text-[10px] leading-tight text-muted-foreground/60 select-none truncate">
+              内容由 AI 生成，请核实重要信息
+            </p>
           </div>
         </aside>
       </div>

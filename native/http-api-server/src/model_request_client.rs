@@ -52,9 +52,15 @@ impl ModelRequestClient {
         let agent = ureq::Agent::config_builder()
             .timeout_global(Some(Duration::from_secs(timeout_secs.max(1))))
             .http_status_as_error(false)
+            .proxy(None)
             .build()
             .new_agent();
         Ok(Self { base_url, agent })
+    }
+
+    #[cfg(test)]
+    pub fn proxy(&self) -> Option<&ureq::Proxy> {
+        self.agent.config().proxy()
     }
 
     pub fn open(

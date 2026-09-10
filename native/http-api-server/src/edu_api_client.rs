@@ -236,7 +236,7 @@ fn is_stream_path(path: &str) -> bool {
     path.starts_with("/api/internal/working-model") || path.contains("/responses")
 }
 
-struct UreqEduApiTransport {
+pub(crate) struct UreqEduApiTransport {
     base_url: String,
     api_agent: ureq::Agent,
     stream_agent: ureq::Agent,
@@ -244,7 +244,7 @@ struct UreqEduApiTransport {
 }
 
 impl UreqEduApiTransport {
-    fn new(base_url: &str) -> Result<Self, EduApiError> {
+    pub(crate) fn new(base_url: &str) -> Result<Self, EduApiError> {
         let base_url = normalize_base_url(base_url)?;
         let api_timeout_secs = resolve_api_timeout_secs();
         let stream_timeout_secs = resolve_stream_timeout_secs();
@@ -252,12 +252,14 @@ impl UreqEduApiTransport {
         let api_agent = ureq::Agent::config_builder()
             .timeout_global(Some(std::time::Duration::from_secs(api_timeout_secs)))
             .http_status_as_error(false)
+            .proxy(None)
             .build()
             .new_agent();
 
         let stream_agent = ureq::Agent::config_builder()
             .timeout_global(Some(std::time::Duration::from_secs(stream_timeout_secs)))
             .http_status_as_error(false)
+            .proxy(None)
             .build()
             .new_agent();
         let image_agent = ureq::Agent::config_builder()
@@ -265,6 +267,7 @@ impl UreqEduApiTransport {
                 IMAGE_GENERATION_TIMEOUT_SECS,
             )))
             .http_status_as_error(false)
+            .proxy(None)
             .build()
             .new_agent();
 
@@ -300,6 +303,21 @@ impl UreqEduApiTransport {
             stream_agent,
             image_agent,
         })
+    }
+}
+
+#[cfg(test)]
+impl UreqEduApiTransport {
+    pub(crate) fn api_proxy(&self) -> Option<&ureq::Proxy> {
+        self.api_agent.config().proxy()
+    }
+
+    pub(crate) fn stream_proxy(&self) -> Option<&ureq::Proxy> {
+        self.stream_agent.config().proxy()
+    }
+
+    pub(crate) fn image_proxy(&self) -> Option<&ureq::Proxy> {
+        self.image_agent.config().proxy()
     }
 }
 

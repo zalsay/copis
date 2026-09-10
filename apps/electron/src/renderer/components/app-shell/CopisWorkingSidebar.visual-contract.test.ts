@@ -670,5 +670,18 @@ describe('Working 侧边栏视觉契约', () => {
     expect(conversationActiveRule).toContain('background: var(--ui-primary-background)')
     expect(conversationActiveRule).toContain('color: var(--ui-primary)')
   })
+
+  test('Given 工作区项目列表与菜单 When 弹出操作菜单 Then 列表容器 overflow 为 visible 避免菜单被截断，且菜单激活时提升层级与边界计算', () => {
+    const projectListRule = sidebarStyles.match(
+      /\.copis-working-project-list\s*\{([^}]*)\}/s,
+    )?.[1]
+    expect(projectListRule).toBeDefined()
+    expect(projectListRule).toContain('overflow: visible')
+    expect(projectListRule).not.toContain('overflow: auto')
+    expect(sidebarStyles).toContain('.copis-working-project-row.menu-open')
+    expect(sidebarStyles).toContain('z-index: 50')
+    expect(sidebarSource).toContain("event.currentTarget.closest('.copis-working-sidebar-body')")
+    expect(sidebarSource).toContain("cn('copis-working-project-group', isMenuOpen && 'menu-open')")
+  })
 })
 

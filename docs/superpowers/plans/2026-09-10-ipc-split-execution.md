@@ -83,6 +83,14 @@
 - 展开后 415 条注册阶段语句与上述主工作区源文件版本一致，注册数量和顺序仍保持 376 handle / 5 on。
 - 全仓 typecheck、Electron build:main 与 diff 检查通过；改动继续保留未提交状态。
 
+## 2026-09-10 本地合并
+
+- 用户授权合入 main，取代此前保留未提交状态的要求。拆分提交 `7058ea81`，整合 main `38afd37ac122f9f5712a413fcacf03cad3b2ab66`；Electron 包版本递增为 `0.0.84`。
+- 解决版本号、已迁出的浏览器注册段及计划文档冲突；main 其他代码更新保持原样。展开后的 415 条注册阶段语句与该 main 提交中的原版一致。
+- 整合结果通过全仓 typecheck、main/preload/renderer、DSH preload、JavaScript prompt preload 构建及 diff 检查；全仓测试中的 IPC 用例通过。
+- 隔离 worktree 全仓测试剩 2 项失败：设计大师本地 vendor 资源缺失与专家团队颜色契约。合并前在 main 单独核验：设计大师 19 项通过，专家团队颜色契约同样失败，因此前者为 worktree 资源差异，后者为既有测试问题。
+- 本次仅本地合并，不推送、不发布；Electron 实际窗口交互仍待用户确认。
+
 ## 用户验收
 
 - Electron 实际窗口中的网页、收藏夹、密码、Agent、文件预览、设置、语音和外部集成仍需用户确认。

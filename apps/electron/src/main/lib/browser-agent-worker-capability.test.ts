@@ -121,4 +121,77 @@ describe('Browser Agent Worker capability', () => {
       revokeBrowserAgentWorkerCapability('session-expiring')
     }
   })
+
+  test('Given capability issued without tabId When validated with a tabId Then it auto-aligns to that tab and locks', () => {
+    const capability = issueBrowserAgentWorkerCapability({
+      sessionId: 'session-no-tab',
+      triggeredBy: 'user',
+    })
+
+    // 第一次调用带有具体 tab-1，自动对齐
+    expect(assertBrowserAgentWorkerCapability({
+      sessionId: 'session-no-tab',
+      tabId: 'tab-1',
+      token: capability.token,
+    })).toEqual({ triggeredBy: 'user' })
+
+    // 对齐后访问同一 tab 保持通过
+    expect(assertBrowserAgentWorkerCapability({
+      sessionId: 'session-no-tab',
+      tabId: 'tab-1',
+      token: capability.token,
+    })).toEqual({ triggeredBy: 'user' })
+
+    // 对齐后如果尝试访问未经授权的 tab-2，则被拦截
+    expect(() => assertBrowserAgentWorkerCapability({
+      sessionId: 'session-no-tab',
+      tabId: 'tab-2',
+      token: capability.token,
+    })).toThrow(expect.objectContaining({ code: 'browser_capability_invalid' }))
+
+    revokeBrowserAgentWorkerCapability('session-no-tab')
+  })
+
+  test('Given capability issued with tabId When validated with undefined tabId Then it passes for open tab actions', () => {
+    const capability = issueBrowserAgentWorkerCapability({
+      sessionId: 'session-open',
+      tabId: 'tab-1',
+      triggeredBy: 'user',
+    })
+
+    expect(assertBrowserAgentWorkerCapability({
+      sessionId: 'session-open',
+      tabId: undefined,
+      token: capability.token,
+    })).toEqual({ triggeredBy: 'user' })
+
+    revokeBrowserAgentWorkerCapability('session-open')
+  })
+
+  test('Given capability issued When revoked with a mismatched token Then the active capability is preserved', () => {
+    const capability = issueBrowserAgentWorkerCapability({
+      sessionId: 'session-token-guard',
+      tabId: 'tab-1',
+      triggeredBy: 'user',
+    })
+
+    // 尝试用旧 token 或不匹配的 token 撤销
+    revokeBrowserAgentWorkerCapability('session-token-guard', 'outdated-stale-token')
+
+    // 活跃的 capability 仍应正常通过校验
+    expect(assertBrowserAgentWorkerCapability({
+      sessionId: 'session-token-guard',
+      tabId: 'tab-1',
+      token: capability.token,
+    })).toEqual({ triggeredBy: 'user' })
+
+    // 用正确的 token 撤销
+    revokeBrowserAgentWorkerCapability('session-token-guard', capability.token)
+
+    expect(() => assertBrowserAgentWorkerCapability({
+      sessionId: 'session-token-guard',
+      tabId: 'tab-1',
+      token: capability.token,
+    })).toThrow(expect.objectContaining({ code: 'browser_capability_stale' }))
+  })
 })
