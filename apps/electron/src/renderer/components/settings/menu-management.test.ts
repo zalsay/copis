@@ -165,16 +165,22 @@ describe('左侧菜单栏悬浮隐藏与菜单管理功能契约 (BDD)', () => {
     expect(preloadSource).not.toContain('.copis-dsh-menu-hide-btn:hover')
   })
 
-  test('Given 菜单管理页面 When 查看「显示中」状态指示与徽章 Then 统一采用 ui-primary 主题强调色', () => {
-    // 状态统计条中的「显示中」图标采用 ui-primary
+  test('Given 菜单管理页面 When 查看菜单项 icon 与显隐状态指示 tag 胶囊 Then 统一采用柔和高雅底色与微边框规范', () => {
+    // 状态统计条中的「显示中」图标指示
     expect(menuSettingsSource).toContain('text-[var(--ui-primary)]')
     expect(menuSettingsSource).not.toContain('text-emerald-500')
 
-    // 列表条目中的徽章与图标背景采用 ui-primary 与 ui-primary-background
-    expect(menuSettingsSource).toContain('bg-[var(--ui-primary-background)] text-[var(--ui-primary)]')
-    expect(menuSettingsSource).not.toContain('text-emerald-600')
+    // 菜单项 icon 废弃旧高饱和橙色，采用柔和高雅底色与微边框
+    expect(menuSettingsSource).not.toContain('bg-[var(--ui-primary-background)] text-[var(--ui-primary)]')
+    expect(menuSettingsSource).toContain("isVisible\n                      ? 'border border-border/50 bg-muted/80 text-foreground/80'\n                      : 'border border-border/30 bg-muted/35 text-muted-foreground/50'")
 
-    // Switch 开关激活色使用 ui-primary
+    // 显隐状态指示 tag 胶囊采用柔和高雅底色
+    expect(menuSettingsSource).not.toContain('border-[var(--ui-primary)]/25')
+    expect(menuSettingsSource).toContain('border-border/50 bg-muted/80 text-foreground/80')
+    expect(menuSettingsSource).toContain('border-border/30 bg-muted/40 text-muted-foreground/60')
+    expect(menuSettingsSource).toContain('rounded-full')
+
+    // Switch 开关激活色保留 ui-primary
     expect(menuSettingsSource).toContain('data-[state=checked]:bg-[var(--ui-primary)]')
   })
 

@@ -1,5 +1,6 @@
 import * as React from 'react'
-import { Download, FolderKanban, Globe, Sparkles } from 'lucide-react'
+import { Download, FolderKanban, Globe } from 'lucide-react'
+import { CopisLogoIcon } from '@/components/ui/copis-logo-icon'
 import { cn } from '@/lib/utils'
 
 export type KnowledgePage = 'ingest' | 'workspace' | 'global' | 'export'
@@ -15,7 +16,7 @@ const NAV_ITEMS: Array<{
   description: string
   icon: React.ComponentType<{ className?: string }>
 }> = [
-  { page: 'ingest', label: '资料智能摄取', description: '本地文档 AI 提炼与网页抓取导入', icon: Sparkles },
+  { page: 'ingest', label: '资料智能摄取', description: '本地文档 AI 提炼与网页抓取导入', icon: CopisLogoIcon },
   { page: 'workspace', label: '项目知识库', description: '当前项目的结构化知识卡片', icon: FolderKanban },
   { page: 'global', label: '全局知识库', description: '跨项目通用的用户知识与规约', icon: Globe },
   { page: 'export', label: '导出知识库', description: '导出为 Markdown 或 JSON 数据包', icon: Download },

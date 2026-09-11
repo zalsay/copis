@@ -205,11 +205,6 @@
   background: hsl(var(--accent));
 }
 
-.copis-working-settings-actions button.danger {
-  border-color: hsl(var(--destructive) / 0.28);
-  color: hsl(var(--destructive));
-}
-
 .copis-working-settings-actions button:disabled {
   cursor: not-allowed;
   opacity: 0.56;
@@ -325,7 +320,7 @@
   padding: 0 10px;
   border: 1px solid hsl(var(--border) / 0.8);
   border-radius: 8px;
-  background: hsl(var(--muted) / 0.7);
+  background: hsl(var(--card) / 0.7);
   color: hsl(var(--foreground));
   font: inherit;
   font-size: 12px;
@@ -345,19 +340,21 @@
 .copis-working-settings-card-action svg {
   width: 14px;
   height: 14px;
+  color: currentColor;
 }
 
-.copis-working-settings-primary-button {
-  border-color: color-mix(in srgb, var(--ui-primary) 50%, transparent);
-  background: color-mix(in srgb, var(--ui-primary) 16%, var(--ui-primary-background));
-  color: var(--ui-primary);
-}
-
+.copis-working-settings-primary-button,
 .copis-working-settings-vip-button,
 .copis-working-settings-invite-button {
-  border-color: color-mix(in srgb, var(--ui-primary) 38%, transparent);
-  background: color-mix(in srgb, var(--ui-primary) 13%, var(--ui-primary-background));
-  color: var(--ui-primary);
+  border: 1px solid hsl(var(--border) / 0.8);
+  background: hsl(var(--card) / 0.7);
+  color: hsl(var(--foreground));
+}
+
+.copis-working-settings-primary-button:hover:not(:disabled),
+.copis-working-settings-vip-button:hover:not(:disabled),
+.copis-working-settings-invite-button:hover:not(:disabled) {
+  background: hsl(var(--accent));
 }
 
 .copis-working-settings-card > strong {
@@ -390,12 +387,13 @@
   display: inline-flex;
   min-height: 24px;
   align-items: center;
-  padding: 0 8px;
-  border-radius: 8px;
-  background: color-mix(in srgb, var(--ui-primary) 12%, var(--ui-primary-background));
-  color: var(--ui-primary);
+  padding: 0 10px;
+  border-radius: 9999px;
+  border: 1px solid hsl(var(--border) / 0.45);
+  background: hsl(var(--muted) / 0.7);
+  color: hsl(var(--muted-foreground));
   font-size: 11px;
-  font-weight: 650;
+  font-weight: 550;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }

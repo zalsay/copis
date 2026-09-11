@@ -54,6 +54,12 @@ export function patchDshSidebarSource(source: string): string {
     'className: SidebarRoot_module_css_default.regionArea,\n\t\t\t\t\t\tonClickCapture: () => { triggerCopisNavigate("conversations"); },\n\t\t\t\t\t\tchildren: renderSlot("sidebar.workspaces"',
   )
 
+  // 确保侧边栏底部 footArea 移除意见反馈菜单项（已移入设置菜单）
+  source = source.replace(
+    /(?:wide\s*\?\s*)?\(0,\s*react_jsx_runtime\.jsx\)\(CopisMenuItem,\s*\{\s*label:\s*"意见反馈"[\s\S]*?\}\)\s*:\s*\(0,\s*react_jsx_runtime\.jsx\)\(CopisRailItem,\s*\{\s*label:\s*"意见反馈"[\s\S]*?\}\),?\s*/g,
+    '',
+  )
+
   // 确保侧边栏 CopisLogo 升级为全新双环银色 Logo
   const COPIS_SIDEBAR_LOGO_MARKER = 'M 725.5 791.5 L 738.5 790.1'
   if (source.includes('const CopisLogo =') && !source.includes(COPIS_SIDEBAR_LOGO_MARKER)) {

@@ -440,7 +440,8 @@
 
 .copis-working-project-main {
   min-width: 0;
-  flex: 1 1 auto;
+  flex: 0 1 auto;
+  max-width: calc(100% - 90px);
   align-self: stretch;
   padding: 0;
   display: flex;
@@ -476,21 +477,63 @@
   line-height: 1.2;
 }
 
+.copis-working-project-collapse {
+  width: 18px;
+  height: 18px;
+  flex: 0 0 18px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: hsl(var(--muted-foreground));
+  cursor: pointer;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.15s ease, background-color 0.15s ease, color 0.15s ease;
+}
+
+.copis-working-project-collapse:hover {
+  background: hsl(var(--foreground) / 0.08);
+  color: hsl(var(--foreground));
+}
+
+.copis-working-project-collapse svg {
+  width: 13px;
+  height: 13px;
+}
+
+.copis-working-project-actions {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
 .copis-working-project-pin-badge {
   width: 12px;
   height: 12px;
-  margin-left: auto;
   margin-right: 2px;
   flex: 0 0 12px;
   color: var(--ui-primary);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.15s ease;
+}
+
+.copis-working-project-row:hover .copis-working-project-pin-badge,
+.copis-working-project-row:focus-within .copis-working-project-pin-badge,
+.copis-working-project-row.menu-open .copis-working-project-pin-badge {
   opacity: 0.85;
 }
 
-.copis-working-project-row.active .copis-working-project-pin-badge {
+.copis-working-project-row.active:hover .copis-working-project-pin-badge,
+.copis-working-project-row.active:focus-within .copis-working-project-pin-badge,
+.copis-working-project-row.active.menu-open .copis-working-project-pin-badge {
   opacity: 1;
 }
 
-.copis-working-project-collapse,
 .copis-working-project-menu-trigger,
 .copis-working-project-new-task {
   width: 22px;
@@ -516,19 +559,18 @@
 .copis-working-project-row:focus-within .copis-working-project-new-task,
 .copis-working-project-row.menu-open .copis-working-project-collapse,
 .copis-working-project-row.menu-open .copis-working-project-menu-trigger,
-.copis-working-project-row.menu-open .copis-working-project-new-task {
+.copis-working-project-row.menu-open .copis-working-project-new-task,
+.copis-working-project-row.expanded .copis-working-project-collapse {
   opacity: 1;
   pointer-events: auto;
 }
 
-.copis-working-project-collapse:hover,
 .copis-working-project-menu-trigger:hover,
 .copis-working-project-new-task:hover {
   background: hsl(var(--foreground) / 0.08);
   color: hsl(var(--foreground));
 }
 
-.copis-working-project-collapse svg,
 .copis-working-project-menu-trigger svg,
 .copis-working-project-new-task svg {
   width: 15px;
@@ -970,8 +1012,16 @@
   display: grid;
   place-items: center;
   border-radius: 50%;
-  background: var(--ui-primary-background);
-  color: var(--ui-primary);
+  border: 1px solid hsl(var(--border) / 0.5);
+  background: hsl(var(--muted) / 0.8);
+  color: hsl(var(--foreground) / 0.8);
+  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+
+.copis-working-sidebar-account:hover .copis-working-account-mark {
+  background: hsl(var(--muted));
+  color: hsl(var(--foreground));
+  border-color: hsl(var(--border) / 0.7);
 }
 
 .copis-working-account-mark svg {
@@ -1008,6 +1058,21 @@
   color: hsl(var(--muted-foreground));
   font-size: 12px;
   line-height: 1.2;
+}
+
+.copis-working-sidebar-account.active {
+  background: var(--ui-primary-background);
+}
+
+.copis-working-sidebar-account.active strong {
+  font-weight: 600;
+  color: var(--ui-primary);
+}
+
+.copis-working-sidebar-account.active .copis-working-account-mark {
+  border-color: color-mix(in srgb, var(--ui-primary) 40%, transparent);
+  background: var(--ui-primary-background);
+  color: var(--ui-primary);
 }
 
 .copis-working-account-copy {

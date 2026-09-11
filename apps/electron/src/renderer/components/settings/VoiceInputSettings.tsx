@@ -3,7 +3,8 @@
  */
 
 import * as React from 'react'
-import { CircleCheck, Globe, Loader2, Mic, MicOff, Sparkles } from 'lucide-react'
+import { CircleCheck, Globe, Loader2, Mic, MicOff } from 'lucide-react'
+import { CopisLogoIcon } from '@/components/ui/copis-logo-icon'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import {
@@ -197,7 +198,7 @@ export function VoiceInputSettings(): React.ReactElement {
           >
             <span className="copis-voice-mode-card-heading">
               <span className="copis-voice-mode-card-icon copis-voice-mode-card-icon-copis">
-                <Sparkles aria-hidden="true" />
+                <CopisLogoIcon />
               </span>
               {settings.provider === 'copis-model' && <CircleCheck className="copis-voice-mode-card-check" aria-hidden="true" />}
             </span>

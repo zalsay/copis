@@ -60,7 +60,7 @@ export function McpCard({
       )}
     >
       <div className="flex items-start gap-3">
-        <div className="rounded-xl bg-blue-500/12 p-2 text-blue-500 shadow-sm shrink-0">
+        <div className="rounded-xl bg-primary/10 p-2 text-primary shadow-sm shrink-0">
           <Plug size={18} />
         </div>
         <div className="min-w-0 flex-1">

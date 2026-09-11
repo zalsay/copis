@@ -31,6 +31,15 @@ describe('Working 支付视觉契约', () => {
     expect(ordersStyles).not.toContain('color: var(--muted-foreground)')
   })
 
+  test('Given 我的订单列表 When 检查订单类型与状态 tag 胶囊 Then 采用柔和高雅底色与全圆角规范且 VIP 升级不保留高饱和橙色', () => {
+    expect(ordersStyles).toContain('border-radius: 9999px;')
+    expect(ordersStyles).toContain('background: hsl(var(--muted) / 0.7);')
+    expect(ordersStyles).toContain('color: hsl(var(--muted-foreground));')
+    expect(ordersStyles).not.toContain('.copis-working-order-type.vip_upgrade {\n  background: var(--ui-primary-background);')
+    expect(ordersStyles).toContain('.copis-working-order-type.vip_upgrade {')
+    expect(ordersStyles).toContain('background: hsl(var(--muted) / 0.92);')
+  })
+
   test('Given 支付弹窗 When 展示套餐与 VIP 权益 Then 不显示冗余价格说明', () => {
     expect(paymentSource).not.toContain('价格和到账数量以服务端为准')
     expect(paymentSource).not.toContain('本次开通')
@@ -63,5 +72,10 @@ describe('Working 支付视觉契约', () => {
 
   test('Given VIP 支付会话创建成功 When 进入默认工作区对话 Then 关闭 VIP 弹窗', () => {
     expect(paymentSource).toContain('await onStartVipUpgrade()\n      handleClose()')
+  })
+
+  test('Given 我的订单列表 When 检查右侧删除操作按钮 Then 删除 icon 尺寸收敛至 14px 精致轻量规范', () => {
+    expect(ordersStyles).toMatch(/\.copis-working-order-delete svg\s*\{[^}]*width:\s*14px;[^}]*height:\s*14px;/s)
+    expect(ordersStyles).toMatch(/\.copis-working-order-delete\s*\{[^}]*width:\s*28px;[^}]*height:\s*28px;/s)
   })
 })

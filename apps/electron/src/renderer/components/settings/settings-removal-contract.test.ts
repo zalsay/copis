@@ -4,6 +4,7 @@ import { join } from 'node:path'
 
 const rendererRoot = join(import.meta.dir, '..', '..')
 const appShellSource = readFileSync(join(rendererRoot, 'components/app-shell/AppShell.tsx'), 'utf8')
+const sidebarSource = readFileSync(join(rendererRoot, 'components/app-shell/CopisWorkingSidebar.tsx'), 'utf8')
 const workingPanelSource = readFileSync(join(rendererRoot, 'components/app-shell/CopisWorkingSettingsPanel.tsx'), 'utf8')
 const appSource = readFileSync(join(rendererRoot, 'App.tsx'), 'utf8')
 const onboardingSource = readFileSync(join(rendererRoot, 'components/onboarding/OnboardingView.tsx'), 'utf8')
@@ -53,8 +54,9 @@ describe('本地设置旧入口清理契约', () => {
       expect(source).not.toContain('TutorialBanner')
     }
 
-    expect(workingPanelSource).toContain('查看使用教程')
-    expect(workingPanelSource).toContain('handleOpenTutorial')
+    expect(sidebarSource).toContain('查看使用教程')
+    expect(sidebarSource).toContain('handleOpenTutorial')
+    expect(workingPanelSource).not.toContain('查看使用教程')
     expect(tabAtomsSource).toContain('TUTORIAL_TAB_ID')
     expect(tabAtomsSource).toContain("type: 'tutorial'")
     expect(tabContentSource).toContain('TutorialTabContent')

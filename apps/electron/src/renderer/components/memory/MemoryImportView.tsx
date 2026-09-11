@@ -6,11 +6,11 @@ import {
   FileText,
   Globe,
   Loader2,
-  Sparkles,
   Trash2,
   Upload,
   X,
 } from 'lucide-react'
+import { CopisLogoIcon } from '@/components/ui/copis-logo-icon'
 import { useAtom, useAtomValue, useSetAtom } from 'jotai'
 import {
   COPIS_WORKING_DEEPSEEK_CHANNEL_ID,
@@ -377,7 +377,7 @@ export function MemoryImportView({ workspaceSlug, workspaces }: MemoryImportView
                 : 'text-foreground/60 hover:bg-muted hover:text-foreground',
             )}
           >
-            <Sparkles className="size-4" />
+            <CopisLogoIcon className="size-4" />
             <span>文档智能抽取 (PDF/Word/Office)</span>
           </button>
           <button

@@ -9,6 +9,7 @@ const connectDialogCss = readFileSync(join(import.meta.dir, 'CopisWorkingConnect
 const loginDialogCss = readFileSync(join(import.meta.dir, 'CopisWorkingLoginDialog.css'), 'utf8')
 const loginShowcaseCss = readFileSync(join(import.meta.dir, 'CopisWorkingLoginShowcase.css'), 'utf8')
 const feedbackDialogCss = readFileSync(join(import.meta.dir, 'CopisWorkingFeedbackDialog.css'), 'utf8')
+const feedbackDialogSource = readFileSync(join(import.meta.dir, 'CopisWorkingFeedbackDialog.tsx'), 'utf8')
 const paymentModalCss = readFileSync(join(import.meta.dir, 'CopisWorkingPaymentModal.css'), 'utf8')
 const messageSettingsCss = readFileSync(join(import.meta.dir, 'CopisWorkingMessageSettingsPanel.css'), 'utf8')
 const voiceInputCss = readFileSync(join(import.meta.dir, '../settings/VoiceInputSettings.css'), 'utf8')
@@ -65,6 +66,34 @@ describe('UI 卡片与弹窗圆角统一契约（对齐账户设置--个人钻�
     const feedbackModalRule = feedbackDialogCss.match(/\.copis-working-feedback-modal\s*\{([^}]*)\}/s)?.[1]
     expect(feedbackModalRule).toBeDefined()
     expect(feedbackModalRule).toContain('border-radius: 8px;')
+  })
+
+  test('Given 用户反馈弹窗 When 检查模态框样式 Then 采用主题变量驱动并废除写死暗色与紫色', () => {
+    // 弹窗本体采用主题变量
+    expect(feedbackDialogCss).toContain('background: hsl(var(--card));')
+    expect(feedbackDialogCss).toContain('color: hsl(var(--card-foreground));')
+    expect(feedbackDialogCss).toContain('border: 1px solid hsl(var(--border));')
+
+    // 背景遮罩采用背景色混色模糊
+    expect(feedbackDialogCss).toContain('background: color-mix(in srgb, hsl(var(--background)) 62%, transparent);')
+    expect(feedbackDialogCss).toContain('backdrop-filter: blur(10px);')
+
+    // 头部图标与柔和高雅底色
+    expect(feedbackDialogSource).toContain('copis-working-feedback-heading-icon')
+    expect(feedbackDialogSource).toContain('<MessageSquare />')
+    expect(feedbackDialogCss).toContain('background: hsl(var(--muted) / 0.8);')
+    expect(feedbackDialogCss).toContain('color: hsl(var(--foreground) / 0.8);')
+    expect(feedbackDialogCss).toContain('border: 1px solid hsl(var(--border) / 0.5);')
+
+    // 操作按钮使用主题主色
+    expect(feedbackDialogCss).toContain('background: hsl(var(--primary));')
+    expect(feedbackDialogCss).toContain('color: hsl(var(--primary-foreground));')
+
+    // 严禁包含旧写死暗黑色与紫色
+    expect(feedbackDialogCss).not.toContain('#202020')
+    expect(feedbackDialogCss).not.toContain('#292929')
+    expect(feedbackDialogCss).not.toContain('#c8a7ff')
+    expect(feedbackDialogCss).not.toContain('rgba(200, 167, 255')
   })
 
   test('Given 支付收银台弹窗 When 检查模态框与套餐卡片 Then 圆角统一为 8px', () => {

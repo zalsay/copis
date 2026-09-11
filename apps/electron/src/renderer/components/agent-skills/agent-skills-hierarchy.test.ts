@@ -33,4 +33,9 @@ describe('Agent Skills 页面层级契约', () => {
     expect(skillUiSource).not.toContain('COPIS 内置')
     expect(skillUiSource).toContain('Copis 内置')
   })
+
+  test('Copis 功能分类 Logo 图标继承当前文字颜色，不硬编码 text-primary', () => {
+    expect(viewSource).toContain("'Copis 功能': <CopisLogoIcon className=\"size-3.5\" />")
+    expect(viewSource).not.toContain("'Copis 功能': <CopisLogoIcon className=\"size-3.5 text-primary\" />")
+  })
 })

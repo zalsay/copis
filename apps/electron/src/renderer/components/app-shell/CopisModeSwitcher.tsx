@@ -1,6 +1,7 @@
 import React, { useCallback, useState } from 'react'
 import { useAtom, useAtomValue, useSetAtom } from 'jotai'
-import { Lightbulb, Sparkles } from 'lucide-react'
+import { Lightbulb } from 'lucide-react'
+import { CopisLogoIcon } from '@/components/ui/copis-logo-icon'
 import {
   appModeAtom,
   setAppModeAndRuntimeAtom,
@@ -108,7 +109,7 @@ export function CopisModeSwitcher({
               {isCreation ? (
                 <Lightbulb className="w-4 h-4 text-[var(--creation-ui-primary)]" aria-hidden="true" />
               ) : (
-                <Sparkles className="w-4 h-4 text-[var(--ui-primary)]" aria-hidden="true" />
+                <CopisLogoIcon className="w-4 h-4 text-[var(--ui-primary)]" />
               )}
               <span
                 className={cn(
@@ -153,7 +154,7 @@ export function CopisModeSwitcher({
           )}
           onClick={() => handleSwitchMode('agent')}
         >
-          <Sparkles className="w-3.5 h-3.5 text-[var(--ui-primary)] shrink-0" aria-hidden="true" />
+          <CopisLogoIcon className="w-3.5 h-3.5 text-[var(--ui-primary)] shrink-0" />
           <span className="whitespace-nowrap truncate">Agent 模式</span>
         </button>
         <button

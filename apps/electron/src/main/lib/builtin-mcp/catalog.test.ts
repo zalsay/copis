@@ -51,22 +51,29 @@ afterAll(() => {
 })
 
 describe('内置 MCP Agent 能力目录', () => {
-  test('Copis 图片生成开启且有凭据时标记为可用', () => {
+  test('Copis 图片生成 已从内置 MCP 列表中移除', () => {
     const server = catalog.listBuiltinMcpServers().find((item) => item.id === 'nano-banana')
-
-    expect(server).toMatchObject({ enabled: true, available: true })
-    expect(server?.name).toBe('copis_image')
+    expect(server).toBeUndefined()
   })
 
-  test('Copis 图片生成未开启时保留目录项但标记为不可用', () => {
-    settings = { builtinMcpEnabledIds: [], builtinMcpDisabledIds: [] }
+  test('定时任务内置 MCP 默认启用且可用', () => {
+    const server = catalog.listBuiltinMcpServers().find((item) => item.id === 'automation')
+    expect(server).toMatchObject({ enabled: true, available: true })
+    expect(server?.name).toBe('automation')
+  })
 
-    const server = catalog.listBuiltinMcpServers().find((item) => item.id === 'nano-banana')
-
-    expect(server).toMatchObject({
-      enabled: false,
+  test('协作子 Agent 在未指定工作区时提示需要先选择项目', () => {
+    const withoutWorkspace = catalog.listBuiltinMcpServers().find((item) => item.id === 'collaboration')
+    expect(withoutWorkspace).toMatchObject({
+      enabled: true,
       available: false,
-      availabilityReason: '默认关闭，可手动开启',
+      availabilityReason: '需要先选择项目',
+    })
+
+    const withWorkspace = catalog.listBuiltinMcpServers({ workspaceSlug: 'demo' }).find((item) => item.id === 'collaboration')
+    expect(withWorkspace).toMatchObject({
+      enabled: true,
+      available: true,
     })
   })
 })

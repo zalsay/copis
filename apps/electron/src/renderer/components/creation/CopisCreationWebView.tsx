@@ -14,12 +14,12 @@ import { useAtom, useAtomValue, useSetAtom } from 'jotai'
 import {
   Loader2,
   RefreshCw,
-  Sparkles,
   Lightbulb,
   AlertCircle,
   Download,
   X,
 } from 'lucide-react'
+import { CopisLogoIcon } from '@/components/ui/copis-logo-icon'
 import { dshCordisStatusAtom, normalizeAppMode, setAppModeAndRuntimeAtom } from '@/atoms/app-mode'
 import { agentSessionsAtom, currentAgentWorkspaceIdAtom } from '@/atoms/agent-atoms'
 import { activeViewAtom } from '@/atoms/active-view'
@@ -465,7 +465,7 @@ export function CopisCreationWebView(): React.ReactElement {
                   disabled={installingModule}
                   className="titlebar-no-drag text-muted-foreground hover:text-foreground"
                 >
-                  <Sparkles className="w-3.5 h-3.5 mr-1.5 text-[var(--ui-primary)]" />
+                  <CopisLogoIcon className="w-3.5 h-3.5 mr-1.5 text-[var(--ui-primary)]" />
                   返回 Agent 模式
                 </Button>
               </div>

@@ -82,8 +82,8 @@ export function MenuManagementSettings(): React.ReactElement {
                   className={cn(
                     'w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 transition-colors',
                     isVisible
-                      ? 'bg-[var(--ui-primary-background)] text-[var(--ui-primary)]'
-                      : 'bg-muted text-muted-foreground',
+                      ? 'border border-border/50 bg-muted/80 text-foreground/80'
+                      : 'border border-border/30 bg-muted/35 text-muted-foreground/50',
                   )}
                 >
                   <Icon className="w-4 h-4" aria-hidden="true" />
@@ -93,10 +93,10 @@ export function MenuManagementSettings(): React.ReactElement {
                     <span className="text-sm font-medium text-foreground leading-none">{item.label}</span>
                     <span
                       className={cn(
-                        'px-1.5 py-0.5 rounded-full text-[10px] font-medium leading-none',
+                        'inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium leading-none transition-colors',
                         isVisible
-                          ? 'bg-[var(--ui-primary-background)] text-[var(--ui-primary)] border border-[var(--ui-primary)]/25'
-                          : 'bg-zinc-500/15 text-zinc-500 dark:text-zinc-400',
+                          ? 'border border-border/50 bg-muted/80 text-foreground/80'
+                          : 'border border-border/30 bg-muted/40 text-muted-foreground/60',
                       )}
                     >
                       {isVisible ? '显示中' : '已隐藏'}

@@ -61,4 +61,13 @@ describe('Working 设置页 VIP 摘要', () => {
     expect(settingsStyles).toContain('background: var(--ui-primary-background);')
     expect(settingsStyles).toContain('color: var(--ui-primary);')
   })
+
+  test('Given 账户卡片标签 When 检查样式定义 Then 采用柔和高雅底色与全圆角胶囊规范', () => {
+    const capsuleRule = settingsStyles.match(/\.copis-working-settings-balance-conversation-count,[^}]*\{([^}]*)\}/s)?.[1]
+    expect(capsuleRule).toBeDefined()
+    expect(capsuleRule).toContain('border-radius: 9999px;')
+    expect(capsuleRule).toContain('background: hsl(var(--muted) / 0.7);')
+    expect(capsuleRule).toContain('color: hsl(var(--muted-foreground));')
+    expect(capsuleRule).not.toContain('color: var(--ui-primary);')
+  })
 })

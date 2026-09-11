@@ -227,7 +227,12 @@ export function SkillMarketDialog({ open, onOpenChange, currentWorkspaceSlug, cu
                 type="button"
                 onClick={() => setCategory(item)}
                 disabled={!workspaceSlug}
-                className={cn('shrink-0 rounded-md px-2.5 py-1 text-xs transition-colors', category === item ? 'bg-primary/10 font-medium text-primary' : 'text-muted-foreground hover:bg-muted hover:text-foreground')}
+                className={cn(
+                  'shrink-0 rounded-full px-2.5 py-1 text-xs font-medium transition-colors cursor-pointer select-none',
+                  category === item
+                    ? 'bg-primary text-primary-foreground shadow-xs'
+                    : 'bg-muted/70 text-muted-foreground hover:bg-muted hover:text-foreground border border-border/40'
+                )}
               >
                 {item}
               </button>

@@ -146,6 +146,17 @@ Copis 的 Agent 模式统一使用 Pi Agent Runtime，基于 `@earendil-works/pi
 
 > Pi Runtime 会为每个 Agent 会话管理底层 session，但不会删除 Copis 中已保存的消息。Pi 会桥接工作区 Skills、用户 MCP Server，以及 Copis 内置的 Automation / Collaboration 工具；不同模型供应商对工具调用、推理和上下文长度的支持仍可能不同。
 
+### Copis Cloud 模型入口自动选择
+
+使用 Copis Cloud 内置模型时，Electron 会在启动本地 Rust HTTP API 前，从 `https://pie.meetlife.com.cn/pi-api/api/client/model-request-endpoints` 获取按优先级排列的 model-request 地址。当前生产顺序为：
+
+1. `https://ai.meetlife.top/model-request`
+2. `https://pie.meetlife.com.cn/model-request`
+
+客户端按顺序请求各候选的 `/health`，选择第一个返回 2xx 的地址，本次启动中的模型配置、Responses 请求和图片任务都复用该地址。健康探测不携带用户 Token；获取配置和全部探测共用 2 秒总超时。配置服务不可用或候选均不健康时，客户端回退到 `https://pie.meetlife.com.cn/model-request`，不会阻止 Copis 启动。
+
+开发和私有部署可通过 `COPIS_MODEL_ENDPOINTS_URL` 覆盖地址列表接口，通过 `COPIS_MODEL_REQUEST_BASE_URL` 显式指定优先模型入口；兼容变量 `WORKING_AGENT_MODEL_BASE_URL` 仍会同步设置。edu-api 业务地址与 model-request 模型地址彼此独立，模型入口切换不会改变登录、工作区、Skills 或支付 API 的目标地址。
+
 ### Automation 运行时
 
 定时任务由本地 Rust HTTP API 统一调度和执行：它负责 30 秒轮询、立即运行、Pi Worker 生命周期、一次运行记录、下一次触发时间与连续失败自动暂停。Electron 只通过私有桥接提供加密渠道凭据、会话 JSONL 持久化、界面事件和通知，不再拥有独立的定时器或后台 Agent 执行链。

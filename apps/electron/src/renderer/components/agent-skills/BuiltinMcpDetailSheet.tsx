@@ -32,12 +32,6 @@ interface BuiltinMcpConfigInfo {
 }
 
 function getConfigInfo(server: BuiltinMcpServerSummary): BuiltinMcpConfigInfo {
-  if (server.id === 'nano-banana') {
-    return {
-      source: 'Copis 内置服务',
-      description: '登录 Copis 后即可使用图片生成功能，无需额外配置。',
-    }
-  }
   if (server.id === 'collaboration') {
     return {
       source: '当前 Agent 项目',
@@ -73,13 +67,13 @@ export function BuiltinMcpDetailSheet({ open, server, onOpenChange, onConfigure 
             </div>
             {server && (
               <div className="mt-4 flex items-start gap-3">
-                <div className="rounded-xl bg-blue-500/12 p-2 text-blue-500 shadow-sm shrink-0">
+                <div className="rounded-xl bg-primary/10 p-2 text-primary shadow-sm shrink-0">
                   <Plug size={18} />
                 </div>
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2">
                     <h3 className="truncate text-base font-semibold text-foreground">{server.displayName}</h3>
-                    <span className="shrink-0 rounded-md bg-blue-500/10 px-1.5 py-0.5 text-[11px] font-medium text-blue-600 dark:text-blue-400">
+                    <span className="shrink-0 rounded-md bg-primary/10 px-1.5 py-0.5 text-[11px] font-medium text-primary">
                       Copis 内置
                     </span>
                   </div>

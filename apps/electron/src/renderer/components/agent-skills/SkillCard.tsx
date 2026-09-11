@@ -20,9 +20,24 @@ interface SkillCardProps {
   onUpdate: () => void
 }
 
+export function getSkillCategoryIconClass(category?: string): string {
+  switch (category) {
+    case 'Copis 功能':
+      return 'bg-foreground/10 text-foreground'
+    case '办公':
+      return 'bg-blue-500/12 text-blue-500 dark:text-blue-400'
+    case '投资':
+      return 'bg-red-500/12 text-red-500 dark:text-red-400'
+    case '其他':
+    default:
+      return 'bg-muted text-muted-foreground'
+  }
+}
+
 export function SkillCard({ skill, isBuiltin, updating, onOpen, onToggle, onUpdate }: SkillCardProps): React.ReactElement {
   const title = skill.displayName?.trim() || skill.name
   const category = isBuiltin ? resolveBuiltinSkillCategory(skill) : skill.category
+  const categoryIconClass = getSkillCategoryIconClass(category)
 
   return (
     <div
@@ -42,7 +57,7 @@ export function SkillCard({ skill, isBuiltin, updating, onOpen, onToggle, onUpda
       )}
     >
       <div className="flex items-start gap-3">
-        <div className="rounded-xl bg-amber-500/12 p-2 text-amber-500 shadow-sm shrink-0">
+        <div className={cn('rounded-xl p-2 shadow-sm shrink-0', categoryIconClass)}>
           <Puzzle size={18} />
         </div>
         <div className="min-w-0 flex-1">

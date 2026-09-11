@@ -518,6 +518,13 @@ Copis 参考 YC QM 项目的结构化长期记忆管理思路（`notebook` / `ca
 - 正式包找不到当前平台的组合二进制时，应报告“未找到打包的 Copis runtime，请重新安装或重新构建应用”，不能退回 Node runtime 并产生误导性的 Node 缺失错误。
 - 开发环境不要求生成 `copis.exe`：`bun run dev` 使用 `dist/pi-rpc-worker.cjs`，通过系统 Bun 或 `vendor/bun` 启动，并设置 `COPIS_PI_RPC_USE_SYSTEM_RUNTIME=1`；开发构建可以继续使用 JS Worker 热重载路径。
 
+**Copis Cloud model-request 地址发现要求（必须遵守）：**
+- Electron 启动 Rust HTTP API 前，必须从 `${COPIS_BACKEND_URL}/api/client/model-request-endpoints` 获取无鉴权 JSON 配置；默认请求地址为 `https://pie.meetlife.com.cn/pi-api/api/client/model-request-endpoints`，也可通过 `COPIS_MODEL_ENDPOINTS_URL` 覆盖配置接口。
+- 配置响应使用 `{ "base_urls": string[] }`，数组顺序就是探测优先级。当前生产顺序为 `https://ai.meetlife.top/model-request`、`https://pie.meetlife.com.cn/model-request`；客户端必须保持服务端顺序，不能排序或并发竞速改变优先级。
+- 候选地址仅允许无用户信息的 HTTP(S) URL，规范化并去重后依次请求 `<base_url>/health`，不附带用户 Token。配置获取与全部健康探测共用 2 秒总超时，第一个返回 2xx 的候选成为本次进程的 model-request 基地址。
+- 显式传入的 `modelBaseUrl`、`COPIS_MODEL_REQUEST_BASE_URL` 或兼容变量 `WORKING_AGENT_MODEL_BASE_URL` 优先作为候选；远端配置失败或没有健康候选时，默认回退 `https://pie.meetlife.com.cn/model-request`。显式自定义 `COPIS_BACKEND_URL` 时保留从该地址派生旧 working-model 兼容入口的开发能力。
+- 选中地址必须同时注入 `COPIS_MODEL_REQUEST_BASE_URL` 与 `WORKING_AGENT_MODEL_BASE_URL`。Rust `ModelRequestClient` 实际读取前者；只设置后者会导致健康探测结果没有驱动真实模型请求。`COPIS_BACKEND_URL` 仍保持 edu-api 业务根地址，不能随 model-request 域名切换。
+
 **Automation 与 Pi Worker 归属（必须遵守）：**
 - Rust HTTP API 是 Automation 的唯一执行方：负责 30 秒 tick、手动立即运行、同任务运行保留、Pi Worker 启动/结束、`automations.json` 运行历史与下次运行时间、连续失败 5 次自动暂停，以及 Worker Automation capability 的签发和撤销。
 - Electron 不得再用 `setInterval`、`runAgentHeadless()` 或 Electron 侧 Worker 管理执行 Automation；仅可通过私有 stdio business bridge 为 Rust 提供加密后的渠道凭据、会话配置与 JSONL/元数据持久化，并转发渲染事件和通知。

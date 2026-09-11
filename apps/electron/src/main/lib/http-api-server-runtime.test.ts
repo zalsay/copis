@@ -286,6 +286,7 @@ describe('Rust HTTP API 功能模块生命周期', () => {
     const records: SpawnRecord[] = []
     const previousBackendUrl = process.env.COPIS_BACKEND_URL
     const previousModelBaseUrl = process.env.WORKING_AGENT_MODEL_BASE_URL
+    const previousModelRequestBaseUrl = process.env.COPIS_MODEL_REQUEST_BASE_URL
 
     try {
       const options = await prepareHttpApiBackend({
@@ -303,11 +304,16 @@ describe('Rust HTTP API 功能模块生命周期', () => {
       expect(records[0]?.options.env?.WORKING_AGENT_MODEL_BASE_URL).toBe(
         'https://configured.example.test/api/internal/working-model',
       )
+      expect(records[0]?.options.env?.COPIS_MODEL_REQUEST_BASE_URL).toBe(
+        'https://configured.example.test/api/internal/working-model',
+      )
     } finally {
       if (previousBackendUrl === undefined) delete process.env.COPIS_BACKEND_URL
       else process.env.COPIS_BACKEND_URL = previousBackendUrl
       if (previousModelBaseUrl === undefined) delete process.env.WORKING_AGENT_MODEL_BASE_URL
       else process.env.WORKING_AGENT_MODEL_BASE_URL = previousModelBaseUrl
+      if (previousModelRequestBaseUrl === undefined) delete process.env.COPIS_MODEL_REQUEST_BASE_URL
+      else process.env.COPIS_MODEL_REQUEST_BASE_URL = previousModelRequestBaseUrl
     }
   })
 

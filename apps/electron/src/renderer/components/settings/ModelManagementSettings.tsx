@@ -1,6 +1,7 @@
 import * as React from 'react'
 import { useSetAtom } from 'jotai'
-import { Activity, CheckCircle2, Crown, Loader2, Plus, Save, Sparkles, Trash2, XCircle } from 'lucide-react'
+import { Activity, CheckCircle2, Crown, Loader2, Plus, Save, Trash2, XCircle } from 'lucide-react'
+import { CopisLogoIcon } from '@/components/ui/copis-logo-icon'
 import type {
   AgentThinkingLevel,
   WorkingCustomModel,
@@ -326,7 +327,7 @@ export function ModelManagementSettings({
                   <section key={model.id} className="rounded-lg border bg-card p-4 shadow-sm space-y-4">
                     <div className="flex items-center justify-between gap-3 border-b pb-3">
                       <div className="flex items-center gap-2 min-w-0">
-                        <Sparkles className="size-4 text-primary shrink-0" />
+                        <CopisLogoIcon className="size-4 text-primary shrink-0" />
                         <strong className="min-w-0 truncate text-sm">{model.name.trim() || '未命名模型'}</strong>
                         <span className="rounded bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground">
                           {model.protocol === 'anthropic-messages' ? 'Anthropic 协议' : 'OpenAI 协议'}

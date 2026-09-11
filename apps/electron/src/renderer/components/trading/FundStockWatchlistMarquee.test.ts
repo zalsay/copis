@@ -1090,6 +1090,16 @@ describe('基金股市 - Header 汉堡菜单与右侧自选管理抽屉 BDD 契�
     expect(terminalCode).toContain('if (hasInitializedRef.current) return')
     expect(terminalCode).toContain('hasInitializedRef.current = true')
   })
+
+  test('Given 顶部跑马灯标的 When 检查选中状态样式 Then 去除边框与外轮廓环', async () => {
+    const terminalCode = await Bun.file(
+      new URL('./FundStockTerminalView.tsx', import.meta.url).pathname
+    ).text()
+
+    // 选中状态采用 border-transparent 且不含旧的 border-primary 与 ring
+    expect(terminalCode).toContain("isSelected\n            ? 'bg-primary/15 border-transparent text-foreground font-semibold shadow-xs'")
+    expect(terminalCode).not.toContain('border-primary/60 text-foreground ring-1')
+  })
 })
 
 

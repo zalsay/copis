@@ -14,15 +14,20 @@ const manifest = JSON.parse(
 ) as BuiltinMcpManifest
 const detailSheetSource = readFileSync(join(import.meta.dir, 'BuiltinMcpDetailSheet.tsx'), 'utf8')
 const imageServer = manifest.servers.find((server) => server.id === 'nano-banana')
+const automationServer = manifest.servers.find((server) => server.id === 'automation')
+const collaborationServer = manifest.servers.find((server) => server.id === 'collaboration')
 
-test('图片生成的列表描述使用用户友好的内置服务文案', () => {
-  expect(imageServer?.description).toBe('使用 Copis 内置的图片生成服务，登录 Copis 后即可生成图片。')
-  expect(imageServer?.description).not.toContain('edu-api')
-  expect(imageServer?.description).not.toContain('为 Agent 提供')
+test('Copis 图片生成 已从内置 MCP 清单中移除', () => {
+  expect(imageServer).toBeUndefined()
+  expect(manifest.servers.some((s) => s.id === 'nano-banana')).toBe(false)
 })
 
-test('图片生成详情说明无需额外配置', () => {
-  expect(detailSheetSource).toContain("source: 'Copis 内置服务'")
-  expect(detailSheetSource).toContain("description: '登录 Copis 后即可使用图片生成功能，无需额外配置。'")
-  expect(detailSheetSource).not.toContain('Copis 后端（edu-api）')
+test('内置 MCP 列表描述使用用户友好的文案', () => {
+  expect(automationServer?.description).toBe('创建、查看、更新、删除和立即运行 Copis 持久化定时任务。')
+  expect(collaborationServer?.description).toBe('创建、等待、读取和停止真实可见的 Copis 协作子 Agent 会话。')
+})
+
+test('内置 MCP 详情配置说明无需额外凭据', () => {
+  expect(detailSheetSource).toContain("description: '协作子 Agent 使用当前项目、会话和权限上下文，无需填写额外凭据。'")
+  expect(detailSheetSource).toContain("description: '自动任务 MCP 直接使用 Copis 本地任务服务，无需填写额外凭据。'")
 })

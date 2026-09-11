@@ -92,7 +92,7 @@ describe('Working 侧边栏视觉契约', () => {
     expect(sidebarSource).toContain("activeView === 'knowledge'")
   })
 
-  test('Given Working footer When 检查账户图标标记 Then 使用 primary 背景与图标颜色', () => {
+  test('Given Working footer When 检查意见反馈与设置图标标记 Then 采用柔和高雅底色且不再使用旧亮橙色背景', () => {
     const accountMarkRule = sidebarStyles.match(
       /\.copis-working-account-mark\s*\{([^}]*)\}/s,
     )?.[1]
@@ -103,10 +103,13 @@ describe('Working 侧边栏视觉契约', () => {
     expect(rootRule).toMatch(/--ui-primary:\s*#(f09a43|f3af6b)/)
     expect(rootRule).toMatch(/--ui-primary-background:\s*rgb\(240 161 90 \/ (10%|20%)\)/)
     expect(rootRule).toContain('--ui-primary-foreground: #2b2137')
-    expect(accountMarkRule).toContain('background: var(--ui-primary-background)')
-    expect(accountMarkRule).toContain('color: var(--ui-primary)')
-    expect(accountMarkRule).not.toContain('background: var(--ui-primary)')
-    expect(accountMarkRule).not.toContain('color: var(--ui-primary-foreground)')
+    // 废弃旧橙色背景与文字
+    expect(accountMarkRule).not.toContain('background: var(--ui-primary-background)')
+    expect(accountMarkRule).not.toContain('color: var(--ui-primary)')
+    // 采用柔和高雅底色与微边框规范
+    expect(accountMarkRule).toContain('background: hsl(var(--muted) / 0.8)')
+    expect(accountMarkRule).toContain('color: hsl(var(--foreground) / 0.8)')
+    expect(accountMarkRule).toContain('border: 1px solid hsl(var(--border) / 0.5)')
     expect(accountMarkRule).not.toContain('color: hsl(var(--primary))')
     expect(accountMarkRule).not.toContain('#c8a7ff')
   })
@@ -482,6 +485,16 @@ describe('Working 侧边栏视觉契约', () => {
     expect(sidebarSource).toContain("isCurrentSessionWorkspace && 'current-session-workspace'")
     expect(conversationListRule).toBeDefined()
     expect(conversationListRule).toContain('padding-left: 16px')
+
+    const collapseBtnIndex = sidebarSource.indexOf('className="copis-working-project-collapse"')
+    const projectActionsIndex = sidebarSource.indexOf('className="copis-working-project-actions"')
+    expect(workspaceProjectMainStart).toBeLessThan(collapseBtnIndex)
+    expect(collapseBtnIndex).toBeLessThan(projectActionsIndex)
+    const actionsRule = sidebarStyles.match(
+      /\.copis-working-project-actions\s*\{([^}]*)\}/s,
+    )?.[1]
+    expect(actionsRule).toBeDefined()
+    expect(actionsRule).toContain('margin-left: auto')
   })
 
   test('Given 工作区项目行 When 展示其会话列表 Then 项目与首条会话之间保留更明显的间距', () => {
@@ -643,6 +656,11 @@ describe('Working 侧边栏视觉契约', () => {
     expect(sidebarStyles).toContain('.copis-working-project-menu button svg')
     expect(sidebarStyles).toContain('.copis-working-project-menu-divider')
     expect(sidebarStyles).toContain('.copis-working-project-pin-badge')
+    const pinBadgeRule = sidebarStyles.match(
+      /\.copis-working-project-pin-badge\s*\{([^}]*)\}/s,
+    )?.[1]
+    expect(pinBadgeRule).toContain('opacity: 0')
+    expect(sidebarStyles).toContain('.copis-working-project-row:hover .copis-working-project-pin-badge')
   })
 
   test('Given 左侧菜单栏激活态 When 渲染当前会话与工作区 Then 会话标题保留主题色与主题背景色，工作区名称取消主题色与背景色且仅工作区图标为主题色', () => {
@@ -683,5 +701,18 @@ describe('Working 侧边栏视觉契约', () => {
     expect(sidebarSource).toContain("event.currentTarget.closest('.copis-working-sidebar-body')")
     expect(sidebarSource).toContain("cn('copis-working-project-group', isMenuOpen && 'menu-open')")
   })
+
+  test('Given 侧边栏底部导航 When 查看操作入口 Then 保留「查看使用教程」与「设置」，且「意见反馈」移入设置菜单', () => {
+    const tutorialIndex = sidebarSource.indexOf('aria-label="查看使用教程"')
+    const settingsIndex = sidebarSource.indexOf('aria-label={hasUpdate ? \'设置，有可用更新\' : \'设置\'}')
+    expect(tutorialIndex).toBeGreaterThan(0)
+    expect(settingsIndex).toBeGreaterThan(tutorialIndex)
+    expect(sidebarSource).not.toContain('<span><strong>意见反馈</strong><small>问题与建议</small></span>')
+    expect(sidebarSource).toContain('handleOpenTutorial')
+    expect(sidebarSource).toContain('GraduationCap')
+    expect(sidebarSource).toContain('<strong>查看使用教程</strong>')
+    expect(sidebarStyles).toContain('.copis-working-sidebar-account.active')
+  })
 })
+
 

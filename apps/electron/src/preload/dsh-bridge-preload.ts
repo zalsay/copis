@@ -368,6 +368,21 @@ function injectCopisThemeAccent(): void {
       color: var(--creation-ui-primary) !important;
     }
 
+    /* 创造模式会话列表项：背景色与条目留出左侧间距，形成优雅层级对齐 */
+    .YDXeBa_sessionRow,
+    [class*="sessionRow"] {
+      margin-left: 16px !important;
+      width: calc(100% - 16px) !important;
+      box-sizing: border-box !important;
+    }
+    .YDXeBa_sessionRow .YDXeBa_slot:empty,
+    [class*="sessionRow"] [class*="slot"]:empty {
+      display: none !important;
+      width: 0 !important;
+      margin: 0 !important;
+      padding: 0 !important;
+    }
+
     /* 创造模式 DSH 侧边栏菜单项与隐藏胶囊按钮契约 */
     .copis-menu-section button {
       position: relative !important;
@@ -410,6 +425,16 @@ function injectCopisThemeAccent(): void {
     .copis-menu-section button:focus-within .copis-dsh-menu-hide-btn {
       opacity: 1;
       pointer-events: auto;
+    }
+
+    /* 侧边栏底部隐藏意见反馈菜单项（统一移入设置菜单） */
+    .hHd-Xa_footArea button[aria-label="意见反馈"],
+    [class*="footArea"] button[aria-label="意见反馈"],
+    [class*="FootArea"] button[aria-label="意见反馈"],
+    .hHd-Xa_footArea button[data-copis-feedback="true"],
+    [class*="footArea"] button[data-copis-feedback="true"],
+    [class*="FootArea"] button[data-copis-feedback="true"] {
+      display: none !important;
     }
   `
   const target = document.head || document.documentElement
@@ -516,6 +541,18 @@ function syncDshSidebarMenuDoms(): void {
     btn.setAttribute('data-copis-menu-id', menuId)
     const isHidden = currentHiddenMenuIds.has(menuId)
     btn.setAttribute('data-copis-hidden', isHidden ? 'true' : 'false')
+  })
+
+  // 3. 侧边栏底部隐藏意见反馈按钮（宽侧边栏与窄侧边栏，统一在设置菜单中呈现）
+  const footButtons = document.querySelectorAll<HTMLButtonElement>(
+    '.hHd-Xa_footArea button, [class*="footArea"] button, [class*="FootArea"] button',
+  )
+  footButtons.forEach((btn) => {
+    const label = btn.querySelector('span')?.textContent?.trim() || btn.getAttribute('aria-label')?.trim() || ''
+    if (label === '意见反馈' || label.includes('反馈')) {
+      btn.setAttribute('data-copis-feedback', 'true')
+      btn.style.setProperty('display', 'none', 'important')
+    }
   })
 }
 

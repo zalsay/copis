@@ -9,7 +9,8 @@ import * as React from 'react'
 import Markdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { toast } from 'sonner'
-import { Sparkles, Pencil, Save, X, FolderOpen, RefreshCw, Trash2, ArrowLeft } from 'lucide-react'
+import { Pencil, Save, X, FolderOpen, RefreshCw, Trash2, ArrowLeft, Puzzle } from 'lucide-react'
+import { getSkillCategoryIconClass } from './SkillCard'
 import { Sheet, SheetContent, SheetTitle } from '@/components/ui/sheet'
 import { Button } from '@/components/ui/button'
 import { Switch } from '@/components/ui/switch'
@@ -59,6 +60,8 @@ function SkillDetailBody({
   onChanged,
 }: SkillDetailSheetProps & { skill: SkillMeta }): React.ReactElement {
   const displayName = skill.displayName?.trim() || skill.name
+  const category = isBuiltin ? resolveBuiltinSkillCategory(skill) : skill.category
+  const categoryIconClass = getSkillCategoryIconClass(category)
   const [content, setContent] = React.useState<string | null>(null)
   const [loadingContent, setLoadingContent] = React.useState(true)
 
@@ -137,8 +140,6 @@ function SkillDetailBody({
       ? `从 ${skill.importSource.sourceWorkspaceName} 导入`
       : '当前项目'
 
-  const category = isBuiltin ? resolveBuiltinSkillCategory(skill) : skill.category
-
   return (
     <div className="flex h-full flex-col min-h-0">
       {/* 头部 */}
@@ -151,8 +152,8 @@ function SkillDetailBody({
         </div>
 
         <div className="mt-4 flex items-start gap-3">
-          <div className="rounded-xl bg-amber-500/12 p-2 text-amber-500 shadow-sm shrink-0">
-            <Sparkles size={18} />
+          <div className={cn('rounded-xl p-2 shadow-sm shrink-0', categoryIconClass)}>
+            <Puzzle size={18} />
           </div>
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2">

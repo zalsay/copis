@@ -11,8 +11,8 @@
 
 import * as React from 'react'
 import { useAtom, useSetAtom } from 'jotai'
-import { toast } from 'sonner'
-import { Blocks, ChevronDown, Search, Plus, Store, FolderOpen, Check, Sparkles, Briefcase, TrendingUp, Folder } from 'lucide-react'
+import { Blocks, ChevronDown, Search, Plus, Store, FolderOpen, Check, Briefcase, TrendingUp, Folder } from 'lucide-react'
+import { CopisLogoIcon } from '@/components/ui/copis-logo-icon'
 import { cn } from '@/lib/utils'
 import {
   Popover,
@@ -20,6 +20,7 @@ import {
   PopoverTrigger,
 } from '@/components/ui/popover'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
+import { toast } from 'sonner'
 import { workspaceCapabilitiesVersionAtom } from '@/atoms/agent-atoms'
 import { agentSkillsTabAtom } from '@/atoms/active-view'
 import { useProjectActions } from '@/hooks/useProjectActions'
@@ -470,9 +471,9 @@ function SkillSection({ title, skills, isBuiltin, updatingSkill, onOpen, onToggl
   }, [isBuiltinSection, selectedCategory, skills])
 
   const categoryIcons: Record<string, React.ReactNode> = {
-    'Copis 功能': <Sparkles className="size-3.5 text-primary" />,
+    'Copis 功能': <CopisLogoIcon className="size-3.5" />,
     '办公': <Briefcase className="size-3.5 text-blue-500 dark:text-blue-400" />,
-    '投资': <TrendingUp className="size-3.5 text-emerald-500 dark:text-emerald-400" />,
+    '投资': <TrendingUp className="size-3.5 text-red-500 dark:text-red-400" />,
     '其他': <Folder className="size-3.5 text-muted-foreground" />,
   }
 

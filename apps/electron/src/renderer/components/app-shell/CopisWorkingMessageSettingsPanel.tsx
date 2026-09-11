@@ -585,29 +585,32 @@ export function CopisWorkingMessageSettingsPanel({
                   <RefreshCw className="mr-1.5 size-3" />
                   {isBound ? '重新绑定' : '立即绑定'}
                 </Button>
-                <Button
-                  type="button"
-                  variant={isSelected ? 'secondary' : 'default'}
-                  size="sm"
-                  className={cn(
-                    'copis-working-message-channel-action',
-                    isSelected && 'selected'
-                  )}
-                  onClick={() => void handleSelectChannel(channel.id)}
-                  disabled={!settings || isSelected || isSaving}
-                  aria-pressed={isSelected}
-                >
-                  {isSaving ? (
-                    <>
-                      <Loader2 className="mr-1.5 size-3 animate-spin" />
-                      保存中...
-                    </>
-                  ) : isSelected ? (
-                    '当前渠道'
-                  ) : (
-                    '设为接收渠道'
-                  )}
-                </Button>
+                {isSelected ? (
+                  <span
+                    className="copis-working-message-channel-action selected"
+                    aria-current="true"
+                  >
+                    当前渠道
+                  </span>
+                ) : (
+                  <Button
+                    type="button"
+                    variant="default"
+                    size="sm"
+                    className="copis-working-message-channel-action"
+                    onClick={() => void handleSelectChannel(channel.id)}
+                    disabled={!settings || isSaving}
+                  >
+                    {isSaving ? (
+                      <>
+                        <Loader2 className="mr-1.5 size-3 animate-spin" />
+                        保存中...
+                      </>
+                    ) : (
+                      '设为接收渠道'
+                    )}
+                  </Button>
+                )}
               </div>
             </article>
           )
@@ -633,7 +636,7 @@ export function CopisWorkingMessageSettingsPanel({
                 type="button"
                 variant="outline"
                 size="sm"
-                className="copis-working-message-channel-rebind-btn text-red-400 hover:text-red-300"
+                className="copis-working-message-channel-rebind-btn"
                 onClick={() => void handleLogoutAgentMail()}
                 disabled={loggingOutMail}
               >

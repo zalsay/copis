@@ -123,7 +123,7 @@ export function AutomationsListView(): React.ReactElement {
         <button
           type="button"
           onClick={handleCreate}
-          className="relative z-[1] titlebar-no-drag ui-primary-button inline-flex min-h-10 items-center gap-1.5 rounded-lg px-3 text-sm font-medium shadow-sm transition-colors active:scale-[0.96]"
+          className="relative z-[1] titlebar-no-drag inline-flex min-h-10 items-center gap-1.5 rounded-lg bg-primary px-3 text-sm font-medium text-primary-foreground shadow-sm transition-colors hover:bg-primary/90 active:scale-[0.96]"
         >
           <Plus size={16} />
           新建任务

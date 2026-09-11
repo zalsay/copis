@@ -41,20 +41,6 @@
         { "name": "stop_delegation", "description": "停止单个协作子会话。" },
         { "name": "stop_delegations", "description": "批量停止协作子会话。" }
       ]
-    },
-    {
-      "id": "nano-banana",
-      "name": "copis_image",
-      "displayName": "Copis 图片生成",
-      "description": "使用 Copis 内置的图片生成服务，登录 Copis 后即可生成图片。",
-      "category": "media",
-      "kind": "internal",
-      "deletable": false,
-      "defaultEnabled": false,
-      "toggleable": true,
-      "tools": [
-        { "name": "generate_image", "description": "生成图片。" }
-      ]
     }
   ]
 }

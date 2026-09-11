@@ -64,4 +64,25 @@ describe('语音输入设置识别模式契约', () => {
     expect(speechButtonSource).toContain('workingSettingsOpenAtom')
     expect(workingAtomsSource).toContain('workingSettingsSectionAtom')
   })
+
+  test('Given 识别模式卡片 When 检查左上角图标与左下角胶囊 Then 采用全应用统一的柔和高雅底色', () => {
+    // 左上角图标统一采用柔和高雅底色规范
+    const iconRule = settingsStyles.match(/\.copis-voice-mode-card-icon\s*\{([^}]*)\}/s)?.[1]
+    expect(iconRule).toBeDefined()
+    expect(iconRule).toContain('background: hsl(var(--muted) / 0.8);')
+    expect(iconRule).toContain('color: hsl(var(--foreground) / 0.8);')
+    expect(iconRule).toContain('border: 1px solid hsl(var(--border) / 0.5);')
+
+    // 左下角胶囊标签统一采用柔和高雅底色规范
+    const badgeRule = settingsStyles.match(/\.copis-voice-mode-card-badge\s*\{([^}]*)\}/s)?.[1]
+    expect(badgeRule).toBeDefined()
+    expect(badgeRule).toContain('background: hsl(var(--muted) / 0.8);')
+    expect(badgeRule).toContain('color: hsl(var(--foreground) / 0.8);')
+    expect(badgeRule).toContain('border: 1px solid hsl(var(--border) / 0.5);')
+
+    // 严禁在图标与胶囊中使用旧的高饱和 var(--ui-primary) / var(--ui-primary-background)
+    expect(iconRule).not.toContain('var(--ui-primary)')
+    expect(badgeRule).not.toContain('var(--ui-primary)')
+  })
 })
+

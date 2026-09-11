@@ -8,7 +8,6 @@
  */
 
 import type { BuiltinMcpServerSummary } from '@copis/shared'
-import { getWorkingApiClient } from '../working-api-service'
 import { getBuiltinMcpDefinitions, type BuiltinMcpDefinition } from './baseline'
 import { isBuiltinMcpDefaultDisabled, isBuiltinMcpUserEnabled } from './settings'
 
@@ -42,15 +41,6 @@ function resolveAvailability(
       enabled: true,
       available,
       availabilityReason: available ? undefined : '需要先选择项目',
-    }
-  }
-
-  if (item.id === 'nano-banana') {
-    const available = getWorkingApiClient().getCachedUser() !== null
-    return {
-      enabled: true,
-      available,
-      availabilityReason: available ? undefined : '需要登录 Copis Working',
     }
   }
 

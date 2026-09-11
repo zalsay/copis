@@ -49,6 +49,7 @@ import {
 import { getOrCreateHttpApiWebToken } from './http-api-web-token'
 import {
   MODEL_BASE_URL_ENV,
+  MODEL_REQUEST_BASE_URL_ENV,
   resolveCopisBackendEndpoints,
   type CopisBackendEndpointResolution,
 } from './backend-endpoint-resolver'
@@ -484,6 +485,9 @@ function spawnManagedProcess(
         ...(options.modelBaseUrl || process.env[MODEL_BASE_URL_ENV]
           ? { [MODEL_BASE_URL_ENV]: options.modelBaseUrl ?? process.env[MODEL_BASE_URL_ENV] }
           : {}),
+        ...(options.modelBaseUrl || process.env[MODEL_REQUEST_BASE_URL_ENV]
+          ? { [MODEL_REQUEST_BASE_URL_ENV]: options.modelBaseUrl ?? process.env[MODEL_REQUEST_BASE_URL_ENV] }
+          : {}),
         ...(piExtensionsDir ? { COPIS_PI_EXTENSIONS_DIR: piExtensionsDir } : {}),
         ...(nodeRuntimeRoot ? { COPIS_RUNTIME_ROOT: nodeRuntimeRoot } : {}),
         ...(pythonRuntimeRoot ? { COPIS_PYTHON_RUNTIME_ROOT: pythonRuntimeRoot } : {}),
@@ -584,8 +588,9 @@ export async function prepareHttpApiBackend(
   const prepared = await resolveHttpApiBackend(options)
   process.env.COPIS_BACKEND_URL = prepared.resolution.backendUrl
   process.env[MODEL_BASE_URL_ENV] = prepared.resolution.modelBaseUrl
+  process.env[MODEL_REQUEST_BASE_URL_ENV] = prepared.resolution.modelBaseUrl
   console.log(
-    `[HTTP API] edu-api endpoint 已选择（${prepared.resolution.source}）：${prepared.resolution.backendUrl}`,
+    `[HTTP API] edu-api endpoint 已选择（${prepared.resolution.source}）：${prepared.resolution.backendUrl}；model-request：${prepared.resolution.modelBaseUrl}`,
   )
   return prepared.options
 }

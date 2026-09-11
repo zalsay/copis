@@ -102,17 +102,20 @@
   justify-content: center;
   width: fit-content;
   min-height: 24px;
-  padding: 0 8px;
-  border-radius: 999px;
-  background: color-mix(in srgb, hsl(var(--muted)) 78%, transparent);
+  padding: 0 10px;
+  border-radius: 9999px;
+  border: 1px solid hsl(var(--border) / 0.45);
+  background: hsl(var(--muted) / 0.7);
   color: hsl(var(--muted-foreground));
   font-size: 11px;
+  font-weight: 550;
   white-space: nowrap;
 }
 
 .copis-working-order-type.vip_upgrade {
-  background: var(--ui-primary-background);
-  color: var(--ui-primary);
+  border-color: hsl(var(--border) / 0.65);
+  background: hsl(var(--muted) / 0.92);
+  color: hsl(var(--foreground) / 0.88);
 }
 
 .copis-working-order-payment strong,
@@ -128,16 +131,25 @@
 }
 
 .copis-working-order-status.pending {
-  background: color-mix(in srgb, var(--ui-primary) 16%, transparent);
-  color: var(--ui-primary);
+  border-color: hsl(38 92% 50% / 0.25);
+  background: hsl(38 92% 50% / 0.08);
+  color: hsl(38 92% 38%);
 }
 .copis-working-order-status.paid {
-  background: color-mix(in srgb, hsl(142 70% 40%) 14%, transparent);
+  border-color: hsl(142 70% 40% / 0.25);
+  background: color-mix(in srgb, hsl(142 70% 40%) 12%, transparent);
   color: hsl(142 70% 35%);
 }
 .copis-working-order-status.failed {
+  border-color: hsl(var(--destructive) / 0.25);
   background: hsl(var(--destructive) / 0.08);
   color: hsl(var(--destructive));
+}
+
+.dark .copis-working-order-status.pending {
+  border-color: hsl(38 92% 50% / 0.3);
+  background: hsl(38 92% 50% / 0.12);
+  color: hsl(38 92% 68%);
 }
 
 .dark .copis-working-order-status.paid {
@@ -164,16 +176,23 @@
 
 .copis-working-order-delete {
   display: inline-flex;
-  width: 34px;
-  height: 34px;
+  width: 28px;
+  height: 28px;
+  justify-self: center;
   align-items: center;
   justify-content: center;
   padding: 0;
   border: 0;
-  border-radius: 8px;
+  border-radius: 6px;
   background: transparent;
   color: hsl(var(--muted-foreground));
   cursor: pointer;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+.copis-working-order-delete svg {
+  width: 14px;
+  height: 14px;
 }
 
 .copis-working-order-delete:hover:not(:disabled) {

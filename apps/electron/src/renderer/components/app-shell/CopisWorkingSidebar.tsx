@@ -13,9 +13,9 @@ import {
   FolderCode,
   FolderOpen,
   Gem,
+  GraduationCap,
   Loader2,
   LogOut,
-  MessageSquare,
   MoreHorizontal,
   PanelLeftOpen,
   PencilLine,
@@ -26,16 +26,23 @@ import {
   RefreshCw,
   Search,
   Settings,
-  Sparkles,
   Timer,
   Trash2,
   TrendingUp,
   UsersRound,
 } from 'lucide-react'
+import { CopisLogoIcon } from '@/components/ui/copis-logo-icon'
 import { toast } from 'sonner'
 import type { AgentWorkspace } from '@copis/shared'
 import { cn } from '@/lib/utils'
-import { sidebarCollapsedAtom } from '@/atoms/tab-atoms'
+import {
+  activeTabIdAtom,
+  openTab,
+  sidebarCollapsedAtom,
+  tabsAtom,
+  TUTORIAL_TAB_ID,
+  TUTORIAL_TAB_TITLE,
+} from '@/atoms/tab-atoms'
 import {
   agentSessionsAtom,
   agentSettingsReadyAtom,
@@ -81,7 +88,6 @@ import {
 } from '@/components/ui/alert-dialog'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { CopisWorkingConnectDialog, type WorkingFolderSelection } from './CopisWorkingConnectDialog'
-import { CopisWorkingFeedbackDialog } from './CopisWorkingFeedbackDialog'
 import { CopisModeSwitcher } from './CopisModeSwitcher'
 import './CopisWorkingSidebar.css'
 
@@ -130,7 +136,6 @@ export function CopisWorkingSidebar({ width, noTransition = false }: CopisWorkin
   const [pendingDeleteSession, setPendingDeleteSession] = React.useState<PendingDeleteSession | null>(null)
   const [pendingDeleteWorkspace, setPendingDeleteWorkspace] = React.useState<PendingDeleteWorkspace | null>(null)
   const [createWorkspaceOpen, setCreateWorkspaceOpen] = useAtom(createWorkspaceDialogOpenAtom)
-  const [feedbackOpen, setFeedbackOpen] = React.useState(false)
   const initialProjectsLoadedRef = React.useRef(false)
 
   const localWorkspaces = useAtomValue(agentWorkspacesAtom)
@@ -159,6 +164,23 @@ export function CopisWorkingSidebar({ width, noTransition = false }: CopisWorkin
   const { executeClose } = useCloseTab()
   const openSession = useOpenSession()
   const [hiddenMenuItems, setHiddenMenuItems] = useAtom(hiddenSidebarMenuItemsAtom)
+  const [tabs, setTabs] = useAtom(tabsAtom)
+  const [activeTabId, setActiveTabId] = useAtom(activeTabIdAtom)
+
+  const isTutorialActive = activeView === 'conversations' && activeTabId === TUTORIAL_TAB_ID
+
+  const handleOpenTutorial = React.useCallback((): void => {
+    const result = openTab(tabs, {
+      type: 'tutorial',
+      sessionId: TUTORIAL_TAB_ID,
+      title: TUTORIAL_TAB_TITLE,
+    })
+    setTabs(result.tabs)
+    setActiveTabId(result.activeTabId)
+    setActiveView('conversations')
+    setWorkingHistorySelection(null)
+    setWorkingSettingsOpen(false)
+  }, [openTab, setActiveTabId, setActiveView, setTabs, setWorkingHistorySelection, setWorkingSettingsOpen, tabs])
 
   const isMenuHidden = React.useCallback(
     (id: string): boolean => hiddenMenuItems.includes(id),
@@ -590,6 +612,7 @@ export function CopisWorkingSidebar({ width, noTransition = false }: CopisWorkin
             'copis-working-project-row',
             isActiveWorkspace && 'active',
             isCurrentSessionWorkspace && 'current-session-workspace',
+            isWorkspaceExpanded && 'expanded',
             isMenuOpen && 'menu-open',
             isMenuOpenUp && 'menu-up',
           )}
@@ -598,32 +621,34 @@ export function CopisWorkingSidebar({ width, noTransition = false }: CopisWorkin
           <button type="button" className="copis-working-project-main" onClick={(event) => { event.stopPropagation(); selectLocalWorkspace(workspace.id) }}>
             <FolderOpen className="copis-working-project-workspace-row-icon" aria-hidden="true" />
             <span>{workspace.name}</span>
-            {isPinned && (
-              <Pin className="copis-working-project-pin-badge" aria-label="已置顶" />
-            )}
           </button>
           <button type="button" className="copis-working-project-collapse" aria-label={isWorkspaceExpanded ? '折叠项目会话' : '展开项目会话'} aria-expanded={isWorkspaceExpanded} onClick={(event) => { event.stopPropagation(); toggleWorkspace(workspace.id) }}>
             {isWorkspaceExpanded ? <ChevronDown aria-hidden="true" /> : <ChevronRight aria-hidden="true" />}
           </button>
-          <button type="button" className="copis-working-project-menu-trigger" aria-label={`${workspace.name} 项目菜单`} aria-haspopup="menu" aria-expanded={isMenuOpen} onClick={(event) => {
-            event.stopPropagation()
-            if (isMenuOpen) {
-              setOpenMenuWorkspaceId(null)
-              return
-            }
-            // 靠近侧栏滚动容器底部时向下弹出会被遮挡，改为向上弹出。
-            const triggerRect = event.currentTarget.getBoundingClientRect()
-            const bodyEl = event.currentTarget.closest('.copis-working-sidebar-body')
-            const bodyBottom = bodyEl ? bodyEl.getBoundingClientRect().bottom : window.innerHeight
-            const spaceBelow = bodyBottom - triggerRect.bottom
-            setOpenMenuDirection(spaceBelow < PROJECT_MENU_ESTIMATED_HEIGHT ? 'up' : 'down')
-            setOpenMenuWorkspaceId(workspace.id)
-          }}>
-            <MoreHorizontal aria-hidden="true" />
-          </button>
-          <button type="button" className="copis-working-project-new-task" aria-label={`在 ${workspace.name} 发起新会话`} title="新会话" onClick={(event) => { event.stopPropagation(); void handleNewSessionForWorkspace(workspace.id) }}>
-            <PencilLine aria-hidden="true" />
-          </button>
+          <div className="copis-working-project-actions">
+            {isPinned && (
+              <Pin className="copis-working-project-pin-badge" aria-label="已置顶" />
+            )}
+            <button type="button" className="copis-working-project-menu-trigger" aria-label={`${workspace.name} 项目菜单`} aria-haspopup="menu" aria-expanded={isMenuOpen} onClick={(event) => {
+              event.stopPropagation()
+              if (isMenuOpen) {
+                setOpenMenuWorkspaceId(null)
+                return
+              }
+              // 靠近侧栏滚动容器底部时向下弹出会被遮挡，改为向上弹出。
+              const triggerRect = event.currentTarget.getBoundingClientRect()
+              const bodyEl = event.currentTarget.closest('.copis-working-sidebar-body')
+              const bodyBottom = bodyEl ? bodyEl.getBoundingClientRect().bottom : window.innerHeight
+              const spaceBelow = bodyBottom - triggerRect.bottom
+              setOpenMenuDirection(spaceBelow < PROJECT_MENU_ESTIMATED_HEIGHT ? 'up' : 'down')
+              setOpenMenuWorkspaceId(workspace.id)
+            }}>
+              <MoreHorizontal aria-hidden="true" />
+            </button>
+            <button type="button" className="copis-working-project-new-task" aria-label={`在 ${workspace.name} 发起新会话`} title="新会话" onClick={(event) => { event.stopPropagation(); void handleNewSessionForWorkspace(workspace.id) }}>
+              <PencilLine aria-hidden="true" />
+            </button>
+          </div>
           {isMenuOpen && (
             <div className="copis-working-project-menu" role="menu">
               <button
@@ -842,7 +867,7 @@ export function CopisWorkingSidebar({ width, noTransition = false }: CopisWorkin
             <UsersRound aria-hidden="true" />
           </button>
         )}
-        <Sparkles className="copis-working-sidebar-collapsed-mark" aria-hidden="true" />
+        <CopisLogoIcon className="copis-working-sidebar-collapsed-mark" />
         <span className="copis-working-sidebar-session-count">{activeSessionCount}</span>
       </aside>
     )
@@ -1117,9 +1142,16 @@ export function CopisWorkingSidebar({ width, noTransition = false }: CopisWorkin
       </div>
 
       <footer className="copis-working-sidebar-footer">
-        <button type="button" className="copis-working-sidebar-account" onClick={() => setFeedbackOpen(true)}>
-          <span className="copis-working-account-mark"><MessageSquare aria-hidden="true" /></span>
-          <span><strong>意见反馈</strong><small>问题与建议</small></span>
+        <button
+          type="button"
+          className={cn('copis-working-sidebar-account', isTutorialActive && 'active')}
+          aria-label="查看使用教程"
+          onClick={handleOpenTutorial}
+        >
+          <span className="copis-working-account-mark">
+            <GraduationCap aria-hidden="true" />
+          </span>
+          <span><strong>查看使用教程</strong><small>产品指南与帮助</small></span>
         </button>
         <div className="copis-working-settings-row">
           <button
@@ -1147,7 +1179,6 @@ export function CopisWorkingSidebar({ width, noTransition = false }: CopisWorkin
           onConfirm={createLocalWorkspace}
         />
       )}
-      <CopisWorkingFeedbackDialog open={feedbackOpen} onClose={() => setFeedbackOpen(false)} />
       <ConfirmDialog
         open={pendingDeleteWorkspace !== null}
         onOpenChange={(open) => { if (!open) setPendingDeleteWorkspace(null) }}

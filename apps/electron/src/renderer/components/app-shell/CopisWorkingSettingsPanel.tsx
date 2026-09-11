@@ -11,7 +11,6 @@ import {
   ClipboardList,
   Crown,
   Gem,
-  GraduationCap,
   HardDrive,
   HardDriveDownload,
   Info,
@@ -23,10 +22,10 @@ import {
   Palette,
   RefreshCw,
   RotateCcw,
-  Sparkles,
   SlidersHorizontal,
   UserRound,
 } from 'lucide-react'
+import { CopisLogoIcon } from '@/components/ui/copis-logo-icon'
 import { toast } from 'sonner'
 import type { LucideIcon } from 'lucide-react'
 import type {
@@ -52,7 +51,6 @@ import {
   hiddenSidebarMenuItemsAtom,
   showAllSidebarMenuItems,
 } from '@/atoms/sidebar-menu-atoms'
-import { activeTabIdAtom, openTab, tabsAtom, TUTORIAL_TAB_ID, TUTORIAL_TAB_TITLE } from '@/atoms/tab-atoms'
 import { leftSidebarWidthAtom } from '@/atoms/sidebar-atoms'
 import { hasUpdateAtom } from '@/atoms/updater'
 import { AboutUpdatesSettings } from '@/components/settings/AboutUpdatesSettings'
@@ -63,6 +61,7 @@ import { StorageSettings } from '@/components/settings/StorageSettings'
 import { VoiceInputSettings } from '@/components/settings/VoiceInputSettings'
 import { ModelManagementSettings } from '@/components/settings/ModelManagementSettings'
 import { PasswordManagerSettings } from '@/components/settings/PasswordManagerSettings'
+import { FeedbackSettings } from '@/components/settings/FeedbackSettings'
 import {
   formatWorkingDiscount,
   formatWorkingLedgerDescription,
@@ -74,7 +73,7 @@ import { CopisWorkingMessageSettingsPanel } from './CopisWorkingMessageSettingsP
 import { CopisWorkingOrdersPanel } from './CopisWorkingOrdersPanel'
 import './CopisWorkingSettingsPanel.css'
 
-type WorkingSettingsMenuId = WorkingSettingsSectionId | 'tutorial'
+type WorkingSettingsMenuId = WorkingSettingsSectionId
 
 interface WorkingSettingsMenuItem {
   id: WorkingSettingsMenuId
@@ -107,12 +106,6 @@ export const WORKING_SETTINGS_MENU: readonly WorkingSettingsMenuItem[] = [
     label: '我的订单',
     description: '查看钻石充值和 VIP 升级订单。',
     icon: ClipboardList,
-  },
-  {
-    id: 'tutorial',
-    label: '查看使用教程',
-    description: '打开 Copis 使用教程。',
-    icon: GraduationCap,
   },
   {
     id: 'voice-input',
@@ -156,6 +149,12 @@ export const WORKING_SETTINGS_MENU: readonly WorkingSettingsMenuItem[] = [
     description: '查看主程序与本地模块版本，并检查、下载和安装更新。',
     icon: Info,
   },
+  {
+    id: 'feedback',
+    label: '意见反馈',
+    description: '告诉我们遇到的问题或希望改进的地方。',
+    icon: MessageSquare,
+  },
 ] as const
 
 interface CopisWorkingSettingsPanelProps {
@@ -165,8 +164,6 @@ interface CopisWorkingSettingsPanelProps {
 export function CopisWorkingSettingsPanel({ onClose }: CopisWorkingSettingsPanelProps): React.ReactElement {
   const [authState, setAuthState] = useAtom(workingAuthStateAtom)
   const setWorkingVipStatus = useSetAtom(workingVipStatusAtom)
-  const [tabs, setTabs] = useAtom(tabsAtom)
-  const [, setActiveTabId] = useAtom(activeTabIdAtom)
   const openPayment = useSetAtom(openWorkingPaymentAtom)
   const closePayment = useSetAtom(closeWorkingPaymentAtom)
   const paymentRefresh = useAtomValue(workingPaymentRefreshAtom)
@@ -299,17 +296,6 @@ export function CopisWorkingSettingsPanel({ onClose }: CopisWorkingSettingsPanel
     setSettings((current) => current ? { ...current, receiveChannel } : current)
   }
 
-  const handleOpenTutorial = (): void => {
-    const result = openTab(tabs, {
-      type: 'tutorial',
-      sessionId: TUTORIAL_TAB_ID,
-      title: TUTORIAL_TAB_TITLE,
-    })
-    setTabs(result.tabs)
-    setActiveTabId(result.activeTabId)
-    onClose()
-  }
-
   const handleLogout = async (): Promise<void> => {
     setLoggingOut(true)
     setError('')
@@ -345,7 +331,7 @@ export function CopisWorkingSettingsPanel({ onClose }: CopisWorkingSettingsPanel
                     key={item.id}
                     type="button"
                     className={`copis-working-settings-nav-button ${isActive ? 'active' : ''}`}
-                    onClick={() => item.id === 'tutorial' ? handleOpenTutorial() : setActiveSection(item.id)}
+                    onClick={() => setActiveSection(item.id)}
                     aria-current={isActive ? 'page' : undefined}
                     aria-label={item.id === 'about' && hasUpdate ? '关于/更新，有可用更新' : undefined}
                   >
@@ -396,7 +382,7 @@ export function CopisWorkingSettingsPanel({ onClose }: CopisWorkingSettingsPanel
                   <span>{loading ? '同步中...' : '刷新'}</span>
                 </button>
               )}
-              <button type="button" className="danger" onClick={() => void handleLogout()} disabled={loading || loggingOut}>
+              <button type="button" onClick={() => void handleLogout()} disabled={loading || loggingOut}>
                 <LogOut aria-hidden="true" />
                 <span>{loggingOut ? '退出中...' : '退出'}</span>
               </button>
@@ -443,6 +429,7 @@ export function CopisWorkingSettingsPanel({ onClose }: CopisWorkingSettingsPanel
             {activeSection === 'menu-management' && <MenuManagementSettings />}
             {activeSection === 'passwords' && <PasswordManagerSettings />}
             {activeSection === 'about' && <AboutUpdatesSettings />}
+            {activeSection === 'feedback' && <FeedbackSettings />}
           </div>
         </main>
       </div>
@@ -577,7 +564,7 @@ function WorkingAccountSettings({
       <section className="copis-working-settings-card copis-working-settings-ledger-card">
         <div className="copis-working-settings-card-heading copis-working-settings-ledger-heading">
           <div className="copis-working-settings-ledger-heading-title">
-            <Sparkles aria-hidden="true" />
+            <CopisLogoIcon />
             <span>个人钻石流水</span>
           </div>
           <div className="copis-working-settings-ledger-daily-total" hidden={ledgerTab !== 'consumption'}>
@@ -610,7 +597,7 @@ function WorkingAccountSettings({
             <LedgerRow key={String(entry.id)} entry={entry} memberNameMap={memberNameMap} />
           )) : (
             <div className="copis-working-settings-empty">
-              <Sparkles aria-hidden="true" />
+              <CopisLogoIcon />
               <span>{loading ? '正在读取流水...' : ledgerTab === 'consumption' ? '暂无钻石消耗记录' : '暂无钻石获取记录'}</span>
             </div>
           )}

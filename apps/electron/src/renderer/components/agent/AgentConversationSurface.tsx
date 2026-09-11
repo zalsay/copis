@@ -17,7 +17,8 @@ import * as React from 'react'
 import { unstable_batchedUpdates } from 'react-dom'
 import { useAtom, useAtomValue, useSetAtom, useStore } from 'jotai'
 import { toast } from 'sonner'
-import { CornerDownLeft, Square, Settings, X, Copy, Sparkles, ListTodo, Paperclip, ShieldCheck, ShieldX } from 'lucide-react'
+import { CornerDownLeft, Square, Settings, X, Copy, ListTodo, Paperclip, ShieldCheck, ShieldX } from 'lucide-react'
+import { CopisLogoIcon } from '@/components/ui/copis-logo-icon'
 import { AgentMessages } from './AgentMessages'
 import { AgentHeader } from './AgentHeader'
 import { AgentMessageQueue } from './AgentMessageQueue'
@@ -2981,7 +2982,7 @@ export function AgentConversationSurface({
           hideComposer ? (
             <div className="flex-1 flex flex-col items-center justify-center p-6 text-center text-muted-foreground gap-2 select-none">
               <div className="w-8 h-8 rounded-full bg-primary/10 text-primary flex items-center justify-center mb-1">
-                <Sparkles className="w-4 h-4" />
+                <CopisLogoIcon className="w-4 h-4" />
               </div>
               <span className="text-xs font-semibold text-foreground/80">AI 投研助手已就绪</span>
               <p className="text-[11px] text-muted-foreground/70 max-w-[200px] leading-relaxed">

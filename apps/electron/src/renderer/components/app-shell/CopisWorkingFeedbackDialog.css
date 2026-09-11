@@ -1,3 +1,4 @@
+/* 用户反馈弹窗：主题变量化，统一 UI，跟随亮暗主题自动切换 */
 .copis-working-feedback-backdrop {
   position: fixed;
   inset: 0;
@@ -5,19 +6,41 @@
   display: grid;
   place-items: center;
   padding: 18px;
-  background: rgba(0, 0, 0, 0.48);
+  background: color-mix(in srgb, hsl(var(--background)) 62%, transparent);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  animation: copis-feedback-backdrop-in 0.18s ease-out;
+}
+
+@keyframes copis-feedback-backdrop-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
 }
 
 .copis-working-feedback-modal {
   width: min(560px, calc(100vw - 24px));
   max-height: calc(100dvh - 24px);
   overflow: auto;
-  padding: 20px;
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  padding: 22px;
+  border: 1px solid hsl(var(--border));
   border-radius: 8px;
-  background: #202020;
-  color: #f4f4f5;
-  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.44);
+  background: hsl(var(--card));
+  color: hsl(var(--card-foreground));
+  box-shadow:
+    0 34px 90px rgba(0, 0, 0, 0.25),
+    inset 0 1px 0 color-mix(in srgb, hsl(var(--card-foreground)) 8%, transparent);
+  animation: copis-feedback-modal-in 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes copis-feedback-modal-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
 }
 
 .copis-working-feedback-header {
@@ -28,18 +51,44 @@
   margin-bottom: 20px;
 }
 
+.copis-working-feedback-heading {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.copis-working-feedback-heading-icon {
+  display: grid;
+  width: 38px;
+  height: 38px;
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: 8px;
+  border: 1px solid hsl(var(--border) / 0.5);
+  background: hsl(var(--muted) / 0.8);
+  color: hsl(var(--foreground) / 0.8);
+}
+
+.copis-working-feedback-heading-icon svg {
+  width: 18px;
+  height: 18px;
+}
+
 .copis-working-feedback-header h2 {
   margin: 0;
-  font-size: 19px;
-  font-weight: 700;
+  color: hsl(var(--card-foreground));
+  font-size: 17px;
+  font-weight: 650;
   line-height: 1.3;
+  letter-spacing: 0.01em;
 }
 
 .copis-working-feedback-header p {
-  margin: 6px 0 0;
-  color: #9f9fa8;
+  margin: 4px 0 0;
+  color: hsl(var(--muted-foreground));
   font-size: 13px;
-  line-height: 1.45;
+  line-height: 1.5;
 }
 
 .copis-working-feedback-header button {
@@ -49,30 +98,34 @@
   place-items: center;
   flex: 0 0 auto;
   padding: 0;
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  border: 1px solid transparent;
   border-radius: 8px;
-  background: rgba(255, 255, 255, 0.05);
-  color: #bdbdc5;
+  background: transparent;
+  color: hsl(var(--muted-foreground));
   cursor: pointer;
+  transition:
+    background-color 0.15s ease,
+    border-color 0.15s ease,
+    color 0.15s ease;
 }
 
 .copis-working-feedback-header button:hover:not(:disabled) {
-  background: rgba(255, 255, 255, 0.1);
-  color: #ffffff;
+  border-color: hsl(var(--border));
+  background: hsl(var(--muted));
+  color: hsl(var(--foreground));
 }
 
 .copis-working-feedback-header button:disabled,
 .copis-working-feedback-actions button:disabled,
 .copis-working-feedback-field input:disabled,
-.copis-working-feedback-field textarea:disabled,
-.copis-working-feedback-select-wrap select:disabled {
+.copis-working-feedback-field textarea:disabled {
   cursor: not-allowed;
-  opacity: 0.6;
+  opacity: 0.56;
 }
 
 .copis-working-feedback-header button svg {
-  width: 17px;
-  height: 17px;
+  width: 16px;
+  height: 16px;
 }
 
 .copis-working-feedback-grid {
@@ -85,9 +138,9 @@
   min-width: 0;
   display: grid;
   gap: 7px;
-  color: #d8d8de;
-  font-size: 13px;
-  font-weight: 650;
+  color: hsl(var(--foreground) / 0.88);
+  font-size: 12px;
+  font-weight: 550;
 }
 
 .copis-working-feedback-field {
@@ -95,121 +148,107 @@
 }
 
 .copis-working-feedback-modal input,
-.copis-working-feedback-modal textarea,
-.copis-working-feedback-select-wrap {
+.copis-working-feedback-modal textarea {
   width: 100%;
   box-sizing: border-box;
-  border: 1px solid rgba(255, 255, 255, 0.13);
+  border: 1px solid hsl(var(--border));
   border-radius: 8px;
-  background: #292929;
-  color: #f4f4f5;
+  background: hsl(var(--background));
+  color: hsl(var(--foreground));
   font: inherit;
-  font-size: 14px;
-}
-
-.copis-working-feedback-modal input,
-.copis-working-feedback-modal textarea {
-  padding: 10px 11px;
+  font-size: 13px;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
 }
 
 .copis-working-feedback-modal input {
-  min-height: 42px;
+  padding: 9px 12px;
+  min-height: 38px;
 }
 
 .copis-working-feedback-modal textarea {
-  min-height: 140px;
+  padding: 10px 12px;
+  min-height: 120px;
   resize: vertical;
   line-height: 1.5;
 }
 
 .copis-working-feedback-modal input::placeholder,
 .copis-working-feedback-modal textarea::placeholder {
-  color: #777780;
+  color: hsl(var(--muted-foreground));
 }
 
 .copis-working-feedback-modal input:focus,
-.copis-working-feedback-modal textarea:focus,
-.copis-working-feedback-select-wrap:focus-within {
-  border-color: rgba(200, 167, 255, 0.78);
+.copis-working-feedback-modal textarea:focus {
+  border-color: var(--ui-primary);
   outline: 0;
-  box-shadow: 0 0 0 3px rgba(200, 167, 255, 0.12);
-}
-
-.copis-working-feedback-select-wrap {
-  position: relative;
-  min-height: 42px;
-  display: flex;
-  align-items: center;
-}
-
-.copis-working-feedback-select-wrap select {
-  width: 100%;
-  min-height: 40px;
-  appearance: none;
-  padding: 0 34px 0 11px;
-  border: 0;
-  outline: 0;
-  background: transparent;
-  color: inherit;
-  font: inherit;
-  cursor: pointer;
-}
-
-.copis-working-feedback-select-wrap svg {
-  position: absolute;
-  right: 10px;
-  width: 16px;
-  height: 16px;
-  pointer-events: none;
-  color: #a9a9b2;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--ui-primary) 18%, transparent);
 }
 
 .copis-working-feedback-message {
   margin-top: 14px;
-  padding: 10px 11px;
+  padding: 10px 12px;
   border-radius: 8px;
   font-size: 13px;
   line-height: 1.45;
 }
 
 .copis-working-feedback-message.error {
-  background: rgba(239, 68, 68, 0.14);
-  color: #f2a4a4;
+  border: 1px solid hsl(var(--destructive) / 0.25);
+  background: hsl(var(--destructive) / 0.1);
+  color: hsl(var(--destructive));
 }
 
 .copis-working-feedback-message.success {
-  background: rgba(74, 222, 128, 0.12);
-  color: #9ae6b4;
+  border: 1px solid hsl(142 70% 40% / 0.25);
+  background: hsl(142 70% 40% / 0.1);
+  color: hsl(142 70% 35%);
+}
+
+.dark .copis-working-feedback-message.success {
+  color: hsl(142 65% 78%);
 }
 
 .copis-working-feedback-actions {
   margin-top: 20px;
   display: flex;
   justify-content: flex-end;
-  gap: 8px;
+  gap: 10px;
 }
 
 .copis-working-feedback-actions button {
   min-height: 36px;
-  padding: 0 13px;
-  border: 1px solid rgba(255, 255, 255, 0.12);
+  padding: 0 16px;
+  border: 1px solid transparent;
   border-radius: 8px;
-  background: #292929;
-  color: #eeeeef;
   font: inherit;
   font-size: 13px;
-  font-weight: 700;
+  font-weight: 600;
   cursor: pointer;
+  transition:
+    background-color 0.15s ease,
+    border-color 0.15s ease,
+    filter 0.15s ease;
+}
+
+.copis-working-feedback-actions button:first-child {
+  border-color: hsl(var(--border));
+  background: transparent;
+  color: hsl(var(--foreground));
+}
+
+.copis-working-feedback-actions button:first-child:hover:not(:disabled) {
+  background: hsl(var(--muted));
 }
 
 .copis-working-feedback-actions button:last-child {
   border-color: transparent;
-  background: #c8a7ff;
-  color: #20162c;
+  background: hsl(var(--primary));
+  color: hsl(var(--primary-foreground));
+  box-shadow: var(--shadow-xs, 0 1px 2px 0 rgb(0 0 0 / 0.05));
 }
 
-.copis-working-feedback-actions button:hover:not(:disabled) {
-  filter: brightness(1.08);
+.copis-working-feedback-actions button:last-child:hover:not(:disabled) {
+  background: hsl(var(--primary) / 0.9);
 }
 
 @media (max-width: 560px) {

@@ -1,6 +1,6 @@
 import * as React from 'react'
 import { createPortal } from 'react-dom'
-import { X } from 'lucide-react'
+import { MessageSquare, X } from 'lucide-react'
 import { AppSelect } from '@/components/ui/select'
 import './CopisWorkingFeedbackDialog.css'
 
@@ -114,9 +114,14 @@ export function CopisWorkingFeedbackDialog({ open, onClose }: CopisWorkingFeedba
         onMouseDown={(event) => event.stopPropagation()}
       >
         <header className="copis-working-feedback-header">
-          <div>
-            <h2 id="copis-working-feedback-title">反馈问题</h2>
-            <p>告诉我们遇到的问题或希望改进的地方。</p>
+          <div className="copis-working-feedback-heading">
+            <span className="copis-working-feedback-heading-icon" aria-hidden="true">
+              <MessageSquare />
+            </span>
+            <div>
+              <h2 id="copis-working-feedback-title">反馈问题</h2>
+              <p>告诉我们遇到的问题或希望改进的地方。</p>
+            </div>
           </div>
           <button type="button" aria-label="关闭反馈" onClick={onClose} disabled={submitting}>
             <X aria-hidden="true" />

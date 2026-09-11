@@ -36,6 +36,7 @@ export type WorkingSettingsSectionId =
   | 'menu-management'
   | 'passwords'
   | 'about'
+  | 'feedback'
 
 /** Working 设置面板当前激活区块，供外部跳转（如语音输入开关提示）设置初始值。 */
 export const workingSettingsSectionAtom = atom<WorkingSettingsSectionId>('settings')

@@ -112,24 +112,24 @@ function NodeDetailsPopover({ node, status, dependencies, pinned, style, onClose
     <div
       role="tooltip"
       aria-label="节点详情悬浮层"
-      className={cn('rounded-lg bg-[#1d1e1f] p-4 shadow-xl ring-1 ring-white/10', pinned ? 'pointer-events-auto' : 'pointer-events-none')}
+      className={cn('rounded-xl border border-border/60 bg-popover p-4 text-popover-foreground shadow-xl ring-1 ring-border/20 backdrop-blur-md', pinned ? 'pointer-events-auto' : 'pointer-events-none')}
       style={style}
     >
       <div className="mb-2 flex items-center gap-2">
-        <span className="grid size-7 shrink-0 place-items-center rounded-full border border-[#f0a15a]/35 bg-[#2b211a] text-[#f0a15a]"><NodeRoleIcon role={node.role} /></span>
+        <span className="grid size-7 shrink-0 place-items-center rounded-lg ui-primary-surface shadow-xs"><NodeRoleIcon role={node.role} /></span>
         <div className="min-w-0 flex-1">
-          <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-[#f0a15a]">节点详情</span>
-          <h3 className="mt-0.5 truncate text-sm font-semibold text-[#f1f3f2]">{node.name}</h3>
+          <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-[var(--ui-primary)]">节点详情</span>
+          <h3 className="mt-0.5 truncate text-sm font-semibold text-foreground">{node.name}</h3>
         </div>
-        {pinned && <button type="button" aria-label="关闭节点详情" onClick={onClose} className="shrink-0 rounded p-1 text-[#858b8e] transition-colors hover:bg-white/10 hover:text-[#f1f3f2]"><X className="size-4" /></button>}
+        {pinned && <button type="button" aria-label="关闭节点详情" onClick={onClose} className="shrink-0 rounded-md p-1 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"><X className="size-4" /></button>}
       </div>
-      <p className="text-xs leading-5 text-[#9fa3a6]">{node.description || `${roleLabel(node.role)}负责当前专家团队中的受控工作。`}</p>
+      <p className="text-xs leading-5 text-muted-foreground">{node.description || `${roleLabel(node.role)}负责当前专家团队中的受控工作。`}</p>
       <dl className="mt-3 grid gap-2 text-xs">
-        <div><dt className="text-[#858b8e]">专家标识</dt><dd className="mt-0.5 break-all font-mono text-[#dfe4e1]">{node.id}</dd></div>
-        <div><dt className="text-[#858b8e]">分工职责 / 状态</dt><dd className="mt-0.5 text-[#dfe4e1]">{roleLabel(node.role)} · {nodeStatusLabels[status]}</dd></div>
-        <div><dt className="text-[#858b8e]">前置协作</dt><dd className="mt-0.5 break-words text-[#dfe4e1]">{dependencies.length > 0 ? `承接 ${dependencies.join('、')}` : '首发协作（无前置）'}</dd></div>
+        <div><dt className="text-muted-foreground">专家标识</dt><dd className="mt-0.5 break-all font-mono text-foreground">{node.id}</dd></div>
+        <div><dt className="text-muted-foreground">分工职责 / 状态</dt><dd className="mt-0.5 text-foreground">{roleLabel(node.role)} · {nodeStatusLabels[status]}</dd></div>
+        <div><dt className="text-muted-foreground">前置协作</dt><dd className="mt-0.5 break-words text-foreground">{dependencies.length > 0 ? `承接 ${dependencies.join('、')}` : '首发协作（无前置）'}</dd></div>
       </dl>
-      {node.path && <div className="mt-3 rounded-md bg-[#151515] px-3 py-2 text-[10px] text-[#858b8e]">交付成果路径：<span className="break-all text-[#dfe4e1]">{node.path}</span></div>}
+      {node.path && <div className="mt-3 rounded-lg border border-border/50 bg-muted/60 px-3 py-2 text-[10px] text-muted-foreground">交付成果路径：<span className="break-all font-mono text-foreground">{node.path}</span></div>}
     </div>
   )
 }
@@ -549,74 +549,90 @@ export function ExpertTeamView(): React.ReactElement {
   }
   const schemaRevision = currentSchema?.revision ?? currentSchema?.currentRevisionId ?? binding?.revision ?? binding?.schemaRevisionId
   return (
-    <div className="flex h-full min-h-0 bg-[#151515] text-[#f2f3f3]">
-      <aside className="min-h-0 w-[230px] shrink-0 overflow-y-auto border-r border-white/10 bg-[#151515] p-4">
-          <button type="button" aria-label="新专家团" onClick={handleOpenNewExpertTeam} disabled={workspaceActionLoading} className="ui-primary-button mb-3 flex min-h-9 w-full items-center justify-center gap-2 rounded-md px-3 py-2 text-sm font-semibold transition-colors">
+    <div className="flex h-full min-h-0 bg-background text-foreground">
+      <aside className="min-h-0 w-[230px] shrink-0 overflow-y-auto border-r border-border/60 bg-content-area/40 p-4">
+          <button
+            type="button"
+            aria-label="新专家团"
+            onClick={handleOpenNewExpertTeam}
+            disabled={workspaceActionLoading}
+            className="mb-3 flex min-h-9 w-full items-center justify-center gap-2 rounded-xl bg-primary px-3 py-2 text-sm font-semibold text-primary-foreground shadow-xs transition-colors hover:bg-primary/90 disabled:opacity-50"
+          >
             <UsersRound className="size-4" />
             新专家团
           </button>
           <div className="mb-3 flex items-center justify-between">
-            <span className="text-xs font-semibold uppercase tracking-wide text-[#858b8e]">专家团队</span>
+            <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">专家团队</span>
             <div className="flex items-center gap-1.5">
-              <span className="text-xs text-[#858b8e]">{schemas.length}</span>
+              <span className="text-xs tabular-nums text-muted-foreground">{schemas.length}</span>
               <button
                 type="button"
                 aria-label="刷新团队列表"
                 title="刷新团队列表"
                 onClick={() => void loadSchemas()}
-                className="rounded p-0.5 text-[#858b8e] transition-colors hover:bg-white/5 hover:text-[#dfe4e1]"
+                className="rounded-md p-0.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
               >
-                <RotateCw className={cn('size-3', loadState.schemas && 'animate-spin text-[#f0a15a]')} />
+                <RotateCw className={cn('size-3', loadState.schemas && 'animate-spin text-[var(--ui-primary)]')} />
               </button>
             </div>
           </div>
-          {loadState.schemas && schemas.length === 0 ? <div className="flex items-center gap-2 py-6 text-xs text-[#858b8e]"><Loader2 className="size-4 animate-spin text-[#f0a15a]" />加载中</div> : schemas.length === 0 ? <div className="py-6 text-xs text-[#858b8e]">暂无可用的团队方案</div> : <div className="space-y-1">{schemas.map((schema) => <button key={schema.id} type="button" onClick={() => void selectSchema(schema.id)} className={cn('flex w-full items-center justify-between rounded-md px-3 py-2 text-left text-sm text-[#dfe4e1] transition-colors hover:bg-white/5', schema.id === schemaId && 'ui-primary-surface')}><span className="min-w-0 truncate">{schema.name}</span><ChevronRight className="size-3.5 shrink-0 text-[#858b8e]" /></button>)}</div>}
-          <div className="mt-6 border-t border-white/10 pt-4"><div className="mb-3 text-xs font-semibold uppercase tracking-wide text-[#858b8e]">最近运行</div>{runs.length === 0 ? <p className="text-xs text-[#858b8e]">启动专家团队后将在此记录运行历史</p> : <div className="space-y-1.5">{runs.slice(0, 8).map((run) => <button key={run.id} type="button" onClick={() => { setCurrentRunId(run.id); void loadRun(run.id) }} className={cn('w-full rounded-md px-2.5 py-2 text-left text-[#dfe4e1] hover:bg-white/5', run.id === currentRun?.id && 'bg-[#f0a15a]/10')}><div className="flex items-center justify-between gap-2"><span className="truncate text-xs font-medium">{formatRunDisplayName(currentSchema?.name, run)}</span><span className={cn('rounded px-1.5 py-0.5 text-[10px]', statusClass(run.status))}>{statusLabels[run.status]}</span></div><div className="mt-1 text-[10px] text-[#858b8e]">{formatTime(run.createdAt)}</div></button>)}</div>}</div>
+          {loadState.schemas && schemas.length === 0 ? <div className="flex items-center gap-2 py-6 text-xs text-muted-foreground"><Loader2 className="size-4 animate-spin text-[var(--ui-primary)]" />加载中</div> : schemas.length === 0 ? <div className="py-6 text-xs text-muted-foreground">暂无可用的团队方案</div> : <div className="space-y-1">{schemas.map((schema) => <button key={schema.id} type="button" onClick={() => void selectSchema(schema.id)} className={cn('flex w-full items-center justify-between rounded-lg px-3 py-2 text-left text-sm font-medium transition-colors', schema.id === schemaId ? 'bg-primary/10 text-primary' : 'text-foreground/80 hover:bg-muted/60 hover:text-foreground')}><span className="min-w-0 truncate">{schema.name}</span><ChevronRight className={cn('size-3.5 shrink-0 transition-colors', schema.id === schemaId ? 'text-primary' : 'text-muted-foreground')} /></button>)}</div>}
+          <div className="mt-6 border-t border-border/60 pt-4"><div className="mb-3 text-xs font-semibold uppercase tracking-wide text-muted-foreground">最近运行</div>{runs.length === 0 ? <p className="text-xs text-muted-foreground">启动专家团队后将在此记录运行历史</p> : <div className="space-y-1.5">{runs.slice(0, 8).map((run) => <button key={run.id} type="button" onClick={() => { setCurrentRunId(run.id); void loadRun(run.id) }} className={cn('w-full rounded-lg px-2.5 py-2 text-left transition-colors', run.id === currentRun?.id ? 'bg-primary/10 text-primary font-medium' : 'text-foreground/80 hover:bg-muted/60 hover:text-foreground')}><div className="flex items-center justify-between gap-2"><span className="truncate text-xs font-medium">{formatRunDisplayName(currentSchema?.name, run)}</span><span className={cn('rounded-full px-2 py-0.5 text-[10px] font-medium', statusClass(run.status))}>{statusLabels[run.status]}</span></div><div className="mt-1 text-[10px] text-muted-foreground">{formatTime(run.createdAt)}</div></button>)}</div>}</div>
       </aside>
 
-      <div className="min-w-0 flex-1 overflow-y-auto bg-[#151515]" aria-label="专家团队右侧工作台">
-        <header className="flex shrink-0 items-start justify-between gap-4 border-b border-white/10 bg-[#151515] px-6 py-5">
+      <div className="min-w-0 flex-1 overflow-y-auto bg-background" aria-label="专家团队右侧工作台">
+        <header className="flex shrink-0 items-start justify-between gap-4 border-b border-border/60 bg-content-area/20 px-6 py-5">
           <div className="flex min-w-0 items-start">
             <div className="min-w-0">
               <h1 className="flex min-w-0 flex-wrap items-center gap-2 text-xl font-semibold">
                 <span className="truncate">{currentSchema?.name ?? '专家团队'}</span>
-                <span className="inline-flex min-h-6 items-center rounded-md ui-primary-badge px-2 text-[11px] font-medium text-[#f5c18e]">方案版本 {schemaRevision ? `v${schemaRevision}` : '--'}</span>
+                <span className="inline-flex min-h-6 items-center rounded-full border border-border/40 bg-muted/70 px-2.5 text-[11px] font-medium text-muted-foreground">方案版本 {schemaRevision ? `v${schemaRevision}` : '--'}</span>
               </h1>
-              <p className="mt-1 max-w-2xl text-xs leading-5 text-[#9fa3a6]">{currentSchema?.description || '由多位专业 AI 专家协同分工，自主规划并交付复杂任务成果'}</p>
+              <p className="mt-1 max-w-2xl text-xs leading-5 text-muted-foreground">{currentSchema?.description || '由多位专业 AI 专家协同分工，自主规划并交付复杂任务成果'}</p>
             </div>
           </div>
           <div className="flex shrink-0 items-center gap-2">
-            {!currentRun && binding?.workspaceSlug && binding.schemaId === currentSchema?.id && <span className="max-w-40 truncate text-[11px] text-[#9fa3a6]" role="status">已绑定：{binding.workspaceSlug}</span>}
-            {currentRun ? <button type="button" className="inline-flex min-h-7 items-center rounded-md ui-primary-button px-2 text-[11px] font-medium" role="status" title="继续对话" onClick={handleContinueConversation}>继续对话</button> : <Button type="button" variant="outline" className="min-h-7 h-7 border-[#f0a15a]/45 bg-[#f0a15a]/10 px-3 text-xs text-[#f5c18e] hover:bg-[#f0a15a]/20" onClick={handleStart} disabled={!currentSchema || workspaceActionLoading}>开始</Button>}
+            {!currentRun && binding?.workspaceSlug && binding.schemaId === currentSchema?.id && <span className="max-w-40 truncate text-[11px] text-muted-foreground" role="status">已绑定：{binding.workspaceSlug}</span>}
+            {currentRun ? (
+              <button
+                type="button"
+                className="inline-flex min-h-7 items-center rounded-md bg-primary px-2.5 text-[11px] font-medium text-primary-foreground shadow-xs transition-colors hover:bg-primary/90"
+                role="status"
+                title="继续对话"
+                onClick={handleContinueConversation}
+              >继续对话</button>
+            ) : (
+              <Button type="button" className="min-h-7 h-7 px-3 text-xs shadow-xs" onClick={handleStart} disabled={!currentSchema || workspaceActionLoading}>开始</Button>
+            )}
           </div>
         </header>
 
         <Dialog open={workspaceDialogOpen} onOpenChange={handleWorkspaceDialogOpenChange}>
-          <DialogContent className="border-[#f0a15a]/25 bg-[#1d1e1f] text-[#f2f3f3]" hideClose={workspaceActionLoading}>
+          <DialogContent className="border-border/60 bg-card text-card-foreground shadow-xl sm:max-w-md" hideClose={workspaceActionLoading}>
             <DialogHeader>
-              <DialogTitle className="text-[#f1f3f2]">选择工作区</DialogTitle>
-              <DialogDescription className="text-[#9fa3a6]">选择一个已有工作区，或新建工作区以启动此专家团队方案。</DialogDescription>
+              <DialogTitle className="text-foreground">选择工作区</DialogTitle>
+              <DialogDescription className="text-muted-foreground">选择一个已有工作区，或新建工作区以启动此专家团队方案。</DialogDescription>
             </DialogHeader>
 
             <div className="space-y-5">
               <section aria-label="已有工作区">
-                <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-[#f0a15a]">已有工作区</div>
-                {workspaces.length === 0 ? <p className="rounded-md bg-[#151515] px-3 py-3 text-xs text-[#858b8e]">暂无可用的项目工作区，请先创建工作区。</p> : <div className="max-h-48 space-y-1 overflow-y-auto">{workspaces.map((workspace) => <Button key={workspace.id} type="button" variant="ghost" className="h-auto min-h-10 w-full justify-between rounded-md bg-[#151515] px-3 py-2 text-left text-[#dfe4e1] hover:bg-[#f0a15a]/10 hover:text-[#f5c18e]" onClick={() => void handleSelectWorkspace(workspace)} disabled={workspaceActionLoading}><span className="min-w-0"><span className="block truncate text-sm font-medium">{workspace.name}</span><span className="mt-0.5 block truncate text-[10px] text-[#858b8e]">{workspace.projectRootPath || 'Copis 托管工作区'}</span></span><ChevronRight className="size-4 shrink-0 text-[#858b8e]" /></Button>)}</div>}
+                <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-[var(--ui-primary)]">已有工作区</div>
+                {workspaces.length === 0 ? <p className="rounded-xl border border-border/60 bg-content-area px-3 py-3 text-xs text-muted-foreground">暂无可用的项目工作区，请先创建工作区。</p> : <div className="max-h-48 space-y-1.5 overflow-y-auto pr-1">{workspaces.map((workspace) => <Button key={workspace.id} type="button" variant="ghost" className="h-auto min-h-10 w-full justify-between rounded-xl border border-border/40 bg-content-area px-3 py-2 text-left text-foreground/90 transition-colors hover:bg-[var(--ui-primary-background)] hover:text-[var(--ui-primary)] hover:border-[var(--ui-primary)]/40" onClick={() => void handleSelectWorkspace(workspace)} disabled={workspaceActionLoading}><span className="min-w-0"><span className="block truncate text-sm font-medium">{workspace.name}</span><span className="mt-0.5 block truncate text-[10px] text-muted-foreground">{workspace.projectRootPath || 'Copis 托管工作区'}</span></span><ChevronRight className="size-4 shrink-0 text-muted-foreground" /></Button>)}</div>}
               </section>
 
-              <section className="border-t border-white/10 pt-4" aria-label="创建工作区">
-                <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-[#f0a15a]">创建工作区</div>
-                <p className="text-xs leading-5 text-[#858b8e]">创建新的项目工作区，专家团队将在该工作区中为你开展工作与交付成果。</p>
+              <section className="border-t border-border/60 pt-4" aria-label="创建工作区">
+                <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-[var(--ui-primary)]">创建工作区</div>
+                <p className="text-xs leading-5 text-muted-foreground">创建新的项目工作区，专家团队将在该工作区中为你开展工作与交付成果。</p>
                 <div className="mt-3 flex flex-wrap gap-2">
-                  <Button type="button" size="sm" className="bg-[var(--ui-primary-background)] text-[var(--ui-primary)] hover:bg-[var(--ui-primary-background)] hover:text-[var(--ui-primary)]" onClick={handleOpenCreateWorkspace} disabled={workspaceActionLoading}><FolderOpen className="size-3.5" />创建工作区</Button>
+                  <Button type="button" size="sm" className="rounded-lg shadow-xs" onClick={handleOpenCreateWorkspace} disabled={workspaceActionLoading}><FolderOpen className="size-3.5" />创建工作区</Button>
                 </div>
               </section>
 
-              {workspaceActionError && <div className="flex items-start gap-2 rounded-md bg-red-500/10 px-3 py-2 text-xs text-red-200" role="alert"><CircleAlert className="mt-0.5 size-4 shrink-0" />{workspaceActionError}</div>}
+              {workspaceActionError && <div className="flex items-start gap-2 rounded-xl bg-destructive/10 px-3 py-2 text-xs text-destructive" role="alert"><CircleAlert className="mt-0.5 size-4 shrink-0" />{workspaceActionError}</div>}
             </div>
 
             <DialogFooter>
-              <Button type="button" variant="outline" className="border-white/15 bg-transparent text-[#dfe4e1] hover:bg-white/5" onClick={() => handleWorkspaceDialogOpenChange(false)} disabled={workspaceActionLoading}>取消</Button>
+              <Button type="button" variant="outline" className="border-border/60 bg-content-area text-foreground/80 hover:bg-accent" onClick={() => handleWorkspaceDialogOpenChange(false)} disabled={workspaceActionLoading}>取消</Button>
             </DialogFooter>
           </DialogContent>
         </Dialog>
@@ -631,37 +647,37 @@ export function ExpertTeamView(): React.ReactElement {
           onCreateWorkspace={handleOpenCreateWorkspaceForNewExpertTeam}
         />
 
-        {error && <div className="mx-6 mt-4 flex items-start gap-2 rounded-md bg-red-500/10 px-3 py-2 text-sm text-red-200" role="alert"><CircleAlert className="mt-0.5 size-4 shrink-0" />{error}</div>}
+        {error && <div className="mx-6 mt-4 flex items-start gap-2 rounded-xl bg-destructive/10 px-3 py-2 text-sm text-destructive" role="alert"><CircleAlert className="mt-0.5 size-4 shrink-0" />{error}</div>}
 
         <main className="min-h-0 p-6">
-          {!currentSchema ? <div className="flex h-full items-center justify-center text-sm text-[#858b8e]">请从左侧选择一个团队方案开始协作</div> : <div className="mx-auto max-w-6xl space-y-5">
-            <section className="rounded-lg bg-[#1d1e1f] p-5 shadow-sm ring-1 ring-white/10" aria-label="专家团队执行阵容">
-              <div className="flex items-end justify-between gap-4"><h2 className="text-lg font-semibold text-[#f1f3f2]">执行阵容</h2><span className="text-xs text-[#858b8e]">{currentSchema.version ? `v${currentSchema.version}` : '标准版'} · {currentSchema.nodes.length} 位团队专家</span></div>
-              <div className="mt-4 grid gap-2 sm:grid-cols-2 xl:grid-cols-3" role="list" aria-label="Schema 节点列表" onMouseLeave={hideNodeDetails}>
+          {!currentSchema ? <div className="flex h-full items-center justify-center text-sm text-muted-foreground">请从左侧选择一个团队方案开始协作</div> : <div className="mx-auto max-w-6xl space-y-5">
+            <section className="rounded-xl border border-border/60 bg-content-area p-5 shadow-xs" aria-label="专家团队执行阵容">
+              <div className="flex items-end justify-between gap-4"><h2 className="text-lg font-semibold text-foreground">执行阵容</h2><span className="text-xs text-muted-foreground">{currentSchema.version ? `v${currentSchema.version}` : '标准版'} · {currentSchema.nodes.length} 位团队专家</span></div>
+              <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-3" role="list" aria-label="Schema 节点列表" onMouseLeave={hideNodeDetails}>
                 {currentSchema.nodes.map((node) => {
                   const state = nodeStates.get(node.id) ?? 'pending'
-                  return <div className={cn('flex min-w-0 cursor-pointer items-center gap-3 rounded-md border border-white/10 bg-[#151515] px-3 py-3 transition-colors', hoveredNodeId === node.id && 'border-[#f0a15a]/40')} key={node.id} role="listitem" onMouseEnter={(event) => showNodeDetails(node.id, event)} onClick={(event) => togglePinNode(node.id, event)}><span className="grid size-8 shrink-0 place-items-center rounded-full border border-[#f0a15a]/35 bg-[#2b211a] text-[#f0a15a]"><NodeRoleIcon role={node.role} /></span><span className="min-w-0"><strong className="block truncate text-xs font-semibold text-[#e9ecea]">{node.name}</strong><small className="mt-1 block truncate text-[10px] text-[#858b8e]">{roleLabel(node.role)} · {nodeStatusLabels[state]}</small></span></div>
+                  return <div className={cn('flex min-w-0 cursor-pointer items-center gap-3 rounded-xl border border-border/60 bg-card p-3.5 shadow-xs transition-all hover:border-border hover:shadow-sm', hoveredNodeId === node.id && 'border-[var(--ui-primary)]/50 shadow-xs ring-1 ring-[var(--ui-primary)]/20')} key={node.id} role="listitem" onMouseEnter={(event) => showNodeDetails(node.id, event)} onClick={(event) => togglePinNode(node.id, event)}><span className="grid size-9 shrink-0 place-items-center rounded-xl ui-primary-surface shadow-xs"><NodeRoleIcon role={node.role} /></span><span className="min-w-0"><strong className="block truncate text-xs font-semibold text-foreground">{node.name}</strong><small className="mt-1 block truncate text-[10px] text-muted-foreground">{roleLabel(node.role)} · {nodeStatusLabels[state]}</small></span></div>
                 })}
               </div>
             </section>
 
-            <section className="rounded-lg bg-[#1d1e1f] p-5 shadow-sm ring-1 ring-white/10" aria-label="专家团队依赖编排">
-                <div className="flex items-end justify-between gap-4"><h2 className="text-lg font-semibold text-[#f1f3f2]">任务路径</h2><span className="rounded-md bg-[#f0a15a]/10 px-2 py-1 text-[11px] font-medium text-[#f5c18e]">{currentRun ? statusLabels[currentRun.status] : '就绪待命'}</span></div>
-                <div className="mt-4 overflow-x-auto rounded-md bg-[#151515] p-4 ring-1 ring-white/10">
+            <section className="rounded-xl border border-border/60 bg-content-area p-5 shadow-xs" aria-label="专家团队依赖编排">
+                <div className="flex items-end justify-between gap-4"><h2 className="text-lg font-semibold text-foreground">任务路径</h2><span className={cn('inline-flex items-center rounded-full px-2.5 py-0.5 text-[11px] font-medium', currentRun ? statusClass(currentRun.status) : 'border border-border/40 bg-muted/70 text-muted-foreground')}>{currentRun ? statusLabels[currentRun.status] : '就绪待命'}</span></div>
+                <div className="mt-4 overflow-x-auto rounded-xl border border-border/60 bg-card p-4 shadow-xs">
                   <div className="flex min-w-max items-center gap-3" onMouseLeave={hideNodeDetails}>
                     {currentSchema.nodes.map((node, index) => {
                       const state = nodeStates.get(node.id) ?? 'pending'
                       const dependencies = node.dependsOn?.length ? node.dependsOn : schemaEdges.filter((edge) => edge.to === node.id).map((edge) => edge.from)
-                      return <React.Fragment key={node.id}><div className={cn('w-44 cursor-pointer rounded-md border px-3 py-3 transition-colors', state === 'running' ? 'border-[#f0a15a]/70 bg-[#f0a15a]/10' : hoveredNodeId === node.id ? 'border-[#f0a15a]/50 bg-[#f0a15a]/5' : 'border-white/10 bg-[#1d1e1f]')} onMouseEnter={(event) => showNodeDetails(node.id, event)} onClick={(event) => togglePinNode(node.id, event)}><div className="flex items-center gap-2"><span className="grid size-7 shrink-0 place-items-center rounded-full bg-[#2b211a] text-[#f0a15a]"><NodeRoleIcon role={node.role} /></span><span className="min-w-0 truncate text-xs font-semibold text-[#e9ecea]">{node.name}</span></div><div className="mt-2 text-[10px] text-[#858b8e]">{roleLabel(node.role)} · {nodeStatusLabels[state]}</div>{dependencies.length > 0 && <div className="mt-1 truncate text-[10px] text-[#858b8e]">承接 {dependencies.join('、')}</div>}</div>{index < currentSchema.nodes.length - 1 && <ChevronRight className="size-4 shrink-0 text-[#f0a15a]" />}</React.Fragment>
+                      return <React.Fragment key={node.id}><div className={cn('w-44 cursor-pointer rounded-xl border p-3.5 shadow-xs transition-all', state === 'running' ? 'border-[var(--ui-primary)]/70 bg-[var(--ui-primary-background)] shadow-sm' : hoveredNodeId === node.id ? 'border-[var(--ui-primary)]/50 bg-[var(--ui-primary-background)]/40 shadow-xs' : 'border-border/60 bg-content-area/60 hover:border-border hover:bg-content-area')} onMouseEnter={(event) => showNodeDetails(node.id, event)} onClick={(event) => togglePinNode(node.id, event)}><div className="flex items-center gap-2"><span className="grid size-7 shrink-0 place-items-center rounded-lg ui-primary-surface shadow-xs"><NodeRoleIcon role={node.role} /></span><span className="min-w-0 truncate text-xs font-semibold text-foreground">{node.name}</span></div><div className="mt-2 text-[10px] text-muted-foreground">{roleLabel(node.role)} · {nodeStatusLabels[state]}</div>{dependencies.length > 0 && <div className="mt-1 truncate text-[10px] text-muted-foreground">承接 {dependencies.join('、')}</div>}</div>{index < currentSchema.nodes.length - 1 && <ChevronRight className="size-4 shrink-0 text-[var(--ui-primary)]/70" />}</React.Fragment>
                     })}
                   </div>
                 </div>
-                <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-[10px] text-[#858b8e]"><span>{schemaEdges.length > 0 ? `${schemaEdges.length} 条协作流` : '多角色按序协同'}</span><span>多角色协同推进</span><span>自动化交付成果</span><span>方案版本 {schemaRevision ? `v${schemaRevision}` : '--'}</span></div>
+                <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-[10px] text-muted-foreground"><span>{schemaEdges.length > 0 ? `${schemaEdges.length} 条协作流` : '多角色按序协同'}</span><span>多角色协同推进</span><span>自动化交付成果</span><span>方案版本 {schemaRevision ? `v${schemaRevision}` : '--'}</span></div>
             </section>
 
-            <section className="rounded-lg bg-[#1d1e1f] p-5 shadow-sm ring-1 ring-white/10" aria-label="专家团队运行历史">
-              <div className="mb-4 flex items-center justify-between gap-3"><div><span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-[#f0a15a]">运行历史</span><h2 className="mt-1 text-lg font-semibold text-[#f1f3f2]">{currentRun ? formatRunDisplayName(currentSchema?.name, currentRun) : '尚未运行'}</h2></div>{currentRun && <div className="flex items-center gap-2"><span className={cn('rounded px-2 py-1 text-[11px]', statusClass(currentRun.status))}>{statusLabels[currentRun.status]}</span>{currentRun.status === 'queued' && <Button variant="outline" size="sm" className="border-white/15 bg-transparent text-[#dfe4e1] hover:bg-white/5" onClick={() => void cancelRun()} disabled={loadState.run}><Square className="size-3.5" />取消运行</Button>}</div>}</div>
-              {!currentRun ? <p className="text-xs text-[#858b8e]">选择左侧运行记录查看详细协作动态与交付成果。</p> : <div className="grid gap-5 lg:grid-cols-2"><div><h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-[#858b8e]">协作动态</h3>{events.length === 0 ? <p className="text-xs text-[#858b8e]">等待专家团队更新协作动态，当前状态为 {statusLabels[currentRun.status]}。</p> : <div className="space-y-2">{events.map((event) => <div key={`${event.id}-${event.sequence ?? ''}`} className="flex gap-2 text-xs text-[#dfe4e1]"><span className="w-12 shrink-0 text-[#858b8e]">{formatTime(event.timestamp)}</span><span className="font-medium">{event.type}</span>{event.message && <span className="text-[#858b8e]">{event.message}</span>}</div>)}</div>}</div><div><h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-[#858b8e]">交付成果</h3>{artifacts.length === 0 ? <p className="text-xs text-[#858b8e]">暂无交付成果文件</p> : <div className="space-y-2">{artifacts.map((artifact) => <div key={artifact.id} className="flex items-center justify-between rounded bg-[#151515] px-3 py-2 text-xs"><span className="truncate text-[#dfe4e1]">{artifact.name}</span><span className="ml-3 shrink-0 text-[#858b8e]">{artifact.path || artifact.mimeType || '--'}</span></div>)}</div>}</div></div>}
+            <section className="rounded-xl border border-border/60 bg-content-area p-5 shadow-xs" aria-label="专家团队运行历史">
+              <div className="mb-4 flex items-center justify-between gap-3"><div><span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-[var(--ui-primary)]">运行历史</span><h2 className="mt-1 text-lg font-semibold text-foreground">{currentRun ? formatRunDisplayName(currentSchema?.name, currentRun) : '尚未运行'}</h2></div>{currentRun && <div className="flex items-center gap-2"><span className={cn('rounded-full px-2.5 py-1 text-[11px] font-medium', statusClass(currentRun.status))}>{statusLabels[currentRun.status]}</span>{currentRun.status === 'queued' && <Button variant="outline" size="sm" className="border-border/60 bg-card text-foreground/80 hover:bg-accent" onClick={() => void cancelRun()} disabled={loadState.run}><Square className="size-3.5" />取消运行</Button>}</div>}</div>
+              {!currentRun ? <p className="text-xs text-muted-foreground">选择左侧运行记录查看详细协作动态与交付成果。</p> : <div className="grid gap-5 lg:grid-cols-2"><div><h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">协作动态</h3>{events.length === 0 ? <p className="text-xs text-muted-foreground">等待专家团队更新协作动态，当前状态为 {statusLabels[currentRun.status]}。</p> : <div className="space-y-2">{events.map((event) => <div key={`${event.id}-${event.sequence ?? ''}`} className="flex gap-2 rounded-lg border border-border/40 bg-card px-3 py-2 text-xs text-foreground/90"><span className="w-12 shrink-0 font-mono text-muted-foreground">{formatTime(event.timestamp)}</span><span className="font-medium">{event.type}</span>{event.message && <span className="text-muted-foreground">{event.message}</span>}</div>)}</div>}</div><div><h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">交付成果</h3>{artifacts.length === 0 ? <p className="text-xs text-muted-foreground">暂无交付成果文件</p> : <div className="space-y-2">{artifacts.map((artifact) => <div key={artifact.id} className="flex items-center justify-between rounded-lg border border-border/60 bg-card px-3 py-2 text-xs shadow-xs"><span className="truncate font-medium text-foreground">{artifact.name}</span><span className="ml-3 shrink-0 font-mono text-muted-foreground">{artifact.path || artifact.mimeType || '--'}</span></div>)}</div>}</div></div>}
             </section>
           </div>}
         </main>

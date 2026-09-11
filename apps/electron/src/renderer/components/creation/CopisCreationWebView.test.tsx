@@ -263,8 +263,8 @@ describe('CopisCreationWebView 侧边栏宽度与原生视图布局契约', () =
     // 2. 右上角快捷返回按钮的 X 图标使用 ui-primary 色
     expect(viewSource).toContain('<X className="w-3.5 h-3.5 text-[var(--ui-primary)]" />')
 
-    // 3. 返回 Agent 模式按钮的 Sparkles 图标使用 ui-primary 色
-    expect(viewSource).toContain('<Sparkles className="w-3.5 h-3.5 mr-1.5 text-[var(--ui-primary)]" />')
+    // 3. 返回 Agent 模式按钮的 CopisLogoIcon 图标使用 ui-primary 色
+    expect(viewSource).toContain('<CopisLogoIcon className="w-3.5 h-3.5 mr-1.5 text-[var(--ui-primary)]" />')
 
     // 4. 创造模式加载态使用 creation-ui-primary 体系
     expect(viewSource).toContain('text-[var(--creation-ui-primary)]')
@@ -390,7 +390,7 @@ describe('CopisCreationWebView 侧边栏宽度与原生视图布局契约', () =
     expect(matchSessionClick({ classList: ['copis-menu-item'], parentClassList: ['copis-menu-section'] })).toBe(false)
     // 反向场景 3：点击模式切换器不触发切回
     expect(matchSessionClick({ classList: ['copis-mode-btn'], parentClassList: ['copis-mode-switcher'] })).toBe(false)
-    // 反向场景 4：点击底部意见反馈不触发切回
+    // 反向场景 4：点击底部操作区（如设置）不触发切回
     expect(matchSessionClick({ classList: ['hHd-Xa_footArea'] })).toBe(false)
   })
 
@@ -440,6 +440,37 @@ describe('CopisCreationWebView 侧边栏宽度与原生视图布局契约', () =
     expect(viewSource).toContain('安装创造模式模块')
     expect(viewSource).toContain('handleInstallModule')
     expect(viewSource).toContain("installFunctionalModule({ name: 'dsh' })")
+  })
+
+  test('Given 创造模式 DSH 预加载样式 When 检查会话列表项样式 Then 会话列表项背景色与条目留出左侧间距', () => {
+    const { readFileSync } = require('node:fs')
+    const { join } = require('node:path')
+    const preloadSource = readFileSync(join(__dirname, '../../../preload/dsh-bridge-preload.ts'), 'utf8')
+
+    expect(preloadSource).toContain('margin-left: 16px !important;')
+    expect(preloadSource).toContain('width: calc(100% - 16px) !important;')
+    expect(preloadSource).toContain('[class*="sessionRow"]')
+    expect(preloadSource).toContain('.YDXeBa_sessionRow')
+    expect(preloadSource).toContain('[class*="slot"]:empty')
+  })
+
+  test('Given 创造模式侧边栏与预加载脚本 When 检查底部菜单项契约 Then 意见反馈菜单项被隐藏与移除，仅保留设置', () => {
+    const { readFileSync } = require('node:fs')
+    const { join } = require('node:path')
+    const preloadSource = readFileSync(join(__dirname, '../../../preload/dsh-bridge-preload.ts'), 'utf8')
+    const patchSource = readFileSync(join(__dirname, '../../../main/lib/dsh-sidebar-patch.ts'), 'utf8')
+
+    // 1. Preload CSS 包含隐藏底部意见反馈的样式规则
+    expect(preloadSource).toContain('button[aria-label="意见反馈"]')
+    expect(preloadSource).toContain('button[data-copis-feedback="true"]')
+
+    // 2. Preload DOM 同步逻辑包含查找并隐藏意见反馈按钮
+    expect(preloadSource).toContain("label === '意见反馈' || label.includes('反馈')")
+    expect(preloadSource).toContain("btn.setAttribute('data-copis-feedback', 'true')")
+
+    // 3. 侧边栏源码补丁逻辑包含移除意见反馈 CopisMenuItem / CopisRailItem
+    expect(patchSource).toContain('移除意见反馈菜单项')
+    expect(patchSource).toContain('"意见反馈"')
   })
 })
 

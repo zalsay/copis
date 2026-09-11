@@ -7,13 +7,13 @@ import {
   LayoutGrid,
   Users,
   Brain,
-  Sparkles,
   ArrowRight,
   Flame,
   ShieldAlert,
   BarChart3,
   Bookmark,
 } from 'lucide-react'
+import { CopisLogoIcon } from '@/components/ui/copis-logo-icon'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
 
@@ -162,7 +162,7 @@ export function NewSessionFeatureChips({ variant = 'main', onSelect }: NewSessio
   return (
     <div className="copis-agent-starter-chips flex flex-wrap items-center justify-center gap-1.5 px-1 pb-2.5 select-none animate-in fade-in slide-in-from-bottom-1 duration-200">
       <div className="flex items-center gap-1 text-[11px] font-medium text-muted-foreground/75 mr-0.5 select-none">
-        <Sparkles className="size-3 text-primary/80" />
+        <CopisLogoIcon className="size-3 text-primary/80" />
         <span>快捷入口</span>
       </div>
 

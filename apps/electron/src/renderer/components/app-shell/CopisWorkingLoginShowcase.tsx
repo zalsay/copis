@@ -1,5 +1,6 @@
 import * as React from 'react'
-import { ArrowLeft, ArrowRight, Bot, Check, CheckCircle2, FileText, Globe2, Sparkles } from 'lucide-react'
+import { ArrowLeft, ArrowRight, Bot, Check, CheckCircle2, FileText, Globe2 } from 'lucide-react'
+import { CopisLogoIcon } from '@/components/ui/copis-logo-icon'
 import { CopisAppLogo } from '@/lib/model-logo'
 import './CopisWorkingLoginShowcase.css'
 
@@ -63,7 +64,7 @@ function ShowcaseVisual({ slide }: { slide: CopisWorkingLoginShowcaseSlide }): R
           <span className="showcase-card-status"><CheckCircle2 size={13} />工作区已连接</span>
         </div>
         <div className="copis-working-showcase-task-card task-card-side">
-          <Sparkles size={15} />
+          <CopisLogoIcon size={15} />
           <span>上下文持续保留</span>
         </div>
       </div>
@@ -97,7 +98,7 @@ function ShowcaseVisual({ slide }: { slide: CopisWorkingLoginShowcaseSlide }): R
       <div className="showcase-workflow-window">
         <div className="showcase-workflow-heading"><FileText size={15} /><span>每周反馈汇总</span><strong>按计划运行</strong></div>
         <div className="showcase-workflow-path">
-          <span><FileText size={14} />收集反馈</span><i /><span><Sparkles size={14} />归纳主题</span><i /><span><Bot size={14} />发送摘要</span>
+          <span><FileText size={14} />收集反馈</span><i /><span><CopisLogoIcon size={14} />归纳主题</span><i /><span><Bot size={14} />发送摘要</span>
         </div>
         <div className="showcase-workflow-result"><Check size={14} /><span><b>最近一次运行完成</b><small>摘要已发送到团队空间</small></span></div>
         <div className="showcase-workflow-footer"><span>下次运行：周一 09:00</span><CheckCircle2 size={16} /></div>

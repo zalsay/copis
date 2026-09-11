@@ -77,3 +77,66 @@ test('Given DSH 侧边栏源码中包含旧版 CopisLogo When 执行 patchDshSid
   expect(patchDshSidebarSource(patched)).toBe(patched)
 })
 
+test('Given DSH 侧边栏源码中包含意见反馈菜单项 When 执行 patchDshSidebarSource Then 自动移除意见反馈菜单项并保留设置与动作插槽', () => {
+  const sourceWithFeedback = `
+					(0, react_jsx_runtime.jsxs)("div", {
+						className: SidebarRoot_module_css_default.footArea,
+						style: {
+							paddingTop: "6px",
+							borderTop: "0.5px solid var(--dsw-alias-border-l3, rgba(255, 255, 255, 0.08))",
+							marginTop: "auto"
+						},
+						children: [
+							wide ? (0, react_jsx_runtime.jsx)(CopisMenuItem, {
+								label: "意见反馈",
+								icon: iconFeedback,
+								onClick: () => {
+									try {
+										if (window.copisBridge) window.copisBridge.openFeedback();
+										if (window.parent && window.parent !== window) window.parent.postMessage({ type: "COPIS_OPEN_FEEDBACK" }, "*");
+										window.postMessage({ type: "COPIS_OPEN_FEEDBACK" }, "*");
+									} catch (_) {}
+								}
+							}) : (0, react_jsx_runtime.jsx)(CopisRailItem, {
+								label: "意见反馈",
+								icon: iconFeedback,
+								onClick: () => {
+									try {
+										if (window.copisBridge) window.copisBridge.openFeedback();
+										if (window.parent && window.parent !== window) window.parent.postMessage({ type: "COPIS_OPEN_FEEDBACK" }, "*");
+										window.postMessage({ type: "COPIS_OPEN_FEEDBACK" }, "*");
+									} catch (_) {}
+								}
+							}),
+							wide ? (0, react_jsx_runtime.jsx)(CopisMenuItem, {
+								label: "设置",
+								view: "settings",
+								icon: iconSettings,
+								onClick: () => {
+									triggerCopisNavigate("settings");
+								}
+							}) : (0, react_jsx_runtime.jsx)(CopisRailItem, {
+								label: "设置",
+								view: "settings",
+								icon: iconSettings,
+								onClick: () => {
+									triggerCopisNavigate("settings");
+								}
+							}),
+							(0, react_jsx_runtime.jsx)("div", {
+								className: SidebarRoot_module_css_default.footerActions,
+								children: renderSlot("sidebar.footer.action", { wide })
+							})
+						]
+					})
+  `
+  const patched = patchDshSidebarSource(sourceWithFeedback)
+  expect(patched).not.toContain('label: "意见反馈"')
+  expect(patched).not.toContain('COPIS_OPEN_FEEDBACK')
+  expect(patched).toContain('label: "设置"')
+  expect(patched).toContain('renderSlot("sidebar.footer.action", { wide })')
+
+  // 幂等性
+  expect(patchDshSidebarSource(patched)).toBe(patched)
+})
+

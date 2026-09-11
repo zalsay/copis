@@ -11,6 +11,10 @@ mock.module('@/components/ui/dialog', () => ({
   DialogContent: ({ children }: DialogMockProps) => <div>{children}</div>,
   DialogHeader: ({ children }: DialogMockProps) => <div>{children}</div>,
   DialogTitle: ({ children }: DialogMockProps) => <div>{children}</div>,
+  DialogDescription: ({ children }: DialogMockProps) => <div>{children}</div>,
+  DialogFooter: ({ children }: DialogMockProps) => <div>{children}</div>,
+  DialogTrigger: ({ children }: DialogMockProps) => <div>{children}</div>,
+  DialogClose: ({ children }: DialogMockProps) => <div>{children}</div>,
 }))
 
 mock.module('@/lib/working-skill-market-api', () => ({

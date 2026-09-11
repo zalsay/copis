@@ -158,13 +158,13 @@ export function WorkspaceDevProjects({ workspaceSlug }: WorkspaceDevProjectsProp
               <div key={group.title} className="space-y-1">
                 <button
                   type="button"
-                  className="flex w-full items-center gap-1 rounded px-1 py-1 text-left hover:bg-accent/50"
+                  className="flex w-full items-center gap-1.5 rounded px-1 py-1 text-left hover:bg-accent/50"
                   aria-expanded={!collapsed}
                   onClick={() => toggleGroup(group.title)}
                 >
-                  <ChevronRight className={cn('size-3 shrink-0 text-muted-foreground transition-transform', !collapsed && 'rotate-90')} />
                   <span className="text-[11px] font-medium text-muted-foreground">{group.title}</span>
-                  <span className="text-[10px] text-muted-foreground/60">{group.projects.length}</span>
+                  <ChevronRight className={cn('size-3 shrink-0 text-muted-foreground transition-transform', !collapsed && 'rotate-90')} />
+                  <span className="ml-auto text-[10px] text-muted-foreground/60">{group.projects.length}</span>
                 </button>
                 {!collapsed && group.projects.map((project) => {
                   const busy = busyProjectPath === project.projectPath

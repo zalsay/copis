@@ -12,12 +12,12 @@ import {
   MicOff,
   Radio,
   Settings2,
-  Sparkles,
   Trash2,
   Upload,
   User,
   X,
 } from 'lucide-react'
+import { CopisLogoIcon } from '@/components/ui/copis-logo-icon'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
@@ -641,7 +641,7 @@ export function LiveTranslatePanel({ width = 420, onClose }: LiveTranslatePanelP
               : {}
           }
         >
-          <Sparkles className="size-3.5" style={{ color: 'var(--ui-primary)' }} />
+          <CopisLogoIcon className="size-3.5" style={{ color: 'var(--ui-primary)' }} />
           <span>智能纪要</span>
         </button>
 
@@ -736,7 +736,7 @@ export function LiveTranslatePanel({ width = 420, onClose }: LiveTranslatePanelP
                 color: 'var(--ui-primary-foreground)',
               }}
             >
-              <Sparkles className="size-3.5" />
+              <CopisLogoIcon className="size-3.5" />
               <span>{isGeneratingMinutes ? 'AI 正在提炼结构化纪要...' : '生成智能会议纪要'}</span>
             </Button>
 
@@ -825,7 +825,7 @@ export function LiveTranslatePanel({ width = 420, onClose }: LiveTranslatePanelP
               </div>
             ) : (
               <div className="flex-1 flex flex-col items-center justify-center text-center text-xs text-zinc-500 space-y-2 py-8">
-                <Sparkles className="size-8 stroke-[1.2] text-zinc-600" />
+                <CopisLogoIcon className="size-8 text-zinc-600" />
                 <span>录制完成后点击上方按钮，AI 自动提炼纪要与行动项</span>
               </div>
             )}
@@ -890,7 +890,7 @@ export function LiveTranslatePanel({ width = 420, onClose }: LiveTranslatePanelP
                       color: 'var(--ui-primary-foreground)',
                     }}
                   >
-                    <Sparkles className="size-3.5" />
+                    <CopisLogoIcon className="size-3.5" />
                     <span>{isTranslatingAudio ? '正在 AI 翻译中...' : '开始音频直译'}</span>
                   </Button>
                 </div>

@@ -48,7 +48,7 @@
 }
 
 .copis-working-message-channel.selected {
-  border-color: color-mix(in srgb, var(--primary) 48%, var(--border));
+  border-color: color-mix(in srgb, var(--ui-primary) 48%, var(--border));
 }
 
 .copis-working-message-channel-icon {
@@ -146,13 +146,16 @@
   filter: brightness(1.04);
 }
 
-.copis-working-message-channel-action.selected {
+.copis-working-message-channel-action.selected,
+.copis-working-message-channel-action.selected:disabled {
   border: 1px solid color-mix(in srgb, var(--ui-primary) 35%, transparent);
+  border-radius: 9999px;
   background: var(--ui-primary-background);
   color: var(--ui-primary);
   font-weight: 600;
   cursor: default;
-  opacity: 1;
+  opacity: 1 !important;
+  user-select: none;
 }
 
 .copis-working-message-channel-action:disabled:not(.selected) {

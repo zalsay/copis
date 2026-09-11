@@ -7,7 +7,7 @@
 
 import * as React from 'react'
 import { toast } from 'sonner'
-import { Sparkles } from 'lucide-react'
+import { CopisLogoIcon } from '@/components/ui/copis-logo-icon'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
@@ -132,7 +132,7 @@ export function ImportSkillDialog({ open, onOpenChange, workspaceSlug, installed
                         <div className="flex h-full flex-col gap-4 p-4">
                           <div className="flex items-start gap-3">
                             <div className="rounded-xl bg-amber-500/12 p-2 text-amber-500 shadow-sm">
-                              <Sparkles size={18} />
+                              <CopisLogoIcon size={18} />
                             </div>
                             <div className="min-w-0 flex-1">
                               <div className="flex items-center gap-2">

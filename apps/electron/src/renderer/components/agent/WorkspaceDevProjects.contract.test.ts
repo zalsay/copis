@@ -32,5 +32,10 @@ describe('项目开发列表契约', () => {
     expect(projectListSource).toContain("title: '我的项目'")
     expect(projectListSource).toContain("title: '工作区'")
     expect(projectListSource).toContain('aria-expanded={!collapsed}')
+
+    const toggleStart = projectListSource.indexOf('onClick={() => toggleGroup(group.title)}')
+    const toggleEnd = projectListSource.indexOf('</button>', toggleStart)
+    const toggleSource = projectListSource.slice(toggleStart, toggleEnd)
+    expect(toggleSource.indexOf('{group.title}')).toBeLessThan(toggleSource.indexOf('<ChevronRight'))
   })
 })

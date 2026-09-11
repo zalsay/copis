@@ -34,34 +34,38 @@ describe('专家团队页头视觉契约', () => {
     }
   })
 
-  test('Given 打开专家团队页 When 查看页头状态徽章 Then 使用全局 primary badge 令牌', () => {
+  test('Given 打开专家团队页 When 查看按钮与 tag 胶囊 Then 对齐技能市场标准配色且主内容区保留主题色', () => {
     expect(primaryBadgeRule).toBeDefined()
-    expect(globalsSource).toContain('--ui-primary: #f3af6b;')
-    expect(globalsSource).toContain('--ui-primary-background: rgb(240 161 90 / 10%);')
-    expect(globalsSource).toContain('.ui-primary-badge')
+    expect(globalsSource).toContain('--ui-primary: #f09a43;')
+    expect(globalsSource).toContain('--ui-primary-background: rgb(240 161 90 / 20%);')
     expect(globalsSource).toContain('.ui-primary-surface')
     expect(globalsSource).toContain('background-color: var(--ui-primary-background)')
     expect(globalsSource).toContain('color: var(--ui-primary)')
     expect(globalsSource).toContain('var(--ui-primary)')
-    expect(primaryBadgeRule).toContain('background-color: var(--ui-primary-background)')
-    expect(primaryBadgeRule).toContain('color: var(--ui-primary)')
-    expect(primaryBadgeRule).toContain(
-      'border: 1px solid color-mix(in srgb, var(--ui-primary) 30%, transparent)',
-    )
-    expect(viewSource).toContain('ui-primary-badge')
+    expect(viewSource).toContain('rounded-full')
+    expect(viewSource).toContain('bg-muted/70')
+    expect(viewSource).toContain('bg-primary')
+    expect(viewSource).not.toContain('ui-primary-badge')
+    expect(viewSource).not.toContain('ui-primary-button')
     expect(viewSource).not.toContain('border-primary/30 bg-primary/10')
     expect(viewSource).not.toContain('border-[#f0a15a]/30 bg-[#f0a15a]/10')
+    expect(viewSource).not.toContain('text-[#f5c18e]')
+    expect(viewSource).not.toContain('bg-[#f0a15a]/10')
   })
 
-  test('Given 选择专家团队 Schema When 查看左列 Then 使用全局 primary surface 令牌', () => {
-    expect(viewSource).toContain("schema.id === schemaId && 'ui-primary-surface'")
+  test('Given 选择专家团队 Schema When 查看左列列表 Then 激活色与知识库列表一致使用 bg-primary/10 text-primary', () => {
+    expect(viewSource).toContain("schema.id === schemaId ? 'bg-primary/10 text-primary'")
+    expect(viewSource).not.toContain("schema.id === schemaId && 'ui-primary-surface'")
     expect(viewSource).not.toContain("schema.id === schemaId && 'bg-[#f0a15a]/10 text-[#f5c18e]'")
   })
 
   test('Given 选择专家团队 Schema When 查看工作台 Then 复刻参考页的只读编排层级', () => {
-    expect(viewSource).toContain('bg-[#151515]')
-    expect(viewSource).toContain('bg-[#1d1e1f]')
-    expect(viewSource).toContain('text-[#f0a15a]')
+    expect(viewSource).not.toContain('bg-[#151515]')
+    expect(viewSource).not.toContain('bg-[#1d1e1f]')
+    expect(viewSource).not.toContain('text-[#f0a15a]')
+    expect(viewSource).not.toContain('bg-[#2b211a]')
+    expect(viewSource).toContain('bg-content-area')
+    expect(viewSource).toContain('border-border')
     expect(viewSource).toContain('<h1 className="flex min-w-0 flex-wrap items-center gap-2 text-xl font-semibold">')
     expect((viewSource.match(/<h1\b/g) ?? []).length).toBe(1)
     expect(viewSource).toMatch(/<h1 className="flex min-w-0 flex-wrap items-center gap-2 text-xl font-semibold">[\s\S]*方案版本/)
@@ -100,7 +104,7 @@ describe('专家团队页头视觉契约', () => {
   })
 
   test('Given 打开专家团队页 When 查看布局 Then 左侧列表从顶部开始且 header 位于右侧工作台', () => {
-    const rootIndex = viewSource.indexOf('<div className="flex h-full min-h-0 bg-[#151515] text-[#f2f3f3]">')
+    const rootIndex = viewSource.indexOf('<div className="flex h-full min-h-0 bg-background text-foreground">')
     const asideIndex = viewSource.indexOf('<aside className=')
     const rightWrapperIndex = viewSource.indexOf('aria-label="专家团队右侧工作台"')
     const headerIndex = viewSource.indexOf('<header className=')
@@ -176,12 +180,11 @@ describe('专家团队页头视觉契约', () => {
     expect(viewSource).toContain('onClick={handleStart}')
   })
 
-  test('Given 选择工作区弹窗 When 点击创建工作区 Then 保留创建入口与交互', () => {
+  test('Given 选择工作区弹窗 When 点击创建工作区 Then 保留创建入口与交互且使用技能市场按钮风格', () => {
     const createWorkspaceButton = viewSource.match(/<Button[^>]*><FolderOpen[^>]*\/>创建工作区<\/Button>/)?.[0]
 
     expect(createWorkspaceButton).toBeDefined()
-    expect(createWorkspaceButton).toContain('text-[var(--ui-primary)]')
-    expect(createWorkspaceButton).toContain('bg-[var(--ui-primary-background)]')
+    expect(createWorkspaceButton).toContain('shadow-xs')
     expect(createWorkspaceButton).not.toContain('text-[#f5c18e]')
     expect(createWorkspaceButton).not.toContain('bg-[#f0a15a]/10')
     expect(viewSource).toContain('onClick={handleOpenCreateWorkspace}')
