@@ -10,6 +10,7 @@ import {
   requireExistingAlipayBot,
   requireExistingAgentlyCli,
   requireExistingDsh,
+  requireExistingCodexCli,
   requireExistingOfficeCli,
   requireExistingNodeRuntime,
   requireExistingPythonRuntime,
@@ -197,6 +198,7 @@ describe('功能模块发布脚本 --rust', () => {
       format: 'tar.gz',
       entrypoint: 'bin/agently-cli',
       binaryPath: '/tmp/agently-cli.tar.gz',
+      required: false,
     })])
   })
 
@@ -219,7 +221,56 @@ describe('功能模块发布脚本 --rust', () => {
       format: 'tar.gz',
       entrypoint: 'bin/dsh',
       binaryPath: '/tmp/dsh.tar.gz',
+      required: false,
     })])
+  })
+
+  test('codex-cli-only 输入使用 tar.gz 归档并标记 required=false', () => {
+    const modules = buildFunctionalModuleBinaryInputs({
+      rustOnly: false,
+      codexCliOnly: true,
+      rustBinary: '/tmp/rust-api-does-not-exist',
+      rustVersion: '0.2.0',
+      officeCliBinary: '/tmp/officecli-does-not-exist',
+      officeCliVersion: '1.0.143',
+      codexCliArchive: '/tmp/codex-cli.tar.gz',
+      codexCliVersion: '0.154.0',
+      platform: 'darwin',
+      arch: 'arm64',
+    })
+
+    expect(modules).toEqual([expect.objectContaining({
+      module: 'codex-cli',
+      format: 'tar.gz',
+      entrypoint: 'bin/codex',
+      binaryPath: '/tmp/codex-cli.tar.gz',
+      required: false,
+    })])
+  })
+
+  test('codex-cli artifact 校验支持 tar.gz 格式且 required 为 false', () => {
+    const manifest: FunctionalModuleManifest = {
+      schema: 1,
+      channel: 'stable',
+      platforms: {
+        'darwin-arm64': {
+          modules: {
+            'codex-cli': {
+              version: '0.154.0',
+              url: 'https://download.example.com/codex-cli.tar.gz',
+              sha256: 'a'.repeat(64),
+              size: 100,
+              format: 'tar.gz',
+              entrypoint: 'bin/codex',
+              required: false,
+            },
+          },
+        },
+      },
+    }
+
+    expect(requireExistingCodexCli(manifest, 'darwin', 'arm64')).toBe(true)
+    expect(() => requireExistingCodexCli(manifest, 'darwin', 'x64')).toThrow('缺少 codex-cli')
   })
 
   test('Node runtime-only 发布要求 COS 已有 Rust 与 OfficeCLI', () => {
@@ -339,8 +390,6 @@ describe('功能模块发布脚本 --rust', () => {
       'alipay-bot',
       'playwright-core',
       'python-runtime',
-      'agently-cli',
-      'dsh',
     ] as const
 
     for (const missingModule of requiredExistingModules) {

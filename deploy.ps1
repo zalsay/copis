@@ -32,6 +32,8 @@ param(
     [switch]$AgentlyCliOnly,
     [Alias('dsh')]
     [switch]$DshOnly,
+    [Alias('codex-cli')]
+    [switch]$CodexCliOnly,
     [ValidateSet('win32', 'darwin', 'linux')]
     [string]$Platform,
     [ValidateSet('x64', 'arm64')]
@@ -55,7 +57,10 @@ param(
     [string]$AgentlyCliArchive,
     [string]$AgentlyCliVersion,
     [string]$DshArchive,
-    [string]$DshVersion
+    [string]$DshVersion,
+    [string]$CodexCliArchive,
+    [string]$CodexCliVersion,
+    [string]$CodexCliBinary
 )
 
 $ErrorActionPreference = 'Stop'
@@ -124,6 +129,7 @@ function Show-Help {
   -PythonRuntimeOnly / --python-runtime 只发布 Python runtime
   -AgentlyCliOnly / --agently-cli        只发布 Agent QQ 邮箱 CLI
   -DshOnly / --dsh                     只发布 DeepSeek Harness (dsh)
+  -CodexCliOnly / --codex-cli          只发布专业模式 (codex-cli)
   -SkipPublish / --skip-publish        只构建，不发布 COS
   -Platform <name> / --platform <name> 目标平台
   -Arch <name> / --arch <name>         目标架构
@@ -134,6 +140,9 @@ function Show-Help {
   -AgentlyCliVersion <version> / --agently-cli-version Agent QQ 邮箱 CLI 模块版本
   -DshArchive <path> / --dsh-archive   DeepSeek Harness (dsh) tar.gz 归档路径
   -DshVersion <version> / --dsh-version DeepSeek Harness (dsh) 模块版本
+  -CodexCliArchive <path> / --codex-cli-archive 专业模式 codex-cli tar.gz 归档路径
+  -CodexCliVersion <version> / --codex-cli-version 专业模式 codex-cli 模块版本
+  -CodexCliBinary <path> / --codex-cli-binary 专业模式 codex 本地二进制路径
   -h, --help                           显示帮助
 '@ | Write-Host
 }
@@ -148,6 +157,7 @@ if ($env:COPIS_PLAYWRIGHT_CORE_ONLY -eq '1') { $PlaywrightCoreOnly = $true }
 if ($env:COPIS_PYTHON_RUNTIME_ONLY -eq '1') { $PythonRuntimeOnly = $true }
 if ($env:COPIS_AGENTLY_CLI_ONLY -eq '1') { $AgentlyCliOnly = $true }
 if ($env:COPIS_DSH_ONLY -eq '1') { $DshOnly = $true }
+if ($env:COPIS_CODEX_CLI_ONLY -eq '1') { $CodexCliOnly = $true }
 
 for ($index = 0; $index -lt $LegacyArguments.Count; $index++) {
     $argument = $LegacyArguments[$index]
@@ -162,6 +172,7 @@ for ($index = 0; $index -lt $LegacyArguments.Count; $index++) {
         '--python-runtime' { $PythonRuntimeOnly = $true }
         '--agently-cli' { $AgentlyCliOnly = $true }
         '--dsh' { $DshOnly = $true }
+        '--codex-cli' { $CodexCliOnly = $true }
         '--build-app' { $BuildApp = $true }
         '--skip-install' { $SkipInstall = $true }
         '--install' { $Install = $true }
@@ -189,6 +200,9 @@ for ($index = 0; $index -lt $LegacyArguments.Count; $index++) {
         '--agently-cli-version' { $AgentlyCliVersion = Get-LegacyValue $LegacyArguments $index $argument; $index++ }
         '--dsh-archive' { $DshArchive = Get-LegacyValue $LegacyArguments $index $argument; $index++ }
         '--dsh-version' { $DshVersion = Get-LegacyValue $LegacyArguments $index $argument; $index++ }
+        '--codex-cli-archive' { $CodexCliArchive = Get-LegacyValue $LegacyArguments $index $argument; $index++ }
+        '--codex-cli-version' { $CodexCliVersion = Get-LegacyValue $LegacyArguments $index $argument; $index++ }
+        '--codex-cli-binary' { $CodexCliBinary = Get-LegacyValue $LegacyArguments $index $argument; $index++ }
         default { throw "Unsupported argument: $argument. Use PowerShell parameters such as -RustOnly." }
     }
 }
@@ -202,8 +216,8 @@ if ($hasExplicitInstall) {
     $SkipInstall = $true
 }
 
-if ((@($RustOnly, $OfficeCliOnly, $NodeRuntimeOnly, $AlipayBotOnly, $PlaywrightCoreOnly, $PythonRuntimeOnly, $AgentlyCliOnly, $DshOnly) | Where-Object { $_ }).Count -gt 1) {
-    throw '-RustOnly, -OfficeCliOnly, -NodeRuntimeOnly, -AlipayBotOnly, -PlaywrightCoreOnly, -PythonRuntimeOnly, -AgentlyCliOnly, and -DshOnly cannot be used together.'
+if ((@($RustOnly, $OfficeCliOnly, $NodeRuntimeOnly, $AlipayBotOnly, $PlaywrightCoreOnly, $PythonRuntimeOnly, $AgentlyCliOnly, $DshOnly, $CodexCliOnly) | Where-Object { $_ }).Count -gt 1) {
+    throw '-RustOnly, -OfficeCliOnly, -NodeRuntimeOnly, -AlipayBotOnly, -PlaywrightCoreOnly, -PythonRuntimeOnly, -AgentlyCliOnly, -DshOnly, and -CodexCliOnly cannot be used together.'
 }
 if (-not (Test-Path -LiteralPath (Join-Path $rootDir 'package.json') -PathType Leaf) -or
     -not (Test-Path -LiteralPath (Join-Path $appDir 'package.json') -PathType Leaf)) {
@@ -236,6 +250,9 @@ $AgentlyCliArchive = Set-FromEnvironment $AgentlyCliArchive 'COPIS_AGENTLY_CLI_A
 $AgentlyCliVersion = Set-FromEnvironment $AgentlyCliVersion 'COPIS_AGENTLY_CLI_VERSION'
 $DshArchive = Set-FromEnvironment $DshArchive 'COPIS_DSH_ARCHIVE'
 $DshVersion = Set-FromEnvironment $DshVersion 'COPIS_DSH_VERSION'
+$CodexCliArchive = Set-FromEnvironment $CodexCliArchive 'COPIS_CODEX_CLI_ARCHIVE'
+$CodexCliVersion = Set-FromEnvironment $CodexCliVersion 'COPIS_CODEX_CLI_VERSION'
+$CodexCliBinary = Set-FromEnvironment $CodexCliBinary 'COPIS_CODEX_CLI_BINARY'
 $nodeRuntimeSource = [System.Environment]::GetEnvironmentVariable('COPIS_NODE_RUNTIME_SOURCE', 'Process')
 
 if ($Platform -notin @('win32', 'darwin', 'linux')) { throw "Unsupported functional module platform: $Platform" }
@@ -430,7 +447,7 @@ if (-not $SkipInstall) {
 }
 
 $rustBinaryPath = $null
-if (-not $OfficeCliOnly -and -not $NodeRuntimeOnly -and -not $AlipayBotOnly -and -not $PlaywrightCoreOnly -and -not $PythonRuntimeOnly -and -not $AgentlyCliOnly -and -not $DshOnly) {
+if (-not $OfficeCliOnly -and -not $NodeRuntimeOnly -and -not $AlipayBotOnly -and -not $PlaywrightCoreOnly -and -not $PythonRuntimeOnly -and -not $AgentlyCliOnly -and -not $DshOnly -and -not $CodexCliOnly) {
     $rustFileName = if ($Platform -eq 'win32') { 'copis-http-api-server.exe' } else { 'copis-http-api-server' }
     $defaultRustBinary = Join-Path $rootDir "native\http-api-server\target\release\$rustFileName"
     if (-not $SkipRustBuild) {
@@ -449,7 +466,7 @@ if (-not $OfficeCliOnly -and -not $NodeRuntimeOnly -and -not $AlipayBotOnly -and
 
 $officeCliBinaryPath = $null
 $officeCliVersionValue = $null
-if (-not $RustOnly -and -not $NodeRuntimeOnly -and -not $AlipayBotOnly -and -not $PlaywrightCoreOnly -and -not $PythonRuntimeOnly -and -not $AgentlyCliOnly -and -not $DshOnly) {
+if (-not $RustOnly -and -not $NodeRuntimeOnly -and -not $AlipayBotOnly -and -not $PlaywrightCoreOnly -and -not $PythonRuntimeOnly -and -not $AgentlyCliOnly -and -not $DshOnly -and -not $CodexCliOnly) {
     $officeCliBinaryPath = Resolve-PathFromRoot $OfficeCliBinary
     $officeCliFileName = if ($Platform -eq 'win32') { 'officecli.exe' } else { 'officecli' }
     if (-not $officeCliBinaryPath) { $officeCliBinaryPath = Join-Path $appDir "resources\bin\$officeCliFileName" }
@@ -469,7 +486,7 @@ if (-not $RustOnly -and -not $NodeRuntimeOnly -and -not $AlipayBotOnly -and -not
 
 $nodeRuntimeArchivePath = $null
 $nodeRuntimeVersionValue = $null
-if (-not $RustOnly -and -not $OfficeCliOnly -and -not $AlipayBotOnly -and -not $PlaywrightCoreOnly -and -not $PythonRuntimeOnly -and -not $AgentlyCliOnly -and -not $DshOnly) {
+if (-not $RustOnly -and -not $OfficeCliOnly -and -not $AlipayBotOnly -and -not $PlaywrightCoreOnly -and -not $PythonRuntimeOnly -and -not $AgentlyCliOnly -and -not $DshOnly -and -not $CodexCliOnly) {
     $nodeRuntimeArchivePath = Resolve-PathFromRoot $NodeRuntimeArchive
     if (-not $nodeRuntimeArchivePath) { $nodeRuntimeArchivePath = Join-Path $appDir "resources\node-runtime\$Platform-$Arch.tar.gz" }
     if (-not (Test-Path -LiteralPath $nodeRuntimeArchivePath -PathType Leaf)) {
@@ -488,7 +505,7 @@ if (-not $RustOnly -and -not $OfficeCliOnly -and -not $AlipayBotOnly -and -not $
 
 $alipayBotArchivePath = $null
 $alipayBotVersionValue = $null
-if (-not $RustOnly -and -not $OfficeCliOnly -and -not $NodeRuntimeOnly -and -not $PlaywrightCoreOnly -and -not $PythonRuntimeOnly -and -not $AgentlyCliOnly -and -not $DshOnly) {
+if (-not $RustOnly -and -not $OfficeCliOnly -and -not $NodeRuntimeOnly -and -not $PlaywrightCoreOnly -and -not $PythonRuntimeOnly -and -not $AgentlyCliOnly -and -not $DshOnly -and -not $CodexCliOnly) {
     $alipayBotArchivePath = Resolve-PathFromRoot $AlipayBotArchive
     if (-not $alipayBotArchivePath) { $alipayBotArchivePath = Join-Path $appDir "resources\alipay-bot\$Platform-$Arch.tar.gz" }
     if (-not (Test-Path -LiteralPath $alipayBotArchivePath -PathType Leaf) -or $env:COPIS_REFRESH_ALIPAY_BOT_CLI -eq '1') {
@@ -513,7 +530,7 @@ if (-not $RustOnly -and -not $OfficeCliOnly -and -not $NodeRuntimeOnly -and -not
 
 $playwrightCoreArchivePath = $null
 $playwrightCoreVersionValue = $null
-if (-not $RustOnly -and -not $OfficeCliOnly -and -not $NodeRuntimeOnly -and -not $AlipayBotOnly -and -not $PythonRuntimeOnly -and -not $AgentlyCliOnly -and -not $DshOnly) {
+if (-not $RustOnly -and -not $OfficeCliOnly -and -not $NodeRuntimeOnly -and -not $AlipayBotOnly -and -not $PythonRuntimeOnly -and -not $AgentlyCliOnly -and -not $DshOnly -and -not $CodexCliOnly) {
     $playwrightCoreArchivePath = Resolve-PathFromRoot $PlaywrightCoreArchive
     if (-not $playwrightCoreArchivePath) { $playwrightCoreArchivePath = Join-Path $appDir 'resources\playwright-core\playwright-core.tar.gz' }
     if (-not (Test-Path -LiteralPath $playwrightCoreArchivePath -PathType Leaf)) {
@@ -527,7 +544,7 @@ if (-not $RustOnly -and -not $OfficeCliOnly -and -not $NodeRuntimeOnly -and -not
 
 $pythonRuntimeArchivePath = $null
 $pythonRuntimeVersionValue = $null
-if (-not $RustOnly -and -not $OfficeCliOnly -and -not $NodeRuntimeOnly -and -not $AlipayBotOnly -and -not $PlaywrightCoreOnly -and -not $AgentlyCliOnly -and -not $DshOnly) {
+if (-not $RustOnly -and -not $OfficeCliOnly -and -not $NodeRuntimeOnly -and -not $AlipayBotOnly -and -not $PlaywrightCoreOnly -and -not $AgentlyCliOnly -and -not $DshOnly -and -not $CodexCliOnly) {
     $pythonRuntimeArchivePath = Resolve-PathFromRoot $PythonRuntimeArchive
     if (-not $pythonRuntimeArchivePath) { $pythonRuntimeArchivePath = Join-Path $appDir "resources\python-runtime\$Platform-$Arch.tar.gz" }
     if (-not (Test-Path -LiteralPath $pythonRuntimeArchivePath -PathType Leaf)) {
@@ -541,7 +558,7 @@ if (-not $RustOnly -and -not $OfficeCliOnly -and -not $NodeRuntimeOnly -and -not
 
 $agentlyCliArchivePath = $null
 $agentlyCliVersionValue = $null
-if (-not $RustOnly -and -not $OfficeCliOnly -and -not $NodeRuntimeOnly -and -not $AlipayBotOnly -and -not $PlaywrightCoreOnly -and -not $PythonRuntimeOnly -and -not $DshOnly) {
+if (-not $RustOnly -and -not $OfficeCliOnly -and -not $NodeRuntimeOnly -and -not $AlipayBotOnly -and -not $PlaywrightCoreOnly -and -not $PythonRuntimeOnly -and -not $DshOnly -and -not $CodexCliOnly) {
     $agentlyCliArchivePath = Resolve-PathFromRoot $AgentlyCliArchive
     if (-not $agentlyCliArchivePath) { $agentlyCliArchivePath = Join-Path $appDir "resources\agently-cli\$Platform-$Arch.tar.gz" }
     if (-not (Test-Path -LiteralPath $agentlyCliArchivePath -PathType Leaf) -or $env:COPIS_REFRESH_AGENTLY_CLI -eq '1') {
@@ -566,7 +583,7 @@ if (-not $RustOnly -and -not $OfficeCliOnly -and -not $NodeRuntimeOnly -and -not
 
 $dshArchivePath = $null
 $dshVersionValue = $null
-if (-not $RustOnly -and -not $OfficeCliOnly -and -not $NodeRuntimeOnly -and -not $AlipayBotOnly -and -not $PlaywrightCoreOnly -and -not $PythonRuntimeOnly -and -not $AgentlyCliOnly) {
+if (-not $RustOnly -and -not $OfficeCliOnly -and -not $NodeRuntimeOnly -and -not $AlipayBotOnly -and -not $PlaywrightCoreOnly -and -not $PythonRuntimeOnly -and -not $AgentlyCliOnly -and -not $CodexCliOnly) {
     $dshArchivePath = Resolve-PathFromRoot $DshArchive
     if (-not $dshArchivePath) { $dshArchivePath = Join-Path $appDir "resources\dsh\$Platform-$Arch.tar.gz" }
     if (-not (Test-Path -LiteralPath $dshArchivePath -PathType Leaf) -or $env:COPIS_REFRESH_DSH -eq '1') {
@@ -589,6 +606,32 @@ if (-not $RustOnly -and -not $OfficeCliOnly -and -not $NodeRuntimeOnly -and -not
     $dshVersionValue = if ([string]::IsNullOrWhiteSpace($DshVersion)) { Read-DshVersion $dshArchivePath } else { $DshVersion.Trim() }
 }
 
+$codexCliArchivePath = $null
+$codexCliVersionValue = $null
+if (-not $RustOnly -and -not $OfficeCliOnly -and -not $NodeRuntimeOnly -and -not $AlipayBotOnly -and -not $PlaywrightCoreOnly -and -not $PythonRuntimeOnly -and -not $AgentlyCliOnly -and -not $DshOnly) {
+    $codexCliArchivePath = Resolve-PathFromRoot $CodexCliArchive
+    if (-not $codexCliArchivePath) { $codexCliArchivePath = Join-Path $appDir "resources\codex-cli\$Platform-$Arch.tar.gz" }
+    if (-not (Test-Path -LiteralPath $codexCliArchivePath -PathType Leaf) -or $env:COPIS_REFRESH_CODEX_CLI -eq '1') {
+        $metadataPath = Join-Path ([System.IO.Path]::GetTempPath()) "copis-codex-cli-$([Guid]::NewGuid().ToString('N')).json"
+        $prepareArguments = @('run', 'prepare:codex-cli-module', '--', '--platform', $Platform, '--arch', $Arch, '--output', $codexCliArchivePath, '--metadata', $metadataPath)
+        if (-not [string]::IsNullOrWhiteSpace($CodexCliBinary)) {
+            $prepareArguments += @('--binary', (Resolve-PathFromRoot $CodexCliBinary))
+        }
+        try {
+            Write-Host 'Preparing Codex CLI module...'
+            Invoke-BunCommand $rootDir $prepareArguments 'Codex CLI module preparation failed'
+            if ([string]::IsNullOrWhiteSpace($CodexCliVersion) -and (Test-Path -LiteralPath $metadataPath -PathType Leaf)) {
+                $CodexCliVersion = [string](Get-Content -LiteralPath $metadataPath -Raw -Encoding UTF8 | ConvertFrom-Json).version
+            }
+        } finally {
+            if (Test-Path -LiteralPath $metadataPath -PathType Leaf) { Remove-Item -LiteralPath $metadataPath -Force }
+        }
+    }
+    if (-not (Test-Path -LiteralPath $codexCliArchivePath -PathType Leaf)) { throw "Codex CLI archive was not found: $codexCliArchivePath" }
+    $codexCliArchivePath = (Resolve-Path -LiteralPath $codexCliArchivePath).Path
+    $codexCliVersionValue = if ([string]::IsNullOrWhiteSpace($CodexCliVersion)) { '0.154.0' } else { $CodexCliVersion.Trim() }
+}
+
 if ($BuildApp) {
     if ($Platform -ne $currentPlatform) { throw '-BuildApp can only build the current platform Electron application.' }
     Write-Host 'Building Electron application...'
@@ -600,14 +643,15 @@ if ($BuildApp) {
 if (-not $SkipPublish) {
     if ([string]::IsNullOrWhiteSpace($PublicBaseUrl)) { throw 'COS_PUBLIC_BASE_URL or -PublicBaseUrl is required to publish functional modules.' }
     $releaseArguments = @('--platform', $Platform, '--arch', $Arch, '--channel', $Channel, '--version', $releaseVersion, '--client-min-version', $minimumClientVersion, '--public-base-url', $PublicBaseUrl)
-    if (-not $OfficeCliOnly -and -not $NodeRuntimeOnly -and -not $AlipayBotOnly -and -not $PlaywrightCoreOnly -and -not $PythonRuntimeOnly -and -not $AgentlyCliOnly -and -not $DshOnly) { $releaseArguments += @('--rust-binary', $rustBinaryPath) }
-    if (-not $RustOnly -and -not $NodeRuntimeOnly -and -not $AlipayBotOnly -and -not $PlaywrightCoreOnly -and -not $PythonRuntimeOnly -and -not $AgentlyCliOnly -and -not $DshOnly) { $releaseArguments += @('--officecli-binary', $officeCliBinaryPath, '--officecli-version', $officeCliVersionValue) }
-    if (-not $RustOnly -and -not $OfficeCliOnly -and -not $AlipayBotOnly -and -not $PlaywrightCoreOnly -and -not $PythonRuntimeOnly -and -not $AgentlyCliOnly -and -not $DshOnly) { $releaseArguments += @('--node-runtime-archive', $nodeRuntimeArchivePath, '--node-runtime-version', $nodeRuntimeVersionValue) }
-    if (-not $RustOnly -and -not $OfficeCliOnly -and -not $NodeRuntimeOnly -and -not $PlaywrightCoreOnly -and -not $PythonRuntimeOnly -and -not $AgentlyCliOnly -and -not $DshOnly) { $releaseArguments += @('--alipay-bot-archive', $alipayBotArchivePath, '--alipay-bot-version', $alipayBotVersionValue) }
-    if (-not $RustOnly -and -not $OfficeCliOnly -and -not $NodeRuntimeOnly -and -not $AlipayBotOnly -and -not $PythonRuntimeOnly -and -not $AgentlyCliOnly -and -not $DshOnly) { $releaseArguments += @('--playwright-core-archive', $playwrightCoreArchivePath, '--playwright-core-version', $playwrightCoreVersionValue) }
-    if (-not $RustOnly -and -not $OfficeCliOnly -and -not $NodeRuntimeOnly -and -not $AlipayBotOnly -and -not $PlaywrightCoreOnly -and -not $AgentlyCliOnly -and -not $DshOnly) { $releaseArguments += @('--python-runtime-archive', $pythonRuntimeArchivePath, '--python-runtime-version', $pythonRuntimeVersionValue) }
-    if (-not $RustOnly -and -not $OfficeCliOnly -and -not $NodeRuntimeOnly -and -not $AlipayBotOnly -and -not $PlaywrightCoreOnly -and -not $PythonRuntimeOnly -and -not $DshOnly) { $releaseArguments += @('--agently-cli-archive', $agentlyCliArchivePath, '--agently-cli-version', $agentlyCliVersionValue) }
-    if (-not $RustOnly -and -not $OfficeCliOnly -and -not $NodeRuntimeOnly -and -not $AlipayBotOnly -and -not $PlaywrightCoreOnly -and -not $PythonRuntimeOnly -and -not $AgentlyCliOnly) { $releaseArguments += @('--dsh-archive', $dshArchivePath, '--dsh-version', $dshVersionValue) }
+    if (-not $OfficeCliOnly -and -not $NodeRuntimeOnly -and -not $AlipayBotOnly -and -not $PlaywrightCoreOnly -and -not $PythonRuntimeOnly -and -not $AgentlyCliOnly -and -not $DshOnly -and -not $CodexCliOnly) { $releaseArguments += @('--rust-binary', $rustBinaryPath) }
+    if (-not $RustOnly -and -not $NodeRuntimeOnly -and -not $AlipayBotOnly -and -not $PlaywrightCoreOnly -and -not $PythonRuntimeOnly -and -not $AgentlyCliOnly -and -not $DshOnly -and -not $CodexCliOnly) { $releaseArguments += @('--officecli-binary', $officeCliBinaryPath, '--officecli-version', $officeCliVersionValue) }
+    if (-not $RustOnly -and -not $OfficeCliOnly -and -not $AlipayBotOnly -and -not $PlaywrightCoreOnly -and -not $PythonRuntimeOnly -and -not $AgentlyCliOnly -and -not $DshOnly -and -not $CodexCliOnly) { $releaseArguments += @('--node-runtime-archive', $nodeRuntimeArchivePath, '--node-runtime-version', $nodeRuntimeVersionValue) }
+    if (-not $RustOnly -and -not $OfficeCliOnly -and -not $NodeRuntimeOnly -and -not $PlaywrightCoreOnly -and -not $PythonRuntimeOnly -and -not $AgentlyCliOnly -and -not $DshOnly -and -not $CodexCliOnly) { $releaseArguments += @('--alipay-bot-archive', $alipayBotArchivePath, '--alipay-bot-version', $alipayBotVersionValue) }
+    if (-not $RustOnly -and -not $OfficeCliOnly -and -not $NodeRuntimeOnly -and -not $AlipayBotOnly -and -not $PythonRuntimeOnly -and -not $AgentlyCliOnly -and -not $DshOnly -and -not $CodexCliOnly) { $releaseArguments += @('--playwright-core-archive', $playwrightCoreArchivePath, '--playwright-core-version', $playwrightCoreVersionValue) }
+    if (-not $RustOnly -and -not $OfficeCliOnly -and -not $NodeRuntimeOnly -and -not $AlipayBotOnly -and -not $PlaywrightCoreOnly -and -not $AgentlyCliOnly -and -not $DshOnly -and -not $CodexCliOnly) { $releaseArguments += @('--python-runtime-archive', $pythonRuntimeArchivePath, '--python-runtime-version', $pythonRuntimeVersionValue) }
+    if (-not $RustOnly -and -not $OfficeCliOnly -and -not $NodeRuntimeOnly -and -not $AlipayBotOnly -and -not $PlaywrightCoreOnly -and -not $PythonRuntimeOnly -and -not $DshOnly -and -not $CodexCliOnly) { $releaseArguments += @('--agently-cli-archive', $agentlyCliArchivePath, '--agently-cli-version', $agentlyCliVersionValue) }
+    if (-not $RustOnly -and -not $OfficeCliOnly -and -not $NodeRuntimeOnly -and -not $AlipayBotOnly -and -not $PlaywrightCoreOnly -and -not $PythonRuntimeOnly -and -not $AgentlyCliOnly -and -not $CodexCliOnly) { $releaseArguments += @('--dsh-archive', $dshArchivePath, '--dsh-version', $dshVersionValue) }
+    if (-not $RustOnly -and -not $OfficeCliOnly -and -not $NodeRuntimeOnly -and -not $AlipayBotOnly -and -not $PlaywrightCoreOnly -and -not $PythonRuntimeOnly -and -not $AgentlyCliOnly -and -not $DshOnly) { $releaseArguments += @('--codex-cli-archive', $codexCliArchivePath, '--codex-cli-version', $codexCliVersionValue) }
     if (-not [string]::IsNullOrWhiteSpace($ObjectPrefixPath)) { $releaseArguments += @('--prefix', $ObjectPrefixPath.Trim()) }
     if ($RustOnly) { $releaseArguments += '--rust' }
     if ($OfficeCliOnly) { $releaseArguments += '--officecli' }
@@ -617,6 +661,7 @@ if (-not $SkipPublish) {
     if ($PythonRuntimeOnly) { $releaseArguments += '--python-runtime' }
     if ($AgentlyCliOnly) { $releaseArguments += '--agently-cli' }
     if ($DshOnly) { $releaseArguments += '--dsh' }
+    if ($CodexCliOnly) { $releaseArguments += '--codex-cli' }
 
     $manifestPath = Join-Path $appDir 'dist\functional-modules\manifest.json'
     Write-Host 'Generating functional module manifest...'

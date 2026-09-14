@@ -22,6 +22,7 @@
     "prepare:alipay-bot-module": "bun run scripts/prepare-alipay-bot-module.ts",
     "prepare:agently-cli-module": "bun run scripts/prepare-agently-cli-module.ts",
     "prepare:dsh-module": "bun run scripts/prepare-dsh-module.ts",
+    "prepare:codex-cli-module": "bun run scripts/prepare-codex-cli-module.ts",
     "prepare:officecli-module": "bun run scripts/prepare-officecli-module.ts",
     "build:functional-module-manifest": "bun run scripts/build-functional-module-manifest.ts",
     "publish:functional-modules": "bun run scripts/publish-functional-modules.ts",

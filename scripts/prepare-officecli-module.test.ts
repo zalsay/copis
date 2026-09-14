@@ -508,4 +508,77 @@ describe('OfficeCLI 功能模块准备', () => {
       server.stop(true)
     }
   })
+
+  test('Given GitHub release API 限流 403 且配置静态直链 When 准备模块 Then 回退静态资源直链下载并成功准备', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'copis-officecli-module-'))
+    temporaryDirectories.push(root)
+    const binary = Buffer.from('direct-download-officecli-binary')
+    const checksum = createHash('sha256').update(binary).digest('hex')
+    let origin = ''
+    let releaseRequests = 0
+    let checksumRequests = 0
+    let binaryRequests = 0
+    const server = Bun.serve({
+      port: 0,
+      fetch(request) {
+        const path = new URL(request.url).pathname
+        if (path === '/release') {
+          releaseRequests += 1
+          return new Response('{"message":"API rate limit exceeded"}', {
+            status: 403,
+            headers: {
+              'content-type': 'application/json',
+              'x-ratelimit-remaining': '0',
+            },
+          })
+        }
+        if (path === '/download/v1.0.143/SHA256SUMS') {
+          checksumRequests += 1
+          return new Response(`${checksum}  officecli-mac-arm64\n`)
+        }
+        if (path === '/download/v1.0.143/officecli-mac-arm64') {
+          binaryRequests += 1
+          return new Response(binary)
+        }
+        return new Response('not found', { status: 404 })
+      },
+    })
+    origin = `http://127.0.0.1:${server.port}`
+    const output = join(root, 'officecli')
+
+    try {
+      const child = Bun.spawn([
+        process.execPath,
+        'scripts/prepare-officecli-module.ts',
+        '--platform',
+        'darwin',
+        '--arch',
+        'arm64',
+        '--output',
+        output,
+        '--release-api-url',
+        `${origin}/release`,
+        '--direct-download-base-url',
+        `${origin}/download`,
+      ], {
+        cwd: repoRoot,
+        env: process.env,
+        stdout: 'pipe',
+        stderr: 'pipe',
+      })
+      const exitCode = await child.exited
+      const logs = `${await new Response(child.stdout).text()}${await new Response(child.stderr).text()}`
+
+      expect(exitCode).toBe(0)
+      expect(releaseRequests).toBe(1)
+      expect(checksumRequests).toBe(1)
+      expect(binaryRequests).toBe(1)
+      expect(logs).toContain('回退到 GitHub Release 静态资源直链下载')
+      expect(logs).toContain('OfficeCLI v1.0.143')
+      expect(readFileSync(output)).toEqual(binary)
+    } finally {
+      server.stop(true)
+    }
+  })
 })
+

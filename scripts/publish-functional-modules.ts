@@ -46,8 +46,6 @@ const REQUIRED_PUBLISHED_MODULES = [
   'rust-http-api',
   'playwright-core',
   'python-runtime',
-  'agently-cli',
-  'dsh',
 ] as const
 
 async function main(): Promise<void> {
@@ -59,8 +57,9 @@ async function main(): Promise<void> {
   const pythonRuntimeOnly = hasFlag('--python-runtime') || process.env.COPIS_PYTHON_RUNTIME_ONLY === '1'
   const agentlyCliOnly = hasFlag('--agently-cli') || process.env.COPIS_AGENTLY_CLI_ONLY === '1'
   const dshOnly = hasFlag('--dsh') || process.env.COPIS_DSH_ONLY === '1'
-  if (Number(rustOnly) + Number(officeCliOnly) + Number(nodeRuntimeOnly) + Number(alipayBotOnly) + Number(playwrightCoreOnly) + Number(pythonRuntimeOnly) + Number(agentlyCliOnly) + Number(dshOnly) > 1) {
-    throw new Error('--rust、--officecli、--node-runtime、--alipay-bot、--playwright-core、--python-runtime、--agently-cli 与 --dsh 不能同时使用')
+  const codexCliOnly = hasFlag('--codex-cli') || process.env.COPIS_CODEX_CLI_ONLY === '1'
+  if (Number(rustOnly) + Number(officeCliOnly) + Number(nodeRuntimeOnly) + Number(alipayBotOnly) + Number(playwrightCoreOnly) + Number(pythonRuntimeOnly) + Number(agentlyCliOnly) + Number(dshOnly) + Number(codexCliOnly) > 1) {
+    throw new Error('--rust、--officecli、--node-runtime、--alipay-bot、--playwright-core、--python-runtime、--agently-cli、--dsh 与 --codex-cli 不能同时使用')
   }
 
   const secretId = requiredEnv('COS_SECRET_ID')
@@ -93,7 +92,7 @@ async function main(): Promise<void> {
   if (hasFlag('--manifest-only')) {
     const manifestPath = requiredOption('--manifest-file', 'COPIS_FUNCTIONAL_MODULE_MANIFEST_FILE')
     const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as FunctionalModuleManifest
-    const requiredManifest = ['node-runtime', 'python-runtime', 'officecli', 'alipay-bot', 'rust-http-api', 'playwright-core', 'agently-cli', 'dsh'].reduce<FunctionalModuleManifest>(
+    const requiredManifest = ['node-runtime', 'python-runtime', 'officecli', 'alipay-bot', 'rust-http-api', 'playwright-core'].reduce<FunctionalModuleManifest>(
       (value, name) => markFunctionalModuleRequired(value, name),
       manifest,
     )
@@ -107,43 +106,48 @@ async function main(): Promise<void> {
     await publishFunctionalModuleManifest(manifestEntry, client)
     console.log(`[publish:functional-modules] 已覆盖发布 manifest: ${manifestEntry.key}`)
   } else {
-    const rustBinary = officeCliOnly || nodeRuntimeOnly || alipayBotOnly || playwrightCoreOnly || pythonRuntimeOnly || agentlyCliOnly || dshOnly
+    const rustBinary = officeCliOnly || nodeRuntimeOnly || alipayBotOnly || playwrightCoreOnly || pythonRuntimeOnly || agentlyCliOnly || dshOnly || codexCliOnly
       ? ''
       : getOption('--rust-binary')
         ?? process.env.COPIS_RUST_HTTP_API_BINARY?.trim()
         ?? join(repoRoot, 'native/http-api-server/target/release', binaryName('copis-http-api-server', platform))
-    const officeCliBinary = rustOnly || nodeRuntimeOnly || alipayBotOnly || playwrightCoreOnly || pythonRuntimeOnly || agentlyCliOnly || dshOnly
+    const officeCliBinary = rustOnly || nodeRuntimeOnly || alipayBotOnly || playwrightCoreOnly || pythonRuntimeOnly || agentlyCliOnly || dshOnly || codexCliOnly
       ? undefined
       : getOption('--officecli-binary')
         ?? process.env.COPIS_OFFICECLI_BINARY?.trim()
         ?? join(electronDir, 'resources/bin', binaryName('officecli', platform))
     const nodeRuntimeArchive = rustOnly || officeCliOnly || alipayBotOnly || playwrightCoreOnly
-      || pythonRuntimeOnly || agentlyCliOnly || dshOnly
+      || pythonRuntimeOnly || agentlyCliOnly || dshOnly || codexCliOnly
       ? undefined
       : getOption('--node-runtime-archive')
         ?? process.env.COPIS_NODE_RUNTIME_ARCHIVE?.trim()
         ?? join(electronDir, 'resources/node-runtime', `${platform}-${arch}.tar.gz`)
     const alipayBotArchive = rustOnly || officeCliOnly || nodeRuntimeOnly || playwrightCoreOnly
-      || pythonRuntimeOnly || agentlyCliOnly || dshOnly
+      || pythonRuntimeOnly || agentlyCliOnly || dshOnly || codexCliOnly
       ? undefined
       : getOption('--alipay-bot-archive')
         ?? process.env.COPIS_ALIPAY_BOT_ARCHIVE?.trim()
         ?? join(electronDir, 'resources/alipay-bot', `${platform}-${arch}.tar.gz`)
-    const pythonRuntimeArchive = rustOnly || officeCliOnly || nodeRuntimeOnly || alipayBotOnly || playwrightCoreOnly || agentlyCliOnly || dshOnly
+    const pythonRuntimeArchive = rustOnly || officeCliOnly || nodeRuntimeOnly || alipayBotOnly || playwrightCoreOnly || agentlyCliOnly || dshOnly || codexCliOnly
       ? undefined
       : getOption('--python-runtime-archive')
       ?? process.env.COPIS_PYTHON_RUNTIME_ARCHIVE?.trim()
       ?? join(electronDir, 'resources/python-runtime', `${platform}-${arch}.tar.gz`)
-    const agentlyCliArchive = rustOnly || officeCliOnly || nodeRuntimeOnly || alipayBotOnly || playwrightCoreOnly || pythonRuntimeOnly || dshOnly
+    const agentlyCliArchive = rustOnly || officeCliOnly || nodeRuntimeOnly || alipayBotOnly || playwrightCoreOnly || pythonRuntimeOnly || dshOnly || codexCliOnly
       ? undefined
       : getOption('--agently-cli-archive')
         ?? process.env.COPIS_AGENTLY_CLI_ARCHIVE?.trim()
         ?? join(electronDir, 'resources/agently-cli', `${platform}-${arch}.tar.gz`)
-    const dshArchive = rustOnly || officeCliOnly || nodeRuntimeOnly || alipayBotOnly || playwrightCoreOnly || pythonRuntimeOnly || agentlyCliOnly
+    const dshArchive = rustOnly || officeCliOnly || nodeRuntimeOnly || alipayBotOnly || playwrightCoreOnly || pythonRuntimeOnly || agentlyCliOnly || codexCliOnly
       ? undefined
       : getOption('--dsh-archive')
         ?? process.env.COPIS_DSH_ARCHIVE?.trim()
         ?? join(electronDir, 'resources/dsh', `${platform}-${arch}.tar.gz`)
+    const codexCliArchive = rustOnly || officeCliOnly || nodeRuntimeOnly || alipayBotOnly || playwrightCoreOnly || pythonRuntimeOnly || agentlyCliOnly || dshOnly
+      ? undefined
+      : getOption('--codex-cli-archive')
+        ?? process.env.COPIS_CODEX_CLI_ARCHIVE?.trim()
+        ?? join(electronDir, 'resources/codex-cli', `${platform}-${arch}.tar.gz`)
     const modules = applyFunctionalModuleVersionLocks(buildFunctionalModuleBinaryInputs({
       rustOnly,
       officeCliOnly,
@@ -153,6 +157,7 @@ async function main(): Promise<void> {
       pythonRuntimeOnly,
       agentlyCliOnly,
       dshOnly,
+      codexCliOnly,
       rustBinary,
       rustVersion: getOption('--rust-version') ?? process.env.COPIS_RUST_HTTP_API_VERSION?.trim() ?? version,
       officeCliBinary,
@@ -178,6 +183,10 @@ async function main(): Promise<void> {
       dshArchive,
       dshVersion: getOption('--dsh-version')
         ?? process.env.COPIS_DSH_VERSION?.trim()
+        ?? version,
+      codexCliArchive,
+      codexCliVersion: getOption('--codex-cli-version')
+        ?? process.env.COPIS_CODEX_CLI_VERSION?.trim()
         ?? version,
       platform,
       arch,
@@ -205,6 +214,7 @@ async function main(): Promise<void> {
       pythonRuntimeOnly,
       agentlyCliOnly,
       dshOnly,
+      codexCliOnly,
       platform,
       arch,
     })
@@ -402,7 +412,7 @@ export function requireExistingAgentlyCli(
     if (options.allowMissing) return false
     throw new Error(`COS manifest 当前平台/架构缺少 agently-cli: ${platformKey}，单模块发布已停止`)
   }
-  if (artifact.required !== true || !contracts.some((contract) => (
+  if (typeof artifact.required !== 'boolean' || !contracts.some((contract) => (
     artifact.format === contract.format && artifact.entrypoint === contract.entrypoint
   ))) {
     throw new Error(`COS manifest 当前平台/架构的 agently-cli 无效: ${platformKey}，单模块发布已停止`)
@@ -428,10 +438,41 @@ export function requireExistingDsh(
     if (options.allowMissing) return false
     throw new Error(`COS manifest 当前平台/架构缺少 dsh: ${platformKey}，单模块发布已停止`)
   }
-  if (artifact.required !== true || !contracts.some((contract) => (
+  if (typeof artifact.required !== 'boolean' || !contracts.some((contract) => (
     artifact.format === contract.format && artifact.entrypoint === contract.entrypoint
   ))) {
     throw new Error(`COS manifest 当前平台/架构的 dsh 无效: ${platformKey}，单模块发布已停止`)
+  }
+  return true
+}
+
+export interface CodexCliValidationOptions {
+  allowMissing?: boolean
+}
+
+export function requireExistingCodexCli(
+  manifest: FunctionalModuleManifest | undefined,
+  platform: FunctionalModulePlatform,
+  arch: FunctionalModuleArchitecture,
+  options: CodexCliValidationOptions = {},
+): boolean {
+  const platformKey = `${platform}-${arch}`
+  const artifact = manifest?.platforms[platformKey]?.modules['codex-cli']
+  const contracts = platform === 'win32'
+    ? [
+        { format: 'tar.gz', entrypoint: 'bin/codex.cmd' },
+        { format: 'tar.gz', entrypoint: 'bin/codex.exe' },
+        { format: 'binary', entrypoint: 'bin/codex.exe' },
+      ]
+    : [{ format: 'tar.gz', entrypoint: 'bin/codex' }]
+  if (!artifact) {
+    if (options.allowMissing) return false
+    throw new Error(`COS manifest 当前平台/架构缺少 codex-cli: ${platformKey}，单模块发布已停止`)
+  }
+  if (artifact.required !== false || !contracts.some((contract) => (
+    artifact.format === contract.format && artifact.entrypoint === contract.entrypoint
+  ))) {
+    throw new Error(`COS manifest 当前平台/架构的 codex-cli 无效: ${platformKey}，单模块发布已停止`)
   }
   return true
 }
@@ -531,6 +572,7 @@ interface SingleModuleReleaseValidationOptions {
   pythonRuntimeOnly?: boolean
   agentlyCliOnly?: boolean
   dshOnly?: boolean
+  codexCliOnly?: boolean
   platform: FunctionalModulePlatform
   arch: FunctionalModuleArchitecture
 }
@@ -549,6 +591,7 @@ export function validateExistingModulesForSingleModuleRelease(
     pythonRuntimeOnly = false,
     agentlyCliOnly = false,
     dshOnly = false,
+    codexCliOnly = false,
     platform,
     arch,
   } = options
@@ -559,8 +602,6 @@ export function validateExistingModulesForSingleModuleRelease(
     requireExistingAlipayBot(manifest, platform, arch)
     requireExistingPlaywrightCore(manifest, platform, arch)
     requireExistingPythonRuntime(manifest, platform, arch)
-    requireExistingAgentlyCli(manifest, platform, arch)
-    requireExistingDsh(manifest, platform, arch)
     return
   }
   if (officeCliOnly) {
@@ -569,8 +610,6 @@ export function validateExistingModulesForSingleModuleRelease(
     requireExistingAlipayBot(manifest, platform, arch)
     requireExistingPlaywrightCore(manifest, platform, arch)
     requireExistingPythonRuntime(manifest, platform, arch)
-    requireExistingAgentlyCli(manifest, platform, arch)
-    requireExistingDsh(manifest, platform, arch)
     return
   }
   if (nodeRuntimeOnly) {
@@ -579,8 +618,6 @@ export function validateExistingModulesForSingleModuleRelease(
     requireExistingAlipayBot(manifest, platform, arch)
     requireExistingPlaywrightCore(manifest, platform, arch)
     requireExistingPythonRuntime(manifest, platform, arch)
-    requireExistingAgentlyCli(manifest, platform, arch)
-    requireExistingDsh(manifest, platform, arch)
     return
   }
   if (alipayBotOnly) {
@@ -589,8 +626,6 @@ export function validateExistingModulesForSingleModuleRelease(
     requireExistingNodeRuntime(manifest, platform, arch)
     requireExistingPlaywrightCore(manifest, platform, arch)
     requireExistingPythonRuntime(manifest, platform, arch)
-    requireExistingAgentlyCli(manifest, platform, arch)
-    requireExistingDsh(manifest, platform, arch)
     return
   }
   if (playwrightCoreOnly) {
@@ -599,8 +634,6 @@ export function validateExistingModulesForSingleModuleRelease(
     requireExistingNodeRuntime(manifest, platform, arch)
     requireExistingAlipayBot(manifest, platform, arch)
     requireExistingPythonRuntime(manifest, platform, arch)
-    requireExistingAgentlyCli(manifest, platform, arch)
-    requireExistingDsh(manifest, platform, arch)
     return
   }
   if (pythonRuntimeOnly) {
@@ -609,8 +642,6 @@ export function validateExistingModulesForSingleModuleRelease(
     requireExistingNodeRuntime(manifest, platform, arch)
     requireExistingAlipayBot(manifest, platform, arch)
     requireExistingPlaywrightCore(manifest, platform, arch)
-    requireExistingAgentlyCli(manifest, platform, arch)
-    requireExistingDsh(manifest, platform, arch)
     return
   }
   if (agentlyCliOnly) {
@@ -620,7 +651,6 @@ export function validateExistingModulesForSingleModuleRelease(
     requireExistingAlipayBot(manifest, platform, arch)
     requireExistingPlaywrightCore(manifest, platform, arch)
     requireExistingPythonRuntime(manifest, platform, arch)
-    requireExistingDsh(manifest, platform, arch)
     return
   }
   if (dshOnly) {
@@ -630,7 +660,16 @@ export function validateExistingModulesForSingleModuleRelease(
     requireExistingAlipayBot(manifest, platform, arch)
     requireExistingPlaywrightCore(manifest, platform, arch)
     requireExistingPythonRuntime(manifest, platform, arch)
-    requireExistingAgentlyCli(manifest, platform, arch)
+    return
+  }
+  if (codexCliOnly) {
+    requireExistingRustApi(manifest, platform, arch)
+    requireExistingOfficeCli(manifest, platform, arch)
+    requireExistingNodeRuntime(manifest, platform, arch)
+    requireExistingAlipayBot(manifest, platform, arch)
+    requireExistingPlaywrightCore(manifest, platform, arch)
+    requireExistingPythonRuntime(manifest, platform, arch)
+    return
   }
 }
 
@@ -643,6 +682,7 @@ interface FunctionalModuleBinaryInputOptions {
   pythonRuntimeOnly?: boolean
   agentlyCliOnly?: boolean
   dshOnly?: boolean
+  codexCliOnly?: boolean
   rustBinary: string
   rustVersion: string
   officeCliBinary?: string
@@ -659,6 +699,8 @@ interface FunctionalModuleBinaryInputOptions {
   agentlyCliVersion?: string
   dshArchive?: string
   dshVersion?: string
+  codexCliArchive?: string
+  codexCliVersion?: string
   platform: FunctionalModulePlatform
   arch: FunctionalModuleArchitecture
 }
@@ -673,11 +715,12 @@ export function buildFunctionalModuleBinaryInputs(
   const pythonRuntimeOnly = input.pythonRuntimeOnly ?? false
   const agentlyCliOnly = input.agentlyCliOnly ?? false
   const dshOnly = input.dshOnly ?? false
-  if (Number(input.rustOnly) + Number(officeCliOnly) + Number(nodeRuntimeOnly) + Number(alipayBotOnly) + Number(playwrightCoreOnly) + Number(pythonRuntimeOnly) + Number(agentlyCliOnly) + Number(dshOnly) > 1) {
-    throw new Error('--rust、--officecli、--node-runtime、--alipay-bot、--playwright-core、--python-runtime、--agently-cli 与 --dsh 不能同时使用')
+  const codexCliOnly = input.codexCliOnly ?? false
+  if (Number(input.rustOnly) + Number(officeCliOnly) + Number(nodeRuntimeOnly) + Number(alipayBotOnly) + Number(playwrightCoreOnly) + Number(pythonRuntimeOnly) + Number(agentlyCliOnly) + Number(dshOnly) + Number(codexCliOnly) > 1) {
+    throw new Error('--rust、--officecli、--node-runtime、--alipay-bot、--playwright-core、--python-runtime、--agently-cli、--dsh 与 --codex-cli 不能同时使用')
   }
   const modules: FunctionalModuleBinaryInput[] = []
-  if (!officeCliOnly && !nodeRuntimeOnly && !alipayBotOnly && !playwrightCoreOnly && !pythonRuntimeOnly && !agentlyCliOnly && !dshOnly) {
+  if (!officeCliOnly && !nodeRuntimeOnly && !alipayBotOnly && !playwrightCoreOnly && !pythonRuntimeOnly && !agentlyCliOnly && !dshOnly && !codexCliOnly) {
     modules.push({
       module: 'rust-http-api',
       version: input.rustVersion,
@@ -687,7 +730,7 @@ export function buildFunctionalModuleBinaryInputs(
       required: true,
     })
   }
-  if (!input.rustOnly && !nodeRuntimeOnly && !alipayBotOnly && !playwrightCoreOnly && !pythonRuntimeOnly && !agentlyCliOnly && !dshOnly) {
+  if (!input.rustOnly && !nodeRuntimeOnly && !alipayBotOnly && !playwrightCoreOnly && !pythonRuntimeOnly && !agentlyCliOnly && !dshOnly && !codexCliOnly) {
     if (!input.officeCliBinary) throw new Error('正常发布或 OfficeCLI-only 发布需要提供 OfficeCLI 二进制路径')
     modules.push({
       module: 'officecli',
@@ -698,7 +741,7 @@ export function buildFunctionalModuleBinaryInputs(
       required: true,
     })
   }
-  if (!input.rustOnly && !officeCliOnly && !alipayBotOnly && !playwrightCoreOnly && !pythonRuntimeOnly && !agentlyCliOnly && !dshOnly) {
+  if (!input.rustOnly && !officeCliOnly && !alipayBotOnly && !playwrightCoreOnly && !pythonRuntimeOnly && !agentlyCliOnly && !dshOnly && !codexCliOnly) {
     if (!input.nodeRuntimeArchive) throw new Error('正常发布或 Node.js runtime-only 发布需要提供 Node.js runtime 归档')
     modules.push({
       module: 'node-runtime',
@@ -711,7 +754,7 @@ export function buildFunctionalModuleBinaryInputs(
       required: true,
     })
   }
-  if (!input.rustOnly && !officeCliOnly && !nodeRuntimeOnly && !playwrightCoreOnly && !pythonRuntimeOnly && !agentlyCliOnly && !dshOnly) {
+  if (!input.rustOnly && !officeCliOnly && !nodeRuntimeOnly && !playwrightCoreOnly && !pythonRuntimeOnly && !agentlyCliOnly && !dshOnly && !codexCliOnly) {
     if (!input.alipayBotArchive) throw new Error('正常发布或支付宝智能体 CLI-only 发布需要提供 alipay-bot 归档')
     modules.push({
       module: 'alipay-bot',
@@ -724,7 +767,7 @@ export function buildFunctionalModuleBinaryInputs(
       required: true,
     })
   }
-  if (!input.rustOnly && !officeCliOnly && !nodeRuntimeOnly && !alipayBotOnly && !pythonRuntimeOnly && !agentlyCliOnly && !dshOnly) {
+  if (!input.rustOnly && !officeCliOnly && !nodeRuntimeOnly && !alipayBotOnly && !pythonRuntimeOnly && !agentlyCliOnly && !dshOnly && !codexCliOnly) {
     if (!input.playwrightCoreArchive) throw new Error('正常发布或 Playwright-only 发布需要提供 playwright-core 归档')
     modules.push({
       module: 'playwright-core',
@@ -737,7 +780,7 @@ export function buildFunctionalModuleBinaryInputs(
       required: true,
     })
   }
-  if (!input.rustOnly && !officeCliOnly && !nodeRuntimeOnly && !alipayBotOnly && !playwrightCoreOnly && !agentlyCliOnly && !dshOnly) {
+  if (!input.rustOnly && !officeCliOnly && !nodeRuntimeOnly && !alipayBotOnly && !playwrightCoreOnly && !agentlyCliOnly && !dshOnly && !codexCliOnly) {
     if (!input.pythonRuntimeArchive) throw new Error('正常发布或 Python runtime-only 发布需要提供 Python runtime 归档')
     modules.push({
       module: 'python-runtime',
@@ -750,7 +793,7 @@ export function buildFunctionalModuleBinaryInputs(
       required: true,
     })
   }
-  if (!input.rustOnly && !officeCliOnly && !nodeRuntimeOnly && !alipayBotOnly && !playwrightCoreOnly && !pythonRuntimeOnly && !dshOnly) {
+  if (!input.rustOnly && !officeCliOnly && !nodeRuntimeOnly && !alipayBotOnly && !playwrightCoreOnly && !pythonRuntimeOnly && !dshOnly && !codexCliOnly) {
     if (!input.agentlyCliArchive) throw new Error('正常发布或 Agent QQ 邮箱 CLI-only 发布需要提供 agently-cli 归档')
     modules.push({
       module: 'agently-cli',
@@ -760,10 +803,10 @@ export function buildFunctionalModuleBinaryInputs(
       binaryPath: input.agentlyCliArchive,
       format: 'tar.gz',
       entrypoint: `bin/${input.platform === 'win32' ? 'agently-cli.cmd' : 'agently-cli'}`,
-      required: true,
+      required: false,
     })
   }
-  if (!input.rustOnly && !officeCliOnly && !nodeRuntimeOnly && !alipayBotOnly && !playwrightCoreOnly && !pythonRuntimeOnly && !agentlyCliOnly) {
+  if (!input.rustOnly && !officeCliOnly && !nodeRuntimeOnly && !alipayBotOnly && !playwrightCoreOnly && !pythonRuntimeOnly && !agentlyCliOnly && !codexCliOnly) {
     if (!input.dshArchive) throw new Error('正常发布或 dsh-only 发布需要提供 dsh 归档')
     modules.push({
       module: 'dsh',
@@ -773,8 +816,25 @@ export function buildFunctionalModuleBinaryInputs(
       binaryPath: input.dshArchive,
       format: 'tar.gz',
       entrypoint: `bin/${input.platform === 'win32' ? 'dsh.cmd' : 'dsh'}`,
-      required: true,
+      required: false,
     })
+  }
+  if (!input.rustOnly && !officeCliOnly && !nodeRuntimeOnly && !alipayBotOnly && !playwrightCoreOnly && !pythonRuntimeOnly && !agentlyCliOnly && !dshOnly) {
+    if (codexCliOnly && !input.codexCliArchive) {
+      throw new Error('专业模式 (codex-cli)-only 发布需要提供 codex-cli 归档')
+    }
+    if (input.codexCliArchive) {
+      modules.push({
+        module: 'codex-cli',
+        version: input.codexCliVersion ?? input.rustVersion,
+        platform: input.platform,
+        arch: input.arch,
+        binaryPath: input.codexCliArchive,
+        format: 'tar.gz',
+        entrypoint: `bin/${input.platform === 'win32' ? 'codex.cmd' : 'codex'}`,
+        required: false,
+      })
+    }
   }
   return modules
 }

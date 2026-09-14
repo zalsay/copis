@@ -106,6 +106,7 @@ show_help() {
   --python-runtime     只发布 Python 3.12 运行环境，保留 COS 中已有其他必要模块
   --agently-cli        只发布 Agent QQ 邮箱 CLI，保留 COS 中已有其他必要模块
   --dsh                只发布 dsh 运行环境，保留 COS 中已有其他必要模块
+  --codex-cli          只发布专业模式 (codex-cli) 运行环境，保留 COS 中已有其他必要模块
   --skip-publish       只构建二进制，不发布 COS
   --platform <name>    win32、darwin 或 linux
   --arch <name>        x64 或 arm64
@@ -129,6 +130,9 @@ show_help() {
   --agently-cli-version <version> 指定 agently-cli 模块版本，默认读取官方 runtime 版本
   --dsh-archive <path> 指定已打包的 dsh tar.gz
   --dsh-version <version> 指定 dsh 模块版本，默认读取官方 runtime 版本
+  --codex-cli-archive <path> 指定已打包的 codex-cli tar.gz
+  --codex-cli-version <version> 指定 codex-cli 模块版本
+  --codex-cli-binary <path> 指定本地 codex 可执行文件路径
   -h, --help           显示帮助
 EOF
 }
@@ -176,6 +180,9 @@ while [[ $# -gt 0 ]]; do
       ;;
     --dsh)
       DSH_ONLY=1
+      ;;
+    --codex-cli)
+      CODEX_CLI_ONLY=1
       ;;
     --skip-publish)
       SKIP_PUBLISH=1
@@ -290,6 +297,21 @@ while [[ $# -gt 0 ]]; do
       DSH_VERSION="$2"
       shift
       ;;
+    --codex-cli-archive)
+      require_value "$1" "${2:-}"
+      CODEX_CLI_ARCHIVE="$2"
+      shift
+      ;;
+    --codex-cli-version)
+      require_value "$1" "${2:-}"
+      CODEX_CLI_VERSION="$2"
+      shift
+      ;;
+    --codex-cli-binary)
+      require_value "$1" "${2:-}"
+      CODEX_CLI_BINARY="$2"
+      shift
+      ;;
     -h|--help)
       show_help
       exit 0
@@ -309,8 +331,9 @@ if [[ -z "$SKIP_INSTALL" ]]; then
   fi
 fi
 
-if [[ $((RUST_ONLY + OFFICECLI_ONLY + NODE_RUNTIME_ONLY + ALIPAY_BOT_ONLY + PLAYWRIGHT_CORE_ONLY + PYTHON_RUNTIME_ONLY + AGENTLY_CLI_ONLY + DSH_ONLY)) -gt 1 ]]; then
-  fail '--rust、--officecli、--node-runtime、--alipay-bot、--playwright-core、--python-runtime、--agently-cli 与 --dsh 不能同时使用。'
+CODEX_CLI_ONLY="${CODEX_CLI_ONLY:-0}"
+if [[ $((RUST_ONLY + OFFICECLI_ONLY + NODE_RUNTIME_ONLY + ALIPAY_BOT_ONLY + PLAYWRIGHT_CORE_ONLY + PYTHON_RUNTIME_ONLY + AGENTLY_CLI_ONLY + DSH_ONLY + CODEX_CLI_ONLY)) -gt 1 ]]; then
+  fail '--rust、--officecli、--node-runtime、--alipay-bot、--playwright-core、--python-runtime、--agently-cli、--dsh 与 --codex-cli 不能同时使用。'
 fi
 
 if ! command -v bun >/dev/null 2>&1; then
@@ -504,7 +527,7 @@ else
   DEFAULT_RUST_BINARY="$ROOT_DIR/native/http-api-server/target/release/copis-http-api-server"
 fi
 
-if [[ "$OFFICECLI_ONLY" != '1' && "$NODE_RUNTIME_ONLY" != '1' && "$ALIPAY_BOT_ONLY" != '1' && "$PLAYWRIGHT_CORE_ONLY" != '1' && "$PYTHON_RUNTIME_ONLY" != '1' && "$AGENTLY_CLI_ONLY" != '1' && "$DSH_ONLY" != '1' && "$SKIP_RUST_BUILD" -eq 0 ]]; then
+if [[ "$OFFICECLI_ONLY" != '1' && "$NODE_RUNTIME_ONLY" != '1' && "$ALIPAY_BOT_ONLY" != '1' && "$PLAYWRIGHT_CORE_ONLY" != '1' && "$PYTHON_RUNTIME_ONLY" != '1' && "$AGENTLY_CLI_ONLY" != '1' && "$DSH_ONLY" != '1' && "$CODEX_CLI_ONLY" != '1' && "$SKIP_RUST_BUILD" -eq 0 ]]; then
   if [[ "$PLATFORM" != "$CURRENT_PLATFORM" || "$ARCH" != "$CURRENT_ARCH" ]]; then
     fail 'deploy.sh 默认只能在当前平台和架构编译 Rust API；跨平台产物请传入 --skip-rust-build 和 --rust-binary。'
   fi
@@ -512,7 +535,7 @@ if [[ "$OFFICECLI_ONLY" != '1' && "$NODE_RUNTIME_ONLY" != '1' && "$ALIPAY_BOT_ON
   run_bun "$APP_DIR" 'Rust HTTP API 构建失败' run build:http-api-server
 fi
 
-if [[ "$OFFICECLI_ONLY" != '1' && "$NODE_RUNTIME_ONLY" != '1' && "$ALIPAY_BOT_ONLY" != '1' && "$PLAYWRIGHT_CORE_ONLY" != '1' && "$PYTHON_RUNTIME_ONLY" != '1' && "$AGENTLY_CLI_ONLY" != '1' && "$DSH_ONLY" != '1' ]]; then
+if [[ "$OFFICECLI_ONLY" != '1' && "$NODE_RUNTIME_ONLY" != '1' && "$ALIPAY_BOT_ONLY" != '1' && "$PLAYWRIGHT_CORE_ONLY" != '1' && "$PYTHON_RUNTIME_ONLY" != '1' && "$AGENTLY_CLI_ONLY" != '1' && "$DSH_ONLY" != '1' && "$CODEX_CLI_ONLY" != '1' ]]; then
   if [[ -n "$RUST_BINARY" && "$RUST_BINARY" != /* ]]; then
     RUST_BINARY="$ROOT_DIR/$RUST_BINARY"
   fi
@@ -523,7 +546,7 @@ if [[ "$OFFICECLI_ONLY" != '1' && "$NODE_RUNTIME_ONLY" != '1' && "$ALIPAY_BOT_ON
   RUST_BINARY="$(cd "$(dirname "$RUST_BINARY")" && pwd)/$(basename "$RUST_BINARY")"
 fi
 
-if [[ "$RUST_ONLY" != '1' && "$NODE_RUNTIME_ONLY" != '1' && "$ALIPAY_BOT_ONLY" != '1' && "$PLAYWRIGHT_CORE_ONLY" != '1' && "$PYTHON_RUNTIME_ONLY" != '1' && "$AGENTLY_CLI_ONLY" != '1' && "$DSH_ONLY" != '1' ]]; then
+if [[ "$RUST_ONLY" != '1' && "$NODE_RUNTIME_ONLY" != '1' && "$ALIPAY_BOT_ONLY" != '1' && "$PLAYWRIGHT_CORE_ONLY" != '1' && "$PYTHON_RUNTIME_ONLY" != '1' && "$AGENTLY_CLI_ONLY" != '1' && "$DSH_ONLY" != '1' && "$CODEX_CLI_ONLY" != '1' ]]; then
   if [[ -n "$OFFICECLI_BINARY" && "$OFFICECLI_BINARY" != /* ]]; then
     OFFICECLI_BINARY="$ROOT_DIR/$OFFICECLI_BINARY"
   fi
@@ -532,8 +555,13 @@ if [[ "$RUST_ONLY" != '1' && "$NODE_RUNTIME_ONLY" != '1' && "$ALIPAY_BOT_ONLY" !
     if [[ "$PLATFORM" == 'win32' ]]; then
       OFFICECLI_BINARY+='.exe'
     fi
+  fi
+  if [[ ! -f "$OFFICECLI_BINARY" || "${COPIS_REFRESH_OFFICECLI:-0}" == '1' ]]; then
     echo '[Copis] 正在从 COS 检查 OfficeCLI 功能模块版本...'
     prepare_officecli_args=(--platform "$PLATFORM" --arch "$ARCH" --output "$OFFICECLI_BINARY")
+    if [[ -n "$OFFICECLI_VERSION" ]]; then
+      prepare_officecli_args+=(--version "$OFFICECLI_VERSION")
+    fi
     if [[ -n "$PUBLIC_BASE_URL" ]]; then
       OFFICECLI_PUBLIC_MANIFEST_URL="$(resolve_functional_module_manifest_url "$PUBLIC_BASE_URL" "$OBJECT_PREFIX_PATH" "$CHANNEL")"
       prepare_officecli_args+=(--public-manifest-url "$OFFICECLI_PUBLIC_MANIFEST_URL")
@@ -547,7 +575,7 @@ if [[ "$RUST_ONLY" != '1' && "$NODE_RUNTIME_ONLY" != '1' && "$ALIPAY_BOT_ONLY" !
   OFFICECLI_VERSION="${OFFICECLI_VERSION:-$(read_officecli_version "$OFFICECLI_BINARY")}"
 fi
 
-if [[ "$RUST_ONLY" != '1' && "$OFFICECLI_ONLY" != '1' && "$ALIPAY_BOT_ONLY" != '1' && "$PLAYWRIGHT_CORE_ONLY" != '1' && "$PYTHON_RUNTIME_ONLY" != '1' && "$AGENTLY_CLI_ONLY" != '1' && "$DSH_ONLY" != '1' ]]; then
+if [[ "$RUST_ONLY" != '1' && "$OFFICECLI_ONLY" != '1' && "$ALIPAY_BOT_ONLY" != '1' && "$PLAYWRIGHT_CORE_ONLY" != '1' && "$PYTHON_RUNTIME_ONLY" != '1' && "$AGENTLY_CLI_ONLY" != '1' && "$DSH_ONLY" != '1' && "$CODEX_CLI_ONLY" != '1' ]]; then
   if [[ "$PLATFORM" != "$CURRENT_PLATFORM" || "$ARCH" != "$CURRENT_ARCH" ]]; then
     fail 'Node.js runtime 必须在目标平台和架构构建，跨平台请传入 --node-runtime-archive。'
   fi
@@ -564,7 +592,7 @@ if [[ "$RUST_ONLY" != '1' && "$OFFICECLI_ONLY" != '1' && "$ALIPAY_BOT_ONLY" != '
   NODE_RUNTIME_VERSION="${NODE_RUNTIME_VERSION:-$VERSION}"
 fi
 
-if [[ "$RUST_ONLY" != '1' && "$OFFICECLI_ONLY" != '1' && "$NODE_RUNTIME_ONLY" != '1' && "$PLAYWRIGHT_CORE_ONLY" != '1' && "$PYTHON_RUNTIME_ONLY" != '1' && "$AGENTLY_CLI_ONLY" != '1' && "$DSH_ONLY" != '1' ]]; then
+if [[ "$RUST_ONLY" != '1' && "$OFFICECLI_ONLY" != '1' && "$NODE_RUNTIME_ONLY" != '1' && "$PLAYWRIGHT_CORE_ONLY" != '1' && "$PYTHON_RUNTIME_ONLY" != '1' && "$AGENTLY_CLI_ONLY" != '1' && "$DSH_ONLY" != '1' && "$CODEX_CLI_ONLY" != '1' ]]; then
   if [[ -n "$ALIPAY_BOT_ARCHIVE" && "$ALIPAY_BOT_ARCHIVE" != /* ]]; then
     ALIPAY_BOT_ARCHIVE="$ROOT_DIR/$ALIPAY_BOT_ARCHIVE"
   fi
@@ -588,7 +616,7 @@ if [[ "$RUST_ONLY" != '1' && "$OFFICECLI_ONLY" != '1' && "$NODE_RUNTIME_ONLY" !=
   ALIPAY_BOT_VERSION="${ALIPAY_BOT_VERSION:-$(read_alipay_bot_version "$ALIPAY_BOT_ARCHIVE")}"
 fi
 
-if [[ "$RUST_ONLY" != '1' && "$OFFICECLI_ONLY" != '1' && "$NODE_RUNTIME_ONLY" != '1' && "$ALIPAY_BOT_ONLY" != '1' && "$PYTHON_RUNTIME_ONLY" != '1' && "$AGENTLY_CLI_ONLY" != '1' && "$DSH_ONLY" != '1' ]]; then
+if [[ "$RUST_ONLY" != '1' && "$OFFICECLI_ONLY" != '1' && "$NODE_RUNTIME_ONLY" != '1' && "$ALIPAY_BOT_ONLY" != '1' && "$PYTHON_RUNTIME_ONLY" != '1' && "$AGENTLY_CLI_ONLY" != '1' && "$DSH_ONLY" != '1' && "$CODEX_CLI_ONLY" != '1' ]]; then
   if [[ -n "$PLAYWRIGHT_CORE_ARCHIVE" && "$PLAYWRIGHT_CORE_ARCHIVE" != /* ]]; then
     PLAYWRIGHT_CORE_ARCHIVE="$ROOT_DIR/$PLAYWRIGHT_CORE_ARCHIVE"
   fi
@@ -604,7 +632,7 @@ if [[ "$RUST_ONLY" != '1' && "$OFFICECLI_ONLY" != '1' && "$NODE_RUNTIME_ONLY" !=
   PLAYWRIGHT_CORE_VERSION="${PLAYWRIGHT_CORE_VERSION:-1.62.1}"
 fi
 
-if [[ "$RUST_ONLY" != '1' && "$OFFICECLI_ONLY" != '1' && "$NODE_RUNTIME_ONLY" != '1' && "$ALIPAY_BOT_ONLY" != '1' && "$PLAYWRIGHT_CORE_ONLY" != '1' && "$AGENTLY_CLI_ONLY" != '1' && "$DSH_ONLY" != '1' ]]; then
+if [[ "$RUST_ONLY" != '1' && "$OFFICECLI_ONLY" != '1' && "$NODE_RUNTIME_ONLY" != '1' && "$ALIPAY_BOT_ONLY" != '1' && "$PLAYWRIGHT_CORE_ONLY" != '1' && "$AGENTLY_CLI_ONLY" != '1' && "$DSH_ONLY" != '1' && "$CODEX_CLI_ONLY" != '1' ]]; then
   if [[ -n "$PYTHON_RUNTIME_ARCHIVE" && "$PYTHON_RUNTIME_ARCHIVE" != /* ]]; then
     PYTHON_RUNTIME_ARCHIVE="$ROOT_DIR/$PYTHON_RUNTIME_ARCHIVE"
   fi
@@ -620,7 +648,7 @@ if [[ "$RUST_ONLY" != '1' && "$OFFICECLI_ONLY" != '1' && "$NODE_RUNTIME_ONLY" !=
   PYTHON_RUNTIME_VERSION="${PYTHON_RUNTIME_VERSION:-3.12.14}"
 fi
 
-if [[ "$RUST_ONLY" != '1' && "$OFFICECLI_ONLY" != '1' && "$NODE_RUNTIME_ONLY" != '1' && "$ALIPAY_BOT_ONLY" != '1' && "$PLAYWRIGHT_CORE_ONLY" != '1' && "$PYTHON_RUNTIME_ONLY" != '1' && "$DSH_ONLY" != '1' ]]; then
+if [[ "$RUST_ONLY" != '1' && "$OFFICECLI_ONLY" != '1' && "$NODE_RUNTIME_ONLY" != '1' && "$ALIPAY_BOT_ONLY" != '1' && "$PLAYWRIGHT_CORE_ONLY" != '1' && "$PYTHON_RUNTIME_ONLY" != '1' && "$DSH_ONLY" != '1' && "$CODEX_CLI_ONLY" != '1' ]]; then
   if [[ -n "$AGENTLY_CLI_ARCHIVE" && "$AGENTLY_CLI_ARCHIVE" != /* ]]; then
     AGENTLY_CLI_ARCHIVE="$ROOT_DIR/$AGENTLY_CLI_ARCHIVE"
   fi
@@ -642,7 +670,7 @@ if [[ "$RUST_ONLY" != '1' && "$OFFICECLI_ONLY" != '1' && "$NODE_RUNTIME_ONLY" !=
   AGENTLY_CLI_VERSION="${AGENTLY_CLI_VERSION:-$(read_agently_cli_version "$AGENTLY_CLI_ARCHIVE")}"
 fi
 
-if [[ "$RUST_ONLY" != '1' && "$OFFICECLI_ONLY" != '1' && "$NODE_RUNTIME_ONLY" != '1' && "$ALIPAY_BOT_ONLY" != '1' && "$PLAYWRIGHT_CORE_ONLY" != '1' && "$PYTHON_RUNTIME_ONLY" != '1' && "$AGENTLY_CLI_ONLY" != '1' ]]; then
+if [[ "$RUST_ONLY" != '1' && "$OFFICECLI_ONLY" != '1' && "$NODE_RUNTIME_ONLY" != '1' && "$ALIPAY_BOT_ONLY" != '1' && "$PLAYWRIGHT_CORE_ONLY" != '1' && "$PYTHON_RUNTIME_ONLY" != '1' && "$AGENTLY_CLI_ONLY" != '1' && "$CODEX_CLI_ONLY" != '1' ]]; then
   if [[ -n "$DSH_ARCHIVE" && "$DSH_ARCHIVE" != /* ]]; then
     DSH_ARCHIVE="$ROOT_DIR/$DSH_ARCHIVE"
   fi
@@ -662,6 +690,28 @@ if [[ "$RUST_ONLY" != '1' && "$OFFICECLI_ONLY" != '1' && "$NODE_RUNTIME_ONLY" !=
     fail "未找到 DeepSeek Harness (dsh) 归档：$DSH_ARCHIVE"
   fi
   DSH_VERSION="${DSH_VERSION:-$(read_dsh_version "$DSH_ARCHIVE")}"
+fi
+
+if [[ "$RUST_ONLY" != '1' && "$OFFICECLI_ONLY" != '1' && "$NODE_RUNTIME_ONLY" != '1' && "$ALIPAY_BOT_ONLY" != '1' && "$PLAYWRIGHT_CORE_ONLY" != '1' && "$PYTHON_RUNTIME_ONLY" != '1' && "$AGENTLY_CLI_ONLY" != '1' && "$DSH_ONLY" != '1' ]]; then
+  if [[ -n "$CODEX_CLI_ARCHIVE" && "$CODEX_CLI_ARCHIVE" != /* ]]; then
+    CODEX_CLI_ARCHIVE="$ROOT_DIR/$CODEX_CLI_ARCHIVE"
+  fi
+  CODEX_CLI_ARCHIVE="${CODEX_CLI_ARCHIVE:-$APP_DIR/resources/codex-cli/${PLATFORM}-${ARCH}.tar.gz}"
+  if [[ ! -f "$CODEX_CLI_ARCHIVE" || "${COPIS_REFRESH_CODEX_CLI:-0}" == '1' ]]; then
+    CODEX_CLI_METADATA="$(mktemp "${TMPDIR:-/tmp}/copis-codex-cli-metadata.XXXXXX")"
+    PREPARE_CODEX_ARGS=(--platform "$PLATFORM" --arch "$ARCH" --output "$CODEX_CLI_ARCHIVE" --metadata "$CODEX_CLI_METADATA")
+    if [[ -n "$CODEX_CLI_BINARY" ]]; then
+      PREPARE_CODEX_ARGS+=(--binary "$CODEX_CLI_BINARY")
+    fi
+    echo '[Copis] 正在准备专业模式核心组件 (codex-cli) 功能模块...'
+    run_bun "$ROOT_DIR" '专业模式核心组件 (codex-cli) 功能模块准备失败' run prepare:codex-cli-module -- "${PREPARE_CODEX_ARGS[@]}"
+    CODEX_CLI_VERSION="${CODEX_CLI_VERSION:-$(cd "$ROOT_DIR" && "$BUN_BIN" -e 'const metadata = JSON.parse(await Bun.file(process.argv[1]).text()); console.log(metadata.version)' "$CODEX_CLI_METADATA")}"
+    rm -f "$CODEX_CLI_METADATA"
+  fi
+  if [[ ! -f "$CODEX_CLI_ARCHIVE" ]]; then
+    fail "未找到专业模式核心组件 (codex-cli) 归档：$CODEX_CLI_ARCHIVE"
+  fi
+  CODEX_CLI_VERSION="${CODEX_CLI_VERSION:-0.154.0}"
 fi
 
 if [[ "$BUILD_APP" -eq 1 ]]; then
@@ -692,29 +742,32 @@ if [[ "$SKIP_PUBLISH" -eq 0 ]]; then
     --public-base-url "$PUBLIC_BASE_URL"
   )
   MANIFEST_OUTPUT="$APP_DIR/dist/functional-modules/manifest.json"
-  if [[ "$OFFICECLI_ONLY" != '1' && "$NODE_RUNTIME_ONLY" != '1' && "$ALIPAY_BOT_ONLY" != '1' && "$PLAYWRIGHT_CORE_ONLY" != '1' && "$PYTHON_RUNTIME_ONLY" != '1' && "$AGENTLY_CLI_ONLY" != '1' && "$DSH_ONLY" != '1' ]]; then
+  if [[ "$OFFICECLI_ONLY" != '1' && "$NODE_RUNTIME_ONLY" != '1' && "$ALIPAY_BOT_ONLY" != '1' && "$PLAYWRIGHT_CORE_ONLY" != '1' && "$PYTHON_RUNTIME_ONLY" != '1' && "$AGENTLY_CLI_ONLY" != '1' && "$DSH_ONLY" != '1' && "$CODEX_CLI_ONLY" != '1' ]]; then
     RELEASE_ARGS+=(--rust-binary "$RUST_BINARY")
   fi
-  if [[ "$RUST_ONLY" != '1' && "$NODE_RUNTIME_ONLY" != '1' && "$ALIPAY_BOT_ONLY" != '1' && "$PLAYWRIGHT_CORE_ONLY" != '1' && "$PYTHON_RUNTIME_ONLY" != '1' && "$AGENTLY_CLI_ONLY" != '1' && "$DSH_ONLY" != '1' ]]; then
+  if [[ "$RUST_ONLY" != '1' && "$NODE_RUNTIME_ONLY" != '1' && "$ALIPAY_BOT_ONLY" != '1' && "$PLAYWRIGHT_CORE_ONLY" != '1' && "$PYTHON_RUNTIME_ONLY" != '1' && "$AGENTLY_CLI_ONLY" != '1' && "$DSH_ONLY" != '1' && "$CODEX_CLI_ONLY" != '1' ]]; then
     RELEASE_ARGS+=(--officecli-binary "$OFFICECLI_BINARY" --officecli-version "$OFFICECLI_VERSION")
   fi
-  if [[ "$RUST_ONLY" != '1' && "$OFFICECLI_ONLY" != '1' && "$ALIPAY_BOT_ONLY" != '1' && "$PLAYWRIGHT_CORE_ONLY" != '1' && "$PYTHON_RUNTIME_ONLY" != '1' && "$AGENTLY_CLI_ONLY" != '1' && "$DSH_ONLY" != '1' ]]; then
+  if [[ "$RUST_ONLY" != '1' && "$OFFICECLI_ONLY" != '1' && "$ALIPAY_BOT_ONLY" != '1' && "$PLAYWRIGHT_CORE_ONLY" != '1' && "$PYTHON_RUNTIME_ONLY" != '1' && "$AGENTLY_CLI_ONLY" != '1' && "$DSH_ONLY" != '1' && "$CODEX_CLI_ONLY" != '1' ]]; then
     RELEASE_ARGS+=(--node-runtime-archive "$NODE_RUNTIME_ARCHIVE" --node-runtime-version "$NODE_RUNTIME_VERSION")
   fi
-  if [[ "$RUST_ONLY" != '1' && "$OFFICECLI_ONLY" != '1' && "$NODE_RUNTIME_ONLY" != '1' && "$PLAYWRIGHT_CORE_ONLY" != '1' && "$PYTHON_RUNTIME_ONLY" != '1' && "$AGENTLY_CLI_ONLY" != '1' && "$DSH_ONLY" != '1' ]]; then
+  if [[ "$RUST_ONLY" != '1' && "$OFFICECLI_ONLY" != '1' && "$NODE_RUNTIME_ONLY" != '1' && "$PLAYWRIGHT_CORE_ONLY" != '1' && "$PYTHON_RUNTIME_ONLY" != '1' && "$AGENTLY_CLI_ONLY" != '1' && "$DSH_ONLY" != '1' && "$CODEX_CLI_ONLY" != '1' ]]; then
     RELEASE_ARGS+=(--alipay-bot-archive "$ALIPAY_BOT_ARCHIVE" --alipay-bot-version "$ALIPAY_BOT_VERSION")
   fi
-  if [[ "$RUST_ONLY" != '1' && "$OFFICECLI_ONLY" != '1' && "$NODE_RUNTIME_ONLY" != '1' && "$ALIPAY_BOT_ONLY" != '1' && "$PYTHON_RUNTIME_ONLY" != '1' && "$AGENTLY_CLI_ONLY" != '1' && "$DSH_ONLY" != '1' ]]; then
+  if [[ "$RUST_ONLY" != '1' && "$OFFICECLI_ONLY" != '1' && "$NODE_RUNTIME_ONLY" != '1' && "$ALIPAY_BOT_ONLY" != '1' && "$PYTHON_RUNTIME_ONLY" != '1' && "$AGENTLY_CLI_ONLY" != '1' && "$DSH_ONLY" != '1' && "$CODEX_CLI_ONLY" != '1' ]]; then
     RELEASE_ARGS+=(--playwright-core-archive "$PLAYWRIGHT_CORE_ARCHIVE" --playwright-core-version "$PLAYWRIGHT_CORE_VERSION")
   fi
-  if [[ "$RUST_ONLY" != '1' && "$OFFICECLI_ONLY" != '1' && "$NODE_RUNTIME_ONLY" != '1' && "$ALIPAY_BOT_ONLY" != '1' && "$PLAYWRIGHT_CORE_ONLY" != '1' && "$AGENTLY_CLI_ONLY" != '1' && "$DSH_ONLY" != '1' ]]; then
+  if [[ "$RUST_ONLY" != '1' && "$OFFICECLI_ONLY" != '1' && "$NODE_RUNTIME_ONLY" != '1' && "$ALIPAY_BOT_ONLY" != '1' && "$PLAYWRIGHT_CORE_ONLY" != '1' && "$AGENTLY_CLI_ONLY" != '1' && "$DSH_ONLY" != '1' && "$CODEX_CLI_ONLY" != '1' ]]; then
     RELEASE_ARGS+=(--python-runtime-archive "$PYTHON_RUNTIME_ARCHIVE" --python-runtime-version "$PYTHON_RUNTIME_VERSION")
   fi
-  if [[ "$RUST_ONLY" != '1' && "$OFFICECLI_ONLY" != '1' && "$NODE_RUNTIME_ONLY" != '1' && "$ALIPAY_BOT_ONLY" != '1' && "$PLAYWRIGHT_CORE_ONLY" != '1' && "$PYTHON_RUNTIME_ONLY" != '1' && "$DSH_ONLY" != '1' ]]; then
+  if [[ "$RUST_ONLY" != '1' && "$OFFICECLI_ONLY" != '1' && "$NODE_RUNTIME_ONLY" != '1' && "$ALIPAY_BOT_ONLY" != '1' && "$PLAYWRIGHT_CORE_ONLY" != '1' && "$PYTHON_RUNTIME_ONLY" != '1' && "$DSH_ONLY" != '1' && "$CODEX_CLI_ONLY" != '1' ]]; then
     RELEASE_ARGS+=(--agently-cli-archive "$AGENTLY_CLI_ARCHIVE" --agently-cli-version "$AGENTLY_CLI_VERSION")
   fi
-  if [[ "$RUST_ONLY" != '1' && "$OFFICECLI_ONLY" != '1' && "$NODE_RUNTIME_ONLY" != '1' && "$ALIPAY_BOT_ONLY" != '1' && "$PLAYWRIGHT_CORE_ONLY" != '1' && "$PYTHON_RUNTIME_ONLY" != '1' && "$AGENTLY_CLI_ONLY" != '1' ]]; then
+  if [[ "$RUST_ONLY" != '1' && "$OFFICECLI_ONLY" != '1' && "$NODE_RUNTIME_ONLY" != '1' && "$ALIPAY_BOT_ONLY" != '1' && "$PLAYWRIGHT_CORE_ONLY" != '1' && "$PYTHON_RUNTIME_ONLY" != '1' && "$AGENTLY_CLI_ONLY" != '1' && "$CODEX_CLI_ONLY" != '1' ]]; then
     RELEASE_ARGS+=(--dsh-archive "$DSH_ARCHIVE" --dsh-version "$DSH_VERSION")
+  fi
+  if [[ "$RUST_ONLY" != '1' && "$OFFICECLI_ONLY" != '1' && "$NODE_RUNTIME_ONLY" != '1' && "$ALIPAY_BOT_ONLY" != '1' && "$PLAYWRIGHT_CORE_ONLY" != '1' && "$PYTHON_RUNTIME_ONLY" != '1' && "$AGENTLY_CLI_ONLY" != '1' && "$DSH_ONLY" != '1' ]]; then
+    RELEASE_ARGS+=(--codex-cli-archive "$CODEX_CLI_ARCHIVE" --codex-cli-version "$CODEX_CLI_VERSION")
   fi
   if [[ -n "$OBJECT_PREFIX_PATH" ]]; then
     RELEASE_ARGS+=(--prefix "$OBJECT_PREFIX_PATH")
@@ -742,6 +795,9 @@ if [[ "$SKIP_PUBLISH" -eq 0 ]]; then
   fi
   if [[ "$DSH_ONLY" == '1' ]]; then
     RELEASE_ARGS+=(--dsh)
+  fi
+  if [[ "$CODEX_CLI_ONLY" == '1' ]]; then
+    RELEASE_ARGS+=(--codex-cli)
   fi
 
   echo '[Copis] 正在生成功能模块 manifest...'

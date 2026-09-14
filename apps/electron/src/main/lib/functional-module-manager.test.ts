@@ -189,16 +189,17 @@ describe('COS 功能模块统一管理', () => {
     expect(calls.filter((url) => url === officeUrl)).toHaveLength(1)
   })
 
-  test('模块状态注册表包含八个必要模块', () => {
+  test('模块状态注册表包含全部模块且必要模块正确标记', () => {
     const statuses = getFunctionalModuleStatuses(createRoot())
 
-    expect(statuses.map((item) => item.name)).toEqual(['node-runtime', 'rust-http-api', 'officecli', 'alipay-bot', 'playwright-core', 'python-runtime', 'agently-cli', 'dsh'])
+    expect(statuses.map((item) => item.name)).toEqual(['node-runtime', 'rust-http-api', 'officecli', 'alipay-bot', 'playwright-core', 'python-runtime', 'agently-cli', 'dsh', 'codex-cli'])
     expect(statuses.find((item) => item.name === 'node-runtime')?.required).toBe(true)
     expect(statuses.find((item) => item.name === 'rust-http-api')?.required).toBe(true)
     expect(statuses.find((item) => item.name === 'officecli')?.required).toBe(true)
     expect(statuses.find((item) => item.name === 'alipay-bot')?.required).toBe(true)
-    expect(statuses.find((item) => item.name === 'agently-cli')?.required).toBe(true)
-    expect(statuses.find((item) => item.name === 'dsh')?.required).toBe(true)
+    expect(statuses.find((item) => item.name === 'agently-cli')?.required).toBe(false)
+    expect(statuses.find((item) => item.name === 'dsh')?.required).toBe(false)
+    expect(statuses.find((item) => item.name === 'codex-cli')?.required).toBe(false)
   })
 
   test('模块状态注册表包含浏览器自动化内核且标记为必选', () => {
@@ -211,13 +212,23 @@ describe('COS 功能模块统一管理', () => {
     })
   })
 
-  test('模块状态注册表包含创造模式且标记为必选', () => {
+  test('模块状态注册表包含创造模式且标记为可选', () => {
     const status = getFunctionalModuleStatuses(createRoot()).find((item) => item.name === 'dsh')
 
     expect(status).toMatchObject({
       name: 'dsh',
       displayName: '创造模式',
-      required: true,
+      required: false,
+    })
+  })
+
+  test('模块状态注册表包含 Agent QQ 邮箱 CLI 且标记为可选', () => {
+    const status = getFunctionalModuleStatuses(createRoot()).find((item) => item.name === 'agently-cli')
+
+    expect(status).toMatchObject({
+      name: 'agently-cli',
+      displayName: 'Agent QQ 邮箱 CLI',
+      required: false,
     })
   })
 
@@ -228,6 +239,16 @@ describe('COS 功能模块统一管理', () => {
       name: 'python-runtime',
       displayName: 'Python 3.12 运行环境',
       required: true,
+    })
+  })
+
+  test('模块状态注册表包含专业模式且标记为可选', () => {
+    const status = getFunctionalModuleStatuses(createRoot()).find((item) => item.name === 'codex-cli')
+
+    expect(status).toMatchObject({
+      name: 'codex-cli',
+      displayName: '专业模式',
+      required: false,
     })
   })
 })

@@ -35,9 +35,9 @@ const MODULE_DEFINITIONS: readonly FunctionalModuleDefinition[] = [
   { name: 'alipay-bot', displayName: '支付宝智能体 CLI', required: true },
   { name: 'playwright-core', displayName: '浏览器自动化内核', required: true },
   { name: 'python-runtime', displayName: 'Python 3.12 运行环境', required: true },
-  { name: 'agently-cli', displayName: 'Agent QQ 邮箱 CLI', required: true },
-  { name: 'dsh', displayName: '创造模式', required: true },
-  { name: 'codex-cli', displayName: '专业模式模块', required: false },
+  { name: 'agently-cli', displayName: 'Agent QQ 邮箱 CLI', required: false },
+  { name: 'dsh', displayName: '创造模式', required: false },
+  { name: 'codex-cli', displayName: '专业模式', required: false },
 ]
 
 export type FunctionalModuleFetch = (

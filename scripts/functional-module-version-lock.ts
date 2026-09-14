@@ -5,7 +5,7 @@ import { resolve } from 'node:path'
 import type { FunctionalModuleManifest, FunctionalModuleName, FunctionalModulePlatform, FunctionalModuleArchitecture } from '@copis/shared'
 import type { FunctionalModuleBinaryInput } from './functional-module-publisher'
 
-const LOCKED_MODULES = ['node-runtime', 'python-runtime', 'alipay-bot', 'playwright-core', 'agently-cli', 'dsh'] as const
+const LOCKED_MODULES = ['node-runtime', 'python-runtime', 'alipay-bot', 'playwright-core', 'agently-cli', 'dsh', 'codex-cli'] as const
 type LockedModuleName = (typeof LOCKED_MODULES)[number]
 
 export interface FunctionalModuleVersionLocks {
@@ -15,6 +15,7 @@ export interface FunctionalModuleVersionLocks {
   'playwright-core': string
   'agently-cli': string
   'dsh': string
+  'codex-cli': string
 }
 
 export const DEFAULT_FUNCTIONAL_MODULE_VERSIONS_PATH = resolve(
@@ -40,6 +41,7 @@ export function loadFunctionalModuleVersionLocks(
     'playwright-core': validateVersion(value['playwright-core'], 'playwright-core', path),
     'agently-cli': validateVersion(value['agently-cli'], 'agently-cli', path),
     'dsh': validateVersion(value['dsh'], 'dsh', path),
+    'codex-cli': validateVersion(value['codex-cli'], 'codex-cli', path),
   }
 }
 

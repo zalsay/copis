@@ -52,18 +52,18 @@ export const FUNCTIONAL_MODULE_DEFINITIONS: readonly FunctionalModuleDefinition[
     name: 'agently-cli',
     displayName: 'Agent QQ 邮箱 CLI',
     description: '为 Copis 提供 Agent 原生邮箱 (@agent.qq.com) 收发与管理能力',
-    required: true,
+    required: false,
   },
   {
     name: 'dsh',
     displayName: '创造模式',
     description: '为 Copis 提供创造模式智能体运行时与工具执行环境',
-    required: true,
+    required: false,
   },
   {
     name: 'codex-cli',
-    displayName: '专业模式模块',
-    description: '专业模式后台运行核心组件',
+    displayName: '专业模式',
+    description: '为 Copis 提供专业模式智能体运行时与核心执行环境',
     required: false,
   },
 ]

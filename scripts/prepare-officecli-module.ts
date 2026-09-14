@@ -14,6 +14,7 @@ import type { FunctionalModuleArchitecture, FunctionalModulePlatform } from '@co
 
 export const OFFICECLI_RELEASE_TAG = 'v1.0.143'
 export const DEFAULT_RELEASE_API = `https://api.github.com/repos/iOfficeAI/OfficeCLI/releases/tags/${OFFICECLI_RELEASE_TAG}`
+export const DEFAULT_DIRECT_DOWNLOAD_BASE = 'https://github.com/iOfficeAI/OfficeCLI/releases/download'
 
 interface GitHubReleaseAsset {
   name: string
@@ -43,8 +44,10 @@ export interface PrepareOfficeCliModuleInput {
   platform: FunctionalModulePlatform
   arch: FunctionalModuleArchitecture
   output: string
+  version?: string
   releaseApiUrl?: string
   publicManifestUrl?: string
+  directDownloadBaseUrl?: string
 }
 
 export interface PreparedOfficeCliModule {
@@ -61,7 +64,8 @@ if (import.meta.main) await main()
 export async function prepareOfficeCliModule(
   input: PrepareOfficeCliModuleInput,
 ): Promise<PreparedOfficeCliModule> {
-  const expectedVersion = releaseVersion(OFFICECLI_RELEASE_TAG)
+  const expectedVersion = input.version ? releaseVersion(input.version) : releaseVersion(OFFICECLI_RELEASE_TAG)
+  const releaseTag = `v${expectedVersion}`
   const assetName = officeCliAssetName(input.platform, input.arch)
   const output = resolve(input.output)
   const cached = readVerifiedCache(output, expectedVersion, assetName)
@@ -95,7 +99,39 @@ export async function prepareOfficeCliModule(
     return { path: output, version: expectedVersion, sha256, size: binary.byteLength }
   }
 
-  const release = await fetchGitHubRelease(input.releaseApiUrl ?? DEFAULT_RELEASE_API)
+  const defaultReleaseApi = `https://api.github.com/repos/iOfficeAI/OfficeCLI/releases/tags/${releaseTag}`
+  const targetReleaseApi = input.releaseApiUrl ?? defaultReleaseApi
+  const allowDirectFallback = !input.releaseApiUrl || Boolean(input.directDownloadBaseUrl)
+  const directDownloadBase = input.directDownloadBaseUrl ?? DEFAULT_DIRECT_DOWNLOAD_BASE
+
+  let release: GitHubRelease | undefined
+  try {
+    release = await fetchGitHubRelease(targetReleaseApi)
+  } catch (apiError) {
+    if (!allowDirectFallback) throw apiError
+    console.warn(
+      `[prepare:officecli-module] GitHub API 访问受限或失败，回退到 GitHub Release 静态资源直链下载: ${formatThrownError(apiError)}`,
+    )
+    try {
+      return await fetchDirectGitHubRelease(
+        directDownloadBase,
+        releaseTag,
+        expectedVersion,
+        assetName,
+        output,
+        input.platform,
+      )
+    } catch (directError) {
+      throw new Error(
+        [
+          'OfficeCLI 准备失败：GitHub API 与静态直链下载均异常',
+          `1. GitHub API 错误:\n${formatThrownError(apiError)}`,
+          `2. 静态直链下载错误:\n${formatThrownError(directError)}`,
+        ].join('\n\n'),
+      )
+    }
+  }
+
   const version = releaseVersion(release.tagName)
   const binaryAsset = release.assets.find((asset) => asset.name === assetName)
   if (!binaryAsset) throw new Error(`OfficeCLI release 缺少目标二进制: ${assetName}`)
@@ -133,8 +169,10 @@ async function main(): Promise<void> {
     platform,
     arch,
     output,
+    version: option('--version') ?? process.env.COPIS_OFFICECLI_VERSION?.trim(),
     releaseApiUrl: option('--release-api-url') ?? process.env.COPIS_OFFICECLI_RELEASE_API?.trim(),
     publicManifestUrl: option('--public-manifest-url') ?? process.env.COPIS_OFFICECLI_PUBLIC_MANIFEST_URL?.trim(),
+    directDownloadBaseUrl: option('--direct-download-base-url') ?? process.env.COPIS_OFFICECLI_DIRECT_DOWNLOAD_BASE?.trim(),
   })
   console.log(
     `[prepare:officecli-module] 已准备 OfficeCLI v${prepared.version}: ${prepared.path} sha256=${prepared.sha256} size=${prepared.size}`,
@@ -284,11 +322,17 @@ function isHttpUrl(value: string): boolean {
 }
 
 async function fetchGitHubRelease(url: string): Promise<GitHubRelease> {
+  const headers: Record<string, string> = {
+    Accept: 'application/vnd.github+json',
+    'User-Agent': 'Copis-functional-module-release',
+  }
+  const token = process.env.GITHUB_TOKEN?.trim() || process.env.GH_TOKEN?.trim()
+  if (token) {
+    headers.Authorization = `Bearer ${token}`
+  }
+
   const response = await fetchWithDiagnostics(url, '读取 OfficeCLI GitHub release 失败', {
-    headers: {
-      Accept: 'application/vnd.github+json',
-      'User-Agent': 'Copis-functional-module-release',
-    },
+    headers,
   })
 
   const value = await response.json() as unknown
@@ -297,6 +341,40 @@ async function fetchGitHubRelease(url: string): Promise<GitHubRelease> {
   }
   const assets = value.assets.map(parseReleaseAsset)
   return { tagName: value.tag_name, assets }
+}
+
+async function fetchDirectGitHubRelease(
+  downloadBaseUrl: string,
+  tag: string,
+  version: string,
+  assetName: string,
+  output: string,
+  platform: FunctionalModulePlatform,
+): Promise<PreparedOfficeCliModule> {
+  const normalizedBase = downloadBaseUrl.replace(/\/+$/, '')
+  const checksumUrl = `${normalizedBase}/${tag}/SHA256SUMS`
+  const checksumText = await fetchText(checksumUrl, 'SHA256SUMS')
+  const expectedSha256 = checksumForAsset(checksumText, assetName)
+
+  const existing = readExistingBinary(output)
+  if (existing) {
+    const sha256 = createHash('sha256').update(existing).digest('hex')
+    if (sha256 === expectedSha256) {
+      writeCacheMetadata(output, { version, assetName, sha256 })
+      return { path: output, version, sha256, size: existing.byteLength }
+    }
+  }
+
+  const binaryUrl = `${normalizedBase}/${tag}/${assetName}`
+  const binary = await fetchBinary(binaryUrl, assetName)
+  const sha256 = createHash('sha256').update(binary).digest('hex')
+  if (sha256 !== expectedSha256) {
+    throw new Error(`OfficeCLI SHA256 校验失败: ${assetName}`)
+  }
+
+  writeBinary(output, binary, platform)
+  writeCacheMetadata(output, { version, assetName, sha256 })
+  return { path: output, version, sha256, size: binary.byteLength }
 }
 
 function parseReleaseAsset(value: unknown): GitHubReleaseAsset {

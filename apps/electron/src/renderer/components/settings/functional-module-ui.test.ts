@@ -18,6 +18,7 @@ describe('功能模块设置页模型', () => {
       'python-runtime',
       'agently-cli',
       'dsh',
+      'codex-cli',
     ])
     expect(FUNCTIONAL_MODULE_DEFINITIONS.find((item) => item.name === 'node-runtime')?.required).toBe(true)
     expect(FUNCTIONAL_MODULE_DEFINITIONS.find((item) => item.name === 'rust-http-api')?.required).toBe(true)
@@ -25,8 +26,9 @@ describe('功能模块设置页模型', () => {
     expect(FUNCTIONAL_MODULE_DEFINITIONS.find((item) => item.name === 'alipay-bot')?.required).toBe(true)
     expect(FUNCTIONAL_MODULE_DEFINITIONS.find((item) => item.name === 'playwright-core')?.required).toBe(true)
     expect(FUNCTIONAL_MODULE_DEFINITIONS.find((item) => item.name === 'python-runtime')?.required).toBe(true)
-    expect(FUNCTIONAL_MODULE_DEFINITIONS.find((item) => item.name === 'agently-cli')?.required).toBe(true)
-    expect(FUNCTIONAL_MODULE_DEFINITIONS.find((item) => item.name === 'dsh')?.required).toBe(true)
+    expect(FUNCTIONAL_MODULE_DEFINITIONS.find((item) => item.name === 'agently-cli')?.required).toBe(false)
+    expect(FUNCTIONAL_MODULE_DEFINITIONS.find((item) => item.name === 'dsh')?.required).toBe(false)
+    expect(FUNCTIONAL_MODULE_DEFINITIONS.find((item) => item.name === 'codex-cli')?.required).toBe(false)
     expect(FUNCTIONAL_MODULE_DEFINITIONS.map((item) => item.displayName)).toEqual([
       'Node.js 运行环境',
       '系统核心模块',
@@ -36,6 +38,7 @@ describe('功能模块设置页模型', () => {
       'Python 3.12 运行环境',
       'Agent QQ 邮箱 CLI',
       '创造模式',
+      '专业模式',
     ])
     expect(FUNCTIONAL_MODULE_DEFINITIONS.every((item) => !/Rust|HTTP|API|Electron/.test(`${item.displayName} ${item.description}`))).toBe(true)
   })

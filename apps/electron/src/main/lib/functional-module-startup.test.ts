@@ -418,8 +418,9 @@ describe('登录后功能模块启动契约', () => {
         ['alipay-bot', true, true],
         ['playwright-core', true, true],
         ['python-runtime', true, true],
-        ['agently-cli', false, true],
-        ['dsh', false, true],
+        ['agently-cli', false, false],
+        ['dsh', false, false],
+        ['codex-cli', false, false],
       ])
       expect(progress.some((item) => item.phase === 'modules' && item.progress === 0.95)).toBe(true)
       expect(progress.some((item) => item.phase === 'health' && item.progress >= 0.95)).toBe(true)
