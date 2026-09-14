@@ -14,8 +14,10 @@ const webBookmarksSourcePath = resolve(import.meta.dir, '../ipc/web-bookmarks.ip
 const webBookmarksSource = readFileSync(webBookmarksSourcePath, 'utf8')
 const browserWorkflowSourcePath = resolve(import.meta.dir, '../ipc/browser-workflow.ipc.ts')
 const browserWorkflowSource = readFileSync(browserWorkflowSourcePath, 'utf8')
+const webSyncSourcePath = resolve(import.meta.dir, '../ipc/web-sync.ipc.ts')
+const webSyncSource = readFileSync(webSyncSourcePath, 'utf8')
 
-const baselineSha256 = '018ebf8b1c8e2e62ba93c166b939e5efe1ecfd2dcc727487875bfe23472c3160'
+const baselineSha256 = '271d5709ceb0742fe1d72397b92484df0475457d9a624cdcce46f708cb3bb516'
 
 function inventoryFunction(text: string, fileName: string, functionName: string) {
   const file = ts.createSourceFile(fileName, text, ts.ScriptTarget.Latest, true)
@@ -53,6 +55,7 @@ const registrars = new Map([
   ['registerWebTabsProjectIpcHandlers', { source: webTabsSource, path: webTabsSourcePath }],
   ['registerWebBookmarksWindowIpcHandlers', { source: webBookmarksSource, path: webBookmarksSourcePath }],
   ['registerWebBookmarksStoreIpcHandlers', { source: webBookmarksSource, path: webBookmarksSourcePath }],
+  ['registerWebSyncIpcHandlers', { source: webSyncSource, path: webSyncSourcePath }],
   ['registerBrowserWorkflowIpcHandlers', { source: browserWorkflowSource, path: browserWorkflowSourcePath }],
 ])
 const file = ts.createSourceFile(sourcePath, source, ts.ScriptTarget.Latest, true)
@@ -109,8 +112,8 @@ const canonical = entries.map((entry) => `${entry.kind}|${entry.channel}`).join(
 const handleCount = entries.filter((entry) => entry.kind === 'handle').length
 const onCount = entries.filter((entry) => entry.kind === 'on').length
 
-test('迁移前注册契约保持 376 个 handle 和 5 个 on', () => {
-  expect(handleCount).toBe(376)
+test('迁移前注册契约保持 383 个 handle 和 5 个 on', () => {
+  expect(handleCount).toBe(383)
   expect(onCount).toBe(5)
   expect(new Set(entries.map((entry) => `${entry.kind}|${entry.channel}`)).size).toBe(entries.length)
   expect(createHash('sha256').update(canonical).digest('hex')).toBe(baselineSha256)

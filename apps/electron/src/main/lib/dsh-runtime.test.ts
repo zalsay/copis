@@ -1,8 +1,9 @@
 import { afterEach, describe, expect, test } from 'bun:test'
+import { spawn } from 'node:child_process'
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-import { resolveDshCommand, resolveDshNode } from './dsh-runtime'
+import { dirname, join } from 'node:path'
+import { resolveDshCommand, resolveDshNode, resolveDshSpawnSpec } from './dsh-runtime'
 import {
   activateFunctionalModule,
   getFunctionalModulePaths,
@@ -108,5 +109,65 @@ describe('dsh-runtime', () => {
 
     const resolved = resolveDshNode(root)
     expect(resolved).toBe(nodePath)
+  })
+
+  test('Given Windows DSH cmd 与内置 Node When 生成启动参数 Then 直接使用 Node 执行 CLI 入口', () => {
+    const root = createTempRoot()
+    const dshCommand = join(root, 'bin', 'dsh.cmd')
+    const cliEntry = join(root, 'runtime', 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js')
+    const dshNode = join(root, 'node-runtime', 'bin', 'node.exe')
+    mkdirSync(join(root, 'bin'), { recursive: true })
+    mkdirSync(dirname(cliEntry), { recursive: true })
+    writeFileSync(dshCommand, '@echo off\r\n', 'utf8')
+    writeFileSync(cliEntry, '', 'utf8')
+
+    expect(resolveDshSpawnSpec({
+      dshCommand,
+      dshNode,
+      args: ['--profile', 'copis'],
+      platform: 'win32',
+    })).toEqual({
+      command: dshNode,
+      args: [cliEntry, '--profile', 'copis'],
+    })
+  })
+
+  test('Given Windows 外部 DSH cmd When 生成启动参数 Then 通过 ComSpec 安全启动脚本', () => {
+    const dshCommand = join(createTempRoot(), 'bin', 'dsh.cmd')
+    const comSpec = process.env.ComSpec || 'cmd.exe'
+
+    expect(resolveDshSpawnSpec({
+      dshCommand,
+      args: ['--profile', 'copis'],
+      platform: 'win32',
+    })).toEqual({
+      command: comSpec,
+      args: ['/d', '/s', '/c', `call "${dshCommand}" "--profile" "copis"`],
+      windowsVerbatimArguments: true,
+    })
+  })
+
+  test('Given Windows 外部 DSH cmd 路径包含空格 When 启动进程 Then 不截断路径且正常退出', async () => {
+    if (process.platform !== 'win32') return
+
+    const root = join(createTempRoot(), 'dsh module with spaces')
+    const dshCommand = join(root, 'bin', 'dsh.cmd')
+    mkdirSync(dirname(dshCommand), { recursive: true })
+    writeFileSync(dshCommand, '@echo off\r\nexit /b 0\r\n', 'utf8')
+    const spawnSpec = resolveDshSpawnSpec({
+      dshCommand,
+      args: ['--profile', 'copis'],
+      platform: 'win32',
+    })
+
+    const child = spawn(spawnSpec.command, spawnSpec.args, {
+      stdio: 'ignore',
+      windowsVerbatimArguments: spawnSpec.windowsVerbatimArguments,
+    })
+    const exitCode = await new Promise<number | null>((resolveExit, reject) => {
+      child.once('error', reject)
+      child.once('exit', resolveExit)
+    })
+    expect(exitCode).toBe(0)
   })
 })

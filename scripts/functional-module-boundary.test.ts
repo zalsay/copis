@@ -62,6 +62,12 @@ describe('功能模块发布边界', () => {
     expect(deployScript).toContain("Join-Path $rootDir '.env'")
   })
 
+  test('PowerShell 部署入口先解析 Bun 再读取 Electron 平台版本', () => {
+    expect(deployScript.indexOf('$bunPath = Resolve-BunPath')).toBeLessThan(
+      deployScript.indexOf('$appVersion = (& $bunPath'),
+    )
+  })
+
   test('Rust-only 部署入口不要求本地 OfficeCLI', () => {
     expect(buildManifestScript).toContain('--rust')
     expect(deployShellScript).toContain('--rust')

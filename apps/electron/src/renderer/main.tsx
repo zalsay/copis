@@ -95,6 +95,7 @@ import { agentToolsAtom } from './atoms/agent-tool-atoms'
 import { feishuBotStatesAtom } from './atoms/feishu-atoms'
 import { dingtalkBotStatesAtom } from './atoms/dingtalk-atoms'
 import { channelsAtom, channelsLoadedAtom, selectedModelAtom } from './atoms/model-atoms'
+import { webSyncStateAtom } from './atoms/web-sync'
 import { appModeAtom, normalizeAppMode } from './atoms/app-mode'
 import { activeViewAtom } from './atoms/active-view'
 import {
@@ -1075,6 +1076,34 @@ function extractLegacyActiveTabId(tabState: unknown): string | null {
   return panels[focusedIndex]?.activeTabId ?? panels[0]?.activeTabId ?? null
 }
 
+/**
+ * 网页增量同步初始化组件
+ *
+ * - 启动时加载初始同步状态（WebSyncState）
+ * - 订阅主进程推送的同步状态更新（防抖增量同步完成、登录同步、立即同步等）
+ */
+function WebSyncInitializer(): null {
+  const store = useStore()
+
+  useEffect(() => {
+    window.electronAPI.webSync?.getState?.()
+      .then((state) => {
+        if (state) store.set(webSyncStateAtom, state)
+      })
+      .catch((err: unknown) => console.error('[WebSyncInitializer] 获取初始同步状态失败:', err))
+
+    const cleanup = window.electronAPI.webSync?.onStateChanged?.((nextState) => {
+      store.set(webSyncStateAtom, nextState)
+    })
+
+    return () => {
+      cleanup?.()
+    }
+  }, [store])
+
+  return null
+}
+
 function TabStatePersistenceInitializer(): null {
   const store = useStore()
   const restoredRef = useRef(false)
@@ -1271,6 +1300,7 @@ if (isQuickTaskWindow) {
     ReactDOM.createRoot(document.getElementById('root')!).render(
       <React.StrictMode>
         <ThemeInitializer />
+        <WebSyncInitializer />
         <WebBookmarksWindowApp />
       </React.StrictMode>
     )
@@ -1299,6 +1329,7 @@ if (isQuickTaskWindow) {
       <PlanningInitializer />
       <FeishuInitializer />
       <DingTalkInitializer />
+      <WebSyncInitializer />
       <TabStatePersistenceInitializer />
       <WindowControls quitApp />
       <VoiceDictationApp embedded />

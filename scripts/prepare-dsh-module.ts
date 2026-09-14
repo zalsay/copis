@@ -20,11 +20,13 @@ import { gzipSync } from 'node:zlib'
 import type { FunctionalModuleArchitecture, FunctionalModulePlatform } from '@copis/shared'
 import { patchDshComposerHistoryRuntime } from '../apps/electron/src/main/lib/dsh-composer-history-patch'
 import { patchDshHeroLogoRuntime } from '../apps/electron/src/main/lib/dsh-hero-logo-patch'
-export { patchDshSidebarRuntime, patchDshSidebarSource } from '../apps/electron/src/main/lib/dsh-sidebar-patch'
+import { patchDshSidebarRuntime, patchDshSidebarSource } from '../apps/electron/src/main/lib/dsh-sidebar-patch'
+
+export { patchDshSidebarRuntime, patchDshSidebarSource }
 
 export const DSH_PACKAGE = '@deepseek-ai/dsh'
 export const DSH_PACKAGE_VERSION = '0.1.2-rc.1'
-export const DSH_VERSION = '0.1.2'
+export const DSH_VERSION = '0.1.3'
 export const DSH_INTEGRITY = 'sha512-RPq48TzxvwpdT9/7W1tbhZDBMmeK+bxDrX9cqQC27Wx/LqtgJF8PSa3b3xriU8oxtvhwYmk21w2cej3uMQrnVA=='
 export const DSH_ENTRYPOINT = 'bin/dsh'
 const DSH_RUNTIME_ENTRYPOINT = 'node_modules/@deepseek-ai/dsh/lib/bin.js'
@@ -45,6 +47,11 @@ interface PreparedDshModuleMetadata {
   packageVersion: string
   package: string
   path: string
+}
+
+interface NpmInvocation {
+  command: string
+  args: string[]
 }
 
 if (import.meta.main) main()
@@ -769,6 +776,49 @@ export function patchDshDetailsPanelFilePreviewSource(source: string): string {
 							})
 						)`
 
+  // 当前官方 bundle 的 DetailsPanel 只展示工具详情，需要在其外层补回 Web+ 工作区与预览页签。
+  if (source.includes('function DetailsPanel({ useChat, useSessions, sessionId, useStore, renderSlot, closeDetails, t })')) {
+    const materialDeclaration = 'const material = useChat((s) => callId === void 0 ? null : materialFor(s, callId), (a, b) => (0, _deepseek_ai_dsh_client_store.shallowEqual)(a, b));'
+    const title = 'children: selection === null ? t("details.title") : material?.name ?? selection.toolName ?? t("details.title")'
+    const bodyExpression = 'selection === null || callId === void 0 ?'
+    const body = `children: ${bodyExpression}`
+    if (!source.includes(materialDeclaration) || !source.includes(title) || !source.includes(body)) {
+      throw new Error('DSH Chat DetailsPanel 当前版本结构与 Web+ 补丁不匹配')
+    }
+
+    const tabs = `(0, react_jsx_runtime.jsxs)("div", {
+						style: { display: "flex", alignItems: "center", gap: "4px", marginLeft: "auto" },
+						children: [
+							(0, react_jsx_runtime.jsx)("button", {
+								type: "button",
+								onClick: () => setActiveTab("files"),
+								style: { border: "none", borderRadius: "6px", padding: "4px 8px", cursor: "pointer", fontSize: "12px", background: activeTab === "files" || activeTab === "preview" ? "var(--dsw-alias-interactive-bg-hover, rgba(120, 120, 128, 0.16))" : "transparent", color: "var(--dsw-alias-label-primary)" },
+								children: "工作区"
+							}),
+							(0, react_jsx_runtime.jsx)("button", {
+								type: "button",
+								disabled: selection === null,
+								onClick: () => setActiveTab("tool"),
+								style: { border: "none", borderRadius: "6px", padding: "4px 8px", cursor: selection === null ? "default" : "pointer", fontSize: "12px", opacity: selection === null ? 0.45 : 1, background: activeTab === "tool" ? "var(--dsw-alias-interactive-bg-hover, rgba(120, 120, 128, 0.16))" : "transparent", color: "var(--dsw-alias-label-primary)" },
+								children: "工具"
+							})
+						]
+					}), `
+
+    let patched = source
+      .replace(materialDeclaration, `${materialDeclaration}\n\t\t\t${DECLARATIONS_CHUNK}\n\t\t\t(0, react.useEffect)(() => { if (selection !== null) setActiveTab("tool"); }, [selection?.callId]);`)
+      .replace(title, 'children: activeTab === "files" ? "工作区" : activeTab === "preview" ? previewingFile?.name ?? "文件预览" : selection === null ? t("details.title") : material?.name ?? selection.toolName ?? t("details.title")')
+      .replace(body, `children: activeTab === "preview" ? (\n${PREVIEW_CHUNK}\n\t\t\t\t\t) : ${WORKSPACE_TREE_BODY_CONTENT}\n\t\t\t\t\t: ${bodyExpression}`)
+
+    const closeClassIndex = patched.indexOf('className: DetailsPanel_module_css_default.close,')
+    const closeButtonIndex = patched.lastIndexOf('(0, react_jsx_runtime.jsx)("button", {', closeClassIndex)
+    if (closeClassIndex === -1 || closeButtonIndex === -1) {
+      throw new Error('DSH Chat DetailsPanel 当前版本缺少关闭按钮锚点')
+    }
+    patched = `${patched.slice(0, closeButtonIndex)}${tabs}${patched.slice(closeButtonIndex)}`
+    return patched
+  }
+
   // 1. 如果包含第一代纯文件预览补丁（v1），进行就地升级
   if (source.includes('const [previewingFile, setPreviewingFile] =')) {
     const declStart = 'const [activeTab, setActiveTab] = (0, react.useState)("files");'
@@ -1058,10 +1108,10 @@ export function patchDshCordisPanelSource(source: string): string {
 function installOfficialCli(runtimeRoot: string, packageCache: string): void {
   mkdirSync(runtimeRoot, { recursive: true })
   mkdirSync(packageCache, { recursive: true })
-  const npmPath = resolveNpmPath()
-  const packageTarball = downloadOfficialPackage(npmPath, packageCache)
+  const npm = resolveNpmInvocation()
+  const packageTarball = downloadOfficialPackage(npm, packageCache)
   verifyOfficialPackage(packageTarball)
-  execFileSync(npmPath, [
+  execFileSync(npm.command, [...npm.args,
     'install',
     '--ignore-scripts',
     '--omit=dev',
@@ -1073,8 +1123,8 @@ function installOfficialCli(runtimeRoot: string, packageCache: string): void {
   ], { cwd: runtimeRoot, stdio: 'inherit' })
 }
 
-function downloadOfficialPackage(npmPath: string, packageCache: string): string {
-  const output = execFileSync(npmPath, [
+function downloadOfficialPackage(npm: NpmInvocation, packageCache: string): string {
+  const output = execFileSync(npm.command, [...npm.args,
     'pack',
     '--silent',
     `${DSH_PACKAGE}@${DSH_PACKAGE_VERSION}`,
@@ -1139,11 +1189,20 @@ function normalizeTimestamps(path: string): void {
   utimesSync(path, new Date(0), new Date(0))
 }
 
-function resolveNpmPath(): string {
-  const nodePath = execFileSync('node', ['-p', 'process.execPath'], { encoding: 'utf8' }).trim()
-  const npmPath = process.platform === 'win32' ? join(dirname(nodePath), 'npm.cmd') : join(dirname(nodePath), 'npm')
+export function resolveNpmInvocation(
+  nodePath = execFileSync('node', ['-p', 'process.execPath'], { encoding: 'utf8' }).trim(),
+  platform: NodeJS.Platform = process.platform,
+): NpmInvocation {
+  const npmPath = platform === 'win32' ? join(dirname(nodePath), 'npm.cmd') : join(dirname(nodePath), 'npm')
   if (!isFile(npmPath)) throw new Error('未找到与 Node.js 配套的 npm')
-  return npmPath
+  if (platform !== 'win32') return { command: npmPath, args: [] }
+
+  const npmCli = [
+    join(dirname(nodePath), 'node_modules/npm/bin/npm-cli.js'),
+    join(dirname(nodePath), '../lib/node_modules/npm/bin/npm-cli.js'),
+  ].find(isFile)
+  if (!npmCli) throw new Error('未找到 npm CLI 入口')
+  return { command: nodePath, args: [npmCli] }
 }
 
 function isFile(path: string): boolean {

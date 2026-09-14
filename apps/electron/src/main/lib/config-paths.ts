@@ -324,6 +324,16 @@ export function getWebPasswordsDatabasePath(): string {
   return join(getConfigDir(), 'web-passwords.db')
 }
 
+/** 获取网页 Profile 配置路径。 */
+export function getWebPageProfilesPath(): string {
+  return join(getConfigDir(), 'web-page-profiles.json')
+}
+
+/** 获取浏览器增量同步状态配置路径。 */
+export function getWebSyncStatePath(): string {
+  return join(getConfigDir(), 'web-sync-state.json')
+}
+
 /**
  * 获取代理配置文件路径
  *

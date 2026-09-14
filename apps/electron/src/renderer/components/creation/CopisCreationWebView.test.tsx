@@ -1,7 +1,25 @@
 import { describe, expect, test } from 'bun:test'
-import { isDshModuleMissingError } from './creation-dsh-helper'
+import { isDshModuleMissingError, shouldInstallDshModule } from './creation-dsh-helper'
 
 describe('CopisCreationWebView 侧边栏宽度与原生视图布局契约', () => {
+  test('Given 已安装旧版 DSH When 进入创造模式检查到更新 Then 先安装新版再启动 Web+', () => {
+    const { readFileSync } = require('node:fs')
+    const { join } = require('node:path')
+    const viewSource = readFileSync(join(__dirname, 'CopisCreationWebView.tsx'), 'utf8')
+
+    expect(shouldInstallDshModule({ installed: true, updateAvailable: true })).toBe(true)
+    expect(shouldInstallDshModule({ installed: false, updateAvailable: false })).toBe(true)
+    expect(shouldInstallDshModule({ installed: true, updateAvailable: false })).toBe(false)
+
+    const checkIndex = viewSource.indexOf("checkFunctionalModule('dsh')")
+    const installIndex = viewSource.indexOf("installFunctionalModule({ name: 'dsh' })")
+    const runtimeIndex = viewSource.indexOf('dshCordis.getStatus()', installIndex)
+    expect(checkIndex).toBeGreaterThan(-1)
+    expect(installIndex).toBeGreaterThan(checkIndex)
+    expect(runtimeIndex).toBeGreaterThan(installIndex)
+    expect(viewSource).toContain('if (previousRuntime.running) await window.electronAPI.dshCordis.stop()')
+  })
+
   test('Given 侧边栏宽度最小限制 When 检查安全展开下限 Then 恒定不低于 264px 避免误折叠', () => {
     const clampSidebarWidth = (w: number) => Math.max(264, Math.round(w))
 

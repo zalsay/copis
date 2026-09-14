@@ -12,7 +12,7 @@ import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import type { FundStockTerminalStatus } from '@copis/shared'
-import { resolveDshCommand, resolveDshNode } from './dsh-runtime'
+import { resolveDshCommand, resolveDshNode, resolveDshSpawnSpec } from './dsh-runtime'
 
 interface DshTradingServerState {
   process: ChildProcess | null
@@ -90,11 +90,27 @@ export async function startDshTradingServer(options: {
       ...(dshNode ? { COPIS_DSH_NODE: dshNode } : {}),
     }
 
-    const child = spawn(dshCmd, ['--profile', 'trading-web', '--no-open'], {
-      env,
-      stdio: ['ignore', 'pipe', 'pipe'],
-      detached: process.platform !== 'win32',
+    const spawnSpec = resolveDshSpawnSpec({
+      dshCommand: dshCmd,
+      dshNode,
+      args: ['--profile', 'trading-web', '--no-open'],
     })
+    let child: ChildProcess
+    try {
+      child = spawn(spawnSpec.command, spawnSpec.args, {
+        env,
+        stdio: ['ignore', 'pipe', 'pipe'],
+        detached: process.platform !== 'win32',
+        windowsVerbatimArguments: spawnSpec.windowsVerbatimArguments,
+      })
+    } catch (error) {
+      state.status = {
+        running: false,
+        error: error instanceof Error ? error.message : String(error),
+      }
+      resolve({ ...state.status })
+      return
+    }
 
     state.process = child
 

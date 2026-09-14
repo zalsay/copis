@@ -42,18 +42,6 @@ export function patchDshSidebarSource(source: string): string {
     )
   }
 
-  // 确保新建会话按钮在触发 startSession 前派发 triggerCopisNavigate("conversations")
-  source = source.replace(
-    /onClick:\s*\(\)\s*=>\s*\{\s*(?:triggerCopisNavigate\("conversations"\);\s*)?startSession\(\);\s*\}/g,
-    'onClick: () => {\n\t\t\t\t\t\t\t\ttriggerCopisNavigate("conversations");\n\t\t\t\t\t\t\t\tstartSession();\n\t\t\t\t\t\t\t}',
-  )
-
-  // 确保工作区列表容器带有 onClickCapture 捕获切回会话事件
-  source = source.replace(
-    /className:\s*SidebarRoot_module_css_default\.regionArea,\s*(?:onClickCapture:\s*\(\)\s*=>\s*\{\s*triggerCopisNavigate\("conversations"\);\s*\},\s*)?children:\s*renderSlot\("sidebar\.workspaces"/g,
-    'className: SidebarRoot_module_css_default.regionArea,\n\t\t\t\t\t\tonClickCapture: () => { triggerCopisNavigate("conversations"); },\n\t\t\t\t\t\tchildren: renderSlot("sidebar.workspaces"',
-  )
-
   // 确保侧边栏底部 footArea 移除意见反馈菜单项（已移入设置菜单）
   source = source.replace(
     /(?:wide\s*\?\s*)?\(0,\s*react_jsx_runtime\.jsx\)\(CopisMenuItem,\s*\{\s*label:\s*"意见反馈"[\s\S]*?\}\)\s*:\s*\(0,\s*react_jsx_runtime\.jsx\)\(CopisRailItem,\s*\{\s*label:\s*"意见反馈"[\s\S]*?\}\),?\s*/g,

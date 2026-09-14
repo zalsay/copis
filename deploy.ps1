@@ -259,13 +259,6 @@ if ($Platform -notin @('win32', 'darwin', 'linux')) { throw "Unsupported functio
 if ($Arch -notin @('x64', 'arm64')) { throw "Unsupported functional module architecture: $Arch" }
 if ([string]::IsNullOrWhiteSpace($Channel)) { throw 'Release channel cannot be empty.' }
 
-$electronPackagePath = Join-Path $appDir 'package.json'
-$electronPackage = Get-Content -LiteralPath $electronPackagePath -Raw -Encoding UTF8 | ConvertFrom-Json
-$appVersion = (& $bunPath (Join-Path $rootDir 'scripts\bump-electron-version.ts') '--get' '--platform' $Platform '--arch' $Arch | Out-String).Trim()
-if ([string]::IsNullOrWhiteSpace($appVersion)) { throw "Cannot read Electron version: $electronPackagePath" }
-$releaseVersion = if ([string]::IsNullOrWhiteSpace($Version)) { $appVersion } else { $Version.Trim() }
-$minimumClientVersion = if ([string]::IsNullOrWhiteSpace($ClientMinVersion)) { $releaseVersion } else { $ClientMinVersion.Trim() }
-
 function Resolve-BunPath {
     $command = Get-Command bun -ErrorAction SilentlyContinue
     if ($command) { return $command.Path }
@@ -438,6 +431,11 @@ function Read-DshVersion {
 $bunPath = Resolve-BunPath
 if (-not $bunPath) { throw 'Bun was not found in PATH, BUN_INSTALL, or the current user profile.' }
 $env:PATH = "$(Split-Path -Parent $bunPath)$([System.IO.Path]::PathSeparator)$env:PATH"
+$electronPackagePath = Join-Path $appDir 'package.json'
+$appVersion = (& $bunPath (Join-Path $rootDir 'scripts\bump-electron-version.ts') '--get' '--platform' $Platform '--arch' $Arch | Out-String).Trim()
+if ([string]::IsNullOrWhiteSpace($appVersion)) { throw "Cannot read Electron version: $electronPackagePath" }
+$releaseVersion = if ([string]::IsNullOrWhiteSpace($Version)) { $appVersion } else { $Version.Trim() }
+$minimumClientVersion = if ([string]::IsNullOrWhiteSpace($ClientMinVersion)) { $releaseVersion } else { $ClientMinVersion.Trim() }
 Write-Host "Using Bun: $bunPath"
 Write-Host "Release version: $releaseVersion; target: $Platform/$Arch; channel: $Channel"
 

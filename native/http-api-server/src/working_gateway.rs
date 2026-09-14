@@ -57,6 +57,7 @@ pub fn is_working_gateway_path(path: &str) -> bool {
         "/api/working/feedback",
         "/api/working/image",
         "/api/working/image/tasks",
+        "/api/working/browser/sync",
     ]
     .iter()
     .any(|prefix| path == *prefix || path.starts_with(&format!("{}/", prefix)))
@@ -367,6 +368,12 @@ pub fn handle_working_gateway_request(
             }
             _ => return Err(GatewayError::method_not_allowed()),
         }
+    }
+
+    if resource == "browser" && segments.len() == 4 && segments[3] == "sync" {
+        require_method(method, "POST")?;
+        let payload = parse_body(body)?;
+        return remote_json(gateway, method, "/api/working/browser/sync", Some(payload));
     }
 
     if resource == "orders" {

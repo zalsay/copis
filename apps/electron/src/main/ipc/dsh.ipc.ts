@@ -1,7 +1,7 @@
 import { ipcMain, BrowserWindow } from 'electron'
 import { DSH_CORDIS_IPC_CHANNELS, type DshReadFileResult } from '@copis/shared'
 import type { DshViewBounds, DshClientEvent } from '@copis/shared'
-import { getDshCordisStatus, reloadDshCordisPlugins, setDshStatusChangeBroadcaster, startDshCordisServer, stopDshCordisServer } from '../lib/dsh-cordis-service'
+import { getDshCordisStatus, reloadDshCordisPlugins, setDshStatusChangeBroadcaster, startDshCordisServer, stopDshCordisServerAndWait } from '../lib/dsh-cordis-service'
 import { ensureDshView, updateDshViewBounds, dispatchToDshClient } from '../lib/dsh-view-manager'
 
 export function registerDshIpcHandlers(): void {
@@ -21,8 +21,8 @@ export function registerDshIpcHandlers(): void {
 
   ipcMain.handle(
     DSH_CORDIS_IPC_CHANNELS.STOP,
-    () => {
-      return stopDshCordisServer()
+    async () => {
+      return stopDshCordisServerAndWait()
     }
   )
 

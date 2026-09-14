@@ -1,4 +1,7 @@
 import { describe, expect, test } from 'bun:test'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import {
   patchDshComposerModelSelectionSource,
   patchDshDetailsPanelFilePreviewSource,
@@ -9,6 +12,7 @@ import {
   DSH_VERSION,
   DSH_INTEGRITY,
   DSH_ENTRYPOINT,
+  resolveNpmInvocation,
 } from './prepare-dsh-module'
 
 const MODEL_SELECT_SOURCE = `
@@ -33,11 +37,51 @@ effortLabel !== void 0 && (0, react_jsx_runtime.jsx)("span", {
 });
 `
 
+const CURRENT_DETAILS_PANEL_SOURCE = `
+function DetailsPanel({ useChat, useSessions, sessionId, useStore, renderSlot, closeDetails, t }) {
+	const selection = useStore((s) => s.selection);
+	const sessionCwd = useSessions((list) => list.byId[sessionId]?.cwd);
+	const callId = selection?.callId;
+	const material = useChat((s) => callId === void 0 ? null : materialFor(s, callId), (a, b) => (0, _deepseek_ai_dsh_client_store.shallowEqual)(a, b));
+	return (0, react_jsx_runtime.jsxs)("div", {
+		children: [(0, react_jsx_runtime.jsxs)("div", {
+			children: [(0, react_jsx_runtime.jsx)("div", {
+				children: selection === null ? t("details.title") : material?.name ?? selection.toolName ?? t("details.title")
+			}), (0, react_jsx_runtime.jsx)("button", {
+				type: "button",
+				className: DetailsPanel_module_css_default.close,
+				children: "close"
+			})]
+		}), (0, react_jsx_runtime.jsx)("div", {
+			children: selection === null || callId === void 0 ? "empty" : "tool"
+		})]
+	});
+}
+`
+
 describe('dsh 运行环境功能模块准备', () => {
+  test('Given Windows 内置 Node 与 npm.cmd When 准备模块 Then 直接用 Node 执行 npm CLI', () => {
+    const root = mkdtempSync(join(tmpdir(), 'copis-dsh-npm-'))
+    const nodePath = join(root, 'bin', 'node.exe')
+    const npmPath = join(root, 'bin', 'npm.cmd')
+    const npmCli = join(root, 'lib', 'node_modules', 'npm', 'bin', 'npm-cli.js')
+    mkdirSync(join(root, 'bin'), { recursive: true })
+    mkdirSync(join(root, 'lib', 'node_modules', 'npm', 'bin'), { recursive: true })
+    writeFileSync(nodePath, '')
+    writeFileSync(npmPath, '')
+    writeFileSync(npmCli, '')
+
+    try {
+      expect(resolveNpmInvocation(nodePath, 'win32')).toEqual({ command: nodePath, args: [npmCli] })
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
   test('使用官方 npm 包并固定版本与入口', () => {
     expect(DSH_PACKAGE).toBe('@deepseek-ai/dsh')
     expect(DSH_PACKAGE_VERSION).toBe('0.1.2-rc.1')
-    expect(DSH_VERSION).toBe('0.1.2')
+    expect(DSH_VERSION).toBe('0.1.3')
     expect(DSH_ENTRYPOINT).toBe('bin/dsh')
     expect(DSH_INTEGRITY).toMatch(/^sha512-/)
   })
@@ -69,6 +113,16 @@ describe('dsh 运行环境功能模块准备', () => {
     expect(() => patchDshDetailsPanelFilePreviewSource('const [activeTab, setActiveTab] = "unsupported";')).toThrow(
       'DSH Chat DetailsPanel 组件结构与受支持版本不匹配',
     )
+  })
+
+  test('Given 当前官方 DetailsPanel When 注入 Web+ Then 增加工作区、文件预览与工具页签', () => {
+    const patched = patchDshDetailsPanelFilePreviewSource(CURRENT_DETAILS_PANEL_SOURCE)
+
+    expect(patched).toContain('window.copisBridge?.listDirectory')
+    expect(patched).toContain('window.copisBridge?.readFile')
+    expect(patched).toContain('children: "工作区"')
+    expect(patched).toContain('children: "工具"')
+    expect(patched).toContain('activeTab === "preview"')
   })
 
   test('DetailsPanel 补丁为详情面板注入文件点击预览、Tab 与高亮组件', () => {

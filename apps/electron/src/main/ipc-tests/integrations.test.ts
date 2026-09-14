@@ -43,7 +43,7 @@ mock.module('../lib/agent-mail-service', () => ({ AgentMailService: {
 } }))
 mock.module('../lib/dsh-cordis-service', () => ({
   getDshCordisStatus: () => ({}), reloadDshCordisPlugins: async () => {},
-  startDshCordisServer: async () => {}, stopDshCordisServer: () => {},
+  startDshCordisServer: async () => {}, stopDshCordisServer: () => {}, stopDshCordisServerAndWait: async () => {},
   setDshStatusChangeBroadcaster: (listener: typeof broadcast) => { broadcast = listener },
 }))
 mock.module('../lib/dsh-view-manager', () => ({ ensureDshView: () => {}, updateDshViewBounds: () => {}, dispatchToDshClient: () => {} }))

@@ -14,8 +14,30 @@ import type {
   WebBookmark,
   WebBookmarkGroup,
   WebBookmarksSnapshot,
+  WebBookmarkGroupChange,
+  WebBookmarkChange,
 } from '@copis/shared'
 import { getWebBookmarksPath } from './config-paths'
+
+const bookmarkChangeListeners = new Set<() => void>()
+
+/** 注册收藏夹本地变更监听器。 */
+export function addBookmarkChangeListener(listener: () => void): () => void {
+  bookmarkChangeListeners.add(listener)
+  return () => {
+    bookmarkChangeListeners.delete(listener)
+  }
+}
+
+function notifyBookmarkChangeListeners(): void {
+  for (const listener of bookmarkChangeListeners) {
+    try {
+      listener()
+    } catch (error) {
+      console.error('[网页收藏夹] 变更监听回调失败:', error)
+    }
+  }
+}
 
 function emptySnapshot(): WebBookmarksSnapshot {
   return { groups: [], bookmarks: [] }
@@ -38,7 +60,19 @@ function readGroups(value: unknown): WebBookmarkGroup[] {
     if (!id || !name || !Number.isFinite(item.createdAt) || seenIds.has(id)) return []
 
     seenIds.add(id)
-    return [{ id, name, createdAt: item.createdAt }]
+    const updatedAt = typeof item.updatedAt === 'number' && Number.isFinite(item.updatedAt) ? item.updatedAt : item.createdAt
+    const version = typeof item.version === 'number' && Number.isFinite(item.version) ? item.version : 1
+    const isDeleted = typeof item.isDeleted === 'boolean' ? item.isDeleted : false
+    const deletedAt = typeof item.deletedAt === 'number' && Number.isFinite(item.deletedAt) ? item.deletedAt : undefined
+    return [{
+      id,
+      name,
+      createdAt: item.createdAt,
+      updatedAt,
+      version,
+      isDeleted,
+      ...(deletedAt !== undefined ? { deletedAt } : {}),
+    }]
   })
 }
 
@@ -82,7 +116,22 @@ function readBookmarks(value: unknown, groups: WebBookmarkGroup[]): WebBookmark[
     if (!id || !title || !url || !Number.isFinite(item.createdAt)) return []
 
     const groupId = typeof item.groupId === 'string' && groupIds.has(item.groupId) ? item.groupId : null
-    return [{ id, title, url, faviconUrl: readFaviconUrl(item.faviconUrl, url), createdAt: item.createdAt, groupId }]
+    const updatedAt = typeof item.updatedAt === 'number' && Number.isFinite(item.updatedAt) ? item.updatedAt : item.createdAt
+    const version = typeof item.version === 'number' && Number.isFinite(item.version) ? item.version : 1
+    const isDeleted = typeof item.isDeleted === 'boolean' ? item.isDeleted : false
+    const deletedAt = typeof item.deletedAt === 'number' && Number.isFinite(item.deletedAt) ? item.deletedAt : undefined
+    return [{
+      id,
+      title,
+      url,
+      faviconUrl: readFaviconUrl(item.faviconUrl, url),
+      createdAt: item.createdAt,
+      groupId,
+      updatedAt,
+      version,
+      isDeleted,
+      ...(deletedAt !== undefined ? { deletedAt } : {}),
+    }]
   })
 }
 
@@ -102,7 +151,7 @@ function readSnapshot(): WebBookmarksSnapshot {
   }
 }
 
-function writeSnapshot(snapshot: WebBookmarksSnapshot): WebBookmarksSnapshot {
+function writeSnapshot(snapshot: WebBookmarksSnapshot, notify = true): WebBookmarksSnapshot {
   const filePath = getWebBookmarksPath()
   mkdirSync(dirname(filePath), { recursive: true })
   try {
@@ -110,6 +159,9 @@ function writeSnapshot(snapshot: WebBookmarksSnapshot): WebBookmarksSnapshot {
   } catch (error) {
     console.error('[网页收藏夹] 写入失败:', error)
     throw new Error('写入网页收藏夹失败')
+  }
+  if (notify) {
+    notifyBookmarkChangeListeners()
   }
   return snapshot
 }
@@ -167,8 +219,17 @@ function ensureGroupNameAvailable(
   }
 }
 
-/** 获取当前网页收藏夹。 */
+/** 获取当前活跃网页收藏夹（过滤掉已被软删除项）。 */
 export function getWebBookmarks(): WebBookmarksSnapshot {
+  const current = readSnapshot()
+  return {
+    groups: current.groups.filter((group) => !group.isDeleted),
+    bookmarks: current.bookmarks.filter((bookmark) => !bookmark.isDeleted),
+  }
+}
+
+/** 获取完整网页收藏夹快照（包含墓碑项，供同步服务使用）。 */
+export function getWebBookmarksRaw(): WebBookmarksSnapshot {
   return readSnapshot()
 }
 
@@ -182,6 +243,7 @@ export function saveWebBookmark(input: SaveWebBookmarkInput): WebBookmarksSnapsh
   const current = readSnapshot()
   const existing = current.bookmarks.find((bookmark) => bookmark.url === url)
   const groupId = resolveGroupId(input.groupId, current, existing)
+  const now = Date.now()
 
   if (existing) {
     const nextFavicon = faviconUrl === undefined
@@ -190,7 +252,17 @@ export function saveWebBookmark(input: SaveWebBookmarkInput): WebBookmarksSnapsh
     return writeSnapshot({
       groups: current.groups,
       bookmarks: current.bookmarks.map((bookmark) => bookmark.id === existing.id
-        ? { ...bookmark, title, url, faviconUrl: nextFavicon, groupId }
+        ? {
+          ...bookmark,
+          title,
+          url,
+          faviconUrl: nextFavicon,
+          groupId,
+          updatedAt: now,
+          version: (existing.version ?? 1) + 1,
+          isDeleted: false,
+          deletedAt: undefined,
+        }
         : bookmark),
     })
   }
@@ -200,28 +272,52 @@ export function saveWebBookmark(input: SaveWebBookmarkInput): WebBookmarksSnapsh
     title,
     url,
     faviconUrl: faviconUrl ?? fallbackFavicon,
-    createdAt: Date.now(),
+    createdAt: now,
+    updatedAt: now,
+    version: 1,
+    isDeleted: false,
     groupId,
   }
   return writeSnapshot({ groups: current.groups, bookmarks: [bookmark, ...current.bookmarks] })
 }
 
-/** 删除指定网页收藏。 */
+/** 删除指定网页收藏（使用墓碑标记以便增量同步）。 */
 export function removeWebBookmark(bookmarkId: string): WebBookmarksSnapshot {
   const current = readSnapshot()
-  return writeSnapshot({
+  const target = current.bookmarks.find((bookmark) => bookmark.id === bookmarkId)
+  if (!target) return getWebBookmarks()
+
+  const now = Date.now()
+  writeSnapshot({
     groups: current.groups,
-    bookmarks: current.bookmarks.filter((bookmark) => bookmark.id !== bookmarkId),
+    bookmarks: current.bookmarks.map((bookmark) => bookmark.id === bookmarkId
+      ? {
+        ...bookmark,
+        isDeleted: true,
+        deletedAt: now,
+        updatedAt: now,
+        version: (bookmark.version ?? 1) + 1,
+      }
+      : bookmark),
   })
+  return getWebBookmarks()
 }
 
 /** 创建网页收藏分组。 */
 export function createWebBookmarkGroup(input: CreateWebBookmarkGroupInput): WebBookmarksSnapshot {
   const name = validateGroupName(input.name)
   const current = readSnapshot()
-  ensureGroupNameAvailable(name, current.groups)
+  ensureGroupNameAvailable(name, current.groups.filter((g) => !g.isDeleted))
+  const now = Date.now()
 
-  const group: WebBookmarkGroup = { id: randomUUID(), name, createdAt: Date.now() }
+  const group: WebBookmarkGroup = {
+    id: randomUUID(),
+    name,
+    createdAt: now,
+    updatedAt: now,
+    version: 1,
+    isDeleted: false,
+  }
   return writeSnapshot({ groups: [group, ...current.groups], bookmarks: current.bookmarks })
 }
 
@@ -229,24 +325,103 @@ export function createWebBookmarkGroup(input: CreateWebBookmarkGroupInput): WebB
 export function renameWebBookmarkGroup(input: RenameWebBookmarkGroupInput): WebBookmarksSnapshot {
   const name = validateGroupName(input.name)
   const current = readSnapshot()
-  if (!current.groups.some((group) => group.id === input.groupId)) throw new Error('收藏分组不存在')
-  ensureGroupNameAvailable(name, current.groups, input.groupId)
+  const target = current.groups.find((group) => group.id === input.groupId && !group.isDeleted)
+  if (!target) throw new Error('收藏分组不存在')
+  ensureGroupNameAvailable(name, current.groups.filter((g) => !g.isDeleted), input.groupId)
+  const now = Date.now()
 
   return writeSnapshot({
-    groups: current.groups.map((group) => group.id === input.groupId ? { ...group, name } : group),
+    groups: current.groups.map((group) => group.id === input.groupId
+      ? { ...group, name, updatedAt: now, version: (group.version ?? 1) + 1 }
+      : group),
     bookmarks: current.bookmarks,
   })
 }
 
-/** 删除网页收藏分组；分组内的收藏会移动到未分组。 */
+/** 删除网页收藏分组；分组标记墓碑，分组内的收藏会移动到未分组。 */
 export function removeWebBookmarkGroup(groupId: string): WebBookmarksSnapshot {
   const current = readSnapshot()
-  if (!current.groups.some((group) => group.id === groupId)) return current
+  const target = current.groups.find((group) => group.id === groupId)
+  if (!target) return getWebBookmarks()
 
-  return writeSnapshot({
-    groups: current.groups.filter((group) => group.id !== groupId),
-    bookmarks: current.bookmarks.map((bookmark) => bookmark.groupId === groupId
-      ? { ...bookmark, groupId: null }
-      : bookmark),
+  const now = Date.now()
+  const nextGroups = current.groups.map((group) => group.id === groupId
+    ? {
+      ...group,
+      isDeleted: true,
+      deletedAt: now,
+      updatedAt: now,
+      version: (group.version ?? 1) + 1,
+    }
+    : group)
+
+  const nextBookmarks = current.bookmarks.map((bookmark) => bookmark.groupId === groupId
+    ? {
+      ...bookmark,
+      groupId: null,
+      updatedAt: now,
+      version: (bookmark.version ?? 1) + 1,
+    }
+    : bookmark)
+
+  writeSnapshot({
+    groups: nextGroups,
+    bookmarks: nextBookmarks,
   })
+  return getWebBookmarks()
+}
+
+/** 批量合并远端增量变更（供同步服务调用，写操作时不额外触发同步推送通知）。 */
+export function applyRemoteBookmarkChanges(
+  remoteGroups: WebBookmarkGroupChange[],
+  remoteBookmarks: WebBookmarkChange[],
+): WebBookmarksSnapshot {
+  const current = readSnapshot()
+  const groupMap = new Map(current.groups.map((g) => [g.id, { ...g }]))
+
+  for (const remote of remoteGroups) {
+    const existing = groupMap.get(remote.id)
+    if (!existing) {
+      groupMap.set(remote.id, { ...remote })
+    } else if (remote.updatedAt >= (existing.updatedAt ?? existing.createdAt)) {
+      groupMap.set(remote.id, { ...remote })
+    }
+  }
+
+  const mergedGroups = Array.from(groupMap.values())
+  const validGroupIds = new Set(
+    mergedGroups.filter((g) => !g.isDeleted).map((g) => g.id),
+  )
+
+  const bookmarkMap = new Map(current.bookmarks.map((b) => [b.id, { ...b }]))
+  for (const remote of remoteBookmarks) {
+    const existing = bookmarkMap.get(remote.id)
+    const effectiveGroupId = remote.groupId && validGroupIds.has(remote.groupId) ? remote.groupId : null
+    const remoteWithGroup = { ...remote, groupId: effectiveGroupId }
+    if (!existing) {
+      bookmarkMap.set(remote.id, remoteWithGroup)
+    } else if (remote.updatedAt >= (existing.updatedAt ?? existing.createdAt)) {
+      bookmarkMap.set(remote.id, remoteWithGroup)
+    }
+  }
+
+  const mergedBookmarks = Array.from(bookmarkMap.values()).map((b) => {
+    if (b.groupId && !validGroupIds.has(b.groupId)) {
+      return { ...b, groupId: null }
+    }
+    return b
+  })
+
+  return writeSnapshot({ groups: mergedGroups, bookmarks: mergedBookmarks }, false)
+}
+
+/** 定时清理超过保留期的本地墓碑记录（默认 30 天）。 */
+export function purgeExpiredBookmarkTombstones(maxAgeMs = 30 * 24 * 60 * 60 * 1000): void {
+  const current = readSnapshot()
+  const threshold = Date.now() - maxAgeMs
+  const groups = current.groups.filter((g) => !g.isDeleted || (g.deletedAt ?? 0) > threshold)
+  const bookmarks = current.bookmarks.filter((b) => !b.isDeleted || (b.deletedAt ?? 0) > threshold)
+  if (groups.length !== current.groups.length || bookmarks.length !== current.bookmarks.length) {
+    writeSnapshot({ groups, bookmarks }, false)
+  }
 }

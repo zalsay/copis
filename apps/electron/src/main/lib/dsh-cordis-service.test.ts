@@ -1,7 +1,9 @@
 import { afterAll, beforeAll, describe, expect, mock, test } from 'bun:test'
-import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { EventEmitter } from 'node:events'
+import type { ChildProcess } from 'node:child_process'
 
 let tempHome: string
 mock.module('electron', () => ({
@@ -113,6 +115,23 @@ describe('dsh-cordis-service', () => {
     const status = dshCordisService.stopDshCordisServer()
     expect(status.running).toBe(false)
     expect(dshCordisService.getDshCordisStatus().running).toBe(false)
+  })
+
+  test('Given 旧 DSH 子进程延迟退出 When 等待停止完成 Then 仅在 exit 后允许继续启动新版', async () => {
+    const child = new EventEmitter() as ChildProcess
+    Object.assign(child, { exitCode: null, signalCode: null })
+    let completed = false
+    const waiting = dshCordisService.waitForDshChildExit(child, 1000).then(() => {
+      completed = true
+    })
+
+    await Promise.resolve()
+    expect(completed).toBe(false)
+    child.emit('exit', 0, null)
+    await waiting
+    expect(completed).toBe(true)
+    expect(child.listenerCount('exit')).toBe(0)
+    expect(child.listenerCount('error')).toBe(0)
   })
 
   test('Given 独立临时目录 When 触发微内核热重载 Then cordis.patch.yml 自动注入 live-reload 时间戳', async () => {
@@ -246,10 +265,20 @@ records:
     const port = portReservation.port
     portReservation.stop()
     const staleScript = join(tempDir, 'stale-dsh.mjs')
-    const newDshCommand = join(tempDir, 'new-dsh.sh')
+    const newDshCommand = process.platform === 'win32'
+      ? join(tempDir, 'dsh-module', 'bin', 'dsh.cmd')
+      : join(tempDir, 'new-dsh.sh')
     writeFileSync(staleScript, `const server = Bun.serve({ hostname: '127.0.0.1', port: Number(process.argv[2]), fetch: () => new Response('dsh web authentication required; reopen the URL printed by dsh web.', { status: 401 }) })\nprocess.on('SIGTERM', () => { server.stop(true); process.exit(0) })\nsetInterval(() => {}, 1000)\n`, 'utf-8')
-    writeFileSync(newDshCommand, '#!/bin/sh\nport=""\nwhile [ "$#" -gt 0 ]; do\n  if [ "$1" = "--port" ]; then\n    port="$2"\n    shift 2\n  else\n    shift\n  fi\ndone\nprintf "http://127.0.0.1:%s/\\n" "$port"\nsleep 30\n', 'utf-8')
-    chmodSync(newDshCommand, 0o755)
+    if (process.platform === 'win32') {
+      const cliEntry = join(tempDir, 'dsh-module', 'runtime', 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js')
+      mkdirSync(join(tempDir, 'dsh-module', 'bin'), { recursive: true })
+      mkdirSync(join(tempDir, 'dsh-module', 'runtime', 'node_modules', '@deepseek-ai', 'dsh', 'lib'), { recursive: true })
+      writeFileSync(newDshCommand, '@echo off\r\n', 'utf-8')
+      writeFileSync(cliEntry, "const index = process.argv.indexOf('--port')\nconsole.log(`http://127.0.0.1:${process.argv[index + 1]}/`)\nsetInterval(() => {}, 1000)\n", 'utf-8')
+    } else {
+      writeFileSync(newDshCommand, '#!/bin/sh\nport=""\nwhile [ "$#" -gt 0 ]; do\n  if [ "$1" = "--port" ]; then\n    port="$2"\n    shift 2\n  else\n    shift\n  fi\ndone\nprintf "http://127.0.0.1:%s/\\n" "$port"\nsleep 30\n', 'utf-8')
+      chmodSync(newDshCommand, 0o755)
+    }
     const staleProcess = Bun.spawn([process.execPath, staleScript, String(port)], { stdout: 'ignore', stderr: 'ignore' })
 
     try {
@@ -268,10 +297,12 @@ records:
         dshRootDir: tempDir,
         port,
         dshCommand: newDshCommand,
+        dshNode: process.platform === 'win32' ? process.execPath : undefined,
         timeoutMs: 2000,
       })
 
-      expect(await staleProcess.exited).toBe(0)
+      // Windows 通过 SIGTERM 结束进程时退出码可能为 1；exited Promise 完成即可证明旧进程已退出。
+      await staleProcess.exited
       expect(status.running).toBe(true)
       expect(status.port).toBe(port)
     } finally {

@@ -56,7 +56,7 @@ type CreationSubView =
   | 'settings'
   | null
 
-import { isDshModuleMissingError } from './creation-dsh-helper'
+import { isDshModuleMissingError, shouldInstallDshModule } from './creation-dsh-helper'
 export { isDshModuleMissingError }
 
 export function CopisCreationWebView(): React.ReactElement {
@@ -284,6 +284,27 @@ export function CopisCreationWebView(): React.ReactElement {
     try {
       setStarting(true)
       setStartError(null)
+
+      // 已安装的旧版 DSH 也能正常启动，因此必须在读取运行状态前主动检查更新。
+      // 若安装了新版本，先完成原子激活，再停止仍使用旧目录的进程并重新启动。
+      if (window.electronAPI.checkFunctionalModule && window.electronAPI.installFunctionalModule) {
+        const moduleStatus = await window.electronAPI.checkFunctionalModule('dsh')
+        if (shouldInstallDshModule(moduleStatus)) {
+          setInstallingModule(true)
+          setInstallProgressText(moduleStatus.installed
+            ? `发现创造模式 v${moduleStatus.availableVersion ?? '新版本'}，正在更新...`
+            : '正在准备安装创造模式模块...')
+          const installed = await window.electronAPI.installFunctionalModule({ name: 'dsh' })
+          if (!installed.installed) {
+            throw new Error(installed.error || '创造模式模块安装未完成，请重试。')
+          }
+
+          const previousRuntime = await window.electronAPI.dshCordis.getStatus()
+          if (previousRuntime.running) await window.electronAPI.dshCordis.stop()
+          setInstallProgressText('创造模式模块已更新，正在启动 Web+...')
+        }
+      }
+
       const current = await window.electronAPI.dshCordis.getStatus()
       if (current.running && current.url) {
         setStatus(current)
@@ -313,6 +334,8 @@ export function CopisCreationWebView(): React.ReactElement {
         error: errMsg,
       })
     } finally {
+      setInstallingModule(false)
+      setInstallProgressText(null)
       setStarting(false)
     }
   }, [setStatus])

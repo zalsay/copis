@@ -16,7 +16,7 @@ import { join } from 'node:path'
 import { parse } from 'yaml'
 import type { DshCordisStatus } from '@copis/shared'
 import { getDefaultSkillsDir, getDshHomeDir } from './config-paths'
-import { resolveDshCommand, resolveDshNode } from './dsh-runtime'
+import { resolveDshCommand, resolveDshNode, resolveDshSpawnSpec } from './dsh-runtime'
 import { patchDshComposerHistoryRuntime } from './dsh-composer-history-patch'
 import { patchDshHeroLogoRuntime } from './dsh-hero-logo-patch'
 import { patchDshSidebarRuntime } from './dsh-sidebar-patch'
@@ -46,6 +46,7 @@ const DSH_AUTH_COOKIE_PREFIX = 'dsh-auth-'
 const COOKIE_PAYLOAD_VERSION = 1
 const DEFAULT_COOKIE_MAX_AGE_DAYS = 30
 const DSH_STALE_PROCESS_STOP_TIMEOUT_MS = 5000
+const DSH_MANAGED_PROCESS_STOP_TIMEOUT_MS = 5000
 
 let statusChangeBroadcaster: ((status: DshCordisStatus) => void) | null = null
 
@@ -581,11 +582,12 @@ export async function startDshCordisServer(options: {
     return startingPromise
   }
 
-  startingPromise = doStartDshCordisServer(options).finally(() => {
-    startingPromise = null
+  const operation = doStartDshCordisServer(options).finally(() => {
+    if (startingPromise === operation) startingPromise = null
   })
+  startingPromise = operation
 
-  return startingPromise
+  return operation
 }
 
 async function doStartDshCordisServer(options: {
@@ -712,16 +714,33 @@ async function doStartDshCordisServer(options: {
       ...(dshNode ? { COPIS_DSH_NODE: dshNode } : {}),
     }
 
-    const child = spawn(dshCmd, ['--profile', profile, '--no-open', '--port', String(targetPort)], {
-      env,
-      stdio: ['ignore', 'pipe', 'pipe'],
-      detached: process.platform !== 'win32',
+    const spawnSpec = resolveDshSpawnSpec({
+      dshCommand: dshCmd,
+      dshNode,
+      args: ['--profile', profile, '--no-open', '--port', String(targetPort)],
     })
+    let child: ChildProcess
+    try {
+      child = spawn(spawnSpec.command, spawnSpec.args, {
+        env,
+        stdio: ['ignore', 'pipe', 'pipe'],
+        detached: process.platform !== 'win32',
+        windowsVerbatimArguments: spawnSpec.windowsVerbatimArguments,
+      })
+    } catch (error) {
+      state.status = {
+        running: false,
+        error: error instanceof Error ? error.message : String(error),
+      }
+      notifyDshCordisStatusChange(state.status)
+      resolve({ ...state.status })
+      return
+    }
 
     state.process = child
 
     const timer = setTimeout(() => {
-      if (!settled) {
+      if (!settled && state.process === child) {
         settled = true
         state.status = {
           running: false,
@@ -733,6 +752,7 @@ async function doStartDshCordisServer(options: {
     }, timeoutMs)
 
     child.stdout?.on('data', (chunk: Buffer) => {
+      if (state.process !== child) return
       const text = chunk.toString('utf-8')
       const urlMatch = text.match(/https?:\/\/(?:127\.0\.0\.1|localhost):(\d+)(?:\/[^\s]*)?/)
       if (urlMatch && urlMatch[1]) {
@@ -793,6 +813,13 @@ async function doStartDshCordisServer(options: {
 
     child.on('error', (err) => {
       clearTimeout(timer)
+      if (state.process !== child) {
+        if (!settled) {
+          settled = true
+          resolve({ ...state.status })
+        }
+        return
+      }
       state.process = null
       state.status = {
         running: false,
@@ -807,6 +834,14 @@ async function doStartDshCordisServer(options: {
 
     child.on('exit', (code, signal) => {
       console.log(`[DSH Cordis Web] 进程已退出 (code: ${code}, signal: ${signal})`)
+      clearTimeout(timer)
+      if (state.process !== child) {
+        if (!settled) {
+          settled = true
+          resolve({ ...state.status })
+        }
+        return
+      }
       state.process = null
       let errorMessage: string | undefined
       if (code !== null && code !== 0) {
@@ -828,6 +863,34 @@ async function doStartDshCordisServer(options: {
       }
     })
   })
+}
+
+/** 等待托管 DSH 子进程真正退出，避免新版抢占尚未释放的端口。 */
+export function waitForDshChildExit(
+  child: ChildProcess,
+  timeoutMs = DSH_MANAGED_PROCESS_STOP_TIMEOUT_MS,
+): Promise<void> {
+  if (child.exitCode !== null || child.signalCode !== null) return Promise.resolve()
+
+  return new Promise((resolve) => {
+    const finish = (): void => {
+      clearTimeout(timer)
+      child.removeListener('exit', finish)
+      child.removeListener('error', finish)
+      resolve()
+    }
+    const timer = setTimeout(finish, timeoutMs)
+    child.once('exit', finish)
+    child.once('error', finish)
+  })
+}
+
+/** IPC 更新重启专用：停止服务并等待旧进程释放端口。 */
+export async function stopDshCordisServerAndWait(): Promise<DshCordisStatus> {
+  const child = state.process
+  stopDshCordisServer()
+  if (child) await waitForDshChildExit(child)
+  return { ...state.status }
 }
 
 /**

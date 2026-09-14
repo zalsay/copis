@@ -6,7 +6,7 @@
  */
 
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
-import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, ATTACHMENT_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, FUNCTIONAL_MODULE_IPC_CHANNELS, PROXY_IPC_CHANNELS, AGENT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, WECHAT_IPC_CHANNELS, AGENT_MAIL_IPC_CHANNELS, AUTOMATION_IPC_CHANNELS, PLANNING_IPC_CHANNELS, WORKING_IPC_CHANNELS, WEB_IPC_CHANNELS, WEB_PASSWORD_IPC_CHANNELS, BROWSER_WORKFLOW_IPC_CHANNELS, MEMORY_IPC_CHANNELS, FUND_STOCK_IPC_CHANNELS, DSH_CORDIS_IPC_CHANNELS } from '@copis/shared'
+import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, ATTACHMENT_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, FUNCTIONAL_MODULE_IPC_CHANNELS, PROXY_IPC_CHANNELS, AGENT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, WECHAT_IPC_CHANNELS, AGENT_MAIL_IPC_CHANNELS, AUTOMATION_IPC_CHANNELS, PLANNING_IPC_CHANNELS, WORKING_IPC_CHANNELS, WEB_IPC_CHANNELS, WEB_PASSWORD_IPC_CHANNELS, WEB_SYNC_IPC_CHANNELS, BROWSER_WORKFLOW_IPC_CHANNELS, MEMORY_IPC_CHANNELS, FUND_STOCK_IPC_CHANNELS, DSH_CORDIS_IPC_CHANNELS } from '@copis/shared'
 import { USER_PROFILE_IPC_CHANNELS, SETTINGS_IPC_CHANNELS, SCRATCH_PAD_IPC_CHANNELS, APP_ICON_IPC_CHANNELS, DOCK_BADGE_IPC_CHANNELS, STORAGE_IPC_CHANNELS, CODEX_IPC_CHANNELS, type CodexAppServerStatus, type CodexCliStatus } from '../types'
 import { agentHttpStreamClient } from '../renderer/lib/agent-http-stream'
 import { setHttpApiWebToken } from '../renderer/lib/http-api-web-token'
@@ -192,6 +192,10 @@ import type {
   DshCordisStatus,
   DshViewBounds,
   DshClientEvent,
+  WebSyncState,
+  WebPageProfile,
+  WebPageProfilesSnapshot,
+  SaveWebPageProfileInput,
 } from '@copis/shared'
 
 const HTTP_API_WEB_TOKEN_ARGUMENT_PREFIX = '--copis-http-api-web-token='
@@ -348,6 +352,24 @@ export interface ElectronAPI {
     saveProjectAssociation: (input: SaveWebPageProjectAssociationInput) => Promise<WebPageProjectAssociation>
     /** 订阅主进程推送的网页页签状态。 */
     onChanged: (callback: (snapshot: WebTabsSnapshot) => void) => () => void
+  }
+
+  // ===== 网页收藏与 Profile 自动增量同步 =====
+  webSync: {
+    /** 立即触发增量同步 */
+    syncNow: () => Promise<WebSyncState>
+    /** 获取当前同步状态快照 */
+    getState: () => Promise<WebSyncState>
+    /** 获取全部页面 Profile 列表快照 */
+    listProfiles: () => Promise<WebPageProfilesSnapshot>
+    /** 获取指定 URL 的页面 Profile */
+    getProfile: (url: string) => Promise<WebPageProfile | null>
+    /** 保存页面 Profile（自动规范化 URL 并触发增量同步） */
+    saveProfile: (input: SaveWebPageProfileInput) => Promise<WebPageProfile>
+    /** 删除指定页面 Profile（生成墓碑并触发增量同步） */
+    removeProfile: (profileId: string) => Promise<WebPageProfilesSnapshot>
+    /** 订阅主进程推送的同步状态变化 */
+    onStateChanged: (callback: (state: WebSyncState) => void) => () => void
   }
 
   // ===== 内嵌网页密码保存与自动填充 =====
@@ -1461,6 +1483,27 @@ const electronAPI: ElectronAPI = {
       const listener = (_event: Electron.IpcRendererEvent, snapshot: WebTabsSnapshot): void => callback(snapshot)
       ipcRenderer.on(WEB_IPC_CHANNELS.STATE_CHANGED, listener)
       return () => { ipcRenderer.removeListener(WEB_IPC_CHANNELS.STATE_CHANGED, listener) }
+    },
+  },
+
+  // 网页收藏与 Profile 自动增量同步
+  webSync: {
+    syncNow: () =>
+      ipcRenderer.invoke(WEB_SYNC_IPC_CHANNELS.SYNC_NOW) as Promise<WebSyncState>,
+    getState: () =>
+      ipcRenderer.invoke(WEB_SYNC_IPC_CHANNELS.GET_STATE) as Promise<WebSyncState>,
+    listProfiles: () =>
+      ipcRenderer.invoke(WEB_SYNC_IPC_CHANNELS.PROFILES_LIST) as Promise<WebPageProfilesSnapshot>,
+    getProfile: (url: string) =>
+      ipcRenderer.invoke(WEB_SYNC_IPC_CHANNELS.PROFILE_GET, url) as Promise<WebPageProfile | null>,
+    saveProfile: (input: SaveWebPageProfileInput) =>
+      ipcRenderer.invoke(WEB_SYNC_IPC_CHANNELS.PROFILE_SAVE, input) as Promise<WebPageProfile>,
+    removeProfile: (profileId: string) =>
+      ipcRenderer.invoke(WEB_SYNC_IPC_CHANNELS.PROFILE_REMOVE, profileId) as Promise<WebPageProfilesSnapshot>,
+    onStateChanged: (callback: (state: WebSyncState) => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, state: WebSyncState): void => callback(state)
+      ipcRenderer.on(WEB_SYNC_IPC_CHANNELS.STATE_CHANGED, listener)
+      return () => { ipcRenderer.removeListener(WEB_SYNC_IPC_CHANNELS.STATE_CHANGED, listener) }
     },
   },
 

@@ -13,6 +13,7 @@ import {
   registerWebTabsNavigationIpcHandlers,
   registerWebTabsProjectIpcHandlers,
 } from './ipc/web-tabs.ipc'
+import { registerWebSyncIpcHandlers } from './ipc/web-sync.ipc'
 import { registerBrowserWorkflowIpcHandlers } from './ipc/browser-workflow.ipc'
 import { registerWorkingAccountIpcHandlers } from './ipc/working-account.ipc'
 import { registerWorkingPaymentIpcHandlers } from './ipc/working-payment.ipc'
@@ -77,6 +78,7 @@ export function registerIpcHandlers(): void {
   registerWebTabsNavigationIpcHandlers()
   registerWebBookmarksStoreIpcHandlers()
   registerWebTabsProjectIpcHandlers()
+  registerWebSyncIpcHandlers()
 
   // ===== 内嵌网页密码安全存储与自动填充 =====
   registerWebPasswordsIpcHandlers()

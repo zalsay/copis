@@ -32,6 +32,8 @@ import type {
   WorkingWorkspace,
   WorkingWorkspaceInput,
   WorkingImageGenerationResult,
+  BrowserSyncRequest,
+  BrowserSyncResponse,
 } from '@copis/shared'
 import {
   getWorkingPaymentCheckError,
@@ -873,6 +875,14 @@ export class WorkingApiClient {
       status: typeof item.status === 'string' ? item.status : 'submitted',
       message: typeof item.message === 'string' ? item.message : '反馈已提交。',
     }
+  }
+
+  /** 向本地 Rust HTTP API 发送浏览器增量同步请求 */
+  async syncBrowserData(request: BrowserSyncRequest): Promise<BrowserSyncResponse> {
+    return this.request<BrowserSyncResponse>('/api/working/browser/sync', {
+      method: 'POST',
+      body: JSON.stringify(request),
+    })
   }
 
   private async request<T>(

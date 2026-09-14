@@ -37,7 +37,7 @@ test('Given DSH 侧边栏源码 When 执行 patchDshSidebarSource Then 激活菜
   expect(patchDshSidebarSource(patched)).toBe(patched)
 })
 
-test('Given DSH 侧边栏源码中的新建会话按钮与工作区容器 When 执行 patchDshSidebarSource Then 自动注入 triggerCopisNavigate("conversations")', () => {
+test('Given DSH 侧边栏源码中的新建会话按钮与工作区容器 When 执行 patchDshSidebarSource Then 保留原生处理且不注入未声明的导航函数', () => {
   const sourceWithNewSession = `
     onClick: () => {
       startSession();
@@ -48,10 +48,12 @@ test('Given DSH 侧边栏源码中的新建会话按钮与工作区容器 When �
     })
   `
   const patched = patchDshSidebarSource(sourceWithNewSession)
-  expect(patched).toContain('triggerCopisNavigate("conversations");')
-  expect(patched).toContain('onClickCapture: () => { triggerCopisNavigate("conversations"); }')
+  expect(patched).toBe(sourceWithNewSession)
+  expect(patched).toContain('startSession();')
+  expect(patched).toContain('children: renderSlot("sidebar.workspaces", { wide })')
+  expect(patched).not.toContain('triggerCopisNavigate')
 
-  // 幂等性测试：重复执行不重复注入
+  // 幂等性测试
   expect(patchDshSidebarSource(patched)).toBe(patched)
 })
 

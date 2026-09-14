@@ -35,6 +35,14 @@ export interface WebBookmarkGroup {
   id: string
   name: string
   createdAt: number
+  /** 最近修改时间戳；未提供时与 createdAt 对齐。 */
+  updatedAt?: number
+  /** 实体版本号；初始为 1。 */
+  version?: number
+  /** 墓碑标记：true 表示已被软删除。 */
+  isDeleted?: boolean
+  /** 软删除时间戳。 */
+  deletedAt?: number
 }
 
 /** 单个网页收藏。 */
@@ -47,6 +55,14 @@ export interface WebBookmark {
   createdAt: number
   /** 所属分组；null 表示未分组。 */
   groupId: string | null
+  /** 最近修改时间戳；未提供时与 createdAt 对齐。 */
+  updatedAt?: number
+  /** 实体版本号；初始为 1。 */
+  version?: number
+  /** 墓碑标记：true 表示已被软删除。 */
+  isDeleted?: boolean
+  /** 软删除时间戳。 */
+  deletedAt?: number
 }
 
 /** 网页收藏夹快照。 */

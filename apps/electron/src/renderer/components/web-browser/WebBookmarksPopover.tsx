@@ -1,9 +1,11 @@
 import * as React from 'react'
 import { useAtomValue, useSetAtom } from 'jotai'
 import {
+  AlertCircle,
   Check,
   ChevronDown,
   ChevronRight,
+  Cloud,
   Folder,
   FolderOpen,
   Globe2,
@@ -18,6 +20,7 @@ import {
 } from 'lucide-react'
 import type { WebBookmark, WebBookmarkGroup, WebBookmarksSnapshot, WebTabState } from '@copis/shared'
 import { webBookmarkGroupsAtom, webBookmarksAtom } from '@/atoms/web-bookmarks'
+import { webSyncStateAtom, triggerWebSyncNowAtom } from '@/atoms/web-sync'
 import { Button } from '@/components/ui/button'
 import {
   DropdownMenu,
@@ -263,6 +266,8 @@ function BookmarkTreeGroup({
 export function WebBookmarksPopover({ activeTab, onNavigate, standalone = false, onRequestClose }: WebBookmarksPopoverProps): React.ReactElement {
   const bookmarks = useAtomValue(webBookmarksAtom)
   const groups = useAtomValue(webBookmarkGroupsAtom)
+  const syncState = useAtomValue(webSyncStateAtom)
+  const triggerSync = useSetAtom(triggerWebSyncNowAtom)
   const setBookmarks = useSetAtom(webBookmarksAtom)
   const setGroups = useSetAtom(webBookmarkGroupsAtom)
   const [loading, setLoading] = React.useState(true)
@@ -321,6 +326,27 @@ export function WebBookmarksPopover({ activeTab, onNavigate, standalone = false,
       mounted = false
     }
   }, [setBookmarks, setGroups])
+
+  // 增量同步完成后自动刷新书签与分组快照
+  React.useEffect(() => {
+    if (syncState.lastSyncedAt <= 0) return
+    window.electronAPI.webTabs.bookmarksList()
+      .then((snapshot) => {
+        applyBookmarkSnapshot(snapshot, setBookmarks, setGroups)
+      })
+      .catch((error: unknown) => {
+        console.error('[网页收藏夹] 同步后刷新书签失败:', error)
+      })
+  }, [syncState.lastSyncedAt, setBookmarks, setGroups])
+
+  const handleManualSync = async (): Promise<void> => {
+    try {
+      await triggerSync()
+      toast.success('增量同步已完成')
+    } catch (error: unknown) {
+      toast.error(error instanceof Error ? error.message : '同步失败')
+    }
+  }
 
   React.useEffect(() => {
     if (saveGroupId !== null && saveGroupId !== undefined && !groups.some((group) => group.id === saveGroupId)) {
@@ -572,7 +598,42 @@ export function WebBookmarksPopover({ activeTab, onNavigate, standalone = false,
               <p className="text-sm font-medium">收藏夹</p>
               <p className="text-[11px] text-muted-foreground">保存常用网页地址</p>
             </div>
-            <span className="text-xs tabular-nums text-muted-foreground">{bookmarks.length}</span>
+            <div className="flex items-center gap-1.5">
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon-sm"
+                    className="h-6 w-6 text-muted-foreground hover:text-foreground"
+                    disabled={syncState.isSyncing}
+                    onClick={() => void handleManualSync()}
+                  >
+                    {syncState.isSyncing ? (
+                      <LoaderCircle className="size-3.5 animate-spin text-primary" />
+                    ) : syncState.lastSyncError ? (
+                      <AlertCircle className="size-3.5 text-destructive" />
+                    ) : syncState.hasLocalChanges ? (
+                      <Cloud className="size-3.5 text-amber-500" />
+                    ) : (
+                      <Cloud className="size-3.5 text-muted-foreground" />
+                    )}
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom" className="text-xs">
+                  {syncState.isSyncing
+                    ? '正在增量同步到服务端...'
+                    : syncState.lastSyncError
+                      ? `同步失败: ${syncState.lastSyncError}，点击重试`
+                      : syncState.hasLocalChanges
+                        ? '有本地变更待同步，点击立即同步'
+                        : syncState.lastSyncedAt > 0
+                          ? `已与云端同步（${new Date(syncState.lastSyncedAt).toLocaleTimeString()}）`
+                          : '点击同步到服务端'}
+                </TooltipContent>
+              </Tooltip>
+              <span className="text-xs tabular-nums text-muted-foreground">{bookmarks.length}</span>
+            </div>
           </div>
 
           <div className="border-y border-border/60 py-2">

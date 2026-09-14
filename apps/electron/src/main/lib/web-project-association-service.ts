@@ -88,5 +88,9 @@ export function saveWebPageProjectAssociation(input: SaveWebPageProjectAssociati
   const next = readAssociations().filter((item) => item.url !== normalizedUrl)
   next.push(association)
   writeAssociations(next)
+  try {
+    const { saveWebPageProfile } = require('./web-page-profile-service')
+    saveWebPageProfile({ url: normalizedUrl, workspaceId: workspace.id })
+  } catch {}
   return association
 }

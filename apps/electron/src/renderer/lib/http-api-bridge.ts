@@ -329,9 +329,46 @@ function createWebTabsFallback(): Record<string, unknown> {
   }
 }
 
+function createWebSyncFallback() {
+  return {
+    syncNow: () =>
+      Promise.resolve({
+        deviceId: '',
+        serverCursor: 0,
+        lastSyncedAt: 0,
+        isSyncing: false,
+        hasLocalChanges: false,
+        lastSyncError: null,
+      }),
+    getState: () =>
+      Promise.resolve({
+        deviceId: '',
+        serverCursor: 0,
+        lastSyncedAt: 0,
+        isSyncing: false,
+        hasLocalChanges: false,
+        lastSyncError: null,
+      }),
+    listProfiles: () => Promise.resolve({ profiles: [] }),
+    getProfile: () => Promise.resolve(null),
+    saveProfile: (input: any) =>
+      Promise.resolve({
+        id: 'local',
+        url: input.url,
+        workspaceId: input.workspaceId,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+        version: 1,
+      }),
+    removeProfile: () => Promise.resolve({ profiles: [] }),
+    onStateChanged: (_callback: unknown) => () => {},
+  }
+}
+
 function createHttpApiBridge(): Window['electronAPI'] {
   const methods = createHttpMethods()
   const webTabs = createWebTabsFallback()
+  const webSync = createWebSyncFallback()
 
   const bridge = new Proxy<Record<string, unknown>>({}, {
     get: (_target, property: string | symbol) => {
@@ -339,6 +376,7 @@ function createHttpApiBridge(): Window['electronAPI'] {
       if (property === 'updater') return undefined
       if (property === 'getHttpApiWebToken') return () => ''
       if (property === 'webTabs') return webTabs
+      if (property === 'webSync') return webSync
       if (property === 'updateSettingsSync') return () => false
       if (property === 'saveScratchPadSync') return () => true
       if (property === 'loadScratchPad') return () => Promise.resolve('')

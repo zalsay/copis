@@ -720,3 +720,71 @@ fn maps_upstream_failure_includes_detail_when_present() {
         "working image generation failed: image model request failed: HTTP 401 Unauthorized"
     );
 }
+
+#[test]
+fn forwards_browser_sync_request_with_token() {
+    let transport = Arc::new(QueueTransport::new(vec![
+        response(200, json!({"token":"access-token","user":{"id":7}})),
+        response(
+            200,
+            json!({
+                "data": {
+                    "serverCursor": 105,
+                    "serverChanges": {
+                        "groups": [],
+                        "bookmarks": [],
+                        "pageProfiles": []
+                    }
+                }
+            }),
+        ),
+    ]));
+    let gateway = gateway(transport.clone());
+    handle_working_gateway_request(
+        &gateway,
+        "POST",
+        "/api/working/login",
+        Some(r#"{"email":"user@example.com","password":"password"}"#),
+    )
+    .unwrap();
+
+    let sync_body = json!({
+        "clientDeviceId": "device-1",
+        "clientCursor": 100,
+        "changes": {
+            "groups": [],
+            "bookmarks": [],
+            "pageProfiles": []
+        }
+    })
+    .to_string();
+
+    let result = handle_working_gateway_request(
+        &gateway,
+        "POST",
+        "/api/working/browser/sync",
+        Some(&sync_body),
+    )
+    .unwrap();
+
+    assert_eq!(result.status, 200);
+    assert_eq!(
+        result.body.unwrap(),
+        json!({
+            "serverCursor": 105,
+            "serverChanges": {
+                "groups": [],
+                "bookmarks": [],
+                "pageProfiles": []
+            }
+        })
+    );
+
+    let requests = transport.requests.lock().unwrap();
+    let sync_request = requests
+        .iter()
+        .find(|req| req.path == "/api/working/browser/sync")
+        .unwrap();
+    assert_eq!(sync_request.method, "POST");
+    assert_eq!(sync_request.access_token.as_deref(), Some("access-token"));
+}
