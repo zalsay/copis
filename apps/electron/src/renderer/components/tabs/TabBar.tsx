@@ -28,6 +28,7 @@ import {
 } from '@/atoms/agent-atoms'
 import { automationFormAtom } from '@/atoms/automation-atoms'
 import { appModeAtom } from '@/atoms/app-mode'
+import { professionalModeAtom } from '@/atoms/professional-mode-atoms'
 import { tearOffPreviewToSplit } from '@/components/diff/preview-opener'
 import { Button } from '@/components/ui/button'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
@@ -52,6 +53,7 @@ export function TabBar(): React.ReactElement {
   const setCurrentAgentWorkspaceId = useSetAtom(currentAgentWorkspaceIdAtom)
   const setUnviewedCompleted = useSetAtom(unviewedCompletedSessionIdsAtom)
   const setAutomationForm = useSetAtom(automationFormAtom)
+  const setProfessionalMode = useSetAtom(professionalModeAtom)
 
   // 统一关闭逻辑：关闭当前会话入口，不停止后台 Agent
   const { requestClose } = useCloseTab()
@@ -119,6 +121,14 @@ export function TabBar(): React.ReactElement {
       } else {
         setAppMode('agent')
       }
+      const isTargetProfessional = session?.agentRuntime === 'codex'
+      setProfessionalMode(isTargetProfessional)
+      if (isTargetProfessional && window.electronAPI?.startCodexAppServer) {
+        window.electronAPI.startCodexAppServer().catch((err) => {
+          console.warn('[TabBar] 启动专业模式服务失败:', err)
+        })
+      }
+      window.electronAPI.updateSettings({ professionalMode: isTargetProfessional }).catch(console.error)
       setCurrentAgentSessionId(tab.sessionId)
 
       // 用户打开查看后只清除未读角标；是否完成由用户通过对勾确认。

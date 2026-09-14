@@ -39,6 +39,7 @@ export interface BrowserWorkflowPageStepInput {
   allowedOrigins: string[]
   variables: Record<string, string | number | boolean>
   signal: AbortSignal
+  advancedAuthorization?: boolean
 }
 
 /**
@@ -49,10 +50,15 @@ export interface BrowserWorkflowPageStepResult {
   expectsNewTabAlias?: string
 }
 
+export interface BrowserWorkflowPageExecutorOptions {
+  advancedAuthorization?: boolean
+}
+
 export interface LocatorEvaluationOptions {
   bundle: BrowserLocatorBundle
   action?: 'locate' | 'click' | 'fill' | 'select' | 'press' | 'visible' | 'hidden'
   selectValue?: string
+  allowSensitive?: boolean
 }
 
 const DEFAULT_TIMEOUT_MS = 15_000
@@ -356,10 +362,11 @@ async function evaluateLocator(
   selectValue: string | undefined,
   executionContextId: number | undefined,
   guard: () => void,
+  allowSensitive = false,
 ): Promise<Record<string, unknown>> {
   guard()
   const evalParams: Record<string, unknown> = {
-    expression: buildLocatorEvaluationSource({ bundle, action, selectValue }),
+    expression: buildLocatorEvaluationSource({ bundle, action, selectValue, allowSensitive }),
     returnByValue: true,
     awaitPromise: true,
   }
@@ -393,6 +400,7 @@ export function buildLocatorEvaluationSource(options: LocatorEvaluationOptions):
   const bundle = options.bundle || {};
   const strategies = Array.isArray(bundle.strategies) ? bundle.strategies : [];
   const fingerprint = bundle.fingerprint || {};
+  const allowSensitive = Boolean(options.allowSensitive);
   const isInteractiveAction = options.action === 'click' || options.action === 'fill' || options.action === 'press' || options.action === 'select';
 
   const normalize = (value) => String(value || '').trim().replace(/\\s+/g, ' ');
@@ -584,7 +592,7 @@ export function buildLocatorEvaluationSource(options: LocatorEvaluationOptions):
       return { status: 'found', strategyIndex, enabled: false, visible: true };
     }
 
-    if (sensitiveReason && (options.action === 'fill' || options.action === 'select')) {
+    if (!allowSensitive && sensitiveReason && (options.action === 'fill' || options.action === 'select')) {
       return { status: 'found', strategyIndex, enabled, visible: true, sensitiveReason };
     }
 
@@ -668,7 +676,7 @@ export function buildLocatorEvaluationSource(options: LocatorEvaluationOptions):
         return { status: 'found', strategyIndex: strategies.length, isHrefFallback: true, enabled: false, visible: true };
       }
 
-      if (sensitiveReason && (options.action === 'fill' || options.action === 'select')) {
+      if (!allowSensitive && sensitiveReason && (options.action === 'fill' || options.action === 'select')) {
         return { status: 'found', strategyIndex: strategies.length, isHrefFallback: true, enabled, visible: true, sensitiveReason };
       }
 
@@ -760,12 +768,16 @@ async function pollCondition<T>(
 /**
  * 创建确定性 Browser Workflow 页面执行器
  */
-export function createBrowserWorkflowPageExecutor(runtime: BrowserWorkflowPageRuntime): {
+export function createBrowserWorkflowPageExecutor(
+  runtime: BrowserWorkflowPageRuntime,
+  defaultOptions?: BrowserWorkflowPageExecutorOptions,
+): {
   execute(input: BrowserWorkflowPageStepInput): Promise<BrowserWorkflowPageStepResult>
 } {
   return {
     async execute(input: BrowserWorkflowPageStepInput): Promise<BrowserWorkflowPageStepResult> {
       const { step, tabId, port, allowedOrigins, variables, signal } = input
+      const advancedAuthorization = Boolean(input.advancedAuthorization ?? defaultOptions?.advancedAuthorization)
       const timeoutMs = typeof step.timeoutMs === 'number' && step.timeoutMs > 0 ? step.timeoutMs : DEFAULT_TIMEOUT_MS
       const compiledStepUrlPattern = step.urlPattern ? compileRegex(step.urlPattern) : undefined
 
@@ -836,7 +848,7 @@ export function createBrowserWorkflowPageExecutor(runtime: BrowserWorkflowPageRu
 
         const { frameId, executionContextId } = await resolveFrameExecutionContext(port, bundle, guard)
 
-        const result = await evaluateLocator(port, bundle, action, selectValue, executionContextId, guard)
+        const result = await evaluateLocator(port, bundle, action, selectValue, executionContextId, guard, advancedAuthorization)
         const status = String(result.status || '')
 
         if (status === 'ambiguous') {
@@ -854,7 +866,7 @@ export function createBrowserWorkflowPageExecutor(runtime: BrowserWorkflowPageRu
         if (result.enabled === false && isInteractive) {
           throw new Error('页面元素当前不可用')
         }
-        if (typeof result.sensitiveReason === 'string' && result.sensitiveReason) {
+        if (!advancedAuthorization && typeof result.sensitiveReason === 'string' && result.sensitiveReason) {
           if (action === 'fill' || action === 'select') {
             throw new Error('Workflow 不允许自动填写敏感字段')
           }
@@ -961,7 +973,7 @@ export function createBrowserWorkflowPageExecutor(runtime: BrowserWorkflowPageRu
         }
 
         case 'fill': {
-          if (isFingerprintSensitive(step.target.fingerprint)) {
+          if (!advancedAuthorization && isFingerprintSensitive(step.target.fingerprint)) {
             throw new Error('Workflow 不允许自动填写敏感字段')
           }
           const text = resolveWorkflowValue(step.value, variables)
@@ -1009,7 +1021,7 @@ export function createBrowserWorkflowPageExecutor(runtime: BrowserWorkflowPageRu
         }
 
         case 'select': {
-          if (isFingerprintSensitive(step.target.fingerprint)) {
+          if (!advancedAuthorization && isFingerprintSensitive(step.target.fingerprint)) {
             throw new Error('Workflow 不允许自动填写敏感字段')
           }
           const selectValue = resolveWorkflowValue(step.value, variables)

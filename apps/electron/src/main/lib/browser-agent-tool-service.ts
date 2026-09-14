@@ -28,7 +28,7 @@ import {
   submitBrowserWorkflowRepairDraft,
 } from './browser-workflow-service'
 import { getBrowserWorkflow, listBrowserWorkflows } from './browser-workflow-store'
-import { runBrowserWorkflow, stopBrowserWorkflowRun } from './browser-workflow-runner'
+import { isBrowserWorkflowRunActive, runBrowserWorkflow, stopBrowserWorkflowRun } from './browser-workflow-runner'
 import { getAgentSessionMeta } from './agent-session-manager'
 import { getSettings } from './settings-service'
 import { redactLogOrigin, redactSensitiveLogValue, shortLogId } from './bridge-log-redaction'
@@ -80,6 +80,7 @@ interface BrowserAgentToolDependencies {
   getBrowserWorkflow: typeof getBrowserWorkflow
   runBrowserWorkflow: typeof runBrowserWorkflow
   stopBrowserWorkflowRun: typeof stopBrowserWorkflowRun
+  isBrowserWorkflowRunActive?: (sessionId: string) => boolean
   getWorkspaceId: (sessionId: string) => string | undefined
   isBrowserWorkflowEnabled: () => boolean
   assertWorkerCapability: typeof assertBrowserAgentWorkerCapability
@@ -104,6 +105,7 @@ export interface BrowserAgentToolServiceDependencies {
   getBrowserWorkflow?: BrowserAgentToolDependencies['getBrowserWorkflow']
   runBrowserWorkflow?: BrowserAgentToolDependencies['runBrowserWorkflow']
   stopBrowserWorkflowRun?: BrowserAgentToolDependencies['stopBrowserWorkflowRun']
+  isBrowserWorkflowRunActive?: (sessionId: string) => boolean
   getWorkspaceId?: BrowserAgentToolDependencies['getWorkspaceId']
   isBrowserWorkflowEnabled?: BrowserAgentToolDependencies['isBrowserWorkflowEnabled']
   assertWorkerCapability?: BrowserAgentToolDependencies['assertWorkerCapability']
@@ -223,6 +225,7 @@ const defaultDependencies: BrowserAgentToolDependencies = {
   getBrowserWorkflow,
   runBrowserWorkflow,
   stopBrowserWorkflowRun,
+  isBrowserWorkflowRunActive,
   getWorkspaceId: (sessionId) => getAgentSessionMeta(sessionId)?.workspaceId,
   isBrowserWorkflowEnabled: () => getSettings().browserWorkflowEnabled !== false,
   assertWorkerCapability: assertBrowserAgentWorkerCapability,
@@ -512,23 +515,31 @@ export function createBrowserAgentToolService(
           return {
             kind: 'json',
             value: {
-              requiresUserApproval: true,
               workflowId,
               ...(version === undefined ? {} : { version }),
               ...(stepId ? { stepId } : {}),
               proposal,
-              message: '请根据修复建议生成完整 versionDraft，再调用 BrowserWorkflowRepair 创建待审核版本。',
+              message: '请根据修复建议生成完整 versionDraft，再调用 BrowserWorkflowRepair 直接生成新版本。',
             },
           }
         }
-        const draft = dependencies.submitBrowserWorkflowRepairDraft(
+        const updatedVersion = dependencies.submitBrowserWorkflowRepairDraft(
           input.sessionId,
           workflowId,
           version,
           stepId,
           input.toolInput.versionDraft,
         )
-        return { kind: 'json', value: { requiresUserApproval: true, proposal, draft } }
+        return {
+          kind: 'json',
+          value: {
+            updated: true,
+            workflowId,
+            version: updatedVersion.version,
+            proposal,
+            message: `Workflow「${workflowId}」已更新至新版本 v${updatedVersion.version}，可直接运行。`,
+          },
+        }
       }
       case 'BrowserWorkflowList': {
         ensureWorkflowEnabled(dependencies.isBrowserWorkflowEnabled())
@@ -561,19 +572,27 @@ export function createBrowserAgentToolService(
         return { kind: 'json', value }
       }
       case 'BrowserWorkflowStop': {
-        requireContext()
         ensureWorkflowEnabled(dependencies.isBrowserWorkflowEnabled())
+        const runActive = dependencies.isBrowserWorkflowRunActive?.(input.sessionId) ?? false
         const status = dependencies.getBrowserWorkflowStatus(input.sessionId)
+        if (runActive || status.run) {
+          dependencies.stopBrowserWorkflowRun(input.sessionId)
+          return { kind: 'text', value: '已终止正在运行的 Browser Workflow 并释放运行锁。' }
+        }
         if ((status.state === 'recording' || status.state === 'paused_cdp_detached') && !status.run) {
           ensureUserTrigger(input.triggeredBy)
           await dependencies.stopBrowserWorkflowRecording(input.sessionId)
           return untrustedBrowserRecording(await dependencies.getBrowserWorkflowRecording(input.sessionId))
         }
-        if (status.state === 'awaiting_summary' || status.state === 'awaiting_review') {
-          return untrustedBrowserRecording(await dependencies.getBrowserWorkflowRecording(input.sessionId))
+        if (status.state === 'awaiting_summary') {
+          try {
+            return untrustedBrowserRecording(await dependencies.getBrowserWorkflowRecording(input.sessionId))
+          } catch {
+            return { kind: 'text', value: '当前没有正在进行的操作录制。' }
+          }
         }
         dependencies.stopBrowserWorkflowRun(input.sessionId)
-        return { kind: 'text', value: '已请求停止当前网页 Workflow。' }
+        return { kind: 'text', value: '当前没有正在运行的 Browser Workflow 或录制。' }
       }
       }
     }

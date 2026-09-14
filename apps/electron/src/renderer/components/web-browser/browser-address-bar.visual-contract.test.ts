@@ -49,6 +49,15 @@ describe('浏览器地址栏视觉契约', () => {
     expect(bannerSource).toContain("backgroundColor: 'var(--ui-primary)'")
     expect(bannerSource).toContain("color: 'var(--ui-primary-foreground, #ffffff)'")
   })
+
+  test('Given 网页工具栏刷新按钮 When 处于加载态 Then 显示停止（X）图标而非 loading 旋转态，点击触发 handleStop', () => {
+    expect(surfaceSource).not.toContain("RotateCw className={cn('size-3 text-foreground', activeTab.isLoading && 'animate-spin')}")
+    expect(surfaceSource).toContain("activeTab.isLoading ? '停止' : '刷新'")
+    expect(surfaceSource).toContain("activeTab.isLoading ? handleStop() : handleReload()")
+    expect(surfaceSource).toContain('<X className="size-3 text-foreground" strokeWidth={2} />')
+    expect(surfaceSource).toContain('<RotateCw className="size-3 text-foreground" strokeWidth={2} />')
+    expect(surfaceSource).toContain('window.electronAPI.webTabs.stop(activeTabId)')
+  })
 })
 
 

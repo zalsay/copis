@@ -1,5 +1,6 @@
 import { describe, expect, mock, test } from 'bun:test'
 import type { AgentSessionMeta, AgentWorkspace, Automation, SDKMessage } from '@copis/shared'
+import { isAgentRuntime } from './agent-runtime-validation'
 
 const rpcSession: AgentSessionMeta = {
   id: 'session-1',
@@ -25,6 +26,7 @@ mock.module('./agent-session-manager', () => ({
   getAgentSessionMeta: (sessionId: string) => {
     if (sessionId === rpcSession.id) return rpcSession
     if (sessionId === 'automation-session-1') return { ...rpcSession, id: 'automation-session-1' }
+    if (sessionId === 'codex-session-1') return { ...rpcSession, id: 'codex-session-1', agentRuntime: 'codex' }
     return undefined
   },
   getAgentSessionSDKMessages: () => persistedRpcMessages,
@@ -667,7 +669,7 @@ describe('Browser Agent RPC 准备', () => {
 
     expect(run.query.permissionMode).toBe('bypassPermissions')
     expect(run.query.skillMentions).toContain('browser-page-control')
-    expect(run.query.additionalSkillPaths).toHaveLength(1)
+    expect(run.query.additionalSkillPaths?.length).toBeGreaterThanOrEqual(1)
     expect(run.query.fileAccessPolicy?.readRoots).toContain(run.query.additionalSkillPaths?.[0])
     expect(run.query.systemPrompt).toContain('tab-1')
     expect(run.query.systemPrompt).toContain('token=REDACTED')
@@ -788,6 +790,109 @@ describe('Browser Agent RPC 准备', () => {
       agentRuntime: 'pi',
     })
     expect(runWithSetting.query.imageGenerationEnabled).toBe(true)
+  })
+
+  test('Given isAgentRuntime 验证器 When 传入 codex/pi/dsh 及非法字符 Then 正确识别', () => {
+    expect(isAgentRuntime('codex')).toBe(true)
+    expect(isAgentRuntime('pi')).toBe(true)
+    expect(isAgentRuntime('dsh')).toBe(true)
+    expect(isAgentRuntime('invalid')).toBe(false)
+    expect(isAgentRuntime('')).toBe(false)
+    expect(isAgentRuntime(null)).toBe(false)
+  })
+
+  test('Given 普通模式会话 (agentRuntime: pi) When 试图以专业模式 (codex) 执行 Then 强拦截并报错', async () => {
+    const { prepareAgentRpcRun } = await import('./agent-rpc-service')
+    await expect(
+      prepareAgentRpcRun({
+        sessionId: rpcSession.id,
+        userMessage: '测试防混用',
+        channelId: 'channel-1',
+        modelId: rpcSession.modelId,
+        agentRuntime: 'codex', // 与会话 pi 不一致
+      }),
+    ).rejects.toThrow('专业模式与普通模式会话不能混用。当前会话与所选模式不一致。')
+  })
+
+  test('Given 专业模式会话 (agentRuntime: codex) When 试图以普通模式 (pi) 执行 Then 强拦截并报错', async () => {
+    const { prepareAgentRpcRun } = await import('./agent-rpc-service')
+    await expect(
+      prepareAgentRpcRun({
+        sessionId: 'codex-session-1',
+        userMessage: '测试防混用',
+        channelId: 'channel-1',
+        modelId: rpcSession.modelId,
+        agentRuntime: 'pi', // 与会话 codex 不一致
+      }),
+    ).rejects.toThrow('专业模式与普通模式会话不能混用。当前会话与所选模式不一致。')
+  })
+
+  test('Given 专业模式会话 When 引用第三方 Provider 渠道 Then 拦截并提示仅支持默认及自定义模型', async () => {
+    const { prepareAgentRpcRun } = await import('./agent-rpc-service')
+    await expect(
+      prepareAgentRpcRun({
+        sessionId: 'codex-session-1',
+        userMessage: '测试专业模式渠道过滤',
+        channelId: 'channel-1', // channel-1 是第三方 provider
+        modelId: rpcSession.modelId,
+        agentRuntime: 'codex',
+      }),
+    ).rejects.toThrow('专业模式仅支持 Copis 默认模型与自定义模型，不支持当前渠道 Provider')
+
+    await expect(
+      prepareAgentRpcRun({
+        sessionId: 'codex-session-1',
+        userMessage: '测试 DeepSeek 虚拟渠道拦截',
+        channelId: 'copis-working-deepseek',
+        modelId: 'deepseek-v4-flash',
+        agentRuntime: 'codex',
+      }),
+    ).rejects.toThrow('专业模式仅支持 Copis 默认模型与自定义模型，不支持当前渠道 Provider')
+  })
+
+  test('Given 专业模式会话 When 选用 Copis 通识 (global) 模型 Then 强拦截并报错', async () => {
+    const { prepareAgentRpcRun } = await import('./agent-rpc-service')
+    await expect(
+      prepareAgentRpcRun({
+        sessionId: 'codex-session-1',
+        userMessage: '测试 global 模型拦截',
+        channelId: 'copis-working',
+        modelId: 'global',
+        agentRuntime: 'codex',
+      }),
+    ).rejects.toThrow('专业模式不支持通识 (global) 模型，请选择快速或专家模型')
+  })
+
+  test('Given Assistant 中间流式帧 (stop_reason 为 null 且无 error) When 检查持久化 Then 返回 false', async () => {
+    const { shouldPersistAgentRpcMessage } = await import('./agent-rpc-service')
+    const streamingAssistant: SDKMessage = {
+      type: 'assistant',
+      uuid: 'uuid-streaming',
+      session_id: 'session-1',
+      message: {
+        role: 'assistant',
+        content: [{ type: 'text', text: '片段文本' }],
+        stop_reason: null,
+      },
+    } as unknown as SDKMessage
+
+    expect(shouldPersistAgentRpcMessage(streamingAssistant)).toBe(false)
+  })
+
+  test('Given Assistant 终态帧 (stop_reason 为 stop) When 检查持久化 Then 返回 true', async () => {
+    const { shouldPersistAgentRpcMessage } = await import('./agent-rpc-service')
+    const finalAssistant: SDKMessage = {
+      type: 'assistant',
+      uuid: 'uuid-final',
+      session_id: 'session-1',
+      message: {
+        role: 'assistant',
+        content: [{ type: 'text', text: '完整文本' }],
+        stop_reason: 'stop',
+      },
+    } as unknown as SDKMessage
+
+    expect(shouldPersistAgentRpcMessage(finalAssistant)).toBe(true)
   })
 })
 

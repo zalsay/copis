@@ -59,6 +59,7 @@ export function getSettings(): AppSettings {
       windowsShellPreference: 'auto',
       agentThinking: { type: 'adaptive' },
       gitAttributionEnabled: true,
+      professionalMode: false,
     }
   }
 
@@ -91,6 +92,8 @@ export function getSettings(): AppSettings {
       windowsShellPreference: settings.windowsShellPreference ?? 'auto',
       agentThinking: settings.agentThinking ?? { type: 'adaptive' },
       gitAttributionEnabled: settings.gitAttributionEnabled ?? true,
+      professionalMode: data.professionalMode ?? false,
+      ...(typeof data.codexAppServerPort === 'number' ? { codexAppServerPort: data.codexAppServerPort } : {}),
     }
   } catch (error) {
     console.error('[设置] 读取失败:', error)
@@ -114,6 +117,7 @@ export function getSettings(): AppSettings {
       windowsShellPreference: 'auto',
       agentThinking: { type: 'adaptive' },
       gitAttributionEnabled: true,
+      professionalMode: false,
     }
   }
 }

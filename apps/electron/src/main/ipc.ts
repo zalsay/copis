@@ -61,6 +61,7 @@ import { registerAutomationIpcHandlers } from './ipc/automation.ipc'
 import { registerMemoryIngestionIpcHandlers } from './ipc/memory-ingestion.ipc'
 import { registerTradingIpcHandlers } from './ipc/trading.ipc'
 import { registerDshIpcHandlers } from './ipc/dsh.ipc'
+import { registerCodexIpcHandlers } from './ipc/codex.ipc'
 
 /**
  * 解析应用图标变体的文件路径
@@ -177,4 +178,5 @@ export function registerIpcHandlers(): void {
 
   registerDshIpcHandlers()
 
+  registerCodexIpcHandlers()
 }

@@ -25,6 +25,7 @@ import {
   unviewedCompletedSessionIdsAtom,
 } from '@/atoms/agent-atoms'
 import { workingSettingsOpenAtom } from '@/atoms/working-atoms'
+import { professionalModeAtom } from '@/atoms/professional-mode-atoms'
 
 type OpenSessionFn = (type: TabType, sessionId: string, title: string) => void
 
@@ -33,6 +34,7 @@ export function useOpenSession(): OpenSessionFn {
   const [tabs, setTabs] = useAtom(tabsAtom)
   const setActiveTabId = useSetAtom(activeTabIdAtom)
   const setAppMode = useSetAtom(appModeAtom)
+  const setProfessionalMode = useSetAtom(professionalModeAtom)
   const setActiveView = useSetAtom(activeViewAtom)
   const setAutomationForm = useSetAtom(automationFormAtom)
   const setCurrentAgentSessionId = useSetAtom(currentAgentSessionIdAtom)
@@ -66,6 +68,14 @@ export function useOpenSession(): OpenSessionFn {
         } else {
           setAppMode('agent')
         }
+        const isTargetProfessional = session?.agentRuntime === 'codex'
+        setProfessionalMode(isTargetProfessional)
+        if (isTargetProfessional && window.electronAPI?.startCodexAppServer) {
+          window.electronAPI.startCodexAppServer().catch((err) => {
+            console.warn('[useOpenSession] 启动专业模式服务失败:', err)
+          })
+        }
+        window.electronAPI.updateSettings({ professionalMode: isTargetProfessional }).catch(console.error)
         setCurrentAgentSessionId(sessionId)
 
         // 用户打开查看后只清除未读角标；是否完成由用户通过对勾确认。

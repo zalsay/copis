@@ -31,10 +31,13 @@ import {
   modelSelectorOpenAtom,
 } from '@/atoms/model-atoms'
 import { workingModelCatalogAtom } from '@/atoms/working-model-catalog-atoms'
+import { professionalModeAtom } from '@/atoms/professional-mode-atoms'
+import { CodexLogoIcon } from '@/components/ui/codex-logo-icon'
 import { CopisTemplateLogo, getModelLogo, getChannelLogo, DefaultLogo } from '@/lib/model-logo'
 import { cn } from '@/lib/utils'
 import {
   COPIS_WORKING_CHANNEL_ID,
+  COPIS_WORKING_CHANNEL_IDS,
   COPIS_WORKING_DEEPSEEK_CHANNEL_ID,
   COPIS_WORKING_EXPERT_MODEL_ID,
   COPIS_WORKING_FAST_MODEL_ID,
@@ -143,6 +146,8 @@ interface ModelSelectorProps {
   composerMode?: boolean
   /** Composer 自定义模型配置，按用户分类分组展示；选择后仍走现有 Working 请求链。 */
   customModelOptions?: readonly WorkingCustomModelOption[]
+  /** 是否处于专业模式（默认从 professionalModeAtom 读取） */
+  isProfessional?: boolean
 }
 
 export function ModelSelector({
@@ -159,6 +164,7 @@ export function ModelSelector({
   triggerClassName,
   composerMode = false,
   customModelOptions,
+  isProfessional: propIsProfessional,
 }: ModelSelectorProps = {}): React.ReactElement {
   const setGlobalModel = useSetAtom(selectedModelAtom)
   const globalSelectedModel = useAtomValue(selectedModelAtom)
@@ -199,19 +205,37 @@ export function ModelSelector({
     ? customModelOptions
     : defaultCustomModelOptions
 
+  const atomIsProfessional = useAtomValue(professionalModeAtom)
+  const isProfessional = propIsProfessional ?? atomIsProfessional
+
   // 构建全部模型选项（已启用渠道中已启用的模型）
+  // 专业模式下强制仅保留 Copis 默认模型渠道（COPIS_WORKING_CHANNEL_ID），彻底过滤第三方 Provider（包含 DeepSeek、智谱等），
+  // 并同步过滤 alias=global 的内置通识模型
   const allOptions = React.useMemo(() => {
-    return buildModelOptions(
+    const effectiveFilterChannelIds = isProfessional
+      ? [COPIS_WORKING_CHANNEL_ID]
+      : filterChannelIds
+    const effectiveFilterChannelId = isProfessional ? undefined : filterChannelId
+
+    const options = buildModelOptions(
       availableChannels,
-      filterChannelId,
-      filterChannelIds,
+      effectiveFilterChannelId,
+      effectiveFilterChannelIds,
       excludedProviders,
       {
-        includeProviders: composerMode ? ['zhipu'] : undefined,
+        includeProviders: composerMode && !isProfessional ? ['zhipu'] : undefined,
         useComposerProviderLabels: composerMode,
       },
     )
-  }, [availableChannels, composerMode, filterChannelId, filterChannelIds, excludedProviders])
+
+    if (isProfessional) {
+      return options.filter(
+        (o) => !(o.channelId === COPIS_WORKING_CHANNEL_ID && o.modelId === COPIS_WORKING_GLOBAL_MODEL_ID),
+      )
+    }
+
+    return options
+  }, [availableChannels, composerMode, filterChannelId, filterChannelIds, excludedProviders, isProfessional])
 
   // 按供应商/渠道分组（包含用户自定义 Working 模型）
   const grouped = React.useMemo(() => {
@@ -432,6 +456,13 @@ export function ModelSelector({
           })()
         )}
       </div>
+
+      {isProfessional && (
+        <div className="flex items-center gap-1.5 px-3.5 py-2 border-t border-border/60 bg-muted/40 text-[11px] text-muted-foreground select-none">
+          <CodexLogoIcon size={12} />
+          <span>专业模式生效中：已过滤第三方渠道与通识模型，仅展示 Copis 快速/专家与自定义模型</span>
+        </div>
+      )}
     </>
   )
 

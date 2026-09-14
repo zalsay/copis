@@ -112,6 +112,10 @@ class FakeWebContents extends EventEmitter {
     this.emit('did-stop-loading')
   }
 
+  stop(): void {
+    this.emit('did-stop-loading')
+  }
+
   close(): void {
     this.closed = true
     this.destroyed = true
@@ -173,6 +177,7 @@ mock.module('./web-tab-session-service', () => ({
 
 const {
   acquireWebTabPagePort,
+  activateWebTab,
   activateWebTabIncognito,
   createWebTab,
   createWorkflowWebTab,
@@ -186,6 +191,7 @@ const {
   resolveWebTabFaviconDataUrl,
   resolveWebTabFaviconUrl,
   reloadWebTab,
+  stopWebTab,
   setWebTabHostWindow,
   subscribeWebTabLifecycle,
   subscribeWorkflowWebTabOpened,
@@ -386,6 +392,33 @@ describe('网页页签 favicon 解析', () => {
 
     // 刷新完成后，即使没有再次触发 page-favicon-updated，favicon 依然被完整保留
     expect(getWebTabState(tabId)?.faviconUrl).toBe('data:image/png;base64,BAU=')
+  })
+})
+
+describe('网页页签刷新与停止加载控制', () => {
+  test('Given 正在加载的网页页签 When 调用 stopWebTab Then 停止加载并更新状态为 isLoading: false', () => {
+    setupHost()
+    const initial = createWebTab({ url: 'https://loading.example' })
+    const tabId = initial.tabs[0]!.id
+    const view = createdViews[0]!
+    view.webContents.emit('did-start-loading')
+    expect(getWebTabState(tabId)?.isLoading).toBe(true)
+
+    const snapshot = stopWebTab(tabId)
+    expect(snapshot.tabs.find((tab) => tab.id === tabId)?.isLoading).toBe(false)
+    expect(getWebTabState(tabId)?.isLoading).toBe(false)
+  })
+
+  test('Given 网页页签 When 触发 reloadWebTab Then 返回包含页签快照且支持后续 stopWebTab 停止', () => {
+    setupHost()
+    const initial = createWebTab({ url: 'https://page.example' })
+    const tabId = initial.tabs[0]!.id
+
+    const reloadSnapshot = reloadWebTab(tabId)
+    expect(reloadSnapshot.tabs.some((tab) => tab.id === tabId)).toBe(true)
+
+    const stoppedSnapshot = stopWebTab(tabId)
+    expect(stoppedSnapshot.tabs.find((tab) => tab.id === tabId)?.isLoading).toBe(false)
   })
 })
 
@@ -730,5 +763,60 @@ describe('网页页签 CDP 会话路由与按需 Lease 生命周期', () => {
     } finally {
       host.contentView.addChildView = originalAddChildView
     }
+  })
+
+  test('Given 公共页签更新尺寸 When 后台创建新页签或切换页签 Then 继承尺寸且视口跟随切换可见性', () => {
+    setupHost()
+    const tab1 = createWebTab({ url: 'https://tab1.example.test' })
+    const tab1Id = tab1.activeTabId!
+    const view1 = createdViews[0]!
+
+    // 初始尺寸更新
+    updateWebTabBounds({
+      tabId: tab1Id,
+      bounds: { x: 100, y: 60, width: 1200, height: 800 },
+    })
+
+    expect(view1.visible).toBe(true)
+    expect(view1.bounds).toEqual({ x: 100, y: 60, width: 1200, height: 800 })
+
+    // 后台创建新页签（activate: false）
+    const tab2 = createWebTab({ url: 'https://tab2.example.test', activate: false })
+    const tab2Id = tab2.createdTabId
+    const view2 = createdViews[1]!
+
+    // 新页签初始未激活，但自动继承有效 bounds
+    expect(view2.visible).toBe(false)
+    expect(view2.bounds).toEqual({ x: 100, y: 60, width: 1200, height: 800 })
+
+    // 切换到 tab2
+    activateWebTab(tab2Id)
+    expect(view1.visible).toBe(false)
+    expect(view2.visible).toBe(true)
+    expect(view2.bounds).toEqual({ x: 100, y: 60, width: 1200, height: 800 })
+
+    // 调整 tab2 尺寸，tab1 的 bounds 也同步对齐
+    updateWebTabBounds({
+      tabId: tab2Id,
+      bounds: { x: 110, y: 70, width: 1400, height: 900 },
+    })
+    expect(view2.bounds).toEqual({ x: 110, y: 70, width: 1400, height: 900 })
+    expect(view1.bounds).toEqual({ x: 110, y: 70, width: 1400, height: 900 })
+
+    // 切换回 tab1
+    activateWebTab(tab1Id)
+    expect(view1.visible).toBe(true)
+    expect(view2.visible).toBe(false)
+    expect(view1.bounds).toEqual({ x: 110, y: 70, width: 1400, height: 900 })
+
+    // 切换至 Copis 首页（activeTabId 为 null）
+    activateWebTab(null)
+    expect(view1.visible).toBe(false)
+    expect(view2.visible).toBe(false)
+
+    // 从首页再次切回任意页签
+    activateWebTab(tab2Id)
+    expect(view2.visible).toBe(true)
+    expect(view2.bounds).toEqual({ x: 110, y: 70, width: 1400, height: 900 })
   })
 })

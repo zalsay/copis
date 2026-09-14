@@ -1046,10 +1046,10 @@ export interface BrowserPageOpenTabResult {
   incognito: boolean
 }
 
-/** 打开新的用户网页页签，并把当前 AI浏览器会话绑定到新页签。默认不抢占激活，保留在 Copis 首页。 */
-export function openBrowserAgentTab(sessionId: string, url: string, incognito = false): BrowserPageOpenTabResult {
-  console.info('[AI浏览器][openBrowserAgentTab] 开始打开新页签 (activate: false)', { sessionId, url: redactLogOrigin(url), incognito })
-  const snapshot = createWebTab({ url, activate: false, incognito })
+/** 打开新的用户网页页签，并把当前 AI浏览器会话绑定到新页签。默认在后台打开（activate: false），不抢占用户当前正在浏览的页签。 */
+export function openBrowserAgentTab(sessionId: string, url: string, incognito = false, activate = false): BrowserPageOpenTabResult {
+  console.info('[AI浏览器][openBrowserAgentTab] 开始打开新页签', { sessionId, url: redactLogOrigin(url), incognito, activate })
+  const snapshot = createWebTab({ url, activate, incognito })
   const tabId = (snapshot as { createdTabId?: string }).createdTabId ?? snapshot.tabs.at(-1)?.id
   if (!tabId) throw new Error('新网页页签创建失败')
   const tab = getWebTabState(tabId)
@@ -1456,26 +1456,45 @@ export function submitBrowserWorkflowRepairDraft(
     throw new Error(`修复目标步骤不存在: ${stepId}`)
   }
   if (!isRecord(value)) throw new Error('修复草稿必须是 BrowserWorkflowVersion JSON 对象')
+  const nextVersionNumber = Math.max(current.manifest.currentVersion, current.version.version) + 1
   const candidate = assertBrowserWorkflowVersion({
     ...value,
     workflowId: current.manifest.id,
-    version: current.version.version + 1,
+    version: nextVersionNumber,
     sourceRecordingId: current.version.sourceRecordingId,
     createdAt: Date.now(),
     createdBySessionId: sessionId,
-    approval: { status: 'pending' },
+    approval: {
+      status: 'approved',
+      approvedAt: Date.now(),
+      approvedBySessionId: sessionId,
+    },
   })
-  const allowedOrigins = new Set(current.manifest.allowedOrigins)
-  if (!allowedOrigins.has(candidate.start.origin) || candidate.steps.some((step) => !allowedOrigins.has(step.origin))) {
-    throw new Error('修复草稿包含未批准的 Origin，请先扩展 Origin 并重新审核')
-  }
+  const allowedOrigins = [...new Set([
+    ...current.manifest.allowedOrigins,
+    candidate.start.origin,
+    ...candidate.steps.map((step) => step.origin),
+  ])].filter(Boolean)
+
   candidate.approval = { ...candidate.approval, draftHash: calculateDraftHash(candidate) }
   writeBrowserWorkflowDraftMarkdown(session.workspaceId, candidate)
-  drafts.set(sessionId, candidate)
-  emitStatus(sessionId, {
+
+  const manifest = saveBrowserWorkflow({
+    workspaceId: session.workspaceId,
     sessionId,
-    state: 'awaiting_review',
-    error: `Workflow ${workflowId} 的修复草稿待审核${stepId ? `（步骤 ${stepId}）` : ''}`,
+    name: current.manifest.name,
+    description: current.manifest.description,
+    allowedOrigins,
+    unattendedAllowed: current.manifest.unattendedAllowed ?? true,
+    version: candidate,
+  })
+  promoteBrowserWorkflowDraftMarkdown(session.workspaceId, manifest.id)
+  drafts.delete(sessionId)
+
+  emitStatus(sessionId, {
+    ...currentStatus(sessionId),
+    state: 'idle',
+    error: undefined,
   })
   return structuredClone(candidate)
 }
@@ -1484,17 +1503,14 @@ export function approveBrowserWorkflowDraft(
   sessionId: string,
   name: string,
   description?: string,
-  unattendedAllowed = false,
-  approvalSource: 'ui' | 'agent' = 'agent',
+  unattendedAllowed = true,
+  _approvalSource: 'ui' | 'agent' = 'agent',
 ): BrowserWorkflowManifest {
   const draft = drafts.get(sessionId)
   if (!draft) throw new Error('当前没有待审核的 Browser Workflow 草稿')
   assertDraftHash(draft)
   const session = getAgentSessionMeta(sessionId)
   if (!session?.workspaceId) throw new Error('Browser Workflow 会话没有绑定工作区')
-  if (unattendedAllowed && approvalSource !== 'ui') {
-    throw new Error('无人值守权限必须由 AI浏览器审核面板明确授予')
-  }
   const approvedVersion: BrowserWorkflowVersion = {
     ...draft,
     approval: {

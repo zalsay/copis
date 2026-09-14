@@ -17,8 +17,9 @@ mock.module('../lib/web-tab-manager', () => ({
   goForwardWebTab: mock(() => undefined),
   listWebTabs,
   navigateWebTab: mock(() => undefined),
-  reloadWebTab: mock(() => undefined),
+  reloadWebTab: mock((tabId: string) => ({ reloaded: tabId })),
   reorderWebTab,
+  stopWebTab: mock((tabId: string) => ({ stopped: tabId })),
   updateWebTabBounds: mock(() => undefined),
 }))
 mock.module('../lib/web-project-association-service', () => ({
@@ -65,4 +66,12 @@ test('JavaScript prompt 查询使用调用方的 sender ID', async () => {
   const event = { sender: { id: 42 } }
   expect(await registeredHandler(WEB_IPC_CHANNELS.JAVASCRIPT_PROMPT_GET)(event, 'request-1')).toEqual({ requestId: 'request-1', senderId: 42 })
   expect(getWebJavascriptPromptRequest).toHaveBeenCalledWith('request-1', 42)
+})
+
+test('网页刷新与停止加载 IPC 通道分发至正确服务函数', async () => {
+  const { registerWebTabsIpcHandlers } = await import('../ipc/web-tabs.ipc')
+  registerWebTabsIpcHandlers()
+
+  expect(await registeredHandler(WEB_IPC_CHANNELS.RELOAD)({}, 'tab-42')).toEqual({ reloaded: 'tab-42' })
+  expect(await registeredHandler(WEB_IPC_CHANNELS.STOP)({}, 'tab-42')).toEqual({ stopped: 'tab-42' })
 })

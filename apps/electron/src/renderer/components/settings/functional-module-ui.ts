@@ -60,6 +60,12 @@ export const FUNCTIONAL_MODULE_DEFINITIONS: readonly FunctionalModuleDefinition[
     description: '为 Copis 提供创造模式智能体运行时与工具执行环境',
     required: true,
   },
+  {
+    name: 'codex-cli',
+    displayName: '专业模式模块',
+    description: '专业模式后台运行核心组件',
+    required: false,
+  },
 ]
 
 export function createEmptyFunctionalModuleStatus(

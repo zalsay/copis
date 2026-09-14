@@ -9,7 +9,8 @@ use crate::automation::{AutomationError, AutomationRunInput, AutomationStore};
 use crate::pi_rpc::{parse_worker_frame, PiWorkerManager};
 use crate::{
     ensure_internal_success, ensure_internal_success_with_body, finalize_worker_run,
-    persist_worker_event, persist_worker_frame, send_internal_request, Bridge,
+    normalize_worker_event_frame, persist_worker_event, persist_worker_frame,
+    send_internal_request, Bridge,
 };
 
 const TICK_INTERVAL: Duration = Duration::from_secs(30);
@@ -157,11 +158,12 @@ impl AutomationScheduler {
             if read == 0 {
                 break;
             }
-            let Some(frame) = parse_worker_frame(line.trim_end_matches(['\r', '\n'])) else {
+            let Some(mut frame) = parse_worker_frame(line.trim_end_matches(['\r', '\n'])) else {
                 continue;
             };
             match frame.get("type").and_then(Value::as_str) {
                 Some("event") => {
+                    normalize_worker_event_frame(&mut frame);
                     if let Err(error) = persist_worker_event(&self.bridge, &frame) {
                         eprintln!("[定时任务] Agent SDK 消息持久化失败: {}", error);
                     }

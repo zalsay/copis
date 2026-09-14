@@ -7,7 +7,7 @@
 
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, ATTACHMENT_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, FUNCTIONAL_MODULE_IPC_CHANNELS, PROXY_IPC_CHANNELS, AGENT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, WECHAT_IPC_CHANNELS, AGENT_MAIL_IPC_CHANNELS, AUTOMATION_IPC_CHANNELS, PLANNING_IPC_CHANNELS, WORKING_IPC_CHANNELS, WEB_IPC_CHANNELS, WEB_PASSWORD_IPC_CHANNELS, BROWSER_WORKFLOW_IPC_CHANNELS, MEMORY_IPC_CHANNELS, FUND_STOCK_IPC_CHANNELS, DSH_CORDIS_IPC_CHANNELS } from '@copis/shared'
-import { USER_PROFILE_IPC_CHANNELS, SETTINGS_IPC_CHANNELS, SCRATCH_PAD_IPC_CHANNELS, APP_ICON_IPC_CHANNELS, DOCK_BADGE_IPC_CHANNELS, STORAGE_IPC_CHANNELS } from '../types'
+import { USER_PROFILE_IPC_CHANNELS, SETTINGS_IPC_CHANNELS, SCRATCH_PAD_IPC_CHANNELS, APP_ICON_IPC_CHANNELS, DOCK_BADGE_IPC_CHANNELS, STORAGE_IPC_CHANNELS, CODEX_IPC_CHANNELS, type CodexAppServerStatus, type CodexCliStatus } from '../types'
 import { agentHttpStreamClient } from '../renderer/lib/agent-http-stream'
 import { setHttpApiWebToken } from '../renderer/lib/http-api-web-token'
 import { COPIS_HTTP_API_HOST } from '@copis/shared/config'
@@ -327,6 +327,8 @@ export interface ElectronAPI {
     goForward: (tabId: string) => Promise<WebTabsSnapshot>
     /** 刷新网页。 */
     reload: (tabId: string) => Promise<WebTabsSnapshot>
+    /** 停止加载网页。 */
+    stop: (tabId: string) => Promise<WebTabsSnapshot>
     /** 发送 CDP 命令。 */
     /** 获取网页收藏夹。 */
     bookmarksList: () => Promise<WebBookmarksSnapshot>
@@ -537,6 +539,23 @@ export interface ElectronAPI {
 
   /** 订阅侧边栏隐藏菜单项配置变化事件（跨窗口与模式同步，返回清理函数） */
   onHiddenSidebarMenuItemsChanged: (callback: (hiddenItems: string[]) => void) => () => void
+
+  // ===== Codex App Server（专业模式） =====
+
+  /** 检测本机 codex-cli 安装与 app-server 可用性 */
+  checkCodexCli: () => Promise<CodexCliStatus>
+
+  /** 获取当前 Codex App Server 运行状态 */
+  getCodexAppServerStatus: () => Promise<CodexAppServerStatus>
+
+  /** 启动 Codex App Server 并开启专业模式 */
+  startCodexAppServer: () => Promise<CodexAppServerStatus>
+
+  /** 停止 Codex App Server 并关闭专业模式 */
+  stopCodexAppServer: () => Promise<void>
+
+  /** 订阅 Codex App Server 运行状态变化事件（返回清理函数） */
+  onCodexAppServerStatusChanged: (callback: (status: CodexAppServerStatus) => void) => () => void
 
   // ===== Scratch Pad =====
 
@@ -1429,6 +1448,7 @@ const electronAPI: ElectronAPI = {
     goBack: (tabId: string) => ipcRenderer.invoke(WEB_IPC_CHANNELS.GO_BACK, tabId) as Promise<WebTabsSnapshot>,
     goForward: (tabId: string) => ipcRenderer.invoke(WEB_IPC_CHANNELS.GO_FORWARD, tabId) as Promise<WebTabsSnapshot>,
     reload: (tabId: string) => ipcRenderer.invoke(WEB_IPC_CHANNELS.RELOAD, tabId) as Promise<WebTabsSnapshot>,
+    stop: (tabId: string) => ipcRenderer.invoke(WEB_IPC_CHANNELS.STOP, tabId) as Promise<WebTabsSnapshot>,
     bookmarksList: () => ipcRenderer.invoke(WEB_IPC_CHANNELS.BOOKMARKS_LIST) as Promise<WebBookmarksSnapshot>,
     bookmarksSave: (input: SaveWebBookmarkInput) => ipcRenderer.invoke(WEB_IPC_CHANNELS.BOOKMARKS_SAVE, input) as Promise<WebBookmarksSnapshot>,
     bookmarksRemove: (bookmarkId: string) => ipcRenderer.invoke(WEB_IPC_CHANNELS.BOOKMARKS_REMOVE, bookmarkId) as Promise<WebBookmarksSnapshot>,
@@ -1692,6 +1712,29 @@ const electronAPI: ElectronAPI = {
     return () => { ipcRenderer.removeListener(SETTINGS_IPC_CHANNELS.ON_HIDDEN_SIDEBAR_MENU_ITEMS_CHANGED, listener) }
   },
 
+  // ===== Codex App Server（专业模式） =====
+  checkCodexCli: () => {
+    return ipcRenderer.invoke(CODEX_IPC_CHANNELS.CHECK_CLI)
+  },
+
+  getCodexAppServerStatus: () => {
+    return ipcRenderer.invoke(CODEX_IPC_CHANNELS.GET_STATUS)
+  },
+
+  startCodexAppServer: () => {
+    return ipcRenderer.invoke(CODEX_IPC_CHANNELS.START_APP_SERVER)
+  },
+
+  stopCodexAppServer: () => {
+    return ipcRenderer.invoke(CODEX_IPC_CHANNELS.STOP_APP_SERVER)
+  },
+
+  onCodexAppServerStatusChanged: (callback: (status: CodexAppServerStatus) => void) => {
+    const listener = (_: unknown, status: CodexAppServerStatus): void => callback(status)
+    ipcRenderer.on(CODEX_IPC_CHANNELS.ON_STATUS_CHANGED, listener)
+    return () => { ipcRenderer.removeListener(CODEX_IPC_CHANNELS.ON_STATUS_CHANGED, listener) }
+  },
+
   // Scratch Pad 持久化
   loadScratchPad: () => {
     return ipcRenderer.invoke(SCRATCH_PAD_IPC_CHANNELS.LOAD)
@@ -1863,7 +1906,7 @@ const electronAPI: ElectronAPI = {
   },
 
   sendAgentMessage: (input: AgentSendInput) => {
-    if (input.agentRuntime === 'pi') return agentHttpStreamClient.send(input)
+    if (input.agentRuntime === 'pi' || input.agentRuntime === 'codex') return agentHttpStreamClient.send(input)
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.SEND_MESSAGE, input)
   },
 

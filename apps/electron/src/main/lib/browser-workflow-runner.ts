@@ -26,6 +26,7 @@ import {
   getBrowserAgentContext,
   getBrowserAgentWorkspaceId,
   handoffBrowserWorkflowFailure,
+  isBrowserPageAdvancedAuthorizationEnabled,
   publishBrowserWorkflowStatus,
 } from './browser-workflow-service'
 import { registerAutomationWorkflowRun } from './automation-manager'
@@ -39,6 +40,11 @@ import {
 
 interface ActiveRun {
   runId: string
+  workflowId: string
+  version: number
+  sessionId: string
+  workspaceId: string
+  startedAt: number
   controller: AbortController
   resumeManual?: () => void
   resumeCdp?: () => void
@@ -245,7 +251,11 @@ async function writeFailureArtifacts(
   // 尽力截取 failure.png
   if (activePort && activeTabId && getWebTabState(activeTabId)) {
     try {
-      const result = (await activePort.send('Page.captureScreenshot', { format: 'png' })) as { data?: string }
+      const screenshotPromise = activePort.send('Page.captureScreenshot', { format: 'png' })
+      const timeoutPromise = new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error('截取失败页面截图超时')), 5000),
+      )
+      const result = (await Promise.race([screenshotPromise, timeoutPromise])) as { data?: string }
       if (result?.data) {
         const buffer = Buffer.from(result.data, 'base64')
         const pngPath = writeBrowserWorkflowArtifact(
@@ -426,7 +436,13 @@ async function handleTabDetachedPauseAndReacquire(
 
 export async function runBrowserWorkflow(input: BrowserWorkflowRunInput, externalSignal?: AbortSignal): Promise<BrowserWorkflowRunSummary> {
   const activeRun = activeRuns.get(input.sessionId)
-  if (activeRun) throw new Error(`当前 Browser Workflow 正在运行: ${activeRun.runId}`)
+  if (activeRun) {
+    const elapsedSeconds = Math.max(0, Math.floor((Date.now() - activeRun.startedAt) / 1000))
+    throw new Error(
+      `当前 Browser Workflow 正在运行 (runId: ${activeRun.runId}, workflowId: ${activeRun.workflowId}, 版本: v${activeRun.version}, 已运行 ${elapsedSeconds} 秒)。` +
+      '如需重新运行或释放运行锁，请先调用 BrowserWorkflowStop 停止运行。',
+    )
+  }
 
   const workflow = getBrowserWorkflow(input.workspaceId, input.workflowId, input.version)
   if (workflow.manifest.status !== 'ready' || workflow.version.approval.status !== 'approved') {
@@ -481,7 +497,15 @@ export async function runBrowserWorkflow(input: BrowserWorkflowRunInput, externa
     signal: controller.signal,
   }
 
-  const activeEntry: ActiveRun = { runId: run.runId, controller }
+  const activeEntry: ActiveRun = {
+    runId: run.runId,
+    workflowId: input.workflowId,
+    version: workflow.version.version,
+    sessionId: input.sessionId,
+    workspaceId: input.workspaceId,
+    startedAt: run.startedAt,
+    controller,
+  }
   activeRuns.set(input.sessionId, activeEntry)
 
   const onTabDetached = (alias: string, _reason: string): void => {
@@ -514,7 +538,8 @@ export async function runBrowserWorkflow(input: BrowserWorkflowRunInput, externa
       return waitForWebTabLoad(tabId, timeoutMs, signal)
     },
   }
-  const pageExecutor = createBrowserWorkflowPageExecutor(pageRuntime)
+  const advancedAuthorization = input.source === 'user' && isBrowserPageAdvancedAuthorizationEnabled(input.sessionId)
+  const pageExecutor = createBrowserWorkflowPageExecutor(pageRuntime, { advancedAuthorization })
 
   try {
     releaseProfileLease = acquireBrowserWorkflowProfileLease(workflowPartition, input.sessionId)
@@ -748,6 +773,7 @@ export async function runBrowserWorkflow(input: BrowserWorkflowRunInput, externa
                   allowedOrigins: workflow.manifest.allowedOrigins,
                   variables,
                   signal: stepController.signal,
+                  advancedAuthorization,
                 })
                 executorPromise.catch(() => {})
 
@@ -808,6 +834,7 @@ export async function runBrowserWorkflow(input: BrowserWorkflowRunInput, externa
                 allowedOrigins: workflow.manifest.allowedOrigins,
                 variables,
                 signal: stepController.signal,
+                advancedAuthorization,
               })
               if (pageStepResult.fallbackUsed) {
                 appendFallbackEvent(runContext, step.id)
@@ -963,11 +990,21 @@ export function continueBrowserWorkflowRun(sessionId: string): void {
   throw new Error('当前 Workflow 没有等待人工接管或 CDP 恢复')
 }
 
-export function stopBrowserWorkflowRun(sessionId: string): void {
+export function getActiveBrowserWorkflowRun(sessionId: string): ActiveRun | undefined {
+  return activeRuns.get(sessionId)
+}
+
+export function isBrowserWorkflowRunActive(sessionId: string): boolean {
+  return activeRuns.has(sessionId)
+}
+
+export function stopBrowserWorkflowRun(sessionId: string): boolean {
   const active = activeRuns.get(sessionId)
   if (active) {
     active.resumeManual = undefined
     active.resumeCdp = undefined
     active.controller.abort()
+    return true
   }
+  return false
 }

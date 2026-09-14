@@ -32,6 +32,8 @@ import {
   UsersRound,
 } from 'lucide-react'
 import { CopisLogoIcon } from '@/components/ui/copis-logo-icon'
+import { CodexLogoIcon } from '@/components/ui/codex-logo-icon'
+import { professionalModeAtom } from '@/atoms/professional-mode-atoms'
 import { toast } from 'sonner'
 import type { AgentWorkspace } from '@copis/shared'
 import { cn } from '@/lib/utils'
@@ -150,6 +152,7 @@ export function CopisWorkingSidebar({ width, noTransition = false }: CopisWorkin
   const pinnedDevProjects = useAtomValue(pinnedDevProjectsAtom)
   const setCurrentWorkspaceId = useSetAtom(currentAgentWorkspaceIdAtom)
   const [appMode, setAppMode] = useAtom(appModeAtom)
+  const setProfessionalMode = useSetAtom(professionalModeAtom)
   const setActiveView = useSetAtom(activeViewAtom)
   const setPlanningTab = useSetAtom(planningTabAtom)
   const setWorkingSettingsOpen = useSetAtom(workingSettingsOpenAtom)
@@ -293,8 +296,18 @@ export function CopisWorkingSidebar({ width, noTransition = false }: CopisWorkin
     } else {
       setAppMode('agent')
     }
+    const isTargetProfessional = targetSession?.agentRuntime === 'codex'
+    setProfessionalMode(isTargetProfessional)
+    if (isTargetProfessional && window.electronAPI?.startCodexAppServer) {
+      window.electronAPI.startCodexAppServer().catch((err) => {
+        console.warn('[CopisWorkingSidebar] 启动专业模式服务失败:', err)
+      })
+    }
     setActiveView('conversations')
-    window.electronAPI.updateSettings({ agentWorkspaceId: workspaceId }).catch(console.error)
+    window.electronAPI.updateSettings({
+      agentWorkspaceId: workspaceId,
+      professionalMode: isTargetProfessional,
+    }).catch(console.error)
     openSession('agent', sessionId, title)
   }
 
@@ -773,6 +786,12 @@ export function CopisWorkingSidebar({ width, noTransition = false }: CopisWorkin
                       {(session.mode === 'creation' || session.agentRuntime === 'dsh') && (
                         <small className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-amber-500/15 text-amber-600 dark:text-amber-400">
                           创造
+                        </small>
+                      )}
+                      {session.agentRuntime === 'codex' && (
+                        <small className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-primary/15 text-primary">
+                          <CodexLogoIcon size={10} />
+                          专业
                         </small>
                       )}
                       <span>{displaySessionTitle || sessionTitle}</span>

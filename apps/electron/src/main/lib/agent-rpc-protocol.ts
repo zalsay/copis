@@ -1,4 +1,5 @@
 import type {
+  AgentRuntime,
   AgentStreamPayload,
   AgentThinkingLevel,
   CopisPermissionMode,
@@ -12,6 +13,8 @@ import type { AgentRuntimeEnv } from './agent-runtime-env'
 
 export interface PiWorkerQueryConfig {
   sessionId: string
+  agentRuntime?: AgentRuntime
+  codexAppServerPort?: number
   prompt: string
   model?: string
   cwd?: string

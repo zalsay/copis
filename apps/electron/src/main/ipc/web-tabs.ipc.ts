@@ -18,6 +18,7 @@ import {
   navigateWebTab,
   reloadWebTab,
   reorderWebTab,
+  stopWebTab,
   updateWebTabBounds,
 } from '../lib/web-tab-manager'
 import {
@@ -53,6 +54,7 @@ export function registerWebTabsNavigationIpcHandlers(): void {
   ipcMain.handle(WEB_IPC_CHANNELS.GO_BACK, (_event, tabId: string) => goBackWebTab(tabId))
   ipcMain.handle(WEB_IPC_CHANNELS.GO_FORWARD, (_event, tabId: string) => goForwardWebTab(tabId))
   ipcMain.handle(WEB_IPC_CHANNELS.RELOAD, (_event, tabId: string) => reloadWebTab(tabId))
+  ipcMain.handle(WEB_IPC_CHANNELS.STOP, (_event, tabId: string) => stopWebTab(tabId))
 }
 
 export function registerWebTabsProjectIpcHandlers(): void {

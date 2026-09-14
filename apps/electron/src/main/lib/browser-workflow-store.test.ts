@@ -330,4 +330,19 @@ describe('Browser Workflow 存储', () => {
     expect(loaded.version.approval.playwrightScriptSha256).toBeUndefined()
     expect(existsSync(join(browserWorkflowRoot, 'legacy-clean-test', 'playwright'))).toBe(false)
   })
+
+  test('Given 请求不存在的版本 When getBrowserWorkflow Then 报错包含最新版本与所有可用版本', () => {
+    const version1 = createVersion('version-diagnostic-test')
+    store.saveBrowserWorkflow({
+      workspaceId: 'workspace-1',
+      sessionId: 'session-1',
+      name: '诊断测试 Workflow',
+      allowedOrigins: ['https://example.com'],
+      version: version1,
+    })
+
+    expect(() => store.getBrowserWorkflow('workspace-1', 'version-diagnostic-test', 3)).toThrow(
+      'Browser Workflow「诊断测试 Workflow」(ID: version-diagnostic-test) 版本 v3 不存在。当前最新版本为 v1，可用版本: v1。',
+    )
+  })
 })

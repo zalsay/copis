@@ -38,7 +38,8 @@ export function registerAgentSessionsIpcHandlers(): void {
     async (_, title?: string, channelId?: string, workspaceId?: string, modelId?: string, expertTeamSession?: AgentExpertTeamSession, expertTeamSetup?: boolean, options?: { agentRuntime?: AgentRuntime; mode?: 'agent' | 'creation' }): Promise<AgentSessionMeta> => {
       const access = getWorkingModelCatalogAccess()
       assertWorkingCustomModelSelection(channelId, modelId, access.isVip, access.ownerId)
-      const runtime = options?.agentRuntime ?? getSettings().agentRuntime ?? 'pi'
+      const currentSettings = getSettings()
+      const runtime = options?.agentRuntime ?? (currentSettings.professionalMode ? 'codex' : (currentSettings.agentRuntime ?? 'pi'))
       const session = createAgentSession(
         title,
         channelId,

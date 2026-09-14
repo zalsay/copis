@@ -15,6 +15,7 @@ import {
   normalizeWorkingMode,
   workingModeToModelId,
   type AgentQueueMessageInput,
+  type AgentRuntime,
   type AgentSendInput,
   type AgentSessionMeta,
   type AgentWorkspace,
@@ -22,10 +23,12 @@ import {
   type CopisPermissionMode,
   type MemoryPolicy,
   type ProviderType,
+  type SDKAssistantMessage,
   type SDKMessage,
   type WorkingMode,
   isAppConnectorSession,
 } from '@copis/shared'
+import { isAgentRuntime } from './agent-runtime-validation'
 import type { AppSettings } from '../../types'
 import {
   getChannelById,
@@ -41,10 +44,15 @@ import {
   appendSDKMessages,
   createAgentSession,
   getAgentSessionMeta,
+  getAgentSessionSDKMessages,
   resolveAgentCwd,
   updateAgentSessionMeta,
-  getAgentSessionSDKMessages,
 } from './agent-session-manager'
+import {
+  DEFAULT_CODEX_PORT,
+  getCodexAppServerStatus,
+  startCodexAppServer,
+} from './codex-app-server-service'
 import {
   ensureAgentWorkspaceBrowserSessionPath,
   ensureAgentWorkspaceContextDir,
@@ -58,7 +66,7 @@ import {
   getLocalProjectRootStatus,
   listAgentWorkspacesByUpdatedAt,
 } from './agent-workspace-manager'
-import { getAgentSessionWorkspacePath, getAgentWorkspacePath, getSdkConfigDir, getWorkspaceSkillsDir } from './config-paths'
+import { getAgentSessionWorkspacePath, getAgentWorkspacePath, getDefaultSkillsDir, getSdkConfigDir, getWorkspaceSkillsDir } from './config-paths'
 import { buildDynamicContext, buildSystemPrompt } from './agent-prompt-builder'
 import {
   HttpExpertTeamContextReader,
@@ -210,10 +218,11 @@ export function parseAgentRpcInput(record: Record<string, unknown>): AgentSendIn
   if (permissionMode !== undefined && !isCopisPermissionMode(permissionMode)) {
     throw new Error('权限模式参数不正确')
   }
-  const agentRuntime = optionalString(record.agentRuntime)
-  if (agentRuntime !== undefined && agentRuntime !== 'pi') {
-    throw new Error('Agent RPC 只支持 Pi runtime')
+  const rawAgentRuntime = optionalString(record.agentRuntime)
+  if (rawAgentRuntime !== undefined && !isAgentRuntime(rawAgentRuntime)) {
+    throw new Error('agentRuntime 参数不正确')
   }
+  const agentRuntime: AgentRuntime = isAgentRuntime(rawAgentRuntime) ? rawAgentRuntime : 'pi'
   const rawStartedAt = record.startedAt
   const startedAt = typeof rawStartedAt === 'number' && Number.isFinite(rawStartedAt) ? rawStartedAt : undefined
   const rawWorkingMode = record.workingMode
@@ -235,7 +244,7 @@ export function parseAgentRpcInput(record: Record<string, unknown>): AgentSendIn
     ...(optionalString(record.rawUserMessage) ? { rawUserMessage: optionalString(record.rawUserMessage) } : {}),
     channelId: optionalString(record.channelId) ?? COPIS_WORKING_CHANNEL_ID,
     ...(optionalString(record.modelId) ? { modelId: optionalString(record.modelId) } : {}),
-    agentRuntime: 'pi',
+    agentRuntime,
     ...(optionalString(record.workspaceId) ? { workspaceId: optionalString(record.workspaceId) } : {}),
     ...(stringArray(record.additionalDirectories) ? { additionalDirectories: stringArray(record.additionalDirectories) } : {}),
     ...(mentionedSkills ? { mentionedSkills } : {}),
@@ -550,6 +559,23 @@ export async function prepareAgentRpcRun(input: AgentSendInput): Promise<PiWorke
   if (!channel) throw new Error(`渠道不存在: ${channelId}`)
   if (!channel.enabled) throw new Error('当前渠道已禁用')
 
+  const isSessionProfessional = session.agentRuntime === 'codex'
+  if (input.agentRuntime && (input.agentRuntime === 'codex') !== isSessionProfessional) {
+    throw new Error('专业模式与普通模式会话不能混用。当前会话与所选模式不一致。')
+  }
+
+  if (isSessionProfessional) {
+    const isCopisDefault = channelId === COPIS_WORKING_CHANNEL_ID
+    const isCustomModel = isWorkingCustomModelChannelId(channelId)
+    if (!isCopisDefault && !isCustomModel) {
+      throw new Error('专业模式仅支持 Copis 默认模型与自定义模型，不支持当前渠道 Provider')
+    }
+    const requestedModelId = input.modelId ?? session.modelId
+    if (isCopisDefault && requestedModelId === COPIS_WORKING_GLOBAL_MODEL_ID) {
+      throw new Error('专业模式不支持通识 (global) 模型，请选择快速或专家模型')
+    }
+  }
+
   const workingMode = channelId === COPIS_WORKING_CHANNEL_ID
     ? normalizeWorkingMode(input.workingMode ?? session.workingMode)
     : undefined
@@ -564,6 +590,10 @@ export async function prepareAgentRpcRun(input: AgentSendInput): Promise<PiWorke
           : workingModeToModelId(workingMode ?? 'fast')
       : input.modelId ?? channel.models[0]?.id ?? DEFAULT_PI_MODEL_ID
     : input.modelId ?? session.modelId ?? DEFAULT_PI_MODEL_ID
+
+  if (isSessionProfessional && channelId === COPIS_WORKING_CHANNEL_ID && modelId === COPIS_WORKING_GLOBAL_MODEL_ID) {
+    throw new Error('专业模式不支持通识 (global) 模型，请选择快速或专家模型')
+  }
   const credentials = customModelRuntime
     ? { apiKey: customModelRuntime.apiKey }
     : await resolveWorkerCredentials(channelId, channel.provider)
@@ -687,8 +717,12 @@ export async function prepareAgentRpcRun(input: AgentSendInput): Promise<PiWorke
   }) + (input.automationContext ? `\n\n## 定时任务执行上下文\n\n${input.automationContext}` : '')
 
   const allSkillPaths: string[] = []
-  if (workspaceSlug) {
+  if (workspaceSkillsDir && !allSkillPaths.includes(workspaceSkillsDir)) {
     allSkillPaths.push(workspaceSkillsDir)
+  }
+  const defaultSkillsDir = getDefaultSkillsDir()
+  if (existsSync(defaultSkillsDir) && !allSkillPaths.includes(defaultSkillsDir)) {
+    allSkillPaths.push(defaultSkillsDir)
   }
   if (isAppConnector) {
     let allWs: AgentWorkspace[] = []
@@ -711,8 +745,32 @@ export async function prepareAgentRpcRun(input: AgentSendInput): Promise<PiWorke
     ...(browserBinding && browserTab ? { tabId: browserBinding.tabId } : {}),
     triggeredBy: input.triggeredBy ?? 'user',
   })
+  let codexAppServerPort: number | undefined
+  if (isSessionProfessional) {
+    let httpApiPort: number | undefined
+    if (channel.baseUrl) {
+      try {
+        const parsed = new URL(channel.baseUrl)
+        if (parsed.port) {
+          httpApiPort = Number(parsed.port)
+        }
+      } catch {
+        // ignore
+      }
+    }
+    const status = getCodexAppServerStatus()
+    if (!status.running) {
+      const started = await startCodexAppServer({ httpApiPort })
+      codexAppServerPort = started.port ?? DEFAULT_CODEX_PORT
+    } else {
+      codexAppServerPort = status.port ?? DEFAULT_CODEX_PORT
+    }
+  }
+
   const query: PiWorkerQueryConfig = {
     sessionId: input.sessionId,
+    agentRuntime: session.agentRuntime ?? 'pi',
+    ...(codexAppServerPort ? { codexAppServerPort } : {}),
     prompt,
     model: modelId,
     cwd: agentCwd,
@@ -759,7 +817,7 @@ export async function prepareAgentRpcRun(input: AgentSendInput): Promise<PiWorke
   }
 
   updateAgentSessionMeta(input.sessionId, {
-    agentRuntime: 'pi',
+    agentRuntime: session.agentRuntime ?? 'pi',
     channelId,
     modelId,
     workingMode,
@@ -837,6 +895,12 @@ export async function prepareAutomationRpcRun(
 export function shouldPersistAgentRpcMessage(message: SDKMessage): boolean {
   const record = message as unknown as Record<string, unknown>
   if (record._partial === true || record.isReplay === true) return false
+  if (message.type === 'assistant') {
+    const assistant = message as SDKAssistantMessage
+    if (!assistant.error && assistant.message?.stop_reason == null) {
+      return false
+    }
+  }
   return message.type === 'result' || isVisibleRunMessage(message)
 }
 

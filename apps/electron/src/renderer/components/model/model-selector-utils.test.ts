@@ -120,4 +120,55 @@ describe('模型选择器内置渠道', () => {
       provider: 'zhipu',
     })
   })
+
+  test('Given 专业模式生效 When 构建模型选项 Then 仅保留 Copis 默认渠道且过滤所有第三方 Provider (DeepSeek/智谱/OpenAI)', () => {
+    const channels: Channel[] = [
+      ...createBuiltinChannels('http://127.0.0.1:9000'),
+      {
+        id: 'openai-channel',
+        name: 'OpenAI 渠道',
+        provider: 'openai',
+        baseUrl: 'https://api.openai.com/v1',
+        apiKey: 'key',
+        models: [{ id: 'gpt-4o', name: 'GPT-4o', enabled: true }],
+        enabled: true,
+        createdAt: 0,
+        updatedAt: 0,
+      },
+      {
+        id: 'zhipu-channel',
+        name: '智谱渠道',
+        provider: 'zhipu',
+        baseUrl: 'https://open.bigmodel.cn/api/paas/v4',
+        apiKey: 'key',
+        models: [],
+        enabled: true,
+        createdAt: 0,
+        updatedAt: 0,
+      },
+    ]
+
+    // 专业模式下的过滤条件：filterChannelIds=[COPIS_WORKING_CHANNEL_ID]，且 includeProviders=undefined
+    const options = buildModelOptions(
+      channels,
+      undefined,
+      [COPIS_WORKING_CHANNEL_ID],
+      undefined,
+      { includeProviders: undefined, useComposerProviderLabels: true },
+    )
+
+    // 所有模型选项必须全部来自于 Copis 默认渠道
+    expect(options.length).toBeGreaterThan(0)
+    for (const option of options) {
+      expect(option.channelId).toBe(COPIS_WORKING_CHANNEL_ID)
+      expect(option.provider).toBe('openai-responses')
+    }
+
+    // 确认第三方渠道全部被过滤排除
+    const channelIds = options.map((o) => o.channelId)
+    expect(channelIds).not.toContain(COPIS_WORKING_DEEPSEEK_CHANNEL_ID)
+    expect(channelIds).not.toContain('copis-working-zhipu')
+    expect(channelIds).not.toContain('openai-channel')
+    expect(channelIds).not.toContain('zhipu-channel')
+  })
 })

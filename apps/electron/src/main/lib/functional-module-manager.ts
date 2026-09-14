@@ -37,6 +37,7 @@ const MODULE_DEFINITIONS: readonly FunctionalModuleDefinition[] = [
   { name: 'python-runtime', displayName: 'Python 3.12 运行环境', required: true },
   { name: 'agently-cli', displayName: 'Agent QQ 邮箱 CLI', required: true },
   { name: 'dsh', displayName: '创造模式', required: true },
+  { name: 'codex-cli', displayName: '专业模式模块', required: false },
 ]
 
 export type FunctionalModuleFetch = (

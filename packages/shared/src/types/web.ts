@@ -172,6 +172,7 @@ export const WEB_IPC_CHANNELS = {
   GO_BACK: 'web-tabs:go-back',
   GO_FORWARD: 'web-tabs:go-forward',
   RELOAD: 'web-tabs:reload',
+  STOP: 'web-tabs:stop',
   STATE_CHANGED: 'web-tabs:state-changed',
   BOOKMARKS_LIST: 'web-bookmarks:list',
   BOOKMARKS_SAVE: 'web-bookmarks:save',

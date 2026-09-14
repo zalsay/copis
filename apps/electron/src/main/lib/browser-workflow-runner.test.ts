@@ -278,8 +278,10 @@ mock.module('./web-tab-manager', () => ({
   },
 }))
 
+const advancedAuthEnabledSessions = new Set<string>()
+
 mock.module('./browser-workflow-page-executor', () => ({
-  createBrowserWorkflowPageExecutor: (_runtime: unknown) => ({
+  createBrowserWorkflowPageExecutor: (_runtime: unknown, _options?: unknown) => ({
     execute: async (input: BrowserWorkflowPageStepInput) => {
       executedSteps.push({ stepId: input.step.id, type: input.step.type, tabId: input.tabId })
       if (pageExecutorHook) {
@@ -293,6 +295,7 @@ mock.module('./browser-workflow-page-executor', () => ({
 mock.module('./browser-workflow-service', () => ({
   getBrowserAgentContext: () => browserContext,
   getBrowserAgentWorkspaceId: () => (browserContext ? 'workspace-1' : undefined),
+  isBrowserPageAdvancedAuthorizationEnabled: (sessionId: string) => advancedAuthEnabledSessions.has(sessionId),
   handoffBrowserWorkflowFailure: (sessionId: string, tabId: string) => {
     workflowFailureHandoffs.push({ sessionId, tabId })
     const record = tabStore.get(tabId)
@@ -385,6 +388,7 @@ beforeEach(() => {
   waitForLoadHook = undefined
   acquirePortHook = undefined
   publishStatusHook = undefined
+  advancedAuthEnabledSessions.clear()
 })
 
 async function waitUntilStatus(
@@ -2034,5 +2038,92 @@ describe('Browser Workflow Runner (确定性 CDP 主进程编排)', () => {
     ).rejects.toThrow('网页页签已销毁: workflow-tab-1')
 
     expect(profileLeaseReleaseCalls).toBe(1)
+  })
+
+  test('Given 正在运行的 Workflow When 再次发起运行 Then 报错包含运行详细信息与 BrowserWorkflowStop 停止指引', async () => {
+    workflow = createReadyWorkflow(createBasicVersion())
+
+    let finishExecution: () => void = () => {}
+    const runningGate = new Promise<void>((resolve) => {
+      finishExecution = resolve
+    })
+
+    pageExecutorHook = async () => {
+      await runningGate
+      return { fallbackUsed: false }
+    }
+
+    const firstRunPromise = runBrowserWorkflow({
+      workspaceId: 'workspace-1',
+      sessionId: 'session-1',
+      workflowId: 'workflow-1',
+      source: 'automation',
+    })
+
+    await new Promise((resolve) => setTimeout(resolve, 50))
+
+    try {
+      await expect(
+        runBrowserWorkflow({
+          workspaceId: 'workspace-1',
+          sessionId: 'session-1',
+          workflowId: 'workflow-1',
+          source: 'automation',
+        }),
+      ).rejects.toThrow(/当前 Browser Workflow 正在运行 \(runId: .*, workflowId: workflow-1, 版本: v1, 已运行 \d+ 秒\)。如需重新运行或释放运行锁，请先调用 BrowserWorkflowStop 停止运行。/)
+    } finally {
+      finishExecution()
+      await firstRunPromise
+    }
+  })
+
+  test('Given 用户开启高级授权且 source 为 user When runBrowserWorkflow 执行 Then 将 advancedAuthorization: true 传给 pageExecutor', async () => {
+    let receivedAuth: boolean | undefined
+    pageExecutorHook = (stepInput) => {
+      receivedAuth = stepInput.advancedAuthorization
+      return { fallbackUsed: false }
+    }
+
+    tabStore.set('tab-1', {
+      id: 'tab-1',
+      url: 'https://example.com/existing',
+      title: 'Existing Tab',
+      isLoading: false,
+      workflowOwned: false,
+    })
+    browserContext = { tabId: 'tab-1' }
+    workflow = createReadyWorkflow(createBasicVersion())
+    advancedAuthEnabledSessions.add('session-auth')
+
+    const summary = await runBrowserWorkflow({
+      workspaceId: 'workspace-1',
+      sessionId: 'session-auth',
+      workflowId: workflow.manifest.id,
+      source: 'user',
+    })
+
+    expect(summary.status).toBe('completed')
+    expect(receivedAuth).toBe(true)
+  })
+
+  test('Given 用户开启高级授权但 source 为 automation When runBrowserWorkflow 执行 Then 不向 pageExecutor 传高级授权 (保持 false)', async () => {
+    let receivedAuth: boolean | undefined
+    pageExecutorHook = (stepInput) => {
+      receivedAuth = stepInput.advancedAuthorization
+      return { fallbackUsed: false }
+    }
+
+    workflow = createReadyWorkflow(createBasicVersion())
+    advancedAuthEnabledSessions.add('session-auth')
+
+    const summary = await runBrowserWorkflow({
+      workspaceId: 'workspace-1',
+      sessionId: 'session-auth',
+      workflowId: workflow.manifest.id,
+      source: 'automation',
+    })
+
+    expect(summary.status).toBe('completed')
+    expect(receivedAuth).toBe(false)
   })
 })

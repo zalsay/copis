@@ -1,6 +1,6 @@
 import { createInterface } from 'node:readline'
-import type { AgentStreamPayload, CopisPermissionMode, SDKMessage } from '@copis/shared'
-import type { PiAgentQueryOptions, PiAgentAdapter } from './lib/adapters/pi-agent-adapter'
+import type { AgentProviderAdapter, AgentStreamPayload, CopisPermissionMode, SDKMessage } from '@copis/shared'
+import type { PiAgentQueryOptions } from './lib/adapters/pi-agent-adapter'
 import {
   parseWorkerCommand,
   parsePiWorkerBrowserCapability,
@@ -17,7 +17,7 @@ import { receiveActiveWorkerQueue } from './lib/pi-worker-queue-receiver'
 
 interface ActiveWorkerRun {
   sessionId: string
-  adapter: PiAgentAdapter
+  adapter: AgentProviderAdapter
   stopped: boolean
   acceptedQueueUuids: Set<string>
 }
@@ -130,9 +130,20 @@ async function runWorker(config: PiWorkerRunConfig): Promise<void> {
   }
 
   const runStartedAt = config.query.retryRunStartedAt ?? Date.now()
-  const { PiAgentAdapter } = await import('./lib/adapters/pi-agent-adapter')
-  const adapter = new PiAgentAdapter()
-  const memoryMaintenance = new MemoryMaintenanceService()
+  const isCodexRuntime = config.query.agentRuntime === 'codex'
+
+  let adapter: AgentProviderAdapter
+  let memoryMaintenance: MemoryMaintenanceService | undefined
+
+  if (isCodexRuntime) {
+    const { CodexAppServerAdapter } = await import('./lib/adapters/codex-app-server-adapter')
+    adapter = new CodexAppServerAdapter()
+  } else {
+    const { PiAgentAdapter } = await import('./lib/adapters/pi-agent-adapter')
+    adapter = new PiAgentAdapter()
+    memoryMaintenance = new MemoryMaintenanceService()
+  }
+
   const run: ActiveWorkerRun = {
     sessionId: config.sessionId,
     adapter,
@@ -148,7 +159,7 @@ async function runWorker(config: PiWorkerRunConfig): Promise<void> {
     ...config.query,
     ...(browserPageControl ? { browserPageControl } : {}),
     ...(automationControl ? { automationControl } : {}),
-    agentRuntime: 'pi',
+    agentRuntime: isCodexRuntime ? 'codex' : 'pi',
     canUseTool: async (_toolName, input) => ({ behavior: 'allow', updatedInput: input }),
     onSessionId: (sdkSessionId, sessionFile) => {
       void writeFrame({
@@ -170,7 +181,7 @@ async function runWorker(config: PiWorkerRunConfig): Promise<void> {
     onRetry: (retry) => {
       emitCopisEvent(config.sessionId, { type: 'retry', ...retry })
     },
-    ...(config.query.workspaceSlug && config.query.memoryPolicy === 'writable'
+    ...(memoryMaintenance && config.query.workspaceSlug && config.query.memoryPolicy === 'writable'
       ? {
         memoryMaintenanceRunner: createMemoryMaintenanceRunner({
           service: memoryMaintenance,
@@ -298,7 +309,9 @@ async function setWorkerPermissionMode(sessionId: string, mode: CopisPermissionM
 
   try {
     // Pi 不接收文件策略；该调用仅保持 SDK 非文件工具状态兼容，实际文件权限由 Rust 执行。
-    await run.adapter.setPermissionMode(sessionId, mode)
+    if (run.adapter.setPermissionMode) {
+      await run.adapter.setPermissionMode(sessionId, mode)
+    }
     emitCopisEvent(sessionId, {
       type: 'plan_mode_changed',
       sessionId,
@@ -320,6 +333,9 @@ async function queueWorker(config: PiWorkerQueueConfig): Promise<void> {
 
   try {
     const accepted = await receiveActiveWorkerQueue(run, config.uuid, async () => {
+      if (!run.adapter.sendQueuedMessage) {
+        throw new Error('当前运行环境不支持追加排队消息')
+      }
       await run.adapter.sendQueuedMessage(
         config.sessionId,
         {

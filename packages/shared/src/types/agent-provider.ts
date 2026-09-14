@@ -7,8 +7,8 @@
 
 import type { SDKMessage } from './agent'
 
-/** Agent runtime 实现。支持 Pi Agent runtime 与 DeepSeek Harness (dsh) runtime。 */
-export type AgentRuntime = 'pi' | 'dsh'
+/** Agent runtime 实现。支持 Pi Agent runtime、DeepSeek Harness (dsh) 与 OpenAI Codex (codex) runtime。 */
+export type AgentRuntime = 'pi' | 'dsh' | 'codex'
 
 /** SDK 用户消息（队列消息注入用，匹配 SDK SDKUserMessage 结构） */
 export interface SDKUserMessageInput {

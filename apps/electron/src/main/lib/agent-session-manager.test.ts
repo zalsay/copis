@@ -128,6 +128,26 @@ describe('Agent 会话 JSONL 读取', () => {
     expect(() => manager.truncateSDKMessages('session-truncate-bad-line', 'assistant-1'))
       .toThrow('JSONL 第 2 行解析失败')
   })
+
+  test('Given 会话 JSONL 存在相同 uuid 的多条中间帧 When 读取 SDKMessage Then 仅保留最新完整帧进行自愈', () => {
+    writeAgentSessionJsonl('session-with-duplicates', [
+      JSON.stringify({ type: 'user', message: { content: [{ type: 'text', text: '你好' }] } }),
+      JSON.stringify({ type: 'assistant', uuid: 'assistant-dup', message: { content: [{ type: 'thinking', thinking: '思考中' }] }, stop_reason: null }),
+      JSON.stringify({ type: 'assistant', uuid: 'assistant-dup', message: { content: [{ type: 'thinking', thinking: '思考中' }, { type: 'text', text: '片段' }] }, stop_reason: null }),
+      JSON.stringify({ type: 'assistant', uuid: 'assistant-dup', message: { content: [{ type: 'thinking', thinking: '思考完成' }, { type: 'text', text: '最终回复' }] }, stop_reason: 'stop' }),
+      JSON.stringify({ type: 'result', subtype: 'success' }),
+    ])
+
+    const messages = manager.getAgentSessionSDKMessages('session-with-duplicates')
+
+    expect(messages.length).toBe(3)
+    expect(messages[0]?.type).toBe('user')
+    expect(messages[1]?.type).toBe('assistant')
+    expect(messages[2]?.type).toBe('result')
+    const assistant = messages[1] as Record<string, unknown>
+    const content = (assistant?.message as Record<string, unknown>)?.content as Array<{ text?: string }>
+    expect(content?.[1]?.text).toBe('最终回复')
+  })
 })
 
 describe('Agent 会话 runtime 元数据', () => {

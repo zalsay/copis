@@ -2,7 +2,7 @@ import * as React from 'react'
 import { Check, CircleStop, FolderKanban, Play, Plus, X } from 'lucide-react'
 import { useAtom, useAtomValue } from 'jotai'
 import { agentWorkspacesAtom } from '@/atoms/agent-atoms'
-import { browserWorkflowDraftAtom, browserWorkflowStatusAtom } from '@/atoms/browser-agent'
+import { browserWorkflowStatusAtom } from '@/atoms/browser-agent'
 import { AgentConversationSurface } from '@/components/agent/AgentConversationSurface'
 import { Button } from '@/components/ui/button'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
@@ -38,10 +38,8 @@ function getPageOriginLabel(pageOrigin: string | undefined): string {
 
 export function BrowserAgentPanel({ sessionId, tabTitle, workspaceId, width, onStartRecording, onStopRecording, onStartNewSession, onSwitchProject, onClose }: BrowserAgentPanelProps): React.ReactElement {
   const [status, setStatus] = useAtom(browserWorkflowStatusAtom)
-  const [draft, setDraft] = useAtom(browserWorkflowDraftAtom)
   const workspaces = useAtomValue(agentWorkspacesAtom)
   const [isActionPending, setIsActionPending] = React.useState(false)
-  const [unattendedAllowed, setUnattendedAllowed] = React.useState(true)
   const defaultWorkspaceId = workspaces.find((workspace) => workspace.slug === 'default')?.id ?? workspaces[0]?.id ?? ''
   const [selectedProjectId, setSelectedProjectId] = React.useState(workspaceId ?? defaultWorkspaceId)
   const pageOriginLabel = getPageOriginLabel(status.pageOrigin)
@@ -59,8 +57,6 @@ export function BrowserAgentPanel({ sessionId, tabTitle, workspaceId, width, onS
 
   React.useEffect(() => {
     let active = true
-    setDraft(null)
-    setUnattendedAllowed(true)
     void window.electronAPI.browserWorkflow.getStatus(sessionId).then((next) => {
       if (active) setStatus(next)
     }).catch((error) => {
@@ -69,25 +65,7 @@ export function BrowserAgentPanel({ sessionId, tabTitle, workspaceId, width, onS
     return () => {
       active = false
     }
-  }, [sessionId, setStatus, setDraft])
-
-  React.useEffect(() => {
-    if (status.state !== 'awaiting_review') {
-      setDraft(null)
-      return
-    }
-    let active = true
-    setUnattendedAllowed(true)
-    void window.electronAPI.browserWorkflow.getDraft(sessionId).then((next) => {
-      if (active) setDraft(next ?? null)
-    }).catch((error) => {
-      console.error('[Browser Workflow] 获取待审核草稿失败:', error)
-      if (active) setDraft(null)
-    })
-    return () => {
-      active = false
-    }
-  }, [sessionId, setDraft, status.state])
+  }, [sessionId, setStatus])
 
   const changeProject = React.useCallback(async (nextProjectId: string): Promise<void> => {
     if (!nextProjectId || nextProjectId === selectedProjectId) return
@@ -153,29 +131,6 @@ export function BrowserAgentPanel({ sessionId, tabTitle, workspaceId, width, onS
       setIsActionPending(false)
     }
   }, [sessionId])
-  const approveDraft = React.useCallback(async (): Promise<void> => {
-    setIsActionPending(true)
-    try {
-      const manifest = await window.electronAPI.browserWorkflow.approveDraft(sessionId, '网页操作 Workflow', undefined, unattendedAllowed)
-      toast.success(`Workflow「${manifest.name}」已保存`)
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : '无法保存 Workflow')
-    } finally {
-      setIsActionPending(false)
-    }
-  }, [sessionId, unattendedAllowed])
-
-  const rejectDraft = React.useCallback(async (): Promise<void> => {
-    setIsActionPending(true)
-    try {
-      await window.electronAPI.browserWorkflow.rejectDraft(sessionId)
-      toast.success('Workflow 草稿已丢弃，可重新让 Agent 提炼')
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : '无法丢弃 Workflow 草稿')
-    } finally {
-      setIsActionPending(false)
-    }
-  }, [sessionId])
 
   return (
     <aside style={{ width }} className="flex h-full min-w-[320px] max-w-[560px] shrink-0 flex-col border-l border-border/70 bg-background shadow-[-8px_0_24px_rgba(15,23,42,0.08)]">
@@ -234,7 +189,7 @@ export function BrowserAgentPanel({ sessionId, tabTitle, workspaceId, width, onS
               size="icon"
               className={cn('size-7', status.state === 'error' && 'text-destructive')}
               aria-label="记录网页操作"
-              disabled={isActionPending || status.state === 'compiling' || status.state === 'awaiting_summary' || status.state === 'awaiting_review'}
+              disabled={isActionPending || status.state === 'compiling' || status.state === 'awaiting_summary'}
               onClick={() => void requestRecording()}
             >
               <Play className="size-3.5" />
@@ -287,38 +242,6 @@ export function BrowserAgentPanel({ sessionId, tabTitle, workspaceId, width, onS
       {status.state === 'awaiting_summary' ? (
         <div className="flex shrink-0 items-center gap-2 border-b border-amber-500/20 bg-amber-500/5 px-3 py-1.5 text-[10px] text-amber-700 dark:text-amber-300">
           Agent 正在读取 Rust 生成的网页操作 JSONL，并提炼 Workflow 草稿。
-        </div>
-      ) : null}
-      {status.state === 'awaiting_review' ? (
-        <div className="shrink-0 border-b border-amber-500/20 bg-amber-500/5 px-3 py-2 text-[10px] text-amber-700 dark:text-amber-300">
-          {draft ? (
-            <>
-              <div className="flex items-center justify-between gap-2 font-medium">
-                <span className="min-w-0 truncate">{draft.start.url}自动化流程草稿</span>
-                <span className="shrink-0">{draft.steps.length} 步</span>
-              </div>
-              <label className="mt-2 flex items-center gap-1.5 text-foreground">
-                <input
-                  type="checkbox"
-                  className="size-3 accent-[var(--ui-primary)]"
-                  checked={unattendedAllowed}
-                  onChange={(event) => setUnattendedAllowed(event.target.checked)}
-                  disabled={isActionPending}
-                />
-                允许该版本无人值守运行
-              </label>
-              <div className="mt-1.5 flex justify-end gap-1.5">
-                <Button type="button" variant="ghost" size="sm" className="h-6 px-2 text-[10px]" disabled={isActionPending} onClick={() => void rejectDraft()}>
-                  取消（不做更新）
-                </Button>
-                <Button type="button" variant="outline" size="sm" className="h-6 px-2 text-[10px]" disabled={isActionPending} onClick={() => void approveDraft()}>
-                  确认（更新为确认后版本）
-                </Button>
-              </div>
-            </>
-          ) : (
-            <span>Workflow 草稿加载中…</span>
-          )}
         </div>
       ) : null}
       {status.state === 'waiting_user' ? (

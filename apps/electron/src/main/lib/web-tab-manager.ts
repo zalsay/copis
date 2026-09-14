@@ -67,6 +67,7 @@ const FAVICON_ACCEPT_HEADER = 'image/avif,image/webp,image/apng,image/svg+xml,im
 
 let hostWindow: BrowserWindow | null = null
 let activeTabId: string | null = null
+let lastPublicBounds: { x: number; y: number; width: number; height: number } | null = null
 let isRestoringPersistedTabs = false
 let isDisposingWebTabs = false
 let bookmarksWindow: BrowserWindow | null = null
@@ -384,8 +385,10 @@ function applyActiveView(): void {
     const isActive = record.state.id === activeTabId
     const hasBounds = record.bounds.width > 0 && record.bounds.height > 0
 
-    if (isActive && hasBounds) {
+    if (hasBounds) {
       record.view.setBounds(record.bounds)
+    }
+    if (isActive && hasBounds) {
       record.view.setVisible(true)
     } else {
       record.view.setVisible(false)
@@ -1024,6 +1027,7 @@ export function disposeWebTabs(): void {
     workflowTabOpenedListeners.clear()
   } finally {
     records.clear()
+    lastPublicBounds = null
     isDisposingWebTabs = false
   }
 }
@@ -1090,6 +1094,9 @@ function createWebTabInternal(input: CreateWebTabInput, workflowOwned: boolean, 
   const view = createWebTabView(partition)
   const id = `web-${randomUUID()}`
   const showWorkflowForE2E = workflowOwned && process.env.COPIS_BROWSER_WORKFLOW_E2E_VISIBLE === '1'
+  const initialBounds = !workflowOwned && lastPublicBounds
+    ? { ...lastPublicBounds }
+    : { x: 0, y: 0, width: 0, height: 0 }
   const record: WebTabRecord = {
     state: {
       id,
@@ -1103,7 +1110,7 @@ function createWebTabInternal(input: CreateWebTabInput, workflowOwned: boolean, 
       canActivateIncognito: false,
     },
     view,
-    bounds: { x: 0, y: 0, width: 0, height: 0 },
+    bounds: initialBounds,
     isIncognito,
     isReloading: false,
     hasOpenedAddress: isHttpWebUrl(url),
@@ -1126,9 +1133,10 @@ function createWebTabInternal(input: CreateWebTabInput, workflowOwned: boolean, 
   record.cleanupLeaseListener = cleanupLease
 
   records.set(id, record)
-  if (showWorkflowForE2E && activeTabId) {
-    const activeRecord = records.get(activeTabId)
+  if (showWorkflowForE2E) {
+    const activeRecord = activeTabId ? records.get(activeTabId) : undefined
     if (activeRecord) record.bounds = { ...activeRecord.bounds }
+    else if (lastPublicBounds) record.bounds = { ...lastPublicBounds }
   }
   try {
     hostWindow!.contentView.addChildView(view)
@@ -1204,7 +1212,11 @@ export function promoteWorkflowWebTab(tabId: string): WebTabState {
   const record = records.get(tabId)
   if (!record?.workflowOwned) throw new Error('Workflow 失败页面不存在或不能接管')
   const activeRecord = activeTabId ? records.get(activeTabId) : undefined
-  if (activeRecord && !activeRecord.workflowOwned) record.bounds = { ...activeRecord.bounds }
+  if (activeRecord && !activeRecord.workflowOwned && activeRecord.bounds.width > 0 && activeRecord.bounds.height > 0) {
+    record.bounds = { ...activeRecord.bounds }
+  } else if (lastPublicBounds) {
+    record.bounds = { ...lastPublicBounds }
+  }
   record.workflowOwned = false
   record.workflowVisible = false
   activeTabId = tabId
@@ -1218,6 +1230,25 @@ export function promoteWorkflowWebTab(tabId: string): WebTabState {
 export function activateWebTab(tabId: string | null): WebTabsSnapshot {
   if (tabId !== null && !records.has(tabId)) {
     throw new Error('网页页签不存在')
+  }
+  if (tabId !== null) {
+    const targetRecord = records.get(tabId)
+    if (targetRecord && !targetRecord.workflowOwned) {
+      const hasValidBounds = targetRecord.bounds.width > 0 && targetRecord.bounds.height > 0
+      if (!hasValidBounds) {
+        if (lastPublicBounds && lastPublicBounds.width > 0 && lastPublicBounds.height > 0) {
+          targetRecord.bounds = { ...lastPublicBounds }
+        } else {
+          for (const item of records.values()) {
+            if (!item.workflowOwned && item.bounds.width > 0 && item.bounds.height > 0) {
+              targetRecord.bounds = { ...item.bounds }
+              lastPublicBounds = { ...item.bounds }
+              break
+            }
+          }
+        }
+      }
+    }
   }
   activeTabId = tabId
   persistTabs()
@@ -1432,6 +1463,14 @@ export function updateWebTabBounds(input: UpdateWebTabBoundsInput): void {
     if (record.workflowVisible) applyActiveView()
     return
   }
+  if (record.bounds.width > 0 && record.bounds.height > 0) {
+    lastPublicBounds = { ...record.bounds }
+    for (const other of records.values()) {
+      if (!other.workflowOwned && other !== record) {
+        other.bounds = { ...record.bounds }
+      }
+    }
+  }
   for (const workflowRecord of records.values()) {
     if (workflowRecord.workflowOwned && workflowRecord.workflowVisible) {
       workflowRecord.bounds = { ...record.bounds }
@@ -1478,12 +1517,26 @@ export function reloadWebTab(tabId: string): WebTabsSnapshot {
   const record = records.get(tabId)
   if (!record) throw new Error('网页页签不存在')
   record.isReloading = true
+  refreshState(record, { isLoading: true })
   try {
     record.view.webContents.reload()
   } catch (error) {
     record.isReloading = false
+    refreshState(record, { isLoading: false })
     throw error
   }
+  return getSnapshot()
+}
+
+/** 停止加载当前网页。 */
+export function stopWebTab(tabId: string): WebTabsSnapshot {
+  const record = records.get(tabId)
+  if (!record) throw new Error('网页页签不存在')
+  record.isReloading = false
+  if (!record.view.webContents.isDestroyed()) {
+    record.view.webContents.stop()
+  }
+  refreshState(record, { isLoading: false })
   return getSnapshot()
 }
 

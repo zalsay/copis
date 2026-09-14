@@ -14,6 +14,7 @@ import { Button } from '@/components/ui/button'
 import { AppSelect } from '@/components/ui/select'
 import { persistWorkingModelCatalog, workingModelCatalogAtom } from '@/atoms/working-model-catalog-atoms'
 import { ProxySettingsCard } from './ProxySettingsCard'
+import { ProfessionalModeCard } from './ProfessionalModeCard'
 
 const PROTOCOL_OPTIONS: Array<{ value: WorkingCustomModelProtocol; label: string }> = [
   { value: 'openai-responses', label: 'OpenAI 兼容协议 (Responses)' },
@@ -286,6 +287,9 @@ export function ModelManagementSettings({
     <div className="space-y-6">
       {/* 网络代理设置模块 */}
       <ProxySettingsCard onNotice={onNotice} />
+
+      {/* 专业模式设置模块 */}
+      <ProfessionalModeCard onNotice={onNotice} />
 
       {/* 自定义模型管理模块 */}
       {!isVip ? (

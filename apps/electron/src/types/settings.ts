@@ -315,6 +315,10 @@ export interface AppSettings {
   agentWorkspaceId?: string
   /** 新 Agent 会话默认使用的 runtime；历史会话缺省迁移为 Pi。 */
   agentRuntime?: AgentRuntime
+  /** 是否启用专业模式（由 OpenAI Codex Harness app-server 驱动） */
+  professionalMode?: boolean
+  /** 专业模式 Codex app-server 监听端口 */
+  codexAppServerPort?: number
   /** Agent 默认的 Copis Memory 策略；工作区策略优先。 */
   defaultMemoryPolicy?: MemoryPolicy
   /** Windows 上 Agent Bash 工具的运行环境；默认自动选择 Git Bash，WSL 需用户显式启用。 */
@@ -433,6 +437,33 @@ export const SETTINGS_IPC_CHANNELS = {
   ON_THEME_SETTINGS_CHANGED: 'settings:theme-settings-changed',
   /** 隐藏侧边栏菜单项配置变化时广播给所有窗口与视图 */
   ON_HIDDEN_SIDEBAR_MENU_ITEMS_CHANGED: 'settings:hidden-sidebar-menu-items-changed',
+} as const
+
+/** Codex CLI 本地检测状态 */
+export interface CodexCliStatus {
+  available: boolean
+  path: string | null
+  version: string | null
+  canStartAppServer: boolean
+  error: string | null
+}
+
+/** Codex App Server 运行状态 */
+export interface CodexAppServerStatus {
+  running: boolean
+  pid?: number
+  port?: number
+  error?: string
+  startedAt?: number
+}
+
+/** Codex App Server IPC 通道 */
+export const CODEX_IPC_CHANNELS = {
+  CHECK_CLI: 'codex:check-cli',
+  GET_STATUS: 'codex:get-status',
+  START_APP_SERVER: 'codex:start-app-server',
+  STOP_APP_SERVER: 'codex:stop-app-server',
+  ON_STATUS_CHANGED: 'codex:status-changed',
 } as const
 
 /** Scratch Pad IPC 通道 */

@@ -84,6 +84,10 @@ import {
   hiddenSidebarMenuItemsAtom,
   initializeHiddenSidebarMenuItems,
 } from './atoms/sidebar-menu-atoms'
+import {
+  professionalModeAtom,
+  codexAppServerStatusAtom,
+} from './atoms/professional-mode-atoms'
 import { useGlobalAgentListeners } from './hooks/useGlobalAgentListeners'
 import { tabsAtom, activeTabIdAtom, getPersistableTabState, sanitizePersistedTabs } from './atoms/tab-atoms'
 import type { TabItem } from './atoms/tab-atoms'
@@ -857,6 +861,47 @@ function SidebarMenuItemsInitializer(): null {
 }
 
 /**
+ * 专业模式初始化组件
+ *
+ * 从主进程加载 settings.professionalMode 并同步到 atom，
+ * 获取 Codex App Server 初始状态并监听状态广播更新。
+ */
+function ProfessionalModeInitializer(): null {
+  const setProfessionalMode = useSetAtom(professionalModeAtom)
+  const setCodexAppServerStatus = useSetAtom(codexAppServerStatusAtom)
+
+  useEffect(() => {
+    // 初始加载设置与状态
+    window.electronAPI.getSettings().then((settings) => {
+      if (typeof settings.professionalMode === 'boolean') {
+        setProfessionalMode(settings.professionalMode)
+      }
+    }).catch((err: unknown) => {
+      console.error('[ProfessionalModeInitializer] 加载设置失败:', err)
+    })
+
+    window.electronAPI.getCodexAppServerStatus?.().then((status) => {
+      if (status) {
+        setCodexAppServerStatus(status)
+      }
+    }).catch((err: unknown) => {
+      console.error('[ProfessionalModeInitializer] 获取 Codex 状态失败:', err)
+    })
+
+    // 订阅状态广播
+    const unsubscribe = window.electronAPI.onCodexAppServerStatusChanged?.((status) => {
+      setCodexAppServerStatus(status)
+    })
+
+    return () => {
+      unsubscribe?.()
+    }
+  }, [setProfessionalMode, setCodexAppServerStatus])
+
+  return null
+}
+
+/**
  * Agent IPC 监听器初始化组件
  *
  * 全局挂载，永不销毁。确保 Agent 流式事件、权限请求
@@ -1106,6 +1151,9 @@ function TabStatePersistenceInitializer(): null {
         store.set(currentAgentSessionIdAtom, activeTab.sessionId)
         const session = agentSessions.find((item) => item.id === activeTab.sessionId)
         if (session?.workspaceId) store.set(currentAgentWorkspaceIdAtom, session.workspaceId)
+        if (session?.agentRuntime === 'codex') {
+          store.set(professionalModeAtom, true)
+        }
       }
 
       console.log(`[TabRestore] 已恢复当前会话入口，历史标签 ${tabsToRestore.length} 个已收敛到左侧列表`)
@@ -1209,6 +1257,7 @@ if (isQuickTaskWindow) {
       <React.StrictMode>
         <ThemeInitializer />
         <AgentSettingsInitializer />
+        <ProfessionalModeInitializer />
         <PlanningShortcutInitializer />
         <AutomationInitializer />
         <PlanningInitializer />
@@ -1236,6 +1285,7 @@ if (isQuickTaskWindow) {
     <React.StrictMode>
       <ThemeInitializer />
       <AgentSettingsInitializer />
+      <ProfessionalModeInitializer />
       <NotificationsInitializer />
       <DockBadgeInitializer />
       <UiPreferencesInitializer />

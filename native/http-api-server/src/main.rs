@@ -3139,7 +3139,7 @@ fn handle_agent_stream(
         if read == 0 {
             break;
         }
-        let Some(frame) = parse_worker_frame(line.trim_end_matches(['\r', '\n'])) else {
+        let Some(mut frame) = parse_worker_frame(line.trim_end_matches(['\r', '\n'])) else {
             if !line.trim().is_empty() {
                 eprintln!("[HTTP API] 收到无法解析的 Pi worker 帧");
             }
@@ -3148,6 +3148,7 @@ fn handle_agent_stream(
 
         match frame.get("type").and_then(Value::as_str) {
             Some("event") => {
+                normalize_worker_event_frame(&mut frame);
                 if let Err(error) = persist_worker_event(&bridge, &frame) {
                     eprintln!("[HTTP API] Agent SDK 消息持久化失败: {}", error);
                 }
@@ -3350,6 +3351,31 @@ pub(crate) fn send_internal_request(
     })
 }
 
+pub(crate) fn normalize_worker_event_frame(frame: &mut Value) {
+    let Some(payload) = frame.get_mut("payload").and_then(Value::as_object_mut) else {
+        return;
+    };
+    if payload.get("kind").and_then(Value::as_str) != Some("sdk_message") {
+        return;
+    }
+    let Some(message) = payload.get_mut("message").and_then(Value::as_object_mut) else {
+        return;
+    };
+
+    // 若为 assistant 消息且 stop_reason 为 null 或缺失，或者未标记 _partial，确保标记 _partial = true
+    if message.get("type").and_then(Value::as_str) == Some("assistant") {
+        let is_terminal = message
+            .get("message")
+            .and_then(|m| m.get("stop_reason"))
+            .map_or(false, |sr| !sr.is_null());
+        let has_partial = message.get("_partial").and_then(Value::as_bool).unwrap_or(false);
+
+        if !is_terminal && !has_partial {
+            message.insert("_partial".to_string(), json!(true));
+        }
+    }
+}
+
 pub(crate) fn persist_worker_event(bridge: &Arc<Bridge>, frame: &Value) -> Result<(), String> {
     let payload = frame.get("payload").and_then(Value::as_object);
     if payload
@@ -3371,7 +3397,12 @@ pub(crate) fn persist_worker_event(bridge: &Arc<Bridge>, frame: &Value) -> Resul
         .get("isReplay")
         .and_then(Value::as_bool)
         .unwrap_or(false);
-    if partial || replay {
+    let is_intermediate_assistant = message.get("type").and_then(Value::as_str) == Some("assistant")
+        && message
+            .get("message")
+            .and_then(|m| m.get("stop_reason"))
+            .map_or(true, |sr| sr.is_null());
+    if partial || replay || is_intermediate_assistant {
         return Ok(());
     }
     let session_id = frame

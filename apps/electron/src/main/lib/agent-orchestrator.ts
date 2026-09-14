@@ -72,7 +72,7 @@ import { getEffectiveProxyUrl } from './proxy-settings-service'
 import { appendSDKMessages, updateAgentSessionMeta, getAgentSessionMeta, getAgentSessionMessages, removeSDKErrorMessage, resolveAgentCwd, getAgentCwdMode } from './agent-session-manager'
 import { ensureAgentWorkspaceContextDir, ensureAgentWorkspaceWritableRoot, getAgentWorkspace, getAgentWorkspaceBySlug, getAgentWorkspaceReadableRoots, getLocalProjectRootStatus, getProjectFilesPath, getWorkspaceMcpConfig, getWorkspaceAttachedDirectories, getWorkspaceAttachedFiles, listAgentWorkspacesByUpdatedAt } from './agent-workspace-manager'
 import { getWorkingApiClient } from './working-api-service'
-import { getAgentWorkspacePath, getAgentSessionWorkspacePath, getSdkConfigDir, getWorkspaceSkillsDir } from './config-paths'
+import { getAgentWorkspacePath, getAgentSessionWorkspacePath, getDefaultSkillsDir, getSdkConfigDir, getWorkspaceSkillsDir } from './config-paths'
 import { isPathWithinRootsAllowMissing } from './file-access-policy'
 import { getRuntimeStatus } from './runtime-init'
 import { getSettings } from './settings-service'
@@ -139,7 +139,9 @@ type RecoverableAgentQueryOptions = {
 // ===== 工具函数 =====
 
 function normalizeAgentRuntime(value: unknown): AgentRuntime {
-  return value === 'dsh' ? 'dsh' : 'pi'
+  if (value === 'codex') return 'codex'
+  if (value === 'dsh') return 'dsh'
+  return 'pi'
 }
 
 const EMPTY_RESPONSE_RESULT_SUBTYPE = 'empty_response'
@@ -1071,6 +1073,20 @@ export class AgentOrchestrator {
       }
     }
 
+    const sessionRuntime = sessionMeta?.agentRuntime ?? 'pi'
+    const requestedRuntime = input.agentRuntime ? normalizeAgentRuntime(input.agentRuntime) : undefined
+
+    if (requestedRuntime && requestedRuntime !== sessionRuntime) {
+      reportPreflightError({
+        code: 'session_runtime_mismatch',
+        title: '会话模式不匹配',
+        message: '专业模式与普通模式会话不能混用。当前会话与所选模式不一致，请新建会话后再试。',
+        actions: [],
+        canRetry: false,
+      })
+      return
+    }
+
     const appSettings = getSettings()
     const previousAgentRuntime = normalizeAgentRuntime(sessionMeta?.agentRuntime)
     const agentRuntime: AgentRuntime = normalizeAgentRuntime(sessionMeta?.agentRuntime)
@@ -1083,6 +1099,32 @@ export class AgentOrchestrator {
             : workingModeToModelId(workingMode ?? 'fast')
         : modelId ?? channel.models[0]?.id
       : undefined
+
+    if (agentRuntime === 'codex') {
+      const isCopisDefault = isCopisWorkingChannelId(channelId)
+      const isCustomModel = isWorkingCustomModelChannelId(channelId)
+      if (!isCopisDefault && !isCustomModel) {
+        reportPreflightError({
+          code: 'agent_provider_not_supported',
+          title: '渠道不受支持',
+          message: '专业模式仅支持 Copis 默认模型与自定义模型，不支持当前渠道 Provider。',
+          actions: [],
+          canRetry: false,
+        })
+        return
+      }
+      if (isCopisDefault && (workingModelId === COPIS_WORKING_GLOBAL_MODEL_ID || modelId === COPIS_WORKING_GLOBAL_MODEL_ID)) {
+        reportPreflightError({
+          code: 'invalid_model',
+          title: '模型不受支持',
+          message: '专业模式不支持通识 (global) 模型，请选择快速或专家模型。',
+          actions: [],
+          canRetry: false,
+        })
+        return
+      }
+    }
+
     const needsWorkingSessionMigration = Boolean(
       workingClient && (
         sessionMeta?.channelId !== channelId
@@ -1771,8 +1813,14 @@ export class AgentOrchestrator {
         })
         : undefined
       const allSkillPaths: string[] = []
-      if (workspaceSlug) {
-        allSkillPaths.push(getWorkspaceSkillsDir(workspaceSlug))
+      const effectiveSlug = workspaceSlug || 'default'
+      const workspaceSkillsDir = getWorkspaceSkillsDir(effectiveSlug)
+      if (workspaceSkillsDir && !allSkillPaths.includes(workspaceSkillsDir)) {
+        allSkillPaths.push(workspaceSkillsDir)
+      }
+      const defaultSkillsDir = getDefaultSkillsDir()
+      if (existsSync(defaultSkillsDir) && !allSkillPaths.includes(defaultSkillsDir)) {
+        allSkillPaths.push(defaultSkillsDir)
       }
       if (isAppConnector) {
         let allWs: AgentWorkspace[] = []

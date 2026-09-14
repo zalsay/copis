@@ -17,7 +17,15 @@ import { appModeAtom } from '@/atoms/app-mode'
 import { draftSessionIdsAtom } from '@/atoms/draft-session-atoms'
 import { useOpenSession } from './useOpenSession'
 import { isAgentSessionMeta, sanitizeAgentSessions } from '@/lib/agent-session-list'
-import type { AgentExpertTeamSession, AgentRuntime } from '@copis/shared'
+import { professionalModeAtom } from '@/atoms/professional-mode-atoms'
+import {
+  COPIS_WORKING_CHANNEL_ID,
+  COPIS_WORKING_FAST_MODEL_ID,
+  COPIS_WORKING_GLOBAL_MODEL_ID,
+  isWorkingCustomModelChannelId,
+  type AgentExpertTeamSession,
+  type AgentRuntime,
+} from '@copis/shared'
 
 interface CreateSessionOptions {
   /** 覆盖默认标题。 */
@@ -57,17 +65,29 @@ export function useCreateSession(): CreateSessionActions {
   const currentWorkspaceId = useAtomValue(currentAgentWorkspaceIdAtom)
   const currentAppMode = useAtomValue(appModeAtom)
   const currentAgentRuntime = useAtomValue(agentRuntimeAtom)
+  const isProfessional = useAtomValue(professionalModeAtom)
 
   const createAgent = async (options?: CreateSessionOptions): Promise<string | undefined> => {
     try {
       const targetMode = options?.mode ?? currentAppMode
-      const targetRuntime = options?.agentRuntime ?? (targetMode === 'creation' ? 'dsh' : currentAgentRuntime)
+      const defaultRuntime = isProfessional ? 'codex' : currentAgentRuntime
+      const targetRuntime = options?.agentRuntime ?? (targetMode === 'creation' ? 'dsh' : defaultRuntime)
+      const isCodexRuntime = targetRuntime === 'codex'
+      const candidateChannelId = options?.channelId ?? agentChannelId ?? undefined
+      const isChannelValidForCodex = candidateChannelId === COPIS_WORKING_CHANNEL_ID || isWorkingCustomModelChannelId(candidateChannelId)
+      const effectiveChannelId = isCodexRuntime && !isChannelValidForCodex
+        ? COPIS_WORKING_CHANNEL_ID
+        : candidateChannelId
+      const candidateModelId = options?.modelId ?? agentModelId ?? undefined
+      const effectiveModelId = isCodexRuntime && (!isChannelValidForCodex || candidateModelId === COPIS_WORKING_GLOBAL_MODEL_ID || !candidateModelId)
+        ? COPIS_WORKING_FAST_MODEL_ID
+        : candidateModelId
 
       const meta = await window.electronAPI.createAgentSession(
         options?.title,
-        options?.channelId ?? agentChannelId ?? undefined,
+        effectiveChannelId,
         options?.workspaceId ?? currentWorkspaceId ?? undefined,
-        options?.modelId ?? agentModelId ?? undefined,
+        effectiveModelId,
         options?.expertTeamSession,
         options?.expertTeamSetup,
         { agentRuntime: targetRuntime, mode: targetMode },

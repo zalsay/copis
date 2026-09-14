@@ -235,7 +235,13 @@ export function getBrowserWorkflow(
   }
   const selectedVersionNumber = version ?? bundle.manifest.currentVersion
   const selected = bundle.versions.find((item) => item.version === selectedVersionNumber)
-  if (!selected) throw new Error('Browser Workflow 版本不存在')
+  if (!selected) {
+    const available = bundle.versions.map((item) => `v${item.version}`).join(', ') || '无'
+    throw new Error(
+      `Browser Workflow「${bundle.manifest.name}」(ID: ${workflowId}) 版本 v${selectedVersionNumber} 不存在。` +
+      `当前最新版本为 v${bundle.manifest.currentVersion}，可用版本: ${available}。`,
+    )
+  }
   assertBrowserWorkflowManifest(bundle.manifest)
   assertBrowserWorkflowVersion(selected)
   if (selected.workflowId !== bundle.manifest.id || selected.version < 1) {

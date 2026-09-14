@@ -43,3 +43,16 @@ test('Given Z.ai 分组与 GLM 模型 When Composer 使用 Copis 标识 Then 仍
   expect(selectorSource).toContain('!usesZhipuLogo(option)')
   expect(selectorSource).toContain('const useZhipuLogo = usesZhipuLogo(first)')
 })
+
+test('Given 专业模式生效 When 打开模型选择器 Then 强制过滤第三方 Provider 及通识模型并提示专业模式生效', () => {
+  expect(selectorSource).toContain('professionalModeAtom')
+  expect(selectorSource).toContain('isProfessional?: boolean')
+  expect(selectorSource).toContain('isProfessional')
+  expect(selectorSource).toContain('[COPIS_WORKING_CHANNEL_ID]')
+  expect(selectorSource).toContain("includeProviders: composerMode && !isProfessional ? ['zhipu'] : undefined")
+  expect(selectorSource).toContain('COPIS_WORKING_GLOBAL_MODEL_ID')
+  expect(selectorSource).toContain('!(o.channelId === COPIS_WORKING_CHANNEL_ID && o.modelId === COPIS_WORKING_GLOBAL_MODEL_ID)')
+  expect(selectorSource).toContain('CodexLogoIcon')
+  expect(selectorSource).toContain('专业模式生效中：已过滤第三方渠道与通识模型，仅展示 Copis 快速/专家与自定义模型')
+})
+

@@ -11,6 +11,7 @@
 import { useCallback } from 'react'
 import { useAtomValue, useSetAtom } from 'jotai'
 import { appModeAtom } from '@/atoms/app-mode'
+import { professionalModeAtom } from '@/atoms/professional-mode-atoms'
 import {
   agentSessionsAtom,
   currentAgentSessionIdAtom,
@@ -23,6 +24,7 @@ export type SyncActiveTabSideEffects = (newActiveTab: TabItem | null) => void
 
 export function useSyncActiveTabSideEffects(): SyncActiveTabSideEffects {
   const setAppMode = useSetAtom(appModeAtom)
+  const setProfessionalMode = useSetAtom(professionalModeAtom)
   const setCurrentAgentSessionId = useSetAtom(currentAgentSessionIdAtom)
   const setCurrentAgentWorkspaceId = useSetAtom(currentAgentWorkspaceIdAtom)
   const setUnviewedCompleted = useSetAtom(unviewedCompletedSessionIdsAtom)
@@ -43,6 +45,14 @@ export function useSyncActiveTabSideEffects(): SyncActiveTabSideEffects {
       } else {
         setAppMode('agent')
       }
+      const isTargetProfessional = session?.agentRuntime === 'codex'
+      setProfessionalMode(isTargetProfessional)
+      if (isTargetProfessional && window.electronAPI?.startCodexAppServer) {
+        window.electronAPI.startCodexAppServer().catch((err) => {
+          console.warn('[useSyncActiveTabSideEffects] 启动专业模式服务失败:', err)
+        })
+      }
+      window.electronAPI.updateSettings({ professionalMode: isTargetProfessional }).catch(console.error)
       setCurrentAgentSessionId(newActiveTab.sessionId)
 
       // 清除该会话的"已完成未查看"标记
@@ -63,6 +73,7 @@ export function useSyncActiveTabSideEffects(): SyncActiveTabSideEffects {
     },
     [
       setAppMode,
+      setProfessionalMode,
       setCurrentAgentSessionId,
       setCurrentAgentWorkspaceId,
       setUnviewedCompleted,

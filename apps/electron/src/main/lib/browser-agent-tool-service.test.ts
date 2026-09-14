@@ -724,4 +724,64 @@ describe('Browser Agent 主进程工具 dispatcher', () => {
     expect(requestSingleApproval).toHaveBeenCalledTimes(1)
     expect(navigate).toHaveBeenCalledWith('browser-session', 'https://other.example.test/path')
   })
+
+  test('Given active workflow run When BrowserWorkflowStop is called without context Then it terminates the run and releases the lock', async () => {
+    const stopBrowserWorkflowRun = mock(() => true)
+    const service = createBrowserAgentToolService({
+      getBrowserAgentContext: () => undefined,
+      isBrowserWorkflowRunActive: () => true,
+      stopBrowserWorkflowRun,
+      getBrowserWorkflowStatus: () => ({
+        sessionId: 'browser-session',
+        state: 'running',
+      }),
+    })
+
+    const result = await service.executeDirect({
+      sessionId: 'browser-session',
+      toolCallId: 'stop-run',
+      toolName: 'BrowserWorkflowStop',
+      toolInput: {},
+      triggeredBy: 'user',
+    })
+
+    expect(result).toEqual({ kind: 'text', value: '已终止正在运行的 Browser Workflow 并释放运行锁。' })
+    expect(stopBrowserWorkflowRun).toHaveBeenCalledWith('browser-session')
+  })
+
+  test('Given BrowserWorkflowRepair When versionDraft is provided Then it directly saves the new version without human review', async () => {
+    const submitBrowserWorkflowRepairDraft = mock(() => ({
+      version: 3,
+      workflowId: 'wf-1',
+    }))
+    const service = createBrowserAgentToolService({
+      getBrowserAgentContext: () => ({ tabId: 'tab-1' }),
+      submitBrowserWorkflowRepairDraft: submitBrowserWorkflowRepairDraft as any,
+    })
+
+    const result = await service.executeDirect({
+      sessionId: 'browser-session',
+      toolCallId: 'repair-1',
+      toolName: 'BrowserWorkflowRepair',
+      toolInput: {
+        workflowId: 'wf-1',
+        proposal: 'fix selector',
+        versionDraft: { steps: [] },
+      },
+      triggeredBy: 'user',
+      workspaceId: 'ws-1',
+    })
+
+    expect(result).toEqual({
+      kind: 'json',
+      value: {
+        updated: true,
+        workflowId: 'wf-1',
+        version: 3,
+        proposal: 'fix selector',
+        message: 'Workflow「wf-1」已更新至新版本 v3，可直接运行。',
+      },
+    })
+    expect(submitBrowserWorkflowRepairDraft).toHaveBeenCalledTimes(1)
+  })
 })

@@ -87,6 +87,7 @@ mock.module('./settings-service', () => ({ getSettings, updateSettings }))
 mock.module('./agent-workspace-manager', () => ({
   ensureAgentWorkspaceBrowserSessionPath: (_workspace: AgentWorkspace, sessionId: string) => join(uploadProjectDir, 'browser', 'agent-workspaces', sessionId),
   getAgentWorkspace: () => workspace,
+  getAgentWorkspaceBrowserWorkflowsDir: () => join(uploadProjectDir, 'browser', 'workflows'),
   getAgentWorkspaceWritableRoot: () => uploadProjectDir,
   getProjectFilesPath: () => uploadProjectDir,
   getWorkspaceAttachedDirectories: () => [],
@@ -94,9 +95,12 @@ mock.module('./agent-workspace-manager', () => ({
 }))
 mock.module('./config-paths', () => ({
   getAgentSessionWorkspacePath: () => uploadSessionDir,
+  getAutomationsPath: () => '',
 }))
+let mockGetBrowserWorkflow: (workspaceId: string, workflowId: string, versionNumber?: number) => any = () => undefined
 mock.module('./browser-workflow-store', () => ({
-  getBrowserWorkflow: () => undefined,
+  getBrowserWorkflow: (...args: any[]) => (mockGetBrowserWorkflow as any)(...args),
+  listBrowserWorkflows: () => [],
   saveBrowserWorkflow,
   writeBrowserWorkflowDraftMarkdown,
   promoteBrowserWorkflowDraftMarkdown,
@@ -241,6 +245,7 @@ let handoffBrowserWorkflowFailure: (sessionId: string, tabId: string) => { tabId
 let startBrowserWorkflowRecording: typeof import('./browser-workflow-service')['startBrowserWorkflowRecording']
 let stopBrowserWorkflowRecording: typeof import('./browser-workflow-service')['stopBrowserWorkflowRecording']
 let submitBrowserWorkflowDraft: typeof import('./browser-workflow-service')['submitBrowserWorkflowDraft']
+let submitBrowserWorkflowRepairDraft: typeof import('./browser-workflow-service')['submitBrowserWorkflowRepairDraft']
 let approveBrowserWorkflowDraft: typeof import('./browser-workflow-service')['approveBrowserWorkflowDraft']
 let resolveBrowserPageUploadPaths: (sessionId: string, paths: string[]) => string[]
 let sendBrowserPageControlCdpCommand: (input: { tabId: string; method: string; params?: Record<string, unknown> }) => Promise<unknown>
@@ -267,6 +272,7 @@ beforeAll(async () => {
   startBrowserWorkflowRecording = service.startBrowserWorkflowRecording
   stopBrowserWorkflowRecording = service.stopBrowserWorkflowRecording
   submitBrowserWorkflowDraft = service.submitBrowserWorkflowDraft
+  submitBrowserWorkflowRepairDraft = service.submitBrowserWorkflowRepairDraft
   approveBrowserWorkflowDraft = service.approveBrowserWorkflowDraft
   resolveBrowserPageUploadPaths = (service as unknown as {
     resolveBrowserPageUploadPaths: (sessionId: string, paths: string[]) => string[]
@@ -402,17 +408,24 @@ describe('Browser Agent Context 绑定', () => {
     unbindBrowserAgentContext('browser-session')
   })
 
-  test('Given incognito=true When Agent opens a tab Then it uses an isolated tab and marks the result', () => {
+  test('Given incognito=true When Agent opens a tab Then it uses an isolated tab and marks the result with activate=false by default', () => {
     const result = openBrowserAgentTab('browser-session', 'https://new.example.test', true)
 
     expect(createdWebTabInputs.at(-1)).toEqual({ url: 'https://new.example.test', activate: false, incognito: true })
     expect(result.incognito).toBe(true)
   })
 
-  test('Given incognito is omitted When Agent opens a tab Then it remains a normal tab', () => {
+  test('Given incognito is omitted When Agent opens a tab Then it defaults to activate=false', () => {
     const result = openBrowserAgentTab('browser-session', 'https://new.example.test')
 
     expect(createdWebTabInputs.at(-1)).toEqual({ url: 'https://new.example.test', activate: false, incognito: false })
+    expect(result.incognito).toBe(false)
+  })
+
+  test('Given activate=true When Agent opens a tab Then it creates the tab and activates it', () => {
+    const result = openBrowserAgentTab('browser-session', 'https://new.example.test', false, true)
+
+    expect(createdWebTabInputs.at(-1)).toEqual({ url: 'https://new.example.test', activate: true, incognito: false })
     expect(result.incognito).toBe(false)
   })
 
@@ -1131,5 +1144,67 @@ describe('Browser Agent Context 绑定', () => {
     expect(formatted).toContain('{"type":"click","url":"https://example.com"}')
     expect(formatted).toContain('{"type":"input","url":"https://example.com"}')
     expect(formatted).toContain('</untrusted-browser-recording>')
+  })
+
+  test('Given 已有 Workflow When submitBrowserWorkflowRepairDraft Then 自动自增版本并保存生效，不进入 awaiting_review', () => {
+    bindBrowserAgentContext('browser-session', { tabId: 'tab-1' })
+    mockGetBrowserWorkflow = () => ({
+      manifest: {
+        schemaVersion: 1,
+        id: 'wf-1',
+        workspaceId: 'workspace-1',
+        workspaceSlug: 'workspace-1',
+        name: '测试 Workflow',
+        status: 'ready',
+        currentVersion: 2,
+        profileId: 'copis-web',
+        allowedOrigins: ['https://example.com'],
+        unattendedAllowed: true,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      },
+      version: {
+        schemaVersion: 1,
+        workflowId: 'wf-1',
+        version: 2,
+        start: { tabAlias: 'main', url: 'https://example.com', origin: 'https://example.com' },
+        variables: [],
+        steps: [{
+          id: 'step-1',
+          type: 'click',
+          tabAlias: 'main',
+          origin: 'https://example.com',
+          target: {
+            framePath: { frameIds: [] },
+            strategies: [{ kind: 'id', value: 'submit' }],
+            fingerprint: { tagName: 'button', visible: true, enabled: true },
+          },
+        }],
+        approval: { status: 'approved' },
+      },
+    })
+
+    const repaired = submitBrowserWorkflowRepairDraft('browser-session', 'wf-1', 2, 'step-1', {
+      schemaVersion: 1,
+      start: { tabAlias: 'main', url: 'https://example.com', origin: 'https://example.com' },
+      variables: [],
+      steps: [{
+        id: 'step-1',
+        type: 'click',
+        tabAlias: 'main',
+        origin: 'https://example.com',
+        target: {
+          framePath: { frameIds: [] },
+          strategies: [{ kind: 'id', value: 'submit-new' }],
+          fingerprint: { tagName: 'button', visible: true, enabled: true },
+        },
+      }],
+    })
+
+    expect(repaired.version).toBe(3)
+    expect(repaired.approval.status).toBe('approved')
+    expect(saveBrowserWorkflow).toHaveBeenCalled()
+    expect(promoteBrowserWorkflowDraftMarkdown).toHaveBeenCalledWith('workspace-1', 'wf-1')
+    unbindBrowserAgentContext('browser-session')
   })
 })

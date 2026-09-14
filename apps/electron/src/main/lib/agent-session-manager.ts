@@ -48,7 +48,13 @@ import type {
   CreateAgentSideQuestionSessionInput,
   AgentSideQuestionSessionResult,
 } from '@copis/shared'
-import { migratePermissionMode } from '@copis/shared'
+import {
+  COPIS_WORKING_CHANNEL_ID,
+  COPIS_WORKING_FAST_MODEL_ID,
+  COPIS_WORKING_GLOBAL_MODEL_ID,
+  isWorkingCustomModelChannelId,
+  migratePermissionMode,
+} from '@copis/shared'
 // 旧格式 → SDKMessage 的转换逻辑下沉到 @copis/session-core 作为唯一真源，避免主进程与渲染层各存一份。
 import { convertLegacyMessage } from '@copis/session-core'
 import { assertEnabledModelForChannel } from './agent-model-selection'
@@ -178,7 +184,7 @@ function migrateLegacyAgentRuntime(index: AgentSessionsIndex): boolean {
   let changed = false
   for (const session of index.sessions) {
     const rawRuntime = (session as AgentSessionMeta & { agentRuntime?: unknown }).agentRuntime
-    if (rawRuntime === 'pi' || rawRuntime === 'dsh') continue
+    if (rawRuntime === 'pi' || rawRuntime === 'dsh' || rawRuntime === 'codex') continue
 
     session.agentRuntime = 'pi'
     // 旧 session ID 属于已移除的 runtime；保留 Copis JSONL，让 Pi 下一轮从本地上下文继续。
@@ -595,11 +601,24 @@ export function createAgentSession(
   const settings = getSettings()
   const defaultThinkingLevel = settings.defaultOpenAIThinkingLevel
     ?? resolvePiThinkingLevel(settings, undefined, 'openai-codex')
+  let effectiveChannelId = channelId
+  let effectiveModelId = modelId
+  if (agentRuntime === 'codex') {
+    const isCopisDefault = effectiveChannelId === COPIS_WORKING_CHANNEL_ID
+    const isCustomModel = isWorkingCustomModelChannelId(effectiveChannelId)
+    if (!isCopisDefault && !isCustomModel) {
+      effectiveChannelId = COPIS_WORKING_CHANNEL_ID
+      effectiveModelId = COPIS_WORKING_FAST_MODEL_ID
+    } else if (isCopisDefault && (!effectiveModelId || effectiveModelId === COPIS_WORKING_GLOBAL_MODEL_ID)) {
+      effectiveModelId = COPIS_WORKING_FAST_MODEL_ID
+    }
+  }
+
   const meta: AgentSessionMeta = {
     id: randomUUID(),
     title: title || '新 Agent 会话',
-    channelId,
-    modelId,
+    channelId: effectiveChannelId,
+    modelId: effectiveModelId,
     workspaceId,
     ...(extraOptions?.mode ? { mode: extraOptions.mode } : {}),
     ...(expertTeamSession ? { expertTeamSession } : {}),
@@ -782,7 +801,25 @@ export function getAgentSessionSDKMessages(id: string): SDKMessage[] {
   try {
     const raw = readFileSync(filePath, 'utf-8')
     const lines = raw.split('\n').filter((line) => line.trim())
-    return parseJsonlLenient<unknown>(lines, `读取 SDKMessage (${id})`).map(normalizePersistedSDKMessage)
+    const messages = parseJsonlLenient<unknown>(lines, `读取 SDKMessage (${id})`).map(normalizePersistedSDKMessage)
+
+    // 基于 uuid 去重与自愈：同一 uuid 的消息保留最新的完整帧（容错历史流式中间帧被误追加的情况）
+    const deduped: SDKMessage[] = []
+    const uuidIndices = new Map<string, number>()
+    for (const msg of messages) {
+      const msgRecord = msg as Record<string, unknown>
+      const uuid = typeof msgRecord.uuid === 'string' ? msgRecord.uuid : undefined
+      if (uuid) {
+        const existingIdx = uuidIndices.get(uuid)
+        if (existingIdx !== undefined) {
+          deduped[existingIdx] = msg
+          continue
+        }
+        uuidIndices.set(uuid, deduped.length)
+      }
+      deduped.push(msg)
+    }
+    return deduped
   } catch (error) {
     console.error(`[Agent 会话] 读取 SDKMessage 失败 (${id}):`, error)
     return []

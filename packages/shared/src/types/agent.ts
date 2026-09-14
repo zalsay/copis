@@ -434,6 +434,7 @@ export type ErrorCode =
   | 'workspace_not_found'
   | 'local_project_root_unavailable'
   | 'session_busy'
+  | 'session_runtime_mismatch'
   | 'unknown_error'
 
 /** 恢复操作 */

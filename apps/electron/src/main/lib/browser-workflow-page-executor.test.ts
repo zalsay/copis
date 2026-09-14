@@ -1008,6 +1008,62 @@ describe('BrowserWorkflowPageExecutor 确定性页面执行器', () => {
         await expect(executor.execute(createStepInput(step))).rejects.toThrow('Workflow 不允许自动填写敏感字段')
       })
     }
+
+    test('Given advancedAuthorization = true (单步参数) When 自动 fill 敏感密码字段 Then 允许执行并不抛出异常', async () => {
+      const executor = createBrowserWorkflowPageExecutor(fakeRuntime.runtime)
+      const step: BrowserFillStep = {
+        id: 'step-fill-sensitive-auth',
+        type: 'fill',
+        tabAlias: 'main',
+        origin: 'https://example.com',
+        target: createLocatorBundle({
+          fingerprint: { tagName: 'input', inputType: 'password', accessibleName: '账户密码' } as BrowserElementFingerprint,
+        }),
+        value: { kind: 'literal', value: 'MySecretPassword123!' },
+      }
+
+      const result = await executor.execute(createStepInput(step, { advancedAuthorization: true }))
+      expect(result.fallbackUsed).toBe(false)
+      const insertCall = fakePort.sentCalls.find((c) => c.method === 'Input.insertText')
+      expect(insertCall).toBeDefined()
+      expect(insertCall?.params?.text).toBe('MySecretPassword123!')
+    })
+
+    test('Given advancedAuthorization = true (单步参数) When 自动 select 敏感选项 Then 允许执行并不抛出异常', async () => {
+      const executor = createBrowserWorkflowPageExecutor(fakeRuntime.runtime)
+      const step: BrowserSelectStep = {
+        id: 'step-select-sensitive-auth',
+        type: 'select',
+        tabAlias: 'main',
+        origin: 'https://example.com',
+        target: createLocatorBundle({
+          fingerprint: { tagName: 'select', accessibleName: '安全验证方式' } as BrowserElementFingerprint,
+        }),
+        value: { kind: 'literal', value: 'sms-otp' },
+      }
+
+      const result = await executor.execute(createStepInput(step, { advancedAuthorization: true }))
+      expect(result.fallbackUsed).toBe(false)
+    })
+
+    test('Given advancedAuthorization = true (执行器默认参数) When 自动 fill 敏感字段 Then 继承授权并不抛出异常', async () => {
+      const executor = createBrowserWorkflowPageExecutor(fakeRuntime.runtime, { advancedAuthorization: true })
+      const step: BrowserFillStep = {
+        id: 'step-fill-sensitive-default-auth',
+        type: 'fill',
+        tabAlias: 'main',
+        origin: 'https://example.com',
+        target: createLocatorBundle({
+          fingerprint: { tagName: 'input', inputType: 'text', accessibleName: '信用卡号' } as BrowserElementFingerprint,
+        }),
+        value: { kind: 'literal', value: '6222021234567890' },
+      }
+
+      const result = await executor.execute(createStepInput(step))
+      expect(result.fallbackUsed).toBe(false)
+      const insertCall = fakePort.sentCalls.find((c) => c.method === 'Input.insertText')
+      expect(insertCall?.params?.text).toBe('6222021234567890')
+    })
   })
 
   // 10. 各类 Step 执行及仅调用白名单 CDP 方法

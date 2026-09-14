@@ -31,6 +31,8 @@ import { NextStepsChips } from './NextStepsChips'
 import { NewSessionFeatureChips, type CopisFeatureItem } from './NewSessionFeatureChips'
 import { extractLatestAssistantNextSteps, type NextStepSuggestion } from './next-steps-parser'
 import { ModelSelector } from '@/components/model/ModelSelector'
+import { ComposerModeTogglePill } from './ComposerModeTogglePill'
+import { professionalModeAtom } from '@/atoms/professional-mode-atoms'
 import { AttachmentPreviewItem } from '@/components/attachments/AttachmentPreviewItem'
 import { QuotedSelectionChip } from '@/components/diff/QuotedSelectionChip'
 import { RichTextInput, type RichTextInputHandle } from '@/components/ai-elements/rich-text-input'
@@ -329,6 +331,24 @@ export function AgentConversationSurface({
     () => sessions.find((s) => s.id === sessionId),
     [sessions, sessionId],
   )
+  const [professionalMode, setProfessionalMode] = useAtom(professionalModeAtom)
+  const isProfessional = sessionMeta
+    ? sessionMeta.agentRuntime === 'codex'
+    : professionalMode
+
+  // 当切换到不同会话或挂载时，同步全局专业模式状态到当前会话的 runtime
+  const prevSessionIdRef = React.useRef<string | null>(null)
+  React.useEffect(() => {
+    if (prevSessionIdRef.current !== sessionId) {
+      prevSessionIdRef.current = sessionId
+      if (sessionMeta?.agentRuntime === 'codex') {
+        setProfessionalMode(true)
+      } else if (sessionMeta?.agentRuntime === 'pi') {
+        setProfessionalMode(false)
+      }
+    }
+  }, [sessionId, sessionMeta?.agentRuntime, setProfessionalMode])
+
   const sessionMetaChannelId = sessionMeta?.channelId
   const sessionMetaModelId = sessionMeta?.modelId
   const hasSessionMeta = Boolean(sessionMeta)
@@ -356,14 +376,16 @@ export function AgentConversationSurface({
   const candidateChannel = candidateChannelId
     ? globalChannels.find((channel) => channel.id === candidateChannelId)
     : undefined
-  // Agent 默认使用 Copis 内置渠道，同时允许已配置 zhipu 渠道和 VIP 自定义模型虚拟渠道恢复。
+  // Agent 默认使用 Copis 内置渠道，同时允许已配置 zhipu 渠道和 VIP 自定义模型虚拟渠道恢复（专业模式强制仅保留 Copis 内置渠道与自定义模型）。
   const agentChannelId = isWorkingCustomModelChannelId(candidateChannelId)
     ? candidateChannelId
-    : isCopisWorkingChannelId(candidateChannelId)
-      ? candidateChannelId
-      : candidateChannel?.provider === 'zhipu'
-        ? candidateChannel.id
-        : COPIS_WORKING_CHANNEL_ID
+    : isProfessional
+      ? COPIS_WORKING_CHANNEL_ID
+      : isCopisWorkingChannelId(candidateChannelId)
+        ? candidateChannelId
+        : candidateChannel?.provider === 'zhipu'
+          ? candidateChannel.id
+          : COPIS_WORKING_CHANNEL_ID
   const selectedCustomModel = React.useMemo(
     () => isWorkingCustomModelChannelId(agentChannelId)
       ? customModelOptions.find((item) => item.channelId === agentChannelId)
@@ -375,7 +397,7 @@ export function AgentConversationSurface({
     : isWorkingCustomModelChannelId(agentChannelId)
       ? selectedCustomModel?.modelId ?? sessionModelMap.get(sessionId) ?? sessionMetaModelId ?? ''
       : agentChannelId === COPIS_WORKING_CHANNEL_ID
-        ? sessionModelMap.get(sessionId) === COPIS_WORKING_GLOBAL_MODEL_ID || sessionMetaModelId === COPIS_WORKING_GLOBAL_MODEL_ID
+        ? (sessionModelMap.get(sessionId) === COPIS_WORKING_GLOBAL_MODEL_ID || sessionMetaModelId === COPIS_WORKING_GLOBAL_MODEL_ID) && !isProfessional
           ? COPIS_WORKING_GLOBAL_MODEL_ID
           : sessionModelMap.get(sessionId) === COPIS_WORKING_EXPERT_MODEL_ID || sessionMetaModelId === COPIS_WORKING_EXPERT_MODEL_ID
             ? COPIS_WORKING_EXPERT_MODEL_ID
@@ -409,8 +431,11 @@ export function AgentConversationSurface({
   // 已有会话首次打开时，从会话元数据初始化 per-session map。
   // setter 内的 `prev.has(sessionId)` 守卫保证幂等，外层不再订阅 Map atom，
   // 避免 setter 写入 → atom 引用变化 → effect 重跑的自循环（React #185）。
-  // Copis Working 的本地 Agent 固定走 Pi；模型推理由 edu-api 的 Responses 端点负责。
-  const sessionAgentRuntime: AgentRuntime = 'pi'
+  const currentSessionForRuntime = React.useMemo(
+    () => sessions.find((s) => s.id === sessionId),
+    [sessions, sessionId],
+  )
+  const sessionAgentRuntime: AgentRuntime = currentSessionForRuntime?.agentRuntime ?? 'pi'
   // 只有会话元数据尚未加载时，才允许使用全局默认值初始化新会话。
   React.useEffect(() => {
     if (!sessionId) return
@@ -2920,9 +2945,15 @@ export function AgentConversationSurface({
 
   const inputTrailingNode = (
     <>
-      <div className="flex min-w-0 items-center gap-1 [&_.model-selector-trigger>span]:max-w-[min(12rem,30vw)]">
+      <div className="flex min-w-0 items-center gap-1.5 [&_.model-selector-trigger>span]:max-w-[min(12rem,30vw)]">
+        <ComposerModeTogglePill
+          disabled={!isNewConversation}
+          sessionId={sessionId}
+          isProfessional={isProfessional}
+        />
         <ModelSelector
-          filterChannelIds={[...COPIS_WORKING_CHANNEL_IDS]}
+          filterChannelIds={isProfessional ? [COPIS_WORKING_CHANNEL_ID] : [...COPIS_WORKING_CHANNEL_IDS]}
+          isProfessional={isProfessional}
           externalSelectedModel={externalSelectedModel}
           onModelSelect={handleModelSelect}
           showChannelInTrigger

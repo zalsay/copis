@@ -278,3 +278,58 @@ fn given_invalid_permission_mode_when_switching_then_reject_before_worker_lookup
 
     assert_eq!(error.code, "invalid_request");
 }
+
+#[test]
+fn given_streaming_assistant_event_without_partial_flag_when_normalizing_then_injects_partial() {
+    let mut frame = json!({
+        "type": "event",
+        "sessionId": "session-test",
+        "payload": {
+            "kind": "sdk_message",
+            "message": {
+                "type": "assistant",
+                "uuid": "test-uuid-1",
+                "message": {
+                    "role": "assistant",
+                    "content": [
+                        { "type": "thinking", "thinking": "Thinking text" },
+                        { "type": "text", "text": "Partial text" }
+                    ],
+                    "stop_reason": null
+                }
+            }
+        }
+    });
+
+    crate::normalize_worker_event_frame(&mut frame);
+
+    let partial = frame["payload"]["message"]["_partial"].as_bool();
+    assert_eq!(partial, Some(true));
+}
+
+#[test]
+fn given_completed_assistant_event_when_normalizing_then_preserves_without_partial() {
+    let mut frame = json!({
+        "type": "event",
+        "sessionId": "session-test",
+        "payload": {
+            "kind": "sdk_message",
+            "message": {
+                "type": "assistant",
+                "uuid": "test-uuid-2",
+                "message": {
+                    "role": "assistant",
+                    "content": [
+                        { "type": "thinking", "thinking": "Thinking text" },
+                        { "type": "text", "text": "Final text" }
+                    ],
+                    "stop_reason": "stop"
+                }
+            }
+        }
+    });
+
+    crate::normalize_worker_event_frame(&mut frame);
+
+    assert!(frame["payload"]["message"].get("_partial").is_none());
+}

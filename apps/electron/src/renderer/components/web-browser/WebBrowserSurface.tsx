@@ -1,6 +1,6 @@
 import * as React from 'react'
 import { useAtom, useAtomValue, useSetAtom } from 'jotai'
-import { ArrowLeft, ArrowRight, CircleStop, ExternalLink, Glasses, Globe2, Languages, RotateCw, ShieldCheck } from 'lucide-react'
+import { ArrowLeft, ArrowRight, CircleStop, ExternalLink, Glasses, Globe2, Languages, RotateCw, ShieldCheck, X } from 'lucide-react'
 import type { WebTabsSnapshot } from '@copis/shared'
 import { browserAgentPanelOpenAtom, browserAgentPanelWidthAtom, browserAgentSessionIdAtom, browserWorkflowStatusAtom } from '@/atoms/browser-agent'
 import { activeWebTabAtom, activeWebTabIdAtom, webTabsAtom } from '@/atoms/web-tabs'
@@ -66,6 +66,7 @@ export function WebBrowserSurface(): React.ReactElement {
   const currentWorkspaceId = useAtomValue(currentAgentWorkspaceIdAtom)
   const agentSessions = useAtomValue(agentSessionsAtom)
   const setAgentSessions = useSetAtom(agentSessionsAtom)
+  const streamingStates = useAtomValue(agentStreamingStatesAtom)
   const setStreamingStates = useSetAtom(agentStreamingStatesAtom)
   const setDraftSessionIds = useSetAtom(draftSessionIdsAtom)
   const browserAgentSessionId = useAtomValue(browserAgentSessionIdAtom)
@@ -75,6 +76,10 @@ export function WebBrowserSurface(): React.ReactElement {
   const setBrowserAgentPanelOpen = useSetAtom(browserAgentPanelOpenAtom)
   const browserWorkflowStatus = useAtomValue(browserWorkflowStatusAtom)
   const setBrowserWorkflowStatus = useSetAtom(browserWorkflowStatusAtom)
+  const isAgentRunning = Boolean(
+    browserAgentSessionId && streamingStates.get(browserAgentSessionId)?.running
+  )
+  const isWorkflowActive = browserWorkflowStatus.state !== 'idle' && browserWorkflowStatus.state !== 'error'
   const [liveTranslateOpen, setLiveTranslateOpen] = useAtom(liveTranslateOpenAtom)
   const liveTranslateActive = useAtomValue(liveTranslateActiveAtom)
   const browserAgentSession = agentSessions.find((session) => session.id === browserAgentSessionId)
@@ -266,8 +271,19 @@ export function WebBrowserSurface(): React.ReactElement {
 
   const handleReload = React.useCallback(async (): Promise<void> => {
     if (!activeTabId) return
+    setTabs((previousTabs) =>
+      previousTabs.map((tab) => (tab.id === activeTabId ? { ...tab, isLoading: true } : tab))
+    )
     apply(await window.electronAPI.webTabs.reload(activeTabId))
-  }, [activeTabId, apply])
+  }, [activeTabId, apply, setTabs])
+
+  const handleStop = React.useCallback(async (): Promise<void> => {
+    if (!activeTabId) return
+    setTabs((previousTabs) =>
+      previousTabs.map((tab) => (tab.id === activeTabId ? { ...tab, isLoading: false } : tab))
+    )
+    apply(await window.electronAPI.webTabs.stop(activeTabId))
+  }, [activeTabId, apply, setTabs])
 
   const incognitoAction = React.useMemo(() => getIncognitoActionState(activeTab), [activeTab])
 
@@ -738,7 +754,11 @@ export function WebBrowserSurface(): React.ReactElement {
     // 绝不能强行篡改 Agent 会话已绑定的目标页签，更不可触发误解绑或破坏 Worker capability
     if (!browserWorkflowEnabled || !browserAgentPanelOpen) return
     if (!browserAgentSessionId || !activeTabId) return
+    // 若 Agent 正在执行或 Workflow 处于活跃状态，严禁在切页时将 session 改绑到用户当前浏览的活动页签！
+    if (isAgentRunning || isWorkflowActive) return
     if (browserAgentContextLookupTabId === activeTabId) return
+    const isHttp = Boolean(activeTab?.url && /^https?:\/\//i.test(activeTab.url))
+    if (!isHttp) return
     const request: BrowserAgentContextRequest = {
       requestId: (browserAgentContextRequestRef.current?.requestId ?? 0) + 1,
       sessionId: browserAgentSessionId,
@@ -777,7 +797,7 @@ export function WebBrowserSurface(): React.ReactElement {
     return () => {
       cancelled = true
     }
-  }, [activeTab?.url, activeTabId, browserAgentBindingQueue, browserAgentContextLookupTabId, browserAgentPanelOpen, browserAgentSessionId, browserWorkflowEnabled, setBrowserWorkflowStatus])
+  }, [activeTab?.url, activeTabId, browserAgentBindingQueue, browserAgentContextLookupTabId, browserAgentPanelOpen, browserAgentSessionId, browserWorkflowEnabled, isAgentRunning, isWorkflowActive, setBrowserWorkflowStatus])
 
   React.useEffect(() => {
     browserAgentSessionIdRef.current = browserAgentSessionId
@@ -838,8 +858,16 @@ export function WebBrowserSurface(): React.ReactElement {
         <BrowserToolbarButton label="前进" disabled={!activeTab.canGoForward} onClick={() => void handleForward()}>
           <ArrowRight className="size-4 text-foreground" strokeWidth={2} />
         </BrowserToolbarButton>
-        <BrowserToolbarButton label="刷新" showTooltip={false} onClick={() => void handleReload()}>
-          <RotateCw className={cn('size-3 text-foreground', activeTab.isLoading && 'animate-spin')} strokeWidth={2} />
+        <BrowserToolbarButton
+          label={activeTab.isLoading ? '停止' : '刷新'}
+          showTooltip={false}
+          onClick={() => void (activeTab.isLoading ? handleStop() : handleReload())}
+        >
+          {activeTab.isLoading ? (
+            <X className="size-3 text-foreground" strokeWidth={2} />
+          ) : (
+            <RotateCw className="size-3 text-foreground" strokeWidth={2} />
+          )}
         </BrowserToolbarButton>
 
         <WebBookmarksPopover activeTab={activeTab} onNavigate={handleBookmarkNavigate} />

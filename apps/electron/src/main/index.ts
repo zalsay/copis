@@ -103,6 +103,7 @@ import { disposePiMcpConnections } from './lib/adapters/pi-mcp-tools'
 import { markRunningDelegationsAsInterrupted } from './lib/agent-session-manager'
 import { stopDshTradingServer } from './lib/dsh-trading-service'
 import { stopDshCordisServer, registerDshCordisWebSessionHeaders } from './lib/dsh-cordis-service'
+import { startCodexAppServer, stopCodexAppServer } from './lib/codex-app-server-service'
 import { configureUpdater, initAutoUpdater, cleanupUpdater } from './lib/updater/auto-updater'
 import { startWorkspaceWatcher, stopWorkspaceWatcher } from './lib/workspace-watcher'
 import { disposeWebTabs, saveWebTabsSession, setWebTabHostWindow } from './lib/web-tab-manager'
@@ -635,6 +636,15 @@ async function bootstrap(): Promise<void> {
 
   safeRun('startPlanningReminderScheduler', startPlanningReminderScheduler)
 
+  // 专业模式开启时，自动启动 Codex App Server 守护服务
+  if (getSettings().professionalMode === true) {
+    safeRun('autoStartCodexAppServer', () => {
+      startCodexAppServer().catch((err) => {
+        console.warn('[主进程] 自动启动 Codex App Server 失败:', err)
+      })
+    })
+  }
+
   app.on('activate', () => {
     if (shouldSuppressVoiceDictationActivate()) {
       return
@@ -746,6 +756,7 @@ app.on('before-quit', (event) => {
   destroyDshView()
   stopDshCordisServer()
   stopDshTradingServer()
+  stopCodexAppServer().catch(() => {})
   // 清理更新器定时器
   cleanupUpdater()
   // 停止工作区文件监听

@@ -20,7 +20,9 @@ import {
 } from '@copis/shared'
 import { initializeWorkingModelCatalog, workingModelCatalogAtom } from '@/atoms/working-model-catalog-atoms'
 import { composerInputHistoryAtom, appendHistoryEntry } from '@/atoms/composer-history'
+import { professionalModeAtom } from '@/atoms/professional-mode-atoms'
 import { ModelSelector } from '@/components/model/ModelSelector'
+import { ComposerModeTogglePill } from '@/components/agent/ComposerModeTogglePill'
 import { RichTextInput } from '@/components/ai-elements/rich-text-input'
 import { InputToolbarOverflow, type ToolbarItem } from '@/components/ai-elements/InputToolbarOverflow'
 import { SpeechButton } from '@/components/ai-elements/speech-button'
@@ -70,6 +72,7 @@ export function WelcomeComposer(): React.ReactElement {
   const [workingMode, setWorkingMode] = React.useState<WorkingMode>('fast')
   const [error, setError] = React.useState<string | null>(null)
   const [history, setHistory] = useAtom(composerInputHistoryAtom)
+  const isProfessional = useAtomValue(professionalModeAtom)
   const sessionRef = React.useRef<AgentSessionMeta | null>(null)
   const workingModelCatalog = useAtomValue(workingModelCatalogAtom)
   const setWorkingModelCatalog = useSetAtom(workingModelCatalogAtom)
@@ -137,11 +140,15 @@ export function WelcomeComposer(): React.ReactElement {
     try {
       let activeSession = sessionRef.current
       if (!activeSession) {
+        const targetRuntime = isProfessional ? 'codex' : 'pi'
         activeSession = await window.electronAPI.createAgentSession(
           undefined,
           selectedModel.channelId,
           workspace.id,
           selectedModelId,
+          undefined,
+          undefined,
+          { agentRuntime: targetRuntime },
         )
         sessionRef.current = activeSession
         setSession(activeSession)
@@ -153,7 +160,7 @@ export function WelcomeComposer(): React.ReactElement {
         rawUserMessage: userMessage,
         channelId: selectedModel.channelId,
         modelId: selectedModelId,
-        agentRuntime: 'pi',
+        agentRuntime: isProfessional ? 'codex' : 'pi',
         workspaceId: workspace.id,
         workingMode,
         permissionModeOverride: 'bypassPermissions',
@@ -169,7 +176,7 @@ export function WelcomeComposer(): React.ReactElement {
     } finally {
       setSending(false)
     }
-  }, [content, selectedModel.channelId, selectedModelId, sending, workingMode, workspace])
+  }, [content, isProfessional, selectedModel.channelId, selectedModelId, sending, workingMode, workspace])
 
   const handleStop = React.useCallback((): void => {
     const activeSession = sessionRef.current
@@ -233,10 +240,18 @@ export function WelcomeComposer(): React.ReactElement {
     },
   ], [loading, sending])
 
+  const hasStarted = entries.length > 0 || sending || Boolean(session)
+
   const trailingNode = (
     <>
+      <ComposerModeTogglePill
+        disabled={hasStarted}
+        sessionId={session?.id}
+        isProfessional={isProfessional}
+      />
       <ModelSelector
-        filterChannelIds={[...COPIS_WORKING_CHANNEL_IDS]}
+        filterChannelIds={isProfessional ? [COPIS_WORKING_CHANNEL_ID] : [...COPIS_WORKING_CHANNEL_IDS]}
+        isProfessional={isProfessional}
         externalSelectedModel={selectedModel}
         onModelSelect={handleModelSelect}
         showChannelInTrigger

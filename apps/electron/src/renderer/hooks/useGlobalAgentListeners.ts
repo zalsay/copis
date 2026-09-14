@@ -1322,15 +1322,21 @@ export function useGlobalAgentListeners(): void {
           return map
         })
 
+        // 确保流式状态停止运行，避免无限加载转圈
+        store.set(agentStreamingStatesAtom, (prev) => {
+          const current = prev.get(data.sessionId)
+          if (!current || !current.running) return prev
+          const map = new Map(prev)
+          map.set(data.sessionId, { ...current, running: false })
+          return map
+        })
+
         // 递增消息刷新版本号，通知 AgentView 重新加载消息
-        const state = store.get(agentStreamingStatesAtom).get(data.sessionId)
-        if (!state?.running) {
-          store.set(agentMessageRefreshAtom, (prev) => {
-            const map = new Map(prev)
-            map.set(data.sessionId, (prev.get(data.sessionId) ?? 0) + 1)
-            return map
-          })
-        }
+        store.set(agentMessageRefreshAtom, (prev) => {
+          const map = new Map(prev)
+          map.set(data.sessionId, (prev.get(data.sessionId) ?? 0) + 1)
+          return map
+        })
         }) // unstable_batchedUpdates
       }
     )

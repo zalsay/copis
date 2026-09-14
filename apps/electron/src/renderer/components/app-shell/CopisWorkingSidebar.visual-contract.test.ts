@@ -713,6 +713,50 @@ describe('Working 侧边栏视觉契约', () => {
     expect(sidebarSource).toContain('<strong>查看使用教程</strong>')
     expect(sidebarStyles).toContain('.copis-working-sidebar-account.active')
   })
+
+  test('Given 工作区会话列表行 When 默认未悬停 Then 时间与loading默认右对齐且删除入口隐藏，悬停时删除入口覆盖时间/loading位置', () => {
+    const rowRule = sidebarStyles.match(
+      /\.copis-working-conversation-row\s*\{([^}]*)\}/s,
+    )?.[1]
+    const mainRule = sidebarStyles.match(
+      /\.copis-working-conversation-main\s*\{([^}]*)\}/s,
+    )?.[1]
+    const metaRule = sidebarStyles.match(
+      /\.copis-working-conversation-meta\s*\{([^}]*)\}/s,
+    )?.[1]
+    const deleteRule = sidebarStyles.match(
+      /\.copis-working-conversation-delete\s*\{([^}]*)\}/s,
+    )?.[1]
+    const disabledRule = sidebarStyles.match(
+      /\.copis-working-conversation-delete:disabled\s*\{([^}]*)\}/s,
+    )?.[1]
+
+    expect(rowRule).toBeDefined()
+    expect(rowRule).toContain('grid-template-columns: minmax(0, 1fr) auto')
+    expect(rowRule).not.toContain('minmax(0, 1fr) auto 22px')
+
+    expect(mainRule).toBeDefined()
+    expect(mainRule).toContain('grid-column: 1')
+
+    expect(metaRule).toBeDefined()
+    expect(metaRule).toContain('grid-column: 2')
+    expect(metaRule).toContain('justify-self: end')
+    expect(metaRule).toContain('min-width: 22px')
+
+    expect(deleteRule).toBeDefined()
+    expect(deleteRule).toContain('grid-column: 2')
+    expect(deleteRule).toContain('justify-self: end')
+    expect(deleteRule).toContain('opacity: 0')
+    expect(deleteRule).toContain('pointer-events: none')
+
+    // 悬停时删除图标覆盖时间/loading，时间/loading 隐藏
+    expect(sidebarStyles).toContain('.copis-working-conversation-row:hover .copis-working-conversation-meta')
+    expect(sidebarStyles).toContain('.copis-working-conversation-row:hover .copis-working-conversation-delete')
+
+    // 未悬停时即使 disabled 也不显示删除入口（opacity 不在 :disabled 中写死）
+    expect(disabledRule).not.toContain('opacity: 0.35')
+    expect(sidebarStyles).toContain('.copis-working-conversation-row:hover .copis-working-conversation-delete:disabled')
+  })
 })
 
 
