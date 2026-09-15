@@ -37,7 +37,7 @@
     },
     "apps/electron": {
       "name": "@copis/electron",
-      "version": "0.0.78",
+      "version": "0.0.84",
       "dependencies": {
         "@anthropic-ai/sdk": "^0.93.0",
         "@earendil-works/pi-agent-core": "0.84.1",
@@ -55,6 +55,7 @@
         "pdfjs-dist": "^4.10.38",
         "pi-web-access": "0.22.0",
         "typebox": "1.1.38",
+        "yaml": "^2.7.0",
       },
       "devDependencies": {
         "@copis/core": "workspace:*",
