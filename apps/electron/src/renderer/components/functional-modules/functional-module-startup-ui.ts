@@ -38,9 +38,10 @@ export const STARTUP_MODULE_ROWS: readonly StartupModuleRow[] = [
   },
 ]
 
-export type StartupGateAction = 'retry' | 'download_update'
+export type StartupGateAction = 'retry' | 'download_update' | 'open_website'
 
-export const COPIS_DOWNLOAD_URL = 'https://copis.meetlife.com.cn'
+export const COPIS_OFFICIAL_URL = 'https://copis.meetlife.com.cn'
+export const COPIS_DOWNLOAD_URL = COPIS_OFFICIAL_URL
 
 export interface StartupClientUpdateRequired {
   minClientVersion: string
@@ -120,7 +121,7 @@ export function getStartupActions(
   error?: string | null,
 ): StartupGateAction[] {
   if (phase !== 'error') return []
-  return isStartupClientUpdateRequired(error) ? ['download_update'] : ['retry']
+  return isStartupClientUpdateRequired(error) ? ['download_update'] : ['retry', 'open_website']
 }
 
 export function formatStartupBytes(value: number | undefined): string {

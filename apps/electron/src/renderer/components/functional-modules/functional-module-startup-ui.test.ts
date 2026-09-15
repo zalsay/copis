@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import {
   COPIS_DOWNLOAD_URL,
+  COPIS_OFFICIAL_URL,
   getStartupActions,
   getStartupClientUpdateDialog,
   getStartupErrorLabel,
@@ -57,18 +58,19 @@ describe('登录后功能模块更新页模型', () => {
     expect(getStartupErrorLabel('Copis 版本过低，需要至少 v0.18.0')).toBe('当前 Copis 版本过低，需要至少 v0.18.0，请下载最新版本')
   })
 
-  test('Given 失败状态 When 生成操作 Then 只能重试不能继续进入', () => {
-    expect(getStartupActions('error')).toEqual(['retry'])
+  test('Given 失败状态 When 生成操作 Then 支持重试更新与打开官网', () => {
+    expect(getStartupActions('error')).toEqual(['retry', 'open_website'])
     expect(getStartupActions('health')).toEqual([])
   })
 
   test('Given 客户端版本过低错误 When 生成操作 Then 提供下载最新版本动作而非重试', () => {
     expect(getStartupActions('error', 'Copis 版本过低，需要至少 0.16.13')).toEqual(['download_update'])
-    expect(getStartupActions('error', '网络连接超时')).toEqual(['retry'])
+    expect(getStartupActions('error', '网络连接超时')).toEqual(['retry', 'open_website'])
     expect(getStartupActions('ready', 'Copis 版本过低，需要至少 0.16.13')).toEqual([])
   })
 
-  test('Given 客户端更新地址 When 读取常量 Then 指向官方下载页面', () => {
+  test('Given 客户端更新与官网地址常量 When 读取常量 Then 指向官方网站页面', () => {
+    expect(COPIS_OFFICIAL_URL).toBe('https://copis.meetlife.com.cn')
     expect(COPIS_DOWNLOAD_URL).toBe('https://copis.meetlife.com.cn')
   })
 

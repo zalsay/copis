@@ -79,7 +79,7 @@ describe('FunctionalModuleUpdateGate 客户端版本过低更新弹窗', () => {
     expect(html).not.toContain('工作区内容')
   })
 
-  test('Given 普通错误状态 When 渲染更新门禁 Then 不显示升级弹窗，只显示重试更新按钮', () => {
+  test('Given 普通错误状态 When 渲染更新门禁 Then 不显示升级弹窗，显示重试更新与打开官网按钮', () => {
     store.set(functionalModuleStartupAtom, {
       phase: 'error',
       detail: '网络连接超时',
@@ -98,6 +98,30 @@ describe('FunctionalModuleUpdateGate 客户端版本过低更新弹窗', () => {
     expect(html).not.toContain('data-alert-dialog-root')
     expect(html).not.toContain('需要更新 Copis')
     expect(html).toContain('重试更新')
+    expect(html).toContain('打开官网')
+  })
+
+  test('Given 普通启动失败错误 When 渲染更新操作栏 Then 包含打开官网按钮并绑定官方网站地址', async () => {
+    const { COPIS_OFFICIAL_URL } = await import('./functional-module-startup-ui')
+    expect(COPIS_OFFICIAL_URL).toBe('https://copis.meetlife.com.cn')
+
+    store.set(functionalModuleStartupAtom, {
+      phase: 'error',
+      detail: '必要组件暂未准备完成，请重试',
+      progress: 0,
+      error: '必要组件暂未准备完成，请重试',
+    })
+
+    const html = renderToString(
+      <Provider store={store}>
+        <FunctionalModuleUpdateGate>
+          <div>工作区内容</div>
+        </FunctionalModuleUpdateGate>
+      </Provider>,
+    )
+
+    expect(html).toContain('Copis 暂时无法启动')
+    expect(html).toContain('打开官网')
   })
 
   test('Given 客户端版本过低且发现新版本 When 渲染更新门禁 Then 弹窗显示发现新版本并展示「下载更新」按钮', () => {

@@ -25,6 +25,7 @@ import {
 } from '@/components/ui/alert-dialog'
 import {
   COPIS_DOWNLOAD_URL,
+  COPIS_OFFICIAL_URL,
   formatStartupBytes,
   getStartupClientUpdateDialog,
   getStartupErrorLabel,
@@ -413,13 +414,27 @@ export function FunctionalModuleUpdateGate({ children }: FunctionalModuleUpdateG
                     'inline-flex min-h-9 items-center justify-center gap-2 rounded-md px-4 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50',
                     clientUpdateDialog
                       ? 'border border-input bg-background hover:bg-accent hover:text-accent-foreground'
-                      : 'bg-primary text-primary-foreground hover:bg-primary/90 self-start',
+                      : 'bg-primary text-primary-foreground hover:bg-primary/90',
                   )}
                   onClick={() => void runStartup()}
                 >
                   <RefreshCw className="size-4" aria-hidden="true" />
                   {clientUpdateDialog ? '重新检查' : '重试更新'}
                 </button>
+                {!clientUpdateDialog && (
+                  <button
+                    type="button"
+                    className="inline-flex min-h-9 items-center justify-center gap-2 rounded-md border border-input bg-background px-4 text-sm font-medium transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50"
+                    onClick={() => {
+                      void window.electronAPI?.openExternal?.(COPIS_OFFICIAL_URL)?.catch?.((error: unknown) => {
+                        console.error('[功能模块] 打开官网失败:', error)
+                      })
+                    }}
+                  >
+                    <ExternalLink className="size-4" aria-hidden="true" />
+                    打开官网
+                  </button>
+                )}
               </div>
             </div>
           )}
