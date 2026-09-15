@@ -48,6 +48,7 @@ use memory::{
     MemoryRestoreInput, MemoryRewriteInput, MemoryScope, MemoryStore, DEFAULT_LIST_LIMIT,
     DEFAULT_RECALL_LIMIT,
 };
+use model_request_client::ModelRequestClient;
 use payment_capability::PAYMENT_CAPABILITY_TOKEN_HEADER;
 use payment_workspace::PaymentWorkspace;
 use pi_rpc::{
@@ -3693,14 +3694,6 @@ impl Drop for ConnectionCountGuard {
 
 fn main() {
     let port = configured_port();
-    let listener = match TcpListener::bind((HOST, port)) {
-        Ok(listener) => listener,
-        Err(error) => {
-            eprintln!("[HTTP API] 无法监听 {}:{}: {}", HOST, port, error);
-            process::exit(1);
-        }
-    };
-
     let bridge = Arc::new(Bridge::new());
     if bridge.available.load(Ordering::Acquire) {
         let response_bridge = Arc::clone(&bridge);
@@ -3731,15 +3724,29 @@ fn main() {
             process::exit(1);
         }
     };
-    let working_gateway = Arc::new(WorkingGateway::new(Arc::clone(&auth_session)));
-    let workers = Arc::new(PiWorkerManager::new());
-    let working_model_proxy = match WorkingModelProxy::new(Arc::clone(&auth_session)) {
-        Ok(proxy) => Arc::new(proxy),
+    // Electron 此时只启动了子进程，尚未把 Rust API 判定为 ready。
+    // 先用真实请求相同的直连 transport 选定模型入口，再开放监听端口，
+    // 避免健康检查在 model-request 尚未就绪时误判启动完成。
+    let model_client = match ModelRequestClient::from_environment() {
+        Ok(client) => client,
         Err(error) => {
-            eprintln!("[HTTP API] Working 模型代理初始化失败: {}", error);
+            eprintln!("[HTTP API] model-request client 初始化失败: {}", error);
             process::exit(1);
         }
     };
+    eprintln!(
+        "[HTTP API] model-request 直连地址已选择：{}",
+        model_client.base_url()
+    );
+    let working_gateway = Arc::new(WorkingGateway::with_model_client(
+        Arc::clone(&auth_session),
+        model_client.clone(),
+    ));
+    let workers = Arc::new(PiWorkerManager::new());
+    let working_model_proxy = Arc::new(WorkingModelProxy::with_model_client(
+        Arc::clone(&auth_session),
+        model_client,
+    ));
     workers.set_working_model_proxy(working_model_proxy);
     let memory_store = match MemoryStore::open(resolve_memory_directory()) {
         Ok(store) => Arc::new(store),
@@ -3786,6 +3793,13 @@ fn main() {
     ));
     automation_scheduler.start();
 
+    let listener = match TcpListener::bind((HOST, port)) {
+        Ok(listener) => listener,
+        Err(error) => {
+            eprintln!("[HTTP API] 无法监听 {}:{}: {}", HOST, port, error);
+            process::exit(1);
+        }
+    };
     eprintln!("[HTTP API] Rust 服务监听 http://{}:{}", HOST, port);
     let active_connections = Arc::new(AtomicUsize::new(0));
     for stream in listener.incoming() {

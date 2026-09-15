@@ -287,6 +287,8 @@ describe('Rust HTTP API 功能模块生命周期', () => {
     const previousBackendUrl = process.env.COPIS_BACKEND_URL
     const previousModelBaseUrl = process.env.WORKING_AGENT_MODEL_BASE_URL
     const previousModelRequestBaseUrl = process.env.COPIS_MODEL_REQUEST_BASE_URL
+    const previousModelRequestBaseUrls = process.env.COPIS_MODEL_REQUEST_BASE_URLS
+    const previousModelProbeTimeoutMs = process.env.COPIS_MODEL_REQUEST_PROBE_TIMEOUT_MS
 
     try {
       const options = await prepareHttpApiBackend({
@@ -307,6 +309,10 @@ describe('Rust HTTP API 功能模块生命周期', () => {
       expect(records[0]?.options.env?.COPIS_MODEL_REQUEST_BASE_URL).toBe(
         'https://configured.example.test/api/internal/working-model',
       )
+      expect(records[0]?.options.env?.COPIS_MODEL_REQUEST_BASE_URLS).toBe(
+        '["https://configured.example.test/api/internal/working-model"]',
+      )
+      expect(Number(records[0]?.options.env?.COPIS_MODEL_REQUEST_PROBE_TIMEOUT_MS)).toBeGreaterThan(0)
     } finally {
       if (previousBackendUrl === undefined) delete process.env.COPIS_BACKEND_URL
       else process.env.COPIS_BACKEND_URL = previousBackendUrl
@@ -314,6 +320,10 @@ describe('Rust HTTP API 功能模块生命周期', () => {
       else process.env.WORKING_AGENT_MODEL_BASE_URL = previousModelBaseUrl
       if (previousModelRequestBaseUrl === undefined) delete process.env.COPIS_MODEL_REQUEST_BASE_URL
       else process.env.COPIS_MODEL_REQUEST_BASE_URL = previousModelRequestBaseUrl
+      if (previousModelRequestBaseUrls === undefined) delete process.env.COPIS_MODEL_REQUEST_BASE_URLS
+      else process.env.COPIS_MODEL_REQUEST_BASE_URLS = previousModelRequestBaseUrls
+      if (previousModelProbeTimeoutMs === undefined) delete process.env.COPIS_MODEL_REQUEST_PROBE_TIMEOUT_MS
+      else process.env.COPIS_MODEL_REQUEST_PROBE_TIMEOUT_MS = previousModelProbeTimeoutMs
     }
   })
 

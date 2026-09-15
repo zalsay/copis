@@ -2,6 +2,8 @@ export const DEFAULT_COPIS_BACKEND_URL = 'https://pie.meetlife.com.cn/pi-api'
 export const DEFAULT_MODEL_REQUEST_URL = 'https://pie.meetlife.com.cn/model-request'
 export const MODEL_BASE_URL_ENV = 'WORKING_AGENT_MODEL_BASE_URL'
 export const MODEL_REQUEST_BASE_URL_ENV = 'COPIS_MODEL_REQUEST_BASE_URL'
+export const MODEL_REQUEST_BASE_URLS_ENV = 'COPIS_MODEL_REQUEST_BASE_URLS'
+export const MODEL_REQUEST_PROBE_TIMEOUT_MS_ENV = 'COPIS_MODEL_REQUEST_PROBE_TIMEOUT_MS'
 export const MODEL_ENDPOINTS_URL_ENV = 'COPIS_MODEL_ENDPOINTS_URL'
 
 const MODEL_ENDPOINT_PATH = '/api/internal/working-model'
@@ -11,8 +13,12 @@ const DEFAULT_RESOLUTION_TIMEOUT_MS = 6_000
 export interface CopisBackendEndpointResolution {
   /** Copis 后端根地址，供 Electron Working API 和 Rust skill market 使用。 */
   backendUrl: string
-  /** 选中的 model-request 基地址，保留候选路径供 Rust/Pi runtime 使用。 */
+  /** 首选/兼容 model-request 基地址；最终地址由 Rust 直连探测决定。 */
   modelBaseUrl: string
+  /** 交给 Rust 按直连可达性探测的有序候选。 */
+  modelBaseUrls: string[]
+  /** 配置获取后留给 Rust 直连探测的剩余预算。 */
+  modelProbeTimeoutMs: number
   source: 'configured' | 'remote'
 }
 
@@ -129,24 +135,27 @@ export async function resolveCopisBackendEndpoints(
     // 配置服务不可用时继续使用现有固定地址，保证客户端仍能启动。
   }
 
+  candidates.push(fallbackModelBaseUrl)
   const seen = new Set<string>()
+  const modelBaseUrls: string[] = []
   for (const candidate of candidates) {
     const normalized = normalizeModelEndpoint(candidate)
     if (!normalized || seen.has(normalized)) continue
     seen.add(normalized)
-    if (await isHealthyModelEndpoint(fetchImpl, normalized, remainingTimeout(deadline))) {
-      return {
-        backendUrl,
-        modelBaseUrl: normalized,
-        source: configuredModel === normalized ? 'configured' : 'remote',
-      }
-    }
+    modelBaseUrls.push(normalized)
   }
 
+  const modelBaseUrl = modelBaseUrls[0] ?? fallbackModelBaseUrl
   return {
     backendUrl,
-    modelBaseUrl: fallbackModelBaseUrl,
-    source: 'configured',
+    modelBaseUrl,
+    modelBaseUrls: modelBaseUrls.length > 0 ? modelBaseUrls : [fallbackModelBaseUrl],
+    modelProbeTimeoutMs: remainingTimeout(deadline),
+    source: configuredModel && normalizeModelEndpoint(configuredModel) === modelBaseUrl
+      ? 'configured'
+      : modelBaseUrl === normalizeModelEndpoint(fallbackModelBaseUrl)
+        ? 'configured'
+        : 'remote',
   }
 }
 
@@ -164,21 +173,6 @@ async function fetchEndpointConfig(
   const payload = await response.json() as unknown
   if (!isRecord(payload) || !Array.isArray(payload.base_urls)) return []
   return payload.base_urls.filter((value): value is string => typeof value === 'string')
-}
-
-async function isHealthyModelEndpoint(
-  fetchImpl: EndpointFetch,
-  baseUrl: string,
-  timeoutMs: number,
-): Promise<boolean> {
-  const healthUrl = healthProbeUrl(baseUrl)
-  if (!healthUrl) return false
-  try {
-    const response = await fetchWithTimeout(fetchImpl, healthUrl, timeoutMs)
-    return response.ok
-  } catch {
-    return false
-  }
 }
 
 async function fetchWithTimeout(

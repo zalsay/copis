@@ -1,11 +1,12 @@
 use crate::model_request_transport::{DisconnectConnector, DisconnectPeer, ModelBody};
 use std::fmt;
 use std::io::Read;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use ureq::unversioned::transport::{Connector, DefaultConnector};
 
 pub const DEFAULT_MODEL_REQUEST_URL: &str = "https://pie.meetlife.com.cn/model-request";
 const MAX_MODEL_RESPONSE_BYTES: u64 = 10 * 1024 * 1024;
+const DEFAULT_MODEL_PROBE_TIMEOUT_MS: u64 = 6_000;
 pub const DEFAULT_MODEL_STREAM_TIMEOUT_SECS: u64 = 960;
 pub const MAX_MODEL_STREAM_TIMEOUT_SECS: u64 = 960;
 
@@ -33,6 +34,7 @@ impl fmt::Display for ModelRequestError {
     }
 }
 
+#[derive(Clone)]
 pub struct ModelRequestClient {
     base_url: String,
     agent: ureq::Agent,
@@ -44,7 +46,29 @@ impl ModelRequestClient {
             .ok()
             .filter(|value| !value.trim().is_empty())
             .unwrap_or_else(|| DEFAULT_MODEL_REQUEST_URL.to_string());
-        Self::new(&base_url, resolve_model_stream_timeout_secs())
+        let candidates = std::env::var("COPIS_MODEL_REQUEST_BASE_URLS")
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+            .map(|value| {
+                serde_json::from_str::<Vec<String>>(&value).map_err(|_| {
+                    ModelRequestError::InvalidConfiguration(
+                        "COPIS_MODEL_REQUEST_BASE_URLS 不是有效的 JSON 地址数组".to_string(),
+                    )
+                })
+            })
+            .transpose()?;
+        let stream_timeout = resolve_model_stream_timeout_secs();
+        let Some(mut candidates) = candidates else {
+            return Self::new(&base_url, stream_timeout);
+        };
+        if !candidates
+            .iter()
+            .any(|candidate| candidate.trim() == base_url)
+        {
+            candidates.insert(0, base_url);
+        }
+        let selected = select_direct_model_base_url(&candidates, resolve_model_probe_timeout_ms())?;
+        Self::new(&selected, stream_timeout)
     }
 
     pub fn new(base_url: &str, timeout_secs: u64) -> Result<Self, ModelRequestError> {
@@ -56,6 +80,10 @@ impl ModelRequestClient {
             .build()
             .new_agent();
         Ok(Self { base_url, agent })
+    }
+
+    pub fn base_url(&self) -> &str {
+        &self.base_url
     }
 
     #[cfg(test)]
@@ -123,6 +151,78 @@ impl ModelRequestClient {
             body: ModelBody::new(Box::new(body), peer),
         })
     }
+}
+
+fn resolve_model_probe_timeout_ms() -> u64 {
+    std::env::var("COPIS_MODEL_REQUEST_PROBE_TIMEOUT_MS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|value| *value > 0)
+        .map(|value| value.min(DEFAULT_MODEL_PROBE_TIMEOUT_MS))
+        .unwrap_or(DEFAULT_MODEL_PROBE_TIMEOUT_MS)
+}
+
+fn select_direct_model_base_url(
+    candidates: &[String],
+    timeout_ms: u64,
+) -> Result<String, ModelRequestError> {
+    let mut normalized = Vec::new();
+    for candidate in candidates {
+        let candidate = normalize_base_url(candidate)?;
+        if !normalized.contains(&candidate) {
+            normalized.push(candidate);
+        }
+    }
+    let fallback = normalized.last().cloned().ok_or_else(|| {
+        ModelRequestError::InvalidConfiguration(
+            "COPIS_MODEL_REQUEST_BASE_URLS 不能为空".to_string(),
+        )
+    })?;
+    let started = Instant::now();
+    let total_timeout = Duration::from_millis(timeout_ms.max(1));
+    for candidate in normalized {
+        let Some(remaining) = total_timeout.checked_sub(started.elapsed()) else {
+            break;
+        };
+        if direct_health_probe(&candidate, remaining) {
+            return Ok(candidate);
+        }
+    }
+    Ok(fallback)
+}
+
+fn direct_health_probe(base_url: &str, timeout: Duration) -> bool {
+    let Some(url) = health_probe_url(base_url) else {
+        return false;
+    };
+    let request = match ureq::http::Request::builder()
+        .method("GET")
+        .uri(url)
+        .header("Accept", "application/json")
+        .body(())
+    {
+        Ok(request) => request,
+        Err(_) => return false,
+    };
+    let agent = ureq::Agent::config_builder()
+        .timeout_global(Some(timeout.max(Duration::from_millis(1))))
+        .http_status_as_error(false)
+        .proxy(None)
+        .build()
+        .new_agent();
+    agent
+        .run(request)
+        .map(|response| response.status().is_success())
+        .unwrap_or(false)
+}
+
+fn health_probe_url(base_url: &str) -> Option<String> {
+    if base_url.ends_with("/model-request") {
+        return Some(format!("{base_url}/health"));
+    }
+    let (scheme, rest) = base_url.split_once("://")?;
+    let authority = rest.split('/').next()?;
+    Some(format!("{scheme}://{authority}/health"))
 }
 
 fn normalize_base_url(value: &str) -> Result<String, ModelRequestError> {

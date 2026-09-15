@@ -95,6 +95,63 @@ fn invalid_model_base_configuration_fails_closed() {
 }
 
 #[test]
+fn environment_candidates_use_rust_direct_health_before_model_requests() {
+    let _guard = environment_lock().lock().unwrap();
+    let unavailable = TcpListener::bind("127.0.0.1:0").unwrap();
+    let unavailable_addr = unavailable.local_addr().unwrap();
+    let unavailable_server = thread::spawn(move || {
+        let _ = unavailable.accept();
+    });
+
+    let available = TcpListener::bind("127.0.0.1:0").unwrap();
+    let available_addr = available.local_addr().unwrap();
+    let available_server = thread::spawn(move || {
+        for expected_path in ["/model-request/health", "/model-request/config"] {
+            let (mut socket, _) = available.accept().unwrap();
+            let mut request = [0_u8; 4096];
+            let read = socket.read(&mut request).unwrap();
+            let request = String::from_utf8_lossy(&request[..read]);
+            assert!(request.starts_with(&format!("GET {expected_path} HTTP/1.1")));
+            socket
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}",
+                )
+                .unwrap();
+        }
+    });
+
+    let first = format!("http://{unavailable_addr}/model-request");
+    let second = format!("http://{available_addr}/model-request");
+    let candidates = serde_json::to_string(&vec![first.clone(), second]).unwrap();
+    let previous_base = std::env::var("COPIS_MODEL_REQUEST_BASE_URL").ok();
+    let previous_candidates = std::env::var("COPIS_MODEL_REQUEST_BASE_URLS").ok();
+    let previous_probe_timeout = std::env::var("COPIS_MODEL_REQUEST_PROBE_TIMEOUT_MS").ok();
+    std::env::set_var("COPIS_MODEL_REQUEST_BASE_URL", first);
+    std::env::set_var("COPIS_MODEL_REQUEST_BASE_URLS", candidates);
+    std::env::set_var("COPIS_MODEL_REQUEST_PROBE_TIMEOUT_MS", "1000");
+
+    let result = ModelRequestClient::from_environment()
+        .and_then(|client| client.open("GET", "/config", "", "token", vec![]));
+
+    match previous_base {
+        Some(value) => std::env::set_var("COPIS_MODEL_REQUEST_BASE_URL", value),
+        None => std::env::remove_var("COPIS_MODEL_REQUEST_BASE_URL"),
+    }
+    match previous_candidates {
+        Some(value) => std::env::set_var("COPIS_MODEL_REQUEST_BASE_URLS", value),
+        None => std::env::remove_var("COPIS_MODEL_REQUEST_BASE_URLS"),
+    }
+    match previous_probe_timeout {
+        Some(value) => std::env::set_var("COPIS_MODEL_REQUEST_PROBE_TIMEOUT_MS", value),
+        None => std::env::remove_var("COPIS_MODEL_REQUEST_PROBE_TIMEOUT_MS"),
+    }
+
+    assert_eq!(result.unwrap().status, 200);
+    unavailable_server.join().unwrap();
+    available_server.join().unwrap();
+}
+
+#[test]
 fn model_stream_timeout_defaults_to_960_seconds_and_is_capped() {
     use crate::model_request_client::{
         resolve_model_stream_timeout_secs, DEFAULT_MODEL_STREAM_TIMEOUT_SECS,

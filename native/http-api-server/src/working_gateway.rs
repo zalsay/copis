@@ -154,7 +154,6 @@ impl WorkingGateway {
         }
     }
 
-    #[cfg(test)]
     pub fn with_model_client(auth: Arc<AuthSession>, model_client: ModelRequestClient) -> Self {
         Self {
             auth,

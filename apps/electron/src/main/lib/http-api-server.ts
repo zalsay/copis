@@ -50,6 +50,8 @@ import { getOrCreateHttpApiWebToken } from './http-api-web-token'
 import {
   MODEL_BASE_URL_ENV,
   MODEL_REQUEST_BASE_URL_ENV,
+  MODEL_REQUEST_BASE_URLS_ENV,
+  MODEL_REQUEST_PROBE_TIMEOUT_MS_ENV,
   resolveCopisBackendEndpoints,
   type CopisBackendEndpointResolution,
 } from './backend-endpoint-resolver'
@@ -70,7 +72,9 @@ function resolvePiExtensionsDir(): string | undefined {
 
 const RUST_HTTP_API_BINARY = 'copis-http-api-server'
 const HEALTH_POLL_INTERVAL_MS = 100
-const DEFAULT_HEALTH_TIMEOUT_MS = 5_000
+// Rust 会在开放监听端口前执行最多 6 秒的 model-request 直连探测，
+// 健康检查需为剩余初始化留出余量。
+const DEFAULT_HEALTH_TIMEOUT_MS = 8_000
 
 export type HttpApiSpawn = (
   file: string,
@@ -95,6 +99,8 @@ export interface HttpApiServerOptions {
   workerLaunch?: PiWorkerLaunch
   backendUrl?: string
   modelBaseUrl?: string
+  modelBaseUrls?: string[]
+  modelProbeTimeoutMs?: number
   endpointConfigUrl?: string
   /** 仅测试内部注入；生产启动路径使用 ensureDefaultWorkspace()。 */
   paymentWorkspace?: Pick<AgentWorkspace, 'slug' | 'projectRootPath' | 'projectPath'>
@@ -488,6 +494,20 @@ function spawnManagedProcess(
         ...(options.modelBaseUrl || process.env[MODEL_REQUEST_BASE_URL_ENV]
           ? { [MODEL_REQUEST_BASE_URL_ENV]: options.modelBaseUrl ?? process.env[MODEL_REQUEST_BASE_URL_ENV] }
           : {}),
+        ...(options.modelBaseUrls || process.env[MODEL_REQUEST_BASE_URLS_ENV]
+          ? {
+              [MODEL_REQUEST_BASE_URLS_ENV]: options.modelBaseUrls
+                ? JSON.stringify(options.modelBaseUrls)
+                : process.env[MODEL_REQUEST_BASE_URLS_ENV],
+            }
+          : {}),
+        ...(options.modelProbeTimeoutMs || process.env[MODEL_REQUEST_PROBE_TIMEOUT_MS_ENV]
+          ? {
+              [MODEL_REQUEST_PROBE_TIMEOUT_MS_ENV]: String(
+                options.modelProbeTimeoutMs ?? process.env[MODEL_REQUEST_PROBE_TIMEOUT_MS_ENV],
+              ),
+            }
+          : {}),
         ...(piExtensionsDir ? { COPIS_PI_EXTENSIONS_DIR: piExtensionsDir } : {}),
         ...(nodeRuntimeRoot ? { COPIS_RUNTIME_ROOT: nodeRuntimeRoot } : {}),
         ...(pythonRuntimeRoot ? { COPIS_PYTHON_RUNTIME_ROOT: pythonRuntimeRoot } : {}),
@@ -577,6 +597,8 @@ async function resolveHttpApiBackend(
       ...options,
       backendUrl: resolution.backendUrl,
       modelBaseUrl: resolution.modelBaseUrl,
+      modelBaseUrls: resolution.modelBaseUrls,
+      modelProbeTimeoutMs: resolution.modelProbeTimeoutMs,
     },
     resolution,
   }
@@ -589,8 +611,10 @@ export async function prepareHttpApiBackend(
   process.env.COPIS_BACKEND_URL = prepared.resolution.backendUrl
   process.env[MODEL_BASE_URL_ENV] = prepared.resolution.modelBaseUrl
   process.env[MODEL_REQUEST_BASE_URL_ENV] = prepared.resolution.modelBaseUrl
+  process.env[MODEL_REQUEST_BASE_URLS_ENV] = JSON.stringify(prepared.resolution.modelBaseUrls)
+  process.env[MODEL_REQUEST_PROBE_TIMEOUT_MS_ENV] = String(prepared.resolution.modelProbeTimeoutMs)
   console.log(
-    `[HTTP API] edu-api endpoint 已选择（${prepared.resolution.source}）：${prepared.resolution.backendUrl}；model-request：${prepared.resolution.modelBaseUrl}`,
+    `[HTTP API] edu-api endpoint 已选择（${prepared.resolution.source}）：${prepared.resolution.backendUrl}；model-request 候选：${prepared.resolution.modelBaseUrls.join(', ')}`,
   )
   return prepared.options
 }

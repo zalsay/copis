@@ -11,7 +11,7 @@ describe('edu-api endpoint configuration', () => {
     expect(DEFAULT_COPIS_BACKEND_URL).toBe('https://pie.meetlife.com.cn/pi-api')
   })
 
-  test('按 edu-api 返回顺序探测 model-request，并选择首个健康地址', async () => {
+  test('保持 edu-api 候选顺序交给 Rust 直连探测', async () => {
     const calls: string[] = []
     const result = await resolveCopisBackendEndpoints({
       configuredBackendUrl: 'https://edu-api.example.test/pi-api',
@@ -25,36 +25,37 @@ describe('edu-api endpoint configuration', () => {
             'https://second.example.test/model-request',
           ] }))
         }
-        if (url === 'https://first.example.test/model-request/health') return new Response('unavailable', { status: 503 })
-        if (url === 'https://second.example.test/model-request/health') return new Response('ok', { status: 200 })
-        return new Response('not found', { status: 404 })
+        throw new Error(`Electron 不应探测候选健康状态：${url}`)
       },
     })
 
     expect(result).toEqual({
       backendUrl: 'https://edu-api.example.test/pi-api',
-      modelBaseUrl: 'https://second.example.test/model-request',
+      modelBaseUrl: 'https://first.example.test/model-request',
+      modelBaseUrls: [
+        'https://first.example.test/model-request',
+        'https://second.example.test/model-request',
+        'https://edu-api.example.test/pi-api/api/internal/working-model',
+      ],
+      modelProbeTimeoutMs: expect.any(Number),
       source: 'remote',
     })
     expect(calls).toEqual([
       'https://edu-api.example.test/pi-api/api/client/model-request-endpoints',
-      'https://first.example.test/model-request/health',
-      'https://second.example.test/model-request/health',
     ])
+    expect((result as unknown as { modelProbeTimeoutMs: number }).modelProbeTimeoutMs).toBeGreaterThan(0)
+    expect((result as unknown as { modelProbeTimeoutMs: number }).modelProbeTimeoutMs).toBeLessThanOrEqual(6_000)
   })
 
-  test('默认探测预算可容纳超过两秒的首个健康检查', async () => {
+  test('默认配置获取预算可容纳超过两秒的响应', async () => {
     const result = await resolveCopisBackendEndpoints({
       configuredBackendUrl: 'https://edu-api.example.test/pi-api',
       endpointConfigUrl: 'https://edu-api.example.test/pi-api/api/client/model-request-endpoints',
       fetchImpl: async (input: string) => {
         const url = String(input)
         if (url.includes('/model-request-endpoints')) {
-          return new Response(JSON.stringify({ base_urls: ['https://first.example.test/model-request'] }))
-        }
-        if (url === 'https://first.example.test/model-request/health') {
           await new Promise<void>((resolve) => setTimeout(resolve, 2_100))
-          return new Response('ok', { status: 200 })
+          return new Response(JSON.stringify({ base_urls: ['https://first.example.test/model-request'] }))
         }
         return new Response('not found', { status: 404 })
       },
@@ -63,6 +64,11 @@ describe('edu-api endpoint configuration', () => {
     expect(result).toEqual({
       backendUrl: 'https://edu-api.example.test/pi-api',
       modelBaseUrl: 'https://first.example.test/model-request',
+      modelBaseUrls: [
+        'https://first.example.test/model-request',
+        'https://edu-api.example.test/pi-api/api/internal/working-model',
+      ],
+      modelProbeTimeoutMs: expect.any(Number),
       source: 'remote',
     })
   })
@@ -78,6 +84,8 @@ describe('edu-api endpoint configuration', () => {
     expect(result).toEqual({
       backendUrl: 'https://edu-api.example.test',
       modelBaseUrl: 'https://configured.example.test/model-request',
+      modelBaseUrls: ['https://configured.example.test/model-request'],
+      modelProbeTimeoutMs: expect.any(Number),
       source: 'configured',
     })
   })
@@ -100,6 +108,8 @@ describe('edu-api endpoint configuration', () => {
     expect(result).toEqual({
       backendUrl: 'http://127.0.0.1:9000/module/edu-api',
       modelBaseUrl: 'http://127.0.0.1:9000/module/edu-api/api/internal/working-model',
+      modelBaseUrls: ['http://127.0.0.1:9000/module/edu-api/api/internal/working-model'],
+      modelProbeTimeoutMs: expect.any(Number),
       source: 'configured',
     })
   })

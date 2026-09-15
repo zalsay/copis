@@ -153,9 +153,9 @@ Copis 的 Agent 模式统一使用 Pi Agent Runtime，基于 `@earendil-works/pi
 1. `https://ai.meetlife.top/model-request`
 2. `https://pie.meetlife.com.cn/model-request`
 
-客户端按顺序请求各候选的 `/health`，选择第一个返回 2xx 的地址，本次启动中的模型配置、Responses 请求和图片任务都复用该地址。健康探测不携带用户 Token；获取配置和全部探测共用 6 秒总超时。配置服务不可用或候选均不健康时，客户端回退到 `https://pie.meetlife.com.cn/model-request`，不会阻止 Copis 启动。
+Electron 只获取并按原顺序把候选交给新启动的 Rust 子进程，不使用 Electron/Chromium 的代理网络结果决定模型入口。Rust 在开放本地 HTTP API 端口前，使用与真实模型请求相同的无代理直连 transport 依次请求各候选的 `/health`，选择第一个返回 2xx 的地址；模型配置、Responses 请求和图片任务复用同一个已选地址。探测不携带用户 Token，配置获取和 Rust 探测共用 6 秒总预算；Electron 的启动健康检查另留 8 秒，覆盖直连探测及其余初始化时间。配置服务不可用或候选均不健康时，客户端回退到最后的兼容地址，不会阻止 Copis 启动。业务 POST 发出后不会跨候选自动重试，避免重复请求或重复计费。
 
-开发和私有部署可通过 `COPIS_MODEL_ENDPOINTS_URL` 覆盖地址列表接口，通过 `COPIS_MODEL_REQUEST_BASE_URL` 显式指定优先模型入口；兼容变量 `WORKING_AGENT_MODEL_BASE_URL` 仍会同步设置。edu-api 业务地址与 model-request 模型地址彼此独立，模型入口切换不会改变登录、工作区、Skills 或支付 API 的目标地址。
+开发和私有部署可通过 `COPIS_MODEL_ENDPOINTS_URL` 覆盖地址列表接口，通过 `COPIS_MODEL_REQUEST_BASE_URL` 显式指定优先模型入口；Electron 通过 `COPIS_MODEL_REQUEST_BASE_URLS` 和 `COPIS_MODEL_REQUEST_PROBE_TIMEOUT_MS` 向 Rust 传递候选与剩余预算，兼容变量 `WORKING_AGENT_MODEL_BASE_URL` 仍会同步设置。edu-api 业务地址与 model-request 模型地址彼此独立，模型入口切换不会改变登录、工作区、Skills 或支付 API 的目标地址。
 
 ### Automation 运行时
 
