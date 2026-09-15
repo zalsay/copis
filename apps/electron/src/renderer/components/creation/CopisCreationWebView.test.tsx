@@ -490,6 +490,32 @@ describe('CopisCreationWebView 侧边栏宽度与原生视图布局契约', () =
     expect(patchSource).toContain('移除意见反馈菜单项')
     expect(patchSource).toContain('"意见反馈"')
   })
+
+  test('Given 创造模式启动失败且版本过低报错 When 解析与格式化错误信息 Then 友好展示最低版本要求与下载引导', async () => {
+    const { formatCreationErrorMessage, parseCreationClientUpdateRequired, isCreationClientUpdateRequired } = await import('./creation-dsh-helper')
+
+    const rawError = "Error invoking remote method 'functional-module:install': Error: 安装创造模式失败: Copis 版本过低，需要至少 0.0.92"
+    expect(isCreationClientUpdateRequired(rawError)).toBe(true)
+    expect(parseCreationClientUpdateRequired(rawError)).toEqual({ minClientVersion: '0.0.92' })
+    expect(formatCreationErrorMessage(rawError)).toBe('当前 Copis 版本过低，需要至少 v0.0.92，请打开官网下载最新版本。')
+
+    const otherError = "Error invoking remote method 'dshCordis:start': Error: 端口 53080 已被占用"
+    expect(isCreationClientUpdateRequired(otherError)).toBe(false)
+    expect(formatCreationErrorMessage(otherError)).toBe('端口 53080 已被占用')
+    expect(formatCreationErrorMessage(null)).toBe('创造模式微内核服务未能成功启动，请点击下方重试。')
+  })
+
+  test('Given 创造模式启动失败界面 When 检查操作按钮契约 Then 包含打开官网按钮并引入官方网址常量', () => {
+    const { readFileSync } = require('node:fs')
+    const { join } = require('node:path')
+    const viewSource = readFileSync(join(__dirname, 'CopisCreationWebView.tsx'), 'utf8')
+
+    // 1. 包含打开官网按钮与图标
+    expect(viewSource).toContain('打开官网')
+    expect(viewSource).toContain('ExternalLink')
+    expect(viewSource).toContain('COPIS_OFFICIAL_URL')
+    expect(viewSource).toContain('window.electronAPI?.openExternal?.(COPIS_OFFICIAL_URL)')
+  })
 })
 
 

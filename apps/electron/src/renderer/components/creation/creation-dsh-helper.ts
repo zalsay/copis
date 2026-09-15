@@ -13,3 +13,28 @@ export function shouldInstallDshModule(status: {
 }): boolean {
   return !status.installed || status.updateAvailable
 }
+
+const CLIENT_VERSION_LOW_PATTERN = /Copis 版本过低[，,\s]+需要至少\s*v?([^\s'"]+)/i
+
+export interface CreationClientUpdateRequired {
+  minClientVersion: string
+}
+
+export function parseCreationClientUpdateRequired(error?: string | null): CreationClientUpdateRequired | null {
+  if (!error) return null
+  const match = error.match(CLIENT_VERSION_LOW_PATTERN)
+  return match ? { minClientVersion: match[1]! } : null
+}
+
+export function isCreationClientUpdateRequired(error?: string | null): boolean {
+  return parseCreationClientUpdateRequired(error) !== null
+}
+
+export function formatCreationErrorMessage(error?: string | null): string {
+  if (!error) return '创造模式微内核服务未能成功启动，请点击下方重试。'
+  const updateReq = parseCreationClientUpdateRequired(error)
+  if (updateReq) {
+    return `当前 Copis 版本过低，需要至少 v${updateReq.minClientVersion}，请打开官网下载最新版本。`
+  }
+  return error.replace(/^Error invoking remote method '[^']+': (?:Error: )?/, '')
+}

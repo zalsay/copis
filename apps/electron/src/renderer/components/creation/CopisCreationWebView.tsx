@@ -17,8 +17,10 @@ import {
   Lightbulb,
   AlertCircle,
   Download,
+  ExternalLink,
   X,
 } from 'lucide-react'
+import { COPIS_OFFICIAL_URL } from '@/components/functional-modules/functional-module-startup-ui'
 import { CopisLogoIcon } from '@/components/ui/copis-logo-icon'
 import { dshCordisStatusAtom, normalizeAppMode, setAppModeAndRuntimeAtom } from '@/atoms/app-mode'
 import { agentSessionsAtom, currentAgentWorkspaceIdAtom } from '@/atoms/agent-atoms'
@@ -56,7 +58,7 @@ type CreationSubView =
   | 'settings'
   | null
 
-import { isDshModuleMissingError, shouldInstallDshModule } from './creation-dsh-helper'
+import { formatCreationErrorMessage, isDshModuleMissingError, shouldInstallDshModule } from './creation-dsh-helper'
 export { isDshModuleMissingError }
 
 export function CopisCreationWebView(): React.ReactElement {
@@ -451,7 +453,7 @@ export function CopisCreationWebView(): React.ReactElement {
                   {installingModule ? '正在安装创造模式模块' : 'Copis 创造模式启动失败'}
                 </h3>
                 <p className="text-xs text-muted-foreground mt-1 max-w-md">
-                  {installProgressText || errorMessage || '创造模式微内核服务未能成功启动，请点击下方重试。'}
+                  {formatCreationErrorMessage(installProgressText || errorMessage)}
                 </p>
               </div>
               <div className="flex flex-wrap items-center justify-center gap-2 mt-2">
@@ -480,6 +482,20 @@ export function CopisCreationWebView(): React.ReactElement {
                 >
                   <RefreshCw className="w-3.5 h-3.5 mr-1.5" />
                   重试启动
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    void window.electronAPI?.openExternal?.(COPIS_OFFICIAL_URL)?.catch?.((error: unknown) => {
+                      console.error('[CopisCreationWebView] 打开官网失败:', error)
+                    })
+                  }}
+                  disabled={installingModule}
+                  className="titlebar-no-drag"
+                >
+                  <ExternalLink className="w-3.5 h-3.5 mr-1.5" />
+                  打开官网
                 </Button>
                 <Button
                   variant="ghost"
