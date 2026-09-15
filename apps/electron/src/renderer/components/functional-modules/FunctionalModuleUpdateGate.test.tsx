@@ -73,6 +73,7 @@ describe('FunctionalModuleUpdateGate 客户端版本过低更新弹窗', () => {
     expect(html).toContain('需要更新 Copis')
     // 弹窗按钮
     expect(html).toContain('关闭')
+    expect(html).toContain('打开官网')
     // 右上角关闭按钮的无障碍文本
     expect(html).toContain('aria-label="关闭"')
     // 工作区内容处于拦截中
@@ -232,6 +233,29 @@ describe('FunctionalModuleUpdateGate 客户端版本过低更新弹窗', () => {
       </Provider>,
     )
     expect(html2).toBeDefined()
+  })
+
+  test('Given 启动遇到版本过低错误 When 渲染门禁界面 Then 弹窗与底层卡片均提供「打开官网」按钮', () => {
+    store.set(functionalModuleStartupAtom, {
+      phase: 'error',
+      detail: 'Copis 版本过低，需要至少 0.0.92',
+      progress: 0,
+      error: 'Copis 版本过低，需要至少 0.0.92',
+    })
+
+    const html = renderToString(
+      <Provider store={store}>
+        <FunctionalModuleUpdateGate>
+          <div>工作区内容</div>
+        </FunctionalModuleUpdateGate>
+      </Provider>,
+    )
+
+    // 弹窗中包含打开官网
+    expect(html).toContain('需要更新 Copis')
+    expect(html).toContain('打开官网')
+    // 底层卡片上也包含重新检查与打开官网
+    expect(html).toContain('重新检查')
   })
 })
 

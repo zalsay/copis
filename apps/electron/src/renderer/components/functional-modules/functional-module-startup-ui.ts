@@ -121,7 +121,7 @@ export function getStartupActions(
   error?: string | null,
 ): StartupGateAction[] {
   if (phase !== 'error') return []
-  return isStartupClientUpdateRequired(error) ? ['download_update'] : ['retry', 'open_website']
+  return isStartupClientUpdateRequired(error) ? ['download_update', 'open_website'] : ['retry', 'open_website']
 }
 
 export function formatStartupBytes(value: number | undefined): string {

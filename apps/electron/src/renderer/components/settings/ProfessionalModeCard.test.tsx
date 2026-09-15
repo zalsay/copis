@@ -67,4 +67,10 @@ describe('ProfessionalModeCard 组件功能契约 (BDD)', () => {
     expect(surfaceSource).toContain('const isProfessional = sessionMeta')
     expect(surfaceSource).toContain("? sessionMeta.agentRuntime === 'codex'")
   })
+
+  test('Given 安装模块遇到版本过低错误 When 渲染错误信息 Then 提供打开官网按钮', () => {
+    expect(cardSource).toContain("installError.includes('版本过低')")
+    expect(cardSource).toContain('COPIS_OFFICIAL_URL')
+    expect(cardSource).toContain('打开官网')
+  })
 })

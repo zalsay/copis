@@ -63,8 +63,8 @@ describe('登录后功能模块更新页模型', () => {
     expect(getStartupActions('health')).toEqual([])
   })
 
-  test('Given 客户端版本过低错误 When 生成操作 Then 提供下载最新版本动作而非重试', () => {
-    expect(getStartupActions('error', 'Copis 版本过低，需要至少 0.16.13')).toEqual(['download_update'])
+  test('Given 客户端版本过低错误 When 生成操作 Then 提供下载最新版本与打开官网动作而非重试', () => {
+    expect(getStartupActions('error', 'Copis 版本过低，需要至少 0.16.13')).toEqual(['download_update', 'open_website'])
     expect(getStartupActions('error', '网络连接超时')).toEqual(['retry', 'open_website'])
     expect(getStartupActions('ready', 'Copis 版本过低，需要至少 0.16.13')).toEqual([])
   })

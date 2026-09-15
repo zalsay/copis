@@ -1,4 +1,6 @@
 import { describe, expect, test } from 'bun:test'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import type { FunctionalModuleStatus } from '@copis/shared'
 import {
   FUNCTIONAL_MODULE_DEFINITIONS,
@@ -73,5 +75,12 @@ describe('功能模块设置页模型', () => {
       required: true,
       error: null,
     })
+  })
+
+  test('Given FunctionalModulesCard 模块遇到版本过低错误 When 渲染操作区 Then 提供打开官网按钮', () => {
+    const cardSource = readFileSync(join(__dirname, 'FunctionalModulesCard.tsx'), 'utf8')
+    expect(cardSource).toContain("status.error?.includes('版本过低')")
+    expect(cardSource).toContain('COPIS_OFFICIAL_URL')
+    expect(cardSource).toContain('打开官网')
   })
 })

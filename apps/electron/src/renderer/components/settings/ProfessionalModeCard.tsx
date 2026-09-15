@@ -6,10 +6,11 @@
 
 import * as React from 'react'
 import { useAtom, useAtomValue } from 'jotai'
-import { AlertCircle, AlertTriangle, CheckCircle2, Download, Loader2, RefreshCw } from 'lucide-react'
+import { AlertCircle, AlertTriangle, CheckCircle2, Download, ExternalLink, Loader2, RefreshCw } from 'lucide-react'
 import { Switch } from '@/components/ui/switch'
 import { Button } from '@/components/ui/button'
 import { CodexLogoIcon } from '@/components/ui/codex-logo-icon'
+import { COPIS_OFFICIAL_URL } from '../functional-modules/functional-module-startup-ui'
 import {
   codexAppServerStatusAtom,
   professionalModeAtom,
@@ -207,9 +208,26 @@ export function ProfessionalModeCard({ onNotice, className }: ProfessionalModeCa
           )}
 
           {installError && (
-            <div className="flex items-center gap-1.5 text-xs text-destructive">
-              <AlertCircle className="size-3.5 shrink-0" />
-              <span>{installError}</span>
+            <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-destructive">
+              <div className="flex items-center gap-1.5">
+                <AlertCircle className="size-3.5 shrink-0" />
+                <span>{installError}</span>
+              </div>
+              {installError.includes('版本过低') && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-6 text-[11px] px-2 text-foreground"
+                  onClick={() => {
+                    void window.electronAPI?.openExternal?.(COPIS_OFFICIAL_URL)?.catch?.((error: unknown) => {
+                      console.error('[专业模式] 打开官网失败:', error)
+                    })
+                  }}
+                >
+                  <ExternalLink className="mr-1 size-3" />
+                  打开官网
+                </Button>
+              )}
             </div>
           )}
         </div>

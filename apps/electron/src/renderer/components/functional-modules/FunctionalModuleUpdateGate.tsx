@@ -396,18 +396,6 @@ export function FunctionalModuleUpdateGate({ children }: FunctionalModuleUpdateG
                     {updateButtonLabel}
                   </button>
                 )}
-                {clientUpdateDialog && updateStatus.status === 'error' && (
-                  <button
-                    type="button"
-                    className="inline-flex min-h-9 items-center justify-center gap-2 rounded-md border border-input bg-background px-4 text-sm font-medium transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50"
-                    onClick={() => {
-                      void window.electronAPI.openExternal(updateStatus.downloadUrl || COPIS_DOWNLOAD_URL)
-                    }}
-                  >
-                    <ExternalLink className="size-4" aria-hidden="true" />
-                    前往官网下载
-                  </button>
-                )}
                 <button
                   type="button"
                   className={cn(
@@ -421,20 +409,18 @@ export function FunctionalModuleUpdateGate({ children }: FunctionalModuleUpdateG
                   <RefreshCw className="size-4" aria-hidden="true" />
                   {clientUpdateDialog ? '重新检查' : '重试更新'}
                 </button>
-                {!clientUpdateDialog && (
-                  <button
-                    type="button"
-                    className="inline-flex min-h-9 items-center justify-center gap-2 rounded-md border border-input bg-background px-4 text-sm font-medium transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50"
-                    onClick={() => {
-                      void window.electronAPI?.openExternal?.(COPIS_OFFICIAL_URL)?.catch?.((error: unknown) => {
-                        console.error('[功能模块] 打开官网失败:', error)
-                      })
-                    }}
-                  >
-                    <ExternalLink className="size-4" aria-hidden="true" />
-                    打开官网
-                  </button>
-                )}
+                <button
+                  type="button"
+                  className="inline-flex min-h-9 items-center justify-center gap-2 rounded-md border border-input bg-background px-4 text-sm font-medium transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50"
+                  onClick={() => {
+                    void window.electronAPI?.openExternal?.(COPIS_OFFICIAL_URL)?.catch?.((error: unknown) => {
+                      console.error('[功能模块] 打开官网失败:', error)
+                    })
+                  }}
+                >
+                  <ExternalLink className="size-4" aria-hidden="true" />
+                  打开官网
+                </button>
               </div>
             </div>
           )}
@@ -489,6 +475,18 @@ export function FunctionalModuleUpdateGate({ children }: FunctionalModuleUpdateG
             >
               {clientUpdateDialog?.cancelLabel ?? '关闭'}
             </AlertDialogCancel>
+            <button
+              type="button"
+              className="inline-flex h-9 items-center justify-center gap-2 rounded-md border border-input bg-background px-4 text-sm font-medium transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              onClick={() => {
+                void window.electronAPI?.openExternal?.(COPIS_OFFICIAL_URL)?.catch?.((error: unknown) => {
+                  console.error('[功能模块] 打开官网失败:', error)
+                })
+              }}
+            >
+              <ExternalLink className="size-4" aria-hidden="true" />
+              打开官网
+            </button>
             <AlertDialogAction
               className="gap-2"
               disabled={isChecking || isDownloading}

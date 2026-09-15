@@ -1,7 +1,8 @@
 import * as React from 'react'
 import { useAtom, useAtomValue, useSetAtom } from 'jotai'
-import { AlertCircle, CheckCircle2, Download, Loader2, PackageCheck, RefreshCw } from 'lucide-react'
+import { AlertCircle, CheckCircle2, Download, ExternalLink, Loader2, PackageCheck, RefreshCw } from 'lucide-react'
 import type { FunctionalModuleProgressPayload, FunctionalModuleStatus } from '@copis/shared'
+import { COPIS_OFFICIAL_URL } from '../functional-modules/functional-module-startup-ui'
 import {
   functionalModuleBusyAtom,
   functionalModuleProgressAtom,
@@ -140,7 +141,22 @@ export function FunctionalModulesCard(): React.ReactElement {
                     <span className="break-words">{stateText}</span>
                   </div>
 
-                  <div className="flex min-h-7 items-center justify-end">
+                  <div className="flex min-h-7 items-center justify-end gap-2">
+                    {status.error?.includes('版本过低') && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="h-7 text-xs"
+                        onClick={() => {
+                          void window.electronAPI?.openExternal?.(COPIS_OFFICIAL_URL)?.catch?.((error: unknown) => {
+                            console.error('[功能模块] 打开官网失败:', error)
+                          })
+                        }}
+                      >
+                        <ExternalLink className="mr-1.5 h-3 w-3" />
+                        打开官网
+                      </Button>
+                    )}
                     {!isBusy && !status.updateAvailable && status.installed && (
                       <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => void runCheck(definition)}>
                         <RefreshCw className="mr-1.5 h-3 w-3" />
