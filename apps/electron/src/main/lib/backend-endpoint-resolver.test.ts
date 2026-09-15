@@ -43,6 +43,30 @@ describe('edu-api endpoint configuration', () => {
     ])
   })
 
+  test('默认探测预算可容纳超过两秒的首个健康检查', async () => {
+    const result = await resolveCopisBackendEndpoints({
+      configuredBackendUrl: 'https://edu-api.example.test/pi-api',
+      endpointConfigUrl: 'https://edu-api.example.test/pi-api/api/client/model-request-endpoints',
+      fetchImpl: async (input: string) => {
+        const url = String(input)
+        if (url.includes('/model-request-endpoints')) {
+          return new Response(JSON.stringify({ base_urls: ['https://first.example.test/model-request'] }))
+        }
+        if (url === 'https://first.example.test/model-request/health') {
+          await new Promise<void>((resolve) => setTimeout(resolve, 2_100))
+          return new Response('ok', { status: 200 })
+        }
+        return new Response('not found', { status: 404 })
+      },
+    })
+
+    expect(result).toEqual({
+      backendUrl: 'https://edu-api.example.test/pi-api',
+      modelBaseUrl: 'https://first.example.test/model-request',
+      source: 'remote',
+    })
+  })
+
   test('远端列表失败时保留已配置模型地址', async () => {
     const result = await resolveCopisBackendEndpoints({
       configuredBackendUrl: 'https://edu-api.example.test',

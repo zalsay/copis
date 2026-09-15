@@ -180,7 +180,7 @@ if [[ ! -f "$APP_INFO_PLIST" ]]; then
 fi
 BUILT_APP_VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP_INFO_PLIST" 2>/dev/null || true)"
 if [[ "$BUILT_APP_VERSION" != "$APP_VERSION" ]]; then
-  echo "[Copis] 构建版本不一致：期望 $APP_VERSION，实际应用包为 ${BUILT_APP_VERSION:-<unknown>}。请清理 apps/electron/out 后重试。" >&2
+  echo "[Copis] 构建版本不一致：期望 ${APP_VERSION}，实际应用包为 ${BUILT_APP_VERSION:-<unknown>}。请清理 apps/electron/out 后重试。" >&2
   exit 1
 fi
 

@@ -6,7 +6,7 @@ export const MODEL_ENDPOINTS_URL_ENV = 'COPIS_MODEL_ENDPOINTS_URL'
 
 const MODEL_ENDPOINT_PATH = '/api/internal/working-model'
 const MODEL_ENDPOINTS_PATH = '/api/client/model-request-endpoints'
-const DEFAULT_RESOLUTION_TIMEOUT_MS = 2_000
+const DEFAULT_RESOLUTION_TIMEOUT_MS = 6_000
 
 export interface CopisBackendEndpointResolution {
   /** Copis 后端根地址，供 Electron Working API 和 Rust skill market 使用。 */

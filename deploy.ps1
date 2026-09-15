@@ -468,9 +468,12 @@ if (-not $RustOnly -and -not $NodeRuntimeOnly -and -not $AlipayBotOnly -and -not
     $officeCliBinaryPath = Resolve-PathFromRoot $OfficeCliBinary
     $officeCliFileName = if ($Platform -eq 'win32') { 'officecli.exe' } else { 'officecli' }
     if (-not $officeCliBinaryPath) { $officeCliBinaryPath = Join-Path $appDir "resources\bin\$officeCliFileName" }
-    if (-not (Test-Path -LiteralPath $officeCliBinaryPath -PathType Leaf)) {
+    if (-not (Test-Path -LiteralPath $officeCliBinaryPath -PathType Leaf) -or $env:COPIS_REFRESH_OFFICECLI -eq '1') {
         Write-Host 'Checking the OfficeCLI functional module version from COS...'
         $prepareArguments = @('run', 'prepare:officecli-module', '--', '--platform', $Platform, '--arch', $Arch, '--output', $officeCliBinaryPath)
+        if (-not [string]::IsNullOrWhiteSpace($OfficeCliVersion)) {
+            $prepareArguments += @('--version', $OfficeCliVersion.Trim())
+        }
         $publicManifestUrl = Resolve-FunctionalModuleManifestUrl -BaseUrl $PublicBaseUrl -Prefix $ObjectPrefixPath -Channel $Channel
         if (-not [string]::IsNullOrWhiteSpace($publicManifestUrl)) {
             $prepareArguments += @('--public-manifest-url', $publicManifestUrl)
