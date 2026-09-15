@@ -196,6 +196,8 @@ describe('功能模块发布边界', () => {
     expect(deployShellScript).toContain('prepare:codex-cli-module')
     expect(deployShellScript).toContain('--codex-cli-archive')
     expect(deployShellScript).toContain('--codex-cli-binary')
+    expect(deployShellScript).toContain('CODEX_CLI_ONLY="${COPIS_CODEX_CLI_ONLY:-0}"')
+    expect(deployShellScript).toContain('CODEX_CLI_ARCHIVE="${COPIS_CODEX_CLI_ARCHIVE:-}"')
     expect(deployShellScript).toContain('专业模式核心组件 (codex-cli) 功能模块准备失败')
     expect(buildManifestScript).toContain('--codex-cli')
     expect(deployScript).toContain('[switch]$CodexCliOnly')
