@@ -320,7 +320,7 @@ describe('项目与会话工作台提示词', () => {
     expect(prompt).not.toContain('## Working 快速模式')
   })
 
-  test('Given DeepSeek v4 Flash When 构建系统提示词 Then 使用 DeepSeek 能力约束而不是 Working alias', () => {
+  test('Given DeepSeek v4 Flash When 构建系统提示词 Then 声明支持图片识别而不是 Working alias', () => {
     const prompt = buildSystemPrompt({
       agentRuntime: 'pi',
       sessionId: 'session-deepseek-flash',
@@ -329,7 +329,8 @@ describe('项目与会话工作台提示词', () => {
     })
 
     expect(prompt).toContain('## DeepSeek 快速模型')
-    expect(prompt).toContain('不支持图片识别')
+    expect(prompt).toContain('支持图片识别')
+    expect(prompt).not.toContain('不支持图片识别')
     expect(prompt).not.toContain('## Working 快速模式')
     expect(prompt).not.toContain('## Working 专家模式')
   })
@@ -492,4 +493,3 @@ describe('项目与会话工作台提示词', () => {
     expect(prompt).toContain('conversation.composer.dock')
   })
 })
-

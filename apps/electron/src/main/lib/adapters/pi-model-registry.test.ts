@@ -2,8 +2,11 @@ import { describe, expect, test } from 'bun:test'
 import {
   COPIS_WORKING_MODEL_SOURCE_TYPE_HEADER,
   COPIS_WORKING_MODEL_SOURCE_TYPE_COPIS_AGENT,
+  COPIS_WORKING_DEEPSEEK_CHANNEL_ID,
+  COPIS_WORKING_DEEPSEEK_FAST_MODEL_ID,
 } from '@copis/shared'
 import {
+  buildModel,
   buildPiRequestHeaders,
   getWorkingCustomResponsesThinkingLevelMap,
 } from './pi-model-registry'
@@ -42,5 +45,36 @@ describe('Pi 模型请求头（Working 计费来源）', () => {
       xhigh: 'xhigh',
       max: 'max',
     })
+  })
+
+  test('Given 内置 DeepSeek v4 Flash When 注册 Pi 模型 Then 保留图片输入能力', async () => {
+    let registeredModel: { input: string[] } | undefined
+    const modelRuntime = {
+      registerProvider: (_name: string, provider: { models: { input: string[] }[] }) => {
+        registeredModel = provider.models[0]
+      },
+      getModel: () => registeredModel,
+    }
+    const sdk = {
+      ModelRuntime: {
+        create: async () => modelRuntime,
+      },
+    }
+
+    const { model } = await buildModel(sdk as never, {
+      apiKey: 'token',
+      baseUrl: 'http://127.0.0.1:51730/api/internal/working-model/v1',
+      channelId: COPIS_WORKING_DEEPSEEK_CHANNEL_ID,
+      model: COPIS_WORKING_DEEPSEEK_FAST_MODEL_ID,
+      permissionMode: 'bypassPermissions',
+      piAgentDir: '/tmp/pi',
+      piSessionDir: '/tmp/pi/sessions',
+      prompt: '读取图片',
+      provider: 'openai-responses',
+      sessionId: 'deepseek-flash-image-input',
+      systemPrompt: 'test',
+    })
+
+    expect(model.input).toEqual(['text', 'image'])
   })
 })

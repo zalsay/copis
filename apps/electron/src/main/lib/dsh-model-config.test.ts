@@ -455,7 +455,7 @@ describe('dsh-model-config', () => {
       .toEqual(['deepseek-v4-flash', 'deepseek-v4-pro'])
     expect(providers.find((provider) => provider.providerRoute === 'copis-working-deepseek')?.models.map((model) => model.name))
       .toEqual([
-        '快速(v4 Flash，思考速度快，不支持图片识别)',
+        '快速(v4 Flash，思考速度快，支持图片识别)',
         '专业(v4Pro，DeepSeek 最强模型，不支持图片识别)',
       ])
     expect(providers.find((provider) => provider.providerRoute === 'copis-working-deepseek')?.defaultContextWindow)

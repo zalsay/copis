@@ -221,10 +221,10 @@ export function buildSystemPrompt(ctx: SystemPromptContext): string {
   if (ctx.currentModelId === COPIS_WORKING_DEEPSEEK_FAST_MODEL_ID) {
     sections.push(`## DeepSeek 快速模型
 
-当前使用 DeepSeek v4 Flash 快速模型，思考速度快但不支持图片识别。本次运行在本地执行工具和文件操作，模型请求直接发送到 edu-api 的 Working Responses 接口，不上传本地工作区文件。
+当前使用 DeepSeek v4 Flash 快速模型，思考速度快并支持图片识别。本次运行在本地执行工具和文件操作，模型请求直接发送到 edu-api 的 Working Responses 接口，不上传本地工作区文件。
 
 - 优先直接处理用户目标，减少不必要的探索和往返。
-- 不要把图片识别作为本模型可完成的能力；需要处理图片时应明确告知用户限制。`)
+- 用户提供图片时，可直接结合图片内容完成任务；无需因图片识别能力要求用户切换模型。`)
   } else if (ctx.currentModelId === COPIS_WORKING_DEEPSEEK_PRO_MODEL_ID) {
     sections.push(`## DeepSeek 专业模型
 

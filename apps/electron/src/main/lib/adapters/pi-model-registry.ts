@@ -23,6 +23,8 @@ import {
   COPIS_WORKING_MODEL_SOURCE_TYPE_COPIS_AGENT,
   isCopisWorkingChannelId,
   isWorkingCustomModelChannelId,
+  COPIS_WORKING_DEEPSEEK_CHANNEL_ID,
+  COPIS_WORKING_DEEPSEEK_FAST_MODEL_ID,
 } from '@copis/shared'
 import {
   getCopisUserAgent,
@@ -720,6 +722,13 @@ export async function buildModel(sdk: PiSdk, input: PiAgentQueryOptions) {
   const modelRuntime = await sdk.ModelRuntime.create({ allowModelNetwork: false })
   const api = normalizePiApi(input.provider)
   const modelDefaults = await resolvePiModelDefaults({ ...input, model: resolvedModelId })
+  // Pi SDK 目录中的同名条目尚未声明视觉能力；内置 Working 路由已支持该能力，需在注册时显式保留。
+  if (
+    input.channelId === COPIS_WORKING_DEEPSEEK_CHANNEL_ID
+    && resolvedModelId === COPIS_WORKING_DEEPSEEK_FAST_MODEL_ID
+  ) {
+    modelDefaults.input = ['text', 'image']
+  }
   if (input.provider === 'openai-responses'
     && isWorkingCustomModelChannelId(input.channelId)
     && !modelDefaults.thinkingLevelMap) {
