@@ -13,12 +13,14 @@ import { createHash, createHmac } from 'node:crypto'
 import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs'
 import { createServer as createNetServer } from 'node:net'
 import { join } from 'node:path'
-import { parse } from 'yaml'
+import { pathToFileURL } from 'node:url'
+import { Document, parse, parseDocument } from 'yaml'
 import type { DshCordisStatus } from '@copis/shared'
 import { getDefaultSkillsDir, getDshHomeDir } from './config-paths'
 import { resolveDshCommand, resolveDshNode, resolveDshSpawnSpec } from './dsh-runtime'
 import { patchDshComposerHistoryRuntime } from './dsh-composer-history-patch'
 import { patchDshHeroLogoRuntime } from './dsh-hero-logo-patch'
+import { patchDshDetailsPanelFilePreviewRuntime } from './dsh-details-panel-patch'
 import { patchDshSidebarRuntime } from './dsh-sidebar-patch'
 import {
   applyDshModelConfig,
@@ -41,6 +43,12 @@ export const COPIS_DSH_PORT = 53080
 
 /** 端口冲突时最大自动回避探测范围（偏移量） */
 export const COPIS_DSH_MAX_PORT_SCAN = 20
+
+/** Copis 创造模式独立客户端模块的 Cordis 条目 ID。 */
+export const COPIS_CREATION_WEB_PLUGIN_ID = 'copis-creation-web'
+
+/** Copis 创造模式独立客户端模块的 npm 包名。 */
+export const COPIS_CREATION_WEB_PLUGIN_PACKAGE = '@copis-ext/creation-web'
 
 const DSH_AUTH_COOKIE_PREFIX = 'dsh-auth-'
 const COOKIE_PAYLOAD_VERSION = 1
@@ -171,6 +179,117 @@ export function syncDshDefaultSkills(dshRootDir = getDshHomeDir()): void {
  * @param dshRootDir DSH 运行时主目录 ($DSH_HOME)，默认为 ~/.copis/dsh/
  * @param profileName 专有 Profile 名称，默认为 'copis'
  */
+/** 返回当前应用随附的 Copis Creation Web 插件目录。 */
+export function resolveCopisCreationWebPluginSourceDir(): string | null {
+  const pluginParts = ['dsh-plugins', 'copis-creation-web']
+  const candidates = [
+    ...(typeof process !== 'undefined' && (process as any).resourcesPath
+      ? [join((process as any).resourcesPath, ...pluginParts)]
+      : []),
+    join(__dirname, '..', 'dsh-plugins', 'copis-creation-web'),
+    join(__dirname, '..', '..', '..', 'dsh-plugins', 'copis-creation-web'),
+  ]
+
+  return candidates.find((candidate) =>
+    existsSync(join(candidate, 'package.json')) && existsSync(join(candidate, 'lib', 'client.js'))
+  ) ?? null
+}
+
+/**
+ * 同步应用随附的 Copis Creation Web 到 Profile 私有目录。
+ *
+ * DSH 在 profile 目录中解析树外插件；插件从应用资源复制而来，因此既不依赖
+ * 用户全局 Node 安装，也不改写任何官方 @deepseek-ai bundle。
+ */
+export function syncCopisCreationWebPlugin(profileDir: string): string | null {
+  const sourceDir = resolveCopisCreationWebPluginSourceDir()
+  const targetDir = join(profileDir, 'plugins', 'copis-creation-web')
+
+  if (!sourceDir) {
+    return existsSync(join(targetDir, 'package.json')) ? targetDir : null
+  }
+
+  try {
+    mkdirSync(join(profileDir, 'plugins'), { recursive: true })
+    cpSync(sourceDir, targetDir, { recursive: true, force: true })
+    return targetDir
+  } catch (error) {
+    console.warn('[DSH Cordis Web] 同步 Copis Creation Web 插件失败:', error)
+    return existsSync(join(targetDir, 'package.json')) ? targetDir : null
+  }
+}
+
+function readCordisPatchItems(patchFile: string): unknown[] {
+  if (!existsSync(patchFile)) return []
+
+  try {
+    const items = parseDocument(readFileSync(patchFile, 'utf-8')).toJS()
+    return Array.isArray(items) ? items : []
+  } catch {
+    return []
+  }
+}
+
+function upsertPatchItem(items: any[], item: Record<string, unknown>): void {
+  const index = items.findIndex((candidate) => candidate?.id === item.id)
+  if (index === -1) items.push(item)
+  else items[index] = item
+}
+
+/** 将 Copis 默认配置与独立 Creation Web 客户端模块写入 profile patch。 */
+function ensureCopisCreationWebPatch(patchFile: string, pluginDir: string | null): void {
+  const items = readCordisPatchItems(patchFile) as any[]
+
+  upsertPatchItem(items, {
+    id: 'agent-presets',
+    config: { default: 'cordis' },
+  })
+
+  if (!items.some((item) => item?.id === 'agent-default-model')) {
+    items.push({
+      id: 'agent-default-model',
+      config: {
+        provider: 'copis',
+        model: 'deepseek-v4-flash',
+      },
+    })
+  }
+
+  upsertPatchItem(items, { id: 'llm-deepseek', disabled: true })
+  upsertPatchItem(items, { id: 'ui-brand-official', disabled: true })
+
+  if (pluginDir) {
+    // Windows 上 Cordis 的 ESM Loader 不能直接导入 C:\ 路径；必须使用 file URL。
+    const pluginEntryUrl = pathToFileURL(join(pluginDir, 'lib', 'index.js')).href
+    let pluginInserted = false
+    for (const item of items) {
+      if (!Array.isArray(item?.insert)) continue
+      const pluginIndex = item.insert.findIndex((entry: any) =>
+        entry?.id === COPIS_CREATION_WEB_PLUGIN_ID || entry?.name === COPIS_CREATION_WEB_PLUGIN_PACKAGE
+      )
+      if (pluginIndex === -1) continue
+
+      item.insert[pluginIndex] = {
+        id: COPIS_CREATION_WEB_PLUGIN_ID,
+        name: pluginEntryUrl,
+      }
+      pluginInserted = true
+      break
+    }
+
+    if (!pluginInserted) {
+      items.push({
+        insert: [{
+          id: COPIS_CREATION_WEB_PLUGIN_ID,
+          name: pluginEntryUrl,
+        }],
+      })
+    }
+  }
+
+  writeFileSync(patchFile, new Document(items).toString(), 'utf-8')
+}
+
 export function ensureCordisWebProfile(
   dshRootDir = getDshHomeDir(),
   profileName = COPIS_DSH_PROFILE,
@@ -200,25 +319,10 @@ export function ensureCordisWebProfile(
     writeFileSync(pkgFile, JSON.stringify(defaultPkg, null, 2), 'utf-8')
   }
 
-  // 2. 确保 cordis.patch.yml 配置了 default: cordis 创造模式预设与 agent-default-model 预设
+  // 2. 同步独立的 Copis Creation Web 插件，并注册到 profile 私有 patch 层。
   const patchFile = join(profileDir, 'cordis.patch.yml')
-  const defaultCordisPatch = `- id: agent-presets\n  config:\n    default: cordis\n- id: agent-default-model\n  config:\n    provider: copis\n    model: deepseek-v4-flash\n- id: llm-deepseek\n  disabled: true\n`
-
-  if (!existsSync(patchFile)) {
-    writeFileSync(patchFile, defaultCordisPatch, 'utf-8')
-  } else {
-    try {
-      const content = readFileSync(patchFile, 'utf-8').trim()
-      // 如果 patch 为空数组或未指定 default: cordis，则注入 cordis 创造模式配置。
-      if (content === '[]' || (!content.includes('default: cordis') && !content.includes("default: 'cordis'"))) {
-        writeFileSync(patchFile, defaultCordisPatch, 'utf-8')
-      } else if (!content.includes('id: llm-deepseek')) {
-        writeFileSync(patchFile, `${content}\n- id: llm-deepseek\n  disabled: true\n`, 'utf-8')
-      }
-    } catch {
-      // 读取失败时保留原文件
-    }
-  }
+  const pluginDir = syncCopisCreationWebPlugin(profileDir)
+  ensureCopisCreationWebPatch(patchFile, pluginDir)
 
   // 3. 确保 DSH 用户技能目录同步了 Copis 默认技能（包括 workspace-builder、dsh-web-evolution 等）
   syncDshDefaultSkills(dshRootDir)
@@ -509,12 +613,15 @@ export async function findOrAllocateDshPort(options: {
   maxScanOffset?: number
   dshRootDir?: string
   fetchFn?: typeof fetch
+  /** 只有明确知道已有实例就是目标 profile 时才允许复用。 */
+  reuseExisting?: boolean
 } = {}): Promise<DshPortAllocationResult> {
   const {
     basePort = COPIS_DSH_PORT,
     maxScanOffset = COPIS_DSH_MAX_PORT_SCAN,
     dshRootDir = getDshHomeDir(),
     fetchFn = globalThis.fetch,
+    reuseExisting = true,
   } = options
 
   let conflictEncountered = false
@@ -529,11 +636,19 @@ export async function findOrAllocateDshPort(options: {
 
     if (probe.portInUse) {
       if (probe.isDsh) {
-        return {
-          type: 'reuse',
-          port: candidatePort,
-          url: probe.url || `http://127.0.0.1:${candidatePort}/`,
+        if (reuseExisting) {
+          return {
+            type: 'reuse',
+            port: candidatePort,
+            url: probe.url || `http://127.0.0.1:${candidatePort}/`,
+          }
         }
+
+        // 端口上的 DSH 可能来自官方默认 web profile。Copis 无法从根页面可靠判断
+        // 对方的 profile，因此创造模式必须使用自己启动的实例，避免误展示默认 Web。
+        conflictEncountered = true
+        console.warn(`[DSH Cordis Web] 候选端口 ${candidatePort} 已有未知 profile 的 DSH 实例，跳过复用并检测下一端口...`)
+        continue
       }
 
       // 端口被其他非 DSH 应用占用，标记冲突并回避到下一端口
@@ -621,6 +736,7 @@ async function doStartDshCordisServer(options: {
   // 托管模块的 launcher 位于 bin/，同时兼容已安装版本而无需重新下载模块。
   patchDshComposerHistoryRuntime(join(dshCmd, '..', '..', 'runtime'))
   patchDshHeroLogoRuntime(join(dshCmd, '..', '..', 'runtime'))
+  patchDshDetailsPanelFilePreviewRuntime(join(dshCmd, '..', '..', 'runtime'))
   patchDshSidebarRuntime(join(dshCmd, '..', '..', 'runtime'))
   registerDshCordisWebSessionHeaders()
 
@@ -630,6 +746,8 @@ async function doStartDshCordisServer(options: {
     const allocation = await findOrAllocateDshPort({
       basePort: port,
       dshRootDir: dshHomeDir,
+      // 根页面无法携带 profile 身份，不能把默认 DSH Web 误当成 Copis Creation Web。
+      reuseExisting: false,
     })
 
     if (allocation.type === 'none_available') {

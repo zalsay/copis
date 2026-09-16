@@ -1,4 +1,6 @@
 import { describe, expect, test } from 'bun:test'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import * as React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { Provider, createStore } from 'jotai'
@@ -6,7 +8,14 @@ import { appModeAtom } from '@/atoms/app-mode'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { CopisModeSwitcher } from './CopisModeSwitcher'
 
+const modeSwitcherSource = readFileSync(join(__dirname, 'CopisModeSwitcher.tsx'), 'utf8')
+
 describe('CopisModeSwitcher', () => {
+  test('Given 发布版 Agent 模式 When 渲染模式切换页签 Then 创造模式入口保持可用', () => {
+    expect(modeSwitcherSource).not.toContain('CREATION_MODE_SWITCH_DISABLED')
+    expect(modeSwitcherSource).not.toContain('创造模式当前已禁用')
+  })
+
   test('Given 展开状态 When 渲染模式切换器 Then 渲染 Agent 模式 与 创造模式，且绝对不包含 (PTC)', () => {
     const store = createStore()
     store.set(appModeAtom, 'agent')

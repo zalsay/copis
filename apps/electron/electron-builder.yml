@@ -67,6 +67,11 @@ files:
 
 # 通用额外资源
 extraResources:
+  # Copis 创造模式的 DSH 客户端插件。运行时会同步到用户 DSH profile，避免改写官方 DSH bundle。
+  - from: dsh-plugins
+    to: dsh-plugins
+    filter:
+      - "**/*"
   # copis CLI 自包含二进制（build:cli 按平台/架构用 bun build --compile 产出到
   # resources/bin/{platform}-{arch}/copis(.exe)）。
   # 运行时由主进程注入 COPIS_CLI 环境变量，暴露给 skill / Agent 调用。
@@ -171,6 +176,8 @@ nsis:
   allowToChangeInstallationDirectory: true
   createDesktopShortcut: true
   createStartMenuShortcut: true
+  # 自动更新通过 --updated 进入专用流程：只显示进度页，不让用户重新选择安装范围或目录。
+  include: resources/installer.nsh
 
 # ============================================
 # 发布配置

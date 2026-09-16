@@ -38,3 +38,12 @@ export function formatCreationErrorMessage(error?: string | null): string {
   }
   return error.replace(/^Error invoking remote method '[^']+': (?:Error: )?/, '')
 }
+
+/**
+ * 侧边栏宽度限制在合理区间 [264, 360]，防止全屏展开或异常上报值污染。
+ */
+export function clampDshSidebarWidth(width?: number): number {
+  if (width === undefined || width === null || !Number.isFinite(width)) return 280
+  return Math.max(264, Math.min(360, Math.round(width)))
+}
+

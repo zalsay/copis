@@ -2,7 +2,7 @@
  * 主程序更新安装器
  *
  * macOS：挂载 DMG，把 Copis.app 复制到 /Applications；
- * Windows：使用 NSIS 静默安装参数拉起安装程序。
+ * Windows：使用 NSIS 可视化升级参数拉起安装程序，显示原生安装进度。
  */
 
 import { execFile } from 'node:child_process'
@@ -23,11 +23,24 @@ export interface AutoInstallResult {
   appPath?: string
 }
 
+/**
+ * Windows NSIS 升级安装参数。
+ *
+ * 保留可视化安装窗口，用户可以看到旧文件迁移与新版本解压进度；`--updated`
+ * 会跳过普通安装流程，`--force-run` 让安装器完成后自行启动新版本。
+ */
+export const WINDOWS_NSIS_UPDATE_ARGUMENTS = ['--updated', '--force-run'] as const
+
 export function planAutoInstall(filePath: string, platform: NodeJS.Platform): AutoInstallKind {
   const lower = basename(filePath).toLowerCase()
   if (platform === 'darwin' && lower.endsWith('.dmg')) return 'dmg'
   if (platform === 'win32' && lower.endsWith('.exe')) return 'nsis'
   return 'unsupported'
+}
+
+/** NSIS 在升级完成后自行启动新版本，调用方不能再竞争性重启当前进程。 */
+export function doesInstallerHandleAppRestart(kind: AutoInstallKind): boolean {
+  return kind === 'nsis'
 }
 
 export async function autoInstallDownloadedUpdate(
@@ -36,7 +49,7 @@ export async function autoInstallDownloadedUpdate(
 ): Promise<AutoInstallResult> {
   const kind = planAutoInstall(filePath, platform)
   if (kind === 'nsis') {
-    await execFileAsync(filePath, ['/S'], { timeout: 20 * 60 * 1000 })
+    await execFileAsync(filePath, WINDOWS_NSIS_UPDATE_ARGUMENTS, { timeout: 20 * 60 * 1000 })
     return { kind, installed: true }
   }
   if (kind === 'dmg') {

@@ -4,6 +4,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { EventEmitter } from 'node:events'
 import type { ChildProcess } from 'node:child_process'
+import { pathToFileURL } from 'node:url'
+import { parseDocument } from 'yaml'
 
 let tempHome: string
 mock.module('electron', () => ({
@@ -71,6 +73,15 @@ describe('dsh-cordis-service', () => {
       expect(content).toContain('provider: copis')
       expect(content).toContain('id: llm-deepseek')
       expect(content).toContain('disabled: true')
+      expect(content).toContain('id: ui-brand-official')
+      expect(content).toContain('id: copis-creation-web')
+
+      const pluginDir = join(profileDir, 'plugins', 'copis-creation-web')
+      expect(existsSync(join(pluginDir, 'package.json'))).toBe(true)
+      expect(existsSync(join(pluginDir, 'lib', 'client.js'))).toBe(true)
+      const patchItems = parseDocument(content).toJS() as Array<{ insert?: Array<{ id?: string; name?: string }> }>
+      const pluginEntry = patchItems.flatMap((item) => item.insert ?? []).find((item) => item.id === 'copis-creation-web')
+      expect(pluginEntry?.name).toBe(pathToFileURL(join(pluginDir, 'lib', 'index.js')).href)
 
       // 验证默认 Skill 同步（workspace-builder 与 dsh-web-evolution）
       const workspaceBuilderSkill = join(tempDir, 'skills', 'workspace-builder', 'SKILL.md')
@@ -97,6 +108,7 @@ describe('dsh-cordis-service', () => {
       const content = readFileSync(patchFile, 'utf-8')
       expect(content).toContain('default: cordis')
       expect(content).toContain('provider: copis')
+      expect(content).toContain('id: copis-creation-web')
     } finally {
       rmSync(tempDir, { recursive: true, force: true })
     }
@@ -258,12 +270,13 @@ records:
     expect(dshCordisService.shouldRestartReusedDshServer(false)).toBe(true)
   })
 
-  test('Given 上一次 Copis 启动遗留的 DSH 进程 When 启动 Cordis 服务 Then 终止旧进程并创建本次生命周期的新进程', async () => {
+  test('Given 上一次 Copis 启动遗留的 DSH 进程 When 启动 Cordis 服务 Then 避让旧端口并创建本次生命周期的新进程', async () => {
     dshCordisService.stopDshCordisServer()
     const tempDir = mkdtempSync(join(tmpdir(), 'copis-test-stale-dsh-'))
     const portReservation = Bun.serve({ port: 0, fetch: () => new Response('reserved') })
     const port = portReservation.port
     portReservation.stop()
+    if (port === undefined) throw new Error('无法分配测试端口')
     const staleScript = join(tempDir, 'stale-dsh.mjs')
     const newDshCommand = process.platform === 'win32'
       ? join(tempDir, 'dsh-module', 'bin', 'dsh.cmd')
@@ -301,10 +314,10 @@ records:
         timeoutMs: 2000,
       })
 
-      // Windows 通过 SIGTERM 结束进程时退出码可能为 1；exited Promise 完成即可证明旧进程已退出。
-      await staleProcess.exited
       expect(status.running).toBe(true)
-      expect(status.port).toBe(port)
+      // 未知 DSH 可能运行官方默认 profile，创造模式不能复用它，否则会回退到默认 DSH Web。
+      if (status.port === undefined) throw new Error('新 DSH 进程未返回监听端口')
+      expect(status.port).toBeGreaterThan(port)
     } finally {
       staleProcess.kill()
       dshCordisService.stopDshCordisServer()
@@ -373,6 +386,34 @@ records:
       }
     } finally {
       dummyServer.stop()
+      mockDshServer.stop()
+    }
+  })
+
+  test('Given 基础端口已有未知 profile 的 DSH When 为 Copis Creation Web 分配端口 Then 跳过已有实例并选择新的空闲端口', async () => {
+    const mockDshServer = Bun.serve({
+      port: 0,
+      fetch() {
+        return new Response('dsh web authentication required; reopen the URL printed by dsh web.', {
+          status: 401,
+        })
+      },
+    })
+
+    try {
+      const basePort = mockDshServer.port ?? 59980
+      const allocation = await dshCordisService.findOrAllocateDshPort({
+        basePort,
+        maxScanOffset: 5,
+        reuseExisting: false,
+      })
+
+      expect(allocation.type).toBe('available')
+      if (allocation.type === 'available') {
+        expect(allocation.port).toBeGreaterThan(basePort)
+        expect(allocation.port).toBeLessThanOrEqual(basePort + 5)
+      }
+    } finally {
       mockDshServer.stop()
     }
   })

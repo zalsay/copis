@@ -51,6 +51,8 @@ export interface FunctionalModuleManagerOptions {
   platform?: FunctionalModulePlatform
   arch?: FunctionalModuleArchitecture
   clientVersion?: string
+  /** DSH 是独立创造模式运行时，检查其版本时不受 Copis 主程序最低版本门槛影响。 */
+  checkClientVersion?: boolean
   fetchImpl?: FunctionalModuleFetch
   onProgress?: (payload: FunctionalModuleProgressPayload) => void
   artifactOverride?: FunctionalModuleArtifact
@@ -87,6 +89,7 @@ export async function fetchFunctionalModuleManifest(
     options.clientVersion ?? process.env.COPIS_VERSION ?? '0.0.0',
     options.platform ?? normalizePlatform(process.platform),
     options.arch ?? normalizeArchitecture(process.arch),
+    { checkClientVersion: options.checkClientVersion },
   )
 }
 
@@ -161,7 +164,9 @@ export async function resolveFunctionalModuleArtifact(
     }
     return ensureRequiredArtifact(definition, options.artifactOverride)
   }
-  const artifact = (await fetchFunctionalModuleManifest(options)).find((item) => item.name === name)
+  // 创造模式由 DSH artifact 自身的版本和校验和决定是否更新，不能用 Copis 主程序门槛拦截。
+  const checkClientVersion = options.checkClientVersion ?? name !== 'dsh'
+  const artifact = (await fetchFunctionalModuleManifest({ ...options, checkClientVersion })).find((item) => item.name === name)
   if (!artifact) throw new Error(`当前平台没有功能模块: ${name}`)
   return ensureRequiredArtifact(definition, artifact)
 }

@@ -24,6 +24,7 @@ export type DshClientEvent =
   | { type: 'COPIS_OPEN_SETTINGS' }
   | { type: 'COPIS_OPEN_FEEDBACK' }
   | { type: 'COPIS_DSH_SIDEBAR_INFO'; width: number; wide?: boolean; collapsed?: boolean }
+  | { type: 'COPIS_OPEN_SESSION'; sessionType: 'agent' | 'chat'; sessionId: string; title?: string }
 
 export interface DshReadFileResult {
   success: boolean

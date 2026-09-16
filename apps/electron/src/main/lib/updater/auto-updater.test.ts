@@ -25,6 +25,7 @@ mock.module('../auto-install-update', () => ({
     kind: 'unsupported',
     installed: false,
   })),
+  doesInstallerHandleAppRestart: (kind: string) => kind === 'nsis',
 }))
 
 mock.module('../agent-workspace-manager', () => ({

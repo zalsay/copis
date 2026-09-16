@@ -1,6 +1,8 @@
-import { describe, expect, mock, test } from 'bun:test'
+import { afterEach, describe, expect, mock, test } from 'bun:test'
+import { parseHTML } from 'linkedom'
 import * as React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
+import { createRoot, type Root } from 'react-dom/client'
 import { Provider, createStore } from 'jotai'
 import { activeWebTabIdAtom } from '@/atoms/web-tabs'
 import { workingAuthStateAtom, workingSettingsOpenAtom, workingVipStatusAtom } from '@/atoms/working-atoms'
@@ -44,18 +46,32 @@ const {
   clampLeftSidebarWidth,
 } = await import('./AppShell')
 
+const act = (React as typeof React & { act: typeof import('react-dom/test-utils').act }).act
+let root: Root | null = null
+
+afterEach(async () => {
+  if (!root) return
+  await act(async () => root?.unmount())
+  root = null
+})
+
 
 function renderAppShell({
   workingSettingsOpen = false,
   workingPaymentOpen = false,
   vipUpgradeAmount,
+  appMode = 'agent',
+  activeWebTabId = 'web-google',
 }: {
   workingSettingsOpen?: boolean
   workingPaymentOpen?: boolean
   vipUpgradeAmount?: string
+  appMode?: 'agent' | 'creation'
+  activeWebTabId?: string | null
 }): string {
   const store = createStore()
-  store.set(activeWebTabIdAtom, 'web-google')
+  store.set(appModeAtom, appMode)
+  store.set(activeWebTabIdAtom, activeWebTabId)
   store.set(workingSettingsOpenAtom, workingSettingsOpen)
   store.set(workingAuthStateAtom, {
     authenticated: true,
@@ -146,6 +162,48 @@ describe('AppShell 模式自适应布局', () => {
     )
     expect(html).not.toContain('data-testid="sidebar"')
     expect(html).toContain('data-testid="main-area"')
+  })
+
+  test('Given 创造模式与活动网页页签同时恢复 When 渲染 AppShell Then 主工作台保持可见且不渲染网页表面', () => {
+    const html = renderAppShell({ appMode: 'creation' })
+
+    expect(html).toContain('data-testid="main-area"')
+    expect(html).not.toContain('data-testid="web-browser-surface"')
+    expect(html).not.toContain('invisible pointer-events-none')
+  })
+
+  test('Given 创造模式恢复时存在活动网页页签 When AppShell 挂载 Then 清空页签状态并通知主进程隐藏原生网页视图', async () => {
+    const { window: domWindow } = parseHTML('<html><body><div id="root"></div></body></html>')
+    const activate = mock(() => Promise.resolve({ tabs: [], activeTabId: null }))
+    Object.assign(globalThis, {
+      window: domWindow,
+      document: domWindow.document,
+      navigator: domWindow.navigator,
+      Event: domWindow.Event,
+      IS_REACT_ACT_ENVIRONMENT: true,
+    })
+    Object.assign(domWindow, {
+      electronAPI: {
+        webTabs: { activate },
+      },
+    })
+
+    const store = createStore()
+    store.set(appModeAtom, 'creation')
+    store.set(activeWebTabIdAtom, 'web-restored')
+    root = createRoot(document.getElementById('root')!)
+
+    await act(async () => {
+      root?.render(
+        <Provider store={store}>
+          <AppShell contextValue={{}} />
+        </Provider>,
+      )
+      await Promise.resolve()
+    })
+
+    expect(store.get(activeWebTabIdAtom)).toBeNull()
+    expect(activate).toHaveBeenCalledWith(null)
   })
 
   test('Given appMode 为 agent When 渲染 AppShell Then 外层侧边栏正常显示', () => {

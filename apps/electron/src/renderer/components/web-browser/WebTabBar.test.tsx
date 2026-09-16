@@ -1,5 +1,6 @@
 import { describe, expect, mock, test } from 'bun:test'
 import * as React from 'react'
+import { readFileSync } from 'node:fs'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { createStore, Provider } from 'jotai'
 import type { WebTabState } from '@copis/shared'
@@ -24,6 +25,7 @@ mock.module('@/lib/model-logo', () => ({
 }))
 
 const { WebTabBar } = await import('./WebTabBar')
+const webTabBarSource = readFileSync(new URL('./WebTabBar.tsx', import.meta.url), 'utf8')
 
 describe('WebTabBar Windows 标题栏', () => {
   test('Given Windows 自定义窗口控制按钮 When 渲染网页页签栏 Then 右上角保留为非拖拽区域', () => {
@@ -105,5 +107,16 @@ describe('WebTabBar Windows 标题栏', () => {
     expect(html).toContain('非常长的一个网页标题用于测试悬浮展示')
     expect(html).not.toContain('https://developer.mozilla.org/zh-CN/docs/Web/HTML')
     expect(html).toContain('Copis 首页')
+  })
+
+  test('Given 发布版 Copis 首页页签 When 右键打开模式菜单 Then Agent 与创造模式均可切换', () => {
+    expect(webTabBarSource).toContain('<ContextMenu>')
+    expect(webTabBarSource).toContain('<ContextMenuTrigger asChild>')
+    expect(webTabBarSource).toContain('<ContextMenuRadioGroup value={currentMode}')
+    expect(webTabBarSource).toContain('<ContextMenuRadioItem value="agent">')
+    expect(webTabBarSource).toContain('<ContextMenuRadioItem value="creation">')
+    expect(webTabBarSource).not.toContain('CREATION_MODE_SWITCH_DISABLED')
+    expect(webTabBarSource).toContain('Agent 模式')
+    expect(webTabBarSource).toContain('创造模式')
   })
 })

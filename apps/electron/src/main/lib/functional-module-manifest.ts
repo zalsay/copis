@@ -42,6 +42,7 @@ export function parseFunctionalModuleManifest(
   clientVersion: string,
   platform: FunctionalModulePlatform,
   arch: FunctionalModuleArchitecture,
+  options: { checkClientVersion?: boolean } = {},
 ): FunctionalModuleArtifact[] {
   let value: unknown
   try {
@@ -59,7 +60,9 @@ export function parseFunctionalModuleManifest(
   const target = manifest.platforms[platformKey]
   if (!target) throw new Error(`manifest 没有当前平台的功能模块: ${platformKey}`)
   const minClientVersion = target.minClientVersion ?? manifest.client?.minVersion
-  if (minClientVersion && compareSemver(clientVersion, minClientVersion) < 0) {
+  if (options.checkClientVersion !== false
+    && minClientVersion
+    && compareSemver(clientVersion, minClientVersion) < 0) {
     throw new FunctionalModuleIncompatibleClientError(clientVersion, minClientVersion)
   }
 

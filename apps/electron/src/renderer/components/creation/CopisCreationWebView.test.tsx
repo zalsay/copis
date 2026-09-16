@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { isDshModuleMissingError, shouldInstallDshModule } from './creation-dsh-helper'
+import { isDshModuleMissingError, shouldInstallDshModule, clampDshSidebarWidth } from './creation-dsh-helper'
 
 describe('CopisCreationWebView 侧边栏宽度与原生视图布局契约', () => {
   test('Given 已安装旧版 DSH When 进入创造模式检查到更新 Then 先安装新版再启动 Web+', () => {
@@ -278,8 +278,9 @@ describe('CopisCreationWebView 侧边栏宽度与原生视图布局契约', () =
     expect(globalsSource).toContain('.creation-ui-primary-badge')
     expect(globalsSource).toContain('.creation-ui-primary-surface')
 
-    // 2. 右上角快捷返回按钮的 X 图标使用 ui-primary 色
-    expect(viewSource).toContain('<X className="w-3.5 h-3.5 text-[var(--ui-primary)]" />')
+    // 2. 右上角快捷返回按钮已移除（统一由左栏原新建会话按钮切换为「返回会话」承载）
+    expect(viewSource).not.toContain('<div className="absolute top-3.5 right-6 z-50">')
+    expect(viewSource).not.toContain('<X className=')
 
     // 3. 返回 Agent 模式按钮的 CopisLogoIcon 图标使用 ui-primary 色
     expect(viewSource).toContain('<CopisLogoIcon className="w-3.5 h-3.5 mr-1.5 text-[var(--ui-primary)]" />')
@@ -515,6 +516,110 @@ describe('CopisCreationWebView 侧边栏宽度与原生视图布局契约', () =
     expect(viewSource).toContain('ExternalLink')
     expect(viewSource).toContain('COPIS_OFFICIAL_URL')
     expect(viewSource).toContain('window.electronAPI?.openExternal?.(COPIS_OFFICIAL_URL)')
+  })
+
+  test('Given 侧边栏宽度限制 When 检查安全展开下限与上限 Then 严格在 [264, 360] 区间避免误折叠与全屏污染', () => {
+    expect(clampDshSidebarWidth(56)).toBe(264)
+    expect(clampDshSidebarWidth(0)).toBe(264)
+    expect(clampDshSidebarWidth(264)).toBe(264)
+    expect(clampDshSidebarWidth(280)).toBe(280)
+    expect(clampDshSidebarWidth(320)).toBe(320)
+    expect(clampDshSidebarWidth(360)).toBe(360)
+    expect(clampDshSidebarWidth(1200)).toBe(360) // 1200px 异常全屏上报值被严格限制在 360px
+    expect(clampDshSidebarWidth(undefined)).toBe(280)
+  })
+
+  test('Given 创造模式左侧菜单点击激活子功能视图 When 检查 DSH 样式与事件联动 Then 彻底隐藏 DSH 中间对话区与详情栏且保持侧边栏宽态展开且派发 COPIS_SUBVIEW_CHANGE', () => {
+    const { readFileSync } = require('node:fs')
+    const { join } = require('node:path')
+    const preloadSource = readFileSync(join(__dirname, '../../../preload/dsh-bridge-preload.ts'), 'utf8')
+    const viewSource = readFileSync(join(__dirname, 'CopisCreationWebView.tsx'), 'utf8')
+
+    // 1. Preload CSS 包含彻底隐藏中间对话区、详情栏与手柄的选择器
+    expect(preloadSource).toContain('body.copis-subview-active [class*="_centerCol"]')
+    expect(preloadSource).toContain('body.copis-subview-active [class*="centerCol"]')
+    expect(preloadSource).toContain('body.copis-subview-active [class*="_detailsCol"]')
+    expect(preloadSource).toContain('body.copis-subview-active [class*="detailsCol"]')
+    expect(preloadSource).toContain('body.copis-subview-active [class*="_handle"]')
+    expect(preloadSource).toContain('body.copis-subview-active [data-view="conversation"]')
+    expect(preloadSource).toContain('body.copis-subview-active main')
+    expect(preloadSource).toContain('display: none !important;')
+
+    // 2. Preload CSS 包含单列充满与侧栏宽态保证规则，且不再隐藏 rail-menu
+    expect(preloadSource).toContain('body.copis-subview-active [class*="_frame"]')
+    expect(preloadSource).toContain('grid-template-columns: 100% !important;')
+    expect(preloadSource).toContain('body.copis-subview-active [class*="_sidebarCol"]')
+    expect(preloadSource).toContain('flex: 1 1 100% !important;')
+    expect(preloadSource).toContain('body.copis-subview-active button[class*="_newSession"]')
+    expect(preloadSource).toContain('body.copis-subview-active [class*="_newSessionLabel"]')
+    expect(preloadSource).toContain('body.copis-subview-active .copis-menu-section')
+    expect(preloadSource).not.toContain('body.copis-subview-active .copis-rail-menu-section')
+
+    // 3. Preload 脚本具备 applySubviewActiveState 响应 COPIS_SUBVIEW_CHANGE 与 COPIS_ACTIVE_VIEW_CHANGE
+    expect(preloadSource).toContain('function applySubviewActiveState(active: boolean): void')
+    expect(preloadSource).toContain("p.type === 'COPIS_SUBVIEW_CHANGE'")
+    expect(preloadSource).toContain('applySubviewActiveState(Boolean(p.subview))')
+
+    // 4. CopisCreationWebView 在导航到子视图与切回时派发 COPIS_SUBVIEW_CHANGE
+    expect(viewSource).toContain("type: 'COPIS_SUBVIEW_CHANGE'")
+    expect(viewSource).toContain('subview: nextView')
+    expect(viewSource).toContain('subview: null')
+
+    // 5. 右上角悬浮返回按钮已移除，统一由左栏新会话按钮切换为返回会话承载
+    expect(viewSource).not.toContain('<div className="absolute top-3.5 right-6 z-50">')
+    expect(viewSource).not.toContain('<X className=')
+  })
+
+  test('Given 创造模式激活子功能视图 When 检查新会话按钮切换与切回会话契约 Then 原新会话按钮无缝切换为返回会话且拦截新建会话', () => {
+    const { readFileSync } = require('node:fs')
+    const { join } = require('node:path')
+    const preloadSource = readFileSync(join(__dirname, '../../../preload/dsh-bridge-preload.ts'), 'utf8')
+
+    // 1. CSS 规则：子功能激活时，button._newSession 变为返回会话高亮样式，并注入返回箭头与「返回会话」文本
+    expect(preloadSource).toContain('body.copis-subview-active button[class*="_newSession"]')
+    expect(preloadSource).toContain('content: "返回会话"')
+    expect(preloadSource).toContain('content: "Esc"')
+    expect(preloadSource).toContain('var(--creation-ui-primary-background)')
+    expect(preloadSource).toContain('body.copis-subview-active .copis-hero-utilities-overlay')
+    expect(preloadSource).toContain('[class*="_logoRow"]')
+
+    // 2. JS 拦截：点击 _newSession 时拦截 startSession，直接关闭子视图并平滑返回原会话
+    expect(preloadSource).toContain('isNewSession')
+    expect(preloadSource).toContain("copisBridge.navigate('conversations')")
+    expect(preloadSource).toContain("type: 'COPIS_SUBVIEW_CHANGE', subview: null")
+    expect(preloadSource).toContain('event.stopImmediatePropagation()')
+    expect(preloadSource).toContain('event.preventDefault()')
+
+    // 3. 动态提示：设置 title 与 aria-label 为 '返回会话 (Esc)'
+    expect(preloadSource).toContain("topNewSessionBtn.setAttribute('title', '返回会话 (Esc)')")
+    expect(preloadSource).toContain("topNewSessionBtn.setAttribute('aria-label', '返回会话 (Esc)')")
+  })
+
+  test('Given 主题设置变化 When 创造模式同步主题 Then CopisCreationWebView 与 Preload 联动分发 agentThemeColor 与 creationThemeColor', () => {
+    const { readFileSync } = require('node:fs')
+    const { join } = require('node:path')
+    const viewSource = readFileSync(join(__dirname, 'CopisCreationWebView.tsx'), 'utf8')
+    const preloadSource = readFileSync(join(__dirname, '../../../preload/dsh-bridge-preload.ts'), 'utf8')
+    const dshManagerSource = readFileSync(join(__dirname, '../../../main/lib/dsh-view-manager.ts'), 'utf8')
+
+    // 1. CopisCreationWebView 订阅了 agentThemeColorAtom 与 creationThemeColorAtom
+    expect(viewSource).toContain('agentThemeColorAtom')
+    expect(viewSource).toContain('creationThemeColorAtom')
+    expect(viewSource).toContain('agentThemeColor,')
+    expect(viewSource).toContain('creationThemeColor,')
+
+    // 2. Preload 接收 COPIS_THEME_CHANGED 并调用 applyCustomThemeColors
+    expect(preloadSource).toContain("p.type === 'COPIS_THEME_CHANGED'")
+    expect(preloadSource).toContain('applyCustomThemeColors(nextAgentColor, nextCreationColor)')
+    expect(preloadSource).toContain('function applyCustomThemeColors(')
+    expect(preloadSource).toContain(':root body[data-ds-dark-theme]')
+    expect(preloadSource).toContain('--ui-primary:')
+    expect(preloadSource).toContain('--creation-ui-primary:')
+    expect(preloadSource).toContain('--creation-ui-primary-background:')
+    expect(preloadSource).toContain('--dsw-specific-sidebar-nav-item-active:')
+
+    // 3. dsh-view-manager 在 syncCurrentTheme 中完整传递有效色彩参数
+    expect(dshManagerSource).toContain('syncThemeToDshView(isDark, effectiveAgentColor, effectiveCreationColor)')
   })
 })
 
