@@ -520,7 +520,7 @@ Copis 参考 YC QM 项目的结构化长期记忆管理思路（`notebook` / `ca
 
 **Copis Cloud model-request 地址发现要求（必须遵守）：**
 - Electron 启动 Rust HTTP API 前，必须从 `${COPIS_BACKEND_URL}/api/client/model-request-endpoints` 获取无鉴权 JSON 配置；默认请求地址为 `https://pie.meetlife.com.cn/pi-api/api/client/model-request-endpoints`，也可通过 `COPIS_MODEL_ENDPOINTS_URL` 覆盖配置接口。
-- 配置响应使用 `{ "base_urls": string[] }`，数组顺序就是探测优先级。当前生产顺序为 `https://ai.meetlife.top/model-request`、`https://pie.meetlife.com.cn/model-request`；客户端必须保持服务端顺序，不能排序或并发竞速改变优先级。
+- 配置响应使用 `{ "base_urls": string[] }`，数组顺序就是探测优先级。当前生产顺序为 `https://ts.meetlife.top/model-request`、`https://ai.meetlife.top/model-request`、`https://pie.meetlife.com.cn/model-request`；客户端必须保持服务端顺序，不能排序或并发竞速改变优先级。
 - Electron 只负责获取、规范化并按原顺序传递候选，不得用 Electron/Chromium 的代理或系统网络结果代替 Rust 直连判定。Rust 子进程初始化时必须使用与真实模型请求相同的 `ureq`、`proxy(None)` transport，按顺序请求 `<base_url>/health`；探测不附带用户 Token，使用配置获取后剩余的 6 秒总预算，第一个返回 2xx 的候选成为本次进程的 model-request 基地址。
 - Rust 必须在直连探测完成并为模型请求、图片任务复用同一个 `ModelRequestClient` 后才监听 HTTP API 端口；Electron 的 Rust API 健康检查发生在子进程启动之后，但只有端口开放且 `/api/health` 返回正确服务身份才算 ready。启动健康检查预算必须覆盖 6 秒直连探测及其余初始化时间。
 - 显式传入的 `modelBaseUrl`、`COPIS_MODEL_REQUEST_BASE_URL` 或兼容变量 `WORKING_AGENT_MODEL_BASE_URL` 优先作为候选；远端配置失败或没有健康候选时，默认回退 `https://pie.meetlife.com.cn/model-request`。显式自定义 `COPIS_BACKEND_URL` 时保留从该地址派生旧 working-model 兼容入口的开发能力。

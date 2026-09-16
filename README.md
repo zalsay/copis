@@ -150,8 +150,9 @@ Copis 的 Agent 模式统一使用 Pi Agent Runtime，基于 `@earendil-works/pi
 
 使用 Copis Cloud 内置模型时，Electron 会在启动本地 Rust HTTP API 前，从 `https://pie.meetlife.com.cn/pi-api/api/client/model-request-endpoints` 获取按优先级排列的 model-request 地址。当前生产顺序为：
 
-1. `https://ai.meetlife.top/model-request`
-2. `https://pie.meetlife.com.cn/model-request`
+1. `https://ts.meetlife.top/model-request`
+2. `https://ai.meetlife.top/model-request`
+3. `https://pie.meetlife.com.cn/model-request`
 
 Electron 只获取并按原顺序把候选交给新启动的 Rust 子进程，不使用 Electron/Chromium 的代理网络结果决定模型入口。Rust 在开放本地 HTTP API 端口前，使用与真实模型请求相同的无代理直连 transport 依次请求各候选的 `/health`，选择第一个返回 2xx 的地址；模型配置、Responses 请求和图片任务复用同一个已选地址。探测不携带用户 Token，配置获取和 Rust 探测共用 6 秒总预算；Electron 的启动健康检查另留 8 秒，覆盖直连探测及其余初始化时间。配置服务不可用或候选均不健康时，客户端回退到最后的兼容地址，不会阻止 Copis 启动。业务 POST 发出后不会跨候选自动重试，避免重复请求或重复计费。
 
