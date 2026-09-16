@@ -76,11 +76,21 @@ export function ensureDshView(url: string): WebContentsView | null {
     console.warn('[DSH View Manager] DSH 网页渲染进程崩溃/退出:', details.reason)
   })
 
+  contents.on('console-message', (_event, level, message, line, sourceId) => {
+    console.log(`[DSH Web Console lvl=${level}] ${message} (${sourceId}:${line})`)
+  })
+
   const syncCurrentTheme = () => {
     try {
       const settings = getSettings()
       const isDark = resolveIsDark(settings.themeMode, settings.themeStyle, nativeTheme.shouldUseDarkColors)
-      syncThemeToDshView(isDark)
+      const effectiveAgentColor = isDark
+        ? (settings.agentThemeColorDark || settings.agentThemeColor || undefined)
+        : (settings.agentThemeColorLight || settings.agentThemeColor || undefined)
+      const effectiveCreationColor = isDark
+        ? (settings.creationThemeColorDark || settings.creationThemeColor || undefined)
+        : (settings.creationThemeColorLight || settings.creationThemeColor || undefined)
+      syncThemeToDshView(isDark, effectiveAgentColor, effectiveCreationColor)
       syncHiddenSidebarMenuItemsToDshView(settings.hiddenSidebarMenuItems)
     } catch (err) {
       console.warn('[DSH View Manager] 同步主题与菜单失败:', err)
@@ -147,9 +157,11 @@ export function syncThemeToDshView(isDark: boolean, agentThemeColor?: string, cr
       try {
         if (document.documentElement) {
           document.documentElement.style.colorScheme = '${isDark ? 'dark' : 'light'}';
+          ${creationThemeColor ? `document.documentElement.style.setProperty('--creation-ui-primary', '${creationThemeColor}', 'important');` : ''}
         }
         if (document.body) {
           ${isDark ? "document.body.setAttribute('data-ds-dark-theme', '');" : "document.body.removeAttribute('data-ds-dark-theme');"}
+          ${creationThemeColor ? `document.body.style.setProperty('--creation-ui-primary', '${creationThemeColor}', 'important');` : ''}
         }
       } catch (e) {}
     `

@@ -8,11 +8,13 @@
  */
 
 import { contextBridge, ipcRenderer } from 'electron'
-import { DSH_CORDIS_IPC_CHANNELS, type DshClientEvent } from '@copis/shared'
+import { DSH_CORDIS_IPC_CHANNELS, AGENT_IPC_CHANNELS, type DshClientEvent } from '@copis/shared'
 import { SETTINGS_IPC_CHANNELS } from '../types'
 
 let currentThemeIsDark: boolean | null = null
 let isApplyingTheme = false
+let currentCustomAgentColor: string | undefined = undefined
+let currentCustomCreationColor: string | undefined = undefined
 
 /**
  * 将浅色/深色主题应用到 DSH 网页 DOM
@@ -37,6 +39,9 @@ function applyDshTheme(isDark: boolean): void {
             document.body.removeAttribute('data-ds-dark-theme')
           }
         }
+      }
+      if (currentCustomAgentColor || currentCustomCreationColor) {
+        applyCustomThemeColors(currentCustomAgentColor, currentCustomCreationColor)
       }
     } finally {
       isApplyingTheme = false
@@ -108,6 +113,8 @@ function hexToRgba(hex: string, alpha: number): string {
 }
 
 function applyCustomThemeColors(agentColor?: string, creationColor?: string): void {
+  currentCustomAgentColor = agentColor
+  currentCustomCreationColor = creationColor
   if (typeof document === 'undefined') return
   const CUSTOM_STYLE_ID = 'copis-custom-theme-colors-style'
   let styleEl = document.getElementById(CUSTOM_STYLE_ID) as HTMLStyleElement | null
@@ -119,23 +126,31 @@ function applyCustomThemeColors(agentColor?: string, creationColor?: string): vo
   if (!styleEl) {
     styleEl = document.createElement('style')
     styleEl.id = CUSTOM_STYLE_ID
-    const target = document.head || document.documentElement
-    if (target) target.appendChild(styleEl)
+  }
+  const target = document.head || document.documentElement
+  if (target) {
+    target.appendChild(styleEl)
   }
 
-  let css = ':root, body {\n'
+  const isDark = currentThemeIsDark ?? false
+  const alpha = isDark ? 0.18 : 0.15
+
+  let css = ':root, :root body, body, body[data-ds-dark-theme], :root body[data-ds-dark-theme], html[data-ds-dark-theme], [data-ds-dark-theme] {\n'
   if (agentColor) {
     css += `  --ui-primary: ${agentColor} !important;\n`
     css += `  --ui-primary-background: ${hexToRgba(agentColor, 0.2)} !important;\n`
   }
   if (creationColor) {
     css += `  --creation-ui-primary: ${creationColor} !important;\n`
-    css += `  --creation-ui-primary-background: ${hexToRgba(creationColor, 0.18)} !important;\n`
+    css += `  --creation-ui-primary-background: ${hexToRgba(creationColor, alpha)} !important;\n`
     css += `  --dsh-brand: ${creationColor} !important;\n`
     css += `  --dsw-static-deepseek-500: ${creationColor} !important;\n`
+    css += `  --dsw-static-deepseek-450: ${creationColor} !important;\n`
+    css += `  --dsw-static-deepseek-400: ${creationColor} !important;\n`
     css += `  --dsw-alias-brand-primary-new-colorprimary-new-color: ${creationColor} !important;\n`
     css += `  --dsw-alias-state-business-primary: ${creationColor} !important;\n`
-    css += `  --dsw-specific-sidebar-nav-item-active: ${hexToRgba(creationColor, 0.18)} !important;\n`
+    css += `  --dsw-alias-label-primary-bluish: ${creationColor} !important;\n`
+    css += `  --dsw-specific-sidebar-nav-item-active: ${hexToRgba(creationColor, alpha)} !important;\n`
     css += `  --dsw-specific-sidebar-nav-item-active-accent: ${creationColor} !important;\n`
   }
   css += '}\n'
@@ -150,7 +165,13 @@ async function initThemeSync(): Promise<void> {
     ])
     const isDark = computeIsDark(settings?.themeMode, settings?.themeStyle, systemIsDark)
     applyDshTheme(isDark)
-    applyCustomThemeColors(settings?.agentThemeColor, settings?.creationThemeColor)
+    const agentColor = isDark
+      ? (settings?.agentThemeColorDark || settings?.agentThemeColor || undefined)
+      : (settings?.agentThemeColorLight || settings?.agentThemeColor || undefined)
+    const creationColor = isDark
+      ? (settings?.creationThemeColorDark || settings?.creationThemeColor || undefined)
+      : (settings?.creationThemeColorLight || settings?.creationThemeColor || undefined)
+    applyCustomThemeColors(agentColor, creationColor)
     if (Array.isArray(settings?.hiddenSidebarMenuItems)) {
       applyHiddenSidebarMenuItems(settings.hiddenSidebarMenuItems)
     }
@@ -169,7 +190,22 @@ const copisBridge = {
     ipcRenderer.send(DSH_CORDIS_IPC_CHANNELS.CLIENT_EVENT, { type: 'COPIS_SWITCH_MODE', mode })
   },
   openSearch: () => {
+    window.dispatchEvent(new CustomEvent('COPIS_OPEN_SEARCH_MODAL'))
     ipcRenderer.send(DSH_CORDIS_IPC_CHANNELS.CLIENT_EVENT, { type: 'COPIS_OPEN_SEARCH' })
+  },
+  getAgentSessions: () => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.LIST_SESSIONS)
+  },
+  searchAgentSessionMessages: (query: string) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.SEARCH_MESSAGES, query)
+  },
+  openSession: (sessionType: 'agent' | 'chat', sessionId: string, title?: string) => {
+    ipcRenderer.send(DSH_CORDIS_IPC_CHANNELS.CLIENT_EVENT, {
+      type: 'COPIS_OPEN_SESSION',
+      sessionType,
+      sessionId,
+      title,
+    })
   },
   openSettings: () => {
     ipcRenderer.send(DSH_CORDIS_IPC_CHANNELS.CLIENT_EVENT, { type: 'COPIS_OPEN_SETTINGS' })
@@ -178,7 +214,13 @@ const copisBridge = {
     ipcRenderer.send(DSH_CORDIS_IPC_CHANNELS.CLIENT_EVENT, { type: 'COPIS_OPEN_FEEDBACK' })
   },
   reportSidebarInfo: (info: { width: number; wide?: boolean; collapsed?: boolean }) => {
-    ipcRenderer.send(DSH_CORDIS_IPC_CHANNELS.CLIENT_EVENT, { type: 'COPIS_DSH_SIDEBAR_INFO', ...info })
+    if (typeof info?.width === 'number' && info.width >= 200 && info.width <= 360) {
+      ipcRenderer.send(DSH_CORDIS_IPC_CHANNELS.CLIENT_EVENT, {
+        type: 'COPIS_DSH_SIDEBAR_INFO',
+        ...info,
+        width: Math.max(264, Math.min(360, Math.round(info.width))),
+      })
+    }
   },
   readFile: (filePath: string, cwd?: string) => {
     return ipcRenderer.invoke(DSH_CORDIS_IPC_CHANNELS.READ_FILE, filePath, cwd)
@@ -220,20 +262,66 @@ window.addEventListener('message', (event) => {
   }
 })
 
+function applySubviewActiveState(active: boolean): void {
+  if (typeof document === 'undefined') return
+  if (active) {
+    document.body?.classList.add('copis-subview-active')
+    document.documentElement?.classList.add('copis-subview-active')
+  } else {
+    document.body?.classList.remove('copis-subview-active')
+    document.documentElement?.classList.remove('copis-subview-active')
+  }
+
+  const newSessionBtn = document.querySelector<HTMLButtonElement>(
+    'button[class*="_newSession"], button[class*="newSession"]',
+  )
+  if (newSessionBtn) {
+    if (active) {
+      newSessionBtn.setAttribute('data-copis-return-button', 'true')
+      newSessionBtn.setAttribute('title', '返回会话 (Esc)')
+      newSessionBtn.setAttribute('aria-label', '返回会话 (Esc)')
+    } else {
+      newSessionBtn.removeAttribute('data-copis-return-button')
+      newSessionBtn.setAttribute('title', '新建会话')
+      newSessionBtn.setAttribute('aria-label', '新建会话')
+    }
+  }
+}
+
 // 监听主进程派发到此 WebContentsView 的事件，通过 postMessage 转发给当前网页
 ipcRenderer.on(DSH_CORDIS_IPC_CHANNELS.DISPATCH_EVENT_TO_CLIENT, (_event, payload) => {
-  if (payload && typeof payload === 'object' && (payload as { type?: string }).type === 'COPIS_THEME_CHANGED') {
-    const { isDark, agentThemeColor, creationThemeColor } = payload as {
-      isDark: boolean
+  if (payload && typeof payload === 'object') {
+    const p = payload as {
+      type?: string
+      isDark?: boolean
       agentThemeColor?: string
       creationThemeColor?: string
+      hiddenSidebarMenuItems?: string[]
+      subview?: string | null
+      view?: string
     }
-    applyDshTheme(Boolean(isDark))
-    applyCustomThemeColors(agentThemeColor, creationThemeColor)
-  }
-  if (payload && typeof payload === 'object' && (payload as { type?: string }).type === 'COPIS_HIDDEN_SIDEBAR_MENU_ITEMS_CHANGED') {
-    const { hiddenSidebarMenuItems } = payload as { hiddenSidebarMenuItems?: string[] }
-    applyHiddenSidebarMenuItems(Array.isArray(hiddenSidebarMenuItems) ? hiddenSidebarMenuItems : [])
+    if (p.type === 'COPIS_THEME_CHANGED') {
+      applyDshTheme(Boolean(p.isDark))
+      const nextAgentColor = p.agentThemeColor !== undefined ? (p.agentThemeColor || undefined) : currentCustomAgentColor
+      const nextCreationColor = p.creationThemeColor !== undefined ? (p.creationThemeColor || undefined) : currentCustomCreationColor
+      applyCustomThemeColors(nextAgentColor, nextCreationColor)
+    }
+    if (p.type === 'COPIS_HIDDEN_SIDEBAR_MENU_ITEMS_CHANGED') {
+      applyHiddenSidebarMenuItems(Array.isArray(p.hiddenSidebarMenuItems) ? p.hiddenSidebarMenuItems : [])
+    }
+    if (p.type === 'COPIS_OPEN_SEARCH_MODAL') {
+      window.dispatchEvent(new CustomEvent('COPIS_OPEN_SEARCH_MODAL'))
+    }
+    if (p.type === 'COPIS_SUBVIEW_CHANGE') {
+      applySubviewActiveState(Boolean(p.subview))
+    }
+    if (p.type === 'COPIS_ACTIVE_VIEW_CHANGE') {
+      if (p.view === 'conversations') {
+        applySubviewActiveState(false)
+      } else if (p.view) {
+        applySubviewActiveState(true)
+      }
+    }
   }
   window.postMessage(payload, '*')
 })
@@ -313,6 +401,56 @@ function injectCopisThemeAccent(): void {
       background: var(--dsw-specific-sidebar-fill) !important;
     }
 
+    /* 侧边栏菜单项尺寸与圆角对齐 Agent 模式 */
+    .copis-menu-item {
+      font-size: 14px !important;
+      font-weight: 400 !important;
+      line-height: 1.25 !important;
+      border-radius: 7px !important;
+      min-height: 31px !important;
+      padding: 5px 8px !important;
+      gap: 8px !important;
+    }
+    .copis-rail-menu-item {
+      border-radius: 7px !important;
+    }
+    .copis-header-action-btn {
+      border-radius: 7px !important;
+      font-size: 13px !important;
+    }
+    .copis-header-btn-agent {
+      border-radius: 7px !important;
+      font-size: 13px !important;
+    }
+    .copis-header-btn-workspace {
+      width: 30px !important;
+      height: 30px !important;
+      padding: 0 !important;
+      border-radius: 7px !important;
+      display: inline-flex !important;
+      align-items: center !important;
+      justify-content: center !important;
+    }
+    /* 创造模式会话列表行圆角与字号对齐 Agent 模式 */
+    .YDXeBa_sessionRow,
+    [class*="sessionRow"] {
+      border-radius: 7px !important;
+      font-size: 14px !important;
+    }
+    button[class*="_newSession"],
+    button[class*="newSession"] {
+      border-radius: 7px !important;
+      font-size: 14px !important;
+    }
+
+    /* Copis 左栏从新建会话开始，不展示 DSH 本地构建品牌 Header。 */
+    [class*="_logoRow"],
+    [class*="logoRow"],
+    [class*="_localBuildBrand"],
+    [class*="localBuildBrand"] {
+      display: none !important;
+    }
+
     /* 侧边栏菜单项激活态：使用 creation-ui-primary 体系 */
     .copis-menu-section button.active,
     .copis-menu-section button[data-active="true"],
@@ -384,7 +522,7 @@ function injectCopisThemeAccent(): void {
     }
 
     /* 创造模式 DSH 侧边栏菜单项与隐藏胶囊按钮契约 */
-    .copis-menu-section button {
+    .copis-menu-section > button {
       position: relative !important;
     }
 
@@ -396,10 +534,12 @@ function injectCopisThemeAccent(): void {
 
     /* DSH 侧边栏菜单项隐藏胶囊按钮：无背景色，仅边框，悬停保持透明背景 */
     .copis-dsh-menu-hide-btn {
-      position: absolute;
-      right: 6px;
-      top: 50%;
-      transform: translateY(-50%);
+      position: static !important;
+      right: auto;
+      top: auto;
+      transform: none;
+      flex: none;
+      margin-left: auto;
       height: 20px;
       padding: 0 7px;
       display: inline-flex;
@@ -436,6 +576,200 @@ function injectCopisThemeAccent(): void {
     [class*="FootArea"] button[data-copis-feedback="true"] {
       display: none !important;
     }
+
+    /* 隐藏 DSH 本地构建与 Logo 标识行，移除多余顶部留白与折叠切换按钮 */
+    [class*="_logoRow"],
+    [class*="logoRow"],
+    .hHd-Xa_logoRow {
+      display: none !important;
+    }
+
+    /* 当 Copis 子视图（规划/记忆/知识库/专家团队等）激活时：
+       1. 彻底隐藏 DSH 原生中间对话区、欢迎屏、输入区与右侧详情栏；
+       2. 强制 DSH 外层 Frame 与侧边栏独占整个 WebContentsView 视口 (100%)；
+       3. 强制 DSH 侧边栏保持展开宽态 (Wide)，严禁误折叠为窄 Rail。 */
+    body.copis-subview-active [class*="_centerCol"],
+    body.copis-subview-active [class*="centerCol"],
+    body.copis-subview-active [class*="_detailsCol"],
+    body.copis-subview-active [class*="detailsCol"],
+    body.copis-subview-active [class*="_handle"],
+    body.copis-subview-active [class*="handle"],
+    body.copis-subview-active [data-view="conversation"],
+    body.copis-subview-active main {
+      display: none !important;
+      width: 0 !important;
+      min-width: 0 !important;
+      max-width: 0 !important;
+      height: 0 !important;
+      overflow: hidden !important;
+      visibility: hidden !important;
+      pointer-events: none !important;
+    }
+
+    body.copis-subview-active [class*="_frame"],
+    body.copis-subview-active [class*="frame"] {
+      display: flex !important;
+      grid-template-columns: 100% !important;
+      width: 100% !important;
+      height: 100% !important;
+    }
+
+    body.copis-subview-active [class*="_sidebarCol"],
+    body.copis-subview-active [class*="sidebarCol"] {
+      display: flex !important;
+      flex: 1 1 100% !important;
+      width: 100% !important;
+      max-width: 100% !important;
+      height: 100% !important;
+      border-right: none !important;
+    }
+
+    body.copis-subview-active .hHd-Xa_root,
+    body.copis-subview-active [class*="_root"],
+    body.copis-subview-active [class*="SidebarRoot"],
+    body.copis-subview-active aside {
+      width: 100% !important;
+      padding: 6px var(--dsh-sidebar-inline-padding, 12px) !important;
+    }
+
+    /* 当子视图激活时，原「新会话」按钮无缝切换为「返回会话」按钮 */
+    body.copis-subview-active button[class*="_newSession"],
+    body.copis-subview-active button[class*="newSession"] {
+      display: flex !important;
+      align-items: center !important;
+      width: 100% !important;
+      height: 36px !important;
+      margin: 0 0 12px !important;
+      padding: 0 12px !important;
+      gap: 8px !important;
+      background: var(--creation-ui-primary-background, rgba(108, 0, 204, 0.12)) !important;
+      color: var(--creation-ui-primary, #6c00cc) !important;
+      border: 1px solid var(--creation-ui-primary-background, rgba(108, 0, 204, 0.25)) !important;
+      border-radius: 7px !important;
+      align-self: stretch !important;
+      cursor: pointer !important;
+      transition: background-color 150ms ease, border-color 150ms ease !important;
+      box-sizing: border-box !important;
+    }
+
+    body.copis-subview-active button[class*="_newSession"]:hover,
+    body.copis-subview-active button[class*="newSession"]:hover {
+      background: var(--creation-ui-primary-background, rgba(108, 0, 204, 0.2)) !important;
+      border-color: var(--creation-ui-primary, #6c00cc) !important;
+    }
+
+    /* 隐藏原「新建会话」图标 */
+    body.copis-subview-active button[class*="_newSession"] svg,
+    body.copis-subview-active button[class*="newSession"] svg {
+      display: none !important;
+    }
+
+    /* 注入返回会话矢量箭头图标（仅作用于外层 button 前缀） */
+    body.copis-subview-active button[class*="_newSession"]::before,
+    body.copis-subview-active button[class*="newSession"]::before {
+      content: "" !important;
+      display: inline-block !important;
+      width: 15px !important;
+      height: 15px !important;
+      flex: none !important;
+      background-color: currentColor !important;
+      -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m12 19-7-7 7-7'/%3E%3Cpath d='M19 12H5'/%3E%3C/svg%3E") no-repeat center / contain !important;
+      mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m12 19-7-7 7-7'/%3E%3Cpath d='M19 12H5'/%3E%3C/svg%3E") no-repeat center / contain !important;
+    }
+
+    /* 隐藏原「新会话」文字，替换为「返回会话」，确保内部 label 绝不带多余边框、背景或伪类箭头 */
+    body.copis-subview-active [class*="newSessionLabel"],
+    body.copis-subview-active [class*="_newSessionLabel"] {
+      font-size: 0 !important;
+      max-width: none !important;
+      opacity: 1 !important;
+      display: inline-flex !important;
+      align-items: center !important;
+      flex: 1 1 auto !important;
+      min-width: 0 !important;
+      overflow: hidden !important;
+      border: none !important;
+      background: transparent !important;
+      padding: 0 !important;
+      margin: 0 !important;
+      height: auto !important;
+      color: currentColor !important;
+      box-shadow: none !important;
+    }
+
+    body.copis-subview-active [class*="newSessionLabel"]::before,
+    body.copis-subview-active [class*="_newSessionLabel"]::before {
+      content: none !important;
+      display: none !important;
+    }
+
+    body.copis-subview-active [class*="newSessionLabel"]::after,
+    body.copis-subview-active [class*="_newSessionLabel"]::after {
+      content: "返回会话" !important;
+      font-size: 14px !important;
+      font-weight: 600 !important;
+      line-height: 20px !important;
+      color: currentColor !important;
+      white-space: nowrap !important;
+      border: none !important;
+      background: transparent !important;
+      padding: 0 !important;
+      margin: 0 !important;
+    }
+
+    /* 在按钮最右侧展示精致的 Esc 快捷键胶囊（仅作用于外层 button 自身） */
+    body.copis-subview-active button[class*="_newSession"]::after,
+    body.copis-subview-active button[class*="newSession"]::after {
+      content: "Esc" !important;
+      margin-left: auto !important;
+      font-size: 10px !important;
+      font-weight: 500 !important;
+      font-family: ui-monospace, monospace !important;
+      line-height: 1 !important;
+      padding: 2px 5px !important;
+      border-radius: 4px !important;
+      border: 1px solid currentColor !important;
+      opacity: 0.7 !important;
+      background: transparent !important;
+      color: currentColor !important;
+      flex: none !important;
+    }
+
+    /* 当子视图激活时，彻底隐藏浮动工具栏（工作区、Agent模式），避免挤占/遮挡侧栏顶部 */
+    body.copis-subview-active .copis-hero-utilities-overlay {
+      display: none !important;
+    }
+
+    body.copis-subview-active [class*="_regionArea"],
+    body.copis-subview-active [class*="regionArea"] {
+      display: flex !important;
+      flex-direction: column !important;
+      margin-left: 0 !important;
+      margin-right: 0 !important;
+      padding-left: 0 !important;
+    }
+
+    body.copis-subview-active .copis-menu-section {
+      display: grid !important;
+    }
+
+    body.copis-subview-active [class*="_footArea"],
+    body.copis-subview-active [class*="footArea"] {
+      align-items: stretch !important;
+    }
+
+    /* 彻底屏蔽 DSH 原生设置弹窗与遮罩层，统一由 Copis 全屏设置面板接管 */
+    [class*="VOzbGW_panel"],
+    [class*="VOzbGW_overlay"],
+    [class*="VOzbGW_mask"],
+    [class*="settingsArea"] [role="dialog"],
+    [class*="SettingsArea"] [role="dialog"],
+    [class*="SettingsPanel"],
+    [class*="settingsPanel"] {
+      display: none !important;
+      visibility: hidden !important;
+      pointer-events: none !important;
+    }
   `
   const target = document.head || document.documentElement
   if (target) {
@@ -445,9 +779,13 @@ function injectCopisThemeAccent(): void {
 
 if (typeof document !== 'undefined') {
   if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', injectCopisThemeAccent)
+    document.addEventListener('DOMContentLoaded', () => {
+      injectCopisThemeAccent()
+      void initThemeSync()
+    })
   } else {
     injectCopisThemeAccent()
+    void initThemeSync()
   }
 }
 
@@ -554,6 +892,23 @@ function syncDshSidebarMenuDoms(): void {
       btn.style.setProperty('display', 'none', 'important')
     }
   })
+
+  // 4. 同步顶部「新建会话 / 返回会话」按钮属性
+  const topNewSessionBtn = document.querySelector<HTMLButtonElement>(
+    'button[class*="_newSession"], button[class*="newSession"]',
+  )
+  if (topNewSessionBtn) {
+    const isSubActive = Boolean(document.body?.classList.contains('copis-subview-active'))
+    if (isSubActive) {
+      topNewSessionBtn.setAttribute('data-copis-return-button', 'true')
+      topNewSessionBtn.setAttribute('title', '返回会话 (Esc)')
+      topNewSessionBtn.setAttribute('aria-label', '返回会话 (Esc)')
+    } else {
+      topNewSessionBtn.removeAttribute('data-copis-return-button')
+      topNewSessionBtn.setAttribute('title', '新建会话')
+      topNewSessionBtn.setAttribute('aria-label', '新建会话')
+    }
+  }
 }
 
 /**
@@ -635,9 +990,24 @@ function setupSessionClickInterceptor(): void {
       target.closest('[class*="RegionArea"]')
     )
 
-    if (isSessionItem || isNewSession || isRegionArea) {
+    if (isNewSession) {
+      if (document.body?.classList.contains('copis-subview-active')) {
+        // 在子视图激活时，原「新建会话」按钮已切换为「返回会话」，点击时拦截 startSession，直接关闭子视图并平滑返回原会话
+        event.preventDefault()
+        event.stopPropagation()
+        event.stopImmediatePropagation()
+        applySubviewActiveState(false)
+        copisBridge.navigate('conversations')
+        window.postMessage({ type: 'COPIS_ACTIVE_VIEW_CHANGE', view: 'conversations' }, '*')
+        window.postMessage({ type: 'COPIS_SUBVIEW_CHANGE', subview: null }, '*')
+        return
+      }
+      applySubviewActiveState(false)
       copisBridge.navigate('conversations')
-      // 同时通过 postMessage 广播，确保侧边栏激活项高亮在网页端第一时间同步清除
+      window.postMessage({ type: 'COPIS_ACTIVE_VIEW_CHANGE', view: 'conversations' }, '*')
+    } else if (isSessionItem || isRegionArea) {
+      applySubviewActiveState(false)
+      copisBridge.navigate('conversations')
       window.postMessage({ type: 'COPIS_ACTIVE_VIEW_CHANGE', view: 'conversations' }, '*')
     }
   }
@@ -646,8 +1016,47 @@ function setupSessionClickInterceptor(): void {
   document.addEventListener('click', onSessionClick, true)
 }
 
+function isDshSettingsTarget(target: HTMLElement | null): boolean {
+  if (!target) return false
+  const btn = target.closest('button')
+  if (!btn) return false
+  if (btn.closest('[class*="settingsArea"], [class*="SettingsArea"]')) return true
+  if (btn.closest('[class*="triggerRow"], [class*="TriggerRow"]') && btn.getAttribute('aria-haspopup') === 'dialog') return true
+  if (btn.matches('button[class*="trigger"][aria-haspopup="dialog"], button[class*="Trigger"][aria-haspopup="dialog"]')) return true
+  const aria = (btn.getAttribute('aria-label') || btn.getAttribute('title') || '').toLowerCase()
+  if (aria.includes('设置') || aria.includes('setting')) return true
+  const text = (btn.textContent || '').trim().toLowerCase()
+  if (text.includes('设置') || text.includes('setting')) {
+    if (btn.closest('[class*="footArea"], [class*="FootArea"], [class*="SidebarRoot"], [class*="_root"], aside')) {
+      return true
+    }
+  }
+  return false
+}
+
+function setupSettingsClickInterceptor(): void {
+  if (typeof document === 'undefined') return
+
+  const onSettingsClick = (event: MouseEvent) => {
+    if (event.button !== 0) return
+    const target = event.target as HTMLElement | null
+    if (isDshSettingsTarget(target)) {
+      event.preventDefault()
+      event.stopPropagation()
+      event.stopImmediatePropagation()
+      applySubviewActiveState(true)
+      copisBridge.openSettings()
+      window.postMessage({ type: 'COPIS_OPEN_SETTINGS' }, '*')
+      window.dispatchEvent(new CustomEvent('COPIS_OPEN_SETTINGS'))
+    }
+  }
+
+  document.addEventListener('click', onSettingsClick, true)
+}
+
 if (typeof document !== 'undefined') {
   setupSessionClickInterceptor()
+  setupSettingsClickInterceptor()
 }
 
 if (typeof window !== 'undefined' && window.matchMedia) {

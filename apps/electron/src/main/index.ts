@@ -138,6 +138,7 @@ import {
 } from './lib/voice-dictation-window'
 import { registerGlobalShortcut, unregisterAllGlobalShortcuts } from './lib/global-shortcut-service'
 import { getCustomWindowChromeOptions } from './lib/window-chrome'
+import { readCopisClientVersion } from './lib/copis-client-version'
 import { setCopisVersion } from '@copis/core'
 import { TRAY_IPC_CHANNELS } from '../types'
 
@@ -510,8 +511,11 @@ app.whenReady().then(bootstrap).catch(handleBootstrapFailure)
  * 单点失败不应阻止窗口和托盘的创建（用户至少要能看到界面）。
  */
 async function bootstrap(): Promise<void> {
-  // 初始化兼容层版本号（供复用的 Pi/Copis 运行时使用）
-  const copisVersion = app.getVersion()
+  // 核心模块的主程序兼容门槛按当前平台和架构读取版本；DSH 使用独立模块版本。
+  const copisVersion = readCopisClientVersion(
+    join(app.getAppPath(), 'package.json'),
+    app.getVersion(),
+  )
   process.env.COPIS_VERSION = copisVersion
   process.env.COPIS_PACKAGED = app.isPackaged ? '1' : '0'
   setCopisVersion(copisVersion)

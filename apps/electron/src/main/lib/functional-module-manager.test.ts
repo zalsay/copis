@@ -137,6 +137,64 @@ describe('COS 功能模块统一管理', () => {
     expect(calls).toEqual([MANIFEST_URL, 'https://download.example.com/copis/modules/stable/darwin-arm64/officecli-1.2.3'])
   })
 
+  test('Given Copis 主程序版本低于平台门槛且 DSH artifact 可用 When 安装创造模式 Then 按 DSH 版本安装而不被主程序门槛拦截', async () => {
+    const dshContent = 'dsh-v0.1.3'
+    const dshUrl = 'https://download.example.com/copis/modules/stable/darwin-arm64/dsh-0.1.3'
+    const manifest = {
+      schema: 1,
+      channel: 'stable',
+      client: { minVersion: '0.16.18' },
+      platforms: {
+        'darwin-arm64': {
+          modules: {
+            dsh: {
+              version: '0.1.3',
+              url: dshUrl,
+              sha256: createHash('sha256').update(dshContent).digest('hex'),
+              size: Buffer.byteLength(dshContent),
+              format: 'binary',
+              entrypoint: 'bin/dsh',
+              required: false,
+            },
+          },
+        },
+      },
+    }
+    const root = createRoot()
+
+    const status = await installFunctionalModule({ name: 'dsh' }, {
+      rootDir: root,
+      manifestUrl: MANIFEST_URL,
+      platform: 'darwin',
+      arch: 'arm64',
+      clientVersion: '0.16.17',
+      fetchImpl: createFetchFixture(manifest, { [dshUrl]: dshContent }, []),
+    })
+
+    expect(status).toMatchObject({ name: 'dsh', installed: true, version: '0.1.3' })
+  })
+
+  test('Given Copis 主程序版本低于平台门槛 When 安装非 DSH 模块 Then 保持主程序版本门槛', async () => {
+    const officeContent = 'officecli-v1'
+    const rustContent = 'rust-api-v1'
+    const manifest = {
+      ...createManifest(
+        moduleArtifact('officecli', '1.2.3', officeContent, true),
+        moduleArtifact('rust-http-api', '0.2.0', rustContent, true),
+      ),
+      client: { minVersion: '0.16.18' },
+    }
+
+    await expect(installFunctionalModule({ name: 'officecli' }, {
+      rootDir: createRoot(),
+      manifestUrl: MANIFEST_URL,
+      platform: 'darwin',
+      arch: 'arm64',
+      clientVersion: '0.16.17',
+      fetchImpl: createFetchFixture(manifest, {}, []),
+    })).rejects.toThrow('Copis 版本过低，需要至少 0.16.18')
+  })
+
   test('Rust API 下载内容校验失败时不产生 active 版本', async () => {
     const rustContent = 'rust-api-v1'
     const badManifest = createManifest(

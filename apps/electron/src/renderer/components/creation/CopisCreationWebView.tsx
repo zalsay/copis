@@ -18,7 +18,6 @@ import {
   AlertCircle,
   Download,
   ExternalLink,
-  X,
 } from 'lucide-react'
 import { COPIS_OFFICIAL_URL } from '@/components/functional-modules/functional-module-startup-ui'
 import { CopisLogoIcon } from '@/components/ui/copis-logo-icon'
@@ -30,7 +29,7 @@ import { planningTabAtom } from '@/atoms/planning-atoms'
 import { workingSettingsOpenAtom } from '@/atoms/working-atoms'
 import { activeWebTabIdAtom } from '@/atoms/web-tabs'
 import { automationFormAtom } from '@/atoms/automation-atoms'
-import { resolvedThemeAtom } from '@/atoms/theme'
+import { resolvedThemeAtom, agentThemeColorAtom, creationThemeColorAtom } from '@/atoms/theme'
 import { useOpenSession } from '@/hooks/useOpenSession'
 import { useCreateSession } from '@/hooks/useCreateSession'
 import { CopisWorkingFeedbackDialog } from '@/components/app-shell/CopisWorkingFeedbackDialog'
@@ -58,13 +57,14 @@ type CreationSubView =
   | 'settings'
   | null
 
-import { formatCreationErrorMessage, isDshModuleMissingError, shouldInstallDshModule } from './creation-dsh-helper'
-export { isDshModuleMissingError }
+import { clampDshSidebarWidth, formatCreationErrorMessage, isDshModuleMissingError, shouldInstallDshModule } from './creation-dsh-helper'
+export { clampDshSidebarWidth, isDshModuleMissingError }
+
 
 export function CopisCreationWebView(): React.ReactElement {
   const [status, setStatus] = useAtom(dshCordisStatusAtom)
   const setAppModeAndRuntime = useSetAtom(setAppModeAndRuntimeAtom)
-  const setSearchDialogOpen = useSetAtom(searchDialogOpenAtom)
+  const [searchDialogOpen, setSearchDialogOpen] = useAtom(searchDialogOpenAtom)
   const setPlanningTab = useSetAtom(planningTabAtom)
   const setWorkingSettingsOpen = useSetAtom(workingSettingsOpenAtom)
   const workingSettingsOpen = useAtomValue(workingSettingsOpenAtom)
@@ -76,6 +76,8 @@ export function CopisCreationWebView(): React.ReactElement {
   const openSession = useOpenSession()
   const { createAgent } = useCreateSession()
   const resolvedTheme = useAtomValue(resolvedThemeAtom)
+  const agentThemeColor = useAtomValue(agentThemeColorAtom)
+  const creationThemeColor = useAtomValue(creationThemeColorAtom)
 
   const [feedbackOpen, setFeedbackOpen] = useState(false)
   // 未就绪时默认处于启动/检测状态，避免首帧闪现未就绪/错误页
@@ -103,16 +105,16 @@ export function CopisCreationWebView(): React.ReactElement {
     }
 
     const rect = nativeHostRef.current.getBoundingClientRect()
-    // 若当前打开了 Copis 功能视图，则原生视图保持展开左侧 DSH 侧边栏（不低于 264px），右侧腾出空间渲染 React 视图；
+    // 若当前打开了 Copis 功能视图，则原生视图保持展开左侧 DSH 侧边栏（严格限制在 [264, 360] 区间），右侧腾出空间渲染 React 视图；
     // 设置页面则完全隐藏原生 DSH 侧边栏与网页内容，由 Copis 设置面板全屏覆盖呈现。
     const isSettings = creationSubView === 'settings'
-    const effectiveSidebarWidth = Math.max(264, dshSidebarWidth)
+    const effectiveSidebarWidth = clampDshSidebarWidth(dshSidebarWidth)
     const effectiveWidth = isSettings
       ? 0
       : creationSubView
         ? Math.min(effectiveSidebarWidth, rect.width)
         : rect.width
-    const isVisible = !workingSettingsOpen && !activeWebTabId && !isSettings && rect.width > 0 && rect.height > 0
+    const isVisible = !workingSettingsOpen && !isSettings && !activeWebTabId && rect.width > 0 && rect.height > 0
 
     void window.electronAPI?.dshCordis?.updateViewBounds?.(
       {
@@ -162,8 +164,10 @@ export function CopisCreationWebView(): React.ReactElement {
     void window.electronAPI?.dshCordis?.dispatchToClient?.({
       type: 'COPIS_THEME_CHANGED',
       isDark: resolvedTheme === 'dark',
+      agentThemeColor,
+      creationThemeColor,
     })
-  }, [resolvedTheme, status.running, status.url])
+  }, [resolvedTheme, agentThemeColor, creationThemeColor, status.running, status.url])
 
   // 切回 Agent 模式并自动恢复当前工作区的 Agent 会话
   const handleBackToAgent = useCallback(() => {
@@ -203,20 +207,82 @@ export function CopisCreationWebView(): React.ReactElement {
             type: 'COPIS_ACTIVE_VIEW_CHANGE',
             view: 'conversations',
           })
+          void window.electronAPI?.dshCordis?.dispatchToClient?.({
+            type: 'COPIS_SUBVIEW_CHANGE',
+            subview: null,
+          })
+          if (nativeHostRef.current && status.url) {
+            const rect = nativeHostRef.current.getBoundingClientRect()
+            void window.electronAPI?.dshCordis?.updateViewBounds?.(
+              {
+                x: Math.round(rect.left),
+                y: Math.round(rect.top),
+                width: Math.round(rect.width),
+                height: Math.round(rect.height),
+                visible: !workingSettingsOpen && !activeWebTabId && rect.width > 0 && rect.height > 0,
+              },
+              status.url
+            )
+          }
         } else if (e.view) {
-          setCreationSubView(e.view as CreationSubView)
+          const nextView = e.view as CreationSubView
+          setCreationSubView(nextView)
+          void window.electronAPI?.dshCordis?.dispatchToClient?.({
+            type: 'COPIS_SUBVIEW_CHANGE',
+            subview: nextView,
+          })
+          if (nativeHostRef.current && status.url) {
+            const rect = nativeHostRef.current.getBoundingClientRect()
+            const effectiveSidebarWidth = clampDshSidebarWidth(dshSidebarWidth)
+            const isSettings = nextView === 'settings'
+            const effectiveWidth = isSettings ? 0 : Math.min(effectiveSidebarWidth, rect.width)
+            void window.electronAPI?.dshCordis?.updateViewBounds?.(
+              {
+                x: Math.round(rect.left),
+                y: Math.round(rect.top),
+                width: Math.round(effectiveWidth),
+                height: Math.round(rect.height),
+                visible: !workingSettingsOpen && !isSettings && !activeWebTabId && rect.width > 0 && rect.height > 0,
+              },
+              status.url
+            )
+          }
           if (e.view === 'planning' && e.tab) {
             setPlanningTab(e.tab as any)
           }
         }
       } else if (e.type === 'COPIS_DSH_SIDEBAR_INFO') {
-        if (e.width && Number.isFinite(e.width) && e.width > 0) {
-          setDshSidebarWidth(Math.max(264, Math.round(e.width)))
+        if (e.width && Number.isFinite(e.width) && e.width >= 200 && e.width <= 360) {
+          setDshSidebarWidth(clampDshSidebarWidth(e.width))
         }
       } else if (e.type === 'COPIS_OPEN_SEARCH') {
-        setSearchDialogOpen(true)
+        void window.electronAPI?.dshCordis?.dispatchToClient?.({
+          type: 'COPIS_OPEN_SEARCH_MODAL',
+        })
+      } else if (e.type === 'COPIS_OPEN_SESSION') {
+        if (e.sessionType === 'agent') {
+          handleBackToAgent()
+          openSession('agent', e.sessionId, e.title || '会话')
+        }
       } else if (e.type === 'COPIS_OPEN_SETTINGS') {
         setCreationSubView('settings')
+        void window.electronAPI?.dshCordis?.dispatchToClient?.({
+          type: 'COPIS_SUBVIEW_CHANGE',
+          subview: 'settings',
+        })
+        if (nativeHostRef.current && status.url) {
+          const rect = nativeHostRef.current.getBoundingClientRect()
+          void window.electronAPI?.dshCordis?.updateViewBounds?.(
+            {
+              x: Math.round(rect.left),
+              y: Math.round(rect.top),
+              width: 0,
+              height: Math.round(rect.height),
+              visible: false,
+            },
+            status.url
+          )
+        }
       } else if (e.type === 'COPIS_OPEN_FEEDBACK') {
         setFeedbackOpen(true)
       }
@@ -234,7 +300,17 @@ export function CopisCreationWebView(): React.ReactElement {
       unsubIpc?.()
       window.removeEventListener('message', onMsg)
     }
-  }, [handleBackToAgent, setAppModeAndRuntime, setActiveView, setSearchDialogOpen, setPlanningTab, setWorkingSettingsOpen])
+  }, [handleBackToAgent, setAppModeAndRuntime, setActiveView, setPlanningTab, setWorkingSettingsOpen, status.url, dshSidebarWidth, workingSettingsOpen, activeWebTabId, openSession])
+
+  // 创造模式下如果从全局快捷键触发了 searchDialogOpen，转发给 DSH 客户端打开原生搜索浮层并重置
+  useEffect(() => {
+    if (searchDialogOpen) {
+      void window.electronAPI?.dshCordis?.dispatchToClient?.({
+        type: 'COPIS_OPEN_SEARCH_MODAL',
+      })
+      setSearchDialogOpen(false)
+    }
+  }, [searchDialogOpen, setSearchDialogOpen])
 
   // 3. 关闭右侧 Copis 功能视图并切回 DSH 聊天
   const closeSubView = useCallback(() => {
@@ -243,7 +319,24 @@ export function CopisCreationWebView(): React.ReactElement {
       type: 'COPIS_ACTIVE_VIEW_CHANGE',
       view: 'conversations',
     })
-  }, [])
+    void window.electronAPI?.dshCordis?.dispatchToClient?.({
+      type: 'COPIS_SUBVIEW_CHANGE',
+      subview: null,
+    })
+    if (nativeHostRef.current && status.url) {
+      const rect = nativeHostRef.current.getBoundingClientRect()
+      void window.electronAPI?.dshCordis?.updateViewBounds?.(
+        {
+          x: Math.round(rect.left),
+          y: Math.round(rect.top),
+          width: Math.round(rect.width),
+          height: Math.round(rect.height),
+          visible: !workingSettingsOpen && !activeWebTabId && rect.width > 0 && rect.height > 0,
+        },
+        status.url
+      )
+    }
+  }, [status.url, workingSettingsOpen, activeWebTabId])
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -524,27 +617,12 @@ export function CopisCreationWebView(): React.ReactElement {
                 : 'border-l border-border/60',
             )}
             style={{
-              left: creationSubView === 'settings' ? 0 : Math.max(264, Math.round(dshSidebarWidth)),
+              left: creationSubView === 'settings' ? 0 : clampDshSidebarWidth(dshSidebarWidth),
             }}
           >
-            {/* 右上角快捷返回按钮 */}
-            <div className="absolute top-3 right-4 z-50">
-              <Button
-                variant="outline"
-                size="sm"
-                className="h-7 px-2.5 gap-1.5 rounded-full border-border/70 bg-background/85 backdrop-blur-sm shadow-sm text-xs hover:bg-accent titlebar-no-drag"
-                onClick={closeSubView}
-                title="返回会话 (Esc)"
-              >
-                <X className="w-3.5 h-3.5 text-[var(--ui-primary)]" />
-                <span className="hidden sm:inline font-medium">返回会话</span>
-                <kbd className="text-[10px] text-muted-foreground font-mono">Esc</kbd>
-              </Button>
-            </div>
-
             <div className="flex-1 min-h-0 relative">
               {creationSubView === 'planning' ? (
-                <PlanningView standalone />
+                <PlanningView />
               ) : creationSubView === 'automations' ? (
                 automationFormOpen ? <AutomationFormView /> : <AutomationsListView />
               ) : creationSubView === 'memory' ? (

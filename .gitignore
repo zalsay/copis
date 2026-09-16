@@ -75,3 +75,4 @@ pnpm-workspace.yaml
 .superpowers/
 .agents/
 skills-lock.json
+.tmp/

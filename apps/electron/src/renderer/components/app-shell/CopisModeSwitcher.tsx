@@ -1,19 +1,10 @@
-import React, { useCallback, useState } from 'react'
-import { useAtom, useAtomValue, useSetAtom } from 'jotai'
+import React from 'react'
 import { Lightbulb } from 'lucide-react'
 import { CopisLogoIcon } from '@/components/ui/copis-logo-icon'
-import {
-  appModeAtom,
-  setAppModeAndRuntimeAtom,
-  dshCordisStatusAtom,
-  creationModeSkipConfirmAtom,
-} from '@/atoms/app-mode'
-import { agentSessionsAtom, currentAgentWorkspaceIdAtom } from '@/atoms/agent-atoms'
-import { activeViewAtom } from '@/atoms/active-view'
-import { useOpenSession } from '@/hooks/useOpenSession'
-import { useCreateSession } from '@/hooks/useCreateSession'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { CopisCreationConfirmDialog } from '@/components/creation/CopisCreationConfirmDialog'
+import { useCopisModeSwitcher } from '@/hooks/useCopisModeSwitcher'
+import { CREATION_MODE_SWITCH_DISABLED } from '@/lib/creation-mode-switch'
 import { cn } from '@/lib/utils'
 
 export interface CopisModeSwitcherProps {
@@ -25,70 +16,22 @@ export function CopisModeSwitcher({
   isCollapsed = false,
   className,
 }: CopisModeSwitcherProps): React.ReactElement {
-  const [appMode, setAppModeAndRuntime] = useAtom(setAppModeAndRuntimeAtom)
-  const currentMode = useAtomValue(appModeAtom)
-  const skipConfirm = useAtomValue(creationModeSkipConfirmAtom)
-  const setDshCordisStatus = useSetAtom(dshCordisStatusAtom)
-  const agentSessions = useAtomValue(agentSessionsAtom)
-  const currentWorkspaceId = useAtomValue(currentAgentWorkspaceIdAtom)
-  const setActiveView = useSetAtom(activeViewAtom)
-  const openSession = useOpenSession()
-  const { createAgent } = useCreateSession()
-
-  const [confirmDialogOpen, setConfirmDialogOpen] = useState(false)
-
-  const executeSwitchToCreation = useCallback(() => {
-    setAppModeAndRuntime('creation')
-    setActiveView('conversations')
-
-    // 进入创造模式时按需预热并启动 DSH Cordis Web 服务
-    window.electronAPI.dshCordis.start()
-      .then((status) => setDshCordisStatus(status))
-      .catch((err) => {
-        console.warn('[CopisModeSwitcher] 启动 DSH Cordis 服务失败:', err)
-        setDshCordisStatus({
-          running: false,
-          error: err instanceof Error ? err.message : String(err),
-        })
-      })
-  }, [setAppModeAndRuntime, setActiveView, setDshCordisStatus])
-
-  const handleSwitchMode = useCallback((nextMode: 'agent' | 'creation') => {
-    if (nextMode === currentMode) return
-
-    if (nextMode === 'creation') {
-      if (skipConfirm) {
-        executeSwitchToCreation()
-      } else {
-        setConfirmDialogOpen(true)
-      }
-      return
-    }
-
-    // 切回 Agent 模式时，恢复当前工作区下的 Agent 会话
-    setAppModeAndRuntime('agent')
-    setActiveView('conversations')
-
-    const matchedSession = agentSessions.find(
-      (s) => !s.archived && s.workspaceId === currentWorkspaceId && s.mode !== 'creation' && s.agentRuntime !== 'dsh',
-    )
-
-    if (matchedSession) {
-      openSession('agent', matchedSession.id, matchedSession.title)
-    } else {
-      createAgent({
-        draft: true,
-        mode: 'agent',
-        agentRuntime: 'pi',
-      })
-    }
-  }, [currentMode, skipConfirm, executeSwitchToCreation, currentWorkspaceId, agentSessions, setAppModeAndRuntime, setActiveView, openSession, createAgent])
+  const {
+    currentMode,
+    confirmDialogOpen,
+    setConfirmDialogOpen,
+    handleSwitchMode,
+    executeSwitchToCreation,
+  } = useCopisModeSwitcher()
 
   if (isCollapsed) {
     const isCreation = currentMode === 'creation'
+    const creationSwitchDisabled = CREATION_MODE_SWITCH_DISABLED && !isCreation
     const tooltipText = isCreation
       ? '当前：创造模式（点击切换为 Agent 模式）'
-      : '当前：Agent 模式（点击切换为创造模式）'
+      : creationSwitchDisabled
+        ? '创造模式当前已禁用'
+        : '当前：Agent 模式（点击切换为创造模式）'
 
     return (
       <>
@@ -101,9 +44,11 @@ export function CopisModeSwitcher({
                 isCreation
                   ? 'bg-[var(--creation-ui-primary-background)] text-[var(--creation-ui-primary)] hover:opacity-90'
                   : 'text-[var(--ui-primary)] hover:bg-muted/40',
+                creationSwitchDisabled && 'cursor-not-allowed opacity-50 hover:bg-transparent',
                 className,
               )}
               aria-label={tooltipText}
+              disabled={creationSwitchDisabled}
               onClick={() => handleSwitchMode(isCreation ? 'agent' : 'creation')}
             >
               {isCreation ? (
@@ -166,7 +111,9 @@ export function CopisModeSwitcher({
             currentMode === 'creation'
               ? 'bg-card text-[var(--creation-ui-primary)] shadow-sm font-semibold border border-border/40'
               : 'text-muted-foreground hover:text-foreground hover:bg-muted/40',
+            CREATION_MODE_SWITCH_DISABLED && 'cursor-not-allowed opacity-50 hover:bg-transparent hover:text-muted-foreground',
           )}
+          disabled={CREATION_MODE_SWITCH_DISABLED}
           onClick={() => handleSwitchMode('creation')}
         >
           <Lightbulb className="w-3.5 h-3.5 text-[var(--creation-ui-primary)] shrink-0" aria-hidden="true" />

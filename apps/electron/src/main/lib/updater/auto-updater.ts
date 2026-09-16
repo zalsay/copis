@@ -15,7 +15,7 @@ import type { UpdateStatus } from './updater-types'
 import { UPDATER_IPC_CHANNELS } from './updater-types'
 import { createIdleInstallScheduler } from './idle-install-scheduler'
 import { checkAppUpdateViaRustApi } from '../app-update-service'
-import { autoInstallDownloadedUpdate } from '../auto-install-update'
+import { autoInstallDownloadedUpdate, doesInstallerHandleAppRestart } from '../auto-install-update'
 import { migrateLegacyAgentWorkspaceProjectDirectories } from '../agent-workspace-manager'
 
 /** 已下载更新的持久化记录结构 */
@@ -547,6 +547,14 @@ async function installDownloadedUpdate(): Promise<void> {
     if (error) {
       console.error('[更新] 打开安装包失败:', error)
     }
+    return
+  }
+
+  // Windows 的 NSIS 安装器会在 --updated --force-run 模式下关闭旧实例并启动新版本。
+  // 按机器安装时外层安装器会在提权后提前返回；若这里自行重启，会与内层安装器
+  // 移动旧程序到 old-install 的过程竞争，导致 Windows 尝试从临时目录启动旧程序。
+  if (doesInstallerHandleAppRestart(result.kind)) {
+    console.log('[更新] Windows 安装器已接管关闭旧版本和启动新版本')
     return
   }
 

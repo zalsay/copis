@@ -213,7 +213,13 @@ export function registerSettingsIpcHandlers(): void {
     console.log(`[设置] 系统主题变化: ${isDark ? '深色' : '浅色'}`)
     const currentSettings = getSettings()
     if (currentSettings.themeMode === 'system') {
-      syncThemeToDshView(isDark)
+      const effectiveAgentColor = isDark
+        ? (currentSettings.agentThemeColorDark || currentSettings.agentThemeColor || undefined)
+        : (currentSettings.agentThemeColorLight || currentSettings.agentThemeColor || undefined)
+      const effectiveCreationColor = isDark
+        ? (currentSettings.creationThemeColorDark || currentSettings.creationThemeColor || undefined)
+        : (currentSettings.creationThemeColorLight || currentSettings.creationThemeColor || undefined)
+      syncThemeToDshView(isDark, effectiveAgentColor, effectiveCreationColor)
     }
     BrowserWindow.getAllWindows().forEach((win) => {
       win.webContents.send(SETTINGS_IPC_CHANNELS.ON_SYSTEM_THEME_CHANGED, isDark)

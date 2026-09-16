@@ -71,6 +71,17 @@ export function AppShell({ contextValue }: AppShellProps): React.ReactElement {
   const showRightPanel = appMode === 'agent' && !!currentSessionId && !workingHistorySelection && !automationForm.open && activeView !== 'planning' && activeView !== 'automations' && activeView !== 'agent-skills' && activeView !== 'memory' && activeView !== 'expert-team' && activeView !== 'fund-stock'
   const isWindows = React.useMemo(() => detectIsWindows(), [])
   const activeWebTabId = useAtomValue(activeWebTabIdAtom)
+  const setActiveWebTabId = useSetAtom(activeWebTabIdAtom)
+  const isWebTabVisible = appMode === 'agent' && !!activeWebTabId
+
+  React.useEffect(() => {
+    if (appMode !== 'creation' || !activeWebTabId) return
+
+    // 兼容启动恢复等绕过模式切换 Hook 的路径，创造模式不允许网页原生视图遮挡主工作台。
+    setActiveWebTabId(null)
+    void window.electronAPI.webTabs.activate(null)
+      .catch((error) => console.error('[创造模式] 退出活动网页页签失败:', error))
+  }, [appMode, activeWebTabId, setActiveWebTabId])
 
   React.useEffect(() => {
     if (!paymentOpen || workingVipStatus) return
@@ -212,9 +223,9 @@ export function AppShell({ contextValue }: AppShellProps): React.ReactElement {
           <div
             className={cn(
               'absolute inset-0 flex h-full w-full',
-              (workingSettingsOpen || activeWebTabId) && 'invisible pointer-events-none',
+              (workingSettingsOpen || isWebTabVisible) && 'invisible pointer-events-none',
             )}
-            aria-hidden={workingSettingsOpen || !!activeWebTabId}
+            aria-hidden={workingSettingsOpen || isWebTabVisible}
           >
             {/* 左侧边栏：创造模式完全由 dsh web 原生侧边栏承载全部功能，避免外层嵌套与割裂；Agent 模式下正常渲染 Copis 侧边栏 */}
             {appMode !== 'creation' && (
@@ -271,14 +282,14 @@ export function AppShell({ contextValue }: AppShellProps): React.ReactElement {
               </div>
             )}
           </div>
-          {activeWebTabId && <WebBrowserSurface />}
+          {isWebTabVisible && <WebBrowserSurface />}
           {workingSettingsOpen && (
             <div
               className={cn(
                 'absolute inset-0 z-[60]',
-                activeWebTabId && 'invisible pointer-events-none',
+                isWebTabVisible && 'invisible pointer-events-none',
               )}
-              aria-hidden={!!activeWebTabId}
+              aria-hidden={isWebTabVisible}
             >
               <CopisWorkingSettingsPanel onClose={() => setWorkingSettingsOpen(false)} />
             </div>
