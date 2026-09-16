@@ -15,7 +15,8 @@ describe('Windows 可视化升级安装器', () => {
   test('Given 自动更新写入完成 When 安装器结束 Then 从正式安装目录启动新版而非 old-install 临时目录', () => {
     expect(installerInclude).toContain('!macro customInstall')
     expect(installerInclude).toContain('${andIf} ${isForceRun}')
-    expect(installerInclude).toContain('!insertmacro StartApp')
+    expect(installerInclude).toContain('${StdUtils.ExecShellAsUser} $0 "$launchLink" "open" "--updated"')
+    expect(installerInclude).not.toContain('!insertmacro StartApp')
     expect(installerInclude).toContain('Quit')
     expect(installerInclude).not.toContain('old-install')
   })

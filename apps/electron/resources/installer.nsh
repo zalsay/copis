@@ -16,7 +16,7 @@
   ${andIf} ${isForceRun}
     ; 所有文件已写入目标目录后才启动新版，避免从 NSIS 临时目录重启。
     HideWindow
-    !insertmacro StartApp
+    ${StdUtils.ExecShellAsUser} $0 "$launchLink" "open" "--updated"
     Quit
   ${endif}
 !macroend
