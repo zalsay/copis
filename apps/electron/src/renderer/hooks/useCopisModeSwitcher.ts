@@ -13,7 +13,6 @@ import {
 } from '@/atoms/app-mode'
 import { activeViewAtom } from '@/atoms/active-view'
 import { activeWebTabIdAtom } from '@/atoms/web-tabs'
-import { CREATION_MODE_SWITCH_DISABLED } from '@/lib/creation-mode-switch'
 import { useCreateSession } from './useCreateSession'
 import { useOpenSession } from './useOpenSession'
 
@@ -40,12 +39,6 @@ export function useCopisModeSwitcher(): CopisModeSwitcherState {
   const [confirmDialogOpen, setConfirmDialogOpen] = useState(false)
 
   const executeSwitchToCreation = useCallback(() => {
-    if (CREATION_MODE_SWITCH_DISABLED) {
-      console.warn('[模式切换] 当前构建已禁用创造模式')
-      setConfirmDialogOpen(false)
-      return
-    }
-
     // 网页 WebContentsView 位于 React DOM 之上。先回到 Copis 首页，避免活动网页遮挡创造模式原生视图。
     setActiveWebTabId(null)
     void window.electronAPI.webTabs.activate(null)
@@ -94,10 +87,6 @@ export function useCopisModeSwitcher(): CopisModeSwitcherState {
     if (nextMode === currentMode) return
 
     if (nextMode === 'creation') {
-      if (CREATION_MODE_SWITCH_DISABLED) {
-        console.warn('[模式切换] 当前构建已禁用创造模式')
-        return
-      }
       if (skipConfirm) {
         executeSwitchToCreation()
       } else {

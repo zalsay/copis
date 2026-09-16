@@ -4,7 +4,6 @@ import { CopisLogoIcon } from '@/components/ui/copis-logo-icon'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { CopisCreationConfirmDialog } from '@/components/creation/CopisCreationConfirmDialog'
 import { useCopisModeSwitcher } from '@/hooks/useCopisModeSwitcher'
-import { CREATION_MODE_SWITCH_DISABLED } from '@/lib/creation-mode-switch'
 import { cn } from '@/lib/utils'
 
 export interface CopisModeSwitcherProps {
@@ -26,12 +25,9 @@ export function CopisModeSwitcher({
 
   if (isCollapsed) {
     const isCreation = currentMode === 'creation'
-    const creationSwitchDisabled = CREATION_MODE_SWITCH_DISABLED && !isCreation
     const tooltipText = isCreation
       ? '当前：创造模式（点击切换为 Agent 模式）'
-      : creationSwitchDisabled
-        ? '创造模式当前已禁用'
-        : '当前：Agent 模式（点击切换为创造模式）'
+      : '当前：Agent 模式（点击切换为创造模式）'
 
     return (
       <>
@@ -44,11 +40,9 @@ export function CopisModeSwitcher({
                 isCreation
                   ? 'bg-[var(--creation-ui-primary-background)] text-[var(--creation-ui-primary)] hover:opacity-90'
                   : 'text-[var(--ui-primary)] hover:bg-muted/40',
-                creationSwitchDisabled && 'cursor-not-allowed opacity-50 hover:bg-transparent',
                 className,
               )}
               aria-label={tooltipText}
-              disabled={creationSwitchDisabled}
               onClick={() => handleSwitchMode(isCreation ? 'agent' : 'creation')}
             >
               {isCreation ? (
@@ -111,9 +105,7 @@ export function CopisModeSwitcher({
             currentMode === 'creation'
               ? 'bg-card text-[var(--creation-ui-primary)] shadow-sm font-semibold border border-border/40'
               : 'text-muted-foreground hover:text-foreground hover:bg-muted/40',
-            CREATION_MODE_SWITCH_DISABLED && 'cursor-not-allowed opacity-50 hover:bg-transparent hover:text-muted-foreground',
           )}
-          disabled={CREATION_MODE_SWITCH_DISABLED}
           onClick={() => handleSwitchMode('creation')}
         >
           <Lightbulb className="w-3.5 h-3.5 text-[var(--creation-ui-primary)] shrink-0" aria-hidden="true" />

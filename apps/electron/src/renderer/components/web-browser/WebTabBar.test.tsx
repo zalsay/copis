@@ -109,14 +109,13 @@ describe('WebTabBar Windows 标题栏', () => {
     expect(html).toContain('Copis 首页')
   })
 
-  test('Given 发布版 Copis 首页页签 When 右键打开模式菜单 Then Agent 模式可切换且创造模式入口被禁用', () => {
+  test('Given 发布版 Copis 首页页签 When 右键打开模式菜单 Then Agent 与创造模式均可切换', () => {
     expect(webTabBarSource).toContain('<ContextMenu>')
     expect(webTabBarSource).toContain('<ContextMenuTrigger asChild>')
     expect(webTabBarSource).toContain('<ContextMenuRadioGroup value={currentMode}')
     expect(webTabBarSource).toContain('<ContextMenuRadioItem value="agent">')
-    expect(webTabBarSource).toContain("import { CREATION_MODE_SWITCH_DISABLED } from '@/lib/creation-mode-switch'")
-    expect(webTabBarSource).toContain('<ContextMenuRadioItem value="creation" disabled={CREATION_MODE_SWITCH_DISABLED}>')
-    expect(webTabBarSource).toContain("if (value === 'creation' && CREATION_MODE_SWITCH_DISABLED) return")
+    expect(webTabBarSource).toContain('<ContextMenuRadioItem value="creation">')
+    expect(webTabBarSource).not.toContain('CREATION_MODE_SWITCH_DISABLED')
     expect(webTabBarSource).toContain('Agent 模式')
     expect(webTabBarSource).toContain('创造模式')
   })

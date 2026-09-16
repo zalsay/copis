@@ -33,7 +33,6 @@ import {
 } from '@/components/ui/context-menu'
 import { CopisCreationConfirmDialog } from '@/components/creation/CopisCreationConfirmDialog'
 import { useCopisModeSwitcher } from '@/hooks/useCopisModeSwitcher'
-import { CREATION_MODE_SWITCH_DISABLED } from '@/lib/creation-mode-switch'
 import type { AppMode } from '@/atoms/app-mode'
 
 function applySnapshot(
@@ -374,7 +373,6 @@ function WebHomeTab({
   onSwitchMode: (nextMode: AppMode) => void
 }): React.ReactElement {
   const handleModeChange = (value: string): void => {
-    if (value === 'creation' && CREATION_MODE_SWITCH_DISABLED) return
     if (value === 'agent' || value === 'creation') onSwitchMode(value)
   }
 
@@ -410,7 +408,7 @@ function WebHomeTab({
             <CopisLogoIcon className="mr-1 size-3.5 text-[var(--ui-primary)]" />
             <span>Agent 模式</span>
           </ContextMenuRadioItem>
-          <ContextMenuRadioItem value="creation" disabled={CREATION_MODE_SWITCH_DISABLED}>
+          <ContextMenuRadioItem value="creation">
             <Lightbulb className="mr-1 size-3.5 text-[var(--creation-ui-primary)]" />
             <span>创造模式</span>
           </ContextMenuRadioItem>
