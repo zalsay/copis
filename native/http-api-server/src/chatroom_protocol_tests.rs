@@ -42,18 +42,81 @@ fn given_depth_three_when_validating_then_reject_without_invocation() {
 #[test]
 fn given_upload_sts_with_extra_fields_when_filtering_then_keep_only_sdk_fields_and_action() {
     let value = json!({
-        "bucket":"b", "region":"r", "objectKey":"k", "tmpSecretId":"id",
-        "tmpSecretKey":"key", "sessionToken":"token", "startTime":1,
-        "expiredTime":2, "action":"upload", "authorization":"jwt", "raw":"secret"
+        "data": {
+            "bucket":"b", "region":"r", "objectKey":"k", "attachmentId":"att-1",
+            "credentials": {
+                "tmpSecretId":"id", "tmpSecretKey":"key", "sessionToken":"token",
+                "startTime":1, "expiredTime":2
+            },
+            "expiresAt":"later", "action":"upload", "authorization":"jwt", "raw":"secret"
+        }
     });
     let grant = filter_cos_sts(&value, CosAction::Upload).unwrap();
+    assert_eq!(grant.attachment_id, "att-1");
     assert_eq!(grant.object_key, "k");
+    assert_eq!(
+        serde_json::to_value(&grant).unwrap(),
+        json!({
+            "attachmentId":"att-1", "bucket":"b", "region":"r", "objectKey":"k",
+            "tmpSecretId":"id", "tmpSecretKey":"key", "sessionToken":"token",
+            "startTime":1, "expiredTime":2, "action":"upload"
+        })
+    );
     let public = public_event(&ChatroomEvent::LocalStatus {
         room_id: None,
         code: "ok".into(),
         message: "ok".into(),
     });
     assert!(!public.to_string().contains("tmpSecret"));
+}
+
+#[test]
+fn given_download_sts_with_phase_one_shape_when_filtering_then_emit_download_grant() {
+    let value = json!({
+        "data": {
+            "bucket":"b", "region":"r", "objectKey":"k", "attachmentId":"att-1",
+            "credentials": {
+                "tmpSecretId":"id", "tmpSecretKey":"key", "sessionToken":"token",
+                "startTime":10, "expiredTime":20
+            },
+            "expiresAt":"later"
+        }
+    });
+    let grant = filter_cos_sts(&value, CosAction::Download).unwrap();
+    assert_eq!(grant.action, CosAction::Download);
+    assert_eq!(
+        serde_json::to_value(CosAction::Download).unwrap(),
+        json!("download")
+    );
+    assert_eq!(serde_json::to_value(grant).unwrap()["action"], "download");
+}
+
+#[test]
+fn given_cos_grant_without_or_with_invalid_attachment_id_when_filtering_then_reject_stably() {
+    let base = json!({
+        "data": {
+            "bucket":"b", "region":"r", "objectKey":"k",
+            "credentials": {
+                "tmpSecretId":"id", "tmpSecretKey":"key", "sessionToken":"token",
+                "startTime":1, "expiredTime":2
+            }
+        }
+    });
+    let long_id = "x".repeat(65);
+    for attachment_id in [
+        None,
+        Some(String::new()),
+        Some("att/1".to_string()),
+        Some(" att-1".to_string()),
+        Some(long_id),
+    ] {
+        let mut value = base.clone();
+        if let Some(attachment_id) = attachment_id {
+            value["data"]["attachmentId"] = json!(attachment_id);
+        }
+        let error = filter_cos_sts(&value, CosAction::Upload).unwrap_err();
+        assert_eq!(error.code, "cos_sts_invalid");
+    }
 }
 
 #[test]
@@ -238,12 +301,13 @@ fn given_public_event_with_nested_secrets_when_sanitizing_then_remove_internal_f
     let event = ChatroomEvent::MessageCreated {
         room_id: "room-1".into(),
         seq: 1,
-        payload: json!({"message":"ok", "nested":{"accessToken":"secret", "localPath":"/tmp/x"}, "items":[{"sessionToken":"secret"}]}),
+        payload: json!({"message":"ok", "attachmentId":"att-1", "nested":{"accessToken":"secret", "localPath":"/tmp/x"}, "items":[{"sessionToken":"secret"}]}),
     };
     let public = public_event(&event);
     assert_eq!(public["roomId"], "room-1");
     assert_eq!(public["seq"], 1);
     assert_eq!(public["payload"]["message"], "ok");
+    assert!(public["payload"].get("attachmentId").is_none());
     assert!(!public.to_string().contains("secret"));
 }
 
@@ -251,8 +315,8 @@ fn given_public_event_with_nested_secrets_when_sanitizing_then_remove_internal_f
 fn given_invalid_cos_grant_when_filtering_then_return_stable_error() {
     for value in [
         json!({"bucket":"b"}),
-        json!({"bucket":"b","region":"r","objectKey":"k","tmpSecretId":"id","tmpSecretKey":"key","sessionToken":"token","startTime":2,"expiredTime":1,"action":"upload"}),
-        json!({"bucket":"b","region":"r","objectKey":"k","tmpSecretId":"id","tmpSecretKey":"key","sessionToken":"token","startTime":1,"expiredTime":2,"action":"download"}),
+        json!({"data":{"bucket":"b","region":"r","objectKey":"k","attachmentId":"att-1","credentials":{"tmpSecretId":"id","tmpSecretKey":"key","sessionToken":"token","startTime":2,"expiredTime":1},"action":"upload"}}),
+        json!({"data":{"bucket":"b","region":"r","objectKey":"k","attachmentId":"att-1","credentials":{"tmpSecretId":"id","tmpSecretKey":"key","sessionToken":"token","startTime":1,"expiredTime":2},"action":"download"}}),
     ] {
         let error = filter_cos_sts(&value, CosAction::Upload).unwrap_err();
         assert_eq!(error.code, "cos_sts_invalid");

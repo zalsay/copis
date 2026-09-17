@@ -1,5 +1,6 @@
 use serde::de::Error as _;
 use serde::de::{self, DeserializeSeed, MapAccess, SeqAccess, Visitor};
+use serde::ser::SerializeStruct;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::{Map, Value};
 use std::collections::HashSet;
@@ -488,6 +489,7 @@ impl ChatroomEvent {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CosStsGrant {
+    pub attachment_id: String,
     pub bucket: String,
     pub region: String,
     pub object_key: String,
@@ -499,10 +501,31 @@ pub struct CosStsGrant {
     pub action: CosAction,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
 pub enum CosAction {
     Upload,
     Download,
+}
+
+impl Serialize for CosStsGrant {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut grant = serializer.serialize_struct("CosStsGrant", 10)?;
+        grant.serialize_field("attachmentId", &self.attachment_id)?;
+        grant.serialize_field("bucket", &self.bucket)?;
+        grant.serialize_field("region", &self.region)?;
+        grant.serialize_field("objectKey", &self.object_key)?;
+        grant.serialize_field("tmpSecretId", &self.tmp_secret_id)?;
+        grant.serialize_field("tmpSecretKey", &self.tmp_secret_key)?;
+        grant.serialize_field("sessionToken", &self.session_token)?;
+        grant.serialize_field("startTime", &self.start_time)?;
+        grant.serialize_field("expiredTime", &self.expired_time)?;
+        grant.serialize_field("action", &self.action)?;
+        grant.end()
+    }
 }
 
 fn invalid(message: impl Into<String>) -> ProtocolError {
@@ -860,6 +883,9 @@ pub fn filter_cos_sts(
         CosAction::Download => "download",
     };
     let grant = CosStsGrant {
+        attachment_id: get_string("attachmentId")
+            .filter(|value| valid_id(value, MAX_ID_BYTES))
+            .ok_or_else(|| ProtocolError::new("cos_sts_invalid", "invalid COS STS grant"))?,
         bucket: get_string("bucket")
             .ok_or_else(|| ProtocolError::new("cos_sts_invalid", "invalid COS STS grant"))?,
         region: get_string("region")
@@ -970,6 +996,7 @@ fn forbidden(key: &str) -> bool {
         "accesstoken",
         "refreshtoken",
         "sessiontoken",
+        "attachmentid",
         "objectkey",
         "cosobject",
         "storageobject",
