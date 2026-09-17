@@ -7,7 +7,7 @@ use super::edu_api_client::{
 };
 use serde_json::{json, Value};
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Barrier, Mutex};
 use std::thread;
 
@@ -150,6 +150,28 @@ fn login_persists_credentials_but_auth_state_exposes_no_token() {
         storage.value.lock().unwrap().as_ref().unwrap().access_token,
         "header.eyJleHAiOjQwMDAwMDAwMDB9.sig"
     );
+}
+
+#[test]
+fn auth_state_observer_runs_after_login_publishes_in_memory_auth() {
+    let transport = Arc::new(QueueTransport::new(vec![response(
+        200,
+        json!({"token":"access-token","user_id":7}),
+    )]));
+    let storage = Arc::new(MemoryStorage::default());
+    let auth = Arc::new(session(transport, storage));
+    let observed = Arc::new(AtomicBool::new(false));
+    let observed_clone = Arc::clone(&observed);
+    let auth_weak = Arc::downgrade(&auth);
+    auth.set_auth_state_observer(Arc::new(move |authenticated| {
+        assert!(authenticated);
+        assert!(auth_weak.upgrade().unwrap().auth_state().authenticated);
+        observed_clone.store(true, Ordering::Release);
+    }));
+
+    auth.login(login_input()).unwrap();
+
+    assert!(observed.load(Ordering::Acquire));
 }
 
 #[test]

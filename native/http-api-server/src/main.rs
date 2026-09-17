@@ -217,7 +217,7 @@ fn parse_auth_working_response(response: EduApiResponse) -> Result<Value, SkillM
 
 struct BridgeAuthStorage {
     bridge: Arc<Bridge>,
-    chatroom_gateway: Mutex<Option<Weak<ChatroomGateway>>>,
+    chatroom_gateway: Arc<Mutex<Option<Weak<ChatroomGateway>>>>,
 }
 
 impl AuthStorage for BridgeAuthStorage {
@@ -315,14 +315,12 @@ impl AuthStorage for BridgeAuthStorage {
             );
             return Err(AuthError::Storage("认证存储保存失败".to_string()));
         }
-        self.notify_chatroom_gateway(true);
         eprintln!("[HTTP API][认证存储] save 成功");
         self.notify_state_changed(true, auth.user.as_ref(), auth.expires_at);
         Ok(())
     }
 
     fn clear(&self) -> Result<(), AuthError> {
-        self.notify_chatroom_gateway(false);
         eprintln!("[HTTP API][认证存储] clear 开始");
         let response = match self.bridge.send_request(&HttpRequest {
             method: "POST".to_string(),
@@ -686,7 +684,10 @@ fn parse_chatroom_device_file(path: &Path) -> Result<String, String> {
 }
 
 fn resolve_chatroom_device_id() -> Result<String, String> {
-    let path = resolve_config_directory().join("client-device.json");
+    resolve_chatroom_device_id_at(&resolve_config_directory().join("client-device.json"))
+}
+
+fn resolve_chatroom_device_id_at(path: &Path) -> Result<String, String> {
     match fs::metadata(&path) {
         Ok(_) => return parse_chatroom_device_file(&path),
         Err(error) if error.kind() == io::ErrorKind::NotFound => {}
@@ -704,8 +705,9 @@ fn resolve_chatroom_device_id() -> Result<String, String> {
     };
     let encoded =
         serde_json::to_vec_pretty(&config).map_err(|_| "聊天室设备文件序列化失败".to_string())?;
-    fs::create_dir_all(resolve_config_directory())
-        .map_err(|error| format!("创建 Copis 配置目录失败: {error}"))?;
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|error| format!("创建 Copis 配置目录失败: {error}"))?;
+    }
     let temporary = path.with_file_name(format!(
         "client-device.json.{}.{}.tmp",
         process::id(),
@@ -1386,9 +1388,11 @@ fn send_memory_not_found(stream: &mut TcpStream, origin: Option<&str>) {
     );
 }
 
-fn read_bridge_responses(bridge: Arc<Bridge>) {
-    let stdin = io::stdin();
-    let reader = BufReader::new(stdin.lock());
+fn read_bridge_responses_from<R: BufRead>(
+    reader: R,
+    bridge: &Bridge,
+    chatroom_gateway: &Arc<Mutex<Option<Weak<ChatroomGateway>>>>,
+) {
     for line_result in reader.lines() {
         let Ok(line) = line_result else {
             break;
@@ -1401,7 +1405,31 @@ fn read_bridge_responses(bridge: Arc<Bridge>) {
             eprintln!("[HTTP API] 收到无法解析的 Electron 响应");
         }
     }
+    cleanup_after_bridge_disconnect(bridge, chatroom_gateway);
+}
+
+fn cleanup_after_bridge_disconnect(
+    bridge: &Bridge,
+    chatroom_gateway: &Arc<Mutex<Option<Weak<ChatroomGateway>>>>,
+) {
     bridge.fail_all("Electron HTTP API 业务桥已关闭");
+    let gateway = chatroom_gateway
+        .lock()
+        .unwrap()
+        .as_ref()
+        .and_then(Weak::upgrade);
+    if let Some(gateway) = gateway {
+        gateway.shutdown();
+    }
+}
+
+fn read_bridge_responses(
+    bridge: Arc<Bridge>,
+    chatroom_gateway: Arc<Mutex<Option<Weak<ChatroomGateway>>>>,
+) {
+    let stdin = io::stdin();
+    let reader = BufReader::new(stdin.lock());
+    read_bridge_responses_from(reader, &bridge, &chatroom_gateway);
     process::exit(0);
 }
 
@@ -4064,9 +4092,11 @@ impl Drop for ConnectionCountGuard {
 fn main() {
     let port = configured_port();
     let bridge = Arc::new(Bridge::new());
+    let chatroom_gateway_slot = Arc::new(Mutex::new(None));
     if bridge.available.load(Ordering::Acquire) {
         let response_bridge = Arc::clone(&bridge);
-        thread::spawn(move || read_bridge_responses(response_bridge));
+        let response_gateway_slot = Arc::clone(&chatroom_gateway_slot);
+        thread::spawn(move || read_bridge_responses(response_bridge, response_gateway_slot));
     }
     let edu_client = match EduApiClient::from_environment(DEFAULT_MAX_CONCURRENT_REQUESTS) {
         Ok(client) => Arc::new(client),
@@ -4077,7 +4107,7 @@ fn main() {
     };
     let bridge_auth_storage = Arc::new(BridgeAuthStorage {
         bridge: Arc::clone(&bridge),
-        chatroom_gateway: Mutex::new(None),
+        chatroom_gateway: Arc::clone(&chatroom_gateway_slot),
     });
     let auth_storage: Arc<dyn AuthStorage> = bridge_auth_storage.clone();
     let auth_client = match EduApiClient::from_auth_environment(DEFAULT_MAX_CONCURRENT_REQUESTS) {
@@ -4189,6 +4219,10 @@ fn main() {
         }
     };
     bridge_auth_storage.set_chatroom_gateway(&chatroom_gateway);
+    let auth_observer_storage = Arc::clone(&bridge_auth_storage);
+    auth_session.set_auth_state_observer(Arc::new(move |authenticated| {
+        auth_observer_storage.notify_chatroom_gateway(authenticated);
+    }));
     let listener = match bind_and_start_chatroom_gateway(port, &chatroom_gateway) {
         Ok(listener) => listener,
         Err(error) => {

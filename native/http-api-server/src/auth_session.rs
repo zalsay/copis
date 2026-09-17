@@ -222,6 +222,7 @@ pub struct AuthSession {
     refresh_state: Mutex<RefreshState>,
     refresh_wakeup: Condvar,
     request_sequence: AtomicU64,
+    auth_state_observer: Mutex<Option<Arc<dyn Fn(bool) + Send + Sync>>>,
 }
 
 impl AuthSession {
@@ -255,7 +256,19 @@ impl AuthSession {
             }),
             refresh_wakeup: Condvar::new(),
             request_sequence: AtomicU64::new(1),
+            auth_state_observer: Mutex::new(None),
         })
+    }
+
+    pub fn set_auth_state_observer(&self, observer: Arc<dyn Fn(bool) + Send + Sync>) {
+        *self.auth_state_observer.lock().unwrap() = Some(observer);
+    }
+
+    fn notify_auth_state_changed(&self, authenticated: bool) {
+        let observer = self.auth_state_observer.lock().unwrap().clone();
+        if let Some(observer) = observer {
+            observer(authenticated);
+        }
     }
 
     pub fn auth_state(&self) -> WorkingAuthState {
@@ -415,6 +428,7 @@ impl AuthSession {
         }
         eprintln!("[HTTP API][OIDC] 首次保存认证记录成功");
         *self.auth.lock().unwrap() = Some(persisted.clone());
+        self.notify_auth_state_changed(true);
         if let Ok(current_user) = self.authenticated_request("GET", "/api/users/me", None) {
             if let Ok(payload) = parse_json_response(&current_user, "当前用户响应") {
                 persisted.user = Some(sanitize_user(&unwrap_data(&payload)));
@@ -424,6 +438,7 @@ impl AuthSession {
                 }
                 eprintln!("[HTTP API][OIDC] 保存用户信息成功");
                 *self.auth.lock().unwrap() = Some(persisted);
+                self.notify_auth_state_changed(true);
             }
         }
         Ok(self.auth_state())
@@ -457,6 +472,7 @@ impl AuthSession {
         };
         self.storage.save(&persisted)?;
         *self.auth.lock().unwrap() = Some(persisted.clone());
+        self.notify_auth_state_changed(true);
 
         if persisted.user.is_none() {
             match self.authenticated_request("GET", "/api/users/me", None) {
@@ -465,6 +481,7 @@ impl AuthSession {
                         persisted.user = Some(sanitize_user(&unwrap_data(&payload)));
                         self.storage.save(&persisted)?;
                         *self.auth.lock().unwrap() = Some(persisted);
+                        self.notify_auth_state_changed(true);
                     }
                 }
                 Err(error @ AuthError::Upstream { status: 401, .. }) => {
@@ -752,11 +769,14 @@ impl AuthSession {
         };
         self.storage.save(&next)?;
         *auth = Some(next);
+        drop(auth);
+        self.notify_auth_state_changed(true);
         Ok(access_token)
     }
 
     fn clear_after_auth_failure(&self) {
         *self.auth.lock().unwrap() = None;
+        self.notify_auth_state_changed(false);
         let _ = self.storage.clear();
     }
 }
