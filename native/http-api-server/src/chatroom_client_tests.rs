@@ -989,6 +989,121 @@ fn given_connected_pending_send_fails_on_eight_sockets_then_stop_before_ninth_an
 }
 
 #[test]
+fn given_unavailable_status_is_observed_then_ordinary_command_claims_the_next_retry_budget() {
+    let mut results = Vec::new();
+    for _ in 0..8 {
+        results.push(ConnectResult::Error(ChatroomClientError::new(
+            "transport",
+            "测试连接失败",
+        )));
+    }
+    let ninth = FakeSocket::new(Vec::new());
+    results.push(ConnectResult::Socket(ninth.clone()));
+    let connector = FakeConnector::new(results);
+    let backoff = FakeBackoff::new();
+    let (events, receiver) = mpsc::channel();
+    let client = Arc::new(ChatroomClient::new_with_backoff(
+        auth(
+            Arc::new(RefreshTransport {
+                calls: AtomicUsize::new(0),
+            }),
+            Arc::new(MemoryStorage::default()),
+        ),
+        "wss://edu.example/ws".into(),
+        connector.clone(),
+        events,
+        backoff,
+    ));
+    let (status_observed, release_status) = client.gate_next_unavailable_status();
+    client.start();
+    client.command(subscribe()).unwrap();
+
+    status_observed
+        .recv_timeout(Duration::from_secs(1))
+        .expect("未观察到 realtime_unavailable 发布窗口");
+    client.command(renew_lease()).unwrap();
+    release_status.send(()).unwrap();
+
+    receive_until(&receiver, |event| {
+        matches!(event, ChatroomClientEvent::Connected)
+    });
+    assert_eq!(connector.attempts.load(Ordering::SeqCst), 9);
+    assert!(matches!(
+        ninth.sent.lock().unwrap().as_slice(),
+        [
+            ChatroomCommand::Subscribe { .. },
+            ChatroomCommand::RenewLease { .. }
+        ]
+    ));
+    client.shutdown();
+}
+
+#[test]
+fn given_pending_send_exhausts_budget_then_observed_unavailable_status_wakes_once() {
+    let client_slot: Arc<Mutex<Option<Arc<ChatroomClient>>>> = Arc::new(Mutex::new(None));
+    let mut results = Vec::new();
+    for index in 0..8 {
+        let socket = FakeSocket::with_connected_ordinary_failures(Vec::new(), index == 0);
+        let command_client_slot = client_slot.clone();
+        let callback: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
+            let client = command_client_slot
+                .lock()
+                .unwrap()
+                .as_ref()
+                .expect("测试客户端尚未就绪")
+                .clone();
+            client.command(renew_lease()).unwrap();
+        });
+        FakeSocket::on_subscribe(&socket, callback);
+        results.push(ConnectResult::Socket(socket));
+    }
+    let ninth = FakeSocket::new(Vec::new());
+    results.push(ConnectResult::Socket(ninth.clone()));
+    let connector = FakeConnector::new(results);
+    let backoff = FakeBackoff::new();
+    let (events, receiver) = mpsc::channel();
+    let client = Arc::new(ChatroomClient::new_with_backoff(
+        auth(
+            Arc::new(RefreshTransport {
+                calls: AtomicUsize::new(0),
+            }),
+            Arc::new(MemoryStorage::default()),
+        ),
+        "wss://edu.example/ws".into(),
+        connector.clone(),
+        events,
+        backoff,
+    ));
+    *client_slot.lock().unwrap() = Some(client.clone());
+    let (status_observed, release_status) = client.gate_next_unavailable_status();
+    client.start();
+    client.command(subscribe()).unwrap();
+    for _ in 0..8 {
+        receive_until(&receiver, |event| {
+            matches!(event, ChatroomClientEvent::Connected)
+        });
+    }
+
+    status_observed
+        .recv_timeout(Duration::from_secs(1))
+        .expect("未观察到 pending 写失败后的 realtime_unavailable 发布窗口");
+    client.command(renew_lease()).unwrap();
+    release_status.send(()).unwrap();
+
+    receive_until(&receiver, |event| {
+        matches!(event, ChatroomClientEvent::Connected)
+    });
+    assert_eq!(connector.attempts.load(Ordering::SeqCst), 9);
+    let sent = ninth.sent.lock().unwrap();
+    assert_eq!(sent.len(), 3);
+    assert!(matches!(&sent[0], ChatroomCommand::Subscribe { .. }));
+    assert!(matches!(&sent[1], ChatroomCommand::RenewLease { .. }));
+    assert!(matches!(&sent[2], ChatroomCommand::RenewLease { .. }));
+    drop(sent);
+    client.shutdown();
+}
+
+#[test]
 fn given_invalid_socket_frames_then_return_stable_protocol_errors_without_payload_leak() {
     let invalid_utf8 = decode_message(Message::Binary(vec![0xff].into())).unwrap_err();
     assert_eq!(invalid_utf8.code, "protocol_invalid");

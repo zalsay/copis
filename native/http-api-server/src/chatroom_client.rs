@@ -60,6 +60,12 @@ struct CommandEnqueueGate {
     release: mpsc::Receiver<()>,
 }
 
+#[cfg(test)]
+struct UnavailableStatusGate {
+    observed: mpsc::Sender<()>,
+    release: mpsc::Receiver<()>,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ChatroomClientError {
     pub code: String,
@@ -120,6 +126,8 @@ pub struct ChatroomClient {
     wake_on_ordinary: Arc<AtomicBool>,
     #[cfg(test)]
     command_gate: Mutex<Option<CommandEnqueueGate>>,
+    #[cfg(test)]
+    unavailable_status_gate: Arc<Mutex<Option<UnavailableStatusGate>>>,
     worker: Mutex<Option<JoinHandle<()>>>,
     backoff: Arc<dyn BackoffWaiter>,
 }
@@ -157,6 +165,8 @@ impl ChatroomClient {
             wake_on_ordinary: Arc::new(AtomicBool::new(true)),
             #[cfg(test)]
             command_gate: Mutex::new(None),
+            #[cfg(test)]
+            unavailable_status_gate: Arc::new(Mutex::new(None)),
             worker: Mutex::new(None),
             backoff,
         }
@@ -173,6 +183,17 @@ impl ChatroomClient {
         (loaded_receiver, release)
     }
 
+    #[cfg(test)]
+    pub(crate) fn gate_next_unavailable_status(&self) -> (mpsc::Receiver<()>, mpsc::Sender<()>) {
+        let (observed, observed_receiver) = mpsc::channel();
+        let (release, release_receiver) = mpsc::channel();
+        *self.unavailable_status_gate.lock().unwrap() = Some(UnavailableStatusGate {
+            observed,
+            release: release_receiver,
+        });
+        (observed_receiver, release)
+    }
+
     pub fn start(&self) {
         let mut worker = self.worker.lock().unwrap();
         if worker.is_some() || self.stop.load(Ordering::Acquire) {
@@ -187,6 +208,8 @@ impl ChatroomClient {
         let stop = self.stop.clone();
         let wake_on_ordinary = self.wake_on_ordinary.clone();
         let backoff = self.backoff.clone();
+        #[cfg(test)]
+        let unavailable_status_gate = self.unavailable_status_gate.clone();
         *worker = Some(thread::spawn(move || {
             if let Some(events) = events {
                 run_worker(
@@ -198,6 +221,8 @@ impl ChatroomClient {
                     stop,
                     wake_on_ordinary,
                     backoff,
+                    #[cfg(test)]
+                    unavailable_status_gate,
                 );
             }
         }));
@@ -267,6 +292,7 @@ fn run_worker(
     stop: Arc<AtomicBool>,
     wake_on_ordinary: Arc<AtomicBool>,
     backoff: Arc<dyn BackoffWaiter>,
+    #[cfg(test)] unavailable_status_gate: Arc<Mutex<Option<UnavailableStatusGate>>>,
 ) {
     let mut subscription: Option<(Vec<RoomCursor>, String)> = None;
     let mut pending = VecDeque::new();
@@ -336,18 +362,32 @@ fn run_worker(
                         refresh.failed = true;
                         emit_status(&events, "auth_refresh_failed", "聊天室认证刷新暂时失败");
                         emit_disconnected(&events);
-                        if !retry_after_failure(&events, &backoff, &stop, &mut retries) {
-                            mark_unavailable(&mut unavailable, &wake_on_ordinary);
-                        }
+                        retry_after_failure(
+                            &events,
+                            &backoff,
+                            &stop,
+                            &mut retries,
+                            &mut unavailable,
+                            &wake_on_ordinary,
+                            #[cfg(test)]
+                            &unavailable_status_gate,
+                        );
                         continue;
                     }
                 }
             }
             Err(_) => {
                 emit_disconnected(&events);
-                if !retry_after_failure(&events, &backoff, &stop, &mut retries) {
-                    mark_unavailable(&mut unavailable, &wake_on_ordinary);
-                }
+                retry_after_failure(
+                    &events,
+                    &backoff,
+                    &stop,
+                    &mut retries,
+                    &mut unavailable,
+                    &wake_on_ordinary,
+                    #[cfg(test)]
+                    &unavailable_status_gate,
+                );
                 continue;
             }
         };
@@ -359,18 +399,32 @@ fn run_worker(
             if socket.send_json(&initial).is_err() {
                 socket.close();
                 emit_disconnected(&events);
-                if !retry_after_failure(&events, &backoff, &stop, &mut retries) {
-                    mark_unavailable(&mut unavailable, &wake_on_ordinary);
-                }
+                retry_after_failure(
+                    &events,
+                    &backoff,
+                    &stop,
+                    &mut retries,
+                    &mut unavailable,
+                    &wake_on_ordinary,
+                    #[cfg(test)]
+                    &unavailable_status_gate,
+                );
                 continue;
             }
         }
         if !flush_pending(&mut socket, &mut pending, &events) {
             socket.close();
             emit_disconnected(&events);
-            if !retry_after_failure(&events, &backoff, &stop, &mut retries) {
-                mark_unavailable(&mut unavailable, &wake_on_ordinary);
-            }
+            retry_after_failure(
+                &events,
+                &backoff,
+                &stop,
+                &mut retries,
+                &mut unavailable,
+                &wake_on_ordinary,
+                #[cfg(test)]
+                &unavailable_status_gate,
+            );
             continue;
         }
         let _ = events.send(ChatroomClientEvent::Connected);
@@ -421,10 +475,17 @@ fn run_worker(
             if reconnect {
                 socket.close();
                 emit_disconnected(&events);
-                if pending_send_failed
-                    && !retry_after_failure(&events, &backoff, &stop, &mut retries)
-                {
-                    mark_unavailable(&mut unavailable, &wake_on_ordinary);
+                if pending_send_failed {
+                    retry_after_failure(
+                        &events,
+                        &backoff,
+                        &stop,
+                        &mut retries,
+                        &mut unavailable,
+                        &wake_on_ordinary,
+                        #[cfg(test)]
+                        &unavailable_status_gate,
+                    );
                 }
                 break;
             }
@@ -445,9 +506,16 @@ fn run_worker(
                 Err(_) => {
                     socket.close();
                     emit_disconnected(&events);
-                    if !retry_after_failure(&events, &backoff, &stop, &mut retries) {
-                        mark_unavailable(&mut unavailable, &wake_on_ordinary);
-                    }
+                    retry_after_failure(
+                        &events,
+                        &backoff,
+                        &stop,
+                        &mut retries,
+                        &mut unavailable,
+                        &wake_on_ordinary,
+                        #[cfg(test)]
+                        &unavailable_status_gate,
+                    );
                     break;
                 }
             }
@@ -546,14 +614,31 @@ fn retry_after_failure(
     backoff: &Arc<dyn BackoffWaiter>,
     stop: &Arc<AtomicBool>,
     retries: &mut usize,
-) -> bool {
+    unavailable: &mut bool,
+    wake_on_ordinary: &AtomicBool,
+    #[cfg(test)] unavailable_status_gate: &Arc<Mutex<Option<UnavailableStatusGate>>>,
+) {
     if *retries >= MAX_CONNECT_RETRIES - 1 {
+        mark_unavailable(unavailable, wake_on_ordinary);
         emit_status(events, "realtime_unavailable", "聊天室实时连接暂不可用");
-        return false;
+        #[cfg(test)]
+        pause_after_unavailable_status(unavailable_status_gate);
+        return;
     }
     let seconds = [1, 2, 4, 8, 16, 30][(*retries).min(5)];
     *retries += 1;
-    backoff.wait(Duration::from_secs(seconds), stop)
+    let _ = backoff.wait(Duration::from_secs(seconds), stop);
+}
+
+#[cfg(test)]
+fn pause_after_unavailable_status(gate: &Arc<Mutex<Option<UnavailableStatusGate>>>) {
+    let gate = gate.lock().unwrap().take();
+    if let Some(gate) = gate {
+        let _ = gate.observed.send(());
+        gate.release
+            .recv_timeout(Duration::from_secs(1))
+            .expect("测试 realtime_unavailable 闸门未收到放行信号");
+    }
 }
 
 fn emit_disconnected(events: &mpsc::Sender<ChatroomClientEvent>) {
