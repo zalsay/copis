@@ -18,6 +18,7 @@ mod automation;
 mod automation_scheduler;
 mod chatroom_protocol;
 mod chatroom_client;
+mod chatroom_gateway;
 mod edu_api_client;
 mod expert_teams;
 mod memory;
@@ -458,6 +459,36 @@ impl Bridge {
         let pending = std::mem::take(&mut *self.pending.lock().unwrap());
         for (_, sender) in pending {
             let _ = sender.send(Err(message.to_string()));
+        }
+    }
+}
+
+impl chatroom_gateway::ChatroomBridge for Bridge {
+    fn send_invocation(&self, body: Vec<u8>) -> Result<(), String> {
+        let response = self.send_request(&HttpRequest {
+            method: "POST".to_string(),
+            target: "/api/internal/chatrooms/invocations".to_string(),
+            headers: HashMap::new(),
+            body,
+        })?;
+        if (200..300).contains(&response.status) {
+            Ok(())
+        } else {
+            Err("聊天室 Agent bridge 返回失败状态".to_string())
+        }
+    }
+
+    fn send_disconnected(&self, body: Vec<u8>) -> Result<(), String> {
+        let response = self.send_request(&HttpRequest {
+            method: "POST".to_string(),
+            target: "/api/internal/chatrooms/disconnected".to_string(),
+            headers: HashMap::new(),
+            body,
+        })?;
+        if (200..300).contains(&response.status) {
+            Ok(())
+        } else {
+            Err("聊天室断开通知返回失败状态".to_string())
         }
     }
 }
@@ -3868,6 +3899,9 @@ mod chatroom_protocol_tests;
 #[cfg(test)]
 #[path = "chatroom_client_tests.rs"]
 mod chatroom_client_tests;
+
+#[cfg(test)]
+mod chatroom_gateway_tests;
 
 #[cfg(test)]
 #[path = "automation_test.rs"]
