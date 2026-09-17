@@ -95,8 +95,8 @@ fn auth_error_message(error: &AuthError) -> String {
 
 /// 供 Rust 到 Electron Main 的受控桥接边界。
 pub trait ChatroomBridge: Send + Sync {
-    fn send_invocation(&self, body: Vec<u8>) -> Result<(), String>;
-    fn send_disconnected(&self, body: Vec<u8>) -> Result<(), String>;
+    fn send_invocation(&self, body: Vec<u8>, shutdown: &AtomicBool) -> Result<(), String>;
+    fn send_disconnected(&self, body: Vec<u8>, shutdown: &AtomicBool) -> Result<(), String>;
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -225,6 +225,12 @@ enum GatewayTask {
     Disconnected(Vec<u8>),
 }
 
+#[cfg(test)]
+struct TaskGate {
+    loaded: mpsc::Sender<()>,
+    release: mpsc::Receiver<()>,
+}
+
 enum Route<'a> {
     Rooms,
     Room(&'a str),
@@ -260,10 +266,13 @@ pub struct ChatroomGateway {
     started: AtomicBool,
     shutdown: AtomicBool,
     disconnected_notified: AtomicBool,
+    pending_disconnected: AtomicBool,
     clock: Arc<dyn GatewayClock>,
     last_lease_tick: Mutex<Instant>,
     task_sender: Mutex<Option<mpsc::SyncSender<GatewayTask>>>,
     task_workers: Mutex<Vec<JoinHandle<()>>>,
+    #[cfg(test)]
+    task_gate: Mutex<Option<TaskGate>>,
 }
 
 impl ChatroomGateway {
@@ -331,10 +340,13 @@ impl ChatroomGateway {
             started: AtomicBool::new(false),
             shutdown: AtomicBool::new(false),
             disconnected_notified: AtomicBool::new(false),
+            pending_disconnected: AtomicBool::new(false),
             last_lease_tick: Mutex::new(clock.now()),
             clock,
             task_sender: Mutex::new(None),
             task_workers: Mutex::new(Vec::new()),
+            #[cfg(test)]
+            task_gate: Mutex::new(None),
         }))
     }
 
@@ -379,11 +391,20 @@ impl ChatroomGateway {
                     Err(mpsc::RecvTimeoutError::Timeout) => continue,
                     Err(mpsc::RecvTimeoutError::Disconnected) => return,
                 };
+                #[cfg(test)]
+                if let Some(gate) = gateway.task_gate.lock().unwrap().take() {
+                    let _ = gate.loaded.send(());
+                    let _ = gate.release.recv();
+                }
+                if gateway.shutdown.load(Ordering::Acquire) {
+                    return;
+                }
                 match task {
                     GatewayTask::Recover(room_id) => gateway.recover_room(room_id),
                     GatewayTask::Invocation(event) => gateway.forward_invocation_now(&event),
                     GatewayTask::Disconnected(body) => gateway.send_disconnected_bridge(body),
                 }
+                gateway.drain_pending_disconnected();
             }));
         }
         *sender_slot = Some(sender);
@@ -443,7 +464,8 @@ impl ChatroomGateway {
                 if self.task_sender.lock().unwrap().is_none() {
                     self.send_disconnected_bridge(body);
                 } else {
-                    self.publish_status(None, "bridge_busy", "聊天室业务桥当前繁忙");
+                    self.pending_disconnected.store(true, Ordering::Release);
+                    self.drain_pending_disconnected();
                 }
             }
         }
@@ -451,8 +473,22 @@ impl ChatroomGateway {
     }
 
     fn send_disconnected_bridge(&self, body: Vec<u8>) {
-        if self.bridge.send_disconnected(body).is_err() {
+        if self.bridge.send_disconnected(body, &self.shutdown).is_err() {
             self.publish_status(None, "bridge_unavailable", "聊天室业务桥不可用");
+        }
+    }
+
+    fn drain_pending_disconnected(&self) {
+        if self.shutdown.load(Ordering::Acquire)
+            || !self.pending_disconnected.swap(false, Ordering::AcqRel)
+        {
+            return;
+        }
+        let body = serde_json::json!({"reason":"realtime_disconnected"})
+            .to_string()
+            .into_bytes();
+        if self.dispatch_task(GatewayTask::Disconnected(body)).is_err() {
+            self.pending_disconnected.store(true, Ordering::Release);
         }
     }
 
@@ -1094,10 +1130,41 @@ impl ChatroomGateway {
             if let GatewayTask::Invocation(event) = task {
                 if self.task_sender.lock().unwrap().is_none() {
                     self.forward_invocation_now(&event);
-                } else if let Some(room_id) = event.room_id() {
-                    self.publish_status(Some(room_id), "bridge_busy", "聊天室 Agent 桥当前繁忙");
+                } else {
+                    self.send_bridge_busy_failure(&event);
                 }
             }
+        }
+    }
+
+    fn send_bridge_busy_failure(&self, event: &ChatroomEvent) {
+        let ChatroomEvent::AgentInvocation { room_id, payload } = event else {
+            return;
+        };
+        let Some(invocation_id) = payload
+            .get("invocationId")
+            .and_then(Value::as_str)
+            .filter(|value| valid_component(value))
+        else {
+            self.publish_status(
+                Some(room_id),
+                "invocation_invalid",
+                "Agent invocation 格式不正确",
+            );
+            return;
+        };
+        if self
+            .send_client_command(ChatroomCommand::AgentEvent {
+                room_id: room_id.clone(),
+                invocation_id: invocation_id.to_string(),
+                event: AgentEventPayload::Failed {
+                    code: "bridge_busy".into(),
+                    message: "聊天室 Agent 桥当前繁忙".into(),
+                },
+            })
+            .is_err()
+        {
+            self.publish_status(Some(room_id), "bridge_busy", "聊天室 Agent 桥当前繁忙");
         }
     }
 
@@ -1168,7 +1235,7 @@ impl ChatroomGateway {
             }
         }
         let body = Value::Object(output).to_string().into_bytes();
-        if self.bridge.send_invocation(body).is_err() {
+        if self.bridge.send_invocation(body, &self.shutdown).is_err() {
             self.publish_status(Some(room_id), "bridge_unavailable", "聊天室业务桥不可用");
         }
     }
@@ -1465,6 +1532,22 @@ impl ChatroomGateway {
     pub(crate) fn tick_leases_for_test(&self, now: Instant) {
         self.tick_leases(now);
     }
+
+    #[cfg(test)]
+    pub(crate) fn gate_next_task_for_test(&self) -> (mpsc::Receiver<()>, mpsc::Sender<()>) {
+        let (loaded, loaded_receiver) = mpsc::channel();
+        let (release, release_receiver) = mpsc::channel();
+        *self.task_gate.lock().unwrap() = Some(TaskGate {
+            loaded,
+            release: release_receiver,
+        });
+        (loaded_receiver, release)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn shutdown_requested_for_test(&self) -> bool {
+        self.shutdown.load(Ordering::Acquire)
+    }
 }
 
 impl Drop for ChatroomGateway {
@@ -1583,24 +1666,25 @@ fn method_allowed(method: &str, route: &Route<'_>) -> bool {
 
 fn parse_sse_room_ids(query: &str) -> Result<Vec<String>, ChatroomGatewayError> {
     let mut rooms = Vec::new();
-    let mut seen = HashSet::new();
-    for pair in query.split('&').filter(|pair| !pair.is_empty()) {
+    let mut selected_key = None;
+    for pair in query.split('&') {
+        if pair.is_empty() {
+            return Err(invalid_request("SSE 查询参数不正确"));
+        }
         let (key, value) = pair
             .split_once('=')
             .ok_or_else(|| invalid_request("SSE 查询参数不正确"))?;
-        if (key == "roomId" || key == "roomIds") && seen.insert(key) && !value.is_empty() {
-            if value.split(',').any(|value| value.is_empty()) {
-                return Err(invalid_request("SSE 查询参数不正确"));
-            }
-            rooms.extend(
-                value
-                    .split(',')
-                    .filter(|value| !value.is_empty())
-                    .map(str::to_string),
-            );
-        } else {
+        if (key != "roomId" && key != "roomIds") || value.is_empty() {
             return Err(invalid_request("SSE 查询参数不正确"));
         }
+        if selected_key.is_some() {
+            return Err(invalid_request("SSE 查询参数不正确"));
+        }
+        selected_key = Some(key);
+        if value.split(',').any(|value| value.is_empty()) {
+            return Err(invalid_request("SSE 查询参数不正确"));
+        }
+        rooms.extend(value.split(',').map(str::to_string));
     }
     Ok(rooms)
 }
@@ -1817,7 +1901,10 @@ fn normalize_public_body(
         }
         ("PATCH", Route::Read(_)) => {
             require_keys(object, &["seq"])?;
-            if object["seq"].as_u64().is_none() {
+            if object["seq"]
+                .as_u64()
+                .is_none_or(|seq| seq > i64::MAX as u64)
+            {
                 return Err(invalid_request("seq 必须是非负整数"));
             }
             Value::Object(object.clone())

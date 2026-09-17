@@ -8,7 +8,7 @@ use super::chatroom_protocol::{ChatroomEvent, CosAction};
 use super::edu_api_client::{EduApiClient, EduApiError, EduApiRequest, EduApiResponse};
 use serde_json::{json, Value};
 use std::collections::HashMap;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -110,13 +110,117 @@ struct FakeBridge {
 }
 
 impl ChatroomBridge for FakeBridge {
-    fn send_invocation(&self, body: Vec<u8>) -> Result<(), String> {
+    fn send_invocation(&self, body: Vec<u8>, _shutdown: &AtomicBool) -> Result<(), String> {
         self.invocations.lock().unwrap().push(body);
         Ok(())
     }
-    fn send_disconnected(&self, body: Vec<u8>) -> Result<(), String> {
+    fn send_disconnected(&self, body: Vec<u8>, _shutdown: &AtomicBool) -> Result<(), String> {
         self.disconnects.lock().unwrap().push(body);
         Ok(())
+    }
+}
+
+struct SaturatingBridge {
+    invocations: Mutex<Vec<Vec<u8>>>,
+    disconnects: Mutex<Vec<Vec<u8>>>,
+    started: mpsc::Sender<()>,
+    started_count: AtomicUsize,
+    release: AtomicBool,
+    in_flight: AtomicUsize,
+}
+
+impl SaturatingBridge {
+    fn new() -> (Arc<Self>, mpsc::Receiver<()>) {
+        let (started, receiver) = mpsc::channel();
+        (
+            Arc::new(Self {
+                invocations: Mutex::new(Vec::new()),
+                disconnects: Mutex::new(Vec::new()),
+                started,
+                started_count: AtomicUsize::new(0),
+                release: AtomicBool::new(false),
+                in_flight: AtomicUsize::new(0),
+            }),
+            receiver,
+        )
+    }
+
+    fn release(&self) {
+        self.release.store(true, Ordering::Release);
+    }
+}
+
+impl ChatroomBridge for SaturatingBridge {
+    fn send_invocation(&self, body: Vec<u8>, shutdown: &AtomicBool) -> Result<(), String> {
+        self.invocations.lock().unwrap().push(body);
+        let ordinal = self.started_count.fetch_add(1, Ordering::AcqRel);
+        self.in_flight.fetch_add(1, Ordering::AcqRel);
+        if ordinal < 4 {
+            let _ = self.started.send(());
+            while !self.release.load(Ordering::Acquire) && !shutdown.load(Ordering::Acquire) {
+                thread::sleep(Duration::from_millis(2));
+            }
+        }
+        self.in_flight.fetch_sub(1, Ordering::AcqRel);
+        if shutdown.load(Ordering::Acquire) {
+            Err("测试 bridge 已取消".into())
+        } else {
+            Ok(())
+        }
+    }
+
+    fn send_disconnected(&self, body: Vec<u8>, _shutdown: &AtomicBool) -> Result<(), String> {
+        self.disconnects.lock().unwrap().push(body);
+        Ok(())
+    }
+}
+
+struct RecordingSocket {
+    sent: Arc<Mutex<Vec<super::chatroom_protocol::ChatroomCommand>>>,
+    released: Arc<AtomicBool>,
+    closed: Arc<AtomicBool>,
+}
+
+impl ChatroomSocket for RecordingSocket {
+    fn send_json(
+        &mut self,
+        command: &super::chatroom_protocol::ChatroomCommand,
+    ) -> Result<(), ChatroomClientError> {
+        self.sent.lock().unwrap().push(command.clone());
+        Ok(())
+    }
+
+    fn receive_json(
+        &mut self,
+    ) -> Result<super::chatroom_protocol::ChatroomEvent, ChatroomClientError> {
+        while !self.released.load(Ordering::Acquire) && !self.closed.load(Ordering::Acquire) {
+            thread::sleep(Duration::from_millis(2));
+        }
+        Err(ChatroomClientError::new("closed", "测试 socket 已关闭"))
+    }
+
+    fn close(&mut self) {
+        self.closed.store(true, Ordering::Release);
+    }
+}
+
+struct RecordingConnector {
+    sent: Arc<Mutex<Vec<super::chatroom_protocol::ChatroomCommand>>>,
+    released: Arc<AtomicBool>,
+}
+
+impl ChatroomSocketConnector for RecordingConnector {
+    fn connect(
+        &self,
+        _url: &str,
+        _authorization: &str,
+        _stop: &AtomicBool,
+    ) -> Result<Box<dyn ChatroomSocket>, ChatroomClientError> {
+        Ok(Box::new(RecordingSocket {
+            sent: self.sent.clone(),
+            released: self.released.clone(),
+            closed: Arc::new(AtomicBool::new(false)),
+        }))
     }
 }
 
@@ -190,6 +294,237 @@ fn gateway(transport: Arc<FakeTransport>, bridge: Arc<FakeBridge>) -> Arc<Chatro
         transport,
     )
     .unwrap()
+}
+
+fn saturated_gateway(
+    bridge: Arc<SaturatingBridge>,
+) -> (
+    Arc<ChatroomGateway>,
+    Arc<Mutex<Vec<super::chatroom_protocol::ChatroomCommand>>>,
+    Arc<AtomicBool>,
+) {
+    let client = Arc::new(
+        EduApiClient::new(
+            "https://test.invalid/module/edu-api",
+            Arc::new(NoopEduTransport),
+            4,
+        )
+        .unwrap(),
+    );
+    let auth = Arc::new(AuthSession::new(client, Arc::new(AuthenticatedTestStorage)).unwrap());
+    let sent = Arc::new(Mutex::new(Vec::new()));
+    let released = Arc::new(AtomicBool::new(false));
+    let gateway = ChatroomGateway::new_with_transport(
+        auth,
+        "https://test.invalid/module/edu-api".into(),
+        Arc::new(RecordingConnector {
+            sent: sent.clone(),
+            released: released.clone(),
+        }),
+        bridge,
+        "device-test".into(),
+        Arc::new(FakeTransport::default()),
+    )
+    .unwrap();
+    (gateway, sent, released)
+}
+
+fn gateway_with_saturating_bridge(bridge: Arc<SaturatingBridge>) -> Arc<ChatroomGateway> {
+    let client = Arc::new(
+        EduApiClient::new(
+            "https://test.invalid/module/edu-api",
+            Arc::new(NoopEduTransport),
+            4,
+        )
+        .unwrap(),
+    );
+    let auth = Arc::new(AuthSession::new(client, Arc::new(TestStorage)).unwrap());
+    ChatroomGateway::new_with_transport(
+        auth,
+        "https://test.invalid/module/edu-api".into(),
+        Arc::new(FakeConnector),
+        bridge,
+        "device-test".into(),
+        Arc::new(FakeTransport::default()),
+    )
+    .unwrap()
+}
+
+fn invocation(room: &str, invocation_id: &str) -> ChatroomEvent {
+    ChatroomEvent::AgentInvocation {
+        room_id: room.into(),
+        payload: json!({
+            "invocationId": invocation_id,
+            "traceId": "trace-1",
+            "targetAgentId": "agent-1",
+            "triggerMessageId": "message-1",
+            "depth": 1,
+            "status": "pending"
+        }),
+    }
+}
+
+#[test]
+fn given_task_is_received_then_shutdown_before_execution_skips_queued_work() {
+    let bridge = Arc::new(FakeBridge::default());
+    let gateway = gateway(Arc::new(FakeTransport::default()), bridge.clone());
+    let (loaded, release) = gateway.gate_next_task_for_test();
+    gateway.start();
+    gateway.publish_event_for_test(invocation("room-1", "inv-queued"));
+    loaded
+        .recv_timeout(Duration::from_millis(500))
+        .expect("task worker 未收到排队任务");
+
+    let shutdown_gateway = Arc::clone(&gateway);
+    let shutdown = thread::spawn(move || shutdown_gateway.shutdown());
+    for _ in 0..100 {
+        if gateway.shutdown_requested_for_test() {
+            break;
+        }
+        thread::sleep(Duration::from_millis(1));
+    }
+    assert!(gateway.shutdown_requested_for_test());
+    release.send(()).unwrap();
+    shutdown.join().unwrap();
+    assert!(bridge.invocations.lock().unwrap().is_empty());
+}
+
+#[test]
+fn given_full_task_queue_then_invocation_reports_strict_bridge_busy_failure() {
+    let (bridge, started) = SaturatingBridge::new();
+    let (gateway, sent, released) = saturated_gateway(bridge.clone());
+    let _subscription = gateway.subscribe_sse(vec!["room-1".into()]).unwrap();
+    gateway.start();
+    for _ in 0..100 {
+        if sent.lock().unwrap().len() >= 1 {
+            break;
+        }
+        thread::sleep(Duration::from_millis(2));
+    }
+    assert_eq!(sent.lock().unwrap().len(), 1);
+
+    for index in 0..4 {
+        gateway.publish_event_for_test(invocation("room-1", &format!("inv-block-{index}")));
+    }
+    for _ in 0..4 {
+        started
+            .recv_timeout(Duration::from_millis(500))
+            .expect("未阻塞全部 invocation worker");
+    }
+    for index in 0..64 {
+        gateway.publish_event_for_test(invocation("room-1", &format!("inv-queued-{index}")));
+    }
+    gateway.publish_event_for_test(invocation("room-1", "inv-overflow"));
+
+    released.store(true, Ordering::Release);
+    for _ in 0..500 {
+        let has_failure = sent.lock().unwrap().iter().any(|command| {
+            matches!(
+                command,
+                super::chatroom_protocol::ChatroomCommand::AgentEvent {
+                    invocation_id,
+                    event: super::chatroom_protocol::AgentEventPayload::Failed { code, .. },
+                    ..
+                } if invocation_id == "inv-overflow" && code == "bridge_busy"
+            )
+        });
+        if has_failure {
+            break;
+        }
+        thread::sleep(Duration::from_millis(2));
+    }
+    assert!(sent.lock().unwrap().iter().any(|command| {
+        matches!(
+            command,
+            super::chatroom_protocol::ChatroomCommand::AgentEvent {
+                invocation_id,
+                event: super::chatroom_protocol::AgentEventPayload::Failed { code, .. },
+                ..
+            } if invocation_id == "inv-overflow" && code == "bridge_busy"
+        )
+    }));
+    gateway.shutdown();
+}
+
+#[test]
+fn given_full_task_queue_then_disconnected_notification_is_merged_and_sent_once() {
+    let (bridge, started) = SaturatingBridge::new();
+    let gateway = gateway_with_saturating_bridge(bridge.clone());
+    gateway.start();
+    for index in 0..4 {
+        gateway.publish_event_for_test(invocation("room-1", &format!("inv-block-{index}")));
+    }
+    for _ in 0..4 {
+        started
+            .recv_timeout(Duration::from_millis(500))
+            .expect("未阻塞全部 invocation worker");
+    }
+    for index in 0..64 {
+        gateway.publish_event_for_test(invocation("room-1", &format!("inv-queued-{index}")));
+    }
+    gateway.handle_client_event_for_test(super::chatroom_client::ChatroomClientEvent::Disconnected);
+    gateway.handle_client_event_for_test(super::chatroom_client::ChatroomClientEvent::Disconnected);
+    bridge.release();
+    for _ in 0..500 {
+        if bridge.disconnects.lock().unwrap().len() == 1 {
+            break;
+        }
+        thread::sleep(Duration::from_millis(2));
+    }
+    assert_eq!(bridge.disconnects.lock().unwrap().len(), 1);
+    gateway.shutdown();
+}
+
+#[test]
+fn given_blocked_bridge_then_shutdown_cancels_call_and_clears_in_flight_worker() {
+    let (bridge, started) = SaturatingBridge::new();
+    let gateway = gateway_with_saturating_bridge(bridge.clone());
+    gateway.start();
+    gateway.publish_event_for_test(invocation("room-1", "inv-blocked"));
+    started
+        .recv_timeout(Duration::from_millis(500))
+        .expect("bridge 未进入阻塞调用");
+    let started_at = Instant::now();
+    gateway.shutdown();
+    assert!(started_at.elapsed() < Duration::from_secs(1));
+    assert_eq!(bridge.in_flight.load(Ordering::Acquire), 0);
+}
+
+#[test]
+fn given_real_bridge_pending_request_then_shutdown_cancels_and_removes_pending() {
+    let bridge = Arc::new(super::Bridge::new());
+    bridge.available.store(true, Ordering::Release);
+    let client = Arc::new(
+        EduApiClient::new(
+            "https://test.invalid/module/edu-api",
+            Arc::new(NoopEduTransport),
+            4,
+        )
+        .unwrap(),
+    );
+    let auth = Arc::new(AuthSession::new(client, Arc::new(TestStorage)).unwrap());
+    let gateway = ChatroomGateway::new_with_transport(
+        auth,
+        "https://test.invalid/module/edu-api".into(),
+        Arc::new(FakeConnector),
+        bridge.clone(),
+        "device-test".into(),
+        Arc::new(FakeTransport::default()),
+    )
+    .unwrap();
+    gateway.start();
+    gateway.publish_event_for_test(invocation("room-1", "inv-real-bridge"));
+    for _ in 0..100 {
+        if !bridge.pending.lock().unwrap().is_empty() {
+            break;
+        }
+        thread::sleep(Duration::from_millis(2));
+    }
+    assert!(!bridge.pending.lock().unwrap().is_empty());
+    let started_at = Instant::now();
+    gateway.shutdown();
+    assert!(started_at.elapsed() < Duration::from_secs(1));
+    assert!(bridge.pending.lock().unwrap().is_empty());
 }
 
 fn durable(room: &str, seq: u64) -> ChatroomEvent {
@@ -511,6 +846,59 @@ fn given_local_sse_route_when_opened_then_never_proxy_to_edu_api() {
         )
         .unwrap();
     assert!(matches!(response, GatewayHttpResponse::Sse(_)));
+    assert!(transport.requests.lock().unwrap().is_empty());
+}
+
+#[test]
+fn given_sse_query_with_empty_duplicate_or_mixed_segments_then_reject_locally() {
+    let gateway = gateway(
+        Arc::new(FakeTransport::default()),
+        Arc::new(FakeBridge::default()),
+    );
+    for query in [
+        "roomId=room-1&",
+        "&roomId=room-1",
+        "roomId=room-1&&roomId=room-2",
+        "roomId=room-1&roomId=room-2",
+        "roomId=room-1&roomIds=room-2",
+    ] {
+        assert!(
+            gateway
+                .handle_http(
+                    "GET",
+                    &format!("/api/chatrooms/v2/events?{query}"),
+                    &HashMap::new(),
+                    &[],
+                )
+                .is_err(),
+            "query should be rejected: {query}"
+        );
+    }
+    assert!(matches!(
+        gateway
+            .handle_http(
+                "GET",
+                "/api/chatrooms/v2/events?roomIds=room-1,room-2",
+                &HashMap::new(),
+                &[],
+            )
+            .unwrap(),
+        GatewayHttpResponse::Sse(_)
+    ));
+}
+
+#[test]
+fn given_read_seq_above_i64_max_then_reject_before_proxying() {
+    let transport = Arc::new(FakeTransport::default());
+    let gateway = gateway(transport.clone(), Arc::new(FakeBridge::default()));
+    assert!(gateway
+        .handle_http(
+            "PATCH",
+            "/api/chatrooms/v2/rooms/room-1/read",
+            &HashMap::new(),
+            br#"{"seq":9223372036854775808}"#,
+        )
+        .is_err());
     assert!(transport.requests.lock().unwrap().is_empty());
 }
 

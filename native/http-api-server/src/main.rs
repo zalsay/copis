@@ -7,7 +7,7 @@ use std::process;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 mod agent_files;
 mod agent_mail;
@@ -416,6 +416,14 @@ impl Bridge {
     }
 
     fn send_request(&self, request: &HttpRequest) -> Result<BridgeResponse, String> {
+        self.send_request_cancellable(request, None)
+    }
+
+    fn send_request_cancellable(
+        &self,
+        request: &HttpRequest,
+        shutdown: Option<&AtomicBool>,
+    ) -> Result<BridgeResponse, String> {
         if !self.available.load(Ordering::Acquire) {
             return Err("HTTP API 业务桥不可用".to_string());
         }
@@ -444,13 +452,27 @@ impl Bridge {
             return Err(format!("HTTP API 业务桥写入失败: {}", error));
         }
 
-        match receiver.recv_timeout(bridge_request_timeout_for_path(&request.target)) {
-            Ok(result) => result,
-            Err(mpsc::RecvTimeoutError::Timeout) => {
+        let timeout = bridge_request_timeout_for_path(&request.target);
+        let deadline = Instant::now() + timeout;
+        loop {
+            if shutdown.is_some_and(|flag| flag.load(Ordering::Acquire)) {
                 self.pending.lock().unwrap().remove(&id);
-                Err(BRIDGE_TIMEOUT_MESSAGE.to_string())
+                return Err("聊天室业务桥调用已取消".to_string());
             }
-            Err(_) => Err("HTTP API 业务桥未返回响应".to_string()),
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                self.pending.lock().unwrap().remove(&id);
+                return Err(BRIDGE_TIMEOUT_MESSAGE.to_string());
+            }
+            let wait = remaining.min(Duration::from_millis(50));
+            match receiver.recv_timeout(wait) {
+                Ok(result) => return result,
+                Err(mpsc::RecvTimeoutError::Timeout) => continue,
+                Err(_) => {
+                    self.pending.lock().unwrap().remove(&id);
+                    return Err("HTTP API 业务桥未返回响应".to_string());
+                }
+            }
         }
     }
 
@@ -464,13 +486,16 @@ impl Bridge {
 }
 
 impl chatroom_gateway::ChatroomBridge for Bridge {
-    fn send_invocation(&self, body: Vec<u8>) -> Result<(), String> {
-        let response = self.send_request(&HttpRequest {
-            method: "POST".to_string(),
-            target: "/api/internal/chatrooms/invocations".to_string(),
-            headers: HashMap::new(),
-            body,
-        })?;
+    fn send_invocation(&self, body: Vec<u8>, shutdown: &AtomicBool) -> Result<(), String> {
+        let response = self.send_request_cancellable(
+            &HttpRequest {
+                method: "POST".to_string(),
+                target: "/api/internal/chatrooms/invocations".to_string(),
+                headers: HashMap::new(),
+                body,
+            },
+            Some(shutdown),
+        )?;
         if (200..300).contains(&response.status) {
             Ok(())
         } else {
@@ -478,13 +503,16 @@ impl chatroom_gateway::ChatroomBridge for Bridge {
         }
     }
 
-    fn send_disconnected(&self, body: Vec<u8>) -> Result<(), String> {
-        let response = self.send_request(&HttpRequest {
-            method: "POST".to_string(),
-            target: "/api/internal/chatrooms/disconnected".to_string(),
-            headers: HashMap::new(),
-            body,
-        })?;
+    fn send_disconnected(&self, body: Vec<u8>, shutdown: &AtomicBool) -> Result<(), String> {
+        let response = self.send_request_cancellable(
+            &HttpRequest {
+                method: "POST".to_string(),
+                target: "/api/internal/chatrooms/disconnected".to_string(),
+                headers: HashMap::new(),
+                body,
+            },
+            Some(shutdown),
+        )?;
         if (200..300).contains(&response.status) {
             Ok(())
         } else {
