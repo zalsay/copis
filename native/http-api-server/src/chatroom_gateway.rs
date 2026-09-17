@@ -265,6 +265,7 @@ pub struct ChatroomGateway {
     event_worker: Mutex<Option<JoinHandle<()>>>,
     started: AtomicBool,
     shutdown: AtomicBool,
+    connection_paused: AtomicBool,
     disconnected_notified: AtomicBool,
     pending_disconnected: AtomicBool,
     clock: Arc<dyn GatewayClock>,
@@ -339,6 +340,7 @@ impl ChatroomGateway {
             event_worker: Mutex::new(None),
             started: AtomicBool::new(false),
             shutdown: AtomicBool::new(false),
+            connection_paused: AtomicBool::new(false),
             disconnected_notified: AtomicBool::new(false),
             pending_disconnected: AtomicBool::new(false),
             last_lease_tick: Mutex::new(clock.now()),
@@ -1441,7 +1443,17 @@ impl ChatroomGateway {
             return;
         }
         self.client.pause();
+        self.connection_paused.store(true, Ordering::Release);
+        self.leases.lock().unwrap().clear();
         self.notify_disconnected();
+    }
+
+    pub fn resume_connection(&self) {
+        if self.shutdown.load(Ordering::Acquire) {
+            return;
+        }
+        self.connection_paused.store(false, Ordering::Release);
+        self.refresh_subscription_snapshot();
     }
 
     pub fn shutdown(&self) {
@@ -1547,6 +1559,11 @@ impl ChatroomGateway {
     #[cfg(test)]
     pub(crate) fn shutdown_requested_for_test(&self) -> bool {
         self.shutdown.load(Ordering::Acquire)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn connection_paused_for_test(&self) -> bool {
+        self.connection_paused.load(Ordering::Acquire)
     }
 }
 

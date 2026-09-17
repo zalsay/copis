@@ -5,7 +5,7 @@ use std::net::{Shutdown, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::{mpsc, Arc, Mutex, Weak};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -142,6 +142,15 @@ fn connection_read_timeout() -> Duration {
     Duration::from_millis(millis)
 }
 
+fn chatroom_sse_heartbeat_interval() -> Duration {
+    let millis = std::env::var("COPIS_CHATROOM_SSE_HEARTBEAT_MS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(15_000);
+    Duration::from_millis(millis)
+}
+
 struct BridgeResponse {
     status: u16,
     body: Option<String>,
@@ -208,6 +217,7 @@ fn parse_auth_working_response(response: EduApiResponse) -> Result<Value, SkillM
 
 struct BridgeAuthStorage {
     bridge: Arc<Bridge>,
+    chatroom_gateway: Mutex<Option<Weak<ChatroomGateway>>>,
 }
 
 impl AuthStorage for BridgeAuthStorage {
@@ -305,12 +315,14 @@ impl AuthStorage for BridgeAuthStorage {
             );
             return Err(AuthError::Storage("认证存储保存失败".to_string()));
         }
+        self.notify_chatroom_gateway(true);
         eprintln!("[HTTP API][认证存储] save 成功");
         self.notify_state_changed(true, auth.user.as_ref(), auth.expires_at);
         Ok(())
     }
 
     fn clear(&self) -> Result<(), AuthError> {
+        self.notify_chatroom_gateway(false);
         eprintln!("[HTTP API][认证存储] clear 开始");
         let response = match self.bridge.send_request(&HttpRequest {
             method: "POST".to_string(),
@@ -343,6 +355,27 @@ impl AuthStorage for BridgeAuthStorage {
 }
 
 impl BridgeAuthStorage {
+    fn set_chatroom_gateway(&self, gateway: &Arc<ChatroomGateway>) {
+        *self.chatroom_gateway.lock().unwrap() = Some(Arc::downgrade(gateway));
+    }
+
+    fn notify_chatroom_gateway(&self, authenticated: bool) {
+        let gateway = self
+            .chatroom_gateway
+            .lock()
+            .unwrap()
+            .as_ref()
+            .and_then(Weak::upgrade);
+        let Some(gateway) = gateway else {
+            return;
+        };
+        if authenticated {
+            gateway.resume_connection();
+        } else {
+            gateway.shutdown_connection();
+        }
+    }
+
     fn notify_state_changed(
         &self,
         authenticated: bool,
@@ -537,6 +570,25 @@ fn chatroom_http_route_owned(path: &str) -> bool {
     is_chatroom_path(path) || is_chatroom_internal_path(path)
 }
 
+fn chatroom_preflight_is_authorized(method: &str, path: &str, internal_token_valid: bool) -> bool {
+    method != "OPTIONS" || !is_chatroom_internal_path(path) || internal_token_valid
+}
+
+fn bind_and_start_chatroom_gateway(
+    port: u16,
+    gateway: &Arc<ChatroomGateway>,
+) -> io::Result<TcpListener> {
+    let listener = match TcpListener::bind((HOST, port)) {
+        Ok(listener) => listener,
+        Err(error) => {
+            gateway.shutdown();
+            return Err(error);
+        }
+    };
+    gateway.start();
+    Ok(listener)
+}
+
 struct ChatroomGatewayShutdownGuard(Arc<ChatroomGateway>);
 
 impl Drop for ChatroomGatewayShutdownGuard {
@@ -554,22 +606,29 @@ struct ClientDeviceFile {
 }
 
 fn valid_chatroom_device_id(value: &str) -> bool {
-    !value.is_empty()
-        && value.len() <= 128
-        && value.trim() == value
-        && !value.chars().any(|character| {
-            character.is_control() || character.is_whitespace() || matches!(character, '/' | '\\')
+    value.len() == 36
+        && value.as_bytes().iter().enumerate().all(|(index, byte)| {
+            if matches!(index, 8 | 13 | 18 | 23) {
+                *byte == b'-'
+            } else {
+                (*byte as char).is_ascii_hexdigit()
+            }
         })
+        && value.as_bytes()[14] == b'4'
+        && matches!(
+            value.as_bytes()[19],
+            b'8'..=b'9' | b'a'..=b'b' | b'A'..=b'B'
+        )
 }
 
-fn generate_chatroom_device_id() -> String {
+fn generate_chatroom_device_id() -> Result<String, String> {
     let mut bytes = [0_u8; 16];
     if getrandom::getrandom(&mut bytes).is_err() {
-        return "00000000-0000-4000-8000-000000000000".to_string();
+        return Err("无法生成聊天室设备标识".to_string());
     }
     bytes[6] = (bytes[6] & 0x0f) | 0x40;
     bytes[8] = (bytes[8] & 0x3f) | 0x80;
-    format!(
+    Ok(format!(
         "{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
         bytes[0],
         bytes[1],
@@ -587,63 +646,100 @@ fn generate_chatroom_device_id() -> String {
         bytes[13],
         bytes[14],
         bytes[15]
-    )
+    ))
 }
 
-fn resolve_chatroom_device_id() -> String {
-    let path = resolve_config_directory().join("client-device.json");
-    if let Ok(bytes) = fs::read(&path) {
-        if let Ok(config) = serde_json::from_slice::<ClientDeviceFile>(&bytes) {
-            if config.version == 1 && valid_chatroom_device_id(&config.device_id) {
-                return config.device_id;
-            }
+fn repair_chatroom_device_permissions(path: &Path) -> io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = fs::metadata(path)?.permissions().mode() & 0o777;
+        if mode != 0o600 {
+            fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
         }
     }
+    Ok(())
+}
 
-    let device_id = generate_chatroom_device_id();
+fn publish_chatroom_device_file(temporary: &Path, target: &Path) -> io::Result<()> {
+    #[cfg(unix)]
+    {
+        fs::hard_link(temporary, target)?;
+        fs::remove_file(temporary)
+    }
+    #[cfg(not(unix))]
+    {
+        fs::rename(temporary, target)
+    }
+}
+
+fn parse_chatroom_device_file(path: &Path) -> Result<String, String> {
+    let bytes = fs::read(path).map_err(|error| format!("读取聊天室设备文件失败: {error}"))?;
+    let config = serde_json::from_slice::<ClientDeviceFile>(&bytes)
+        .map_err(|_| "聊天室设备文件格式不正确".to_string())?;
+    if config.version != 1 || !valid_chatroom_device_id(&config.device_id) {
+        return Err("聊天室设备文件内容不正确".to_string());
+    }
+    repair_chatroom_device_permissions(path)
+        .map_err(|error| format!("修复聊天室设备文件权限失败: {error}"))?;
+    Ok(config.device_id)
+}
+
+fn resolve_chatroom_device_id() -> Result<String, String> {
+    let path = resolve_config_directory().join("client-device.json");
+    match fs::metadata(&path) {
+        Ok(_) => return parse_chatroom_device_file(&path),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => return Err(format!("检查聊天室设备文件失败: {error}")),
+    }
+
+    let device_id = generate_chatroom_device_id()?;
     let config = ClientDeviceFile {
         version: 1,
         device_id: device_id.clone(),
         created_at: SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_secs())
-            .unwrap_or(0),
+            .map_err(|_| "系统时间无效".to_string())?,
     };
-    let Ok(encoded) = serde_json::to_vec_pretty(&config) else {
-        return device_id;
-    };
-    if fs::create_dir_all(resolve_config_directory()).is_ok() {
-        let temporary = path.with_file_name(format!("client-device.json.{}.tmp", process::id()));
-        let write_result = (|| -> io::Result<()> {
-            let mut options = OpenOptions::new();
-            options.write(true).create_new(true);
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::OpenOptionsExt;
-                options.mode(0o600);
-            }
-            let mut file = options.open(&temporary)?;
-            file.write_all(&encoded)?;
-            file.sync_all()?;
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                fs::set_permissions(&temporary, fs::Permissions::from_mode(0o600))?;
-            }
-            fs::rename(&temporary, &path)
-        })();
-        if write_result.is_err() {
+    let encoded =
+        serde_json::to_vec_pretty(&config).map_err(|_| "聊天室设备文件序列化失败".to_string())?;
+    fs::create_dir_all(resolve_config_directory())
+        .map_err(|error| format!("创建 Copis 配置目录失败: {error}"))?;
+    let temporary = path.with_file_name(format!(
+        "client-device.json.{}.{}.tmp",
+        process::id(),
+        device_id
+    ));
+    let write_result = (|| -> io::Result<()> {
+        let mut options = OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let mut file = options.open(&temporary)?;
+        file.write_all(&encoded)?;
+        file.sync_all()?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&temporary, fs::Permissions::from_mode(0o600))?;
+        }
+        publish_chatroom_device_file(&temporary, &path)
+    })();
+    match write_result {
+        Ok(()) => Ok(device_id),
+        Err(_) => {
             let _ = fs::remove_file(&temporary);
-            if let Ok(bytes) = fs::read(&path) {
-                if let Ok(config) = serde_json::from_slice::<ClientDeviceFile>(&bytes) {
-                    if config.version == 1 && valid_chatroom_device_id(&config.device_id) {
-                        return config.device_id;
-                    }
-                }
+            if fs::metadata(&path).is_ok() {
+                parse_chatroom_device_file(&path)
+            } else {
+                Err("聊天室设备文件无法原子创建".to_string())
             }
         }
     }
-    device_id
 }
 
 #[derive(Deserialize)]
@@ -1767,17 +1863,26 @@ fn handle_connection(
         }
     }
 
-    if request.method == "OPTIONS" {
-        send_empty_response(&mut stream, 204, origin);
-        let _ = stream.shutdown(Shutdown::Both);
-        return;
-    }
-
     let path = request
         .target
         .split('?')
         .next()
         .unwrap_or(request.target.as_str());
+    if !chatroom_preflight_is_authorized(&request.method, path, is_internal_token_valid(&request)) {
+        send_json_response(
+            &mut stream,
+            403,
+            r#"{"error":"聊天室内部接口未授权","code":"internal_token_required"}"#,
+            origin,
+        );
+        let _ = stream.shutdown(Shutdown::Both);
+        return;
+    }
+    if request.method == "OPTIONS" {
+        send_empty_response(&mut stream, 204, origin);
+        let _ = stream.shutdown(Shutdown::Both);
+        return;
+    }
     if !is_web_route_authorized(origin, &request, path) {
         send_json_response(
             &mut stream,
@@ -2372,14 +2477,27 @@ fn handle_chatroom_http(
             send_empty_response(stream, status, origin);
         }
         GatewayHttpResponse::Sse(subscription) => {
+            let heartbeat = chatroom_sse_heartbeat_interval();
+            let _ = stream.set_write_timeout(Some(heartbeat));
             let headers = sse_headers_with_origin(200, origin);
             if stream.write_all(headers.as_bytes()).is_err() {
                 return;
             }
             let _ = stream.flush();
-            while let Ok(event) = subscription.receiver.recv() {
-                if send_sse_frame(stream, &event).is_err() {
-                    break;
+            loop {
+                match subscription.receiver.recv_timeout(heartbeat) {
+                    Ok(event) => {
+                        if send_sse_frame(stream, &event).is_err() {
+                            break;
+                        }
+                    }
+                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                        if stream.write_all(b": keepalive\n\n").is_err() || stream.flush().is_err()
+                        {
+                            break;
+                        }
+                    }
+                    Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
                 }
             }
         }
@@ -3957,9 +4075,11 @@ fn main() {
             process::exit(1);
         }
     };
-    let auth_storage: Arc<dyn AuthStorage> = Arc::new(BridgeAuthStorage {
+    let bridge_auth_storage = Arc::new(BridgeAuthStorage {
         bridge: Arc::clone(&bridge),
+        chatroom_gateway: Mutex::new(None),
     });
+    let auth_storage: Arc<dyn AuthStorage> = bridge_auth_storage.clone();
     let auth_client = match EduApiClient::from_auth_environment(DEFAULT_MAX_CONCURRENT_REQUESTS) {
         Ok(client) => Arc::new(client),
         Err(error) => {
@@ -4047,13 +4167,20 @@ fn main() {
     ));
     automation_scheduler.start();
 
+    let chatroom_device_id = match resolve_chatroom_device_id() {
+        Ok(device_id) => device_id,
+        Err(error) => {
+            eprintln!("[HTTP API] 聊天室设备标识初始化失败: {}", error);
+            process::exit(1);
+        }
+    };
     let chatroom_bridge: Arc<dyn ChatroomBridge> = bridge.clone();
     let chatroom_gateway = match ChatroomGateway::new(
         Arc::clone(&auth_session),
         edu_client.base_url().to_string(),
         Arc::new(TungsteniteConnector::default()),
         chatroom_bridge,
-        resolve_chatroom_device_id(),
+        chatroom_device_id,
     ) {
         Ok(gateway) => gateway,
         Err(error) => {
@@ -4061,16 +4188,15 @@ fn main() {
             process::exit(1);
         }
     };
-    chatroom_gateway.start();
-    let _chatroom_shutdown = ChatroomGatewayShutdownGuard(Arc::clone(&chatroom_gateway));
-
-    let listener = match TcpListener::bind((HOST, port)) {
+    bridge_auth_storage.set_chatroom_gateway(&chatroom_gateway);
+    let listener = match bind_and_start_chatroom_gateway(port, &chatroom_gateway) {
         Ok(listener) => listener,
         Err(error) => {
             eprintln!("[HTTP API] 无法监听 {}:{}: {}", HOST, port, error);
             process::exit(1);
         }
     };
+    let _chatroom_shutdown = ChatroomGatewayShutdownGuard(Arc::clone(&chatroom_gateway));
     eprintln!("[HTTP API] Rust 服务监听 http://{}:{}", HOST, port);
     let active_connections = Arc::new(AtomicUsize::new(0));
     for stream in listener.incoming() {

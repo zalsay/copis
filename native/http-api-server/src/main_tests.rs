@@ -4,7 +4,13 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
+use super::auth_session::{AuthError, AuthSession, AuthStorage, PersistedAuth};
 use super::automation::WorkerAutomationContext;
+use super::chatroom_client::{ChatroomClientError, ChatroomSocket, ChatroomSocketConnector};
+use super::chatroom_gateway::{
+    ChatroomBridge, ChatroomGateway, GatewayTransport, GatewayTransportResponse,
+};
+use super::edu_api_client::{EduApiClient, EduApiError, EduApiRequest, EduApiResponse};
 use super::pi_rpc::{
     format_sse_event, is_agent_messages_route, is_agent_queue_route, is_agent_status_route,
     is_agent_stop_route, is_agent_workers_status_route, is_agent_workers_stop_all_route,
@@ -20,10 +26,156 @@ use super::{
     parse_internal_recording_route, recording_marker, Bridge, BridgeResponse, HttpRequest,
 };
 
+struct MainTestStorage;
+
+impl AuthStorage for MainTestStorage {
+    fn load(&self) -> Result<Option<PersistedAuth>, AuthError> {
+        Ok(None)
+    }
+    fn save(&self, _auth: &PersistedAuth) -> Result<(), AuthError> {
+        Ok(())
+    }
+    fn clear(&self) -> Result<(), AuthError> {
+        Ok(())
+    }
+}
+
+struct MainTestEduTransport;
+
+impl super::edu_api_client::EduApiTransport for MainTestEduTransport {
+    fn send(&self, _request: EduApiRequest) -> Result<EduApiResponse, EduApiError> {
+        Err(EduApiError::Transport("测试不应调用认证传输".into()))
+    }
+}
+
+struct MainTestSocket;
+
+impl ChatroomSocket for MainTestSocket {
+    fn send_json(
+        &mut self,
+        _command: &super::chatroom_protocol::ChatroomCommand,
+    ) -> Result<(), ChatroomClientError> {
+        Ok(())
+    }
+    fn receive_json(
+        &mut self,
+    ) -> Result<super::chatroom_protocol::ChatroomEvent, ChatroomClientError> {
+        Err(ChatroomClientError::new("closed", "测试 socket 已关闭"))
+    }
+    fn close(&mut self) {}
+}
+
+struct MainTestConnector;
+
+impl ChatroomSocketConnector for MainTestConnector {
+    fn connect(
+        &self,
+        _url: &str,
+        _authorization: &str,
+        _stop: &std::sync::atomic::AtomicBool,
+    ) -> Result<Box<dyn ChatroomSocket>, ChatroomClientError> {
+        Ok(Box::new(MainTestSocket))
+    }
+}
+
+struct MainTestBridge;
+
+impl ChatroomBridge for MainTestBridge {
+    fn send_invocation(
+        &self,
+        _body: Vec<u8>,
+        _shutdown: &std::sync::atomic::AtomicBool,
+    ) -> Result<(), String> {
+        Ok(())
+    }
+    fn send_disconnected(
+        &self,
+        _body: Vec<u8>,
+        _shutdown: &std::sync::atomic::AtomicBool,
+    ) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+struct MainTestGatewayTransport {
+    responses: std::sync::Mutex<Vec<GatewayTransportResponse>>,
+}
+
+impl GatewayTransport for MainTestGatewayTransport {
+    fn request(
+        &self,
+        _method: &str,
+        _path: &str,
+        _body: Option<String>,
+    ) -> Result<GatewayTransportResponse, String> {
+        self.responses
+            .lock()
+            .unwrap()
+            .pop()
+            .ok_or_else(|| "测试传输没有响应".to_string())
+    }
+}
+
+fn main_test_gateway(response: GatewayTransportResponse) -> Arc<ChatroomGateway> {
+    let client = Arc::new(
+        EduApiClient::new("https://example.com", Arc::new(MainTestEduTransport), 1).unwrap(),
+    );
+    let auth = Arc::new(AuthSession::new(client, Arc::new(MainTestStorage)).unwrap());
+    ChatroomGateway::new_with_transport(
+        auth,
+        "https://example.com".into(),
+        Arc::new(MainTestConnector),
+        Arc::new(MainTestBridge),
+        "123e4567-e89b-42d3-a456-426614174000".into(),
+        Arc::new(MainTestGatewayTransport {
+            responses: std::sync::Mutex::new(vec![response]),
+        }),
+    )
+    .unwrap()
+}
+
+fn run_chatroom_http(request: HttpRequest, gateway: Arc<ChatroomGateway>) -> String {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        super::handle_chatroom_http(&mut stream, &request, None, Some(&gateway));
+    });
+    let mut client = std::net::TcpStream::connect(address).unwrap();
+    let mut response = String::new();
+    client.read_to_string(&mut response).unwrap();
+    server.join().unwrap();
+    response
+}
+
 #[test]
 fn given_renderer_chatroom_request_when_routed_then_use_gateway_and_never_forward_to_business_bridge(
 ) {
-    assert!(super::chatroom_http_route_owned("/api/chatrooms/v2/rooms"));
+    let gateway = main_test_gateway(GatewayTransportResponse {
+        status: 200,
+        body: br#"{"data":{"access_token":"jwt","objectKey":"private","memory":"secret","items":[{"sessionToken":"sts"}]}}"#.to_vec(),
+    });
+    let response = run_chatroom_http(
+        HttpRequest {
+            method: "GET".to_string(),
+            target: "/api/chatrooms/v2/rooms".to_string(),
+            headers: HashMap::new(),
+            body: Vec::new(),
+        },
+        gateway,
+    );
+    assert!(response.starts_with("HTTP/1.1 200 OK"));
+    for field in [
+        "access_token",
+        "refresh_token",
+        "Authorization",
+        "tmpSecretKey",
+        "sessionToken",
+        "objectKey",
+        "memory",
+    ] {
+        assert!(!response.contains(field), "public response leaked {field}");
+    }
     assert!(!super::chatroom_http_route_owned("/api/working/profile"));
 }
 
@@ -50,33 +202,189 @@ fn given_internal_chatroom_invocation_without_internal_token_then_return_403() {
 }
 
 #[test]
+fn given_internal_chatroom_options_without_token_then_return_403_before_preflight() {
+    assert!(!super::chatroom_preflight_is_authorized(
+        "OPTIONS",
+        "/api/internal/chatrooms/cos/upload-grant",
+        false,
+    ));
+    assert!(super::chatroom_preflight_is_authorized(
+        "OPTIONS",
+        "/api/chatrooms/v2/events",
+        false,
+    ));
+}
+
+#[test]
+fn given_device_id_when_validating_then_require_uuid_v4_and_rfc_variant() {
+    assert!(super::valid_chatroom_device_id(
+        "123e4567-e89b-42d3-a456-426614174000"
+    ));
+    assert!(!super::valid_chatroom_device_id("device-1"));
+    assert!(!super::valid_chatroom_device_id(
+        "00000000-0000-0000-8000-000000000000"
+    ));
+    assert!(!super::valid_chatroom_device_id(
+        "123e4567-e89b-52d3-a456-426614174000"
+    ));
+}
+
+#[test]
+fn given_device_file_write_failure_then_resolver_fails_closed() {
+    let previous = std::env::var("COPIS_CONFIG_DIR").ok();
+    let config_path =
+        std::env::temp_dir().join(format!("copis-chatroom-device-file-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&config_path);
+    std::fs::create_dir_all(&config_path).unwrap();
+    std::fs::write(config_path.join("client-device.json"), b"not-json").unwrap();
+    std::env::set_var("COPIS_CONFIG_DIR", &config_path);
+    assert!(super::resolve_chatroom_device_id().is_err());
+    match previous {
+        Some(value) => std::env::set_var("COPIS_CONFIG_DIR", value),
+        None => std::env::remove_var("COPIS_CONFIG_DIR"),
+    }
+    let _ = std::fs::remove_dir_all(config_path);
+}
+
+#[cfg(unix)]
+#[test]
+fn given_valid_device_file_with_broad_permissions_then_repair_to_0600_and_reuse_id() {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+
+    let previous = std::env::var("COPIS_CONFIG_DIR").ok();
+    let config_path = std::env::temp_dir().join(format!(
+        "copis-chatroom-device-permissions-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&config_path);
+    std::fs::create_dir_all(&config_path).unwrap();
+    let device_id = "123e4567-e89b-42d3-a456-426614174000";
+    std::fs::write(
+        config_path.join("client-device.json"),
+        format!(r#"{{"version":1,"deviceId":"{device_id}","createdAt":1}}"#),
+    )
+    .unwrap();
+    std::fs::set_permissions(
+        config_path.join("client-device.json"),
+        std::fs::Permissions::from_mode(0o644),
+    )
+    .unwrap();
+    std::env::set_var("COPIS_CONFIG_DIR", &config_path);
+    assert_eq!(super::resolve_chatroom_device_id().unwrap(), device_id);
+    assert_eq!(
+        std::fs::metadata(config_path.join("client-device.json"))
+            .unwrap()
+            .mode()
+            & 0o777,
+        0o600
+    );
+    match previous {
+        Some(value) => std::env::set_var("COPIS_CONFIG_DIR", value),
+        None => std::env::remove_var("COPIS_CONFIG_DIR"),
+    }
+    let _ = std::fs::remove_dir_all(config_path);
+}
+
+#[test]
 fn given_internal_cos_grant_with_valid_token_then_only_internal_response_contains_temporary_credentials(
 ) {
-    assert!(super::chatroom_http_route_owned(
-        "/api/internal/chatrooms/cos/upload-grant"
-    ));
-    assert!(super::is_chatroom_path("/api/chatrooms/v2/rooms/room-1"));
-    assert!(!super::is_chatroom_internal_path(
-        "/api/chatrooms/v2/rooms/room-1"
-    ));
+    let previous = std::env::var("COPIS_HTTP_API_INTERNAL_TOKEN").ok();
+    std::env::set_var("COPIS_HTTP_API_INTERNAL_TOKEN", "task4-internal-token");
+    let gateway = main_test_gateway(GatewayTransportResponse {
+        status: 200,
+        body: br#"{"data":{"attachmentId":"att-1","bucket":"b","region":"r","objectKey":"private/key","credentials":{"tmpSecretId":"id","tmpSecretKey":"key","sessionToken":"session","startTime":1,"expiredTime":2},"action":"upload"}}"#.to_vec(),
+    });
+    let response = run_chatroom_http(
+        HttpRequest {
+            method: "POST".to_string(),
+            target: "/api/internal/chatrooms/cos/upload-grant".to_string(),
+            headers: HashMap::from([(
+                "x-copis-internal-token".to_string(),
+                "task4-internal-token".to_string(),
+            )]),
+            body: br#"{"roomId":"room-1","fileName":"a.txt","mimeType":"text/plain","sizeBytes":1,"sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}"#.to_vec(),
+        },
+        gateway,
+    );
+    assert!(response.contains("tmpSecretKey"));
+    assert!(response.contains("sessionToken"));
+    assert!(response.contains("objectKey"));
+    assert!(!response.contains("Authorization"));
+    match previous {
+        Some(value) => std::env::set_var("COPIS_HTTP_API_INTERNAL_TOKEN", value),
+        None => std::env::remove_var("COPIS_HTTP_API_INTERNAL_TOKEN"),
+    }
 }
 
 #[test]
 fn given_sse_request_when_connection_closes_then_main_does_not_shutdown_background_gateway() {
-    assert!(super::chatroom_http_route_owned("/api/chatrooms/v2/events"));
-    assert!(!super::is_chatroom_internal_path(
-        "/api/chatrooms/v2/events"
-    ));
+    let previous_heartbeat = std::env::var("COPIS_CHATROOM_SSE_HEARTBEAT_MS").ok();
+    std::env::set_var("COPIS_CHATROOM_SSE_HEARTBEAT_MS", "20");
+    let gateway = main_test_gateway(GatewayTransportResponse {
+        status: 200,
+        body: br#"{"data":[]}"#.to_vec(),
+    });
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let (done, done_receiver) = std::sync::mpsc::channel();
+    let server_gateway = Arc::clone(&gateway);
+    let server = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let request = HttpRequest {
+            method: "GET".to_string(),
+            target: "/api/chatrooms/v2/events?roomId=room-1".to_string(),
+            headers: HashMap::new(),
+            body: Vec::new(),
+        };
+        super::handle_chatroom_http(&mut stream, &request, None, Some(&server_gateway));
+        let _ = done.send(());
+    });
+    let mut client = std::net::TcpStream::connect(address).unwrap();
+    let mut headers = [0_u8; 64];
+    let _ = client.read(&mut headers);
+    client.shutdown(std::net::Shutdown::Both).unwrap();
+    assert!(done_receiver
+        .recv_timeout(Duration::from_millis(500))
+        .is_ok());
+    server.join().unwrap();
+    assert!(!gateway.shutdown_requested_for_test());
+    match previous_heartbeat {
+        Some(value) => std::env::set_var("COPIS_CHATROOM_SSE_HEARTBEAT_MS", value),
+        None => std::env::remove_var("COPIS_CHATROOM_SSE_HEARTBEAT_MS"),
+    }
 }
 
 #[test]
 fn given_process_shutdown_when_gateway_is_running_then_close_ws_and_release_leases() {
-    assert!(super::chatroom_http_route_owned(
-        "/api/internal/chatrooms/invocations/invocation-1/completed"
-    ));
-    assert!(super::is_chatroom_internal_path(
-        "/api/internal/chatrooms/invocations/invocation-1/completed"
-    ));
+    let gateway = main_test_gateway(GatewayTransportResponse {
+        status: 204,
+        body: Vec::new(),
+    });
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    drop(listener);
+    let occupied = std::net::TcpListener::bind((super::HOST, port)).unwrap();
+    let result = super::bind_and_start_chatroom_gateway(port, &gateway);
+    assert!(result.is_err());
+    assert!(gateway.shutdown_requested_for_test());
+    drop(occupied);
+}
+
+#[test]
+fn given_auth_storage_state_change_then_pause_and_resume_chatroom_gateway() {
+    let gateway = main_test_gateway(GatewayTransportResponse {
+        status: 204,
+        body: Vec::new(),
+    });
+    let storage = super::BridgeAuthStorage {
+        bridge: Arc::new(Bridge::new()),
+        chatroom_gateway: std::sync::Mutex::new(Some(Arc::downgrade(&gateway))),
+    };
+    storage.notify_chatroom_gateway(false);
+    assert!(gateway.connection_paused_for_test());
+    assert_eq!(gateway.lease_count_for_test(), 0);
+    storage.notify_chatroom_gateway(true);
+    assert!(!gateway.connection_paused_for_test());
 }
 
 #[test]
