@@ -297,18 +297,67 @@ fn given_snapshot_when_parsing_then_expose_latest_seq_without_persistent_seq() {
 }
 
 #[test]
-fn given_public_event_with_nested_secrets_when_sanitizing_then_remove_internal_fields() {
+fn given_public_message_with_attachment_ids_when_sanitizing_then_keep_ids_and_remove_secrets() {
     let event = ChatroomEvent::MessageCreated {
         room_id: "room-1".into(),
         seq: 1,
-        payload: json!({"message":"ok", "attachmentId":"att-1", "nested":{"accessToken":"secret", "localPath":"/tmp/x"}, "items":[{"sessionToken":"secret"}]}),
+        payload: json!({"message":"ok", "attachmentIds":["att-1", "att-2"], "nested":{"accessToken":"secret", "localPath":"/tmp/x"}, "items":[{"sessionToken":"secret"}], "authorization":"Bearer jwt"}),
     };
     let public = public_event(&event);
     assert_eq!(public["roomId"], "room-1");
     assert_eq!(public["seq"], 1);
     assert_eq!(public["payload"]["message"], "ok");
-    assert!(public["payload"].get("attachmentId").is_none());
+    assert_eq!(
+        public["payload"]["attachmentIds"],
+        json!(["att-1", "att-2"])
+    );
     assert!(!public.to_string().contains("secret"));
+}
+
+#[test]
+fn given_public_attachment_event_with_cos_grant_when_serializing_then_keep_id_and_filter_grant_secrets(
+) {
+    let grant = filter_cos_sts(
+        &json!({
+            "data": {
+                "bucket":"b", "region":"r", "objectKey":"private/path",
+                "attachmentId":"att-1",
+                "credentials": {
+                    "tmpSecretId":"id", "tmpSecretKey":"key", "sessionToken":"token",
+                    "startTime":1, "expiredTime":2
+                },
+                "action":"download"
+            }
+        }),
+        CosAction::Download,
+    )
+    .unwrap();
+    let event = ChatroomEvent::AttachmentUpdated {
+        room_id: "room-1".into(),
+        seq: 2,
+        payload: json!({
+            "attachmentId":"att-1",
+            "grant":serde_json::to_value(grant).unwrap(),
+            "Authorization":"Bearer jwt"
+        }),
+    };
+
+    let public: Value = serde_json::to_value(&event).unwrap();
+    assert_eq!(public["payload"]["attachmentId"], "att-1");
+    assert_eq!(public["payload"]["grant"]["attachmentId"], "att-1");
+    for field in [
+        "objectKey",
+        "tmpSecretId",
+        "tmpSecretKey",
+        "sessionToken",
+        "Authorization",
+    ] {
+        assert!(public["payload"].get(field).is_none(), "leaked {field}");
+        assert!(
+            public["payload"]["grant"].get(field).is_none(),
+            "leaked grant {field}"
+        );
+    }
 }
 
 #[test]

@@ -996,7 +996,6 @@ fn forbidden(key: &str) -> bool {
         "accesstoken",
         "refreshtoken",
         "sessiontoken",
-        "attachmentid",
         "objectkey",
         "cosobject",
         "storageobject",
