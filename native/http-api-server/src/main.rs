@@ -165,6 +165,76 @@ struct Bridge {
     recording_paths: Mutex<HashMap<(String, String), PathBuf>>,
 }
 
+enum ChatroomGatewayLifecycleState {
+    WaitingForRegistration,
+    Registered(Weak<ChatroomGateway>),
+    StartupFailed,
+}
+
+struct ChatroomGatewayLifecycle {
+    state: Mutex<ChatroomGatewayLifecycleState>,
+    changed: std::sync::Condvar,
+}
+
+impl ChatroomGatewayLifecycle {
+    fn new() -> Self {
+        Self {
+            state: Mutex::new(ChatroomGatewayLifecycleState::WaitingForRegistration),
+            changed: std::sync::Condvar::new(),
+        }
+    }
+
+    fn register_gateway(&self, gateway: &Arc<ChatroomGateway>) {
+        let mut state = self.state.lock().unwrap();
+        if matches!(
+            *state,
+            ChatroomGatewayLifecycleState::WaitingForRegistration
+        ) {
+            *state = ChatroomGatewayLifecycleState::Registered(Arc::downgrade(gateway));
+            self.changed.notify_all();
+        }
+    }
+
+    fn mark_startup_failed(&self) {
+        *self.state.lock().unwrap() = ChatroomGatewayLifecycleState::StartupFailed;
+        self.changed.notify_all();
+    }
+
+    fn gateway(&self) -> Option<Arc<ChatroomGateway>> {
+        let state = self.state.lock().unwrap();
+        match &*state {
+            ChatroomGatewayLifecycleState::Registered(gateway) => gateway.upgrade(),
+            ChatroomGatewayLifecycleState::WaitingForRegistration
+            | ChatroomGatewayLifecycleState::StartupFailed => None,
+        }
+    }
+
+    fn shutdown_after_bridge_disconnect(&self) {
+        let mut state = self.state.lock().unwrap();
+        loop {
+            match &*state {
+                ChatroomGatewayLifecycleState::WaitingForRegistration => {
+                    state = self.changed.wait(state).unwrap();
+                }
+                ChatroomGatewayLifecycleState::Registered(gateway) => {
+                    let gateway = gateway.upgrade();
+                    drop(state);
+                    if let Some(gateway) = gateway {
+                        gateway.shutdown();
+                    }
+                    return;
+                }
+                ChatroomGatewayLifecycleState::StartupFailed => return,
+            }
+        }
+    }
+}
+
+fn startup_failed_and_exit(lifecycle: &ChatroomGatewayLifecycle, code: i32) -> ! {
+    lifecycle.mark_startup_failed();
+    process::exit(code);
+}
+
 struct AuthWorkingBackend {
     auth: Arc<AuthSession>,
 }
@@ -217,7 +287,7 @@ fn parse_auth_working_response(response: EduApiResponse) -> Result<Value, SkillM
 
 struct BridgeAuthStorage {
     bridge: Arc<Bridge>,
-    chatroom_gateway: Arc<Mutex<Option<Weak<ChatroomGateway>>>>,
+    chatroom_gateway: Arc<ChatroomGatewayLifecycle>,
 }
 
 impl AuthStorage for BridgeAuthStorage {
@@ -354,16 +424,11 @@ impl AuthStorage for BridgeAuthStorage {
 
 impl BridgeAuthStorage {
     fn set_chatroom_gateway(&self, gateway: &Arc<ChatroomGateway>) {
-        *self.chatroom_gateway.lock().unwrap() = Some(Arc::downgrade(gateway));
+        self.chatroom_gateway.register_gateway(gateway);
     }
 
     fn notify_chatroom_gateway(&self, authenticated: bool) {
-        let gateway = self
-            .chatroom_gateway
-            .lock()
-            .unwrap()
-            .as_ref()
-            .and_then(Weak::upgrade);
+        let gateway = self.chatroom_gateway.gateway();
         let Some(gateway) = gateway else {
             return;
         };
@@ -1391,7 +1456,7 @@ fn send_memory_not_found(stream: &mut TcpStream, origin: Option<&str>) {
 fn read_bridge_responses_from<R: BufRead>(
     reader: R,
     bridge: &Bridge,
-    chatroom_gateway: &Arc<Mutex<Option<Weak<ChatroomGateway>>>>,
+    lifecycle: &ChatroomGatewayLifecycle,
 ) {
     for line_result in reader.lines() {
         let Ok(line) = line_result else {
@@ -1405,31 +1470,18 @@ fn read_bridge_responses_from<R: BufRead>(
             eprintln!("[HTTP API] 收到无法解析的 Electron 响应");
         }
     }
-    cleanup_after_bridge_disconnect(bridge, chatroom_gateway);
+    cleanup_after_bridge_disconnect(bridge, lifecycle);
 }
 
-fn cleanup_after_bridge_disconnect(
-    bridge: &Bridge,
-    chatroom_gateway: &Arc<Mutex<Option<Weak<ChatroomGateway>>>>,
-) {
+fn cleanup_after_bridge_disconnect(bridge: &Bridge, lifecycle: &ChatroomGatewayLifecycle) {
     bridge.fail_all("Electron HTTP API 业务桥已关闭");
-    let gateway = chatroom_gateway
-        .lock()
-        .unwrap()
-        .as_ref()
-        .and_then(Weak::upgrade);
-    if let Some(gateway) = gateway {
-        gateway.shutdown();
-    }
+    lifecycle.shutdown_after_bridge_disconnect();
 }
 
-fn read_bridge_responses(
-    bridge: Arc<Bridge>,
-    chatroom_gateway: Arc<Mutex<Option<Weak<ChatroomGateway>>>>,
-) {
+fn read_bridge_responses(bridge: Arc<Bridge>, lifecycle: Arc<ChatroomGatewayLifecycle>) {
     let stdin = io::stdin();
     let reader = BufReader::new(stdin.lock());
-    read_bridge_responses_from(reader, &bridge, &chatroom_gateway);
+    read_bridge_responses_from(reader, &bridge, &lifecycle);
     process::exit(0);
 }
 
@@ -4092,29 +4144,29 @@ impl Drop for ConnectionCountGuard {
 fn main() {
     let port = configured_port();
     let bridge = Arc::new(Bridge::new());
-    let chatroom_gateway_slot = Arc::new(Mutex::new(None));
+    let chatroom_gateway_lifecycle = Arc::new(ChatroomGatewayLifecycle::new());
     if bridge.available.load(Ordering::Acquire) {
         let response_bridge = Arc::clone(&bridge);
-        let response_gateway_slot = Arc::clone(&chatroom_gateway_slot);
-        thread::spawn(move || read_bridge_responses(response_bridge, response_gateway_slot));
+        let response_lifecycle = Arc::clone(&chatroom_gateway_lifecycle);
+        thread::spawn(move || read_bridge_responses(response_bridge, response_lifecycle));
     }
     let edu_client = match EduApiClient::from_environment(DEFAULT_MAX_CONCURRENT_REQUESTS) {
         Ok(client) => Arc::new(client),
         Err(error) => {
             eprintln!("[HTTP API] edu-api client 初始化失败: {}", error);
-            process::exit(1);
+            startup_failed_and_exit(&chatroom_gateway_lifecycle, 1);
         }
     };
     let bridge_auth_storage = Arc::new(BridgeAuthStorage {
         bridge: Arc::clone(&bridge),
-        chatroom_gateway: Arc::clone(&chatroom_gateway_slot),
+        chatroom_gateway: Arc::clone(&chatroom_gateway_lifecycle),
     });
     let auth_storage: Arc<dyn AuthStorage> = bridge_auth_storage.clone();
     let auth_client = match EduApiClient::from_auth_environment(DEFAULT_MAX_CONCURRENT_REQUESTS) {
         Ok(client) => Arc::new(client),
         Err(error) => {
             eprintln!("[HTTP API] Auth OIDC client 初始化失败: {}", error);
-            process::exit(1);
+            startup_failed_and_exit(&chatroom_gateway_lifecycle, 1);
         }
     };
     let auth_session = match AuthSession::new_with_oidc(
@@ -4125,7 +4177,7 @@ fn main() {
         Ok(session) => Arc::new(session),
         Err(error) => {
             eprintln!("[HTTP API] Working 认证会话初始化失败: {}", error);
-            process::exit(1);
+            startup_failed_and_exit(&chatroom_gateway_lifecycle, 1);
         }
     };
     // Electron 此时只启动了子进程，尚未把 Rust API 判定为 ready。
@@ -4135,7 +4187,7 @@ fn main() {
         Ok(client) => client,
         Err(error) => {
             eprintln!("[HTTP API] model-request client 初始化失败: {}", error);
-            process::exit(1);
+            startup_failed_and_exit(&chatroom_gateway_lifecycle, 1);
         }
     };
     eprintln!(
@@ -4156,14 +4208,14 @@ fn main() {
         Ok(store) => Arc::new(store),
         Err(error) => {
             eprintln!("[HTTP API] Memory 存储初始化失败: {}", error);
-            process::exit(1);
+            startup_failed_and_exit(&chatroom_gateway_lifecycle, 1);
         }
     };
     let expert_team_store = match ExpertTeamStore::open(resolve_expert_teams_directory()) {
         Ok(store) => Arc::new(store),
         Err(error) => {
             eprintln!("[HTTP API] Expert Teams 存储初始化失败: {}", error);
-            process::exit(1);
+            startup_failed_and_exit(&chatroom_gateway_lifecycle, 1);
         }
     };
     let skill_market_state = Arc::new(SkillMarketState::production(Arc::new(AuthWorkingBackend {
@@ -4177,7 +4229,7 @@ fn main() {
         Ok(workspace) => Arc::new(workspace),
         Err(error) => {
             eprintln!("[HTTP API] 默认支付工作区初始化失败: {}", error);
-            process::exit(1);
+            startup_failed_and_exit(&chatroom_gateway_lifecycle, 1);
         }
     };
     start_desktop_payment_poller(
@@ -4201,7 +4253,7 @@ fn main() {
         Ok(device_id) => device_id,
         Err(error) => {
             eprintln!("[HTTP API] 聊天室设备标识初始化失败: {}", error);
-            process::exit(1);
+            startup_failed_and_exit(&chatroom_gateway_lifecycle, 1);
         }
     };
     let chatroom_bridge: Arc<dyn ChatroomBridge> = bridge.clone();
@@ -4215,7 +4267,7 @@ fn main() {
         Ok(gateway) => gateway,
         Err(error) => {
             eprintln!("[HTTP API] 聊天室网关初始化失败: {}", error.message);
-            process::exit(1);
+            startup_failed_and_exit(&chatroom_gateway_lifecycle, 1);
         }
     };
     bridge_auth_storage.set_chatroom_gateway(&chatroom_gateway);
@@ -4227,7 +4279,7 @@ fn main() {
         Ok(listener) => listener,
         Err(error) => {
             eprintln!("[HTTP API] 无法监听 {}:{}: {}", HOST, port, error);
-            process::exit(1);
+            startup_failed_and_exit(&chatroom_gateway_lifecycle, 1);
         }
     };
     let _chatroom_shutdown = ChatroomGatewayShutdownGuard(Arc::clone(&chatroom_gateway));

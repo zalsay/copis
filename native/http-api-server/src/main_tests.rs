@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Barrier, Mutex};
+use std::sync::{Arc, Barrier};
 use std::thread;
 use std::time::Duration;
 
@@ -152,13 +152,40 @@ fn given_bridge_eof_when_cleanup_runs_then_shutdown_shared_gateway_without_proce
     gateway.register_lease_for_test("room-1", "agent-1", "device-1");
     gateway.start();
     let bridge = Arc::new(Bridge::new());
-    let gateway_slot = Arc::new(Mutex::new(Some(Arc::downgrade(&gateway))));
+    let lifecycle = Arc::new(super::ChatroomGatewayLifecycle::new());
+    lifecycle.register_gateway(&gateway);
 
-    super::read_bridge_responses_from(
-        std::io::Cursor::new(Vec::<u8>::new()),
-        &bridge,
-        &gateway_slot,
-    );
+    super::read_bridge_responses_from(std::io::Cursor::new(Vec::<u8>::new()), &bridge, &lifecycle);
+
+    assert!(gateway.shutdown_requested_for_test());
+    assert_eq!(gateway.lease_count_for_test(), 0);
+}
+
+#[test]
+fn given_bridge_eof_before_gateway_registration_when_cleanup_runs_then_wait_for_registration_and_shutdown_gateway(
+) {
+    let gateway = main_test_gateway(GatewayTransportResponse {
+        status: 204,
+        body: Vec::new(),
+    });
+    gateway.register_lease_for_test("room-1", "agent-1", "device-1");
+    gateway.start();
+    let bridge = Arc::new(Bridge::new());
+    let lifecycle = Arc::new(super::ChatroomGatewayLifecycle::new());
+    let (finished_tx, finished_rx) = std::sync::mpsc::channel();
+    let cleanup_bridge = Arc::clone(&bridge);
+    let cleanup_lifecycle = Arc::clone(&lifecycle);
+    let cleanup = thread::spawn(move || {
+        super::cleanup_after_bridge_disconnect(&cleanup_bridge, &cleanup_lifecycle);
+        finished_tx.send(()).unwrap();
+    });
+
+    assert!(finished_rx.recv_timeout(Duration::from_millis(50)).is_err());
+    lifecycle.register_gateway(&gateway);
+    finished_rx
+        .recv_timeout(Duration::from_secs(1))
+        .expect("gateway 注册后 EOF 清理应完成");
+    cleanup.join().unwrap();
 
     assert!(gateway.shutdown_requested_for_test());
     assert_eq!(gateway.lease_count_for_test(), 0);
@@ -752,8 +779,9 @@ fn given_auth_storage_state_change_then_pause_and_resume_chatroom_gateway() {
     });
     let storage = super::BridgeAuthStorage {
         bridge: Arc::new(Bridge::new()),
-        chatroom_gateway: Arc::new(std::sync::Mutex::new(Some(Arc::downgrade(&gateway)))),
+        chatroom_gateway: Arc::new(super::ChatroomGatewayLifecycle::new()),
     };
+    storage.chatroom_gateway.register_gateway(&gateway);
     storage.notify_chatroom_gateway(false);
     assert!(gateway.connection_paused_for_test());
     assert_eq!(gateway.lease_count_for_test(), 0);

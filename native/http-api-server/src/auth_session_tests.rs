@@ -16,6 +16,7 @@ struct MemoryStorage {
     value: Mutex<Option<PersistedAuth>>,
     saves: AtomicUsize,
     clears: AtomicUsize,
+    clear_error: AtomicBool,
 }
 
 impl AuthStorage for MemoryStorage {
@@ -31,6 +32,9 @@ impl AuthStorage for MemoryStorage {
 
     fn clear(&self) -> Result<(), AuthError> {
         self.clears.fetch_add(1, Ordering::SeqCst);
+        if self.clear_error.load(Ordering::SeqCst) {
+            return Err(AuthError::Storage("测试认证清理失败".to_string()));
+        }
         *self.value.lock().unwrap() = None;
         Ok(())
     }
@@ -172,6 +176,54 @@ fn auth_state_observer_runs_after_login_publishes_in_memory_auth() {
     auth.login(login_input()).unwrap();
 
     assert!(observed.load(Ordering::Acquire));
+}
+
+#[test]
+fn login_profile_enrichment_notifies_auth_observer_only_once() {
+    let transport = Arc::new(QueueTransport::new(vec![
+        response(200, json!({"token":"access-token"})),
+        response(200, json!({"data":{"id":7,"email":"user@example.com"}})),
+    ]));
+    let storage = Arc::new(MemoryStorage::default());
+    let auth = session(transport, storage);
+    let notifications = Arc::new(AtomicUsize::new(0));
+    let notifications_clone = Arc::clone(&notifications);
+    auth.set_auth_state_observer(Arc::new(move |authenticated| {
+        assert!(authenticated);
+        notifications_clone.fetch_add(1, Ordering::SeqCst);
+    }));
+
+    auth.login(login_input()).unwrap();
+
+    assert_eq!(notifications.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn explicit_logout_returns_storage_clear_error_after_local_auth_is_cleared() {
+    let transport = Arc::new(QueueTransport::new(vec![]));
+    let storage = Arc::new(MemoryStorage::default());
+    *storage.value.lock().unwrap() = Some(persisted_auth());
+    storage.clear_error.store(true, Ordering::SeqCst);
+    let auth = Arc::new(session(transport, storage.clone()));
+    let notifications = Arc::new(Mutex::new(Vec::new()));
+    let notifications_clone = Arc::clone(&notifications);
+    let auth_weak = Arc::downgrade(&auth);
+    auth.set_auth_state_observer(Arc::new(move |authenticated| {
+        notifications_clone.lock().unwrap().push((
+            authenticated,
+            auth_weak.upgrade().unwrap().auth_state().authenticated,
+        ));
+    }));
+
+    let result = auth.logout();
+
+    assert!(matches!(
+        result,
+        Err(AuthError::Storage(message)) if message == "测试认证清理失败"
+    ));
+    assert!(!auth.auth_state().authenticated);
+    assert_eq!(*notifications.lock().unwrap(), vec![(false, false)]);
+    assert_eq!(storage.clears.load(Ordering::SeqCst), 1);
 }
 
 #[test]

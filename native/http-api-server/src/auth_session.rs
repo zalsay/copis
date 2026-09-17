@@ -438,7 +438,6 @@ impl AuthSession {
                 }
                 eprintln!("[HTTP API][OIDC] 保存用户信息成功");
                 *self.auth.lock().unwrap() = Some(persisted);
-                self.notify_auth_state_changed(true);
             }
         }
         Ok(self.auth_state())
@@ -481,7 +480,6 @@ impl AuthSession {
                         persisted.user = Some(sanitize_user(&unwrap_data(&payload)));
                         self.storage.save(&persisted)?;
                         *self.auth.lock().unwrap() = Some(persisted);
-                        self.notify_auth_state_changed(true);
                     }
                 }
                 Err(error @ AuthError::Upstream { status: 401, .. }) => {
@@ -602,8 +600,8 @@ impl AuthSession {
     }
 
     pub fn logout(&self) -> Result<(), AuthError> {
-        self.clear_after_auth_failure();
-        Ok(())
+        self.clear_local_auth();
+        self.storage.clear()
     }
 
     pub fn authenticated_request(
@@ -775,9 +773,15 @@ impl AuthSession {
     }
 
     fn clear_after_auth_failure(&self) {
+        self.clear_local_auth();
+        if self.storage.clear().is_err() {
+            eprintln!("[HTTP API][认证] 自动清理认证存储失败");
+        }
+    }
+
+    fn clear_local_auth(&self) {
         *self.auth.lock().unwrap() = None;
         self.notify_auth_state_changed(false);
-        let _ = self.storage.clear();
     }
 }
 
