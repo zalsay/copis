@@ -241,9 +241,6 @@ impl ChatroomClient {
         }
         let wake_budget =
             is_ordinary_command(&command) && self.wake_on_ordinary.swap(false, Ordering::AcqRel);
-        if !matches!(command, ChatroomCommand::Close) {
-            self.paused.store(false, Ordering::Release);
-        }
         #[cfg(test)]
         let command_gate = self.command_gate.lock().unwrap().take();
         #[cfg(test)]
@@ -323,6 +320,7 @@ fn run_worker(
         if paused.load(Ordering::Acquire) {
             match command_rx.recv() {
                 Ok(queued) => {
+                    let resumes = !matches!(&queued.command, ChatroomCommand::Close);
                     if apply_command(
                         queued.command,
                         &mut subscription,
@@ -335,6 +333,9 @@ fn run_worker(
                         &wake_on_ordinary,
                     ) {
                         return;
+                    }
+                    if resumes {
+                        paused.store(false, Ordering::Release);
                     }
                 }
                 Err(_) => return,

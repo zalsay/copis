@@ -88,6 +88,7 @@ impl EduApiTransport for RetryableRefreshTransport {
 struct FakeSocket {
     received: Mutex<VecDeque<Result<ChatroomEvent, ChatroomClientError>>>,
     receive_release: Mutex<Option<mpsc::Receiver<()>>>,
+    receive_started: Mutex<Option<mpsc::Sender<()>>>,
     sent: Mutex<Vec<ChatroomCommand>>,
     on_subscribe: Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
     closed: AtomicBool,
@@ -103,6 +104,7 @@ impl FakeSocket {
         Arc::new(Self {
             received: Mutex::new(events.into()),
             receive_release: Mutex::new(None),
+            receive_started: Mutex::new(None),
             sent: Mutex::new(Vec::new()),
             on_subscribe: Mutex::new(None),
             closed: AtomicBool::new(false),
@@ -115,13 +117,20 @@ impl FakeSocket {
     }
 
     fn gated_disconnect() -> (Arc<Self>, mpsc::Sender<()>) {
+        let (socket, _started, release) = Self::gated_disconnect_with_start();
+        (socket, release)
+    }
+
+    fn gated_disconnect_with_start() -> (Arc<Self>, mpsc::Receiver<()>, mpsc::Sender<()>) {
         let (release, wait) = mpsc::channel();
+        let (started, started_receiver) = mpsc::channel();
         let socket = Self::new(vec![Err(ChatroomClientError::new(
             "disconnected",
             "测试立即断开",
         ))]);
         *socket.receive_release.lock().unwrap() = Some(wait);
-        (socket, release)
+        *socket.receive_started.lock().unwrap() = Some(started);
+        (socket, started_receiver, release)
     }
 
     fn with_send_failures(
@@ -178,6 +187,9 @@ impl ChatroomSocket for Arc<FakeSocket> {
     }
 
     fn receive_json(&mut self) -> Result<ChatroomEvent, ChatroomClientError> {
+        if let Some(started) = self.receive_started.lock().unwrap().take() {
+            let _ = started.send(());
+        }
         if let Some(release) = self.receive_release.lock().unwrap().take() {
             release
                 .recv_timeout(Duration::from_secs(1))
@@ -1281,10 +1293,8 @@ fn given_temporary_pause_when_authenticated_client_is_restarted_then_new_socket_
         }),
         storage,
     );
-    let first = FakeSocket::new(vec![Ok(ChatroomEvent::AgentDelta {
-        room_id: "room-1".into(),
-        payload: json!({"delta":"ready"}),
-    })]);
+    let (first, first_receive_started, first_receive_release) =
+        FakeSocket::gated_disconnect_with_start();
     let second = FakeSocket::new(vec![Err(ChatroomClientError::new(
         "read_timeout",
         "测试空闲连接",
@@ -1306,7 +1316,13 @@ fn given_temporary_pause_when_authenticated_client_is_restarted_then_new_socket_
     assert!(receiver
         .recv_timeout(Duration::from_millis(500))
         .is_ok_and(|event| matches!(event, ChatroomClientEvent::Connected)));
+    first_receive_started
+        .recv_timeout(Duration::from_millis(500))
+        .expect("首个 socket 未进入可控 receive");
     client.pause();
+    assert_eq!(connector.attempts.load(Ordering::SeqCst), 1);
+    assert!(receiver.recv_timeout(Duration::from_millis(20)).is_err());
+    first_receive_release.send(()).unwrap();
     let disconnected = (0..10).any(|_| {
         receiver
             .recv_timeout(Duration::from_millis(100))
