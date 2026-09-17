@@ -630,6 +630,73 @@ fn given_unavailable_then_ordinary_command_wakes_one_new_retry_budget() {
 }
 
 #[test]
+fn given_unavailable_then_burst_ordinary_commands_only_one_can_claim_wake_budget() {
+    let connector =
+        FakeConnector::new(
+            (0..8)
+                .map(|_| ConnectResult::Error(ChatroomClientError::new("transport", "连接失败")))
+                .chain((0..100).map(|_| {
+                    ConnectResult::Error(ChatroomClientError::new("transport", "连接失败"))
+                }))
+                .collect(),
+        );
+    let backoff = FakeBackoff::new();
+    let (events, receiver) = mpsc::channel();
+    let client = ChatroomClient::new_with_backoff(
+        auth(
+            Arc::new(RefreshTransport {
+                calls: AtomicUsize::new(0),
+            }),
+            Arc::new(MemoryStorage::default()),
+        ),
+        "wss://edu.example/ws".into(),
+        connector.clone(),
+        events,
+        backoff,
+    );
+    client.start();
+    client.command(subscribe()).unwrap();
+    receive_until(
+        &receiver,
+        |event| matches!(event, ChatroomClientEvent::Status { code, .. } if code == "realtime_unavailable"),
+    );
+
+    let (loaded, release) = client.gate_next_command();
+    let command_client = Arc::new(client);
+    let first_command_client = command_client.clone();
+    let first = std::thread::spawn(move || {
+        first_command_client
+            .command(ChatroomCommand::RenewLease {
+                room_id: "room-1".into(),
+                agent_id: "agent-1".into(),
+                device_id: "device-1".into(),
+            })
+            .unwrap();
+    });
+    loaded
+        .recv_timeout(Duration::from_secs(1))
+        .expect("测试第一个命令未观察到唤醒预算");
+    for _ in 0..7 {
+        command_client
+            .command(ChatroomCommand::RenewLease {
+                room_id: "room-1".into(),
+                agent_id: "agent-1".into(),
+                device_id: "device-1".into(),
+            })
+            .unwrap();
+    }
+    release.send(()).unwrap();
+    first.join().unwrap();
+
+    receive_until(
+        &receiver,
+        |event| matches!(event, ChatroomClientEvent::Status { code, .. } if code == "realtime_unavailable"),
+    );
+    assert_eq!(connector.authorizations.lock().unwrap().len(), 16);
+    command_client.shutdown();
+}
+
+#[test]
 fn given_pending_commands_before_connect_then_flush_all_in_order_after_initial_subscribe() {
     let socket = FakeSocket::new(Vec::new());
     let connector = FakeConnector::new(vec![ConnectResult::Socket(socket.clone())]);

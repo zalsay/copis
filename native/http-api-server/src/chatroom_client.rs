@@ -54,6 +54,12 @@ struct QueuedCommand {
     wake_budget: bool,
 }
 
+#[cfg(test)]
+struct CommandEnqueueGate {
+    loaded: mpsc::Sender<()>,
+    release: mpsc::Receiver<()>,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ChatroomClientError {
     pub code: String,
@@ -112,6 +118,8 @@ pub struct ChatroomClient {
     commands: Mutex<Option<mpsc::Sender<QueuedCommand>>>,
     stop: Arc<AtomicBool>,
     wake_on_ordinary: Arc<AtomicBool>,
+    #[cfg(test)]
+    command_gate: Mutex<Option<CommandEnqueueGate>>,
     worker: Mutex<Option<JoinHandle<()>>>,
     backoff: Arc<dyn BackoffWaiter>,
 }
@@ -147,9 +155,22 @@ impl ChatroomClient {
             commands: Mutex::new(None),
             stop: Arc::new(AtomicBool::new(false)),
             wake_on_ordinary: Arc::new(AtomicBool::new(true)),
+            #[cfg(test)]
+            command_gate: Mutex::new(None),
             worker: Mutex::new(None),
             backoff,
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn gate_next_command(&self) -> (mpsc::Receiver<()>, mpsc::Sender<()>) {
+        let (loaded, loaded_receiver) = mpsc::channel();
+        let (release, release_receiver) = mpsc::channel();
+        *self.command_gate.lock().unwrap() = Some(CommandEnqueueGate {
+            loaded,
+            release: release_receiver,
+        });
+        (loaded_receiver, release)
     }
 
     pub fn start(&self) {
@@ -189,7 +210,17 @@ impl ChatroomClient {
                 "聊天室连接已关闭",
             ));
         }
-        let wake_budget = self.wake_on_ordinary.load(Ordering::Acquire);
+        let wake_budget =
+            is_ordinary_command(&command) && self.wake_on_ordinary.swap(false, Ordering::AcqRel);
+        #[cfg(test)]
+        let command_gate = self.command_gate.lock().unwrap().take();
+        #[cfg(test)]
+        if let Some(gate) = command_gate {
+            let _ = gate.loaded.send(());
+            gate.release
+                .recv_timeout(Duration::from_secs(1))
+                .expect("测试命令未收到放行信号");
+        }
         self.commands
             .lock()
             .unwrap()
@@ -471,6 +502,17 @@ fn reset_retry_budget(retries: &mut usize, refresh: &mut RefreshAttempt) {
     *retries = 0;
     refresh.attempted = false;
     refresh.failed = false;
+}
+
+fn is_ordinary_command(command: &ChatroomCommand) -> bool {
+    matches!(
+        command,
+        ChatroomCommand::SendMessage { .. }
+            | ChatroomCommand::AgentAccepted { .. }
+            | ChatroomCommand::AgentEvent { .. }
+            | ChatroomCommand::RenewLease { .. }
+            | ChatroomCommand::CursorAck { .. }
+    )
 }
 
 fn mark_unavailable(unavailable: &mut bool, wake_on_ordinary: &AtomicBool) {
