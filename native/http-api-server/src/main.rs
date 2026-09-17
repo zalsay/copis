@@ -16,6 +16,7 @@ mod app_update;
 mod auth_session;
 mod automation;
 mod automation_scheduler;
+mod chatroom_protocol;
 mod edu_api_client;
 mod expert_teams;
 mod memory;
@@ -3858,6 +3859,10 @@ mod tests;
 #[cfg(test)]
 #[path = "auth_session_tests.rs"]
 mod auth_session_tests;
+
+#[cfg(test)]
+#[path = "chatroom_protocol_tests.rs"]
+mod chatroom_protocol_tests;
 
 #[cfg(test)]
 #[path = "automation_test.rs"]
