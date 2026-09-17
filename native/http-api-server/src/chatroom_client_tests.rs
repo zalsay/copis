@@ -1,7 +1,8 @@
 use super::auth_session::{AuthError, AuthSession, AuthStorage, PersistedAuth};
 use super::chatroom_client::{
     decode_message, websocket_connect_config, BackoffWaiter, ChatroomClient, ChatroomClientError,
-    ChatroomClientEvent, ChatroomSocket, ChatroomSocketConnector,
+    ChatroomClientEvent, ChatroomHostResolver, ChatroomSocket, ChatroomSocketConnector,
+    TungsteniteConnector,
 };
 use super::chatroom_protocol::{ChatroomCommand, ChatroomEvent, RoomCursor};
 use super::edu_api_client::{
@@ -86,6 +87,7 @@ impl EduApiTransport for RetryableRefreshTransport {
 
 struct FakeSocket {
     received: Mutex<VecDeque<Result<ChatroomEvent, ChatroomClientError>>>,
+    receive_release: Mutex<Option<mpsc::Receiver<()>>>,
     sent: Mutex<Vec<ChatroomCommand>>,
     closed: AtomicBool,
     send_count: AtomicUsize,
@@ -96,11 +98,22 @@ impl FakeSocket {
     fn new(events: Vec<Result<ChatroomEvent, ChatroomClientError>>) -> Arc<Self> {
         Arc::new(Self {
             received: Mutex::new(events.into()),
+            receive_release: Mutex::new(None),
             sent: Mutex::new(Vec::new()),
             closed: AtomicBool::new(false),
             send_count: AtomicUsize::new(0),
             fail_on_send: AtomicUsize::new(0),
         })
+    }
+
+    fn gated_disconnect() -> (Arc<Self>, mpsc::Sender<()>) {
+        let (release, wait) = mpsc::channel();
+        let socket = Self::new(vec![Err(ChatroomClientError::new(
+            "disconnected",
+            "测试立即断开",
+        ))]);
+        *socket.receive_release.lock().unwrap() = Some(wait);
+        (socket, release)
     }
 
     fn with_send_failures(
@@ -124,6 +137,11 @@ impl ChatroomSocket for Arc<FakeSocket> {
     }
 
     fn receive_json(&mut self) -> Result<ChatroomEvent, ChatroomClientError> {
+        if let Some(release) = self.receive_release.lock().unwrap().take() {
+            release
+                .recv_timeout(Duration::from_secs(1))
+                .expect("测试 socket 未收到放行信号");
+        }
         self.received
             .lock()
             .unwrap()
@@ -160,6 +178,7 @@ impl ChatroomSocketConnector for FakeConnector {
         &self,
         _url: &str,
         authorization: &str,
+        _stop: &AtomicBool,
     ) -> Result<Box<dyn ChatroomSocket>, ChatroomClientError> {
         self.authorizations
             .lock()
@@ -175,6 +194,32 @@ impl ChatroomSocketConnector for FakeConnector {
             ConnectResult::Socket(socket) => Ok(Box::new(socket)),
             ConnectResult::Error(error) => Err(error),
         }
+    }
+}
+
+struct SlowResolver {
+    started: Mutex<Option<mpsc::Sender<()>>>,
+    calls: AtomicUsize,
+}
+
+impl ChatroomHostResolver for SlowResolver {
+    fn resolve(
+        &self,
+        _host: &str,
+        _port: u16,
+        stop: &AtomicBool,
+    ) -> Result<Vec<std::net::SocketAddr>, ChatroomClientError> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        if let Some(signal) = self.started.lock().unwrap().take() {
+            let _ = signal.send(());
+        }
+        while !stop.load(Ordering::Acquire) {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        Err(ChatroomClientError::new(
+            "client_closed",
+            "聊天室连接已关闭",
+        ))
     }
 }
 
@@ -495,6 +540,96 @@ fn given_disconnect_when_reader_retries_then_use_bounded_exponential_backoff() {
 }
 
 #[test]
+fn given_immediate_disconnects_with_ordinary_commands_then_budget_still_reaches_unavailable() {
+    let mut results = Vec::new();
+    let mut releases = Vec::new();
+    for _ in 0..8 {
+        let (socket, release) = FakeSocket::gated_disconnect();
+        results.push(ConnectResult::Socket(socket));
+        releases.push(release);
+    }
+    let connector = FakeConnector::new(results);
+    let backoff = FakeBackoff::new();
+    let (events, receiver) = mpsc::channel();
+    let client = ChatroomClient::new_with_backoff(
+        auth(
+            Arc::new(RefreshTransport {
+                calls: AtomicUsize::new(0),
+            }),
+            Arc::new(MemoryStorage::default()),
+        ),
+        "wss://edu.example/ws".into(),
+        connector.clone(),
+        events,
+        backoff,
+    );
+    client.start();
+    client.command(subscribe()).unwrap();
+    for release in releases {
+        receive_until(&receiver, |event| {
+            matches!(event, ChatroomClientEvent::Connected)
+        });
+        client
+            .command(ChatroomCommand::RenewLease {
+                room_id: "room-1".into(),
+                agent_id: "agent-1".into(),
+                device_id: "device-1".into(),
+            })
+            .unwrap();
+        release.send(()).unwrap();
+    }
+    receive_until(
+        &receiver,
+        |event| matches!(event, ChatroomClientEvent::Status { code, .. } if code == "realtime_unavailable"),
+    );
+    assert_eq!(connector.authorizations.lock().unwrap().len(), 8);
+    client.shutdown();
+}
+
+#[test]
+fn given_unavailable_then_ordinary_command_wakes_one_new_retry_budget() {
+    let socket = FakeSocket::new(Vec::new());
+    let connector = FakeConnector::new(
+        (0..8)
+            .map(|_| ConnectResult::Error(ChatroomClientError::new("transport", "连接失败")))
+            .chain([ConnectResult::Socket(socket.clone())])
+            .collect(),
+    );
+    let backoff = FakeBackoff::new();
+    let (events, receiver) = mpsc::channel();
+    let client = ChatroomClient::new_with_backoff(
+        auth(
+            Arc::new(RefreshTransport {
+                calls: AtomicUsize::new(0),
+            }),
+            Arc::new(MemoryStorage::default()),
+        ),
+        "wss://edu.example/ws".into(),
+        connector.clone(),
+        events,
+        backoff,
+    );
+    client.start();
+    client.command(subscribe()).unwrap();
+    receive_until(
+        &receiver,
+        |event| matches!(event, ChatroomClientEvent::Status { code, .. } if code == "realtime_unavailable"),
+    );
+    client
+        .command(ChatroomCommand::RenewLease {
+            room_id: "room-1".into(),
+            agent_id: "agent-1".into(),
+            device_id: "device-1".into(),
+        })
+        .unwrap();
+    receive_until(&receiver, |event| {
+        matches!(event, ChatroomClientEvent::Connected)
+    });
+    assert_eq!(connector.authorizations.lock().unwrap().len(), 9);
+    client.shutdown();
+}
+
+#[test]
 fn given_pending_commands_before_connect_then_flush_all_in_order_after_initial_subscribe() {
     let socket = FakeSocket::new(Vec::new());
     let connector = FakeConnector::new(vec![ConnectResult::Socket(socket.clone())]);
@@ -636,10 +771,41 @@ fn given_websocket_redirect_then_connector_policy_forbids_forwarding_authorizati
 #[test]
 fn given_websocket_connector_when_inspecting_timeouts_then_connect_and_io_are_bounded() {
     let (connect, read, write) = super::chatroom_client::websocket_io_timeouts();
-    assert!(connect <= Duration::from_secs(10));
-    assert!(super::chatroom_client::websocket_handshake_timeout() <= Duration::from_secs(10));
+    assert!(connect <= Duration::from_secs(1));
+    assert!(super::chatroom_client::websocket_handshake_timeout() <= Duration::from_secs(1));
     assert!(read <= Duration::from_secs(1));
     assert!(write <= Duration::from_secs(1));
+}
+
+#[test]
+fn given_slow_resolver_when_client_shuts_down_then_worker_cancels_without_new_resolver_threads() {
+    let (started, started_receiver) = mpsc::channel();
+    let resolver = Arc::new(SlowResolver {
+        started: Mutex::new(Some(started)),
+        calls: AtomicUsize::new(0),
+    });
+    let connector = Arc::new(TungsteniteConnector::with_resolver(resolver.clone()));
+    let (events, _receiver) = mpsc::channel();
+    let client = ChatroomClient::new(
+        auth(
+            Arc::new(RefreshTransport {
+                calls: AtomicUsize::new(0),
+            }),
+            Arc::new(MemoryStorage::default()),
+        ),
+        "ws://edu.example/ws".into(),
+        connector,
+        events,
+    );
+    client.start();
+    client.command(subscribe()).unwrap();
+    started_receiver
+        .recv_timeout(Duration::from_secs(1))
+        .expect("测试 resolver 未开始");
+    let started = std::time::Instant::now();
+    client.shutdown();
+    assert!(started.elapsed() < Duration::from_secs(1));
+    assert_eq!(resolver.calls.load(Ordering::SeqCst), 1);
 }
 
 #[test]

@@ -1,12 +1,12 @@
 use crate::auth_session::{AuthError, AuthSession};
 use crate::chatroom_protocol::{ChatroomCommand, ChatroomEvent, RoomCursor};
 use serde::Serialize;
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::io::{self, Read, Write};
-use std::net::{TcpStream, ToSocketAddrs};
+use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
 use std::str;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::{mpsc, Arc, Mutex, OnceLock};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 use tungstenite::client::IntoClientRequest;
@@ -18,10 +18,12 @@ use tungstenite::stream::{MaybeTlsStream, Mode};
 const MAX_MESSAGE_BYTES: usize = 128 * 1024;
 pub(crate) const MAX_REDIRECTS: u8 = 0;
 const MAX_CONNECT_RETRIES: usize = 8;
-const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
-const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(1);
+const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(1);
 const READ_TIMEOUT: Duration = Duration::from_secs(1);
 const WRITE_TIMEOUT: Duration = Duration::from_secs(1);
+const DNS_TIMEOUT: Duration = Duration::from_secs(1);
+const DNS_CACHE_TTL: Duration = Duration::from_secs(60);
 
 pub trait ChatroomSocket: Send {
     fn send_json(&mut self, command: &ChatroomCommand) -> Result<(), ChatroomClientError>;
@@ -34,7 +36,22 @@ pub trait ChatroomSocketConnector: Send + Sync {
         &self,
         url: &str,
         authorization: &str,
+        stop: &AtomicBool,
     ) -> Result<Box<dyn ChatroomSocket>, ChatroomClientError>;
+}
+
+pub(crate) trait ChatroomHostResolver: Send + Sync {
+    fn resolve(
+        &self,
+        host: &str,
+        port: u16,
+        stop: &AtomicBool,
+    ) -> Result<Vec<SocketAddr>, ChatroomClientError>;
+}
+
+struct QueuedCommand {
+    command: ChatroomCommand,
+    wake_budget: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -92,8 +109,9 @@ pub struct ChatroomClient {
     url: String,
     connector: Arc<dyn ChatroomSocketConnector>,
     events: Mutex<Option<mpsc::Sender<ChatroomClientEvent>>>,
-    commands: Mutex<Option<mpsc::Sender<ChatroomCommand>>>,
+    commands: Mutex<Option<mpsc::Sender<QueuedCommand>>>,
     stop: Arc<AtomicBool>,
+    wake_on_ordinary: Arc<AtomicBool>,
     worker: Mutex<Option<JoinHandle<()>>>,
     backoff: Arc<dyn BackoffWaiter>,
 }
@@ -128,6 +146,7 @@ impl ChatroomClient {
             events: Mutex::new(Some(events)),
             commands: Mutex::new(None),
             stop: Arc::new(AtomicBool::new(false)),
+            wake_on_ordinary: Arc::new(AtomicBool::new(true)),
             worker: Mutex::new(None),
             backoff,
         }
@@ -145,10 +164,20 @@ impl ChatroomClient {
         let connector = self.connector.clone();
         let events = self.events.lock().unwrap().take();
         let stop = self.stop.clone();
+        let wake_on_ordinary = self.wake_on_ordinary.clone();
         let backoff = self.backoff.clone();
         *worker = Some(thread::spawn(move || {
             if let Some(events) = events {
-                run_worker(auth, url, connector, command_rx, events, stop, backoff);
+                run_worker(
+                    auth,
+                    url,
+                    connector,
+                    command_rx,
+                    events,
+                    stop,
+                    wake_on_ordinary,
+                    backoff,
+                );
             }
         }));
     }
@@ -160,12 +189,16 @@ impl ChatroomClient {
                 "聊天室连接已关闭",
             ));
         }
+        let wake_budget = self.wake_on_ordinary.load(Ordering::Acquire);
         self.commands
             .lock()
             .unwrap()
             .as_ref()
             .ok_or_else(|| ChatroomClientError::new("client_not_started", "聊天室连接尚未启动"))?
-            .send(command)
+            .send(QueuedCommand {
+                command,
+                wake_budget,
+            })
             .map_err(|_| ChatroomClientError::new("client_closed", "聊天室连接已关闭"))
     }
 
@@ -177,7 +210,10 @@ impl ChatroomClient {
             return;
         }
         if let Some(commands) = self.commands.lock().unwrap().as_ref() {
-            let _ = commands.send(ChatroomCommand::Close);
+            let _ = commands.send(QueuedCommand {
+                command: ChatroomCommand::Close,
+                wake_budget: false,
+            });
         }
         if let Some(worker) = self.worker.lock().unwrap().take() {
             let _ = worker.join();
@@ -195,9 +231,10 @@ fn run_worker(
     auth: Arc<AuthSession>,
     url: String,
     connector: Arc<dyn ChatroomSocketConnector>,
-    command_rx: mpsc::Receiver<ChatroomCommand>,
+    command_rx: mpsc::Receiver<QueuedCommand>,
     events: mpsc::Sender<ChatroomClientEvent>,
     stop: Arc<AtomicBool>,
+    wake_on_ordinary: Arc<AtomicBool>,
     backoff: Arc<dyn BackoffWaiter>,
 ) {
     let mut subscription: Option<(Vec<RoomCursor>, String)> = None;
@@ -212,15 +249,17 @@ fn run_worker(
         }
         if unavailable || subscription.is_none() {
             match command_rx.recv() {
-                Ok(command) => {
+                Ok(queued) => {
                     if apply_command(
-                        command,
+                        queued.command,
                         &mut subscription,
                         &mut pending,
                         &mut unavailable,
                         &mut retries,
                         &mut refresh,
+                        queued.wake_budget,
                         &stop,
+                        &wake_on_ordinary,
                     ) {
                         return;
                     }
@@ -238,20 +277,21 @@ fn run_worker(
             }
         };
         let authorization = format!("Bearer {token}");
-        let mut socket = match connector.connect(&url, &authorization) {
+        let mut socket = match connector.connect(&url, &authorization, &stop) {
             Ok(socket) => socket,
+            Err(_) if stop.load(Ordering::Acquire) => return,
             Err(error) if error.code == "unauthorized" => {
                 if refresh.attempted {
                     if refresh.failed {
                         emit_disconnected(&events);
                         if !retry_after_failure(&events, &backoff, &stop, &mut retries) {
-                            unavailable = true;
+                            mark_unavailable(&mut unavailable, &wake_on_ordinary);
                         }
                         continue;
                     }
                     let _ = auth.logout();
                     emit_status(&events, "auth_expired", "聊天室认证已过期");
-                    unavailable = true;
+                    mark_unavailable(&mut unavailable, &wake_on_ordinary);
                     continue;
                 }
                 refresh.attempted = true;
@@ -259,7 +299,7 @@ fn run_worker(
                     Ok(_) => continue,
                     Err(AuthError::Upstream { status: 401, .. }) => {
                         emit_status(&events, "auth_expired", "聊天室认证已过期");
-                        unavailable = true;
+                        mark_unavailable(&mut unavailable, &wake_on_ordinary);
                         continue;
                     }
                     Err(_) => {
@@ -267,7 +307,7 @@ fn run_worker(
                         emit_status(&events, "auth_refresh_failed", "聊天室认证刷新暂时失败");
                         emit_disconnected(&events);
                         if !retry_after_failure(&events, &backoff, &stop, &mut retries) {
-                            unavailable = true;
+                            mark_unavailable(&mut unavailable, &wake_on_ordinary);
                         }
                         continue;
                     }
@@ -276,7 +316,7 @@ fn run_worker(
             Err(_) => {
                 emit_disconnected(&events);
                 if !retry_after_failure(&events, &backoff, &stop, &mut retries) {
-                    unavailable = true;
+                    mark_unavailable(&mut unavailable, &wake_on_ordinary);
                 }
                 continue;
             }
@@ -290,7 +330,7 @@ fn run_worker(
                 socket.close();
                 emit_disconnected(&events);
                 if !retry_after_failure(&events, &backoff, &stop, &mut retries) {
-                    unavailable = true;
+                    mark_unavailable(&mut unavailable, &wake_on_ordinary);
                 }
                 continue;
             }
@@ -299,7 +339,7 @@ fn run_worker(
             socket.close();
             emit_disconnected(&events);
             if !retry_after_failure(&events, &backoff, &stop, &mut retries) {
-                unavailable = true;
+                mark_unavailable(&mut unavailable, &wake_on_ordinary);
             }
             continue;
         }
@@ -311,19 +351,21 @@ fn run_worker(
                 socket.close();
                 return;
             }
-            while let Ok(command) = command_rx.try_recv() {
+            while let Ok(queued) = command_rx.try_recv() {
                 let changes_subscription = matches!(
-                    &command,
+                    &queued.command,
                     ChatroomCommand::Subscribe { .. } | ChatroomCommand::Unsubscribe { .. }
                 );
                 if apply_command(
-                    command,
+                    queued.command,
                     &mut subscription,
                     &mut pending,
                     &mut unavailable,
                     &mut retries,
                     &mut refresh,
+                    queued.wake_budget,
                     &stop,
+                    &wake_on_ordinary,
                 ) {
                     socket.close();
                     return;
@@ -367,7 +409,7 @@ fn run_worker(
                     socket.close();
                     emit_disconnected(&events);
                     if !retry_after_failure(&events, &backoff, &stop, &mut retries) {
-                        unavailable = true;
+                        mark_unavailable(&mut unavailable, &wake_on_ordinary);
                     }
                     break;
                 }
@@ -383,7 +425,9 @@ fn apply_command(
     unavailable: &mut bool,
     retries: &mut usize,
     refresh: &mut RefreshAttempt,
+    wake_budget: bool,
     stop: &AtomicBool,
+    wake_on_ordinary: &AtomicBool,
 ) -> bool {
     match command {
         ChatroomCommand::Close => {
@@ -393,9 +437,8 @@ fn apply_command(
         ChatroomCommand::Subscribe { rooms, device_id } => {
             *subscription = Some((rooms, device_id));
             *unavailable = false;
-            *retries = 0;
-            refresh.attempted = false;
-            refresh.failed = false;
+            reset_retry_budget(retries, refresh);
+            wake_on_ordinary.store(false, Ordering::Release);
             false
         }
         ChatroomCommand::Unsubscribe { room_id } => {
@@ -408,20 +451,31 @@ fn apply_command(
                 }
             }
             *unavailable = false;
-            *retries = 0;
-            refresh.attempted = false;
-            refresh.failed = false;
+            reset_retry_budget(retries, refresh);
+            wake_on_ordinary.store(subscription.is_none(), Ordering::Release);
             false
         }
         command => {
-            *unavailable = false;
-            *retries = 0;
-            refresh.attempted = false;
-            refresh.failed = false;
+            if wake_budget {
+                *unavailable = false;
+                reset_retry_budget(retries, refresh);
+                wake_on_ordinary.store(false, Ordering::Release);
+            }
             pending.push_back(command);
             false
         }
     }
+}
+
+fn reset_retry_budget(retries: &mut usize, refresh: &mut RefreshAttempt) {
+    *retries = 0;
+    refresh.attempted = false;
+    refresh.failed = false;
+}
+
+fn mark_unavailable(unavailable: &mut bool, wake_on_ordinary: &AtomicBool) {
+    *unavailable = true;
+    wake_on_ordinary.store(true, Ordering::Release);
 }
 
 fn flush_pending(
@@ -473,14 +527,168 @@ fn emit_auth_error(events: &mpsc::Sender<ChatroomClientEvent>, error: AuthError)
     emit_status(events, "auth_expired", message);
 }
 
-pub struct TungsteniteConnector;
+struct DnsRequest {
+    host: String,
+    port: u16,
+    response: mpsc::SyncSender<Result<Vec<SocketAddr>, ()>>,
+}
+
+struct CachedResolution {
+    addresses: Vec<SocketAddr>,
+    expires_at: Instant,
+}
+
+struct SystemDnsResolver {
+    requests: Option<mpsc::SyncSender<DnsRequest>>,
+    cache: Mutex<HashMap<(String, u16), CachedResolution>>,
+}
+
+impl SystemDnsResolver {
+    fn new() -> Self {
+        let (request_tx, request_rx) = mpsc::sync_channel::<DnsRequest>(1);
+        let requests = thread::Builder::new()
+            .name("copis-chatroom-dns".to_string())
+            .spawn(move || {
+                while let Ok(request) = request_rx.recv() {
+                    let result = (request.host.as_str(), request.port)
+                        .to_socket_addrs()
+                        .map(|addresses| addresses.collect::<Vec<_>>())
+                        .map_err(|_| ());
+                    let _ = request.response.send(result);
+                }
+            })
+            .ok()
+            .map(|_| request_tx);
+        Self {
+            requests,
+            cache: Mutex::new(HashMap::new()),
+        }
+    }
+}
+
+impl ChatroomHostResolver for SystemDnsResolver {
+    fn resolve(
+        &self,
+        host: &str,
+        port: u16,
+        stop: &AtomicBool,
+    ) -> Result<Vec<SocketAddr>, ChatroomClientError> {
+        if stop.load(Ordering::Acquire) {
+            return Err(ChatroomClientError::new(
+                "client_closed",
+                "聊天室连接已关闭",
+            ));
+        }
+        let key = (host.to_string(), port);
+        {
+            let mut cache = self.cache.lock().unwrap();
+            if let Some(cached) = cache.get(&key) {
+                if cached.expires_at > Instant::now() {
+                    return Ok(cached.addresses.clone());
+                }
+            }
+            cache.remove(&key);
+        }
+
+        let requests = self.requests.as_ref().ok_or_else(|| {
+            ChatroomClientError::new("connect_failed", "聊天室地址解析服务不可用")
+        })?;
+        let (response_tx, response_rx) = mpsc::sync_channel(1);
+        requests
+            .try_send(DnsRequest {
+                host: key.0.clone(),
+                port,
+                response: response_tx,
+            })
+            .map_err(|_| ChatroomClientError::new("connect_failed", "聊天室地址解析服务繁忙"))?;
+
+        let deadline = Instant::now() + DNS_TIMEOUT;
+        loop {
+            if stop.load(Ordering::Acquire) {
+                return Err(ChatroomClientError::new(
+                    "client_closed",
+                    "聊天室连接已关闭",
+                ));
+            }
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return Err(ChatroomClientError::new(
+                    "connect_failed",
+                    "聊天室地址解析超时",
+                ));
+            }
+            match response_rx.recv_timeout(Duration::from_millis(20).min(remaining)) {
+                Ok(Ok(addresses)) if !addresses.is_empty() => {
+                    self.cache.lock().unwrap().insert(
+                        key,
+                        CachedResolution {
+                            addresses: addresses.clone(),
+                            expires_at: Instant::now() + DNS_CACHE_TTL,
+                        },
+                    );
+                    return Ok(addresses);
+                }
+                Ok(Ok(_)) | Ok(Err(())) => {
+                    return Err(ChatroomClientError::new(
+                        "connect_failed",
+                        "聊天室地址解析失败",
+                    ));
+                }
+                Err(mpsc::RecvTimeoutError::Timeout) => continue,
+                Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    return Err(ChatroomClientError::new(
+                        "connect_failed",
+                        "聊天室地址解析失败",
+                    ));
+                }
+            }
+        }
+    }
+}
+
+fn default_chatroom_host_resolver() -> Arc<dyn ChatroomHostResolver> {
+    static RESOLVER: OnceLock<Arc<SystemDnsResolver>> = OnceLock::new();
+    RESOLVER
+        .get_or_init(|| Arc::new(SystemDnsResolver::new()))
+        .clone()
+}
+
+pub struct TungsteniteConnector {
+    resolver: Arc<dyn ChatroomHostResolver>,
+}
+
+impl TungsteniteConnector {
+    pub fn new() -> Self {
+        Self {
+            resolver: default_chatroom_host_resolver(),
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_resolver(resolver: Arc<dyn ChatroomHostResolver>) -> Self {
+        Self { resolver }
+    }
+}
+
+impl Default for TungsteniteConnector {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl ChatroomSocketConnector for TungsteniteConnector {
     fn connect(
         &self,
         url: &str,
         authorization: &str,
+        stop: &AtomicBool,
     ) -> Result<Box<dyn ChatroomSocket>, ChatroomClientError> {
+        if stop.load(Ordering::Acquire) {
+            return Err(ChatroomClientError::new(
+                "client_closed",
+                "聊天室连接已关闭",
+            ));
+        }
         let mut request = url
             .into_client_request()
             .map_err(|_| ChatroomClientError::new("connect_failed", "聊天室连接地址无效"))?;
@@ -515,7 +723,8 @@ impl ChatroomSocketConnector for TungsteniteConnector {
                 "聊天室连接端口无效",
             ));
         }
-        let stream = connect_tcp_with_timeout(host, port)?;
+        let addresses = self.resolver.resolve(host, port, stop)?;
+        let stream = connect_tcp_with_timeout(&addresses, stop)?;
         stream
             .set_read_timeout(Some(HANDSHAKE_TIMEOUT))
             .and_then(|_| stream.set_write_timeout(Some(HANDSHAKE_TIMEOUT)))
@@ -529,6 +738,12 @@ impl ChatroomSocketConnector for TungsteniteConnector {
         let (socket, _) =
             tungstenite::client_tls_with_config(request, stream, Some(config), connector)
                 .map_err(map_tungstenite_handshake_error)?;
+        if stop.load(Ordering::Acquire) {
+            return Err(ChatroomClientError::new(
+                "client_closed",
+                "聊天室连接已关闭",
+            ));
+        }
         Ok(Box::new(TungsteniteSocket::new(socket)?))
     }
 }
@@ -541,14 +756,18 @@ pub(crate) fn websocket_handshake_timeout() -> Duration {
     HANDSHAKE_TIMEOUT
 }
 
-fn connect_tcp_with_timeout(host: &str, port: u16) -> Result<TcpStream, ChatroomClientError> {
-    // 标准库的系统 DNS 解析没有可取消接口；下面的截止时间严格约束 TCP
-    // 建连及后续 TLS/HTTP 握手，解析阶段的阻塞风险记录在 Task 2 报告中。
-    let addresses = (host, port)
-        .to_socket_addrs()
-        .map_err(|_| ChatroomClientError::new("connect_failed", "聊天室地址解析失败"))?;
+fn connect_tcp_with_timeout(
+    addresses: &[SocketAddr],
+    stop: &AtomicBool,
+) -> Result<TcpStream, ChatroomClientError> {
     let deadline = Instant::now() + CONNECT_TIMEOUT;
-    for address in addresses {
+    for address in addresses.iter().copied() {
+        if stop.load(Ordering::Acquire) {
+            return Err(ChatroomClientError::new(
+                "client_closed",
+                "聊天室连接已关闭",
+            ));
+        }
         let remaining = deadline.saturating_duration_since(Instant::now());
         if remaining.is_zero() {
             break;
@@ -556,6 +775,12 @@ fn connect_tcp_with_timeout(host: &str, port: u16) -> Result<TcpStream, Chatroom
         if let Ok(stream) = TcpStream::connect_timeout(&address, remaining) {
             return Ok(stream);
         }
+    }
+    if stop.load(Ordering::Acquire) {
+        return Err(ChatroomClientError::new(
+            "client_closed",
+            "聊天室连接已关闭",
+        ));
     }
     Err(ChatroomClientError::new("connect_failed", "聊天室连接超时"))
 }
