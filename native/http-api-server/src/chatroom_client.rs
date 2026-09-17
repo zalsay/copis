@@ -314,10 +314,9 @@ fn run_worker(
             Err(error) if error.code == "unauthorized" => {
                 if refresh.attempted {
                     if refresh.failed {
-                        emit_disconnected(&events);
-                        if !retry_after_failure(&events, &backoff, &stop, &mut retries) {
-                            mark_unavailable(&mut unavailable, &wake_on_ordinary);
-                        }
+                        let _ = auth.logout();
+                        emit_status(&events, "auth_expired", "聊天室认证已过期");
+                        mark_unavailable(&mut unavailable, &wake_on_ordinary);
                         continue;
                     }
                     let _ = auth.logout();
@@ -414,12 +413,19 @@ fn run_worker(
                     break;
                 }
             }
-            if !reconnect && !flush_pending(&mut socket, &mut pending, &events) {
+            let pending_send_failed =
+                !reconnect && !flush_pending(&mut socket, &mut pending, &events);
+            if pending_send_failed {
                 reconnect = true;
             }
             if reconnect {
                 socket.close();
                 emit_disconnected(&events);
+                if pending_send_failed
+                    && !retry_after_failure(&events, &backoff, &stop, &mut retries)
+                {
+                    mark_unavailable(&mut unavailable, &wake_on_ordinary);
+                }
                 break;
             }
             match socket.receive_json() {

@@ -89,9 +89,13 @@ struct FakeSocket {
     received: Mutex<VecDeque<Result<ChatroomEvent, ChatroomClientError>>>,
     receive_release: Mutex<Option<mpsc::Receiver<()>>>,
     sent: Mutex<Vec<ChatroomCommand>>,
+    on_subscribe: Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
     closed: AtomicBool,
     send_count: AtomicUsize,
     fail_on_send: AtomicUsize,
+    fail_connected_ordinary: AtomicBool,
+    fail_first_ordinary: AtomicBool,
+    ordinary_send_count: AtomicUsize,
 }
 
 impl FakeSocket {
@@ -100,9 +104,13 @@ impl FakeSocket {
             received: Mutex::new(events.into()),
             receive_release: Mutex::new(None),
             sent: Mutex::new(Vec::new()),
+            on_subscribe: Mutex::new(None),
             closed: AtomicBool::new(false),
             send_count: AtomicUsize::new(0),
             fail_on_send: AtomicUsize::new(0),
+            fail_connected_ordinary: AtomicBool::new(false),
+            fail_first_ordinary: AtomicBool::new(false),
+            ordinary_send_count: AtomicUsize::new(0),
         })
     }
 
@@ -124,6 +132,22 @@ impl FakeSocket {
         socket.fail_on_send.store(failures, Ordering::SeqCst);
         socket
     }
+
+    fn with_connected_ordinary_failures(
+        events: Vec<Result<ChatroomEvent, ChatroomClientError>>,
+        fail_first_ordinary: bool,
+    ) -> Arc<Self> {
+        let socket = Self::new(events);
+        socket.fail_connected_ordinary.store(true, Ordering::SeqCst);
+        socket
+            .fail_first_ordinary
+            .store(fail_first_ordinary, Ordering::SeqCst);
+        socket
+    }
+
+    fn on_subscribe(socket: &Arc<Self>, callback: Arc<dyn Fn() + Send + Sync>) {
+        *socket.on_subscribe.lock().unwrap() = Some(callback);
+    }
 }
 
 impl ChatroomSocket for Arc<FakeSocket> {
@@ -132,7 +156,24 @@ impl ChatroomSocket for Arc<FakeSocket> {
         if self.fail_on_send.load(Ordering::SeqCst) == send_number {
             return Err(ChatroomClientError::new("send_failed", "测试写入失败"));
         }
+        if !matches!(command, ChatroomCommand::Subscribe { .. })
+            && self.fail_connected_ordinary.load(Ordering::SeqCst)
+        {
+            let ordinary_number = self.ordinary_send_count.fetch_add(1, Ordering::SeqCst) + 1;
+            let fail_first = self.fail_first_ordinary.load(Ordering::SeqCst);
+            if ordinary_number >= 2 || (fail_first && ordinary_number == 1) {
+                return Err(ChatroomClientError::new(
+                    "send_failed",
+                    "测试连接态写入失败",
+                ));
+            }
+        }
         self.sent.lock().unwrap().push(command.clone());
+        if matches!(command, ChatroomCommand::Subscribe { .. }) {
+            if let Some(callback) = self.on_subscribe.lock().unwrap().clone() {
+                callback();
+            }
+        }
         Ok(())
     }
 
@@ -162,6 +203,7 @@ enum ConnectResult {
 struct FakeConnector {
     results: Mutex<VecDeque<ConnectResult>>,
     authorizations: Mutex<Vec<String>>,
+    attempts: AtomicUsize,
 }
 
 impl FakeConnector {
@@ -169,6 +211,7 @@ impl FakeConnector {
         Arc::new(Self {
             results: Mutex::new(results.into()),
             authorizations: Mutex::new(Vec::new()),
+            attempts: AtomicUsize::new(0),
         })
     }
 }
@@ -180,19 +223,15 @@ impl ChatroomSocketConnector for FakeConnector {
         authorization: &str,
         _stop: &AtomicBool,
     ) -> Result<Box<dyn ChatroomSocket>, ChatroomClientError> {
+        self.attempts.fetch_add(1, Ordering::SeqCst);
         self.authorizations
             .lock()
             .unwrap()
             .push(authorization.to_string());
-        match self
-            .results
-            .lock()
-            .unwrap()
-            .pop_front()
-            .expect("测试连接结果不足")
-        {
-            ConnectResult::Socket(socket) => Ok(Box::new(socket)),
-            ConnectResult::Error(error) => Err(error),
+        match self.results.lock().unwrap().pop_front() {
+            Some(ConnectResult::Socket(socket)) => Ok(Box::new(socket)),
+            Some(ConnectResult::Error(error)) => Err(error),
+            None => Err(ChatroomClientError::new("transport", "测试连接结果耗尽")),
         }
     }
 }
@@ -263,6 +302,32 @@ fn subscribe() -> ChatroomCommand {
         }],
         device_id: "device-1".into(),
     }
+}
+
+fn renew_lease() -> ChatroomCommand {
+    ChatroomCommand::RenewLease {
+        room_id: "room-1".into(),
+        agent_id: "agent-1".into(),
+        device_id: "device-1".into(),
+    }
+}
+
+fn wait_for_status(
+    receiver: &mpsc::Receiver<ChatroomClientEvent>,
+    expected_code: &str,
+    timeout: Duration,
+) -> bool {
+    let deadline = std::time::Instant::now() + timeout;
+    while std::time::Instant::now() < deadline {
+        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+        match receiver.recv_timeout(Duration::from_millis(20).min(remaining)) {
+            Ok(ChatroomClientEvent::Status { code, .. }) if code == expected_code => return true,
+            Ok(_) => {}
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+            Err(mpsc::RecvTimeoutError::Disconnected) => return false,
+        }
+    }
+    false
 }
 
 fn receive_until(
@@ -391,6 +456,49 @@ fn given_temporary_refresh_failure_when_ws_401_then_keep_auth_and_reach_unavaila
     assert_eq!(connector.authorizations.lock().unwrap().len(), 8);
     assert_eq!(backoff.waits.lock().unwrap().len(), 7);
     client.shutdown();
+}
+
+#[test]
+fn given_temporary_refresh_failure_then_second_ws_401_when_connecting_then_clear_auth_once_without_third_retry(
+) {
+    let storage = Arc::new(MemoryStorage::default());
+    let transport = Arc::new(FailingRefreshTransport {
+        calls: AtomicUsize::new(0),
+    });
+    let connector = FakeConnector::new(vec![
+        ConnectResult::Error(ChatroomClientError::new("unauthorized", "未授权")),
+        ConnectResult::Error(ChatroomClientError::new("unauthorized", "未授权")),
+    ]);
+    let backoff = FakeBackoff::new();
+    let (events, receiver) = mpsc::channel();
+    let auth = auth(transport.clone(), storage.clone());
+    let client = ChatroomClient::new_with_backoff(
+        auth.clone(),
+        "wss://edu.example/ws".into(),
+        connector.clone(),
+        events,
+        backoff,
+    );
+    client.start();
+    client.command(subscribe()).unwrap();
+
+    let auth_expired = wait_for_status(&receiver, "auth_expired", Duration::from_secs(1));
+    let auth_expired_count = receiver
+        .try_iter()
+        .filter(|event| {
+            matches!(event, ChatroomClientEvent::Status { code, .. } if code == "auth_expired")
+        })
+        .count()
+        + usize::from(auth_expired);
+    let attempts = connector.attempts.load(Ordering::SeqCst);
+    client.shutdown();
+
+    assert!(auth_expired, "第二次握手 401 应立即使认证失效");
+    assert_eq!(auth_expired_count, 1);
+    assert_eq!(storage.clears.load(Ordering::SeqCst), 1);
+    assert!(!auth.auth_state().authenticated);
+    assert_eq!(transport.calls.load(Ordering::SeqCst), 1);
+    assert_eq!(attempts, 2, "认证失效后不应进行第三次连接");
 }
 
 #[test]
@@ -812,6 +920,71 @@ fn given_pending_send_failure_then_reconnect_preserves_command_for_ordered_retry
     assert!(
         matches!(&sent[1], ChatroomCommand::SendMessage { client_message_id, .. } if client_message_id == "message-1")
     );
+    client.shutdown();
+}
+
+#[test]
+fn given_connected_pending_send_fails_on_eight_sockets_then_stop_before_ninth_and_preserve_order() {
+    let client_slot: Arc<Mutex<Option<Arc<ChatroomClient>>>> = Arc::new(Mutex::new(None));
+    let mut results = Vec::new();
+    for index in 0..8 {
+        let socket = FakeSocket::with_connected_ordinary_failures(Vec::new(), index == 0);
+        let command_client_slot = client_slot.clone();
+        let callback: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
+            let client = command_client_slot
+                .lock()
+                .unwrap()
+                .as_ref()
+                .expect("测试客户端尚未就绪")
+                .clone();
+            client.command(renew_lease()).unwrap();
+        });
+        FakeSocket::on_subscribe(&socket, callback);
+        results.push(ConnectResult::Socket(socket));
+    }
+    let ninth = FakeSocket::new(Vec::new());
+    results.push(ConnectResult::Socket(ninth.clone()));
+    let connector = FakeConnector::new(results);
+    let backoff = FakeBackoff::new();
+    let (events, receiver) = mpsc::channel();
+    let client = Arc::new(ChatroomClient::new_with_backoff(
+        auth(
+            Arc::new(RefreshTransport {
+                calls: AtomicUsize::new(0),
+            }),
+            Arc::new(MemoryStorage::default()),
+        ),
+        "wss://edu.example/ws".into(),
+        connector.clone(),
+        events,
+        backoff,
+    ));
+    *client_slot.lock().unwrap() = Some(client.clone());
+    client.start();
+    client.command(subscribe()).unwrap();
+
+    for _ in 0..8 {
+        receive_until(&receiver, |event| {
+            matches!(event, ChatroomClientEvent::Connected)
+        });
+    }
+    let unavailable = wait_for_status(&receiver, "realtime_unavailable", Duration::from_secs(1));
+    let attempts = connector.attempts.load(Ordering::SeqCst);
+    if !unavailable || attempts != 8 {
+        client.shutdown();
+        panic!("连接态发送失败应在第 8 次后停止：unavailable={unavailable}, attempts={attempts}");
+    }
+
+    client.command(subscribe()).unwrap();
+    receive_until(&receiver, |event| {
+        matches!(event, ChatroomClientEvent::Connected)
+    });
+    assert_eq!(connector.attempts.load(Ordering::SeqCst), 9);
+    let sent = ninth.sent.lock().unwrap();
+    assert_eq!(sent.len(), 2);
+    assert!(matches!(&sent[0], ChatroomCommand::Subscribe { .. }));
+    assert!(matches!(&sent[1], command if *command == renew_lease()));
+    drop(sent);
     client.shutdown();
 }
 
