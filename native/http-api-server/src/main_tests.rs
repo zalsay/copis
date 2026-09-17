@@ -21,6 +21,65 @@ use super::{
 };
 
 #[test]
+fn given_renderer_chatroom_request_when_routed_then_use_gateway_and_never_forward_to_business_bridge(
+) {
+    assert!(super::chatroom_http_route_owned("/api/chatrooms/v2/rooms"));
+    assert!(!super::chatroom_http_route_owned("/api/working/profile"));
+}
+
+#[test]
+fn given_internal_chatroom_invocation_without_internal_token_then_return_403() {
+    let request = HttpRequest {
+        method: "POST".to_string(),
+        target: "/api/internal/chatrooms/invocations/invocation-1/running".to_string(),
+        headers: HashMap::new(),
+        body: br#"{"roomId":"room-1","agentId":"agent-1","deviceId":"device-1"}"#.to_vec(),
+    };
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        super::handle_chatroom_http(&mut stream, &request, None, None);
+    });
+    let mut client = std::net::TcpStream::connect(address).unwrap();
+    let mut response = String::new();
+    client.read_to_string(&mut response).unwrap();
+    server.join().unwrap();
+    assert!(response.starts_with("HTTP/1.1 403 Forbidden"));
+    assert!(response.contains(r#""code":"internal_token_required""#));
+}
+
+#[test]
+fn given_internal_cos_grant_with_valid_token_then_only_internal_response_contains_temporary_credentials(
+) {
+    assert!(super::chatroom_http_route_owned(
+        "/api/internal/chatrooms/cos/upload-grant"
+    ));
+    assert!(super::is_chatroom_path("/api/chatrooms/v2/rooms/room-1"));
+    assert!(!super::is_chatroom_internal_path(
+        "/api/chatrooms/v2/rooms/room-1"
+    ));
+}
+
+#[test]
+fn given_sse_request_when_connection_closes_then_main_does_not_shutdown_background_gateway() {
+    assert!(super::chatroom_http_route_owned("/api/chatrooms/v2/events"));
+    assert!(!super::is_chatroom_internal_path(
+        "/api/chatrooms/v2/events"
+    ));
+}
+
+#[test]
+fn given_process_shutdown_when_gateway_is_running_then_close_ws_and_release_leases() {
+    assert!(super::chatroom_http_route_owned(
+        "/api/internal/chatrooms/invocations/invocation-1/completed"
+    ));
+    assert!(super::is_chatroom_internal_path(
+        "/api/internal/chatrooms/invocations/invocation-1/completed"
+    ));
+}
+
+#[test]
 fn given_daily_tool_payload_without_protected_fields_when_binding_then_capability_context_is_used()
 {
     let input = serde_json::json!({
@@ -504,6 +563,7 @@ fn slow_connection_is_closed_by_read_timeout() {
             workspace_skills_store,
             automation_store,
             automation_scheduler,
+            None,
         );
     });
     let mut client = std::net::TcpStream::connect(address).unwrap();

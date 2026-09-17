@@ -43,6 +43,11 @@ use automation::{
     AutomationUpdateInput,
 };
 use automation_scheduler::AutomationScheduler;
+use chatroom_client::TungsteniteConnector;
+use chatroom_gateway::{
+    is_chatroom_internal_path, is_chatroom_path, ChatroomBridge, ChatroomGateway,
+    GatewayHttpResponse,
+};
 use edu_api_client::{EduApiClient, EduApiResponse, DEFAULT_MAX_CONCURRENT_REQUESTS};
 use expert_teams::{ExpertTeamError, ExpertTeamStore};
 use memory::{
@@ -526,6 +531,119 @@ struct HttpRequest {
     target: String,
     headers: HashMap<String, String>,
     body: Vec<u8>,
+}
+
+fn chatroom_http_route_owned(path: &str) -> bool {
+    is_chatroom_path(path) || is_chatroom_internal_path(path)
+}
+
+struct ChatroomGatewayShutdownGuard(Arc<ChatroomGateway>);
+
+impl Drop for ChatroomGatewayShutdownGuard {
+    fn drop(&mut self) {
+        self.0.shutdown();
+    }
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ClientDeviceFile {
+    version: u8,
+    device_id: String,
+    created_at: u64,
+}
+
+fn valid_chatroom_device_id(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 128
+        && value.trim() == value
+        && !value.chars().any(|character| {
+            character.is_control() || character.is_whitespace() || matches!(character, '/' | '\\')
+        })
+}
+
+fn generate_chatroom_device_id() -> String {
+    let mut bytes = [0_u8; 16];
+    if getrandom::getrandom(&mut bytes).is_err() {
+        return "00000000-0000-4000-8000-000000000000".to_string();
+    }
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    format!(
+        "{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
+        bytes[0],
+        bytes[1],
+        bytes[2],
+        bytes[3],
+        bytes[4],
+        bytes[5],
+        bytes[6],
+        bytes[7],
+        bytes[8],
+        bytes[9],
+        bytes[10],
+        bytes[11],
+        bytes[12],
+        bytes[13],
+        bytes[14],
+        bytes[15]
+    )
+}
+
+fn resolve_chatroom_device_id() -> String {
+    let path = resolve_config_directory().join("client-device.json");
+    if let Ok(bytes) = fs::read(&path) {
+        if let Ok(config) = serde_json::from_slice::<ClientDeviceFile>(&bytes) {
+            if config.version == 1 && valid_chatroom_device_id(&config.device_id) {
+                return config.device_id;
+            }
+        }
+    }
+
+    let device_id = generate_chatroom_device_id();
+    let config = ClientDeviceFile {
+        version: 1,
+        device_id: device_id.clone(),
+        created_at: SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_secs())
+            .unwrap_or(0),
+    };
+    let Ok(encoded) = serde_json::to_vec_pretty(&config) else {
+        return device_id;
+    };
+    if fs::create_dir_all(resolve_config_directory()).is_ok() {
+        let temporary = path.with_file_name(format!("client-device.json.{}.tmp", process::id()));
+        let write_result = (|| -> io::Result<()> {
+            let mut options = OpenOptions::new();
+            options.write(true).create_new(true);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::OpenOptionsExt;
+                options.mode(0o600);
+            }
+            let mut file = options.open(&temporary)?;
+            file.write_all(&encoded)?;
+            file.sync_all()?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                fs::set_permissions(&temporary, fs::Permissions::from_mode(0o600))?;
+            }
+            fs::rename(&temporary, &path)
+        })();
+        if write_result.is_err() {
+            let _ = fs::remove_file(&temporary);
+            if let Ok(bytes) = fs::read(&path) {
+                if let Ok(config) = serde_json::from_slice::<ClientDeviceFile>(&bytes) {
+                    if config.version == 1 && valid_chatroom_device_id(&config.device_id) {
+                        return config.device_id;
+                    }
+                }
+            }
+        }
+    }
+    device_id
 }
 
 #[derive(Deserialize)]
@@ -1612,6 +1730,7 @@ fn handle_connection(
     workspace_skills_store: Arc<WorkspaceSkillsStore>,
     automation_store: Arc<AutomationStore>,
     automation_scheduler: Arc<AutomationScheduler>,
+    chatroom_gateway: Option<Arc<ChatroomGateway>>,
 ) {
     let _ = stream.set_read_timeout(Some(connection_read_timeout()));
     let request = match read_http_request(&mut stream) {
@@ -1676,6 +1795,12 @@ fn handle_connection(
             r#"{"error":"认证存储桥仅允许 Rust stdio 调用","code":"private_bridge_only"}"#,
             origin,
         );
+        let _ = stream.shutdown(Shutdown::Both);
+        return;
+    }
+
+    if chatroom_http_route_owned(path) {
+        handle_chatroom_http(&mut stream, &request, origin, chatroom_gateway.as_deref());
         let _ = stream.shutdown(Shutdown::Both);
         return;
     }
@@ -2194,6 +2319,71 @@ fn handle_connection(
         }
     }
     let _ = stream.shutdown(Shutdown::Both);
+}
+
+fn handle_chatroom_http(
+    stream: &mut TcpStream,
+    request: &HttpRequest,
+    origin: Option<&str>,
+    gateway: Option<&ChatroomGateway>,
+) {
+    let path = request
+        .target
+        .split('?')
+        .next()
+        .unwrap_or(request.target.as_str());
+    let internal = is_chatroom_internal_path(path);
+    if internal && !is_internal_token_valid(request) {
+        send_json_response(
+            stream,
+            403,
+            r#"{"error":"聊天室内部接口未授权","code":"internal_token_required"}"#,
+            origin,
+        );
+        return;
+    }
+    let Some(gateway) = gateway else {
+        send_json_response(
+            stream,
+            503,
+            r#"{"error":"聊天室网关不可用","code":"gateway_unavailable"}"#,
+            origin,
+        );
+        return;
+    };
+    let response = match gateway.handle_http(
+        &request.method,
+        &request.target,
+        &request.headers,
+        &request.body,
+    ) {
+        Ok(response) => response,
+        Err(error) => {
+            let body = json!({"error": error.message, "code": error.code}).to_string();
+            send_json_response(stream, error.status, &body, origin);
+            return;
+        }
+    };
+    match response {
+        GatewayHttpResponse::Json { status, body } => {
+            send_json_response(stream, status, &body.to_string(), origin);
+        }
+        GatewayHttpResponse::Empty { status } => {
+            send_empty_response(stream, status, origin);
+        }
+        GatewayHttpResponse::Sse(subscription) => {
+            let headers = sse_headers_with_origin(200, origin);
+            if stream.write_all(headers.as_bytes()).is_err() {
+                return;
+            }
+            let _ = stream.flush();
+            while let Ok(event) = subscription.receiver.recv() {
+                if send_sse_frame(stream, &event).is_err() {
+                    break;
+                }
+            }
+        }
+    }
 }
 
 fn is_skill_market_path(path: &str) -> bool {
@@ -3777,8 +3967,11 @@ fn main() {
             process::exit(1);
         }
     };
-    let auth_session = match AuthSession::new_with_oidc(edu_client, auth_storage, Some(auth_client))
-    {
+    let auth_session = match AuthSession::new_with_oidc(
+        Arc::clone(&edu_client),
+        auth_storage,
+        Some(auth_client),
+    ) {
         Ok(session) => Arc::new(session),
         Err(error) => {
             eprintln!("[HTTP API] Working 认证会话初始化失败: {}", error);
@@ -3854,6 +4047,23 @@ fn main() {
     ));
     automation_scheduler.start();
 
+    let chatroom_bridge: Arc<dyn ChatroomBridge> = bridge.clone();
+    let chatroom_gateway = match ChatroomGateway::new(
+        Arc::clone(&auth_session),
+        edu_client.base_url().to_string(),
+        Arc::new(TungsteniteConnector::default()),
+        chatroom_bridge,
+        resolve_chatroom_device_id(),
+    ) {
+        Ok(gateway) => gateway,
+        Err(error) => {
+            eprintln!("[HTTP API] 聊天室网关初始化失败: {}", error.message);
+            process::exit(1);
+        }
+    };
+    chatroom_gateway.start();
+    let _chatroom_shutdown = ChatroomGatewayShutdownGuard(Arc::clone(&chatroom_gateway));
+
     let listener = match TcpListener::bind((HOST, port)) {
         Ok(listener) => listener,
         Err(error) => {
@@ -3884,6 +4094,7 @@ fn main() {
                 let connection_workspace_skills = Arc::clone(&workspace_skills_store);
                 let connection_automation = Arc::clone(&automation_store);
                 let connection_automation_scheduler = Arc::clone(&automation_scheduler);
+                let connection_chatroom_gateway = Arc::clone(&chatroom_gateway);
                 let connection_active = Arc::clone(&active_connections);
                 thread::spawn(move || {
                     let _guard = ConnectionCountGuard(connection_active);
@@ -3902,6 +4113,7 @@ fn main() {
                         connection_workspace_skills,
                         connection_automation,
                         connection_automation_scheduler,
+                        Some(connection_chatroom_gateway),
                     )
                 });
             }
@@ -3910,6 +4122,7 @@ fn main() {
             }
         }
     }
+    chatroom_gateway.shutdown();
 }
 
 #[cfg(test)]
