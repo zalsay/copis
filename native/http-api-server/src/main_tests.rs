@@ -219,6 +219,76 @@ fn given_registered_gateway_when_startup_fails_then_shutdown_and_release_resourc
     assert_eq!(gateway.lease_count_for_test(), 0);
 }
 
+#[test]
+fn given_startup_failed_when_late_started_gateway_registers_then_shutdown_and_release_resources() {
+    let lifecycle = Arc::new(super::ChatroomGatewayLifecycle::new());
+    lifecycle.mark_startup_failed();
+
+    let gateway = main_test_gateway(GatewayTransportResponse {
+        status: 204,
+        body: Vec::new(),
+    });
+    gateway.register_lease_for_test("room-1", "agent-1", "device-1");
+    gateway.start();
+
+    let (finished_tx, finished_rx) = std::sync::mpsc::channel();
+    let register_lifecycle = Arc::clone(&lifecycle);
+    let register_gateway = Arc::clone(&gateway);
+    thread::spawn(move || {
+        register_lifecycle.register_gateway(&register_gateway);
+        finished_tx.send(()).unwrap();
+    });
+
+    finished_rx
+        .recv_timeout(Duration::from_secs(1))
+        .expect("StartupFailed 后迟到 gateway 注册应在有限时间内完成 shutdown");
+    assert!(gateway.shutdown_requested_for_test());
+    assert_eq!(gateway.lease_count_for_test(), 0);
+}
+
+#[test]
+fn given_registered_gateway_when_different_gateway_registers_then_reject_new_without_shutdown_original(
+) {
+    let original = main_test_gateway(GatewayTransportResponse {
+        status: 204,
+        body: Vec::new(),
+    });
+    original.register_lease_for_test("room-1", "agent-1", "device-1");
+    original.start();
+    let lifecycle = Arc::new(super::ChatroomGatewayLifecycle::new());
+    lifecycle.register_gateway(&original);
+
+    let incoming = main_test_gateway(GatewayTransportResponse {
+        status: 204,
+        body: Vec::new(),
+    });
+    incoming.register_lease_for_test("room-2", "agent-2", "device-2");
+    incoming.start();
+    lifecycle.register_gateway(&incoming);
+
+    assert!(!original.shutdown_requested_for_test());
+    assert_eq!(original.lease_count_for_test(), 1);
+    assert!(incoming.shutdown_requested_for_test());
+    assert_eq!(incoming.lease_count_for_test(), 0);
+}
+
+#[test]
+fn given_registered_gateway_when_same_gateway_registers_again_then_keep_gateway_running() {
+    let gateway = main_test_gateway(GatewayTransportResponse {
+        status: 204,
+        body: Vec::new(),
+    });
+    gateway.register_lease_for_test("room-1", "agent-1", "device-1");
+    gateway.start();
+    let lifecycle = Arc::new(super::ChatroomGatewayLifecycle::new());
+    lifecycle.register_gateway(&gateway);
+
+    lifecycle.register_gateway(&gateway);
+
+    assert!(!gateway.shutdown_requested_for_test());
+    assert_eq!(gateway.lease_count_for_test(), 1);
+}
+
 fn run_chatroom_http(request: HttpRequest, gateway: Arc<ChatroomGateway>) -> String {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap();

@@ -186,12 +186,28 @@ impl ChatroomGatewayLifecycle {
 
     fn register_gateway(&self, gateway: &Arc<ChatroomGateway>) {
         let mut state = self.state.lock().unwrap();
-        if matches!(
-            *state,
-            ChatroomGatewayLifecycleState::WaitingForRegistration
-        ) {
-            *state = ChatroomGatewayLifecycleState::Registered(Arc::downgrade(gateway));
-            self.changed.notify_all();
+        let rejected_gateway = match &*state {
+            ChatroomGatewayLifecycleState::WaitingForRegistration => {
+                *state = ChatroomGatewayLifecycleState::Registered(Arc::downgrade(gateway));
+                self.changed.notify_all();
+                None
+            }
+            ChatroomGatewayLifecycleState::StartupFailed => Some(Arc::clone(gateway)),
+            ChatroomGatewayLifecycleState::Registered(registered) => {
+                let is_same_gateway = registered
+                    .upgrade()
+                    .map(|registered| Arc::ptr_eq(&registered, gateway))
+                    .unwrap_or(false);
+                if is_same_gateway {
+                    None
+                } else {
+                    Some(Arc::clone(gateway))
+                }
+            }
+        };
+        drop(state);
+        if let Some(gateway) = rejected_gateway {
+            gateway.shutdown();
         }
     }
 
