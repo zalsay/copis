@@ -1,7 +1,7 @@
 use super::auth_session::{AuthSession, AuthStorage, PersistedAuth};
 use super::chatroom_client::{ChatroomClientError, ChatroomSocket, ChatroomSocketConnector};
 use super::chatroom_gateway::{
-    ChatroomBridge, ChatroomGateway, GatewayHttpResponse, GatewayTransport,
+    ChatroomBridge, ChatroomGateway, GatewayClock, GatewayHttpResponse, GatewayTransport,
     GatewayTransportResponse,
 };
 use super::chatroom_protocol::{ChatroomEvent, CosAction};
@@ -10,7 +10,8 @@ use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::sync::atomic::AtomicBool;
 use std::sync::{mpsc, Arc, Mutex};
-use std::time::Duration;
+use std::thread;
+use std::time::{Duration, Instant};
 
 #[derive(Default)]
 struct TestStorage;
@@ -32,6 +33,28 @@ struct NoopEduTransport;
 impl super::edu_api_client::EduApiTransport for NoopEduTransport {
     fn send(&self, _request: EduApiRequest) -> Result<EduApiResponse, EduApiError> {
         Err(EduApiError::Transport("测试不应调用认证传输".into()))
+    }
+}
+
+struct AuthenticatedTestStorage;
+
+impl AuthStorage for AuthenticatedTestStorage {
+    fn load(&self) -> Result<Option<PersistedAuth>, super::auth_session::AuthError> {
+        Ok(Some(PersistedAuth {
+            access_token: "test-access-token".into(),
+            refresh_token: None,
+            provider: "test".into(),
+            user: Some(json!({"id": 1})),
+            expires_at: None,
+        }))
+    }
+
+    fn save(&self, _auth: &PersistedAuth) -> Result<(), super::auth_session::AuthError> {
+        Ok(())
+    }
+
+    fn clear(&self) -> Result<(), super::auth_session::AuthError> {
+        Ok(())
     }
 }
 
@@ -125,6 +148,29 @@ impl ChatroomSocketConnector for FakeConnector {
     }
 }
 
+struct TestGatewayClock {
+    now: Mutex<Instant>,
+}
+
+impl TestGatewayClock {
+    fn new() -> Self {
+        Self {
+            now: Mutex::new(Instant::now()),
+        }
+    }
+
+    fn advance(&self, duration: Duration) {
+        let mut now = self.now.lock().unwrap();
+        *now += duration;
+    }
+}
+
+impl GatewayClock for TestGatewayClock {
+    fn now(&self) -> Instant {
+        *self.now.lock().unwrap()
+    }
+}
+
 fn gateway(transport: Arc<FakeTransport>, bridge: Arc<FakeBridge>) -> Arc<ChatroomGateway> {
     let client = Arc::new(
         EduApiClient::new(
@@ -143,6 +189,7 @@ fn gateway(transport: Arc<FakeTransport>, bridge: Arc<FakeBridge>) -> Arc<Chatro
         "device-test".into(),
         transport,
     )
+    .unwrap()
 }
 
 fn durable(room: &str, seq: u64) -> ChatroomEvent {
@@ -487,6 +534,431 @@ fn given_slow_sse_subscriber_when_durable_event_fills_reserve_then_close_with_re
     let marker = subscription.receiver.recv().unwrap();
     assert_eq!(marker["code"], "resync_required");
     assert!(subscription.receiver.recv().is_err());
+}
+
+#[test]
+fn given_sse_consumer_drains_events_when_more_than_capacity_arrives_then_subscription_stays_open() {
+    let gateway = gateway(
+        Arc::new(FakeTransport::default()),
+        Arc::new(FakeBridge::default()),
+    );
+    let subscription = gateway.subscribe_sse(vec!["room-1".into()]).unwrap();
+    for seq in 1..=128 {
+        gateway.publish_event_for_test(durable("room-1", seq));
+        assert!(subscription
+            .receiver
+            .recv_timeout(Duration::from_millis(100))
+            .is_ok());
+    }
+    gateway.publish_event_for_test(durable("room-1", 129));
+    assert_eq!(subscription.receiver.recv().unwrap()["seq"], 129);
+}
+
+#[test]
+fn given_sse_subscription_when_receiver_is_dropped_then_registry_is_released() {
+    let gateway = gateway(
+        Arc::new(FakeTransport::default()),
+        Arc::new(FakeBridge::default()),
+    );
+    let subscription = gateway.subscribe_sse(vec!["room-1".into()]).unwrap();
+    assert_eq!(gateway.subscriber_count_for_test(), 1);
+    drop(subscription);
+    assert_eq!(gateway.subscriber_count_for_test(), 0);
+}
+
+#[test]
+fn given_cursor_100_when_snapshot_latest_is_103_then_catch_up_events_are_not_skipped() {
+    let gateway = gateway(
+        Arc::new(FakeTransport::default()),
+        Arc::new(FakeBridge::default()),
+    );
+    gateway.set_room_cursor_for_test("room-1", 100);
+    let subscription = gateway.subscribe_sse(vec!["room-1".into()]).unwrap();
+    gateway.publish_event_for_test(ChatroomEvent::RoomSnapshot {
+        room_id: "room-1".into(),
+        latest_seq: 103,
+        payload: json!({"name":"room"}),
+    });
+    gateway.publish_event_for_test(durable("room-1", 101));
+    gateway.publish_event_for_test(durable("room-1", 102));
+    gateway.publish_event_for_test(durable("room-1", 103));
+    assert_eq!(
+        subscription.receiver.recv().unwrap()["type"],
+        "room.snapshot"
+    );
+    assert_eq!(subscription.receiver.recv().unwrap()["seq"], 101);
+    assert_eq!(subscription.receiver.recv().unwrap()["seq"], 102);
+    assert_eq!(subscription.receiver.recv().unwrap()["seq"], 103);
+    assert_eq!(gateway.room_cursor_for_test("room-1"), Some(103));
+}
+
+#[test]
+fn given_recovery_page_overlaps_live_buffer_when_recovered_then_publish_each_sequence_once() {
+    let transport = Arc::new(FakeTransport::default());
+    transport.push(GatewayTransportResponse {
+        status: 200,
+        body: serde_json::to_vec(&json!({"data":[
+            {"eventId":"e101","roomId":"room-1","seq":101,"eventType":"message.created","payload":{"messageId":"m101"},"createdAt":"now"},
+            {"eventId":"e102","roomId":"room-1","seq":102,"eventType":"message.created","payload":{"messageId":"m102"},"createdAt":"now"},
+            {"eventId":"e103","roomId":"room-1","seq":103,"eventType":"message.created","payload":{"messageId":"m103"},"createdAt":"now"}
+        ]}))
+        .unwrap(),
+    });
+    let (started, release) = transport.gate_next_request();
+    let gateway = gateway(transport.clone(), Arc::new(FakeBridge::default()));
+    gateway.set_room_cursor_for_test("room-1", 100);
+    let subscription = gateway.subscribe_sse(vec!["room-1".into()]).unwrap();
+    let recovery_gateway = Arc::clone(&gateway);
+    let recovery = std::thread::spawn(move || {
+        recovery_gateway.publish_event_for_test(durable("room-1", 103));
+    });
+    started.recv().unwrap();
+    gateway.publish_event_for_test(durable("room-1", 103));
+    release.send(()).unwrap();
+    recovery.join().unwrap();
+    let mut seqs = Vec::new();
+    for _ in 0..3 {
+        seqs.push(
+            subscription.receiver.recv().unwrap()["seq"]
+                .as_u64()
+                .unwrap(),
+        );
+    }
+    assert_eq!(seqs, vec![101, 102, 103]);
+    assert!(subscription.receiver.try_recv().is_err());
+    assert_eq!(transport.requests.lock().unwrap().len(), 1);
+    assert_eq!(gateway.buffered_count_for_test("room-1"), 0);
+}
+
+#[test]
+fn given_public_routes_when_body_or_query_schema_is_invalid_then_reject_without_proxying() {
+    let transport = Arc::new(FakeTransport::default());
+    let gateway = gateway(transport.clone(), Arc::new(FakeBridge::default()));
+    for (method, path, body) in [
+        (
+            "POST",
+            "/api/chatrooms/v2/rooms",
+            br#"{"name":"x","shareCode":"AB12","extra":1}"#.as_slice(),
+        ),
+        (
+            "PATCH",
+            "/api/chatrooms/v2/rooms/room-1",
+            br#"{}"#.as_slice(),
+        ),
+        (
+            "POST",
+            "/api/chatrooms/v2/join",
+            br#"{"shareCode":""}"#.as_slice(),
+        ),
+        (
+            "PATCH",
+            "/api/chatrooms/v2/rooms/room-1/read",
+            br#"{"seq":-1}"#.as_slice(),
+        ),
+        (
+            "POST",
+            "/api/chatrooms/v2/rooms/room-1/agents",
+            br#"{"displayName":"a","deviceId":"d","unknown":true}"#.as_slice(),
+        ),
+        (
+            "PATCH",
+            "/api/chatrooms/v2/rooms/room-1/agents/agent-1",
+            br#"{"avatar":3}"#.as_slice(),
+        ),
+        (
+            "POST",
+            "/api/chatrooms/v2/rooms/room-1/lease",
+            br#"{"deviceId":"d","deviceId":"d2"}"#.as_slice(),
+        ),
+    ] {
+        assert!(gateway
+            .handle_http(method, path, &HashMap::new(), body)
+            .is_err());
+    }
+    assert!(gateway
+        .handle_http(
+            "GET",
+            "/api/chatrooms/v2/rooms/room-1/messages?afterSeq=1&limit=10",
+            &HashMap::new(),
+            &[],
+        )
+        .is_err());
+    assert!(gateway
+        .handle_http("GET", "/api/chatrooms/v2/rooms", &HashMap::new(), br#"{}"#)
+        .is_err());
+    assert!(gateway
+        .handle_http(
+            "POST",
+            "/api/chatrooms/v2/rooms",
+            &HashMap::new(),
+            br#"{"name":"x","shareCode":"AB12"} trailing"#,
+        )
+        .is_err());
+    assert!(transport.requests.lock().unwrap().is_empty());
+}
+
+#[test]
+fn given_internal_routes_when_schema_contains_unknown_or_sensitive_fields_then_reject_without_proxying(
+) {
+    let transport = Arc::new(FakeTransport::default());
+    let gateway = gateway(transport.clone(), Arc::new(FakeBridge::default()));
+    assert!(gateway
+        .handle_http(
+            "POST",
+            "/api/internal/chatrooms/cos/download-grant",
+            &HashMap::new(),
+            br#"{"roomId":"room-1","attachmentId":"att-1","objectKey":"private"}"#,
+        )
+        .is_err());
+    assert!(gateway
+        .handle_http(
+            "POST",
+            "/api/internal/chatrooms/cos/finalize",
+            &HashMap::new(),
+            br#"{"roomId":"room-1","attachmentId":"att-1","sizeBytes":1,"etag":"e","sha256":"s","objectKey":"private"}"#,
+        )
+        .is_err());
+    assert!(transport.requests.lock().unwrap().is_empty());
+}
+
+#[test]
+fn given_phase_one_upload_schema_when_filename_and_mime_are_valid_then_accept_exact_limits() {
+    let transport = Arc::new(FakeTransport::default());
+    transport.push(GatewayTransportResponse {
+        status: 400,
+        body: br#"{}"#.to_vec(),
+    });
+    let gateway = gateway(transport.clone(), Arc::new(FakeBridge::default()));
+    let file_name = "a".repeat(200);
+    let body = json!({
+        "roomId": "room-1",
+        "fileName": file_name,
+        "mimeType": "text/plain; charset=utf-8",
+        "sizeBytes": 256 * 1024 * 1024,
+        "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    })
+    .to_string();
+    assert!(gateway
+        .handle_http(
+            "POST",
+            "/api/internal/chatrooms/cos/upload-grant",
+            &HashMap::new(),
+            body.as_bytes(),
+        )
+        .is_ok());
+    assert_eq!(transport.requests.lock().unwrap().len(), 1);
+}
+
+#[test]
+fn given_phase_one_upload_schema_when_mime_is_not_parseable_then_reject_without_proxying() {
+    let transport = Arc::new(FakeTransport::default());
+    let gateway = gateway(transport.clone(), Arc::new(FakeBridge::default()));
+    let body = br#"{"roomId":"room-1","fileName":"report.txt","mimeType":"not a mime","sizeBytes":1,"sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}"#;
+    assert!(gateway
+        .handle_http(
+            "POST",
+            "/api/internal/chatrooms/cos/upload-grant",
+            &HashMap::new(),
+            body,
+        )
+        .is_err());
+    assert!(transport.requests.lock().unwrap().is_empty());
+}
+
+#[test]
+fn given_running_invocation_state_when_received_then_return_local_noop_without_upstream_command() {
+    let gateway = gateway(
+        Arc::new(FakeTransport::default()),
+        Arc::new(FakeBridge::default()),
+    );
+    assert!(matches!(
+        gateway
+            .handle_http(
+                "POST",
+                "/api/internal/chatrooms/invocations/inv-1/running",
+                &HashMap::new(),
+                br#"{"roomId":"room-1","invocationId":"inv-1"}"#,
+            )
+            .unwrap(),
+        GatewayHttpResponse::Empty { status: 204 }
+    ));
+}
+
+#[test]
+fn given_invalid_gateway_base_url_when_constructed_then_fail_closed() {
+    let client = Arc::new(
+        EduApiClient::new(
+            "https://test.invalid/module/edu-api",
+            Arc::new(NoopEduTransport),
+            4,
+        )
+        .unwrap(),
+    );
+    let auth = Arc::new(AuthSession::new(client, Arc::new(TestStorage)).unwrap());
+    assert!(ChatroomGateway::new_with_transport(
+        auth,
+        "https://test.invalid/module/edu-api?token=jwt".into(),
+        Arc::new(FakeConnector),
+        Arc::new(FakeBridge::default()),
+        "device-test".into(),
+        Arc::new(FakeTransport::default()),
+    )
+    .is_err());
+}
+
+#[test]
+fn given_public_response_with_phase_one_sensitive_fields_when_sanitized_then_remove_recursively() {
+    let transport = Arc::new(FakeTransport::default());
+    transport.push(GatewayTransportResponse {
+        status: 200,
+        body: br#"{"attachmentId":"att-1","attachmentIds":["att-2"],"deviceHash":"h","rawDevice":"r","cosKey":"c","storageKey":"s","qcs":"qcs::secret","nested":{"Authorization":"jwt","localPath":"/Users/private"}}"#.to_vec(),
+    });
+    let gateway = gateway(transport, Arc::new(FakeBridge::default()));
+    let GatewayHttpResponse::Json { body, .. } = gateway
+        .handle_http("GET", "/api/chatrooms/v2/rooms", &HashMap::new(), &[])
+        .unwrap()
+    else {
+        panic!("expected JSON")
+    };
+    assert_eq!(body["attachmentId"], "att-1");
+    assert_eq!(body["attachmentIds"][0], "att-2");
+    for key in ["deviceHash", "rawDevice", "cosKey", "storageKey", "qcs"] {
+        assert!(body.get(key).is_none());
+    }
+    assert!(body["nested"].get("Authorization").is_none());
+    assert!(body["nested"].get("localPath").is_none());
+}
+
+#[test]
+fn given_lease_response_when_upstream_rejects_then_do_not_register_until_2xx_and_clear_offline() {
+    let transport = Arc::new(FakeTransport::default());
+    transport.push(GatewayTransportResponse {
+        status: 409,
+        body: br#"{"code":"agent_busy"}"#.to_vec(),
+    });
+    transport.push(GatewayTransportResponse {
+        status: 204,
+        body: Vec::new(),
+    });
+    let gateway = gateway(transport, Arc::new(FakeBridge::default()));
+    gateway
+        .handle_http(
+            "POST",
+            "/api/chatrooms/v2/rooms/room-1/agents/agent-1/lease",
+            &HashMap::new(),
+            br#"{"deviceId":"device-1"}"#,
+        )
+        .unwrap();
+    assert_eq!(gateway.lease_count_for_test(), 0);
+    gateway
+        .handle_http(
+            "POST",
+            "/api/chatrooms/v2/rooms/room-1/agents/agent-1/lease",
+            &HashMap::new(),
+            br#"{"deviceId":"device-1"}"#,
+        )
+        .unwrap();
+    assert_eq!(gateway.lease_count_for_test(), 1);
+    gateway.set_room_cursor_for_test("room-1", 0);
+    gateway.publish_event_for_test(ChatroomEvent::AgentOffline {
+        room_id: "room-1".into(),
+        seq: 1,
+        payload: json!({"roomAgentId":"agent-1"}),
+    });
+    assert_eq!(gateway.lease_count_for_test(), 0);
+}
+
+#[test]
+fn given_running_gateway_when_injected_clock_passes_lease_expiry_then_event_loop_removes_lease() {
+    let client = Arc::new(
+        EduApiClient::new(
+            "https://test.invalid/module/edu-api",
+            Arc::new(NoopEduTransport),
+            4,
+        )
+        .unwrap(),
+    );
+    let auth = Arc::new(AuthSession::new(client, Arc::new(AuthenticatedTestStorage)).unwrap());
+    let clock = Arc::new(TestGatewayClock::new());
+    let gateway = ChatroomGateway::new_with_transport_and_clock(
+        auth,
+        "https://test.invalid/module/edu-api".into(),
+        Arc::new(FakeConnector),
+        Arc::new(FakeBridge::default()),
+        "device-test".into(),
+        Arc::new(FakeTransport::default()),
+        clock.clone(),
+    )
+    .unwrap();
+    gateway.register_lease_for_test("room-1", "agent-1", "device-1");
+    gateway.start();
+
+    clock.advance(Duration::from_secs(61));
+    let expired = (0..20).any(|_| {
+        thread::sleep(Duration::from_millis(50));
+        gateway.lease_count_for_test() == 0
+    });
+    gateway.shutdown();
+    assert!(expired);
+}
+
+#[test]
+fn given_completed_invocation_when_published_then_keep_agent_lease() {
+    let gateway = gateway(
+        Arc::new(FakeTransport::default()),
+        Arc::new(FakeBridge::default()),
+    );
+    gateway.register_lease_for_test("room-1", "agent-1", "device-1");
+    gateway.set_room_cursor_for_test("room-1", 0);
+    gateway.publish_event_for_test(ChatroomEvent::AgentCompleted {
+        room_id: "room-1".into(),
+        payload: json!({"roomAgentId":"agent-1"}),
+    });
+    assert_eq!(gateway.lease_count_for_test(), 1);
+}
+
+#[test]
+fn given_room_a_recovery_is_blocked_when_room_b_event_arrives_then_dispatcher_keeps_publishing() {
+    let transport = Arc::new(FakeTransport::default());
+    transport.push(GatewayTransportResponse {
+        status: 200,
+        body: serde_json::to_vec(&json!({"data":[
+            {"eventId":"e1","roomId":"room-a","seq":1,"eventType":"message.created","payload":{"messageId":"m1"},"createdAt":"now"}
+        ]}))
+        .unwrap(),
+    });
+    let (started, release) = transport.gate_next_request();
+    let gateway = gateway(transport, Arc::new(FakeBridge::default()));
+    gateway.start();
+    gateway.set_room_cursor_for_test("room-a", 0);
+    gateway.set_room_cursor_for_test("room-b", 0);
+    let room_a = gateway.subscribe_sse(vec!["room-a".into()]).unwrap();
+    let room_b = gateway.subscribe_sse(vec!["room-b".into()]).unwrap();
+    gateway.publish_event_for_test(durable("room-a", 2));
+    started.recv_timeout(Duration::from_millis(500)).unwrap();
+    gateway.publish_event_for_test(durable("room-b", 1));
+    let room_b_event = loop {
+        let event = room_b
+            .receiver
+            .recv_timeout(Duration::from_millis(100))
+            .unwrap();
+        if event["seq"].as_u64() == Some(1) {
+            break event;
+        }
+    };
+    assert_eq!(room_b_event["seq"], 1);
+    release.send(()).unwrap();
+    let room_a_event = loop {
+        let event = room_a
+            .receiver
+            .recv_timeout(Duration::from_millis(500))
+            .unwrap();
+        if event["seq"].as_u64() == Some(1) {
+            break event;
+        }
+    };
+    assert_eq!(room_a_event["seq"], 1);
+    gateway.shutdown();
 }
 
 #[test]

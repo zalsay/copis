@@ -1,24 +1,29 @@
 use crate::auth_session::{AuthError, AuthSession};
 use crate::chatroom_client::{ChatroomClient, ChatroomClientEvent, ChatroomSocketConnector};
 use crate::chatroom_protocol::{
-    chatroom_ws_url, filter_cos_sts, normalize_room_id, public_event, validate_invocation_depth,
-    AgentEventPayload, ChatroomCommand, ChatroomEvent, CosAction, RoomCursor, CHATROOM_HTTP_PREFIX,
-    CHATROOM_INTERNAL_PREFIX, CHATROOM_SSE_PATH,
+    chatroom_ws_url, filter_cos_sts, normalize_room_id, public_event, sanitize_public,
+    validate_invocation_depth, AgentEventPayload, ChatroomCommand, ChatroomEvent, CosAction,
+    RoomCursor, CHATROOM_HTTP_PREFIX, CHATROOM_INTERNAL_PREFIX, CHATROOM_SSE_PATH,
 };
+use serde::de::{self, DeserializeSeed, MapAccess, SeqAccess, Visitor};
+use serde::Deserializer;
 use serde_json::{Map, Value};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::{mpsc, Arc, Mutex, Weak};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 const MAX_BODY_BYTES: usize = 10 * 1024 * 1024;
+const MAX_ATTACHMENT_BYTES: u64 = 256 * 1024 * 1024;
 const MAX_QUERY_BYTES: usize = 4096;
 const SSE_CAPACITY: usize = 64;
 const SSE_RESERVED_SLOT: usize = SSE_CAPACITY - 1;
 const LEASE_DURATION: Duration = Duration::from_secs(60);
 const LEASE_RENEW_INTERVAL: Duration = Duration::from_secs(20);
 const MAX_RECOVERY_PAGE: usize = 500;
+const TASK_WORKER_COUNT: usize = 4;
+const TASK_QUEUE_CAPACITY: usize = 64;
 
 pub(crate) trait GatewayClock: Send + Sync {
     fn now(&self) -> Instant;
@@ -118,13 +123,70 @@ pub enum GatewayHttpResponse {
 }
 
 pub struct SseSubscription {
-    pub receiver: mpsc::Receiver<Value>,
+    pub receiver: SseReceiver,
+    _guard: SseSubscriptionGuard,
+}
+
+pub struct SseReceiver {
+    receiver: mpsc::Receiver<Value>,
+    occupancy: Arc<AtomicUsize>,
+}
+
+impl SseReceiver {
+    pub fn recv(&self) -> Result<Value, mpsc::RecvError> {
+        self.receiver.recv().map(|value| {
+            self.occupancy.fetch_sub(1, Ordering::AcqRel);
+            value
+        })
+    }
+
+    pub fn recv_timeout(&self, timeout: Duration) -> Result<Value, mpsc::RecvTimeoutError> {
+        self.receiver.recv_timeout(timeout).map(|value| {
+            self.occupancy.fetch_sub(1, Ordering::AcqRel);
+            value
+        })
+    }
+
+    pub fn try_recv(&self) -> Result<Value, mpsc::TryRecvError> {
+        self.receiver.try_recv().map(|value| {
+            self.occupancy.fetch_sub(1, Ordering::AcqRel);
+            value
+        })
+    }
+}
+
+struct SseSubscriptionGuard {
+    subscribers: Weak<Mutex<HashMap<u64, Subscriber>>>,
+    subscriber_id: u64,
+}
+
+impl Drop for SseSubscriptionGuard {
+    fn drop(&mut self) {
+        if let Some(subscribers) = self.subscribers.upgrade() {
+            subscribers.lock().unwrap().remove(&self.subscriber_id);
+        }
+    }
+}
+
+fn try_send_sse(
+    sender: &mpsc::SyncSender<Value>,
+    occupancy: &AtomicUsize,
+    value: Value,
+) -> Result<(), mpsc::TrySendError<Value>> {
+    occupancy.fetch_add(1, Ordering::AcqRel);
+    match sender.try_send(value) {
+        Ok(()) => Ok(()),
+        Err(error) => {
+            occupancy.fetch_sub(1, Ordering::AcqRel);
+            Err(error)
+        }
+    }
 }
 
 struct Subscriber {
     rooms: HashSet<String>,
     sender: mpsc::SyncSender<Value>,
-    sent: AtomicUsize,
+    occupancy: Arc<AtomicUsize>,
 }
 
 struct RoomState {
@@ -157,6 +219,12 @@ struct LeaseState {
     next_renew_at: Instant,
 }
 
+enum GatewayTask {
+    Recover(String),
+    Invocation(ChatroomEvent),
+    Disconnected(Vec<u8>),
+}
+
 enum Route<'a> {
     Rooms,
     Room(&'a str),
@@ -184,7 +252,7 @@ pub struct ChatroomGateway {
     bridge: Arc<dyn ChatroomBridge>,
     device_id: String,
     rooms: Mutex<HashMap<String, RoomState>>,
-    subscribers: Mutex<HashMap<u64, Subscriber>>,
+    subscribers: Arc<Mutex<HashMap<u64, Subscriber>>>,
     leases: Mutex<HashMap<(String, String), LeaseState>>,
     next_subscriber_id: AtomicU64,
     client_events: Mutex<Option<mpsc::Receiver<ChatroomClientEvent>>>,
@@ -194,6 +262,8 @@ pub struct ChatroomGateway {
     disconnected_notified: AtomicBool,
     clock: Arc<dyn GatewayClock>,
     last_lease_tick: Mutex<Instant>,
+    task_sender: Mutex<Option<mpsc::SyncSender<GatewayTask>>>,
+    task_workers: Mutex<Vec<JoinHandle<()>>>,
 }
 
 impl ChatroomGateway {
@@ -203,7 +273,7 @@ impl ChatroomGateway {
         connector: Arc<dyn ChatroomSocketConnector>,
         bridge: Arc<dyn ChatroomBridge>,
         device_id: String,
-    ) -> Arc<Self> {
+    ) -> Result<Arc<Self>, ChatroomGatewayError> {
         let transport = Arc::new(AuthGatewayTransport { auth });
         Self::new_with_transport(
             transport.auth.clone(),
@@ -223,7 +293,7 @@ impl ChatroomGateway {
         bridge: Arc<dyn ChatroomBridge>,
         device_id: String,
         transport: Arc<dyn GatewayTransport>,
-    ) -> Arc<Self> {
+    ) -> Result<Arc<Self>, ChatroomGatewayError> {
         Self::new_with_transport_and_clock(
             _auth,
             edu_base_url,
@@ -243,17 +313,17 @@ impl ChatroomGateway {
         device_id: String,
         transport: Arc<dyn GatewayTransport>,
         clock: Arc<dyn GatewayClock>,
-    ) -> Arc<Self> {
+    ) -> Result<Arc<Self>, ChatroomGatewayError> {
         let url = chatroom_ws_url(&edu_base_url)
-            .unwrap_or_else(|_| format!("ws://127.0.0.1{}/ws", CHATROOM_HTTP_PREFIX));
+            .map_err(|_| invalid_request("聊天室实时服务地址不合法"))?;
         let (events, receiver) = mpsc::channel();
-        Arc::new(Self {
+        Ok(Arc::new(Self {
             client: Arc::new(ChatroomClient::new(_auth, url, connector, events)),
             transport,
             bridge,
             device_id,
             rooms: Mutex::new(HashMap::new()),
-            subscribers: Mutex::new(HashMap::new()),
+            subscribers: Arc::new(Mutex::new(HashMap::new())),
             leases: Mutex::new(HashMap::new()),
             next_subscriber_id: AtomicU64::new(1),
             client_events: Mutex::new(Some(receiver)),
@@ -263,13 +333,16 @@ impl ChatroomGateway {
             disconnected_notified: AtomicBool::new(false),
             last_lease_tick: Mutex::new(clock.now()),
             clock,
-        })
+            task_sender: Mutex::new(None),
+            task_workers: Mutex::new(Vec::new()),
+        }))
     }
 
     pub fn start(self: &Arc<Self>) {
         if self.shutdown.load(Ordering::Acquire) || self.started.swap(true, Ordering::AcqRel) {
             return;
         }
+        self.start_task_pool();
         self.client.start();
         let receiver = self.client_events.lock().unwrap().take();
         let Some(receiver) = receiver else {
@@ -281,6 +354,53 @@ impl ChatroomGateway {
         self.refresh_subscription_snapshot();
     }
 
+    fn start_task_pool(self: &Arc<Self>) {
+        let mut sender_slot = self.task_sender.lock().unwrap();
+        if sender_slot.is_some() {
+            return;
+        }
+        let (sender, receiver) = mpsc::sync_channel(TASK_QUEUE_CAPACITY);
+        let receiver = Arc::new(Mutex::new(receiver));
+        let mut workers = self.task_workers.lock().unwrap();
+        for _ in 0..TASK_WORKER_COUNT {
+            let gateway = Arc::clone(self);
+            let receiver = Arc::clone(&receiver);
+            workers.push(thread::spawn(move || loop {
+                if gateway.shutdown.load(Ordering::Acquire) {
+                    return;
+                }
+                // `recv_timeout` 让接收锁在等待期间释放，阻塞任务不会串行化整个 worker 池。
+                let task = receiver
+                    .lock()
+                    .unwrap()
+                    .recv_timeout(Duration::from_millis(50));
+                let task = match task {
+                    Ok(task) => task,
+                    Err(mpsc::RecvTimeoutError::Timeout) => continue,
+                    Err(mpsc::RecvTimeoutError::Disconnected) => return,
+                };
+                match task {
+                    GatewayTask::Recover(room_id) => gateway.recover_room(room_id),
+                    GatewayTask::Invocation(event) => gateway.forward_invocation_now(&event),
+                    GatewayTask::Disconnected(body) => gateway.send_disconnected_bridge(body),
+                }
+            }));
+        }
+        *sender_slot = Some(sender);
+    }
+
+    fn dispatch_task(&self, task: GatewayTask) -> Result<(), GatewayTask> {
+        let sender = self.task_sender.lock().unwrap().clone();
+        match sender {
+            Some(sender) => match sender.try_send(task) {
+                Ok(()) => Ok(()),
+                Err(mpsc::TrySendError::Full(task))
+                | Err(mpsc::TrySendError::Disconnected(task)) => Err(task),
+            },
+            None => Err(task),
+        }
+    }
+
     fn run_event_loop(self: Arc<Self>, receiver: mpsc::Receiver<ChatroomClientEvent>) {
         loop {
             if self.shutdown.load(Ordering::Acquire) {
@@ -288,7 +408,7 @@ impl ChatroomGateway {
             }
             match receiver.recv_timeout(Duration::from_millis(250)) {
                 Ok(event) => self.handle_client_event(event),
-                Err(mpsc::RecvTimeoutError::Timeout) => self.tick_leases(Instant::now()),
+                Err(mpsc::RecvTimeoutError::Timeout) => self.tick_leases(self.clock.now()),
                 Err(mpsc::RecvTimeoutError::Disconnected) => return,
             }
         }
@@ -317,14 +437,23 @@ impl ChatroomGateway {
             return;
         }
         let body = serde_json::json!({"reason":"realtime_disconnected"});
-        if self
-            .bridge
-            .send_disconnected(body.to_string().into_bytes())
-            .is_err()
-        {
-            self.publish_status(None, "bridge_unavailable", "聊天室业务桥不可用");
+        let body = body.to_string().into_bytes();
+        if let Err(task) = self.dispatch_task(GatewayTask::Disconnected(body)) {
+            if let GatewayTask::Disconnected(body) = task {
+                if self.task_sender.lock().unwrap().is_none() {
+                    self.send_disconnected_bridge(body);
+                } else {
+                    self.publish_status(None, "bridge_busy", "聊天室业务桥当前繁忙");
+                }
+            }
         }
         self.publish_status(None, "realtime_disconnected", "聊天室实时连接已断开");
+    }
+
+    fn send_disconnected_bridge(&self, body: Vec<u8>) {
+        if self.bridge.send_disconnected(body).is_err() {
+            self.publish_status(None, "bridge_unavailable", "聊天室业务桥不可用");
+        }
     }
 
     pub fn handle_http(
@@ -393,46 +522,28 @@ impl ChatroomGateway {
         route: &Route<'_>,
         body: &[u8],
     ) -> Result<GatewayHttpResponse, ChatroomGatewayError> {
-        validate_query_for_route(route, query)?;
-        let mut body_value = parse_body_value(body, body_required(method, route))?;
-        let request_body = match route {
-            Route::Messages(_) if method == "POST" => {
-                body_value = normalize_message_body(&body_value)?;
-                Some(body_value.to_string())
-            }
-            Route::Lease(_, _) if method == "POST" => {
-                let object = body_value
-                    .as_object()
-                    .ok_or_else(|| invalid_request("lease 请求体必须是对象"))?;
-                require_keys(object, &["deviceId"])?;
-                let device_id = required_string(object, "deviceId")?.to_string();
-                Some(serde_json::json!({"deviceId": device_id}).to_string())
-            }
-            _ => {
-                reject_sensitive_request(&body_value)?;
-                if body_value.is_null() {
-                    None
-                } else {
-                    Some(body_value.to_string())
-                }
-            }
-        };
-        let upstream_path = if query.is_empty() {
+        let body_value = parse_body_value(body, body_required(method, route))?;
+        let request_body = normalize_public_body(method, route, &body_value, !body.is_empty())?;
+        let canonical_query = canonical_query_for_route(route, query)?;
+        let upstream_path = if canonical_query.is_empty() {
             path.to_string()
         } else {
-            format!("{path}?{query}")
+            format!("{path}?{canonical_query}")
         };
         let response = self
             .transport
             .request(method, &upstream_path, request_body)
             .map_err(|message| ChatroomGatewayError::new(502, "upstream_unavailable", message))?;
+        let successful = (200..300).contains(&response.status);
         let result = public_response(response)?;
-        if let Route::Lease(room_id, agent_id) = route {
-            if let Some(device_id) = body_value.get("deviceId").and_then(Value::as_str) {
-                self.register_lease(room_id, agent_id, device_id);
+        if successful {
+            if let Route::Lease(room_id, agent_id) = route {
+                if let Some(device_id) = body_value.get("deviceId").and_then(Value::as_str) {
+                    self.register_lease(room_id, agent_id, device_id);
+                }
             }
+            self.update_local_state_after_route(method, route);
         }
-        self.update_local_state_after_route(method, route);
         Ok(result)
     }
 
@@ -453,6 +564,30 @@ impl ChatroomGateway {
         let expected_upload = ["roomId", "fileName", "mimeType", "sizeBytes", "sha256"];
         if action == CosAction::Upload {
             require_keys(object, &expected_upload)?;
+            let file_name = required_file_name(object, "fileName")?;
+            let mime_type = object
+                .get("mimeType")
+                .and_then(Value::as_str)
+                .filter(|value| valid_media_type(value))
+                .ok_or_else(|| invalid_request("mimeType 不正确"))?;
+            let size = object
+                .get("sizeBytes")
+                .and_then(Value::as_u64)
+                .filter(|size| *size <= MAX_ATTACHMENT_BYTES)
+                .ok_or_else(|| invalid_request("sizeBytes 不正确"))?;
+            let sha256 = object
+                .get("sha256")
+                .and_then(Value::as_str)
+                .filter(|value| {
+                    value.len() == 64
+                        && value
+                            .chars()
+                            .all(|c| c.is_ascii_digit() || matches!(c, 'a'..='f'))
+                })
+                .ok_or_else(|| invalid_request("sha256 不正确"))?;
+            let _ = (file_name, mime_type, size, sha256);
+        } else {
+            require_keys(object, &["roomId", "attachmentId"])?;
         }
         let endpoint = match action {
             CosAction::Upload => {
@@ -467,15 +602,10 @@ impl ChatroomGateway {
                     .ok_or_else(|| invalid_request("缺少 attachmentId"))?
             ),
         };
-        if action == CosAction::Upload {
-            reject_sensitive_request(&value)?;
-        }
         let mut upstream_value = value.clone();
         if let Some(object) = upstream_value.as_object_mut() {
             object.remove("roomId");
-            if action == CosAction::Download {
-                object.remove("attachmentId");
-            }
+            object.remove("attachmentId");
         }
         let response = self
             .transport
@@ -514,14 +644,33 @@ impl ChatroomGateway {
             .filter(|value| valid_component(value))
             .ok_or_else(|| invalid_request("缺少 attachmentId"))?;
         let room_id = normalize_room_id(room_id).map_err(|_| invalid_request("roomId 不合法"))?;
-        reject_sensitive_request(&value)?;
+        require_keys(
+            object,
+            &["roomId", "attachmentId", "sizeBytes", "etag", "sha256"],
+        )?;
+        let size_bytes = object
+            .get("sizeBytes")
+            .and_then(Value::as_u64)
+            .filter(|size| *size <= MAX_ATTACHMENT_BYTES)
+            .ok_or_else(|| invalid_request("sizeBytes 不正确"))?;
+        let etag = required_text(object, "etag")?;
+        let sha256 = object
+            .get("sha256")
+            .and_then(Value::as_str)
+            .filter(|value| {
+                value.len() == 64
+                    && value
+                        .chars()
+                        .all(|c| c.is_ascii_digit() || matches!(c, 'a'..='f'))
+            })
+            .ok_or_else(|| invalid_request("sha256 不正确"))?;
         let endpoint =
             format!("/api/chatrooms/v2/rooms/{room_id}/attachments/{attachment_id}/finalize");
-        let mut upstream_value = value.clone();
-        if let Some(object) = upstream_value.as_object_mut() {
-            object.remove("roomId");
-            object.remove("attachmentId");
-        }
+        let upstream_value = serde_json::json!({
+            "sizeBytes": size_bytes,
+            "etag": etag,
+            "sha256": sha256,
+        });
         let response = self
             .transport
             .request("POST", &endpoint, Some(upstream_value.to_string()))
@@ -545,8 +694,12 @@ impl ChatroomGateway {
             return Err(invalid_request("invocationId 不匹配"));
         }
         normalize_room_id(room_id).map_err(|_| invalid_request("roomId 不合法"))?;
+        if state == "running" {
+            require_keys(object, &["roomId", "invocationId"])?;
+            return Ok(GatewayHttpResponse::Empty { status: 204 });
+        }
         let command = match state {
-            "accepted" | "running" => {
+            "accepted" => {
                 require_keys(object, &["roomId", "invocationId", "agentId", "deviceId"])?;
                 ChatroomCommand::AgentAccepted {
                     room_id: room_id.to_string(),
@@ -628,6 +781,7 @@ impl ChatroomGateway {
             );
         }
         let (sender, receiver) = mpsc::sync_channel(SSE_CAPACITY);
+        let occupancy = Arc::new(AtomicUsize::new(0));
         let subscriber_id = self.next_subscriber_id.fetch_add(1, Ordering::Relaxed);
         let mut initial = Vec::new();
         {
@@ -653,28 +807,34 @@ impl ChatroomGateway {
             Subscriber {
                 rooms: rooms.clone(),
                 sender: sender.clone(),
-                sent: AtomicUsize::new(0),
+                occupancy: occupancy.clone(),
             },
         );
         for event in initial {
             let _ = self.send_to_subscriber(subscriber_id, public_event(&event), true);
         }
         self.refresh_subscription_snapshot();
-        Ok(SseSubscription { receiver })
+        Ok(SseSubscription {
+            receiver: SseReceiver {
+                receiver,
+                occupancy,
+            },
+            _guard: SseSubscriptionGuard {
+                subscribers: Arc::downgrade(&self.subscribers),
+                subscriber_id,
+            },
+        })
     }
 
     fn send_to_subscriber(&self, id: u64, value: Value, durable: bool) -> bool {
-        let (sender, sent) = {
+        let (sender, occupancy) = {
             let subscribers = self.subscribers.lock().unwrap();
             let Some(subscriber) = subscribers.get(&id) else {
                 return false;
             };
-            (
-                subscriber.sender.clone(),
-                subscriber.sent.load(Ordering::Acquire),
-            )
+            (subscriber.sender.clone(), subscriber.occupancy.clone())
         };
-        if sent >= SSE_RESERVED_SLOT {
+        if occupancy.load(Ordering::Acquire) >= SSE_RESERVED_SLOT {
             if !durable {
                 return true;
             }
@@ -683,17 +843,12 @@ impl ChatroomGateway {
                 code: "resync_required".into(),
                 message: "SSE 客户端过慢，请重新同步聊天室".into(),
             });
-            let delivered = sender.try_send(marker).is_ok();
+            let delivered = try_send_sse(&sender, &occupancy, marker).is_ok();
             self.subscribers.lock().unwrap().remove(&id);
             return delivered;
         }
-        match sender.try_send(value) {
-            Ok(()) => {
-                if let Some(subscriber) = self.subscribers.lock().unwrap().get(&id) {
-                    subscriber.sent.fetch_add(1, Ordering::AcqRel);
-                }
-                true
-            }
+        match try_send_sse(&sender, &occupancy, value) {
+            Ok(()) => true,
             Err(mpsc::TrySendError::Full(_)) if !durable => true,
             Err(mpsc::TrySendError::Full(_)) => {
                 let marker = public_event(&ChatroomEvent::LocalStatus {
@@ -701,7 +856,7 @@ impl ChatroomGateway {
                     code: "resync_required".into(),
                     message: "SSE 客户端过慢，请重新同步聊天室".into(),
                 });
-                let delivered = sender.try_send(marker).is_ok();
+                let delivered = try_send_sse(&sender, &occupancy, marker).is_ok();
                 self.subscribers.lock().unwrap().remove(&id);
                 delivered
             }
@@ -720,16 +875,10 @@ impl ChatroomGateway {
             self.publish_persistent(event, seq);
             return;
         }
-        if let ChatroomEvent::RoomSnapshot {
-            room_id,
-            latest_seq,
-            ..
-        } = &event
-        {
+        if let ChatroomEvent::RoomSnapshot { room_id, .. } = &event {
             let mut states = self.rooms.lock().unwrap();
             let state = states.entry(room_id.clone()).or_insert_with(RoomState::new);
             state.subscribed = true;
-            state.last_contiguous_seq = (*latest_seq).max(state.last_contiguous_seq);
             state.snapshot = Some(event.clone());
         }
         self.broadcast(&event);
@@ -765,7 +914,13 @@ impl ChatroomGateway {
             }
         }
         if should_recover {
-            self.recover_room(room_id);
+            if let Err(task) = self.dispatch_task(GatewayTask::Recover(room_id.clone())) {
+                if self.task_sender.lock().unwrap().is_some() {
+                    self.finish_recovery_with_gap(&room_id);
+                } else if let GatewayTask::Recover(room_id) = task {
+                    self.recover_room(room_id);
+                }
+            }
         }
         if should_commit {
             self.commit_event(event);
@@ -798,6 +953,7 @@ impl ChatroomGateway {
                         return;
                     }
                     state.last_contiguous_seq = seq;
+                    state.buffered.retain(|buffered_seq, _| *buffered_seq > seq);
                 }
                 self.commit_event(event);
                 continue;
@@ -863,6 +1019,7 @@ impl ChatroomGateway {
                         Err(())
                     } else {
                         state.last_contiguous_seq = seq;
+                        state.buffered.retain(|buffered_seq, _| *buffered_seq > seq);
                         Ok(Some(event.clone()))
                     }
                 };
@@ -895,6 +1052,7 @@ impl ChatroomGateway {
     }
 
     fn commit_event(&self, event: ChatroomEvent) {
+        self.cleanup_lease_for_event(&event);
         self.broadcast(&event);
         if let (Some(room_id), Some(seq)) = (event.room_id(), event.seq()) {
             self.send_client_command_if_started(ChatroomCommand::CursorAck {
@@ -904,7 +1062,46 @@ impl ChatroomGateway {
         }
     }
 
+    fn cleanup_lease_for_event(&self, event: &ChatroomEvent) {
+        let should_remove = matches!(
+            event,
+            ChatroomEvent::AgentOffline { .. } | ChatroomEvent::AgentDisabled { .. }
+        );
+        if !should_remove {
+            return;
+        }
+        let (room_id, payload) = match event {
+            ChatroomEvent::AgentOffline {
+                room_id, payload, ..
+            }
+            | ChatroomEvent::AgentDisabled {
+                room_id, payload, ..
+            } => (room_id, payload),
+            _ => return,
+        };
+        let Some(agent_id) = payload
+            .as_object()
+            .and_then(|object| object.get("roomAgentId").or_else(|| object.get("agentId")))
+            .and_then(Value::as_str)
+        else {
+            return;
+        };
+        self.remove_lease(room_id, agent_id);
+    }
+
     fn forward_invocation(&self, event: &ChatroomEvent) {
+        if let Err(task) = self.dispatch_task(GatewayTask::Invocation(event.clone())) {
+            if let GatewayTask::Invocation(event) = task {
+                if self.task_sender.lock().unwrap().is_none() {
+                    self.forward_invocation_now(&event);
+                } else if let Some(room_id) = event.room_id() {
+                    self.publish_status(Some(room_id), "bridge_busy", "聊天室 Agent 桥当前繁忙");
+                }
+            }
+        }
+    }
+
+    fn forward_invocation_now(&self, event: &ChatroomEvent) {
         let ChatroomEvent::AgentInvocation { room_id, payload } = event else {
             return;
         };
@@ -1173,8 +1370,11 @@ impl ChatroomGateway {
     }
 
     pub fn shutdown_connection(&self) {
+        if self.shutdown.load(Ordering::Acquire) {
+            return;
+        }
+        self.client.pause();
         self.notify_disconnected();
-        self.client.shutdown();
     }
 
     pub fn shutdown(&self) {
@@ -1185,6 +1385,13 @@ impl ChatroomGateway {
         self.subscribers.lock().unwrap().clear();
         self.client.shutdown();
         if let Some(worker) = self.event_worker.lock().unwrap().take() {
+            if worker.thread().id() != thread::current().id() {
+                let _ = worker.join();
+            }
+        }
+        self.task_sender.lock().unwrap().take();
+        let mut task_workers = self.task_workers.lock().unwrap();
+        for worker in task_workers.drain(..) {
             if worker.thread().id() != thread::current().id() {
                 let _ = worker.join();
             }
@@ -1219,6 +1426,26 @@ impl ChatroomGateway {
             .unwrap()
             .get(room_id)
             .map(|state| state.last_contiguous_seq)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn subscriber_count_for_test(&self) -> usize {
+        self.subscribers.lock().unwrap().len()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn buffered_count_for_test(&self, room_id: &str) -> usize {
+        self.rooms
+            .lock()
+            .unwrap()
+            .get(room_id)
+            .map(|state| state.buffered.len())
+            .unwrap_or(0)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn lease_count_for_test(&self) -> usize {
+        self.leases.lock().unwrap().len()
     }
 
     #[cfg(test)]
@@ -1356,11 +1583,15 @@ fn method_allowed(method: &str, route: &Route<'_>) -> bool {
 
 fn parse_sse_room_ids(query: &str) -> Result<Vec<String>, ChatroomGatewayError> {
     let mut rooms = Vec::new();
+    let mut seen = HashSet::new();
     for pair in query.split('&').filter(|pair| !pair.is_empty()) {
         let (key, value) = pair
             .split_once('=')
             .ok_or_else(|| invalid_request("SSE 查询参数不正确"))?;
-        if key == "roomId" || key == "roomIds" {
+        if (key == "roomId" || key == "roomIds") && seen.insert(key) && !value.is_empty() {
+            if value.split(',').any(|value| value.is_empty()) {
+                return Err(invalid_request("SSE 查询参数不正确"));
+            }
             rooms.extend(
                 value
                     .split(',')
@@ -1374,25 +1605,47 @@ fn parse_sse_room_ids(query: &str) -> Result<Vec<String>, ChatroomGatewayError> 
     Ok(rooms)
 }
 
-fn validate_query_for_route(route: &Route<'_>, query: &str) -> Result<(), ChatroomGatewayError> {
+fn canonical_query_for_route(
+    route: &Route<'_>,
+    query: &str,
+) -> Result<String, ChatroomGatewayError> {
     if query.is_empty() {
-        return Ok(());
+        return Ok(String::new());
     }
     let allowed: &[&str] = match route {
-        Route::Messages(_) | Route::Events(_) => &["afterSeq", "beforeSeq", "limit"],
-        Route::LocalSse => &["roomId", "roomIds"],
+        Route::Messages(_) => &["beforeSeq", "limit"],
+        Route::Events(_) => &["afterSeq", "limit"],
         _ => &[],
     };
+    let mut values = HashMap::new();
     for pair in query.split('&') {
-        let key = pair
+        let (key, value) = pair
             .split_once('=')
-            .map(|(key, _)| key)
             .ok_or_else(|| invalid_request("查询参数不正确"))?;
-        if !allowed.contains(&key) {
+        if !allowed.contains(&key) || value.is_empty() || values.contains_key(key) {
             return Err(invalid_request("查询参数不正确"));
         }
+        let parsed = value
+            .parse::<u64>()
+            .map_err(|_| invalid_request("查询参数不正确"))?;
+        if key == "limit" && !(1..=500).contains(&parsed) {
+            return Err(invalid_request("查询参数不正确"));
+        }
+        if key != "limit" && parsed > i64::MAX as u64 {
+            return Err(invalid_request("查询参数不正确"));
+        }
+        values.insert(key, parsed);
     }
-    Ok(())
+    let order = match route {
+        Route::Messages(_) => ["beforeSeq", "limit"],
+        Route::Events(_) => ["afterSeq", "limit"],
+        _ => return Ok(String::new()),
+    };
+    Ok(order
+        .iter()
+        .filter_map(|key| values.get(key).map(|value| format!("{key}={value}")))
+        .collect::<Vec<_>>()
+        .join("&"))
 }
 
 fn body_required(method: &str, route: &Route<'_>) -> bool {
@@ -1403,7 +1656,19 @@ fn body_required(method: &str, route: &Route<'_>) -> bool {
             | ("POST", Route::Messages(_))
             | ("POST", Route::Agents(_))
             | ("POST", Route::Lease(_, _))
+            | ("PATCH", Route::Room(_))
+            | ("PATCH", Route::Read(_))
+            | ("PATCH", Route::Agent(_, _))
     )
+}
+
+fn parse_strict_json(body: &[u8]) -> Result<Value, ()> {
+    let mut deserializer = serde_json::Deserializer::from_slice(body);
+    let value = deserializer
+        .deserialize_any(StrictValueVisitor)
+        .map_err(|_| ())?;
+    deserializer.end().map_err(|_| ())?;
+    Ok(value)
 }
 
 fn parse_body_value(body: &[u8], required: bool) -> Result<Value, ChatroomGatewayError> {
@@ -1413,7 +1678,331 @@ fn parse_body_value(body: &[u8], required: bool) -> Result<Value, ChatroomGatewa
         }
         return Ok(Value::Null);
     }
-    serde_json::from_slice(body).map_err(|_| invalid_request("请求体不是有效 JSON"))
+    parse_strict_json(body).map_err(|_| invalid_request("请求体不是有效 JSON"))
+}
+
+struct StrictValueSeed;
+
+impl<'de> DeserializeSeed<'de> for StrictValueSeed {
+    type Value = Value;
+
+    fn deserialize<D>(self, deserializer: D) -> Result<Value, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        deserializer.deserialize_any(StrictValueVisitor)
+    }
+}
+
+struct StrictValueVisitor;
+
+impl<'de> Visitor<'de> for StrictValueVisitor {
+    type Value = Value;
+
+    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("JSON value without duplicate object keys")
+    }
+
+    fn visit_unit<E>(self) -> Result<Value, E> {
+        Ok(Value::Null)
+    }
+
+    fn visit_bool<E>(self, value: bool) -> Result<Value, E> {
+        Ok(Value::Bool(value))
+    }
+
+    fn visit_i64<E>(self, value: i64) -> Result<Value, E> {
+        Ok(Value::from(value))
+    }
+
+    fn visit_u64<E>(self, value: u64) -> Result<Value, E> {
+        Ok(Value::from(value))
+    }
+
+    fn visit_f64<E>(self, value: f64) -> Result<Value, E> {
+        Ok(Value::from(value))
+    }
+
+    fn visit_str<E>(self, value: &str) -> Result<Value, E> {
+        Ok(Value::String(value.to_string()))
+    }
+
+    fn visit_string<E>(self, value: String) -> Result<Value, E> {
+        Ok(Value::String(value))
+    }
+
+    fn visit_seq<A>(self, mut sequence: A) -> Result<Value, A::Error>
+    where
+        A: SeqAccess<'de>,
+    {
+        let mut values = Vec::new();
+        while let Some(value) = sequence.next_element_seed(StrictValueSeed)? {
+            values.push(value);
+        }
+        Ok(Value::Array(values))
+    }
+
+    fn visit_map<A>(self, mut map: A) -> Result<Value, A::Error>
+    where
+        A: MapAccess<'de>,
+    {
+        let mut values = Map::new();
+        let mut seen = HashSet::new();
+        while let Some(key) = map.next_key::<String>()? {
+            if !seen.insert(key.clone()) {
+                return Err(de::Error::custom("duplicate JSON object key"));
+            }
+            values.insert(key, map.next_value_seed(StrictValueSeed)?);
+        }
+        Ok(Value::Object(values))
+    }
+}
+
+fn normalize_public_body(
+    method: &str,
+    route: &Route<'_>,
+    value: &Value,
+    has_body: bool,
+) -> Result<Option<String>, ChatroomGatewayError> {
+    let is_body_route = body_required(method, route);
+    if !is_body_route {
+        if has_body {
+            return Err(invalid_request("该路由不接受请求体"));
+        }
+        return Ok(None);
+    }
+    let object = value
+        .as_object()
+        .ok_or_else(|| invalid_request("请求体必须是对象"))?;
+    let normalized = match (method, route) {
+        ("POST", Route::Rooms) => {
+            require_keys(object, &["name", "shareCode"])?;
+            let name = required_text(object, "name")?;
+            let share_code = required_share_code(object, "shareCode")?;
+            serde_json::json!({"name":name,"shareCode":share_code})
+        }
+        ("PATCH", Route::Room(_)) => {
+            if object.is_empty() {
+                return Err(invalid_request("更新聊天室至少需要一个字段"));
+            }
+            require_optional_keys(object, &["name", "shareCode", "shareCodeEnabled"])?;
+            let mut result = Map::new();
+            if object.contains_key("name") {
+                result.insert(
+                    "name".into(),
+                    Value::String(required_text(object, "name")?.into()),
+                );
+            }
+            if object.contains_key("shareCode") {
+                result.insert(
+                    "shareCode".into(),
+                    Value::String(required_share_code(object, "shareCode")?.into()),
+                );
+            }
+            if object.contains_key("shareCodeEnabled") {
+                result.insert(
+                    "shareCodeEnabled".into(),
+                    Value::Bool(
+                        object["shareCodeEnabled"]
+                            .as_bool()
+                            .ok_or_else(|| invalid_request("shareCodeEnabled 类型不正确"))?,
+                    ),
+                );
+            }
+            Value::Object(result)
+        }
+        ("POST", Route::Join) => {
+            require_keys(object, &["shareCode"])?;
+            serde_json::json!({"shareCode":required_share_code(object,"shareCode")?})
+        }
+        ("PATCH", Route::Read(_)) => {
+            require_keys(object, &["seq"])?;
+            if object["seq"].as_u64().is_none() {
+                return Err(invalid_request("seq 必须是非负整数"));
+            }
+            Value::Object(object.clone())
+        }
+        ("POST", Route::Agents(_)) => {
+            require_optional_keys(object, &["displayName", "avatar", "deviceId"])?;
+            if !object.contains_key("displayName") || !object.contains_key("deviceId") {
+                return Err(invalid_request("新增 Agent 缺少必要字段"));
+            }
+            let display_name = required_text(object, "displayName")?;
+            let device_id = required_text(object, "deviceId")?;
+            let mut result = serde_json::json!({"displayName":display_name,"deviceId":device_id});
+            if object.contains_key("avatar") {
+                result["avatar"] = Value::String(required_text(object, "avatar")?.into());
+            }
+            result
+        }
+        ("PATCH", Route::Agent(_, _)) => {
+            if object.is_empty() {
+                return Err(invalid_request("更新 Agent 至少需要一个字段"));
+            }
+            require_optional_keys(object, &["displayName", "avatar"])?;
+            let mut result = Map::new();
+            for key in ["displayName", "avatar"] {
+                if object.contains_key(key) {
+                    result.insert(
+                        key.into(),
+                        Value::String(required_text(object, key)?.into()),
+                    );
+                }
+            }
+            Value::Object(result)
+        }
+        ("POST", Route::Lease(_, _)) => {
+            require_keys(object, &["deviceId"])?;
+            serde_json::json!({"deviceId":required_text(object,"deviceId")?})
+        }
+        ("POST", Route::Messages(_)) => normalize_message_body(value)?,
+        _ => return Err(invalid_request("请求体 schema 不正确")),
+    };
+    Ok(Some(normalized.to_string()))
+}
+
+fn require_optional_keys(
+    object: &Map<String, Value>,
+    allowed: &[&str],
+) -> Result<(), ChatroomGatewayError> {
+    if object.keys().any(|key| !allowed.contains(&key.as_str())) {
+        return Err(invalid_request("请求体包含未知字段"));
+    }
+    Ok(())
+}
+
+fn required_text<'a>(
+    object: &'a Map<String, Value>,
+    key: &str,
+) -> Result<&'a str, ChatroomGatewayError> {
+    object
+        .get(key)
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty() && value.len() <= 128 && value.trim() == *value)
+        .ok_or_else(|| invalid_request("文本字段不正确"))
+}
+
+fn required_file_name<'a>(
+    object: &'a Map<String, Value>,
+    key: &str,
+) -> Result<&'a str, ChatroomGatewayError> {
+    object
+        .get(key)
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty() && value.len() <= 255 && value.trim() == *value)
+        .ok_or_else(|| invalid_request("文件名不正确"))
+}
+
+fn valid_media_type(value: &str) -> bool {
+    if value.len() > 128 || value.contains(['\r', '\n']) {
+        return false;
+    }
+    let value = value.trim();
+    let Some((media_type, parameters)) = split_media_type(value) else {
+        return false;
+    };
+    if media_type.is_empty()
+        || !media_type
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'/' || is_media_token(byte))
+    {
+        return false;
+    }
+    if media_type.bytes().filter(|byte| *byte == b'/').count() > 1 {
+        return false;
+    }
+    parameters
+        .into_iter()
+        .all(|parameter| valid_media_parameter(parameter.trim()))
+}
+
+fn split_media_type(value: &str) -> Option<(&str, Vec<&str>)> {
+    let mut parts = Vec::new();
+    let mut start = 0;
+    let mut quoted = false;
+    let mut escaped = false;
+    for (index, byte) in value.bytes().enumerate() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        match byte {
+            b'\\' if quoted => escaped = true,
+            b'"' => quoted = !quoted,
+            b';' if !quoted => {
+                parts.push(&value[start..index]);
+                start = index + 1;
+            }
+            _ => {}
+        }
+    }
+    if quoted || escaped {
+        return None;
+    }
+    parts.push(&value[start..]);
+    let media_type = parts.first()?.trim();
+    Some((media_type, parts.into_iter().skip(1).collect()))
+}
+
+fn valid_media_parameter(parameter: &str) -> bool {
+    let Some((name, raw_value)) = parameter.split_once('=') else {
+        return false;
+    };
+    let name = name.trim();
+    let value = raw_value.trim();
+    if name.is_empty() || value.is_empty() || !name.bytes().all(is_media_token) {
+        return false;
+    }
+    if value.starts_with('"') {
+        if !value.ends_with('"') || value.len() < 2 {
+            return false;
+        }
+        let mut escaped = false;
+        for byte in value[1..value.len() - 1].bytes() {
+            if escaped {
+                escaped = false;
+            } else if byte == b'\\' {
+                escaped = true;
+            } else if byte == b'"' || byte.is_ascii_control() {
+                return false;
+            }
+        }
+        !escaped
+    } else {
+        value.bytes().all(is_media_token)
+    }
+}
+
+fn is_media_token(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric()
+        || matches!(
+            byte,
+            b'!' | b'#'
+                | b'$'
+                | b'%'
+                | b'&'
+                | b'\''
+                | b'*'
+                | b'+'
+                | b'-'
+                | b'.'
+                | b'^'
+                | b'_'
+                | b'`'
+                | b'|'
+                | b'~'
+        )
+}
+
+fn required_share_code<'a>(
+    object: &'a Map<String, Value>,
+    key: &str,
+) -> Result<&'a str, ChatroomGatewayError> {
+    let value = required_text(object, key)?;
+    if value.len() != 4 || !value.chars().all(|char| char.is_ascii_alphanumeric()) {
+        return Err(invalid_request("分享码必须是 4 位字母或数字"));
+    }
+    Ok(value)
 }
 
 fn normalize_message_body(value: &Value) -> Result<Value, ChatroomGatewayError> {
@@ -1501,52 +2090,6 @@ fn string_array(
     optional_string_array(object, key)
 }
 
-fn reject_sensitive_request(value: &Value) -> Result<(), ChatroomGatewayError> {
-    if contains_sensitive_key(value) {
-        return Err(invalid_request("请求包含不允许的敏感字段"));
-    }
-    Ok(())
-}
-
-fn contains_sensitive_key(value: &Value) -> bool {
-    match value {
-        Value::Array(items) => items.iter().any(contains_sensitive_key),
-        Value::Object(object) => object
-            .iter()
-            .any(|(key, value)| forbidden_key(key) || contains_sensitive_key(value)),
-        _ => false,
-    }
-}
-
-fn forbidden_key(key: &str) -> bool {
-    let normalized = key.to_ascii_lowercase().replace(['_', '-'], "");
-    [
-        "authorization",
-        "authheader",
-        "bearer",
-        "jwt",
-        "sts",
-        "tmpsecret",
-        "secret",
-        "accesstoken",
-        "refreshtoken",
-        "sessiontoken",
-        "objectkey",
-        "cosobject",
-        "storageobject",
-        "localpath",
-        "absolutepath",
-        "internalpath",
-        "filepath",
-        "memory",
-        "skill",
-    ]
-    .iter()
-    .any(|prefix| normalized.starts_with(prefix))
-        || normalized == "device"
-        || normalized == "deviceid"
-}
-
 fn valid_component(value: &str) -> bool {
     !value.is_empty()
         && value.trim() == value
@@ -1588,8 +2131,8 @@ fn public_response(
             status: response.status,
         });
     }
-    let body = serde_json::from_slice::<Value>(&response.body)
-        .map(sanitize_public)
+    let body = parse_strict_json(&response.body)
+        .map(|value| sanitize_public(&value))
         .unwrap_or_else(|_| serde_json::json!({"error":"上游响应格式不正确","code":"invalid_upstream_response"}));
     Ok(GatewayHttpResponse::Json {
         status: response.status,
@@ -1598,24 +2141,9 @@ fn public_response(
 }
 
 fn parse_json_response(body: &[u8]) -> Result<Value, ChatroomGatewayError> {
-    serde_json::from_slice(body).map_err(|_| {
+    parse_strict_json(body).map_err(|_| {
         ChatroomGatewayError::new(502, "invalid_upstream_response", "上游响应格式不正确")
     })
-}
-
-fn sanitize_public(value: Value) -> Value {
-    match value {
-        Value::Array(items) => Value::Array(items.into_iter().map(sanitize_public).collect()),
-        Value::Object(object) => Value::Object(
-            object
-                .into_iter()
-                .filter(|(key, _)| !forbidden_key(key))
-                .map(|(key, value)| (key, sanitize_public(value)))
-                .collect(),
-        ),
-        Value::String(value) if sensitive_scalar(&value) => Value::String("[已过滤]".into()),
-        value => value,
-    }
 }
 
 fn sensitive_scalar(value: &str) -> bool {

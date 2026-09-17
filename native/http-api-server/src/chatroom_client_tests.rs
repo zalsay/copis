@@ -1273,6 +1273,56 @@ fn given_client_is_dropped_without_shutdown_then_worker_closes_socket() {
 }
 
 #[test]
+fn given_temporary_pause_when_authenticated_client_is_restarted_then_new_socket_connects() {
+    let storage = Arc::new(MemoryStorage::default());
+    let auth = auth(
+        Arc::new(RefreshTransport {
+            calls: AtomicUsize::new(0),
+        }),
+        storage,
+    );
+    let first = FakeSocket::new(vec![Ok(ChatroomEvent::AgentDelta {
+        room_id: "room-1".into(),
+        payload: json!({"delta":"ready"}),
+    })]);
+    let second = FakeSocket::new(vec![Err(ChatroomClientError::new(
+        "read_timeout",
+        "测试空闲连接",
+    ))]);
+    let connector = FakeConnector::new(vec![
+        ConnectResult::Socket(first),
+        ConnectResult::Socket(second),
+    ]);
+    let (events, receiver) = mpsc::channel();
+    let client = ChatroomClient::new_with_backoff(
+        auth,
+        "wss://edu.example/api/chatrooms/v2/ws".into(),
+        connector.clone(),
+        events,
+        FakeBackoff::new(),
+    );
+    client.start();
+    client.command(subscribe()).unwrap();
+    assert!(receiver
+        .recv_timeout(Duration::from_millis(500))
+        .is_ok_and(|event| matches!(event, ChatroomClientEvent::Connected)));
+    client.pause();
+    let disconnected = (0..10).any(|_| {
+        receiver
+            .recv_timeout(Duration::from_millis(100))
+            .is_ok_and(|event| matches!(event, ChatroomClientEvent::Disconnected))
+    });
+    assert!(disconnected);
+    client.command(subscribe()).unwrap();
+    assert!(receiver
+        .recv_timeout(Duration::from_millis(500))
+        .is_ok_and(|event| matches!(event, ChatroomClientEvent::Connected)));
+    assert_eq!(connector.attempts.load(Ordering::SeqCst), 2);
+    client.shutdown();
+    client.shutdown();
+}
+
+#[test]
 fn given_connected_socket_disconnects_immediately_then_failure_budget_is_not_reset() {
     let connector = FakeConnector::new(
         (0..8)

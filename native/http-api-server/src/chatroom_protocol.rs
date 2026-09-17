@@ -922,7 +922,7 @@ pub fn filter_cos_sts(
 }
 
 pub fn public_event(event: &ChatroomEvent) -> Value {
-    let clean = |value: &Value| sanitize(value);
+    let clean = |value: &Value| sanitize_public(value);
     let mut result = serde_json::Map::new();
     result.insert("type".into(), Value::String(event.kind().into()));
     if let Some(room) = event.room_id() {
@@ -942,7 +942,10 @@ pub fn public_event(event: &ChatroomEvent) -> Value {
         }
         ChatroomEvent::LocalStatus { code, message, .. } => {
             result.insert("code".into(), Value::String(code.clone()));
-            result.insert("message".into(), sanitize(&Value::String(message.clone())));
+            result.insert(
+                "message".into(),
+                sanitize_public(&Value::String(message.clone())),
+            );
         }
         _ => {
             let payload = match event {
@@ -970,13 +973,13 @@ pub fn public_event(event: &ChatroomEvent) -> Value {
     Value::Object(result)
 }
 
-fn sanitize(value: &Value) -> Value {
+pub fn sanitize_public(value: &Value) -> Value {
     match value {
-        Value::Array(items) => Value::Array(items.iter().map(sanitize).collect()),
+        Value::Array(items) => Value::Array(items.iter().map(sanitize_public).collect()),
         Value::Object(map) => Value::Object(
             map.iter()
                 .filter(|(key, _)| !forbidden(key))
-                .map(|(key, value)| (key.clone(), sanitize(value)))
+                .map(|(key, value)| (key.clone(), sanitize_public(value)))
                 .collect(),
         ),
         Value::String(value) if sensitive_scalar(value) => Value::String("[已过滤]".into()),

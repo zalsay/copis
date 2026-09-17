@@ -123,6 +123,7 @@ pub struct ChatroomClient {
     events: Mutex<Option<mpsc::Sender<ChatroomClientEvent>>>,
     commands: Mutex<Option<mpsc::Sender<QueuedCommand>>>,
     stop: Arc<AtomicBool>,
+    paused: Arc<AtomicBool>,
     wake_on_ordinary: Arc<AtomicBool>,
     #[cfg(test)]
     command_gate: Mutex<Option<CommandEnqueueGate>>,
@@ -162,6 +163,7 @@ impl ChatroomClient {
             events: Mutex::new(Some(events)),
             commands: Mutex::new(None),
             stop: Arc::new(AtomicBool::new(false)),
+            paused: Arc::new(AtomicBool::new(false)),
             wake_on_ordinary: Arc::new(AtomicBool::new(true)),
             #[cfg(test)]
             command_gate: Mutex::new(None),
@@ -206,6 +208,7 @@ impl ChatroomClient {
         let connector = self.connector.clone();
         let events = self.events.lock().unwrap().take();
         let stop = self.stop.clone();
+        let paused = self.paused.clone();
         let wake_on_ordinary = self.wake_on_ordinary.clone();
         let backoff = self.backoff.clone();
         #[cfg(test)]
@@ -219,6 +222,7 @@ impl ChatroomClient {
                     command_rx,
                     events,
                     stop,
+                    paused,
                     wake_on_ordinary,
                     backoff,
                     #[cfg(test)]
@@ -237,6 +241,9 @@ impl ChatroomClient {
         }
         let wake_budget =
             is_ordinary_command(&command) && self.wake_on_ordinary.swap(false, Ordering::AcqRel);
+        if !matches!(command, ChatroomCommand::Close) {
+            self.paused.store(false, Ordering::Release);
+        }
         #[cfg(test)]
         let command_gate = self.command_gate.lock().unwrap().take();
         #[cfg(test)]
@@ -256,6 +263,14 @@ impl ChatroomClient {
                 wake_budget,
             })
             .map_err(|_| ChatroomClientError::new("client_closed", "聊天室连接已关闭"))
+    }
+
+    #[allow(dead_code)]
+    pub fn pause(&self) {
+        if self.stop.load(Ordering::Acquire) {
+            return;
+        }
+        self.paused.store(true, Ordering::Release);
     }
 
     pub fn shutdown(&self) {
@@ -290,6 +305,7 @@ fn run_worker(
     command_rx: mpsc::Receiver<QueuedCommand>,
     events: mpsc::Sender<ChatroomClientEvent>,
     stop: Arc<AtomicBool>,
+    paused: Arc<AtomicBool>,
     wake_on_ordinary: Arc<AtomicBool>,
     backoff: Arc<dyn BackoffWaiter>,
     #[cfg(test)] unavailable_status_gate: Arc<Mutex<Option<UnavailableStatusGate>>>,
@@ -303,6 +319,27 @@ fn run_worker(
     loop {
         if stop.load(Ordering::Acquire) {
             return;
+        }
+        if paused.load(Ordering::Acquire) {
+            match command_rx.recv() {
+                Ok(queued) => {
+                    if apply_command(
+                        queued.command,
+                        &mut subscription,
+                        &mut pending,
+                        &mut unavailable,
+                        &mut retries,
+                        &mut refresh,
+                        queued.wake_budget,
+                        &stop,
+                        &wake_on_ordinary,
+                    ) {
+                        return;
+                    }
+                }
+                Err(_) => return,
+            }
+            continue;
         }
         if unavailable || subscription.is_none() {
             match command_rx.recv() {
@@ -434,6 +471,11 @@ fn run_worker(
             if stop.load(Ordering::Acquire) {
                 socket.close();
                 return;
+            }
+            if paused.load(Ordering::Acquire) {
+                socket.close();
+                emit_disconnected(&events);
+                break;
             }
             while let Ok(queued) = command_rx.try_recv() {
                 let changes_subscription = matches!(
