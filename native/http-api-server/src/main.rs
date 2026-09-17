@@ -196,8 +196,22 @@ impl ChatroomGatewayLifecycle {
     }
 
     fn mark_startup_failed(&self) {
-        *self.state.lock().unwrap() = ChatroomGatewayLifecycleState::StartupFailed;
-        self.changed.notify_all();
+        let gateway = {
+            let mut state = self.state.lock().unwrap();
+            let gateway = match &*state {
+                ChatroomGatewayLifecycleState::Registered(gateway) => Some(gateway.clone()),
+                ChatroomGatewayLifecycleState::WaitingForRegistration
+                | ChatroomGatewayLifecycleState::StartupFailed => None,
+            };
+            if !matches!(&*state, ChatroomGatewayLifecycleState::StartupFailed) {
+                *state = ChatroomGatewayLifecycleState::StartupFailed;
+                self.changed.notify_all();
+            }
+            gateway
+        };
+        if let Some(gateway) = gateway.and_then(|gateway| gateway.upgrade()) {
+            gateway.shutdown();
+        }
     }
 
     fn gateway(&self) -> Option<Arc<ChatroomGateway>> {

@@ -191,6 +191,34 @@ fn given_bridge_eof_before_gateway_registration_when_cleanup_runs_then_wait_for_
     assert_eq!(gateway.lease_count_for_test(), 0);
 }
 
+#[test]
+fn given_registered_gateway_when_startup_fails_then_shutdown_and_release_resources() {
+    let gateway = main_test_gateway(GatewayTransportResponse {
+        status: 204,
+        body: Vec::new(),
+    });
+    gateway.register_lease_for_test("room-1", "agent-1", "device-1");
+    gateway.start();
+    let lifecycle = Arc::new(super::ChatroomGatewayLifecycle::new());
+    lifecycle.register_gateway(&gateway);
+
+    let (finished_tx, finished_rx) = std::sync::mpsc::channel();
+    let failed_lifecycle = Arc::clone(&lifecycle);
+    let transition = thread::spawn(move || {
+        failed_lifecycle.mark_startup_failed();
+        finished_tx.send(()).unwrap();
+    });
+    finished_rx
+        .recv_timeout(Duration::from_secs(1))
+        .expect("startup-failed transition 应在有限时间内完成 gateway shutdown");
+    transition.join().unwrap();
+
+    lifecycle.mark_startup_failed();
+
+    assert!(gateway.shutdown_requested_for_test());
+    assert_eq!(gateway.lease_count_for_test(), 0);
+}
+
 fn run_chatroom_http(request: HttpRequest, gateway: Arc<ChatroomGateway>) -> String {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap();
