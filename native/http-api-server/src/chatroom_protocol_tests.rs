@@ -261,10 +261,12 @@ fn given_invalid_cos_grant_when_filtering_then_return_stable_error() {
 
 #[test]
 fn given_valid_room_ids_when_normalizing_then_reject_path_and_control_injection() {
-    assert_eq!(normalize_room_id(" room-1 ").unwrap(), "room-1");
+    assert_eq!(normalize_room_id("room-1").unwrap(), "room-1");
     for room_id in [
         "",
         " ",
+        " room-1",
+        "room-1 ",
         "../room",
         "room/1",
         "room?x",
@@ -276,6 +278,132 @@ fn given_valid_room_ids_when_normalizing_then_reject_path_and_control_injection(
             "accepted room id {room_id:?}"
         );
     }
+}
+
+#[test]
+fn given_payload_at_64_kib_when_parsing_then_accept_but_reject_payload_plus_one() {
+    for (size, accepted) in [(65_525usize, true), (65_526, false)] {
+        let input = json!({
+            "type":"agent.delta",
+            "roomId":"room-1",
+            "payload":{"text":"x".repeat(size)}
+        });
+        assert_eq!(
+            parse_event(&serde_json::to_vec(&input).unwrap()).is_ok(),
+            accepted,
+            "payload size {size}"
+        );
+    }
+}
+
+#[test]
+fn given_frame_larger_than_protocol_limit_when_parsing_then_reject() {
+    let input = json!({
+        "type":"agent.delta",
+        "roomId":"room-1",
+        "payload":{"text":"x".repeat(130_000)}
+    });
+    assert!(parse_event(&serde_json::to_vec(&input).unwrap()).is_err());
+}
+
+#[test]
+fn given_subscribe_limits_when_serializing_then_enforce_server_boundaries() {
+    let room = |index| RoomCursor {
+        room_id: format!("room-{index}"),
+        after_seq: 0,
+    };
+    for (rooms, device, accepted) in [
+        ((0..50).map(room).collect::<Vec<_>>(), "d".into(), true),
+        ((0..51).map(room).collect::<Vec<_>>(), "d".into(), false),
+        (vec![room(1)], "d".repeat(128), true),
+        (vec![room(1)], "d".repeat(129), false),
+        (vec![room(1)], "".into(), false),
+        (
+            vec![RoomCursor {
+                room_id: "room-1".into(),
+                after_seq: i64::MAX as u64 + 1,
+            }],
+            "d".into(),
+            false,
+        ),
+    ] {
+        let result = serde_json::to_value(ChatroomCommand::Subscribe {
+            rooms,
+            device_id: device,
+        });
+        assert_eq!(result.is_ok(), accepted);
+    }
+}
+
+#[test]
+fn given_command_limits_when_serializing_then_reject_invalid_ids_content_and_mentions() {
+    let base = |event| ChatroomCommand::AgentEvent {
+        room_id: "room-1".into(),
+        invocation_id: "inv-1".into(),
+        event,
+    };
+    let commands = [
+        ChatroomCommand::SendMessage {
+            room_id: "room-1".into(),
+            client_message_id: "c".repeat(129),
+            content: "hello".into(),
+            mention_agent_ids: vec![],
+            attachment_ids: vec![],
+        },
+        ChatroomCommand::SendMessage {
+            room_id: "room-1".into(),
+            client_message_id: "c".into(),
+            content: " ".into(),
+            mention_agent_ids: vec![],
+            attachment_ids: vec![],
+        },
+        ChatroomCommand::SendMessage {
+            room_id: "room-1".into(),
+            client_message_id: "c".into(),
+            content: "hello".into(),
+            mention_agent_ids: vec!["a".into(); 4],
+            attachment_ids: vec![],
+        },
+        ChatroomCommand::SendMessage {
+            room_id: "room-1".into(),
+            client_message_id: "c".into(),
+            content: "hello".into(),
+            mention_agent_ids: vec!["agent/1".into()],
+            attachment_ids: vec![],
+        },
+        base(AgentEventPayload::Delta {
+            text: "x".repeat(65_537),
+        }),
+        base(AgentEventPayload::Completed {
+            content: " ".into(),
+            mention_agent_ids: vec![],
+            attachment_ids: vec![],
+            client_message_id: "reply".into(),
+        }),
+        base(AgentEventPayload::Failed {
+            code: "f".repeat(65),
+            message: "ignored".into(),
+        }),
+        ChatroomCommand::AgentAccepted {
+            room_id: "room-1".into(),
+            invocation_id: "inv-1".into(),
+            agent_id: "".into(),
+            device_id: "device".into(),
+        },
+        ChatroomCommand::RenewLease {
+            room_id: "room-1".into(),
+            agent_id: "agent-1".into(),
+            device_id: "d".repeat(129),
+        },
+    ];
+    for command in commands {
+        assert!(serde_json::to_value(command).is_err());
+    }
+    assert!(serde_json::to_value(ChatroomCommand::CursorAck {
+        room_id: "room-1".into(),
+        seq: i64::MAX as u64 + 1
+    })
+    .is_err());
 }
 
 #[test]

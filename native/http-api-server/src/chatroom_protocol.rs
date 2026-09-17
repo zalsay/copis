@@ -9,7 +9,12 @@ pub const CHATROOM_WS_PATH: &str = "/api/chatrooms/v2/ws";
 pub const CHATROOM_HTTP_PREFIX: &str = "/api/chatrooms/v2";
 pub const CHATROOM_INTERNAL_PREFIX: &str = "/api/internal/chatrooms";
 pub const CHATROOM_SSE_PATH: &str = "/api/chatrooms/v2/events";
-const MAX_EVENT_BYTES: usize = 64 * 1024;
+const MAX_FRAME_BYTES: usize = 128 * 1024;
+const MAX_PAYLOAD_BYTES: usize = 64 * 1024;
+const MAX_ROOMS: usize = 50;
+const MAX_ID_BYTES: usize = 64;
+const MAX_DEVICE_BYTES: usize = 128;
+const MAX_CLIENT_MESSAGE_ID_BYTES: usize = 128;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RoomCursor {
@@ -17,7 +22,7 @@ pub struct RoomCursor {
     pub after_seq: u64,
 }
 
-#[derive(Clone, Debug, PartialEq, Deserialize)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum ChatroomCommand {
     Subscribe {
         rooms: Vec<RoomCursor>,
@@ -56,7 +61,7 @@ pub enum ChatroomCommand {
     Close,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum AgentEventPayload {
     Delta {
         text: String,
@@ -155,13 +160,13 @@ impl ChatroomCommand {
         let valid_room = |value: &str| normalize_room_id(value).is_ok();
         match self {
             Self::Subscribe { rooms, device_id } => {
-                if rooms.is_empty()
-                    || device_id.trim().is_empty()
-                    || device_id.chars().any(char::is_control)
-                {
+                if rooms.is_empty() || rooms.len() > MAX_ROOMS || !valid_device(device_id) {
                     return Err("subscribe requires rooms and device_id");
                 }
-                if rooms.iter().any(|room| !valid_room(&room.room_id)) {
+                if rooms
+                    .iter()
+                    .any(|room| !valid_room(&room.room_id) || room.after_seq > i64::MAX as u64)
+                {
                     return Err("subscribe contains invalid room id");
                 }
             }
@@ -173,24 +178,36 @@ impl ChatroomCommand {
             Self::SendMessage {
                 room_id,
                 client_message_id,
-                ..
+                content,
+                mention_agent_ids,
+                attachment_ids,
             } => {
                 if !valid_room(room_id) {
                     return Err("command contains invalid room id");
                 }
-                if client_message_id.trim().is_empty() {
+                if !valid_id(client_message_id, MAX_CLIENT_MESSAGE_ID_BYTES)
+                    || !valid_content(content, MAX_PAYLOAD_BYTES)
+                    || !valid_mentions(mention_agent_ids)
+                    || attachment_ids
+                        .iter()
+                        .any(|attachment_id| !valid_id(attachment_id, MAX_ID_BYTES))
+                {
                     return Err("message requires client_message_id");
                 }
             }
             Self::AgentAccepted {
                 room_id,
                 invocation_id,
-                ..
+                agent_id,
+                device_id,
             } => {
                 if !valid_room(room_id) {
                     return Err("command contains invalid room id");
                 }
-                if invocation_id.trim().is_empty() {
+                if !valid_id(invocation_id, MAX_ID_BYTES)
+                    || !valid_id(agent_id, MAX_ID_BYTES)
+                    || !valid_device(device_id)
+                {
                     return Err("accepted event requires invocation_id");
                 }
             }
@@ -202,40 +219,88 @@ impl ChatroomCommand {
                 if !valid_room(room_id) {
                     return Err("command contains invalid room id");
                 }
-                if invocation_id.trim().is_empty() {
+                if !valid_id(invocation_id, MAX_ID_BYTES) {
                     return Err("agent event requires invocation_id");
                 }
-                if let AgentEventPayload::Completed {
-                    client_message_id, ..
-                } = event
-                {
-                    if client_message_id.trim().is_empty() {
-                        return Err("completed event requires client_message_id");
+                match event {
+                    AgentEventPayload::Delta { text } => {
+                        if text.len() > MAX_PAYLOAD_BYTES {
+                            return Err("delta exceeds payload limit");
+                        }
+                    }
+                    AgentEventPayload::Completed {
+                        content,
+                        mention_agent_ids,
+                        attachment_ids,
+                        client_message_id,
+                    } => {
+                        if !valid_content(content, MAX_PAYLOAD_BYTES)
+                            || !valid_id(client_message_id, MAX_CLIENT_MESSAGE_ID_BYTES)
+                            || !valid_mentions(mention_agent_ids)
+                            || attachment_ids
+                                .iter()
+                                .any(|attachment_id| !valid_id(attachment_id, MAX_ID_BYTES))
+                        {
+                            return Err("completed event contains invalid fields");
+                        }
+                    }
+                    AgentEventPayload::Failed { code, .. } => {
+                        if !valid_id(code, MAX_ID_BYTES) {
+                            return Err("failed event contains invalid failure code");
+                        }
                     }
                 }
             }
             Self::RenewLease {
-                room_id, agent_id, ..
+                room_id,
+                agent_id,
+                device_id,
             } => {
-                if !valid_room(room_id) {
+                if !valid_room(room_id)
+                    || !valid_id(agent_id, MAX_ID_BYTES)
+                    || !valid_device(device_id)
+                {
                     return Err("command contains invalid room id");
-                }
-                if agent_id.trim().is_empty() {
-                    return Err("heartbeat requires agent_id");
                 }
             }
             Self::CursorAck { room_id, seq } => {
-                if !valid_room(room_id) {
+                if !valid_room(room_id) || *seq == 0 || *seq > i64::MAX as u64 {
                     return Err("command contains invalid room id");
-                }
-                if *seq == 0 {
-                    return Err("cursor ack requires positive seq");
                 }
             }
             Self::Close => {}
         }
         Ok(())
     }
+}
+
+fn valid_id(value: &str, max_bytes: usize) -> bool {
+    !value.is_empty()
+        && value.trim() == value
+        && value.len() <= max_bytes
+        && !value
+            .chars()
+            .any(|character| character.is_control() || character.is_whitespace())
+        && !value
+            .chars()
+            .any(|character| matches!(character, '/' | '?' | '#' | '\\'))
+}
+
+fn valid_device(value: &str) -> bool {
+    !value.is_empty()
+        && value.trim() == value
+        && value.len() <= MAX_DEVICE_BYTES
+        && !value
+            .chars()
+            .any(|character| character.is_control() || character.is_whitespace())
+}
+
+fn valid_content(value: &str, max_bytes: usize) -> bool {
+    !value.trim().is_empty() && value.len() <= max_bytes
+}
+
+fn valid_mentions(values: &[String]) -> bool {
+    values.len() <= 3 && values.iter().all(|value| valid_id(value, MAX_ID_BYTES))
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -474,9 +539,9 @@ pub fn chatroom_ws_url(base_url: &str) -> Result<String, ProtocolError> {
 }
 
 pub fn normalize_room_id(value: &str) -> Result<String, ProtocolError> {
-    let value = value.trim();
-    if value.is_empty()
-        || value.len() > 64
+    if value.trim() != value
+        || value.is_empty()
+        || value.len() > MAX_ID_BYTES
         || value
             .chars()
             .any(|c| c.is_control() || matches!(c, '/' | '?' | '#' | '\\'))
@@ -498,10 +563,10 @@ pub fn validate_invocation_depth(depth: u8) -> Result<(), ProtocolError> {
 }
 
 pub fn parse_event(bytes: &[u8]) -> Result<ChatroomEvent, ProtocolError> {
-    if bytes.len() > MAX_EVENT_BYTES {
+    if bytes.len() > MAX_FRAME_BYTES {
         return Err(ProtocolError::new(
             "payload_too_large",
-            "chatroom event exceeds 64 KiB",
+            "chatroom event frame exceeds 128 KiB",
         ));
     }
     let root = parse_strict_value(bytes)?;
@@ -529,7 +594,7 @@ pub fn parse_event(bytes: &[u8]) -> Result<ChatroomEvent, ProtocolError> {
     if payload != Value::Null && !payload.is_object() && !payload.is_array() {
         return Err(invalid("event payload must be structured"));
     }
-    if payload.to_string().len() > MAX_EVENT_BYTES {
+    if payload.to_string().len() > MAX_PAYLOAD_BYTES {
         return Err(ProtocolError::new(
             "payload_too_large",
             "chatroom event payload exceeds 64 KiB",
