@@ -389,6 +389,59 @@ fn given_ws_handshake_401_when_client_connects_then_refresh_once_and_retry_with_
 }
 
 #[test]
+fn given_connected_when_equivalent_subscribe_is_repeated_then_do_not_reconnect() {
+    let first = FakeSocket::new(Vec::new());
+    let connector = FakeConnector::new(vec![ConnectResult::Socket(first)]);
+    let (events, receiver) = mpsc::channel();
+    let client = ChatroomClient::new(
+        auth(
+            Arc::new(RefreshTransport {
+                calls: AtomicUsize::new(0),
+            }),
+            Arc::new(MemoryStorage::default()),
+        ),
+        "wss://edu.example/ws".into(),
+        connector.clone(),
+        events,
+    );
+    client.start();
+    client.command(subscribe()).unwrap();
+    receive_until(&receiver, |event| {
+        matches!(event, ChatroomClientEvent::Connected)
+    });
+    client.command(subscribe()).unwrap();
+    std::thread::sleep(Duration::from_millis(30));
+    assert_eq!(connector.attempts.load(Ordering::SeqCst), 1);
+    client.shutdown();
+}
+
+#[test]
+fn given_invalid_command_when_client_is_unavailable_then_reject_before_queue_mutation() {
+    let connector = FakeConnector::new(Vec::new());
+    let (events, _receiver) = mpsc::channel();
+    let client = ChatroomClient::new(
+        auth(
+            Arc::new(RefreshTransport {
+                calls: AtomicUsize::new(0),
+            }),
+            Arc::new(MemoryStorage::default()),
+        ),
+        "wss://edu.example/ws".into(),
+        connector.clone(),
+        events,
+    );
+    client.start();
+    let error = client
+        .command(ChatroomCommand::Unsubscribe { room_id: "".into() })
+        .unwrap_err();
+    assert_eq!(error.code, "invalid_command");
+    client.command(subscribe()).unwrap();
+    std::thread::sleep(Duration::from_millis(30));
+    assert_eq!(connector.attempts.load(Ordering::SeqCst), 1);
+    client.shutdown();
+}
+
+#[test]
 fn given_second_ws_401_after_refresh_when_client_connects_then_emit_auth_expired_and_stop() {
     let storage = Arc::new(MemoryStorage::default());
     let transport = Arc::new(RefreshTransport {

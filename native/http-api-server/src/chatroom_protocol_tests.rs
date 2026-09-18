@@ -380,6 +380,7 @@ fn given_valid_room_ids_when_normalizing_then_reject_path_and_control_injection(
         " ",
         " room-1",
         "room-1 ",
+        "room 1",
         "../room",
         "room/1",
         "room?x",

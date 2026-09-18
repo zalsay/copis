@@ -207,6 +207,7 @@ impl ChatroomSocket for RecordingSocket {
 struct RecordingConnector {
     sent: Arc<Mutex<Vec<super::chatroom_protocol::ChatroomCommand>>>,
     released: Arc<AtomicBool>,
+    attempts: Arc<AtomicUsize>,
 }
 
 impl ChatroomSocketConnector for RecordingConnector {
@@ -216,6 +217,7 @@ impl ChatroomSocketConnector for RecordingConnector {
         _authorization: &str,
         _stop: &AtomicBool,
     ) -> Result<Box<dyn ChatroomSocket>, ChatroomClientError> {
+        self.attempts.fetch_add(1, Ordering::SeqCst);
         Ok(Box::new(RecordingSocket {
             sent: self.sent.clone(),
             released: self.released.clone(),
@@ -284,7 +286,7 @@ fn gateway(transport: Arc<FakeTransport>, bridge: Arc<FakeBridge>) -> Arc<Chatro
         )
         .unwrap(),
     );
-    let auth = Arc::new(AuthSession::new(client, Arc::new(TestStorage)).unwrap());
+    let auth = Arc::new(AuthSession::new(client, Arc::new(AuthenticatedTestStorage)).unwrap());
     ChatroomGateway::new_with_transport(
         auth,
         "https://test.invalid/module/edu-api".into(),
@@ -294,6 +296,61 @@ fn gateway(transport: Arc<FakeTransport>, bridge: Arc<FakeBridge>) -> Arc<Chatro
         transport,
     )
     .unwrap()
+}
+
+fn unauthenticated_gateway() -> Arc<ChatroomGateway> {
+    let client = Arc::new(
+        EduApiClient::new(
+            "https://test.invalid/module/edu-api",
+            Arc::new(NoopEduTransport),
+            4,
+        )
+        .unwrap(),
+    );
+    let auth = Arc::new(AuthSession::new(client, Arc::new(TestStorage)).unwrap());
+    ChatroomGateway::new_with_transport(
+        auth,
+        "https://test.invalid/module/edu-api".into(),
+        Arc::new(FakeConnector),
+        Arc::new(FakeBridge::default()),
+        "device-test".into(),
+        Arc::new(FakeTransport::default()),
+    )
+    .unwrap()
+}
+
+fn recording_gateway() -> (
+    Arc<ChatroomGateway>,
+    Arc<Mutex<Vec<super::chatroom_protocol::ChatroomCommand>>>,
+    Arc<AtomicUsize>,
+    Arc<AtomicBool>,
+) {
+    let client = Arc::new(
+        EduApiClient::new(
+            "https://test.invalid/module/edu-api",
+            Arc::new(NoopEduTransport),
+            4,
+        )
+        .unwrap(),
+    );
+    let auth = Arc::new(AuthSession::new(client, Arc::new(AuthenticatedTestStorage)).unwrap());
+    let sent = Arc::new(Mutex::new(Vec::new()));
+    let released = Arc::new(AtomicBool::new(false));
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let gateway = ChatroomGateway::new_with_transport(
+        auth,
+        "https://test.invalid/module/edu-api".into(),
+        Arc::new(RecordingConnector {
+            sent: sent.clone(),
+            released: released.clone(),
+            attempts: attempts.clone(),
+        }),
+        Arc::new(FakeBridge::default()),
+        "device-test".into(),
+        Arc::new(FakeTransport::default()),
+    )
+    .unwrap();
+    (gateway, sent, attempts, released)
 }
 
 fn saturated_gateway(
@@ -320,6 +377,7 @@ fn saturated_gateway(
         Arc::new(RecordingConnector {
             sent: sent.clone(),
             released: released.clone(),
+            attempts: Arc::new(AtomicUsize::new(0)),
         }),
         bridge,
         "device-test".into(),
@@ -604,6 +662,173 @@ fn given_sse_subscription_for_room_when_public_event_arrives_then_receive_filter
     assert_eq!(value["type"], "agent.delta");
     assert!(value.to_string().contains("[已过滤]") || !value.to_string().contains("private"));
     assert!(!value.to_string().contains("sessionToken"));
+}
+
+#[test]
+fn given_connected_gateway_when_connected_event_repeats_then_do_not_reconnect_equivalent_subscription(
+) {
+    let (gateway, sent, attempts, released) = recording_gateway();
+    gateway.set_room_cursor_for_test("room-1", 0);
+    gateway.start();
+    std::thread::sleep(Duration::from_millis(50));
+    assert_eq!(sent.lock().unwrap().len(), 1);
+    assert_eq!(attempts.load(Ordering::SeqCst), 1);
+    gateway.handle_client_event_for_test(super::chatroom_client::ChatroomClientEvent::Connected);
+    std::thread::sleep(Duration::from_millis(50));
+    assert_eq!(sent.lock().unwrap().len(), 1);
+    assert_eq!(attempts.load(Ordering::SeqCst), 1);
+    released.store(true, Ordering::Release);
+    gateway.shutdown();
+}
+
+#[test]
+fn given_internal_agent_text_when_unicode_whitespace_is_present_then_forward_to_client_boundary() {
+    let gateway = gateway(
+        Arc::new(FakeTransport::default()),
+        Arc::new(FakeBridge::default()),
+    );
+    let result = gateway.handle_http(
+        "POST",
+        "/api/internal/chatrooms/invocations/inv-1/delta",
+        &HashMap::new(),
+        serde_json::to_vec(
+            &json!({"roomId":"room-1","invocationId":"inv-1","delta":"你好，\n世界"}),
+        )
+        .unwrap()
+        .as_slice(),
+    );
+    assert!(matches!(result, Err(error) if error.code == "realtime_unavailable"));
+    let result = gateway.handle_http(
+        "POST",
+        "/api/internal/chatrooms/invocations/inv-1/completed",
+        &HashMap::new(),
+        serde_json::to_vec(&json!({"roomId":"room-1","invocationId":"inv-1","content":"第一行\n第二行","mentionAgentIds":[],"attachmentIds":[],"clientMessageId":"client-1"})).unwrap().as_slice(),
+    );
+    assert!(matches!(result, Err(error) if error.code == "realtime_unavailable"));
+}
+
+#[test]
+fn given_internal_agent_text_when_control_or_limit_is_present_then_reject_request() {
+    let gateway = gateway(
+        Arc::new(FakeTransport::default()),
+        Arc::new(FakeBridge::default()),
+    );
+    let control = gateway.handle_http(
+        "POST",
+        "/api/internal/chatrooms/invocations/inv-1/delta",
+        &HashMap::new(),
+        b"{\"roomId\":\"room-1\",\"invocationId\":\"inv-1\",\"delta\":\"bad\\u0001\"}",
+    );
+    assert!(matches!(control, Err(error) if error.status == 400));
+    let mut body = format!(
+        "{{\"roomId\":\"room-1\",\"invocationId\":\"inv-1\",\"delta\":\"{}\"}}",
+        "x".repeat(65 * 1024)
+    );
+    let oversized = gateway.handle_http(
+        "POST",
+        "/api/internal/chatrooms/invocations/inv-1/delta",
+        &HashMap::new(),
+        body.as_bytes(),
+    );
+    assert!(matches!(oversized, Err(error) if error.status == 400));
+    body.clear();
+}
+
+#[test]
+fn given_auth_loss_when_connection_is_shutdown_then_clear_sse_and_room_state() {
+    let gateway = gateway(
+        Arc::new(FakeTransport::default()),
+        Arc::new(FakeBridge::default()),
+    );
+    gateway.set_room_cursor_for_test("room-1", 9);
+    let _subscription = gateway.subscribe_sse(vec!["room-1".into()]).unwrap();
+    gateway.register_lease_for_test("room-1", "agent-1", "device-1");
+    gateway.shutdown_connection();
+    assert_eq!(gateway.subscriber_count_for_test(), 0);
+    assert_eq!(gateway.room_cursor_for_test("room-1"), None);
+    assert_eq!(gateway.lease_count_for_test(), 0);
+    gateway.resume_connection();
+    assert_eq!(gateway.room_cursor_for_test("room-1"), None);
+}
+
+#[test]
+fn given_unauthenticated_gateway_when_sse_is_requested_then_deny_without_cache_access() {
+    let gateway = unauthenticated_gateway();
+    let result = gateway.subscribe_sse(vec!["room-1".into()]);
+    assert!(
+        matches!(result, Err(error) if error.status == 401 && error.code == "not_authenticated")
+    );
+}
+
+#[test]
+fn given_successful_leave_or_removal_when_route_finishes_then_room_is_unsubscribed() {
+    for (method, path, body) in [
+        ("POST", "/api/chatrooms/v2/rooms/room-1/leave", Vec::new()),
+        ("DELETE", "/api/chatrooms/v2/rooms/room-1", Vec::new()),
+        (
+            "DELETE",
+            "/api/chatrooms/v2/rooms/room-1/agents/agent-1",
+            Vec::new(),
+        ),
+        (
+            "DELETE",
+            "/api/chatrooms/v2/rooms/room-1/members/42",
+            Vec::new(),
+        ),
+    ] {
+        let transport = Arc::new(FakeTransport::default());
+        transport.push(GatewayTransportResponse {
+            status: 204,
+            body: Vec::new(),
+        });
+        let gateway = gateway(transport, Arc::new(FakeBridge::default()));
+        gateway.set_room_cursor_for_test("room-1", 7);
+        gateway.register_lease_for_test("room-1", "agent-1", "device-1");
+        gateway
+            .handle_http(method, path, &HashMap::new(), &body)
+            .unwrap();
+        assert_eq!(
+            gateway.room_cursor_for_test("room-1"),
+            None,
+            "{method} {path}"
+        );
+        assert_eq!(gateway.lease_count_for_test(), 0, "{method} {path}");
+    }
+}
+
+#[test]
+fn given_continuous_client_events_when_lease_expires_then_event_path_ticks_it() {
+    let client = Arc::new(
+        EduApiClient::new(
+            "https://test.invalid/module/edu-api",
+            Arc::new(NoopEduTransport),
+            4,
+        )
+        .unwrap(),
+    );
+    let auth = Arc::new(AuthSession::new(client, Arc::new(AuthenticatedTestStorage)).unwrap());
+    let clock = Arc::new(TestGatewayClock::new());
+    let gateway = ChatroomGateway::new_with_transport_and_clock(
+        auth,
+        "https://test.invalid/module/edu-api".into(),
+        Arc::new(FakeConnector),
+        Arc::new(FakeBridge::default()),
+        "device-test".into(),
+        Arc::new(FakeTransport::default()),
+        clock.clone(),
+    )
+    .unwrap();
+    gateway.register_lease_for_test("room-1", "agent-1", "device-1");
+    clock.advance(Duration::from_secs(61));
+    for _ in 0..10 {
+        gateway.handle_client_event_for_test(super::chatroom_client::ChatroomClientEvent::Event(
+            ChatroomEvent::AgentPresenceChanged {
+                room_id: "room-1".into(),
+                payload: json!({}),
+            },
+        ));
+    }
+    assert_eq!(gateway.lease_count_for_test(), 0);
 }
 
 #[test]

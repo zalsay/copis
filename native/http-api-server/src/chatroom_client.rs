@@ -233,6 +233,9 @@ impl ChatroomClient {
     }
 
     pub fn command(&self, command: ChatroomCommand) -> Result<(), ChatroomClientError> {
+        command
+            .validate_wire_fields()
+            .map_err(|message| ChatroomClientError::new("invalid_command", message))?;
         if self.stop.load(Ordering::Acquire) {
             return Err(ChatroomClientError::new(
                 "client_closed",
@@ -318,6 +321,8 @@ fn run_worker(
             return;
         }
         if paused.load(Ordering::Acquire) {
+            // 认证失效时丢弃旧订阅，恢复后必须由新的 Subscribe 重建状态。
+            subscription = None;
             match command_rx.recv() {
                 Ok(queued) => {
                     let resumes = !matches!(&queued.command, ChatroomCommand::Close);
@@ -479,10 +484,11 @@ fn run_worker(
                 break;
             }
             while let Ok(queued) = command_rx.try_recv() {
-                let changes_subscription = matches!(
+                let is_subscription_command = matches!(
                     &queued.command,
                     ChatroomCommand::Subscribe { .. } | ChatroomCommand::Unsubscribe { .. }
                 );
+                let previous_subscription = subscription.clone();
                 if apply_command(
                     queued.command,
                     &mut subscription,
@@ -497,6 +503,8 @@ fn run_worker(
                     socket.close();
                     return;
                 }
+                let changes_subscription =
+                    is_subscription_command && previous_subscription != subscription;
                 if changes_subscription {
                     reconnect = true;
                     break;

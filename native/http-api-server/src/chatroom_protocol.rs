@@ -157,7 +157,7 @@ impl Serialize for ChatroomCommand {
 }
 
 impl ChatroomCommand {
-    fn validate_wire_fields(&self) -> Result<(), &'static str> {
+    pub(crate) fn validate_wire_fields(&self) -> Result<(), &'static str> {
         let valid_room = |value: &str| normalize_room_id(value).is_ok();
         match self {
             Self::Subscribe { rooms, device_id } => {
@@ -225,7 +225,7 @@ impl ChatroomCommand {
                 }
                 match event {
                     AgentEventPayload::Delta { text } => {
-                        if text.len() > MAX_PAYLOAD_BYTES {
+                        if !valid_content(text, MAX_PAYLOAD_BYTES) {
                             return Err("delta exceeds payload limit");
                         }
                     }
@@ -245,8 +245,10 @@ impl ChatroomCommand {
                             return Err("completed event contains invalid fields");
                         }
                     }
-                    AgentEventPayload::Failed { code, .. } => {
-                        if !valid_id(code, MAX_ID_BYTES) {
+                    AgentEventPayload::Failed { code, message } => {
+                        if !valid_id(code, MAX_ID_BYTES)
+                            || !valid_content(message, MAX_PAYLOAD_BYTES)
+                        {
                             return Err("failed event contains invalid failure code");
                         }
                     }
@@ -297,7 +299,11 @@ fn valid_device(value: &str) -> bool {
 }
 
 fn valid_content(value: &str, max_bytes: usize) -> bool {
-    !value.trim().is_empty() && value.len() <= max_bytes
+    !value.trim().is_empty()
+        && value.len() <= max_bytes
+        && !value
+            .chars()
+            .any(|character| character.is_control() && !matches!(character, '\n' | '\r' | '\t'))
 }
 
 fn valid_mentions(values: &[String]) -> bool {
@@ -567,7 +573,7 @@ pub fn normalize_room_id(value: &str) -> Result<String, ProtocolError> {
         || value.len() > MAX_ID_BYTES
         || value
             .chars()
-            .any(|c| c.is_control() || matches!(c, '/' | '?' | '#' | '\\'))
+            .any(|c| c.is_control() || c.is_whitespace() || matches!(c, '/' | '?' | '#' | '\\'))
     {
         return Err(invalid("invalid room id"));
     }

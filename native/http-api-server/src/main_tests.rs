@@ -33,7 +33,13 @@ struct MainTestStorage;
 
 impl AuthStorage for MainTestStorage {
     fn load(&self) -> Result<Option<PersistedAuth>, AuthError> {
-        Ok(None)
+        Ok(Some(PersistedAuth {
+            access_token: "main-test-token".into(),
+            refresh_token: None,
+            provider: "test".into(),
+            user: Some(serde_json::json!({"id": 1})),
+            expires_at: None,
+        }))
     }
     fn save(&self, _auth: &PersistedAuth) -> Result<(), AuthError> {
         Ok(())
@@ -610,6 +616,36 @@ fn given_concurrent_device_resolution_when_target_is_absent_then_both_use_one_uu
         use std::os::unix::fs::MetadataExt;
         assert_eq!(std::fs::metadata(&target).unwrap().mode() & 0o777, 0o600);
     }
+    let _ = std::fs::remove_dir_all(directory);
+}
+
+#[cfg(not(unix))]
+#[test]
+fn given_windows_device_target_when_two_publishers_race_then_existing_target_is_not_replaced() {
+    let directory = std::env::temp_dir().join(format!(
+        "copis-chatroom-device-windows-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&directory);
+    std::fs::create_dir_all(&directory).unwrap();
+    let target = directory.join("client-device.json");
+    let first = directory.join("first.tmp");
+    let second = directory.join("second.tmp");
+    std::fs::write(
+        &first,
+        br#"{"version":1,"deviceId":"123e4567-e89b-42d3-a456-426614174000","createdAt":1}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        &second,
+        br#"{"version":1,"deviceId":"123e4567-e89b-42d3-a456-426614174001","createdAt":1}"#,
+    )
+    .unwrap();
+    super::publish_chatroom_device_file(&first, &target).unwrap();
+    assert!(super::publish_chatroom_device_file(&second, &target).is_err());
+    assert!(std::fs::read_to_string(&target)
+        .unwrap()
+        .contains("42d3-a456-426614174000"));
     let _ = std::fs::remove_dir_all(directory);
 }
 
