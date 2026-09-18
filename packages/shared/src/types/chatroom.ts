@@ -200,6 +200,10 @@ export interface SyncChatRoomAgentSkillsInput {
   roomAgentId: string
 }
 
+/**
+ * Main 模块之间传递的可信运行时编译期契约。
+ * 该类型不得嵌入任何 IPC DTO；执行路径和其他敏感字段不能进入 Renderer。
+ */
 export interface ChatRoomAgentRuntimeContext {
   executionWorkspace: {
     root: string
@@ -237,12 +241,41 @@ function hasExactKeys(value: Record<string, unknown>, keys: readonly string[]): 
   return Object.keys(value).every((key) => expected.has(key)) && keys.every((key) => key in value)
 }
 
+function hasRequiredKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
+  return keys.every((key) => key in value)
+}
+
 function isBoundedId(value: unknown): value is string {
   return typeof value === 'string' && value.trim().length > 0 && value.length <= CHATROOM_MAX_ID_LENGTH
 }
 
 function isBoundedText(value: unknown, maxLength: number): value is string {
   return typeof value === 'string' && value.length <= maxLength
+}
+
+function isBoundedNonBlankText(value: unknown, maxLength: number): value is string {
+  return isBoundedText(value, maxLength) && value.trim().length > 0
+}
+
+function isNonNegativeSafeInteger(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
+}
+
+function isContextMessageCount(value: unknown): value is number {
+  return (
+    typeof value === 'number' &&
+    Number.isSafeInteger(value) &&
+    value >= 1 &&
+    value <= CHATROOM_MAX_CONTEXT_MESSAGES
+  )
+}
+
+function hasOptionalValue(value: Record<string, unknown>, key: string, guard: (value: unknown) => boolean): boolean {
+  return !(key in value) || guard(value[key])
+}
+
+function isInputRecord(value: unknown, keys: readonly string[]): value is Record<string, unknown> {
+  return isRecord(value) && Object.keys(value).every((key) => keys.includes(key))
 }
 
 function isBoundedIdArray(value: unknown, maxLength: number): value is string[] {
@@ -291,8 +324,7 @@ function isContextMessage(value: unknown): value is ChatRoomContextMessage {
     isBoundedId(value.messageId) &&
     isSender(value.sender) &&
     isBoundedText(value.text, CHATROOM_MAX_OUTPUT_TEXT_LENGTH) &&
-    typeof value.createdAt === 'number' &&
-    Number.isFinite(value.createdAt) &&
+    isNonNegativeSafeInteger(value.createdAt) &&
     (value.attachmentIds === undefined || isBoundedIdArray(value.attachmentIds, CHATROOM_MAX_ATTACHMENT_IDS)) &&
     (value.mentionedAgentIds === undefined || isBoundedIdArray(value.mentionedAgentIds, CHATROOM_MAX_AGENTS)) &&
     (value.invocationChain === undefined || isInvocationChain(value.invocationChain))
@@ -318,7 +350,75 @@ export function isChatRoomAgentInvocation(value: unknown): value is ChatRoomAgen
     Array.isArray(value.messages) &&
     value.messages.length <= CHATROOM_MAX_CONTEXT_MESSAGES &&
     value.messages.every((message) => isContextMessage(message)) &&
-    typeof value.receivedAt === 'number' &&
-    Number.isFinite(value.receivedAt)
+    isNonNegativeSafeInteger(value.receivedAt)
   )
+}
+
+/** Renderer -> Main：创建聊天室 Agent 的严格输入校验。 */
+export function isProvisionChatRoomAgentInput(value: unknown): value is ProvisionChatRoomAgentInput {
+  const keys = [
+    'roomId',
+    'sourceWorkspaceId',
+    'displayName',
+    'channelId',
+    'modelId',
+    'contextMessageCount',
+    'memorySharingEnabled',
+    'skillSharingEnabled',
+  ] as const
+  if (!isInputRecord(value, keys) || !hasRequiredKeys(value, ['roomId', 'sourceWorkspaceId', 'displayName', 'channelId'])) return false
+  return (
+    isBoundedId(value.roomId) &&
+    isBoundedId(value.sourceWorkspaceId) &&
+    isBoundedNonBlankText(value.displayName, CHATROOM_MAX_ID_LENGTH) &&
+    isBoundedId(value.channelId) &&
+    hasOptionalValue(value, 'modelId', isBoundedId) &&
+    hasOptionalValue(value, 'contextMessageCount', isContextMessageCount) &&
+    hasOptionalValue(value, 'memorySharingEnabled', (item) => typeof item === 'boolean') &&
+    hasOptionalValue(value, 'skillSharingEnabled', (item) => typeof item === 'boolean')
+  )
+}
+
+/** Renderer -> Main：更新聊天室 Agent 的严格输入校验。 */
+export function isUpdateChatRoomAgentInput(value: unknown): value is UpdateChatRoomAgentInput {
+  const updateKeys = [
+    'displayName',
+    'channelId',
+    'modelId',
+    'contextMessageCount',
+    'memorySharingEnabled',
+    'skillSharingEnabled',
+  ] as const
+  const keys = ['roomId', 'roomAgentId', ...updateKeys] as const
+  if (!isInputRecord(value, keys) || !hasRequiredKeys(value, ['roomId', 'roomAgentId'])) return false
+  const hasUpdate = updateKeys.some((key) => key in value)
+  return (
+    hasUpdate &&
+    isBoundedId(value.roomId) &&
+    isBoundedId(value.roomAgentId) &&
+    hasOptionalValue(value, 'displayName', (item) => isBoundedNonBlankText(item, CHATROOM_MAX_ID_LENGTH)) &&
+    hasOptionalValue(value, 'channelId', isBoundedId) &&
+    hasOptionalValue(value, 'modelId', isBoundedId) &&
+    hasOptionalValue(value, 'contextMessageCount', isContextMessageCount) &&
+    hasOptionalValue(value, 'memorySharingEnabled', (item) => typeof item === 'boolean') &&
+    hasOptionalValue(value, 'skillSharingEnabled', (item) => typeof item === 'boolean')
+  )
+}
+
+/** Renderer -> Main：归档 Agent 的严格输入校验。 */
+export function isRemoveChatRoomAgentInput(value: unknown): value is RemoveChatRoomAgentInput {
+  if (!isInputRecord(value, ['roomId', 'roomAgentId']) || !hasExactKeys(value, ['roomId', 'roomAgentId'])) return false
+  return isBoundedId(value.roomId) && isBoundedId(value.roomAgentId)
+}
+
+/** Renderer -> Main：同步 Agent Skill 快照的严格输入校验。 */
+export function isSyncChatRoomAgentSkillsInput(value: unknown): value is SyncChatRoomAgentSkillsInput {
+  if (!isInputRecord(value, ['roomId', 'roomAgentId']) || !hasExactKeys(value, ['roomId', 'roomAgentId'])) return false
+  return isBoundedId(value.roomId) && isBoundedId(value.roomAgentId)
+}
+
+/** Renderer -> Main：主理人权限响应的严格输入校验，不接受 alwaysAllow 等扩展字段。 */
+export function isChatRoomPermissionResponse(value: unknown): value is ChatRoomPermissionResponse {
+  if (!isInputRecord(value, ['requestId', 'behavior']) || !hasExactKeys(value, ['requestId', 'behavior'])) return false
+  return isBoundedId(value.requestId) && (value.behavior === 'allow' || value.behavior === 'deny')
 }
