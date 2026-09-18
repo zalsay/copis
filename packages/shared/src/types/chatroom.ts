@@ -348,9 +348,9 @@ function isContextMessage(value: unknown): value is ChatRoomContextMessage {
     isSender(value.sender) &&
     isBoundedText(value.text, CHATROOM_MAX_OUTPUT_TEXT_LENGTH) &&
     isNonNegativeSafeInteger(value.createdAt) &&
-    (value.attachmentIds === undefined || isBoundedIdArray(value.attachmentIds, CHATROOM_MAX_ATTACHMENT_IDS)) &&
-    (value.mentionedAgentIds === undefined || isBoundedIdArray(value.mentionedAgentIds, CHATROOM_MAX_AGENTS)) &&
-    (value.invocationChain === undefined || isInvocationChain(value.invocationChain))
+    hasOptionalValue(value, 'attachmentIds', (item) => isBoundedIdArray(item, CHATROOM_MAX_ATTACHMENT_IDS)) &&
+    hasOptionalValue(value, 'mentionedAgentIds', (item) => isBoundedIdArray(item, CHATROOM_MAX_AGENTS)) &&
+    hasOptionalValue(value, 'invocationChain', isInvocationChain)
   )
 }
 

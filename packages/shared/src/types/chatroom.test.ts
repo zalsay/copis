@@ -111,6 +111,84 @@ test('Given DTO 中包含稀疏数组或非索引数组字段 When 校验 Then �
   ).toBe(false)
 })
 
+test('Given context optional 字段为 own undefined When 校验 Then 拒绝未定义值', () => {
+  const baseMessage = {
+    messageId: 'message-1',
+    sender: { type: 'user' as const, id: 'user-1', displayName: '主理人' },
+    text: '触发',
+    createdAt: 0,
+  }
+  const baseInvocation = {
+    invocationId: 'inv-1',
+    roomId: 'room-1',
+    traceId: 'trace-1',
+    targetAgentId: 'agent-a',
+    triggerMessageId: 'message-1',
+    depth: 0,
+    sender: baseMessage.sender,
+    receivedAt: 0,
+  }
+  expect(isChatRoomAgentInvocation({ ...baseInvocation, messages: [baseMessage] })).toBe(true)
+  expect(
+    isChatRoomAgentInvocation({
+      ...baseInvocation,
+      messages: [{ ...baseMessage, attachmentIds: undefined }],
+    }),
+  ).toBe(false)
+  expect(
+    isChatRoomAgentInvocation({
+      ...baseInvocation,
+      messages: [{ ...baseMessage, mentionedAgentIds: undefined }],
+    }),
+  ).toBe(false)
+  expect(
+    isChatRoomAgentInvocation({
+      ...baseInvocation,
+      messages: [{ ...baseMessage, invocationChain: undefined }],
+    }),
+  ).toBe(false)
+})
+
+test('Given Object.prototype 被临时污染 When context 缺少 optional own 字段 Then 仍按缺失字段处理', () => {
+  const pollutedKeys = ['attachmentIds', 'mentionedAgentIds', 'invocationChain'] as const
+  const originalDescriptors = new Map<string, PropertyDescriptor | undefined>()
+  const baseMessage = {
+    messageId: 'message-1',
+    sender: { type: 'user' as const, id: 'user-1', displayName: '主理人' },
+    text: '触发',
+    createdAt: 0,
+  }
+  const invocation = {
+    invocationId: 'inv-1',
+    roomId: 'room-1',
+    traceId: 'trace-1',
+    targetAgentId: 'agent-a',
+    triggerMessageId: 'message-1',
+    depth: 0,
+    sender: baseMessage.sender,
+    messages: [baseMessage],
+    receivedAt: 0,
+  }
+
+  try {
+    for (const key of pollutedKeys) {
+      originalDescriptors.set(key, Object.getOwnPropertyDescriptor(Object.prototype, key))
+      Object.defineProperty(Object.prototype, key, {
+        configurable: true,
+        enumerable: false,
+        value: ['inherited-secret'],
+      })
+    }
+    expect(isChatRoomAgentInvocation(invocation)).toBe(true)
+  } finally {
+    for (const key of pollutedKeys) {
+      const descriptor = originalDescriptors.get(key)
+      if (descriptor) Object.defineProperty(Object.prototype, key, descriptor)
+      else delete (Object.prototype as Record<string, unknown>)[key]
+    }
+  }
+})
+
 test('Given 上下文数量越界 When 归一化 Then 限制在 1 到 200 且默认 50', () => {
   expect(normalizeChatRoomContextMessageCount(undefined)).toBe(50)
   expect(normalizeChatRoomContextMessageCount(0)).toBe(1)
