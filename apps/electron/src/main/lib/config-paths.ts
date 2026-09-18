@@ -6,7 +6,7 @@
  */
 
 import { join, basename } from 'node:path'
-import { mkdirSync, existsSync, cpSync, renameSync, rmSync, readdirSync, readFileSync } from 'node:fs'
+import { lstatSync, mkdirSync, existsSync, cpSync, renameSync, rmSync, readdirSync, readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { resolveBundledCliPath } from './compiled-runtime-path'
 import { rmSyncWithRetry } from './fs-retry'
@@ -426,9 +426,28 @@ function validateChatroomPathComponent(value: string, name: string): void {
 
 /** 获取聊天室本地存储根目录。 */
 export function getChatRoomsRootPath(): string {
-  const dir = join(getAgentWorkspacesDir(), 'chatrooms')
-  if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
+  const workspacesRoot = getAgentWorkspacesDir()
+  assertRealDirectory(workspacesRoot, 'Agent 工作区')
+  const dir = join(workspacesRoot, 'chatrooms')
+  try {
+    lstatSync(dir)
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+    mkdirSync(dir, { recursive: false })
+  }
+  assertRealDirectory(dir, '聊天室根')
+  assertRealDirectory(workspacesRoot, 'Agent 工作区')
   return dir
+}
+
+function assertRealDirectory(path: string, label: string): void {
+  let stats
+  try {
+    stats = lstatSync(path)
+  } catch (error) {
+    throw new Error(`${label}路径不可用`, { cause: error })
+  }
+  if (!stats.isDirectory()) throw new Error(`${label}路径不是目录`)
 }
 
 /** 获取稳定客户端设备文件路径。 */

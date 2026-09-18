@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test'
-import { existsSync, mkdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, rmSync, statSync, symlinkSync, unlinkSync, utimesSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 const testDir = join(process.env.TMPDIR ?? '/tmp', `copis-client-device-test-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`)
@@ -29,6 +29,12 @@ const {
 } = await import('./client-device-id')
 
 const LEGACY_DEVICE_ID = '123e4567-e89b-42d3-a456-426614174000'
+
+function writeLockOwner(lockPath: string, owner: { token: string; pid: number; createdAt: number }): void {
+  writeFileSync(lockPath, JSON.stringify({ version: 1, ...owner, dev: 0, ino: 0 }))
+  const stats = statSync(lockPath)
+  writeFileSync(lockPath, JSON.stringify({ version: 1, ...owner, dev: stats.dev, ino: stats.ino }))
+}
 
 describe('客户端设备 ID 与聊天室路径', () => {
   beforeEach(() => {
@@ -140,34 +146,65 @@ describe('客户端设备 ID 与聊天室路径', () => {
     if (process.platform === 'win32') return
     const lockPath = `${getClientDevicePath()}.lock`
     const token = '11111111-1111-4111-8111-111111111111'
-    mkdirSync(lockPath)
-    writeFileSync(join(lockPath, 'owner.json'), JSON.stringify({
-      version: 1,
+    writeLockOwner(lockPath, {
       token,
       pid: process.pid,
       createdAt: 0,
-    }))
+    })
+    utimesSync(lockPath, new Date(0), new Date(0))
 
     expect(() => __clientDeviceIdTestHooks.acquire(lockPath, getClientDevicePath())).toThrow('客户端设备文件锁仍由活动进程持有')
-    expect(readFileSync(join(lockPath, 'owner.json'), 'utf8')).toContain(token)
+    expect(readFileSync(lockPath, 'utf8')).toContain(token)
   })
 
-  test('旧 token 不能删除或覆盖新 owner 的锁', () => {
+  test('ownerless 或非法 JSON 锁可被安全回收并重新创建', () => {
     if (process.platform === 'win32') return
     const lockPath = `${getClientDevicePath()}.lock`
-    const oldToken = '11111111-1111-4111-8111-111111111111'
-    const newToken = '22222222-2222-4222-8222-222222222222'
-    mkdirSync(lockPath)
-    writeFileSync(join(lockPath, 'owner.json'), JSON.stringify({ version: 1, token: newToken, pid: process.pid, createdAt: Date.now() }))
+    for (const content of ['', '{broken']) {
+      writeFileSync(lockPath, content)
 
-    expect(__clientDeviceIdTestHooks.removeIfOwner(lockPath, oldToken)).toBe(false)
-    expect(__clientDeviceIdTestHooks.publishIfOwner(getClientDevicePath(), lockPath, oldToken, {
+      const handle = __clientDeviceIdTestHooks.acquire(lockPath, getClientDevicePath())
+
+      expect(handle).not.toBeNull()
+      expect(__clientDeviceIdTestHooks.removeIfOwner(handle!)).toBe(true)
+    }
+  })
+
+  test('旧 handle 失去 canonical inode 后不能删除或覆盖新 owner', () => {
+    if (process.platform === 'win32') return
+    const lockPath = `${getClientDevicePath()}.lock`
+    const oldHandle = __clientDeviceIdTestHooks.acquire(lockPath, getClientDevicePath())
+    expect(oldHandle).not.toBeNull()
+    unlinkSync(lockPath)
+    const newHandle = __clientDeviceIdTestHooks.acquire(lockPath, getClientDevicePath())
+    expect(newHandle).not.toBeNull()
+
+    expect(__clientDeviceIdTestHooks.removeIfOwner(oldHandle!)).toBe(false)
+    expect(__clientDeviceIdTestHooks.publishIfOwner(getClientDevicePath(), oldHandle!, {
       version: 1,
       deviceId: '123e4567-e89b-42d3-a456-426614174001',
       createdAt: 1,
     })).toBe(false)
     expect(existsSync(getClientDevicePath())).toBe(false)
-    expect(readFileSync(join(lockPath, 'owner.json'), 'utf8')).toContain(newToken)
+    expect(readFileSync(lockPath, 'utf8')).toContain(newHandle!.token)
+    expect(__clientDeviceIdTestHooks.removeIfOwner(newHandle!)).toBe(true)
+  })
+
+  test('工作区或聊天室根是符号链接时路径 helper 直接拒绝', () => {
+    if (process.platform === 'win32') return
+    const workspacesPath = actualConfigPaths.getAgentWorkspacesDir()
+    const externalPath = join(testDir, 'external-workspaces')
+    mkdirSync(externalPath, { recursive: true })
+    rmSync(workspacesPath, { recursive: true, force: true })
+    symlinkSync(externalPath, workspacesPath)
+    expect(() => getChatRoomsRootPath()).toThrow('Agent 工作区路径不是目录')
+
+    rmSync(workspacesPath, { force: true })
+    mkdirSync(workspacesPath, { recursive: true })
+    const externalRoomsPath = join(testDir, 'external-chatrooms')
+    mkdirSync(externalRoomsPath, { recursive: true })
+    symlinkSync(externalRoomsPath, join(workspacesPath, 'chatrooms'))
+    expect(() => getChatRoomsRootPath()).toThrow('聊天室根路径不是目录')
   })
 
   test('client-device.json 缺少或错误 createdAt 时视为坏文件并重建', () => {

@@ -9,7 +9,8 @@
  * 5. 管理后台心跳轮询与墓碑清理生命周期。
  */
 
-import { lstatSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { randomUUID } from 'node:crypto'
+import { lstatSync, mkdirSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 import type {
   BrowserSyncRequest,
@@ -20,7 +21,7 @@ import type {
   WebSyncState,
 } from '@copis/shared'
 import { getWebSyncStatePath } from './config-paths'
-import { getOrCreateClientDeviceId } from './client-device-id'
+import { getOrCreateClientDeviceId, readPureJsonFile } from './client-device-id'
 import {
   addBookmarkChangeListener,
   applyRemoteBookmarkChanges,
@@ -40,6 +41,17 @@ export type WebSyncStateListener = (state: WebSyncState) => void
 
 const DEFAULT_DEBOUNCE_MS = 5000
 const DEFAULT_POLL_INTERVAL_MS = 15 * 60 * 1000
+
+function assertWritableStatePath(path: string): void {
+  let stats
+  try {
+    stats = lstatSync(path)
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return
+    throw error
+  }
+  if (!stats.isFile()) throw new Error('WebSync 状态文件路径不是普通文件')
+}
 
 export class WebSyncCoordinator {
   private state: WebSyncState
@@ -93,18 +105,26 @@ export class WebSyncCoordinator {
   private loadState(): WebSyncState {
     const path = getWebSyncStatePath()
     const deviceId = getOrCreateClientDeviceId()
-    let hasStateFile = false
-    try {
-      const stats = lstatSync(path)
-      hasStateFile = true
-      if (!stats.isFile()) {
-        throw new Error('WebSync 状态文件路径不是普通文件')
+    const raw = readPureJsonFile<Partial<WebSyncState>>(path, 'WebSync 状态文件')
+    if (!raw) {
+      let hasStateFile = false
+      try {
+        lstatSync(path)
+        hasStateFile = true
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
       }
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
-    }
-
-    if (!hasStateFile) {
+      if (hasStateFile) {
+        console.warn('[WebSync] 加载同步状态失败，使用默认值')
+        return {
+          deviceId,
+          serverCursor: 0,
+          lastSyncedAt: 0,
+          isSyncing: false,
+          hasLocalChanges: false,
+          lastSyncError: null,
+        }
+      }
       const defaultState: WebSyncState = {
         deviceId,
         serverCursor: 0,
@@ -117,36 +137,25 @@ export class WebSyncCoordinator {
       return defaultState
     }
 
-    try {
-      const raw = JSON.parse(readFileSync(path, 'utf-8')) as Partial<WebSyncState>
-      return {
-        deviceId,
-        serverCursor: typeof raw.serverCursor === 'number' && Number.isFinite(raw.serverCursor) ? raw.serverCursor : 0,
-        lastSyncedAt: typeof raw.lastSyncedAt === 'number' && Number.isFinite(raw.lastSyncedAt) ? raw.lastSyncedAt : 0,
-        isSyncing: false,
-        hasLocalChanges: Boolean(raw.hasLocalChanges),
-        lastSyncError: typeof raw.lastSyncError === 'string' ? raw.lastSyncError : null,
-      }
-    } catch (error) {
-      console.warn('[WebSync] 加载同步状态失败，使用默认值:', error)
-      return {
-        deviceId,
-        serverCursor: 0,
-        lastSyncedAt: 0,
-        isSyncing: false,
-        hasLocalChanges: false,
-        lastSyncError: null,
-      }
+    return {
+      deviceId,
+      serverCursor: typeof raw.serverCursor === 'number' && Number.isFinite(raw.serverCursor) ? raw.serverCursor : 0,
+      lastSyncedAt: typeof raw.lastSyncedAt === 'number' && Number.isFinite(raw.lastSyncedAt) ? raw.lastSyncedAt : 0,
+      isSyncing: false,
+      hasLocalChanges: Boolean(raw.hasLocalChanges),
+      lastSyncError: typeof raw.lastSyncError === 'string' ? raw.lastSyncError : null,
     }
   }
 
   private persistState(state: WebSyncState): void {
     const path = getWebSyncStatePath()
     mkdirSync(dirname(path), { recursive: true })
-    const tempPath = `${path}.${process.pid}.${Date.now()}.tmp`
-    writeFileSync(tempPath, `${JSON.stringify(state, null, 2)}\n`, 'utf-8')
+    assertWritableStatePath(path)
+    const tempPath = `${path}.${process.pid}.${randomUUID()}.tmp`
     try {
+      writeFileSync(tempPath, `${JSON.stringify(state, null, 2)}\n`, { encoding: 'utf-8', flag: 'wx' })
       renameSync(tempPath, path)
+      assertWritableStatePath(path)
     } catch (error) {
       rmSync(tempPath, { force: true })
       console.error('[WebSync] 持久化状态失败:', error)
