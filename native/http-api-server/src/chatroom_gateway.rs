@@ -25,6 +25,7 @@ const LEASE_RENEW_INTERVAL: Duration = Duration::from_secs(20);
 const MAX_RECOVERY_PAGE: usize = 500;
 const TASK_WORKER_COUNT: usize = 4;
 const TASK_QUEUE_CAPACITY: usize = 64;
+const NO_CLIENT_GENERATION: u64 = u64::MAX;
 
 pub(crate) trait GatewayClock: Send + Sync {
     fn now(&self) -> Instant;
@@ -274,7 +275,10 @@ pub struct ChatroomGateway {
     event_worker: Mutex<Option<JoinHandle<()>>>,
     started: AtomicBool,
     shutdown: AtomicBool,
+    auth_epoch: AtomicU64,
+    auth_boundary: Mutex<()>,
     connection_paused: AtomicBool,
+    accepted_client_generation: AtomicU64,
     disconnected_notified: AtomicBool,
     pending_disconnected: AtomicBool,
     clock: Arc<dyn GatewayClock>,
@@ -353,7 +357,10 @@ impl ChatroomGateway {
             event_worker: Mutex::new(None),
             started: AtomicBool::new(false),
             shutdown: AtomicBool::new(false),
+            auth_epoch: AtomicU64::new(0),
+            auth_boundary: Mutex::new(()),
             connection_paused: AtomicBool::new(false),
+            accepted_client_generation: AtomicU64::new(NO_CLIENT_GENERATION),
             disconnected_notified: AtomicBool::new(false),
             pending_disconnected: AtomicBool::new(false),
             last_lease_tick: Mutex::new(clock.now()),
@@ -460,19 +467,42 @@ impl ChatroomGateway {
         match event {
             ChatroomClientEvent::Connected => {
                 self.disconnected_notified.store(false, Ordering::Release);
-                self.publish_status(None, "realtime_connected", "聊天室实时连接已建立");
-                self.refresh_subscription_snapshot();
+                if !self.connection_paused.load(Ordering::Acquire) {
+                    self.publish_status(None, "realtime_connected", "聊天室实时连接已建立");
+                }
+            }
+            ChatroomClientEvent::ConnectedAt { generation } => {
+                if generation == self.client.pause_generation()
+                    && self.auth.auth_state().authenticated
+                {
+                    self.accepted_client_generation
+                        .store(generation, Ordering::Release);
+                    self.connection_paused.store(false, Ordering::Release);
+                    self.disconnected_notified.store(false, Ordering::Release);
+                    self.publish_status(None, "realtime_connected", "聊天室实时连接已建立");
+                    self.refresh_subscription_snapshot();
+                }
             }
             ChatroomClientEvent::Disconnected => self.notify_disconnected(),
             ChatroomClientEvent::Status { code, message } => {
                 self.publish_status(None, &code, &message)
             }
             ChatroomClientEvent::Event(event)
-                if !self.connection_paused.load(Ordering::Acquire) =>
+                if !self.connection_paused.load(Ordering::Acquire)
+                    && self.accepted_client_generation.load(Ordering::Acquire)
+                        == NO_CLIENT_GENERATION
+                    && self.auth_epoch.load(Ordering::Acquire) == 0 =>
             {
                 self.publish_event(event)
             }
             ChatroomClientEvent::Event(_) => {}
+            ChatroomClientEvent::EventAt { generation, event }
+                if !self.connection_paused.load(Ordering::Acquire)
+                    && self.accepted_client_generation.load(Ordering::Acquire) == generation =>
+            {
+                self.publish_event(event)
+            }
+            ChatroomClientEvent::EventAt { .. } => {}
         }
     }
 
@@ -836,6 +866,7 @@ impl ChatroomGateway {
                 "请先登录 Copis Working",
             ));
         }
+        let auth_epoch = self.auth_epoch.load(Ordering::Acquire);
         if room_ids.is_empty() || room_ids.len() > 50 {
             return Err(invalid_request("SSE 至少需要一个聊天室"));
         }
@@ -846,9 +877,22 @@ impl ChatroomGateway {
             );
         }
         #[cfg(test)]
-        if let Some(gate) = self.sse_registration_gate.lock().unwrap().take() {
+        let registration_gate = self.sse_registration_gate.lock().unwrap().take();
+        #[cfg(test)]
+        if let Some(gate) = registration_gate {
             let _ = gate.loaded.send(());
             let _ = gate.release.recv();
+        }
+        let _auth_boundary = self.auth_boundary.lock().unwrap();
+        if self.auth_epoch.load(Ordering::Acquire) != auth_epoch
+            || !self.auth.auth_state().authenticated
+            || self.connection_paused.load(Ordering::Acquire)
+        {
+            return Err(ChatroomGatewayError::new(
+                401,
+                "not_authenticated",
+                "请先登录 Copis Working",
+            ));
         }
         let (sender, receiver) = mpsc::sync_channel(SSE_CAPACITY);
         let occupancy = Arc::new(AtomicUsize::new(0));
@@ -880,19 +924,6 @@ impl ChatroomGateway {
                 occupancy: occupancy.clone(),
             },
         );
-        if !self.auth.auth_state().authenticated || self.connection_paused.load(Ordering::Acquire) {
-            // 认证失效可能发生在初始检查与注册之间；此时撤销本次注册，
-            // 并清理同一认证上下文下的本地状态，避免旧账号快照继续可见。
-            self.subscribers.lock().unwrap().clear();
-            self.rooms.lock().unwrap().clear();
-            self.leases.lock().unwrap().clear();
-            *self.last_subscription.lock().unwrap() = None;
-            return Err(ChatroomGatewayError::new(
-                401,
-                "not_authenticated",
-                "请先登录 Copis Working",
-            ));
-        }
         for event in initial {
             let _ = self.send_to_subscriber(subscriber_id, public_event(&event), true);
         }
@@ -1526,7 +1557,11 @@ impl ChatroomGateway {
         if self.shutdown.load(Ordering::Acquire) {
             return;
         }
+        let _auth_boundary = self.auth_boundary.lock().unwrap();
+        self.auth_epoch.fetch_add(1, Ordering::AcqRel);
         self.client.pause();
+        self.accepted_client_generation
+            .store(NO_CLIENT_GENERATION, Ordering::Release);
         self.connection_paused.store(true, Ordering::Release);
         self.leases.lock().unwrap().clear();
         self.rooms.lock().unwrap().clear();
@@ -1539,8 +1574,8 @@ impl ChatroomGateway {
         if self.shutdown.load(Ordering::Acquire) {
             return;
         }
-        self.connection_paused.store(false, Ordering::Release);
         self.client.resume();
+        self.connection_paused.store(false, Ordering::Release);
     }
 
     pub fn shutdown(&self) {

@@ -92,9 +92,19 @@ impl ChatroomClientError {
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub enum ChatroomClientEvent {
     Connected,
+    ConnectedAt {
+        generation: u64,
+    },
     Disconnected,
     Event(ChatroomEvent),
-    Status { code: String, message: String },
+    EventAt {
+        generation: u64,
+        event: ChatroomEvent,
+    },
+    Status {
+        code: String,
+        message: String,
+    },
 }
 
 pub(crate) trait BackoffWaiter: Send + Sync {
@@ -133,6 +143,7 @@ pub struct ChatroomClient {
     stop: Arc<AtomicBool>,
     paused: Arc<AtomicBool>,
     pause_generation: Arc<AtomicU64>,
+    pause_state_lock: Arc<Mutex<()>>,
     resume_requested: Arc<AtomicBool>,
     wake_on_ordinary: Arc<AtomicBool>,
     #[cfg(test)]
@@ -177,6 +188,7 @@ impl ChatroomClient {
             stop: Arc::new(AtomicBool::new(false)),
             paused: Arc::new(AtomicBool::new(false)),
             pause_generation: Arc::new(AtomicU64::new(0)),
+            pause_state_lock: Arc::new(Mutex::new(())),
             resume_requested: Arc::new(AtomicBool::new(false)),
             wake_on_ordinary: Arc::new(AtomicBool::new(true)),
             #[cfg(test)]
@@ -237,6 +249,7 @@ impl ChatroomClient {
         let stop = self.stop.clone();
         let paused = self.paused.clone();
         let pause_generation = self.pause_generation.clone();
+        let pause_state_lock = self.pause_state_lock.clone();
         let resume_requested = self.resume_requested.clone();
         let wake_on_ordinary = self.wake_on_ordinary.clone();
         let backoff = self.backoff.clone();
@@ -255,6 +268,7 @@ impl ChatroomClient {
                     stop,
                     paused,
                     pause_generation,
+                    pause_state_lock,
                     resume_requested,
                     wake_on_ordinary,
                     backoff,
@@ -316,8 +330,16 @@ impl ChatroomClient {
         if self.stop.load(Ordering::Acquire) {
             return;
         }
-        self.pause_generation.fetch_add(1, Ordering::AcqRel);
+        let _pause_state = self.pause_state_lock.lock().unwrap();
+        // 先进入暂停态，再递增 generation；这样命令即使采样到旧 generation，
+        // 也只能进入 paused 分支被丢弃，不能在过渡窗口发送到旧 socket。
         self.paused.store(true, Ordering::Release);
+        self.resume_requested.store(false, Ordering::Release);
+        self.pause_generation.fetch_add(1, Ordering::AcqRel);
+    }
+
+    pub(crate) fn pause_generation(&self) -> u64 {
+        self.pause_generation.load(Ordering::Acquire)
     }
 
     /// 仅由明确的认证恢复路径调用；普通命令不能解除暂停状态。
@@ -325,6 +347,7 @@ impl ChatroomClient {
         if self.stop.load(Ordering::Acquire) {
             return;
         }
+        let _pause_state = self.pause_state_lock.lock().unwrap();
         if !self.paused.load(Ordering::Acquire) {
             return;
         }
@@ -383,6 +406,7 @@ fn run_worker(
     stop: Arc<AtomicBool>,
     paused: Arc<AtomicBool>,
     pause_generation: Arc<AtomicU64>,
+    pause_state_lock: Arc<Mutex<()>>,
     resume_requested: Arc<AtomicBool>,
     wake_on_ordinary: Arc<AtomicBool>,
     backoff: Arc<dyn BackoffWaiter>,
@@ -406,8 +430,11 @@ fn run_worker(
             match command_rx.recv() {
                 Ok(queued) => {
                     if queued.resume {
-                        paused.store(false, Ordering::Release);
-                        resume_requested.store(false, Ordering::Release);
+                        let _pause_state = pause_state_lock.lock().unwrap();
+                        if queued.pause_generation == pause_generation.load(Ordering::Acquire) {
+                            paused.store(false, Ordering::Release);
+                            resume_requested.store(false, Ordering::Release);
+                        }
                         continue;
                     }
                     if matches!(&queued.command, ChatroomCommand::Close) {
@@ -416,6 +443,7 @@ fn run_worker(
                     }
                     // pause 与 command() 的原子检查之间可能存在竞态；认证暂停
                     // 期间到达的普通命令必须丢弃，不能留待恢复后重放。
+                    restore_wake_budget(queued.wake_budget, &wake_on_ordinary);
                     continue;
                 }
                 Err(_) => return,
@@ -425,11 +453,16 @@ fn run_worker(
             match command_rx.recv() {
                 Ok(queued) => {
                     if queued.resume {
-                        paused.store(false, Ordering::Release);
-                        resume_requested.store(false, Ordering::Release);
+                        let _pause_state = pause_state_lock.lock().unwrap();
+                        if queued.pause_generation == pause_generation.load(Ordering::Acquire) {
+                            paused.store(false, Ordering::Release);
+                            resume_requested.store(false, Ordering::Release);
+                        }
                         continue;
                     }
-                    if queued.pause_generation != pause_generation.load(Ordering::Acquire) {
+                    let current_generation = pause_generation.load(Ordering::Acquire);
+                    if queued.pause_generation != current_generation {
+                        restore_wake_budget(queued.wake_budget, &wake_on_ordinary);
                         continue;
                     }
                     if apply_command(
@@ -552,7 +585,10 @@ fn run_worker(
             );
             continue;
         }
-        let _ = events.send(ChatroomClientEvent::Connected);
+        let connection_generation = pause_generation.load(Ordering::Acquire);
+        let _ = events.send(ChatroomClientEvent::ConnectedAt {
+            generation: connection_generation,
+        });
 
         let mut reconnect = false;
         loop {
@@ -574,18 +610,24 @@ fn run_worker(
             }
             while let Ok(queued) = command_rx.try_recv() {
                 if queued.resume {
-                    // 认证恢复不能复用认证失效前的 socket 或订阅；清空旧状态，
-                    // 通过受控断开等待新的 Subscribe 建立连接。
-                    paused.store(false, Ordering::Release);
-                    resume_requested.store(false, Ordering::Release);
-                    subscription = None;
-                    pending.clear();
-                    reconnect = true;
-                    break;
+                    let _pause_state = pause_state_lock.lock().unwrap();
+                    if queued.pause_generation == pause_generation.load(Ordering::Acquire) {
+                        // 认证恢复不能复用认证失效前的 socket 或订阅；清空旧状态，
+                        // 通过受控断开等待新的 Subscribe 建立连接。
+                        paused.store(false, Ordering::Release);
+                        resume_requested.store(false, Ordering::Release);
+                        subscription = None;
+                        pending.clear();
+                        reconnect = true;
+                        break;
+                    }
+                    continue;
                 }
-                if queued.pause_generation != pause_generation.load(Ordering::Acquire)
+                let current_generation = pause_generation.load(Ordering::Acquire);
+                if queued.pause_generation != current_generation
                     && !matches!(&queued.command, ChatroomCommand::Close)
                 {
+                    restore_wake_budget(queued.wake_budget, &wake_on_ordinary);
                     continue;
                 }
                 let is_subscription_command = matches!(
@@ -649,7 +691,10 @@ fn run_worker(
                     retries = 0;
                     refresh.attempted = false;
                     refresh.failed = false;
-                    let _ = events.send(ChatroomClientEvent::Event(event));
+                    let _ = events.send(ChatroomClientEvent::EventAt {
+                        generation: connection_generation,
+                        event,
+                    });
                 }
                 Err(error) if error.code == "read_timeout" => {
                     // 一个完整的读超时窗口表示连接已进入稳定空闲态。
@@ -731,6 +776,12 @@ fn reset_retry_budget(retries: &mut usize, refresh: &mut RefreshAttempt) {
     *retries = 0;
     refresh.attempted = false;
     refresh.failed = false;
+}
+
+fn restore_wake_budget(wake_budget: bool, wake_on_ordinary: &AtomicBool) {
+    if wake_budget {
+        wake_on_ordinary.store(true, Ordering::Release);
+    }
 }
 
 fn is_ordinary_command(command: &ChatroomCommand) -> bool {

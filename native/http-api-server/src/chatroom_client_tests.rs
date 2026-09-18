@@ -379,7 +379,7 @@ fn given_ws_handshake_401_when_client_connects_then_refresh_once_and_retry_with_
     client.start();
     client.command(subscribe()).unwrap();
     receive_until(&receiver, |event| {
-        matches!(event, ChatroomClientEvent::Connected)
+        matches!(event, ChatroomClientEvent::ConnectedAt { .. })
     });
     assert_eq!(
         connector.authorizations.lock().unwrap().as_slice(),
@@ -408,7 +408,7 @@ fn given_connected_when_equivalent_subscribe_is_repeated_then_do_not_reconnect()
     client.start();
     client.command(subscribe()).unwrap();
     receive_until(&receiver, |event| {
-        matches!(event, ChatroomClientEvent::Connected)
+        matches!(event, ChatroomClientEvent::ConnectedAt { .. })
     });
     client.command(subscribe()).unwrap();
     std::thread::sleep(Duration::from_millis(30));
@@ -612,7 +612,7 @@ fn given_unavailable_after_temporary_refresh_failure_when_command_arrives_then_r
         })
         .unwrap();
     receive_until(&receiver, |event| {
-        matches!(event, ChatroomClientEvent::Connected)
+        matches!(event, ChatroomClientEvent::ConnectedAt { .. })
     });
     assert!(auth.auth_state().authenticated);
     assert_eq!(transport.calls.load(Ordering::SeqCst), 2);
@@ -645,12 +645,15 @@ fn given_socket_event_when_reader_receives_then_emit_structured_event_without_jw
     client.start();
     client.command(subscribe()).unwrap();
     let event = receive_until(&receiver, |event| {
-        matches!(event, ChatroomClientEvent::Event(_))
+        matches!(event, ChatroomClientEvent::EventAt { .. })
     });
     let encoded = serde_json::to_string(&event).unwrap();
     assert!(matches!(
         event,
-        ChatroomClientEvent::Event(ChatroomEvent::MessageCreated { seq: 2, .. })
+        ChatroomClientEvent::EventAt {
+            event: ChatroomEvent::MessageCreated { seq: 2, .. },
+            ..
+        }
     ));
     assert!(!encoded.contains("old-token"));
     assert!(!encoded.contains("Authorization"));
@@ -741,7 +744,7 @@ fn given_immediate_disconnects_with_ordinary_commands_then_budget_still_reaches_
     client.command(subscribe()).unwrap();
     for release in releases {
         receive_until(&receiver, |event| {
-            matches!(event, ChatroomClientEvent::Connected)
+            matches!(event, ChatroomClientEvent::ConnectedAt { .. })
         });
         client
             .command(ChatroomCommand::RenewLease {
@@ -797,7 +800,7 @@ fn given_unavailable_then_ordinary_command_wakes_one_new_retry_budget() {
         })
         .unwrap();
     receive_until(&receiver, |event| {
-        matches!(event, ChatroomClientEvent::Connected)
+        matches!(event, ChatroomClientEvent::ConnectedAt { .. })
     });
     assert_eq!(connector.authorizations.lock().unwrap().len(), 9);
     client.shutdown();
@@ -905,7 +908,7 @@ fn given_pending_commands_before_connect_then_flush_all_in_order_after_initial_s
         })
         .unwrap();
     receive_until(&receiver, |event| {
-        matches!(event, ChatroomClientEvent::Connected)
+        matches!(event, ChatroomClientEvent::ConnectedAt { .. })
     });
     for _ in 0..10_000 {
         if socket.sent.lock().unwrap().len() == 3 {
@@ -1031,7 +1034,7 @@ fn given_connected_pending_send_fails_on_eight_sockets_then_stop_before_ninth_an
 
     for _ in 0..8 {
         receive_until(&receiver, |event| {
-            matches!(event, ChatroomClientEvent::Connected)
+            matches!(event, ChatroomClientEvent::ConnectedAt { .. })
         });
     }
     let unavailable = wait_for_status(&receiver, "realtime_unavailable", Duration::from_secs(1));
@@ -1043,7 +1046,7 @@ fn given_connected_pending_send_fails_on_eight_sockets_then_stop_before_ninth_an
 
     client.command(subscribe()).unwrap();
     receive_until(&receiver, |event| {
-        matches!(event, ChatroomClientEvent::Connected)
+        matches!(event, ChatroomClientEvent::ConnectedAt { .. })
     });
     assert_eq!(connector.attempts.load(Ordering::SeqCst), 9);
     let sent = ninth.sent.lock().unwrap();
@@ -1091,7 +1094,7 @@ fn given_unavailable_status_is_observed_then_ordinary_command_claims_the_next_re
     release_status.send(()).unwrap();
 
     receive_until(&receiver, |event| {
-        matches!(event, ChatroomClientEvent::Connected)
+        matches!(event, ChatroomClientEvent::ConnectedAt { .. })
     });
     assert_eq!(connector.attempts.load(Ordering::SeqCst), 9);
     assert!(matches!(
@@ -1146,7 +1149,7 @@ fn given_pending_send_exhausts_budget_then_observed_unavailable_status_wakes_onc
     client.command(subscribe()).unwrap();
     for _ in 0..8 {
         receive_until(&receiver, |event| {
-            matches!(event, ChatroomClientEvent::Connected)
+            matches!(event, ChatroomClientEvent::ConnectedAt { .. })
         });
     }
 
@@ -1157,7 +1160,7 @@ fn given_pending_send_exhausts_budget_then_observed_unavailable_status_wakes_onc
     release_status.send(()).unwrap();
 
     receive_until(&receiver, |event| {
-        matches!(event, ChatroomClientEvent::Connected)
+        matches!(event, ChatroomClientEvent::ConnectedAt { .. })
     });
     assert_eq!(connector.attempts.load(Ordering::SeqCst), 9);
     let sent = ninth.sent.lock().unwrap();
@@ -1266,7 +1269,7 @@ fn given_subscription_change_when_connected_then_reconnect_with_only_new_initial
         })
         .unwrap();
     receive_until(&receiver, |event| {
-        matches!(event, ChatroomClientEvent::Connected)
+        matches!(event, ChatroomClientEvent::ConnectedAt { .. })
     });
     client
         .command(ChatroomCommand::Unsubscribe {
@@ -1274,7 +1277,7 @@ fn given_subscription_change_when_connected_then_reconnect_with_only_new_initial
         })
         .unwrap();
     receive_until(&receiver, |event| {
-        matches!(event, ChatroomClientEvent::Connected)
+        matches!(event, ChatroomClientEvent::ConnectedAt { .. })
     });
     let first_sent = first.sent.lock().unwrap();
     assert_eq!(first_sent.len(), 1);
@@ -1306,7 +1309,7 @@ fn given_shutdown_when_socket_is_active_then_send_close_and_join_worker() {
     client.start();
     client.command(subscribe()).unwrap();
     receive_until(&receiver, |event| {
-        matches!(event, ChatroomClientEvent::Connected)
+        matches!(event, ChatroomClientEvent::ConnectedAt { .. })
     });
     client.shutdown();
     assert!(socket.closed.load(Ordering::SeqCst));
@@ -1332,7 +1335,7 @@ fn given_client_is_dropped_without_shutdown_then_worker_closes_socket() {
     client.start();
     client.command(subscribe()).unwrap();
     receive_until(&receiver, |event| {
-        matches!(event, ChatroomClientEvent::Connected)
+        matches!(event, ChatroomClientEvent::ConnectedAt { .. })
     });
     drop(client);
     assert!(socket.closed.load(Ordering::SeqCst));
@@ -1369,7 +1372,7 @@ fn given_temporary_pause_when_authenticated_client_is_restarted_then_new_socket_
     client.command(subscribe()).unwrap();
     assert!(receiver
         .recv_timeout(Duration::from_millis(500))
-        .is_ok_and(|event| matches!(event, ChatroomClientEvent::Connected)));
+        .is_ok_and(|event| matches!(event, ChatroomClientEvent::ConnectedAt { .. })));
     first_receive_started
         .recv_timeout(Duration::from_millis(500))
         .expect("首个 socket 未进入可控 receive");
@@ -1387,7 +1390,7 @@ fn given_temporary_pause_when_authenticated_client_is_restarted_then_new_socket_
     client.command(subscribe()).unwrap();
     assert!(receiver
         .recv_timeout(Duration::from_millis(500))
-        .is_ok_and(|event| matches!(event, ChatroomClientEvent::Connected)));
+        .is_ok_and(|event| matches!(event, ChatroomClientEvent::ConnectedAt { .. })));
     assert_eq!(connector.attempts.load(Ordering::SeqCst), 2);
     client.shutdown();
     client.shutdown();
@@ -1425,7 +1428,7 @@ fn given_resume_arrives_during_connected_command_drain_then_reconnect_requires_n
     client.command(subscribe()).unwrap();
     assert!(receiver
         .recv_timeout(Duration::from_millis(500))
-        .is_ok_and(|event| matches!(event, ChatroomClientEvent::Connected)));
+        .is_ok_and(|event| matches!(event, ChatroomClientEvent::ConnectedAt { .. })));
     drain_loaded
         .recv_timeout(Duration::from_millis(500))
         .expect("connected command drain 未进入 gate");
@@ -1440,7 +1443,7 @@ fn given_resume_arrives_during_connected_command_drain_then_reconnect_requires_n
     client.command(subscribe()).unwrap();
     assert!(receiver
         .recv_timeout(Duration::from_millis(500))
-        .is_ok_and(|event| matches!(event, ChatroomClientEvent::Connected)));
+        .is_ok_and(|event| matches!(event, ChatroomClientEvent::ConnectedAt { .. })));
     assert_eq!(connector.attempts.load(Ordering::SeqCst), 2);
     client.shutdown();
 }
@@ -1474,7 +1477,7 @@ fn given_paused_client_when_ordinary_command_arrives_then_stay_paused_until_expl
     client.command(subscribe()).unwrap();
     assert!(receiver
         .recv_timeout(Duration::from_millis(500))
-        .is_ok_and(|event| { matches!(event, ChatroomClientEvent::Connected) }));
+        .is_ok_and(|event| { matches!(event, ChatroomClientEvent::ConnectedAt { .. }) }));
     assert_eq!(connector.attempts.load(Ordering::SeqCst), 1);
     client.shutdown();
 }
@@ -1513,13 +1516,121 @@ fn given_command_wins_pause_check_race_then_paused_worker_drops_it_before_resume
     client.command(subscribe()).unwrap();
     assert!(receiver
         .recv_timeout(Duration::from_millis(500))
-        .is_ok_and(|event| matches!(event, ChatroomClientEvent::Connected)));
+        .is_ok_and(|event| matches!(event, ChatroomClientEvent::ConnectedAt { .. })));
     let sent = socket.sent.lock().unwrap();
     assert_eq!(sent.len(), 1);
     assert!(matches!(
         sent.first(),
         Some(ChatroomCommand::Subscribe { .. })
     ));
+    client.shutdown();
+}
+
+#[test]
+fn given_stale_resume_after_a_newer_pause_then_resume_sentinel_does_not_clear_pause() {
+    let first = FakeSocket::new(vec![Err(ChatroomClientError::new(
+        "read_timeout",
+        "测试空闲连接",
+    ))]);
+    let second = FakeSocket::new(vec![Err(ChatroomClientError::new(
+        "read_timeout",
+        "测试空闲连接",
+    ))]);
+    let connector = FakeConnector::new(vec![
+        ConnectResult::Socket(first),
+        ConnectResult::Socket(second),
+    ]);
+    let (events, receiver) = mpsc::channel();
+    let client = ChatroomClient::new_with_backoff(
+        auth(
+            Arc::new(RefreshTransport {
+                calls: AtomicUsize::new(0),
+            }),
+            Arc::new(MemoryStorage::default()),
+        ),
+        "wss://edu.example/ws".into(),
+        connector.clone(),
+        events,
+        FakeBackoff::new(),
+    );
+    let (drain_loaded, drain_release) = client.gate_connected_command_drain();
+    client.start();
+    client.command(subscribe()).unwrap();
+    assert!(receiver
+        .recv_timeout(Duration::from_millis(500))
+        .is_ok_and(|event| matches!(event, ChatroomClientEvent::ConnectedAt { .. })));
+    drain_loaded
+        .recv_timeout(Duration::from_millis(500))
+        .expect("connected command drain 未进入 gate");
+
+    client.pause();
+    client.resume();
+    client.pause();
+    drain_release.send(()).unwrap();
+    assert!(receiver
+        .recv_timeout(Duration::from_millis(500))
+        .is_ok_and(|event| matches!(event, ChatroomClientEvent::Disconnected)));
+
+    let error = client.command(subscribe()).unwrap_err();
+    assert_eq!(error.code, "client_paused");
+    assert!(receiver.recv_timeout(Duration::from_millis(100)).is_err());
+    client.resume();
+    client.command(subscribe()).unwrap();
+    assert!(receiver
+        .recv_timeout(Duration::from_millis(500))
+        .is_ok_and(|event| matches!(event, ChatroomClientEvent::ConnectedAt { .. })));
+    assert_eq!(connector.attempts.load(Ordering::SeqCst), 2);
+    client.shutdown();
+}
+
+#[test]
+fn given_stale_ordinary_command_is_dropped_then_restore_wake_budget_for_next_command() {
+    let socket = FakeSocket::new(vec![Err(ChatroomClientError::new(
+        "read_timeout",
+        "测试空闲连接",
+    ))]);
+    let connector = FakeConnector::new(
+        (0..8)
+            .map(|_| ConnectResult::Error(ChatroomClientError::new("transport", "连接失败")))
+            .chain([ConnectResult::Socket(socket)])
+            .collect(),
+    );
+    let (events, receiver) = mpsc::channel();
+    let client = Arc::new(ChatroomClient::new_with_backoff(
+        auth(
+            Arc::new(RefreshTransport {
+                calls: AtomicUsize::new(0),
+            }),
+            Arc::new(MemoryStorage::default()),
+        ),
+        "wss://edu.example/ws".into(),
+        connector.clone(),
+        events,
+        FakeBackoff::new(),
+    ));
+    client.start();
+    client.command(subscribe()).unwrap();
+    receive_until(
+        &receiver,
+        |event| matches!(event, ChatroomClientEvent::Status { code, .. } if code == "realtime_unavailable"),
+    );
+
+    let (command_loaded, command_release) = client.gate_next_command();
+    let command_client = Arc::clone(&client);
+    let command = thread::spawn(move || command_client.command(renew_lease()));
+    command_loaded
+        .recv_timeout(Duration::from_millis(500))
+        .expect("普通命令未进入发送 gate");
+    client.pause();
+    client.resume();
+    command_release.send(()).unwrap();
+    assert!(command.join().unwrap().is_ok());
+
+    client.command(renew_lease()).unwrap();
+    assert!(receiver
+        .recv_timeout(Duration::from_millis(500))
+        .is_ok_and(|event| matches!(event, ChatroomClientEvent::ConnectedAt { .. })));
+    assert_eq!(connector.attempts.load(Ordering::SeqCst), 9);
     client.shutdown();
 }
 

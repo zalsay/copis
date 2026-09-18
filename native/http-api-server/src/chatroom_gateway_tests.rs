@@ -801,6 +801,61 @@ fn given_auth_loss_during_sse_registration_then_do_not_leave_subscriber() {
 }
 
 #[test]
+fn given_logout_login_aba_during_sse_registration_then_reject_old_auth_epoch() {
+    let gateway = gateway(
+        Arc::new(FakeTransport::default()),
+        Arc::new(FakeBridge::default()),
+    );
+    let (loaded, release) = gateway.gate_sse_registration_for_test();
+    let worker_gateway = Arc::clone(&gateway);
+    let worker = thread::spawn(move || worker_gateway.subscribe_sse(vec!["room-1".into()]));
+    loaded.recv_timeout(Duration::from_millis(500)).unwrap();
+
+    gateway.shutdown_connection();
+    gateway.resume_connection();
+    gateway.set_room_cursor_for_test("room-2", 7);
+    let new_subscription = gateway.subscribe_sse(vec!["room-2".into()]).unwrap();
+    release.send(()).unwrap();
+    let result = worker.join().unwrap();
+    assert!(matches!(result, Err(error) if error.status == 401));
+    assert_eq!(gateway.subscriber_count_for_test(), 1);
+    assert_eq!(gateway.room_cursor_for_test("room-2"), Some(7));
+    drop(new_subscription);
+    assert_eq!(gateway.room_cursor_for_test("room-1"), None);
+}
+
+#[test]
+fn given_auth_loss_then_resume_before_new_socket_connected_then_old_events_stay_rejected() {
+    let gateway = gateway(
+        Arc::new(FakeTransport::default()),
+        Arc::new(FakeBridge::default()),
+    );
+    gateway.set_room_cursor_for_test("room-1", 9);
+    let _subscription = gateway.subscribe_sse(vec!["room-1".into()]).unwrap();
+    gateway.shutdown_connection();
+    gateway.resume_connection();
+
+    gateway.handle_client_event_for_test(
+        super::chatroom_client::ChatroomClientEvent::ConnectedAt { generation: 0 },
+    );
+    assert!(!gateway.connection_paused_for_test());
+    let subscription = gateway.subscribe_sse(vec!["room-1".into()]).unwrap();
+    gateway.handle_client_event_for_test(super::chatroom_client::ChatroomClientEvent::EventAt {
+        generation: 0,
+        event: ChatroomEvent::RoomSnapshot {
+            room_id: "room-1".into(),
+            latest_seq: 9,
+            payload: json!({"name":"旧账号快照"}),
+        },
+    });
+    assert!(subscription
+        .receiver
+        .recv_timeout(Duration::from_millis(100))
+        .is_err());
+    assert_eq!(gateway.subscriber_count_for_test(), 1);
+}
+
+#[test]
 fn given_successful_leave_or_removal_when_route_finishes_then_room_is_unsubscribed() {
     for (method, path, body) in [
         ("POST", "/api/chatrooms/v2/rooms/room-1/leave", Vec::new()),
