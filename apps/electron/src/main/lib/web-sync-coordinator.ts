@@ -9,7 +9,7 @@
  * 5. 管理后台心跳轮询与墓碑清理生命周期。
  */
 
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { lstatSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 import type {
   BrowserSyncRequest,
@@ -93,7 +93,18 @@ export class WebSyncCoordinator {
   private loadState(): WebSyncState {
     const path = getWebSyncStatePath()
     const deviceId = getOrCreateClientDeviceId()
-    if (!existsSync(path)) {
+    let hasStateFile = false
+    try {
+      const stats = lstatSync(path)
+      hasStateFile = true
+      if (!stats.isFile()) {
+        throw new Error('WebSync 状态文件路径不是普通文件')
+      }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+    }
+
+    if (!hasStateFile) {
       const defaultState: WebSyncState = {
         deviceId,
         serverCursor: 0,

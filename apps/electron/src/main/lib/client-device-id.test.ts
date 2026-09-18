@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test'
-import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 const testDir = join(process.env.TMPDIR ?? '/tmp', `copis-client-device-test-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`)
@@ -25,7 +25,10 @@ const {
   getChatRoomPath,
   getChatRoomConfigPath,
   getChatRoomAgentSessionMessagesPath,
+  __clientDeviceIdTestHooks,
 } = await import('./client-device-id')
+
+const LEGACY_DEVICE_ID = '123e4567-e89b-42d3-a456-426614174000'
 
 describe('客户端设备 ID 与聊天室路径', () => {
   beforeEach(() => {
@@ -38,12 +41,12 @@ describe('客户端设备 ID 与聊天室路径', () => {
   })
 
   test('已有 web-sync deviceId 时首次读取会迁移并原子保存', () => {
-    writeFileSync(webSyncPath, JSON.stringify({ deviceId: 'legacy-device', serverCursor: 0 }))
+    writeFileSync(webSyncPath, JSON.stringify({ deviceId: LEGACY_DEVICE_ID, serverCursor: 0 }))
 
-    expect(getOrCreateClientDeviceId()).toBe('legacy-device')
+    expect(getOrCreateClientDeviceId()).toBe(LEGACY_DEVICE_ID)
     expect(JSON.parse(readFileSync(getClientDevicePath(), 'utf8'))).toMatchObject({
       version: 1,
-      deviceId: 'legacy-device',
+      deviceId: LEGACY_DEVICE_ID,
     })
     if (process.platform !== 'win32') {
       expect(statSync(getClientDevicePath()).mode & 0o777).toBe(0o600)
@@ -52,10 +55,10 @@ describe('客户端设备 ID 与聊天室路径', () => {
 
   test('client-device.json 优先于 web-sync-state.json 且权限收紧', () => {
     mkdirSync(join(testDir, 'agent-workspaces', 'chatrooms'), { recursive: true })
-    writeFileSync(webSyncPath, JSON.stringify({ deviceId: 'legacy-device' }))
-    writeFileSync(getClientDevicePath(), JSON.stringify({ version: 1, deviceId: 'client-device', createdAt: Date.now() }))
+    writeFileSync(webSyncPath, JSON.stringify({ deviceId: LEGACY_DEVICE_ID }))
+    writeFileSync(getClientDevicePath(), JSON.stringify({ version: 1, deviceId: LEGACY_DEVICE_ID, createdAt: Date.now() }))
 
-    expect(getOrCreateClientDeviceId()).toBe('client-device')
+    expect(getOrCreateClientDeviceId()).toBe(LEGACY_DEVICE_ID)
     if (process.platform !== 'win32') {
       expect(statSync(getClientDevicePath()).mode & 0o777).toBe(0o600)
     }
@@ -69,12 +72,102 @@ describe('客户端设备 ID 与聊天室路径', () => {
     expect(getOrCreateClientDeviceId()).toBe(first)
   })
 
+  test('大小写混合的 UUID v4 旧 ID 可以迁移，新生成 ID 保持小写', () => {
+    const uppercaseId = '123E4567-E89B-42D3-A456-426614174000'
+    writeFileSync(webSyncPath, JSON.stringify({ deviceId: uppercaseId }))
+
+    expect(getOrCreateClientDeviceId()).toBe(uppercaseId)
+    rmSync(getClientDevicePath(), { force: true })
+    rmSync(webSyncPath, { force: true })
+    expect(getOrCreateClientDeviceId()).toMatch(/^[0-9a-f-]{36}$/)
+    expect(getOrCreateClientDeviceId()).not.toMatch(/[A-F]/)
+  })
+
   test('旧 ID 含控制字符、空白或超长时不迁移', () => {
-    for (const deviceId of [' leading-space', 'trailing-space ', 'line\nbreak', 'x'.repeat(129), '🙂'.repeat(64)]) {
+    for (const deviceId of [' leading-space', 'trailing-space ', 'line\nbreak', 'x'.repeat(129), '🙂'.repeat(64), 'legacy-device']) {
       rmSync(getClientDevicePath(), { force: true })
       writeFileSync(webSyncPath, JSON.stringify({ deviceId }))
       expect(getOrCreateClientDeviceId()).not.toBe(deviceId)
     }
+  })
+
+  test('client-device.json 的临时恢复文件不会被纯读取路径提升', () => {
+    writeFileSync(getClientDevicePath(), '{broken')
+    writeFileSync(`${getClientDevicePath()}.tmp`, JSON.stringify({
+      version: 1,
+      deviceId: LEGACY_DEVICE_ID,
+      createdAt: 1,
+    }))
+
+    const resolved = getOrCreateClientDeviceId()
+
+    expect(resolved).not.toBe(LEGACY_DEVICE_ID)
+    expect(existsSync(`${getClientDevicePath()}.tmp`)).toBe(true)
+  })
+
+  test('有效和悬空符号链接设备目标都直接失败且不触碰链接目标', () => {
+    if (process.platform === 'win32') return
+    const externalPath = join(testDir, 'external-device.json')
+    writeFileSync(externalPath, JSON.stringify({
+      version: 1,
+      deviceId: LEGACY_DEVICE_ID,
+      createdAt: 1,
+    }))
+
+    for (const linkPath of [getClientDevicePath(), `${getClientDevicePath()}-dangling`]) {
+      rmSync(getClientDevicePath(), { force: true })
+      rmSync(`${getClientDevicePath()}-dangling`, { force: true })
+      symlinkSync(linkPath.endsWith('dangling') ? join(testDir, 'missing.json') : externalPath, getClientDevicePath())
+
+      expect(() => getOrCreateClientDeviceId()).toThrow('客户端设备文件路径不是普通文件')
+      expect(readFileSync(externalPath, 'utf8')).toContain(LEGACY_DEVICE_ID)
+    }
+  })
+
+  test('目录和 FIFO 设备目标直接失败且不会进入重试循环', () => {
+    if (process.platform === 'win32') return
+    mkdirSync(getClientDevicePath())
+    expect(() => getOrCreateClientDeviceId()).toThrow('客户端设备文件路径不是普通文件')
+
+    rmSync(getClientDevicePath(), { recursive: true, force: true })
+    const fifoPath = getClientDevicePath()
+    const fifoResult = Bun.spawnSync(['mkfifo', fifoPath])
+    if (fifoResult.exitCode !== 0) return
+    expect(() => getOrCreateClientDeviceId()).toThrow('客户端设备文件路径不是普通文件')
+  })
+
+  test('活动但过期的锁不会因 mtime 老旧而被窃取', () => {
+    if (process.platform === 'win32') return
+    const lockPath = `${getClientDevicePath()}.lock`
+    const token = '11111111-1111-4111-8111-111111111111'
+    mkdirSync(lockPath)
+    writeFileSync(join(lockPath, 'owner.json'), JSON.stringify({
+      version: 1,
+      token,
+      pid: process.pid,
+      createdAt: 0,
+    }))
+
+    expect(() => __clientDeviceIdTestHooks.acquire(lockPath, getClientDevicePath())).toThrow('客户端设备文件锁仍由活动进程持有')
+    expect(readFileSync(join(lockPath, 'owner.json'), 'utf8')).toContain(token)
+  })
+
+  test('旧 token 不能删除或覆盖新 owner 的锁', () => {
+    if (process.platform === 'win32') return
+    const lockPath = `${getClientDevicePath()}.lock`
+    const oldToken = '11111111-1111-4111-8111-111111111111'
+    const newToken = '22222222-2222-4222-8222-222222222222'
+    mkdirSync(lockPath)
+    writeFileSync(join(lockPath, 'owner.json'), JSON.stringify({ version: 1, token: newToken, pid: process.pid, createdAt: Date.now() }))
+
+    expect(__clientDeviceIdTestHooks.removeIfOwner(lockPath, oldToken)).toBe(false)
+    expect(__clientDeviceIdTestHooks.publishIfOwner(getClientDevicePath(), lockPath, oldToken, {
+      version: 1,
+      deviceId: '123e4567-e89b-42d3-a456-426614174001',
+      createdAt: 1,
+    })).toBe(false)
+    expect(existsSync(getClientDevicePath())).toBe(false)
+    expect(readFileSync(join(lockPath, 'owner.json'), 'utf8')).toContain(newToken)
   })
 
   test('client-device.json 缺少或错误 createdAt 时视为坏文件并重建', () => {
