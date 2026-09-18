@@ -272,10 +272,11 @@ function reclaimDeviceFileLock(lockPath: string, record: DeviceFileLockRecord): 
 }
 
 function tryCreateDeviceFileLock(lockPath: string): DeviceFileLockHandle | null {
+  const stagingPath = `${lockPath}.${process.pid}.${randomUUID()}.staging`
   let fd: number
   try {
     fd = openSync(
-      lockPath,
+      stagingPath,
       FS_CONSTANTS.O_CREAT | FS_CONSTANTS.O_EXCL | FS_CONSTANTS.O_WRONLY | NO_FOLLOW_FLAG,
       0o600,
     )
@@ -308,9 +309,17 @@ function tryCreateDeviceFileLock(lockPath: string): DeviceFileLockHandle | null 
       offset += writeSync(fd, encoded, offset, encoded.length - offset)
     }
     fsyncSync(fd)
+
+    try {
+      linkSync(stagingPath, lockPath)
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'EEXIST') return null
+      throw error
+    }
     return owner
   } finally {
     closeSync(fd)
+    rmSync(stagingPath, { force: true })
   }
 }
 

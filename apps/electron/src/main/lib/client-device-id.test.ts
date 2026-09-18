@@ -234,10 +234,15 @@ describe('客户端设备 ID 与聊天室路径', () => {
     }))
 
     const ids: string[] = []
-    for (const child of children) {
+    for (const [index, child] of children.entries()) {
       await child.exited
-      expect(child.exitCode).toBe(0)
       const output = await new Response(child.stdout).text()
+      const errorOutput = await new Response(child.stderr).text()
+      if (child.exitCode !== 0) {
+        throw new Error(
+          `并发子进程 ${index} 失败: exitCode=${child.exitCode}\nstdout=${output}\nstderr=${errorOutput}`,
+        )
+      }
       const match = output.match(/[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/)
       expect(match).not.toBeNull()
       ids.push(match![0])
