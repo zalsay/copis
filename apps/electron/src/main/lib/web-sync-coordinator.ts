@@ -11,7 +11,6 @@
 
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
-import { randomUUID } from 'node:crypto'
 import type {
   BrowserSyncRequest,
   BrowserSyncResponse,
@@ -21,6 +20,7 @@ import type {
   WebSyncState,
 } from '@copis/shared'
 import { getWebSyncStatePath } from './config-paths'
+import { getOrCreateClientDeviceId } from './client-device-id'
 import {
   addBookmarkChangeListener,
   applyRemoteBookmarkChanges,
@@ -92,9 +92,10 @@ export class WebSyncCoordinator {
 
   private loadState(): WebSyncState {
     const path = getWebSyncStatePath()
+    const deviceId = getOrCreateClientDeviceId()
     if (!existsSync(path)) {
       const defaultState: WebSyncState = {
-        deviceId: randomUUID(),
+        deviceId,
         serverCursor: 0,
         lastSyncedAt: 0,
         isSyncing: false,
@@ -108,7 +109,7 @@ export class WebSyncCoordinator {
     try {
       const raw = JSON.parse(readFileSync(path, 'utf-8')) as Partial<WebSyncState>
       return {
-        deviceId: typeof raw.deviceId === 'string' && raw.deviceId ? raw.deviceId : randomUUID(),
+        deviceId,
         serverCursor: typeof raw.serverCursor === 'number' && Number.isFinite(raw.serverCursor) ? raw.serverCursor : 0,
         lastSyncedAt: typeof raw.lastSyncedAt === 'number' && Number.isFinite(raw.lastSyncedAt) ? raw.lastSyncedAt : 0,
         isSyncing: false,
@@ -118,7 +119,7 @@ export class WebSyncCoordinator {
     } catch (error) {
       console.warn('[WebSync] 加载同步状态失败，使用默认值:', error)
       return {
-        deviceId: randomUUID(),
+        deviceId,
         serverCursor: 0,
         lastSyncedAt: 0,
         isSyncing: false,

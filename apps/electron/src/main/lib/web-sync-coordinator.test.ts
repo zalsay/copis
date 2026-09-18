@@ -25,6 +25,8 @@ const actualConfigPaths = await import('./config-paths')
 mock.module('./config-paths', () => ({
   ...actualConfigPaths,
   getConfigDir: () => testDir,
+  getAgentWorkspacesDir: () => join(testDir, 'agent-workspaces'),
+  getClientDevicePath: () => join(testDir, 'client-device.json'),
   getWorkingAuthPath: () => join(testDir, 'working-auth.json'),
   getWorkingModelCatalogPath: () => join(testDir, 'working-model-catalog.json'),
   getWebSyncStatePath: () => syncStatePath,
@@ -34,12 +36,14 @@ mock.module('./config-paths', () => ({
 }))
 
 const { WebSyncCoordinator, resetWebSyncCoordinatorForTests } = await import('./web-sync-coordinator')
+const { getOrCreateClientDeviceId } = await import('./client-device-id')
 const bookmarkService = await import('./web-bookmark-service')
 const profileService = await import('./web-page-profile-service')
 
 describe('WebSyncCoordinator 增量同步调度', () => {
   beforeEach(() => {
     mkdirSync(testDir, { recursive: true })
+    mkdirSync(join(testDir, 'agent-workspaces', 'chatrooms'), { recursive: true })
   })
 
   afterEach(() => {
@@ -55,6 +59,14 @@ describe('WebSyncCoordinator 增量同步调度', () => {
     expect(state.serverCursor).toBe(0)
     expect(state.isSyncing).toBe(false)
     expect(existsSync(syncStatePath)).toBe(true)
+
+    coordinator.destroy()
+  })
+
+  test('WebSync 与聊天室共享同一个稳定客户端设备 ID', () => {
+    const coordinator = new WebSyncCoordinator({ autoStartInterval: false })
+
+    expect(coordinator.getState().deviceId).toBe(getOrCreateClientDeviceId())
 
     coordinator.destroy()
   })
