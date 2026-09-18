@@ -762,14 +762,9 @@ fn publish_chatroom_device_file(temporary: &Path, target: &Path) -> io::Result<(
     }
     #[cfg(not(unix))]
     {
-        // Windows 的 rename 可能替换已有目标；这里改为目标文件独占创建，
-        // 竞争失败的一方读取已发布的最终 UUID。
-        let bytes = fs::read(temporary)?;
-        let mut options = OpenOptions::new();
-        options.write(true).create_new(true);
-        let mut file = options.open(target)?;
-        file.write_all(&bytes)?;
-        file.sync_all()?;
+        // 临时文件已完整写入并 flush；硬链接发布避免读者看到半成品，
+        // 同时在目标已存在时以 AlreadyExists 失败而不会覆盖。
+        fs::hard_link(temporary, target)?;
         fs::remove_file(temporary)
     }
 }

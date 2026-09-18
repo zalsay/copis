@@ -12,6 +12,7 @@ use serde_json::json;
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
+use std::thread;
 use std::time::Duration;
 use tungstenite::Message;
 
@@ -1382,12 +1383,143 @@ fn given_temporary_pause_when_authenticated_client_is_restarted_then_new_socket_
             .is_ok_and(|event| matches!(event, ChatroomClientEvent::Disconnected))
     });
     assert!(disconnected);
+    client.resume();
     client.command(subscribe()).unwrap();
     assert!(receiver
         .recv_timeout(Duration::from_millis(500))
         .is_ok_and(|event| matches!(event, ChatroomClientEvent::Connected)));
     assert_eq!(connector.attempts.load(Ordering::SeqCst), 2);
     client.shutdown();
+    client.shutdown();
+}
+
+#[test]
+fn given_resume_arrives_during_connected_command_drain_then_reconnect_requires_new_subscribe() {
+    let first = FakeSocket::new(vec![Err(ChatroomClientError::new(
+        "read_timeout",
+        "测试空闲连接",
+    ))]);
+    let second = FakeSocket::new(vec![Err(ChatroomClientError::new(
+        "read_timeout",
+        "测试空闲连接",
+    ))]);
+    let connector = FakeConnector::new(vec![
+        ConnectResult::Socket(first),
+        ConnectResult::Socket(second),
+    ]);
+    let (events, receiver) = mpsc::channel();
+    let client = ChatroomClient::new_with_backoff(
+        auth(
+            Arc::new(RefreshTransport {
+                calls: AtomicUsize::new(0),
+            }),
+            Arc::new(MemoryStorage::default()),
+        ),
+        "wss://edu.example/ws".into(),
+        connector.clone(),
+        events,
+        FakeBackoff::new(),
+    );
+    let (drain_loaded, drain_release) = client.gate_connected_command_drain();
+    client.start();
+    client.command(subscribe()).unwrap();
+    assert!(receiver
+        .recv_timeout(Duration::from_millis(500))
+        .is_ok_and(|event| matches!(event, ChatroomClientEvent::Connected)));
+    drain_loaded
+        .recv_timeout(Duration::from_millis(500))
+        .expect("connected command drain 未进入 gate");
+
+    client.pause();
+    client.resume();
+    drain_release.send(()).unwrap();
+    assert!(receiver
+        .recv_timeout(Duration::from_millis(500))
+        .is_ok_and(|event| matches!(event, ChatroomClientEvent::Disconnected)));
+
+    client.command(subscribe()).unwrap();
+    assert!(receiver
+        .recv_timeout(Duration::from_millis(500))
+        .is_ok_and(|event| matches!(event, ChatroomClientEvent::Connected)));
+    assert_eq!(connector.attempts.load(Ordering::SeqCst), 2);
+    client.shutdown();
+}
+
+#[test]
+fn given_paused_client_when_ordinary_command_arrives_then_stay_paused_until_explicit_resume() {
+    let socket = FakeSocket::new(vec![Err(ChatroomClientError::new(
+        "read_timeout",
+        "测试空闲连接",
+    ))]);
+    let connector = FakeConnector::new(vec![ConnectResult::Socket(socket)]);
+    let (events, receiver) = mpsc::channel();
+    let client = ChatroomClient::new(
+        auth(
+            Arc::new(RefreshTransport {
+                calls: AtomicUsize::new(0),
+            }),
+            Arc::new(MemoryStorage::default()),
+        ),
+        "wss://edu.example/ws".into(),
+        connector.clone(),
+        events,
+    );
+    client.pause();
+    client.start();
+    let error = client.command(renew_lease()).unwrap_err();
+    assert_eq!(error.code, "client_paused");
+    assert!(receiver.recv_timeout(Duration::from_millis(40)).is_err());
+    assert_eq!(connector.attempts.load(Ordering::SeqCst), 0);
+    client.resume();
+    client.command(subscribe()).unwrap();
+    assert!(receiver
+        .recv_timeout(Duration::from_millis(500))
+        .is_ok_and(|event| { matches!(event, ChatroomClientEvent::Connected) }));
+    assert_eq!(connector.attempts.load(Ordering::SeqCst), 1);
+    client.shutdown();
+}
+
+#[test]
+fn given_command_wins_pause_check_race_then_paused_worker_drops_it_before_resume() {
+    let socket = FakeSocket::new(vec![Err(ChatroomClientError::new(
+        "read_timeout",
+        "测试空闲连接",
+    ))]);
+    let connector = FakeConnector::new(vec![ConnectResult::Socket(socket.clone())]);
+    let (events, receiver) = mpsc::channel();
+    let client = Arc::new(ChatroomClient::new(
+        auth(
+            Arc::new(RefreshTransport {
+                calls: AtomicUsize::new(0),
+            }),
+            Arc::new(MemoryStorage::default()),
+        ),
+        "wss://edu.example/ws".into(),
+        connector,
+        events,
+    ));
+    client.start();
+    let (command_loaded, command_release) = client.gate_next_command();
+    let command_client = Arc::clone(&client);
+    let command = thread::spawn(move || command_client.command(renew_lease()));
+    command_loaded
+        .recv_timeout(Duration::from_millis(500))
+        .expect("命令未进入发送 gate");
+    client.pause();
+    client.resume();
+    command_release.send(()).unwrap();
+    assert!(command.join().unwrap().is_ok());
+
+    client.command(subscribe()).unwrap();
+    assert!(receiver
+        .recv_timeout(Duration::from_millis(500))
+        .is_ok_and(|event| matches!(event, ChatroomClientEvent::Connected)));
+    let sent = socket.sent.lock().unwrap();
+    assert_eq!(sent.len(), 1);
+    assert!(matches!(
+        sent.first(),
+        Some(ChatroomCommand::Subscribe { .. })
+    ));
     client.shutdown();
 }
 

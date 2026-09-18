@@ -5,7 +5,7 @@ use std::collections::{HashMap, VecDeque};
 use std::io::{self, Read, Write};
 use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
 use std::str;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Mutex, OnceLock};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
@@ -52,6 +52,8 @@ pub(crate) trait ChatroomHostResolver: Send + Sync {
 struct QueuedCommand {
     command: ChatroomCommand,
     wake_budget: bool,
+    resume: bool,
+    pause_generation: u64,
 }
 
 #[cfg(test)]
@@ -63,6 +65,12 @@ struct CommandEnqueueGate {
 #[cfg(test)]
 struct UnavailableStatusGate {
     observed: mpsc::Sender<()>,
+    release: mpsc::Receiver<()>,
+}
+
+#[cfg(test)]
+struct ConnectedCommandDrainGate {
+    loaded: mpsc::Sender<()>,
     release: mpsc::Receiver<()>,
 }
 
@@ -124,11 +132,15 @@ pub struct ChatroomClient {
     commands: Mutex<Option<mpsc::Sender<QueuedCommand>>>,
     stop: Arc<AtomicBool>,
     paused: Arc<AtomicBool>,
+    pause_generation: Arc<AtomicU64>,
+    resume_requested: Arc<AtomicBool>,
     wake_on_ordinary: Arc<AtomicBool>,
     #[cfg(test)]
     command_gate: Mutex<Option<CommandEnqueueGate>>,
     #[cfg(test)]
     unavailable_status_gate: Arc<Mutex<Option<UnavailableStatusGate>>>,
+    #[cfg(test)]
+    connected_command_drain_gate: Arc<Mutex<Option<ConnectedCommandDrainGate>>>,
     worker: Mutex<Option<JoinHandle<()>>>,
     backoff: Arc<dyn BackoffWaiter>,
 }
@@ -164,11 +176,15 @@ impl ChatroomClient {
             commands: Mutex::new(None),
             stop: Arc::new(AtomicBool::new(false)),
             paused: Arc::new(AtomicBool::new(false)),
+            pause_generation: Arc::new(AtomicU64::new(0)),
+            resume_requested: Arc::new(AtomicBool::new(false)),
             wake_on_ordinary: Arc::new(AtomicBool::new(true)),
             #[cfg(test)]
             command_gate: Mutex::new(None),
             #[cfg(test)]
             unavailable_status_gate: Arc::new(Mutex::new(None)),
+            #[cfg(test)]
+            connected_command_drain_gate: Arc::new(Mutex::new(None)),
             worker: Mutex::new(None),
             backoff,
         }
@@ -196,6 +212,17 @@ impl ChatroomClient {
         (observed_receiver, release)
     }
 
+    #[cfg(test)]
+    pub(crate) fn gate_connected_command_drain(&self) -> (mpsc::Receiver<()>, mpsc::Sender<()>) {
+        let (loaded, loaded_receiver) = mpsc::channel();
+        let (release, release_receiver) = mpsc::channel();
+        *self.connected_command_drain_gate.lock().unwrap() = Some(ConnectedCommandDrainGate {
+            loaded,
+            release: release_receiver,
+        });
+        (loaded_receiver, release)
+    }
+
     pub fn start(&self) {
         let mut worker = self.worker.lock().unwrap();
         if worker.is_some() || self.stop.load(Ordering::Acquire) {
@@ -209,10 +236,14 @@ impl ChatroomClient {
         let events = self.events.lock().unwrap().take();
         let stop = self.stop.clone();
         let paused = self.paused.clone();
+        let pause_generation = self.pause_generation.clone();
+        let resume_requested = self.resume_requested.clone();
         let wake_on_ordinary = self.wake_on_ordinary.clone();
         let backoff = self.backoff.clone();
         #[cfg(test)]
         let unavailable_status_gate = self.unavailable_status_gate.clone();
+        #[cfg(test)]
+        let connected_command_drain_gate = self.connected_command_drain_gate.clone();
         *worker = Some(thread::spawn(move || {
             if let Some(events) = events {
                 run_worker(
@@ -223,10 +254,14 @@ impl ChatroomClient {
                     events,
                     stop,
                     paused,
+                    pause_generation,
+                    resume_requested,
                     wake_on_ordinary,
                     backoff,
                     #[cfg(test)]
                     unavailable_status_gate,
+                    #[cfg(test)]
+                    connected_command_drain_gate,
                 );
             }
         }));
@@ -240,6 +275,15 @@ impl ChatroomClient {
             return Err(ChatroomClientError::new(
                 "client_closed",
                 "聊天室连接已关闭",
+            ));
+        }
+        // 在 paused precheck 前采样 generation；若 pause 随后发生，worker 会
+        // 通过 generation mismatch 丢弃这条已经在竞态窗口中的命令。
+        let pause_generation = self.pause_generation.load(Ordering::Acquire);
+        if self.paused.load(Ordering::Acquire) && !self.resume_requested.load(Ordering::Acquire) {
+            return Err(ChatroomClientError::new(
+                "client_paused",
+                "聊天室连接因认证状态暂停",
             ));
         }
         let wake_budget =
@@ -261,6 +305,8 @@ impl ChatroomClient {
             .send(QueuedCommand {
                 command,
                 wake_budget,
+                resume: false,
+                pause_generation,
             })
             .map_err(|_| ChatroomClientError::new("client_closed", "聊天室连接已关闭"))
     }
@@ -270,7 +316,35 @@ impl ChatroomClient {
         if self.stop.load(Ordering::Acquire) {
             return;
         }
+        self.pause_generation.fetch_add(1, Ordering::AcqRel);
         self.paused.store(true, Ordering::Release);
+    }
+
+    /// 仅由明确的认证恢复路径调用；普通命令不能解除暂停状态。
+    pub fn resume(&self) {
+        if self.stop.load(Ordering::Acquire) {
+            return;
+        }
+        if !self.paused.load(Ordering::Acquire) {
+            return;
+        }
+        self.resume_requested.store(true, Ordering::Release);
+        let pause_generation = self.pause_generation.load(Ordering::Acquire);
+        if let Some(commands) = self.commands.lock().unwrap().as_ref() {
+            if commands
+                .send(QueuedCommand {
+                    command: ChatroomCommand::Close,
+                    wake_budget: false,
+                    resume: true,
+                    pause_generation,
+                })
+                .is_err()
+            {
+                self.resume_requested.store(false, Ordering::Release);
+            }
+        } else {
+            self.resume_requested.store(false, Ordering::Release);
+        }
     }
 
     pub fn shutdown(&self) {
@@ -284,6 +358,8 @@ impl ChatroomClient {
             let _ = commands.send(QueuedCommand {
                 command: ChatroomCommand::Close,
                 wake_budget: false,
+                resume: false,
+                pause_generation: self.pause_generation.load(Ordering::Acquire),
             });
         }
         if let Some(worker) = self.worker.lock().unwrap().take() {
@@ -306,9 +382,12 @@ fn run_worker(
     events: mpsc::Sender<ChatroomClientEvent>,
     stop: Arc<AtomicBool>,
     paused: Arc<AtomicBool>,
+    pause_generation: Arc<AtomicU64>,
+    resume_requested: Arc<AtomicBool>,
     wake_on_ordinary: Arc<AtomicBool>,
     backoff: Arc<dyn BackoffWaiter>,
     #[cfg(test)] unavailable_status_gate: Arc<Mutex<Option<UnavailableStatusGate>>>,
+    #[cfg(test)] connected_command_drain_gate: Arc<Mutex<Option<ConnectedCommandDrainGate>>>,
 ) {
     let mut subscription: Option<(Vec<RoomCursor>, String)> = None;
     let mut pending = VecDeque::new();
@@ -323,33 +402,36 @@ fn run_worker(
         if paused.load(Ordering::Acquire) {
             // 认证失效时丢弃旧订阅，恢复后必须由新的 Subscribe 重建状态。
             subscription = None;
+            pending.clear();
             match command_rx.recv() {
                 Ok(queued) => {
-                    let resumes = !matches!(&queued.command, ChatroomCommand::Close);
-                    if apply_command(
-                        queued.command,
-                        &mut subscription,
-                        &mut pending,
-                        &mut unavailable,
-                        &mut retries,
-                        &mut refresh,
-                        queued.wake_budget,
-                        &stop,
-                        &wake_on_ordinary,
-                    ) {
+                    if queued.resume {
+                        paused.store(false, Ordering::Release);
+                        resume_requested.store(false, Ordering::Release);
+                        continue;
+                    }
+                    if matches!(&queued.command, ChatroomCommand::Close) {
+                        stop.store(true, Ordering::Release);
                         return;
                     }
-                    if resumes {
-                        paused.store(false, Ordering::Release);
-                    }
+                    // pause 与 command() 的原子检查之间可能存在竞态；认证暂停
+                    // 期间到达的普通命令必须丢弃，不能留待恢复后重放。
+                    continue;
                 }
                 Err(_) => return,
             }
-            continue;
         }
         if unavailable || subscription.is_none() {
             match command_rx.recv() {
                 Ok(queued) => {
+                    if queued.resume {
+                        paused.store(false, Ordering::Release);
+                        resume_requested.store(false, Ordering::Release);
+                        continue;
+                    }
+                    if queued.pause_generation != pause_generation.load(Ordering::Acquire) {
+                        continue;
+                    }
                     if apply_command(
                         queued.command,
                         &mut subscription,
@@ -483,7 +565,29 @@ fn run_worker(
                 emit_disconnected(&events);
                 break;
             }
+            #[cfg(test)]
+            if let Some(gate) = connected_command_drain_gate.lock().unwrap().take() {
+                let _ = gate.loaded.send(());
+                gate.release
+                    .recv_timeout(Duration::from_secs(1))
+                    .expect("测试命令 drain 未收到放行信号");
+            }
             while let Ok(queued) = command_rx.try_recv() {
+                if queued.resume {
+                    // 认证恢复不能复用认证失效前的 socket 或订阅；清空旧状态，
+                    // 通过受控断开等待新的 Subscribe 建立连接。
+                    paused.store(false, Ordering::Release);
+                    resume_requested.store(false, Ordering::Release);
+                    subscription = None;
+                    pending.clear();
+                    reconnect = true;
+                    break;
+                }
+                if queued.pause_generation != pause_generation.load(Ordering::Acquire)
+                    && !matches!(&queued.command, ChatroomCommand::Close)
+                {
+                    continue;
+                }
                 let is_subscription_command = matches!(
                     &queued.command,
                     ChatroomCommand::Subscribe { .. } | ChatroomCommand::Unsubscribe { .. }

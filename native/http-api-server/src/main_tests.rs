@@ -649,6 +649,34 @@ fn given_windows_device_target_when_two_publishers_race_then_existing_target_is_
     let _ = std::fs::remove_dir_all(directory);
 }
 
+#[test]
+fn given_device_publish_when_readers_race_then_target_is_never_partial_json() {
+    let directory = std::env::temp_dir().join(format!(
+        "copis-chatroom-device-publish-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&directory);
+    std::fs::create_dir_all(&directory).unwrap();
+    let target = directory.join("client-device.json");
+    let temporary = directory.join("complete.tmp");
+    let encoded =
+        br#"{"version":1,"deviceId":"123e4567-e89b-42d3-a456-426614174000","createdAt":1}"#;
+    std::fs::write(&temporary, encoded).unwrap();
+    let reader_target = target.clone();
+    let reader = thread::spawn(move || {
+        for _ in 0..1000 {
+            if let Ok(bytes) = std::fs::read(&reader_target) {
+                assert_eq!(bytes, encoded);
+            }
+            thread::yield_now();
+        }
+    });
+    super::publish_chatroom_device_file(&temporary, &target).unwrap();
+    reader.join().unwrap();
+    assert_eq!(std::fs::read(&target).unwrap(), encoded);
+    let _ = std::fs::remove_dir_all(directory);
+}
+
 #[cfg(unix)]
 #[test]
 fn given_valid_device_file_with_broad_permissions_then_repair_to_0600_and_reuse_id() {

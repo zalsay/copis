@@ -232,6 +232,12 @@ struct TaskGate {
     release: mpsc::Receiver<()>,
 }
 
+#[cfg(test)]
+struct SseRegistrationGate {
+    loaded: mpsc::Sender<()>,
+    release: mpsc::Receiver<()>,
+}
+
 enum Route<'a> {
     Rooms,
     Room(&'a str),
@@ -277,6 +283,8 @@ pub struct ChatroomGateway {
     task_workers: Mutex<Vec<JoinHandle<()>>>,
     #[cfg(test)]
     task_gate: Mutex<Option<TaskGate>>,
+    #[cfg(test)]
+    sse_registration_gate: Mutex<Option<SseRegistrationGate>>,
 }
 
 impl ChatroomGateway {
@@ -354,6 +362,8 @@ impl ChatroomGateway {
             task_workers: Mutex::new(Vec::new()),
             #[cfg(test)]
             task_gate: Mutex::new(None),
+            #[cfg(test)]
+            sse_registration_gate: Mutex::new(None),
         }))
     }
 
@@ -835,6 +845,11 @@ impl ChatroomGateway {
                 normalize_room_id(&room_id).map_err(|_| invalid_request("聊天室 ID 不合法"))?,
             );
         }
+        #[cfg(test)]
+        if let Some(gate) = self.sse_registration_gate.lock().unwrap().take() {
+            let _ = gate.loaded.send(());
+            let _ = gate.release.recv();
+        }
         let (sender, receiver) = mpsc::sync_channel(SSE_CAPACITY);
         let occupancy = Arc::new(AtomicUsize::new(0));
         let subscriber_id = self.next_subscriber_id.fetch_add(1, Ordering::Relaxed);
@@ -865,6 +880,19 @@ impl ChatroomGateway {
                 occupancy: occupancy.clone(),
             },
         );
+        if !self.auth.auth_state().authenticated || self.connection_paused.load(Ordering::Acquire) {
+            // 认证失效可能发生在初始检查与注册之间；此时撤销本次注册，
+            // 并清理同一认证上下文下的本地状态，避免旧账号快照继续可见。
+            self.subscribers.lock().unwrap().clear();
+            self.rooms.lock().unwrap().clear();
+            self.leases.lock().unwrap().clear();
+            *self.last_subscription.lock().unwrap() = None;
+            return Err(ChatroomGatewayError::new(
+                401,
+                "not_authenticated",
+                "请先登录 Copis Working",
+            ));
+        }
         for event in initial {
             let _ = self.send_to_subscriber(subscriber_id, public_event(&event), true);
         }
@@ -1411,14 +1439,17 @@ impl ChatroomGateway {
             Route::Agent(room_id, agent_id) => {
                 if method == "DELETE" {
                     self.remove_lease(room_id, agent_id);
-                    self.remove_room_subscription(room_id);
                 } else {
                     self.mark_room_subscribed(room_id);
                 }
             }
             Route::Lease(room_id, _) => self.mark_room_subscribed(room_id),
-            Route::MemberRemove(room_id, _) => {
-                self.remove_room_subscription(room_id);
+            Route::MemberRemove(room_id, member_id) => {
+                if self.current_user_matches_member(member_id) {
+                    self.remove_room_subscription(room_id);
+                } else {
+                    self.mark_room_subscribed(room_id);
+                }
             }
             Route::Rooms
             | Route::Join
@@ -1440,6 +1471,24 @@ impl ChatroomGateway {
                 .or_insert_with(RoomState::new)
                 .subscribed = true;
         }
+    }
+
+    fn current_user_matches_member(&self, member_id: &str) -> bool {
+        let Some(user) = self.auth.auth_state().user else {
+            return false;
+        };
+        let Some(user) = user.as_object() else {
+            return false;
+        };
+        ["id", "ID", "userId", "user_id"].iter().any(|key| {
+            let Some(value) = user.get(*key) else {
+                return false;
+            };
+            value.as_str() == Some(member_id)
+                || value
+                    .as_u64()
+                    .is_some_and(|number| number.to_string() == member_id)
+        })
     }
 
     fn register_lease(&self, room_id: &str, agent_id: &str, device_id: &str) {
@@ -1491,6 +1540,7 @@ impl ChatroomGateway {
             return;
         }
         self.connection_paused.store(false, Ordering::Release);
+        self.client.resume();
     }
 
     pub fn shutdown(&self) {
@@ -1588,6 +1638,17 @@ impl ChatroomGateway {
         let (loaded, loaded_receiver) = mpsc::channel();
         let (release, release_receiver) = mpsc::channel();
         *self.task_gate.lock().unwrap() = Some(TaskGate {
+            loaded,
+            release: release_receiver,
+        });
+        (loaded_receiver, release)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn gate_sse_registration_for_test(&self) -> (mpsc::Receiver<()>, mpsc::Sender<()>) {
+        let (loaded, loaded_receiver) = mpsc::channel();
+        let (release, release_receiver) = mpsc::channel();
+        *self.sse_registration_gate.lock().unwrap() = Some(SseRegistrationGate {
             loaded,
             release: release_receiver,
         });

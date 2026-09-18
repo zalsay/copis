@@ -58,6 +58,28 @@ impl AuthStorage for AuthenticatedTestStorage {
     }
 }
 
+struct AuthenticatedUppercaseIdStorage;
+
+impl AuthStorage for AuthenticatedUppercaseIdStorage {
+    fn load(&self) -> Result<Option<PersistedAuth>, super::auth_session::AuthError> {
+        Ok(Some(PersistedAuth {
+            access_token: "test-access-token".into(),
+            refresh_token: None,
+            provider: "test".into(),
+            user: Some(json!({"ID": 42})),
+            expires_at: None,
+        }))
+    }
+
+    fn save(&self, _auth: &PersistedAuth) -> Result<(), super::auth_session::AuthError> {
+        Ok(())
+    }
+
+    fn clear(&self) -> Result<(), super::auth_session::AuthError> {
+        Ok(())
+    }
+}
+
 #[derive(Default)]
 struct FakeTransport {
     requests: Mutex<Vec<(String, String, Option<String>)>>,
@@ -761,18 +783,31 @@ fn given_unauthenticated_gateway_when_sse_is_requested_then_deny_without_cache_a
 }
 
 #[test]
+fn given_auth_loss_during_sse_registration_then_do_not_leave_subscriber() {
+    let gateway = gateway(
+        Arc::new(FakeTransport::default()),
+        Arc::new(FakeBridge::default()),
+    );
+    let (loaded, release) = gateway.gate_sse_registration_for_test();
+    let worker_gateway = Arc::clone(&gateway);
+    let worker = thread::spawn(move || worker_gateway.subscribe_sse(vec!["room-1".into()]));
+    loaded.recv_timeout(Duration::from_millis(500)).unwrap();
+    gateway.shutdown_connection();
+    release.send(()).unwrap();
+    let result = worker.join().unwrap();
+    assert!(matches!(result, Err(error) if error.status == 401));
+    assert_eq!(gateway.subscriber_count_for_test(), 0);
+    assert_eq!(gateway.room_cursor_for_test("room-1"), None);
+}
+
+#[test]
 fn given_successful_leave_or_removal_when_route_finishes_then_room_is_unsubscribed() {
     for (method, path, body) in [
         ("POST", "/api/chatrooms/v2/rooms/room-1/leave", Vec::new()),
         ("DELETE", "/api/chatrooms/v2/rooms/room-1", Vec::new()),
         (
             "DELETE",
-            "/api/chatrooms/v2/rooms/room-1/agents/agent-1",
-            Vec::new(),
-        ),
-        (
-            "DELETE",
-            "/api/chatrooms/v2/rooms/room-1/members/42",
+            "/api/chatrooms/v2/rooms/room-1/members/1",
             Vec::new(),
         ),
     ] {
@@ -794,6 +829,73 @@ fn given_successful_leave_or_removal_when_route_finishes_then_room_is_unsubscrib
         );
         assert_eq!(gateway.lease_count_for_test(), 0, "{method} {path}");
     }
+}
+
+#[test]
+fn given_successful_delete_of_other_agent_or_member_when_route_finishes_then_room_stays_subscribed()
+{
+    for path in [
+        "/api/chatrooms/v2/rooms/room-1/agents/agent-1",
+        "/api/chatrooms/v2/rooms/room-1/members/42",
+    ] {
+        let transport = Arc::new(FakeTransport::default());
+        transport.push(GatewayTransportResponse {
+            status: 204,
+            body: Vec::new(),
+        });
+        let gateway = gateway(transport, Arc::new(FakeBridge::default()));
+        gateway.set_room_cursor_for_test("room-1", 7);
+        gateway.register_lease_for_test("room-1", "agent-1", "device-1");
+        gateway
+            .handle_http("DELETE", path, &HashMap::new(), &[])
+            .unwrap();
+        assert_eq!(gateway.room_cursor_for_test("room-1"), Some(7), "{path}");
+        if path.contains("agents") {
+            assert_eq!(gateway.lease_count_for_test(), 0);
+        }
+    }
+}
+
+#[test]
+fn given_current_member_removed_when_auth_user_uses_uppercase_id_then_leave_room_subscription() {
+    let transport = Arc::new(FakeTransport::default());
+    transport.push(GatewayTransportResponse {
+        status: 204,
+        body: Vec::new(),
+    });
+    let client = Arc::new(
+        EduApiClient::new(
+            "https://test.invalid/module/edu-api",
+            Arc::new(NoopEduTransport),
+            4,
+        )
+        .unwrap(),
+    );
+    let auth =
+        Arc::new(AuthSession::new(client, Arc::new(AuthenticatedUppercaseIdStorage)).unwrap());
+    let gateway = ChatroomGateway::new_with_transport(
+        auth,
+        "https://test.invalid/module/edu-api".into(),
+        Arc::new(FakeConnector),
+        Arc::new(FakeBridge::default()),
+        "device-test".into(),
+        transport,
+    )
+    .unwrap();
+    gateway.set_room_cursor_for_test("room-1", 7);
+    gateway.register_lease_for_test("room-1", "agent-1", "device-1");
+
+    gateway
+        .handle_http(
+            "DELETE",
+            "/api/chatrooms/v2/rooms/room-1/members/42",
+            &HashMap::new(),
+            &[],
+        )
+        .unwrap();
+
+    assert_eq!(gateway.room_cursor_for_test("room-1"), None);
+    assert_eq!(gateway.lease_count_for_test(), 0);
 }
 
 #[test]
