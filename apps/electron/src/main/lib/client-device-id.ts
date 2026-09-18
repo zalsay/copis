@@ -15,12 +15,15 @@ import {
   linkSync,
   lstatSync,
   openSync,
+  realpathSync,
   readSync,
   renameSync,
+  rmdirSync,
   rmSync,
   unlinkSync,
   writeSync,
 } from 'node:fs'
+import { resolve as resolvePath } from 'node:path'
 import { getClientDevicePath, getWebSyncStatePath } from './config-paths'
 import { writeJsonFileAtomic } from './safe-file'
 
@@ -53,6 +56,13 @@ interface DeviceFileLockOwner {
   ino: number
 }
 
+interface LegacyDeviceFileLockOwner {
+  version: 1
+  token: string
+  pid: number
+  createdAt: number
+}
+
 interface DeviceFileLockHandle extends DeviceFileLockOwner {
   lockPath: string
 }
@@ -74,6 +84,7 @@ const DEVICE_ID_UUID_V4_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][
 const NO_FOLLOW_FLAG = process.platform === 'win32' ? 0 : FS_CONSTANTS.O_NOFOLLOW
 const NON_BLOCKING_FLAG = process.platform === 'win32' ? 0 : FS_CONSTANTS.O_NONBLOCK
 const MAX_PURE_JSON_BYTES = 2 * 1024 * 1024
+const LEGACY_LOCK_OWNER_GRACE_MS = 100
 
 function isValidDeviceId(value: unknown): value is string {
   return typeof value === 'string'
@@ -121,6 +132,20 @@ export function readPureJsonFile<T>(path: string, label: string): T | null {
 }
 
 function readPureJsonFileWithIdentity<T>(path: string, label: string): PureJsonReadResult<T> | null {
+  let expectedPathIdentity: FileIdentity | undefined
+  if (process.platform === 'win32') {
+    let pathStats
+    try {
+      pathStats = lstatSync(path)
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
+      throw new Error(`${label}打开失败`, { cause: error })
+    }
+    if (!pathStats.isFile()) throw new Error(`${label}路径不是普通文件`)
+    assertNoWindowsReparsePath(path, label)
+    expectedPathIdentity = { dev: pathStats.dev, ino: pathStats.ino }
+  }
+
   let fd: number
   try {
     fd = openSync(path, FS_CONSTANTS.O_RDONLY | NO_FOLLOW_FLAG | NON_BLOCKING_FLAG)
@@ -137,7 +162,12 @@ function readPureJsonFileWithIdentity<T>(path: string, label: string): PureJsonR
     const stats = fstatSync(fd)
     if (!stats.isFile()) throw new Error(`${label}路径不是普通文件`)
     const identity = { dev: stats.dev, ino: stats.ino }
+    if (expectedPathIdentity && !sameFileIdentity(expectedPathIdentity, identity)) {
+      throw new Error(`${label}路径在读取期间发生变化`)
+    }
+    if (process.platform === 'win32') assertPathIdentity(path, identity, label)
     const raw = readFdText(fd, label)
+    if (process.platform === 'win32') assertPathIdentity(path, identity, label)
     if (raw.trim().length === 0) return { value: null, identity }
     try {
       return { value: JSON.parse(raw) as T, identity }
@@ -155,13 +185,13 @@ function readValidClientDevice(path: string): ClientDeviceFile | null {
 }
 
 function repairClientDevicePermissions(path: string): void {
+  if (process.platform === 'win32') return
   let fd: number | undefined
   try {
     fd = openSync(path, FS_CONSTANTS.O_RDONLY | NO_FOLLOW_FLAG | NON_BLOCKING_FLAG)
     if (!fstatSync(fd).isFile()) throw new Error('客户端设备文件路径不是普通文件')
     fchmodSync(fd, 0o600)
   } catch (error) {
-    if (process.platform === 'win32') return
     throw new Error('客户端设备文件权限修复失败', { cause: error })
   } finally {
     if (fd !== undefined) closeSync(fd)
@@ -179,6 +209,37 @@ function waitForDeviceFilePublisher(): void {
 interface DeviceFileLockRecord {
   owner: DeviceFileLockOwner | null
   identity: FileIdentity
+  legacy: boolean
+}
+
+function assertPathIdentity(path: string, identity: FileIdentity, label: string): void {
+  let stats
+  try {
+    stats = lstatSync(path)
+  } catch (error) {
+    throw new Error(`${label}路径在读取期间发生变化`, { cause: error })
+  }
+  if (!stats.isFile() || !sameFileIdentity(identity, { dev: stats.dev, ino: stats.ino })) {
+    throw new Error(`${label}路径在读取期间发生变化`)
+  }
+  assertNoWindowsReparsePath(path, label)
+}
+
+function assertNoWindowsReparsePath(path: string, label: string): void {
+  if (process.platform !== 'win32') return
+  let resolvedPath
+  try {
+    resolvedPath = realpathSync.native(path)
+  } catch (error) {
+    throw new Error(`${label}路径不是普通文件`, { cause: error })
+  }
+  const normalize = (value: string) => value
+    .replace(/^\\\\\?\\/, '')
+    .replace(/[\\/]+$/, '')
+    .toLowerCase()
+  if (normalize(resolvedPath) !== normalize(resolvePath(path))) {
+    throw new Error(`${label}路径不是普通文件`)
+  }
 }
 
 function readLockRecord(lockPath: string): DeviceFileLockRecord | null {
@@ -189,19 +250,60 @@ function readLockRecord(lockPath: string): DeviceFileLockRecord | null {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
     throw error
   }
+  const canonicalIdentity = { dev: canonicalStats.dev, ino: canonicalStats.ino }
+  if (canonicalStats.isDirectory()) {
+    const raw = readPureJsonFile<unknown>(`${lockPath}/owner.json`, '客户端设备文件锁')
+    if (!isValidLegacyDeviceFileLockOwner(raw)) {
+      return { owner: null, identity: canonicalIdentity, legacy: true }
+    }
+    return {
+      owner: {
+        ...raw,
+        dev: canonicalIdentity.dev,
+        ino: canonicalIdentity.ino,
+      },
+      identity: canonicalIdentity,
+      legacy: true,
+    }
+  }
   if (!canonicalStats.isFile()) throw new Error('客户端设备文件锁路径不是普通文件')
 
   const result = readPureJsonFileWithIdentity<unknown>(lockPath, '客户端设备文件锁')
   if (!result) return null
-  const canonicalIdentity = { dev: canonicalStats.dev, ino: canonicalStats.ino }
   if (!sameFileIdentity(canonicalIdentity, result.identity)) {
     return null
   }
   const owner = isValidDeviceFileLockOwner(result.value) ? result.value : null
   if (owner && (owner.dev !== result.identity.dev || owner.ino !== result.identity.ino)) {
-    return { owner: null, identity: result.identity }
+    return { owner: null, identity: result.identity, legacy: false }
   }
-  return { owner, identity: result.identity }
+  return { owner, identity: result.identity, legacy: false }
+}
+
+function waitForLegacyLockOwner(lockPath: string): DeviceFileLockRecord | null {
+  const deadline = Date.now() + LEGACY_LOCK_OWNER_GRACE_MS
+  for (;;) {
+    const record = readLockRecord(lockPath)
+    if (!record || !record.legacy || record.owner || Date.now() >= deadline) return record
+    waitForDeviceFilePublisher()
+  }
+}
+
+function isValidLegacyDeviceFileLockOwner(value: unknown): value is LegacyDeviceFileLockOwner {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false
+  const record = value as Record<string, unknown>
+  const keys = Object.keys(record)
+  return keys.length === 4
+    && keys.every((key) => key === 'version' || key === 'token' || key === 'pid' || key === 'createdAt')
+    && record.version === 1
+    && typeof record.token === 'string'
+    && DEVICE_ID_UUID_V4_PATTERN.test(record.token)
+    && typeof record.pid === 'number'
+    && Number.isSafeInteger(record.pid)
+    && record.pid > 0
+    && typeof record.createdAt === 'number'
+    && Number.isSafeInteger(record.createdAt)
+    && record.createdAt >= 0
 }
 
 function isValidDeviceFileLockOwner(value: unknown): value is DeviceFileLockOwner {
@@ -254,21 +356,61 @@ function reclaimDeviceFileLock(lockPath: string, record: DeviceFileLockRecord): 
 
   try {
     const reclaimedRecord = readLockRecord(reclaimPath)
-    if (!reclaimedRecord || !sameFileIdentity(reclaimedRecord.identity, record.identity)) {
+    if (!reclaimedRecord
+      || record.legacy !== reclaimedRecord.legacy
+      || !sameFileIdentity(reclaimedRecord.identity, record.identity)) {
       throw new Error('客户端设备文件锁元数据在回收期间发生变化')
     }
-    if (record.owner && (!reclaimedRecord.owner || reclaimedRecord.owner.token !== record.owner.token)) {
+    if (record.owner && (!reclaimedRecord.owner || !sameLockOwner(record.owner, reclaimedRecord.owner))) {
       throw new Error('客户端设备文件锁 owner 在回收期间发生变化')
     }
     if (!record.owner && reclaimedRecord.owner) {
       throw new Error('客户端设备文件锁已在回收期间取得 owner')
     }
-    rmSync(reclaimPath, { recursive: true, force: true })
+    removeReclaimedLock(reclaimPath, record.identity)
     return true
   } catch (error) {
     // 无法证明仍是同一个 owner 时保留回收目录，避免误删其他进程的锁。
     throw error
   }
+}
+
+function removeReclaimedLock(path: string, identity: FileIdentity): void {
+  const stats = lstatSync(path)
+  if (!sameFileIdentity(identity, { dev: stats.dev, ino: stats.ino })) {
+    throw new Error('客户端设备文件锁元数据在回收期间发生变化')
+  }
+  if (stats.isFile()) {
+    unlinkSync(path)
+    return
+  }
+  if (!stats.isDirectory()) {
+    throw new Error('客户端设备文件锁路径不是普通文件')
+  }
+
+  const ownerPath = `${path}/owner.json`
+  let ownerStats
+  try {
+    ownerStats = lstatSync(ownerPath)
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      rmdirSync(path)
+      return
+    }
+    throw error
+  }
+  if (!ownerStats.isFile()) throw new Error('客户端设备文件锁元数据路径不是普通文件')
+  unlinkSync(ownerPath)
+  rmdirSync(path)
+}
+
+function sameLockOwner(left: DeviceFileLockOwner, right: DeviceFileLockOwner): boolean {
+  return left.version === right.version
+    && left.token === right.token
+    && left.pid === right.pid
+    && left.createdAt === right.createdAt
+    && left.dev === right.dev
+    && left.ino === right.ino
 }
 
 function tryCreateDeviceFileLock(lockPath: string): DeviceFileLockHandle | null {
@@ -339,11 +481,16 @@ function acquireDeviceFileLock(
 
     if (readValidClientDevice(targetPath)) return null
 
-    const record = readLockRecord(lockPath)
+    let record = readLockRecord(lockPath)
     if (!record) {
       if (Date.now() >= deadline) throw new Error('客户端设备文件锁所有权无法确认')
       waitForDeviceFilePublisher()
       continue
+    }
+
+    if (record.legacy && !record.owner) {
+      record = waitForLegacyLockOwner(lockPath)
+      if (!record) continue
     }
 
     if (record.owner) {
@@ -414,7 +561,9 @@ function publishClientDeviceFile(path: string, file: ClientDeviceFile, owner: De
 
 function removeDeviceFileLockIfOwner(owner: DeviceFileLockHandle): boolean {
   if (!hasLockOwnership(owner)) return false
-  rmSync(owner.lockPath, { force: true })
+  const stats = lstatSync(owner.lockPath)
+  if (!stats.isFile() || !sameFileIdentity({ dev: stats.dev, ino: stats.ino }, owner)) return false
+  unlinkSync(owner.lockPath)
   return true
 }
 

@@ -36,6 +36,11 @@ function writeLockOwner(lockPath: string, owner: { token: string; pid: number; c
   writeFileSync(lockPath, JSON.stringify({ version: 1, ...owner, dev: stats.dev, ino: stats.ino }))
 }
 
+function writeLegacyLockOwner(lockPath: string, owner: { token: string; pid: number; createdAt: number }): void {
+  mkdirSync(lockPath)
+  writeFileSync(join(lockPath, 'owner.json'), JSON.stringify({ version: 1, ...owner }))
+}
+
 describe('客户端设备 ID 与聊天室路径', () => {
   beforeEach(() => {
     rmSync(testDir, { recursive: true, force: true })
@@ -168,6 +173,46 @@ describe('客户端设备 ID 与聊天室路径', () => {
       expect(handle).not.toBeNull()
       expect(__clientDeviceIdTestHooks.removeIfOwner(handle!)).toBe(true)
     }
+  })
+
+  test('活动的旧版目录锁不会被回收', () => {
+    if (process.platform === 'win32') return
+    const lockPath = `${getClientDevicePath()}.lock`
+    const token = '11111111-1111-4111-8111-111111111111'
+    writeLegacyLockOwner(lockPath, { token, pid: process.pid, createdAt: 0 })
+
+    expect(() => __clientDeviceIdTestHooks.acquire(lockPath, getClientDevicePath())).toThrow('客户端设备文件锁仍由活动进程持有')
+    expect(readFileSync(join(lockPath, 'owner.json'), 'utf8')).toContain(token)
+    expect(statSync(lockPath).isDirectory()).toBe(true)
+  })
+
+  test('已停止的旧版目录锁会被安全迁移回收并重新创建', () => {
+    if (process.platform === 'win32') return
+    const lockPath = `${getClientDevicePath()}.lock`
+    writeLegacyLockOwner(lockPath, {
+      token: '22222222-2222-4222-8222-222222222222',
+      pid: 2147483647,
+      createdAt: 0,
+    })
+
+    const handle = __clientDeviceIdTestHooks.acquire(lockPath, getClientDevicePath())
+
+    expect(handle).not.toBeNull()
+    expect(statSync(lockPath).isFile()).toBe(true)
+    expect(__clientDeviceIdTestHooks.removeIfOwner(handle!)).toBe(true)
+  })
+
+  test('非法或 ownerless 的旧版目录锁不会永久阻塞设备 ID 创建', () => {
+    if (process.platform === 'win32') return
+    const lockPath = `${getClientDevicePath()}.lock`
+    mkdirSync(lockPath)
+    writeFileSync(join(lockPath, 'owner.json'), '{broken')
+
+    const handle = __clientDeviceIdTestHooks.acquire(lockPath, getClientDevicePath())
+
+    expect(handle).not.toBeNull()
+    expect(statSync(lockPath).isFile()).toBe(true)
+    expect(__clientDeviceIdTestHooks.removeIfOwner(handle!)).toBe(true)
   })
 
   test('旧 handle 失去 canonical inode 后不能删除或覆盖新 owner', () => {
