@@ -233,16 +233,19 @@ export interface ChatRoomRustApi {
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false
+  const prototype = Object.getPrototypeOf(value)
+  return prototype === null || prototype === Object.prototype
 }
 
 function hasExactKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
   const expected = new Set(keys)
-  return Object.keys(value).every((key) => expected.has(key)) && keys.every((key) => key in value)
+  const ownKeys = Reflect.ownKeys(value)
+  return ownKeys.length === keys.length && ownKeys.every((key) => typeof key === 'string' && expected.has(key))
 }
 
 function hasRequiredKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
-  return keys.every((key) => key in value)
+  return keys.every((key) => Object.prototype.hasOwnProperty.call(value, key))
 }
 
 function isBoundedId(value: unknown): value is string {
@@ -255,6 +258,24 @@ function isBoundedText(value: unknown, maxLength: number): value is string {
 
 function isBoundedNonBlankText(value: unknown, maxLength: number): value is string {
   return isBoundedText(value, maxLength) && value.trim().length > 0
+}
+
+function isArrayIndexKey(key: string): boolean {
+  const index = Number(key)
+  return Number.isSafeInteger(index) && index >= 0 && index < 2 ** 32 - 1 && String(index) === key
+}
+
+/** 只接受没有 holes 且没有自定义属性的普通数组。 */
+function isDenseArray(value: unknown): value is unknown[] {
+  if (!Array.isArray(value)) return false
+  for (const key of Reflect.ownKeys(value)) {
+    if (key === 'length') continue
+    if (typeof key !== 'string' || !isArrayIndexKey(key) || Number(key) >= value.length) return false
+  }
+  for (let index = 0; index < value.length; index += 1) {
+    if (!Object.prototype.hasOwnProperty.call(value, String(index))) return false
+  }
+  return true
 }
 
 function isNonNegativeSafeInteger(value: unknown): value is number {
@@ -271,15 +292,17 @@ function isContextMessageCount(value: unknown): value is number {
 }
 
 function hasOptionalValue(value: Record<string, unknown>, key: string, guard: (value: unknown) => boolean): boolean {
-  return !(key in value) || guard(value[key])
+  return !Object.prototype.hasOwnProperty.call(value, key) || guard(value[key])
 }
 
 function isInputRecord(value: unknown, keys: readonly string[]): value is Record<string, unknown> {
-  return isRecord(value) && Object.keys(value).every((key) => keys.includes(key))
+  if (!isRecord(value)) return false
+  const allowed = new Set(keys)
+  return Reflect.ownKeys(value).every((key) => typeof key === 'string' && allowed.has(key))
 }
 
 function isBoundedIdArray(value: unknown, maxLength: number): value is string[] {
-  return Array.isArray(value) && value.length <= maxLength && value.every((item) => isBoundedId(item))
+  return isDenseArray(value) && value.length <= maxLength && value.every((item) => isBoundedId(item))
 }
 
 function isSender(value: unknown): value is ChatRoomSender {
@@ -306,7 +329,7 @@ export function normalizeChatRoomContextMessageCount(value: unknown): number {
 
 function isInvocationChain(value: unknown): value is ChatRoomInvocationChainEntry[] {
   return (
-    Array.isArray(value) &&
+    isDenseArray(value) &&
     value.length <= CHATROOM_MAX_DEPTH &&
     value.every((entry) => {
       if (!isRecord(entry) || !hasExactKeys(entry, ['agentId', 'invocationId'])) return false
@@ -318,8 +341,8 @@ function isInvocationChain(value: unknown): value is ChatRoomInvocationChainEntr
 function isContextMessage(value: unknown): value is ChatRoomContextMessage {
   if (!isRecord(value)) return false
   const keys = ['messageId', 'sender', 'text', 'createdAt', 'attachmentIds', 'mentionedAgentIds', 'invocationChain']
-  if (!Object.keys(value).every((key) => keys.includes(key))) return false
-  if (!('messageId' in value) || !('sender' in value) || !('text' in value) || !('createdAt' in value)) return false
+  if (!Reflect.ownKeys(value).every((key) => typeof key === 'string' && keys.includes(key))) return false
+  if (!hasRequiredKeys(value, ['messageId', 'sender', 'text', 'createdAt'])) return false
   return (
     isBoundedId(value.messageId) &&
     isSender(value.sender) &&
@@ -347,7 +370,7 @@ export function isChatRoomAgentInvocation(value: unknown): value is ChatRoomAgen
     value.depth >= 0 &&
     value.depth <= CHATROOM_MAX_DEPTH &&
     isSender(value.sender) &&
-    Array.isArray(value.messages) &&
+    isDenseArray(value.messages) &&
     value.messages.length <= CHATROOM_MAX_CONTEXT_MESSAGES &&
     value.messages.every((message) => isContextMessage(message)) &&
     isNonNegativeSafeInteger(value.receivedAt)
@@ -391,7 +414,7 @@ export function isUpdateChatRoomAgentInput(value: unknown): value is UpdateChatR
   ] as const
   const keys = ['roomId', 'roomAgentId', ...updateKeys] as const
   if (!isInputRecord(value, keys) || !hasRequiredKeys(value, ['roomId', 'roomAgentId'])) return false
-  const hasUpdate = updateKeys.some((key) => key in value)
+  const hasUpdate = updateKeys.some((key) => Object.prototype.hasOwnProperty.call(value, key))
   return (
     hasUpdate &&
     isBoundedId(value.roomId) &&
