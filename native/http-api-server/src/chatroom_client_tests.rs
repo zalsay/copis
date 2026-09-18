@@ -213,10 +213,16 @@ enum ConnectResult {
     Error(ChatroomClientError),
 }
 
+struct ConnectGate {
+    loaded: mpsc::Sender<()>,
+    release: mpsc::Receiver<()>,
+}
+
 struct FakeConnector {
     results: Mutex<VecDeque<ConnectResult>>,
     authorizations: Mutex<Vec<String>>,
     attempts: AtomicUsize,
+    connect_gate: Mutex<Option<ConnectGate>>,
 }
 
 impl FakeConnector {
@@ -225,7 +231,18 @@ impl FakeConnector {
             results: Mutex::new(results.into()),
             authorizations: Mutex::new(Vec::new()),
             attempts: AtomicUsize::new(0),
+            connect_gate: Mutex::new(None),
         })
+    }
+
+    fn gate_next_connect(&self) -> (mpsc::Receiver<()>, mpsc::Sender<()>) {
+        let (loaded, loaded_receiver) = mpsc::channel();
+        let (release, release_receiver) = mpsc::channel();
+        *self.connect_gate.lock().unwrap() = Some(ConnectGate {
+            loaded,
+            release: release_receiver,
+        });
+        (loaded_receiver, release)
     }
 }
 
@@ -241,6 +258,12 @@ impl ChatroomSocketConnector for FakeConnector {
             .lock()
             .unwrap()
             .push(authorization.to_string());
+        if let Some(gate) = self.connect_gate.lock().unwrap().take() {
+            let _ = gate.loaded.send(());
+            gate.release
+                .recv_timeout(Duration::from_secs(1))
+                .expect("测试 connector connect 未收到放行信号");
+        }
         match self.results.lock().unwrap().pop_front() {
             Some(ConnectResult::Socket(socket)) => Ok(Box::new(socket)),
             Some(ConnectResult::Error(error)) => Err(error),
@@ -1410,6 +1433,74 @@ fn given_client_is_dropped_without_shutdown_then_worker_closes_socket() {
     });
     drop(client);
     assert!(socket.closed.load(Ordering::SeqCst));
+}
+
+#[test]
+fn given_pause_and_resume_during_connect_when_socket_is_rejected_then_worker_restarts() {
+    let first = FakeSocket::new(Vec::new());
+    let second = FakeSocket::new(vec![Err(ChatroomClientError::new(
+        "read_timeout",
+        "测试空闲连接",
+    ))]);
+    let connector = FakeConnector::new(vec![
+        ConnectResult::Socket(first.clone()),
+        ConnectResult::Socket(second.clone()),
+    ]);
+    let (events, receiver) = mpsc::channel();
+    let authenticated = auth(
+        Arc::new(RefreshTransport {
+            calls: AtomicUsize::new(0),
+        }),
+        Arc::new(MemoryStorage::default()),
+    );
+    let (connect_loaded, connect_release) = connector.gate_next_connect();
+    let client = ChatroomClient::new_with_backoff(
+        authenticated.clone(),
+        "wss://edu.example/ws".into(),
+        connector.clone(),
+        events,
+        FakeBackoff::new(),
+    );
+    client.start();
+    client.command(subscribe()).unwrap();
+    connect_loaded
+        .recv_timeout(Duration::from_millis(500))
+        .expect("首次 connect 未进入 gate");
+    client.pause();
+    client.resume();
+    authenticated.refresh_single_flight().unwrap();
+    connect_release.send(()).unwrap();
+
+    assert!(receiver
+        .recv_timeout(Duration::from_millis(500))
+        .is_ok_and(|event| { matches!(event, ChatroomClientEvent::Disconnected) }));
+    assert!(first.closed.load(Ordering::SeqCst));
+    assert_eq!(connector.attempts.load(Ordering::SeqCst), 1);
+
+    client
+        .command(ChatroomCommand::Subscribe {
+            rooms: vec![RoomCursor {
+                room_id: "room-2".into(),
+                after_seq: 0,
+            }],
+            device_id: "device-2".into(),
+        })
+        .unwrap();
+    assert!(receiver
+        .recv_timeout(Duration::from_millis(500))
+        .is_ok_and(|event| { matches!(event, ChatroomClientEvent::ConnectedAt { .. }) }));
+    assert_eq!(connector.attempts.load(Ordering::SeqCst), 2);
+    assert_eq!(
+        connector.authorizations.lock().unwrap().as_slice(),
+        ["Bearer old-token", "Bearer new-token"]
+    );
+    assert_eq!(first.sent.lock().unwrap().len(), 0);
+    let second_sent = second.sent.lock().unwrap();
+    assert_eq!(second_sent.len(), 1);
+    assert!(
+        matches!(&second_sent[0], ChatroomCommand::Subscribe { rooms, device_id } if rooms[0].room_id == "room-2" && device_id == "device-2")
+    );
+    client.shutdown();
 }
 
 #[test]

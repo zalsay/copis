@@ -571,6 +571,22 @@ fn run_worker(
             continue;
         }
 
+        // resume 哨兵可能仍在 command_rx 中，但其它生命周期路径已经让
+        // worker 观察到 paused=false；在任何新 socket connect 前先失效旧状态。
+        let resume_pending = {
+            let _pause_state = pause_state_lock.lock().unwrap();
+            if resume_requested.load(Ordering::Acquire) {
+                subscription = None;
+                pending.clear();
+                true
+            } else {
+                false
+            }
+        };
+        if resume_pending {
+            continue;
+        }
+
         let token = match auth.current_access_token() {
             Ok(token) => token,
             Err(error) => {
@@ -651,7 +667,12 @@ fn run_worker(
         let mut connection_failed = false;
         {
             let _pause_state = pause_state_lock.lock().unwrap();
-            if stop.load(Ordering::Acquire) || paused.load(Ordering::Acquire) {
+            let resume_pending = resume_requested.load(Ordering::Acquire);
+            if stop.load(Ordering::Acquire) || paused.load(Ordering::Acquire) || resume_pending {
+                if resume_pending {
+                    subscription = None;
+                    pending.clear();
+                }
                 socket.close();
                 connection_rejected = true;
             } else {
@@ -674,7 +695,9 @@ fn run_worker(
         }
         if connection_rejected {
             emit_disconnected(&events);
-            break;
+            // stop 会在下一轮顶部退出；暂停/恢复拒绝只表示当前 socket
+            // 生命周期作废，必须继续外层循环消费 resume 哨兵和新订阅。
+            continue;
         }
         if connection_failed {
             socket.close();
