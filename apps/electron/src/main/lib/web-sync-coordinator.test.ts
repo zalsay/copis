@@ -71,6 +71,26 @@ describe('WebSyncCoordinator 增量同步调度', () => {
     coordinator.destroy()
   })
 
+  test('迁移旧 WebSync 设备 ID 时保留非零游标和最后同步时间', () => {
+    writeFileSync(syncStatePath, JSON.stringify({
+      deviceId: 'legacy-device',
+      serverCursor: 42,
+      lastSyncedAt: 123456,
+      hasLocalChanges: true,
+    }))
+
+    const coordinator = new WebSyncCoordinator({ autoStartInterval: false })
+    const state = coordinator.getState()
+
+    expect(state.deviceId).toBe('legacy-device')
+    expect(state.serverCursor).toBe(42)
+    expect(state.lastSyncedAt).toBe(123456)
+    expect(state.hasLocalChanges).toBe(true)
+    expect(getOrCreateClientDeviceId()).toBe(state.deviceId)
+
+    coordinator.destroy()
+  })
+
   test('当用户未登录时，syncNow 优雅跳过请求并保留本地脏标记', async () => {
     let syncDataCalled = false
     const mockClient = {
