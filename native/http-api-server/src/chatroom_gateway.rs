@@ -239,6 +239,12 @@ struct SseRegistrationGate {
     release: mpsc::Receiver<()>,
 }
 
+#[cfg(test)]
+struct ClientEventAcceptanceGate {
+    loaded: mpsc::Sender<()>,
+    release: mpsc::Receiver<()>,
+}
+
 enum Route<'a> {
     Rooms,
     Room(&'a str),
@@ -289,6 +295,8 @@ pub struct ChatroomGateway {
     task_gate: Mutex<Option<TaskGate>>,
     #[cfg(test)]
     sse_registration_gate: Mutex<Option<SseRegistrationGate>>,
+    #[cfg(test)]
+    client_event_acceptance_gate: Mutex<Option<ClientEventAcceptanceGate>>,
 }
 
 impl ChatroomGateway {
@@ -371,6 +379,8 @@ impl ChatroomGateway {
             task_gate: Mutex::new(None),
             #[cfg(test)]
             sse_registration_gate: Mutex::new(None),
+            #[cfg(test)]
+            client_event_acceptance_gate: Mutex::new(None),
         }))
     }
 
@@ -472,7 +482,20 @@ impl ChatroomGateway {
                 }
             }
             ChatroomClientEvent::ConnectedAt { generation } => {
-                if generation == self.client.pause_generation()
+                let candidate = generation == self.client.pause_generation()
+                    && self.auth.auth_state().authenticated;
+                #[cfg(test)]
+                if candidate {
+                    if let Some(gate) = self.client_event_acceptance_gate.lock().unwrap().take() {
+                        let _ = gate.loaded.send(());
+                        gate.release
+                            .recv_timeout(Duration::from_secs(1))
+                            .expect("测试 client event acceptance 未收到放行信号");
+                    }
+                }
+                let _auth_boundary = self.auth_boundary.lock().unwrap();
+                if candidate
+                    && generation == self.client.pause_generation()
                     && self.auth.auth_state().authenticated
                 {
                     self.accepted_client_generation
@@ -496,13 +519,27 @@ impl ChatroomGateway {
                 self.publish_event(event)
             }
             ChatroomClientEvent::Event(_) => {}
-            ChatroomClientEvent::EventAt { generation, event }
-                if !self.connection_paused.load(Ordering::Acquire)
-                    && self.accepted_client_generation.load(Ordering::Acquire) == generation =>
-            {
-                self.publish_event(event)
+            ChatroomClientEvent::EventAt { generation, event } => {
+                let candidate = !self.connection_paused.load(Ordering::Acquire)
+                    && self.accepted_client_generation.load(Ordering::Acquire) == generation;
+                #[cfg(test)]
+                if candidate {
+                    if let Some(gate) = self.client_event_acceptance_gate.lock().unwrap().take() {
+                        let _ = gate.loaded.send(());
+                        gate.release
+                            .recv_timeout(Duration::from_secs(1))
+                            .expect("测试 client event acceptance 未收到放行信号");
+                    }
+                }
+                let _auth_boundary = self.auth_boundary.lock().unwrap();
+                if candidate
+                    && !self.connection_paused.load(Ordering::Acquire)
+                    && self.accepted_client_generation.load(Ordering::Acquire) == generation
+                    && self.auth.auth_state().authenticated
+                {
+                    self.publish_event(event);
+                }
             }
-            ChatroomClientEvent::EventAt { .. } => {}
         }
     }
 
@@ -1574,6 +1611,7 @@ impl ChatroomGateway {
         if self.shutdown.load(Ordering::Acquire) {
             return;
         }
+        let _auth_boundary = self.auth_boundary.lock().unwrap();
         self.client.resume();
         self.connection_paused.store(false, Ordering::Release);
     }
@@ -1684,6 +1722,19 @@ impl ChatroomGateway {
         let (loaded, loaded_receiver) = mpsc::channel();
         let (release, release_receiver) = mpsc::channel();
         *self.sse_registration_gate.lock().unwrap() = Some(SseRegistrationGate {
+            loaded,
+            release: release_receiver,
+        });
+        (loaded_receiver, release)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn gate_client_event_acceptance_for_test(
+        &self,
+    ) -> (mpsc::Receiver<()>, mpsc::Sender<()>) {
+        let (loaded, loaded_receiver) = mpsc::channel();
+        let (release, release_receiver) = mpsc::channel();
+        *self.client_event_acceptance_gate.lock().unwrap() = Some(ClientEventAcceptanceGate {
             loaded,
             release: release_receiver,
         });

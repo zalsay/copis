@@ -856,6 +856,74 @@ fn given_auth_loss_then_resume_before_new_socket_connected_then_old_events_stay_
 }
 
 #[test]
+fn given_logout_after_event_acceptance_check_then_old_event_cannot_reach_new_subscriber() {
+    let gateway = gateway(
+        Arc::new(FakeTransport::default()),
+        Arc::new(FakeBridge::default()),
+    );
+    gateway.handle_client_event_for_test(
+        super::chatroom_client::ChatroomClientEvent::ConnectedAt { generation: 0 },
+    );
+    let (loaded, release) = gateway.gate_client_event_acceptance_for_test();
+    let event_gateway = Arc::clone(&gateway);
+    let event = thread::spawn(move || {
+        event_gateway.handle_client_event_for_test(
+            super::chatroom_client::ChatroomClientEvent::EventAt {
+                generation: 0,
+                event: ChatroomEvent::RoomSnapshot {
+                    room_id: "room-1".into(),
+                    latest_seq: 1,
+                    payload: json!({"name":"旧账号快照"}),
+                },
+            },
+        );
+    });
+    loaded
+        .recv_timeout(Duration::from_millis(500))
+        .expect("旧事件未到达 acceptance gate");
+
+    gateway.shutdown_connection();
+    gateway.resume_connection();
+    let subscription = gateway.subscribe_sse(vec!["room-1".into()]).unwrap();
+    release.send(()).unwrap();
+    event.join().unwrap();
+
+    assert!(subscription
+        .receiver
+        .recv_timeout(Duration::from_millis(100))
+        .is_err());
+}
+
+#[test]
+fn given_logout_after_connected_acceptance_check_then_old_generation_is_not_accepted() {
+    let gateway = gateway(
+        Arc::new(FakeTransport::default()),
+        Arc::new(FakeBridge::default()),
+    );
+    let (loaded, release) = gateway.gate_client_event_acceptance_for_test();
+    let connected_gateway = Arc::clone(&gateway);
+    let connected = thread::spawn(move || {
+        connected_gateway.handle_client_event_for_test(
+            super::chatroom_client::ChatroomClientEvent::ConnectedAt { generation: 0 },
+        );
+    });
+    loaded
+        .recv_timeout(Duration::from_millis(500))
+        .expect("ConnectedAt 未到达 acceptance gate");
+
+    gateway.shutdown_connection();
+    gateway.resume_connection();
+    let subscription = gateway.subscribe_sse(vec!["room-1".into()]).unwrap();
+    release.send(()).unwrap();
+    connected.join().unwrap();
+
+    assert!(subscription
+        .receiver
+        .recv_timeout(Duration::from_millis(100))
+        .is_err());
+}
+
+#[test]
 fn given_successful_leave_or_removal_when_route_finishes_then_room_is_unsubscribed() {
     for (method, path, body) in [
         ("POST", "/api/chatrooms/v2/rooms/room-1/leave", Vec::new()),

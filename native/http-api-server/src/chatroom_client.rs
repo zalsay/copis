@@ -74,6 +74,24 @@ struct ConnectedCommandDrainGate {
     release: mpsc::Receiver<()>,
 }
 
+#[cfg(test)]
+struct UnavailableCommandApplyGate {
+    loaded: mpsc::Sender<()>,
+    release: mpsc::Receiver<()>,
+}
+
+#[cfg(test)]
+struct ConnectionReadyGate {
+    loaded: mpsc::Sender<()>,
+    release: mpsc::Receiver<()>,
+}
+
+#[cfg(test)]
+struct ConnectedCommandApplyGate {
+    loaded: mpsc::Sender<()>,
+    release: mpsc::Receiver<()>,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ChatroomClientError {
     pub code: String,
@@ -152,6 +170,12 @@ pub struct ChatroomClient {
     unavailable_status_gate: Arc<Mutex<Option<UnavailableStatusGate>>>,
     #[cfg(test)]
     connected_command_drain_gate: Arc<Mutex<Option<ConnectedCommandDrainGate>>>,
+    #[cfg(test)]
+    unavailable_command_apply_gate: Arc<Mutex<Option<UnavailableCommandApplyGate>>>,
+    #[cfg(test)]
+    connection_ready_gate: Arc<Mutex<Option<ConnectionReadyGate>>>,
+    #[cfg(test)]
+    connected_command_apply_gate: Arc<Mutex<Option<ConnectedCommandApplyGate>>>,
     worker: Mutex<Option<JoinHandle<()>>>,
     backoff: Arc<dyn BackoffWaiter>,
 }
@@ -197,6 +221,12 @@ impl ChatroomClient {
             unavailable_status_gate: Arc::new(Mutex::new(None)),
             #[cfg(test)]
             connected_command_drain_gate: Arc::new(Mutex::new(None)),
+            #[cfg(test)]
+            unavailable_command_apply_gate: Arc::new(Mutex::new(None)),
+            #[cfg(test)]
+            connection_ready_gate: Arc::new(Mutex::new(None)),
+            #[cfg(test)]
+            connected_command_apply_gate: Arc::new(Mutex::new(None)),
             worker: Mutex::new(None),
             backoff,
         }
@@ -235,6 +265,39 @@ impl ChatroomClient {
         (loaded_receiver, release)
     }
 
+    #[cfg(test)]
+    pub(crate) fn gate_unavailable_command_apply(&self) -> (mpsc::Receiver<()>, mpsc::Sender<()>) {
+        let (loaded, loaded_receiver) = mpsc::channel();
+        let (release, release_receiver) = mpsc::channel();
+        *self.unavailable_command_apply_gate.lock().unwrap() = Some(UnavailableCommandApplyGate {
+            loaded,
+            release: release_receiver,
+        });
+        (loaded_receiver, release)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn gate_connection_ready(&self) -> (mpsc::Receiver<()>, mpsc::Sender<()>) {
+        let (loaded, loaded_receiver) = mpsc::channel();
+        let (release, release_receiver) = mpsc::channel();
+        *self.connection_ready_gate.lock().unwrap() = Some(ConnectionReadyGate {
+            loaded,
+            release: release_receiver,
+        });
+        (loaded_receiver, release)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn gate_connected_command_apply(&self) -> (mpsc::Receiver<()>, mpsc::Sender<()>) {
+        let (loaded, loaded_receiver) = mpsc::channel();
+        let (release, release_receiver) = mpsc::channel();
+        *self.connected_command_apply_gate.lock().unwrap() = Some(ConnectedCommandApplyGate {
+            loaded,
+            release: release_receiver,
+        });
+        (loaded_receiver, release)
+    }
+
     pub fn start(&self) {
         let mut worker = self.worker.lock().unwrap();
         if worker.is_some() || self.stop.load(Ordering::Acquire) {
@@ -257,6 +320,12 @@ impl ChatroomClient {
         let unavailable_status_gate = self.unavailable_status_gate.clone();
         #[cfg(test)]
         let connected_command_drain_gate = self.connected_command_drain_gate.clone();
+        #[cfg(test)]
+        let unavailable_command_apply_gate = self.unavailable_command_apply_gate.clone();
+        #[cfg(test)]
+        let connection_ready_gate = self.connection_ready_gate.clone();
+        #[cfg(test)]
+        let connected_command_apply_gate = self.connected_command_apply_gate.clone();
         *worker = Some(thread::spawn(move || {
             if let Some(events) = events {
                 run_worker(
@@ -276,6 +345,12 @@ impl ChatroomClient {
                     unavailable_status_gate,
                     #[cfg(test)]
                     connected_command_drain_gate,
+                    #[cfg(test)]
+                    unavailable_command_apply_gate,
+                    #[cfg(test)]
+                    connection_ready_gate,
+                    #[cfg(test)]
+                    connected_command_apply_gate,
                 );
             }
         }));
@@ -412,6 +487,9 @@ fn run_worker(
     backoff: Arc<dyn BackoffWaiter>,
     #[cfg(test)] unavailable_status_gate: Arc<Mutex<Option<UnavailableStatusGate>>>,
     #[cfg(test)] connected_command_drain_gate: Arc<Mutex<Option<ConnectedCommandDrainGate>>>,
+    #[cfg(test)] unavailable_command_apply_gate: Arc<Mutex<Option<UnavailableCommandApplyGate>>>,
+    #[cfg(test)] connection_ready_gate: Arc<Mutex<Option<ConnectionReadyGate>>>,
+    #[cfg(test)] connected_command_apply_gate: Arc<Mutex<Option<ConnectedCommandApplyGate>>>,
 ) {
     let mut subscription: Option<(Vec<RoomCursor>, String)> = None;
     let mut pending = VecDeque::new();
@@ -460,8 +538,17 @@ fn run_worker(
                         }
                         continue;
                     }
-                    let current_generation = pause_generation.load(Ordering::Acquire);
-                    if queued.pause_generation != current_generation {
+                    #[cfg(test)]
+                    if let Some(gate) = unavailable_command_apply_gate.lock().unwrap().take() {
+                        let _ = gate.loaded.send(());
+                        gate.release
+                            .recv_timeout(Duration::from_secs(1))
+                            .expect("测试 unavailable 命令 apply 未收到放行信号");
+                    }
+                    let _pause_state = pause_state_lock.lock().unwrap();
+                    if paused.load(Ordering::Acquire)
+                        || queued.pause_generation != pause_generation.load(Ordering::Acquire)
+                    {
                         restore_wake_budget(queued.wake_budget, &wake_on_ordinary);
                         continue;
                     }
@@ -552,25 +639,44 @@ fn run_worker(
         refresh.attempted = false;
         refresh.failed = false;
 
-        if let Some((rooms, device_id)) = subscription.clone() {
-            let initial = ChatroomCommand::Subscribe { rooms, device_id };
-            if socket.send_json(&initial).is_err() {
+        #[cfg(test)]
+        if let Some(gate) = connection_ready_gate.lock().unwrap().take() {
+            let _ = gate.loaded.send(());
+            gate.release
+                .recv_timeout(Duration::from_secs(1))
+                .expect("测试连接 ready 未收到放行信号");
+        }
+        let mut connection_generation = 0;
+        let mut connection_rejected = false;
+        let mut connection_failed = false;
+        {
+            let _pause_state = pause_state_lock.lock().unwrap();
+            if stop.load(Ordering::Acquire) || paused.load(Ordering::Acquire) {
                 socket.close();
-                emit_disconnected(&events);
-                retry_after_failure(
-                    &events,
-                    &backoff,
-                    &stop,
-                    &mut retries,
-                    &mut unavailable,
-                    &wake_on_ordinary,
-                    #[cfg(test)]
-                    &unavailable_status_gate,
-                );
-                continue;
+                connection_rejected = true;
+            } else {
+                if let Some((rooms, device_id)) = subscription.clone() {
+                    let initial = ChatroomCommand::Subscribe { rooms, device_id };
+                    if socket.send_json(&initial).is_err() {
+                        connection_failed = true;
+                    }
+                }
+                if !connection_failed && !flush_pending(&mut socket, &mut pending, &events) {
+                    connection_failed = true;
+                }
+                if !connection_failed {
+                    connection_generation = pause_generation.load(Ordering::Acquire);
+                    let _ = events.send(ChatroomClientEvent::ConnectedAt {
+                        generation: connection_generation,
+                    });
+                }
             }
         }
-        if !flush_pending(&mut socket, &mut pending, &events) {
+        if connection_rejected {
+            emit_disconnected(&events);
+            break;
+        }
+        if connection_failed {
             socket.close();
             emit_disconnected(&events);
             retry_after_failure(
@@ -585,10 +691,6 @@ fn run_worker(
             );
             continue;
         }
-        let connection_generation = pause_generation.load(Ordering::Acquire);
-        let _ = events.send(ChatroomClientEvent::ConnectedAt {
-            generation: connection_generation,
-        });
 
         let mut reconnect = false;
         loop {
@@ -608,64 +710,111 @@ fn run_worker(
                     .recv_timeout(Duration::from_secs(1))
                     .expect("测试命令 drain 未收到放行信号");
             }
+            let mut queued_commands = VecDeque::new();
             while let Ok(queued) = command_rx.try_recv() {
                 if queued.resume {
-                    let _pause_state = pause_state_lock.lock().unwrap();
-                    if queued.pause_generation == pause_generation.load(Ordering::Acquire) {
-                        // 认证恢复不能复用认证失效前的 socket 或订阅；清空旧状态，
-                        // 通过受控断开等待新的 Subscribe 建立连接。
-                        paused.store(false, Ordering::Release);
-                        resume_requested.store(false, Ordering::Release);
-                        subscription = None;
-                        pending.clear();
-                        reconnect = true;
-                        break;
-                    }
+                    queued_commands.push_back(queued);
                     continue;
                 }
-                let current_generation = pause_generation.load(Ordering::Acquire);
-                if queued.pause_generation != current_generation
+                let queued_generation = pause_generation.load(Ordering::Acquire);
+                if queued.pause_generation != queued_generation
                     && !matches!(&queued.command, ChatroomCommand::Close)
                 {
                     restore_wake_budget(queued.wake_budget, &wake_on_ordinary);
                     continue;
                 }
-                let is_subscription_command = matches!(
-                    &queued.command,
-                    ChatroomCommand::Subscribe { .. } | ChatroomCommand::Unsubscribe { .. }
-                );
-                let previous_subscription = subscription.clone();
-                if apply_command(
-                    queued.command,
-                    &mut subscription,
-                    &mut pending,
-                    &mut unavailable,
-                    &mut retries,
-                    &mut refresh,
-                    queued.wake_budget,
-                    &stop,
-                    &wake_on_ordinary,
-                ) {
-                    socket.close();
-                    return;
+                #[cfg(test)]
+                if let Some(gate) = connected_command_apply_gate.lock().unwrap().take() {
+                    let _ = gate.loaded.send(());
+                    gate.release
+                        .recv_timeout(Duration::from_secs(1))
+                        .expect("测试 connected 命令 apply 未收到放行信号");
                 }
-                let changes_subscription =
-                    is_subscription_command && previous_subscription != subscription;
-                if changes_subscription {
-                    reconnect = true;
-                    break;
-                }
-                if unavailable {
-                    reconnect = true;
-                    break;
-                }
-                if subscription.is_none() {
-                    reconnect = true;
-                    break;
+                queued_commands.push_back(queued);
+            }
+            let mut paused_disconnect = false;
+            let mut pending_send_failed = false;
+            {
+                let _pause_state = pause_state_lock.lock().unwrap();
+                if paused.load(Ordering::Acquire) {
+                    while let Some(queued) = queued_commands.pop_front() {
+                        if queued.resume
+                            && queued.pause_generation == pause_generation.load(Ordering::Acquire)
+                        {
+                            // 认证恢复不能复用认证失效前的 socket 或订阅；清空旧状态，
+                            // 通过受控断开等待新的 Subscribe 建立连接。
+                            paused.store(false, Ordering::Release);
+                            resume_requested.store(false, Ordering::Release);
+                            subscription = None;
+                            pending.clear();
+                            reconnect = true;
+                            break;
+                        }
+                    }
+                    if !reconnect {
+                        socket.close();
+                        paused_disconnect = true;
+                    }
+                } else {
+                    while let Some(queued) = queued_commands.pop_front() {
+                        if queued.resume {
+                            if queued.pause_generation == pause_generation.load(Ordering::Acquire) {
+                                // 认证恢复不能复用认证失效前的 socket 或订阅；清空旧状态，
+                                // 通过受控断开等待新的 Subscribe 建立连接。
+                                paused.store(false, Ordering::Release);
+                                resume_requested.store(false, Ordering::Release);
+                                subscription = None;
+                                pending.clear();
+                                reconnect = true;
+                                break;
+                            }
+                            continue;
+                        }
+                        let queued_generation = pause_generation.load(Ordering::Acquire);
+                        if queued.pause_generation != queued_generation
+                            && !matches!(&queued.command, ChatroomCommand::Close)
+                        {
+                            restore_wake_budget(queued.wake_budget, &wake_on_ordinary);
+                            continue;
+                        }
+                        let is_subscription_command = matches!(
+                            &queued.command,
+                            ChatroomCommand::Subscribe { .. } | ChatroomCommand::Unsubscribe { .. }
+                        );
+                        let previous_subscription = subscription.clone();
+                        if apply_command(
+                            queued.command,
+                            &mut subscription,
+                            &mut pending,
+                            &mut unavailable,
+                            &mut retries,
+                            &mut refresh,
+                            queued.wake_budget,
+                            &stop,
+                            &wake_on_ordinary,
+                        ) {
+                            socket.close();
+                            return;
+                        }
+                        let changes_subscription =
+                            is_subscription_command && previous_subscription != subscription;
+                        if changes_subscription {
+                            reconnect = true;
+                            break;
+                        }
+                        if unavailable || subscription.is_none() {
+                            reconnect = true;
+                            break;
+                        }
+                    }
+                    pending_send_failed =
+                        !reconnect && !flush_pending(&mut socket, &mut pending, &events);
                 }
             }
-            let pending_send_failed =
-                !reconnect && !flush_pending(&mut socket, &mut pending, &events);
+            if paused_disconnect {
+                emit_disconnected(&events);
+                break;
+            }
             if pending_send_failed {
                 reconnect = true;
             }
@@ -691,10 +840,25 @@ fn run_worker(
                     retries = 0;
                     refresh.attempted = false;
                     refresh.failed = false;
-                    let _ = events.send(ChatroomClientEvent::EventAt {
-                        generation: connection_generation,
-                        event,
-                    });
+                    let mut paused_disconnect = false;
+                    {
+                        let _pause_state = pause_state_lock.lock().unwrap();
+                        if paused.load(Ordering::Acquire)
+                            || pause_generation.load(Ordering::Acquire) != connection_generation
+                        {
+                            socket.close();
+                            paused_disconnect = true;
+                        } else {
+                            let _ = events.send(ChatroomClientEvent::EventAt {
+                                generation: connection_generation,
+                                event,
+                            });
+                        }
+                    }
+                    if paused_disconnect {
+                        emit_disconnected(&events);
+                        break;
+                    }
                 }
                 Err(error) if error.code == "read_timeout" => {
                     // 一个完整的读超时窗口表示连接已进入稳定空闲态。
