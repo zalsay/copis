@@ -1289,7 +1289,7 @@ impl ChatroomGateway {
         let ChatroomEvent::AgentInvocation { room_id, payload } = event else {
             return;
         };
-        let Some(object) = payload.as_object() else {
+        let Some(mut object) = payload.as_object().cloned() else {
             self.publish_status(
                 Some(room_id),
                 "invocation_invalid",
@@ -1314,7 +1314,15 @@ impl ChatroomGateway {
             return;
         }
 
-        if validate_forward_invocation_payload(object).is_err() {
+        if validate_forward_invocation_payload(&object).is_err() {
+            self.publish_status(
+                Some(room_id),
+                "invocation_invalid",
+                "Agent invocation 格式不正确",
+            );
+            return;
+        }
+        if canonicalize_forward_invocation_payload(&mut object).is_err() {
             self.publish_status(
                 Some(room_id),
                 "invocation_invalid",
@@ -2578,6 +2586,38 @@ fn validate_forward_invocation_payload(object: &Map<String, Value>) -> Result<()
     {
         return Err(());
     }
+    Ok(())
+}
+
+fn canonicalize_forward_invocation_payload(object: &mut Map<String, Value>) -> Result<(), ()> {
+    let sender = object
+        .get_mut("sender")
+        .and_then(Value::as_object_mut)
+        .ok_or(())?;
+    canonicalize_forward_sender_display_name(sender)?;
+
+    let messages = object
+        .get_mut("messages")
+        .and_then(Value::as_array_mut)
+        .ok_or(())?;
+    for message in messages {
+        let sender = message
+            .as_object_mut()
+            .and_then(|value| value.get_mut("sender"))
+            .and_then(Value::as_object_mut)
+            .ok_or(())?;
+        canonicalize_forward_sender_display_name(sender)?;
+    }
+    Ok(())
+}
+
+fn canonicalize_forward_sender_display_name(sender: &mut Map<String, Value>) -> Result<(), ()> {
+    let display_name = sender
+        .get("displayName")
+        .and_then(Value::as_str)
+        .and_then(canonicalize_invocation_display_name)
+        .ok_or(())?;
+    sender.insert("displayName".into(), Value::String(display_name));
     Ok(())
 }
 

@@ -1088,6 +1088,27 @@ fn given_agent_invocation_when_upstream_event_arrives_then_forward_only_sanitize
 }
 
 #[test]
+fn given_invocation_sender_names_with_edge_whitespace_when_forwarded_then_bridge_receives_canonical_names(
+) {
+    let bridge = Arc::new(FakeBridge::default());
+    let gateway = gateway(Arc::new(FakeTransport::default()), bridge.clone());
+    gateway.publish_event_for_test(ChatroomEvent::AgentInvocation {
+        room_id: "room-1".into(),
+        payload: json!({
+            "invocationId":"inv-1", "traceId":"trace-1", "targetAgentId":"agent-1",
+            "triggerMessageId":"msg-1", "depth":1,
+            "sender":{"type":"user","id":"7","displayName":"\u{feff}\u{a0}用户#7\u{feff}"},
+            "messages":[{"messageId":"msg-1","sender":{"type":"user","id":"7","displayName":"\u{feff}\u{a0}用户#7\u{feff}"},"text":"hello","createdAt":1000}],
+            "receivedAt":2000
+        }),
+    });
+    let body = bridge.invocations.lock().unwrap().first().cloned().unwrap();
+    let value: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(value["sender"]["displayName"], "用户#7");
+    assert_eq!(value["messages"][0]["sender"]["displayName"], "用户#7");
+}
+
+#[test]
 fn given_legacy_or_malformed_agent_invocation_when_upstream_event_arrives_then_bridge_is_not_called(
 ) {
     for payload in [

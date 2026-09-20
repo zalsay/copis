@@ -70,6 +70,12 @@ afterEach(() => {
 })
 
 describe('聊天室本地工作区存储', () => {
+  test('孤立 UTF-16 surrogate 不得进入本地 room 配置', () => {
+    const store = makeStore()
+    expect(() => provision(store, { displayName: '\uD800' })).toThrow('invalid_agent_input')
+    expect(store.read('room-1')).toBeUndefined()
+  })
+
   test('updateAgentSkillSnapshot 拒绝与实际快照不一致的 digest', () => {
     const store = makeStore()
     const saved = provision(store)

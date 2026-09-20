@@ -270,7 +270,11 @@ export function canonicalizeChatRoomAgentDisplayName(value: unknown): string | u
   if (typeof value !== 'string') return undefined
   if (Array.from(value).some((character) => {
     const codePoint = character.codePointAt(0)
-    return codePoint !== undefined && (codePoint <= 0x1f || (codePoint >= 0x7f && codePoint <= 0x9f))
+    return codePoint !== undefined && (
+      codePoint <= 0x1f
+      || (codePoint >= 0x7f && codePoint <= 0x9f)
+      || (codePoint >= 0xd800 && codePoint <= 0xdfff)
+    )
   })) return undefined
   const canonical = value.replace(/^[\p{White_Space}\uFEFF]+|[\p{White_Space}\uFEFF]+$/gu, '')
   if (canonical.length === 0 || new TextEncoder().encode(canonical).byteLength > 128) return undefined

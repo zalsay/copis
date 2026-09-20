@@ -69,3 +69,27 @@ Task 7 的三个 load-bearing carry-over 已关闭，并完成 Task 8 parser/san
 - Electron renderer build 保留仓库既有 warning；未替用户执行 Electron 实际窗口 UI 确认。
 - ai-education 整包 handlers 测试需要本机 PostgreSQL `ai_education_test`，当前环境不存在；任务相关 ChatRoomV2 handler/service focused suites 已通过。
 - Go/Rust carry-over 的部分实现先于最终新增回归命令完成，命令结果均为真实 production path GREEN，但无法回溯记录每个跨语言测试的独立 RED 输出。
+
+## 修复轮 2：跨层边界回归
+
+### 1. Shared/local displayName surrogate
+
+- RED：`bun test packages/shared/src/types/chatroom.test.ts` 为 `\uD800` 失败（孤立 surrogate 被 `TextEncoder` 按 U+FFFD 接受）；`bun test apps/electron/src/main/lib/chatroom-workspace-store.test.ts` 生产 `provisionAgent` 同样持久化了 `\uD800`。
+- GREEN：Shared canonicalizer 显式拒绝 UTF-16 surrogate code point；合法 surrogate pair（emoji）仍接受，workspace store 生产路径拒绝且不创建 room 配置。Shared `14 pass`、workspace `23 pass`。
+
+### 2. Rust bridge canonical forwarding
+
+- RED：新增真实 `ChatroomGateway` → `FakeBridge` callback body 回归后，`cargo test chatroom_gateway_tests::given_invocation_sender_names_with_edge_whitespace_when_forwarded_then_bridge_receives_canonical_names -- --exact` 收到原始 `FEFF/NBSP`，断言失败。
+- GREEN：`forward_invocation_now` 在 validation 后 clone payload，并对 top-level sender 与每个 message sender 写回同一 canonical displayName；malformed payload 仍 fail closed。gateway canonical、forward callback、malformed regression 均通过。
+
+### 3. WS full-frame boundary
+
+- RED：真实 Gorilla WebSocket server 测试构造 Unicode `agent.completed` envelope（文本 65,535 UTF-8 bytes，含 invocationId、arrays、clientMessageId；frame >64 KiB 且 <=128 KiB），旧 `SetReadLimit(64 KiB)` 返回 close 1009。
+- GREEN：edu-api read limit 对齐共享 `ChatRoomV2WireEventMaxPayloadBytes`（128 KiB），文本字段仍单独限制 64 KiB；真实测试接受该 frame 并完成 invocation，>128 KiB frame 被拒绝且未进入 handler。Rust protocol/client 既有 64 KiB payload、128 KiB frame/config regression 通过。
+- 裁定：保留 64 KiB text/64 KiB payload 语义，128 KiB 仅为完整 WS JSON envelope/frame 上限，避免单点放宽文本输入。
+
+### 修复轮 2 验证
+
+- Copis：Shared/workspace focused tests、Rust gateway/protocol/client focused tests、`cargo fmt --check` 通过。
+- ai-education：`go test ./handlers -run 'ChatRoomV2' -count=1`、`go test ./services -run 'ChatRoomV2' -count=1` 通过。
+- 既有 sanitizer/prompt、atomic failure、room-wide transient 回归保持通过；Electron typecheck/build 与 Rust 全套测试在提交前重跑。

@@ -14,6 +14,9 @@ import {
 test('Given displayName 含 FEFF/NBSP 和多字节边界 When canonicalize Then uses shared edge trim and UTF-8 limit', async () => {
   const { canonicalizeChatRoomAgentDisplayName } = await import('./chatroom')
   expect(canonicalizeChatRoomAgentDisplayName('\uFEFF\u00A0 Agent \uFEFF')).toBe('Agent')
+  expect(canonicalizeChatRoomAgentDisplayName('\uD800')).toBeUndefined()
+  expect(canonicalizeChatRoomAgentDisplayName('\uDC00')).toBeUndefined()
+  expect(canonicalizeChatRoomAgentDisplayName('😀')).toBe('😀')
   expect(canonicalizeChatRoomAgentDisplayName('界'.repeat(42))).toBe('界'.repeat(42))
   expect(canonicalizeChatRoomAgentDisplayName('界'.repeat(43))).toBeUndefined()
   expect(canonicalizeChatRoomAgentDisplayName('Agent\u0001')).toBeUndefined()
