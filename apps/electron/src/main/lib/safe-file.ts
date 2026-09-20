@@ -49,17 +49,26 @@ export function writeTextFileAtomic(filePath: string, content: string): void {
  * 安全读取 JSON 索引文件
  * 优先读主文件，损坏则尝试 .tmp / .bak，都失败返回 null
  */
-export function readJsonFileSafe<T>(filePath: string, logLabel?: string): T | null {
+export type SafeJsonReadStatus = 'missing' | 'valid' | 'recovered' | 'corrupt'
+
+export interface SafeJsonReadResult<T> {
+  value: T | null
+  status: SafeJsonReadStatus
+}
+
+/** 返回 JSON 文件读取来源，允许调用方区分“没有文件”和“文件全部损坏”。 */
+export function readJsonFileSafeDetailed<T>(filePath: string, logLabel?: string): SafeJsonReadResult<T> {
   const tmpPath = filePath + '.tmp'
   const bakPath = filePath + '.bak'
   const displayPath = logLabel ?? filePath
+  const hasCandidate = existsSync(filePath) || existsSync(tmpPath) || existsSync(bakPath)
 
   // 1. 尝试读取主文件
   if (existsSync(filePath)) {
     try {
       const raw = readFileSync(filePath, 'utf-8')
       if (raw.trim().length > 0) {
-        return JSON.parse(raw) as T
+        return { value: JSON.parse(raw) as T, status: 'valid' }
       }
     } catch {
       console.warn(`[数据恢复] 主索引文件损坏: ${displayPath}`)
@@ -75,7 +84,7 @@ export function readJsonFileSafe<T>(filePath: string, logLabel?: string): T | nu
         // .tmp 有效 → 提升为主文件
         renameSync(tmpPath, filePath)
         console.log(`[数据恢复] 从 .tmp 文件恢复: ${displayPath}`)
-        return parsed
+        return { value: parsed, status: 'recovered' }
       }
     } catch {
       // .tmp 也损坏，继续 fallback
@@ -93,12 +102,16 @@ export function readJsonFileSafe<T>(filePath: string, logLabel?: string): T | nu
         // 用 .bak 恢复主文件（跳过备份，避免用损坏的主文件覆盖好的 .bak）
         writeJsonFileAtomic(filePath, parsed as object, true)
         console.log(`[数据恢复] 从 .bak 文件恢复: ${displayPath}`)
-        return parsed
+        return { value: parsed, status: 'recovered' }
       }
     } catch {
       console.error(`[数据恢复] .bak 文件也损坏: ${logLabel ?? bakPath}`)
     }
   }
 
-  return null // 全部失败，需要上层从 JSONL 重建
+  return { value: null, status: hasCandidate ? 'corrupt' : 'missing' }
+}
+
+export function readJsonFileSafe<T>(filePath: string, logLabel?: string): T | null {
+  return readJsonFileSafeDetailed<T>(filePath, logLabel).value
 }

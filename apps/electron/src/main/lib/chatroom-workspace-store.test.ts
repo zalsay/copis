@@ -227,4 +227,122 @@ describe('聊天室本地工作区存储', () => {
     const store = makeStore()
     expect(() => store.provisionAgent(identity, makeInput())).toThrow()
   })
+
+  test('非法 roomId 在任何目录 mutation 前拒绝且不创建 chatrooms 外目录', () => {
+    const store = makeStore()
+    const escaped = join(testHome, '.copis-dev', 'agent-workspaces', 'escaped')
+
+    expect(() => store.provisionAgent(identity, makeInput({ roomId: '../escaped' }))).toThrow()
+    expect(existsSync(escaped)).toBe(false)
+  })
+
+  test('room.json 持久化并严格要求 version 1', () => {
+    const store = makeStore()
+    provision(store)
+    const configPath = getChatRoomConfigPath('room-1')
+    const config = JSON.parse(readFileSync(configPath, 'utf8'))
+    expect(config.version).toBe(1)
+
+    delete config.version
+    writeFileSync(configPath, JSON.stringify(config))
+    expect(() => store.read('room-1')).toThrow('invalid_room_config')
+  })
+
+  test('主文件和 tmp/bak 都不可恢复时 provision fail closed 且不覆盖原文件', () => {
+    const store = makeStore()
+    provision(store)
+    const configPath = getChatRoomConfigPath('room-1')
+    writeFileSync(configPath, '{main-broken')
+    writeFileSync(`${configPath}.tmp`, '{tmp-broken')
+    writeFileSync(`${configPath}.bak`, '{bak-broken')
+
+    expect(() => provision(store, { displayName: 'Agent B' })).toThrow('room_config_unrecoverable')
+    expect(readFileSync(configPath, 'utf8')).toBe('{main-broken')
+  })
+
+  test('配置写入失败时只回滚本次创建的 agents 目录', () => {
+    const store = makeStore()
+    const roomPath = getChatRoomPath('room-rollback')
+    mkdirSync(roomPath, { recursive: true })
+    mkdirSync(join(roomPath, 'room.json.tmp'))
+    const agentsPath = join(roomPath, 'agents')
+
+    expect(() => store.provisionAgent(identity, makeInput({ roomId: 'room-rollback' }))).toThrow()
+    expect(existsSync(join(roomPath, 'room.json.tmp'))).toBe(true)
+    expect(existsSync(agentsPath)).toBe(false)
+  })
+
+  test('read 校验完整 Agent 目录链路并拒绝缺失目录', () => {
+    const store = makeStore()
+    const saved = provision(store)
+    const inboxPath = getChatRoomAgentInboxPath('room-1', saved.agents[0]!.roomAgentId)
+    rmSync(inboxPath, { recursive: true, force: true })
+
+    expect(() => store.read('room-1')).toThrow('聊天室 Agent inbox_path_unavailable')
+  })
+
+  test('read 拒绝 agents 和 inbox 目录 symlink', () => {
+    if (process.platform === 'win32') return
+    const store = makeStore()
+    const saved = provision(store)
+    const roomsRoot = getChatRoomsRootPath()
+    const roomPath = getChatRoomPath('room-1')
+    const agentsPath = join(roomPath, 'agents')
+    const externalAgents = join(testHome, 'external-agents')
+    mkdirSync(externalAgents)
+    rmSync(agentsPath, { recursive: true, force: true })
+    symlinkSync(externalAgents, agentsPath)
+    expect(() => store.read('room-1')).toThrow('聊天室 Agent 根_path_not_directory')
+
+    rmSync(agentsPath, { force: true })
+    mkdirSync(agentsPath)
+    const agentPath = join(agentsPath, saved.agents[0]!.roomAgentId)
+    mkdirSync(agentPath)
+    mkdirSync(join(agentPath, 'sessions'))
+    mkdirSync(join(agentPath, 'workspace-files'))
+    mkdirSync(join(agentPath, 'workspace-files', 'project'))
+    const externalInbox = join(testHome, 'external-inbox')
+    mkdirSync(externalInbox)
+    symlinkSync(externalInbox, join(agentPath, 'workspace-files', 'project', 'inbox'))
+    mkdirSync(join(agentPath, 'skills-snapshot'))
+    expect(() => store.read('room-1')).toThrow('聊天室 Agent inbox_path_not_directory')
+    expect(roomsRoot).toBe(getChatRoomsRootPath())
+  })
+
+  test('invocation 状态矩阵拒绝不一致的时间和 failure 字段', () => {
+    const store = makeStore()
+    const saved = provision(store)
+    const targetAgentId = saved.agents[0]!.roomAgentId
+    const invocation = (overrides: Partial<ChatRoomInvocationRecord>) => makeInvocation({ targetAgentId, ...overrides })
+
+    expect(() => store.upsertInvocation('room-1', invocation({ invocationId: 'terminal-missing-time', finishedAt: undefined }))).toThrow('invalid_room_config')
+    expect(() => store.upsertInvocation('room-1', invocation({ invocationId: 'completed-failure', failureCode: 'internal_error' }))).toThrow('invalid_room_config')
+    expect(() => store.upsertInvocation('room-1', invocation({ invocationId: 'created-later-time', status: 'created', finishedAt: undefined, acceptedAt: now }))).toThrow('invalid_room_config')
+    expect(() => store.upsertInvocation('room-1', invocation({ invocationId: 'accepted-started', status: 'accepted', finishedAt: undefined, acceptedAt: now, startedAt: now }))).toThrow('invalid_room_config')
+    expect(() => store.upsertInvocation('room-1', invocation({ invocationId: 'running-finished', status: 'running', acceptedAt: now, startedAt: now, finishedAt: now }))).toThrow('invalid_room_config')
+    expect(() => store.upsertInvocation('room-1', invocation({ invocationId: 'failed-missing-code', status: 'failed' }))).toThrow('invalid_room_config')
+    expect(() => store.upsertInvocation('room-1', invocation({ invocationId: 'rejected-missing-message', status: 'rejected', failureCode: 'host_approval_denied' }))).toThrow('invalid_room_config')
+  })
+
+  test('同 trace 和 target 的不同 invocationId 拒绝为 duplicate', () => {
+    const store = makeStore()
+    const saved = provision(store)
+    const first = makeInvocation({ targetAgentId: saved.agents[0]!.roomAgentId })
+    store.upsertInvocation('room-1', first)
+
+    expect(() => store.upsertInvocation('room-1', { ...first, invocationId: 'inv-2' })).toThrow('invocation_duplicate')
+  })
+
+  test('archived Agent 不占 active 上限且可复用 display name', () => {
+    const store = makeStore()
+    const archived = provision(store, { displayName: 'Reusable' })
+    store.archiveAgent({ roomId: 'room-1', roomAgentId: archived.agents[0]!.roomAgentId })
+    provision(store, { displayName: 'Reusable' })
+    provision(store, { displayName: 'Active B' })
+    provision(store, { displayName: 'Active C' })
+
+    expect(store.read('room-1')?.agents).toHaveLength(4)
+    expect(store.read('room-1')?.agents.filter((agent) => agent.archivedAt === undefined)).toHaveLength(3)
+    expect(new Set(store.read('room-1')?.agents.map((agent) => agent.roomAgentId)).size).toBe(4)
+  })
 })

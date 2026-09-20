@@ -3,6 +3,7 @@ import {
   lstatSync,
   mkdirSync,
   readdirSync,
+  rmdirSync,
 } from 'node:fs'
 import { join } from 'node:path'
 import {
@@ -30,7 +31,7 @@ import {
   getChatRoomPath,
   getChatRoomsRootPath,
 } from './config-paths'
-import { readJsonFileSafe, writeJsonFileAtomic } from './safe-file'
+import { readJsonFileSafeDetailed, writeJsonFileAtomic } from './safe-file'
 
 interface ChatRoomWorkspaceStoreOptions {
   identity?: ChatRoomLocalIdentity
@@ -38,6 +39,7 @@ interface ChatRoomWorkspaceStoreOptions {
 }
 
 type StoreConstructorInput = ChatRoomWorkspaceStoreOptions | ChatRoomLocalIdentity
+type PersistedRoomConfig = ChatRoomLocalRoomConfig & { version: 1 }
 
 const INVOCATION_STATUSES = new Set(['created', 'accepted', 'running', 'completed', 'failed', 'rejected'])
 const INVOCATION_FAILURE_CODES = new Set([
@@ -48,6 +50,7 @@ const INVOCATION_FAILURE_CODES = new Set([
   'room_agent_not_found', 'internal_error',
 ] satisfies ChatRoomInvocationFailureCode[])
 const TERMINAL_STATUSES = new Set(['completed', 'failed', 'rejected'])
+const CHATROOM_COMPONENT_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -62,6 +65,10 @@ function hasExactKeys(value: Record<string, unknown>, required: readonly string[
 
 function isId(value: unknown): value is string {
   return typeof value === 'string' && value.trim().length > 0 && value.length <= CHATROOM_MAX_ID_LENGTH
+}
+
+function isPathComponent(value: unknown): value is string {
+  return typeof value === 'string' && CHATROOM_COMPONENT_PATTERN.test(value)
 }
 
 function isText(value: unknown): value is string {
@@ -110,17 +117,31 @@ function assertDirectory(path: string, label: string): void {
   if (!stats.isDirectory()) throw new Error(`${label}_path_not_directory`)
 }
 
-function ensureDirectory(parent: string, name: string, label: string): string {
+function ensureDirectory(parent: string, name: string, label: string, created?: string[]): string {
   assertDirectory(parent, `${label}_parent`)
   const path = join(parent, name)
+  let wasCreated = false
   try {
     lstatSync(path)
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
     mkdirSync(path)
+    wasCreated = true
   }
+  if (wasCreated) created?.push(path)
   assertDirectory(path, label)
   return path
+}
+
+function rollbackDirectories(created: string[]): void {
+  for (const path of [...created].reverse()) {
+    try {
+      const stats = lstatSync(path)
+      if (stats.isDirectory()) rmdirSync(path)
+    } catch {
+      // 回滚只处理本次创建且仍为空的目录，保留其他进程或用户内容。
+    }
+  }
 }
 
 function assertOptionalRegularFile(path: string, label: string): void {
@@ -180,28 +201,54 @@ function validateInvocation(value: unknown, expectedRoomId: string): asserts val
     if (!isTimestamp(item) || item < previous || item > value.updatedAt) throw new Error('invalid_room_config')
     previous = item
   }
-  if (!isTerminal(value.status) && value.finishedAt !== undefined) throw new Error('invalid_room_config')
+  if (value.startedAt !== undefined && value.acceptedAt === undefined) throw new Error('invalid_room_config')
   if (value.failureCode !== undefined && (typeof value.failureCode !== 'string'
     || !INVOCATION_FAILURE_CODES.has(value.failureCode as ChatRoomInvocationFailureCode))) {
     throw new Error('invalid_room_config')
   }
   if (value.failureMessage !== undefined && !isText(value.failureMessage)) throw new Error('invalid_room_config')
-  if (value.status !== 'failed' && value.status !== 'rejected'
-    && (value.failureCode !== undefined || value.failureMessage !== undefined)) {
-    throw new Error('invalid_room_config')
+  const hasFailure = value.failureCode !== undefined || value.failureMessage !== undefined
+  switch (value.status) {
+    case 'created':
+      if (value.acceptedAt !== undefined || value.startedAt !== undefined || value.finishedAt !== undefined || hasFailure) {
+        throw new Error('invalid_room_config')
+      }
+      break
+    case 'accepted':
+      if (value.acceptedAt === undefined || value.startedAt !== undefined || value.finishedAt !== undefined || hasFailure) {
+        throw new Error('invalid_room_config')
+      }
+      break
+    case 'running':
+      if (value.acceptedAt === undefined || value.startedAt === undefined || value.finishedAt !== undefined || hasFailure) {
+        throw new Error('invalid_room_config')
+      }
+      break
+    case 'completed':
+      if (value.finishedAt === undefined || hasFailure) throw new Error('invalid_room_config')
+      break
+    case 'failed':
+    case 'rejected':
+      if (value.finishedAt === undefined || typeof value.failureCode !== 'string'
+        || typeof value.failureMessage !== 'string' || value.failureMessage.length === 0) {
+        throw new Error('invalid_room_config')
+      }
+      break
   }
 }
 
-function validateConfig(value: unknown, expectedRoomId: string, expectedIdentity?: ChatRoomLocalIdentity): asserts value is ChatRoomLocalRoomConfig {
+function validateConfig(value: unknown, expectedRoomId: string, expectedIdentity?: ChatRoomLocalIdentity): asserts value is PersistedRoomConfig {
   if (!isRecord(value) || !hasExactKeys(value,
-    ['roomId', 'hostUserId', 'deviceId', 'lastProcessedSeq', 'agents', 'invocations', 'createdAt', 'updatedAt'])) {
+    ['version', 'roomId', 'hostUserId', 'deviceId', 'lastProcessedSeq', 'agents', 'invocations', 'createdAt', 'updatedAt'])) {
     throw new Error('invalid_room_config')
   }
-  if (value.roomId !== expectedRoomId || !isId(value.hostUserId) || !isId(value.deviceId)
+  if (value.version !== 1 || value.roomId !== expectedRoomId || !isId(value.hostUserId) || !isId(value.deviceId)
     || !isTimestamp(value.createdAt) || !isTimestamp(value.updatedAt) || value.updatedAt < value.createdAt
     || typeof value.lastProcessedSeq !== 'number' || !Number.isSafeInteger(value.lastProcessedSeq) || value.lastProcessedSeq < 0
     || !Array.isArray(value.agents) || !Array.isArray(value.invocations)
-    || value.agents.length > CHATROOM_MAX_AGENTS) throw new Error('invalid_room_config')
+    || value.agents.filter((agent) => isRecord(agent) && agent.archivedAt === undefined).length > CHATROOM_MAX_AGENTS) {
+    throw new Error('invalid_room_config')
+  }
   if (expectedIdentity && !identityMatches(expectedIdentity, { hostUserId: value.hostUserId, deviceId: value.deviceId })) {
     throw new Error('identity_mismatch')
   }
@@ -213,10 +260,10 @@ function validateConfig(value: unknown, expectedRoomId: string, expectedIdentity
     if (agentIds.has(agent.roomAgentId)) throw new Error('duplicate_room_agent_id')
     if (sessionIds.has(agent.sessionId)) throw new Error('duplicate_session_id')
     const displayName = agent.displayName.trim().toLowerCase()
-    if (displayNames.has(displayName)) throw new Error('display_name_conflict')
+    if (agent.archivedAt === undefined && displayNames.has(displayName)) throw new Error('display_name_conflict')
     agentIds.add(agent.roomAgentId)
     sessionIds.add(agent.sessionId)
-    displayNames.add(displayName)
+    if (agent.archivedAt === undefined) displayNames.add(displayName)
   }
   const invocationIds = new Set<string>()
   for (const invocation of value.invocations) {
@@ -274,7 +321,7 @@ export class ChatRoomWorkspaceStore {
   provisionAgent(identity: ChatRoomLocalIdentity, input: ProvisionChatRoomAgentInput): ChatRoomLocalRoomConfig {
     assertIdentity(identity)
     if (this.expectedIdentity && !identityMatches(this.expectedIdentity, identity)) throw new Error('identity_mismatch')
-    if (!isId(input.roomId) || !isId(input.sourceWorkspaceId) || typeof input.displayName !== 'string'
+    if (!isPathComponent(input.roomId) || !isId(input.sourceWorkspaceId) || typeof input.displayName !== 'string'
       || input.displayName.trim().length === 0 || input.displayName.length > CHATROOM_MAX_ID_LENGTH || !isId(input.channelId)) {
       throw new Error('invalid_agent_input')
     }
@@ -288,49 +335,56 @@ export class ChatRoomWorkspaceStore {
     if (input.skillSharingEnabled !== undefined && typeof input.skillSharingEnabled !== 'boolean') {
       throw new Error('invalid_agent_input')
     }
-    const roomPath = this.ensureRoomDirectories(input.roomId)
-    const previous = this.load(input.roomId, this.now())
-    const timestamp = this.now()
-    const config: ChatRoomLocalRoomConfig = previous ?? {
-      roomId: input.roomId,
-      hostUserId: identity.hostUserId,
-      deviceId: identity.deviceId,
-      lastProcessedSeq: 0,
-      agents: [],
-      invocations: [],
-      createdAt: timestamp,
-      updatedAt: timestamp,
+    const createdDirectories: string[] = []
+    try {
+      this.ensureRoomDirectories(input.roomId, createdDirectories)
+      const previous = this.load(input.roomId, this.now())
+      const timestamp = this.now()
+      const config: PersistedRoomConfig = previous ?? {
+        version: 1,
+        roomId: input.roomId,
+        hostUserId: identity.hostUserId,
+        deviceId: identity.deviceId,
+        lastProcessedSeq: 0,
+        agents: [],
+        invocations: [],
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      }
+      if (!identityMatches(identity, { hostUserId: config.hostUserId, deviceId: config.deviceId })) throw new Error('identity_mismatch')
+      if (config.agents.filter((agent) => agent.archivedAt === undefined).length >= CHATROOM_MAX_AGENTS) throw new Error('agent_limit_reached')
+      const displayName = input.displayName.trim().toLowerCase()
+      if (config.agents.some((agent) => agent.archivedAt === undefined && agent.displayName.trim().toLowerCase() === displayName)) {
+        throw new Error('display_name_conflict')
+      }
+      const roomAgentId = `agent-${randomUUID()}`
+      const sessionId = `session-${randomUUID()}`
+      const agent: ChatRoomAgentLocalConfig = {
+        roomAgentId,
+        displayName: input.displayName,
+        sourceWorkspaceId: input.sourceWorkspaceId,
+        sessionId,
+        channelId: input.channelId,
+        ...(input.modelId === undefined ? {} : { modelId: input.modelId }),
+        contextMessageCount: input.contextMessageCount === undefined
+          ? CHATROOM_DEFAULT_CONTEXT_MESSAGES
+          : normalizeChatRoomContextMessageCount(input.contextMessageCount),
+        memorySharingEnabled: input.memorySharingEnabled ?? false,
+        skillSharingEnabled: input.skillSharingEnabled ?? false,
+      }
+      this.ensureAgentDirectories(input.roomId, roomAgentId, createdDirectories)
+      const next: PersistedRoomConfig = { ...config, agents: [...config.agents, agent], updatedAt: timestamp }
+      this.persist(config, next)
+      if (!this.expectedIdentity) this.expectedIdentity = { ...identity }
+      return clone(next)
+    } catch (error) {
+      rollbackDirectories(createdDirectories)
+      throw error
     }
-    if (!identityMatches(identity, { hostUserId: config.hostUserId, deviceId: config.deviceId })) throw new Error('identity_mismatch')
-    if (config.agents.length >= CHATROOM_MAX_AGENTS) throw new Error('agent_limit_reached')
-    const displayName = input.displayName.trim().toLowerCase()
-    if (config.agents.some((agent) => agent.displayName.trim().toLowerCase() === displayName)) {
-      throw new Error('display_name_conflict')
-    }
-    const roomAgentId = `agent-${randomUUID()}`
-    const sessionId = `session-${randomUUID()}`
-    const agent: ChatRoomAgentLocalConfig = {
-      roomAgentId,
-      displayName: input.displayName,
-      sourceWorkspaceId: input.sourceWorkspaceId,
-      sessionId,
-      channelId: input.channelId,
-      ...(input.modelId === undefined ? {} : { modelId: input.modelId }),
-      contextMessageCount: input.contextMessageCount === undefined
-        ? CHATROOM_DEFAULT_CONTEXT_MESSAGES
-        : normalizeChatRoomContextMessageCount(input.contextMessageCount),
-      memorySharingEnabled: input.memorySharingEnabled ?? false,
-      skillSharingEnabled: input.skillSharingEnabled ?? false,
-    }
-    this.ensureAgentDirectories(input.roomId, roomAgentId)
-    const next = { ...config, agents: [...config.agents, agent], updatedAt: timestamp }
-    this.persist(config, next, roomPath)
-    if (!this.expectedIdentity) this.expectedIdentity = { ...identity }
-    return clone(next)
   }
 
   updateAgent(input: UpdateChatRoomAgentInput): ChatRoomLocalRoomConfig {
-    if (!isId(input.roomId) || !isId(input.roomAgentId)) throw new Error('invalid_agent_input')
+    if (!isPathComponent(input.roomId) || !isPathComponent(input.roomAgentId)) throw new Error('invalid_agent_input')
     if (input.contextMessageCount !== undefined && !isContextCount(input.contextMessageCount)) throw new Error('invalid_context_message_count')
     if (input.channelId !== undefined && !isId(input.channelId)) throw new Error('invalid_agent_input')
     if (input.modelId !== undefined && !isId(input.modelId)) throw new Error('invalid_agent_input')
@@ -396,6 +450,9 @@ export class ChatRoomWorkspaceStore {
     validateInvocation(record, roomId)
     if (!current.agents.some((agent) => agent.roomAgentId === record.targetAgentId)) throw new Error('room_agent_not_found')
     const index = current.invocations.findIndex((item) => item.invocationId === record.invocationId)
+    const traceConflict = current.invocations.find((item) => item.traceId === record.traceId
+      && item.targetAgentId === record.targetAgentId && item.invocationId !== record.invocationId)
+    if (traceConflict) throw new Error('invocation_duplicate')
     const invocations = [...current.invocations]
     if (index >= 0) {
       const previous = current.invocations[index]!
@@ -427,8 +484,8 @@ export class ChatRoomWorkspaceStore {
     this.persist(current, { ...current, lastProcessedSeq: seq, updatedAt: this.now() })
   }
 
-  private load(roomId: string, now: number): ChatRoomLocalRoomConfig | undefined {
-    if (!isId(roomId)) throw new Error('invalid_room_id')
+  private load(roomId: string, now: number): PersistedRoomConfig | undefined {
+    if (!isPathComponent(roomId)) throw new Error('invalid_room_id')
     const roomPath = getChatRoomPath(roomId)
     let stats
     try {
@@ -438,14 +495,19 @@ export class ChatRoomWorkspaceStore {
       throw error
     }
     if (!stats.isDirectory()) throw new Error('room_path_not_directory')
+    const agentsPath = join(roomPath, 'agents')
+    assertDirectory(agentsPath, '聊天室 Agent 根')
     const configPath = getChatRoomConfigPath(roomId)
     this.assertConfigFiles(configPath)
-    const raw = readJsonFileSafe<unknown>(configPath, '聊天室配置')
-    if (raw === null) return undefined
+    const result = readJsonFileSafeDetailed<unknown>(configPath, '聊天室配置')
+    if (result.status === 'missing') return undefined
+    if (result.status === 'corrupt' || result.value === null) throw new Error('room_config_unrecoverable')
+    const raw = result.value
     validateConfig(raw, roomId, this.expectedIdentity)
     if (!this.expectedIdentity) {
       this.expectedIdentity = { hostUserId: raw.hostUserId, deviceId: raw.deviceId }
     }
+    this.assertAgentDirectoryTree(roomPath, raw.agents)
     const normalizedInvocations = normalizeInvocations(raw.invocations, now)
     const normalized = sameContent(raw.invocations, normalizedInvocations)
       ? raw
@@ -454,13 +516,16 @@ export class ChatRoomWorkspaceStore {
     return clone(normalized)
   }
 
-  private persist(previous: ChatRoomLocalRoomConfig, next: ChatRoomLocalRoomConfig, roomPath?: string): void {
+  private persist(previous: PersistedRoomConfig, next: PersistedRoomConfig): void {
     validateConfig(next, next.roomId, this.expectedIdentity ?? { hostUserId: next.hostUserId, deviceId: next.deviceId })
     if (sameContent(previous, next)) return
+    const roomPath = getChatRoomPath(next.roomId)
+    assertDirectory(roomPath, '聊天室')
+    this.assertAgentDirectoryTree(roomPath, next.agents)
     const configPath = getChatRoomConfigPath(next.roomId)
     this.assertConfigFiles(configPath)
     writeJsonFileAtomic(configPath, next, false, 0o600)
-    if (roomPath) assertDirectory(roomPath, '聊天室')
+    assertDirectory(roomPath, '聊天室')
   }
 
   private assertConfigFiles(configPath: string): void {
@@ -469,23 +534,38 @@ export class ChatRoomWorkspaceStore {
     assertOptionalRegularFile(`${configPath}.bak`, '聊天室配置备份文件')
   }
 
-  private ensureRoomDirectories(roomId: string): string {
+  private ensureRoomDirectories(roomId: string, created?: string[]): string {
     const roomsRoot = getChatRoomsRootPath()
-    const roomPath = ensureDirectory(roomsRoot, roomId, '聊天室')
-    ensureDirectory(roomPath, 'agents', '聊天室 Agent 根')
+    const roomPath = ensureDirectory(roomsRoot, roomId, '聊天室', created)
+    ensureDirectory(roomPath, 'agents', '聊天室 Agent 根', created)
     return roomPath
   }
 
-  private ensureAgentDirectories(roomId: string, roomAgentId: string): void {
-    const roomPath = this.ensureRoomDirectories(roomId)
+  private ensureAgentDirectories(roomId: string, roomAgentId: string, created?: string[]): void {
+    const roomPath = this.ensureRoomDirectories(roomId, created)
     const agentsPath = join(roomPath, 'agents')
-    const agentPath = ensureDirectory(agentsPath, roomAgentId, '聊天室 Agent')
-    const sessions = ensureDirectory(agentPath, 'sessions', '聊天室 Agent sessions')
-    const workspaceFiles = ensureDirectory(agentPath, 'workspace-files', '聊天室 Agent workspace-files')
-    const project = ensureDirectory(workspaceFiles, 'project', '聊天室 Agent project')
-    ensureDirectory(project, 'inbox', '聊天室 Agent inbox')
-    ensureDirectory(agentPath, 'skills-snapshot', '聊天室 Agent skills-snapshot')
+    const agentPath = ensureDirectory(agentsPath, roomAgentId, '聊天室 Agent', created)
+    const sessions = ensureDirectory(agentPath, 'sessions', '聊天室 Agent sessions', created)
+    const workspaceFiles = ensureDirectory(agentPath, 'workspace-files', '聊天室 Agent workspace-files', created)
+    const project = ensureDirectory(workspaceFiles, 'project', '聊天室 Agent project', created)
+    ensureDirectory(project, 'inbox', '聊天室 Agent inbox', created)
+    ensureDirectory(agentPath, 'skills-snapshot', '聊天室 Agent skills-snapshot', created)
     assertDirectory(sessions, '聊天室 Agent sessions')
     assertDirectory(getChatRoomAgentPath(roomId, roomAgentId), '聊天室 Agent')
+  }
+
+  private assertAgentDirectoryTree(roomPath: string, agents: ChatRoomAgentLocalConfig[]): void {
+    const agentsPath = join(roomPath, 'agents')
+    assertDirectory(agentsPath, '聊天室 Agent 根')
+    for (const agent of agents) {
+      const agentPath = join(agentsPath, agent.roomAgentId)
+      assertDirectory(agentPath, '聊天室 Agent')
+      assertDirectory(join(agentPath, 'sessions'), '聊天室 Agent sessions')
+      const project = join(agentPath, 'workspace-files', 'project')
+      assertDirectory(join(agentPath, 'workspace-files'), '聊天室 Agent workspace-files')
+      assertDirectory(project, '聊天室 Agent project')
+      assertDirectory(join(project, 'inbox'), '聊天室 Agent inbox')
+      assertDirectory(join(agentPath, 'skills-snapshot'), '聊天室 Agent skills-snapshot')
+    }
   }
 }
