@@ -1,5 +1,4 @@
 import { createHash, randomUUID } from 'node:crypto'
-import { execFileSync } from 'node:child_process'
 import {
   chmodSync,
   closeSync,
@@ -16,7 +15,6 @@ import {
   renameSync,
   rmdirSync,
   unlinkSync,
-  writeSync,
 } from 'node:fs'
 import { dirname, join, relative, resolve, sep } from 'node:path'
 import { getWorkspaceSkillsReadOnly } from './agent-workspace-manager'
@@ -30,7 +28,13 @@ import {
 } from './config-paths'
 import { ChatRoomWorkspaceStore } from './chatroom-workspace-store'
 import { readJsonFileSafeDetailed } from './safe-file'
-import { syncDirectoryDurable as syncDirectory, syncParentDurable as syncParent } from './durable-fs'
+import {
+  setWindowsSnapshotAcl,
+  syncDirectoryDurable as syncDirectory,
+  syncDirectoryTreeDurable,
+  syncParentDurable as syncParentDurableImpl,
+  writeAllSync,
+} from './durable-fs'
 
 const COMPONENT_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/
 const MAX_FILES = 10_000
@@ -59,7 +63,9 @@ export interface SyncChatRoomAgentSkillSnapshotInput {
   /** 故障/竞态回归注入点，不属于 IPC DTO。 */
   testHooks?: {
     beforeRead?: (path: string) => void
+    beforeSourceEnumeration?: () => void
     beforeWrite?: (path: string) => void
+    beforeTargetMkdir?: () => void
     afterJournalPhase?: (phase: ChatRoomSkillSnapshotJournalPhase) => void
   }
 }
@@ -170,6 +176,28 @@ interface DirectoryIdentity {
   path: string
   dev: number
   ino: number
+  realpath?: string
+}
+
+let syncParentTestHook: ((path: string) => void) | undefined
+
+function syncParent(path: string): void {
+  // 快照复制会触发大量节点级父目录同步。Windows 在事务结束时统一刷新整棵树，
+  // 避免每个文件启动一次 PowerShell；POSIX 继续保持逐次目录 fsync。
+  if (process.platform === 'win32') return
+  if (syncParentTestHook) {
+    syncParentTestHook(path)
+    return
+  }
+  syncParentDurableImpl(path)
+}
+
+function syncSnapshotTree(path: string): void {
+  if (process.platform === 'win32') {
+    syncDirectoryTreeDurable(path)
+    return
+  }
+  syncDirectory(path)
 }
 
 function captureDirectoryChain(anchor: string, target: string, message: string): DirectoryIdentity[] {
@@ -192,7 +220,16 @@ function captureDirectoryChain(anchor: string, target: string, message: string):
       fail(message)
     }
     if (stats.isSymbolicLink() || !stats.isDirectory()) fail(message)
-    chain.push({ path: currentPath, dev: stats.dev, ino: stats.ino })
+    assertWindowsNoReparse(currentPath)
+    let realpath: string | undefined
+    if (process.platform === 'win32') {
+      try {
+        realpath = realpathSync.native(currentPath)
+      } catch (error) {
+        fail(message)
+      }
+    }
+    chain.push({ path: currentPath, dev: stats.dev, ino: stats.ino, realpath })
   }
   return chain
 }
@@ -207,6 +244,11 @@ function assertDirectoryChainStable(chain: readonly DirectoryIdentity[], message
     }
     if (stats.isSymbolicLink() || !stats.isDirectory() || stats.dev !== expected.dev || stats.ino !== expected.ino) {
       fail(message)
+    }
+    if (expected.realpath !== undefined) {
+      let actual: string
+      try { actual = realpathSync.native(expected.path) } catch { fail(message) }
+      if (actual !== expected.realpath) fail(message)
     }
   }
 }
@@ -312,16 +354,29 @@ function tryCreateSnapshotLock(lockPath: string): SnapshotLockHandle | null {
       dev: owner.dev,
       ino: owner.ino,
     }))
-    let offset = 0
-    while (offset < bytes.length) offset += writeSync(fd, bytes, offset, bytes.length - offset)
+    writeAllSync(fd, bytes, 'Skill 快照同步锁元数据')
     fsyncSync(fd)
     closeSync(fd)
     fd = -1
+    let linkedCanonical = false
     try {
       linkSync(stagingPath, lockPath)
+      linkedCanonical = true
       syncParent(lockPath)
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'EEXIST') return null
+      if (linkedCanonical) {
+        try {
+          const record = snapshotLockRecord(lockPath)
+          if (record && record.dev === owner.dev && record.ino === owner.ino
+            && record.owner && sameSnapshotLock(record.owner, owner)) {
+            unlinkSync(lockPath)
+            syncParent(lockPath)
+          }
+        } catch (cleanupError) {
+          throw new Error('Skill 快照同步锁已创建但清理失败，仍可能持有锁', { cause: cleanupError })
+        }
+      }
       throw error
     }
     return owner
@@ -389,13 +444,17 @@ function readRegularFile(
   expected: { dev: number; ino: number; size: number; mtimeMs: number },
   sourceRoot: string,
   beforeRead?: (path: string) => void,
+  sourceAnchorChain?: readonly DirectoryIdentity[],
 ): Buffer {
   if (expected.size > MAX_FILE_BYTES) fail('Skill 快照文件过大')
   const fsConstants = constants as typeof constants & { O_NOFOLLOW?: number }
   const flags = constants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0)
   const parentChain = captureDirectoryChain(sourceRoot, dirname(path), 'Skill 快照源目录发生变化')
+  if (sourceAnchorChain) assertDirectoryChainStable(sourceAnchorChain, 'Skill 快照源目录发生变化')
   beforeRead?.(path)
   assertDirectoryChainStable(parentChain, 'Skill 快照源目录发生变化')
+  if (sourceAnchorChain) assertDirectoryChainStable(sourceAnchorChain, 'Skill 快照源目录发生变化')
+  assertWindowsNoReparse(path)
   let fd = -1
   try {
     fd = openSync(path, flags)
@@ -424,6 +483,7 @@ function readRegularFile(
       fail('Skill 快照文件状态发生变化')
     }
     assertDirectoryChainStable(parentChain, 'Skill 快照源目录发生变化')
+    if (sourceAnchorChain) assertDirectoryChainStable(sourceAnchorChain, 'Skill 快照源目录发生变化')
     return bytes
   } catch (error) {
     if (error instanceof Error && error.message.startsWith('Skill 快照')) throw error
@@ -441,7 +501,9 @@ function collectSourceTree(
   counters: { files: number; bytes: number },
   sourceRoot: string,
   beforeRead?: (path: string) => void,
+  sourceAnchorChain?: readonly DirectoryIdentity[],
 ): void {
+  if (sourceAnchorChain) assertDirectoryChainStable(sourceAnchorChain, 'Skill 快照源目录发生变化')
   let stats
   try {
     stats = lstatSync(path)
@@ -453,11 +515,13 @@ function collectSourceTree(
     const directoryChain = captureDirectoryChain(sourceRoot, path, 'Skill 快照源目录发生变化')
     records.push({ type: 'D', path: normalizeRelativePath(relativePath) })
     assertDirectoryChainStable(directoryChain, 'Skill 快照源目录发生变化')
+    if (sourceAnchorChain) assertDirectoryChainStable(sourceAnchorChain, 'Skill 快照源目录发生变化')
     const entries = readdirSync(path, { withFileTypes: true }).sort((left, right) => compareStableText(left.name, right.name))
     assertDirectoryChainStable(directoryChain, 'Skill 快照源目录发生变化')
+    if (sourceAnchorChain) assertDirectoryChainStable(sourceAnchorChain, 'Skill 快照源目录发生变化')
     for (const entry of entries) {
       const child = relativePath ? relativePath + '/' + entry.name : entry.name
-      collectSourceTree(join(path, entry.name), child, records, counters, sourceRoot, beforeRead)
+      collectSourceTree(join(path, entry.name), child, records, counters, sourceRoot, beforeRead, sourceAnchorChain)
     }
     return
   }
@@ -468,11 +532,11 @@ function collectSourceTree(
   records.push({
     type: 'F',
     path: normalizeRelativePath(relativePath),
-    bytes: readRegularFile(path, stats, sourceRoot, beforeRead),
+    bytes: readRegularFile(path, stats, sourceRoot, beforeRead, sourceAnchorChain),
   })
 }
 
-function applyReadOnly(path: string): void {
+function validateSnapshotTree(path: string): void {
   let stats
   try {
     stats = lstatSync(path)
@@ -480,13 +544,28 @@ function applyReadOnly(path: string): void {
     fail('Skill 快照临时目录不可用')
   }
   if (stats.isSymbolicLink()) fail('Skill 快照不允许符号链接')
+  assertWindowsNoReparse(path)
+  if (stats.isDirectory()) {
+    for (const entry of readdirSync(path)) validateSnapshotTree(join(path, entry))
+    return
+  }
+  if (!stats.isFile()) fail('Skill 快照只允许普通文件和目录')
+}
+
+function applyReadOnly(path: string): void {
+  validateSnapshotTree(path)
+  if (process.platform === 'win32') {
+    setWindowsSnapshotAcl(path, false)
+    syncSnapshotTree(path)
+    return
+  }
+  let stats = lstatSync(path)
   if (stats.isDirectory()) {
     for (const entry of readdirSync(path)) applyReadOnly(join(path, entry))
     setSnapshotPermissions(path, true, false)
     syncDirectory(path)
     return
   }
-  if (!stats.isFile()) fail('Skill 快照只允许普通文件和目录')
   setSnapshotPermissions(path, false, false)
 }
 
@@ -502,34 +581,20 @@ function assertWindowsNoReparse(path: string): void {
   if (normalize(resolved) !== normalize(resolve(path))) fail('Skill 快照拒绝 Windows reparse 路径')
 }
 
-function setWindowsAcl(path: string, directory: boolean, writable: boolean): void {
-  assertWindowsNoReparse(path)
-  const user = process.env.USERNAME
-  if (!user || /[\\/]/.test(user)) fail('Skill 快照 Windows 用户不可验证')
-  const rights = writable ? (directory ? '(OI)(CI)M' : 'M') : (directory ? '(OI)(CI)RX' : 'R')
-  try {
-    execFileSync('icacls', [
-      path,
-      '/inheritance:r',
-      '/remove:g', '*S-1-1-0',
-      '/remove:g', '*S-1-5-32-545',
-      '/grant:r', `${user}:${rights}`,
-    ], { stdio: 'ignore', windowsHide: true })
-  } catch (error) {
-    fail('Skill 快照 Windows ACL 设置失败')
-  }
-  assertWindowsNoReparse(path)
-}
-
 function setSnapshotPermissions(path: string, directory: boolean, writable: boolean): void {
   if (process.platform === 'win32') {
-    setWindowsAcl(path, directory, writable)
+    assertWindowsNoReparse(path)
+    try {
+      setWindowsSnapshotAcl(path, writable)
+    } catch {
+      fail('Skill 快照 Windows ACL 设置失败')
+    }
     return
   }
   chmodSync(path, directory ? (writable ? 0o700 : 0o500) : (writable ? 0o600 : 0o400))
 }
 
-function removeSafeTree(path: string): void {
+function removeSafeTree(path: string, windowsAclPrepared = false): void {
   let stats
   try {
     stats = lstatSync(path)
@@ -539,6 +604,15 @@ function removeSafeTree(path: string): void {
   }
   if (stats.isSymbolicLink()) fail('Skill 快照不允许符号链接')
   if (stats.isDirectory()) {
+    if (process.platform === 'win32') {
+      if (!windowsAclPrepared) {
+        validateSnapshotTree(path)
+        setWindowsSnapshotAcl(path, true)
+      }
+      for (const entry of readdirSync(path)) removeSafeTree(join(path, entry), true)
+      rmdirSync(path)
+      return
+    }
     // 旧快照是只读树；显式同步的清理阶段临时恢复 owner write。
     setSnapshotPermissions(path, true, true)
     for (const entry of readdirSync(path)) removeSafeTree(join(path, entry))
@@ -547,6 +621,10 @@ function removeSafeTree(path: string): void {
     return
   }
   if (!stats.isFile()) fail('Skill 快照清理失败')
+  if (process.platform === 'win32') {
+    unlinkSync(path)
+    return
+  }
   setSnapshotPermissions(path, false, true)
   unlinkSync(path)
   syncParent(path)
@@ -580,10 +658,14 @@ function copyRecords(
   sourceRoot: string,
   destinationRoot: string,
   beforeWrite?: (path: string) => void,
+  targetAnchorChain?: readonly DirectoryIdentity[],
+  sourceAnchorChain?: readonly DirectoryIdentity[],
 ): void {
   const destinationIdentity = captureDirectoryChain(destinationRoot, destinationRoot, 'Skill 快照目标目录发生变化')
   for (const record of records) {
     if (record.path === '') continue
+    if (targetAnchorChain) assertDirectoryChainStable(targetAnchorChain, 'Skill 快照目标目录发生变化')
+    if (sourceAnchorChain) assertDirectoryChainStable(sourceAnchorChain, 'Skill 快照源目录发生变化')
     const target = join(destinationRoot, ...record.path.split('/'))
     if (record.type === 'D') {
       const parent = dirname(target)
@@ -592,6 +674,7 @@ function copyRecords(
       assertDirectoryChainStable(parentIdentity, 'Skill 快照目标目录发生变化')
       mkdirSync(target)
       assertDirectoryChainStable(parentIdentity, 'Skill 快照目标目录发生变化')
+      if (targetAnchorChain) assertDirectoryChainStable(targetAnchorChain, 'Skill 快照目标目录发生变化')
       assertDirectoryTarget(target, 'Skill 快照目标目录发生变化')
       syncParent(target)
     } else {
@@ -603,6 +686,7 @@ function copyRecords(
       // 读取已在收集阶段完成，写入仅使用内存中的受控 bytes。
       beforeWrite?.(target)
       assertDirectoryChainStable(parentIdentity, 'Skill 快照目标目录发生变化')
+      if (targetAnchorChain) assertDirectoryChainStable(targetAnchorChain, 'Skill 快照目标目录发生变化')
       const bytes = record.bytes ?? Buffer.alloc(0)
       const noFollow = (constants as typeof constants & { O_NOFOLLOW?: number }).O_NOFOLLOW ?? 0
       let fd = -1
@@ -616,7 +700,8 @@ function copyRecords(
         let offset = 0
         while (offset < bytes.length) {
           const length = Math.min(WRITE_CHUNK_BYTES, bytes.length - offset)
-          offset += writeSync(fd, bytes, offset, length)
+          writeAllSync(fd, bytes.subarray(offset, offset + length), 'Skill 快照目标文件')
+          offset += length
         }
         fsyncSync(fd)
         const closed = fstatSync(fd)
@@ -637,6 +722,7 @@ function copyRecords(
       }
       assertRegularTarget(target, 'Skill 快照目标目录发生变化')
       assertDirectoryChainStable(parentIdentity, 'Skill 快照目标目录发生变化')
+      if (targetAnchorChain) assertDirectoryChainStable(targetAnchorChain, 'Skill 快照目标目录发生变化')
       syncParent(target)
     }
   }
@@ -650,6 +736,7 @@ function assertDirectoryTarget(path: string, message: string): void {
     fail(message)
   }
   if (stats.isSymbolicLink() || !stats.isDirectory()) fail(message)
+  assertWindowsNoReparse(path)
 }
 
 function assertRegularTarget(path: string, message: string): void {
@@ -660,6 +747,7 @@ function assertRegularTarget(path: string, message: string): void {
     fail(message)
   }
   if (stats.isSymbolicLink() || !stats.isFile()) fail(message)
+  assertWindowsNoReparse(path)
 }
 
 function assertSnapshotTarget(snapshotPath: string): void {
@@ -738,8 +826,7 @@ function writeJournal(path: string, journal: SnapshotJournal): void {
   let fd = -1
   try {
     fd = openSync(tempPath, flags, 0o600)
-    let offset = 0
-    while (offset < bytes.length) offset += writeSync(fd, bytes, offset, bytes.length - offset)
+    writeAllSync(fd, bytes, 'Skill 快照 journal')
     fsyncSync(fd)
     closeSync(fd)
     fd = -1
@@ -922,13 +1009,19 @@ function syncChatRoomAgentSkillSnapshotUnlocked(input: SyncChatRoomAgentSkillSna
   const sourceRoot = getWorkspaceSkillsDir(input.sourceWorkspaceSlug)
   const configDir = getConfigDir()
   assertControlledDirectory(sourceRoot, configDir, 'Skill 源目录不可用')
+  const sourceAnchorChain = captureDirectoryChain(configDir, sourceRoot, 'Skill 快照源目录发生变化')
 
   const snapshotPath = getChatRoomAgentSkillsSnapshotPath(input.roomId, input.roomAgentId)
   const roomsRoot = getChatRoomsRootPath()
   assertControlledDirectory(dirname(snapshotPath), roomsRoot, 'Skill 快照目录不可用')
+  const targetAnchorChain = captureDirectoryChain(roomsRoot, dirname(snapshotPath), 'Skill 快照目标目录发生变化')
+  assertDirectoryChainStable(sourceAnchorChain, 'Skill 快照源目录发生变化')
+  assertDirectoryChainStable(targetAnchorChain, 'Skill 快照目标目录发生变化')
   assertSnapshotTarget(snapshotPath)
   assertNotWithin(sourceRoot, snapshotPath, 'Skill 快照源路径与目标冲突')
 
+  input.testHooks?.beforeSourceEnumeration?.()
+  assertDirectoryChainStable(sourceAnchorChain, 'Skill 快照源目录发生变化')
   const enabledSkills = getWorkspaceSkillsReadOnly(input.sourceWorkspaceSlug)
     .filter((skill: SkillMeta) => skill.enabled !== false)
     .sort((left, right) => compareStableText(left.slug, right.slug))
@@ -936,6 +1029,7 @@ function syncChatRoomAgentSkillSnapshotUnlocked(input: SyncChatRoomAgentSkillSna
   const counters = { files: 0, bytes: 0 }
   records.push({ type: 'D', path: '' })
   for (const skill of enabledSkills) {
+    assertDirectoryChainStable(sourceAnchorChain, 'Skill 快照源目录发生变化')
     assertComponent(skill.slug, 'Skill slug')
     const sourceSkill = join(sourceRoot, skill.slug)
     assertContained(sourceRoot, sourceSkill, 'Skill 源路径越界')
@@ -946,8 +1040,10 @@ function syncChatRoomAgentSkillSnapshotUnlocked(input: SyncChatRoomAgentSkillSna
       fail('Skill 源目录不可用')
     }
     if (!stats.isDirectory() || stats.isSymbolicLink()) fail('Skill 快照只允许普通目录')
-    collectSourceTree(sourceSkill, skill.slug, records, counters, sourceRoot, input.testHooks?.beforeRead)
+    collectSourceTree(sourceSkill, skill.slug, records, counters, sourceRoot, input.testHooks?.beforeRead, sourceAnchorChain)
   }
+  assertDirectoryChainStable(sourceAnchorChain, 'Skill 快照源目录发生变化')
+  assertDirectoryChainStable(targetAnchorChain, 'Skill 快照目标目录发生变化')
 
   const parent = dirname(snapshotPath)
   const nextPath = join(parent, '.next-' + randomUUID())
@@ -962,7 +1058,12 @@ function syncChatRoomAgentSkillSnapshotUnlocked(input: SyncChatRoomAgentSkillSna
     && computeChatRoomSkillSnapshotDigest(snapshotPath) === EMPTY_SNAPSHOT_DIGEST) {
     removeSafeTree(snapshotPath)
   }
+  input.testHooks?.beforeTargetMkdir?.()
+  assertDirectoryChainStable(targetAnchorChain, 'Skill 快照目标目录发生变化')
   mkdirSync(nextPath, { recursive: false, mode: 0o700 })
+  assertDirectoryChainStable(targetAnchorChain, 'Skill 快照目标目录发生变化')
+  const nextIdentity = captureDirectoryChain(dirname(snapshotPath), nextPath, 'Skill 快照目标目录发生变化')
+  assertDirectoryChainStable(nextIdentity, 'Skill 快照目标目录发生变化')
   const digest = digestRecords(records)
   const result: ChatRoomSkillSnapshotResult = {
     snapshotPath,
@@ -984,9 +1085,10 @@ function syncChatRoomAgentSkillSnapshotUnlocked(input: SyncChatRoomAgentSkillSna
   try {
     writeJournal(journalPath, journal)
     input.testHooks?.afterJournalPhase?.(journal.phase)
-    copyRecords(records, sourceRoot, nextPath, input.testHooks?.beforeWrite)
+    copyRecords(records, sourceRoot, nextPath, input.testHooks?.beforeWrite, targetAnchorChain, sourceAnchorChain)
     applyReadOnly(nextPath)
-    syncDirectory(nextPath)
+    syncSnapshotTree(nextPath)
+    assertDirectoryChainStable(targetAnchorChain, 'Skill 快照目标目录发生变化')
     removeSafeTree(previousPath)
     let currentExists = false
     try {
@@ -996,22 +1098,28 @@ function syncChatRoomAgentSkillSnapshotUnlocked(input: SyncChatRoomAgentSkillSna
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
     }
     if (currentExists) {
+      assertDirectoryChainStable(targetAnchorChain, 'Skill 快照目标目录发生变化')
       renameSync(snapshotPath, previousPath)
       syncParent(snapshotPath)
+      assertDirectoryChainStable(targetAnchorChain, 'Skill 快照目标目录发生变化')
       journal.phase = 'current_moved'
       input.testHooks?.afterJournalPhase?.(journal.phase)
     }
     renameSync(nextPath, snapshotPath)
     syncParent(nextPath)
+    assertDirectoryChainStable(targetAnchorChain, 'Skill 快照目标目录发生变化')
     journal.phase = 'next_moved'
     input.testHooks?.afterJournalPhase?.(journal.phase)
     workspaceStore.updateAgentSkillSnapshot(input.roomId, input.roomAgentId, result)
+    assertDirectoryChainStable(targetAnchorChain, 'Skill 快照目标目录发生变化')
     journal.phase = 'config_persisted'
     input.testHooks?.afterJournalPhase?.(journal.phase)
     removeSafeTree(previousPath)
+    assertDirectoryChainStable(targetAnchorChain, 'Skill 快照目标目录发生变化')
     journal.phase = 'cleanup'
     input.testHooks?.afterJournalPhase?.(journal.phase)
     removeJournal(journalPath)
+    if (process.platform === 'win32') syncDirectoryTreeDurable(parent)
     return result
   } catch (error) {
     try {
@@ -1043,6 +1151,9 @@ export function syncChatRoomAgentSkillSnapshot(input: SyncChatRoomAgentSkillSnap
 export const __chatRoomSkillSnapshotTestHooks = {
   acquire: (lockPath: string): SnapshotLockHandle => acquireSnapshotLock(lockPath),
   release: (owner: SnapshotLockHandle): void => releaseSnapshotLock(owner),
+  setSyncParentHook: (hook: ((path: string) => void) | undefined): void => {
+    syncParentTestHook = hook
+  },
 }
 
 function restorePreviousSnapshot(previousPath: string, snapshotPath: string): void {

@@ -572,6 +572,25 @@ describe('聊天室 Agent Skill 只读快照', () => {
     })).toThrow('Skill 快照源目录发生变化')
   })
 
+  test('Given sourceRoot parent 在枚举前被替换 When 同步 Then fail closed 且不枚举外部树', () => {
+    writeSkill('enabled-skill')
+    const sourceParent = dirname(sourceRoot())
+    let swapped = false
+    expect(() => syncChatRoomAgentSkillSnapshot({
+      roomId,
+      roomAgentId,
+      sourceWorkspaceSlug,
+      testHooks: {
+        beforeSourceEnumeration: () => {
+          if (swapped) return
+          swapped = true
+          renameSync(sourceParent, `${sourceParent}-moved-before-enumeration`)
+          symlinkSync(testHome, sourceParent, 'dir')
+        },
+      },
+    })).toThrow('Skill 快照源目录发生变化')
+  })
+
   test('Given snapshot next root 在写入前被替换 When 同步 Then fail closed', () => {
     writeSkill('enabled-skill')
     let swapped = false
@@ -590,6 +609,58 @@ describe('聊天室 Agent Skill 只读快照', () => {
         },
       },
     })).toThrow('Skill 快照目标目录发生变化')
+  })
+
+  test('Given 目标父目录在创建 next 前被替换 When 同步 Then fail closed 且不读取外部内容', () => {
+    writeSkill('enabled-skill')
+    let swapped = false
+    expect(() => syncChatRoomAgentSkillSnapshot({
+      roomId,
+      roomAgentId,
+      sourceWorkspaceSlug,
+      testHooks: {
+        beforeTargetMkdir: () => {
+          if (swapped) return
+          swapped = true
+          const parent = dirname(snapshotPath())
+          const moved = parent + '-moved-before-mkdir'
+          renameSync(parent, moved)
+          symlinkSync(testHome, parent, 'dir')
+        },
+      },
+    })).toThrow('Skill 快照目标目录发生变化')
+  })
+
+  test('Given link 成功后父目录持久化失败 When 同步锁清理 Then 下一次可获得锁且不删除替换后的锁', () => {
+    writeSkill('enabled-skill')
+    const lockPath = join(dirname(snapshotPath()), '.skills-snapshot.lock')
+    let failOnce = true
+    __chatRoomSkillSnapshotTestHooks.setSyncParentHook((path) => {
+      if (failOnce && path === lockPath) {
+        failOnce = false
+        throw new Error('injected parent flush failure')
+      }
+    })
+    expect(() => syncChatRoomAgentSkillSnapshot({ roomId, roomAgentId, sourceWorkspaceSlug })).toThrow('Skill 快照同步锁创建失败')
+    __chatRoomSkillSnapshotTestHooks.setSyncParentHook(undefined)
+    expect(existsSync(lockPath)).toBe(false)
+    expect(() => syncChatRoomAgentSkillSnapshot({ roomId, roomAgentId, sourceWorkspaceSlug })).not.toThrow()
+  })
+
+  test('Given 父目录持久化失败期间 canonical 被替换 When 清理 Then 不删除替换后的锁', () => {
+    writeSkill('enabled-skill')
+    const lockPath = join(dirname(snapshotPath()), '.skills-snapshot.lock')
+    let replaced = false
+    __chatRoomSkillSnapshotTestHooks.setSyncParentHook((path) => {
+      if (replaced || path !== lockPath) return
+      replaced = true
+      renameSync(lockPath, `${lockPath}.other`)
+      writeFileSync(lockPath, 'other-owner')
+      throw new Error('injected parent flush failure')
+    })
+    expect(() => syncChatRoomAgentSkillSnapshot({ roomId, roomAgentId, sourceWorkspaceSlug })).toThrow('Skill 快照同步锁创建失败')
+    __chatRoomSkillSnapshotTestHooks.setSyncParentHook(undefined)
+    expect(readFileSync(lockPath, 'utf8')).toBe('other-owner')
   })
 })
 

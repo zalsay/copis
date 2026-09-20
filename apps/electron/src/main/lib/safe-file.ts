@@ -6,22 +6,26 @@
  * - 读取：主文件 → .tmp 残留 → .bak 回退，多层容错
  */
 
+import { randomUUID } from 'node:crypto'
 import {
   chmodSync,
   closeSync,
   constants,
   copyFileSync,
   existsSync,
+  fstatSync,
   fsyncSync,
   lstatSync,
   openSync,
+  readSync,
   readFileSync,
+  realpathSync,
   renameSync,
   unlinkSync,
   writeFileSync,
-  writeSync,
 } from 'node:fs'
-import { syncParentDurable } from './durable-fs'
+import { dirname } from 'node:path'
+import { syncParentDurable, writeAllSync } from './durable-fs'
 
 /**
  * 原子写入 JSON 文件：write-to-temp → rename
@@ -55,37 +59,243 @@ export function writeJsonFileAtomic(filePath: string, data: object, skipBackup =
 
 /** 聊天室提交摘要使用的持久化写入：临时文件和父目录均显式 fsync。 */
 export function writeJsonFileAtomicDurable(filePath: string, data: object, mode = 0o600): void {
-  const tmpPath = filePath + '.tmp'
-  const bakPath = filePath + '.bak'
-  if (existsSync(filePath)) {
-    copyFileSync(filePath, bakPath)
-    chmodSync(bakPath, mode)
-  }
-  let tmpStats
-  try {
-    tmpStats = lstatSync(tmpPath)
-    if (tmpStats.isSymbolicLink() || !tmpStats.isFile()) throw new Error('临时文件不是普通文件')
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw new Error('聊天室配置临时文件不可用', { cause: error })
-  }
-
-  const noFollow = (constants as typeof constants & { O_NOFOLLOW?: number }).O_NOFOLLOW ?? 0
+  const parentChain = captureParentChain(filePath)
   const bytes = Buffer.from(JSON.stringify(data, null, 2), 'utf8')
-  let fd = -1
+  const noFollow = (constants as typeof constants & { O_NOFOLLOW?: number }).O_NOFOLLOW ?? 0
+  const tempPath = `${filePath}.tmp-${randomUUID()}`
+  const backupTempPath = `${filePath}.bak-${randomUUID()}`
+  let tempIdentity: FileIdentity | undefined
+  let backupIdentity: FileIdentity | undefined
+
   try {
-    fd = openSync(tmpPath, constants.O_CREAT | constants.O_TRUNC | constants.O_WRONLY | noFollow, mode)
-    let offset = 0
-    while (offset < bytes.length) offset += writeSync(fd, bytes, offset, bytes.length - offset)
-    fsyncSync(fd)
-    chmodSync(tmpPath, mode)
-    closeSync(fd)
-    fd = -1
-    renameSync(tmpPath, filePath)
+    const current = readRegularIdentity(filePath, true)
+    assertParentChainStable(parentChain)
+    tempIdentity = writeDurableTemp(tempPath, bytes, mode, parentChain, noFollow, '聊天室配置临时文件')
+    assertParentChainStable(parentChain)
+
+    if (current) {
+      backupIdentity = copyRegularToTemp(filePath, backupTempPath, mode, parentChain, noFollow)
+      replacePathWithoutDelete(backupTempPath, filePath + '.bak', parentChain, backupIdentity)
+      backupIdentity = undefined
+    }
+
+    assertParentChainStable(parentChain)
+    replacePathWithoutDelete(tempPath, filePath, parentChain, tempIdentity, current)
+    tempIdentity = undefined
+    const committed = readRegularIdentity(filePath, false)
+    if (!committed) throw new Error('聊天室配置主文件不可用')
     chmodSync(filePath, mode)
+    assertParentChainStable(parentChain)
     syncParentDurable(filePath)
   } catch (error) {
-    if (fd >= 0) closeSync(fd)
+    cleanupOwnedTemp(tempPath, tempIdentity)
+    cleanupOwnedTemp(backupTempPath, backupIdentity)
     throw new Error('聊天室配置持久化失败', { cause: error })
+  }
+}
+
+interface FileIdentity {
+  dev: number
+  ino: number
+  size: number
+  mtimeMs: number
+}
+
+interface ParentIdentity extends FileIdentity {
+  path: string
+  requestedPath?: string
+}
+
+function captureParentChain(filePath: string): ParentIdentity[] {
+  const chain: ParentIdentity[] = []
+  const requestedParent = dirname(filePath)
+  let current = realpathSync.native(requestedParent)
+  for (;;) {
+    const stats = lstatSync(current)
+    if (stats.isSymbolicLink() || !stats.isDirectory()) throw new Error('聊天室配置父目录不可用')
+    chain.unshift({ path: current,
+      dev: stats.dev, ino: stats.ino, size: stats.size, mtimeMs: stats.mtimeMs })
+    const parent = dirname(current)
+    if (parent === current) break
+    current = parent
+  }
+  chain[chain.length - 1]!.requestedPath = requestedParent
+  return chain
+}
+
+function assertParentChainStable(chain: readonly ParentIdentity[]): void {
+  if (chain.length === 0) throw new Error('聊天室配置父目录不可用')
+  const immediate = chain[chain.length - 1]!
+  const requestedParent = immediate.requestedPath
+  if (requestedParent) {
+    let actualRequestedParent: string
+    try { actualRequestedParent = realpathSync.native(requestedParent) } catch {
+      throw new Error('聊天室配置父目录发生变化')
+    }
+    if (actualRequestedParent !== immediate.path) throw new Error('聊天室配置父目录发生变化')
+  }
+  const expectedParent = immediate.path
+  let actualParent: string
+  try { actualParent = realpathSync.native(expectedParent) } catch {
+    throw new Error('聊天室配置父目录发生变化')
+  }
+  if (actualParent !== expectedParent) throw new Error('聊天室配置父目录发生变化')
+  for (const expected of chain) {
+    const stats = lstatSync(expected.path)
+    if (stats.isSymbolicLink() || !stats.isDirectory() || stats.dev !== expected.dev || stats.ino !== expected.ino) {
+      throw new Error('聊天室配置父目录发生变化')
+    }
+  }
+}
+
+function readRegularIdentity(path: string, allowMissing: boolean): FileIdentity | undefined {
+  let stats
+  try {
+    stats = lstatSync(path)
+  } catch (error) {
+    if (allowMissing && (error as NodeJS.ErrnoException).code === 'ENOENT') return undefined
+    throw error
+  }
+  if (stats.isSymbolicLink() || !stats.isFile() || stats.nlink > 1) throw new Error('聊天室配置文件不可用')
+  return { dev: stats.dev, ino: stats.ino, size: stats.size, mtimeMs: stats.mtimeMs }
+}
+
+function assertSameFileIdentity(path: string, expected: FileIdentity): void {
+  const actual = readRegularIdentity(path, false)
+  if (!actual || actual.dev !== expected.dev || actual.ino !== expected.ino || actual.size !== expected.size
+    || actual.mtimeMs !== expected.mtimeMs) throw new Error('聊天室配置临时文件发生变化')
+}
+
+function writeDurableTemp(
+  path: string,
+  bytes: Buffer,
+  mode: number,
+  parentChain: readonly ParentIdentity[],
+  noFollow: number,
+  label: string,
+): FileIdentity {
+  assertParentChainStable(parentChain)
+  let fd = -1
+  try {
+    fd = openSync(path, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | noFollow, mode)
+    const opened = fstatSync(fd)
+    if (!opened.isFile() || opened.nlink > 1) throw new Error(`${label}不可用`)
+    writeAllSync(fd, bytes, label)
+    fsyncSync(fd)
+    chmodSync(path, mode)
+    const closed = fstatSync(fd)
+    if (!closed.isFile() || closed.dev !== opened.dev || closed.ino !== opened.ino || closed.size !== bytes.length) {
+      throw new Error(`${label}发生变化`)
+    }
+    closeSync(fd)
+    fd = -1
+    assertSameFileIdentity(path, { dev: closed.dev, ino: closed.ino, size: closed.size, mtimeMs: closed.mtimeMs })
+    assertParentChainStable(parentChain)
+    return { dev: closed.dev, ino: closed.ino, size: closed.size, mtimeMs: closed.mtimeMs }
+  } finally {
+    if (fd >= 0) closeSync(fd)
+  }
+}
+
+function copyRegularToTemp(
+  sourcePath: string,
+  destinationPath: string,
+  mode: number,
+  parentChain: readonly ParentIdentity[],
+  noFollow: number,
+): FileIdentity {
+  const sourceIdentity = readRegularIdentity(sourcePath, false)
+  if (!sourceIdentity) throw new Error('聊天室配置源文件不可用')
+  let sourceFd = -1
+  let destinationFd = -1
+  try {
+    assertParentChainStable(parentChain)
+    sourceFd = openSync(sourcePath, constants.O_RDONLY | noFollow)
+    const sourceOpened = fstatSync(sourceFd)
+    if (sourceOpened.dev !== sourceIdentity.dev || sourceOpened.ino !== sourceIdentity.ino
+      || sourceOpened.size !== sourceIdentity.size || sourceOpened.nlink > 1) throw new Error('聊天室配置源文件发生变化')
+    destinationFd = openSync(destinationPath, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | noFollow, mode)
+    const destinationOpened = fstatSync(destinationFd)
+    if (!destinationOpened.isFile() || destinationOpened.nlink > 1) throw new Error('聊天室配置备份文件不可用')
+    const buffer = Buffer.allocUnsafe(64 * 1024)
+    let offset = 0
+    while (offset < sourceOpened.size) {
+      const count = readSync(sourceFd, buffer, 0, Math.min(buffer.length, sourceOpened.size - offset), offset)
+      if (count <= 0) throw new Error('聊天室配置源文件读取失败')
+      writeAllSync(destinationFd, buffer.subarray(0, count), '聊天室配置备份文件')
+      offset += count
+    }
+    fsyncSync(destinationFd)
+    const destinationClosed = fstatSync(destinationFd)
+    if (destinationClosed.dev !== destinationOpened.dev || destinationClosed.ino !== destinationOpened.ino
+      || destinationClosed.size !== sourceOpened.size) throw new Error('聊天室配置备份文件发生变化')
+    const sourceClosed = fstatSync(sourceFd)
+    if (sourceClosed.dev !== sourceOpened.dev || sourceClosed.ino !== sourceOpened.ino
+      || sourceClosed.size !== sourceOpened.size || sourceClosed.mtimeMs !== sourceOpened.mtimeMs) {
+      throw new Error('聊天室配置源文件发生变化')
+    }
+    closeSync(destinationFd)
+    destinationFd = -1
+    closeSync(sourceFd)
+    sourceFd = -1
+    chmodSync(destinationPath, mode)
+    assertSameFileIdentity(destinationPath, {
+      dev: destinationClosed.dev,
+      ino: destinationClosed.ino,
+      size: destinationClosed.size,
+      mtimeMs: lstatSync(destinationPath).mtimeMs,
+    })
+    assertParentChainStable(parentChain)
+    const result = readRegularIdentity(destinationPath, false)
+    if (!result) throw new Error('聊天室配置备份文件不可用')
+    return result
+  } finally {
+    if (destinationFd >= 0) closeSync(destinationFd)
+    if (sourceFd >= 0) closeSync(sourceFd)
+  }
+}
+
+function replacePathWithoutDelete(
+  path: string,
+  targetPath: string,
+  parentChain: readonly ParentIdentity[],
+  identity: FileIdentity,
+  expectedTarget?: FileIdentity,
+): void {
+  assertSameFileIdentity(path, identity)
+  assertParentChainStable(parentChain)
+  if (expectedTarget) assertSameFileIdentity(targetPath, expectedTarget)
+  try {
+    renameSync(path, targetPath)
+  } catch (error) {
+    // Windows 的 rename 可能拒绝覆盖现有目标；先把已校验目标移到随机同目录名，
+    // 再完成 rename，整个过程不跟随或删除目标。POSIX 仍走单次原子替换。
+    if (process.platform !== 'win32') throw error
+    const displacedPath = `${targetPath}.displaced-${randomUUID()}`
+    const target = readRegularIdentity(targetPath, true)
+    if (target) renameSync(targetPath, displacedPath)
+    try {
+      renameSync(path, targetPath)
+    } catch (renameError) {
+      if (target) renameSync(displacedPath, targetPath)
+      throw renameError
+    }
+    if (target) {
+      const displaced = readRegularIdentity(displacedPath, false)
+      if (displaced) unlinkSync(displacedPath)
+    }
+  }
+  assertSameFileIdentity(targetPath, identity)
+  assertParentChainStable(parentChain)
+}
+
+function cleanupOwnedTemp(path: string, identity: FileIdentity | undefined): void {
+  if (!identity) return
+  try {
+    const current = readRegularIdentity(path, true)
+    if (current && current.dev === identity.dev && current.ino === identity.ino) unlinkSync(path)
+  } catch {
+    // 外部替换或权限异常时保留残留，避免误删他人文件。
   }
 }
 

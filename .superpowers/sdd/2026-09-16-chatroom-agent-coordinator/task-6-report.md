@@ -139,3 +139,27 @@
 - `bun test apps/electron/src/main/lib/chatroom-skill-snapshot.test.ts -t 'Given update 已写入 room.json'`：1 pass。
 - snapshot 独立 Bun 进程连续 10 次：每次 27 pass / 0 fail。
 - runtime context：5 pass；RPC：34 pass（更正此前误写的 runtime context 计数）。
+
+## Fix Round 4：RED / GREEN
+
+- RED：复审复现四类重要问题：锁在 hardlink 成功但父目录 flush 失败后可能残留；写入循环未统一拒绝非正数返回；同步只锚定 sourceRoot、且 target next 创建前缺少完整父链复核；durable room 配置仍使用固定 `.tmp`/直接 `copyFileSync(.bak)`。Windows 路径还会为每个 Skill 文件/目录启动 `icacls` 与 PowerShell。
+- GREEN：锁创建记录 canonical 已创建状态，父 flush 失败时按 dev/ino/token 复核后清理，替换锁不会被删除，清理失败明确标记仍可能持锁。新增 `durable-fs.writeAllSync()`，锁元数据、目标文件、journal 与 durable 配置均复用并拒绝 `count <= 0`。Skill 同步捕获 configDir→sourceRoot 与 roomsRoot→agent parent 的完整 dev/ino 链（Windows 同步 realpath），在枚举、读取、next mkdir、复制、rename、配置写入前后持续复核；next mkdir 校验新目录 identity。durable 配置改用同父目录唯一 O_EXCL/O_NOFOLLOW 临时文件和唯一备份临时文件，不截断固定 `.tmp`、不直接复制写固定 `.bak`，并按拥有者 inode 受控清理随机残留。
+- GREEN：Windows ACL 改为基于 `WindowsIdentity` SID 的单次递归 `icacls /T`，目录树 flush 改为单个递归 PowerShell 进程；POSIX 保持逐级 chmod/fsync。新增平台命令构造测试与固定 `.tmp/.bak` 普通文件/符号链接回归测试。
+
+## Fix Round 4 验证
+
+- `bun test apps/electron/src/main/lib/chatroom-skill-snapshot.test.ts`：31 pass。
+- `bun test apps/electron/src/main/lib/safe-file.test.ts`：3 pass。
+- `bun test apps/electron/src/main/lib/durable-fs.test.ts`：3 pass。
+- `bun test apps/electron/src/main/lib/chatroom-workspace-store.test.ts`：22 pass。
+- `bun test apps/electron/src/main/lib/agent-rpc-runtime-context.test.ts`：5 pass。
+- `bun test apps/electron/src/main/lib/agent-rpc-service.test.ts`：34 pass。
+- `bun run --filter='@copis/electron' typecheck`：pass。
+- `bun run --filter='@copis/electron' build:main`：pass。
+- `bun run --filter='@copis/electron' build:renderer`：pass（仅既有 Vite chunk/browserslist warning）。
+- `git diff --check`：pass。
+
+## Fix Round 4 Rulings / 残余风险
+
+- Node/Electron 没有 openat/handle-relative 的全链路 API；本轮补齐完整父链 dev/ino 与 Windows realpath 复核并覆盖可观察替换窗口，但同一 UID 的纳秒级 ABA 仍非内核事务，不能声称等价 openat。真实 Windows ACL、reparse、目录 flush 与 rename replace 语义仍需 Windows runner 验证。
+- Windows 每次快照事务的 ACL 与目录树 flush 已批处理为少量子进程；单个文件仍使用 fd fsync。POSIX 仍按树节点执行权限/目录持久化操作。
