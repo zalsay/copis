@@ -192,11 +192,20 @@ describe('聊天室隐藏 Agent session 存储', () => {
   test('unknown non-empty SDK extension type is accepted with valid common fields', () => {
     const messagesPath = getChatRoomAgentSessionMessagesPath('room-1', agentConfig.roomAgentId)
     const backend = new ChatRoomHiddenSessionStore('room-1', agentConfig)
-    const extension = { type: 'pi_custom_event', uuid: 'extension-1', session_id: 'sdk-session', payload: { ok: true } }
+    const extension = { type: 'pi_custom_event', uuid: 'extension-1', session_id: 'sdk-session', error: 'extension detail', payload: { ok: true } }
     writeFileSync(messagesPath, `${JSON.stringify(extension)}\n`, 'utf8')
 
     expect(backend.getSDKMessages()).toEqual([extension])
     writeFileSync(messagesPath, `${JSON.stringify({ type: 'pi_custom_event', uuid: 1 })}\n`, 'utf8')
+    expect(() => backend.getSDKMessages()).toThrow()
+  })
+
+  test('known assistant error still requires the strict error.message structure', () => {
+    const messagesPath = getChatRoomAgentSessionMessagesPath('room-1', agentConfig.roomAgentId)
+    const backend = new ChatRoomHiddenSessionStore('room-1', agentConfig)
+    const assistant = { type: 'assistant', parent_tool_use_id: null, message: { content: [] }, error: 'not-an-error-object' }
+    writeFileSync(messagesPath, `${JSON.stringify(assistant)}\n`, 'utf8')
+
     expect(() => backend.getSDKMessages()).toThrow()
   })
 

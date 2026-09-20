@@ -124,9 +124,6 @@ function assertValidSDKMessage(value: unknown): asserts value is SDKMessage {
   if (value.parent_tool_use_id !== undefined
     && value.parent_tool_use_id !== null
     && typeof value.parent_tool_use_id !== 'string') throw new Error('聊天室 Agent session 消息损坏')
-  if (value.error !== undefined && (!isRecord(value.error) || typeof value.error.message !== 'string')) {
-    throw new Error('聊天室 Agent session 消息损坏')
-  }
   if (!SDK_MESSAGE_TYPES.has(value.type)) return
   if (value.type === 'assistant') {
     if (!isRecord(value.message) || !Array.isArray(value.message.content)
@@ -134,6 +131,9 @@ function assertValidSDKMessage(value: unknown): asserts value is SDKMessage {
       throw new Error('聊天室 Agent session 消息损坏')
     }
     if (!Object.prototype.hasOwnProperty.call(value, 'parent_tool_use_id')) throw new Error('聊天室 Agent session 消息损坏')
+    if (value.error !== undefined && (!isRecord(value.error) || typeof value.error.message !== 'string')) {
+      throw new Error('聊天室 Agent session 消息损坏')
+    }
   } else if (value.type === 'user') {
     if (!Object.prototype.hasOwnProperty.call(value, 'parent_tool_use_id')
       || (value.parent_tool_use_id !== null && typeof value.parent_tool_use_id !== 'string')) {
