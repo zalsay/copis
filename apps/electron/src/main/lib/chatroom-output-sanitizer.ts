@@ -12,8 +12,11 @@ const CLEAN_PLACEHOLDER = '[内容已清理]'
 const PATH_PLACEHOLDER = '[本地路径已隐藏]'
 const SECRET_PLACEHOLDER = '[敏感信息已隐藏]'
 const ANSI_ESCAPE = /\u001B(?:\][^\u0007]*(?:\u0007|\u001B\\)|\[[0-?]*[ -/]*[@-~])/g
-const POSIX_PATH = /(^|[^\w:\]])\/(?:[A-Za-z0-9._~@%+-]+\/)*[A-Za-z0-9._~@%+-]+/g
-const WINDOWS_PATH = /(^|[^\w])(?:[A-Za-z]:[\\/])(?:[^\s\\/:*?"<>|]+[\\/])*[^\s\\/:*?"<>|]+/g
+const PATH_COMPONENT = String.raw`[^\s/\\:*?"<>|\[\]]+`
+const PATH_DIRECTORY = `${PATH_COMPONENT}(?:[ \t]+${PATH_COMPONENT})*`
+const PATH_FILE = `(?:${PATH_COMPONENT}(?:[ \t]+${PATH_COMPONENT})*\\.${PATH_COMPONENT}|${PATH_COMPONENT})`
+const POSIX_PATH = new RegExp(`(^|[^\\w:\\]])/(?:${PATH_DIRECTORY}/)*${PATH_FILE}(?=$|[\\s,;，。！？、；：])`, 'gu')
+const WINDOWS_PATH = new RegExp(`(^|[^\\w])(?:[A-Za-z]:[\\\\/])(?:${PATH_DIRECTORY}[\\\\/])*${PATH_FILE}(?=$|[\\s,;，。！？、；：])`, 'gu')
 
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
@@ -46,17 +49,46 @@ function truncateUtf8(value: string): string {
   const encoded = new TextEncoder().encode(value)
   if (encoded.byteLength <= MAX_OUTPUT_BYTES) return value
   let end = MAX_OUTPUT_BYTES
-  while (end > 0 && ((encoded[end] ?? 0) & 0xc0) === 0x80) end -= 1
-  return new TextDecoder().decode(encoded.slice(0, end))
+  const decoder = new TextDecoder('utf-8', { fatal: true })
+  while (end > 0) {
+    try {
+      return decoder.decode(encoded.slice(0, end))
+    } catch {
+      end -= 1
+    }
+  }
+  return ''
+}
+
+function hasUnpairedSurrogate(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index)
+    if (code >= 0xD800 && code <= 0xDBFF) {
+      const next = value.charCodeAt(index + 1)
+      if (next >= 0xDC00 && next <= 0xDFFF) {
+        index += 1
+        continue
+      }
+      return true
+    }
+    if (code >= 0xDC00 && code <= 0xDFFF) return true
+  }
+  return false
+}
+
+function getOverlappingSensitiveValues(roots: string[], secrets: string[]): string[] {
+  return secrets.filter((secret) => roots.some((root) => root.includes(secret) || secret.includes(root)))
 }
 
 function sanitizeText(value: string, context: ChatRoomOutputSanitizerContext): string {
   let sanitized = normalizeText(value)
+  if (hasUnpairedSurrogate(sanitized)) return CLEAN_PLACEHOLDER
+  sanitized = replaceSecrets(sanitized, getOverlappingSensitiveValues(context.executionRoots, context.sensitiveValues))
   sanitized = replaceKnownRoots(sanitized, context.executionRoots)
   sanitized = replaceGenericPaths(sanitized)
   sanitized = replaceSecrets(sanitized, context.sensitiveValues)
   sanitized = truncateUtf8(sanitized)
-  return sanitized.length > 0 ? sanitized : CLEAN_PLACEHOLDER
+  return sanitized.trim().length > 0 ? sanitized : CLEAN_PLACEHOLDER
 }
 
 function intersectIds(values: string[], allowed: string[]): string[] {

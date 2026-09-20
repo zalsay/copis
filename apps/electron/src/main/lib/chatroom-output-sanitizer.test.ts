@@ -66,8 +66,26 @@ test('Given overlapping roots and secrets When 清理 Then 不泄漏任一子串
 })
 
 test('Given generic POSIX 和 Windows 绝对路径 When 清理 Then 均隐藏路径', () => {
-  const result = parseAndSanitizeChatRoomAgentOutput('/home/user/private.txt 与 C:\\Users\\Alice\\secret.txt', context)
-  expect(result.text).toBe('[本地路径已隐藏] 与 [本地路径已隐藏]')
+  const result = parseAndSanitizeChatRoomAgentOutput('/home/user/private.txt 与 /Users/张三/秘密.txt 与 C:\\Program Files\\secret.txt', context)
+  expect(result.text).toBe('[本地路径已隐藏] 与 [本地路径已隐藏] 与 [本地路径已隐藏]')
+})
+
+test('Given 清理后只剩换行和制表符 When 上报 Then 使用非空安全占位', () => {
+  expect(parseAndSanitizeChatRoomAgentOutput('\n\t\n', context).text).toBe('[内容已清理]')
+})
+
+test('Given secret 完整包含 execution root When 清理 Then 不泄漏 secret 的任一子串', () => {
+  const secretContext = { ...context, executionRoots: ['/tmp/chatroom/runtime'], sensitiveValues: ['/tmp/chatroom/runtime/credential.txt'] }
+  const result = parseAndSanitizeChatRoomAgentOutput('/tmp/chatroom/runtime/credential.txt', secretContext)
+  expect(result.text).toBe('[敏感信息已隐藏]')
+  expect(result.text).not.toContain('/tmp/chatroom/runtime')
+  expect(result.text).not.toContain('credential.txt')
+})
+
+test('Given text 含 unpaired surrogate When 清理 Then 拒绝无效 UTF-8', () => {
+  const result = parseAndSanitizeChatRoomAgentOutput('\uD800', context)
+  expect(result.text).toBe('[内容已清理]')
+  expect(result.text).not.toContain('\uFFFD')
 })
 
 test('Given 输出超过 64 KiB UTF-8 边界 When 清理 Then 截断不破坏字符', () => {
