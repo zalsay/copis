@@ -309,6 +309,45 @@ describe('聊天室本地工作区存储', () => {
     expect(roomsRoot).toBe(getChatRoomsRootPath())
   })
 
+  test('archived display name 不阻塞 active update，但 active-active 仍冲突', () => {
+    const store = makeStore()
+    const archived = provision(store, { displayName: 'Reusable' })
+    const active = provision(store, { displayName: 'Active A' })
+    const other = provision(store, { displayName: 'Active B' })
+    store.archiveAgent({ roomId: 'room-1', roomAgentId: archived.agents[0]!.roomAgentId })
+
+    expect(store.updateAgent({
+      roomId: 'room-1',
+      roomAgentId: active.agents[1]!.roomAgentId,
+      displayName: 'Reusable',
+    }).agents.find((agent) => agent.roomAgentId === active.agents[1]!.roomAgentId)?.displayName).toBe('Reusable')
+    expect(() => store.updateAgent({
+      roomId: 'room-1',
+      roomAgentId: other.agents[2]!.roomAgentId,
+      displayName: 'Reusable',
+    })).toThrow('display_name_conflict')
+  })
+
+  test('persisted roomAgentId 必须是安全 path component，拒绝目录穿越和特殊组件', () => {
+    const store = makeStore()
+    const saved = provision(store)
+    const configPath = getChatRoomConfigPath('room-1')
+    const roomPath = getChatRoomPath('room-1')
+    const outsidePath = join(roomPath, 'outside')
+    mkdirSync(outsidePath)
+    const sentinelPath = join(outsidePath, 'sentinel.txt')
+    writeFileSync(sentinelPath, 'keep')
+    const config = JSON.parse(readFileSync(configPath, 'utf8'))
+    for (const roomAgentId of ['../outside', 'agent/other', '.', '..']) {
+      writeFileSync(configPath, JSON.stringify({
+        ...config,
+        agents: [{ ...saved.agents[0], roomAgentId }],
+      }))
+      expect(() => store.read('room-1')).toThrow('invalid_room_config')
+      expect(readFileSync(sentinelPath, 'utf8')).toBe('keep')
+    }
+  })
+
   test('invocation 状态矩阵拒绝不一致的时间和 failure 字段', () => {
     const store = makeStore()
     const saved = provision(store)

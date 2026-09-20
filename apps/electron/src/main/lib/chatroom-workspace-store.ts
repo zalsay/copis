@@ -161,7 +161,7 @@ function validateAgent(value: unknown): asserts value is ChatRoomAgentLocalConfi
     ['modelId', 'skillSnapshotDigest', 'archivedAt'])) {
     throw new Error('invalid_room_config')
   }
-  if (!isId(value.roomAgentId) || typeof value.displayName !== 'string' || value.displayName.trim().length === 0
+  if (!isPathComponent(value.roomAgentId) || typeof value.displayName !== 'string' || value.displayName.trim().length === 0
     || value.displayName.length > CHATROOM_MAX_ID_LENGTH || !isId(value.sourceWorkspaceId) || !isId(value.sessionId)
     || !isId(value.channelId) || !isContextCount(value.contextMessageCount)
     || typeof value.memorySharingEnabled !== 'boolean' || typeof value.skillSharingEnabled !== 'boolean') {
@@ -402,7 +402,7 @@ export class ChatRoomWorkspaceStore {
     const nextAgent: ChatRoomAgentLocalConfig = { ...existingAgent }
     if (input.displayName !== undefined) {
       if (input.displayName.trim().length === 0 || input.displayName.length > CHATROOM_MAX_ID_LENGTH) throw new Error('invalid_agent_input')
-      if (current.agents.some((agent, candidateIndex) => candidateIndex !== index
+      if (current.agents.some((agent, candidateIndex) => candidateIndex !== index && agent.archivedAt === undefined
         && agent.displayName.trim().toLowerCase() === input.displayName!.trim().toLowerCase())) {
         throw new Error('display_name_conflict')
       }
