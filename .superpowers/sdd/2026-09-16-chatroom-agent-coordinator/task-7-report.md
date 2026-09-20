@@ -56,3 +56,13 @@ bun run --filter='@copis/electron' typecheck                    # pass
 ## 提交与状态
 
 本报告与四个实现/测试文件应在同一个独立 commit 中提交。提交前必须确认 5 个既有 dirty Rust 文件仍未暂存，且 `git diff --check` 通过。
+
+## Fix Round 1
+
+Reviewer 指出的边界已在本轮修复：
+
+- 五个回传方法现在严格生成 Phase 2 `require_keys` 对应的 exact body；上下文由 Main-only resolver 提供，公开方法签名精确实现五个 Shared report 方法，resolver 缺失、异常、原型/字段/ASCII component 不合法都会在 fetch 前失败；调用方注入的同名额外字段不会覆盖 resolver。
+- handler 使用静态字面量 lazy import，并新增无默认实例的 coordinator 注册 scaffold；注册 disposer 带 token，旧实例 disposer 不会清理替换后的实例。
+- callback 结果运行时只接受 `accepted`/`duplicate`；callback/协调器异常统一为固定 `chatroom_coordinator_failed` 中文响应，详细异常仅经 `redactSensitiveLogValue` 写日志。
+
+本轮 RED 由 exact body、resolver fail-closed、注册 token、未知 callback 状态及敏感错误响应测试证明；GREEN 聚焦验证为：client 10 pass、handler 12 pass、coordinator scaffold 2 pass、Electron typecheck pass。提交 hash 由本轮独立 commit 记录在交付消息中。

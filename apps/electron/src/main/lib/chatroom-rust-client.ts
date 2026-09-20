@@ -1,8 +1,6 @@
 /** 聊天室 Agent 状态回传客户端：只允许访问本机 Rust 网关的五个冻结路由。 */
 
 import type {
-  ChatRoomAgentOutput,
-  ChatRoomInvocationFailureCode,
   ChatRoomRustApi,
 } from '@copis/shared'
 import { getHttpApiInternalToken, HTTP_API_HOST, HTTP_API_PORT } from './http-api-server'
@@ -16,15 +14,12 @@ const ABSOLUTE_PATH_PATTERN = /(?:[A-Za-z]:[\\/]|\/(?:Users|home|private|tmp|var
 
 type FetchImplementation = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>
 
-/**
- * Rust 回传所需的内部上下文由 Main 协调器提供；它不会进入 Renderer 或远端 DTO。
- * 五个公开方法仍可在没有上下文时用于协议/单元测试，生产调用应提供完整字段。
- */
+/** Rust 回传所需的上下文只由 Main 协调器提供，不进入 Renderer。 */
 export interface ChatRoomInvocationReportContext {
-  roomId?: string
-  agentId?: string
-  deviceId?: string
-  clientMessageId?: string
+  roomId: string
+  agentId: string
+  deviceId: string
+  clientMessageId: string
 }
 
 export interface HttpChatRoomRustApiClientOptions {
@@ -34,6 +29,11 @@ export interface HttpChatRoomRustApiClientOptions {
   getToken?: () => string | null | undefined
   getInvocationContext?: (invocationId: string) => ChatRoomInvocationReportContext | undefined
 }
+
+type ChatRoomReportApi = Pick<
+  ChatRoomRustApi,
+  'reportAccepted' | 'reportRunning' | 'reportDelta' | 'reportCompleted' | 'reportFailed'
+>
 
 function resolveBaseUrl(baseUrl: string | undefined): string {
   const value = baseUrl?.trim() || `http://${HTTP_API_HOST}:${HTTP_API_PORT}`
@@ -108,26 +108,32 @@ async function readBoundedResponseText(response: Response): Promise<string> {
   }
 }
 
-function contextBody(
-  invocationId: string,
-  context: ChatRoomInvocationReportContext | undefined,
-): Record<string, unknown> {
-  return {
-    invocationId,
-    ...(context?.roomId ? { roomId: context.roomId } : {}),
-    ...(context?.agentId ? { agentId: context.agentId } : {}),
-    ...(context?.deviceId ? { deviceId: context.deviceId } : {}),
-  }
+const SAFE_COMPONENT_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false
+  const prototype = Object.getPrototypeOf(value)
+  return prototype === Object.prototype || prototype === null
 }
 
-function mergeInvocationContext(
-  invocationId: string,
-  input: ChatRoomInvocationReportContext,
-  getContext: (invocationId: string) => ChatRoomInvocationReportContext | undefined,
-): ChatRoomInvocationReportContext {
+function validateContext(value: unknown): ChatRoomInvocationReportContext {
+  if (!isPlainRecord(value)) throw new Error('context_not_plain')
+  const keys = Reflect.ownKeys(value)
+  const expected = ['roomId', 'agentId', 'deviceId', 'clientMessageId']
+  if (keys.length !== expected.length || keys.some((key) => typeof key !== 'string' || !expected.includes(key))) {
+    throw new Error('context_keys_invalid')
+  }
+  for (const key of expected) {
+    const component = value[key]
+    if (typeof component !== 'string' || !SAFE_COMPONENT_PATTERN.test(component)) {
+      throw new Error('context_component_invalid')
+    }
+  }
   return {
-    ...getContext(invocationId),
-    ...input,
+    roomId: value.roomId as string,
+    agentId: value.agentId as string,
+    deviceId: value.deviceId as string,
+    clientMessageId: value.clientMessageId as string,
   }
 }
 
@@ -135,17 +141,17 @@ function mergeInvocationContext(
  * 只实现 Task 7 冻结的五个回传方法。
  * `releaseAgentLeases` 没有对应的 Phase 2 loopback 路由，由 Task 10 生命周期适配层负责。
  */
-export class HttpChatRoomRustApiClient implements Omit<ChatRoomRustApi, 'releaseAgentLeases'> {
+export class HttpChatRoomRustApiClient implements ChatRoomReportApi {
   private readonly baseUrl: string
   private readonly fetchImpl: FetchImplementation
   private readonly getToken: () => string | null | undefined
-  private readonly getInvocationContext: (invocationId: string) => ChatRoomInvocationReportContext | undefined
+  private readonly getInvocationContext?: (invocationId: string) => ChatRoomInvocationReportContext | undefined
 
   constructor(options: HttpChatRoomRustApiClientOptions = {}) {
     this.baseUrl = resolveBaseUrl(options.baseUrl)
     this.fetchImpl = options.fetchImpl ?? fetch
     this.getToken = options.getToken ?? getHttpApiInternalToken
-    this.getInvocationContext = options.getInvocationContext ?? (() => undefined)
+    this.getInvocationContext = options.getInvocationContext
   }
 
   private async post(path: string, body: Record<string, unknown>): Promise<void> {
@@ -177,53 +183,65 @@ export class HttpChatRoomRustApiClient implements Omit<ChatRoomRustApi, 'release
     }
   }
 
-  async reportAccepted(input: { invocationId: string } & ChatRoomInvocationReportContext): Promise<void> {
+  private resolveContext(invocationId: string): ChatRoomInvocationReportContext {
+    if (!this.getInvocationContext) throw new Error('聊天室回传上下文不可用')
+    try {
+      return validateContext(this.getInvocationContext(invocationId))
+    } catch {
+      throw new Error('聊天室回传上下文不可用')
+    }
+  }
+
+  async reportAccepted(input: Parameters<ChatRoomReportApi['reportAccepted']>[0]): Promise<void> {
     const invocationId = assertInvocationId(input.invocationId)
-    const context = mergeInvocationContext(input.invocationId, input, this.getInvocationContext)
+    const context = this.resolveContext(input.invocationId)
     await this.post(`/api/internal/chatrooms/invocations/${invocationId}/accepted`, {
-      ...contextBody(input.invocationId, context),
+      roomId: context.roomId,
+      invocationId: input.invocationId,
+      agentId: context.agentId,
+      deviceId: context.deviceId,
     })
   }
 
-  async reportRunning(input: { invocationId: string } & ChatRoomInvocationReportContext): Promise<void> {
+  async reportRunning(input: Parameters<ChatRoomReportApi['reportRunning']>[0]): Promise<void> {
     const invocationId = assertInvocationId(input.invocationId)
-    const context = mergeInvocationContext(input.invocationId, input, this.getInvocationContext)
+    const context = this.resolveContext(input.invocationId)
     await this.post(`/api/internal/chatrooms/invocations/${invocationId}/running`, {
-      ...contextBody(input.invocationId, context),
+      roomId: context.roomId,
+      invocationId: input.invocationId,
     })
   }
 
-  async reportDelta(input: { invocationId: string; delta: string } & ChatRoomInvocationReportContext): Promise<void> {
+  async reportDelta(input: Parameters<ChatRoomReportApi['reportDelta']>[0]): Promise<void> {
     const invocationId = assertInvocationId(input.invocationId)
+    const context = this.resolveContext(input.invocationId)
     const delta = assertDelta(input.delta)
-    const context = mergeInvocationContext(input.invocationId, input, this.getInvocationContext)
     await this.post(`/api/internal/chatrooms/invocations/${invocationId}/delta`, {
-      ...contextBody(input.invocationId, context),
+      roomId: context.roomId,
+      invocationId: input.invocationId,
       delta,
     })
   }
 
-  async reportCompleted(input: { invocationId: string; output: ChatRoomAgentOutput } & ChatRoomInvocationReportContext): Promise<void> {
+  async reportCompleted(input: Parameters<ChatRoomReportApi['reportCompleted']>[0]): Promise<void> {
     const invocationId = assertInvocationId(input.invocationId)
-    const context = mergeInvocationContext(input.invocationId, input, this.getInvocationContext)
+    const context = this.resolveContext(input.invocationId)
     await this.post(`/api/internal/chatrooms/invocations/${invocationId}/completed`, {
-      ...contextBody(input.invocationId, context),
+      roomId: context.roomId,
+      invocationId: input.invocationId,
       content: input.output.text,
       mentionAgentIds: input.output.mentionedAgentIds,
       attachmentIds: input.output.attachmentIds,
-      clientMessageId: context?.clientMessageId ?? input.invocationId,
+      clientMessageId: context.clientMessageId,
     })
   }
 
-  async reportFailed(input: {
-    invocationId: string
-    code: ChatRoomInvocationFailureCode
-    message: string
-  } & ChatRoomInvocationReportContext): Promise<void> {
+  async reportFailed(input: Parameters<ChatRoomReportApi['reportFailed']>[0]): Promise<void> {
     const invocationId = assertInvocationId(input.invocationId)
-    const context = mergeInvocationContext(input.invocationId, input, this.getInvocationContext)
+    const context = this.resolveContext(input.invocationId)
     await this.post(`/api/internal/chatrooms/invocations/${invocationId}/failed`, {
-      ...contextBody(input.invocationId, context),
+      roomId: context.roomId,
+      invocationId: input.invocationId,
       failureCode: input.code,
       message: input.message,
     })

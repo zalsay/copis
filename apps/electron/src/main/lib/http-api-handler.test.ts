@@ -130,14 +130,27 @@ describe('聊天室 Rust bridge HTTP handler', () => {
   })
 
   test('Given callback 抛错 When bridge 调用 Then 返回统一 500 且不产生未处理 rejection', async () => {
-    const handleChatRoomInvocation = mock(async () => { throw new Error('coordinator failed') })
+    const handleChatRoomInvocation = mock(async () => { throw new Error('token=secret /Users/private/coordinator failed') })
     const response = await handleHttpApiRequest({
       method: 'POST',
       path: '/api/internal/chatrooms/invocations',
       body: JSON.stringify(invocation),
     }, createDependencies({ handleChatRoomInvocation }))
 
-    expect(response).toEqual({ status: 500, body: { code: 'internal_error', error: 'coordinator failed' } })
+    expect(response).toEqual({ status: 500, body: { code: 'chatroom_coordinator_failed', error: '聊天室协调器处理失败' } })
+    expect(JSON.stringify(response)).not.toContain('secret')
+    expect(JSON.stringify(response)).not.toContain('/Users/private')
+  })
+
+  test('Given coordinator callback 返回未知状态 When bridge 调用 Then 固定返回 500 而不是误认 accepted', async () => {
+    const handleChatRoomInvocation = mock(async () => 'unexpected' as never)
+    const response = await handleHttpApiRequest({
+      method: 'POST',
+      path: '/api/internal/chatrooms/invocations',
+      body: JSON.stringify(invocation),
+    }, createDependencies({ handleChatRoomInvocation }))
+
+    expect(response).toEqual({ status: 500, body: { code: 'chatroom_coordinator_failed', error: '聊天室协调器处理失败' } })
   })
 
   test('Given disconnected body 含未知字段 When bridge 处理 Then 拒绝且不清理', async () => {
@@ -153,14 +166,16 @@ describe('聊天室 Rust bridge HTTP handler', () => {
   })
 
   test('Given disconnected callback 抛错 When bridge 处理 Then 返回统一 500 而非误报 coordinator unavailable', async () => {
-    const handleChatRoomGatewayDisconnected = mock(async () => { throw new Error('disconnect failed') })
+    const handleChatRoomGatewayDisconnected = mock(async () => { throw new Error('token=secret /Users/private/disconnect failed') })
     const response = await handleHttpApiRequest({
       method: 'POST',
       path: '/api/internal/chatrooms/disconnected',
       body: JSON.stringify({ reason: 'realtime_disconnected' }),
     }, createDependencies({ handleChatRoomGatewayDisconnected }))
 
-    expect(response).toEqual({ status: 500, body: { code: 'internal_error', error: 'disconnect failed' } })
+    expect(response).toEqual({ status: 500, body: { code: 'chatroom_coordinator_failed', error: '聊天室协调器处理失败' } })
+    expect(JSON.stringify(response)).not.toContain('secret')
+    expect(JSON.stringify(response)).not.toContain('/Users/private')
   })
 
   test('Given Task 1 validator When fixture used Then it remains strict plain DTO', () => {

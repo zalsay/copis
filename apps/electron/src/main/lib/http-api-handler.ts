@@ -525,14 +525,18 @@ interface ChatRoomCoordinatorModule {
 
 /**
  * 聊天室协调器必须延迟加载，避免健康检查或普通文件 API 触发 Agent runtime 初始化。
- * 使用字符串变量保持 Task 9 尚未落地时的构建兼容性；生产模块存在后仍只解析该固定模块。
+ * 使用静态字面量 import，确保 esbuild 将 Task 9 模块纳入 Main bundle。
  */
 async function getDefaultChatRoomCoordinator(): Promise<ChatRoomCoordinatorFacade> {
-  const moduleName: string = './chatroom-agent-coordinator'
-  const module = await import(moduleName) as ChatRoomCoordinatorModule
+  const module = await import('./chatroom-agent-coordinator') as ChatRoomCoordinatorModule
   const coordinator = module.getChatRoomAgentCoordinator?.() ?? module.chatRoomAgentCoordinator
   if (!coordinator) throw new Error('聊天室协调器导出不可用')
   return coordinator
+}
+
+function throwChatRoomCoordinatorFailure(error: unknown): never {
+  console.error('[聊天室] coordinator callback 失败:', redactSensitiveLogValue(error))
+  throw new HttpApiRequestError('聊天室协调器处理失败', 500, 'chatroom_coordinator_failed')
 }
 
 function isExactDisconnectedBody(value: unknown): boolean {
@@ -564,7 +568,11 @@ async function handleChatRoomInternalRequest(
       throw new HttpApiRequestError('聊天室断开通知参数不正确', 400, 'invalid_chatroom_disconnect')
     }
     if (dependencies.handleChatRoomGatewayDisconnected) {
-      await dependencies.handleChatRoomGatewayDisconnected()
+      try {
+        await dependencies.handleChatRoomGatewayDisconnected()
+      } catch (error) {
+        throwChatRoomCoordinatorFailure(error)
+      }
       return { status: 204 }
     }
     let coordinator: ChatRoomCoordinatorFacade
@@ -573,7 +581,11 @@ async function handleChatRoomInternalRequest(
     } catch {
       throw new HttpApiRequestError('聊天室协调器不可用', 503, 'chatroom_coordinator_unavailable')
     }
-    await coordinator.handleGatewayDisconnected()
+    try {
+      await coordinator.handleGatewayDisconnected()
+    } catch (error) {
+      throwChatRoomCoordinatorFailure(error)
+    }
     return { status: 204 }
   }
 
@@ -582,7 +594,11 @@ async function handleChatRoomInternalRequest(
   }
   let result: 'accepted' | 'duplicate'
   if (dependencies.handleChatRoomInvocation) {
-    result = await dependencies.handleChatRoomInvocation(body)
+    try {
+      result = await dependencies.handleChatRoomInvocation(body)
+    } catch (error) {
+      throwChatRoomCoordinatorFailure(error)
+    }
   } else {
     let coordinator: ChatRoomCoordinatorFacade
     try {
@@ -590,7 +606,15 @@ async function handleChatRoomInternalRequest(
     } catch {
       throw new HttpApiRequestError('聊天室协调器不可用', 503, 'chatroom_coordinator_unavailable')
     }
-    result = await coordinator.handleInvocation(body)
+    try {
+      result = await coordinator.handleInvocation(body)
+    } catch (error) {
+      throwChatRoomCoordinatorFailure(error)
+    }
+  }
+  if (result !== 'accepted' && result !== 'duplicate') {
+    console.error('[聊天室] coordinator 返回了未知状态:', redactSensitiveLogValue(result))
+    throw new HttpApiRequestError('聊天室协调器处理失败', 500, 'chatroom_coordinator_failed')
   }
   return result === 'duplicate'
     ? { status: 200, body: { status: 'duplicate' } }

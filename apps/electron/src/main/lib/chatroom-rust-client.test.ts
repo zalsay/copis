@@ -23,9 +23,20 @@ const { HttpChatRoomRustApiClient } = await import('./chatroom-rust-client')
 
 type RecordedRequest = { input: RequestInfo | URL; init?: RequestInit }
 
+const context = {
+  roomId: 'room-1',
+  agentId: 'agent-a',
+  deviceId: 'device-1',
+  clientMessageId: 'message-1',
+}
+
 function createClient(
   requests: RecordedRequest[],
-  options: { token?: string | null; response?: Response } = {},
+  options: {
+    token?: string | null
+    response?: Response
+    getInvocationContext?: (invocationId: string) => typeof context
+  } = {},
 ) {
   return new HttpChatRoomRustApiClient({
     fetchImpl: async (input, init) => {
@@ -33,6 +44,7 @@ function createClient(
       return options.response ?? new Response(null, { status: 204 })
     },
     getToken: () => options.token === undefined ? 'internal-test' : options.token,
+    getInvocationContext: options.getInvocationContext ?? (() => context),
   })
 }
 
@@ -57,6 +69,22 @@ describe('HttpChatRoomRustApiClient', () => {
       'http://127.0.0.1:51730/api/internal/chatrooms/invocations/inv-1/completed',
       'http://127.0.0.1:51730/api/internal/chatrooms/invocations/inv-1/failed',
     ])
+    expect(JSON.parse(String(requests[0]?.init?.body))).toEqual({
+      roomId: 'room-1', invocationId: 'inv-1', agentId: 'agent-a', deviceId: 'device-1',
+    })
+    expect(JSON.parse(String(requests[1]?.init?.body))).toEqual({
+      roomId: 'room-1', invocationId: 'inv-1',
+    })
+    expect(JSON.parse(String(requests[2]?.init?.body))).toEqual({
+      roomId: 'room-1', invocationId: 'inv-1', delta: '你好',
+    })
+    expect(JSON.parse(String(requests[3]?.init?.body))).toEqual({
+      roomId: 'room-1', invocationId: 'inv-1', content: '完成',
+      mentionAgentIds: [], attachmentIds: [], clientMessageId: 'message-1',
+    })
+    expect(JSON.parse(String(requests[4]?.init?.body))).toEqual({
+      roomId: 'room-1', invocationId: 'inv-1', failureCode: 'internal_error', message: '失败',
+    })
     for (const request of requests) {
       expect(request.init?.method).toBe('POST')
       expect(request.init?.headers).toEqual(expect.objectContaining({
@@ -100,6 +128,39 @@ describe('HttpChatRoomRustApiClient', () => {
     expect(requests).toHaveLength(0)
   })
 
+  test('Given resolver 缺失、抛错或返回非法 context When 回传 Then 在 fetch 前 fail closed', async () => {
+    const requests: RecordedRequest[] = []
+    const missing = new HttpChatRoomRustApiClient({
+      fetchImpl: async (input, init) => {
+        requests.push({ input, init })
+        return new Response(null, { status: 204 })
+      },
+      getToken: () => 'internal-test',
+    })
+    const throwing = createClient(requests, { getInvocationContext: () => { throw new Error('token=secret /Users/private') } })
+    const invalid = createClient(requests, { getInvocationContext: () => ({ ...context, roomId: '../escape' }) })
+
+    await expect(missing.reportAccepted({ invocationId: 'inv-1' })).rejects.toThrow('聊天室回传上下文不可用')
+    await expect(throwing.reportRunning({ invocationId: 'inv-1' })).rejects.toThrow('聊天室回传上下文不可用')
+    await expect(invalid.reportFailed({ invocationId: 'inv-1', code: 'internal_error', message: '失败' })).rejects.toThrow('聊天室回传上下文不可用')
+    expect(requests).toHaveLength(0)
+  })
+
+  test('Given JS caller 伪造 room/device 字段 When 回传 Then 只能使用 resolver context 且 body 不含额外字段', async () => {
+    const requests: RecordedRequest[] = []
+    const client = createClient(requests)
+    await client.reportAccepted({
+      invocationId: 'inv-1',
+      roomId: 'attacker-room',
+      agentId: 'attacker-agent',
+      deviceId: 'attacker-device',
+    } as never)
+
+    expect(JSON.parse(String(requests[0]?.init?.body))).toEqual({
+      roomId: 'room-1', invocationId: 'inv-1', agentId: 'agent-a', deviceId: 'device-1',
+    })
+  })
+
   test('Given 非 loopback baseUrl When 创建客户端 Then 立即拒绝外部或 localhost 地址', () => {
     expect(() => new HttpChatRoomRustApiClient({ baseUrl: 'http://localhost:51730' })).toThrow('Rust HTTP API 必须使用 loopback 地址')
     expect(() => new HttpChatRoomRustApiClient({ baseUrl: 'https://evil.example.test:51730' })).toThrow('Rust HTTP API 必须使用 loopback 地址')
@@ -114,7 +175,7 @@ describe('HttpChatRoomRustApiClient', () => {
         return new Response(null, { status: 204 })
       },
       getToken: () => 'internal-test',
-      getInvocationContext: () => ({ roomId: 'room-1', agentId: 'agent-a', deviceId: 'device-1', clientMessageId: 'message-1' }),
+      getInvocationContext: () => context,
     })
 
     await client.reportAccepted({ invocationId: 'inv-1' })
@@ -124,7 +185,7 @@ describe('HttpChatRoomRustApiClient', () => {
       invocationId: 'inv-1', roomId: 'room-1', agentId: 'agent-a', deviceId: 'device-1',
     })
     expect(JSON.parse(String(requests[1]?.init?.body))).toEqual({
-      invocationId: 'inv-1', roomId: 'room-1', agentId: 'agent-a', deviceId: 'device-1',
+      invocationId: 'inv-1', roomId: 'room-1',
       content: '完成', mentionAgentIds: ['agent-b'], attachmentIds: [], clientMessageId: 'message-1',
     })
   })
@@ -156,5 +217,18 @@ describe('HttpChatRoomRustApiClient', () => {
     if (!(error instanceof Error)) {
       throw new Error('预期客户端抛出 Error')
     }
+  })
+
+  test('Given 错误响应 UTF-8 字符被拆成多块 When 请求失败 Then 有界读取仍保留完整字符', async () => {
+    const encoded = new TextEncoder().encode('错误：请重试')
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        for (const byte of encoded) controller.enqueue(new Uint8Array([byte]))
+        controller.close()
+      },
+    })
+    const client = createClient([], { response: new Response(stream, { status: 500 }) })
+
+    await expect(client.reportAccepted({ invocationId: 'inv-1' })).rejects.toThrow('错误：请重试')
   })
 })
