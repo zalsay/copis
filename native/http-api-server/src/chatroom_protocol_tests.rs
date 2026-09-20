@@ -395,17 +395,69 @@ fn given_valid_room_ids_when_normalizing_then_reject_path_and_control_injection(
 }
 
 #[test]
-fn given_payload_at_64_kib_when_parsing_then_accept_but_reject_payload_plus_one() {
-    for (size, accepted) in [(65_525usize, true), (65_526, false)] {
+fn given_completed_event_with_64_kib_content_and_envelope_when_parsing_then_preserve_content() {
+    let content = "界".repeat(21_845);
+    let input = json!({
+        "type":"agent.completed",
+        "roomId":"room-1",
+        "payload":{
+            "invocationId":"invocation-1",
+            "content":content,
+            "mentionAgentIds":["agent-1", "agent-2", "agent-3"],
+            "attachmentIds":["attachment-1", "attachment-2"],
+            "clientMessageId":"client-message-1"
+        }
+    });
+    let bytes = serde_json::to_vec(&input).unwrap();
+    assert!(bytes.len() > 64 * 1024);
+    assert!(bytes.len() <= 128 * 1024);
+
+    let event = parse_event(&bytes).expect("完整 envelope 不应受 64 KiB 正文预算误伤");
+    match event {
+        ChatroomEvent::AgentCompleted { payload, .. } => {
+            assert_eq!(payload["content"], content);
+        }
+        other => panic!("unexpected event: {other:?}"),
+    }
+}
+
+#[test]
+fn given_completed_content_over_64_kib_when_parsing_then_reject_field_without_widening_text_limit()
+{
+    let input = json!({
+        "type":"agent.completed",
+        "roomId":"room-1",
+        "payload":{"invocationId":"invocation-1", "content":"界".repeat(21_846)}
+    });
+    let bytes = serde_json::to_vec(&input).unwrap();
+    assert!(bytes.len() < 128 * 1024);
+    assert!(parse_event(&bytes).is_err());
+}
+
+#[test]
+fn given_payload_over_128_kib_when_parsing_then_reject_whole_frame() {
+    let input = json!({
+        "type":"agent.completed",
+        "roomId":"room-1",
+        "payload":{"blob":"x".repeat(132_000)}
+    });
+    let bytes = serde_json::to_vec(&input).unwrap();
+    assert!(bytes.len() > 128 * 1024);
+    assert!(parse_event(&bytes).is_err());
+}
+
+#[test]
+fn given_delta_content_at_64_kib_when_parsing_then_enforce_field_limit_not_envelope_limit() {
+    for (size, accepted) in [(65_536usize, true), (65_537, false)] {
         let input = json!({
             "type":"agent.delta",
             "roomId":"room-1",
-            "payload":{"text":"x".repeat(size)}
+            "payload":{"delta":"x".repeat(size)}
         });
         assert_eq!(
             parse_event(&serde_json::to_vec(&input).unwrap()).is_ok(),
             accepted,
-            "payload size {size}"
+            "delta size {size}"
         );
     }
 }
@@ -415,7 +467,7 @@ fn given_frame_larger_than_protocol_limit_when_parsing_then_reject() {
     let input = json!({
         "type":"agent.delta",
         "roomId":"room-1",
-        "payload":{"text":"x".repeat(130_000)}
+        "payload":{"text":"x".repeat(132_000)}
     });
     assert!(parse_event(&serde_json::to_vec(&input).unwrap()).is_err());
 }

@@ -11,11 +11,14 @@ pub const CHATROOM_HTTP_PREFIX: &str = "/api/chatrooms/v2";
 pub const CHATROOM_INTERNAL_PREFIX: &str = "/api/internal/chatrooms";
 pub const CHATROOM_SSE_PATH: &str = "/api/chatrooms/v2/events";
 const MAX_FRAME_BYTES: usize = 128 * 1024;
-const MAX_PAYLOAD_BYTES: usize = 64 * 1024;
+// 帧预算覆盖完整 JSON envelope；业务正文仍由字段级预算单独限制。
+const MAX_PAYLOAD_BYTES: usize = MAX_FRAME_BYTES;
+const MAX_TEXT_BYTES: usize = 64 * 1024;
 const MAX_ROOMS: usize = 50;
 const MAX_ID_BYTES: usize = 64;
 const MAX_DEVICE_BYTES: usize = 128;
 const MAX_CLIENT_MESSAGE_ID_BYTES: usize = 128;
+const MAX_ATTACHMENT_IDS: usize = 20;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RoomCursor {
@@ -187,7 +190,7 @@ impl ChatroomCommand {
                     return Err("command contains invalid room id");
                 }
                 if !valid_id(client_message_id, MAX_CLIENT_MESSAGE_ID_BYTES)
-                    || !valid_content(content, MAX_PAYLOAD_BYTES)
+                    || !valid_content(content, MAX_TEXT_BYTES)
                     || !valid_mentions(mention_agent_ids)
                     || attachment_ids
                         .iter()
@@ -225,7 +228,7 @@ impl ChatroomCommand {
                 }
                 match event {
                     AgentEventPayload::Delta { text } => {
-                        if !valid_content(text, MAX_PAYLOAD_BYTES) {
+                        if !valid_content(text, MAX_TEXT_BYTES) {
                             return Err("delta exceeds payload limit");
                         }
                     }
@@ -235,7 +238,7 @@ impl ChatroomCommand {
                         attachment_ids,
                         client_message_id,
                     } => {
-                        if !valid_content(content, MAX_PAYLOAD_BYTES)
+                        if !valid_content(content, MAX_TEXT_BYTES)
                             || !valid_id(client_message_id, MAX_CLIENT_MESSAGE_ID_BYTES)
                             || !valid_mentions(mention_agent_ids)
                             || attachment_ids
@@ -246,8 +249,7 @@ impl ChatroomCommand {
                         }
                     }
                     AgentEventPayload::Failed { code, message } => {
-                        if !valid_id(code, MAX_ID_BYTES)
-                            || !valid_content(message, MAX_PAYLOAD_BYTES)
+                        if !valid_id(code, MAX_ID_BYTES) || !valid_content(message, MAX_TEXT_BYTES)
                         {
                             return Err("failed event contains invalid failure code");
                         }
@@ -308,6 +310,65 @@ fn valid_content(value: &str, max_bytes: usize) -> bool {
 
 fn valid_mentions(values: &[String]) -> bool {
     values.len() <= 3 && values.iter().all(|value| valid_id(value, MAX_ID_BYTES))
+}
+
+fn validate_event_payload_fields(payload: &Value) -> Result<(), ProtocolError> {
+    let Some(object) = payload.as_object() else {
+        return Ok(());
+    };
+
+    for field in ["content", "delta", "message"] {
+        if let Some(value) = object.get(field) {
+            let text = value
+                .as_str()
+                .ok_or_else(|| invalid("event text field must be a string"))?;
+            if !valid_content(text, MAX_TEXT_BYTES) {
+                return Err(ProtocolError::new(
+                    "payload_too_large",
+                    "chatroom event text field exceeds 64 KiB",
+                ));
+            }
+        }
+    }
+
+    for (field, max_bytes) in [
+        ("invocationId", MAX_ID_BYTES),
+        ("failureCode", MAX_ID_BYTES),
+        ("code", MAX_ID_BYTES),
+        ("clientMessageId", MAX_CLIENT_MESSAGE_ID_BYTES),
+    ] {
+        if let Some(value) = object.get(field) {
+            let id = value
+                .as_str()
+                .ok_or_else(|| invalid("event id field must be a string"))?;
+            if !valid_id(id, max_bytes) {
+                return Err(invalid("event id field is invalid"));
+            }
+        }
+    }
+
+    for (field, max_count) in [
+        ("mentionAgentIds", 3usize),
+        ("attachmentIds", MAX_ATTACHMENT_IDS),
+    ] {
+        if let Some(value) = object.get(field) {
+            let ids = value
+                .as_array()
+                .ok_or_else(|| invalid("event id list must be an array"))?;
+            if ids.len() > max_count
+                || ids.iter().any(|value| {
+                    value
+                        .as_str()
+                        .map(|id| !valid_id(id, MAX_ID_BYTES))
+                        .unwrap_or(true)
+                })
+            {
+                return Err(invalid("event id list is invalid"));
+            }
+        }
+    }
+
+    Ok(())
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -626,9 +687,10 @@ pub fn parse_event(bytes: &[u8]) -> Result<ChatroomEvent, ProtocolError> {
     if payload.to_string().len() > MAX_PAYLOAD_BYTES {
         return Err(ProtocolError::new(
             "payload_too_large",
-            "chatroom event payload exceeds 64 KiB",
+            "chatroom event payload exceeds 128 KiB",
         ));
     }
+    validate_event_payload_fields(&payload)?;
     let seq = object
         .get("seq")
         .map(|value| {

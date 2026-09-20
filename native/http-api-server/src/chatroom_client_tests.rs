@@ -1279,6 +1279,35 @@ fn given_invalid_socket_frames_then_return_stable_protocol_errors_without_payloa
 }
 
 #[test]
+fn given_completed_frame_over_64_kib_but_under_128_kib_when_client_decodes_then_preserve_content() {
+    let content = "界".repeat(21_845);
+    let frame = json!({
+        "type":"agent.completed",
+        "roomId":"room-1",
+        "payload":{
+            "invocationId":"invocation-1",
+            "content":content,
+            "mentionAgentIds":["agent-1", "agent-2", "agent-3"],
+            "attachmentIds":["attachment-1", "attachment-2"],
+            "clientMessageId":"client-message-1"
+        }
+    });
+    let encoded = serde_json::to_string(&frame).unwrap();
+    assert!(encoded.len() > 64 * 1024);
+    assert!(encoded.len() <= 128 * 1024);
+
+    let event = decode_message(Message::Text(encoded.into()))
+        .unwrap()
+        .expect("completed frame should decode");
+    match event {
+        ChatroomEvent::AgentCompleted { payload, .. } => {
+            assert_eq!(payload["content"], content);
+        }
+        other => panic!("unexpected client event: {other:?}"),
+    }
+}
+
+#[test]
 fn given_websocket_redirect_then_connector_policy_forbids_forwarding_authorization() {
     let (config, max_redirects) = websocket_connect_config();
     assert_eq!(max_redirects, 0);
