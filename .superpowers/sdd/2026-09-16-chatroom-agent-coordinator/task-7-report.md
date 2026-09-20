@@ -57,6 +57,24 @@ bun run --filter='@copis/electron' typecheck                    # pass
 
 本报告与四个实现/测试文件应在同一个独立 commit 中提交。提交前必须确认 5 个既有 dirty Rust 文件仍未暂存，且 `git diff --check` 通过。
 
+## Fix Round 2
+
+本轮针对 rereview 的两项 Important finding 补充了 BDD 回归覆盖：
+
+### RED
+
+- 新增 completed 输出的 strict shared validator、Rust 64 KiB UTF-8 边界、控制字符、mention/attachment component 以及 failed code/message 场景后，先运行 `bun test apps/electron/src/main/lib/chatroom-rust-client.test.ts`，得到 10 pass / 4 fail；失败均为实现尚未在 fetch 前拒绝伪造输出、超限文本、非法文本和未知 failureCode。
+- 新增 coordinator 错误/未知状态日志脱敏场景，要求捕获 `console.error` 并验证 token、POSIX/Windows 路径和 stack marker 均不出现。
+
+### GREEN
+
+- `HttpChatRoomRustApiClient` 现在先以 `isChatRoomAgentOutput()` 校验完整运行时对象，再执行 Rust `valid_text` 等价检查；mention/attachment ID 使用 Rust `valid_component` 约束；failed report 使用完整 failureCode union 和同一文本边界校验，所有失败均发生在 fetch 前。
+- coordinator 异常和未知状态仅记录固定中文类别，不序列化 error、status 或堆栈；HTTP response 保持固定 `chatroom_coordinator_failed`。
+- 聚焦验证：client 14 pass / 0 fail；handler 14 pass / 0 fail；coordinator scaffold 2 pass / 0 fail；shared chatroom 11 pass / 0 fail；既有 HTTP API bridge 17 pass / 0 fail。
+- `bun run --filter='@copis/electron' typecheck`、`build:main`、`build:renderer`、`git diff --check` 均通过。Renderer 构建仅保留既有 chunk size/dynamic import warnings。
+
+本轮未修改计划、ledger、AGENTS.md、README.md 或五个既有 dirty Rust 文件；提交 hash 记录在交付消息中。
+
 ## Fix Round 1
 
 Reviewer 指出的边界已在本轮修复：

@@ -142,6 +142,37 @@ describe('聊天室 Rust bridge HTTP handler', () => {
     expect(JSON.stringify(response)).not.toContain('/Users/private')
   })
 
+  test('Given coordinator 抛出含敏感路径和堆栈的错误 When bridge 记录失败 Then 日志也不泄露错误详情', async () => {
+    const secret = 'token=secret-value'
+    const posixPath = '/Users/private/coordinator.ts'
+    const windowsPath = 'C:\\Users\\private\\coordinator.ts'
+    const stackMarker = 'STACK_SECRET_MARKER'
+    const error = new Error(`${secret} ${posixPath} ${windowsPath}`)
+    error.stack = `${error.name}: ${error.message}\n    at ${windowsPath}:42:7\n${stackMarker}`
+    const handleChatRoomInvocation = mock(async () => { throw error })
+    const calls: unknown[][] = []
+    const originalError = console.error
+    console.error = (...args: unknown[]) => { calls.push(args) }
+    let response: unknown
+    try {
+      response = await handleHttpApiRequest({
+        method: 'POST',
+        path: '/api/internal/chatrooms/invocations',
+        body: JSON.stringify(invocation),
+      }, createDependencies({ handleChatRoomInvocation }))
+    } finally {
+      console.error = originalError
+    }
+
+    expect(response).toEqual({ status: 500, body: { code: 'chatroom_coordinator_failed', error: '聊天室协调器处理失败' } })
+    const logs = JSON.stringify(calls)
+    expect(logs).not.toContain(secret)
+    expect(logs).not.toContain(posixPath)
+    expect(logs).not.toContain(windowsPath)
+    expect(logs).not.toContain(stackMarker)
+    expect(logs).toContain('协调器回调失败')
+  })
+
   test('Given coordinator callback 返回未知状态 When bridge 调用 Then 固定返回 500 而不是误认 accepted', async () => {
     const handleChatRoomInvocation = mock(async () => 'unexpected' as never)
     const response = await handleHttpApiRequest({
@@ -151,6 +182,37 @@ describe('聊天室 Rust bridge HTTP handler', () => {
     }, createDependencies({ handleChatRoomInvocation }))
 
     expect(response).toEqual({ status: 500, body: { code: 'chatroom_coordinator_failed', error: '聊天室协调器处理失败' } })
+  })
+
+  test('Given coordinator 返回带敏感字段的未知状态 When bridge 记录失败 Then 日志不序列化原始状态', async () => {
+    const value = {
+      status: 'unexpected-status-secret',
+      token: 'token=unknown-secret',
+      posixPath: '/Users/private/unknown.ts',
+      windowsPath: 'C:\\Users\\private\\unknown.ts',
+    }
+    const handleChatRoomInvocation = mock(async () => value as never)
+    const calls: unknown[][] = []
+    const originalError = console.error
+    console.error = (...args: unknown[]) => { calls.push(args) }
+    let response: unknown
+    try {
+      response = await handleHttpApiRequest({
+        method: 'POST',
+        path: '/api/internal/chatrooms/invocations',
+        body: JSON.stringify(invocation),
+      }, createDependencies({ handleChatRoomInvocation }))
+    } finally {
+      console.error = originalError
+    }
+
+    expect(response).toEqual({ status: 500, body: { code: 'chatroom_coordinator_failed', error: '聊天室协调器处理失败' } })
+    const logs = JSON.stringify(calls)
+    expect(logs).not.toContain('unexpected-status-secret')
+    expect(logs).not.toContain('unknown-secret')
+    expect(logs).not.toContain('/Users/private/unknown.ts')
+    expect(logs).not.toContain('C:\\Users\\private\\unknown.ts')
+    expect(logs).toContain('协调器返回了未知状态')
   })
 
   test('Given disconnected body 含未知字段 When bridge 处理 Then 拒绝且不清理', async () => {

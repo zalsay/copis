@@ -535,7 +535,9 @@ async function getDefaultChatRoomCoordinator(): Promise<ChatRoomCoordinatorFacad
 }
 
 function throwChatRoomCoordinatorFailure(error: unknown): never {
-  console.error('[聊天室] coordinator callback 失败:', redactSensitiveLogValue(error))
+  // 协调器错误可能包含令牌、绝对路径和堆栈；这里只记录固定类别，避免污染日志。
+  void error
+  console.error('[聊天室] 协调器回调失败')
   throw new HttpApiRequestError('聊天室协调器处理失败', 500, 'chatroom_coordinator_failed')
 }
 
@@ -613,7 +615,7 @@ async function handleChatRoomInternalRequest(
     }
   }
   if (result !== 'accepted' && result !== 'duplicate') {
-    console.error('[聊天室] coordinator 返回了未知状态:', redactSensitiveLogValue(result))
+    console.error('[聊天室] 协调器返回了未知状态')
     throw new HttpApiRequestError('聊天室协调器处理失败', 500, 'chatroom_coordinator_failed')
   }
   return result === 'duplicate'

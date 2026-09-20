@@ -1,12 +1,16 @@
 /** 聊天室 Agent 状态回传客户端：只允许访问本机 Rust 网关的五个冻结路由。 */
 
+import { isChatRoomAgentOutput } from '@copis/shared'
 import type {
+  ChatRoomAgentOutput,
+  ChatRoomInvocationFailureCode,
   ChatRoomRustApi,
 } from '@copis/shared'
 import { getHttpApiInternalToken, HTTP_API_HOST, HTTP_API_PORT } from './http-api-server'
 import { redactSensitiveLogValue } from './bridge-log-redaction'
 
 const MAX_DELTA_BYTES = 16 * 1024
+const MAX_TEXT_BYTES = 64 * 1024
 const MAX_ERROR_RESPONSE_CHARS = 400
 const MAX_ERROR_RESPONSE_BYTES = MAX_ERROR_RESPONSE_CHARS * 4 + 4
 const INVOCATION_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/
@@ -109,6 +113,84 @@ async function readBoundedResponseText(response: Response): Promise<string> {
 }
 
 const SAFE_COMPONENT_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/
+
+const CHATROOM_FAILURE_CODES: ReadonlySet<ChatRoomInvocationFailureCode> = new Set([
+  'room_not_found',
+  'room_archived',
+  'not_room_member',
+  'share_code_invalid',
+  'share_code_rate_limited',
+  'agent_limit_reached',
+  'agent_offline',
+  'agent_busy',
+  'invocation_duplicate',
+  'invocation_depth_exceeded',
+  'host_approval_timeout',
+  'host_approval_denied',
+  'attachment_not_ready',
+  'attachment_forbidden',
+  'realtime_reconnecting',
+  'gateway_disconnected',
+  'app_quit',
+  'invalid_invocation',
+  'invalid_output',
+  'room_agent_not_found',
+  'internal_error',
+])
+
+function isRustControl(character: string): boolean {
+  const codePoint = character.codePointAt(0)
+  if (codePoint === undefined) return false
+  return codePoint <= 0x1f || (codePoint >= 0x7f && codePoint <= 0x9f)
+}
+
+/** Rust 网关的 required_text 约束：非空、仅允许换行/回车/制表控制符、按 UTF-8 字节计长。 */
+function assertRustText(value: unknown): asserts value is string {
+  if (
+    typeof value !== 'string'
+    || value.trim().length === 0
+    || Buffer.byteLength(value, 'utf8') > MAX_TEXT_BYTES
+    || Array.from(value).some((character) => (
+      isRustControl(character) && character !== '\n' && character !== '\r' && character !== '\t'
+    ))
+  ) {
+    throw new Error('聊天室文本参数不正确')
+  }
+}
+
+function assertChatRoomAgentOutput(value: unknown): asserts value is ChatRoomAgentOutput {
+  if (!isChatRoomAgentOutput(value)) throw new Error('聊天室输出参数不正确')
+  assertRustText(value.text)
+  if (
+    value.mentionedAgentIds.some((id) => !isRustComponent(id))
+    || value.attachmentIds.some((id) => !isRustComponent(id))
+  ) {
+    throw new Error('聊天室输出参数不正确')
+  }
+}
+
+function assertFailureCode(value: unknown): asserts value is ChatRoomInvocationFailureCode {
+  if (typeof value !== 'string' || !CHATROOM_FAILURE_CODES.has(value as ChatRoomInvocationFailureCode)) {
+    throw new Error('failureCode 参数不正确')
+  }
+}
+
+/** 与 Rust 网关 valid_component 对齐；输出 ID 不应因共享校验较宽而绕过路径组件限制。 */
+function isRustComponent(value: string): boolean {
+  if (
+    value.length === 0
+    || value.trim() !== value
+    || Buffer.byteLength(value, 'utf8') > 128
+  ) return false
+  return !Array.from(value).some((character) => {
+    const codePoint = character.codePointAt(0)
+    return (
+      (codePoint !== undefined && (codePoint <= 0x1f || (codePoint >= 0x7f && codePoint <= 0x9f)))
+      || /\s/u.test(character)
+      || character === '/' || character === '?' || character === '#' || character === '\\'
+    )
+  })
+}
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return false
@@ -226,6 +308,7 @@ export class HttpChatRoomRustApiClient implements ChatRoomReportApi {
   async reportCompleted(input: Parameters<ChatRoomReportApi['reportCompleted']>[0]): Promise<void> {
     const invocationId = assertInvocationId(input.invocationId)
     const context = this.resolveContext(input.invocationId)
+    assertChatRoomAgentOutput((input as { output: unknown }).output)
     await this.post(`/api/internal/chatrooms/invocations/${invocationId}/completed`, {
       roomId: context.roomId,
       invocationId: input.invocationId,
@@ -239,6 +322,8 @@ export class HttpChatRoomRustApiClient implements ChatRoomReportApi {
   async reportFailed(input: Parameters<ChatRoomReportApi['reportFailed']>[0]): Promise<void> {
     const invocationId = assertInvocationId(input.invocationId)
     const context = this.resolveContext(input.invocationId)
+    assertFailureCode((input as { code: unknown }).code)
+    assertRustText((input as { message: unknown }).message)
     await this.post(`/api/internal/chatrooms/invocations/${invocationId}/failed`, {
       roomId: context.roomId,
       invocationId: input.invocationId,

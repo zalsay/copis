@@ -190,6 +190,89 @@ describe('HttpChatRoomRustApiClient', () => {
     })
   })
 
+  test('Given completed output 含未知字段或非法 mention/attachment ID When 回传 Then 在 fetch 前拒绝', async () => {
+    const requests: RecordedRequest[] = []
+    const client = createClient(requests)
+    const validOutput = { text: '完成', mentionedAgentIds: [], attachmentIds: [] }
+
+    await expect(client.reportCompleted({
+      invocationId: 'inv-1',
+      output: { ...validOutput, token: 'forged' } as never,
+    })).rejects.toThrow('聊天室输出参数不正确')
+    await expect(client.reportCompleted({
+      invocationId: 'inv-1',
+      output: { ...validOutput, mentionedAgentIds: ['agent/id'] },
+    })).rejects.toThrow('聊天室输出参数不正确')
+    await expect(client.reportCompleted({
+      invocationId: 'inv-1',
+      output: { ...validOutput, attachmentIds: ['attachment id'] },
+    })).rejects.toThrow('聊天室输出参数不正确')
+    expect(requests).toHaveLength(0)
+  })
+
+  test('Given completed text 在 Rust 64 KiB 边界 When 回传 Then 精确边界接受且超出一个字节前拒绝', async () => {
+    const requests: RecordedRequest[] = []
+    const client = createClient(requests)
+    const asciiAtLimit = 'a'.repeat(64 * 1024)
+    const unicodeAtLimit = `${'你'.repeat(21845)}a`
+    expect(Buffer.byteLength(unicodeAtLimit, 'utf8')).toBe(64 * 1024)
+
+    await client.reportCompleted({
+      invocationId: 'inv-1',
+      output: { text: asciiAtLimit, mentionedAgentIds: [], attachmentIds: [] },
+    })
+    await client.reportCompleted({
+      invocationId: 'inv-1',
+      output: { text: unicodeAtLimit, mentionedAgentIds: [], attachmentIds: [] },
+    })
+    await expect(client.reportCompleted({
+      invocationId: 'inv-1',
+      output: { text: `${asciiAtLimit}b`, mentionedAgentIds: [], attachmentIds: [] },
+    })).rejects.toThrow('聊天室文本参数不正确')
+    await expect(client.reportCompleted({
+      invocationId: 'inv-1',
+      output: { text: `${unicodeAtLimit}b`, mentionedAgentIds: [], attachmentIds: [] },
+    })).rejects.toThrow('聊天室文本参数不正确')
+    expect(requests).toHaveLength(2)
+  })
+
+  test('Given completed text 为空或包含 Rust 禁止控制字符 When 回传 Then 在 fetch 前拒绝', async () => {
+    const requests: RecordedRequest[] = []
+    const client = createClient(requests)
+
+    await expect(client.reportCompleted({
+      invocationId: 'inv-1',
+      output: { text: ' \n\t ', mentionedAgentIds: [], attachmentIds: [] },
+    })).rejects.toThrow('聊天室文本参数不正确')
+    await expect(client.reportCompleted({
+      invocationId: 'inv-1',
+      output: { text: '有效\u0001文本', mentionedAgentIds: [], attachmentIds: [] },
+    })).rejects.toThrow('聊天室文本参数不正确')
+    expect(requests).toHaveLength(0)
+  })
+
+  test('Given failed report 使用未知 failureCode 或非法 message When 回传 Then 在 fetch 前拒绝', async () => {
+    const requests: RecordedRequest[] = []
+    const client = createClient(requests)
+    const exactlyAtLimit = 'a'.repeat(64 * 1024)
+    const unicodeAtLimit = `${'你'.repeat(21845)}a`
+    expect(Buffer.byteLength(unicodeAtLimit, 'utf8')).toBe(64 * 1024)
+
+    await expect(client.reportFailed({ invocationId: 'inv-1', code: 'not_a_failure_code' as never, message: '失败' }))
+      .rejects.toThrow('failureCode 参数不正确')
+    await expect(client.reportFailed({ invocationId: 'inv-1', code: 'internal_error', message: ' \n\t ' }))
+      .rejects.toThrow('聊天室文本参数不正确')
+    await expect(client.reportFailed({ invocationId: 'inv-1', code: 'internal_error', message: '失败\u0001原因' }))
+      .rejects.toThrow('聊天室文本参数不正确')
+    await client.reportFailed({ invocationId: 'inv-1', code: 'internal_error', message: exactlyAtLimit })
+    await client.reportFailed({ invocationId: 'inv-1', code: 'internal_error', message: unicodeAtLimit })
+    await expect(client.reportFailed({ invocationId: 'inv-1', code: 'internal_error', message: `${exactlyAtLimit}b` }))
+      .rejects.toThrow('聊天室文本参数不正确')
+    await expect(client.reportFailed({ invocationId: 'inv-1', code: 'internal_error', message: `${unicodeAtLimit}b` }))
+      .rejects.toThrow('聊天室文本参数不正确')
+    expect(requests).toHaveLength(2)
+  })
+
   test('Given Rust 返回超大敏感错误 When 请求失败 Then 只读取有限内容并先脱敏再抛出', async () => {
     const secret = 'internal-test-secret'
     const stream = new ReadableStream<Uint8Array>({
