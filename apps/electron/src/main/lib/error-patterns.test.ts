@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { isTransientNetworkError, isMalformedResponseError, isSessionNotFoundError } from './error-patterns'
+import { isTransientNetworkError, isMalformedResponseError, isSessionNotFoundError, isNetworkError } from './error-patterns'
 
 describe('isTransientNetworkError', () => {
   // 原有覆盖：确保扩展正则未回归
@@ -88,3 +88,46 @@ describe('isSessionNotFoundError', () => {
     expect(isSessionNotFoundError()).toBe(false)
   })
 })
+
+describe('isNetworkError', () => {
+  test('Given TypeError: fetch failed (无网络时原生 fetch 异常) Then 判定为网络错误', () => {
+    const error = new TypeError('fetch failed')
+    expect(isNetworkError(error)).toBe(true)
+  })
+
+  test('Given TypeError: fetch failed 且 cause 包含 getaddrinfo ENOTFOUND Then 判定为网络错误', () => {
+    const error = new TypeError('fetch failed')
+    Object.assign(error, {
+      cause: Object.assign(new Error('getaddrinfo ENOTFOUND download.copis.cn'), {
+        code: 'ENOTFOUND',
+      }),
+    })
+    expect(isNetworkError(error)).toBe(true)
+  })
+
+  test('Given 系统网络错误码对象 (code: ENOTFOUND / ECONNREFUSED) Then 判定为网络错误', () => {
+    expect(isNetworkError({ code: 'ENOTFOUND', message: 'getaddrinfo failed' })).toBe(true)
+    expect(isNetworkError({ code: 'ECONNREFUSED', message: 'connect failed' })).toBe(true)
+    expect(isNetworkError({ code: 'EHOSTUNREACH', message: 'host unreachable' })).toBe(true)
+  })
+
+  test('Given 离线断网错误 (net::ERR_INTERNET_DISCONNECTED) Then 判定为网络错误', () => {
+    expect(isNetworkError(new Error('net::ERR_INTERNET_DISCONNECTED'))).toBe(true)
+    expect(isNetworkError(new Error('net::ERR_NAME_NOT_RESOLVED'))).toBe(true)
+  })
+
+  test('Given 字符串形式网络错误 Then 判定为网络错误', () => {
+    expect(isNetworkError('TypeError: fetch failed')).toBe(true)
+    expect(isNetworkError('Failed to fetch')).toBe(true)
+    expect(isNetworkError('Network error: connect ETIMEDOUT')).toBe(true)
+  })
+
+  test('Given 非网络普通错误 Then 不判定为网络错误', () => {
+    expect(isNetworkError(new Error('~/.copis/ 配置损坏'))).toBe(false)
+    expect(isNetworkError(new Error('系统 Keychain 无法解密保存的凭证'))).toBe(false)
+    expect(isNetworkError(new Error('Invalid token'))).toBe(false)
+    expect(isNetworkError(null)).toBe(false)
+    expect(isNetworkError(undefined)).toBe(false)
+  })
+})
+

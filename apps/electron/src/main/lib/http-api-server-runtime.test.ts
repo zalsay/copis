@@ -938,6 +938,89 @@ describe('Rust HTTP API 功能模块生命周期', () => {
     }
   })
 
+  test('打包模式下已有 active 模块且更新检查遇到网络错误时，降级使用已有本地模块正常启动', async () => {
+    const root = createRoot()
+    const oldPackage = rustPackage('0.1.0', 'old-rust-api')
+    await activateRustVersion(root, oldPackage, 'old-rust-api')
+    const records: SpawnRecord[] = []
+    const manifestUrl = 'https://download.example.com/manifest.json'
+
+    const previousResourcesPath = (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath
+
+    packaged = true
+    Object.defineProperty(process, 'resourcesPath', {
+      configurable: true,
+      value: '/tmp/copis-test-resources',
+    })
+    try {
+      const result = await ensureRustHttpApiServerReady({
+        rootDir: join(root, 'modules'),
+        paymentWorkspace: paymentWorkspaceFor(root),
+        manifestUrl,
+        platform: 'darwin',
+        arch: 'arm64',
+        clientVersion: '0.16.17',
+        spawnImpl: spawnFixture(records),
+        fetchImpl: async (input) => {
+          if (String(input).includes('manifest.json')) {
+            throw new TypeError('fetch failed')
+          }
+          if (String(input).includes('/api/health')) {
+            return new Response(JSON.stringify({ ok: true, service: 'copis-http-api' }), { status: 200 })
+          }
+          return new Response('not found', { status: 404 })
+        },
+        healthTimeoutMs: 50,
+        stopTimeoutMs: 5,
+        workerLaunch: { kind: 'executable', path: '/tmp/copis-test-runtime' },
+      })
+
+      expect(result).toEqual({ status: 'ready' })
+      expect(records).toHaveLength(1)
+      expect(records[0]?.options.env?.COPIS_HTTP_API_PORT).toBe('51740')
+    } finally {
+      packaged = false
+      if (previousResourcesPath === undefined) {
+        Object.defineProperty(process, 'resourcesPath', {
+          configurable: true,
+          value: undefined,
+        })
+      } else {
+        Object.defineProperty(process, 'resourcesPath', {
+          configurable: true,
+          value: previousResourcesPath,
+        })
+      }
+    }
+  })
+
+  test('打包模式下无 active 模块且遇到网络错误时，抛出网络异常保持 reject 语义', async () => {
+    const root = createRoot()
+    const records: SpawnRecord[] = []
+    const manifestUrl = 'https://download.example.com/manifest.json'
+
+    packaged = true
+    try {
+      await expect(ensureRustHttpApiServerReady({
+        rootDir: join(root, 'modules'),
+        paymentWorkspace: paymentWorkspaceFor(root),
+        manifestUrl,
+        platform: 'darwin',
+        arch: 'arm64',
+        clientVersion: '0.16.17',
+        spawnImpl: spawnFixture(records),
+        fetchImpl: async () => {
+          throw new TypeError('fetch failed')
+        },
+        healthTimeoutMs: 50,
+        stopTimeoutMs: 5,
+      })).rejects.toThrow('fetch failed')
+      expect(records).toHaveLength(0)
+    } finally {
+      packaged = false
+    }
+  })
+
   test('打包模式下 manifest 要求更高客户端版本时，旧模块首次健康检查失败会重试', async () => {
     const root = createRoot()
     const oldPackage = rustPackage('0.1.0', 'old-rust-api')

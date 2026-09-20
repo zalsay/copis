@@ -19,6 +19,7 @@ import { getBundledCliPath, getConfigDir, getFunctionalModulesDir } from './conf
 import { resolveAgentlyCliCommand, resolveAgentlyCliNode } from './agently-cli-runtime'
 import { resolveDshCommand, resolveDshNode } from './dsh-runtime'
 import { isFunctionalModuleIncompatibleClientError } from './functional-module-manifest'
+import { isNetworkError } from './error-patterns'
 import { getSystemBunPath, getVendorBunPath } from './bun-finder'
 import { ensureDefaultWorkspace } from './agent-workspace-manager'
 import {
@@ -846,6 +847,7 @@ export async function ensureRustHttpApiServerReady(
     return { status: 'ready' }
   }
 
+  const active = readActiveFunctionalModule(paths, 'rust-http-api')
   let artifact: FunctionalModuleArtifact | undefined
   let updateRequired: RustHttpApiServerUpdateRequiredStatus | undefined
   try {
@@ -867,12 +869,15 @@ export async function ensureRustHttpApiServerReady(
         clientVersion: error.clientVersion,
         minClientVersion: error.minClientVersion,
       }
+    } else if (active && isNetworkError(error)) {
+      console.warn(
+        '[HTTP API] 检查 Rust 核心模块更新失败（网络离线），继续使用本地已有版本:',
+        error,
+      )
     } else {
       throw error
     }
   }
-
-  const active = readActiveFunctionalModule(paths, 'rust-http-api')
   if (updateRequired) {
     if (!active) {
       return updateRequired

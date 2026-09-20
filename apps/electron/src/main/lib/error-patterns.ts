@@ -14,7 +14,7 @@
  * 这些都是 provider 连接被 CDN/网关切断的同类瞬时错误，与 ECONNRESET 性质一致。
  */
 export const TRANSIENT_NETWORK_PATTERN =
-  /terminated|socket hang up|ECONNRESET|ETIMEDOUT|ECONNABORTED|EPIPE|ENOTFOUND|EAI_AGAIN|ECONNREFUSED|fetch failed|failed to fetch|network error|peer closed connection|connection (?:error|closed|reset)|other side closed|incomplete chunked read|AbortError|(?:operation|request) was aborted|(?:request )?timed out|stream (?:closed|ended|disconnected) prematurely|premature close|stream ended before (?:a )?(?:terminal(?: response)? event|message_stop)/i
+  /terminated|socket hang up|ECONNRESET|ETIMEDOUT|ECONNABORTED|EPIPE|ENOTFOUND|EAI_AGAIN|ECONNREFUSED|EHOSTUNREACH|ENETUNREACH|fetch failed|failed to fetch|network error|peer closed connection|connection (?:error|closed|reset)|other side closed|incomplete chunked read|AbortError|(?:operation|request) was aborted|(?:request )?timed out|stream (?:closed|ended|disconnected) prematurely|premature close|stream ended before (?:a )?(?:terminal(?: response)? event|message_stop)|net::ERR_|getaddrinfo/i
 
 /** 判断错误消息/stderr 是否为瞬时网络错误 */
 export function isTransientNetworkError(message?: string, stderr?: string): boolean {
@@ -22,6 +22,55 @@ export function isTransientNetworkError(message?: string, stderr?: string): bool
   return (
     (!!message && TRANSIENT_NETWORK_PATTERN.test(message)) ||
     (!!stderr && TRANSIENT_NETWORK_PATTERN.test(stderr))
+  )
+}
+
+/**
+ * 判断错误是否为网络连接错误（如离线、断网、DNS 失败、拒绝连接、请求失败等）。
+ * 深度检查 Error 本身、cause、code 以及典型网络错误模式。
+ */
+export function isNetworkError(error: unknown): boolean {
+  if (!error) return false
+  if (typeof error === 'string') {
+    return (
+      isTransientNetworkError(error) ||
+      /fetch failed|failed to fetch|network error|offline|internet|getaddrinfo|enotfound|econnrefused|econnreset|etimedout|ehostunreach|enetunreach|net::err/i.test(error)
+    )
+  }
+
+  const err = error as {
+    name?: string
+    message?: string
+    stack?: string
+    code?: string
+    cause?: unknown
+  }
+
+  const parts: string[] = []
+  if (err.name) parts.push(err.name)
+  if (err.message) parts.push(err.message)
+  if (err.code) parts.push(err.code)
+
+  if (err.cause) {
+    if (err.cause instanceof Error) {
+      parts.push(err.cause.name, err.cause.message)
+      if ('code' in err.cause && typeof err.cause.code === 'string') {
+        parts.push(err.cause.code)
+      }
+    } else if (typeof err.cause === 'object' && err.cause !== null) {
+      const causeObj = err.cause as { code?: string; message?: string; name?: string }
+      if (causeObj.name) parts.push(causeObj.name)
+      if (causeObj.code) parts.push(causeObj.code)
+      if (causeObj.message) parts.push(causeObj.message)
+    } else {
+      parts.push(String(err.cause))
+    }
+  }
+
+  const text = parts.join(' ')
+  return (
+    isTransientNetworkError(text) ||
+    /fetch failed|failed to fetch|network error|offline|internet|getaddrinfo|enotfound|econnrefused|econnreset|etimedout|ehostunreach|enetunreach|net::err/i.test(text)
   )
 }
 
