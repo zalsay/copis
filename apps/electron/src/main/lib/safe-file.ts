@@ -129,6 +129,7 @@ export function writeJsonFileAtomicDurable(
 
 const RECOVERY_SLOT_SUFFIXES = ['a', 'b'] as const
 const RECOVERY_VERSION = 1
+const MAX_SAFE_TEXT_BYTES = 4 * 1024 * 1024
 
 interface RecoveryOwner {
   token: string
@@ -151,17 +152,17 @@ function recoveryOwnerPath(filePath: string): string {
   return `${filePath}.bak-recovery-owner`
 }
 
-function recoverySlotPaths(filePath: string): string[] {
-  return RECOVERY_SLOT_SUFFIXES.map((suffix) => `${filePath}.bak-recovery-${suffix}`)
+function recoverySlotPaths(filePath: string, ownerToken: string): string[] {
+  return RECOVERY_SLOT_SUFFIXES.map((suffix) => `${filePath}.bak-recovery-${ownerToken}-${suffix}`)
 }
 
-function readRegularTextNoFollow(filePath: string): SafeTextFile | undefined {
+function readRegularTextNoFollow(filePath: string, maxBytes = MAX_SAFE_TEXT_BYTES): SafeTextFile | undefined {
   const noFollow = (constants as typeof constants & { O_NOFOLLOW?: number }).O_NOFOLLOW ?? 0
   let fd = -1
   try {
     fd = openSync(filePath, constants.O_RDONLY | noFollow)
     const opened = fstatSync(fd)
-    if (!opened.isFile() || opened.nlink > 1 || opened.size < 0) return undefined
+    if (!opened.isFile() || opened.nlink > 1 || opened.size < 0 || opened.size > maxBytes) return undefined
     const bytes = Buffer.allocUnsafe(opened.size)
     let offset = 0
     while (offset < bytes.length) {
@@ -189,13 +190,13 @@ function readRegularTextNoFollow(filePath: string): SafeTextFile | undefined {
   }
 }
 
-function parseRecoveryOwner(filePath: string): RecoveryOwner | undefined {
+function parseRecoveryOwner(filePath: string): (RecoveryOwner & { identity: FileIdentity }) | undefined {
   const candidate = readRegularTextNoFollow(filePath)
   if (!candidate) return undefined
   try {
     const parsed = JSON.parse(candidate.raw) as Partial<RecoveryOwner>
     return typeof parsed.token === 'string' && /^[0-9a-f-]{36}$/i.test(parsed.token)
-      ? { token: parsed.token }
+      ? { token: parsed.token, identity: candidate.identity }
       : undefined
   } catch {
     return undefined
@@ -248,6 +249,26 @@ function parseRecoveryEnvelope(filePath: string): { envelope: RecoveryEnvelope; 
   }
 }
 
+function sameFileIdentity(left: FileIdentity, right: FileIdentity): boolean {
+  return left.dev === right.dev && left.ino === right.ino && left.size === right.size && left.mtimeMs === right.mtimeMs
+}
+
+/** 只在 owner 文件两次 no-follow/fd 校验一致时读取当前 token 的两个受控槽位。 */
+function readTrustedRecoveryEnvelopes(filePath: string): { envelope: RecoveryEnvelope; identity: FileIdentity }[] {
+  const ownerPath = recoveryOwnerPath(filePath)
+  const owner = parseRecoveryOwner(ownerPath)
+  if (!owner) return []
+  const slots = recoverySlotPaths(filePath, owner.token)
+    .map((path) => parseRecoveryEnvelope(path))
+    .filter((candidate): candidate is { envelope: RecoveryEnvelope; identity: FileIdentity } => candidate !== undefined)
+    .filter((candidate) => candidate.envelope.ownerToken === owner.token)
+  const confirmedOwner = parseRecoveryOwner(ownerPath)
+  if (!confirmedOwner || confirmedOwner.token !== owner.token || !sameFileIdentity(owner.identity, confirmedOwner.identity)) {
+    return []
+  }
+  return slots
+}
+
 function installRecoveryBackup(
   filePath: string,
   parentChain: readonly ParentIdentity[],
@@ -258,11 +279,13 @@ function installRecoveryBackup(
   if (!owner) throw new Error('聊天室配置备份所有权不可验证')
   const source = readRegularTextNoFollow(filePath)
   if (!source) throw new Error('聊天室配置源文件不可用')
-  const slots = recoverySlotPaths(filePath).map((path) => ({ path, candidate: parseRecoveryEnvelope(path) }))
+  const slots = recoverySlotPaths(filePath, owner.token).map((path) => ({ path, candidate: parseRecoveryEnvelope(path) }))
   const owned = slots.filter((slot) => slot.candidate?.envelope.ownerToken === owner.token)
   const generation = Math.max(0, ...owned.map((slot) => slot.candidate!.envelope.generation)) + 1
-  const target = slots.find((slot) => !pathExistsWithoutFollowing(slot.path))
-    ?? owned.sort((left, right) => left.candidate!.envelope.generation - right.candidate!.envelope.generation)[0]
+  const missing = slots.find((slot) => !pathExistsWithoutFollowing(slot.path))
+  const target = missing ?? (owned.length === RECOVERY_SLOT_SUFFIXES.length
+    ? owned.sort((left, right) => left.candidate!.envelope.generation - right.candidate!.envelope.generation)[0]
+    : undefined)
   if (!target) throw new Error('聊天室配置备份槽位不可用')
 
   const envelope: RecoveryEnvelope = {
@@ -577,7 +600,10 @@ export function readJsonFileSafeDetailed<T>(filePath: string, logLabel?: string)
   const tmpPath = filePath + '.tmp'
   const bakPath = filePath + '.bak'
   const displayPath = logLabel ?? filePath
-  const hasCandidate = [filePath, tmpPath, bakPath, ...recoverySlotPaths(filePath)]
+  const ownerPath = recoveryOwnerPath(filePath)
+  const owner = parseRecoveryOwner(ownerPath)
+  const controlledPaths = owner ? recoverySlotPaths(filePath, owner.token) : []
+  const hasCandidate = [filePath, tmpPath, bakPath, ownerPath, ...controlledPaths]
     .some((candidate) => pathExistsWithoutFollowing(candidate))
 
   // 1. 尝试读取主文件
@@ -614,9 +640,7 @@ export function readJsonFileSafeDetailed<T>(filePath: string, logLabel?: string)
   }
 
   // 3. 先选择经过 envelope、摘要和代次校验的受控 previous。
-  const controlledCandidates = recoverySlotPaths(filePath)
-    .map((path) => parseRecoveryEnvelope(path))
-    .filter((candidate): candidate is { envelope: RecoveryEnvelope; identity: FileIdentity } => candidate !== undefined)
+  const controlledCandidates = readTrustedRecoveryEnvelopes(filePath)
     .sort((left, right) => right.envelope.generation - left.envelope.generation)
   if (controlledCandidates.length > 0) {
     try {

@@ -178,7 +178,6 @@
 ## Fix Round 5 验证
 
 - `bun test apps/electron/src/main/lib/safe-file.test.ts`：5 pass。
-- `bun test apps/electron/src/main/lib/chatroom-skill-snapshot.test.ts`：32 pass。
 
 ## Fix Round 6：RED / GREEN
 
@@ -208,3 +207,33 @@
   rename 语义仍需 Windows runner 验证。
 - `resolveWorkspaceSkillsDir()` 的副作用规避与只读枚举的 lstat→readFile 窗口保持既有
   residual，本轮未扩大 Skill 快照范围修改。
+
+## Fix Round 7：RED / GREEN
+
+- RED：新增恢复回归后，`safe-file.test.ts` 复现三类问题：主文件损坏时会接受未绑定
+  当前 owner 的高 generation 槽；owner 文件缺失/损坏/替换时仍会读取 controlled
+  槽；仅一个可信槽且另一槽被外部文件占用时会覆盖式轮换，无法保证唯一 previous
+  保留。
+- GREEN：恢复 owner 现在通过 no-follow 文件描述符、inode、size、mtime 和二次读取
+  一致性确认；受控槽名绑定当前 owner UUID（`<owner-token>-a/b`），envelope 的
+  `ownerToken` 仍必须精确匹配，owner 失信时全部跳过并继续 canonical `.bak`。
+  轮换仅在另一槽缺失或两个槽均为当前 owner 时执行；仅一个可信槽配外部普通文件、
+  符号链接或损坏槽时直接 fail closed，保留唯一可信 previous 且不触碰外部槽。
+- GREEN：`readRegularTextNoFollow()` 对 owner、envelope 和 room JSON 统一设置 4 MiB
+  上限，避免 sparse 巨型文件导致无界 Buffer 分配；补充伪造高代次、owner 缺失/损坏/
+  替换/符号链接、外部槽占用和 sparse 文件 BDD。
+
+## Fix Round 7 验证
+
+- `bun test apps/electron/src/main/lib/safe-file.test.ts`：14 pass（含新增 owner/槽位/
+  大文件回归）。
+- `bun run --filter='@copis/electron' typecheck`：pass。
+
+## Fix Round 7 残余风险
+
+- UUID 临时文件在 SIGKILL/断电后仍可能残留；本轮不引入复杂 scavenger，正常成功和可捕获
+  异常路径仍按拥有者身份清理，不能宣称所有 crash 残留绝对有界。
+- Node/Electron 仍没有 openat/handle-relative 的全链路事务 API；owner/父目录 inode、
+  no-follow、受控 token 槽位和 durable flush 已覆盖可观察替换窗口，同一 UID 纳秒级 ABA
+  仍是平台 residual。真实 Windows ACL、reparse、目录 flush 与 rename replace 语义仍需
+  Windows runner 验证。

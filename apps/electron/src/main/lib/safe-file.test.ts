@@ -1,9 +1,41 @@
+import { createHash } from 'node:crypto'
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
-import { existsSync, lstatSync, mkdirSync, readFileSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
+import {
+  closeSync,
+  existsSync,
+  ftruncateSync,
+  lstatSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  unlinkSync,
+  writeFileSync,
+} from 'node:fs'
 import { join } from 'node:path'
 import { readJsonFileSafe, writeJsonFileAtomicDurable } from './safe-file'
 
 const root = join(process.env.TMPDIR ?? '/tmp', `copis-safe-file-${Date.now()}-${Math.random().toString(36).slice(2)}`)
+
+function recoveryOwnerToken(file: string): string {
+  return (JSON.parse(readFileSync(`${file}.bak-recovery-owner`, 'utf8')) as { token: string }).token
+}
+
+function recoverySlotPath(file: string, token: string, suffix: 'a' | 'b'): string {
+  return `${file}.bak-recovery-${token}-${suffix}`
+}
+
+function writeRecoveryEnvelope(path: string, ownerToken: string, generation: number, payload: object): void {
+  const encoded = JSON.stringify(payload)
+  writeFileSync(path, JSON.stringify({
+    version: 1,
+    ownerToken,
+    generation,
+    payload: encoded,
+    digest: createHash('sha256').update(encoded, 'utf8').digest('hex'),
+  }))
+}
 
 beforeEach(() => mkdirSync(root, { recursive: true }))
 afterEach(() => rmSync(root, { recursive: true, force: true }))
@@ -130,5 +162,80 @@ describe('聊天室 durable JSON writer', () => {
     unlinkSync(file)
 
     expect(readJsonFileSafe<{ value: string }>(file)).toEqual({ value: 'one' })
+  })
+
+  test('Given 受控槽有伪造的更高代次 When owner token 不匹配 Then 拒绝伪造恢复并使用可信来源', () => {
+    const file = join(root, 'room.json')
+    writeJsonFileAtomicDurable(file, { value: 'slot' })
+    writeFileSync(`${file}.bak`, JSON.stringify({ value: 'canonical' }))
+    writeJsonFileAtomicDurable(file, { value: 'current' })
+
+    const token = recoveryOwnerToken(file)
+    // 槽路径绑定当前 owner，但 envelope 仍必须精确匹配 owner token。
+    writeRecoveryEnvelope(recoverySlotPath(file, token, 'b'), '11111111-1111-4111-8111-111111111111', 999, { value: 'forged' })
+    writeFileSync(file, '{broken')
+
+    expect(readJsonFileSafe<{ value: string }>(file)).toEqual({ value: 'slot' })
+  })
+
+  test('Given owner 文件缺失、损坏或被替换 When 主文件损坏 Then controlled slots 全部不可信', () => {
+    const modes = ['missing', 'corrupt', 'replaced'] as const
+    for (const mode of modes) {
+      const file = join(root, `room-${mode}.json`)
+      writeJsonFileAtomicDurable(file, { value: 'slot' })
+      writeFileSync(`${file}.bak`, JSON.stringify({ value: 'canonical' }))
+      writeJsonFileAtomicDurable(file, { value: 'current' })
+      const ownerPath = `${file}.bak-recovery-owner`
+      if (mode === 'missing') unlinkSync(ownerPath)
+      if (mode === 'corrupt') writeFileSync(ownerPath, '{broken')
+      if (mode === 'replaced') writeFileSync(ownerPath, JSON.stringify({ token: '22222222-2222-4222-8222-222222222222' }))
+      writeFileSync(file, '{broken')
+
+      expect(readJsonFileSafe<{ value: string }>(file)).toEqual({ value: 'canonical' })
+    }
+  })
+
+  test('Given owner 文件是符号链接 When 主文件损坏 Then controlled slots 全部不可信', () => {
+    if (process.platform === 'win32') return
+    const file = join(root, 'room-owner-symlink.json')
+    writeJsonFileAtomicDurable(file, { value: 'slot' })
+    writeFileSync(`${file}.bak`, JSON.stringify({ value: 'canonical' }))
+    writeJsonFileAtomicDurable(file, { value: 'current' })
+    const ownerPath = `${file}.bak-recovery-owner`
+    const externalOwner = join(root, 'external-owner.json')
+    writeFileSync(externalOwner, JSON.stringify({ token: recoveryOwnerToken(file) }))
+    unlinkSync(ownerPath)
+    symlinkSync(externalOwner, ownerPath)
+    writeFileSync(file, '{broken')
+
+    expect(readJsonFileSafe<{ value: string }>(file)).toEqual({ value: 'canonical' })
+  })
+
+  test('Given 一个可信槽和一个外部占用槽 When 写入下一代失败 Then 保留唯一可信槽和外部文件', () => {
+    const file = join(root, 'room-external-slot.json')
+    writeJsonFileAtomicDurable(file, { value: 'one' })
+    writeFileSync(`${file}.bak`, JSON.stringify({ value: 'canonical' }))
+    writeJsonFileAtomicDurable(file, { value: 'two' })
+
+    const token = recoveryOwnerToken(file)
+    const externalSlot = recoverySlotPath(file, token, 'b')
+    writeFileSync(externalSlot, 'external slot')
+    expect(() => writeJsonFileAtomicDurable(file, { value: 'three' })).toThrow()
+
+    expect(readFileSync(externalSlot, 'utf8')).toBe('external slot')
+    writeFileSync(file, '{broken')
+    expect(readJsonFileSafe<{ value: string }>(file)).toEqual({ value: 'one' })
+  })
+
+  test('Given sparse 巨型 owner-like 文件 When 安全读取 Then 不分配巨型 Buffer 且 fail closed', () => {
+    const file = join(root, 'sparse.json')
+    const fd = openSync(file, 'w')
+    try {
+      ftruncateSync(fd, 8 * 1024 * 1024)
+    } finally {
+      closeSync(fd)
+    }
+
+    expect(readJsonFileSafe(file)).toBeNull()
   })
 })
