@@ -1,5 +1,12 @@
 import { describe, expect, test } from 'bun:test'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { patchDshHeroLogoSource } from './dsh-hero-logo-patch'
+
+const lightMetalLogo = readFileSync(
+  join(__dirname, '../../../resources/copis-logos/main-logo-metal-light.svg'),
+  'utf8',
+)
 
 const legacyPandaHeroFishSource = `
 		function HeroFish({ hovering }) {
@@ -57,8 +64,14 @@ const officialWhaleHeroFishSource = `
 `
 
 describe('dsh-hero-logo-patch', () => {
-  test('Given DSH 包含旧版熊猫图标的 HeroFish 源码 When 执行 patchDshHeroLogoSource Then 替换为全新双环银色 Logo', () => {
-    const patched = patchDshHeroLogoSource(legacyPandaHeroFishSource)
+  test('Given DSH 包含旧版熊猫图标的 HeroFish 源码 When 执行 patchDshHeroLogoSource Then 浅色使用金属 Logo 且深色保留银色 Logo', () => {
+    const patched = patchDshHeroLogoSource(legacyPandaHeroFishSource, lightMetalLogo)
+    const lightLogoData = patched.match(/data:image\/svg\+xml;base64,([A-Za-z0-9+/=]+)/)?.[1]
+
+    expect(lightLogoData).toBeDefined()
+    expect(Buffer.from(lightLogoData!, 'base64').toString('utf8')).toBe(lightMetalLogo)
+    expect(patched).toContain('className: "copis-hero-logo-light"')
+    expect(patched).toContain('className: "copis-hero-logo-dark"')
     expect(patched).toContain('M 725.5 791.5 L 738.5 790.1')
     expect(patched).toContain('M 563.5 803.5 L 579.5 801.3')
     expect(patched).toContain('id: "copisHeroSilverGrad"')
@@ -69,19 +82,19 @@ describe('dsh-hero-logo-patch', () => {
   })
 
   test('Given 官方 DSH 鲸鱼图标的 HeroFish 源码 When 执行 patchDshHeroLogoSource Then 替换为全新双环银色 Logo', () => {
-    const patched = patchDshHeroLogoSource(officialWhaleHeroFishSource)
+    const patched = patchDshHeroLogoSource(officialWhaleHeroFishSource, lightMetalLogo)
     expect(patched).toContain('M 725.5 791.5 L 738.5 790.1')
     expect(patched).toContain('M 563.5 803.5 L 579.5 801.3')
     expect(patched).not.toContain('FISH_LOGO_PATH')
   })
 
   test('Given 已修补的源码 When 重复执行 patchDshHeroLogoSource Then 保持幂等不产生变化', () => {
-    const patched = patchDshHeroLogoSource(legacyPandaHeroFishSource)
-    const doublePatched = patchDshHeroLogoSource(patched)
+    const patched = patchDshHeroLogoSource(legacyPandaHeroFishSource, lightMetalLogo)
+    const doublePatched = patchDshHeroLogoSource(patched, lightMetalLogo)
     expect(doublePatched).toBe(patched)
   })
 
   test('Given 结构不匹配的未知源码 When 执行 patchDshHeroLogoSource Then 抛出明确异常', () => {
-    expect(() => patchDshHeroLogoSource('const unknown = 123')).toThrow('DSH 创造模式 HeroFish 组件未找到匹配结构')
+    expect(() => patchDshHeroLogoSource('const unknown = 123', lightMetalLogo)).toThrow('DSH 创造模式 HeroFish 组件未找到匹配结构')
   })
 })

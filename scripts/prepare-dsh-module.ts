@@ -83,7 +83,10 @@ export function main(): void {
     patchDshDetailsPanelFilePreviewRuntime(runtimeRoot)
     patchDshCordisPanelRuntime(runtimeRoot)
     patchDshSidebarRuntime(runtimeRoot)
-    patchDshHeroLogoRuntime(runtimeRoot)
+    patchDshHeroLogoRuntime(
+      runtimeRoot,
+      resolve('apps/electron/resources/copis-logos/main-logo-metal-light.svg'),
+    )
     if (!patchDshComposerHistoryRuntime(runtimeRoot)) throw new Error('官方 dsh 缺少 Composer 输入组件')
     if (!isFile(join(runtimeRoot, DSH_RUNTIME_ENTRYPOINT))) {
       throw new Error(`官方 dsh 缺少入口文件: ${DSH_RUNTIME_ENTRYPOINT}`)

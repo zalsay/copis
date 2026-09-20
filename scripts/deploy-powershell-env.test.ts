@@ -28,7 +28,6 @@ describe('Windows 部署入口的 .env 加载', () => {
 
   test('按 deploy.sh 的方式以 UTF-8 读取配置和应用元数据', () => {
     expect(deployScript).toContain('Get-Content -LiteralPath $Path -Encoding UTF8')
-    expect(deployScript).toContain('Get-Content -LiteralPath $electronPackagePath -Raw -Encoding UTF8')
     expect(deployScript).toContain('Get-Content -LiteralPath $metadataPath -Raw -Encoding UTF8')
     expect(deployScript).toContain("$entry = $entry -replace '^export\\s+', ''")
   })

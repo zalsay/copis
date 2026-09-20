@@ -10,63 +10,42 @@ var __defProp = Object.defineProperty;
 var __getOwnPropNames = Object.getOwnPropertyNames;
 var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
 var __hasOwnProp = Object.prototype.hasOwnProperty;
-function __accessProp(key) {
-  return this[key];
-}
-var __toESMCache_node;
-var __toESMCache_esm;
 var __toESM = (mod, isNodeMode, target) => {
-  var canCache = mod != null && typeof mod === "object";
-  if (canCache) {
-    var cache = isNodeMode ? __toESMCache_node ??= new WeakMap : __toESMCache_esm ??= new WeakMap;
-    var cached = cache.get(mod);
-    if (cached)
-      return cached;
-  }
   target = mod != null ? __create(__getProtoOf(mod)) : {};
   const to = isNodeMode || !mod || !mod.__esModule ? __defProp(target, "default", { value: mod, enumerable: true }) : target;
   for (let key of __getOwnPropNames(mod))
     if (!__hasOwnProp.call(to, key))
       __defProp(to, key, {
-        get: __accessProp.bind(mod, key),
+        get: () => mod[key],
         enumerable: true
       });
-  if (canCache)
-    cache.set(mod, to);
   return to;
 };
+var __moduleCache = /* @__PURE__ */ new WeakMap;
 var __toCommonJS = (from) => {
-  var entry = (__moduleCache ??= new WeakMap).get(from), desc;
+  var entry = __moduleCache.get(from), desc;
   if (entry)
     return entry;
   entry = __defProp({}, "__esModule", { value: true });
-  if (from && typeof from === "object" || typeof from === "function") {
-    for (var key of __getOwnPropNames(from))
-      if (!__hasOwnProp.call(entry, key))
-        __defProp(entry, key, {
-          get: __accessProp.bind(from, key),
-          enumerable: !(desc = __getOwnPropDesc(from, key)) || desc.enumerable
-        });
-  }
+  if (from && typeof from === "object" || typeof from === "function")
+    __getOwnPropNames(from).map((key) => !__hasOwnProp.call(entry, key) && __defProp(entry, key, {
+      get: () => from[key],
+      enumerable: !(desc = __getOwnPropDesc(from, key)) || desc.enumerable
+    }));
   __moduleCache.set(from, entry);
   return entry;
 };
-var __moduleCache;
-var __returnValue = (v) => v;
-function __exportSetter(name, newValue) {
-  this[name] = __returnValue.bind(null, newValue);
-}
 var __export = (target, all) => {
   for (var name in all)
     __defProp(target, name, {
       get: all[name],
       enumerable: true,
       configurable: true,
-      set: __exportSetter.bind(all, name)
+      set: (newValue) => all[name] = () => newValue
     });
 };
 
-// apps/electron/dsh-plugins/copis-creation-web/src/client.tsx
+// dsh-plugins/copis-creation-web/src/client.tsx
 var exports_client = {};
 __export(exports_client, {
   isSettingsTarget: () => isSettingsTarget,
@@ -79,19 +58,20 @@ __export(exports_client, {
   CopisDetailsPanel: () => CopisDetailsPanel
 });
 module.exports = __toCommonJS(exports_client);
-// node_modules/lucide-react/dist/esm/createLucideIcon.js
+
+// ../../node_modules/lucide-react/dist/esm/createLucideIcon.js
 var import_react2 = require("react");
 
-// node_modules/lucide-react/dist/esm/shared/src/utils.js
+// ../../node_modules/lucide-react/dist/esm/shared/src/utils.js
 var toKebabCase = (string) => string.replace(/([a-z0-9])([A-Z])/g, "$1-$2").toLowerCase();
 var mergeClasses = (...classes) => classes.filter((className, index, array) => {
   return Boolean(className) && className.trim() !== "" && array.indexOf(className) === index;
 }).join(" ").trim();
 
-// node_modules/lucide-react/dist/esm/Icon.js
+// ../../node_modules/lucide-react/dist/esm/Icon.js
 var import_react = require("react");
 
-// node_modules/lucide-react/dist/esm/defaultAttributes.js
+// ../../node_modules/lucide-react/dist/esm/defaultAttributes.js
 var defaultAttributes = {
   xmlns: "http://www.w3.org/2000/svg",
   width: 24,
@@ -104,7 +84,7 @@ var defaultAttributes = {
   strokeLinejoin: "round"
 };
 
-// node_modules/lucide-react/dist/esm/Icon.js
+// ../../node_modules/lucide-react/dist/esm/Icon.js
 var Icon = import_react.forwardRef(({
   color = "currentColor",
   size = 24,
@@ -130,7 +110,7 @@ var Icon = import_react.forwardRef(({
   ]);
 });
 
-// node_modules/lucide-react/dist/esm/createLucideIcon.js
+// ../../node_modules/lucide-react/dist/esm/createLucideIcon.js
 var createLucideIcon = (iconName, iconNode) => {
   const Component = import_react2.forwardRef(({ className, ...props }, ref) => import_react2.createElement(Icon, {
     ref,
@@ -142,17 +122,7 @@ var createLucideIcon = (iconName, iconNode) => {
   return Component;
 };
 
-// node_modules/lucide-react/dist/esm/icons/loader-circle.js
-var LoaderCircle = createLucideIcon("LoaderCircle", [
-  ["path", { d: "M21 12a9 9 0 1 1-6.219-8.56", key: "13zald" }]
-]);
-// node_modules/lucide-react/dist/esm/icons/users-round.js
-var UsersRound = createLucideIcon("UsersRound", [
-  ["path", { d: "M18 21a8 8 0 0 0-16 0", key: "3ypg7q" }],
-  ["circle", { cx: "10", cy: "8", r: "5", key: "o932ke" }],
-  ["path", { d: "M22 20c0-3.37-2-6.5-4-8a5 5 0 0 0-.45-8.3", key: "10s06x" }]
-]);
-// node_modules/lucide-react/dist/esm/icons/book-open.js
+// ../../node_modules/lucide-react/dist/esm/icons/book-open.js
 var BookOpen = createLucideIcon("BookOpen", [
   ["path", { d: "M12 7v14", key: "1akyts" }],
   [
@@ -163,7 +133,8 @@ var BookOpen = createLucideIcon("BookOpen", [
     }
   ]
 ]);
-// node_modules/lucide-react/dist/esm/icons/brain.js
+
+// ../../node_modules/lucide-react/dist/esm/icons/brain.js
 var Brain = createLucideIcon("Brain", [
   [
     "path",
@@ -187,7 +158,8 @@ var Brain = createLucideIcon("Brain", [
   ["path", { d: "M6 18a4 4 0 0 1-1.967-.516", key: "2e4loj" }],
   ["path", { d: "M19.967 17.484A4 4 0 0 1 18 18", key: "159ez6" }]
 ]);
-// node_modules/lucide-react/dist/esm/icons/calendar-clock.js
+
+// ../../node_modules/lucide-react/dist/esm/icons/calendar-clock.js
 var CalendarClock = createLucideIcon("CalendarClock", [
   ["path", { d: "M21 7.5V6a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h3.5", key: "1osxxc" }],
   ["path", { d: "M16 2v4", key: "4m81vk" }],
@@ -196,39 +168,47 @@ var CalendarClock = createLucideIcon("CalendarClock", [
   ["path", { d: "M17.5 17.5 16 16.3V14", key: "akvzfd" }],
   ["circle", { cx: "16", cy: "16", r: "6", key: "qoo3c4" }]
 ]);
-// node_modules/lucide-react/dist/esm/icons/check.js
+
+// ../../node_modules/lucide-react/dist/esm/icons/check.js
 var Check = createLucideIcon("Check", [["path", { d: "M20 6 9 17l-5-5", key: "1gmf2c" }]]);
-// node_modules/lucide-react/dist/esm/icons/chevron-down.js
+
+// ../../node_modules/lucide-react/dist/esm/icons/chevron-down.js
 var ChevronDown = createLucideIcon("ChevronDown", [
   ["path", { d: "m6 9 6 6 6-6", key: "qrunsl" }]
 ]);
-// node_modules/lucide-react/dist/esm/icons/chevron-left.js
+
+// ../../node_modules/lucide-react/dist/esm/icons/chevron-left.js
 var ChevronLeft = createLucideIcon("ChevronLeft", [
   ["path", { d: "m15 18-6-6 6-6", key: "1wnfg3" }]
 ]);
-// node_modules/lucide-react/dist/esm/icons/chevron-right.js
+
+// ../../node_modules/lucide-react/dist/esm/icons/chevron-right.js
 var ChevronRight = createLucideIcon("ChevronRight", [
   ["path", { d: "m9 18 6-6-6-6", key: "mthhwq" }]
 ]);
-// node_modules/lucide-react/dist/esm/icons/copy.js
+
+// ../../node_modules/lucide-react/dist/esm/icons/copy.js
 var Copy = createLucideIcon("Copy", [
   ["rect", { width: "14", height: "14", x: "8", y: "8", rx: "2", ry: "2", key: "17jyea" }],
   ["path", { d: "M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2", key: "zix9uf" }]
 ]);
-// node_modules/lucide-react/dist/esm/icons/external-link.js
+
+// ../../node_modules/lucide-react/dist/esm/icons/external-link.js
 var ExternalLink = createLucideIcon("ExternalLink", [
   ["path", { d: "M15 3h6v6", key: "1q9fwt" }],
   ["path", { d: "M10 14 21 3", key: "gplh6r" }],
   ["path", { d: "M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6", key: "a6xqqp" }]
 ]);
-// node_modules/lucide-react/dist/esm/icons/file-code.js
+
+// ../../node_modules/lucide-react/dist/esm/icons/file-code.js
 var FileCode = createLucideIcon("FileCode", [
   ["path", { d: "M10 12.5 8 15l2 2.5", key: "1tg20x" }],
   ["path", { d: "m14 12.5 2 2.5-2 2.5", key: "yinavb" }],
   ["path", { d: "M14 2v4a2 2 0 0 0 2 2h4", key: "tnqrlb" }],
   ["path", { d: "M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7z", key: "1mlx9k" }]
 ]);
-// node_modules/lucide-react/dist/esm/icons/folder-open.js
+
+// ../../node_modules/lucide-react/dist/esm/icons/folder-open.js
 var FolderOpen = createLucideIcon("FolderOpen", [
   [
     "path",
@@ -238,7 +218,8 @@ var FolderOpen = createLucideIcon("FolderOpen", [
     }
   ]
 ]);
-// node_modules/lucide-react/dist/esm/icons/folder.js
+
+// ../../node_modules/lucide-react/dist/esm/icons/folder.js
 var Folder = createLucideIcon("Folder", [
   [
     "path",
@@ -248,18 +229,26 @@ var Folder = createLucideIcon("Folder", [
     }
   ]
 ]);
-// node_modules/lucide-react/dist/esm/icons/panel-right-close.js
+
+// ../../node_modules/lucide-react/dist/esm/icons/loader-circle.js
+var LoaderCircle = createLucideIcon("LoaderCircle", [
+  ["path", { d: "M21 12a9 9 0 1 1-6.219-8.56", key: "13zald" }]
+]);
+
+// ../../node_modules/lucide-react/dist/esm/icons/panel-right-close.js
 var PanelRightClose = createLucideIcon("PanelRightClose", [
   ["rect", { width: "18", height: "18", x: "3", y: "3", rx: "2", key: "afitv7" }],
   ["path", { d: "M15 3v18", key: "14nvp0" }],
   ["path", { d: "m8 9 3 3-3 3", key: "12hl5m" }]
 ]);
-// node_modules/lucide-react/dist/esm/icons/panel-right.js
+
+// ../../node_modules/lucide-react/dist/esm/icons/panel-right.js
 var PanelRight = createLucideIcon("PanelRight", [
   ["rect", { width: "18", height: "18", x: "3", y: "3", rx: "2", key: "afitv7" }],
   ["path", { d: "M15 3v18", key: "14nvp0" }]
 ]);
-// node_modules/lucide-react/dist/esm/icons/puzzle.js
+
+// ../../node_modules/lucide-react/dist/esm/icons/puzzle.js
 var Puzzle = createLucideIcon("Puzzle", [
   [
     "path",
@@ -269,38 +258,50 @@ var Puzzle = createLucideIcon("Puzzle", [
     }
   ]
 ]);
-// node_modules/lucide-react/dist/esm/icons/refresh-cw.js
+
+// ../../node_modules/lucide-react/dist/esm/icons/refresh-cw.js
 var RefreshCw = createLucideIcon("RefreshCw", [
   ["path", { d: "M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8", key: "v9h5vc" }],
   ["path", { d: "M21 3v5h-5", key: "1q7to0" }],
   ["path", { d: "M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16", key: "3uifl3" }],
   ["path", { d: "M8 16H3v5", key: "1cv678" }]
 ]);
-// node_modules/lucide-react/dist/esm/icons/search.js
+
+// ../../node_modules/lucide-react/dist/esm/icons/search.js
 var Search = createLucideIcon("Search", [
   ["circle", { cx: "11", cy: "11", r: "8", key: "4ej97u" }],
   ["path", { d: "m21 21-4.3-4.3", key: "1qie3q" }]
 ]);
-// node_modules/lucide-react/dist/esm/icons/timer.js
+
+// ../../node_modules/lucide-react/dist/esm/icons/timer.js
 var Timer = createLucideIcon("Timer", [
   ["line", { x1: "10", x2: "14", y1: "2", y2: "2", key: "14vaq8" }],
   ["line", { x1: "12", x2: "15", y1: "14", y2: "11", key: "17fdiu" }],
   ["circle", { cx: "12", cy: "14", r: "8", key: "1e1u0o" }]
 ]);
-// node_modules/lucide-react/dist/esm/icons/trending-up.js
+
+// ../../node_modules/lucide-react/dist/esm/icons/trending-up.js
 var TrendingUp = createLucideIcon("TrendingUp", [
   ["polyline", { points: "22 7 13.5 15.5 8.5 10.5 2 17", key: "126l90" }],
   ["polyline", { points: "16 7 22 7 22 13", key: "kwv8wd" }]
 ]);
-// node_modules/lucide-react/dist/esm/icons/x.js
+
+// ../../node_modules/lucide-react/dist/esm/icons/users-round.js
+var UsersRound = createLucideIcon("UsersRound", [
+  ["path", { d: "M18 21a8 8 0 0 0-16 0", key: "3ypg7q" }],
+  ["circle", { cx: "10", cy: "8", r: "5", key: "o932ke" }],
+  ["path", { d: "M22 20c0-3.37-2-6.5-4-8a5 5 0 0 0-.45-8.3", key: "10s06x" }]
+]);
+
+// ../../node_modules/lucide-react/dist/esm/icons/x.js
 var X = createLucideIcon("X", [
   ["path", { d: "M18 6 6 18", key: "1bl5f8" }],
   ["path", { d: "m6 6 12 12", key: "d8bk6v" }]
 ]);
-// apps/electron/dsh-plugins/copis-creation-web/src/client.tsx
+// dsh-plugins/copis-creation-web/src/client.tsx
 var import_react3 = require("react");
 
-// apps/electron/src/renderer/components/ui/copis-logo-icon.tsx
+// src/renderer/components/ui/copis-logo-icon.tsx
 var React = __toESM(require("react"));
 var jsx_runtime = require("react/jsx-runtime");
 var CopisLogoIcon = React.forwardRef(({ size = 16, width, height, className, fill = "currentColor", ...props }, ref) => {
@@ -327,7 +328,7 @@ var CopisLogoIcon = React.forwardRef(({ size = 16, width, height, className, fil
 });
 CopisLogoIcon.displayName = "CopisLogoIcon";
 
-// apps/electron/dsh-plugins/copis-creation-web/src/client.tsx
+// dsh-plugins/copis-creation-web/src/client.tsx
 var jsx_runtime2 = require("react/jsx-runtime");
 var CREATION_STYLES_ID = "copis-creation-web-styles";
 var SIDEBAR_MENU_ITEMS = [

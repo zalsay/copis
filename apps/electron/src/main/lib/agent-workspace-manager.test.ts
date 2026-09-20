@@ -73,9 +73,9 @@ describe('Agent 工作区 MCP 配置', () => {
           command: 'custom-automation',
           enabled: true,
         },
-        copis_image: {
+        collaboration: {
           type: 'stdio',
-          command: 'custom-image',
+          command: 'custom-collaboration',
           enabled: true,
         },
         github: {

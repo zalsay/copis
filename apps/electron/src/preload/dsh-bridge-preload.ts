@@ -392,6 +392,19 @@ function injectCopisThemeAccent(): void {
       --dsw-specific-sidebar-nav-item-active-accent: #a855f7 !important;
     }
 
+    .copis-hero-logo-light {
+      display: block;
+    }
+    .copis-hero-logo-dark {
+      display: none;
+    }
+    body[data-ds-dark-theme] .copis-hero-logo-light {
+      display: none;
+    }
+    body[data-ds-dark-theme] .copis-hero-logo-dark {
+      display: block;
+    }
+
     /* 侧边栏容器背景：对齐 Agent 模式 */
     .hHd-Xa_root,
     [class*="SidebarRoot_root"],
@@ -1070,5 +1083,4 @@ if (typeof window !== 'undefined' && window.matchMedia) {
     })
   } catch {}
 }
-
 

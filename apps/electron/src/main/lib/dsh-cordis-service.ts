@@ -17,6 +17,7 @@ import { pathToFileURL } from 'node:url'
 import { Document, parse, parseDocument } from 'yaml'
 import type { DshCordisStatus } from '@copis/shared'
 import { getDefaultSkillsDir, getDshHomeDir } from './config-paths'
+import { getBundledResourcesDir } from './bundled-resources'
 import { resolveDshCommand, resolveDshNode, resolveDshSpawnSpec } from './dsh-runtime'
 import { patchDshComposerHistoryRuntime } from './dsh-composer-history-patch'
 import { patchDshHeroLogoRuntime } from './dsh-hero-logo-patch'
@@ -735,7 +736,10 @@ async function doStartDshCordisServer(options: {
   ensureCordisWebProfile(dshHomeDir, profile)
   // 托管模块的 launcher 位于 bin/，同时兼容已安装版本而无需重新下载模块。
   patchDshComposerHistoryRuntime(join(dshCmd, '..', '..', 'runtime'))
-  patchDshHeroLogoRuntime(join(dshCmd, '..', '..', 'runtime'))
+  patchDshHeroLogoRuntime(
+    join(dshCmd, '..', '..', 'runtime'),
+    join(getBundledResourcesDir(), 'copis-logos', 'main-logo-metal-light.svg'),
+  )
   patchDshDetailsPanelFilePreviewRuntime(join(dshCmd, '..', '..', 'runtime'))
   patchDshSidebarRuntime(join(dshCmd, '..', '..', 'runtime'))
   registerDshCordisWebSessionHeaders()

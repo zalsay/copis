@@ -11,35 +11,31 @@ const avatarComponentPath = join(__dirname, 'CopisAgentAvatar.tsx')
 const agentMessagesPath = join(__dirname, 'AgentMessages.tsx')
 const sdkRendererPath = join(__dirname, 'SDKMessageRenderer.tsx')
 const modelLogoPath = join(__dirname, '../../lib/model-logo.ts')
-const darkLogoPath = join(rootDir, 'mian-logo-dark.svg')
+const lightMetalLogoPath = join(rootDir, 'apps/electron/resources/copis-logos/main-logo-metal-light.svg')
 
-describe('对话区 Agent 回复 Copis 头像浅色模式深灰色契约 (BDD)', () => {
-  test('Given 浅色模式深灰 Logo 文件 When 检查 SVG 定义 Then 具备深灰渐变与镂空遮罩', () => {
-    expect(existsSync(darkLogoPath)).toBe(true)
-    const svgContent = readFileSync(darkLogoPath, 'utf8')
+describe('对话区 Agent 回复 Copis 头像浅色模式金属 Logo 契约 (BDD)', () => {
+  test('Given 浅色模式金属 Logo 文件 When 检查 SVG 定义 Then 保留白底与双环且不包含外边框', () => {
+    expect(existsSync(lightMetalLogoPath)).toBe(true)
+    const svgContent = readFileSync(lightMetalLogoPath, 'utf8')
 
-    // 渐变与深灰配色
-    expect(svgContent).toContain('id="dark-gray"')
-    expect(svgContent).toContain('#3F3F46')
-    expect(svgContent).toContain('#27272A')
-    expect(svgContent).toContain('#18181B')
-
-    // 镂空遮罩：保证眼睛与五官在任何背景下均透出背景色
-    expect(svgContent).toContain('mask id="cutout"')
-    expect(svgContent).toContain('mask="url(#cutout)"')
+    expect(svgContent).toContain('fill="#ffffff"')
+    expect(svgContent).toContain('id="mark0SteelDark"')
+    expect(svgContent).toContain('id="mark1SteelDark"')
+    expect(svgContent).not.toContain('id="frameSteelDark"')
+    expect(svgContent).not.toContain('stroke="url(#frameSteelDark)"')
   })
 
-  test('Given model-logo 模块 When 导出 Logo 资源 Then 包含深灰版 CopisAgentDarkLogo', () => {
+  test('Given model-logo 模块 When 导出 Logo 资源 Then 包含浅色模式金属版 CopisAgentLightLogo', () => {
     const modelLogoSource = readFileSync(modelLogoPath, 'utf8')
-    expect(modelLogoSource).toContain('CopisAgentDarkLogo')
-    expect(modelLogoSource).toContain('mian-logo-dark.svg')
+    expect(modelLogoSource).toContain('CopisAgentLightLogo')
+    expect(modelLogoSource).toContain('main-logo-metal-light.svg')
   })
 
-  test('Given CopisAgentAvatar 组件 When 渲染头像 Then 浅色模式显示深灰 Logo，深色模式显示银白 Logo', () => {
+  test('Given CopisAgentAvatar 组件 When 渲染头像 Then 浅色模式显示金属 Logo，深色模式显示银白 Logo', () => {
     const avatarSource = readFileSync(avatarComponentPath, 'utf8')
 
     // 包含浅色与深色专属类
-    expect(avatarSource).toContain('CopisAgentDarkLogo')
+    expect(avatarSource).toContain('CopisAgentLightLogo')
     expect(avatarSource).toContain('CopisAgentLogo')
     expect(avatarSource).toContain('dark:hidden')
     expect(avatarSource).toContain('hidden dark:block')
