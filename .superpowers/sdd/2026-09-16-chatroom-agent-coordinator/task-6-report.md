@@ -237,3 +237,36 @@
   no-follow、受控 token 槽位和 durable flush 已覆盖可观察替换窗口，同一 UID 纳秒级 ABA
   仍是平台 residual。真实 Windows ACL、reparse、目录 flush 与 rename replace 语义仍需
   Windows runner 验证。
+
+## Fix Round 8：通用 reader 上限与 legacy recovery 兼容
+
+- RED：新增通用 JSON 大于 4 MiB、聊天室 payload/envelope 边界、legacy owner/token
+  匹配及 owner 缺失/损坏/符号链接回归；原实现将通用 `readRegularTextNoFollow()`
+  统一限制为 4 MiB，导致合法旧索引被判定为损坏，且只认识 token-scoped 槽位。
+- GREEN：通用 reader 省略上限时恢复历史无上限行为；`readJsonFileSafeDetailed()`
+  新增可选 `maxBytes`，仅聊天室 `room.json` 读写显式限制为 2 MiB，owner 固定限制
+  1 KiB，recovery envelope 按 payload 上限预留 6 倍 JSON escaping 与包装空间。durable
+  writer 的边界参数保持可选，避免通用恢复路径被聊天室上限污染。
+- GREEN：恢复读取新增旧版本 `room.json.bak-recovery-a/b` fallback。先经过两次稳定
+  no-follow/fd/inode owner 校验，且 envelope.ownerToken 必须完全匹配；只要存在可信
+  token-scoped 槽位就优先新槽位，legacy 只作 fallback。legacy 缺 owner、损坏、symlink
+  或 token 不匹配时仍 fail closed；`hasCandidate/status` 纳入 legacy 残留识别。
+
+## Fix Round 8 验证
+
+- RED：新增测试首次执行因新常量/options 与 legacy 分支尚不存在而失败；实现后
+  `bun test apps/electron/src/main/lib/safe-file.test.ts`：21 pass / 0 fail（含通用
+  writer 显式 maxBytes 超限 fail-closed）。
+- GREEN：`chatroom-workspace-store.test.ts`：22 pass；
+  `chatroom-skill-snapshot.test.ts` 独立 Bun 进程连续 10 次，每次 32 pass / 0 fail；
+  `durable-fs.test.ts`：3 pass；`agent-rpc-runtime-context.test.ts`：5 pass；
+  `agent-rpc-service.test.ts`：34 pass；`packages/shared/src/types/chatroom.test.ts`：11 pass。
+- GREEN：Electron typecheck、`build:main`、`build:renderer` 均通过；renderer 仅有既有
+  Browserslist/chunk size warning；`git diff --check` 通过。
+
+## Fix Round 8 残余风险
+
+- 同 UID 恶意进程在路径检查与操作之间的纳秒级 ABA 竞态仍受 Node 缺少 openat/目录句柄
+  API 限制；现有 owner/token/inode/no-follow 校验仍保持 fail closed 取向。
+- 真实 Windows ACL、reparse、目录 flush 和 rename replace 语义仍需 Windows runner；
+  本轮没有扩大平台测试范围。

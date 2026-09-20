@@ -32,9 +32,19 @@ import { syncParentDurable, writeAllSync } from './durable-fs'
  * 原子写入 JSON 文件：write-to-temp → rename
  * 写入前自动保留 .bak 备份
  */
-export function writeJsonFileAtomic(filePath: string, data: object, skipBackup = false, mode?: number): void {
+export function writeJsonFileAtomic(
+  filePath: string,
+  data: object,
+  skipBackup = false,
+  mode?: number,
+  maxBytes?: number,
+): void {
   const tmpPath = filePath + '.tmp'
   const bakPath = filePath + '.bak'
+  const serialized = JSON.stringify(data, null, 2)
+  if (maxBytes !== undefined && Buffer.byteLength(serialized, 'utf8') > maxBytes) {
+    throw new Error('JSON 文件超过大小限制')
+  }
 
   // 备份当前文件（如果存在且可读）
   if (!skipBackup && existsSync(filePath)) {
@@ -47,9 +57,9 @@ export function writeJsonFileAtomic(filePath: string, data: object, skipBackup =
 
 	// 写入临时文件；认证文件需要在重命名前就收紧权限。
 	if (mode === undefined) {
-		writeFileSync(tmpPath, JSON.stringify(data, null, 2), 'utf-8')
+		writeFileSync(tmpPath, serialized, 'utf-8')
 	} else {
-		writeFileSync(tmpPath, JSON.stringify(data, null, 2), { encoding: 'utf-8', mode })
+		writeFileSync(tmpPath, serialized, { encoding: 'utf-8', mode })
 		chmodSync(tmpPath, mode)
 	}
 
@@ -64,9 +74,11 @@ export function writeJsonFileAtomicDurable(
   data: object,
   mode = 0o600,
   skipBackup = false,
+  maxBytes?: number,
 ): void {
   const parentChain = captureParentChain(filePath)
   const bytes = Buffer.from(JSON.stringify(data, null, 2), 'utf8')
+  if (maxBytes !== undefined && bytes.length > maxBytes) throw new Error('JSON 文件超过大小限制')
   const noFollow = (constants as typeof constants & { O_NOFOLLOW?: number }).O_NOFOLLOW ?? 0
   const tempPath = `${filePath}.tmp-${randomUUID()}`
   const backupTempPath = `${filePath}.bak-${randomUUID()}`
@@ -108,7 +120,7 @@ export function writeJsonFileAtomicDurable(
       if (needsRecoveryBackup) {
         // 固定 .bak 可能是外部文件/链接，也可能是本次事务之前的 canonical。
         // 无论来源如何都不覆盖它；受控槽位负责保存后续最新 previous。
-        installRecoveryBackup(filePath, parentChain, mode, noFollow)
+        installRecoveryBackup(filePath, parentChain, mode, noFollow, maxBytes)
       }
     }
 
@@ -129,7 +141,11 @@ export function writeJsonFileAtomicDurable(
 
 const RECOVERY_SLOT_SUFFIXES = ['a', 'b'] as const
 const RECOVERY_VERSION = 1
-const MAX_SAFE_TEXT_BYTES = 4 * 1024 * 1024
+/** 通用 JSON 索引不设 4 MiB 上限；聊天室 room.json 单独使用此边界。 */
+export const CHATROOM_CONFIG_MAX_BYTES = 2 * 1024 * 1024
+/** envelope 需要容纳 payload 的 JSON 转义和 envelope 字段本身。 */
+export const CHATROOM_RECOVERY_ENVELOPE_MAX_BYTES = CHATROOM_CONFIG_MAX_BYTES * 6 + 4096
+const RECOVERY_OWNER_MAX_BYTES = 1024
 
 interface RecoveryOwner {
   token: string
@@ -156,13 +172,18 @@ function recoverySlotPaths(filePath: string, ownerToken: string): string[] {
   return RECOVERY_SLOT_SUFFIXES.map((suffix) => `${filePath}.bak-recovery-${ownerToken}-${suffix}`)
 }
 
-function readRegularTextNoFollow(filePath: string, maxBytes = MAX_SAFE_TEXT_BYTES): SafeTextFile | undefined {
+function legacyRecoverySlotPaths(filePath: string): string[] {
+  return RECOVERY_SLOT_SUFFIXES.map((suffix) => `${filePath}.bak-recovery-${suffix}`)
+}
+
+function readRegularTextNoFollow(filePath: string, maxBytes?: number): SafeTextFile | undefined {
   const noFollow = (constants as typeof constants & { O_NOFOLLOW?: number }).O_NOFOLLOW ?? 0
   let fd = -1
   try {
     fd = openSync(filePath, constants.O_RDONLY | noFollow)
     const opened = fstatSync(fd)
-    if (!opened.isFile() || opened.nlink > 1 || opened.size < 0 || opened.size > maxBytes) return undefined
+    if (!opened.isFile() || opened.nlink > 1 || opened.size < 0
+      || (maxBytes !== undefined && opened.size > maxBytes)) return undefined
     const bytes = Buffer.allocUnsafe(opened.size)
     let offset = 0
     while (offset < bytes.length) {
@@ -191,7 +212,7 @@ function readRegularTextNoFollow(filePath: string, maxBytes = MAX_SAFE_TEXT_BYTE
 }
 
 function parseRecoveryOwner(filePath: string): (RecoveryOwner & { identity: FileIdentity }) | undefined {
-  const candidate = readRegularTextNoFollow(filePath)
+  const candidate = readRegularTextNoFollow(filePath, RECOVERY_OWNER_MAX_BYTES)
   if (!candidate) return undefined
   try {
     const parsed = JSON.parse(candidate.raw) as Partial<RecoveryOwner>
@@ -232,8 +253,8 @@ function createRecoveryOwner(filePath: string, parentChain: readonly ParentIdent
   }
 }
 
-function parseRecoveryEnvelope(filePath: string): { envelope: RecoveryEnvelope; identity: FileIdentity } | undefined {
-  const candidate = readRegularTextNoFollow(filePath)
+function parseRecoveryEnvelope(filePath: string, maxBytes = CHATROOM_RECOVERY_ENVELOPE_MAX_BYTES): { envelope: RecoveryEnvelope; identity: FileIdentity } | undefined {
+  const candidate = readRegularTextNoFollow(filePath, maxBytes)
   if (!candidate) return undefined
   try {
     const envelope = JSON.parse(candidate.raw) as Partial<RecoveryEnvelope> & RecoveryEnvelope
@@ -253,12 +274,17 @@ function sameFileIdentity(left: FileIdentity, right: FileIdentity): boolean {
   return left.dev === right.dev && left.ino === right.ino && left.size === right.size && left.mtimeMs === right.mtimeMs
 }
 
-/** 只在 owner 文件两次 no-follow/fd 校验一致时读取当前 token 的两个受控槽位。 */
+/** 只在 owner 文件两次 no-follow/fd 校验一致时读取当前 token 的受控槽位。 */
 function readTrustedRecoveryEnvelopes(filePath: string): { envelope: RecoveryEnvelope; identity: FileIdentity }[] {
   const ownerPath = recoveryOwnerPath(filePath)
   const owner = parseRecoveryOwner(ownerPath)
   if (!owner) return []
-  const slots = recoverySlotPaths(filePath, owner.token)
+  const tokenScopedSlots = recoverySlotPaths(filePath, owner.token)
+    .map((path) => parseRecoveryEnvelope(path))
+    .filter((candidate): candidate is { envelope: RecoveryEnvelope; identity: FileIdentity } => candidate !== undefined)
+    .filter((candidate) => candidate.envelope.ownerToken === owner.token)
+  // 新版本 token-scoped 槽位优先；只有没有可信新槽位时才兼容旧版固定名称。
+  const legacySlots = legacyRecoverySlotPaths(filePath)
     .map((path) => parseRecoveryEnvelope(path))
     .filter((candidate): candidate is { envelope: RecoveryEnvelope; identity: FileIdentity } => candidate !== undefined)
     .filter((candidate) => candidate.envelope.ownerToken === owner.token)
@@ -266,7 +292,7 @@ function readTrustedRecoveryEnvelopes(filePath: string): { envelope: RecoveryEnv
   if (!confirmedOwner || confirmedOwner.token !== owner.token || !sameFileIdentity(owner.identity, confirmedOwner.identity)) {
     return []
   }
-  return slots
+  return tokenScopedSlots.length > 0 ? tokenScopedSlots : legacySlots
 }
 
 function installRecoveryBackup(
@@ -274,12 +300,17 @@ function installRecoveryBackup(
   parentChain: readonly ParentIdentity[],
   mode: number,
   noFollow: number,
+  maxBytes?: number,
 ): void {
   const owner = createRecoveryOwner(filePath, parentChain, mode, noFollow)
   if (!owner) throw new Error('聊天室配置备份所有权不可验证')
-  const source = readRegularTextNoFollow(filePath)
+  const source = readRegularTextNoFollow(filePath, maxBytes)
   if (!source) throw new Error('聊天室配置源文件不可用')
-  const slots = recoverySlotPaths(filePath, owner.token).map((path) => ({ path, candidate: parseRecoveryEnvelope(path) }))
+  const envelopeMaxBytes = maxBytes === undefined
+    ? CHATROOM_RECOVERY_ENVELOPE_MAX_BYTES
+    : maxBytes * 6 + 4096
+  const slots = recoverySlotPaths(filePath, owner.token)
+    .map((path) => ({ path, candidate: parseRecoveryEnvelope(path, envelopeMaxBytes) }))
   const owned = slots.filter((slot) => slot.candidate?.envelope.ownerToken === owner.token)
   const generation = Math.max(0, ...owned.map((slot) => slot.candidate!.envelope.generation)) + 1
   const missing = slots.find((slot) => !pathExistsWithoutFollowing(slot.path))
@@ -595,19 +626,29 @@ export interface SafeJsonReadResult<T> {
   status: SafeJsonReadStatus
 }
 
+export interface SafeJsonReadOptions {
+  /** 仅对需要边界的索引传入；省略时保持通用 reader 的历史无上限行为。 */
+  maxBytes?: number
+}
+
 /** 返回 JSON 文件读取来源，允许调用方区分“没有文件”和“文件全部损坏”。 */
-export function readJsonFileSafeDetailed<T>(filePath: string, logLabel?: string): SafeJsonReadResult<T> {
+export function readJsonFileSafeDetailed<T>(
+  filePath: string,
+  logLabel?: string,
+  options?: SafeJsonReadOptions,
+): SafeJsonReadResult<T> {
   const tmpPath = filePath + '.tmp'
   const bakPath = filePath + '.bak'
   const displayPath = logLabel ?? filePath
   const ownerPath = recoveryOwnerPath(filePath)
   const owner = parseRecoveryOwner(ownerPath)
   const controlledPaths = owner ? recoverySlotPaths(filePath, owner.token) : []
-  const hasCandidate = [filePath, tmpPath, bakPath, ownerPath, ...controlledPaths]
+  const legacyPaths = legacyRecoverySlotPaths(filePath)
+  const hasCandidate = [filePath, tmpPath, bakPath, ownerPath, ...controlledPaths, ...legacyPaths]
     .some((candidate) => pathExistsWithoutFollowing(candidate))
 
   // 1. 尝试读取主文件
-  const main = readRegularTextNoFollow(filePath)
+  const main = readRegularTextNoFollow(filePath, options?.maxBytes)
   if (main) {
     try {
       if (main.raw.trim().length > 0) {
@@ -619,13 +660,13 @@ export function readJsonFileSafeDetailed<T>(filePath: string, logLabel?: string)
   }
 
   // 2. 检查是否有未完成的 .tmp 文件（上次 rename 前崩溃）
-  const pending = readRegularTextNoFollow(tmpPath)
+  const pending = readRegularTextNoFollow(tmpPath, options?.maxBytes)
   if (pending) {
     try {
       if (pending.raw.trim().length > 0) {
         const parsed = JSON.parse(pending.raw) as T
         // .tmp 有效 → 提升为主文件
-        writeJsonFileAtomicDurable(filePath, parsed as object, 0o600, true)
+        writeJsonFileAtomicDurable(filePath, parsed as object, 0o600, true, options?.maxBytes)
         console.log(`[数据恢复] 从 .tmp 文件恢复: ${displayPath}`)
         return { value: parsed, status: 'recovered' }
       }
@@ -645,7 +686,7 @@ export function readJsonFileSafeDetailed<T>(filePath: string, logLabel?: string)
   if (controlledCandidates.length > 0) {
     try {
       const parsed = JSON.parse(controlledCandidates[0]!.envelope.payload) as T
-      writeJsonFileAtomicDurable(filePath, parsed as object, 0o600, true)
+      writeJsonFileAtomicDurable(filePath, parsed as object, 0o600, true, options?.maxBytes)
       console.log(`[数据恢复] 从受控 .bak previous 恢复: ${displayPath}`)
       return { value: parsed, status: 'recovered' }
     } catch {
@@ -654,13 +695,13 @@ export function readJsonFileSafeDetailed<T>(filePath: string, logLabel?: string)
   }
 
   // 4. Fallback 到 canonical .bak；固定路径一律 no-follow 读取。
-  const canonical = readRegularTextNoFollow(bakPath)
+  const canonical = readRegularTextNoFollow(bakPath, options?.maxBytes)
   if (canonical) {
     try {
       if (canonical.raw.trim().length > 0) {
         const parsed = JSON.parse(canonical.raw) as T
         // 用 .bak 恢复主文件（跳过备份，避免用损坏的主文件覆盖好的 .bak）
-        writeJsonFileAtomicDurable(filePath, parsed as object, 0o600, true)
+        writeJsonFileAtomicDurable(filePath, parsed as object, 0o600, true, options?.maxBytes)
         console.log(`[数据恢复] 从 .bak 文件恢复: ${displayPath}`)
         return { value: parsed, status: 'recovered' }
       }

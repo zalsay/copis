@@ -27,7 +27,7 @@ import {
   resolveWorkspaceSkillsDir,
 } from './config-paths'
 import { ChatRoomWorkspaceStore } from './chatroom-workspace-store'
-import { readJsonFileSafeDetailed } from './safe-file'
+import { CHATROOM_CONFIG_MAX_BYTES, readJsonFileSafeDetailed } from './safe-file'
 import {
   setWindowsSnapshotAcl,
   syncDirectoryDurable as syncDirectory,
@@ -849,7 +849,9 @@ function configuredSnapshotDigest(roomId: string, roomAgentId: string): string |
   const configPath = getChatRoomConfigPath(roomId)
   assertControlledDirectory(dirname(configPath), getChatRoomsRootPath(), '聊天室配置目录不可用')
   if (!assertJournalFile(configPath)) return undefined
-  const result = readJsonFileSafeDetailed<unknown>(configPath, '聊天室配置')
+  const result = readJsonFileSafeDetailed<unknown>(configPath, '聊天室配置', {
+    maxBytes: CHATROOM_CONFIG_MAX_BYTES,
+  })
   if (result.status === 'corrupt' || !isPlainRecord(result.value)) fail('聊天室配置不可用')
   const agents = result.value.agents
   if (!Array.isArray(agents)) fail('聊天室配置不可用')

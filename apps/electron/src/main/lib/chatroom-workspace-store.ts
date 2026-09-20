@@ -32,7 +32,12 @@ import {
   getChatRoomAgentSkillsSnapshotPath,
   getChatRoomsRootPath,
 } from './config-paths'
-import { readJsonFileSafeDetailed, writeJsonFileAtomic, writeJsonFileAtomicDurable } from './safe-file'
+import {
+  CHATROOM_CONFIG_MAX_BYTES,
+  readJsonFileSafeDetailed,
+  writeJsonFileAtomic,
+  writeJsonFileAtomicDurable,
+} from './safe-file'
 import type { ChatRoomSkillSnapshotResult } from './chatroom-skill-snapshot'
 
 interface ChatRoomWorkspaceStoreOptions {
@@ -536,7 +541,9 @@ export class ChatRoomWorkspaceStore {
     assertDirectory(agentsPath, '聊天室 Agent 根')
     const configPath = getChatRoomConfigPath(roomId)
     this.assertConfigFiles(configPath)
-    const result = readJsonFileSafeDetailed<unknown>(configPath, '聊天室配置')
+    const result = readJsonFileSafeDetailed<unknown>(configPath, '聊天室配置', {
+      maxBytes: CHATROOM_CONFIG_MAX_BYTES,
+    })
     if (result.status === 'missing') return undefined
     if (result.status === 'corrupt' || result.value === null) throw new Error('room_config_unrecoverable')
     const raw = result.value
@@ -561,8 +568,8 @@ export class ChatRoomWorkspaceStore {
     this.assertAgentDirectoryTree(roomPath, next.agents)
     const configPath = getChatRoomConfigPath(next.roomId)
     this.assertConfigFiles(configPath)
-    if (durable) writeJsonFileAtomicDurable(configPath, next, 0o600)
-    else writeJsonFileAtomic(configPath, next, false, 0o600)
+    if (durable) writeJsonFileAtomicDurable(configPath, next, 0o600, false, CHATROOM_CONFIG_MAX_BYTES)
+    else writeJsonFileAtomic(configPath, next, false, 0o600, CHATROOM_CONFIG_MAX_BYTES)
     assertDirectory(roomPath, '聊天室')
   }
 

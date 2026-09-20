@@ -14,7 +14,14 @@ import {
   writeFileSync,
 } from 'node:fs'
 import { join } from 'node:path'
-import { readJsonFileSafe, writeJsonFileAtomicDurable } from './safe-file'
+import {
+  CHATROOM_CONFIG_MAX_BYTES,
+  CHATROOM_RECOVERY_ENVELOPE_MAX_BYTES,
+  readJsonFileSafe,
+  readJsonFileSafeDetailed,
+  writeJsonFileAtomic,
+  writeJsonFileAtomicDurable,
+} from './safe-file'
 
 const root = join(process.env.TMPDIR ?? '/tmp', `copis-safe-file-${Date.now()}-${Math.random().toString(36).slice(2)}`)
 
@@ -24,6 +31,10 @@ function recoveryOwnerToken(file: string): string {
 
 function recoverySlotPath(file: string, token: string, suffix: 'a' | 'b'): string {
   return `${file}.bak-recovery-${token}-${suffix}`
+}
+
+function legacyRecoverySlotPath(file: string, suffix: 'a' | 'b'): string {
+  return `${file}.bak-recovery-${suffix}`
 }
 
 function writeRecoveryEnvelope(path: string, ownerToken: string, generation: number, payload: object): void {
@@ -41,6 +52,54 @@ beforeEach(() => mkdirSync(root, { recursive: true }))
 afterEach(() => rmSync(root, { recursive: true, force: true }))
 
 describe('聊天室 durable JSON writer', () => {
+  test('Given 合法通用 JSON 超过 4 MiB When 安全读取 Then 保持既有通用索引兼容', () => {
+    const file = join(root, 'large-generic.json')
+    const value = 'x'.repeat(4 * 1024 * 1024)
+    writeFileSync(file, JSON.stringify({ value }))
+
+    expect(readJsonFileSafe<{ value: string }>(file)?.value.length).toBe(value.length)
+  })
+
+  test('Given 聊天室配置 payload 恰好在显式上限内 When 安全读取 Then 接受 payload', () => {
+    const file = join(root, 'room-boundary.json')
+    const prefix = '{\n  "value": "'
+    const suffix = '"\n}'
+    const value = 'x'.repeat(CHATROOM_CONFIG_MAX_BYTES - Buffer.byteLength(prefix) - Buffer.byteLength(suffix))
+    writeFileSync(file, `${prefix}${value}${suffix}`)
+
+    const result = readJsonFileSafeDetailed<{ value: string }>(file, '聊天室配置', {
+      maxBytes: CHATROOM_CONFIG_MAX_BYTES,
+    })
+    expect(result.status).toBe('valid')
+    expect(result.value?.value.length).toBe(value.length)
+  })
+
+  test('Given 通用 writer 传入显式 maxBytes 且 payload 超限 When 写入 Then fail closed', () => {
+    const file = join(root, 'room-write-limit.json')
+
+    expect(() => writeJsonFileAtomic(file, { value: '0123456789' }, false, 0o600, 10)).toThrow()
+    expect(existsSync(file)).toBe(false)
+  })
+
+  test('Given 聊天室配置 recovery envelope 近 payload 上限 When 恢复 Then 预留包装与转义空间', () => {
+    const file = join(root, 'room-envelope-boundary.json')
+    const value = 'x'.repeat(CHATROOM_CONFIG_MAX_BYTES - 64)
+    writeJsonFileAtomicDurable(file, { value })
+    writeFileSync(`${file}.bak`, 'external bak')
+    writeJsonFileAtomicDurable(file, { value: `${value}2` })
+    const slots = [...new Bun.Glob('room-envelope-boundary.json.bak-recovery-*').scanSync(root)]
+      .filter((path) => !path.endsWith('-owner'))
+    expect(slots.length).toBeGreaterThan(0)
+    expect(slots.every((path) => Buffer.byteLength(readFileSync(join(root, path))) <= CHATROOM_RECOVERY_ENVELOPE_MAX_BYTES)).toBe(true)
+    writeFileSync(file, '{broken')
+
+    const result = readJsonFileSafeDetailed<{ value: string }>(file, '聊天室配置', {
+      maxBytes: CHATROOM_CONFIG_MAX_BYTES,
+    })
+    expect(result.status).toBe('recovered')
+    expect(result.value?.value).toBe(value)
+  })
+
   test('Given 固定 tmp 是外部普通文件 When 持久化 Then 不截断或覆盖固定 tmp', () => {
     const file = join(root, 'room.json')
     const fixedTmp = `${file}.tmp`
@@ -209,6 +268,55 @@ describe('聊天室 durable JSON writer', () => {
     writeFileSync(file, '{broken')
 
     expect(readJsonFileSafe<{ value: string }>(file)).toEqual({ value: 'canonical' })
+  })
+
+  test('Given legacy recovery slot 的 owner 匹配 When 主文件损坏 Then 兼容恢复并标记 recovered', () => {
+    const file = join(root, 'room-legacy.json')
+    const token = '11111111-1111-4111-8111-111111111111'
+    writeFileSync(`${file}.bak-recovery-owner`, JSON.stringify({ token }))
+    writeRecoveryEnvelope(legacyRecoverySlotPath(file, 'a'), token, 1, { value: 'legacy' })
+    writeFileSync(file, '{broken')
+
+    const result = readJsonFileSafeDetailed<{ value: string }>(file)
+    expect(result).toEqual({ value: { value: 'legacy' }, status: 'recovered' })
+  })
+
+  test('Given legacy recovery slot 的 owner token 不匹配 When 主文件损坏 Then 拒绝恢复', () => {
+    const file = join(root, 'room-legacy-mismatch.json')
+    writeFileSync(`${file}.bak-recovery-owner`, JSON.stringify({ token: '11111111-1111-4111-8111-111111111111' }))
+    writeRecoveryEnvelope(
+      legacyRecoverySlotPath(file, 'a'),
+      '22222222-2222-4222-8222-222222222222',
+      999,
+      { value: 'forged' },
+    )
+    writeFileSync(file, '{broken')
+
+    const result = readJsonFileSafeDetailed(file)
+    expect(result.value).toBeNull()
+    expect(result.status).toBe('corrupt')
+  })
+
+  test('Given legacy recovery slot 但 owner 缺失、损坏或符号链接 When 主文件损坏 Then 不信任 legacy', () => {
+    const modes = ['missing', 'corrupt', 'symlink'] as const
+    for (const mode of modes) {
+      if (mode === 'symlink' && process.platform === 'win32') continue
+      const file = join(root, `room-legacy-owner-${mode}.json`)
+      const token = '11111111-1111-4111-8111-111111111111'
+      const ownerPath = `${file}.bak-recovery-owner`
+      writeRecoveryEnvelope(legacyRecoverySlotPath(file, 'a'), token, 1, { value: 'forged' })
+      if (mode === 'corrupt') writeFileSync(ownerPath, '{broken')
+      if (mode === 'symlink') {
+        const externalOwner = join(root, `external-owner-${mode}.json`)
+        writeFileSync(externalOwner, JSON.stringify({ token }))
+        symlinkSync(externalOwner, ownerPath)
+      }
+      writeFileSync(file, '{broken')
+
+      const result = readJsonFileSafeDetailed(file)
+      expect(result.value).toBeNull()
+      expect(result.status).toBe('corrupt')
+    }
   })
 
   test('Given 一个可信槽和一个外部占用槽 When 写入下一代失败 Then 保留唯一可信槽和外部文件', () => {
