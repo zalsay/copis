@@ -311,6 +311,44 @@ export class CodexAppServerAdapter implements AgentProviderAdapter {
           return
         }
 
+        // 服务端请求处理 (JSON-RPC ServerRequest)
+        if (typeof data.id === 'number' && typeof data.method === 'string') {
+          const reqId = data.id
+          const reqMethod = data.method
+          const isBypass = options.permissionMode === 'bypassPermissions'
+
+          switch (reqMethod) {
+            case 'item/commandExecution/requestApproval':
+            case 'item/fileChange/requestApproval':
+            case 'item/permissions/requestApproval':
+              try {
+                ws.send(JSON.stringify({
+                  id: reqId,
+                  result: { decision: isBypass ? 'accept' : 'decline' },
+                }))
+              } catch (err) {
+                console.warn(`[Codex App Server Adapter] 响应 ${reqMethod} 失败:`, err)
+              }
+              return
+
+            case 'execCommandApproval':
+            case 'applyPatchApproval':
+              try {
+                ws.send(JSON.stringify({
+                  id: reqId,
+                  result: { decision: isBypass ? 'approved' : 'denied' },
+                }))
+              } catch (err) {
+                console.warn(`[Codex App Server Adapter] 响应 ${reqMethod} 失败:`, err)
+              }
+              return
+
+            default:
+              console.warn(`[Codex App Server Adapter] 收到未显式处理的 ServerRequest: ${reqMethod} (id=${reqId})`)
+              break
+          }
+        }
+
         // 通知处理
         const method = typeof data.method === 'string' ? data.method : ''
         const params = (data.params as Record<string, unknown>) || {}
@@ -513,6 +551,16 @@ export class CodexAppServerAdapter implements AgentProviderAdapter {
         },
       }
 
+      // 权限模式与沙箱策略对齐：
+      // Copis 默认 bypassPermissions（完全自动）模式对应 Codex 的 never 审批与 danger-full-access 沙箱；
+      // plan（计划模式）对应 read-only 沙箱。
+      const isBypass = options.permissionMode === 'bypassPermissions'
+      const approvalPolicy = isBypass ? 'never' : 'on-request'
+      const sandbox = isBypass ? 'danger-full-access' : 'read-only'
+      const sandboxPolicy = isBypass
+        ? { type: 'dangerFullAccess' }
+        : { type: 'readOnly', networkAccess: false }
+
       // 3. 启动或恢复 Thread
       let threadId: string | undefined
       if (options.resumeSessionId) {
@@ -520,6 +568,8 @@ export class CodexAppServerAdapter implements AgentProviderAdapter {
           const res = await sendRequest('thread/resume', {
             threadId: options.resumeSessionId,
             cwd: options.cwd,
+            approvalPolicy,
+            sandbox,
             model: targetModel,
             modelProvider: modelProviderName,
             config: threadConfig,
@@ -534,10 +584,10 @@ export class CodexAppServerAdapter implements AgentProviderAdapter {
       }
 
       if (!threadId) {
-        const approvalPolicy = options.permissionMode === 'bypassPermissions' ? 'never' : 'on-request'
         const res = await sendRequest('thread/start', {
           cwd: options.cwd,
           approvalPolicy,
+          sandbox,
           model: targetModel,
           modelProvider: modelProviderName,
           config: threadConfig,
@@ -555,11 +605,11 @@ export class CodexAppServerAdapter implements AgentProviderAdapter {
       options.onSessionId?.(threadId)
 
       // 4. 启动 Turn
-      const approvalPolicy = options.permissionMode === 'bypassPermissions' ? 'never' : 'on-request'
       const turnParams: Record<string, unknown> = {
         threadId,
         cwd: options.cwd,
         approvalPolicy,
+        sandboxPolicy,
         summary: 'auto',
         input: [
           {

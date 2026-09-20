@@ -125,6 +125,8 @@ export function ensureCopisCodexConfig(options?: { httpApiPort?: number }): stri
 # 独立于用户系统 ~/.codex，默认通过 Copis 本地 Rust HTTP API 网关访问模型
 model = "fast"
 model_provider = "copis"
+approval_policy = "never"
+sandbox_mode = "danger-full-access"
 
 [model_providers.copis]
 name = "copis"

@@ -112,6 +112,7 @@ describe('CodexAppServerAdapter', () => {
     const threadParams = threadStartMsg.params as Record<string, unknown>
     expect(threadParams.model).toBe('gpt-5-codex')
     expect(threadParams.modelProvider).toBe('copis')
+    expect(threadParams.sandbox).toBe('danger-full-access')
     expect(threadParams.developerInstructions).toBe('系统指令')
     expect(threadParams.config).toMatchObject({
       model: 'gpt-5-codex',
@@ -130,6 +131,7 @@ describe('CodexAppServerAdapter', () => {
     const turnStartMsg = mock.messages.find((m) => m.method === 'turn/start') as Record<string, unknown>
     const turnParams = turnStartMsg.params as Record<string, unknown>
     expect(turnParams.approvalPolicy).toBe('never')
+    expect(turnParams.sandboxPolicy).toEqual({ type: 'dangerFullAccess' })
     expect(turnParams.model).toBe('gpt-5-codex')
     expect(turnParams.effort).toBe('high')
 
@@ -209,12 +211,14 @@ describe('CodexAppServerAdapter', () => {
     const threadResumeMsg = mock.messages.find((m) => m.method === 'thread/resume') as Record<string, unknown>
     const threadResumeParams = threadResumeMsg.params as Record<string, unknown>
     expect(threadResumeParams.modelProvider).toBe('copis')
+    expect(threadResumeParams.sandbox).toBe('read-only')
     expect(threadResumeParams.developerInstructions).toBe('系统指令')
     expect(threadResumeParams.config).toBeDefined()
 
     const turnStartMsg = mock.messages.find((m) => m.method === 'turn/start') as Record<string, unknown>
     const turnParams = turnStartMsg.params as Record<string, unknown>
     expect(turnParams.approvalPolicy).toBe('on-request')
+    expect(turnParams.sandboxPolicy).toEqual({ type: 'readOnly', networkAccess: false })
 
     adapter.dispose()
     await mock.close()
@@ -737,6 +741,72 @@ describe('CodexAppServerAdapter', () => {
     expect(skillReq).toBeDefined()
     const skillParams = skillReq.params as Record<string, unknown>
     expect(skillParams.extraRoots).toEqual([customSkillPath])
+
+    adapter.dispose()
+    await mock.close()
+  })
+
+  test('Given Codex App Server 发送审批请求 (item/commandExecution/requestApproval 与 applyPatchApproval) When bypassPermissions Then 自动回复允许决策', async () => {
+    const mock = await createMockCodexAppServer()
+    const receivedApprovals: Array<Record<string, unknown>> = []
+
+    mock.server.on('connection', (ws: WebSocket) => {
+      ws.on('message', (raw: RawData) => {
+        const msg = JSON.parse(raw.toString()) as Record<string, unknown>
+
+        if (msg.method === 'initialize') {
+          ws.send(JSON.stringify({ id: msg.id, result: {} }))
+        } else if (msg.method === 'thread/start') {
+          ws.send(JSON.stringify({ id: msg.id, result: { thread: { id: 'thread-approval' } } }))
+        } else if (msg.method === 'turn/start') {
+          ws.send(JSON.stringify({ id: msg.id, result: { turn: { id: 'turn-approval' } } }))
+          // 模拟服务端发起审批请求
+          ws.send(JSON.stringify({
+            id: 991,
+            method: 'item/commandExecution/requestApproval',
+            params: { command: 'powershell -Command "echo 1"' },
+          }))
+          ws.send(JSON.stringify({
+            id: 992,
+            method: 'applyPatchApproval',
+            params: { callId: 'patch-1', fileChanges: {} },
+          }))
+        } else if (typeof msg.id === 'number' && msg.result) {
+          // 记录客户端发回的审批响应
+          receivedApprovals.push(msg)
+          if (receivedApprovals.length === 2) {
+            ws.send(JSON.stringify({
+              method: 'turn/completed',
+              params: { turn: { id: 'turn-approval', status: 'completed' } },
+            }))
+          }
+        }
+      })
+    })
+
+    const adapter = new CodexAppServerAdapter()
+    const queryConfig: PiWorkerQueryConfig = {
+      sessionId: 'session-approval-1',
+      agentRuntime: 'codex',
+      codexAppServerPort: mock.port,
+      prompt: '审批测试',
+      apiKey: 'test-key',
+      provider: 'openai-codex',
+      systemPrompt: '系统指令',
+      permissionMode: 'bypassPermissions',
+      piAgentDir: '/tmp',
+      piSessionDir: '/tmp/sessions',
+    }
+
+    for await (const _ of adapter.query(queryConfig)) {
+      // 消费流
+    }
+
+    expect(receivedApprovals.length).toBe(2)
+    const cmdApproval = receivedApprovals.find((a) => a.id === 991)
+    expect(cmdApproval?.result).toEqual({ decision: 'accept' })
+    const patchApproval = receivedApprovals.find((a) => a.id === 992)
+    expect(patchApproval?.result).toEqual({ decision: 'approved' })
 
     adapter.dispose()
     await mock.close()

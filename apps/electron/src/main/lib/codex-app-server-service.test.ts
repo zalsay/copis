@@ -167,6 +167,8 @@ describe('Codex App Server Service (BDD)', () => {
     expect(content).toContain('wire_api = "responses"')
     expect(content).toContain('http://127.0.0.1:51740/api/internal/working-model/v1')
     expect(content).toContain('X-Working-Model-Source-Type')
+    expect(content).toContain('approval_policy = "never"')
+    expect(content).toContain('sandbox_mode = "danger-full-access"')
 
     // 验证默认系统技能在 config.toml 中被声明禁用
     expect(content).toContain('name = "imagegen"')
