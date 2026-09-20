@@ -24,7 +24,7 @@ import {
   getChatRoomAgentSkillsSnapshotPath,
   getChatRoomsRootPath,
   getConfigDir,
-  getWorkspaceSkillsDir,
+  resolveWorkspaceSkillsDir,
 } from './config-paths'
 import { ChatRoomWorkspaceStore } from './chatroom-workspace-store'
 import { readJsonFileSafeDetailed } from './safe-file'
@@ -1006,7 +1006,9 @@ function syncChatRoomAgentSkillSnapshotUnlocked(input: SyncChatRoomAgentSkillSna
   assertComponent(input.sourceWorkspaceSlug, 'sourceWorkspaceSlug')
   recoverChatRoomAgentSkillSnapshotUnlocked(input)
 
-  const sourceRoot = getWorkspaceSkillsDir(input.sourceWorkspaceSlug)
+  // 先以纯路径解析完整 workspace parent 链，再调用只读枚举；不得让枚举 helper
+  // 在 anchor 校验前创建或迁移 .agents/skills。
+  const sourceRoot = resolveWorkspaceSkillsDir(input.sourceWorkspaceSlug)
   const configDir = getConfigDir()
   assertControlledDirectory(sourceRoot, configDir, 'Skill 源目录不可用')
   const sourceAnchorChain = captureDirectoryChain(configDir, sourceRoot, 'Skill 快照源目录发生变化')

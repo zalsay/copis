@@ -21,6 +21,7 @@ mock.module('electron', () => ({ app: { isPackaged: false } }))
 mock.module('node:os', () => ({ homedir: () => testHome }))
 
 const {
+  getConfigDir,
   getChatRoomAgentSkillsSnapshotPath,
   getInactiveSkillsDir,
   getWorkspaceSkillsDir,
@@ -589,6 +590,18 @@ describe('聊天室 Agent Skill 只读快照', () => {
         },
       },
     })).toThrow('Skill 快照源目录发生变化')
+  })
+
+  test('Given workspace 根是外部符号链接 When 同步 Then 先 fail closed 且不创建外部 .agents/skills', () => {
+    if (process.platform === 'win32') return
+    const workspacePath = join(getConfigDir(), 'agent-workspaces', sourceWorkspaceSlug)
+    const externalWorkspace = join(testHome, 'external-workspace')
+    mkdirSync(externalWorkspace, { recursive: true })
+    symlinkSync(externalWorkspace, workspacePath, 'dir')
+
+    expect(() => syncChatRoomAgentSkillSnapshot({ roomId, roomAgentId, sourceWorkspaceSlug })).toThrow('Skill 源目录不可用')
+    expect(existsSync(join(externalWorkspace, '.agents'))).toBe(false)
+    expect(existsSync(join(externalWorkspace, '.agents', 'skills'))).toBe(false)
   })
 
   test('Given snapshot next root 在写入前被替换 When 同步 Then fail closed', () => {

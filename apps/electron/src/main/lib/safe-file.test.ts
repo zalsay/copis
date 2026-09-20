@@ -48,4 +48,32 @@ describe('聊天室 durable JSON writer', () => {
     expect([...new Bun.Glob('room.json.bak-*').scanSync(root)]).toEqual([])
     expect(existsSync(`${file}.tmp`)).toBe(false)
   })
+
+  test('Given canonical bak 已是外部普通文件 When 持久化 Then 不覆盖固定 bak', () => {
+    const file = join(root, 'room.json')
+    const fixedBak = `${file}.bak`
+    writeFileSync(file, JSON.stringify({ value: 'old' }))
+    writeFileSync(fixedBak, 'external bak')
+
+    writeJsonFileAtomicDurable(file, { value: 'new' })
+
+    expect(readFileSync(fixedBak, 'utf8')).toBe('external bak')
+    expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual({ value: 'new' })
+  })
+
+  test('Given canonical bak 是指向外部的符号链接 When 持久化 Then 不覆盖链接或外部目标', () => {
+    if (process.platform === 'win32') return
+    const file = join(root, 'room.json')
+    const fixedBak = `${file}.bak`
+    const externalBak = join(root, 'external-bak')
+    writeFileSync(file, JSON.stringify({ value: 'old' }))
+    writeFileSync(externalBak, 'external bak')
+    symlinkSync(externalBak, fixedBak)
+
+    writeJsonFileAtomicDurable(file, { value: 'new' })
+
+    expect(lstatSync(fixedBak).isSymbolicLink()).toBe(true)
+    expect(readFileSync(externalBak, 'utf8')).toBe('external bak')
+    expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual({ value: 'new' })
+  })
 })

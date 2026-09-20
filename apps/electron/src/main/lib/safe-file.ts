@@ -15,6 +15,7 @@ import {
   existsSync,
   fstatSync,
   fsyncSync,
+  linkSync,
   lstatSync,
   openSync,
   readSync,
@@ -75,8 +76,27 @@ export function writeJsonFileAtomicDurable(filePath: string, data: object, mode 
 
     if (current) {
       backupIdentity = copyRegularToTemp(filePath, backupTempPath, mode, parentChain, noFollow)
-      replacePathWithoutDelete(backupTempPath, filePath + '.bak', parentChain, backupIdentity)
-      backupIdentity = undefined
+      const fixedBackupPath = filePath + '.bak'
+      if (pathExistsWithoutFollowing(fixedBackupPath)) {
+        // 固定 .bak 可能由其他版本、用户或外部链接占用；将已完成的备份保留为
+        // 唯一随机路径，绝不以 rename 覆盖既有目标。
+        syncParentDurable(backupTempPath)
+        backupIdentity = undefined
+      } else {
+        const installed = installBackupWithoutReplacing(
+          backupTempPath,
+          fixedBackupPath,
+          parentChain,
+          backupIdentity,
+        )
+        if (!installed) {
+          // 目标在检查后出现时同样不能覆盖，随机备份继续作为保留副本。
+          syncParentDurable(backupTempPath)
+          backupIdentity = undefined
+        } else {
+          backupIdentity = undefined
+        }
+      }
     }
 
     assertParentChainStable(parentChain)
@@ -91,6 +111,16 @@ export function writeJsonFileAtomicDurable(filePath: string, data: object, mode 
     cleanupOwnedTemp(tempPath, tempIdentity)
     cleanupOwnedTemp(backupTempPath, backupIdentity)
     throw new Error('聊天室配置持久化失败', { cause: error })
+  }
+}
+
+function pathExistsWithoutFollowing(path: string): boolean {
+  try {
+    lstatSync(path)
+    return true
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false
+    throw error
   }
 }
 
@@ -287,6 +317,38 @@ function replacePathWithoutDelete(
   }
   assertSameFileIdentity(targetPath, identity)
   assertParentChainStable(parentChain)
+}
+
+/** 仅在 canonical 备份不存在时通过 hard link 安装，永不替换既有目标。 */
+function installBackupWithoutReplacing(
+  sourcePath: string,
+  targetPath: string,
+  parentChain: readonly ParentIdentity[],
+  identity: FileIdentity,
+): boolean {
+  assertSameFileIdentity(sourcePath, identity)
+  assertParentChainStable(parentChain)
+  try {
+    linkSync(sourcePath, targetPath)
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'EEXIST') return false
+    throw error
+  }
+  try {
+    const installed = lstatSync(targetPath)
+    if (installed.isSymbolicLink() || !installed.isFile() || installed.dev !== identity.dev
+      || installed.ino !== identity.ino || installed.size !== identity.size
+      || installed.mtimeMs !== identity.mtimeMs) {
+      throw new Error('聊天室配置备份文件发生变化')
+    }
+    assertParentChainStable(parentChain)
+    unlinkSync(sourcePath)
+    syncParentDurable(targetPath)
+    return true
+  } catch (error) {
+    // 目标已通过 hard link 安装；保留 source 或由受控清理回收，不触碰 target。
+    throw error
+  }
 }
 
 function cleanupOwnedTemp(path: string, identity: FileIdentity | undefined): void {

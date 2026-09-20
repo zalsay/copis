@@ -163,3 +163,19 @@
 
 - Node/Electron 没有 openat/handle-relative 的全链路 API；本轮补齐完整父链 dev/ino 与 Windows realpath 复核并覆盖可观察替换窗口，但同一 UID 的纳秒级 ABA 仍非内核事务，不能声称等价 openat。真实 Windows ACL、reparse、目录 flush 与 rename replace 语义仍需 Windows runner 验证。
 - Windows 每次快照事务的 ACL 与目录树 flush 已批处理为少量子进程；单个文件仍使用 fd fsync。POSIX 仍按树节点执行权限/目录持久化操作。
+
+## Fix Round 5：RED / GREEN
+
+- RED：新增回归测试后，`safe-file.test.ts` 复现固定 `room.json.bak` 普通文件和符号链接
+  会被 durable writer 替换（3 pass / 2 fail）；Skill 快照新增 workspace 根为外部符号链接的
+  场景复现 anchor 校验前在外部目录创建 `.agents/skills`（0 pass / 1 fail）。
+- GREEN：durable writer 现在仅在固定 `.bak` 不存在时通过 hard link 安装备份；若目标已存在或
+  在检查后出现，则保留随机唯一备份并绝不替换固定路径，既有固定文件、符号链接及其外部目标
+  内容保持不变。只读 Skill 枚举新增 `resolveWorkspaceSkillsDir()` 纯路径 helper，snapshot
+  先校验 `configDir → agent-workspaces → workspace → .agents → skills` 完整 parent anchor 链，
+  再调用不创建目录的枚举，外部 workspace 符号链接直接 fail closed。
+
+## Fix Round 5 验证
+
+- `bun test apps/electron/src/main/lib/safe-file.test.ts`：5 pass。
+- `bun test apps/electron/src/main/lib/chatroom-skill-snapshot.test.ts`：32 pass。

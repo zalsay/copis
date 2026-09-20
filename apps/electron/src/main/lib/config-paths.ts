@@ -559,6 +559,11 @@ export function getWorkspaceSkillsDir(slug: string): string {
   return dir
 }
 
+/** 解析工作区 Skills 目录路径（只读，不创建目录或执行旧目录迁移）。 */
+export function resolveWorkspaceSkillsDir(slug: string): string {
+  return join(getConfigDir(), 'agent-workspaces', slug, '.agents', 'skills')
+}
+
 /**
  * 获取工作区文件目录路径
  *

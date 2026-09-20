@@ -19,6 +19,7 @@ import {
   getDefaultProjectRootPath,
   getWorkspaceMcpPath,
   getWorkspaceSkillsDir,
+  resolveWorkspaceSkillsDir,
   getWorkspaceFilesDir,
   resolveWorkspaceFilesDir,
   getInactiveSkillsDir,
@@ -1326,7 +1327,7 @@ export function getWorkspaceSkills(workspaceSlug: string): SkillMeta[] {
  * 条目，由调用方在复制前明确拒绝。
  */
 export function getWorkspaceSkillsReadOnly(workspaceSlug: string): SkillMeta[] {
-  const dir = getWorkspaceSkillsDir(workspaceSlug)
+  const dir = resolveWorkspaceSkillsDir(workspaceSlug)
   const skills: SkillMeta[] = []
   let entries
   try {
