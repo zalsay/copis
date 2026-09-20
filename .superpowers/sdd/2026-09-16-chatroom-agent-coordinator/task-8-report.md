@@ -90,6 +90,7 @@ Task 7 的三个 load-bearing carry-over 已关闭，并完成 Task 8 parser/san
 
 ### 修复轮 2 验证
 
+- 提交：Copis `1903de21`（Shared surrogate、Rust bridge canonical forwarding、报告）；ai-education `507ce8a8`（WS 128 KiB full-frame boundary）。
 - Copis：Shared/workspace focused tests、Rust gateway/protocol/client focused tests、`cargo fmt --check` 通过。
 - ai-education：`go test ./handlers -run 'ChatRoomV2' -count=1`、`go test ./services -run 'ChatRoomV2' -count=1` 通过。
-- 既有 sanitizer/prompt、atomic failure、room-wide transient 回归保持通过；Electron typecheck/build 与 Rust 全套测试在提交前重跑。
+- 既有 sanitizer/prompt、atomic failure、room-wide transient 回归保持通过；最终 Electron typecheck/build:main/build:renderer、Rust 全套 `444 passed`、两仓 diff check 均通过。
