@@ -49,9 +49,10 @@ export function writeTextFileAtomic(filePath: string, content: string): void {
  * 安全读取 JSON 索引文件
  * 优先读主文件，损坏则尝试 .tmp / .bak，都失败返回 null
  */
-export function readJsonFileSafe<T>(filePath: string): T | null {
+export function readJsonFileSafe<T>(filePath: string, logLabel?: string): T | null {
   const tmpPath = filePath + '.tmp'
   const bakPath = filePath + '.bak'
+  const displayPath = logLabel ?? filePath
 
   // 1. 尝试读取主文件
   if (existsSync(filePath)) {
@@ -61,7 +62,7 @@ export function readJsonFileSafe<T>(filePath: string): T | null {
         return JSON.parse(raw) as T
       }
     } catch {
-      console.warn(`[数据恢复] 主索引文件损坏: ${filePath}`)
+      console.warn(`[数据恢复] 主索引文件损坏: ${displayPath}`)
     }
   }
 
@@ -73,7 +74,7 @@ export function readJsonFileSafe<T>(filePath: string): T | null {
         const parsed = JSON.parse(raw) as T
         // .tmp 有效 → 提升为主文件
         renameSync(tmpPath, filePath)
-        console.log(`[数据恢复] 从 .tmp 文件恢复: ${filePath}`)
+        console.log(`[数据恢复] 从 .tmp 文件恢复: ${displayPath}`)
         return parsed
       }
     } catch {
@@ -91,11 +92,11 @@ export function readJsonFileSafe<T>(filePath: string): T | null {
         const parsed = JSON.parse(raw) as T
         // 用 .bak 恢复主文件（跳过备份，避免用损坏的主文件覆盖好的 .bak）
         writeJsonFileAtomic(filePath, parsed as object, true)
-        console.log(`[数据恢复] 从 .bak 文件恢复: ${filePath}`)
+        console.log(`[数据恢复] 从 .bak 文件恢复: ${displayPath}`)
         return parsed
       }
     } catch {
-      console.error(`[数据恢复] .bak 文件也损坏: ${bakPath}`)
+      console.error(`[数据恢复] .bak 文件也损坏: ${logLabel ?? bakPath}`)
     }
   }
 
