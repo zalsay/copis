@@ -21,8 +21,40 @@ import type { AgentMessage, AgentSessionMeta, SDKMessage, ChatRoomAgentLocalConf
 
 const PRIVATE_MODE = 0o600
 
+const META_KEYS = new Set([
+  'id', 'title', 'channelId', 'modelId', 'sdkSessionId', 'piSessionFile', 'piEntryBindings', 'agentRuntime', 'mode',
+  'codexFastMode', 'workingMode', 'reasoningLevel', 'openAIThinkingLevel', 'workspaceId', 'expertTeamSession',
+  'expertTeamSetup', 'agentCwdMode', 'pinned', 'starred', 'archived', 'attachedDirectories', 'attachedFiles',
+  'forkSourceDir', 'forkSourceSdkSessionId', 'resumeAtMessageUuid', 'manualWorking', 'completedButUnconfirmed',
+  'stoppedByUser', 'permissionMode', 'advancedAuthorization', 'source', 'feishuDedicated', 'wechatDedicated',
+  'dingtalkDedicated', 'sourceAutomationId', 'automationGraduated', 'parentSessionId', 'rootSessionId',
+  'sourceDelegationId', 'delegationRole', 'delegationStatus', 'delegationDepth', 'delegationGoal', 'createdAt', 'updatedAt',
+])
+
+const META_UPDATE_KEYS = new Set([
+  'title', 'sdkSessionId', 'piSessionFile', 'piEntryBindings', 'codexFastMode', 'workingMode', 'reasoningLevel',
+  'openAIThinkingLevel', 'expertTeamSession', 'expertTeamSetup', 'pinned', 'starred', 'archived', 'attachedDirectories',
+  'attachedFiles', 'forkSourceDir', 'forkSourceSdkSessionId', 'resumeAtMessageUuid', 'stoppedByUser', 'permissionMode',
+  'advancedAuthorization', 'completedButUnconfirmed', 'sourceAutomationId', 'automationGraduated', 'parentSessionId',
+  'rootSessionId', 'sourceDelegationId', 'delegationRole', 'delegationStatus', 'delegationDepth', 'delegationGoal',
+  'source', 'feishuDedicated', 'wechatDedicated', 'dingtalkDedicated', 'channelId', 'modelId', 'workspaceId', 'agentRuntime',
+])
+
+const SDK_MESSAGE_TYPES = new Set(['assistant', 'user', 'result', 'system', 'tool_progress', 'prompt_suggestion', 'tool_use_summary'])
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function assertPlainRecord(value: unknown, label: string): asserts value is Record<string, unknown> {
+  if (!isRecord(value)) throw new Error(`${label} 损坏`)
+  const prototype = Object.getPrototypeOf(value)
+  if (prototype !== Object.prototype && prototype !== null) throw new Error(`${label} 损坏`)
+  if (Reflect.ownKeys(value).some((key) => typeof key === 'symbol')) throw new Error(`${label} 损坏`)
+}
+
+function assertKnownKeys(value: Record<string, unknown>, allowed: Set<string>, label: string): void {
+  if (Object.keys(value).some((key) => !allowed.has(key))) throw new Error(`${label} 损坏`)
 }
 
 function assertRealDirectory(path: string, label: string): void {
@@ -53,31 +85,81 @@ function readStrictJson(path: string, label: string): unknown {
   }
 }
 
-function assertValidMeta(value: unknown, config: ChatRoomAgentLocalConfig): asserts value is AgentSessionMeta {
-  if (!isRecord(value)
-    || value.id !== config.sessionId
+function assertValidMeta(value: unknown, config: ChatRoomAgentLocalConfig, expectedCreatedAt?: number): asserts value is AgentSessionMeta {
+  assertPlainRecord(value, '聊天室 Agent session 元数据')
+  assertKnownKeys(value, META_KEYS, '聊天室 Agent session 元数据')
+  if (value.id !== config.sessionId
     || typeof value.title !== 'string'
     || value.title.length === 0
     || typeof value.createdAt !== 'number'
     || !Number.isSafeInteger(value.createdAt)
+    || value.createdAt < 0
+    || (expectedCreatedAt !== undefined && value.createdAt !== expectedCreatedAt)
     || typeof value.updatedAt !== 'number'
     || !Number.isSafeInteger(value.updatedAt)
     || value.updatedAt < value.createdAt
     || value.agentRuntime !== 'pi'
-    || (value.channelId !== undefined && typeof value.channelId !== 'string')
-    || (value.modelId !== undefined && typeof value.modelId !== 'string')
-    || (value.workspaceId !== undefined && typeof value.workspaceId !== 'string')) {
+    || value.channelId !== config.channelId
+    || value.modelId !== config.modelId
+    || value.workspaceId !== config.sourceWorkspaceId) {
     throw new Error('聊天室 Agent session 元数据损坏')
   }
 }
 
-function parseJsonlStrict<T>(path: string, label: string): T[] {
+function assertValidAgentMessage(value: unknown): asserts value is AgentMessage {
+  assertPlainRecord(value, '聊天室 Agent session 消息')
+  if (typeof value.id !== 'string' || value.id.length === 0
+    || !['user', 'assistant', 'tool', 'status'].includes(value.role as string)
+    || typeof value.content !== 'string'
+    || typeof value.createdAt !== 'number' || !Number.isSafeInteger(value.createdAt) || value.createdAt < 0) {
+    throw new Error('聊天室 Agent session 消息损坏')
+  }
+}
+
+function assertValidSDKMessage(value: unknown): asserts value is SDKMessage {
+  assertPlainRecord(value, '聊天室 Agent session 消息')
+  if (typeof value.type !== 'string' || !SDK_MESSAGE_TYPES.has(value.type)) throw new Error('聊天室 Agent session 消息损坏')
+  if (value.uuid !== undefined && typeof value.uuid !== 'string') throw new Error('聊天室 Agent session 消息损坏')
+  if (value.type === 'assistant') {
+    if (!isRecord(value.message) || !Array.isArray(value.message.content)
+      || (value.parent_tool_use_id !== null && typeof value.parent_tool_use_id !== 'string')) {
+      throw new Error('聊天室 Agent session 消息损坏')
+    }
+    if (!Object.prototype.hasOwnProperty.call(value, 'parent_tool_use_id')) throw new Error('聊天室 Agent session 消息损坏')
+    if (value.error !== undefined && (!isRecord(value.error) || typeof value.error.message !== 'string')) {
+      throw new Error('聊天室 Agent session 消息损坏')
+    }
+  } else if (value.type === 'user') {
+    if (!Object.prototype.hasOwnProperty.call(value, 'parent_tool_use_id')
+      || (value.parent_tool_use_id !== null && typeof value.parent_tool_use_id !== 'string')) {
+      throw new Error('聊天室 Agent session 消息损坏')
+    }
+    if (value.message !== undefined && (!isRecord(value.message)
+      || (value.message.content !== undefined && !Array.isArray(value.message.content)))) {
+      throw new Error('聊天室 Agent session 消息损坏')
+    }
+  } else if (value.type === 'result') {
+    if (typeof value.subtype !== 'string' || !isRecord(value.usage)
+      || typeof value.usage.input_tokens !== 'number' || typeof value.usage.output_tokens !== 'number') {
+      throw new Error('聊天室 Agent session 消息损坏')
+    }
+  } else if (value.type === 'tool_progress') {
+    if (typeof value.tool_use_id !== 'string' || typeof value.tool_name !== 'string'
+      || (value.parent_tool_use_id !== null && typeof value.parent_tool_use_id !== 'string')) {
+      throw new Error('聊天室 Agent session 消息损坏')
+    }
+  }
+}
+
+function parseJsonlStrict<T>(path: string, label: string, validate?: (value: unknown) => asserts value is T): T[] {
   const raw = readFileSync(path, 'utf8')
   const records: T[] = []
   for (const line of raw.split('\n')) {
     if (!line.trim()) continue
     try {
-      records.push(JSON.parse(line) as T)
+      const value = JSON.parse(line) as unknown
+      validate?.(value)
+      records.push(value as T)
     } catch {
       throw new Error(`${label} 损坏`)
     }
@@ -143,6 +225,8 @@ export class ChatRoomHiddenSessionStore implements AgentSessionStorageOverride {
 
   updateMeta(updates: AgentSessionMetaUpdates): AgentSessionMeta {
     return this.withMutation(() => {
+      assertPlainRecord(updates, '聊天室 Agent session 更新')
+      assertKnownKeys(updates, META_UPDATE_KEYS, '聊天室 Agent session 更新')
       const existing = this.getMeta()
       const normalizedUpdates = { ...updates }
       if (Object.prototype.hasOwnProperty.call(normalizedUpdates, 'attachedDirectories')) {
@@ -164,7 +248,7 @@ export class ChatRoomHiddenSessionStore implements AgentSessionStorageOverride {
         ...(autoUnarchive ? { archived: false } : {}),
         updatedAt: isStarredOnly ? existing.updatedAt : Date.now(),
       }
-      assertValidMeta(updated, this.config)
+      assertValidMeta(updated, this.config, existing.createdAt)
       this.writeMeta(updated)
       return updated
     })
@@ -172,11 +256,12 @@ export class ChatRoomHiddenSessionStore implements AgentSessionStorageOverride {
 
   getAgentMessages(): AgentMessage[] {
     if (!existsSync(this.messagesPath)) return []
-    return parseJsonlStrict<AgentMessage>(this.messagesPath, '聊天室 Agent session 消息')
+    return parseJsonlStrict<AgentMessage>(this.messagesPath, '聊天室 Agent session 消息', assertValidAgentMessage)
   }
 
   appendAgentMessage(message: AgentMessage): void {
     this.withMutation(() => {
+      assertValidAgentMessage(message)
       this.appendLine(JSON.stringify(message))
       const meta = this.getMeta()
       this.writeMeta({ ...meta, updatedAt: Date.now() })
@@ -185,8 +270,7 @@ export class ChatRoomHiddenSessionStore implements AgentSessionStorageOverride {
 
   getSDKMessages(): SDKMessage[] {
     if (!existsSync(this.messagesPath)) return []
-    const parsed = parseJsonlStrict<unknown>(this.messagesPath, '聊天室 Agent session 消息')
-      .map(normalizePersistedSDKMessageForInternal)
+    const parsed = this.readSDKMessages()
     return dedupeSDKMessagesForInternal(parsed)
   }
 
@@ -194,6 +278,7 @@ export class ChatRoomHiddenSessionStore implements AgentSessionStorageOverride {
     if (messages.length === 0) return
     this.withMutation(() => {
       for (const message of messages) {
+        assertValidSDKMessage(message)
         this.appendLine(serializeSDKMessageForStorageForInternal(message))
       }
     })
@@ -202,8 +287,7 @@ export class ChatRoomHiddenSessionStore implements AgentSessionStorageOverride {
   removeSDKErrorMessage(errorUuid: string): boolean {
     return this.withMutation(() => {
       if (!existsSync(this.messagesPath)) return false
-      const messages = parseJsonlStrict<unknown>(this.messagesPath, '聊天室 Agent session 消息')
-        .map(normalizePersistedSDKMessageForInternal)
+      const messages = this.readSDKMessages()
       const targetIndex = messages.findIndex((message) => message.type === 'assistant'
         && (message as { uuid?: string }).uuid === errorUuid
         && Boolean((message as { error?: unknown }).error))
@@ -221,6 +305,17 @@ export class ChatRoomHiddenSessionStore implements AgentSessionStorageOverride {
     if (!existsSync(this.messagesPath)) writeFileSync(this.messagesPath, '', { encoding: 'utf8', mode: PRIVATE_MODE })
     appendFileSync(this.messagesPath, `${line}\n`, 'utf8')
     chmodSync(this.messagesPath, PRIVATE_MODE)
+  }
+
+  private readSDKMessages(): SDKMessage[] {
+    const parsed = parseJsonlStrict<unknown>(this.messagesPath, '聊天室 Agent session 消息', (value) => {
+      if (isRecord(value) && 'role' in value && !('type' in value)) {
+        assertValidAgentMessage(value)
+        return
+      }
+      assertValidSDKMessage(value)
+    }).map(normalizePersistedSDKMessageForInternal)
+    return parsed
   }
 
   private writeMeta(meta: AgentSessionMeta): void {

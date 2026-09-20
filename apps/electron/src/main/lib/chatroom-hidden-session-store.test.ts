@@ -137,6 +137,46 @@ describe('聊天室隐藏 Agent session 存储', () => {
     expect(existsSync(getAgentSessionMessagesPath(agentConfig.sessionId))).toBe(false)
   })
 
+  test('meta unknown key or binding mismatch fail closed', () => {
+    const metaPath = getChatRoomAgentSessionMetaPath('room-1', agentConfig.roomAgentId)
+    const backend = new ChatRoomHiddenSessionStore('room-1', agentConfig)
+    const validMeta = backend.getMeta()
+
+    writeFileSync(metaPath, JSON.stringify({ ...validMeta, unexpected: true }), 'utf8')
+    expect(() => backend.getMeta()).toThrow()
+    writeFileSync(metaPath, JSON.stringify({ ...validMeta, channelId: 'other-channel' }), 'utf8')
+    expect(() => backend.getMeta()).toThrow()
+    writeFileSync(metaPath, JSON.stringify({ ...validMeta, modelId: 'other-model' }), 'utf8')
+    expect(() => backend.getMeta()).toThrow()
+    writeFileSync(metaPath, JSON.stringify({ ...validMeta, workspaceId: 'other-workspace' }), 'utf8')
+    expect(() => backend.getMeta()).toThrow()
+  })
+
+  test('updateMeta rejects immutable createdAt/id and unknown runtime keys before persistence', () => {
+    const metaPath = getChatRoomAgentSessionMetaPath('room-1', agentConfig.roomAgentId)
+    const backend = new ChatRoomHiddenSessionStore('room-1', agentConfig)
+    const unregister = manager.registerAgentSessionStorageOverride(agentConfig.sessionId, backend)
+    const before = backend.getMeta()
+
+    expect(() => manager.updateAgentSessionMeta(agentConfig.sessionId, { id: 'other' } as never)).toThrow()
+    expect(() => manager.updateAgentSessionMeta(agentConfig.sessionId, { createdAt: 1 } as never)).toThrow()
+    expect(() => manager.updateAgentSessionMeta(agentConfig.sessionId, { unexpected: true } as never)).toThrow()
+    expect(JSON.parse(readFileSync(metaPath, 'utf8'))).toEqual(before)
+    unregister()
+  })
+
+  test('JSON syntax valid but invalid AgentMessage or SDKMessage shape fails closed', () => {
+    const messagesPath = getChatRoomAgentSessionMessagesPath('room-1', agentConfig.roomAgentId)
+    const backend = new ChatRoomHiddenSessionStore('room-1', agentConfig)
+
+    writeFileSync(messagesPath, `${JSON.stringify('not-an-object')}\n`, 'utf8')
+    expect(() => backend.getAgentMessages()).toThrow()
+    writeFileSync(messagesPath, `${JSON.stringify({ type: 'unknown-sdk-type' })}\n`, 'utf8')
+    expect(() => backend.getSDKMessages()).toThrow()
+    writeFileSync(messagesPath, `${JSON.stringify({ type: 'assistant', message: 'not-an-object' })}\n`, 'utf8')
+    expect(() => backend.getSDKMessages()).toThrow()
+  })
+
   test('sessions、meta、messages 为 symlink 或非目录/文件时拒绝访问', () => {
     if (process.platform === 'win32') return
     const sessionsPath = getChatRoomAgentSessionDir('room-1', agentConfig.roomAgentId)
