@@ -9,6 +9,7 @@ mock.module('node:os', () => ({ homedir: () => testHome }))
 
 const {
   getChatRoomAgentInboxPath,
+  getChatRoomAgentSkillsSnapshotPath,
   getChatRoomConfigPath,
   getChatRoomPath,
   getChatRoomsRootPath,
@@ -69,6 +70,21 @@ afterEach(() => {
 })
 
 describe('聊天室本地工作区存储', () => {
+  test('updateAgentSkillSnapshot 拒绝与实际快照不一致的 digest', () => {
+    const store = makeStore()
+    const saved = provision(store)
+    const roomAgentId = saved.agents[0]!.roomAgentId
+    const snapshotPath = getChatRoomAgentSkillsSnapshotPath('room-1', roomAgentId)
+    mkdirSync(snapshotPath, { recursive: true })
+
+    expect(() => store.updateAgentSkillSnapshot('room-1', roomAgentId, {
+      snapshotPath,
+      digest: '0'.repeat(64),
+      skillSlugs: [],
+      syncedAt: now,
+    })).toThrow('invalid_skill_snapshot')
+  })
+
   test('room 无配置时 provision 建立隔离目录并原子写 room.json', () => {
     const store = makeStore()
     const saved = provision(store)

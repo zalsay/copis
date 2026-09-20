@@ -1320,6 +1320,68 @@ export function getWorkspaceSkills(workspaceSlug: string): SkillMeta[] {
   return scanSkillsInDir(getWorkspaceSkillsDir(workspaceSlug), true)
 }
 
+/**
+ * 只读枚举工作区当前启用的 Skill，供跨工作区快照使用。
+ * 不执行 frontmatter 自愈、导入迁移或日志输出；符号链接目录保留为占位
+ * 条目，由调用方在复制前明确拒绝。
+ */
+export function getWorkspaceSkillsReadOnly(workspaceSlug: string): SkillMeta[] {
+  const dir = getWorkspaceSkillsDir(workspaceSlug)
+  const skills: SkillMeta[] = []
+  let entries
+  try {
+    entries = readdirSync(dir, { withFileTypes: true })
+  } catch {
+    return skills
+  }
+  for (const entry of entries) {
+    const skillDir = join(dir, entry.name)
+    let stats
+    try {
+      stats = lstatSync(skillDir)
+    } catch {
+      continue
+    }
+    if (stats.isSymbolicLink()) {
+      skills.push({ slug: entry.name, name: entry.name, enabled: true })
+      continue
+    }
+    if (!stats.isDirectory()) continue
+    const skillMdPath = join(skillDir, 'SKILL.md')
+    let skillMdStats
+    try {
+      skillMdStats = lstatSync(skillMdPath)
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue
+      skills.push({ slug: entry.name, name: entry.name, enabled: true })
+      continue
+    }
+    if (!skillMdStats.isFile() || skillMdStats.isSymbolicLink()) {
+      // 让快照复制阶段显式拒绝特殊文件或符号链接，避免静默遗漏启用 Skill。
+      skills.push({ slug: entry.name, name: entry.name, enabled: true })
+      continue
+    }
+    try {
+      const info = parseSkillFrontmatterInfo(readFileSync(skillMdPath, 'utf-8'))
+      skills.push({
+        slug: entry.name,
+        name: info.name || entry.name,
+        enabled: true,
+        ...(info.displayName ? { displayName: info.displayName } : {}),
+        ...(info.description ? { description: info.description } : {}),
+        ...(info.group ? { group: info.group } : {}),
+        ...(info.icon ? { icon: info.icon } : {}),
+        ...(info.version ? { version: info.version } : {}),
+        ...(info.category ? { category: info.category } : {}),
+      })
+    } catch {
+      // 元数据异常也保留占位，由复制阶段 fail closed，而不是静默减少能力。
+      skills.push({ slug: entry.name, name: entry.name, enabled: true })
+    }
+  }
+  return skills
+}
+
 /** 解析 SKILL.md 的 YAML frontmatter，支持单行值、block scalar（`|` / `>`）和多行缩进 */
 function parseSkillFrontmatter(content: string, slug: string, enabled: boolean): SkillMeta {
   const info = parseSkillFrontmatterInfo(content)

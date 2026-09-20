@@ -3,15 +3,17 @@ import { createHash } from 'node:crypto'
 import {
   existsSync,
   chmodSync,
+  cpSync,
   lstatSync,
   mkdirSync,
+  renameSync,
   readdirSync,
   readFileSync,
   rmSync,
   symlinkSync,
   writeFileSync,
 } from 'node:fs'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 
 const testHome = join(process.env.TMPDIR ?? '/tmp', `copis-chatroom-skill-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`)
 
@@ -25,6 +27,10 @@ const {
 } = await import('./config-paths')
 const { ChatRoomWorkspaceStore } = await import('./chatroom-workspace-store')
 const { syncChatRoomAgentSkillSnapshot } = await import('./chatroom-skill-snapshot')
+const {
+  computeChatRoomSkillSnapshotDigest,
+  recoverChatRoomAgentSkillSnapshot,
+} = await import('./chatroom-skill-snapshot')
 
 const identity = { hostUserId: 'host-1', deviceId: 'device-1' }
 const roomId = 'room-1'
@@ -92,6 +98,10 @@ function cleanup(): void {
   rmSync(testHome, { recursive: true, force: true })
 }
 
+function writeJournal(snapshot: string, journal: Record<string, unknown>): void {
+  writeFileSync(join(dirname(snapshot), '.snapshot-journal.json'), JSON.stringify(journal), 'utf-8')
+}
+
 beforeEach(() => {
   cleanup()
   mkdirSync(testHome, { recursive: true })
@@ -126,6 +136,17 @@ describe('聊天室 Agent Skill 只读快照', () => {
 
     expect(() => syncChatRoomAgentSkillSnapshot({ roomId, roomAgentId, sourceWorkspaceSlug })).toThrow('Skill 快照不允许符号链接')
     expect(readFileSync(join(oldSnapshot, 'old.txt'), 'utf-8')).toBe('old-snapshot')
+  })
+
+  test('Given Skill 的 SKILL.md 是符号链接 When 同步 Then 不静默遗漏而 fail closed', () => {
+    if (process.platform === 'win32') return
+    const skillPath = writeSkill('linked-skill')
+    const external = join(testHome, 'external-skill.md')
+    writeFileSync(external, 'external', 'utf-8')
+    rmSync(join(skillPath, 'SKILL.md'))
+    symlinkSync(external, join(skillPath, 'SKILL.md'))
+
+    expect(() => syncChatRoomAgentSkillSnapshot({ roomId, roomAgentId, sourceWorkspaceSlug })).toThrow()
   })
 
   test('Given 来源 Skill 后续变化 When Agent 运行但未同步 Then 快照内容不变', () => {
@@ -213,6 +234,204 @@ describe('聊天室 Agent Skill 只读快照', () => {
     store.updateAgent({ roomId, roomAgentId, skillSharingEnabled: false })
     expect(existsSync(result.snapshotPath)).toBe(true)
     expect(store.getAgent(roomId, roomAgentId)?.skillSnapshotDigest).toBe(result.digest)
+  })
+
+  test('Given current 已移到 previous 但 config 仍是旧 digest When 启动恢复 Then 回滚旧快照并清理 journal', () => {
+    writeSkill('enabled-skill', 'SKILL.md', 'old')
+    const first = syncChatRoomAgentSkillSnapshot({ roomId, roomAgentId, sourceWorkspaceSlug })
+    const previousPath = join(dirname(first.snapshotPath), '.previous')
+    const nextPath = join(dirname(first.snapshotPath), '.next-11111111-1111-4111-8111-111111111111')
+    renameSync(first.snapshotPath, previousPath)
+    cpSync(previousPath, nextPath, { recursive: true })
+    makeWritable(nextPath)
+    writeFileSync(join(nextPath, 'enabled-skill', 'SKILL.md'), 'new', 'utf-8')
+    const targetDigest = computeChatRoomSkillSnapshotDigest(nextPath)
+    writeJournal(first.snapshotPath, {
+      version: 1,
+      roomId,
+      roomAgentId,
+      targetDigest,
+      previousDigest: first.digest,
+      nextName: '.next-11111111-1111-4111-8111-111111111111',
+      previousName: '.previous',
+      phase: 'current_moved',
+    })
+
+    recoverChatRoomAgentSkillSnapshot({ roomId, roomAgentId })
+
+    expect(readFileSync(join(first.snapshotPath, 'enabled-skill', 'SKILL.md'), 'utf-8')).toContain('old')
+    expect(existsSync(previousPath)).toBe(false)
+    expect(existsSync(nextPath)).toBe(false)
+  })
+
+  test('Given journal 处于 prepared 且 current 尚未移动 When 启动恢复 Then 保留旧 current 并删除未完成 next', () => {
+    writeSkill('enabled-skill', 'SKILL.md', 'old')
+    const first = syncChatRoomAgentSkillSnapshot({ roomId, roomAgentId, sourceWorkspaceSlug })
+    const nextPath = join(dirname(first.snapshotPath), '.next-33333333-3333-4333-8333-333333333333')
+    cpSync(first.snapshotPath, nextPath, { recursive: true })
+    makeWritable(nextPath)
+    writeFileSync(join(nextPath, 'enabled-skill', 'SKILL.md'), 'new', 'utf-8')
+    const targetDigest = computeChatRoomSkillSnapshotDigest(nextPath)
+    writeJournal(first.snapshotPath, {
+      version: 1,
+      roomId,
+      roomAgentId,
+      targetDigest,
+      previousDigest: first.digest,
+      nextName: '.next-33333333-3333-4333-8333-333333333333',
+      previousName: '.previous',
+      phase: 'prepared',
+    })
+
+    recoverChatRoomAgentSkillSnapshot({ roomId, roomAgentId })
+
+    expect(readFileSync(join(first.snapshotPath, 'enabled-skill', 'SKILL.md'), 'utf-8')).toContain('old')
+    expect(existsSync(nextPath)).toBe(false)
+  })
+
+  test('Given next 已成为 current 但 config 仍是旧 digest When 启动恢复 Then 删除新 current 并恢复 previous', () => {
+    writeSkill('enabled-skill', 'SKILL.md', 'old')
+    const first = syncChatRoomAgentSkillSnapshot({ roomId, roomAgentId, sourceWorkspaceSlug })
+    const previousPath = join(dirname(first.snapshotPath), '.previous')
+    const nextPath = join(dirname(first.snapshotPath), '.next-44444444-4444-4444-8444-444444444444')
+    renameSync(first.snapshotPath, previousPath)
+    cpSync(previousPath, nextPath, { recursive: true })
+    makeWritable(nextPath)
+    writeFileSync(join(nextPath, 'enabled-skill', 'SKILL.md'), 'new', 'utf-8')
+    const targetDigest = computeChatRoomSkillSnapshotDigest(nextPath)
+    renameSync(nextPath, first.snapshotPath)
+    writeJournal(first.snapshotPath, {
+      version: 1,
+      roomId,
+      roomAgentId,
+      targetDigest,
+      previousDigest: first.digest,
+      nextName: '.next-44444444-4444-4444-8444-444444444444',
+      previousName: '.previous',
+      phase: 'next_moved',
+    })
+
+    recoverChatRoomAgentSkillSnapshot({ roomId, roomAgentId })
+
+    expect(readFileSync(join(first.snapshotPath, 'enabled-skill', 'SKILL.md'), 'utf-8')).toContain('old')
+    expect(existsSync(previousPath)).toBe(false)
+  })
+
+  test('Given 首次同步 next 已成为 current 且没有 previous When 启动恢复 Then 回滚到无快照状态', () => {
+    const emptyCurrent = snapshotPath()
+    const nextPath = join(dirname(emptyCurrent), '.next-55555555-5555-4555-8555-555555555555')
+    rmSync(emptyCurrent, { recursive: true, force: true })
+    mkdirSync(join(nextPath, 'enabled-skill'), { recursive: true })
+    writeFileSync(join(nextPath, 'enabled-skill', 'SKILL.md'), 'new', 'utf-8')
+    const targetDigest = computeChatRoomSkillSnapshotDigest(nextPath)
+    renameSync(nextPath, emptyCurrent)
+    writeJournal(emptyCurrent, {
+      version: 1,
+      roomId,
+      roomAgentId,
+      targetDigest,
+      previousDigest: null,
+      nextName: '.next-55555555-5555-4555-8555-555555555555',
+      previousName: '.previous',
+      phase: 'next_moved',
+    })
+
+    recoverChatRoomAgentSkillSnapshot({ roomId, roomAgentId })
+
+    expect(existsSync(emptyCurrent)).toBe(false)
+  })
+
+  test('Given config 已是目标 digest 且 current 完整 When 启动恢复 Then 保留 current 并清理 previous', () => {
+    writeSkill('enabled-skill', 'SKILL.md', 'stable')
+    const first = syncChatRoomAgentSkillSnapshot({ roomId, roomAgentId, sourceWorkspaceSlug })
+    const previousPath = join(dirname(first.snapshotPath), '.previous')
+    cpSync(first.snapshotPath, previousPath, { recursive: true })
+    writeFileSync(join(dirname(first.snapshotPath), '.snapshot-journal.json'), JSON.stringify({
+      version: 1,
+      roomId,
+      roomAgentId,
+      targetDigest: first.digest,
+      previousDigest: first.digest,
+      nextName: '.next-22222222-2222-4222-8222-222222222222',
+      previousName: '.previous',
+      phase: 'config_persisted',
+    }))
+
+    recoverChatRoomAgentSkillSnapshot({ roomId, roomAgentId })
+
+    expect(computeChatRoomSkillSnapshotDigest(first.snapshotPath)).toBe(first.digest)
+    expect(existsSync(previousPath)).toBe(false)
+  })
+
+  test('Given active Skill 含非 ASCII slug When 同步顺序变化 Then digest 使用稳定 code-unit 顺序', () => {
+    writeSkill('z-skill', '中.md', '中')
+    writeSkill('a-skill', 'é.md', 'é')
+    const first = syncChatRoomAgentSkillSnapshot({ roomId, roomAgentId, sourceWorkspaceSlug })
+    rmSync(join(sourceRoot(), 'z-skill'), { recursive: true, force: true })
+    rmSync(join(sourceRoot(), 'a-skill'), { recursive: true, force: true })
+    writeSkill('a-skill', 'é.md', 'é')
+    writeSkill('z-skill', '中.md', '中')
+    const second = syncChatRoomAgentSkillSnapshot({ roomId, roomAgentId, sourceWorkspaceSlug })
+
+    expect(second.digest).toBe(first.digest)
+  })
+
+  test('Given Skill frontmatter 不完整 When 只读同步 Then 不执行自愈且日志不泄露绝对路径', () => {
+    const sourceFile = join(writeSkill('no-repair', 'SKILL.md', '# No repair'), 'SKILL.md')
+    const logs: string[] = []
+    const originalLog = console.log
+    const originalWarn = console.warn
+    console.log = (...args: unknown[]) => logs.push(args.join(' '))
+    console.warn = (...args: unknown[]) => logs.push(args.join(' '))
+    try {
+      syncChatRoomAgentSkillSnapshot({ roomId, roomAgentId, sourceWorkspaceSlug })
+    } finally {
+      console.log = originalLog
+      console.warn = originalWarn
+    }
+    expect(readFileSync(sourceFile, 'utf-8')).toBe('# No repair')
+    expect(logs.join('\n')).not.toContain(testHome)
+  })
+
+  test('Given source parent 在读取前被替换 When 同步 Then fail closed 且不读取外部树', () => {
+    const skillPath = writeSkill('enabled-skill')
+    const external = join(testHome, 'external-source')
+    mkdirSync(external, { recursive: true })
+    writeFileSync(join(external, 'SKILL.md'), 'external', 'utf-8')
+    let swapped = false
+    expect(() => syncChatRoomAgentSkillSnapshot({
+      roomId,
+      roomAgentId,
+      sourceWorkspaceSlug,
+      testHooks: {
+        beforeRead: (path) => {
+          if (swapped || !path.endsWith('SKILL.md')) return
+          swapped = true
+          renameSync(skillPath, join(testHome, 'moved-source'))
+          symlinkSync(external, skillPath, 'dir')
+        },
+      },
+    })).toThrow('Skill 快照源目录发生变化')
+  })
+
+  test('Given snapshot next root 在写入前被替换 When 同步 Then fail closed', () => {
+    writeSkill('enabled-skill')
+    let swapped = false
+    expect(() => syncChatRoomAgentSkillSnapshot({
+      roomId,
+      roomAgentId,
+      sourceWorkspaceSlug,
+      testHooks: {
+        beforeWrite: (path) => {
+          if (swapped) return
+          swapped = true
+          const nextRoot = dirname(path)
+          const moved = nextRoot + '-moved'
+          renameSync(nextRoot, moved)
+          symlinkSync(testHome, nextRoot, 'dir')
+        },
+      },
+    })).toThrow('Skill 快照目标目录发生变化')
   })
 })
 

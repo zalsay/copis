@@ -433,6 +433,16 @@ export class ChatRoomWorkspaceStore {
       throw new Error('invalid_skill_snapshot')
     }
     assertDirectory(result.snapshotPath, '聊天室 Agent skills-snapshot')
+    let actualDigest: string
+    try {
+      const snapshot = require('./chatroom-skill-snapshot') as {
+        computeChatRoomSkillSnapshotDigest(path: string): string
+      }
+      actualDigest = snapshot.computeChatRoomSkillSnapshotDigest(result.snapshotPath)
+    } catch {
+      throw new Error('invalid_skill_snapshot')
+    }
+    if (actualDigest !== result.digest) throw new Error('invalid_skill_snapshot')
     const current = this.load(roomId, this.now())
     if (!current) throw new Error('room_not_found')
     const index = current.agents.findIndex((agent) => agent.roomAgentId === roomAgentId)
