@@ -262,12 +262,19 @@ function isBoundedNonBlankText(value: unknown, maxLength: number): value is stri
 
 /** 聊天室 Agent 名称跨 Rust/Go/主进程的专用规则：trim 后非空、UTF-8 最多 128 字节、拒绝 Unicode Cc control。 */
 export function isChatRoomAgentDisplayName(value: unknown): value is string {
-  if (typeof value !== 'string' || value.trim().length === 0) return false
-  if (new TextEncoder().encode(value.trim()).byteLength > 128) return false
-  return !Array.from(value).some((character) => {
+  return canonicalizeChatRoomAgentDisplayName(value) !== undefined
+}
+
+/** 规范化聊天室 Agent 名称；边界空白遵循 Unicode White_Space 加 BOM。 */
+export function canonicalizeChatRoomAgentDisplayName(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined
+  if (Array.from(value).some((character) => {
     const codePoint = character.codePointAt(0)
     return codePoint !== undefined && (codePoint <= 0x1f || (codePoint >= 0x7f && codePoint <= 0x9f))
-  })
+  })) return undefined
+  const canonical = value.replace(/^[\p{White_Space}\uFEFF]+|[\p{White_Space}\uFEFF]+$/gu, '')
+  if (canonical.length === 0 || new TextEncoder().encode(canonical).byteLength > 128) return undefined
+  return canonical
 }
 
 function isArrayIndexKey(key: string): boolean {

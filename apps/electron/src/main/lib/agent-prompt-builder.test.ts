@@ -1,4 +1,6 @@
 import { beforeAll, describe, expect, mock, test } from 'bun:test'
+import { registerTrustedAgentExternalSource } from './agent-rpc-source-context'
+import { registerTrustedAgentRuntimeContext } from './agent-rpc-runtime-context'
 
 mock.module('./user-profile-service', () => ({
   getUserProfile: () => ({ userName: '测试用户' }),
@@ -48,6 +50,48 @@ function buildPrompt(agentCwd: string, memoryPolicy?: 'off' | 'visible' | 'writa
 }
 
 describe('项目与会话工作台提示词', () => {
+  test('Given trusted chatroom source and runtime context When 构建系统提示词 Then injects strict structured output instruction', () => {
+    const sessionId = 'chatroom-prompt-gated'
+    const releaseSource = registerTrustedAgentExternalSource(sessionId, 'chatroom')
+    const releaseContext = registerTrustedAgentRuntimeContext(sessionId, {
+      executionWorkspace: { root: '/tmp/runtime', projectRoot: '/tmp/runtime/project', inboxRoot: '/tmp/runtime/inbox', sessionRoot: '/tmp/runtime/session' },
+      permissionContext: {
+        roomId: 'room-1', roomAgentId: 'agent-a', invocationId: 'inv-1', traceId: 'trace-1',
+        originalSender: { type: 'user', id: 'user-1', displayName: '用户' }, invocationChain: [],
+      },
+    })
+    try {
+      const prompt = buildSystemPrompt({ sessionId, permissionMode: 'bypassPermissions' })
+      expect(prompt).toContain('聊天室结构化输出')
+      expect(prompt).toContain('mentionedAgentIds')
+      expect(prompt).toContain('attachmentId')
+      expect(prompt).not.toContain('/tmp/runtime')
+      expect(prompt).not.toContain('room-1')
+    } finally {
+      releaseContext()
+      releaseSource()
+    }
+  })
+
+  test('Given only source or only runtime context When 构建系统提示词 Then does not inject chatroom output instruction', () => {
+    const sourceOnly = 'chatroom-prompt-source-only'
+    const releaseSource = registerTrustedAgentExternalSource(sourceOnly, 'chatroom')
+    const sourcePrompt = buildSystemPrompt({ sessionId: sourceOnly, permissionMode: 'bypassPermissions' })
+    releaseSource()
+    expect(sourcePrompt).not.toContain('聊天室结构化输出')
+    const contextOnly = 'chatroom-prompt-context-only'
+    const releaseContext = registerTrustedAgentRuntimeContext(contextOnly, {
+      executionWorkspace: { root: '/tmp/runtime', projectRoot: '/tmp/runtime/project', inboxRoot: '/tmp/runtime/inbox', sessionRoot: '/tmp/runtime/session' },
+      permissionContext: {
+        roomId: 'room-1', roomAgentId: 'agent-a', invocationId: 'inv-1', traceId: 'trace-1',
+        originalSender: { type: 'user', id: 'user-1', displayName: '用户' }, invocationChain: [],
+      },
+    })
+    const contextPrompt = buildSystemPrompt({ sessionId: contextOnly, permissionMode: 'bypassPermissions' })
+    releaseContext()
+    expect(contextPrompt).not.toContain('聊天室结构化输出')
+  })
+
   test('Given user Browser Context When 构建系统提示词 Then 跨站地址直接执行且不要求单次确认', () => {
     const prompt = buildSystemPrompt({
       agentRuntime: 'pi',

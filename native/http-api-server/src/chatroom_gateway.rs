@@ -2130,7 +2130,7 @@ fn normalize_public_body(
                     let value = if key == "displayName" {
                         required_chatroom_display_name(object, key)?
                     } else {
-                        required_component_text(object, key)?
+                        required_component_text(object, key)?.to_owned()
                     };
                     result.insert(key.into(), Value::String(value.into()));
                 }
@@ -2593,10 +2593,21 @@ fn valid_invocation_id(value: &str, max_bytes: usize) -> bool {
         })
 }
 
+pub(crate) fn canonicalize_invocation_display_name(value: &str) -> Option<String> {
+    if value.chars().any(|character| character.is_control()) {
+        return None;
+    }
+    let canonical = value
+        .trim_matches(|character: char| character.is_whitespace() || character == '\u{feff}')
+        .to_owned();
+    if canonical.is_empty() || canonical.len() > 128 {
+        return None;
+    }
+    Some(canonical)
+}
+
 pub(crate) fn valid_invocation_display_name(value: &str) -> bool {
-    !value.trim().is_empty()
-        && value.trim().len() <= 128
-        && !value.chars().any(|character| character.is_control())
+    canonicalize_invocation_display_name(value).is_some()
 }
 
 fn valid_member_id(value: &str) -> bool {
@@ -2625,15 +2636,14 @@ fn required_text<'a>(
         .ok_or_else(|| invalid_request("内部请求文本字段不正确"))
 }
 
-fn required_chatroom_display_name<'a>(
-    object: &'a Map<String, Value>,
+fn required_chatroom_display_name(
+    object: &Map<String, Value>,
     key: &str,
-) -> Result<&'a str, ChatroomGatewayError> {
+) -> Result<String, ChatroomGatewayError> {
     object
         .get(key)
         .and_then(Value::as_str)
-        .filter(|value| valid_invocation_display_name(value))
-        .map(str::trim)
+        .and_then(canonicalize_invocation_display_name)
         .ok_or_else(|| invalid_request("聊天室 Agent 名称不正确"))
 }
 

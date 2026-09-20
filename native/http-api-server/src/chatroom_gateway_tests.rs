@@ -1919,6 +1919,18 @@ fn given_chatroom_agent_display_name_when_validating_then_use_trimmed_utf8_limit
     assert!(super::chatroom_gateway::valid_invocation_display_name(
         &format!("  {}  ", "界".repeat(42))
     ));
+    assert_eq!(
+        super::chatroom_gateway::canonicalize_invocation_display_name(
+            "\u{feff}\u{a0}Agent\u{feff}"
+        ),
+        Some("Agent".to_owned())
+    );
+    assert!(
+        super::chatroom_gateway::canonicalize_invocation_display_name(&"界".repeat(42)).is_some()
+    );
+    assert!(
+        super::chatroom_gateway::canonicalize_invocation_display_name(&"界".repeat(43)).is_none()
+    );
     assert!(!super::chatroom_gateway::valid_invocation_display_name(
         &"界".repeat(43)
     ));

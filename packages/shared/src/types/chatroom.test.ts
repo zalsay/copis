@@ -11,6 +11,14 @@ import {
   normalizeChatRoomContextMessageCount,
 } from './chatroom'
 
+test('Given displayName 含 FEFF/NBSP 和多字节边界 When canonicalize Then uses shared edge trim and UTF-8 limit', async () => {
+  const { canonicalizeChatRoomAgentDisplayName } = await import('./chatroom')
+  expect(canonicalizeChatRoomAgentDisplayName('\uFEFF\u00A0 Agent \uFEFF')).toBe('Agent')
+  expect(canonicalizeChatRoomAgentDisplayName('界'.repeat(42))).toBe('界'.repeat(42))
+  expect(canonicalizeChatRoomAgentDisplayName('界'.repeat(43))).toBeUndefined()
+  expect(canonicalizeChatRoomAgentDisplayName('Agent\u0001')).toBeUndefined()
+})
+
 test('Given 结构化 Agent 输出 When 校验 Then 只接受三个固定字段的有界对象', () => {
   expect(isChatRoomAgentOutput({ text: '完成', mentionedAgentIds: ['agent-b'], attachmentIds: [] })).toBe(true)
   expect(isChatRoomAgentOutput({ text: '完成', mentionedAgentIds: '@agent-b', attachmentIds: [] })).toBe(false)

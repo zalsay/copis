@@ -15,6 +15,7 @@ import {
   CHATROOM_MAX_OUTPUT_TEXT_LENGTH,
   CHATROOM_MAX_TERMINAL_INVOCATIONS,
   CHATROOM_TERMINAL_RETENTION_MS,
+  canonicalizeChatRoomAgentDisplayName,
   isChatRoomAgentDisplayName,
   normalizeChatRoomContextMessageCount,
   type ChatRoomAgentLocalConfig,
@@ -169,12 +170,14 @@ function validateAgent(value: unknown): asserts value is ChatRoomAgentLocalConfi
     ['modelId', 'skillSnapshotDigest', 'archivedAt'])) {
     throw new Error('invalid_room_config')
   }
-  if (!isPathComponent(value.roomAgentId) || !isChatRoomAgentDisplayName(value.displayName)
+  const canonicalDisplayName = canonicalizeChatRoomAgentDisplayName(value.displayName)
+  if (!isPathComponent(value.roomAgentId) || canonicalDisplayName === undefined
     || !isId(value.sourceWorkspaceId) || !isId(value.sessionId)
     || !isId(value.channelId) || !isContextCount(value.contextMessageCount)
     || typeof value.memorySharingEnabled !== 'boolean' || typeof value.skillSharingEnabled !== 'boolean') {
     throw new Error('invalid_room_config')
   }
+  value.displayName = canonicalDisplayName
   if (Object.prototype.hasOwnProperty.call(value, 'modelId') && value.modelId !== undefined && !isId(value.modelId)) {
     throw new Error('invalid_room_config')
   }
@@ -361,7 +364,9 @@ export class ChatRoomWorkspaceStore {
       }
       if (!identityMatches(identity, { hostUserId: config.hostUserId, deviceId: config.deviceId })) throw new Error('identity_mismatch')
       if (config.agents.filter((agent) => agent.archivedAt === undefined).length >= CHATROOM_MAX_AGENTS) throw new Error('agent_limit_reached')
-      const displayName = input.displayName.trim().toLowerCase()
+      const canonicalDisplayName = canonicalizeChatRoomAgentDisplayName(input.displayName)
+      if (!canonicalDisplayName) throw new Error('invalid_agent_input')
+      const displayName = canonicalDisplayName.toLowerCase()
       if (config.agents.some((agent) => agent.archivedAt === undefined && agent.displayName.trim().toLowerCase() === displayName)) {
         throw new Error('display_name_conflict')
       }
@@ -369,7 +374,7 @@ export class ChatRoomWorkspaceStore {
       const sessionId = `session-${randomUUID()}`
       const agent: ChatRoomAgentLocalConfig = {
         roomAgentId,
-        displayName: input.displayName.trim(),
+        displayName: canonicalDisplayName,
         sourceWorkspaceId: input.sourceWorkspaceId,
         sessionId,
         channelId: input.channelId,
@@ -414,7 +419,7 @@ export class ChatRoomWorkspaceStore {
         && agent.displayName.trim().toLowerCase() === input.displayName!.trim().toLowerCase())) {
         throw new Error('display_name_conflict')
       }
-      nextAgent.displayName = input.displayName.trim()
+      nextAgent.displayName = canonicalizeChatRoomAgentDisplayName(input.displayName)!
     }
     for (const key of ['channelId', 'modelId', 'contextMessageCount', 'memorySharingEnabled', 'skillSharingEnabled'] as const) {
       if (input[key] !== undefined) (nextAgent as unknown as Record<string, unknown>)[key] = input[key]
