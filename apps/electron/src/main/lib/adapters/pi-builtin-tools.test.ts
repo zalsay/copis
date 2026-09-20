@@ -331,7 +331,8 @@ test('Given chatroom capability profile When building RPC worker tools Then paym
     capabilityProfile: 'chatroom',
   })
   const names = tools.map((tool) => tool.name)
-  expect(names).toEqual(expect.arrayContaining(['Read', 'Bash', 'Edit', 'Write', 'memory_recall', 'memory_read']))
+  expect(names).toEqual(expect.arrayContaining(['Read', 'Edit', 'Write', 'memory_recall', 'memory_read']))
+  expect(names).not.toContain('Bash')
   expect(names).not.toContain('RealPath')
   expect(names).not.toContain('BrowserPageObserve')
   expect(names).not.toContain('AutomationRun')
@@ -339,6 +340,38 @@ test('Given chatroom capability profile When building RPC worker tools Then paym
   expect(names).not.toContain('AlipayBot')
   expect(names).not.toContain('AgentMail')
   expect(names).not.toContain('WorkingPayment')
+})
+
+test('Given legacy chatroom profile without Rust policy When building worker tools Then no local file tools are registered', async () => {
+  const { buildBuiltinToolDefinitions } = await import('./pi-agent-adapter')
+  const sdk = {
+    createReadToolDefinition: () => ({ name: 'Read' }),
+    createBashToolDefinition: () => ({ name: 'Bash' }),
+    createEditToolDefinition: () => ({ name: 'Edit' }),
+    createWriteToolDefinition: () => ({ name: 'Write' }),
+    createGrepToolDefinition: () => ({ name: 'Grep' }),
+    createFindToolDefinition: () => ({ name: 'Find' }),
+    createLsToolDefinition: () => ({ name: 'Ls' }),
+    defineTool: <T>(definition: T): T => definition,
+  } as unknown as typeof import('@earendil-works/pi-coding-agent')
+  const tools = buildBuiltinToolDefinitions(sdk, '/tmp/chatroom/project', undefined, undefined, {
+    sessionId: 'legacy-chatroom-capability-session',
+    useRustFileApi: false,
+    memoryPolicy: 'visible',
+    memoryWorkspaceSlug: 'source-workspace',
+    capabilityProfile: 'chatroom',
+  })
+  expect(tools.map((tool) => tool.name)).toEqual(['memory_recall', 'memory_read'])
+})
+
+test('Given chatroom resource loader profile Then project extensions are disabled while snapshot skills remain configured', async () => {
+  const { resolvePiResourceLoaderPolicy } = await import('./pi-agent-adapter')
+  expect(resolvePiResourceLoaderPolicy({ capabilityProfile: 'chatroom', additionalSkillPaths: ['/tmp/chatroom/skills'] })).toEqual({
+    noExtensions: true,
+    additionalExtensionPaths: [],
+    additionalSkillPaths: ['/tmp/chatroom/skills'],
+  })
+  expect(resolvePiResourceLoaderPolicy({ capabilityProfile: 'default', additionalSkillPaths: ['/tmp/workspace/skills'] }).noExtensions).toBe(false)
 })
 
 describe('主 Agent 专家团队工具边界', () => {

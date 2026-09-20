@@ -216,6 +216,18 @@ interface ActivePiSession {
   runtimeGuard?: AgentRuntimeGuard
 }
 
+export function resolvePiResourceLoaderPolicy(input: Pick<PiAgentQueryOptions, 'capabilityProfile' | 'additionalSkillPaths'>): {
+  noExtensions: boolean
+  additionalExtensionPaths: string[]
+  additionalSkillPaths: string[]
+} {
+  return {
+    noExtensions: input.capabilityProfile === 'chatroom',
+    additionalExtensionPaths: input.capabilityProfile === 'chatroom' ? [] : resolveDefaultPiExtensionEntries(),
+    additionalSkillPaths: input.additionalSkillPaths ?? [],
+  }
+}
+
 interface PendingInterruptPrompt {
   content: string
   resolveAccepted: () => void
@@ -1326,13 +1338,15 @@ export function buildBuiltinToolDefinitions(
     ? createRustFileToolOperations({ sessionId: options.sessionId })
     : undefined
   const definitions = [
-    sdk.createReadToolDefinition(cwd, rustFileTools ? { operations: rustFileTools.read } : undefined),
-    // Bash 在 Rust 文件能力启用时同样经 Rust 执行，不能回退到 Pi 本地 Shell。
-    sdk.createBashToolDefinition(cwd, rustFileTools
-      ? { operations: createRustBashToolOperations({ sessionId: options.sessionId }) }
-      : createCopisBashToolOptions(runtimeEnv)),
-    sdk.createEditToolDefinition(cwd, rustFileTools ? { operations: rustFileTools.edit } : undefined),
-    sdk.createWriteToolDefinition(cwd, rustFileTools ? { operations: rustFileTools.write } : undefined),
+    ...(options.capabilityProfile === 'chatroom' && !rustFileTools ? [] : [
+      sdk.createReadToolDefinition(cwd, rustFileTools ? { operations: rustFileTools.read } : undefined),
+      // 聊天室暂不开放 Shell；Task 9 接入 host approval sink 后再恢复受控能力。
+      ...(options.capabilityProfile === 'chatroom' ? [] : [sdk.createBashToolDefinition(cwd, rustFileTools
+        ? { operations: createRustBashToolOperations({ sessionId: options.sessionId }) }
+        : createCopisBashToolOptions(runtimeEnv))]),
+      sdk.createEditToolDefinition(cwd, rustFileTools ? { operations: rustFileTools.edit } : undefined),
+      sdk.createWriteToolDefinition(cwd, rustFileTools ? { operations: rustFileTools.write } : undefined),
+    ]),
     ...(rustFileTools && options.capabilityProfile !== 'chatroom' ? [
       sdk.defineTool({
         name: 'RealPath',
@@ -1350,7 +1364,7 @@ export function buildBuiltinToolDefinitions(
         },
       }),
     ] : []),
-    ...(!rustFileTools ? [
+    ...(!rustFileTools && options.capabilityProfile !== 'chatroom' ? [
       sdk.createGrepToolDefinition(cwd),
       sdk.createFindToolDefinition(cwd),
       sdk.createLsToolDefinition(cwd),
@@ -1547,16 +1561,18 @@ export class PiAgentAdapter implements AgentProviderAdapter {
           : []),
       ]
       ensureSkillPathsSanitized(input.additionalSkillPaths)
+      const resourcePolicy = resolvePiResourceLoaderPolicy(input)
       const resourceLoader = new sdk.DefaultResourceLoader({
         cwd,
         agentDir: input.piAgentDir,
         settingsManager,
         noSkills: true,
+        noExtensions: resourcePolicy.noExtensions,
         ...createCopisResourceLoaderOptions(),
         // 聊天室只消费 Main 传入的 Skill snapshot；默认 pi-web-access 等扩展
         // 会注入联网工具，必须与 profile 一起关闭。
-        additionalExtensionPaths: input.capabilityProfile === 'chatroom' ? [] : resolveDefaultPiExtensionEntries(),
-        additionalSkillPaths: input.additionalSkillPaths ?? [],
+        additionalExtensionPaths: resourcePolicy.additionalExtensionPaths,
+        additionalSkillPaths: resourcePolicy.additionalSkillPaths,
         skillsOverride: createCopisSkillsOverride(input.additionalSkillPaths),
         ...(model.reasoning && extensionFactories.length > 0 && { extensionFactories }),
         systemPromptOverride: () => input.systemPrompt,

@@ -10,6 +10,8 @@ const MAX_TOOL_SUMMARY_LENGTH = 200
 interface SessionPromptHint {
   agentCwd: string
   workspaceSlug?: string
+  /** 聊天室不暴露普通 Agent session-cleaner 或全局 history path。 */
+  disableHistoryGuide?: boolean
 }
 
 function getSessionHistoryPath(sessionId: string): string {
@@ -45,7 +47,8 @@ function buildSessionCliAccessGuide(sessionId: string, historyPath: string, work
   ].join('\n')
 }
 
-function buildCurrentSessionHistoryInstruction(sessionId: string, workspaceSlug?: string): string {
+function buildCurrentSessionHistoryInstruction(sessionId: string, workspaceSlug?: string, disableHistoryGuide = false): string {
+  if (disableHistoryGuide) return '聊天室运行时不提供普通 Agent 会话历史读取指引；仅使用当前聊天室运行上下文继续。'
   const historyPath = getSessionHistoryPath(sessionId)
   if (canUseSessionCleaner()) {
     return buildSessionCliAccessGuide(sessionId, historyPath, workspaceSlug)
@@ -132,9 +135,9 @@ export function buildContextPrompt(sessionId: string, currentUserMessage: string
   // 避免「从零重新执行整个任务」（#903）。
   const sessionInfoBlock = sessionHint
     ? `\n<session_info>\nSession ID: ${sessionId}\nSession CWD: ${sessionHint.agentCwd}\n` +
-      `History path: ${getSessionHistoryPath(sessionId)}\n` +
+      `${sessionHint.disableHistoryGuide ? '' : `History path: ${getSessionHistoryPath(sessionId)}\n`}` +
       `重要：上方仅为最近 ${MAX_CONTEXT_MESSAGES} 条对话摘要，可能不完整。在继续之前，` +
-      `${buildCurrentSessionHistoryInstruction(sessionId, sessionHint.workspaceSlug)}\n` +
+      `${buildCurrentSessionHistoryInstruction(sessionId, sessionHint.workspaceSlug, sessionHint.disableHistoryGuide)}\n` +
       `恢复时先确认「已经完成了哪些工作、进行到哪一步」，然后从中断处继续，切勿重复执行已完成的步骤。\n</session_info>\n`
     : ''
 
@@ -163,12 +166,12 @@ export function buildRecoveryPrompt(
     `你正在接续一个已有的 Agent 会话（因模型切换等原因需要重新建立连接）。\n` +
     `当前会话的完整历史记录在下方会话信息中，请先恢复上下文，然后继续处理用户的最新请求。\n` +
     `<session id="${sessionId}" title="${title}" cwd="${sessionHint.agentCwd}">\n` +
-    `History path: ${historyPath}\n` +
+    `${sessionHint.disableHistoryGuide ? '' : `History path: ${historyPath}\n`}` +
     `</session>\n` +
-    `${buildCurrentSessionHistoryInstruction(sessionId, sessionHint.workspaceSlug)}\n` +
+    `${buildCurrentSessionHistoryInstruction(sessionId, sessionHint.workspaceSlug, sessionHint.disableHistoryGuide)}\n` +
     `</session_recovery>`
 
-  console.log(`[Agent 编排] buildRecoveryPrompt: 注入 session 自引用 → ${historyPath}`)
+  console.log(`[Agent 编排] buildRecoveryPrompt: ${sessionHint.disableHistoryGuide ? '聊天室禁用普通 history 指引' : `注入 session 自引用 → ${historyPath}`}`)
   return `${recoveryBlock}\n\n${currentUserMessage}`
 }
 

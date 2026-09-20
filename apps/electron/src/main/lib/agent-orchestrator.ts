@@ -136,6 +136,7 @@ type RecoverableAgentQueryOptions = {
   prompt: string
   resumeSessionId?: string
   resumeSessionAt?: string
+  capabilityProfile?: 'default' | 'chatroom'
 }
 
 // ===== 工具函数 =====
@@ -747,7 +748,10 @@ export class AgentOrchestrator {
     }
     queryOptions.resumeSessionId = undefined
     queryOptions.resumeSessionAt = undefined
-    queryOptions.prompt = buildRecoveryPrompt(sessionId, contextualMessage, { agentCwd, workspaceSlug })
+    queryOptions.prompt = buildRecoveryPrompt(sessionId, contextualMessage, {
+      agentCwd,
+      ...(queryOptions.capabilityProfile === 'chatroom' ? { disableHistoryGuide: true } : { workspaceSlug }),
+    })
     return retryReason
   }
 
@@ -1419,7 +1423,10 @@ export class AgentOrchestrator {
         ? '/compact'
         : existingSdkSessionId
           ? contextualMessage
-          : buildContextPrompt(sessionId, contextualMessage, { agentCwd, workspaceSlug })
+          : buildContextPrompt(sessionId, contextualMessage, {
+            agentCwd,
+            ...(isChatroomRun ? { disableHistoryGuide: true } : { workspaceSlug }),
+          })
 
       if (existingSdkSessionId) {
         console.log(`[Agent 编排] 使用 resume 模式，SDK session ID: ${existingSdkSessionId}`)

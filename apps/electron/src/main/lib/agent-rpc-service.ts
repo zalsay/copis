@@ -267,6 +267,10 @@ export function parseAgentRpcInput(record: Record<string, unknown>): AgentSendIn
 }
 
 export function parseAgentRpcQueueInput(record: Record<string, unknown>): AgentQueueMessageInput {
+  const forbiddenField = AGENT_RPC_FORBIDDEN_INPUT_FIELDS.find((field) => field in record)
+  if (forbiddenField) {
+    throw new Error(`不支持的请求字段: ${forbiddenField}`)
+  }
   const sessionId = requireString(record, 'sessionId')
   const userMessage = requireString(record, 'userMessage')
   if (record.interrupt !== undefined && typeof record.interrupt !== 'boolean') {
@@ -723,7 +727,10 @@ export async function prepareAgentRpcRun(input: AgentSendInput): Promise<PiWorke
     ? '/compact'
     : existingSdkSessionId
       ? contextualMessage
-      : buildContextPrompt(input.sessionId, contextualMessage, { agentCwd, workspaceSlug: memoryWorkspaceSlug })
+      : buildContextPrompt(input.sessionId, contextualMessage, {
+        agentCwd,
+        ...(isChatroomRun ? { disableHistoryGuide: true } : { workspaceSlug: memoryWorkspaceSlug }),
+      })
   // 专家团队上下文：delegation 只接受主进程 runner 生成的冻结上下文；
   // user 回合每次按 Rust 当前 binding/revision 重新解析（fail-soft）。
   const expertTeamContext = input.expertTeamContext

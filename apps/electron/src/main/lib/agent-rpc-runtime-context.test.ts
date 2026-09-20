@@ -88,3 +88,16 @@ test('Given runtime context 是 Proxy 或非法 Memory policy When 注册 Then �
   expect(() => registerTrustedAgentRuntimeContext('malicious-policy', invalidPolicy)).toThrow()
   expect(getTrustedAgentRuntimeContext('malicious-policy')).toBeUndefined()
 })
+
+test('Given invocationChain 超过聊天室最大深度 When 注册 Then fail closed', async () => {
+  const { registerTrustedAgentRuntimeContext, getTrustedAgentRuntimeContext } = await import('./agent-rpc-runtime-context')
+  const tooDeep = {
+    ...context,
+    permissionContext: {
+      ...context.permissionContext,
+      invocationChain: Array.from({ length: 4 }, (_, index) => ({ agentId: `agent-${index}`, invocationId: `invocation-${index}` })),
+    },
+  }
+  expect(() => registerTrustedAgentRuntimeContext('too-deep', tooDeep)).toThrow()
+  expect(getTrustedAgentRuntimeContext('too-deep')).toBeUndefined()
+})

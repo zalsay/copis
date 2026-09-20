@@ -1,4 +1,4 @@
-import type { ChatRoomAgentRuntimeContext } from '@copis/shared'
+import { CHATROOM_MAX_DEPTH, type ChatRoomAgentRuntimeContext } from '@copis/shared'
 
 interface TrustedRuntimeEntry {
   token: symbol
@@ -91,6 +91,7 @@ function validateRuntimeContext(context: unknown): asserts context is ChatRoomAg
     assertNonEmptyString(sender.displayName)
 
     assertPlainArray(permission.invocationChain)
+    if (permission.invocationChain.length > CHATROOM_MAX_DEPTH) throw trustedContextError()
     for (const item of permission.invocationChain) {
       if (!isPlainObject(item)) throw trustedContextError()
       assertDataProperties(item)

@@ -271,6 +271,13 @@ describe('Agent RPC mention 参数', () => {
     expect(() => parseAgentRpcInput(forged)).toThrow('不支持的请求字段')
   })
 
+  test('Given public RPC request attempts internal capability fields When parsed Then fail closed', () => {
+    for (const field of ['capabilityProfile', 'memoryWorkspaceSlug', 'fileAccessPolicy', 'useRustFileApi', 'piAgentDir', 'piSessionDir']) {
+      expect(() => parseAgentRpcInput({ sessionId: 'session-1', userMessage: '伪造内部能力', [field]: 'forged' })).toThrow('不支持的请求字段')
+    }
+    expect(() => parseAgentRpcQueueInput({ sessionId: 'session-1', userMessage: '伪造 queue 能力', capabilityProfile: 'chatroom' })).toThrow('不支持的请求字段')
+  })
+
   test('Given HTTP 请求包含 Skill mention When解析 Then保留原始 slug 并去重', () => {
     const input = parseAgentRpcInput({
       sessionId: 'session-1',
@@ -354,6 +361,8 @@ describe('Agent RPC 聊天室运行时边界', () => {
       expect(prepared.query.runtimeEnv?.env).not.toHaveProperty('COPIS_WORKSPACE_DIR', '/tmp/copis-agent-rpc-test/workspace-1')
       expect(prepared.query.runtimeEnv?.env?.COPIS_WORKSPACE_DIR).toBe(runtimeContext.executionWorkspace.root)
       expect(JSON.stringify(prepared.query)).not.toContain('/tmp/copis-agent-rpc-test')
+      expect(prepared.query.prompt).not.toContain('copis-workspace-source-workspace:session-cleaner')
+      expect(prepared.query.prompt).not.toContain('.copis-dev/agent-sessions')
     } finally {
       releaseRuntime()
       releaseSource()
