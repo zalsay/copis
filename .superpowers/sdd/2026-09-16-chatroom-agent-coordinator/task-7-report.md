@@ -75,6 +75,23 @@ bun run --filter='@copis/electron' typecheck                    # pass
 
 本轮未修改计划、ledger、AGENTS.md、README.md 或五个既有 dirty Rust 文件；提交 hash 记录在交付消息中。
 
+## Fix Round 3
+
+本轮重新对照 `chatroom_protocol.rs`：`MAX_ID_BYTES=64`、`MAX_DEVICE_BYTES=128`、`MAX_CLIENT_MESSAGE_ID_BYTES=128`，并确认 gateway 的 `valid_component` 还会拒绝 `/ ? # \\`。
+
+### RED
+
+- 新增 protocol ID 64/65 字节、device/clientMessage 128/129 字节、multibyte output ID 64/65 字节以及 delta 控制字符场景；实现尚未按字段拆分限制时，client 聚焦测试得到 14 pass / 3 fail。
+
+### GREEN
+
+- roomId、agentId、mentionAgentIds、attachmentIds 使用 64 UTF-8 字节的 `valid_id` 等价校验；deviceId 和 clientMessageId 使用 128 UTF-8 字节限制，并保留 gateway component 兼容约束。
+- invocationId 收紧为最多 64 字节的 ASCII 路由安全形式；failureCode union 值天然在 protocol 64 字节范围内。
+- delta 复用 Rust 文本校验，保持 16 KiB 上限，同时拒绝除换行、回车、制表符外的控制字符。
+- 聚焦 client 测试现为 17 pass / 0 fail；边界测试明确证明 device/clientMessage 128 字节可成功发送，attachment 64 字节可成功发送，超限字段均在 fetch 前拒绝。
+
+本轮新增测试与实现仍保持五种 Rust request body exact shape；其余完整验证在提交交付消息中记录。
+
 ## Fix Round 1
 
 Reviewer 指出的边界已在本轮修复：

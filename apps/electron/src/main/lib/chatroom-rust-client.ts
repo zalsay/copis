@@ -13,7 +13,8 @@ const MAX_DELTA_BYTES = 16 * 1024
 const MAX_TEXT_BYTES = 64 * 1024
 const MAX_ERROR_RESPONSE_CHARS = 400
 const MAX_ERROR_RESPONSE_BYTES = MAX_ERROR_RESPONSE_CHARS * 4 + 4
-const INVOCATION_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/
+/** invocationId 还要作为 HTTP 路由组件，因此在 protocol 64 字节限制上采用 ASCII 路由安全形式。 */
+const INVOCATION_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/
 const ABSOLUTE_PATH_PATTERN = /(?:[A-Za-z]:[\\/]|\/(?:Users|home|private|tmp|var|Volumes)\/)[^\s\n\r"']*/g
 
 type FetchImplementation = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>
@@ -72,7 +73,7 @@ function assertDelta(value: string): string {
   if (typeof value !== 'string' || Buffer.byteLength(value, 'utf8') > MAX_DELTA_BYTES) {
     throw new Error('delta 参数过大')
   }
-  if (value.trim().length === 0) throw new Error('delta 参数不正确')
+  assertRustText(value, MAX_DELTA_BYTES, 'delta 参数不正确')
   return value
 }
 
@@ -112,8 +113,6 @@ async function readBoundedResponseText(response: Response): Promise<string> {
   }
 }
 
-const SAFE_COMPONENT_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/
-
 const CHATROOM_FAILURE_CODES: ReadonlySet<ChatRoomInvocationFailureCode> = new Set([
   'room_not_found',
   'room_archived',
@@ -145,16 +144,20 @@ function isRustControl(character: string): boolean {
 }
 
 /** Rust 网关的 required_text 约束：非空、仅允许换行/回车/制表控制符、按 UTF-8 字节计长。 */
-function assertRustText(value: unknown): asserts value is string {
+function assertRustText(
+  value: unknown,
+  maxBytes = MAX_TEXT_BYTES,
+  errorMessage = '聊天室文本参数不正确',
+): asserts value is string {
   if (
     typeof value !== 'string'
     || value.trim().length === 0
-    || Buffer.byteLength(value, 'utf8') > MAX_TEXT_BYTES
+    || Buffer.byteLength(value, 'utf8') > maxBytes
     || Array.from(value).some((character) => (
       isRustControl(character) && character !== '\n' && character !== '\r' && character !== '\t'
     ))
   ) {
-    throw new Error('聊天室文本参数不正确')
+    throw new Error(errorMessage)
   }
 }
 
@@ -162,8 +165,8 @@ function assertChatRoomAgentOutput(value: unknown): asserts value is ChatRoomAge
   if (!isChatRoomAgentOutput(value)) throw new Error('聊天室输出参数不正确')
   assertRustText(value.text)
   if (
-    value.mentionedAgentIds.some((id) => !isRustComponent(id))
-    || value.attachmentIds.some((id) => !isRustComponent(id))
+    value.mentionedAgentIds.some((id) => !isRustId(id, 64))
+    || value.attachmentIds.some((id) => !isRustId(id, 64))
   ) {
     throw new Error('聊天室输出参数不正确')
   }
@@ -175,12 +178,12 @@ function assertFailureCode(value: unknown): asserts value is ChatRoomInvocationF
   }
 }
 
-/** 与 Rust 网关 valid_component 对齐；输出 ID 不应因共享校验较宽而绕过路径组件限制。 */
-function isRustComponent(value: string): boolean {
+/** 与 Rust protocol valid_id 和网关 valid_component 对齐，按 UTF-8 字节而非 JS 字符数计长。 */
+function isRustId(value: string, maxBytes: number): boolean {
   if (
     value.length === 0
     || value.trim() !== value
-    || Buffer.byteLength(value, 'utf8') > 128
+    || Buffer.byteLength(value, 'utf8') > maxBytes
   ) return false
   return !Array.from(value).some((character) => {
     const codePoint = character.codePointAt(0)
@@ -207,7 +210,8 @@ function validateContext(value: unknown): ChatRoomInvocationReportContext {
   }
   for (const key of expected) {
     const component = value[key]
-    if (typeof component !== 'string' || !SAFE_COMPONENT_PATTERN.test(component)) {
+    const maxBytes = key === 'roomId' || key === 'agentId' ? 64 : 128
+    if (typeof component !== 'string' || !isRustId(component, maxBytes)) {
       throw new Error('context_component_invalid')
     }
   }

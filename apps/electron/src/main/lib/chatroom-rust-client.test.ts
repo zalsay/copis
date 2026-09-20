@@ -118,6 +118,16 @@ describe('HttpChatRoomRustApiClient', () => {
     expect(requests).toHaveLength(1)
   })
 
+  test('Given delta 含 Rust 禁止控制字符 When 回传 Then 在 fetch 前拒绝且允许换行制表符', async () => {
+    const requests: RecordedRequest[] = []
+    const client = createClient(requests)
+
+    await expect(client.reportDelta({ invocationId: 'inv-1', delta: '有效\u0001内容' }))
+      .rejects.toThrow('delta 参数不正确')
+    await client.reportDelta({ invocationId: 'inv-1', delta: '第一行\n\t第二行\r' })
+    expect(requests).toHaveLength(1)
+  })
+
   test('Given internal token 为空或全空白 When 请求 Rust Then 在 fetch 前拒绝', async () => {
     const requests: RecordedRequest[] = []
     const empty = createClient(requests, { token: '' })
@@ -188,6 +198,97 @@ describe('HttpChatRoomRustApiClient', () => {
       invocationId: 'inv-1', roomId: 'room-1',
       content: '完成', mentionAgentIds: ['agent-b'], attachmentIds: [], clientMessageId: 'message-1',
     })
+  })
+
+  test('Given Rust protocol 各字段达到边界 When 回传 Then 64 字节 ID 接受而超限在 fetch 前拒绝', async () => {
+    const requests: RecordedRequest[] = []
+    const id64 = 'a'.repeat(64)
+    const id65 = 'a'.repeat(65)
+    const device128 = 'd'.repeat(128)
+    const clientMessage128 = 'm'.repeat(128)
+    const boundaryContext = {
+      roomId: id64,
+      agentId: id64,
+      deviceId: device128,
+      clientMessageId: clientMessage128,
+    }
+    const client = createClient(requests, { getInvocationContext: () => boundaryContext })
+
+    await client.reportAccepted({ invocationId: id64 })
+    await client.reportCompleted({
+      invocationId: id64,
+      output: { text: '完成', mentionedAgentIds: [], attachmentIds: [id64] },
+    })
+    expect(requests).toHaveLength(2)
+
+    const cases: Array<[
+      string,
+      () => Promise<void>,
+    ]> = [
+      ['roomId', () => new HttpChatRoomRustApiClient({
+        fetchImpl: async (input, init) => {
+          requests.push({ input, init })
+          return new Response(null, { status: 204 })
+        },
+        getToken: () => 'internal-test',
+        getInvocationContext: () => ({ ...boundaryContext, roomId: id65 }),
+      }).reportAccepted({ invocationId: 'inv-1' })],
+      ['agentId', () => new HttpChatRoomRustApiClient({
+        fetchImpl: async (input, init) => {
+          requests.push({ input, init })
+          return new Response(null, { status: 204 })
+        },
+        getToken: () => 'internal-test',
+        getInvocationContext: () => ({ ...boundaryContext, agentId: id65 }),
+      }).reportAccepted({ invocationId: 'inv-1' })],
+      ['deviceId', () => new HttpChatRoomRustApiClient({
+        fetchImpl: async (input, init) => {
+          requests.push({ input, init })
+          return new Response(null, { status: 204 })
+        },
+        getToken: () => 'internal-test',
+        getInvocationContext: () => ({ ...boundaryContext, deviceId: `${device128}d` }),
+      }).reportAccepted({ invocationId: 'inv-1' })],
+      ['clientMessageId', () => new HttpChatRoomRustApiClient({
+        fetchImpl: async (input, init) => {
+          requests.push({ input, init })
+          return new Response(null, { status: 204 })
+        },
+        getToken: () => 'internal-test',
+        getInvocationContext: () => ({ ...boundaryContext, clientMessageId: `${clientMessage128}m` }),
+      }).reportCompleted({
+        invocationId: 'inv-1',
+        output: { text: '完成', mentionedAgentIds: [], attachmentIds: [] },
+      })],
+      ['invocationId', () => client.reportRunning({ invocationId: id65 })],
+    ]
+    for (const [field, attempt] of cases) {
+      await expect(attempt()).rejects.toThrow(field === 'invocationId' ? 'invocationId 参数不正确' : '聊天室回传上下文不可用')
+    }
+    expect(requests).toHaveLength(2)
+  })
+
+  test('Given output ID 是多字节 UTF-8 When 达到 protocol 64 字节边界 Then 接受而 65 字节拒绝', async () => {
+    const requests: RecordedRequest[] = []
+    const client = createClient(requests)
+    const id64Bytes = `${'你'.repeat(21)}a`
+    const id65Bytes = `${id64Bytes}b`
+    expect(Buffer.byteLength(id64Bytes, 'utf8')).toBe(64)
+    expect(Buffer.byteLength(id65Bytes, 'utf8')).toBe(65)
+
+    await client.reportCompleted({
+      invocationId: 'inv-1',
+      output: { text: '完成', mentionedAgentIds: [id64Bytes], attachmentIds: [] },
+    })
+    await expect(client.reportCompleted({
+      invocationId: 'inv-1',
+      output: { text: '完成', mentionedAgentIds: [id65Bytes], attachmentIds: [] },
+    })).rejects.toThrow('聊天室输出参数不正确')
+    await expect(client.reportCompleted({
+      invocationId: 'inv-1',
+      output: { text: '完成', mentionedAgentIds: [], attachmentIds: [id65Bytes] },
+    })).rejects.toThrow('聊天室输出参数不正确')
+    expect(requests).toHaveLength(1)
   })
 
   test('Given completed output 含未知字段或非法 mention/attachment ID When 回传 Then 在 fetch 前拒绝', async () => {
