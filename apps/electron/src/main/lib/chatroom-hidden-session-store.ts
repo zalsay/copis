@@ -118,17 +118,22 @@ function assertValidAgentMessage(value: unknown): asserts value is AgentMessage 
 
 function assertValidSDKMessage(value: unknown): asserts value is SDKMessage {
   assertPlainRecord(value, '聊天室 Agent session 消息')
-  if (typeof value.type !== 'string' || !SDK_MESSAGE_TYPES.has(value.type)) throw new Error('聊天室 Agent session 消息损坏')
+  if (typeof value.type !== 'string' || value.type.trim().length === 0) throw new Error('聊天室 Agent session 消息损坏')
   if (value.uuid !== undefined && typeof value.uuid !== 'string') throw new Error('聊天室 Agent session 消息损坏')
+  if (value.session_id !== undefined && typeof value.session_id !== 'string') throw new Error('聊天室 Agent session 消息损坏')
+  if (value.parent_tool_use_id !== undefined
+    && value.parent_tool_use_id !== null
+    && typeof value.parent_tool_use_id !== 'string') throw new Error('聊天室 Agent session 消息损坏')
+  if (value.error !== undefined && (!isRecord(value.error) || typeof value.error.message !== 'string')) {
+    throw new Error('聊天室 Agent session 消息损坏')
+  }
+  if (!SDK_MESSAGE_TYPES.has(value.type)) return
   if (value.type === 'assistant') {
     if (!isRecord(value.message) || !Array.isArray(value.message.content)
       || (value.parent_tool_use_id !== null && typeof value.parent_tool_use_id !== 'string')) {
       throw new Error('聊天室 Agent session 消息损坏')
     }
     if (!Object.prototype.hasOwnProperty.call(value, 'parent_tool_use_id')) throw new Error('聊天室 Agent session 消息损坏')
-    if (value.error !== undefined && (!isRecord(value.error) || typeof value.error.message !== 'string')) {
-      throw new Error('聊天室 Agent session 消息损坏')
-    }
   } else if (value.type === 'user') {
     if (!Object.prototype.hasOwnProperty.call(value, 'parent_tool_use_id')
       || (value.parent_tool_use_id !== null && typeof value.parent_tool_use_id !== 'string')) {
@@ -149,6 +154,14 @@ function assertValidSDKMessage(value: unknown): asserts value is SDKMessage {
       throw new Error('聊天室 Agent session 消息损坏')
     }
   }
+}
+
+function assertValidPersistedMessage(value: unknown): void {
+  if (isRecord(value) && 'role' in value && !('type' in value)) {
+    assertValidAgentMessage(value)
+    return
+  }
+  assertValidSDKMessage(value)
 }
 
 function parseJsonlStrict<T>(path: string, label: string, validate?: (value: unknown) => asserts value is T): T[] {
@@ -256,7 +269,7 @@ export class ChatRoomHiddenSessionStore implements AgentSessionStorageOverride {
 
   getAgentMessages(): AgentMessage[] {
     if (!existsSync(this.messagesPath)) return []
-    return parseJsonlStrict<AgentMessage>(this.messagesPath, '聊天室 Agent session 消息', assertValidAgentMessage)
+    return parseJsonlStrict<unknown>(this.messagesPath, '聊天室 Agent session 消息', assertValidPersistedMessage) as AgentMessage[]
   }
 
   appendAgentMessage(message: AgentMessage): void {
@@ -308,13 +321,8 @@ export class ChatRoomHiddenSessionStore implements AgentSessionStorageOverride {
   }
 
   private readSDKMessages(): SDKMessage[] {
-    const parsed = parseJsonlStrict<unknown>(this.messagesPath, '聊天室 Agent session 消息', (value) => {
-      if (isRecord(value) && 'role' in value && !('type' in value)) {
-        assertValidAgentMessage(value)
-        return
-      }
-      assertValidSDKMessage(value)
-    }).map(normalizePersistedSDKMessageForInternal)
+    const parsed = parseJsonlStrict<unknown>(this.messagesPath, '聊天室 Agent session 消息', assertValidPersistedMessage)
+      .map(normalizePersistedSDKMessageForInternal)
     return parsed
   }
 

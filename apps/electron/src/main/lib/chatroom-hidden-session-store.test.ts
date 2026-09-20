@@ -171,9 +171,32 @@ describe('聊天室隐藏 Agent session 存储', () => {
 
     writeFileSync(messagesPath, `${JSON.stringify('not-an-object')}\n`, 'utf8')
     expect(() => backend.getAgentMessages()).toThrow()
-    writeFileSync(messagesPath, `${JSON.stringify({ type: 'unknown-sdk-type' })}\n`, 'utf8')
+    writeFileSync(messagesPath, `${JSON.stringify({ type: '' })}\n`, 'utf8')
     expect(() => backend.getSDKMessages()).toThrow()
     writeFileSync(messagesPath, `${JSON.stringify({ type: 'assistant', message: 'not-an-object' })}\n`, 'utf8')
+    expect(() => backend.getSDKMessages()).toThrow()
+  })
+
+  test('mixed JSONL allows valid SDK records through getAgentMessages while retaining legacy records', () => {
+    const messagesPath = getChatRoomAgentSessionMessagesPath('room-1', agentConfig.roomAgentId)
+    const backend = new ChatRoomHiddenSessionStore('room-1', agentConfig)
+    const legacy: AgentMessage = { id: 'legacy-mixed', role: 'assistant', content: 'legacy', createdAt: Date.now() }
+    writeFileSync(messagesPath, `${JSON.stringify(userMessage)}\n${JSON.stringify(legacy)}\n`, 'utf8')
+
+    const messages = backend.getAgentMessages()
+    expect(messages).toHaveLength(2)
+    expect(messages[0] as unknown).toEqual(userMessage)
+    expect(messages[1]).toEqual(legacy)
+  })
+
+  test('unknown non-empty SDK extension type is accepted with valid common fields', () => {
+    const messagesPath = getChatRoomAgentSessionMessagesPath('room-1', agentConfig.roomAgentId)
+    const backend = new ChatRoomHiddenSessionStore('room-1', agentConfig)
+    const extension = { type: 'pi_custom_event', uuid: 'extension-1', session_id: 'sdk-session', payload: { ok: true } }
+    writeFileSync(messagesPath, `${JSON.stringify(extension)}\n`, 'utf8')
+
+    expect(backend.getSDKMessages()).toEqual([extension])
+    writeFileSync(messagesPath, `${JSON.stringify({ type: 'pi_custom_event', uuid: 1 })}\n`, 'utf8')
     expect(() => backend.getSDKMessages()).toThrow()
   })
 
