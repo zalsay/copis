@@ -65,10 +65,13 @@ describe('Codex IPC Handlers (BDD)', () => {
   })
 
   test('Given Codex App Server IPC 注册 When 调用查询、启动、停止 Then 状态机与设置正确同步并广播', async () => {
-    dummyExecPath = join(tmpdir(), `mock-codex-ipc-${Date.now()}.sh`)
+    const isWin = process.platform === 'win32'
+    dummyExecPath = join(tmpdir(), `mock-codex-ipc-${Date.now()}${isWin ? '.cmd' : '.sh'}`)
     writeFileSync(
       dummyExecPath,
-      '#!/bin/sh\nif [ "$1" = "--version" ]; then\n  echo "codex 0.8.0"\n  exit 0\nelif [ "$1" = "app-server" ] && [ "$2" = "--help" ]; then\n  echo "Usage: codex app-server --listen"\n  exit 0\nfi\nsleep 30\n',
+      isWin
+        ? '@echo off\r\nif "%~1"=="--version" (\r\n  echo codex 0.8.0\r\n  exit /b 0\r\n)\r\nif "%~1"=="app-server" if "%~2"=="--help" (\r\n  echo Usage: codex app-server --listen\r\n  exit /b 0\r\n)\r\n:loop\r\nping -n 2 127.0.0.1 >nul\r\ngoto loop\r\n'
+        : '#!/bin/sh\nif [ "$1" = "--version" ]; then\n  echo "codex 0.8.0"\n  exit 0\nelif [ "$1" = "app-server" ] && [ "$2" = "--help" ]; then\n  echo "Usage: codex app-server --listen"\n  exit 0\nfi\nsleep 30\n',
       { mode: 0o755 },
     )
     process.env.COPIS_CODEX_EXECUTABLE = dummyExecPath

@@ -9,10 +9,19 @@
  */
 
 import { type ChildProcess, execSync, spawn, spawnSync } from 'node:child_process'
-import { existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import {
+  closeSync,
+  existsSync,
+  mkdirSync,
+  openSync,
+  readSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs'
 import { createServer as createNetServer } from 'node:net'
 import { homedir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import type { CodexAppServerStatus, CodexCliStatus } from '../../types'
 import { getConfigDir, getFunctionalModulesDir } from './config-paths'
 import { getFunctionalModulePaths, readActiveFunctionalModule } from './functional-module-store'
@@ -20,6 +29,18 @@ import { resolveCopisHttpApiPort } from '@copis/shared/config'
 
 export const DEFAULT_CODEX_PORT = 54080
 export const MAX_CODEX_PORT_SCAN = 20
+
+function isAppPackaged(): boolean {
+  try {
+    const electron = require('electron')
+    if (typeof electron.app?.isPackaged === 'boolean') {
+      return electron.app.isPackaged
+    }
+  } catch {
+    // 忽略非 Electron 运行环境异常
+  }
+  return process.env.COPIS_PACKAGED === '1'
+}
 
 /**
  * Codex 默认内置 skills 屏蔽黑名单。
@@ -92,7 +113,7 @@ export function ensureCopisCodexConfig(options?: { httpApiPort?: number }): stri
   const configPath = join(codexHome, 'config.toml')
   const httpApiPort = options?.httpApiPort ?? resolveCopisHttpApiPort({
     configuredPort: process.env.COPIS_HTTP_API_PORT,
-    isPackaged: process.env.COPIS_PACKAGED === '1',
+    isPackaged: isAppPackaged(),
   })
 
   // 构造 config.toml 中显式禁用 Codex 默认内置技能的配置
@@ -166,6 +187,92 @@ export function isPortAvailable(port: number, host = '127.0.0.1'): Promise<boole
 }
 
 /**
+ * 判断是否为 Windows 下必须以 Shell 方式调用的脚本文件（.cmd / .bat）
+ */
+export function isWindowsScript(commandPath: string): boolean {
+  return process.platform === 'win32' && ['.cmd', '.bat'].some((ext) => commandPath.toLowerCase().endsWith(ext))
+}
+
+/** 检查文件是否为 Windows PE 可执行文件（MZ 头） */
+export function isPeBinary(filePath: string): boolean {
+  if (!existsSync(filePath)) return false
+  try {
+    const buffer = Buffer.alloc(2)
+    const fd = openSync(filePath, 'r')
+    readSync(fd, buffer, 0, 2, 0)
+    closeSync(fd)
+    return buffer[0] === 0x4d && buffer[1] === 0x5a // 'MZ'
+  } catch {
+    return false
+  }
+}
+
+/** 验证文件是否为可有效执行的 Codex 二进制或脚本 */
+export function isValidCodexBinary(filePath: string): boolean {
+  if (!existsSync(filePath)) return false
+  if (process.platform === 'win32') {
+    if (filePath.toLowerCase().endsWith('.exe')) {
+      return isPeBinary(filePath)
+    }
+    if (isWindowsScript(filePath)) {
+      const adjacentExe = filePath.replace(/\.(cmd|bat)$/i, '.exe')
+      if (existsSync(adjacentExe) && !isPeBinary(adjacentExe)) {
+        return false
+      }
+      return true
+    }
+  }
+  return true
+}
+
+/**
+ * 标准化 Codex 可执行文件路径：
+ * 在 Windows 环境下，若传入的为 .cmd 批处理且同目录下存在真正的 codex.exe 原生 PE 二进制，
+ * 则优先返回原生 .exe，避免 Windows 下 spawn .cmd 触发 Node.js EINVAL 限制或启动额外 shell 进程。
+ */
+export function normalizeCodexExecutable(commandPath: string): string {
+  if (process.platform === 'win32') {
+    if (commandPath.toLowerCase().endsWith('.cmd') || commandPath.toLowerCase().endsWith('.bat')) {
+      const exeCandidate = commandPath.replace(/\.(cmd|bat)$/i, '.exe')
+      if (existsSync(exeCandidate) && isPeBinary(exeCandidate)) {
+        return exeCandidate
+      }
+    }
+  }
+  return commandPath
+}
+
+/**
+ * 尝试从脚本路径或其关联的 npm 包目录中穿透解析真实的 Codex 原生二进制
+ */
+export function resolveUnderlyingCodexExeFromScript(scriptPath: string): string | undefined {
+  if (process.platform !== 'win32') return undefined
+  const adjacentExe = scriptPath.replace(/\.(cmd|bat|ps1)$/i, '') + '.exe'
+  if (existsSync(adjacentExe) && isPeBinary(adjacentExe)) return adjacentExe
+
+  const dir = dirname(scriptPath)
+  const searchRoots = [
+    dir,
+    join(dir, 'node_modules'),
+    join(dir, '..', 'node_modules'),
+  ]
+  const targetTriple = process.arch === 'arm64' ? 'aarch64-pc-windows-msvc' : 'x86_64-pc-windows-msvc'
+  const pkgName = process.arch === 'arm64' ? '@openai/codex-win32-arm64' : '@openai/codex-win32-x64'
+
+  for (const root of searchRoots) {
+    const candidates = [
+      join(root, pkgName, 'vendor', targetTriple, 'bin', 'codex.exe'),
+      join(root, '@openai', 'codex', 'node_modules', pkgName, 'vendor', targetTriple, 'bin', 'codex.exe'),
+    ]
+    for (const c of candidates) {
+      if (existsSync(c) && isPeBinary(c)) return c
+    }
+  }
+
+  return undefined
+}
+
+/**
  * 解析系统或功能模块中的 codex 命令路径
  */
 export function resolveCodexCommand(
@@ -173,16 +280,18 @@ export function resolveCodexCommand(
   options: { skipSystemFallback?: boolean } = {},
 ): string | undefined {
   if (process.env.COPIS_CODEX_EXECUTABLE && existsSync(process.env.COPIS_CODEX_EXECUTABLE)) {
-    return process.env.COPIS_CODEX_EXECUTABLE
+    return normalizeCodexExecutable(process.env.COPIS_CODEX_EXECUTABLE)
   }
 
-  const binaryName = process.platform === 'win32' ? 'codex.cmd' : 'codex'
-  const entrypoints = process.platform === 'win32' ? ['bin/codex.cmd', 'bin/codex.exe'] : ['bin/codex']
+  const entrypoints = process.platform === 'win32' ? ['bin/codex.exe', 'bin/codex.cmd'] : ['bin/codex']
 
   // 1. 优先从 Copis 功能模块目录查找
   const active = readActiveFunctionalModule(getFunctionalModulePaths(rootDir), 'codex-cli')
   if (active && entrypoints.includes(active.entrypoint) && existsSync(active.path)) {
-    return active.path
+    const candidate = normalizeCodexExecutable(active.path)
+    if (isValidCodexBinary(candidate)) {
+      return candidate
+    }
   }
 
   if (options.skipSystemFallback) {
@@ -194,18 +303,31 @@ export function resolveCodexCommand(
   if (rootDir !== prodModulesDir && existsSync(prodModulesDir)) {
     const prodActive = readActiveFunctionalModule(getFunctionalModulePaths(prodModulesDir), 'codex-cli')
     if (prodActive && entrypoints.includes(prodActive.entrypoint) && existsSync(prodActive.path)) {
-      return prodActive.path
+      const candidate = normalizeCodexExecutable(prodActive.path)
+      if (isValidCodexBinary(candidate)) {
+        return candidate
+      }
     }
   }
 
   // 3. 用户系统常用目录探测
   const home = homedir()
   const systemCandidates = process.platform === 'win32'
-    ? [join(home, '.local', 'bin', 'codex.cmd'), join(home, '.local', 'bin', 'codex.exe')]
+    ? [
+        join(home, '.local', 'bin', 'codex.exe'),
+        join(home, '.local', 'bin', 'codex.cmd'),
+        join(process.env.APPDATA || join(home, 'AppData', 'Roaming'), 'npm', 'codex.cmd'),
+        join(process.env.LOCALAPPDATA || join(home, 'AppData', 'Local'), 'Programs', 'codex', 'codex.exe'),
+      ]
     : [join(home, '.local', 'bin', 'codex'), '/usr/local/bin/codex', '/opt/homebrew/bin/codex']
 
   for (const candidate of systemCandidates) {
-    if (existsSync(candidate)) return candidate
+    if (existsSync(candidate)) {
+      const native = resolveUnderlyingCodexExeFromScript(candidate)
+      if (native) return native
+      const norm = normalizeCodexExecutable(candidate)
+      if (isValidCodexBinary(norm)) return norm
+    }
   }
 
   // 4. 从系统 PATH 动态查找
@@ -216,9 +338,20 @@ export function resolveCodexCommand(
       stdio: ['pipe', 'pipe', 'pipe'],
       timeout: 3000,
     })
-    const foundPath = out.trim().split('\n')[0]?.trim()
-    if (foundPath && existsSync(foundPath)) {
-      return foundPath
+    const lines = out.split(/\r?\n/).map((l) => l.trim()).filter(Boolean)
+    if (process.platform === 'win32') {
+      const exeMatch = lines.find((l) => l.toLowerCase().endsWith('.exe') && existsSync(l))
+      if (exeMatch) return exeMatch
+
+      const cmdMatch = lines.find((l) => ['.cmd', '.bat'].some((ext) => l.toLowerCase().endsWith(ext)) && existsSync(l))
+      if (cmdMatch) {
+        const native = resolveUnderlyingCodexExeFromScript(cmdMatch)
+        if (native) return native
+        return cmdMatch
+      }
+    } else {
+      const first = lines[0]
+      if (first && existsSync(first)) return first
     }
   } catch {
     // 未在 PATH 中找到
@@ -245,6 +378,8 @@ export async function detectCodexCli(
     }
   }
 
+  const isScript = isWindowsScript(codexCmd)
+
   // 提取版本信息
   let version: string | null = null
   try {
@@ -252,6 +387,7 @@ export async function detectCodexCli(
       encoding: 'utf-8',
       timeout: 3000,
       stdio: ['pipe', 'pipe', 'pipe'],
+      shell: isScript,
     })
     if (verResult.status === 0 && verResult.stdout) {
       const match = verResult.stdout.match(/(\d+\.\d+\.\d+[\w.-]*)/)
@@ -267,6 +403,7 @@ export async function detectCodexCli(
       encoding: 'utf-8',
       timeout: 4000,
       stdio: ['pipe', 'pipe', 'pipe'],
+      shell: isScript,
     })
 
     const combinedOutput = `${checkResult.stdout || ''}\n${checkResult.stderr || ''}`
@@ -363,6 +500,7 @@ export async function startCodexAppServer(options: {
     PORT: String(selectedPort),
   }
 
+  const isScript = isWindowsScript(codexCmd)
   const child = spawn(
     codexCmd,
     ['app-server', '--listen', `ws://127.0.0.1:${selectedPort}`],
@@ -370,6 +508,7 @@ export async function startCodexAppServer(options: {
       env: childEnv,
       stdio: ['ignore', 'pipe', 'pipe'],
       detached: false,
+      shell: isScript,
     },
   )
 
@@ -438,10 +577,18 @@ export async function stopCodexAppServer(): Promise<void> {
       }
     }
 
-    const forceKillTimer = setTimeout(() => {
+    const killProcessTree = () => {
       try {
-        proc.kill('SIGKILL')
+        if (process.platform === 'win32' && proc.pid) {
+          spawnSync('taskkill', ['/pid', String(proc.pid), '/T', '/F'], { stdio: 'ignore' })
+        } else {
+          proc.kill('SIGKILL')
+        }
       } catch { /* 忽略已退出错误 */ }
+    }
+
+    const forceKillTimer = setTimeout(() => {
+      killProcessTree()
       finish()
     }, 3000)
 
@@ -451,7 +598,11 @@ export async function stopCodexAppServer(): Promise<void> {
     })
 
     try {
-      proc.kill('SIGTERM')
+      if (process.platform === 'win32') {
+        killProcessTree()
+      } else {
+        proc.kill('SIGTERM')
+      }
     } catch {
       clearTimeout(forceKillTimer)
       finish()

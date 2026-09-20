@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, Menu, nativeTheme, protocol, screen, shell } from 'electron'
+import { app, BrowserWindow, dialog, Menu, nativeImage, nativeTheme, protocol, screen, shell } from 'electron'
 import { join } from 'path'
 import { existsSync } from 'fs'
 import { httpApiPortArgument, httpApiWebTokenArgument } from './lib/http-api-web-token'
@@ -357,9 +357,12 @@ function isDevServerNavigation(url: string): boolean {
 function createWindow(): void {
   const iconPath = getIconPath()
   const iconExists = existsSync(iconPath)
+  const appIcon = iconExists ? nativeImage.createFromPath(iconPath) : undefined
 
   if (!iconExists) {
     console.warn('App icon not found at:', iconPath)
+  } else if (appIcon?.isEmpty()) {
+    console.warn('App icon could not be loaded from:', iconPath)
   }
 
   const titleBarOptions = getCustomWindowChromeOptions({
@@ -379,7 +382,7 @@ function createWindow(): void {
     title: 'Copis',
     minWidth: 800,
     minHeight: 600,
-    icon: iconExists ? iconPath : undefined,
+    icon: appIcon?.isEmpty() === false ? appIcon : undefined,
     show: false,
     webPreferences: {
       preload: join(__dirname, 'preload.cjs'),
@@ -404,6 +407,11 @@ function createWindow(): void {
 
   // 窗口就绪后，按保存的状态决定是否最大化
   mainWindow.once('ready-to-show', () => {
+    // Windows 在原地升级后可能沿用旧的任务栏图标缓存。窗口就绪时重新设置
+    // NativeImage，确保任务栏按钮获得当前版本的 HICON，而不是空白占位图标。
+    if (process.platform === 'win32' && appIcon?.isEmpty() === false) {
+      mainWindow?.setIcon(appIcon)
+    }
     if (savedState?.isMaximized ?? true) {
       mainWindow?.maximize()
     }

@@ -181,7 +181,7 @@ if (!rustOnly && !officeCliOnly && !nodeRuntimeOnly && !alipayBotOnly && !playwr
     arch,
     binaryPath: codexCliArchive,
     format: 'tar.gz',
-    entrypoint: `bin/${platform === 'win32' ? 'codex.cmd' : 'codex'}`,
+    entrypoint: `bin/${platform === 'win32' ? 'codex.exe' : 'codex'}`,
     required: false,
   })
 }

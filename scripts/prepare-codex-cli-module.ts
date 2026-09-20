@@ -3,11 +3,14 @@ import { createHash } from 'node:crypto'
 import { execFileSync, execSync } from 'node:child_process'
 import {
   chmodSync,
+  closeSync,
   copyFileSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
+  openSync,
   readFileSync,
+  readSync,
   readdirSync,
   renameSync,
   rmSync,
@@ -30,18 +33,104 @@ export interface PreparedCodexCliModuleMetadata {
   size: number
 }
 
-export function resolveSourceCodexBinary(customBinary?: string): string | undefined {
-  if (customBinary && existsSync(customBinary)) return resolve(customBinary)
+/** 检查文件是否为 Windows PE 可执行文件（MZ 头） */
+export function isPeBinary(filePath: string): boolean {
+  if (!existsSync(filePath)) return false
+  try {
+    const buffer = Buffer.alloc(2)
+    const fd = openSync(filePath, 'r')
+    readSync(fd, buffer, 0, 2, 0)
+    closeSync(fd)
+    return buffer[0] === 0x4d && buffer[1] === 0x5a // 'MZ'
+  } catch {
+    return false
+  }
+}
+
+/** 尝试从候选路径或其关联的 npm 包目录中穿透解析真实的 Codex 原生二进制 */
+export function resolveNativeCodexFromCandidate(
+  candidatePath: string,
+  platform: string = process.platform,
+  arch: string = process.arch,
+): string | undefined {
+  if (platform === 'win32') {
+    if (candidatePath.toLowerCase().endsWith('.exe') && isPeBinary(candidatePath)) {
+      return candidatePath
+    }
+    const adjacentExe = candidatePath.replace(/\.(cmd|bat|ps1)$/i, '') + '.exe'
+    if (existsSync(adjacentExe) && isPeBinary(adjacentExe)) {
+      return adjacentExe
+    }
+  } else {
+    if (existsSync(candidatePath) && !candidatePath.endsWith('.cmd') && !candidatePath.endsWith('.bat')) {
+      return candidatePath
+    }
+  }
+
+  // 针对 npm 全局/局部安装场景解析底层原生包
+  const dir = dirname(candidatePath)
+  const searchRoots = [
+    dir,
+    join(dir, 'node_modules'),
+    join(dir, '..', 'node_modules'),
+  ]
+  const targetTriple =
+    platform === 'win32'
+      ? (arch === 'arm64' ? 'aarch64-pc-windows-msvc' : 'x86_64-pc-windows-msvc')
+      : platform === 'darwin'
+        ? (arch === 'arm64' ? 'aarch64-apple-darwin' : 'x86_64-apple-darwin')
+        : (arch === 'arm64' ? 'aarch64-unknown-linux-musl' : 'x86_64-unknown-linux-musl')
+
+  const pkgName =
+    platform === 'win32'
+      ? (arch === 'arm64' ? '@openai/codex-win32-arm64' : '@openai/codex-win32-x64')
+      : platform === 'darwin'
+        ? (arch === 'arm64' ? '@openai/codex-darwin-arm64' : '@openai/codex-darwin-x64')
+        : (arch === 'arm64' ? '@openai/codex-linux-arm64' : '@openai/codex-linux-x64')
+
+  const binFilename = platform === 'win32' ? 'codex.exe' : 'codex'
+
+  for (const root of searchRoots) {
+    const candidates = [
+      join(root, pkgName, 'vendor', targetTriple, 'bin', binFilename),
+      join(root, '@openai', 'codex', 'node_modules', pkgName, 'vendor', targetTriple, 'bin', binFilename),
+    ]
+    for (const c of candidates) {
+      if (existsSync(c) && (platform !== 'win32' || isPeBinary(c))) {
+        return c
+      }
+    }
+  }
+
+  return undefined
+}
+
+export function resolveSourceCodexBinary(
+  customBinary?: string,
+  options?: { platform?: string; arch?: string },
+): string | undefined {
+  const platform = options?.platform ?? process.platform
+  const arch = options?.arch ?? process.arch
+
+  if (customBinary && existsSync(customBinary)) {
+    const native = resolveNativeCodexFromCandidate(resolve(customBinary), platform, arch)
+    if (native) return native
+    if (platform !== 'win32' || isPeBinary(customBinary)) return resolve(customBinary)
+  }
   if (process.env.COPIS_CODEX_CLI_BINARY && existsSync(process.env.COPIS_CODEX_CLI_BINARY)) {
-    return resolve(process.env.COPIS_CODEX_CLI_BINARY)
+    const native = resolveNativeCodexFromCandidate(resolve(process.env.COPIS_CODEX_CLI_BINARY), platform, arch)
+    if (native) return native
+    if (platform !== 'win32' || isPeBinary(process.env.COPIS_CODEX_CLI_BINARY)) return resolve(process.env.COPIS_CODEX_CLI_BINARY)
   }
   if (process.env.COPIS_CODEX_EXECUTABLE && existsSync(process.env.COPIS_CODEX_EXECUTABLE)) {
-    return resolve(process.env.COPIS_CODEX_EXECUTABLE)
+    const native = resolveNativeCodexFromCandidate(resolve(process.env.COPIS_CODEX_EXECUTABLE), platform, arch)
+    if (native) return native
+    if (platform !== 'win32' || isPeBinary(process.env.COPIS_CODEX_EXECUTABLE)) return resolve(process.env.COPIS_CODEX_EXECUTABLE)
   }
 
   const home = homedir()
   const candidates: string[] = []
-  if (process.platform === 'darwin') {
+  if (platform === 'darwin') {
     candidates.push(
       '/Applications/ChatGPT.app/Contents/Resources/codex',
       join(home, 'Applications/ChatGPT.app/Contents/Resources/codex'),
@@ -49,11 +138,15 @@ export function resolveSourceCodexBinary(customBinary?: string): string | undefi
       '/usr/local/bin/codex',
       '/opt/homebrew/bin/codex',
     )
-  } else if (process.platform === 'win32') {
+  } else if (platform === 'win32') {
     candidates.push(
-      join(home, '.local', 'bin', 'codex.cmd'),
       join(home, '.local', 'bin', 'codex.exe'),
+      join(home, '.local', 'bin', 'codex.cmd'),
     )
+    const appData = process.env.APPDATA || join(home, 'AppData', 'Roaming')
+    candidates.push(join(appData, 'npm', 'codex.cmd'))
+    const localAppData = process.env.LOCALAPPDATA || join(home, 'AppData', 'Local')
+    candidates.push(join(localAppData, 'Programs', 'codex', 'codex.exe'))
   } else {
     candidates.push(
       join(home, '.local/bin/codex'),
@@ -63,18 +156,24 @@ export function resolveSourceCodexBinary(customBinary?: string): string | undefi
   }
 
   for (const candidate of candidates) {
-    if (existsSync(candidate)) return candidate
+    const native = resolveNativeCodexFromCandidate(candidate, platform, arch)
+    if (native) return native
+    if (existsSync(candidate) && (platform !== 'win32' || isPeBinary(candidate))) return candidate
   }
 
   try {
-    const whichCmd = process.platform === 'win32' ? 'where codex' : 'which codex'
+    const whichCmd = platform === 'win32' ? 'where codex' : 'which codex'
     const out = execSync(whichCmd, {
       encoding: 'utf8',
       stdio: ['pipe', 'pipe', 'pipe'],
       timeout: 3000,
     }).trim()
-    const first = out.split(/\r?\n/)[0]?.trim()
-    if (first && existsSync(first)) return first
+    const lines = out.split(/\r?\n/).map((l) => l.trim()).filter(Boolean)
+    for (const line of lines) {
+      const native = resolveNativeCodexFromCandidate(line, platform, arch)
+      if (native) return native
+      if (existsSync(line) && (platform !== 'win32' || isPeBinary(line))) return line
+    }
   } catch {
     // 未在 PATH 中找到
   }
@@ -84,15 +183,17 @@ export function resolveSourceCodexBinary(customBinary?: string): string | undefi
 
 export function readCodexCliVersion(binaryPath: string): string {
   try {
+    const isWin = process.platform === 'win32'
     const out = execFileSync(binaryPath, ['--version'], {
       encoding: 'utf8',
       stdio: ['pipe', 'pipe', 'pipe'],
       timeout: 5000,
+      shell: isWin && (binaryPath.endsWith('.cmd') || binaryPath.endsWith('.bat')),
     }).trim()
-    const match = /(\d+\.\d+\.\d+)/.exec(out)
+    const match = /(\d+\.\d+\.\d+[\w.-]*)/.exec(out)
     if (match?.[1]) return match[1]
-  } catch {
-    // 忽略错误并回退固定版本
+  } catch (err) {
+    console.warn(`[prepare-codex-cli-module] 读取版本失败 (${binaryPath}):`, err)
   }
   return CODEX_CLI_VERSION
 }
@@ -105,10 +206,16 @@ export function main(): void {
   const metadataOutput = option('--metadata')
   const binaryOption = option('--binary')
 
-  const sourceBinary = resolveSourceCodexBinary(binaryOption)
+  const sourceBinary = resolveSourceCodexBinary(binaryOption, { platform, arch })
   if (!sourceBinary) {
     throw new Error(
       `未找到专业模式核心组件 (codex) 二进制文件。请通过 --binary <path> 或环境变量 COPIS_CODEX_CLI_BINARY 指定路径。`,
+    )
+  }
+
+  if (platform === 'win32' && !isPeBinary(sourceBinary)) {
+    throw new Error(
+      `检测到的文件不是有效的 Windows PE 二进制文件: ${sourceBinary}。请指定正确的原生 codex.exe 路径。`,
     )
   }
 
@@ -123,6 +230,10 @@ export function main(): void {
     if (platform === 'win32') {
       const targetExe = join(binDir, 'codex.exe')
       copyFileSync(sourceBinary, targetExe)
+      const hostExe = join(dirname(sourceBinary), 'codex-code-mode-host.exe')
+      if (existsSync(hostExe) && isPeBinary(hostExe)) {
+        copyFileSync(hostExe, join(binDir, 'codex-code-mode-host.exe'))
+      }
       // 生成启动批处理
       writeFileSync(
         join(binDir, 'codex.cmd'),
@@ -133,6 +244,11 @@ export function main(): void {
       const targetBin = join(binDir, 'codex')
       copyFileSync(sourceBinary, targetBin)
       chmodSync(targetBin, 0o755)
+      const hostBin = join(dirname(sourceBinary), 'codex-code-mode-host')
+      if (existsSync(hostBin)) {
+        copyFileSync(hostBin, join(binDir, 'codex-code-mode-host'))
+        chmodSync(join(binDir, 'codex-code-mode-host'), 0o755)
+      }
     }
 
     normalizeTimestamps(moduleRoot)

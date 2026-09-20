@@ -918,7 +918,7 @@ export function WebBrowserSurface(): React.ReactElement {
                     <Glasses className="size-4" />
                   </Button>
                 </TooltipTrigger>
-                <TooltipContent side="bottom">
+                <TooltipContent side="top" sideOffset={8} avoidCollisions={false}>
                   <div>{incognitoAction.label}</div>
                   <div className="text-muted-foreground">{incognitoAction.description}</div>
                 </TooltipContent>
@@ -1041,7 +1041,7 @@ function BrowserToolbarButton({
       <TooltipTrigger asChild>
         {button}
       </TooltipTrigger>
-      <TooltipContent side="bottom">{label}</TooltipContent>
+      <TooltipContent side="top" sideOffset={8} avoidCollisions={false}>{label}</TooltipContent>
     </Tooltip>
   )
 }

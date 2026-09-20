@@ -84,11 +84,14 @@ describe('Codex App Server Service (BDD)', () => {
   })
 
   test('Given 模拟可执行程序 When 启动并停止服务 Then 状态机正确流转并广播', async () => {
-    // 制作一个响应 SIGTERM 快速退出的模拟脚本
-    dummyExecPath = join(tmpdir(), `mock-codex-${Date.now()}.sh`)
+    // 制作一个响应退出的模拟脚本
+    const isWin = process.platform === 'win32'
+    dummyExecPath = join(tmpdir(), `mock-codex-${Date.now()}${isWin ? '.cmd' : '.sh'}`)
     writeFileSync(
       dummyExecPath,
-      '#!/bin/sh\ntrap "exit 0" TERM INT\nwhile true; do sleep 0.1; done\n',
+      isWin
+        ? '@echo off\r\n:loop\r\nping -n 2 127.0.0.1 >nul\r\ngoto loop\r\n'
+        : '#!/bin/sh\ntrap "exit 0" TERM INT\nwhile true; do sleep 0.1; done\n',
       { mode: 0o755 },
     )
 
@@ -133,10 +136,13 @@ describe('Codex App Server Service (BDD)', () => {
   })
 
   test('Given 支持 app-server 的可执行程序 When 执行环境检测 Then detectCodexCli 返回就绪与版本信息', async () => {
-    dummyExecPath = join(tmpdir(), `mock-codex-cli-${Date.now()}.sh`)
+    const isWin = process.platform === 'win32'
+    dummyExecPath = join(tmpdir(), `mock-codex-cli-${Date.now()}${isWin ? '.cmd' : '.sh'}`)
     writeFileSync(
       dummyExecPath,
-      '#!/bin/sh\nif [ "$1" = "--version" ]; then\n  echo "codex 0.8.5"\nelse\n  echo "Usage: codex app-server --listen 127.0.0.1:54080"\nfi\n',
+      isWin
+        ? '@echo off\r\nif "%~1"=="--version" (\r\n  echo codex 0.8.5\r\n  exit /b 0\r\n)\r\necho Usage: codex app-server --listen 127.0.0.1:54080\r\nexit /b 0\r\n'
+        : '#!/bin/sh\nif [ "$1" = "--version" ]; then\n  echo "codex 0.8.5"\nelse\n  echo "Usage: codex app-server --listen 127.0.0.1:54080"\nfi\n',
       { mode: 0o755 },
     )
     process.env.COPIS_CODEX_EXECUTABLE = dummyExecPath
@@ -152,7 +158,7 @@ describe('Codex App Server Service (BDD)', () => {
   test('Given Copis 运行环境 When 调用 getCopisCodexHomeDir 与 ensureCopisCodexConfig Then 自动创建隔离配置与技能屏蔽规则', () => {
     const codexHome = getCopisCodexHomeDir()
     expect(codexHome).toContain('.copis')
-    expect(codexHome.endsWith('/codex')).toBe(true)
+    expect(codexHome.endsWith(`${join('', 'codex')}`)).toBe(true)
 
     const ensured = ensureCopisCodexConfig({ httpApiPort: 51740 })
     expect(ensured).toBe(codexHome)

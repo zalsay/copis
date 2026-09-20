@@ -831,7 +831,7 @@ export function buildFunctionalModuleBinaryInputs(
         arch: input.arch,
         binaryPath: input.codexCliArchive,
         format: 'tar.gz',
-        entrypoint: `bin/${input.platform === 'win32' ? 'codex.cmd' : 'codex'}`,
+        entrypoint: `bin/${input.platform === 'win32' ? 'codex.exe' : 'codex'}`,
         required: false,
       })
     }

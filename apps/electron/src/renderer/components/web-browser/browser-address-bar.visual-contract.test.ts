@@ -58,6 +58,12 @@ describe('浏览器地址栏视觉契约', () => {
     expect(surfaceSource).toContain('<RotateCw className="size-3 text-foreground" strokeWidth={2} />')
     expect(surfaceSource).toContain('window.electronAPI.webTabs.stop(activeTabId)')
   })
+
+  test('Given 原生网页视图位于工具栏下方 When 悬停地址栏右侧按钮 Then 提示固定向上展开且不会碰撞翻转到网页区域', () => {
+    expect(surfaceSource).toContain('<TooltipContent side="top" sideOffset={8} avoidCollisions={false}>')
+    expect(surfaceSource).toContain('<TooltipContent side="top" sideOffset={8} avoidCollisions={false}>{label}</TooltipContent>')
+    expect(surfaceSource).not.toContain('<TooltipContent side="bottom">{label}</TooltipContent>')
+  })
 })
 
 
