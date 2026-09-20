@@ -36,6 +36,7 @@ const COMPONENT_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/
 const MAX_FILES = 10_000
 const MAX_FILE_BYTES = 16 * 1024 * 1024
 const MAX_TOTAL_BYTES = 100 * 1024 * 1024
+const WRITE_CHUNK_BYTES = 64 * 1024
 const JOURNAL_NAME = '.snapshot-journal.json'
 const SNAPSHOT_LOCK_NAME = '.skills-snapshot.lock'
 const NEXT_NAME_PATTERN = /^\.next-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
@@ -613,11 +614,14 @@ function copyRecords(
         if (!opened.isFile() || opened.nlink > 1) fail('Skill 快照目标目录发生变化')
         writtenIdentity = { dev: opened.dev, ino: opened.ino }
         let offset = 0
-        while (offset < bytes.length) offset += writeSync(fd, bytes, offset, bytes.length - offset)
+        while (offset < bytes.length) {
+          const length = Math.min(WRITE_CHUNK_BYTES, bytes.length - offset)
+          offset += writeSync(fd, bytes, offset, length)
+        }
         fsyncSync(fd)
         const closed = fstatSync(fd)
         if (!closed.isFile() || closed.dev !== opened.dev || closed.ino !== opened.ino
-          || closed.size !== bytes.length || closed.mtimeMs !== opened.mtimeMs) {
+          || closed.size !== bytes.length) {
           fail('Skill 快照目标目录发生变化')
         }
         writtenMtimeMs = closed.mtimeMs

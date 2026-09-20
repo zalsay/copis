@@ -127,6 +127,15 @@ describe('聊天室 Agent Skill 只读快照', () => {
     expect(lstatSync(join(result.snapshotPath, 'enabled-skill', 'SKILL.md')).mode & 0o777).toBe(0o400)
   })
 
+  test('Given 启用 Skill 文件较大且分块写入 When 同步 Then 正常写入后的 mtime 变化不被误判为竞态', () => {
+    const content = `---\nname: large-skill\n---\n${'x'.repeat(256 * 1024)}`
+    const sourceFile = join(writeSkill('large-skill', 'SKILL.md', content), 'SKILL.md')
+
+    const result = syncChatRoomAgentSkillSnapshot({ roomId, roomAgentId, sourceWorkspaceSlug })
+
+    expect(readFileSync(join(result.snapshotPath, 'large-skill', 'SKILL.md'), 'utf-8')).toBe(readFileSync(sourceFile, 'utf-8'))
+  })
+
   test('Given Skill 内含符号链接 When 同步 Then 拒绝且保留旧快照', () => {
     const oldSnapshot = snapshotPath()
     mkdirSync(oldSnapshot, { recursive: true })

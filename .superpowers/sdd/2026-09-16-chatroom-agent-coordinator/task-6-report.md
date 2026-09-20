@@ -98,7 +98,7 @@
 - bun test apps/electron/src/main/lib/chatroom-workspace-store.test.ts：22 pass。
 - bun test apps/electron/src/main/lib/config-paths.test.ts：6 pass。
 - bun test apps/electron/src/main/lib/chatroom-hidden-session-store.test.ts：13 pass。
-- bun test apps/electron/src/main/lib/agent-rpc-runtime-context.test.ts：34 pass。
+- bun test apps/electron/src/main/lib/agent-rpc-runtime-context.test.ts：5 pass。
 - bun test apps/electron/src/main/lib/agent-rpc-service.test.ts：34 pass。
 - bun test apps/electron/src/main/lib/agent-workspace-manager.test.ts：33 pass，1 个
   既有失败（MCP 保留名测试期望 `['github']`，实际仍包含内置 `copis_image`，与
@@ -121,3 +121,21 @@
 - Windows snapshot ACL 是文件工具/资源加载边界的第一层；运行时仍必须禁止 Agent
   将 snapshot 作为写入根。由于持久化同步需要父目录创建锁和临时树，父目录级 ACL
   的真实继承行为需要 Windows runner 复核，不把 POSIX mode 当作 Windows ACL 保证。
+
+## Fix Round 3：RED / GREEN
+
+- RED：控制端独立运行时发现首次同步偶发在目标文件写入后抛出“Skill 快照目标目录
+  发生变化”。根因是 `copyRecords` 把新文件 open 后的 `opened.mtimeMs` 当作不变量，
+  但正常写入本身会更新 mtime；因此在第一个 `fstat` 时被误判为目标竞态。先保留
+  目标父目录替换测试，再加入 256 KiB 分块写入场景验证该类回归。
+- GREEN：目标文件现在只把 open 后的 dev/ino 作为身份基线，写入并 fsync 后以最终
+  `fstat` 的 size/dev/ino/nlink/mtime 作为提交前快照，close 后的 lstat 必须匹配该
+  最终状态；不再比较写前 mtime。固定 64 KiB 写块使大文件路径实际覆盖多次 write，
+  同时保留父目录身份、O_NOFOLLOW、nlink 和最终路径检查。
+
+## Fix Round 3 验证
+
+- `bun test apps/electron/src/main/lib/chatroom-skill-snapshot.test.ts -t 'Given next 已成为 current'`：1 pass。
+- `bun test apps/electron/src/main/lib/chatroom-skill-snapshot.test.ts -t 'Given update 已写入 room.json'`：1 pass。
+- snapshot 独立 Bun 进程连续 10 次：每次 27 pass / 0 fail。
+- runtime context：5 pass；RPC：34 pass（更正此前误写的 runtime context 计数）。
