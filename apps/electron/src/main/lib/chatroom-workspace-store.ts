@@ -29,9 +29,11 @@ import {
   getChatRoomAgentPath,
   getChatRoomConfigPath,
   getChatRoomPath,
+  getChatRoomAgentSkillsSnapshotPath,
   getChatRoomsRootPath,
 } from './config-paths'
 import { readJsonFileSafeDetailed, writeJsonFileAtomic } from './safe-file'
+import type { ChatRoomSkillSnapshotResult } from './chatroom-skill-snapshot'
 
 interface ChatRoomWorkspaceStoreOptions {
   identity?: ChatRoomLocalIdentity
@@ -414,6 +416,31 @@ export class ChatRoomWorkspaceStore {
     const agents = [...current.agents]
     agents[index] = nextAgent
     if (sameContent(current.agents, agents)) return clone(current)
+    const next = { ...current, agents, updatedAt: this.now() }
+    this.persist(current, next)
+    return clone(next)
+  }
+
+  /** 仅在 Skill 快照完成原子替换后记录摘要；不把快照路径写入 room.json。 */
+  updateAgentSkillSnapshot(roomId: string, roomAgentId: string, result: ChatRoomSkillSnapshotResult): ChatRoomLocalRoomConfig {
+    if (!isPathComponent(roomId) || !isPathComponent(roomAgentId)
+      || typeof result !== 'object' || result === null
+      || result.snapshotPath !== getChatRoomAgentSkillsSnapshotPath(roomId, roomAgentId)
+      || typeof result.digest !== 'string' || !/^[a-f0-9]{64}$/.test(result.digest)
+      || !Array.isArray(result.skillSlugs)
+      || result.skillSlugs.some((slug) => !isPathComponent(slug))
+      || typeof result.syncedAt !== 'number' || !Number.isSafeInteger(result.syncedAt) || result.syncedAt < 0) {
+      throw new Error('invalid_skill_snapshot')
+    }
+    assertDirectory(result.snapshotPath, '聊天室 Agent skills-snapshot')
+    const current = this.load(roomId, this.now())
+    if (!current) throw new Error('room_not_found')
+    const index = current.agents.findIndex((agent) => agent.roomAgentId === roomAgentId)
+    if (index < 0) throw new Error('room_agent_not_found')
+    const existing = current.agents[index]!
+    if (existing.skillSnapshotDigest === result.digest) return clone(current)
+    const agents = [...current.agents]
+    agents[index] = { ...existing, skillSnapshotDigest: result.digest }
     const next = { ...current, agents, updatedAt: this.now() }
     this.persist(current, next)
     return clone(next)
