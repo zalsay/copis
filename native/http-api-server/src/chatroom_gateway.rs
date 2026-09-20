@@ -2111,7 +2111,7 @@ fn normalize_public_body(
             if !object.contains_key("displayName") || !object.contains_key("deviceId") {
                 return Err(invalid_request("新增 Agent 缺少必要字段"));
             }
-            let display_name = required_component_text(object, "displayName")?;
+            let display_name = required_chatroom_display_name(object, "displayName")?;
             let device_id = required_component_text(object, "deviceId")?;
             let mut result = serde_json::json!({"displayName":display_name,"deviceId":device_id});
             if object.contains_key("avatar") {
@@ -2127,10 +2127,12 @@ fn normalize_public_body(
             let mut result = Map::new();
             for key in ["displayName", "avatar"] {
                 if object.contains_key(key) {
-                    result.insert(
-                        key.into(),
-                        Value::String(required_component_text(object, key)?.into()),
-                    );
+                    let value = if key == "displayName" {
+                        required_chatroom_display_name(object, key)?
+                    } else {
+                        required_component_text(object, key)?
+                    };
+                    result.insert(key.into(), Value::String(value.into()));
                 }
             }
             Value::Object(result)
@@ -2591,10 +2593,9 @@ fn valid_invocation_id(value: &str, max_bytes: usize) -> bool {
         })
 }
 
-fn valid_invocation_display_name(value: &str) -> bool {
-    !value.is_empty()
-        && value.trim() == value
-        && value.len() <= 128
+pub(crate) fn valid_invocation_display_name(value: &str) -> bool {
+    !value.trim().is_empty()
+        && value.trim().len() <= 128
         && !value.chars().any(|character| character.is_control())
 }
 
@@ -2622,6 +2623,18 @@ fn required_text<'a>(
         .and_then(Value::as_str)
         .filter(|value| valid_text(value))
         .ok_or_else(|| invalid_request("内部请求文本字段不正确"))
+}
+
+fn required_chatroom_display_name<'a>(
+    object: &'a Map<String, Value>,
+    key: &str,
+) -> Result<&'a str, ChatroomGatewayError> {
+    object
+        .get(key)
+        .and_then(Value::as_str)
+        .filter(|value| valid_invocation_display_name(value))
+        .map(str::trim)
+        .ok_or_else(|| invalid_request("聊天室 Agent 名称不正确"))
 }
 
 fn valid_text(value: &str) -> bool {

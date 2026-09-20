@@ -1912,3 +1912,19 @@ fn given_disconnect_transition_when_repeated_then_notify_bridge_once_until_recon
     gateway.handle_client_event_for_test(super::chatroom_client::ChatroomClientEvent::Disconnected);
     assert_eq!(bridge.disconnects.lock().unwrap().len(), 2);
 }
+
+#[test]
+fn given_chatroom_agent_display_name_when_validating_then_use_trimmed_utf8_limit_and_reject_controls(
+) {
+    assert!(super::chatroom_gateway::valid_invocation_display_name(
+        &format!("  {}  ", "界".repeat(42))
+    ));
+    assert!(!super::chatroom_gateway::valid_invocation_display_name(
+        &"界".repeat(43)
+    ));
+    for value in ["bad\nname", "bad\tname", "bad\0name", "bad\u{0085}name"] {
+        assert!(!super::chatroom_gateway::valid_invocation_display_name(
+            value
+        ));
+    }
+}

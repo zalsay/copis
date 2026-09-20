@@ -121,3 +121,16 @@ Reviewer 指出的边界已在本轮修复：
 - edu-api handlers ChatRoomV2：通过；HTTP 与 WebSocket 两条投递路径均验证完整 payload。
 - Rust gateway：55/55；Rust protocol：28/28；`cargo fmt --check` 通过。
 - Electron：Rust client 17/17、HTTP handler 16/16、coordinator scaffold 2/2、shared chatroom 11/11；typecheck、build:main、build:renderer 通过。
+
+## Fix Round 5/5 — RED
+
+- Shared strict invocation 回归先加入空 `messages`、未关联 `triggerMessageId`、最后消息 sender 与顶层 sender 不一致，以及多字节 128/129 字节、换行/制表/NUL/C1 control 的 displayName 场景；当前 validator 运行结果为 11 pass / 2 fail，失败正对应空上下文与超长 displayName 尚未被拒绝。
+- edu-api HTTP 投递先加入 builder 失败必须转 failed 并发送 `agent.failed` 的场景；当前 handler 聚焦命令编译后测试失败，failure transition 尚未发生。
+- 本轮 RED 命令：`bun test packages/shared/src/types/chatroom.test.ts`；`cd backend/modules/edu-api && go test ./handlers -run 'TestChatRoomV2HTTPInvocationBuilderFailureTransitionsAndPublishesFailure|TestChatRoomV2HTTPInvocationDeliveryUsesFullPublicPayloadBuilder' -count=1`。
+
+### GREEN
+
+- Shared `isChatRoomAgentDisplayName` 统一按 trim 后 UTF-8 128 字节并拒绝 Unicode Cc control；`isChatRoomAgentInvocation` 现在要求非空 messages、末条 messageId 等于 triggerMessageId，且末条 sender 的 type/id/displayName 与顶层 sender 完全一致。Electron workspace store 持久化前统一 trim，Go model helper 统一入口/存储/builder，Rust route 与 bridge validator 同步规则。
+- HTTP 与 WebSocket invocation 投递共用 `failChatRoomV2Invocation` 窄 helper：builder 失败时通过 resolver 校验 room/owner/device，幂等写入 `invalid_invocation` failed，并仅发送固定 `agent.failed` payload；transition 失败 fail closed，不泄漏原始错误。修正文案为 128 KiB。
+- 聚焦测试：Shared/Electron 71 pass / 0 fail；edu-api ChatRoomV2 services + handlers 通过；Rust 全量 443 pass / 0 fail；`gofmt -l` 无输出；`cargo fmt --check`、`git diff --check` 通过。
+- Electron `bun run typecheck`、`build:main`、`build:renderer` 均 exit 0；renderer 仅有既有 Browserslist/dynamic-import/chunk-size warnings。

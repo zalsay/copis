@@ -32,7 +32,12 @@ const invocation: ChatRoomAgentInvocation = {
   triggerMessageId: 'message-1',
   depth: 0,
   sender: { type: 'user', id: 'user-1', displayName: '主理人' },
-  messages: [],
+  messages: [{
+    messageId: 'message-1',
+    sender: { type: 'user', id: 'user-1', displayName: '主理人' },
+    text: '执行',
+    createdAt: 0,
+  }],
   receivedAt: 1,
 }
 
@@ -124,6 +129,23 @@ describe('聊天室 Rust bridge HTTP handler', () => {
     for (const body of [
       { invocationId: 'inv-legacy', roomId: 'room-1', traceId: 'trace-1', targetAgentId: 'agent-a', triggerMessageId: 'message-1', depth: 0 },
       { ...rustInvocationFixture, status: 'created' },
+    ]) {
+      const response = await handleHttpApiRequest({
+        method: 'POST',
+        path: '/api/internal/chatrooms/invocations',
+        body: JSON.stringify(body),
+      }, createDependencies({ handleChatRoomInvocation }))
+      expect(response.status).toBe(400)
+    }
+    expect(handleChatRoomInvocation).not.toHaveBeenCalled()
+  })
+
+  test('Given Rust invocation 上下文为空或 trigger/sender 不一致 When bridge 投递 Then 返回 400 且不调用 coordinator', async () => {
+    const handleChatRoomInvocation = mock(async () => 'accepted' as const)
+    for (const body of [
+      { ...invocation, messages: [] },
+      { ...invocation, messages: [{ ...invocation.messages[0]!, messageId: 'message-other' }] },
+      { ...invocation, messages: [{ ...invocation.messages[0]!, sender: { ...invocation.sender, id: 'user-2' } }] },
     ]) {
       const response = await handleHttpApiRequest({
         method: 'POST',

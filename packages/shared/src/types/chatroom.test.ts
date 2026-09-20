@@ -149,6 +149,44 @@ test('Given context optional 字段为 own undefined When 校验 Then 拒绝未�
   ).toBe(false)
 })
 
+test('Given invocation 上下文为空或未关联触发消息 When 通过 Rust bridge 校验 Then 拒绝', () => {
+  const sender = { type: 'user' as const, id: 'user-1', displayName: '主理人' }
+  const base = {
+    invocationId: 'inv-1',
+    roomId: 'room-1',
+    traceId: 'trace-1',
+    targetAgentId: 'agent-a',
+    triggerMessageId: 'message-1',
+    depth: 0,
+    sender,
+    receivedAt: 0,
+  }
+  expect(isChatRoomAgentInvocation({ ...base, messages: [] })).toBe(false)
+  expect(isChatRoomAgentInvocation({
+    ...base,
+    messages: [{ messageId: 'message-2', sender, text: '其他消息', createdAt: 0 }],
+  })).toBe(false)
+  expect(isChatRoomAgentInvocation({
+    ...base,
+    messages: [{ messageId: 'message-1', sender: { ...sender, id: 'user-2' }, text: '触发', createdAt: 0 }],
+  })).toBe(false)
+})
+
+test('Given 聊天室 Agent displayName When 校验 Then 按 trim 后 UTF-8 128 字节且拒绝所有 control', () => {
+  const sender = { type: 'user' as const, id: 'user-1', displayName: '主理人' }
+  const base = {
+    invocationId: 'inv-1', roomId: 'room-1', traceId: 'trace-1', targetAgentId: 'agent-a',
+    triggerMessageId: 'message-1', depth: 0, sender, receivedAt: 0,
+    messages: [{ messageId: 'message-1', sender, text: '触发', createdAt: 0 }],
+  }
+  expect(isChatRoomAgentInvocation({ ...base, sender: { ...sender, displayName: `  ${'界'.repeat(42)}  ` }, messages: [{ ...base.messages[0], sender: { ...sender, displayName: `  ${'界'.repeat(42)}  ` } }] })).toBe(true)
+  expect(isChatRoomAgentInvocation({ ...base, sender: { ...sender, displayName: '界'.repeat(43) }, messages: [{ ...base.messages[0], sender: { ...sender, displayName: '界'.repeat(43) } }] })).toBe(false)
+  for (const control of ['\n', '\t', '\u0000', '\u0085']) {
+    const named = { ...sender, displayName: `Agent${control}` }
+    expect(isChatRoomAgentInvocation({ ...base, sender: named, messages: [{ ...base.messages[0], sender: named }] })).toBe(false)
+  }
+})
+
 test('Given Object.prototype 被临时污染 When context 缺少 optional own 字段 Then 仍按缺失字段处理', () => {
   const pollutedKeys = ['attachmentIds', 'mentionedAgentIds', 'invocationChain'] as const
   const originalDescriptors = new Map<string, PropertyDescriptor | undefined>()
@@ -239,7 +277,12 @@ test('Given invocation 包含协议外字段 When 通过 Rust bridge 校验 Then
     triggerMessageId: 'message-1',
     depth: 0,
     sender: { type: 'user' as const, id: 'user-1', displayName: '主理人' },
-    messages: [],
+    messages: [{
+      messageId: 'message-1',
+      sender: { type: 'user' as const, id: 'user-1', displayName: '主理人' },
+      text: '触发',
+      createdAt: 0,
+    }],
     receivedAt: Date.now(),
   }
   expect(isChatRoomAgentInvocation(invocation)).toBe(true)

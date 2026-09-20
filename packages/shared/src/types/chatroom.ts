@@ -260,6 +260,16 @@ function isBoundedNonBlankText(value: unknown, maxLength: number): value is stri
   return isBoundedText(value, maxLength) && value.trim().length > 0
 }
 
+/** 聊天室 Agent 名称跨 Rust/Go/主进程的专用规则：trim 后非空、UTF-8 最多 128 字节、拒绝 Unicode Cc control。 */
+export function isChatRoomAgentDisplayName(value: unknown): value is string {
+  if (typeof value !== 'string' || value.trim().length === 0) return false
+  if (new TextEncoder().encode(value.trim()).byteLength > 128) return false
+  return !Array.from(value).some((character) => {
+    const codePoint = character.codePointAt(0)
+    return codePoint !== undefined && (codePoint <= 0x1f || (codePoint >= 0x7f && codePoint <= 0x9f))
+  })
+}
+
 function isArrayIndexKey(key: string): boolean {
   const index = Number(key)
   return Number.isSafeInteger(index) && index >= 0 && index < 2 ** 32 - 1 && String(index) === key
@@ -307,7 +317,11 @@ function isBoundedIdArray(value: unknown, maxLength: number): value is string[] 
 
 function isSender(value: unknown): value is ChatRoomSender {
   if (!isRecord(value) || !hasExactKeys(value, ['type', 'id', 'displayName'])) return false
-  return (value.type === 'user' || value.type === 'agent') && isBoundedId(value.id) && isBoundedText(value.displayName, CHATROOM_MAX_ID_LENGTH)
+  return (value.type === 'user' || value.type === 'agent') && isBoundedId(value.id) && isChatRoomAgentDisplayName(value.displayName)
+}
+
+function sameSender(left: ChatRoomSender, right: ChatRoomSender): boolean {
+  return left.type === right.type && left.id === right.id && left.displayName === right.displayName
 }
 
 /** 结构化输出必须是固定三字段对象，避免把内部字段传回聊天室。 */
@@ -371,8 +385,11 @@ export function isChatRoomAgentInvocation(value: unknown): value is ChatRoomAgen
     value.depth <= CHATROOM_MAX_DEPTH &&
     isSender(value.sender) &&
     isDenseArray(value.messages) &&
+    value.messages.length >= 1 &&
     value.messages.length <= CHATROOM_MAX_CONTEXT_MESSAGES &&
     value.messages.every((message) => isContextMessage(message)) &&
+    (value.messages[value.messages.length - 1] as ChatRoomContextMessage).messageId === value.triggerMessageId &&
+    sameSender(value.messages[value.messages.length - 1]!.sender, value.sender) &&
     isNonNegativeSafeInteger(value.receivedAt)
   )
 }
@@ -393,7 +410,7 @@ export function isProvisionChatRoomAgentInput(value: unknown): value is Provisio
   return (
     isBoundedId(value.roomId) &&
     isBoundedId(value.sourceWorkspaceId) &&
-    isBoundedNonBlankText(value.displayName, CHATROOM_MAX_ID_LENGTH) &&
+    isChatRoomAgentDisplayName(value.displayName) &&
     isBoundedId(value.channelId) &&
     hasOptionalValue(value, 'modelId', isBoundedId) &&
     hasOptionalValue(value, 'contextMessageCount', isContextMessageCount) &&
@@ -419,7 +436,7 @@ export function isUpdateChatRoomAgentInput(value: unknown): value is UpdateChatR
     hasUpdate &&
     isBoundedId(value.roomId) &&
     isBoundedId(value.roomAgentId) &&
-    hasOptionalValue(value, 'displayName', (item) => isBoundedNonBlankText(item, CHATROOM_MAX_ID_LENGTH)) &&
+    hasOptionalValue(value, 'displayName', isChatRoomAgentDisplayName) &&
     hasOptionalValue(value, 'channelId', isBoundedId) &&
     hasOptionalValue(value, 'modelId', isBoundedId) &&
     hasOptionalValue(value, 'contextMessageCount', isContextMessageCount) &&

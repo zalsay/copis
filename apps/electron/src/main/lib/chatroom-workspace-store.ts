@@ -15,6 +15,7 @@ import {
   CHATROOM_MAX_OUTPUT_TEXT_LENGTH,
   CHATROOM_MAX_TERMINAL_INVOCATIONS,
   CHATROOM_TERMINAL_RETENTION_MS,
+  isChatRoomAgentDisplayName,
   normalizeChatRoomContextMessageCount,
   type ChatRoomAgentLocalConfig,
   type ChatRoomInvocationFailureCode,
@@ -168,8 +169,8 @@ function validateAgent(value: unknown): asserts value is ChatRoomAgentLocalConfi
     ['modelId', 'skillSnapshotDigest', 'archivedAt'])) {
     throw new Error('invalid_room_config')
   }
-  if (!isPathComponent(value.roomAgentId) || typeof value.displayName !== 'string' || value.displayName.trim().length === 0
-    || value.displayName.length > CHATROOM_MAX_ID_LENGTH || !isId(value.sourceWorkspaceId) || !isId(value.sessionId)
+  if (!isPathComponent(value.roomAgentId) || !isChatRoomAgentDisplayName(value.displayName)
+    || !isId(value.sourceWorkspaceId) || !isId(value.sessionId)
     || !isId(value.channelId) || !isContextCount(value.contextMessageCount)
     || typeof value.memorySharingEnabled !== 'boolean' || typeof value.skillSharingEnabled !== 'boolean') {
     throw new Error('invalid_room_config')
@@ -328,8 +329,8 @@ export class ChatRoomWorkspaceStore {
   provisionAgent(identity: ChatRoomLocalIdentity, input: ProvisionChatRoomAgentInput): ChatRoomLocalRoomConfig {
     assertIdentity(identity)
     if (this.expectedIdentity && !identityMatches(this.expectedIdentity, identity)) throw new Error('identity_mismatch')
-    if (!isPathComponent(input.roomId) || !isId(input.sourceWorkspaceId) || typeof input.displayName !== 'string'
-      || input.displayName.trim().length === 0 || input.displayName.length > CHATROOM_MAX_ID_LENGTH || !isId(input.channelId)) {
+    if (!isPathComponent(input.roomId) || !isId(input.sourceWorkspaceId)
+      || !isChatRoomAgentDisplayName(input.displayName) || !isId(input.channelId)) {
       throw new Error('invalid_agent_input')
     }
     if (input.contextMessageCount !== undefined && !isContextCount(input.contextMessageCount)) {
@@ -368,7 +369,7 @@ export class ChatRoomWorkspaceStore {
       const sessionId = `session-${randomUUID()}`
       const agent: ChatRoomAgentLocalConfig = {
         roomAgentId,
-        displayName: input.displayName,
+        displayName: input.displayName.trim(),
         sourceWorkspaceId: input.sourceWorkspaceId,
         sessionId,
         channelId: input.channelId,
@@ -408,12 +409,12 @@ export class ChatRoomWorkspaceStore {
     const existingAgent = current.agents[index]!
     const nextAgent: ChatRoomAgentLocalConfig = { ...existingAgent }
     if (input.displayName !== undefined) {
-      if (input.displayName.trim().length === 0 || input.displayName.length > CHATROOM_MAX_ID_LENGTH) throw new Error('invalid_agent_input')
+      if (!isChatRoomAgentDisplayName(input.displayName)) throw new Error('invalid_agent_input')
       if (current.agents.some((agent, candidateIndex) => candidateIndex !== index && agent.archivedAt === undefined
         && agent.displayName.trim().toLowerCase() === input.displayName!.trim().toLowerCase())) {
         throw new Error('display_name_conflict')
       }
-      nextAgent.displayName = input.displayName
+      nextAgent.displayName = input.displayName.trim()
     }
     for (const key of ['channelId', 'modelId', 'contextMessageCount', 'memorySharingEnabled', 'skillSharingEnabled'] as const) {
       if (input[key] !== undefined) (nextAgent as unknown as Record<string, unknown>)[key] = input[key]
