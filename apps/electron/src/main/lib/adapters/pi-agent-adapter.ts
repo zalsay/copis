@@ -74,6 +74,7 @@ import { buildPiAlipayBotTools } from './pi-alipay-bot-tool'
 import { buildPiAgentMailTools } from './pi-agent-mail-tool'
 import { buildPiWorkingPaymentTools } from './pi-working-payment-tool'
 import { buildPiMemoryTools } from './pi-memory-tools'
+import { resolveMemoryPolicyForProfile } from './memory-tool-policy'
 import { buildPiImageGenerationTools } from './pi-image-generation-tool'
 import { createRustBashToolOperations, createRustFileToolOperations } from './pi-rust-file-tools'
 import { resolveDefaultPiExtensionEntries } from './pi-default-extensions'
@@ -1371,7 +1372,7 @@ export function buildBuiltinToolDefinitions(
     ] : []),
     ...buildPiMemoryTools(sdk, {
       workspaceSlug: options.memoryWorkspaceSlug ?? options.workspaceSlug,
-      memoryPolicy: options.memoryPolicy,
+      memoryPolicy: resolveMemoryPolicyForProfile(options.capabilityProfile, options.memoryPolicy),
     }),
     ...(options.capabilityProfile !== 'chatroom' && options.browserPageControl
       ? buildPiBrowserAgentTools(sdk, {

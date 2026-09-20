@@ -19,7 +19,7 @@ import type {
 } from '@copis/shared'
 import { buildPiMemoryTools } from './pi-memory-tools'
 import { runtimeMemoryApiClient as memoryApiClient } from '../memory-api-client-runtime'
-import { memoryToolNamesForPolicy } from './memory-tool-policy'
+import { memoryToolNamesForPolicy, resolveMemoryPolicyForProfile } from './memory-tool-policy'
 import { getBrowserAgentContext } from '../browser-workflow-service'
 import { renderBrowserRecording, renderBrowserSnapshot } from '../browser-page-control-service'
 import {
@@ -976,9 +976,10 @@ export async function buildPiBuiltinTools(
   // 聊天室只允许显式共享的只读 Memory。所有外部网络、浏览器、计划、协作、
   // 专家团队和图片能力都必须从这个 profile 中排除，避免普通会话配置被继承。
   if (ctx.capabilityProfile === 'chatroom') {
-    if (memoryToolNamesForPolicy(ctx.memoryPolicy ?? 'off').length > 0) {
+    const memoryPolicy = resolveMemoryPolicyForProfile('chatroom', ctx.memoryPolicy)
+    if (memoryToolNamesForPolicy(memoryPolicy).length > 0) {
       try {
-        tools.push(...buildMemoryTools(sdk, ctx))
+        tools.push(...buildMemoryTools(sdk, { ...ctx, memoryPolicy }))
       } catch (error) {
         console.error('[Pi 桥接] 注入聊天室 Memory 工具失败:', error)
       }

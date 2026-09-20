@@ -311,6 +311,24 @@ test('Given chatroom capability profile When building legacy Pi tools Then only 
   expect(result.expertTeamAvailable).toBe(false)
 })
 
+test('Given chatroom profile with missing or writable memory policy When building legacy Pi tools Then Memory stays closed', async () => {
+  const sdk = {
+    createReadToolDefinition: () => ({ name: 'Read' }),
+    createEditToolDefinition: () => ({ name: 'Edit' }),
+    createWriteToolDefinition: () => ({ name: 'Write' }),
+    defineTool: <T>(definition: T): T => definition,
+  } as unknown as typeof import('@earendil-works/pi-coding-agent')
+  for (const memoryPolicy of [undefined, 'writable'] as const) {
+    const result = await buildPiBuiltinTools(sdk, {
+      sessionId: `chatroom-memory-closed-${String(memoryPolicy)}`,
+      channelId: 'channel-1',
+      memoryPolicy,
+      capabilityProfile: 'chatroom',
+    } as any)
+    expect(result.tools.map((tool) => tool.name)).toEqual([])
+  }
+})
+
 test('Given chatroom capability profile When building RPC worker tools Then payment mail automation browser image and RealPath are absent', async () => {
   const { buildBuiltinToolDefinitions } = await import('./pi-agent-adapter')
   const sdk = {
@@ -362,6 +380,25 @@ test('Given legacy chatroom profile without Rust policy When building worker too
     capabilityProfile: 'chatroom',
   })
   expect(tools.map((tool) => tool.name)).toEqual(['memory_recall', 'memory_read'])
+})
+
+test('Given RPC chatroom profile with missing or writable memory policy When building worker tools Then Memory stays closed', async () => {
+  const { buildBuiltinToolDefinitions } = await import('./pi-agent-adapter')
+  const sdk = {
+    createReadToolDefinition: () => ({ name: 'Read' }),
+    createEditToolDefinition: () => ({ name: 'Edit' }),
+    createWriteToolDefinition: () => ({ name: 'Write' }),
+    defineTool: <T>(definition: T): T => definition,
+  } as unknown as typeof import('@earendil-works/pi-coding-agent')
+  for (const memoryPolicy of [undefined, 'writable'] as const) {
+    const tools = buildBuiltinToolDefinitions(sdk, '/tmp/chatroom/project', undefined, undefined, {
+      sessionId: `rpc-memory-closed-${String(memoryPolicy)}`,
+      useRustFileApi: true,
+      memoryPolicy,
+      capabilityProfile: 'chatroom',
+    })
+    expect(tools.map((tool) => tool.name)).toEqual(['Read', 'Edit', 'Write'])
+  }
 })
 
 test('Given chatroom resource loader profile Then project extensions are disabled while snapshot skills remain configured', async () => {
