@@ -12,11 +12,14 @@ const CLEAN_PLACEHOLDER = '[内容已清理]'
 const PATH_PLACEHOLDER = '[本地路径已隐藏]'
 const SECRET_PLACEHOLDER = '[敏感信息已隐藏]'
 const ANSI_ESCAPE = /\u001B(?:\][^\u0007]*(?:\u0007|\u001B\\)|\[[0-?]*[ -/]*[@-~])/g
-const PATH_COMPONENT = String.raw`[^\s/\\:*?"<>|\[\]]+`
+// 包裹符号不属于路径 component，作为 terminator 保留在原文中。
+const PATH_COMPONENT = String.raw`[^\s/\\:*?"'<>|\[\](){}]+`
 const PATH_DIRECTORY = `${PATH_COMPONENT}(?:[ \t]+${PATH_COMPONENT})*`
 const PATH_FILE = `(?:${PATH_COMPONENT}(?:[ \t]+${PATH_COMPONENT})*\\.${PATH_COMPONENT}|${PATH_COMPONENT})`
-const POSIX_PATH = new RegExp(`(^|[^\\w:\\]])/(?:${PATH_DIRECTORY}/)*${PATH_FILE}(?=$|[\\s,;，。！？、；：])`, 'gu')
-const WINDOWS_PATH = new RegExp(`(^|[^\\w])(?:[A-Za-z]:[\\\\/])(?:${PATH_DIRECTORY}[\\\\/])*${PATH_FILE}(?=$|[\\s,;，。！？、；：])`, 'gu')
+const PATH_TERMINATOR = String.raw`[\s,.;:!?，。！？、；："'\[\](){}]`
+const FILE_URI_PATH = new RegExp(`(file://)/(?:${PATH_DIRECTORY}/)*${PATH_FILE}(?=$|${PATH_TERMINATOR})`, 'giu')
+const POSIX_PATH = new RegExp(`(^|[^\\w:/\\]])/(?:${PATH_DIRECTORY}/)*${PATH_FILE}(?=$|${PATH_TERMINATOR})`, 'gu')
+const WINDOWS_PATH = new RegExp(`(^|[^\\w])(?:[A-Za-z]:[\\\\/])(?:${PATH_DIRECTORY}[\\\\/])*${PATH_FILE}(?=$|${PATH_TERMINATOR})`, 'gu')
 
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
@@ -34,8 +37,14 @@ function replaceKnownRoots(value: string, roots: string[]): string {
 }
 
 function replaceGenericPaths(value: string): string {
-  const windows = value.replace(WINDOWS_PATH, (match, prefix: string) => `${prefix}${PATH_PLACEHOLDER}`)
-  return windows.replace(POSIX_PATH, (match, prefix: string) => `${prefix}${PATH_PLACEHOLDER}`)
+  const replacePath = (match: string, prefix: string): string => {
+    const path = match.slice(prefix.length)
+    const trailing = path.match(/[.,;:!?，。！？、；：]+$/u)?.[0] ?? ''
+    return `${prefix}${PATH_PLACEHOLDER}${trailing}`
+  }
+  const fileUris = value.replace(FILE_URI_PATH, replacePath)
+  const windows = fileUris.replace(WINDOWS_PATH, replacePath)
+  return windows.replace(POSIX_PATH, replacePath)
 }
 
 function replaceSecrets(value: string, secrets: string[]): string {

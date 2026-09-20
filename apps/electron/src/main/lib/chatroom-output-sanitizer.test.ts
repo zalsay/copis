@@ -70,6 +70,26 @@ test('Given generic POSIX 和 Windows 绝对路径 When 清理 Then 均隐藏路
   expect(result.text).toBe('[本地路径已隐藏] 与 [本地路径已隐藏] 与 [本地路径已隐藏]')
 })
 
+test('Given 路径被引号或成对分隔符包裹 When 清理 Then 仅替换完整路径并保留外围符号', () => {
+  const result = parseAndSanitizeChatRoomAgentOutput(
+    '"/home/user/file.txt" \'/Users/张三/秘密.txt\' [C:\\Users\\Alice\\secret.txt] (/Users/张三/秘密.txt) (C:\\Users\\Alice\\secret.txt) {C:\\Users\\Alice\\secret.txt}, /home/user/file.txt.',
+    context,
+  )
+  expect(result.text).toBe(
+    '"[本地路径已隐藏]" \'[本地路径已隐藏]\' [[本地路径已隐藏]] ([本地路径已隐藏]) ([本地路径已隐藏]) {[本地路径已隐藏]}, [本地路径已隐藏].',
+  )
+  expect(result.text).not.toContain('/home/user/file.txt')
+  expect(result.text).not.toContain('/Users/张三/秘密.txt')
+  expect(result.text).not.toContain('C:\\Users\\Alice\\secret.txt')
+})
+
+test('Given 网络 URL 或 file URI When 清理 Then 不误伤 URL 且不泄漏 file 本地路径', () => {
+  expect(parseAndSanitizeChatRoomAgentOutput('https://example.com/path', context).text).toBe('https://example.com/path')
+  const fileUri = parseAndSanitizeChatRoomAgentOutput('file:///home/user/a.txt', context).text
+  expect(fileUri).toBe('file://[本地路径已隐藏]')
+  expect(fileUri).not.toContain('/home/user/a.txt')
+})
+
 test('Given 清理后只剩换行和制表符 When 上报 Then 使用非空安全占位', () => {
   expect(parseAndSanitizeChatRoomAgentOutput('\n\t\n', context).text).toBe('[内容已清理]')
 })
