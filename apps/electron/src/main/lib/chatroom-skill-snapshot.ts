@@ -1,20 +1,22 @@
 import { createHash, randomUUID } from 'node:crypto'
+import { execFileSync } from 'node:child_process'
 import {
   chmodSync,
   closeSync,
   constants,
   fstatSync,
   fsyncSync,
+  linkSync,
   lstatSync,
   mkdirSync,
   openSync,
   readSync,
   readdirSync,
+  realpathSync,
   renameSync,
   rmdirSync,
   unlinkSync,
   writeSync,
-  writeFileSync,
 } from 'node:fs'
 import { dirname, join, relative, resolve, sep } from 'node:path'
 import { getWorkspaceSkillsReadOnly } from './agent-workspace-manager'
@@ -28,12 +30,14 @@ import {
 } from './config-paths'
 import { ChatRoomWorkspaceStore } from './chatroom-workspace-store'
 import { readJsonFileSafeDetailed } from './safe-file'
+import { syncDirectoryDurable as syncDirectory, syncParentDurable as syncParent } from './durable-fs'
 
 const COMPONENT_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/
 const MAX_FILES = 10_000
 const MAX_FILE_BYTES = 16 * 1024 * 1024
 const MAX_TOTAL_BYTES = 100 * 1024 * 1024
 const JOURNAL_NAME = '.snapshot-journal.json'
+const SNAPSHOT_LOCK_NAME = '.skills-snapshot.lock'
 const NEXT_NAME_PATTERN = /^\.next-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
 const JOURNAL_PHASES = new Set(['prepared', 'current_moved', 'next_moved', 'config_persisted', 'cleanup'])
 
@@ -77,6 +81,19 @@ interface SnapshotJournal {
   phase: ChatRoomSkillSnapshotJournalPhase
 }
 
+interface SnapshotLockOwner {
+  version: 1
+  token: string
+  pid: number
+  createdAt: number
+  dev: number
+  ino: number
+}
+
+interface SnapshotLockHandle extends SnapshotLockOwner {
+  lockPath: string
+}
+
 export interface RecoverChatRoomAgentSkillSnapshotInput {
   roomId: string
   roomAgentId: string
@@ -99,6 +116,7 @@ function assertDirectory(path: string, message: string): void {
     fail(message)
   }
   if (stats.isSymbolicLink() || !stats.isDirectory()) fail(message)
+  assertWindowsNoReparse(path)
 }
 
 /** 校验从 configDir 到目标目录的每个受控组件，避免目录链路被替换。 */
@@ -131,6 +149,20 @@ function assertNotWithin(root: string, child: string, message: string): void {
     && resolve(root, relativePath) === resolve(child))) {
     fail(message)
   }
+}
+
+function readFdFully(fd: number, maxBytes: number, label: string): Buffer {
+  const chunks: Buffer[] = []
+  let total = 0
+  const chunk = Buffer.allocUnsafe(16 * 1024)
+  for (;;) {
+    const count = readSync(fd, chunk, 0, chunk.length, null)
+    if (count === 0) break
+    total += count
+    if (total > maxBytes) fail(`${label}内容过大`)
+    chunks.push(Buffer.from(chunk.subarray(0, count)))
+  }
+  return Buffer.concat(chunks, total)
 }
 
 interface DirectoryIdentity {
@@ -191,6 +223,166 @@ function compareStableText(left: string, right: string): number {
   return left.length - right.length
 }
 
+function validSnapshotLockOwner(value: unknown): value is SnapshotLockOwner {
+  if (!isPlainRecord(value)) return false
+  const keys = ['version', 'token', 'pid', 'createdAt', 'dev', 'ino']
+  const ownKeys = Reflect.ownKeys(value)
+  return ownKeys.length === keys.length
+    && ownKeys.every((key) => typeof key === 'string' && keys.includes(key))
+    && value.version === 1
+    && typeof value.token === 'string'
+    && /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(value.token)
+    && typeof value.pid === 'number' && Number.isSafeInteger(value.pid) && value.pid > 0
+    && typeof value.createdAt === 'number' && Number.isSafeInteger(value.createdAt) && value.createdAt >= 0
+    && typeof value.dev === 'number' && Number.isSafeInteger(value.dev) && value.dev >= 0
+    && typeof value.ino === 'number' && Number.isSafeInteger(value.ino) && value.ino >= 0
+}
+
+function sameSnapshotLock(left: SnapshotLockOwner, right: SnapshotLockOwner): boolean {
+  return left.token === right.token && left.pid === right.pid && left.createdAt === right.createdAt
+    && left.dev === right.dev && left.ino === right.ino
+}
+
+function snapshotLockRecord(lockPath: string): { owner: SnapshotLockOwner | null; dev: number; ino: number } | null {
+  let pathStats
+  try {
+    pathStats = lstatSync(lockPath)
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
+    throw new Error('Skill 快照同步锁不可用', { cause: error })
+  }
+  if (pathStats.isSymbolicLink() || !pathStats.isFile()) fail('Skill 快照同步锁不可用')
+  const fd = openSync(lockPath, constants.O_RDONLY | ((constants as typeof constants & { O_NOFOLLOW?: number }).O_NOFOLLOW ?? 0))
+  try {
+    const fdStats = fstatSync(fd)
+    if (!fdStats.isFile() || fdStats.dev !== pathStats.dev || fdStats.ino !== pathStats.ino) {
+      fail('Skill 快照同步锁发生变化')
+    }
+    let owner: SnapshotLockOwner | null = null
+    const raw = readFdFully(fd, 4096, 'Skill 快照同步锁')
+    if (raw.length > 0) {
+      let value: unknown
+      try { value = JSON.parse(raw.toString('utf8')) } catch { value = undefined }
+      if (value !== undefined && !validSnapshotLockOwner(value)) fail('Skill 快照同步锁元数据无效')
+      if (value !== undefined) owner = value as SnapshotLockOwner
+    }
+    if (owner && (owner.dev !== fdStats.dev || owner.ino !== fdStats.ino)) fail('Skill 快照同步锁 owner 无效')
+    return { owner, dev: fdStats.dev, ino: fdStats.ino }
+  } finally {
+    closeSync(fd)
+  }
+}
+
+function processState(pid: number): 'alive' | 'dead' | 'unknown' {
+  if (pid === process.pid) return 'alive'
+  try {
+    process.kill(pid, 0)
+    return 'alive'
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code
+    if (code === 'ESRCH') return 'dead'
+    if (code === 'EPERM') return 'alive'
+    return 'unknown'
+  }
+}
+
+function tryCreateSnapshotLock(lockPath: string): SnapshotLockHandle | null {
+  const stagingPath = `${lockPath}.${process.pid}.${randomUUID()}.staging`
+  let fd = -1
+  try {
+    fd = openSync(stagingPath,
+      constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY
+      | ((constants as typeof constants & { O_NOFOLLOW?: number }).O_NOFOLLOW ?? 0), 0o600)
+    const stats = fstatSync(fd)
+    const owner: SnapshotLockHandle = {
+      lockPath,
+      version: 1,
+      token: randomUUID(),
+      pid: process.pid,
+      createdAt: Date.now(),
+      dev: stats.dev,
+      ino: stats.ino,
+    }
+    const bytes = Buffer.from(JSON.stringify({
+      version: owner.version,
+      token: owner.token,
+      pid: owner.pid,
+      createdAt: owner.createdAt,
+      dev: owner.dev,
+      ino: owner.ino,
+    }))
+    let offset = 0
+    while (offset < bytes.length) offset += writeSync(fd, bytes, offset, bytes.length - offset)
+    fsyncSync(fd)
+    closeSync(fd)
+    fd = -1
+    try {
+      linkSync(stagingPath, lockPath)
+      syncParent(lockPath)
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'EEXIST') return null
+      throw error
+    }
+    return owner
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'EEXIST') return null
+    throw new Error('Skill 快照同步锁创建失败', { cause: error })
+  } finally {
+    if (fd >= 0) closeSync(fd)
+    try { unlinkSync(stagingPath) } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+    }
+  }
+}
+
+function reclaimSnapshotLock(lockPath: string, record: { owner: SnapshotLockOwner | null; dev: number; ino: number }): boolean {
+  const reclaimPath = `${lockPath}.reclaim-${randomUUID()}`
+  try {
+    renameSync(lockPath, reclaimPath)
+    syncParent(lockPath)
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false
+    throw new Error('Skill 快照同步锁回收失败', { cause: error })
+  }
+  try {
+    const reclaimed = snapshotLockRecord(reclaimPath)
+    if (!reclaimed || reclaimed.dev !== record.dev || reclaimed.ino !== record.ino
+      || (record.owner && (!reclaimed.owner || !sameSnapshotLock(record.owner, reclaimed.owner)))
+      || (!record.owner && reclaimed.owner)) {
+      throw new Error('Skill 快照同步锁 owner 在回收期间发生变化')
+    }
+    unlinkSync(reclaimPath)
+    syncParent(reclaimPath)
+    return true
+  } catch (error) {
+    throw new Error('Skill 快照同步锁回收失败', { cause: error })
+  }
+}
+
+function acquireSnapshotLock(lockPath: string): SnapshotLockHandle {
+  const owner = tryCreateSnapshotLock(lockPath)
+  if (owner) return owner
+  const record = snapshotLockRecord(lockPath)
+  if (!record) return acquireSnapshotLock(lockPath)
+  if (record.owner) {
+    const state = processState(record.owner.pid)
+    if (state === 'alive') fail('Skill 快照同步锁仍由活动进程持有')
+    if (state === 'unknown') fail('Skill 快照同步锁所属进程状态无法确认')
+  }
+  reclaimSnapshotLock(lockPath, record)
+  const retry = tryCreateSnapshotLock(lockPath)
+  if (retry) return retry
+  fail('Skill 快照同步锁无法取得所有权')
+}
+
+function releaseSnapshotLock(owner: SnapshotLockHandle): void {
+  const record = snapshotLockRecord(owner.lockPath)
+  if (!record || !record.owner || !sameSnapshotLock(record.owner, owner)
+    || record.dev !== owner.dev || record.ino !== owner.ino) return
+  unlinkSync(owner.lockPath)
+  syncParent(owner.lockPath)
+}
+
 function readRegularFile(
   path: string,
   expected: { dev: number; ino: number; size: number; mtimeMs: number },
@@ -221,6 +413,13 @@ function readRegularFile(
     const closed = fstatSync(fd)
     if (closed.dev !== opened.dev || closed.ino !== opened.ino || closed.size !== opened.size
       || closed.mtimeMs !== opened.mtimeMs) {
+      fail('Skill 快照文件状态发生变化')
+    }
+    const finalPathStats = lstatSync(path)
+    if (!finalPathStats.isFile() || finalPathStats.isSymbolicLink()
+      || finalPathStats.dev !== opened.dev || finalPathStats.ino !== opened.ino
+      || finalPathStats.nlink > 1 || finalPathStats.size !== opened.size
+      || finalPathStats.mtimeMs !== opened.mtimeMs) {
       fail('Skill 快照文件状态发生变化')
     }
     assertDirectoryChainStable(parentChain, 'Skill 快照源目录发生变化')
@@ -282,11 +481,51 @@ function applyReadOnly(path: string): void {
   if (stats.isSymbolicLink()) fail('Skill 快照不允许符号链接')
   if (stats.isDirectory()) {
     for (const entry of readdirSync(path)) applyReadOnly(join(path, entry))
-    chmodSync(path, 0o500)
+    setSnapshotPermissions(path, true, false)
+    syncDirectory(path)
     return
   }
   if (!stats.isFile()) fail('Skill 快照只允许普通文件和目录')
-  chmodSync(path, 0o400)
+  setSnapshotPermissions(path, false, false)
+}
+
+function assertWindowsNoReparse(path: string): void {
+  if (process.platform !== 'win32') return
+  let resolved
+  try {
+    resolved = realpathSync.native(path)
+  } catch (error) {
+    fail('Skill 快照 Windows 路径不可验证')
+  }
+  const normalize = (value: string) => value.replace(/^\\\\\?\\/, '').replace(/[\\/]+$/, '').toLowerCase()
+  if (normalize(resolved) !== normalize(resolve(path))) fail('Skill 快照拒绝 Windows reparse 路径')
+}
+
+function setWindowsAcl(path: string, directory: boolean, writable: boolean): void {
+  assertWindowsNoReparse(path)
+  const user = process.env.USERNAME
+  if (!user || /[\\/]/.test(user)) fail('Skill 快照 Windows 用户不可验证')
+  const rights = writable ? (directory ? '(OI)(CI)M' : 'M') : (directory ? '(OI)(CI)RX' : 'R')
+  try {
+    execFileSync('icacls', [
+      path,
+      '/inheritance:r',
+      '/remove:g', '*S-1-1-0',
+      '/remove:g', '*S-1-5-32-545',
+      '/grant:r', `${user}:${rights}`,
+    ], { stdio: 'ignore', windowsHide: true })
+  } catch (error) {
+    fail('Skill 快照 Windows ACL 设置失败')
+  }
+  assertWindowsNoReparse(path)
+}
+
+function setSnapshotPermissions(path: string, directory: boolean, writable: boolean): void {
+  if (process.platform === 'win32') {
+    setWindowsAcl(path, directory, writable)
+    return
+  }
+  chmodSync(path, directory ? (writable ? 0o700 : 0o500) : (writable ? 0o600 : 0o400))
 }
 
 function removeSafeTree(path: string): void {
@@ -300,13 +539,16 @@ function removeSafeTree(path: string): void {
   if (stats.isSymbolicLink()) fail('Skill 快照不允许符号链接')
   if (stats.isDirectory()) {
     // 旧快照是只读树；显式同步的清理阶段临时恢复 owner write。
-    chmodSync(path, 0o700)
+    setSnapshotPermissions(path, true, true)
     for (const entry of readdirSync(path)) removeSafeTree(join(path, entry))
     rmdirSync(path)
+    syncParent(path)
     return
   }
   if (!stats.isFile()) fail('Skill 快照清理失败')
+  setSnapshotPermissions(path, false, true)
   unlinkSync(path)
+  syncParent(path)
 }
 
 function digestRecords(records: SyncFileRecord[]): string {
@@ -350,6 +592,7 @@ function copyRecords(
       mkdirSync(target)
       assertDirectoryChainStable(parentIdentity, 'Skill 快照目标目录发生变化')
       assertDirectoryTarget(target, 'Skill 快照目标目录发生变化')
+      syncParent(target)
     } else {
       const parentIdentity = captureDirectoryChain(destinationRoot, dirname(target), 'Skill 快照目标目录发生变化')
       assertDirectoryChainStable(destinationIdentity, 'Skill 快照目标目录发生变化')
@@ -359,9 +602,38 @@ function copyRecords(
       // 读取已在收集阶段完成，写入仅使用内存中的受控 bytes。
       beforeWrite?.(target)
       assertDirectoryChainStable(parentIdentity, 'Skill 快照目标目录发生变化')
-      writeFileSync(target, record.bytes ?? Buffer.alloc(0), { mode: 0o600, flag: 'wx' })
+      const bytes = record.bytes ?? Buffer.alloc(0)
+      const noFollow = (constants as typeof constants & { O_NOFOLLOW?: number }).O_NOFOLLOW ?? 0
+      let fd = -1
+      let writtenIdentity: { dev: number; ino: number } | undefined
+      let writtenMtimeMs: number | undefined
+      try {
+        fd = openSync(target, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | noFollow, 0o600)
+        const opened = fstatSync(fd)
+        if (!opened.isFile() || opened.nlink > 1) fail('Skill 快照目标目录发生变化')
+        writtenIdentity = { dev: opened.dev, ino: opened.ino }
+        let offset = 0
+        while (offset < bytes.length) offset += writeSync(fd, bytes, offset, bytes.length - offset)
+        fsyncSync(fd)
+        const closed = fstatSync(fd)
+        if (!closed.isFile() || closed.dev !== opened.dev || closed.ino !== opened.ino
+          || closed.size !== bytes.length || closed.mtimeMs !== opened.mtimeMs) {
+          fail('Skill 快照目标目录发生变化')
+        }
+        writtenMtimeMs = closed.mtimeMs
+      } finally {
+        if (fd >= 0) closeSync(fd)
+      }
+      chmodSync(target, 0o600)
+      const targetStats = lstatSync(target)
+      if (!targetStats.isFile() || !writtenIdentity
+        || targetStats.dev !== writtenIdentity.dev || targetStats.ino !== writtenIdentity.ino
+        || targetStats.nlink > 1 || targetStats.size !== bytes.length || targetStats.mtimeMs !== writtenMtimeMs) {
+        fail('Skill 快照目标目录发生变化')
+      }
       assertRegularTarget(target, 'Skill 快照目标目录发生变化')
       assertDirectoryChainStable(parentIdentity, 'Skill 快照目标目录发生变化')
+      syncParent(target)
     }
   }
 }
@@ -440,8 +712,7 @@ function readJournal(path: string, roomId: string, roomAgentId: string): Snapsho
     fd = openSync(path, flags)
     const stats = fstatSync(fd)
     if (!stats.isFile() || stats.size > 8192) fail('Skill 快照 journal 无效')
-    const bytes = Buffer.alloc(stats.size)
-    readSync(fd, bytes, 0, bytes.length, 0)
+    const bytes = readFdFully(fd, 8192, 'Skill 快照 journal')
     const value = JSON.parse(bytes.toString('utf8')) as unknown
     validateJournal(value, roomId, roomAgentId)
     return value
@@ -455,7 +726,7 @@ function readJournal(path: string, roomId: string, roomAgentId: string): Snapsho
 
 function writeJournal(path: string, journal: SnapshotJournal): void {
   const tempPath = path + '.tmp'
-  assertJournalFile(path)
+  if (assertJournalFile(path)) fail('Skill 快照 journal 已存在')
   assertJournalFile(tempPath)
   const fsConstants = constants as typeof constants & { O_NOFOLLOW?: number }
   const flags = constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | (fsConstants.O_NOFOLLOW ?? 0)
@@ -463,12 +734,14 @@ function writeJournal(path: string, journal: SnapshotJournal): void {
   let fd = -1
   try {
     fd = openSync(tempPath, flags, 0o600)
-    writeSync(fd, bytes, 0, bytes.length, 0)
+    let offset = 0
+    while (offset < bytes.length) offset += writeSync(fd, bytes, offset, bytes.length - offset)
     fsyncSync(fd)
     closeSync(fd)
     fd = -1
     renameSync(tempPath, path)
     chmodSync(path, 0o600)
+    syncParent(path)
   } catch {
     if (fd >= 0) closeSync(fd)
     throw new Error('Skill 快照 journal 写入失败')
@@ -478,6 +751,7 @@ function writeJournal(path: string, journal: SnapshotJournal): void {
 function removeJournal(path: string): void {
   if (!assertJournalFile(path)) return
   unlinkSync(path)
+  syncParent(path)
 }
 
 function configuredSnapshotDigest(roomId: string, roomAgentId: string): string | undefined {
@@ -502,7 +776,7 @@ function configuredSnapshotDigest(roomId: string, roomAgentId: string): string |
  * 配置 digest 是提交事实：匹配目标 digest 时保留 current，否则恢复 previous
  * 或删除首次同步留下的未提交 current。
  */
-export function recoverChatRoomAgentSkillSnapshot(
+function recoverChatRoomAgentSkillSnapshotUnlocked(
   input: RecoverChatRoomAgentSkillSnapshotInput,
 ): void {
   assertComponent(input.roomId, 'roomId')
@@ -528,11 +802,15 @@ export function recoverChatRoomAgentSkillSnapshot(
   const configuredDigest = configuredSnapshotDigest(input.roomId, input.roomAgentId)
   const currentExists = existsAsDirectory(snapshotPath)
   const currentDigest = currentExists ? computeChatRoomSkillSnapshotDigest(snapshotPath) : undefined
+  const clearJournalFiles = (): void => {
+    removeJournal(journalPath)
+    if (assertJournalFile(journalPath + '.tmp')) removeJournal(journalPath + '.tmp')
+  }
   if (configuredDigest === journal.targetDigest) {
     if (!currentExists || currentDigest !== journal.targetDigest) fail('Skill 快照 journal 与配置不一致')
     removeSafeTree(nextPath)
     removeSafeTree(previousPath)
-    removeJournal(journalPath)
+    clearJournalFiles()
     return
   }
 
@@ -544,16 +822,22 @@ export function recoverChatRoomAgentSkillSnapshot(
   }
   const removeNextAndJournal = (): void => {
     removeSafeTree(nextPath)
-    removeJournal(journalPath)
+    clearJournalFiles()
   }
 
   if (journal.phase === 'prepared') {
     // marker 已写但 current 尚未移动；若 marker 写入后恰好发生了 current→previous，
     // 也可以依据受控 previous 摘要完成恢复。
     if (previousExists) {
-      if (currentExists) fail('Skill 快照 prepared 状态不一致')
       validatePrevious()
+      if (currentExists) {
+        if (currentDigest !== journal.targetDigest) fail('Skill 快照 prepared 状态不一致')
+        removeSafeTree(snapshotPath)
+      }
       restorePreviousSnapshot(previousPath, snapshotPath)
+    } else if (currentDigest === journal.targetDigest && journal.previousDigest === null) {
+      // 首次同步的 current 已经由 next rename 产生，但 marker 仍是 prepared。
+      removeSafeTree(snapshotPath)
     } else if (currentDigest !== undefined && currentDigest !== expectedPreviousDigest) {
       fail('Skill 快照 current 与配置不一致')
     } else if (currentDigest === undefined && journal.previousDigest !== null) {
@@ -564,8 +848,12 @@ export function recoverChatRoomAgentSkillSnapshot(
   }
 
   if (journal.phase === 'current_moved') {
-    if (!previousExists || currentExists) fail('Skill 快照 current_moved 状态不一致')
+    if (!previousExists) fail('Skill 快照 current_moved 状态不一致')
     validatePrevious()
+    if (currentExists) {
+      if (currentDigest !== journal.targetDigest) fail('Skill 快照 current_moved 状态不一致')
+      removeSafeTree(snapshotPath)
+    }
     restorePreviousSnapshot(previousPath, snapshotPath)
     removeNextAndJournal()
     return
@@ -601,11 +889,31 @@ export function recoverChatRoomAgentSkillSnapshot(
   removeNextAndJournal()
 }
 
-export function syncChatRoomAgentSkillSnapshot(input: SyncChatRoomAgentSkillSnapshotInput): ChatRoomSkillSnapshotResult {
+function acquireLockForInput(roomId: string, roomAgentId: string): SnapshotLockHandle {
+  const snapshotPath = getChatRoomAgentSkillsSnapshotPath(roomId, roomAgentId)
+  const parent = dirname(snapshotPath)
+  assertControlledDirectory(parent, getChatRoomsRootPath(), 'Skill 快照目录不可用')
+  return acquireSnapshotLock(join(parent, SNAPSHOT_LOCK_NAME))
+}
+
+export function recoverChatRoomAgentSkillSnapshot(
+  input: RecoverChatRoomAgentSkillSnapshotInput,
+): void {
+  assertComponent(input.roomId, 'roomId')
+  assertComponent(input.roomAgentId, 'roomAgentId')
+  const owner = acquireLockForInput(input.roomId, input.roomAgentId)
+  try {
+    recoverChatRoomAgentSkillSnapshotUnlocked(input)
+  } finally {
+    releaseSnapshotLock(owner)
+  }
+}
+
+function syncChatRoomAgentSkillSnapshotUnlocked(input: SyncChatRoomAgentSkillSnapshotInput): ChatRoomSkillSnapshotResult {
   assertComponent(input.roomId, 'roomId')
   assertComponent(input.roomAgentId, 'roomAgentId')
   assertComponent(input.sourceWorkspaceSlug, 'sourceWorkspaceSlug')
-  recoverChatRoomAgentSkillSnapshot(input)
+  recoverChatRoomAgentSkillSnapshotUnlocked(input)
 
   const sourceRoot = getWorkspaceSkillsDir(input.sourceWorkspaceSlug)
   const configDir = getConfigDir()
@@ -669,14 +977,12 @@ export function syncChatRoomAgentSkillSnapshot(input: SyncChatRoomAgentSkillSnap
     phase: 'prepared',
   }
 
-  let previousMoved = false
-  let nextMoved = false
-  let configPersisted = false
   try {
     writeJournal(journalPath, journal)
     input.testHooks?.afterJournalPhase?.(journal.phase)
     copyRecords(records, sourceRoot, nextPath, input.testHooks?.beforeWrite)
     applyReadOnly(nextPath)
+    syncDirectory(nextPath)
     removeSafeTree(previousPath)
     let currentExists = false
     try {
@@ -687,47 +993,29 @@ export function syncChatRoomAgentSkillSnapshot(input: SyncChatRoomAgentSkillSnap
     }
     if (currentExists) {
       renameSync(snapshotPath, previousPath)
-      previousMoved = true
+      syncParent(snapshotPath)
       journal.phase = 'current_moved'
-      writeJournal(journalPath, journal)
       input.testHooks?.afterJournalPhase?.(journal.phase)
     }
     renameSync(nextPath, snapshotPath)
-    nextMoved = true
+    syncParent(nextPath)
     journal.phase = 'next_moved'
-    writeJournal(journalPath, journal)
     input.testHooks?.afterJournalPhase?.(journal.phase)
-    try {
-      workspaceStore.updateAgentSkillSnapshot(input.roomId, input.roomAgentId, result)
-      configPersisted = true
-      journal.phase = 'config_persisted'
-      writeJournal(journalPath, journal)
-      input.testHooks?.afterJournalPhase?.(journal.phase)
-    } catch (error) {
-      throw error
-    }
+    workspaceStore.updateAgentSkillSnapshot(input.roomId, input.roomAgentId, result)
+    journal.phase = 'config_persisted'
+    input.testHooks?.afterJournalPhase?.(journal.phase)
     removeSafeTree(previousPath)
     journal.phase = 'cleanup'
-    writeJournal(journalPath, journal)
     input.testHooks?.afterJournalPhase?.(journal.phase)
     removeJournal(journalPath)
     return result
   } catch (error) {
-    if (configPersisted) {
-      try {
-        recoverChatRoomAgentSkillSnapshot(input)
-      } catch {
-        // journal 保留到下一次运行前恢复，避免配置与快照被静默分离。
-      }
-    } else {
-      try {
-        removeSafeTree(nextPath)
-        if (nextMoved) removeSafeTree(snapshotPath)
-        if (previousMoved) restorePreviousSnapshot(previousPath, snapshotPath)
-        removeJournal(journalPath)
-      } catch {
-        // journal 保留到下一次运行前恢复，避免配置与快照被静默分离。
-      }
+    try {
+      // 不依赖内存中的 configPersisted/rename 标志；重新读取配置、current、previous
+      // 和 journal，覆盖 update 已写入后才抛错以及 marker 落后于 FS 的窗口。
+      recoverChatRoomAgentSkillSnapshotUnlocked(input)
+    } catch {
+      // journal 保留到下一次运行前恢复，避免配置与快照被静默分离。
     }
     if (error instanceof Error && (error.message.startsWith('Skill ') || error.message.startsWith('room_') || error.message.startsWith('invalid_'))) {
       throw error
@@ -736,8 +1024,26 @@ export function syncChatRoomAgentSkillSnapshot(input: SyncChatRoomAgentSkillSnap
   }
 }
 
+export function syncChatRoomAgentSkillSnapshot(input: SyncChatRoomAgentSkillSnapshotInput): ChatRoomSkillSnapshotResult {
+  assertComponent(input.roomId, 'roomId')
+  assertComponent(input.roomAgentId, 'roomAgentId')
+  assertComponent(input.sourceWorkspaceSlug, 'sourceWorkspaceSlug')
+  const owner = acquireLockForInput(input.roomId, input.roomAgentId)
+  try {
+    return syncChatRoomAgentSkillSnapshotUnlocked(input)
+  } finally {
+    releaseSnapshotLock(owner)
+  }
+}
+
+export const __chatRoomSkillSnapshotTestHooks = {
+  acquire: (lockPath: string): SnapshotLockHandle => acquireSnapshotLock(lockPath),
+  release: (owner: SnapshotLockHandle): void => releaseSnapshotLock(owner),
+}
+
 function restorePreviousSnapshot(previousPath: string, snapshotPath: string): void {
   renameSync(previousPath, snapshotPath)
+  syncParent(snapshotPath)
   applyReadOnly(snapshotPath)
 }
 

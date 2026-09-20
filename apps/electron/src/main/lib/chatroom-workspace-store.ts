@@ -32,7 +32,7 @@ import {
   getChatRoomAgentSkillsSnapshotPath,
   getChatRoomsRootPath,
 } from './config-paths'
-import { readJsonFileSafeDetailed, writeJsonFileAtomic } from './safe-file'
+import { readJsonFileSafeDetailed, writeJsonFileAtomic, writeJsonFileAtomicDurable } from './safe-file'
 import type { ChatRoomSkillSnapshotResult } from './chatroom-skill-snapshot'
 
 interface ChatRoomWorkspaceStoreOptions {
@@ -116,7 +116,7 @@ function assertDirectory(path: string, label: string): void {
   } catch (error) {
     throw new Error(`${label}_path_unavailable`, { cause: error })
   }
-  if (!stats.isDirectory()) throw new Error(`${label}_path_not_directory`)
+  if (stats.isSymbolicLink() || !stats.isDirectory()) throw new Error(`${label}_path_not_directory`)
 }
 
 function ensureDirectory(parent: string, name: string, label: string, created?: string[]): string {
@@ -452,7 +452,7 @@ export class ChatRoomWorkspaceStore {
     const agents = [...current.agents]
     agents[index] = { ...existing, skillSnapshotDigest: result.digest }
     const next = { ...current, agents, updatedAt: this.now() }
-    this.persist(current, next)
+    this.persist(current, next, true)
     return clone(next)
   }
 
@@ -553,7 +553,7 @@ export class ChatRoomWorkspaceStore {
     return clone(normalized)
   }
 
-  private persist(previous: PersistedRoomConfig, next: PersistedRoomConfig): void {
+  private persist(previous: PersistedRoomConfig, next: PersistedRoomConfig, durable = false): void {
     validateConfig(next, next.roomId, this.expectedIdentity ?? { hostUserId: next.hostUserId, deviceId: next.deviceId })
     if (sameContent(previous, next)) return
     const roomPath = getChatRoomPath(next.roomId)
@@ -561,7 +561,8 @@ export class ChatRoomWorkspaceStore {
     this.assertAgentDirectoryTree(roomPath, next.agents)
     const configPath = getChatRoomConfigPath(next.roomId)
     this.assertConfigFiles(configPath)
-    writeJsonFileAtomic(configPath, next, false, 0o600)
+    if (durable) writeJsonFileAtomicDurable(configPath, next, 0o600)
+    else writeJsonFileAtomic(configPath, next, false, 0o600)
     assertDirectory(roomPath, '聊天室')
   }
 

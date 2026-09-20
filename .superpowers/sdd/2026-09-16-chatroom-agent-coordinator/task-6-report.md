@@ -68,3 +68,56 @@
 - 故障种子覆盖 journal 的 prepared、current_moved、next_moved（含首次同步无
   previous）和 config_persisted 提交保留路径；journal 写入失败或配置失败时保留
   可恢复状态而不静默删除旧快照。
+
+## Fix Round 2：RED / GREEN
+
+- RED：复审继续指出 journal phase 可能落后于文件系统操作、首次同步空占位目录会
+  被误当作 committed previous，跨进程同步/恢复缺少 per-room-agent ownership，且
+  文件、目录和 room.json 缺少完整的 fsync 持久化证据；Windows 不能只依赖 chmod。
+  新增 phase 落后种子、活动/ownerless/dead lock、持久化后抛错和 source/target
+  parent ABA 测试后，先观察到相应失败，再实现修复。
+- GREEN：同步和恢复现在都在 O_EXCL/owner token/pid/inode 锁内执行，活动 owner 不
+  窃取，ownerless/dead owner 仅在 inode 与 owner 再校验后回收，释放只接受自己的
+  token/inode。journal 只在 prepared marker 原子落盘一次，之后以重新读取的
+  config digest、current/previous/next 实际摘要做恢复判定，避免 Windows journal
+  覆盖窗口；覆盖 marker 写入、两次 rename、room.json durable persist、cleanup
+  之间的 phase 落后状态。首次同步的受控空占位目录不作为 previous。
+- GREEN：源文件采用 fd 循环读取并在读取前后比较 dev/ino/nlink/size/mtime，目标文件
+  采用 O_CREAT|O_EXCL|O_NOFOLLOW、循环写入、文件 fsync、fstat 与最终 lstat 比较；
+  每级父目录持续比较 dev/ino/realpath containment。目录、journal、parent 和
+  room.json 临时文件均执行可判定的 durable flush；room.json digest 只在成功 swap
+  后通过 durable atomic persist 写入。
+- GREEN：Windows 使用参数数组调用 `icacls` 设置 snapshot 树 ACL（不以 chmod 代替），
+  使用带 `FILE_FLAG_BACKUP_SEMANTICS` 的 PowerShell `FlushFileBuffers` 适配器持久化
+  目录；reparse 路径拒绝，ACL/flush 失败 fail closed。POSIX 仍验证目录 0500、文件
+  0400，同步清理只在持锁阶段暂时恢复 owner write。
+
+## Fix Round 2 验证
+
+- bun test apps/electron/src/main/lib/chatroom-skill-snapshot.test.ts：26 pass。
+- bun test apps/electron/src/main/lib/chatroom-workspace-store.test.ts：22 pass。
+- bun test apps/electron/src/main/lib/config-paths.test.ts：6 pass。
+- bun test apps/electron/src/main/lib/chatroom-hidden-session-store.test.ts：13 pass。
+- bun test apps/electron/src/main/lib/agent-rpc-runtime-context.test.ts：34 pass。
+- bun test apps/electron/src/main/lib/agent-rpc-service.test.ts：34 pass。
+- bun test apps/electron/src/main/lib/agent-workspace-manager.test.ts：33 pass，1 个
+  既有失败（MCP 保留名测试期望 `['github']`，实际仍包含内置 `copis_image`，与
+  Skill snapshot 改动无关）。
+- bun run --filter='@copis/electron' typecheck：pass。
+- bun run --filter='@copis/electron' build:main：pass。
+- bun run --filter='@copis/electron' build:renderer：pass（仅既有 Vite chunk/browserslist
+  warning）。
+- git diff --check：pass。
+
+## Fix Round 2 Rulings / 残余风险
+
+- journal 不依赖落后于 FS 的 phase 字段；物理操作后、phase 写入前的崩溃由 config
+  digest 与实际树摘要共同决定 commit/rollback。损坏 journal、异常树类型、ACL 或
+  durable flush 失败均 fail closed 并保留可恢复残留。
+- Node/Electron 当前没有 openat/handle-relative 全链路 API；dev/ino、父链、realpath
+  containment、O_NOFOLLOW、nlink 和锁已最大化检测并缩小同 UID 恶意 ABA 窗口，但无法
+  宣称等价于内核级 openat 事务。真实 Windows ACL、reparse、目录 flush 仍需 Windows
+  runner 进行最终验证；本机验证的是安全命令参数、失败即拒绝和跨平台代码路径。
+- Windows snapshot ACL 是文件工具/资源加载边界的第一层；运行时仍必须禁止 Agent
+  将 snapshot 作为写入根。由于持久化同步需要父目录创建锁和临时树，父目录级 ACL
+  的真实继承行为需要 Windows runner 复核，不把 POSIX mode 当作 Windows ACL 保证。

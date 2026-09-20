@@ -6,7 +6,22 @@
  * - 读取：主文件 → .tmp 残留 → .bak 回退，多层容错
  */
 
-import { writeFileSync, renameSync, existsSync, copyFileSync, readFileSync, unlinkSync, chmodSync } from 'node:fs'
+import {
+  chmodSync,
+  closeSync,
+  constants,
+  copyFileSync,
+  existsSync,
+  fsyncSync,
+  lstatSync,
+  openSync,
+  readFileSync,
+  renameSync,
+  unlinkSync,
+  writeFileSync,
+  writeSync,
+} from 'node:fs'
+import { syncParentDurable } from './durable-fs'
 
 /**
  * 原子写入 JSON 文件：write-to-temp → rename
@@ -36,6 +51,42 @@ export function writeJsonFileAtomic(filePath: string, data: object, skipBackup =
 	// 原子重命名（POSIX rename 是原子操作）
 	renameSync(tmpPath, filePath)
 	if (mode !== undefined) chmodSync(filePath, mode)
+}
+
+/** 聊天室提交摘要使用的持久化写入：临时文件和父目录均显式 fsync。 */
+export function writeJsonFileAtomicDurable(filePath: string, data: object, mode = 0o600): void {
+  const tmpPath = filePath + '.tmp'
+  const bakPath = filePath + '.bak'
+  if (existsSync(filePath)) {
+    copyFileSync(filePath, bakPath)
+    chmodSync(bakPath, mode)
+  }
+  let tmpStats
+  try {
+    tmpStats = lstatSync(tmpPath)
+    if (tmpStats.isSymbolicLink() || !tmpStats.isFile()) throw new Error('临时文件不是普通文件')
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw new Error('聊天室配置临时文件不可用', { cause: error })
+  }
+
+  const noFollow = (constants as typeof constants & { O_NOFOLLOW?: number }).O_NOFOLLOW ?? 0
+  const bytes = Buffer.from(JSON.stringify(data, null, 2), 'utf8')
+  let fd = -1
+  try {
+    fd = openSync(tmpPath, constants.O_CREAT | constants.O_TRUNC | constants.O_WRONLY | noFollow, mode)
+    let offset = 0
+    while (offset < bytes.length) offset += writeSync(fd, bytes, offset, bytes.length - offset)
+    fsyncSync(fd)
+    chmodSync(tmpPath, mode)
+    closeSync(fd)
+    fd = -1
+    renameSync(tmpPath, filePath)
+    chmodSync(filePath, mode)
+    syncParentDurable(filePath)
+  } catch (error) {
+    if (fd >= 0) closeSync(fd)
+    throw new Error('聊天室配置持久化失败', { cause: error })
+  }
 }
 
 /** 原子重写文本文件（用于 JSONL 会话等非单个 JSON 文档）。 */
