@@ -94,3 +94,17 @@ Task 7 的三个 load-bearing carry-over 已关闭，并完成 Task 8 parser/san
 - Copis：Shared/workspace focused tests、Rust gateway/protocol/client focused tests、`cargo fmt --check` 通过。
 - ai-education：`go test ./handlers -run 'ChatRoomV2' -count=1`、`go test ./services -run 'ChatRoomV2' -count=1` 通过。
 - 既有 sanitizer/prompt、atomic failure、room-wide transient 回归保持通过；最终 Electron typecheck/build:main/build:renderer、Rust 全套 `444 passed`、两仓 diff check 均通过。
+
+## 修复轮 3：Rust parser envelope/text budget
+
+- RED：先加入真实 `agent.completed` parser/client 回归，正文为 21,845 个 `界`（65,535 UTF-8 bytes），携带 invocationId、三项 mention IDs、附件 IDs 和 clientMessageId；frame 大于 64 KiB 且不超过 128 KiB。旧 `parse_event()` 以 `payload_too_large: chatroom event payload exceeds 64 KiB` 拒绝，`cargo test given_completed_ -- --test-threads=1` 为 `2 failed, 4 passed`（包含 production `decode_message` 链路）。
+- GREEN：`MAX_PAYLOAD_BYTES` 改为完整 envelope/frame 的 128 KiB 预算，新增 `MAX_TEXT_BYTES=64 KiB`；`content`、`delta`、`message` 及命令侧正文继续执行字段级 UTF-8 byte 上限，并对 invocation/failure/code/clientMessageId 与 mention/attachment ID 字段做边界校验。合法完整 envelope 保留 content；正文超过 64 KiB 拒绝；payload/frame 超过 128 KiB 拒绝。
+- 新增回归：`given_completed_event_with_64_kib_content_and_envelope_when_parsing_then_preserve_content`、`given_completed_frame_over_64_kib_but_under_128_kib_when_client_decodes_then_preserve_content`、`given_completed_content_over_64_kib_when_parsing_then_reject_field_without_widening_text_limit`、`given_payload_over_128_kib_when_parsing_then_reject_whole_frame`、delta 64 KiB 字段边界。`cargo test 'when_parsing_then' -- --test-threads=1` 为 `10 passed`；`cargo test -- --test-threads=1` 为 `448 passed, 0 failed`。
+- 裁定：128 KiB 只覆盖完整 Rust/Go WebSocket frame JSON envelope；业务文本仍严格 64 KiB，避免扩大总 payload 后绕过正文限制。`decode_message()` 的真实 client receive decoder 复用同一 `parse_event()`，新增回归证明合法 envelope 可达 client event。
+
+### 修复轮 3 验证与提交
+
+- Copis focused Rust：`cargo test 'completed_' -- --test-threads=1` 为 `7 passed`；protocol boundary `10 passed`；full `cargo test -- --test-threads=1` 为 `448 passed`；`cargo fmt --check`、`git diff --check` 通过。
+- Copis existing Task 8 regression：sanitizer `15/15`、prompt `32/32`、Shared `14/14`、workspace store `23/23`；`bun run typecheck`、`build:main`、`build:renderer` 均通过（保留既有 Browserslist/大 chunk warning）。
+- ai-education：`go test ./handlers -run 'ChatRoomV2' -count=1`、`go test ./services -run 'ChatRoomV2' -count=1` 均通过；本轮无 Go 文件改动、无新增提交。
+- 本轮代码提交：Copis `4c73203c`（仅三个 Rust protocol/client 文件）；保留 Copis 五个无关 dirty Rust 文件不暂存。
