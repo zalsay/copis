@@ -16,6 +16,8 @@ use std::time::{Duration, Instant};
 
 const MAX_BODY_BYTES: usize = 10 * 1024 * 1024;
 const MAX_TEXT_BYTES: usize = 64 * 1024;
+const MAX_INVOCATION_BRIDGE_BYTES: usize = 128 * 1024;
+const MAX_SAFE_INTEGER: u64 = 9_007_199_254_740_991;
 const MAX_ATTACHMENT_BYTES: u64 = 256 * 1024 * 1024;
 const MAX_QUERY_BYTES: usize = 4096;
 const SSE_CAPACITY: usize = 64;
@@ -1295,33 +1297,6 @@ impl ChatroomGateway {
             );
             return;
         };
-        let required = [
-            ("invocationId", "invocationId"),
-            ("traceId", "traceId"),
-            ("targetAgentId", "targetAgentId"),
-            ("triggerMessageId", "triggerMessageId"),
-        ];
-        let mut output = Map::new();
-        output.insert("roomId".into(), Value::String(room_id.clone()));
-        for (source, target) in required {
-            let Some(value) = object.get(source).and_then(Value::as_str) else {
-                self.publish_status(
-                    Some(room_id),
-                    "invocation_invalid",
-                    "Agent invocation 格式不正确",
-                );
-                return;
-            };
-            if !valid_component(value) || sensitive_scalar(value) {
-                self.publish_status(
-                    Some(room_id),
-                    "invocation_invalid",
-                    "Agent invocation 格式不正确",
-                );
-                return;
-            }
-            output.insert(target.into(), Value::String(value.into()));
-        }
         let Some(depth) = object.get("depth").and_then(Value::as_u64) else {
             self.publish_status(
                 Some(room_id),
@@ -1338,18 +1313,38 @@ impl ChatroomGateway {
             );
             return;
         }
-        output.insert("depth".into(), Value::from(depth));
-        if let Some(status) = object.get("status").and_then(Value::as_str) {
-            if valid_component(status) {
-                output.insert("status".into(), Value::String(status.into()));
-            }
+
+        if validate_forward_invocation_payload(object).is_err() {
+            self.publish_status(
+                Some(room_id),
+                "invocation_invalid",
+                "Agent invocation 格式不正确",
+            );
+            return;
         }
-        if let Some(status_code) = object.get("statusCode").and_then(Value::as_str) {
-            if valid_component(status_code) {
-                output.insert("statusCode".into(), Value::String(status_code.into()));
-            }
+        let mut output = Map::new();
+        output.insert("roomId".into(), Value::String(room_id.clone()));
+        for key in [
+            "invocationId",
+            "traceId",
+            "targetAgentId",
+            "triggerMessageId",
+            "depth",
+            "sender",
+            "messages",
+            "receivedAt",
+        ] {
+            output.insert(key.into(), object.get(key).cloned().unwrap_or(Value::Null));
         }
         let body = Value::Object(output).to_string().into_bytes();
+        if body.len() > MAX_INVOCATION_BRIDGE_BYTES {
+            self.publish_status(
+                Some(room_id),
+                "invocation_invalid",
+                "Agent invocation 格式不正确",
+            );
+            return;
+        }
         if self.bridge.send_invocation(body, &self.shutdown).is_err() {
             self.publish_status(Some(room_id), "bridge_unavailable", "聊天室业务桥不可用");
         }
@@ -2386,6 +2381,221 @@ fn valid_component(value: &str) -> bool {
         && !value.chars().any(|value| {
             value.is_control() || value.is_whitespace() || matches!(value, '/' | '?' | '#' | '\\')
         })
+}
+
+fn validate_forward_invocation_payload(object: &Map<String, Value>) -> Result<(), ()> {
+    let required = [
+        "invocationId",
+        "traceId",
+        "targetAgentId",
+        "triggerMessageId",
+        "depth",
+        "sender",
+        "messages",
+        "receivedAt",
+    ];
+    if object.keys().any(|key| !required.contains(&key.as_str()))
+        || required.iter().any(|key| !object.contains_key(*key))
+    {
+        return Err(());
+    }
+    for (key, max) in [
+        ("invocationId", 64usize),
+        ("targetAgentId", 64),
+        ("triggerMessageId", 64),
+    ] {
+        if !object
+            .get(key)
+            .and_then(Value::as_str)
+            .is_some_and(|value| valid_invocation_id(value, max))
+        {
+            return Err(());
+        }
+    }
+    if !object
+        .get("traceId")
+        .and_then(Value::as_str)
+        .is_some_and(|value| valid_invocation_id(value, 128))
+    {
+        return Err(());
+    }
+    let Some(depth) = object.get("depth").and_then(Value::as_u64) else {
+        return Err(());
+    };
+    if depth > 3 {
+        return Err(());
+    }
+    let Some(sender) = object.get("sender").and_then(Value::as_object) else {
+        return Err(());
+    };
+    if sender
+        .keys()
+        .any(|key| !["type", "id", "displayName"].contains(&key.as_str()))
+        || ["type", "id", "displayName"]
+            .iter()
+            .any(|key| !sender.contains_key(*key))
+        || !sender
+            .get("type")
+            .and_then(Value::as_str)
+            .is_some_and(|value| value == "user" || value == "agent")
+        || !sender
+            .get("id")
+            .and_then(Value::as_str)
+            .is_some_and(|value| valid_invocation_id(value, 64))
+        || !sender
+            .get("displayName")
+            .and_then(Value::as_str)
+            .is_some_and(valid_invocation_display_name)
+    {
+        return Err(());
+    }
+    let Some(messages) = object.get("messages").and_then(Value::as_array) else {
+        return Err(());
+    };
+    if messages.is_empty() || messages.len() > 200 {
+        return Err(());
+    }
+    for message in messages {
+        let Some(message) = message.as_object() else {
+            return Err(());
+        };
+        if message.keys().any(|key| {
+            ![
+                "messageId",
+                "sender",
+                "text",
+                "createdAt",
+                "attachmentIds",
+                "mentionedAgentIds",
+                "invocationChain",
+            ]
+            .contains(&key.as_str())
+        }) || ["messageId", "sender", "text", "createdAt"]
+            .iter()
+            .any(|key| !message.contains_key(*key))
+        {
+            return Err(());
+        }
+        if !message
+            .get("messageId")
+            .and_then(Value::as_str)
+            .is_some_and(|value| valid_invocation_id(value, 64))
+            || !message
+                .get("text")
+                .and_then(Value::as_str)
+                .is_some_and(valid_text)
+            || !message
+                .get("createdAt")
+                .and_then(Value::as_u64)
+                .is_some_and(|value| value <= MAX_SAFE_INTEGER)
+        {
+            return Err(());
+        }
+        let Some(message_sender) = message.get("sender").and_then(Value::as_object) else {
+            return Err(());
+        };
+        if message_sender
+            .keys()
+            .any(|key| !["type", "id", "displayName"].contains(&key.as_str()))
+            || ["type", "id", "displayName"]
+                .iter()
+                .any(|key| !message_sender.contains_key(*key))
+            || !message_sender
+                .get("type")
+                .and_then(Value::as_str)
+                .is_some_and(|value| value == "user" || value == "agent")
+            || !message_sender
+                .get("id")
+                .and_then(Value::as_str)
+                .is_some_and(|value| valid_invocation_id(value, 64))
+            || !message_sender
+                .get("displayName")
+                .and_then(Value::as_str)
+                .is_some_and(valid_invocation_display_name)
+        {
+            return Err(());
+        }
+        for (key, max) in [("attachmentIds", 20usize), ("mentionedAgentIds", 3)] {
+            if let Some(value) = message.get(key) {
+                let Some(items) = value.as_array() else {
+                    return Err(());
+                };
+                if items.len() > max
+                    || items.iter().any(|item| {
+                        item.as_str()
+                            .is_none_or(|value| !valid_invocation_id(value, 64))
+                    })
+                {
+                    return Err(());
+                }
+            }
+        }
+        if let Some(value) = message.get("invocationChain") {
+            let Some(entries) = value.as_array() else {
+                return Err(());
+            };
+            if entries.len() > 3 {
+                return Err(());
+            }
+            for entry in entries {
+                let Some(entry) = entry.as_object() else {
+                    return Err(());
+                };
+                if entry
+                    .keys()
+                    .any(|key| !["agentId", "invocationId"].contains(&key.as_str()))
+                    || ["agentId", "invocationId"]
+                        .iter()
+                        .any(|key| !entry.contains_key(*key))
+                    || !entry
+                        .get("agentId")
+                        .and_then(Value::as_str)
+                        .is_some_and(|value| valid_invocation_id(value, 64))
+                    || !entry
+                        .get("invocationId")
+                        .and_then(Value::as_str)
+                        .is_some_and(|value| valid_invocation_id(value, 64))
+                {
+                    return Err(());
+                }
+            }
+        }
+    }
+    let Some(last_message) = messages.last().and_then(Value::as_object) else {
+        return Err(());
+    };
+    if last_message.get("messageId") != object.get("triggerMessageId")
+        || last_message.get("sender") != object.get("sender")
+    {
+        return Err(());
+    }
+    if !object
+        .get("receivedAt")
+        .and_then(Value::as_u64)
+        .is_some_and(|value| value <= MAX_SAFE_INTEGER)
+    {
+        return Err(());
+    }
+    Ok(())
+}
+
+fn valid_invocation_id(value: &str, max_bytes: usize) -> bool {
+    !value.is_empty()
+        && value.trim() == value
+        && value.len() <= max_bytes
+        && !sensitive_scalar(value)
+        && !value.chars().any(|character| {
+            character.is_control()
+                || character.is_whitespace()
+                || matches!(character, '/' | '?' | '#' | '\\')
+        })
+}
+
+fn valid_invocation_display_name(value: &str) -> bool {
+    !value.is_empty()
+        && value.trim() == value
+        && value.len() <= 128
+        && !value.chars().any(|character| character.is_control())
 }
 
 fn valid_member_id(value: &str) -> bool {

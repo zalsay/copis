@@ -101,3 +101,23 @@ Reviewer 指出的边界已在本轮修复：
 - callback 结果运行时只接受 `accepted`/`duplicate`；callback/协调器异常统一为固定 `chatroom_coordinator_failed` 中文响应，详细异常仅经 `redactSensitiveLogValue` 写日志。
 
 本轮 RED 由 exact body、resolver fail-closed、注册 token、未知 callback 状态及敏感错误响应测试证明；GREEN 聚焦验证为：client 10 pass、handler 12 pass、coordinator scaffold 2 pass、Electron typecheck pass。提交 hash 由本轮独立 commit 记录在交付消息中。
+
+## Fix Round 4 — edu-api / Rust / Electron full invocation contract
+
+### RED
+
+- edu-api 先新增 `BuildAgentInvocationPayload` 契约测试；在 builder 尚不存在时编译失败，证明测试要求的是独立公开 DTO，而不是数据库 invocation 的 JSON 映射。
+- Rust gateway 先把测试 fixture 改为真实完整 payload；旧转发实现缺少 `sender`/`messages`/`receivedAt`，完整 fixture 断言失败，legacy/minimal fixture 仍错误进入 bridge。
+
+### GREEN
+
+- edu-api 新增 wire-only payload builder：事务提交后的消息表按 trigger seq 截断，最多保留 200 条并按 oldest-to-newest 排序，触发消息始终位于末尾；上下文超过 120 KiB 时从最早消息裁剪，保留触发消息；用户显示名采用稳定的 `用户#<memberId>` 非敏感 fallback，Agent 显示名来自房间 Agent 记录（包含软删除历史记录）。HTTP `deliverInvocations` 与 WebSocket `publishMessageResult` 复用同一个 builder helper。
+- Rust gateway 仅接收严格 allowlist 的完整 invocation DTO，校验 sender/messages/receivedAt、上下文字段、控制字符、字节上限、safe integer 及 sender/trigger 关系；输出只增加 envelope `roomId`，不转发 status/statusCode 或任意内部字段。bridge body 使用 128 KiB 专用上限。
+- Electron handler 测试加入 Rust 完整序列化 fixture，并拒绝 legacy/minimal/status-bearing payload。
+
+### 聚焦验证
+
+- edu-api services ChatRoomV2：通过；新增 invocation payload 契约、Agent next-hop、软删除历史 Agent、200 条上下文、近 64 KiB 文本及 oldest-first trimming 场景通过。
+- edu-api handlers ChatRoomV2：通过；HTTP 与 WebSocket 两条投递路径均验证完整 payload。
+- Rust gateway：55/55；Rust protocol：28/28；`cargo fmt --check` 通过。
+- Electron：Rust client 17/17、HTTP handler 16/16、coordinator scaffold 2/2、shared chatroom 11/11；typecheck、build:main、build:renderer 通过。

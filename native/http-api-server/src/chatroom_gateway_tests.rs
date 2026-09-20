@@ -439,7 +439,9 @@ fn invocation(room: &str, invocation_id: &str) -> ChatroomEvent {
             "targetAgentId": "agent-1",
             "triggerMessageId": "message-1",
             "depth": 1,
-            "status": "pending"
+            "sender": {"type":"user","id":"7","displayName":"用户#7"},
+            "messages": [{"messageId":"message-1","sender":{"type":"user","id":"7","displayName":"用户#7"},"text":"hello","createdAt":1000}],
+            "receivedAt": 2000
         }),
     }
 }
@@ -1065,9 +1067,10 @@ fn given_agent_invocation_when_upstream_event_arrives_then_forward_only_sanitize
         room_id: "room-1".into(),
         payload: json!({
             "invocationId":"inv-1", "traceId":"trace-1", "targetAgentId":"agent-1",
-            "triggerMessageId":"msg-1", "depth":1, "status":"pending",
-            "context":{"memory":"private", "skill":"private", "localPath":"/Users/private"},
-            "accessToken":"jwt"
+            "triggerMessageId":"msg-1", "depth":1,
+            "sender":{"type":"user","id":"7","displayName":"用户#7"},
+            "messages":[{"messageId":"msg-1","sender":{"type":"user","id":"7","displayName":"用户#7"},"text":"hello","createdAt":1000}],
+            "receivedAt":2000
         }),
     });
     let body = bridge.invocations.lock().unwrap().first().cloned().unwrap();
@@ -1075,8 +1078,32 @@ fn given_agent_invocation_when_upstream_event_arrives_then_forward_only_sanitize
     assert_eq!(value["roomId"], "room-1");
     assert_eq!(value["invocationId"], "inv-1");
     assert_eq!(value["depth"], 1);
+    assert_eq!(value["sender"]["type"], "user");
+    assert_eq!(value["messages"][0]["messageId"], "msg-1");
+    assert_eq!(value["receivedAt"], 2000);
+    assert!(value.get("status").is_none());
+    assert!(value.get("statusCode").is_none());
     assert!(value.get("context").is_none());
     assert!(value.get("accessToken").is_none());
+}
+
+#[test]
+fn given_legacy_or_malformed_agent_invocation_when_upstream_event_arrives_then_bridge_is_not_called(
+) {
+    for payload in [
+        json!({"invocationId":"inv-legacy","traceId":"trace","targetAgentId":"agent","triggerMessageId":"msg","depth":0}),
+        json!({"invocationId":"inv-bad","traceId":"trace","targetAgentId":"agent","triggerMessageId":"msg","depth":0,"sender":{"type":"user","id":"7","displayName":"user"},"messages":[{"messageId":"msg","sender":{"type":"user","id":"7","displayName":"user"},"text":"bad\u{0001}","createdAt":1}],"receivedAt":2}),
+        json!({"invocationId":"inv-mismatch","traceId":"trace","targetAgentId":"agent","triggerMessageId":"msg-expected","depth":0,"sender":{"type":"user","id":"7","displayName":"user"},"messages":[{"messageId":"msg-other","sender":{"type":"user","id":"7","displayName":"user"},"text":"hello","createdAt":1}],"receivedAt":2}),
+        json!({"invocationId":"inv-sender-mismatch","traceId":"trace","targetAgentId":"agent","triggerMessageId":"msg","depth":0,"sender":{"type":"user","id":"7","displayName":"user"},"messages":[{"messageId":"msg","sender":{"type":"agent","id":"agent","displayName":"Agent"},"text":"hello","createdAt":1}],"receivedAt":2}),
+    ] {
+        let bridge = Arc::new(FakeBridge::default());
+        let gateway = gateway(Arc::new(FakeTransport::default()), bridge.clone());
+        gateway.publish_event_for_test(ChatroomEvent::AgentInvocation {
+            room_id: "room-1".into(),
+            payload,
+        });
+        assert!(bridge.invocations.lock().unwrap().is_empty());
+    }
 }
 
 #[test]

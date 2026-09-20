@@ -36,6 +36,19 @@ const invocation: ChatRoomAgentInvocation = {
   receivedAt: 1,
 }
 
+const rustInvocationFixture: ChatRoomAgentInvocation = {
+  ...invocation,
+  sender: { type: 'user', id: '7', displayName: '用户#7' },
+  messages: [{
+    messageId: 'message-1',
+    sender: { type: 'user', id: '7', displayName: '用户#7' },
+    text: 'hello',
+    createdAt: 1000,
+    mentionedAgentIds: ['agent-a'],
+  }],
+  receivedAt: 2000,
+}
+
 function createDependencies(overrides: Partial<HttpApiDependencies> = {}): HttpApiDependencies {
   return {
     getWorkingClient: (() => ({ baseUrl: 'https://backend.example.test' })) as unknown as HttpApiDependencies['getWorkingClient'],
@@ -57,6 +70,18 @@ describe('聊天室 Rust bridge HTTP handler', () => {
     expect(response).toEqual({ status: 202, body: { status: 'accepted' } })
     expect(handleChatRoomInvocation).toHaveBeenCalledWith(invocation)
     expect(handleChatRoomInvocation).toHaveBeenCalledTimes(1)
+  })
+
+  test('Given Rust full invocation serialization When bridge 投递 Then strict DTO reaches coordinator unchanged', async () => {
+    const handleChatRoomInvocation = mock(async () => 'accepted' as const)
+    const response = await handleHttpApiRequest({
+      method: 'POST',
+      path: '/api/internal/chatrooms/invocations',
+      body: JSON.stringify(rustInvocationFixture),
+    }, createDependencies({ handleChatRoomInvocation }))
+
+    expect(response).toEqual({ status: 202, body: { status: 'accepted' } })
+    expect(handleChatRoomInvocation).toHaveBeenCalledWith(rustInvocationFixture)
   })
 
   test('Given coordinator 判断重复 invocation When Rust bridge 投递 Then 返回 duplicate 200', async () => {
@@ -91,6 +116,22 @@ describe('聊天室 Rust bridge HTTP handler', () => {
     }, createDependencies({ handleChatRoomInvocation }))
 
     expect(response).toEqual({ status: 400, body: { code: 'invalid_chatroom_invocation', error: '聊天室调用参数不正确' } })
+    expect(handleChatRoomInvocation).not.toHaveBeenCalled()
+  })
+
+  test('Given legacy minimal or status-bearing invocation When bridge 投递 Then strict DTO rejects before coordinator', async () => {
+    const handleChatRoomInvocation = mock(async () => 'accepted' as const)
+    for (const body of [
+      { invocationId: 'inv-legacy', roomId: 'room-1', traceId: 'trace-1', targetAgentId: 'agent-a', triggerMessageId: 'message-1', depth: 0 },
+      { ...rustInvocationFixture, status: 'created' },
+    ]) {
+      const response = await handleHttpApiRequest({
+        method: 'POST',
+        path: '/api/internal/chatrooms/invocations',
+        body: JSON.stringify(body),
+      }, createDependencies({ handleChatRoomInvocation }))
+      expect(response.status).toBe(400)
+    }
     expect(handleChatRoomInvocation).not.toHaveBeenCalled()
   })
 
