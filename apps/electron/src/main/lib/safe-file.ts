@@ -253,7 +253,7 @@ function createRecoveryOwner(filePath: string, parentChain: readonly ParentIdent
   }
 }
 
-function parseRecoveryEnvelope(filePath: string, maxBytes = CHATROOM_RECOVERY_ENVELOPE_MAX_BYTES): { envelope: RecoveryEnvelope; identity: FileIdentity } | undefined {
+function parseRecoveryEnvelope(filePath: string, maxBytes?: number): { envelope: RecoveryEnvelope; identity: FileIdentity } | undefined {
   const candidate = readRegularTextNoFollow(filePath, maxBytes)
   if (!candidate) return undefined
   try {
@@ -270,24 +270,34 @@ function parseRecoveryEnvelope(filePath: string, maxBytes = CHATROOM_RECOVERY_EN
   }
 }
 
+function recoveryEnvelopeMaxBytes(maxBytes: number | undefined): number | undefined {
+  return maxBytes === undefined ? undefined : maxBytes * 6 + 4096
+}
+
 function sameFileIdentity(left: FileIdentity, right: FileIdentity): boolean {
   return left.dev === right.dev && left.ino === right.ino && left.size === right.size && left.mtimeMs === right.mtimeMs
 }
 
 /** 只在 owner 文件两次 no-follow/fd 校验一致时读取当前 token 的受控槽位。 */
-function readTrustedRecoveryEnvelopes(filePath: string): { envelope: RecoveryEnvelope; identity: FileIdentity }[] {
+function readTrustedRecoveryEnvelopes(filePath: string, maxBytes?: number): { envelope: RecoveryEnvelope; identity: FileIdentity }[] {
   const ownerPath = recoveryOwnerPath(filePath)
   const owner = parseRecoveryOwner(ownerPath)
   if (!owner) return []
+  const envelopeMaxBytes = recoveryEnvelopeMaxBytes(maxBytes)
+  const payloadWithinLimit = (candidate: { envelope: RecoveryEnvelope; identity: FileIdentity }): boolean => (
+    maxBytes === undefined || Buffer.byteLength(candidate.envelope.payload, 'utf8') <= maxBytes
+  )
   const tokenScopedSlots = recoverySlotPaths(filePath, owner.token)
-    .map((path) => parseRecoveryEnvelope(path))
+    .map((path) => parseRecoveryEnvelope(path, envelopeMaxBytes))
     .filter((candidate): candidate is { envelope: RecoveryEnvelope; identity: FileIdentity } => candidate !== undefined)
     .filter((candidate) => candidate.envelope.ownerToken === owner.token)
+    .filter(payloadWithinLimit)
   // 新版本 token-scoped 槽位优先；只有没有可信新槽位时才兼容旧版固定名称。
   const legacySlots = legacyRecoverySlotPaths(filePath)
-    .map((path) => parseRecoveryEnvelope(path))
+    .map((path) => parseRecoveryEnvelope(path, envelopeMaxBytes))
     .filter((candidate): candidate is { envelope: RecoveryEnvelope; identity: FileIdentity } => candidate !== undefined)
     .filter((candidate) => candidate.envelope.ownerToken === owner.token)
+    .filter(payloadWithinLimit)
   const confirmedOwner = parseRecoveryOwner(ownerPath)
   if (!confirmedOwner || confirmedOwner.token !== owner.token || !sameFileIdentity(owner.identity, confirmedOwner.identity)) {
     return []
@@ -307,8 +317,17 @@ function installRecoveryBackup(
   const source = readRegularTextNoFollow(filePath, maxBytes)
   if (!source) throw new Error('聊天室配置源文件不可用')
   const envelopeMaxBytes = maxBytes === undefined
-    ? CHATROOM_RECOVERY_ENVELOPE_MAX_BYTES
-    : maxBytes * 6 + 4096
+    ? Math.max(
+        CHATROOM_RECOVERY_ENVELOPE_MAX_BYTES,
+        Buffer.byteLength(JSON.stringify({
+          version: RECOVERY_VERSION,
+          ownerToken: owner.token,
+          generation: Number.MAX_SAFE_INTEGER,
+          payload: source.raw,
+          digest: '0'.repeat(64),
+        }), 'utf8') + 1024,
+      )
+    : recoveryEnvelopeMaxBytes(maxBytes)!
   const slots = recoverySlotPaths(filePath, owner.token)
     .map((path) => ({ path, candidate: parseRecoveryEnvelope(path, envelopeMaxBytes) }))
   const owned = slots.filter((slot) => slot.candidate?.envelope.ownerToken === owner.token)
@@ -331,7 +350,7 @@ function installRecoveryBackup(
   try {
     assertParentChainStable(parentChain)
     if (target.candidate) {
-      const current = parseRecoveryEnvelope(target.path)
+      const current = parseRecoveryEnvelope(target.path, envelopeMaxBytes)
       if (!current || current.envelope.ownerToken !== owner.token || current.identity.dev !== target.candidate.identity.dev
         || current.identity.ino !== target.candidate.identity.ino) throw new Error('聊天室配置备份槽位发生变化')
       unlinkSync(target.path)
@@ -349,7 +368,7 @@ function installRecoveryBackup(
       throw new Error('聊天室配置备份槽位发生变化')
     }
     unlinkSync(tempPath)
-    const committed = parseRecoveryEnvelope(target.path)
+    const committed = parseRecoveryEnvelope(target.path, envelopeMaxBytes)
     if (!committed || committed.identity.dev !== tempIdentity.dev || committed.identity.ino !== tempIdentity.ino
       || committed.envelope.generation !== generation || committed.envelope.ownerToken !== owner.token) {
       throw new Error('聊天室配置备份槽位发生变化')
@@ -681,7 +700,7 @@ export function readJsonFileSafeDetailed<T>(
   }
 
   // 3. 先选择经过 envelope、摘要和代次校验的受控 previous。
-  const controlledCandidates = readTrustedRecoveryEnvelopes(filePath)
+  const controlledCandidates = readTrustedRecoveryEnvelopes(filePath, options?.maxBytes)
     .sort((left, right) => right.envelope.generation - left.envelope.generation)
   if (controlledCandidates.length > 0) {
     try {

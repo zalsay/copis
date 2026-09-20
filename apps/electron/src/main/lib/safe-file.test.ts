@@ -39,12 +39,16 @@ function legacyRecoverySlotPath(file: string, suffix: 'a' | 'b'): string {
 
 function writeRecoveryEnvelope(path: string, ownerToken: string, generation: number, payload: object): void {
   const encoded = JSON.stringify(payload)
+  writeRawRecoveryEnvelope(path, ownerToken, generation, encoded)
+}
+
+function writeRawRecoveryEnvelope(path: string, ownerToken: string, generation: number, payload: string): void {
   writeFileSync(path, JSON.stringify({
     version: 1,
     ownerToken,
     generation,
-    payload: encoded,
-    digest: createHash('sha256').update(encoded, 'utf8').digest('hex'),
+    payload,
+    digest: createHash('sha256').update(payload, 'utf8').digest('hex'),
   }))
 }
 
@@ -295,6 +299,74 @@ describe('聊天室 durable JSON writer', () => {
     const result = readJsonFileSafeDetailed(file)
     expect(result.value).toBeNull()
     expect(result.status).toBe('corrupt')
+  })
+
+  test('Given token-scoped recovery envelope 的 payload 超过聊天室上限但仅由空白填充 When 主文件损坏 Then 拒绝恢复且不提升主文件', () => {
+    const file = join(root, 'room-token-oversized-payload.json')
+    const token = '11111111-1111-4111-8111-111111111111'
+    const payloadPrefix = '{"value":"ok"}'
+    const payload = `${payloadPrefix}${' '.repeat(CHATROOM_CONFIG_MAX_BYTES - Buffer.byteLength(payloadPrefix) + 1)}`
+    writeFileSync(`${file}.bak-recovery-owner`, JSON.stringify({ token }))
+    writeRawRecoveryEnvelope(recoverySlotPath(file, token, 'a'), token, 1, payload)
+    writeFileSync(file, '{broken')
+
+    const result = readJsonFileSafeDetailed<{ value: string }>(file, '聊天室配置', {
+      maxBytes: CHATROOM_CONFIG_MAX_BYTES,
+    })
+
+    expect(result).toEqual({ value: null, status: 'corrupt' })
+    expect(readFileSync(file, 'utf8')).toBe('{broken')
+  })
+
+  test('Given legacy recovery envelope 的 payload 超过聊天室上限但仅由空白填充 When 主文件损坏 Then 拒绝恢复且不提升主文件', () => {
+    const file = join(root, 'room-legacy-oversized-payload.json')
+    const token = '11111111-1111-4111-8111-111111111111'
+    const payloadPrefix = '{"value":"legacy"}'
+    const payload = `${payloadPrefix}${' '.repeat(CHATROOM_CONFIG_MAX_BYTES - Buffer.byteLength(payloadPrefix) + 1)}`
+    writeFileSync(`${file}.bak-recovery-owner`, JSON.stringify({ token }))
+    writeRawRecoveryEnvelope(legacyRecoverySlotPath(file, 'a'), token, 1, payload)
+    writeFileSync(file, '{broken')
+
+    const result = readJsonFileSafeDetailed<{ value: string }>(file, '聊天室配置', {
+      maxBytes: CHATROOM_CONFIG_MAX_BYTES,
+    })
+
+    expect(result).toEqual({ value: null, status: 'corrupt' })
+    expect(readFileSync(file, 'utf8')).toBe('{broken')
+  })
+
+  test('Given 超限 controlled recovery envelope 与合法 canonical bak 并存 When 主文件损坏 Then 回退 canonical', () => {
+    const file = join(root, 'room-oversized-payload-canonical-fallback.json')
+    const token = '11111111-1111-4111-8111-111111111111'
+    const payloadPrefix = '{"value":"oversized"}'
+    const payload = `${payloadPrefix}${' '.repeat(CHATROOM_CONFIG_MAX_BYTES - Buffer.byteLength(payloadPrefix) + 1)}`
+    writeFileSync(`${file}.bak-recovery-owner`, JSON.stringify({ token }))
+    writeRawRecoveryEnvelope(recoverySlotPath(file, token, 'a'), token, 1, payload)
+    writeFileSync(`${file}.bak`, JSON.stringify({ value: 'canonical' }))
+    writeFileSync(file, '{broken')
+
+    const result = readJsonFileSafeDetailed<{ value: string }>(file, '聊天室配置', {
+      maxBytes: CHATROOM_CONFIG_MAX_BYTES,
+    })
+
+    expect(result).toEqual({ value: { value: 'canonical' }, status: 'recovered' })
+    expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual({ value: 'canonical' })
+  })
+
+  test('Given token-scoped recovery envelope 的 payload 恰好达到聊天室上限 When 主文件损坏 Then 正常恢复', () => {
+    const file = join(root, 'room-boundary-recovery-payload.json')
+    const token = '11111111-1111-4111-8111-111111111111'
+    const payloadPrefix = '{"value":"boundary"}'
+    const payload = `${payloadPrefix}${' '.repeat(CHATROOM_CONFIG_MAX_BYTES - Buffer.byteLength(payloadPrefix))}`
+    writeFileSync(`${file}.bak-recovery-owner`, JSON.stringify({ token }))
+    writeRawRecoveryEnvelope(recoverySlotPath(file, token, 'a'), token, 1, payload)
+    writeFileSync(file, '{broken')
+
+    const result = readJsonFileSafeDetailed<{ value: string }>(file, '聊天室配置', {
+      maxBytes: CHATROOM_CONFIG_MAX_BYTES,
+    })
+
+    expect(result).toEqual({ value: { value: 'boundary' }, status: 'recovered' })
   })
 
   test('Given legacy recovery slot 但 owner 缺失、损坏或符号链接 When 主文件损坏 Then 不信任 legacy', () => {

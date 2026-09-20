@@ -270,3 +270,36 @@
   API 限制；现有 owner/token/inode/no-follow 校验仍保持 fail closed 取向。
 - 真实 Windows ACL、reparse、目录 flush 和 rename replace 语义仍需 Windows runner；
   本轮没有扩大平台测试范围。
+
+## Fix Round 9：Recovery envelope payload 上限
+
+- RED：新增 token-scoped、legacy、canonical fallback 和恰好边界的 BDD 后，
+  `safe-file.test.ts` 首次执行为 22 pass / 3 fail；合法 owner/token/digest 下，
+  payload 原始 UTF-8 字节超过 2 MiB 但主要由 JSON 空白组成时，原实现仍会从受控槽位
+  恢复并提升主文件。
+- GREEN：`readTrustedRecoveryEnvelopes()` 接收调用方 `maxBytes`，token-scoped 和
+  legacy candidate 在信任及 generation 排序前均校验 `Buffer.byteLength(payload,
+  'utf8') <= maxBytes`。超限 candidate 被视为不可信，不会 promotion；存在合法
+  canonical `.bak` 时继续回退，只有超限受控槽时返回 `corrupt`，恰好达到边界仍可恢复。
+- GREEN：`installRecoveryBackup()` 的初次枚举、替换前复核和安装后复核统一传递同一
+  `envelopeMaxBytes`。省略 `maxBytes` 的通用 durable writer 根据实际 source 的
+  serialized envelope 动态派生上限，并保持通用 reader 不受聊天室 2 MiB payload 限制。
+
+## Fix Round 9 验证
+
+- RED：`bun test apps/electron/src/main/lib/safe-file.test.ts`：22 pass / 3 fail。
+- GREEN：`bun test apps/electron/src/main/lib/safe-file.test.ts`：25 pass / 0 fail；
+  `chatroom-skill-snapshot.test.ts` 独立 Bun 进程连续 10 次，每次 32 pass / 0 fail；
+  `chatroom-workspace-store.test.ts`：22 pass；`durable-fs.test.ts`：3 pass；
+  `agent-rpc-runtime-context.test.ts`：5 pass；`agent-rpc-service.test.ts`：34 pass；
+  `packages/shared/src/types/chatroom.test.ts`：11 pass。
+- GREEN：Electron `typecheck`、`build:main`、`build:renderer` 均通过；renderer 仅有
+  既有 Browserslist、动态导入和 chunk size warning；`git diff --check cc9757c1..HEAD`
+  与 `git diff --check` 均通过。
+
+## Fix Round 9 残余风险
+
+- 真实 Windows ACL、reparse、目录 flush 和 rename replace 语义仍需 Windows runner；
+  本轮没有扩大平台测试范围。
+- Node/Electron 仍缺少 openat/目录句柄级全链路事务 API，同 UID 纳秒级 ABA 竞态仍是
+  已知 residual；现有 no-follow、owner/token、inode 和父链校验保持 fail closed 取向。
