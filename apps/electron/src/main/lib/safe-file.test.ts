@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
-import { existsSync, lstatSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, lstatSync, mkdirSync, readFileSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { writeJsonFileAtomicDurable } from './safe-file'
+import { readJsonFileSafe, writeJsonFileAtomicDurable } from './safe-file'
 
 const root = join(process.env.TMPDIR ?? '/tmp', `copis-safe-file-${Date.now()}-${Math.random().toString(36).slice(2)}`)
 
@@ -75,5 +75,60 @@ describe('聊天室 durable JSON writer', () => {
     expect(lstatSync(fixedBak).isSymbolicLink()).toBe(true)
     expect(readFileSync(externalBak, 'utf8')).toBe('external bak')
     expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual({ value: 'new' })
+  })
+
+  test('Given fixed bak 被外部普通文件占用 When 连续提交并丢失主文件 Then 恢复最近一次 previous 且不改外部文件', () => {
+    const file = join(root, 'room.json')
+    const fixedBak = `${file}.bak`
+    writeJsonFileAtomicDurable(file, { value: 'one' })
+    writeFileSync(fixedBak, 'external bak')
+
+    writeJsonFileAtomicDurable(file, { value: 'two' })
+    writeJsonFileAtomicDurable(file, { value: 'three' })
+    unlinkSync(file)
+
+    expect(readJsonFileSafe<{ value: string }>(file)).toEqual({ value: 'two' })
+    expect(readFileSync(fixedBak, 'utf8')).toBe('external bak')
+  })
+
+  test('Given fixed bak 是外部符号链接 When 连续提交并损坏主文件 Then 恢复最近一次 previous 且不跟随链接', () => {
+    if (process.platform === 'win32') return
+    const file = join(root, 'room.json')
+    const fixedBak = `${file}.bak`
+    const externalBak = join(root, 'external-bak')
+    writeJsonFileAtomicDurable(file, { value: 'one' })
+    writeFileSync(externalBak, 'external bak')
+    symlinkSync(externalBak, fixedBak)
+
+    writeJsonFileAtomicDurable(file, { value: 'two' })
+    writeJsonFileAtomicDurable(file, { value: 'three' })
+    writeFileSync(file, '{broken')
+
+    expect(readJsonFileSafe<{ value: string }>(file)).toEqual({ value: 'two' })
+    expect(readFileSync(externalBak, 'utf8')).toBe('external bak')
+    expect(lstatSync(fixedBak).isSymbolicLink()).toBe(true)
+  })
+
+  test('Given 多次提交 When 检查受控恢复残留 Then 数量保持有界', () => {
+    const file = join(root, 'room.json')
+    writeJsonFileAtomicDurable(file, { value: 'one' })
+    writeFileSync(`${file}.bak`, 'external bak')
+    for (let index = 2; index <= 20; index += 1) {
+      writeJsonFileAtomicDurable(file, { value: String(index) })
+    }
+
+    const controlled = [...new Bun.Glob('room.json.bak-recovery-*').scanSync(root)]
+    expect(controlled.length).toBeLessThanOrEqual(3)
+    expect(controlled.some((path) => path.endsWith('.bak-recovery-owner'))).toBe(true)
+    expect([...new Bun.Glob('room.json.bak-????????-????-????-????-????????????').scanSync(root)]).toEqual([])
+  })
+
+  test('Given canonical bak 正常存在 When 主文件丢失 Then 仍从 canonical bak 恢复', () => {
+    const file = join(root, 'room.json')
+    writeJsonFileAtomicDurable(file, { value: 'one' })
+    writeJsonFileAtomicDurable(file, { value: 'two' })
+    unlinkSync(file)
+
+    expect(readJsonFileSafe<{ value: string }>(file)).toEqual({ value: 'one' })
   })
 })

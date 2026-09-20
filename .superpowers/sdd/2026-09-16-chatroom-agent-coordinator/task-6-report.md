@@ -179,3 +179,32 @@
 
 - `bun test apps/electron/src/main/lib/safe-file.test.ts`：5 pass。
 - `bun test apps/electron/src/main/lib/chatroom-skill-snapshot.test.ts`：32 pass。
+
+## Fix Round 6：RED / GREEN
+
+- RED：复审复现固定 `.bak` 被外部普通文件或符号链接占用时，连续写入
+  `one → two → three` 会把最新 previous 留在随机 `room.json.bak-UUID`，安全读取只看固定
+  `.bak`，主文件丢失/损坏后无法恢复 `two`；连续写入还会产生无界随机备份残留。
+- GREEN：保留固定 `.bak` 为不可覆盖的 canonical 兼容路径；当它被占用或已存在时，使用带
+  owner token、代次、原始 payload 摘要的两个受控 A/B recovery 槽位。槽位通过 no-follow
+  fd/lstat 校验，只有匹配 owner token 与 inode 的旧槽位才可回收，hard-link 安装使用
+  `O_EXCL` 等价语义，固定 `.bak` 与其外部目标始终不变。读取主文件、`.tmp`、固定 `.bak`
+  和受控槽位均使用 fd/no-follow/identity 校验，受控槽位按已验证 generation 选择最近
+  previous；恢复主文件跳过再次备份。受控 owner、A/B 槽位和事务临时文件使备份残留有明确
+  上限，不再每次写入增长随机备份。
+
+## Fix Round 6 验证
+
+- RED：新增固定 `.bak` 普通文件、固定 `.bak` 符号链接、连续多次写入残留上限和 canonical
+  `.bak` 回归测试后，`bun test apps/electron/src/main/lib/safe-file.test.ts` 为 6 pass / 3 fail。
+- GREEN：实现修复后上述测试为 9 pass / 0 fail；`bun run --filter='@copis/electron' typecheck`
+  通过，`git diff --check` 通过。
+
+## Fix Round 6 残余风险
+
+- A/B 槽位回收依赖 Node 当前可用的路径级 inode/owner 校验；同一 UID 在校验与 unlink
+  之间进行纳秒级 ABA 替换仍无法获得 openat/目录句柄级事务保证，竞态会 fail closed 于
+  新备份安装而不会覆盖后来出现的外部路径。真实 Windows ACL、reparse、目录 flush 和
+  rename 语义仍需 Windows runner 验证。
+- `resolveWorkspaceSkillsDir()` 的副作用规避与只读枚举的 lstat→readFile 窗口保持既有
+  residual，本轮未扩大 Skill 快照范围修改。

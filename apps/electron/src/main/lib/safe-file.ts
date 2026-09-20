@@ -6,7 +6,7 @@
  * - 读取：主文件 → .tmp 残留 → .bak 回退，多层容错
  */
 
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import {
   chmodSync,
   closeSync,
@@ -59,7 +59,12 @@ export function writeJsonFileAtomic(filePath: string, data: object, skipBackup =
 }
 
 /** 聊天室提交摘要使用的持久化写入：临时文件和父目录均显式 fsync。 */
-export function writeJsonFileAtomicDurable(filePath: string, data: object, mode = 0o600): void {
+export function writeJsonFileAtomicDurable(
+  filePath: string,
+  data: object,
+  mode = 0o600,
+  skipBackup = false,
+): void {
   const parentChain = captureParentChain(filePath)
   const bytes = Buffer.from(JSON.stringify(data, null, 2), 'utf8')
   const noFollow = (constants as typeof constants & { O_NOFOLLOW?: number }).O_NOFOLLOW ?? 0
@@ -74,13 +79,15 @@ export function writeJsonFileAtomicDurable(filePath: string, data: object, mode 
     tempIdentity = writeDurableTemp(tempPath, bytes, mode, parentChain, noFollow, '聊天室配置临时文件')
     assertParentChainStable(parentChain)
 
-    if (current) {
+    let needsRecoveryBackup = false
+    if (!skipBackup && current) {
       backupIdentity = copyRegularToTemp(filePath, backupTempPath, mode, parentChain, noFollow)
       const fixedBackupPath = filePath + '.bak'
       if (pathExistsWithoutFollowing(fixedBackupPath)) {
+        needsRecoveryBackup = true
         // 固定 .bak 可能由其他版本、用户或外部链接占用；将已完成的备份保留为
         // 唯一随机路径，绝不以 rename 覆盖既有目标。
-        syncParentDurable(backupTempPath)
+        cleanupOwnedTemp(backupTempPath, backupIdentity)
         backupIdentity = undefined
       } else {
         const installed = installBackupWithoutReplacing(
@@ -90,12 +97,18 @@ export function writeJsonFileAtomicDurable(filePath: string, data: object, mode 
           backupIdentity,
         )
         if (!installed) {
-          // 目标在检查后出现时同样不能覆盖，随机备份继续作为保留副本。
-          syncParentDurable(backupTempPath)
+          // 目标在检查后出现时同样不能覆盖；改用两个受控代次槽位保存最近 previous。
+          needsRecoveryBackup = true
+          cleanupOwnedTemp(backupTempPath, backupIdentity)
           backupIdentity = undefined
         } else {
           backupIdentity = undefined
         }
+      }
+      if (needsRecoveryBackup) {
+        // 固定 .bak 可能是外部文件/链接，也可能是本次事务之前的 canonical。
+        // 无论来源如何都不覆盖它；受控槽位负责保存后续最新 previous。
+        installRecoveryBackup(filePath, parentChain, mode, noFollow)
       }
     }
 
@@ -111,6 +124,186 @@ export function writeJsonFileAtomicDurable(filePath: string, data: object, mode 
     cleanupOwnedTemp(tempPath, tempIdentity)
     cleanupOwnedTemp(backupTempPath, backupIdentity)
     throw new Error('聊天室配置持久化失败', { cause: error })
+  }
+}
+
+const RECOVERY_SLOT_SUFFIXES = ['a', 'b'] as const
+const RECOVERY_VERSION = 1
+
+interface RecoveryOwner {
+  token: string
+}
+
+interface RecoveryEnvelope {
+  version: number
+  ownerToken: string
+  generation: number
+  payload: string
+  digest: string
+}
+
+interface SafeTextFile {
+  raw: string
+  identity: FileIdentity
+}
+
+function recoveryOwnerPath(filePath: string): string {
+  return `${filePath}.bak-recovery-owner`
+}
+
+function recoverySlotPaths(filePath: string): string[] {
+  return RECOVERY_SLOT_SUFFIXES.map((suffix) => `${filePath}.bak-recovery-${suffix}`)
+}
+
+function readRegularTextNoFollow(filePath: string): SafeTextFile | undefined {
+  const noFollow = (constants as typeof constants & { O_NOFOLLOW?: number }).O_NOFOLLOW ?? 0
+  let fd = -1
+  try {
+    fd = openSync(filePath, constants.O_RDONLY | noFollow)
+    const opened = fstatSync(fd)
+    if (!opened.isFile() || opened.nlink > 1 || opened.size < 0) return undefined
+    const bytes = Buffer.allocUnsafe(opened.size)
+    let offset = 0
+    while (offset < bytes.length) {
+      const count = readSync(fd, bytes, offset, bytes.length - offset, offset)
+      if (count <= 0) return undefined
+      offset += count
+    }
+    const closed = fstatSync(fd)
+    if (!closed.isFile() || closed.nlink > 1 || closed.dev !== opened.dev || closed.ino !== opened.ino
+      || closed.size !== opened.size || closed.mtimeMs !== opened.mtimeMs) return undefined
+    closeSync(fd)
+    fd = -1
+    const onDisk = lstatSync(filePath)
+    if (onDisk.isSymbolicLink() || !onDisk.isFile() || onDisk.nlink > 1
+      || onDisk.dev !== closed.dev || onDisk.ino !== closed.ino || onDisk.size !== closed.size
+      || onDisk.mtimeMs !== closed.mtimeMs) return undefined
+    return {
+      raw: bytes.toString('utf8'),
+      identity: { dev: closed.dev, ino: closed.ino, size: closed.size, mtimeMs: closed.mtimeMs },
+    }
+  } catch {
+    return undefined
+  } finally {
+    if (fd >= 0) closeSync(fd)
+  }
+}
+
+function parseRecoveryOwner(filePath: string): RecoveryOwner | undefined {
+  const candidate = readRegularTextNoFollow(filePath)
+  if (!candidate) return undefined
+  try {
+    const parsed = JSON.parse(candidate.raw) as Partial<RecoveryOwner>
+    return typeof parsed.token === 'string' && /^[0-9a-f-]{36}$/i.test(parsed.token)
+      ? { token: parsed.token }
+      : undefined
+  } catch {
+    return undefined
+  }
+}
+
+function createRecoveryOwner(filePath: string, parentChain: readonly ParentIdentity[], mode: number, noFollow: number): RecoveryOwner | undefined {
+  const ownerPath = recoveryOwnerPath(filePath)
+  const existing = parseRecoveryOwner(ownerPath)
+  if (existing) return existing
+  if (pathExistsWithoutFollowing(ownerPath)) return undefined
+
+  const owner: RecoveryOwner = { token: randomUUID() }
+  let fd = -1
+  try {
+    assertParentChainStable(parentChain)
+    fd = openSync(ownerPath, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | noFollow, mode)
+    const bytes = Buffer.from(JSON.stringify(owner), 'utf8')
+    writeAllSync(fd, bytes, '聊天室配置备份所有权文件')
+    fsyncSync(fd)
+    const stats = fstatSync(fd)
+    if (!stats.isFile() || stats.nlink > 1 || stats.size !== bytes.length) throw new Error('聊天室配置备份所有权文件不可用')
+    closeSync(fd)
+    fd = -1
+    assertParentChainStable(parentChain)
+    syncParentDurable(ownerPath)
+    return owner
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'EEXIST') return parseRecoveryOwner(ownerPath)
+    throw error
+  } finally {
+    if (fd >= 0) closeSync(fd)
+  }
+}
+
+function parseRecoveryEnvelope(filePath: string): { envelope: RecoveryEnvelope; identity: FileIdentity } | undefined {
+  const candidate = readRegularTextNoFollow(filePath)
+  if (!candidate) return undefined
+  try {
+    const envelope = JSON.parse(candidate.raw) as Partial<RecoveryEnvelope> & RecoveryEnvelope
+    if (envelope.version !== RECOVERY_VERSION || typeof envelope.ownerToken !== 'string'
+      || !/^[0-9a-f-]{36}$/i.test(envelope.ownerToken) || !Number.isSafeInteger(envelope.generation)
+      || envelope.generation < 1 || typeof envelope.payload !== 'string'
+      || !/^[a-f0-9]{64}$/.test(envelope.digest)) return undefined
+    const digest = createHash('sha256').update(envelope.payload, 'utf8').digest('hex')
+    if (digest !== envelope.digest || JSON.parse(envelope.payload) === null) return undefined
+    return { envelope, identity: candidate.identity }
+  } catch {
+    return undefined
+  }
+}
+
+function installRecoveryBackup(
+  filePath: string,
+  parentChain: readonly ParentIdentity[],
+  mode: number,
+  noFollow: number,
+): void {
+  const owner = createRecoveryOwner(filePath, parentChain, mode, noFollow)
+  if (!owner) throw new Error('聊天室配置备份所有权不可验证')
+  const source = readRegularTextNoFollow(filePath)
+  if (!source) throw new Error('聊天室配置源文件不可用')
+  const slots = recoverySlotPaths(filePath).map((path) => ({ path, candidate: parseRecoveryEnvelope(path) }))
+  const owned = slots.filter((slot) => slot.candidate?.envelope.ownerToken === owner.token)
+  const generation = Math.max(0, ...owned.map((slot) => slot.candidate!.envelope.generation)) + 1
+  const target = slots.find((slot) => !pathExistsWithoutFollowing(slot.path))
+    ?? owned.sort((left, right) => left.candidate!.envelope.generation - right.candidate!.envelope.generation)[0]
+  if (!target) throw new Error('聊天室配置备份槽位不可用')
+
+  const envelope: RecoveryEnvelope = {
+    version: RECOVERY_VERSION,
+    ownerToken: owner.token,
+    generation,
+    payload: source.raw,
+    digest: createHash('sha256').update(source.raw, 'utf8').digest('hex'),
+  }
+  const tempPath = `${target.path}.next-${randomUUID()}`
+  const tempIdentity = writeDurableTemp(tempPath, Buffer.from(JSON.stringify(envelope), 'utf8'), mode, parentChain, noFollow, '聊天室配置受控备份临时文件')
+  try {
+    assertParentChainStable(parentChain)
+    if (target.candidate) {
+      const current = parseRecoveryEnvelope(target.path)
+      if (!current || current.envelope.ownerToken !== owner.token || current.identity.dev !== target.candidate.identity.dev
+        || current.identity.ino !== target.candidate.identity.ino) throw new Error('聊天室配置备份槽位发生变化')
+      unlinkSync(target.path)
+      syncParentDurable(target.path)
+    }
+    try {
+      linkSync(tempPath, target.path)
+    } catch (error) {
+      // O_EXCL 等价的 hard link 失败时不覆盖后来出现的外部文件。
+      throw new Error('聊天室配置备份槽位不可用', { cause: error })
+    }
+    const installed = lstatSync(target.path)
+    if (installed.isSymbolicLink() || !installed.isFile() || installed.nlink < 2
+      || installed.dev !== tempIdentity.dev || installed.ino !== tempIdentity.ino) {
+      throw new Error('聊天室配置备份槽位发生变化')
+    }
+    unlinkSync(tempPath)
+    const committed = parseRecoveryEnvelope(target.path)
+    if (!committed || committed.identity.dev !== tempIdentity.dev || committed.identity.ino !== tempIdentity.ino
+      || committed.envelope.generation !== generation || committed.envelope.ownerToken !== owner.token) {
+      throw new Error('聊天室配置备份槽位发生变化')
+    }
+    syncParentDurable(target.path)
+  } catch (error) {
+    cleanupOwnedTemp(tempPath, tempIdentity)
+    throw error
   }
 }
 
@@ -384,14 +577,15 @@ export function readJsonFileSafeDetailed<T>(filePath: string, logLabel?: string)
   const tmpPath = filePath + '.tmp'
   const bakPath = filePath + '.bak'
   const displayPath = logLabel ?? filePath
-  const hasCandidate = existsSync(filePath) || existsSync(tmpPath) || existsSync(bakPath)
+  const hasCandidate = [filePath, tmpPath, bakPath, ...recoverySlotPaths(filePath)]
+    .some((candidate) => pathExistsWithoutFollowing(candidate))
 
   // 1. 尝试读取主文件
-  if (existsSync(filePath)) {
+  const main = readRegularTextNoFollow(filePath)
+  if (main) {
     try {
-      const raw = readFileSync(filePath, 'utf-8')
-      if (raw.trim().length > 0) {
-        return { value: JSON.parse(raw) as T, status: 'valid' }
+      if (main.raw.trim().length > 0) {
+        return { value: JSON.parse(main.raw) as T, status: 'valid' }
       }
     } catch {
       console.warn(`[数据恢复] 主索引文件损坏: ${displayPath}`)
@@ -399,13 +593,13 @@ export function readJsonFileSafeDetailed<T>(filePath: string, logLabel?: string)
   }
 
   // 2. 检查是否有未完成的 .tmp 文件（上次 rename 前崩溃）
-  if (existsSync(tmpPath)) {
+  const pending = readRegularTextNoFollow(tmpPath)
+  if (pending) {
     try {
-      const raw = readFileSync(tmpPath, 'utf-8')
-      if (raw.trim().length > 0) {
-        const parsed = JSON.parse(raw) as T
+      if (pending.raw.trim().length > 0) {
+        const parsed = JSON.parse(pending.raw) as T
         // .tmp 有效 → 提升为主文件
-        renameSync(tmpPath, filePath)
+        writeJsonFileAtomicDurable(filePath, parsed as object, 0o600, true)
         console.log(`[数据恢复] 从 .tmp 文件恢复: ${displayPath}`)
         return { value: parsed, status: 'recovered' }
       }
@@ -413,17 +607,36 @@ export function readJsonFileSafeDetailed<T>(filePath: string, logLabel?: string)
       // .tmp 也损坏，继续 fallback
     }
     // 清理无效的 .tmp
-    try { unlinkSync(tmpPath) } catch { /* ignore */ }
+    try {
+      const current = readRegularIdentity(tmpPath, true)
+      if (current && current.dev === pending.identity.dev && current.ino === pending.identity.ino) unlinkSync(tmpPath)
+    } catch { /* ignore */ }
   }
 
-  // 3. Fallback 到 .bak
-  if (existsSync(bakPath)) {
+  // 3. 先选择经过 envelope、摘要和代次校验的受控 previous。
+  const controlledCandidates = recoverySlotPaths(filePath)
+    .map((path) => parseRecoveryEnvelope(path))
+    .filter((candidate): candidate is { envelope: RecoveryEnvelope; identity: FileIdentity } => candidate !== undefined)
+    .sort((left, right) => right.envelope.generation - left.envelope.generation)
+  if (controlledCandidates.length > 0) {
     try {
-      const raw = readFileSync(bakPath, 'utf-8')
-      if (raw.trim().length > 0) {
-        const parsed = JSON.parse(raw) as T
+      const parsed = JSON.parse(controlledCandidates[0]!.envelope.payload) as T
+      writeJsonFileAtomicDurable(filePath, parsed as object, 0o600, true)
+      console.log(`[数据恢复] 从受控 .bak previous 恢复: ${displayPath}`)
+      return { value: parsed, status: 'recovered' }
+    } catch {
+      console.error(`[数据恢复] 受控 .bak previous 也损坏: ${displayPath}`)
+    }
+  }
+
+  // 4. Fallback 到 canonical .bak；固定路径一律 no-follow 读取。
+  const canonical = readRegularTextNoFollow(bakPath)
+  if (canonical) {
+    try {
+      if (canonical.raw.trim().length > 0) {
+        const parsed = JSON.parse(canonical.raw) as T
         // 用 .bak 恢复主文件（跳过备份，避免用损坏的主文件覆盖好的 .bak）
-        writeJsonFileAtomic(filePath, parsed as object, true)
+        writeJsonFileAtomicDurable(filePath, parsed as object, 0o600, true)
         console.log(`[数据恢复] 从 .bak 文件恢复: ${displayPath}`)
         return { value: parsed, status: 'recovered' }
       }
