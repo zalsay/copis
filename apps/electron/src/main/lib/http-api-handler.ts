@@ -42,6 +42,7 @@ import {
   COPIS_WORKING_GLOBAL_MODEL_ID,
   isCopisWorkingChannelId,
   isWorkingCustomModelChannelId,
+  isChatRoomAgentInvocation,
   WORKING_IPC_CHANNELS,
 } from '@copis/shared'
 import { resolveCopisHttpApiPort } from '@copis/shared/config'
@@ -69,6 +70,7 @@ import type {
   WorkingWorkspaceInput,
   WorkingReceiveChannel,
   WorkingAuthState,
+  ChatRoomAgentInvocation,
 } from '@copis/shared'
 import { fileService } from './file-service'
 import { getAgentWorkspace, getAgentWorkspaceWritableRoot } from './agent-workspace-manager'
@@ -138,6 +140,10 @@ export interface HttpApiDependencies {
   getBrowserAgentToolApi?: () => BrowserAgentToolHttpApi | Promise<BrowserAgentToolHttpApi>
   /** Rust bridge dispatch 使用的主进程专家团队入口。 */
   dispatchExpertTeam?: (snapshot: ExpertTeamRunSnapshot, workspaceRoot: string) => Promise<ExpertTeamRunResult>
+  /** Rust bridge dispatch 使用的主进程聊天室入口。 */
+  handleChatRoomInvocation?: (input: ChatRoomAgentInvocation) => Promise<'accepted' | 'duplicate'>
+  /** Rust bridge 断开通知使用的聊天室清理入口。 */
+  handleChatRoomGatewayDisconnected?: () => Promise<void>
 }
 
 export interface BrowserAgentToolHttpApi {
@@ -505,6 +511,90 @@ async function readJsonBody(request: HttpApiRequest): Promise<unknown> {
   } catch {
     throw new HttpApiRequestError('请求体不是有效的 JSON', 400, 'invalid_json')
   }
+}
+
+type ChatRoomCoordinatorFacade = {
+  handleInvocation(input: ChatRoomAgentInvocation): Promise<'accepted' | 'duplicate'>
+  handleGatewayDisconnected(): Promise<void>
+}
+
+interface ChatRoomCoordinatorModule {
+  getChatRoomAgentCoordinator?: () => ChatRoomCoordinatorFacade
+  chatRoomAgentCoordinator?: ChatRoomCoordinatorFacade
+}
+
+/**
+ * 聊天室协调器必须延迟加载，避免健康检查或普通文件 API 触发 Agent runtime 初始化。
+ * 使用字符串变量保持 Task 9 尚未落地时的构建兼容性；生产模块存在后仍只解析该固定模块。
+ */
+async function getDefaultChatRoomCoordinator(): Promise<ChatRoomCoordinatorFacade> {
+  const moduleName: string = './chatroom-agent-coordinator'
+  const module = await import(moduleName) as ChatRoomCoordinatorModule
+  const coordinator = module.getChatRoomAgentCoordinator?.() ?? module.chatRoomAgentCoordinator
+  if (!coordinator) throw new Error('聊天室协调器导出不可用')
+  return coordinator
+}
+
+function isExactDisconnectedBody(value: unknown): boolean {
+  if (value === undefined) return true
+  if (!isRecord(value)) return false
+  const keys = Reflect.ownKeys(value)
+  return keys.length === 1
+    && keys[0] === 'reason'
+    && value.reason === 'realtime_disconnected'
+}
+
+async function handleChatRoomInternalRequest(
+  request: HttpApiRequest,
+  path: string,
+  dependencies: HttpApiDependencies,
+): Promise<HttpApiResponse> {
+  const isInvocation = path === '/api/internal/chatrooms/invocations'
+  const isDisconnected = path === '/api/internal/chatrooms/disconnected'
+  if (!isInvocation && !isDisconnected) {
+    throw new HttpApiRequestError('HTTP API 路径不存在', 404, 'not_found')
+  }
+  if (request.method !== 'POST') {
+    throw new HttpApiRequestError('聊天室内部接口只支持 POST', 405, 'method_not_allowed')
+  }
+
+  const body = await readJsonBody(request)
+  if (isDisconnected) {
+    if (!isExactDisconnectedBody(body)) {
+      throw new HttpApiRequestError('聊天室断开通知参数不正确', 400, 'invalid_chatroom_disconnect')
+    }
+    if (dependencies.handleChatRoomGatewayDisconnected) {
+      await dependencies.handleChatRoomGatewayDisconnected()
+      return { status: 204 }
+    }
+    let coordinator: ChatRoomCoordinatorFacade
+    try {
+      coordinator = await getDefaultChatRoomCoordinator()
+    } catch {
+      throw new HttpApiRequestError('聊天室协调器不可用', 503, 'chatroom_coordinator_unavailable')
+    }
+    await coordinator.handleGatewayDisconnected()
+    return { status: 204 }
+  }
+
+  if (!isChatRoomAgentInvocation(body)) {
+    throw new HttpApiRequestError('聊天室调用参数不正确', 400, 'invalid_chatroom_invocation')
+  }
+  let result: 'accepted' | 'duplicate'
+  if (dependencies.handleChatRoomInvocation) {
+    result = await dependencies.handleChatRoomInvocation(body)
+  } else {
+    let coordinator: ChatRoomCoordinatorFacade
+    try {
+      coordinator = await getDefaultChatRoomCoordinator()
+    } catch {
+      throw new HttpApiRequestError('聊天室协调器不可用', 503, 'chatroom_coordinator_unavailable')
+    }
+    result = await coordinator.handleInvocation(body)
+  }
+  return result === 'duplicate'
+    ? { status: 200, body: { status: 'duplicate' } }
+    : { status: 202, body: { status: 'accepted' } }
 }
 
 async function handleAgentRequest(
@@ -1304,6 +1394,14 @@ export async function handleHttpApiRequest(
     const segments = url.pathname.split('/').filter(Boolean)
     if (segments[0] !== 'api') {
       throw new HttpApiRequestError('HTTP API 路径不存在', 404, 'not_found')
+    }
+
+    // Rust bridge 只允许两个无 query、无 trailing slash 的精确路径。
+    if (url.search === '' && request.path === url.pathname && (
+      url.pathname === '/api/internal/chatrooms/invocations'
+      || url.pathname === '/api/internal/chatrooms/disconnected'
+    )) {
+      return await handleChatRoomInternalRequest(request, url.pathname, dependencies)
     }
 
     if (segments[1] === 'internal' && segments[2] === 'auth-storage') {

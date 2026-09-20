@@ -1,0 +1,58 @@
+# Task 7 — Rust Internal Client and Bridge Dispatch
+
+## 范围
+
+本任务实现 Electron Main 到 Rust 聊天室网关的五个状态回传客户端，以及 Rust stdout bridge 到 Main 协调器的两个精确入口。未修改 Shared 契约、Renderer/public token API 或 Rust 文件。
+
+## BDD/TDD 证据
+
+### RED
+
+先新增以下测试，再运行：
+
+```text
+bun test apps/electron/src/main/lib/chatroom-rust-client.test.ts
+```
+
+测试在生产模块尚不存在时因 `Cannot find module './chatroom-rust-client'` 失败；同时新增的 handler 场景在路由尚未注册时返回 404，证明测试覆盖了缺失行为。
+
+### GREEN
+
+实现后聚焦测试通过：
+
+```text
+bun test apps/electron/src/main/lib/chatroom-rust-client.test.ts  # 7 pass
+bun test apps/electron/src/main/lib/http-api-handler.test.ts      # 11 pass
+bun run --filter='@copis/electron' typecheck                    # pass
+```
+
+覆盖内容包括：
+
+- 五个冻结 invocation 状态路径、仅 `127.0.0.1` loopback、非空 internal token；
+- invocationId 路径校验、UTF-8 delta 16 KiB 边界、上下文到 Rust DTO 的严格字段映射；
+- 非 2xx 响应的有界流读取（最多 400 字符）和敏感字段/本地路径脱敏；
+- 精确 POST bridge 路径、query/trailing slash 拒绝、strict invocation DTO/未知字段/请求体上限；
+- accepted/duplicate 状态码、断开清理一次、coordinator lazy import 不可用、注入 callback 抛错。
+
+## 实现位置
+
+- `apps/electron/src/main/lib/chatroom-rust-client.ts`
+  - 导出 `HttpChatRoomRustApiClient`，仅暴露五个 Phase 2 invocation 回传方法；
+  - Main-only `getInvocationContext` 可补齐 Phase 2 要求的 room/agent/device/clientMessage 字段，不进入 Renderer；
+  - `releaseAgentLeases` 没有 Phase 2 对应 loopback 路由，留给 Task 10 生命周期适配层。
+- `apps/electron/src/main/lib/http-api-handler.ts`
+  - 新增两个精确 Rust bridge 路由和可注入依赖；
+  - 合法 DTO 校验后才加载协调器，未注入且模块不可用时稳定返回 503；
+  - 不接触 Working JWT/public web token。
+- `apps/electron/src/main/lib/chatroom-rust-client.test.ts`
+- `apps/electron/src/main/lib/http-api-handler.test.ts`
+
+## 剩余风险
+
+- 尚未运行真实 Windows runner；本任务无 Windows 特定代码。
+- Rust 网关要求回传 body 带 `roomId`/Agent/device 等字段，而 Shared `ChatRoomRustApi` 的公开方法参数只带 invocationId；客户端提供 Main-only `getInvocationContext` 接缝，Task 9/10 接入时必须注入，不能用 Renderer 或远端字段补齐。
+- Task 9 协调器模块尚不存在；本任务只验证缺失模块返回稳定 503。Task 9 落地后必须提供 `getChatRoomAgentCoordinator()` 或 `chatRoomAgentCoordinator` 导出，并补跑 handler 全量测试。
+
+## 提交与状态
+
+本报告与四个实现/测试文件应在同一个独立 commit 中提交。提交前必须确认 5 个既有 dirty Rust 文件仍未暂存，且 `git diff --check` 通过。
