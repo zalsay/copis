@@ -158,6 +158,10 @@ export interface PiAgentQueryOptions extends AgentQueryInput {
   skillMentions?: string[]
   /** 当前 Memory 可见范围对应的 workspace slug。 */
   workspaceSlug?: string
+  /** Main 解析出的聊天室 Memory scope；不作为通用 runtime workspace 使用。 */
+  memoryWorkspaceSlug?: string
+  /** 仅由 Main trusted runtime profile 派生，不能由输入请求伪造。 */
+  capabilityProfile?: 'default' | 'chatroom'
   /** 当前 Agent 的 Memory 策略。 */
   memoryPolicy?: MemoryPolicy
   /** token-threshold 整理统一交给 Memory maintenance keyed queue。 */
@@ -1316,7 +1320,7 @@ export function buildBuiltinToolDefinitions(
   cwd: string,
   canUseTool: PiAgentQueryOptions['canUseTool'],
   runtimeEnv: AgentRuntimeEnv | undefined,
-  options: Pick<PiAgentQueryOptions, 'sessionId' | 'useRustFileApi' | 'browserPageControl' | 'automationControl' | 'workspaceSlug' | 'memoryPolicy' | 'imageGenerationEnabled'>,
+  options: Pick<PiAgentQueryOptions, 'sessionId' | 'useRustFileApi' | 'browserPageControl' | 'automationControl' | 'workspaceSlug' | 'memoryWorkspaceSlug' | 'memoryPolicy' | 'imageGenerationEnabled' | 'capabilityProfile'>,
 ): ToolDefinition[] {
   const rustFileTools = options.useRustFileApi
     ? createRustFileToolOperations({ sessionId: options.sessionId })
@@ -1329,7 +1333,7 @@ export function buildBuiltinToolDefinitions(
       : createCopisBashToolOptions(runtimeEnv)),
     sdk.createEditToolDefinition(cwd, rustFileTools ? { operations: rustFileTools.edit } : undefined),
     sdk.createWriteToolDefinition(cwd, rustFileTools ? { operations: rustFileTools.write } : undefined),
-    ...(rustFileTools ? [
+    ...(rustFileTools && options.capabilityProfile !== 'chatroom' ? [
       sdk.defineTool({
         name: 'RealPath',
         label: '获取真实路径',
@@ -1352,22 +1356,22 @@ export function buildBuiltinToolDefinitions(
       sdk.createLsToolDefinition(cwd),
     ] : []),
     ...buildPiMemoryTools(sdk, {
-      workspaceSlug: options.workspaceSlug,
+      workspaceSlug: options.memoryWorkspaceSlug ?? options.workspaceSlug,
       memoryPolicy: options.memoryPolicy,
     }),
-    ...(options.browserPageControl
+    ...(options.capabilityProfile !== 'chatroom' && options.browserPageControl
       ? buildPiBrowserAgentTools(sdk, {
         sessionId: options.sessionId,
         capability: options.browserPageControl,
       })
       : []),
-    ...(options.automationControl
+    ...(options.capabilityProfile !== 'chatroom' && options.automationControl
       ? buildPiAutomationTools(sdk, { sessionId: options.sessionId, capability: options.automationControl })
       : []),
-    ...buildPiAlipayBotTools(sdk, { sessionId: options.sessionId }),
-    ...buildPiAgentMailTools(sdk, { sessionId: options.sessionId }),
-    ...buildPiWorkingPaymentTools(sdk),
-    ...(options.imageGenerationEnabled
+    ...(options.capabilityProfile !== 'chatroom' ? buildPiAlipayBotTools(sdk, { sessionId: options.sessionId }) : []),
+    ...(options.capabilityProfile !== 'chatroom' ? buildPiAgentMailTools(sdk, { sessionId: options.sessionId }) : []),
+    ...(options.capabilityProfile !== 'chatroom' ? buildPiWorkingPaymentTools(sdk) : []),
+    ...(options.capabilityProfile !== 'chatroom' && options.imageGenerationEnabled
       ? buildPiImageGenerationTools(sdk, { sessionId: options.sessionId, cwd })
       : []),
   ] as unknown as ToolDefinition[]
@@ -1490,11 +1494,11 @@ export class PiAgentAdapter implements AgentProviderAdapter {
       let automaticCompactionContinuations = 0
       let pendingTerminalResult: SDKMessage | undefined
       const customTools = [
-        buildCurrentSessionCompactionTool(
+        ...(input.capabilityProfile === 'chatroom' ? [] : [buildCurrentSessionCompactionTool(
           sdk,
           () => { compactContextRequested = true },
           input.canUseTool,
-        ),
+        )]),
         ...buildBuiltinToolDefinitions(
           sdk,
           cwd,
@@ -1502,8 +1506,8 @@ export class PiAgentAdapter implements AgentProviderAdapter {
           input.runtimeEnv,
           input,
         ),
-        ...buildCopisProductToolDefinitions(sdk, input.canUseTool),
-        ...wrapCustomToolDefinitions(input.customTools, input.canUseTool),
+        ...(input.capabilityProfile === 'chatroom' ? [] : buildCopisProductToolDefinitions(sdk, input.canUseTool)),
+        ...(input.capabilityProfile === 'chatroom' ? [] : wrapCustomToolDefinitions(input.customTools, input.canUseTool)),
       ]
 
       const settingsManager = sdk.SettingsManager.inMemory({
@@ -1549,7 +1553,9 @@ export class PiAgentAdapter implements AgentProviderAdapter {
         settingsManager,
         noSkills: true,
         ...createCopisResourceLoaderOptions(),
-        additionalExtensionPaths: resolveDefaultPiExtensionEntries(),
+        // 聊天室只消费 Main 传入的 Skill snapshot；默认 pi-web-access 等扩展
+        // 会注入联网工具，必须与 profile 一起关闭。
+        additionalExtensionPaths: input.capabilityProfile === 'chatroom' ? [] : resolveDefaultPiExtensionEntries(),
         additionalSkillPaths: input.additionalSkillPaths ?? [],
         skillsOverride: createCopisSkillsOverride(input.additionalSkillPaths),
         ...(model.reasoning && extensionFactories.length > 0 && { extensionFactories }),

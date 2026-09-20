@@ -35,7 +35,11 @@ export interface PiWorkerQueryConfig {
   additionalSkillPaths?: string[]
   /** 当前用户输入显式引用的 Skill slug。 */
   skillMentions?: string[]
+  /** Main-only capability profile; chatroom profile excludes all business/external tools. */
+  capabilityProfile?: 'default' | 'chatroom'
   workspaceSlug?: string
+  /** Chatroom source scope consumed only by Memory tools, never generic runtime workspace. */
+  memoryWorkspaceSlug?: string
   memoryPolicy?: MemoryPolicy
   proxyUrl?: string
   transport?: 'sse' | 'websocket' | 'websocket-cached'

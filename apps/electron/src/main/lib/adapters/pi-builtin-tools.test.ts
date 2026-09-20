@@ -80,6 +80,15 @@ mock.module('../agent-tools/image-generation-tool', () => ({
 mock.module('../attachment-service', () => ({
   readAttachmentAsBase64: readAttachmentBase64,
 }))
+mock.module('./pi-rust-file-tools', () => ({
+  createRustFileToolOperations: () => ({
+    read: async () => ({ content: '' }),
+    edit: async () => ({ content: '' }),
+    write: async () => ({ content: '' }),
+    realPath: async (path: string) => path,
+  }),
+  createRustBashToolOperations: () => ({ execute: async () => ({ content: '' }) }),
+}))
 
 const { buildPiBuiltinTools } = await import('./pi-builtin-tools')
 
@@ -275,6 +284,61 @@ describe('Pi Browser 工具复用主进程 dispatcher', () => {
     expect(run.promptSnippet).toContain('只能调用 `BrowserWorkflowRun`')
     expect(run.promptSnippet).toContain('不得通过 `bash`、Node.js')
   })
+})
+
+test('Given chatroom capability profile When building legacy Pi tools Then only readonly Memory remains', async () => {
+  const sdk = {
+    defineTool: <T>(definition: T): T => definition,
+  } as unknown as typeof import('@earendil-works/pi-coding-agent')
+  const result = await buildPiBuiltinTools(sdk, {
+    sessionId: 'chatroom-capability-session',
+    channelId: 'channel-1',
+    workspaceId: 'workspace-1',
+    workspaceSlug: 'source-workspace',
+    memoryPolicy: 'visible',
+    triggeredBy: 'user',
+    capabilityProfile: 'chatroom',
+  } as any)
+
+  const names = result.tools.map((tool) => tool.name)
+  expect(names).toEqual([...memoryToolNamesForPolicy('visible')])
+  expect(names).not.toContain('WebSearch')
+  expect(names).not.toContain('WebFetch')
+  expect(names).not.toContain('Planning')
+  expect(names).not.toContain('BrowserPageObserve')
+  expect(names).not.toContain('generate_image')
+  expect(result.collaborationAvailable).toBe(false)
+  expect(result.expertTeamAvailable).toBe(false)
+})
+
+test('Given chatroom capability profile When building RPC worker tools Then payment mail automation browser image and RealPath are absent', async () => {
+  const { buildBuiltinToolDefinitions } = await import('./pi-agent-adapter')
+  const sdk = {
+    createReadToolDefinition: () => ({ name: 'Read' }),
+    createBashToolDefinition: () => ({ name: 'Bash' }),
+    createEditToolDefinition: () => ({ name: 'Edit' }),
+    createWriteToolDefinition: () => ({ name: 'Write' }),
+    defineTool: <T>(definition: T): T => definition,
+  } as unknown as typeof import('@earendil-works/pi-coding-agent')
+  const tools = buildBuiltinToolDefinitions(sdk, '/tmp/chatroom/project', undefined, undefined, {
+    sessionId: 'chatroom-rpc-capability-session',
+    useRustFileApi: true,
+    browserPageControl: { endpoint: '/api/internal/agent/browser-tool', token: 'forged' },
+    automationControl: { endpoint: '/api/internal/agent/automation-tool', token: 'forged' },
+    imageGenerationEnabled: true,
+    memoryPolicy: 'visible',
+    memoryWorkspaceSlug: 'source-workspace',
+    capabilityProfile: 'chatroom',
+  })
+  const names = tools.map((tool) => tool.name)
+  expect(names).toEqual(expect.arrayContaining(['Read', 'Bash', 'Edit', 'Write', 'memory_recall', 'memory_read']))
+  expect(names).not.toContain('RealPath')
+  expect(names).not.toContain('BrowserPageObserve')
+  expect(names).not.toContain('AutomationRun')
+  expect(names).not.toContain('generate_image')
+  expect(names).not.toContain('AlipayBot')
+  expect(names).not.toContain('AgentMail')
+  expect(names).not.toContain('WorkingPayment')
 })
 
 describe('主 Agent 专家团队工具边界', () => {

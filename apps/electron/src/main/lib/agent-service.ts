@@ -291,15 +291,19 @@ export async function runAgentHeadless(
     registerWebContents(runInput.sessionId, wc)
   }
 
-  const releaseTrustedSource = callbacks.source
-    ? registerTrustedAgentExternalSource(runInput.sessionId, callbacks.source)
-    : undefined
-  const releaseTrustedRuntimeContext = callbacks.trustedRuntimeContext
-    ? registerTrustedAgentRuntimeContext(runInput.sessionId, callbacks.trustedRuntimeContext)
-    : undefined
+  let releaseTrustedSource: (() => void) | undefined
+  let releaseTrustedRuntimeContext: (() => void) | undefined
   let errorSent = false
   let completeSent = false
   try {
+    // 两个 trusted registry 必须在同一事务边界内建立；runtime context 校验失败时
+    // 不能留下可被后续同 session 调用读取的 source 标签。
+    releaseTrustedSource = callbacks.source
+      ? registerTrustedAgentExternalSource(runInput.sessionId, callbacks.source)
+      : undefined
+    releaseTrustedRuntimeContext = callbacks.trustedRuntimeContext
+      ? registerTrustedAgentRuntimeContext(runInput.sessionId, callbacks.trustedRuntimeContext)
+      : undefined
     await agentRpcGateway.run(runInput, {
       onEvent: ({ sessionId, payload }) => eventBus.emit(sessionId, payload),
       onError: (error) => {

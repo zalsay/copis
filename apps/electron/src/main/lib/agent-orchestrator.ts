@@ -1325,11 +1325,14 @@ export class AgentOrchestrator {
         agentRuntime,
         workspaceId: isChatroomRun ? undefined : workspaceId,
         workspaceSlug,
+        capabilityProfile: isChatroomRun ? 'chatroom' : 'default',
         allowedRoots: allAdditionalDirectories,
-        permissionMode: resolveBrowserAgentPermissionMode(
-          hasBrowserContext,
-          permissionModeOverride ?? sessionMeta?.permissionMode,
-        ),
+        permissionMode: isChatroomRun
+          ? 'bypassPermissions'
+          : resolveBrowserAgentPermissionMode(
+            hasBrowserContext,
+            permissionModeOverride ?? sessionMeta?.permissionMode,
+          ),
         memoryPolicy: isChatroomRun
           ? (trustedRuntimeContext!.memorySource ? 'visible' : 'off')
           : workspace?.memoryPolicy ?? appSettings.defaultMemoryPolicy ?? 'writable',
@@ -1426,10 +1429,9 @@ export class AgentOrchestrator {
 
       // 12. 读取应用设置并确定权限模式
       // 权限模式只属于当前 session；新会话默认完全自动模式。
-      const initialPermissionMode: CopisPermissionMode = resolveBrowserAgentPermissionMode(
-        hasBrowserContext,
-        permissionModeOverride,
-      )
+      const initialPermissionMode: CopisPermissionMode = isChatroomRun
+        ? 'bypassPermissions'
+        : resolveBrowserAgentPermissionMode(hasBrowserContext, permissionModeOverride)
       // 注册到 Map，支持运行中动态切换
       this.sessionPermissionModes.set(sessionId, initialPermissionMode)
       console.log(`[Agent 编排] 权限模式: ${initialPermissionMode}${permissionModeOverride ? '（外部覆盖）' : ''}`)
@@ -1561,13 +1563,17 @@ export class AgentOrchestrator {
         // ── Composer 高级授权：Git/SSH/curl/Python 命令必须开启后才允许执行 ──
         if (toolName === 'Bash') {
           const command = typeof input.command === 'string' ? input.command : ''
-          const advancedAuthorization = getAgentSessionMeta(sessionId)?.advancedAuthorization === true
+          const advancedAuthorization = !isChatroomRun && getAgentSessionMeta(sessionId)?.advancedAuthorization === true
           if (isAdvancedAuthorizationCommand(command) && !advancedAuthorization) {
             return {
               behavior: 'deny' as const,
               message: 'Git/SSH/curl/Python 命令需要先在 Composer 开启高级授权。',
             }
           }
+        }
+
+        if (isChatroomRun && ['RealPath', 'BrowserPageObserve', 'BrowserPageClick', 'BrowserPageType', 'BrowserPageNavigate', 'WebSearch', 'WebFetch', 'VisionRelay', 'generate_image', 'mcp__alipay_bot', 'mcp__agent_mail', 'mcp__working_payment'].includes(toolName)) {
+          return { behavior: 'deny' as const, message: '聊天室运行时未授予该敏感能力。' }
         }
 
         // ── Write 大文件 token 截断防护 ──
@@ -1903,12 +1909,14 @@ export class AgentOrchestrator {
             : undefined,
         ),
         resumeSessionId: existingSdkSessionId,
-        piAgentDir: getSdkConfigDir(),
-        piSessionDir: join(getSdkConfigDir(), 'sessions'),
+        piAgentDir: isChatroomRun ? trustedRuntimeContext!.executionWorkspace.sessionRoot : getSdkConfigDir(),
+        piSessionDir: isChatroomRun ? join(trustedRuntimeContext!.executionWorkspace.sessionRoot, 'sessions') : join(getSdkConfigDir(), 'sessions'),
         ...(allAdditionalDirectories.length > 0 && { additionalDirectories: allAdditionalDirectories }),
         ...(allSkillPaths.length > 0 && { additionalSkillPaths: allSkillPaths }),
         ...(effectiveSkillMentions?.length ? { skillMentions: effectiveSkillMentions } : {}),
-        ...(workspaceSlug ? { workspaceSlug } : {}),
+        ...(isChatroomRun ? { capabilityProfile: 'chatroom' as const } : {}),
+        ...(!isChatroomRun && workspaceSlug ? { workspaceSlug } : {}),
+        ...(isChatroomRun && workspaceSlug ? { memoryWorkspaceSlug: workspaceSlug } : {}),
         memoryPolicy,
         ...(memoryTokenMaintenanceRunner ? { memoryMaintenanceRunner: memoryTokenMaintenanceRunner } : {}),
         ...(isCompactCommand ? { compactRequest: true } : {}),

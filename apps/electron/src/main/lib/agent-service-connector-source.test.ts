@@ -116,5 +116,17 @@ test('Given non-chatroom headless run supplies trusted context When called Then 
   await expect(runAgentHeadless({ sessionId: 'bad-session', userMessage: '执行', channelId: 'channel-1', agentRuntime: 'pi' }, {
     source: 'feishu', trustedRuntimeContext: context,
     onError: () => {}, onComplete: () => {}, onTitleUpdated: () => {},
-  })).rejects.toThrow('trustedRuntimeContext')
+})).rejects.toThrow('trustedRuntimeContext')
+})
+
+test('Given chatroom trusted source and runtime registration throws When headless run fails Then source registration is cleaned', async () => {
+  const { runAgentHeadless } = await import('./agent-service')
+  const maliciousContext = new Proxy({} as ChatRoomAgentRuntimeContext, {
+    ownKeys: () => { throw new Error('malicious context') },
+  })
+  await runAgentHeadless({ sessionId: 'chatroom-registration-failure', userMessage: '执行', channelId: 'channel-1', agentRuntime: 'pi' }, {
+    source: 'chatroom', trustedRuntimeContext: maliciousContext,
+    onError: () => {}, onComplete: () => {}, onTitleUpdated: () => {},
+  })
+  expect(getTrustedAgentExternalSource('chatroom-registration-failure')).toBeUndefined()
 })

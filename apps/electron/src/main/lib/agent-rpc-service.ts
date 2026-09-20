@@ -644,7 +644,8 @@ export async function prepareAgentRpcRun(input: AgentSendInput): Promise<PiWorke
   const sourceWorkspaceSlug = workspace.slug
   const memoryWorkspaceSlug = isChatroomRun ? chatroomRuntimeContext.memorySource?.workspaceSlug : sourceWorkspaceSlug
   const workspaceSlug = memoryWorkspaceSlug
-  const browserBinding = getBrowserAgentContext(input.sessionId)
+  // 聊天室运行不继承普通会话残留的 Browser binding；该 profile 没有页面能力。
+  const browserBinding = isChatroomRun ? undefined : getBrowserAgentContext(input.sessionId)
   const browserTab = browserBinding ? getWebTabState(browserBinding.tabId) : undefined
   const hasBrowserContext = Boolean(browserBinding && browserTab)
   console.info('[AI浏览器][prepareAgentRpcRun] 检查页签上下文与绑定状态', {
@@ -659,10 +660,12 @@ export async function prepareAgentRpcRun(input: AgentSendInput): Promise<PiWorke
   })
   const browserAdvancedAuthorization = !isChatroomRun && (input.triggeredBy ?? 'user') === 'user'
     && isBrowserPageAdvancedAuthorizationEnabled(input.sessionId)
-  const effectivePermissionMode = resolveBrowserAgentPermissionMode(
-    hasBrowserContext,
-    input.permissionModeOverride ?? session.permissionMode ?? COPIS_DEFAULT_PERMISSION_MODE,
-  )
+  const effectivePermissionMode = isChatroomRun
+    ? 'bypassPermissions' as CopisPermissionMode
+    : resolveBrowserAgentPermissionMode(
+      hasBrowserContext,
+      input.permissionModeOverride ?? session.permissionMode ?? COPIS_DEFAULT_PERMISSION_MODE,
+    )
   const effectiveSkillMentions = isChatroomRun ? undefined : resolveBrowserAgentSkillMentions(input.mentionedSkills, hasBrowserContext)
   const agentCwd = isChatroomRun
     ? chatroomRuntimeContext.executionWorkspace.projectRoot
@@ -695,7 +698,7 @@ export async function prepareAgentRpcRun(input: AgentSendInput): Promise<PiWorke
     workspaceWriteRoot,
     additionalDirectories: directories,
     permissionMode: effectivePermissionMode,
-    advancedAuthorization: session.advancedAuthorization === true,
+    advancedAuthorization: !isChatroomRun && session.advancedAuthorization === true,
     isAppConnector,
     ...(isChatroomRun ? { chatroomRuntimeContext } : {}),
   })
@@ -835,13 +838,15 @@ export async function prepareAgentRpcRun(input: AgentSendInput): Promise<PiWorke
     permissionMode: effectivePermissionMode,
     systemPrompt,
     ...(existingSdkSessionId ? { resumeSessionId: existingSdkSessionId } : {}),
-    piAgentDir: getSdkConfigDir(),
-    piSessionDir: join(getSdkConfigDir(), 'sessions'),
+    piAgentDir: isChatroomRun ? chatroomRuntimeContext.executionWorkspace.sessionRoot : getSdkConfigDir(),
+    piSessionDir: isChatroomRun ? join(chatroomRuntimeContext.executionWorkspace.sessionRoot, 'sessions') : join(getSdkConfigDir(), 'sessions'),
     ...(settings.agentMaxBudgetUsd && settings.agentMaxBudgetUsd > 0 ? { maxBudgetUsd: settings.agentMaxBudgetUsd } : {}),
     ...(directories.length > 0 ? { additionalDirectories: directories } : {}),
     ...(allSkillPaths.length > 0 ? { additionalSkillPaths: allSkillPaths } : {}),
     ...(effectiveSkillMentions?.length ? { skillMentions: effectiveSkillMentions } : {}),
-    ...(memoryWorkspaceSlug ? { workspaceSlug: memoryWorkspaceSlug } : {}),
+    ...(isChatroomRun ? { capabilityProfile: 'chatroom' as const } : {}),
+    ...(!isChatroomRun && memoryWorkspaceSlug ? { workspaceSlug: memoryWorkspaceSlug } : {}),
+    ...(isChatroomRun && memoryWorkspaceSlug ? { memoryWorkspaceSlug } : {}),
     ...(!isChatroomRun && workspace?.id ? { workspaceId: workspace.id } : {}),
     ...(!isChatroomRun && session.sourceAutomationId ? { sourceAutomationId: session.sourceAutomationId } : {}),
     automationEnabled: !isChatroomRun && isBuiltinMcpUserEnabled('automation'),

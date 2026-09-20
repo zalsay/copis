@@ -51,3 +51,40 @@ test('Given 同一 session 嵌套注册 When 按顺序释放 Then 只释放自�
   expect(getTrustedAgentRuntimeContext('session-2')).toBeUndefined()
   outer()
 })
+
+test('Given runtime context 含 getter、symbol 或非普通原型 When 注册 Then fail closed', async () => {
+  const { registerTrustedAgentRuntimeContext, getTrustedAgentRuntimeContext } = await import('./agent-rpc-runtime-context')
+
+  const getterContext = { ...context } as Record<string, unknown>
+  Object.defineProperty(getterContext, 'executionWorkspace', {
+    enumerable: true,
+    get: () => context.executionWorkspace,
+  })
+  expect(() => registerTrustedAgentRuntimeContext('malicious-getter', getterContext as unknown as ChatRoomAgentRuntimeContext)).toThrow()
+  expect(getTrustedAgentRuntimeContext('malicious-getter')).toBeUndefined()
+
+  const symbolContext = { ...context, [Symbol('forged')]: 'unexpected' }
+  expect(() => registerTrustedAgentRuntimeContext('malicious-symbol', symbolContext as ChatRoomAgentRuntimeContext)).toThrow()
+  expect(getTrustedAgentRuntimeContext('malicious-symbol')).toBeUndefined()
+
+  const inheritedContext = Object.create({ forged: true }) as ChatRoomAgentRuntimeContext
+  Object.assign(inheritedContext, context)
+  expect(() => registerTrustedAgentRuntimeContext('malicious-prototype', inheritedContext)).toThrow()
+  expect(getTrustedAgentRuntimeContext('malicious-prototype')).toBeUndefined()
+})
+
+test('Given runtime context 是 Proxy 或非法 Memory policy When 注册 Then 不建立 trusted entry', async () => {
+  const { registerTrustedAgentRuntimeContext, getTrustedAgentRuntimeContext } = await import('./agent-rpc-runtime-context')
+  const proxied = new Proxy(context, {
+    ownKeys: () => { throw new Error('proxy read denied') },
+  })
+  expect(() => registerTrustedAgentRuntimeContext('malicious-proxy', proxied)).toThrow()
+  expect(getTrustedAgentRuntimeContext('malicious-proxy')).toBeUndefined()
+
+  const invalidPolicy = {
+    ...context,
+    memorySource: { workspaceSlug: 'source-workspace', policy: 'writable' },
+  } as unknown as ChatRoomAgentRuntimeContext
+  expect(() => registerTrustedAgentRuntimeContext('malicious-policy', invalidPolicy)).toThrow()
+  expect(getTrustedAgentRuntimeContext('malicious-policy')).toBeUndefined()
+})
