@@ -28,6 +28,7 @@ import type {
   CopisPermissionMode,
   AgentExternalRunSource,
   AgentMessage,
+  ChatRoomAgentRuntimeContext,
   RewindSessionResult,
 } from '@copis/shared'
 import { AgentEventBus } from './agent-event-bus'
@@ -41,6 +42,7 @@ import { getHeadlessAgentRunTarget } from './agent-headless-run-target'
 import { sendAgentStreamComplete } from './agent-completion-payload'
 import { getHttpApiInternalToken } from './http-api-server'
 import { registerTrustedAgentExternalSource } from './agent-rpc-source-context'
+import { registerTrustedAgentRuntimeContext } from './agent-rpc-runtime-context'
 
 // ===== 实例创建 =====
 
@@ -252,6 +254,15 @@ export async function runAgent(
   }
 }
 
+export interface HeadlessAgentRunOptions {
+  onError: (error: string) => void
+  onComplete: (messages?: AgentMessage[]) => void
+  onTitleUpdated: (title: string) => void
+  source?: AgentExternalRunSource
+  originSessionId?: string
+  trustedRuntimeContext?: ChatRoomAgentRuntimeContext
+}
+
 /**
  * 无渲染进程的 Agent 运行（供飞书 Bridge 等外部调用方使用）
  *
@@ -260,14 +271,14 @@ export async function runAgent(
  */
 export async function runAgentHeadless(
   input: AgentSendInput,
-  callbacks: {
-    onError: (error: string) => void
-    onComplete: (messages?: AgentMessage[]) => void
-    onTitleUpdated: (title: string) => void
-    source?: AgentExternalRunSource
-    originSessionId?: string
-  },
+  callbacks: HeadlessAgentRunOptions,
 ): Promise<void> {
+  if (callbacks.trustedRuntimeContext && callbacks.source !== 'chatroom') {
+    throw new Error('trustedRuntimeContext 仅允许聊天室来源使用')
+  }
+  if (callbacks.source === 'chatroom' && !callbacks.trustedRuntimeContext) {
+    throw new Error('聊天室运行缺少可信 runtimeContext')
+  }
   // 委派子会话优先回到父会话所在 renderer，外部无界面运行才回退任意主窗口。
   const wc = getHeadlessAgentRunTarget(
     sessionWebContents,
@@ -282,6 +293,9 @@ export async function runAgentHeadless(
 
   const releaseTrustedSource = callbacks.source
     ? registerTrustedAgentExternalSource(runInput.sessionId, callbacks.source)
+    : undefined
+  const releaseTrustedRuntimeContext = callbacks.trustedRuntimeContext
+    ? registerTrustedAgentRuntimeContext(runInput.sessionId, callbacks.trustedRuntimeContext)
     : undefined
   let errorSent = false
   let completeSent = false
@@ -353,6 +367,7 @@ export async function runAgentHeadless(
     }
   } finally {
     releaseTrustedSource?.()
+    releaseTrustedRuntimeContext?.()
     sessionWebContents.delete(runInput.sessionId)
   }
 }

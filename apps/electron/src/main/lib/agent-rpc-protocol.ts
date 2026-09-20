@@ -118,6 +118,9 @@ export interface PiWorkerRunConfig {
   query: PiWorkerQueryConfig
 }
 
+/** Renderer/HTTP 输入禁止携带的主进程能力字段；可信聊天室上下文只存在 Main registry。 */
+export const AGENT_RPC_FORBIDDEN_INPUT_FIELDS = ['runtimeContext'] as const
+
 export interface PiWorkerQueueConfig {
   sessionId: string
   userMessage: string
