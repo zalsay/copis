@@ -73,6 +73,35 @@ interface AgentSessionsIndex {
   openAIThinkingDefaultEnabledMigrationCompleted?: boolean
 }
 
+export type AgentSessionMetaUpdates = Parameters<typeof updateAgentSessionMeta>[1]
+
+export interface AgentSessionStorageOverride {
+  getMeta(): AgentSessionMeta
+  updateMeta(updates: AgentSessionMetaUpdates): AgentSessionMeta
+  getAgentMessages(): AgentMessage[]
+  appendAgentMessage(message: AgentMessage): void
+  getSDKMessages(): SDKMessage[]
+  appendSDKMessages(messages: SDKMessage[]): void
+  removeSDKErrorMessage(errorUuid: string): boolean
+}
+
+const agentSessionStorageOverrides = new Map<string, AgentSessionStorageOverride>()
+
+export function registerAgentSessionStorageOverride(
+  sessionId: string,
+  storage: AgentSessionStorageOverride,
+): () => void {
+  if (agentSessionStorageOverrides.has(sessionId)) {
+    throw new Error('Agent session storage override already registered')
+  }
+  agentSessionStorageOverrides.set(sessionId, storage)
+  return () => {
+    if (agentSessionStorageOverrides.get(sessionId) === storage) {
+      agentSessionStorageOverrides.delete(sessionId)
+    }
+  }
+}
+
 /** 当前索引版本 */
 const INDEX_VERSION = 1
 
@@ -138,13 +167,37 @@ function parseJsonlStrict<T>(lines: string[], context: string): T[] {
   return records
 }
 
-function normalizePersistedSDKMessage(parsed: unknown): SDKMessage {
+/** @internal 隐藏聊天室存储复用的持久化格式转换。 */
+export function normalizePersistedSDKMessageForInternal(parsed: unknown): SDKMessage {
   // 旧格式检测：AgentMessage 有 `role` 字段，SDKMessage 有 `type` 字段
   if (parsed && typeof parsed === 'object' && 'role' in parsed && !('type' in parsed)) {
     return convertLegacyMessage(parsed as AgentMessage)
   }
   return parsed as SDKMessage
 }
+
+/** @internal 隐藏聊天室存储复用 ordinary session 的 uuid 去重语义。 */
+export function dedupeSDKMessagesForInternal(messages: SDKMessage[]): SDKMessage[] {
+  const deduped: SDKMessage[] = []
+  const uuidIndices = new Map<string, number>()
+  for (const msg of messages) {
+    const msgRecord = msg as Record<string, unknown>
+    const uuid = typeof msgRecord.uuid === 'string' ? msgRecord.uuid : undefined
+    if (uuid) {
+      const existingIdx = uuidIndices.get(uuid)
+      if (existingIdx !== undefined) {
+        deduped[existingIdx] = msg
+        continue
+      }
+      uuidIndices.set(uuid, deduped.length)
+    }
+    deduped.push(msg)
+  }
+  return deduped
+}
+
+// 兼容本文件内的普通 session 读取路径。
+const normalizePersistedSDKMessage = normalizePersistedSDKMessageForInternal
 
 function hasSameAttachedPaths(value: unknown, normalized: string[] | undefined): boolean {
   if (normalized === undefined) return value === undefined
@@ -552,6 +605,8 @@ export function listAgentSessions(): AgentSessionMeta[] {
  * 获取单个会话的元数据
  */
 export function getAgentSessionMeta(id: string): AgentSessionMeta | undefined {
+  const override = agentSessionStorageOverrides.get(id)
+  if (override) return override.getMeta()
   const index = readIndex()
   return index.sessions.find((s) => s.id === id)
 }
@@ -670,6 +725,8 @@ export function createAgentSession(
  * 读取会话的所有消息
  */
 export function getAgentSessionMessages(id: string): AgentMessage[] {
+  const override = agentSessionStorageOverrides.get(id)
+  if (override) return override.getAgentMessages()
   const filePath = getAgentSessionMessagesPath(id)
 
   if (!existsSync(filePath)) {
@@ -690,6 +747,11 @@ export function getAgentSessionMessages(id: string): AgentMessage[] {
  * 追加一条消息到会话的 JSONL 文件
  */
 export function appendAgentMessage(id: string, message: AgentMessage): void {
+  const override = agentSessionStorageOverrides.get(id)
+  if (override) {
+    override.appendAgentMessage(message)
+    return
+  }
   const filePath = getAgentSessionMessagesPath(id)
 
   try {
@@ -712,7 +774,7 @@ export function appendAgentMessage(id: string, message: AgentMessage): void {
 }
 
 /** 单条 SDKMessage 序列化后最大长度（UTF-16 code units，超出则截断内容） */
-const MAX_SDK_MESSAGE_LENGTH = 256 * 1024 // ~256K chars
+export const MAX_SDK_MESSAGE_LENGTH = 256 * 1024 // ~256K chars
 /** 截断后保留的预览文本长度 */
 const TRUNCATED_PREVIEW_LENGTH = 2000
 
@@ -723,6 +785,11 @@ const TRUNCATED_PREVIEW_LENGTH = 2000
  * 超过 256K chars 的消息会被自动截断以防止存储膨胀。
  */
 export function appendSDKMessages(id: string, messages: SDKMessage[]): void {
+  const override = agentSessionStorageOverrides.get(id)
+  if (override) {
+    override.appendSDKMessages(messages)
+    return
+  }
   if (messages.length === 0) return
 
   const filePath = getAgentSessionMessagesPath(id)
@@ -792,6 +859,8 @@ function sanitizeOversizedMessage(msg: SDKMessage, originalLength: number): SDKM
  * 新格式（有 `type` 字段）直接返回。
  */
 export function getAgentSessionSDKMessages(id: string): SDKMessage[] {
+  const override = agentSessionStorageOverrides.get(id)
+  if (override) return override.getSDKMessages()
   const filePath = getAgentSessionMessagesPath(id)
 
   if (!existsSync(filePath)) {
@@ -804,22 +873,7 @@ export function getAgentSessionSDKMessages(id: string): SDKMessage[] {
     const messages = parseJsonlLenient<unknown>(lines, `读取 SDKMessage (${id})`).map(normalizePersistedSDKMessage)
 
     // 基于 uuid 去重与自愈：同一 uuid 的消息保留最新的完整帧（容错历史流式中间帧被误追加的情况）
-    const deduped: SDKMessage[] = []
-    const uuidIndices = new Map<string, number>()
-    for (const msg of messages) {
-      const msgRecord = msg as Record<string, unknown>
-      const uuid = typeof msgRecord.uuid === 'string' ? msgRecord.uuid : undefined
-      if (uuid) {
-        const existingIdx = uuidIndices.get(uuid)
-        if (existingIdx !== undefined) {
-          deduped[existingIdx] = msg
-          continue
-        }
-        uuidIndices.set(uuid, deduped.length)
-      }
-      deduped.push(msg)
-    }
-    return deduped
+    return dedupeSDKMessagesForInternal(messages)
   } catch (error) {
     console.error(`[Agent 会话] 读取 SDKMessage 失败 (${id}):`, error)
     return []
@@ -837,6 +891,8 @@ export function updateAgentSessionMeta(
   id: string,
   updates: Partial<Pick<AgentSessionMeta, 'title' | 'channelId' | 'modelId' | 'sdkSessionId' | 'piSessionFile' | 'piEntryBindings' | 'agentRuntime' | 'codexFastMode' | 'workingMode' | 'reasoningLevel' | 'openAIThinkingLevel' | 'workspaceId' | 'expertTeamSession' | 'expertTeamSetup' | 'pinned' | 'starred' | 'archived' | 'attachedDirectories' | 'attachedFiles' | 'forkSourceDir' | 'forkSourceSdkSessionId' | 'resumeAtMessageUuid' | 'stoppedByUser' | 'permissionMode' | 'advancedAuthorization' | 'completedButUnconfirmed' | 'sourceAutomationId' | 'automationGraduated' | 'parentSessionId' | 'rootSessionId' | 'sourceDelegationId' | 'delegationRole' | 'delegationStatus' | 'delegationDepth' | 'delegationGoal' | 'source' | 'feishuDedicated' | 'wechatDedicated' | 'dingtalkDedicated'>>,
 ): AgentSessionMeta {
+  const override = agentSessionStorageOverrides.get(id)
+  if (override) return override.updateMeta(updates)
   const index = readIndex()
   const idx = index.sessions.findIndex((s) => s.id === id)
 
@@ -1265,7 +1321,8 @@ function getStoredMessageUuid(msg: SDKMessage): string | undefined {
   return 'uuid' in msg ? (msg as { uuid?: string }).uuid : undefined
 }
 
-function serializeSDKMessageForStorage(
+/** @internal 隐藏聊天室存储复用 ordinary session 的序列化上限和截断行为。 */
+export function serializeSDKMessageForStorageForInternal(
   msg: SDKMessage,
   sourceDir?: string,
   destDir?: string,
@@ -1285,6 +1342,8 @@ function serializeSDKMessageForStorage(
   }
   return sanitized
 }
+
+const serializeSDKMessageForStorage = serializeSDKMessageForStorageForInternal
 
 async function writeJsonlLine(stream: WriteStream, line: string): Promise<void> {
   await new Promise<void>((resolve, reject) => {
@@ -1365,6 +1424,8 @@ export function truncateSDKMessages(id: string, upToUuidInclusive: string): SDKM
  * 仅删除 assistant error，避免调用方误删普通回复；找不到时保持幂等。
  */
 export function removeSDKErrorMessage(id: string, errorUuid: string): boolean {
+  const override = agentSessionStorageOverrides.get(id)
+  if (override) return override.removeSDKErrorMessage(errorUuid)
   const filePath = getAgentSessionMessagesPath(id)
   if (!existsSync(filePath)) return false
 
