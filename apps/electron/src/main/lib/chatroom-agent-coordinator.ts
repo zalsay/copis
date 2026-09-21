@@ -33,6 +33,7 @@ export interface ChatRoomAgentCoordinatorFacade {
   handleInvocation(input: ChatRoomAgentInvocation): Promise<'accepted' | 'duplicate'>
   handleGatewayDisconnected(): Promise<void>
   stopAll(reason: 'logout' | 'gateway_disconnected' | 'app_quit'): Promise<{ stoppedSessionIds: string[]; releasedRoomAgentIds: string[] }>
+  dispose(): Promise<void>
   provisionAgent?(input: ProvisionChatRoomAgentInput): Promise<ChatRoomAgentLocalConfig>
   updateAgent?(input: UpdateChatRoomAgentInput): Promise<ChatRoomAgentLocalConfig>
   removeAgent?(input: RemoveChatRoomAgentInput): Promise<void>

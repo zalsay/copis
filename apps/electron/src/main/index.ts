@@ -110,6 +110,7 @@ import { disposeWebTabs, saveWebTabsSession, setWebTabHostWindow } from './lib/w
 import { setDshHostWindow, destroyDshView } from './lib/dsh-view-manager'
 import { stopAllBrowserWorkflowRecordings } from './lib/browser-workflow-service'
 import { stopAllBrowserWorkflowRuns } from './lib/browser-workflow-runner'
+import { runChatRoomQuitCleanup } from './lib/chatroom-lifecycle'
 import { startAgentToolsWatcher, stopAgentToolsWatcher } from './lib/agent-tools-watcher'
 import { getIsQuitting, setQuitting } from './lib/app-lifecycle'
 import {
@@ -759,9 +760,17 @@ app.on('before-quit', (event) => {
   disposeWebTabs()
 
   // Pi Worker 已收到停止命令后再关闭本地 HTTP API，避免开发重启时残留端口占用。
-  stopHttpApiServer().catch((error: unknown) => {
-    console.error('[HTTP API] 关闭失败:', error)
-  })
+  void runChatRoomQuitCleanup({
+    stopChatRooms: async () => {},
+    stopAgents: async () => {},
+    stopHttpApi: () => stopHttpApiServer(),
+    disposeChatRooms: async () => {
+      try {
+        const { getChatRoomAgentCoordinator } = await import('./lib/chatroom-agent-coordinator')
+        await getChatRoomAgentCoordinator().dispose()
+      } catch { /* 协调器未初始化 */ }
+    },
+  }).catch((error: unknown) => console.error('[退出] 聊天室清理失败:', error))
 
   // 释放 Pi runtime 资源
   cleanupAgentRuntimeResources()

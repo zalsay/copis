@@ -17,11 +17,13 @@ test('Given 注册后替换协调器 When 旧 token 释放 Then 不得清理新�
     handleInvocation: async () => 'accepted' as const,
     handleGatewayDisconnected: async () => {},
     stopAll: async () => ({ stoppedSessionIds: [], releasedRoomAgentIds: [] }),
+    dispose: async () => {},
   }
   const second = {
     handleInvocation: async () => 'duplicate' as const,
     handleGatewayDisconnected: async () => {},
     stopAll: async () => ({ stoppedSessionIds: [], releasedRoomAgentIds: [] }),
+    dispose: async () => {},
   }
   const releaseFirst = coordinatorModule.registerChatRoomAgentCoordinator(first)
   const releaseSecond = coordinatorModule.registerChatRoomAgentCoordinator(second)
