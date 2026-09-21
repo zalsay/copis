@@ -93,7 +93,7 @@ for (const key of Object.keys(process.env)) {
 
 import { createApplicationMenu } from './menu'
 import { registerIpcHandlers } from './ipc'
-import { ensureRustHttpApiServerReady, stopHttpApiServer } from './lib/http-api-server'
+import { addHttpApiServerExitListener, ensureRustHttpApiServerReady, stopHttpApiServer } from './lib/http-api-server'
 import { createTray, destroyTray, getTray } from './tray'
 import { initializeRuntime } from './lib/runtime-init'
 import { seedDefaultSkills } from './lib/config-paths'
@@ -557,6 +557,13 @@ async function bootstrap(): Promise<void> {
 
   // Register IPC handlers
   registerIpcHandlers()
+  // Rust 非预期退出时聊天室立即失败，不排队重试；正常 stop 不会触发该监听。
+  safeRun('chatroomRustExitListener', () => addHttpApiServerExitListener((reason) => {
+    if (reason !== 'unexpected_exit' && reason !== 'error') return
+    void import('./lib/chatroom-agent-coordinator').then(({ getChatRoomAgentCoordinator }) => {
+      return getChatRoomAgentCoordinator().handleGatewayDisconnected()
+    }).catch(() => undefined)
+  }))
 
   // 注册 DSH Cordis 创造模式内嵌 Web Session 请求头拦截器
   safeRun('registerDshCordisWebSessionHeaders', registerDshCordisWebSessionHeaders)
@@ -725,7 +732,13 @@ app.on('before-quit', (event) => {
     event.preventDefault()
     if (!piWorkerStopInProgress) {
       piWorkerStopInProgress = true
-      void stopAllAgents()
+      void (async () => {
+        try {
+          const { getChatRoomAgentCoordinator } = await import('./lib/chatroom-agent-coordinator')
+          await (getChatRoomAgentCoordinator() as { stopAll?: (reason: 'app_quit') => Promise<void> }).stopAll?.('app_quit')
+        } catch { /* 协调器未初始化或已释放 */ }
+        await stopAllAgents()
+      })()
         .catch((error: unknown) => {
           console.warn('[退出] Pi Worker 批量停止失败:', error)
         })

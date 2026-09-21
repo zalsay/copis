@@ -144,6 +144,7 @@ export interface HttpApiDependencies {
   handleChatRoomInvocation?: (input: ChatRoomAgentInvocation) => Promise<'accepted' | 'duplicate'>
   /** Rust bridge 断开通知使用的聊天室清理入口。 */
   handleChatRoomGatewayDisconnected?: () => Promise<void>
+  stopChatRoomAgents?: (reason: 'logout') => Promise<void>
   handleAgentPermission?: (input: { sessionId: string; requestId: string; toolName: string; toolInput: Record<string, unknown>; description?: string }) => Promise<{ behavior: 'allow' | 'deny'; message?: string }>
 }
 
@@ -202,6 +203,14 @@ const defaultDependencies: HttpApiDependencies = {
     })
   },
   getFileApi: () => fileService,
+  stopChatRoomAgents: async (reason) => {
+    try {
+      const { getChatRoomAgentCoordinator } = await import('./chatroom-agent-coordinator')
+      await (getChatRoomAgentCoordinator() as { stopAll?: (value: 'logout') => Promise<void> }).stopAll?.(reason)
+    } catch {
+      // 聊天室协调器尚未初始化时没有可停止的运行。
+    }
+  },
 }
 
 let defaultAgentApiPromise: Promise<AgentHttpFacade> | null = null
@@ -873,6 +882,7 @@ async function handleWorkingRequest(
   }
 
   if (resource === 'logout' && method === 'POST') {
+    await dependencies.stopChatRoomAgents?.('logout')
     client.logout()
     return { status: 200, body: makeAuthState(client) }
   }

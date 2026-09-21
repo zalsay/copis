@@ -200,6 +200,39 @@ export interface SyncChatRoomAgentSkillsInput {
   roomAgentId: string
 }
 
+/** Renderer 可见的聊天室 Agent 脱敏视图。 */
+export interface ChatRoomAgentLocalView {
+  roomAgentId: string
+  displayName: string
+  sourceWorkspaceId: string
+  channelId: string
+  modelId?: string
+  contextMessageCount: number
+  memorySharingEnabled: boolean
+  skillSharingEnabled: boolean
+  skillSnapshotDigest?: string
+  archived: boolean
+}
+
+/** Renderer 可见的聊天室脱敏视图。 */
+export interface ChatRoomLocalRoomView {
+  roomId: string
+  agents: ChatRoomAgentLocalView[]
+  updatedAt: number
+}
+
+/** 聊天室在 Renderer 中使用的最小本地管理 API。 */
+export interface ChatRoomElectronAPI {
+  listLocalRooms(): Promise<ChatRoomLocalRoomView[]>
+  provisionAgent(input: ProvisionChatRoomAgentInput): Promise<ChatRoomAgentLocalView>
+  updateAgent(input: UpdateChatRoomAgentInput): Promise<ChatRoomAgentLocalView>
+  removeAgent(input: RemoveChatRoomAgentInput): Promise<void>
+  syncAgentSkills(input: SyncChatRoomAgentSkillsInput): Promise<ChatRoomAgentLocalView>
+  respondPermission(input: ChatRoomPermissionResponse): Promise<void>
+  onPermissionRequested(callback: (request: ChatRoomPermissionRequest) => void): () => void
+  onLocalConfigChanged(callback: (room: ChatRoomLocalRoomView) => void): () => void
+}
+
 /**
  * Main 模块之间传递的可信运行时编译期契约。
  * 该类型不得嵌入任何 IPC DTO；执行路径和其他敏感字段不能进入 Renderer。

@@ -32,7 +32,15 @@ const TERMINAL_CONFIRM_TIMEOUT_MS = 2_000
 export interface ChatRoomAgentCoordinatorFacade {
   handleInvocation(input: ChatRoomAgentInvocation): Promise<'accepted' | 'duplicate'>
   handleGatewayDisconnected(): Promise<void>
+  provisionAgent?(input: ProvisionChatRoomAgentInput): Promise<ChatRoomAgentLocalConfig>
+  updateAgent?(input: UpdateChatRoomAgentInput): Promise<ChatRoomAgentLocalConfig>
+  removeAgent?(input: RemoveChatRoomAgentInput): Promise<void>
+  syncAgentSkills?(input: SyncChatRoomAgentSkillsInput): Promise<ChatRoomAgentLocalConfig>
+  respondToPermission?(input: ChatRoomPermissionResponse): Promise<void>
   requestWorkerPermission?(input: { sessionId: string; requestId: string; toolName: string; toolInput: Record<string, unknown>; description?: string }): Promise<{ behavior: 'allow' | 'deny'; message?: string }>
+  listLocalRooms?(): ChatRoomLocalRoomConfig[]
+  onPermissionRequested?(listener: (request: ChatRoomPermissionRequest) => void): () => void
+  onLocalConfigChanged?(listener: (room: ChatRoomLocalRoomConfig) => void): () => void
 }
 export interface ChatRoomAgentEventListener { (sessionId: string, payload: AgentStreamPayload): void }
 export interface ChatRoomNextHopInput { parent: ChatRoomAgentInvocation; output: ChatRoomAgentOutput; targetAgentId: string; depth: number }
@@ -74,24 +82,33 @@ export class ChatRoomAgentCoordinator implements ChatRoomAgentCoordinatorFacade 
   private disconnected = false
   private disposed = false
   private stopping: Promise<{ stoppedSessionIds: string[]; releasedRoomAgentIds: string[] }> | undefined
+  private readonly permissionListeners = new Set<(request: ChatRoomPermissionRequest) => void>()
+  private readonly configListeners = new Set<(room: ChatRoomLocalRoomConfig) => void>()
   constructor(private readonly deps: ChatRoomAgentCoordinatorDependencies) {}
+  listLocalRooms(): ChatRoomLocalRoomConfig[] { return this.deps.store.list() }
+  onPermissionRequested(listener: (request: ChatRoomPermissionRequest) => void): () => void { this.permissionListeners.add(listener); return () => this.permissionListeners.delete(listener) }
+  onLocalConfigChanged(listener: (room: ChatRoomLocalRoomConfig) => void): () => void { this.configListeners.add(listener); return () => this.configListeners.delete(listener) }
   start(): void { if (!this.unsubscribeEvents && !this.disposed) this.unsubscribeEvents = this.deps.subscribeAgentEvents((sid, payload) => this.onAgentEvent(sid, payload)) }
   async provisionAgent(input: ProvisionChatRoomAgentInput): Promise<ChatRoomAgentLocalConfig> {
     const identity = await this.requireHostIdentity(input.roomId)
     const room = this.deps.store.provisionAgent(identity, input)
+    this.configListeners.forEach((listener) => listener(room))
     return this.requireAgent(room, room.agents.at(-1)!.roomAgentId)
   }
   async updateAgent(input: UpdateChatRoomAgentInput): Promise<ChatRoomAgentLocalConfig> {
     await this.requireHostIdentity(input.roomId)
     const room = this.deps.store.updateAgent(input)
+    this.configListeners.forEach((listener) => listener(room))
     return this.requireAgent(room, input.roomAgentId)
   }
-  async removeAgent(input: RemoveChatRoomAgentInput): Promise<void> { await this.requireHostIdentity(input.roomId); this.deps.store.archiveAgent(input) }
+  async removeAgent(input: RemoveChatRoomAgentInput): Promise<void> { await this.requireHostIdentity(input.roomId); const room = this.deps.store.archiveAgent(input); this.configListeners.forEach((listener) => listener(room)) }
   async syncAgentSkills(input: SyncChatRoomAgentSkillsInput): Promise<ChatRoomAgentLocalConfig> {
     await this.requireHostIdentity(input.roomId)
     const config = this.requireAgent(this.deps.store.read(input.roomId), input.roomAgentId)
     const result = this.deps.syncSkills({ roomId: input.roomId, roomAgentId: input.roomAgentId, sourceWorkspaceSlug: this.deps.getSourceWorkspaceSlug?.(config.sourceWorkspaceId) ?? config.sourceWorkspaceId })
-    return this.requireAgent(this.deps.store.updateAgentSkillSnapshot(input.roomId, input.roomAgentId, result), input.roomAgentId)
+    const room = this.deps.store.updateAgentSkillSnapshot(input.roomId, input.roomAgentId, result)
+    this.configListeners.forEach((listener) => listener(room))
+    return this.requireAgent(room, input.roomAgentId)
   }
   async handleInvocation(input: ChatRoomAgentInvocation): Promise<'accepted' | 'duplicate'> {
     if (this.disposed) return 'duplicate'
@@ -279,7 +296,7 @@ export class ChatRoomAgentCoordinator implements ChatRoomAgentCoordinatorFacade 
     const expiresAt = this.deps.now() + timeoutMs; const safeToolName = request.toolName.replace(/[^A-Za-z0-9_.:-]/g, '').slice(0, 80) || '未知工具'; const safe: ChatRoomPermissionRequest = { roomId: invocation.roomId, roomAgentId: config.roomAgentId, invocationId: invocation.invocationId, traceId: invocation.traceId, originalSender: invocation.sender, invocationChain: invocation.messages.at(-1)?.invocationChain ?? [], requestId: request.requestId, toolName: safeToolName, summary: sanitizeChatRoomText(request.description, { ...this.createSanitizerContext(invocation, config, this.deps.store.read(invocation.roomId), []), allowedAgentIds: [], allowedAttachmentIds: [] }, 512), createdAt: this.deps.now(), expiresAt }
     const timer = setTimeout(() => { const pending = this.pendingPermissions.get(request.requestId); if (!pending) return; clearTimeout(pending.timer); this.pendingPermissions.delete(request.requestId); (this.deps.permissionService ?? permissionService).respondToPermission(request.requestId, 'deny', false); const run = this.activeRuns.get(invocation.invocationId); if (run) { run.stopRequested = true; void this.failTerminal(run, 'host_approval_timeout'); void this.stopAgentBounded(run.config.sessionId) } }, timeoutMs)
     if (this.pendingPermissions.has(request.requestId)) { clearTimeout(timer); (this.deps.permissionService ?? permissionService).respondToPermission(request.requestId, 'deny', false); return undefined }
-    this.pendingPermissions.set(request.requestId, { request, invocationId: invocation.invocationId, roomId: invocation.roomId, hostUserId: this.deps.store.read(invocation.roomId)?.hostUserId ?? '', expiresAt, timer }); if (notifyHost) this.deps.sendPermissionToHost(safe); void this.deps.rustApi.reportDelta({ invocationId: invocation.invocationId, delta: '等待主理人授权' }).catch(() => undefined)
+    this.pendingPermissions.set(request.requestId, { request, invocationId: invocation.invocationId, roomId: invocation.roomId, hostUserId: this.deps.store.read(invocation.roomId)?.hostUserId ?? '', expiresAt, timer }); if (notifyHost) { this.deps.sendPermissionToHost(safe); this.permissionListeners.forEach((listener) => listener(safe)) }; void this.deps.rustApi.reportDelta({ invocationId: invocation.invocationId, delta: '等待主理人授权' }).catch(() => undefined)
     return safe
   }
   private denyPendingPermissions(): void { const service = this.deps.permissionService ?? permissionService; for (const [requestId, pending] of this.pendingPermissions) { clearTimeout(pending.timer); service.respondToPermission(requestId, 'deny', false); this.pendingPermissions.delete(requestId) } }
@@ -331,5 +348,7 @@ export class ChatRoomAgentCoordinator implements ChatRoomAgentCoordinatorFacade 
 
 let registeredCoordinator: ChatRoomAgentCoordinatorFacade | undefined
 let registrationToken = 0
-export function registerChatRoomAgentCoordinator(coordinator: ChatRoomAgentCoordinatorFacade): () => void { const token = ++registrationToken; registeredCoordinator = coordinator; return () => { if (registrationToken === token && registeredCoordinator === coordinator) registeredCoordinator = undefined } }
+const registrationListeners = new Set<(coordinator: ChatRoomAgentCoordinatorFacade) => void>()
+export function onChatRoomAgentCoordinatorRegistered(listener: (coordinator: ChatRoomAgentCoordinatorFacade) => void): () => void { registrationListeners.add(listener); if (registeredCoordinator) listener(registeredCoordinator); return () => registrationListeners.delete(listener) }
+export function registerChatRoomAgentCoordinator(coordinator: ChatRoomAgentCoordinatorFacade): () => void { const token = ++registrationToken; registeredCoordinator = coordinator; registrationListeners.forEach((listener) => listener(coordinator)); return () => { if (registrationToken === token && registeredCoordinator === coordinator) registeredCoordinator = undefined } }
 export function getChatRoomAgentCoordinator(): ChatRoomAgentCoordinatorFacade { if (!registeredCoordinator) throw new Error('聊天室协调器尚未注册'); return registeredCoordinator }

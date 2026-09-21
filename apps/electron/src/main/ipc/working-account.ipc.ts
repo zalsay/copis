@@ -4,7 +4,11 @@ import { getWorkingApiClient } from '../lib/working-api-service'
 import { getDshCordisStatus, reloadDshCordisPlugins } from '../lib/dsh-cordis-service'
 import { getWorkingModelCatalogAccess } from '../lib/working-model-catalog-access'
 
-export function registerWorkingAccountIpcHandlers(): void {
+export interface WorkingAccountIpcOptions {
+  stopChatRoomAgents?: (reason: 'logout') => Promise<void>
+}
+
+export function registerWorkingAccountIpcHandlers(options: WorkingAccountIpcOptions = {}): void {
   ipcMain.handle(WORKING_IPC_CHANNELS.GET_CONFIG, async () => ({
     backendUrl: getWorkingApiClient().baseUrl,
   }))
@@ -77,6 +81,7 @@ export function registerWorkingAccountIpcHandlers(): void {
 
   ipcMain.handle(WORKING_IPC_CHANNELS.LOGOUT, async () => {
     const client = getWorkingApiClient()
+    if (options.stopChatRoomAgents) await options.stopChatRoomAgents('logout')
     await client.logout()
     if (getDshCordisStatus().running) await reloadDshCordisPlugins({ startIfNeeded: false })
     return { authenticated: false, user: null, backendUrl: client.baseUrl }
