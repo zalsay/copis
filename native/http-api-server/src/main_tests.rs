@@ -1072,6 +1072,14 @@ fn recording_markers_are_single_jsonl_lines() {
 }
 
 #[test]
+fn permission_bridge_has_a_bounded_approval_timeout() {
+    assert_eq!(
+        super::bridge_request_timeout_for_path("/api/internal/agent/permission"),
+        std::time::Duration::from_secs(90)
+    );
+}
+
+#[test]
 fn stores_recording_in_registered_session_directory_without_exposing_absolute_path() {
     let root = std::env::temp_dir().join(format!(
         "copis-browser-recording-session-{}",

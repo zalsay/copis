@@ -195,7 +195,7 @@ test('Given reportRunning 失败 When accepted 已回传 Then 不启动 Agent �
   expect(reportFailed).toHaveBeenCalledWith(expect.objectContaining({ code: 'internal_error', message: '聊天室 Agent 执行失败' }))
 })
 
-test('Given reportCompleted 失败 When Agent 完成 Then local remains failed and no next hop is dispatched', async () => {
+test('Given reportCompleted 结果未知 When Agent 完成 Then local remains uncertain and no lease release is claimed', async () => {
   const base = fakeDeps()
   const reportFailed = mock(async () => {})
   const createNextHop = mock(async () => {})
@@ -203,7 +203,7 @@ test('Given reportCompleted 失败 When Agent 完成 Then local remains failed a
   const coordinator = new coordinatorModule.ChatRoomAgentCoordinator(deps)
   await coordinator.handleInvocation(makeInput('completed-fail', 'agent-a'))
   await new Promise((resolve) => setTimeout(resolve, 0))
-  expect(records.get('completed-fail')?.status).toBe('failed')
+  expect(records.get('completed-fail')?.status).toBe('running')
   expect(createNextHop).not.toHaveBeenCalled()
 })
 
@@ -223,10 +223,11 @@ test('Given completion claimed while reportCompleted is pending When gateway dis
   expect(reportFailed).not.toHaveBeenCalled()
 })
 
-test('Given reportCompleted never resolves When stopAll is called Then finalization is bounded and lease release follows it', async () => {
-  const reportCompleted = mock(async (_input: unknown, options?: { signal?: AbortSignal }) => await new Promise<void>((_resolve, reject) => {
-    options?.signal?.addEventListener('abort', () => reject(new Error('aborted')), { once: true })
-  }))
+test('Given completion response is lost When stopAll is called Then idempotent finalize confirms terminal before lease release', async () => {
+  const reportCompleted = mock(async (_input: unknown, options?: { signal?: AbortSignal }) => {
+    if (!options?.signal) return
+    await new Promise<void>((_resolve, reject) => options.signal?.addEventListener('abort', () => reject(new Error('aborted')), { once: true }))
+  })
   const releaseAgentLeases = mock(async () => {})
   const { deps, records } = fakeDeps({ rustApi: { ...fakeDeps().deps.rustApi, reportCompleted, releaseAgentLeases }, stopAgent: mock(async () => await new Promise<void>(() => {})) })
   const coordinator = new coordinatorModule.ChatRoomAgentCoordinator(deps)
@@ -235,8 +236,51 @@ test('Given reportCompleted never resolves When stopAll is called Then finalizat
   const started = Date.now()
   await coordinator.stopAll('app_quit')
   expect(Date.now() - started).toBeLessThan(3_000)
-  expect(records.get('completion-never')?.status).toBe('failed')
+  expect(records.get('completion-never')?.status).toBe('completed')
   expect(releaseAgentLeases).toHaveBeenCalled()
+})
+
+test('Given Rust 已写入 completed 但响应丢失 When finalize retry succeeds Then local terminal 也唯一为 completed', async () => {
+  let serverCompleted = false
+  const reportCompleted = mock(async (_input: unknown, options?: { signal?: AbortSignal }) => {
+    if (reportCompleted.mock.calls.length === 1) {
+      serverCompleted = true
+      await new Promise<void>((_resolve, reject) => options?.signal?.addEventListener('abort', () => reject(new Error('response_lost')), { once: true }))
+      return
+    }
+    if (serverCompleted) return
+  })
+  const reportFailed = mock(async () => {})
+  const { deps, records } = fakeDeps({ rustApi: { ...fakeDeps().deps.rustApi, reportCompleted, reportFailed } })
+  const coordinator = new coordinatorModule.ChatRoomAgentCoordinator(deps)
+  await coordinator.handleInvocation(makeInput('remote-completed', 'agent-a'))
+  await new Promise((resolve) => setTimeout(resolve, 1_200))
+  expect(serverCompleted).toBe(true)
+  expect(records.get('remote-completed')?.status).toBe('completed')
+  expect(reportFailed).not.toHaveBeenCalled()
+})
+
+test('Given finalize retry 仍不可确认 When stopAll 收敛 Then uncertain run 不释放 lease', async () => {
+  const reportCompleted = mock(async () => { throw new Error('unavailable') })
+  const releaseAgentLeases = mock(async () => {})
+  const { deps, records } = fakeDeps({ rustApi: { ...fakeDeps().deps.rustApi, reportCompleted, releaseAgentLeases } })
+  const coordinator = new coordinatorModule.ChatRoomAgentCoordinator(deps)
+  await coordinator.handleInvocation(makeInput('uncertain-terminal', 'agent-a'))
+  await new Promise((resolve) => setTimeout(resolve, 1_100))
+  await coordinator.stopAll('app_quit')
+  expect(records.get('uncertain-terminal')?.status).toBe('running')
+  expect(releaseAgentLeases).not.toHaveBeenCalled()
+})
+
+test('Given reportFailed 网络失败 When stopAll 收敛 Then 未确认 terminal 保留 lease', async () => {
+  const reportFailed = mock(async () => { throw new Error('network down') })
+  const releaseAgentLeases = mock(async () => {})
+  const base = fakeDeps()
+  const { deps } = fakeDeps({ rustApi: { ...base.deps.rustApi, reportRunning: mock(async () => { throw new Error('running unavailable') }), reportFailed, releaseAgentLeases } })
+  const coordinator = new coordinatorModule.ChatRoomAgentCoordinator(deps)
+  await coordinator.handleInvocation(makeInput('failed-unconfirmed', 'agent-a'))
+  await coordinator.stopAll('app_quit')
+  expect(releaseAgentLeases).not.toHaveBeenCalled()
 })
 
 test('Given contextMessageCount=50 且收到55条消息 When启动 Then只提交最新50条', async () => {
@@ -271,6 +315,19 @@ test('Given Agent 请求敏感权限 When 主理人响应 Then 仅收到脱敏�
   await coordinator.respondToPermission({ requestId: 'permission-request-1', behavior: 'allow' })
   expect(respondToPermission).toHaveBeenCalledWith('permission-request-1', 'allow', false)
   release()
+})
+
+test('Given worker permission When external approval dispatches Then Main pending is installed before host notification', async () => {
+  let hostNotified = false
+  let pendingCreated = false
+  const sendPermissionToHost = mock(() => { expect(pendingCreated).toBe(true); hostNotified = true })
+  const openExternalApproval = mock(async (_request: PermissionRequest, _signal: AbortSignal, dispatch: () => void) => { pendingCreated = true; dispatch(); return { behavior: 'deny' as const, message: '拒绝' } })
+  const { deps } = fakeDeps({ sendPermissionToHost, permissionService: { openExternalApproval, respondToPermission: mock(() => 'session-agent-a') } })
+  const coordinator = new coordinatorModule.ChatRoomAgentCoordinator(deps)
+  await coordinator.handleInvocation(makeInput('permission-order', 'agent-a'))
+  const result = await coordinator.requestWorkerPermission!({ sessionId: 'session-agent-a', requestId: 'permission-order-1', toolName: 'Bash', toolInput: { command: 'echo test' } })
+  expect(result.behavior).toBe('deny')
+  expect(hostNotified).toBe(true)
 })
 
 test('Given host denies a pending permission When stopAgent never returns Then underlying promise is denied before bounded terminal handling', async () => {
