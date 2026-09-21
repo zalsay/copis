@@ -23,6 +23,13 @@ mock.module('electron', () => ({
 }))
 
 const { handleHttpApiRequest } = await import('./http-api-handler')
+const { parseAgentWorkerPermissionRequest } = await import('./http-api-handler')
+
+test('Given worker permission DTO When unknown fields or control text arrive Then Main rejects without truncation', () => {
+  expect(() => parseAgentWorkerPermissionRequest({ sessionId: 's', requestId: 'r', toolName: 'Bash', toolInput: {}, extra: true })).toThrow('权限请求字段不正确')
+  expect(() => parseAgentWorkerPermissionRequest({ sessionId: 's\n', requestId: 'r', toolName: 'Bash', toolInput: {} })).toThrow('权限请求参数不正确')
+  expect(() => parseAgentWorkerPermissionRequest({ sessionId: 's', requestId: 'r', toolName: 'x'.repeat(129), toolInput: {} })).toThrow('权限请求参数不正确')
+})
 
 const invocation: ChatRoomAgentInvocation = {
   invocationId: 'inv-1',

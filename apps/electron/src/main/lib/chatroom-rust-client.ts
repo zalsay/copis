@@ -240,7 +240,7 @@ export class HttpChatRoomRustApiClient implements ChatRoomReportApi {
     this.getInvocationContext = options.getInvocationContext
   }
 
-  private async post(path: string, body: Record<string, unknown>): Promise<void> {
+  private async post(path: string, body: Record<string, unknown>, signal?: AbortSignal): Promise<void> {
     const token = this.getToken()
     if (typeof token !== 'string' || token.trim().length === 0) {
       throw new Error('Rust HTTP API 尚未启动')
@@ -256,6 +256,7 @@ export class HttpChatRoomRustApiClient implements ChatRoomReportApi {
           'X-Copis-Internal-Token': token,
         },
         body: JSON.stringify(body),
+        signal,
       })
     } catch (error) {
       const safeError = redactErrorText(error instanceof Error ? error.message : String(error))
@@ -309,7 +310,7 @@ export class HttpChatRoomRustApiClient implements ChatRoomReportApi {
     })
   }
 
-  async reportCompleted(input: Parameters<ChatRoomReportApi['reportCompleted']>[0]): Promise<void> {
+  async reportCompleted(input: Parameters<ChatRoomReportApi['reportCompleted']>[0], options?: { signal?: AbortSignal }): Promise<void> {
     const invocationId = assertInvocationId(input.invocationId)
     const context = this.resolveContext(input.invocationId)
     assertChatRoomAgentOutput((input as { output: unknown }).output)
@@ -320,7 +321,7 @@ export class HttpChatRoomRustApiClient implements ChatRoomReportApi {
       mentionAgentIds: input.output.mentionedAgentIds,
       attachmentIds: input.output.attachmentIds,
       clientMessageId: context.clientMessageId,
-    })
+    }, options?.signal)
   }
 
   async reportFailed(input: Parameters<ChatRoomReportApi['reportFailed']>[0]): Promise<void> {

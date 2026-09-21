@@ -99,6 +99,7 @@ const INTERNAL_RECORDING_PREFIX: &str = "/internal/browser-workflows/recordings/
 const DISABLED_WORKING_AUTH_SYNC_PATH: &str = "/internal/working-auth/token";
 const INTERNAL_AGENT_FILES_PREFIX: &str = "/api/internal/agent/files/";
 const INTERNAL_AGENT_SHELL_PATH: &str = "/api/internal/agent/shell";
+const INTERNAL_AGENT_PERMISSION_PATH: &str = "/api/internal/agent/permission";
 const INTERNAL_AGENT_ALIPAY_BOT_PATH: &str = "/api/internal/agent/alipay-bot";
 const INTERNAL_AGENT_MAIL_PATH: &str = "/api/internal/agent/agent-mail";
 const VITE_DEV_ORIGINS: [&str; 2] = ["http://127.0.0.1:5174", "http://localhost:5174"];
@@ -129,6 +130,9 @@ fn bridge_request_timeout() -> Duration {
 fn bridge_request_timeout_for_path(path: &str) -> Duration {
     if path == "/api/working/images/generate" {
         return Duration::from_secs(300);
+    }
+    if path == INTERNAL_AGENT_PERMISSION_PATH {
+        return Duration::from_secs(90);
     }
     bridge_request_timeout()
 }
@@ -2149,6 +2153,11 @@ fn handle_connection(
         let _ = stream.shutdown(Shutdown::Both);
         return;
     }
+    if path == INTERNAL_AGENT_PERMISSION_PATH {
+        handle_internal_agent_permission(&mut stream, &request, origin, workers.as_ref(), &bridge);
+        let _ = stream.shutdown(Shutdown::Both);
+        return;
+    }
 
     if is_internal_agent_alipay_bot_path(path) {
         handle_internal_agent_alipay_bot(&mut stream, &request, origin, workers.as_ref());
@@ -3453,6 +3462,132 @@ fn handle_internal_agent_shell(
             let body = json!({ "error": error.message, "code": error.code }).to_string();
             send_json_response(stream, error.status, &body, origin);
         }
+    }
+}
+
+fn handle_internal_agent_permission(
+    stream: &mut TcpStream,
+    request: &HttpRequest,
+    origin: Option<&str>,
+    workers: &PiWorkerManager,
+    bridge: &Bridge,
+) {
+    if request.method != "POST" {
+        send_json_response(
+            stream,
+            405,
+            r#"{"error":"权限接口只支持 POST","code":"method_not_allowed"}"#,
+            origin,
+        );
+        return;
+    }
+    let Some(token) = request.headers.get(AGENT_FILE_TOKEN_HEADER) else {
+        send_json_response(
+            stream,
+            403,
+            r#"{"error":"Agent 文件能力令牌缺失","code":"agent_file_token_required"}"#,
+            None,
+        );
+        return;
+    };
+    if request.body.len() > 64 * 1024 {
+        send_json_response(
+            stream,
+            413,
+            r#"{"error":"权限请求体过大","code":"request_body_too_large"}"#,
+            origin,
+        );
+        return;
+    }
+    let Ok(value) = serde_json::from_slice::<Value>(&request.body) else {
+        send_json_response(
+            stream,
+            400,
+            r#"{"error":"权限请求体不正确","code":"invalid_request"}"#,
+            origin,
+        );
+        return;
+    };
+    let Some(object) = value.as_object() else {
+        send_json_response(
+            stream,
+            400,
+            r#"{"error":"权限请求体必须是对象","code":"invalid_request"}"#,
+            origin,
+        );
+        return;
+    };
+    if object.keys().any(|key| {
+        !matches!(
+            key.as_str(),
+            "sessionId" | "requestId" | "toolName" | "toolInput" | "description"
+        )
+    }) || object.len() != 4 && object.len() != 5
+    {
+        send_json_response(
+            stream,
+            400,
+            r#"{"error":"权限请求字段不正确","code":"invalid_request"}"#,
+            origin,
+        );
+        return;
+    }
+    let valid_text = |value: Option<&Value>, max: usize| {
+        value.and_then(Value::as_str).is_some_and(|text| {
+            !text.is_empty() && text.len() <= max && text.chars().all(|ch| !ch.is_control())
+        })
+    };
+    let valid_id = |value: Option<&Value>| {
+        valid_text(value, 128)
+            && value.and_then(Value::as_str).is_some_and(|text| {
+                text.chars()
+                    .all(|ch| !ch.is_whitespace() && !matches!(ch, '/' | '\\' | '?' | '#'))
+            })
+    };
+    let Some(session_id) = value.get("sessionId").and_then(Value::as_str) else {
+        send_json_response(
+            stream,
+            400,
+            r#"{"error":"权限请求缺少 sessionId","code":"invalid_request"}"#,
+            origin,
+        );
+        return;
+    };
+    if !valid_id(value.get("sessionId"))
+        || !valid_id(value.get("requestId"))
+        || !valid_id(value.get("toolName"))
+        || (value.get("description").is_some() && !valid_text(value.get("description"), 1024))
+        || !value.get("toolInput").is_some_and(Value::is_object)
+    {
+        send_json_response(
+            stream,
+            400,
+            r#"{"error":"权限请求参数不正确","code":"invalid_request"}"#,
+            origin,
+        );
+        return;
+    }
+    if let Err(error) = workers
+        .file_policies()
+        .validate_chatroom_worker_token(session_id, token)
+    {
+        let body = json!({"error": error.message, "code": error.code}).to_string();
+        send_json_response(stream, error.status, &body, origin);
+        return;
+    }
+    match bridge.send_request(&HttpRequest {
+        method: "POST".into(),
+        target: INTERNAL_AGENT_PERMISSION_PATH.into(),
+        headers: HashMap::new(),
+        body: request.body.clone(),
+    }) {
+        Ok(response) => send_bridge_response(stream, response, origin),
+        Err(_) => send_json_response(
+            stream,
+            503,
+            r#"{"error":"聊天室权限通道不可用","code":"permission_bridge_unavailable"}"#,
+            origin,
+        ),
     }
 }
 

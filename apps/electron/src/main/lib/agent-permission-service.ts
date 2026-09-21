@@ -87,7 +87,7 @@ export interface CanUseToolOptions {
 
 /** 待处理的权限请求 */
 interface PendingPermission {
-  resolve: (result: PermissionResult) => void
+  settle: (result: PermissionResult) => void
   request: PermissionRequest
 }
 
@@ -170,23 +170,29 @@ export class AgentPermissionService {
     return this.openPendingPermission(request, options.signal, sendToRenderer)
   }
 
+  /** Main 内部 capability 通道复用统一 pending/abort/settle 生命周期。 */
+  openExternalApproval(request: PermissionRequest, signal: AbortSignal, sendToRenderer: (request: PermissionRequest) => void): Promise<PermissionResult> {
+    return this.openPendingPermission(request, signal, sendToRenderer)
+  }
+
   private openPendingPermission(request: PermissionRequest, signal: AbortSignal, sendToRenderer: (request: PermissionRequest) => void): Promise<PermissionResult> {
     if (this.pendingPermissions.has(request.requestId)) return Promise.reject(new Error('permission_request_duplicate'))
     if (signal.aborted) return Promise.resolve({ behavior: 'deny', message: '操作已中止' })
     let resolvePending!: (result: PermissionResult) => void
     let settled = false
+    let abortListener: (() => void) | undefined
     const result = new Promise<PermissionResult>((resolve) => { resolvePending = resolve })
-    const settle = (value: PermissionResult): void => { if (settled) return; settled = true; this.pendingPermissions.delete(request.requestId); resolvePending(value) }
-    this.pendingPermissions.set(request.requestId, { resolve: resolvePending, request })
-    const abort = (): void => settle({ behavior: 'deny', message: '操作已中止' })
-    signal.addEventListener('abort', abort, { once: true })
+    const settle = (value: PermissionResult): void => { if (settled) return; settled = true; this.pendingPermissions.delete(request.requestId); if (abortListener) signal.removeEventListener('abort', abortListener); resolvePending(value) }
+    this.pendingPermissions.set(request.requestId, { settle, request })
+    abortListener = (): void => settle({ behavior: 'deny', message: '操作已中止' })
+    signal.addEventListener('abort', abortListener, { once: true })
     try {
       sendToRenderer(request)
     } catch {
       settle({ behavior: 'deny', message: '权限请求发送失败' })
       return Promise.reject(new Error('permission_request_dispatch_failed'))
     }
-    if (signal.aborted) abort()
+    if (signal.aborted) abortListener()
     return result
   }
 
@@ -206,7 +212,7 @@ export class AgentPermissionService {
       this.addToWhitelist(sessionId, pending.request.toolName, pending.request.toolInput)
     }
 
-    pending.resolve(
+    pending.settle(
       behavior === 'allow'
         ? { behavior: 'allow' as const, updatedInput: pending.request.toolInput }
         : { behavior: 'deny' as const, message: '用户拒绝了此操作' }
@@ -221,7 +227,7 @@ export class AgentPermissionService {
   clearSessionPending(sessionId: string): void {
     for (const [requestId, pending] of this.pendingPermissions) {
       if (pending.request.sessionId === sessionId) {
-        pending.resolve({ behavior: 'deny' as const, message: '会话已结束' })
+        pending.settle({ behavior: 'deny' as const, message: '会话已结束' })
         this.pendingPermissions.delete(requestId)
       }
     }

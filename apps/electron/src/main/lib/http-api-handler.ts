@@ -144,6 +144,7 @@ export interface HttpApiDependencies {
   handleChatRoomInvocation?: (input: ChatRoomAgentInvocation) => Promise<'accepted' | 'duplicate'>
   /** Rust bridge 断开通知使用的聊天室清理入口。 */
   handleChatRoomGatewayDisconnected?: () => Promise<void>
+  handleAgentPermission?: (input: { sessionId: string; requestId: string; toolName: string; toolInput: Record<string, unknown>; description?: string }) => Promise<{ behavior: 'allow' | 'deny'; message?: string }>
 }
 
 export interface BrowserAgentToolHttpApi {
@@ -954,6 +955,23 @@ async function handleWorkingRequest(
   throw new HttpApiRequestError('Working API 路径不存在', 404, 'not_found')
 }
 
+export function parseAgentWorkerPermissionRequest(value: Record<string, unknown>): { sessionId: string; requestId: string; toolName: string; toolInput: Record<string, unknown>; description?: string } {
+  const keys = Object.keys(value)
+  if (keys.some((key) => !['sessionId', 'requestId', 'toolName', 'toolInput', 'description'].includes(key)) || keys.length < 4 || keys.length > 5) throw new HttpApiRequestError('权限请求字段不正确', 400, 'invalid_permission_request')
+  const text = (key: string, max: number): string => {
+    const item = value[key]
+    if (typeof item !== 'string' || item.length === 0 || item.length > max || [...item].some((char) => char.charCodeAt(0) < 32)) throw new HttpApiRequestError('权限请求参数不正确', 400, 'invalid_permission_request')
+    return item
+  }
+  const id = (key: string): string => {
+    const item = text(key, 128)
+    if ([...item].some((char) => /\s|[\\/?#]/u.test(char))) throw new HttpApiRequestError('权限请求参数不正确', 400, 'invalid_permission_request')
+    return item
+  }
+  if (!isRecord(value.toolInput) || Object.keys(value.toolInput).length > 32) throw new HttpApiRequestError('权限请求参数不正确', 400, 'invalid_permission_request')
+  return { sessionId: id('sessionId'), requestId: id('requestId'), toolName: id('toolName'), toolInput: value.toolInput, ...(value.description === undefined ? {} : { description: text('description', 1024) }) }
+}
+
 async function handleAgentRpcInternalRequest(
   request: HttpApiRequest,
   segments: string[],
@@ -1001,6 +1019,16 @@ async function handleAgentRpcInternalRequest(
       console.warn('[AI浏览器][HTTP] browser-tool 参数校验拒绝', { method: request.method, reason: 'not_found' })
     }
     throw new HttpApiRequestError('Agent RPC 内部接口不存在', 404, 'not_found')
+  }
+  if (action === 'permission') {
+    const input = parseAgentWorkerPermissionRequest(bodyRecord)
+    const handler = dependencies.handleAgentPermission ?? (async (input) => {
+      const module = await import('./chatroom-agent-coordinator') as { getChatRoomAgentCoordinator?: () => { requestWorkerPermission?: (value: typeof input) => Promise<{ behavior: 'allow' | 'deny'; message?: string }> } }
+      const coordinator = module.getChatRoomAgentCoordinator?.()
+      if (!coordinator?.requestWorkerPermission) throw new Error('聊天室协调器尚未注册')
+      return coordinator.requestWorkerPermission(input)
+    })
+    return { status: 200, body: await handler(input) }
   }
 
   if (action === 'browser-tool') {

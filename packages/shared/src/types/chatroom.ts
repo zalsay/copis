@@ -222,7 +222,7 @@ export interface ChatRoomRustApi {
   reportAccepted(input: { invocationId: string }): Promise<void>
   reportRunning(input: { invocationId: string }): Promise<void>
   reportDelta(input: { invocationId: string; delta: string }): Promise<void>
-  reportCompleted(input: { invocationId: string; output: ChatRoomAgentOutput }): Promise<void>
+  reportCompleted(input: { invocationId: string; output: ChatRoomAgentOutput }, options?: { signal?: AbortSignal }): Promise<void>
   reportFailed(input: {
     invocationId: string
     code: ChatRoomInvocationFailureCode

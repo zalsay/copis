@@ -356,7 +356,7 @@ function buildRustFileAccessPolicy(input: {
   workspaceSkillsDir?: string
   workspaceWriteRoot: string
   additionalDirectories: string[]
-  permissionMode: CopisPermissionMode
+  permissionMode: CopisPermissionMode | 'default'
   advancedAuthorization: boolean
   isAppConnector?: boolean
   chatroomRuntimeContext?: ChatRoomAgentRuntimeContext
@@ -702,7 +702,7 @@ export async function prepareAgentRpcRun(input: AgentSendInput): Promise<PiWorke
     workspaceSkillsDir,
     workspaceWriteRoot,
     additionalDirectories: directories,
-    permissionMode: effectivePermissionMode,
+    permissionMode: queryPermissionMode,
     advancedAuthorization: !isChatroomRun && session.advancedAuthorization === true,
     isAppConnector,
     ...(isChatroomRun ? { chatroomRuntimeContext } : {}),

@@ -210,6 +210,10 @@ fn is_copis_working_channel_id(channel_id: &str) -> bool {
     channel_id.starts_with("copis-working")
 }
 
+pub fn is_supported_permission_mode_for_profile(mode: &str, profile: Option<&str>) -> bool {
+    is_supported_permission_mode(mode) || (mode == "default" && profile == Some("chatroom"))
+}
+
 impl PiWorkerManager {
     pub fn new() -> Self {
         Self {
@@ -381,10 +385,11 @@ impl PiWorkerManager {
                 .get_mut("query")
                 .and_then(Value::as_object_mut)
                 .ok_or_else(|| "Pi worker 配置缺少 query".to_string())?;
+            let capability_profile = query.get("capabilityProfile").and_then(Value::as_str);
             let permission_mode = query
                 .get("permissionMode")
                 .and_then(Value::as_str)
-                .filter(|mode| is_supported_permission_mode(mode))
+                .filter(|mode| is_supported_permission_mode_for_profile(mode, capability_profile))
                 .ok_or_else(|| "Pi worker 配置缺少有效 permissionMode".to_string())?
                 .to_string();
             let triggered_by = query

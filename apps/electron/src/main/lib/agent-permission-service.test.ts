@@ -1,9 +1,19 @@
 import { expect, test } from 'bun:test'
 import { AgentPermissionService, type CanUseToolOptions } from './agent-permission-service'
+import type { PermissionRequest } from '@copis/shared'
 
 function permissionOptions(signal: AbortSignal, toolUseID: string): CanUseToolOptions {
   return { signal, toolUseID, displayName: '删除分组', description: '删除 Todo 分组' }
 }
+
+test('Given internal worker approval When renderer responds Then external pending settles exactly once', async () => {
+  const service = new AgentPermissionService(() => 'external-request')
+  const sent: PermissionRequest[] = []
+  const result = service.openExternalApproval({ requestId: 'external-request', sessionId: 'chat-session', toolName: 'Bash', toolInput: { command: 'echo ok' }, description: 'danger', dangerLevel: 'dangerous', allowAlways: false }, new AbortController().signal, (request) => sent.push(request))
+  expect(sent).toHaveLength(1)
+  expect(service.respondToPermission('external-request', 'allow', false)).toBe('chat-session')
+  expect(await result).toMatchObject({ behavior: 'allow' })
+})
 
 test('Given a destructive planning request When it is approved Then approval is single-use and cannot create a session whitelist', async () => {
   const service = new AgentPermissionService()
@@ -62,6 +72,17 @@ test('Given abort during renderer dispatch When approval opens Then it resolves 
   const controller = new AbortController()
   let result!: Promise<unknown>
   result = service.requestSingleApproval('session-1', 'Bash', { command: 'rm -rf project' }, permissionOptions(controller.signal, 'tool-1'), () => controller.abort())
+  await expect(result).resolves.toMatchObject({ behavior: 'deny' })
+  expect(service.getPendingRequests()).toHaveLength(0)
+})
+
+test('Given approval already responded When abort and clear follow Then settle is idempotent and no pending remains', async () => {
+  const service = new AgentPermissionService(() => 'settle-once')
+  const controller = new AbortController()
+  const result = service.requestSingleApproval('session-1', 'Bash', { command: 'echo ok' }, permissionOptions(controller.signal, 'tool-1'), () => {})
+  expect(service.respondToPermission('settle-once', 'deny', false)).toBe('session-1')
+  controller.abort()
+  service.clearSessionPending('session-1')
   await expect(result).resolves.toMatchObject({ behavior: 'deny' })
   expect(service.getPendingRequests()).toHaveLength(0)
 })

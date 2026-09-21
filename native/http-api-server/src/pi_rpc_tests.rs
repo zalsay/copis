@@ -1,12 +1,26 @@
 use super::{
     configure_payment_worker_capability, configure_worker_file_capability,
-    is_copis_working_channel_id, parse_payment_worker_result, payment_worker_command,
-    permission_mode_command, resolve_worker_launch, stop_command, worker_requires_node,
-    PaymentWorkerAction, PiWorkerManager, PiWorkerRunState, PiWorkerStatusSnapshot, WorkerLaunch,
+    is_copis_working_channel_id, is_supported_permission_mode_for_profile,
+    parse_payment_worker_result, payment_worker_command, permission_mode_command,
+    resolve_worker_launch, stop_command, worker_requires_node, PaymentWorkerAction,
+    PiWorkerManager, PiWorkerRunState, PiWorkerStatusSnapshot, WorkerLaunch,
 };
 use serde_json::json;
 use std::path::PathBuf;
 use std::process::Command;
+
+#[test]
+fn chatroom_default_permission_mode_is_main_only() {
+    assert!(is_supported_permission_mode_for_profile(
+        "default",
+        Some("chatroom")
+    ));
+    assert!(!is_supported_permission_mode_for_profile(
+        "default",
+        Some("user")
+    ));
+    assert!(!is_supported_permission_mode_for_profile("default", None));
+}
 
 #[test]
 fn given_copis_working_channel_family_when_checking_working_model_then_match_prefix() {

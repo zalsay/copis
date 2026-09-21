@@ -71,6 +71,39 @@ test('Given 三个在线 Agent When 并发投递 Then 各自立即启动且不�
   expect(runAgentHeadless).toHaveBeenCalledTimes(3)
 })
 
+test('Given 相同 invocationId 并发到达 When 身份校验包含 await Then 只有一次 accepted/start', async () => {
+  let releaseIdentity!: () => void
+  const identity = new Promise<void>((resolve) => { releaseIdentity = resolve })
+  const reportAccepted = mock(async () => {})
+  const { deps, runAgentHeadless } = fakeDeps({
+    getCurrentUserId: async () => { await identity; return 'user-1' },
+    rustApi: { ...fakeDeps().deps.rustApi, reportAccepted },
+  })
+  const coordinator = new coordinatorModule.ChatRoomAgentCoordinator(deps)
+  const first = coordinator.handleInvocation(makeInput('same-concurrent', 'agent-a'))
+  const second = coordinator.handleInvocation(makeInput('same-concurrent', 'agent-a'))
+  releaseIdentity()
+  expect(await Promise.all([first, second])).toContain('duplicate')
+  expect(reportAccepted).toHaveBeenCalledTimes(1)
+  expect(runAgentHeadless).toHaveBeenCalledTimes(1)
+})
+
+test('Given 最后一次身份读取期间 Agent 被归档 When invocation 到达 Then ABA 失败且不启动', async () => {
+  let reads = 0
+  const { deps, runAgentHeadless, reportFailed } = fakeDeps({
+    getCurrentUserId: async () => {
+      reads++
+      if (reads === 3) (depsStoreRoom as ChatRoomLocalRoomConfig).agents[0]!.archivedAt = 3
+      return 'user-1'
+    },
+  })
+  const depsStoreRoom = deps.store.read() as ChatRoomLocalRoomConfig
+  const coordinator = new coordinatorModule.ChatRoomAgentCoordinator(deps)
+  await coordinator.handleInvocation(makeInput('archive-aba', 'agent-a'))
+  expect(runAgentHeadless).not.toHaveBeenCalled()
+  expect(reportFailed).toHaveBeenCalledWith(expect.objectContaining({ code: 'room_agent_not_found' }))
+})
+
 test('Given 同一 trace 与 Agent 已有记录 When 重复投递 Then 返回 duplicate 且不重启', async () => {
   const { deps, runAgentHeadless } = fakeDeps()
   const coordinator = new coordinatorModule.ChatRoomAgentCoordinator(deps)
@@ -111,6 +144,16 @@ test('Given depth=2 的结构化输出提及 Agent When 完成 Then 不创建下
   await coordinator.handleInvocation({ ...makeInput('depth-two', 'agent-a', 2), traceId: 'depth-two-trace' })
   await new Promise((resolve) => setTimeout(resolve, 0))
   expect(createNextHop).not.toHaveBeenCalled()
+})
+
+test('Given 多个 next-hop 且一路失败 When Agent 完成 Then 其它目标仍并行调度', async () => {
+  const createNextHop = mock(async ({ targetAgentId }: { targetAgentId: string }) => { if (targetAgentId === 'agent-b') throw new Error('isolated failure') })
+  const { deps } = fakeDeps({ createNextHop, runAgentHeadless: mock(async (_input: unknown, callbacks: { onComplete: (messages: AgentMessage[]) => void }) => callbacks.onComplete([{ role: 'assistant', id: 'assistant-next', content: '{"text":"完成","mentionedAgentIds":["agent-b","agent-c"],"attachmentIds":[]}', createdAt: 2 } as AgentMessage])) })
+  const coordinator = new coordinatorModule.ChatRoomAgentCoordinator(deps)
+  await coordinator.handleInvocation(makeInput('next-hop-isolation', 'agent-a'))
+  await new Promise((resolve) => setTimeout(resolve, 0))
+  expect(createNextHop).toHaveBeenCalledTimes(2)
+  expect(createNextHop.mock.calls.map(([input]) => input.targetAgentId)).toEqual(expect.arrayContaining(['agent-b', 'agent-c']))
 })
 
 test('Given authenticated host/device 不匹配 When invocation 到达 Then fail closed 且不改外来 room', async () => {
@@ -180,6 +223,22 @@ test('Given completion claimed while reportCompleted is pending When gateway dis
   expect(reportFailed).not.toHaveBeenCalled()
 })
 
+test('Given reportCompleted never resolves When stopAll is called Then finalization is bounded and lease release follows it', async () => {
+  const reportCompleted = mock(async (_input: unknown, options?: { signal?: AbortSignal }) => await new Promise<void>((_resolve, reject) => {
+    options?.signal?.addEventListener('abort', () => reject(new Error('aborted')), { once: true })
+  }))
+  const releaseAgentLeases = mock(async () => {})
+  const { deps, records } = fakeDeps({ rustApi: { ...fakeDeps().deps.rustApi, reportCompleted, releaseAgentLeases }, stopAgent: mock(async () => await new Promise<void>(() => {})) })
+  const coordinator = new coordinatorModule.ChatRoomAgentCoordinator(deps)
+  await coordinator.handleInvocation(makeInput('completion-never', 'agent-a'))
+  await new Promise((resolve) => setTimeout(resolve, 0))
+  const started = Date.now()
+  await coordinator.stopAll('app_quit')
+  expect(Date.now() - started).toBeLessThan(3_000)
+  expect(records.get('completion-never')?.status).toBe('failed')
+  expect(releaseAgentLeases).toHaveBeenCalled()
+})
+
 test('Given contextMessageCount=50 且收到55条消息 When启动 Then只提交最新50条', async () => {
   let captured: AgentSendInputLike | undefined
   const messages = Array.from({ length: 55 }, (_, index) => ({ messageId: `m-${index}`, sender: { type: 'user' as const, id: 'u', displayName: '用户' }, text: `消息-${index}`, createdAt: index }))
@@ -230,6 +289,38 @@ test('Given host denies a pending permission When stopAgent never returns Then u
   await coordinator.respondToPermission({ requestId: 'deny-request', behavior: 'deny' })
   expect(respondToPermission).toHaveBeenCalledWith('deny-request', 'deny', false)
   expect(records.get('deny-bounded')?.status).toBe('failed')
+})
+
+test('Given permissionTimeoutMs 可注入 When 主理人不响应 Then worker pending 显式 deny 且 terminal 收敛', async () => {
+  let runtime: { requestPermission?: (request: PermissionRequest) => void } | undefined
+  const respondToPermission = mock(async () => 'session-agent-a')
+  const { deps, records } = fakeDeps({
+    permissionTimeoutMs: 10,
+    permissionService: { respondToPermission, openExternalApproval: async () => await new Promise<never>(() => {}) },
+    runAgentHeadless: mock(async (_input: unknown, callbacks: { trustedRuntimeContext?: { requestPermission?: (request: PermissionRequest) => void } }) => { runtime = callbacks.trustedRuntimeContext; await new Promise<void>(() => {}) }),
+  })
+  const coordinator = new coordinatorModule.ChatRoomAgentCoordinator(deps)
+  await coordinator.handleInvocation(makeInput('permission-timeout', 'agent-a'))
+  for (let i = 0; i < 10 && !runtime; i++) await Promise.resolve()
+  runtime?.requestPermission?.({ requestId: 'timeout-request', sessionId: 'session-agent-a', toolName: 'Bash', toolInput: { command: 'danger' }, description: '危险操作', dangerLevel: 'dangerous' })
+  await new Promise((resolve) => setTimeout(resolve, 30))
+  expect(respondToPermission).toHaveBeenCalledWith('timeout-request', 'deny', false)
+  expect(records.get('permission-timeout')?.failureCode).toBe('host_approval_timeout')
+})
+
+test('Given skill snapshot digest 不匹配 When invocation 启动 Then 拒绝执行并记录固定失败', async () => {
+  const reportFailed = mock(async () => {})
+  const { deps, runAgentHeadless } = fakeDeps({
+    room: undefined,
+    rustApi: { ...fakeDeps().deps.rustApi, reportFailed },
+  })
+  const room = (deps.store.read() as ChatRoomLocalRoomConfig)
+  room.agents[0] = { ...room.agents[0]!, skillSharingEnabled: true, skillSnapshotDigest: 'b'.repeat(64) }
+  const coordinator = new coordinatorModule.ChatRoomAgentCoordinator(deps)
+  await coordinator.handleInvocation(makeInput('skill-mismatch', 'agent-a'))
+  await new Promise((resolve) => setTimeout(resolve, 0))
+  expect(runAgentHeadless).not.toHaveBeenCalled()
+  expect(reportFailed).toHaveBeenCalledWith(expect.objectContaining({ code: 'invalid_invocation' }))
 })
 
 test('Given 本地存在多个未归档 Agent When stopAll Then 释放全部 lease 且重复调用幂等', async () => {

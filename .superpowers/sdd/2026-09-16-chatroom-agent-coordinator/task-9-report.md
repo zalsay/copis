@@ -46,3 +46,31 @@ Fix round 2 verification：coordinator 18/18，workspace store 25/25，permissio
 - GREEN：权限服务在注册前及 dispatch 后检查 abort，并通过幂等 settle 清理 pending；RPC Main-only query mode 使用 `default`，Renderer `CopisPermissionMode` 未扩展；聊天室 Rust file tools 恢复受限 Bash，安全文件工具仍由 coordinator/orchestrator 控制，外部工具继续审批或拒绝；run 增加 completion claim，完成回传 pending 时断连不会倒写 failed。
 
 Fix round 3 verification：permission 4/4，coordinator 19/19，RPC service 34/34，Pi builtin tools 22/22；Electron typecheck、build:main、build:renderer 均通过。停止超时可通过 Main-only `stopAgentTimeoutMs` 注入测试值；待提交。
+
+## Fix round 4/5
+
+- RED：新增 Worker 源码回归断言、external approval settle 测试与 Rust `chatroom default` profile 测试；初始结果分别为 unconditional allow 断言失败、`openExternalApproval is not a function`、Rust helper unresolved import。
+- GREEN：Pi Worker 在 `capabilityProfile=chatroom` 下对 project 内 Read/Edit/Write/MultiEdit 与只读 Memory 自动允许，敏感能力明确拒绝，其余（含 Bash/越界文件）经 session-bound `COPIS_PI_FILE_API_TOKEN` 访问 Rust permission route；Rust 只对 chatroom profile 接受 Main-only `default`，普通 profile 仍拒绝；Rust route 校验 token/session 后通过 stdio Bridge 转发 Main，Main coordinator 复用统一 pending settle API。
+- 验证：`bun test apps/electron/src/main/pi-rpc-worker.test.ts apps/electron/src/main/lib/agent-permission-service.test.ts` 8 pass；`cargo test --manifest-path native/http-api-server/Cargo.toml chatroom_default_permission_mode_is_main_only` 1 pass；`cargo test --manifest-path native/http-api-server/Cargo.toml chatroom_default_policy_requires_chatroom_profile` 1 pass；Electron typecheck pass；`git diff --check` pass。
+- 剩余风险：本轮尚未补齐 Rust route 的网络级 token 错误/跨 session、Main handler/gateway 集成测试，completion/disconnect 终态协议与 expired/non-host 既有实现仍需主 Agent 继续审阅；未执行全套 build 与实际 Electron UI 验收。
+
+### Fix round 4 continuation
+
+- 修复 chatroom `query.permissionMode=default` 与 Rust file policy mismatch：policy 与 query 同时使用 Main-only `default`，普通 profile 仍拒绝。
+- Bridge 对 permission route 使用 90 秒有界等待；Rust permission route 增加 chatroom profile、token/session 绑定、精确字段、长度、控制字符和 body 上限校验；Main 增加严格 permission DTO validator，拒绝未知字段和静默截断。
+- Coordinator 改用注入的 permission service；权限服务 pending 使用统一幂等 settle 并移除 abort listener；过期响应立即删除 pending、底层 deny、claim timeout terminal 后抛 `permission_expired`。
+- 新增 settle-after-respond、Main validator、chatroom profile/token 绑定回归测试。
+- 验证：Electron focused 27 pass，typecheck pass；Rust focused tests需分进程运行（Bun/Rust 命令参数不能一次传多个 test filter）；cargo fmt check 尚待精确格式化且不触碰既有 dirty hunks。
+
+### Fix round 4 final continuation
+
+- `prepareAgentRpcRun` 的聊天室 file policy 现在与 query 同用 Main-only `default`；`PiWorkerFileAccessPolicy` 与内部 protocol 接受该值，普通 renderer 输入仍不可注入 capability profile。
+- permission bridge timeout 精确提高到 90 秒；Rust policy 增加 `chatroom_profile` 绑定，permission route 不再接受普通 worker token。Rust/Main validator 均拒绝未知字段、空值、控制字符、过长 ID/文本、非对象 toolInput 和静默截断。
+- Worker canUseTool 抽为 `pi-worker-permission.ts` 并由真实 Worker 使用；测试真实调用证明 project-local Read 立即 allow、Bash 在 bridge response 前保持 pending，abort 后 fail closed。
+- `PendingPermission` 统一幂等 settle，settle 时移除 abort listener；补 respond→abort→clear 回归。过期 host 响应立即删除 pending、底层 deny 并 claim `host_approval_timeout`。
+- 验证：Electron focused 28 pass，Electron typecheck pass；Rust `chatroom_default_policy_requires_chatroom_profile` pass，`chatroom_default_permission_mode_is_main_only` pass。cargo fmt check 仍需主代理对既有 dirty main.rs hunks 做精确格式处理；未提交。
+## Fix round 4 final RED/GREEN
+
+- RED: completion callback could remain in flight after the local 1s race, allowing a late remote completed terminal; the new regression holds `reportCompleted` until its `AbortSignal` is observed and asserts cancellation before lease release.
+- GREEN: `ChatRoomRustApi.reportCompleted` now accepts an optional signal; `HttpChatRoomRustApiClient` forwards it to fetch; coordinator aborts and awaits the in-flight request before recording the single local failed terminal and releasing leases. Added concurrent invocation, archive ABA, timeout, skill-digest, and next-hop isolation BDDs.
+- Commands: `bun test apps/electron/src/main/lib/chatroom-agent-coordinator.test.ts` (25 pass, 53 expects); focused worker/permission/handler suite (28 pass, 82 expects); `bun run --filter='@copis/electron' typecheck`; `bun run --filter='@copis/electron' build:main`; `bun run --filter='@copis/electron' build:renderer`; `cargo fmt --manifest-path native/http-api-server/Cargo.toml -- --check`; `cargo test --manifest-path native/http-api-server/Cargo.toml` (453 pass); `git diff --check`.

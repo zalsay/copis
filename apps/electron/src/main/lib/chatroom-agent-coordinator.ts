@@ -25,11 +25,13 @@ type HeadlessRunner = (input: AgentSendInput, callbacks: {
 }) => Promise<void>
 type AgentStopper = (sessionId: string) => Promise<void>
 const STOP_AGENT_TIMEOUT_MS = 1_000
+const REPORT_COMPLETION_TIMEOUT_MS = 1_000
 
 /** Task 7 的 bridge 接缝；兼容静态加载和旧 handler 测试。 */
 export interface ChatRoomAgentCoordinatorFacade {
   handleInvocation(input: ChatRoomAgentInvocation): Promise<'accepted' | 'duplicate'>
   handleGatewayDisconnected(): Promise<void>
+  requestWorkerPermission?(input: { sessionId: string; requestId: string; toolName: string; toolInput: Record<string, unknown>; description?: string }): Promise<{ behavior: 'allow' | 'deny'; message?: string }>
 }
 export interface ChatRoomAgentEventListener { (sessionId: string, payload: AgentStreamPayload): void }
 export interface ChatRoomNextHopInput { parent: ChatRoomAgentInvocation; output: ChatRoomAgentOutput; targetAgentId: string; depth: number }
@@ -43,6 +45,7 @@ export interface ChatRoomAgentCoordinatorDependencies {
   runAgentHeadless: HeadlessRunner
   stopAgent: AgentStopper
   stopAgentTimeoutMs?: number
+  permissionTimeoutMs?: number
   subscribeAgentEvents(listener: ChatRoomAgentEventListener): () => void
   createHiddenSessionStore(roomId: string, agent: ChatRoomAgentLocalConfig): ChatRoomHiddenSessionStore
   registerSessionStorageOverride(sessionId: string, storage: ChatRoomHiddenSessionStore): () => void
@@ -50,10 +53,10 @@ export interface ChatRoomAgentCoordinatorDependencies {
   createNextHop(input: ChatRoomNextHopInput): Promise<void>
   sendPermissionToHost(request: ChatRoomPermissionRequest): void
   reportDiagnostic?(message: string): void
-  permissionService?: Pick<AgentPermissionService, 'respondToPermission'>
+  permissionService?: Pick<AgentPermissionService, 'respondToPermission' | 'openExternalApproval'>
   now(): number
 }
-interface ActiveRun { invocation: ChatRoomAgentInvocation; config: ChatRoomAgentLocalConfig; stopRequested: boolean; terminal: boolean; completionClaimed: boolean; lastDeltaAt: number; sessionRelease?: () => void }
+interface ActiveRun { invocation: ChatRoomAgentInvocation; config: ChatRoomAgentLocalConfig; stopRequested: boolean; terminal: boolean; completionClaimed: boolean; lastDeltaAt: number; sessionRelease?: () => void; finalization?: Promise<void> }
 interface PendingPermission { request: PermissionRequest; invocationId: string; roomId: string; hostUserId: string; expiresAt: number; timer: ReturnType<typeof setTimeout> }
 function latestAssistantText(messages: AgentMessage[] | undefined): string {
   return messages?.filter((message) => message.role === 'assistant').map((message) => typeof message.content === 'string' ? message.content : '').at(-1) ?? ''
@@ -129,7 +132,8 @@ export class ChatRoomAgentCoordinator implements ChatRoomAgentCoordinatorFacade 
       this.activeRuns.delete(input.invocationId)
       return 'accepted'
     }
-    void this.execute(this.activeRuns.get(input.invocationId)!)
+    const run = this.activeRuns.get(input.invocationId)!
+    run.finalization = this.execute(run)
     return 'accepted'
   }
   async handleGatewayDisconnected(): Promise<void> {
@@ -137,13 +141,42 @@ export class ChatRoomAgentCoordinator implements ChatRoomAgentCoordinatorFacade 
     this.denyPendingPermissions()
     await Promise.all([...this.activeRuns.values()].map(async (run) => { run.stopRequested = true; await this.failTerminal(run, 'gateway_disconnected'); void this.stopAgentBounded(run.config.sessionId) }))
   }
+  async requestWorkerPermission(input: { sessionId: string; requestId: string; toolName: string; toolInput: Record<string, unknown>; description?: string }): Promise<{ behavior: 'allow' | 'deny'; message?: string }> {
+    const run = [...this.activeRuns.values()].find((candidate) => candidate.config.sessionId === input.sessionId)
+    if (!run || run.terminal || run.stopRequested) return { behavior: 'deny', message: '聊天室运行已结束' }
+    if (this.pendingPermissions.has(input.requestId)) return { behavior: 'deny', message: 'permission_request_duplicate' }
+    const request: PermissionRequest = { requestId: input.requestId, sessionId: input.sessionId, toolName: input.toolName, toolInput: input.toolInput, description: input.description ?? '聊天室 Agent 请求主理人授权', dangerLevel: 'dangerous', allowAlways: false }
+    const service = this.deps.permissionService ?? permissionService
+    this.requestPermission(run.invocation, run.config, request)
+    try {
+      const result = await service.openExternalApproval(request, AbortSignal.timeout(this.deps.permissionTimeoutMs ?? 60_000), () => undefined)
+      return result.behavior === 'allow' ? { behavior: 'allow' } : { behavior: 'deny', message: result.message }
+    } catch {
+      const pending = this.pendingPermissions.get(input.requestId)
+      if (pending) {
+        clearTimeout(pending.timer)
+        this.pendingPermissions.delete(input.requestId)
+      }
+      run.stopRequested = true
+      await this.failTerminal(run, 'host_approval_denied')
+      void this.stopAgentBounded(run.config.sessionId)
+      return { behavior: 'deny', message: '权限请求发送失败' }
+    }
+  }
   async respondToPermission(input: ChatRoomPermissionResponse): Promise<void> {
     const pending = this.pendingPermissions.get(input.requestId)
     if (!pending) throw new Error('permission_not_found')
     const userId = await this.deps.getCurrentUserId(); const room = this.deps.store.read(pending.roomId)
     const run = this.activeRuns.get(pending.invocationId)
     if (!room || !run || run.config.sessionId !== pending.request.sessionId || userId !== pending.hostUserId || userId !== room.hostUserId || room.deviceId !== this.deps.getDeviceId()) throw new Error('not_room_host')
-    if (this.deps.now() >= pending.expiresAt) throw new Error('permission_expired')
+    if (this.deps.now() >= pending.expiresAt) {
+      clearTimeout(pending.timer)
+      this.pendingPermissions.delete(input.requestId)
+      const service = this.deps.permissionService ?? permissionService
+      service.respondToPermission(input.requestId, 'deny', false)
+      if (run) { run.stopRequested = true; await this.failTerminal(run, 'host_approval_timeout'); void this.stopAgentBounded(run.config.sessionId) }
+      throw new Error('permission_expired')
+    }
     clearTimeout(pending.timer); this.pendingPermissions.delete(input.requestId)
     const resolved = (this.deps.permissionService ?? permissionService).respondToPermission(input.requestId, input.behavior, false)
     if (!resolved) throw new Error('permission_not_found')
@@ -152,7 +185,7 @@ export class ChatRoomAgentCoordinator implements ChatRoomAgentCoordinatorFacade 
   async stopAll(reason: 'logout' | 'gateway_disconnected' | 'app_quit'): Promise<{ stoppedSessionIds: string[]; releasedRoomAgentIds: string[] }> {
     if (this.stopping) return this.stopping
     this.disconnected = true
-    this.stopping = (async () => { const runs = [...this.activeRuns.values()]; this.denyPendingPermissions(); await Promise.all(runs.map(async (run) => { run.stopRequested = true; await this.failTerminal(run, reason === 'app_quit' ? 'app_quit' : reason === 'logout' ? 'internal_error' : 'gateway_disconnected'); void this.stopAgentBounded(run.config.sessionId) })); const roomAgentIds = [...new Set(this.deps.store.list().flatMap((room) => room.agents.filter((agent) => agent.archivedAt === undefined).map((agent) => agent.roomAgentId)))]; await this.deps.rustApi.releaseAgentLeases({ roomAgentIds, reason }).catch(() => undefined); return { stoppedSessionIds: runs.map((run) => run.config.sessionId), releasedRoomAgentIds: roomAgentIds } })()
+    this.stopping = (async () => { const runs = [...this.activeRuns.values()]; this.denyPendingPermissions(); await Promise.all(runs.map(async (run) => { run.stopRequested = true; await this.failTerminal(run, reason === 'app_quit' ? 'app_quit' : reason === 'logout' ? 'internal_error' : 'gateway_disconnected'); void this.stopAgentBounded(run.config.sessionId); await this.awaitFinalization(run) })); const roomAgentIds = [...new Set(this.deps.store.list().flatMap((room) => room.agents.filter((agent) => agent.archivedAt === undefined).map((agent) => agent.roomAgentId)))]; await this.deps.rustApi.releaseAgentLeases({ roomAgentIds, reason }).catch(() => undefined); return { stoppedSessionIds: runs.map((run) => run.config.sessionId), releasedRoomAgentIds: roomAgentIds } })()
     return this.stopping
   }
   async dispose(): Promise<void> { if (this.disposed) return; await this.stopAll('app_quit'); this.disposed = true; this.unsubscribeEvents?.(); this.unsubscribeEvents = undefined }
@@ -196,7 +229,20 @@ export class ChatRoomAgentCoordinator implements ChatRoomAgentCoordinatorFacade 
       // 先在 Main 同步临界区声明完成权，断连/拒绝的 late callback 不得倒写 failed。
       run.completionClaimed = true
       try {
-        await this.deps.rustApi.reportCompleted({ invocationId: invocation.invocationId, output })
+        const completionAbort = new AbortController()
+        const completion = this.deps.rustApi.reportCompleted({ invocationId: invocation.invocationId, output }, { signal: completionAbort.signal })
+        const completedReported = await Promise.race([
+          completion.then(() => true).catch(() => false),
+          new Promise<boolean>((resolve) => setTimeout(() => resolve(false), REPORT_COMPLETION_TIMEOUT_MS)),
+        ])
+        if (!completedReported) {
+          this.deps.reportDiagnostic?.('聊天室 completed 回传超时，取消并等待确认')
+          completionAbort.abort()
+          await completion.catch(() => undefined)
+          this.deps.store.transitionInvocation(invocation.roomId, invocation.invocationId, ['running'], (record) => ({ ...record, status: 'failed', updatedAt: this.deps.now(), finishedAt: this.deps.now(), failureCode: 'internal_error', failureMessage: failureMessage('internal_error') }))
+          run.terminal = true
+          return
+        }
       } catch {
         this.deps.reportDiagnostic?.('聊天室 completed 状态回传失败')
         await this.failTerminal(run, 'internal_error', true)
@@ -219,13 +265,15 @@ export class ChatRoomAgentCoordinator implements ChatRoomAgentCoordinatorFacade 
     return { executionWorkspace: { root: getChatRoomAgentProjectPath(invocation.roomId, config.roomAgentId), projectRoot: getChatRoomAgentProjectPath(invocation.roomId, config.roomAgentId), inboxRoot: getChatRoomAgentInboxPath(invocation.roomId, config.roomAgentId), sessionRoot: getChatRoomAgentSessionDir(invocation.roomId, config.roomAgentId) }, ...(config.memorySharingEnabled ? { memorySource: { workspaceSlug: this.deps.getSourceWorkspaceSlug?.(config.sourceWorkspaceId) ?? config.sourceWorkspaceId, policy: 'visible' as const } } : {}), ...(config.skillSharingEnabled ? { skillSnapshotPath: getChatRoomAgentSkillsSnapshotPath(invocation.roomId, config.roomAgentId) } : {}), permissionContext, requestPermission: (request) => this.requestPermission(invocation, config, request) }
   }
   private requestPermission(invocation: ChatRoomAgentInvocation, config: ChatRoomAgentLocalConfig, request: PermissionRequest): void {
-    const expiresAt = this.deps.now() + 60_000; const safeToolName = request.toolName.replace(/[^A-Za-z0-9_.:-]/g, '').slice(0, 80) || '未知工具'; const safe: ChatRoomPermissionRequest = { roomId: invocation.roomId, roomAgentId: config.roomAgentId, invocationId: invocation.invocationId, traceId: invocation.traceId, originalSender: invocation.sender, invocationChain: invocation.messages.at(-1)?.invocationChain ?? [], requestId: request.requestId, toolName: safeToolName, summary: sanitizeChatRoomText(request.description, { ...this.createSanitizerContext(invocation, config, this.deps.store.read(invocation.roomId), []), allowedAgentIds: [], allowedAttachmentIds: [] }, 512), createdAt: this.deps.now(), expiresAt }
-    const timer = setTimeout(() => { const pending = this.pendingPermissions.get(request.requestId); if (!pending) return; clearTimeout(pending.timer); this.pendingPermissions.delete(request.requestId); (this.deps.permissionService ?? permissionService).respondToPermission(request.requestId, 'deny', false); const run = this.activeRuns.get(invocation.invocationId); if (run) { run.stopRequested = true; void this.failTerminal(run, 'host_approval_timeout'); void this.stopAgentBounded(run.config.sessionId) } }, 60_000)
+    const timeoutMs = this.deps.permissionTimeoutMs ?? 60_000
+    const expiresAt = this.deps.now() + timeoutMs; const safeToolName = request.toolName.replace(/[^A-Za-z0-9_.:-]/g, '').slice(0, 80) || '未知工具'; const safe: ChatRoomPermissionRequest = { roomId: invocation.roomId, roomAgentId: config.roomAgentId, invocationId: invocation.invocationId, traceId: invocation.traceId, originalSender: invocation.sender, invocationChain: invocation.messages.at(-1)?.invocationChain ?? [], requestId: request.requestId, toolName: safeToolName, summary: sanitizeChatRoomText(request.description, { ...this.createSanitizerContext(invocation, config, this.deps.store.read(invocation.roomId), []), allowedAgentIds: [], allowedAttachmentIds: [] }, 512), createdAt: this.deps.now(), expiresAt }
+    const timer = setTimeout(() => { const pending = this.pendingPermissions.get(request.requestId); if (!pending) return; clearTimeout(pending.timer); this.pendingPermissions.delete(request.requestId); (this.deps.permissionService ?? permissionService).respondToPermission(request.requestId, 'deny', false); const run = this.activeRuns.get(invocation.invocationId); if (run) { run.stopRequested = true; void this.failTerminal(run, 'host_approval_timeout'); void this.stopAgentBounded(run.config.sessionId) } }, timeoutMs)
     if (this.pendingPermissions.has(request.requestId)) { clearTimeout(timer); (this.deps.permissionService ?? permissionService).respondToPermission(request.requestId, 'deny', false); return }
     this.pendingPermissions.set(request.requestId, { request, invocationId: invocation.invocationId, roomId: invocation.roomId, hostUserId: this.deps.store.read(invocation.roomId)?.hostUserId ?? '', expiresAt, timer }); this.deps.sendPermissionToHost(safe); void this.deps.rustApi.reportDelta({ invocationId: invocation.invocationId, delta: '等待主理人授权' }).catch(() => undefined)
   }
   private denyPendingPermissions(): void { const service = this.deps.permissionService ?? permissionService; for (const [requestId, pending] of this.pendingPermissions) { clearTimeout(pending.timer); service.respondToPermission(requestId, 'deny', false); this.pendingPermissions.delete(requestId) } }
   private async stopAgentBounded(sessionId: string): Promise<void> { let timer: ReturnType<typeof setTimeout> | undefined; await Promise.race([this.deps.stopAgent(sessionId).catch(() => undefined), new Promise<void>((resolve) => { timer = setTimeout(resolve, this.deps.stopAgentTimeoutMs ?? STOP_AGENT_TIMEOUT_MS) })]); if (timer) clearTimeout(timer) }
+  private async awaitFinalization(run: ActiveRun): Promise<void> { if (!run.finalization) return; await Promise.race([run.finalization.catch(() => undefined), new Promise<void>((resolve) => setTimeout(resolve, REPORT_COMPLETION_TIMEOUT_MS + STOP_AGENT_TIMEOUT_MS))]) }
   private onAgentEvent(sessionId: string, payload: AgentStreamPayload): void {
     const run = [...this.activeRuns.values()].find((candidate) => candidate.config.sessionId === sessionId)
     if (!run || run.terminal || this.deps.now() - run.lastDeltaAt < 50) return
