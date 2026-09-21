@@ -22,3 +22,12 @@
 
 - Task 10 仍需把真实 `runAgentHeadless`、hidden session store、session override、Skill snapshot 和 Rust bridge 生命周期注入 coordinator；本任务没有修改 IPC/preload/main lifecycle。
 - Electron 实际窗口中的权限 UI 和聊天室页面属于后续 Task 10/Phase 4，需用户最终确认。
+
+## Fix round 1
+
+- RED：reviewer 指出原实现缺少敏感工具 defense-in-depth、统一 delta sanitizer、拒绝状态持久化、CAS、回传失败停止、完整 lease release 等边界；新增 workspace CAS 与增量 sanitizer 回归后先验证失败/类型错误，再修复为 GREEN。
+- GREEN：`ChatRoomWorkspaceStore.transitionInvocation()` 在单次 load/validate/persist 路径内完成 expected-status CAS；协调器现在强制 session override 依赖、身份二次校验、accepted/running 回传失败不启动、固定错误摘要、rejected 持久化、terminal late callback 防覆盖、主理人 deny/timeout 先 stop、下一跳 `allSettled`、所有未归档 Agent lease release，并复用统一文本 sanitizer 和敏感值。
+- Orchestrator 对聊天室仅自动放行隔离 project 文件工具与只读 Memory，其余能力进入主理人单次审批；浏览器/支付/外部账号能力继续 fail closed。
+- BDD 补充覆盖：三路 barrier 并行启动、depth 2 不创建下一跳、host/device mismatch、hidden override 注册失败、accepted 回传失败、最新 N 条上下文、Main-only 权限摘要与强制单次批准、全量未归档 lease stopAll、delta 路径/secret/UTF-8 16 KiB/50ms、真实 workspace CAS late callback。
+
+Fix round 1 verification：coordinator 15/15，workspace store 24/24，sanitizer 16/16，permission 1/1，runtime 5/5，HTTP handler 17/17；Electron typecheck、build:main、build:renderer、git diff --check 均通过。

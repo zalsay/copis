@@ -1587,6 +1587,22 @@ export class AgentOrchestrator {
           return { behavior: 'deny' as const, message: '聊天室运行时未授予该敏感能力。' }
         }
 
+        // 聊天室只自动放行隔离 project 内的基础文件操作和只读 Memory；
+        // 其它能力即使当前模式是 bypass，也必须经过主理人单次审批。
+        if (isChatroomRun) {
+          const filePath = typeof input.file_path === 'string' ? input.file_path : typeof input.path === 'string' ? input.path : ''
+          const projectRoot = trustedRuntimeContext!.executionWorkspace.projectRoot
+          const relativePath = filePath ? relative(projectRoot, resolve(filePath)) : '..'
+          const insideProject = relativePath !== '' && relativePath !== '..' && !relativePath.startsWith('..')
+          const safeFileTool = ['Read', 'Edit', 'Write', 'MultiEdit'].includes(toolName) && insideProject
+          const safeMemoryTool = ['memory_recall', 'memory_read'].includes(toolName)
+          if (!safeFileTool && !safeMemoryTool) {
+            return permissionService.requestSingleApproval(sessionId, toolName, input, options, (request) => {
+              if (trustedRuntimeContext?.requestPermission) trustedRuntimeContext.requestPermission(request)
+            })
+          }
+        }
+
         // ── Write 大文件 token 截断防护 ──
         if (toolName === 'Write' && typeof input.content === 'string') {
           const estimatedTokens = estimateTokenCount(input.content)

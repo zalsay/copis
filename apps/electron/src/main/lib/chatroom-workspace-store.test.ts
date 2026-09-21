@@ -406,4 +406,15 @@ describe('聊天室本地工作区存储', () => {
     expect(store.read('room-1')?.agents.filter((agent) => agent.archivedAt === undefined)).toHaveLength(3)
     expect(new Set(store.read('room-1')?.agents.map((agent) => agent.roomAgentId)).size).toBe(4)
   })
+
+  test('invocation CAS 只允许 expected status，terminal 后 late callback 不得覆盖', () => {
+    const store = makeStore()
+    const saved = provision(store)
+    const targetAgentId = saved.agents[0]!.roomAgentId
+    const accepted = makeInvocation({ targetAgentId, status: 'accepted', acceptedAt: now, finishedAt: undefined })
+    store.upsertInvocation('room-1', accepted)
+    expect(store.transitionInvocation('room-1', 'inv-1', ['accepted'], (record) => ({ ...record, status: 'running', startedAt: now, updatedAt: now }))).toMatchObject({ transitioned: true })
+    expect(store.transitionInvocation('room-1', 'inv-1', ['running'], (record) => ({ ...record, status: 'failed', finishedAt: now, updatedAt: now, failureCode: 'gateway_disconnected', failureMessage: '聊天室网关已断开' }))).toMatchObject({ transitioned: true })
+    expect(store.transitionInvocation('room-1', 'inv-1', ['running'], (record) => ({ ...record, status: 'completed', finishedAt: now, updatedAt: now }))).toMatchObject({ transitioned: false, record: { status: 'failed' } })
+  })
 })

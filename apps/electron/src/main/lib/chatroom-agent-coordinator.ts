@@ -1,3 +1,4 @@
+import { existsSync, lstatSync } from 'node:fs'
 import type {
   AgentMessage, AgentSendInput, AgentStreamPayload, ChatRoomAgentInvocation,
   ChatRoomAgentLocalConfig, ChatRoomAgentOutput, ChatRoomAgentRuntimeContext,
@@ -8,7 +9,7 @@ import type {
 } from '@copis/shared'
 import { CHATROOM_MAX_DEPTH } from '@copis/shared'
 import { AgentPermissionService, permissionService } from './agent-permission-service'
-import { parseAndSanitizeChatRoomAgentOutput } from './chatroom-output-sanitizer'
+import { parseAndSanitizeChatRoomAgentOutput, sanitizeChatRoomText, type ChatRoomOutputSanitizerContext } from './chatroom-output-sanitizer'
 import { getChatRoomAgentInboxPath, getChatRoomAgentProjectPath, getChatRoomAgentSessionDir, getChatRoomAgentSkillsSnapshotPath, getChatRoomPath } from './config-paths'
 import type { ChatRoomHiddenSessionStore } from './chatroom-hidden-session-store'
 import type { ChatRoomWorkspaceStore } from './chatroom-workspace-store'
@@ -35,15 +36,17 @@ export interface ChatRoomAgentCoordinatorDependencies {
   rustApi: ChatRoomRustApi
   getCurrentUserId(): Promise<string | undefined>
   getDeviceId(): string
+  getSensitiveValues(): string[]
   getSourceWorkspaceSlug?(workspaceId: string): string | undefined
   runAgentHeadless: HeadlessRunner
   stopAgent: AgentStopper
   subscribeAgentEvents(listener: ChatRoomAgentEventListener): () => void
   createHiddenSessionStore(roomId: string, agent: ChatRoomAgentLocalConfig): ChatRoomHiddenSessionStore
-  registerSessionStorageOverride?(sessionId: string, storage: ChatRoomHiddenSessionStore): () => void
+  registerSessionStorageOverride(sessionId: string, storage: ChatRoomHiddenSessionStore): () => void
   syncSkills(input: SyncChatRoomAgentSkillSnapshotInput): ChatRoomSkillSnapshotResult
   createNextHop(input: ChatRoomNextHopInput): Promise<void>
   sendPermissionToHost(request: ChatRoomPermissionRequest): void
+  reportDiagnostic?(message: string): void
   permissionService?: Pick<AgentPermissionService, 'respondToPermission'>
   now(): number
 }
@@ -54,9 +57,6 @@ function latestAssistantText(messages: AgentMessage[] | undefined): string {
 }
 function failureMessage(code: ChatRoomInvocationFailureCode): string {
   return ({ agent_offline: 'Agent 当前离线', agent_busy: 'Agent 正在处理其他消息', invocation_depth_exceeded: '调用深度已达到上限', gateway_disconnected: '聊天室网关已断开', host_approval_timeout: '主理人授权超时', host_approval_denied: '主理人拒绝了操作' } as Partial<Record<ChatRoomInvocationFailureCode, string>>)[code] ?? '聊天室 Agent 执行失败'
-}
-function redactPermissionSummary(value: string): string {
-  return value.replace(/(?:[A-Za-z]:[\\/]|\/(?:Users|home|private|tmp|var|Volumes)\/)[^\s]+/g, '[本地路径已隐藏]').slice(0, 400)
 }
 
 /** Main-only 聊天室 Agent 协调器；每个 Agent 独立运行，不设全局队列。 */
@@ -88,18 +88,35 @@ export class ChatRoomAgentCoordinator implements ChatRoomAgentCoordinatorFacade 
   }
   async handleInvocation(input: ChatRoomAgentInvocation): Promise<'accepted' | 'duplicate'> {
     if (this.disposed) return 'duplicate'
+    const authenticatedUserId = await this.deps.getCurrentUserId()
+    const authenticatedDeviceId = this.deps.getDeviceId()
     const room = this.deps.store.read(input.roomId)
+    if (room && (authenticatedUserId !== room.hostUserId || authenticatedDeviceId !== room.deviceId)) {
+      await this.reportRejected(input, 'not_room_member')
+      return 'accepted'
+    }
     if (room && (this.activeRuns.has(input.invocationId) || this.deps.store.getInvocation(input.roomId, input.invocationId) || this.deps.store.getTraceAgentInvocation(input.roomId, input.traceId, input.targetAgentId))) return 'duplicate'
-    if (this.disconnected) { await this.reportRejected(input, 'agent_offline'); return 'accepted' }
+    if (room && (await this.deps.getCurrentUserId()) !== authenticatedUserId) {
+      await this.reportRejected(input, 'not_room_member')
+      return 'accepted'
+    }
+    if (this.disconnected) { await this.reportRejected(input, 'agent_offline', room, input.targetAgentId); return 'accepted' }
     const config = room?.agents.find((agent) => agent.roomAgentId === input.targetAgentId && agent.archivedAt === undefined)
     if (!room || !config) { await this.reportRejected(input, 'room_agent_not_found'); return 'accepted' }
-    if (input.depth >= CHATROOM_MAX_DEPTH) { await this.reportRejected(input, 'invocation_depth_exceeded'); return 'accepted' }
-    if ([...this.activeRuns.values()].some((run) => run.config.roomAgentId === config.roomAgentId)) { await this.reportRejected(input, 'agent_busy'); return 'accepted' }
+    if (input.depth >= CHATROOM_MAX_DEPTH) { await this.reportRejected(input, 'invocation_depth_exceeded', room, input.targetAgentId); return 'accepted' }
+    if ([...this.activeRuns.values()].some((run) => run.config.roomAgentId === config.roomAgentId)) { await this.reportRejected(input, 'agent_busy', room, input.targetAgentId); return 'accepted' }
     const now = this.deps.now()
     const record: ChatRoomInvocationRecord = { invocationId: input.invocationId, roomId: input.roomId, traceId: input.traceId, targetAgentId: input.targetAgentId, triggerMessageId: input.triggerMessageId, depth: input.depth, status: 'accepted', createdAt: Math.min(now, input.receivedAt), updatedAt: now, acceptedAt: now }
     this.deps.store.upsertInvocation(input.roomId, record)
     this.activeRuns.set(input.invocationId, { invocation: input, config, stopRequested: false, terminal: false, lastDeltaAt: -Infinity })
-    await this.deps.rustApi.reportAccepted({ invocationId: input.invocationId }).catch(() => undefined)
+    try {
+      await this.deps.rustApi.reportAccepted({ invocationId: input.invocationId })
+    } catch {
+      this.deps.reportDiagnostic?.('聊天室 accepted 状态回传失败')
+      await this.failTerminal(this.activeRuns.get(input.invocationId)!, 'internal_error')
+      this.activeRuns.delete(input.invocationId)
+      return 'accepted'
+    }
     void this.execute(this.activeRuns.get(input.invocationId)!)
     return 'accepted'
   }
@@ -111,17 +128,19 @@ export class ChatRoomAgentCoordinator implements ChatRoomAgentCoordinatorFacade 
     const pending = this.pendingPermissions.get(input.requestId)
     if (!pending) throw new Error('permission_not_found')
     const userId = await this.deps.getCurrentUserId(); const room = this.deps.store.read(pending.roomId)
-    if (!room || userId !== pending.hostUserId || userId !== room.hostUserId || room.deviceId !== this.deps.getDeviceId()) throw new Error('not_room_host')
+    const run = this.activeRuns.get(pending.invocationId)
+    if (!room || !run || run.config.sessionId !== pending.request.sessionId || userId !== pending.hostUserId || userId !== room.hostUserId || room.deviceId !== this.deps.getDeviceId()) throw new Error('not_room_host')
     if (this.deps.now() >= pending.expiresAt) throw new Error('permission_expired')
     clearTimeout(pending.timer); this.pendingPermissions.delete(input.requestId)
+    if (input.behavior === 'deny' && run) { run.stopRequested = true; await this.deps.stopAgent(run.config.sessionId).catch(() => undefined) }
     const resolved = (this.deps.permissionService ?? permissionService).respondToPermission(input.requestId, input.behavior, false)
     if (!resolved) throw new Error('permission_not_found')
-    if (input.behavior === 'deny') { const run = this.activeRuns.get(pending.invocationId); if (run) await this.failTerminal(run, 'host_approval_denied') }
+    if (input.behavior === 'deny' && run) await this.failTerminal(run, 'host_approval_denied')
   }
   async stopAll(reason: 'logout' | 'gateway_disconnected' | 'app_quit'): Promise<{ stoppedSessionIds: string[]; releasedRoomAgentIds: string[] }> {
     if (this.stopping) return this.stopping
     this.disconnected = true
-    this.stopping = (async () => { const runs = [...this.activeRuns.values()]; for (const pending of this.pendingPermissions.values()) clearTimeout(pending.timer); this.pendingPermissions.clear(); await Promise.all(runs.map(async (run) => { run.stopRequested = true; await this.deps.stopAgent(run.config.sessionId).catch(() => undefined); await this.failTerminal(run, reason === 'app_quit' ? 'app_quit' : reason === 'logout' ? 'internal_error' : 'gateway_disconnected') })); const roomAgentIds = [...new Set(runs.map((run) => run.config.roomAgentId))]; await this.deps.rustApi.releaseAgentLeases({ roomAgentIds, reason }).catch(() => undefined); return { stoppedSessionIds: runs.map((run) => run.config.sessionId), releasedRoomAgentIds: roomAgentIds } })()
+    this.stopping = (async () => { const runs = [...this.activeRuns.values()]; for (const pending of this.pendingPermissions.values()) clearTimeout(pending.timer); this.pendingPermissions.clear(); await Promise.all(runs.map(async (run) => { run.stopRequested = true; await this.deps.stopAgent(run.config.sessionId).catch(() => undefined); await this.failTerminal(run, reason === 'app_quit' ? 'app_quit' : reason === 'logout' ? 'internal_error' : 'gateway_disconnected') })); const roomAgentIds = [...new Set(this.deps.store.list().flatMap((room) => room.agents.filter((agent) => agent.archivedAt === undefined).map((agent) => agent.roomAgentId)))]; await this.deps.rustApi.releaseAgentLeases({ roomAgentIds, reason }).catch(() => undefined); return { stoppedSessionIds: runs.map((run) => run.config.sessionId), releasedRoomAgentIds: roomAgentIds } })()
     return this.stopping
   }
   async dispose(): Promise<void> { if (this.disposed) return; await this.stopAll('app_quit'); this.disposed = true; this.unsubscribeEvents?.(); this.unsubscribeEvents = undefined }
@@ -130,35 +149,59 @@ export class ChatRoomAgentCoordinator implements ChatRoomAgentCoordinatorFacade 
     const { invocation, config } = run
     try {
       const hidden = this.deps.createHiddenSessionStore(invocation.roomId, config)
-      if (this.deps.registerSessionStorageOverride) run.sessionRelease = this.deps.registerSessionStorageOverride(config.sessionId, hidden)
+      run.sessionRelease = this.deps.registerSessionStorageOverride(config.sessionId, hidden)
       const context = this.createRuntimeContext(invocation, config)
+      if (config.skillSharingEnabled) {
+        const skillPath = context.skillSnapshotPath
+        if (!skillPath || !existsSync(skillPath) || !lstatSync(skillPath).isDirectory() || !config.skillSnapshotDigest) {
+          await this.failTerminal(run, 'invalid_invocation')
+          return
+        }
+      }
       const current = this.deps.store.getInvocation(invocation.roomId, invocation.invocationId); const now = this.deps.now()
       if (!current || current.status !== 'accepted') return
-      this.deps.store.upsertInvocation(invocation.roomId, { ...current, status: 'running', startedAt: now, updatedAt: now })
-      await this.deps.rustApi.reportRunning({ invocationId: invocation.invocationId }).catch(() => undefined)
+      const running = this.deps.store.transitionInvocation(invocation.roomId, invocation.invocationId, ['accepted'], (record) => ({ ...record, status: 'running', startedAt: now, updatedAt: now }))
+      if (!running.transitioned) return
+      try {
+        await this.deps.rustApi.reportRunning({ invocationId: invocation.invocationId })
+      } catch {
+        this.deps.reportDiagnostic?.('聊天室 running 状态回传失败')
+        await this.failTerminal(run, 'internal_error')
+        return
+      }
       let runError: string | undefined; let messages: AgentMessage[] | undefined
-      const input: AgentSendInput = { sessionId: config.sessionId, userMessage: invocation.messages.map((message) => `${message.sender.displayName}: ${message.text}`).join('\n'), rawUserMessage: invocation.messages.at(-1)?.text ?? '', channelId: config.channelId, modelId: config.modelId, workspaceId: config.sourceWorkspaceId, agentRuntime: 'pi', triggeredBy: 'user' }
+      const contextMessages = invocation.messages.slice(-config.contextMessageCount)
+      const input: AgentSendInput = { sessionId: config.sessionId, userMessage: contextMessages.map((message) => `${message.sender.displayName}: ${message.text}`).join('\n'), rawUserMessage: contextMessages.at(-1)?.text ?? '', channelId: config.channelId, modelId: config.modelId, workspaceId: config.sourceWorkspaceId, agentRuntime: 'pi', triggeredBy: 'user' }
       await this.deps.runAgentHeadless(input, { source: 'chatroom', trustedRuntimeContext: context, onError: (error) => { runError = error }, onComplete: (completed) => { messages = completed }, onTitleUpdated: () => {} })
-      if (run.stopRequested || runError) { await this.failTerminal(run, run.stopRequested ? 'gateway_disconnected' : 'internal_error', runError); return }
+      if (run.stopRequested || runError) { await this.failTerminal(run, run.stopRequested ? 'gateway_disconnected' : 'internal_error'); return }
       const room = this.deps.store.read(invocation.roomId)
       const allowedAttachmentIds = [...new Set(invocation.messages.flatMap((message) => message.attachmentIds ?? []))]
-      const output = parseAndSanitizeChatRoomAgentOutput(latestAssistantText(messages), { executionRoots: [getChatRoomPath(invocation.roomId), getChatRoomAgentProjectPath(invocation.roomId, config.roomAgentId), getChatRoomAgentInboxPath(invocation.roomId, config.roomAgentId)], sensitiveValues: [], allowedAgentIds: (room?.agents ?? []).filter((agent) => agent.archivedAt === undefined).map((agent) => agent.roomAgentId), allowedAttachmentIds })
+      const sanitizerContext = this.createSanitizerContext(invocation, config, room, allowedAttachmentIds)
+      const output = parseAndSanitizeChatRoomAgentOutput(latestAssistantText(messages), sanitizerContext)
       if (run.terminal) return
       const record = this.deps.store.getInvocation(invocation.roomId, invocation.invocationId)
       if (!record || ['completed', 'failed', 'rejected'].includes(record.status)) return
-      const completedAt = this.deps.now(); this.deps.store.upsertInvocation(invocation.roomId, { ...record, status: 'completed', updatedAt: completedAt, finishedAt: completedAt })
-      await this.deps.rustApi.reportCompleted({ invocationId: invocation.invocationId, output }).catch(() => undefined)
-      if (invocation.depth + 1 < CHATROOM_MAX_DEPTH) for (const targetAgentId of output.mentionedAgentIds) { if (targetAgentId !== config.roomAgentId && !this.deps.store.getTraceAgentInvocation(invocation.roomId, invocation.traceId, targetAgentId)) await this.deps.createNextHop({ parent: invocation, output, targetAgentId, depth: invocation.depth + 1 }) }
-    } catch (error) { await this.failTerminal(run, run.stopRequested ? 'gateway_disconnected' : 'internal_error', error instanceof Error ? error.message : undefined) }
+      const completedAt = this.deps.now(); const completed = this.deps.store.transitionInvocation(invocation.roomId, invocation.invocationId, ['running'], (currentRecord) => ({ ...currentRecord, status: 'completed', updatedAt: completedAt, finishedAt: completedAt }))
+      if (!completed.transitioned) return
+      await this.deps.rustApi.reportCompleted({ invocationId: invocation.invocationId, output }).catch(() => this.deps.reportDiagnostic?.('聊天室 completed 状态回传失败'))
+      if (invocation.depth + 1 < CHATROOM_MAX_DEPTH) {
+        const dispatches = await Promise.allSettled(output.mentionedAgentIds.filter((targetAgentId) => targetAgentId !== config.roomAgentId && !this.deps.store.getTraceAgentInvocation(invocation.roomId, invocation.traceId, targetAgentId)).map((targetAgentId) => this.deps.createNextHop({ parent: invocation, output, targetAgentId, depth: invocation.depth + 1 })))
+        if (dispatches.some((result) => result.status === 'rejected')) this.deps.reportDiagnostic?.('聊天室下一跳调度失败')
+      }
+    } catch { await this.failTerminal(run, run.stopRequested ? 'gateway_disconnected' : 'internal_error') }
     finally { for (const [requestId, pending] of this.pendingPermissions) if (pending.invocationId === invocation.invocationId) { clearTimeout(pending.timer); this.pendingPermissions.delete(requestId) }; run.sessionRelease?.(); this.activeRuns.delete(invocation.invocationId) }
+  }
+  private createSanitizerContext(invocation: ChatRoomAgentInvocation, config: ChatRoomAgentLocalConfig, room: ChatRoomLocalRoomConfig | undefined, allowedAttachmentIds: string[]): ChatRoomOutputSanitizerContext {
+    return { executionRoots: [getChatRoomPath(invocation.roomId), getChatRoomAgentProjectPath(invocation.roomId, config.roomAgentId), getChatRoomAgentInboxPath(invocation.roomId, config.roomAgentId)], sensitiveValues: this.deps.getSensitiveValues(), allowedAgentIds: (room?.agents ?? []).filter((agent) => agent.archivedAt === undefined).map((agent) => agent.roomAgentId), allowedAttachmentIds }
   }
   private createRuntimeContext(invocation: ChatRoomAgentInvocation, config: ChatRoomAgentLocalConfig): ChatRoomAgentRuntimeContext {
     const permissionContext = { roomId: invocation.roomId, roomAgentId: config.roomAgentId, invocationId: invocation.invocationId, traceId: invocation.traceId, originalSender: invocation.sender, invocationChain: invocation.messages.at(-1)?.invocationChain ?? [] }
     return { executionWorkspace: { root: getChatRoomAgentProjectPath(invocation.roomId, config.roomAgentId), projectRoot: getChatRoomAgentProjectPath(invocation.roomId, config.roomAgentId), inboxRoot: getChatRoomAgentInboxPath(invocation.roomId, config.roomAgentId), sessionRoot: getChatRoomAgentSessionDir(invocation.roomId, config.roomAgentId) }, ...(config.memorySharingEnabled ? { memorySource: { workspaceSlug: this.deps.getSourceWorkspaceSlug?.(config.sourceWorkspaceId) ?? config.sourceWorkspaceId, policy: 'visible' as const } } : {}), ...(config.skillSharingEnabled ? { skillSnapshotPath: getChatRoomAgentSkillsSnapshotPath(invocation.roomId, config.roomAgentId) } : {}), permissionContext, requestPermission: (request) => this.requestPermission(invocation, config, request) }
   }
   private requestPermission(invocation: ChatRoomAgentInvocation, config: ChatRoomAgentLocalConfig, request: PermissionRequest): void {
-    const expiresAt = this.deps.now() + 60_000; const safe: ChatRoomPermissionRequest = { roomId: invocation.roomId, roomAgentId: config.roomAgentId, invocationId: invocation.invocationId, traceId: invocation.traceId, originalSender: invocation.sender, invocationChain: invocation.messages.at(-1)?.invocationChain ?? [], requestId: request.requestId, toolName: request.toolName, summary: redactPermissionSummary(request.description), createdAt: this.deps.now(), expiresAt }
-    const timer = setTimeout(() => { const pending = this.pendingPermissions.get(request.requestId); if (!pending) return; this.pendingPermissions.delete(request.requestId); (this.deps.permissionService ?? permissionService).respondToPermission(request.requestId, 'deny', false); const run = this.activeRuns.get(invocation.invocationId); if (run) void this.failTerminal(run, 'host_approval_timeout') }, 60_000)
+    const expiresAt = this.deps.now() + 60_000; const safeToolName = request.toolName.replace(/[^A-Za-z0-9_.:-]/g, '').slice(0, 80) || '未知工具'; const safe: ChatRoomPermissionRequest = { roomId: invocation.roomId, roomAgentId: config.roomAgentId, invocationId: invocation.invocationId, traceId: invocation.traceId, originalSender: invocation.sender, invocationChain: invocation.messages.at(-1)?.invocationChain ?? [], requestId: request.requestId, toolName: safeToolName, summary: sanitizeChatRoomText(request.description, { ...this.createSanitizerContext(invocation, config, this.deps.store.read(invocation.roomId), []), allowedAgentIds: [], allowedAttachmentIds: [] }, 512), createdAt: this.deps.now(), expiresAt }
+    const timer = setTimeout(() => { const pending = this.pendingPermissions.get(request.requestId); if (!pending) return; this.pendingPermissions.delete(request.requestId); const run = this.activeRuns.get(invocation.invocationId); if (run) { run.stopRequested = true; void this.deps.stopAgent(run.config.sessionId).finally(() => { (this.deps.permissionService ?? permissionService).respondToPermission(request.requestId, 'deny', false); void this.failTerminal(run, 'host_approval_timeout') }) } else { (this.deps.permissionService ?? permissionService).respondToPermission(request.requestId, 'deny', false) } }, 60_000)
+    if (this.pendingPermissions.has(request.requestId)) { clearTimeout(timer); return }
     this.pendingPermissions.set(request.requestId, { request, invocationId: invocation.invocationId, roomId: invocation.roomId, hostUserId: this.deps.store.read(invocation.roomId)?.hostUserId ?? '', expiresAt, timer }); this.deps.sendPermissionToHost(safe); void this.deps.rustApi.reportDelta({ invocationId: invocation.invocationId, delta: '等待主理人授权' }).catch(() => undefined)
   }
   private onAgentEvent(sessionId: string, payload: AgentStreamPayload): void {
@@ -171,10 +214,12 @@ export class ChatRoomAgentCoordinator implements ChatRoomAgentCoordinatorFacade 
     }
     if (!text) return
     run.lastDeltaAt = this.deps.now()
-    void this.deps.rustApi.reportDelta({ invocationId: run.invocation.invocationId, delta: text.slice(0, 16 * 1024) }).catch(() => undefined)
+    const room = this.deps.store.read(run.invocation.roomId)
+    const safeDelta = sanitizeChatRoomText(text, this.createSanitizerContext(run.invocation, run.config, room, []), 16 * 1024)
+    void this.deps.rustApi.reportDelta({ invocationId: run.invocation.invocationId, delta: safeDelta }).catch(() => this.deps.reportDiagnostic?.('聊天室增量回传失败'))
   }
-  private async failTerminal(run: ActiveRun, code: ChatRoomInvocationFailureCode, detail?: string): Promise<void> { if (run.terminal) return; run.terminal = true; const record = this.deps.store.getInvocation(run.invocation.roomId, run.invocation.invocationId); if (!record || ['completed', 'failed', 'rejected'].includes(record.status)) return; const finishedAt = this.deps.now(); this.deps.store.upsertInvocation(run.invocation.roomId, { ...record, status: 'failed', updatedAt: finishedAt, finishedAt, failureCode: code, failureMessage: detail?.slice(0, 400) || failureMessage(code) }); await this.deps.rustApi.reportFailed({ invocationId: run.invocation.invocationId, code, message: detail?.slice(0, 400) || failureMessage(code) }).catch(() => undefined) }
-  private async reportRejected(input: ChatRoomAgentInvocation, code: ChatRoomInvocationFailureCode): Promise<void> { await this.deps.rustApi.reportFailed({ invocationId: input.invocationId, code, message: failureMessage(code) }).catch(() => undefined) }
+  private async failTerminal(run: ActiveRun, code: ChatRoomInvocationFailureCode): Promise<void> { if (run.terminal) return; run.terminal = true; const transitioned = this.deps.store.transitionInvocation(run.invocation.roomId, run.invocation.invocationId, ['accepted', 'running'], (record) => ({ ...record, status: 'failed', updatedAt: this.deps.now(), finishedAt: this.deps.now(), failureCode: code, failureMessage: failureMessage(code) })); if (!transitioned.transitioned) return; await this.deps.rustApi.reportFailed({ invocationId: run.invocation.invocationId, code, message: failureMessage(code) }).catch(() => this.deps.reportDiagnostic?.('聊天室 terminal 状态回传失败')) }
+  private async reportRejected(input: ChatRoomAgentInvocation, code: ChatRoomInvocationFailureCode, room?: ChatRoomLocalRoomConfig, targetAgentId?: string): Promise<void> { if (room && targetAgentId && room.agents.some((agent) => agent.roomAgentId === targetAgentId)) { const now = this.deps.now(); try { this.deps.store.upsertInvocation(input.roomId, { invocationId: input.invocationId, roomId: input.roomId, traceId: input.traceId, targetAgentId, triggerMessageId: input.triggerMessageId, depth: input.depth, status: 'rejected', createdAt: Math.min(now, input.receivedAt), updatedAt: now, finishedAt: now, failureCode: code, failureMessage: failureMessage(code) }) } catch { /* 记录失败时仍只上报固定码 */ } } await this.deps.rustApi.reportFailed({ invocationId: input.invocationId, code, message: failureMessage(code) }).catch(() => this.deps.reportDiagnostic?.('聊天室 rejected 状态回传失败')) }
   private async requireHostIdentity(roomId: string): Promise<{ hostUserId: string; deviceId: string }> { const userId = await this.deps.getCurrentUserId(); const room = this.deps.store.read(roomId); if (!room || !userId || room.hostUserId !== userId || room.deviceId !== this.deps.getDeviceId()) throw new Error('not_room_host'); return { hostUserId: userId, deviceId: this.deps.getDeviceId() } }
   private requireAgent(room: ChatRoomLocalRoomConfig | undefined, id: string): ChatRoomAgentLocalConfig { const agent = room?.agents.find((candidate) => candidate.roomAgentId === id); if (!agent) throw new Error('room_agent_not_found'); return agent }
 }

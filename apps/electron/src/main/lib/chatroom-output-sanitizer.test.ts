@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { parseAndSanitizeChatRoomAgentOutput, type ChatRoomOutputSanitizerContext } from './chatroom-output-sanitizer'
+import { parseAndSanitizeChatRoomAgentOutput, sanitizeChatRoomText, type ChatRoomOutputSanitizerContext } from './chatroom-output-sanitizer'
 
 const context: ChatRoomOutputSanitizerContext = {
   executionRoots: ['/tmp/chatroom/runtime', '/tmp/chatroom/runtime/project'],
@@ -119,4 +119,15 @@ test('Given 输出超过 64 KiB UTF-8 边界 When 清理 Then 截断不破坏字
 test('Given 清理后为空 When 清理 Then 返回固定安全占位', () => {
   expect(parseAndSanitizeChatRoomAgentOutput('\u0000\u001b[31m\u001b[0m', context).text).toBe('[内容已清理]')
   expect(parseAndSanitizeChatRoomAgentOutput('{"text":"","mentionedAgentIds":[],"attachmentIds":[]}', context).text).toBe('[内容已清理]')
+})
+
+test('Given 增量含路径、secret、surrogate 或超长 UTF-8 When sanitizeChatRoomText Then 固定清理并按字节截断', () => {
+  const value = sanitizeChatRoomText(`/Users/private/project token-secret ${'界'.repeat(20_000)}`, {
+    ...context,
+    sensitiveValues: ['token-secret'],
+  })
+  expect(value).not.toContain('/Users/private/project')
+  expect(value).not.toContain('token-secret')
+  expect(new TextEncoder().encode(value).byteLength).toBeLessThanOrEqual(16 * 1024)
+  expect(sanitizeChatRoomText('bad\uD800', context)).toBe('[内容已清理]')
 })

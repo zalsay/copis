@@ -54,10 +54,10 @@ function replaceSecrets(value: string, secrets: string[]): string {
     .reduce((result, secret) => result.replace(new RegExp(escapeRegExp(secret), 'g'), SECRET_PLACEHOLDER), value)
 }
 
-function truncateUtf8(value: string): string {
+function truncateUtf8(value: string, maxBytes = MAX_OUTPUT_BYTES): string {
   const encoded = new TextEncoder().encode(value)
-  if (encoded.byteLength <= MAX_OUTPUT_BYTES) return value
-  let end = MAX_OUTPUT_BYTES
+  if (encoded.byteLength <= maxBytes) return value
+  let end = maxBytes
   const decoder = new TextDecoder('utf-8', { fatal: true })
   while (end > 0) {
     try {
@@ -89,15 +89,24 @@ function getOverlappingSensitiveValues(roots: string[], secrets: string[]): stri
   return secrets.filter((secret) => roots.some((root) => root.includes(secret) || secret.includes(root)))
 }
 
-function sanitizeText(value: string, context: ChatRoomOutputSanitizerContext): string {
+function sanitizeText(value: string, context: ChatRoomOutputSanitizerContext, maxBytes = MAX_OUTPUT_BYTES): string {
   let sanitized = normalizeText(value)
   if (hasUnpairedSurrogate(sanitized)) return CLEAN_PLACEHOLDER
   sanitized = replaceSecrets(sanitized, getOverlappingSensitiveValues(context.executionRoots, context.sensitiveValues))
   sanitized = replaceKnownRoots(sanitized, context.executionRoots)
   sanitized = replaceGenericPaths(sanitized)
   sanitized = replaceSecrets(sanitized, context.sensitiveValues)
-  sanitized = truncateUtf8(sanitized)
+  sanitized = truncateUtf8(sanitized, maxBytes)
   return sanitized.trim().length > 0 ? sanitized : CLEAN_PLACEHOLDER
+}
+
+/** 聊天室所有增量/摘要文本共用的安全边界。 */
+export function sanitizeChatRoomText(
+  value: string,
+  context: ChatRoomOutputSanitizerContext,
+  maxBytes = 16 * 1024,
+): string {
+  return sanitizeText(value, context, maxBytes)
 }
 
 function intersectIds(values: string[], allowed: string[]): string[] {

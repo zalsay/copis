@@ -517,6 +517,39 @@ export class ChatRoomWorkspaceStore {
     return clone(normalized.find((item) => item.invocationId === record.invocationId) ?? record)
   }
 
+  /**
+   * 在一次 load/validate/persist 路径内完成 invocation 状态 CAS。
+   * 返回 false 表示当前状态已被其它完成路径抢先转换，调用方不得继续上报。
+   */
+  transitionInvocation(
+    roomId: string,
+    invocationId: string,
+    expectedStatuses: readonly ChatRoomInvocationRecord['status'][],
+    update: (current: ChatRoomInvocationRecord) => ChatRoomInvocationRecord,
+  ): { transitioned: boolean; record?: ChatRoomInvocationRecord } {
+    const current = this.load(roomId, this.now())
+    if (!current) throw new Error('room_not_found')
+    const index = current.invocations.findIndex((item) => item.invocationId === invocationId)
+    if (index < 0) return { transitioned: false }
+    const previous = current.invocations[index]!
+    if (!expectedStatuses.includes(previous.status)) return { transitioned: false, record: clone(previous) }
+    const nextRecord = update(clone(previous))
+    validateInvocation(nextRecord, roomId)
+    if (nextRecord.invocationId !== previous.invocationId
+      || nextRecord.traceId !== previous.traceId
+      || nextRecord.targetAgentId !== previous.targetAgentId
+      || nextRecord.triggerMessageId !== previous.triggerMessageId
+      || nextRecord.depth !== previous.depth) {
+      throw new Error('invocation_transition_identity_mismatch')
+    }
+    const invocations = [...current.invocations]
+    invocations[index] = clone(nextRecord)
+    const normalized = normalizeInvocations(invocations, this.now())
+    const next = { ...current, invocations: normalized, updatedAt: this.now() }
+    this.persist(current, next)
+    return { transitioned: true, record: clone(nextRecord) }
+  }
+
   compactInvocationRecords(roomId: string, now = this.now()): { terminalCount: number; records: ChatRoomInvocationRecord[] } {
     const current = this.load(roomId, now)
     if (!current) throw new Error('room_not_found')

@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test'
 import { mock } from 'bun:test'
-import type { AgentMessage, ChatRoomAgentInvocation, ChatRoomAgentLocalConfig, ChatRoomLocalRoomConfig } from '@copis/shared'
+import type { AgentMessage, ChatRoomAgentInvocation, ChatRoomAgentLocalConfig, ChatRoomLocalRoomConfig, PermissionRequest } from '@copis/shared'
 
 const coordinatorModule = await import('./chatroom-agent-coordinator')
 
@@ -43,9 +43,11 @@ function fakeDeps(overrides: Record<string, unknown> = {}) {
   const records = new Map<string, any>()
   const store = {
     read: () => room,
+    list: () => [room],
     getInvocation: (_roomId: string, id: string) => records.get(id),
     getTraceAgentInvocation: (_roomId: string, traceId: string, target: string) => [...records.values()].find((record) => record.traceId === traceId && record.targetAgentId === target),
     upsertInvocation: (_roomId: string, record: any) => { records.set(record.invocationId, record); return record },
+    transitionInvocation: (_roomId: string, id: string, expected: string[], update: (record: any) => any) => { const current = records.get(id); if (!current || !expected.includes(current.status)) return { transitioned: false, record: current }; const next = update(current); records.set(id, next); return { transitioned: true, record: next } },
   }
   const reportAccepted = mock(async () => {})
   const reportRunning = mock(async () => {})
@@ -56,7 +58,7 @@ function fakeDeps(overrides: Record<string, unknown> = {}) {
     deps: {
       store,
       rustApi: { reportAccepted, reportRunning, reportDelta: mock(async () => {}), reportCompleted, reportFailed, releaseAgentLeases: mock(async () => {}) },
-      getCurrentUserId: async () => 'user-1', getDeviceId: () => 'device-1', runAgentHeadless, stopAgent: mock(async () => {}), subscribeAgentEvents: () => () => {}, createHiddenSessionStore: () => ({}) as never, syncSkills: () => ({ snapshotPath: '/tmp/skills', digest: 'a'.repeat(64), skillSlugs: [], syncedAt: 1 }), createNextHop: mock(async () => {}), sendPermissionToHost: mock(() => {}), now: () => 2, ...overrides,
+      getCurrentUserId: async () => 'user-1', getDeviceId: () => 'device-1', getSensitiveValues: () => [], runAgentHeadless, stopAgent: mock(async () => {}), subscribeAgentEvents: () => () => {}, createHiddenSessionStore: () => ({}) as never, registerSessionStorageOverride: () => () => {}, syncSkills: () => ({ snapshotPath: '/tmp/skills', digest: 'a'.repeat(64), skillSlugs: [], syncedAt: 1 }), createNextHop: mock(async () => {}), sendPermissionToHost: mock(() => {}), now: () => 2, ...overrides,
     } as any,
     room, records, runAgentHeadless, reportAccepted, reportRunning, reportCompleted, reportFailed,
   }
@@ -82,7 +84,127 @@ test('Given depth 为 3 或 Gateway 已断开 When 投递 Then 立即失败且�
   const coordinator = new coordinatorModule.ChatRoomAgentCoordinator(deps)
   await coordinator.handleInvocation({ ...makeInput('inv-deep', 'agent-a'), depth: 3 })
   await coordinator.handleGatewayDisconnected()
-  await coordinator.handleInvocation(makeInput('inv-offline', 'agent-a'))
+  await coordinator.handleInvocation({ ...makeInput('inv-offline', 'agent-a'), traceId: 'trace-offline' })
   expect(runAgentHeadless).not.toHaveBeenCalled()
   expect(reportFailed).toHaveBeenCalledTimes(2)
 })
+
+test('Given 三个 run 都被 barrier 卡住 When 批量投递 Then 任一完成前三个都已经启动', async () => {
+  const started: string[] = []
+  const release: Array<() => void> = []
+  const { deps, runAgentHeadless } = fakeDeps({ runAgentHeadless: mock(async (input: { sessionId: string }, callbacks: { onComplete: (messages: AgentMessage[]) => void }) => {
+    started.push(input.sessionId)
+    await new Promise<void>((resolve) => release.push(() => { callbacks.onComplete([]); resolve() }))
+  }) })
+  const coordinator = new coordinatorModule.ChatRoomAgentCoordinator(deps)
+  const all = Promise.all(['agent-a', 'agent-b', 'agent-c'].map((agentId, index) => coordinator.handleInvocation({ ...makeInput(`barrier-${index}`, agentId), traceId: `barrier-trace-${index}` })))
+  for (let i = 0; i < 20 && started.length < 3; i++) await Promise.resolve()
+  expect(started).toHaveLength(3)
+  release.forEach((resolve) => resolve())
+  await all
+})
+
+test('Given depth=2 的结构化输出提及 Agent When 完成 Then 不创建下一跳', async () => {
+  const createNextHop = mock(async () => {})
+  const { deps } = fakeDeps({ createNextHop, runAgentHeadless: mock(async (_input: unknown, callbacks: { onComplete: (messages: AgentMessage[]) => void }) => callbacks.onComplete([{ role: 'assistant', id: 'assistant-2', content: '{"text":"完成","mentionedAgentIds":["agent-b"],"attachmentIds":[]}', createdAt: 2 } as AgentMessage])) })
+  const coordinator = new coordinatorModule.ChatRoomAgentCoordinator(deps)
+  await coordinator.handleInvocation({ ...makeInput('depth-two', 'agent-a', 2), traceId: 'depth-two-trace' })
+  await new Promise((resolve) => setTimeout(resolve, 0))
+  expect(createNextHop).not.toHaveBeenCalled()
+})
+
+test('Given authenticated host/device 不匹配 When invocation 到达 Then fail closed 且不改外来 room', async () => {
+  const { deps, records, runAgentHeadless, reportFailed } = fakeDeps({ getCurrentUserId: async () => 'other-user' })
+  const coordinator = new coordinatorModule.ChatRoomAgentCoordinator(deps)
+  await coordinator.handleInvocation(makeInput('foreign-room', 'agent-a'))
+  expect(records.size).toBe(0)
+  expect(runAgentHeadless).not.toHaveBeenCalled()
+  expect(reportFailed).toHaveBeenCalledWith(expect.objectContaining({ code: 'not_room_member' }))
+})
+
+test('Given hidden session override 注册失败 When invocation 到达 Then terminal failed 且不运行普通 session', async () => {
+  const { deps, runAgentHeadless, reportFailed } = fakeDeps({ registerSessionStorageOverride: () => { throw new Error('注册失败') } })
+  const coordinator = new coordinatorModule.ChatRoomAgentCoordinator(deps)
+  await coordinator.handleInvocation(makeInput('hidden-fail', 'agent-a'))
+  await new Promise((resolve) => setTimeout(resolve, 0))
+  expect(runAgentHeadless).not.toHaveBeenCalled()
+  expect(reportFailed).toHaveBeenCalledWith(expect.objectContaining({ code: 'internal_error' }))
+})
+
+test('Given reportAccepted 失败 When invocation 到达 Then 不启动 Agent 并记录固定 terminal', async () => {
+  const base = fakeDeps()
+  const reportFailed = mock(async () => {})
+  const { deps, runAgentHeadless } = fakeDeps({ rustApi: { ...base.deps.rustApi, reportAccepted: mock(async () => { throw new Error('secret sdk error') }), reportFailed } })
+  const coordinator = new coordinatorModule.ChatRoomAgentCoordinator(deps)
+  await coordinator.handleInvocation(makeInput('accepted-fail', 'agent-a'))
+  expect(runAgentHeadless).not.toHaveBeenCalled()
+  expect(reportFailed).toHaveBeenCalledWith(expect.objectContaining({ code: 'internal_error', message: '聊天室 Agent 执行失败' }))
+})
+
+test('Given contextMessageCount=50 且收到55条消息 When启动 Then只提交最新50条', async () => {
+  let captured: AgentSendInputLike | undefined
+  const messages = Array.from({ length: 55 }, (_, index) => ({ messageId: `m-${index}`, sender: { type: 'user' as const, id: 'u', displayName: '用户' }, text: `消息-${index}`, createdAt: index }))
+  const { deps } = fakeDeps({ runAgentHeadless: mock(async (input: AgentSendInputLike, callbacks: { onComplete: (messages: AgentMessage[]) => void }) => { captured = input; callbacks.onComplete([]) }) })
+  const coordinator = new coordinatorModule.ChatRoomAgentCoordinator(deps)
+  await coordinator.handleInvocation({ ...makeInput('context-limit', 'agent-a'), messages })
+  await new Promise((resolve) => setTimeout(resolve, 0))
+  expect(captured?.userMessage.startsWith('用户: 消息-5')).toBe(true)
+  expect(captured?.userMessage).not.toContain('消息-0')
+})
+
+test('Given Agent 请求敏感权限 When 主理人响应 Then 仅收到脱敏摘要且底层强制 alwaysAllow=false', async () => {
+  let runtime: { requestPermission?: (request: PermissionRequest) => void } | undefined
+  let release!: () => void
+  const held = new Promise<void>((resolve) => { release = resolve })
+  const sendPermissionToHost = mock(() => {})
+  const respondToPermission = mock(() => 'session-agent-a')
+  const { deps } = fakeDeps({
+    runAgentHeadless: mock(async (_input: unknown, callbacks: { trustedRuntimeContext?: { requestPermission?: (request: PermissionRequest) => void } }) => { runtime = callbacks.trustedRuntimeContext; await held }),
+    getSensitiveValues: () => ['token-secret'],
+    sendPermissionToHost,
+    permissionService: { respondToPermission },
+  })
+  const coordinator = new coordinatorModule.ChatRoomAgentCoordinator(deps)
+  await coordinator.handleInvocation(makeInput('permission-1', 'agent-a'))
+  for (let i = 0; i < 10 && !runtime; i++) await Promise.resolve()
+  runtime?.requestPermission?.({ requestId: 'permission-request-1', sessionId: 'session-agent-a', toolName: 'Bash\u0000<script>', toolInput: { command: 'curl secret-token' }, description: '写入 /Users/private/project token-secret', dangerLevel: 'dangerous' })
+  expect(JSON.stringify(sendPermissionToHost.mock.calls)).not.toContain('/Users/private/project')
+  expect(JSON.stringify(sendPermissionToHost.mock.calls)).not.toContain('token-secret')
+  await coordinator.respondToPermission({ requestId: 'permission-request-1', behavior: 'allow' })
+  expect(respondToPermission).toHaveBeenCalledWith('permission-request-1', 'allow', false)
+  release()
+})
+
+test('Given 本地存在多个未归档 Agent When stopAll Then 释放全部 lease 且重复调用幂等', async () => {
+  const { deps } = fakeDeps()
+  const coordinator = new coordinatorModule.ChatRoomAgentCoordinator(deps)
+  const first = await coordinator.stopAll('gateway_disconnected')
+  const second = await coordinator.stopAll('gateway_disconnected')
+  expect(first.releasedRoomAgentIds).toEqual(['agent-a', 'agent-b', 'agent-c'])
+  expect(second).toBe(first)
+  expect(deps.rustApi.releaseAgentLeases).toHaveBeenCalledTimes(1)
+})
+
+test('Given SDK delta 含 secret/path When EventBus 转发 Then 使用 UTF-8 16KiB sanitizer 且50ms内不重复上报', async () => {
+  let listener!: (sessionId: string, payload: unknown) => void
+  let release!: () => void
+  const held = new Promise<void>((resolve) => { release = resolve })
+  const { deps } = fakeDeps({
+    getSensitiveValues: () => ['token-secret'],
+    subscribeAgentEvents: (next: (sessionId: string, payload: unknown) => void) => { listener = next; return () => {} },
+    runAgentHeadless: mock(async (_input: unknown, callbacks: { onComplete: (messages: AgentMessage[]) => void }) => { await held; callbacks.onComplete([]) }),
+  })
+  const coordinator = new coordinatorModule.ChatRoomAgentCoordinator(deps)
+  coordinator.start()
+  await coordinator.handleInvocation(makeInput('delta-safe', 'agent-a'))
+  listener('session-agent-a', { kind: 'sdk_message', message: { type: 'assistant', message: { content: [{ type: 'text', text: `/Users/private token-secret ${'界'.repeat(20_000)}` }] } } })
+  listener('session-agent-a', { kind: 'sdk_message', message: { type: 'assistant', message: { content: [{ type: 'text', text: '第二次' }] } } })
+  await new Promise((resolve) => setTimeout(resolve, 0))
+  const deltas = (deps.rustApi.reportDelta as ReturnType<typeof mock>).mock.calls
+  expect(deltas.length).toBe(1)
+  expect(String(deltas[0]?.[0].delta)).not.toContain('token-secret')
+  expect(new TextEncoder().encode(String(deltas[0]?.[0].delta)).byteLength).toBeLessThanOrEqual(16 * 1024)
+  release()
+})
+
+type AgentSendInputLike = { userMessage: string }
