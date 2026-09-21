@@ -97,6 +97,12 @@ Fix round 3 verification：permission 4/4，coordinator 19/19，RPC service 34/3
 - GREEN：`cleanupActiveRun` 返回 boolean，仅在 sessionRelease 成功后标记完成、清空回调并按 identity 删除 active run；失败保留可重试状态。`stopAll` 只有所有 run 同时 terminal confirmed 且 cleanup 成功才释放 lease，失败时允许下一次 stopAll 重试。
 - Evidence：coordinator `32 pass / 87 expects`；Electron typecheck、build:main、build:renderer、git diff check 均通过。
 
+## Fix round 9 RED/GREEN
+
+- RED：review 发现 `releaseAgentLeases` 失败被吞掉后仍返回非空 IDs 且缓存 resolved stop 结果，无法重试；补充并发 stopAll 共享首轮失败、空 IDs 返回、二次 retry、已完成 session cleanup/report 不重复回调的 BDD。
+- GREEN：仅 lease release 成功时返回实际 IDs；失败记录固定中文诊断、返回空 IDs 并重置 `stopping`。即使 activeRuns 已清空，也从 store 重新计算待释放 Agent IDs。
+- Evidence：coordinator `33 pass / 95 expects`；Electron typecheck、build:main、build:renderer、git diff check 均通过。
+
 ## Fix round 7 RED/GREEN
 
 - RED：首次 `reportFailed` 失败且 `execute.finally` 已结束后，`stopAll` 重试成功只确认远端终态并释放 lease，未清理 `activeRuns` 与 session override；新增测试先等待首次 finalization 完成，再断言 retry 后 active run 移除、session cleanup 在 lease release 前且二次 stopAll 不重复清理。

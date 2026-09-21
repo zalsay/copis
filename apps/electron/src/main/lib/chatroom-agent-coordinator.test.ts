@@ -456,6 +456,32 @@ test('Given 本地存在多个未归档 Agent When stopAll Then 释放全部 lea
   expect(deps.rustApi.releaseAgentLeases).toHaveBeenCalledTimes(1)
 })
 
+test('Given 首次 lease release 失败 When 并发 stopAll 后再次重试 Then 不误报并复用已完成清理', async () => {
+  let releaseCalls = 0
+  let sessionCleanupCalls = 0
+  const releaseAgentLeases = mock(async () => { releaseCalls++; if (releaseCalls === 1) throw new Error('lease service unavailable') })
+  const base = fakeDeps()
+  const { deps, runAgentHeadless, reportCompleted } = fakeDeps({
+    rustApi: { ...base.deps.rustApi, releaseAgentLeases },
+    registerSessionStorageOverride: () => () => { sessionCleanupCalls++ },
+  })
+  const coordinator = new coordinatorModule.ChatRoomAgentCoordinator(deps)
+  await coordinator.handleInvocation(makeInput('lease-retry', 'agent-a'))
+  for (let attempt = 0; attempt < 20 && runAgentHeadless.mock.calls.length === 0; attempt++) await Promise.resolve()
+  expect(runAgentHeadless).toHaveBeenCalledTimes(1)
+  for (let attempt = 0; attempt < 20 && reportCompleted.mock.calls.length === 0; attempt++) await Promise.resolve()
+  await new Promise((resolve) => setTimeout(resolve, 0))
+  expect(sessionCleanupCalls).toBe(1)
+  const [first, concurrent] = await Promise.all([coordinator.stopAll('app_quit'), coordinator.stopAll('app_quit')])
+  expect(first.releasedRoomAgentIds).toEqual([])
+  expect(concurrent).toEqual(first)
+  expect(releaseCalls).toBe(1)
+  const second = await coordinator.stopAll('app_quit')
+  expect(second.releasedRoomAgentIds).toEqual(['agent-a', 'agent-b', 'agent-c'])
+  expect(releaseCalls).toBe(2)
+  expect(sessionCleanupCalls).toBe(1)
+})
+
 test('Given SDK delta 含 secret/path When EventBus 转发 Then 使用 UTF-8 16KiB sanitizer 且50ms内不重复上报', async () => {
   let listener!: (sessionId: string, payload: unknown) => void
   let release!: () => void
