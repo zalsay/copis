@@ -90,3 +90,9 @@ Fix round 3 verification：permission 4/4，coordinator 19/19，RPC service 34/3
 - RED: `failTerminal` set `run.terminal` before remote `reportFailed`; a later stopAll/disconnect returned early and could release no/incorrect lease without retrying the original failure.
 - GREEN: failure claim is now stored once with immutable code/message; remote confirmation retries the same payload until success. Cleanup occurs only after `terminalConfirmed`; persistent failure keeps active run and lease. Added BDDs for retry success, persistent failure, unchanged stop reason, and exactly-once session cleanup.
 - Evidence: coordinator suite 31 pass / 73 expects; Electron typecheck and build:main; Rust fmt and diff checks pass.
+
+## Fix round 7 RED/GREEN
+
+- RED：首次 `reportFailed` 失败且 `execute.finally` 已结束后，`stopAll` 重试成功只确认远端终态并释放 lease，未清理 `activeRuns` 与 session override；新增测试先等待首次 finalization 完成，再断言 retry 后 active run 移除、session cleanup 在 lease release 前且二次 stopAll 不重复清理。
+- GREEN：抽取 `cleanupActiveRun` 一次性幂等清理，`execute.finally` 与 `stopAll` confirmation 路径共同调用；使用 run identity 检查避免 ABA 删除替代 run，并在确认终态后、释放 room-agent lease 前释放 session override。
+- Evidence：coordinator `31 pass / 78 expects`；Electron typecheck、build:main、build:renderer、cargo fmt check、git diff check 均通过。

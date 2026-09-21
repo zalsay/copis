@@ -57,7 +57,7 @@ export interface ChatRoomAgentCoordinatorDependencies {
   permissionService?: Pick<AgentPermissionService, 'respondToPermission' | 'openExternalApproval'>
   now(): number
 }
-interface ActiveRun { invocation: ChatRoomAgentInvocation; config: ChatRoomAgentLocalConfig; stopRequested: boolean; terminal: boolean; terminalConfirmed: boolean; failureClaim?: { code: ChatRoomInvocationFailureCode; message: string }; completionClaimed: boolean; lastDeltaAt: number; sessionRelease?: () => void; finalization?: Promise<void> }
+interface ActiveRun { invocation: ChatRoomAgentInvocation; config: ChatRoomAgentLocalConfig; stopRequested: boolean; terminal: boolean; terminalConfirmed: boolean; cleanupDone: boolean; failureClaim?: { code: ChatRoomInvocationFailureCode; message: string }; completionClaimed: boolean; lastDeltaAt: number; sessionRelease?: () => void; finalization?: Promise<void> }
 interface PendingPermission { request: PermissionRequest; invocationId: string; roomId: string; hostUserId: string; expiresAt: number; timer: ReturnType<typeof setTimeout> }
 function latestAssistantText(messages: AgentMessage[] | undefined): string {
   return messages?.filter((message) => message.role === 'assistant').map((message) => typeof message.content === 'string' ? message.content : '').at(-1) ?? ''
@@ -124,7 +124,7 @@ export class ChatRoomAgentCoordinator implements ChatRoomAgentCoordinatorFacade 
     const now = this.deps.now()
     const record: ChatRoomInvocationRecord = { invocationId: input.invocationId, roomId: input.roomId, traceId: input.traceId, targetAgentId: input.targetAgentId, triggerMessageId: input.triggerMessageId, depth: input.depth, status: 'accepted', createdAt: Math.min(now, input.receivedAt), updatedAt: now, acceptedAt: now }
     this.deps.store.upsertInvocation(input.roomId, record)
-    this.activeRuns.set(input.invocationId, { invocation: input, config, stopRequested: false, terminal: false, terminalConfirmed: false, completionClaimed: false, lastDeltaAt: -Infinity })
+    this.activeRuns.set(input.invocationId, { invocation: input, config, stopRequested: false, terminal: false, terminalConfirmed: false, cleanupDone: false, completionClaimed: false, lastDeltaAt: -Infinity })
     try {
       await this.deps.rustApi.reportAccepted({ invocationId: input.invocationId })
     } catch {
@@ -186,7 +186,7 @@ export class ChatRoomAgentCoordinator implements ChatRoomAgentCoordinatorFacade 
   async stopAll(reason: 'logout' | 'gateway_disconnected' | 'app_quit'): Promise<{ stoppedSessionIds: string[]; releasedRoomAgentIds: string[] }> {
     if (this.stopping) return this.stopping
     this.disconnected = true
-    this.stopping = (async () => { const runs = [...this.activeRuns.values()]; this.denyPendingPermissions(); const finalized = await Promise.all(runs.map(async (run) => { run.stopRequested = true; await this.failTerminal(run, reason === 'app_quit' ? 'app_quit' : reason === 'logout' ? 'internal_error' : 'gateway_disconnected'); void this.stopAgentBounded(run.config.sessionId); return this.awaitFinalization(run) })); const roomAgentIds = finalized.every(Boolean) ? [...new Set(this.deps.store.list().flatMap((room) => room.agents.filter((agent) => agent.archivedAt === undefined).map((agent) => agent.roomAgentId)))] : []; if (roomAgentIds.length > 0) await this.deps.rustApi.releaseAgentLeases({ roomAgentIds, reason }).catch(() => undefined); return { stoppedSessionIds: runs.map((run) => run.config.sessionId), releasedRoomAgentIds: roomAgentIds } })()
+    this.stopping = (async () => { const runs = [...this.activeRuns.values()]; this.denyPendingPermissions(); const finalized = await Promise.all(runs.map(async (run) => { run.stopRequested = true; await this.failTerminal(run, reason === 'app_quit' ? 'app_quit' : reason === 'logout' ? 'internal_error' : 'gateway_disconnected'); void this.stopAgentBounded(run.config.sessionId); const confirmed = await this.awaitFinalization(run); if (confirmed) this.cleanupActiveRun(run); return confirmed })); const roomAgentIds = finalized.every(Boolean) ? [...new Set(this.deps.store.list().flatMap((room) => room.agents.filter((agent) => agent.archivedAt === undefined).map((agent) => agent.roomAgentId)))] : []; if (roomAgentIds.length > 0) await this.deps.rustApi.releaseAgentLeases({ roomAgentIds, reason }).catch(() => undefined); return { stoppedSessionIds: runs.map((run) => run.config.sessionId), releasedRoomAgentIds: roomAgentIds } })()
     return this.stopping
   }
   async dispose(): Promise<void> { if (this.disposed) return; await this.stopAll('app_quit'); this.disposed = true; this.unsubscribeEvents?.(); this.unsubscribeEvents = undefined }
@@ -265,7 +265,7 @@ export class ChatRoomAgentCoordinator implements ChatRoomAgentCoordinatorFacade 
         if (dispatches.some((result) => result.status === 'rejected')) this.deps.reportDiagnostic?.('聊天室下一跳调度失败')
       }
     } catch { await this.failTerminal(run, run.stopRequested ? 'gateway_disconnected' : 'internal_error') }
-    finally { for (const [requestId, pending] of this.pendingPermissions) if (pending.invocationId === invocation.invocationId) { clearTimeout(pending.timer); this.pendingPermissions.delete(requestId) }; if (run.terminalConfirmed) { run.sessionRelease?.(); this.activeRuns.delete(invocation.invocationId) } }
+    finally { for (const [requestId, pending] of this.pendingPermissions) if (pending.invocationId === invocation.invocationId) { clearTimeout(pending.timer); this.pendingPermissions.delete(requestId) }; this.cleanupActiveRun(run) }
   }
   private createSanitizerContext(invocation: ChatRoomAgentInvocation, config: ChatRoomAgentLocalConfig, room: ChatRoomLocalRoomConfig | undefined, allowedAttachmentIds: string[]): ChatRoomOutputSanitizerContext {
     return { executionRoots: [getChatRoomPath(invocation.roomId), getChatRoomAgentProjectPath(invocation.roomId, config.roomAgentId), getChatRoomAgentInboxPath(invocation.roomId, config.roomAgentId)], sensitiveValues: this.deps.getSensitiveValues(), allowedAgentIds: (room?.agents ?? []).filter((agent) => agent.archivedAt === undefined).map((agent) => agent.roomAgentId), allowedAttachmentIds }
@@ -285,6 +285,15 @@ export class ChatRoomAgentCoordinator implements ChatRoomAgentCoordinatorFacade 
   private denyPendingPermissions(): void { const service = this.deps.permissionService ?? permissionService; for (const [requestId, pending] of this.pendingPermissions) { clearTimeout(pending.timer); service.respondToPermission(requestId, 'deny', false); this.pendingPermissions.delete(requestId) } }
   private async stopAgentBounded(sessionId: string): Promise<void> { let timer: ReturnType<typeof setTimeout> | undefined; await Promise.race([this.deps.stopAgent(sessionId).catch(() => undefined), new Promise<void>((resolve) => { timer = setTimeout(resolve, this.deps.stopAgentTimeoutMs ?? STOP_AGENT_TIMEOUT_MS) })]); if (timer) clearTimeout(timer) }
   private async awaitFinalization(run: ActiveRun): Promise<boolean> { if (!run.finalization) return run.terminalConfirmed; await Promise.race([run.finalization.catch(() => undefined), new Promise<void>((resolve) => setTimeout(resolve, REPORT_COMPLETION_TIMEOUT_MS + STOP_AGENT_TIMEOUT_MS + TERMINAL_CONFIRM_TIMEOUT_MS))]); return run.terminalConfirmed }
+  /** 终态已被 Rust 确认后清理本地运行态；允许 execute.finally 与 stopAll 并发调用。 */
+  private cleanupActiveRun(run: ActiveRun): void {
+    if (!run.terminalConfirmed || run.cleanupDone) return
+    run.cleanupDone = true
+    if (this.activeRuns.get(run.invocation.invocationId) === run) this.activeRuns.delete(run.invocation.invocationId)
+    const release = run.sessionRelease
+    run.sessionRelease = undefined
+    try { release?.() } catch { this.deps.reportDiagnostic?.('聊天室会话存储清理失败') }
+  }
   private onAgentEvent(sessionId: string, payload: AgentStreamPayload): void {
     const run = [...this.activeRuns.values()].find((candidate) => candidate.config.sessionId === sessionId)
     if (!run || run.terminal || this.deps.now() - run.lastDeltaAt < 50) return

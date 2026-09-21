@@ -286,16 +286,27 @@ test('Given reportFailed 网络失败 When stopAll 收敛 Then 未确认 termina
 test('Given 首次 reportFailed 失败 When stopAll 重试成功 Then 使用原 failure claim 确认并只清理一次', async () => {
   let releaseCount = 0
   let failedCalls = 0
-  const reportFailed = mock(async (input: { code: string; message: string }) => { failedCalls++; if (failedCalls === 1) throw new Error('temporary network'); expect(input.code).toBe('internal_error'); expect(input.message).toBe('聊天室 Agent 执行失败') })
-  const releaseAgentLeases = mock(async () => {})
-  const sessionRelease = () => { releaseCount++ }
+  let firstFailureSettled!: () => void
+  const firstFailure = new Promise<void>((resolve) => { firstFailureSettled = resolve })
+  const order: string[] = []
+  const reportFailed = mock(async (input: { code: string; message: string }) => { failedCalls++; if (failedCalls === 1) { firstFailureSettled(); throw new Error('temporary network') }; expect(input.code).toBe('internal_error'); expect(input.message).toBe('聊天室 Agent 执行失败') })
+  const releaseAgentLeases = mock(async () => { order.push('lease-release') })
+  const sessionRelease = () => { releaseCount++; order.push('session-release') }
   const base = fakeDeps()
   const { deps } = fakeDeps({ rustApi: { ...base.deps.rustApi, reportRunning: mock(async () => { throw new Error('running unavailable') }), reportFailed, releaseAgentLeases }, registerSessionStorageOverride: () => sessionRelease })
   const coordinator = new coordinatorModule.ChatRoomAgentCoordinator(deps)
   await coordinator.handleInvocation(makeInput('failure-retry', 'agent-a'))
+  await firstFailure
+  await new Promise((resolve) => setTimeout(resolve, 0))
+  expect(releaseCount).toBe(0)
   await coordinator.stopAll('app_quit')
   expect(reportFailed).toHaveBeenCalledTimes(2)
   expect(releaseAgentLeases).toHaveBeenCalled()
+  expect(releaseCount).toBe(1)
+  expect((coordinator as unknown as { activeRuns: Map<string, unknown> }).activeRuns.size).toBe(0)
+  expect(order).toEqual(['session-release', 'lease-release'])
+  await coordinator.stopAll('app_quit')
+  expect(reportFailed).toHaveBeenCalledTimes(2)
   expect(releaseCount).toBe(1)
 })
 
