@@ -4,8 +4,9 @@ export async function runChatRoomQuitCleanup(input: {
   stopHttpApi: () => Promise<void>
   disposeChatRooms: () => Promise<void>
 }): Promise<void> {
-  await input.stopChatRooms()
-  await input.stopAgents()
-  await input.stopHttpApi()
-  await input.disposeChatRooms()
+  let firstError: unknown
+  for (const phase of [input.stopChatRooms, input.stopAgents, input.stopHttpApi, input.disposeChatRooms]) {
+    try { await phase() } catch (error) { firstError ??= error }
+  }
+  if (firstError) throw firstError
 }

@@ -2,7 +2,7 @@ import { expect, mock, test } from 'bun:test'
 import { CHATROOM_IPC_CHANNELS } from '@copis/shared'
 const handlers = new Map<string, (...args: any[]) => any>()
 const handle = mock((channel: string, fn: (...args: any[]) => any) => { handlers.set(channel, fn) })
-const mainContents = {}
+const mainContents = { isDestroyed: () => false, send: mock(() => {}) }
 mock.module('electron', () => ({ ipcMain: { handle }, BrowserWindow: class {} }))
 mock.module('../index', () => ({ getMainWindow: () => ({ isDestroyed: () => false, webContents: mainContents }) }))
 const coordinator = {
@@ -10,13 +10,35 @@ const coordinator = {
   provisionAgent: mock(async (input: any) => ({ ...input, roomAgentId: 'a', sessionId: 'secret-session', contextMessageCount: 50, memorySharingEnabled: false, skillSharingEnabled: false })),
   updateAgent: mock(async () => ({ roomAgentId: 'a', displayName: 'A', sourceWorkspaceId: 'w', sessionId: 'secret-session', channelId: 'c', contextMessageCount: 50, memorySharingEnabled: false, skillSharingEnabled: false })),
   removeAgent: mock(async () => {}), syncAgentSkills: mock(async () => ({ roomAgentId: 'a', displayName: 'A', sourceWorkspaceId: 'w', sessionId: 'secret-session', channelId: 'c', contextMessageCount: 50, memorySharingEnabled: false, skillSharingEnabled: false })), respondToPermission: mock(async () => {}),
-  onPermissionRequested: () => () => {}, onLocalConfigChanged: () => () => {}, handleInvocation: async () => 'accepted' as const, handleGatewayDisconnected: async () => {}, stopAll: async () => ({ stoppedSessionIds: [], releasedRoomAgentIds: [] }), dispose: async () => {},
+  permissionListeners: [] as Array<(value: any) => void>, configListeners: [] as Array<(value: any) => void>,
+  onPermissionRequested: (listener: (value: any) => void) => { coordinator.permissionListeners.push(listener); return () => { coordinator.permissionListeners = coordinator.permissionListeners.filter((item) => item !== listener) } }, onLocalConfigChanged: (listener: (value: any) => void) => { coordinator.configListeners.push(listener); return () => { coordinator.configListeners = coordinator.configListeners.filter((item) => item !== listener) } }, handleInvocation: async () => 'accepted' as const, handleGatewayDisconnected: async () => {}, stopAll: async () => ({ stoppedSessionIds: [], releasedRoomAgentIds: [] }), dispose: async () => {},
 }
 const module = await import('../ipc/chatrooms.ipc')
+const coordinatorModule = await import('../lib/chatroom-agent-coordinator')
 module.registerChatRoomIpcHandlers({ getCoordinator: () => coordinator as any, getMainWindow: () => ({ isDestroyed: () => false, webContents: mainContents } as any) })
-test('Given 主窗口 provision When handler executes Then returns redacted view', async () => {
+coordinatorModule.registerChatRoomAgentCoordinator(coordinator as any)
+test('Given 主窗口 When each management handler executes Then DTO reaches coordinator and views are redacted', async () => {
+  const sender = { sender: mainContents }
+  const list = await handlers.get(CHATROOM_IPC_CHANNELS.LIST_LOCAL_ROOMS)!(sender)
+  expect(JSON.stringify(list)).not.toContain('hostUserId'); expect(JSON.stringify(list)).not.toContain('sessionId')
   const result = await handlers.get(CHATROOM_IPC_CHANNELS.PROVISION_AGENT)!({ sender: mainContents }, { roomId: 'room-1', sourceWorkspaceId: 'w', displayName: 'A', channelId: 'c' })
   expect(result.sessionId).toBeUndefined(); expect(result.roomAgentId).toBe('a')
+  await handlers.get(CHATROOM_IPC_CHANNELS.UPDATE_AGENT)!(sender, { roomId: 'room-1', roomAgentId: 'a', displayName: 'A2' })
+  await handlers.get(CHATROOM_IPC_CHANNELS.REMOVE_AGENT)!(sender, { roomId: 'room-1', roomAgentId: 'a' })
+  await handlers.get(CHATROOM_IPC_CHANNELS.SYNC_AGENT_SKILLS)!(sender, { roomId: 'room-1', roomAgentId: 'a' })
+  await handlers.get(CHATROOM_IPC_CHANNELS.RESPOND_PERMISSION)!(sender, { requestId: 'request-1', behavior: 'allow' })
+  expect(coordinator.provisionAgent).toHaveBeenCalled(); expect(coordinator.updateAgent).toHaveBeenCalled(); expect(coordinator.removeAgent).toHaveBeenCalled(); expect(coordinator.syncAgentSkills).toHaveBeenCalled(); expect(coordinator.respondToPermission).toHaveBeenCalled()
+})
+
+test('Given coordinator push callbacks When emitting permission/config Then each payload is redacted and delivered once', () => {
+  const send = mock(() => {})
+  mainContents.send = send
+  const permission = { requestId: 'p', toolName: 'Bash', summary: 'run', roomId: 'r', roomAgentId: 'a', invocationId: 'i', traceId: 't', originalSender: { type: 'user', id: 'u', displayName: 'u' }, invocationChain: [], createdAt: 1, expiresAt: 2 }
+  coordinator.permissionListeners.forEach((listener) => listener(permission))
+  coordinator.configListeners.forEach((listener) => listener({ roomId: 'r', agents: [], updatedAt: 1 }))
+  expect(send).toHaveBeenCalledWith(CHATROOM_IPC_CHANNELS.PERMISSION_REQUESTED, permission)
+  expect(send).toHaveBeenCalledWith(CHATROOM_IPC_CHANNELS.LOCAL_CONFIG_CHANGED, { roomId: 'r', agents: [], updatedAt: 1 })
+  expect(JSON.stringify(send.mock.calls)).not.toContain('toolInput')
 })
 test('Given non-main sender or strict DTO When mutate Then reject', async () => {
   await expect(handlers.get(CHATROOM_IPC_CHANNELS.PROVISION_AGENT)!({ sender: {} }, { roomId: 'room-1', sourceWorkspaceId: 'w', displayName: 'A', channelId: 'c' })).rejects.toThrow('不允许的请求来源')

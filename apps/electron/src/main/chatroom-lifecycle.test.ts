@@ -10,5 +10,7 @@ test('Given app quit When cleanup runs Then production helper enforces ordered p
     disposeChatRooms: async () => { order.push('coordinator.dispose') },
   })
   expect(order).toEqual(['coordinator.stopAll:app_quit', 'agents.stopAll', 'httpApi.stop', 'coordinator.dispose'])
-  await expect(runChatRoomQuitCleanup({ stopChatRooms: async () => { throw new Error('stop failed') }, stopAgents: async () => {}, stopHttpApi: async () => {}, disposeChatRooms: async () => {} })).rejects.toThrow('stop failed')
+  const afterFailure: string[] = []
+  await expect(runChatRoomQuitCleanup({ stopChatRooms: async () => { afterFailure.push('rooms'); throw new Error('stop failed') }, stopAgents: async () => { afterFailure.push('agents') }, stopHttpApi: async () => { afterFailure.push('http') }, disposeChatRooms: async () => { afterFailure.push('dispose') } })).rejects.toThrow('stop failed')
+  expect(afterFailure).toEqual(['rooms', 'agents', 'http', 'dispose'])
 })

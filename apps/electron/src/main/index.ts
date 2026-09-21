@@ -734,11 +734,22 @@ app.on('before-quit', (event) => {
     if (!piWorkerStopInProgress) {
       piWorkerStopInProgress = true
       void (async () => {
-        try {
-          const { getChatRoomAgentCoordinator } = await import('./lib/chatroom-agent-coordinator')
-          await getChatRoomAgentCoordinator().stopAll('app_quit')
-        } catch { /* 协调器未初始化或已释放 */ }
-        await stopAllAgents()
+        await runChatRoomQuitCleanup({
+          stopChatRooms: async () => {
+            try {
+              const { getChatRoomAgentCoordinator } = await import('./lib/chatroom-agent-coordinator')
+              await getChatRoomAgentCoordinator().stopAll('app_quit')
+            } catch { /* 协调器未初始化或已释放 */ }
+          },
+          stopAgents: () => stopAllAgents(),
+          stopHttpApi: () => stopHttpApiServer(),
+          disposeChatRooms: async () => {
+            try {
+              const { getChatRoomAgentCoordinator } = await import('./lib/chatroom-agent-coordinator')
+              await getChatRoomAgentCoordinator().dispose()
+            } catch { /* 协调器未初始化 */ }
+          },
+        })
       })()
         .catch((error: unknown) => {
           console.warn('[退出] Pi Worker 批量停止失败:', error)
@@ -758,19 +769,6 @@ app.on('before-quit', (event) => {
   stopAllBrowserWorkflowRecordings()
   stopAllBrowserWorkflowRuns()
   disposeWebTabs()
-
-  // Pi Worker 已收到停止命令后再关闭本地 HTTP API，避免开发重启时残留端口占用。
-  void runChatRoomQuitCleanup({
-    stopChatRooms: async () => {},
-    stopAgents: async () => {},
-    stopHttpApi: () => stopHttpApiServer(),
-    disposeChatRooms: async () => {
-      try {
-        const { getChatRoomAgentCoordinator } = await import('./lib/chatroom-agent-coordinator')
-        await getChatRoomAgentCoordinator().dispose()
-      } catch { /* 协调器未初始化 */ }
-    },
-  }).catch((error: unknown) => console.error('[退出] 聊天室清理失败:', error))
 
   // 释放 Pi runtime 资源
   cleanupAgentRuntimeResources()

@@ -92,28 +92,29 @@ export class ChatRoomAgentCoordinator implements ChatRoomAgentCoordinatorFacade 
   onLocalConfigChanged(listener: (room: ChatRoomLocalRoomConfig) => void): () => void { this.configListeners.add(listener); return () => this.configListeners.delete(listener) }
   private emitPermissionRequest(request: ChatRoomPermissionRequest): void {
     this.deps.sendPermissionToHost(request)
-    this.permissionListeners.forEach((listener) => listener(request))
+    this.permissionListeners.forEach((listener) => { try { listener(request) } catch { this.deps.reportDiagnostic?.('聊天室权限通知监听器失败') } })
   }
+  private emitConfig(room: ChatRoomLocalRoomConfig): void { this.configListeners.forEach((listener) => { try { listener(room) } catch { this.deps.reportDiagnostic?.('聊天室配置通知监听器失败') } }) }
   start(): void { if (!this.unsubscribeEvents && !this.disposed) this.unsubscribeEvents = this.deps.subscribeAgentEvents((sid, payload) => this.onAgentEvent(sid, payload)) }
   async provisionAgent(input: ProvisionChatRoomAgentInput): Promise<ChatRoomAgentLocalConfig> {
     const identity = await this.requireHostIdentity(input.roomId)
     const room = this.deps.store.provisionAgent(identity, input)
-    this.configListeners.forEach((listener) => listener(room))
+    this.emitConfig(room)
     return this.requireAgent(room, room.agents.at(-1)!.roomAgentId)
   }
   async updateAgent(input: UpdateChatRoomAgentInput): Promise<ChatRoomAgentLocalConfig> {
     await this.requireHostIdentity(input.roomId)
     const room = this.deps.store.updateAgent(input)
-    this.configListeners.forEach((listener) => listener(room))
+    this.emitConfig(room)
     return this.requireAgent(room, input.roomAgentId)
   }
-  async removeAgent(input: RemoveChatRoomAgentInput): Promise<void> { await this.requireHostIdentity(input.roomId); const room = this.deps.store.archiveAgent(input); this.configListeners.forEach((listener) => listener(room)) }
+  async removeAgent(input: RemoveChatRoomAgentInput): Promise<void> { await this.requireHostIdentity(input.roomId); const room = this.deps.store.archiveAgent(input); this.emitConfig(room) }
   async syncAgentSkills(input: SyncChatRoomAgentSkillsInput): Promise<ChatRoomAgentLocalConfig> {
     await this.requireHostIdentity(input.roomId)
     const config = this.requireAgent(this.deps.store.read(input.roomId), input.roomAgentId)
     const result = this.deps.syncSkills({ roomId: input.roomId, roomAgentId: input.roomAgentId, sourceWorkspaceSlug: this.deps.getSourceWorkspaceSlug?.(config.sourceWorkspaceId) ?? config.sourceWorkspaceId })
     const room = this.deps.store.updateAgentSkillSnapshot(input.roomId, input.roomAgentId, result)
-    this.configListeners.forEach((listener) => listener(room))
+    this.emitConfig(room)
     return this.requireAgent(room, input.roomAgentId)
   }
   async handleInvocation(input: ChatRoomAgentInvocation): Promise<'accepted' | 'duplicate'> {
@@ -356,5 +357,5 @@ let registeredCoordinator: ChatRoomAgentCoordinatorFacade | undefined
 let registrationToken = 0
 const registrationListeners = new Set<(coordinator: ChatRoomAgentCoordinatorFacade) => void>()
 export function onChatRoomAgentCoordinatorRegistered(listener: (coordinator: ChatRoomAgentCoordinatorFacade) => void): () => void { registrationListeners.add(listener); if (registeredCoordinator) listener(registeredCoordinator); return () => registrationListeners.delete(listener) }
-export function registerChatRoomAgentCoordinator(coordinator: ChatRoomAgentCoordinatorFacade): () => void { const token = ++registrationToken; registeredCoordinator = coordinator; registrationListeners.forEach((listener) => listener(coordinator)); return () => { if (registrationToken === token && registeredCoordinator === coordinator) registeredCoordinator = undefined } }
+export function registerChatRoomAgentCoordinator(coordinator: ChatRoomAgentCoordinatorFacade): () => void { const token = ++registrationToken; registeredCoordinator = coordinator; registrationListeners.forEach((listener) => { try { listener(coordinator) } catch { /* 单个注册监听失败不影响其他监听 */ } }); return () => { if (registrationToken === token && registeredCoordinator === coordinator) registeredCoordinator = undefined } }
 export function getChatRoomAgentCoordinator(): ChatRoomAgentCoordinatorFacade { if (!registeredCoordinator) throw new Error('聊天室协调器尚未注册'); return registeredCoordinator }
