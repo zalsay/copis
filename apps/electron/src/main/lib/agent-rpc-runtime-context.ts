@@ -56,7 +56,8 @@ function validateRuntimeContext(context: unknown): asserts context is ChatRoomAg
   try {
     if (!isPlainObject(context)) throw trustedContextError()
     assertDataProperties(context)
-    assertExactKeys(context, ['executionWorkspace', 'permissionContext'], ['memorySource', 'skillSnapshotPath'])
+    assertExactKeys(context, ['executionWorkspace', 'permissionContext'], ['memorySource', 'skillSnapshotPath', 'requestPermission'])
+    if (context.requestPermission !== undefined && typeof context.requestPermission !== 'function') throw trustedContextError()
 
     const execution = context.executionWorkspace
     if (!isPlainObject(execution)) throw trustedContextError()

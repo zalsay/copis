@@ -1353,7 +1353,11 @@ export class AgentOrchestrator {
               description: approval.description,
             },
             (request) => {
-              this.eventBus.emit(sessionId, { kind: 'copis_event', event: { type: 'permission_request', request } })
+              if (isChatroomRun && trustedRuntimeContext?.requestPermission) {
+                trustedRuntimeContext.requestPermission(request)
+              } else {
+                this.eventBus.emit(sessionId, { kind: 'copis_event', event: { type: 'permission_request', request } })
+              }
             },
           )
           return result.behavior === 'allow'
@@ -1692,7 +1696,11 @@ export class AgentOrchestrator {
         }
         if (planningDeletionPermission === 'require-single-approval') {
           return permissionService.requestSingleApproval(sessionId, toolName, input, options, (request) => {
-            this.eventBus.emit(sessionId, { kind: 'copis_event', event: { type: 'permission_request', request } })
+            if (isChatroomRun && trustedRuntimeContext?.requestPermission) {
+              trustedRuntimeContext.requestPermission(request)
+            } else {
+              this.eventBus.emit(sessionId, { kind: 'copis_event', event: { type: 'permission_request', request } })
+            }
           })
         }
 

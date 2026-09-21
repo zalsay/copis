@@ -214,6 +214,8 @@ export interface ChatRoomAgentRuntimeContext {
   memorySource?: { workspaceSlug: string; policy: 'visible' }
   skillSnapshotPath?: string
   permissionContext: ChatRoomPermissionContext
+  /** Main-only sink；完整 PermissionRequest 不得进入 Renderer 或 HTTP DTO。 */
+  requestPermission?: (request: import('./agent').PermissionRequest) => void
 }
 
 export interface ChatRoomRustApi {
