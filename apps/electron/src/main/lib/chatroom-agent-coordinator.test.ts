@@ -164,6 +164,22 @@ test('Given reportCompleted 失败 When Agent 完成 Then local remains failed a
   expect(createNextHop).not.toHaveBeenCalled()
 })
 
+test('Given completion claimed while reportCompleted is pending When gateway disconnects Then completion wins and disconnect cannot overwrite local state', async () => {
+  let releaseCompleted!: () => void
+  const reportCompleted = mock(async () => await new Promise<void>((resolve) => { releaseCompleted = resolve }))
+  const { deps, records, reportFailed } = fakeDeps({ rustApi: { ...fakeDeps().deps.rustApi, reportCompleted } })
+  const coordinator = new coordinatorModule.ChatRoomAgentCoordinator(deps)
+  await coordinator.handleInvocation(makeInput('completion-race', 'agent-a'))
+  for (let i = 0; i < 20 && !reportCompleted.mock.calls.length; i++) await Promise.resolve()
+  expect(records.get('completion-race')?.status).toBe('running')
+  await coordinator.handleGatewayDisconnected()
+  expect(records.get('completion-race')?.status).toBe('running')
+  releaseCompleted()
+  await new Promise((resolve) => setTimeout(resolve, 0))
+  expect(records.get('completion-race')?.status).toBe('completed')
+  expect(reportFailed).not.toHaveBeenCalled()
+})
+
 test('Given contextMessageCount=50 且收到55条消息 When启动 Then只提交最新50条', async () => {
   let captured: AgentSendInputLike | undefined
   const messages = Array.from({ length: 55 }, (_, index) => ({ messageId: `m-${index}`, sender: { type: 'user' as const, id: 'u', displayName: '用户' }, text: `消息-${index}`, createdAt: index }))

@@ -42,6 +42,7 @@ export interface ChatRoomAgentCoordinatorDependencies {
   getSourceWorkspaceSlug?(workspaceId: string): string | undefined
   runAgentHeadless: HeadlessRunner
   stopAgent: AgentStopper
+  stopAgentTimeoutMs?: number
   subscribeAgentEvents(listener: ChatRoomAgentEventListener): () => void
   createHiddenSessionStore(roomId: string, agent: ChatRoomAgentLocalConfig): ChatRoomHiddenSessionStore
   registerSessionStorageOverride(sessionId: string, storage: ChatRoomHiddenSessionStore): () => void
@@ -52,7 +53,7 @@ export interface ChatRoomAgentCoordinatorDependencies {
   permissionService?: Pick<AgentPermissionService, 'respondToPermission'>
   now(): number
 }
-interface ActiveRun { invocation: ChatRoomAgentInvocation; config: ChatRoomAgentLocalConfig; stopRequested: boolean; terminal: boolean; lastDeltaAt: number; sessionRelease?: () => void }
+interface ActiveRun { invocation: ChatRoomAgentInvocation; config: ChatRoomAgentLocalConfig; stopRequested: boolean; terminal: boolean; completionClaimed: boolean; lastDeltaAt: number; sessionRelease?: () => void }
 interface PendingPermission { request: PermissionRequest; invocationId: string; roomId: string; hostUserId: string; expiresAt: number; timer: ReturnType<typeof setTimeout> }
 function latestAssistantText(messages: AgentMessage[] | undefined): string {
   return messages?.filter((message) => message.role === 'assistant').map((message) => typeof message.content === 'string' ? message.content : '').at(-1) ?? ''
@@ -105,7 +106,7 @@ export class ChatRoomAgentCoordinator implements ChatRoomAgentCoordinatorFacade 
     // 身份读取包含 await；回到同步临界区前必须重新加载 room/config/ledger，避免 ABA。
     const finalUserId = await this.deps.getCurrentUserId()
     const finalRoom = this.deps.store.read(input.roomId)
-    if (finalUserId !== authenticatedUserId || this.deps.getDeviceId() !== authenticatedDeviceId) {
+    if (!finalRoom || finalUserId !== finalRoom.hostUserId || this.deps.getDeviceId() !== finalRoom.deviceId || finalUserId !== authenticatedUserId || this.deps.getDeviceId() !== authenticatedDeviceId) {
       await this.reportRejected(input, 'not_room_member', finalRoom, input.targetAgentId)
       return 'accepted'
     }
@@ -119,7 +120,7 @@ export class ChatRoomAgentCoordinator implements ChatRoomAgentCoordinatorFacade 
     const now = this.deps.now()
     const record: ChatRoomInvocationRecord = { invocationId: input.invocationId, roomId: input.roomId, traceId: input.traceId, targetAgentId: input.targetAgentId, triggerMessageId: input.triggerMessageId, depth: input.depth, status: 'accepted', createdAt: Math.min(now, input.receivedAt), updatedAt: now, acceptedAt: now }
     this.deps.store.upsertInvocation(input.roomId, record)
-    this.activeRuns.set(input.invocationId, { invocation: input, config, stopRequested: false, terminal: false, lastDeltaAt: -Infinity })
+    this.activeRuns.set(input.invocationId, { invocation: input, config, stopRequested: false, terminal: false, completionClaimed: false, lastDeltaAt: -Infinity })
     try {
       await this.deps.rustApi.reportAccepted({ invocationId: input.invocationId })
     } catch {
@@ -189,14 +190,16 @@ export class ChatRoomAgentCoordinator implements ChatRoomAgentCoordinatorFacade 
       const allowedAttachmentIds = [...new Set(invocation.messages.flatMap((message) => message.attachmentIds ?? []))]
       const sanitizerContext = this.createSanitizerContext(invocation, config, room, allowedAttachmentIds)
       const output = parseAndSanitizeChatRoomAgentOutput(latestAssistantText(messages), sanitizerContext)
-      if (run.terminal) return
+      if (run.terminal || run.completionClaimed) return
       const record = this.deps.store.getInvocation(invocation.roomId, invocation.invocationId)
       if (!record || ['completed', 'failed', 'rejected'].includes(record.status)) return
+      // 先在 Main 同步临界区声明完成权，断连/拒绝的 late callback 不得倒写 failed。
+      run.completionClaimed = true
       try {
         await this.deps.rustApi.reportCompleted({ invocationId: invocation.invocationId, output })
       } catch {
         this.deps.reportDiagnostic?.('聊天室 completed 状态回传失败')
-        await this.failTerminal(run, 'internal_error')
+        await this.failTerminal(run, 'internal_error', true)
         return
       }
       const completedAt = this.deps.now(); const completed = this.deps.store.transitionInvocation(invocation.roomId, invocation.invocationId, ['running'], (currentRecord) => ({ ...currentRecord, status: 'completed', updatedAt: completedAt, finishedAt: completedAt }))
@@ -222,7 +225,7 @@ export class ChatRoomAgentCoordinator implements ChatRoomAgentCoordinatorFacade 
     this.pendingPermissions.set(request.requestId, { request, invocationId: invocation.invocationId, roomId: invocation.roomId, hostUserId: this.deps.store.read(invocation.roomId)?.hostUserId ?? '', expiresAt, timer }); this.deps.sendPermissionToHost(safe); void this.deps.rustApi.reportDelta({ invocationId: invocation.invocationId, delta: '等待主理人授权' }).catch(() => undefined)
   }
   private denyPendingPermissions(): void { const service = this.deps.permissionService ?? permissionService; for (const [requestId, pending] of this.pendingPermissions) { clearTimeout(pending.timer); service.respondToPermission(requestId, 'deny', false); this.pendingPermissions.delete(requestId) } }
-  private async stopAgentBounded(sessionId: string): Promise<void> { let timer: ReturnType<typeof setTimeout> | undefined; await Promise.race([this.deps.stopAgent(sessionId).catch(() => undefined), new Promise<void>((resolve) => { timer = setTimeout(resolve, STOP_AGENT_TIMEOUT_MS) })]); if (timer) clearTimeout(timer) }
+  private async stopAgentBounded(sessionId: string): Promise<void> { let timer: ReturnType<typeof setTimeout> | undefined; await Promise.race([this.deps.stopAgent(sessionId).catch(() => undefined), new Promise<void>((resolve) => { timer = setTimeout(resolve, this.deps.stopAgentTimeoutMs ?? STOP_AGENT_TIMEOUT_MS) })]); if (timer) clearTimeout(timer) }
   private onAgentEvent(sessionId: string, payload: AgentStreamPayload): void {
     const run = [...this.activeRuns.values()].find((candidate) => candidate.config.sessionId === sessionId)
     if (!run || run.terminal || this.deps.now() - run.lastDeltaAt < 50) return
@@ -237,7 +240,7 @@ export class ChatRoomAgentCoordinator implements ChatRoomAgentCoordinatorFacade 
     const safeDelta = sanitizeChatRoomText(text, this.createSanitizerContext(run.invocation, run.config, room, []), 16 * 1024)
     void this.deps.rustApi.reportDelta({ invocationId: run.invocation.invocationId, delta: safeDelta }).catch(() => this.deps.reportDiagnostic?.('聊天室增量回传失败'))
   }
-  private async failTerminal(run: ActiveRun, code: ChatRoomInvocationFailureCode): Promise<void> { if (run.terminal) return; run.terminal = true; const transitioned = this.deps.store.transitionInvocation(run.invocation.roomId, run.invocation.invocationId, ['accepted', 'running'], (record) => ({ ...record, status: 'failed', updatedAt: this.deps.now(), finishedAt: this.deps.now(), failureCode: code, failureMessage: failureMessage(code) })); if (!transitioned.transitioned) return; await this.deps.rustApi.reportFailed({ invocationId: run.invocation.invocationId, code, message: failureMessage(code) }).catch(() => this.deps.reportDiagnostic?.('聊天室 terminal 状态回传失败')) }
+  private async failTerminal(run: ActiveRun, code: ChatRoomInvocationFailureCode, allowCompletionClaim = false): Promise<void> { if (run.terminal || (run.completionClaimed && !allowCompletionClaim)) return; run.terminal = true; const transitioned = this.deps.store.transitionInvocation(run.invocation.roomId, run.invocation.invocationId, ['accepted', 'running'], (record) => ({ ...record, status: 'failed', updatedAt: this.deps.now(), finishedAt: this.deps.now(), failureCode: code, failureMessage: failureMessage(code) })); if (!transitioned.transitioned) return; await this.deps.rustApi.reportFailed({ invocationId: run.invocation.invocationId, code, message: failureMessage(code) }).catch(() => this.deps.reportDiagnostic?.('聊天室 terminal 状态回传失败')) }
   private async reportRejected(input: ChatRoomAgentInvocation, code: ChatRoomInvocationFailureCode, room?: ChatRoomLocalRoomConfig, targetAgentId?: string): Promise<void> { if (room && targetAgentId && room.agents.some((agent) => agent.roomAgentId === targetAgentId)) { const now = this.deps.now(); try { this.deps.store.upsertInvocation(input.roomId, { invocationId: input.invocationId, roomId: input.roomId, traceId: input.traceId, targetAgentId, triggerMessageId: input.triggerMessageId, depth: input.depth, status: 'failed', createdAt: Math.min(now, input.receivedAt), updatedAt: now, finishedAt: now, failureCode: code, failureMessage: failureMessage(code) }) } catch { /* 记录失败时仍只上报固定码 */ } } await this.deps.rustApi.reportFailed({ invocationId: input.invocationId, code, message: failureMessage(code) }).catch(() => this.deps.reportDiagnostic?.('聊天室 rejected 状态回传失败')) }
   private async requireHostIdentity(roomId: string): Promise<{ hostUserId: string; deviceId: string }> { const userId = await this.deps.getCurrentUserId(); const room = this.deps.store.read(roomId); if (!room || !userId || room.hostUserId !== userId || room.deviceId !== this.deps.getDeviceId()) throw new Error('not_room_host'); return { hostUserId: userId, deviceId: this.deps.getDeviceId() } }
   private requireAgent(room: ChatRoomLocalRoomConfig | undefined, id: string): ChatRoomAgentLocalConfig { const agent = room?.agents.find((candidate) => candidate.roomAgentId === id); if (!agent) throw new Error('room_agent_not_found'); return agent }

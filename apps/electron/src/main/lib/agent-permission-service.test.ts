@@ -45,3 +45,23 @@ test('Given the same request id When two approvals are opened Then the second pr
   expect(service.respondToPermission(requestId, 'deny', true)).toBe('session-1')
   expect((await first).behavior).toBe('deny')
 })
+
+test('Given an already aborted signal When approval opens Then it resolves deny without dispatching', async () => {
+  const service = new AgentPermissionService(() => 'pre-aborted')
+  const controller = new AbortController()
+  controller.abort()
+  let dispatched = false
+  const result = await service.requestSingleApproval('session-1', 'Bash', { command: 'rm -rf project' }, permissionOptions(controller.signal, 'tool-1'), () => { dispatched = true })
+  expect(result.behavior).toBe('deny')
+  expect(dispatched).toBe(false)
+  expect(service.getPendingRequests()).toHaveLength(0)
+})
+
+test('Given abort during renderer dispatch When approval opens Then it resolves deny and leaves no pending request', async () => {
+  const service = new AgentPermissionService(() => 'dispatch-abort')
+  const controller = new AbortController()
+  let result!: Promise<unknown>
+  result = service.requestSingleApproval('session-1', 'Bash', { command: 'rm -rf project' }, permissionOptions(controller.signal, 'tool-1'), () => controller.abort())
+  await expect(result).resolves.toMatchObject({ behavior: 'deny' })
+  expect(service.getPendingRequests()).toHaveLength(0)
+})

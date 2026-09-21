@@ -39,3 +39,10 @@ Fix round 1 verification：coordinator 15/15，workspace store 24/24，sanitizer
 - 聊天室 query 使用 SDK `default` 可拦截模式（仅 Main 内部类型扩展，不改变用户可选的 bypass/plan），原生敏感工具仍经 canUseTool/主理人审批；聊天室路径解析以 projectRoot 为相对基准，Skill 启动前校验 snapshot digest。
 
 Fix round 2 verification：coordinator 18/18，workspace store 25/25，permission 2/2；Electron typecheck、build:main 已通过。未修改 IPC/preload/main lifecycle；仍需主 Agent 完成全套回归、code simplifier 与最终 Electron 实际窗口确认。
+
+## Fix round 3
+
+- RED：补充 pre-aborted/dispatch 中 abort、RPC chatroom `default`、Rust file API Bash 注册及 completion/disconnect 竞态场景；旧实现分别会发送已取消请求、仍输出 bypass、缺少 Bash 或允许断连覆盖完成状态。
+- GREEN：权限服务在注册前及 dispatch 后检查 abort，并通过幂等 settle 清理 pending；RPC Main-only query mode 使用 `default`，Renderer `CopisPermissionMode` 未扩展；聊天室 Rust file tools 恢复受限 Bash，安全文件工具仍由 coordinator/orchestrator 控制，外部工具继续审批或拒绝；run 增加 completion claim，完成回传 pending 时断连不会倒写 failed。
+
+Fix round 3 verification：permission 4/4，coordinator 19/19，RPC service 34/34，Pi builtin tools 22/22；Electron typecheck、build:main、build:renderer 均通过。停止超时可通过 Main-only `stopAgentTimeoutMs` 注入测试值；待提交。

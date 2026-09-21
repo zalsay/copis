@@ -670,6 +670,7 @@ export async function prepareAgentRpcRun(input: AgentSendInput): Promise<PiWorke
       hasBrowserContext,
       input.permissionModeOverride ?? session.permissionMode ?? COPIS_DEFAULT_PERMISSION_MODE,
     )
+  const queryPermissionMode = isChatroomRun ? 'default' as const : effectivePermissionMode
   const effectiveSkillMentions = isChatroomRun ? undefined : resolveBrowserAgentSkillMentions(input.mentionedSkills, hasBrowserContext)
   const agentCwd = isChatroomRun
     ? chatroomRuntimeContext.executionWorkspace.projectRoot
@@ -842,7 +843,7 @@ export async function prepareAgentRpcRun(input: AgentSendInput): Promise<PiWorke
     channelId,
     channelName: channel.name,
     ...(maxTurns !== undefined ? { maxTurns } : {}),
-    permissionMode: effectivePermissionMode,
+    permissionMode: queryPermissionMode,
     systemPrompt,
     ...(existingSdkSessionId ? { resumeSessionId: existingSdkSessionId } : {}),
     piAgentDir: isChatroomRun ? chatroomRuntimeContext.executionWorkspace.sessionRoot : getSdkConfigDir(),

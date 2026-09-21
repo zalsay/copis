@@ -24,7 +24,8 @@ export interface PiWorkerQueryConfig {
   channelId?: string
   channelName?: string
   maxTurns?: number
-  permissionMode: CopisPermissionMode
+  /** Main-only SDK default mode; never accepted from renderer DTOs. */
+  permissionMode: CopisPermissionMode | 'default'
   systemPrompt: string
   resumeSessionId?: string
   piAgentDir: string

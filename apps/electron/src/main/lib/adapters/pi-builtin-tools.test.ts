@@ -314,6 +314,7 @@ test('Given chatroom capability profile When building legacy Pi tools Then only 
 test('Given chatroom profile with missing or writable memory policy When building legacy Pi tools Then Memory stays closed', async () => {
   const sdk = {
     createReadToolDefinition: () => ({ name: 'Read' }),
+    createBashToolDefinition: () => ({ name: 'Bash' }),
     createEditToolDefinition: () => ({ name: 'Edit' }),
     createWriteToolDefinition: () => ({ name: 'Write' }),
     defineTool: <T>(definition: T): T => definition,
@@ -349,8 +350,7 @@ test('Given chatroom capability profile When building RPC worker tools Then paym
     capabilityProfile: 'chatroom',
   })
   const names = tools.map((tool) => tool.name)
-  expect(names).toEqual(expect.arrayContaining(['Read', 'Edit', 'Write', 'memory_recall', 'memory_read']))
-  expect(names).not.toContain('Bash')
+  expect(names).toEqual(expect.arrayContaining(['Read', 'Edit', 'Write', 'Bash', 'memory_recall', 'memory_read']))
   expect(names).not.toContain('RealPath')
   expect(names).not.toContain('BrowserPageObserve')
   expect(names).not.toContain('AutomationRun')
@@ -386,6 +386,7 @@ test('Given RPC chatroom profile with missing or writable memory policy When bui
   const { buildBuiltinToolDefinitions } = await import('./pi-agent-adapter')
   const sdk = {
     createReadToolDefinition: () => ({ name: 'Read' }),
+    createBashToolDefinition: () => ({ name: 'Bash' }),
     createEditToolDefinition: () => ({ name: 'Edit' }),
     createWriteToolDefinition: () => ({ name: 'Write' }),
     defineTool: <T>(definition: T): T => definition,
@@ -397,7 +398,7 @@ test('Given RPC chatroom profile with missing or writable memory policy When bui
       memoryPolicy,
       capabilityProfile: 'chatroom',
     })
-    expect(tools.map((tool) => tool.name)).toEqual(['Read', 'Edit', 'Write'])
+    expect(tools.map((tool) => tool.name)).toEqual(['Read', 'Bash', 'Edit', 'Write'])
   }
 })
 

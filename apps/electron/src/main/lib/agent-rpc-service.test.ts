@@ -354,7 +354,8 @@ describe('Agent RPC 聊天室运行时边界', () => {
       expect(prepared.query.additionalDirectories).toBeUndefined()
       expect(prepared.query.browserPageControl).toBeUndefined()
       expect(prepared.query.automationEnabled).toBe(false)
-      expect(prepared.query.permissionMode).toBe('bypassPermissions')
+      expect(prepared.query.permissionMode).toBe('default')
+      expect(prepared.query.useRustFileApi).toBe(true)
       expect(prepared.query.fileAccessPolicy?.advancedAuthorization).toBe(false)
       expect(prepared.query.piAgentDir).toBe(runtimeContext.executionWorkspace.sessionRoot)
       expect(prepared.query.piSessionDir).not.toContain('sdk-config/sessions')
@@ -433,7 +434,7 @@ describe('Agent RPC 聊天室运行时边界', () => {
         agentRuntime: 'pi',
         permissionModeOverride: 'bypassPermissions',
       })
-      expect(prepared.query.permissionMode).toBe('bypassPermissions')
+      expect(prepared.query.permissionMode).toBe('default')
       expect(prepared.query.browserPageControl).toBeUndefined()
       expect(prepared.query.fileAccessPolicy?.advancedAuthorization).toBe(false)
       expect(prepared.query.automationEnabled).toBe(false)

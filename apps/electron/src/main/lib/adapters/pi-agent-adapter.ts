@@ -1342,8 +1342,7 @@ export function buildBuiltinToolDefinitions(
   const definitions = [
     ...(options.capabilityProfile === 'chatroom' && !rustFileTools ? [] : [
       sdk.createReadToolDefinition(cwd, rustFileTools ? { operations: rustFileTools.read } : undefined),
-      // 聊天室暂不开放 Shell；Task 9 接入 host approval sink 后再恢复受控能力。
-      ...(options.capabilityProfile === 'chatroom' ? [] : [sdk.createBashToolDefinition(cwd, rustFileTools
+      ...(options.capabilityProfile === 'chatroom' && !rustFileTools ? [] : [sdk.createBashToolDefinition(cwd, rustFileTools
         ? { operations: createRustBashToolOperations({ sessionId: options.sessionId }) }
         : createCopisBashToolOptions(runtimeEnv))]),
       sdk.createEditToolDefinition(cwd, rustFileTools ? { operations: rustFileTools.edit } : undefined),
