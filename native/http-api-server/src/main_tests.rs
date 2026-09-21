@@ -20,11 +20,12 @@ use super::pi_rpc::{
 use super::{
     append_recording_line, bind_automation_create_input, decode_hex, encode_hex,
     ensure_internal_success_with_body, find_subslice, handle_connection,
-    handle_internal_recording_request, is_allowed_origin, is_internal_agent_alipay_bot_path,
-    is_internal_agent_shell_path, is_internal_path, is_internal_token_valid,
-    is_private_auth_bridge_path, is_safe_path_component, is_skill_market_path, is_vite_dev_origin,
-    is_web_route_authorized, is_working_payment_path, is_workspace_dev_route,
-    parse_internal_recording_route, recording_marker, Bridge, BridgeResponse, HttpRequest,
+    handle_internal_agent_permission, handle_internal_recording_request, is_allowed_origin,
+    is_internal_agent_alipay_bot_path, is_internal_agent_shell_path, is_internal_path,
+    is_internal_token_valid, is_private_auth_bridge_path, is_safe_path_component,
+    is_skill_market_path, is_vite_dev_origin, is_web_route_authorized, is_working_payment_path,
+    is_workspace_dev_route, parse_internal_recording_route, recording_marker, Bridge,
+    BridgeResponse, HttpRequest,
 };
 
 static NEXT_HTTP_TEST_DIR: AtomicUsize = AtomicUsize::new(0);
@@ -1077,6 +1078,138 @@ fn permission_bridge_has_a_bounded_approval_timeout() {
         super::bridge_request_timeout_for_path("/api/internal/agent/permission"),
         std::time::Duration::from_secs(90)
     );
+}
+
+fn run_permission_handler(
+    request: HttpRequest,
+    workers: &super::pi_rpc::PiWorkerManager,
+    bridge: &Bridge,
+) -> String {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let server_request = request;
+    let server = thread::scope(|scope| {
+        let handle = scope.spawn(|| {
+            let (mut stream, _) = listener.accept().unwrap();
+            handle_internal_agent_permission(&mut stream, &server_request, None, workers, bridge);
+        });
+        let mut client = std::net::TcpStream::connect(address).unwrap();
+        let mut response = String::new();
+        client.read_to_string(&mut response).unwrap();
+        handle.join().unwrap();
+        response
+    });
+    server
+}
+
+#[test]
+fn permission_handler_rejects_method_token_session_profile_and_unknown_fields_before_bridge() {
+    let workers = super::pi_rpc::PiWorkerManager::new();
+    let bridge = Bridge::new();
+    bridge.fail_all("test bridge unavailable");
+    let root =
+        std::env::temp_dir().join(format!("copis-permission-handler-{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&root);
+    let mut query = serde_json::Map::new();
+    query.insert(
+        "cwd".into(),
+        serde_json::Value::String(root.to_string_lossy().into_owned()),
+    );
+    query.insert("useRustFileApi".into(), serde_json::Value::Bool(true));
+    query.insert(
+        "capabilityProfile".into(),
+        serde_json::Value::String("chatroom".into()),
+    );
+    query.insert("fileAccessPolicy".into(), serde_json::json!({"readRoots":[root],"readFiles":[],"writeRoots":[root],"permissionMode":"default"}));
+    let token = workers
+        .file_policies()
+        .register_from_query("permission-session", &mut query)
+        .unwrap();
+    let body = serde_json::to_vec(&serde_json::json!({"sessionId":"permission-session","requestId":"request-1","toolName":"Bash","toolInput":{}})).unwrap();
+    let response = run_permission_handler(
+        HttpRequest {
+            method: "GET".into(),
+            target: "/api/internal/agent/permission".into(),
+            headers: [(super::AGENT_FILE_TOKEN_HEADER.to_string(), token.clone())]
+                .into_iter()
+                .collect(),
+            body: body.clone(),
+        },
+        &workers,
+        &bridge,
+    );
+    assert!(response.starts_with("HTTP/1.1 405"));
+    let response = run_permission_handler(
+        HttpRequest {
+            method: "POST".into(),
+            target: "/api/internal/agent/permission".into(),
+            headers: [(super::AGENT_FILE_TOKEN_HEADER.to_string(), "wrong".into())]
+                .into_iter()
+                .collect(),
+            body: body.clone(),
+        },
+        &workers,
+        &bridge,
+    );
+    assert!(response.starts_with("HTTP/1.1 403"));
+    let response = run_permission_handler(HttpRequest { method: "POST".into(), target: "/api/internal/agent/permission".into(), headers: [(super::AGENT_FILE_TOKEN_HEADER.to_string(), token.clone())].into_iter().collect(), body: serde_json::to_vec(&serde_json::json!({"sessionId":"other-session","requestId":"request-1","toolName":"Bash","toolInput":{}})).unwrap() }, &workers, &bridge);
+    assert!(response.starts_with("HTTP/1.1 403"));
+    let response = run_permission_handler(
+        HttpRequest {
+            method: "POST".into(),
+            target: "/api/internal/agent/permission".into(),
+            headers: [(super::AGENT_FILE_TOKEN_HEADER.to_string(), token.clone())]
+                .into_iter()
+                .collect(),
+            body: body.clone(),
+        },
+        &workers,
+        &bridge,
+    );
+    assert!(response.starts_with("HTTP/1.1 503"));
+    let response = run_permission_handler(HttpRequest { method: "POST".into(), target: "/api/internal/agent/permission".into(), headers: [(super::AGENT_FILE_TOKEN_HEADER.to_string(), token)].into_iter().collect(), body: serde_json::to_vec(&serde_json::json!({"sessionId":"permission-session","requestId":"request-1","toolName":"Bash","toolInput":{},"unknown":true})).unwrap() }, &workers, &bridge);
+    assert!(response.starts_with("HTTP/1.1 400"));
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn permission_handler_forwards_only_chatroom_profile_and_reports_bridge_unavailable() {
+    let workers = super::pi_rpc::PiWorkerManager::new();
+    let bridge = Bridge::new();
+    bridge.fail_all("test bridge unavailable");
+    let root =
+        std::env::temp_dir().join(format!("copis-permission-profile-{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&root);
+    let mut query = serde_json::Map::new();
+    query.insert(
+        "cwd".into(),
+        serde_json::Value::String(root.to_string_lossy().into_owned()),
+    );
+    query.insert("useRustFileApi".into(), serde_json::Value::Bool(true));
+    query.insert(
+        "capabilityProfile".into(),
+        serde_json::Value::String("user".into()),
+    );
+    query.insert("fileAccessPolicy".into(), serde_json::json!({"readRoots":[root],"readFiles":[],"writeRoots":[root],"permissionMode":"bypassPermissions"}));
+    let ordinary = workers
+        .file_policies()
+        .register_from_query("ordinary-session", &mut query)
+        .unwrap();
+    let body = serde_json::to_vec(&serde_json::json!({"sessionId":"ordinary-session","requestId":"request-1","toolName":"Bash","toolInput":{}})).unwrap();
+    let response = run_permission_handler(
+        HttpRequest {
+            method: "POST".into(),
+            target: "/api/internal/agent/permission".into(),
+            headers: [(super::AGENT_FILE_TOKEN_HEADER.to_string(), ordinary)]
+                .into_iter()
+                .collect(),
+            body,
+        },
+        &workers,
+        &bridge,
+    );
+    assert!(response.starts_with("HTTP/1.1 403"));
+    let _ = std::fs::remove_dir_all(root);
 }
 
 #[test]
