@@ -283,6 +283,34 @@ test('Given reportFailed 网络失败 When stopAll 收敛 Then 未确认 termina
   expect(releaseAgentLeases).not.toHaveBeenCalled()
 })
 
+test('Given 首次 reportFailed 失败 When stopAll 重试成功 Then 使用原 failure claim 确认并只清理一次', async () => {
+  let releaseCount = 0
+  let failedCalls = 0
+  const reportFailed = mock(async (input: { code: string; message: string }) => { failedCalls++; if (failedCalls === 1) throw new Error('temporary network'); expect(input.code).toBe('internal_error'); expect(input.message).toBe('聊天室 Agent 执行失败') })
+  const releaseAgentLeases = mock(async () => {})
+  const sessionRelease = () => { releaseCount++ }
+  const base = fakeDeps()
+  const { deps } = fakeDeps({ rustApi: { ...base.deps.rustApi, reportRunning: mock(async () => { throw new Error('running unavailable') }), reportFailed, releaseAgentLeases }, registerSessionStorageOverride: () => sessionRelease })
+  const coordinator = new coordinatorModule.ChatRoomAgentCoordinator(deps)
+  await coordinator.handleInvocation(makeInput('failure-retry', 'agent-a'))
+  await coordinator.stopAll('app_quit')
+  expect(reportFailed).toHaveBeenCalledTimes(2)
+  expect(releaseAgentLeases).toHaveBeenCalled()
+  expect(releaseCount).toBe(1)
+})
+
+test('Given reportFailed 持续失败 When stopAll 使用不同 reason Then 原 failure claim 不变且不释放 lease', async () => {
+  const reportFailed = mock(async (input: { code: string; message: string }) => { expect(input.code).toBe('internal_error'); expect(input.message).toBe('聊天室 Agent 执行失败'); throw new Error('offline') })
+  const releaseAgentLeases = mock(async () => {})
+  const base = fakeDeps()
+  const { deps } = fakeDeps({ rustApi: { ...base.deps.rustApi, reportRunning: mock(async () => { throw new Error('running unavailable') }), reportFailed, releaseAgentLeases } })
+  const coordinator = new coordinatorModule.ChatRoomAgentCoordinator(deps)
+  await coordinator.handleInvocation(makeInput('failure-stable', 'agent-a'))
+  await coordinator.stopAll('gateway_disconnected')
+  expect(reportFailed).toHaveBeenCalledTimes(2)
+  expect(releaseAgentLeases).not.toHaveBeenCalled()
+})
+
 test('Given contextMessageCount=50 且收到55条消息 When启动 Then只提交最新50条', async () => {
   let captured: AgentSendInputLike | undefined
   const messages = Array.from({ length: 55 }, (_, index) => ({ messageId: `m-${index}`, sender: { type: 'user' as const, id: 'u', displayName: '用户' }, text: `消息-${index}`, createdAt: index }))

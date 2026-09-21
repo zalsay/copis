@@ -57,7 +57,7 @@ export interface ChatRoomAgentCoordinatorDependencies {
   permissionService?: Pick<AgentPermissionService, 'respondToPermission' | 'openExternalApproval'>
   now(): number
 }
-interface ActiveRun { invocation: ChatRoomAgentInvocation; config: ChatRoomAgentLocalConfig; stopRequested: boolean; terminal: boolean; terminalConfirmed: boolean; completionClaimed: boolean; lastDeltaAt: number; sessionRelease?: () => void; finalization?: Promise<void> }
+interface ActiveRun { invocation: ChatRoomAgentInvocation; config: ChatRoomAgentLocalConfig; stopRequested: boolean; terminal: boolean; terminalConfirmed: boolean; failureClaim?: { code: ChatRoomInvocationFailureCode; message: string }; completionClaimed: boolean; lastDeltaAt: number; sessionRelease?: () => void; finalization?: Promise<void> }
 interface PendingPermission { request: PermissionRequest; invocationId: string; roomId: string; hostUserId: string; expiresAt: number; timer: ReturnType<typeof setTimeout> }
 function latestAssistantText(messages: AgentMessage[] | undefined): string {
   return messages?.filter((message) => message.role === 'assistant').map((message) => typeof message.content === 'string' ? message.content : '').at(-1) ?? ''
@@ -299,7 +299,21 @@ export class ChatRoomAgentCoordinator implements ChatRoomAgentCoordinatorFacade 
     const safeDelta = sanitizeChatRoomText(text, this.createSanitizerContext(run.invocation, run.config, room, []), 16 * 1024)
     void this.deps.rustApi.reportDelta({ invocationId: run.invocation.invocationId, delta: safeDelta }).catch(() => this.deps.reportDiagnostic?.('聊天室增量回传失败'))
   }
-  private async failTerminal(run: ActiveRun, code: ChatRoomInvocationFailureCode, allowCompletionClaim = false): Promise<void> { if (run.terminal || (run.completionClaimed && !allowCompletionClaim)) return; run.terminal = true; const transitioned = this.deps.store.transitionInvocation(run.invocation.roomId, run.invocation.invocationId, ['accepted', 'running'], (record) => ({ ...record, status: 'failed', updatedAt: this.deps.now(), finishedAt: this.deps.now(), failureCode: code, failureMessage: failureMessage(code) })); if (!transitioned.transitioned) return; try { await this.deps.rustApi.reportFailed({ invocationId: run.invocation.invocationId, code, message: failureMessage(code) }); run.terminalConfirmed = true } catch { this.deps.reportDiagnostic?.('聊天室 terminal 状态回传失败') } }
+  private async failTerminal(run: ActiveRun, code: ChatRoomInvocationFailureCode, allowCompletionClaim = false): Promise<void> {
+    if (run.completionClaimed && !allowCompletionClaim) return
+    if (!run.failureClaim) {
+      const message = failureMessage(code)
+      run.failureClaim = { code, message }
+      run.terminal = true
+      const transitioned = this.deps.store.transitionInvocation(run.invocation.roomId, run.invocation.invocationId, ['accepted', 'running'], (record) => ({ ...record, status: 'failed', updatedAt: this.deps.now(), finishedAt: this.deps.now(), failureCode: code, failureMessage: message }))
+      if (!transitioned.transitioned) return
+    }
+    if (run.terminalConfirmed) return
+    try {
+      await this.deps.rustApi.reportFailed({ invocationId: run.invocation.invocationId, code: run.failureClaim.code, message: run.failureClaim.message })
+      run.terminalConfirmed = true
+    } catch { this.deps.reportDiagnostic?.('聊天室 terminal 状态回传失败') }
+  }
   private async reportRejected(input: ChatRoomAgentInvocation, code: ChatRoomInvocationFailureCode, room?: ChatRoomLocalRoomConfig, targetAgentId?: string): Promise<void> { if (room && targetAgentId && room.agents.some((agent) => agent.roomAgentId === targetAgentId)) { const now = this.deps.now(); try { this.deps.store.upsertInvocation(input.roomId, { invocationId: input.invocationId, roomId: input.roomId, traceId: input.traceId, targetAgentId, triggerMessageId: input.triggerMessageId, depth: input.depth, status: 'failed', createdAt: Math.min(now, input.receivedAt), updatedAt: now, finishedAt: now, failureCode: code, failureMessage: failureMessage(code) }) } catch { /* 记录失败时仍只上报固定码 */ } } await this.deps.rustApi.reportFailed({ invocationId: input.invocationId, code, message: failureMessage(code) }).catch(() => this.deps.reportDiagnostic?.('聊天室 rejected 状态回传失败')) }
   private async requireHostIdentity(roomId: string): Promise<{ hostUserId: string; deviceId: string }> { const userId = await this.deps.getCurrentUserId(); const room = this.deps.store.read(roomId); if (!room || !userId || room.hostUserId !== userId || room.deviceId !== this.deps.getDeviceId()) throw new Error('not_room_host'); return { hostUserId: userId, deviceId: this.deps.getDeviceId() } }
   private requireAgent(room: ChatRoomLocalRoomConfig | undefined, id: string): ChatRoomAgentLocalConfig { const agent = room?.agents.find((candidate) => candidate.roomAgentId === id); if (!agent) throw new Error('room_agent_not_found'); return agent }

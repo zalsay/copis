@@ -85,3 +85,8 @@ Fix round 3 verification：permission 4/4，coordinator 19/19，RPC service 34/3
 - Added real `handle_internal_agent_permission` TCP harness tests covering non-POST, wrong token, cross-session token, ordinary profile, unknown field, valid chatroom token, and bridge unavailable. Authentication failures return before bridge forwarding; valid chatroom authorization reaches the bridge boundary and returns stable 503 when unavailable.
 - The completion retry BDD (`Rust 已写入 completed 但响应丢失 When finalize retry succeeds`) verifies the retry uses the same completed payload and resolves local terminal to completed; no separate Rust gateway idempotency fixture existed, so this remains the client contract boundary.
 - Latest focused Rust handler tests: 2 passed; coordinator suite: 29 passed / 62 expects. `cargo fmt --check` and `git diff --check` pass.
+## Fix round 6 RED/GREEN
+
+- RED: `failTerminal` set `run.terminal` before remote `reportFailed`; a later stopAll/disconnect returned early and could release no/incorrect lease without retrying the original failure.
+- GREEN: failure claim is now stored once with immutable code/message; remote confirmation retries the same payload until success. Cleanup occurs only after `terminalConfirmed`; persistent failure keeps active run and lease. Added BDDs for retry success, persistent failure, unchanged stop reason, and exactly-once session cleanup.
+- Evidence: coordinator suite 31 pass / 73 expects; Electron typecheck and build:main; Rust fmt and diff checks pass.
