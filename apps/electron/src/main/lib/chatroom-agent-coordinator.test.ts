@@ -141,6 +141,29 @@ test('Given reportAccepted 失败 When invocation 到达 Then 不启动 Agent �
   expect(reportFailed).toHaveBeenCalledWith(expect.objectContaining({ code: 'internal_error', message: '聊天室 Agent 执行失败' }))
 })
 
+test('Given reportRunning 失败 When accepted 已回传 Then 不启动 Agent 且固定失败', async () => {
+  const base = fakeDeps()
+  const reportFailed = mock(async () => {})
+  const { deps, runAgentHeadless } = fakeDeps({ rustApi: { ...base.deps.rustApi, reportRunning: mock(async () => { throw new Error('raw sdk detail') }), reportFailed } })
+  const coordinator = new coordinatorModule.ChatRoomAgentCoordinator(deps)
+  await coordinator.handleInvocation(makeInput('running-fail', 'agent-a'))
+  await new Promise((resolve) => setTimeout(resolve, 0))
+  expect(runAgentHeadless).not.toHaveBeenCalled()
+  expect(reportFailed).toHaveBeenCalledWith(expect.objectContaining({ code: 'internal_error', message: '聊天室 Agent 执行失败' }))
+})
+
+test('Given reportCompleted 失败 When Agent 完成 Then local remains failed and no next hop is dispatched', async () => {
+  const base = fakeDeps()
+  const reportFailed = mock(async () => {})
+  const createNextHop = mock(async () => {})
+  const { deps, records } = fakeDeps({ rustApi: { ...base.deps.rustApi, reportCompleted: mock(async () => { throw new Error('raw sdk detail') }), reportFailed }, createNextHop })
+  const coordinator = new coordinatorModule.ChatRoomAgentCoordinator(deps)
+  await coordinator.handleInvocation(makeInput('completed-fail', 'agent-a'))
+  await new Promise((resolve) => setTimeout(resolve, 0))
+  expect(records.get('completed-fail')?.status).toBe('failed')
+  expect(createNextHop).not.toHaveBeenCalled()
+})
+
 test('Given contextMessageCount=50 且收到55条消息 When启动 Then只提交最新50条', async () => {
   let captured: AgentSendInputLike | undefined
   const messages = Array.from({ length: 55 }, (_, index) => ({ messageId: `m-${index}`, sender: { type: 'user' as const, id: 'u', displayName: '用户' }, text: `消息-${index}`, createdAt: index }))
@@ -173,6 +196,24 @@ test('Given Agent 请求敏感权限 When 主理人响应 Then 仅收到脱敏�
   await coordinator.respondToPermission({ requestId: 'permission-request-1', behavior: 'allow' })
   expect(respondToPermission).toHaveBeenCalledWith('permission-request-1', 'allow', false)
   release()
+})
+
+test('Given host denies a pending permission When stopAgent never returns Then underlying promise is denied before bounded terminal handling', async () => {
+  let runtime: { requestPermission?: (request: PermissionRequest) => void } | undefined
+  const respondToPermission = mock(async () => 'session-agent-a')
+  const stopAgent = mock(async () => await new Promise<void>(() => {}))
+  const { deps, records } = fakeDeps({
+    stopAgent,
+    permissionService: { respondToPermission },
+    runAgentHeadless: mock(async (_input: unknown, callbacks: { trustedRuntimeContext?: { requestPermission?: (request: PermissionRequest) => void } }) => { runtime = callbacks.trustedRuntimeContext; await new Promise<void>(() => {}) }),
+  })
+  const coordinator = new coordinatorModule.ChatRoomAgentCoordinator(deps)
+  await coordinator.handleInvocation(makeInput('deny-bounded', 'agent-a'))
+  for (let i = 0; i < 10 && !runtime; i++) await Promise.resolve()
+  runtime?.requestPermission?.({ requestId: 'deny-request', sessionId: 'session-agent-a', toolName: 'Bash', toolInput: { command: 'rm -rf project' }, description: '危险命令', dangerLevel: 'dangerous' })
+  await coordinator.respondToPermission({ requestId: 'deny-request', behavior: 'deny' })
+  expect(respondToPermission).toHaveBeenCalledWith('deny-request', 'deny', false)
+  expect(records.get('deny-bounded')?.status).toBe('failed')
 })
 
 test('Given 本地存在多个未归档 Agent When stopAll Then 释放全部 lease 且重复调用幂等', async () => {

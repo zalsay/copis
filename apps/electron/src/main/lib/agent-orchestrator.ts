@@ -1592,8 +1592,8 @@ export class AgentOrchestrator {
         if (isChatroomRun) {
           const filePath = typeof input.file_path === 'string' ? input.file_path : typeof input.path === 'string' ? input.path : ''
           const projectRoot = trustedRuntimeContext!.executionWorkspace.projectRoot
-          const relativePath = filePath ? relative(projectRoot, resolve(filePath)) : '..'
-          const insideProject = relativePath !== '' && relativePath !== '..' && !relativePath.startsWith('..')
+          const relativePath = filePath ? relative(projectRoot, resolve(projectRoot, filePath)) : '..'
+          const insideProject = relativePath !== '' && relativePath !== '..' && !relativePath.startsWith('..') && !isAbsolute(relativePath)
           const safeFileTool = ['Read', 'Edit', 'Write', 'MultiEdit'].includes(toolName) && insideProject
           const safeMemoryTool = ['memory_recall', 'memory_read'].includes(toolName)
           if (!safeFileTool && !safeMemoryTool) {
@@ -1931,7 +1931,7 @@ export class AgentOrchestrator {
         proxyUrl,
         runtimeEnv,
         ...(maxTurns != null && { maxTurns }),
-        permissionMode: initialPermissionMode,
+        permissionMode: isChatroomRun ? 'default' : initialPermissionMode,
         canUseTool,
         systemPrompt: systemPromptAppend + buildPiAdditionalDirectoriesPrompt(
           allAdditionalDirectories,

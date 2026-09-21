@@ -33,3 +33,15 @@ test('Given a destructive planning request When it is approved Then approval is 
   expect(service.respondToPermission(secondRequest!.requestId, 'deny', false)).toBe('session-1')
   expect((await secondResult).behavior).toBe('deny')
 })
+
+test('Given the same request id When two approvals are opened Then the second promise rejects and the first remains resolvable', async () => {
+  let sequence = 0
+  const service = new AgentPermissionService(() => sequence++ === 0 ? 'duplicate-request' : 'duplicate-request')
+  const controller = new AbortController()
+  let requestId = ''
+  const first = service.requestSingleApproval('session-1', 'Bash', { command: 'rm -rf project' }, permissionOptions(controller.signal, 'tool-1'), (request) => { requestId = request.requestId })
+  const second = service.requestSingleApproval('session-1', 'Bash', { command: 'rm -rf project' }, permissionOptions(controller.signal, 'tool-2'), () => {})
+  await expect(second).rejects.toThrow('permission_request_duplicate')
+  expect(service.respondToPermission(requestId, 'deny', true)).toBe('session-1')
+  expect((await first).behavior).toBe('deny')
+})

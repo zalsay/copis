@@ -130,7 +130,8 @@ export interface PiAgentQueryOptions extends AgentQueryInput {
   channelId?: string
   channelName?: string
   maxTurns?: number
-  permissionMode: CopisPermissionMode
+  /** default 是 SDK 的可拦截模式，仅供聊天室 Main 使用，不暴露到用户模式切换。 */
+  permissionMode: CopisPermissionMode | 'default'
   canUseTool?: (
     toolName: string,
     input: Record<string, unknown>,

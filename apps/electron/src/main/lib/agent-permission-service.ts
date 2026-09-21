@@ -105,6 +105,7 @@ interface SessionWhitelist {
  * 单例模式，管理所有会话的权限状态。
  */
 export class AgentPermissionService {
+  constructor(private readonly requestIdFactory: () => string = randomUUID) {}
   /** 待处理的权限请求 Map（requestId → PendingPermission） */
   private pendingPermissions = new Map<string, PendingPermission>()
 
@@ -146,19 +147,7 @@ export class AgentPermissionService {
 
       // 需要询问用户：构建请求并发送到 UI
       const request = this.buildPermissionRequest(sessionId, toolName, input, options)
-      sendToRenderer(request)
-
-      return new Promise<PermissionResult>((resolve) => {
-        this.pendingPermissions.set(request.requestId, { resolve, request })
-
-        // 如果 signal 被中止，自动拒绝
-        options.signal.addEventListener('abort', () => {
-          if (this.pendingPermissions.has(request.requestId)) {
-            this.pendingPermissions.delete(request.requestId)
-            resolve({ behavior: 'deny' as const, message: '操作已中止' })
-          }
-        }, { once: true })
-      })
+      return this.openPendingPermission(request, options.signal, sendToRenderer)
     }
   }
 
@@ -178,15 +167,28 @@ export class AgentPermissionService {
       dangerLevel: 'dangerous',
       allowAlways: false,
     }
-    sendToRenderer(request)
-    return new Promise<PermissionResult>((resolve) => {
-      this.pendingPermissions.set(request.requestId, { resolve, request })
-      options.signal.addEventListener('abort', () => {
-        if (!this.pendingPermissions.has(request.requestId)) return
-        this.pendingPermissions.delete(request.requestId)
-        resolve({ behavior: 'deny' as const, message: '操作已中止' })
-      }, { once: true })
-    })
+    return this.openPendingPermission(request, options.signal, sendToRenderer)
+  }
+
+  private openPendingPermission(request: PermissionRequest, signal: AbortSignal, sendToRenderer: (request: PermissionRequest) => void): Promise<PermissionResult> {
+    if (this.pendingPermissions.has(request.requestId)) return Promise.reject(new Error('permission_request_duplicate'))
+    let resolvePending!: (result: PermissionResult) => void
+    const result = new Promise<PermissionResult>((resolve) => { resolvePending = resolve })
+    this.pendingPermissions.set(request.requestId, { resolve: resolvePending, request })
+    try {
+      sendToRenderer(request)
+    } catch {
+      this.pendingPermissions.delete(request.requestId)
+      resolvePending({ behavior: 'deny', message: '权限请求发送失败' })
+      return Promise.reject(new Error('permission_request_dispatch_failed'))
+    }
+    signal.addEventListener('abort', () => {
+      const pending = this.pendingPermissions.get(request.requestId)
+      if (!pending) return
+      this.pendingPermissions.delete(request.requestId)
+      pending.resolve({ behavior: 'deny', message: '操作已中止' })
+    }, { once: true })
+    return result
   }
 
   /**
@@ -338,7 +340,7 @@ export class AgentPermissionService {
       : undefined
 
     return {
-      requestId: randomUUID(),
+    requestId: this.requestIdFactory(),
       sessionId,
       toolName,
       toolInput: input,

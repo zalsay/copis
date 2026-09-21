@@ -70,6 +70,16 @@ afterEach(() => {
 })
 
 describe('聊天室本地工作区存储', () => {
+  test('terminal invocation cannot transition back to another terminal status', () => {
+    const store = makeStore()
+    const saved = provision(store)
+    const roomAgentId = saved.agents[0]!.roomAgentId
+    store.upsertInvocation('room-1', makeInvocation({ targetAgentId: roomAgentId, status: 'accepted', acceptedAt: now, finishedAt: undefined }))
+    expect(store.transitionInvocation('room-1', 'inv-1', ['accepted'], (record) => ({ ...record, status: 'running', startedAt: now })).transitioned).toBe(true)
+    expect(store.transitionInvocation('room-1', 'inv-1', ['running'], (record) => ({ ...record, status: 'completed', finishedAt: now })).transitioned).toBe(true)
+    expect(store.transitionInvocation('room-1', 'inv-1', ['completed'], (record) => ({ ...record, status: 'failed', failureCode: 'internal_error', failureMessage: 'x' })).transitioned).toBe(false)
+    expect(store.getInvocation('room-1', 'inv-1')?.status).toBe('completed')
+  })
   test('孤立 UTF-16 surrogate 不得进入本地 room 配置', () => {
     const store = makeStore()
     expect(() => provision(store, { displayName: '\uD800' })).toThrow('invalid_agent_input')

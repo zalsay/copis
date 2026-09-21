@@ -535,6 +535,17 @@ export class ChatRoomWorkspaceStore {
     if (!expectedStatuses.includes(previous.status)) return { transitioned: false, record: clone(previous) }
     const nextRecord = update(clone(previous))
     validateInvocation(nextRecord, roomId)
+    const allowed: Record<ChatRoomInvocationRecord['status'], readonly ChatRoomInvocationRecord['status'][]> = {
+      created: ['accepted', 'failed', 'rejected'],
+      accepted: ['running', 'failed', 'rejected'],
+      running: ['completed', 'failed'],
+      completed: [],
+      failed: [],
+      rejected: [],
+    }
+    if (nextRecord.status === previous.status || !allowed[previous.status].includes(nextRecord.status)) {
+      return { transitioned: false, record: clone(previous) }
+    }
     if (nextRecord.invocationId !== previous.invocationId
       || nextRecord.traceId !== previous.traceId
       || nextRecord.targetAgentId !== previous.targetAgentId

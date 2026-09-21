@@ -31,3 +31,11 @@
 - BDD 补充覆盖：三路 barrier 并行启动、depth 2 不创建下一跳、host/device mismatch、hidden override 注册失败、accepted 回传失败、最新 N 条上下文、Main-only 权限摘要与强制单次批准、全量未归档 lease stopAll、delta 路径/secret/UTF-8 16 KiB/50ms、真实 workspace CAS late callback。
 
 Fix round 1 verification：coordinator 15/15，workspace store 24/24，sanitizer 16/16，permission 1/1，runtime 5/5，HTTP handler 17/17；Electron typecheck、build:main、build:renderer、git diff --check 均通过。
+
+## Fix round 2
+
+- RED：补充 duplicate requestId 双 Promise、terminal 状态回退、reportRunning/reportCompleted 失败、stopAgent 永不返回时 deny 收敛等 BDD 场景；初始实现分别出现权限 Promise 悬挂、状态矩阵未限制和重复运行风险。
+- GREEN：权限服务先原子占位再发送 renderer，重复 requestId 明确拒绝，sink 异常固定拒绝且不遗留 pending；协调器在 deny/timeout/disconnect/stopAll 前显式 deny 底层请求，stopAgent 采用有界 fire-and-forget，terminal 不等待停止；状态 CAS 增加单向矩阵，Rust 没有 rejected bridge 时本地拒绝统一保存为 failed；completed 只有远端回传成功后才落本地，失败转固定 failed 且不继续下一跳。
+- 聊天室 query 使用 SDK `default` 可拦截模式（仅 Main 内部类型扩展，不改变用户可选的 bypass/plan），原生敏感工具仍经 canUseTool/主理人审批；聊天室路径解析以 projectRoot 为相对基准，Skill 启动前校验 snapshot digest。
+
+Fix round 2 verification：coordinator 18/18，workspace store 25/25，permission 2/2；Electron typecheck、build:main 已通过。未修改 IPC/preload/main lifecycle；仍需主 Agent 完成全套回归、code simplifier 与最终 Electron 实际窗口确认。
