@@ -108,3 +108,23 @@ Task 7 的三个 load-bearing carry-over 已关闭，并完成 Task 8 parser/san
 - Copis existing Task 8 regression：sanitizer `15/15`、prompt `32/32`、Shared `14/14`、workspace store `23/23`；`bun run typecheck`、`build:main`、`build:renderer` 均通过（保留既有 Browserslist/大 chunk warning）。
 - ai-education：`go test ./handlers -run 'ChatRoomV2' -count=1`、`go test ./services -run 'ChatRoomV2' -count=1` 均通过；本轮无 Go 文件改动、无新增提交。
 - 本轮代码提交：Copis `4c73203c`（仅三个 Rust protocol/client 文件）；保留 Copis 五个无关 dirty Rust 文件不暂存。
+
+## 修复轮 4：附件、完整 WebSocket frame 与 Agent transient schema
+
+### TDD / BDD 证据
+
+- RED：Rust 原有 `ChatroomCommand` 与完成事件只校验附件 ID 格式，不拒绝 21 项；Rust parser 也允许 Agent transient 任意对象。新增 20/21 附件、缺失/错类型/未知字段/嵌套绕过用例后先失败，再实现统一边界与严格 schema。
+- GREEN：Rust `SendMessage`、`AgentEventPayload::Completed`、公共消息 normalize、内部完成路由统一拒绝超过 20 个附件；`agent.accepted`、`agent.delta`、`agent.completed`、`agent.failed` 现在按精确公开字段解析，拒绝未知/缺失/错类型，文本仍 64 KiB、mentions 3、attachments 20。
+- RED：Go wire 原按 RawMessage payload 128 KiB 判断，未计 type/roomId/seq/payload envelope 与 Gorilla `WriteJSON` 末尾换行。新增完整 frame 二分边界回归后改为 `json.Marshal(event)+1` 预算，最大可接受 frame 通过，多 1 字节返回 `ErrChatRoomV2WirePayloadTooBig`，写出前不会发送。
+- GREEN：Go producer 将 accepted 收敛为 `{invocationId}`，completed 发送完整 `{invocationId,content,mentionAgentIds,attachmentIds,clientMessageId}`；Go store 在事务前统一拒绝 21 附件，并让 clientMessageId/数组 ID 拒绝控制符、Unicode 空白及 `/ ? # \\`，与 Rust 对齐。
+
+### 验证
+
+- Copis Rust protocol `34/34`、gateway `57/57`、client `38/38`；`cargo fmt` 通过。
+- ai-education `go test ./handlers -run 'ChatRoomV2' -count=1` 通过；`go test ./services -run 'ChatRoomV2' -count=1` 通过；新增完整 frame 与消息输入边界测试均通过；`gofmt` 通过。
+- 保留已有 sanitizer、prompt 双 gate、atomic failure、room-wide transient 与 64 KiB/128 KiB 回归。
+
+### 裁定
+
+- `agent.completed` 的 server outgoing shape 已同步为完整五字段，避免 Rust parser 为兼容旧的二字段事件而放宽 schema；durable `message.created` 与 transient completed 两者字段保持一致。
+- 完整 frame 预算只约束 Go 写出 envelope；业务 `content`/`delta` 仍 64 KiB，附件上限由共享模型常量 `ChatRoomV2MaxAttachmentIDs` 定义。

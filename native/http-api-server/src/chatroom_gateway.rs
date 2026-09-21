@@ -864,7 +864,13 @@ impl ChatroomGateway {
                     event: AgentEventPayload::Completed {
                         content: required_text(object, "content")?.to_string(),
                         mention_agent_ids: string_array(object, "mentionAgentIds")?,
-                        attachment_ids: string_array(object, "attachmentIds")?,
+                        attachment_ids: {
+                            let ids = string_array(object, "attachmentIds")?;
+                            if ids.len() > 20 {
+                                return Err(invalid_request("附件数量超限"));
+                            }
+                            ids
+                        },
                         client_message_id: required_string(object, "clientMessageId")?.to_string(),
                     },
                 }
@@ -2322,6 +2328,9 @@ fn normalize_message_body(value: &Value) -> Result<Value, ChatroomGatewayError> 
         return Err(invalid_request("消息 @Agent 数量超限"));
     }
     let attachments = optional_string_array(object, "attachmentIds")?;
+    if attachments.len() > 20 {
+        return Err(invalid_request("附件数量超限"));
+    }
     let client_message_id = match object.get("clientMessageId") {
         Some(Value::String(value)) if valid_uuid(value) => value.clone(),
         Some(_) => return Err(invalid_request("clientMessageId 不合法")),

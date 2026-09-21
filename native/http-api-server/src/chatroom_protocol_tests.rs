@@ -250,12 +250,26 @@ fn given_all_phase_one_events_when_parsing_then_accept_persisted_and_transient_e
         "member.presence_changed",
         "agent.presence_changed",
         "agent.invocation",
-        "agent.accepted",
-        "agent.delta",
-        "agent.completed",
-        "agent.failed",
     ] {
         let input = json!({"type": typ, "roomId": "room-1", "payload": {"value": "ok"}});
+        assert!(
+            parse_event(&serde_json::to_vec(&input).unwrap()).is_ok(),
+            "{typ}"
+        );
+    }
+    for (typ, payload) in [
+        ("agent.accepted", json!({"invocationId":"inv-1"})),
+        ("agent.delta", json!({"invocationId":"inv-1","delta":"ok"})),
+        (
+            "agent.completed",
+            json!({"invocationId":"inv-1","content":"ok","mentionAgentIds":[],"attachmentIds":[],"clientMessageId":"reply-1"}),
+        ),
+        (
+            "agent.failed",
+            json!({"invocationId":"inv-1","failureCode":"failed"}),
+        ),
+    ] {
+        let input = json!({"type": typ, "roomId": "room-1", "payload": payload});
         assert!(
             parse_event(&serde_json::to_vec(&input).unwrap()).is_ok(),
             "{typ}"
@@ -452,7 +466,7 @@ fn given_delta_content_at_64_kib_when_parsing_then_enforce_field_limit_not_envel
         let input = json!({
             "type":"agent.delta",
             "roomId":"room-1",
-            "payload":{"delta":"x".repeat(size)}
+            "payload":{"invocationId":"inv-1","delta":"x".repeat(size)}
         });
         assert_eq!(
             parse_event(&serde_json::to_vec(&input).unwrap()).is_ok(),
@@ -691,4 +705,51 @@ fn given_sensitive_scalar_variants_when_parsing_then_reject_case_insensitively()
             "accepted sensitive scalar {value}"
         );
     }
+}
+
+#[test]
+fn given_twenty_one_attachments_when_validating_command_then_reject() {
+    let command = ChatroomCommand::SendMessage {
+        room_id: "room-1".into(),
+        client_message_id: "client-1".into(),
+        content: "hello".into(),
+        mention_agent_ids: vec![],
+        attachment_ids: (0..21).map(|index| format!("attachment-{index}")).collect(),
+    };
+    assert!(serde_json::to_value(command).is_err());
+}
+
+#[test]
+fn given_agent_transient_payload_with_missing_wrong_or_unknown_fields_when_parsing_then_reject() {
+    let cases = [
+        json!({"type":"agent.delta","roomId":"room-1","payload":{"invocationId":"inv-1"}}),
+        json!({"type":"agent.delta","roomId":"room-1","payload":{"invocationId":"inv-1","delta":""}}),
+        json!({"type":"agent.delta","roomId":"room-1","payload":{"invocationId":"inv-1","delta":"ok","nested":{"delta":"bypass"}}}),
+        json!({"type":"agent.completed","roomId":"room-1","payload":{"invocationId":"inv-1","content":"done","mentionAgentIds":[],"attachmentIds":[]}}),
+        json!({"type":"agent.completed","roomId":"room-1","payload":{"invocationId":"inv-1","content":"done","mentionAgentIds":[],"attachmentIds":[],"clientMessageId":"reply","extra":true}}),
+        json!({"type":"agent.failed","roomId":"room-1","payload":{"invocationId":"inv-1"}}),
+        json!({"type":"agent.accepted","roomId":"room-1","payload":{"invocationId":"inv-1","extra":true}}),
+    ];
+    for value in cases {
+        assert!(
+            parse_event(&serde_json::to_vec(&value).unwrap()).is_err(),
+            "accepted {value}"
+        );
+    }
+}
+
+#[test]
+fn given_agent_completed_with_twenty_one_attachments_when_parsing_then_reject() {
+    let value = json!({
+        "type":"agent.completed",
+        "roomId":"room-1",
+        "payload":{
+            "invocationId":"inv-1",
+            "content":"done",
+            "mentionAgentIds":[],
+            "attachmentIds":(0..21).map(|index| format!("attachment-{index}")).collect::<Vec<_>>(),
+            "clientMessageId":"reply"
+        }
+    });
+    assert!(parse_event(&serde_json::to_vec(&value).unwrap()).is_err());
 }

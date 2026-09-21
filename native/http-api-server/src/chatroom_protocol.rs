@@ -192,6 +192,7 @@ impl ChatroomCommand {
                 if !valid_id(client_message_id, MAX_CLIENT_MESSAGE_ID_BYTES)
                     || !valid_content(content, MAX_TEXT_BYTES)
                     || !valid_mentions(mention_agent_ids)
+                    || attachment_ids.len() > MAX_ATTACHMENT_IDS
                     || attachment_ids
                         .iter()
                         .any(|attachment_id| !valid_id(attachment_id, MAX_ID_BYTES))
@@ -241,6 +242,7 @@ impl ChatroomCommand {
                         if !valid_content(content, MAX_TEXT_BYTES)
                             || !valid_id(client_message_id, MAX_CLIENT_MESSAGE_ID_BYTES)
                             || !valid_mentions(mention_agent_ids)
+                            || attachment_ids.len() > MAX_ATTACHMENT_IDS
                             || attachment_ids
                                 .iter()
                                 .any(|attachment_id| !valid_id(attachment_id, MAX_ID_BYTES))
@@ -368,6 +370,119 @@ fn validate_event_payload_fields(payload: &Value) -> Result<(), ProtocolError> {
         }
     }
 
+    Ok(())
+}
+
+fn validate_transient_agent_payload(typ: &str, payload: &Value) -> Result<(), ProtocolError> {
+    let object = payload
+        .as_object()
+        .ok_or_else(|| invalid("agent transient payload must be an object"))?;
+    let (required, allowed): (&[&str], &[&str]) = match typ {
+        "agent.accepted" => (&["invocationId"], &["invocationId"]),
+        "agent.delta" => (&["invocationId", "delta"], &["invocationId", "delta"]),
+        "agent.completed" => (
+            &[
+                "invocationId",
+                "content",
+                "mentionAgentIds",
+                "attachmentIds",
+                "clientMessageId",
+            ],
+            &[
+                "invocationId",
+                "content",
+                "mentionAgentIds",
+                "attachmentIds",
+                "clientMessageId",
+            ],
+        ),
+        "agent.failed" => (
+            &["invocationId", "failureCode"],
+            &["invocationId", "failureCode"],
+        ),
+        _ => return Ok(()),
+    };
+    if object.keys().any(|key| !allowed.contains(&key.as_str()))
+        || required.iter().any(|key| !object.contains_key(*key))
+    {
+        return Err(invalid("agent transient payload schema is invalid"));
+    }
+    let invocation_id = object
+        .get("invocationId")
+        .and_then(Value::as_str)
+        .filter(|value| valid_id(value, MAX_ID_BYTES))
+        .ok_or_else(|| invalid("agent transient invocationId is invalid"))?;
+    let _ = invocation_id;
+    match typ {
+        "agent.accepted" => {}
+        "agent.delta" => {
+            let delta = object
+                .get("delta")
+                .and_then(Value::as_str)
+                .ok_or_else(|| invalid("agent delta must be a string"))?;
+            if !valid_content(delta, MAX_TEXT_BYTES) {
+                return Err(ProtocolError::new(
+                    "payload_too_large",
+                    "agent delta exceeds 64 KiB",
+                ));
+            }
+        }
+        "agent.completed" => {
+            let content = object
+                .get("content")
+                .and_then(Value::as_str)
+                .ok_or_else(|| invalid("agent completed content must be a string"))?;
+            if !valid_content(content, MAX_TEXT_BYTES) {
+                return Err(ProtocolError::new(
+                    "payload_too_large",
+                    "agent completed content exceeds 64 KiB",
+                ));
+            }
+            let mentions = object
+                .get("mentionAgentIds")
+                .and_then(Value::as_array)
+                .ok_or_else(|| invalid("agent completed mentions must be an array"))?;
+            if mentions.len() > 3
+                || mentions.iter().any(|value| {
+                    value
+                        .as_str()
+                        .map(|id| !valid_id(id, MAX_ID_BYTES))
+                        .unwrap_or(true)
+                })
+            {
+                return Err(invalid("agent completed mentions are invalid"));
+            }
+            let attachments = object
+                .get("attachmentIds")
+                .and_then(Value::as_array)
+                .ok_or_else(|| invalid("agent completed attachments must be an array"))?;
+            if attachments.len() > MAX_ATTACHMENT_IDS
+                || attachments.iter().any(|value| {
+                    value
+                        .as_str()
+                        .map(|id| !valid_id(id, MAX_ID_BYTES))
+                        .unwrap_or(true)
+                })
+            {
+                return Err(invalid("agent completed attachments are invalid"));
+            }
+            let client_message_id = object
+                .get("clientMessageId")
+                .and_then(Value::as_str)
+                .filter(|value| valid_id(value, MAX_CLIENT_MESSAGE_ID_BYTES))
+                .ok_or_else(|| invalid("agent completed clientMessageId is invalid"))?;
+            let _ = client_message_id;
+        }
+        "agent.failed" => {
+            let code = object
+                .get("failureCode")
+                .and_then(Value::as_str)
+                .filter(|value| valid_id(value, MAX_ID_BYTES))
+                .ok_or_else(|| invalid("agent failureCode is invalid"))?;
+            let _ = code;
+        }
+        _ => unreachable!(),
+    }
     Ok(())
 }
 
@@ -691,6 +806,7 @@ pub fn parse_event(bytes: &[u8]) -> Result<ChatroomEvent, ProtocolError> {
         ));
     }
     validate_event_payload_fields(&payload)?;
+    validate_transient_agent_payload(typ, &payload)?;
     let seq = object
         .get("seq")
         .map(|value| {
