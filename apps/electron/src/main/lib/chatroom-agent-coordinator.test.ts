@@ -224,7 +224,9 @@ test('Given completion claimed while reportCompleted is pending When gateway dis
 })
 
 test('Given completion response is lost When stopAll is called Then idempotent finalize confirms terminal before lease release', async () => {
+  let completionStarted = false
   const reportCompleted = mock(async (_input: unknown, options?: { signal?: AbortSignal }) => {
+    completionStarted = true
     if (!options?.signal) return
     await new Promise<void>((_resolve, reject) => options.signal?.addEventListener('abort', () => reject(new Error('aborted')), { once: true }))
   })
@@ -232,7 +234,8 @@ test('Given completion response is lost When stopAll is called Then idempotent f
   const { deps, records } = fakeDeps({ rustApi: { ...fakeDeps().deps.rustApi, reportCompleted, releaseAgentLeases }, stopAgent: mock(async () => await new Promise<void>(() => {})) })
   const coordinator = new coordinatorModule.ChatRoomAgentCoordinator(deps)
   await coordinator.handleInvocation(makeInput('completion-never', 'agent-a'))
-  await new Promise((resolve) => setTimeout(resolve, 0))
+  for (let attempt = 0; attempt < 50 && !completionStarted; attempt++) await Promise.resolve()
+  expect(completionStarted).toBe(true)
   const started = Date.now()
   await coordinator.stopAll('app_quit')
   expect(Date.now() - started).toBeLessThan(3_000)
@@ -308,6 +311,30 @@ test('Given 首次 reportFailed 失败 When stopAll 重试成功 Then 使用原 
   await coordinator.stopAll('app_quit')
   expect(reportFailed).toHaveBeenCalledTimes(2)
   expect(releaseCount).toBe(1)
+})
+
+test('Given session cleanup 首次失败 When stopAll 重试 Then 未清理成功前不释放 lease 且后续只成功清理一次', async () => {
+  let releaseAttempts = 0
+  const releaseAgentLeases = mock(async () => {})
+  const base = fakeDeps()
+  const { deps } = fakeDeps({
+    rustApi: { ...base.deps.rustApi, reportRunning: mock(async () => { throw new Error('running unavailable') }), releaseAgentLeases },
+    registerSessionStorageOverride: () => () => { releaseAttempts++; if (releaseAttempts < 3) throw new Error('cleanup unavailable') },
+  })
+  const coordinator = new coordinatorModule.ChatRoomAgentCoordinator(deps)
+  await coordinator.handleInvocation(makeInput('cleanup-retry', 'agent-a'))
+  await new Promise((resolve) => setTimeout(resolve, 0))
+  expect(releaseAttempts).toBe(1)
+  await coordinator.stopAll('app_quit')
+  expect(releaseAttempts).toBe(2)
+  expect(releaseAgentLeases).not.toHaveBeenCalled()
+  expect((coordinator as unknown as { activeRuns: Map<string, unknown> }).activeRuns.size).toBe(1)
+  await coordinator.stopAll('app_quit')
+  expect(releaseAttempts).toBe(3)
+  expect(releaseAgentLeases).toHaveBeenCalledTimes(1)
+  expect((coordinator as unknown as { activeRuns: Map<string, unknown> }).activeRuns.size).toBe(0)
+  await coordinator.stopAll('app_quit')
+  expect(releaseAttempts).toBe(3)
 })
 
 test('Given reportFailed 持续失败 When stopAll 使用不同 reason Then 原 failure claim 不变且不释放 lease', async () => {

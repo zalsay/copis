@@ -186,7 +186,7 @@ export class ChatRoomAgentCoordinator implements ChatRoomAgentCoordinatorFacade 
   async stopAll(reason: 'logout' | 'gateway_disconnected' | 'app_quit'): Promise<{ stoppedSessionIds: string[]; releasedRoomAgentIds: string[] }> {
     if (this.stopping) return this.stopping
     this.disconnected = true
-    this.stopping = (async () => { const runs = [...this.activeRuns.values()]; this.denyPendingPermissions(); const finalized = await Promise.all(runs.map(async (run) => { run.stopRequested = true; await this.failTerminal(run, reason === 'app_quit' ? 'app_quit' : reason === 'logout' ? 'internal_error' : 'gateway_disconnected'); void this.stopAgentBounded(run.config.sessionId); const confirmed = await this.awaitFinalization(run); if (confirmed) this.cleanupActiveRun(run); return confirmed })); const roomAgentIds = finalized.every(Boolean) ? [...new Set(this.deps.store.list().flatMap((room) => room.agents.filter((agent) => agent.archivedAt === undefined).map((agent) => agent.roomAgentId)))] : []; if (roomAgentIds.length > 0) await this.deps.rustApi.releaseAgentLeases({ roomAgentIds, reason }).catch(() => undefined); return { stoppedSessionIds: runs.map((run) => run.config.sessionId), releasedRoomAgentIds: roomAgentIds } })()
+    this.stopping = (async () => { const runs = [...this.activeRuns.values()]; this.denyPendingPermissions(); const finalized = await Promise.all(runs.map(async (run) => { run.stopRequested = true; await this.failTerminal(run, reason === 'app_quit' ? 'app_quit' : reason === 'logout' ? 'internal_error' : 'gateway_disconnected'); void this.stopAgentBounded(run.config.sessionId); const terminalConfirmed = await this.awaitFinalization(run); return terminalConfirmed && this.cleanupActiveRun(run) })); const allCleaned = finalized.every(Boolean); const roomAgentIds = allCleaned ? [...new Set(this.deps.store.list().flatMap((room) => room.agents.filter((agent) => agent.archivedAt === undefined).map((agent) => agent.roomAgentId)))] : []; if (roomAgentIds.length > 0) await this.deps.rustApi.releaseAgentLeases({ roomAgentIds, reason }).catch(() => undefined); const result = { stoppedSessionIds: runs.map((run) => run.config.sessionId), releasedRoomAgentIds: roomAgentIds }; if (!allCleaned) this.stopping = undefined; return result })()
     return this.stopping
   }
   async dispose(): Promise<void> { if (this.disposed) return; await this.stopAll('app_quit'); this.disposed = true; this.unsubscribeEvents?.(); this.unsubscribeEvents = undefined }
@@ -286,13 +286,14 @@ export class ChatRoomAgentCoordinator implements ChatRoomAgentCoordinatorFacade 
   private async stopAgentBounded(sessionId: string): Promise<void> { let timer: ReturnType<typeof setTimeout> | undefined; await Promise.race([this.deps.stopAgent(sessionId).catch(() => undefined), new Promise<void>((resolve) => { timer = setTimeout(resolve, this.deps.stopAgentTimeoutMs ?? STOP_AGENT_TIMEOUT_MS) })]); if (timer) clearTimeout(timer) }
   private async awaitFinalization(run: ActiveRun): Promise<boolean> { if (!run.finalization) return run.terminalConfirmed; await Promise.race([run.finalization.catch(() => undefined), new Promise<void>((resolve) => setTimeout(resolve, REPORT_COMPLETION_TIMEOUT_MS + STOP_AGENT_TIMEOUT_MS + TERMINAL_CONFIRM_TIMEOUT_MS))]); return run.terminalConfirmed }
   /** 终态已被 Rust 确认后清理本地运行态；允许 execute.finally 与 stopAll 并发调用。 */
-  private cleanupActiveRun(run: ActiveRun): void {
-    if (!run.terminalConfirmed || run.cleanupDone) return
+  private cleanupActiveRun(run: ActiveRun): boolean {
+    if (!run.terminalConfirmed) return false
+    if (run.cleanupDone) return true
+    try { run.sessionRelease?.() } catch { this.deps.reportDiagnostic?.('聊天室会话存储清理失败'); return false }
+    run.sessionRelease = undefined
     run.cleanupDone = true
     if (this.activeRuns.get(run.invocation.invocationId) === run) this.activeRuns.delete(run.invocation.invocationId)
-    const release = run.sessionRelease
-    run.sessionRelease = undefined
-    try { release?.() } catch { this.deps.reportDiagnostic?.('聊天室会话存储清理失败') }
+    return true
   }
   private onAgentEvent(sessionId: string, payload: AgentStreamPayload): void {
     const run = [...this.activeRuns.values()].find((candidate) => candidate.config.sessionId === sessionId)

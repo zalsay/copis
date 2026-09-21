@@ -91,6 +91,12 @@ Fix round 3 verification：permission 4/4，coordinator 19/19，RPC service 34/3
 - GREEN: failure claim is now stored once with immutable code/message; remote confirmation retries the same payload until success. Cleanup occurs only after `terminalConfirmed`; persistent failure keeps active run and lease. Added BDDs for retry success, persistent failure, unchanged stop reason, and exactly-once session cleanup.
 - Evidence: coordinator suite 31 pass / 73 expects; Electron typecheck and build:main; Rust fmt and diff checks pass.
 
+## Fix round 8 RED/GREEN
+
+- RED：review 发现 `sessionRelease` 抛错时旧清理逻辑先删除 active run 并吞异常，`stopAll` 仍可能释放 lease，后续无法重试；补充首次/再次清理失败与成功的 BDD，并强化 completion-pending 场景确认首次 `reportCompleted` 已发出。
+- GREEN：`cleanupActiveRun` 返回 boolean，仅在 sessionRelease 成功后标记完成、清空回调并按 identity 删除 active run；失败保留可重试状态。`stopAll` 只有所有 run 同时 terminal confirmed 且 cleanup 成功才释放 lease，失败时允许下一次 stopAll 重试。
+- Evidence：coordinator `32 pass / 87 expects`；Electron typecheck、build:main、build:renderer、git diff check 均通过。
+
 ## Fix round 7 RED/GREEN
 
 - RED：首次 `reportFailed` 失败且 `execute.finally` 已结束后，`stopAll` 重试成功只确认远端终态并释放 lease，未清理 `activeRuns` 与 session override；新增测试先等待首次 finalization 完成，再断言 retry 后 active run 移除、session cleanup 在 lease release 前且二次 stopAll 不重复清理。
