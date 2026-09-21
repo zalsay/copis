@@ -144,3 +144,17 @@ Task 7 的三个 load-bearing carry-over 已关闭，并完成 Task 8 parser/san
 - `go test ./services -run 'ChatRoomV2' -count=5`：通过。
 - Rust protocol `34/34`、gateway `57/57`、client `38/38`：通过；`cargo fmt --check` 通过。
 - 完整 frame <=128 KiB、附件 <=20、既有 sanitizer/prompt/atomic failure/room-wide transient 回归保持通过。
+
+## 修复轮 4（评审回归）：原始数组限额先于去重
+
+### RED / GREEN
+
+- RED：新增 store 与 WS command BDD 用例后，21 个相同 attachment 及 4 个相同 mention 因旧逻辑先去重而被接受。
+- GREEN：`message.create` 与 `agent.completed` 的 WS 解码、统一消息 store 均先按原始数组数量执行 `attachments <= 20`、`mentions <= 3`，再按原顺序去重并持久化/广播；20/3 边界继续接受并规范化。
+- HTTP message create 复用同一 store validator，因此不会绕过事务前检查；completed 的状态转移也在同一 validator 之后执行。
+
+### 验证
+
+- RED 实际失败：store 与 WS 重复数组用例各 1 个失败。
+- GREEN：store/WS 重复数组回归通过；后续 `go test ./handlers -run 'ChatRoomV2' -count=5`、`go test ./services -run 'ChatRoomV2' -count=5` 通过。
+- Rust protocol/gateway/client、附件 20 边界、完整 frame 128 KiB 与上一轮 control/failure/empty transient 回归保持通过。
