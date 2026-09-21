@@ -128,3 +128,19 @@ Task 7 的三个 load-bearing carry-over 已关闭，并完成 Task 8 parser/san
 
 - `agent.completed` 的 server outgoing shape 已同步为完整五字段，避免 Rust parser 为兼容旧的二字段事件而放宽 schema；durable `message.created` 与 transient completed 两者字段保持一致。
 - 完整 frame 预算只约束 Go 写出 envelope；业务 `content`/`delta` 仍 64 KiB，附件上限由共享模型常量 `ChatRoomV2MaxAttachmentIDs` 定义。
+
+## 修复轮 4（评审回归）：内容、failureCode 与空 transient 边界
+
+### RED / GREEN
+
+- RED：新增 Go WS/Hub 与真实 store 路径回归，发现 Go 允许 Rust `valid_content` 会拒绝的 Unicode control；新增 failureCode 空值、Unicode whitespace、control、`/?#\\`、UTF-8/64 字节边界回归，发现 store 仅做 trim/长度检查。
+- GREEN：Go wire/store/WS handler 统一使用与 Rust 等价的 UTF-8、非空、字节上限及 control 规则；只允许 `\\n\\r\\t`，拒绝其他 Unicode control。failureCode 在 WS decode、handleCommand、store 状态转移前均按 `valid_id(64)` 校验，非法值不会进入事务或广播。
+- RED：`ValidateChatRoomV2WireEvent` 的空 payload 早退允许四类严格 Agent transient 缺失 schema；GREEN：仅 `accepted/delta/completed/failed` 强制非空对象与 required fields，其他 transient/persisted/snapshot 仍保持可扩展。
+- RED：completed producer 使用请求数组，重复 mentions/attachments 会在 transient 广播中复现；GREEN：改从持久化 `result.Message` 权威 JSON 字段解码并去重，保持持久化顺序。
+
+### 验证
+
+- `go test ./handlers -run 'ChatRoomV2' -count=5`：通过。
+- `go test ./services -run 'ChatRoomV2' -count=5`：通过。
+- Rust protocol `34/34`、gateway `57/57`、client `38/38`：通过；`cargo fmt --check` 通过。
+- 完整 frame <=128 KiB、附件 <=20、既有 sanitizer/prompt/atomic failure/room-wide transient 回归保持通过。
