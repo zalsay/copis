@@ -40,6 +40,49 @@ test('Given coordinator push callbacks When emitting permission/config Then each
   expect(send).toHaveBeenCalledWith(CHATROOM_IPC_CHANNELS.LOCAL_CONFIG_CHANGED, { roomId: 'r', agents: [], updatedAt: 1 })
   expect(JSON.stringify(send.mock.calls)).not.toContain('toolInput')
 })
+test('Given runtime permission request contains internal fields When pushed Then renderer receives only the strict public DTO', () => {
+  const send = mock(() => {})
+  mainContents.send = send
+  const request = {
+    requestId: 'p-safe', toolName: 'Bash', summary: 'run', roomId: 'r', roomAgentId: 'a', invocationId: 'i', traceId: 't',
+    originalSender: { type: 'user', id: 'u', displayName: 'u', internalToken: 'secret' }, invocationChain: [{ agentId: 'a', invocationId: 'parent', path: '/private' }], createdAt: 1, expiresAt: 2,
+    toolInput: { command: 'cat /private' }, internalToken: 'secret', path: '/private', [Symbol('secret')]: 'secret',
+  }
+  coordinator.permissionListeners.forEach((listener) => listener(request))
+  expect(send).toHaveBeenCalledWith(CHATROOM_IPC_CHANNELS.PERMISSION_REQUESTED, {
+    requestId: 'p-safe', toolName: 'Bash', summary: 'run', roomId: 'r', roomAgentId: 'a', invocationId: 'i', traceId: 't',
+    originalSender: { type: 'user', id: 'u', displayName: 'u' }, invocationChain: [{ agentId: 'a', invocationId: 'parent' }], createdAt: 1, expiresAt: 2,
+  })
+})
+test('Given runtime permission request has a malicious prototype or extra fields When pushed Then it is rejected without IPC send', () => {
+  const send = mock(() => {})
+  mainContents.send = send
+  const malicious = Object.create({ roomId: 'r' })
+  Object.assign(malicious, { requestId: 'p-proto', toolName: 'Bash', summary: 'run', roomId: 'r', roomAgentId: 'a', invocationId: 'i', traceId: 't', originalSender: { type: 'user', id: 'u', displayName: 'u' }, invocationChain: [], createdAt: 1, expiresAt: 2 })
+  coordinator.permissionListeners.forEach((listener) => listener(malicious))
+  expect(send).not.toHaveBeenCalledWith(CHATROOM_IPC_CHANNELS.PERMISSION_REQUESTED, expect.anything())
+})
+test('Given coordinator is replaced or unregistered When old coordinator emits Then IPC detaches old subscriptions', () => {
+  const registry = coordinatorModule
+  const makeCoordinator = () => ({
+    ...coordinator,
+    permissionListeners: [] as Array<(value: any) => void>,
+    configListeners: [] as Array<(value: any) => void>,
+    onPermissionRequested(listener: (value: any) => void) { this.permissionListeners.push(listener); return () => { this.permissionListeners = this.permissionListeners.filter((item) => item !== listener) } },
+    onLocalConfigChanged(listener: (value: any) => void) { this.configListeners.push(listener); return () => { this.configListeners = this.configListeners.filter((item) => item !== listener) } },
+  })
+  const first = makeCoordinator(); const second = makeCoordinator()
+  const firstRelease = registry.registerChatRoomAgentCoordinator(first as any)
+  const firstListeners = [...first.permissionListeners]
+  const secondRelease = registry.registerChatRoomAgentCoordinator(second as any)
+  const send = mock(() => {})
+  mainContents.send = send
+  firstListeners.forEach((listener) => listener({ requestId: 'old', toolName: 'Bash', summary: 'old', roomId: 'r', roomAgentId: 'a', invocationId: 'i', traceId: 't', originalSender: { type: 'user', id: 'u', displayName: 'u' }, invocationChain: [], createdAt: 1, expiresAt: 2 }))
+  expect(send).not.toHaveBeenCalled()
+  second.permissionListeners.forEach((listener) => listener({ requestId: 'new', toolName: 'Bash', summary: 'new', roomId: 'r', roomAgentId: 'a', invocationId: 'i', traceId: 't', originalSender: { type: 'user', id: 'u', displayName: 'u' }, invocationChain: [], createdAt: 1, expiresAt: 2 }))
+  expect(send).toHaveBeenCalledTimes(1)
+  firstRelease(); secondRelease()
+})
 test('Given non-main sender or strict DTO When mutate Then reject', async () => {
   await expect(handlers.get(CHATROOM_IPC_CHANNELS.PROVISION_AGENT)!({ sender: {} }, { roomId: 'room-1', sourceWorkspaceId: 'w', displayName: 'A', channelId: 'c' })).rejects.toThrow('不允许的请求来源')
   await expect(handlers.get(CHATROOM_IPC_CHANNELS.RESPOND_PERMISSION)!({ sender: mainContents }, { requestId: 'x', behavior: 'allow', [Symbol('x')]: 1 })).rejects.toThrow('权限响应参数不正确')

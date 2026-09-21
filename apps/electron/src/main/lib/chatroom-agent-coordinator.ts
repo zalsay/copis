@@ -355,7 +355,24 @@ export class ChatRoomAgentCoordinator implements ChatRoomAgentCoordinatorFacade 
 
 let registeredCoordinator: ChatRoomAgentCoordinatorFacade | undefined
 let registrationToken = 0
-const registrationListeners = new Set<(coordinator: ChatRoomAgentCoordinatorFacade) => void>()
-export function onChatRoomAgentCoordinatorRegistered(listener: (coordinator: ChatRoomAgentCoordinatorFacade) => void): () => void { registrationListeners.add(listener); if (registeredCoordinator) listener(registeredCoordinator); return () => registrationListeners.delete(listener) }
-export function registerChatRoomAgentCoordinator(coordinator: ChatRoomAgentCoordinatorFacade): () => void { const token = ++registrationToken; registeredCoordinator = coordinator; registrationListeners.forEach((listener) => { try { listener(coordinator) } catch { /* 单个注册监听失败不影响其他监听 */ } }); return () => { if (registrationToken === token && registeredCoordinator === coordinator) registeredCoordinator = undefined } }
+export type ChatRoomAgentCoordinatorRegistration = ChatRoomAgentCoordinatorFacade | undefined
+const registrationListeners = new Set<(registration: ChatRoomAgentCoordinatorRegistration) => void>()
+function notifyCoordinatorRegistration(registration: ChatRoomAgentCoordinatorRegistration): void {
+  registrationListeners.forEach((listener) => { try { listener(registration) } catch { /* 单个注册监听失败不影响其他监听 */ } })
+}
+export function onChatRoomAgentCoordinatorRegistered(listener: (registration: ChatRoomAgentCoordinatorRegistration) => void): () => void {
+  registrationListeners.add(listener)
+  if (registeredCoordinator) listener(registeredCoordinator)
+  return () => registrationListeners.delete(listener)
+}
+export function registerChatRoomAgentCoordinator(coordinator: ChatRoomAgentCoordinatorFacade): () => void {
+  const token = ++registrationToken
+  registeredCoordinator = coordinator
+  notifyCoordinatorRegistration(coordinator)
+  return () => {
+    if (registrationToken !== token || registeredCoordinator !== coordinator) return
+    registeredCoordinator = undefined
+    notifyCoordinatorRegistration(undefined)
+  }
+}
 export function getChatRoomAgentCoordinator(): ChatRoomAgentCoordinatorFacade { if (!registeredCoordinator) throw new Error('聊天室协调器尚未注册'); return registeredCoordinator }

@@ -33,6 +33,20 @@ test('Given 注册后替换协调器 When 旧 token 释放 Then 不得清理新�
   expect(() => coordinatorModule.getChatRoomAgentCoordinator()).toThrow('聊天室协调器尚未注册')
 })
 
+test('Given 注册观察者 When 注销旧协调器或替换 Then 只收到当前注册状态且旧 token 不会误注销新实例', () => {
+  const events: Array<object | undefined> = []
+  const detach = coordinatorModule.onChatRoomAgentCoordinatorRegistered((registration) => events.push(registration))
+  const first = { handleInvocation: async () => 'accepted' as const, handleGatewayDisconnected: async () => {}, stopAll: async () => ({ stoppedSessionIds: [], releasedRoomAgentIds: [] }), dispose: async () => {} }
+  const second = { handleInvocation: async () => 'duplicate' as const, handleGatewayDisconnected: async () => {}, stopAll: async () => ({ stoppedSessionIds: [], releasedRoomAgentIds: [] }), dispose: async () => {} }
+  const releaseFirst = coordinatorModule.registerChatRoomAgentCoordinator(first)
+  const releaseSecond = coordinatorModule.registerChatRoomAgentCoordinator(second)
+  releaseFirst()
+  expect(events).toEqual([first, second])
+  releaseSecond()
+  expect(events).toEqual([first, second, undefined])
+  detach()
+})
+
 function makeAgent(id: string): ChatRoomAgentLocalConfig {
   return { roomAgentId: id, displayName: id, sourceWorkspaceId: 'workspace-1', sessionId: `session-${id}`, channelId: 'channel-1', contextMessageCount: 50, memorySharingEnabled: false, skillSharingEnabled: false }
 }
