@@ -5,6 +5,7 @@ import {
   isRemoveChatRoomAgentInput,
   isSyncChatRoomAgentSkillsInput,
   isUpdateChatRoomAgentInput,
+  isChatRoomPermissionResponse,
   type ChatRoomAgentLocalConfig,
   type ChatRoomAgentLocalView,
   type ChatRoomLocalRoomConfig,
@@ -48,10 +49,7 @@ function toRoomView(room: ChatRoomLocalRoomConfig): ChatRoomLocalRoomView {
 }
 
 function requireResponse(value: unknown): asserts value is ChatRoomPermissionResponse {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('权限响应参数不正确')
-  const record = value as Record<string, unknown>
-  if (Object.keys(record).length !== 2 || typeof record.requestId !== 'string' || !record.requestId.trim()
-    || (record.behavior !== 'allow' && record.behavior !== 'deny')) throw new Error('权限响应参数不正确')
+  if (!isChatRoomPermissionResponse(value)) throw new Error('权限响应参数不正确')
 }
 function requireMethod<T extends (...args: any[]) => any>(value: T | undefined): T {
   if (!value) throw new Error('聊天室协调器尚未初始化')
@@ -74,39 +72,46 @@ export function registerChatRoomIpcHandlers(options: RegisterChatRoomIpcOptions 
   invoke(CHATROOM_IPC_CHANNELS.PROVISION_AGENT, async (event, value) => {
     assertMainSender(event, getWindow)
     if (!isProvisionChatRoomAgentInput(value)) throw new Error('聊天室 Agent 参数不正确')
-    return toAgentView(await requireMethod(getCoordinator().provisionAgent)?.call(getCoordinator(), value))
+    const coordinator = getCoordinator()
+    return toAgentView(await requireMethod(coordinator.provisionAgent).call(coordinator, value))
   })
   invoke(CHATROOM_IPC_CHANNELS.UPDATE_AGENT, async (event, value) => {
     assertMainSender(event, getWindow)
     if (!isUpdateChatRoomAgentInput(value)) throw new Error('聊天室 Agent 更新参数不正确')
-    return toAgentView(await requireMethod(getCoordinator().updateAgent)?.call(getCoordinator(), value))
+    const coordinator = getCoordinator()
+    return toAgentView(await requireMethod(coordinator.updateAgent).call(coordinator, value))
   })
   invoke(CHATROOM_IPC_CHANNELS.REMOVE_AGENT, async (event, value) => {
     assertMainSender(event, getWindow)
     if (!isRemoveChatRoomAgentInput(value)) throw new Error('聊天室 Agent 删除参数不正确')
-    await requireMethod(getCoordinator().removeAgent)?.call(getCoordinator(), value)
+    const coordinator = getCoordinator()
+    await requireMethod(coordinator.removeAgent).call(coordinator, value)
   })
   invoke(CHATROOM_IPC_CHANNELS.SYNC_AGENT_SKILLS, async (event, value) => {
     assertMainSender(event, getWindow)
     if (!isSyncChatRoomAgentSkillsInput(value)) throw new Error('聊天室 Skill 参数不正确')
-    return toAgentView(await requireMethod(getCoordinator().syncAgentSkills)?.call(getCoordinator(), value))
+    const coordinator = getCoordinator()
+    return toAgentView(await requireMethod(coordinator.syncAgentSkills).call(coordinator, value))
   })
   invoke(CHATROOM_IPC_CHANNELS.RESPOND_PERMISSION, async (event, value) => {
     assertMainSender(event, getWindow)
     requireResponse(value)
-    await requireMethod(getCoordinator().respondToPermission)?.call(getCoordinator(), value)
+    const coordinator = getCoordinator()
+    await requireMethod(coordinator.respondToPermission).call(coordinator, value)
   })
+  let detachPushListeners: (() => void) | undefined
   const attachPushListeners = (coordinator: ChatRoomAgentCoordinatorFacade): void => {
-    coordinator.onPermissionRequested?.((request) => {
+    detachPushListeners?.()
+    const detachPermission = coordinator.onPermissionRequested?.((request) => {
     const win = getWindow()
     if (win && !win.isDestroyed() && !win.webContents.isDestroyed()) win.webContents.send(CHATROOM_IPC_CHANNELS.PERMISSION_REQUESTED, request)
     })
-    coordinator.onLocalConfigChanged?.((room) => {
+    const detachConfig = coordinator.onLocalConfigChanged?.((room) => {
     const win = getWindow()
     if (win && !win.isDestroyed() && !win.webContents.isDestroyed()) win.webContents.send(CHATROOM_IPC_CHANNELS.LOCAL_CONFIG_CHANGED, toRoomView(room))
     })
+    detachPushListeners = () => { detachPermission?.(); detachConfig?.() }
   }
-  try { attachPushListeners(getCoordinator()) } catch { /* 协调器稍后注册 */ }
   onChatRoomAgentCoordinatorRegistered(attachPushListeners)
 }
 

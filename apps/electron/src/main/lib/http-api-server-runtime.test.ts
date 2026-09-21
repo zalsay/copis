@@ -53,6 +53,7 @@ const {
   ensureRustHttpApiServerReady,
   updateHttpApiServer,
   waitForHttpApiHealth,
+  addHttpApiServerExitListener,
 } = await import('./http-api-server')
 import type { HttpApiSpawn } from './http-api-server'
 
@@ -87,6 +88,13 @@ afterEach(async () => {
 afterAll(() => {
   if (previousHttpApiPort === undefined) delete process.env.COPIS_HTTP_API_PORT
   else process.env.COPIS_HTTP_API_PORT = previousHttpApiPort
+})
+
+test('Given Rust exit listener When unsubscribed Then later exits do not notify it', () => {
+  let calls = 0
+  const remove = addHttpApiServerExitListener(() => { calls += 1 })
+  remove()
+  expect(calls).toBe(0)
 })
 
 function createRoot(): string {

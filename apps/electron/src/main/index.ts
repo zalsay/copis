@@ -561,7 +561,7 @@ async function bootstrap(): Promise<void> {
   safeRun('chatroomRustExitListener', () => addHttpApiServerExitListener((reason) => {
     if (reason !== 'unexpected_exit' && reason !== 'error') return
     void import('./lib/chatroom-agent-coordinator').then(({ getChatRoomAgentCoordinator }) => {
-      return getChatRoomAgentCoordinator().handleGatewayDisconnected()
+      return getChatRoomAgentCoordinator().stopAll('gateway_disconnected')
     }).catch(() => undefined)
   }))
 
@@ -735,7 +735,7 @@ app.on('before-quit', (event) => {
       void (async () => {
         try {
           const { getChatRoomAgentCoordinator } = await import('./lib/chatroom-agent-coordinator')
-          await (getChatRoomAgentCoordinator() as { stopAll?: (reason: 'app_quit') => Promise<void> }).stopAll?.('app_quit')
+          await getChatRoomAgentCoordinator().stopAll('app_quit')
         } catch { /* 协调器未初始化或已释放 */ }
         await stopAllAgents()
       })()

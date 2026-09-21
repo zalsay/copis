@@ -16,10 +16,12 @@ test('Given 注册后替换协调器 When 旧 token 释放 Then 不得清理新�
   const first = {
     handleInvocation: async () => 'accepted' as const,
     handleGatewayDisconnected: async () => {},
+    stopAll: async () => ({ stoppedSessionIds: [], releasedRoomAgentIds: [] }),
   }
   const second = {
     handleInvocation: async () => 'duplicate' as const,
     handleGatewayDisconnected: async () => {},
+    stopAll: async () => ({ stoppedSessionIds: [], releasedRoomAgentIds: [] }),
   }
   const releaseFirst = coordinatorModule.registerChatRoomAgentCoordinator(first)
   const releaseSecond = coordinatorModule.registerChatRoomAgentCoordinator(second)
@@ -394,6 +396,18 @@ test('Given worker permission When external approval dispatches Then Main pendin
   const result = await coordinator.requestWorkerPermission!({ sessionId: 'session-agent-a', requestId: 'permission-order-1', toolName: 'Bash', toolInput: { command: 'echo test' } })
   expect(result.behavior).toBe('deny')
   expect(hostNotified).toBe(true)
+})
+
+test('Given worker permission When external approval dispatches Then IPC permission listener receives one redacted request', async () => {
+  const openExternalApproval = mock(async (_request: PermissionRequest, _signal: AbortSignal, dispatch: () => void) => { dispatch(); return { behavior: 'deny' as const } })
+  const { deps } = fakeDeps({ permissionService: { openExternalApproval, respondToPermission: mock(() => 'session-agent-a') } })
+  const coordinator = new coordinatorModule.ChatRoomAgentCoordinator(deps)
+  const pushed: unknown[] = []
+  coordinator.onPermissionRequested((request) => pushed.push(request))
+  await coordinator.handleInvocation(makeInput('permission-push', 'agent-a'))
+  await coordinator.requestWorkerPermission!({ sessionId: 'session-agent-a', requestId: 'permission-push-1', toolName: 'Bash', toolInput: { command: 'secret' }, description: '执行命令' })
+  expect(pushed).toHaveLength(1)
+  expect(JSON.stringify(pushed)).not.toContain('toolInput')
 })
 
 test('Given host denies a pending permission When stopAgent never returns Then underlying promise is denied before bounded terminal handling', async () => {

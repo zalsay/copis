@@ -92,8 +92,7 @@ export function registerIpcHandlers(): void {
     stopChatRoomAgents: async (reason) => {
       try {
         const { getChatRoomAgentCoordinator } = await import('./lib/chatroom-agent-coordinator')
-        const coordinator = getChatRoomAgentCoordinator() as { stopAll?: (value: 'logout') => Promise<void> }
-        await coordinator.stopAll?.(reason)
+        await getChatRoomAgentCoordinator().stopAll(reason)
       } catch {
         // 协调器尚未初始化时没有运行中的聊天室 Agent。
       }

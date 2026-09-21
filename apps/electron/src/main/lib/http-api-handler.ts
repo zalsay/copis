@@ -206,7 +206,7 @@ const defaultDependencies: HttpApiDependencies = {
   stopChatRoomAgents: async (reason) => {
     try {
       const { getChatRoomAgentCoordinator } = await import('./chatroom-agent-coordinator')
-      await (getChatRoomAgentCoordinator() as { stopAll?: (value: 'logout') => Promise<void> }).stopAll?.(reason)
+      await getChatRoomAgentCoordinator().stopAll(reason)
     } catch {
       // 聊天室协调器尚未初始化时没有可停止的运行。
     }
