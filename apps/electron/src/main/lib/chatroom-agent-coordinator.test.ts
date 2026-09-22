@@ -51,8 +51,8 @@ function makeAgent(id: string): ChatRoomAgentLocalConfig {
   return { roomAgentId: id, displayName: id, sourceWorkspaceId: 'workspace-1', sessionId: `session-${id}`, channelId: 'channel-1', contextMessageCount: 50, memorySharingEnabled: false, skillSharingEnabled: false }
 }
 
-function makeInput(id: string, targetAgentId: string, depth = 0): ChatRoomAgentInvocation {
-  return { invocationId: id, roomId: 'room-1', traceId: 'trace-1', targetAgentId, triggerMessageId: `message-${id}`, depth, sender: { type: 'user', id: 'user-1', displayName: '用户' }, messages: [{ messageId: `message-${id}`, sender: { type: 'user', id: 'user-1', displayName: '用户' }, text: '请处理', createdAt: 1 }], receivedAt: 1 }
+function makeInput(id: string, targetAgentId: string, depth = 0, roomId = 'room-1'): ChatRoomAgentInvocation {
+  return { invocationId: id, roomId, traceId: 'trace-1', targetAgentId, triggerMessageId: `message-${id}`, depth, sender: { type: 'user', id: 'user-1', displayName: '用户' }, messages: [{ messageId: `message-${id}`, sender: { type: 'user', id: 'user-1', displayName: '用户' }, text: '请处理', createdAt: 1 }], receivedAt: 1 }
 }
 
 function fakeDeps(overrides: Record<string, unknown> = {}) {
@@ -216,6 +216,55 @@ test('Given 三个 run 都被 barrier 卡住 When 批量投递 Then 任一完成
   expect(started).toHaveLength(3)
   release.forEach((resolve) => resolve())
   await all
+})
+
+test('Given 两个聊天室使用相同 roomAgentId When room-1 被 barrier 卡住 Then room-2 仍可并行执行且同房间请求返回 busy', async () => {
+  const started: string[] = []
+  const release: Array<() => void> = []
+  const base = fakeDeps({ runAgentHeadless: mock(async (input: { sessionId: string }, callbacks: { onComplete: (messages: AgentMessage[]) => void }) => {
+    started.push(input.sessionId)
+    await new Promise<void>((resolve) => release.push(() => { callbacks.onComplete([]); resolve() }))
+  }) })
+  const secondRoom: ChatRoomLocalRoomConfig = { ...base.room, roomId: 'room-2', agents: base.room.agents.map((agent) => ({ ...agent })) }
+  base.deps.store.read = (roomId: string) => roomId === 'room-2' ? secondRoom : base.room
+  base.deps.store.list = () => [base.room, secondRoom]
+  const coordinator = new coordinatorModule.ChatRoomAgentCoordinator(base.deps)
+
+  await coordinator.handleInvocation({ ...makeInput('pair-room-1', 'agent-a'), traceId: 'pair-room-1' })
+  for (let attempt = 0; attempt < 20 && started.length < 1; attempt++) await Promise.resolve()
+  expect(started).toEqual(['session-agent-a'])
+
+  await coordinator.handleInvocation({ ...makeInput('pair-room-2', 'agent-a', 0, 'room-2'), traceId: 'pair-room-2' })
+  await coordinator.handleInvocation({ ...makeInput('pair-room-1-busy', 'agent-a'), traceId: 'pair-room-1-busy' })
+  expect(started).toEqual(['session-agent-a', 'session-agent-a'])
+  expect(base.reportFailed).toHaveBeenCalledWith(expect.objectContaining({ invocationId: 'pair-room-1-busy', code: 'agent_busy' }))
+
+  release.forEach((resolve) => resolve())
+})
+
+test('Given disconnect 已成功释放 lease When 合法 invocation 深度超限 Then 不恢复 lifecycle 或清理 generation lease 集合', async () => {
+  const { deps, reportFailed } = fakeDeps()
+  const coordinator = new coordinatorModule.ChatRoomAgentCoordinator(deps)
+  await coordinator.stopAll('gateway_disconnected')
+  await coordinator.handleInvocation({ ...makeInput('disconnected-depth', 'agent-a', 3), traceId: 'disconnected-depth' })
+  expect(reportFailed).toHaveBeenCalledWith(expect.objectContaining({ invocationId: 'disconnected-depth', code: 'invocation_depth_exceeded' }))
+  expect((coordinator as unknown as { lifecycle: string }).lifecycle).toBe('disconnected')
+  await coordinator.stopAll('gateway_disconnected')
+  expect(deps.rustApi.releaseAgentLeases).toHaveBeenCalledTimes(1)
+})
+
+test('Given disconnect 已成功释放 lease 且同 room Agent 可构造为 busy When busy invocation 到达 Then 不恢复 lifecycle 或重复释放 generation lease', async () => {
+  const { deps, reportFailed } = fakeDeps()
+  const coordinator = new coordinatorModule.ChatRoomAgentCoordinator(deps)
+  await coordinator.stopAll('gateway_disconnected')
+  const activeRuns = (coordinator as unknown as { activeRuns: Map<string, unknown> }).activeRuns
+  activeRuns.set('synthetic-busy', { invocation: { roomId: 'room-1' }, config: { roomAgentId: 'agent-a' } })
+  await coordinator.handleInvocation({ ...makeInput('disconnected-busy', 'agent-a'), traceId: 'disconnected-busy' })
+  expect(reportFailed).toHaveBeenCalledWith(expect.objectContaining({ invocationId: 'disconnected-busy', code: 'agent_busy' }))
+  expect((coordinator as unknown as { lifecycle: string }).lifecycle).toBe('disconnected')
+  activeRuns.delete('synthetic-busy')
+  await coordinator.stopAll('gateway_disconnected')
+  expect(deps.rustApi.releaseAgentLeases).toHaveBeenCalledTimes(1)
 })
 
 test('Given depth=2 的结构化输出提及 Agent When 完成 Then mentions 仍交给服务端边界', async () => {

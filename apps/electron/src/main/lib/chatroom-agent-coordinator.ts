@@ -148,12 +148,12 @@ export class ChatRoomAgentCoordinator implements ChatRoomAgentCoordinatorFacade 
     const config = room?.agents.find((agent) => agent.roomAgentId === input.targetAgentId && agent.archivedAt === undefined)
     if (!room || !config) { await this.reportRejected(input, 'room_agent_not_found'); return 'accepted' }
     if (this.lifecycle === 'stopping' || this.lifecycle === 'auth_required' || this.lifecycle === 'disposed') { await this.reportRejected(input, 'agent_offline', room, input.targetAgentId); return 'accepted' }
+    if (input.depth >= CHATROOM_MAX_DEPTH) { await this.reportRejected(input, 'invocation_depth_exceeded', room, input.targetAgentId); return 'accepted' }
+    if ([...this.activeRuns.values()].some((run) => run.invocation.roomId === input.roomId && run.config.roomAgentId === config.roomAgentId)) { await this.reportRejected(input, 'agent_busy', room, input.targetAgentId); return 'accepted' }
     if (this.lifecycle === 'disconnected') {
       this.lifecycle = 'ready'
       this.releasedLeaseKeys.clear()
     }
-    if (input.depth >= CHATROOM_MAX_DEPTH) { await this.reportRejected(input, 'invocation_depth_exceeded', room, input.targetAgentId); return 'accepted' }
-    if ([...this.activeRuns.values()].some((run) => run.config.roomAgentId === config.roomAgentId)) { await this.reportRejected(input, 'agent_busy', room, input.targetAgentId); return 'accepted' }
     const now = this.deps.now()
     const record: ChatRoomInvocationRecord = { invocationId: input.invocationId, roomId: input.roomId, traceId: input.traceId, targetAgentId: input.targetAgentId, triggerMessageId: input.triggerMessageId, depth: input.depth, status: 'accepted', createdAt: Math.min(now, input.receivedAt), updatedAt: now, acceptedAt: now }
     this.deps.store.upsertInvocation(input.roomId, record)
