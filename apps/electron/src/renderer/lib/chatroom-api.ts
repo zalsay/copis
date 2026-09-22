@@ -48,13 +48,15 @@ export function normalizeChatRoomMessage(value: unknown, defaults: { roomId?: st
   const sender = record(o.sender)
   const rawSenderType = pick(sender, 'type', 'senderType', 'sender_type') ?? pick(o, 'senderType', 'sender_type')
   const senderType = ['user', 'agent', 'system'].includes(text(rawSenderType)) ? rawSenderType as ChatRoomMessage['senderType'] : 'system'
+  const wireSenderId = pick(o, 'senderAgentId', 'sender_agent_id') ?? pick(o, 'senderUserId', 'sender_user_id')
+  const senderId = text(pick(sender, 'id', 'senderId', 'sender_id')) || text(pick(o, 'senderId', 'sender_id')) || (typeof wireSenderId === 'number' || typeof wireSenderId === 'string' ? String(wireSenderId) : '')
   const rawCreatedAt = pick(o, 'createdAt', 'created_at')
   return {
     messageId: text(pick(o, 'messageId', 'message_id', 'id')),
     roomId: text(pick(o, 'roomId', 'room_id')) || defaults.roomId || '',
     seq: num(o.seq, defaults.seq ?? 0),
     senderType,
-    senderId: text(pick(sender, 'id', 'senderId', 'sender_id')) || text(pick(o, 'senderId', 'sender_id')),
+    senderId,
     content: text(pick(o, 'text', 'content')),
     mentionAgentIds: array(pick(o, 'mentionedAgentIds', 'mentionAgentIds', 'mentioned_agent_ids', 'mention_agent_ids')).filter((v): v is string => typeof v === 'string'),
     attachmentIds: array(pick(o, 'attachmentIds', 'attachment_ids')).filter((v): v is string => typeof v === 'string'),

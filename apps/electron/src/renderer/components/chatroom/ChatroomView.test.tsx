@@ -1,7 +1,8 @@
 import { describe, expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
-import { deleteChatRoomAndClose } from './ChatroomView'
+import { deleteChatRoomAndClose, hasDurableChatRoomReply } from './ChatroomView'
 import type { TabItem } from '@/atoms/tab-atoms'
+import type { ChatRoomInvocation, ChatRoomMessage } from '@copis/shared'
 
 const source = readFileSync(new URL('./ChatroomView.tsx', import.meta.url), 'utf8')
 
@@ -17,8 +18,15 @@ describe('聊天室房间视图契约', () => {
     expect(source).toContain('invocation.delta')
     expect(source).toContain('triggerMessageId')
     expect(source).toContain('已停止继续唤起')
-    expect(source).toContain('hasDurableReply')
-    expect(source).toContain("invocation.status === 'running' || !hasDurableReply(invocation)")
+    expect(source).toContain('hasDurableChatRoomReply')
+    expect(source).toContain("invocation.status === 'running' || !hasDurableChatRoomReply(messages, invocation)")
+  })
+
+  test('同一 trace 的两个 Agent 只隐藏各自已落库的 delta', () => {
+    const base: ChatRoomMessage = { messageId: 'm', roomId: 'r1', seq: 1, senderType: 'agent', senderId: 'agent-a', content: '答复', mentionAgentIds: [], attachmentIds: [], clientMessageId: 'c', traceId: 'trace-1', depth: 1, createdAt: 'now' }
+    const invocation = (targetAgentId: string): Pick<ChatRoomInvocation, 'traceId' | 'targetAgentId'> => ({ traceId: 'trace-1', targetAgentId })
+    expect(hasDurableChatRoomReply([{ ...base, senderId: 'agent-a' }], invocation('agent-a'))).toBe(true)
+    expect(hasDurableChatRoomReply([{ ...base, senderId: 'agent-a' }], invocation('agent-b'))).toBe(false)
   })
 
   test('删除成功后清理房间并关闭对应 Tab', async () => {
