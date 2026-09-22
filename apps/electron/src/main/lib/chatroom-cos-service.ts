@@ -45,6 +45,7 @@ export interface ChatRoomCosGrantClient {
 export interface ChatRoomCosSdk {
   sliceUploadFile(params: ChatRoomCosUploadParams): Promise<{ ETag?: string }>
   abortUploadTask(params: { UploadId: string; Level: 'task' }): Promise<unknown>
+  cancelTask(taskId: string): void
   downloadFile(params: ChatRoomCosDownloadParams): Promise<{ ETag?: string }>
 }
 
@@ -81,6 +82,8 @@ export interface ChatRoomCosServiceOptions {
   internalTokenProvider?: () => string | null
   apiBaseUrl?: string
   logger?: (event: string) => void
+  /** 仅供 Main 测试注入；生产默认使用流式 SHA-256。 */
+  fileHasher?: (filePath: string) => Promise<string>
 }
 
 export interface ChatRoomCosService {
@@ -98,6 +101,7 @@ interface ActiveTransfer {
   roomId: string
   originalName?: string
   sdk?: ChatRoomCosSdk
+  kind: 'upload' | 'download'
 }
 
 function stableErrorCode(error: unknown): string {
@@ -238,13 +242,14 @@ export function createChatRoomCosService(options: ChatRoomCosServiceOptions): Ch
   async function upload(input: ChatRoomUploadJob): Promise<ChatRoomTransferResult> {
     assertSafeIdentifier(input.transferId, 'transfer_id')
     assertSafeIdentifier(input.roomId, 'room_id')
-    const transfer: ActiveTransfer = { cancelled: false, roomId: input.roomId }
+    if (active.has(input.transferId)) return resultFailed(input.transferId, 'transfer_in_progress')
+    const transfer: ActiveTransfer = { cancelled: false, roomId: input.roomId, kind: 'upload' }
     active.set(input.transferId, transfer)
     let authorized: CosSdkGrant | undefined
     try {
       const metadata = assertUploadFile(input.filePath)
       transfer.originalName = metadata.originalName
-      const sha256 = await sha256File(input.filePath)
+      const sha256 = await (options.fileHasher ?? sha256File)(input.filePath)
       if (transfer.cancelled) throw new Error('transfer_cancelled')
       emit(progressState(transfer, input.transferId, 'waiting_authorization', 0))
       authorized = validateGrant(await grantClient.requestUploadGrant({ roomId: input.roomId, originalName: metadata.originalName, mimeType: mimeTypeFor(metadata.originalName), sizeBytes: metadata.sizeBytes, sha256 }), 'upload')
@@ -288,7 +293,8 @@ export function createChatRoomCosService(options: ChatRoomCosServiceOptions): Ch
     assertSafeIdentifier(input.transferId, 'transfer_id')
     assertSafeIdentifier(input.roomId, 'room_id')
     assertSafeIdentifier(input.attachmentId, 'attachment_id')
-    const transfer: ActiveTransfer = { cancelled: false, roomId: input.roomId }
+    if (active.has(input.transferId)) return resultFailed(input.transferId, 'transfer_in_progress')
+    const transfer: ActiveTransfer = { cancelled: false, roomId: input.roomId, kind: 'download' }
     active.set(input.transferId, transfer)
     let authorized: CosSdkGrant | undefined
     try {
@@ -315,7 +321,10 @@ export function createChatRoomCosService(options: ChatRoomCosServiceOptions): Ch
       transfer.sdk = sdkFactory({ SecretId: authorized.tmpSecretId, SecretKey: authorized.tmpSecretKey, SecurityToken: authorized.sessionToken })
       const result = await transfer.sdk.downloadFile({
         Bucket: authorized.bucket, Region: authorized.region, Key: authorized.objectKey, FilePath: destinationPath,
-        onTaskReady: (taskId) => { transfer.taskId = taskId },
+        onTaskReady: (taskId) => {
+          transfer.taskId = taskId
+          if (transfer.cancelled && transfer.sdk) transfer.sdk.cancelTask(taskId)
+        },
         onProgress: (value) => emit(progressState(transfer, input.transferId, 'downloading', clampProgress(value.percent))),
       })
       if (transfer.cancelled) throw new Error('transfer_cancelled')
@@ -341,7 +350,11 @@ export function createChatRoomCosService(options: ChatRoomCosServiceOptions): Ch
       if (!transfer) throw new Error('transfer_not_found')
       transfer.cancelled = true
       if (transfer.sdk && transfer.taskId) {
-        await transfer.sdk.abortUploadTask({ UploadId: transfer.taskId, Level: 'task' })
+        if (transfer.kind === 'upload') {
+          await transfer.sdk.abortUploadTask({ UploadId: transfer.taskId, Level: 'task' })
+        } else {
+          transfer.sdk.cancelTask(transfer.taskId)
+        }
       }
     },
     onProgress(listener) { listeners.add(listener); return () => listeners.delete(listener) },

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, mock, test } from 'bun:test'
-import { mkdtempSync, writeFileSync, readFileSync } from 'node:fs'
+import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -47,6 +47,7 @@ function baseOptions(overrides: Partial<ChatRoomCosServiceOptions> = {}): ChatRo
         return { ETag: 'etag-1' }
       },
       abortUploadTask: async () => ({}),
+      cancelTask: () => {},
       downloadFile: async (params) => {
         params.onProgress?.({ loaded: 2, total: 2, speed: 1, percent: 1 })
         return { ETag: 'etag-download' }
@@ -80,6 +81,7 @@ describe('ChatRoomCosService', () => {
         return {
           sliceUploadFile: async (params) => { sdkParams = params as unknown as Record<string, unknown>; params.onTaskReady?.('task-1'); return { ETag: 'etag-1' } },
           abortUploadTask: async () => ({}),
+          cancelTask: () => {},
           downloadFile: async () => ({ ETag: 'etag' }),
         }
       },
@@ -117,22 +119,124 @@ describe('ChatRoomCosService', () => {
     let finalizeCount = 0
     let resolveUpload!: (value: { ETag: string }) => void
     let aborted: unknown
+    let taskReady!: () => void
+    const taskReadyBarrier = new Promise<void>((resolve) => { taskReady = resolve })
     const service = createChatRoomCosService(baseOptions({
       fileDialog: { showOpenDialog: async () => ({ canceled: false, filePaths: [filePath] }), showSaveDialog: async () => ({ canceled: true }) },
       grantClient: { requestUploadGrant: async () => grant(), requestDownloadGrant: async () => grant('download'), finalizeUpload: async () => { finalizeCount++ } },
       sdkFactory: () => ({
-        sliceUploadFile: async (params) => { params.onTaskReady?.('task-cancel'); return new Promise((resolve) => { resolveUpload = resolve }) },
+        sliceUploadFile: async (params) => { params.onTaskReady?.('task-cancel'); taskReady(); return new Promise((resolve) => { resolveUpload = resolve }) },
         abortUploadTask: async (params) => { aborted = params; resolveUpload({ ETag: 'late' }); return {} },
+        cancelTask: () => {},
         downloadFile: async () => ({ ETag: 'etag' }),
       }),
     }))
     const running = service.upload({ transferId: 't-cancel', roomId: 'r-1', filePath })
-    await new Promise((resolve) => setTimeout(resolve, 0))
+    await taskReadyBarrier
     await service.cancel('t-cancel')
     const result = await running
     expect(aborted).toEqual({ UploadId: 'task-cancel', Level: 'task' })
     expect(finalizeCount).toBe(0)
     expect(result.phase).toBe('cancelled')
+  })
+
+  test('hash 尚未完成时取消会阻止授权、SDK 和 finalize', async () => {
+    const root = makeRoot()
+    const filePath = join(root, 'early.txt')
+    writeFileSync(filePath, 'hello')
+    let releaseHash!: () => void
+    let hashStarted!: () => void
+    const hashBarrier = new Promise<void>((resolve) => { hashStarted = resolve })
+    const hashRelease = new Promise<void>((resolve) => { releaseHash = resolve })
+    let grantCalls = 0
+    let sdkCalls = 0
+    let finalizeCalls = 0
+    const service = createChatRoomCosService(baseOptions({
+      fileHasher: async () => { hashStarted(); await hashRelease; return 'a'.repeat(64) },
+      grantClient: { requestUploadGrant: async () => { grantCalls++; return grant() }, requestDownloadGrant: async () => grant('download'), finalizeUpload: async () => { finalizeCalls++ } },
+      sdkFactory: () => { sdkCalls++; return { sliceUploadFile: async () => ({ ETag: 'etag' }), abortUploadTask: async () => ({}), cancelTask: () => {}, downloadFile: async () => ({ ETag: 'etag' }) } },
+    }))
+    const running = service.upload({ transferId: 't-before-hash', roomId: 'r-1', filePath })
+    await hashBarrier
+    await service.cancel('t-before-hash')
+    releaseHash()
+    const result = await running
+    expect(result.phase).toBe('cancelled')
+    expect(grantCalls).toBe(0)
+    expect(sdkCalls).toBe(0)
+    expect(finalizeCalls).toBe(0)
+  })
+
+  test('授权请求进行中取消会阻止 SDK 和 finalize', async () => {
+    const root = makeRoot()
+    const filePath = join(root, 'grant.txt')
+    writeFileSync(filePath, 'hello')
+    let grantRequested!: () => void
+    const grantBarrier = new Promise<void>((resolve) => { grantRequested = resolve })
+    let releaseGrant!: (value: CosSdkGrant) => void
+    const grantPromise = new Promise<CosSdkGrant>((resolve) => { releaseGrant = resolve })
+    let sdkCalls = 0
+    let finalizeCalls = 0
+    const service = createChatRoomCosService(baseOptions({
+      grantClient: { requestUploadGrant: async () => { grantRequested(); return grantPromise }, requestDownloadGrant: async () => grant('download'), finalizeUpload: async () => { finalizeCalls++ } },
+      sdkFactory: () => { sdkCalls++; return { sliceUploadFile: async () => ({ ETag: 'etag' }), abortUploadTask: async () => ({}), cancelTask: () => {}, downloadFile: async () => ({ ETag: 'etag' }) } },
+    }))
+    const running = service.upload({ transferId: 't-before-task', roomId: 'r-1', filePath })
+    await grantBarrier
+    await service.cancel('t-before-task')
+    releaseGrant(grant())
+    const result = await running
+    expect(result.phase).toBe('cancelled')
+    expect(sdkCalls).toBe(0)
+    expect(finalizeCalls).toBe(0)
+  })
+
+  test('同一 transferId 并发上传不会覆盖 active task', async () => {
+    const root = makeRoot()
+    const filePath = join(root, 'duplicate.txt')
+    writeFileSync(filePath, 'hello')
+    let releaseGrant!: (value: CosSdkGrant) => void
+    const grantPromise = new Promise<CosSdkGrant>((resolve) => { releaseGrant = resolve })
+    let grantRequested!: () => void
+    const grantBarrier = new Promise<void>((resolve) => { grantRequested = resolve })
+    let grantCalls = 0
+    const service = createChatRoomCosService(baseOptions({
+      grantClient: { requestUploadGrant: async () => { grantCalls++; grantRequested(); return grantPromise }, requestDownloadGrant: async () => grant('download'), finalizeUpload: async () => {} },
+    }))
+    const first = service.upload({ transferId: 'same-transfer', roomId: 'r-1', filePath })
+    await grantBarrier
+    const second = await service.upload({ transferId: 'same-transfer', roomId: 'r-1', filePath })
+    expect(second).toEqual({ transferId: 'same-transfer', phase: 'failed', errorCode: 'transfer_in_progress' })
+    expect(grantCalls).toBe(1)
+    await service.cancel('same-transfer')
+    releaseGrant(grant())
+    expect((await first).phase).toBe('cancelled')
+  })
+
+  test('下载取消使用 SDK cancelTask，不调用 upload 专用 abort', async () => {
+    const root = makeRoot()
+    const destination = join(root, 'download-cancel.txt')
+    let taskReady!: () => void
+    const taskBarrier = new Promise<void>((resolve) => { taskReady = resolve })
+    let resolveDownload!: (value: { ETag: string }) => void
+    let abortCalls = 0
+    let cancelCalls = 0
+    const service = createChatRoomCosService(baseOptions({
+      grantClient: { requestUploadGrant: async () => grant(), requestDownloadGrant: async () => grant('download'), finalizeUpload: async () => {} },
+      sdkFactory: () => ({
+        sliceUploadFile: async () => ({ ETag: 'etag' }),
+        abortUploadTask: async () => { abortCalls++; return {} },
+        cancelTask: () => { cancelCalls++ },
+        downloadFile: async (params) => { params.onTaskReady?.('download-task'); taskReady(); return new Promise((resolve) => { resolveDownload = resolve }) },
+      }),
+    }))
+    const running = service.download({ transferId: 'download-cancel', roomId: 'r-1', attachmentId: 'att-1', target: 'user', destinationPath: destination })
+    await taskBarrier
+    await service.cancel('download-cancel')
+    resolveDownload({ ETag: 'late' })
+    expect((await running).phase).toBe('cancelled')
+    expect(cancelCalls).toBe(1)
+    expect(abortCalls).toBe(0)
   })
 
   test('下载只使用服务端 objectKey 并把结果写到 Main 选择的目标', async () => {
@@ -143,7 +247,7 @@ describe('ChatRoomCosService', () => {
       grantClient: { requestUploadGrant: async () => grant(), requestDownloadGrant: async () => grant('download'), finalizeUpload: async () => {} },
       fileDialog: { showOpenDialog: async () => ({ canceled: true }), showSaveDialog: async () => ({ canceled: false, filePath: destination }) },
       sdkFactory: () => ({
-        sliceUploadFile: async () => ({ ETag: 'etag' }), abortUploadTask: async () => ({}),
+        sliceUploadFile: async () => ({ ETag: 'etag' }), abortUploadTask: async () => ({}), cancelTask: () => {},
         downloadFile: async (params) => { sdkParams = params as unknown as Record<string, unknown>; return { ETag: 'etag-download' } },
       }),
     }))
@@ -162,7 +266,7 @@ describe('ChatRoomCosService', () => {
       fileDialog: { showOpenDialog: async () => ({ canceled: true }), showSaveDialog: async () => ({ canceled: true }) },
       resolveAgentInboxPath: (roomId) => { requestedRoom = roomId; return inbox },
       sdkFactory: () => ({
-        sliceUploadFile: async () => ({ ETag: 'etag' }), abortUploadTask: async () => ({}),
+        sliceUploadFile: async () => ({ ETag: 'etag' }), abortUploadTask: async () => ({}), cancelTask: () => {},
         downloadFile: async (params) => { destination = params.FilePath; return { ETag: 'etag' } },
       }),
     }))
@@ -180,7 +284,7 @@ describe('ChatRoomCosService', () => {
     const service = createChatRoomCosService(baseOptions({
       logger: (value) => seen.push(value),
       fileDialog: { showOpenDialog: async () => ({ canceled: false, filePaths: [filePath] }), showSaveDialog: async () => ({ canceled: true }) },
-      sdkFactory: () => ({ sliceUploadFile: async () => { throw new Error('secret-key objectKey') }, abortUploadTask: async () => ({}), downloadFile: async () => ({ ETag: 'e' }) }),
+      sdkFactory: () => ({ sliceUploadFile: async () => { throw new Error('secret-key objectKey') }, abortUploadTask: async () => ({}), cancelTask: () => {}, downloadFile: async () => ({ ETag: 'e' }) }),
     }))
     const result = await service.selectAndUpload({ transferId: 't-error', roomId: 'r-1' })
     expect(result.phase).toBe('failed')
