@@ -76,6 +76,33 @@ export function removeChatRoomMentionToken(value: string, displayName: string): 
   return value.replace(new RegExp(`(^|\\s)@${escapedName}(?=\\s|$)\\s?`, 'u'), '$1')
 }
 
+export function removeChatRoomMentionTrigger(value: string, caret: number): { value: string; caret: number } {
+  const trigger = getChatRoomMentionQuery(value, caret)
+  if (!trigger) return { value, caret }
+  return { value: `${value.slice(0, trigger.start)}${value.slice(Math.min(caret, value.length)).replace(/^\s/u, '')}`, caret: trigger.start }
+}
+
+/** 仅从唯一、边界完整的已选文本恢复 token；歧义或手写重复文本不会恢复为 Agent ID。 */
+export function reconstructChatRoomMentionTokens(value: string, agentIds: string[], agents: ChatRoomAgent[]): Map<string, ChatRoomMentionToken> {
+  const result = new Map<string, ChatRoomMentionToken>()
+  for (const agentId of agentIds) {
+    const agent = agents.find((item) => item.agentId === agentId)
+    if (!agent) continue
+    const tokenText = `@${agent.displayName}`
+    const occurrences: ChatRoomMentionToken[] = []
+    let from = 0
+    while (from <= value.length - tokenText.length) {
+      const start = value.indexOf(tokenText, from)
+      if (start < 0) break
+      const end = start + tokenText.length
+      if ((start === 0 || /\s/u.test(value[start - 1]!)) && (end === value.length || /\s/u.test(value[end]!))) occurrences.push({ start, end })
+      from = start + tokenText.length
+    }
+    if (occurrences.length === 1) result.set(agentId, occurrences[0]!)
+  }
+  return result
+}
+
 export function subscribeChatRoomTransferProgress(roomId: string, setTransfer: (state: ChatRoomTransferState) => void, subscribe: ChatRoomTransferProgressSubscribe): () => void {
   return subscribe((state) => { if (state.roomId === roomId) setTransfer(state) })
 }
@@ -95,7 +122,7 @@ export function ChatroomComposer({ roomId, agents, archived = false, connectionS
   const [sending, setSending] = React.useState(false)
   const [uploading, setUploading] = React.useState(false)
   const textareaRef = React.useRef<HTMLTextAreaElement>(null)
-  const [mentionTokens, setMentionTokens] = React.useState<Map<string, ChatRoomMentionToken>>(new Map())
+  const [mentionTokens, setMentionTokens] = React.useState<Map<string, ChatRoomMentionToken>>(() => reconstructChatRoomMentionTokens(draft, mentions, agents))
   const [mentionQuery, setMentionQuery] = React.useState<ChatRoomMentionTrigger | undefined>()
   const [activeMentionIndex, setActiveMentionIndex] = React.useState(0)
   React.useEffect(() => subscribeChatRoomTransferProgress(roomId, setTransfer, window.electronAPI.chatrooms.onTransferProgress), [roomId, setTransfer])
@@ -107,6 +134,10 @@ export function ChatroomComposer({ roomId, agents, archived = false, connectionS
   const keyboardCandidates = React.useMemo(() => getChatRoomKeyboardCandidates(agents, mentionQuery?.query ?? ''), [agents, mentionQuery?.query])
   const pendingAuthorizationAgentIds = React.useMemo(() => new Set([...permissionRequests.values()].filter((request) => request.roomId === roomId).map((request) => request.roomAgentId)), [permissionRequests, roomId])
   const previousDraftRef = React.useRef(draft)
+  React.useEffect(() => {
+    setMentionTokens(reconstructChatRoomMentionTokens(draft, mentions, agents))
+    previousDraftRef.current = draft
+  }, [roomId])
   const refreshMentionQuery = (value: string, caret: number): void => {
     const next = getChatRoomMentionQuery(value, caret)
     setMentionQuery(next)
@@ -116,6 +147,16 @@ export function ChatroomComposer({ roomId, agents, archived = false, connectionS
     if (agent.status === 'disabled' || !mentionQuery) return
     const textarea = textareaRef.current
     const caret = textarea?.selectionStart ?? draft.length
+    if (mentions.includes(agent.agentId)) {
+      const duplicateRemoval = removeChatRoomMentionTrigger(draft, caret)
+      const nextTokens = reconcileChatRoomMentionTokens(mentionTokens, draft, duplicateRemoval.value)
+      setMentionTokens(nextTokens)
+      previousDraftRef.current = duplicateRemoval.value
+      setDraft({ roomId, value: duplicateRemoval.value })
+      setMentionQuery(undefined)
+      setActiveMentionIndex(0)
+      return
+    }
     const replacement = replaceChatRoomMentionTrigger(draft, caret, agent.displayName)
     const nextTokens = reconcileChatRoomMentionTokens(mentionTokens, draft, replacement.value)
     nextTokens.set(agent.agentId, { start: mentionQuery.start, end: mentionQuery.start + agent.displayName.length + 1 })
@@ -153,8 +194,9 @@ export function ChatroomComposer({ roomId, agents, archived = false, connectionS
   const submit = async (): Promise<void> => {
     const content = draft.trim()
     if (!content || unavailable || sending) return
+    const effectiveMentionTokens = mentionTokens.size > 0 ? mentionTokens : reconstructChatRoomMentionTokens(draft, mentions, agents)
     const mentionAgentIds = mentions.filter((agentId) => {
-      const token = mentionTokens.get(agentId)
+      const token = effectiveMentionTokens.get(agentId)
       const agent = agents.find((item) => item.agentId === agentId)
       return token !== undefined && agent !== undefined && draft.slice(token.start, token.end) === `@${agent.displayName}`
     })
