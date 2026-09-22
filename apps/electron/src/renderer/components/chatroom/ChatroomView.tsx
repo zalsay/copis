@@ -6,15 +6,10 @@ import { chatRoomActiveRoomIdAtom, chatRoomConnectionStatusAtom, chatRoomDeleted
 import { activeTabIdAtom, closeChatRoomTab, tabsAtom } from '@/atoms/tab-atoms'
 import { ChatroomComposer } from './ChatroomComposer'
 import { ChatroomMembersPanel } from './ChatroomMembersPanel'
-import type { ChatRoomAgent, ChatRoomAttachment, ChatRoomMember, ChatRoomPermissionRequest, ChatRoomSummary } from '@copis/shared'
+import type { ChatRoomAgent, ChatRoomAttachment, ChatRoomMember, ChatRoomSummary } from '@copis/shared'
 
 export interface ChatroomViewProps { roomId: string }
 type Details = { room: ChatRoomSummary; members: ChatRoomMember[]; agents: ChatRoomAgent[] }
-
-export function getHostChatRoomPermission(room: Pick<ChatRoomSummary, 'role'> | undefined, requests: Iterable<ChatRoomPermissionRequest>, roomId: string): ChatRoomPermissionRequest | undefined {
-  if (room?.role !== 'host') return undefined
-  return [...requests].find((request) => request.roomId === roomId)
-}
 
 export async function deleteChatRoomAndClose(input: { roomId: string; deleteRoom: () => Promise<void>; removeRoom: (roomId: string) => void; tabs: Parameters<typeof closeChatRoomTab>[0]; activeTabId: string | null; setTabs: (tabs: Parameters<typeof closeChatRoomTab>[0]) => void; setActiveTabId: (activeTabId: string | null) => void }): Promise<void> {
   await input.deleteRoom()

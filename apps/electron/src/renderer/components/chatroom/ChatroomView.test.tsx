@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
-import { deleteChatRoomAndClose, getHostChatRoomPermission } from './ChatroomView'
+import { deleteChatRoomAndClose } from './ChatroomView'
 import type { TabItem } from '@/atoms/tab-atoms'
 
 const source = readFileSync(new URL('./ChatroomView.tsx', import.meta.url), 'utf8')
@@ -33,10 +33,4 @@ describe('聊天室房间视图契约', () => {
     expect(calls).toEqual([])
   })
 
-  test('权限请求在详情尚未加载时保留，成员视图不可操作', () => {
-    const request = { requestId: 'p1', roomId: 'r1', roomAgentId: 'a1', invocationId: 'i1', traceId: 't1', originalSender: { type: 'user' as const, id: 'u1', displayName: '用户' }, invocationChain: [], toolName: 'Bash', summary: '执行命令', createdAt: 1, expiresAt: 2 }
-    expect(getHostChatRoomPermission(undefined, [request], 'r1')).toBeUndefined()
-    expect(getHostChatRoomPermission({ role: 'member' }, [request], 'r1')).toBeUndefined()
-    expect(getHostChatRoomPermission({ role: 'host' }, [request], 'r1')).toEqual(request)
-  })
 })

@@ -66,8 +66,6 @@ export function normalizeChatRoomMessage(value: unknown, defaults: { roomId?: st
   }
 }
 function normalizeAttachment(value: unknown): ChatRoomAttachment { const o = record(value); const status = ['pending', 'ready', 'attached', 'deleted'].includes(text(o.status)) ? text(o.status) as ChatRoomAttachment['status'] : 'pending'; return { attachmentId: text(pick(o, 'attachmentId', 'attachment_id', 'id')), roomId: text(pick(o, 'roomId', 'room_id')), originalName: text(pick(o, 'originalName', 'original_name', 'fileName')), mimeType: text(pick(o, 'mimeType', 'mime_type')), sizeBytes: num(pick(o, 'sizeBytes', 'size_bytes')), status, ...(typeof pick(o, 'messageId', 'message_id') === 'string' ? { messageId: text(pick(o, 'messageId', 'message_id')) } : {}) } }
-function unwrap(value: unknown, key: string): unknown { const o = record(value); return o[key] ?? value }
-
 export interface ChatRoomApi {
   listRooms(): Promise<ChatRoomSummary[]>
   getRoom(roomId: string): Promise<{ room: ChatRoomSummary; members: ChatRoomMember[]; agents: ChatRoomAgent[] }>

@@ -27,7 +27,9 @@ export function ChatroomComposer({ roomId, agents, archived = false, connectionS
   const [sending, setSending] = React.useState(false)
   const [uploading, setUploading] = React.useState(false)
   React.useEffect(() => subscribeChatRoomTransferProgress(roomId, setTransfer, window.electronAPI.chatrooms.onTransferProgress), [roomId, setTransfer])
-  const readyAttachments = [...transfers.values()].filter((item) => item.roomId === roomId && item.phase === 'ready' && item.attachmentId).map((item) => item.attachmentId!)
+  const roomTransfers = [...transfers.values()].filter((item) => item.roomId === roomId)
+  const readyTransfers = roomTransfers.filter((item) => item.phase === 'ready')
+  const readyAttachments = readyTransfers.flatMap((item) => item.attachmentId ? [item.attachmentId] : [])
   const unavailable = archived || connectionStatus === 'offline' || connectionStatus === 'auth_expired'
   const toggleMention = (agent: ChatRoomAgent): void => {
     if (agent.status === 'offline' || agent.status === 'disabled') return
@@ -61,8 +63,8 @@ export function ChatroomComposer({ roomId, agents, archived = false, connectionS
       <button type="button" aria-label="发送消息" onClick={() => void submit().catch(() => undefined)} disabled={unavailable || sending || !draft.trim()} className="rounded-xl bg-primary p-2 text-primary-foreground disabled:opacity-40"><Send className="size-4" /></button>
     </div>
     {sending && <div role="status" className="text-xs text-muted-foreground">发送中...</div>}
-    {[...transfers.values()].filter((item) => item.roomId === roomId && item.phase === 'ready').map((item) => <div key={item.transferId} role="status" className="text-xs text-emerald-600">{item.originalName ?? '附件'} · 已就绪</div>)}
-    {[...transfers.values()].filter((item) => item.roomId === roomId && item.phase !== 'ready').map((item) => <div key={item.transferId} role="status" className={`text-xs ${item.phase === 'failed' ? 'text-destructive' : 'text-muted-foreground'}`}>{item.originalName ?? '附件'} · {item.phase === 'waiting_authorization' ? '等待授权' : item.phase === 'uploading' ? `上传中 ${Math.round(item.progress * 100)}%` : item.phase === 'validating' ? '校验中' : '上传失败'}</div>)}
+    {readyTransfers.map((item) => <div key={item.transferId} role="status" className="text-xs text-emerald-600">{item.originalName ?? '附件'} · 已就绪</div>)}
+    {roomTransfers.filter((item) => item.phase !== 'ready').map((item) => <div key={item.transferId} role="status" className={`text-xs ${item.phase === 'failed' ? 'text-destructive' : 'text-muted-foreground'}`}>{item.originalName ?? '附件'} · {item.phase === 'waiting_authorization' ? '等待授权' : item.phase === 'uploading' ? `上传中 ${Math.round(item.progress * 100)}%` : item.phase === 'validating' ? '校验中' : '上传失败'}</div>)}
     {[...sends.values()].filter((item) => item.roomId === roomId && item.status === 'failed').map((item) => <div key={item.clientMessageId} className="flex items-center justify-between text-xs text-destructive"><span>{item.error ?? '发送失败'}</span><button type="button" className="underline" onClick={() => void retrySend({ api: chatRoomApi, ...item }).catch(() => undefined)}>重试</button></div>)}
   </div>
 }
