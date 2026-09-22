@@ -10,10 +10,12 @@ use super::edu_api_client::{
 };
 use serde_json::json;
 use std::collections::VecDeque;
+use std::net::{SocketAddr, TcpListener};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 use std::time::Duration;
+use tungstenite::handshake::server::{Request, Response};
 use tungstenite::Message;
 
 #[derive(Default)]
@@ -275,6 +277,19 @@ impl ChatroomSocketConnector for FakeConnector {
 struct SlowResolver {
     started: Mutex<Option<mpsc::Sender<()>>>,
     calls: AtomicUsize,
+}
+
+struct LoopbackResolver(SocketAddr);
+
+impl ChatroomHostResolver for LoopbackResolver {
+    fn resolve(
+        &self,
+        _host: &str,
+        _port: u16,
+        _stop: &AtomicBool,
+    ) -> Result<Vec<SocketAddr>, ChatroomClientError> {
+        Ok(vec![self.0])
+    }
 }
 
 impl ChatroomHostResolver for SlowResolver {
@@ -1322,6 +1337,83 @@ fn given_websocket_connector_when_inspecting_timeouts_then_connect_and_io_are_bo
     assert!(super::chatroom_client::websocket_handshake_timeout() <= Duration::from_secs(1));
     assert!(read <= Duration::from_secs(1));
     assert!(write <= Duration::from_secs(1));
+}
+
+#[test]
+fn given_loopback_chatroom_server_when_tungstenite_connector_connects_then_wire_contract_is_real() {
+    let listener = TcpListener::bind(("127.0.0.1", 0)).expect("绑定 loopback WebSocket listener");
+    let address = listener.local_addr().unwrap();
+    let (server_done, server_done_receiver) = mpsc::channel();
+    let server = thread::spawn(move || {
+        let (stream, _) = listener.accept().expect("接受 WebSocket 连接");
+        stream
+            .set_read_timeout(Some(Duration::from_secs(1)))
+            .unwrap();
+        stream
+            .set_write_timeout(Some(Duration::from_secs(1)))
+            .unwrap();
+        let websocket = tungstenite::accept_hdr(stream, |request: &Request, response: Response| {
+            assert_eq!(request.uri().path(), "/api/chatrooms/v2/ws");
+            assert_eq!(
+                request
+                    .headers()
+                    .get("authorization")
+                    .and_then(|value| value.to_str().ok()),
+                Some("Bearer integration-secret")
+            );
+            Ok(response)
+        })
+        .expect("完成 WebSocket 握手");
+        let mut websocket = websocket;
+        let command = websocket.read().expect("读取真实命令帧");
+        let command_json = match command {
+            Message::Text(text) => {
+                serde_json::from_str::<serde_json::Value>(text.as_ref()).expect("命令帧应为 JSON")
+            }
+            other => panic!("命令帧类型错误: {other:?}"),
+        };
+        assert_eq!(
+            command_json,
+            json!({"type":"message.create","roomId":"room-1","payload":{"content":"hello","mentionAgentIds":[],"attachmentIds":[],"clientMessageId":"client-1"}})
+        );
+        websocket
+            .send(Message::Text(
+                r#"{"type":"agent.delta","roomId":"room-1","payload":{"invocationId":"invocation-1","delta":"world"}}"#.into()
+            ))
+            .expect("发送真实事件帧");
+        let _ = server_done.send(());
+    });
+
+    let connector = TungsteniteConnector::with_resolver(Arc::new(LoopbackResolver(address)));
+    let stop = AtomicBool::new(false);
+    let mut socket = connector
+        .connect(
+            "ws://edu.example/api/chatrooms/v2/ws",
+            "Bearer integration-secret",
+            &stop,
+        )
+        .expect("连接 loopback WebSocket");
+    socket
+        .send_json(&ChatroomCommand::SendMessage {
+            room_id: "room-1".into(),
+            client_message_id: "client-1".into(),
+            content: "hello".into(),
+            mention_agent_ids: Vec::new(),
+            attachment_ids: Vec::new(),
+        })
+        .expect("发送真实命令");
+    assert_eq!(
+        socket.receive_json().unwrap(),
+        ChatroomEvent::AgentDelta {
+            room_id: "room-1".into(),
+            payload: json!({"invocationId":"invocation-1","delta":"world"}),
+        }
+    );
+    socket.close();
+    server_done_receiver
+        .recv_timeout(Duration::from_secs(1))
+        .expect("真实 WebSocket 服务端未在限定时间内完成");
+    server.join().expect("回收 loopback WebSocket 服务端");
 }
 
 #[test]
