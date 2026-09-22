@@ -18,9 +18,7 @@ import {
 } from '@copis/shared'
 import { getMainWindow } from '../index'
 import { getChatRoomAgentCoordinator, onChatRoomAgentCoordinatorRegistered, type ChatRoomAgentCoordinatorFacade } from '../lib/chatroom-agent-coordinator'
-import { getChatRoomAttachmentInboxPath, getChatRoomCosService, type ChatRoomCosService } from '../lib/chatroom-cos-service'
-import { ChatRoomWorkspaceStore } from '../lib/chatroom-workspace-store'
-import { getOrCreateClientDeviceId } from '../lib/client-device-id'
+import { getChatRoomCosService, resolveChatRoomAgentInboxPath, type ChatRoomCosService } from '../lib/chatroom-cos-service'
 
 export interface RegisterChatRoomIpcOptions {
   getCoordinator?: () => ChatRoomAgentCoordinatorFacade
@@ -152,14 +150,7 @@ function sanitizeTransferState(value: unknown): ChatRoomTransferState | undefine
 
 function defaultResolveAgentInboxPath(roomId: string, roomAgentId: string, attachmentId: string): string {
   if (!isSafeIdentifier(attachmentId)) throw new Error('聊天室下载参数不正确')
-  const { getWorkingApiClient } = require('../lib/working-api-service') as typeof import('../lib/working-api-service')
-  const room = new ChatRoomWorkspaceStore().read(roomId)
-  const userId = getWorkingApiClient().getCachedUser()?.id
-  const deviceId = getOrCreateClientDeviceId()
-  if (!room || room.hostUserId !== (userId === undefined ? undefined : String(userId)) || room.deviceId !== deviceId) throw new Error('聊天室 Agent 收件箱无权访问')
-  const agent = room.agents.find((candidate) => candidate.roomAgentId === roomAgentId && candidate.archivedAt === undefined)
-  if (!agent) throw new Error('聊天室 Agent 收件箱无权访问')
-  return getChatRoomAttachmentInboxPath(roomId, agent.roomAgentId, attachmentId)
+  return resolveChatRoomAgentInboxPath(roomId, roomAgentId, attachmentId)
 }
 
 function toChatRoomPermissionRequestView(value: unknown): ChatRoomPermissionRequest | undefined {

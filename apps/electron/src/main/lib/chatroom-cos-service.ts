@@ -5,8 +5,10 @@ import { basename, dirname, extname, isAbsolute, join, resolve } from 'node:path
 import { tmpdir } from 'node:os'
 import { Transform } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
-import type { ChatRoomAttachmentPhase, ChatRoomDownloadRequest, ChatRoomTransferResult, ChatRoomTransferState } from '@copis/shared'
+import type { ChatRoomAttachmentPhase, ChatRoomDownloadRequest, ChatRoomLocalRoomConfig, ChatRoomTransferResult, ChatRoomTransferState } from '@copis/shared'
 import { getChatRoomAgentInboxPath } from './config-paths'
+import { ChatRoomWorkspaceStore } from './chatroom-workspace-store'
+import { getOrCreateClientDeviceId } from './client-device-id'
 
 const MAX_FILE_BYTES = 256 * 1024 * 1024
 const MAX_GRANT_TTL_SECONDS = 60 * 60
@@ -479,17 +481,23 @@ export function createChatRoomCosService(options: ChatRoomCosServiceOptions): Ch
     let downloadTempDir: string | undefined
     try {
       emitTransfer(input.transferId, transfer, 'waiting_authorization', 0)
+      let destinationPath: string | undefined
+      const refreshAgentDestination = (): void => {
+        if (input.target !== 'agent_inbox') return
+        if (!options.resolveAgentInboxPath || input.destinationPath || !input.roomAgentId) throw new Error('agent_inbox_target_invalid')
+        const nextDestination = options.resolveAgentInboxPath(input.roomId, input.roomAgentId, input.attachmentId)
+        if (destinationPath !== undefined && nextDestination !== destinationPath) throw new Error('destination_path_changed')
+        destinationPath = nextDestination
+      }
+      refreshAgentDestination()
       authorized = validateGrant(await grantClient.requestDownloadGrant({ roomId: input.roomId, attachmentId: input.attachmentId }), 'download')
       if (authorized.attachmentId !== input.attachmentId) throw new Error('cos_grant_invalid')
       transfer.attachmentId = authorized.attachmentId
       transfer.bucket = authorized.bucket
       transfer.region = authorized.region
       transfer.objectKey = authorized.objectKey
-      let destinationPath: string | undefined
       if (input.target === 'agent_inbox') {
-        if (!options.resolveAgentInboxPath) throw new Error('agent_inbox_unavailable')
-        if (input.destinationPath || !input.roomAgentId) throw new Error('agent_inbox_target_invalid')
-        destinationPath = options.resolveAgentInboxPath(input.roomId, input.roomAgentId, input.attachmentId)
+        refreshAgentDestination()
       } else {
         if (input.roomAgentId !== undefined) throw new Error('user_target_invalid')
         destinationPath = input.destinationPath
@@ -503,6 +511,8 @@ export function createChatRoomCosService(options: ChatRoomCosServiceOptions): Ch
       assertDestinationPath(destinationPath)
       const destinationParentIdentity = readDestinationParentIdentity(destinationPath)
       if (transfer.cancelled) throw new Error('transfer_cancelled')
+      refreshAgentDestination()
+      assertDestinationPath(destinationPath)
       emitTransfer(input.transferId, transfer, 'downloading', 0)
       transfer.sdk = sdkFactory({ SecretId: authorized.tmpSecretId, SecretKey: authorized.tmpSecretKey, SecurityToken: authorized.sessionToken })
       const destinationParent = dirname(destinationPath)
@@ -520,8 +530,11 @@ export function createChatRoomCosService(options: ChatRoomCosServiceOptions): Ch
       })
       if (transfer.cancelled) throw new Error('transfer_cancelled')
       if (!result?.ETag) throw new Error('cos_download_missing_etag')
+      refreshAgentDestination()
       assertDestinationPath(destinationPath)
       assertDestinationParentIdentity(destinationPath, destinationParentIdentity)
+      refreshAgentDestination()
+      assertDestinationPath(destinationPath)
       replaceDownloadedFile(tempPath, destinationPath)
       rmSync(downloadTempDir, { recursive: true, force: true })
       emitTerminal(input.transferId, transfer, 'ready', 1)
@@ -571,6 +584,31 @@ export function getChatRoomAttachmentInboxPath(roomId: string, roomAgentId: stri
   return join(getChatRoomAgentInboxPath(roomId, roomAgentId), fileName)
 }
 
+/** 每次调用都重新读取房间配置和当前登录身份，防止 logout、切换设备或 Agent 归档后的 ABA。 */
+export interface ChatRoomAgentInboxResolverDependencies {
+  readRoom?: (roomId: string) => ChatRoomLocalRoomConfig | undefined
+  getCurrentUserId?: () => string | undefined
+  getDeviceId?: () => string
+}
+
+export function createChatRoomAgentInboxResolver(dependencies: ChatRoomAgentInboxResolverDependencies = {}): (roomId: string, roomAgentId: string, attachmentId: string) => string {
+  return (roomId, roomAgentId, attachmentId) => {
+    const room = dependencies.readRoom ? dependencies.readRoom(roomId) : new ChatRoomWorkspaceStore().read(roomId)
+    const userId = dependencies.getCurrentUserId ? dependencies.getCurrentUserId() : (() => {
+      const { getWorkingApiClient } = require('../lib/working-api-service') as typeof import('../lib/working-api-service')
+      const value = getWorkingApiClient().getCachedUser()?.id
+      return value === undefined ? undefined : String(value)
+    })()
+    const deviceId = dependencies.getDeviceId ? dependencies.getDeviceId() : getOrCreateClientDeviceId()
+    if (!room || room.hostUserId !== userId || room.deviceId !== deviceId) throw new Error('聊天室 Agent 收件箱无权访问')
+    const agent = room.agents.find((candidate) => candidate.roomAgentId === roomAgentId && candidate.archivedAt === undefined)
+    if (!agent) throw new Error('聊天室 Agent 收件箱无权访问')
+    return getChatRoomAttachmentInboxPath(roomId, agent.roomAgentId, attachmentId)
+  }
+}
+
+export const resolveChatRoomAgentInboxPath = createChatRoomAgentInboxResolver()
+
 let productionService: ChatRoomCosService | undefined
 
 function getProductionGrantClient(): ChatRoomCosGrantClient {
@@ -597,7 +635,7 @@ export function getChatRoomCosService(): ChatRoomCosService {
       showOpenDialog: async () => dialog.showOpenDialog({ properties: ['openFile'] }),
       showSaveDialog: async () => dialog.showSaveDialog({}),
     },
-    resolveAgentInboxPath: (roomId, roomAgentId, attachmentId) => getChatRoomAttachmentInboxPath(roomId, roomAgentId, attachmentId),
+    resolveAgentInboxPath: resolveChatRoomAgentInboxPath,
   })
   return productionService
 }

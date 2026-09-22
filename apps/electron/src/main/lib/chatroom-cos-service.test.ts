@@ -1,13 +1,14 @@
 import { afterEach, describe, expect, mock, test } from 'bun:test'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, truncateSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 
 mock.module('electron', () => ({ app: { isPackaged: false, getPath: () => '/tmp' } }))
 mock.module('./http-api-server', () => ({ HTTP_API_HOST: '127.0.0.1', HTTP_API_PORT: 51730, getHttpApiInternalToken: () => 'test-token' }))
 
 const {
   createChatRoomCosService,
+  createChatRoomAgentInboxResolver,
 } = await import('./chatroom-cos-service')
 import type { ChatRoomCosSdk, ChatRoomCosServiceOptions, CosSdkGrant } from './chatroom-cos-service'
 
@@ -63,6 +64,32 @@ function baseOptions(overrides: Partial<ChatRoomCosServiceOptions> = {}): ChatRo
 }
 
 describe('ChatRoomCosService', () => {
+  test('生产 Agent inbox resolver 每次读取当前用户、设备和 room 配置并拒绝归档 Agent', () => {
+    let currentUserId: string | undefined = 'host-1'
+    let currentDeviceId = 'device-1'
+    let room: any = {
+      roomId: 'room-1', hostUserId: 'host-1', deviceId: 'device-1', lastProcessedSeq: 0,
+      agents: [{ roomAgentId: 'agent-1', archivedAt: undefined }], invocations: [], createdAt: 1, updatedAt: 1,
+    }
+    const resolver = createChatRoomAgentInboxResolver({
+      readRoom: () => room,
+      getCurrentUserId: () => currentUserId,
+      getDeviceId: () => currentDeviceId,
+    })
+    const first = resolver('room-1', 'agent-1', 'attachment-1')
+    expect(first).toContain('agent-1')
+    currentUserId = undefined
+    expect(() => resolver('room-1', 'agent-1', 'attachment-1')).toThrow('无权访问')
+    currentUserId = 'host-1'
+    currentDeviceId = 'device-2'
+    expect(() => resolver('room-1', 'agent-1', 'attachment-1')).toThrow('无权访问')
+    currentDeviceId = 'device-1'
+    room = { ...room, hostUserId: 'replacement-host' }
+    expect(() => resolver('room-1', 'agent-1', 'attachment-1')).toThrow('无权访问')
+    room = { ...room, hostUserId: 'host-1', agents: [{ roomAgentId: 'agent-1', archivedAt: Date.now() }] }
+    expect(() => resolver('room-1', 'agent-1', 'attachment-1')).toThrow('无权访问')
+  })
+
   test('Electron builder 保留 Main COS SDK runtime 依赖', () => {
     const builder = readFileSync(join(import.meta.dir, '../../../electron-builder.yml'), 'utf8')
     expect(builder).not.toContain('!node_modules/cos-nodejs-sdk-v5/**')
@@ -435,6 +462,126 @@ describe('ChatRoomCosService', () => {
     expect(destination).toContain('.copis-chatroom-download-')
     expect(existsSync(inbox)).toBe(true)
     expect(destination).not.toContain('attacker.txt')
+  })
+
+  test('Agent inbox 在 grant 返回后身份变更时 fail closed，不启动 SDK', async () => {
+    const root = makeRoot()
+    const destination = join(root, 'inbox', 'attachment.bin')
+    mkdirSync(dirname(destination), { recursive: true })
+    let identity = 'active'
+    let resolverCalls = 0
+    let sdkCalls = 0
+    const service = createChatRoomCosService(baseOptions({
+      grantClient: {
+        requestUploadGrant: async () => grant(),
+        requestDownloadGrant: async () => grant('download'),
+        finalizeUpload: async () => {},
+      },
+      resolveAgentInboxPath: () => {
+        resolverCalls++
+        if (identity !== 'active') throw new Error('agent_inbox_forbidden')
+        identity = 'logged_out'
+        return destination
+      },
+      sdkFactory: () => {
+        sdkCalls++
+        return { sliceUploadFile: async () => ({ ETag: 'etag' }), abortUploadTask: async () => ({}), cancelTask: () => {}, downloadFile: async () => ({ ETag: 'etag' }) }
+      },
+    }))
+    const result = await service.download({ transferId: 'grant-aba', roomId: 'r-1', attachmentId: 'att-1', target: 'agent_inbox', roomAgentId: 'agent-a' })
+    expect(result.phase).toBe('failed')
+    expect(resolverCalls).toBeGreaterThanOrEqual(2)
+    expect(sdkCalls).toBe(0)
+    expect(existsSync(destination)).toBe(false)
+  })
+
+  test('Agent inbox 在 SDK 完成后 Agent 被归档时不执行最终替换并清理临时目录', async () => {
+    const root = makeRoot()
+    const destination = join(root, 'inbox', 'attachment.bin')
+    mkdirSync(dirname(destination), { recursive: true })
+    let archived = false
+    let resolverCalls = 0
+    let temporaryPath: string | undefined
+    const service = createChatRoomCosService(baseOptions({
+      resolveAgentInboxPath: () => {
+        resolverCalls++
+        if (archived) throw new Error('agent_archived')
+        return destination
+      },
+      sdkFactory: () => ({
+        sliceUploadFile: async () => ({ ETag: 'etag' }), abortUploadTask: async () => ({}), cancelTask: () => {},
+        downloadFile: async (params) => {
+          temporaryPath = params.FilePath
+          writeFileSync(params.FilePath, 'private payload')
+          archived = true
+          return { ETag: 'etag' }
+        },
+      }),
+    }))
+    const result = await service.download({ transferId: 'archive-aba', roomId: 'r-1', attachmentId: 'att-1', target: 'agent_inbox', roomAgentId: 'agent-a' })
+    expect(result.phase).toBe('failed')
+    expect(resolverCalls).toBeGreaterThanOrEqual(3)
+    expect(existsSync(destination)).toBe(false)
+    expect(temporaryPath).toBeDefined()
+    expect(existsSync(temporaryPath!)).toBe(false)
+  })
+
+  test('房间配置替换导致 inbox 目的地变化时不写入新房间', async () => {
+    const root = makeRoot()
+    const oldDestination = join(root, 'old-room', 'attachment.bin')
+    const newDestination = join(root, 'new-room', 'attachment.bin')
+    mkdirSync(dirname(oldDestination), { recursive: true })
+    mkdirSync(dirname(newDestination), { recursive: true })
+    let resolverCalls = 0
+    let temporaryPath: string | undefined
+    const service = createChatRoomCosService(baseOptions({
+      resolveAgentInboxPath: () => {
+        resolverCalls++
+        return resolverCalls === 1 ? oldDestination : newDestination
+      },
+      sdkFactory: () => ({
+        sliceUploadFile: async () => ({ ETag: 'etag' }), abortUploadTask: async () => ({}), cancelTask: () => {},
+        downloadFile: async (params) => {
+          temporaryPath = params.FilePath
+          writeFileSync(params.FilePath, 'private payload')
+          return { ETag: 'etag' }
+        },
+      }),
+    }))
+    const result = await service.download({ transferId: 'room-replace-aba', roomId: 'r-1', attachmentId: 'att-1', target: 'agent_inbox', roomAgentId: 'agent-a' })
+    expect(result.phase).toBe('failed')
+    expect(resolverCalls).toBeGreaterThanOrEqual(2)
+    expect(existsSync(oldDestination)).toBe(false)
+    expect(existsSync(newDestination)).toBe(false)
+    expect(existsSync(temporaryPath!)).toBe(false)
+  })
+
+  test('最终 rename 前 Agent 归档时仍清理私有临时文件', async () => {
+    const root = makeRoot()
+    const destination = join(root, 'inbox', 'attachment.bin')
+    mkdirSync(dirname(destination), { recursive: true })
+    let resolverCalls = 0
+    let temporaryPath: string | undefined
+    const service = createChatRoomCosService(baseOptions({
+      resolveAgentInboxPath: () => {
+        resolverCalls++
+        if (resolverCalls >= 5) throw new Error('agent_archived_before_rename')
+        return destination
+      },
+      sdkFactory: () => ({
+        sliceUploadFile: async () => ({ ETag: 'etag' }), abortUploadTask: async () => ({}), cancelTask: () => {},
+        downloadFile: async (params) => {
+          temporaryPath = params.FilePath
+          writeFileSync(params.FilePath, 'private payload')
+          return { ETag: 'etag' }
+        },
+      }),
+    }))
+    const result = await service.download({ transferId: 'rename-aba', roomId: 'r-1', attachmentId: 'att-1', target: 'agent_inbox', roomAgentId: 'agent-a' })
+    expect(result.phase).toBe('failed')
+    expect(resolverCalls).toBe(5)
+    expect(existsSync(destination)).toBe(false)
+    expect(existsSync(temporaryPath!)).toBe(false)
   })
 
   test('下载目标或父目录为 symlink 时 fail closed，不调用 SDK 且不覆盖外部文件', async () => {
