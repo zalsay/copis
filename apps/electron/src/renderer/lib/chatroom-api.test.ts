@@ -22,10 +22,10 @@ describe('chatRoomApi', () => {
       { sourceWorkspaceId: 'three', displayName: '第三 Agent', channelId: 'c', contextMessageCount: 50, memorySharingEnabled: false, skillSharingEnabled: false },
     ], { onProvisionProgress: (value) => progress.push(value) })
     await new Promise((resolve) => setTimeout(resolve, 0))
-    expect(progress).toEqual([{ completed: 1, total: 3, agentName: '第一 Agent' }])
+    expect(progress).toEqual([{ completed: 0, total: 3, agentName: '' }, { completed: 1, total: 3, agentName: '第一 Agent' }])
     releaseSecond()
     await creation
-    expect(progress.map(({ completed, total }) => `${completed}/${total}`)).toEqual(['1/3', '2/3', '3/3'])
+    expect(progress.map(({ completed, total }) => `${completed}/${total}`)).toEqual(['0/3', '1/3', '2/3', '3/3'])
     Object.defineProperty(globalThis, 'window', { configurable: true, value: original })
   })
 
@@ -43,7 +43,7 @@ describe('chatRoomApi', () => {
     expect(error).toBeInstanceOf(ChatRoomProvisionError)
     expect((error as ChatRoomProvisionError).succeededCount).toBe(1)
     expect((error as ChatRoomProvisionError).totalCount).toBe(3)
-    expect(progress).toEqual([{ completed: 1, total: 3, agentName: '正常 Agent' }])
+    expect(progress).toEqual([{ completed: 0, total: 3, agentName: '' }, { completed: 1, total: 3, agentName: '正常 Agent' }])
     expect(postCount).toBe(1)
     Object.defineProperty(globalThis, 'window', { configurable: true, value: original })
   })
