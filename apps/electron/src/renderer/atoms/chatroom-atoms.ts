@@ -67,7 +67,8 @@ export const chatRoomHydrateMessagesAtom = atom(null, (_get, set, input: { roomI
     next.set(input.roomId, mergeChatRoomMessages(input.messages, current.get(input.roomId) ?? []))
     return next
   })
-  if (input.cursor !== undefined) set(chatRoomCursorsAtom, (current) => new Map(current).set(input.roomId, Math.max(current.get(input.roomId) ?? 0, input.cursor!)))
+  const historicalCursor = input.messages.reduce((max, message) => Math.max(max, message.seq), 0)
+  if (input.cursor !== undefined || historicalCursor > 0) set(chatRoomCursorsAtom, (current) => new Map(current).set(input.roomId, Math.max(current.get(input.roomId) ?? 0, input.cursor ?? 0, historicalCursor)))
 })
 
 export const chatRoomActiveRoomIdAtom = atom<string | undefined>(undefined)

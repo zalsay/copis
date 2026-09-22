@@ -17,6 +17,8 @@ describe('聊天室房间视图契约', () => {
     expect(source).toContain('invocation.delta')
     expect(source).toContain('triggerMessageId')
     expect(source).toContain('已停止继续唤起')
+    expect(source).toContain('hasDurableReply')
+    expect(source).toContain("invocation.status === 'running' || !hasDurableReply(invocation)")
   })
 
   test('删除成功后清理房间并关闭对应 Tab', async () => {
