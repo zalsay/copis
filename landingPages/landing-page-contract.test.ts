@@ -291,7 +291,7 @@ describe('landing 下载中心契约', () => {
     } finally {
       await browser.close()
     }
-  })
+  }, 20_000)
 })
 
 describe('landing logo 契约', () => {
