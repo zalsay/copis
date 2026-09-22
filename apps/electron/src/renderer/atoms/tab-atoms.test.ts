@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { getPersistableTabState, openChatRoomTab, openTab, resolveRenderedTabId } from './tab-atoms'
+import { closeChatRoomTab, getPersistableTabState, openChatRoomTab, openTab, resolveRenderedTabId } from './tab-atoms'
 import type { TabItem } from './tab-atoms'
 
 describe('会话入口持久化', () => {
@@ -76,5 +76,14 @@ describe('会话入口持久化', () => {
     const second = openChatRoomTab(first.tabs, { roomId: 'room-1', name: '讨论' })
     expect(second.tabs).toBe(first.tabs)
     expect(second.activeTabId).toBe(first.activeTabId)
+  })
+
+  test('删除聊天室关闭对应 Tab 并选择相邻 fallback', () => {
+    const agent: TabItem = { id: 'agent-1', type: 'agent', sessionId: 'agent-1', title: 'Agent' }
+    const first = openChatRoomTab([agent], { roomId: 'room-1', name: '讨论' })
+    const tabs = [...first.tabs, { id: 'chatroom:room-2', type: 'chatroom' as const, roomId: 'room-2', title: '另一个' }]
+    const result = closeChatRoomTab(tabs, first.activeTabId, 'room-1')
+    expect(result.tabs.map((tab) => tab.id)).toEqual(['agent-1', 'chatroom:room-2'])
+    expect(result.activeTabId).toBe('chatroom:room-2')
   })
 })

@@ -22,6 +22,8 @@ export const chatRoomDraftsAtom = atom<ChatRoomDraftState>(new Map())
 export const chatRoomMentionAgentIdsAtom = atom<ChatRoomMentionState>(new Map())
 export const chatRoomUnreadCountsAtom = atom<ChatRoomUnreadState>(new Map())
 export const chatRoomSendStatesAtom = atom<Map<string, ChatRoomSendState>>(new Map())
+/** 已删除房间的本地墓碑，阻止迟到的 HTTP/SSE 结果重新写回状态。 */
+export const chatRoomDeletedRoomIdsAtom = atom<Set<string>>(new Set<string>())
 
 export const chatRoomActiveRoomIdAtom = atom<string | undefined>(undefined)
 export const chatRoomResetStateAtom = atom(null, (_get, set) => {
@@ -36,10 +38,28 @@ export const chatRoomResetStateAtom = atom(null, (_get, set) => {
   set(chatRoomMentionAgentIdsAtom, new Map())
   set(chatRoomUnreadCountsAtom, new Map())
   set(chatRoomSendStatesAtom, new Map())
+  set(chatRoomDeletedRoomIdsAtom, new Set())
   set(chatRoomActiveRoomIdAtom, undefined)
+})
+export const chatRoomRemoveRoomAtom = atom(null, (get, set, roomId: string) => {
+  const removeKey = <T>(current: Map<string, T>): Map<string, T> => { const next = new Map(current); next.delete(roomId); return next }
+  set(chatRoomRoomsAtom, (current) => current.filter((room) => room.roomId !== roomId))
+  set(chatRoomDetailsAtom, (current) => { const next = { ...current }; delete next[roomId]; return next })
+  set(chatRoomMessagesAtom, removeKey)
+  set(chatRoomCursorsAtom, removeKey)
+  set(chatRoomConnectionStatusAtom, removeKey)
+  set(chatRoomUnreadCountsAtom, removeKey)
+  set(chatRoomDraftsAtom, removeKey)
+  set(chatRoomMentionAgentIdsAtom, removeKey)
+  set(chatRoomInvocationsAtom, removeKey)
+  set(chatRoomTransfersAtom, (current) => new Map([...current].filter(([, state]) => state.roomId !== roomId)))
+  set(chatRoomSendStatesAtom, (current) => new Map([...current].filter(([, state]) => state.roomId !== roomId)))
+  set(chatRoomDeletedRoomIdsAtom, (current: Set<string>) => new Set(current).add(roomId))
+  if (get(chatRoomActiveRoomIdAtom) === roomId) set(chatRoomActiveRoomIdAtom, undefined)
 })
 export const chatRoomApplyEventAtom = atom(null, (get, set, event: ChatRoomEventEnvelope) => {
   const roomId = event.roomId; if (!roomId) return
+  if (get(chatRoomDeletedRoomIdsAtom).has(roomId)) return
   const payload = (typeof event.payload === 'object' && event.payload !== null ? event.payload : {}) as Record<string, unknown>
   if (event.seq !== undefined) set(chatRoomCursorsAtom, (current) => new Map(current).set(roomId, Math.max(current.get(roomId) ?? 0, event.seq!)))
   if (event.type === 'message.created') {

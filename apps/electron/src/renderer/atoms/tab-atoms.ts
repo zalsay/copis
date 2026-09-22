@@ -312,6 +312,15 @@ export function openChatRoomTab(
   }
 }
 
+/** 删除聊天室后关闭其专属标签，并按关闭标签的相邻规则选择新的激活标签。 */
+export function closeChatRoomTab(
+  tabs: TabItem[],
+  activeTabId: string | null,
+  roomId: string,
+): { tabs: TabItem[]; activeTabId: string | null } {
+  return closeTab(tabs, activeTabId, `chatroom:${roomId}`)
+}
+
 /**
  * 从视图状态与预览文件 Map 构造 openTab 的 restore 提示。
  * 仅当该会话预览 Tab 处于打开状态且确实有预览文件时才返回提示，否则返回 undefined。
