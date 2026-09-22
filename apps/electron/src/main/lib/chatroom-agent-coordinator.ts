@@ -46,11 +46,15 @@ export interface ChatRoomAgentCoordinatorFacade {
   onPermissionRequested?(listener: (request: ChatRoomPermissionRequest) => void): () => void
   onLocalConfigChanged?(listener: (room: ChatRoomLocalRoomConfig) => void): () => void
 }
+type ChatRoomLease = { roomId: string; roomAgentId: string }
+type ChatRoomMainRustApi = Omit<ChatRoomRustApi, 'releaseAgentLeases'> & {
+  releaseAgentLeases(input: { roomAgentIds: string[]; leases: ChatRoomLease[]; reason: 'logout' | 'gateway_disconnected' | 'app_quit' }): Promise<void>
+}
 export interface ChatRoomAgentEventListener { (sessionId: string, payload: AgentStreamPayload): void }
 export interface ChatRoomNextHopInput { parent: ChatRoomAgentInvocation; output: ChatRoomAgentOutput; targetAgentId: string; depth: number }
 export interface ChatRoomAgentCoordinatorDependencies {
   store: ChatRoomWorkspaceStore
-  rustApi: ChatRoomRustApi
+  rustApi: ChatRoomMainRustApi
   getCurrentUserId(): Promise<string | undefined>
   getDeviceId(): string
   getSensitiveValues(): string[]
@@ -85,7 +89,7 @@ export class ChatRoomAgentCoordinator implements ChatRoomAgentCoordinatorFacade 
   private stoppingReason: 'logout' | 'gateway_disconnected' | 'app_quit' | undefined
   private disposed = false
   private stopping: Promise<{ stoppedSessionIds: string[]; releasedRoomAgentIds: string[] }> | undefined
-  private readonly releasedRoomAgentIds = new Set<string>()
+  private readonly releasedLeaseKeys = new Set<string>()
   private readonly permissionListeners = new Set<(request: ChatRoomPermissionRequest) => void>()
   private readonly configListeners = new Set<(room: ChatRoomLocalRoomConfig) => void>()
   constructor(private readonly deps: ChatRoomAgentCoordinatorDependencies) {}
@@ -141,10 +145,13 @@ export class ChatRoomAgentCoordinator implements ChatRoomAgentCoordinatorFacade 
     }
     if (finalRoom && (this.activeRuns.has(input.invocationId) || this.deps.store.getInvocation(input.roomId, input.invocationId) || this.deps.store.getTraceAgentInvocation(input.roomId, input.traceId, input.targetAgentId))) return 'duplicate'
     room = finalRoom
-    if (this.lifecycle === 'stopping' || this.lifecycle === 'auth_required' || this.lifecycle === 'disposed') { await this.reportRejected(input, 'agent_offline', room, input.targetAgentId); return 'accepted' }
-    if (this.lifecycle === 'disconnected') this.lifecycle = 'ready'
     const config = room?.agents.find((agent) => agent.roomAgentId === input.targetAgentId && agent.archivedAt === undefined)
     if (!room || !config) { await this.reportRejected(input, 'room_agent_not_found'); return 'accepted' }
+    if (this.lifecycle === 'stopping' || this.lifecycle === 'auth_required' || this.lifecycle === 'disposed') { await this.reportRejected(input, 'agent_offline', room, input.targetAgentId); return 'accepted' }
+    if (this.lifecycle === 'disconnected') {
+      this.lifecycle = 'ready'
+      this.releasedLeaseKeys.clear()
+    }
     if (input.depth >= CHATROOM_MAX_DEPTH) { await this.reportRejected(input, 'invocation_depth_exceeded', room, input.targetAgentId); return 'accepted' }
     if ([...this.activeRuns.values()].some((run) => run.config.roomAgentId === config.roomAgentId)) { await this.reportRejected(input, 'agent_busy', room, input.targetAgentId); return 'accepted' }
     const now = this.deps.now()
@@ -228,18 +235,19 @@ export class ChatRoomAgentCoordinator implements ChatRoomAgentCoordinatorFacade 
         return terminalConfirmed && this.cleanupActiveRun(run)
       }))
       const allCleaned = finalized.every(Boolean)
-      const roomAgentIds = allCleaned
-        ? [...new Set(this.deps.store.list().flatMap((room) => room.agents.filter((agent) => agent.archivedAt === undefined).map((agent) => agent.roomAgentId)))]
+      const leases = allCleaned
+        ? this.deps.store.list().flatMap((room) => room.agents.filter((agent) => agent.archivedAt === undefined).map((agent) => ({ roomId: room.roomId, roomAgentId: agent.roomAgentId })))
         : []
-      const pendingRoomAgentIds = roomAgentIds.filter((roomAgentId) => !this.releasedRoomAgentIds.has(roomAgentId))
+      const uniqueLeases = [...new Map(leases.map((lease) => [`${lease.roomId}\0${lease.roomAgentId}`, lease])).values()]
+      const pendingLeases = uniqueLeases.filter((lease) => !this.releasedLeaseKeys.has(`${lease.roomId}\0${lease.roomAgentId}`))
       const releasedRoomAgentIds: string[] = []
-      for (let index = 0; index < pendingRoomAgentIds.length; index += 3) {
-        const batch = pendingRoomAgentIds.slice(index, index + 3)
+      for (let index = 0; index < pendingLeases.length; index += 3) {
+        const batch = pendingLeases.slice(index, index + 3)
         try {
-          await this.deps.rustApi.releaseAgentLeases({ roomAgentIds: batch, reason })
-          batch.forEach((roomAgentId) => {
-            this.releasedRoomAgentIds.add(roomAgentId)
-            releasedRoomAgentIds.push(roomAgentId)
+          await this.deps.rustApi.releaseAgentLeases({ roomAgentIds: batch.map((lease) => lease.roomAgentId), leases: batch, reason })
+          batch.forEach((lease) => {
+            this.releasedLeaseKeys.add(`${lease.roomId}\0${lease.roomAgentId}`)
+            releasedRoomAgentIds.push(lease.roomAgentId)
           })
         } catch {
           this.deps.reportDiagnostic?.('聊天室 Agent lease 释放失败')
@@ -253,7 +261,7 @@ export class ChatRoomAgentCoordinator implements ChatRoomAgentCoordinatorFacade 
     })()
     return this.stopping
   }
-  async resumeAfterAuthentication(): Promise<void> { const stopping = this.stopping; if (stopping) await stopping; if (this.disposed || this.stoppingReason === 'app_quit') return; if (this.lifecycle === 'auth_required') { this.lifecycle = 'ready'; this.stoppingReason = undefined } }
+  async resumeAfterAuthentication(): Promise<void> { const stopping = this.stopping; if (stopping) await stopping; if (this.disposed || this.stoppingReason === 'app_quit') return; if (this.lifecycle === 'auth_required') { this.lifecycle = 'ready'; this.stoppingReason = undefined; this.releasedLeaseKeys.clear() } }
   async dispose(): Promise<void> { if (this.disposed) return; await this.stopAll('app_quit'); this.disposed = true; this.lifecycle = 'disposed'; this.unsubscribeEvents?.(); this.unsubscribeEvents = undefined }
 
   private async execute(run: ActiveRun): Promise<void> {

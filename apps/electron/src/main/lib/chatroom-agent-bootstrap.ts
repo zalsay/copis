@@ -47,11 +47,8 @@ export function initializeChatRoomAgentCoordinator(): ChatRoomAgentCoordinator {
       reportDelta: (input) => client.reportDelta(input),
       reportCompleted: (input, options) => client.reportCompleted(input, options),
       reportFailed: (input) => client.reportFailed(input),
-      releaseAgentLeases: async ({ roomAgentIds, reason }) => {
-        const leases = store.list().flatMap((room) => room.agents
-          .filter((agent) => roomAgentIds.includes(agent.roomAgentId))
-          .map((agent) => ({ roomId: room.roomId, roomAgentId: agent.roomAgentId })))
-        if (leases.length !== roomAgentIds.length) throw new Error('聊天室 lease 上下文不可用')
+      releaseAgentLeases: async ({ roomAgentIds, leases, reason }) => {
+        if (leases.length !== roomAgentIds.length || leases.some((lease, index) => lease.roomAgentId !== roomAgentIds[index])) throw new Error('聊天室 lease 上下文不可用')
         await client.releaseAgentLeases({ roomAgentIds, reason, deviceId, leases })
       },
     },

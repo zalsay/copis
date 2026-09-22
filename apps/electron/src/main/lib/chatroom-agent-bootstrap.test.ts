@@ -43,3 +43,23 @@ test('Given production bootstrap initialized twice When initialize executes Then
   expect(bootstrap.initializeChatRoomAgentCoordinator()).toBe(first)
   bootstrap.releaseChatRoomAgentCoordinatorRegistration()
 })
+
+test('Given coordinator 已解析精确 room lease pair When production adapter 释放 Then 不通过 roomAgentId 反查上下文', async () => {
+  const coordinator = bootstrap.initializeChatRoomAgentCoordinator()
+  const deps = (coordinator as unknown as { deps: { rustApi: { releaseAgentLeases: (input: unknown) => Promise<void> } } }).deps
+  await deps.rustApi.releaseAgentLeases({
+    roomAgentIds: ['same-agent'],
+    leases: [{ roomId: 'room-exact', roomAgentId: 'same-agent' }],
+    reason: 'gateway_disconnected',
+  })
+  expect(rustCalls.at(-1)).toEqual({
+    method: 'release',
+    input: {
+      roomAgentIds: ['same-agent'],
+      leases: [{ roomId: 'room-exact', roomAgentId: 'same-agent' }],
+      reason: 'gateway_disconnected',
+      deviceId: 'device-production',
+    },
+  })
+  bootstrap.releaseChatRoomAgentCoordinatorRegistration()
+})

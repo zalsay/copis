@@ -564,6 +564,40 @@ test('Given 两个聊天室共六个未归档 Agent When stopAll Then 每批最�
   expect(result.releasedRoomAgentIds).toEqual(['agent-a', 'agent-b', 'agent-c', 'agent-d', 'agent-e', 'agent-f'])
 })
 
+test('Given 两个聊天室存在相同 roomAgentId When stopAll Then 按精确 room lease pair 分批释放且不漏报重复 ID', async () => {
+  const base = fakeDeps()
+  const secondRoom = { ...base.room, roomId: 'room-2', agents: ['agent-a', 'agent-b', 'agent-c'].map(makeAgent) }
+  base.deps.store.list = () => [base.room, secondRoom]
+  const releaseAgentLeases = mock(async (_input: { roomAgentIds: string[]; leases: Array<{ roomId: string; roomAgentId: string }> }) => {})
+  base.deps.rustApi.releaseAgentLeases = releaseAgentLeases
+  const coordinator = new coordinatorModule.ChatRoomAgentCoordinator(base.deps)
+
+  const result = await coordinator.stopAll('gateway_disconnected')
+
+  expect(releaseAgentLeases.mock.calls.map(([input]) => input!.leases)).toEqual([
+    [{ roomId: 'room-1', roomAgentId: 'agent-a' }, { roomId: 'room-1', roomAgentId: 'agent-b' }, { roomId: 'room-1', roomAgentId: 'agent-c' }],
+    [{ roomId: 'room-2', roomAgentId: 'agent-a' }, { roomId: 'room-2', roomAgentId: 'agent-b' }, { roomId: 'room-2', roomAgentId: 'agent-c' }],
+  ])
+  expect(result.releasedRoomAgentIds).toEqual(['agent-a', 'agent-b', 'agent-c', 'agent-a', 'agent-b', 'agent-c'])
+})
+
+test('Given disconnect 后可信 invocation 或重新认证建立新 generation When 再次断开 Then 相同 lease pair 再次释放', async () => {
+  const { deps, runAgentHeadless } = fakeDeps()
+  const coordinator = new coordinatorModule.ChatRoomAgentCoordinator(deps)
+
+  await coordinator.handleGatewayDisconnected()
+  await coordinator.handleInvocation(makeInput('new-generation', 'agent-a'))
+  await new Promise((resolve) => setTimeout(resolve, 0))
+  await coordinator.handleGatewayDisconnected()
+  await coordinator.stopAll('logout')
+  await coordinator.resumeAfterAuthentication()
+  await coordinator.handleGatewayDisconnected()
+
+  expect(runAgentHeadless).toHaveBeenCalledTimes(1)
+  expect(deps.rustApi.releaseAgentLeases).toHaveBeenCalledTimes(3)
+  expect((deps.rustApi.releaseAgentLeases as ReturnType<typeof mock>).mock.calls.every(([input]) => input!.leases.length === 3)).toBe(true)
+})
+
 test('Given 某一批 lease 释放失败 When stopAll 重试 Then 只重试失败批次且不谎报成功批次', async () => {
   const base = fakeDeps()
   const secondRoom = { ...base.room, roomId: 'room-2', agents: ['agent-d', 'agent-e', 'agent-f'].map(makeAgent) }
