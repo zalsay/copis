@@ -8,8 +8,15 @@ const source = readFileSync(new URL('./ChatroomView.tsx', import.meta.url), 'utf
 describe('聊天室房间视图契约', () => {
   test('房间按 roomId 加载消息并使用成员面板', () => {
     expect(source).toContain('getMessages(roomId')
+    expect(source).toContain('hydrateMessages({ roomId, messages: history.messages, cursor: history.cursor })')
     expect(source).toContain('<ChatroomMembersPanel')
     expect(source).toContain('<ChatroomComposer')
+  })
+
+  test('调用卡片展示实时 delta、真实触发来源和停止继续唤起原因', () => {
+    expect(source).toContain('invocation.delta')
+    expect(source).toContain('triggerMessageId')
+    expect(source).toContain('已停止继续唤起')
   })
 
   test('删除成功后清理房间并关闭对应 Tab', async () => {

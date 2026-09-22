@@ -26,6 +26,50 @@ export const chatRoomSendStatesAtom = atom<Map<string, ChatRoomSendState>>(new M
 export const chatRoomDeletedRoomIdsAtom = atom<Set<string>>(new Set<string>())
 export const chatRoomPermissionRequestsAtom = atom<Map<string, ChatRoomPermissionRequest>>(new Map())
 
+function messageKey(message: ChatRoomMessage): string {
+  if (message.messageId) return `id:${message.messageId}`
+  if (message.seq > 0) return `seq:${message.seq}`
+  if (message.clientMessageId) return `client:${message.clientMessageId}`
+  return `anonymous:${message.createdAt}:${message.senderId}:${message.content}`
+}
+
+/** 合并历史与实时消息。历史请求可能晚于 SSE 返回，不能覆盖已经到达的实时消息。 */
+export function mergeChatRoomMessages(current: ChatRoomMessage[], incoming: ChatRoomMessage[]): ChatRoomMessage[] {
+  const merged = new Map<string, ChatRoomMessage>()
+  const put = (message: ChatRoomMessage) => {
+    const key = [...merged.entries()].find(([, existing]) =>
+      (message.messageId && existing.messageId === message.messageId) ||
+      (message.seq > 0 && existing.seq > 0 && existing.seq === message.seq))?.[0] ?? messageKey(message)
+    const previous = merged.get(key)
+    // 后到的消息只补全已有字段，避免历史响应覆盖实时响应携带的较新内容。
+    merged.set(key, previous ? {
+      ...previous,
+      ...message,
+      messageId: message.messageId || previous.messageId,
+      roomId: message.roomId || previous.roomId,
+      senderId: message.senderId || previous.senderId,
+      content: message.content || previous.content,
+      createdAt: message.createdAt || previous.createdAt,
+    } : message)
+  }
+  current.forEach(put)
+  incoming.forEach(put)
+  return [...merged.values()].sort((a, b) => {
+    if (a.seq !== b.seq && (a.seq > 0 || b.seq > 0)) return a.seq - b.seq
+    return a.createdAt.localeCompare(b.createdAt) || messageKey(a).localeCompare(messageKey(b))
+  })
+}
+
+export const chatRoomHydrateMessagesAtom = atom(null, (_get, set, input: { roomId: string; messages: ChatRoomMessage[]; cursor?: number }) => {
+  set(chatRoomMessagesAtom, (current) => {
+    const next = new Map(current)
+    // 以历史作为基线、当前状态作为后到数据，确保加载期间收到的 SSE 内容优先。
+    next.set(input.roomId, mergeChatRoomMessages(input.messages, current.get(input.roomId) ?? []))
+    return next
+  })
+  if (input.cursor !== undefined) set(chatRoomCursorsAtom, (current) => new Map(current).set(input.roomId, Math.max(current.get(input.roomId) ?? 0, input.cursor!)))
+})
+
 export const chatRoomActiveRoomIdAtom = atom<string | undefined>(undefined)
 export const chatRoomResetStateAtom = atom(null, (_get, set) => {
   set(chatRoomRoomsAtom, [])
@@ -68,11 +112,17 @@ export const chatRoomApplyEventAtom = atom(null, (get, set, event: ChatRoomEvent
   if (event.seq !== undefined) set(chatRoomCursorsAtom, (current) => new Map(current).set(roomId, Math.max(current.get(roomId) ?? 0, event.seq!)))
   if (event.type === 'message.created') {
     const message = normalizeChatRoomMessage(payload, { roomId, seq: event.seq })
-    set(chatRoomMessagesAtom, (current) => { const next = new Map(current); next.set(roomId, [...(current.get(roomId) ?? []), message]); return next })
-    if (get(chatRoomActiveRoomIdAtom) !== roomId) set(chatRoomUnreadCountsAtom, (current) => new Map(current).set(roomId, (current.get(roomId) ?? 0) + 1))
+    let added = false
+    set(chatRoomMessagesAtom, (current) => {
+      const existing = current.get(roomId) ?? []
+      const merged = mergeChatRoomMessages(existing, [message])
+      added = merged.length > existing.length
+      const next = new Map(current); next.set(roomId, merged); return next
+    })
+    if (added && get(chatRoomActiveRoomIdAtom) !== roomId) set(chatRoomUnreadCountsAtom, (current) => new Map(current).set(roomId, (current.get(roomId) ?? 0) + 1))
   } else if (event.type === 'agent.delta' || event.type === 'agent.completed' || event.type === 'agent.failed') {
     const invocationId = typeof payload.invocationId === 'string' ? payload.invocationId : undefined; if (!invocationId) return
-    set(chatRoomInvocationsAtom, (current) => { const next = new Map(current); const room = new Map(current.get(roomId) ?? []); const old = room.get(invocationId); const status = event.type === 'agent.delta' ? 'running' : event.type === 'agent.completed' ? 'completed' : 'failed'; room.set(invocationId, { ...(old ?? {}), invocationId, roomId, traceId: typeof payload.traceId === 'string' ? payload.traceId : old?.traceId ?? '', targetAgentId: typeof payload.targetAgentId === 'string' ? payload.targetAgentId : old?.targetAgentId ?? '', triggerMessageId: typeof payload.triggerMessageId === 'string' ? payload.triggerMessageId : old?.triggerMessageId ?? '', depth: typeof payload.depth === 'number' ? payload.depth : old?.depth ?? 0, status, ...(event.type === 'agent.delta' && typeof payload.delta === 'string' ? { delta: `${old?.delta ?? ''}${payload.delta}` } : {}), ...(event.type !== 'agent.delta' ? { delta: undefined } : {}), ...(typeof payload.failureCode === 'string' ? { failureCode: payload.failureCode } : {}) }); next.set(roomId, room); return next })
+    set(chatRoomInvocationsAtom, (current) => { const next = new Map(current); const room = new Map(current.get(roomId) ?? []); const old = room.get(invocationId); const status = event.type === 'agent.delta' ? 'running' : event.type === 'agent.completed' ? 'completed' : 'failed'; room.set(invocationId, { ...(old ?? {}), invocationId, roomId, traceId: typeof payload.traceId === 'string' ? payload.traceId : old?.traceId ?? '', targetAgentId: typeof payload.targetAgentId === 'string' ? payload.targetAgentId : old?.targetAgentId ?? '', triggerMessageId: typeof payload.triggerMessageId === 'string' ? payload.triggerMessageId : old?.triggerMessageId ?? '', depth: typeof payload.depth === 'number' ? payload.depth : old?.depth ?? 0, status, ...(event.type === 'agent.delta' && typeof payload.delta === 'string' ? { delta: `${old?.delta ?? ''}${payload.delta}` } : {}), ...(typeof payload.failureCode === 'string' ? { failureCode: payload.failureCode } : {}) }); next.set(roomId, room); return next })
   }
 })
 export const chatRoomSetDraftAtom = atom(null, (_get, set, input: { roomId: string; value: string }) => set(chatRoomDraftsAtom, (current) => new Map(current).set(input.roomId, input.value)))
