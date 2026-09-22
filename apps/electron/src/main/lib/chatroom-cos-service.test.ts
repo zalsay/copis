@@ -423,14 +423,14 @@ describe('ChatRoomCosService', () => {
     let destination: string | undefined
     const service = createChatRoomCosService(baseOptions({
       fileDialog: { showOpenDialog: async () => ({ canceled: true }), showSaveDialog: async () => ({ canceled: true }) },
-      resolveAgentInboxPath: (roomId) => { requestedRoom = roomId; return inbox },
+      resolveAgentInboxPath: (roomId, roomAgentId, attachmentId) => { requestedRoom = `${roomId}/${roomAgentId}/${attachmentId}`; return inbox },
       sdkFactory: () => ({
         sliceUploadFile: async () => ({ ETag: 'etag' }), abortUploadTask: async () => ({}), cancelTask: () => {},
         downloadFile: async (params) => { destination = params.FilePath; return { ETag: 'etag' } },
       }),
     }))
-    await service.download({ transferId: 't-inbox', roomId: 'r-1', attachmentId: 'att-1', target: 'agent_inbox', destinationPath: join(root, 'attacker.txt') })
-    expect(requestedRoom).toBe('r-1')
+    await service.download({ transferId: 't-inbox', roomId: 'r-1', attachmentId: 'att-1', target: 'agent_inbox', roomAgentId: 'agent-a' })
+    expect(requestedRoom).toBe('r-1/agent-a/att-1')
     expect(destination).not.toBe(inbox)
     expect(destination).toContain('.copis-chatroom-download-')
     expect(existsSync(inbox)).toBe(true)

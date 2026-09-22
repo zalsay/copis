@@ -150,12 +150,14 @@ export interface ChatRoomSendMessageInput {
   clientMessageId: string
 }
 
-export interface ChatRoomDownloadRequest {
+export type ChatRoomDownloadRequest = {
   transferId: string
   roomId: string
   attachmentId: string
-  target: 'user' | 'agent_inbox'
-}
+} & (
+  | { target: 'user'; roomAgentId?: never }
+  | { target: 'agent_inbox'; roomAgentId: string }
+)
 
 export interface ChatRoomTransferResult {
   transferId: string
@@ -377,11 +379,10 @@ export interface ChatRoomElectronAPI {
   respondPermission(input: ChatRoomPermissionResponse): Promise<void>
   onPermissionRequested(callback: (request: ChatRoomPermissionRequest) => void): () => void
   onLocalConfigChanged(callback: (room: ChatRoomLocalRoomView) => void): () => void
-  /** 传输 API 在 Task 3 接入 preload；可选以兼容旧版 preload 的启动过程。 */
-  startUpload?: (input: { transferId: string; roomId: string }) => Promise<ChatRoomTransferResult>
-  startDownload?: (input: ChatRoomDownloadRequest) => Promise<ChatRoomTransferResult>
-  cancelTransfer?: (transferId: string) => Promise<void>
-  onTransferProgress?: (callback: (state: ChatRoomTransferState) => void) => () => void
+  startUpload(input: { transferId: string; roomId: string }): Promise<ChatRoomTransferResult>
+  startDownload(input: ChatRoomDownloadRequest): Promise<ChatRoomTransferResult>
+  cancelTransfer(transferId: string): Promise<void>
+  onTransferProgress(callback: (state: ChatRoomTransferState) => void): () => void
 }
 
 /**

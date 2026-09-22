@@ -12,13 +12,22 @@ import {
   type ChatRoomLocalRoomView,
   type ChatRoomPermissionResponse,
   type ChatRoomPermissionRequest,
+  type ChatRoomDownloadRequest,
+  type ChatRoomTransferResult,
+  type ChatRoomTransferState,
 } from '@copis/shared'
 import { getMainWindow } from '../index'
 import { getChatRoomAgentCoordinator, onChatRoomAgentCoordinatorRegistered, type ChatRoomAgentCoordinatorFacade } from '../lib/chatroom-agent-coordinator'
+import { getChatRoomAttachmentInboxPath, getChatRoomCosService, type ChatRoomCosService } from '../lib/chatroom-cos-service'
+import { ChatRoomWorkspaceStore } from '../lib/chatroom-workspace-store'
+import { getOrCreateClientDeviceId } from '../lib/client-device-id'
 
 export interface RegisterChatRoomIpcOptions {
   getCoordinator?: () => ChatRoomAgentCoordinatorFacade
   getMainWindow?: typeof import('../index').getMainWindow
+  getCosService?: () => ChatRoomCosService
+  /** 校验当前主理人绑定的 Agent，并返回 Main-only inbox 路径。 */
+  resolveAgentInboxPath?: (roomId: string, roomAgentId: string, attachmentId: string) => string
 }
 
 let registered = false
@@ -57,10 +66,100 @@ function requireMethod<T extends (...args: any[]) => any>(value: T | undefined):
   return value
 }
 
+function isSafeIdentifier(value: unknown): value is string {
+  return typeof value === 'string' && value.length > 0 && value.length <= 128 && !/[\u0000-\u001f\u007f]/.test(value)
+}
+
+function isSafeOriginalName(value: unknown): value is string {
+  return typeof value === 'string' && value.length > 0 && value.length <= 255
+    && !/[\\/\u0000-\u001f\u007f]/.test(value)
+}
+
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
   if (value === null || typeof value !== 'object') return false
   const prototype = Object.getPrototypeOf(value)
   return prototype === Object.prototype || prototype === null
+}
+
+function hasExactKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
+  const ownKeys = Reflect.ownKeys(value)
+  return ownKeys.length === keys.length && ownKeys.every((key) => typeof key === 'string' && keys.includes(key))
+}
+
+function requireTransferInput(value: unknown): asserts value is { transferId: string; roomId: string } {
+  if (!isPlainRecord(value) || !hasExactKeys(value, ['transferId', 'roomId'])
+    || !isSafeIdentifier(value.transferId) || !isSafeIdentifier(value.roomId)) {
+    throw new Error('聊天室传输参数不正确')
+  }
+}
+
+function requireDownloadInput(value: unknown): asserts value is ChatRoomDownloadRequest {
+  if (!isPlainRecord(value) || !isSafeIdentifier(value.transferId) || !isSafeIdentifier(value.roomId) || !isSafeIdentifier(value.attachmentId)) {
+    throw new Error('聊天室下载参数不正确')
+  }
+  if (value.target === 'user') {
+    if (!hasExactKeys(value, ['transferId', 'roomId', 'attachmentId', 'target'])) throw new Error('聊天室下载参数不正确')
+    return
+  }
+  if (value.target === 'agent_inbox'
+    && hasExactKeys(value, ['transferId', 'roomId', 'attachmentId', 'target', 'roomAgentId'])
+    && isSafeIdentifier(value.roomAgentId)) return
+  throw new Error('聊天室下载参数不正确')
+}
+
+function requireTransferId(value: unknown): asserts value is string {
+  if (!isSafeIdentifier(value)) throw new Error('聊天室传输参数不正确')
+}
+
+function sanitizeTransferResult(value: unknown): ChatRoomTransferResult {
+  if (!isPlainRecord(value) || !isSafeIdentifier(value.transferId)
+    || (value.phase !== 'ready' && value.phase !== 'failed' && value.phase !== 'cancelled')) {
+    throw new Error('聊天室传输结果不正确')
+  }
+  const result: ChatRoomTransferResult = { transferId: value.transferId, phase: value.phase }
+  if (value.attachmentId !== undefined) {
+    if (!isSafeIdentifier(value.attachmentId)) throw new Error('聊天室传输结果不正确')
+    result.attachmentId = value.attachmentId
+  }
+  if (value.originalName !== undefined) {
+    if (!isSafeOriginalName(value.originalName)) throw new Error('聊天室传输结果不正确')
+    result.originalName = value.originalName
+  }
+  if (value.errorCode !== undefined) {
+    if (typeof value.errorCode !== 'string' || value.errorCode.length === 0 || value.errorCode.length > 128) throw new Error('聊天室传输结果不正确')
+    result.errorCode = value.errorCode
+  }
+  return result
+}
+
+function sanitizeTransferState(value: unknown): ChatRoomTransferState | undefined {
+  if (!isPlainRecord(value) || !isSafeIdentifier(value.transferId) || !isSafeIdentifier(value.roomId)
+    || typeof value.progress !== 'number' || !Number.isFinite(value.progress)
+    || typeof value.phase !== 'string') return undefined
+  const phases = new Set(['waiting_authorization', 'uploading', 'validating', 'ready', 'downloading', 'failed', 'cancelled'])
+  if (!phases.has(value.phase)) return undefined
+  const state: ChatRoomTransferState = {
+    transferId: value.transferId,
+    roomId: value.roomId,
+    phase: value.phase as ChatRoomTransferState['phase'],
+    progress: Math.max(0, Math.min(1, value.progress)),
+  }
+  if (value.attachmentId !== undefined && isSafeIdentifier(value.attachmentId)) state.attachmentId = value.attachmentId
+  if (value.originalName !== undefined && isSafeOriginalName(value.originalName)) state.originalName = value.originalName
+  if (value.errorCode !== undefined && typeof value.errorCode === 'string' && value.errorCode.length > 0 && value.errorCode.length <= 128) state.errorCode = value.errorCode
+  return state
+}
+
+function defaultResolveAgentInboxPath(roomId: string, roomAgentId: string, attachmentId: string): string {
+  if (!isSafeIdentifier(attachmentId)) throw new Error('聊天室下载参数不正确')
+  const { getWorkingApiClient } = require('../lib/working-api-service') as typeof import('../lib/working-api-service')
+  const room = new ChatRoomWorkspaceStore().read(roomId)
+  const userId = getWorkingApiClient().getCachedUser()?.id
+  const deviceId = getOrCreateClientDeviceId()
+  if (!room || room.hostUserId !== (userId === undefined ? undefined : String(userId)) || room.deviceId !== deviceId) throw new Error('聊天室 Agent 收件箱无权访问')
+  const agent = room.agents.find((candidate) => candidate.roomAgentId === roomAgentId && candidate.archivedAt === undefined)
+  if (!agent) throw new Error('聊天室 Agent 收件箱无权访问')
+  return getChatRoomAttachmentInboxPath(roomId, agent.roomAgentId, attachmentId)
 }
 
 function toChatRoomPermissionRequestView(value: unknown): ChatRoomPermissionRequest | undefined {
@@ -96,9 +195,18 @@ export function registerChatRoomIpcHandlers(options: RegisterChatRoomIpcOptions 
   registered = true
   const getCoordinator = options.getCoordinator ?? getChatRoomAgentCoordinator
   const getWindow = options.getMainWindow ?? getMainWindow
+  const cosService = options.getCosService?.() ?? getChatRoomCosService()
+  const resolveAgentInboxPath = options.resolveAgentInboxPath ?? defaultResolveAgentInboxPath
   const invoke = (channel: string, handler: (event: IpcMainInvokeEvent, value?: unknown) => unknown): void => {
     ipcMain.handle(channel, handler)
   }
+  cosService.onProgress((value) => {
+    const state = sanitizeTransferState(value)
+    const win = getWindow()
+    if (state && win && !win.isDestroyed() && !win.webContents.isDestroyed()) {
+      win.webContents.send(CHATROOM_IPC_CHANNELS.TRANSFER_PROGRESS, state)
+    }
+  })
   invoke(CHATROOM_IPC_CHANNELS.LIST_LOCAL_ROOMS, (event) => {
     assertMainSender(event, getWindow)
     const rooms = getCoordinator().listLocalRooms?.() ?? []
@@ -133,6 +241,22 @@ export function registerChatRoomIpcHandlers(options: RegisterChatRoomIpcOptions 
     requireResponse(value)
     const coordinator = getCoordinator()
     await requireMethod(coordinator.respondToPermission).call(coordinator, value)
+  })
+  invoke(CHATROOM_IPC_CHANNELS.SELECT_AND_UPLOAD, async (event, value) => {
+    assertMainSender(event, getWindow)
+    requireTransferInput(value)
+    return sanitizeTransferResult(await cosService.selectAndUpload(value))
+  })
+  invoke(CHATROOM_IPC_CHANNELS.START_DOWNLOAD, async (event, value) => {
+    assertMainSender(event, getWindow)
+    requireDownloadInput(value)
+    if (value.target === 'agent_inbox') resolveAgentInboxPath(value.roomId, value.roomAgentId, value.attachmentId)
+    return sanitizeTransferResult(await cosService.download(value))
+  })
+  invoke(CHATROOM_IPC_CHANNELS.CANCEL_TRANSFER, async (event, value) => {
+    assertMainSender(event, getWindow)
+    requireTransferId(value)
+    await cosService.cancel(value)
   })
   let detachPushListeners: (() => void) | undefined
   const attachPushListeners = (coordinator: ChatRoomAgentCoordinatorFacade | undefined): void => {

@@ -1403,6 +1403,14 @@ const electronAPI: ElectronAPI = {
       ipcRenderer.on(CHATROOM_IPC_CHANNELS.LOCAL_CONFIG_CHANGED, listener)
       return () => ipcRenderer.removeListener(CHATROOM_IPC_CHANNELS.LOCAL_CONFIG_CHANGED, listener)
     },
+    startUpload: (input) => ipcRenderer.invoke(CHATROOM_IPC_CHANNELS.SELECT_AND_UPLOAD, input),
+    startDownload: (input) => ipcRenderer.invoke(CHATROOM_IPC_CHANNELS.START_DOWNLOAD, input),
+    cancelTransfer: (transferId) => ipcRenderer.invoke(CHATROOM_IPC_CHANNELS.CANCEL_TRANSFER, transferId),
+    onTransferProgress: (callback) => {
+      const listener = (_event: Electron.IpcRendererEvent, payload: Parameters<ChatRoomElectronAPI['onTransferProgress']>[0] extends (value: infer T) => void ? T : never) => callback(payload)
+      ipcRenderer.on(CHATROOM_IPC_CHANNELS.TRANSFER_PROGRESS, listener)
+      return () => ipcRenderer.removeListener(CHATROOM_IPC_CHANNELS.TRANSFER_PROGRESS, listener)
+    },
   },
   // 运行时
   getHttpApiWebToken: () => {

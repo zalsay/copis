@@ -106,6 +106,7 @@ export function registerIpcHandlers(): void {
       }
     },
   })
+  // 聊天室管理与 COS 传输统一由同一个 Main handler 注册，避免重复暴露或重复监听。
   registerChatRoomIpcHandlers()
   registerWorkingPaymentIpcHandlers()
   registerWorkingModelsIpcHandlers()

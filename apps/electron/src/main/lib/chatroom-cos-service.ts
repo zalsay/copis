@@ -5,8 +5,8 @@ import { basename, dirname, extname, isAbsolute, join, resolve } from 'node:path
 import { tmpdir } from 'node:os'
 import { Transform } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
-import { HTTP_API_HOST, HTTP_API_PORT, getHttpApiInternalToken } from './http-api-server'
-import type { ChatRoomAttachmentPhase, ChatRoomTransferResult, ChatRoomTransferState } from '@copis/shared'
+import type { ChatRoomAttachmentPhase, ChatRoomDownloadRequest, ChatRoomTransferResult, ChatRoomTransferState } from '@copis/shared'
+import { getChatRoomAgentInboxPath } from './config-paths'
 
 const MAX_FILE_BYTES = 256 * 1024 * 1024
 const MAX_GRANT_TTL_SECONDS = 60 * 60
@@ -19,11 +19,7 @@ export interface ChatRoomUploadJob {
   filePath: string
 }
 
-export interface ChatRoomDownloadJob {
-  transferId: string
-  roomId: string
-  attachmentId: string
-  target: 'user' | 'agent_inbox'
+export type ChatRoomDownloadJob = ChatRoomDownloadRequest & {
   /** Main-only path. Renderer never receives or supplies this value. */
   destinationPath?: string
 }
@@ -83,7 +79,7 @@ export interface ChatRoomCosServiceOptions {
   grantClient?: ChatRoomCosGrantClient
   sdkFactory?: (credentials: { SecretId: string; SecretKey: string; SecurityToken: string }) => ChatRoomCosSdk
   fileDialog: ChatRoomCosFileDialog
-  resolveAgentInboxPath?: (roomId: string) => string
+  resolveAgentInboxPath?: (roomId: string, roomAgentId: string, attachmentId: string) => string
   fetchImpl?: typeof fetch
   internalTokenProvider?: () => string | null
   apiBaseUrl?: string
@@ -340,10 +336,11 @@ function createHttpGrantClient(options: Required<Pick<ChatRoomCosServiceOptions,
 }
 
 export function createChatRoomCosService(options: ChatRoomCosServiceOptions): ChatRoomCosService {
+  const httpApi = options.grantClient ? undefined : require('./http-api-server') as typeof import('./http-api-server')
   const grantClient = options.grantClient ?? createHttpGrantClient({
     fetchImpl: options.fetchImpl ?? fetch,
-    internalTokenProvider: options.internalTokenProvider ?? getHttpApiInternalToken,
-    apiBaseUrl: options.apiBaseUrl ?? `http://${HTTP_API_HOST}:${HTTP_API_PORT}`,
+    internalTokenProvider: options.internalTokenProvider ?? httpApi!.getHttpApiInternalToken,
+    apiBaseUrl: options.apiBaseUrl ?? `http://${httpApi!.HTTP_API_HOST}:${httpApi!.HTTP_API_PORT}`,
   })
   const sdkFactory = options.sdkFactory ?? ((credentials) => new COS(credentials) as unknown as ChatRoomCosSdk)
   const listeners = new Set<(state: ChatRoomTransferState) => void>()
@@ -491,8 +488,10 @@ export function createChatRoomCosService(options: ChatRoomCosServiceOptions): Ch
       let destinationPath: string | undefined
       if (input.target === 'agent_inbox') {
         if (!options.resolveAgentInboxPath) throw new Error('agent_inbox_unavailable')
-        destinationPath = options.resolveAgentInboxPath(input.roomId)
+        if (input.destinationPath || !input.roomAgentId) throw new Error('agent_inbox_target_invalid')
+        destinationPath = options.resolveAgentInboxPath(input.roomId, input.roomAgentId, input.attachmentId)
       } else {
+        if (input.roomAgentId !== undefined) throw new Error('user_target_invalid')
         destinationPath = input.destinationPath
         if (!destinationPath) {
           const selected = await options.fileDialog.showSaveDialog()
@@ -564,4 +563,41 @@ export function createChatRoomCosService(options: ChatRoomCosServiceOptions): Ch
 
 export function isChatRoomCosSensitiveText(value: unknown): boolean {
   return typeof value === 'string' && SENSITIVE_TEXT.test(value)
+}
+
+/** 仅使用可信附件 ID 生成固定安全文件名，绝不把 objectKey 或 Renderer 路径带入 inbox。 */
+export function getChatRoomAttachmentInboxPath(roomId: string, roomAgentId: string, attachmentId: string): string {
+  const fileName = `attachment-${createHash('sha256').update(attachmentId).digest('hex').slice(0, 32)}.bin`
+  return join(getChatRoomAgentInboxPath(roomId, roomAgentId), fileName)
+}
+
+let productionService: ChatRoomCosService | undefined
+
+function getProductionGrantClient(): ChatRoomCosGrantClient {
+  const httpApi = require('./http-api-server') as typeof import('./http-api-server')
+  return createHttpGrantClient({
+    fetchImpl: fetch,
+    internalTokenProvider: httpApi.getHttpApiInternalToken,
+    apiBaseUrl: `http://${httpApi.HTTP_API_HOST}:${httpApi.HTTP_API_PORT}`,
+  })
+}
+
+/** 创建并缓存生产环境 Main-only COS 服务；临时凭据始终留在该服务调用栈。 */
+export function getChatRoomCosService(): ChatRoomCosService {
+  if (productionService) return productionService
+  const { dialog } = require('electron') as typeof import('electron')
+  const grantClient: ChatRoomCosGrantClient = {
+    requestUploadGrant: (input) => getProductionGrantClient().requestUploadGrant(input),
+    requestDownloadGrant: (input) => getProductionGrantClient().requestDownloadGrant(input),
+    finalizeUpload: (input) => getProductionGrantClient().finalizeUpload(input),
+  }
+  productionService = createChatRoomCosService({
+    grantClient,
+    fileDialog: {
+      showOpenDialog: async () => dialog.showOpenDialog({ properties: ['openFile'] }),
+      showSaveDialog: async () => dialog.showSaveDialog({}),
+    },
+    resolveAgentInboxPath: (roomId, roomAgentId, attachmentId) => getChatRoomAttachmentInboxPath(roomId, roomAgentId, attachmentId),
+  })
+  return productionService
 }
