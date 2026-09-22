@@ -38,7 +38,7 @@ function inventoryNode(root: ts.Node, file: ts.SourceFile) {
         entries.push({ kind, channel: node.arguments[0]?.getText(file) ?? '', line: file.getLineAndCharacterOfPosition(node.getStart(file)).line + 1 })
       }
     }
-    if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && node.arguments.length === 0) {
+    if (ts.isCallExpression(node) && ts.isIdentifier(node.expression)) {
       const registrar = registrars.get(node.expression.text)
       if (registrar) entries.push(...inventoryFunction(registrar.source, registrar.path, node.expression.text))
     }
