@@ -1100,7 +1100,7 @@ export function CopisWorkingSidebar({ width, noTransition = false }: CopisWorkin
               </div>
             </div>
             <div className="copis-working-project-list">
-              {chatRooms.map((room) => <button type="button" key={room.roomId} className="copis-working-project-pinned-row" onClick={() => { const next = openChatRoomTab(tabs, room); setTabs(next.tabs); setActiveTabId(next.activeTabId); setActiveView('conversations') }}><UsersRound className="copis-working-project-pinned-icon" aria-hidden="true" /><span className="copis-working-project-pinned-copy"><span className="copis-working-project-pinned-name">{room.name}</span><small>{room.connectionStatus === 'connected' ? '已连接' : room.connectionStatus === 'reconnecting' ? '重连中' : '离线'}{room.unreadCount ? ` · ${room.unreadCount} 条未读` : ''}</small></span></button>)}
+              {chatRooms.map((room) => <button type="button" key={room.roomId} className="copis-working-chatroom-row copis-working-project-pinned-row" onClick={() => { const next = openChatRoomTab(tabs, room); setTabs(next.tabs); setActiveTabId(next.activeTabId); setActiveView('conversations') }}><UsersRound className="copis-working-chatroom-icon copis-working-project-pinned-icon" aria-hidden="true" /><span className="copis-working-project-pinned-copy"><span className="copis-working-project-pinned-name">{room.name}</span><small>{room.connectionStatus === 'connected' ? '已连接' : room.connectionStatus === 'reconnecting' ? '重连中' : '离线'}{room.unreadCount ? ` · ${room.unreadCount} 条未读` : ''}</small></span></button>)}
               {chatRooms.length === 0 && <div className="copis-working-project-pinned-empty">暂无聊天室</div>}
             </div>
           </section>

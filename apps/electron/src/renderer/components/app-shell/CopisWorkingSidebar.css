@@ -594,9 +594,15 @@
 }
 
 .copis-working-project-pinned-row:hover,
-.copis-working-project-pinned-row:focus-visible {
+.copis-working-project-pinned-row:focus-visible,
+.copis-working-chatroom-row:hover,
+.copis-working-chatroom-row:focus-visible {
   background: hsl(var(--foreground) / 0.07);
   outline: 0;
+}
+
+.copis-working-chatroom-icon {
+  color: var(--ui-primary);
 }
 
 .copis-working-project-pinned-copy {

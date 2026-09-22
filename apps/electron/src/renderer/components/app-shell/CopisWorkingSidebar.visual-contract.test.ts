@@ -333,6 +333,17 @@ describe('Working 侧边栏视觉契约', () => {
     expect(sidebarStyles).toContain('color: var(--ui-primary)')
   })
 
+  test('Given 聊天室列表 When 展示聊天室行 Then 使用独立契约且不改变项目固定行契约', () => {
+    const chatroomRowStart = sidebarSource.indexOf('className="copis-working-chatroom-row copis-working-project-pinned-row"')
+    const chatroomRowEnd = sidebarSource.indexOf('</button>', chatroomRowStart)
+    const chatroomRowSource = sidebarSource.slice(chatroomRowStart, chatroomRowEnd)
+
+    expect(chatroomRowStart).toBeGreaterThanOrEqual(0)
+    expect(chatroomRowSource).toContain('<UsersRound className="copis-working-chatroom-icon copis-working-project-pinned-icon" aria-hidden="true" />')
+    expect(sidebarStyles).toContain('.copis-working-chatroom-row:hover')
+    expect(sidebarStyles).toContain('.copis-working-chatroom-icon')
+  })
+
   test('Given 项目分组 When 悬停分组标题 Then 背景覆盖左侧留白且内容起点与技能市场一致', () => {
     const menuRule = sidebarStyles.match(/\.copis-working-menu-button\s*\{([^}]*)\}/s)?.[1]
     const headingRule = sidebarStyles.match(
@@ -758,5 +769,4 @@ describe('Working 侧边栏视觉契约', () => {
     expect(sidebarStyles).toContain('.copis-working-conversation-row:hover .copis-working-conversation-delete:disabled')
   })
 })
-
 
