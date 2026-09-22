@@ -2,7 +2,7 @@ import * as React from 'react'
 import { Paperclip, Send } from 'lucide-react'
 import { useAtomValue, useSetAtom } from 'jotai'
 import type { ChatRoomAgent, ChatRoomTransferState } from '@copis/shared'
-import { chatRoomConsumeTransfersAtom, chatRoomDraftsAtom, chatRoomMentionAgentIdsAtom, chatRoomRetrySendAtom, chatRoomSendMessageAtom, chatRoomSendStatesAtom, chatRoomSetDraftAtom, chatRoomSetMentionsAtom, chatRoomSetTransferAtom, chatRoomTransfersAtom } from '@/atoms/chatroom-atoms'
+import { chatRoomConsumeTransfersAtom, chatRoomDraftsAtom, chatRoomMentionAgentIdsAtom, chatRoomPermissionRequestsAtom, chatRoomRetrySendAtom, chatRoomSendMessageAtom, chatRoomSendStatesAtom, chatRoomSetDraftAtom, chatRoomSetMentionsAtom, chatRoomSetTransferAtom, chatRoomTransfersAtom } from '@/atoms/chatroom-atoms'
 import { chatRoomApi } from '@/lib/chatroom-api'
 
 export interface ChatroomComposerProps { roomId: string; agents: ChatRoomAgent[]; archived?: boolean; connectionStatus?: string }
@@ -12,6 +12,11 @@ export type ChatRoomTransferProgressSubscribe = (callback: (state: ChatRoomTrans
 export interface ChatRoomMentionTrigger {
   start: number
   query: string
+}
+
+export interface ChatRoomMentionToken {
+  start: number
+  end: number
 }
 
 /** 返回光标前最后一个独立 @ 触发词，普通邮箱或已完成的文本不会误触发。 */
@@ -28,13 +33,34 @@ export function filterChatRoomMentionCandidates(agents: ChatRoomAgent[], query: 
   return agents.filter((agent) => `${agent.displayName} ${agent.agentId}`.toLocaleLowerCase().includes(normalized))
 }
 
-export function formatChatRoomAgentStatus(agent: ChatRoomAgent): string {
+export function getChatRoomKeyboardCandidates(agents: ChatRoomAgent[], query: string): ChatRoomAgent[] {
+  return filterChatRoomMentionCandidates(agents, query).filter((agent) => agent.status !== 'disabled')
+}
+
+export function formatChatRoomAgentStatus(agent: ChatRoomAgent, pendingAuthorization = false): string {
   const status = String(agent.status)
   if (status === 'disabled') return '已禁用'
+  if (pendingAuthorization) return '待授权'
   if (status === 'offline') return '离线'
-  if (status === 'pending' || status === 'pending_authorization' || status === 'waiting_authorization') return '待授权'
   if (status === 'busy' || agent.busy) return '忙碌'
   return '在线'
+}
+
+/** 根据一次文本编辑保留未被编辑触及的结构化 token，并平移其后的范围。 */
+export function reconcileChatRoomMentionTokens(tokens: Map<string, ChatRoomMentionToken>, previous: string, next: string): Map<string, ChatRoomMentionToken> {
+  if (previous === next) return new Map(tokens)
+  let prefix = 0
+  while (prefix < previous.length && prefix < next.length && previous[prefix] === next[prefix]) prefix += 1
+  let suffix = 0
+  while (suffix < previous.length - prefix && suffix < next.length - prefix && previous[previous.length - suffix - 1] === next[next.length - suffix - 1]) suffix += 1
+  const oldEnd = previous.length - suffix
+  const delta = (next.length - suffix) - oldEnd
+  const result = new Map<string, ChatRoomMentionToken>()
+  for (const [agentId, token] of tokens) {
+    if (token.end <= prefix) { result.set(agentId, token); continue }
+    if (token.start >= oldEnd) result.set(agentId, { start: token.start + delta, end: token.end + delta })
+  }
+  return result
 }
 
 export function replaceChatRoomMentionTrigger(value: string, caret: number, displayName: string): { value: string; caret: number } {
@@ -59,6 +85,7 @@ export function ChatroomComposer({ roomId, agents, archived = false, connectionS
   const mentions = useAtomValue(chatRoomMentionAgentIdsAtom).get(roomId) ?? []
   const transfers = useAtomValue(chatRoomTransfersAtom)
   const sends = useAtomValue(chatRoomSendStatesAtom)
+  const permissionRequests = useAtomValue(chatRoomPermissionRequestsAtom)
   const setDraft = useSetAtom(chatRoomSetDraftAtom)
   const setMentions = useSetAtom(chatRoomSetMentionsAtom)
   const send = useSetAtom(chatRoomSendMessageAtom)
@@ -68,6 +95,7 @@ export function ChatroomComposer({ roomId, agents, archived = false, connectionS
   const [sending, setSending] = React.useState(false)
   const [uploading, setUploading] = React.useState(false)
   const textareaRef = React.useRef<HTMLTextAreaElement>(null)
+  const [mentionTokens, setMentionTokens] = React.useState<Map<string, ChatRoomMentionToken>>(new Map())
   const [mentionQuery, setMentionQuery] = React.useState<ChatRoomMentionTrigger | undefined>()
   const [activeMentionIndex, setActiveMentionIndex] = React.useState(0)
   React.useEffect(() => subscribeChatRoomTransferProgress(roomId, setTransfer, window.electronAPI.chatrooms.onTransferProgress), [roomId, setTransfer])
@@ -76,6 +104,9 @@ export function ChatroomComposer({ roomId, agents, archived = false, connectionS
   const readyAttachments = readyTransfers.flatMap((item) => item.attachmentId ? [item.attachmentId] : [])
   const unavailable = archived || connectionStatus === 'offline' || connectionStatus === 'auth_expired'
   const candidates = React.useMemo(() => filterChatRoomMentionCandidates(agents, mentionQuery?.query ?? ''), [agents, mentionQuery?.query])
+  const keyboardCandidates = React.useMemo(() => getChatRoomKeyboardCandidates(agents, mentionQuery?.query ?? ''), [agents, mentionQuery?.query])
+  const pendingAuthorizationAgentIds = React.useMemo(() => new Set([...permissionRequests.values()].filter((request) => request.roomId === roomId).map((request) => request.roomAgentId)), [permissionRequests, roomId])
+  const previousDraftRef = React.useRef(draft)
   const refreshMentionQuery = (value: string, caret: number): void => {
     const next = getChatRoomMentionQuery(value, caret)
     setMentionQuery(next)
@@ -86,6 +117,10 @@ export function ChatroomComposer({ roomId, agents, archived = false, connectionS
     const textarea = textareaRef.current
     const caret = textarea?.selectionStart ?? draft.length
     const replacement = replaceChatRoomMentionTrigger(draft, caret, agent.displayName)
+    const nextTokens = reconcileChatRoomMentionTokens(mentionTokens, draft, replacement.value)
+    nextTokens.set(agent.agentId, { start: mentionQuery.start, end: mentionQuery.start + agent.displayName.length + 1 })
+    setMentionTokens(nextTokens)
+    previousDraftRef.current = replacement.value
     setDraft({ roomId, value: replacement.value })
     if (!mentions.includes(agent.agentId)) setMentions({ roomId, agentIds: [...mentions, agent.agentId] })
     setMentionQuery(undefined)
@@ -98,17 +133,36 @@ export function ChatroomComposer({ roomId, agents, archived = false, connectionS
     }, 0)
   }
   const removeMention = (agent: ChatRoomAgent): void => {
-    setDraft({ roomId, value: removeChatRoomMentionToken(draft, agent.displayName) })
-    setMentions({ roomId, agentIds: mentions.filter((id) => id !== agent.agentId) })
+    const token = mentionTokens.get(agent.agentId)
+    const nextDraft = token ? `${draft.slice(0, token.start)}${draft.slice(token.end).replace(/^\s/, '')}` : removeChatRoomMentionToken(draft, agent.displayName)
+    const nextTokens = new Map(mentionTokens)
+    nextTokens.delete(agent.agentId)
+    setMentionTokens(nextTokens)
+    previousDraftRef.current = nextDraft
+    setDraft({ roomId, value: nextDraft })
+    setMentions({ roomId, agentIds: mentions.filter((id) => nextTokens.has(id)) })
+  }
+  const handleDraftChange = (value: string, caret: number): void => {
+    const nextTokens = reconcileChatRoomMentionTokens(mentionTokens, previousDraftRef.current, value)
+    setMentionTokens(nextTokens)
+    previousDraftRef.current = value
+    setDraft({ roomId, value })
+    setMentions({ roomId, agentIds: mentions.filter((id) => nextTokens.has(id)) })
+    refreshMentionQuery(value, caret)
   }
   const submit = async (): Promise<void> => {
     const content = draft.trim()
     if (!content || unavailable || sending) return
+    const mentionAgentIds = mentions.filter((agentId) => {
+      const token = mentionTokens.get(agentId)
+      const agent = agents.find((item) => item.agentId === agentId)
+      return token !== undefined && agent !== undefined && draft.slice(token.start, token.end) === `@${agent.displayName}`
+    })
     const clientMessageId = crypto.randomUUID()
     setSending(true)
     try {
-      await send({ api: chatRoomApi, roomId, content, mentionAgentIds: mentions, attachmentIds: readyAttachments, clientMessageId })
-      consumeTransfers(readyAttachments); setDraft({ roomId, value: '' }); setMentions({ roomId, agentIds: [] })
+      await send({ api: chatRoomApi, roomId, content, mentionAgentIds, attachmentIds: readyAttachments, clientMessageId })
+      consumeTransfers(readyAttachments); setDraft({ roomId, value: '' }); setMentions({ roomId, agentIds: [] }); setMentionTokens(new Map()); previousDraftRef.current = ''
     } finally { setSending(false) }
   }
   const chooseAttachment = async (): Promise<void> => {
@@ -132,18 +186,18 @@ export function ChatroomComposer({ roomId, agents, archived = false, connectionS
     {connectionStatus === 'auth_expired' && <div role="status" className="text-xs text-destructive">登录已过期，请重新登录</div>}
     <div className="relative flex items-end gap-2">
       <button type="button" aria-label="添加附件" disabled={unavailable || uploading} onClick={() => void chooseAttachment()} className="rounded-lg p-2 text-muted-foreground hover:bg-muted disabled:opacity-40"><Paperclip className="size-4" /></button>
-      <textarea ref={textareaRef} aria-label="聊天室消息" role="combobox" aria-autocomplete="list" aria-controls="chatroom-agent-mentions" aria-expanded={Boolean(mentionQuery && candidates.length > 0)} value={draft} disabled={unavailable || sending} onChange={(e) => { setDraft({ roomId, value: e.target.value }); refreshMentionQuery(e.target.value, e.target.selectionStart) }} onClick={(e) => refreshMentionQuery(e.currentTarget.value, e.currentTarget.selectionStart)} onKeyDown={(e) => {
-        if (mentionQuery && candidates.length > 0) {
-          if (e.key === 'ArrowDown') { e.preventDefault(); setActiveMentionIndex((index) => (index + 1) % candidates.length); return }
-          if (e.key === 'ArrowUp') { e.preventDefault(); setActiveMentionIndex((index) => (index - 1 + candidates.length) % candidates.length); return }
+      <textarea ref={textareaRef} aria-label="聊天室消息" role="combobox" aria-autocomplete="list" aria-controls="chatroom-agent-mentions" aria-expanded={Boolean(mentionQuery && candidates.length > 0)} value={draft} disabled={unavailable || sending} onChange={(e) => handleDraftChange(e.target.value, e.target.selectionStart)} onClick={(e) => refreshMentionQuery(e.currentTarget.value, e.currentTarget.selectionStart)} onKeyDown={(e) => {
+        if (mentionQuery && keyboardCandidates.length > 0) {
+          if (e.key === 'ArrowDown') { e.preventDefault(); setActiveMentionIndex((index) => (index + 1) % keyboardCandidates.length); return }
+          if (e.key === 'ArrowUp') { e.preventDefault(); setActiveMentionIndex((index) => (index - 1 + keyboardCandidates.length) % keyboardCandidates.length); return }
           if (e.key === 'Escape') { e.preventDefault(); setMentionQuery(undefined); return }
-          if (e.key === 'Enter' || e.key === 'Tab') { const candidate = candidates[activeMentionIndex] ?? candidates[0]; if (candidate) { e.preventDefault(); selectMention(candidate) }; return }
+          if (e.key === 'Enter' || e.key === 'Tab') { const candidate = keyboardCandidates[activeMentionIndex] ?? keyboardCandidates[0]; if (candidate) { e.preventDefault(); selectMention(candidate) }; return }
         }
         if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void submit().catch(() => undefined) }
       }} placeholder={unavailable ? '聊天室当前不可发送' : '输入 @ 选择 Agent，或直接输入消息'} className="min-h-10 max-h-32 flex-1 resize-y rounded-xl bg-muted/50 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-primary/30" />
       {mentionQuery && candidates.length > 0 && <div id="chatroom-agent-mentions" role="listbox" aria-label="Agent 候选" className="absolute bottom-full left-10 z-20 mb-2 min-w-56 max-w-80 overflow-hidden rounded-xl bg-popover p-1 shadow-lg ring-1 ring-border/50">
-        {candidates.map((agent, index) => <button key={agent.agentId} type="button" role="option" aria-selected={index === activeMentionIndex} aria-disabled={agent.status === 'disabled'} disabled={agent.status === 'disabled'} onMouseDown={(e) => e.preventDefault()} onClick={() => selectMention(agent)} className={`flex w-full items-center justify-between gap-3 rounded-lg px-3 py-2 text-left text-xs ${index === activeMentionIndex ? 'bg-muted' : ''} disabled:cursor-not-allowed disabled:opacity-50`}>
-          <span className="min-w-0 truncate">@{agent.displayName}</span><span className={`shrink-0 ${formatChatRoomAgentStatus(agent) === '离线' ? 'text-destructive' : 'text-muted-foreground'}`}>{formatChatRoomAgentStatus(agent)}</span>
+        {candidates.map((agent) => <button key={agent.agentId} type="button" role="option" aria-selected={keyboardCandidates[activeMentionIndex]?.agentId === agent.agentId} aria-disabled={agent.status === 'disabled'} disabled={agent.status === 'disabled'} onMouseDown={(e) => e.preventDefault()} onClick={() => selectMention(agent)} className={`flex w-full items-center justify-between gap-3 rounded-lg px-3 py-2 text-left text-xs ${keyboardCandidates[activeMentionIndex]?.agentId === agent.agentId ? 'bg-muted' : ''} disabled:cursor-not-allowed disabled:opacity-50`}>
+          <span className="min-w-0 truncate">@{agent.displayName}</span><span className={`shrink-0 ${formatChatRoomAgentStatus(agent, pendingAuthorizationAgentIds.has(agent.agentId)) === '离线' ? 'text-destructive' : 'text-muted-foreground'}`}>{formatChatRoomAgentStatus(agent, pendingAuthorizationAgentIds.has(agent.agentId))}</span>
         </button>)}
       </div>}
       <button type="button" aria-label="发送消息" onClick={() => void submit().catch(() => undefined)} disabled={unavailable || sending || !draft.trim()} className="rounded-xl bg-primary p-2 text-primary-foreground disabled:opacity-40"><Send className="size-4" /></button>
