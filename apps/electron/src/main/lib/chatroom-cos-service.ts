@@ -284,6 +284,7 @@ export function createChatRoomCosService(options: ChatRoomCosServiceOptions): Ch
   }
 
   async function selectAndUpload(input: { transferId: string; roomId: string }): Promise<ChatRoomTransferResult> {
+    if (active.has(input.transferId)) return resultFailed(input.transferId, 'transfer_in_progress')
     const selected = await options.fileDialog.showOpenDialog()
     if (selected.canceled || !selected.filePaths?.[0]) return { transferId: input.transferId, phase: 'cancelled', errorCode: 'transfer_cancelled' }
     return upload({ transferId: input.transferId, roomId: input.roomId, filePath: selected.filePaths[0] })
