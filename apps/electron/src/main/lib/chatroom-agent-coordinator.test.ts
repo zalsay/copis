@@ -76,7 +76,7 @@ function fakeDeps(overrides: Record<string, unknown> = {}) {
     deps: {
       store,
       rustApi: { reportAccepted, reportRunning, reportDelta: mock(async () => {}), reportCompleted, reportFailed, releaseAgentLeases: mock(async () => {}) },
-      getCurrentUserId: async () => 'user-1', getDeviceId: () => 'device-1', getSensitiveValues: () => [], runAgentHeadless, stopAgent: mock(async () => {}), subscribeAgentEvents: () => () => {}, createHiddenSessionStore: () => ({}) as never, registerSessionStorageOverride: () => () => {}, syncSkills: () => ({ snapshotPath: '/tmp/skills', digest: 'a'.repeat(64), skillSlugs: [], syncedAt: 1 }), createNextHop: mock(async () => {}), sendPermissionToHost: mock(() => {}), now: () => 2, ...overrides,
+      getCurrentUserId: async () => 'user-1', getDeviceId: () => 'device-1', getSensitiveValues: () => [], runAgentHeadless, stopAgent: mock(async () => {}), subscribeAgentEvents: () => () => {}, createHiddenSessionStore: () => ({}) as never, registerSessionStorageOverride: () => () => {}, syncSkills: () => ({ snapshotPath: '/tmp/skills', digest: 'a'.repeat(64), skillSlugs: [], syncedAt: 1 }), now: () => 2, ...overrides,
     } as any,
     room, records, runAgentHeadless, reportAccepted, reportRunning, reportCompleted, reportFailed,
   }
@@ -155,23 +155,21 @@ test('Given 三个 run 都被 barrier 卡住 When 批量投递 Then 任一完成
   await all
 })
 
-test('Given depth=2 的结构化输出提及 Agent When 完成 Then 不创建下一跳', async () => {
-  const createNextHop = mock(async () => {})
-  const { deps } = fakeDeps({ createNextHop, runAgentHeadless: mock(async (_input: unknown, callbacks: { onComplete: (messages: AgentMessage[]) => void }) => callbacks.onComplete([{ role: 'assistant', id: 'assistant-2', content: '{"text":"完成","mentionedAgentIds":["agent-b"],"attachmentIds":[]}', createdAt: 2 } as AgentMessage])) })
+test('Given depth=2 的结构化输出提及 Agent When 完成 Then mentions 仍交给服务端边界', async () => {
+  const { deps } = fakeDeps({ runAgentHeadless: mock(async (_input: unknown, callbacks: { onComplete: (messages: AgentMessage[]) => void }) => callbacks.onComplete([{ role: 'assistant', id: 'assistant-2', content: '{"text":"完成","mentionedAgentIds":["agent-b"],"attachmentIds":[]}', createdAt: 2 } as AgentMessage])) })
   const coordinator = new coordinatorModule.ChatRoomAgentCoordinator(deps)
   await coordinator.handleInvocation({ ...makeInput('depth-two', 'agent-a', 2), traceId: 'depth-two-trace' })
   await new Promise((resolve) => setTimeout(resolve, 0))
-  expect(createNextHop).not.toHaveBeenCalled()
 })
 
-test('Given 多个 next-hop 且一路失败 When Agent 完成 Then 其它目标仍并行调度', async () => {
-  const createNextHop = mock(async ({ targetAgentId }: { targetAgentId: string }) => { if (targetAgentId === 'agent-b') throw new Error('isolated failure') })
-  const { deps } = fakeDeps({ createNextHop, runAgentHeadless: mock(async (_input: unknown, callbacks: { onComplete: (messages: AgentMessage[]) => void }) => callbacks.onComplete([{ role: 'assistant', id: 'assistant-next', content: '{"text":"完成","mentionedAgentIds":["agent-b","agent-c"],"attachmentIds":[]}', createdAt: 2 } as AgentMessage])) })
+test('Given Agent 输出提及多个 Agent When 完成 Then mentions 原样交给 Rust，由服务端事务创建下一跳', async () => {
+  const reportCompleted = mock(async () => {})
+  const base = fakeDeps()
+  const { deps } = fakeDeps({ rustApi: { ...base.deps.rustApi, reportCompleted }, runAgentHeadless: mock(async (_input: unknown, callbacks: { onComplete: (messages: AgentMessage[]) => void }) => callbacks.onComplete([{ role: 'assistant', id: 'assistant-next', content: '{"text":"完成","mentionedAgentIds":["agent-b","agent-c"],"attachmentIds":[]}', createdAt: 2 } as AgentMessage])) })
   const coordinator = new coordinatorModule.ChatRoomAgentCoordinator(deps)
-  await coordinator.handleInvocation(makeInput('next-hop-isolation', 'agent-a'))
+  await coordinator.handleInvocation(makeInput('next-hop-server-owned', 'agent-a'))
   await new Promise((resolve) => setTimeout(resolve, 0))
-  expect(createNextHop).toHaveBeenCalledTimes(2)
-  expect(createNextHop.mock.calls.map(([input]) => input.targetAgentId)).toEqual(expect.arrayContaining(['agent-b', 'agent-c']))
+  expect(reportCompleted).toHaveBeenCalledWith(expect.objectContaining({ invocationId: 'next-hop-server-owned', output: { text: '完成', mentionedAgentIds: ['agent-b', 'agent-c'], attachmentIds: [] } }), expect.anything())
 })
 
 test('Given authenticated host/device 不匹配 When invocation 到达 Then fail closed 且不改外来 room', async () => {
@@ -216,13 +214,11 @@ test('Given reportRunning 失败 When accepted 已回传 Then 不启动 Agent �
 test('Given reportCompleted 结果未知 When Agent 完成 Then local remains uncertain and no lease release is claimed', async () => {
   const base = fakeDeps()
   const reportFailed = mock(async () => {})
-  const createNextHop = mock(async () => {})
-  const { deps, records } = fakeDeps({ rustApi: { ...base.deps.rustApi, reportCompleted: mock(async () => { throw new Error('raw sdk detail') }), reportFailed }, createNextHop })
+  const { deps, records } = fakeDeps({ rustApi: { ...base.deps.rustApi, reportCompleted: mock(async () => { throw new Error('raw sdk detail') }), reportFailed } })
   const coordinator = new coordinatorModule.ChatRoomAgentCoordinator(deps)
   await coordinator.handleInvocation(makeInput('completed-fail', 'agent-a'))
   await new Promise((resolve) => setTimeout(resolve, 0))
   expect(records.get('completed-fail')?.status).toBe('running')
-  expect(createNextHop).not.toHaveBeenCalled()
 })
 
 test('Given completion claimed while reportCompleted is pending When gateway disconnects Then completion wins and disconnect cannot overwrite local state', async () => {
@@ -382,32 +378,32 @@ test('Given Agent 请求敏感权限 When 主理人响应 Then 仅收到脱敏�
   let runtime: { requestPermission?: (request: PermissionRequest) => void } | undefined
   let release!: () => void
   const held = new Promise<void>((resolve) => { release = resolve })
-  const sendPermissionToHost = mock(() => {})
   const respondToPermission = mock(() => 'session-agent-a')
   const { deps } = fakeDeps({
     runAgentHeadless: mock(async (_input: unknown, callbacks: { trustedRuntimeContext?: { requestPermission?: (request: PermissionRequest) => void } }) => { runtime = callbacks.trustedRuntimeContext; await held }),
     getSensitiveValues: () => ['token-secret'],
-    sendPermissionToHost,
     permissionService: { respondToPermission },
   })
   const coordinator = new coordinatorModule.ChatRoomAgentCoordinator(deps)
+  const hostRequests: unknown[] = []
+  coordinator.onPermissionRequested((request) => hostRequests.push(request))
   await coordinator.handleInvocation(makeInput('permission-1', 'agent-a'))
   for (let i = 0; i < 10 && !runtime; i++) await Promise.resolve()
   runtime?.requestPermission?.({ requestId: 'permission-request-1', sessionId: 'session-agent-a', toolName: 'Bash\u0000<script>', toolInput: { command: 'curl secret-token' }, description: '写入 /Users/private/project token-secret', dangerLevel: 'dangerous' })
-  expect(JSON.stringify(sendPermissionToHost.mock.calls)).not.toContain('/Users/private/project')
-  expect(JSON.stringify(sendPermissionToHost.mock.calls)).not.toContain('token-secret')
+  expect(JSON.stringify(hostRequests)).not.toContain('/Users/private/project')
+  expect(JSON.stringify(hostRequests)).not.toContain('token-secret')
   await coordinator.respondToPermission({ requestId: 'permission-request-1', behavior: 'allow' })
   expect(respondToPermission).toHaveBeenCalledWith('permission-request-1', 'allow', false)
   release()
 })
 
 test('Given worker permission When external approval dispatches Then Main pending is installed before host notification', async () => {
-  let hostNotified = false
   let pendingCreated = false
-  const sendPermissionToHost = mock(() => { expect(pendingCreated).toBe(true); hostNotified = true })
   const openExternalApproval = mock(async (_request: PermissionRequest, _signal: AbortSignal, dispatch: () => void) => { pendingCreated = true; dispatch(); return { behavior: 'deny' as const, message: '拒绝' } })
-  const { deps } = fakeDeps({ sendPermissionToHost, permissionService: { openExternalApproval, respondToPermission: mock(() => 'session-agent-a') } })
+  const { deps } = fakeDeps({ permissionService: { openExternalApproval, respondToPermission: mock(() => 'session-agent-a') } })
   const coordinator = new coordinatorModule.ChatRoomAgentCoordinator(deps)
+  let hostNotified = false
+  coordinator.onPermissionRequested(() => { expect(pendingCreated).toBe(true); hostNotified = true })
   await coordinator.handleInvocation(makeInput('permission-order', 'agent-a'))
   const result = await coordinator.requestWorkerPermission!({ sessionId: 'session-agent-a', requestId: 'permission-order-1', toolName: 'Bash', toolInput: { command: 'echo test' } })
   expect(result.behavior).toBe('deny')

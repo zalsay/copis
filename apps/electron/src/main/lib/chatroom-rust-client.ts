@@ -224,8 +224,7 @@ function validateContext(value: unknown): ChatRoomInvocationReportContext {
 }
 
 /**
- * 只实现 Task 7 冻结的五个回传方法。
- * `releaseAgentLeases` 没有对应的 Phase 2 loopback 路由，由 Task 10 生命周期适配层负责。
+ * 实现 Agent 状态回传及 Task 10 生命周期 lease release 的 loopback 协议。
  */
 export class HttpChatRoomRustApiClient implements ChatRoomReportApi {
   private readonly baseUrl: string
@@ -335,5 +334,11 @@ export class HttpChatRoomRustApiClient implements ChatRoomReportApi {
       failureCode: input.code,
       message: input.message,
     })
+  }
+
+  async releaseAgentLeases(input: { roomAgentIds: string[]; reason: 'logout' | 'gateway_disconnected' | 'app_quit'; leases?: Array<{ roomId: string; roomAgentId: string }>; deviceId?: string }): Promise<void> {
+    if (!Array.isArray(input.roomAgentIds) || input.roomAgentIds.length > 3 || input.roomAgentIds.length === 0) throw new Error('lease 参数不正确')
+    if (!input.deviceId || !Array.isArray(input.leases) || input.leases.length !== input.roomAgentIds.length) throw new Error('lease 上下文不可用')
+    await this.post('/api/internal/chatrooms/agents/leases/release', { deviceId: input.deviceId, leases: input.leases })
   }
 }

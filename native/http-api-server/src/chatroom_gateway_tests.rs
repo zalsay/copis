@@ -1608,6 +1608,48 @@ fn given_internal_routes_when_schema_contains_unknown_or_sensitive_fields_then_r
 }
 
 #[test]
+fn given_internal_lease_release_when_schema_is_strict_then_proxy_bounded_pairs() {
+    let transport = Arc::new(FakeTransport::default());
+    transport.push(GatewayTransportResponse {
+        status: 204,
+        body: Vec::new(),
+    });
+    let gateway = gateway(transport.clone(), Arc::new(FakeBridge::default()));
+    let body = br#"{"deviceId":"device-1","leases":[{"roomId":"room-1","roomAgentId":"agent-1"}]}"#;
+    assert!(matches!(
+        gateway
+            .handle_http(
+                "POST",
+                "/api/internal/chatrooms/agents/leases/release",
+                &HashMap::new(),
+                body,
+            )
+            .unwrap(),
+        GatewayHttpResponse::Empty { status: 204 }
+    ));
+    {
+        let requests = transport.requests.lock().unwrap();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].0, "POST");
+        assert_eq!(requests[0].1, "/api/chatrooms/v2/agents/leases/release");
+        assert_eq!(
+            serde_json::from_str::<Value>(requests[0].2.as_deref().unwrap()).unwrap(),
+            serde_json::from_slice::<Value>(body).unwrap()
+        );
+    }
+
+    assert!(gateway
+        .handle_http(
+            "POST",
+            "/api/internal/chatrooms/agents/leases/release",
+            &HashMap::new(),
+            br#"{"deviceId":"device-1","leases":[{"roomId":"room-1","roomAgentId":"agent-1","token":"secret"}]}"#,
+        )
+        .is_err());
+    assert_eq!(transport.requests.lock().unwrap().len(), 1);
+}
+
+#[test]
 fn given_phase_one_upload_schema_when_filename_and_mime_are_valid_then_accept_exact_limits() {
     let transport = Arc::new(FakeTransport::default());
     transport.push(GatewayTransportResponse {

@@ -415,4 +415,31 @@ describe('HttpChatRoomRustApiClient', () => {
 
     await expect(client.reportAccepted({ invocationId: 'inv-1' })).rejects.toThrow('错误：请重试')
   })
+
+  test('Given authenticated lease pairs When release is requested Then Rust receives the bounded internal DTO', async () => {
+    const requests: RecordedRequest[] = []
+    const client = createClient(requests)
+
+    await client.releaseAgentLeases({
+      roomAgentIds: ['agent-a'],
+      reason: 'app_quit',
+      deviceId: 'device-1',
+      leases: [{ roomId: 'room-1', roomAgentId: 'agent-a' }],
+    })
+
+    expect(String(requests[0]?.input)).toBe('http://127.0.0.1:51730/api/internal/chatrooms/agents/leases/release')
+    expect(JSON.parse(String(requests[0]?.init?.body))).toEqual({
+      deviceId: 'device-1',
+      leases: [{ roomId: 'room-1', roomAgentId: 'agent-a' }],
+    })
+  })
+
+  test('Given incomplete lease context When release is requested Then it fails closed before fetch', async () => {
+    const requests: RecordedRequest[] = []
+    const client = createClient(requests)
+    await expect(client.releaseAgentLeases({
+      roomAgentIds: ['agent-a'], reason: 'logout', deviceId: 'device-1', leases: [],
+    })).rejects.toThrow('lease 上下文不可用')
+    expect(requests).toHaveLength(0)
+  })
 })

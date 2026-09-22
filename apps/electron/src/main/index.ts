@@ -111,6 +111,7 @@ import { setDshHostWindow, destroyDshView } from './lib/dsh-view-manager'
 import { stopAllBrowserWorkflowRecordings } from './lib/browser-workflow-service'
 import { stopAllBrowserWorkflowRuns } from './lib/browser-workflow-runner'
 import { runChatRoomQuitCleanup } from './lib/chatroom-lifecycle'
+import { initializeChatRoomAgentCoordinator } from './lib/chatroom-agent-bootstrap'
 import { startAgentToolsWatcher, stopAgentToolsWatcher } from './lib/agent-tools-watcher'
 import { getIsQuitting, setQuitting } from './lib/app-lifecycle'
 import {
@@ -558,6 +559,7 @@ async function bootstrap(): Promise<void> {
 
   // Register IPC handlers
   registerIpcHandlers()
+  safeRun('initializeChatRoomAgentCoordinator', initializeChatRoomAgentCoordinator)
   // Rust 非预期退出时聊天室立即失败，不排队重试；正常 stop 不会触发该监听。
   safeRun('chatroomRustExitListener', () => addHttpApiServerExitListener((reason) => {
     if (reason !== 'unexpected_exit' && reason !== 'error') return
@@ -745,8 +747,8 @@ app.on('before-quit', (event) => {
           stopHttpApi: () => stopHttpApiServer(),
           disposeChatRooms: async () => {
             try {
-              const { getChatRoomAgentCoordinator } = await import('./lib/chatroom-agent-coordinator')
-              await getChatRoomAgentCoordinator().dispose()
+              const { disposeChatRoomAgentCoordinator } = await import('./lib/chatroom-agent-bootstrap')
+              await disposeChatRoomAgentCoordinator()
             } catch { /* 协调器未初始化 */ }
           },
         })

@@ -61,8 +61,6 @@ export interface ChatRoomAgentCoordinatorDependencies {
   createHiddenSessionStore(roomId: string, agent: ChatRoomAgentLocalConfig): ChatRoomHiddenSessionStore
   registerSessionStorageOverride(sessionId: string, storage: ChatRoomHiddenSessionStore): () => void
   syncSkills(input: SyncChatRoomAgentSkillSnapshotInput): ChatRoomSkillSnapshotResult
-  createNextHop(input: ChatRoomNextHopInput): Promise<void>
-  sendPermissionToHost(request: ChatRoomPermissionRequest): void
   reportDiagnostic?(message: string): void
   permissionService?: Pick<AgentPermissionService, 'respondToPermission' | 'openExternalApproval'>
   now(): number
@@ -91,7 +89,6 @@ export class ChatRoomAgentCoordinator implements ChatRoomAgentCoordinatorFacade 
   onPermissionRequested(listener: (request: ChatRoomPermissionRequest) => void): () => void { this.permissionListeners.add(listener); return () => this.permissionListeners.delete(listener) }
   onLocalConfigChanged(listener: (room: ChatRoomLocalRoomConfig) => void): () => void { this.configListeners.add(listener); return () => this.configListeners.delete(listener) }
   private emitPermissionRequest(request: ChatRoomPermissionRequest): void {
-    this.deps.sendPermissionToHost(request)
     this.permissionListeners.forEach((listener) => { try { listener(request) } catch { this.deps.reportDiagnostic?.('聊天室权限通知监听器失败') } })
   }
   private emitConfig(room: ChatRoomLocalRoomConfig): void { this.configListeners.forEach((listener) => { try { listener(room) } catch { this.deps.reportDiagnostic?.('聊天室配置通知监听器失败') } }) }
@@ -284,10 +281,7 @@ export class ChatRoomAgentCoordinator implements ChatRoomAgentCoordinatorFacade 
       }
       const completedAt = this.deps.now(); const completed = this.deps.store.transitionInvocation(invocation.roomId, invocation.invocationId, ['running'], (currentRecord) => ({ ...currentRecord, status: 'completed', updatedAt: completedAt, finishedAt: completedAt }))
       if (!completed.transitioned) return
-      if (invocation.depth + 1 < CHATROOM_MAX_DEPTH) {
-        const dispatches = await Promise.allSettled(output.mentionedAgentIds.filter((targetAgentId) => targetAgentId !== config.roomAgentId && !this.deps.store.getTraceAgentInvocation(invocation.roomId, invocation.traceId, targetAgentId)).map((targetAgentId) => this.deps.createNextHop({ parent: invocation, output, targetAgentId, depth: invocation.depth + 1 })))
-        if (dispatches.some((result) => result.status === 'rejected')) this.deps.reportDiagnostic?.('聊天室下一跳调度失败')
-      }
+      // 下一跳由 edu-api CompleteInvocationWithReply 在同一事务中创建；Main 不重复投递。
     } catch { await this.failTerminal(run, run.stopRequested ? 'gateway_disconnected' : 'internal_error') }
     finally { for (const [requestId, pending] of this.pendingPermissions) if (pending.invocationId === invocation.invocationId) { clearTimeout(pending.timer); this.pendingPermissions.delete(requestId) }; this.cleanupActiveRun(run) }
   }

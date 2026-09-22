@@ -265,6 +265,7 @@ enum Route<'a> {
     InternalUpload,
     InternalDownload,
     InternalFinalize,
+    InternalLeaseRelease,
     InternalInvocation(&'a str, &'a str),
 }
 
@@ -622,6 +623,7 @@ impl ChatroomGateway {
             Route::InternalUpload => self.handle_cos_grant(CosAction::Upload, body),
             Route::InternalDownload => self.handle_cos_grant(CosAction::Download, body),
             Route::InternalFinalize => self.handle_internal_finalize(body),
+            Route::InternalLeaseRelease => self.handle_internal_lease_release(body),
             Route::InternalInvocation(invocation_id, state) => {
                 self.handle_internal_invocation(state, invocation_id, body)
             }
@@ -802,6 +804,58 @@ impl ChatroomGateway {
         let response = self
             .transport
             .request("POST", &endpoint, Some(upstream_value.to_string()))
+            .map_err(|message| ChatroomGatewayError::new(502, "upstream_unavailable", message))?;
+        public_response(response)
+    }
+
+    fn handle_internal_lease_release(
+        &self,
+        body: &[u8],
+    ) -> Result<GatewayHttpResponse, ChatroomGatewayError> {
+        let value = parse_body_value(body, true)?;
+        let object = value
+            .as_object()
+            .ok_or_else(|| invalid_request("请求体必须是对象"))?;
+        require_keys(object, &["deviceId", "leases"])?;
+        let _device_id = object
+            .get("deviceId")
+            .and_then(Value::as_str)
+            .filter(|v| valid_component(v))
+            .ok_or_else(|| invalid_request("deviceId 不正确"))?;
+        let leases = object
+            .get("leases")
+            .and_then(Value::as_array)
+            .ok_or_else(|| invalid_request("leases 不正确"))?;
+        if leases.is_empty() || leases.len() > 3 {
+            return Err(invalid_request("leases 数量不正确"));
+        }
+        let mut seen = HashSet::new();
+        for lease in leases {
+            let item = lease
+                .as_object()
+                .ok_or_else(|| invalid_request("lease 必须是对象"))?;
+            require_keys(item, &["roomId", "roomAgentId"])?;
+            let room_id = item
+                .get("roomId")
+                .and_then(Value::as_str)
+                .filter(|v| valid_component(v))
+                .ok_or_else(|| invalid_request("roomId 不正确"))?;
+            let agent_id = item
+                .get("roomAgentId")
+                .and_then(Value::as_str)
+                .filter(|v| valid_component(v))
+                .ok_or_else(|| invalid_request("roomAgentId 不正确"))?;
+            if !seen.insert(format!("{room_id}\0{agent_id}")) {
+                return Err(invalid_request("leases 不得重复"));
+            }
+        }
+        let response = self
+            .transport
+            .request(
+                "POST",
+                "/api/chatrooms/v2/agents/leases/release",
+                Some(value.to_string()),
+            )
             .map_err(|message| ChatroomGatewayError::new(502, "upstream_unavailable", message))?;
         public_response(response)
     }
@@ -1534,6 +1588,7 @@ impl ChatroomGateway {
             | Route::InternalUpload
             | Route::InternalDownload
             | Route::InternalFinalize
+            | Route::InternalLeaseRelease
             | Route::InternalInvocation(_, _) => {}
         }
         self.refresh_subscription_snapshot();
@@ -1801,6 +1856,9 @@ fn parse_route(path: &str) -> Result<Route<'_>, ChatroomGatewayError> {
     if path == format!("{CHATROOM_INTERNAL_PREFIX}/cos/finalize") {
         return Ok(Route::InternalFinalize);
     }
+    if path == format!("{CHATROOM_INTERNAL_PREFIX}/agents/leases/release") {
+        return Ok(Route::InternalLeaseRelease);
+    }
     if path.starts_with(&internal_prefix) {
         let parts: Vec<&str> = path[internal_prefix.len()..].split('/').collect();
         if parts.len() == 3 && parts[0] == "invocations" && valid_component(parts[1]) {
@@ -1871,6 +1929,7 @@ fn method_allowed(method: &str, route: &Route<'_>) -> bool {
             | ("POST", Route::InternalUpload)
             | ("POST", Route::InternalDownload)
             | ("POST", Route::InternalFinalize)
+            | ("POST", Route::InternalLeaseRelease)
             | ("POST", Route::InternalInvocation(_, _))
     )
 }
