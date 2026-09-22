@@ -1,8 +1,8 @@
 import { describe, expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
-import { deleteChatRoomAndClose, hasDurableChatRoomReply } from './ChatroomView'
+import { deleteChatRoomAndClose, getChatRoomIdentityLabel, getChatRoomInvocationTargetLabel, hasDurableChatRoomReply } from './ChatroomView'
 import type { TabItem } from '@/atoms/tab-atoms'
-import type { ChatRoomInvocation, ChatRoomMessage } from '@copis/shared'
+import type { ChatRoomAgent, ChatRoomInvocation, ChatRoomMember, ChatRoomMessage } from '@copis/shared'
 
 const source = readFileSync(new URL('./ChatroomView.tsx', import.meta.url), 'utf8')
 
@@ -27,6 +27,17 @@ describe('聊天室房间视图契约', () => {
     const invocation = (targetAgentId: string): Pick<ChatRoomInvocation, 'traceId' | 'targetAgentId'> => ({ traceId: 'trace-1', targetAgentId })
     expect(hasDurableChatRoomReply([{ ...base, senderId: 'agent-a' }], invocation('agent-a'))).toBe(true)
     expect(hasDurableChatRoomReply([{ ...base, senderId: 'agent-a' }], invocation('agent-b'))).toBe(false)
+  })
+
+  test('按真实身份显示多个用户和 Agent，未知身份安全回退', () => {
+    const members: ChatRoomMember[] = [{ userId: 'u-current', displayName: '当前用户', role: 'host', presence: 'online' }, { userId: 'u-other', displayName: '另一位成员', role: 'member', presence: 'online' }]
+    const agents: ChatRoomAgent[] = [{ agentId: 'agent-a', displayName: '分析 Agent', status: 'online', busy: false, memoryShared: false, skillsShared: false }, { agentId: 'agent-b', displayName: '执行 Agent', status: 'online', busy: false, memoryShared: false, skillsShared: false }]
+    expect(getChatRoomIdentityLabel({ senderType: 'user', senderId: 'u-current' }, 'u-current', members, agents)).toBe('我')
+    expect(getChatRoomIdentityLabel({ senderType: 'user', senderId: 'u-other' }, 'u-current', members, agents)).toBe('另一位成员')
+    expect(getChatRoomIdentityLabel({ senderType: 'agent', senderId: 'agent-a' }, 'u-current', members, agents)).toBe('分析 Agent')
+    expect(getChatRoomIdentityLabel({ senderType: 'agent', senderId: 'unknown-agent' }, 'u-current', members, agents)).toBe('unknown-agent')
+    expect(getChatRoomInvocationTargetLabel('agent-b', agents)).toBe('执行 Agent')
+    expect(getChatRoomInvocationTargetLabel('unknown-agent', agents)).toBe('unknown-agent')
   })
 
   test('删除成功后清理房间并关闭对应 Tab', async () => {
