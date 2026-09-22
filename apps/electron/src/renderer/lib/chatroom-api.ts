@@ -13,7 +13,19 @@ export class ChatRoomApiError extends Error {
 export class ChatRoomProvisionError extends Error {
   readonly room: ChatRoomSummary
   readonly agentName: string
-  constructor(room: ChatRoomSummary, agentName: string, cause: unknown) { super(`聊天室已创建，但 Agent「${agentName}」配置失败：${cause instanceof Error ? cause.message : '未知错误'}`); this.name = 'ChatRoomProvisionError'; this.room = room; this.agentName = agentName }
+  readonly succeededCount: number
+  readonly totalCount: number
+  constructor(room: ChatRoomSummary, agentName: string, cause: unknown, succeededCount: number, totalCount: number) { super(`聊天室已创建，但 Agent「${agentName}」配置失败：${cause instanceof Error ? cause.message : '未知错误'}`); this.name = 'ChatRoomProvisionError'; this.room = room; this.agentName = agentName; this.succeededCount = succeededCount; this.totalCount = totalCount }
+}
+
+export interface ChatRoomProvisionProgress {
+  completed: number
+  total: number
+  agentName: string
+}
+
+export interface ChatRoomCreateOptions {
+  onProvisionProgress?: (progress: ChatRoomProvisionProgress) => void
 }
 
 type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>
@@ -59,7 +71,7 @@ function unwrap(value: unknown, key: string): unknown { const o = record(value);
 export interface ChatRoomApi {
   listRooms(): Promise<ChatRoomSummary[]>
   getRoom(roomId: string): Promise<{ room: ChatRoomSummary; members: ChatRoomMember[]; agents: ChatRoomAgent[] }>
-  createRoom(input: ChatRoomCreateInput, selectedAgents?: Array<Pick<ChatRoomAgentLocalView, 'sourceWorkspaceId' | 'displayName' | 'channelId' | 'modelId' | 'contextMessageCount' | 'memorySharingEnabled' | 'skillSharingEnabled'>>): Promise<ChatRoomSummary>
+  createRoom(input: ChatRoomCreateInput, selectedAgents?: Array<Pick<ChatRoomAgentLocalView, 'sourceWorkspaceId' | 'displayName' | 'channelId' | 'modelId' | 'contextMessageCount' | 'memorySharingEnabled' | 'skillSharingEnabled'>>, options?: ChatRoomCreateOptions): Promise<ChatRoomSummary>
   joinRoom(input: ChatRoomJoinInput): Promise<ChatRoomSummary>
   getMessages(roomId: string, options?: { beforeSeq?: number; limit?: number }): Promise<{ messages: ChatRoomMessage[]; cursor?: number }>
   sendMessage(input: Omit<ChatRoomSendMessageInput, 'clientMessageId'> & { clientMessageId?: string }): Promise<ChatRoomMessage>
@@ -86,7 +98,7 @@ export function createChatRoomApi(options: { fetchImpl?: FetchLike; baseUrl?: st
   return {
     listRooms: () => request('/api/chatrooms/v2/rooms', {}, (v) => array(record(v).rooms ?? v).map(normalizeSummary)),
     getRoom: (roomId) => request(`/api/chatrooms/v2/rooms/${encodeURIComponent(roomId)}`, {}, (v) => { const o = record(v); return { room: normalizeSummary(o.room ?? v), members: array(o.members).map(normalizeMember), agents: array(o.agents).map(normalizeAgent) } }),
-    createRoom: async (input, selectedAgents = []) => { const shareCode = normalizeChatRoomShareCode(input.shareCode); if (!shareCode) throw new ChatRoomApiError('分享码必须是4位字母或数字', 400, 'invalid_share_code'); const room = await request('/api/chatrooms/v2/rooms', { method: 'POST', body: json({ name: input.name, shareCode }) }, (v) => normalizeSummary(record(v).room ?? v)); const provision = (globalThis as typeof globalThis & { window?: Window }).window?.electronAPI?.chatrooms?.provisionAgent; if (provision) { for (const agent of selectedAgents.slice(0, 3)) { try { await provision({ roomId: room.roomId, sourceWorkspaceId: agent.sourceWorkspaceId, displayName: agent.displayName, channelId: agent.channelId, ...(agent.modelId === undefined ? {} : { modelId: agent.modelId }), contextMessageCount: agent.contextMessageCount, memorySharingEnabled: agent.memorySharingEnabled, skillSharingEnabled: agent.skillSharingEnabled }) } catch (error) { throw new ChatRoomProvisionError(room, agent.displayName, error) } } } return room },
+    createRoom: async (input, selectedAgents = [], options = {}) => { const shareCode = normalizeChatRoomShareCode(input.shareCode); if (!shareCode) throw new ChatRoomApiError('分享码必须是4位字母或数字', 400, 'invalid_share_code'); const room = await request('/api/chatrooms/v2/rooms', { method: 'POST', body: json({ name: input.name, shareCode }) }, (v) => normalizeSummary(record(v).room ?? v)); const provision = (globalThis as typeof globalThis & { window?: Window }).window?.electronAPI?.chatrooms?.provisionAgent; const agents = selectedAgents.slice(0, 3); if (provision) { let succeededCount = 0; for (const agent of agents) { try { await provision({ roomId: room.roomId, sourceWorkspaceId: agent.sourceWorkspaceId, displayName: agent.displayName, channelId: agent.channelId, ...(agent.modelId === undefined ? {} : { modelId: agent.modelId }), contextMessageCount: agent.contextMessageCount, memorySharingEnabled: agent.memorySharingEnabled, skillSharingEnabled: agent.skillSharingEnabled }); succeededCount += 1; options.onProvisionProgress?.({ completed: succeededCount, total: agents.length, agentName: agent.displayName }) } catch (error) { throw new ChatRoomProvisionError(room, agent.displayName, error, succeededCount, agents.length) } } } return room },
     joinRoom: (input) => { const shareCode = normalizeChatRoomShareCode(input.shareCode); if (!shareCode) return Promise.reject(new ChatRoomApiError('分享码必须是4位字母或数字', 400, 'invalid_share_code')); return request('/api/chatrooms/v2/join', { method: 'POST', body: json({ shareCode }) }, (v) => normalizeSummary(record(v).room ?? v)) },
     getMessages: (roomId, options = {}) => { const qs = new URLSearchParams(); if (options.beforeSeq !== undefined) qs.set('beforeSeq', String(options.beforeSeq)); if (options.limit !== undefined) qs.set('limit', String(options.limit)); return request(`/api/chatrooms/v2/rooms/${encodeURIComponent(roomId)}/messages${qs.size ? `?${qs}` : ''}`, {}, (v) => { const o = record(v); return { messages: array(o.messages ?? o.data ?? v).map((message) => normalizeChatRoomMessage(message, { roomId })), ...(typeof o.cursor === 'number' ? { cursor: o.cursor } : {}) } }) },
     sendMessage: (input) => request(`/api/chatrooms/v2/rooms/${encodeURIComponent(input.roomId)}/messages`, { method: 'POST', body: json({ content: input.content, mentionAgentIds: input.mentionAgentIds, attachmentIds: input.attachmentIds, clientMessageId: input.clientMessageId ?? crypto.randomUUID() }) }, (v) => normalizeChatRoomMessage(record(v).message ?? record(v).data ?? v, { roomId: input.roomId })),

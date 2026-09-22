@@ -9,6 +9,44 @@ describe('chatRoomApi', () => {
   })
   test('创建请求只发送 name/shareCode，并按本地 Agent 配置顺序 provision', async () => { let body = ''; const provisioned: unknown[] = []; const original = globalThis.window; Object.defineProperty(globalThis, 'window', { configurable: true, value: { electronAPI: { chatrooms: { provisionAgent: async (input: unknown) => { provisioned.push(input); return {} } } } } }); const api = createChatRoomApi({ baseUrl: 'http://test', fetchImpl: async (_url, init) => { body = String(init?.body); return response({ roomId: 'r1', name: 'R' }) } }); await api.createRoom({ name: 'R', shareCode: 'AB12' }, [{ sourceWorkspaceId: 'ws', displayName: 'Agent', channelId: 'channel', contextMessageCount: 50, memorySharingEnabled: true, skillSharingEnabled: false }]); expect(JSON.parse(body)).toEqual({ name: 'R', shareCode: 'AB12' }); expect(provisioned[0]).toMatchObject({ sourceWorkspaceId: 'ws', displayName: 'Agent', channelId: 'channel', memorySharingEnabled: true }); Object.defineProperty(globalThis, 'window', { configurable: true, value: original }) })
   test('创建成功后 provision 失败保留已创建房间且不再次 POST', async () => { let postCount = 0; const original = globalThis.window; Object.defineProperty(globalThis, 'window', { configurable: true, value: { electronAPI: { chatrooms: { provisionAgent: async (input: { displayName: string }) => { if (input.displayName === '失败 Agent') throw new Error('配置不可用'); return {} } } } } }); const api = createChatRoomApi({ baseUrl: 'http://test', fetchImpl: async () => { postCount++; return response({ roomId: 'r1', name: 'R' }) } }); await expect(api.createRoom({ name: 'R', shareCode: 'AB12' }, [{ sourceWorkspaceId: 'ok', displayName: '正常 Agent', channelId: 'c', contextMessageCount: 50, memorySharingEnabled: false, skillSharingEnabled: false }, { sourceWorkspaceId: 'bad', displayName: '失败 Agent', channelId: 'c', contextMessageCount: 50, memorySharingEnabled: false, skillSharingEnabled: false }])).rejects.toBeInstanceOf(ChatRoomProvisionError); expect(postCount).toBe(1); Object.defineProperty(globalThis, 'window', { configurable: true, value: original }) })
+  test('每个 Agent provision 成功后立即报告进度', async () => {
+    const original = globalThis.window
+    let releaseSecond!: () => void
+    const secondReady = new Promise<void>((resolve) => { releaseSecond = resolve })
+    const progress: Array<{ completed: number; total: number; agentName: string }> = []
+    Object.defineProperty(globalThis, 'window', { configurable: true, value: { electronAPI: { chatrooms: { provisionAgent: async (input: { displayName: string }) => { if (input.displayName === '第二 Agent') await secondReady; return {} } } } } })
+    const api = createChatRoomApi({ baseUrl: 'http://test', fetchImpl: async () => response({ roomId: 'r1', name: 'R' }) })
+    const creation = api.createRoom({ name: 'R', shareCode: 'AB12' }, [
+      { sourceWorkspaceId: 'one', displayName: '第一 Agent', channelId: 'c', contextMessageCount: 50, memorySharingEnabled: false, skillSharingEnabled: false },
+      { sourceWorkspaceId: 'two', displayName: '第二 Agent', channelId: 'c', contextMessageCount: 50, memorySharingEnabled: false, skillSharingEnabled: false },
+      { sourceWorkspaceId: 'three', displayName: '第三 Agent', channelId: 'c', contextMessageCount: 50, memorySharingEnabled: false, skillSharingEnabled: false },
+    ], { onProvisionProgress: (value) => progress.push(value) })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(progress).toEqual([{ completed: 1, total: 3, agentName: '第一 Agent' }])
+    releaseSecond()
+    await creation
+    expect(progress.map(({ completed, total }) => `${completed}/${total}`)).toEqual(['1/3', '2/3', '3/3'])
+    Object.defineProperty(globalThis, 'window', { configurable: true, value: original })
+  })
+
+  test('provision 部分失败报告已成功数量且创建请求只发送一次', async () => {
+    let postCount = 0
+    const original = globalThis.window
+    const progress: Array<{ completed: number; total: number; agentName: string }> = []
+    Object.defineProperty(globalThis, 'window', { configurable: true, value: { electronAPI: { chatrooms: { provisionAgent: async (input: { displayName: string }) => { if (input.displayName === '失败 Agent') throw new Error('配置不可用'); return {} } } } } })
+    const api = createChatRoomApi({ baseUrl: 'http://test', fetchImpl: async () => { postCount++; return response({ roomId: 'r1', name: 'R' }) } })
+    const error = await api.createRoom({ name: 'R', shareCode: 'AB12' }, [
+      { sourceWorkspaceId: 'one', displayName: '正常 Agent', channelId: 'c', contextMessageCount: 50, memorySharingEnabled: false, skillSharingEnabled: false },
+      { sourceWorkspaceId: 'bad', displayName: '失败 Agent', channelId: 'c', contextMessageCount: 50, memorySharingEnabled: false, skillSharingEnabled: false },
+      { sourceWorkspaceId: 'three', displayName: '未执行 Agent', channelId: 'c', contextMessageCount: 50, memorySharingEnabled: false, skillSharingEnabled: false },
+    ], { onProvisionProgress: (value) => progress.push(value) }).catch((value) => value as ChatRoomProvisionError)
+    expect(error).toBeInstanceOf(ChatRoomProvisionError)
+    expect((error as ChatRoomProvisionError).succeededCount).toBe(1)
+    expect((error as ChatRoomProvisionError).totalCount).toBe(3)
+    expect(progress).toEqual([{ completed: 1, total: 3, agentName: '正常 Agent' }])
+    expect(postCount).toBe(1)
+    Object.defineProperty(globalThis, 'window', { configurable: true, value: original })
+  })
   test('主理人控制使用 Rust gateway 的真实路由', async () => {
     const calls: Array<{ url: string; method: string }> = []
     const api = createChatRoomApi({ baseUrl: 'http://test', fetchImpl: async (url, init) => { calls.push({ url: String(url), method: init?.method ?? 'GET' }); return response({}) } })
