@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, mock, test } from 'bun:test'
-import { mkdtempSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, truncateSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -26,10 +26,11 @@ function makeRoot(): string {
 }
 
 function grant(action: 'upload' | 'download' = 'upload'): CosSdkGrant {
+  const now = Math.floor(Date.now() / 1000)
   return {
     attachmentId: 'att-1', bucket: 'bucket-1', region: 'ap-shanghai', objectKey: 'rooms/r1/att-1/a.txt',
     tmpSecretId: 'secret-id', tmpSecretKey: 'secret-key', sessionToken: 'session-token',
-    startTime: 1, expiredTime: 999_999_999, action,
+    startTime: now - 1, expiredTime: now + 900, action,
   }
 }
 
@@ -62,6 +63,11 @@ function baseOptions(overrides: Partial<ChatRoomCosServiceOptions> = {}): ChatRo
 }
 
 describe('ChatRoomCosService', () => {
+  test('Electron builder 保留 Main COS SDK runtime 依赖', () => {
+    const builder = readFileSync(join(import.meta.dir, '../../../electron-builder.yml'), 'utf8')
+    expect(builder).not.toContain('!node_modules/cos-nodejs-sdk-v5/**')
+  })
+
   test('Main 选择文件后读取 metadata/SHA256，只请求一次上传授权并 finalize', async () => {
     const root = makeRoot()
     const filePath = join(root, 'a.txt')
@@ -92,9 +98,56 @@ describe('ChatRoomCosService', () => {
     expect(uploadInput).toEqual({ roomId: 'room-1', originalName: 'a.txt', mimeType: 'text/plain', sizeBytes: 5, sha256: '2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824' })
     expect(finalized).toEqual({ roomId: 'room-1', attachmentId: 'att-1', sizeBytes: 5, sha256: '2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824', etag: 'etag-1' })
     expect(sdkParams?.Key).toBe('rooms/r1/att-1/a.txt')
+    expect(sdkParams?.['x-cos-meta-sha256']).toBe('2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824')
     expect(result).toEqual({ transferId: 'transfer-1', attachmentId: 'att-1', originalName: 'a.txt', phase: 'ready' })
     expect(JSON.stringify(result)).not.toContain('secret-key')
     expect(JSON.stringify(result)).not.toContain(filePath)
+  })
+
+  test('上传使用受控临时快照，hash 与 SDK 读取同一内容并在结束后清理', async () => {
+    const root = makeRoot()
+    const filePath = join(root, 'snapshot.txt')
+    writeFileSync(filePath, 'before-mutation')
+    let sdkPath = ''
+    let sdkContent = ''
+    const service = createChatRoomCosService(baseOptions({
+      sdkFactory: () => {
+        writeFileSync(filePath, 'after-mutation')
+        return {
+          sliceUploadFile: async (params) => {
+            sdkPath = params.FilePath
+            sdkContent = require('node:fs').readFileSync(params.FilePath, 'utf8')
+            return { ETag: 'etag-snapshot' }
+          },
+          abortUploadTask: async () => ({}), cancelTask: () => {}, downloadFile: async () => ({ ETag: 'etag' }),
+        }
+      },
+    }))
+    const result = await service.upload({ transferId: 'snapshot-transfer', roomId: 'r-1', filePath })
+    expect(result.phase).toBe('ready')
+    expect(sdkContent).toBe('before-mutation')
+    expect(sdkPath).not.toBe(filePath)
+    expect(existsSync(sdkPath)).toBe(false)
+  })
+
+  test('拒绝空文件、超过 Rust 256MiB 上限和无效 grant 时间窗口', async () => {
+    const root = makeRoot()
+    const emptyPath = join(root, 'empty.txt')
+    const oversizedPath = join(root, 'oversized.bin')
+    writeFileSync(emptyPath, '')
+    writeFileSync(oversizedPath, '')
+    truncateSync(oversizedPath, 256 * 1024 * 1024 + 1)
+    const service = createChatRoomCosService(baseOptions({
+      grantClient: {
+        requestUploadGrant: async () => ({ ...grant(), expiredTime: Math.floor(Date.now() / 1000) - 1 }),
+        requestDownloadGrant: async () => grant('download'), finalizeUpload: async () => {},
+      },
+    }))
+    expect((await service.upload({ transferId: 'empty', roomId: 'r-1', filePath: emptyPath })).errorCode).toBe('cos_transfer_failed')
+    expect((await service.upload({ transferId: 'oversized', roomId: 'r-1', filePath: oversizedPath })).errorCode).toBe('cos_transfer_failed')
+    const validPath = join(root, 'valid.txt')
+    writeFileSync(validPath, 'valid')
+    expect((await service.upload({ transferId: 'expired', roomId: 'r-1', filePath: validPath })).errorCode).toBe('cos_transfer_failed')
   })
 
   test('分片上传把 SDK progress 映射为脱敏 transfer state', async () => {
@@ -135,7 +188,7 @@ describe('ChatRoomCosService', () => {
     await taskReadyBarrier
     await service.cancel('t-cancel')
     const result = await running
-    expect(aborted).toEqual({ UploadId: 'task-cancel', Level: 'task' })
+    expect(aborted).toEqual({ UploadId: 'task-cancel', Bucket: 'bucket-1', Region: 'ap-shanghai', Key: 'rooms/r1/att-1/a.txt', Level: 'task' })
     expect(finalizeCount).toBe(0)
     expect(result.phase).toBe('cancelled')
   })

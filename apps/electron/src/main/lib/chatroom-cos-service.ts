@@ -1,11 +1,16 @@
 import COS from 'cos-nodejs-sdk-v5'
 import { createHash } from 'node:crypto'
-import { createReadStream, lstatSync, mkdirSync, statSync } from 'node:fs'
-import { basename, dirname, extname, isAbsolute } from 'node:path'
+import { constants, closeSync, createReadStream, createWriteStream, fstatSync, fsyncSync, lstatSync, mkdirSync, mkdtempSync, openSync, rmSync, statSync } from 'node:fs'
+import { basename, dirname, extname, isAbsolute, join } from 'node:path'
+import { tmpdir } from 'node:os'
+import { Transform } from 'node:stream'
+import { pipeline } from 'node:stream/promises'
 import { HTTP_API_HOST, HTTP_API_PORT, getHttpApiInternalToken } from './http-api-server'
 import type { ChatRoomAttachmentPhase, ChatRoomTransferResult, ChatRoomTransferState } from '@copis/shared'
 
-const MAX_FILE_BYTES = 512 * 1024 * 1024
+const MAX_FILE_BYTES = 256 * 1024 * 1024
+const MAX_GRANT_TTL_SECONDS = 60 * 60
+const GRANT_CLOCK_SKEW_SECONDS = 60
 const SENSITIVE_TEXT = /(?:secret|token|authorization|object.?key|local.?path|absolute.?path)/i
 
 export interface ChatRoomUploadJob {
@@ -44,7 +49,7 @@ export interface ChatRoomCosGrantClient {
 
 export interface ChatRoomCosSdk {
   sliceUploadFile(params: ChatRoomCosUploadParams): Promise<{ ETag?: string }>
-  abortUploadTask(params: { UploadId: string; Level: 'task' }): Promise<unknown>
+  abortUploadTask(params: { UploadId: string; Bucket: string; Region: string; Key: string; Level: 'task' }): Promise<unknown>
   cancelTask(taskId: string): void
   downloadFile(params: ChatRoomCosDownloadParams): Promise<{ ETag?: string }>
 }
@@ -55,6 +60,7 @@ export interface ChatRoomCosUploadParams {
   Key: string
   FilePath: string
   ContentType?: string
+  'x-cos-meta-sha256': string
   onTaskReady?: (taskId: string) => void
   onProgress?: (progress: { loaded: number; total: number; speed: number; percent: number }) => void
 }
@@ -102,6 +108,9 @@ interface ActiveTransfer {
   originalName?: string
   sdk?: ChatRoomCosSdk
   kind: 'upload' | 'download'
+  bucket?: string
+  region?: string
+  objectKey?: string
 }
 
 function stableErrorCode(error: unknown): string {
@@ -128,26 +137,75 @@ function assertSafeIdentifier(value: string, label: string): void {
   if (!value || value.length > 128 || /[\u0000-\u001f\u007f]/.test(value)) throw new Error(`${label}_invalid`)
 }
 
-function assertUploadFile(filePath: string): { sizeBytes: number; originalName: string } {
+interface UploadSnapshot {
+  filePath: string
+  sizeBytes: number
+  originalName: string
+  sha256: string
+  cleanup(): void
+}
+
+function sameFileIdentity(left: ReturnType<typeof fstatSync>, right: ReturnType<typeof fstatSync>): boolean {
+  return left.dev === right.dev
+    && left.ino === right.ino
+    && left.size === right.size
+    && left.mtimeMs === right.mtimeMs
+}
+
+async function createUploadSnapshot(filePath: string): Promise<UploadSnapshot> {
   if (!isAbsolute(filePath) || /[\u0000\u0001-\u001f\u007f]/.test(filePath)) throw new Error('file_path_invalid')
   const linkStats = lstatSync(filePath)
   if (!linkStats.isFile()) throw new Error('file_not_regular')
-  const stats = statSync(filePath)
-  if (stats.size > MAX_FILE_BYTES) throw new Error('file_too_large')
-  const originalName = basename(filePath)
-  if (!originalName || originalName === '.' || originalName === '..') throw new Error('file_name_invalid')
-  return { sizeBytes: stats.size, originalName }
-}
-
-async function sha256File(filePath: string): Promise<string> {
-  const hash = createHash('sha256')
-  await new Promise<void>((resolve, reject) => {
-    const stream = createReadStream(filePath)
-    stream.on('data', (chunk: string | Buffer) => hash.update(chunk))
-    stream.once('error', reject)
-    stream.once('end', resolve)
-  })
-  return hash.digest('hex')
+  let sourceFd: number | undefined
+  let tempFd: number | undefined
+  let tempDir: string | undefined
+  try {
+    sourceFd = openSync(filePath, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0))
+    const initial = fstatSync(sourceFd)
+    if (!initial.isFile()) throw new Error('file_not_regular')
+    if (initial.size <= 0) throw new Error('file_empty')
+    if (initial.size > MAX_FILE_BYTES) throw new Error('file_too_large')
+    tempDir = mkdtempSync(join(tmpdir(), '.copis-chatroom-upload-'))
+    const snapshotPath = join(tempDir, 'snapshot')
+    tempFd = openSync(snapshotPath, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY, 0o600)
+    const hash = createHash('sha256')
+    const digestTransform = new Transform({
+      transform(chunk: Buffer, _encoding, callback) {
+        hash.update(chunk)
+        callback(null, chunk)
+      },
+    })
+    await pipeline(
+      createReadStream(filePath, { fd: sourceFd, autoClose: false }),
+      digestTransform,
+      createWriteStream(snapshotPath, { fd: tempFd, autoClose: false }),
+    )
+    fsyncSync(tempFd)
+    const finalSource = fstatSync(sourceFd)
+    if (!sameFileIdentity(initial, finalSource)) throw new Error('file_changed')
+    const snapshotStats = statSync(snapshotPath)
+    if (snapshotStats.size !== initial.size) throw new Error('file_snapshot_invalid')
+    const originalName = basename(filePath)
+    if (!originalName || originalName === '.' || originalName === '..') throw new Error('file_name_invalid')
+    if (!tempDir) throw new Error('file_snapshot_invalid')
+    const cleanupDir = tempDir
+    closeSync(tempFd)
+    tempFd = undefined
+    closeSync(sourceFd)
+    sourceFd = undefined
+    return {
+      filePath: snapshotPath,
+      sizeBytes: initial.size,
+      originalName,
+      sha256: hash.digest('hex'),
+      cleanup: () => rmSync(cleanupDir, { recursive: true, force: true }),
+    }
+  } catch (error) {
+    if (tempFd !== undefined) { try { closeSync(tempFd) } catch {} }
+    if (sourceFd !== undefined) { try { closeSync(sourceFd) } catch {} }
+    if (tempDir) rmSync(tempDir, { recursive: true, force: true })
+    throw error
+  }
 }
 
 function clampProgress(value: unknown): number {
@@ -175,7 +233,13 @@ function validateGrant(raw: unknown, action: CosSdkGrant['action']): CosSdkGrant
     if (typeof value[key] !== 'string' || !value[key] || /[\u0000-\u001f\u007f]/.test(value[key] as string)) throw new Error('cos_grant_invalid')
   }
   if (value.action !== action || typeof value.startTime !== 'number' || typeof value.expiredTime !== 'number') throw new Error('cos_grant_invalid')
-  if (!Number.isSafeInteger(value.startTime) || !Number.isSafeInteger(value.expiredTime) || value.expiredTime <= value.startTime) throw new Error('cos_grant_invalid')
+  const now = Math.floor(Date.now() / 1000)
+  if (!Number.isSafeInteger(value.startTime) || !Number.isSafeInteger(value.expiredTime)
+    || value.expiredTime <= value.startTime
+    || value.startTime > now + GRANT_CLOCK_SKEW_SECONDS
+    || value.startTime < now - GRANT_CLOCK_SKEW_SECONDS
+    || value.expiredTime <= now
+    || value.expiredTime - value.startTime > MAX_GRANT_TTL_SECONDS) throw new Error('cos_grant_invalid')
   return {
     attachmentId: value.attachmentId as string, bucket: value.bucket as string, region: value.region as string,
     objectKey: value.objectKey as string, tmpSecretId: value.tmpSecretId as string,
@@ -228,6 +292,20 @@ export function createChatRoomCosService(options: ChatRoomCosServiceOptions): Ch
     }
   }
 
+  async function cancelUploadTask(transfer: ActiveTransfer, taskId: string): Promise<void> {
+    transfer.sdk?.cancelTask(taskId)
+    if (!transfer.sdk || !transfer.bucket || !transfer.region || !transfer.objectKey) return
+    try {
+      // SDK 的 abortUploadTask 需要完整对象定位；本地 task id 是 SDK 暴露的唯一可用任务标识。
+      await transfer.sdk.abortUploadTask({
+        UploadId: taskId, Bucket: transfer.bucket, Region: transfer.region, Key: transfer.objectKey, Level: 'task',
+      })
+    } catch {
+      // 本地任务已取消；远端清理失败不把敏感 SDK 错误暴露给 Renderer。
+      safeLogger(logger, 'transfer_abort_failed')
+    }
+  }
+
   const fail = (transferId: string, input: ActiveTransfer, error: unknown): ChatRoomTransferResult => {
     const code = stableErrorCode(error)
     safeLogger(logger, code)
@@ -246,23 +324,27 @@ export function createChatRoomCosService(options: ChatRoomCosServiceOptions): Ch
     const transfer: ActiveTransfer = { cancelled: false, roomId: input.roomId, kind: 'upload' }
     active.set(input.transferId, transfer)
     let authorized: CosSdkGrant | undefined
+    let snapshot: UploadSnapshot | undefined
     try {
-      const metadata = assertUploadFile(input.filePath)
-      transfer.originalName = metadata.originalName
-      const sha256 = await (options.fileHasher ?? sha256File)(input.filePath)
+      snapshot = await createUploadSnapshot(input.filePath)
+      transfer.originalName = snapshot.originalName
+      const sha256 = await (options.fileHasher ?? (async () => snapshot!.sha256))(snapshot.filePath)
       if (transfer.cancelled) throw new Error('transfer_cancelled')
       emit(progressState(transfer, input.transferId, 'waiting_authorization', 0))
-      authorized = validateGrant(await grantClient.requestUploadGrant({ roomId: input.roomId, originalName: metadata.originalName, mimeType: mimeTypeFor(metadata.originalName), sizeBytes: metadata.sizeBytes, sha256 }), 'upload')
+      authorized = validateGrant(await grantClient.requestUploadGrant({ roomId: input.roomId, originalName: snapshot.originalName, mimeType: mimeTypeFor(snapshot.originalName), sizeBytes: snapshot.sizeBytes, sha256 }), 'upload')
       transfer.attachmentId = authorized.attachmentId
+      transfer.bucket = authorized.bucket
+      transfer.region = authorized.region
+      transfer.objectKey = authorized.objectKey
       if (transfer.cancelled) throw new Error('transfer_cancelled')
       emit(progressState(transfer, input.transferId, 'uploading', 0))
       transfer.sdk = sdkFactory({ SecretId: authorized.tmpSecretId, SecretKey: authorized.tmpSecretKey, SecurityToken: authorized.sessionToken })
       const uploadResult = await transfer.sdk.sliceUploadFile({
-        Bucket: authorized.bucket, Region: authorized.region, Key: authorized.objectKey, FilePath: input.filePath,
-        ContentType: mimeTypeFor(metadata.originalName),
+        Bucket: authorized.bucket, Region: authorized.region, Key: authorized.objectKey, FilePath: snapshot.filePath,
+        ContentType: mimeTypeFor(snapshot.originalName), 'x-cos-meta-sha256': sha256,
         onTaskReady: (taskId) => {
           transfer.taskId = taskId
-          if (transfer.cancelled && transfer.sdk) void transfer.sdk.abortUploadTask({ UploadId: taskId, Level: 'task' }).catch(() => {})
+          if (transfer.cancelled) void cancelUploadTask(transfer, taskId)
         },
         onProgress: (value) => emit(progressState(transfer, input.transferId, 'uploading', clampProgress(value.percent))),
       })
@@ -270,16 +352,20 @@ export function createChatRoomCosService(options: ChatRoomCosServiceOptions): Ch
       const etag = typeof uploadResult?.ETag === 'string' && uploadResult.ETag ? uploadResult.ETag : undefined
       if (!etag) throw new Error('cos_upload_missing_etag')
       emit(progressState(transfer, input.transferId, 'validating', 1))
-      await grantClient.finalizeUpload({ roomId: input.roomId, attachmentId: authorized.attachmentId, sizeBytes: metadata.sizeBytes, sha256, etag })
+      await grantClient.finalizeUpload({ roomId: input.roomId, attachmentId: authorized.attachmentId, sizeBytes: snapshot.sizeBytes, sha256, etag })
       emit(progressState(transfer, input.transferId, 'ready', 1))
-      return { transferId: input.transferId, attachmentId: authorized.attachmentId, originalName: metadata.originalName, phase: 'ready' }
+      return { transferId: input.transferId, attachmentId: authorized.attachmentId, originalName: snapshot.originalName, phase: 'ready' }
     } catch (error) {
       return fail(input.transferId, transfer, error)
     } finally {
       active.delete(input.transferId)
       transfer.sdk = undefined
       transfer.taskId = undefined
+      transfer.bucket = undefined
+      transfer.region = undefined
+      transfer.objectKey = undefined
       clearGrant(authorized)
+      try { snapshot?.cleanup() } catch { safeLogger(logger, 'transfer_cleanup_failed') }
     }
   }
 
@@ -303,6 +389,9 @@ export function createChatRoomCosService(options: ChatRoomCosServiceOptions): Ch
       authorized = validateGrant(await grantClient.requestDownloadGrant({ roomId: input.roomId, attachmentId: input.attachmentId }), 'download')
       if (authorized.attachmentId !== input.attachmentId) throw new Error('cos_grant_invalid')
       transfer.attachmentId = authorized.attachmentId
+      transfer.bucket = authorized.bucket
+      transfer.region = authorized.region
+      transfer.objectKey = authorized.objectKey
       let destinationPath: string | undefined
       if (input.target === 'agent_inbox') {
         if (!options.resolveAgentInboxPath) throw new Error('agent_inbox_unavailable')
@@ -338,6 +427,9 @@ export function createChatRoomCosService(options: ChatRoomCosServiceOptions): Ch
       active.delete(input.transferId)
       transfer.sdk = undefined
       transfer.taskId = undefined
+      transfer.bucket = undefined
+      transfer.region = undefined
+      transfer.objectKey = undefined
       clearGrant(authorized)
     }
   }
@@ -352,7 +444,7 @@ export function createChatRoomCosService(options: ChatRoomCosServiceOptions): Ch
       transfer.cancelled = true
       if (transfer.sdk && transfer.taskId) {
         if (transfer.kind === 'upload') {
-          await transfer.sdk.abortUploadTask({ UploadId: transfer.taskId, Level: 'task' })
+          await cancelUploadTask(transfer, transfer.taskId)
         } else {
           transfer.sdk.cancelTask(transfer.taskId)
         }
