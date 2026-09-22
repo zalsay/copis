@@ -23,4 +23,12 @@ describe('chatRoomSse', () => {
     const api = new ChatRoomSseClient({ baseUrl: 'http://test', fetchImpl: async (url) => { if (String(url).includes('roomIds=')) { streamCalls += 1; return stream() } const after = Number(new URL(String(url)).searchParams.get('afterSeq')); return response({ data: Array.from({ length: 500 }, (_, index) => ({ eventType: 'message.created', roomId: 'r1', seq: after + index + 1, payload: {} })) }) } })
     api.onStatus((status) => statuses.push(status)); api.setRooms(['r1']); await new Promise((resolve) => setTimeout(resolve, 500)); api.close(); expect(statuses).toContain('reconnecting'); expect(streamCalls).toBeGreaterThanOrEqual(2)
   })
+  test('实时缺口恢复失败时中止旧连接并重连，且不提前释放缺口事件', async () => {
+    let streamCalls = 0
+    const statuses: string[] = []
+    const received: number[] = []
+    const stream = (seq: number) => new Response(new ReadableStream({ start(controller) { controller.enqueue(new TextEncoder().encode(`data: {"type":"message.created","roomId":"r1","seq":${seq},"payload":{}}\n\n`)); controller.close() } }), { headers: { 'Content-Type': 'text/event-stream' } })
+    const api = new ChatRoomSseClient({ baseUrl: 'http://test', fetchImpl: async (url) => { if (String(url).includes('roomIds=')) { streamCalls += 1; return stream(streamCalls === 1 ? 1 : 3) } return response({ error: 'temporary failure' }, 500) } })
+    api.onStatus((status) => statuses.push(status)); api.onEvent((event) => { if (event.seq) received.push(event.seq) }); api.setRooms(['r1']); await new Promise((resolve) => setTimeout(resolve, 420)); api.close(); expect(statuses).toContain('reconnecting'); expect(streamCalls).toBeGreaterThanOrEqual(2); expect(received).toEqual([1])
+  })
 })
