@@ -112,6 +112,7 @@ interface WorkingApiFacade {
   sendVerificationCode(input: WorkingSendVerificationCodeInput): ReturnType<WorkingApiClient['sendVerificationCode']>
   verifyPasswordResetCode(input: WorkingVerifyPasswordResetCodeInput): ReturnType<WorkingApiClient['verifyPasswordResetCode']>
   resetPassword(input: WorkingPasswordResetInput): ReturnType<WorkingApiClient['resetPassword']>
+  clearAuth(): void
   logout(): void
   getCurrentUser(): ReturnType<WorkingApiClient['getCurrentUser']>
   listWorkspaces(): ReturnType<WorkingApiClient['listWorkspaces']>
@@ -1511,6 +1512,9 @@ export async function handleHttpApiRequest(
       if (segments[3] === 'clear' && request.method === 'POST') {
         console.info('[HTTP API][认证存储] clear 收到请求')
         try {
+          // Rust 认证状态先释放聊天室运行时，再清理 Electron 的本地身份缓存，避免旧身份继续命中 Agent 工作区。
+          await dependencies.stopChatRoomAgents?.('logout')
+          dependencies.getWorkingClient().clearAuth()
           clearWorkingAuthFromRust()
         } catch (error) {
           console.error('[HTTP API][认证存储] clear 失败', redactSensitiveLogValue(error))
@@ -1529,16 +1533,24 @@ export async function handleHttpApiRequest(
       if ('accessToken' in body || 'refreshToken' in body || 'token' in body) {
         throw new HttpApiRequestError('认证状态通知不得包含凭据', 400, 'credential_leak')
       }
-      const user = body.user === null || body.user === undefined
+      const reportedUser = body.user === null || body.user === undefined
         ? null
         : isRecord(body.user) ? body.user as WorkingAuthState['user'] : null
+      // 失效通知中的 user 只属于过渡消息，不能继续让渲染进程把它当作已认证身份。
+      const user = body.authenticated ? reportedUser : null
       const expiresAt = typeof body.expiresAt === 'number' && Number.isFinite(body.expiresAt)
         ? body.expiresAt
         : null
+      const client = dependencies.getWorkingClient()
+      if (!body.authenticated) {
+        // 认证失效必须先停止聊天室 Agent，再清理 cachedUser/tokenStore，防止配置 ABA 写入旧 inbox。
+        await dependencies.stopChatRoomAgents?.('logout')
+        client.clearAuth()
+      }
       dependencies.notifyWorkingAuthUpdated?.({
         authenticated: body.authenticated,
         user,
-        backendUrl: dependencies.getWorkingClient().baseUrl,
+        backendUrl: client.baseUrl,
         expiresAt,
       })
       if (body.authenticated) await dependencies.resumeChatRoomAgentsAfterAuthentication?.()

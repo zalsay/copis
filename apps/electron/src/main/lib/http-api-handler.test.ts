@@ -81,6 +81,59 @@ test('Given Rust HTTP login reports authenticated When auth state changes Then c
   expect(resume).toHaveBeenCalledTimes(1)
 })
 
+test('Given authenticated state notification carries a user When bridge handles it Then it does not synthesize or clear local cached identity', async () => {
+  const clearAuth = mock(() => undefined)
+  const client = { baseUrl: 'https://backend.example.test', clearAuth, getCachedUser: () => null }
+  const response = await handleHttpApiRequest({
+    method: 'POST',
+    path: '/api/internal/auth-state/changed',
+    body: JSON.stringify({ authenticated: true, user: { id: 'rust-user' } }),
+  }, createDependencies({ getWorkingClient: () => client as never }))
+
+  expect(response).toEqual({ status: 204 })
+  expect(clearAuth).not.toHaveBeenCalled()
+})
+
+test('Given Rust reports unauthenticated When auth state changes Then chatrooms stop before Working cached user is cleared', async () => {
+  let cachedUser: { id: string } | null = { id: 'stale-user' }
+  const order: string[] = []
+  const client = {
+    baseUrl: 'https://backend.example.test',
+    getCachedUser: () => cachedUser,
+    clearAuth: () => { order.push('clearAuth'); cachedUser = null },
+  }
+  const response = await handleHttpApiRequest({
+    method: 'POST',
+    path: '/api/internal/auth-state/changed',
+    body: JSON.stringify({ authenticated: false }),
+  }, createDependencies({
+    getWorkingClient: () => client as never,
+    stopChatRoomAgents: async () => { order.push('stopChatRoomAgents'); expect(cachedUser).not.toBeNull() },
+  }))
+
+  expect(response).toEqual({ status: 204 })
+  expect(order).toEqual(['stopChatRoomAgents', 'clearAuth'])
+  expect(cachedUser).toBeNull()
+})
+
+test('Given Rust clears auth storage When clear bridge runs Then runtime is stopped before local identity cleanup', async () => {
+  const order: string[] = []
+  const client = {
+    baseUrl: 'https://backend.example.test',
+    clearAuth: () => { order.push('clearAuth') },
+  }
+  const response = await handleHttpApiRequest({
+    method: 'POST',
+    path: '/api/internal/auth-storage/clear',
+  }, createDependencies({
+    getWorkingClient: () => client as never,
+    stopChatRoomAgents: async () => { order.push('stopChatRoomAgents') },
+  }))
+
+  expect(response).toEqual({ status: 204 })
+  expect(order).toEqual(['stopChatRoomAgents', 'clearAuth'])
+})
+
 describe('聊天室 Rust bridge HTTP handler', () => {
   test('Given 合法 invocation When Rust bridge 投递 Then coordinator 接收且返回 accepted 202', async () => {
     const handleChatRoomInvocation = mock(async () => 'accepted' as const)
