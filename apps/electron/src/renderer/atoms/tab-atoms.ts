@@ -31,7 +31,7 @@ export const TUTORIAL_TAB_ID = '__tutorial__'
 export const TUTORIAL_TAB_TITLE = 'Copis 使用教程'
 
 /** 标签页数据 */
-export interface TabItem {
+export interface SessionTabItem {
   /** 唯一标签 ID（直接使用 sessionId） */
   id: string
   /** 标签页类型 */
@@ -40,10 +40,9 @@ export interface TabItem {
   sessionId: string
   /** 标签页显示标题 */
   title: string
-  /** 聊天室 Tab 的 roomId；聊天室不创建 sessionId。 */
-  roomId?: string
 }
-export interface ChatRoomTabItem { id: string; type: 'chatroom'; roomId: string; title: string; sessionId?: never }
+export interface ChatRoomTabItem { id: string; type: 'chatroom'; roomId: string; title: string }
+export type TabItem = SessionTabItem | ChatRoomTabItem
 
 /** Tab 持久化数据（保存到 settings.json） */
 export interface PersistedTabState {
@@ -126,7 +125,7 @@ export const activeTabAtom = atom<TabItem | null>((get) => {
  */
 export const activeSessionIdAtom = atom<string | null>((get) => {
   const activeTab = get(activeTabAtom)
-  return (activeTab as unknown as { type: string } | null)?.type === 'chatroom' ? null : activeTab?.sessionId ?? null
+  return activeTab?.type === 'chatroom' ? null : activeTab?.sessionId ?? null
 })
 
 /** 标签是否在流式输出中（派生，从现有流式 atoms 计算） */
@@ -184,19 +183,19 @@ export function getPreviewTabTitle(filePath: string): string {
   return `预览：${getFileBaseName(filePath)}`
 }
 
-export function isPreviewTab(tab: TabItem): boolean {
+export function isPreviewTab(tab: TabItem): tab is SessionTabItem & { type: 'preview' } {
   return tab.type === 'preview' || tab.id.startsWith(PREVIEW_TAB_PREFIX)
 }
 
-function isSessionTab(tab: TabItem): tab is TabItem & { sessionId: string } {
-  return tab.type === 'agent' && typeof tab.sessionId === 'string'
+function isSessionTab(tab: TabItem): tab is SessionTabItem {
+  return tab.type === 'agent'
 }
 
 function getPersistentTabs(tabs: TabItem[]): TabItem[] {
-  return tabs.filter((tab) => tab.id !== LEGACY_SCRATCH_PAD_ID && tab.type !== 'tutorial' && (tab as unknown as { type: string }).type !== 'chatroom' && !isPreviewTab(tab))
+  return tabs.filter((tab) => tab.id !== LEGACY_SCRATCH_PAD_ID && tab.type !== 'tutorial' && tab.type !== 'chatroom' && !isPreviewTab(tab))
 }
 
-function isPersistedAgentTab(value: unknown): value is TabItem {
+function isPersistedAgentTab(value: unknown): value is SessionTabItem {
   if (typeof value !== 'object' || value === null) return false
   const candidate = value as Record<string, unknown>
   return candidate.type === 'agent'
@@ -221,7 +220,7 @@ export function getPersistableTabState(
   const persistentTabs = getPersistentTabs(tabs)
   const activeTab = activeTabId ? tabs.find((tab) => tab.id === activeTabId) : null
   const persistentActiveTabId = activeTab && isPreviewTab(activeTab)
-    ? persistentTabs.find((tab) => tab.sessionId === activeTab.sessionId && tab.type === 'agent')?.id
+    ? persistentTabs.find((tab) => tab.type !== 'chatroom' && tab.sessionId === activeTab.sessionId && tab.type === 'agent')?.id
       ?? persistentTabs.at(-1)?.id
       ?? null
     : activeTab && persistentTabs.some((tab) => tab.id === activeTab.id)
@@ -271,7 +270,7 @@ export function openTab(
     }
   }
 
-  const existingTab = tabs.find((t) => t.sessionId === item.sessionId && t.type === item.type)
+  const existingTab = tabs.find((t): t is SessionTabItem => t.type !== 'chatroom' && t.sessionId === item.sessionId && t.type === item.type)
   const sessionTab: TabItem = existingTab ?? {
     id: item.sessionId,
     type: item.type,
@@ -305,11 +304,10 @@ export function openChatRoomTab(
   room: { roomId: string; name: string },
 ): { tabs: TabItem[]; activeTabId: string } {
   const id = `chatroom:${room.roomId}`
-  const existing = tabs.find((tab) => (tab as unknown as ChatRoomTabItem).type === 'chatroom' && (tab as unknown as ChatRoomTabItem).roomId === room.roomId) as ChatRoomTabItem | undefined
+  const existing = tabs.find((tab): tab is ChatRoomTabItem => tab.type === 'chatroom' && tab.roomId === room.roomId)
   if (existing) return { tabs, activeTabId: existing.id }
   return {
-    // 运行时故意不写入 sessionId；聊天室使用 roomId 作为唯一身份。
-    tabs: [...tabs, { id, type: 'chatroom', roomId: room.roomId, title: room.name } as unknown as TabItem],
+    tabs: [...tabs, { id, type: 'chatroom', roomId: room.roomId, title: room.name }],
     activeTabId: id,
   }
 }

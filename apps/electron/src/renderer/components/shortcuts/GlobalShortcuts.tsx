@@ -326,6 +326,8 @@ export function GlobalShortcuts(): null {
       const fallbackTarget = { type: 'agent' as const, sessionId: store.get(currentAgentSessionIdAtom) }
       const target = activeTab ?? fallbackTarget
 
+      if (target.type === 'chatroom') return
+
       if (!target.sessionId) return
 
       store.set(activeViewAtom, 'conversations')

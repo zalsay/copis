@@ -39,8 +39,7 @@ export function TabContent({ tabId }: TabContentProps): React.ReactElement {
     )
   }
 
-  const chatroomTab = tab as unknown as { type: string; roomId?: string }
-  if (chatroomTab.type === 'chatroom' && chatroomTab.roomId) return <ChatroomView roomId={chatroomTab.roomId} />
+  if (tab.type === 'chatroom') return <ChatroomView roomId={tab.roomId} />
 
   if (tab.type === 'preview') {
     return (
@@ -54,6 +53,7 @@ export function TabContent({ tabId }: TabContentProps): React.ReactElement {
     return <TutorialTabContent />
   }
 
+  if (tab.type !== 'agent') return <div className="flex h-full items-center justify-center text-sm text-muted-foreground">标签页不存在</div>
   return (
     <TabErrorBoundary key={tab.sessionId} sessionId={tab.sessionId}>
       <AgentView sessionId={tab.sessionId} />

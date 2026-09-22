@@ -55,7 +55,7 @@ describe('会话入口持久化', () => {
 
     const result = openTab(
       [{ id: 'old', type: 'agent', sessionId: 'old', title: '旧会话' }],
-      tutorialTab,
+      tutorialTab as Extract<TabItem, { type: 'tutorial' }>,
     )
 
     expect(result).toEqual({ tabs: [tutorialTab], activeTabId: tutorialTab.id })
