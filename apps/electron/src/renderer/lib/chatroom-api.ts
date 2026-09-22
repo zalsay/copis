@@ -66,6 +66,10 @@ export interface ChatRoomApi {
   markRead(roomId: string, seq: number): Promise<void>
   listAgents(roomId: string): Promise<ChatRoomAgent[]>
   listAttachments(roomId: string): Promise<ChatRoomAttachment[]>
+  archiveRoom(roomId: string): Promise<void>
+  restoreRoom(roomId: string): Promise<void>
+  deleteRoom(roomId: string): Promise<void>
+  removeMember(roomId: string, memberId: string): Promise<void>
 }
 
 export function createChatRoomApi(options: { fetchImpl?: FetchLike; baseUrl?: string } = {}): ChatRoomApi {
@@ -89,6 +93,10 @@ export function createChatRoomApi(options: { fetchImpl?: FetchLike; baseUrl?: st
     markRead: (roomId, seq) => request(`/api/chatrooms/v2/rooms/${encodeURIComponent(roomId)}/read`, { method: 'PATCH', body: json({ seq }) }, () => undefined),
     listAgents: (roomId) => request(`/api/chatrooms/v2/rooms/${encodeURIComponent(roomId)}/agents`, {}, (v) => array(record(v).agents ?? v).map(normalizeAgent)),
     listAttachments: (roomId) => request(`/api/chatrooms/v2/rooms/${encodeURIComponent(roomId)}/attachments`, {}, (v) => array(record(v).attachments ?? v).map(normalizeAttachment)),
+    archiveRoom: (roomId) => request(`/api/chatrooms/v2/rooms/${encodeURIComponent(roomId)}/archive`, { method: 'POST' }, () => undefined),
+    restoreRoom: (roomId) => request(`/api/chatrooms/v2/rooms/${encodeURIComponent(roomId)}/restore`, { method: 'POST' }, () => undefined),
+    deleteRoom: (roomId) => request(`/api/chatrooms/v2/rooms/${encodeURIComponent(roomId)}`, { method: 'DELETE' }, () => undefined),
+    removeMember: (roomId, memberId) => request(`/api/chatrooms/v2/rooms/${encodeURIComponent(roomId)}/members/${encodeURIComponent(memberId)}`, { method: 'DELETE' }, () => undefined),
   }
 }
 

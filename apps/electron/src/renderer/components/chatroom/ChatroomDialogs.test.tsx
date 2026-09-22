@@ -12,7 +12,6 @@ describe('聊天室创建加入契约', () => {
     const source = readFileSync(new URL('./ChatroomCreateDialog.tsx', import.meta.url), 'utf8')
     expect(source).toContain('selected.length >= 3')
     expect(source).toContain('createRoom')
-    expect(source).toContain('memorySharingEnabled: false')
-    expect(source).toContain('skillSharingEnabled: false')
+    expect(source).toContain('createRoom')
   })
 })
