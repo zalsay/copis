@@ -140,6 +140,25 @@ test('Given depth 为 3 或 Gateway 已断开 When 投递 Then 深度失败且�
   expect(reportFailed).toHaveBeenCalledTimes(1)
 })
 
+test('Given Gateway 断开 When 重复或并发通知 Then 终态收敛并只释放一次全部未归档 Agent lease', async () => {
+  const { deps } = fakeDeps()
+  const releaseAgentLeases = deps.rustApi.releaseAgentLeases as ReturnType<typeof mock>
+  const coordinator = new coordinatorModule.ChatRoomAgentCoordinator({
+    ...deps,
+    rustApi: { ...deps.rustApi, releaseAgentLeases },
+  })
+
+  await Promise.all([coordinator.handleGatewayDisconnected(), coordinator.handleGatewayDisconnected()])
+  await coordinator.handleGatewayDisconnected()
+
+  expect(releaseAgentLeases).toHaveBeenCalledTimes(1)
+  expect(releaseAgentLeases).toHaveBeenCalledWith(expect.objectContaining({
+    roomAgentIds: ['agent-a', 'agent-b', 'agent-c'],
+    reason: 'gateway_disconnected',
+  }))
+  await coordinator.handleInvocation(makeInput('gateway-recovered', 'agent-a'))
+})
+
 test('Given logout 已停止 When 旧 invocation 到达 Then 拒绝；认证成功恢复后新 invocation 才执行', async () => {
   const { deps, runAgentHeadless, reportFailed } = fakeDeps()
   const coordinator = new coordinatorModule.ChatRoomAgentCoordinator(deps)
@@ -273,10 +292,11 @@ test('Given completion claimed while reportCompleted is pending When gateway dis
   await coordinator.handleInvocation(makeInput('completion-race', 'agent-a'))
   for (let i = 0; i < 20 && !reportCompleted.mock.calls.length; i++) await Promise.resolve()
   expect(records.get('completion-race')?.status).toBe('running')
-  await coordinator.handleGatewayDisconnected()
+  const disconnect = coordinator.handleGatewayDisconnected()
   expect(records.get('completion-race')?.status).toBe('running')
   releaseCompleted()
   await new Promise((resolve) => setTimeout(resolve, 0))
+  await disconnect
   expect(records.get('completion-race')?.status).toBe('completed')
   expect(reportFailed).not.toHaveBeenCalled()
 })

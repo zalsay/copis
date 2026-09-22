@@ -163,10 +163,8 @@ export class ChatRoomAgentCoordinator implements ChatRoomAgentCoordinatorFacade 
     return 'accepted'
   }
   async handleGatewayDisconnected(): Promise<void> {
-    if (this.disposed || this.lifecycle === 'auth_required' || this.lifecycle === 'stopping') return
-    this.lifecycle = 'disconnected'
-    this.denyPendingPermissions()
-    await Promise.all([...this.activeRuns.values()].map(async (run) => { run.stopRequested = true; await this.failTerminal(run, 'gateway_disconnected'); void this.stopAgentBounded(run.config.sessionId) }))
+    if (this.disposed || this.lifecycle === 'auth_required' || this.lifecycle === 'disconnected') return
+    await this.stopAll('gateway_disconnected')
   }
   async requestWorkerPermission(input: { sessionId: string; requestId: string; toolName: string; toolInput: Record<string, unknown>; description?: string }): Promise<{ behavior: 'allow' | 'deny'; message?: string }> {
     const run = [...this.activeRuns.values()].find((candidate) => candidate.config.sessionId === input.sessionId)
