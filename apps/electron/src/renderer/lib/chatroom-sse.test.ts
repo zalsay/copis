@@ -31,4 +31,14 @@ describe('chatRoomSse', () => {
     const api = new ChatRoomSseClient({ baseUrl: 'http://test', fetchImpl: async (url) => { if (String(url).includes('roomIds=')) { streamCalls += 1; return stream(streamCalls === 1 ? 1 : 3) } return response({ error: 'temporary failure' }, 500) } })
     api.onStatus((status) => statuses.push(status)); api.onEvent((event) => { if (event.seq) received.push(event.seq) }); api.setRooms(['r1']); await new Promise((resolve) => setTimeout(resolve, 420)); api.close(); expect(statuses).toContain('reconnecting'); expect(streamCalls).toBeGreaterThanOrEqual(2); expect(received).toEqual([1])
   })
+  test('切换订阅房间时旧 generation 的恢复结果不会污染新连接', async () => {
+    const urls: string[] = []
+    const received: string[] = []
+    let releaseRecovery!: () => void
+    let recoveryCalls = 0
+    let streamCalls = 0
+    const stream = (roomId: string, seq: number) => new Response(new ReadableStream({ start(controller) { controller.enqueue(new TextEncoder().encode(`data: {"type":"message.created","roomId":"${roomId}","seq":${seq},"payload":{}}\n\n`)); controller.close() } }), { headers: { 'Content-Type': 'text/event-stream' } })
+    const api = new ChatRoomSseClient({ baseUrl: 'http://test', fetchImpl: async (url) => { const value = String(url); urls.push(value); if (value.includes('roomIds=')) { streamCalls += 1; return stream(value.includes('r2') ? 'r2' : 'r1', 1) } recoveryCalls += 1; if (recoveryCalls === 1) { await new Promise<void>((resolve) => { releaseRecovery = resolve }); return response({ data: [{ eventType: 'message.created', roomId: 'r1', seq: 2, payload: {} }] }) } return response({ data: [] }) } })
+    api.onEvent((event) => { if (event.roomId) received.push(event.roomId) }); api.setRooms(['r1']); await new Promise((resolve) => setTimeout(resolve, 300)); api.setRooms(['r2']); releaseRecovery(); await new Promise((resolve) => setTimeout(resolve, 10)); api.close(); expect(streamCalls).toBeGreaterThanOrEqual(2); expect(urls.some((url) => url.includes('roomIds=r2'))).toBe(true); expect(received).toEqual(['r1', 'r2'])
+  })
 })

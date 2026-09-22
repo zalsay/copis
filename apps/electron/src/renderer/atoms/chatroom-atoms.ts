@@ -24,6 +24,20 @@ export const chatRoomUnreadCountsAtom = atom<ChatRoomUnreadState>(new Map())
 export const chatRoomSendStatesAtom = atom<Map<string, ChatRoomSendState>>(new Map())
 
 export const chatRoomActiveRoomIdAtom = atom<string | undefined>(undefined)
+export const chatRoomResetStateAtom = atom(null, (_get, set) => {
+  set(chatRoomRoomsAtom, [])
+  set(chatRoomDetailsAtom, {})
+  set(chatRoomMessagesAtom, new Map())
+  set(chatRoomCursorsAtom, new Map())
+  set(chatRoomConnectionStatusAtom, new Map())
+  set(chatRoomInvocationsAtom, new Map())
+  set(chatRoomTransfersAtom, new Map())
+  set(chatRoomDraftsAtom, new Map())
+  set(chatRoomMentionAgentIdsAtom, new Map())
+  set(chatRoomUnreadCountsAtom, new Map())
+  set(chatRoomSendStatesAtom, new Map())
+  set(chatRoomActiveRoomIdAtom, undefined)
+})
 export const chatRoomApplyEventAtom = atom(null, (get, set, event: ChatRoomEventEnvelope) => {
   const roomId = event.roomId; if (!roomId) return
   const payload = (typeof event.payload === 'object' && event.payload !== null ? event.payload : {}) as Record<string, unknown>
