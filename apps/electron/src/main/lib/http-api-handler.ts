@@ -113,6 +113,7 @@ interface WorkingApiFacade {
   verifyPasswordResetCode(input: WorkingVerifyPasswordResetCodeInput): ReturnType<WorkingApiClient['verifyPasswordResetCode']>
   resetPassword(input: WorkingPasswordResetInput): ReturnType<WorkingApiClient['resetPassword']>
   clearAuth(): void
+  setAuthenticatedUserFromRust(value: unknown): boolean
   logout(): void
   getCurrentUser(): ReturnType<WorkingApiClient['getCurrentUser']>
   listWorkspaces(): ReturnType<WorkingApiClient['listWorkspaces']>
@@ -1493,6 +1494,24 @@ export async function handleHttpApiRequest(
       if (segments[3] === 'save' && request.method === 'POST') {
         const body = await readJsonBody(request)
         if (!isRecord(body)) throw new HttpApiRequestError('认证存储记录不正确', 400, 'invalid_auth_storage')
+        const client = dependencies.getWorkingClient()
+        const previousUser = client.getCachedUser()
+        const nextUser = isRecord(body.user) ? body.user : null
+        const identityChanged = previousUser !== null && (
+          nextUser === null || String(previousUser.id) !== String(nextUser.id ?? nextUser.userId ?? nextUser.user_id)
+        )
+        let runtimeStopped = false
+        const invalidatePreviousIdentity = async (): Promise<void> => {
+          if (runtimeStopped) return
+          try {
+            await dependencies.stopChatRoomAgents?.('logout')
+          } finally {
+            runtimeStopped = true
+            // stop/release 失败也必须清除旧身份，避免旧账号继续访问聊天室工作区。
+            client.clearAuth()
+          }
+        }
+        if (identityChanged) await invalidatePreviousIdentity()
         console.info('[HTTP API][认证存储] save 收到请求', {
           provider: body.provider ?? '-',
           hasAccessToken: typeof body.accessToken === 'string' && body.accessToken.length > 0,
@@ -1502,7 +1521,12 @@ export async function handleHttpApiRequest(
         })
         try {
           saveWorkingAuthFromRust(body as unknown as RustWorkingAuthRecord)
+          if (!client.setAuthenticatedUserFromRust(body.user)) {
+            await invalidatePreviousIdentity()
+            throw new HttpApiRequestError('认证存储记录缺少用户身份', 400, 'invalid_auth_storage')
+          }
         } catch (error) {
+          if (!runtimeStopped) await invalidatePreviousIdentity()
           console.error('[HTTP API][认证存储] save 失败', redactSensitiveLogValue(error))
           throw error
         }

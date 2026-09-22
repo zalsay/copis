@@ -134,6 +134,29 @@ test('Given Rust clears auth storage When clear bridge runs Then runtime is stop
   expect(order).toEqual(['stopChatRoomAgents', 'clearAuth'])
 })
 
+test('Given cached account A When Rust saves account B Then old runtime stops before facade adopts B', async () => {
+  const order: string[] = []
+  let currentUser: { id: string } | null = { id: 'A' }
+  const client = {
+    baseUrl: 'https://backend.example.test',
+    getCachedUser: () => currentUser,
+    clearAuth: () => { order.push('clearAuth'); currentUser = null },
+    setAuthenticatedUserFromRust: (user: unknown) => { order.push('setUser'); currentUser = user as { id: string }; return true },
+  }
+  const response = await handleHttpApiRequest({
+    method: 'POST',
+    path: '/api/internal/auth-storage/save',
+    body: JSON.stringify({ accessToken: 'token-b', provider: 'legacy', user: { id: 'B' } }),
+  }, createDependencies({
+    getWorkingClient: () => client as never,
+    stopChatRoomAgents: async () => { order.push('stopChatRoomAgents') },
+  }))
+
+  expect(response).toEqual({ status: 204 })
+  expect(order).toEqual(['stopChatRoomAgents', 'clearAuth', 'setUser'])
+  expect(currentUser).toEqual({ id: 'B' })
+})
+
 describe('聊天室 Rust bridge HTTP handler', () => {
   test('Given 合法 invocation When Rust bridge 投递 Then coordinator 接收且返回 accepted 202', async () => {
     const handleChatRoomInvocation = mock(async () => 'accepted' as const)

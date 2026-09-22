@@ -482,6 +482,13 @@ export class WorkingApiClient {
     this.tokenStore.clear()
   }
 
+  /** Rust auth-storage/save 成功后同步 facade 身份，避免沿用上一个账号的缓存。 */
+  setAuthenticatedUserFromRust(value: unknown): boolean {
+    const user = normalizeWorkingUser(value)
+    this.cachedUser = user
+    return user !== null
+  }
+
   async login(input: WorkingLoginInput): Promise<WorkingLoginResult> {
     const email = input.email.trim()
     if (!email || !input.password) throw new Error('请输入邮箱和密码')

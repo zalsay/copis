@@ -53,6 +53,17 @@ function createClient(fetchImpl: (input: string, init?: RequestInit) => Promise<
 }
 
 describe('Copis Rust Working facade', () => {
+  test('Given facade 缓存账号 A When Rust auth storage adopts B Then cached user immediately becomes B', () => {
+    const client = new WorkingApiClient({ tokenStore: createStore() })
+    client.setAuthenticatedUserFromRust({ id: 'A' })
+    expect(client.getCachedUser()).toEqual(expect.objectContaining({ id: 'A' }))
+
+    const accepted = client.setAuthenticatedUserFromRust({ id: 'B', email: 'b@example.com' })
+
+    expect(accepted).toBe(true)
+    expect(client.getCachedUser()).toEqual(expect.objectContaining({ id: 'B', email: 'b@example.com' }))
+  })
+
   test('登录只请求本机 Rust，并且不把 access token 写入 Electron facade', async () => {
     const calls: Array<{ url: string; init?: RequestInit }> = []
     const client = createClient(async (url, init) => {
