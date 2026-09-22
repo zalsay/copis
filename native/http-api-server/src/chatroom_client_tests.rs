@@ -14,7 +14,7 @@ use std::net::{SocketAddr, TcpListener};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tungstenite::handshake::server::{Request, Response};
 use tungstenite::Message;
 
@@ -1342,10 +1342,29 @@ fn given_websocket_connector_when_inspecting_timeouts_then_connect_and_io_are_bo
 #[test]
 fn given_loopback_chatroom_server_when_tungstenite_connector_connects_then_wire_contract_is_real() {
     let listener = TcpListener::bind(("127.0.0.1", 0)).expect("绑定 loopback WebSocket listener");
+    listener
+        .set_nonblocking(true)
+        .expect("配置 loopback listener 非阻塞");
     let address = listener.local_addr().unwrap();
     let (server_done, server_done_receiver) = mpsc::channel();
     let server = thread::spawn(move || {
-        let (stream, _) = listener.accept().expect("接受 WebSocket 连接");
+        let accept_deadline = Instant::now() + Duration::from_secs(1);
+        let (stream, _) = loop {
+            match listener.accept() {
+                Ok(connection) => break connection,
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    assert!(
+                        Instant::now() < accept_deadline,
+                        "loopback listener 接受连接超时"
+                    );
+                    thread::sleep(Duration::from_millis(5));
+                }
+                Err(error) => panic!("接受 WebSocket 连接失败: {error}"),
+            }
+        };
+        stream
+            .set_nonblocking(false)
+            .expect("配置 WebSocket 流阻塞模式");
         stream
             .set_read_timeout(Some(Duration::from_secs(1)))
             .unwrap();
@@ -1365,6 +1384,17 @@ fn given_loopback_chatroom_server_when_tungstenite_connector_connects_then_wire_
         })
         .expect("完成 WebSocket 握手");
         let mut websocket = websocket;
+        let subscribe = websocket.read().expect("读取真实订阅帧");
+        let subscribe_json = match subscribe {
+            Message::Text(text) => {
+                serde_json::from_str::<serde_json::Value>(text.as_ref()).expect("命令帧应为 JSON")
+            }
+            other => panic!("订阅帧类型错误: {other:?}"),
+        };
+        assert_eq!(
+            subscribe_json,
+            json!({"type":"subscribe","payload":{"roomIds":["room-1"],"afterSeq":{"room-1":0},"deviceId":"device-1"}})
+        );
         let command = websocket.read().expect("读取真实命令帧");
         let command_json = match command {
             Message::Text(text) => {
@@ -1393,6 +1423,7 @@ fn given_loopback_chatroom_server_when_tungstenite_connector_connects_then_wire_
             &stop,
         )
         .expect("连接 loopback WebSocket");
+    socket.send_json(&subscribe()).expect("发送真实订阅");
     socket
         .send_json(&ChatroomCommand::SendMessage {
             room_id: "room-1".into(),
@@ -1410,10 +1441,12 @@ fn given_loopback_chatroom_server_when_tungstenite_connector_connects_then_wire_
         }
     );
     socket.close();
-    server_done_receiver
-        .recv_timeout(Duration::from_secs(1))
-        .expect("真实 WebSocket 服务端未在限定时间内完成");
-    server.join().expect("回收 loopback WebSocket 服务端");
+    let server_finished = server_done_receiver
+        .recv_timeout(Duration::from_secs(2))
+        .is_ok();
+    let server_result = server.join();
+    assert!(server_finished, "真实 WebSocket 服务端未在限定时间内完成");
+    server_result.expect("回收 loopback WebSocket 服务端");
 }
 
 #[test]
