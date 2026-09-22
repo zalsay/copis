@@ -1,5 +1,5 @@
 import { atom } from 'jotai'
-import type { ChatRoomAttachment, ChatRoomConnectionStatus, ChatRoomEventEnvelope, ChatRoomInvocation, ChatRoomMessage, ChatRoomSummary, ChatRoomTransferState } from '@copis/shared'
+import type { ChatRoomAttachment, ChatRoomConnectionStatus, ChatRoomEventEnvelope, ChatRoomInvocation, ChatRoomMessage, ChatRoomPermissionRequest, ChatRoomSummary, ChatRoomTransferState } from '@copis/shared'
 import { normalizeChatRoomMessage } from '../lib/chatroom-api'
 
 export type ChatRoomMessageState = Map<string, ChatRoomMessage[]>
@@ -24,6 +24,7 @@ export const chatRoomUnreadCountsAtom = atom<ChatRoomUnreadState>(new Map())
 export const chatRoomSendStatesAtom = atom<Map<string, ChatRoomSendState>>(new Map())
 /** 已删除房间的本地墓碑，阻止迟到的 HTTP/SSE 结果重新写回状态。 */
 export const chatRoomDeletedRoomIdsAtom = atom<Set<string>>(new Set<string>())
+export const chatRoomPermissionRequestsAtom = atom<Map<string, ChatRoomPermissionRequest>>(new Map())
 
 export const chatRoomActiveRoomIdAtom = atom<string | undefined>(undefined)
 export const chatRoomResetStateAtom = atom(null, (_get, set) => {
@@ -39,6 +40,7 @@ export const chatRoomResetStateAtom = atom(null, (_get, set) => {
   set(chatRoomUnreadCountsAtom, new Map())
   set(chatRoomSendStatesAtom, new Map())
   set(chatRoomDeletedRoomIdsAtom, new Set())
+  set(chatRoomPermissionRequestsAtom, new Map())
   set(chatRoomActiveRoomIdAtom, undefined)
 })
 export const chatRoomRemoveRoomAtom = atom(null, (get, set, roomId: string) => {
@@ -54,9 +56,11 @@ export const chatRoomRemoveRoomAtom = atom(null, (get, set, roomId: string) => {
   set(chatRoomInvocationsAtom, removeKey)
   set(chatRoomTransfersAtom, (current) => new Map([...current].filter(([, state]) => state.roomId !== roomId)))
   set(chatRoomSendStatesAtom, (current) => new Map([...current].filter(([, state]) => state.roomId !== roomId)))
+  set(chatRoomPermissionRequestsAtom, (current) => new Map([...current].filter(([, request]) => request.roomId !== roomId)))
   set(chatRoomDeletedRoomIdsAtom, (current: Set<string>) => new Set(current).add(roomId))
   if (get(chatRoomActiveRoomIdAtom) === roomId) set(chatRoomActiveRoomIdAtom, undefined)
 })
+export const chatRoomClearPermissionRequestAtom = atom(null, (get, set, requestId: string) => { const next = new Map(get(chatRoomPermissionRequestsAtom)); next.delete(requestId); set(chatRoomPermissionRequestsAtom, next) })
 export const chatRoomApplyEventAtom = atom(null, (get, set, event: ChatRoomEventEnvelope) => {
   const roomId = event.roomId; if (!roomId) return
   if (get(chatRoomDeletedRoomIdsAtom).has(roomId)) return

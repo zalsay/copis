@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react'
 import { useAtomValue, useSetAtom, useStore } from 'jotai'
-import { chatRoomApplyEventAtom, chatRoomConnectionStatusAtom, chatRoomResetStateAtom, chatRoomRoomsAtom } from '../../atoms/chatroom-atoms'
+import { chatRoomApplyEventAtom, chatRoomConnectionStatusAtom, chatRoomPermissionRequestsAtom, chatRoomResetStateAtom, chatRoomRoomsAtom } from '../../atoms/chatroom-atoms'
 import { ChatRoomSseClient } from '../../lib/chatroom-sse'
 import { chatRoomApi } from '../../lib/chatroom-api'
 import { workingAuthStateAtom } from '../../atoms/working-atoms'
@@ -51,6 +51,13 @@ export function ChatroomSseInitializer(): null {
     }
     return () => { offEvent(); offStatus(); client.close() }
   }, [accountKey, resetState, store])
+  useEffect(() => {
+    return window.electronAPI.chatrooms.onPermissionRequested((request) => {
+      const currentAuth = store.get(workingAuthStateAtom)
+      if (!currentAuth?.authenticated) return
+      store.set(chatRoomPermissionRequestsAtom, (current) => new Map(current).set(request.requestId, request))
+    })
+  }, [store])
   useEffect(() => {
     if (!shouldSubscribeChatRoomRooms(accountKey, subscribedAccountKeyRef.current)) {
       if (accountKey !== 'anonymous') subscribedAccountKeyRef.current = accountKey

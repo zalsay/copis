@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { createStore } from 'jotai/vanilla'
-import { chatRoomActiveRoomIdAtom, chatRoomApplyEventAtom, chatRoomConnectionStatusAtom, chatRoomCursorsAtom, chatRoomDeletedRoomIdsAtom, chatRoomDetailsAtom, chatRoomDraftsAtom, chatRoomInvocationsAtom, chatRoomMessagesAtom, chatRoomRemoveRoomAtom, chatRoomResetStateAtom, chatRoomRoomsAtom, chatRoomSendMessageAtom, chatRoomSendStatesAtom, chatRoomTransfersAtom, chatRoomUnreadCountsAtom } from './chatroom-atoms'
+import { chatRoomActiveRoomIdAtom, chatRoomApplyEventAtom, chatRoomConnectionStatusAtom, chatRoomCursorsAtom, chatRoomDeletedRoomIdsAtom, chatRoomDetailsAtom, chatRoomDraftsAtom, chatRoomInvocationsAtom, chatRoomMessagesAtom, chatRoomPermissionRequestsAtom, chatRoomRemoveRoomAtom, chatRoomResetStateAtom, chatRoomRoomsAtom, chatRoomSendMessageAtom, chatRoomSendStatesAtom, chatRoomTransfersAtom, chatRoomUnreadCountsAtom } from './chatroom-atoms'
 describe('chatRoomAtoms', () => {
   test('同一 roomId 的消息与未读互不污染', () => { const store = createStore(); store.set(chatRoomActiveRoomIdAtom, 'r2'); store.set(chatRoomApplyEventAtom, { type: 'message.created', roomId: 'r1', seq: 1, payload: { messageId: 'm1' } }); store.set(chatRoomApplyEventAtom, { type: 'message.created', roomId: 'r2', seq: 1, payload: { messageId: 'm2' } }); expect(store.get(chatRoomMessagesAtom).get('r1')).toHaveLength(1); expect(store.get(chatRoomMessagesAtom).get('r2')).toHaveLength(1); expect(store.get(chatRoomUnreadCountsAtom).get('r1')).toBe(1); expect(store.get(chatRoomUnreadCountsAtom).get('r2')).toBeUndefined() })
   test('Agent 完成或失败清除 delta 并保留终态', () => { const store = createStore(); store.set(chatRoomApplyEventAtom, { type: 'agent.delta', roomId: 'r1', payload: { invocationId: 'i1', delta: '处理中' } }); store.set(chatRoomApplyEventAtom, { type: 'agent.failed', roomId: 'r1', payload: { invocationId: 'i1', failureCode: 'agent_offline' } }); const invocation = store.get(chatRoomInvocationsAtom).get('r1')?.get('i1'); expect(invocation?.status).toBe('failed'); expect(invocation?.delta).toBeUndefined(); expect(invocation?.failureCode).toBe('agent_offline') })
@@ -17,5 +17,15 @@ describe('chatRoomAtoms', () => {
     expect(store.get(chatRoomRoomsAtom)).toEqual([]); expect(store.get(chatRoomDetailsAtom)).toEqual({}); expect(store.get(chatRoomMessagesAtom).has('r1')).toBe(false); expect(store.get(chatRoomCursorsAtom).has('r1')).toBe(false); expect(store.get(chatRoomConnectionStatusAtom).has('r1')).toBe(false); expect(store.get(chatRoomDraftsAtom).has('r1')).toBe(false); expect(store.get(chatRoomUnreadCountsAtom).has('r1')).toBe(false); expect(store.get(chatRoomInvocationsAtom).has('r1')).toBe(false); expect(store.get(chatRoomTransfersAtom).size).toBe(0); expect(store.get(chatRoomActiveRoomIdAtom)).toBeUndefined()
     store.set(chatRoomApplyEventAtom, { type: 'message.created', roomId: 'r1', seq: 5, payload: { messageId: 'late' } })
     expect(store.get(chatRoomMessagesAtom).has('r1')).toBe(false); expect(store.get(chatRoomDeletedRoomIdsAtom).has('r1')).toBe(true)
+  })
+  test('权限请求按 requestId 去重，并在账号重置时清空', () => {
+    const store = createStore()
+    const request = { requestId: 'p1', roomId: 'r1', roomAgentId: 'a1', invocationId: 'i1', traceId: 't1', originalSender: { type: 'user' as const, id: 'u1', displayName: '用户' }, invocationChain: [{ agentId: 'a1', invocationId: 'i1' }], toolName: 'Bash', summary: '执行命令', createdAt: 1, expiresAt: 2 }
+    store.set(chatRoomPermissionRequestsAtom, new Map([[request.requestId, request]]))
+    store.set(chatRoomPermissionRequestsAtom, (current) => new Map(current).set(request.requestId, { ...request, summary: '更新后的请求' }))
+    expect(store.get(chatRoomPermissionRequestsAtom).size).toBe(1)
+    expect(store.get(chatRoomPermissionRequestsAtom).get('p1')?.summary).toBe('更新后的请求')
+    store.set(chatRoomResetStateAtom)
+    expect(store.get(chatRoomPermissionRequestsAtom).size).toBe(0)
   })
 })
