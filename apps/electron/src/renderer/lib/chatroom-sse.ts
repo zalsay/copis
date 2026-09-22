@@ -7,13 +7,12 @@ export type ChatRoomSseStatusListener = (status: ChatRoomConnectionStatus) => vo
 type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>
 
 export function parseChatRoomSseFrame(frame: string): ChatRoomEventEnvelope | undefined {
-  let eventType = 'message'; const data: string[] = []
+  const data: string[] = []
   for (const line of frame.split(/\r?\n/)) {
-    if (line.startsWith('event:')) eventType = line.slice(6).trim()
-    else if (line.startsWith('data:')) data.push(line.slice(5).replace(/^ /, ''))
+    if (line.startsWith('data:')) data.push(line.slice(5).replace(/^ /, ''))
   }
   if (!data.length) return undefined
-  try { const parsed = JSON.parse(data.join('\n')) as Record<string, unknown>; return { type: typeof parsed.type === 'string' ? parsed.type : eventType, roomId: typeof parsed.roomId === 'string' ? parsed.roomId : undefined, seq: typeof parsed.seq === 'number' ? parsed.seq : undefined, latestSeq: typeof parsed.latestSeq === 'number' ? parsed.latestSeq : undefined, payload: parsed.payload } } catch { return undefined }
+  try { const parsed = JSON.parse(data.join('\n')) as Record<string, unknown>; if (typeof parsed !== 'object' || parsed === null || typeof parsed.type !== 'string' || !parsed.type) return undefined; return { type: parsed.type, roomId: typeof parsed.roomId === 'string' ? parsed.roomId : undefined, seq: typeof parsed.seq === 'number' ? parsed.seq : undefined, latestSeq: typeof parsed.latestSeq === 'number' ? parsed.latestSeq : undefined, payload: parsed.payload } } catch { return undefined }
 }
 
 export class ChatRoomSseClient {
@@ -30,11 +29,11 @@ export class ChatRoomSseClient {
   onEvent(listener: ChatRoomSseListener): () => void { this.listeners.add(listener); return () => this.listeners.delete(listener) }
   onStatus(listener: ChatRoomSseStatusListener): () => void { this.statusListeners.add(listener); return () => this.statusListeners.delete(listener) }
   subscribe(roomIds: Iterable<string>): () => void { for (const id of roomIds) this.roomIds.add(id); this.start(); return () => { for (const id of roomIds) this.roomIds.delete(id); if (!this.roomIds.size) this.close() } }
-  setRooms(roomIds: Iterable<string>): void { const next = new Set(roomIds); const changed = next.size !== this.roomIds.size || [...next].some((id) => !this.roomIds.has(id)); this.roomIds = next; if (!this.roomIds.size) { this.close(); return } if (changed && this.controller) { this.controller.abort(); this.controller = undefined } this.start() }
+  setRooms(roomIds: Iterable<string>): void { const next = new Set(roomIds); const changed = next.size !== this.roomIds.size || [...next].some((id) => !this.roomIds.has(id)); this.roomIds = next; if (!this.roomIds.size) { this.close(); return } this.stopped = false; if (changed && this.controller) { this.controller.abort(); this.controller = undefined } this.start() }
   private status(status: ChatRoomConnectionStatus): void { for (const listener of this.statusListeners) listener(status) }
   private start(): void { if (this.controller || this.stopped || !this.roomIds.size) return; this.stopped = false; this.controller = new AbortController(); this.status(this.attempt ? 'reconnecting' : 'connecting'); void this.connect(this.controller) }
   private async connect(controller: AbortController): Promise<void> {
-    const query = encodeURIComponent([...this.roomIds].join(','));
+    const query = [...this.roomIds].join(',');
     try {
       const response = await this.fetchImpl(`${this.baseUrl}/api/chatrooms/v2/events?roomIds=${query}`, withHttpApiWebToken({ headers: { Accept: 'text/event-stream' }, signal: controller.signal }))
       if (response.status === 401 || response.status === 403) { this.status('auth_expired'); return }
