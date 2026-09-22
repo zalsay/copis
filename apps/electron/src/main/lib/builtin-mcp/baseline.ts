@@ -62,5 +62,9 @@ export function getBuiltinMcpName(id: string): string {
  * 任何同名条目都是误写/冲突，应在保存时剔除。
  */
 export const RESERVED_BUILTIN_KEYS: ReadonlySet<string> = new Set(
-  DEFINITIONS.flatMap((d) => [d.id, d.name]),
+  [
+    ...DEFINITIONS.flatMap((d) => [d.id, d.name]),
+    // copis_image 是旧版内置能力名，虽已不在当前 manifest 中，仍被运行时识别，必须继续保留以避免工作区 MCP 身份冲突。
+    'copis_image',
+  ],
 )

@@ -83,11 +83,17 @@ describe('Agent 工作区 MCP 配置', () => {
           command: 'github-mcp',
           enabled: true,
         },
+        copis_image_custom: {
+          type: 'stdio',
+          command: 'custom-image',
+          enabled: true,
+        },
       },
     })
 
-    expect(Object.keys(normalized.servers).sort()).toEqual(['github'])
+    expect(Object.keys(normalized.servers).sort()).toEqual(['copis_image_custom', 'github'])
     expect(normalized.servers.github?.command).toBe('github-mcp')
+    expect(normalized.servers.copis_image_custom?.command).toBe('custom-image')
   })
 })
 
@@ -744,4 +750,3 @@ describe('工作区置顶与多项倒排排序', () => {
     expect(onDiskContent).toContain('description:')
   })
 })
-
