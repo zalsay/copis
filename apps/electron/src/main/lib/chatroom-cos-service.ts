@@ -1,7 +1,7 @@
 import COS from 'cos-nodejs-sdk-v5'
 import { createHash } from 'node:crypto'
-import { constants, closeSync, createReadStream, createWriteStream, fstatSync, fsyncSync, lstatSync, mkdirSync, mkdtempSync, openSync, rmSync, statSync } from 'node:fs'
-import { basename, dirname, extname, isAbsolute, join } from 'node:path'
+import { constants, closeSync, createReadStream, createWriteStream, fstatSync, fsyncSync, lstatSync, mkdtempSync, openSync, renameSync, rmSync, statSync } from 'node:fs'
+import { basename, dirname, extname, isAbsolute, join, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
 import { Transform } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
@@ -49,7 +49,7 @@ export interface ChatRoomCosGrantClient {
 
 export interface ChatRoomCosSdk {
   sliceUploadFile(params: ChatRoomCosUploadParams): Promise<{ ETag?: string }>
-  abortUploadTask(params: { UploadId: string; Bucket: string; Region: string; Key: string; Level: 'task' }): Promise<unknown>
+  abortUploadTask(params: { Bucket: string; Region: string; Key: string; Level: 'file' }): Promise<unknown>
   cancelTask(taskId: string): void
   downloadFile(params: ChatRoomCosDownloadParams): Promise<{ ETag?: string }>
 }
@@ -111,6 +111,7 @@ interface ActiveTransfer {
   bucket?: string
   region?: string
   objectKey?: string
+  finalizing?: boolean
 }
 
 function stableErrorCode(error: unknown): string {
@@ -135,6 +136,33 @@ function mimeTypeFor(name: string): string {
 
 function assertSafeIdentifier(value: string, label: string): void {
   if (!value || value.length > 128 || /[\u0000-\u001f\u007f]/.test(value)) throw new Error(`${label}_invalid`)
+}
+
+function assertDestinationPath(destinationPath: string): void {
+  if (!isAbsolute(destinationPath) || /[\u0000\u0001-\u001f\u007f]/.test(destinationPath)) throw new Error('destination_path_invalid')
+  const absolute = resolve(destinationPath)
+  let current = absolute
+  let isLeaf = true
+  for (;;) {
+    let stats
+    try {
+      stats = lstatSync(current)
+    } catch (error) {
+      if (isLeaf && (error as NodeJS.ErrnoException).code === 'ENOENT') {
+        current = dirname(current)
+        isLeaf = false
+        continue
+      }
+      throw new Error('destination_path_invalid')
+    }
+    // macOS 的 /var 等系统根别名本身可能是 symlink；真正的目标目录链仍必须拒绝 symlink。
+    const parent = dirname(current)
+    const isSystemRootAlias = parent === '/'
+    if ((stats.isSymbolicLink() && !isSystemRootAlias) || (!isLeaf && !stats.isDirectory() && !(stats.isSymbolicLink() && isSystemRootAlias))) throw new Error('destination_path_invalid')
+    if (parent === current) break
+    current = parent
+    isLeaf = false
+  }
 }
 
 interface UploadSnapshot {
@@ -296,9 +324,10 @@ export function createChatRoomCosService(options: ChatRoomCosServiceOptions): Ch
     transfer.sdk?.cancelTask(taskId)
     if (!transfer.sdk || !transfer.bucket || !transfer.region || !transfer.objectKey) return
     try {
-      // SDK 的 abortUploadTask 需要完整对象定位；本地 task id 是 SDK 暴露的唯一可用任务标识。
+      // onTaskReady 返回的是 SDK 本地 task id，不是 COS multipart UploadId。
+      // 先取消本地任务，再按对象级清理未完成分片，绝不执行 bucket 级清理。
       await transfer.sdk.abortUploadTask({
-        UploadId: taskId, Bucket: transfer.bucket, Region: transfer.region, Key: transfer.objectKey, Level: 'task',
+        Bucket: transfer.bucket, Region: transfer.region, Key: transfer.objectKey, Level: 'file',
       })
     } catch {
       // 本地任务已取消；远端清理失败不把敏感 SDK 错误暴露给 Renderer。
@@ -351,6 +380,7 @@ export function createChatRoomCosService(options: ChatRoomCosServiceOptions): Ch
       if (transfer.cancelled) throw new Error('transfer_cancelled')
       const etag = typeof uploadResult?.ETag === 'string' && uploadResult.ETag ? uploadResult.ETag : undefined
       if (!etag) throw new Error('cos_upload_missing_etag')
+      transfer.finalizing = true
       emit(progressState(transfer, input.transferId, 'validating', 1))
       await grantClient.finalizeUpload({ roomId: input.roomId, attachmentId: authorized.attachmentId, sizeBytes: snapshot.sizeBytes, sha256, etag })
       emit(progressState(transfer, input.transferId, 'ready', 1))
@@ -384,6 +414,7 @@ export function createChatRoomCosService(options: ChatRoomCosServiceOptions): Ch
     const transfer: ActiveTransfer = { cancelled: false, roomId: input.roomId, kind: 'download' }
     active.set(input.transferId, transfer)
     let authorized: CosSdkGrant | undefined
+    let downloadTempDir: string | undefined
     try {
       emit(progressState(transfer, input.transferId, 'waiting_authorization', 0))
       authorized = validateGrant(await grantClient.requestDownloadGrant({ roomId: input.roomId, attachmentId: input.attachmentId }), 'download')
@@ -405,12 +436,17 @@ export function createChatRoomCosService(options: ChatRoomCosServiceOptions): Ch
         }
       }
       if (!destinationPath || !isAbsolute(destinationPath) || /[\u0000\u0001-\u001f\u007f]/.test(destinationPath)) throw new Error('destination_path_invalid')
-      mkdirSync(dirname(destinationPath), { recursive: true })
+      assertDestinationPath(destinationPath)
       if (transfer.cancelled) throw new Error('transfer_cancelled')
       emit(progressState(transfer, input.transferId, 'downloading', 0))
       transfer.sdk = sdkFactory({ SecretId: authorized.tmpSecretId, SecretKey: authorized.tmpSecretKey, SecurityToken: authorized.sessionToken })
+      const destinationParent = dirname(destinationPath)
+      downloadTempDir = mkdtempSync(join(destinationParent, '.copis-chatroom-download-'))
+      const tempPath = join(downloadTempDir, 'payload')
+      const tempFd = openSync(tempPath, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY, 0o600)
+      closeSync(tempFd)
       const result = await transfer.sdk.downloadFile({
-        Bucket: authorized.bucket, Region: authorized.region, Key: authorized.objectKey, FilePath: destinationPath,
+        Bucket: authorized.bucket, Region: authorized.region, Key: authorized.objectKey, FilePath: tempPath,
         onTaskReady: (taskId) => {
           transfer.taskId = taskId
           if (transfer.cancelled && transfer.sdk) transfer.sdk.cancelTask(taskId)
@@ -419,11 +455,15 @@ export function createChatRoomCosService(options: ChatRoomCosServiceOptions): Ch
       })
       if (transfer.cancelled) throw new Error('transfer_cancelled')
       if (!result?.ETag) throw new Error('cos_download_missing_etag')
+      assertDestinationPath(destinationPath)
+      renameSync(tempPath, destinationPath)
+      rmSync(downloadTempDir, { recursive: true, force: true })
       emit(progressState(transfer, input.transferId, 'ready', 1))
       return { transferId: input.transferId, attachmentId: authorized.attachmentId, phase: 'ready' }
     } catch (error) {
       return fail(input.transferId, transfer, error)
     } finally {
+      if (downloadTempDir) { try { rmSync(downloadTempDir, { recursive: true, force: true }) } catch {} }
       active.delete(input.transferId)
       transfer.sdk = undefined
       transfer.taskId = undefined
@@ -441,6 +481,7 @@ export function createChatRoomCosService(options: ChatRoomCosServiceOptions): Ch
     async cancel(transferId) {
       const transfer = active.get(transferId)
       if (!transfer) throw new Error('transfer_not_found')
+      if (transfer.finalizing) throw new Error('transfer_finalize_in_progress')
       transfer.cancelled = true
       if (transfer.sdk && transfer.taskId) {
         if (transfer.kind === 'upload') {

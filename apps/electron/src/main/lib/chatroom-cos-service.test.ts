@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, mock, test } from 'bun:test'
-import { existsSync, mkdtempSync, readFileSync, truncateSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, truncateSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -188,7 +188,7 @@ describe('ChatRoomCosService', () => {
     await taskReadyBarrier
     await service.cancel('t-cancel')
     const result = await running
-    expect(aborted).toEqual({ UploadId: 'task-cancel', Bucket: 'bucket-1', Region: 'ap-shanghai', Key: 'rooms/r1/att-1/a.txt', Level: 'task' })
+    expect(aborted).toEqual({ Bucket: 'bucket-1', Region: 'ap-shanghai', Key: 'rooms/r1/att-1/a.txt', Level: 'file' })
     expect(finalizeCount).toBe(0)
     expect(result.phase).toBe('cancelled')
   })
@@ -266,6 +266,27 @@ describe('ChatRoomCosService', () => {
     expect((await first).phase).toBe('cancelled')
   })
 
+  test('finalize 进行中取消明确失败且不会返回用户取消后的 ready', async () => {
+    const root = makeRoot()
+    const filePath = join(root, 'finalize.txt')
+    writeFileSync(filePath, 'hello')
+    let finalizeStarted!: () => void
+    const finalizeBarrier = new Promise<void>((resolve) => { finalizeStarted = resolve })
+    let releaseFinalize!: () => void
+    const finalizeRelease = new Promise<void>((resolve) => { releaseFinalize = resolve })
+    const service = createChatRoomCosService(baseOptions({
+      grantClient: {
+        requestUploadGrant: async () => grant(), requestDownloadGrant: async () => grant('download'),
+        finalizeUpload: async () => { finalizeStarted(); await finalizeRelease },
+      },
+    }))
+    const running = service.upload({ transferId: 't-finalize', roomId: 'r-1', filePath })
+    await finalizeBarrier
+    await expect(service.cancel('t-finalize')).rejects.toThrow('transfer_finalize_in_progress')
+    releaseFinalize()
+    expect(await running).toEqual({ transferId: 't-finalize', attachmentId: 'att-1', originalName: 'finalize.txt', phase: 'ready' })
+  })
+
   test('下载取消使用 SDK cancelTask，不调用 upload 专用 abort', async () => {
     const root = makeRoot()
     const destination = join(root, 'download-cancel.txt')
@@ -305,7 +326,10 @@ describe('ChatRoomCosService', () => {
       }),
     }))
     const result = await service.download({ transferId: 't-download', roomId: 'r-1', attachmentId: 'att-1', target: 'user', destinationPath: destination })
-    expect(sdkParams).toMatchObject({ Bucket: 'bucket-1', Region: 'ap-shanghai', Key: 'rooms/r1/att-1/a.txt', FilePath: destination })
+    expect(sdkParams).toMatchObject({ Bucket: 'bucket-1', Region: 'ap-shanghai', Key: 'rooms/r1/att-1/a.txt' })
+    expect(typeof sdkParams?.FilePath).toBe('string')
+    expect(sdkParams?.FilePath).not.toBe(destination)
+    expect(existsSync(destination)).toBe(true)
     expect(result).toEqual({ transferId: 't-download', attachmentId: 'att-1', phase: 'ready' })
     expect(JSON.stringify(result)).not.toContain('objectKey')
   })
@@ -313,6 +337,7 @@ describe('ChatRoomCosService', () => {
   test('下载到 Agent inbox 只解析绑定房间的隔离目录', async () => {
     const root = makeRoot()
     const inbox = join(root, 'room-r1', 'agent-a', 'inbox', 'file.txt')
+    mkdirSync(join(root, 'room-r1', 'agent-a', 'inbox'), { recursive: true })
     let requestedRoom: string | undefined
     let destination: string | undefined
     const service = createChatRoomCosService(baseOptions({
@@ -325,8 +350,35 @@ describe('ChatRoomCosService', () => {
     }))
     await service.download({ transferId: 't-inbox', roomId: 'r-1', attachmentId: 'att-1', target: 'agent_inbox', destinationPath: join(root, 'attacker.txt') })
     expect(requestedRoom).toBe('r-1')
-    expect(destination).toBe(inbox)
+    expect(destination).not.toBe(inbox)
+    expect(destination).toContain('.copis-chatroom-download-')
+    expect(existsSync(inbox)).toBe(true)
     expect(destination).not.toContain('attacker.txt')
+  })
+
+  test('下载目标或父目录为 symlink 时 fail closed，不调用 SDK 且不覆盖外部文件', async () => {
+    const root = makeRoot()
+    const outside = join(root, 'outside')
+    mkdirSync(outside)
+    const outsideFile = join(outside, 'secret.txt')
+    writeFileSync(outsideFile, 'keep')
+    const symlinkTarget = join(root, 'link-file.txt')
+    symlinkSync(outsideFile, symlinkTarget)
+    const outsideDir = join(root, 'outside-dir')
+    mkdirSync(outsideDir)
+    const symlinkParent = join(root, 'link-dir')
+    symlinkSync(outsideDir, symlinkParent)
+    let sdkCalls = 0
+    const service = createChatRoomCosService(baseOptions({
+      sdkFactory: () => {
+        sdkCalls++
+        return { sliceUploadFile: async () => ({ ETag: 'etag' }), abortUploadTask: async () => ({}), cancelTask: () => {}, downloadFile: async () => ({ ETag: 'etag' }) }
+      },
+    }))
+    expect((await service.download({ transferId: 'symlink-leaf', roomId: 'r-1', attachmentId: 'att-1', target: 'user', destinationPath: symlinkTarget })).phase).toBe('failed')
+    expect((await service.download({ transferId: 'symlink-parent', roomId: 'r-1', attachmentId: 'att-1', target: 'user', destinationPath: join(symlinkParent, 'new.txt') })).phase).toBe('failed')
+    expect(sdkCalls).toBe(0)
+    expect(readFileSync(outsideFile, 'utf8')).toBe('keep')
   })
 
   test('STS 和 objectKey 不出现在进度、结果、错误和日志', async () => {
