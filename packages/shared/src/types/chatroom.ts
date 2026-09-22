@@ -14,6 +14,19 @@ export const CHATROOM_MAX_ID_LENGTH = 128
 export const CHATROOM_MAX_OUTPUT_TEXT_LENGTH = 200_000
 export const CHATROOM_MAX_ATTACHMENT_IDS = 20
 
+export type ChatRoomRole = 'host' | 'member'
+export type ChatRoomStatus = 'active' | 'archived' | 'deleting' | 'deleted'
+export type ChatRoomPresence = 'online' | 'busy' | 'offline' | 'disabled'
+export type ChatRoomConnectionStatus = 'connecting' | 'connected' | 'reconnecting' | 'offline' | 'auth_expired'
+export type ChatRoomAttachmentPhase =
+  | 'waiting_authorization'
+  | 'uploading'
+  | 'validating'
+  | 'ready'
+  | 'downloading'
+  | 'failed'
+  | 'cancelled'
+
 /** 仅暴露本地聊天室管理能力，不包含发送消息或 Rust 上报通道。 */
 export const CHATROOM_IPC_CHANNELS = {
   LIST_LOCAL_ROOMS: 'chatrooms:list-local-rooms',
@@ -24,7 +37,140 @@ export const CHATROOM_IPC_CHANNELS = {
   RESPOND_PERMISSION: 'chatrooms:respond-permission',
   PERMISSION_REQUESTED: 'chatrooms:permission-requested',
   LOCAL_CONFIG_CHANGED: 'chatrooms:local-config-changed',
+  SELECT_AND_UPLOAD: 'chatrooms:select-and-upload',
+  START_DOWNLOAD: 'chatrooms:start-download',
+  CANCEL_TRANSFER: 'chatrooms:cancel-transfer',
+  TRANSFER_PROGRESS: 'chatrooms:transfer-progress',
 } as const
+
+/** Renderer 可见的远端聊天室概要。分享码只在服务端允许的成员范围内返回。 */
+export interface ChatRoomSummary {
+  roomId: string
+  name: string
+  role: ChatRoomRole
+  status: ChatRoomStatus
+  shareCode?: string
+  memberCount: number
+  unreadCount: number
+  connectionStatus: ChatRoomConnectionStatus
+}
+
+export interface ChatRoomMember {
+  userId: string
+  displayName: string
+  avatar?: string
+  role: ChatRoomRole
+  presence: ChatRoomPresence
+}
+
+export interface ChatRoomAgent {
+  agentId: string
+  displayName: string
+  avatar?: string
+  status: ChatRoomPresence
+  busy: boolean
+  memoryShared: boolean
+  skillsShared: boolean
+}
+
+/** 服务端消息 DTO；trace/depth 只允许作为服务端响应的一部分出现。 */
+export interface ChatRoomMessage {
+  messageId: string
+  roomId: string
+  seq: number
+  senderType: 'user' | 'agent' | 'system'
+  senderId: string
+  content: string
+  mentionAgentIds: string[]
+  attachmentIds: string[]
+  clientMessageId: string
+  traceId?: string
+  parentMessageId?: string
+  depth: number
+  createdAt: string
+}
+
+export interface ChatRoomInvocation {
+  invocationId: string
+  roomId: string
+  traceId: string
+  targetAgentId: string
+  triggerMessageId: string
+  depth: number
+  status: ChatRoomInvocationStatus
+  failureCode?: string
+  delta?: string
+  errorMessage?: string
+}
+
+export interface ChatRoomAttachment {
+  attachmentId: string
+  roomId: string
+  originalName: string
+  mimeType: string
+  sizeBytes: number
+  status: 'pending' | 'ready' | 'attached' | 'deleted'
+  messageId?: string
+}
+
+export interface ChatRoomTransferState {
+  transferId: string
+  attachmentId?: string
+  roomId: string
+  originalName?: string
+  phase: ChatRoomAttachmentPhase
+  progress: number
+  errorCode?: string
+}
+
+export interface ChatRoomEventEnvelope {
+  type: string
+  roomId?: string
+  seq?: number
+  latestSeq?: number
+  payload: unknown
+}
+
+/** Renderer -> Rust：客户端只提交房间名和主理人创建的分享码。 */
+export interface ChatRoomCreateInput {
+  name: string
+  shareCode: string
+}
+
+export interface ChatRoomJoinInput {
+  shareCode: string
+}
+
+/** Renderer -> Rust：服务端负责生成 trace/depth 等调用链字段。 */
+export interface ChatRoomSendMessageInput {
+  roomId: string
+  content: string
+  mentionAgentIds: string[]
+  attachmentIds: string[]
+  clientMessageId: string
+}
+
+export interface ChatRoomDownloadRequest {
+  transferId: string
+  roomId: string
+  attachmentId: string
+  target: 'user' | 'agent_inbox'
+}
+
+export interface ChatRoomTransferResult {
+  transferId: string
+  attachmentId?: string
+  originalName?: string
+  phase: 'ready' | 'failed' | 'cancelled'
+  errorCode?: string
+}
+
+/** Renderer 边界的分享码规范化；服务端仍负责有效性、唯一性和限流。 */
+export function normalizeChatRoomShareCode(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined
+  const normalized = value.trim().toUpperCase()
+  return /^[A-Z0-9]{4}$/.test(normalized) ? normalized : undefined
+}
 
 export type ChatRoomInvocationStatus =
   | 'created'
@@ -231,6 +377,11 @@ export interface ChatRoomElectronAPI {
   respondPermission(input: ChatRoomPermissionResponse): Promise<void>
   onPermissionRequested(callback: (request: ChatRoomPermissionRequest) => void): () => void
   onLocalConfigChanged(callback: (room: ChatRoomLocalRoomView) => void): () => void
+  /** 传输 API 在 Task 3 接入 preload；可选以兼容旧版 preload 的启动过程。 */
+  startUpload?: (input: { transferId: string; roomId: string }) => Promise<ChatRoomTransferResult>
+  startDownload?: (input: ChatRoomDownloadRequest) => Promise<ChatRoomTransferResult>
+  cancelTransfer?: (transferId: string) => Promise<void>
+  onTransferProgress?: (callback: (state: ChatRoomTransferState) => void) => () => void
 }
 
 /**
