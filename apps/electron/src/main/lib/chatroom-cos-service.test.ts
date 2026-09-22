@@ -1,0 +1,190 @@
+import { afterEach, describe, expect, mock, test } from 'bun:test'
+import { mkdtempSync, writeFileSync, readFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+
+mock.module('electron', () => ({ app: { isPackaged: false, getPath: () => '/tmp' } }))
+mock.module('./http-api-server', () => ({ HTTP_API_HOST: '127.0.0.1', HTTP_API_PORT: 51730, getHttpApiInternalToken: () => 'test-token' }))
+
+const {
+  createChatRoomCosService,
+} = await import('./chatroom-cos-service')
+import type { ChatRoomCosSdk, ChatRoomCosServiceOptions, CosSdkGrant } from './chatroom-cos-service'
+
+const roots: string[] = []
+
+afterEach(() => {
+  roots.splice(0).forEach((root) => {
+    try { require('node:fs').rmSync(root, { recursive: true, force: true }) } catch {}
+  })
+})
+
+function makeRoot(): string {
+  const root = mkdtempSync(join(tmpdir(), 'copis-chatroom-cos-'))
+  roots.push(root)
+  return root
+}
+
+function grant(action: 'upload' | 'download' = 'upload'): CosSdkGrant {
+  return {
+    attachmentId: 'att-1', bucket: 'bucket-1', region: 'ap-shanghai', objectKey: 'rooms/r1/att-1/a.txt',
+    tmpSecretId: 'secret-id', tmpSecretKey: 'secret-key', sessionToken: 'session-token',
+    startTime: 1, expiredTime: 999_999_999, action,
+  }
+}
+
+function baseOptions(overrides: Partial<ChatRoomCosServiceOptions> = {}): ChatRoomCosServiceOptions {
+  return {
+    grantClient: {
+      requestUploadGrant: async () => grant('upload'),
+      requestDownloadGrant: async () => grant('download'),
+      finalizeUpload: async () => {},
+    },
+    sdkFactory: () => ({
+      sliceUploadFile: async (params) => {
+        params.onTaskReady?.('task-1')
+        params.onProgress?.({ loaded: 1, total: 2, speed: 1, percent: 0.5 })
+        return { ETag: 'etag-1' }
+      },
+      abortUploadTask: async () => ({}),
+      downloadFile: async (params) => {
+        params.onProgress?.({ loaded: 2, total: 2, speed: 1, percent: 1 })
+        return { ETag: 'etag-download' }
+      },
+    }),
+    fileDialog: {
+      showOpenDialog: async () => ({ canceled: false, filePaths: [] }),
+      showSaveDialog: async () => ({ canceled: false, filePath: undefined }),
+    },
+    ...overrides,
+  }
+}
+
+describe('ChatRoomCosService', () => {
+  test('Main 选择文件后读取 metadata/SHA256，只请求一次上传授权并 finalize', async () => {
+    const root = makeRoot()
+    const filePath = join(root, 'a.txt')
+    writeFileSync(filePath, 'hello')
+    let uploadInput: unknown
+    let finalized: unknown
+    let sdkParams: Record<string, unknown> | undefined
+    const options = baseOptions({
+      fileDialog: { showOpenDialog: async () => ({ canceled: false, filePaths: [filePath] }), showSaveDialog: async () => ({ canceled: true }) },
+      grantClient: {
+        requestUploadGrant: async (input) => { uploadInput = input; return grant('upload') },
+        requestDownloadGrant: async () => grant('download'),
+        finalizeUpload: async (input) => { finalized = input },
+      },
+      sdkFactory: (credentials) => {
+        expect(credentials).toEqual({ SecretId: 'secret-id', SecretKey: 'secret-key', SecurityToken: 'session-token' })
+        return {
+          sliceUploadFile: async (params) => { sdkParams = params as unknown as Record<string, unknown>; params.onTaskReady?.('task-1'); return { ETag: 'etag-1' } },
+          abortUploadTask: async () => ({}),
+          downloadFile: async () => ({ ETag: 'etag' }),
+        }
+      },
+    })
+    const service = createChatRoomCosService(options)
+    const result = await service.selectAndUpload({ transferId: 'transfer-1', roomId: 'room-1' })
+
+    expect(uploadInput).toEqual({ roomId: 'room-1', originalName: 'a.txt', mimeType: 'text/plain', sizeBytes: 5, sha256: '2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824' })
+    expect(finalized).toEqual({ roomId: 'room-1', attachmentId: 'att-1', sizeBytes: 5, sha256: '2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824', etag: 'etag-1' })
+    expect(sdkParams?.Key).toBe('rooms/r1/att-1/a.txt')
+    expect(result).toEqual({ transferId: 'transfer-1', attachmentId: 'att-1', originalName: 'a.txt', phase: 'ready' })
+    expect(JSON.stringify(result)).not.toContain('secret-key')
+    expect(JSON.stringify(result)).not.toContain(filePath)
+  })
+
+  test('分片上传把 SDK progress 映射为脱敏 transfer state', async () => {
+    const progress: unknown[] = []
+    const root = makeRoot()
+    const filePath = join(root, 'a.bin')
+    writeFileSync(filePath, 'ab')
+    const service = createChatRoomCosService(baseOptions({
+      fileDialog: { showOpenDialog: async () => ({ canceled: false, filePaths: [filePath] }), showSaveDialog: async () => ({ canceled: true }) },
+    }))
+    service.onProgress((state) => progress.push(state))
+    await service.selectAndUpload({ transferId: 't-1', roomId: 'r-1' })
+    expect(progress).toContainEqual({ transferId: 't-1', attachmentId: 'att-1', roomId: 'r-1', originalName: 'a.bin', phase: 'uploading', progress: 0.5 })
+    expect(progress.at(-1)).toEqual({ transferId: 't-1', attachmentId: 'att-1', roomId: 'r-1', originalName: 'a.bin', phase: 'ready', progress: 1 })
+    expect(JSON.stringify(progress)).not.toContain('objectKey')
+  })
+
+  test('取消上传调用 abortUploadTask 且不会 finalize', async () => {
+    const root = makeRoot()
+    const filePath = join(root, 'a.txt')
+    writeFileSync(filePath, 'hello')
+    let finalizeCount = 0
+    let resolveUpload!: (value: { ETag: string }) => void
+    let aborted: unknown
+    const service = createChatRoomCosService(baseOptions({
+      fileDialog: { showOpenDialog: async () => ({ canceled: false, filePaths: [filePath] }), showSaveDialog: async () => ({ canceled: true }) },
+      grantClient: { requestUploadGrant: async () => grant(), requestDownloadGrant: async () => grant('download'), finalizeUpload: async () => { finalizeCount++ } },
+      sdkFactory: () => ({
+        sliceUploadFile: async (params) => { params.onTaskReady?.('task-cancel'); return new Promise((resolve) => { resolveUpload = resolve }) },
+        abortUploadTask: async (params) => { aborted = params; resolveUpload({ ETag: 'late' }); return {} },
+        downloadFile: async () => ({ ETag: 'etag' }),
+      }),
+    }))
+    const running = service.upload({ transferId: 't-cancel', roomId: 'r-1', filePath })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    await service.cancel('t-cancel')
+    const result = await running
+    expect(aborted).toEqual({ UploadId: 'task-cancel', Level: 'task' })
+    expect(finalizeCount).toBe(0)
+    expect(result.phase).toBe('cancelled')
+  })
+
+  test('下载只使用服务端 objectKey 并把结果写到 Main 选择的目标', async () => {
+    const root = makeRoot()
+    const destination = join(root, 'download.txt')
+    let sdkParams: Record<string, unknown> | undefined
+    const service = createChatRoomCosService(baseOptions({
+      grantClient: { requestUploadGrant: async () => grant(), requestDownloadGrant: async () => grant('download'), finalizeUpload: async () => {} },
+      fileDialog: { showOpenDialog: async () => ({ canceled: true }), showSaveDialog: async () => ({ canceled: false, filePath: destination }) },
+      sdkFactory: () => ({
+        sliceUploadFile: async () => ({ ETag: 'etag' }), abortUploadTask: async () => ({}),
+        downloadFile: async (params) => { sdkParams = params as unknown as Record<string, unknown>; return { ETag: 'etag-download' } },
+      }),
+    }))
+    const result = await service.download({ transferId: 't-download', roomId: 'r-1', attachmentId: 'att-1', target: 'user', destinationPath: destination })
+    expect(sdkParams).toMatchObject({ Bucket: 'bucket-1', Region: 'ap-shanghai', Key: 'rooms/r1/att-1/a.txt', FilePath: destination })
+    expect(result).toEqual({ transferId: 't-download', attachmentId: 'att-1', phase: 'ready' })
+    expect(JSON.stringify(result)).not.toContain('objectKey')
+  })
+
+  test('下载到 Agent inbox 只解析绑定房间的隔离目录', async () => {
+    const root = makeRoot()
+    const inbox = join(root, 'room-r1', 'agent-a', 'inbox', 'file.txt')
+    let requestedRoom: string | undefined
+    let destination: string | undefined
+    const service = createChatRoomCosService(baseOptions({
+      fileDialog: { showOpenDialog: async () => ({ canceled: true }), showSaveDialog: async () => ({ canceled: true }) },
+      resolveAgentInboxPath: (roomId) => { requestedRoom = roomId; return inbox },
+      sdkFactory: () => ({
+        sliceUploadFile: async () => ({ ETag: 'etag' }), abortUploadTask: async () => ({}),
+        downloadFile: async (params) => { destination = params.FilePath; return { ETag: 'etag' } },
+      }),
+    }))
+    await service.download({ transferId: 't-inbox', roomId: 'r-1', attachmentId: 'att-1', target: 'agent_inbox', destinationPath: join(root, 'attacker.txt') })
+    expect(requestedRoom).toBe('r-1')
+    expect(destination).toBe(inbox)
+    expect(destination).not.toContain('attacker.txt')
+  })
+
+  test('STS 和 objectKey 不出现在进度、结果、错误和日志', async () => {
+    const seen: unknown[] = []
+    const root = makeRoot()
+    const filePath = join(root, 'a.txt')
+    writeFileSync(filePath, 'x')
+    const service = createChatRoomCosService(baseOptions({
+      logger: (value) => seen.push(value),
+      fileDialog: { showOpenDialog: async () => ({ canceled: false, filePaths: [filePath] }), showSaveDialog: async () => ({ canceled: true }) },
+      sdkFactory: () => ({ sliceUploadFile: async () => { throw new Error('secret-key objectKey') }, abortUploadTask: async () => ({}), downloadFile: async () => ({ ETag: 'e' }) }),
+    }))
+    const result = await service.selectAndUpload({ transferId: 't-error', roomId: 'r-1' })
+    expect(result.phase).toBe('failed')
+    expect(JSON.stringify(result)).not.toMatch(/secret-key|objectKey|rooms\/r1/)
+    expect(JSON.stringify(seen)).not.toMatch(/secret-key|objectKey|rooms\/r1/)
+  })
+})
