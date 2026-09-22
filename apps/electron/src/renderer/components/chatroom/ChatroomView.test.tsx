@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
-import { deleteChatRoomAndClose, getChatRoomIdentityLabel, getChatRoomInvocationTargetLabel, hasDurableChatRoomReply } from './ChatroomView'
+import { deleteChatRoomAndClose, getChatRoomIdentityLabel, getChatRoomInvocationTargetLabel, getChatRoomMessageClassName, hasDurableChatRoomReply } from './ChatroomView'
 import type { TabItem } from '@/atoms/tab-atoms'
 import type { ChatRoomAgent, ChatRoomInvocation, ChatRoomMember, ChatRoomMessage } from '@copis/shared'
 
@@ -35,9 +35,22 @@ describe('聊天室房间视图契约', () => {
     expect(getChatRoomIdentityLabel({ senderType: 'user', senderId: 'u-current' }, 'u-current', members, agents)).toBe('我')
     expect(getChatRoomIdentityLabel({ senderType: 'user', senderId: 'u-other' }, 'u-current', members, agents)).toBe('另一位成员')
     expect(getChatRoomIdentityLabel({ senderType: 'agent', senderId: 'agent-a' }, 'u-current', members, agents)).toBe('分析 Agent')
+    expect(getChatRoomIdentityLabel({ senderType: 'agent', senderId: 'agent-b' }, 'u-current', members, agents)).toBe('执行 Agent')
     expect(getChatRoomIdentityLabel({ senderType: 'agent', senderId: 'unknown-agent' }, 'u-current', members, agents)).toBe('unknown-agent')
     expect(getChatRoomInvocationTargetLabel('agent-b', agents)).toBe('执行 Agent')
     expect(getChatRoomInvocationTargetLabel('unknown-agent', agents)).toBe('unknown-agent')
+  })
+
+  test('仅当前用户消息右对齐并使用主色，其他用户左对齐且与 Agent 区分', () => {
+    expect(getChatRoomMessageClassName({ senderType: 'user', senderId: 'u-current' }, 'u-current')).toBe('ml-auto bg-primary text-primary-foreground')
+    expect(getChatRoomMessageClassName({ senderType: 'user', senderId: 'u-other' }, 'u-current')).toBe('mr-auto bg-muted/70 text-foreground')
+    expect(getChatRoomMessageClassName({ senderType: 'agent', senderId: 'agent-a' }, 'u-current')).toBe('mr-auto bg-muted')
+    expect(getChatRoomMessageClassName({ senderType: 'agent', senderId: 'agent-b' }, 'u-current')).toBe('mr-auto bg-muted')
+    expect(source).toContain("message.senderType === 'user' && currentUserId === message.senderId")
+    expect(source).toContain("'ml-auto bg-primary text-primary-foreground'")
+    expect(source).toContain("'mr-auto bg-muted'")
+    expect(source).toContain("'mr-auto bg-muted/70 text-foreground'")
+    expect(source).toContain('getChatRoomMessageClassName(message, currentUserId)')
   })
 
   test('删除成功后清理房间并关闭对应 Tab', async () => {
