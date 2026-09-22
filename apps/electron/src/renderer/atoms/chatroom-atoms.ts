@@ -1,5 +1,6 @@
 import { atom } from 'jotai'
 import type { ChatRoomAttachment, ChatRoomConnectionStatus, ChatRoomEventEnvelope, ChatRoomInvocation, ChatRoomMessage, ChatRoomSummary, ChatRoomTransferState } from '@copis/shared'
+import { normalizeChatRoomMessage } from '../lib/chatroom-api'
 
 export type ChatRoomMessageState = Map<string, ChatRoomMessage[]>
 export type ChatRoomCursorState = Map<string, number>
@@ -28,7 +29,7 @@ export const chatRoomApplyEventAtom = atom(null, (get, set, event: ChatRoomEvent
   const payload = (typeof event.payload === 'object' && event.payload !== null ? event.payload : {}) as Record<string, unknown>
   if (event.seq !== undefined) set(chatRoomCursorsAtom, (current) => new Map(current).set(roomId, Math.max(current.get(roomId) ?? 0, event.seq!)))
   if (event.type === 'message.created') {
-    const message = payload as unknown as ChatRoomMessage
+    const message = normalizeChatRoomMessage(payload, { roomId, seq: event.seq })
     set(chatRoomMessagesAtom, (current) => { const next = new Map(current); next.set(roomId, [...(current.get(roomId) ?? []), message]); return next })
     if (get(chatRoomActiveRoomIdAtom) !== roomId) set(chatRoomUnreadCountsAtom, (current) => new Map(current).set(roomId, (current.get(roomId) ?? 0) + 1))
   } else if (event.type === 'agent.delta' || event.type === 'agent.completed' || event.type === 'agent.failed') {
