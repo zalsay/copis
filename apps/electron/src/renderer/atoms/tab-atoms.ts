@@ -40,7 +40,10 @@ export interface TabItem {
   sessionId: string
   /** 标签页显示标题 */
   title: string
+  /** 聊天室 Tab 的 roomId；聊天室不创建 sessionId。 */
+  roomId?: string
 }
+export interface ChatRoomTabItem { id: string; type: 'chatroom'; roomId: string; title: string; sessionId?: never }
 
 /** Tab 持久化数据（保存到 settings.json） */
 export interface PersistedTabState {
@@ -75,6 +78,7 @@ export interface OpenTabRestore {
 // ===== 核心 Atoms =====
 
 /** 顶部当前会话入口列表 */
+// 旧的 Agent 辅助函数仍消费三种会话 Tab；聊天室入口通过纯函数写入同一列表。
 export const tabsAtom = atom<TabItem[]>([])
 
 /** 当前激活的标签 ID */
@@ -122,7 +126,7 @@ export const activeTabAtom = atom<TabItem | null>((get) => {
  */
 export const activeSessionIdAtom = atom<string | null>((get) => {
   const activeTab = get(activeTabAtom)
-  return activeTab?.sessionId ?? null
+  return (activeTab as unknown as { type: string } | null)?.type === 'chatroom' ? null : activeTab?.sessionId ?? null
 })
 
 /** 标签是否在流式输出中（派生，从现有流式 atoms 计算） */
@@ -184,12 +188,12 @@ export function isPreviewTab(tab: TabItem): boolean {
   return tab.type === 'preview' || tab.id.startsWith(PREVIEW_TAB_PREFIX)
 }
 
-function isSessionTab(tab: TabItem): boolean {
-  return tab.type === 'agent'
+function isSessionTab(tab: TabItem): tab is TabItem & { sessionId: string } {
+  return tab.type === 'agent' && typeof tab.sessionId === 'string'
 }
 
 function getPersistentTabs(tabs: TabItem[]): TabItem[] {
-  return tabs.filter((tab) => tab.id !== LEGACY_SCRATCH_PAD_ID && tab.type !== 'tutorial' && !isPreviewTab(tab))
+  return tabs.filter((tab) => tab.id !== LEGACY_SCRATCH_PAD_ID && tab.type !== 'tutorial' && (tab as unknown as { type: string }).type !== 'chatroom' && !isPreviewTab(tab))
 }
 
 function isPersistedAgentTab(value: unknown): value is TabItem {
@@ -234,7 +238,7 @@ export function getPersistableTabState(
  *  restore 提示存在时，切回带预览的会话会一并重建其预览 Tab 并回到上次视图。 */
 export function openTab(
   tabs: TabItem[],
-  item: { type: TabType; sessionId: string; title: string },
+  item: { type: Exclude<TabType, 'chatroom'>; sessionId: string; title: string },
   restore?: OpenTabRestore,
 ): { tabs: TabItem[]; activeTabId: string } {
   if (item.type === 'tutorial') {
@@ -292,6 +296,21 @@ export function openTab(
   return {
     tabs: [sessionTab],
     activeTabId: sessionTab.id,
+  }
+}
+
+/** 打开独立聊天室标签；不会替换现有 Agent、预览或教程标签。 */
+export function openChatRoomTab(
+  tabs: TabItem[],
+  room: { roomId: string; name: string },
+): { tabs: TabItem[]; activeTabId: string } {
+  const id = `chatroom:${room.roomId}`
+  const existing = tabs.find((tab) => (tab as unknown as ChatRoomTabItem).type === 'chatroom' && (tab as unknown as ChatRoomTabItem).roomId === room.roomId) as ChatRoomTabItem | undefined
+  if (existing) return { tabs, activeTabId: existing.id }
+  return {
+    // 运行时故意不写入 sessionId；聊天室使用 roomId 作为唯一身份。
+    tabs: [...tabs, { id, type: 'chatroom', roomId: room.roomId, title: room.name } as unknown as TabItem],
+    activeTabId: id,
   }
 }
 
@@ -362,6 +381,6 @@ export function updateTabTitle(
   title: string,
 ): TabItem[] {
   return tabs.map((t) =>
-    t.sessionId === sessionId && !isPreviewTab(t) ? { ...t, title } : t
+    isSessionTab(t) && t.sessionId === sessionId && !isPreviewTab(t) ? { ...t, title } : t
   )
 }

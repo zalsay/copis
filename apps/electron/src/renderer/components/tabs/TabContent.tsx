@@ -14,6 +14,7 @@ import { MarkdownRichEditor } from '@/components/diff/MarkdownRichEditor'
 import { PreviewTabContent } from '@/components/diff/PreviewTabContent'
 import { MarkdownToc } from '@/components/diff/MarkdownToc'
 import { TabErrorBoundary } from './TabErrorBoundary'
+import { ChatroomView } from '@/components/chatroom/ChatroomView'
 
 export interface TabContentProps {
   tabId: string
@@ -37,6 +38,9 @@ export function TabContent({ tabId }: TabContentProps): React.ReactElement {
       </div>
     )
   }
+
+  const chatroomTab = tab as unknown as { type: string; roomId?: string }
+  if (chatroomTab.type === 'chatroom' && chatroomTab.roomId) return <ChatroomView roomId={chatroomTab.roomId} />
 
   if (tab.type === 'preview') {
     return (

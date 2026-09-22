@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { getPersistableTabState, openTab, resolveRenderedTabId } from './tab-atoms'
+import { getPersistableTabState, openChatRoomTab, openTab, resolveRenderedTabId } from './tab-atoms'
 import type { TabItem } from './tab-atoms'
 
 describe('会话入口持久化', () => {
@@ -63,5 +63,18 @@ describe('会话入口持久化', () => {
       tabs: [],
       activeTabId: null,
     })
+  })
+
+  test('Given Agent 和项目 Tab 已存在 When 打开聊天室 Then 保留原 Tab 且按 roomId 聚焦复用', () => {
+    const agent: TabItem = { id: 'agent-1', type: 'agent', sessionId: 'agent-1', title: 'Agent' }
+    const project: TabItem = { id: 'preview-1', type: 'preview', sessionId: 'agent-1', title: '项目' }
+    const first = openChatRoomTab([agent, project], { roomId: 'room-1', name: '讨论' })
+    expect(first.tabs).toHaveLength(3)
+    expect(first.tabs[0]).toEqual(agent)
+    expect(first.tabs[1]).toEqual(project)
+    expect(first.activeTabId).toBe('chatroom:room-1')
+    const second = openChatRoomTab(first.tabs, { roomId: 'room-1', name: '讨论' })
+    expect(second.tabs).toBe(first.tabs)
+    expect(second.activeTabId).toBe(first.activeTabId)
   })
 })
