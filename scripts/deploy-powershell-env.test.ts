@@ -4,6 +4,7 @@ import { join } from 'node:path'
 
 const repoRoot = join(import.meta.dir, '..')
 const deployScript = readFileSync(join(repoRoot, 'deploy.ps1'), 'utf8')
+const electronPlatformVersionScript = readFileSync(join(repoRoot, 'scripts/electron-platform-version.ts'), 'utf8')
 
 describe('Windows 部署入口的 .env 加载', () => {
   test('在读取发布配置前加载根目录 .env，并保留进程环境变量优先级', () => {
@@ -26,9 +27,11 @@ describe('Windows 部署入口的 .env 加载', () => {
     expect(deployScript).toContain("'--skip-publish' { $SkipPublish = $true }")
   })
 
-  test('按 deploy.sh 的方式以 UTF-8 读取配置和应用元数据', () => {
+  test('按目标平台读取应用版本，并以 UTF-8 解析应用元数据', () => {
     expect(deployScript).toContain('Get-Content -LiteralPath $Path -Encoding UTF8')
-    expect(deployScript).toContain('Get-Content -LiteralPath $electronPackagePath -Raw -Encoding UTF8')
+    expect(deployScript).toContain("'--get' '--platform' $Platform '--arch' $Arch")
+    expect(deployScript).toContain("Join-Path $rootDir 'scripts\\bump-electron-version.ts'")
+    expect(electronPlatformVersionScript).toContain("resolveElectronVersion(JSON.parse(readFileSync(packagePath, 'utf8')), platform, arch)")
     expect(deployScript).toContain('Get-Content -LiteralPath $metadataPath -Raw -Encoding UTF8')
     expect(deployScript).toContain("$entry = $entry -replace '^export\\s+', ''")
   })
