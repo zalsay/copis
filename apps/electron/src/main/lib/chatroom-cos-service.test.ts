@@ -266,6 +266,36 @@ describe('ChatRoomCosService', () => {
     expect((await first).phase).toBe('cancelled')
   })
 
+  test('选择文件对话框期间占用 transferId，取消后不启动上传', async () => {
+    const root = makeRoot()
+    const filePath = join(root, 'selected.txt')
+    writeFileSync(filePath, 'hello')
+    let releaseDialog!: (value: { canceled: boolean; filePaths: string[] }) => void
+    const dialog = new Promise<{ canceled: boolean; filePaths: string[] }>((resolve) => { releaseDialog = resolve })
+    let uploadGrantCalls = 0
+    const service = createChatRoomCosService(baseOptions({
+      fileDialog: { showOpenDialog: async () => dialog, showSaveDialog: async () => ({ canceled: true }) },
+      grantClient: { requestUploadGrant: async () => { uploadGrantCalls++; return grant() }, requestDownloadGrant: async () => grant('download'), finalizeUpload: async () => {} },
+    }))
+    const first = service.selectAndUpload({ transferId: 'select-lock', roomId: 'r-1' })
+    await Promise.resolve()
+    expect(await service.upload({ transferId: 'select-lock', roomId: 'r-1', filePath })).toEqual({ transferId: 'select-lock', phase: 'failed', errorCode: 'transfer_in_progress' })
+    await service.cancel('select-lock')
+    releaseDialog({ canceled: false, filePaths: [filePath] })
+    expect(await first).toEqual({ transferId: 'select-lock', phase: 'cancelled', errorCode: 'transfer_cancelled' })
+    expect(uploadGrantCalls).toBe(0)
+  })
+
+  test('选择文件对话框异常会清理 transferId，后续同 ID 可重试', async () => {
+    let calls = 0
+    const service = createChatRoomCosService(baseOptions({
+      fileDialog: { showOpenDialog: async () => { calls++; throw new Error('dialog_failed') }, showSaveDialog: async () => ({ canceled: true }) },
+    }))
+    expect((await service.selectAndUpload({ transferId: 'select-error', roomId: 'r-1' })).phase).toBe('failed')
+    expect((await service.selectAndUpload({ transferId: 'select-error', roomId: 'r-1' })).phase).toBe('failed')
+    expect(calls).toBe(2)
+  })
+
   test('finalize 进行中取消明确失败且不会返回用户取消后的 ready', async () => {
     const root = makeRoot()
     const filePath = join(root, 'finalize.txt')
@@ -313,6 +343,43 @@ describe('ChatRoomCosService', () => {
     expect(abortCalls).toBe(0)
   })
 
+  test('上传完成后 SDK 晚到 progress 不再向 Renderer 发事件', async () => {
+    const root = makeRoot()
+    const filePath = join(root, 'late.txt')
+    writeFileSync(filePath, 'hello')
+    let lateProgress!: (value: { loaded: number; total: number; speed: number; percent: number }) => void
+    const progress: unknown[] = []
+    const service = createChatRoomCosService(baseOptions({
+      sdkFactory: () => ({
+        sliceUploadFile: async (params) => { lateProgress = params.onProgress!; return { ETag: 'etag-late' } },
+        abortUploadTask: async () => ({}), cancelTask: () => {}, downloadFile: async () => ({ ETag: 'etag' }),
+      }),
+    }))
+    service.onProgress((state) => progress.push(state))
+    expect((await service.upload({ transferId: 'late-upload', roomId: 'r-1', filePath })).phase).toBe('ready')
+    const count = progress.length
+    lateProgress({ loaded: 1, total: 2, speed: 1, percent: 0.5 })
+    expect(progress.length).toBe(count)
+  })
+
+  test('下载完成后 SDK 晚到 progress 不再向 Renderer 发事件', async () => {
+    const root = makeRoot()
+    const destination = join(root, 'late-download.txt')
+    let lateProgress!: (value: { loaded: number; total: number; speed: number; percent: number }) => void
+    const progress: unknown[] = []
+    const service = createChatRoomCosService(baseOptions({
+      sdkFactory: () => ({
+        sliceUploadFile: async () => ({ ETag: 'etag' }), abortUploadTask: async () => ({}), cancelTask: () => {},
+        downloadFile: async (params) => { lateProgress = params.onProgress!; return { ETag: 'etag-late-download' } },
+      }),
+    }))
+    service.onProgress((state) => progress.push(state))
+    expect((await service.download({ transferId: 'late-download', roomId: 'r-1', attachmentId: 'att-1', target: 'user', destinationPath: destination })).phase).toBe('ready')
+    const count = progress.length
+    lateProgress({ loaded: 1, total: 2, speed: 1, percent: 0.5 })
+    expect(progress.length).toBe(count)
+  })
+
   test('下载只使用服务端 objectKey 并把结果写到 Main 选择的目标', async () => {
     const root = makeRoot()
     const destination = join(root, 'download.txt')
@@ -332,6 +399,20 @@ describe('ChatRoomCosService', () => {
     expect(existsSync(destination)).toBe(true)
     expect(result).toEqual({ transferId: 't-download', attachmentId: 'att-1', phase: 'ready' })
     expect(JSON.stringify(result)).not.toContain('objectKey')
+  })
+
+  test('下载到用户已选目标会完成受控替换', async () => {
+    const root = makeRoot()
+    const destination = join(root, 'replace.txt')
+    writeFileSync(destination, '旧文件必须被用户选择覆盖')
+    const service = createChatRoomCosService(baseOptions({
+      sdkFactory: () => ({
+        sliceUploadFile: async () => ({ ETag: 'etag' }), abortUploadTask: async () => ({}), cancelTask: () => {},
+        downloadFile: async (params) => { writeFileSync(params.FilePath, '新文件'); return { ETag: 'etag-replace' } },
+      }),
+    }))
+    expect((await service.download({ transferId: 'replace-target', roomId: 'r-1', attachmentId: 'att-1', target: 'user', destinationPath: destination })).phase).toBe('ready')
+    expect(readFileSync(destination, 'utf8')).toBe('新文件')
   })
 
   test('下载到 Agent inbox 只解析绑定房间的隔离目录', async () => {

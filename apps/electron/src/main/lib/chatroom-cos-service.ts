@@ -1,5 +1,5 @@
 import COS from 'cos-nodejs-sdk-v5'
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { constants, closeSync, createReadStream, createWriteStream, fstatSync, fsyncSync, lstatSync, mkdtempSync, openSync, renameSync, rmSync, statSync } from 'node:fs'
 import { basename, dirname, extname, isAbsolute, join, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
@@ -112,6 +112,7 @@ interface ActiveTransfer {
   region?: string
   objectKey?: string
   finalizing?: boolean
+  terminalPhase?: 'ready' | 'failed' | 'cancelled'
 }
 
 function stableErrorCode(error: unknown): string {
@@ -163,6 +164,19 @@ function assertDestinationPath(destinationPath: string): void {
     current = parent
     isLeaf = false
   }
+}
+
+interface DirectoryIdentity { dev: number; ino: number }
+
+function readDestinationParentIdentity(destinationPath: string): DirectoryIdentity {
+  const stats = lstatSync(dirname(destinationPath))
+  if (!stats.isDirectory() || stats.isSymbolicLink()) throw new Error('destination_path_invalid')
+  return { dev: stats.dev, ino: stats.ino }
+}
+
+function assertDestinationParentIdentity(destinationPath: string, expected: DirectoryIdentity): void {
+  const current = readDestinationParentIdentity(destinationPath)
+  if (current.dev !== expected.dev || current.ino !== expected.ino) throw new Error('destination_path_changed')
 }
 
 interface UploadSnapshot {
@@ -253,6 +267,28 @@ function progressState(input: ActiveTransfer, transferId: string, phase: ChatRoo
   }
 }
 
+function replaceDownloadedFile(tempPath: string, destinationPath: string): void {
+  try {
+    renameSync(tempPath, destinationPath)
+    return
+  } catch (error) {
+    // Windows 不允许 rename 覆盖已存在文件。先把经过路径校验的旧文件移到同目录
+    // 的随机备份名，替换失败时恢复；任何阶段都不先 unlink 用户文件。
+    if (process.platform !== 'win32') throw error
+    const target = lstatSync(destinationPath)
+    if (target.isSymbolicLink() || !target.isFile()) throw error
+    const displacedPath = `${destinationPath}.displaced-${randomUUID()}`
+    renameSync(destinationPath, displacedPath)
+    try {
+      renameSync(tempPath, destinationPath)
+    } catch (replacementError) {
+      try { renameSync(displacedPath, destinationPath) } catch { /* 保留 displaced 供恢复 */ }
+      throw replacementError
+    }
+    try { rmSync(displacedPath, { force: true }) } catch { /* 新文件已安装，旧文件仍保留可恢复 */ }
+  }
+}
+
 function validateGrant(raw: unknown, action: CosSdkGrant['action']): CosSdkGrant {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('cos_grant_invalid')
   const value = raw as Record<string, unknown>
@@ -320,6 +356,17 @@ export function createChatRoomCosService(options: ChatRoomCosServiceOptions): Ch
     }
   }
 
+  const emitTransfer = (transferId: string, transfer: ActiveTransfer, phase: ChatRoomAttachmentPhase, progress: number): void => {
+    if (active.get(transferId) !== transfer || transfer.cancelled || transfer.terminalPhase) return
+    emit(progressState(transfer, transferId, phase, progress))
+  }
+
+  const emitTerminal = (transferId: string, transfer: ActiveTransfer, phase: 'ready' | 'failed' | 'cancelled', progress: number): void => {
+    if (active.get(transferId) !== transfer || transfer.terminalPhase) return
+    transfer.terminalPhase = phase
+    emit(progressState(transfer, transferId, phase, progress))
+  }
+
   async function cancelUploadTask(transfer: ActiveTransfer, taskId: string): Promise<void> {
     transfer.sdk?.cancelTask(taskId)
     if (!transfer.sdk || !transfer.bucket || !transfer.region || !transfer.objectKey) return
@@ -339,19 +386,14 @@ export function createChatRoomCosService(options: ChatRoomCosServiceOptions): Ch
     const code = stableErrorCode(error)
     safeLogger(logger, code)
     if (code === 'transfer_cancelled' || input.cancelled) {
-      emit(progressState(input, transferId, 'cancelled', 0))
+      emitTerminal(transferId, input, 'cancelled', 0)
       return { transferId, ...(input.attachmentId ? { attachmentId: input.attachmentId } : {}), ...(input.originalName ? { originalName: input.originalName } : {}), phase: 'cancelled', errorCode: 'transfer_cancelled' }
     }
-    emit(progressState(input, transferId, 'failed', 0))
+    emitTerminal(transferId, input, 'failed', 0)
     return { transferId, ...(input.originalName ? { originalName: input.originalName } : {}), phase: 'failed', errorCode: code }
   }
 
-  async function upload(input: ChatRoomUploadJob): Promise<ChatRoomTransferResult> {
-    assertSafeIdentifier(input.transferId, 'transfer_id')
-    assertSafeIdentifier(input.roomId, 'room_id')
-    if (active.has(input.transferId)) return resultFailed(input.transferId, 'transfer_in_progress')
-    const transfer: ActiveTransfer = { cancelled: false, roomId: input.roomId, kind: 'upload' }
-    active.set(input.transferId, transfer)
+  async function runUpload(input: ChatRoomUploadJob, transfer: ActiveTransfer): Promise<ChatRoomTransferResult> {
     let authorized: CosSdkGrant | undefined
     let snapshot: UploadSnapshot | undefined
     try {
@@ -359,31 +401,32 @@ export function createChatRoomCosService(options: ChatRoomCosServiceOptions): Ch
       transfer.originalName = snapshot.originalName
       const sha256 = await (options.fileHasher ?? (async () => snapshot!.sha256))(snapshot.filePath)
       if (transfer.cancelled) throw new Error('transfer_cancelled')
-      emit(progressState(transfer, input.transferId, 'waiting_authorization', 0))
+      emitTransfer(input.transferId, transfer, 'waiting_authorization', 0)
       authorized = validateGrant(await grantClient.requestUploadGrant({ roomId: input.roomId, originalName: snapshot.originalName, mimeType: mimeTypeFor(snapshot.originalName), sizeBytes: snapshot.sizeBytes, sha256 }), 'upload')
       transfer.attachmentId = authorized.attachmentId
       transfer.bucket = authorized.bucket
       transfer.region = authorized.region
       transfer.objectKey = authorized.objectKey
       if (transfer.cancelled) throw new Error('transfer_cancelled')
-      emit(progressState(transfer, input.transferId, 'uploading', 0))
+      emitTransfer(input.transferId, transfer, 'uploading', 0)
       transfer.sdk = sdkFactory({ SecretId: authorized.tmpSecretId, SecretKey: authorized.tmpSecretKey, SecurityToken: authorized.sessionToken })
       const uploadResult = await transfer.sdk.sliceUploadFile({
         Bucket: authorized.bucket, Region: authorized.region, Key: authorized.objectKey, FilePath: snapshot.filePath,
         ContentType: mimeTypeFor(snapshot.originalName), 'x-cos-meta-sha256': sha256,
         onTaskReady: (taskId) => {
+          if (active.get(input.transferId) !== transfer || transfer.terminalPhase) return
           transfer.taskId = taskId
           if (transfer.cancelled) void cancelUploadTask(transfer, taskId)
         },
-        onProgress: (value) => emit(progressState(transfer, input.transferId, 'uploading', clampProgress(value.percent))),
+        onProgress: (value) => emitTransfer(input.transferId, transfer, 'uploading', clampProgress(value.percent)),
       })
       if (transfer.cancelled) throw new Error('transfer_cancelled')
       const etag = typeof uploadResult?.ETag === 'string' && uploadResult.ETag ? uploadResult.ETag : undefined
       if (!etag) throw new Error('cos_upload_missing_etag')
       transfer.finalizing = true
-      emit(progressState(transfer, input.transferId, 'validating', 1))
+      emitTransfer(input.transferId, transfer, 'validating', 1)
       await grantClient.finalizeUpload({ roomId: input.roomId, attachmentId: authorized.attachmentId, sizeBytes: snapshot.sizeBytes, sha256, etag })
-      emit(progressState(transfer, input.transferId, 'ready', 1))
+      emitTerminal(input.transferId, transfer, 'ready', 1)
       return { transferId: input.transferId, attachmentId: authorized.attachmentId, originalName: snapshot.originalName, phase: 'ready' }
     } catch (error) {
       return fail(input.transferId, transfer, error)
@@ -399,11 +442,33 @@ export function createChatRoomCosService(options: ChatRoomCosServiceOptions): Ch
     }
   }
 
-  async function selectAndUpload(input: { transferId: string; roomId: string }): Promise<ChatRoomTransferResult> {
+  async function upload(input: ChatRoomUploadJob): Promise<ChatRoomTransferResult> {
+    assertSafeIdentifier(input.transferId, 'transfer_id')
+    assertSafeIdentifier(input.roomId, 'room_id')
     if (active.has(input.transferId)) return resultFailed(input.transferId, 'transfer_in_progress')
-    const selected = await options.fileDialog.showOpenDialog()
-    if (selected.canceled || !selected.filePaths?.[0]) return { transferId: input.transferId, phase: 'cancelled', errorCode: 'transfer_cancelled' }
-    return upload({ transferId: input.transferId, roomId: input.roomId, filePath: selected.filePaths[0] })
+    const transfer: ActiveTransfer = { cancelled: false, roomId: input.roomId, kind: 'upload' }
+    active.set(input.transferId, transfer)
+    return runUpload(input, transfer)
+  }
+
+  async function selectAndUpload(input: { transferId: string; roomId: string }): Promise<ChatRoomTransferResult> {
+    assertSafeIdentifier(input.transferId, 'transfer_id')
+    assertSafeIdentifier(input.roomId, 'room_id')
+    if (active.has(input.transferId)) return resultFailed(input.transferId, 'transfer_in_progress')
+    const transfer: ActiveTransfer = { cancelled: false, roomId: input.roomId, kind: 'upload' }
+    active.set(input.transferId, transfer)
+    try {
+      const selected = await options.fileDialog.showOpenDialog()
+      if (transfer.cancelled || selected.canceled || !selected.filePaths?.[0]) {
+        emitTerminal(input.transferId, transfer, 'cancelled', 0)
+        return { transferId: input.transferId, phase: 'cancelled', errorCode: 'transfer_cancelled' }
+      }
+      return runUpload({ transferId: input.transferId, roomId: input.roomId, filePath: selected.filePaths[0] }, transfer)
+    } catch (error) {
+      return fail(input.transferId, transfer, error)
+    } finally {
+      if (active.get(input.transferId) === transfer && transfer.terminalPhase) active.delete(input.transferId)
+    }
   }
 
   async function download(input: ChatRoomDownloadJob): Promise<ChatRoomTransferResult> {
@@ -416,7 +481,7 @@ export function createChatRoomCosService(options: ChatRoomCosServiceOptions): Ch
     let authorized: CosSdkGrant | undefined
     let downloadTempDir: string | undefined
     try {
-      emit(progressState(transfer, input.transferId, 'waiting_authorization', 0))
+      emitTransfer(input.transferId, transfer, 'waiting_authorization', 0)
       authorized = validateGrant(await grantClient.requestDownloadGrant({ roomId: input.roomId, attachmentId: input.attachmentId }), 'download')
       if (authorized.attachmentId !== input.attachmentId) throw new Error('cos_grant_invalid')
       transfer.attachmentId = authorized.attachmentId
@@ -437,8 +502,9 @@ export function createChatRoomCosService(options: ChatRoomCosServiceOptions): Ch
       }
       if (!destinationPath || !isAbsolute(destinationPath) || /[\u0000\u0001-\u001f\u007f]/.test(destinationPath)) throw new Error('destination_path_invalid')
       assertDestinationPath(destinationPath)
+      const destinationParentIdentity = readDestinationParentIdentity(destinationPath)
       if (transfer.cancelled) throw new Error('transfer_cancelled')
-      emit(progressState(transfer, input.transferId, 'downloading', 0))
+      emitTransfer(input.transferId, transfer, 'downloading', 0)
       transfer.sdk = sdkFactory({ SecretId: authorized.tmpSecretId, SecretKey: authorized.tmpSecretKey, SecurityToken: authorized.sessionToken })
       const destinationParent = dirname(destinationPath)
       downloadTempDir = mkdtempSync(join(destinationParent, '.copis-chatroom-download-'))
@@ -451,14 +517,15 @@ export function createChatRoomCosService(options: ChatRoomCosServiceOptions): Ch
           transfer.taskId = taskId
           if (transfer.cancelled && transfer.sdk) transfer.sdk.cancelTask(taskId)
         },
-        onProgress: (value) => emit(progressState(transfer, input.transferId, 'downloading', clampProgress(value.percent))),
+        onProgress: (value) => emitTransfer(input.transferId, transfer, 'downloading', clampProgress(value.percent)),
       })
       if (transfer.cancelled) throw new Error('transfer_cancelled')
       if (!result?.ETag) throw new Error('cos_download_missing_etag')
       assertDestinationPath(destinationPath)
-      renameSync(tempPath, destinationPath)
+      assertDestinationParentIdentity(destinationPath, destinationParentIdentity)
+      replaceDownloadedFile(tempPath, destinationPath)
       rmSync(downloadTempDir, { recursive: true, force: true })
-      emit(progressState(transfer, input.transferId, 'ready', 1))
+      emitTerminal(input.transferId, transfer, 'ready', 1)
       return { transferId: input.transferId, attachmentId: authorized.attachmentId, phase: 'ready' }
     } catch (error) {
       return fail(input.transferId, transfer, error)
