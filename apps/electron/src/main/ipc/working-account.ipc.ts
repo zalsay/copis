@@ -6,6 +6,7 @@ import { getWorkingModelCatalogAccess } from '../lib/working-model-catalog-acces
 
 export interface WorkingAccountIpcOptions {
   stopChatRoomAgents?: (reason: 'logout') => Promise<void>
+  resumeChatRoomAgentsAfterAuthentication?: () => Promise<void>
 }
 
 export function registerWorkingAccountIpcHandlers(options: WorkingAccountIpcOptions = {}): void {
@@ -33,6 +34,7 @@ export function registerWorkingAccountIpcHandlers(options: WorkingAccountIpcOpti
     const client = getWorkingApiClient()
     await client.login(input)
     const state = await client.getAuthState()
+    await options.resumeChatRoomAgentsAfterAuthentication?.()
     if (getDshCordisStatus().running) await reloadDshCordisPlugins({ startIfNeeded: false })
     return {
       ...state,
@@ -43,6 +45,7 @@ export function registerWorkingAccountIpcHandlers(options: WorkingAccountIpcOpti
   ipcMain.handle(WORKING_IPC_CHANNELS.LOGIN_OIDC, async () => {
     const client = getWorkingApiClient()
     const result = await client.loginWithOAuth((url) => shell.openExternal(url))
+    await options.resumeChatRoomAgentsAfterAuthentication?.()
     if (getDshCordisStatus().running) await reloadDshCordisPlugins({ startIfNeeded: false })
     return {
       authenticated: true,

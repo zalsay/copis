@@ -130,14 +130,58 @@ test('Given 同一 trace 与 Agent 已有记录 When 重复投递 Then 返回 du
   expect(runAgentHeadless).toHaveBeenCalledTimes(1)
 })
 
-test('Given depth 为 3 或 Gateway 已断开 When 投递 Then 立即失败且不启动', async () => {
+test('Given depth 为 3 或 Gateway 已断开 When 投递 Then 深度失败且可信新 invocation 可恢复连接', async () => {
   const { deps, runAgentHeadless, reportFailed } = fakeDeps()
   const coordinator = new coordinatorModule.ChatRoomAgentCoordinator(deps)
   await coordinator.handleInvocation({ ...makeInput('inv-deep', 'agent-a'), depth: 3 })
   await coordinator.handleGatewayDisconnected()
-  await coordinator.handleInvocation({ ...makeInput('inv-offline', 'agent-a'), traceId: 'trace-offline' })
+  await coordinator.handleInvocation({ ...makeInput('inv-reconnect', 'agent-a'), traceId: 'trace-reconnect' })
+  expect(runAgentHeadless).toHaveBeenCalledTimes(1)
+  expect(reportFailed).toHaveBeenCalledTimes(1)
+})
+
+test('Given logout 已停止 When 旧 invocation 到达 Then 拒绝；认证成功恢复后新 invocation 才执行', async () => {
+  const { deps, runAgentHeadless, reportFailed } = fakeDeps()
+  const coordinator = new coordinatorModule.ChatRoomAgentCoordinator(deps)
+  await coordinator.stopAll('logout')
+  await coordinator.handleInvocation(makeInput('logout-old', 'agent-a'))
+  expect(reportFailed).toHaveBeenCalledWith(expect.objectContaining({ invocationId: 'logout-old', code: 'agent_offline' }))
   expect(runAgentHeadless).not.toHaveBeenCalled()
-  expect(reportFailed).toHaveBeenCalledTimes(2)
+  await coordinator.resumeAfterAuthentication()
+  await coordinator.handleInvocation({ ...makeInput('logout-new', 'agent-a'), traceId: 'trace-after-login' })
+  expect(runAgentHeadless).toHaveBeenCalledTimes(1)
+})
+
+test('Given logout stop 正在进行 When authentication callback arrives Then it waits and does not revive app quit state', async () => {
+  const { deps, runAgentHeadless } = fakeDeps()
+  const coordinator = new coordinatorModule.ChatRoomAgentCoordinator(deps)
+  const stop = coordinator.stopAll('app_quit')
+  await coordinator.resumeAfterAuthentication()
+  await stop
+  await coordinator.handleInvocation(makeInput('quit-no-revive', 'agent-a'))
+  expect(runAgentHeadless).not.toHaveBeenCalled()
+})
+
+test('Given gateway transient disconnect When trusted invocation arrives after stop Then it proves recovery once', async () => {
+  const { deps, runAgentHeadless } = fakeDeps()
+  const coordinator = new coordinatorModule.ChatRoomAgentCoordinator(deps)
+  await coordinator.stopAll('gateway_disconnected')
+  await coordinator.handleInvocation(makeInput('reconnect-new', 'agent-a'))
+  expect(runAgentHeadless).toHaveBeenCalledTimes(1)
+})
+
+test('Given gateway stop is in flight When logout escalates Then auth_required wins over auto-resume', async () => {
+  const { deps, runAgentHeadless, reportFailed } = fakeDeps()
+  const coordinator = new coordinatorModule.ChatRoomAgentCoordinator(deps)
+  const gatewayStop = coordinator.stopAll('gateway_disconnected')
+  const logoutStop = coordinator.stopAll('logout')
+  await Promise.all([gatewayStop, logoutStop])
+  await coordinator.handleInvocation({ ...makeInput('late-auth-window', 'agent-a'), traceId: 'late-auth-window' })
+  expect(runAgentHeadless).not.toHaveBeenCalled()
+  expect(reportFailed).toHaveBeenCalledWith(expect.objectContaining({ invocationId: 'late-auth-window', code: 'agent_offline' }))
+  await coordinator.resumeAfterAuthentication()
+  await coordinator.handleInvocation({ ...makeInput('after-auth', 'agent-a'), traceId: 'after-auth' })
+  expect(runAgentHeadless).toHaveBeenCalledTimes(1)
 })
 
 test('Given 三个 run 都被 barrier 卡住 When 批量投递 Then 任一完成前三个都已经启动', async () => {
@@ -478,8 +522,8 @@ test('Given 本地存在多个未归档 Agent When stopAll Then 释放全部 lea
   const first = await coordinator.stopAll('gateway_disconnected')
   const second = await coordinator.stopAll('gateway_disconnected')
   expect(first.releasedRoomAgentIds).toEqual(['agent-a', 'agent-b', 'agent-c'])
-  expect(second).toBe(first)
-  expect(deps.rustApi.releaseAgentLeases).toHaveBeenCalledTimes(1)
+  expect(second).toEqual(first)
+  expect(deps.rustApi.releaseAgentLeases).toHaveBeenCalledTimes(2)
 })
 
 test('Given 首次 lease release 失败 When 并发 stopAll 后再次重试 Then 不误报并复用已完成清理', async () => {

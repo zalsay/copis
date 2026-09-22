@@ -70,6 +70,17 @@ function createDependencies(overrides: Partial<HttpApiDependencies> = {}): HttpA
   }
 }
 
+test('Given Rust HTTP login reports authenticated When auth state changes Then coordinator resume callback runs once', async () => {
+  const resume = mock(async () => undefined)
+  const response = await handleHttpApiRequest({
+    method: 'POST', path: '/api/internal/auth-state/changed', body: JSON.stringify({ authenticated: true, user: { id: 'user-1' } }),
+  }, createDependencies({
+    resumeChatRoomAgentsAfterAuthentication: resume,
+  }))
+  expect(response.status).toBe(204)
+  expect(resume).toHaveBeenCalledTimes(1)
+})
+
 describe('聊天室 Rust bridge HTTP handler', () => {
   test('Given 合法 invocation When Rust bridge 投递 Then coordinator 接收且返回 accepted 202', async () => {
     const handleChatRoomInvocation = mock(async () => 'accepted' as const)

@@ -97,6 +97,14 @@ export function registerIpcHandlers(): void {
         // 协调器尚未初始化时没有运行中的聊天室 Agent。
       }
     },
+    resumeChatRoomAgentsAfterAuthentication: async () => {
+      try {
+        const { resumeChatRoomAgentCoordinatorAfterAuthentication } = await import('./lib/chatroom-agent-bootstrap')
+        await resumeChatRoomAgentCoordinatorAfterAuthentication()
+      } catch {
+        // 协调器尚未初始化时无需恢复状态。
+      }
+    },
   })
   registerChatRoomIpcHandlers()
   registerWorkingPaymentIpcHandlers()

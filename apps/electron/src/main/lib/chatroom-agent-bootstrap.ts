@@ -85,6 +85,11 @@ export function releaseChatRoomAgentCoordinatorRegistration(): void {
   registrationRelease = undefined
 }
 
+export async function resumeChatRoomAgentCoordinatorAfterAuthentication(): Promise<void> {
+  const coordinator = getChatRoomAgentCoordinator()
+  await coordinator.resumeAfterAuthentication?.()
+}
+
 export async function disposeChatRoomAgentCoordinator(): Promise<void> {
   try { await getChatRoomAgentCoordinator().dispose() } finally { releaseChatRoomAgentCoordinatorRegistration() }
 }

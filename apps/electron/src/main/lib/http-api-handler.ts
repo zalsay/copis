@@ -145,6 +145,7 @@ export interface HttpApiDependencies {
   /** Rust bridge 断开通知使用的聊天室清理入口。 */
   handleChatRoomGatewayDisconnected?: () => Promise<void>
   stopChatRoomAgents?: (reason: 'logout') => Promise<void>
+  resumeChatRoomAgentsAfterAuthentication?: () => Promise<void>
   handleAgentPermission?: (input: { sessionId: string; requestId: string; toolName: string; toolInput: Record<string, unknown>; description?: string }) => Promise<{ behavior: 'allow' | 'deny'; message?: string }>
 }
 
@@ -209,6 +210,14 @@ const defaultDependencies: HttpApiDependencies = {
       await getChatRoomAgentCoordinator().stopAll(reason)
     } catch {
       // 聊天室协调器尚未初始化时没有可停止的运行。
+    }
+  },
+  resumeChatRoomAgentsAfterAuthentication: async () => {
+    try {
+      const { resumeChatRoomAgentCoordinatorAfterAuthentication } = await import('./chatroom-agent-bootstrap')
+      await resumeChatRoomAgentCoordinatorAfterAuthentication()
+    } catch {
+      // 协调器尚未初始化时无需恢复状态。
     }
   },
 }
@@ -829,6 +838,7 @@ async function handleWorkingRequest(
       password: requireString(bodyRecord ?? {}, 'password', '登录密码不正确'),
     }
     const result = await client.login(input)
+    await dependencies.resumeChatRoomAgentsAfterAuthentication?.()
     return {
       status: 200,
       body: {
@@ -1531,6 +1541,7 @@ export async function handleHttpApiRequest(
         backendUrl: dependencies.getWorkingClient().baseUrl,
         expiresAt,
       })
+      if (body.authenticated) await dependencies.resumeChatRoomAgentsAfterAuthentication?.()
       console.info('[HTTP API][认证状态] changed 完成', {
         authenticated: body.authenticated,
         hasUser: user !== null,

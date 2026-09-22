@@ -3,9 +3,10 @@ import { WORKING_IPC_CHANNELS } from '@copis/shared'
 
 const handle = mock(() => {})
 const login = mock(async () => undefined)
+const loginWithOAuth = mock(async () => ({ user: { id: 'oidc-user' } }))
 const getAuthState = mock(async () => ({ authenticated: true }))
 const logout = mock(() => undefined)
-const client = { baseUrl: 'https://working.example', login, logout, getAuthState }
+const client = { baseUrl: 'https://working.example', login, loginWithOAuth, logout, getAuthState, getCachedUser: () => ({ id: 'oidc-user' }) }
 const getWorkingApiClient = mock(() => client)
 const reloadDshCordisPlugins = mock(async () => undefined)
 
@@ -28,7 +29,8 @@ function registeredHandler(channel: string): IpcHandler {
 
 test('Working 登录验证参数并刷新 Cordis 插件', async () => {
   const { registerWorkingAccountIpcHandlers } = await import('../ipc/working-account.ipc')
-  registerWorkingAccountIpcHandlers()
+  const resume = mock(async () => undefined)
+  registerWorkingAccountIpcHandlers({ resumeChatRoomAgentsAfterAuthentication: resume })
 
   await expect(registeredHandler(WORKING_IPC_CHANNELS.LOGIN)({}, { email: 'user@example.com', password: 'secret' })).resolves.toEqual({
     authenticated: true,
@@ -36,6 +38,10 @@ test('Working 登录验证参数并刷新 Cordis 插件', async () => {
   })
   expect(login).toHaveBeenCalledWith({ email: 'user@example.com', password: 'secret' })
   expect(reloadDshCordisPlugins).toHaveBeenCalledWith({ startIfNeeded: false })
+  expect(resume).toHaveBeenCalledTimes(1)
+  login.mockImplementationOnce(async () => { throw new Error('login failed') })
+  await expect(registeredHandler(WORKING_IPC_CHANNELS.LOGIN)({}, { email: 'user@example.com', password: 'wrong' })).rejects.toThrow('login failed')
+  expect(resume).toHaveBeenCalledTimes(1)
   await expect(registeredHandler(WORKING_IPC_CHANNELS.LOGIN)({}, { email: 'user@example.com' })).rejects.toThrow('登录参数不正确')
 })
 
@@ -46,4 +52,13 @@ test('Working 登出先等待聊天室清理再清除认证', async () => {
   registerWorkingAccountIpcHandlers({ stopChatRoomAgents: async () => { order.push('stopAll') } })
   await registeredHandler(WORKING_IPC_CHANNELS.LOGOUT)({})
   expect(order).toEqual(['stopAll', 'logout'])
+})
+
+test('Working OIDC 登录成功触发同一聊天室恢复回调', async () => {
+  const { registerWorkingAccountIpcHandlers } = await import('../ipc/working-account.ipc')
+  const resume = mock(async () => undefined)
+  registerWorkingAccountIpcHandlers({ resumeChatRoomAgentsAfterAuthentication: resume })
+  await registeredHandler(WORKING_IPC_CHANNELS.LOGIN_OIDC)()
+  expect(loginWithOAuth).toHaveBeenCalledTimes(1)
+  expect(resume).toHaveBeenCalledTimes(1)
 })

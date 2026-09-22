@@ -27,6 +27,7 @@ type AgentStopper = (sessionId: string) => Promise<void>
 const STOP_AGENT_TIMEOUT_MS = 1_000
 const REPORT_COMPLETION_TIMEOUT_MS = 1_000
 const TERMINAL_CONFIRM_TIMEOUT_MS = 2_000
+const STOP_REASON_PRIORITY: Record<'logout' | 'gateway_disconnected' | 'app_quit', number> = { gateway_disconnected: 1, logout: 2, app_quit: 3 }
 
 /** Task 7 的 bridge 接缝；兼容静态加载和旧 handler 测试。 */
 export interface ChatRoomAgentCoordinatorFacade {
@@ -34,6 +35,7 @@ export interface ChatRoomAgentCoordinatorFacade {
   handleGatewayDisconnected(): Promise<void>
   stopAll(reason: 'logout' | 'gateway_disconnected' | 'app_quit'): Promise<{ stoppedSessionIds: string[]; releasedRoomAgentIds: string[] }>
   dispose(): Promise<void>
+  resumeAfterAuthentication?(): Promise<void>
   provisionAgent?(input: ProvisionChatRoomAgentInput): Promise<ChatRoomAgentLocalConfig>
   updateAgent?(input: UpdateChatRoomAgentInput): Promise<ChatRoomAgentLocalConfig>
   removeAgent?(input: RemoveChatRoomAgentInput): Promise<void>
@@ -79,7 +81,8 @@ export class ChatRoomAgentCoordinator implements ChatRoomAgentCoordinatorFacade 
   private readonly activeRuns = new Map<string, ActiveRun>()
   private readonly pendingPermissions = new Map<string, PendingPermission>()
   private unsubscribeEvents: (() => void) | undefined
-  private disconnected = false
+  private lifecycle: 'ready' | 'auth_required' | 'disconnected' | 'stopping' | 'disposed' = 'ready'
+  private stoppingReason: 'logout' | 'gateway_disconnected' | 'app_quit' | undefined
   private disposed = false
   private stopping: Promise<{ stoppedSessionIds: string[]; releasedRoomAgentIds: string[] }> | undefined
   private readonly permissionListeners = new Set<(request: ChatRoomPermissionRequest) => void>()
@@ -137,7 +140,8 @@ export class ChatRoomAgentCoordinator implements ChatRoomAgentCoordinatorFacade 
     }
     if (finalRoom && (this.activeRuns.has(input.invocationId) || this.deps.store.getInvocation(input.roomId, input.invocationId) || this.deps.store.getTraceAgentInvocation(input.roomId, input.traceId, input.targetAgentId))) return 'duplicate'
     room = finalRoom
-    if (this.disconnected) { await this.reportRejected(input, 'agent_offline', room, input.targetAgentId); return 'accepted' }
+    if (this.lifecycle === 'stopping' || this.lifecycle === 'auth_required' || this.lifecycle === 'disposed') { await this.reportRejected(input, 'agent_offline', room, input.targetAgentId); return 'accepted' }
+    if (this.lifecycle === 'disconnected') this.lifecycle = 'ready'
     const config = room?.agents.find((agent) => agent.roomAgentId === input.targetAgentId && agent.archivedAt === undefined)
     if (!room || !config) { await this.reportRejected(input, 'room_agent_not_found'); return 'accepted' }
     if (input.depth >= CHATROOM_MAX_DEPTH) { await this.reportRejected(input, 'invocation_depth_exceeded', room, input.targetAgentId); return 'accepted' }
@@ -159,7 +163,8 @@ export class ChatRoomAgentCoordinator implements ChatRoomAgentCoordinatorFacade 
     return 'accepted'
   }
   async handleGatewayDisconnected(): Promise<void> {
-    this.disconnected = true
+    if (this.disposed || this.lifecycle === 'auth_required' || this.lifecycle === 'stopping') return
+    this.lifecycle = 'disconnected'
     this.denyPendingPermissions()
     await Promise.all([...this.activeRuns.values()].map(async (run) => { run.stopRequested = true; await this.failTerminal(run, 'gateway_disconnected'); void this.stopAgentBounded(run.config.sessionId) }))
   }
@@ -205,12 +210,19 @@ export class ChatRoomAgentCoordinator implements ChatRoomAgentCoordinatorFacade 
     if (input.behavior === 'deny' && run) { run.stopRequested = true; await this.failTerminal(run, 'host_approval_denied'); void this.stopAgentBounded(run.config.sessionId) }
   }
   async stopAll(reason: 'logout' | 'gateway_disconnected' | 'app_quit'): Promise<{ stoppedSessionIds: string[]; releasedRoomAgentIds: string[] }> {
-    if (this.stopping) return this.stopping
-    this.disconnected = true
-    this.stopping = (async () => { const runs = [...this.activeRuns.values()]; this.denyPendingPermissions(); const finalized = await Promise.all(runs.map(async (run) => { run.stopRequested = true; await this.failTerminal(run, reason === 'app_quit' ? 'app_quit' : reason === 'logout' ? 'internal_error' : 'gateway_disconnected'); void this.stopAgentBounded(run.config.sessionId); const terminalConfirmed = await this.awaitFinalization(run); return terminalConfirmed && this.cleanupActiveRun(run) })); const allCleaned = finalized.every(Boolean); const roomAgentIds = allCleaned ? [...new Set(this.deps.store.list().flatMap((room) => room.agents.filter((agent) => agent.archivedAt === undefined).map((agent) => agent.roomAgentId)))] : []; let releasedRoomAgentIds: string[] = []; let leaseReleaseSucceeded = true; if (roomAgentIds.length > 0) { try { await this.deps.rustApi.releaseAgentLeases({ roomAgentIds, reason }); releasedRoomAgentIds = roomAgentIds } catch { leaseReleaseSucceeded = false; this.deps.reportDiagnostic?.('聊天室 Agent lease 释放失败') } } const result = { stoppedSessionIds: runs.map((run) => run.config.sessionId), releasedRoomAgentIds }; if (!allCleaned || !leaseReleaseSucceeded) this.stopping = undefined; return result })()
+    if (this.stopping) {
+      if (this.stoppingReason && STOP_REASON_PRIORITY[reason] > STOP_REASON_PRIORITY[this.stoppingReason]) {
+        this.stoppingReason = reason
+        this.lifecycle = 'stopping'
+      }
+      return this.stopping
+    }
+    this.lifecycle = 'stopping'; this.stoppingReason = reason
+    this.stopping = (async () => { const runs = [...this.activeRuns.values()]; this.denyPendingPermissions(); const finalized = await Promise.all(runs.map(async (run) => { run.stopRequested = true; await this.failTerminal(run, reason === 'app_quit' ? 'app_quit' : reason === 'logout' ? 'internal_error' : 'gateway_disconnected'); void this.stopAgentBounded(run.config.sessionId); const terminalConfirmed = await this.awaitFinalization(run); return terminalConfirmed && this.cleanupActiveRun(run) })); const allCleaned = finalized.every(Boolean); const roomAgentIds = allCleaned ? [...new Set(this.deps.store.list().flatMap((room) => room.agents.filter((agent) => agent.archivedAt === undefined).map((agent) => agent.roomAgentId)))] : []; let releasedRoomAgentIds: string[] = []; let leaseReleaseSucceeded = true; if (roomAgentIds.length > 0) { try { await this.deps.rustApi.releaseAgentLeases({ roomAgentIds, reason }); releasedRoomAgentIds = roomAgentIds } catch { leaseReleaseSucceeded = false; this.deps.reportDiagnostic?.('聊天室 Agent lease 释放失败') } } const result = { stoppedSessionIds: runs.map((run) => run.config.sessionId), releasedRoomAgentIds }; const finalReason = this.stoppingReason ?? reason; this.stopping = undefined; this.lifecycle = finalReason === 'logout' ? 'auth_required' : finalReason === 'gateway_disconnected' ? 'disconnected' : 'stopping'; return result })()
     return this.stopping
   }
-  async dispose(): Promise<void> { if (this.disposed) return; await this.stopAll('app_quit'); this.disposed = true; this.unsubscribeEvents?.(); this.unsubscribeEvents = undefined }
+  async resumeAfterAuthentication(): Promise<void> { const stopping = this.stopping; if (stopping) await stopping; if (this.disposed || this.stoppingReason === 'app_quit') return; if (this.lifecycle === 'auth_required') { this.lifecycle = 'ready'; this.stoppingReason = undefined } }
+  async dispose(): Promise<void> { if (this.disposed) return; await this.stopAll('app_quit'); this.disposed = true; this.lifecycle = 'disposed'; this.unsubscribeEvents?.(); this.unsubscribeEvents = undefined }
 
   private async execute(run: ActiveRun): Promise<void> {
     const { invocation, config } = run
