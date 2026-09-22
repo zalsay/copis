@@ -241,7 +241,7 @@ function main() {
       }
     }
 
-    for (const v of ['react.production.min.js', 'react-dom.production.min.js']) {
+    for (const v of ['react.production.min.js', 'react-dom.production.min.js', 'LICENSE']) {
       const vSrc = join(RUNTIME_DIR, 'vendor', v)
       if (existsSync(vSrc)) {
         copyFileSync(vSrc, join(vendorTargetDir, v))

@@ -431,5 +431,28 @@ describe('默认 Skills 清单', () => {
       rmSync(tempDir, { recursive: true, force: true })
     }
   })
-})
 
+  test('设计大师脚手架复制运行时时保留两个 vendor 目录的许可证', () => {
+    const tempDir = mkdtempSync(join(tmpdir(), 'copis-dashi-design-scaffold-'))
+    const outputFile = join(tempDir, 'project', 'design.dc.html')
+    const scaffold = join(DEFAULT_SKILLS_DIR, 'dashi-design/scripts/scaffold.mjs')
+
+    try {
+      const result = spawnSync('node', [scaffold, '--output', outputFile], { encoding: 'utf8' })
+
+      expect(result.status).toBe(0)
+      const expectedLicense = readFileSync(
+        join(DEFAULT_SKILLS_DIR, 'dashi-design/runtime/vendor/LICENSE'),
+        'utf8'
+      )
+      for (const licensePath of [
+        join(tempDir, 'project/runtime/vendor/LICENSE'),
+        join(tempDir, 'project/vendor/LICENSE'),
+      ]) {
+        expect(readFileSync(licensePath, 'utf8')).toBe(expectedLicense)
+      }
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true })
+    }
+  })
+})
