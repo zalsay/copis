@@ -308,7 +308,7 @@ test('Given completion response is lost When stopAll is called Then idempotent f
     if (!options?.signal) return
     await new Promise<void>((_resolve, reject) => options.signal?.addEventListener('abort', () => reject(new Error('aborted')), { once: true }))
   })
-  const releaseAgentLeases = mock(async () => {})
+  const releaseAgentLeases = mock(async (_input: { roomAgentIds: string[] }) => {})
   const { deps, records } = fakeDeps({ rustApi: { ...fakeDeps().deps.rustApi, reportCompleted, releaseAgentLeases }, stopAgent: mock(async () => await new Promise<void>(() => {})) })
   const coordinator = new coordinatorModule.ChatRoomAgentCoordinator(deps)
   await coordinator.handleInvocation(makeInput('completion-never', 'agent-a'))
@@ -343,7 +343,7 @@ test('Given Rust 已写入 completed 但响应丢失 When finalize retry succeed
 
 test('Given finalize retry 仍不可确认 When stopAll 收敛 Then uncertain run 不释放 lease', async () => {
   const reportCompleted = mock(async () => { throw new Error('unavailable') })
-  const releaseAgentLeases = mock(async () => {})
+  const releaseAgentLeases = mock(async (_input: { roomAgentIds: string[] }) => {})
   const { deps, records } = fakeDeps({ rustApi: { ...fakeDeps().deps.rustApi, reportCompleted, releaseAgentLeases } })
   const coordinator = new coordinatorModule.ChatRoomAgentCoordinator(deps)
   await coordinator.handleInvocation(makeInput('uncertain-terminal', 'agent-a'))
@@ -542,8 +542,51 @@ test('Given 本地存在多个未归档 Agent When stopAll Then 释放全部 lea
   const first = await coordinator.stopAll('gateway_disconnected')
   const second = await coordinator.stopAll('gateway_disconnected')
   expect(first.releasedRoomAgentIds).toEqual(['agent-a', 'agent-b', 'agent-c'])
-  expect(second).toEqual(first)
-  expect(deps.rustApi.releaseAgentLeases).toHaveBeenCalledTimes(2)
+  expect(second.releasedRoomAgentIds).toEqual([])
+  expect(deps.rustApi.releaseAgentLeases).toHaveBeenCalledTimes(1)
+})
+
+test('Given 两个聊天室共六个未归档 Agent When stopAll Then 每批最多释放三个且汇总全部成功 lease', async () => {
+  const base = fakeDeps()
+  const secondRoom = { ...base.room, roomId: 'room-2', agents: ['agent-d', 'agent-e', 'agent-f'].map(makeAgent) }
+  base.deps.store.list = () => [base.room, secondRoom]
+  const releaseAgentLeases = mock(async (_input: { roomAgentIds: string[] }) => {})
+  base.deps.rustApi.releaseAgentLeases = releaseAgentLeases
+  const coordinator = new coordinatorModule.ChatRoomAgentCoordinator(base.deps)
+
+  const result = await coordinator.stopAll('gateway_disconnected')
+
+  expect(releaseAgentLeases.mock.calls.map(([input]) => input!.roomAgentIds)).toEqual([
+    ['agent-a', 'agent-b', 'agent-c'],
+    ['agent-d', 'agent-e', 'agent-f'],
+  ])
+  expect(releaseAgentLeases.mock.calls.every(([input]) => input!.roomAgentIds.length <= 3)).toBe(true)
+  expect(result.releasedRoomAgentIds).toEqual(['agent-a', 'agent-b', 'agent-c', 'agent-d', 'agent-e', 'agent-f'])
+})
+
+test('Given 某一批 lease 释放失败 When stopAll 重试 Then 只重试失败批次且不谎报成功批次', async () => {
+  const base = fakeDeps()
+  const secondRoom = { ...base.room, roomId: 'room-2', agents: ['agent-d', 'agent-e', 'agent-f'].map(makeAgent) }
+  base.deps.store.list = () => [base.room, secondRoom]
+  let calls = 0
+  const releaseAgentLeases = mock(async (input: { roomAgentIds: string[] }) => {
+    calls++
+    if (calls === 1) throw new Error('first batch unavailable')
+    expect(input.roomAgentIds).toEqual(calls === 2 ? ['agent-d', 'agent-e', 'agent-f'] : ['agent-a', 'agent-b', 'agent-c'])
+  })
+  base.deps.rustApi.releaseAgentLeases = releaseAgentLeases
+  const coordinator = new coordinatorModule.ChatRoomAgentCoordinator(base.deps)
+
+  const first = await coordinator.stopAll('gateway_disconnected')
+  const second = await coordinator.stopAll('gateway_disconnected')
+
+  expect(first.releasedRoomAgentIds).toEqual(['agent-d', 'agent-e', 'agent-f'])
+  expect(second.releasedRoomAgentIds).toEqual(['agent-a', 'agent-b', 'agent-c'])
+  expect(releaseAgentLeases.mock.calls.map(([input]) => input!.roomAgentIds)).toEqual([
+    ['agent-a', 'agent-b', 'agent-c'],
+    ['agent-d', 'agent-e', 'agent-f'],
+    ['agent-a', 'agent-b', 'agent-c'],
+  ])
 })
 
 test('Given 首次 lease release 失败 When 并发 stopAll 后再次重试 Then 不误报并复用已完成清理', async () => {

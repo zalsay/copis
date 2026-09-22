@@ -85,6 +85,7 @@ export class ChatRoomAgentCoordinator implements ChatRoomAgentCoordinatorFacade 
   private stoppingReason: 'logout' | 'gateway_disconnected' | 'app_quit' | undefined
   private disposed = false
   private stopping: Promise<{ stoppedSessionIds: string[]; releasedRoomAgentIds: string[] }> | undefined
+  private readonly releasedRoomAgentIds = new Set<string>()
   private readonly permissionListeners = new Set<(request: ChatRoomPermissionRequest) => void>()
   private readonly configListeners = new Set<(room: ChatRoomLocalRoomConfig) => void>()
   constructor(private readonly deps: ChatRoomAgentCoordinatorDependencies) {}
@@ -216,7 +217,40 @@ export class ChatRoomAgentCoordinator implements ChatRoomAgentCoordinatorFacade 
       return this.stopping
     }
     this.lifecycle = 'stopping'; this.stoppingReason = reason
-    this.stopping = (async () => { const runs = [...this.activeRuns.values()]; this.denyPendingPermissions(); const finalized = await Promise.all(runs.map(async (run) => { run.stopRequested = true; await this.failTerminal(run, reason === 'app_quit' ? 'app_quit' : reason === 'logout' ? 'internal_error' : 'gateway_disconnected'); void this.stopAgentBounded(run.config.sessionId); const terminalConfirmed = await this.awaitFinalization(run); return terminalConfirmed && this.cleanupActiveRun(run) })); const allCleaned = finalized.every(Boolean); const roomAgentIds = allCleaned ? [...new Set(this.deps.store.list().flatMap((room) => room.agents.filter((agent) => agent.archivedAt === undefined).map((agent) => agent.roomAgentId)))] : []; let releasedRoomAgentIds: string[] = []; let leaseReleaseSucceeded = true; if (roomAgentIds.length > 0) { try { await this.deps.rustApi.releaseAgentLeases({ roomAgentIds, reason }); releasedRoomAgentIds = roomAgentIds } catch { leaseReleaseSucceeded = false; this.deps.reportDiagnostic?.('聊天室 Agent lease 释放失败') } } const result = { stoppedSessionIds: runs.map((run) => run.config.sessionId), releasedRoomAgentIds }; const finalReason = this.stoppingReason ?? reason; this.stopping = undefined; this.lifecycle = finalReason === 'logout' ? 'auth_required' : finalReason === 'gateway_disconnected' ? 'disconnected' : 'stopping'; return result })()
+    this.stopping = (async () => {
+      const runs = [...this.activeRuns.values()]
+      this.denyPendingPermissions()
+      const finalized = await Promise.all(runs.map(async (run) => {
+        run.stopRequested = true
+        await this.failTerminal(run, reason === 'app_quit' ? 'app_quit' : reason === 'logout' ? 'internal_error' : 'gateway_disconnected')
+        void this.stopAgentBounded(run.config.sessionId)
+        const terminalConfirmed = await this.awaitFinalization(run)
+        return terminalConfirmed && this.cleanupActiveRun(run)
+      }))
+      const allCleaned = finalized.every(Boolean)
+      const roomAgentIds = allCleaned
+        ? [...new Set(this.deps.store.list().flatMap((room) => room.agents.filter((agent) => agent.archivedAt === undefined).map((agent) => agent.roomAgentId)))]
+        : []
+      const pendingRoomAgentIds = roomAgentIds.filter((roomAgentId) => !this.releasedRoomAgentIds.has(roomAgentId))
+      const releasedRoomAgentIds: string[] = []
+      for (let index = 0; index < pendingRoomAgentIds.length; index += 3) {
+        const batch = pendingRoomAgentIds.slice(index, index + 3)
+        try {
+          await this.deps.rustApi.releaseAgentLeases({ roomAgentIds: batch, reason })
+          batch.forEach((roomAgentId) => {
+            this.releasedRoomAgentIds.add(roomAgentId)
+            releasedRoomAgentIds.push(roomAgentId)
+          })
+        } catch {
+          this.deps.reportDiagnostic?.('聊天室 Agent lease 释放失败')
+        }
+      }
+      const result = { stoppedSessionIds: runs.map((run) => run.config.sessionId), releasedRoomAgentIds }
+      const finalReason = this.stoppingReason ?? reason
+      this.stopping = undefined
+      this.lifecycle = finalReason === 'logout' ? 'auth_required' : finalReason === 'gateway_disconnected' ? 'disconnected' : 'stopping'
+      return result
+    })()
     return this.stopping
   }
   async resumeAfterAuthentication(): Promise<void> { const stopping = this.stopping; if (stopping) await stopping; if (this.disposed || this.stoppingReason === 'app_quit') return; if (this.lifecycle === 'auth_required') { this.lifecycle = 'ready'; this.stoppingReason = undefined } }
