@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'bun:test'
+import { afterEach, describe, expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
 import { parseHTML } from 'linkedom'
 import * as React from 'react'
@@ -13,6 +13,37 @@ import { ChatroomComposer, filterChatRoomMentionCandidates, formatChatRoomAgentS
 import type { ChatRoomAgent } from '@copis/shared'
 
 const source = readFileSync(new URL('./ChatroomComposer.tsx', import.meta.url), 'utf8')
+
+function installComposerDom(): ReturnType<typeof parseHTML>['window'] {
+  const parsed = parseHTML('<html><body><div id="root"></div></body></html>')
+  const domWindow = parsed.window
+  Object.assign(domWindow, { setTimeout, clearTimeout, setInterval, clearInterval, IS_REACT_ACT_ENVIRONMENT: true })
+  Object.assign(globalThis, {
+    window: domWindow,
+    document: domWindow.document,
+    navigator: domWindow.navigator,
+    Event: domWindow.Event,
+    KeyboardEvent: domWindow.Event,
+    HTMLInputElement: domWindow.HTMLInputElement,
+    HTMLTextAreaElement: domWindow.HTMLTextAreaElement,
+    Element: domWindow.Element,
+    Node: domWindow.Node,
+    HTMLElement: domWindow.HTMLElement,
+    IS_REACT_ACT_ENVIRONMENT: true,
+  })
+  return domWindow
+}
+
+function changeComposerTextarea(_domWindow: ReturnType<typeof parseHTML>['window'], textarea: HTMLTextAreaElement, value: string, caret: number): void {
+  textarea.value = value
+  Object.defineProperty(textarea, 'selectionStart', { configurable: true, value: caret })
+  Simulate.change(textarea)
+}
+
+afterEach(() => {
+  const root = typeof document === 'undefined' ? null : document.getElementById('root')
+  if (root) root.replaceChildren()
+})
 
 describe('聊天室输入行为契约', () => {
   const agents: ChatRoomAgent[] = [
@@ -42,6 +73,7 @@ describe('聊天室输入行为契约', () => {
     expect(removeChatRoomMentionToken('请 @Alpha 继续', 'Alpha')).toBe('请 继续')
     const tokens = new Map([['a-online', { start: 0, end: 6 }]])
     expect(reconcileChatRoomMentionTokens(tokens, '@Alpha', '手写 Alpha')).toEqual(new Map())
+    expect(reconcileChatRoomMentionTokens(new Map([['a-online', { start: 0, end: 6 }], ['a-offline', { start: 7, end: 12 }]]), '@Alpha @Beta ', '@Beta ')).toEqual(new Map([['a-offline', { start: 0, end: 5 }]]))
     expect(removeChatRoomMentionTrigger('请 @Alpha 后续', 8)).toEqual({ value: '请 后续', caret: 2 })
     expect(reconstructChatRoomMentionTokens('@Alpha 后续', ['a-online'], agents)).toEqual(new Map([['a-online', { start: 0, end: 6 }]]))
     expect(reconstructChatRoomMentionTokens('@Alpha @Alpha', ['a-online'], agents)).toEqual(new Map())
@@ -72,35 +104,34 @@ describe('聊天室输入行为契约', () => {
   })
 
   test('选择离线 Agent 后发送仍提交结构化 ID，手写同名文本不会伪造 ID', async () => {
-    const parsed = parseHTML('<html><body><div id="root"></div></body></html>')
-    Object.assign(globalThis, { window: parsed.window, document: parsed.window.document, IS_REACT_ACT_ENVIRONMENT: true })
+    const domWindow = installComposerDom()
     const requests: Array<{ body?: unknown }> = []
     const originalSendMessage = chatRoomApi.sendMessage
     chatRoomApi.sendMessage = async (input) => { requests.push({ body: input }); return { messageId: 'm-1', roomId: 'room-1', seq: 1, senderType: 'user', senderId: 'user-1', content: input.content, mentionAgentIds: input.mentionAgentIds, attachmentIds: [], clientMessageId: input.clientMessageId ?? 'c-1', depth: 0, createdAt: '1' } }
-    Object.assign(parsed.window, { setTimeout, clearTimeout, setInterval, clearInterval, electronAPI: { chatrooms: { onTransferProgress: () => () => undefined, startUpload: async () => ({ transferId: 't', phase: 'ready' }) } } })
+    Object.assign(domWindow, { electronAPI: { chatrooms: { onTransferProgress: () => () => undefined, startUpload: async () => ({ transferId: 't', phase: 'ready' }) } } })
     const store = createStore()
     store.set(chatRoomPermissionRequestsAtom, new Map([['permission-1', { roomId: 'room-1', roomAgentId: 'a-online' } as ChatRoomPermissionRequest]]))
     const act = (React as typeof React & { act: typeof import('react-dom/test-utils').act }).act
     const root = createRoot(document.getElementById('root')!)
     await act(async () => { root.render(<Provider store={store}><ChatroomComposer roomId="room-1" agents={agents} /></Provider>) })
     const textarea = document.querySelector('[aria-label="聊天室消息"]') as HTMLTextAreaElement
-    await act(async () => { textarea.value = '@'; Object.defineProperty(textarea, 'selectionStart', { configurable: true, value: 1 }); Simulate.change(textarea) })
+    await act(async () => { changeComposerTextarea(domWindow, textarea, '@', 1) })
     expect(document.querySelector('[role="listbox"]')).not.toBeNull()
     expect([...document.querySelectorAll('[role="option"]')].find((item) => item.textContent?.includes('Alpha'))?.textContent).toContain('待授权')
     const offline = [...document.querySelectorAll('[role="option"]')].find((item) => item.textContent?.includes('Beta')) as HTMLButtonElement
     expect(offline.disabled).toBe(false)
-    await act(async () => { offline.click(); await Promise.resolve() })
+    await act(async () => { Simulate.click(offline); await Promise.resolve() })
     expect(store.get(chatRoomMentionAgentIdsAtom).get('room-1')).toEqual(['a-offline'])
-    await act(async () => { textarea.value = '@Beta @'; Object.defineProperty(textarea, 'selectionStart', { configurable: true, value: 7 }); Simulate.change(textarea) })
+    await act(async () => { changeComposerTextarea(domWindow, textarea, '@Beta @', 7) })
     const duplicate = [...document.querySelectorAll('[role="option"]')].find((item) => item.textContent?.includes('Beta')) as HTMLButtonElement
-    await act(async () => { duplicate.click(); await Promise.resolve() })
+    await act(async () => { Simulate.click(duplicate); await Promise.resolve() })
     expect(store.get(chatRoomMentionAgentIdsAtom).get('room-1')).toEqual(['a-offline'])
     expect(store.get(chatRoomDraftsAtom).get('room-1')).toBe('@Beta ')
-    await act(async () => { (document.querySelector('[aria-label="发送消息"]') as HTMLButtonElement).click(); await new Promise((resolve) => setTimeout(resolve, 0)) })
+    await act(async () => { Simulate.click(document.querySelector('[aria-label="发送消息"]')!); await new Promise((resolve) => setTimeout(resolve, 0)) })
     expect(requests.at(-1)?.body).toMatchObject({ mentionAgentIds: ['a-offline'] })
-    await act(async () => { textarea.value = '手写 @Beta'; Object.defineProperty(textarea, 'selectionStart', { configurable: true, value: 9 }); Simulate.change(textarea) })
+    await act(async () => { changeComposerTextarea(domWindow, textarea, '手写 @Beta', 9) })
     expect(store.get(chatRoomMentionAgentIdsAtom).get('room-1')).toEqual([])
-    await act(async () => { (document.querySelector('[aria-label="发送消息"]') as HTMLButtonElement).click(); await new Promise((resolve) => setTimeout(resolve, 0)) })
+    await act(async () => { Simulate.click(document.querySelector('[aria-label="发送消息"]')!); await new Promise((resolve) => setTimeout(resolve, 0)) })
     expect(requests.at(-1)?.body).toMatchObject({ mentionAgentIds: [] })
     chatRoomApi.sendMessage = originalSendMessage
     await act(async () => { root.unmount() })
@@ -108,9 +139,8 @@ describe('聊天室输入行为契约', () => {
   })
 
   test('Composer 重挂载后恢复房间内结构化 mention token，并继续提交 Agent ID', async () => {
-    const parsed = parseHTML('<html><body><div id="root"></div></body></html>')
-    Object.assign(globalThis, { window: parsed.window, document: parsed.window.document, IS_REACT_ACT_ENVIRONMENT: true })
-    Object.assign(parsed.window, { setTimeout, clearTimeout, setInterval, clearInterval, electronAPI: { chatrooms: { onTransferProgress: () => () => undefined, startUpload: async () => ({ transferId: 't', phase: 'ready' }) } } })
+    const domWindow = installComposerDom()
+    Object.assign(domWindow, { electronAPI: { chatrooms: { onTransferProgress: () => () => undefined, startUpload: async () => ({ transferId: 't', phase: 'ready' }) } } })
     const requests: unknown[] = []
     const originalSendMessage = chatRoomApi.sendMessage
     chatRoomApi.sendMessage = async (input) => { requests.push(input); return { messageId: 'm-2', roomId: 'room-1', seq: 2, senderType: 'user', senderId: 'user-1', content: input.content, mentionAgentIds: input.mentionAgentIds, attachmentIds: [], clientMessageId: input.clientMessageId ?? 'c-2', depth: 0, createdAt: '2' } }
@@ -123,7 +153,32 @@ describe('聊天室输入行为契约', () => {
     await act(async () => { root.unmount() })
     root = createRoot(document.getElementById('root')!)
     await act(async () => { root.render(<Provider store={store}><ChatroomComposer roomId="room-1" agents={agents} /></Provider>) })
-    await act(async () => { (document.querySelector('[aria-label="发送消息"]') as HTMLButtonElement).click(); await new Promise((resolve) => setTimeout(resolve, 0)) })
+    await act(async () => { Simulate.click(document.querySelector('[aria-label="发送消息"]')!); await new Promise((resolve) => setTimeout(resolve, 0)) })
+    expect(requests.at(-1)).toMatchObject({ mentionAgentIds: ['a-offline'] })
+    chatRoomApi.sendMessage = originalSendMessage
+    await act(async () => { root.unmount() })
+  })
+
+  test('删除前一个 mention 后，后续 Agent token 偏移仍正确并可提交', async () => {
+    const domWindow = installComposerDom()
+    Object.assign(domWindow, { electronAPI: { chatrooms: { onTransferProgress: () => () => undefined, startUpload: async () => ({ transferId: 't', phase: 'ready' }) } } })
+    const requests: unknown[] = []
+    const originalSendMessage = chatRoomApi.sendMessage
+    chatRoomApi.sendMessage = async (input) => { requests.push(input); return { messageId: 'm-3', roomId: 'room-1', seq: 3, senderType: 'user', senderId: 'user-1', content: input.content, mentionAgentIds: input.mentionAgentIds, attachmentIds: [], clientMessageId: input.clientMessageId ?? 'c-3', depth: 0, createdAt: '3' } }
+    const store = createStore()
+    const act = (React as typeof React & { act: typeof import('react-dom/test-utils').act }).act
+    const root = createRoot(document.getElementById('root')!)
+    await act(async () => { root.render(<Provider store={store}><ChatroomComposer roomId="room-1" agents={agents} /></Provider>) })
+    const textarea = document.querySelector('[aria-label="聊天室消息"]') as HTMLTextAreaElement
+    await act(async () => { changeComposerTextarea(domWindow, textarea, '@', 1) })
+    await act(async () => { Simulate.click([...document.querySelectorAll('[role="option"]')].find((item) => item.textContent?.includes('Alpha'))!); await Promise.resolve() })
+    await act(async () => { changeComposerTextarea(domWindow, textarea, '@Alpha @', 8) })
+    await act(async () => { Simulate.click([...document.querySelectorAll('[role="option"]')].find((item) => item.textContent?.includes('Beta'))!); await Promise.resolve() })
+    expect(store.get(chatRoomMentionAgentIdsAtom).get('room-1')).toEqual(['a-online', 'a-offline'])
+    expect(store.get(chatRoomDraftsAtom).get('room-1')).toBe('@Alpha @Beta ')
+    await act(async () => { Simulate.click(document.querySelector('[aria-label="移除提及 Alpha"]')!); await Promise.resolve() })
+    expect(store.get(chatRoomMentionAgentIdsAtom).get('room-1')).toEqual(['a-offline'])
+    await act(async () => { Simulate.click(document.querySelector('[aria-label="发送消息"]')!); await new Promise((resolve) => setTimeout(resolve, 0)) })
     expect(requests.at(-1)).toMatchObject({ mentionAgentIds: ['a-offline'] })
     chatRoomApi.sendMessage = originalSendMessage
     await act(async () => { root.unmount() })

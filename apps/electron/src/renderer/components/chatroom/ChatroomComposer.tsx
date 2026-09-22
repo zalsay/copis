@@ -58,7 +58,9 @@ export function reconcileChatRoomMentionTokens(tokens: Map<string, ChatRoomMenti
   const result = new Map<string, ChatRoomMentionToken>()
   for (const [agentId, token] of tokens) {
     if (token.end <= prefix) { result.set(agentId, token); continue }
-    if (token.start >= oldEnd) result.set(agentId, { start: token.start + delta, end: token.end + delta })
+    const tokenText = previous.slice(token.start, token.end)
+    const shiftedStart = token.start + delta
+    if (shiftedStart >= 0 && next.slice(shiftedStart, shiftedStart + tokenText.length) === tokenText) result.set(agentId, { start: shiftedStart, end: shiftedStart + tokenText.length })
   }
   return result
 }
@@ -176,8 +178,14 @@ export function ChatroomComposer({ roomId, agents, archived = false, connectionS
   const removeMention = (agent: ChatRoomAgent): void => {
     const token = mentionTokens.get(agent.agentId)
     const nextDraft = token ? `${draft.slice(0, token.start)}${draft.slice(token.end).replace(/^\s/, '')}` : removeChatRoomMentionToken(draft, agent.displayName)
-    const nextTokens = new Map(mentionTokens)
-    nextTokens.delete(agent.agentId)
+    const removedEnd = token ? token.end + (draft[token.end] && /\s/u.test(draft[token.end]!) ? 1 : 0) : undefined
+    const delta = nextDraft.length - draft.length
+    const nextTokens = new Map<string, ChatRoomMentionToken>()
+    for (const [agentId, otherToken] of mentionTokens) {
+      if (agentId === agent.agentId) continue
+      if (!token || removedEnd === undefined || otherToken.end <= token.start) nextTokens.set(agentId, otherToken)
+      else if (otherToken.start >= removedEnd) nextTokens.set(agentId, { start: otherToken.start + delta, end: otherToken.end + delta })
+    }
     setMentionTokens(nextTokens)
     previousDraftRef.current = nextDraft
     setDraft({ roomId, value: nextDraft })
