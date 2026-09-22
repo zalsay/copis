@@ -1497,6 +1497,7 @@ export async function handleHttpApiRequest(
         const client = dependencies.getWorkingClient()
         const previousUser = client.getCachedUser()
         const nextUser = isRecord(body.user) ? body.user : null
+        const hasInvalidUser = body.user !== undefined && body.user !== null && !isRecord(body.user)
         const identityChanged = previousUser !== null && (
           nextUser === null || String(previousUser.id) !== String(nextUser.id ?? nextUser.userId ?? nextUser.user_id)
         )
@@ -1521,10 +1522,13 @@ export async function handleHttpApiRequest(
         })
         try {
           saveWorkingAuthFromRust(body as unknown as RustWorkingAuthRecord)
-          if (!client.setAuthenticatedUserFromRust(body.user)) {
+          // OIDC/Legacy 初始化可能先写入凭据、再异步补齐用户资料；缺少 user 是合法的过渡状态，
+          // 但显式提供的非对象或无法归一化的用户必须拒绝，并保持 fail closed。
+          if (hasInvalidUser || (nextUser !== null && !client.setAuthenticatedUserFromRust(body.user))) {
             await invalidatePreviousIdentity()
             throw new HttpApiRequestError('认证存储记录缺少用户身份', 400, 'invalid_auth_storage')
           }
+          if (nextUser === null) client.setAuthenticatedUserFromRust(null)
         } catch (error) {
           if (!runtimeStopped) await invalidatePreviousIdentity()
           console.error('[HTTP API][认证存储] save 失败', redactSensitiveLogValue(error))

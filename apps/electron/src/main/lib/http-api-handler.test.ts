@@ -157,6 +157,57 @@ test('Given cached account A When Rust saves account B Then old runtime stops be
   expect(currentUser).toEqual({ id: 'B' })
 })
 
+test('Given cached account A When Rust temporarily saves auth without user Then save succeeds and facade becomes unauthenticated', async () => {
+  const order: string[] = []
+  let currentUser: { id: string } | null = { id: 'A' }
+  const client = {
+    baseUrl: 'https://backend.example.test',
+    getCachedUser: () => currentUser,
+    clearAuth: () => { order.push('clearAuth'); currentUser = null },
+    setAuthenticatedUserFromRust: (user: unknown) => {
+      order.push('setUser')
+      currentUser = user && typeof user === 'object' ? user as { id: string } : null
+      return currentUser !== null
+    },
+  }
+  const response = await handleHttpApiRequest({
+    method: 'POST',
+    path: '/api/internal/auth-storage/save',
+    body: JSON.stringify({ accessToken: 'oidc-transition', provider: 'oidc' }),
+  }, createDependencies({
+    getWorkingClient: () => client as never,
+    stopChatRoomAgents: async () => { order.push('stopChatRoomAgents') },
+  }))
+
+  expect(response).toEqual({ status: 204 })
+  expect(order).toEqual(['stopChatRoomAgents', 'clearAuth', 'setUser'])
+  expect(currentUser).toBeNull()
+})
+
+test('Given auth save carries malformed user When Rust bridge handles it Then it fails closed and clears facade identity', async () => {
+  let currentUser: { id: string } | null = { id: 'A' }
+  let stopped = 0
+  const client = {
+    baseUrl: 'https://backend.example.test',
+    getCachedUser: () => currentUser,
+    clearAuth: () => { currentUser = null },
+    setAuthenticatedUserFromRust: () => false,
+  }
+  const response = await handleHttpApiRequest({
+    method: 'POST',
+    path: '/api/internal/auth-storage/save',
+    body: JSON.stringify({ accessToken: 'bad-user', provider: 'legacy', user: 'not-an-object' }),
+  }, createDependencies({
+    getWorkingClient: () => client as never,
+    stopChatRoomAgents: async () => { stopped += 1 },
+  }))
+
+  expect(response.status).toBe(400)
+  expect(response.body).toEqual({ error: '认证存储记录缺少用户身份', code: 'invalid_auth_storage' })
+  expect(stopped).toBe(1)
+  expect(currentUser).toBeNull()
+})
+
 describe('聊天室 Rust bridge HTTP handler', () => {
   test('Given 合法 invocation When Rust bridge 投递 Then coordinator 接收且返回 accepted 202', async () => {
     const handleChatRoomInvocation = mock(async () => 'accepted' as const)
