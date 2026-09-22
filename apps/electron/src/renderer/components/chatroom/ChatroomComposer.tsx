@@ -1,11 +1,17 @@
 import * as React from 'react'
 import { Paperclip, Send } from 'lucide-react'
 import { useAtom, useAtomValue, useSetAtom } from 'jotai'
-import type { ChatRoomAgent } from '@copis/shared'
+import type { ChatRoomAgent, ChatRoomTransferState } from '@copis/shared'
 import { chatRoomConsumeTransfersAtom, chatRoomDraftsAtom, chatRoomMentionAgentIdsAtom, chatRoomRetrySendAtom, chatRoomSendMessageAtom, chatRoomSendStatesAtom, chatRoomSetDraftAtom, chatRoomSetMentionsAtom, chatRoomSetTransferAtom, chatRoomTransfersAtom } from '@/atoms/chatroom-atoms'
 import { chatRoomApi } from '@/lib/chatroom-api'
 
 export interface ChatroomComposerProps { roomId: string; agents: ChatRoomAgent[]; archived?: boolean; connectionStatus?: string }
+
+export type ChatRoomTransferProgressSubscribe = (callback: (state: ChatRoomTransferState) => void) => () => void
+
+export function subscribeChatRoomTransferProgress(roomId: string, setTransfer: (state: ChatRoomTransferState) => void, subscribe: ChatRoomTransferProgressSubscribe): () => void {
+  return subscribe((state) => { if (state.roomId === roomId) setTransfer(state) })
+}
 
 export function ChatroomComposer({ roomId, agents, archived = false, connectionStatus = 'connected' }: ChatroomComposerProps): React.ReactElement {
   const draft = useAtomValue(chatRoomDraftsAtom).get(roomId) ?? ''
@@ -20,7 +26,7 @@ export function ChatroomComposer({ roomId, agents, archived = false, connectionS
   const consumeTransfers = useSetAtom(chatRoomConsumeTransfersAtom)
   const [sending, setSending] = React.useState(false)
   const [uploading, setUploading] = React.useState(false)
-  React.useEffect(() => window.electronAPI.chatrooms.onTransferProgress((state) => { if (state.roomId === roomId) setTransfer(state) }), [roomId, setTransfer])
+  React.useEffect(() => subscribeChatRoomTransferProgress(roomId, setTransfer, window.electronAPI.chatrooms.onTransferProgress), [roomId, setTransfer])
   const readyAttachments = [...transfers.values()].filter((item) => item.roomId === roomId && item.phase === 'ready' && item.attachmentId).map((item) => item.attachmentId!)
   const unavailable = archived || connectionStatus === 'offline' || connectionStatus === 'auth_expired'
   const toggleMention = (agent: ChatRoomAgent): void => {
