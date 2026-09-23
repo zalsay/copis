@@ -40,7 +40,7 @@ let event = parse_event(br#"{"type":"room.recovery_ready","roomId":"room-1","pay
 assert_eq!(event.kind(), "room.recovery_ready");
 ```
 
-- [ ] **Step 2: 验证 RED。** `cargo test chatroom_protocol_tests:: --lib`、`cargo test chatroom_gateway_tests:: --lib` 应因新事件或路径尚不支持而失败。
+- [ ] **Step 2: 验证 RED。** `cargo test chatroom_protocol_tests::`、`cargo test chatroom_gateway_tests::` 应因新事件或路径尚不支持而失败。
 - [ ] **Step 3: 最小实现。** 在现有 `parse_event`、`public_event`、`Route`、`parse_route`、`method_allowed`、`canonical_query_for_route` 添加精确分支；保持既有敏感字段过滤及 Authorization 边界。
 
 ```rust
@@ -48,7 +48,7 @@ assert_eq!(event.kind(), "room.recovery_ready");
 Route::TerminalInvocations(room_id) => method == "GET",
 ```
 
-- [ ] **Step 4: 验证 GREEN 并提交。** 重跑两组定向测试、`cargo test --lib`、`cargo fmt --check`、`cargo build`、`git diff --check`；只暂存本任务四个文件。
+- [ ] **Step 4: 验证 GREEN 并提交。** 重跑两组定向测试、`cargo test`、`cargo fmt --check`、`cargo build`、`git diff --check`；只暂存本任务四个文件。
 
 ### Task 2: Renderer 在 ready 后分页恢复 invocation 终态
 
