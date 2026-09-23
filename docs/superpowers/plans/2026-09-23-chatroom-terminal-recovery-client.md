@@ -54,13 +54,15 @@ Route::TerminalInvocations(room_id) => method == "GET",
 
 **Files:**
 - Modify: `apps/electron/src/renderer/lib/chatroom-sse.ts`
+- Modify: `apps/electron/src/renderer/atoms/chatroom-atoms.ts`
 - Test: `apps/electron/src/renderer/lib/chatroom-sse.test.ts`
+- Test: `apps/electron/src/renderer/atoms/chatroom-atoms.test.ts`
 
 **Interfaces:**
 - Consumes: Task 1 转发的 `room.recovery_ready`；edu-api 终态页 `{invocations:[{invocationId,roomId,traceId,targetAgentId,triggerMessageId,depth,status,failureCode?,finishedAt?}],nextCursor:string|null}`。
-- Produces: 对每个完成/失败调用派发已有 `ChatRoomEventEnvelope` (`agent.completed` / `agent.failed`，`rejected` 映射为 `agent.failed`)；不生成 seq。现有 `chatRoomApplyEventAtom` 已支持合并这些事件，不改 atom。
+- Produces: 对每个完成/失败调用派发已有 `ChatRoomEventEnvelope` (`agent.completed` / `agent.failed`，`rejected` 映射为 `agent.failed`)；不生成 seq。`chatRoomApplyEventAtom` 按 invocation ID 合并，终态不得被迟到的 `agent.delta` 降级成 running。
 
-- [ ] **Step 1: 写 RED 测试。** 首连和重连收到 ready 后均请求第一页；多页走严格递增游标；实时状态与补拉重复只合并一次；非本房间行、无效游标及 HTTP 失败让连接进入重试；断开或切换账号后旧请求不得写入 Jotai。
+- [ ] **Step 1: 写 RED 测试。** 首连和重连收到 ready 后均请求第一页；多页走严格递增游标；实时状态与补拉重复只合并一次；非本房间行、无效游标及 HTTP 失败让连接进入重试；断开或切换账号后旧请求不得写入 Jotai。Atom 单测覆盖已完成/失败状态收到迟到 delta 后仍为终态，重复终态无降级。
 
 ```ts
 client.onEvent((event) => recovered.push(event))
@@ -69,7 +71,7 @@ expect(recovered.some((event) => event.type === 'agent.failed' && event.roomId =
 ```
 
 - [ ] **Step 2: 验证 RED。** `bun test apps/electron/src/renderer/lib/chatroom-sse.test.ts` 应因未发起终态查询或未派发终态而失败。
-- [ ] **Step 3: 最小实现。** 在 `ChatRoomSseClient.receive` 识别 ready 后启动每房间、每连接 generation 的分页恢复；验证响应字段与游标严格前进后再经已有 listener 派发终态。并发实时事件可先到，终态按 invocation ID 幂等合并；失败调用 `failConnection`，不静默吞掉。
+- [ ] **Step 3: 最小实现。** 在 `ChatRoomSseClient.receive` 识别 ready 后启动每房间、每连接 generation 的分页恢复；验证响应字段与游标严格前进后再经已有 listener 派发终态。并发实时事件可先到，Atom 对同 invocation ID 的终态保持单调；失败调用 `failConnection`，不静默吞掉。
 
 ```ts
 if (event.type === 'room.recovery_ready' && roomId) {
