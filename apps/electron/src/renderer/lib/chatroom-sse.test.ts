@@ -63,12 +63,35 @@ describe('chatRoomSse', () => {
     api.setRooms(['r1']); await new Promise((resolve) => setTimeout(resolve, 0)); expect(terminalCalls).toBe(1); releaseReady(); await new Promise((resolve) => setTimeout(resolve, 0)); api.close(); expect(terminalCalls).toBe(2)
   })
 
-  test('ready 与首连恢复并发时共享同一个终态分页请求', async () => {
+  test('ready 与首连恢复并发时最多排队一次补查', async () => {
     let terminalCalls = 0
     let releaseTerminal!: () => void
     const stream = new Response(new ReadableStream({ start(controller) { controller.enqueue(new TextEncoder().encode('data: {"type":"room.recovery_ready","roomId":"r1"}\n\n')) } }), { headers: { 'Content-Type': 'text/event-stream' } })
     const api = new ChatRoomSseClient({ baseUrl: 'http://test', fetchImpl: async (url) => { if (String(url).includes('roomIds=')) return stream; terminalCalls += 1; await new Promise<void>((resolve) => { releaseTerminal = resolve }); return response({ invocations: [], nextCursor: null }) } })
-    api.setRooms(['r1']); await new Promise((resolve) => setTimeout(resolve, 0)); expect(terminalCalls).toBe(1); releaseTerminal(); await new Promise((resolve) => setTimeout(resolve, 0)); api.close(); expect(terminalCalls).toBe(1)
+    api.setRooms(['r1']); await new Promise((resolve) => setTimeout(resolve, 0)); expect(terminalCalls).toBe(1); releaseTerminal(); await new Promise((resolve) => setTimeout(resolve, 0)); api.close(); expect(terminalCalls).toBe(2)
+  })
+
+  test('ready 在服务端已取快照但 HTTP 返回延迟期间仍触发补查', async () => {
+    let terminalCalls = 0
+    let releaseFirstResponse!: () => void
+    let sendReady!: () => void
+    let resolveRecovered!: () => void
+    const recovered = new Promise<void>((resolve) => { resolveRecovered = resolve })
+    const stream = new Response(new ReadableStream({ start(controller) { controller.enqueue(new TextEncoder().encode('')); sendReady = () => { controller.enqueue(new TextEncoder().encode('data: {"type":"room.recovery_ready","roomId":"r1"}\n\n')) } } }), { headers: { 'Content-Type': 'text/event-stream' } })
+    const api = new ChatRoomSseClient({ baseUrl: 'http://test', fetchImpl: async (url) => {
+      if (String(url).includes('roomIds=')) return stream
+      terminalCalls += 1
+      if (terminalCalls === 1) {
+        const emptySnapshot = response({ invocations: [], nextCursor: null })
+        await new Promise<void>((resolve) => { releaseFirstResponse = resolve })
+        return emptySnapshot
+      }
+      return response({ invocations: [{ invocationId: 'arrived-during-delay', roomId: 'r1', traceId: 't', targetAgentId: 'a', triggerMessageId: 'm', depth: 0, status: 'completed' }], nextCursor: null })
+    } })
+    api.onEvent((event) => { if (event.type === 'agent.completed' && (event.payload as { invocationId?: string })?.invocationId === 'arrived-during-delay') resolveRecovered() })
+    api.setRooms(['r1']); await new Promise((resolve) => setTimeout(resolve, 0)); expect(terminalCalls).toBe(1); sendReady(); await new Promise((resolve) => setTimeout(resolve, 0)); releaseFirstResponse()
+    await Promise.race([recovered, new Promise((_, reject) => setTimeout(() => reject(new Error('终态补查未完成')), 500))]); api.close()
+    expect(terminalCalls).toBe(2)
   })
 
   test('ready 在终态快照读取后、首轮恢复 Promise 结束前排队一次补查', async () => {
@@ -112,6 +135,31 @@ describe('chatRoomSse', () => {
     const terminalUrls = urls.filter((url) => url.includes('/invocations/terminal'))
     expect(terminalUrls.slice(0, 2).map((url) => new URL(url).searchParams.get('after'))).toEqual([null, 'i1'])
     expect(streamCalls).toBeGreaterThanOrEqual(2); expect(statuses).toContain('reconnecting')
+  })
+
+  test('超过 100 页的终态仍从当前游标读取到结尾且不重连', async () => {
+    let terminalCalls = 0
+    let streamCalls = 0
+    const terminalUrls: string[] = []
+    let finalPageRead!: () => void
+    const finalPage = new Promise<void>((resolve) => { finalPageRead = resolve })
+    const statuses: string[] = []
+    const stream = new Response(new ReadableStream({ start(controller) { controller.enqueue(new TextEncoder().encode('')) } }), { headers: { 'Content-Type': 'text/event-stream' } })
+    const row = (index: number) => ({ invocationId: `inv-${String(index).padStart(5, '0')}`, roomId: 'r1', traceId: 't', targetAgentId: 'a', triggerMessageId: 'm', depth: 0, status: 'completed' })
+    const api = new ChatRoomSseClient({ baseUrl: 'http://test', fetchImpl: async (url) => {
+      const value = String(url)
+      if (value.includes('roomIds=')) { streamCalls += 1; return stream }
+      terminalUrls.push(value)
+      terminalCalls += 1
+      const start = (terminalCalls - 1) * 100
+      const count = terminalCalls === 101 ? 1 : 100
+      const invocations = Array.from({ length: count }, (_, offset) => row(start + offset))
+      return response({ invocations, nextCursor: terminalCalls === 101 ? null : invocations[count - 1]?.invocationId })
+    } })
+    api.onStatus((status) => statuses.push(status)); api.onEvent((event) => { if ((event.payload as { invocationId?: string })?.invocationId === 'inv-10000') finalPageRead() }); api.setRooms(['r1'])
+    await Promise.race([finalPage, new Promise((_, reject) => setTimeout(() => reject(new Error('第 101 页未完成')), 1000))]); await new Promise((resolve) => setTimeout(resolve, 0)); api.close()
+    expect(terminalCalls).toBe(101); expect(streamCalls).toBe(1); expect(statuses).not.toContain('reconnecting')
+    expect(new URL(terminalUrls[100]!).searchParams.get('after')).toBe('inv-09999')
   })
 
   test('终态补拉 HTTP 失败后连接重试，且失败轮次不派发为已同步', async () => {

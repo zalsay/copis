@@ -5,7 +5,18 @@ import { withHttpApiWebToken } from './http-api-web-token'
 export type ChatRoomSseListener = (event: ChatRoomEventEnvelope) => void
 export type ChatRoomSseStatusListener = (status: ChatRoomConnectionStatus) => void
 type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>
-type TerminalRecovery = { promise: Promise<void>; snapshotRead: boolean; readyRerun: boolean }
+type TerminalInvocation = {
+  invocationId: string
+  roomId: string
+  traceId: string
+  targetAgentId: string
+  triggerMessageId: string
+  depth: number
+  status: 'completed' | 'failed' | 'rejected'
+  failureCode?: string
+  finishedAt?: string | number
+}
+type TerminalRecovery = { promise: Promise<void>; readyRerun: boolean }
 
 export function parseChatRoomSseFrame(frame: string): ChatRoomEventEnvelope | undefined {
   const data: string[] = []
@@ -71,16 +82,15 @@ export class ChatRoomSseClient {
     const key = `${generation}:${roomId}`
     const active = this.terminalRecoveries.get(key)
     if (active) {
-      if (triggeredByReady && active.snapshotRead) active.readyRerun = true
+      if (triggeredByReady) active.readyRerun = true
       return active.promise
     }
-    const recovery: TerminalRecovery = { promise: Promise.resolve(), snapshotRead: false, readyRerun: false }
+    const recovery: TerminalRecovery = { promise: Promise.resolve(), readyRerun: false }
     recovery.promise = (async () => {
       try {
         do {
-          recovery.snapshotRead = false
           recovery.readyRerun = false
-          await this.fetchTerminalInvocations(roomId, controller, generation, () => { recovery.snapshotRead = true })
+          await this.fetchTerminalInvocations(roomId, controller, generation)
         } while (recovery.readyRerun && this.isCurrent(controller, generation) && this.roomIds.has(roomId))
       } finally {
         if (this.terminalRecoveries.get(key) === recovery) this.terminalRecoveries.delete(key)
@@ -89,22 +99,21 @@ export class ChatRoomSseClient {
     this.terminalRecoveries.set(key, recovery)
     return recovery.promise
   }
-  private async fetchTerminalInvocations(roomId: string, controller: AbortController, generation: number, onSnapshotRead: () => void): Promise<void> {
+  private async fetchTerminalInvocations(roomId: string, controller: AbortController, generation: number): Promise<void> {
     let after: string | undefined
-    const seenCursors = new Set<string>()
-    for (let page = 0; page < 100; page += 1) {
+    let page = 0
+    while (true) {
       if (!this.isCurrent(controller, generation) || !this.roomIds.has(roomId)) return
       const query = new URLSearchParams({ limit: '100' })
       if (after) query.set('after', after)
       const response = await this.fetchImpl(`${this.baseUrl}/api/chatrooms/v2/rooms/${encodeURIComponent(roomId)}/invocations/terminal?${query}`, withHttpApiWebToken({ headers: { Accept: 'application/json' }, signal: controller.signal }))
       if (!response.ok) throw new Error(`聊天室终态恢复失败（${response.status}）`)
       const raw = await response.json() as unknown
-      onSnapshotRead()
       if (!this.isCurrent(controller, generation) || !this.roomIds.has(roomId)) return
       if (typeof raw !== 'object' || raw === null) throw new Error('聊天室终态恢复响应无效')
       const root = raw as Record<string, unknown>
       if (!Array.isArray(root.invocations) || !(root.nextCursor === null || typeof root.nextCursor === 'string')) throw new Error('聊天室终态恢复响应无效')
-      const invocations = root.invocations.map((value) => this.normalizeTerminalInvocation(value, roomId))
+      const invocations = root.invocations.map((value) => this.parseTerminalInvocation(value, roomId))
       if (invocations.some((value) => !value)) throw new Error('聊天室终态恢复包含无效调用')
       const valid = invocations as NonNullable<(typeof invocations)[number]>[]
       let previousId = after ?? ''
@@ -114,8 +123,7 @@ export class ChatRoomSseClient {
       }
       const nextCursor = root.nextCursor
       if (nextCursor !== null) {
-        if (!nextCursor || nextCursor <= (after ?? '') || seenCursors.has(nextCursor) || !valid.length || nextCursor !== valid[valid.length - 1]?.invocationId) throw new Error('聊天室终态恢复游标无效')
-        seenCursors.add(nextCursor)
+        if (!nextCursor || nextCursor <= (after ?? '') || !valid.length || nextCursor !== valid[valid.length - 1]?.invocationId) throw new Error('聊天室终态恢复游标无效')
       }
       for (const invocation of valid) {
         if (!this.isCurrent(controller, generation) || !this.roomIds.has(roomId)) return
@@ -128,13 +136,26 @@ export class ChatRoomSseClient {
         return
       }
       after = nextCursor
+      page += 1
+      if (page % 10 === 0) await new Promise<void>((resolve) => setTimeout(resolve, 0))
     }
-    throw new Error('聊天室终态恢复达到分页上限')
   }
-  private normalizeTerminalInvocation(value: unknown, expectedRoomId: string): ({ invocationId: string; roomId: string; traceId: string; targetAgentId: string; triggerMessageId: string; depth: number; status: 'completed' | 'failed' | 'rejected'; failureCode?: string; finishedAt?: string | number }) | undefined {
+  private parseTerminalInvocation(value: unknown, expectedRoomId: string): TerminalInvocation | undefined {
     if (typeof value !== 'object' || value === null) return undefined
     const item = value as Record<string, unknown>
-    if (typeof item.invocationId !== 'string' || !item.invocationId || item.roomId !== expectedRoomId || typeof item.traceId !== 'string' || typeof item.targetAgentId !== 'string' || typeof item.triggerMessageId !== 'string' || !Number.isSafeInteger(item.depth) || (item.depth as number) < 0 || !['completed', 'failed', 'rejected'].includes(String(item.status)) || (item.failureCode !== undefined && typeof item.failureCode !== 'string') || (item.finishedAt !== undefined && typeof item.finishedAt !== 'string' && typeof item.finishedAt !== 'number')) return undefined
+    const hasValidStatus = item.status === 'completed' || item.status === 'failed' || item.status === 'rejected'
+    const hasValidFinishedAt = item.finishedAt === undefined || typeof item.finishedAt === 'string' || typeof item.finishedAt === 'number'
+    if (
+      typeof item.invocationId !== 'string' || !item.invocationId ||
+      item.roomId !== expectedRoomId ||
+      typeof item.traceId !== 'string' ||
+      typeof item.targetAgentId !== 'string' ||
+      typeof item.triggerMessageId !== 'string' ||
+      !Number.isSafeInteger(item.depth) || (item.depth as number) < 0 ||
+      !hasValidStatus ||
+      (item.failureCode !== undefined && typeof item.failureCode !== 'string') ||
+      !hasValidFinishedAt
+    ) return undefined
     return {
       invocationId: item.invocationId,
       roomId: expectedRoomId,
