@@ -44,12 +44,15 @@ describe('chatRoomSse', () => {
 
   test('首次建立本地 SSE 后即使没有 ready 也分页恢复终态', async () => {
     const urls: string[] = []
-    const recovered: unknown[] = []
+    const recovered: Array<{ type: string; roomId?: string; payload?: unknown }> = []
     const stream = new Response(new ReadableStream({ start(controller) { controller.enqueue(new TextEncoder().encode('')); } }), { headers: { 'Content-Type': 'text/event-stream' } })
-    const api = new ChatRoomSseClient({ baseUrl: 'http://test', fetchImpl: async (url) => { urls.push(String(url)); if (String(url).includes('roomIds=')) return stream; return response({ invocations: [{ invocationId: 'i-done', roomId: 'r1', traceId: 't1', targetAgentId: 'a1', triggerMessageId: 'm1', depth: 0, status: 'completed' }, { invocationId: 'i-failed', roomId: 'r1', traceId: 't2', targetAgentId: 'a2', triggerMessageId: 'm2', depth: 1, status: 'rejected', failureCode: 'agent_offline' }], nextCursor: null }) } })
+    const api = new ChatRoomSseClient({ baseUrl: 'http://test', fetchImpl: async (url) => { urls.push(String(url)); if (String(url).includes('roomIds=')) return stream; return response({ invocations: [{ invocationId: 'i-done', roomId: 'r1', traceId: 't1', targetAgentId: 'a1', triggerMessageId: 'm1', depth: 0, status: 'completed', finishedAt: '2026-09-23T00:00:00Z', internalSecret: 'must-not-leak' }, { invocationId: 'i-failed', roomId: 'r1', traceId: 't2', targetAgentId: 'a2', triggerMessageId: 'm2', depth: 1, status: 'rejected', failureCode: 'agent_offline' }], nextCursor: null }) } })
     api.onEvent((event) => recovered.push(event)); api.setRooms(['r1']); await new Promise((resolve) => setTimeout(resolve, 0)); api.close()
     expect(urls.some((url) => url.includes('/rooms/r1/invocations/terminal'))).toBe(true)
     expect(recovered).toEqual(expect.arrayContaining([expect.objectContaining({ type: 'agent.completed', roomId: 'r1', payload: expect.objectContaining({ invocationId: 'i-done' }) }), expect.objectContaining({ type: 'agent.failed', roomId: 'r1', payload: expect.objectContaining({ invocationId: 'i-failed', failureCode: 'agent_offline' }) })]))
+    const completed = recovered.find((event) => event.type === 'agent.completed')
+    expect(completed?.payload).toMatchObject({ finishedAt: '2026-09-23T00:00:00Z' })
+    expect(completed?.payload).not.toHaveProperty('internalSecret')
   })
 
   test('ready 晚于本地首轮查询时再次恢复，同一时刻触发则合并请求', async () => {
@@ -68,14 +71,47 @@ describe('chatRoomSse', () => {
     api.setRooms(['r1']); await new Promise((resolve) => setTimeout(resolve, 0)); expect(terminalCalls).toBe(1); releaseTerminal(); await new Promise((resolve) => setTimeout(resolve, 0)); api.close(); expect(terminalCalls).toBe(1)
   })
 
-  test('终态分页使用严格前进游标并拒绝重复游标和跨房间记录', async () => {
+  test('ready 在终态快照读取后、首轮恢复 Promise 结束前排队一次补查', async () => {
+    let terminalCalls = 0
+    let finishSnapshot!: () => void
+    let sendReady!: () => void
+    const stream = new Response(new ReadableStream({ start(controller) { controller.enqueue(new TextEncoder().encode('')); sendReady = () => { const frame = new TextEncoder().encode('data: {"type":"room.recovery_ready","roomId":"r1"}\n\n'); controller.enqueue(frame); controller.enqueue(frame) } } }), { headers: { 'Content-Type': 'text/event-stream' } })
+    const api = new ChatRoomSseClient({ baseUrl: 'http://test', fetchImpl: async (url) => { if (String(url).includes('roomIds=')) return stream; terminalCalls += 1; return { ok: true, json: () => new Promise((resolve) => { finishSnapshot = () => { resolve({ invocations: [], nextCursor: null }); sendReady() } }) } as Response } })
+    api.setRooms(['r1']); await new Promise((resolve) => setTimeout(resolve, 0)); expect(terminalCalls).toBe(1); finishSnapshot(); await new Promise((resolve) => setTimeout(resolve, 0)); api.close()
+    expect(terminalCalls).toBe(2)
+  })
+
+  test('终态多页响应严格递增并完整派发', async () => {
+    const urls: string[] = []
+    const recovered: string[] = []
+    const stream = new Response(new ReadableStream({ start(controller) { controller.enqueue(new TextEncoder().encode('')) } }), { headers: { 'Content-Type': 'text/event-stream' } })
+    const row = (invocationId: string) => ({ invocationId, roomId: 'r1', traceId: 't', targetAgentId: 'a', triggerMessageId: 'm', depth: 0, status: 'completed' })
+    const api = new ChatRoomSseClient({ baseUrl: 'http://test', fetchImpl: async (url) => { const value = String(url); urls.push(value); if (value.includes('roomIds=')) return stream; return new URL(value).searchParams.has('after') ? response({ invocations: [row('i2')], nextCursor: null }) : response({ invocations: [row('i1')], nextCursor: 'i1' }) } })
+    api.onEvent((event) => { if (event.type === 'agent.completed') recovered.push(String((event.payload as { invocationId: string }).invocationId)) }); api.setRooms(['r1']); await new Promise((resolve) => setTimeout(resolve, 0)); api.close()
+    expect(urls.filter((url) => url.includes('/invocations/terminal'))).toHaveLength(2)
+    expect(recovered).toEqual(['i1', 'i2'])
+  })
+
+  test('第二页出现跨房间行时重试且不派发该行', async () => {
+    const recovered: string[] = []
+    const statuses: string[] = []
+    const stream = new Response(new ReadableStream({ start(controller) { controller.enqueue(new TextEncoder().encode('')) } }), { headers: { 'Content-Type': 'text/event-stream' } })
+    const api = new ChatRoomSseClient({ baseUrl: 'http://test', fetchImpl: async (url) => { const value = String(url); if (value.includes('roomIds=')) return stream; if (new URL(value).searchParams.has('after')) return response({ invocations: [{ invocationId: 'i2', roomId: 'r2', traceId: 't', targetAgentId: 'a', triggerMessageId: 'm', depth: 0, status: 'failed' }], nextCursor: null }); return response({ invocations: [{ invocationId: 'i1', roomId: 'r1', traceId: 't', targetAgentId: 'a', triggerMessageId: 'm', depth: 0, status: 'completed' }], nextCursor: 'i1' }) } })
+    api.onStatus((status) => statuses.push(status)); api.onEvent((event) => { if (event.type.startsWith('agent.')) recovered.push(String((event.payload as { invocationId: string }).invocationId)) }); api.setRooms(['r1']); await new Promise((resolve) => setTimeout(resolve, 300)); api.close()
+    expect(statuses).toContain('reconnecting')
+    expect(recovered).toEqual(['i1'])
+  })
+
+  test('终态分页拒绝重复游标并触发重试', async () => {
     const urls: string[] = []
     const statuses: string[] = []
     let streamCalls = 0
     const stream = () => new Response(new ReadableStream({ start(controller) { streamCalls += 1; controller.enqueue(new TextEncoder().encode('')); } }), { headers: { 'Content-Type': 'text/event-stream' } })
-    const api = new ChatRoomSseClient({ baseUrl: 'http://test', fetchImpl: async (url) => { const value = String(url); urls.push(value); if (value.includes('roomIds=')) return stream(); const after = new URL(value).searchParams.get('after'); return response(after ? { invocations: [{ invocationId: 'cross', roomId: 'r2', traceId: 't', targetAgentId: 'a', triggerMessageId: 'm', depth: 0, status: 'failed' }], nextCursor: 'same' } : { invocations: [{ invocationId: 'i1', roomId: 'r1', traceId: 't', targetAgentId: 'a', triggerMessageId: 'm', depth: 0, status: 'failed' }], nextCursor: 'same' }) } })
+    const api = new ChatRoomSseClient({ baseUrl: 'http://test', fetchImpl: async (url) => { const value = String(url); urls.push(value); if (value.includes('roomIds=')) return stream(); const after = new URL(value).searchParams.get('after'); return response(after ? { invocations: [{ invocationId: 'i2', roomId: 'r1', traceId: 't', targetAgentId: 'a', triggerMessageId: 'm', depth: 0, status: 'failed' }], nextCursor: 'i1' } : { invocations: [{ invocationId: 'i1', roomId: 'r1', traceId: 't', targetAgentId: 'a', triggerMessageId: 'm', depth: 0, status: 'failed' }], nextCursor: 'i1' }) } })
     api.onStatus((status) => statuses.push(status)); api.setRooms(['r1']); await new Promise((resolve) => setTimeout(resolve, 300)); api.close()
-    expect(urls.filter((url) => url.includes('/invocations/terminal'))).toHaveLength(2); expect(streamCalls).toBeGreaterThanOrEqual(2); expect(statuses).toContain('reconnecting')
+    const terminalUrls = urls.filter((url) => url.includes('/invocations/terminal'))
+    expect(terminalUrls.slice(0, 2).map((url) => new URL(url).searchParams.get('after'))).toEqual([null, 'i1'])
+    expect(streamCalls).toBeGreaterThanOrEqual(2); expect(statuses).toContain('reconnecting')
   })
 
   test('终态补拉 HTTP 失败后连接重试，且失败轮次不派发为已同步', async () => {
