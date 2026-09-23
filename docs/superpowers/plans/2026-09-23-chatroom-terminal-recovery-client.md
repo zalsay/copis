@@ -14,7 +14,7 @@
 
 - 30 秒内未 `accepted` 的 `created` invocation 由 edu-api 判定；Copis 不排队、不重新执行。
 - `room.recovery_ready` 与 invocation 状态不占消息 `seq`。
-- 补拉只能在该房间订阅成功后发生；首次连接和每次重连均执行，分页严格前进，失败不得伪称恢复成功。
+- 收到 `room.recovery_ready` 后补拉；本地 SSE 成功连接时也补拉以覆盖远端 WS 早已在线、不会重发 ready 的情况。首次连接和每次重连均执行，分页严格前进，失败不得伪称恢复成功。
 - 终态响应不能携带设备哈希、COS object key 或内部错误；跨房间响应必须拒绝。
 - 使用 Jotai；保留现有无关 Rust 和 ledger 改动，不修改 `AGENTS.md` 或 `README.md`，不部署。
 - 新行为必须先写正确失败的测试并记录 RED/GREEN；注释与日志优先中文。
@@ -62,7 +62,7 @@ Route::TerminalInvocations(room_id) => method == "GET",
 - Consumes: Task 1 转发的 `room.recovery_ready`；edu-api 终态页 `{invocations:[{invocationId,roomId,traceId,targetAgentId,triggerMessageId,depth,status,failureCode?,finishedAt?}],nextCursor:string|null}`。
 - Produces: 对每个完成/失败调用派发已有 `ChatRoomEventEnvelope` (`agent.completed` / `agent.failed`，`rejected` 映射为 `agent.failed`)；不生成 seq。`chatRoomApplyEventAtom` 按 invocation ID 合并，终态不得被迟到的 `agent.delta` 降级成 running。
 
-- [ ] **Step 1: 写 RED 测试。** 首连和重连收到 ready 后均请求第一页；多页走严格递增游标；实时状态与补拉重复只合并一次；非本房间行、无效游标及 HTTP 失败让连接进入重试；断开或切换账号后旧请求不得写入 Jotai。Atom 单测覆盖已完成/失败状态收到迟到 delta 后仍为终态，重复终态无降级。
+- [ ] **Step 1: 写 RED 测试。** 首连和重连收到 ready 后均请求第一页；即使没有 ready，本地 SSE 首连与重连成功后也请求终态，覆盖远端 WS 连接未断的场景。多页走严格递增游标；同 generation 的双触发、实时状态与补拉重复只合并一次；非本房间行、无效游标及 HTTP 失败让连接进入重试；断开或切换账号后旧请求不得写入 Jotai。Atom 单测覆盖已完成/失败状态收到迟到 delta 后仍为终态，重复终态无降级。
 
 ```ts
 client.onEvent((event) => recovered.push(event))
@@ -71,7 +71,7 @@ expect(recovered.some((event) => event.type === 'agent.failed' && event.roomId =
 ```
 
 - [ ] **Step 2: 验证 RED。** `bun test apps/electron/src/renderer/lib/chatroom-sse.test.ts` 应因未发起终态查询或未派发终态而失败。
-- [ ] **Step 3: 最小实现。** 在 `ChatRoomSseClient.receive` 识别 ready 后启动每房间、每连接 generation 的分页恢复；验证响应字段与游标严格前进后再经已有 listener 派发终态。并发实时事件可先到，Atom 对同 invocation ID 的终态保持单调；失败调用 `failConnection`，不静默吞掉。
+- [ ] **Step 3: 最小实现。** 本地 SSE 的 live reader 启动后为当前房间发起终态分页恢复；`ChatRoomSseClient.receive` 识别远端 ready 时也为该房间发起。相同 generation/room 的并发恢复合并，但 ready 在首次恢复完成后仍可再触发一次以覆盖首次本地查询与远端 WS 完成订阅之间的窗口。验证响应字段与游标严格前进后再经已有 listener 派发终态。并发实时事件可先到，Atom 对同 invocation ID 的终态保持单调；失败调用 `failConnection`，不静默吞掉。
 
 ```ts
 if (event.type === 'room.recovery_ready' && roomId) {
