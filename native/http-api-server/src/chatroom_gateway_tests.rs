@@ -689,6 +689,119 @@ fn given_sse_subscription_for_room_when_public_event_arrives_then_receive_filter
 }
 
 #[test]
+fn given_room_sse_subscription_when_recovery_marker_arrives_then_forward_only_to_matching_room() {
+    let gateway = gateway(
+        Arc::new(FakeTransport::default()),
+        Arc::new(FakeBridge::default()),
+    );
+    let subscription = gateway.subscribe_sse(vec!["room-1".into()]).unwrap();
+    let event = crate::chatroom_protocol::parse_event(
+        br#"{"type":"room.recovery_ready","roomId":"room-2","payload":{}}"#,
+    )
+    .expect("recovery marker should parse");
+    gateway.publish_event_for_test(event);
+    assert!(subscription
+        .receiver
+        .recv_timeout(Duration::from_millis(20))
+        .is_err());
+
+    let event = crate::chatroom_protocol::parse_event(
+        br#"{"type":"room.recovery_ready","roomId":"room-1","payload":{}}"#,
+    )
+    .expect("recovery marker should parse");
+    gateway.publish_event_for_test(event);
+    let forwarded = subscription
+        .receiver
+        .recv_timeout(Duration::from_millis(100))
+        .unwrap();
+    assert_eq!(forwarded["type"], "room.recovery_ready");
+    assert_eq!(forwarded["roomId"], "room-1");
+    assert!(forwarded.get("seq").is_none());
+}
+
+#[test]
+fn given_terminal_invocations_query_when_valid_get_then_proxy_normalized_allowlisted_query() {
+    let transport = Arc::new(FakeTransport::default());
+    transport.push(GatewayTransportResponse {
+        status: 200,
+        body: br#"{"invocations":[],"nextCursor":null}"#.to_vec(),
+    });
+    let gateway = gateway(transport.clone(), Arc::new(FakeBridge::default()));
+
+    let response = gateway
+        .handle_http(
+            "GET",
+            "/api/chatrooms/v2/rooms/room-1/invocations/terminal?limit=25&after=inv-9",
+            &HashMap::new(),
+            &[],
+        )
+        .unwrap();
+
+    assert!(matches!(
+        response,
+        GatewayHttpResponse::Json { status: 200, .. }
+    ));
+    assert_eq!(
+        transport.requests.lock().unwrap()[0].1,
+        "/api/chatrooms/v2/rooms/room-1/invocations/terminal?after=inv-9&limit=25"
+    );
+}
+
+#[test]
+fn given_terminal_invocations_query_with_invalid_method_route_or_query_then_reject_without_proxying(
+) {
+    let transport = Arc::new(FakeTransport::default());
+    let gateway = gateway(transport.clone(), Arc::new(FakeBridge::default()));
+
+    for (method, path) in [
+        (
+            "POST",
+            "/api/chatrooms/v2/rooms/room-1/invocations/terminal",
+        ),
+        (
+            "GET",
+            "/api/chatrooms/v2/rooms/room-1/invocations/terminal-extra",
+        ),
+        (
+            "GET",
+            "/api/chatrooms/v2/rooms/room-1/invocations/terminal?url=https://evil.test",
+        ),
+        (
+            "GET",
+            "/api/chatrooms/v2/rooms/room-1/invocations/terminal?limit=101",
+        ),
+        (
+            "GET",
+            "/api/chatrooms/v2/rooms/room-1/invocations/terminal?after=inv-1&after=inv-2",
+        ),
+        (
+            "GET",
+            "/api/chatrooms/v2/rooms/room-1/invocations/terminal?after=../other",
+        ),
+        (
+            "GET",
+            "/api/chatrooms/v2/rooms/room-1/invocations/terminal?limit=1&extra=1",
+        ),
+    ] {
+        assert!(
+            gateway
+                .handle_http(method, path, &HashMap::new(), &[])
+                .is_err(),
+            "accepted {method} {path}"
+        );
+    }
+    assert!(gateway
+        .handle_http(
+            "GET",
+            "/api/chatrooms/v2/rooms/room%2Fother/invocations/terminal",
+            &HashMap::new(),
+            &[],
+        )
+        .is_err());
+    assert!(transport.requests.lock().unwrap().is_empty());
+}
+
+#[test]
 fn given_connected_gateway_when_connected_event_repeats_then_do_not_reconnect_equivalent_subscription(
 ) {
     let (gateway, sent, attempts, released) = recording_gateway();

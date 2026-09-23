@@ -257,6 +257,7 @@ enum Route<'a> {
     Read(&'a str),
     Messages(&'a str),
     Events(&'a str),
+    TerminalInvocations(&'a str),
     Agents(&'a str),
     Agent(&'a str, &'a str),
     Lease(&'a str, &'a str),
@@ -636,6 +637,7 @@ impl ChatroomGateway {
             | Route::Read(_)
             | Route::Messages(_)
             | Route::Events(_)
+            | Route::TerminalInvocations(_)
             | Route::Agents(_)
             | Route::Agent(_, _)
             | Route::Lease(_, _)
@@ -1561,6 +1563,7 @@ impl ChatroomGateway {
             | Route::Read(room_id)
             | Route::Messages(room_id)
             | Route::Events(room_id)
+            | Route::TerminalInvocations(room_id)
             | Route::Agents(room_id) => {
                 self.mark_room_subscribed(room_id);
             }
@@ -1892,6 +1895,7 @@ fn parse_route(path: &str) -> Result<Route<'_>, ChatroomGatewayError> {
         [_, _, "read"] => Route::Read(room_id),
         [_, _, "messages"] => Route::Messages(room_id),
         [_, _, "events"] => Route::Events(room_id),
+        [_, _, "invocations", "terminal"] => Route::TerminalInvocations(room_id),
         [_, _, "agents"] => Route::Agents(room_id),
         [_, _, "members", member_id] if valid_member_id(member_id) => {
             Route::MemberRemove(room_id, member_id)
@@ -1920,6 +1924,7 @@ fn method_allowed(method: &str, route: &Route<'_>) -> bool {
             | ("PATCH", Route::Read(_))
             | ("GET", Route::Messages(_))
             | ("GET", Route::Events(_))
+            | ("GET", Route::TerminalInvocations(_))
             | ("POST", Route::Messages(_))
             | ("POST", Route::Agents(_))
             | ("PATCH", Route::Agent(_, _))
@@ -1969,9 +1974,10 @@ fn canonical_query_for_route(
     let allowed: &[&str] = match route {
         Route::Messages(_) => &["beforeSeq", "limit"],
         Route::Events(_) => &["afterSeq", "limit"],
+        Route::TerminalInvocations(_) => &["after", "limit"],
         _ => &[],
     };
-    let mut values = HashMap::new();
+    let mut values: HashMap<&str, String> = HashMap::new();
     for pair in query.split('&') {
         let (key, value) = pair
             .split_once('=')
@@ -1979,20 +1985,33 @@ fn canonical_query_for_route(
         if !allowed.contains(&key) || value.is_empty() || values.contains_key(key) {
             return Err(invalid_request("查询参数不正确"));
         }
-        let parsed = value
-            .parse::<u64>()
-            .map_err(|_| invalid_request("查询参数不正确"))?;
-        if key == "limit" && !(1..=500).contains(&parsed) {
-            return Err(invalid_request("查询参数不正确"));
+        if key == "after" {
+            if !valid_component(value) {
+                return Err(invalid_request("查询参数不正确"));
+            }
+            values.insert(key, value.to_string());
+        } else {
+            let parsed = value
+                .parse::<u64>()
+                .map_err(|_| invalid_request("查询参数不正确"))?;
+            let limit = if matches!(route, Route::TerminalInvocations(_)) {
+                100
+            } else {
+                500
+            };
+            if key == "limit" && !(1..=limit).contains(&parsed) {
+                return Err(invalid_request("查询参数不正确"));
+            }
+            if key != "limit" && parsed > i64::MAX as u64 {
+                return Err(invalid_request("查询参数不正确"));
+            }
+            values.insert(key, parsed.to_string());
         }
-        if key != "limit" && parsed > i64::MAX as u64 {
-            return Err(invalid_request("查询参数不正确"));
-        }
-        values.insert(key, parsed);
     }
     let order = match route {
         Route::Messages(_) => ["beforeSeq", "limit"],
         Route::Events(_) => ["afterSeq", "limit"],
+        Route::TerminalInvocations(_) => ["after", "limit"],
         _ => return Ok(String::new()),
     };
     Ok(order

@@ -753,3 +753,31 @@ fn given_agent_completed_with_twenty_one_attachments_when_parsing_then_reject() 
     });
     assert!(parse_event(&serde_json::to_vec(&value).unwrap()).is_err());
 }
+
+#[test]
+fn given_room_recovery_ready_without_sequence_when_parsing_then_accept_transient_marker() {
+    let event =
+        parse_event(br#"{"type":"room.recovery_ready","roomId":"room-1","payload":{}}"#).unwrap();
+
+    assert_eq!(event.kind(), "room.recovery_ready");
+    assert_eq!(event.room_id(), Some("room-1"));
+    assert_eq!(event.seq(), None);
+    assert_eq!(
+        serde_json::to_value(event).unwrap(),
+        json!({"type":"room.recovery_ready","roomId":"room-1","payload":{}})
+    );
+}
+
+#[test]
+fn given_room_recovery_ready_with_sequence_or_sensitive_fields_when_parsing_then_reject() {
+    for value in [
+        json!({"type":"room.recovery_ready","roomId":"room-1","seq":1,"payload":{}}),
+        json!({"type":"room.recovery_ready","roomId":"room-1","payload":{"accessToken":"secret"}}),
+        json!({"type":"room.recovery_ready","roomId":"room-1","payload":{"unexpected":true}}),
+    ] {
+        assert!(
+            parse_event(&serde_json::to_vec(&value).unwrap()).is_err(),
+            "accepted {value}"
+        );
+    }
+}

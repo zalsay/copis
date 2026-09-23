@@ -581,6 +581,9 @@ pub enum ChatroomEvent {
         room_id: String,
         payload: Value,
     },
+    RoomRecoveryReady {
+        room_id: String,
+    },
     LocalStatus {
         room_id: Option<String>,
         code: String,
@@ -628,7 +631,8 @@ impl ChatroomEvent {
             | Self::AgentAccepted { room_id, .. }
             | Self::AgentDelta { room_id, .. }
             | Self::AgentCompleted { room_id, .. }
-            | Self::AgentFailed { room_id, .. } => Some(room_id),
+            | Self::AgentFailed { room_id, .. }
+            | Self::RoomRecoveryReady { room_id } => Some(room_id),
         }
     }
     pub fn seq(&self) -> Option<u64> {
@@ -664,6 +668,7 @@ impl ChatroomEvent {
             Self::AgentDelta { .. } => "agent.delta",
             Self::AgentCompleted { .. } => "agent.completed",
             Self::AgentFailed { .. } => "agent.failed",
+            Self::RoomRecoveryReady { .. } => "room.recovery_ready",
             Self::LocalStatus { .. } => "local.status",
         }
     }
@@ -979,6 +984,16 @@ pub fn parse_event(bytes: &[u8]) -> Result<ChatroomEvent, ProtocolError> {
             payload.clone(),
             |room_id, payload| ChatroomEvent::AgentFailed { room_id, payload },
         )?,
+        "room.recovery_ready" => {
+            if seq.is_some() || payload != Value::Object(Map::new()) {
+                return Err(invalid(
+                    "recovery marker must be empty and cannot carry seq",
+                ));
+            }
+            ChatroomEvent::RoomRecoveryReady {
+                room_id: room_id.unwrap(),
+            }
+        }
         "error" => {
             let code = payload
                 .get("code")
@@ -1130,6 +1145,9 @@ pub fn public_event(event: &ChatroomEvent) -> Value {
                 "message".into(),
                 sanitize_public(&Value::String(message.clone())),
             );
+        }
+        ChatroomEvent::RoomRecoveryReady { .. } => {
+            result.insert("payload".into(), Value::Object(serde_json::Map::new()));
         }
         _ => {
             let payload = match event {
