@@ -64,6 +64,30 @@ describe('Agent RPC 协议', () => {
     expect(parseWorkerCommand(serializeWorkerCommand(command))).toEqual(command)
   })
 
+  test('Given Main-derived chatroom profile When transported to Worker Then capability and Memory scope survive roundtrip', () => {
+    const command: AgentRpcWorkerCommand = {
+      type: 'run',
+      requestId: 'request-chatroom-profile-1',
+      config: {
+        sessionId: 'chatroom-session',
+        query: {
+          sessionId: 'chatroom-session',
+          prompt: '执行隔离任务',
+          apiKey: 'secret',
+          provider: 'openai',
+          permissionMode: 'bypassPermissions',
+          systemPrompt: 'Chatroom Agent',
+          piAgentDir: '/tmp/chatroom/session',
+          piSessionDir: '/tmp/chatroom/session/sessions',
+          capabilityProfile: 'chatroom',
+          memoryWorkspaceSlug: 'source-workspace',
+          useRustFileApi: true,
+        },
+      },
+    }
+    expect(parseWorkerCommand(serializeWorkerCommand(command))).toEqual(command)
+  })
+
   test('Given system prompt 含专家团队受管控协议 When serialized Then worker 帧只透传提示词文本，不携带原始上下文字段', () => {
     const command: AgentRpcWorkerCommand = {
       type: 'run',

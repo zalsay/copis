@@ -287,7 +287,8 @@
   gap: 8px;
 }
 
-.copis-working-project-pinned-icon {
+.copis-working-project-pinned-icon,
+.copis-working-chatroom-icon {
   width: 15px;
   height: 15px;
   flex: 0 0 15px;
@@ -577,7 +578,8 @@
   height: 15px;
 }
 
-.copis-working-project-pinned-row {
+.copis-working-project-pinned-row,
+.copis-working-chatroom-row {
   width: 100%;
   min-width: 0;
   min-height: 31px;
@@ -594,19 +596,23 @@
 }
 
 .copis-working-project-pinned-row:hover,
-.copis-working-project-pinned-row:focus-visible {
+.copis-working-project-pinned-row:focus-visible,
+.copis-working-chatroom-row:hover,
+.copis-working-chatroom-row:focus-visible {
   background: hsl(var(--foreground) / 0.07);
   outline: 0;
 }
 
-.copis-working-project-pinned-copy {
+.copis-working-project-pinned-copy,
+.copis-working-chatroom-copy {
   min-width: 0;
   display: flex;
   flex-direction: column;
   gap: 1px;
 }
 
-.copis-working-project-pinned-name {
+.copis-working-project-pinned-name,
+.copis-working-chatroom-name {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -615,7 +621,8 @@
   line-height: 1.25;
 }
 
-.copis-working-project-pinned-copy small {
+.copis-working-project-pinned-copy small,
+.copis-working-chatroom-copy small {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

@@ -149,8 +149,17 @@ fn image_task_gateway_refreshes_once_and_replays_same_request_without_resubmitti
     .unwrap();
     assert_eq!(result.status, 202);
     assert_eq!(result.body.unwrap()["data"]["task_id"], "task-1");
-    let listed = handle_working_gateway_request(&gateway, "GET", "/api/working/image/tasks?session_id=s-1", None).unwrap();
-    assert_eq!(listed.body.unwrap()["data"]["tasks"][0]["request_id"], "image-call-1");
+    let listed = handle_working_gateway_request(
+        &gateway,
+        "GET",
+        "/api/working/image/tasks?session_id=s-1",
+        None,
+    )
+    .unwrap();
+    assert_eq!(
+        listed.body.unwrap()["data"]["tasks"][0]["request_id"],
+        "image-call-1"
+    );
     server.join().unwrap();
 }
 
@@ -162,27 +171,68 @@ fn image_task_completed_query_uses_sqlite_cache_after_upstream_stops() {
         let (mut socket, _) = listener.accept().unwrap();
         let mut request = Vec::new();
         let mut byte = [0];
-        while !request.ends_with(b"\r\n\r\n") { socket.read_exact(&mut byte).unwrap(); request.push(byte[0]); }
-        assert!(String::from_utf8_lossy(&request).starts_with("GET /v1/images/tasks/cached-task HTTP/1.1"));
+        while !request.ends_with(b"\r\n\r\n") {
+            socket.read_exact(&mut byte).unwrap();
+            request.push(byte[0]);
+        }
+        assert!(String::from_utf8_lossy(&request)
+            .starts_with("GET /v1/images/tasks/cached-task HTTP/1.1"));
         let body = r#"{"data":{"task_id":"cached-task","status":"completed","image_url":"https://cos.example/image?q-sign-time=1%3B4000000000"}}"#;
-        write!(socket, "HTTP/1.0 200 OK\r\nContent-Length: {}\r\n\r\n{}", body.len(), body).unwrap();
+        write!(
+            socket,
+            "HTTP/1.0 200 OK\r\nContent-Length: {}\r\n\r\n{}",
+            body.len(),
+            body
+        )
+        .unwrap();
     });
     let transport = Arc::new(QueueTransport::new(vec![]));
-    let client = Arc::new(EduApiClient::new("https://edu-api.example.test", transport, 32).unwrap());
+    let client =
+        Arc::new(EduApiClient::new("https://edu-api.example.test", transport, 32).unwrap());
     let storage = Arc::new(MemoryStorage::default());
     *storage.value.lock().unwrap() = Some(PersistedAuth {
-        access_token: "test-access".into(), refresh_token: None, provider: "oidc".into(),
-        user: Some(json!({"ID":42})), expires_at: Some(4000000000),
+        access_token: "test-access".into(),
+        refresh_token: None,
+        provider: "oidc".into(),
+        user: Some(json!({"ID":42})),
+        expires_at: Some(4000000000),
     });
     let auth = Arc::new(AuthSession::new(client, storage).unwrap());
-    let gateway = WorkingGateway::with_model_client(auth.clone(), ModelRequestClient::new(&format!("http://{address}"), 1).unwrap());
-    let first = handle_working_gateway_request(&gateway, "GET", "/api/working/image/tasks/cached-task", None).unwrap();
+    let gateway = WorkingGateway::with_model_client(
+        auth.clone(),
+        ModelRequestClient::new(&format!("http://{address}"), 1).unwrap(),
+    );
+    let first = handle_working_gateway_request(
+        &gateway,
+        "GET",
+        "/api/working/image/tasks/cached-task",
+        None,
+    )
+    .unwrap();
     server.join().unwrap();
-    let second = handle_working_gateway_request(&gateway, "GET", "/api/working/image/tasks/cached-task", None).unwrap();
+    let second = handle_working_gateway_request(
+        &gateway,
+        "GET",
+        "/api/working/image/tasks/cached-task",
+        None,
+    )
+    .unwrap();
     assert_eq!(first.body, second.body);
-    assert!(handle_working_gateway_request(&gateway, "GET", "/api/working/image/tasks/cached-task?refresh=1", None).is_err());
+    assert!(handle_working_gateway_request(
+        &gateway,
+        "GET",
+        "/api/working/image/tasks/cached-task?refresh=1",
+        None
+    )
+    .is_err());
     auth.logout().unwrap();
-    assert!(handle_working_gateway_request(&gateway, "GET", "/api/working/image/tasks/cached-task", None).is_err());
+    assert!(handle_working_gateway_request(
+        &gateway,
+        "GET",
+        "/api/working/image/tasks/cached-task",
+        None
+    )
+    .is_err());
 }
 
 #[test]

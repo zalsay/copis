@@ -74,6 +74,7 @@ import { buildPiAlipayBotTools } from './pi-alipay-bot-tool'
 import { buildPiAgentMailTools } from './pi-agent-mail-tool'
 import { buildPiWorkingPaymentTools } from './pi-working-payment-tool'
 import { buildPiMemoryTools } from './pi-memory-tools'
+import { resolveMemoryPolicyForProfile } from './memory-tool-policy'
 import { buildPiImageGenerationTools } from './pi-image-generation-tool'
 import { createRustBashToolOperations, createRustFileToolOperations } from './pi-rust-file-tools'
 import { resolveDefaultPiExtensionEntries } from './pi-default-extensions'
@@ -129,7 +130,8 @@ export interface PiAgentQueryOptions extends AgentQueryInput {
   channelId?: string
   channelName?: string
   maxTurns?: number
-  permissionMode: CopisPermissionMode
+  /** default 是 SDK 的可拦截模式，仅供聊天室 Main 使用，不暴露到用户模式切换。 */
+  permissionMode: CopisPermissionMode | 'default'
   canUseTool?: (
     toolName: string,
     input: Record<string, unknown>,
@@ -158,6 +160,10 @@ export interface PiAgentQueryOptions extends AgentQueryInput {
   skillMentions?: string[]
   /** 当前 Memory 可见范围对应的 workspace slug。 */
   workspaceSlug?: string
+  /** Main 解析出的聊天室 Memory scope；不作为通用 runtime workspace 使用。 */
+  memoryWorkspaceSlug?: string
+  /** 仅由 Main trusted runtime profile 派生，不能由输入请求伪造。 */
+  capabilityProfile?: 'default' | 'chatroom'
   /** 当前 Agent 的 Memory 策略。 */
   memoryPolicy?: MemoryPolicy
   /** token-threshold 整理统一交给 Memory maintenance keyed queue。 */
@@ -210,6 +216,18 @@ interface ActivePiSession {
   readySettled: boolean
   disposed: boolean
   runtimeGuard?: AgentRuntimeGuard
+}
+
+export function resolvePiResourceLoaderPolicy(input: Pick<PiAgentQueryOptions, 'capabilityProfile' | 'additionalSkillPaths'>): {
+  noExtensions: boolean
+  additionalExtensionPaths: string[]
+  additionalSkillPaths: string[]
+} {
+  return {
+    noExtensions: input.capabilityProfile === 'chatroom',
+    additionalExtensionPaths: input.capabilityProfile === 'chatroom' ? [] : resolveDefaultPiExtensionEntries(),
+    additionalSkillPaths: input.additionalSkillPaths ?? [],
+  }
 }
 
 interface PendingInterruptPrompt {
@@ -1316,20 +1334,21 @@ export function buildBuiltinToolDefinitions(
   cwd: string,
   canUseTool: PiAgentQueryOptions['canUseTool'],
   runtimeEnv: AgentRuntimeEnv | undefined,
-  options: Pick<PiAgentQueryOptions, 'sessionId' | 'useRustFileApi' | 'browserPageControl' | 'automationControl' | 'workspaceSlug' | 'memoryPolicy' | 'imageGenerationEnabled'>,
+  options: Pick<PiAgentQueryOptions, 'sessionId' | 'useRustFileApi' | 'browserPageControl' | 'automationControl' | 'workspaceSlug' | 'memoryWorkspaceSlug' | 'memoryPolicy' | 'imageGenerationEnabled' | 'capabilityProfile'>,
 ): ToolDefinition[] {
   const rustFileTools = options.useRustFileApi
     ? createRustFileToolOperations({ sessionId: options.sessionId })
     : undefined
   const definitions = [
-    sdk.createReadToolDefinition(cwd, rustFileTools ? { operations: rustFileTools.read } : undefined),
-    // Bash 在 Rust 文件能力启用时同样经 Rust 执行，不能回退到 Pi 本地 Shell。
-    sdk.createBashToolDefinition(cwd, rustFileTools
-      ? { operations: createRustBashToolOperations({ sessionId: options.sessionId }) }
-      : createCopisBashToolOptions(runtimeEnv)),
-    sdk.createEditToolDefinition(cwd, rustFileTools ? { operations: rustFileTools.edit } : undefined),
-    sdk.createWriteToolDefinition(cwd, rustFileTools ? { operations: rustFileTools.write } : undefined),
-    ...(rustFileTools ? [
+    ...(options.capabilityProfile === 'chatroom' && !rustFileTools ? [] : [
+      sdk.createReadToolDefinition(cwd, rustFileTools ? { operations: rustFileTools.read } : undefined),
+      ...(options.capabilityProfile === 'chatroom' && !rustFileTools ? [] : [sdk.createBashToolDefinition(cwd, rustFileTools
+        ? { operations: createRustBashToolOperations({ sessionId: options.sessionId }) }
+        : createCopisBashToolOptions(runtimeEnv))]),
+      sdk.createEditToolDefinition(cwd, rustFileTools ? { operations: rustFileTools.edit } : undefined),
+      sdk.createWriteToolDefinition(cwd, rustFileTools ? { operations: rustFileTools.write } : undefined),
+    ]),
+    ...(rustFileTools && options.capabilityProfile !== 'chatroom' ? [
       sdk.defineTool({
         name: 'RealPath',
         label: '获取真实路径',
@@ -1346,28 +1365,28 @@ export function buildBuiltinToolDefinitions(
         },
       }),
     ] : []),
-    ...(!rustFileTools ? [
+    ...(!rustFileTools && options.capabilityProfile !== 'chatroom' ? [
       sdk.createGrepToolDefinition(cwd),
       sdk.createFindToolDefinition(cwd),
       sdk.createLsToolDefinition(cwd),
     ] : []),
     ...buildPiMemoryTools(sdk, {
-      workspaceSlug: options.workspaceSlug,
-      memoryPolicy: options.memoryPolicy,
+      workspaceSlug: options.memoryWorkspaceSlug ?? options.workspaceSlug,
+      memoryPolicy: resolveMemoryPolicyForProfile(options.capabilityProfile, options.memoryPolicy),
     }),
-    ...(options.browserPageControl
+    ...(options.capabilityProfile !== 'chatroom' && options.browserPageControl
       ? buildPiBrowserAgentTools(sdk, {
         sessionId: options.sessionId,
         capability: options.browserPageControl,
       })
       : []),
-    ...(options.automationControl
+    ...(options.capabilityProfile !== 'chatroom' && options.automationControl
       ? buildPiAutomationTools(sdk, { sessionId: options.sessionId, capability: options.automationControl })
       : []),
-    ...buildPiAlipayBotTools(sdk, { sessionId: options.sessionId }),
-    ...buildPiAgentMailTools(sdk, { sessionId: options.sessionId }),
-    ...buildPiWorkingPaymentTools(sdk),
-    ...(options.imageGenerationEnabled
+    ...(options.capabilityProfile !== 'chatroom' ? buildPiAlipayBotTools(sdk, { sessionId: options.sessionId }) : []),
+    ...(options.capabilityProfile !== 'chatroom' ? buildPiAgentMailTools(sdk, { sessionId: options.sessionId }) : []),
+    ...(options.capabilityProfile !== 'chatroom' ? buildPiWorkingPaymentTools(sdk) : []),
+    ...(options.capabilityProfile !== 'chatroom' && options.imageGenerationEnabled
       ? buildPiImageGenerationTools(sdk, { sessionId: options.sessionId, cwd })
       : []),
   ] as unknown as ToolDefinition[]
@@ -1490,11 +1509,11 @@ export class PiAgentAdapter implements AgentProviderAdapter {
       let automaticCompactionContinuations = 0
       let pendingTerminalResult: SDKMessage | undefined
       const customTools = [
-        buildCurrentSessionCompactionTool(
+        ...(input.capabilityProfile === 'chatroom' ? [] : [buildCurrentSessionCompactionTool(
           sdk,
           () => { compactContextRequested = true },
           input.canUseTool,
-        ),
+        )]),
         ...buildBuiltinToolDefinitions(
           sdk,
           cwd,
@@ -1502,8 +1521,8 @@ export class PiAgentAdapter implements AgentProviderAdapter {
           input.runtimeEnv,
           input,
         ),
-        ...buildCopisProductToolDefinitions(sdk, input.canUseTool),
-        ...wrapCustomToolDefinitions(input.customTools, input.canUseTool),
+        ...(input.capabilityProfile === 'chatroom' ? [] : buildCopisProductToolDefinitions(sdk, input.canUseTool)),
+        ...(input.capabilityProfile === 'chatroom' ? [] : wrapCustomToolDefinitions(input.customTools, input.canUseTool)),
       ]
 
       const settingsManager = sdk.SettingsManager.inMemory({
@@ -1543,14 +1562,18 @@ export class PiAgentAdapter implements AgentProviderAdapter {
           : []),
       ]
       ensureSkillPathsSanitized(input.additionalSkillPaths)
+      const resourcePolicy = resolvePiResourceLoaderPolicy(input)
       const resourceLoader = new sdk.DefaultResourceLoader({
         cwd,
         agentDir: input.piAgentDir,
         settingsManager,
         noSkills: true,
+        noExtensions: resourcePolicy.noExtensions,
         ...createCopisResourceLoaderOptions(),
-        additionalExtensionPaths: resolveDefaultPiExtensionEntries(),
-        additionalSkillPaths: input.additionalSkillPaths ?? [],
+        // 聊天室只消费 Main 传入的 Skill snapshot；默认 pi-web-access 等扩展
+        // 会注入联网工具，必须与 profile 一起关闭。
+        additionalExtensionPaths: resourcePolicy.additionalExtensionPaths,
+        additionalSkillPaths: resourcePolicy.additionalSkillPaths,
         skillsOverride: createCopisSkillsOverride(input.additionalSkillPaths),
         ...(model.reasoning && extensionFactories.length > 0 && { extensionFactories }),
         systemPromptOverride: () => input.systemPrompt,

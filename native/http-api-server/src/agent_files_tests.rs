@@ -52,6 +52,47 @@ fn store_for_plan(root: &Path, write_root: &Path) -> (AgentFilePolicyStore, Stri
     (store, "session-plan".to_string())
 }
 
+#[test]
+fn chatroom_default_policy_requires_chatroom_profile() {
+    let root = temp_dir("chatroom-default");
+    let mut query = Map::new();
+    query.insert(
+        "cwd".into(),
+        Value::String(root.to_string_lossy().into_owned()),
+    );
+    query.insert("useRustFileApi".into(), Value::Bool(true));
+    query.insert("capabilityProfile".into(), Value::String("chatroom".into()));
+    query.insert("fileAccessPolicy".into(), json!({"readRoots": [root], "readFiles": [], "writeRoots": [root], "permissionMode": "default"}));
+    let result = AgentFilePolicyStore::new().register_from_query("chatroom-session", &mut query);
+    assert!(result.is_ok(), "chatroom result: {:?}", result.err());
+
+    let mut forged = query;
+    forged.insert("fileAccessPolicy".into(), json!({"readRoots": [root], "readFiles": [], "writeRoots": [root], "permissionMode": "default"}));
+    forged.insert("capabilityProfile".into(), Value::String("user".into()));
+    assert!(AgentFilePolicyStore::new()
+        .register_from_query("user-session", &mut forged)
+        .is_err());
+
+    let store = AgentFilePolicyStore::new();
+    let mut valid = Map::new();
+    valid.insert(
+        "cwd".into(),
+        Value::String(root.to_string_lossy().into_owned()),
+    );
+    valid.insert("useRustFileApi".into(), Value::Bool(true));
+    valid.insert("capabilityProfile".into(), Value::String("chatroom".into()));
+    valid.insert("fileAccessPolicy".into(), json!({"readRoots": [root], "readFiles": [], "writeRoots": [root], "permissionMode": "default"}));
+    let token = store
+        .register_from_query("chatroom-token", &mut valid)
+        .unwrap();
+    assert!(store
+        .validate_chatroom_worker_token("chatroom-token", &token)
+        .is_ok());
+    assert!(store
+        .validate_chatroom_worker_token("other-session", &token)
+        .is_err());
+}
+
 fn body(session: &str, path: &Path) -> Vec<u8> {
     serde_json::to_vec(&json!({ "sessionId": session, "path": path })).unwrap()
 }

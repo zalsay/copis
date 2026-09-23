@@ -1,5 +1,5 @@
 import { describe, expect, test, beforeEach, afterEach, mock } from 'bun:test'
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import type { BrowserSyncRequest, BrowserSyncResponse } from '@copis/shared'
@@ -8,6 +8,7 @@ const testDir = join(tmpdir(), `copis-web-sync-test-${Date.now()}-${Math.random(
 const syncStatePath = join(testDir, 'web-sync-state.json')
 const bookmarksPath = join(testDir, 'web-bookmarks.json')
 const profilesPath = join(testDir, 'web-page-profiles.json')
+const LEGACY_DEVICE_ID = '123e4567-e89b-42d3-a456-426614174000'
 
 mock.module('electron', () => ({
   app: {
@@ -25,6 +26,8 @@ const actualConfigPaths = await import('./config-paths')
 mock.module('./config-paths', () => ({
   ...actualConfigPaths,
   getConfigDir: () => testDir,
+  getAgentWorkspacesDir: () => join(testDir, 'agent-workspaces'),
+  getClientDevicePath: () => join(testDir, 'client-device.json'),
   getWorkingAuthPath: () => join(testDir, 'working-auth.json'),
   getWorkingModelCatalogPath: () => join(testDir, 'working-model-catalog.json'),
   getWebSyncStatePath: () => syncStatePath,
@@ -34,12 +37,14 @@ mock.module('./config-paths', () => ({
 }))
 
 const { WebSyncCoordinator, resetWebSyncCoordinatorForTests } = await import('./web-sync-coordinator')
+const { getOrCreateClientDeviceId } = await import('./client-device-id')
 const bookmarkService = await import('./web-bookmark-service')
 const profileService = await import('./web-page-profile-service')
 
 describe('WebSyncCoordinator 增量同步调度', () => {
   beforeEach(() => {
     mkdirSync(testDir, { recursive: true })
+    mkdirSync(join(testDir, 'agent-workspaces', 'chatrooms'), { recursive: true })
   })
 
   afterEach(() => {
@@ -57,6 +62,61 @@ describe('WebSyncCoordinator 增量同步调度', () => {
     expect(existsSync(syncStatePath)).toBe(true)
 
     coordinator.destroy()
+  })
+
+  test('WebSync 与聊天室共享同一个稳定客户端设备 ID', () => {
+    const coordinator = new WebSyncCoordinator({ autoStartInterval: false })
+
+    expect(coordinator.getState().deviceId).toBe(getOrCreateClientDeviceId())
+
+    coordinator.destroy()
+  })
+
+  test('迁移旧 WebSync 设备 ID 时保留非零游标和最后同步时间', () => {
+    writeFileSync(syncStatePath, JSON.stringify({
+      deviceId: LEGACY_DEVICE_ID,
+      serverCursor: 42,
+      lastSyncedAt: 123456,
+      hasLocalChanges: true,
+    }))
+
+    const coordinator = new WebSyncCoordinator({ autoStartInterval: false })
+    const state = coordinator.getState()
+
+    expect(state.deviceId).toBe(LEGACY_DEVICE_ID)
+    expect(state.serverCursor).toBe(42)
+    expect(state.lastSyncedAt).toBe(123456)
+    expect(state.hasLocalChanges).toBe(true)
+    expect(getOrCreateClientDeviceId()).toBe(state.deviceId)
+
+    coordinator.destroy()
+  })
+
+  test('WebSync 状态的临时恢复文件不会被读取路径提升', () => {
+    writeFileSync(syncStatePath, '{broken')
+    writeFileSync(`${syncStatePath}.tmp`, JSON.stringify({
+      deviceId: LEGACY_DEVICE_ID,
+      serverCursor: 99,
+      lastSyncedAt: 123,
+    }))
+
+    const coordinator = new WebSyncCoordinator({ autoStartInterval: false })
+    expect(coordinator.getState().serverCursor).toBe(0)
+    expect(existsSync(`${syncStatePath}.tmp`)).toBe(true)
+    coordinator.destroy()
+  })
+
+  test('WebSync 状态符号链接不会被跟随读取', () => {
+    if (process.platform === 'win32') return
+    const externalPath = join(testDir, 'external-sync-state.json')
+    writeFileSync(externalPath, JSON.stringify({
+      deviceId: LEGACY_DEVICE_ID,
+      serverCursor: 77,
+    }))
+    symlinkSync(externalPath, syncStatePath)
+
+    expect(() => new WebSyncCoordinator({ autoStartInterval: false })).toThrow('WebSync 状态文件路径不是普通文件')
+    expect(JSON.parse(readFileSync(externalPath, 'utf8')).serverCursor).toBe(77)
   })
 
   test('当用户未登录时，syncNow 优雅跳过请求并保留本地脏标记', async () => {

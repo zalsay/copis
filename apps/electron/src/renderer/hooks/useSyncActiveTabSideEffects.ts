@@ -37,6 +37,11 @@ export function useSyncActiveTabSideEffects(): SyncActiveTabSideEffects {
         setCurrentAgentSessionId(null)
         return
       }
+      if (newActiveTab.type === 'chatroom') {
+        setCurrentAgentSessionId(null)
+        setAppMode('agent')
+        return
+      }
 
       // Agent / 会话预览
       const session = agentSessions.find((s) => s.id === newActiveTab.sessionId)

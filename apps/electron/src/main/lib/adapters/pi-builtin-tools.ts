@@ -19,7 +19,7 @@ import type {
 } from '@copis/shared'
 import { buildPiMemoryTools } from './pi-memory-tools'
 import { runtimeMemoryApiClient as memoryApiClient } from '../memory-api-client-runtime'
-import { memoryToolNamesForPolicy } from './memory-tool-policy'
+import { memoryToolNamesForPolicy, resolveMemoryPolicyForProfile } from './memory-tool-policy'
 import { getBrowserAgentContext } from '../browser-workflow-service'
 import { renderBrowserRecording, renderBrowserSnapshot } from '../browser-page-control-service'
 import {
@@ -96,6 +96,8 @@ export interface PiBuiltinToolsContext {
   memoryPolicy?: MemoryPolicy
   triggeredBy?: 'user' | 'automation' | 'delegation'
   requestSingleApproval?: (input: PiBuiltinSingleApprovalInput) => Promise<boolean>
+  /** 仅由 Main 根据 trusted runtime registry 派生；Renderer/HTTP 不可传入。 */
+  capabilityProfile?: 'default' | 'chatroom'
 }
 
 export interface PiBuiltinSingleApprovalInput {
@@ -970,6 +972,20 @@ export async function buildPiBuiltinTools(
   ctx: PiBuiltinToolsContext,
 ): Promise<PiBuiltinToolsResult> {
   const tools: ToolDefinition[] = []
+
+  // 聊天室只允许显式共享的只读 Memory。所有外部网络、浏览器、计划、协作、
+  // 专家团队和图片能力都必须从这个 profile 中排除，避免普通会话配置被继承。
+  if (ctx.capabilityProfile === 'chatroom') {
+    const memoryPolicy = resolveMemoryPolicyForProfile('chatroom', ctx.memoryPolicy)
+    if (memoryToolNamesForPolicy(memoryPolicy).length > 0) {
+      try {
+        tools.push(...buildMemoryTools(sdk, { ...ctx, memoryPolicy }))
+      } catch (error) {
+        console.error('[Pi 桥接] 注入聊天室 Memory 工具失败:', error)
+      }
+    }
+    return { tools, collaborationAvailable: false, expertTeamAvailable: false }
+  }
 
   if (getBrowserAgentContext(ctx.sessionId) || ctx.workspaceId) {
     try {

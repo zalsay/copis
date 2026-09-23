@@ -93,7 +93,7 @@ for (const key of Object.keys(process.env)) {
 
 import { createApplicationMenu } from './menu'
 import { registerIpcHandlers } from './ipc'
-import { ensureRustHttpApiServerReady, stopHttpApiServer } from './lib/http-api-server'
+import { addHttpApiServerExitListener, ensureRustHttpApiServerReady, stopHttpApiServer } from './lib/http-api-server'
 import { createTray, destroyTray, getTray } from './tray'
 import { initializeRuntime } from './lib/runtime-init'
 import { seedDefaultSkills } from './lib/config-paths'
@@ -111,6 +111,8 @@ import { disposeWebTabs, saveWebTabsSession, setWebTabHostWindow } from './lib/w
 import { setDshHostWindow, destroyDshView } from './lib/dsh-view-manager'
 import { stopAllBrowserWorkflowRecordings } from './lib/browser-workflow-service'
 import { stopAllBrowserWorkflowRuns } from './lib/browser-workflow-runner'
+import { runChatRoomQuitCleanup } from './lib/chatroom-lifecycle'
+import { initializeChatRoomAgentCoordinator } from './lib/chatroom-agent-bootstrap'
 import { startAgentToolsWatcher, stopAgentToolsWatcher } from './lib/agent-tools-watcher'
 import { getIsQuitting, setQuitting } from './lib/app-lifecycle'
 import {
@@ -570,6 +572,14 @@ async function bootstrap(): Promise<void> {
 
   // Register IPC handlers
   registerIpcHandlers()
+  safeRun('initializeChatRoomAgentCoordinator', initializeChatRoomAgentCoordinator)
+  // Rust 非预期退出时聊天室立即失败，不排队重试；正常 stop 不会触发该监听。
+  safeRun('chatroomRustExitListener', () => addHttpApiServerExitListener((reason) => {
+    if (reason !== 'unexpected_exit' && reason !== 'error') return
+    void import('./lib/chatroom-agent-coordinator').then(({ getChatRoomAgentCoordinator }) => {
+      return getChatRoomAgentCoordinator().stopAll('gateway_disconnected')
+    }).catch(() => undefined)
+  }))
 
   // 注册 DSH Cordis 创造模式内嵌 Web Session 请求头拦截器
   safeRun('registerDshCordisWebSessionHeaders', registerDshCordisWebSessionHeaders)
@@ -729,7 +739,24 @@ app.on('before-quit', (event) => {
     event.preventDefault()
     if (!piWorkerStopInProgress) {
       piWorkerStopInProgress = true
-      void stopAllAgents()
+      void (async () => {
+        await runChatRoomQuitCleanup({
+          stopChatRooms: async () => {
+            try {
+              const { getChatRoomAgentCoordinator } = await import('./lib/chatroom-agent-coordinator')
+              await getChatRoomAgentCoordinator().stopAll('app_quit')
+            } catch { /* 协调器未初始化或已释放 */ }
+          },
+          stopAgents: () => stopAllAgents(),
+          stopHttpApi: () => stopHttpApiServer(),
+          disposeChatRooms: async () => {
+            try {
+              const { disposeChatRoomAgentCoordinator } = await import('./lib/chatroom-agent-bootstrap')
+              await disposeChatRoomAgentCoordinator()
+            } catch { /* 协调器未初始化 */ }
+          },
+        })
+      })()
         .catch((error: unknown) => {
           console.warn('[退出] Pi Worker 批量停止失败:', error)
         })
@@ -748,11 +775,6 @@ app.on('before-quit', (event) => {
   stopAllBrowserWorkflowRecordings()
   stopAllBrowserWorkflowRuns()
   disposeWebTabs()
-
-  // Pi Worker 已收到停止命令后再关闭本地 HTTP API，避免开发重启时残留端口占用。
-  stopHttpApiServer().catch((error: unknown) => {
-    console.error('[HTTP API] 关闭失败:', error)
-  })
 
   // 释放 Pi runtime 资源
   cleanupAgentRuntimeResources()

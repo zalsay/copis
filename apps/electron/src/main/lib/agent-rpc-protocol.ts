@@ -24,7 +24,8 @@ export interface PiWorkerQueryConfig {
   channelId?: string
   channelName?: string
   maxTurns?: number
-  permissionMode: CopisPermissionMode
+  /** Main-only SDK default mode; never accepted from renderer DTOs. */
+  permissionMode: CopisPermissionMode | 'default'
   systemPrompt: string
   resumeSessionId?: string
   piAgentDir: string
@@ -35,7 +36,11 @@ export interface PiWorkerQueryConfig {
   additionalSkillPaths?: string[]
   /** 当前用户输入显式引用的 Skill slug。 */
   skillMentions?: string[]
+  /** Main-only capability profile; chatroom profile excludes all business/external tools. */
+  capabilityProfile?: 'default' | 'chatroom'
   workspaceSlug?: string
+  /** Chatroom source scope consumed only by Memory tools, never generic runtime workspace. */
+  memoryWorkspaceSlug?: string
   memoryPolicy?: MemoryPolicy
   proxyUrl?: string
   transport?: 'sse' | 'websocket' | 'websocket-cached'
@@ -109,7 +114,7 @@ export interface PiWorkerFileAccessPolicy {
   readFiles: string[]
   writeRoots: string[]
   browserSessionRoot?: string
-  permissionMode: CopisPermissionMode
+  permissionMode: CopisPermissionMode | 'default'
   advancedAuthorization?: boolean
 }
 
@@ -117,6 +122,17 @@ export interface PiWorkerRunConfig {
   sessionId: string
   query: PiWorkerQueryConfig
 }
+
+/** Renderer/HTTP 输入禁止携带的主进程能力字段；可信聊天室上下文只存在 Main registry。 */
+export const AGENT_RPC_FORBIDDEN_INPUT_FIELDS = [
+  'runtimeContext',
+  'capabilityProfile',
+  'memoryWorkspaceSlug',
+  'fileAccessPolicy',
+  'useRustFileApi',
+  'piAgentDir',
+  'piSessionDir',
+] as const
 
 export interface PiWorkerQueueConfig {
   sessionId: string

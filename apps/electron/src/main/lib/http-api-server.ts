@@ -131,6 +131,19 @@ let httpApiProcess: ChildProcessWithoutNullStreams | null = null
 let httpApiInternalToken: string | null = null
 let stopping = false
 let responseWriteChain = Promise.resolve()
+export type HttpApiServerExitReason = 'error' | 'unexpected_exit'
+const exitListeners = new Set<(reason: HttpApiServerExitReason) => void>()
+
+export function addHttpApiServerExitListener(listener: (reason: HttpApiServerExitReason) => void): () => void {
+  exitListeners.add(listener)
+  return () => exitListeners.delete(listener)
+}
+
+function notifyHttpApiServerExit(reason: HttpApiServerExitReason): void {
+  for (const listener of [...exitListeners]) {
+    try { listener(reason) } catch (error) { console.warn('[HTTP API] 退出监听器执行失败:', error) }
+  }
+}
 
 function encodeHex(value: string): string {
   return Buffer.from(value, 'utf8').toString('hex')
@@ -569,6 +582,7 @@ function spawnManagedProcess(
       httpApiProcess = null
       httpApiInternalToken = null
       if (!stopping) console.error('[HTTP API] Rust 进程错误:', error.message)
+      if (!stopping) notifyHttpApiServerExit('error')
     }
   })
   child.once('exit', (code, signal) => {
@@ -578,6 +592,7 @@ function spawnManagedProcess(
     httpApiInternalToken = null
     if (!stopping) {
       console.error(`[HTTP API] Rust 进程退出（code=${code ?? 'null'}, signal=${signal ?? 'none'}）`)
+      notifyHttpApiServerExit('unexpected_exit')
     }
   })
 

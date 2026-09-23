@@ -83,11 +83,17 @@ describe('Agent 工作区 MCP 配置', () => {
           command: 'github-mcp',
           enabled: true,
         },
+        copis_image_custom: {
+          type: 'stdio',
+          command: 'custom-image',
+          enabled: true,
+        },
       },
     })
 
-    expect(Object.keys(normalized.servers).sort()).toEqual(['github'])
+    expect(Object.keys(normalized.servers).sort()).toEqual(['copis_image_custom', 'github'])
     expect(normalized.servers.github?.command).toBe('github-mcp')
+    expect(normalized.servers.copis_image_custom?.command).toBe('custom-image')
   })
 })
 
@@ -589,6 +595,35 @@ describe('Agent 工作区创建', () => {
 })
 
 describe('Agent 工作区 Skill 扫描', () => {
+  test('Given 有效 Skill When 只读枚举启用项 Then 不自愈磁盘也不输出绝对路径', () => {
+    const workspaceSlug = 'readonly-skill-workspace'
+    const skillsDir = configPaths.getWorkspaceSkillsDir(workspaceSlug)
+    const skillPath = join(skillsDir, 'readonly-skill', 'SKILL.md')
+    const originalContent = '---\nname: readonly-skill\ndescription: 只读测试\n---\n\n正文\n'
+    mkdirSync(join(skillsDir, 'readonly-skill'), { recursive: true })
+    writeFileSync(skillPath, originalContent, 'utf-8')
+
+    const logs: string[] = []
+    const originalLog = console.log
+    const originalWarn = console.warn
+    const originalError = console.error
+    console.log = (...args: unknown[]) => logs.push(args.join(' '))
+    console.warn = (...args: unknown[]) => logs.push(args.join(' '))
+    console.error = (...args: unknown[]) => logs.push(args.join(' '))
+    let skills: ReturnType<typeof manager.getWorkspaceSkillsReadOnly>
+    try {
+      skills = manager.getWorkspaceSkillsReadOnly(workspaceSlug)
+    } finally {
+      console.log = originalLog
+      console.warn = originalWarn
+      console.error = originalError
+    }
+
+    expect(skills!.map((skill) => skill.slug)).toEqual(['readonly-skill'])
+    expect(readFileSync(skillPath, 'utf-8')).toBe(originalContent)
+    expect(logs.join('\n')).not.toContain(tempHome)
+  })
+
   test('Given Skills 目录包含 broken symlink When 获取工作区 Skills Then 跳过坏条目并继续扫描后续 Skill', () => {
     const workspaceSlug = 'workspace-a'
     const skillsDir = configPaths.getWorkspaceSkillsDir(workspaceSlug)
@@ -715,5 +750,3 @@ describe('工作区置顶与多项倒排排序', () => {
     expect(onDiskContent).toContain('description:')
   })
 })
-
-

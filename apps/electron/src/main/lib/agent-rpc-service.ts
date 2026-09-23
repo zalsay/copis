@@ -116,6 +116,8 @@ import {
 } from './agent-rpc-memory'
 import { filterAttachedPaths } from './attached-paths'
 import { getTrustedAgentExternalSource } from './agent-rpc-source-context'
+import { getTrustedAgentRuntimeContext } from './agent-rpc-runtime-context'
+import type { ChatRoomAgentRuntimeContext } from '@copis/shared'
 import type {
   AgentRpcWorkerFrame,
   PiWorkerFileAccessPolicy,
@@ -123,6 +125,7 @@ import type {
   PiWorkerRunConfig,
   PiWorkerQueryConfig,
 } from './agent-rpc-protocol'
+import { AGENT_RPC_FORBIDDEN_INPUT_FIELDS } from './agent-rpc-protocol'
 
 const DEFAULT_PI_MODEL_ID = 'claude-sonnet-5'
 
@@ -212,6 +215,10 @@ function requireString(record: Record<string, unknown>, key: string): string {
 }
 
 export function parseAgentRpcInput(record: Record<string, unknown>): AgentSendInput {
+  const forbiddenField = AGENT_RPC_FORBIDDEN_INPUT_FIELDS.find((field) => field in record)
+  if (forbiddenField) {
+    throw new Error(`不支持的请求字段: ${forbiddenField}`)
+  }
   const sessionId = requireString(record, 'sessionId')
   const userMessage = requireString(record, 'userMessage')
   const permissionMode = optionalString(record.permissionModeOverride)
@@ -260,6 +267,10 @@ export function parseAgentRpcInput(record: Record<string, unknown>): AgentSendIn
 }
 
 export function parseAgentRpcQueueInput(record: Record<string, unknown>): AgentQueueMessageInput {
+  const forbiddenField = AGENT_RPC_FORBIDDEN_INPUT_FIELDS.find((field) => field in record)
+  if (forbiddenField) {
+    throw new Error(`不支持的请求字段: ${forbiddenField}`)
+  }
   const sessionId = requireString(record, 'sessionId')
   const userMessage = requireString(record, 'userMessage')
   if (record.interrupt !== undefined && typeof record.interrupt !== 'boolean') {
@@ -342,13 +353,30 @@ function buildRustFileAccessPolicy(input: {
   session: AgentSessionMeta
   sessionId: string
   agentCwd: string
-  workspaceSkillsDir: string
+  workspaceSkillsDir?: string
   workspaceWriteRoot: string
   additionalDirectories: string[]
-  permissionMode: CopisPermissionMode
+  permissionMode: CopisPermissionMode | 'default'
   advancedAuthorization: boolean
   isAppConnector?: boolean
+  chatroomRuntimeContext?: ChatRoomAgentRuntimeContext
 }): PiWorkerFileAccessPolicy {
+  if (input.chatroomRuntimeContext) {
+    const execution = input.chatroomRuntimeContext.executionWorkspace
+    return {
+      readRoots: uniqueAbsolutePaths([
+        execution.root,
+        execution.projectRoot,
+        execution.inboxRoot,
+        execution.sessionRoot,
+        ...(input.chatroomRuntimeContext.skillSnapshotPath ? [input.chatroomRuntimeContext.skillSnapshotPath] : []),
+      ]),
+      readFiles: [],
+      writeRoots: [resolve(execution.projectRoot)],
+      permissionMode: input.permissionMode,
+      advancedAuthorization: false,
+    }
+  }
   const projectRoot = getProjectFilesPath(input.workspace.slug)
   const sessionWorkspaceRoot = getAgentSessionWorkspacePath(input.workspace.slug, input.sessionId)
   const browserSessionRoot = ensureAgentWorkspaceBrowserSessionPath(input.workspace, input.sessionId)
@@ -358,7 +386,7 @@ function buildRustFileAccessPolicy(input: {
     input.workspaceWriteRoot,
     browserSessionRoot,
     sessionWorkspaceRoot,
-    input.workspaceSkillsDir,
+    ...(input.workspaceSkillsDir ? [input.workspaceSkillsDir] : []),
     ...existingAbsoluteDirectories(input.additionalDirectories),
     ...existingAbsoluteDirectories(getWorkspaceAttachedDirectories(input.workspace.slug)),
   ]
@@ -429,6 +457,7 @@ function buildRuntimeEnv(
   workspace: AgentWorkspace | undefined,
   workspaceSlug: string | undefined,
   inheritProcessProxy: boolean = false,
+  executionRoot?: string,
 ): ReturnType<typeof buildAgentRuntimeEnv> {
   const base = buildAgentRuntimeEnv({
     proxyUrl,
@@ -440,12 +469,15 @@ function buildRuntimeEnv(
     dshPath: getFunctionalModulePath('dsh'),
     dshNodePath: resolveDshNode(),
   })
-  if (!workspace || !workspaceSlug) return base
-  const workspaceEnv = {
-    COPIS_WORKSPACE_DIR: getAgentWorkspacePath(workspaceSlug),
-    COPIS_WORKSPACE_SLUG: workspaceSlug,
-    PROMA_WORKSPACE_DIR: getAgentWorkspacePath(workspaceSlug),
-    PROMA_WORKSPACE_SLUG: workspaceSlug,
+  if (!workspace || (!workspaceSlug && !executionRoot)) return base
+  const workspaceDir = executionRoot ?? getAgentWorkspacePath(workspaceSlug!)
+  const workspaceEnv: Record<string, string> = {
+    COPIS_WORKSPACE_DIR: workspaceDir,
+    PROMA_WORKSPACE_DIR: workspaceDir,
+  }
+  if (!executionRoot && workspaceSlug) {
+    workspaceEnv.COPIS_WORKSPACE_SLUG = workspaceSlug
+    workspaceEnv.PROMA_WORKSPACE_SLUG = workspaceSlug
   }
   return { ...base, env: mergeRuntimeEnv(base.env, workspaceEnv) }
 }
@@ -532,15 +564,27 @@ export async function prepareAgentRpcRun(input: AgentSendInput): Promise<PiWorke
   const session = getAgentSessionMeta(input.sessionId)
   if (!session) throw new Error(`Agent 会话不存在: ${input.sessionId}`)
 
+  const trustedSource = getTrustedAgentExternalSource(input.sessionId)
+  const chatroomRuntimeContext = getTrustedAgentRuntimeContext(input.sessionId)
+  if (chatroomRuntimeContext && trustedSource !== 'chatroom') {
+    throw new Error('trustedRuntimeContext 仅允许聊天室来源使用')
+  }
+  if (trustedSource === 'chatroom' && !chatroomRuntimeContext) {
+    throw new Error('聊天室运行缺少可信 runtimeContext')
+  }
+  const isChatroomRun = trustedSource === 'chatroom' && chatroomRuntimeContext !== undefined
+
   const workspaceId = session.workspaceId ?? input.workspaceId
   const workspace = workspaceId ? getAgentWorkspace(workspaceId) : undefined
   if (workspaceId && !workspace) throw new Error(`Agent 项目不存在: ${workspaceId}`)
   if (!workspace) {
     throw new Error('Agent 必须绑定有效工作区后才能执行文件操作')
   }
-  const projectRootStatus = getLocalProjectRootStatus(workspace.projectRootPath)
+  const projectRootStatus = getLocalProjectRootStatus(
+    isChatroomRun ? chatroomRuntimeContext.executionWorkspace.projectRoot : workspace.projectRootPath,
+  )
   if (projectRootStatus && projectRootStatus !== 'available') {
-    throw new Error(`本地项目根目录不可用：${workspace.projectRootPath}`)
+    throw new Error(`本地项目根目录不可用：${isChatroomRun ? chatroomRuntimeContext.executionWorkspace.projectRoot : workspace.projectRootPath}`)
   }
 
   const channelId = input.channelId ?? session.channelId ?? COPIS_WORKING_CHANNEL_ID
@@ -601,8 +645,11 @@ export async function prepareAgentRpcRun(input: AgentSendInput): Promise<PiWorke
     ? getHttpApiInternalToken() ?? undefined
     : undefined
   const settings = getSettings()
-  const workspaceSlug = workspace.slug
-  const browserBinding = getBrowserAgentContext(input.sessionId)
+  const sourceWorkspaceSlug = workspace.slug
+  const memoryWorkspaceSlug = isChatroomRun ? chatroomRuntimeContext.memorySource?.workspaceSlug : sourceWorkspaceSlug
+  const workspaceSlug = memoryWorkspaceSlug
+  // 聊天室运行不继承普通会话残留的 Browser binding；该 profile 没有页面能力。
+  const browserBinding = isChatroomRun ? undefined : getBrowserAgentContext(input.sessionId)
   const browserTab = browserBinding ? getWebTabState(browserBinding.tabId) : undefined
   const hasBrowserContext = Boolean(browserBinding && browserTab)
   console.info('[AI浏览器][prepareAgentRpcRun] 检查页签上下文与绑定状态', {
@@ -615,27 +662,34 @@ export async function prepareAgentRpcRun(input: AgentSendInput): Promise<PiWorke
     hasBrowserContext,
     targetTabIdForCapability: (browserBinding && browserTab ? browserBinding.tabId : undefined),
   })
-  const browserAdvancedAuthorization = (input.triggeredBy ?? 'user') === 'user'
+  const browserAdvancedAuthorization = !isChatroomRun && (input.triggeredBy ?? 'user') === 'user'
     && isBrowserPageAdvancedAuthorizationEnabled(input.sessionId)
-  const effectivePermissionMode = resolveBrowserAgentPermissionMode(
-    hasBrowserContext,
-    input.permissionModeOverride ?? session.permissionMode ?? COPIS_DEFAULT_PERMISSION_MODE,
-  )
-  const effectiveSkillMentions = resolveBrowserAgentSkillMentions(input.mentionedSkills, hasBrowserContext)
-  const agentCwd = resolveAgentCwd(workspace, input.sessionId, session.agentCwdMode)
+  const effectivePermissionMode = isChatroomRun
+    ? 'bypassPermissions' as CopisPermissionMode
+    : resolveBrowserAgentPermissionMode(
+      hasBrowserContext,
+      input.permissionModeOverride ?? session.permissionMode ?? COPIS_DEFAULT_PERMISSION_MODE,
+    )
+  const queryPermissionMode = isChatroomRun ? 'default' as const : effectivePermissionMode
+  const effectiveSkillMentions = isChatroomRun ? undefined : resolveBrowserAgentSkillMentions(input.mentionedSkills, hasBrowserContext)
+  const agentCwd = isChatroomRun
+    ? chatroomRuntimeContext.executionWorkspace.projectRoot
+    : resolveAgentCwd(workspace, input.sessionId, session.agentCwdMode)
   if (!agentCwd) throw new Error('Agent 工作区 cwd 不可用，已拒绝启动文件操作')
-  const workspaceWriteRoot = getAgentWorkspaceWritableRoot(workspace)
-  ensureAgentWorkspaceContextDir(workspace)
-  const workspaceSkillsDir = getWorkspaceSkillsDir(workspaceSlug)
+  const workspaceWriteRoot = isChatroomRun
+    ? chatroomRuntimeContext.executionWorkspace.projectRoot
+    : getAgentWorkspaceWritableRoot(workspace)
+  if (!isChatroomRun) ensureAgentWorkspaceContextDir(workspace)
+  const workspaceSkillsDir = isChatroomRun ? undefined : getWorkspaceSkillsDir(sourceWorkspaceSlug)
   const startedAt = input.startedAt ?? Date.now()
   const existingSdkSessionId = session.sdkSessionId
-  const isAppConnector = isAppConnectorSession(session, getTrustedAgentExternalSource(input.sessionId))
-  const directories = uniqueDirectories(input, session, workspace, isAppConnector)
+  const isAppConnector = !isChatroomRun && isAppConnectorSession(session, trustedSource)
+  const directories = isChatroomRun ? [] : uniqueDirectories(input, session, workspace, isAppConnector)
   const isCustomModel = Boolean(customModelRuntime) || isWorkingCustomModelChannelId(channelId)
   const proxyUrl = isCustomModel ? await getEffectiveProxyUrl() : undefined
-  const runtimeEnv = buildRuntimeEnv(settings, proxyUrl, workspace, workspaceSlug, isCustomModel)
+  const runtimeEnv = buildRuntimeEnv(settings, proxyUrl, workspace, workspaceSlug, isCustomModel, isChatroomRun ? chatroomRuntimeContext.executionWorkspace.root : undefined)
   const compactRequest = input.userMessage.trim() === '/compact'
-  const mentionedToolsPrompt = buildMentionedToolsPrompt(input.mentionedSkills, input.mentionedMcpServers)
+  const mentionedToolsPrompt = isChatroomRun ? undefined : buildMentionedToolsPrompt(input.mentionedSkills, input.mentionedMcpServers)
   const enrichedUserMessage = mentionedToolsPrompt
     ? `${mentionedToolsPrompt}\n\n${input.userMessage}`
     : input.userMessage
@@ -648,21 +702,24 @@ export async function prepareAgentRpcRun(input: AgentSendInput): Promise<PiWorke
     workspaceSkillsDir,
     workspaceWriteRoot,
     additionalDirectories: directories,
-    permissionMode: effectivePermissionMode,
-    advancedAuthorization: session.advancedAuthorization === true,
+    permissionMode: queryPermissionMode,
+    advancedAuthorization: !isChatroomRun && session.advancedAuthorization === true,
     isAppConnector,
+    ...(isChatroomRun ? { chatroomRuntimeContext } : {}),
   })
-  const memoryPolicy = workspace.memoryPolicy ?? settings.defaultMemoryPolicy ?? 'writable'
+  const memoryPolicy: MemoryPolicy = isChatroomRun
+    ? (chatroomRuntimeContext.memorySource ? 'visible' : 'off')
+    : workspace.memoryPolicy ?? settings.defaultMemoryPolicy ?? 'writable'
   const dynamicContext = buildDynamicContext({
     workspaceName: workspace.name,
-    workspaceSlug,
+    workspaceSlug: isChatroomRun ? undefined : memoryWorkspaceSlug,
     agentCwd,
   })
   const baseContextualMessage = `${dynamicContext}\n\n${enrichedUserMessage}`
   const contextualMessage = compactRequest
     ? baseContextualMessage
     : await appendMemoryContext(baseContextualMessage, {
-      workspaceSlug,
+      workspaceSlug: memoryWorkspaceSlug,
       userMessage: enrichedUserMessage,
       policy: memoryPolicy,
     })
@@ -671,7 +728,10 @@ export async function prepareAgentRpcRun(input: AgentSendInput): Promise<PiWorke
     ? '/compact'
     : existingSdkSessionId
       ? contextualMessage
-      : buildContextPrompt(input.sessionId, contextualMessage, { agentCwd, workspaceSlug })
+      : buildContextPrompt(input.sessionId, contextualMessage, {
+        agentCwd,
+        ...(isChatroomRun ? { disableHistoryGuide: true } : { workspaceSlug: memoryWorkspaceSlug }),
+      })
   // 专家团队上下文：delegation 只接受主进程 runner 生成的冻结上下文；
   // user 回合每次按 Rust 当前 binding/revision 重新解析（fail-soft）。
   const expertTeamContext = input.expertTeamContext
@@ -680,7 +740,7 @@ export async function prepareAgentRpcRun(input: AgentSendInput): Promise<PiWorke
       : undefined)
     : compactRequest
       ? undefined
-      : (input.triggeredBy ?? 'user') === 'user'
+    : !isChatroomRun && (input.triggeredBy ?? 'user') === 'user'
         ? await resolveExpertTeamPromptContext({
           workspace,
           reader: new HttpExpertTeamContextReader(),
@@ -689,14 +749,14 @@ export async function prepareAgentRpcRun(input: AgentSendInput): Promise<PiWorke
   const systemPrompt = buildSystemPrompt({
     agentRuntime: 'pi',
     workspaceName: workspace.name,
-    workspaceSlug,
+    workspaceSlug: isChatroomRun ? undefined : memoryWorkspaceSlug,
     sessionId: input.sessionId,
     agentCwd,
     workspaceWriteRoot,
     permissionMode: effectivePermissionMode,
     collaborationAvailable: false,
     // 与 Pi 内置工具保持一致：只有用户主会话可使用专家团队，委派/自动化会话只执行成员或任务本身。
-    expertTeamAvailable: (input.triggeredBy ?? 'user') === 'user' && Boolean(workspaceId && workspaceSlug),
+    expertTeamAvailable: !isChatroomRun && (input.triggeredBy ?? 'user') === 'user' && Boolean(workspaceId && workspaceSlug),
     currentModelId: modelId,
     workingMode,
     memoryPolicy,
@@ -704,7 +764,7 @@ export async function prepareAgentRpcRun(input: AgentSendInput): Promise<PiWorke
     ...(session.expertTeamSession ? { expertTeamSession: session.expertTeamSession } : {}),
     ...(session.expertTeamSetup ? { expertTeamSetup: true } : {}),
     ...(expertTeamContext ? { expertTeamContext } : {}),
-    ...(browserBinding && browserTab
+    ...(!isChatroomRun && browserBinding && browserTab
       ? {
         browserContext: {
           tabId: browserBinding.tabId,
@@ -720,11 +780,14 @@ export async function prepareAgentRpcRun(input: AgentSendInput): Promise<PiWorke
   if (workspaceSkillsDir && !allSkillPaths.includes(workspaceSkillsDir)) {
     allSkillPaths.push(workspaceSkillsDir)
   }
+  if (isChatroomRun && chatroomRuntimeContext.skillSnapshotPath) {
+    allSkillPaths.push(chatroomRuntimeContext.skillSnapshotPath)
+  }
   const defaultSkillsDir = getDefaultSkillsDir()
-  if (existsSync(defaultSkillsDir) && !allSkillPaths.includes(defaultSkillsDir)) {
+  if (!isChatroomRun && existsSync(defaultSkillsDir) && !allSkillPaths.includes(defaultSkillsDir)) {
     allSkillPaths.push(defaultSkillsDir)
   }
-  if (isAppConnector) {
+  if (!isChatroomRun && isAppConnector) {
     let allWs: AgentWorkspace[] = []
     try {
       allWs = listAgentWorkspacesByUpdatedAt()
@@ -740,7 +803,7 @@ export async function prepareAgentRpcRun(input: AgentSendInput): Promise<PiWorke
   }
 
   const maxTurns = settings.agentMaxTurns && settings.agentMaxTurns > 0 ? settings.agentMaxTurns : undefined
-  const browserPageControl = issueBrowserAgentWorkerCapability({
+  const browserPageControl = isChatroomRun ? undefined : issueBrowserAgentWorkerCapability({
     sessionId: input.sessionId,
     ...(browserBinding && browserTab ? { tabId: browserBinding.tabId } : {}),
     triggeredBy: input.triggeredBy ?? 'user',
@@ -780,20 +843,22 @@ export async function prepareAgentRpcRun(input: AgentSendInput): Promise<PiWorke
     channelId,
     channelName: channel.name,
     ...(maxTurns !== undefined ? { maxTurns } : {}),
-    permissionMode: effectivePermissionMode,
+    permissionMode: queryPermissionMode,
     systemPrompt,
     ...(existingSdkSessionId ? { resumeSessionId: existingSdkSessionId } : {}),
-    piAgentDir: getSdkConfigDir(),
-    piSessionDir: join(getSdkConfigDir(), 'sessions'),
+    piAgentDir: isChatroomRun ? chatroomRuntimeContext.executionWorkspace.sessionRoot : getSdkConfigDir(),
+    piSessionDir: isChatroomRun ? join(chatroomRuntimeContext.executionWorkspace.sessionRoot, 'sessions') : join(getSdkConfigDir(), 'sessions'),
     ...(settings.agentMaxBudgetUsd && settings.agentMaxBudgetUsd > 0 ? { maxBudgetUsd: settings.agentMaxBudgetUsd } : {}),
     ...(directories.length > 0 ? { additionalDirectories: directories } : {}),
     ...(allSkillPaths.length > 0 ? { additionalSkillPaths: allSkillPaths } : {}),
     ...(effectiveSkillMentions?.length ? { skillMentions: effectiveSkillMentions } : {}),
-    ...(workspaceSlug ? { workspaceSlug } : {}),
-    ...(workspace?.id ? { workspaceId: workspace.id } : {}),
-    ...(session.sourceAutomationId ? { sourceAutomationId: session.sourceAutomationId } : {}),
-    automationEnabled: isBuiltinMcpUserEnabled('automation'),
-    imageGenerationEnabled: Boolean(
+    ...(isChatroomRun ? { capabilityProfile: 'chatroom' as const } : {}),
+    ...(!isChatroomRun && memoryWorkspaceSlug ? { workspaceSlug: memoryWorkspaceSlug } : {}),
+    ...(isChatroomRun && memoryWorkspaceSlug ? { memoryWorkspaceSlug } : {}),
+    ...(!isChatroomRun && workspace?.id ? { workspaceId: workspace.id } : {}),
+    ...(!isChatroomRun && session.sourceAutomationId ? { sourceAutomationId: session.sourceAutomationId } : {}),
+    automationEnabled: !isChatroomRun && isBuiltinMcpUserEnabled('automation'),
+    imageGenerationEnabled: !isChatroomRun && Boolean(
       isBuiltinMcpUserEnabled('nano-banana')
       || input.mentionedMcpServers?.includes('copis_image')
       || input.mentionedMcpServers?.includes('nano-banana')
@@ -812,7 +877,7 @@ export async function prepareAgentRpcRun(input: AgentSendInput): Promise<PiWorke
       ?? (settings.agentEffort === 'max' ? 'xhigh' : settings.agentEffort ?? 'high'),
     retryRunStartedAt: startedAt,
     ...(fileAccessPolicy ? { fileAccessPolicy, useRustFileApi: true } : {}),
-    browserPageControl,
+    ...(browserPageControl ? { browserPageControl } : {}),
     triggeredBy: input.triggeredBy ?? 'user',
   }
 
@@ -838,7 +903,7 @@ export async function prepareAgentRpcRun(input: AgentSendInput): Promise<PiWorke
     memoryPolicy,
     ...(input.triggeredBy ? { triggeredBy: input.triggeredBy } : {}),
     compactRequest,
-    browserCapabilityToken: browserPageControl.token,
+    ...(browserPageControl ? { browserCapabilityToken: browserPageControl.token } : {}),
   })
   return { sessionId: input.sessionId, query }
 }

@@ -187,7 +187,7 @@ describe('Working 侧边栏视觉契约', () => {
       /\.copis-working-project-row\.active\s+\.copis-working-project-main\s*\{([^}]*)\}/s,
     )?.[1]
     const pinnedNameRule = sidebarStyles.match(
-      /\.copis-working-project-pinned-name\s*\{([^}]*)\}/s,
+      /\.copis-working-project-pinned-name,\s*\.copis-working-chatroom-name\s*\{([^}]*)\}/s,
     )?.[1]
     const conversationRowRule = sidebarStyles.match(
       /\.copis-working-conversation-row\s*\{([^}]*)\}/s,
@@ -333,6 +333,22 @@ describe('Working 侧边栏视觉契约', () => {
     expect(sidebarStyles).toContain('color: var(--ui-primary)')
   })
 
+  test('Given 聊天室列表 When 展示聊天室行 Then 使用独立契约且不改变项目固定行契约', () => {
+    const chatroomRowStart = sidebarSource.indexOf('className="copis-working-chatroom-row"')
+    const chatroomRowEnd = sidebarSource.indexOf('</button>', chatroomRowStart)
+    const chatroomRowSource = sidebarSource.slice(chatroomRowStart, chatroomRowEnd)
+
+    expect(chatroomRowStart).toBeGreaterThanOrEqual(0)
+    expect(chatroomRowSource).toContain('<UsersRound className="copis-working-chatroom-icon" aria-hidden="true" />')
+    expect(chatroomRowSource).toContain('className="copis-working-chatroom-copy"')
+    expect(chatroomRowSource).toContain('className="copis-working-chatroom-name"')
+    expect(chatroomRowSource).not.toContain('copis-working-project-pinned-row')
+    expect(chatroomRowSource).not.toContain('copis-working-project-pinned-icon')
+    expect(sidebarStyles).toContain('.copis-working-project-pinned-row,\n.copis-working-chatroom-row')
+    expect(sidebarStyles).toContain('.copis-working-chatroom-row:hover')
+    expect(sidebarStyles).toContain('.copis-working-chatroom-icon')
+  })
+
   test('Given 项目分组 When 悬停分组标题 Then 背景覆盖左侧留白且内容起点与技能市场一致', () => {
     const menuRule = sidebarStyles.match(/\.copis-working-menu-button\s*\{([^}]*)\}/s)?.[1]
     const headingRule = sidebarStyles.match(
@@ -345,13 +361,13 @@ describe('Working 侧边栏视觉契约', () => {
       /\.copis-working-project-pinned-toggle\s*\{([^}]*)\}/s,
     )?.[1]
     const pinnedIconRule = sidebarStyles.match(
-      /\.copis-working-project-pinned-icon\s*\{([^}]*)\}/s,
+      /\.copis-working-project-pinned-icon,\s*\.copis-working-chatroom-icon\s*\{([^}]*)\}/s,
     )?.[1]
     const pinnedCountRule = sidebarStyles.match(
       /\.copis-working-project-pinned-toggle\s+\.copis-working-project-group-count\s*\{([^}]*)\}/s,
     )?.[1]
     const pinnedRule = sidebarStyles.match(
-      /\.copis-working-project-pinned-row\s*\{([^}]*)\}/s,
+      /\.copis-working-project-pinned-row,\s*\.copis-working-chatroom-row\s*\{([^}]*)\}/s,
     )?.[1]
 
     expect(menuRule).toBeDefined()
@@ -758,5 +774,3 @@ describe('Working 侧边栏视觉契约', () => {
     expect(sidebarStyles).toContain('.copis-working-conversation-row:hover .copis-working-conversation-delete:disabled')
   })
 })
-
-

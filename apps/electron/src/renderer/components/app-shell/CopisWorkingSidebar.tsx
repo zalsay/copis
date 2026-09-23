@@ -30,6 +30,7 @@ import {
   Trash2,
   TrendingUp,
   UsersRound,
+  UserPlus,
 } from 'lucide-react'
 import { CopisLogoIcon } from '@/components/ui/copis-logo-icon'
 import { CodexLogoIcon } from '@/components/ui/codex-logo-icon'
@@ -92,6 +93,10 @@ import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { CopisWorkingConnectDialog, type WorkingFolderSelection } from './CopisWorkingConnectDialog'
 import { CopisModeSwitcher } from './CopisModeSwitcher'
 import './CopisWorkingSidebar.css'
+import { chatRoomRoomsAtom } from '@/atoms/chatroom-atoms'
+import { ChatroomCreateDialog } from '@/components/chatroom/ChatroomCreateDialog'
+import { ChatroomJoinDialog } from '@/components/chatroom/ChatroomJoinDialog'
+import { openChatRoomTab } from '@/atoms/tab-atoms'
 
 interface CopisWorkingSidebarProps {
   width: number
@@ -138,6 +143,8 @@ export function CopisWorkingSidebar({ width, noTransition = false }: CopisWorkin
   const [pendingDeleteSession, setPendingDeleteSession] = React.useState<PendingDeleteSession | null>(null)
   const [pendingDeleteWorkspace, setPendingDeleteWorkspace] = React.useState<PendingDeleteWorkspace | null>(null)
   const [createWorkspaceOpen, setCreateWorkspaceOpen] = useAtom(createWorkspaceDialogOpenAtom)
+  const [chatroomCreateOpen, setChatroomCreateOpen] = React.useState(false)
+  const [chatroomJoinOpen, setChatroomJoinOpen] = React.useState(false)
   const initialProjectsLoadedRef = React.useRef(false)
 
   const localWorkspaces = useAtomValue(agentWorkspacesAtom)
@@ -150,6 +157,7 @@ export function CopisWorkingSidebar({ width, noTransition = false }: CopisWorkin
   const agentSettingsReady = useAtomValue(agentSettingsReadyAtom)
   const streamingStates = useAtomValue(agentStreamingStatesAtom)
   const pinnedDevProjects = useAtomValue(pinnedDevProjectsAtom)
+  const chatRooms = useAtomValue(chatRoomRoomsAtom)
   const setCurrentWorkspaceId = useSetAtom(currentAgentWorkspaceIdAtom)
   const [appMode, setAppMode] = useAtom(appModeAtom)
   const setProfessionalMode = useSetAtom(professionalModeAtom)
@@ -886,8 +894,12 @@ export function CopisWorkingSidebar({ width, noTransition = false }: CopisWorkin
             <UsersRound aria-hidden="true" />
           </button>
         )}
+        <button type="button" className="copis-working-sidebar-icon-button" aria-label="创建聊天室" title="创建聊天室" onClick={() => setChatroomCreateOpen(true)}><Plus aria-hidden="true" /></button>
+        <button type="button" className="copis-working-sidebar-icon-button" aria-label="加入聊天室" title="加入聊天室" onClick={() => setChatroomJoinOpen(true)}><UserPlus aria-hidden="true" /></button>
         <CopisLogoIcon className="copis-working-sidebar-collapsed-mark" />
         <span className="copis-working-sidebar-session-count">{activeSessionCount}</span>
+        <ChatroomCreateDialog open={chatroomCreateOpen} onOpenChange={setChatroomCreateOpen} />
+        <ChatroomJoinDialog open={chatroomJoinOpen} onOpenChange={setChatroomJoinOpen} />
       </aside>
     )
   }
@@ -1079,6 +1091,19 @@ export function CopisWorkingSidebar({ width, noTransition = false }: CopisWorkin
               </button>
             </div>
           )}
+          <section aria-label="聊天室" className="mt-2 border-t border-border/30 pt-2">
+            <div className="copis-working-project-heading copis-working-project-group-heading">
+              <span className="copis-working-project-group-toggle"><span>聊天室</span><small className="copis-working-project-group-count">{chatRooms.length}</small></span>
+              <div className="copis-working-project-heading-actions">
+                <button type="button" className="copis-working-project-create" aria-label="加入聊天室" title="加入聊天室" onClick={() => setChatroomJoinOpen(true)}><UserPlus aria-hidden="true" /></button>
+                <button type="button" className="copis-working-project-create" aria-label="创建聊天室" title="创建聊天室" onClick={() => setChatroomCreateOpen(true)}><Plus aria-hidden="true" /></button>
+              </div>
+            </div>
+            <div className="copis-working-project-list">
+              {chatRooms.map((room) => <button type="button" key={room.roomId} className="copis-working-chatroom-row" onClick={() => { const next = openChatRoomTab(tabs, room); setTabs(next.tabs); setActiveTabId(next.activeTabId); setActiveView('conversations') }}><UsersRound className="copis-working-chatroom-icon" aria-hidden="true" /><span className="copis-working-chatroom-copy"><span className="copis-working-chatroom-name">{room.name}</span><small>{room.connectionStatus === 'connected' ? '已连接' : room.connectionStatus === 'reconnecting' ? '重连中' : '离线'}{room.unreadCount ? ` · ${room.unreadCount} 条未读` : ''}</small></span></button>)}
+              {chatRooms.length === 0 && <div className="copis-working-project-pinned-empty">暂无聊天室</div>}
+            </div>
+          </section>
         </nav>
 
         <section className="copis-working-project-section" aria-label="工作区">
@@ -1198,6 +1223,8 @@ export function CopisWorkingSidebar({ width, noTransition = false }: CopisWorkin
           onConfirm={createLocalWorkspace}
         />
       )}
+      <ChatroomCreateDialog open={chatroomCreateOpen} onOpenChange={setChatroomCreateOpen} />
+      <ChatroomJoinDialog open={chatroomJoinOpen} onOpenChange={setChatroomJoinOpen} />
       <ConfirmDialog
         open={pendingDeleteWorkspace !== null}
         onOpenChange={(open) => { if (!open) setPendingDeleteWorkspace(null) }}

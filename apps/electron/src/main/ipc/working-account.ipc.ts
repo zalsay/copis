@@ -4,7 +4,12 @@ import { getWorkingApiClient } from '../lib/working-api-service'
 import { getDshCordisStatus, reloadDshCordisPlugins } from '../lib/dsh-cordis-service'
 import { getWorkingModelCatalogAccess } from '../lib/working-model-catalog-access'
 
-export function registerWorkingAccountIpcHandlers(): void {
+export interface WorkingAccountIpcOptions {
+  stopChatRoomAgents?: (reason: 'logout') => Promise<void>
+  resumeChatRoomAgentsAfterAuthentication?: () => Promise<void>
+}
+
+export function registerWorkingAccountIpcHandlers(options: WorkingAccountIpcOptions = {}): void {
   ipcMain.handle(WORKING_IPC_CHANNELS.GET_CONFIG, async () => ({
     backendUrl: getWorkingApiClient().baseUrl,
   }))
@@ -29,6 +34,7 @@ export function registerWorkingAccountIpcHandlers(): void {
     const client = getWorkingApiClient()
     await client.login(input)
     const state = await client.getAuthState()
+    await options.resumeChatRoomAgentsAfterAuthentication?.()
     if (getDshCordisStatus().running) await reloadDshCordisPlugins({ startIfNeeded: false })
     return {
       ...state,
@@ -39,6 +45,7 @@ export function registerWorkingAccountIpcHandlers(): void {
   ipcMain.handle(WORKING_IPC_CHANNELS.LOGIN_OIDC, async () => {
     const client = getWorkingApiClient()
     const result = await client.loginWithOAuth((url) => shell.openExternal(url))
+    await options.resumeChatRoomAgentsAfterAuthentication?.()
     if (getDshCordisStatus().running) await reloadDshCordisPlugins({ startIfNeeded: false })
     return {
       authenticated: true,
@@ -77,6 +84,7 @@ export function registerWorkingAccountIpcHandlers(): void {
 
   ipcMain.handle(WORKING_IPC_CHANNELS.LOGOUT, async () => {
     const client = getWorkingApiClient()
+    if (options.stopChatRoomAgents) await options.stopChatRoomAgents('logout')
     await client.logout()
     if (getDshCordisStatus().running) await reloadDshCordisPlugins({ startIfNeeded: false })
     return { authenticated: false, user: null, backendUrl: client.baseUrl }

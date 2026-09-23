@@ -53,6 +53,7 @@ const {
   ensureRustHttpApiServerReady,
   updateHttpApiServer,
   waitForHttpApiHealth,
+  addHttpApiServerExitListener,
 } = await import('./http-api-server')
 import type { HttpApiSpawn } from './http-api-server'
 
@@ -87,6 +88,13 @@ afterEach(async () => {
 afterAll(() => {
   if (previousHttpApiPort === undefined) delete process.env.COPIS_HTTP_API_PORT
   else process.env.COPIS_HTTP_API_PORT = previousHttpApiPort
+})
+
+test('Given Rust exit listener When unsubscribed Then later exits do not notify it', () => {
+  let calls = 0
+  const remove = addHttpApiServerExitListener(() => { calls += 1 })
+  remove()
+  expect(calls).toBe(0)
 })
 
 function createRoot(): string {
@@ -1164,5 +1172,20 @@ describe('Rust HTTP API 功能模块生命周期', () => {
         })
       }
     }
+  })
+
+  test('Given managed Rust child When unexpected exit/error occurs Then notify once; intentional stop stays silent', async () => {
+    const root = createRoot(); const records: SpawnRecord[] = []; const events: string[] = []
+    await activateRustVersion(root, rustPackage('0.1.0', 'exit-rust-api'), 'exit-rust-api')
+    const remove = addHttpApiServerExitListener((reason) => events.push(reason))
+    startHttpApiServer({ rootDir: join(root, 'modules'), paymentWorkspace: paymentWorkspaceFor(root), spawnImpl: spawnFixture(records) })
+    records[0]!.child.emit('error', new Error('boom'))
+    records[0]!.child.emit('exit', 1, null)
+    expect(events).toEqual(['error'])
+    const intentional: SpawnRecord[] = []
+    startHttpApiServer({ rootDir: join(root, 'modules'), paymentWorkspace: paymentWorkspaceFor(root), spawnImpl: spawnFixture(intentional) })
+    await stopHttpApiServer(5)
+    expect(events).toEqual(['error'])
+    remove()
   })
 })

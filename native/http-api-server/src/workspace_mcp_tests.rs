@@ -98,6 +98,29 @@ fn save_and_load_round_trip_preserves_normalized_config() {
 }
 
 #[test]
+fn given_legacy_copis_image_when_saved_and_read_then_reserved_name_is_filtered_but_similar_name_remains(
+) {
+    let directory = TestDirectory::new();
+    let store = store(&directory);
+    let config = json!({
+        "servers": {
+            "copis_image": { "command": "legacy-image", "enabled": true },
+            "copis_image_custom": { "command": "custom-image", "enabled": true }
+        }
+    });
+
+    let saved = store.save_config("project-legacy", config).unwrap();
+    let saved_servers = saved["servers"].as_object().unwrap();
+    assert!(!saved_servers.contains_key("copis_image"));
+    assert!(saved_servers.contains_key("copis_image_custom"));
+
+    let loaded = store.get_config("project-legacy").unwrap();
+    let loaded_servers = loaded["servers"].as_object().unwrap();
+    assert!(!loaded_servers.contains_key("copis_image"));
+    assert!(loaded_servers.contains_key("copis_image_custom"));
+}
+
+#[test]
 fn missing_config_returns_empty_servers() {
     let directory = TestDirectory::new();
     let store = store(&directory);

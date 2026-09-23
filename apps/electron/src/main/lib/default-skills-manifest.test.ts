@@ -1,5 +1,7 @@
 import { describe, expect, test } from 'bun:test'
-import { existsSync, readdirSync, readFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { spawnSync } from 'node:child_process'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 const DEFAULT_SKILLS_DIR = join(import.meta.dir, '../../../default-skills')
@@ -394,9 +396,63 @@ describe('默认 Skills 清单', () => {
 
     const runtimeDir = join(DEFAULT_SKILLS_DIR, 'dashi-design', 'runtime')
     expect(existsSync(join(runtimeDir, 'support.js'))).toBe(true)
-    expect(existsSync(join(runtimeDir, 'vendor', 'react.production.min.js'))).toBe(true)
+    const vendorDir = join(runtimeDir, 'vendor')
+    for (const asset of ['react.production.min.js', 'react-dom.production.min.js', 'LICENSE']) {
+      expect(existsSync(join(vendorDir, asset))).toBe(true)
+    }
+  })
+
+  test('设计大师运行时可将最小设计文件导出为离线单文件 HTML', () => {
+    const runtimeDir = join(DEFAULT_SKILLS_DIR, 'dashi-design', 'runtime')
+    const vendorDir = join(runtimeDir, 'vendor')
+    const tempDir = mkdtempSync(join(tmpdir(), 'copis-dashi-design-'))
+    const inputFile = join(tempDir, 'design.dc.html')
+    const outputFile = join(tempDir, 'design.standalone.html')
+
+    try {
+      writeFileSync(inputFile, '<!doctype html><html><body><div id="app"></div></body></html>')
+      const result = spawnSync('node', [
+        join(DEFAULT_SKILLS_DIR, 'dashi-design/scripts/export-standalone.mjs'),
+        '--input',
+        inputFile,
+        '--output',
+        outputFile,
+      ], { encoding: 'utf8' })
+
+      expect(result.status).toBe(0)
+      const standalone = readFileSync(outputFile, 'utf8')
+      expect(standalone).toContain('@license React')
+      expect(standalone).toContain('ReactDOM')
+      expect(standalone.length).toBeGreaterThan(
+        readFileSync(join(vendorDir, 'react.production.min.js'), 'utf8').length
+          + readFileSync(join(vendorDir, 'react-dom.production.min.js'), 'utf8').length
+      )
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true })
+    }
+  })
+
+  test('设计大师脚手架复制运行时时保留两个 vendor 目录的许可证', () => {
+    const tempDir = mkdtempSync(join(tmpdir(), 'copis-dashi-design-scaffold-'))
+    const outputFile = join(tempDir, 'project', 'design.dc.html')
+    const scaffold = join(DEFAULT_SKILLS_DIR, 'dashi-design/scripts/scaffold.mjs')
+
+    try {
+      const result = spawnSync('node', [scaffold, '--output', outputFile], { encoding: 'utf8' })
+
+      expect(result.status).toBe(0)
+      const expectedLicense = readFileSync(
+        join(DEFAULT_SKILLS_DIR, 'dashi-design/runtime/vendor/LICENSE'),
+        'utf8'
+      )
+      for (const licensePath of [
+        join(tempDir, 'project/runtime/vendor/LICENSE'),
+        join(tempDir, 'project/vendor/LICENSE'),
+      ]) {
+        expect(readFileSync(licensePath, 'utf8')).toBe(expectedLicense)
+      }
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true })
+    }
   })
 })
-
-
-

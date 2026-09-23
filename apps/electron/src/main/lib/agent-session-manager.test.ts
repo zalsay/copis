@@ -107,6 +107,34 @@ afterAll(() => {
 })
 
 describe('Agent 会话 JSONL 读取', () => {
+  test('隐藏 storage override 注销后恢复 ordinary session 路由', () => {
+    const meta = {
+      id: 'override-session',
+      title: '隐藏会话',
+      channelId: 'channel-1',
+      agentRuntime: 'pi' as const,
+      createdAt: 1,
+      updatedAt: 1,
+    }
+    const sdkMessages = [{ type: 'user', uuid: 'hidden-message' }]
+    const backend = {
+      getMeta: () => meta,
+      updateMeta: (updates: Parameters<typeof manager.updateAgentSessionMeta>[1]) => ({ ...meta, ...updates }),
+      getAgentMessages: () => [],
+      appendAgentMessage: () => {},
+      getSDKMessages: () => sdkMessages,
+      appendSDKMessages: () => {},
+      removeSDKErrorMessage: () => false,
+    }
+    const unregister = manager.registerAgentSessionStorageOverride('override-session', backend)
+    expect(manager.getAgentSessionMeta('override-session')).toEqual(meta)
+    expect(manager.getAgentSessionSDKMessages('override-session')).toEqual(sdkMessages)
+    unregister()
+
+    writeAgentSessionJsonl('override-session', [JSON.stringify({ type: 'assistant', uuid: 'ordinary-message' })])
+    expect(manager.getAgentSessionSDKMessages('override-session').map((message) => (message as { uuid?: string }).uuid)).toEqual(['ordinary-message'])
+  })
+
   test('Given 会话 JSONL 混入损坏行 When 读取 SDKMessage Then 跳过坏行并保留其它消息', () => {
     writeAgentSessionJsonl('session-with-bad-line', [
       JSON.stringify({ type: 'user', message: { content: [{ type: 'text', text: '你好' }] }, parent_tool_use_id: null }),

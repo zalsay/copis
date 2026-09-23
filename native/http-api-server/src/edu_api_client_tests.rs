@@ -1,6 +1,6 @@
 use super::edu_api_client::{
-    EduApiClient, EduApiError, EduApiRequest, EduApiResponse, EduApiTransport,
-    UreqEduApiTransport, DEFAULT_BACKEND_URL,
+    EduApiClient, EduApiError, EduApiRequest, EduApiResponse, EduApiTransport, UreqEduApiTransport,
+    DEFAULT_BACKEND_URL,
 };
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Barrier, Mutex};

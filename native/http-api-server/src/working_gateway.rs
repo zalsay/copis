@@ -8,10 +8,10 @@ use std::fmt;
 use std::io::Read;
 use std::sync::Arc;
 
-#[path = "image_task_store.rs"]
-mod image_task_store;
 #[path = "image_task_gateway.rs"]
 mod image_task_gateway;
+#[path = "image_task_store.rs"]
+mod image_task_store;
 
 #[derive(Debug)]
 pub struct GatewayResponse {

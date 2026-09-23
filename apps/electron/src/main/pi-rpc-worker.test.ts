@@ -3,13 +3,29 @@ import { once } from 'node:events'
 import { createServer } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { resolve } from 'node:path'
+import { readFileSync } from 'node:fs'
 import { describe, expect, test } from 'bun:test'
 import { serializeWorkerCommand, type AgentRpcWorkerCommand } from './lib/agent-rpc-protocol'
+import { createChatroomCanUseTool } from './lib/pi-worker-permission'
 
 const repoRoot = resolve(import.meta.dir, '../../..')
 const workerEntry = resolve(import.meta.dir, 'pi-rpc-worker.ts')
 
 describe('Pi RPC worker payment EOF race', () => {
+  test('Given chatroom canUseTool When Read is project-local Then allow is immediate and Bash waits for bridge response', async () => {
+    const config = { sessionId: 'chat-session', query: { capabilityProfile: 'chatroom', cwd: '/project' } } as any
+    const canUseTool = createChatroomCanUseTool(config, async () => await new Promise<Response>(() => {}))
+    await expect(canUseTool('Read', { file_path: '/project/a.txt' }, { signal: new AbortController().signal, toolUseID: 'read-1' })).resolves.toMatchObject({ behavior: 'allow' })
+    const controller = new AbortController()
+    const pending = canUseTool('Bash', { command: 'echo ok' }, { signal: controller.signal, toolUseID: 'bash-1' })
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    controller.abort()
+    await expect(pending).resolves.toMatchObject({ behavior: 'deny' })
+  })
+  test('Given chatroom worker When inspecting canUseTool Then it must not unconditionally allow every tool', () => {
+    const source = readFileSync(workerEntry, 'utf8')
+    expect(source).not.toContain("canUseTool: async (_toolName, input) => ({ behavior: 'allow', updatedInput: input })")
+  })
   test('Given a payment start command When the Worker invokes the local capability Then it preserves paymentNeeded', async () => {
     let receivedBody: Record<string, unknown> | undefined
     const server = createServer(async (request, response) => {

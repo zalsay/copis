@@ -63,6 +63,7 @@ import { registerMemoryIngestionIpcHandlers } from './ipc/memory-ingestion.ipc'
 import { registerTradingIpcHandlers } from './ipc/trading.ipc'
 import { registerDshIpcHandlers } from './ipc/dsh.ipc'
 import { registerCodexIpcHandlers } from './ipc/codex.ipc'
+import { registerChatRoomIpcHandlers } from './ipc/chatrooms.ipc'
 
 /**
  * 解析应用图标变体的文件路径
@@ -87,7 +88,26 @@ export function registerIpcHandlers(): void {
   registerBrowserWorkflowIpcHandlers()
 
   // ===== Copis Working 后端（仅账号与业务元数据） =====
-  registerWorkingAccountIpcHandlers()
+  registerWorkingAccountIpcHandlers({
+    stopChatRoomAgents: async (reason) => {
+      try {
+        const { getChatRoomAgentCoordinator } = await import('./lib/chatroom-agent-coordinator')
+        await getChatRoomAgentCoordinator().stopAll(reason)
+      } catch {
+        // 协调器尚未初始化时没有运行中的聊天室 Agent。
+      }
+    },
+    resumeChatRoomAgentsAfterAuthentication: async () => {
+      try {
+        const { resumeChatRoomAgentCoordinatorAfterAuthentication } = await import('./lib/chatroom-agent-bootstrap')
+        await resumeChatRoomAgentCoordinatorAfterAuthentication()
+      } catch {
+        // 协调器尚未初始化时无需恢复状态。
+      }
+    },
+  })
+  // 聊天室管理与 COS 传输统一由同一个 Main handler 注册，避免重复暴露或重复监听。
+  registerChatRoomIpcHandlers()
   registerWorkingPaymentIpcHandlers()
   registerWorkingModelsIpcHandlers()
 

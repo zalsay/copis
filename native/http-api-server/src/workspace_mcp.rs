@@ -8,8 +8,14 @@ use std::sync::Mutex;
 /// 内置 MCP 占用的保留名（id + 运行时 name），与 Electron
 /// `builtin-mcp/baseline.ts` 的 RESERVED_BUILTIN_KEYS 保持一致。
 /// 工作区 mcp.json 不允许出现这些 key，保存时应剔除。
-const RESERVED_BUILTIN_KEYS: &[&str] =
-    &["automation", "collaboration", "nano-banana", "nano_banana"];
+const RESERVED_BUILTIN_KEYS: &[&str] = &[
+    "automation",
+    "collaboration",
+    "nano-banana",
+    "nano_banana",
+    // copis_image 是仍被运行时识别的历史内置能力名，必须继续保留以避免身份冲突。
+    "copis_image",
+];
 
 /// streamable http 的别名，规范化为 http，与共享层 mcp-transport 一致。
 const STREAMABLE_HTTP_ALIASES: &[&str] = &["streamableHttp", "streamable-http", "streamable_http"];

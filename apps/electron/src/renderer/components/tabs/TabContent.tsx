@@ -14,6 +14,7 @@ import { MarkdownRichEditor } from '@/components/diff/MarkdownRichEditor'
 import { PreviewTabContent } from '@/components/diff/PreviewTabContent'
 import { MarkdownToc } from '@/components/diff/MarkdownToc'
 import { TabErrorBoundary } from './TabErrorBoundary'
+import { ChatroomView } from '@/components/chatroom/ChatroomView'
 
 export interface TabContentProps {
   tabId: string
@@ -38,6 +39,8 @@ export function TabContent({ tabId }: TabContentProps): React.ReactElement {
     )
   }
 
+  if (tab.type === 'chatroom') return <ChatroomView roomId={tab.roomId} />
+
   if (tab.type === 'preview') {
     return (
       <TabErrorBoundary key={tab.id} sessionId={tab.sessionId}>
@@ -50,6 +53,7 @@ export function TabContent({ tabId }: TabContentProps): React.ReactElement {
     return <TutorialTabContent />
   }
 
+  if (tab.type !== 'agent') return <div className="flex h-full items-center justify-center text-sm text-muted-foreground">标签页不存在</div>
   return (
     <TabErrorBoundary key={tab.sessionId} sessionId={tab.sessionId}>
       <AgentView sessionId={tab.sessionId} />

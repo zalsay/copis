@@ -88,6 +88,7 @@ struct FileAccessPolicy {
     permission_mode: String,
     advanced_authorization: bool,
     worker_token: String,
+    chatroom_profile: bool,
 }
 
 #[derive(Default)]
@@ -145,8 +146,9 @@ impl AgentFilePolicyStore {
         if !use_rust_file_api {
             return Err("Rust 文件权限策略未启用 Rust 文件 API".to_string());
         }
-        let mut policy = FileAccessPolicy::from_value(&value, query.get("cwd"))
-            .map_err(|error| error.message)?;
+        let mut policy =
+            FileAccessPolicy::from_value(&value, query.get("cwd"), query.get("capabilityProfile"))
+                .map_err(|error| error.message)?;
         let worker_token = generate_worker_token()?;
         policy.worker_token = worker_token.clone();
         let mut policies = self.policies.lock().unwrap();
@@ -261,6 +263,26 @@ impl AgentFilePolicyStore {
         worker_token: &str,
     ) -> Result<(), AgentFileError> {
         self.ensure_worker_token(session_id, worker_token)
+    }
+
+    pub fn validate_chatroom_worker_token(
+        &self,
+        session_id: &str,
+        worker_token: &str,
+    ) -> Result<(), AgentFileError> {
+        self.ensure_worker_token(session_id, worker_token)?;
+        let policies = self.policies.lock().unwrap();
+        if policies
+            .get(session_id)
+            .is_some_and(|policy| policy.chatroom_profile)
+        {
+            Ok(())
+        } else {
+            Err(AgentFileError::forbidden(
+                "chatroom_profile_required",
+                "聊天室权限能力不可用",
+            ))
+        }
     }
 
     pub fn handle(
@@ -496,7 +518,11 @@ impl FileAccessPolicy {
         self.ensure_read(&target)
     }
 
-    fn from_value(value: &Value, cwd: Option<&Value>) -> Result<Self, AgentFileError> {
+    fn from_value(
+        value: &Value,
+        cwd: Option<&Value>,
+        capability_profile: Option<&Value>,
+    ) -> Result<Self, AgentFileError> {
         let object = value
             .as_object()
             .ok_or_else(|| AgentFileError::bad_request("fileAccessPolicy 必须是对象"))?;
@@ -504,7 +530,9 @@ impl FileAccessPolicy {
             .get("permissionMode")
             .and_then(Value::as_str)
             .ok_or_else(|| AgentFileError::bad_request("fileAccessPolicy.permissionMode 不正确"))?;
-        if !is_supported_permission_mode(permission_mode) {
+        let chatroom_default = permission_mode == "default"
+            && capability_profile.and_then(Value::as_str) == Some("chatroom");
+        if !is_supported_permission_mode(permission_mode) && !chatroom_default {
             return Err(AgentFileError::bad_request(
                 "fileAccessPolicy.permissionMode 不正确",
             ));
@@ -531,6 +559,7 @@ impl FileAccessPolicy {
                 .and_then(Value::as_bool)
                 .unwrap_or(false),
             worker_token: String::new(),
+            chatroom_profile: chatroom_default,
         })
     }
 
