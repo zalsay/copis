@@ -62,6 +62,7 @@ function fakeDeps(overrides: Record<string, unknown> = {}) {
   const store = {
     read: () => room,
     list: () => [room],
+    listRestorableRooms: (): ChatRoomLocalRoomConfig[] => store.list(),
     getInvocation: (_roomId: string, id: string) => records.get(id),
     getTraceAgentInvocation: (_roomId: string, traceId: string, target: string) => [...records.values()].find((record) => record.traceId === traceId && record.targetAgentId === target),
     upsertInvocation: (_roomId: string, record: any) => { records.set(record.invocationId, record); return record },
@@ -72,15 +73,561 @@ function fakeDeps(overrides: Record<string, unknown> = {}) {
   const reportCompleted = mock(async () => {})
   const reportFailed = mock(async () => {})
   const runAgentHeadless = mock(async (_input: unknown, callbacks: { onComplete: (messages: AgentMessage[]) => void }) => { callbacks.onComplete([{ role: 'assistant', id: 'assistant-1', content: '{"text":"完成","mentionedAgentIds":[],"attachmentIds":[]}', createdAt: 2 } as AgentMessage]) })
+  const rustApi = { reportAccepted, reportRunning, reportDelta: mock(async () => {}), reportCompleted, reportFailed, releaseAgentLeases: mock(async () => {}), getRoomRealtimeStatus: async () => ({ ready: true, epoch: 5 }) }
   return {
     deps: {
       store,
-      rustApi: { reportAccepted, reportRunning, reportDelta: mock(async () => {}), reportCompleted, reportFailed, releaseAgentLeases: mock(async () => {}) },
+      rustApi,
       getCurrentUserId: async () => 'user-1', getDeviceId: () => 'device-1', getSensitiveValues: () => [], runAgentHeadless, stopAgent: mock(async () => {}), subscribeAgentEvents: () => () => {}, createHiddenSessionStore: () => ({}) as never, registerSessionStorageOverride: () => () => {}, syncSkills: () => ({ snapshotPath: '/tmp/skills', digest: 'a'.repeat(64), skillSlugs: [], syncedAt: 1 }), now: () => 2, ...overrides,
+      ...(overrides.rustApi ? { rustApi: { ...rustApi, ...overrides.rustApi as object } } : {}),
+      ...(overrides.store ? { store: { listRestorableRooms: () => (overrides.store as typeof store).list?.() ?? [], ...overrides.store as object } } : {}),
     } as any,
     room, records, runAgentHeadless, reportAccepted, reportRunning, reportCompleted, reportFailed,
   }
 }
+
+test('首次配置 Agent 使用远端主理人授权及服务端 ID 创建本地房间', async () => {
+  const room: ChatRoomLocalRoomConfig = { roomId: 'room-1', hostUserId: 'user-1', deviceId: 'device-1', lastProcessedSeq: 0, agents: [makeAgent('server-agent-1')], invocations: [], createdAt: 1, updatedAt: 1 }
+  let localRoom: ChatRoomLocalRoomConfig | undefined
+  const requests: string[] = []
+  const { deps } = fakeDeps({
+    store: {
+      read: () => localRoom,
+      provisionAgent: (identity: { hostUserId: string; deviceId: string }, input: { roomId: string }, id: string) => {
+        expect(identity).toEqual({ hostUserId: 'user-1', deviceId: 'device-1' })
+        expect(input.roomId).toBe('room-1')
+        expect(id).toBe('server-agent-1')
+        requests.push('local')
+        localRoom = room
+        return room
+      },
+    },
+    rustApi: {
+      getRoomHostUserId: async (id: string) => { requests.push(`verify:${id}`); return 'user-1' },
+      registerAgent: async (input: { roomId: string; displayName: string; deviceId: string; hostUserId: string }) => {
+        expect(input).toEqual({ roomId: 'room-1', displayName: 'Grok', deviceId: 'device-1', hostUserId: 'user-1' })
+        requests.push('register')
+        return 'server-agent-1'
+      },
+      unregisterAgent: async () => { requests.push('unregister') },
+      renewAgentLease: async (roomId: string, agentId: string, deviceId: string) => {
+        expect([roomId, agentId, deviceId]).toEqual(['room-1', 'server-agent-1', 'device-1'])
+        requests.push('lease')
+      },
+    },
+  })
+  const coordinator = new coordinatorModule.ChatRoomAgentCoordinator(deps)
+  const agent = await coordinator.provisionAgent({ roomId: 'room-1', sourceWorkspaceId: 'workspace-1', displayName: 'Grok', channelId: 'channel-1' })
+  expect(agent.roomAgentId).toBe('server-agent-1')
+  expect(requests).toEqual(['verify:room-1', 'register', 'local', 'lease'])
+})
+
+test('已有房间断连后恢复且网关确认新快照时，可添加第一个 Agent 而不重新创建房间', async () => {
+  const calls: string[] = []
+  const room: ChatRoomLocalRoomConfig = { roomId: 'room-1', hostUserId: 'user-1', deviceId: 'device-1', lastProcessedSeq: 0, agents: [makeAgent('server-agent-1')], invocations: [], createdAt: 1, updatedAt: 1 }
+  const base = fakeDeps()
+  const { deps } = fakeDeps({
+    store: { read: () => undefined, list: () => [], listRestorableRooms: () => [], provisionAgent: () => { calls.push('local'); return room } },
+    rustApi: {
+      ...base.deps.rustApi,
+      getRoomRealtimeStatus: async () => { calls.push('ready'); return { ready: true, epoch: 5 } },
+      getRoomHostUserId: async () => 'user-1',
+      registerAgent: async () => { calls.push('register'); return 'server-agent-1' },
+      renewAgentLease: async () => { calls.push('lease') },
+    },
+  })
+  const coordinator = new coordinatorModule.ChatRoomAgentCoordinator(deps)
+  await coordinator.stopAll('gateway_disconnected')
+  const agent = await coordinator.provisionAgent({ roomId: 'room-1', sourceWorkspaceId: 'workspace-1', displayName: 'Grok', channelId: 'channel-1' })
+  expect(agent.roomAgentId).toBe('server-agent-1')
+  expect(calls).toEqual(['ready', 'ready', 'register', 'ready', 'local', 'lease', 'ready'])
+})
+
+test('网关尚未收到当前房间快照时拒绝添加 Agent，且不注册远端记录', async () => {
+  const calls: string[] = []
+  const base = fakeDeps()
+  const { deps } = fakeDeps({
+    store: { read: () => undefined, provisionAgent: () => { calls.push('local'); throw new Error('不应写入') } },
+    rustApi: {
+      ...base.deps.rustApi,
+      getRoomRealtimeStatus: async () => { calls.push('ready'); return { ready: false, epoch: 5 } },
+      getRoomHostUserId: async () => 'user-1',
+      registerAgent: async () => { calls.push('register'); return 'server-agent-1' },
+    },
+  })
+  await expect(new coordinatorModule.ChatRoomAgentCoordinator(deps).provisionAgent({ roomId: 'room-1', sourceWorkspaceId: 'workspace-1', displayName: 'Grok', channelId: 'channel-1' })).rejects.toThrow('agent_offline')
+  expect(calls).toEqual(['ready'])
+})
+
+test('远端注册期间网关断线、主进程通知滞后时，撤销远端 Agent 且不写本地', async () => {
+  const calls: string[] = []
+  const base = fakeDeps()
+  let checks = 0
+  const { deps } = fakeDeps({
+    store: { read: () => undefined, provisionAgent: () => { calls.push('local'); throw new Error('不应写入') } },
+    rustApi: { ...base.deps.rustApi,
+      getRoomHostUserId: async () => 'user-1',
+      getRoomRealtimeStatus: async () => { checks++; return { ready: checks < 3, epoch: checks < 3 ? 5 : 6 } },
+      registerAgent: async () => { calls.push('register'); return 'server-agent-1' },
+      unregisterAgent: async () => { calls.push('delete') },
+    },
+  })
+  await expect(new coordinatorModule.ChatRoomAgentCoordinator(deps).provisionAgent({ roomId: 'room-1', sourceWorkspaceId: 'workspace-1', displayName: 'Grok', channelId: 'channel-1' })).rejects.toThrow('agent_offline')
+  expect(calls).toEqual(['register', 'delete'])
+})
+
+test('断线又重连后即使重新就绪也不能沿用注册前的连接版本', async () => {
+  const calls: string[] = []
+  const base = fakeDeps()
+  let checks = 0
+  const { deps } = fakeDeps({
+    store: { read: () => undefined, provisionAgent: () => { calls.push('local'); throw new Error('不应写入') } },
+    rustApi: { ...base.deps.rustApi,
+      getRoomHostUserId: async () => 'user-1',
+      getRoomRealtimeStatus: async () => ({ ready: true, epoch: ++checks < 3 ? 5 : 7 }),
+      registerAgent: async () => { calls.push('register'); return 'server-agent-1' },
+      unregisterAgent: async () => { calls.push('delete') },
+    },
+  })
+  await expect(new coordinatorModule.ChatRoomAgentCoordinator(deps).provisionAgent({ roomId: 'room-1', sourceWorkspaceId: 'workspace-1', displayName: 'Grok', channelId: 'channel-1' })).rejects.toThrow('agent_offline')
+  expect(calls).toEqual(['register', 'delete'])
+})
+
+test('注册成功但网关状态接口失败时，撤销远端 Agent 且不写本地', async () => {
+  const calls: string[] = []
+  let checks = 0
+  const base = fakeDeps()
+  const { deps } = fakeDeps({
+    store: { read: () => undefined, provisionAgent: () => { calls.push('local'); throw new Error('不应写入') } },
+    rustApi: { ...base.deps.rustApi,
+      getRoomHostUserId: async () => 'user-1',
+      getRoomRealtimeStatus: async () => { if (++checks > 2) throw new Error('状态查询失败'); return { ready: true, epoch: 5 } },
+      registerAgent: async () => { calls.push('register'); return 'server-agent-1' },
+      unregisterAgent: async () => { calls.push('delete') },
+    },
+  })
+  await expect(new coordinatorModule.ChatRoomAgentCoordinator(deps).provisionAgent({ roomId: 'room-1', sourceWorkspaceId: 'workspace-1', displayName: 'Grok', channelId: 'channel-1' })).rejects.toThrow('状态查询失败')
+  expect(calls).toEqual(['register', 'delete'])
+})
+
+test('续租新 Agent 期间网关断线，撤销本地配置和租约并移除远端 Agent', async () => {
+  const calls: string[] = []
+  const room: ChatRoomLocalRoomConfig = { roomId: 'room-1', hostUserId: 'user-1', deviceId: 'device-1', lastProcessedSeq: 0, agents: [makeAgent('server-agent-1')], invocations: [], createdAt: 1, updatedAt: 1 }
+  const base = fakeDeps()
+  let checks = 0
+  const { deps } = fakeDeps({
+    store: { read: () => undefined, provisionAgent: () => { calls.push('local'); return room }, archiveAgent: () => { calls.push('archive'); return room } },
+    rustApi: { ...base.deps.rustApi,
+      getRoomHostUserId: async () => 'user-1',
+      getRoomRealtimeStatus: async () => ({ ready: ++checks < 4, epoch: checks < 4 ? 5 : 6 }),
+      registerAgent: async () => { calls.push('register'); return 'server-agent-1' },
+      renewAgentLease: async () => { calls.push('lease') },
+      releaseAgentLeases: async () => { calls.push('release') },
+      unregisterAgent: async () => { calls.push('delete') },
+    },
+  })
+  await expect(new coordinatorModule.ChatRoomAgentCoordinator(deps).provisionAgent({ roomId: 'room-1', sourceWorkspaceId: 'workspace-1', displayName: 'Grok', channelId: 'channel-1' })).rejects.toThrow('agent_offline')
+  expect(calls).toEqual(['register', 'local', 'lease', 'release', 'archive', 'delete'])
+})
+
+test('网关就绪查询期间再次断线，不得复活旧 generation 或注册新 Agent', async () => {
+  let beginReady!: () => void
+  let finishReady!: () => void
+  const entered = new Promise<void>((resolve) => { beginReady = resolve })
+  const waiting = new Promise<void>((resolve) => { finishReady = resolve })
+  const calls: string[] = []
+  const base = fakeDeps()
+  const { deps } = fakeDeps({
+    store: { read: () => undefined, list: () => [], provisionAgent: () => { calls.push('local'); throw new Error('不应写入') } },
+    rustApi: { ...base.deps.rustApi, getRoomHostUserId: async () => 'user-1', getRoomRealtimeStatus: async () => { beginReady(); await waiting; return { ready: true, epoch: 5 } }, registerAgent: async () => { calls.push('register'); return 'server-agent-1' } },
+  })
+  const coordinator = new coordinatorModule.ChatRoomAgentCoordinator(deps)
+  const adding = coordinator.provisionAgent({ roomId: 'room-1', sourceWorkspaceId: 'workspace-1', displayName: 'Grok', channelId: 'channel-1' })
+  await entered
+  await coordinator.stopAll('gateway_disconnected')
+  finishReady()
+  await expect(adding).rejects.toThrow('agent_offline')
+  expect(calls).toEqual([])
+})
+
+test('就绪后复核账号期间断线，不得用旧 generation 恢复旧 Agent 租约', async () => {
+  let identityStarted!: () => void
+  let releaseIdentity!: () => void
+  const waiting = new Promise<void>((resolve) => { releaseIdentity = resolve })
+  const entered = new Promise<void>((resolve) => { identityStarted = resolve })
+  let identityReads = 0
+  const calls: string[] = []
+  const oldRoom: ChatRoomLocalRoomConfig = { roomId: 'room-1', hostUserId: 'user-1', deviceId: 'device-1', lastProcessedSeq: 0, agents: [makeAgent('old-agent')], invocations: [], createdAt: 1, updatedAt: 1 }
+  const base = fakeDeps()
+  const { deps } = fakeDeps({
+    store: { read: () => oldRoom, list: () => [oldRoom], listRestorableRooms: () => [oldRoom], provisionAgent: () => { calls.push('local'); throw new Error('不应写入') } },
+    getCurrentUserId: async () => { identityReads++; if (identityReads === 2) { identityStarted(); await waiting } return 'user-1' },
+    rustApi: { ...base.deps.rustApi, getRoomHostUserId: async () => 'user-1', getRoomRealtimeStatus: async () => ({ ready: true, epoch: 5 }), renewAgentLease: async () => { calls.push('renew-old') }, registerAgent: async () => { calls.push('register'); return 'server-agent-1' } },
+  })
+  const coordinator = new coordinatorModule.ChatRoomAgentCoordinator(deps)
+  const adding = coordinator.provisionAgent({ roomId: 'room-1', sourceWorkspaceId: 'workspace-1', displayName: 'Grok', channelId: 'channel-1' })
+  await entered
+  await coordinator.stopAll('gateway_disconnected')
+  releaseIdentity()
+  await expect(adding).rejects.toThrow('agent_offline')
+  expect(calls).toEqual([])
+})
+
+test('已有房间断线恢复后添加新 Agent 时，先恢复该房间旧 Agent 的在线租约', async () => {
+  const calls: string[] = []
+  const previous: ChatRoomLocalRoomConfig = { roomId: 'room-1', hostUserId: 'user-1', deviceId: 'device-1', lastProcessedSeq: 0, agents: [makeAgent('old-agent')], invocations: [], createdAt: 1, updatedAt: 1 }
+  const next: ChatRoomLocalRoomConfig = { ...previous, agents: [...previous.agents, makeAgent('server-agent-1')] }
+  const base = fakeDeps()
+  const { deps } = fakeDeps({
+    store: { read: () => previous, list: () => [previous], listRestorableRooms: () => [previous], provisionAgent: () => { calls.push('local'); return next } },
+    rustApi: { ...base.deps.rustApi, getRoomRealtimeStatus: async () => { calls.push('ready'); return { ready: true, epoch: 5 } }, getRoomHostUserId: async () => 'user-1', registerAgent: async () => { calls.push('register'); return 'server-agent-1' }, renewAgentLease: async (_roomId: string, id: string) => { calls.push(`renew:${id}`) }, unregisterAgent: async () => undefined },
+  })
+  const coordinator = new coordinatorModule.ChatRoomAgentCoordinator(deps)
+  await coordinator.stopAll('gateway_disconnected')
+  calls.length = 0
+  await coordinator.provisionAgent({ roomId: 'room-1', sourceWorkspaceId: 'workspace-1', displayName: 'Grok', channelId: 'channel-1' })
+  expect(calls).toEqual(['ready', 'ready', 'ready', 'renew:old-agent', 'ready', 'ready', 'register', 'ready', 'local', 'renew:server-agent-1', 'ready'])
+})
+
+test('启动时只有当前房间已收到 WebSocket 快照才恢复旧 Agent 租约', async () => {
+  const calls: string[] = []
+  const base = fakeDeps()
+  const { deps } = fakeDeps({ rustApi: { ...base.deps.rustApi, getRoomHostUserId: async () => 'user-1', getRoomRealtimeStatus: async () => ({ ready: false, epoch: 5 }), renewAgentLease: async () => { calls.push('renew') } } })
+  await new coordinatorModule.ChatRoomAgentCoordinator(deps).resumeLeases()
+  expect(calls).toEqual([])
+})
+
+test('启动首次快照未到时自动重试租约恢复，不要求用户重新添加 Agent', async () => {
+  let checks = 0
+  const renewed: string[] = []
+  const { deps } = fakeDeps({ leaseRecoveryRetryMs: 5, rustApi: {
+    getRoomHostUserId: async () => 'user-1',
+    getRoomRealtimeStatus: async () => ({ ready: ++checks > 1, epoch: 5 }),
+    renewAgentLease: async (_roomId: string, agentId: string) => { renewed.push(agentId) },
+  } })
+  const coordinator = new coordinatorModule.ChatRoomAgentCoordinator(deps)
+  coordinator.start()
+  try {
+    await new Promise((resolve) => setTimeout(resolve, 40))
+    expect(renewed).toEqual(['agent-a', 'agent-b', 'agent-c'])
+    await coordinator.stopAll('gateway_disconnected')
+    await new Promise((resolve) => setTimeout(resolve, 40))
+    expect(renewed).toEqual(['agent-a', 'agent-b', 'agent-c', 'agent-a', 'agent-b', 'agent-c'])
+  } finally { await coordinator.dispose() }
+})
+
+test('等待快照期间退出登录，禁止后台恢复旧 Agent 租约', async () => {
+  let ready = false
+  const renewed: string[] = []
+  const { deps } = fakeDeps({ leaseRecoveryRetryMs: 5, rustApi: {
+    getRoomHostUserId: async () => 'user-1', getRoomRealtimeStatus: async () => ({ ready, epoch: 5 }),
+    renewAgentLease: async (_roomId: string, agentId: string) => { renewed.push(agentId) },
+  } })
+  const coordinator = new coordinatorModule.ChatRoomAgentCoordinator(deps)
+  coordinator.start()
+  try {
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    await coordinator.stopAll('logout')
+    ready = true
+    await new Promise((resolve) => setTimeout(resolve, 30))
+    expect(renewed).toEqual([])
+  } finally { await coordinator.dispose() }
+})
+
+test('旧 Agent 租约恢复前连接版本已经改变时，不得续租', async () => {
+  const calls: string[] = []
+  let checks = 0
+  const base = fakeDeps()
+  const { deps } = fakeDeps({ rustApi: { ...base.deps.rustApi,
+    getRoomHostUserId: async () => 'user-1',
+    getRoomRealtimeStatus: async () => ({ ready: true, epoch: ++checks === 1 ? 5 : 7 }),
+    renewAgentLease: async () => { calls.push('renew') },
+  } })
+  await new coordinatorModule.ChatRoomAgentCoordinator(deps).resumeLeases()
+  expect(calls).toEqual([])
+})
+
+test('旧 Agent 续租期间断线且通知滞后时，释放该租约并停止恢复其它 Agent', async () => {
+  const calls: string[] = []
+  let checks = 0
+  const base = fakeDeps()
+  const { deps } = fakeDeps({ rustApi: { ...base.deps.rustApi,
+    getRoomHostUserId: async () => 'user-1',
+    getRoomRealtimeStatus: async () => ({ ready: ++checks < 3, epoch: checks < 3 ? 5 : 6 }),
+    renewAgentLease: async (_roomId: string, id: string) => { calls.push(`renew:${id}`) },
+    releaseAgentLeases: async () => { calls.push('release') },
+  } })
+  await new coordinatorModule.ChatRoomAgentCoordinator(deps).resumeLeases()
+  expect(calls).toEqual(['renew:agent-a', 'release'])
+})
+
+test('旧 Agent 续租后状态查询持续失败，释放可能已激活的租约', async () => {
+  const calls: string[] = []
+  let checks = 0
+  const base = fakeDeps()
+  const { deps } = fakeDeps({ rustApi: { ...base.deps.rustApi,
+    getRoomHostUserId: async () => 'user-1',
+    getRoomRealtimeStatus: async () => { if (++checks > 2) throw new Error('状态查询失败'); return { ready: true, epoch: 5 } },
+    renewAgentLease: async (_roomId: string, id: string) => { calls.push(`renew:${id}`) },
+    releaseAgentLeases: async () => { calls.push('release') },
+  } })
+  await new coordinatorModule.ChatRoomAgentCoordinator(deps).resumeLeases()
+  expect(calls).toEqual(['renew:agent-a', 'release'])
+})
+
+test('服务端房间不是当前用户的房间时，不注册 Agent 或写入本地配置', async () => {
+  let writes = 0
+  const { deps } = fakeDeps({
+    store: { read: () => undefined, provisionAgent: () => { writes++; throw new Error('unexpected') } },
+    rustApi: { getRoomHostUserId: async () => 'another-user', registerAgent: async () => { writes++; return 'unexpected' } },
+  })
+  await expect(new coordinatorModule.ChatRoomAgentCoordinator(deps).provisionAgent({ roomId: 'room-1', sourceWorkspaceId: 'workspace-1', displayName: 'Grok', channelId: 'channel-1' })).rejects.toThrow('not_room_host')
+  expect(writes).toBe(0)
+})
+
+test('注册响应丢失但服务器已经创建 Agent 时，先验证设备再恢复同一个 ID', async () => {
+  const calls: string[] = []
+  const room: ChatRoomLocalRoomConfig = { roomId: 'room-1', hostUserId: 'user-1', deviceId: 'device-1', lastProcessedSeq: 0, agents: [makeAgent('server-agent-1')], invocations: [], createdAt: 1, updatedAt: 1 }
+  const { deps } = fakeDeps({
+    store: { read: () => undefined, provisionAgent: (_identity: unknown, _input: unknown, id: string) => { expect(id).toBe('server-agent-1'); calls.push('local'); return room } },
+    rustApi: {
+      getRoomHostUserId: async () => 'user-1',
+      registerAgent: async () => { calls.push('register'); throw new Error('响应丢失') },
+      findRegisteredAgent: async () => { calls.push('verify-device'); return { agentId: 'server-agent-1', leaseVerified: true } },
+      renewAgentLease: async () => { calls.push('lease') },
+    },
+  })
+  const agent = await new coordinatorModule.ChatRoomAgentCoordinator(deps).provisionAgent({ roomId: 'room-1', sourceWorkspaceId: 'workspace-1', displayName: 'Grok', channelId: 'channel-1' })
+  expect(agent.roomAgentId).toBe('server-agent-1')
+  expect(calls).toEqual(['register', 'verify-device', 'local'])
+})
+
+test('设备验证续租响应丢失时，使用候选 ID 定向释放并撤销远端 Agent', async () => {
+  const calls: string[] = []
+  const base = fakeDeps()
+  const { deps } = fakeDeps({
+    store: { read: () => undefined, provisionAgent: () => { calls.push('local'); throw new Error('不应写入') } },
+    rustApi: { ...base.deps.rustApi,
+      getRoomHostUserId: async () => 'user-1',
+      registerAgent: async () => { calls.push('register'); throw new Error('响应丢失') },
+      findRegisteredAgent: async () => { calls.push('verify-device'); return { agentId: 'server-agent-1', leaseVerified: false } },
+      releaseAgentLeases: async () => { calls.push('release') },
+      unregisterAgent: async () => { calls.push('delete') },
+    },
+  })
+  await expect(new coordinatorModule.ChatRoomAgentCoordinator(deps).provisionAgent({ roomId: 'room-1', sourceWorkspaceId: 'workspace-1', displayName: 'Grok', channelId: 'channel-1' })).rejects.toThrow('已撤销')
+  expect(calls).toEqual(['register', 'verify-device', 'release', 'delete'])
+})
+
+test('同一房间并发添加 Agent 时，只发送一个远端注册请求', async () => {
+  let release!: () => void
+  let started!: () => void
+  const pending = new Promise<void>((resolve) => { release = resolve })
+  const barrier = new Promise<void>((resolve) => { started = resolve })
+  const calls: string[] = []
+  const room: ChatRoomLocalRoomConfig = { roomId: 'room-1', hostUserId: 'user-1', deviceId: 'device-1', lastProcessedSeq: 0, agents: [makeAgent('server-agent-1')], invocations: [], createdAt: 1, updatedAt: 1 }
+  const { deps } = fakeDeps({ store: { read: () => undefined, provisionAgent: () => room }, rustApi: {
+    getRoomHostUserId: async () => 'user-1',
+    registerAgent: async () => { calls.push('register'); started(); await pending; return 'server-agent-1' },
+    renewAgentLease: async () => undefined,
+  } })
+  const coordinator = new coordinatorModule.ChatRoomAgentCoordinator(deps)
+  const input = { roomId: 'room-1', sourceWorkspaceId: 'workspace-1', displayName: 'Grok', channelId: 'channel-1' }
+  const first = coordinator.provisionAgent(input)
+  await barrier
+  const second = coordinator.provisionAgent(input)
+  release()
+  await expect(second).rejects.toThrow('agent_busy')
+  await first
+  expect(calls).toEqual(['register'])
+})
+
+test('远端注册成功但本地保存失败时，撤销远端 Agent 并保留原始错误', async () => {
+  const requests: string[] = []
+  const { deps } = fakeDeps({
+    store: { read: () => undefined, provisionAgent: () => { requests.push('local'); throw new Error('磁盘已满') } },
+    rustApi: {
+      getRoomHostUserId: async () => 'user-1',
+      registerAgent: async () => { requests.push('register'); return 'server-agent-1' },
+      unregisterAgent: async (roomId: string, agentId: string) => { requests.push(`delete:${roomId}:${agentId}`) },
+    },
+  })
+  await expect(new coordinatorModule.ChatRoomAgentCoordinator(deps).provisionAgent({ roomId: 'room-1', sourceWorkspaceId: 'workspace-1', displayName: 'Grok', channelId: 'channel-1' })).rejects.toThrow('磁盘已满')
+  expect(requests).toEqual(['register', 'local', 'delete:room-1:server-agent-1'])
+})
+
+test('新 Agent 租约建立失败时不能宣告配置成功，并撤销本地与远端配置', async () => {
+  const requests: string[] = []
+  const room: ChatRoomLocalRoomConfig = { roomId: 'room-1', hostUserId: 'user-1', deviceId: 'device-1', lastProcessedSeq: 0, agents: [makeAgent('server-agent-1')], invocations: [], createdAt: 1, updatedAt: 1 }
+  const { deps } = fakeDeps({
+    store: {
+      read: () => undefined,
+      provisionAgent: () => { requests.push('local'); return room },
+      archiveAgent: () => { requests.push('archive'); return room },
+    },
+    rustApi: {
+      getRoomHostUserId: async () => 'user-1',
+      registerAgent: async () => { requests.push('register'); return 'server-agent-1' },
+      renewAgentLease: async () => { requests.push('lease'); throw new Error('网关离线') },
+      releaseAgentLeases: async () => { requests.push('release') },
+      unregisterAgent: async () => { requests.push('delete') },
+    },
+  })
+  await expect(new coordinatorModule.ChatRoomAgentCoordinator(deps).provisionAgent({ roomId: 'room-1', sourceWorkspaceId: 'workspace-1', displayName: 'Grok', channelId: 'channel-1' })).rejects.toThrow('网关离线')
+  expect(requests).toEqual(['register', 'local', 'lease', 'release', 'archive', 'delete'])
+})
+
+test('重启后只为当前主理人本机配置恢复 Agent 租约', async () => {
+  const renewed: string[] = []
+  const base = fakeDeps()
+  const { deps } = fakeDeps({
+    rustApi: {
+      ...base.deps.rustApi,
+      getRoomHostUserId: async () => 'user-1',
+      renewAgentLease: async (_roomId: string, agentId: string) => { renewed.push(agentId) },
+    },
+  })
+  const coordinator = new coordinatorModule.ChatRoomAgentCoordinator(deps)
+  await coordinator.resumeLeases()
+  expect(renewed).toEqual(['agent-a', 'agent-b', 'agent-c'])
+  const other = fakeDeps({ ...deps, getCurrentUserId: async () => 'other-user' })
+  await new coordinatorModule.ChatRoomAgentCoordinator(other.deps).resumeLeases()
+  expect(renewed).toHaveLength(3)
+})
+
+test('恢复租约时一个 Agent 失败不阻止同房间其他 Agent 上线', async () => {
+  const calls: string[] = []
+  const base = fakeDeps()
+  const { deps } = fakeDeps({ rustApi: {
+    ...base.deps.rustApi,
+    getRoomHostUserId: async () => 'user-1',
+    renewAgentLease: async (_roomId: string, id: string) => { calls.push(id); if (id === 'agent-a') throw new Error('Agent 已失效') },
+  } })
+  await new coordinatorModule.ChatRoomAgentCoordinator(deps).resumeLeases()
+  expect(calls).toEqual(['agent-a', 'agent-b', 'agent-c'])
+})
+
+test('损坏房间不阻断其他房间 Agent 的租约恢复', async () => {
+  const renewed: string[] = []
+  const base = fakeDeps()
+  const { deps, room } = fakeDeps({
+    store: { list: () => { throw new Error('room.json 损坏') }, listRestorableRooms: () => [base.room] },
+    rustApi: { ...base.deps.rustApi, getRoomHostUserId: async () => 'user-1', renewAgentLease: async (_roomId: string, id: string) => { renewed.push(id) } },
+  })
+  await new coordinatorModule.ChatRoomAgentCoordinator(deps).resumeLeases()
+  expect(renewed).toEqual(room.agents.map((agent) => agent.roomAgentId))
+})
+
+test('损坏房间不应中断断线清理，重连后仍可添加新 Agent', async () => {
+  const base = fakeDeps()
+  const saved = { ...base.room, roomId: 'new-room', agents: [makeAgent('server-agent')] }
+  const { deps } = fakeDeps({
+    store: {
+      list: () => { throw new Error('invalid_room_config') },
+      listRestorableRooms: () => [base.room],
+      read: () => undefined,
+      provisionAgent: () => saved,
+    },
+    rustApi: {
+      getRoomHostUserId: async () => 'user-1',
+      registerAgent: async () => 'server-agent',
+      renewAgentLease: async () => undefined,
+    },
+  })
+  const coordinator = new coordinatorModule.ChatRoomAgentCoordinator(deps)
+  const stopped = await coordinator.stopAll('gateway_disconnected')
+  expect(stopped.releasedRoomAgentIds).toEqual(['agent-a', 'agent-b', 'agent-c'])
+  const agent = await coordinator.provisionAgent({ roomId: 'new-room', sourceWorkspaceId: 'workspace-1', displayName: 'Grok', channelId: 'channel-1' })
+  expect(agent.roomAgentId).toBe('server-agent')
+})
+
+test('房间目录暂时不可读导致清理失败后，下一次清理可重试而不永久卡在 stopping', async () => {
+  const { deps } = fakeDeps()
+  const list = deps.store.list
+  deps.store.list = () => { throw new Error('目录不可读') }
+  deps.store.listRestorableRooms = () => { throw new Error('目录不可读') }
+  const coordinator = new coordinatorModule.ChatRoomAgentCoordinator(deps)
+  await expect(coordinator.stopAll('gateway_disconnected')).rejects.toThrow('目录不可读')
+  deps.store.list = list
+  deps.store.listRestorableRooms = list
+  const stopped = await coordinator.stopAll('gateway_disconnected')
+  expect(stopped.releasedRoomAgentIds).toEqual(['agent-a', 'agent-b', 'agent-c'])
+})
+
+test('远端注册期间登出后，不能再创建本地 Agent 或续租', async () => {
+  let releaseRegistration!: () => void
+  let registrationStarted!: () => void
+  const pending = new Promise<void>((resolve) => { releaseRegistration = resolve })
+  const started = new Promise<void>((resolve) => { registrationStarted = resolve })
+  const calls: string[] = []
+  const base = fakeDeps()
+  const { deps } = fakeDeps({
+    store: { read: () => undefined, list: () => [], provisionAgent: () => { calls.push('local'); throw new Error('不应写入') } },
+    rustApi: { ...base.deps.rustApi,
+      getRoomHostUserId: async () => 'user-1',
+      registerAgent: async () => { calls.push('register'); registrationStarted(); await pending; return 'server-agent-1' },
+      renewAgentLease: async () => { calls.push('lease') },
+      unregisterAgent: async () => { calls.push('delete') },
+    },
+  })
+  const coordinator = new coordinatorModule.ChatRoomAgentCoordinator(deps)
+  const provisioning = coordinator.provisionAgent({ roomId: 'room-1', sourceWorkspaceId: 'workspace-1', displayName: 'Grok', channelId: 'channel-1' })
+  await started
+  await coordinator.stopAll('logout')
+  releaseRegistration()
+  await expect(provisioning).rejects.toThrow('agent_offline')
+  expect(calls).toEqual(['register', 'delete'])
+})
+
+test('旧 lease 请求在断连清理后完成，必须再次释放且不能保留本地 Agent', async () => {
+  let releaseLease!: () => void
+  let leaseStarted!: () => void
+  const pending = new Promise<void>((resolve) => { releaseLease = resolve })
+  const started = new Promise<void>((resolve) => { leaseStarted = resolve })
+  const calls: string[] = []
+  const room: ChatRoomLocalRoomConfig = { roomId: 'room-1', hostUserId: 'user-1', deviceId: 'device-1', lastProcessedSeq: 0, agents: [makeAgent('server-agent-1')], invocations: [], createdAt: 1, updatedAt: 1 }
+  const base = fakeDeps()
+  const { deps } = fakeDeps({
+    store: { read: () => undefined, list: () => [room], provisionAgent: () => room, archiveAgent: () => { calls.push('archive'); return room } },
+    rustApi: { ...base.deps.rustApi,
+      getRoomHostUserId: async () => 'user-1', registerAgent: async () => 'server-agent-1',
+      renewAgentLease: async () => { leaseStarted(); await pending; calls.push('lease-done') },
+      releaseAgentLeases: async () => { calls.push('release') },
+      unregisterAgent: async () => { calls.push('delete') },
+    },
+  })
+  const coordinator = new coordinatorModule.ChatRoomAgentCoordinator(deps)
+  const provisioning = coordinator.provisionAgent({ roomId: 'room-1', sourceWorkspaceId: 'workspace-1', displayName: 'Grok', channelId: 'channel-1' })
+  await started
+  await coordinator.stopAll('gateway_disconnected')
+  releaseLease()
+  await expect(provisioning).rejects.toThrow('agent_offline')
+  expect(calls).toEqual(['release', 'lease-done', 'release', 'archive', 'delete'])
+})
+
+test('启动时恢复租约碰到登出，不得把刚完成的旧租约重新上线', async () => {
+  let releaseLease!: () => void
+  let leaseStarted!: () => void
+  const pending = new Promise<void>((resolve) => { releaseLease = resolve })
+  const started = new Promise<void>((resolve) => { leaseStarted = resolve })
+  const calls: string[] = []
+  const room: ChatRoomLocalRoomConfig = { roomId: 'room-1', hostUserId: 'user-1', deviceId: 'device-1', lastProcessedSeq: 0, agents: [makeAgent('agent-a')], invocations: [], createdAt: 1, updatedAt: 1 }
+  const base = fakeDeps()
+  const { deps } = fakeDeps({
+    store: { list: () => [room], listRestorableRooms: () => [room] },
+    rustApi: { ...base.deps.rustApi, getRoomHostUserId: async () => 'user-1',
+      renewAgentLease: async () => { leaseStarted(); await pending; calls.push('lease-done') },
+      releaseAgentLeases: async () => { calls.push('release') },
+    },
+  })
+  const coordinator = new coordinatorModule.ChatRoomAgentCoordinator(deps)
+  const restoration = coordinator.resumeLeases()
+  await started
+  await coordinator.stopAll('logout')
+  releaseLease()
+  await restoration
+  expect(calls).toEqual(['release', 'lease-done', 'release'])
+})
 
 test('Given 三个在线 Agent When 并发投递 Then 各自立即启动且不共享全局队列', async () => {
   const { deps, runAgentHeadless } = fakeDeps()

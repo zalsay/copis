@@ -48,6 +48,7 @@ export interface ChatRoomSummary {
   roomId: string
   name: string
   role: ChatRoomRole
+  hostUserId?: string
   status: ChatRoomStatus
   shareCode?: string
   memberCount: number
@@ -101,6 +102,8 @@ export interface ChatRoomInvocation {
   failureCode?: string
   delta?: string
   errorMessage?: string
+  /** Renderer 首次观察到本次调用的时间，用于运行指示器计时。 */
+  startedAt?: number
 }
 
 export interface ChatRoomAttachment {
@@ -128,6 +131,7 @@ export interface ChatRoomEventEnvelope {
   roomId?: string
   seq?: number
   latestSeq?: number
+  code?: string
   payload: unknown
 }
 

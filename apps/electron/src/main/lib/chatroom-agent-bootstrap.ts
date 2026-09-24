@@ -5,6 +5,7 @@ import { createChatRoomHiddenSessionStore } from './chatroom-hidden-session-stor
 import { registerAgentSessionStorageOverride } from './agent-session-manager'
 import { syncChatRoomAgentSkillSnapshot } from './chatroom-skill-snapshot'
 import { HttpChatRoomRustApiClient } from './chatroom-rust-client'
+import { ChatRoomManagementClient } from './chatroom-management-client'
 import { getOrCreateClientDeviceId } from './client-device-id'
 import { getWorkingApiClient } from './working-api-service'
 import { listConfiguredChannels, decryptApiKey } from './channel-manager'
@@ -13,7 +14,7 @@ import { runAgentHeadless, stopAgent, agentEventBus } from './agent-service'
 let registrationRelease: (() => void) | undefined
 
 function getInvocationContext(store: ChatRoomWorkspaceStore, invocationId: string): ChatRoomInvocationReportContext | undefined {
-  for (const room of store.list()) {
+  for (const room of store.listRestorableRooms()) {
     const invocation = room.invocations.find((candidate) => candidate.invocationId === invocationId)
     if (!invocation) continue
     const agent = room.agents.find((candidate) => candidate.roomAgentId === invocation.targetAgentId)
@@ -39,9 +40,16 @@ export function initializeChatRoomAgentCoordinator(): ChatRoomAgentCoordinator {
   const store = new ChatRoomWorkspaceStore()
   const deviceId = getOrCreateClientDeviceId()
   const client = new HttpChatRoomRustApiClient({ getInvocationContext: (invocationId) => getInvocationContext(store, invocationId) })
+  const management = new ChatRoomManagementClient()
   const coordinator = new ChatRoomAgentCoordinator({
     store,
     rustApi: {
+      getRoomHostUserId: (roomId) => management.getRoomHostUserId(roomId),
+      getRoomRealtimeStatus: (roomId) => management.getRoomRealtimeStatus(roomId),
+      registerAgent: (input) => management.registerAgent(input),
+      findRegisteredAgent: (input) => management.findRegisteredAgent(input),
+      unregisterAgent: (roomId, agentId) => management.unregisterAgent(roomId, agentId),
+      renewAgentLease: (roomId, agentId, id) => management.renewAgentLease(roomId, agentId, id),
       reportAccepted: (input) => client.reportAccepted(input),
       reportRunning: (input) => client.reportRunning(input),
       reportDelta: (input) => client.reportDelta(input),
@@ -69,6 +77,7 @@ export function initializeChatRoomAgentCoordinator(): ChatRoomAgentCoordinator {
   try {
     registrationRelease = registerChatRoomAgentCoordinator(coordinator)
     coordinator.start()
+    void coordinator.resumeLeases().catch(() => console.warn('[聊天室] 恢复 Agent 租约失败'))
     return coordinator
   } catch (error) {
     registrationRelease?.()

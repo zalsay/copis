@@ -70,6 +70,23 @@ afterEach(() => {
 })
 
 describe('聊天室本地工作区存储', () => {
+  test('恢复租约时跳过单个损坏的 room.json，不阻止其他房间', () => {
+    const store = makeStore()
+    provision(store, { roomId: 'room-broken' })
+    provision(store, { roomId: 'room-healthy' })
+    writeFileSync(getChatRoomConfigPath('room-broken'), '{invalid json')
+    expect(() => store.list()).toThrow()
+    expect(store.listRestorableRooms().map((room) => room.roomId)).toEqual(['room-healthy'])
+  })
+
+  test('远端 Agent ID 成为本地配置与独立目录的共同主键', () => {
+    const store = makeStore()
+    const saved = store.provisionAgent(identity, makeInput(), 'server-agent-1')
+    expect(saved.agents[0]?.roomAgentId).toBe('server-agent-1')
+    expect(store.read('room-1')?.agents[0]?.roomAgentId).toBe('server-agent-1')
+    expect(existsSync(getChatRoomAgentInboxPath('room-1', 'server-agent-1'))).toBe(true)
+  })
+
   test('terminal invocation cannot transition back to another terminal status', () => {
     const store = makeStore()
     const saved = provision(store)

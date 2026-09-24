@@ -1,7 +1,115 @@
 import { describe, expect, test } from 'bun:test'
+import { createStore } from 'jotai/vanilla'
+import { chatRoomApplyEventAtom, chatRoomRoomsAtom } from '../atoms/chatroom-atoms'
 import { ChatRoomSseClient, parseChatRoomSseFrame } from './chatroom-sse'
 const response = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status })
 describe('chatRoomSse', () => {
+  test('浏览器原生 fetch 要求 global 接收者时仍能建立房间 SSE 与终态补拉', async () => {
+    const statuses: string[] = []
+    const fetchImpl = function (this: unknown, url: RequestInfo | URL): Promise<Response> {
+      if (this !== globalThis) throw new TypeError('Illegal invocation')
+      if (String(url).includes('/invocations/terminal')) return Promise.resolve(response({ invocations: [], nextCursor: null }))
+      return Promise.resolve(new Response(new ReadableStream({ start(controller) { controller.enqueue(new TextEncoder().encode('data: {"type":"local.status","code":"realtime_connected"}\n\n')) } }), { headers: { 'Content-Type': 'text/event-stream' } }))
+    }
+    const client = new ChatRoomSseClient({ baseUrl: 'http://test', fetchImpl })
+    client.onStatus((status) => statuses.push(status))
+    client.setRooms(['r1'])
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 10))
+      expect(statuses).toContain('connected')
+      expect(statuses).not.toContain('reconnecting')
+    } finally { client.close() }
+  })
+  test('坏房间的定向状态到达后只重订阅仍可访问的房间', async () => {
+    const store = createStore()
+    const room = (roomId: string) => ({ roomId, name: roomId, role: 'member' as const, status: 'active' as const, memberCount: 1, unreadCount: 0, connectionStatus: 'offline' as const })
+    store.set(chatRoomRoomsAtom, [room('valid-room'), room('stale-room')])
+    const subscriptions: string[] = []
+    let resumed!: () => void
+    const validOnly = new Promise<void>((resolve) => { resumed = resolve })
+    const client = new ChatRoomSseClient({ baseUrl: 'http://test', fetchImpl: async (url) => {
+      const path = String(url)
+      if (!path.includes('/events?roomIds=')) return response({ invocations: [], nextCursor: null })
+      subscriptions.push(path)
+      if (path.endsWith('roomIds=valid-room')) resumed()
+      const frame = path.includes('stale-room') ? 'data: {"type":"local.status","roomId":"stale-room","code":"room_not_found"}\n\n' : ''
+      return new Response(new ReadableStream({ start(controller) { if (frame) controller.enqueue(new TextEncoder().encode(frame)) } }), { headers: { 'Content-Type': 'text/event-stream' } })
+    } })
+    const unsubscribe = store.sub(chatRoomRoomsAtom, () => client.setRooms(store.get(chatRoomRoomsAtom).map((item) => item.roomId)))
+    client.onEvent((event) => store.set(chatRoomApplyEventAtom, event))
+    client.setRooms(['valid-room', 'stale-room'])
+    try {
+      await Promise.race([validOnly, new Promise((_, reject) => setTimeout(() => reject(new Error('有效房间未重新订阅')), 500))])
+      expect(store.get(chatRoomRoomsAtom).map((item) => item.roomId)).toEqual(['valid-room'])
+      expect(subscriptions.some((url) => url.endsWith('roomIds=valid-room'))).toBe(true)
+    } finally { unsubscribe(); client.close() }
+  })
+  test('失效房间的终态查询先返回 404 时立即移除它，仍连接有效房间', async () => {
+    const store = createStore()
+    const room = (roomId: string) => ({ roomId, name: roomId, role: 'member' as const, status: 'active' as const, memberCount: 1, unreadCount: 0, connectionStatus: 'offline' as const })
+    store.set(chatRoomRoomsAtom, [room('valid-room'), room('stale-room')])
+    const subscriptions: string[] = []
+    let ready!: () => void
+    const validOnly = new Promise<void>((resolve) => { ready = resolve })
+    const client = new ChatRoomSseClient({ baseUrl: 'http://test', fetchImpl: async (url) => {
+      const path = String(url)
+      if (path.includes('/invocations/terminal?')) {
+        return path.includes('/stale-room/') ? response({ error: { code: 'not_found' } }, 404) : response({ invocations: [], nextCursor: null })
+      }
+      subscriptions.push(path)
+      if (path.endsWith('roomIds=valid-room')) ready()
+      return new Response(new ReadableStream({ start(controller) {
+        if (path.includes('stale-room')) setTimeout(() => controller.enqueue(new TextEncoder().encode('data: {"type":"local.status","roomId":"stale-room","code":"room_not_found"}\n\n')), 100)
+      } }), { headers: { 'Content-Type': 'text/event-stream' } })
+    } })
+    const unsubscribe = store.sub(chatRoomRoomsAtom, () => client.setRooms(store.get(chatRoomRoomsAtom).map((item) => item.roomId)))
+    client.onEvent((event) => store.set(chatRoomApplyEventAtom, event))
+    client.setRooms(['valid-room', 'stale-room'])
+    try {
+      await Promise.race([validOnly, new Promise((_, reject) => setTimeout(() => reject(new Error('终态 404 持续阻断有效房间')), 700))])
+      expect(store.get(chatRoomRoomsAtom).map((item) => item.roomId)).toEqual(['valid-room'])
+      expect(subscriptions.some((path) => path.endsWith('roomIds=valid-room'))).toBe(true)
+    } finally { unsubscribe(); client.close() }
+  })
+  test('local.status 保留网关状态码，HTTP SSE 建立后仍等待真实 WebSocket 状态', async () => {
+    const parsed = parseChatRoomSseFrame('data: {"type":"local.status","roomId":null,"code":"not_found","message":"聊天室不存在"}\n\n')
+    expect(parsed?.code).toBe('not_found')
+
+    let push!: (frame: string) => void
+    const stream = new Response(new ReadableStream({ start(controller) { push = (frame) => controller.enqueue(new TextEncoder().encode(`data: ${frame}\n\n`)) } }), { headers: { 'Content-Type': 'text/event-stream' } })
+    const statuses: string[] = []
+    const client = new ChatRoomSseClient({ baseUrl: 'http://test', fetchImpl: async (url) => String(url).includes('roomIds=') ? stream : response({ invocations: [], nextCursor: null }) })
+    client.onStatus((status) => statuses.push(status))
+    client.setRooms(['r1'])
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(statuses).not.toContain('connected')
+    push('{"type":"local.status","roomId":null,"code":"realtime_connected","message":"已连接"}')
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(statuses.at(-1)).toBe('connected')
+    push('{"type":"local.status","roomId":null,"code":"not_found","message":"聊天室不存在"}')
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(statuses.at(-1)).toBe('reconnecting')
+    push('{"type":"local.status","roomId":null,"code":"auth_expired","message":"登录失效"}')
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(statuses.at(-1)).toBe('auth_expired')
+    client.close()
+  })
+  test('单个房间的 bridge_unavailable 不把其他房间的传输状态改成重连中', async () => {
+    let push!: (frame: string) => void
+    const stream = new Response(new ReadableStream({ start(controller) { push = (frame) => controller.enqueue(new TextEncoder().encode(`data: ${frame}\n\n`)) } }), { headers: { 'Content-Type': 'text/event-stream' } })
+    const statuses: string[] = []
+    const client = new ChatRoomSseClient({ baseUrl: 'http://test', fetchImpl: async (url) => String(url).includes('roomIds=') ? stream : response({ invocations: [], nextCursor: null }) })
+    client.onStatus((status) => statuses.push(status))
+    client.setRooms(['r1', 'r2'])
+    try {
+      push('{"type":"local.status","code":"realtime_connected"}')
+      await new Promise((resolve) => setTimeout(resolve, 0))
+      expect(statuses.at(-1)).toBe('connected')
+      push('{"type":"local.status","roomId":"r1","code":"bridge_unavailable"}')
+      await new Promise((resolve) => setTimeout(resolve, 0))
+      expect(statuses.at(-1)).toBe('connected')
+    } finally { client.close() }
+  })
   test('解析 event/data 多行帧', () => { expect(parseChatRoomSseFrame('event: message.created\ndata: {"type":"message.created",\ndata: "roomId":"r1"}\n\n')?.type).toBe('message.created') })
   test('多房间查询保留逗号且 close 会停止请求', async () => { const urls: string[] = []; const statuses: string[] = []; let resolve!: () => void; const api = new ChatRoomSseClient({ baseUrl: 'http://test', fetchImpl: async (url, init) => { urls.push(String(url)); await new Promise<void>((r) => { resolve = r; init?.signal?.addEventListener('abort', () => r()) }); throw new DOMException('aborted', 'AbortError') } }); api.onStatus((s) => statuses.push(s)); api.setRooms(['r1', 'r2']); await Promise.resolve(); expect(urls[0]).toContain('roomIds=r1,r2'); api.close(); resolve?.(); expect(statuses).toContain('offline') })
   test('缺少 type 的帧被丢弃', () => { expect(parseChatRoomSseFrame('event: message.created\ndata: {"payload":{}}\n\n')).toBeUndefined() })

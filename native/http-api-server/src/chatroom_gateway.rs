@@ -196,6 +196,7 @@ struct Subscriber {
 struct RoomState {
     last_contiguous_seq: u64,
     subscribed: bool,
+    snapshot_ready: bool,
     gap_recovery: bool,
     recovering: bool,
     snapshot: Option<ChatroomEvent>,
@@ -207,6 +208,7 @@ impl RoomState {
         Self {
             last_contiguous_seq: 0,
             subscribed: false,
+            snapshot_ready: false,
             gap_recovery: false,
             recovering: false,
             snapshot: None,
@@ -227,6 +229,7 @@ enum GatewayTask {
     Recover(String),
     Invocation(ChatroomEvent),
     Disconnected(Vec<u8>),
+    PruneInaccessible(u64),
 }
 
 #[cfg(test)]
@@ -267,6 +270,7 @@ enum Route<'a> {
     InternalDownload,
     InternalFinalize,
     InternalLeaseRelease,
+    InternalRoomStatus(&'a str),
     InternalInvocation(&'a str, &'a str),
 }
 
@@ -286,19 +290,25 @@ pub struct ChatroomGateway {
     started: AtomicBool,
     shutdown: AtomicBool,
     auth_epoch: AtomicU64,
+    realtime_epoch: AtomicU64,
     auth_boundary: Mutex<()>,
     connection_paused: AtomicBool,
     accepted_client_generation: AtomicU64,
+    websocket_connected: AtomicBool,
     disconnected_notified: AtomicBool,
     pending_disconnected: AtomicBool,
     clock: Arc<dyn GatewayClock>,
     last_lease_tick: Mutex<Instant>,
     task_sender: Mutex<Option<mpsc::SyncSender<GatewayTask>>>,
+    prune_queued: AtomicBool,
+    prune_pending: AtomicBool,
     task_workers: Mutex<Vec<JoinHandle<()>>>,
     #[cfg(test)]
     task_gate: Mutex<Option<TaskGate>>,
     #[cfg(test)]
     sse_registration_gate: Mutex<Option<SseRegistrationGate>>,
+    #[cfg(test)]
+    sse_status_gate: Mutex<Option<SseRegistrationGate>>,
     #[cfg(test)]
     client_event_acceptance_gate: Mutex<Option<ClientEventAcceptanceGate>>,
 }
@@ -370,19 +380,25 @@ impl ChatroomGateway {
             started: AtomicBool::new(false),
             shutdown: AtomicBool::new(false),
             auth_epoch: AtomicU64::new(0),
+            realtime_epoch: AtomicU64::new(0),
             auth_boundary: Mutex::new(()),
             connection_paused: AtomicBool::new(false),
             accepted_client_generation: AtomicU64::new(NO_CLIENT_GENERATION),
+            websocket_connected: AtomicBool::new(false),
             disconnected_notified: AtomicBool::new(false),
             pending_disconnected: AtomicBool::new(false),
             last_lease_tick: Mutex::new(clock.now()),
             clock,
             task_sender: Mutex::new(None),
+            prune_queued: AtomicBool::new(false),
+            prune_pending: AtomicBool::new(false),
             task_workers: Mutex::new(Vec::new()),
             #[cfg(test)]
             task_gate: Mutex::new(None),
             #[cfg(test)]
             sse_registration_gate: Mutex::new(None),
+            #[cfg(test)]
+            sse_status_gate: Mutex::new(None),
             #[cfg(test)]
             client_event_acceptance_gate: Mutex::new(None),
         }))
@@ -441,6 +457,11 @@ impl ChatroomGateway {
                     GatewayTask::Recover(room_id) => gateway.recover_room(room_id),
                     GatewayTask::Invocation(event) => gateway.forward_invocation_now(&event),
                     GatewayTask::Disconnected(body) => gateway.send_disconnected_bridge(body),
+                    GatewayTask::PruneInaccessible(epoch) => {
+                        gateway.prune_inaccessible_subscriptions(epoch);
+                        gateway.prune_queued.store(false, Ordering::Release);
+                        gateway.try_dispatch_pending_prune();
+                    }
                 }
                 gateway.drain_pending_disconnected();
             }));
@@ -470,6 +491,7 @@ impl ChatroomGateway {
                 Err(mpsc::RecvTimeoutError::Timeout) => self.tick_leases(self.clock.now()),
                 Err(mpsc::RecvTimeoutError::Disconnected) => return,
             }
+            self.try_dispatch_pending_prune();
         }
     }
 
@@ -480,10 +502,14 @@ impl ChatroomGateway {
         self.tick_leases(self.clock.now());
         match event {
             ChatroomClientEvent::Connected => {
-                self.disconnected_notified.store(false, Ordering::Release);
-                if !self.connection_paused.load(Ordering::Acquire) {
-                    self.publish_status(None, "realtime_connected", "聊天室实时连接已建立");
+                let _auth_boundary = self.auth_boundary.lock().unwrap();
+                if self.connection_paused.load(Ordering::Acquire) {
+                    return;
                 }
+                self.websocket_connected.store(true, Ordering::Release);
+                self.realtime_epoch.fetch_add(1, Ordering::AcqRel);
+                self.disconnected_notified.store(false, Ordering::Release);
+                self.publish_status(None, "realtime_connected", "聊天室实时连接已建立");
             }
             ChatroomClientEvent::ConnectedAt { generation } => {
                 let candidate = generation == self.client.pause_generation()
@@ -505,14 +531,22 @@ impl ChatroomGateway {
                     self.accepted_client_generation
                         .store(generation, Ordering::Release);
                     self.connection_paused.store(false, Ordering::Release);
+                    self.websocket_connected.store(true, Ordering::Release);
+                    self.realtime_epoch.fetch_add(1, Ordering::AcqRel);
                     self.disconnected_notified.store(false, Ordering::Release);
                     self.publish_status(None, "realtime_connected", "聊天室实时连接已建立");
                     self.refresh_subscription_snapshot();
                 }
             }
-            ChatroomClientEvent::Disconnected => self.notify_disconnected(),
+            ChatroomClientEvent::Disconnected => {
+                let _auth_boundary = self.auth_boundary.lock().unwrap();
+                self.notify_disconnected();
+            }
             ChatroomClientEvent::Status { code, message } => {
-                self.publish_status(None, &code, &message)
+                self.publish_status(None, &code, &message);
+                if matches!(code.as_str(), "not_found" | "not_member" | "forbidden") {
+                    self.schedule_inaccessible_prune();
+                }
             }
             ChatroomClientEvent::Event(event)
                 if !self.connection_paused.load(Ordering::Acquire)
@@ -536,18 +570,30 @@ impl ChatroomGateway {
                     }
                 }
                 let _auth_boundary = self.auth_boundary.lock().unwrap();
-                if candidate
+                let accepted = candidate
                     && !self.connection_paused.load(Ordering::Acquire)
                     && self.accepted_client_generation.load(Ordering::Acquire) == generation
-                    && self.auth.auth_state().authenticated
-                {
+                    && self.auth.auth_state().authenticated;
+                let should_prune = accepted
+                    && matches!(&event,
+                    ChatroomEvent::LocalStatus { code, .. } if matches!(code.as_str(), "not_found" | "not_member" | "forbidden"));
+                if accepted {
                     self.publish_event(event);
+                }
+                drop(_auth_boundary);
+                if should_prune {
+                    self.schedule_inaccessible_prune();
                 }
             }
         }
     }
 
     fn notify_disconnected(&self) {
+        self.websocket_connected.store(false, Ordering::Release);
+        self.realtime_epoch.fetch_add(1, Ordering::AcqRel);
+        for state in self.rooms.lock().unwrap().values_mut() {
+            state.snapshot_ready = false;
+        }
         if self.disconnected_notified.swap(true, Ordering::AcqRel) {
             return;
         }
@@ -625,6 +671,7 @@ impl ChatroomGateway {
             Route::InternalDownload => self.handle_cos_grant(CosAction::Download, body),
             Route::InternalFinalize => self.handle_internal_finalize(body),
             Route::InternalLeaseRelease => self.handle_internal_lease_release(body),
+            Route::InternalRoomStatus(room_id) => self.handle_internal_room_status(room_id),
             Route::InternalInvocation(invocation_id, state) => {
                 self.handle_internal_invocation(state, invocation_id, body)
             }
@@ -810,6 +857,33 @@ impl ChatroomGateway {
         public_response(response)
     }
 
+    fn handle_internal_room_status(
+        &self,
+        room_id: &str,
+    ) -> Result<GatewayHttpResponse, ChatroomGatewayError> {
+        let _auth_boundary = self.auth_boundary.lock().unwrap();
+        if !self.auth.auth_state().authenticated || self.connection_paused.load(Ordering::Acquire) {
+            return Err(ChatroomGatewayError::new(
+                401,
+                "not_authenticated",
+                "请先登录 Copis Working",
+            ));
+        }
+        let connected = self.websocket_connected.load(Ordering::Acquire)
+            && self.accepted_client_generation.load(Ordering::Acquire) != NO_CLIENT_GENERATION;
+        let ready = connected
+            && self
+                .rooms
+                .lock()
+                .unwrap()
+                .get(room_id)
+                .is_some_and(|room| room.subscribed && room.snapshot_ready);
+        Ok(GatewayHttpResponse::Json {
+            status: 200,
+            body: serde_json::json!({"ready": ready, "epoch": self.realtime_epoch.load(Ordering::Acquire)}),
+        })
+    }
+
     fn handle_internal_lease_release(
         &self,
         body: &[u8],
@@ -971,11 +1045,33 @@ impl ChatroomGateway {
         if room_ids.is_empty() || room_ids.len() > 50 {
             return Err(invalid_request("SSE 至少需要一个聊天室"));
         }
-        let mut rooms = HashSet::new();
+        let mut requested_rooms = HashSet::new();
         for room_id in room_ids {
-            rooms.insert(
+            requested_rooms.insert(
                 normalize_room_id(&room_id).map_err(|_| invalid_request("聊天室 ID 不合法"))?,
             );
+        }
+        let mut rooms = HashSet::new();
+        let mut rejected_rooms = Vec::new();
+        for room_id in requested_rooms {
+            match self.verify_sse_room(&room_id) {
+                Ok(()) => {
+                    rooms.insert(room_id);
+                }
+                Err(error) if error.status == 403 || error.status == 404 => {
+                    rejected_rooms.push(ChatroomEvent::LocalStatus {
+                        room_id: Some(room_id),
+                        code: if error.status == 404 {
+                            "room_not_found"
+                        } else {
+                            "not_member"
+                        }
+                        .into(),
+                        message: "聊天室已不可访问".into(),
+                    });
+                }
+                Err(error) => return Err(error),
+            }
         }
         #[cfg(test)]
         let registration_gate = self.sse_registration_gate.lock().unwrap().take();
@@ -995,10 +1091,21 @@ impl ChatroomGateway {
                 "请先登录 Copis Working",
             ));
         }
+        for event in &rejected_rooms {
+            if let ChatroomEvent::LocalStatus {
+                room_id: Some(room_id),
+                code,
+                message,
+            } = event
+            {
+                self.publish_status(Some(room_id), code, message);
+                self.remove_room_subscription(room_id);
+            }
+        }
         let (sender, receiver) = mpsc::sync_channel(SSE_CAPACITY);
         let occupancy = Arc::new(AtomicUsize::new(0));
         let subscriber_id = self.next_subscriber_id.fetch_add(1, Ordering::Relaxed);
-        let mut initial = Vec::new();
+        let mut initial = rejected_rooms;
         {
             let mut states = self.rooms.lock().unwrap();
             for room_id in &rooms {
@@ -1015,6 +1122,18 @@ impl ChatroomGateway {
                     });
                 }
             }
+        }
+        if self.websocket_connected.load(Ordering::Acquire) {
+            initial.push(ChatroomEvent::LocalStatus {
+                room_id: None,
+                code: "realtime_connected".into(),
+                message: "聊天室实时连接已建立".into(),
+            });
+        }
+        #[cfg(test)]
+        if let Some(gate) = self.sse_status_gate.lock().unwrap().take() {
+            let _ = gate.loaded.send(());
+            let _ = gate.release.recv();
         }
         // 注册先于 snapshot/status，避免注册与首帧之间丢事件。
         self.subscribers.lock().unwrap().insert(
@@ -1039,6 +1158,118 @@ impl ChatroomGateway {
                 subscriber_id,
             },
         })
+    }
+
+    fn verify_sse_room(&self, room_id: &str) -> Result<(), ChatroomGatewayError> {
+        let path = format!("{CHATROOM_HTTP_PREFIX}/rooms/{room_id}");
+        let response = self.transport.request("GET", &path, None).map_err(|_| {
+            ChatroomGatewayError::new(502, "upstream_unavailable", "聊天室服务暂不可用")
+        })?;
+        if !(200..300).contains(&response.status) {
+            let status = response.status;
+            return Err(ChatroomGatewayError::new(
+                status,
+                if status == 404 {
+                    "room_not_found"
+                } else {
+                    "room_unavailable"
+                },
+                "聊天室不可用或当前账号无访问权限",
+            ));
+        }
+        let value = parse_json_response(&response.body)?;
+        let room = value.get("data").and_then(|data| data.get("room"));
+        if room
+            .and_then(|room| room.get("roomId"))
+            .and_then(Value::as_str)
+            != Some(room_id)
+        {
+            return Err(ChatroomGatewayError::new(
+                502,
+                "invalid_upstream_response",
+                "聊天室详情响应不正确",
+            ));
+        }
+        if matches!(
+            room.and_then(|room| room.get("status"))
+                .and_then(Value::as_str),
+            Some("deleted" | "deleting")
+        ) {
+            return Err(ChatroomGatewayError::new(
+                404,
+                "room_not_found",
+                "聊天室已关闭",
+            ));
+        }
+        Ok(())
+    }
+
+    fn schedule_inaccessible_prune(&self) {
+        self.prune_pending.store(true, Ordering::Release);
+        self.try_dispatch_pending_prune();
+    }
+
+    fn try_dispatch_pending_prune(&self) {
+        if !self.prune_pending.load(Ordering::Acquire)
+            || self
+                .prune_queued
+                .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+                .is_err()
+        {
+            return;
+        }
+        if !self.prune_pending.swap(false, Ordering::AcqRel) {
+            self.prune_queued.store(false, Ordering::Release);
+            return;
+        }
+        let epoch = self.auth_epoch.load(Ordering::Acquire);
+        if self
+            .dispatch_task(GatewayTask::PruneInaccessible(epoch))
+            .is_err()
+        {
+            if self.task_sender.lock().unwrap().is_none() {
+                self.prune_inaccessible_subscriptions(epoch);
+            } else {
+                self.prune_pending.store(true, Ordering::Release);
+            }
+            self.prune_queued.store(false, Ordering::Release);
+            if self.task_sender.lock().unwrap().is_none() {
+                self.try_dispatch_pending_prune();
+            }
+        }
+    }
+
+    fn prune_inaccessible_subscriptions(&self, auth_epoch: u64) {
+        if self.auth_epoch.load(Ordering::Acquire) != auth_epoch {
+            return;
+        }
+        let room_ids = self
+            .rooms
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(_, state)| state.subscribed)
+            .map(|(room_id, _)| room_id.clone())
+            .collect::<Vec<_>>();
+        for room_id in room_ids {
+            if self.auth_epoch.load(Ordering::Acquire) != auth_epoch {
+                return;
+            }
+            let rejection = match self.verify_sse_room(&room_id) {
+                Err(error) if error.status == 403 => Some("not_member"),
+                Err(error) if error.status == 404 => Some("room_not_found"),
+                _ => None,
+            };
+            let Some(code) = rejection else { continue };
+            let _auth_boundary = self.auth_boundary.lock().unwrap();
+            if self.auth_epoch.load(Ordering::Acquire) != auth_epoch
+                || !self.auth.auth_state().authenticated
+            {
+                return;
+            }
+            self.publish_status(Some(&room_id), code, "聊天室已不可访问");
+            self.remove_room_subscription(&room_id);
+        }
     }
 
     fn send_to_subscriber(&self, id: u64, value: Value, durable: bool) -> bool {
@@ -1094,6 +1325,7 @@ impl ChatroomGateway {
             let mut states = self.rooms.lock().unwrap();
             let state = states.entry(room_id.clone()).or_insert_with(RoomState::new);
             state.subscribed = true;
+            state.snapshot_ready = true;
             state.snapshot = Some(event.clone());
         }
         self.broadcast(&event);
@@ -1592,6 +1824,7 @@ impl ChatroomGateway {
             | Route::InternalDownload
             | Route::InternalFinalize
             | Route::InternalLeaseRelease
+            | Route::InternalRoomStatus(_)
             | Route::InternalInvocation(_, _) => {}
         }
         self.refresh_subscription_snapshot();
@@ -1667,6 +1900,7 @@ impl ChatroomGateway {
         self.accepted_client_generation
             .store(NO_CLIENT_GENERATION, Ordering::Release);
         self.connection_paused.store(true, Ordering::Release);
+        self.websocket_connected.store(false, Ordering::Release);
         self.leases.lock().unwrap().clear();
         self.rooms.lock().unwrap().clear();
         *self.last_subscription.lock().unwrap() = None;
@@ -1675,6 +1909,7 @@ impl ChatroomGateway {
     }
 
     pub fn resume_connection(&self) {
+        self.websocket_connected.store(false, Ordering::Release);
         if self.shutdown.load(Ordering::Acquire) {
             return;
         }
@@ -1796,6 +2031,19 @@ impl ChatroomGateway {
     }
 
     #[cfg(test)]
+    pub(crate) fn gate_sse_status_snapshot_for_test(
+        &self,
+    ) -> (mpsc::Receiver<()>, mpsc::Sender<()>) {
+        let (loaded, loaded_receiver) = mpsc::channel();
+        let (release, release_receiver) = mpsc::channel();
+        *self.sse_status_gate.lock().unwrap() = Some(SseRegistrationGate {
+            loaded,
+            release: release_receiver,
+        });
+        (loaded_receiver, release)
+    }
+
+    #[cfg(test)]
     pub(crate) fn gate_client_event_acceptance_for_test(
         &self,
     ) -> (mpsc::Receiver<()>, mpsc::Sender<()>) {
@@ -1864,6 +2112,14 @@ fn parse_route(path: &str) -> Result<Route<'_>, ChatroomGatewayError> {
     }
     if path.starts_with(&internal_prefix) {
         let parts: Vec<&str> = path[internal_prefix.len()..].split('/').collect();
+        if parts.len() == 3
+            && parts[0] == "rooms"
+            && parts[2] == "status"
+            && valid_component(parts[1])
+        {
+            normalize_room_id(parts[1]).map_err(|_| route_not_found())?;
+            return Ok(Route::InternalRoomStatus(parts[1]));
+        }
         if parts.len() == 3 && parts[0] == "invocations" && valid_component(parts[1]) {
             return Ok(Route::InternalInvocation(parts[1], parts[2]));
         }
@@ -1935,6 +2191,7 @@ fn method_allowed(method: &str, route: &Route<'_>) -> bool {
             | ("POST", Route::InternalDownload)
             | ("POST", Route::InternalFinalize)
             | ("POST", Route::InternalLeaseRelease)
+            | ("GET", Route::InternalRoomStatus(_))
             | ("POST", Route::InternalInvocation(_, _))
     )
 }

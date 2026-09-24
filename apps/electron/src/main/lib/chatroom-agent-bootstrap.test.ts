@@ -1,8 +1,13 @@
 import { expect, mock, test } from 'bun:test'
 
 const rustCalls: Array<{ method: string; input: unknown }> = []
-mock.module('./chatroom-workspace-store', () => ({ ChatRoomWorkspaceStore: class { list() { return [] } read() { return undefined } } }))
+let roomFixtures: any[] = []
+let rejectStrictList = false
+let reportContext!: (invocationId: string) => unknown
+mock.module('./chatroom-workspace-store', () => ({ ChatRoomWorkspaceStore: class { list() { if (rejectStrictList) throw new Error('invalid_room_config'); return roomFixtures } listRestorableRooms() { return roomFixtures } read() { return undefined } } }))
+mock.module('./http-api-server', () => ({ HTTP_API_HOST: '127.0.0.1', HTTP_API_PORT: 51740, getHttpApiInternalToken: () => 'test-internal-token' }))
 mock.module('./chatroom-rust-client', () => ({ HttpChatRoomRustApiClient: class {
+  constructor(options: { getInvocationContext: (invocationId: string) => unknown }) { reportContext = options.getInvocationContext }
   reportAccepted = async (input: unknown) => { rustCalls.push({ method: 'accepted', input }) }
   reportRunning = async (input: unknown) => { rustCalls.push({ method: 'running', input }) }
   reportDelta = async (input: unknown) => { rustCalls.push({ method: 'delta', input }) }
@@ -20,6 +25,19 @@ mock.module('./chatroom-skill-snapshot', () => ({ syncChatRoomAgentSkillSnapshot
 
 const bootstrap = await import('./chatroom-agent-bootstrap')
 const coordinatorModule = await import('./chatroom-agent-coordinator')
+
+test('有效房间的调用回传不受其它损坏房间配置影响', async () => {
+  roomFixtures = [{ roomId: 'room-healthy', deviceId: 'device-production', agents: [{ roomAgentId: 'a1' }], invocations: [{ invocationId: 'i1', targetAgentId: 'a1', triggerMessageId: 'm1' }] }]
+  rejectStrictList = true
+  bootstrap.initializeChatRoomAgentCoordinator()
+  try {
+    expect(reportContext('i1')).toEqual({ roomId: 'room-healthy', agentId: 'a1', deviceId: 'device-production', clientMessageId: 'm1' })
+    expect(reportContext('unknown')).toBeUndefined()
+  } finally {
+    roomFixtures = []; rejectStrictList = false
+    await bootstrap.disposeChatRoomAgentCoordinator()
+  }
+})
 
 test('Given production bootstrap When initialize executes Then one real coordinator is registered with real adapters and dispose releases token', async () => {
   const coordinator = bootstrap.initializeChatRoomAgentCoordinator()

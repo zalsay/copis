@@ -329,8 +329,23 @@ export class ChatRoomWorkspaceStore {
     return result
   }
 
-  provisionAgent(identity: ChatRoomLocalIdentity, input: ProvisionChatRoomAgentInput): ChatRoomLocalRoomConfig {
+  /** 生命周期批量处理：隔离坏房间，不能阻止其他房间续租或断线清理。 */
+  listRestorableRooms(): ChatRoomLocalRoomConfig[] {
+    const roomsRoot = getChatRoomsRootPath()
+    const result: ChatRoomLocalRoomConfig[] = []
+    for (const entry of readdirSync(roomsRoot)) {
+      try {
+        assertDirectory(join(roomsRoot, entry), '聊天室')
+        const config = this.read(entry)
+        if (config) result.push(config)
+      } catch { console.warn('[聊天室] 跳过损坏的本地房间配置') }
+    }
+    return result
+  }
+
+  provisionAgent(identity: ChatRoomLocalIdentity, input: ProvisionChatRoomAgentInput, serverAgentId?: string): ChatRoomLocalRoomConfig {
     assertIdentity(identity)
+    if (serverAgentId !== undefined && !isPathComponent(serverAgentId)) throw new Error('invalid_agent_input')
     if (this.expectedIdentity && !identityMatches(this.expectedIdentity, identity)) throw new Error('identity_mismatch')
     if (!isPathComponent(input.roomId) || !isId(input.sourceWorkspaceId)
       || !isChatRoomAgentDisplayName(input.displayName) || !isId(input.channelId)) {
@@ -370,7 +385,8 @@ export class ChatRoomWorkspaceStore {
       if (config.agents.some((agent) => agent.archivedAt === undefined && agent.displayName.trim().toLowerCase() === displayName)) {
         throw new Error('display_name_conflict')
       }
-      const roomAgentId = `agent-${randomUUID()}`
+      const roomAgentId = serverAgentId ?? `agent-${randomUUID()}`
+      if (config.agents.some((agent) => agent.roomAgentId === roomAgentId)) throw new Error('duplicate_agent_id')
       const sessionId = `session-${randomUUID()}`
       const agent: ChatRoomAgentLocalConfig = {
         roomAgentId,

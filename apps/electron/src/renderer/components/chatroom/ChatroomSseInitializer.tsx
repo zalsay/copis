@@ -98,7 +98,9 @@ export function ChatroomSseInitializer(): ReactElement {
     const client = new ChatRoomSseClient()
     clientRef.current = client
     const offEvent = client.onEvent((event) => store.set(chatRoomApplyEventAtom, event))
-    const offStatus = client.onStatus((status) => { for (const room of store.get(chatRoomRoomsAtom)) store.set(chatRoomConnectionStatusAtom, (current) => new Map(current).set(room.roomId, status)) })
+    const offStatus = client.onStatus((status) => {
+      for (const room of store.get(chatRoomRoomsAtom)) store.set(chatRoomConnectionStatusAtom, (current) => new Map(current).set(room.roomId, status))
+    })
     if (accountChanged || accountKey === 'anonymous') {
       resetState()
     }

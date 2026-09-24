@@ -85,11 +85,27 @@ struct FakeTransport {
     requests: Mutex<Vec<(String, String, Option<String>)>>,
     responses: Mutex<Vec<GatewayTransportResponse>>,
     request_gate: Mutex<Option<(mpsc::Sender<()>, mpsc::Receiver<()>)>>,
+    room_check_status: Mutex<HashMap<String, u16>>,
+    room_check_gate: Mutex<Option<(mpsc::Sender<()>, mpsc::Receiver<()>)>>,
 }
 
 impl FakeTransport {
     fn push(&self, response: GatewayTransportResponse) {
         self.responses.lock().unwrap().push(response);
+    }
+
+    fn set_room_check_status(&self, room_id: &str, status: u16) {
+        self.room_check_status
+            .lock()
+            .unwrap()
+            .insert(room_id.into(), status);
+    }
+
+    fn gate_next_room_check(&self) -> (mpsc::Receiver<()>, mpsc::Sender<()>) {
+        let (started, started_receiver) = mpsc::channel();
+        let (release, release_receiver) = mpsc::channel();
+        *self.room_check_gate.lock().unwrap() = Some((started, release_receiver));
+        (started_receiver, release)
     }
 
     fn gate_next_request(&self) -> (mpsc::Receiver<()>, mpsc::Sender<()>) {
@@ -107,6 +123,37 @@ impl GatewayTransport for FakeTransport {
         path: &str,
         body: Option<String>,
     ) -> Result<GatewayTransportResponse, String> {
+        // 既有测试只模拟业务请求；新增 SSE 成员校验默认返回可读的有效房间。
+        if method == "GET" {
+            if let Some(room_id) = path
+                .strip_prefix("/api/chatrooms/v2/rooms/")
+                .filter(|id| !id.contains('/') && !id.contains('?'))
+            {
+                let status = self
+                    .room_check_status
+                    .lock()
+                    .unwrap()
+                    .get(room_id)
+                    .copied()
+                    .unwrap_or(200);
+                if let Some((started, release)) = self.room_check_gate.lock().unwrap().take() {
+                    let _ = started.send(());
+                    release
+                        .recv_timeout(Duration::from_secs(2))
+                        .map_err(|_| "测试校验未收到放行信号".to_string())?;
+                }
+                return Ok(GatewayTransportResponse {
+                    status,
+                    body: if status == 200 {
+                        json!({"data":{"room":{"roomId":room_id,"status":"active"},"members":[],"agents":[]}}).to_string().into_bytes()
+                    } else {
+                        json!({"error":{"code":"not_found"}})
+                            .to_string()
+                            .into_bytes()
+                    },
+                });
+            }
+        }
         self.requests
             .lock()
             .unwrap()
@@ -347,6 +394,17 @@ fn recording_gateway() -> (
     Arc<AtomicUsize>,
     Arc<AtomicBool>,
 ) {
+    recording_gateway_with_transport(Arc::new(FakeTransport::default()))
+}
+
+fn recording_gateway_with_transport(
+    transport: Arc<FakeTransport>,
+) -> (
+    Arc<ChatroomGateway>,
+    Arc<Mutex<Vec<super::chatroom_protocol::ChatroomCommand>>>,
+    Arc<AtomicUsize>,
+    Arc<AtomicBool>,
+) {
     let client = Arc::new(
         EduApiClient::new(
             "https://test.invalid/module/edu-api",
@@ -369,7 +427,7 @@ fn recording_gateway() -> (
         }),
         Arc::new(FakeBridge::default()),
         "device-test".into(),
-        Arc::new(FakeTransport::default()),
+        transport,
     )
     .unwrap();
     (gateway, sent, attempts, released)
@@ -377,6 +435,17 @@ fn recording_gateway() -> (
 
 fn saturated_gateway(
     bridge: Arc<SaturatingBridge>,
+) -> (
+    Arc<ChatroomGateway>,
+    Arc<Mutex<Vec<super::chatroom_protocol::ChatroomCommand>>>,
+    Arc<AtomicBool>,
+) {
+    saturated_gateway_with_transport(bridge, Arc::new(FakeTransport::default()))
+}
+
+fn saturated_gateway_with_transport(
+    bridge: Arc<SaturatingBridge>,
+    transport: Arc<FakeTransport>,
 ) -> (
     Arc<ChatroomGateway>,
     Arc<Mutex<Vec<super::chatroom_protocol::ChatroomCommand>>>,
@@ -403,7 +472,7 @@ fn saturated_gateway(
         }),
         bridge,
         "device-test".into(),
-        Arc::new(FakeTransport::default()),
+        transport,
     )
     .unwrap();
     (gateway, sent, released)
@@ -526,6 +595,47 @@ fn given_full_task_queue_then_invocation_reports_strict_bridge_busy_failure() {
         )
     }));
     gateway.shutdown();
+}
+
+#[test]
+fn given_full_task_queue_when_room_is_revoked_then_prune_retries_after_capacity_returns() {
+    let (bridge, started) = SaturatingBridge::new();
+    let transport = Arc::new(FakeTransport::default());
+    transport.set_room_check_status("stale-room", 404);
+    let (gateway, _, released) = saturated_gateway_with_transport(bridge.clone(), transport);
+    gateway.set_room_cursor_for_test("stale-room", 2);
+    gateway.start();
+    gateway.handle_client_event_for_test(
+        super::chatroom_client::ChatroomClientEvent::ConnectedAt { generation: 0 },
+    );
+    for index in 0..4 {
+        gateway.publish_event_for_test(invocation("room-1", &format!("inv-block-{index}")));
+    }
+    for _ in 0..4 {
+        started
+            .recv_timeout(Duration::from_millis(500))
+            .expect("未阻塞全部 worker");
+    }
+    for index in 0..64 {
+        gateway.publish_event_for_test(invocation("room-1", &format!("inv-queued-{index}")));
+    }
+    gateway.handle_client_event_for_test(super::chatroom_client::ChatroomClientEvent::EventAt {
+        generation: 0,
+        event: ChatroomEvent::LocalStatus {
+            room_id: None,
+            code: "not_found".into(),
+            message: "聊天室不存在".into(),
+        },
+    });
+    bridge.release();
+    let until = Instant::now() + Duration::from_secs(2);
+    while gateway.room_cursor_for_test("stale-room").is_some() && Instant::now() < until {
+        thread::yield_now();
+    }
+    let removed = gateway.room_cursor_for_test("stale-room").is_none();
+    released.store(true, Ordering::Release);
+    gateway.shutdown();
+    assert!(removed, "队列满时不可永久丢失旧房间核对任务");
 }
 
 #[test]
@@ -895,6 +1005,326 @@ fn given_unauthenticated_gateway_when_sse_is_requested_then_deny_without_cache_a
     assert!(
         matches!(result, Err(error) if error.status == 401 && error.code == "not_authenticated")
     );
+}
+
+#[test]
+fn given_missing_room_when_sse_subscribes_then_report_it_without_poisoning_valid_rooms() {
+    let transport = Arc::new(FakeTransport::default());
+    transport.set_room_check_status("missing-room", 404);
+    let gateway = gateway(transport.clone(), Arc::new(FakeBridge::default()));
+    let missing = gateway.subscribe_sse(vec!["missing-room".into()]).unwrap();
+    let rejected = missing
+        .receiver
+        .recv_timeout(Duration::from_millis(100))
+        .unwrap();
+    assert_eq!(rejected["type"], "local.status");
+    assert_eq!(rejected["roomId"], "missing-room");
+    assert_eq!(rejected["code"], "room_not_found");
+    assert_eq!(gateway.room_cursor_for_test("missing-room"), None);
+    drop(missing);
+
+    let valid = gateway.subscribe_sse(vec!["valid-room".into()]);
+    assert!(valid.is_ok());
+    assert_eq!(gateway.subscriber_count_for_test(), 1);
+}
+
+#[test]
+fn given_valid_and_missing_rooms_when_sse_subscribes_then_keep_valid_room_live() {
+    let transport = Arc::new(FakeTransport::default());
+    transport.set_room_check_status("missing-room", 404);
+    let gateway = gateway(transport, Arc::new(FakeBridge::default()));
+    let subscription = gateway
+        .subscribe_sse(vec!["valid-room".into(), "missing-room".into()])
+        .unwrap();
+    let rejected = subscription
+        .receiver
+        .recv_timeout(Duration::from_millis(100))
+        .unwrap();
+    assert_eq!(rejected["roomId"], "missing-room");
+    assert_eq!(rejected["code"], "room_not_found");
+    assert_eq!(gateway.room_cursor_for_test("valid-room"), Some(0));
+    assert_eq!(gateway.room_cursor_for_test("missing-room"), None);
+}
+
+#[test]
+fn given_stale_cached_room_when_sse_precheck_rejects_it_then_remove_old_gateway_state() {
+    let transport = Arc::new(FakeTransport::default());
+    transport.set_room_check_status("stale-room", 404);
+    let gateway = gateway(transport, Arc::new(FakeBridge::default()));
+    gateway.set_room_cursor_for_test("stale-room", 7);
+    let subscription = gateway
+        .subscribe_sse(vec!["valid-room".into(), "stale-room".into()])
+        .unwrap();
+    let rejected = subscription
+        .receiver
+        .recv_timeout(Duration::from_millis(100))
+        .unwrap();
+    assert_eq!(rejected["code"], "room_not_found");
+    assert_eq!(gateway.room_cursor_for_test("stale-room"), None);
+    assert_eq!(gateway.room_cursor_for_test("valid-room"), Some(0));
+}
+
+#[test]
+fn given_remote_not_found_when_stale_room_is_subscribed_then_keep_valid_room_only() {
+    let transport = Arc::new(FakeTransport::default());
+    transport.set_room_check_status("stale-room", 404);
+    let gateway = gateway(transport, Arc::new(FakeBridge::default()));
+    gateway.set_room_cursor_for_test("valid-room", 4);
+    gateway.set_room_cursor_for_test("stale-room", 2);
+
+    gateway.handle_client_event_for_test(
+        super::chatroom_client::ChatroomClientEvent::ConnectedAt { generation: 0 },
+    );
+    gateway.handle_client_event_for_test(super::chatroom_client::ChatroomClientEvent::EventAt {
+        generation: 0,
+        event: ChatroomEvent::LocalStatus {
+            room_id: None,
+            code: "not_found".into(),
+            message: "聊天室不存在".into(),
+        },
+    });
+    assert_eq!(gateway.room_cursor_for_test("stale-room"), None);
+    assert_eq!(gateway.room_cursor_for_test("valid-room"), Some(4));
+}
+
+#[test]
+fn given_real_ws_error_when_stale_room_is_pruned_then_notify_its_sse_subscriber() {
+    let transport = Arc::new(FakeTransport::default());
+    let gateway = gateway(transport.clone(), Arc::new(FakeBridge::default()));
+    let subscription = gateway
+        .subscribe_sse(vec!["valid-room".into(), "stale-room".into()])
+        .unwrap();
+    transport.set_room_check_status("stale-room", 404);
+    gateway.handle_client_event_for_test(
+        super::chatroom_client::ChatroomClientEvent::ConnectedAt { generation: 0 },
+    );
+    gateway.handle_client_event_for_test(super::chatroom_client::ChatroomClientEvent::EventAt {
+        generation: 0,
+        event: ChatroomEvent::LocalStatus {
+            room_id: None,
+            code: "not_found".into(),
+            message: "聊天室不存在".into(),
+        },
+    });
+    let statuses = (0..3)
+        .filter_map(|_| {
+            subscription
+                .receiver
+                .recv_timeout(Duration::from_millis(50))
+                .ok()
+        })
+        .collect::<Vec<_>>();
+    assert!(statuses
+        .iter()
+        .any(|event| event["roomId"] == "stale-room" && event["code"] == "room_not_found"));
+    assert_eq!(gateway.room_cursor_for_test("stale-room"), None);
+}
+
+#[test]
+fn given_room_validation_waits_on_network_when_ws_error_arrives_then_event_loop_remains_responsive()
+{
+    let transport = Arc::new(FakeTransport::default());
+    transport.set_room_check_status("stale-room", 404);
+    let (gateway, _, _, released) = recording_gateway_with_transport(transport.clone());
+    gateway.set_room_cursor_for_test("stale-room", 2);
+    gateway.start();
+    gateway.handle_client_event_for_test(
+        super::chatroom_client::ChatroomClientEvent::ConnectedAt { generation: 0 },
+    );
+    let (started, release) = transport.gate_next_room_check();
+    gateway.handle_client_event_for_test(super::chatroom_client::ChatroomClientEvent::EventAt {
+        generation: 0,
+        event: ChatroomEvent::LocalStatus {
+            room_id: None,
+            code: "not_found".into(),
+            message: "聊天室不存在".into(),
+        },
+    });
+    let validation_started = started.recv_timeout(Duration::from_millis(500)).is_ok();
+    let other_event_processed = if validation_started {
+        let (done, observed) = mpsc::channel();
+        let worker_gateway = Arc::clone(&gateway);
+        let worker = thread::spawn(move || {
+            worker_gateway.handle_client_event_for_test(
+                super::chatroom_client::ChatroomClientEvent::Disconnected,
+            );
+            let _ = done.send(());
+        });
+        let result = observed.recv_timeout(Duration::from_millis(100)).is_ok();
+        let _ = release.send(());
+        worker.join().unwrap();
+        result
+    } else {
+        let _ = release.send(());
+        false
+    };
+    released.store(true, Ordering::Release);
+    gateway.shutdown();
+    assert!(validation_started, "应在后台开始验证旧房间");
+    assert!(other_event_processed, "远端请求不得阻塞实时事件处理");
+}
+
+#[test]
+fn given_second_not_found_during_first_prune_then_recheck_after_first_finishes() {
+    let transport = Arc::new(FakeTransport::default());
+    let (gateway, _, _, released) = recording_gateway_with_transport(transport.clone());
+    gateway.set_room_cursor_for_test("stale-room", 2);
+    gateway.start();
+    gateway.handle_client_event_for_test(
+        super::chatroom_client::ChatroomClientEvent::ConnectedAt { generation: 0 },
+    );
+    let (started, release) = transport.gate_next_room_check();
+    let error = || super::chatroom_client::ChatroomClientEvent::EventAt {
+        generation: 0,
+        event: ChatroomEvent::LocalStatus {
+            room_id: None,
+            code: "not_found".into(),
+            message: "聊天室不存在".into(),
+        },
+    };
+    gateway.handle_client_event_for_test(error());
+    started.recv_timeout(Duration::from_millis(500)).unwrap();
+    transport.set_room_check_status("stale-room", 404);
+    gateway.handle_client_event_for_test(error());
+    release.send(()).unwrap();
+    let until = Instant::now() + Duration::from_millis(500);
+    while gateway.room_cursor_for_test("stale-room").is_some() && Instant::now() < until {
+        thread::yield_now();
+    }
+    let removed = gateway.room_cursor_for_test("stale-room").is_none();
+    released.store(true, Ordering::Release);
+    gateway.shutdown();
+    assert!(removed, "首轮校验结束后必须补查期间收到的失效状态");
+}
+
+#[test]
+fn given_socket_already_connected_when_sse_attaches_then_initial_status_reports_remote_state() {
+    let gateway = gateway(
+        Arc::new(FakeTransport::default()),
+        Arc::new(FakeBridge::default()),
+    );
+    gateway.handle_client_event_for_test(
+        super::chatroom_client::ChatroomClientEvent::ConnectedAt { generation: 0 },
+    );
+    let subscription = gateway.subscribe_sse(vec!["valid-room".into()]).unwrap();
+    let status = subscription
+        .receiver
+        .recv_timeout(Duration::from_millis(100))
+        .unwrap();
+    assert_eq!(status["type"], "local.status");
+    assert_eq!(status["code"], "realtime_connected");
+}
+
+#[test]
+fn given_room_snapshot_from_current_socket_when_main_checks_internal_status_then_only_live_room_is_ready(
+) {
+    let gateway = gateway(
+        Arc::new(FakeTransport::default()),
+        Arc::new(FakeBridge::default()),
+    );
+    gateway.set_room_cursor_for_test("room-1", 0);
+    let status = || -> (bool, u64) {
+        let result = gateway
+            .handle_http(
+                "GET",
+                "/api/internal/chatrooms/rooms/room-1/status",
+                &HashMap::new(),
+                &[],
+            )
+            .unwrap();
+        let GatewayHttpResponse::Json { status, body } = result else {
+            panic!("应返回 JSON")
+        };
+        assert_eq!(status, 200);
+        (
+            body["ready"].as_bool().unwrap(),
+            body["epoch"].as_u64().unwrap(),
+        )
+    };
+    let snapshot = || super::chatroom_client::ChatroomClientEvent::EventAt {
+        generation: 0,
+        event: ChatroomEvent::RoomSnapshot {
+            room_id: "room-1".into(),
+            latest_seq: 0,
+            payload: json!({"room":{"roomId":"room-1"},"members":[],"agents":[]}),
+        },
+    };
+    let (ready, initial_epoch) = status();
+    assert!(!ready);
+    gateway.handle_client_event_for_test(
+        super::chatroom_client::ChatroomClientEvent::ConnectedAt { generation: 0 },
+    );
+    let (ready, connected_epoch) = status();
+    assert!(!ready, "WebSocket 建连尚不代表房间订阅就绪");
+    assert!(connected_epoch > initial_epoch);
+    gateway.handle_client_event_for_test(snapshot());
+    assert_eq!(status(), (true, connected_epoch));
+    gateway.handle_client_event_for_test(super::chatroom_client::ChatroomClientEvent::Disconnected);
+    let (ready, disconnected_epoch) = status();
+    assert!(!ready);
+    assert!(disconnected_epoch > connected_epoch);
+    gateway.handle_client_event_for_test(
+        super::chatroom_client::ChatroomClientEvent::ConnectedAt { generation: 0 },
+    );
+    let (ready, reconnected_epoch) = status();
+    assert!(!ready, "旧连接的 snapshot 不能证明新连接就绪");
+    assert!(reconnected_epoch > disconnected_epoch);
+    gateway.handle_client_event_for_test(snapshot());
+    assert_eq!(status(), (true, reconnected_epoch));
+}
+
+#[test]
+fn given_disconnect_during_sse_registration_then_new_subscriber_receives_final_disconnected_status()
+{
+    let gateway = gateway(
+        Arc::new(FakeTransport::default()),
+        Arc::new(FakeBridge::default()),
+    );
+    gateway.handle_client_event_for_test(
+        super::chatroom_client::ChatroomClientEvent::ConnectedAt { generation: 0 },
+    );
+    let (loaded, release) = gateway.gate_sse_status_snapshot_for_test();
+    let subscribing_gateway = Arc::clone(&gateway);
+    let subscribing =
+        thread::spawn(move || subscribing_gateway.subscribe_sse(vec!["valid-room".into()]));
+    loaded.recv_timeout(Duration::from_millis(500)).unwrap();
+    let disconnected_gateway = Arc::clone(&gateway);
+    let (started, started_receiver) = mpsc::channel();
+    let disconnecting = thread::spawn(move || {
+        let _ = started.send(());
+        disconnected_gateway.handle_client_event_for_test(
+            super::chatroom_client::ChatroomClientEvent::Disconnected,
+        );
+    });
+    started_receiver
+        .recv_timeout(Duration::from_millis(500))
+        .unwrap();
+    let _ = release.send(());
+    let subscription = subscribing.join().unwrap().unwrap();
+    disconnecting.join().unwrap();
+    let first = subscription
+        .receiver
+        .recv_timeout(Duration::from_millis(100))
+        .unwrap();
+    assert_eq!(first["code"], "realtime_connected");
+    let last = subscription
+        .receiver
+        .recv_timeout(Duration::from_millis(100))
+        .unwrap();
+    assert_eq!(last["code"], "realtime_disconnected");
+}
+
+#[test]
+fn given_transient_room_lookup_failure_when_reconciling_then_preserve_subscription() {
+    let transport = Arc::new(FakeTransport::default());
+    transport.set_room_check_status("valid-room", 502);
+    let gateway = gateway(transport, Arc::new(FakeBridge::default()));
+    gateway.set_room_cursor_for_test("valid-room", 4);
+    gateway.handle_client_event_for_test(super::chatroom_client::ChatroomClientEvent::Status {
+        code: "not_found".into(),
+        message: "聊天室不存在".into(),
+    });
+    assert_eq!(gateway.room_cursor_for_test("valid-room"), Some(4));
 }
 
 #[test]

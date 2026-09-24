@@ -1,8 +1,101 @@
 import { describe, expect, test } from 'bun:test'
-import { createChatRoomApi, ChatRoomApiError, ChatRoomProvisionError } from './chatroom-api'
+import { createChatRoomApi, ChatRoomApiError, ChatRoomProvisionError, provisionChatRoomAgents } from './chatroom-api'
+
+test('发送消息保留服务端调用身份及离线结果，但不泄漏设备字段', async () => {
+  const api = createChatRoomApi({ baseUrl: 'http://test', fetchImpl: async () => Response.json({ data: { message: { roomId: 'r1', messageId: 'm1', content: '你好' }, invocations: [{ invocationId: 'i1', roomId: 'r1', targetAgentId: 'a1', triggerMessageId: 'm1', traceId: 't1', depth: 0, status: 'created', deviceIdHash: 'secret-device' }], events: [{ eventType: 'agent.offline', roomId: 'r1', seq: 4, payload: { agentId: 'a2', messageId: 'm1', failureCode: 'lease_expired' } }] } }) })
+  const result = await api.sendMessage({ roomId: 'r1', content: '你好', mentionAgentIds: ['a1', 'a2'], attachmentIds: [] })
+  expect(result.invocations?.[0]).toMatchObject({ invocationId: 'i1', targetAgentId: 'a1', triggerMessageId: 'm1', status: 'created' })
+  expect(result.events?.[0]).toMatchObject({ type: 'agent.offline', payload: { failureCode: 'lease_expired' } })
+  expect(JSON.stringify(result)).not.toContain('secret-device')
+})
 
 const response = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status })
 describe('chatRoomApi', () => {
+  test('已有房间添加 Agent 离线失败时不误称聊天室刚创建', async () => {
+    const previous = globalThis.window
+    Object.defineProperty(globalThis, 'window', { configurable: true, value: { electronAPI: { chatrooms: { provisionAgent: async () => { throw new Error('agent_offline') } } } } })
+    const room = { roomId: 'existing-room', name: '已有房间', role: 'host' as const, status: 'active' as const, memberCount: 1, unreadCount: 0, connectionStatus: 'connected' as const }
+    const agent = { sourceWorkspaceId: 'workspace-grok', displayName: 'grok', channelId: 'channel-1' }
+    try {
+      const failure = await provisionChatRoomAgents(room, [agent], { operation: 'add' }).catch((error) => error as ChatRoomProvisionError)
+      expect(failure).toBeInstanceOf(ChatRoomProvisionError)
+      if (!(failure instanceof ChatRoomProvisionError)) throw new Error('预期添加 Agent 失败')
+      expect(failure.message).toContain('Agent「grok」添加失败')
+      expect(failure.message).not.toContain('聊天室已创建')
+    } finally { Object.defineProperty(globalThis, 'window', { configurable: true, value: previous }) }
+  })
+  test('已创建房间可仅配置未完成的 Agent，不再次提交房间创建', async () => {
+    const previous = globalThis.window
+    const calls: string[] = []
+    Object.defineProperty(globalThis, 'window', { configurable: true, value: { electronAPI: { chatrooms: { provisionAgent: async (input: { displayName: string }) => { calls.push(input.displayName); if (input.displayName === 'Agent B' && calls.filter((name) => name === 'Agent B').length === 1) throw new Error('暂时失败') } } } } })
+    const room = { roomId: 'room-created', name: '房间', role: 'host' as const, status: 'active' as const, memberCount: 1, unreadCount: 0, connectionStatus: 'offline' as const }
+    const agents = ['Agent A', 'Agent B'].map((displayName) => ({ sourceWorkspaceId: displayName, displayName, channelId: 'c', contextMessageCount: 50, memorySharingEnabled: false, skillSharingEnabled: false }))
+    try {
+      const error = await provisionChatRoomAgents(room, agents).catch((failure) => failure as ChatRoomProvisionError)
+      expect(error).toBeInstanceOf(ChatRoomProvisionError)
+      if (!(error instanceof ChatRoomProvisionError)) throw new Error('预期 Agent 配置失败')
+      expect(error.succeededCount).toBe(1)
+      await provisionChatRoomAgents(room, agents.slice(error.succeededCount))
+      expect(calls).toEqual(['Agent A', 'Agent B', 'Agent B'])
+    } finally { Object.defineProperty(globalThis, 'window', { configurable: true, value: previous }) }
+  })
+  test('列表保留服务端主理人 ID，供侧栏选择删除或退出', async () => {
+    const api = createChatRoomApi({ baseUrl: 'http://test', fetchImpl: async () => response({ data: [{ roomId: 'room-1', name: '协作室', hostUserId: 7 }] }) })
+    expect(await api.listRooms()).toMatchObject([{ roomId: 'room-1', hostUserId: '7' }])
+  })
+
+  test('加入成员退出房间使用 Rust 网关 POST leave 路由', async () => {
+    const calls: Array<{ url: string; method: string }> = []
+    const api = createChatRoomApi({ baseUrl: 'http://test', fetchImpl: async (url, init) => {
+      calls.push({ url: String(url), method: init?.method ?? 'GET' })
+      return response({ data: { roomId: 'room-1' } })
+    } })
+    await api.leaveRoom('room-1')
+    expect(calls).toEqual([{ url: 'http://test/api/chatrooms/v2/rooms/room-1/leave', method: 'POST' }])
+  })
+
+  test('edu-api data 信封中的房间列表和创建结果保留真实 roomId', async () => {
+    const requests: Array<{ url: string; method: string }> = []
+    const api = createChatRoomApi({ baseUrl: 'http://test', fetchImpl: async (url, init) => {
+      requests.push({ url: String(url), method: init?.method ?? 'GET' })
+      const room = { roomId: 'room-real', name: '协作室', shareCode: 'AB12', status: 'active' }
+      return response({ data: init?.method === 'POST' ? room : [room] })
+    } })
+    expect((await api.listRooms()).map((room) => room.roomId)).toEqual(['room-real'])
+    expect((await api.createRoom({ name: '协作室', shareCode: 'AB12' })).roomId).toBe('room-real')
+    expect(requests).toEqual([
+      { url: 'http://test/api/chatrooms/v2/rooms', method: 'GET' },
+      { url: 'http://test/api/chatrooms/v2/rooms', method: 'POST' },
+    ])
+  })
+
+  test('加入和房间详情解开 edu-api data 信封', async () => {
+    const room = { roomId: 'room-real', name: '协作室', status: 'active' }
+    const api = createChatRoomApi({ baseUrl: 'http://test', fetchImpl: async (_url, init) => response({ data: init?.method === 'POST'
+      ? room
+      : { room, members: [{ userId: 'user-1', displayName: '主理人', role: 'host' }], agents: [] } }) })
+    expect((await api.joinRoom({ shareCode: 'A7K2' })).roomId).toBe('room-real')
+    await expect(api.getRoom('room-real')).resolves.toMatchObject({ room: { roomId: 'room-real' }, members: [{ userId: 'user-1' }] })
+  })
+
+  test('服务端 roomAgentId 映射为可 @ 的 Agent ID', async () => {
+    const api = createChatRoomApi({ baseUrl: 'http://test', fetchImpl: async () => response({ data: { room: { roomId: 'room-1', name: '房间', hostUserId: 7 }, members: [], agents: [{ roomAgentId: 'server-agent-1', roomId: 'room-1', ownerUserId: 7, displayName: 'Grok', status: 'online' }] } }) })
+    const detail = await api.getRoom('room-1')
+    expect(detail.agents).toMatchObject([{ agentId: 'server-agent-1', displayName: 'Grok', status: 'online' }])
+  })
+
+  test('创建响应缺少 roomId 时不返回可打开的空房间', async () => {
+    const api = createChatRoomApi({ fetchImpl: async () => response({ data: { name: '无效房间' } }) })
+    await expect(api.createRoom({ name: '无效房间', shareCode: 'AB12' })).rejects.toMatchObject({ code: 'invalid_room_response' })
+  })
+
+  test('空 roomId 的详情请求在 fetch 前拒绝，避免 /rooms/ 路由', async () => {
+    let fetchCount = 0
+    const api = createChatRoomApi({ fetchImpl: async () => { fetchCount++; return response({}) } })
+    await expect(api.getRoom('')).rejects.toBeInstanceOf(ChatRoomApiError)
+    expect(fetchCount).toBe(0)
+  })
+
   test('加入请求将小写分享码转为大写并直接调用 join', async () => {
     const calls: RequestInit[] = []; const api = createChatRoomApi({ baseUrl: 'http://test', fetchImpl: async (_url, init) => { calls.push(init ?? {}); return response({ room: { roomId: 'r1', name: 'R' } }) } })
     await api.joinRoom({ shareCode: 'a9z0' }); expect(JSON.parse(String(calls[0]?.body))).toEqual({ shareCode: 'A9Z0' })

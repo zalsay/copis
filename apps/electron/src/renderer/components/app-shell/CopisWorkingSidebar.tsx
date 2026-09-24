@@ -1,5 +1,5 @@
 import * as React from 'react'
-import { useAtom, useAtomValue, useSetAtom } from 'jotai'
+import { useAtom, useAtomValue, useSetAtom, useStore } from 'jotai'
 import {
   ArrowDown,
   ArrowUp,
@@ -36,7 +36,7 @@ import { CopisLogoIcon } from '@/components/ui/copis-logo-icon'
 import { CodexLogoIcon } from '@/components/ui/codex-logo-icon'
 import { professionalModeAtom } from '@/atoms/professional-mode-atoms'
 import { toast } from 'sonner'
-import type { AgentWorkspace } from '@copis/shared'
+import type { AgentWorkspace, ChatRoomSummary, WorkingAuthState } from '@copis/shared'
 import { cn } from '@/lib/utils'
 import {
   activeTabIdAtom,
@@ -93,9 +93,12 @@ import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { CopisWorkingConnectDialog, type WorkingFolderSelection } from './CopisWorkingConnectDialog'
 import { CopisModeSwitcher } from './CopisModeSwitcher'
 import './CopisWorkingSidebar.css'
-import { chatRoomRoomsAtom } from '@/atoms/chatroom-atoms'
+import { chatRoomConnectionStatusAtom, chatRoomRemoveRoomAtom, chatRoomRoomsAtom } from '@/atoms/chatroom-atoms'
+import { chatRoomApi } from '@/lib/chatroom-api'
 import { ChatroomCreateDialog } from '@/components/chatroom/ChatroomCreateDialog'
 import { ChatroomJoinDialog } from '@/components/chatroom/ChatroomJoinDialog'
+import { ChatroomSidebarRow } from '@/components/chatroom/ChatroomSidebarRow'
+import { closeSidebarChatRoom, getChatRoomCloseAction } from '@/components/chatroom/chatroom-sidebar-close'
 import { openChatRoomTab } from '@/atoms/tab-atoms'
 
 interface CopisWorkingSidebarProps {
@@ -111,6 +114,18 @@ interface PendingDeleteSession {
 interface PendingDeleteWorkspace {
   id: string
   name: string
+}
+
+interface PendingCloseChatRoom {
+  room: ChatRoomSummary
+  userId: string
+  action: 'delete' | 'leave'
+}
+
+function getAuthenticatedUserId(auth: WorkingAuthState | null): string | undefined {
+  if (!auth?.authenticated || !auth.user) return undefined
+  const id = String(auth.user.id ?? auth.user.userId ?? '').trim()
+  return id || undefined
 }
 
 const CONVERSATION_PREVIEW_LIMIT = 5
@@ -138,6 +153,7 @@ export function CopisWorkingSidebar({ width, noTransition = false }: CopisWorkin
   const [expandedConversationWorkspaceIds, setExpandedConversationWorkspaceIds] = React.useState<Set<string>>(new Set())
   const [pinnedGroupCollapsed, setPinnedGroupCollapsed] = React.useState(false)
   const [workspaceGroupCollapsed, setWorkspaceGroupCollapsed] = React.useState(false)
+  const [chatroomGroupCollapsed, setChatroomGroupCollapsed] = React.useState(false)
   const [openMenuWorkspaceId, setOpenMenuWorkspaceId] = React.useState<string | null>(null)
   const [openMenuDirection, setOpenMenuDirection] = React.useState<'down' | 'up'>('down')
   const [pendingDeleteSession, setPendingDeleteSession] = React.useState<PendingDeleteSession | null>(null)
@@ -145,6 +161,8 @@ export function CopisWorkingSidebar({ width, noTransition = false }: CopisWorkin
   const [createWorkspaceOpen, setCreateWorkspaceOpen] = useAtom(createWorkspaceDialogOpenAtom)
   const [chatroomCreateOpen, setChatroomCreateOpen] = React.useState(false)
   const [chatroomJoinOpen, setChatroomJoinOpen] = React.useState(false)
+  const [pendingCloseChatRoom, setPendingCloseChatRoom] = React.useState<PendingCloseChatRoom | null>(null)
+  const [closingChatRoomId, setClosingChatRoomId] = React.useState<string | null>(null)
   const initialProjectsLoadedRef = React.useRef(false)
 
   const localWorkspaces = useAtomValue(agentWorkspacesAtom)
@@ -158,6 +176,8 @@ export function CopisWorkingSidebar({ width, noTransition = false }: CopisWorkin
   const streamingStates = useAtomValue(agentStreamingStatesAtom)
   const pinnedDevProjects = useAtomValue(pinnedDevProjectsAtom)
   const chatRooms = useAtomValue(chatRoomRoomsAtom)
+  const chatRoomConnectionStatuses = useAtomValue(chatRoomConnectionStatusAtom)
+  const removeChatRoom = useSetAtom(chatRoomRemoveRoomAtom)
   const setCurrentWorkspaceId = useSetAtom(currentAgentWorkspaceIdAtom)
   const [appMode, setAppMode] = useAtom(appModeAtom)
   const setProfessionalMode = useSetAtom(professionalModeAtom)
@@ -177,6 +197,30 @@ export function CopisWorkingSidebar({ width, noTransition = false }: CopisWorkin
   const [hiddenMenuItems, setHiddenMenuItems] = useAtom(hiddenSidebarMenuItemsAtom)
   const [tabs, setTabs] = useAtom(tabsAtom)
   const [activeTabId, setActiveTabId] = useAtom(activeTabIdAtom)
+  const store = useStore()
+  const currentChatRoomUserId = getAuthenticatedUserId(auth)
+  const pendingChatRoomAction = pendingCloseChatRoom?.action ?? null
+
+  React.useEffect(() => { setPendingCloseChatRoom(null) }, [currentChatRoomUserId])
+
+  const closeChatRoom = async (room: ChatRoomSummary, userId = currentChatRoomUserId): Promise<void> => {
+    if (closingChatRoomId !== null) return
+    setClosingChatRoomId(room.roomId || '__invalid__')
+    try {
+      await closeSidebarChatRoom({
+        room, currentUserId: userId, api: chatRoomApi,
+        getCurrentUserId: () => getAuthenticatedUserId(store.get(workingAuthStateAtom)),
+        isRoomCurrent: () => store.get(chatRoomRoomsAtom).some((current) => current.roomId === room.roomId && current.hostUserId === room.hostUserId),
+        getTabs: () => store.get(tabsAtom), getActiveTabId: () => store.get(activeTabIdAtom),
+        removeRoom: removeChatRoom, setTabs, setActiveTabId,
+      })
+      setPendingCloseChatRoom(null)
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : '聊天室操作失败')
+    } finally {
+      setClosingChatRoomId(null)
+    }
+  }
 
   const isTutorialActive = activeView === 'conversations' && activeTabId === TUTORIAL_TAB_ID
 
@@ -1091,22 +1135,49 @@ export function CopisWorkingSidebar({ width, noTransition = false }: CopisWorkin
               </button>
             </div>
           )}
-          <section aria-label="聊天室" className="mt-2 border-t border-border/30 pt-2">
+        </nav>
+
+        <section className="copis-working-project-section" aria-label="工作区">
+          <div className="copis-working-project-group-section">
             <div className="copis-working-project-heading copis-working-project-group-heading">
-              <span className="copis-working-project-group-toggle"><span>聊天室</span><small className="copis-working-project-group-count">{chatRooms.length}</small></span>
+              <button
+                type="button"
+                className="copis-working-project-group-toggle copis-working-project-chatroom-toggle"
+                aria-expanded={!chatroomGroupCollapsed}
+                onClick={() => setChatroomGroupCollapsed((current) => !current)}
+              >
+                <span className="whitespace-nowrap">聊天室</span>
+                <ChevronRight className={cn('copis-working-project-group-chevron', !chatroomGroupCollapsed && 'expanded')} aria-hidden="true" />
+                <small className="copis-working-project-group-count">{chatRooms.length}</small>
+              </button>
               <div className="copis-working-project-heading-actions">
                 <button type="button" className="copis-working-project-create" aria-label="加入聊天室" title="加入聊天室" onClick={() => setChatroomJoinOpen(true)}><UserPlus aria-hidden="true" /></button>
                 <button type="button" className="copis-working-project-create" aria-label="创建聊天室" title="创建聊天室" onClick={() => setChatroomCreateOpen(true)}><Plus aria-hidden="true" /></button>
               </div>
             </div>
-            <div className="copis-working-project-list">
-              {chatRooms.map((room) => <button type="button" key={room.roomId} className="copis-working-chatroom-row" onClick={() => { const next = openChatRoomTab(tabs, room); setTabs(next.tabs); setActiveTabId(next.activeTabId); setActiveView('conversations') }}><UsersRound className="copis-working-chatroom-icon" aria-hidden="true" /><span className="copis-working-chatroom-copy"><span className="copis-working-chatroom-name">{room.name}</span><small>{room.connectionStatus === 'connected' ? '已连接' : room.connectionStatus === 'reconnecting' ? '重连中' : '离线'}{room.unreadCount ? ` · ${room.unreadCount} 条未读` : ''}</small></span></button>)}
-              {chatRooms.length === 0 && <div className="copis-working-project-pinned-empty">暂无聊天室</div>}
-            </div>
-          </section>
-        </nav>
-
-        <section className="copis-working-project-section" aria-label="工作区">
+            {!chatroomGroupCollapsed && (
+              <div className="copis-working-project-list">
+                {chatRooms.map((room) => (
+                  <ChatroomSidebarRow
+                    key={room.roomId}
+                    room={room}
+                    connectionStatus={chatRoomConnectionStatuses.get(room.roomId)}
+                    action={getChatRoomCloseAction(room, currentChatRoomUserId)}
+                    busy={closingChatRoomId !== null}
+                    active={activeView === 'conversations' && activeTabId === `chatroom:${room.roomId}`}
+                    onOpen={() => { const next = openChatRoomTab(tabs, room); setTabs(next.tabs); setActiveTabId(next.activeTabId); setActiveView('conversations') }}
+                    onRequestClose={() => {
+                      const action = getChatRoomCloseAction(room, currentChatRoomUserId)
+                      if (action === 'local') { void closeChatRoom(room); return }
+                      if (!currentChatRoomUserId) { toast.error('请先登录再操作聊天室'); return }
+                      setPendingCloseChatRoom({ room, userId: currentChatRoomUserId, action })
+                    }}
+                  />
+                ))}
+                {chatRooms.length === 0 && <div className="copis-working-project-pinned-empty">暂无聊天室</div>}
+              </div>
+            )}
+          </div>
           <div className="copis-working-project-group-section">
             <div className="copis-working-project-heading copis-working-project-group-heading">
               <button
@@ -1225,6 +1296,21 @@ export function CopisWorkingSidebar({ width, noTransition = false }: CopisWorkin
       )}
       <ChatroomCreateDialog open={chatroomCreateOpen} onOpenChange={setChatroomCreateOpen} />
       <ChatroomJoinDialog open={chatroomJoinOpen} onOpenChange={setChatroomJoinOpen} />
+      <ConfirmDialog
+        open={pendingCloseChatRoom !== null}
+        onOpenChange={(open) => { if (!open && closingChatRoomId === null) setPendingCloseChatRoom(null) }}
+        title={pendingChatRoomAction === 'delete'
+          ? `永久删除聊天室「${pendingCloseChatRoom?.room.name ?? ''}」？`
+          : `退出聊天室「${pendingCloseChatRoom?.room.name ?? ''}」？`}
+        description={pendingChatRoomAction === 'delete'
+          ? '删除后所有成员将无法访问，远端附件会异步清理；主理人本地工作区文件保留。'
+          : '退出后将从你的列表移除，需要分享码才能重新加入。'}
+        confirmLabel={pendingChatRoomAction === 'delete' ? '永久删除' : '退出房间'}
+        loadingLabel="处理中..."
+        loading={closingChatRoomId !== null}
+        variant={pendingChatRoomAction === 'delete' ? 'destructive' : 'default'}
+        onConfirm={() => { if (pendingCloseChatRoom) return closeChatRoom(pendingCloseChatRoom.room, pendingCloseChatRoom.userId) }}
+      />
       <ConfirmDialog
         open={pendingDeleteWorkspace !== null}
         onOpenChange={(open) => { if (!open) setPendingDeleteWorkspace(null) }}

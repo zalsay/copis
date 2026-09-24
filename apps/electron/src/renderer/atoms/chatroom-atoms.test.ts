@@ -1,10 +1,99 @@
 import { describe, expect, test } from 'bun:test'
 import { createStore } from 'jotai/vanilla'
-import { chatRoomActiveRoomIdAtom, chatRoomApplyEventAtom, chatRoomConnectionStatusAtom, chatRoomCursorsAtom, chatRoomDeletedRoomIdsAtom, chatRoomDetailsAtom, chatRoomDraftsAtom, chatRoomHydrateMessagesAtom, chatRoomInvocationsAtom, chatRoomMessagesAtom, chatRoomPermissionRequestsAtom, chatRoomRemoveRoomAtom, chatRoomResetStateAtom, chatRoomRoomsAtom, chatRoomSendMessageAtom, chatRoomSendStatesAtom, chatRoomTransfersAtom, chatRoomUnreadCountsAtom } from './chatroom-atoms'
+import { chatRoomActiveRoomIdAtom, chatRoomApplyEventAtom, chatRoomConnectionStatusAtom, chatRoomCursorsAtom, chatRoomDeletedRoomIdsAtom, chatRoomDetailsAtom, chatRoomDraftsAtom, chatRoomHydrateMessagesAtom, chatRoomInvocationsAtom, chatRoomMessagesAtom, chatRoomPermissionRequestsAtom, chatRoomRejoinRoomAtom, chatRoomRemoveRoomAtom, chatRoomResetStateAtom, chatRoomRoomsAtom, chatRoomSendMessageAtom, chatRoomSendStatesAtom, chatRoomTransfersAtom, chatRoomUnreadCountsAtom } from './chatroom-atoms'
 import type { ChatRoomMessage } from '@copis/shared'
 
 const message = (overrides: Partial<ChatRoomMessage>): ChatRoomMessage => ({ messageId: 'm', roomId: 'r1', seq: 1, senderType: 'user', senderId: 'u1', content: '内容', mentionAgentIds: [], attachmentIds: [], clientMessageId: 'c', depth: 0, createdAt: '2026-01-01T00:00:00Z', ...overrides })
 describe('chatRoomAtoms', () => {
+  test('收到真实租约心跳后更新 Agent 在线状态，离线广播不虚构调用', () => {
+    const store = createStore()
+    store.set(chatRoomDetailsAtom, { r1: { agents: [{ agentId: 'a1', displayName: 'Grok', status: 'offline', busy: false }] } })
+    store.set(chatRoomApplyEventAtom, { type: 'agent.presence_changed', roomId: 'r1', payload: { roomAgentId: 'a1', status: 'online', online: true } })
+    expect(store.get(chatRoomDetailsAtom).r1).toMatchObject({ agents: [{ agentId: 'a1', status: 'online' }] })
+    store.set(chatRoomApplyEventAtom, { type: 'agent.offline', roomId: 'r1', payload: { agentId: 'a1', reason: 'client_release' } })
+    expect(store.get(chatRoomDetailsAtom).r1).toMatchObject({ agents: [{ agentId: 'a1', status: 'offline' }] })
+    expect(store.get(chatRoomInvocationsAtom).size).toBe(0)
+  })
+  test('唤起、接受和首段输出有独立状态，迟到的接受事件不覆盖终态或清空输出', () => {
+    const store = createStore()
+    const payload = { invocationId: 'i1', targetAgentId: 'a1', triggerMessageId: 'm1', traceId: 't1', depth: 0 }
+    store.set(chatRoomApplyEventAtom, { type: 'agent.invocation', roomId: 'r1', payload })
+    expect(store.get(chatRoomInvocationsAtom).get('r1')?.get('i1')?.status).toBe('created')
+    store.set(chatRoomApplyEventAtom, { type: 'agent.accepted', roomId: 'r1', payload })
+    expect(store.get(chatRoomInvocationsAtom).get('r1')?.get('i1')?.status).toBe('accepted')
+    store.set(chatRoomApplyEventAtom, { type: 'agent.delta', roomId: 'r1', payload: { invocationId: 'i1', delta: '答复' } })
+    store.set(chatRoomApplyEventAtom, { type: 'agent.accepted', roomId: 'r1', payload })
+    expect(store.get(chatRoomInvocationsAtom).get('r1')?.get('i1')).toMatchObject({ status: 'running', delta: '答复', targetAgentId: 'a1' })
+    store.set(chatRoomApplyEventAtom, { type: 'agent.completed', roomId: 'r1', payload })
+    store.set(chatRoomApplyEventAtom, { type: 'agent.accepted', roomId: 'r1', payload })
+    expect(store.get(chatRoomInvocationsAtom).get('r1')?.get('i1')?.status).toBe('completed')
+  })
+
+  test('服务端未创建 invocation 的 lease_expired 结果仍按消息与 Agent 显示失败', () => {
+    const store = createStore()
+    const event = { type: 'agent.offline', roomId: 'r1', seq: 5, payload: { agentId: 'a1', messageId: 'm1', failureCode: 'lease_expired', reason: 'lease_expired' } }
+    store.set(chatRoomApplyEventAtom, event)
+    store.set(chatRoomApplyEventAtom, event)
+    const results = [...store.get(chatRoomInvocationsAtom).get('r1')!.values()]
+    expect(results).toHaveLength(1)
+    expect(results[0]).toMatchObject({ targetAgentId: 'a1', triggerMessageId: 'm1', status: 'rejected', failureCode: 'lease_expired' })
+  })
+
+  test('发送带提及消息立即记录稳定的起始时间，并用响应 ID 关联后续调用', async () => {
+    const store = createStore()
+    let finish!: (value: ChatRoomMessage) => void
+    const response = new Promise<ChatRoomMessage>((resolve) => { finish = resolve })
+    const sending = store.set(chatRoomSendMessageAtom, { api: { sendMessage: () => response }, roomId: 'r1', content: '@A 你好', mentionAgentIds: ['a1'], attachmentIds: [], clientMessageId: 'c1' })
+    const startedAt = store.get(chatRoomSendStatesAtom).get('c1')?.startedAt
+    expect(typeof startedAt).toBe('number')
+    finish(message({ messageId: 'm1', clientMessageId: 'c1' }))
+    await sending
+    expect(store.get(chatRoomSendStatesAtom).get('c1')).toMatchObject({ startedAt, messageId: 'm1', status: 'sent' })
+  })
+  test('accepted 先到而发送响应晚到时，补全 Agent 身份且不把思考降级为等待', async () => {
+    const store = createStore()
+    store.set(chatRoomApplyEventAtom, { type: 'agent.accepted', roomId: 'r1', payload: { invocationId: 'i1' } })
+    await store.set(chatRoomSendMessageAtom, { api: { sendMessage: async () => ({ ...message({ messageId: 'm1' }), invocations: [{ invocationId: 'i1', roomId: 'r1', targetAgentId: 'a1', triggerMessageId: 'm1', traceId: 't1', depth: 0, status: 'created' as const }], events: [{ type: 'agent.offline', roomId: 'r1', payload: { messageId: 'm1', agentId: 'a2', failureCode: 'lease_expired' } }] }) }, roomId: 'r1', content: '@A @B', mentionAgentIds: ['a1', 'a2'], attachmentIds: [] })
+    expect(store.get(chatRoomInvocationsAtom).get('r1')?.get('i1')).toMatchObject({ status: 'accepted', targetAgentId: 'a1', triggerMessageId: 'm1' })
+    expect([...store.get(chatRoomInvocationsAtom).get('r1')!.values()].some((item) => item.targetAgentId === 'a2' && item.status === 'rejected')).toBe(true)
+  })
+  test('真实 Agent 回复已落库，即使 completed 帧丢失也结束思考状态', () => {
+    const store = createStore()
+    store.set(chatRoomApplyEventAtom, { type: 'agent.accepted', roomId: 'r1', payload: { invocationId: 'i1', targetAgentId: 'a1', triggerMessageId: 'm1', traceId: 't1' } })
+    store.set(chatRoomApplyEventAtom, { type: 'message.created', roomId: 'r1', seq: 2, payload: { messageId: 'reply', senderType: 'agent', senderAgentId: 'a1', content: '答复', parentMessageId: 'm1', traceId: 't1' } })
+    expect(store.get(chatRoomInvocationsAtom).get('r1')?.get('i1')?.status).toBe('completed')
+  })
+
+  test('切换账号后迟到的发送响应不得重建旧账号的动画或调用结果', async () => {
+    const store = createStore()
+    let finish!: (value: ReturnType<typeof message>) => void
+    const response = new Promise<ReturnType<typeof message>>((resolve) => { finish = resolve })
+    const pending = store.set(chatRoomSendMessageAtom, { api: { sendMessage: () => response }, roomId: 'r1', content: '@A', mentionAgentIds: ['a1'], attachmentIds: [], clientMessageId: 'old-send' })
+    store.set(chatRoomResetStateAtom)
+    finish({ ...message({}), invocations: [{ invocationId: 'i1', roomId: 'r1', targetAgentId: 'a1', triggerMessageId: 'm1', traceId: 't1', depth: 0, status: 'created' }] } as ReturnType<typeof message>)
+    await pending
+    expect(store.get(chatRoomSendStatesAtom).size).toBe(0)
+    expect(store.get(chatRoomInvocationsAtom).size).toBe(0)
+  })
+  test('网关确认某房间已不可访问时，仅移除该房间并保留其他订阅房间', () => {
+    const store = createStore()
+    const room = (roomId: string) => ({ roomId, name: roomId, role: 'member' as const, status: 'active' as const, memberCount: 1, unreadCount: 0, connectionStatus: 'connected' as const })
+    store.set(chatRoomRoomsAtom, [room('valid-room'), room('stale-room')])
+    store.set(chatRoomApplyEventAtom, { type: 'local.status', roomId: 'stale-room', code: 'room_not_found', payload: null })
+    expect(store.get(chatRoomRoomsAtom).map((item) => item.roomId)).toEqual(['valid-room'])
+    expect(store.get(chatRoomDeletedRoomIdsAtom).has('stale-room')).toBe(true)
+  })
+  test('用户重新加入刚退出的同一个房间后可继续接收消息和详情', () => {
+    const store = createStore()
+    const room = { roomId: 'r1', name: '重新加入', role: 'member' as const, status: 'active' as const, memberCount: 1, unreadCount: 0, connectionStatus: 'offline' as const }
+    store.set(chatRoomRoomsAtom, [room])
+    store.set(chatRoomRemoveRoomAtom, 'r1')
+    store.set(chatRoomRejoinRoomAtom, room)
+    store.set(chatRoomApplyEventAtom, { type: 'message.created', roomId: 'r1', seq: 1, payload: { messageId: 'new-message', text: '欢迎回来' } })
+    expect(store.get(chatRoomDeletedRoomIdsAtom).has('r1')).toBe(false)
+    expect(store.get(chatRoomMessagesAtom).get('r1')?.[0]?.content).toBe('欢迎回来')
+    expect(store.get(chatRoomRoomsAtom)).toEqual([room])
+  })
   test('同一 roomId 的消息与未读互不污染', () => { const store = createStore(); store.set(chatRoomActiveRoomIdAtom, 'r2'); store.set(chatRoomApplyEventAtom, { type: 'message.created', roomId: 'r1', seq: 1, payload: { messageId: 'm1' } }); store.set(chatRoomApplyEventAtom, { type: 'message.created', roomId: 'r2', seq: 1, payload: { messageId: 'm2' } }); expect(store.get(chatRoomMessagesAtom).get('r1')).toHaveLength(1); expect(store.get(chatRoomMessagesAtom).get('r2')).toHaveLength(1); expect(store.get(chatRoomUnreadCountsAtom).get('r1')).toBe(1); expect(store.get(chatRoomUnreadCountsAtom).get('r2')).toBeUndefined() })
   test('历史晚于 SSE 到达时合并且按 messageId/seq 去重，不覆盖实时消息', () => { const store = createStore(); store.set(chatRoomActiveRoomIdAtom, 'other'); store.set(chatRoomApplyEventAtom, { type: 'message.created', roomId: 'r1', seq: 2, payload: { messageId: 'm2', sender: { type: 'agent', id: 'a1' }, text: '实时较新', createdAt: '2026-01-01T00:00:02Z' } }); store.set(chatRoomHydrateMessagesAtom, { roomId: 'r1', cursor: 2, messages: [message({ messageId: 'm1', seq: 1, content: '历史' }), message({ messageId: 'm2', seq: 2, content: '历史旧值', senderType: 'agent', senderId: 'a1' })] }); const messages = store.get(chatRoomMessagesAtom).get('r1')!; expect(messages.map((item) => item.messageId)).toEqual(['m1', 'm2']); expect(messages[1]?.content).toBe('实时较新'); expect(store.get(chatRoomUnreadCountsAtom).get('r1')).toBe(1); expect(store.get(chatRoomCursorsAtom).get('r1')).toBe(2) })
   test('SSE 晚于历史到达时仍只保留一条，并且重复事件不增加未读', () => { const store = createStore(); store.set(chatRoomActiveRoomIdAtom, 'other'); store.set(chatRoomHydrateMessagesAtom, { roomId: 'r1', messages: [message({ messageId: 'm1', seq: 1 })], cursor: 1 }); const event = { type: 'message.created' as const, roomId: 'r1', seq: 1, payload: { messageId: 'm1', text: '同一条' } }; store.set(chatRoomApplyEventAtom, event); store.set(chatRoomApplyEventAtom, event); expect(store.get(chatRoomMessagesAtom).get('r1')).toHaveLength(1); expect(store.get(chatRoomUnreadCountsAtom).get('r1')).toBeUndefined() })

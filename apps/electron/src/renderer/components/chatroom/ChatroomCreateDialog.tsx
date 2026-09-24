@@ -2,14 +2,53 @@ import * as React from 'react'
 import { useAtom, useAtomValue, useSetAtom } from 'jotai'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
-import { chatRoomApi, ChatRoomProvisionError } from '@/lib/chatroom-api'
+import { chatRoomApi, ChatRoomProvisionError, provisionChatRoomAgents } from '@/lib/chatroom-api'
+import type { ChatRoomSummary } from '@copis/shared'
 import { openChatRoomTab, tabsAtom, activeTabIdAtom } from '@/atoms/tab-atoms'
 import { agentChannelIdAtom, agentModelIdAtom, agentWorkspacesAtom } from '@/atoms/agent-atoms'
 import { chatRoomRoomsAtom } from '@/atoms/chatroom-atoms'
 
 export function ChatroomCreateDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }): React.ReactElement {
-  const [name, setName] = React.useState(''); const [code, setCode] = React.useState(''); const [error, setError] = React.useState(''); const [createdRoomId, setCreatedRoomId] = React.useState<string | null>(null); const [selected, setSelected] = React.useState<string[]>([]); const [sharing, setSharing] = React.useState<Record<string, { memory: boolean; skills: boolean }>>({}); const [progress, setProgress] = React.useState(0); const [provisionTotal, setProvisionTotal] = React.useState(0); const workspaces = useAtomValue(agentWorkspacesAtom); const channelId = useAtomValue(agentChannelIdAtom); const modelId = useAtomValue(agentModelIdAtom); const [tabs, setTabs] = useAtom(tabsAtom); const [, setActive] = useAtom(activeTabIdAtom); const setRooms = useSetAtom(chatRoomRoomsAtom)
-  React.useEffect(() => { if (!open) { setCreatedRoomId(null); setError(''); setProgress(0); setProvisionTotal(0) } }, [open])
-  const submit = async (event: React.FormEvent): Promise<void> => { event.preventDefault(); setError(''); if (createdRoomId || !name.trim() || !/^[A-Z0-9]{4}$/.test(code.trim().toUpperCase())) { if (!createdRoomId) setError('请填写名称和4位分享码'); return } setProgress(0); setProvisionTotal(0); try { const room = await chatRoomApi.createRoom({ name: name.trim(), shareCode: code.trim(), }, selected.map((id) => ({ sourceWorkspaceId: id, displayName: workspaces.find((w) => w.id === id)?.name ?? 'Agent', channelId: channelId ?? '', ...(modelId ? { modelId } : {}), contextMessageCount: 50, memorySharingEnabled: sharing[id]?.memory ?? false, skillSharingEnabled: sharing[id]?.skills ?? false })), { onProvisionProgress: ({ completed, total }) => { setProgress(completed); setProvisionTotal(total) } }); setRooms((current) => [...current.filter((item) => item.roomId !== room.roomId), room]); const next = openChatRoomTab(tabs, room); setTabs(next.tabs); setActive(next.activeTabId); onOpenChange(false); setName(''); setCode(''); setSelected([]); setProgress(0); setProvisionTotal(0) } catch (e) { if (e instanceof ChatRoomProvisionError) { setProgress(e.succeededCount); setProvisionTotal(e.totalCount); setRooms((current) => [...current.filter((item) => item.roomId !== e.room.roomId), e.room]); const next = openChatRoomTab(tabs, e.room); setTabs(next.tabs); setActive(next.activeTabId); setCreatedRoomId(e.room.roomId); setError(e.message) } else setError(e instanceof Error ? e.message : '创建聊天室失败') } }
-  return <Dialog open={open} onOpenChange={onOpenChange}><DialogContent><DialogHeader><DialogTitle>创建聊天室</DialogTitle><DialogDescription>创建后可邀请成员加入，并选择最多3个本地 Agent</DialogDescription></DialogHeader><form onSubmit={(e) => void submit(e)} className="space-y-3"><input aria-label="聊天室名称" value={name} onChange={(e) => setName(e.target.value)} placeholder="例如：产品讨论" className="w-full rounded-lg bg-muted px-3 py-2 outline-none" /><input aria-label="分享码" maxLength={4} value={code} onChange={(e) => setCode(e.target.value.toUpperCase())} placeholder="4位字母或数字" className="w-full rounded-lg bg-muted px-3 py-2 uppercase tracking-widest outline-none" /><div className="space-y-1"><div className="text-xs text-muted-foreground">选择 Agent（{selected.length}/3）</div>{workspaces.map((workspace) => { const options = sharing[workspace.id] ?? { memory: false, skills: false }; return <div key={workspace.id} className="rounded-lg px-2 py-1.5 hover:bg-muted"><label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={selected.includes(workspace.id)} disabled={!selected.includes(workspace.id) && selected.length >= 3} onChange={() => setSelected((current) => current.includes(workspace.id) ? current.filter((id) => id !== workspace.id) : [...current, workspace.id])} />{workspace.name}</label>{selected.includes(workspace.id) && <div className="ml-6 mt-1 flex gap-3 text-[10px] text-muted-foreground"><label><input type="checkbox" checked={options.memory} onChange={(e) => setSharing((current) => ({ ...current, [workspace.id]: { ...options, memory: e.target.checked } }))} /> 共享记忆</label><label><input type="checkbox" checked={options.skills} onChange={(e) => setSharing((current) => ({ ...current, [workspace.id]: { ...options, skills: e.target.checked } }))} /> 共享 Skill</label></div>}</div> })}</div>{provisionTotal > 0 && <div role="status" className="text-xs text-muted-foreground">Agent 配置 {progress}/{provisionTotal}</div>}{error && <p role="alert" className="text-xs text-destructive">{error}</p>}<DialogFooter><Button type="button" variant="ghost" onClick={() => onOpenChange(false)}>取消</Button><Button type="submit" disabled={createdRoomId !== null}>创建</Button></DialogFooter></form></DialogContent></Dialog>
+  const [name, setName] = React.useState('')
+  const [code, setCode] = React.useState('')
+  const [error, setError] = React.useState('')
+  const [createdRoom, setCreatedRoom] = React.useState<ChatRoomSummary | null>(null)
+  const createdRoomId = createdRoom?.roomId ?? null
+  const [busy, setBusy] = React.useState(false)
+  const [selected, setSelected] = React.useState<string[]>([])
+  const [sharing, setSharing] = React.useState<Record<string, { memory: boolean; skills: boolean }>>({})
+  const [progress, setProgress] = React.useState(0)
+  const [provisionTotal, setProvisionTotal] = React.useState(0)
+  const workspaces = useAtomValue(agentWorkspacesAtom)
+  const channelId = useAtomValue(agentChannelIdAtom)
+  const modelId = useAtomValue(agentModelIdAtom)
+  const [tabs, setTabs] = useAtom(tabsAtom)
+  const [, setActive] = useAtom(activeTabIdAtom)
+  const setRooms = useSetAtom(chatRoomRoomsAtom)
+  React.useEffect(() => { if (!open) { setCreatedRoom(null); setError(''); setProgress(0); setProvisionTotal(0) } }, [open])
+  const submit = async (event: React.FormEvent): Promise<void> => {
+    event.preventDefault()
+    if (busy) return
+    setError('')
+    if (!createdRoom && (!name.trim() || !/^[A-Z0-9]{4}$/.test(code.trim().toUpperCase()))) { setError('请填写名称和4位分享码'); return }
+    if (selected.length > 0 && !channelId) { setError('请先配置 Agent 渠道'); return }
+    const agents = selected.map((id) => ({ sourceWorkspaceId: id, displayName: workspaces.find((w) => w.id === id)?.name ?? 'Agent', channelId: channelId ?? '', ...(modelId ? { modelId } : {}), contextMessageCount: 50, memorySharingEnabled: sharing[id]?.memory ?? false, skillSharingEnabled: sharing[id]?.skills ?? false }))
+    const completedBeforeRetry = createdRoom ? progress : 0
+    setBusy(true)
+    try {
+      const room = createdRoom ?? await chatRoomApi.createRoom({ name: name.trim(), shareCode: code.trim() }, agents, { onProvisionProgress: ({ completed, total }) => { setProgress(completed); setProvisionTotal(total) } })
+      if (createdRoom) await provisionChatRoomAgents(room, agents.slice(completedBeforeRetry), { onProvisionProgress: ({ completed }) => setProgress(completedBeforeRetry + completed) })
+      setRooms((current) => [...current.filter((item) => item.roomId !== room.roomId), room])
+      const next = openChatRoomTab(tabs, room); setTabs(next.tabs); setActive(next.activeTabId)
+      onOpenChange(false); setName(''); setCode(''); setSelected([]); setProgress(0); setProvisionTotal(0)
+    } catch (e) {
+      if (e instanceof ChatRoomProvisionError) {
+        setProgress(completedBeforeRetry + e.succeededCount); setProvisionTotal(agents.length)
+        setRooms((current) => [...current.filter((item) => item.roomId !== e.room.roomId), e.room])
+        const next = openChatRoomTab(tabs, e.room); setTabs(next.tabs); setActive(next.activeTabId)
+        setCreatedRoom(e.room); setError(e.message)
+      } else setError(e instanceof Error ? e.message : '创建聊天室失败')
+    } finally { setBusy(false) }
+  }
+  return <Dialog open={open} onOpenChange={onOpenChange}><DialogContent><DialogHeader><DialogTitle>创建聊天室</DialogTitle><DialogDescription>创建后可邀请成员加入，并选择最多3个本地 Agent</DialogDescription></DialogHeader><form onSubmit={(e) => void submit(e)} className="space-y-3"><input aria-label="聊天室名称" value={name} onChange={(e) => setName(e.target.value)} placeholder="例如：产品讨论" className="w-full rounded-lg bg-muted px-3 py-2 outline-none" /><input aria-label="分享码" maxLength={4} value={code} onChange={(e) => setCode(e.target.value.toUpperCase())} placeholder="4位字母或数字" className="w-full rounded-lg bg-muted px-3 py-2 uppercase tracking-widest outline-none" /><div className="space-y-1"><div className="text-xs text-muted-foreground">选择 Agent（{selected.length}/3）</div>{workspaces.map((workspace) => { const options = sharing[workspace.id] ?? { memory: false, skills: false }; return <div key={workspace.id} className="rounded-lg px-2 py-1.5 hover:bg-muted"><label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={selected.includes(workspace.id)} disabled={createdRoomId !== null || (!selected.includes(workspace.id) && selected.length >= 3)} onChange={() => setSelected((current) => current.includes(workspace.id) ? current.filter((id) => id !== workspace.id) : [...current, workspace.id])} />{workspace.name}</label>{selected.includes(workspace.id) && <div className="ml-6 mt-1 flex gap-3 text-[10px] text-muted-foreground"><label><input type="checkbox" checked={options.memory} onChange={(e) => setSharing((current) => ({ ...current, [workspace.id]: { ...options, memory: e.target.checked } }))} /> 共享记忆</label><label><input type="checkbox" checked={options.skills} onChange={(e) => setSharing((current) => ({ ...current, [workspace.id]: { ...options, skills: e.target.checked } }))} /> 共享 Skill</label></div>}</div> })}</div>{provisionTotal > 0 && <div role="status" className="text-xs text-muted-foreground">Agent 配置 {progress}/{provisionTotal}</div>}{error && <p role="alert" className="text-xs text-destructive">{error}</p>}<DialogFooter><Button type="button" variant="ghost" onClick={() => onOpenChange(false)}>取消</Button><Button type="submit" disabled={busy || (createdRoomId !== null && progress >= selected.length)}>{createdRoomId ? '继续配置' : '创建'}</Button></DialogFooter></form></DialogContent></Dialog>
 }

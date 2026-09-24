@@ -281,6 +281,17 @@
   margin-left: auto;
 }
 
+.copis-working-project-chatroom-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  white-space: nowrap;
+}
+
+.copis-working-project-chatroom-toggle .copis-working-project-group-count {
+  margin-left: auto;
+}
+
 .copis-working-project-pinned-toggle {
   display: flex;
   align-items: center;
@@ -593,6 +604,100 @@
   color: hsl(var(--foreground));
   text-align: left;
   cursor: pointer;
+}
+
+.copis-working-chatroom-entry {
+  position: relative;
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  border-radius: 7px;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+.copis-working-chatroom-entry:hover,
+.copis-working-chatroom-entry:focus-within {
+  background: hsl(var(--foreground) / 0.07);
+}
+
+.copis-working-chatroom-entry.active {
+  background: var(--ui-primary-background);
+  color: var(--ui-primary);
+}
+
+.copis-working-chatroom-entry .copis-working-chatroom-row {
+  flex: 1;
+  width: auto;
+  border-radius: 7px;
+  background: transparent;
+  padding-right: 4px;
+}
+
+.copis-working-chatroom-entry .copis-working-chatroom-row:hover,
+.copis-working-chatroom-entry .copis-working-chatroom-row:focus-visible,
+.copis-working-chatroom-entry:hover .copis-working-chatroom-row,
+.copis-working-chatroom-entry:focus-within .copis-working-chatroom-row {
+  background: transparent;
+  outline: 0;
+}
+
+.copis-working-chatroom-entry.active .copis-working-chatroom-row {
+  color: var(--ui-primary);
+}
+
+.copis-working-chatroom-entry.active .copis-working-chatroom-name {
+  font-weight: 600;
+}
+
+.copis-working-chatroom-close {
+  display: grid;
+  place-items: center;
+  flex: 0 0 22px;
+  width: 22px;
+  height: 22px;
+  margin-right: 6px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: hsl(var(--muted-foreground));
+  opacity: 0;
+  pointer-events: none;
+  cursor: pointer;
+  z-index: 1;
+  transition: opacity 0.15s ease, background-color 0.15s ease, color 0.15s ease;
+}
+
+.copis-working-chatroom-close svg {
+  width: 14px;
+  height: 14px;
+  color: inherit;
+}
+
+.copis-working-chatroom-entry:hover .copis-working-chatroom-close,
+.copis-working-chatroom-entry:focus-within .copis-working-chatroom-close,
+.copis-working-chatroom-close:focus-visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.copis-working-chatroom-close:hover:not(:disabled),
+.copis-working-chatroom-close:focus-visible {
+  background: hsl(var(--destructive) / 0.12);
+  color: hsl(var(--destructive));
+  outline: 0;
+}
+
+.copis-working-chatroom-close:disabled {
+  cursor: wait;
+  opacity: 0.35;
+}
+
+@media (hover: none) {
+  .copis-working-chatroom-close {
+    opacity: 1;
+    pointer-events: auto;
+  }
 }
 
 .copis-working-project-pinned-row:hover,

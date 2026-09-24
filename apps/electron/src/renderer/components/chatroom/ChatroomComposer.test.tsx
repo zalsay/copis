@@ -183,4 +183,32 @@ describe('聊天室输入行为契约', () => {
     chatRoomApi.sendMessage = originalSendMessage
     await act(async () => { root.unmount() })
   })
+
+  test('Composer 采用与 Agent 一致的卡片布局、毛玻璃样式、CornerDownLeft 发送按钮与 AI 生成提示文案', async () => {
+    installComposerDom()
+    const store = createStore()
+    const act = (React as typeof React & { act: typeof import('react-dom/test-utils').act }).act
+    const root = createRoot(document.getElementById('root')!)
+    await act(async () => { root.render(<Provider store={store}><ChatroomComposer roomId="room-1" agents={agents} /></Provider>) })
+
+    const agentModeContainer = document.querySelector('[data-input-mode="agent"]')
+    expect(agentModeContainer).not.toBeNull()
+    expect(agentModeContainer?.className).toContain('max-w-[760px]')
+
+    const composerCard = document.querySelector('.copis-agent-composer-card')
+    expect(composerCard).not.toBeNull()
+    expect(composerCard?.className).toContain('rounded-[17px]')
+    expect(composerCard?.className).toContain('backdrop-blur-sm')
+    expect(composerCard?.className).toContain('shadow-[0_20px_60px_rgba(0,0,0,0.26)]')
+
+    expect(document.body.textContent).toContain('内容由 AI 生成，请核实重要信息')
+
+    const sendButton = document.querySelector('[aria-label="发送消息"]')
+    expect(sendButton).not.toBeNull()
+    expect(source).toContain('CornerDownLeft')
+    expect(source).toContain('inputToolbarButtonClass')
+    expect(source).toContain('inputToolbarSendButtonClass')
+
+    await act(async () => { root.unmount() })
+  })
 })

@@ -311,6 +311,18 @@ fn given_snapshot_when_parsing_then_expose_latest_seq_without_persistent_seq() {
 }
 
 #[test]
+fn given_empty_room_snapshot_from_go_omitempty_when_parsing_then_latest_seq_is_zero() {
+    // edu-api 在 nextSeq=1 时生成 latestSeq=0；Go omitempty 会省略该字段。
+    let event = parse_event(
+        br#"{"type":"room.snapshot","roomId":"room-1","payload":{"room":{"roomId":"room-1","nextSeq":1},"members":[{"userId":7}],"agents":[]}}"#,
+    )
+    .unwrap();
+    assert_eq!(event.kind(), "room.snapshot");
+    assert_eq!(event.seq(), None);
+    assert_eq!(serde_json::to_value(&event).unwrap()["latestSeq"], 0);
+}
+
+#[test]
 fn given_public_message_with_attachment_ids_when_sanitizing_then_keep_ids_and_remove_secrets() {
     let event = ChatroomEvent::MessageCreated {
         room_id: "room-1".into(),

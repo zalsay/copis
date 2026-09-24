@@ -114,10 +114,21 @@ struct MainTestGatewayTransport {
 impl GatewayTransport for MainTestGatewayTransport {
     fn request(
         &self,
-        _method: &str,
-        _path: &str,
+        method: &str,
+        path: &str,
         _body: Option<String>,
     ) -> Result<GatewayTransportResponse, String> {
+        if method == "GET" {
+            if let Some(room_id) = path
+                .strip_prefix("/api/chatrooms/v2/rooms/")
+                .filter(|id| !id.contains('/') && !id.contains('?'))
+            {
+                return Ok(GatewayTransportResponse {
+                    status: 200,
+                    body: serde_json::json!({"data":{"room":{"roomId":room_id,"status":"active"},"members":[],"agents":[]}}).to_string().into_bytes(),
+                });
+            }
+        }
         self.responses
             .lock()
             .unwrap()
@@ -529,6 +540,28 @@ fn given_internal_chatroom_invocation_without_internal_token_then_return_403() {
         target: "/api/internal/chatrooms/invocations/invocation-1/running".to_string(),
         headers: HashMap::new(),
         body: br#"{"roomId":"room-1","agentId":"agent-1","deviceId":"device-1"}"#.to_vec(),
+    };
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        super::handle_chatroom_http(&mut stream, &request, None, None);
+    });
+    let mut client = std::net::TcpStream::connect(address).unwrap();
+    let mut response = String::new();
+    client.read_to_string(&mut response).unwrap();
+    server.join().unwrap();
+    assert!(response.starts_with("HTTP/1.1 403 Forbidden"));
+    assert!(response.contains(r#""code":"internal_token_required""#));
+}
+
+#[test]
+fn given_internal_chatroom_room_status_without_token_then_return_403() {
+    let request = HttpRequest {
+        method: "GET".into(),
+        target: "/api/internal/chatrooms/rooms/room-1/status".into(),
+        headers: HashMap::new(),
+        body: Vec::new(),
     };
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap();

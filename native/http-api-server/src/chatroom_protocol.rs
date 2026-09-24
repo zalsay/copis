@@ -849,7 +849,7 @@ pub fn parse_event(bytes: &[u8]) -> Result<ChatroomEvent, ProtocolError> {
     let event = match typ {
         "room.snapshot" => ChatroomEvent::RoomSnapshot {
             room_id: room_id.ok_or_else(|| invalid("event roomId is required"))?,
-            latest_seq: latest.ok_or_else(|| invalid("snapshot latestSeq is required"))?,
+            latest_seq: latest.unwrap_or(0),
             payload,
         },
         "message.created" => persisted(

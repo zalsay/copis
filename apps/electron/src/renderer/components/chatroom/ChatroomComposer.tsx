@@ -1,9 +1,28 @@
 import * as React from 'react'
-import { Paperclip, Send } from 'lucide-react'
+import { CornerDownLeft, Paperclip, X } from 'lucide-react'
 import { useAtomValue, useSetAtom } from 'jotai'
 import type { ChatRoomAgent, ChatRoomTransferState } from '@copis/shared'
-import { chatRoomConsumeTransfersAtom, chatRoomDraftsAtom, chatRoomMentionAgentIdsAtom, chatRoomPermissionRequestsAtom, chatRoomRetrySendAtom, chatRoomSendMessageAtom, chatRoomSendStatesAtom, chatRoomSetDraftAtom, chatRoomSetMentionsAtom, chatRoomSetTransferAtom, chatRoomTransfersAtom } from '@/atoms/chatroom-atoms'
+import {
+  chatRoomConsumeTransfersAtom,
+  chatRoomDraftsAtom,
+  chatRoomMentionAgentIdsAtom,
+  chatRoomPermissionRequestsAtom,
+  chatRoomRetrySendAtom,
+  chatRoomSendMessageAtom,
+  chatRoomSendStatesAtom,
+  chatRoomSetDraftAtom,
+  chatRoomSetMentionsAtom,
+  chatRoomSetTransferAtom,
+  chatRoomTransfersAtom,
+} from '@/atoms/chatroom-atoms'
 import { chatRoomApi } from '@/lib/chatroom-api'
+import { cn } from '@/lib/utils'
+import { Button } from '@/components/ui/button'
+import {
+  inputToolbarButtonClass,
+  inputToolbarDisabledButtonClass,
+  inputToolbarSendButtonClass,
+} from '@/components/ai-elements/input-toolbar-styles'
 
 export interface ChatroomComposerProps { roomId: string; agents: ChatRoomAgent[]; archived?: boolean; connectionStatus?: string }
 
@@ -132,6 +151,7 @@ export function ChatroomComposer({ roomId, agents, archived = false, connectionS
   const readyTransfers = roomTransfers.filter((item) => item.phase === 'ready')
   const readyAttachments = readyTransfers.flatMap((item) => item.attachmentId ? [item.attachmentId] : [])
   const unavailable = archived || connectionStatus === 'offline' || connectionStatus === 'auth_expired'
+  const canSend = !unavailable && !sending && Boolean(draft.trim())
   const candidates = React.useMemo(() => filterChatRoomMentionCandidates(agents, mentionQuery?.query ?? ''), [agents, mentionQuery?.query])
   const keyboardCandidates = React.useMemo(() => getChatRoomKeyboardCandidates(agents, mentionQuery?.query ?? ''), [agents, mentionQuery?.query])
   const pendingAuthorizationAgentIds = React.useMemo(() => new Set([...permissionRequests.values()].filter((request) => request.roomId === roomId).map((request) => request.roomAgentId)), [permissionRequests, roomId])
@@ -221,40 +241,245 @@ export function ChatroomComposer({ roomId, agents, archived = false, connectionS
     setTransfer({ transferId, roomId, phase: 'waiting_authorization', progress: 0 })
     try { const result = await window.electronAPI.chatrooms.startUpload({ transferId, roomId }); setTransfer({ transferId, roomId, attachmentId: result.attachmentId, originalName: result.originalName, phase: result.phase, progress: result.phase === 'ready' ? 1 : 0, ...(result.errorCode ? { errorCode: result.errorCode } : {}) }) } catch (error) { setTransfer({ transferId, roomId, phase: 'failed', progress: 0, errorCode: error instanceof Error ? error.message : '上传失败' }) } finally { setUploading(false) }
   }
-  return <div className="border-t border-border/50 bg-background/60 p-3 space-y-2">
-    {mentions.length > 0 && <div className="flex flex-wrap gap-1.5" aria-label="已提及 Agent">
-      {mentions.map((agentId) => {
-        const agent = agents.find((item) => item.agentId === agentId)
-        if (!agent) return null
-        return <span key={agent.agentId} className="inline-flex items-center gap-1 rounded-full bg-primary/15 px-2 py-1 text-[11px] text-primary">
-          @{agent.displayName}
-          <button type="button" aria-label={`移除提及 ${agent.displayName}`} onClick={() => removeMention(agent)} className="rounded-full px-0.5 hover:bg-primary/20">×</button>
-        </span>
-      })}
-    </div>}
-    {connectionStatus === 'offline' && <div role="status" className="text-xs text-destructive">Agent 离线，消息不会排队</div>}
-    {connectionStatus === 'auth_expired' && <div role="status" className="text-xs text-destructive">登录已过期，请重新登录</div>}
-    <div className="relative flex items-end gap-2">
-      <button type="button" aria-label="添加附件" disabled={unavailable || uploading} onClick={() => void chooseAttachment()} className="rounded-lg p-2 text-muted-foreground hover:bg-muted disabled:opacity-40"><Paperclip className="size-4" /></button>
-      <textarea ref={textareaRef} aria-label="聊天室消息" role="combobox" aria-autocomplete="list" aria-controls="chatroom-agent-mentions" aria-expanded={Boolean(mentionQuery && candidates.length > 0)} value={draft} disabled={unavailable || sending} onChange={(e) => handleDraftChange(e.target.value, e.target.selectionStart)} onClick={(e) => refreshMentionQuery(e.currentTarget.value, e.currentTarget.selectionStart)} onKeyDown={(e) => {
-        if (mentionQuery && keyboardCandidates.length > 0) {
-          if (e.key === 'ArrowDown') { e.preventDefault(); setActiveMentionIndex((index) => (index + 1) % keyboardCandidates.length); return }
-          if (e.key === 'ArrowUp') { e.preventDefault(); setActiveMentionIndex((index) => (index - 1 + keyboardCandidates.length) % keyboardCandidates.length); return }
-          if (e.key === 'Escape') { e.preventDefault(); setMentionQuery(undefined); return }
-          if (e.key === 'Enter' || e.key === 'Tab') { const candidate = keyboardCandidates[activeMentionIndex] ?? keyboardCandidates[0]; if (candidate) { e.preventDefault(); selectMention(candidate) }; return }
-        }
-        if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void submit().catch(() => undefined) }
-      }} placeholder={unavailable ? '聊天室当前不可发送' : '输入 @ 选择 Agent，或直接输入消息'} className="min-h-10 max-h-32 flex-1 resize-y rounded-xl bg-muted/50 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-primary/30" />
-      {mentionQuery && candidates.length > 0 && <div id="chatroom-agent-mentions" role="listbox" aria-label="Agent 候选" className="absolute bottom-full left-10 z-20 mb-2 min-w-56 max-w-80 overflow-hidden rounded-xl bg-popover p-1 shadow-lg ring-1 ring-border/50">
-        {candidates.map((agent) => <button key={agent.agentId} type="button" role="option" aria-selected={keyboardCandidates[activeMentionIndex]?.agentId === agent.agentId} aria-disabled={agent.status === 'disabled'} disabled={agent.status === 'disabled'} onMouseDown={(e) => e.preventDefault()} onClick={() => selectMention(agent)} className={`flex w-full items-center justify-between gap-3 rounded-lg px-3 py-2 text-left text-xs ${keyboardCandidates[activeMentionIndex]?.agentId === agent.agentId ? 'bg-muted' : ''} disabled:cursor-not-allowed disabled:opacity-50`}>
-          <span className="min-w-0 truncate">@{agent.displayName}</span><span className={`shrink-0 ${formatChatRoomAgentStatus(agent, pendingAuthorizationAgentIds.has(agent.agentId)) === '离线' ? 'text-destructive' : 'text-muted-foreground'}`}>{formatChatRoomAgentStatus(agent, pendingAuthorizationAgentIds.has(agent.agentId))}</span>
-        </button>)}
-      </div>}
-      <button type="button" aria-label="发送消息" onClick={() => void submit().catch(() => undefined)} disabled={unavailable || sending || !draft.trim()} className="rounded-xl bg-primary p-2 text-primary-foreground disabled:opacity-40"><Send className="size-4" /></button>
+
+  const failedSends = [...sends.values()].filter((item) => item.roomId === roomId && item.status === 'failed')
+
+  return (
+    <div className="w-full shrink-0 px-2.5 pb-2.5 md:px-[18px] md:pb-[18px]">
+      <div className="mx-auto w-full max-w-[760px]" data-input-mode="agent">
+        {/* 发送失败错误条目 */}
+        {failedSends.map((item) => (
+          <div
+            key={item.clientMessageId}
+            role="alert"
+            className="mb-1.5 flex items-center justify-between rounded-lg bg-destructive/10 px-3 py-1.5 text-xs text-destructive"
+          >
+            <span>{item.error ?? '发送失败'}</span>
+            <button
+              type="button"
+              className="underline hover:opacity-80 transition-opacity"
+              onClick={() => void retrySend({ api: chatRoomApi, ...item }).catch(() => undefined)}
+            >
+              重试
+            </button>
+          </div>
+        ))}
+
+        {/* 核心卡片容器：对齐 Agent Composer 的圆角、毛玻璃、微边框与阴影 */}
+        <div className="copis-agent-composer-card relative rounded-[17px] border-[0.5px] border-border bg-background/70 backdrop-blur-sm shadow-[0_20px_60px_rgba(0,0,0,0.26)] transition-all duration-200 focus-within:border-foreground/20">
+          {/* 连接状态警告提示 */}
+          {connectionStatus === 'offline' && (
+            <div role="status" className="px-3.5 pt-2 text-xs text-destructive">
+              Agent 离线，消息不会排队
+            </div>
+          )}
+          {connectionStatus === 'auth_expired' && (
+            <div role="status" className="px-3.5 pt-2 text-xs text-destructive">
+              登录已过期，请重新登录
+            </div>
+          )}
+
+          {/* 已提及 Agent Chip 区域 */}
+          {mentions.length > 0 && (
+            <div className="flex flex-wrap items-center gap-1.5 px-3 pt-2.5 pb-1" aria-label="已提及 Agent">
+              {mentions.map((agentId) => {
+                const agent = agents.find((item) => item.agentId === agentId)
+                if (!agent) return null
+                return (
+                  <span
+                    key={agent.agentId}
+                    className="inline-flex items-center gap-1 rounded-full bg-primary/15 px-2.5 py-0.5 text-[11px] font-medium text-primary shadow-xs transition-colors"
+                  >
+                    @{agent.displayName}
+                    <button
+                      type="button"
+                      aria-label={`移除提及 ${agent.displayName}`}
+                      onClick={() => removeMention(agent)}
+                      className="rounded-full p-0.5 hover:bg-primary/20 text-primary/70 hover:text-primary transition-colors"
+                    >
+                      <X className="size-3" />
+                    </button>
+                  </span>
+                )
+              })}
+            </div>
+          )}
+
+          {/* 附件上传状态/已就绪 Chips 区域 */}
+          {(readyTransfers.length > 0 || roomTransfers.some((item) => item.phase !== 'ready')) && (
+            <div className="flex flex-wrap items-center gap-1.5 px-3 pt-1.5 pb-1">
+              {readyTransfers.map((item) => (
+                <span
+                  key={item.transferId}
+                  role="status"
+                  className="inline-flex items-center gap-1 rounded-full bg-emerald-500/10 border border-emerald-500/20 px-2.5 py-0.5 text-[11px] text-emerald-600 dark:text-emerald-400"
+                >
+                  <Paperclip className="size-3" />
+                  <span className="max-w-[140px] truncate">{item.originalName ?? '附件'}</span>
+                  <span>· 已就绪</span>
+                </span>
+              ))}
+              {roomTransfers
+                .filter((item) => item.phase !== 'ready')
+                .map((item) => (
+                  <span
+                    key={item.transferId}
+                    role="status"
+                    className={cn(
+                      'inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-[11px]',
+                      item.phase === 'failed'
+                        ? 'bg-destructive/10 border border-destructive/20 text-destructive'
+                        : 'bg-muted/70 text-muted-foreground'
+                    )}
+                  >
+                    <Paperclip className="size-3" />
+                    <span className="max-w-[140px] truncate">{item.originalName ?? '附件'}</span>
+                    <span>
+                      · {item.phase === 'waiting_authorization'
+                        ? '等待授权'
+                        : item.phase === 'uploading'
+                          ? `上传中 ${Math.round(item.progress * 100)}%`
+                          : item.phase === 'validating'
+                            ? '校验中'
+                            : '上传失败'}
+                    </span>
+                  </span>
+                ))}
+            </div>
+          )}
+
+          {/* 纯净通透的输入区 */}
+          <textarea
+            ref={textareaRef}
+            aria-label="聊天室消息"
+            role="combobox"
+            aria-autocomplete="list"
+            aria-controls="chatroom-agent-mentions"
+            aria-expanded={Boolean(mentionQuery && candidates.length > 0)}
+            value={draft}
+            disabled={unavailable || sending}
+            onChange={(e) => handleDraftChange(e.target.value, e.target.selectionStart)}
+            onClick={(e) => refreshMentionQuery(e.currentTarget.value, e.currentTarget.selectionStart)}
+            onKeyDown={(e) => {
+              if (mentionQuery && keyboardCandidates.length > 0) {
+                if (e.key === 'ArrowDown') {
+                  e.preventDefault()
+                  setActiveMentionIndex((index) => (index + 1) % keyboardCandidates.length)
+                  return
+                }
+                if (e.key === 'ArrowUp') {
+                  e.preventDefault()
+                  setActiveMentionIndex((index) => (index - 1 + keyboardCandidates.length) % keyboardCandidates.length)
+                  return
+                }
+                if (e.key === 'Escape') {
+                  e.preventDefault()
+                  setMentionQuery(undefined)
+                  return
+                }
+                if (e.key === 'Enter' || e.key === 'Tab') {
+                  const candidate = keyboardCandidates[activeMentionIndex] ?? keyboardCandidates[0]
+                  if (candidate) {
+                    e.preventDefault()
+                    selectMention(candidate)
+                  }
+                  return
+                }
+              }
+              if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault()
+                void submit().catch(() => undefined)
+              }
+            }}
+            placeholder={unavailable ? '聊天室当前不可发送' : '输入 @ 选择 Agent，或直接输入消息'}
+            rows={1}
+            className="w-full resize-none border-0 bg-transparent px-3.5 pt-3 pb-2 text-sm outline-none placeholder:text-muted-foreground/50 focus:ring-0 focus:outline-none min-h-[44px] max-h-36 scrollbar-none"
+          />
+
+          {/* 候选 Agent 浮动菜单 */}
+          {mentionQuery && candidates.length > 0 && (
+            <div
+              id="chatroom-agent-mentions"
+              role="listbox"
+              aria-label="Agent 候选"
+              className="absolute bottom-full left-3 z-30 mb-2 min-w-56 max-w-80 overflow-hidden rounded-xl bg-popover p-1 shadow-lg ring-1 ring-border/50"
+            >
+              {candidates.map((agent) => (
+                <button
+                  key={agent.agentId}
+                  type="button"
+                  role="option"
+                  aria-selected={keyboardCandidates[activeMentionIndex]?.agentId === agent.agentId}
+                  aria-disabled={agent.status === 'disabled'}
+                  disabled={agent.status === 'disabled'}
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => selectMention(agent)}
+                  className={cn(
+                    'flex w-full items-center justify-between gap-3 rounded-lg px-3 py-2 text-left text-xs transition-colors disabled:cursor-not-allowed disabled:opacity-50',
+                    keyboardCandidates[activeMentionIndex]?.agentId === agent.agentId ? 'bg-muted' : 'hover:bg-muted/60'
+                  )}
+                >
+                  <span className="min-w-0 truncate font-medium">@{agent.displayName}</span>
+                  <span
+                    className={cn(
+                      'shrink-0 text-[11px]',
+                      formatChatRoomAgentStatus(agent, pendingAuthorizationAgentIds.has(agent.agentId)) === '离线'
+                        ? 'text-destructive'
+                        : 'text-muted-foreground'
+                    )}
+                  >
+                    {formatChatRoomAgentStatus(agent, pendingAuthorizationAgentIds.has(agent.agentId))}
+                  </span>
+                </button>
+              ))}
+            </div>
+          )}
+
+          {/* 底部工具栏：左侧附件与发送中提示，右侧 Agent 风格发送按钮 */}
+          <div className="flex items-center justify-between px-3 pb-2 pt-1 border-t border-border/20">
+            <div className="flex items-center gap-1.5">
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className={inputToolbarButtonClass}
+                disabled={unavailable || uploading}
+                onClick={() => void chooseAttachment()}
+                aria-label="添加附件"
+                title="添加附件"
+              >
+                <Paperclip className="size-[17px]" />
+              </Button>
+              {sending && (
+                <span role="status" className="text-xs text-muted-foreground ml-1">
+                  发送中...
+                </span>
+              )}
+            </div>
+            <div className="flex items-center gap-1.5">
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                aria-label="发送消息"
+                title="发送消息"
+                className={cn(
+                  canSend ? inputToolbarSendButtonClass : inputToolbarDisabledButtonClass
+                )}
+                onClick={() => void submit().catch(() => undefined)}
+                disabled={!canSend}
+              >
+                <CornerDownLeft className="size-[20px]" />
+              </Button>
+            </div>
+          </div>
+        </div>
+
+        {/* 底部合规/提示文案，与 Agent 对话一致 */}
+        <p className="mt-1.5 text-center text-[11px] leading-tight text-muted-foreground/60 select-none">
+          内容由 AI 生成，请核实重要信息
+        </p>
+      </div>
     </div>
-    {sending && <div role="status" className="text-xs text-muted-foreground">发送中...</div>}
-    {readyTransfers.map((item) => <div key={item.transferId} role="status" className="text-xs text-emerald-600">{item.originalName ?? '附件'} · 已就绪</div>)}
-    {roomTransfers.filter((item) => item.phase !== 'ready').map((item) => <div key={item.transferId} role="status" className={`text-xs ${item.phase === 'failed' ? 'text-destructive' : 'text-muted-foreground'}`}>{item.originalName ?? '附件'} · {item.phase === 'waiting_authorization' ? '等待授权' : item.phase === 'uploading' ? `上传中 ${Math.round(item.progress * 100)}%` : item.phase === 'validating' ? '校验中' : '上传失败'}</div>)}
-    {[...sends.values()].filter((item) => item.roomId === roomId && item.status === 'failed').map((item) => <div key={item.clientMessageId} className="flex items-center justify-between text-xs text-destructive"><span>{item.error ?? '发送失败'}</span><button type="button" className="underline" onClick={() => void retrySend({ api: chatRoomApi, ...item }).catch(() => undefined)}>重试</button></div>)}
-  </div>
+  )
 }

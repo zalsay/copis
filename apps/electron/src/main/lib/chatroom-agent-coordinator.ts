@@ -49,6 +49,12 @@ export interface ChatRoomAgentCoordinatorFacade {
 type ChatRoomLease = { roomId: string; roomAgentId: string }
 type ChatRoomMainRustApi = Omit<ChatRoomRustApi, 'releaseAgentLeases'> & {
   releaseAgentLeases(input: { roomAgentIds: string[]; leases: ChatRoomLease[]; reason: 'logout' | 'gateway_disconnected' | 'app_quit' }): Promise<void>
+  getRoomHostUserId(roomId: string): Promise<string>
+  getRoomRealtimeStatus(roomId: string): Promise<{ ready: boolean; epoch: number }>
+  registerAgent(input: { roomId: string; displayName: string; deviceId: string; hostUserId: string }): Promise<string>
+  unregisterAgent(roomId: string, agentId: string): Promise<void>
+  renewAgentLease(roomId: string, agentId: string, deviceId: string): Promise<void>
+  findRegisteredAgent(input: { roomId: string; displayName: string; deviceId: string; hostUserId: string }): Promise<{ agentId: string; leaseVerified: boolean } | undefined>
 }
 export interface ChatRoomAgentEventListener { (sessionId: string, payload: AgentStreamPayload): void }
 export interface ChatRoomNextHopInput { parent: ChatRoomAgentInvocation; output: ChatRoomAgentOutput; targetAgentId: string; depth: number }
@@ -63,6 +69,7 @@ export interface ChatRoomAgentCoordinatorDependencies {
   stopAgent: AgentStopper
   stopAgentTimeoutMs?: number
   permissionTimeoutMs?: number
+  leaseRecoveryRetryMs?: number
   subscribeAgentEvents(listener: ChatRoomAgentEventListener): () => void
   createHiddenSessionStore(roomId: string, agent: ChatRoomAgentLocalConfig): ChatRoomHiddenSessionStore
   registerSessionStorageOverride(sessionId: string, storage: ChatRoomHiddenSessionStore): () => void
@@ -89,7 +96,12 @@ export class ChatRoomAgentCoordinator implements ChatRoomAgentCoordinatorFacade 
   private stoppingReason: 'logout' | 'gateway_disconnected' | 'app_quit' | undefined
   private disposed = false
   private stopping: Promise<{ stoppedSessionIds: string[]; releasedRoomAgentIds: string[] }> | undefined
+  private leaseGeneration = 0
   private readonly releasedLeaseKeys = new Set<string>()
+  private readonly provisioningRooms = new Set<string>()
+  private leaseRecoveryTimer: ReturnType<typeof setTimeout> | undefined
+  private leaseRecovery: Promise<void> | undefined
+  private recoveryEnabled = false
   private readonly permissionListeners = new Set<(request: ChatRoomPermissionRequest) => void>()
   private readonly configListeners = new Set<(room: ChatRoomLocalRoomConfig) => void>()
   constructor(private readonly deps: ChatRoomAgentCoordinatorDependencies) {}
@@ -100,12 +112,184 @@ export class ChatRoomAgentCoordinator implements ChatRoomAgentCoordinatorFacade 
     this.permissionListeners.forEach((listener) => { try { listener(request) } catch { this.deps.reportDiagnostic?.('聊天室权限通知监听器失败') } })
   }
   private emitConfig(room: ChatRoomLocalRoomConfig): void { this.configListeners.forEach((listener) => { try { listener(room) } catch { this.deps.reportDiagnostic?.('聊天室配置通知监听器失败') } }) }
-  start(): void { if (!this.unsubscribeEvents && !this.disposed) this.unsubscribeEvents = this.deps.subscribeAgentEvents((sid, payload) => this.onAgentEvent(sid, payload)) }
+  start(): void {
+    if (this.disposed || this.recoveryEnabled) return
+    this.unsubscribeEvents = this.deps.subscribeAgentEvents((sid, payload) => this.onAgentEvent(sid, payload))
+    this.recoveryEnabled = true
+    this.scheduleLeaseRecovery()
+  }
+  private scheduleLeaseRecovery(): void {
+    if (!this.recoveryEnabled || this.disposed || this.leaseRecoveryTimer || !['ready', 'disconnected'].includes(this.lifecycle)) return
+    this.leaseRecoveryTimer = setTimeout(() => {
+      this.leaseRecoveryTimer = undefined
+      void this.resumeLeases().catch(() => this.deps.reportDiagnostic?.('聊天室 Agent 租约恢复失败'))
+    }, this.deps.leaseRecoveryRetryMs ?? 1_000)
+    this.leaseRecoveryTimer.unref?.()
+  }
+  private assertAgentOnline(generation: number): void {
+    if (this.disposed || this.lifecycle !== 'ready' || this.leaseGeneration !== generation) throw new Error('agent_offline')
+  }
+  private assertProvisionMayProceed(generation: number): void {
+    if (this.disposed || this.lifecycle === 'auth_required' || this.lifecycle === 'stopping' || this.leaseGeneration !== generation) throw new Error('agent_offline')
+  }
+  private async releaseLease(roomId: string, agentId: string): Promise<boolean> {
+    try {
+      await this.deps.rustApi.releaseAgentLeases({ roomAgentIds: [agentId], leases: [{ roomId, roomAgentId: agentId }], reason: this.stoppingReason ?? 'gateway_disconnected' })
+      return true
+    } catch { this.deps.reportDiagnostic?.('聊天室 Agent 租约清理失败'); return false }
+  }
+  resumeLeases(): Promise<void> {
+    if (this.leaseRecovery) return this.leaseRecovery
+    if (this.leaseRecoveryTimer) clearTimeout(this.leaseRecoveryTimer)
+    this.leaseRecoveryTimer = undefined
+    this.leaseRecovery = this.restoreLeases().then((complete) => {
+      if (!complete) this.scheduleLeaseRecovery()
+    }, (error: unknown) => {
+      this.scheduleLeaseRecovery()
+      throw error
+    }).finally(() => { this.leaseRecovery = undefined })
+    return this.leaseRecovery
+  }
+  private async restoreLeases(): Promise<boolean> {
+    const generation = this.leaseGeneration
+    const hostUserId = await this.deps.getCurrentUserId()
+    const deviceId = this.deps.getDeviceId()
+    if (!hostUserId || this.disposed || !['ready', 'disconnected'].includes(this.lifecycle) || generation !== this.leaseGeneration) return false
+    let rooms: ChatRoomLocalRoomConfig[]
+    try { rooms = this.deps.store.listRestorableRooms() }
+    catch { this.deps.reportDiagnostic?.('聊天室本地配置读取失败，无法恢复 Agent 租约'); return false }
+    let complete = true
+    for (const room of rooms) {
+      if (room.hostUserId !== hostUserId || room.deviceId !== deviceId) continue
+      let realtime: { ready: boolean; epoch: number }
+      try {
+        if (await this.deps.rustApi.getRoomHostUserId(room.roomId) !== hostUserId) continue
+        realtime = await this.deps.rustApi.getRoomRealtimeStatus(room.roomId)
+        if (!realtime.ready) { complete = false; continue }
+        if (await this.deps.getCurrentUserId() !== hostUserId || this.deps.getDeviceId() !== deviceId) return false
+        this.assertProvisionMayProceed(generation)
+        if (this.lifecycle === 'disconnected') {
+          this.lifecycle = 'ready'
+          this.stoppingReason = undefined
+          this.releasedLeaseKeys.clear()
+        }
+      } catch { complete = false; this.deps.reportDiagnostic?.('聊天室 Agent 租约恢复失败'); continue }
+      const sameRealtime = async (): Promise<boolean> => {
+        if (this.leaseGeneration !== generation || this.lifecycle !== 'ready') return false
+        const current = await this.deps.rustApi.getRoomRealtimeStatus(room.roomId)
+        return current.ready && current.epoch === realtime.epoch && this.leaseGeneration === generation && this.lifecycle === 'ready'
+      }
+      for (const agent of room.agents) {
+        if (agent.archivedAt !== undefined) continue
+        let renewalAttempted = false
+        try {
+          this.assertAgentOnline(generation)
+          if (await this.deps.getCurrentUserId() !== hostUserId || this.deps.getDeviceId() !== deviceId) return false
+          this.assertAgentOnline(generation)
+          if (!await sameRealtime()) return false
+          this.assertAgentOnline(generation)
+          renewalAttempted = true
+          await this.deps.rustApi.renewAgentLease(room.roomId, agent.roomAgentId, deviceId)
+          if (!await sameRealtime() || await this.deps.getCurrentUserId() !== hostUserId || this.deps.getDeviceId() !== deviceId || this.leaseGeneration !== generation || this.lifecycle !== 'ready') {
+            await this.releaseLease(room.roomId, agent.roomAgentId)
+            return false
+          }
+        } catch {
+          if (!await sameRealtime().catch(() => false)) {
+            if (renewalAttempted) await this.releaseLease(room.roomId, agent.roomAgentId)
+            return false
+          }
+          complete = false
+          this.deps.reportDiagnostic?.('聊天室 Agent 租约恢复失败')
+        }
+      }
+    }
+    return complete
+  }
   async provisionAgent(input: ProvisionChatRoomAgentInput): Promise<ChatRoomAgentLocalConfig> {
-    const identity = await this.requireHostIdentity(input.roomId)
-    const room = this.deps.store.provisionAgent(identity, input)
-    this.emitConfig(room)
-    return this.requireAgent(room, room.agents.at(-1)!.roomAgentId)
+    if (this.provisioningRooms.has(input.roomId)) throw new Error('agent_busy')
+    this.provisioningRooms.add(input.roomId)
+    try {
+      const generation = this.leaseGeneration
+      const hostUserId = await this.deps.getCurrentUserId()
+      this.assertProvisionMayProceed(generation)
+      const deviceId = this.deps.getDeviceId()
+      const localRoom = this.deps.store.read(input.roomId)
+      if (!hostUserId || (localRoom && (localRoom.hostUserId !== hostUserId || localRoom.deviceId !== deviceId))) throw new Error('not_room_host')
+      if (localRoom?.agents.some((agent) => agent.archivedAt === undefined && agent.displayName.trim().toLowerCase() === input.displayName.trim().toLowerCase())) throw new Error('display_name_conflict')
+      if (localRoom && localRoom.agents.filter((agent) => agent.archivedAt === undefined).length >= 3) throw new Error('agent_limit_reached')
+      if (await this.deps.rustApi.getRoomHostUserId(input.roomId) !== hostUserId) throw new Error('not_room_host')
+      const realtime = await this.deps.rustApi.getRoomRealtimeStatus(input.roomId)
+      if (!realtime.ready) throw new Error('agent_offline')
+      this.assertProvisionMayProceed(generation)
+      if (await this.deps.getCurrentUserId() !== hostUserId || this.deps.getDeviceId() !== deviceId) throw new Error('not_room_host')
+      this.assertProvisionMayProceed(generation)
+      if (this.lifecycle === 'disconnected') {
+        this.lifecycle = 'ready'
+        this.stoppingReason = undefined
+        this.releasedLeaseKeys.clear()
+        await this.resumeLeases()
+      }
+      const assertSameRealtime = async (): Promise<void> => {
+        this.assertAgentOnline(generation)
+        const current = await this.deps.rustApi.getRoomRealtimeStatus(input.roomId)
+        this.assertAgentOnline(generation)
+        if (!current.ready || current.epoch !== realtime.epoch) throw new Error('agent_offline')
+      }
+      this.assertAgentOnline(generation)
+      if (await this.deps.getCurrentUserId() !== hostUserId || this.deps.getDeviceId() !== deviceId) throw new Error('not_room_host')
+      this.assertAgentOnline(generation)
+      await assertSameRealtime()
+      const registration = { roomId: input.roomId, displayName: input.displayName, deviceId, hostUserId }
+      let agentId: string
+      let leaseConfirmed = false
+      try { agentId = await this.deps.rustApi.registerAgent(registration) }
+      catch {
+        const uncertain = 'Agent 注册结果不确定，请检查房间 Agent 列表，勿重复添加同名 Agent'
+        let recovered: Awaited<ReturnType<ChatRoomMainRustApi['findRegisteredAgent']>>
+        try { recovered = await this.deps.rustApi.findRegisteredAgent(registration) }
+        catch { throw new Error(uncertain) }
+        if (!recovered) throw new Error(uncertain)
+        if (!recovered.leaseVerified) {
+          if (!await this.releaseLease(input.roomId, recovered.agentId)) throw new Error(uncertain)
+          try { await this.deps.rustApi.unregisterAgent(input.roomId, recovered.agentId) }
+          catch { throw new Error('Agent 租约已释放，但远端清理未完成，请勿重复添加同名 Agent') }
+          throw new Error('Agent 注册确认失败，已撤销远端 Agent，请重新尝试')
+        }
+        agentId = recovered.agentId
+        leaseConfirmed = true
+      }
+      let saved = false
+      try {
+        await assertSameRealtime()
+        this.assertAgentOnline(generation)
+        if (await this.deps.getCurrentUserId() !== hostUserId || this.deps.getDeviceId() !== deviceId) throw new Error('not_room_host')
+        this.assertAgentOnline(generation)
+        const room = this.deps.store.provisionAgent({ hostUserId, deviceId }, input, agentId)
+        saved = true
+        if (!leaseConfirmed) await this.deps.rustApi.renewAgentLease(input.roomId, agentId, deviceId)
+        this.assertAgentOnline(generation)
+        if (await this.deps.getCurrentUserId() !== hostUserId || this.deps.getDeviceId() !== deviceId) throw new Error('not_room_host')
+        this.assertAgentOnline(generation)
+        await assertSameRealtime()
+        this.emitConfig(room)
+        return this.requireAgent(room, agentId)
+      } catch (error) {
+        const leaseCleaned = !(saved || leaseConfirmed) || await this.releaseLease(input.roomId, agentId)
+        let localCleaned = true
+        if (saved) {
+          try { this.emitConfig(this.deps.store.archiveAgent({ roomId: input.roomId, roomAgentId: agentId })) }
+          catch { localCleaned = false }
+        }
+        let remoteCleaned = true
+        try { await this.deps.rustApi.unregisterAgent(input.roomId, agentId) }
+        catch { remoteCleaned = false }
+        if (!leaseCleaned || !localCleaned || !remoteCleaned) throw new Error('Agent 配置失败且清理未完成，请勿重复添加同名 Agent')
+        throw error
+      }
+    } finally {
+      this.provisioningRooms.delete(input.roomId)
+    }
   }
   async updateAgent(input: UpdateChatRoomAgentInput): Promise<ChatRoomAgentLocalConfig> {
     await this.requireHostIdentity(input.roomId)
@@ -216,6 +400,8 @@ export class ChatRoomAgentCoordinator implements ChatRoomAgentCoordinatorFacade 
     if (input.behavior === 'deny' && run) { run.stopRequested = true; await this.failTerminal(run, 'host_approval_denied'); void this.stopAgentBounded(run.config.sessionId) }
   }
   async stopAll(reason: 'logout' | 'gateway_disconnected' | 'app_quit'): Promise<{ stoppedSessionIds: string[]; releasedRoomAgentIds: string[] }> {
+    if (this.leaseRecoveryTimer) clearTimeout(this.leaseRecoveryTimer)
+    this.leaseRecoveryTimer = undefined
     if (this.stopping) {
       if (this.stoppingReason && STOP_REASON_PRIORITY[reason] > STOP_REASON_PRIORITY[this.stoppingReason]) {
         this.stoppingReason = reason
@@ -223,6 +409,7 @@ export class ChatRoomAgentCoordinator implements ChatRoomAgentCoordinatorFacade 
       }
       return this.stopping
     }
+    this.leaseGeneration++
     this.lifecycle = 'stopping'; this.stoppingReason = reason
     this.stopping = (async () => {
       const runs = [...this.activeRuns.values()]
@@ -236,7 +423,7 @@ export class ChatRoomAgentCoordinator implements ChatRoomAgentCoordinatorFacade 
       }))
       const allCleaned = finalized.every(Boolean)
       const leases = allCleaned
-        ? this.deps.store.list().flatMap((room) => room.agents.filter((agent) => agent.archivedAt === undefined).map((agent) => ({ roomId: room.roomId, roomAgentId: agent.roomAgentId })))
+        ? this.deps.store.listRestorableRooms().flatMap((room) => room.agents.filter((agent) => agent.archivedAt === undefined).map((agent) => ({ roomId: room.roomId, roomAgentId: agent.roomAgentId })))
         : []
       const uniqueLeases = [...new Map(leases.map((lease) => [`${lease.roomId}\0${lease.roomAgentId}`, lease])).values()]
       const pendingLeases = uniqueLeases.filter((lease) => !this.releasedLeaseKeys.has(`${lease.roomId}\0${lease.roomAgentId}`))
@@ -253,15 +440,17 @@ export class ChatRoomAgentCoordinator implements ChatRoomAgentCoordinatorFacade 
           this.deps.reportDiagnostic?.('聊天室 Agent lease 释放失败')
         }
       }
-      const result = { stoppedSessionIds: runs.map((run) => run.config.sessionId), releasedRoomAgentIds }
+      return { stoppedSessionIds: runs.map((run) => run.config.sessionId), releasedRoomAgentIds }
+    })().finally(() => {
+      // 即使目录读取或终态清理失败，也不能保留 rejected Promise 并永久锁住协调器。
       const finalReason = this.stoppingReason ?? reason
       this.stopping = undefined
       this.lifecycle = finalReason === 'logout' ? 'auth_required' : finalReason === 'gateway_disconnected' ? 'disconnected' : 'stopping'
-      return result
-    })()
+      if (finalReason === 'gateway_disconnected') this.scheduleLeaseRecovery()
+    })
     return this.stopping
   }
-  async resumeAfterAuthentication(): Promise<void> { const stopping = this.stopping; if (stopping) await stopping; if (this.disposed || this.stoppingReason === 'app_quit') return; if (this.lifecycle === 'auth_required') { this.lifecycle = 'ready'; this.stoppingReason = undefined; this.releasedLeaseKeys.clear() } }
+  async resumeAfterAuthentication(): Promise<void> { const stopping = this.stopping; if (stopping) await stopping; if (this.disposed || this.stoppingReason === 'app_quit') return; if (this.lifecycle === 'auth_required') { this.lifecycle = 'ready'; this.stoppingReason = undefined; this.releasedLeaseKeys.clear() } await this.resumeLeases() }
   async dispose(): Promise<void> { if (this.disposed) return; await this.stopAll('app_quit'); this.disposed = true; this.lifecycle = 'disposed'; this.unsubscribeEvents?.(); this.unsubscribeEvents = undefined }
 
   private async execute(run: ActiveRun): Promise<void> {
