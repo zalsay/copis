@@ -562,13 +562,11 @@ fn project_shell_allows_read_only_git_status_in_cross_workspace_root() {
         "cwd": root,
     }))
     .unwrap();
-    assert_eq!(
-        store
-            .handle_shell_with_worker_token(&token, &outside_request)
-            .unwrap_err()
-            .code,
-        "read_not_allowed"
-    );
+    // 高级授权的 Shell 不再套用只读参数路径限制；目标不是仓库时由 Git 自行报错。
+    let outside_result = store
+        .handle_shell_with_worker_token(&token, &outside_request)
+        .unwrap();
+    assert_eq!(outside_result["exitCode"], 128);
 }
 
 #[test]
@@ -913,6 +911,42 @@ fn project_shell_requires_advanced_authorization_for_git_ssh_curl_and_python() {
         .unwrap();
     assert_eq!(python_result["exitCode"], 0);
     assert_eq!(python_result["output"], "authorized-python\n");
+}
+
+#[test]
+fn project_shell_with_advanced_authorization_runs_commands_outside_the_allowlist() {
+    let root = temp_dir("advanced-all-commands");
+    let write_root = root.join("writable");
+    fs::create_dir_all(&write_root).unwrap();
+    let store = AgentFilePolicyStore::new();
+    let mut query = Map::new();
+    query.insert(
+        "cwd".to_string(),
+        Value::String(root.to_string_lossy().into_owned()),
+    );
+    query.insert("useRustFileApi".to_string(), Value::Bool(true));
+    query.insert(
+        "fileAccessPolicy".to_string(),
+        json!({ "readRoots": [root], "readFiles": [], "writeRoots": [write_root], "permissionMode": "bypassPermissions", "advancedAuthorization": true }),
+    );
+    let token = store
+        .register_from_query("session-all-commands", &mut query)
+        .unwrap();
+    let request = serde_json::to_vec(&json!({
+        "sessionId": "session-all-commands",
+        "command": "echo authorized && echo all-commands",
+        "cwd": root,
+    }))
+    .unwrap();
+
+    let result = store
+        .handle_shell_with_worker_token(&token, &request)
+        .unwrap();
+    assert_eq!(result["exitCode"], 0);
+    assert!(result["output"]
+        .as_str()
+        .unwrap_or_default()
+        .contains("all-commands"));
 }
 
 #[test]

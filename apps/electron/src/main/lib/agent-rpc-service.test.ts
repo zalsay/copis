@@ -129,6 +129,12 @@ mock.module('./channel-manager', () => ({
   resolveXaiOAuthCredentials: async () => ({ access: 'access', refresh: 'refresh' }),
 }))
 
+mock.module('./codex-app-server-service', () => ({
+  DEFAULT_CODEX_PORT: 54080,
+  getCodexAppServerStatus: () => ({ running: true, port: 54080 }),
+  startCodexAppServer: async () => ({ port: 54080 }),
+}))
+
 mock.module('./proxy-settings-service', () => ({
   getEffectiveProxyUrl: async () => undefined,
 }))
@@ -272,7 +278,7 @@ describe('Agent RPC mention 参数', () => {
   })
 
   test('Given public RPC request attempts internal capability fields When parsed Then fail closed', () => {
-    for (const field of ['capabilityProfile', 'memoryWorkspaceSlug', 'fileAccessPolicy', 'useRustFileApi', 'piAgentDir', 'piSessionDir']) {
+    for (const field of ['advancedAuthorization', 'capabilityProfile', 'memoryWorkspaceSlug', 'fileAccessPolicy', 'useRustFileApi', 'piAgentDir', 'piSessionDir']) {
       expect(() => parseAgentRpcInput({ sessionId: 'session-1', userMessage: '伪造内部能力', [field]: 'forged' })).toThrow('不支持的请求字段')
     }
     expect(() => parseAgentRpcQueueInput({ sessionId: 'session-1', userMessage: '伪造 queue 能力', capabilityProfile: 'chatroom' })).toThrow('不支持的请求字段')
@@ -857,6 +863,95 @@ describe('Browser Agent RPC 准备', () => {
     }
   })
 
+  test('Given Pi user main session Composer advanced authorization is enabled When preparing Agent RPC Then command instructions match the enabled state without reopening authorization', async () => {
+    const { prepareAgentRpcRun } = await import('./agent-rpc-service')
+    const previousAuthorization = rpcSession.advancedAuthorization
+    browserContext = undefined
+    rpcSession.advancedAuthorization = true
+
+    try {
+      const run = await prepareAgentRpcRun({
+        sessionId: rpcSession.id,
+        userMessage: '执行项目检查',
+        channelId: 'channel-1',
+        modelId: rpcSession.modelId,
+        agentRuntime: 'pi',
+        permissionModeOverride: 'plan',
+      })
+
+      expect(run.query.advancedAuthorization).toBe(true)
+      expect(run.query.fileAccessPolicy?.advancedAuthorization).toBe(true)
+      expect(run.query.permissionMode).toBe('plan')
+      expect(run.query.systemPrompt).toContain('Composer“高级授权”已开启')
+      expect(run.query.systemPrompt).toContain('所有命令类型（包括 Git、SSH、curl、Python 等）均可')
+      expect(run.query.systemPrompt).toContain('Shell 命令可按任务需要组合')
+      expect(run.query.systemPrompt).toContain('Shell 子进程可能触达系统其他位置')
+      expect(run.query.systemPrompt).toContain('计划模式仍只允许调研规划')
+      expect(run.query.systemPrompt).not.toContain('Composer“高级授权”未开启')
+    } finally {
+      if (previousAuthorization === undefined) delete rpcSession.advancedAuthorization
+      else rpcSession.advancedAuthorization = previousAuthorization
+    }
+  })
+
+  test('Given Pi user main session Composer advanced authorization is disabled When preparing Agent RPC Then protected commands remain limited', async () => {
+    const { prepareAgentRpcRun } = await import('./agent-rpc-service')
+    const previousAuthorization = rpcSession.advancedAuthorization
+    browserContext = undefined
+    rpcSession.advancedAuthorization = false
+
+    try {
+      const run = await prepareAgentRpcRun({
+        sessionId: rpcSession.id,
+        userMessage: '检查项目',
+        channelId: 'channel-1',
+        modelId: rpcSession.modelId,
+        agentRuntime: 'pi',
+      })
+
+      expect(run.query.advancedAuthorization).toBe(false)
+      expect(run.query.fileAccessPolicy?.advancedAuthorization).toBe(false)
+      expect(run.query.systemPrompt).toContain('Composer“高级授权”未开启')
+      expect(run.query.systemPrompt).toContain('Git、SSH、curl、Python 等受保护命令仍受限制')
+      expect(run.query.systemPrompt).toContain('项目命令逐条调用')
+    } finally {
+      if (previousAuthorization === undefined) delete rpcSession.advancedAuthorization
+      else rpcSession.advancedAuthorization = previousAuthorization
+    }
+  })
+
+  test('Given advanced authorization is enabled on an automation or delegation session When preparing Agent RPC Then the main-session authorization is not inherited', async () => {
+    const { prepareAgentRpcRun } = await import('./agent-rpc-service')
+    const previousAuthorization = rpcSession.advancedAuthorization
+    const previousAutomationId = rpcSession.sourceAutomationId
+    const previousDelegationId = rpcSession.sourceDelegationId
+    rpcSession.advancedAuthorization = true
+    browserContext = undefined
+
+    try {
+      for (const source of ['automation', 'delegation'] as const) {
+        rpcSession.sourceAutomationId = source === 'automation' ? 'automation-1' : undefined
+        rpcSession.sourceDelegationId = source === 'delegation' ? 'delegation-1' : undefined
+        const run = await prepareAgentRpcRun({
+          sessionId: rpcSession.id,
+          userMessage: '执行内部任务',
+          channelId: 'channel-1',
+          modelId: rpcSession.modelId,
+          triggeredBy: source,
+        })
+
+        expect(run.query.advancedAuthorization).toBe(false)
+        expect(run.query.fileAccessPolicy?.advancedAuthorization).toBe(false)
+        expect(run.query.systemPrompt).toContain('Composer“高级授权”未开启')
+      }
+    } finally {
+      if (previousAuthorization === undefined) delete rpcSession.advancedAuthorization
+      else rpcSession.advancedAuthorization = previousAuthorization
+      rpcSession.sourceAutomationId = previousAutomationId
+      rpcSession.sourceDelegationId = previousDelegationId
+    }
+  }, 30_000)
+
   test('Given Browser Agent run When queueing and finalizing Then it retains the Skill and revokes the issued capability', async () => {
     const { assertBrowserAgentWorkerCapability } = await import('./browser-agent-worker-capability')
     const { finalizeAgentRpcRun, prepareAgentRpcQueue, prepareAgentRpcRun } = await import('./agent-rpc-service')
@@ -978,6 +1073,64 @@ describe('Browser Agent RPC 准备', () => {
         agentRuntime: 'pi', // 与会话 codex 不一致
       }),
     ).rejects.toThrow('专业模式与普通模式会话不能混用。当前会话与所选模式不一致。')
+  })
+
+  test('Given Codex professional user session has advanced authorization enabled When preparing in plan mode Then prompt uses Codex runtime and preserves the read-only boundary', async () => {
+    const { prepareAgentRpcRun } = await import('./agent-rpc-service')
+    const previousAuthorization = rpcSession.advancedAuthorization
+    rpcSession.advancedAuthorization = true
+
+    try {
+      const run = await prepareAgentRpcRun({
+        sessionId: 'codex-session-1',
+        userMessage: '规划项目检查',
+        channelId: 'copis-working',
+        modelId: 'fast',
+        agentRuntime: 'codex',
+        permissionModeOverride: 'plan',
+      })
+
+      expect(run.query.advancedAuthorization).toBe(true)
+      expect(run.query.permissionMode).toBe('plan')
+      expect(run.query.systemPrompt).toContain('Codex App Server 专业模式')
+      expect(run.query.systemPrompt).toContain('## Codex App Server Runtime（专业模式）')
+      expect(run.query.systemPrompt).toContain('Composer“高级授权”已开启')
+      expect(run.query.systemPrompt).toContain('即使 Composer“高级授权”已开启')
+      expect(run.query.systemPrompt).not.toContain('## Pi Agent Runtime')
+      expect(run.query.systemPrompt).not.toContain('当前会话的基础工具使用小写')
+      expect(run.query.systemPrompt).not.toContain('Git/SSH/curl/Python 命令必须在 Composer 开启')
+      expect(run.query.systemPrompt).not.toContain('memory_recall')
+      expect(run.query.systemPrompt).not.toContain('memory_rewrite')
+    } finally {
+      if (previousAuthorization === undefined) delete rpcSession.advancedAuthorization
+      else rpcSession.advancedAuthorization = previousAuthorization
+    }
+  })
+
+  test('Given Codex professional user session has advanced authorization disabled When preparing Then prompt does not claim command authorization', async () => {
+    const { prepareAgentRpcRun } = await import('./agent-rpc-service')
+    const previousAuthorization = rpcSession.advancedAuthorization
+    rpcSession.advancedAuthorization = false
+
+    try {
+      const run = await prepareAgentRpcRun({
+        sessionId: 'codex-session-1',
+        userMessage: '检查项目',
+        channelId: 'copis-working',
+        modelId: 'fast',
+        agentRuntime: 'codex',
+        permissionModeOverride: 'bypassPermissions',
+      })
+
+      expect(run.query.advancedAuthorization).toBe(false)
+      expect(run.query.systemPrompt).toContain('Composer“高级授权”未开启')
+      expect(run.query.systemPrompt).toContain('关闭时，不要把命令视为已获高级授权')
+      expect(run.query.systemPrompt).not.toContain('## Pi Agent Runtime')
+      expect(run.query.systemPrompt).not.toContain('Git/SSH/curl/Python 命令必须在 Composer 开启')
+    } finally {
+      if (previousAuthorization === undefined) delete rpcSession.advancedAuthorization
+      else rpcSession.advancedAuthorization = previousAuthorization
+    }
   })
 
   test('Given 专业模式会话 When 引用第三方 Provider 渠道 Then 拦截并提示仅支持默认及自定义模型', async () => {

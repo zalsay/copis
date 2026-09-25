@@ -123,6 +123,7 @@ describe('项目与会话工作台提示词', () => {
       permissionMode: 'bypassPermissions',
       browserContext: { tabId: 'web-1', url: 'https://example.com/' },
       browserAdvancedAuthorization: true,
+      composerAdvancedAuthorization: true,
     })
 
     expect(prompt).toContain('Composer“高级授权”已开启')
@@ -137,6 +138,7 @@ describe('项目与会话工作台提示词', () => {
       sessionId: 'session-browser-default',
       permissionMode: 'bypassPermissions',
       browserContext: { tabId: 'web-1', url: 'https://example.com/' },
+      composerAdvancedAuthorization: false,
     })
 
     expect(prompt).toContain('Composer“高级授权”未开启')
@@ -149,7 +151,7 @@ describe('项目与会话工作台提示词', () => {
     expect(prompt).toContain('`read`、`write`、`edit`、`bash`')
     expect(prompt).toContain('直接在当前项目目录调用一次 `bash`，例如 `npm install`')
     expect(prompt).toContain('不要要求用户安装 Node.js/npm')
-    expect(prompt).toContain('不要使用 `&&`、`;`、管道、重定向或命令替换')
+    expect(prompt).toContain('项目命令逐条调用，不使用 `&&`、`;`、管道、重定向或命令替换')
     expect(prompt).not.toContain('Read、Write、Edit、Bash、Grep、Glob、LS、Skill')
   })
 

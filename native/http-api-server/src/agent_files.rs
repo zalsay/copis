@@ -453,14 +453,19 @@ impl FileAccessPolicy {
                 "Git/SSH/curl/Python 命令需要先在 Composer 开启高级授权",
             ));
         }
-        validate_project_command(&request.command)?;
-        let read_only = is_read_only_project_command(&request.command);
+        if self.advanced_authorization {
+            validate_command_size(&request.command)?;
+        } else {
+            validate_project_command(&request.command)?;
+        }
         let cwd = self.resolve(&request.cwd, false)?;
         self.ensure_read(&cwd)?;
-        if read_only {
-            self.validate_read_only_command_paths(&request.command)?;
-        } else {
-            self.ensure_write(&cwd)?;
+        if !self.advanced_authorization {
+            if is_read_only_project_command(&request.command) {
+                self.validate_read_only_command_paths(&request.command)?;
+            } else {
+                self.ensure_write(&cwd)?;
+            }
         }
         if !fs::metadata(&cwd).map_err(io_error)?.is_dir() {
             return Err(AgentFileError::forbidden(
@@ -762,14 +767,10 @@ fn is_explicit_command_path(argument: &str) -> bool {
             .any(|component| matches!(component, "." | ".."))
 }
 
-/// 仅开放只读检查、项目依赖、构建、本地开发、Office 文档操作、工作区 Git 与高级授权的 SSH/curl/Python 命令；通用 Shell 语法会绕过路径策略。
+/// 未开启高级授权时仅开放受控项目命令；开启后由会话授权执行任意非空 Shell 命令。
 fn validate_project_command(command: &str) -> Result<(), AgentFileError> {
+    validate_command_size(command)?;
     let command = command.trim();
-    if command.is_empty() || command.len() > 16 * 1024 {
-        return Err(AgentFileError::bad_request(
-            "项目命令不能为空且不能超过 16 KB",
-        ));
-    }
     if command.contains([';', '|', '&', '>', '<', '\n', '\r', '`']) || command.contains("$(") {
         return Err(AgentFileError::forbidden(
             "command_syntax_not_allowed",
@@ -901,6 +902,15 @@ fn validate_project_command(command: &str) -> Result<(), AgentFileError> {
             "仅支持工作区内的只读检查、依赖安装、构建、测试、本地开发、Office 文档操作与 Git 命令",
         ))
     }
+}
+
+fn validate_command_size(command: &str) -> Result<(), AgentFileError> {
+    if command.trim().is_empty() || command.len() > 16 * 1024 {
+        return Err(AgentFileError::bad_request(
+            "项目命令不能为空且不能超过 16 KB",
+        ));
+    }
+    Ok(())
 }
 
 fn is_officecli_global_option(argument: &str) -> bool {

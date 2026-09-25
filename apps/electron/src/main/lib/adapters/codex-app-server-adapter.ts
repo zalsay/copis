@@ -315,7 +315,7 @@ export class CodexAppServerAdapter implements AgentProviderAdapter {
         if (typeof data.id === 'number' && typeof data.method === 'string') {
           const reqId = data.id
           const reqMethod = data.method
-          const isBypass = options.permissionMode === 'bypassPermissions'
+          const isBypass = options.permissionMode === 'bypassPermissions' && options.advancedAuthorization === true
 
           switch (reqMethod) {
             case 'item/commandExecution/requestApproval':
@@ -552,9 +552,9 @@ export class CodexAppServerAdapter implements AgentProviderAdapter {
       }
 
       // 权限模式与沙箱策略对齐：
-      // Copis 默认 bypassPermissions（完全自动）模式对应 Codex 的 never 审批与 danger-full-access 沙箱；
-      // plan（计划模式）对应 read-only 沙箱。
-      const isBypass = options.permissionMode === 'bypassPermissions'
+      // 只有用户主会话已开启高级授权且不在计划模式时，才给予完整命令执行能力。
+      // 关闭高级授权或进入计划模式时，Codex 不得继续沿用完全访问沙箱。
+      const isBypass = options.permissionMode === 'bypassPermissions' && options.advancedAuthorization === true
       const approvalPolicy = isBypass ? 'never' : 'on-request'
       const sandbox = isBypass ? 'danger-full-access' : 'read-only'
       const sandboxPolicy = isBypass

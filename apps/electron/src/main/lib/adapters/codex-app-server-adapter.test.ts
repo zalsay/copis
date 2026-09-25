@@ -86,6 +86,7 @@ describe('CodexAppServerAdapter', () => {
       apiKey: '',
       provider: 'openai-codex',
       permissionMode: 'bypassPermissions',
+      advancedAuthorization: true,
       systemPrompt: '系统指令',
       piAgentDir: '/tmp',
       piSessionDir: '/tmp/sessions',
@@ -198,6 +199,7 @@ describe('CodexAppServerAdapter', () => {
       apiKey: '',
       provider: 'openai-codex',
       permissionMode: 'plan',
+      advancedAuthorization: true,
       systemPrompt: '系统指令',
       piAgentDir: '/tmp',
       piSessionDir: '/tmp/sessions',
@@ -794,6 +796,7 @@ describe('CodexAppServerAdapter', () => {
       provider: 'openai-codex',
       systemPrompt: '系统指令',
       permissionMode: 'bypassPermissions',
+      advancedAuthorization: true,
       piAgentDir: '/tmp',
       piSessionDir: '/tmp/sessions',
     }
@@ -811,5 +814,47 @@ describe('CodexAppServerAdapter', () => {
     adapter.dispose()
     await mock.close()
   })
-})
 
+  test('Given 高级授权关闭但权限模式为 bypass When Codex 请求命令审批 Then 拒绝并使用无网络只读沙箱', async () => {
+    const mock = await createMockCodexAppServer()
+    let approval: Record<string, unknown> | undefined
+
+    mock.server.on('connection', (ws: WebSocket) => {
+      ws.on('message', (raw: RawData) => {
+        const msg = JSON.parse(raw.toString()) as Record<string, unknown>
+        mock.messages.push(msg)
+        if (msg.method === 'initialize') {
+          ws.send(JSON.stringify({ id: msg.id, result: {} }))
+        } else if (msg.method === 'thread/start') {
+          ws.send(JSON.stringify({ id: msg.id, result: { thread: { id: 'thread-restricted' } } }))
+        } else if (msg.method === 'turn/start') {
+          ws.send(JSON.stringify({ id: msg.id, result: { turn: { id: 'turn-restricted' } } }))
+          ws.send(JSON.stringify({ id: 991, method: 'item/commandExecution/requestApproval', params: { command: 'ssh -V' } }))
+        } else if (msg.id === 991 && msg.result) {
+          approval = msg
+          ws.send(JSON.stringify({ method: 'turn/completed', params: { turn: { status: 'completed' } } }))
+        }
+      })
+    })
+
+    const adapter = new CodexAppServerAdapter()
+    for await (const _ of adapter.query({
+      sessionId: 'session-restricted', agentRuntime: 'codex', codexAppServerPort: mock.port,
+      prompt: '检查 SSH', apiKey: 'test-key', provider: 'openai-codex',
+      permissionMode: 'bypassPermissions', advancedAuthorization: false,
+      systemPrompt: '系统指令', piAgentDir: '/tmp', piSessionDir: '/tmp/sessions',
+    })) {
+      // 消费流
+    }
+
+    const thread = mock.messages.find((message) => message.method === 'thread/start')?.params as Record<string, unknown>
+    const turn = mock.messages.find((message) => message.method === 'turn/start')?.params as Record<string, unknown>
+    expect(thread.sandbox).toBe('read-only')
+    expect(turn.approvalPolicy).toBe('on-request')
+    expect(turn.sandboxPolicy).toEqual({ type: 'readOnly', networkAccess: false })
+    expect(approval?.result).toEqual({ decision: 'decline' })
+
+    adapter.dispose()
+    await mock.close()
+  })
+})

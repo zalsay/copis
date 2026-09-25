@@ -652,7 +652,7 @@ export function AgentConversationSurface({
     && agentChannelProvider === 'openai-codex'
     && isCodexFastModeSupportedModel(agentModelId ?? undefined)
   const codexFastModeEnabled = isCodexFastModeAvailable && sessionMeta?.codexFastMode === true
-  const advancedAuthorizationEnabled = sessionMeta?.advancedAuthorization !== false
+  const advancedAuthorizationEnabled = sessionMeta?.advancedAuthorization === true
 
   // 检查 Agent 渠道列表中是否存在可用的模型（渠道 enabled + 模型 enabled）
   const hasAvailableModel = Boolean(stableChannel?.enabled && stableChannel.models.some((model) => model.enabled))
@@ -2827,7 +2827,7 @@ export function AgentConversationSurface({
             </Button>
           </TooltipTrigger>
           <TooltipContent side="top">
-            <p>{advancedAuthorizationEnabled ? '高级授权已开启：允许 Git/SSH 和 AI浏览器全部页面操作' : '开启高级授权：允许 Git/SSH 和 AI浏览器全部页面操作'}</p>
+            <p>{advancedAuthorizationEnabled ? '高级授权已开启：非计划模式下允许所有命令和 AI浏览器全部页面操作' : '开启高级授权：非计划模式下允许所有命令和 AI浏览器全部页面操作'}</p>
           </TooltipContent>
         </Tooltip>
       ),

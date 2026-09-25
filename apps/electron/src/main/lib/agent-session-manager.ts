@@ -689,7 +689,7 @@ export function createAgentSession(
     reasoningLevel: defaultThinkingLevel,
     // Copis Working 默认使用快速模式；用户可按会话切换到专家模式。
     workingMode: 'fast',
-    // 默认开启高级授权（允许 Git/SSH 和 AI浏览器全部页面操作）
+    // 默认开启高级授权（允许用户主会话执行所有命令和 AI浏览器全部页面操作）
     advancedAuthorization: true,
     createdAt: now,
     updatedAt: now,
