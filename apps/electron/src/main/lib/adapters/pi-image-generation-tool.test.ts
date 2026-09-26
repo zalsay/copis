@@ -1,4 +1,4 @@
-import { afterAll, describe, expect, mock, test } from 'bun:test'
+import { afterAll, beforeAll, describe, expect, mock, test } from 'bun:test'
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -12,9 +12,15 @@ import {
 } from './pi-image-generation-tool'
 
 const testConfigDir = mkdtempSync(join(tmpdir(), 'copis-image-tests-'))
+const previousFileApiToken = process.env.COPIS_PI_FILE_API_TOKEN
+beforeAll(() => { process.env.COPIS_PI_FILE_API_TOKEN = 'image-tool-registration-test' })
 const configPaths = await import('../config-paths')
 mock.module('../config-paths', () => ({ ...configPaths, getConfigDir: () => testConfigDir }))
-afterAll(() => rmSync(testConfigDir, { recursive: true, force: true }))
+afterAll(() => {
+  if (previousFileApiToken === undefined) delete process.env.COPIS_PI_FILE_API_TOKEN
+  else process.env.COPIS_PI_FILE_API_TOKEN = previousFileApiToken
+  rmSync(testConfigDir, { recursive: true, force: true })
+})
 
 // Mock attachment-storage 以避免真实的磁盘写入
 mock.module('../attachment-storage', () => ({
@@ -299,7 +305,7 @@ describe('Pi Copis 图片生成工具适配器', () => {
     expect(tool.executionMode).toBe('sequential')
   })
 
-  test('Given buildBuiltinToolDefinitions When imageGenerationEnabled 为 true Then customTools 包含 generate_image', async () => {
+  test('Given 图片生成能力开启 When 构建 Pi 与 Rust Worker 工具 Then 生成和任务恢复工具完整注册', async () => {
     const { buildBuiltinToolDefinitions } = await import('./pi-agent-adapter')
 
     const mockSdk = {
@@ -313,31 +319,35 @@ describe('Pi Copis 图片生成工具适配器', () => {
       defineTool: (def: { name: string }) => ({ ...def }),
     } as unknown as typeof import('@earendil-works/pi-coding-agent')
 
-    const enabledDefs = buildBuiltinToolDefinitions(
-      mockSdk,
-      '/test/cwd',
-      undefined,
-      undefined,
-      {
-        sessionId: 'session-1',
-        useRustFileApi: false,
-        imageGenerationEnabled: true,
-      },
-    )
+    for (const useRustFileApi of [false, true]) {
+      const enabledDefs = buildBuiltinToolDefinitions(
+        mockSdk,
+        '/test/cwd',
+        undefined,
+        undefined,
+        {
+          sessionId: 'session-1',
+          useRustFileApi,
+          imageGenerationEnabled: true,
+        },
+      )
 
-    const disabledDefs = buildBuiltinToolDefinitions(
-      mockSdk,
-      '/test/cwd',
-      undefined,
-      undefined,
-      {
-        sessionId: 'session-2',
-        useRustFileApi: false,
-        imageGenerationEnabled: false,
-      },
-    )
+      const disabledDefs = buildBuiltinToolDefinitions(
+        mockSdk,
+        '/test/cwd',
+        undefined,
+        undefined,
+        {
+          sessionId: 'session-2',
+          useRustFileApi,
+          imageGenerationEnabled: false,
+        },
+      )
 
-    expect(enabledDefs.map((d) => d.name)).toContain('generate_image')
-    expect(disabledDefs.map((d) => d.name)).not.toContain('generate_image')
+      for (const name of ['generate_image', 'get_image_task', 'list_image_tasks']) {
+        expect(enabledDefs.map((d) => d.name)).toContain(name)
+        expect(disabledDefs.map((d) => d.name)).not.toContain(name)
+      }
+    }
   })
 })

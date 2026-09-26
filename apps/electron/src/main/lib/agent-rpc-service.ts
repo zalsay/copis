@@ -864,10 +864,12 @@ export async function prepareAgentRpcRun(input: AgentSendInput): Promise<PiWorke
     ...(!isChatroomRun && workspace?.id ? { workspaceId: workspace.id } : {}),
     ...(!isChatroomRun && session.sourceAutomationId ? { sourceAutomationId: session.sourceAutomationId } : {}),
     automationEnabled: !isChatroomRun && isBuiltinMcpUserEnabled('automation'),
-    imageGenerationEnabled: !isChatroomRun && Boolean(
-      isBuiltinMcpUserEnabled('nano-banana')
-      || input.mentionedMcpServers?.includes('copis_image')
-      || input.mentionedMcpServers?.includes('nano-banana')
+    // 默认图片工具与内置图片 Skill 对齐；plan 模式不因默认分支新增副作用能力。
+    imageGenerationEnabled: !isChatroomRun && (!isSessionProfessional || queryPermissionMode !== 'plan') && (
+      (isUserMainSession && trustedSource === undefined && queryPermissionMode !== 'plan')
+      || isBuiltinMcpUserEnabled('nano-banana')
+      || input.mentionedMcpServers?.includes('copis_image') === true
+      || input.mentionedMcpServers?.includes('nano-banana') === true
     ),
     memoryPolicy,
     ...(proxyUrl ? { proxyUrl } : {}),

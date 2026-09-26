@@ -169,6 +169,8 @@ describe('CodexAppServerAdapter', () => {
 
         if (msg.method === 'initialize') {
           ws.send(JSON.stringify({ id: msg.id, result: { serverInfo: { name: 'codex' } } }))
+        } else if (msg.method === 'thread/loaded/list') {
+          ws.send(JSON.stringify({ id: msg.id, result: { data: [] } }))
         } else if (msg.method === 'thread/resume') {
           threadResumeCalled = true
           ws.send(JSON.stringify({ id: msg.id, result: { thread: { id: 'thread-resumed' } } }))
@@ -236,6 +238,8 @@ describe('CodexAppServerAdapter', () => {
 
         if (msg.method === 'initialize') {
           ws.send(JSON.stringify({ id: msg.id, result: {} }))
+        } else if (msg.method === 'thread/loaded/list') {
+          ws.send(JSON.stringify({ id: msg.id, result: { data: [] } }))
         } else if (msg.method === 'thread/resume') {
           ws.send(JSON.stringify({ id: msg.id, error: { message: 'no rollout found' } }))
         } else if (msg.method === 'thread/start') {

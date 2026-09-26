@@ -3,7 +3,7 @@
  *
  * 负责在 RPC Worker 运行时中与本地 Codex App Server 守护进程进行 WebSocket JSON-RPC 通信：
  * - 握手 initialize；
- * - 会话 Thread 恢复 (thread/resume) 与新建 (thread/start)；
+ * - 会话 Thread 恢复/分叉 (thread/resume、thread/fork) 与新建 (thread/start)；
  * - Turn 发起与流式 delta 解析（正文 agentMessage/delta 与思考链 reasoning/textDelta）；
  * - 转换为 Copis 标准的 SDKAssistantMessage 与 SDKResultMessage；
  * - 支持 turn/interrupt 打断。
@@ -24,6 +24,12 @@ import {
 } from '@copis/shared'
 import { resolveCopisHttpApiPort } from '@copis/shared/config'
 import type { PiWorkerQueryConfig } from '../agent-rpc-protocol'
+import {
+  CODEX_IMAGE_MCP_SERVER_NAME,
+  startCodexImageToolsMcp,
+  type CodexImageToolCall,
+  type CodexImageToolResult,
+} from './codex-image-tools-mcp'
 
 const DEFAULT_CODEX_PORT = 54080
 const WS_CONNECT_TIMEOUT_MS = 10_000
@@ -42,10 +48,11 @@ export interface CodexWebSocketClient {
 }
 
 interface ActiveSessionEntry {
-  ws: CodexWebSocketClient
+  ws?: CodexWebSocketClient
   threadId: string
   turnId?: string
   aborted: boolean
+  closeImageBridge?: () => Promise<void>
 }
 
 /**
@@ -123,6 +130,11 @@ export function extractCodexErrorMessage(params: Record<string, unknown>): strin
   return rawMessage
 }
 
+function isCodexThreadNotFoundError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error)
+  return /no rollout found|thread\s+(?:was\s+)?not found|thread does not exist|rollout.*not found/i.test(message)
+}
+
 class AsyncQueue<T> {
   private queue: T[] = []
   private resolvers: Array<(value: IteratorResult<T>) => void> = []
@@ -193,12 +205,108 @@ export class CodexAppServerAdapter implements AgentProviderAdapter {
     const assistantUuid = randomUUID()
     const startedAt = options.retryRunStartedAt ?? Date.now()
 
+    const imageToolsEnabled = options.imageGenerationEnabled === true
+      && options.capabilityProfile !== 'chatroom'
+      && options.permissionMode !== 'plan'
+    const toolCalls = new Set<string>()
+    let imageBridge: Awaited<ReturnType<typeof startCodexImageToolsMcp>> | undefined
+    let imageBridgeClosePromise: Promise<void> | undefined
+    const closeImageBridge = (): Promise<void> => {
+      if (!imageBridge) return Promise.resolve()
+      imageBridgeClosePromise ??= imageBridge.close().catch(() => {
+        console.warn('[Codex App Server] 关闭 Copis 图片工具桥接失败')
+      })
+      return imageBridgeClosePromise
+    }
+    const sessionEntry: ActiveSessionEntry = {
+      threadId: '',
+      aborted: false,
+      closeImageBridge,
+    }
+    // 从桥接启动开始就登记 session，使 dispose/abort 可以取消整个准备阶段。
+    this.activeSessions.set(options.sessionId, sessionEntry)
+
+    const emitToolUse = (call: CodexImageToolCall) => {
+      if (toolCalls.has(call.callId)) return
+      toolCalls.add(call.callId)
+      queue.push({
+        type: 'assistant',
+        uuid: randomUUID(),
+        session_id: options.sessionId,
+        parent_tool_use_id: null,
+        message: {
+          role: 'assistant',
+          model: targetModel,
+          content: [{
+            type: 'tool_use',
+            id: call.callId,
+            name: call.name,
+            input: call.arguments,
+          }],
+          stop_reason: 'tool_use',
+          usage: {
+            input_tokens: 0,
+            output_tokens: 0,
+            cache_read_input_tokens: 0,
+            cache_creation_input_tokens: 0,
+          },
+        },
+        _channelModelId: targetModel,
+        _createdAt: Date.now(),
+      } as unknown as SDKAssistantMessage)
+    }
+
+    if (imageToolsEnabled) {
+      try {
+        imageBridge = await startCodexImageToolsMcp({
+          sessionId: options.sessionId,
+          cwd: options.cwd,
+          onToolStart: emitToolUse,
+          onToolResult: (result: CodexImageToolResult) => {
+            emitToolUse(result)
+            queue.push({
+              type: 'user',
+              uuid: randomUUID(),
+              session_id: options.sessionId,
+              parent_tool_use_id: null,
+              message: {
+                content: [{
+                  type: 'tool_result',
+                  tool_use_id: result.callId,
+                  content: result.content,
+                  is_error: result.isError,
+                }],
+              },
+              tool_use_result: result.details,
+            } as unknown as SDKMessage)
+          },
+        })
+      } catch {
+        this.activeSessions.delete(options.sessionId)
+        throw new Error('Copis 图片工具桥接启动失败，未继续本轮会话')
+      }
+    }
+    if (sessionEntry.aborted) {
+      await closeImageBridge()
+      this.activeSessions.delete(options.sessionId)
+      throw new Error('Codex 会话已在图片工具桥接启动期间取消')
+    }
+
     let ws: CodexWebSocketClient
     try {
       ws = await this.connectWebSocket(wsUrl)
     } catch (err) {
+      await closeImageBridge()
+      this.activeSessions.delete(options.sessionId)
       const msg = err instanceof Error ? err.message : String(err)
       throw new Error(`连接 Codex App Server 失败 (${wsUrl}): ${msg}`)
+    }
+    sessionEntry.ws = ws
+    if (sessionEntry.aborted) {
+      await closeImageBridge()
+      this.activeSessions.delete(options.sessionId)
+      try { ws.close() } catch { /* 忽略关闭异常 */ }
+      throw new Error('Codex 会话已在连接期间取消')
     }
 
     let nextRequestId = 1
@@ -222,6 +330,13 @@ export class CodexAppServerAdapter implements AgentProviderAdapter {
         pendingRequests.set(id, { resolve, reject, timer })
         ws.send(JSON.stringify({ method, id, params }))
       })
+    }
+    const rejectPendingRequests = (reason: string) => {
+      for (const req of pendingRequests.values()) {
+        clearTimeout(req.timer)
+        req.reject(new Error(reason))
+      }
+      pendingRequests.clear()
     }
 
     let accumulatedText = ''
@@ -280,13 +395,6 @@ export class CodexAppServerAdapter implements AgentProviderAdapter {
 
       queue.push(partial)
     }
-
-    const sessionEntry: ActiveSessionEntry = {
-      ws,
-      threadId: '',
-      aborted: false,
-    }
-    this.activeSessions.set(options.sessionId, sessionEntry)
 
     ws.onmessage = (event: { data: unknown }) => {
       try {
@@ -474,11 +582,15 @@ export class CodexAppServerAdapter implements AgentProviderAdapter {
       const errorObj = err instanceof Error
         ? err
         : new Error(String((err as { message?: string })?.message || err || 'WebSocket error'))
+      void closeImageBridge()
+      rejectPendingRequests('Codex WebSocket 发生错误，取消等待中的 RPC 请求')
       queue.fail(errorObj)
     }
 
     ws.onclose = () => {
       if (partialPushTimer) clearTimeout(partialPushTimer)
+      void closeImageBridge()
+      rejectPendingRequests('Codex WebSocket 已关闭，取消等待中的 RPC 请求')
       queue.close()
     }
 
@@ -550,6 +662,17 @@ export class CodexAppServerAdapter implements AgentProviderAdapter {
           },
         },
       }
+      // thread/resume 可能沿用已经加载的 MCP 配置；已加载 Thread 会在下方 fork，
+      // 未启用时也显式传禁用项，避免恢复路径意外继承生图能力。
+      threadConfig.mcp_servers = {
+        [CODEX_IMAGE_MCP_SERVER_NAME]: imageBridge?.config ?? {
+          url: 'http://127.0.0.1:1/mcp',
+          tool_timeout_sec: 360,
+          enabled: false,
+          required: false,
+          default_tools_approval_mode: 'approve',
+        },
+      }
 
       // 权限模式与沙箱策略对齐：
       // 只有用户主会话已开启高级授权且不在计划模式时，才给予完整命令执行能力。
@@ -564,22 +687,84 @@ export class CodexAppServerAdapter implements AgentProviderAdapter {
       // 3. 启动或恢复 Thread
       let threadId: string | undefined
       if (options.resumeSessionId) {
+        // 对已加载 Thread，App Server 实测不会用 thread/resume 的 config 覆盖现有 MCP 配置。
+        // 当前运行时的兼容成本是 fork 完整历史并应用本轮配置；原 SDK Thread 保留用于回滚。
+        // 未加载时 thread/resume 会应用本轮 config；loaded 查询失败必须失败关闭。
+        let isThreadLoaded = false
         try {
-          const res = await sendRequest('thread/resume', {
-            threadId: options.resumeSessionId,
-            cwd: options.cwd,
-            approvalPolicy,
-            sandbox,
-            model: targetModel,
-            modelProvider: modelProviderName,
-            config: threadConfig,
-            ...(options.systemPrompt ? { developerInstructions: options.systemPrompt } : {}),
-          })
-          if (res && !res.error) {
-            threadId = options.resumeSessionId
-          }
+          let cursor: string | undefined
+          const seenCursors = new Set<string>()
+          do {
+            const loaded = await sendRequest('thread/loaded/list', {
+              limit: 100,
+              ...(cursor ? { cursor } : {}),
+            })
+            if (!Array.isArray(loaded.data) || loaded.data.some(id => typeof id !== 'string')) {
+              throw new Error('Codex 返回了无效的 loaded thread 列表')
+            }
+            if (loaded.nextCursor != null && typeof loaded.nextCursor !== 'string') {
+              throw new Error('Codex 返回了无效的 loaded thread 游标')
+            }
+            const loadedIds = loaded.data as string[]
+            if (loadedIds.includes(options.resumeSessionId)) {
+              isThreadLoaded = true
+              break
+            }
+            cursor = typeof loaded.nextCursor === 'string' ? loaded.nextCursor : undefined
+            if (cursor && seenCursors.has(cursor)) throw new Error('Codex loaded thread 分页游标重复')
+            if (cursor) seenCursors.add(cursor)
+          } while (cursor)
         } catch {
-          // resume 失败回退到 start
+          throw new Error('无法确认 Codex 会话是否已加载，已停止以避免沿用过期图片工具权限')
+        }
+
+        if (isThreadLoaded) {
+          try {
+            const res = await sendRequest('thread/fork', {
+              threadId: options.resumeSessionId,
+              deferGoalContinuation: true,
+              cwd: options.cwd,
+              approvalPolicy,
+              sandbox,
+              model: targetModel,
+              modelProvider: modelProviderName,
+              config: threadConfig,
+              ...(options.systemPrompt ? { developerInstructions: options.systemPrompt } : {}),
+            })
+            const thread = (res.thread as Record<string, unknown>) || {}
+            threadId = typeof thread.id === 'string' ? thread.id : undefined
+            if (!threadId) throw new Error('Codex fork 未返回 Thread ID')
+          } catch {
+            throw new Error('无法使用当前图片工具权限 fork Codex 会话，已停止以保留原会话历史')
+          }
+        } else {
+          try {
+            const res = await sendRequest('thread/resume', {
+              threadId: options.resumeSessionId,
+              cwd: options.cwd,
+              approvalPolicy,
+              sandbox,
+              model: targetModel,
+              modelProvider: modelProviderName,
+              config: threadConfig,
+              ...(options.systemPrompt ? { developerInstructions: options.systemPrompt } : {}),
+            })
+            if (res && !res.error) {
+              threadId = options.resumeSessionId
+            } else {
+              const message = typeof res.error === 'string'
+                ? res.error
+                : res.error && typeof res.error === 'object'
+                  ? extractCodexErrorMessage({ error: res.error })
+                  : 'Codex 未能恢复原会话'
+              throw new Error(message)
+            }
+          } catch (error) {
+            if (!isCodexThreadNotFoundError(error)) {
+              throw new Error('Codex 恢复会话失败，已保留原会话 ID 和历史记录')
+            }
+            // 仅在明确 rollout/thread 不存在时维持既有 thread/start 恢复行为。
+          }
         }
       }
 
@@ -603,6 +788,8 @@ export class CodexAppServerAdapter implements AgentProviderAdapter {
 
       sessionEntry.threadId = threadId
       options.onSessionId?.(threadId)
+
+      if (sessionEntry.aborted) throw new Error('Codex 会话已取消，未启动新 Turn')
 
       // 4. 启动 Turn
       const turnParams: Record<string, unknown> = {
@@ -638,11 +825,8 @@ export class CodexAppServerAdapter implements AgentProviderAdapter {
     } finally {
       if (partialPushTimer) clearTimeout(partialPushTimer)
       this.activeSessions.delete(options.sessionId)
-      for (const req of pendingRequests.values()) {
-        clearTimeout(req.timer)
-        req.reject(new Error('会话已结束，取消等待中的 RPC 请求'))
-      }
-      pendingRequests.clear()
+      rejectPendingRequests('会话已结束，取消等待中的 RPC 请求')
+      await closeImageBridge()
       try {
         if (ws.readyState === 1 || ws.readyState === 0) {
           ws.close()
@@ -659,8 +843,9 @@ export class CodexAppServerAdapter implements AgentProviderAdapter {
   dispose(): void {
     for (const entry of this.activeSessions.values()) {
       entry.aborted = true
+      void entry.closeImageBridge?.()
       try {
-        if (entry.ws.readyState === 1 || entry.ws.readyState === 0) {
+        if (entry.ws && (entry.ws.readyState === 1 || entry.ws.readyState === 0)) {
           entry.ws.close()
         }
       } catch {
@@ -689,8 +874,9 @@ export class CodexAppServerAdapter implements AgentProviderAdapter {
     const entry = this.activeSessions.get(sessionId)
     if (!entry) return
     entry.aborted = true
+    void entry.closeImageBridge?.()
 
-    if (entry.ws.readyState === 1 && entry.threadId) {
+    if (entry.ws?.readyState === 1 && entry.threadId) {
       try {
         entry.ws.send(JSON.stringify({
           method: 'turn/interrupt',
@@ -703,6 +889,8 @@ export class CodexAppServerAdapter implements AgentProviderAdapter {
       } catch (err) {
         console.warn('[Codex App Server Adapter] 发送 turn/interrupt 失败:', err)
       }
+    } else if (entry.ws && (entry.ws.readyState === 1 || entry.ws.readyState === 0)) {
+      try { entry.ws.close() } catch { /* 忽略关闭异常 */ }
     }
   }
 
