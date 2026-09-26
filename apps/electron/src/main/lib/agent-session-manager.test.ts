@@ -4,9 +4,11 @@ import * as os from 'node:os'
 import { join } from 'node:path'
 
 type AgentSessionManager = typeof import('./agent-session-manager')
+type AgentWorkspaceManager = typeof import('./agent-workspace-manager')
 type AgentSessionContextPrompt = typeof import('./agent-session-context-prompt')
 
 let manager: AgentSessionManager
+let workspaceManager: AgentWorkspaceManager
 let contextPrompt: AgentSessionContextPrompt
 let tempHome: string
 const originalHome = process.env.HOME
@@ -89,6 +91,7 @@ beforeAll(async () => {
   process.env.HOME = tempHome
   process.env.COPIS_DEV = '0'
   manager = await import('./agent-session-manager')
+  workspaceManager = await import('./agent-workspace-manager')
   contextPrompt = await import('./agent-session-context-prompt')
 })
 
@@ -220,6 +223,38 @@ describe('Agent 会话 runtime 元数据', () => {
     expect(existsSync(join(projectRootPath, 'copis', '.context'))).toBe(true)
     expect(existsSync(join(projectRootPath, 'project', '.context'))).toBe(false)
     expect(existsSync(join(tempHome, '.copis', 'agent-workspaces', 'context-workspace', session.id, '.context'))).toBe(false)
+  })
+
+  test('Given investment 会话使用默认 project cwd When 创建 session 并解析运行路径 Then cwd 直接指向 Investment 根且不重建旧目录', () => {
+    const investmentRoot = join(tempHome, 'Documents', 'Copis', 'Investment')
+    mkdirSync(investmentRoot, { recursive: true })
+    writeFileSync(join(tempHome, '.copis', 'agent-workspaces.json'), JSON.stringify({
+      version: 3,
+      workspaces: [{
+        id: 'investment-session-workspace',
+        name: '我的投资',
+        slug: 'investment',
+        projectRootPath: investmentRoot,
+        projectPath: join(investmentRoot, 'project'),
+        createdAt: 1,
+        updatedAt: 1,
+      }],
+    }), 'utf-8')
+
+    const workspace = workspaceManager.ensureInvestmentWorkspace()
+    const session = manager.createAgentSession(
+      '投资会话',
+      undefined,
+      workspace.id,
+      undefined,
+      'pi',
+      'project',
+    )
+
+    expect(manager.resolveAgentCwd({ slug: workspace.slug }, session.id, session.agentCwdMode)).toBe(investmentRoot)
+    expect(existsSync(join(investmentRoot, 'project'))).toBe(false)
+    expect(existsSync(join(investmentRoot, 'copis'))).toBe(false)
+    expect(existsSync(join(investmentRoot, '.context'))).toBe(true)
   })
 
   test('Given 历史索引包含非法附加路径 When 读取会话 Then 清理非法值后再返回', () => {

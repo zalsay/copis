@@ -7,10 +7,16 @@ mock.module('./user-profile-service', () => ({
 }))
 
 mock.module('./agent-workspace-manager', () => ({
-  getAgentWorkspaceBySlug: () => undefined,
-  getAgentWorkspaceContextDir: () => '/tmp/sample-project/copis/.context',
-  getAgentWorkspaceWritableRoot: () => '/tmp/sample-project/copis',
-  getProjectFilesPath: () => '/tmp/sample-project',
+  getAgentWorkspaceBySlug: (slug: string) => slug === 'investment'
+    ? { slug, name: '我的投资', projectRootPath: '/tmp/Investment', projectPath: '/tmp/Investment' }
+    : undefined,
+  getAgentWorkspaceContextDir: (workspace: { slug: string }) => workspace.slug === 'investment'
+    ? '/tmp/Investment/.context'
+    : '/tmp/sample-project/copis/.context',
+  getAgentWorkspaceWritableRoot: (workspace: { slug: string }) => workspace.slug === 'investment'
+    ? '/tmp/Investment'
+    : '/tmp/sample-project/copis',
+  getProjectFilesPath: (slug: string) => slug === 'investment' ? '/tmp/Investment' : '/tmp/sample-project',
   getWorkspaceMcpConfig: () => ({ servers: {} }),
   listAgentWorkspacesByUpdatedAt: () => [],
 }))
@@ -308,6 +314,23 @@ describe('项目与会话工作台提示词', () => {
     expect(prompt).toContain('普通产物（报告、导出文件、附件等）默认写入该目录')
     expect(prompt).toContain('长期 Context 继续写入项目级 Context 的绝对路径 `/tmp/sample-project/copis/.context`')
     expect(prompt).toContain('新项目代码、依赖配置和启动脚本仍写入项目开发目录')
+  })
+
+  test('Given 我的投资工作区 When 构建系统提示词 Then 指向 Investment 根并说明复用 Context 且不创建包装目录', () => {
+    const prompt = buildSystemPrompt({
+      agentRuntime: 'pi',
+      workspaceName: '我的投资',
+      workspaceSlug: 'investment',
+      sessionId: 'investment-session',
+      agentCwd: '/tmp/Investment',
+      workspaceWriteRoot: '/tmp/Investment',
+      permissionMode: 'bypassPermissions',
+    })
+
+    expect(prompt).toContain('项目开发目录: /tmp/Investment')
+    expect(prompt).toContain('默认产物输出目录: /tmp/Investment')
+    expect(prompt).toContain('Investment 根目录本身可写，不要额外创建 copis/ 或 project/ 包装目录')
+    expect(prompt).toContain('投资工作区优先复用已有 copis/.context；若无旧目录，则使用 Investment 根下的 .context')
   })
 
   test('Given 工作区前端任务 When 构建提示词 Then 强制使用可启动的 Vue 3 Vite 项目', () => {
