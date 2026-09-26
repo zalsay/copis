@@ -180,6 +180,18 @@ function normalizeWorkingUser(value: unknown, fallback: Partial<WorkingUser> = {
   return user
 }
 
+function normalizedUserIdentity(user: WorkingUser | null): string | null {
+  const id = user?.id ?? user?.userId
+  return id === undefined || id === null ? null : String(id).trim() || null
+}
+
+function sameUserIdentity(left: WorkingUser | null, right: WorkingUser | null): boolean {
+  if (left === right) return true
+  const leftId = normalizedUserIdentity(left)
+  const rightId = normalizedUserIdentity(right)
+  return leftId !== null && leftId === rightId
+}
+
 function normalizeWorkingLoginResult(value: unknown): WorkingLoginResult {
   const item = isRecord(value) ? value : {}
   const token = firstDefined(item, ['token', 'access_token', 'accessToken'])
@@ -456,6 +468,7 @@ export class WorkingApiClient {
   private readonly fetchImpl: (input: string, init?: RequestInit) => Promise<Response>
   private readonly tokenStore: WorkingTokenStore
   private cachedUser: WorkingUser | null
+  private identityRevision = 0
 
   constructor(options: WorkingApiClientOptions) {
     this.baseUrl = resolveLocalRustApiUrl(options.baseUrl, options.fetchImpl !== undefined, options.isPackaged)
@@ -474,10 +487,16 @@ export class WorkingApiClient {
   }
 
   getCachedUser(): WorkingUser | null {
-    return this.cachedUser ?? normalizeWorkingUser(this.tokenStore.getUser())
+    return this.cachedUser
+  }
+
+  private setCachedUser(user: WorkingUser | null): void {
+    if (!sameUserIdentity(this.cachedUser, user)) this.identityRevision += 1
+    this.cachedUser = user
   }
 
   clearAuth(): void {
+    this.identityRevision += 1
     this.cachedUser = null
     this.tokenStore.clear()
   }
@@ -485,13 +504,15 @@ export class WorkingApiClient {
   /** Rust auth-storage/save 成功后同步 facade 身份，避免沿用上一个账号的缓存。 */
   setAuthenticatedUserFromRust(value: unknown): boolean {
     const user = normalizeWorkingUser(value)
-    this.cachedUser = user
+    if (sameUserIdentity(this.cachedUser, user)) this.identityRevision += 1
+    this.setCachedUser(user)
     return user !== null
   }
 
   async login(input: WorkingLoginInput): Promise<WorkingLoginResult> {
     const email = input.email.trim()
     if (!email || !input.password) throw new Error('请输入邮箱和密码')
+    const identityRevision = this.identityRevision
     const rawState = await this.request<unknown>('/api/working/login', {
       method: 'POST',
       auth: false,
@@ -502,7 +523,7 @@ export class WorkingApiClient {
     if (state.authenticated !== true) {
       throw new WorkingApiError('登录响应格式不正确', 200, 'invalid_login_response', rawState)
     }
-    this.cachedUser = user
+    if (identityRevision === this.identityRevision) this.setCachedUser(user)
     return {
       token: '',
       ...(user ? { user } : {}),
@@ -525,7 +546,7 @@ export class WorkingApiClient {
     while (Date.now() < deadline) {
       const state = await this.getAuthState()
       if (state.authenticated) {
-        this.cachedUser = state.user
+        this.setCachedUser(state.user)
         return { token: '', ...(state.user ? { user: state.user } : {}) }
       }
       await new Promise<void>((resolve) => setTimeout(resolve, 250))
@@ -596,10 +617,14 @@ export class WorkingApiClient {
   }
 
   async logout(): Promise<void> {
+    const userBeforeLogout = this.getCachedUser()
+    const identityRevision = this.identityRevision
     try {
       await this.request('/api/working/logout', { method: 'POST', auth: false })
     } finally {
-      this.clearAuth()
+      if (identityRevision === this.identityRevision && sameUserIdentity(this.getCachedUser(), userBeforeLogout)) {
+        this.clearAuth()
+      }
     }
   }
 
@@ -627,10 +652,15 @@ export class WorkingApiClient {
   }
 
   async getAuthState(): Promise<{ authenticated: boolean; user: WorkingUser | null; expiresAt?: number }> {
+    const identityRevision = this.identityRevision
     const rawState = await this.requestAuthStateWithStartupRetry()
     const state = isRecord(rawState) ? rawState : {}
     const user = normalizeWorkingUser(state.user)
-    this.cachedUser = user
+    if (identityRevision !== this.identityRevision) {
+      const currentUser = this.getCachedUser()
+      return { authenticated: currentUser !== null, user: currentUser }
+    }
+    this.setCachedUser(user)
     return {
       authenticated: state.authenticated === true,
       user,
@@ -639,23 +669,31 @@ export class WorkingApiClient {
   }
 
   async getCurrentUser(): Promise<WorkingUser> {
+    const identityRevision = this.identityRevision
     const rawUser = await this.request<unknown>('/api/working/current-user')
     const user = normalizeWorkingUser(rawUser)
     if (!user) {
       throw new WorkingApiError('当前账号响应格式不正确', 200, 'invalid_user_response', rawUser)
     }
-    this.cachedUser = user
+    if (identityRevision !== this.identityRevision) {
+      throw new WorkingApiError('账号已变化，已丢弃过期账号响应', 409, 'auth_state_changed')
+    }
+    this.setCachedUser(user)
     return user
   }
 
   async getSettingsSnapshot(): Promise<WorkingSettingsSnapshot> {
+    const identityRevision = this.identityRevision
     const rawSettings = await this.request<unknown>('/api/working/settings')
     const settings = isRecord(rawSettings) ? rawSettings : {}
     const user = normalizeWorkingUser(settings.user ?? rawSettings)
     if (!user) {
       throw new WorkingApiError('当前账号响应格式不正确', 200, 'invalid_user_response', rawSettings)
     }
-    this.cachedUser = user
+    if (identityRevision !== this.identityRevision) {
+      throw new WorkingApiError('账号已变化，已丢弃过期账号响应', 409, 'auth_state_changed')
+    }
+    this.setCachedUser(user)
     const invitedUsers = Array.isArray(settings.invitedUsers)
       ? settings.invitedUsers.map(normalizeInvitedUser)
       : []
@@ -886,10 +924,44 @@ export class WorkingApiClient {
 
   /** 向本地 Rust HTTP API 发送浏览器增量同步请求 */
   async syncBrowserData(request: BrowserSyncRequest): Promise<BrowserSyncResponse> {
-    return this.request<BrowserSyncResponse>('/api/working/browser/sync', {
-      method: 'POST',
-      body: JSON.stringify(request),
-    })
+    if (typeof request.expectedUserId !== 'string' || !request.expectedUserId.trim()) {
+      throw new WorkingApiError('浏览器同步缺少预期账号身份', 400, 'browser_sync_expected_user_required')
+    }
+    let capabilities: unknown
+    try {
+      capabilities = await this.request<unknown>('/api/working/browser/sync/capabilities')
+    } catch (error) {
+      if (
+        error instanceof WorkingApiError
+        && (error.status === 404 || error.status === 405 || error.code === 'not_found' || error.code === 'unsupported_route')
+      ) {
+        throw new WorkingApiError('请更新浏览器云同步所需的本地服务', error.status, 'browser_sync_capability_required')
+      }
+      throw error
+    }
+    if (
+      !isRecord(capabilities)
+      || capabilities.accountBoundSync !== true
+      || capabilities.protocolVersion !== 1
+    ) {
+      throw new WorkingApiError('请更新浏览器云同步所需的本地服务', 0, 'browser_sync_capability_required')
+    }
+    try {
+      return await this.request<BrowserSyncResponse>('/api/working/browser/sync', {
+        method: 'POST',
+        body: JSON.stringify(request),
+      })
+    } catch (error) {
+      if (error instanceof WorkingApiError && error.status === 404) {
+        throw new WorkingApiError(
+          '云端尚未提供浏览器同步接口',
+          error.status,
+          'browser_sync_endpoint_unavailable',
+          error.payload,
+        )
+      }
+      throw error
+    }
   }
 
   private async request<T>(

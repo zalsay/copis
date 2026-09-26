@@ -1,6 +1,6 @@
 use super::auth_session::{
     working_oidc_redirect_uri, AuthError, AuthSession, LoginInput, RegisterInput, SendCodeInput,
-    VerifyResetCodeInput,
+    UserBoundRequestError, VerifyResetCodeInput,
 };
 use super::model_request_client::ModelRequestClient;
 use serde_json::{Map, Value};
@@ -369,10 +369,42 @@ pub fn handle_working_gateway_request(
         }
     }
 
+    if resource == "browser"
+        && segments.len() == 5
+        && segments[3] == "sync"
+        && segments[4] == "capabilities"
+    {
+        require_method(method, "GET")?;
+        return Ok(json_response(
+            200,
+            serde_json::json!({"accountBoundSync": true, "protocolVersion": 1}),
+        ));
+    }
+
     if resource == "browser" && segments.len() == 4 && segments[3] == "sync" {
         require_method(method, "POST")?;
-        let payload = parse_body(body)?;
-        return remote_json(gateway, method, "/api/working/browser/sync", Some(payload));
+        let mut payload = parse_body(body)?;
+        let expected_user_id = required_browser_sync_user_id(&payload)?;
+        if let Some(object) = payload.as_object_mut() {
+            object.remove("expectedUserId");
+        }
+        let response = gateway
+            .auth
+            .authenticated_request_for_user(
+                &expected_user_id,
+                method,
+                "/api/working/browser/sync",
+                Some(payload.to_string()),
+            )
+            .map_err(|error| match error {
+                UserBoundRequestError::Authentication(error) => GatewayError::from(error),
+                UserBoundRequestError::UserMismatch => GatewayError::new(
+                    409,
+                    "browser_sync_user_mismatch",
+                    "浏览器同步账号与当前账号不一致",
+                ),
+            })?;
+        return remote_response(response.status, &response.body);
     }
 
     if resource == "orders" {
@@ -676,20 +708,21 @@ fn remote_json(
         .auth
         .authenticated_request(method, path, body.map(|value| value.to_string()))
         .map_err(GatewayError::from)?;
-    if response.status == 204 || response.body.is_empty() {
-        return Ok(GatewayResponse {
-            status: response.status,
-            body: None,
-        });
+    remote_response(response.status, &response.body)
+}
+
+fn remote_response(status: u16, body: &[u8]) -> Result<GatewayResponse, GatewayError> {
+    if status == 204 || body.is_empty() {
+        return Ok(GatewayResponse { status, body: None });
     }
-    let value = serde_json::from_slice::<Value>(&response.body).map_err(|_| {
+    let value = serde_json::from_slice::<Value>(body).map_err(|_| {
         GatewayError::new(
             502,
             "invalid_upstream_response",
             "Working 后端响应不是有效 JSON",
         )
     })?;
-    Ok(json_response(response.status, unwrap_data(&value)))
+    Ok(json_response(status, unwrap_data(&value)))
 }
 
 impl GatewayError {
@@ -765,6 +798,23 @@ fn parse_body_or_empty(body: Option<&str>) -> Result<Value, GatewayError> {
     body.map(parse_json_body)
         .transpose()
         .map(|value| value.unwrap_or_else(|| Value::Object(Map::new())))
+}
+
+fn required_browser_sync_user_id(value: &Value) -> Result<String, GatewayError> {
+    let expected_user_id = value
+        .get("expectedUserId")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|user_id| !user_id.is_empty() && user_id.len() <= 256)
+        .filter(|user_id| !user_id.chars().any(char::is_control))
+        .ok_or_else(|| {
+            GatewayError::new(
+                400,
+                "browser_sync_user_required",
+                "浏览器同步缺少有效的账号标识",
+            )
+        })?;
+    Ok(expected_user_id.to_string())
 }
 
 fn parse_json_body(body: &str) -> Result<Value, GatewayError> {

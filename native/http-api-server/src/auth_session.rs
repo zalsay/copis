@@ -103,6 +103,11 @@ pub enum AuthError {
     RefreshFailed,
 }
 
+pub(crate) enum UserBoundRequestError {
+    Authentication(AuthError),
+    UserMismatch,
+}
+
 impl fmt::Debug for AuthError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -438,6 +443,7 @@ impl AuthSession {
                 }
                 eprintln!("[HTTP API][OIDC] 保存用户信息成功");
                 *self.auth.lock().unwrap() = Some(persisted);
+                self.notify_auth_state_changed(true);
             }
         }
         Ok(self.auth_state())
@@ -480,10 +486,11 @@ impl AuthSession {
                         persisted.user = Some(sanitize_user(&unwrap_data(&payload)));
                         self.storage.save(&persisted)?;
                         *self.auth.lock().unwrap() = Some(persisted);
+                        self.notify_auth_state_changed(true);
                     }
                 }
                 Err(error @ AuthError::Upstream { status: 401, .. }) => {
-                    self.clear_after_auth_failure();
+                    self.clear_after_auth_failure(true);
                     return Err(error);
                 }
                 Err(_) => {}
@@ -591,12 +598,22 @@ impl AuthSession {
         state.active = false;
         state.result = Some(result.clone());
         self.refresh_wakeup.notify_all();
+        drop(state);
+        let auth_state = self.auth_state();
+        if result.is_ok() || !auth_state.authenticated {
+            self.notify_auth_state_changed(auth_state.authenticated);
+        }
         result
     }
 
     #[cfg(test)]
     pub fn refresh_waiters(&self) -> usize {
         self.refresh_state.lock().unwrap().waiters
+    }
+
+    #[cfg(test)]
+    pub fn refresh_active_for_test(&self) -> bool {
+        self.refresh_state.lock().unwrap().active
     }
 
     pub fn logout(&self) -> Result<(), AuthError> {
@@ -628,7 +645,7 @@ impl AuthSession {
                 match self.request_with_token(method, path, body, Some(token), headers) {
                     Ok(response) => Ok(response),
                     Err(replayed @ AuthError::Upstream { status: 401, .. }) => {
-                        self.clear_after_auth_failure();
+                        self.clear_after_auth_failure(true);
                         let _ = error;
                         Err(replayed)
                     }
@@ -637,6 +654,34 @@ impl AuthSession {
             }
             Err(error) => Err(error),
         }
+    }
+
+    pub(crate) fn authenticated_request_for_user(
+        &self,
+        expected_user_id: &str,
+        method: &str,
+        path: &str,
+        body: Option<String>,
+    ) -> Result<EduApiResponse, UserBoundRequestError> {
+        let token = {
+            let auth = self.auth.lock().unwrap();
+            let auth = auth.as_ref().ok_or(UserBoundRequestError::Authentication(
+                AuthError::NotAuthenticated,
+            ))?;
+            let current_user_id = auth
+                .user
+                .as_ref()
+                .and_then(user_identifier)
+                .ok_or(UserBoundRequestError::UserMismatch)?;
+            if current_user_id != expected_user_id {
+                return Err(UserBoundRequestError::UserMismatch);
+            }
+            auth.access_token.clone()
+        };
+
+        // 浏览器同步不刷新重放：账号可能已切换，重放会把旧 payload 交给新账号。
+        self.request_with_token(method, path, body, Some(token), Vec::new())
+            .map_err(UserBoundRequestError::Authentication)
     }
 
     pub(crate) fn current_access_token(&self) -> Result<String, AuthError> {
@@ -750,7 +795,7 @@ impl AuthSession {
             Ok(response) => response,
             Err(error) => {
                 if matches!(error, AuthError::Upstream { status: 401, .. }) {
-                    self.clear_after_auth_failure();
+                    self.clear_after_auth_failure(false);
                 }
                 return Err(error);
             }
@@ -774,13 +819,14 @@ impl AuthSession {
         };
         self.storage.save(&next)?;
         *auth = Some(next);
-        drop(auth);
-        self.notify_auth_state_changed(true);
         Ok(access_token)
     }
 
-    fn clear_after_auth_failure(&self) {
-        self.clear_local_auth();
+    fn clear_after_auth_failure(&self, notify_observer: bool) {
+        *self.auth.lock().unwrap() = None;
+        if notify_observer {
+            self.notify_auth_state_changed(false);
+        }
         if self.storage.clear().is_err() {
             eprintln!("[HTTP API][认证] 自动清理认证存储失败");
         }
@@ -997,6 +1043,16 @@ fn sanitize_user(value: &Value) -> Value {
         sanitized.insert(key.clone(), value.clone());
     }
     Value::Object(sanitized)
+}
+
+fn user_identifier(user: &Value) -> Option<String> {
+    ["ID", "id", "user_id", "userId"]
+        .iter()
+        .find_map(|key| match user.get(*key)? {
+            Value::String(value) if !value.trim().is_empty() => Some(value.trim().to_string()),
+            Value::Number(value) => Some(value.to_string()),
+            _ => None,
+        })
 }
 
 fn jwt_expiry(token: &str) -> Option<u64> {

@@ -1,7 +1,15 @@
-import { describe, expect, mock, test } from 'bun:test'
+import { afterAll, describe, expect, mock, test } from 'bun:test'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { join } from 'node:path'
+import * as os from 'node:os'
 import { isChatRoomAgentInvocation, type ChatRoomAgentInvocation } from '@copis/shared'
 import type { HttpApiDependencies } from './http-api-handler'
 import type { AppSettings } from '../../types'
+
+// 认证存储回调会写入或清除文件，必须与用户真实主目录隔离。
+const testHome = mkdtempSync(join(os.tmpdir(), 'copis-http-handler-'))
+mock.module('node:os', () => ({ ...os, homedir: () => testHome }))
+afterAll(() => rmSync(testHome, { recursive: true, force: true }))
 
 mock.module('electron', () => ({
   app: { isPackaged: true, getPath: () => '/tmp/copis-test-app-data' },
@@ -81,6 +89,38 @@ test('Given Rust HTTP login reports authenticated When auth state changes Then c
   expect(resume).toHaveBeenCalledTimes(1)
 })
 
+test('Given Rust 通知退出 When 存在异步运行时清理 Then 先隔离浏览器账号再广播', async () => {
+  const order: string[] = []
+  const response = await handleHttpApiRequest({
+    method: 'POST', path: '/api/internal/auth-state/changed',
+    body: JSON.stringify({ authenticated: false, user: { id: 'old-account' } }),
+  }, createDependencies({
+    getWorkingClient: () => ({ baseUrl: 'https://backend.example.test', clearAuth: () => { order.push('clear') } }) as never,
+    syncWebSyncAuthState: (state) => {
+      expect(state.authenticated).toBe(false)
+      expect(state.user).toBeNull()
+      order.push('browser')
+    },
+    stopChatRoomAgents: async () => { order.push('stop') },
+    notifyWorkingAuthUpdated: () => { order.push('broadcast') },
+  }))
+  expect(response.status).toBe(204)
+  expect(order).toEqual(['browser', 'stop', 'clear', 'broadcast'])
+})
+
+test('Given Rust 通知新账号 When 刷新认证状态 Then 浏览器先收到同一身份', async () => {
+  const order: string[] = []
+  const response = await handleHttpApiRequest({
+    method: 'POST', path: '/api/internal/auth-state/changed',
+    body: JSON.stringify({ authenticated: true, user: { id: 'account-b' } }),
+  }, createDependencies({
+    syncWebSyncAuthState: (state) => { expect(state.user?.id).toBe('account-b'); order.push('browser') },
+    notifyWorkingAuthUpdated: () => { order.push('broadcast') },
+  }))
+  expect(response.status).toBe(204)
+  expect(order).toEqual(['browser', 'broadcast'])
+})
+
 test('Given authenticated state notification carries a user When bridge handles it Then it does not synthesize or clear local cached identity', async () => {
   const clearAuth = mock(() => undefined)
   const client = { baseUrl: 'https://backend.example.test', clearAuth, getCachedUser: () => null }
@@ -149,10 +189,12 @@ test('Given cached account A When Rust saves account B Then old runtime stops be
     body: JSON.stringify({ accessToken: 'token-b', provider: 'legacy', user: { id: 'B' } }),
   }, createDependencies({
     getWorkingClient: () => client as never,
+    syncWebSyncAuthState: () => { order.push('unexpected-browser-switch') },
     stopChatRoomAgents: async () => { order.push('stopChatRoomAgents') },
   }))
 
   expect(response).toEqual({ status: 204 })
+  // storage/save 还在 Rust 内存认证提交之前；浏览器须等待后续已提交的状态通知。
   expect(order).toEqual(['stopChatRoomAgents', 'clearAuth', 'setUser'])
   expect(currentUser).toEqual({ id: 'B' })
 })

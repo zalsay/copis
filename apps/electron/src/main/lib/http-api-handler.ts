@@ -1,6 +1,7 @@
 import { app } from 'electron'
 import type { WorkingApiClient } from './working-api-client'
 import { getWorkingApiClient } from './working-api-service'
+import { getWebSyncCoordinator } from './web-sync-coordinator'
 import {
   clearWorkingAuthFromRust,
   loadWorkingAuthForRust,
@@ -137,6 +138,8 @@ export interface HttpApiDependencies {
   saveWorkingModelCatalog?: (value: unknown, isVip: boolean, ownerId?: string) => import('@copis/shared').WorkingModelCatalog
   /** Rust 后台支付确认后，向主渲染进程广播最新 Working 账户资料。 */
   notifyWorkingAuthUpdated?: (state: WorkingAuthState) => void
+  /** 在任何异步清理或 UI 广播之前切换浏览器账号，失效旧同步请求。 */
+  syncWebSyncAuthState?: (state: WorkingAuthState) => void
   getAgentApi?: () => Promise<AgentHttpFacade>
   getFileApi?: () => FileHttpFacade | Promise<FileHttpFacade>
   getBrowserAgentToolApi?: () => BrowserAgentToolHttpApi | Promise<BrowserAgentToolHttpApi>
@@ -196,6 +199,7 @@ const defaultDependencies: HttpApiDependencies = {
   updateAppSettings: updateSettings,
   getWorkingModelCatalog,
   saveWorkingModelCatalog,
+  syncWebSyncAuthState: (state) => getWebSyncCoordinator().setAuthState(state),
   notifyWorkingAuthUpdated: (state) => {
     void import('../index').then(({ getMainWindow }) => {
       const mainWindow = getMainWindow()
@@ -1539,6 +1543,9 @@ export async function handleHttpApiRequest(
       }
       if (segments[3] === 'clear' && request.method === 'POST') {
         console.info('[HTTP API][认证存储] clear 收到请求')
+        dependencies.syncWebSyncAuthState?.({
+          authenticated: false, user: null, backendUrl: dependencies.getWorkingClient().baseUrl,
+        })
         try {
           // Rust 认证状态先释放聊天室运行时，再清理 Electron 的本地身份缓存，避免旧身份继续命中 Agent 工作区。
           await dependencies.stopChatRoomAgents?.('logout')
@@ -1570,17 +1577,19 @@ export async function handleHttpApiRequest(
         ? body.expiresAt
         : null
       const client = dependencies.getWorkingClient()
+      const authState: WorkingAuthState = {
+        authenticated: body.authenticated,
+        user,
+        backendUrl: client.baseUrl,
+        expiresAt,
+      }
+      dependencies.syncWebSyncAuthState?.(authState)
       if (!body.authenticated) {
         // 认证失效必须先停止聊天室 Agent，再清理 cachedUser/tokenStore，防止配置 ABA 写入旧 inbox。
         await dependencies.stopChatRoomAgents?.('logout')
         client.clearAuth()
       }
-      dependencies.notifyWorkingAuthUpdated?.({
-        authenticated: body.authenticated,
-        user,
-        backendUrl: client.baseUrl,
-        expiresAt,
-      })
+      dependencies.notifyWorkingAuthUpdated?.(authState)
       if (body.authenticated) await dependencies.resumeChatRoomAgentsAfterAuthentication?.()
       console.info('[HTTP API][认证状态] changed 完成', {
         authenticated: body.authenticated,

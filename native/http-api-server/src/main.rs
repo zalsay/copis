@@ -420,7 +420,6 @@ impl AuthStorage for BridgeAuthStorage {
             return Err(AuthError::Storage("认证存储保存失败".to_string()));
         }
         eprintln!("[HTTP API][认证存储] save 成功");
-        self.notify_state_changed(true, auth.user.as_ref(), auth.expires_at);
         Ok(())
     }
 
@@ -451,7 +450,6 @@ impl AuthStorage for BridgeAuthStorage {
             return Err(AuthError::Storage("认证存储清理失败".to_string()));
         }
         eprintln!("[HTTP API][认证存储] clear 成功");
-        self.notify_state_changed(false, None, None);
         Ok(())
     }
 }
@@ -4444,8 +4442,18 @@ fn main() {
     };
     bridge_auth_storage.set_chatroom_gateway(&chatroom_gateway);
     let auth_observer_storage = Arc::clone(&bridge_auth_storage);
-    auth_session.set_auth_state_observer(Arc::new(move |authenticated| {
-        auth_observer_storage.notify_chatroom_gateway(authenticated);
+    let auth_session_weak = Arc::downgrade(&auth_session);
+    auth_session.set_auth_state_observer(Arc::new(move |_| {
+        let Some(auth_session) = auth_session_weak.upgrade() else {
+            return;
+        };
+        let auth_state = auth_session.auth_state();
+        auth_observer_storage.notify_state_changed(
+            auth_state.authenticated,
+            auth_state.user.as_ref(),
+            auth_state.expires_at,
+        );
+        auth_observer_storage.notify_chatroom_gateway(auth_state.authenticated);
     }));
     let listener = match bind_and_start_chatroom_gateway(port, &chatroom_gateway) {
         Ok(listener) => listener,

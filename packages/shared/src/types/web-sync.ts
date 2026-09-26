@@ -62,6 +62,10 @@ export interface WebPageProfilesSnapshot {
 
 /** 本地同步状态元数据 */
 export interface WebSyncState {
+  /** 当前本地存储/同步分区的稳定账号键；guest 为 null。 */
+  accountId: string | null
+  /** 同步生命周期状态；idle 表示尚未完成本次会话的同步判断。 */
+  status: 'idle' | 'signed-out' | 'pending' | 'syncing' | 'synced' | 'error'
   /** 本地客户端唯一设备 ID */
   deviceId: string
   /** 客户端已确认的服务端增量游标（初始为 0） */
@@ -127,6 +131,8 @@ export interface BrowserSyncChanges {
 export interface BrowserSyncRequest {
   clientDeviceId: string
   clientCursor: number
+  /** Rust 网关必须在捕获认证 token 的同一临界区验证该稳定用户 ID。 */
+  expectedUserId: string
   changes: BrowserSyncChanges
 }
 

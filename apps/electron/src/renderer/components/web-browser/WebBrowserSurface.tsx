@@ -39,6 +39,7 @@ import {
 } from '@/atoms/web-password-atoms'
 import { WebPasswordPromptBanner } from './WebPasswordPromptBanner'
 import { WebPasswordKeyPopover } from './WebPasswordKeyPopover'
+import { WebSyncStatusButton } from './WebSyncStatusButton'
 
 function applySnapshot(
   snapshot: WebTabsSnapshot,
@@ -945,6 +946,8 @@ export function WebBrowserSurface(): React.ReactElement {
             )}
           </BrowserToolbarButton>
         ) : null}
+
+        <WebSyncStatusButton />
 
         <BrowserToolbarButton
           label={liveTranslateActive ? 'Gemini 实时语音同传 (运行中)' : 'Gemini 实时语音同传'}

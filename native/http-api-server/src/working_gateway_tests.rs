@@ -12,7 +12,7 @@ use serde_json::{json, Value};
 use std::collections::VecDeque;
 use std::io::{Read, Write};
 use std::net::TcpListener;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Barrier, Mutex};
 use std::thread;
 
 static HTTP_API_ENV_LOCK: Mutex<()> = Mutex::new(());
@@ -41,6 +41,44 @@ impl AuthStorage for MemoryStorage {
 struct QueueTransport {
     responses: Mutex<VecDeque<EduApiResponse>>,
     requests: Mutex<Vec<EduApiRequest>>,
+}
+
+struct BrowserSyncSwitchTransport {
+    login_count: std::sync::atomic::AtomicUsize,
+    requests: Mutex<Vec<EduApiRequest>>,
+    sync_entered: Arc<Barrier>,
+    sync_release: Arc<Barrier>,
+}
+
+impl EduApiTransport for BrowserSyncSwitchTransport {
+    fn send(&self, request: EduApiRequest) -> Result<EduApiResponse, EduApiError> {
+        let path = request.path.clone();
+        self.requests.lock().unwrap().push(request);
+        match path.as_str() {
+            "/api/auth/login" => {
+                let account = self
+                    .login_count
+                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Ok(response(
+                    200,
+                    if account == 0 {
+                        json!({"token":"account-a-token", "refresh_token":"account-a-refresh", "user":{"id":7}})
+                    } else {
+                        json!({"token":"account-b-token", "refresh_token":"account-b-refresh", "user":{"id":8}})
+                    },
+                ))
+            }
+            "/api/working/browser/sync" => {
+                self.sync_entered.wait();
+                self.sync_release.wait();
+                Ok(response(
+                    401,
+                    json!({"code":"unauthorized","message":"expired"}),
+                ))
+            }
+            _ => Err(EduApiError::Transport(format!("意外测试请求: {path}"))),
+        }
+    }
 }
 
 impl QueueTransport {
@@ -772,6 +810,27 @@ fn maps_upstream_failure_includes_detail_when_present() {
 }
 
 #[test]
+fn browser_sync_capabilities_advertise_account_binding_without_remote_request() {
+    let transport = Arc::new(QueueTransport::new(vec![]));
+    let gateway = gateway(transport.clone());
+
+    let result = handle_working_gateway_request(
+        &gateway,
+        "GET",
+        "/api/working/browser/sync/capabilities",
+        None,
+    )
+    .unwrap();
+
+    assert_eq!(result.status, 200);
+    assert_eq!(
+        result.body.unwrap(),
+        json!({"accountBoundSync": true, "protocolVersion": 1})
+    );
+    assert!(transport.requests.lock().unwrap().is_empty());
+}
+
+#[test]
 fn forwards_browser_sync_request_with_token() {
     let transport = Arc::new(QueueTransport::new(vec![
         response(200, json!({"token":"access-token","user":{"id":7}})),
@@ -799,6 +858,7 @@ fn forwards_browser_sync_request_with_token() {
     .unwrap();
 
     let sync_body = json!({
+        "expectedUserId": "7",
         "clientDeviceId": "device-1",
         "clientCursor": 100,
         "changes": {
@@ -837,4 +897,173 @@ fn forwards_browser_sync_request_with_token() {
         .unwrap();
     assert_eq!(sync_request.method, "POST");
     assert_eq!(sync_request.access_token.as_deref(), Some("access-token"));
+    let forwarded_body: Value =
+        serde_json::from_str(sync_request.body.as_deref().unwrap()).unwrap();
+    assert!(forwarded_body.get("expectedUserId").is_none());
+    assert_eq!(forwarded_body["clientDeviceId"], "device-1");
+}
+
+#[test]
+fn browser_sync_accepts_supported_user_id_field_names_and_json_number_or_string_values() {
+    for (field, user_id, expected_user_id) in [
+        ("ID", json!(42), "42"),
+        ("id", json!("id-string"), "id-string"),
+        ("user_id", json!(43), "43"),
+        ("userId", json!("camel-id"), "camel-id"),
+    ] {
+        let user = Value::Object(serde_json::Map::from_iter([(field.to_string(), user_id)]));
+        let transport = Arc::new(QueueTransport::new(vec![
+            response(200, json!({"token":"account-token","user":user})),
+            response(200, json!({"data":{}})),
+        ]));
+        let gateway = gateway(transport);
+        handle_working_gateway_request(
+            &gateway,
+            "POST",
+            "/api/working/login",
+            Some(r#"{"email":"user@example.com","password":"password"}"#),
+        )
+        .unwrap();
+
+        let body = json!({"expectedUserId": expected_user_id, "changes": {}}).to_string();
+        let result = handle_working_gateway_request(
+            &gateway,
+            "POST",
+            "/api/working/browser/sync",
+            Some(&body),
+        );
+        assert!(
+            result.is_ok(),
+            "field {field} should match {expected_user_id}"
+        );
+    }
+}
+
+#[test]
+fn browser_sync_requires_expected_user_and_authentication_before_remote_request() {
+    let transport = Arc::new(QueueTransport::new(vec![]));
+    let gateway = gateway(transport.clone());
+
+    let missing_user = handle_working_gateway_request(
+        &gateway,
+        "POST",
+        "/api/working/browser/sync",
+        Some(r#"{"changes":{}}"#),
+    )
+    .unwrap_err();
+    assert_eq!(missing_user.status, 400);
+    assert_eq!(missing_user.code, "browser_sync_user_required");
+
+    let unauthenticated = handle_working_gateway_request(
+        &gateway,
+        "POST",
+        "/api/working/browser/sync",
+        Some(r#"{"expectedUserId":"7","changes":{}}"#),
+    )
+    .unwrap_err();
+    assert_eq!(unauthenticated.status, 401);
+    assert_eq!(unauthenticated.code, "unauthorized");
+    assert!(transport.requests.lock().unwrap().is_empty());
+}
+
+#[test]
+fn browser_sync_rejects_a_different_current_account_before_remote_request() {
+    let transport = Arc::new(QueueTransport::new(vec![response(
+        200,
+        json!({"token":"account-a-token","user":{"id":7}}),
+    )]));
+    let gateway = gateway(transport.clone());
+    handle_working_gateway_request(
+        &gateway,
+        "POST",
+        "/api/working/login",
+        Some(r#"{"email":"user@example.com","password":"password"}"#),
+    )
+    .unwrap();
+
+    let mismatch = handle_working_gateway_request(
+        &gateway,
+        "POST",
+        "/api/working/browser/sync",
+        Some(r#"{"expectedUserId":"8","changes":{}}"#),
+    )
+    .unwrap_err();
+    assert_eq!(mismatch.status, 409);
+    assert_eq!(mismatch.code, "browser_sync_user_mismatch");
+    assert_eq!(
+        transport
+            .requests
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|request| request.path == "/api/working/browser/sync")
+            .count(),
+        0
+    );
+}
+
+#[test]
+fn browser_sync_keeps_captured_account_token_and_does_not_refresh_replay_after_switch() {
+    let transport = Arc::new(BrowserSyncSwitchTransport {
+        login_count: std::sync::atomic::AtomicUsize::new(0),
+        requests: Mutex::new(Vec::new()),
+        sync_entered: Arc::new(Barrier::new(2)),
+        sync_release: Arc::new(Barrier::new(2)),
+    });
+    let client = Arc::new(
+        EduApiClient::new(
+            "https://edu-api.example.test/module/edu-api",
+            transport.clone(),
+            32,
+        )
+        .unwrap(),
+    );
+    let gateway = Arc::new(WorkingGateway::new(Arc::new(
+        AuthSession::new(client, Arc::new(MemoryStorage::default())).unwrap(),
+    )));
+    handle_working_gateway_request(
+        &gateway,
+        "POST",
+        "/api/working/login",
+        Some(r#"{"email":"a@example.com","password":"password"}"#),
+    )
+    .unwrap();
+
+    let sync_gateway = gateway.clone();
+    let sync = thread::spawn(move || {
+        handle_working_gateway_request(
+            &sync_gateway,
+            "POST",
+            "/api/working/browser/sync",
+            Some(r#"{"expectedUserId":"7","bookmarks":[{"url":"https://a.example"}]}"#),
+        )
+    });
+    transport.sync_entered.wait();
+    handle_working_gateway_request(
+        &gateway,
+        "POST",
+        "/api/working/login",
+        Some(r#"{"email":"b@example.com","password":"password"}"#),
+    )
+    .unwrap();
+    transport.sync_release.wait();
+
+    let sync_error = sync.join().unwrap().unwrap_err();
+    assert_eq!(sync_error.status, 401);
+    let requests = transport.requests.lock().unwrap();
+    let sync_requests: Vec<_> = requests
+        .iter()
+        .filter(|request| request.path == "/api/working/browser/sync")
+        .collect();
+    assert_eq!(sync_requests.len(), 1);
+    assert_eq!(
+        sync_requests[0].access_token.as_deref(),
+        Some("account-a-token")
+    );
+    let forwarded_body: Value =
+        serde_json::from_str(sync_requests[0].body.as_deref().unwrap()).unwrap();
+    assert!(forwarded_body.get("expectedUserId").is_none());
+    assert!(!requests
+        .iter()
+        .any(|request| request.path == "/api/auth/refresh"));
 }

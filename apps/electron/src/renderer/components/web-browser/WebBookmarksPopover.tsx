@@ -1,11 +1,9 @@
 import * as React from 'react'
 import { useAtomValue, useSetAtom } from 'jotai'
 import {
-  AlertCircle,
   Check,
   ChevronDown,
   ChevronRight,
-  Cloud,
   Folder,
   FolderOpen,
   Globe2,
@@ -20,7 +18,7 @@ import {
 } from 'lucide-react'
 import type { WebBookmark, WebBookmarkGroup, WebBookmarksSnapshot, WebTabState } from '@copis/shared'
 import { webBookmarkGroupsAtom, webBookmarksAtom } from '@/atoms/web-bookmarks'
-import { webSyncStateAtom, triggerWebSyncNowAtom } from '@/atoms/web-sync'
+import { webSyncStateAtom } from '@/atoms/web-sync'
 import { Button } from '@/components/ui/button'
 import {
   DropdownMenu,
@@ -35,6 +33,8 @@ import { Popover, PopoverAnchor, PopoverContent } from '@/components/ui/popover'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
 import { toast } from 'sonner'
+import { WebSyncStatusButton } from './WebSyncStatusButton'
+import { isCurrentWebBookmarkRequest } from './web-bookmark-snapshot'
 
 interface WebBookmarksPopoverProps {
   activeTab: WebTabState
@@ -267,7 +267,6 @@ export function WebBookmarksPopover({ activeTab, onNavigate, standalone = false,
   const bookmarks = useAtomValue(webBookmarksAtom)
   const groups = useAtomValue(webBookmarkGroupsAtom)
   const syncState = useAtomValue(webSyncStateAtom)
-  const triggerSync = useSetAtom(triggerWebSyncNowAtom)
   const setBookmarks = useSetAtom(webBookmarksAtom)
   const setGroups = useSetAtom(webBookmarkGroupsAtom)
   const [loading, setLoading] = React.useState(true)
@@ -282,6 +281,10 @@ export function WebBookmarksPopover({ activeTab, onNavigate, standalone = false,
   const [expandedGroupIds, setExpandedGroupIds] = React.useState<Set<string>>(new Set())
   const bookmarksTriggerRef = React.useRef<HTMLButtonElement>(null)
   const treeInitializedRef = React.useRef(false)
+  const bookmarkLoadGenerationRef = React.useRef(0)
+  const bookmarkAccountIdRef = React.useRef<string | null | undefined>(undefined)
+  const currentSyncAccountIdRef = React.useRef(syncState.accountId)
+  currentSyncAccountIdRef.current = syncState.accountId
 
   const currentBookmark = bookmarks.find((bookmark) => bookmark.url === activeTab.url)
   const effectiveSaveGroupId = saveGroupId === undefined ? currentBookmark?.groupId ?? null : saveGroupId
@@ -309,44 +312,35 @@ export function WebBookmarksPopover({ activeTab, onNavigate, standalone = false,
   const ungroupedBookmarks = bookmarksByGroup.get(null) ?? []
   const bookmarkActionLabel = !canBookmark ? '当前页面不可收藏' : currentBookmark ? '取消当前页收藏' : '收藏当前页'
 
+  // 账号切换或一次同步完成后刷新书签；代次保护避免旧账号的慢响应覆盖新快照。
   React.useEffect(() => {
+    const generation = ++bookmarkLoadGenerationRef.current
+    const request = { accountId: syncState.accountId, generation }
+    if (bookmarkAccountIdRef.current !== syncState.accountId) {
+      bookmarkAccountIdRef.current = syncState.accountId
+      setLoading(true)
+    }
     let mounted = true
-    setLoading(true)
+
     window.electronAPI.webTabs.bookmarksList()
       .then((snapshot) => {
-        if (mounted) applyBookmarkSnapshot(snapshot, setBookmarks, setGroups)
+        if (mounted && isCurrentWebBookmarkRequest(request, currentSyncAccountIdRef.current, bookmarkLoadGenerationRef.current)) {
+          applyBookmarkSnapshot(snapshot, setBookmarks, setGroups)
+        }
       })
       .catch((error: unknown) => {
-        if (mounted) toast.error(error instanceof Error ? error.message : '加载收藏夹失败')
+        if (mounted && isCurrentWebBookmarkRequest(request, currentSyncAccountIdRef.current, bookmarkLoadGenerationRef.current)) {
+          toast.error(error instanceof Error ? error.message : '加载收藏夹失败')
+        }
       })
       .finally(() => {
-        if (mounted) setLoading(false)
+        if (mounted && isCurrentWebBookmarkRequest(request, currentSyncAccountIdRef.current, bookmarkLoadGenerationRef.current)) setLoading(false)
       })
+
     return () => {
       mounted = false
     }
-  }, [setBookmarks, setGroups])
-
-  // 增量同步完成后自动刷新书签与分组快照
-  React.useEffect(() => {
-    if (syncState.lastSyncedAt <= 0) return
-    window.electronAPI.webTabs.bookmarksList()
-      .then((snapshot) => {
-        applyBookmarkSnapshot(snapshot, setBookmarks, setGroups)
-      })
-      .catch((error: unknown) => {
-        console.error('[网页收藏夹] 同步后刷新书签失败:', error)
-      })
-  }, [syncState.lastSyncedAt, setBookmarks, setGroups])
-
-  const handleManualSync = async (): Promise<void> => {
-    try {
-      await triggerSync()
-      toast.success('增量同步已完成')
-    } catch (error: unknown) {
-      toast.error(error instanceof Error ? error.message : '同步失败')
-    }
-  }
+  }, [syncState.accountId, syncState.lastSyncedAt, setBookmarks, setGroups])
 
   React.useEffect(() => {
     if (saveGroupId !== null && saveGroupId !== undefined && !groups.some((group) => group.id === saveGroupId)) {
@@ -387,6 +381,7 @@ export function WebBookmarksPopover({ activeTab, onNavigate, standalone = false,
 
   const saveCurrent = async (): Promise<void> => {
     if (!canBookmark || busy) return
+    const request = { accountId: syncState.accountId, generation: bookmarkLoadGenerationRef.current }
     setBusy(true)
     try {
       const wasAlreadySaved = currentBookmark !== undefined
@@ -397,10 +392,13 @@ export function WebBookmarksPopover({ activeTab, onNavigate, standalone = false,
         faviconUrl: activeTab.faviconUrl || resolveDefaultFaviconUrl(activeTab.url),
         groupId: saveGroupId,
       })
+      if (!isCurrentWebBookmarkRequest(request, currentSyncAccountIdRef.current, bookmarkLoadGenerationRef.current)) return
       applyBookmarkSnapshot(snapshot, setBookmarks, setGroups)
       toast.success(wasMoved ? `已移动到「${saveGroupName}」` : wasAlreadySaved ? '已更新当前页收藏' : `已收藏到「${saveGroupName}」`)
     } catch (error: unknown) {
-      toast.error(error instanceof Error ? error.message : '保存收藏失败')
+      if (isCurrentWebBookmarkRequest(request, currentSyncAccountIdRef.current, bookmarkLoadGenerationRef.current)) {
+        toast.error(error instanceof Error ? error.message : '保存收藏失败')
+      }
     } finally {
       setBusy(false)
     }
@@ -408,13 +406,17 @@ export function WebBookmarksPopover({ activeTab, onNavigate, standalone = false,
 
   const removeBookmark = async (bookmarkId: string, successMessage?: string): Promise<void> => {
     if (busy) return
+    const request = { accountId: syncState.accountId, generation: bookmarkLoadGenerationRef.current }
     setBusy(true)
     try {
       const snapshot = await window.electronAPI.webTabs.bookmarksRemove(bookmarkId)
+      if (!isCurrentWebBookmarkRequest(request, currentSyncAccountIdRef.current, bookmarkLoadGenerationRef.current)) return
       applyBookmarkSnapshot(snapshot, setBookmarks, setGroups)
       if (successMessage) toast.success(successMessage)
     } catch (error: unknown) {
-      toast.error(error instanceof Error ? error.message : '删除收藏失败')
+      if (isCurrentWebBookmarkRequest(request, currentSyncAccountIdRef.current, bookmarkLoadGenerationRef.current)) {
+        toast.error(error instanceof Error ? error.message : '删除收藏失败')
+      }
     } finally {
       setBusy(false)
     }
@@ -431,6 +433,7 @@ export function WebBookmarksPopover({ activeTab, onNavigate, standalone = false,
 
   const moveBookmark = async (bookmark: WebBookmark, groupId: string | null): Promise<void> => {
     if (busy || bookmark.groupId === groupId) return
+    const request = { accountId: syncState.accountId, generation: bookmarkLoadGenerationRef.current }
     setBusy(true)
     try {
       const snapshot = await window.electronAPI.webTabs.bookmarksSave({
@@ -438,11 +441,14 @@ export function WebBookmarksPopover({ activeTab, onNavigate, standalone = false,
         url: bookmark.url,
         groupId,
       })
+      if (!isCurrentWebBookmarkRequest(request, currentSyncAccountIdRef.current, bookmarkLoadGenerationRef.current)) return
       applyBookmarkSnapshot(snapshot, setBookmarks, setGroups)
       const targetName = groupId === null ? '未分组' : groups.find((group) => group.id === groupId)?.name ?? '未分组'
       toast.success(`已移动到「${targetName}」`)
     } catch (error: unknown) {
-      toast.error(error instanceof Error ? error.message : '移动收藏失败')
+      if (isCurrentWebBookmarkRequest(request, currentSyncAccountIdRef.current, bookmarkLoadGenerationRef.current)) {
+        toast.error(error instanceof Error ? error.message : '移动收藏失败')
+      }
     } finally {
       setBusy(false)
     }
@@ -451,9 +457,11 @@ export function WebBookmarksPopover({ activeTab, onNavigate, standalone = false,
   const createGroup = async (event: React.FormEvent<HTMLFormElement>): Promise<void> => {
     event.preventDefault()
     if (!newGroupName.trim() || busy) return
+    const request = { accountId: syncState.accountId, generation: bookmarkLoadGenerationRef.current }
     setBusy(true)
     try {
       const snapshot = await window.electronAPI.webTabs.bookmarksGroupCreate({ name: newGroupName })
+      if (!isCurrentWebBookmarkRequest(request, currentSyncAccountIdRef.current, bookmarkLoadGenerationRef.current)) return
       applyBookmarkSnapshot(snapshot, setBookmarks, setGroups)
       const createdGroup = snapshot.groups[0]
       if (createdGroup) {
@@ -465,7 +473,9 @@ export function WebBookmarksPopover({ activeTab, onNavigate, standalone = false,
       setNewGroupName('')
       setCreatingGroup(false)
     } catch (error: unknown) {
-      toast.error(error instanceof Error ? error.message : '创建分组失败')
+      if (isCurrentWebBookmarkRequest(request, currentSyncAccountIdRef.current, bookmarkLoadGenerationRef.current)) {
+        toast.error(error instanceof Error ? error.message : '创建分组失败')
+      }
     } finally {
       setBusy(false)
     }
@@ -474,14 +484,18 @@ export function WebBookmarksPopover({ activeTab, onNavigate, standalone = false,
   const renameGroup = async (event: React.FormEvent<HTMLFormElement>, groupId: string): Promise<void> => {
     event.preventDefault()
     if (!editingGroupName.trim() || busy) return
+    const request = { accountId: syncState.accountId, generation: bookmarkLoadGenerationRef.current }
     setBusy(true)
     try {
       const snapshot = await window.electronAPI.webTabs.bookmarksGroupRename({ groupId, name: editingGroupName })
+      if (!isCurrentWebBookmarkRequest(request, currentSyncAccountIdRef.current, bookmarkLoadGenerationRef.current)) return
       applyBookmarkSnapshot(snapshot, setBookmarks, setGroups)
       setEditingGroupId(null)
       setEditingGroupName('')
     } catch (error: unknown) {
-      toast.error(error instanceof Error ? error.message : '重命名分组失败')
+      if (isCurrentWebBookmarkRequest(request, currentSyncAccountIdRef.current, bookmarkLoadGenerationRef.current)) {
+        toast.error(error instanceof Error ? error.message : '重命名分组失败')
+      }
     } finally {
       setBusy(false)
     }
@@ -492,9 +506,11 @@ export function WebBookmarksPopover({ activeTab, onNavigate, standalone = false,
     const confirmed = window.confirm(`删除分组「${group.name}」？其中的收藏会移动到未分组。`)
     if (!confirmed) return
 
+    const request = { accountId: syncState.accountId, generation: bookmarkLoadGenerationRef.current }
     setBusy(true)
     try {
       const snapshot = await window.electronAPI.webTabs.bookmarksGroupRemove(group.id)
+      if (!isCurrentWebBookmarkRequest(request, currentSyncAccountIdRef.current, bookmarkLoadGenerationRef.current)) return
       applyBookmarkSnapshot(snapshot, setBookmarks, setGroups)
       if (saveGroupId === group.id) setSaveGroupId(null)
       if (viewGroupId === group.id) {
@@ -503,7 +519,9 @@ export function WebBookmarksPopover({ activeTab, onNavigate, standalone = false,
       }
       toast.success(`已删除分组「${group.name}」`)
     } catch (error: unknown) {
-      toast.error(error instanceof Error ? error.message : '删除分组失败')
+      if (isCurrentWebBookmarkRequest(request, currentSyncAccountIdRef.current, bookmarkLoadGenerationRef.current)) {
+        toast.error(error instanceof Error ? error.message : '删除分组失败')
+      }
     } finally {
       setBusy(false)
     }
@@ -599,39 +617,7 @@ export function WebBookmarksPopover({ activeTab, onNavigate, standalone = false,
               <p className="text-[11px] text-muted-foreground">保存常用网页地址</p>
             </div>
             <div className="flex items-center gap-1.5">
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="icon-sm"
-                    className="h-6 w-6 text-muted-foreground hover:text-foreground"
-                    disabled={syncState.isSyncing}
-                    onClick={() => void handleManualSync()}
-                  >
-                    {syncState.isSyncing ? (
-                      <LoaderCircle className="size-3.5 animate-spin text-primary" />
-                    ) : syncState.lastSyncError ? (
-                      <AlertCircle className="size-3.5 text-destructive" />
-                    ) : syncState.hasLocalChanges ? (
-                      <Cloud className="size-3.5 text-amber-500" />
-                    ) : (
-                      <Cloud className="size-3.5 text-muted-foreground" />
-                    )}
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent side="bottom" className="text-xs">
-                  {syncState.isSyncing
-                    ? '正在增量同步到服务端...'
-                    : syncState.lastSyncError
-                      ? `同步失败: ${syncState.lastSyncError}，点击重试`
-                      : syncState.hasLocalChanges
-                        ? '有本地变更待同步，点击立即同步'
-                        : syncState.lastSyncedAt > 0
-                          ? `已与云端同步（${new Date(syncState.lastSyncedAt).toLocaleTimeString()}）`
-                          : '点击同步到服务端'}
-                </TooltipContent>
-              </Tooltip>
+              <WebSyncStatusButton compact />
               <span className="text-xs tabular-nums text-muted-foreground">{bookmarks.length}</span>
             </div>
           </div>

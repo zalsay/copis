@@ -2,6 +2,21 @@ import { describe, expect, mock, test } from 'bun:test'
 import type { MemoryExportFileInput } from '@copis/shared'
 import { downloadMemoryExport, installHttpApiBridge } from './http-api-bridge'
 
+test('Given 浏览器降级桥 When 请求云同步 Then 明确返回不支持而非同步成功', async () => {
+  const runtime = globalThis as typeof globalThis & { window?: Window & typeof globalThis }
+  const previousWindow = runtime.window
+  runtime.window = { location: { origin: 'http://127.0.0.1:51730' } } as unknown as Window & typeof globalThis
+  try {
+    installHttpApiBridge()
+    const result = await runtime.window.electronAPI.webSync.syncNow()
+    expect(result.status).toBe('error')
+    expect(result.lastSyncError).toContain('仅支持桌面应用')
+    expect(result.lastSyncedAt).toBe(0)
+  } finally {
+    runtime.window = previousWindow
+  }
+})
+
 describe('浏览器模式 Memory 导出', () => {
   test('没有 Electron 保存桥时创建浏览器下载', () => {
     const anchor = {

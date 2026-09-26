@@ -38,6 +38,7 @@ mock.module('./config-paths', () => ({
 
 const { WebSyncCoordinator, resetWebSyncCoordinatorForTests } = await import('./web-sync-coordinator')
 const { getOrCreateClientDeviceId } = await import('./client-device-id')
+const accountStorage = await import('./web-sync-account-storage')
 const bookmarkService = await import('./web-bookmark-service')
 const profileService = await import('./web-page-profile-service')
 
@@ -49,6 +50,7 @@ describe('WebSyncCoordinator 增量同步调度', () => {
 
   afterEach(() => {
     resetWebSyncCoordinatorForTests()
+    accountStorage.resetWebSyncAccountContextForTests()
     rmSync(testDir, { recursive: true, force: true })
   })
 
@@ -57,6 +59,8 @@ describe('WebSyncCoordinator 增量同步调度', () => {
     const state = coordinator.getState()
 
     expect(state.deviceId).toBeDefined()
+    expect(state.accountId).toBeNull()
+    expect(state.status).toBe('idle')
     expect(state.serverCursor).toBe(0)
     expect(state.isSyncing).toBe(false)
     expect(existsSync(syncStatePath)).toBe(true)
@@ -122,6 +126,7 @@ describe('WebSyncCoordinator 增量同步调度', () => {
   test('当用户未登录时，syncNow 优雅跳过请求并保留本地脏标记', async () => {
     let syncDataCalled = false
     const mockClient = {
+      baseUrl: 'https://working.example',
       getAuthState: async () => ({ authenticated: false }),
       syncBrowserData: async () => {
         syncDataCalled = true
@@ -136,11 +141,13 @@ describe('WebSyncCoordinator 增量同步调度', () => {
     expect(syncDataCalled).toBe(false)
     expect(state.isSyncing).toBe(false)
     expect(state.hasLocalChanges).toBe(true)
+    expect(state.status).toBe('signed-out')
 
     coordinator.destroy()
   })
 
   test('增量同步成功后更新游标并应用服务端下发的增量变更', async () => {
+    accountStorage.setWebSyncAccountContext(accountStorage.createWebSyncAccountContext(true, { id: 'user-1' }, 'https://working.example'))
     // 准备本地数据
     bookmarkService.saveWebBookmark({ title: '本地书签', url: 'https://local.example.com' })
     profileService.saveWebPageProfile({ url: 'https://local.example.com', workspaceId: 'ws-local' })
@@ -178,7 +185,8 @@ describe('WebSyncCoordinator 增量同步调度', () => {
     }
 
     const mockClient = {
-      getAuthState: async () => ({ authenticated: true }),
+      baseUrl: 'https://working.example',
+      getAuthState: async () => ({ authenticated: true, user: { id: 'user-1' } }),
       syncBrowserData: async (req: BrowserSyncRequest) => {
         capturedRequest = req
         return mockResponse
@@ -194,6 +202,8 @@ describe('WebSyncCoordinator 增量同步调度', () => {
 
     expect(stateAfterSync.serverCursor).toBe(108)
     expect(stateAfterSync.hasLocalChanges).toBe(false)
+    expect(stateAfterSync.status).toBe('synced')
+    expect(stateAfterSync.accountId).not.toBeNull()
     expect(stateAfterSync.lastSyncError).toBeNull()
 
     // 验证远端变更已合入本地
@@ -207,10 +217,18 @@ describe('WebSyncCoordinator 增量同步调度', () => {
   })
 
   test('网络失败时记录错误且不阻塞后续重试', async () => {
+    accountStorage.setWebSyncAccountContext(accountStorage.createWebSyncAccountContext(true, { id: 'retry-user' }, 'https://working.example'))
+    bookmarkService.saveWebBookmark({ title: '待重试', url: 'https://retry.example.com' })
+    const requests: BrowserSyncRequest[] = []
+    let attempts = 0
     const mockClient = {
-      getAuthState: async () => ({ authenticated: true }),
-      syncBrowserData: async () => {
-        throw new Error('网络连接超时')
+      baseUrl: 'https://working.example',
+      getAuthState: async () => ({ authenticated: true, user: { id: 'retry-user' } }),
+      syncBrowserData: async (request: BrowserSyncRequest) => {
+        requests.push(request)
+        attempts += 1
+        if (attempts === 1) throw new Error('网络连接超时')
+        return { serverCursor: 2, serverChanges: { groups: [], bookmarks: [], pageProfiles: [] } }
       },
     } as any
 
@@ -220,7 +238,64 @@ describe('WebSyncCoordinator 增量同步调度', () => {
     expect(state.isSyncing).toBe(false)
     expect(state.hasLocalChanges).toBe(true)
     expect(state.lastSyncError).toBe('网络连接超时')
+    expect(state.status).toBe('error')
+
+    const retried = await coordinator.syncNow()
+    expect(retried.status).toBe('synced')
+    expect(retried.hasLocalChanges).toBe(false)
+    expect(requests).toHaveLength(2)
+    expect(requests[0]!.expectedUserId).toBe('retry-user')
+    expect(requests[1]!.changes.bookmarks).toEqual(requests[0]!.changes.bookmarks)
 
     coordinator.destroy()
+  })
+
+  test('请求失败后重启会重发未确认项，成功 ack 和游标也能跨重启恢复', async () => {
+    accountStorage.setWebSyncAccountContext(accountStorage.createWebSyncAccountContext(true, { id: 'restart-user' }, 'https://working.example'))
+    bookmarkService.saveWebBookmark({ title: '重启后重试', url: 'https://restart.example.com' })
+    const requests: BrowserSyncRequest[] = []
+    const firstClient = {
+      baseUrl: 'https://working.example',
+      getAuthState: async () => ({ authenticated: true, user: { id: 'restart-user' } }),
+      syncBrowserData: async (request: BrowserSyncRequest) => {
+        requests.push(request)
+        throw new Error('首次网络失败')
+      },
+    } as any
+
+    const firstCoordinator = new WebSyncCoordinator({ apiClient: firstClient, autoStartInterval: false })
+    expect((await firstCoordinator.syncNow()).status).toBe('error')
+    firstCoordinator.destroy()
+
+    const retryClient = {
+      baseUrl: 'https://working.example',
+      getAuthState: async () => ({ authenticated: true, user: { id: 'restart-user' } }),
+      syncBrowserData: async (request: BrowserSyncRequest) => {
+        requests.push(request)
+        return { serverCursor: 31, serverChanges: { groups: [], bookmarks: [], pageProfiles: [] } }
+      },
+    } as any
+    const retryCoordinator = new WebSyncCoordinator({ apiClient: retryClient, autoStartInterval: false })
+    expect((await retryCoordinator.syncNow()).status).toBe('synced')
+    retryCoordinator.destroy()
+
+    const verifyClient = {
+      baseUrl: 'https://working.example',
+      getAuthState: async () => ({ authenticated: true, user: { id: 'restart-user' } }),
+      syncBrowserData: async (request: BrowserSyncRequest) => {
+        requests.push(request)
+        return { serverCursor: 32, serverChanges: { groups: [], bookmarks: [], pageProfiles: [] } }
+      },
+    } as any
+    const verifyCoordinator = new WebSyncCoordinator({ apiClient: verifyClient, autoStartInterval: false })
+    expect(verifyCoordinator.getState().serverCursor).toBe(31)
+    await verifyCoordinator.syncNow()
+
+    expect(requests).toHaveLength(3)
+    expect(requests[0]!.changes.bookmarks).toHaveLength(1)
+    expect(requests[1]!.changes.bookmarks).toEqual(requests[0]!.changes.bookmarks)
+    expect(requests[2]!.clientCursor).toBe(31)
+    expect(requests[2]!.changes.bookmarks).toHaveLength(0)
+    verifyCoordinator.destroy()
   })
 })
