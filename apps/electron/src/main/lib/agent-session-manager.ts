@@ -87,6 +87,10 @@ export interface AgentSessionStorageOverride {
 
 const agentSessionStorageOverrides = new Map<string, AgentSessionStorageOverride>()
 
+export function hasAgentSessionStorageOverride(sessionId: string): boolean {
+  return agentSessionStorageOverrides.has(sessionId)
+}
+
 export function registerAgentSessionStorageOverride(
   sessionId: string,
   storage: AgentSessionStorageOverride,

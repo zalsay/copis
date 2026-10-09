@@ -19,6 +19,7 @@ import {
   isChatRoomAgentDisplayName,
   normalizeChatRoomContextMessageCount,
   type ChatRoomAgentLocalConfig,
+  type ChatRoomAgentOutput,
   type ChatRoomInvocationFailureCode,
   type ChatRoomInvocationRecord,
   type ChatRoomLocalIdentity,
@@ -41,6 +42,7 @@ import {
   writeJsonFileAtomicDurable,
 } from './safe-file'
 import type { ChatRoomSkillSnapshotResult } from './chatroom-skill-snapshot'
+import { computeChatRoomReplyDigest, normalizeChatRoomReplyOutput } from './chatroom-reply-digest'
 
 interface ChatRoomWorkspaceStoreOptions {
   identity?: ChatRoomLocalIdentity
@@ -49,6 +51,31 @@ interface ChatRoomWorkspaceStoreOptions {
 
 type StoreConstructorInput = ChatRoomWorkspaceStoreOptions | ChatRoomLocalIdentity
 type PersistedRoomConfig = ChatRoomLocalRoomConfig & { version: 1 }
+
+interface ChatRoomPendingResultBase {
+  hostUserId: string
+  deviceId: string
+  roomId: string
+  invocationId: string
+  traceId: string
+  targetAgentId: string
+  triggerMessageId: string
+  depth: number
+  clientMessageId: string
+  createdAt: number
+}
+
+export type ChatRoomPendingResultInput = ChatRoomPendingResultBase & (
+  | { expectedStatus: 'completed'; output: ChatRoomAgentOutput; replyDigest: string; failureCode?: never }
+  | { expectedStatus: 'failed'; failureCode: ChatRoomInvocationFailureCode; output?: never; replyDigest?: never }
+)
+
+export type ChatRoomPendingResultRecord = ChatRoomPendingResultInput & { recordRevision: string }
+
+interface PersistedPendingResults {
+  version: 1
+  records: ChatRoomPendingResultRecord[]
+}
 
 const INVOCATION_STATUSES = new Set(['created', 'accepted', 'running', 'completed', 'failed', 'rejected'])
 const INVOCATION_FAILURE_CODES = new Set([
@@ -60,6 +87,10 @@ const INVOCATION_FAILURE_CODES = new Set([
 ] satisfies ChatRoomInvocationFailureCode[])
 const TERMINAL_STATUSES = new Set(['completed', 'failed', 'rejected'])
 const CHATROOM_COMPONENT_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/
+const PENDING_RESULTS_FILE = 'pending-results.json'
+const PENDING_RESULTS_MAX_RECORDS = 32
+const PENDING_RESULT_MAX_BYTES = 192 * 1024
+const PENDING_RESULTS_MAX_BYTES = 3 * 1024 * 1024
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -114,6 +145,87 @@ function identityMatches(left: ChatRoomLocalIdentity, right: ChatRoomLocalIdenti
 
 function assertIdentity(identity: ChatRoomLocalIdentity): void {
   if (!isId(identity.hostUserId) || !isId(identity.deviceId)) throw new Error('identity_invalid')
+}
+
+function validatePendingResult(value: unknown, stored: boolean): asserts value is ChatRoomPendingResultInput | ChatRoomPendingResultRecord {
+  if (!isRecord(value)) throw new Error('invalid_pending_result')
+  const common = ['hostUserId', 'deviceId', 'roomId', 'invocationId', 'traceId', 'targetAgentId', 'triggerMessageId', 'depth', 'clientMessageId', 'createdAt']
+  const revision = stored ? ['recordRevision'] : []
+  if (value.expectedStatus === 'completed') {
+    if (!hasExactKeys(value, [...common, 'expectedStatus', 'output', 'replyDigest', ...revision])
+      || !isId(value.hostUserId) || !isId(value.deviceId) || !isPathComponent(value.roomId)
+      || !isId(value.invocationId) || !isId(value.traceId) || !isPathComponent(value.targetAgentId)
+      || !isId(value.triggerMessageId) || !Number.isSafeInteger(value.depth) || Number(value.depth) < 0
+      || Number(value.depth) > CHATROOM_MAX_DEPTH || !isId(value.clientMessageId) || !isTimestamp(value.createdAt)
+      || (stored && !isId(value.recordRevision)) || !isRecord(value.output)
+      || !hasExactKeys(value.output, ['text', 'attachmentIds', 'mentionedAgentIds'])
+      || typeof value.output.text !== 'string'
+      || !Array.isArray(value.output.attachmentIds) || !Array.isArray(value.output.mentionedAgentIds)
+      || !/^[a-f0-9]{64}$/u.test(String(value.replyDigest))) {
+      throw new Error('invalid_pending_result')
+    }
+    const normalizedOutput = normalizeChatRoomReplyOutput(value.output as unknown as ChatRoomAgentOutput)
+    if (Buffer.byteLength(normalizedOutput.text, 'utf8') > PENDING_RESULT_MAX_BYTES) {
+      throw new Error('pending_result_too_large')
+    }
+    if (computeChatRoomReplyDigest({ clientMessageId: value.clientMessageId, ...normalizedOutput }) !== value.replyDigest) {
+      throw new Error('invalid_pending_result_digest')
+    }
+    return
+  }
+  if (value.expectedStatus === 'failed'
+    && hasExactKeys(value, [...common, 'expectedStatus', 'failureCode', ...revision])
+    && isId(value.hostUserId) && isId(value.deviceId) && isPathComponent(value.roomId)
+    && isId(value.invocationId) && isId(value.traceId) && isPathComponent(value.targetAgentId)
+    && isId(value.triggerMessageId) && Number.isSafeInteger(value.depth) && Number(value.depth) >= 0
+    && Number(value.depth) <= CHATROOM_MAX_DEPTH && isId(value.clientMessageId) && isTimestamp(value.createdAt)
+    && typeof value.failureCode === 'string'
+    && INVOCATION_FAILURE_CODES.has(value.failureCode as ChatRoomInvocationFailureCode)
+    && (!stored || isId(value.recordRevision))) {
+    return
+  }
+  throw new Error('invalid_pending_result')
+}
+
+function normalizePendingInput(input: ChatRoomPendingResultInput): ChatRoomPendingResultInput {
+  validatePendingResult(input, false)
+  const metadata: ChatRoomPendingResultBase = {
+    hostUserId: input.hostUserId,
+    deviceId: input.deviceId,
+    roomId: input.roomId,
+    invocationId: input.invocationId,
+    traceId: input.traceId,
+    targetAgentId: input.targetAgentId,
+    triggerMessageId: input.triggerMessageId,
+    depth: input.depth,
+    clientMessageId: input.clientMessageId,
+    createdAt: input.createdAt,
+  }
+  if (input.expectedStatus === 'failed') return { ...metadata, expectedStatus: 'failed', failureCode: input.failureCode }
+  if (Buffer.byteLength(input.output.text, 'utf8') > PENDING_RESULT_MAX_BYTES) {
+    throw new Error('pending_result_too_large')
+  }
+  const output = normalizeChatRoomReplyOutput(input.output)
+  const normalized: ChatRoomPendingResultInput = {
+    ...metadata,
+    expectedStatus: 'completed',
+    output,
+    replyDigest: input.replyDigest,
+  }
+  validatePendingResult(normalized, false)
+  if (Buffer.byteLength(JSON.stringify(normalized), 'utf8') > PENDING_RESULT_MAX_BYTES) {
+    throw new Error('pending_result_too_large')
+  }
+  return normalized
+}
+
+function withoutRecordRevision(record: ChatRoomPendingResultRecord): ChatRoomPendingResultInput {
+  const { recordRevision: _revision, ...input } = record
+  return input
+}
+
+function pendingDeliveryKey(record: Pick<ChatRoomPendingResultInput, 'targetAgentId' | 'clientMessageId'>): string {
+  return JSON.stringify([record.targetAgentId, record.clientMessageId])
 }
 
 function assertDirectory(path: string, label: string): void {
@@ -323,8 +435,13 @@ export class ChatRoomWorkspaceStore {
     for (const entry of readdirSync(roomsRoot)) {
       const path = join(roomsRoot, entry)
       assertDirectory(path, '聊天室')
-      const config = this.read(entry)
-      if (config) result.push(config)
+      try {
+        const config = this.read(entry)
+        if (config) result.push(config)
+      } catch (error) {
+        if (error instanceof Error && error.message === 'identity_mismatch') continue
+        throw error
+      }
     }
     return result
   }
@@ -338,14 +455,17 @@ export class ChatRoomWorkspaceStore {
         assertDirectory(join(roomsRoot, entry), '聊天室')
         const config = this.read(entry)
         if (config) result.push(config)
-      } catch { console.warn('[聊天室] 跳过损坏的本地房间配置') }
+      } catch (error) {
+        if (!(error instanceof Error && error.message === 'identity_mismatch')) console.warn('[聊天室] 跳过损坏的本地房间配置')
+      }
     }
     return result
   }
 
-  provisionAgent(identity: ChatRoomLocalIdentity, input: ProvisionChatRoomAgentInput, serverAgentId?: string): ChatRoomLocalRoomConfig {
+  provisionAgent(identity: ChatRoomLocalIdentity, input: ProvisionChatRoomAgentInput, serverAgentId?: string, options?: { roomCreatedAt?: number }): ChatRoomLocalRoomConfig {
     assertIdentity(identity)
     if (serverAgentId !== undefined && !isPathComponent(serverAgentId)) throw new Error('invalid_agent_input')
+    if (options?.roomCreatedAt !== undefined && !isTimestamp(options.roomCreatedAt)) throw new Error('invalid_management_operation_room_identity')
     if (this.expectedIdentity && !identityMatches(this.expectedIdentity, identity)) throw new Error('identity_mismatch')
     if (!isPathComponent(input.roomId) || !isId(input.sourceWorkspaceId)
       || !isChatRoomAgentDisplayName(input.displayName) || !isId(input.channelId)) {
@@ -366,6 +486,9 @@ export class ChatRoomWorkspaceStore {
       this.ensureRoomDirectories(input.roomId, createdDirectories)
       const previous = this.load(input.roomId, this.now())
       const timestamp = this.now()
+      if (previous && options?.roomCreatedAt !== undefined && previous.createdAt !== options.roomCreatedAt) {
+        throw new Error('management_operation_room_identity_mismatch')
+      }
       const config: PersistedRoomConfig = previous ?? {
         version: 1,
         roomId: input.roomId,
@@ -374,8 +497,8 @@ export class ChatRoomWorkspaceStore {
         lastProcessedSeq: 0,
         agents: [],
         invocations: [],
-        createdAt: timestamp,
-        updatedAt: timestamp,
+        createdAt: options?.roomCreatedAt ?? timestamp,
+        updatedAt: Math.max(timestamp, options?.roomCreatedAt ?? timestamp),
       }
       if (!identityMatches(identity, { hostUserId: config.hostUserId, deviceId: config.deviceId })) throw new Error('identity_mismatch')
       if (config.agents.filter((agent) => agent.archivedAt === undefined).length >= CHATROOM_MAX_AGENTS) throw new Error('agent_limit_reached')
@@ -506,6 +629,45 @@ export class ChatRoomWorkspaceStore {
 
   getTraceAgentInvocation(roomId: string, traceId: string, roomAgentId: string): ChatRoomInvocationRecord | undefined {
     return clone(this.read(roomId)?.invocations.find((record) => record.traceId === traceId && record.targetAgentId === roomAgentId))
+  }
+
+  /** 保存已净化的 terminal 候选；此处不代表服务端已确认。 */
+  savePendingResult(input: ChatRoomPendingResultInput): ChatRoomPendingResultRecord {
+    const normalized = normalizePendingInput(input)
+    const room = this.requirePendingRoom(normalized.roomId)
+    if (room.hostUserId !== normalized.hostUserId || room.deviceId !== normalized.deviceId) throw new Error('identity_mismatch')
+    const current = this.readPendingResultsFile(normalized.roomId)
+    const deliveryKey = pendingDeliveryKey(normalized)
+    const sameKey = current.records.find((record) => record.invocationId === normalized.invocationId
+      || pendingDeliveryKey(record) === deliveryKey)
+    if (sameKey) {
+      const { recordRevision: _revision, ...existing } = sameKey
+      if (sameContent(existing, normalized)) return clone(sameKey)
+      throw new Error('pending_result_conflict')
+    }
+    if (current.records.length >= PENDING_RESULTS_MAX_RECORDS) throw new Error('pending_results_full')
+    const record = { ...normalized, recordRevision: randomUUID() } as ChatRoomPendingResultRecord
+    const records = [...current.records, record]
+    this.persistPendingResults(normalized.roomId, records)
+    return clone(record)
+  }
+
+  listPendingResults(roomId: string): ChatRoomPendingResultRecord[] {
+    this.requirePendingRoom(roomId)
+    return clone(this.readPendingResultsFile(roomId).records)
+  }
+
+  /** Main coordinator 在 proof 后调用；旧快照不能删除后来重建的记录。 */
+  removePendingResultIfUnchanged(expected: ChatRoomPendingResultRecord): boolean {
+    validatePendingResult(expected, true)
+    const room = this.requirePendingRoom(expected.roomId)
+    if (room.hostUserId !== expected.hostUserId || room.deviceId !== expected.deviceId) throw new Error('identity_mismatch')
+    const current = this.readPendingResultsFile(expected.roomId)
+    const index = current.records.findIndex((record) => record.invocationId === expected.invocationId)
+    if (index < 0 || !sameContent(current.records[index], expected)) return false
+    const records = current.records.filter((_, recordIndex) => recordIndex !== index)
+    this.persistPendingResults(expected.roomId, records)
+    return true
   }
 
   upsertInvocation(roomId: string, record: ChatRoomInvocationRecord): ChatRoomInvocationRecord {
@@ -643,6 +805,75 @@ export class ChatRoomWorkspaceStore {
     assertOptionalRegularFile(configPath, '聊天室配置')
     assertOptionalRegularFile(`${configPath}.tmp`, '聊天室配置临时文件')
     assertOptionalRegularFile(`${configPath}.bak`, '聊天室配置备份文件')
+  }
+
+  private requirePendingRoom(roomId: string): PersistedRoomConfig {
+    if (!isPathComponent(roomId)) throw new Error('invalid_room_id')
+    if (!this.expectedIdentity) throw new Error('identity_required')
+    const room = this.load(roomId, this.now())
+    if (!room) throw new Error('room_not_found')
+    if (!identityMatches(this.expectedIdentity, { hostUserId: room.hostUserId, deviceId: room.deviceId })) {
+      throw new Error('identity_mismatch')
+    }
+    return room
+  }
+
+  private pendingResultsPath(roomId: string): string {
+    const roomPath = getChatRoomPath(roomId)
+    assertDirectory(roomPath, '聊天室')
+    return join(roomPath, PENDING_RESULTS_FILE)
+  }
+
+  private readPendingResultsFile(roomId: string): PersistedPendingResults {
+    const path = this.pendingResultsPath(roomId)
+    assertOptionalRegularFile(path, 'pending_results')
+    assertOptionalRegularFile(`${path}.tmp`, 'pending_results_tmp')
+    assertOptionalRegularFile(`${path}.bak`, 'pending_results_bak')
+    const result = readJsonFileSafeDetailed<unknown>(path, '聊天室待确认结果', { maxBytes: PENDING_RESULTS_MAX_BYTES })
+    if (result.status === 'missing') return { version: 1, records: [] }
+    if (result.status === 'corrupt' || !isRecord(result.value) || result.value.version !== 1
+      || !Array.isArray(result.value.records) || result.value.records.length > PENDING_RESULTS_MAX_RECORDS) {
+      throw new Error('pending_results_unrecoverable')
+    }
+    const records: ChatRoomPendingResultRecord[] = []
+    const invocationIds = new Set<string>()
+    const deliveryKeys = new Set<string>()
+    try {
+      for (const entry of result.value.records) {
+        validatePendingResult(entry, true)
+        if (entry.roomId !== roomId || !this.expectedIdentity
+          || entry.hostUserId !== this.expectedIdentity.hostUserId || entry.deviceId !== this.expectedIdentity.deviceId
+          || invocationIds.has(entry.invocationId) || deliveryKeys.has(pendingDeliveryKey(entry))) {
+          throw new Error('pending_result_scope_mismatch')
+        }
+        const storedEntry = entry as ChatRoomPendingResultRecord
+        const normalized = normalizePendingInput(withoutRecordRevision(storedEntry))
+        if (!sameContent(normalized, withoutRecordRevision(storedEntry))) throw new Error('pending_result_invalid')
+        invocationIds.add(entry.invocationId)
+        deliveryKeys.add(pendingDeliveryKey(entry))
+        records.push(clone(storedEntry))
+      }
+      if (Buffer.byteLength(JSON.stringify({ version: 1, records }), 'utf8') > PENDING_RESULTS_MAX_BYTES) {
+        throw new Error('pending_results_too_large')
+      }
+    } catch {
+      throw new Error('pending_results_unrecoverable')
+    }
+    return { version: 1, records }
+  }
+
+  private persistPendingResults(roomId: string, records: ChatRoomPendingResultRecord[]): void {
+    if (records.length > PENDING_RESULTS_MAX_RECORDS) throw new Error('pending_results_full')
+    const path = this.pendingResultsPath(roomId)
+    assertOptionalRegularFile(path, 'pending_results')
+    assertOptionalRegularFile(`${path}.tmp`, 'pending_results_tmp')
+    assertOptionalRegularFile(`${path}.bak`, 'pending_results_bak')
+    const payload: PersistedPendingResults = { version: 1, records }
+    if (Buffer.byteLength(JSON.stringify(payload), 'utf8') > PENDING_RESULTS_MAX_BYTES) {
+      throw new Error('pending_results_too_large')
+    }
+    writeJsonFileAtomicDurable(path, payload, 0o600, true, PENDING_RESULTS_MAX_BYTES)
+    assertDirectory(getChatRoomPath(roomId), '聊天室')
   }
 
   private ensureRoomDirectories(roomId: string, created?: string[]): string {

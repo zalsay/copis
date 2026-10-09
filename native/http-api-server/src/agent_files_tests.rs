@@ -52,6 +52,103 @@ fn store_for_plan(root: &Path, write_root: &Path) -> (AgentFilePolicyStore, Stri
     (store, "session-plan".to_string())
 }
 
+#[cfg(unix)]
+fn register_writable_session(
+    store: &AgentFilePolicyStore,
+    session_id: &str,
+    root: &Path,
+) -> String {
+    let mut query = Map::new();
+    query.insert(
+        "cwd".to_string(),
+        Value::String(root.to_string_lossy().into_owned()),
+    );
+    query.insert("useRustFileApi".to_string(), Value::Bool(true));
+    query.insert(
+        "fileAccessPolicy".to_string(),
+        json!({
+            "readRoots": [root], "readFiles": [], "writeRoots": [root],
+            "permissionMode": "bypassPermissions"
+        }),
+    );
+    store.register_from_query(session_id, &mut query).unwrap()
+}
+
+#[cfg(unix)]
+fn register_chatroom_writable_session(
+    store: &AgentFilePolicyStore,
+    session_id: &str,
+    root: &Path,
+) -> String {
+    let mut query = Map::new();
+    query.insert(
+        "cwd".to_string(),
+        Value::String(root.to_string_lossy().into_owned()),
+    );
+    query.insert("useRustFileApi".to_string(), Value::Bool(true));
+    query.insert(
+        "capabilityProfile".to_string(),
+        Value::String("chatroom".to_string()),
+    );
+    query.insert(
+        "fileAccessPolicy".to_string(),
+        json!({
+            "readRoots": [root], "readFiles": [], "writeRoots": [root],
+            "permissionMode": "default", "advancedAuthorization": true
+        }),
+    );
+    store.register_from_query(session_id, &mut query).unwrap()
+}
+
+#[cfg(unix)]
+#[test]
+fn chatroom_shell_capability_is_rejected_before_host_approved_command_can_spawn() {
+    let root = temp_dir("chatroom-shell-deny");
+    let store = AgentFilePolicyStore::new();
+    let session_id = "chatroom-shell-session";
+    let token = register_chatroom_writable_session(&store, session_id, &root);
+    let marker = root.join("must-not-spawn");
+    let body = serde_json::to_vec(&json!({
+        "sessionId": session_id,
+        "command": "python -c pass",
+        "cwd": root,
+        "timeoutMs": 1000,
+    }))
+    .unwrap();
+    let mut process = Command::new("/bin/sh");
+    process.args(["-c", &format!("echo spawned > '{}'", marker.display())]);
+
+    let error = store
+        .handle_shell_with_worker_token_and_process(&token, &body, process)
+        .unwrap_err();
+
+    assert_eq!(error.status, 403);
+    assert_eq!(error.code, "chatroom_shell_not_allowed");
+    assert!(
+        !marker.exists(),
+        "chatroom shell must fail before spawning a process"
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn remove_if_worker_token_revokes_only_its_own_file_policy() {
+    let root = temp_dir("file-token-owner-cas");
+    let store = AgentFilePolicyStore::new();
+    let session_id = "file-token-owner-session";
+    let token_a = register_writable_session(&store, session_id, &root);
+    assert!(store.remove_if_worker_token(session_id, &token_a));
+
+    let token_b = register_writable_session(&store, session_id, &root);
+    assert_ne!(token_a, token_b);
+    assert!(!store.remove_if_worker_token(session_id, &token_a));
+    assert!(store.contains_worker_token(session_id, &token_b));
+    assert!(store.remove_if_worker_token(session_id, &token_b));
+    assert!(!store.contains_worker_token(session_id, &token_b));
+    fs::remove_dir_all(root).unwrap();
+}
+
 #[test]
 fn chatroom_default_policy_requires_chatroom_profile() {
     let root = temp_dir("chatroom-default");

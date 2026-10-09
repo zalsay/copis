@@ -1,6 +1,6 @@
 import * as React from 'react'
 import type { ChatRoomInvocation, ChatRoomMessage } from '@copis/shared'
-import type { ChatRoomSendState } from '@/atoms/chatroom-atoms'
+import type { ChatRoomRendererInvocation, ChatRoomSendState } from '@/atoms/chatroom-atoms'
 import { chatRoomExpirePendingInvocationAtom } from '@/atoms/chatroom-atoms'
 import { useSetAtom } from 'jotai'
 import { AgentRunningIndicator } from '../agent/AgentRunningIndicator'
@@ -22,7 +22,7 @@ export function getPendingChatRoomInvocations(roomId: string, sends: Iterable<Ch
 }
 
 const FAILURE_LABELS: Record<string, string> = {
-  agent_offline: 'Agent 离线，不排队', lease_expired: 'Agent 租约已过期，本次未执行',
+  agent_offline: '宿主离线，本次未执行', lease_expired: '宿主暂不可用，本次未执行',
   agent_busy: 'Agent 正在处理其他消息，本次未执行', agent_disabled: 'Agent 已禁用',
   gateway_disconnected: '实时连接已断开', internal_error: 'Agent 执行失败',
   host_approval_denied: '主理人拒绝了操作', host_approval_timeout: '等待主理人授权超时',
@@ -32,7 +32,7 @@ const FAILURE_LABELS: Record<string, string> = {
   invocation_unconfirmed: '未收到 Agent 调用确认，请检查主理人连接状态',
 }
 
-export function ChatroomAgentActivity({ invocation, connectionStatus }: { invocation: ChatRoomInvocation; connectionStatus: string }): React.ReactElement {
+export function ChatroomAgentActivity({ invocation, connectionStatus }: { invocation: ChatRoomRendererInvocation; connectionStatus: string }): React.ReactElement {
   const expirePending = useSetAtom(chatRoomExpirePendingInvocationAtom)
   const [fallbackStart] = React.useState(() => Date.now())
   const startedAt = invocation.startedAt ?? fallbackStart
@@ -52,7 +52,8 @@ export function ChatroomAgentActivity({ invocation, connectionStatus }: { invoca
   }, [invocation, startedAt, expirePending])
   if (invocation.status === 'completed') return <span>已完成</span>
   if (!active) return <span className="text-destructive">{FAILURE_LABELS[invocation.failureCode ?? ''] ?? `调用失败${invocation.failureCode ? `（${invocation.failureCode}）` : ''}`}</span>
+  if (invocation.previewPaused) return <span role="status" className="text-muted-foreground">流式预览已暂停，等待完整回复</span>
   if (timedOut) return <span className="text-destructive">未收到 Agent 调用确认，请检查主理人连接状态</span>
-  if (connectionStatus !== 'connected') return <span className="text-muted-foreground">连接中断，等待状态同步</span>
+  if (connectionStatus !== 'connected') return <span className="text-muted-foreground">{connectionStatus === 'auth_expired' ? '登录已过期，等待重新连接' : '连接中断，等待状态同步'}</span>
   return <AgentRunningIndicator startedAt={startedAt} label={invocation.status === 'created' ? '正在唤起' : '正在思考'} />
 }

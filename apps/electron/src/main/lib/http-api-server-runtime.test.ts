@@ -4,24 +4,21 @@ import { execFileSync, type SpawnOptions } from 'node:child_process'
 import { afterAll, afterEach, describe, expect, test, mock } from 'bun:test'
 import { createHash } from 'node:crypto'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import * as nodeOs from 'node:os'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import type { FunctionalModuleFetch } from './functional-module-manager'
-import {
-  activateFunctionalModule,
-  assembleFunctionalModule,
-  cacheFunctionalModule,
-  getFunctionalModulePaths,
-  readActiveFunctionalModule,
-  type FunctionalModulePackage,
-} from './functional-module-store'
+import type { FunctionalModulePackage } from './functional-module-store'
 
 let packaged = false
+let bundledCliFixture: string | undefined
+const fixtureHome = mkdtempSync(join(tmpdir(), 'copis-http-api-runtime-home-'))
+mock.module('node:os', () => ({ ...nodeOs, homedir: () => fixtureHome }))
 
 mock.module('electron', () => ({
   app: {
     get isPackaged() { return packaged },
-    getPath: () => '/tmp/copis-http-api-runtime-test',
+    getPath: () => fixtureHome,
   },
   BrowserWindow: class {},
   WebContentsView: class {},
@@ -40,6 +37,16 @@ mock.module('electron', () => ({
   },
 }))
 
+const actualConfigPaths = await import('./config-paths')
+mock.module('./config-paths', () => ({ ...actualConfigPaths, getConfigDir: () => join(fixtureHome, '.copis-dev'), getBundledCliPath: () => bundledCliFixture }))
+const {
+  activateFunctionalModule,
+  assembleFunctionalModule,
+  cacheFunctionalModule,
+  getFunctionalModulePaths,
+  readActiveFunctionalModule,
+} = await import('./functional-module-store')
+
 const previousHttpApiPort = process.env.COPIS_HTTP_API_PORT
 process.env.COPIS_HTTP_API_PORT = '51740'
 
@@ -54,6 +61,8 @@ const {
   updateHttpApiServer,
   waitForHttpApiHealth,
   addHttpApiServerExitListener,
+  classifyPiWorkerAvailability,
+  getPiWorkerRuntimeAvailability,
 } = await import('./http-api-server')
 import type { HttpApiSpawn } from './http-api-server'
 
@@ -69,16 +78,22 @@ class FakeChild extends EventEmitter {
   readonly stdout = new PassThrough()
   readonly stderr = new PassThrough()
   killed = false
+  deferExitOnKill = false
 
   kill(): boolean {
     if (this.killed) return false
     this.killed = true
-    this.emit('exit', 0, null)
+    if (!this.deferExitOnKill) this.emit('exit', 0, null)
     return true
   }
 }
 
 const tempRoots: string[] = []
+
+function setPackagedResourcesPath(path: string | undefined): void {
+  if (path === undefined) Reflect.deleteProperty(process, 'resourcesPath')
+  else Object.defineProperty(process, 'resourcesPath', { configurable: true, value: path })
+}
 
 afterEach(async () => {
   await stopHttpApiServer(5)
@@ -88,6 +103,7 @@ afterEach(async () => {
 afterAll(() => {
   if (previousHttpApiPort === undefined) delete process.env.COPIS_HTTP_API_PORT
   else process.env.COPIS_HTTP_API_PORT = previousHttpApiPort
+  rmSync(fixtureHome, { recursive: true, force: true })
 })
 
 test('Given Rust exit listener When unsubscribed Then later exits do not notify it', () => {
@@ -95,6 +111,163 @@ test('Given Rust exit listener When unsubscribed Then later exits do not notify 
   const remove = addHttpApiServerExitListener(() => { calls += 1 })
   remove()
   expect(calls).toBe(0)
+})
+
+test('Pi launch health helper rejects a missing bundled worker entry', () => {
+  expect(classifyPiWorkerAvailability(undefined, undefined, true)).toEqual({ available: false, reason: 'pi_worker_entry_missing' })
+})
+
+test('Pi launch health helper rejects a development script without its Bun runtime', () => {
+  const root = createRoot()
+  const worker = join(root, 'pi-rpc-worker.cjs')
+  writeFileSync(worker, 'fixture script', { mode: 0o644 })
+  expect(classifyPiWorkerAvailability({ kind: 'script', path: worker }, undefined, false))
+    .toEqual({ available: false, reason: 'pi_worker_runtime_missing' })
+})
+
+test('Pi launch health helper accepts the same executable/script combinations used by Rust startup', () => {
+  const root = createRoot()
+  const executable = join(root, 'copis')
+  const worker = join(root, 'pi-rpc-worker.cjs')
+  const bun = join(root, 'bun')
+  writeFileSync(executable, 'fixture executable', { mode: 0o755 })
+  writeFileSync(worker, 'fixture script', { mode: 0o644 })
+  writeFileSync(bun, 'fixture bun', { mode: 0o755 })
+  if (process.platform !== 'win32') { chmodSync(executable, 0o755); chmodSync(bun, 0o755) }
+  expect(classifyPiWorkerAvailability({ kind: 'executable', path: executable }, undefined, true))
+    .toEqual({ available: true, kind: 'executable' })
+  expect(classifyPiWorkerAvailability({ kind: 'script', path: worker }, { path: bun, useSystemRuntime: true }, false))
+    .toEqual({ available: true, kind: 'script' })
+  expect(classifyPiWorkerAvailability({ kind: 'executable', path: '' }, undefined, true))
+    .toMatchObject({ available: false, reason: 'pi_worker_entry_unavailable' })
+  expect(classifyPiWorkerAvailability({ kind: 'executable', path: root }, undefined, true))
+    .toMatchObject({ available: false, reason: 'pi_worker_entry_unavailable' })
+  expect(classifyPiWorkerAvailability({ kind: 'script', path: worker }, { path: root, useSystemRuntime: true }, false))
+    .toMatchObject({ available: false, reason: 'pi_worker_runtime_unavailable' })
+  expect(classifyPiWorkerAvailability({ kind: 'script', path: worker }, { path: bun, useSystemRuntime: true }, true))
+    .toMatchObject({ available: false, reason: 'pi_worker_runtime_missing' })
+})
+
+test('Pi health reads the active process launch, not a newly appeared default candidate', async () => {
+  const root = createRoot()
+  await activateRustVersion(root, rustPackage('0.1.0', 'actual-pi-state'), 'actual-pi-state')
+  const records: SpawnRecord[] = []
+  const laterDefault = join(root, 'later-default-copis')
+  writeFileSync(laterDefault, 'fixture executable', { mode: 0o755 })
+  bundledCliFixture = undefined
+  packaged = true
+  setPackagedResourcesPath(root)
+  try {
+    startHttpApiServer({ rootDir: join(root, 'modules'), paymentWorkspace: paymentWorkspaceFor(root), spawnImpl: spawnFixture(records) })
+    expect(getPiWorkerRuntimeAvailability()).toEqual({ available: false, reason: 'pi_worker_entry_missing' })
+    bundledCliFixture = laterDefault
+    expect(getPiWorkerRuntimeAvailability()).toEqual({ available: false, reason: 'pi_worker_entry_missing' })
+
+    await stopHttpApiServer(5)
+    startHttpApiServer({ rootDir: join(root, 'modules'), paymentWorkspace: paymentWorkspaceFor(root), spawnImpl: spawnFixture(records) })
+    expect(getPiWorkerRuntimeAvailability()).toEqual({ available: true, kind: 'executable' })
+  } finally {
+    await stopHttpApiServer(5)
+    bundledCliFixture = undefined
+    packaged = false
+    setPackagedResourcesPath(undefined)
+  }
+})
+
+test('Pi health follows an active override and verifies executable file permissions', async () => {
+  const root = createRoot()
+  await activateRustVersion(root, rustPackage('0.1.0', 'override-pi-state'), 'override-pi-state')
+  const activeOverride = join(root, 'actual-override')
+  const unusedDefault = join(root, 'unused-default')
+  writeFileSync(activeOverride, 'override', { mode: 0o755 })
+  writeFileSync(unusedDefault, 'default', { mode: 0o755 })
+  chmodSync(activeOverride, 0o755)
+  chmodSync(unusedDefault, 0o755)
+  const records: SpawnRecord[] = []
+  packaged = true
+  setPackagedResourcesPath(root)
+  bundledCliFixture = unusedDefault
+  try {
+    startHttpApiServer({
+      rootDir: join(root, 'modules'), paymentWorkspace: paymentWorkspaceFor(root), spawnImpl: spawnFixture(records),
+      workerLaunch: { kind: 'executable', path: activeOverride },
+    })
+    expect(getPiWorkerRuntimeAvailability()).toEqual({ available: true, kind: 'executable' })
+    if (process.platform !== 'win32') {
+      chmodSync(activeOverride, 0o600)
+      expect(getPiWorkerRuntimeAvailability()).toMatchObject({ available: false, reason: 'pi_worker_entry_unavailable' })
+      chmodSync(activeOverride, 0o755)
+    }
+    rmSync(activeOverride)
+    expect(getPiWorkerRuntimeAvailability()).toMatchObject({ available: false, reason: 'pi_worker_entry_unavailable' })
+  } finally {
+    await stopHttpApiServer(5)
+    packaged = false
+    bundledCliFixture = undefined
+    setPackagedResourcesPath(undefined)
+  }
+})
+
+test('script launch cannot be healthy in packaged mode without its effective compiled executable runtime', async () => {
+  const root = createRoot()
+  await activateRustVersion(root, rustPackage('0.1.0', 'packaged-script-pi'), 'packaged-script-pi')
+  const script = join(root, 'pi-rpc-worker.cjs')
+  writeFileSync(script, 'fixture worker script', { mode: 0o644 })
+  const records: SpawnRecord[] = []
+  packaged = true
+  setPackagedResourcesPath(root)
+  try {
+    startHttpApiServer({
+      rootDir: join(root, 'modules'), paymentWorkspace: paymentWorkspaceFor(root), spawnImpl: spawnFixture(records),
+      workerLaunch: { kind: 'script', path: script },
+    })
+    expect(getPiWorkerRuntimeAvailability()).toMatchObject({ available: false, reason: 'pi_worker_runtime_missing' })
+  } finally {
+    await stopHttpApiServer(5)
+    packaged = false
+    setPackagedResourcesPath(undefined)
+  }
+})
+
+test('A to B Rust update adopts B Worker config and a late A child exit cannot clear B health', async () => {
+  const root = createRoot()
+  await activateRustVersion(root, rustPackage('0.1.0', 'worker-update-old-rust'), 'worker-update-old-rust')
+  const oldWorker = join(root, 'old-pi-worker.cjs')
+  const newWorker = join(root, 'new-copis')
+  writeFileSync(oldWorker, 'old worker script', { mode: 0o644 })
+  writeFileSync(newWorker, 'new executable', { mode: 0o755 })
+  if (process.platform !== 'win32') chmodSync(newWorker, 0o755)
+  const records: SpawnRecord[] = []
+  const spawnImpl = spawnFixture(records, (record) => {
+    if (records.length === 1) record.child.deferExitOnKill = true
+  })
+  packaged = true
+  setPackagedResourcesPath(root)
+  try {
+    startHttpApiServer({
+      rootDir: join(root, 'modules'), paymentWorkspace: paymentWorkspaceFor(root), spawnImpl,
+      workerLaunch: { kind: 'script', path: oldWorker },
+    })
+    expect(getPiWorkerRuntimeAvailability()).toMatchObject({ available: false, reason: 'pi_worker_runtime_missing' })
+    const oldChild = records[0]!.child
+
+    const updated = await updateHttpApiServer({
+      rootDir: join(root, 'modules'), paymentWorkspace: paymentWorkspaceFor(root),
+      manifestUrl: 'https://download.example.com/manifest.json', platform: 'darwin', arch: 'arm64',
+      clientVersion: '0.16.17', spawnImpl, workerLaunch: { kind: 'executable', path: newWorker },
+      fetchImpl: fetchFixture(manifestFor('0.2.0', 'worker-update-new-rust'), 'worker-update-new-rust', () => true),
+      backendUrl: 'https://backend.example.test', modelBaseUrl: 'https://model.example.test',
+      healthTimeoutMs: 100, stopTimeoutMs: 5,
+    })
+    expect(updated).toBe(true)
+    expect(getPiWorkerRuntimeAvailability()).toEqual({ available: true, kind: 'executable' })
+    oldChild.emit('exit', 0, null)
+    expect(getPiWorkerRuntimeAvailability()).toEqual({ available: true, kind: 'executable' })
+  } finally {
+    await stopHttpApiServer(5)
+    packaged = false
+    setPackagedResourcesPath(undefined)
+  }
 })
 
 function createRoot(): string {
@@ -297,12 +470,18 @@ describe('Rust HTTP API 功能模块生命周期', () => {
     const previousModelRequestBaseUrl = process.env.COPIS_MODEL_REQUEST_BASE_URL
     const previousModelRequestBaseUrls = process.env.COPIS_MODEL_REQUEST_BASE_URLS
     const previousModelProbeTimeoutMs = process.env.COPIS_MODEL_REQUEST_PROBE_TIMEOUT_MS
+    const endpointConfigUrl = 'https://configured.example.test/api/client/model-request-endpoints'
 
     try {
       const options = await prepareHttpApiBackend({
         rootDir: join(root, 'modules'),
         backendUrl: 'https://configured.example.test',
         modelBaseUrl: 'https://configured.example.test/api/internal/working-model',
+        endpointConfigUrl,
+        fetchImpl: async (input) => {
+          expect(input).toBe(endpointConfigUrl)
+          return Response.json({ base_urls: [] })
+        },
       })
       startHttpApiServer({
         ...options,

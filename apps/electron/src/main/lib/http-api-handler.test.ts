@@ -1,10 +1,26 @@
-import { describe, expect, mock, test } from 'bun:test'
+import { afterAll, describe, expect, mock, test } from 'bun:test'
+import { mkdtempSync, rmSync } from 'node:fs'
+import * as nodeOs from 'node:os'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { isChatRoomAgentInvocation, type ChatRoomAgentInvocation } from '@copis/shared'
+import { AgentHttpStreamClient } from '../../renderer/lib/agent-http-stream'
 import type { HttpApiDependencies } from './http-api-handler'
 import type { AppSettings } from '../../types'
 
+const fixtureRoot = mkdtempSync(join(tmpdir(), 'copis-http-api-handler-test-'))
+const fixturePathCalls: string[] = []
+let electronGetPathCalls = 0
+mock.module('node:os', () => ({ ...nodeOs, homedir: () => fixtureRoot }))
+
+function fixturePath(...segments: string[]): string {
+  const path = join(fixtureRoot, ...segments)
+  fixturePathCalls.push(path)
+  return path
+}
+
 mock.module('electron', () => ({
-  app: { isPackaged: true, getPath: () => '/tmp/copis-test-app-data' },
+  app: { isPackaged: true, getPath: () => { electronGetPathCalls++; throw new Error('HTTP handler test must not read Electron user paths') } },
   BrowserWindow: class {},
   WebContentsView: class {},
   clipboard: {},
@@ -22,13 +38,76 @@ mock.module('electron', () => ({
   },
 }))
 
+const actualConfigPaths = await import('./config-paths')
+mock.module('./config-paths', () => ({
+  ...actualConfigPaths,
+  getConfigDir: () => fixturePath('config'),
+}))
 const { handleHttpApiRequest } = await import('./http-api-handler')
 const { parseAgentWorkerPermissionRequest } = await import('./http-api-handler')
+
+afterAll(() => {
+  try {
+    const configRoot = actualConfigPaths.getConfigDir()
+    const chatroomsRoot = actualConfigPaths.getChatRoomsRootPath()
+    expect(configRoot.startsWith(fixtureRoot)).toBe(true)
+    expect(chatroomsRoot.startsWith(fixtureRoot)).toBe(true)
+    expect(fixturePathCalls.length).toBeGreaterThan(0)
+    expect(fixturePathCalls.every((path) => path.startsWith(fixtureRoot))).toBe(true)
+    expect(electronGetPathCalls).toBe(0)
+  } finally {
+    rmSync(fixtureRoot, { recursive: true, force: true })
+  }
+})
 
 test('Given worker permission DTO When unknown fields or control text arrive Then Main rejects without truncation', () => {
   expect(() => parseAgentWorkerPermissionRequest({ sessionId: 's', requestId: 'r', toolName: 'Bash', toolInput: {}, extra: true })).toThrow('权限请求字段不正确')
   expect(() => parseAgentWorkerPermissionRequest({ sessionId: 's\n', requestId: 'r', toolName: 'Bash', toolInput: {} })).toThrow('权限请求参数不正确')
   expect(() => parseAgentWorkerPermissionRequest({ sessionId: 's', requestId: 'r', toolName: 'x'.repeat(129), toolInput: {} })).toThrow('权限请求参数不正确')
+})
+
+test('Given prepare body 明示携带 malformed trustedRunId When Main 解析 Then fail closed 不退化为普通运行', async () => {
+  for (const trustedRunId of [0, '', null, false]) {
+    const response = await handleHttpApiRequest({
+      method: 'POST',
+      path: '/api/internal/agent/prepare',
+      body: JSON.stringify({ sessionId: 'session-1', userMessage: 'prepare', _copisTrustedRunId: trustedRunId }),
+    }, createDependencies())
+    expect(response.status).toBe(400)
+    expect(response.body).toMatchObject({ code: 'invalid_chatroom_run_id' })
+  }
+})
+
+test('Given 普通 Renderer send 经 Rust prepare 转发且没有 trusted run ID When Main routes request Then 保留普通 prepare 兼容', async () => {
+  let rendererBody = ''
+  const originalFetch = globalThis.fetch
+  globalThis.fetch = Object.assign(async (_input: RequestInfo | URL, init?: RequestInit) => {
+    rendererBody = String(init?.body)
+    return new Response('data: {"type":"complete","sessionId":"session-1","stoppedByUser":false}\n\n', {
+      headers: { 'Content-Type': 'text/event-stream' },
+    })
+  }, { preconnect: originalFetch.preconnect })
+
+  const prepareAgentRpcRun = mock(async (input: { sessionId: string; userMessage: string }, trustedRunId?: string) => ({
+    sessionId: input.sessionId,
+    userMessage: input.userMessage,
+    trustedRunId: trustedRunId ?? null,
+  }))
+  try {
+    const rendererInput = { sessionId: 'session-1', userMessage: '普通 Agent 消息', channelId: 'channel-1' }
+    await new AgentHttpStreamClient().send(rendererInput)
+    expect(JSON.parse(rendererBody)).toEqual(rendererInput)
+
+    const response = await handleHttpApiRequest({
+      method: 'POST',
+      path: '/api/internal/agent/prepare',
+      body: rendererBody,
+    }, createDependencies({ prepareAgentRpcRun } as unknown as Partial<HttpApiDependencies>))
+    expect(response).toEqual({ status: 200, body: { sessionId: 'session-1', userMessage: '普通 Agent 消息', trustedRunId: null } })
+    expect(prepareAgentRpcRun).toHaveBeenCalledWith({ ...rendererInput, agentRuntime: 'pi' }, undefined)
+  } finally {
+    globalThis.fetch = originalFetch
+  }
 })
 
 const invocation: ChatRoomAgentInvocation = {
@@ -59,6 +138,12 @@ const rustInvocationFixture: ChatRoomAgentInvocation = {
     mentionedAgentIds: ['agent-a'],
   }],
   receivedAt: 2000,
+}
+
+const trustedGatewayOrigin = { clientGeneration: 31, socketGeneration: 41, authEpoch: 0 }
+
+function rustInvocationEnvelope(input: ChatRoomAgentInvocation = rustInvocationFixture): string {
+  return JSON.stringify({ invocation: input, gatewayOrigin: trustedGatewayOrigin })
 }
 
 function createDependencies(overrides: Partial<HttpApiDependencies> = {}): HttpApiDependencies {
@@ -209,20 +294,7 @@ test('Given auth save carries malformed user When Rust bridge handles it Then it
 })
 
 describe('聊天室 Rust bridge HTTP handler', () => {
-  test('Given 合法 invocation When Rust bridge 投递 Then coordinator 接收且返回 accepted 202', async () => {
-    const handleChatRoomInvocation = mock(async () => 'accepted' as const)
-    const response = await handleHttpApiRequest({
-      method: 'POST',
-      path: '/api/internal/chatrooms/invocations',
-      body: JSON.stringify(invocation),
-    }, createDependencies({ handleChatRoomInvocation }))
-
-    expect(response).toEqual({ status: 202, body: { status: 'accepted' } })
-    expect(handleChatRoomInvocation).toHaveBeenCalledWith(invocation)
-    expect(handleChatRoomInvocation).toHaveBeenCalledTimes(1)
-  })
-
-  test('Given Rust full invocation serialization When bridge 投递 Then strict DTO reaches coordinator unchanged', async () => {
+  test('Given 合法 flat invocation 缺少可信 origin When Rust bridge 投递 Then 明确拒绝而不调用 coordinator', async () => {
     const handleChatRoomInvocation = mock(async () => 'accepted' as const)
     const response = await handleHttpApiRequest({
       method: 'POST',
@@ -230,8 +302,40 @@ describe('聊天室 Rust bridge HTTP handler', () => {
       body: JSON.stringify(rustInvocationFixture),
     }, createDependencies({ handleChatRoomInvocation }))
 
+    expect(response).toEqual({
+      status: 400,
+      body: { code: 'invalid_chatroom_origin', error: '当前 Copis Rust 运行时不支持可信聊天室来源校验，请更新 Copis 后重试' },
+    })
+    expect(handleChatRoomInvocation).not.toHaveBeenCalled()
+  })
+
+  test('Given Rust full invocation serialization When bridge 投递 Then strict DTO reaches coordinator unchanged', async () => {
+    const handleChatRoomInvocation = mock(async () => 'accepted' as const)
+    const response = await handleHttpApiRequest({
+      method: 'POST',
+      path: '/api/internal/chatrooms/invocations',
+      body: rustInvocationEnvelope(),
+    }, createDependencies({ handleChatRoomInvocation }))
+
     expect(response).toEqual({ status: 202, body: { status: 'accepted' } })
-    expect(handleChatRoomInvocation).toHaveBeenCalledWith(rustInvocationFixture)
+    expect(handleChatRoomInvocation).toHaveBeenCalledWith(rustInvocationFixture, trustedGatewayOrigin)
+  })
+
+  test('Given authenticated socket invocation envelope When Rust bridge 投递 Then Main 将原始origin与严格invocation分别绑定', async () => {
+    const handleChatRoomInvocation = mock(async () => 'accepted' as const)
+    const response = await handleHttpApiRequest({
+      method: 'POST', path: '/api/internal/chatrooms/invocations',
+      body: rustInvocationEnvelope(),
+    }, createDependencies({ handleChatRoomInvocation }))
+    expect(response).toEqual({ status: 202, body: { status: 'accepted' } })
+    expect(handleChatRoomInvocation).toHaveBeenCalledWith(rustInvocationFixture, trustedGatewayOrigin)
+
+    const wrongOrigin = await handleHttpApiRequest({
+      method: 'POST', path: '/api/internal/chatrooms/invocations',
+      body: JSON.stringify({ invocation: rustInvocationFixture, gatewayOrigin: { ...trustedGatewayOrigin, socketGeneration: 0 } }),
+    }, createDependencies({ handleChatRoomInvocation }))
+    expect(wrongOrigin).toMatchObject({ status: 400, body: { code: 'invalid_chatroom_origin' } })
+    expect(handleChatRoomInvocation).toHaveBeenCalledTimes(1)
   })
 
   test('Given coordinator 判断重复 invocation When Rust bridge 投递 Then 返回 duplicate 200', async () => {
@@ -239,7 +343,7 @@ describe('聊天室 Rust bridge HTTP handler', () => {
     const response = await handleHttpApiRequest({
       method: 'POST',
       path: '/api/internal/chatrooms/invocations',
-      body: JSON.stringify(invocation),
+      body: rustInvocationEnvelope(invocation),
     }, createDependencies({ handleChatRoomInvocation }))
 
     expect(response).toEqual({ status: 200, body: { status: 'duplicate' } })
@@ -255,6 +359,39 @@ describe('聊天室 Rust bridge HTTP handler', () => {
 
     expect(response).toEqual({ status: 204 })
     expect(handleChatRoomGatewayDisconnected).toHaveBeenCalledTimes(1)
+  })
+
+  test('Given current Rust Gateway 的 agent.failed proof When internal bridge 投递 Then Main 只向 coordinator 转交精确事件和 socket/auth generation', async () => {
+    const handleChatRoomServerFailure = mock(async () => 'handled' as const)
+    const proof = { event: 'agent.failed', roomId: 'room-1', invocationId: 'inv-1', failureCode: 'agent_offline', clientGeneration: 3, socketGeneration: 7, authEpoch: 0 }
+    const response = await handleHttpApiRequest({
+      method: 'POST', path: '/api/internal/chatrooms/server-failure', body: JSON.stringify(proof),
+    }, createDependencies({ handleChatRoomServerFailure }))
+    expect(response).toEqual({ status: 200, body: { status: 'stopped' } })
+    expect(handleChatRoomServerFailure).toHaveBeenCalledWith({ roomId: proof.roomId, invocationId: proof.invocationId, failureCode: proof.failureCode, origin: { clientGeneration: 3, socketGeneration: 7, authEpoch: 0 } })
+    for (const invalid of [
+      { ...proof, socketGeneration: 0 },
+      { ...proof, failureCode: 'bad\ncode' },
+      { ...proof, source: 'renderer' },
+    ]) {
+      const rejected = await handleHttpApiRequest({ method: 'POST', path: '/api/internal/chatrooms/server-failure', body: JSON.stringify(invalid) }, createDependencies({ handleChatRoomServerFailure }))
+      expect(rejected).toMatchObject({ status: 400, body: { code: 'invalid_chatroom_server_failure' } })
+    }
+    expect(handleChatRoomServerFailure).toHaveBeenCalledTimes(1)
+    const unknownServerCode = await handleHttpApiRequest({
+      method: 'POST', path: '/api/internal/chatrooms/server-failure',
+      body: JSON.stringify({ ...proof, failureCode: 'executor_disabled' }),
+    }, createDependencies({ handleChatRoomServerFailure }))
+    expect(unknownServerCode).toEqual({ status: 200, body: { status: 'stopped' } })
+    expect(handleChatRoomServerFailure).toHaveBeenLastCalledWith({ roomId: proof.roomId, invocationId: proof.invocationId, failureCode: 'internal_error', origin: { clientGeneration: 3, socketGeneration: 7, authEpoch: 0 } })
+  })
+
+  test('Given Native owner stop 未确认 When trusted failed proof 到达 Main Then 返回可重试 handoff 状态', async () => {
+    const handleChatRoomServerFailure = mock(async () => 'retry' as const)
+    const proof = { event: 'agent.failed', roomId: 'room-1', invocationId: 'inv-retry', failureCode: 'agent_offline', clientGeneration: 3, socketGeneration: 7, authEpoch: 0 }
+    const response = await handleHttpApiRequest({ method: 'POST', path: '/api/internal/chatrooms/server-failure', body: JSON.stringify(proof) }, createDependencies({ handleChatRoomServerFailure }))
+    expect(response).toMatchObject({ status: 503, body: { code: 'chatroom_execution_handoff_unknown' } })
+    expect(handleChatRoomServerFailure).toHaveBeenCalledTimes(1)
   })
 
   test('Given 非法 invocation 或未知字段 When bridge 投递 Then 返回稳定 400 且不执行 Agent', async () => {
@@ -331,7 +468,7 @@ describe('聊天室 Rust bridge HTTP handler', () => {
     const response = await handleHttpApiRequest({
       method: 'POST',
       path: '/api/internal/chatrooms/invocations',
-      body: JSON.stringify(invocation),
+      body: rustInvocationEnvelope(invocation),
     }, createDependencies())
 
     expect(response).toEqual({ status: 503, body: { code: 'chatroom_coordinator_unavailable', error: '聊天室协调器不可用' } })
@@ -342,7 +479,7 @@ describe('聊天室 Rust bridge HTTP handler', () => {
     const response = await handleHttpApiRequest({
       method: 'POST',
       path: '/api/internal/chatrooms/invocations',
-      body: JSON.stringify(invocation),
+      body: rustInvocationEnvelope(invocation),
     }, createDependencies({ handleChatRoomInvocation }))
 
     expect(response).toEqual({ status: 500, body: { code: 'chatroom_coordinator_failed', error: '聊天室协调器处理失败' } })
@@ -366,7 +503,7 @@ describe('聊天室 Rust bridge HTTP handler', () => {
       response = await handleHttpApiRequest({
         method: 'POST',
         path: '/api/internal/chatrooms/invocations',
-        body: JSON.stringify(invocation),
+        body: rustInvocationEnvelope(invocation),
       }, createDependencies({ handleChatRoomInvocation }))
     } finally {
       console.error = originalError
@@ -386,7 +523,7 @@ describe('聊天室 Rust bridge HTTP handler', () => {
     const response = await handleHttpApiRequest({
       method: 'POST',
       path: '/api/internal/chatrooms/invocations',
-      body: JSON.stringify(invocation),
+      body: rustInvocationEnvelope(invocation),
     }, createDependencies({ handleChatRoomInvocation }))
 
     expect(response).toEqual({ status: 500, body: { code: 'chatroom_coordinator_failed', error: '聊天室协调器处理失败' } })
@@ -408,7 +545,7 @@ describe('聊天室 Rust bridge HTTP handler', () => {
       response = await handleHttpApiRequest({
         method: 'POST',
         path: '/api/internal/chatrooms/invocations',
-        body: JSON.stringify(invocation),
+        body: rustInvocationEnvelope(invocation),
       }, createDependencies({ handleChatRoomInvocation }))
     } finally {
       console.error = originalError

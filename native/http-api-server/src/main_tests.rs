@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::ffi::OsString;
 use std::io::{Read, Write};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Barrier};
@@ -18,17 +19,395 @@ use super::pi_rpc::{
     parse_worker_frame, sse_headers,
 };
 use super::{
-    append_recording_line, bind_automation_create_input, decode_hex, encode_hex,
-    ensure_internal_success_with_body, find_subslice, handle_connection,
-    handle_internal_agent_permission, handle_internal_recording_request, is_allowed_origin,
-    is_internal_agent_alipay_bot_path, is_internal_agent_shell_path, is_internal_path,
-    is_internal_token_valid, is_private_auth_bridge_path, is_safe_path_component,
-    is_skill_market_path, is_vite_dev_origin, is_web_route_authorized, is_working_payment_path,
-    is_workspace_dev_route, parse_internal_recording_route, recording_marker, Bridge,
-    BridgeResponse, HttpRequest,
+    append_recording_line, bind_automation_create_input, build_prepare_body,
+    chatroom_invocation_bridge_failure, decode_hex, encode_hex, ensure_internal_success_with_body,
+    find_subslice, handle_connection, handle_internal_agent_permission,
+    handle_internal_recording_request, is_allowed_origin, is_internal_agent_alipay_bot_path,
+    is_internal_agent_shell_path, is_internal_path, is_internal_token_valid,
+    is_private_auth_bridge_path, is_safe_path_component, is_skill_market_path, is_vite_dev_origin,
+    is_web_route_authorized, is_working_payment_path, is_workspace_dev_route,
+    parse_internal_recording_route, recording_marker, Bridge, BridgeResponse, HttpRequest,
 };
 
 static NEXT_HTTP_TEST_DIR: AtomicUsize = AtomicUsize::new(0);
+
+#[test]
+fn native_prepare_forwards_main_generated_trusted_run_id_unchanged() {
+    let request = HttpRequest {
+        method: "POST".into(),
+        target: "/api/agent/sessions/session-a/messages".into(),
+        headers: HashMap::new(),
+        body: serde_json::to_vec(&serde_json::json!({
+            "userMessage": "room task",
+            "_copisTrustedRunId": "opaque-main-run-id",
+        }))
+        .unwrap(),
+    };
+
+    let prepared = serde_json::from_slice::<serde_json::Value>(
+        &build_prepare_body(&request, "session-a").unwrap(),
+    )
+    .unwrap();
+
+    assert_eq!(prepared["sessionId"], "session-a");
+    assert_eq!(prepared["_copisTrustedRunId"], "opaque-main-run-id");
+}
+
+#[test]
+fn native_prepare_preserves_ordinary_renderer_body_without_trusted_run_id() {
+    let request = HttpRequest {
+        method: "POST".into(),
+        target: "/api/agent/sessions/session-ordinary/messages".into(),
+        headers: HashMap::new(),
+        body: serde_json::to_vec(&serde_json::json!({
+            "sessionId": "session-ordinary",
+            "userMessage": "ordinary renderer request",
+            "channelId": "channel-1",
+        }))
+        .unwrap(),
+    };
+
+    let prepared = serde_json::from_slice::<serde_json::Value>(
+        &build_prepare_body(&request, "session-ordinary").unwrap(),
+    )
+    .unwrap();
+
+    assert_eq!(prepared["sessionId"], "session-ordinary");
+    assert_eq!(prepared["userMessage"], "ordinary renderer request");
+    assert!(prepared.get("_copisTrustedRunId").is_none());
+}
+
+#[test]
+fn chatroom_protocol_options_are_default_off_and_independently_opted_in() {
+    let defaults = super::parse_chatroom_protocol_options(|_| None).unwrap();
+    assert_eq!(
+        defaults,
+        super::chatroom_protocol::ChatroomProtocolOptions::default()
+    );
+    assert!(defaults.requested_capabilities().is_empty());
+
+    let values = HashMap::from([
+        (
+            "COPIS_CHATROOM_AGENT_READY_V1".to_string(),
+            OsString::from("true"),
+        ),
+        (
+            "COPIS_CHATROOM_INVOCATION_ACK_V1".to_string(),
+            OsString::from("false"),
+        ),
+        (
+            "COPIS_CHATROOM_DELTA_FRAME_ID_V1".to_string(),
+            OsString::from("true"),
+        ),
+    ]);
+    let options = super::parse_chatroom_protocol_options(|name| values.get(name).cloned()).unwrap();
+    assert_eq!(
+        options.requested_capabilities(),
+        vec![
+            super::chatroom_protocol::ChatroomCapability::AgentReadyV1,
+            super::chatroom_protocol::ChatroomCapability::AgentDeltaFrameIdV1,
+        ]
+    );
+}
+
+#[test]
+fn malformed_chatroom_protocol_option_is_a_fixed_fail_closed_startup_error() {
+    for name in [
+        "COPIS_CHATROOM_AGENT_READY_V1",
+        "COPIS_CHATROOM_INVOCATION_ACK_V1",
+        "COPIS_CHATROOM_DELTA_FRAME_ID_V1",
+    ] {
+        let values = HashMap::from([(name.to_string(), OsString::from("TRUE"))]);
+        let error =
+            super::parse_chatroom_protocol_options(|candidate| values.get(candidate).cloned())
+                .expect_err("uppercase boolean must not silently opt in or out");
+        assert!(error.contains(name));
+        assert!(!error.contains("TRUE"));
+    }
+}
+
+#[test]
+fn chatroom_invocation_bridge_maps_only_the_existing_pairing_error_to_a_fixed_diagnostic() {
+    let unsupported = BridgeResponse {
+        status: 400,
+        body: Some(
+            r#"{"error":"当前 Copis Rust 运行时不支持可信聊天室来源校验，请更新 Copis 后重试","code":"invalid_chatroom_origin"}"#.into(),
+        ),
+    };
+    assert_eq!(
+        chatroom_invocation_bridge_failure(&unsupported),
+        super::chatroom_gateway::CHATROOM_NATIVE_RUNTIME_UNSUPPORTED,
+    );
+
+    let wrong_origin = BridgeResponse {
+        status: 400,
+        body: Some(r#"{"error":"聊天室来源代际不正确","code":"invalid_chatroom_origin"}"#.into()),
+    };
+    assert_eq!(
+        chatroom_invocation_bridge_failure(&wrong_origin),
+        super::chatroom_gateway::CHATROOM_NATIVE_RUNTIME_UNSUPPORTED,
+    );
+
+    for response in [
+        BridgeResponse {
+            status: 500,
+            body: Some(
+                r#"{"error":"secret /private/path","code":"invalid_chatroom_origin"}"#.into(),
+            ),
+        },
+        BridgeResponse {
+            status: 400,
+            body: Some(r#"{"error":"details","code":"other_error"}"#.into()),
+        },
+        BridgeResponse {
+            status: 400,
+            body: Some(
+                r#"{"error":"secret","code":"invalid_chatroom_origin","path":"/private/path"}"#
+                    .into(),
+            ),
+        },
+        BridgeResponse {
+            status: 400,
+            body: None,
+        },
+    ] {
+        assert_eq!(
+            chatroom_invocation_bridge_failure(&response),
+            "聊天室 Agent bridge 返回失败状态",
+        );
+    }
+}
+
+fn launch_agent_stream_barrier(
+    request: HttpRequest,
+    bridge: Arc<Bridge>,
+    workers: Arc<super::pi_rpc::PiWorkerManager>,
+) -> (thread::JoinHandle<()>, std::net::TcpStream) {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let path = request
+            .target
+            .split('?')
+            .next()
+            .unwrap_or(&request.target)
+            .to_string();
+        super::handle_agent_stream(&mut stream, &request, &path, None, bridge, workers);
+        let _ = stream.shutdown(std::net::Shutdown::Both);
+    });
+    let client = std::net::TcpStream::connect(address).unwrap();
+    (server, client)
+}
+
+fn wait_for_bridge_pending(bridge: &Bridge, wanted: usize) -> Vec<u64> {
+    let deadline = std::time::Instant::now() + Duration::from_secs(2);
+    loop {
+        let mut ids = bridge
+            .pending
+            .lock()
+            .unwrap()
+            .keys()
+            .copied()
+            .collect::<Vec<_>>();
+        ids.sort_unstable();
+        if ids.len() >= wanted {
+            return ids;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "Main prepare barrier 未收到 Bridge 请求"
+        );
+        thread::yield_now();
+    }
+}
+
+fn release_bridge_prepare(bridge: &Bridge, request_id: u64, session_id: &str) {
+    let response = BridgeResponse {
+        status: 200,
+        body: Some(serde_json::json!({ "sessionId": session_id, "query": {} }).to_string()),
+    };
+    bridge
+        .pending
+        .lock()
+        .unwrap()
+        .remove(&request_id)
+        .unwrap()
+        .send(Ok(response))
+        .unwrap();
+}
+
+fn run_agent_stop_route(
+    request: HttpRequest,
+    workers: Arc<super::pi_rpc::PiWorkerManager>,
+) -> String {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let request_path = request
+        .target
+        .split('?')
+        .next()
+        .unwrap_or(&request.target)
+        .to_string();
+    let server = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        super::handle_agent_stop(&mut stream, &request, &request_path, None, workers.as_ref());
+        let _ = stream.shutdown(std::net::Shutdown::Both);
+    });
+    let mut client = std::net::TcpStream::connect(address).unwrap();
+    let mut response = String::new();
+    client.read_to_string(&mut response).unwrap();
+    server.join().unwrap();
+    response
+}
+
+#[test]
+fn given_real_agent_stream_waits_at_bridge_prepare_when_owner_http_stop_arrives_then_late_a_cannot_start_or_clear_b(
+) {
+    let bridge = Arc::new(Bridge::new());
+    let workers = Arc::new(super::pi_rpc::PiWorkerManager::new());
+    let session_id = "chatroom-barrier-session";
+    let input = |run_id: &str| HttpRequest {
+        method: "POST".into(),
+        target: format!("/api/agent/sessions/{session_id}/messages"),
+        headers: HashMap::new(),
+        body: serde_json::to_vec(
+            &serde_json::json!({ "userMessage": run_id, "_copisTrustedRunId": run_id }),
+        )
+        .unwrap(),
+    };
+    let stop = |run_id: &str| HttpRequest {
+        method: "POST".into(),
+        target: format!("/api/agent/sessions/{session_id}/stop"),
+        headers: HashMap::new(),
+        body: serde_json::to_vec(&serde_json::json!({ "_copisTrustedRunId": run_id })).unwrap(),
+    };
+
+    let (stream_a, mut client_a) =
+        launch_agent_stream_barrier(input("run-a"), Arc::clone(&bridge), Arc::clone(&workers));
+    let ids_a = wait_for_bridge_pending(&bridge, 1);
+    let body_a = bridge
+        .request_records
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|(target, _)| target == "/api/internal/agent/prepare")
+        .map(|(_, body)| serde_json::from_slice::<serde_json::Value>(body).unwrap())
+        .unwrap();
+    assert_eq!(body_a["_copisTrustedRunId"], "run-a");
+
+    let stop_started = std::time::Instant::now();
+    assert!(run_agent_stop_route(stop("run-a"), Arc::clone(&workers)).starts_with("HTTP/1.1 204"));
+    assert!(
+        stop_started.elapsed() < Duration::from_millis(500),
+        "stop 在 Main prepare barrier 放行前必须完成"
+    );
+
+    let (stream_b, mut client_b) =
+        launch_agent_stream_barrier(input("run-b"), Arc::clone(&bridge), Arc::clone(&workers));
+    let ids_b = wait_for_bridge_pending(&bridge, 2);
+    assert_eq!(
+        workers.pending_startup_owner_for_test(session_id),
+        Some(Some("run-b".to_string()))
+    );
+
+    release_bridge_prepare(&bridge, ids_a[0], session_id);
+    let mut response_a = String::new();
+    client_a.read_to_string(&mut response_a).unwrap();
+    stream_a.join().unwrap();
+    assert!(response_a.starts_with("HTTP/1.1 503"));
+    assert_eq!(
+        workers.pending_startup_owner_for_test(session_id),
+        Some(Some("run-b".to_string()))
+    );
+    assert!(!workers.is_active(session_id));
+    assert!(run_agent_stop_route(stop("run-a"), Arc::clone(&workers)).starts_with("HTTP/1.1 204"));
+    assert_eq!(
+        workers.pending_startup_owner_for_test(session_id),
+        Some(Some("run-b".to_string()))
+    );
+
+    let body_b = bridge
+        .request_records
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|(target, body)| {
+            target == "/api/internal/agent/prepare"
+                && serde_json::from_slice::<serde_json::Value>(body)
+                    .ok()
+                    .and_then(|value| value.get("_copisTrustedRunId").cloned())
+                    .as_ref()
+                    == Some(&serde_json::json!("run-b"))
+        })
+        .map(|(_, body)| serde_json::from_slice::<serde_json::Value>(body).unwrap())
+        .unwrap();
+    assert_eq!(body_b["_copisTrustedRunId"], "run-b");
+    assert!(run_agent_stop_route(stop("run-b"), Arc::clone(&workers)).starts_with("HTTP/1.1 204"));
+    release_bridge_prepare(&bridge, ids_b[1], session_id);
+    let mut response_b = String::new();
+    client_b.read_to_string(&mut response_b).unwrap();
+    stream_b.join().unwrap();
+    assert!(response_b.starts_with("HTTP/1.1 503"));
+    assert!(!workers.is_active(session_id));
+}
+
+#[cfg(unix)]
+#[test]
+fn given_active_b_worker_when_http_stop_with_stale_a_owner_arrives_then_b_remains_active() {
+    let manager = Arc::new(super::pi_rpc::PiWorkerManager::new());
+    let root = std::env::temp_dir().join(format!("copis-http-stop-owner-{}", std::process::id()));
+    std::fs::create_dir_all(&root).unwrap();
+    let session_id = "http-stop-owner-session";
+    let reservation = manager
+        .reserve_startup_for(session_id, Some("run-b".to_string()))
+        .unwrap();
+    let config = serde_json::json!({
+        "sessionId": session_id,
+        "query": {
+            "sessionId": session_id,
+            "cwd": root,
+            "channelId": "fake-provider",
+            "model": "no-model-call",
+            "permissionMode": "bypassPermissions",
+            "triggeredBy": "user",
+            "automationEnabled": false,
+            "useRustFileApi": true,
+            "fileAccessPolicy": {
+                "readRoots": [root], "readFiles": [], "writeRoots": [root],
+                "permissionMode": "bypassPermissions"
+            }
+        }
+    });
+    let run_b = manager
+        .start_reserved_with_fake_worker(&reservation, config)
+        .unwrap();
+
+    let stale_stop = HttpRequest {
+        method: "POST".into(),
+        target: format!("/api/agent/sessions/{session_id}/stop"),
+        headers: HashMap::new(),
+        body: serde_json::to_vec(&serde_json::json!({ "_copisTrustedRunId": "run-a" })).unwrap(),
+    };
+    let stale_stop_response = run_agent_stop_route(stale_stop, Arc::clone(&manager));
+    let active_after_stale_stop = manager.is_active(session_id);
+
+    let current_stop = HttpRequest {
+        method: "POST".into(),
+        target: format!("/api/agent/sessions/{session_id}/stop"),
+        headers: HashMap::new(),
+        body: serde_json::to_vec(&serde_json::json!({ "_copisTrustedRunId": "run-b" })).unwrap(),
+    };
+    let current_stop_response = run_agent_stop_route(current_stop, Arc::clone(&manager));
+    let active_after_current_stop = manager.is_active(session_id);
+    manager.finish(run_b);
+    std::fs::remove_dir_all(root).unwrap();
+
+    assert!(stale_stop_response.starts_with("HTTP/1.1 204"));
+    assert!(active_after_stale_stop);
+    assert!(current_stop_response.starts_with("HTTP/1.1 204"));
+    assert!(!active_after_current_stop);
+}
 
 struct MainTestStorage;
 
@@ -99,6 +478,13 @@ impl ChatroomBridge for MainTestBridge {
         Ok(())
     }
     fn send_disconnected(
+        &self,
+        _body: Vec<u8>,
+        _shutdown: &std::sync::atomic::AtomicBool,
+    ) -> Result<(), String> {
+        Ok(())
+    }
+    fn send_server_failure(
         &self,
         _body: Vec<u8>,
         _shutdown: &std::sync::atomic::AtomicBool,
@@ -319,6 +705,19 @@ fn run_chatroom_http(request: HttpRequest, gateway: Arc<ChatroomGateway>) -> Str
     client.read_to_string(&mut response).unwrap();
     server.join().unwrap();
     response
+}
+
+fn parse_http_request_fixture(wire: Vec<u8>) -> Result<HttpRequest, super::RequestError> {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        super::read_http_request(&mut stream)
+    });
+    let mut client = std::net::TcpStream::connect(address).unwrap();
+    client.write_all(&wire).unwrap();
+    client.shutdown(std::net::Shutdown::Write).unwrap();
+    server.join().unwrap()
 }
 
 fn run_handle_connection(
@@ -556,12 +955,226 @@ fn given_internal_chatroom_invocation_without_internal_token_then_return_403() {
 }
 
 #[test]
+fn given_agent_management_route_when_renderer_or_preflight_omits_internal_token_then_reject_and_internal_main_route_reaches_gateway(
+) {
+    let _environment = super::skill_market::backend_env_test_lock().lock().unwrap();
+    let directory = std::env::temp_dir().join(format!(
+        "copis-chatroom-management-route-{}-{}",
+        std::process::id(),
+        NEXT_HTTP_TEST_DIR.fetch_add(1, Ordering::Relaxed)
+    ));
+    let _ = std::fs::remove_dir_all(&directory);
+    std::fs::create_dir_all(&directory).unwrap();
+    let token = "task5b2-temporary-internal-token";
+    std::fs::write(directory.join("internal-token.fixture"), token).unwrap();
+    let previous_internal = std::env::var("COPIS_HTTP_API_INTERNAL_TOKEN").ok();
+    let previous_web = std::env::var("COPIS_HTTP_API_WEB_TOKEN").ok();
+    std::env::set_var("COPIS_HTTP_API_INTERNAL_TOKEN", token);
+    std::env::set_var("COPIS_HTTP_API_WEB_TOKEN", "renderer-web-token");
+
+    let receipt = serde_json::json!({
+        "version": 1,
+        "operationId": "43d51f60-215e-45d4-9462-2d9a22562282",
+        "roomId": "room-1",
+        "roomAgentId": "agent-1",
+        "ownerUserId": 1,
+        "action": "register",
+        "status": "registered",
+        "displayName": "测试助手",
+        "memoryShared": false,
+        "skillsShared": false
+    });
+    let gateway = main_test_gateway(GatewayTransportResponse {
+        status: 200,
+        body: serde_json::json!({"data":receipt}).to_string().into_bytes(),
+    });
+    let target = "/api/internal/chatrooms/rooms/room-1/agent-management/operations";
+    let body = serde_json::json!({
+        "action": "register",
+        "operationId": "43d51f60-215e-45d4-9462-2d9a22562282",
+        "deviceId": "123e4567-e89b-42d3-a456-426614174000",
+        "displayName": "测试助手"
+    })
+    .to_string()
+    .into_bytes();
+    let unauthenticated = run_chatroom_http(
+        HttpRequest {
+            method: "POST".into(),
+            target: target.into(),
+            headers: HashMap::new(),
+            body: body.clone(),
+        },
+        Arc::clone(&gateway),
+    );
+    let renderer_token = run_chatroom_http(
+        HttpRequest {
+            method: "POST".into(),
+            target: target.into(),
+            headers: [("x-copis-web-token".into(), "renderer-web-token".into())]
+                .into_iter()
+                .collect(),
+            body: body.clone(),
+        },
+        Arc::clone(&gateway),
+    );
+    let unauthenticated_options = run_chatroom_http(
+        HttpRequest {
+            method: "OPTIONS".into(),
+            target: target.into(),
+            headers: HashMap::new(),
+            body: Vec::new(),
+        },
+        Arc::clone(&gateway),
+    );
+    let internal = run_chatroom_http(
+        HttpRequest {
+            method: "POST".into(),
+            target: target.into(),
+            headers: [("x-copis-internal-token".into(), token.into())]
+                .into_iter()
+                .collect(),
+            body,
+        },
+        gateway,
+    );
+
+    match previous_internal {
+        Some(value) => std::env::set_var("COPIS_HTTP_API_INTERNAL_TOKEN", value),
+        None => std::env::remove_var("COPIS_HTTP_API_INTERNAL_TOKEN"),
+    }
+    match previous_web {
+        Some(value) => std::env::set_var("COPIS_HTTP_API_WEB_TOKEN", value),
+        None => std::env::remove_var("COPIS_HTTP_API_WEB_TOKEN"),
+    }
+    let _ = std::fs::remove_dir_all(&directory);
+
+    assert!(unauthenticated.starts_with("HTTP/1.1 403 Forbidden"));
+    assert!(renderer_token.starts_with("HTTP/1.1 403 Forbidden"));
+    assert!(unauthenticated_options.starts_with("HTTP/1.1 403 Forbidden"));
+    assert!(internal.starts_with("HTTP/1.1 200 OK"), "{internal}");
+    assert!(internal.contains(r#""status":"registered""#));
+}
+
+#[test]
+fn given_agent_management_http_body_when_at_or_over_64_kibibytes_then_bound_content_length_and_chunked_reads(
+) {
+    let path = "/api/internal/chatrooms/rooms/room-1/agent-management/operations";
+    let max = super::MAX_CHATROOM_MANAGEMENT_BODY_BYTES;
+    let at_limit = vec![b'x'; max];
+    let over_limit = vec![b'x'; max + 1];
+    let content_length_request = |body: &[u8]| {
+        let mut wire = format!(
+            "POST {path} HTTP/1.1\r\nHost: localhost\r\nContent-Length: {}\r\n\r\n",
+            body.len()
+        )
+        .into_bytes();
+        wire.extend_from_slice(body);
+        wire
+    };
+    let chunked_request = |body: &[u8]| {
+        let mut wire = format!(
+            "POST {path} HTTP/1.1\r\nHost: localhost\r\nTransfer-Encoding: chunked\r\n\r\n{:x}\r\n",
+            body.len()
+        )
+        .into_bytes();
+        wire.extend_from_slice(body);
+        wire.extend_from_slice(b"\r\n0\r\n\r\n");
+        wire
+    };
+
+    for wire in [
+        content_length_request(&at_limit),
+        chunked_request(&at_limit),
+    ] {
+        let Ok(request) = parse_http_request_fixture(wire) else {
+            panic!("正好 64 KiB 的管理 HTTP body 应通过读取边界");
+        };
+        assert_eq!(request.body.len(), max);
+    }
+    for wire in [
+        content_length_request(&over_limit),
+        chunked_request(&over_limit),
+    ] {
+        let Err(super::RequestError::BadRequest(_, code)) = parse_http_request_fixture(wire) else {
+            panic!("64 KiB + 1 的管理 HTTP body 必须以稳定 400 拒绝");
+        };
+        assert_eq!(code, "invalid_request");
+    }
+}
+
+#[test]
 fn given_internal_chatroom_room_status_without_token_then_return_403() {
     let request = HttpRequest {
         method: "GET".into(),
         target: "/api/internal/chatrooms/rooms/room-1/status".into(),
         headers: HashMap::new(),
         body: Vec::new(),
+    };
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        super::handle_chatroom_http(&mut stream, &request, None, None);
+    });
+    let mut client = std::net::TcpStream::connect(address).unwrap();
+    let mut response = String::new();
+    client.read_to_string(&mut response).unwrap();
+    server.join().unwrap();
+    assert!(response.starts_with("HTTP/1.1 403 Forbidden"));
+    assert!(response.contains(r#""code":"internal_token_required""#));
+}
+
+#[test]
+fn given_internal_chatroom_invocation_status_without_token_then_return_403() {
+    let request = HttpRequest {
+        method: "POST".into(),
+        target: "/api/internal/chatrooms/rooms/room-1/invocations/invocation-1/status".into(),
+        headers: HashMap::new(),
+        body: br#"{}"#.to_vec(),
+    };
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        super::handle_chatroom_http(&mut stream, &request, None, None);
+    });
+    let mut client = std::net::TcpStream::connect(address).unwrap();
+    let mut response = String::new();
+    client.read_to_string(&mut response).unwrap();
+    server.join().unwrap();
+    assert!(response.starts_with("HTTP/1.1 403 Forbidden"));
+    assert!(response.contains(r#""code":"internal_token_required""#));
+}
+
+#[test]
+fn given_internal_chatroom_agent_ready_without_internal_token_then_return_403() {
+    let request = HttpRequest {
+        method: "POST".into(),
+        target: "/api/internal/chatrooms/rooms/room-1/agents/agent-1/ready".into(),
+        headers: HashMap::new(),
+        body: br#"{}"#.to_vec(),
+    };
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        super::handle_chatroom_http(&mut stream, &request, None, None);
+    });
+    let mut client = std::net::TcpStream::connect(address).unwrap();
+    let mut response = String::new();
+    client.read_to_string(&mut response).unwrap();
+    server.join().unwrap();
+    assert!(response.starts_with("HTTP/1.1 403 Forbidden"));
+    assert!(response.contains(r#""code":"internal_token_required""#));
+}
+
+#[test]
+fn given_internal_chatroom_execution_binding_without_internal_token_then_return_403() {
+    let request = HttpRequest {
+        method: "POST".into(),
+        target: "/api/internal/chatrooms/execution-bindings/bind".into(),
+        headers: HashMap::new(),
+        body: br#"{}"#.to_vec(),
     };
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap();
@@ -1110,6 +1723,14 @@ fn permission_bridge_has_a_bounded_approval_timeout() {
     assert_eq!(
         super::bridge_request_timeout_for_path("/api/internal/agent/permission"),
         std::time::Duration::from_secs(90)
+    );
+}
+
+#[test]
+fn chatroom_terminal_handoff_bridge_has_a_short_bounded_retry_timeout() {
+    assert_eq!(
+        super::bridge_request_timeout_for_path("/api/internal/chatrooms/server-failure"),
+        Duration::from_millis(1_500)
     );
 }
 

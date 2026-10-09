@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::ffi::OsString;
 use std::fs::{self, OpenOptions};
 use std::io::{self, BufRead, BufReader, BufWriter, Read, Write};
 use std::net::{Shutdown, TcpListener, TcpStream};
@@ -16,8 +17,11 @@ mod app_update;
 mod auth_session;
 mod automation;
 mod automation_scheduler;
+mod chatroom_ack;
 mod chatroom_client;
+mod chatroom_execution;
 mod chatroom_gateway;
+mod chatroom_management;
 mod chatroom_protocol;
 mod edu_api_client;
 mod expert_teams;
@@ -48,6 +52,7 @@ use chatroom_gateway::{
     is_chatroom_internal_path, is_chatroom_path, ChatroomBridge, ChatroomGateway,
     GatewayHttpResponse,
 };
+use chatroom_protocol::ChatroomProtocolOptions;
 use edu_api_client::{EduApiClient, EduApiResponse, DEFAULT_MAX_CONCURRENT_REQUESTS};
 use expert_teams::{ExpertTeamError, ExpertTeamStore};
 use memory::{
@@ -62,7 +67,7 @@ use payment_workspace::PaymentWorkspace;
 use pi_rpc::{
     agent_session_id, is_agent_messages_route, is_agent_queue_route, is_agent_status_route,
     is_agent_stop_route, is_agent_workers_status_route, is_agent_workers_stop_all_route,
-    parse_worker_frame, sse_headers_with_origin, PiWorkerManager,
+    parse_worker_frame, sse_headers_with_origin, AgentStartupReservation, PiWorkerManager,
 };
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -88,6 +93,7 @@ const HOST: &str = "127.0.0.1";
 const DEFAULT_PORT: u16 = 51730;
 // 文件写入接口允许 50 MB 内容，额外预留 JSON/path/sessionId 等请求字段空间。
 const MAX_REQUEST_BODY_BYTES: usize = 50 * 1024 * 1024 + 256 * 1024;
+const MAX_CHATROOM_MANAGEMENT_BODY_BYTES: usize = 64 * 1024;
 const MAX_HEADER_BYTES: usize = 64 * 1024;
 const MAX_LINE_BYTES: usize = 64 * 1024;
 const MAX_RECORDING_LINE_BYTES: usize = 256 * 1024;
@@ -118,6 +124,22 @@ fn is_working_model_route(method: &str, path: &str) -> bool {
         )
 }
 
+fn is_chatroom_management_http_path(path: &str) -> bool {
+    if path == "/api/internal/chatrooms/agent-management/capabilities" {
+        return true;
+    }
+    let parts: Vec<&str> = path.split('/').collect();
+    matches!(
+        parts.as_slice(),
+        ["", "api", "internal", "chatrooms", "rooms", room_id, "agent-management", "operations"]
+            if !room_id.is_empty()
+    ) || matches!(
+        parts.as_slice(),
+        ["", "api", "internal", "chatrooms", "rooms", room_id, "agent-management", "operations", "status"]
+            if !room_id.is_empty()
+    )
+}
+
 fn bridge_request_timeout() -> Duration {
     let millis = std::env::var("COPIS_HTTP_API_BRIDGE_TIMEOUT_MS")
         .ok()
@@ -130,6 +152,9 @@ fn bridge_request_timeout() -> Duration {
 fn bridge_request_timeout_for_path(path: &str) -> Duration {
     if path == "/api/working/images/generate" {
         return Duration::from_secs(300);
+    }
+    if path == "/api/internal/chatrooms/server-failure" {
+        return Duration::from_millis(1_500);
     }
     if path == INTERNAL_AGENT_PERMISSION_PATH {
         return Duration::from_secs(90);
@@ -160,6 +185,34 @@ struct BridgeResponse {
     body: Option<String>,
 }
 
+const CHATROOM_INVOCATION_BRIDGE_FAILURE: &str = "聊天室 Agent bridge 返回失败状态";
+
+fn chatroom_invocation_bridge_failure(response: &BridgeResponse) -> &'static str {
+    if response.status != 400 {
+        return CHATROOM_INVOCATION_BRIDGE_FAILURE;
+    }
+    let Some(body) = response.body.as_deref() else {
+        return CHATROOM_INVOCATION_BRIDGE_FAILURE;
+    };
+    let Ok(value) = serde_json::from_str::<Value>(body) else {
+        return CHATROOM_INVOCATION_BRIDGE_FAILURE;
+    };
+    let Some(object) = value.as_object() else {
+        return CHATROOM_INVOCATION_BRIDGE_FAILURE;
+    };
+    if object.len() == 2
+        && object
+            .get("code")
+            .and_then(Value::as_str)
+            .is_some_and(|code| code == "invalid_chatroom_origin")
+        && object.get("error").and_then(Value::as_str).is_some()
+    {
+        chatroom_gateway::CHATROOM_NATIVE_RUNTIME_UNSUPPORTED
+    } else {
+        CHATROOM_INVOCATION_BRIDGE_FAILURE
+    }
+}
+
 struct Bridge {
     next_id: AtomicU64,
     available: AtomicBool,
@@ -167,6 +220,8 @@ struct Bridge {
     pending: Mutex<HashMap<u64, mpsc::Sender<Result<BridgeResponse, String>>>>,
     recording_locks: Mutex<HashMap<String, Arc<Mutex<()>>>>,
     recording_paths: Mutex<HashMap<(String, String), PathBuf>>,
+    #[cfg(test)]
+    request_records: Mutex<Vec<(String, Vec<u8>)>>,
 }
 
 enum ChatroomGatewayLifecycleState {
@@ -547,6 +602,8 @@ impl Bridge {
             pending: Mutex::new(HashMap::new()),
             recording_locks: Mutex::new(HashMap::new()),
             recording_paths: Mutex::new(HashMap::new()),
+            #[cfg(test)]
+            request_records: Mutex::new(Vec::new()),
         }
     }
 
@@ -562,6 +619,12 @@ impl Bridge {
         if !self.available.load(Ordering::Acquire) {
             return Err("HTTP API 业务桥不可用".to_string());
         }
+
+        #[cfg(test)]
+        self.request_records
+            .lock()
+            .unwrap()
+            .push((request.target.clone(), request.body.clone()));
 
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let (sender, receiver) = mpsc::channel();
@@ -634,7 +697,7 @@ impl chatroom_gateway::ChatroomBridge for Bridge {
         if (200..300).contains(&response.status) {
             Ok(())
         } else {
-            Err("聊天室 Agent bridge 返回失败状态".to_string())
+            Err(chatroom_invocation_bridge_failure(&response).to_string())
         }
     }
 
@@ -652,6 +715,23 @@ impl chatroom_gateway::ChatroomBridge for Bridge {
             Ok(())
         } else {
             Err("聊天室断开通知返回失败状态".to_string())
+        }
+    }
+
+    fn send_server_failure(&self, body: Vec<u8>, shutdown: &AtomicBool) -> Result<(), String> {
+        let response = self.send_request_cancellable(
+            &HttpRequest {
+                method: "POST".to_string(),
+                target: "/api/internal/chatrooms/server-failure".to_string(),
+                headers: HashMap::new(),
+                body,
+            },
+            Some(shutdown),
+        )?;
+        if (200..300).contains(&response.status) {
+            Ok(())
+        } else {
+            Err("聊天室服务端终态通知返回失败状态".to_string())
         }
     }
 }
@@ -928,6 +1008,17 @@ fn read_http_request(stream: &mut TcpStream) -> Result<HttpRequest, RequestError
             "invalid_http_request",
         ));
     }
+    let management_body_limit = is_chatroom_management_http_path(
+        request_parts[1]
+            .split('?')
+            .next()
+            .unwrap_or(request_parts[1]),
+    );
+    let max_body_bytes = if management_body_limit {
+        MAX_CHATROOM_MANAGEMENT_BODY_BYTES
+    } else {
+        MAX_REQUEST_BODY_BYTES
+    };
 
     let mut headers = HashMap::new();
     for line in lines {
@@ -948,13 +1039,17 @@ fn read_http_request(stream: &mut TcpStream) -> Result<HttpRequest, RequestError
         .map(|value| value.to_ascii_lowercase().contains("chunked"))
         .unwrap_or(false)
     {
-        read_chunked_body(&mut reader)?
+        read_chunked_body(&mut reader, max_body_bytes, management_body_limit)?
     } else if let Some(content_length) = headers.get("content-length") {
         let length = content_length
             .parse::<usize>()
             .map_err(|_| RequestError::BadRequest("请求体长度不正确", "invalid_content_length"))?;
-        if length > MAX_REQUEST_BODY_BYTES {
-            return Err(RequestError::TooLarge);
+        if length > max_body_bytes {
+            return Err(if management_body_limit {
+                RequestError::BadRequest("管理请求体超过 64 KiB 限制", "invalid_request")
+            } else {
+                RequestError::TooLarge
+            });
         }
         reader
             .read_exact_bytes(length)
@@ -971,7 +1066,11 @@ fn read_http_request(stream: &mut TcpStream) -> Result<HttpRequest, RequestError
     })
 }
 
-fn read_chunked_body(reader: &mut BufferedReader) -> Result<Vec<u8>, RequestError> {
+fn read_chunked_body(
+    reader: &mut BufferedReader,
+    max_body_bytes: usize,
+    management_body_limit: bool,
+) -> Result<Vec<u8>, RequestError> {
     let mut body = Vec::new();
     loop {
         let line = reader
@@ -992,8 +1091,12 @@ fn read_chunked_body(reader: &mut BufferedReader) -> Result<Vec<u8>, RequestErro
             }
             break;
         }
-        if body.len().saturating_add(size) > MAX_REQUEST_BODY_BYTES {
-            return Err(RequestError::TooLarge);
+        if body.len().saturating_add(size) > max_body_bytes {
+            return Err(if management_body_limit {
+                RequestError::BadRequest("管理请求体超过 64 KiB 限制", "invalid_request")
+            } else {
+                RequestError::TooLarge
+            });
         }
         body.extend_from_slice(
             &reader
@@ -2230,29 +2333,7 @@ fn handle_connection(
     }
 
     if is_agent_stop_route(&request.method, path) {
-        let Some(session_id) = agent_session_id(path) else {
-            send_json_response(
-                &mut stream,
-                400,
-                r#"{"error":"Agent 会话路径不正确","code":"invalid_path"}"#,
-                origin,
-            );
-            let _ = stream.shutdown(Shutdown::Both);
-            return;
-        };
-        match workers.stop(&session_id) {
-            Ok(true) => send_empty_response(&mut stream, 204, origin),
-            Ok(false) => send_empty_response(&mut stream, 204, origin),
-            Err(error) => {
-                eprintln!("[HTTP API] Pi worker 停止失败: {}", error);
-                send_json_response(
-                    &mut stream,
-                    503,
-                    r#"{"error":"Pi worker 不可用","code":"pi_worker_unavailable"}"#,
-                    origin,
-                );
-            }
-        }
+        handle_agent_stop(&mut stream, &request, path, origin, workers.as_ref());
         let _ = stream.shutdown(Shutdown::Both);
         return;
     }
@@ -2546,6 +2627,47 @@ fn handle_connection(
         }
     }
     let _ = stream.shutdown(Shutdown::Both);
+}
+
+fn handle_agent_stop(
+    stream: &mut TcpStream,
+    request: &HttpRequest,
+    path: &str,
+    origin: Option<&str>,
+    workers: &PiWorkerManager,
+) {
+    let Some(session_id) = agent_session_id(path) else {
+        send_json_response(
+            stream,
+            400,
+            r#"{"error":"Agent 会话路径不正确","code":"invalid_path"}"#,
+            origin,
+        );
+        return;
+    };
+    let owner_id = match trusted_agent_run_id(&request.body) {
+        Ok(owner_id) => owner_id,
+        Err(error) => {
+            let body = format!(
+                r#"{{"error":"{}","code":"invalid_chatroom_run_id"}}"#,
+                escape_json_string(&error)
+            );
+            send_json_response(stream, 400, &body, origin);
+            return;
+        }
+    };
+    match workers.stop_owned(&session_id, owner_id.as_deref()) {
+        Ok(_) => send_empty_response(stream, 204, origin),
+        Err(error) => {
+            eprintln!("[HTTP API] Pi worker 停止失败: {}", error);
+            send_json_response(
+                stream,
+                503,
+                r#"{"error":"Pi worker 不可用","code":"pi_worker_unavailable"}"#,
+                origin,
+            );
+        }
+    }
 }
 
 fn handle_chatroom_http(
@@ -3660,6 +3782,17 @@ fn handle_internal_agent_agent_mail(
     }
 }
 
+struct AgentStartupCleanup<'a> {
+    workers: &'a PiWorkerManager,
+    reservation: AgentStartupReservation,
+}
+
+impl Drop for AgentStartupCleanup<'_> {
+    fn drop(&mut self) {
+        self.workers.abandon_startup(&self.reservation);
+    }
+}
+
 fn handle_agent_stream(
     stream: &mut TcpStream,
     request: &HttpRequest,
@@ -3676,6 +3809,33 @@ fn handle_agent_stream(
             origin,
         );
         return;
+    };
+
+    let owner_id = match trusted_agent_run_id(&request.body) {
+        Ok(owner_id) => owner_id,
+        Err(error) => {
+            let body = format!(
+                r#"{{"error":"{}","code":"invalid_chatroom_run_id"}}"#,
+                escape_json_string(&error)
+            );
+            send_json_response(stream, 400, &body, origin);
+            return;
+        }
+    };
+    let reservation = match workers.reserve_startup_for(&session_id, owner_id) {
+        Ok(reservation) => reservation,
+        Err(error) => {
+            let body = format!(
+                r#"{{"error":"{}","code":"agent_worker_busy"}}"#,
+                escape_json_string(&error)
+            );
+            send_json_response(stream, 409, &body, origin);
+            return;
+        }
+    };
+    let _startup_cleanup = AgentStartupCleanup {
+        workers: workers.as_ref(),
+        reservation: reservation.clone(),
     };
 
     let prepare_body = match build_prepare_body(request, &session_id) {
@@ -3724,7 +3884,7 @@ fn handle_agent_stream(
         }
     };
 
-    let mut worker = match workers.start(&session_id, config) {
+    let mut worker = match workers.start_reserved(&reservation, config) {
         Ok(worker) => worker,
         Err(error) => {
             eprintln!("[HTTP API] {}", error);
@@ -3755,6 +3915,9 @@ fn handle_agent_stream(
             }
         };
         if read == 0 {
+            break;
+        }
+        if !workers.owns_run(&worker) {
             break;
         }
         let Some(mut frame) = parse_worker_frame(line.trim_end_matches(['\r', '\n'])) else {
@@ -3822,7 +3985,7 @@ fn handle_agent_stream(
     }
 
     if stop_worker {
-        if let Err(error) = workers.stop(&session_id) {
+        if let Err(error) = workers.stop_run(&worker) {
             eprintln!("[HTTP API] 停止 Pi worker 失败: {}", error);
         }
     }
@@ -3940,6 +4103,22 @@ fn handle_agent_queue(
             );
             send_json_response(stream, 503, &body, origin);
         }
+    }
+}
+
+fn trusted_agent_run_id(body: &[u8]) -> Result<Option<String>, String> {
+    if body.is_empty() {
+        return Ok(None);
+    }
+    let value =
+        serde_json::from_slice::<Value>(body).map_err(|_| "请求体不是有效的 JSON".to_string())?;
+    let object = value
+        .as_object()
+        .ok_or_else(|| "请求体必须是 JSON 对象".to_string())?;
+    match object.get("_copisTrustedRunId") {
+        None => Ok(None),
+        Some(Value::String(run_id)) if !run_id.trim().is_empty() => Ok(Some(run_id.clone())),
+        Some(_) => Err("聊天室运行 run ID 不正确".to_string()),
     }
 }
 
@@ -4305,6 +4484,37 @@ fn configured_port() -> u16 {
         .unwrap_or(DEFAULT_PORT)
 }
 
+fn parse_chatroom_protocol_options(
+    lookup: impl Fn(&str) -> Option<OsString>,
+) -> Result<ChatroomProtocolOptions, String> {
+    const FLAGS: [(&str, fn(&mut ChatroomProtocolOptions) -> &mut bool); 3] = [
+        ("COPIS_CHATROOM_AGENT_READY_V1", |options| {
+            &mut options.agent_ready_v1
+        }),
+        ("COPIS_CHATROOM_INVOCATION_ACK_V1", |options| {
+            &mut options.invocation_ack_v1
+        }),
+        ("COPIS_CHATROOM_DELTA_FRAME_ID_V1", |options| {
+            &mut options.delta_frame_id_v1
+        }),
+    ];
+    let mut options = ChatroomProtocolOptions::default();
+    for (name, select) in FLAGS {
+        let Some(value) = lookup(name) else {
+            continue;
+        };
+        let Some(value) = value.to_str() else {
+            return Err(format!("{name} 必须精确设置为小写 true 或 false"));
+        };
+        *select(&mut options) = match value {
+            "true" => true,
+            "false" => false,
+            _ => return Err(format!("{name} 必须精确设置为小写 true 或 false")),
+        };
+    }
+    Ok(options)
+}
+
 struct ConnectionCountGuard(Arc<AtomicUsize>);
 
 impl Drop for ConnectionCountGuard {
@@ -4317,6 +4527,14 @@ fn main() {
     let port = configured_port();
     let bridge = Arc::new(Bridge::new());
     let chatroom_gateway_lifecycle = Arc::new(ChatroomGatewayLifecycle::new());
+    let chatroom_protocol_options =
+        match parse_chatroom_protocol_options(|name| std::env::var_os(name)) {
+            Ok(options) => options,
+            Err(error) => {
+                eprintln!("[HTTP API] 聊天室协议配置无效: {error}");
+                startup_failed_and_exit(&chatroom_gateway_lifecycle, 1);
+            }
+        };
     if bridge.available.load(Ordering::Acquire) {
         let response_bridge = Arc::clone(&bridge);
         let response_lifecycle = Arc::clone(&chatroom_gateway_lifecycle);
@@ -4435,6 +4653,7 @@ fn main() {
         Arc::new(TungsteniteConnector::default()),
         chatroom_bridge,
         chatroom_device_id,
+        chatroom_protocol_options,
     ) {
         Ok(gateway) => gateway,
         Err(error) => {
@@ -4442,6 +4661,8 @@ fn main() {
             startup_failed_and_exit(&chatroom_gateway_lifecycle, 1);
         }
     };
+    chatroom_gateway
+        .attach_execution_runtime(workers.chatroom_execution_registry(), Arc::clone(&workers));
     bridge_auth_storage.set_chatroom_gateway(&chatroom_gateway);
     let auth_observer_storage = Arc::clone(&bridge_auth_storage);
     auth_session.set_auth_state_observer(Arc::new(move |authenticated| {
@@ -4524,6 +4745,8 @@ mod chatroom_protocol_tests;
 #[cfg(test)]
 #[path = "chatroom_client_tests.rs"]
 mod chatroom_client_tests;
+#[cfg(test)]
+mod chatroom_execution_tests;
 
 #[cfg(test)]
 mod chatroom_gateway_tests;

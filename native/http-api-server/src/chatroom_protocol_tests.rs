@@ -2,6 +2,72 @@ use super::chatroom_protocol::*;
 use serde_json::{json, Value};
 
 #[test]
+fn given_reply_with_html_separators_and_duplicate_ids_when_digesting_then_match_go_json_bytes() {
+    let reply = ChatroomReplyDigestInput {
+        client_message_id: "reply-1",
+        content: "<&>\u{2028}\u{2029}",
+        mention_agent_ids: &["agent-a", "agent-a", "agent-b"],
+        attachment_ids: &["file-1", "file-1"],
+    };
+    let canonical = canonical_reply_json(&reply);
+    assert_eq!(
+        canonical,
+        r#"{"attachmentIds":["file-1"],"clientMessageId":"reply-1","content":"\u003c\u0026\u003e\u2028\u2029","mentionAgentIds":["agent-a","agent-b"]}"#
+    );
+    assert_eq!(
+        reply_digest(&reply),
+        "ddba9fcd40fe01d74aea1e3cdc3ca9383d7a2cb8165e064bde53f309c4afbabe"
+    );
+}
+
+#[test]
+fn given_go_3a3a_fixture_reply_fields_when_projected_then_match_status_digest_bytes_and_sha() {
+    let reply = ChatroomReplyDigestInput {
+        client_message_id: "reply-1",
+        content: "<ok>&\u{2028}\u{2029}",
+        mention_agent_ids: &["agent-1"],
+        attachment_ids: &[],
+    };
+    assert_eq!(
+        canonical_reply_json(&reply),
+        r#"{"attachmentIds":[],"clientMessageId":"reply-1","content":"\u003cok\u003e\u0026\u2028\u2029","mentionAgentIds":["agent-1"]}"#
+    );
+    assert_eq!(
+        reply_digest(&reply),
+        "c7180d64124a0e45f9b8705c40d9729d985a08752092a86c557b4ef9dcd44c35"
+    );
+}
+
+#[test]
+fn given_reply_without_ids_when_digesting_then_encode_empty_arrays() {
+    let reply = ChatroomReplyDigestInput {
+        client_message_id: "reply-2",
+        content: "done",
+        mention_agent_ids: &[],
+        attachment_ids: &[],
+    };
+    assert_eq!(
+        canonical_reply_json(&reply),
+        r#"{"attachmentIds":[],"clientMessageId":"reply-2","content":"done","mentionAgentIds":[]}"#
+    );
+}
+
+#[test]
+fn given_reply_digest_when_rendered_then_use_lowercase_sha256_hex() {
+    let reply = ChatroomReplyDigestInput {
+        client_message_id: "reply-2",
+        content: "done",
+        mention_agent_ids: &[],
+        attachment_ids: &[],
+    };
+    let digest = reply_digest(&reply);
+    assert_eq!(digest.len(), 64);
+    assert!(digest
+        .bytes()
+        .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)));
+}
+
+#[test]
 fn given_lowercase_backend_url_when_building_ws_url_then_use_wss_and_fixed_path() {
     assert_eq!(
         chatroom_ws_url("https://edu.example/module/edu-api").unwrap(),
@@ -18,6 +84,167 @@ fn given_event_json_when_parsing_then_preserve_room_seq_and_payload() {
     assert_eq!(event.room_id(), Some("room-1"));
     assert_eq!(event.seq(), Some(7));
     assert_eq!(event.kind(), "message.created");
+}
+
+#[test]
+fn given_private_command_ack_when_parsing_then_validate_exact_payload_and_room() {
+    let ack = parse_private_command_ack(
+        br#"{"type":"command.ack","roomId":"room-1","payload":{"requestId":"req-1","command":"agent.ready","ok":true}}"#,
+        "room-1",
+    )
+    .unwrap();
+    assert_eq!(ack.request_id, "req-1");
+    assert_eq!(ack.command, "agent.ready");
+    assert!(ack.ok);
+    assert!(parse_private_command_ack(
+        br#"{"type":"command.ack","roomId":"room-2","payload":{"requestId":"req-1","command":"agent.ready","ok":true}}"#,
+        "room-1",
+    )
+    .is_err());
+    assert!(parse_private_command_ack(
+        br#"{"type":"command.ack","roomId":"room-1","payload":{"requestId":"req-1","command":"agent.ready","ok":true,"extra":1}}"#,
+        "room-1",
+    )
+    .is_err());
+    let running = parse_private_command_ack(
+        br#"{"type":"command.ack","roomId":"room-1","payload":{"requestId":"req-2","command":"agent.running","ok":true,"status":"running","invocationId":"inv-1"}}"#,
+        "room-1",
+    ).expect("agent.running ACK is part of the private ACK contract");
+    assert_eq!(running.command, "agent.running");
+    for field in ["invocationId", "status", "errorCode"] {
+        for value in ["null", "\"\""] {
+            let frame = format!(
+                r#"{{"type":"command.ack","roomId":"room-1","payload":{{"requestId":"req-1","command":"agent.running","ok":true,"{field}":{value}}}}}"#
+            );
+            assert!(
+                parse_private_command_ack(frame.as_bytes(), "room-1").is_err(),
+                "accepted {field}={value}"
+            );
+        }
+    }
+    assert!(parse_event(
+        br#"{"type":"command.ack","roomId":"room-1","payload":{"requestId":"req-1","command":"agent.ready","ok":true}}"#
+    )
+    .is_err());
+    assert_eq!(
+        parse_chatroom_capabilities(
+            br#"{"capabilities":["agent-ready-v1","future-v9","invocation-ack-v1"]}"#
+        )
+        .unwrap(),
+        vec![
+            ChatroomCapability::AgentReadyV1,
+            ChatroomCapability::InvocationAckV1
+        ]
+    );
+    assert!(parse_chatroom_capabilities(br#"{"capabilities":[],"extra":true}"#).is_err());
+    assert!(parse_chatroom_capabilities(br#"{"capabilities":[null]}"#).is_err());
+    let prefix = br#"{"capabilities":[""#;
+    let suffix = br#""]}"#;
+    let mut exactly_at_limit = prefix.to_vec();
+    exactly_at_limit.extend(std::iter::repeat_n(
+        b'x',
+        4096 - prefix.len() - suffix.len(),
+    ));
+    exactly_at_limit.extend_from_slice(suffix);
+    assert_eq!(exactly_at_limit.len(), 4096);
+    assert_eq!(
+        parse_chatroom_capabilities(&exactly_at_limit).unwrap(),
+        vec![]
+    );
+    assert!(parse_chatroom_capabilities(&vec![b' '; 4097]).is_err());
+    assert_eq!(
+        parse_chatroom_capabilities_response(404, b"").unwrap(),
+        None
+    );
+    assert_eq!(
+        parse_chatroom_capabilities_response(200, br#"{"capabilities":[]}"#).unwrap(),
+        Some(vec![])
+    );
+    assert!(parse_chatroom_capabilities_response(503, b"").is_err());
+    assert!(parse_chatroom_capabilities_response(401, b"").is_err());
+}
+
+#[test]
+fn given_delta_frame_capability_when_parsing_then_keep_known_optional_receive_format() {
+    let capabilities = parse_chatroom_capabilities(
+        br#"{"capabilities":["agent-ready-v1","invocation-ack-v1","agent-delta-frame-id-v1"]}"#,
+    )
+    .unwrap();
+    assert_eq!(capabilities.len(), 3);
+    assert_eq!(capabilities[2], ChatroomCapability::AgentDeltaFrameIdV1);
+    let selected_only_delta =
+        parse_chatroom_capabilities(br#"{"capabilities":["agent-delta-frame-id-v1"]}"#).unwrap();
+    assert!(!selected_only_delta.contains(&ChatroomCapability::AgentReadyV1));
+    assert!(!selected_only_delta.contains(&ChatroomCapability::InvocationAckV1));
+    let subscribe = ChatroomCommand::Subscribe {
+        rooms: vec![RoomCursor {
+            room_id: "room-1".into(),
+            after_seq: 0,
+        }],
+        device_id: "device-1".into(),
+        capabilities: Some(selected_only_delta),
+    };
+    assert_eq!(
+        serde_json::to_value(subscribe).unwrap()["payload"]["capabilities"],
+        json!(["agent-delta-frame-id-v1"])
+    );
+}
+
+#[test]
+fn given_delta_frame_id_when_parsing_then_preserve_only_the_public_frame_identity() {
+    let event = parse_event(
+        br#"{"type":"agent.delta","roomId":"room-1","payload":{"invocationId":"inv-1","delta":"part","frameId":"0123456789abcdef0123456789abcdef"}}"#,
+    )
+    .expect("合法的新格式帧应可解析");
+    assert_eq!(
+        public_event(&event),
+        json!({
+            "type":"agent.delta",
+            "roomId":"room-1",
+            "payload": {
+                "invocationId":"inv-1",
+                "delta":"part",
+                "frameId":"0123456789abcdef0123456789abcdef"
+            }
+        })
+    );
+    assert!(valid_delta_frame_id("0123456789abcdef0123456789abcdef"));
+    assert!(!valid_delta_frame_id("0123456789ABCDEF0123456789ABCDEF"));
+    assert!(!valid_delta_frame_id("0123456789abcdef0123456789abcde"));
+    assert!(validate_delta_frame_selection(
+        &json!({"invocationId":"inv-1","delta":"part","frameId":"0123456789abcdef0123456789abcdef"}),
+        true,
+    )
+    .is_ok());
+    assert!(validate_delta_frame_selection(
+        &json!({"invocationId":"inv-1","delta":"part","frameId":"0123456789abcdef0123456789abcdef"}),
+        false,
+    )
+    .is_err());
+    assert!(
+        validate_delta_frame_selection(&json!({"invocationId":"inv-1","delta":"part"}), false)
+            .is_ok()
+    );
+    assert!(
+        validate_delta_frame_selection(&json!({"invocationId":"inv-1","delta":"part"}), true)
+            .is_err()
+    );
+    assert!(parse_event(
+        br#"{"type":"agent.delta","roomId":"room-1","payload":{"invocationId":"inv-1","delta":"part","frameId":"0123456789ABCDEF0123456789ABCDEF"}}"#
+    )
+    .is_err());
+    assert!(parse_event(
+        br#"{"type":"agent.delta","roomId":"room-1","payload":{"invocationId":"inv-1","delta":"part","frameId":"0123456789abcdef0123456789abcde"}}"#
+    )
+    .is_err());
+    assert!(parse_event(
+        br#"{"type":"agent.delta","roomId":"room-1","payload":{"invocationId":"inv-1","delta":"part","frameId":"0123456789abcdef0123456789abcdef","requestId":"private-1"}}"#
+    )
+    .is_err());
+    assert!(parse_event(
+        br#"{"type":"agent.delta","roomId":"room-1","payload":{"invocationId":"inv-1","delta":"part"}}"#
+    )
+    .is_ok());
 }
 
 #[test]
@@ -127,12 +354,58 @@ fn given_subscribe_command_when_serializing_then_emit_strict_initial_wire_envelo
             after_seq: 7,
         }],
         device_id: "device".into(),
+        capabilities: None,
     };
     assert_eq!(
         serde_json::to_value(command).unwrap(),
         json!({
             "type": "subscribe",
             "payload": {"roomIds": ["room-1"], "afterSeq": {"room-1": 7}, "deviceId": "device"}
+        })
+    );
+}
+
+#[test]
+fn given_ready_command_when_serializing_then_emit_exact_identity_free_contract() {
+    let command = ChatroomCommand::Ready {
+        room_id: "room-1".into(),
+        request_id: "req-1".into(),
+        room_agent_id: "agent-1".into(),
+    };
+    assert_eq!(
+        serde_json::to_value(command).unwrap(),
+        json!({
+            "type":"agent.ready", "roomId":"room-1", "payload":{"requestId":"req-1","roomAgentId":"agent-1"}
+        })
+    );
+    assert_eq!(
+        serde_json::to_value(ChatroomCommand::Unready {
+            room_id: "room-1".into(),
+            request_id: "req-2".into(),
+            room_agent_id: "agent-1".into(),
+        })
+        .unwrap(),
+        json!({
+            "type":"agent.unready", "roomId":"room-1", "payload":{"requestId":"req-2","roomAgentId":"agent-1"}
+        })
+    );
+}
+
+#[test]
+fn given_running_command_when_serializing_then_emit_acknowledged_lifecycle_frame() {
+    let command = ChatroomCommand::ConfirmedLifecycle {
+        request_id: "req-running".into(),
+        command: Box::new(ChatroomCommand::AgentRunning {
+            room_id: "room-1".into(),
+            invocation_id: "inv-1".into(),
+        }),
+    };
+    assert_eq!(
+        serde_json::to_value(command).unwrap(),
+        json!({
+            "type":"agent.running",
+            "roomId":"room-1",
+            "payload":{"invocationId":"inv-1","requestId":"req-running"}
         })
     );
 }
@@ -522,6 +795,7 @@ fn given_subscribe_limits_when_serializing_then_enforce_server_boundaries() {
         let result = serde_json::to_value(ChatroomCommand::Subscribe {
             rooms,
             device_id: device,
+            capabilities: None,
         });
         assert_eq!(result.is_ok(), accepted);
     }
@@ -674,6 +948,7 @@ fn given_invalid_command_fields_when_serializing_then_reject_before_wire() {
         ChatroomCommand::Subscribe {
             rooms: vec![],
             device_id: "device".into(),
+            capabilities: None,
         },
         ChatroomCommand::Subscribe {
             rooms: vec![RoomCursor {
@@ -681,6 +956,7 @@ fn given_invalid_command_fields_when_serializing_then_reject_before_wire() {
                 after_seq: 0,
             }],
             device_id: "".into(),
+            capabilities: None,
         },
     ];
     for command in commands {

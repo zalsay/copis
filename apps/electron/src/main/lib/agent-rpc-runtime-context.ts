@@ -1,8 +1,20 @@
-import { CHATROOM_MAX_DEPTH, type ChatRoomAgentRuntimeContext } from '@copis/shared'
+import { CHATROOM_MAX_DEPTH, canonicalizeChatRoomAgentDisplayName, type ChatRoomAgentRuntimeContext } from '@copis/shared'
+
+export interface TrustedChatRoomAgentPublicIdentity {
+  roomAgentId: string
+  displayName: string
+}
+
+/** Main-only extension; this metadata is never serialized into IPC, HTTP, or the public shared DTO. */
+export type TrustedChatRoomAgentRuntimeContext = ChatRoomAgentRuntimeContext & {
+  publicAgentRoster?: TrustedChatRoomAgentPublicIdentity[]
+}
 
 interface TrustedRuntimeEntry {
   token: symbol
-  context: ChatRoomAgentRuntimeContext
+  runId?: string
+  isCurrent?: () => Promise<boolean>
+  context: TrustedChatRoomAgentRuntimeContext
 }
 
 /**
@@ -52,12 +64,30 @@ function assertPlainArray(value: unknown): asserts value is unknown[] {
   }
 }
 
-function validateRuntimeContext(context: unknown): asserts context is ChatRoomAgentRuntimeContext {
+function validatePublicAgentRoster(value: unknown): asserts value is TrustedChatRoomAgentPublicIdentity[] {
+  assertPlainArray(value)
+  if (value.length > 3) throw trustedContextError()
+  const seenAgentIds = new Set<string>()
+  for (const candidate of value) {
+    if (!isPlainObject(candidate)) throw trustedContextError()
+    assertDataProperties(candidate)
+    assertExactKeys(candidate, ['roomAgentId', 'displayName'])
+    const roomAgentId = candidate.roomAgentId
+    const canonicalName = canonicalizeChatRoomAgentDisplayName(candidate.displayName)
+    if (typeof roomAgentId !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(roomAgentId)
+      || canonicalName === undefined || canonicalName !== candidate.displayName
+      || seenAgentIds.has(roomAgentId)) throw trustedContextError()
+    seenAgentIds.add(roomAgentId)
+  }
+}
+
+function validateRuntimeContext(context: unknown): asserts context is TrustedChatRoomAgentRuntimeContext {
   try {
     if (!isPlainObject(context)) throw trustedContextError()
     assertDataProperties(context)
-    assertExactKeys(context, ['executionWorkspace', 'permissionContext'], ['memorySource', 'skillSnapshotPath', 'requestPermission'])
+    assertExactKeys(context, ['executionWorkspace', 'permissionContext'], ['memorySource', 'skillSnapshotPath', 'requestPermission', 'publicAgentRoster'])
     if (context.requestPermission !== undefined && typeof context.requestPermission !== 'function') throw trustedContextError()
+    if (context.publicAgentRoster !== undefined) validatePublicAgentRoster(context.publicAgentRoster)
 
     const execution = context.executionWorkspace
     if (!isPlainObject(execution)) throw trustedContextError()
@@ -133,12 +163,15 @@ function cloneAndFreeze<T>(value: T, seen = new WeakMap<object, unknown>()): T {
 
 export function registerTrustedAgentRuntimeContext(
   sessionId: string,
-  context: ChatRoomAgentRuntimeContext,
+  context: TrustedChatRoomAgentRuntimeContext,
+  options: { runId?: string; signal?: AbortSignal; isCurrent?: () => Promise<boolean> } = {},
 ): () => void {
   if (!sessionId.trim()) throw new Error('sessionId 不能为空')
   validateRuntimeContext(context)
   const entry: TrustedRuntimeEntry = {
     token: Symbol('trusted-agent-runtime-context'),
+    ...(options.runId ? { runId: options.runId } : {}),
+    ...(options.isCurrent ? { isCurrent: options.isCurrent } : {}),
     context: cloneAndFreeze(context),
   }
   const entries = trustedRuntimeContexts.get(sessionId) ?? []
@@ -146,9 +179,10 @@ export function registerTrustedAgentRuntimeContext(
   trustedRuntimeContexts.set(sessionId, entries)
 
   let released = false
-  return () => {
+  const release = () => {
     if (released) return
     released = true
+    options.signal?.removeEventListener('abort', release)
     const currentEntries = trustedRuntimeContexts.get(sessionId)
     if (!currentEntries) return
     const index = currentEntries.findIndex((candidate) => candidate.token === entry.token)
@@ -156,11 +190,24 @@ export function registerTrustedAgentRuntimeContext(
     currentEntries.splice(index, 1)
     if (currentEntries.length === 0) trustedRuntimeContexts.delete(sessionId)
   }
+  if (options.signal?.aborted) release()
+  else options.signal?.addEventListener('abort', release, { once: true })
+  return release
 }
 
 export function getTrustedAgentRuntimeContext(
   sessionId: string,
-): ChatRoomAgentRuntimeContext | undefined {
+  runId?: string,
+): TrustedChatRoomAgentRuntimeContext | undefined {
   const entries = trustedRuntimeContexts.get(sessionId)
-  return entries?.[entries.length - 1]?.context
+  if (!entries) return undefined
+  if (runId) return entries.find((entry) => entry.runId === runId)?.context
+  return entries[entries.length - 1]?.context
+}
+
+export function getTrustedAgentRuntimeGuard(
+  sessionId: string,
+  runId: string,
+): (() => Promise<boolean>) | undefined {
+  return trustedRuntimeContexts.get(sessionId)?.find((entry) => entry.runId === runId)?.isCurrent
 }

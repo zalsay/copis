@@ -8,14 +8,25 @@ import * as React from 'react'
 import { parseHTML } from 'linkedom'
 import { createRoot } from 'react-dom/client'
 import { Provider, createStore } from 'jotai'
-import { chatRoomDetailsAtom, chatRoomRejoinRoomAtom, chatRoomRemoveRoomAtom, chatRoomRoomsAtom } from '@/atoms/chatroom-atoms'
+import { chatRoomDetailsAtom, chatRoomMessagesAtom, chatRoomRejoinRoomAtom, chatRoomRemoveRoomAtom, chatRoomResetStateAtom, chatRoomRoomsAtom } from '@/atoms/chatroom-atoms'
 import { ChatroomView } from './ChatroomView'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { chatRoomConnectionStatusAtom, chatRoomInvocationsAtom, chatRoomSendStatesAtom } from '@/atoms/chatroom-atoms'
 import { chatRoomApplyEventAtom } from '@/atoms/chatroom-atoms'
 import { ChatroomAgentActivity, getPendingChatRoomInvocations } from './ChatroomAgentActivity'
+import { workingAuthStateAtom } from '@/atoms/working-atoms'
 
 const source = readFileSync(new URL('./ChatroomView.tsx', import.meta.url), 'utf8')
+
+test('帧身份冲突或容量耗尽时只显示本地预览暂停提示，不伪造服务端失败', () => {
+  const invocation = {
+    invocationId: 'i1', roomId: 'r1', targetAgentId: 'a1', triggerMessageId: 'm1', traceId: 't1', depth: 0,
+    status: 'running', delta: '已收到内容', previewPaused: 'frame_capacity',
+  } as ChatRoomInvocation & { previewPaused: 'frame_capacity' }
+  const markup = renderToStaticMarkup(<Provider store={createStore()}><ChatroomAgentActivity invocation={invocation} connectionStatus="connected" /></Provider>)
+  expect(markup).toContain('流式预览已暂停，等待完整回复')
+  expect(markup).not.toContain('调用失败')
+})
 
 test('本地唤起超时转成终态，不在重连时重新成为 pending，迟到真实调用替换本地提示', async () => {
   const prior = { window: globalThis.window, document: globalThis.document }
@@ -47,6 +58,109 @@ test('本地唤起超时转成终态，不在重连时重新成为 pending，迟
 })
 
 describe('聊天室房间视图契约', () => {
+  test('账号切换后迟到的初始房间详情与历史响应不回填旧账号状态', async () => {
+    const prior = { window: globalThis.window, document: globalThis.document, getRoom: chatRoomApi.getRoom, getMessages: chatRoomApi.getMessages, markRead: chatRoomApi.markRead, listAttachments: chatRoomApi.listAttachments }
+    const priorActEnvironment = Object.getOwnPropertyDescriptor(globalThis, 'IS_REACT_ACT_ENVIRONMENT')
+    const dom = parseHTML('<html><body><div id="root"></div></body></html>')
+    Object.assign(dom.window, { electronAPI: { chatrooms: { onTransferProgress: () => () => undefined } } })
+    Object.assign(globalThis, { window: dom.window, document: dom.window.document, IS_REACT_ACT_ENVIRONMENT: true })
+    type Detail = Awaited<ReturnType<typeof chatRoomApi.getRoom>>
+    type History = Awaited<ReturnType<typeof chatRoomApi.getMessages>>
+    const detailResolvers: Array<(detail: Detail) => void> = []
+    const historyResolvers: Array<(history: History) => void> = []
+    const attachmentResolvers: Array<(attachments: Awaited<ReturnType<typeof chatRoomApi.listAttachments>>) => void> = []
+    const markReadCalls: Array<{ roomId: string; seq: number }> = []
+    chatRoomApi.getRoom = async () => new Promise((resolve) => { detailResolvers.push(resolve) })
+    chatRoomApi.getMessages = async () => new Promise((resolve) => { historyResolvers.push(resolve) })
+    chatRoomApi.listAttachments = async () => new Promise((resolve) => { attachmentResolvers.push(resolve) })
+    chatRoomApi.markRead = async (roomId, seq) => { markReadCalls.push({ roomId, seq }) }
+    const store = createStore()
+    store.set(workingAuthStateAtom, { authenticated: true, user: { id: 'account-a' }, backendUrl: 'http://test' })
+    store.set(chatRoomRoomsAtom, [{ roomId: 'room-shared-id', name: 'A 摘要', role: 'member', status: 'active', memberCount: 1, unreadCount: 0, connectionStatus: 'offline' }])
+    const root = createRoot(dom.window.document.getElementById('root')!)
+    const act = (React as typeof React & { act: typeof import('react-dom/test-utils').act }).act
+    const oldDetail: Detail = { room: { roomId: 'room-shared-id', name: 'A 详情', role: 'member', status: 'active', memberCount: 1, unreadCount: 0, connectionStatus: 'offline' }, members: [], agents: [] }
+    const newDetail: Detail = { room: { roomId: 'room-shared-id', name: 'B 详情', role: 'member', status: 'active', memberCount: 1, unreadCount: 0, connectionStatus: 'offline' }, members: [], agents: [] }
+    const oldHistory: History = { messages: [{ messageId: 'message-a', roomId: 'room-shared-id', seq: 1, senderType: 'user', senderId: 'user-a', content: '账号A消息', mentionAgentIds: [], attachmentIds: ['attachment-a'], clientMessageId: 'client-a', depth: 0, createdAt: '2026-09-30T00:00:00.000Z' }], cursor: 1 }
+    const newHistory: History = { messages: [{ messageId: 'message-b', roomId: 'room-shared-id', seq: 1, senderType: 'user', senderId: 'user-b', content: '账号B消息', mentionAgentIds: [], attachmentIds: ['attachment-b'], clientMessageId: 'client-b', depth: 0, createdAt: '2026-09-30T00:00:01.000Z' }], cursor: 1 }
+    try {
+      await act(async () => { root.render(<Provider store={store}><ChatroomView roomId="room-shared-id" /></Provider>); await new Promise((resolve) => setTimeout(resolve, 0)) })
+      await act(async () => {
+        store.set(workingAuthStateAtom, { authenticated: true, user: { id: 'account-b' }, backendUrl: 'http://test' })
+        store.set(chatRoomResetStateAtom)
+        await Promise.resolve()
+      })
+      expect(detailResolvers).toHaveLength(2)
+      await act(async () => {
+        detailResolvers[0]!(oldDetail)
+        historyResolvers[0]!(oldHistory)
+        attachmentResolvers[0]!([])
+        await new Promise((resolve) => setTimeout(resolve, 0))
+      })
+      expect(store.get(chatRoomDetailsAtom)).toEqual({})
+      expect(store.get(chatRoomMessagesAtom).has('room-shared-id')).toBe(false)
+      expect(dom.window.document.body.textContent).not.toContain('A 附件')
+      await act(async () => {
+        detailResolvers[1]!(newDetail)
+        historyResolvers[1]!(newHistory)
+        attachmentResolvers[1]!([{ attachmentId: 'attachment-b', roomId: 'room-shared-id', originalName: 'B 附件', mimeType: 'text/plain', sizeBytes: 1, status: 'attached' }])
+        await new Promise((resolve) => setTimeout(resolve, 0))
+      })
+      expect(store.get(chatRoomDetailsAtom)['room-shared-id']).toMatchObject({ room: { name: 'B 详情' } })
+      expect(store.get(chatRoomMessagesAtom).get('room-shared-id')?.[0]?.content).toBe('账号B消息')
+      expect(dom.window.document.body.textContent).toContain('下载 B 附件')
+      expect(markReadCalls).toEqual([{ roomId: 'room-shared-id', seq: 1 }])
+    } finally {
+      await act(async () => root.unmount())
+      chatRoomApi.getRoom = prior.getRoom
+      chatRoomApi.getMessages = prior.getMessages
+      chatRoomApi.markRead = prior.markRead
+      chatRoomApi.listAttachments = prior.listAttachments
+      Object.assign(globalThis, { window: prior.window, document: prior.document })
+      if (priorActEnvironment) Object.defineProperty(globalThis, 'IS_REACT_ACT_ENVIRONMENT', priorActEnvironment)
+      else Reflect.deleteProperty(globalThis, 'IS_REACT_ACT_ENVIRONMENT')
+    }
+  })
+  test('同一 roomId 删除后立即重新加入，旧生命周期 HTTP 响应不会回填', async () => {
+    const prior = { window: globalThis.window, document: globalThis.document, getRoom: chatRoomApi.getRoom, getMessages: chatRoomApi.getMessages, markRead: chatRoomApi.markRead, listAttachments: chatRoomApi.listAttachments }
+    const dom = parseHTML('<html><body><div id="root"></div></body></html>')
+    Object.assign(dom.window, { electronAPI: { chatrooms: { onTransferProgress: () => () => undefined } } })
+    Object.assign(globalThis, { window: dom.window, document: dom.window.document, IS_REACT_ACT_ENVIRONMENT: true })
+    type Detail = Awaited<ReturnType<typeof chatRoomApi.getRoom>>
+    type History = Awaited<ReturnType<typeof chatRoomApi.getMessages>>
+    let resolveDetail!: (detail: Detail) => void
+    let resolveHistory!: (history: History) => void
+    let resolveAttachments!: (attachments: Awaited<ReturnType<typeof chatRoomApi.listAttachments>>) => void
+    chatRoomApi.getRoom = async () => new Promise((resolve) => { resolveDetail = resolve })
+    chatRoomApi.getMessages = async () => new Promise((resolve) => { resolveHistory = resolve })
+    chatRoomApi.listAttachments = async () => new Promise((resolve) => { resolveAttachments = resolve })
+    chatRoomApi.markRead = async () => undefined
+    const store = createStore()
+    const room = { roomId: 'room-rejoin', name: '重新加入的房间', role: 'member' as const, status: 'active' as const, memberCount: 0, unreadCount: 0, connectionStatus: 'offline' as const }
+    store.set(chatRoomRoomsAtom, [room])
+    const root = createRoot(dom.window.document.getElementById('root')!)
+    const act = (React as typeof React & { act: typeof import('react-dom/test-utils').act }).act
+    try {
+      await act(async () => { root.render(<Provider store={store}><ChatroomView roomId="room-rejoin" /></Provider>); await new Promise((resolve) => setTimeout(resolve, 0)) })
+      await act(async () => { store.set(chatRoomRemoveRoomAtom, room.roomId); store.set(chatRoomRejoinRoomAtom, room); await Promise.resolve() })
+      await act(async () => {
+        resolveDetail({ room: { ...room, name: '删除前详情' }, members: [], agents: [] })
+        resolveHistory({ messages: [{ messageId: 'old-message', roomId: room.roomId, seq: 1, senderType: 'user', senderId: 'u1', content: '旧生命周期', mentionAgentIds: [], attachmentIds: [], clientMessageId: 'c1', depth: 0, createdAt: '2026-09-30T00:00:00.000Z' }] })
+        resolveAttachments([])
+        await new Promise((resolve) => setTimeout(resolve, 0))
+      })
+      expect(store.get(chatRoomDetailsAtom)[room.roomId]).toBeUndefined()
+      expect(store.get(chatRoomMessagesAtom).has(room.roomId)).toBe(false)
+      expect(dom.window.document.body.textContent).not.toContain('删除前详情')
+    } finally {
+      await act(async () => root.unmount())
+      chatRoomApi.getRoom = prior.getRoom
+      chatRoomApi.getMessages = prior.getMessages
+      chatRoomApi.markRead = prior.markRead
+      chatRoomApi.listAttachments = prior.listAttachments
+      Object.assign(globalThis, { window: prior.window, document: prior.document })
+    }
+  })
   test('多个 Agent 被唤起时分别显示等待和思考，失败后停止动效并显示原因', () => {
     const store = createStore()
     store.set(chatRoomConnectionStatusAtom, new Map([['r1', 'connected']]))
@@ -60,7 +174,7 @@ describe('聊天室房间视图契约', () => {
     expect(render()).toContain('agent-thinking-marquee')
     store.set(chatRoomInvocationsAtom, new Map([['r1', new Map([['i1', { ...invocation, status: 'failed', failureCode: 'lease_expired' }]])]]))
     expect(render()).not.toContain('正在思考')
-    expect(render()).toContain('租约已过期')
+    expect(render()).toContain('宿主暂不可用，本次未执行')
     store.set(chatRoomConnectionStatusAtom, new Map([['r1', 'reconnecting']]))
     expect(render()).not.toContain('agent-thinking-marquee')
     expect(render()).toContain('连接中断')
@@ -107,8 +221,8 @@ describe('聊天室房间视图契约', () => {
   })
 
   test('房间按 roomId 加载消息并使用成员面板', () => {
-    expect(source).toContain('getMessages(roomId')
-    expect(source).toContain('hydrateMessages({ roomId, messages: history.messages, cursor: history.cursor })')
+    expect(source).toContain('loadChatRoomViewData(requestedRoomId)')
+    expect(source).toContain('hydrateMessages({ roomId: requestedRoomId, messages: history.messages, cursor: history.cursor })')
     expect(source).toContain('<ChatroomMembersPanel')
     expect(source).toContain('<ChatroomComposer')
   })
@@ -193,6 +307,38 @@ describe('聊天室房间视图契约', () => {
     expect(nextActive).toBe('agent-1')
   })
 
+  test('删除 A 等待期间新打开的 B Tab 会保留，只关闭 A', async () => {
+    let resolveDelete!: () => void
+    const requestTabs: TabItem[] = [{ id: 'chatroom:r1', type: 'chatroom', roomId: 'r1', title: 'A' }]
+    let tabs: TabItem[] = requestTabs
+    let activeTabId: string | null = 'chatroom:r1'
+    const deletePromise = deleteChatRoomAndClose({
+      roomId: 'r1', deleteRoom: () => new Promise<void>((resolve) => { resolveDelete = resolve }), removeRoom: () => undefined,
+      tabs: requestTabs, activeTabId: 'chatroom:r1',
+      getTabs: () => tabs, getActiveTabId: () => activeTabId,
+      setTabs: (next) => { tabs = next }, setActiveTabId: (next) => { activeTabId = next },
+    })
+    tabs = [...tabs, { id: 'chatroom:r2', type: 'chatroom', roomId: 'r2', title: 'B' }]
+    activeTabId = 'chatroom:r2'
+    resolveDelete()
+    await deletePromise
+    expect(tabs.map((tab) => tab.id)).toEqual(['chatroom:r2'])
+    expect(activeTabId).toBe('chatroom:r2')
+  })
+
+  test('删除 A 回执跨账号或 room view 代际后不操作新账号的 Tab', async () => {
+    let resolveDelete!: () => void
+    let tabs: TabItem[] = [{ id: 'chatroom:r1', type: 'chatroom', roomId: 'r1', title: '新账号的 A' }]
+    const deletePromise = deleteChatRoomAndClose({
+      roomId: 'r1', deleteRoom: () => new Promise<void>((resolve) => { resolveDelete = resolve }), removeRoom: () => { throw new Error('不应清理新账号状态') },
+      getTabs: () => tabs, getActiveTabId: () => 'chatroom:r1', isCurrent: () => false,
+      setTabs: (next) => { tabs = next }, setActiveTabId: () => undefined,
+    })
+    resolveDelete()
+    await deletePromise
+    expect(tabs).toEqual([{ id: 'chatroom:r1', type: 'chatroom', roomId: 'r1', title: '新账号的 A' }])
+  })
+
   test('删除失败时不清理房间或 Tab', async () => {
     const calls: string[] = []
     const tabs: TabItem[] = [{ id: 'chatroom:r1', type: 'chatroom', roomId: 'r1', title: '房间' }]
@@ -209,12 +355,13 @@ test('同一房间 Tab 留在页面时重新加入，必须重新读取详情与
   Object.assign(parsed.window, { electronAPI: { chatrooms: { onTransferProgress: () => () => undefined } } })
   Object.assign(globalThis, { window: parsed.window, document: parsed.window.document, IS_REACT_ACT_ENVIRONMENT: true })
   let detailsRequested = 0
-  const originalApi = { getRoom: chatRoomApi.getRoom, getMessages: chatRoomApi.getMessages, listAttachments: chatRoomApi.listAttachments }
+  const originalApi = { getRoom: chatRoomApi.getRoom, getMessages: chatRoomApi.getMessages, listAttachments: chatRoomApi.listAttachments, markRead: chatRoomApi.markRead }
   const store = createStore()
   const room = { roomId: 'r1', name: '恢复的房间', role: 'member' as const, status: 'active' as const, memberCount: 0, unreadCount: 0, connectionStatus: 'offline' as const }
   chatRoomApi.getRoom = async () => { detailsRequested++; return { room, members: [{ userId: '7', displayName: '主理人', role: 'host', presence: 'online' }], agents: [] } }
   chatRoomApi.getMessages = async () => ({ messages: [] })
   chatRoomApi.listAttachments = async () => []
+  chatRoomApi.markRead = async () => undefined
   store.set(chatRoomRoomsAtom, [room])
   store.set(chatRoomRemoveRoomAtom, room.roomId)
   const root = createRoot(parsed.window.document.getElementById('root')!)

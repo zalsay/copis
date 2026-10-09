@@ -1,7 +1,10 @@
 use crate::auth_session::{AuthError, AuthSession};
-use crate::chatroom_protocol::{ChatroomCommand, ChatroomEvent, RoomCursor};
+use crate::chatroom_ack::{AckError, ConfirmedCommand, PendingCommandAcks};
+use crate::chatroom_protocol::{
+    ChatroomCapability, ChatroomCommand, ChatroomEvent, PrivateCommandAck, RoomCursor,
+};
 use serde::Serialize;
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::{self, Read, Write};
 use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
 use std::str;
@@ -28,7 +31,129 @@ const DNS_CACHE_TTL: Duration = Duration::from_secs(60);
 pub trait ChatroomSocket: Send {
     fn send_json(&mut self, command: &ChatroomCommand) -> Result<(), ChatroomClientError>;
     fn receive_json(&mut self) -> Result<ChatroomEvent, ChatroomClientError>;
+    fn receive_frame(&mut self) -> Result<ChatroomSocketFrame, ChatroomClientError> {
+        self.receive_json().map(ChatroomSocketFrame::Event)
+    }
     fn close(&mut self);
+}
+
+/// 私有帧留在 native client 内部，不属于公开 SSE/Renderer 的 ChatroomEvent。
+#[derive(Clone, Debug, PartialEq)]
+pub enum ChatroomSocketFrame {
+    Event(ChatroomEvent),
+    EventWithRawJsonBytes {
+        event: ChatroomEvent,
+        raw_json_bytes: usize,
+    },
+    PrivateAck(PrivateCommandAck),
+}
+
+const MAX_INITIAL_SNAPSHOT_BUFFER_EVENTS: usize = 256;
+const MAX_INITIAL_SNAPSHOT_BUFFER_BYTES: usize = 1_048_576;
+
+struct InitialSnapshotGate {
+    pending_rooms: HashSet<String>,
+    subscribed_rooms: HashSet<String>,
+    requested_capabilities: Option<Vec<ChatroomCapability>>,
+    echoed_capabilities: Option<Vec<ChatroomCapability>>,
+    buffered_events: VecDeque<ChatroomEvent>,
+    buffered_bytes: usize,
+}
+
+impl InitialSnapshotGate {
+    fn new(
+        rooms: Vec<RoomCursor>,
+        requested_capabilities: Option<Vec<ChatroomCapability>>,
+    ) -> Self {
+        let subscribed_rooms = rooms
+            .iter()
+            .map(|room| room.room_id.clone())
+            .collect::<HashSet<_>>();
+        Self {
+            pending_rooms: subscribed_rooms.clone(),
+            subscribed_rooms,
+            requested_capabilities,
+            echoed_capabilities: None,
+            buffered_events: VecDeque::new(),
+            buffered_bytes: 0,
+        }
+    }
+
+    fn is_pending(&self) -> bool {
+        !self.pending_rooms.is_empty()
+    }
+
+    fn observe_snapshot(
+        &mut self,
+        room_id: &str,
+        payload: &serde_json::Value,
+    ) -> Result<Option<Vec<ChatroomCapability>>, ()> {
+        if !self.is_pending() {
+            return Ok(None);
+        }
+        if !self.subscribed_rooms.contains(room_id) {
+            return Err(());
+        }
+        let echoed = match payload.get("capabilities") {
+            None => Vec::new(),
+            Some(serde_json::Value::Array(values)) => {
+                let wire = serde_json::json!({"capabilities": values});
+                crate::chatroom_protocol::parse_chatroom_capabilities(wire.to_string().as_bytes())
+                    .map_err(|_| ())?
+            }
+            Some(_) => return Err(()),
+        };
+        let selected = self
+            .requested_capabilities
+            .as_ref()
+            .map(|requested| {
+                echoed
+                    .into_iter()
+                    .filter(|capability| requested.contains(capability))
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        if self
+            .echoed_capabilities
+            .as_ref()
+            .is_some_and(|previous| previous != &selected)
+        {
+            return Err(());
+        }
+        if self.echoed_capabilities.is_none() {
+            self.echoed_capabilities = Some(selected);
+        }
+        if !self.pending_rooms.remove(room_id) {
+            return Ok(None);
+        }
+        if self.is_pending() {
+            Ok(None)
+        } else {
+            Ok(self.echoed_capabilities.clone())
+        }
+    }
+
+    fn buffer(&mut self, event: ChatroomEvent, raw_json_bytes: usize) -> Result<(), ()> {
+        let next_bytes = self.buffered_bytes.checked_add(raw_json_bytes).ok_or(())?;
+        if self.buffered_events.len() >= MAX_INITIAL_SNAPSHOT_BUFFER_EVENTS
+            || next_bytes > MAX_INITIAL_SNAPSHOT_BUFFER_BYTES
+        {
+            return Err(());
+        }
+        self.buffered_bytes = next_bytes;
+        self.buffered_events.push_back(event);
+        Ok(())
+    }
+
+    fn drain(&mut self) -> VecDeque<ChatroomEvent> {
+        self.buffered_bytes = 0;
+        std::mem::take(&mut self.buffered_events)
+    }
+
+    fn clear(&mut self) {
+        self.buffered_events.clear();
+        self.buffered_bytes = 0;
+    }
 }
 
 pub trait ChatroomSocketConnector: Send + Sync {
@@ -54,6 +179,8 @@ struct QueuedCommand {
     wake_budget: bool,
     resume: bool,
     pause_generation: u64,
+    expected_socket_generation: Option<u64>,
+    request_id: Option<String>,
 }
 
 #[cfg(test)]
@@ -119,6 +246,11 @@ pub enum ChatroomClientEvent {
         generation: u64,
         event: ChatroomEvent,
     },
+    SocketEventAt {
+        generation: u64,
+        socket_generation: u64,
+        event: ChatroomEvent,
+    },
     Status {
         code: String,
         message: String,
@@ -164,6 +296,10 @@ pub struct ChatroomClient {
     pause_state_lock: Arc<Mutex<()>>,
     resume_requested: Arc<AtomicBool>,
     wake_on_ordinary: Arc<AtomicBool>,
+    pending_acks: Arc<PendingCommandAcks>,
+    active_socket_generation: Arc<AtomicU64>,
+    next_socket_generation: Arc<AtomicU64>,
+    selected_capabilities: Arc<Mutex<(u64, Vec<ChatroomCapability>)>>,
     #[cfg(test)]
     command_gate: Mutex<Option<CommandEnqueueGate>>,
     #[cfg(test)]
@@ -215,6 +351,10 @@ impl ChatroomClient {
             pause_state_lock: Arc::new(Mutex::new(())),
             resume_requested: Arc::new(AtomicBool::new(false)),
             wake_on_ordinary: Arc::new(AtomicBool::new(true)),
+            pending_acks: Arc::new(PendingCommandAcks::default()),
+            active_socket_generation: Arc::new(AtomicU64::new(0)),
+            next_socket_generation: Arc::new(AtomicU64::new(0)),
+            selected_capabilities: Arc::new(Mutex::new((0, Vec::new()))),
             #[cfg(test)]
             command_gate: Mutex::new(None),
             #[cfg(test)]
@@ -315,6 +455,10 @@ impl ChatroomClient {
         let pause_state_lock = self.pause_state_lock.clone();
         let resume_requested = self.resume_requested.clone();
         let wake_on_ordinary = self.wake_on_ordinary.clone();
+        let pending_acks = self.pending_acks.clone();
+        let active_socket_generation = self.active_socket_generation.clone();
+        let next_socket_generation = self.next_socket_generation.clone();
+        let selected_capabilities = self.selected_capabilities.clone();
         let backoff = self.backoff.clone();
         #[cfg(test)]
         let unavailable_status_gate = self.unavailable_status_gate.clone();
@@ -340,6 +484,10 @@ impl ChatroomClient {
                     pause_state_lock,
                     resume_requested,
                     wake_on_ordinary,
+                    pending_acks,
+                    active_socket_generation,
+                    next_socket_generation,
+                    selected_capabilities,
                     backoff,
                     #[cfg(test)]
                     unavailable_status_gate,
@@ -396,6 +544,282 @@ impl ChatroomClient {
                 wake_budget,
                 resume: false,
                 pause_generation,
+                expected_socket_generation: None,
+                request_id: None,
+            })
+            .map_err(|_| ChatroomClientError::new("client_closed", "聊天室连接已关闭"))
+    }
+
+    /// 将不需要 ACK 的增量限制在调用方刚确认的 socket 代际，禁止重连后补发。
+    pub(crate) fn command_on_generation(
+        &self,
+        command: ChatroomCommand,
+        generation: u64,
+    ) -> Result<(), ChatroomClientError> {
+        command
+            .validate_wire_fields()
+            .map_err(|message| ChatroomClientError::new("invalid_command", message))?;
+        if generation == 0 || self.active_socket_generation.load(Ordering::Acquire) != generation {
+            return Err(ChatroomClientError::new(
+                "disconnected",
+                "聊天室连接代际已变化",
+            ));
+        }
+        let pause_generation = self.pause_generation.load(Ordering::Acquire);
+        if self.paused.load(Ordering::Acquire) && !self.resume_requested.load(Ordering::Acquire) {
+            return Err(ChatroomClientError::new(
+                "client_paused",
+                "聊天室连接因认证状态暂停",
+            ));
+        }
+        self.commands
+            .lock()
+            .unwrap()
+            .as_ref()
+            .ok_or_else(|| ChatroomClientError::new("client_not_started", "聊天室连接尚未启动"))?
+            .send(QueuedCommand {
+                command,
+                wake_budget: false,
+                resume: false,
+                pause_generation,
+                expected_socket_generation: Some(generation),
+                request_id: None,
+            })
+            .map_err(|_| ChatroomClientError::new("client_closed", "聊天室连接已关闭"))
+    }
+
+    /// 在当前已连接 socket 上发送生命周期命令并等待该连接私有 ACK。
+    /// 此等待发生在调用线程，socket reader 继续独立接收和分发 ACK。
+    pub fn request_and_confirm(
+        &self,
+        command: ChatroomCommand,
+        room_id: &str,
+        request_id: &str,
+        command_name: &str,
+        invocation_id: Option<&str>,
+    ) -> Result<ConfirmedCommand, AckError> {
+        self.request_and_confirm_inner(
+            command,
+            room_id,
+            request_id,
+            command_name,
+            invocation_id,
+            None,
+            Duration::from_secs(5),
+        )
+    }
+
+    /// 只允许在调用方验证过能力的同一 socket 代际上发送并等待确认。
+    pub(crate) fn request_and_confirm_on_generation(
+        &self,
+        command: ChatroomCommand,
+        room_id: &str,
+        request_id: &str,
+        command_name: &str,
+        invocation_id: Option<&str>,
+        expected_generation: u64,
+    ) -> Result<ConfirmedCommand, AckError> {
+        self.request_and_confirm_inner(
+            command,
+            room_id,
+            request_id,
+            command_name,
+            invocation_id,
+            Some(expected_generation),
+            Duration::from_secs(5),
+        )
+    }
+
+    pub(super) fn request_and_confirm_with_timeout(
+        &self,
+        command: ChatroomCommand,
+        room_id: &str,
+        request_id: &str,
+        command_name: &str,
+        invocation_id: Option<&str>,
+        timeout: Duration,
+    ) -> Result<ConfirmedCommand, AckError> {
+        self.request_and_confirm_inner(
+            command,
+            room_id,
+            request_id,
+            command_name,
+            invocation_id,
+            None,
+            timeout,
+        )
+    }
+
+    fn request_and_confirm_inner(
+        &self,
+        command: ChatroomCommand,
+        room_id: &str,
+        request_id: &str,
+        command_name: &str,
+        invocation_id: Option<&str>,
+        expected_generation: Option<u64>,
+        timeout: Duration,
+    ) -> Result<ConfirmedCommand, AckError> {
+        if !matches!(
+            &command,
+            ChatroomCommand::Ready { .. }
+                | ChatroomCommand::Unready { .. }
+                | ChatroomCommand::AgentAccepted { .. }
+                | ChatroomCommand::AgentRunning { .. }
+                | ChatroomCommand::AgentEvent {
+                    event: crate::chatroom_protocol::AgentEventPayload::Completed { .. }
+                        | crate::chatroom_protocol::AgentEventPayload::Failed { .. },
+                    ..
+                }
+        ) {
+            return Err(AckError::MismatchedAck);
+        }
+        let (actual_room, actual_command, actual_invocation, embedded_request) = match &command {
+            ChatroomCommand::Ready {
+                room_id,
+                request_id: embedded,
+                ..
+            }
+            | ChatroomCommand::Unready {
+                room_id,
+                request_id: embedded,
+                ..
+            } => {
+                let name = if matches!(&command, ChatroomCommand::Ready { .. }) {
+                    "agent.ready"
+                } else {
+                    "agent.unready"
+                };
+                (room_id.as_str(), name, None, Some(embedded.as_str()))
+            }
+            ChatroomCommand::AgentAccepted {
+                room_id,
+                invocation_id,
+                ..
+            } => (
+                room_id.as_str(),
+                "agent.accepted",
+                Some(invocation_id.as_str()),
+                None,
+            ),
+            ChatroomCommand::AgentRunning {
+                room_id,
+                invocation_id,
+            } => (
+                room_id.as_str(),
+                "agent.running",
+                Some(invocation_id.as_str()),
+                None,
+            ),
+            ChatroomCommand::AgentEvent {
+                room_id,
+                invocation_id,
+                event,
+            } => {
+                let name = match event {
+                    crate::chatroom_protocol::AgentEventPayload::Completed { .. } => {
+                        "agent.completed"
+                    }
+                    crate::chatroom_protocol::AgentEventPayload::Failed { .. } => "agent.failed",
+                    crate::chatroom_protocol::AgentEventPayload::Delta { .. } => {
+                        return Err(AckError::MismatchedAck)
+                    }
+                };
+                (room_id.as_str(), name, Some(invocation_id.as_str()), None)
+            }
+            _ => return Err(AckError::MismatchedAck),
+        };
+        if actual_room != room_id
+            || actual_command != command_name
+            || actual_invocation != invocation_id
+            || embedded_request.is_some_and(|embedded| embedded != request_id)
+        {
+            return Err(AckError::MismatchedAck);
+        }
+        let generation = self.active_socket_generation.load(Ordering::Acquire);
+        if generation == 0 || expected_generation.is_some_and(|expected| expected != generation) {
+            return Err(AckError::Disconnected);
+        }
+        let receiver = self.pending_acks.register(
+            generation,
+            room_id,
+            request_id,
+            command_name,
+            invocation_id,
+        )?;
+        if self
+            .send_confirmed_command(command, request_id, generation)
+            .is_err()
+        {
+            self.pending_acks.cancel(generation, request_id);
+            return Err(AckError::Disconnected);
+        }
+        self.pending_acks
+            .wait(request_id, generation, receiver, timeout)
+    }
+
+    pub fn selected_capabilities(&self) -> (u64, Vec<ChatroomCapability>) {
+        self.selected_capabilities
+            .lock()
+            .expect("capability state poisoned")
+            .clone()
+    }
+
+    pub fn active_socket_generation(&self) -> u64 {
+        self.active_socket_generation.load(Ordering::Acquire)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_active_socket_generation_for_test(&self, generation: u64) {
+        self.active_socket_generation
+            .store(generation, Ordering::Release);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_selected_capabilities_for_test(
+        &self,
+        generation: u64,
+        capabilities: Vec<ChatroomCapability>,
+    ) {
+        *self.selected_capabilities.lock().unwrap() = (generation, capabilities);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn pending_ack_count(&self) -> usize {
+        self.pending_acks.pending_len()
+    }
+
+    fn send_confirmed_command(
+        &self,
+        command: ChatroomCommand,
+        request_id: &str,
+        generation: u64,
+    ) -> Result<(), ChatroomClientError> {
+        if self.active_socket_generation.load(Ordering::Acquire) != generation {
+            return Err(ChatroomClientError::new(
+                "disconnected",
+                "聊天室连接代际已变化",
+            ));
+        }
+        command
+            .validate_wire_fields()
+            .map_err(|message| ChatroomClientError::new("invalid_command", message))?;
+        let command = ChatroomCommand::ConfirmedLifecycle {
+            request_id: request_id.to_string(),
+            command: Box::new(command),
+        };
+        let command_tx = self.commands.lock().unwrap();
+        let sender = command_tx
+            .as_ref()
+            .ok_or_else(|| ChatroomClientError::new("client_not_started", "聊天室连接尚未启动"))?;
+        sender
+            .send(QueuedCommand {
+                command,
+                wake_budget: false,
+                resume: false,
+                pause_generation: self.pause_generation.load(Ordering::Acquire),
+                expected_socket_generation: Some(generation),
+                request_id: Some(request_id.to_string()),
             })
             .map_err(|_| ChatroomClientError::new("client_closed", "聊天室连接已关闭"))
     }
@@ -411,6 +835,11 @@ impl ChatroomClient {
         self.paused.store(true, Ordering::Release);
         self.resume_requested.store(false, Ordering::Release);
         self.pause_generation.fetch_add(1, Ordering::AcqRel);
+        let generation = self.active_socket_generation.swap(0, Ordering::AcqRel);
+        if generation != 0 {
+            self.pending_acks.invalidate_generation(generation);
+        }
+        *self.selected_capabilities.lock().unwrap() = (0, Vec::new());
     }
 
     pub(crate) fn pause_generation(&self) -> u64 {
@@ -435,6 +864,8 @@ impl ChatroomClient {
                     wake_budget: false,
                     resume: true,
                     pause_generation,
+                    expected_socket_generation: None,
+                    request_id: None,
                 })
                 .is_err()
             {
@@ -446,6 +877,9 @@ impl ChatroomClient {
     }
 
     pub fn shutdown(&self) {
+        self.active_socket_generation.store(0, Ordering::Release);
+        self.pending_acks.invalidate_all();
+        *self.selected_capabilities.lock().unwrap() = (0, Vec::new());
         if self.stop.swap(true, Ordering::AcqRel) {
             if let Some(worker) = self.worker.lock().unwrap().take() {
                 let _ = worker.join();
@@ -458,6 +892,8 @@ impl ChatroomClient {
                 wake_budget: false,
                 resume: false,
                 pause_generation: self.pause_generation.load(Ordering::Acquire),
+                expected_socket_generation: None,
+                request_id: None,
             });
         }
         if let Some(worker) = self.worker.lock().unwrap().take() {
@@ -484,6 +920,10 @@ fn run_worker(
     pause_state_lock: Arc<Mutex<()>>,
     resume_requested: Arc<AtomicBool>,
     wake_on_ordinary: Arc<AtomicBool>,
+    pending_acks: Arc<PendingCommandAcks>,
+    active_socket_generation: Arc<AtomicU64>,
+    next_socket_generation: Arc<AtomicU64>,
+    selected_capabilities: Arc<Mutex<(u64, Vec<ChatroomCapability>)>>,
     backoff: Arc<dyn BackoffWaiter>,
     #[cfg(test)] unavailable_status_gate: Arc<Mutex<Option<UnavailableStatusGate>>>,
     #[cfg(test)] connected_command_drain_gate: Arc<Mutex<Option<ConnectedCommandDrainGate>>>,
@@ -491,7 +931,7 @@ fn run_worker(
     #[cfg(test)] connection_ready_gate: Arc<Mutex<Option<ConnectionReadyGate>>>,
     #[cfg(test)] connected_command_apply_gate: Arc<Mutex<Option<ConnectedCommandApplyGate>>>,
 ) {
-    let mut subscription: Option<(Vec<RoomCursor>, String)> = None;
+    let mut subscription: Option<(Vec<RoomCursor>, String, Option<Vec<ChatroomCapability>>)> = None;
     let mut pending = VecDeque::new();
     let mut retries = 0usize;
     let mut refresh = RefreshAttempt::default();
@@ -663,6 +1103,13 @@ fn run_worker(
                 .expect("测试连接 ready 未收到放行信号");
         }
         let mut connection_generation = 0;
+        let socket_generation = next_socket_generation.fetch_add(1, Ordering::AcqRel) + 1;
+        let mut initial_snapshot_gate = subscription
+            .as_ref()
+            .map(|(rooms, _, capabilities)| {
+                InitialSnapshotGate::new(rooms.clone(), capabilities.clone())
+            })
+            .unwrap_or_else(|| InitialSnapshotGate::new(Vec::new(), None));
         let mut connection_rejected = false;
         let mut connection_failed = false;
         {
@@ -676,8 +1123,12 @@ fn run_worker(
                 socket.close();
                 connection_rejected = true;
             } else {
-                if let Some((rooms, device_id)) = subscription.clone() {
-                    let initial = ChatroomCommand::Subscribe { rooms, device_id };
+                if let Some((rooms, device_id, capabilities)) = subscription.clone() {
+                    let initial = ChatroomCommand::Subscribe {
+                        rooms,
+                        device_id,
+                        capabilities,
+                    };
                     if socket.send_json(&initial).is_err() {
                         connection_failed = true;
                     }
@@ -687,6 +1138,8 @@ fn run_worker(
                 }
                 if !connection_failed {
                     connection_generation = pause_generation.load(Ordering::Acquire);
+                    active_socket_generation.store(socket_generation, Ordering::Release);
+                    *selected_capabilities.lock().unwrap() = (socket_generation, Vec::new());
                     let _ = events.send(ChatroomClientEvent::ConnectedAt {
                         generation: connection_generation,
                     });
@@ -746,6 +1199,19 @@ fn run_worker(
                     restore_wake_budget(queued.wake_budget, &wake_on_ordinary);
                     continue;
                 }
+                if let Some(expected) = queued.expected_socket_generation {
+                    if expected != socket_generation
+                        || queued
+                            .request_id
+                            .as_deref()
+                            .is_some_and(|request_id| !pending_acks.contains(expected, request_id))
+                    {
+                        if let Some(request_id) = queued.request_id.as_deref() {
+                            pending_acks.cancel(expected, request_id);
+                        }
+                        continue;
+                    }
+                }
                 #[cfg(test)]
                 if let Some(gate) = connected_command_apply_gate.lock().unwrap().take() {
                     let _ = gate.loaded.send(());
@@ -798,6 +1264,26 @@ fn run_worker(
                             && !matches!(&queued.command, ChatroomCommand::Close)
                         {
                             restore_wake_budget(queued.wake_budget, &wake_on_ordinary);
+                            continue;
+                        }
+                        if let Some(expected) = queued.expected_socket_generation {
+                            if expected != socket_generation
+                                || queued.request_id.as_deref().is_some_and(|request_id| {
+                                    !pending_acks.contains(expected, request_id)
+                                })
+                            {
+                                if let Some(request_id) = queued.request_id.as_deref() {
+                                    pending_acks.cancel(expected, request_id);
+                                }
+                                continue;
+                            }
+                            if socket.send_json(&queued.command).is_err() {
+                                if let Some(request_id) = queued.request_id.as_deref() {
+                                    pending_acks.cancel(expected, request_id);
+                                }
+                                reconnect = true;
+                                break;
+                            }
                             continue;
                         }
                         let is_subscription_command = matches!(
@@ -858,12 +1344,32 @@ fn run_worker(
                 }
                 break;
             }
-            match socket.receive_json() {
-                Ok(event) => {
+            match socket.receive_frame() {
+                Ok(ChatroomSocketFrame::PrivateAck(ack)) => {
+                    let _ = pending_acks.resolve(socket_generation, ack);
+                    retries = 0;
+                    refresh.attempted = false;
+                    refresh.failed = false;
+                }
+                Ok(frame) => {
+                    let (event, raw_json_bytes) = match frame {
+                        ChatroomSocketFrame::Event(event) => {
+                            let raw_json_bytes = serde_json::to_vec(&event)
+                                .map(|value| value.len())
+                                .unwrap_or(MAX_MESSAGE_BYTES + 1);
+                            (event, raw_json_bytes)
+                        }
+                        ChatroomSocketFrame::EventWithRawJsonBytes {
+                            event,
+                            raw_json_bytes,
+                        } => (event, raw_json_bytes),
+                        ChatroomSocketFrame::PrivateAck(_) => unreachable!(),
+                    };
                     retries = 0;
                     refresh.attempted = false;
                     refresh.failed = false;
                     let mut paused_disconnect = false;
+                    let mut handshake_failed = false;
                     {
                         let _pause_state = pause_state_lock.lock().unwrap();
                         if paused.load(Ordering::Acquire)
@@ -872,14 +1378,96 @@ fn run_worker(
                             socket.close();
                             paused_disconnect = true;
                         } else {
-                            let _ = events.send(ChatroomClientEvent::EventAt {
-                                generation: connection_generation,
-                                event,
-                            });
+                            let snapshot_selection = match &event {
+                                ChatroomEvent::RoomSnapshot {
+                                    room_id, payload, ..
+                                } => initial_snapshot_gate.observe_snapshot(room_id, payload),
+                                _ => Ok(None),
+                            };
+                            match snapshot_selection {
+                                Err(()) => {
+                                    initial_snapshot_gate.clear();
+                                    if let Ok(mut state) = selected_capabilities.lock() {
+                                        if state.0 == socket_generation {
+                                            state.1.clear();
+                                        }
+                                    }
+                                    handshake_failed = true;
+                                }
+                                Ok(Some(selected)) => {
+                                    let mut state = selected_capabilities.lock().unwrap();
+                                    if active_socket_generation.load(Ordering::Acquire)
+                                        != socket_generation
+                                        || state.0 != socket_generation
+                                    {
+                                        initial_snapshot_gate.clear();
+                                        state.1.clear();
+                                        handshake_failed = true;
+                                    } else {
+                                        state.1 = selected;
+                                        let _ = events.send(ChatroomClientEvent::SocketEventAt {
+                                            generation: connection_generation,
+                                            socket_generation,
+                                            event,
+                                        });
+                                        for buffered in initial_snapshot_gate.drain() {
+                                            let _ =
+                                                events.send(ChatroomClientEvent::SocketEventAt {
+                                                    generation: connection_generation,
+                                                    socket_generation,
+                                                    event: buffered,
+                                                });
+                                        }
+                                    }
+                                }
+                                Ok(None) => {
+                                    if matches!(&event, ChatroomEvent::RoomSnapshot { .. }) {
+                                        let _ = events.send(ChatroomClientEvent::SocketEventAt {
+                                            generation: connection_generation,
+                                            socket_generation,
+                                            event,
+                                        });
+                                    } else if initial_snapshot_gate.is_pending() {
+                                        if initial_snapshot_gate
+                                            .buffer(event, raw_json_bytes)
+                                            .is_err()
+                                        {
+                                            initial_snapshot_gate.clear();
+                                            if let Ok(mut state) = selected_capabilities.lock() {
+                                                if state.0 == socket_generation {
+                                                    state.1.clear();
+                                                }
+                                            }
+                                            handshake_failed = true;
+                                        }
+                                    } else {
+                                        let _ = events.send(ChatroomClientEvent::SocketEventAt {
+                                            generation: connection_generation,
+                                            socket_generation,
+                                            event,
+                                        });
+                                    }
+                                }
+                            }
                         }
                     }
                     if paused_disconnect {
                         emit_disconnected(&events);
+                        break;
+                    }
+                    if handshake_failed {
+                        socket.close();
+                        emit_disconnected(&events);
+                        retry_after_failure(
+                            &events,
+                            &backoff,
+                            &stop,
+                            &mut retries,
+                            &mut unavailable,
+                            &wake_on_ordinary,
+                            #[cfg(test)]
+                            &unavailable_status_gate,
+                        );
                         break;
                     }
                 }
@@ -907,12 +1495,15 @@ fn run_worker(
                 }
             }
         }
+        active_socket_generation.store(0, Ordering::Release);
+        *selected_capabilities.lock().unwrap() = (0, Vec::new());
+        pending_acks.invalidate_generation(socket_generation);
     }
 }
 
 fn apply_command(
     command: ChatroomCommand,
-    subscription: &mut Option<(Vec<RoomCursor>, String)>,
+    subscription: &mut Option<(Vec<RoomCursor>, String, Option<Vec<ChatroomCapability>>)>,
     pending: &mut VecDeque<ChatroomCommand>,
     unavailable: &mut bool,
     retries: &mut usize,
@@ -926,20 +1517,24 @@ fn apply_command(
             stop.store(true, Ordering::Release);
             true
         }
-        ChatroomCommand::Subscribe { rooms, device_id } => {
-            *subscription = Some((rooms, device_id));
+        ChatroomCommand::Subscribe {
+            rooms,
+            device_id,
+            capabilities,
+        } => {
+            *subscription = Some((rooms, device_id, capabilities));
             *unavailable = false;
             reset_retry_budget(retries, refresh);
             wake_on_ordinary.store(false, Ordering::Release);
             false
         }
         ChatroomCommand::Unsubscribe { room_id } => {
-            if let Some((rooms, device_id)) = subscription.as_mut() {
+            if let Some((rooms, device_id, capabilities)) = subscription.as_mut() {
                 rooms.retain(|room| room.room_id != room_id);
                 if rooms.is_empty() {
                     *subscription = None;
                 } else {
-                    *subscription = Some((rooms.clone(), device_id.clone()));
+                    *subscription = Some((rooms.clone(), device_id.clone(), capabilities.clone()));
                 }
             }
             *unavailable = false;
@@ -1401,9 +1996,56 @@ impl ChatroomSocket for TungsteniteSocket {
         }
     }
 
+    fn receive_frame(&mut self) -> Result<ChatroomSocketFrame, ChatroomClientError> {
+        loop {
+            match self.socket.read() {
+                Ok(message) => match decode_socket_frame(message)? {
+                    Some(frame) => return Ok(frame),
+                    None => continue,
+                },
+                Err(error) => return Err(map_socket_error(error)),
+            }
+        }
+    }
+
     fn close(&mut self) {
         let _ = self.socket.close(None);
     }
+}
+
+pub(super) fn decode_socket_frame(
+    message: Message,
+) -> Result<Option<ChatroomSocketFrame>, ChatroomClientError> {
+    let bytes = match message {
+        Message::Text(text) => text.as_bytes().to_vec(),
+        Message::Binary(bytes) => {
+            str::from_utf8(&bytes).map_err(|_| {
+                ChatroomClientError::new("protocol_invalid", "聊天室二进制帧不是 UTF-8")
+            })?;
+            bytes.to_vec()
+        }
+        Message::Ping(_) | Message::Pong(_) | Message::Frame(_) => return Ok(None),
+        Message::Close(_) => {
+            return Err(ChatroomClientError::new("disconnected", "聊天室连接已关闭"))
+        }
+    };
+    let value: serde_json::Value = serde_json::from_slice(&bytes)
+        .map_err(|_| ChatroomClientError::new("protocol_invalid", "聊天室 JSON 帧无效"))?;
+    if value.get("type").and_then(serde_json::Value::as_str) == Some("command.ack") {
+        let room_id = value
+            .get("roomId")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| ChatroomClientError::new("protocol_invalid", "ACK roomId 缺失"))?;
+        let ack = crate::chatroom_protocol::parse_private_command_ack(&bytes, room_id)
+            .map_err(|error| ChatroomClientError::new(error.code, error.message))?;
+        return Ok(Some(ChatroomSocketFrame::PrivateAck(ack)));
+    }
+    parse_event(&bytes)
+        .map(|event| ChatroomSocketFrame::EventWithRawJsonBytes {
+            event,
+            raw_json_bytes: bytes.len(),
+        })
+        .map(Some)
 }
 
 pub(crate) fn decode_message(

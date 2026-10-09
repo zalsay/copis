@@ -127,12 +127,14 @@ describe('Agent 会话 JSONL 读取', () => {
       removeSDKErrorMessage: () => false,
     }
     const unregister = manager.registerAgentSessionStorageOverride('override-session', backend)
+    expect(manager.hasAgentSessionStorageOverride('override-session')).toBe(true)
     expect(manager.getAgentSessionMeta('override-session')).toEqual(meta)
     expect(manager.getAgentSessionSDKMessages('override-session')).toEqual(sdkMessages)
     unregister()
 
     writeAgentSessionJsonl('override-session', [JSON.stringify({ type: 'assistant', uuid: 'ordinary-message' })])
     expect(manager.getAgentSessionSDKMessages('override-session').map((message) => (message as { uuid?: string }).uuid)).toEqual(['ordinary-message'])
+    expect(manager.hasAgentSessionStorageOverride('override-session')).toBe(false)
   })
 
   test('Given 会话 JSONL 混入损坏行 When 读取 SDKMessage Then 跳过坏行并保留其它消息', () => {

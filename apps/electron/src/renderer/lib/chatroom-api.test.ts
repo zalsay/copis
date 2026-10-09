@@ -11,6 +11,34 @@ test('发送消息保留服务端调用身份及离线结果，但不泄漏设�
 
 const response = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status })
 describe('chatRoomApi', () => {
+  test('读取公开 invocation metadata 时严格按 ID 请求并只保留白名单字段', async () => {
+    const calls: Array<{ url: string; method: string; body?: BodyInit | null }> = []
+    const api = createChatRoomApi({ baseUrl: 'http://test', fetchImpl: async (url, init) => {
+      calls.push({ url: String(url), method: init?.method ?? 'GET', body: init?.body })
+      return response({ data: { invocation: { invocationId: 'i-1', roomId: 'r-1', traceId: 't-1', targetAgentId: 'a-2', triggerMessageId: 'm-1', depth: 1, status: 'accepted', deviceIdHash: 'private-device', requestReceipt: 'private-receipt' } } })
+    } })
+    const invocation = await api.getInvocationMetadata('r-1', 'i-1')
+    expect(calls).toEqual([{ url: 'http://test/api/chatrooms/v2/rooms/r-1/invocations/i-1/metadata', method: 'GET', body: undefined }])
+    expect(invocation).toEqual({ invocationId: 'i-1', roomId: 'r-1', traceId: 't-1', targetAgentId: 'a-2', triggerMessageId: 'm-1', depth: 1, status: 'accepted' })
+    expect(JSON.stringify(invocation)).not.toContain('private-')
+  })
+
+  test('metadata 404 保留 not-found，不回退到最近 mention 或伪造 server failure', async () => {
+    const api = createChatRoomApi({ baseUrl: 'http://test', fetchImpl: async () => response({ code: 'not_found', message: 'not found' }, 404) })
+    await expect(api.getInvocationMetadata('r-1', 'i-missing')).rejects.toMatchObject({ status: 404, code: 'not_found' })
+  })
+
+  test('Agent readiness 使用服务端 availability，不从在线 presence 推断 ready', async () => {
+    const api = createChatRoomApi({ baseUrl: 'http://test', fetchImpl: async () => response({ data: { room: { roomId: 'r-1' }, members: [], agents: [
+      { agentId: 'a-1', displayName: 'Agent A', status: 'online', availability: 'preparing', busy: false },
+      { agentId: 'a-2', displayName: 'Agent B', status: 'offline', availability: 'configuration_error' },
+      { agentId: 'a-3', displayName: 'Agent C', status: 'online', availability: 'unknown' },
+    ] } }) })
+    const detail = await api.getRoom('r-1')
+    expect(detail.agents.map((agent) => agent.availability)).toEqual(['preparing', 'configuration_error', undefined])
+    expect(detail.agents[0]?.status).toBe('online')
+  })
+
   test('已有房间添加 Agent 离线失败时不误称聊天室刚创建', async () => {
     const previous = globalThis.window
     Object.defineProperty(globalThis, 'window', { configurable: true, value: { electronAPI: { chatrooms: { provisionAgent: async () => { throw new Error('agent_offline') } } } } })
@@ -107,15 +135,17 @@ describe('chatRoomApi', () => {
     let releaseSecond!: () => void
     const secondReady = new Promise<void>((resolve) => { releaseSecond = resolve })
     const progress: Array<{ completed: number; total: number; agentName: string }> = []
+    const started: Array<{ completed: number; total: number; agentName: string }> = []
     Object.defineProperty(globalThis, 'window', { configurable: true, value: { electronAPI: { chatrooms: { provisionAgent: async (input: { displayName: string }) => { if (input.displayName === '第二 Agent') await secondReady; return {} } } } } })
     const api = createChatRoomApi({ baseUrl: 'http://test', fetchImpl: async () => response({ roomId: 'r1', name: 'R' }) })
     const creation = api.createRoom({ name: 'R', shareCode: 'AB12' }, [
       { sourceWorkspaceId: 'one', displayName: '第一 Agent', channelId: 'c', contextMessageCount: 50, memorySharingEnabled: false, skillSharingEnabled: false },
       { sourceWorkspaceId: 'two', displayName: '第二 Agent', channelId: 'c', contextMessageCount: 50, memorySharingEnabled: false, skillSharingEnabled: false },
       { sourceWorkspaceId: 'three', displayName: '第三 Agent', channelId: 'c', contextMessageCount: 50, memorySharingEnabled: false, skillSharingEnabled: false },
-    ], { onProvisionProgress: (value) => progress.push(value) })
+    ], { onProvisionStart: (value) => started.push(value), onProvisionProgress: (value) => progress.push(value) })
     await new Promise((resolve) => setTimeout(resolve, 0))
     expect(progress).toEqual([{ completed: 0, total: 3, agentName: '' }, { completed: 1, total: 3, agentName: '第一 Agent' }])
+    expect(started).toEqual([{ completed: 0, total: 3, agentName: '第一 Agent' }, { completed: 1, total: 3, agentName: '第二 Agent' }])
     releaseSecond()
     await creation
     expect(progress.map(({ completed, total }) => `${completed}/${total}`)).toEqual(['0/3', '1/3', '2/3', '3/3'])

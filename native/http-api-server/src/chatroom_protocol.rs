@@ -3,6 +3,7 @@ use serde::de::{self, DeserializeSeed, MapAccess, SeqAccess, Visitor};
 use serde::ser::SerializeStruct;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::{Map, Value};
+use sha2::{Digest, Sha256};
 use std::collections::HashSet;
 use std::fmt;
 
@@ -20,6 +21,50 @@ const MAX_DEVICE_BYTES: usize = 128;
 const MAX_CLIENT_MESSAGE_ID_BYTES: usize = 128;
 const MAX_ATTACHMENT_IDS: usize = 20;
 
+#[derive(Clone, Copy, Debug)]
+pub struct ChatroomReplyDigestInput<'a> {
+    pub client_message_id: &'a str,
+    pub content: &'a str,
+    pub mention_agent_ids: &'a [&'a str],
+    pub attachment_ids: &'a [&'a str],
+}
+
+/// 与 Go encoding/json 默认 HTML 转义保持字节一致的回复 JSON。
+pub fn canonical_reply_json(reply: &ChatroomReplyDigestInput<'_>) -> String {
+    fn quote(value: &str) -> String {
+        serde_json::to_string(value)
+            .expect("字符串始终可以序列化")
+            .replace('&', "\\u0026")
+            .replace('<', "\\u003c")
+            .replace('>', "\\u003e")
+            .replace('\u{2028}', "\\u2028")
+            .replace('\u{2029}', "\\u2029")
+    }
+
+    fn ids(values: &[&str]) -> String {
+        let mut seen = HashSet::new();
+        let unique = values
+            .iter()
+            .filter(|value| seen.insert(**value))
+            .map(|value| quote(value))
+            .collect::<Vec<_>>();
+        format!("[{}]", unique.join(","))
+    }
+
+    format!(
+        "{{\"attachmentIds\":{},\"clientMessageId\":{},\"content\":{},\"mentionAgentIds\":{}}}",
+        ids(reply.attachment_ids),
+        quote(reply.client_message_id),
+        quote(reply.content),
+        ids(reply.mention_agent_ids),
+    )
+}
+
+pub fn reply_digest(reply: &ChatroomReplyDigestInput<'_>) -> String {
+    let digest = Sha256::digest(canonical_reply_json(reply).as_bytes());
+    digest.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RoomCursor {
     pub room_id: String,
@@ -28,9 +73,15 @@ pub struct RoomCursor {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum ChatroomCommand {
+    /// 仅在服务端能力协商后用于私有 ACK 的生命周期帧；普通旧帧不变化。
+    ConfirmedLifecycle {
+        request_id: String,
+        command: Box<ChatroomCommand>,
+    },
     Subscribe {
         rooms: Vec<RoomCursor>,
         device_id: String,
+        capabilities: Option<Vec<ChatroomCapability>>,
     },
     Unsubscribe {
         room_id: String,
@@ -48,10 +99,24 @@ pub enum ChatroomCommand {
         agent_id: String,
         device_id: String,
     },
+    AgentRunning {
+        room_id: String,
+        invocation_id: String,
+    },
     AgentEvent {
         room_id: String,
         invocation_id: String,
         event: AgentEventPayload,
+    },
+    Ready {
+        room_id: String,
+        request_id: String,
+        room_agent_id: String,
+    },
+    Unready {
+        room_id: String,
+        request_id: String,
+        room_agent_id: String,
     },
     RenewLease {
         room_id: String,
@@ -90,14 +155,40 @@ impl Serialize for ChatroomCommand {
         use serde::ser::Error;
         self.validate_wire_fields().map_err(S::Error::custom)?;
         let value = match self {
-            Self::Subscribe { rooms, device_id } => {
+            Self::ConfirmedLifecycle {
+                request_id,
+                command,
+            } => {
+                let mut value = serde_json::to_value(command.as_ref()).map_err(S::Error::custom)?;
+                let payload = value
+                    .get_mut("payload")
+                    .and_then(Value::as_object_mut)
+                    .ok_or_else(|| S::Error::custom("confirmed lifecycle payload missing"))?;
+                payload.insert("requestId".into(), Value::String(request_id.clone()));
+                value
+            }
+            Self::Subscribe {
+                rooms,
+                device_id,
+                capabilities,
+            } => {
                 let mut after = Map::new();
                 let mut ids = Vec::with_capacity(rooms.len());
                 for room in rooms {
                     ids.push(Value::String(room.room_id.clone()));
                     after.insert(room.room_id.clone(), Value::from(room.after_seq));
                 }
-                serde_json::json!({"type":"subscribe","payload":{"roomIds":ids,"afterSeq":after,"deviceId":device_id}})
+                let mut payload =
+                    serde_json::json!({"roomIds":ids,"afterSeq":after,"deviceId":device_id});
+                if let Some(capabilities) = capabilities {
+                    payload["capabilities"] = Value::Array(
+                        capabilities
+                            .iter()
+                            .map(|capability| Value::String(capability.as_wire().into()))
+                            .collect(),
+                    );
+                }
+                serde_json::json!({"type":"subscribe","payload":payload})
             }
             Self::SendMessage {
                 room_id,
@@ -114,6 +205,12 @@ impl Serialize for ChatroomCommand {
                 ..
             } => serde_json::json!({
                 "type":"agent.accepted", "roomId":room_id, "payload":{"invocationId":invocation_id}
+            }),
+            Self::AgentRunning {
+                room_id,
+                invocation_id,
+            } => serde_json::json!({
+                "type":"agent.running", "roomId":room_id, "payload":{"invocationId":invocation_id}
             }),
             Self::AgentEvent {
                 room_id,
@@ -141,6 +238,20 @@ impl Serialize for ChatroomCommand {
                 };
                 serde_json::json!({"type":typ,"roomId":room_id,"payload":payload})
             }
+            Self::Ready {
+                room_id,
+                request_id,
+                room_agent_id,
+            } => serde_json::json!({
+                "type":"agent.ready", "roomId":room_id, "payload":{"requestId":request_id,"roomAgentId":room_agent_id}
+            }),
+            Self::Unready {
+                room_id,
+                request_id,
+                room_agent_id,
+            } => serde_json::json!({
+                "type":"agent.unready", "roomId":room_id, "payload":{"requestId":request_id,"roomAgentId":room_agent_id}
+            }),
             Self::RenewLease {
                 room_id, agent_id, ..
             } => serde_json::json!({
@@ -163,7 +274,42 @@ impl ChatroomCommand {
     pub(crate) fn validate_wire_fields(&self) -> Result<(), &'static str> {
         let valid_room = |value: &str| normalize_room_id(value).is_ok();
         match self {
-            Self::Subscribe { rooms, device_id } => {
+            Self::ConfirmedLifecycle {
+                request_id,
+                command,
+            } => {
+                let lifecycle_command = matches!(
+                    command.as_ref(),
+                    Self::AgentAccepted { .. }
+                        | Self::AgentRunning { .. }
+                        | Self::Ready { .. }
+                        | Self::Unready { .. }
+                ) || matches!(
+                    command.as_ref(),
+                    Self::AgentEvent {
+                        event: AgentEventPayload::Completed { .. }
+                            | AgentEventPayload::Failed { .. },
+                        ..
+                    }
+                );
+                if !valid_id(request_id, MAX_CLIENT_MESSAGE_ID_BYTES) || !lifecycle_command {
+                    return Err("confirmed lifecycle command contains invalid fields");
+                }
+                command.validate_wire_fields()?;
+                if matches!(
+                    command.as_ref(),
+                    Self::Ready { request_id: embedded, .. }
+                        | Self::Unready { request_id: embedded, .. }
+                        if embedded != request_id
+                ) {
+                    return Err("confirmed lifecycle requestId does not match command");
+                }
+            }
+            Self::Subscribe {
+                rooms,
+                device_id,
+                capabilities,
+            } => {
                 if rooms.is_empty() || rooms.len() > MAX_ROOMS || !valid_device(device_id) {
                     return Err("subscribe requires rooms and device_id");
                 }
@@ -172,6 +318,29 @@ impl ChatroomCommand {
                     .any(|room| !valid_room(&room.room_id) || room.after_seq > i64::MAX as u64)
                 {
                     return Err("subscribe contains invalid room id");
+                }
+                if capabilities
+                    .as_ref()
+                    .is_some_and(|values| values.is_empty() || values.len() > 8)
+                {
+                    return Err("subscribe capabilities are invalid");
+                }
+            }
+            Self::Ready {
+                room_id,
+                request_id,
+                room_agent_id,
+            }
+            | Self::Unready {
+                room_id,
+                request_id,
+                room_agent_id,
+            } => {
+                if !valid_room(room_id)
+                    || !valid_id(request_id, MAX_CLIENT_MESSAGE_ID_BYTES)
+                    || !valid_id(room_agent_id, MAX_ID_BYTES)
+                {
+                    return Err("ready command contains invalid fields");
                 }
             }
             Self::Unsubscribe { room_id } => {
@@ -214,6 +383,14 @@ impl ChatroomCommand {
                     || !valid_device(device_id)
                 {
                     return Err("accepted event requires invocation_id");
+                }
+            }
+            Self::AgentRunning {
+                room_id,
+                invocation_id,
+            } => {
+                if !valid_room(room_id) || !valid_id(invocation_id, MAX_ID_BYTES) {
+                    return Err("running event requires invocation_id");
                 }
             }
             Self::AgentEvent {
@@ -379,7 +556,10 @@ fn validate_transient_agent_payload(typ: &str, payload: &Value) -> Result<(), Pr
         .ok_or_else(|| invalid("agent transient payload must be an object"))?;
     let (required, allowed): (&[&str], &[&str]) = match typ {
         "agent.accepted" => (&["invocationId"], &["invocationId"]),
-        "agent.delta" => (&["invocationId", "delta"], &["invocationId", "delta"]),
+        "agent.delta" => (
+            &["invocationId", "delta"],
+            &["invocationId", "delta", "frameId"],
+        ),
         "agent.completed" => (
             &[
                 "invocationId",
@@ -425,6 +605,13 @@ fn validate_transient_agent_payload(typ: &str, payload: &Value) -> Result<(), Pr
                     "payload_too_large",
                     "agent delta exceeds 64 KiB",
                 ));
+            }
+            if object.get("frameId").is_some_and(|value| {
+                value
+                    .as_str()
+                    .is_none_or(|frame_id| !valid_delta_frame_id(frame_id))
+            }) {
+                return Err(invalid("agent delta frameId is invalid"));
             }
         }
         "agent.completed" => {
@@ -490,6 +677,235 @@ fn validate_transient_agent_payload(typ: &str, payload: &Value) -> Result<(), Pr
 pub struct ProtocolError {
     pub code: String,
     pub message: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PrivateCommandAck {
+    pub room_id: String,
+    pub request_id: String,
+    pub command: String,
+    pub ok: bool,
+    pub invocation_id: Option<String>,
+    pub status: Option<String>,
+    pub error_code: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ChatroomCapability {
+    AgentReadyV1,
+    InvocationAckV1,
+    AgentDeltaFrameIdV1,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ChatroomProtocolOptions {
+    pub agent_ready_v1: bool,
+    pub invocation_ack_v1: bool,
+    pub delta_frame_id_v1: bool,
+}
+
+impl ChatroomProtocolOptions {
+    pub fn requested_capabilities(self) -> Vec<ChatroomCapability> {
+        let mut capabilities = Vec::with_capacity(3);
+        if self.agent_ready_v1 {
+            capabilities.push(ChatroomCapability::AgentReadyV1);
+        }
+        if self.invocation_ack_v1 {
+            capabilities.push(ChatroomCapability::InvocationAckV1);
+        }
+        if self.delta_frame_id_v1 {
+            capabilities.push(ChatroomCapability::AgentDeltaFrameIdV1);
+        }
+        capabilities
+    }
+
+    pub fn modern_execution_enabled(self) -> bool {
+        self.agent_ready_v1 && self.invocation_ack_v1
+    }
+}
+
+impl ChatroomCapability {
+    fn as_wire(self) -> &'static str {
+        match self {
+            Self::AgentReadyV1 => "agent-ready-v1",
+            Self::InvocationAckV1 => "invocation-ack-v1",
+            Self::AgentDeltaFrameIdV1 => "agent-delta-frame-id-v1",
+        }
+    }
+}
+
+pub fn valid_delta_frame_id(value: &str) -> bool {
+    value.len() == 32
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+/// ID 格式本身合法还不够；只有当前 socket 的已选能力可声明该字段。
+pub fn validate_delta_frame_selection(
+    payload: &Value,
+    id_selected: bool,
+) -> Result<(), ProtocolError> {
+    let object = payload
+        .as_object()
+        .ok_or_else(|| invalid("agent delta payload must be an object"))?;
+    match (id_selected, object.get("frameId")) {
+        (false, None) => Ok(()),
+        (true, Some(Value::String(value))) if valid_delta_frame_id(value) => Ok(()),
+        _ => Err(invalid(
+            "agent delta frameId does not match socket capability",
+        )),
+    }
+}
+
+/// 私有 ACK 与可广播 `ChatroomEvent` 分离，并按请求房间和精确字段校验。
+pub fn parse_private_command_ack(
+    bytes: &[u8],
+    expected_room_id: &str,
+) -> Result<PrivateCommandAck, ProtocolError> {
+    let root = parse_strict_value(bytes)?;
+    let object = root
+        .as_object()
+        .ok_or_else(|| invalid("ACK must be an object"))?;
+    if object.len() != 3 || object.get("type").and_then(Value::as_str) != Some("command.ack") {
+        return Err(invalid("invalid private ACK envelope"));
+    }
+    let room_id = object
+        .get("roomId")
+        .and_then(Value::as_str)
+        .ok_or_else(|| invalid("ACK roomId is required"))?;
+    if normalize_room_id(room_id)? != expected_room_id {
+        return Err(invalid("ACK room does not match request"));
+    }
+    let payload = object
+        .get("payload")
+        .and_then(Value::as_object)
+        .ok_or_else(|| invalid("ACK payload is required"))?;
+    let allowed = [
+        "requestId",
+        "command",
+        "ok",
+        "invocationId",
+        "status",
+        "errorCode",
+    ];
+    if payload.keys().any(|key| !allowed.contains(&key.as_str()))
+        || !["requestId", "command", "ok"]
+            .iter()
+            .all(|key| payload.contains_key(*key))
+    {
+        return Err(invalid("invalid ACK payload fields"));
+    }
+    let request_id = payload
+        .get("requestId")
+        .and_then(Value::as_str)
+        .filter(|value| valid_id(value, MAX_CLIENT_MESSAGE_ID_BYTES))
+        .ok_or_else(|| invalid("ACK requestId is invalid"))?
+        .to_string();
+    let command = payload
+        .get("command")
+        .and_then(Value::as_str)
+        .filter(|value| {
+            matches!(
+                *value,
+                "agent.ready"
+                    | "agent.unready"
+                    | "agent.accepted"
+                    | "agent.running"
+                    | "agent.delta"
+                    | "agent.completed"
+                    | "agent.failed"
+            )
+        })
+        .ok_or_else(|| invalid("ACK command is invalid"))?
+        .to_string();
+    let ok = payload
+        .get("ok")
+        .and_then(Value::as_bool)
+        .ok_or_else(|| invalid("ACK ok is required"))?;
+    let optional = |key: &str| -> Result<Option<String>, ProtocolError> {
+        payload
+            .get(key)
+            .map(|value| {
+                value
+                    .as_str()
+                    .filter(|text| valid_id(text, MAX_ID_BYTES))
+                    .map(str::to_string)
+                    .ok_or_else(|| invalid("ACK optional field is invalid"))
+            })
+            .transpose()
+    };
+    if payload.get("status").is_some_and(|value| {
+        !matches!(
+            value.as_str(),
+            Some("created" | "accepted" | "running" | "completed" | "failed" | "rejected")
+        )
+    }) {
+        return Err(invalid("ACK status is invalid"));
+    }
+    Ok(PrivateCommandAck {
+        room_id: room_id.to_string(),
+        request_id,
+        command,
+        ok,
+        invocation_id: optional("invocationId")?,
+        status: optional("status")?,
+        error_code: optional("errorCode")?,
+    })
+}
+
+/// 只返回当前客户端实现且服务端确实声明的能力，未知值不会被启用。
+pub fn parse_chatroom_capabilities(bytes: &[u8]) -> Result<Vec<ChatroomCapability>, ProtocolError> {
+    const MAX_CAPABILITIES_RESPONSE_BYTES: usize = 4096;
+    if bytes.len() > MAX_CAPABILITIES_RESPONSE_BYTES {
+        return Err(invalid("capabilities response exceeds payload limit"));
+    }
+    let root = parse_strict_value(bytes)?;
+    let object = root
+        .as_object()
+        .ok_or_else(|| invalid("capabilities must be an object"))?;
+    if object.len() != 1 {
+        return Err(invalid("unknown capabilities response field"));
+    }
+    let values = object
+        .get("capabilities")
+        .and_then(Value::as_array)
+        .ok_or_else(|| invalid("capabilities array is required"))?;
+    let mut result = Vec::new();
+    for value in values {
+        match value.as_str() {
+            Some("agent-ready-v1") => result.push(ChatroomCapability::AgentReadyV1),
+            Some("invocation-ack-v1") => result.push(ChatroomCapability::InvocationAckV1),
+            Some("agent-delta-frame-id-v1") => result.push(ChatroomCapability::AgentDeltaFrameIdV1),
+            // 忽略未来的能力名称；只有此处显式识别的值才能进入请求/协商集合。
+            Some(_) => continue,
+            None => return Err(invalid("capability must be a string")),
+        }
+    }
+    result.sort_by_key(|capability| match capability {
+        ChatroomCapability::AgentReadyV1 => 0,
+        ChatroomCapability::InvocationAckV1 => 1,
+        ChatroomCapability::AgentDeltaFrameIdV1 => 2,
+    });
+    result.dedup();
+    Ok(result)
+}
+
+/// 404 表示旧服务器未提供探测端点；其他错误不降级成旧协议。
+pub fn parse_chatroom_capabilities_response(
+    status: u16,
+    bytes: &[u8],
+) -> Result<Option<Vec<ChatroomCapability>>, ProtocolError> {
+    if status == 404 {
+        return Ok(None);
+    }
+    if !(200..300).contains(&status) {
+        return Err(ProtocolError::new(
+            "capabilities_unavailable",
+            format!("capabilities request returned HTTP {status}"),
+        ));
+    }
+    parse_chatroom_capabilities(bytes).map(Some)
 }
 
 impl ProtocolError {

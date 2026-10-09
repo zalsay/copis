@@ -12,6 +12,7 @@
 
 import { dirname, isAbsolute, join, relative, resolve, sep, win32 } from 'node:path'
 import { accessSync, constants, existsSync, mkdirSync, writeFileSync } from 'node:fs'
+import { randomUUID } from 'node:crypto'
 import { BrowserWindow } from 'electron'
 import type { WebContents } from 'electron'
 import { AGENT_IPC_CHANNELS, MAX_ATTACHMENT_SIZE } from '@copis/shared'
@@ -28,7 +29,6 @@ import type {
   CopisPermissionMode,
   AgentExternalRunSource,
   AgentMessage,
-  ChatRoomAgentRuntimeContext,
   RewindSessionResult,
 } from '@copis/shared'
 import { AgentEventBus } from './agent-event-bus'
@@ -41,8 +41,9 @@ import { setAgentStopper, setHeadlessAgentRunner } from './agent-headless-runner
 import { getHeadlessAgentRunTarget } from './agent-headless-run-target'
 import { sendAgentStreamComplete } from './agent-completion-payload'
 import { getHttpApiInternalToken } from './http-api-server'
-import { registerTrustedAgentExternalSource } from './agent-rpc-source-context'
+import { registerTrustedAgentExternalSource, registerTrustedAgentRpcRun } from './agent-rpc-source-context'
 import { registerTrustedAgentRuntimeContext } from './agent-rpc-runtime-context'
+import type { TrustedChatRoomAgentRuntimeContext } from './agent-rpc-runtime-context'
 
 // ===== 实例创建 =====
 
@@ -63,6 +64,10 @@ import('./agent-collaboration-tools').then(({ registerCollaborationEventBus }) =
  * runAgent 开始时注册，结束时清理。
  */
 const sessionWebContents = new Map<string, WebContents>()
+const sessionWebContentsOwners = new Map<string, symbol>()
+interface HeadlessRunOwner { sessionId: string; token: symbol; signal?: AbortSignal; claimed: boolean }
+const headlessRunOwners = new Map<string, HeadlessRunOwner>()
+const externalRunWebContentsOwners = new Map<string, { startedAt: number; webContentsOwner?: symbol }>()
 
 /**
  * 已挂载 destroyed 回收钩子的 webContents 集合。
@@ -78,18 +83,34 @@ const wcWithCleanupHook = new WeakSet<WebContents>()
  * 仅依赖 finally 块清理无法覆盖窗口关闭、渲染进程崩溃、headless 路径主窗口被替换等
  * webContents 提前销毁的场景——destroyed 事件兜底。
  */
-function registerWebContents(sessionId: string, wc: WebContents): void {
+function registerWebContents(sessionId: string, wc: WebContents): symbol {
   // 同一 sessionId 切换 webContents 时直接覆盖；旧 wc 的 destroyed 钩子仍由 WeakSet 持有，
   // 触发时会扫描 sessionWebContents 清理所有指向旧 wc 的条目（见下方实现）。
+  const token = Symbol('agent-webcontents-owner')
   sessionWebContents.set(sessionId, wc)
-  if (wcWithCleanupHook.has(wc)) return
+  sessionWebContentsOwners.set(sessionId, token)
+  if (wcWithCleanupHook.has(wc)) return token
   wcWithCleanupHook.add(wc)
   wc.once('destroyed', () => {
     // 单个 wc 可能映射到多个 sessionId（同窗口多 tab），需要清理所有指向它的条目
     for (const [sid, mappedWc] of sessionWebContents) {
-      if (mappedWc === wc) sessionWebContents.delete(sid)
+      if (mappedWc === wc) {
+        sessionWebContents.delete(sid)
+        sessionWebContentsOwners.delete(sid)
+      }
     }
   })
+  return token
+}
+
+function releaseWebContents(sessionId: string, token: symbol | undefined): void {
+  if (!token || sessionWebContentsOwners.get(sessionId) !== token) return
+  sessionWebContentsOwners.delete(sessionId)
+  sessionWebContents.delete(sessionId)
+}
+
+function isHeadlessRunOwnerCurrent(owner: HeadlessRunOwner): boolean {
+  return owner.claimed && headlessRunOwners.get(owner.sessionId) === owner && !owner.signal?.aborted
 }
 
 function isMainRendererWindow(win: BrowserWindow): boolean {
@@ -121,7 +142,12 @@ export function forwardExternalAgentRunStarted(input: {
   startedAt: number
   triggeredBy: AgentSendInput['triggeredBy']
 }): void {
+  if (headlessRunOwners.has(input.sessionId)) return
   getExternalRunWebContents(input.sessionId)
+  externalRunWebContentsOwners.set(input.sessionId, {
+    startedAt: input.startedAt,
+    webContentsOwner: sessionWebContentsOwners.get(input.sessionId),
+  })
   const session = getAgentSessionMeta(input.sessionId)
   eventBus.emit(input.sessionId, {
     kind: 'copis_event',
@@ -139,20 +165,29 @@ export function forwardExternalAgentRunStarted(input: {
 }
 
 export function forwardExternalAgentEvent(sessionId: string, payload: AgentStreamPayload): void {
+  if (headlessRunOwners.has(sessionId)) return
   getExternalRunWebContents(sessionId)
   eventBus.emit(sessionId, payload)
 }
 
 export function forwardExternalAgentError(sessionId: string, error: string): void {
+  if (headlessRunOwners.has(sessionId)) return
   const wc = getExternalRunWebContents(sessionId)
   if (!wc || wc.isDestroyed()) return
   wc.send(AGENT_IPC_CHANNELS.STREAM_ERROR, { sessionId, error })
 }
 
 export function forwardExternalAgentComplete(payload: AgentStreamCompletePayload): void {
-  const wc = getExternalRunWebContents(payload.sessionId)
-  if (wc && !wc.isDestroyed()) sendAgentStreamComplete(wc, payload, payload)
-  sessionWebContents.delete(payload.sessionId)
+  if (headlessRunOwners.has(payload.sessionId)) return
+  const runOwner = externalRunWebContentsOwners.get(payload.sessionId)
+  if (!runOwner || runOwner.startedAt !== payload.startedAt) return
+  if (externalRunWebContentsOwners.get(payload.sessionId) !== runOwner) return
+  if (sessionWebContentsOwners.get(payload.sessionId) === runOwner.webContentsOwner) {
+    const wc = sessionWebContents.get(payload.sessionId)
+    if (wc && !wc.isDestroyed()) sendAgentStreamComplete(wc, payload, payload)
+    releaseWebContents(payload.sessionId, runOwner.webContentsOwner)
+  }
+  externalRunWebContentsOwners.delete(payload.sessionId)
 }
 
 // ===== EventBus IPC 转发中间件 =====
@@ -181,7 +216,9 @@ export async function runAgent(
   webContents: WebContents,
 ): Promise<void> {
   // 更新 webContents 映射；并发状态由 RPC gateway 与 Rust Worker 共同维护。
-  registerWebContents(input.sessionId, webContents)
+  const webContentsOwner = registerWebContents(input.sessionId, webContents)
+  const trustedRunId = randomUUID()
+  const releaseTrustedRun = registerTrustedAgentRpcRun(input.sessionId, trustedRunId)
   // 开始新一轮执行时清除"完成未确认"标记
   try {
     updateAgentSessionMeta(input.sessionId, { completedButUnconfirmed: false })
@@ -235,7 +272,7 @@ export async function runAgent(
           })
         }
       },
-    })
+    }, { trustedRunId })
   } catch (err) {
     console.error('[Agent 服务] runAgent 未处理异常:', err)
     const errorMessage = err instanceof Error ? err.message : '未知错误'
@@ -250,7 +287,8 @@ export async function runAgent(
     }
   } finally {
     // 该调用独占本次 SSE 生命周期；结束后映射不再需要。
-    sessionWebContents.delete(input.sessionId)
+    releaseTrustedRun()
+    releaseWebContents(input.sessionId, webContentsOwner)
   }
 }
 
@@ -260,7 +298,11 @@ export interface HeadlessAgentRunOptions {
   onTitleUpdated: (title: string) => void
   source?: AgentExternalRunSource
   originSessionId?: string
-  trustedRuntimeContext?: ChatRoomAgentRuntimeContext
+  trustedRuntimeContext?: TrustedChatRoomAgentRuntimeContext
+  signal?: AbortSignal
+  /** Main-only ownership/liveness input; it is never serialized into AgentSendInput. */
+  trustedRunId?: string
+  isTrustedRunCurrent?: () => Promise<boolean>
 }
 
 /**
@@ -287,9 +329,10 @@ export async function runAgentHeadless(
   )
   const runInput: AgentSendInput = input.startedAt != null ? input : { ...input, startedAt: Date.now() }
   const startedAt = runInput.startedAt!
-  if (wc) {
-    registerWebContents(runInput.sessionId, wc)
-  }
+  const owner: HeadlessRunOwner = { sessionId: runInput.sessionId, token: Symbol('headless-agent-run'), signal: callbacks.signal, claimed: false }
+  const trustedRunId = callbacks.trustedRunId ?? randomUUID()
+  const releaseTrustedRun = registerTrustedAgentRpcRun(runInput.sessionId, trustedRunId, callbacks.signal)
+  let webContentsOwner: symbol | undefined
 
   let releaseTrustedSource: (() => void) | undefined
   let releaseTrustedRuntimeContext: (() => void) | undefined
@@ -299,14 +342,21 @@ export async function runAgentHeadless(
     // 两个 trusted registry 必须在同一事务边界内建立；runtime context 校验失败时
     // 不能留下可被后续同 session 调用读取的 source 标签。
     releaseTrustedSource = callbacks.source
-      ? registerTrustedAgentExternalSource(runInput.sessionId, callbacks.source)
+      ? registerTrustedAgentExternalSource(runInput.sessionId, callbacks.source, { runId: trustedRunId, signal: callbacks.signal })
       : undefined
     releaseTrustedRuntimeContext = callbacks.trustedRuntimeContext
-      ? registerTrustedAgentRuntimeContext(runInput.sessionId, callbacks.trustedRuntimeContext)
+      ? registerTrustedAgentRuntimeContext(runInput.sessionId, callbacks.trustedRuntimeContext, { runId: trustedRunId, signal: callbacks.signal, isCurrent: callbacks.isTrustedRunCurrent })
       : undefined
     await agentRpcGateway.run(runInput, {
-      onEvent: ({ sessionId, payload }) => eventBus.emit(sessionId, payload),
+      onEvent: ({ sessionId, payload }) => { if (isHeadlessRunOwnerCurrent(owner)) eventBus.emit(sessionId, payload) },
       onError: (error) => {
+        if (!isHeadlessRunOwnerCurrent(owner)) {
+          if (!owner.claimed && !owner.signal?.aborted) {
+            errorSent = true
+            callbacks.onError(error)
+          }
+          return
+        }
         errorSent = true
         callbacks.onError(error)
         // 同步到渲染进程
@@ -318,6 +368,7 @@ export async function runAgentHeadless(
         }
       },
       onComplete: (messages, complete) => {
+        if (!isHeadlessRunOwnerCurrent(owner)) return
         completeSent = true
         callbacks.onComplete(messages)
         // 同步到渲染进程
@@ -332,6 +383,7 @@ export async function runAgentHeadless(
         }
       },
       onTitleUpdated: (title) => {
+        if (!isHeadlessRunOwnerCurrent(owner)) return
         callbacks.onTitleUpdated(title)
         // 同步到渲染进程
         if (wc && !wc.isDestroyed()) {
@@ -342,6 +394,10 @@ export async function runAgentHeadless(
         }
       },
       onRunStarted: (persistedStartedAt) => {
+        if (owner.signal?.aborted) return
+        owner.claimed = true
+        headlessRunOwners.set(runInput.sessionId, owner)
+        if (wc) webContentsOwner = registerWebContents(runInput.sessionId, wc)
         const session = getAgentSessionMeta(runInput.sessionId)
         eventBus.emit(runInput.sessionId, {
           kind: 'copis_event',
@@ -357,22 +413,28 @@ export async function runAgentHeadless(
           },
         })
       },
-    })
+    }, { signal: callbacks.signal, trustedRunId })
   } catch (err) {
     console.error('[Agent 服务] runAgentHeadless 未处理异常:', err)
+    const isCurrentOwner = isHeadlessRunOwnerCurrent(owner)
+    const failedBeforeClaim = !owner.claimed && !owner.signal?.aborted
+    if (!isCurrentOwner && !failedBeforeClaim) return
     const errorMessage = err instanceof Error ? err.message : '未知错误'
     if (!errorSent) callbacks.onError(errorMessage)
     if (!completeSent) callbacks.onComplete()
-    if (wc && !wc.isDestroyed()) {
+    const mayNotifyRenderer = isCurrentOwner || (!owner.claimed && !headlessRunOwners.has(runInput.sessionId))
+    if (mayNotifyRenderer && wc && !wc.isDestroyed()) {
       if (!errorSent) wc.send(AGENT_IPC_CHANNELS.STREAM_ERROR, { sessionId: runInput.sessionId, error: errorMessage })
       if (!completeSent) {
         sendAgentStreamComplete(wc, runInput, { messages: [], stoppedByUser: false, startedAt })
       }
     }
   } finally {
+    releaseTrustedRun()
     releaseTrustedSource?.()
     releaseTrustedRuntimeContext?.()
-    sessionWebContents.delete(runInput.sessionId)
+    if (headlessRunOwners.get(runInput.sessionId) === owner) headlessRunOwners.delete(runInput.sessionId)
+    releaseWebContents(runInput.sessionId, webContentsOwner)
   }
 }
 
@@ -387,8 +449,8 @@ export async function generateAgentTitle(input: AgentGenerateTitleInput): Promis
 /**
  * 中止指定会话的 Agent 执行
  */
-export async function stopAgent(sessionId: string): Promise<void> {
-  await agentRpcGateway.stop(sessionId)
+export async function stopAgent(sessionId: string, trustedRunId?: string): Promise<void> {
+  await agentRpcGateway.stop(sessionId, trustedRunId)
 }
 
 setHeadlessAgentRunner(runAgentHeadless)

@@ -1,8 +1,13 @@
 use crate::auth_session::{AuthError, AuthSession};
+use crate::chatroom_ack::{AckError, ConfirmedCommand};
 use crate::chatroom_client::{ChatroomClient, ChatroomClientEvent, ChatroomSocketConnector};
+use crate::chatroom_execution::{
+    ChatroomExecutionBinding, ChatroomExecutionRegistry, ChatroomOrigin,
+};
 use crate::chatroom_protocol::{
-    chatroom_ws_url, filter_cos_sts, normalize_room_id, public_event, sanitize_public,
-    validate_invocation_depth, AgentEventPayload, ChatroomCommand, ChatroomEvent, CosAction,
+    chatroom_ws_url, filter_cos_sts, normalize_room_id, public_event, reply_digest,
+    sanitize_public, validate_invocation_depth, AgentEventPayload, ChatroomCapability,
+    ChatroomCommand, ChatroomEvent, ChatroomProtocolOptions, ChatroomReplyDigestInput, CosAction,
     RoomCursor, CHATROOM_HTTP_PREFIX, CHATROOM_INTERNAL_PREFIX, CHATROOM_SSE_PATH,
 };
 use serde::de::{self, DeserializeSeed, MapAccess, SeqAccess, Visitor};
@@ -17,6 +22,8 @@ use std::time::{Duration, Instant};
 const MAX_BODY_BYTES: usize = 10 * 1024 * 1024;
 const MAX_TEXT_BYTES: usize = 64 * 1024;
 const MAX_INVOCATION_BRIDGE_BYTES: usize = 128 * 1024;
+const MAX_INVOCATION_STATUS_BYTES: usize = 128 * 1024;
+const MAX_MANAGEMENT_BODY_BYTES: usize = 64 * 1024;
 const MAX_SAFE_INTEGER: u64 = 9_007_199_254_740_991;
 const MAX_ATTACHMENT_BYTES: u64 = 256 * 1024 * 1024;
 const MAX_QUERY_BYTES: usize = 4096;
@@ -28,6 +35,569 @@ const MAX_RECOVERY_PAGE: usize = 500;
 const TASK_WORKER_COUNT: usize = 4;
 const TASK_QUEUE_CAPACITY: usize = 64;
 const NO_CLIENT_GENERATION: u64 = u64::MAX;
+const CHATROOM_CAPABILITIES_PATH: &str = "/api/chatrooms/v2/capabilities";
+const MAX_LEGACY_LIFECYCLE_WAITERS: usize = 256;
+pub(super) const CHATROOM_NATIVE_RUNTIME_UNSUPPORTED: &str = "chatroom_native_runtime_unsupported";
+const CHATROOM_NATIVE_RUNTIME_UNSUPPORTED_MESSAGE: &str =
+    "当前本机 Rust 运行时不支持可信聊天室来源校验，请更新并重启 Copis";
+
+fn is_chatroom_failure_code(value: &str) -> bool {
+    matches!(
+        value,
+        "room_not_found"
+            | "room_archived"
+            | "not_room_member"
+            | "share_code_invalid"
+            | "share_code_rate_limited"
+            | "agent_limit_reached"
+            | "agent_offline"
+            | "agent_busy"
+            | "invocation_duplicate"
+            | "invocation_depth_exceeded"
+            | "host_approval_timeout"
+            | "host_approval_denied"
+            | "attachment_not_ready"
+            | "attachment_forbidden"
+            | "realtime_reconnecting"
+            | "gateway_disconnected"
+            | "app_quit"
+            | "invalid_invocation"
+            | "invalid_output"
+            | "room_agent_not_found"
+            | "internal_error"
+    )
+}
+
+struct LegacyLifecycleWaiter {
+    generation: u64,
+    expected: LegacyLifecycleExpectation,
+    sender: mpsc::SyncSender<Result<Option<LegacyTerminalProof>, AckError>>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum LegacyTerminalProof {
+    Completed {
+        reply_client_message_id: String,
+        reply_digest: String,
+    },
+    Failed {
+        failure_code: String,
+    },
+}
+
+impl LegacyTerminalProof {
+    fn to_value(&self) -> Value {
+        match self {
+            Self::Completed {
+                reply_client_message_id,
+                reply_digest,
+            } => serde_json::json!({
+                "kind": "matched-server-event-v1",
+                "replyClientMessageId": reply_client_message_id,
+                "replyDigest": reply_digest,
+            }),
+            Self::Failed { failure_code } => serde_json::json!({
+                "kind": "matched-server-event-v1",
+                "failureCode": failure_code,
+            }),
+        }
+    }
+}
+
+enum LegacyLifecycleExpectation {
+    Command(ChatroomCommand),
+    Status {
+        room_id: String,
+        invocation_id: String,
+        status: String,
+        client_message_id: String,
+        reply_digest: String,
+        failure_code: String,
+    },
+}
+
+#[derive(Default)]
+struct LegacyLifecycleWaiters {
+    entries: Mutex<HashMap<String, LegacyLifecycleWaiter>>,
+}
+
+impl LegacyLifecycleWaiters {
+    fn register(
+        &self,
+        generation: u64,
+        request_id: &str,
+        command: ChatroomCommand,
+    ) -> Result<mpsc::Receiver<Result<Option<LegacyTerminalProof>, AckError>>, AckError> {
+        self.register_expected(
+            generation,
+            request_id,
+            LegacyLifecycleExpectation::Command(command),
+        )
+    }
+
+    fn register_status(
+        &self,
+        generation: u64,
+        request_id: &str,
+        room_id: &str,
+        invocation_id: &str,
+        status: &str,
+        client_message_id: &str,
+        reply_digest: &str,
+        failure_code: &str,
+    ) -> Result<mpsc::Receiver<Result<Option<LegacyTerminalProof>, AckError>>, AckError> {
+        self.register_expected(
+            generation,
+            request_id,
+            LegacyLifecycleExpectation::Status {
+                room_id: room_id.to_string(),
+                invocation_id: invocation_id.to_string(),
+                status: status.to_string(),
+                client_message_id: client_message_id.to_string(),
+                reply_digest: reply_digest.to_string(),
+                failure_code: failure_code.to_string(),
+            },
+        )
+    }
+
+    fn register_expected(
+        &self,
+        generation: u64,
+        request_id: &str,
+        expected: LegacyLifecycleExpectation,
+    ) -> Result<mpsc::Receiver<Result<Option<LegacyTerminalProof>, AckError>>, AckError> {
+        let mut entries = self.entries.lock().expect("legacy lifecycle map poisoned");
+        if entries.contains_key(request_id)
+            || entries.values().any(|pending| {
+                pending.generation == generation
+                    && same_lifecycle_identity(&pending.expected, &expected)
+            })
+        {
+            return Err(AckError::DuplicateRequest);
+        }
+        if entries.len() >= MAX_LEGACY_LIFECYCLE_WAITERS {
+            return Err(AckError::Full);
+        }
+        let (sender, receiver) = mpsc::sync_channel(1);
+        entries.insert(
+            request_id.to_string(),
+            LegacyLifecycleWaiter {
+                generation,
+                expected,
+                sender,
+            },
+        );
+        Ok(receiver)
+    }
+
+    fn observe(
+        &self,
+        generation: u64,
+        event: &ChatroomEvent,
+        allow_accepted: bool,
+    ) -> Option<ChatroomCommand> {
+        let mut entries = self.entries.lock().expect("legacy lifecycle map poisoned");
+        let matched = entries.iter().find_map(|(id, pending)| {
+            (pending.generation == generation)
+                .then(|| {
+                    lifecycle_event_match(&pending.expected, event)
+                        .map(|matched| (id.clone(), matched))
+                })
+                .flatten()
+        });
+        let (id, outcome) = matched?;
+        let pending = entries.remove(&id).expect("matched waiter exists");
+        let outcome = if !allow_accepted
+            && matches!(
+                &pending.expected,
+                LegacyLifecycleExpectation::Command(ChatroomCommand::AgentAccepted { .. })
+            ) {
+            Err(AckError::Full)
+        } else {
+            outcome
+        };
+        match outcome {
+            Ok(terminal_proof) => {
+                let _ = pending.sender.try_send(Ok(terminal_proof));
+                match pending.expected {
+                    LegacyLifecycleExpectation::Command(command) => Some(command),
+                    LegacyLifecycleExpectation::Status { .. } => None,
+                }
+            }
+            Err(error) => {
+                let _ = pending.sender.try_send(Err(error));
+                None
+            }
+        }
+    }
+
+    fn cancel(&self, generation: u64, request_id: &str) {
+        let mut entries = self.entries.lock().expect("legacy lifecycle map poisoned");
+        if entries
+            .get(request_id)
+            .is_some_and(|pending| pending.generation == generation)
+        {
+            entries.remove(request_id);
+        }
+    }
+
+    fn invalidate_all(&self) {
+        let mut entries = self.entries.lock().expect("legacy lifecycle map poisoned");
+        for (_, pending) in entries.drain() {
+            let _ = pending.sender.try_send(Err(AckError::Disconnected));
+        }
+    }
+
+    fn wait(
+        &self,
+        request_id: &str,
+        generation: u64,
+        receiver: mpsc::Receiver<Result<Option<LegacyTerminalProof>, AckError>>,
+        timeout: Duration,
+    ) -> Result<Option<LegacyTerminalProof>, AckError> {
+        let result = match receiver.recv_timeout(timeout) {
+            Ok(result) => result,
+            Err(mpsc::RecvTimeoutError::Timeout) => Err(AckError::Timeout),
+            Err(mpsc::RecvTimeoutError::Disconnected) => Err(AckError::Disconnected),
+        };
+        if matches!(result, Err(AckError::Timeout)) {
+            self.cancel(generation, request_id);
+        }
+        result
+    }
+}
+
+fn remember_legacy_accepted(
+    accepted: &mut HashSet<(u64, String, String)>,
+    generation: u64,
+    room_id: &str,
+    invocation_id: &str,
+) -> bool {
+    let key = (generation, room_id.to_string(), invocation_id.to_string());
+    if accepted.contains(&key) {
+        return true;
+    }
+    if accepted.len() >= MAX_LEGACY_LIFECYCLE_WAITERS {
+        return false;
+    }
+    accepted.insert(key);
+    true
+}
+
+fn observe_legacy_lifecycle(
+    waiters: &LegacyLifecycleWaiters,
+    accepted: &Mutex<HashSet<(u64, String, String)>>,
+    generation: u64,
+    event: &ChatroomEvent,
+) -> Option<ChatroomCommand> {
+    if let ChatroomEvent::AgentAccepted { room_id, payload } = event {
+        let invocation_id = payload.get("invocationId")?.as_str()?;
+        let mut accepted = accepted.lock().expect("legacy accepted map poisoned");
+        let key = (generation, room_id.clone(), invocation_id.to_string());
+        let has_capacity = accepted.contains(&key) || accepted.len() < MAX_LEGACY_LIFECYCLE_WAITERS;
+        let confirmed = waiters.observe(generation, event, has_capacity);
+        if confirmed.is_some() {
+            remember_legacy_accepted(&mut accepted, generation, room_id, invocation_id);
+        }
+        confirmed
+    } else {
+        waiters.observe(generation, event, true)
+    }
+}
+
+fn same_lifecycle_identity(
+    left: &LegacyLifecycleExpectation,
+    right: &LegacyLifecycleExpectation,
+) -> bool {
+    if let (
+        LegacyLifecycleExpectation::Status {
+            room_id: left_room,
+            invocation_id: left_id,
+            status: left_status,
+            ..
+        },
+        LegacyLifecycleExpectation::Status {
+            room_id: right_room,
+            invocation_id: right_id,
+            status: right_status,
+            ..
+        },
+    ) = (left, right)
+    {
+        return left_room == right_room && left_id == right_id && left_status == right_status;
+    }
+    let (LegacyLifecycleExpectation::Command(left), LegacyLifecycleExpectation::Command(right)) =
+        (left, right)
+    else {
+        return false;
+    };
+    match (left, right) {
+        (
+            ChatroomCommand::AgentAccepted {
+                room_id: left_room,
+                invocation_id: left_id,
+                ..
+            },
+            ChatroomCommand::AgentAccepted {
+                room_id: right_room,
+                invocation_id: right_id,
+                ..
+            },
+        )
+        | (
+            ChatroomCommand::AgentRunning {
+                room_id: left_room,
+                invocation_id: left_id,
+            },
+            ChatroomCommand::AgentRunning {
+                room_id: right_room,
+                invocation_id: right_id,
+            },
+        ) => left_room == right_room && left_id == right_id,
+        (
+            ChatroomCommand::AgentEvent {
+                room_id: left_room,
+                invocation_id: left_id,
+                event: left_event,
+            },
+            ChatroomCommand::AgentEvent {
+                room_id: right_room,
+                invocation_id: right_id,
+                event: right_event,
+            },
+        ) => {
+            left_room == right_room
+                && left_id == right_id
+                && std::mem::discriminant(left_event) == std::mem::discriminant(right_event)
+        }
+        _ => false,
+    }
+}
+
+fn lifecycle_event_match(
+    expected: &LegacyLifecycleExpectation,
+    event: &ChatroomEvent,
+) -> Option<Result<Option<LegacyTerminalProof>, AckError>> {
+    let command = match expected {
+        LegacyLifecycleExpectation::Command(command) => Some(command),
+        LegacyLifecycleExpectation::Status { .. } => None,
+    };
+    let (expected_room, expected_id, expected_kind) = match command {
+        Some(ChatroomCommand::AgentAccepted {
+            room_id,
+            invocation_id,
+            ..
+        }) => (room_id, invocation_id, "accepted"),
+        Some(ChatroomCommand::AgentRunning {
+            room_id,
+            invocation_id,
+        }) => (room_id, invocation_id, "running"),
+        Some(ChatroomCommand::AgentEvent {
+            room_id,
+            invocation_id,
+            event: AgentEventPayload::Completed { .. },
+        }) => (room_id, invocation_id, "completed"),
+        Some(ChatroomCommand::AgentEvent {
+            room_id,
+            invocation_id,
+            event: AgentEventPayload::Failed { .. },
+        }) => (room_id, invocation_id, "failed"),
+        Some(_) => return None,
+        None => match expected {
+            LegacyLifecycleExpectation::Status {
+                room_id,
+                invocation_id,
+                status,
+                ..
+            } => (room_id, invocation_id, status.as_str()),
+            _ => unreachable!(),
+        },
+    };
+    if event.room_id() != Some(expected_room) {
+        return None;
+    }
+    let (actual_id, actual_kind, payload) = match event {
+        ChatroomEvent::AgentAccepted { payload, .. } => {
+            (payload.get("invocationId")?.as_str()?, "accepted", payload)
+        }
+        ChatroomEvent::AgentCompleted { payload, .. } => {
+            (payload.get("invocationId")?.as_str()?, "completed", payload)
+        }
+        ChatroomEvent::AgentFailed { payload, .. } => {
+            (payload.get("invocationId")?.as_str()?, "failed", payload)
+        }
+        _ => return None,
+    };
+    if actual_id != expected_id {
+        return None;
+    }
+    if actual_kind != expected_kind {
+        if matches!(
+            (actual_kind, expected_kind),
+            ("completed", "failed") | ("failed", "completed")
+        ) {
+            return Some(Err(AckError::Rejected("terminal_conflict".into())));
+        }
+        return None;
+    }
+    let terminal_proof = match (command, expected) {
+        (Some(ChatroomCommand::AgentAccepted { .. }), _) => None,
+        (
+            Some(ChatroomCommand::AgentEvent {
+                event:
+                    AgentEventPayload::Completed {
+                        content,
+                        mention_agent_ids,
+                        attachment_ids,
+                        client_message_id,
+                    },
+                ..
+            }),
+            _,
+        ) => {
+            let actual_client_id = payload.get("clientMessageId").and_then(Value::as_str);
+            let Some(actual_content) = payload.get("content").and_then(Value::as_str) else {
+                return Some(Err(AckError::Rejected("result_mismatch".into())));
+            };
+            let Some(mentions) = payload.get("mentionAgentIds").and_then(Value::as_array) else {
+                return Some(Err(AckError::Rejected("result_mismatch".into())));
+            };
+            let Some(mentions) = mentions
+                .iter()
+                .map(Value::as_str)
+                .collect::<Option<Vec<_>>>()
+            else {
+                return Some(Err(AckError::Rejected("result_mismatch".into())));
+            };
+            let Some(attachments) = payload.get("attachmentIds").and_then(Value::as_array) else {
+                return Some(Err(AckError::Rejected("result_mismatch".into())));
+            };
+            let Some(attachments) = attachments
+                .iter()
+                .map(Value::as_str)
+                .collect::<Option<Vec<_>>>()
+            else {
+                return Some(Err(AckError::Rejected("result_mismatch".into())));
+            };
+            let actual_digest = reply_digest(&ChatroomReplyDigestInput {
+                client_message_id: actual_client_id.unwrap_or_default(),
+                content: actual_content,
+                mention_agent_ids: &mentions,
+                attachment_ids: &attachments,
+            });
+            let expected_digest = reply_digest(&ChatroomReplyDigestInput {
+                client_message_id,
+                content,
+                mention_agent_ids: &mention_agent_ids
+                    .iter()
+                    .map(String::as_str)
+                    .collect::<Vec<_>>(),
+                attachment_ids: &attachment_ids
+                    .iter()
+                    .map(String::as_str)
+                    .collect::<Vec<_>>(),
+            });
+            if actual_client_id != Some(client_message_id) || actual_digest != expected_digest {
+                return Some(Err(AckError::Rejected("result_mismatch".into())));
+            }
+            Some(LegacyTerminalProof::Completed {
+                reply_client_message_id: actual_client_id.unwrap_or_default().to_string(),
+                reply_digest: actual_digest,
+            })
+        }
+        (
+            Some(ChatroomCommand::AgentEvent {
+                event: AgentEventPayload::Failed { code, .. },
+                ..
+            }),
+            _,
+        ) => {
+            let Some(actual_failure_code) = payload.get("failureCode").and_then(Value::as_str)
+            else {
+                return Some(Err(AckError::Rejected("result_mismatch".into())));
+            };
+            if !is_chatroom_failure_code(actual_failure_code) || actual_failure_code != code {
+                return Some(Err(AckError::Rejected("result_mismatch".into())));
+            }
+            Some(LegacyTerminalProof::Failed {
+                failure_code: actual_failure_code.to_string(),
+            })
+        }
+        (
+            None,
+            LegacyLifecycleExpectation::Status {
+                status,
+                client_message_id,
+                reply_digest: expected_digest,
+                failure_code,
+                ..
+            },
+        ) if status == "completed" => {
+            let Some(content) = payload.get("content").and_then(Value::as_str) else {
+                return Some(Err(AckError::Rejected("result_mismatch".into())));
+            };
+            let Some(actual_client_id) = payload.get("clientMessageId").and_then(Value::as_str)
+            else {
+                return Some(Err(AckError::Rejected("result_mismatch".into())));
+            };
+            let mentions = payload
+                .get("mentionAgentIds")
+                .and_then(Value::as_array)?
+                .iter()
+                .map(Value::as_str)
+                .collect::<Option<Vec<_>>>()?;
+            let attachments = payload
+                .get("attachmentIds")
+                .and_then(Value::as_array)?
+                .iter()
+                .map(Value::as_str)
+                .collect::<Option<Vec<_>>>()?;
+            let actual_digest = reply_digest(&ChatroomReplyDigestInput {
+                client_message_id: actual_client_id,
+                content,
+                mention_agent_ids: &mentions,
+                attachment_ids: &attachments,
+            });
+            if actual_client_id != client_message_id
+                || !failure_code.is_empty()
+                || actual_digest != *expected_digest
+            {
+                return Some(Err(AckError::Rejected("result_mismatch".into())));
+            }
+            Some(LegacyTerminalProof::Completed {
+                reply_client_message_id: actual_client_id.to_string(),
+                reply_digest: actual_digest,
+            })
+        }
+        (
+            None,
+            LegacyLifecycleExpectation::Status {
+                status,
+                failure_code,
+                client_message_id,
+                reply_digest,
+                ..
+            },
+        ) if status == "failed" => {
+            let Some(actual_failure_code) = payload.get("failureCode").and_then(Value::as_str)
+            else {
+                return Some(Err(AckError::Rejected("result_mismatch".into())));
+            };
+            if !is_chatroom_failure_code(actual_failure_code)
+                || actual_failure_code != failure_code
+                || !client_message_id.is_empty()
+                || !reply_digest.is_empty()
+            {
+                return Some(Err(AckError::Rejected("result_mismatch".into())));
+            }
+            Some(LegacyTerminalProof::Failed {
+                failure_code: actual_failure_code.to_string(),
+            })
+        }
+        _ => return Some(Err(AckError::Rejected("result_mismatch".into()))),
+    };
+    Some(Ok(terminal_proof))
+}
 
 pub(crate) trait GatewayClock: Send + Sync {
     fn now(&self) -> Instant;
@@ -101,6 +671,7 @@ fn auth_error_message(error: &AuthError) -> String {
 pub trait ChatroomBridge: Send + Sync {
     fn send_invocation(&self, body: Vec<u8>, shutdown: &AtomicBool) -> Result<(), String>;
     fn send_disconnected(&self, body: Vec<u8>, shutdown: &AtomicBool) -> Result<(), String>;
+    fn send_server_failure(&self, body: Vec<u8>, shutdown: &AtomicBool) -> Result<(), String>;
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -110,6 +681,15 @@ pub struct ChatroomGatewayError {
     pub message: String,
 }
 
+/// 只暴露当前 WebSocket 代际在全量初始 snapshot 中确认的能力。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GatewayCapabilityState {
+    pub socket_generation: u64,
+    pub selected: Vec<ChatroomCapability>,
+}
+
+type GatewayOrigin = ChatroomOrigin;
+
 impl ChatroomGatewayError {
     fn new(status: u16, code: impl Into<String>, message: impl Into<String>) -> Self {
         Self {
@@ -118,6 +698,65 @@ impl ChatroomGatewayError {
             message: message.into(),
         }
     }
+}
+
+fn lifecycle_unknown(message: impl Into<String>) -> ChatroomGatewayError {
+    ChatroomGatewayError::new(503, "lifecycle_unknown", message)
+}
+
+fn lifecycle_boot_id() -> Result<String, ChatroomGatewayError> {
+    let mut bytes = [0_u8; 16];
+    getrandom::getrandom(&mut bytes).map_err(|_| {
+        ChatroomGatewayError::new(
+            500,
+            "gateway_entropy_unavailable",
+            "无法生成聊天室生命周期请求标识",
+        )
+    })?;
+    Ok(bytes.iter().map(|byte| format!("{byte:02x}")).collect())
+}
+
+fn lifecycle_request_id(boot_id: &str, counter: u64) -> String {
+    format!("gw-{boot_id}-{counter}")
+}
+
+fn lifecycle_ack_error(error: AckError) -> ChatroomGatewayError {
+    match error {
+        AckError::Rejected(code) if matches!(code.as_str(), "forbidden" | "not_member") => {
+            ChatroomGatewayError::new(403, "lifecycle_rejected", code)
+        }
+        AckError::Rejected(code) => ChatroomGatewayError::new(409, "lifecycle_rejected", code),
+        AckError::Full | AckError::DuplicateRequest => {
+            ChatroomGatewayError::new(503, "lifecycle_unavailable", "生命周期确认队列不可用")
+        }
+        AckError::Timeout | AckError::Disconnected | AckError::MismatchedAck => {
+            lifecycle_unknown("未收到可验证的聊天室生命周期确认")
+        }
+    }
+}
+
+pub(super) fn valid_lifecycle_confirmation(
+    confirmed: &ConfirmedCommand,
+    room_id: &str,
+    invocation_id: &str,
+    command: &str,
+    request_id: &str,
+    status: &str,
+    generation: u64,
+) -> bool {
+    let status_matches_command = match (command, status, confirmed.status.as_deref()) {
+        ("agent.accepted", "accepted", Some("accepted" | "running")) => true,
+        ("agent.running", "running", Some("running")) => true,
+        ("agent.completed", "completed", Some("completed")) => true,
+        ("agent.failed", "failed", Some("failed")) => true,
+        _ => false,
+    };
+    confirmed.room_id == room_id
+        && confirmed.invocation_id.as_deref() == Some(invocation_id)
+        && confirmed.command == command
+        && confirmed.request_id == request_id
+        && status_matches_command
+        && confirmed.generation == generation
 }
 
 pub enum GatewayHttpResponse {
@@ -227,8 +866,20 @@ struct LeaseState {
 
 enum GatewayTask {
     Recover(String),
-    Invocation(ChatroomEvent),
+    Invocation {
+        event: ChatroomEvent,
+        origin: GatewayOrigin,
+    },
+    #[cfg(test)]
+    TestInvocation(ChatroomEvent),
     Disconnected(Vec<u8>),
+    ServerFailure {
+        body: Vec<u8>,
+        room_id: String,
+        client_generation: u64,
+        socket_generation: u64,
+        auth_epoch: u64,
+    },
     PruneInaccessible(u64),
 }
 
@@ -261,6 +912,7 @@ enum Route<'a> {
     Messages(&'a str),
     Events(&'a str),
     TerminalInvocations(&'a str),
+    InvocationMetadata(&'a str, &'a str),
     Agents(&'a str),
     Agent(&'a str, &'a str),
     Lease(&'a str, &'a str),
@@ -271,7 +923,13 @@ enum Route<'a> {
     InternalFinalize,
     InternalLeaseRelease,
     InternalRoomStatus(&'a str),
+    InternalAgentReadiness(&'a str, &'a str, bool),
     InternalInvocation(&'a str, &'a str),
+    InternalInvocationStatus(&'a str, &'a str),
+    InternalExecutionBinding(bool),
+    InternalManagementCapabilities,
+    InternalManagementOperation(&'a str),
+    InternalManagementStatus(&'a str),
 }
 
 pub struct ChatroomGateway {
@@ -279,7 +937,10 @@ pub struct ChatroomGateway {
     client: Arc<ChatroomClient>,
     transport: Arc<dyn GatewayTransport>,
     bridge: Arc<dyn ChatroomBridge>,
+    execution_registry: Mutex<Arc<ChatroomExecutionRegistry>>,
+    native_workers: Mutex<Option<Arc<super::pi_rpc::PiWorkerManager>>>,
     device_id: String,
+    protocol_options: ChatroomProtocolOptions,
     rooms: Mutex<HashMap<String, RoomState>>,
     subscribers: Arc<Mutex<HashMap<u64, Subscriber>>>,
     leases: Mutex<HashMap<(String, String), LeaseState>>,
@@ -295,6 +956,13 @@ pub struct ChatroomGateway {
     connection_paused: AtomicBool,
     accepted_client_generation: AtomicU64,
     websocket_connected: AtomicBool,
+    advertised_capabilities: Mutex<(u64, Vec<ChatroomCapability>)>,
+    capability_probe_sequence: AtomicU64,
+    next_lifecycle_request_id: AtomicU64,
+    lifecycle_boot_id: String,
+    legacy_lifecycle_waiters: LegacyLifecycleWaiters,
+    legacy_accepted: Mutex<HashSet<(u64, String, String)>>,
+    legacy_status_wait_timeout: Mutex<Duration>,
     disconnected_notified: AtomicBool,
     pending_disconnected: AtomicBool,
     clock: Arc<dyn GatewayClock>,
@@ -305,6 +973,10 @@ pub struct ChatroomGateway {
     task_workers: Mutex<Vec<JoinHandle<()>>>,
     #[cfg(test)]
     task_gate: Mutex<Option<TaskGate>>,
+    #[cfg(test)]
+    invocation_dispatch_observer: Mutex<Option<mpsc::Sender<(u64, u64, u64)>>>,
+    #[cfg(test)]
+    saturated_task_receiver: Mutex<Option<mpsc::Receiver<GatewayTask>>>,
     #[cfg(test)]
     sse_registration_gate: Mutex<Option<SseRegistrationGate>>,
     #[cfg(test)]
@@ -320,15 +992,17 @@ impl ChatroomGateway {
         connector: Arc<dyn ChatroomSocketConnector>,
         bridge: Arc<dyn ChatroomBridge>,
         device_id: String,
+        protocol_options: ChatroomProtocolOptions,
     ) -> Result<Arc<Self>, ChatroomGatewayError> {
         let transport = Arc::new(AuthGatewayTransport { auth });
-        Self::new_with_transport(
+        Self::new_with_transport_and_options(
             transport.auth.clone(),
             edu_base_url,
             connector,
             bridge,
             device_id,
             transport,
+            protocol_options,
         )
     }
 
@@ -341,14 +1015,35 @@ impl ChatroomGateway {
         device_id: String,
         transport: Arc<dyn GatewayTransport>,
     ) -> Result<Arc<Self>, ChatroomGatewayError> {
-        Self::new_with_transport_and_clock(
+        Self::new_with_transport_and_options(
             _auth,
             edu_base_url,
             connector,
             bridge,
             device_id,
             transport,
+            ChatroomProtocolOptions::default(),
+        )
+    }
+
+    pub(crate) fn new_with_transport_and_options(
+        auth: Arc<AuthSession>,
+        edu_base_url: String,
+        connector: Arc<dyn ChatroomSocketConnector>,
+        bridge: Arc<dyn ChatroomBridge>,
+        device_id: String,
+        transport: Arc<dyn GatewayTransport>,
+        protocol_options: ChatroomProtocolOptions,
+    ) -> Result<Arc<Self>, ChatroomGatewayError> {
+        Self::new_with_transport_and_clock_and_options(
+            auth,
+            edu_base_url,
+            connector,
+            bridge,
+            device_id,
+            transport,
             Arc::new(SystemGatewayClock),
+            protocol_options,
         )
     }
 
@@ -361,15 +1056,41 @@ impl ChatroomGateway {
         transport: Arc<dyn GatewayTransport>,
         clock: Arc<dyn GatewayClock>,
     ) -> Result<Arc<Self>, ChatroomGatewayError> {
+        Self::new_with_transport_and_clock_and_options(
+            auth,
+            edu_base_url,
+            connector,
+            bridge,
+            device_id,
+            transport,
+            clock,
+            ChatroomProtocolOptions::default(),
+        )
+    }
+
+    pub(crate) fn new_with_transport_and_clock_and_options(
+        auth: Arc<AuthSession>,
+        edu_base_url: String,
+        connector: Arc<dyn ChatroomSocketConnector>,
+        bridge: Arc<dyn ChatroomBridge>,
+        device_id: String,
+        transport: Arc<dyn GatewayTransport>,
+        clock: Arc<dyn GatewayClock>,
+        protocol_options: ChatroomProtocolOptions,
+    ) -> Result<Arc<Self>, ChatroomGatewayError> {
         let url = chatroom_ws_url(&edu_base_url)
             .map_err(|_| invalid_request("聊天室实时服务地址不合法"))?;
+        let lifecycle_boot_id = lifecycle_boot_id()?;
         let (events, receiver) = mpsc::channel();
         Ok(Arc::new(Self {
             auth: auth.clone(),
             client: Arc::new(ChatroomClient::new(auth, url, connector, events)),
             transport,
             bridge,
+            execution_registry: Mutex::new(Arc::new(ChatroomExecutionRegistry::default())),
+            native_workers: Mutex::new(None),
             device_id,
+            protocol_options,
             rooms: Mutex::new(HashMap::new()),
             subscribers: Arc::new(Mutex::new(HashMap::new())),
             leases: Mutex::new(HashMap::new()),
@@ -385,6 +1106,13 @@ impl ChatroomGateway {
             connection_paused: AtomicBool::new(false),
             accepted_client_generation: AtomicU64::new(NO_CLIENT_GENERATION),
             websocket_connected: AtomicBool::new(false),
+            advertised_capabilities: Mutex::new((0, Vec::new())),
+            capability_probe_sequence: AtomicU64::new(0),
+            next_lifecycle_request_id: AtomicU64::new(1),
+            lifecycle_boot_id,
+            legacy_lifecycle_waiters: LegacyLifecycleWaiters::default(),
+            legacy_accepted: Mutex::new(HashSet::new()),
+            legacy_status_wait_timeout: Mutex::new(Duration::from_secs(5)),
             disconnected_notified: AtomicBool::new(false),
             pending_disconnected: AtomicBool::new(false),
             last_lease_tick: Mutex::new(clock.now()),
@@ -395,6 +1123,10 @@ impl ChatroomGateway {
             task_workers: Mutex::new(Vec::new()),
             #[cfg(test)]
             task_gate: Mutex::new(None),
+            #[cfg(test)]
+            invocation_dispatch_observer: Mutex::new(None),
+            #[cfg(test)]
+            saturated_task_receiver: Mutex::new(None),
             #[cfg(test)]
             sse_registration_gate: Mutex::new(None),
             #[cfg(test)]
@@ -420,12 +1152,155 @@ impl ChatroomGateway {
         self.refresh_subscription_snapshot();
     }
 
+    pub fn attach_execution_runtime(
+        &self,
+        registry: Arc<ChatroomExecutionRegistry>,
+        workers: Arc<super::pi_rpc::PiWorkerManager>,
+    ) {
+        *self.execution_registry.lock().unwrap() = registry;
+        *self.native_workers.lock().unwrap() = Some(workers);
+    }
+
+    /// 能力广告只用于发起可选请求；有效选择必须来自同代 WS 初始 snapshot。
+    pub fn capability_state(&self) -> GatewayCapabilityState {
+        let active_generation = self.client.active_socket_generation();
+        let (socket_generation, selected) = self.client.selected_capabilities();
+        let (advertised_generation, advertised) =
+            self.advertised_capabilities.lock().unwrap().clone();
+        if active_generation != 0
+            && active_generation == socket_generation
+            && active_generation == advertised_generation
+        {
+            GatewayCapabilityState {
+                socket_generation,
+                selected: selected
+                    .into_iter()
+                    .filter(|capability| advertised.contains(capability))
+                    .collect(),
+            }
+        } else {
+            GatewayCapabilityState {
+                socket_generation: 0,
+                selected: Vec::new(),
+            }
+        }
+    }
+
+    fn capability_probe_enabled(&self) -> bool {
+        !self.protocol_options.requested_capabilities().is_empty()
+    }
+
+    fn modern_protocol_selected(&self) -> bool {
+        if !self.protocol_options.modern_execution_enabled() {
+            return false;
+        }
+        let active_generation = self.client.active_socket_generation();
+        let capability = self.capability_state();
+        active_generation != 0
+            && capability.socket_generation == active_generation
+            && capability
+                .selected
+                .contains(&ChatroomCapability::AgentReadyV1)
+            && capability
+                .selected
+                .contains(&ChatroomCapability::InvocationAckV1)
+    }
+
+    #[cfg(test)]
+    pub(super) fn lifecycle_request_id_for_test(&self, counter: u64) -> String {
+        lifecycle_request_id(&self.lifecycle_boot_id, counter)
+    }
+
+    #[cfg(test)]
+    pub(super) fn active_socket_generation_for_test(&self) -> u64 {
+        self.client.active_socket_generation()
+    }
+
+    #[cfg(test)]
+    pub(super) fn set_current_socket_generations_for_test(
+        &self,
+        client_generation: u64,
+        socket_generation: u64,
+    ) {
+        self.accepted_client_generation
+            .store(client_generation, Ordering::Release);
+        self.client
+            .set_active_socket_generation_for_test(socket_generation);
+        self.connection_paused.store(false, Ordering::Release);
+    }
+
+    #[cfg(test)]
+    pub(super) fn set_capabilities_for_test(
+        &self,
+        socket_generation: u64,
+        capabilities: Vec<ChatroomCapability>,
+    ) {
+        self.client
+            .set_selected_capabilities_for_test(socket_generation, capabilities.clone());
+        *self.advertised_capabilities.lock().unwrap() = (socket_generation, capabilities);
+    }
+
+    #[cfg(test)]
+    pub(super) fn set_room_snapshot_ready_for_test(&self, room_id: &str) {
+        self.websocket_connected.store(true, Ordering::Release);
+        let mut room = RoomState::new();
+        room.subscribed = true;
+        room.snapshot_ready = true;
+        self.rooms.lock().unwrap().insert(room_id.to_string(), room);
+    }
+
+    #[cfg(test)]
+    pub(super) fn start_task_pool_for_test(self: &Arc<Self>) {
+        self.start_task_pool();
+    }
+
+    #[cfg(test)]
+    pub(super) fn fill_task_queue_for_test(&self) {
+        let (sender, receiver) = mpsc::sync_channel::<GatewayTask>(TASK_QUEUE_CAPACITY);
+        for _ in 0..TASK_QUEUE_CAPACITY {
+            sender
+                .try_send(GatewayTask::Recover("queue-full-test".into()))
+                .unwrap();
+        }
+        *self.task_sender.lock().unwrap() = Some(sender);
+        *self.saturated_task_receiver.lock().unwrap() = Some(receiver);
+    }
+
+    #[cfg(test)]
+    pub(super) fn handle_socket_event_for_test(
+        &self,
+        client_generation: u64,
+        socket_generation: u64,
+        event: ChatroomEvent,
+    ) {
+        self.handle_socket_event(client_generation, Some(socket_generation), event);
+    }
+
+    #[cfg(test)]
+    pub(super) fn pause_generation_for_test(&self) -> u64 {
+        self.client.pause_generation()
+    }
+
+    #[cfg(test)]
+    pub(super) fn websocket_connected_for_test(&self) -> bool {
+        self.websocket_connected.load(Ordering::Acquire)
+    }
+
+    #[cfg(test)]
+    pub(super) fn room_snapshot_for_test(&self, room_id: &str) -> Option<ChatroomEvent> {
+        self.rooms
+            .lock()
+            .unwrap()
+            .get(room_id)
+            .and_then(|state| state.snapshot.clone())
+    }
+
     fn start_task_pool(self: &Arc<Self>) {
         let mut sender_slot = self.task_sender.lock().unwrap();
         if sender_slot.is_some() {
             return;
         }
-        let (sender, receiver) = mpsc::sync_channel(TASK_QUEUE_CAPACITY);
+        let (sender, receiver) = mpsc::sync_channel::<GatewayTask>(TASK_QUEUE_CAPACITY);
         let receiver = Arc::new(Mutex::new(receiver));
         let mut workers = self.task_workers.lock().unwrap();
         for _ in 0..TASK_WORKER_COUNT {
@@ -455,8 +1330,27 @@ impl ChatroomGateway {
                 }
                 match task {
                     GatewayTask::Recover(room_id) => gateway.recover_room(room_id),
-                    GatewayTask::Invocation(event) => gateway.forward_invocation_now(&event),
+                    GatewayTask::Invocation { event, origin } => {
+                        gateway.forward_invocation_now(&event, origin)
+                    }
+                    #[cfg(test)]
+                    GatewayTask::TestInvocation(event) => {
+                        gateway.forward_invocation_for_test(&event)
+                    }
                     GatewayTask::Disconnected(body) => gateway.send_disconnected_bridge(body),
+                    GatewayTask::ServerFailure {
+                        body,
+                        room_id,
+                        client_generation,
+                        socket_generation,
+                        auth_epoch,
+                    } => gateway.send_server_failure_if_current(
+                        body,
+                        &room_id,
+                        client_generation,
+                        socket_generation,
+                        auth_epoch,
+                    ),
                     GatewayTask::PruneInaccessible(epoch) => {
                         gateway.prune_inaccessible_subscriptions(epoch);
                         gateway.prune_queued.store(false, Ordering::Release);
@@ -523,22 +1417,44 @@ impl ChatroomGateway {
                             .expect("测试 client event acceptance 未收到放行信号");
                     }
                 }
-                let _auth_boundary = self.auth_boundary.lock().unwrap();
-                if candidate
-                    && generation == self.client.pause_generation()
-                    && self.auth.auth_state().authenticated
-                {
-                    self.accepted_client_generation
-                        .store(generation, Ordering::Release);
-                    self.connection_paused.store(false, Ordering::Release);
-                    self.websocket_connected.store(true, Ordering::Release);
-                    self.realtime_epoch.fetch_add(1, Ordering::AcqRel);
-                    self.disconnected_notified.store(false, Ordering::Release);
-                    self.publish_status(None, "realtime_connected", "聊天室实时连接已建立");
+                let accepted = {
+                    let _auth_boundary = self.auth_boundary.lock().unwrap();
+                    if candidate
+                        && generation == self.client.pause_generation()
+                        && self.auth.auth_state().authenticated
+                    {
+                        self.accepted_client_generation
+                            .store(generation, Ordering::Release);
+                        self.connection_paused.store(false, Ordering::Release);
+                        self.websocket_connected.store(true, Ordering::Release);
+                        self.realtime_epoch.fetch_add(1, Ordering::AcqRel);
+                        if self.capability_probe_enabled() {
+                            *self.last_subscription.lock().unwrap() = None;
+                            *self.advertised_capabilities.lock().unwrap() = (0, Vec::new());
+                        }
+                        self.disconnected_notified.store(false, Ordering::Release);
+                        self.publish_status(None, "realtime_connected", "聊天室实时连接已建立");
+                        true
+                    } else {
+                        false
+                    }
+                };
+                if accepted {
+                    let socket_generation = self.client.active_socket_generation();
+                    let revoked = self
+                        .execution_registry
+                        .lock()
+                        .unwrap()
+                        .revoke_stale_sources(generation, socket_generation);
+                    self.revoke_native_bindings(revoked);
                     self.refresh_subscription_snapshot();
                 }
             }
             ChatroomClientEvent::Disconnected => {
+                self.legacy_lifecycle_waiters.invalidate_all();
+                self.legacy_accepted.lock().unwrap().clear();
+                let revoked = self.execution_registry.lock().unwrap().revoke_all();
+                self.revoke_native_bindings(revoked);
                 let _auth_boundary = self.auth_boundary.lock().unwrap();
                 self.notify_disconnected();
             }
@@ -558,39 +1474,214 @@ impl ChatroomGateway {
             }
             ChatroomClientEvent::Event(_) => {}
             ChatroomClientEvent::EventAt { generation, event } => {
-                let candidate = !self.connection_paused.load(Ordering::Acquire)
-                    && self.accepted_client_generation.load(Ordering::Acquire) == generation;
-                #[cfg(test)]
-                if candidate {
-                    if let Some(gate) = self.client_event_acceptance_gate.lock().unwrap().take() {
-                        let _ = gate.loaded.send(());
-                        gate.release
-                            .recv_timeout(Duration::from_secs(1))
-                            .expect("测试 client event acceptance 未收到放行信号");
+                self.handle_socket_event(generation, None, event)
+            }
+            ChatroomClientEvent::SocketEventAt {
+                generation,
+                socket_generation,
+                event,
+            } => self.handle_socket_event(generation, Some(socket_generation), event),
+        }
+    }
+
+    fn handle_socket_event(
+        &self,
+        generation: u64,
+        socket_generation: Option<u64>,
+        event: ChatroomEvent,
+    ) {
+        // EventAt 是旧内部事件兼容形状（没有 socket generation），只保留公开事件兼容，
+        // 不能作为生命周期、accepted cache 或当前连接事件的证明。
+        let socket_generation_matches = || {
+            socket_generation.is_none_or(|socket_generation| {
+                socket_generation != 0
+                    && self.client.active_socket_generation() == socket_generation
+            })
+        };
+        let delta_frame_valid = match &event {
+            ChatroomEvent::AgentDelta { payload, .. } => {
+                let id_selected = socket_generation.is_some_and(|generation| {
+                    let capability = self.capability_state();
+                    capability.socket_generation == generation
+                        && capability
+                            .selected
+                            .contains(&ChatroomCapability::AgentDeltaFrameIdV1)
+                });
+                crate::chatroom_protocol::validate_delta_frame_selection(payload, id_selected)
+                    .is_ok()
+            }
+            _ => true,
+        };
+        let candidate = delta_frame_valid
+            && !self.connection_paused.load(Ordering::Acquire)
+            && self.accepted_client_generation.load(Ordering::Acquire) == generation
+            && socket_generation_matches();
+        #[cfg(test)]
+        if candidate {
+            if let Some(gate) = self.client_event_acceptance_gate.lock().unwrap().take() {
+                let _ = gate.loaded.send(());
+                gate.release
+                    .recv_timeout(Duration::from_secs(1))
+                    .expect("测试 client event acceptance 未收到放行信号");
+            }
+        }
+        let _auth_boundary = self.auth_boundary.lock().unwrap();
+        let accepted = candidate
+            && !self.connection_paused.load(Ordering::Acquire)
+            && self.accepted_client_generation.load(Ordering::Acquire) == generation
+            && socket_generation_matches()
+            && self.auth.auth_state().authenticated;
+        let should_prune = accepted
+            && matches!(&event,
+            ChatroomEvent::LocalStatus { code, .. } if matches!(code.as_str(), "not_found" | "not_member" | "forbidden"));
+        let mut terminal_task = None;
+        let mut revoked_binding = None;
+        let mut deferred_failure_event = None;
+        let origin = socket_generation.map(|socket_generation| GatewayOrigin {
+            client_generation: generation,
+            socket_generation,
+            auth_epoch: self.auth_epoch.load(Ordering::Acquire),
+        });
+        let mut invocation_task = None;
+        if accepted {
+            if let Some(socket_generation) = socket_generation {
+                observe_legacy_lifecycle(
+                    &self.legacy_lifecycle_waiters,
+                    &self.legacy_accepted,
+                    socket_generation,
+                    &event,
+                );
+                if let ChatroomEvent::AgentCompleted { room_id, payload }
+                | ChatroomEvent::AgentFailed { room_id, payload } = &event
+                {
+                    if let Some(invocation_id) = payload.get("invocationId").and_then(Value::as_str)
+                    {
+                        self.legacy_accepted.lock().unwrap().remove(&(
+                            socket_generation,
+                            room_id.clone(),
+                            invocation_id.to_string(),
+                        ));
                     }
                 }
-                let _auth_boundary = self.auth_boundary.lock().unwrap();
-                let accepted = candidate
-                    && !self.connection_paused.load(Ordering::Acquire)
-                    && self.accepted_client_generation.load(Ordering::Acquire) == generation
-                    && self.auth.auth_state().authenticated;
-                let should_prune = accepted
-                    && matches!(&event,
-                    ChatroomEvent::LocalStatus { code, .. } if matches!(code.as_str(), "not_found" | "not_member" | "forbidden"));
-                if accepted {
-                    self.publish_event(event);
-                }
-                drop(_auth_boundary);
-                if should_prune {
-                    self.schedule_inaccessible_prune();
+            }
+            terminal_task = socket_generation.and_then(|socket_generation| {
+                let ChatroomEvent::AgentFailed { room_id, payload } = &event else {
+                    return None;
+                };
+                let invocation_id = payload
+                    .get("invocationId")
+                    .and_then(Value::as_str)
+                    .filter(|value| valid_component(value))?;
+                let failure_code = payload
+                    .get("failureCode")
+                    .and_then(Value::as_str)
+                    .filter(|value| valid_component(value))
+                    .unwrap_or("internal_error");
+                let body = serde_json::json!({
+                    "event": "agent.failed",
+                    "roomId": room_id,
+                    "invocationId": invocation_id,
+                    "failureCode": failure_code,
+                    "clientGeneration": generation,
+                    "socketGeneration": socket_generation,
+                    "authEpoch": self.auth_epoch.load(Ordering::Acquire),
+                })
+                .to_string()
+                .into_bytes();
+                Some((
+                    body,
+                    room_id.clone(),
+                    socket_generation,
+                    self.auth_epoch.load(Ordering::Acquire),
+                ))
+            });
+            if let (Some(origin), ChatroomEvent::AgentInvocation { room_id, payload }) =
+                (origin, &event)
+            {
+                let invocation_id = payload
+                    .get("invocationId")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                let target_agent_id = payload
+                    .get("targetAgentId")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                let subscribed = self
+                    .rooms
+                    .lock()
+                    .unwrap()
+                    .get(room_id)
+                    .is_some_and(|room| room.subscribed);
+                let recorded = subscribed
+                    && !invocation_id.is_empty()
+                    && !target_agent_id.is_empty()
+                    && self.execution_registry.lock().unwrap().record_source(
+                        room_id,
+                        invocation_id,
+                        target_agent_id,
+                        origin,
+                    );
+                if recorded {
+                    invocation_task = Some((event.clone(), origin));
                 }
             }
+            if let (Some(socket_generation), ChatroomEvent::AgentFailed { room_id, payload }) =
+                (socket_generation, &event)
+            {
+                if let Some(invocation_id) = payload.get("invocationId").and_then(Value::as_str) {
+                    revoked_binding = self
+                        .execution_registry
+                        .lock()
+                        .unwrap()
+                        .revoke_invocation(room_id, invocation_id);
+                }
+                let _ = socket_generation;
+                deferred_failure_event = Some(event.clone());
+            }
+            if deferred_failure_event.is_none() {
+                self.publish_event(event);
+            }
+        }
+        drop(_auth_boundary);
+        if let Some(binding) = revoked_binding {
+            self.revoke_native_bindings(vec![binding]);
+        }
+        if let Some(event) = deferred_failure_event {
+            self.publish_event(event);
+        }
+        if let Some((event, origin)) = invocation_task {
+            self.forward_invocation(&event, origin);
+        }
+        if let Some((body, room_id, socket_generation, auth_epoch)) = terminal_task {
+            let task = GatewayTask::ServerFailure {
+                body: body.clone(),
+                room_id: room_id.clone(),
+                client_generation: generation,
+                socket_generation,
+                auth_epoch,
+            };
+            if self.dispatch_task(task).is_err() {
+                self.send_server_failure_if_current(
+                    body,
+                    &room_id,
+                    generation,
+                    socket_generation,
+                    auth_epoch,
+                );
+            }
+        }
+        if should_prune {
+            self.schedule_inaccessible_prune();
         }
     }
 
     fn notify_disconnected(&self) {
+        self.legacy_lifecycle_waiters.invalidate_all();
+        self.legacy_accepted.lock().unwrap().clear();
         self.websocket_connected.store(false, Ordering::Release);
         self.realtime_epoch.fetch_add(1, Ordering::AcqRel);
+        *self.last_subscription.lock().unwrap() = None;
+        *self.advertised_capabilities.lock().unwrap() = (0, Vec::new());
         for state in self.rooms.lock().unwrap().values_mut() {
             state.snapshot_ready = false;
         }
@@ -612,10 +1703,105 @@ impl ChatroomGateway {
         self.publish_status(None, "realtime_disconnected", "聊天室实时连接已断开");
     }
 
+    fn revoke_native_bindings(&self, bindings: Vec<ChatroomExecutionBinding>) {
+        let workers = self.native_workers.lock().unwrap().clone();
+        let Some(workers) = workers else { return };
+        for binding in bindings {
+            let mut stopped = false;
+            for attempt in 0..3 {
+                match workers.revoke_chatroom_binding(&binding) {
+                    Ok(_) => {
+                        stopped = true;
+                        break;
+                    }
+                    Err(_) if attempt < 2 => {
+                        thread::sleep(Duration::from_millis(if attempt == 0 { 25 } else { 75 }))
+                    }
+                    Err(_) => {}
+                }
+            }
+            if stopped {
+                self.execution_registry
+                    .lock()
+                    .unwrap()
+                    .confirm_native_stop(&binding);
+            } else {
+                self.publish_status(
+                    Some(&binding.room_id),
+                    "execution_revoke_failed",
+                    "聊天室 Agent 执行撤权失败",
+                );
+            }
+        }
+    }
+
     fn send_disconnected_bridge(&self, body: Vec<u8>) {
         if self.bridge.send_disconnected(body, &self.shutdown).is_err() {
             self.publish_status(None, "bridge_unavailable", "聊天室业务桥不可用");
         }
+    }
+
+    fn send_server_failure_if_current(
+        &self,
+        body: Vec<u8>,
+        room_id: &str,
+        client_generation: u64,
+        socket_generation: u64,
+        auth_epoch: u64,
+    ) {
+        let origin = ChatroomOrigin {
+            client_generation,
+            socket_generation,
+            auth_epoch,
+        };
+        let current = self.server_failure_origin_is_current(room_id, origin);
+        if current {
+            self.send_server_failure_with_bounded_retry(body, room_id, origin);
+        }
+    }
+
+    fn send_server_failure_with_bounded_retry(
+        &self,
+        body: Vec<u8>,
+        room_id: &str,
+        origin: ChatroomOrigin,
+    ) {
+        for attempt in 0..3 {
+            if !self.server_failure_origin_is_current(room_id, origin) {
+                return;
+            }
+            if self
+                .bridge
+                .send_server_failure(body.clone(), &self.shutdown)
+                .is_ok()
+            {
+                return;
+            }
+            if attempt < 2 {
+                thread::sleep(Duration::from_millis(if attempt == 0 { 40 } else { 120 }));
+            }
+        }
+        self.publish_status(None, "bridge_unavailable", "聊天室服务端终态通知暂不可用");
+    }
+
+    fn server_failure_origin_is_current(&self, room_id: &str, origin: ChatroomOrigin) -> bool {
+        self.origin_is_current(origin)
+            && self
+                .rooms
+                .lock()
+                .unwrap()
+                .get(room_id)
+                .is_some_and(|room| room.subscribed)
+    }
+
+    fn origin_is_current(&self, origin: GatewayOrigin) -> bool {
+        let _auth_boundary = self.auth_boundary.lock().unwrap();
+        !self.shutdown.load(Ordering::Acquire)
+            && !self.connection_paused.load(Ordering::Acquire)
+            && self.accepted_client_generation.load(Ordering::Acquire) == origin.client_generation
+            && self.client.active_socket_generation() == origin.socket_generation
+            && self.auth_epoch.load(Ordering::Acquire) == origin.auth_epoch
+            && self.auth.auth_state().authenticated
     }
 
     fn drain_pending_disconnected(&self) {
@@ -646,6 +1832,25 @@ impl ChatroomGateway {
                 "聊天室网关已关闭",
             ));
         }
+        let (path, query) = split_target(target)?;
+        let route = parse_route(&path)?;
+        let method = method.to_ascii_uppercase();
+        let is_management_route = matches!(
+            route,
+            Route::InternalManagementCapabilities
+                | Route::InternalManagementOperation(_)
+                | Route::InternalManagementStatus(_)
+        );
+        if is_management_route && !query.is_empty() {
+            return Err(management_invalid_request("管理接口不接受查询参数"));
+        }
+        if is_management_route && body.len() > MAX_MANAGEMENT_BODY_BYTES {
+            return Err(ChatroomGatewayError::new(
+                400,
+                "invalid_request",
+                "管理请求体超过 64 KiB 限制",
+            ));
+        }
         if body.len() > MAX_BODY_BYTES {
             return Err(ChatroomGatewayError::new(
                 413,
@@ -653,9 +1858,6 @@ impl ChatroomGateway {
                 "请求体过大",
             ));
         }
-        let (path, query) = split_target(target)?;
-        let route = parse_route(&path)?;
-        let method = method.to_ascii_uppercase();
         if matches!(route, Route::LocalSse) {
             if method != "GET" {
                 return Err(method_not_allowed());
@@ -672,8 +1874,56 @@ impl ChatroomGateway {
             Route::InternalFinalize => self.handle_internal_finalize(body),
             Route::InternalLeaseRelease => self.handle_internal_lease_release(body),
             Route::InternalRoomStatus(room_id) => self.handle_internal_room_status(room_id),
+            Route::InternalAgentReadiness(room_id, agent_id, ready) => {
+                match self.handle_internal_agent_readiness(room_id, agent_id, ready, body) {
+                    Ok(response) => Ok(response),
+                    Err(error)
+                        if matches!(
+                            error.code.as_str(),
+                            "lifecycle_unknown"
+                                | "lifecycle_rejected"
+                                | "lifecycle_unavailable"
+                                | "legacy_mode"
+                                | "not_authenticated"
+                        ) =>
+                    {
+                        let legacy = error.code == "legacy_mode";
+                        let outcome = if matches!(error.status, 401 | 403)
+                            || error.code == "lifecycle_rejected"
+                        {
+                            "Rejected"
+                        } else {
+                            "Unknown"
+                        };
+                        Ok(GatewayHttpResponse::Json {
+                            status: error.status,
+                            body: serde_json::json!({
+                                "outcome": outcome,
+                                "mode": if legacy { "legacy" } else { "agent-ready-v1" },
+                                "source": if error.code == "lifecycle_rejected" { "private-ack" } else { "gateway" },
+                                "code": error.code,
+                                "error": error.message,
+                            }),
+                        })
+                    }
+                    Err(error) => Err(error),
+                }
+            }
             Route::InternalInvocation(invocation_id, state) => {
                 self.handle_internal_invocation(state, invocation_id, body)
+            }
+            Route::InternalInvocationStatus(room_id, invocation_id) => {
+                self.handle_internal_invocation_status(room_id, invocation_id, body)
+            }
+            Route::InternalExecutionBinding(bind) => {
+                self.handle_internal_execution_binding(bind, body)
+            }
+            Route::InternalManagementCapabilities => self.handle_management_capabilities(body),
+            Route::InternalManagementOperation(room_id) => {
+                self.handle_management_operation(room_id, body)
+            }
+            Route::InternalManagementStatus(room_id) => {
+                self.handle_management_status(room_id, body)
             }
             Route::Rooms
             | Route::Room(_)
@@ -685,12 +1935,180 @@ impl ChatroomGateway {
             | Route::Messages(_)
             | Route::Events(_)
             | Route::TerminalInvocations(_)
+            | Route::InvocationMetadata(_, _)
             | Route::Agents(_)
             | Route::Agent(_, _)
             | Route::Lease(_, _)
             | Route::Join => self.handle_public_http(&method, &path, &query, &route, body),
             Route::LocalSse => unreachable!(),
         }
+    }
+
+    fn management_identity(&self) -> Result<(u64, u64), ChatroomGatewayError> {
+        let _auth_boundary = self.auth_boundary.lock().unwrap();
+        if self.shutdown.load(Ordering::Acquire) {
+            return Err(ChatroomGatewayError::new(
+                503,
+                "gateway_closed",
+                "聊天室网关已关闭",
+            ));
+        }
+        let epoch = self.auth_epoch.load(Ordering::Acquire);
+        let (actor_id, _, _) = self.auth.image_task_identity().map_err(|error| {
+            let (status, code) = match error {
+                AuthError::NotAuthenticated => (401, "not_authenticated"),
+                _ => (503, "auth_unavailable"),
+            };
+            ChatroomGatewayError::new(status, code, error.to_string())
+        })?;
+        if actor_id == 0 || self.auth_epoch.load(Ordering::Acquire) != epoch {
+            return Err(ChatroomGatewayError::new(
+                401,
+                "auth_changed",
+                "Working 身份在管理请求开始前已变化",
+            ));
+        }
+        Ok((epoch, actor_id))
+    }
+
+    fn verify_management_identity(
+        &self,
+        epoch: u64,
+        actor_id: u64,
+    ) -> Result<std::sync::MutexGuard<'_, ()>, ChatroomGatewayError> {
+        let auth_boundary = self.auth_boundary.lock().unwrap();
+        if self.shutdown.load(Ordering::Acquire) {
+            return Err(ChatroomGatewayError::new(
+                503,
+                "gateway_closed",
+                "聊天室网关已关闭",
+            ));
+        }
+        let current_actor = self
+            .auth
+            .image_task_identity()
+            .ok()
+            .map(|identity| identity.0);
+        if self.auth_epoch.load(Ordering::Acquire) != epoch || current_actor != Some(actor_id) {
+            return Err(ChatroomGatewayError::new(
+                409,
+                "auth_changed",
+                "Working 身份在管理请求期间已变化，已丢弃旧响应",
+            ));
+        }
+        Ok(auth_boundary)
+    }
+
+    fn handle_management_capabilities(
+        &self,
+        body: &[u8],
+    ) -> Result<GatewayHttpResponse, ChatroomGatewayError> {
+        if !body.is_empty() {
+            return Err(management_invalid_request("能力探测不接受请求体"));
+        }
+        let (epoch, actor_id) = self.management_identity()?;
+        let response = self
+            .transport
+            .request(
+                "GET",
+                "/api/chatrooms/v2/agent-management/capabilities",
+                None,
+            )
+            .map_err(management_transport_error)?;
+        let _auth_boundary = self.verify_management_identity(epoch, actor_id)?;
+        if !(200..300).contains(&response.status) {
+            return Ok(management_error_response(response));
+        }
+        if response.status == 204 || response.body.is_empty() {
+            return Err(invalid_management_response("上游能力响应缺少版本信息"));
+        }
+        let value = parse_management_response(&response.body)?;
+        let body = crate::chatroom_management::validate_capabilities_envelope(value)
+            .map_err(|_| invalid_management_response("上游能力响应不符合管理协议 v1"))?;
+        Ok(GatewayHttpResponse::Json {
+            status: response.status,
+            body,
+        })
+    }
+
+    fn handle_management_operation(
+        &self,
+        room_id: &str,
+        body: &[u8],
+    ) -> Result<GatewayHttpResponse, ChatroomGatewayError> {
+        let value = parse_management_body(body)?;
+        let command = crate::chatroom_management::parse_command(value, &self.device_id)
+            .map_err(|_| management_invalid_request("管理命令字段、类型或设备身份不正确"))?;
+        let (epoch, actor_id) = self.management_identity()?;
+        let path = format!("/api/chatrooms/v2/rooms/{room_id}/agent-management/operations");
+        let response = self
+            .transport
+            .request("POST", &path, Some(command.body.to_string()))
+            .map_err(management_transport_error)?;
+        let _auth_boundary = self.verify_management_identity(epoch, actor_id)?;
+        if !(200..300).contains(&response.status) {
+            return Ok(management_error_response(response));
+        }
+        if response.status == 204 || response.body.is_empty() {
+            return Err(invalid_management_response("上游管理写入未返回回执"));
+        }
+        let value = parse_management_response(&response.body)?;
+        let body = crate::chatroom_management::validate_receipt_envelope(
+            value, &command, room_id, actor_id,
+        )
+        .map_err(|_| invalid_management_response("上游管理回执与请求身份不匹配"))?;
+        let room_agent_id = body["data"]["roomAgentId"]
+            .as_str()
+            .expect("已校验的管理回执含 roomAgentId");
+        if command.action == "remove" {
+            self.remove_management_lease(room_id, room_agent_id);
+        }
+        Ok(GatewayHttpResponse::Json {
+            status: response.status,
+            body,
+        })
+    }
+
+    fn handle_management_status(
+        &self,
+        room_id: &str,
+        body: &[u8],
+    ) -> Result<GatewayHttpResponse, ChatroomGatewayError> {
+        let value = parse_management_body(body)?;
+        let query = crate::chatroom_management::parse_status_query(value, &self.device_id)
+            .map_err(|_| management_invalid_request("管理状态查询字段、类型或设备身份不正确"))?;
+        let (epoch, actor_id) = self.management_identity()?;
+        let path = format!("/api/chatrooms/v2/rooms/{room_id}/agent-management/operations/status");
+        let response = self
+            .transport
+            .request("POST", &path, Some(query.body.to_string()))
+            .map_err(management_transport_error)?;
+        let _auth_boundary = self.verify_management_identity(epoch, actor_id)?;
+        if !(200..300).contains(&response.status) {
+            return Ok(management_error_response(response));
+        }
+        if response.status == 204 || response.body.is_empty() {
+            return Err(invalid_management_response("上游管理状态查询未返回回执"));
+        }
+        let value = parse_management_response(&response.body)?;
+        let body = crate::chatroom_management::validate_status_receipt_envelope(
+            value,
+            &query.operation_id,
+            room_id,
+            actor_id,
+        )
+        .map_err(|_| invalid_management_response("上游管理状态回执与请求身份不匹配"))?;
+        Ok(GatewayHttpResponse::Json {
+            status: response.status,
+            body,
+        })
+    }
+
+    fn remove_management_lease(&self, room_id: &str, agent_id: &str) {
+        self.leases
+            .lock()
+            .unwrap()
+            .remove(&(room_id.to_string(), agent_id.to_string()));
     }
 
     fn handle_public_http(
@@ -713,12 +2131,31 @@ impl ChatroomGateway {
             .transport
             .request(method, &upstream_path, request_body)
             .map_err(|message| ChatroomGatewayError::new(502, "upstream_unavailable", message))?;
+        if let Route::InvocationMetadata(room_id, invocation_id) = route {
+            if (200..300).contains(&response.status) {
+                let body =
+                    validate_invocation_metadata_response(&response.body, room_id, invocation_id)?;
+                return Ok(GatewayHttpResponse::Json {
+                    status: response.status,
+                    body,
+                });
+            }
+            // 上游旧版本或未知调用的 404 必须原样保留，不能伪造关联结果。
+            return public_response(response);
+        }
         let successful = (200..300).contains(&response.status);
         let result = public_response(response)?;
         if successful {
             if let Route::Lease(room_id, agent_id) = route {
                 if let Some(device_id) = body_value.get("deviceId").and_then(Value::as_str) {
-                    self.register_lease(room_id, agent_id, device_id);
+                    if self.modern_protocol_selected() {
+                        self.leases
+                            .lock()
+                            .unwrap()
+                            .remove(&(room_id.to_string(), agent_id.to_string()));
+                    } else {
+                        self.register_lease(room_id, agent_id, device_id);
+                    }
                 }
             }
             self.update_local_state_after_route(method, route);
@@ -869,18 +2306,168 @@ impl ChatroomGateway {
                 "请先登录 Copis Working",
             ));
         }
+        let generation = self.client.active_socket_generation();
         let connected = self.websocket_connected.load(Ordering::Acquire)
             && self.accepted_client_generation.load(Ordering::Acquire) != NO_CLIENT_GENERATION;
-        let ready = connected
+        let snapshot_ready = connected
             && self
                 .rooms
                 .lock()
                 .unwrap()
                 .get(room_id)
                 .is_some_and(|room| room.subscribed && room.snapshot_ready);
+        let capability = self.capability_state();
+        let selected = if capability.socket_generation == generation {
+            capability.selected
+        } else {
+            Vec::new()
+        };
+        let modern = self.modern_protocol_selected();
+        let capability_state = if generation == 0 || !snapshot_ready {
+            "preparing"
+        } else if modern {
+            "ready"
+        } else {
+            "legacy"
+        };
         Ok(GatewayHttpResponse::Json {
             status: 200,
-            body: serde_json::json!({"ready": ready, "epoch": self.realtime_epoch.load(Ordering::Acquire)}),
+            body: serde_json::json!({
+                "ready": snapshot_ready,
+                "epoch": self.realtime_epoch.load(Ordering::Acquire),
+                "capabilityState": capability_state,
+                "mode": if modern { "modern" } else { "legacy" },
+                "socketGeneration": generation,
+                "snapshotReady": snapshot_ready,
+                "selectedCapabilities": selected.iter().map(|cap| match cap {
+                    ChatroomCapability::AgentReadyV1 => "agent-ready-v1",
+                    ChatroomCapability::InvocationAckV1 => "invocation-ack-v1",
+                    ChatroomCapability::AgentDeltaFrameIdV1 => "agent-delta-frame-id-v1",
+                }).collect::<Vec<_>>(),
+            }),
+        })
+    }
+
+    fn handle_internal_agent_readiness(
+        &self,
+        room_id: &str,
+        agent_id: &str,
+        ready: bool,
+        body: &[u8],
+    ) -> Result<GatewayHttpResponse, ChatroomGatewayError> {
+        normalize_room_id(room_id).map_err(|_| invalid_request("roomId 不合法"))?;
+        if !valid_component(agent_id) {
+            return Err(invalid_request("roomAgentId 不合法"));
+        }
+        let request = parse_body_value(body, true)?;
+        if !request.as_object().is_some_and(serde_json::Map::is_empty) {
+            return Err(invalid_request("ready 请求不得指定宿主或所有者身份"));
+        }
+        let auth_boundary = self.auth_boundary.lock().unwrap();
+        if !self.auth.auth_state().authenticated || self.connection_paused.load(Ordering::Acquire) {
+            return Err(ChatroomGatewayError::new(
+                401,
+                "not_authenticated",
+                "请先登录 Copis Working",
+            ));
+        }
+        let generation = self.client.active_socket_generation();
+        let auth_epoch = self.auth_epoch.load(Ordering::Acquire);
+        let auth_generation = self.accepted_client_generation.load(Ordering::Acquire);
+        if generation == 0
+            || !self.websocket_connected.load(Ordering::Acquire)
+            || auth_generation == NO_CLIENT_GENERATION
+        {
+            return Err(lifecycle_unknown("当前没有活动的聊天室连接"));
+        }
+        let snapshot_ready = self
+            .rooms
+            .lock()
+            .unwrap()
+            .get(room_id)
+            .is_some_and(|room| room.subscribed && room.snapshot_ready);
+        if !snapshot_ready {
+            return Err(lifecycle_unknown("当前房间订阅快照尚未就绪"));
+        }
+        if !self.modern_protocol_selected() {
+            return Err(ChatroomGatewayError::new(
+                409,
+                "legacy_mode",
+                "当前 WebSocket 未协商 agent-ready-v1，请使用 legacy lease 路径",
+            ));
+        }
+        let counter = self
+            .next_lifecycle_request_id
+            .fetch_add(1, Ordering::AcqRel);
+        let request_id = lifecycle_request_id(&self.lifecycle_boot_id, counter);
+        let command_name = if ready {
+            "agent.ready"
+        } else {
+            "agent.unready"
+        };
+        let command = if ready {
+            ChatroomCommand::Ready {
+                room_id: room_id.to_string(),
+                request_id: request_id.clone(),
+                room_agent_id: agent_id.to_string(),
+            }
+        } else {
+            ChatroomCommand::Unready {
+                room_id: room_id.to_string(),
+                request_id: request_id.clone(),
+                room_agent_id: agent_id.to_string(),
+            }
+        };
+        drop(auth_boundary);
+
+        let confirmed = self
+            .client
+            .request_and_confirm_on_generation(
+                command,
+                room_id,
+                &request_id,
+                command_name,
+                None,
+                generation,
+            )
+            .map_err(lifecycle_ack_error)?;
+
+        let _auth_boundary = self.auth_boundary.lock().unwrap();
+        if !self.auth.auth_state().authenticated
+            || self.connection_paused.load(Ordering::Acquire)
+            || self.auth_epoch.load(Ordering::Acquire) != auth_epoch
+            || self.accepted_client_generation.load(Ordering::Acquire) != auth_generation
+            || self.client.active_socket_generation() != generation
+            || self.capability_state().socket_generation != generation
+            || !self
+                .rooms
+                .lock()
+                .unwrap()
+                .get(room_id)
+                .is_some_and(|room| room.subscribed && room.snapshot_ready)
+            || confirmed.room_id != room_id
+            || confirmed.command != command_name
+            || confirmed.request_id != request_id
+            || confirmed.generation != generation
+        {
+            return Err(lifecycle_unknown("ready 确认到达时连接代际已变化"));
+        }
+        self.leases
+            .lock()
+            .unwrap()
+            .remove(&(room_id.to_string(), agent_id.to_string()));
+        Ok(GatewayHttpResponse::Json {
+            status: 200,
+            body: serde_json::json!({
+                "outcome": "confirmed",
+                "mode": "agent-ready-v1",
+                "source": "private-ack",
+                "roomId": room_id,
+                "roomAgentId": agent_id,
+                "command": command_name,
+                "requestId": confirmed.request_id,
+                "generation": confirmed.generation,
+            }),
         })
     }
 
@@ -952,11 +2539,27 @@ impl ChatroomGateway {
             return Err(invalid_request("invocationId 不匹配"));
         }
         normalize_room_id(room_id).map_err(|_| invalid_request("roomId 不合法"))?;
-        if state == "running" {
-            require_keys(object, &["roomId", "invocationId"])?;
-            return Ok(GatewayHttpResponse::Empty { status: 204 });
-        }
+        let auth_epoch = {
+            let _auth_boundary = self.auth_boundary.lock().unwrap();
+            if !self.auth.auth_state().authenticated
+                || self.connection_paused.load(Ordering::Acquire)
+            {
+                return Err(ChatroomGatewayError::new(
+                    401,
+                    "not_authenticated",
+                    "聊天室连接因认证状态不可用",
+                ));
+            }
+            self.auth_epoch.load(Ordering::Acquire)
+        };
         let command = match state {
+            "running" => {
+                require_keys(object, &["roomId", "invocationId"])?;
+                ChatroomCommand::AgentRunning {
+                    room_id: room_id.to_string(),
+                    invocation_id: invocation_id.to_string(),
+                }
+            }
             "accepted" => {
                 require_keys(object, &["roomId", "invocationId", "agentId", "deviceId"])?;
                 ChatroomCommand::AgentAccepted {
@@ -1012,11 +2615,15 @@ impl ChatroomGateway {
                 {
                     return Err(invalid_request("内部请求包含未知或缺失字段"));
                 }
+                let failure_code = required_string(object, "failureCode")?;
+                if !is_chatroom_failure_code(failure_code) {
+                    return Err(invalid_request("聊天室 failureCode 不合法"));
+                }
                 ChatroomCommand::AgentEvent {
                     room_id: room_id.to_string(),
                     invocation_id: invocation_id.to_string(),
                     event: AgentEventPayload::Failed {
-                        code: required_string(object, "failureCode")?.to_string(),
+                        code: failure_code.to_string(),
                         message: match object.get("message") {
                             None => "Agent invocation failed".to_string(),
                             Some(_) => required_text(object, "message")?.to_string(),
@@ -1026,8 +2633,516 @@ impl ChatroomGateway {
             }
             _ => return Err(route_not_found()),
         };
-        self.send_client_command(command)?;
-        Ok(GatewayHttpResponse::Empty { status: 204 })
+        if state == "delta" {
+            let generation = self.client.active_socket_generation();
+            if generation == 0 {
+                return Err(ChatroomGatewayError::new(
+                    503,
+                    "realtime_unavailable",
+                    "没有可发送增量的活动聊天室连接",
+                ));
+            }
+            self.client
+                .command_on_generation(command, generation)
+                .map_err(|_| {
+                    ChatroomGatewayError::new(
+                        503,
+                        "realtime_unavailable",
+                        "聊天室连接代际已变化，增量未发送",
+                    )
+                })?;
+            let _auth_boundary = self.auth_boundary.lock().unwrap();
+            if self.auth_epoch.load(Ordering::Acquire) != auth_epoch
+                || !self.auth.auth_state().authenticated
+                || self.connection_paused.load(Ordering::Acquire)
+                || self.client.active_socket_generation() != generation
+            {
+                return Err(lifecycle_unknown("认证状态或连接代际已变化，增量未确认"));
+            }
+            return Ok(GatewayHttpResponse::Empty { status: 204 });
+        }
+
+        let request_id = lifecycle_request_id(
+            &self.lifecycle_boot_id,
+            self.next_lifecycle_request_id
+                .fetch_add(1, Ordering::AcqRel),
+        );
+        let expected_status = state;
+        let command_name = match state {
+            "accepted" => "agent.accepted",
+            "running" => "agent.running",
+            "completed" => "agent.completed",
+            "failed" => "agent.failed",
+            _ => return Err(route_not_found()),
+        };
+        let generation = self.client.active_socket_generation();
+        if generation == 0 {
+            return Err(lifecycle_unknown("当前没有活动的聊天室连接"));
+        }
+        let ack_selected = self.modern_protocol_selected();
+        if !ack_selected {
+            if state == "running" {
+                let already_accepted = self.legacy_accepted.lock().unwrap().contains(&(
+                    generation,
+                    room_id.to_string(),
+                    invocation_id.to_string(),
+                ));
+                if !already_accepted {
+                    return Err(lifecycle_unknown(
+                        "旧协议 running 仅在本连接已确认 accepted 后提供 advisory",
+                    ));
+                }
+                let _auth_boundary = self.auth_boundary.lock().unwrap();
+                if self.auth_epoch.load(Ordering::Acquire) != auth_epoch
+                    || !self.auth.auth_state().authenticated
+                    || self.connection_paused.load(Ordering::Acquire)
+                    || self.client.active_socket_generation() != generation
+                {
+                    return Err(lifecycle_unknown("旧协议 running advisory 的连接已变化"));
+                }
+                return Ok(GatewayHttpResponse::Json {
+                    status: 200,
+                    body: serde_json::json!({
+                        "outcome": "advisory",
+                        "mode": "legacy",
+                        "source": "accepted-event+local-advisory",
+                        "roomId": room_id,
+                        "invocationId": invocation_id,
+                        "command": command_name,
+                        "status": expected_status,
+                        "generation": generation,
+                    }),
+                });
+            }
+            let receiver = self
+                .legacy_lifecycle_waiters
+                .register(generation, &request_id, command.clone())
+                .map_err(lifecycle_ack_error)?;
+            if self
+                .client
+                .command_on_generation(command, generation)
+                .is_err()
+            {
+                self.legacy_lifecycle_waiters
+                    .cancel(generation, &request_id);
+                return Err(lifecycle_unknown("旧协议生命周期命令未能进入当前 socket"));
+            }
+            let terminal_proof = self
+                .legacy_lifecycle_waiters
+                .wait(&request_id, generation, receiver, Duration::from_secs(5))
+                .map_err(lifecycle_ack_error)?;
+            if matches!(state, "completed" | "failed") && terminal_proof.is_none() {
+                return Err(lifecycle_unknown(
+                    "legacy terminal event 缺少匹配结果 proof",
+                ));
+            }
+            let _auth_boundary = self.auth_boundary.lock().unwrap();
+            if self.auth_epoch.load(Ordering::Acquire) != auth_epoch
+                || !self.auth.auth_state().authenticated
+                || self.connection_paused.load(Ordering::Acquire)
+                || self.client.active_socket_generation() != generation
+            {
+                return Err(lifecycle_unknown("legacy 服务端事件到达时连接代际已变化"));
+            }
+            let mut body = serde_json::json!({
+                "outcome": "confirmed",
+                "mode": "legacy",
+                "source": "server-event",
+                "roomId": room_id,
+                "invocationId": invocation_id,
+                "command": command_name,
+                "status": expected_status,
+                "generation": generation,
+            });
+            if let Some(terminal_proof) = terminal_proof {
+                body.as_object_mut()
+                    .expect("legacy lifecycle result is an object")
+                    .insert("terminalProof".into(), terminal_proof.to_value());
+            }
+            return Ok(GatewayHttpResponse::Json { status: 200, body });
+        }
+        // 不持有 auth_boundary 或 Gateway 状态锁等待 ACK；reader 在线程内独立处理回包。
+        let confirmed = self
+            .client
+            .request_and_confirm_on_generation(
+                command,
+                room_id,
+                &request_id,
+                command_name,
+                Some(invocation_id),
+                generation,
+            )
+            .map_err(lifecycle_ack_error)?;
+        let _auth_boundary = self.auth_boundary.lock().unwrap();
+        if self.auth_epoch.load(Ordering::Acquire) != auth_epoch
+            || !self.auth.auth_state().authenticated
+            || self.connection_paused.load(Ordering::Acquire)
+            || !valid_lifecycle_confirmation(
+                &confirmed,
+                room_id,
+                invocation_id,
+                command_name,
+                &request_id,
+                expected_status,
+                generation,
+            )
+            || self.client.active_socket_generation() != generation
+            || self.capability_state().socket_generation != generation
+        {
+            return Err(lifecycle_unknown("聊天室确认状态缺失或连接代际已变化"));
+        }
+        Ok(GatewayHttpResponse::Json {
+            status: 200,
+            body: serde_json::json!({
+                "outcome": "confirmed",
+                "mode": "invocation-ack-v1",
+                "source": "private-ack",
+                "confirmed": true,
+                "roomId": confirmed.room_id,
+                "invocationId": confirmed.invocation_id,
+                "requestId": confirmed.request_id,
+                "command": confirmed.command,
+                "status": confirmed.status,
+                "generation": confirmed.generation,
+            }),
+        })
+    }
+
+    fn handle_internal_invocation_status(
+        &self,
+        path_room_id: &str,
+        path_invocation_id: &str,
+        body: &[u8],
+    ) -> Result<GatewayHttpResponse, ChatroomGatewayError> {
+        let request = parse_body_value(body, true)?;
+        let expected = request
+            .as_object()
+            .ok_or_else(|| invalid_request("状态查询请求必须是对象"))?;
+        require_keys(
+            expected,
+            &[
+                "roomId",
+                "invocationId",
+                "deviceId",
+                "traceId",
+                "targetAgentId",
+                "triggerMessageId",
+                "depth",
+                "expectedStatus",
+                "failureCode",
+                "clientMessageId",
+                "replyDigest",
+            ],
+        )?;
+        let room_id = required_string(expected, "roomId")?;
+        let invocation_id = required_string(expected, "invocationId")?;
+        let device_id = required_string(expected, "deviceId")?;
+        if room_id != path_room_id
+            || invocation_id != path_invocation_id
+            || room_id.len() > 64
+            || !valid_invocation_id(invocation_id, 128)
+            || device_id != self.device_id
+        {
+            return Err(ChatroomGatewayError::new(
+                403,
+                "invocation_status_rejected",
+                "聊天室调用状态查询上下文不匹配",
+            ));
+        }
+        normalize_room_id(room_id).map_err(|_| invalid_request("roomId 不合法"))?;
+        for key in ["traceId", "targetAgentId", "triggerMessageId"] {
+            let value = required_string(expected, key)?;
+            if !valid_invocation_id(value, 128) {
+                return Err(invalid_request("状态查询关联字段不合法"));
+            }
+        }
+        if expected
+            .get("depth")
+            .and_then(Value::as_u64)
+            .filter(|depth| *depth <= u8::MAX as u64)
+            .is_none()
+        {
+            return Err(invalid_request("状态查询 depth 不合法"));
+        }
+        let expected_status = required_string(expected, "expectedStatus")?;
+        let expected_client_id = expected
+            .get("clientMessageId")
+            .and_then(Value::as_str)
+            .ok_or_else(|| invalid_request("状态查询 clientMessageId 不合法"))?;
+        let expected_digest = expected
+            .get("replyDigest")
+            .and_then(Value::as_str)
+            .ok_or_else(|| invalid_request("状态查询 replyDigest 不合法"))?;
+        let expected_failure_code = expected
+            .get("failureCode")
+            .and_then(Value::as_str)
+            .ok_or_else(|| invalid_request("状态查询 failureCode 不合法"))?;
+        match expected_status {
+            "completed"
+                if valid_invocation_id(expected_client_id, 128)
+                    && valid_sha256(expected_digest)
+                    && expected_failure_code.is_empty() => {}
+            "failed"
+                if expected_client_id.is_empty()
+                    && expected_digest.is_empty()
+                    && is_chatroom_failure_code(expected_failure_code) => {}
+            _ => return Err(invalid_request("状态查询终态期望不合法")),
+        }
+        let auth_epoch = {
+            let _auth_boundary = self.auth_boundary.lock().unwrap();
+            if !self.auth.auth_state().authenticated
+                || self.connection_paused.load(Ordering::Acquire)
+            {
+                return Err(ChatroomGatewayError::new(
+                    401,
+                    "not_authenticated",
+                    "请先登录 Copis Working",
+                ));
+            }
+            self.auth_epoch.load(Ordering::Acquire)
+        };
+        let generation = self.client.active_socket_generation();
+        let outcome = |name, proof| {
+            invocation_status_outcome(name, room_id, invocation_id, expected, generation, proof)
+        };
+        let mut legacy_status_waiter = None;
+        if generation != 0 && !self.modern_protocol_selected() {
+            let request_id = format!(
+                "{}-status",
+                lifecycle_request_id(
+                    &self.lifecycle_boot_id,
+                    self.next_lifecycle_request_id
+                        .fetch_add(1, Ordering::AcqRel),
+                )
+            );
+            match self.legacy_lifecycle_waiters.register_status(
+                generation,
+                &request_id,
+                room_id,
+                invocation_id,
+                expected_status,
+                expected_client_id,
+                expected_digest,
+                expected_failure_code,
+            ) {
+                Ok(receiver) => legacy_status_waiter = Some((request_id, receiver)),
+                Err(_) => return Ok(outcome("Unknown", None)),
+            }
+        }
+        let path = format!(
+            "{CHATROOM_HTTP_PREFIX}/rooms/{}/invocations/{}/status?deviceId={}",
+            percent_encode_query_component(room_id),
+            percent_encode_query_component(invocation_id),
+            percent_encode_query_component(device_id),
+        );
+        let response = match self.transport.request("GET", &path, None) {
+            Ok(response) => response,
+            Err(_) => {
+                if let Some((request_id, _)) = &legacy_status_waiter {
+                    self.legacy_lifecycle_waiters.cancel(generation, request_id);
+                }
+                return Ok(outcome("Unknown", None));
+            }
+        };
+        if response.status == 404 {
+            if let Some((request_id, receiver)) = legacy_status_waiter {
+                if let Ok(Some(terminal_proof)) = self.legacy_lifecycle_waiters.wait(
+                    &request_id,
+                    generation,
+                    receiver,
+                    self.legacy_status_wait_timeout(),
+                ) {
+                    let _auth_boundary = self.auth_boundary.lock().unwrap();
+                    if self.auth_epoch.load(Ordering::Acquire) == auth_epoch
+                        && self.auth.auth_state().authenticated
+                        && !self.connection_paused.load(Ordering::Acquire)
+                        && self.client.active_socket_generation() == generation
+                    {
+                        return Ok(GatewayHttpResponse::Json {
+                            status: 200,
+                            body: serde_json::json!({
+                                "outcome": "Confirmed",
+                                "mode": "legacy",
+                                "source": "server-event",
+                                "roomId": room_id,
+                                "invocationId": invocation_id,
+                                "traceId": expected.get("traceId"),
+                                "status": expected_status,
+                                "generation": generation,
+                                "terminalProof": terminal_proof.to_value(),
+                            }),
+                        });
+                    }
+                }
+            }
+            return Ok(outcome("Unknown", None));
+        }
+        if let Some((request_id, _)) = &legacy_status_waiter {
+            self.legacy_lifecycle_waiters.cancel(generation, request_id);
+        }
+        if response.status >= 500 {
+            return Ok(outcome("Unknown", None));
+        }
+        if response.status == 401 || response.status == 403 {
+            return Ok(outcome("Rejected", None));
+        }
+        if !(200..300).contains(&response.status)
+            || response.body.len() > MAX_INVOCATION_STATUS_BYTES
+        {
+            return Ok(outcome("Rejected", None));
+        }
+        let data = match parse_invocation_status_data(&response.body) {
+            Ok(data) => data,
+            Err(()) => return Ok(outcome("Rejected", None)),
+        };
+        if !invocation_status_matches(&data, expected) {
+            return Ok(outcome("Rejected", None));
+        }
+        let status = data
+            .get("status")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        if !matches!(
+            status,
+            "created" | "accepted" | "running" | "completed" | "failed"
+        ) {
+            return Ok(outcome("Rejected", None));
+        }
+        if !matches!(status, "completed" | "failed") {
+            return Ok(outcome("Unknown", None));
+        }
+        if status != expected_status {
+            return Ok(outcome("Rejected", None));
+        }
+        if !data
+            .get("finishedAt")
+            .and_then(Value::as_str)
+            .is_some_and(|value| {
+                value.len() <= 64 && chrono::DateTime::parse_from_rfc3339(value).is_ok()
+            })
+        {
+            return Ok(outcome("Rejected", None));
+        }
+        if status == "completed"
+            && (data.get("replyClientMessageId").and_then(Value::as_str)
+                != expected.get("clientMessageId").and_then(Value::as_str)
+                || data.get("replyDigest").and_then(Value::as_str)
+                    != expected.get("replyDigest").and_then(Value::as_str)
+                || !data
+                    .get("replyMessageId")
+                    .and_then(Value::as_str)
+                    .is_some_and(|value| valid_invocation_id(value, 128))
+                || data
+                    .get("replyDigest")
+                    .and_then(Value::as_str)
+                    .is_none_or(|value| !valid_sha256(value)))
+        {
+            return Ok(outcome("Rejected", None));
+        }
+        if status == "failed"
+            && data.get("failureCode").and_then(Value::as_str) != Some(expected_failure_code)
+        {
+            return Ok(outcome("Rejected", None));
+        }
+        let _auth_boundary = self.auth_boundary.lock().unwrap();
+        if self.auth_epoch.load(Ordering::Acquire) != auth_epoch
+            || !self.auth.auth_state().authenticated
+            || self.connection_paused.load(Ordering::Acquire)
+        {
+            return Ok(outcome("Unknown", None));
+        }
+        Ok(outcome("Confirmed", Some(data)))
+    }
+
+    fn handle_internal_execution_binding(
+        &self,
+        bind: bool,
+        body: &[u8],
+    ) -> Result<GatewayHttpResponse, ChatroomGatewayError> {
+        let value = parse_body_value(body, true)?;
+        let object = value
+            .as_object()
+            .ok_or_else(|| invalid_request("执行绑定请求必须是对象"))?;
+        require_keys(
+            object,
+            &[
+                "roomId",
+                "invocationId",
+                "targetAgentId",
+                "sessionId",
+                "workerRunId",
+                "origin",
+            ],
+        )?;
+        let room_id = required_string(object, "roomId")?;
+        let invocation_id = required_string(object, "invocationId")?;
+        let target_agent_id = required_string(object, "targetAgentId")?;
+        let session_id = required_string(object, "sessionId")?;
+        let worker_run_id = required_string(object, "workerRunId")?;
+        if !valid_component(&room_id)
+            || !valid_component(&invocation_id)
+            || !valid_component(&target_agent_id)
+            || !valid_component(&session_id)
+            || !valid_component(&worker_run_id)
+        {
+            return Err(invalid_request("执行绑定标识不合法"));
+        }
+        let origin_value = object
+            .get("origin")
+            .and_then(Value::as_object)
+            .ok_or_else(|| invalid_request("执行绑定来源不正确"))?;
+        require_keys(
+            origin_value,
+            &["clientGeneration", "socketGeneration", "authEpoch"],
+        )?;
+        let origin = ChatroomOrigin {
+            client_generation: origin_value
+                .get("clientGeneration")
+                .and_then(Value::as_u64)
+                .filter(|value| *value > 0)
+                .ok_or_else(|| invalid_request("clientGeneration 不正确"))?,
+            socket_generation: origin_value
+                .get("socketGeneration")
+                .and_then(Value::as_u64)
+                .filter(|value| *value > 0)
+                .ok_or_else(|| invalid_request("socketGeneration 不正确"))?,
+            auth_epoch: origin_value
+                .get("authEpoch")
+                .and_then(Value::as_u64)
+                .ok_or_else(|| invalid_request("authEpoch 不正确"))?,
+        };
+        let binding = ChatroomExecutionBinding {
+            room_id: room_id.to_string(),
+            invocation_id: invocation_id.to_string(),
+            target_agent_id: target_agent_id.to_string(),
+            session_id: session_id.to_string(),
+            worker_run_id: worker_run_id.to_string(),
+            origin,
+        };
+        let registry = self.execution_registry.lock().unwrap().clone();
+        if bind {
+            let subscribed = self
+                .rooms
+                .lock()
+                .unwrap()
+                .get(room_id)
+                .is_some_and(|room| room.subscribed && room.snapshot_ready);
+            if !subscribed || !self.origin_is_current(origin) || !registry.bind(binding) {
+                return Ok(GatewayHttpResponse::Json {
+                    status: 409,
+                    body: serde_json::json!({"code":"execution_binding_rejected"}),
+                });
+            }
+        } else if !registry.release(&binding) {
+            return Ok(GatewayHttpResponse::Json {
+                status: 409,
+                body: serde_json::json!({"code":"execution_binding_stale"}),
+            });
+        }
+        Ok(GatewayHttpResponse::Json {
+            status: 200,
+            body: serde_json::json!({"status": if bind {"bound"} else {"released"}}),
+        })
     }
 
     pub fn subscribe_sse(
@@ -1099,7 +3214,7 @@ impl ChatroomGateway {
             } = event
             {
                 self.publish_status(Some(room_id), code, message);
-                self.remove_room_subscription(room_id);
+                self.remove_room_subscription_state(room_id);
             }
         }
         let (sender, receiver) = mpsc::sync_channel(SSE_CAPACITY);
@@ -1147,6 +3262,7 @@ impl ChatroomGateway {
         for event in initial {
             let _ = self.send_to_subscriber(subscriber_id, public_event(&event), true);
         }
+        drop(_auth_boundary);
         self.refresh_subscription_snapshot();
         Ok(SseSubscription {
             receiver: SseReceiver {
@@ -1261,14 +3377,21 @@ impl ChatroomGateway {
                 _ => None,
             };
             let Some(code) = rejection else { continue };
-            let _auth_boundary = self.auth_boundary.lock().unwrap();
-            if self.auth_epoch.load(Ordering::Acquire) != auth_epoch
-                || !self.auth.auth_state().authenticated
-            {
-                return;
+            let removed = {
+                let _auth_boundary = self.auth_boundary.lock().unwrap();
+                if self.auth_epoch.load(Ordering::Acquire) != auth_epoch
+                    || !self.auth.auth_state().authenticated
+                    || self.connection_paused.load(Ordering::Acquire)
+                {
+                    return;
+                }
+                self.publish_status(Some(&room_id), code, "聊天室已不可访问");
+                self.remove_room_subscription_state(&room_id);
+                true
+            };
+            if removed {
+                self.refresh_subscription_snapshot();
             }
-            self.publish_status(Some(&room_id), code, "聊天室已不可访问");
-            self.remove_room_subscription(&room_id);
         }
     }
 
@@ -1329,9 +3452,6 @@ impl ChatroomGateway {
             state.snapshot = Some(event.clone());
         }
         self.broadcast(&event);
-        if matches!(event, ChatroomEvent::AgentInvocation { .. }) {
-            self.forward_invocation(&event);
-        }
     }
 
     fn publish_persistent(&self, event: ChatroomEvent, seq: u64) {
@@ -1536,12 +3656,26 @@ impl ChatroomGateway {
         self.remove_lease(room_id, agent_id);
     }
 
-    fn forward_invocation(&self, event: &ChatroomEvent) {
-        if let Err(task) = self.dispatch_task(GatewayTask::Invocation(event.clone())) {
-            if let GatewayTask::Invocation(event) = task {
+    fn forward_invocation(&self, event: &ChatroomEvent, origin: GatewayOrigin) {
+        let result = self.dispatch_task(GatewayTask::Invocation {
+            event: event.clone(),
+            origin,
+        });
+        #[cfg(test)]
+        if result.is_ok() {
+            if let Some(observer) = self.invocation_dispatch_observer.lock().unwrap().take() {
+                let _ = observer.send((
+                    origin.client_generation,
+                    origin.socket_generation,
+                    origin.auth_epoch,
+                ));
+            }
+        }
+        if let Err(task) = result {
+            if let GatewayTask::Invocation { event, origin } = task {
                 if self.task_sender.lock().unwrap().is_none() {
-                    self.forward_invocation_now(&event);
-                } else {
+                    self.forward_invocation_now(&event, origin);
+                } else if self.origin_is_current(origin) {
                     self.send_bridge_busy_failure(&event);
                 }
             }
@@ -1579,7 +3713,10 @@ impl ChatroomGateway {
         }
     }
 
-    fn forward_invocation_now(&self, event: &ChatroomEvent) {
+    pub(super) fn forward_invocation_now(&self, event: &ChatroomEvent, origin: GatewayOrigin) {
+        if !self.origin_is_current(origin) {
+            return;
+        }
         let ChatroomEvent::AgentInvocation { room_id, payload } = event else {
             return;
         };
@@ -1624,6 +3761,63 @@ impl ChatroomGateway {
             );
             return;
         }
+        let mut invocation = Map::new();
+        invocation.insert("roomId".into(), Value::String(room_id.clone()));
+        for key in [
+            "invocationId",
+            "traceId",
+            "targetAgentId",
+            "triggerMessageId",
+            "depth",
+            "sender",
+            "messages",
+            "receivedAt",
+        ] {
+            invocation.insert(key.into(), object.get(key).cloned().unwrap_or(Value::Null));
+        }
+        let output = serde_json::json!({
+            "invocation": Value::Object(invocation),
+            "gatewayOrigin": {
+                "clientGeneration": origin.client_generation,
+                "socketGeneration": origin.socket_generation,
+                "authEpoch": origin.auth_epoch,
+            },
+        });
+        let body = output.to_string().into_bytes();
+        if body.len() > MAX_INVOCATION_BRIDGE_BYTES {
+            self.publish_status(
+                Some(room_id),
+                "invocation_invalid",
+                "Agent invocation 格式不正确",
+            );
+            return;
+        }
+        if let Err(error) = self.bridge.send_invocation(body, &self.shutdown) {
+            if error == CHATROOM_NATIVE_RUNTIME_UNSUPPORTED {
+                self.publish_status(
+                    Some(room_id),
+                    "invocation_invalid",
+                    CHATROOM_NATIVE_RUNTIME_UNSUPPORTED_MESSAGE,
+                );
+                return;
+            }
+            self.publish_status(Some(room_id), "bridge_unavailable", "聊天室业务桥不可用");
+        }
+    }
+
+    #[cfg(test)]
+    fn forward_invocation_for_test(&self, event: &ChatroomEvent) {
+        let ChatroomEvent::AgentInvocation { room_id, payload } = event else {
+            return;
+        };
+        let Some(mut object) = payload.as_object().cloned() else {
+            return;
+        };
+        if validate_forward_invocation_payload(&object).is_err()
+            || canonicalize_forward_invocation_payload(&mut object).is_err()
+        {
+            return;
+        }
         let mut output = Map::new();
         output.insert("roomId".into(), Value::String(room_id.clone()));
         for key in [
@@ -1639,16 +3833,8 @@ impl ChatroomGateway {
             output.insert(key.into(), object.get(key).cloned().unwrap_or(Value::Null));
         }
         let body = Value::Object(output).to_string().into_bytes();
-        if body.len() > MAX_INVOCATION_BRIDGE_BYTES {
-            self.publish_status(
-                Some(room_id),
-                "invocation_invalid",
-                "Agent invocation 格式不正确",
-            );
-            return;
-        }
-        if self.bridge.send_invocation(body, &self.shutdown).is_err() {
-            self.publish_status(Some(room_id), "bridge_unavailable", "聊天室业务桥不可用");
+        if body.len() <= MAX_INVOCATION_BRIDGE_BYTES {
+            let _ = self.bridge.send_invocation(body, &self.shutdown);
         }
     }
 
@@ -1683,7 +3869,11 @@ impl ChatroomGateway {
     }
 
     fn refresh_subscription_snapshot(&self) {
-        if self.shutdown.load(Ordering::Acquire) || !self.started.load(Ordering::Acquire) {
+        if self.shutdown.load(Ordering::Acquire)
+            || !self.started.load(Ordering::Acquire)
+            || self.connection_paused.load(Ordering::Acquire)
+            || !self.auth.auth_state().authenticated
+        {
             return;
         }
         let rooms = {
@@ -1702,16 +3892,131 @@ impl ChatroomGateway {
             return;
         }
         let desired = (rooms, self.device_id.clone());
-        {
-            let mut last = self.last_subscription.lock().unwrap();
-            if last.as_ref() == Some(&desired) {
+        if self.last_subscription.lock().unwrap().as_ref() == Some(&desired) {
+            return;
+        }
+        let auth_epoch = self.auth_epoch.load(Ordering::Acquire);
+        let realtime_epoch = self.realtime_epoch.load(Ordering::Acquire);
+        let socket_generation = self.client.active_socket_generation();
+        let mut probe_sequence = None;
+        let requested_capabilities = self.protocol_options.requested_capabilities();
+        let capabilities = if !requested_capabilities.is_empty() {
+            let sequence = self
+                .capability_probe_sequence
+                .fetch_add(1, Ordering::AcqRel)
+                + 1;
+            probe_sequence = Some(sequence);
+            if self.connection_paused.load(Ordering::Acquire)
+                || self.auth_epoch.load(Ordering::Acquire) != auth_epoch
+                || !self.auth.auth_state().authenticated
+            {
                 return;
             }
-            *last = Some(desired.clone());
+            let response = match self
+                .transport
+                .request("GET", CHATROOM_CAPABILITIES_PATH, None)
+            {
+                Ok(response) => response,
+                Err(_) => {
+                    if self.auth_epoch.load(Ordering::Acquire) == auth_epoch
+                        && !self.connection_paused.load(Ordering::Acquire)
+                    {
+                        self.publish_status(
+                            None,
+                            "capabilities_unavailable",
+                            "聊天室能力探测暂不可用",
+                        );
+                    }
+                    return;
+                }
+            };
+            if self.connection_paused.load(Ordering::Acquire)
+                || self.auth_epoch.load(Ordering::Acquire) != auth_epoch
+                || self.realtime_epoch.load(Ordering::Acquire) != realtime_epoch
+                || self.client.active_socket_generation() != socket_generation
+                || self.capability_probe_sequence.load(Ordering::Acquire) != sequence
+                || !self.auth.auth_state().authenticated
+            {
+                return;
+            }
+            let advertised = match crate::chatroom_protocol::parse_chatroom_capabilities_response(
+                response.status,
+                &response.body,
+            ) {
+                Ok(capabilities) => capabilities,
+                Err(_) => {
+                    if !self.connection_paused.load(Ordering::Acquire)
+                        && self.auth_epoch.load(Ordering::Acquire) == auth_epoch
+                    {
+                        self.publish_status(None, "capabilities_invalid", "聊天室能力响应无效");
+                    }
+                    return;
+                }
+            };
+            let current_rooms = self
+                .rooms
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|(_, state)| state.subscribed)
+                .map(|(room_id, state)| RoomCursor {
+                    room_id: room_id.clone(),
+                    after_seq: state.last_contiguous_seq,
+                })
+                .collect::<Vec<_>>();
+            if current_rooms != desired.0 {
+                return;
+            }
+            advertised.map(|capabilities| {
+                capabilities
+                    .into_iter()
+                    .filter(|capability| requested_capabilities.contains(capability))
+                    .collect()
+            })
+        } else {
+            None
+        };
+        let _auth_boundary = self.auth_boundary.lock().unwrap();
+        if self.shutdown.load(Ordering::Acquire)
+            || self.connection_paused.load(Ordering::Acquire)
+            || self.auth_epoch.load(Ordering::Acquire) != auth_epoch
+            || self.realtime_epoch.load(Ordering::Acquire) != realtime_epoch
+            || self.client.active_socket_generation() != socket_generation
+            || !self.auth.auth_state().authenticated
+        {
+            return;
         }
+        let current_rooms = self
+            .rooms
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(_, state)| state.subscribed)
+            .map(|(room_id, state)| RoomCursor {
+                room_id: room_id.clone(),
+                after_seq: state.last_contiguous_seq,
+            })
+            .collect::<Vec<_>>();
+        if current_rooms != desired.0 {
+            return;
+        }
+        if self.last_subscription.lock().unwrap().as_ref() == Some(&desired) {
+            return;
+        }
+        if !requested_capabilities.is_empty() {
+            if probe_sequence.is_none_or(|sequence| {
+                self.capability_probe_sequence.load(Ordering::Acquire) != sequence
+            }) {
+                return;
+            }
+            *self.advertised_capabilities.lock().unwrap() =
+                (socket_generation, capabilities.clone().unwrap_or_default());
+        }
+        *self.last_subscription.lock().unwrap() = Some(desired.clone());
         self.send_client_command_if_started(ChatroomCommand::Subscribe {
             rooms: desired.0,
             device_id: desired.1,
+            capabilities,
         });
     }
 
@@ -1744,6 +4049,10 @@ impl ChatroomGateway {
                 return;
             }
             *last = now;
+        }
+        if self.modern_protocol_selected() {
+            self.leases.lock().unwrap().clear();
+            return;
         }
         let mut renew = Vec::new();
         let mut expired = Vec::new();
@@ -1825,7 +4134,14 @@ impl ChatroomGateway {
             | Route::InternalFinalize
             | Route::InternalLeaseRelease
             | Route::InternalRoomStatus(_)
-            | Route::InternalInvocation(_, _) => {}
+            | Route::InternalAgentReadiness(_, _, _)
+            | Route::InternalInvocation(_, _)
+            | Route::InternalInvocationStatus(_, _)
+            | Route::InternalExecutionBinding(_)
+            | Route::InvocationMetadata(_, _)
+            | Route::InternalManagementCapabilities
+            | Route::InternalManagementOperation(_)
+            | Route::InternalManagementStatus(_) => {}
         }
         self.refresh_subscription_snapshot();
     }
@@ -1882,29 +4198,38 @@ impl ChatroomGateway {
     }
 
     fn remove_room_subscription(&self, room_id: &str) {
+        self.remove_room_subscription_state(room_id);
+        self.refresh_subscription_snapshot();
+    }
+
+    fn remove_room_subscription_state(&self, room_id: &str) {
         self.rooms.lock().unwrap().remove(room_id);
         self.leases
             .lock()
             .unwrap()
             .retain(|(lease_room, _), _| lease_room != room_id);
-        self.refresh_subscription_snapshot();
     }
 
     pub fn shutdown_connection(&self) {
         if self.shutdown.load(Ordering::Acquire) {
             return;
         }
-        let _auth_boundary = self.auth_boundary.lock().unwrap();
-        self.auth_epoch.fetch_add(1, Ordering::AcqRel);
-        self.client.pause();
-        self.accepted_client_generation
-            .store(NO_CLIENT_GENERATION, Ordering::Release);
-        self.connection_paused.store(true, Ordering::Release);
-        self.websocket_connected.store(false, Ordering::Release);
-        self.leases.lock().unwrap().clear();
-        self.rooms.lock().unwrap().clear();
-        *self.last_subscription.lock().unwrap() = None;
-        self.subscribers.lock().unwrap().clear();
+        {
+            let _auth_boundary = self.auth_boundary.lock().unwrap();
+            self.auth_epoch.fetch_add(1, Ordering::AcqRel);
+            self.client.pause();
+            self.accepted_client_generation
+                .store(NO_CLIENT_GENERATION, Ordering::Release);
+            self.connection_paused.store(true, Ordering::Release);
+            self.websocket_connected.store(false, Ordering::Release);
+            self.leases.lock().unwrap().clear();
+            self.rooms.lock().unwrap().clear();
+            *self.last_subscription.lock().unwrap() = None;
+            *self.advertised_capabilities.lock().unwrap() = (0, Vec::new());
+            self.subscribers.lock().unwrap().clear();
+        }
+        let revoked = self.execution_registry.lock().unwrap().revoke_all();
+        self.revoke_native_bindings(revoked);
         self.notify_disconnected();
     }
 
@@ -1922,6 +4247,8 @@ impl ChatroomGateway {
         if self.shutdown.swap(true, Ordering::AcqRel) {
             return;
         }
+        let revoked = self.execution_registry.lock().unwrap().revoke_all();
+        self.revoke_native_bindings(revoked);
         self.leases.lock().unwrap().clear();
         *self.last_subscription.lock().unwrap() = None;
         self.subscribers.lock().unwrap().clear();
@@ -1943,7 +4270,20 @@ impl ChatroomGateway {
 
     #[cfg(test)]
     pub(crate) fn publish_event_for_test(&self, event: ChatroomEvent) {
-        self.publish_event(event);
+        if matches!(event, ChatroomEvent::AgentInvocation { .. }) {
+            self.publish_event(event.clone());
+            if let Err(task) = self.dispatch_task(GatewayTask::TestInvocation(event.clone())) {
+                if matches!(task, GatewayTask::TestInvocation(_)) {
+                    if self.task_sender.lock().unwrap().is_some() {
+                        self.send_bridge_busy_failure(&event);
+                    } else {
+                        self.forward_invocation_for_test(&event);
+                    }
+                }
+            }
+        } else {
+            self.publish_event(event);
+        }
     }
 
     #[cfg(test)]
@@ -1991,6 +4331,14 @@ impl ChatroomGateway {
     }
 
     #[cfg(test)]
+    pub(crate) fn has_lease_for_test(&self, room_id: &str, agent_id: &str) -> bool {
+        self.leases
+            .lock()
+            .unwrap()
+            .contains_key(&(room_id.to_string(), agent_id.to_string()))
+    }
+
+    #[cfg(test)]
     pub(crate) fn register_lease_for_test(&self, room_id: &str, agent_id: &str, device_id: &str) {
         self.register_lease(room_id, agent_id, device_id);
     }
@@ -2009,6 +4357,11 @@ impl ChatroomGateway {
     }
 
     #[cfg(test)]
+    pub(crate) fn advance_auth_epoch_without_disconnect_for_test(&self) {
+        self.auth_epoch.fetch_add(1, Ordering::AcqRel);
+    }
+
+    #[cfg(test)]
     pub(crate) fn gate_next_task_for_test(&self) -> (mpsc::Receiver<()>, mpsc::Sender<()>) {
         let (loaded, loaded_receiver) = mpsc::channel();
         let (release, release_receiver) = mpsc::channel();
@@ -2017,6 +4370,15 @@ impl ChatroomGateway {
             release: release_receiver,
         });
         (loaded_receiver, release)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn observe_next_invocation_dispatch_for_test(
+        &self,
+    ) -> mpsc::Receiver<(u64, u64, u64)> {
+        let (sender, receiver) = mpsc::channel();
+        *self.invocation_dispatch_observer.lock().unwrap() = Some(sender);
+        receiver
     }
 
     #[cfg(test)]
@@ -2054,6 +4416,15 @@ impl ChatroomGateway {
             release: release_receiver,
         });
         (loaded_receiver, release)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_legacy_status_wait_timeout_for_test(&self, timeout: Duration) {
+        *self.legacy_status_wait_timeout.lock().unwrap() = timeout;
+    }
+
+    fn legacy_status_wait_timeout(&self) -> Duration {
+        *self.legacy_status_wait_timeout.lock().unwrap()
     }
 
     #[cfg(test)]
@@ -2112,6 +4483,35 @@ fn parse_route(path: &str) -> Result<Route<'_>, ChatroomGatewayError> {
     }
     if path.starts_with(&internal_prefix) {
         let parts: Vec<&str> = path[internal_prefix.len()..].split('/').collect();
+        if parts.as_slice() == ["agent-management", "capabilities"] {
+            return Ok(Route::InternalManagementCapabilities);
+        }
+        if parts.len() == 4
+            && parts[0] == "rooms"
+            && parts[2] == "agent-management"
+            && parts[3] == "operations"
+            && valid_component(parts[1])
+        {
+            normalize_room_id(parts[1]).map_err(|_| route_not_found())?;
+            return Ok(Route::InternalManagementOperation(parts[1]));
+        }
+        if parts.len() == 5
+            && parts[0] == "rooms"
+            && parts[2] == "agent-management"
+            && parts[3] == "operations"
+            && parts[4] == "status"
+            && valid_component(parts[1])
+        {
+            normalize_room_id(parts[1]).map_err(|_| route_not_found())?;
+            return Ok(Route::InternalManagementStatus(parts[1]));
+        }
+        if parts.len() == 2 && parts[0] == "execution-bindings" {
+            match parts[1] {
+                "bind" => return Ok(Route::InternalExecutionBinding(true)),
+                "release" => return Ok(Route::InternalExecutionBinding(false)),
+                _ => {}
+            }
+        }
         if parts.len() == 3
             && parts[0] == "rooms"
             && parts[2] == "status"
@@ -2119,6 +4519,28 @@ fn parse_route(path: &str) -> Result<Route<'_>, ChatroomGatewayError> {
         {
             normalize_room_id(parts[1]).map_err(|_| route_not_found())?;
             return Ok(Route::InternalRoomStatus(parts[1]));
+        }
+        if parts.len() == 5
+            && parts[0] == "rooms"
+            && parts[2] == "agents"
+            && valid_component(parts[1])
+            && valid_component(parts[3])
+        {
+            match parts[4] {
+                "ready" => return Ok(Route::InternalAgentReadiness(parts[1], parts[3], true)),
+                "unready" => return Ok(Route::InternalAgentReadiness(parts[1], parts[3], false)),
+                _ => {}
+            }
+        }
+        if parts.len() == 5
+            && parts[0] == "rooms"
+            && parts[2] == "invocations"
+            && parts[4] == "status"
+            && valid_component(parts[1])
+            && valid_component(parts[3])
+        {
+            normalize_room_id(parts[1]).map_err(|_| route_not_found())?;
+            return Ok(Route::InternalInvocationStatus(parts[1], parts[3]));
         }
         if parts.len() == 3 && parts[0] == "invocations" && valid_component(parts[1]) {
             return Ok(Route::InternalInvocation(parts[1], parts[2]));
@@ -2152,6 +4574,11 @@ fn parse_route(path: &str) -> Result<Route<'_>, ChatroomGatewayError> {
         [_, _, "messages"] => Route::Messages(room_id),
         [_, _, "events"] => Route::Events(room_id),
         [_, _, "invocations", "terminal"] => Route::TerminalInvocations(room_id),
+        [_, _, "invocations", invocation_id, "metadata"]
+            if valid_invocation_id(invocation_id, 64) =>
+        {
+            Route::InvocationMetadata(room_id, invocation_id)
+        }
         [_, _, "agents"] => Route::Agents(room_id),
         [_, _, "members", member_id] if valid_member_id(member_id) => {
             Route::MemberRemove(room_id, member_id)
@@ -2163,6 +4590,129 @@ fn parse_route(path: &str) -> Result<Route<'_>, ChatroomGatewayError> {
         _ => return Err(route_not_found()),
     };
     Ok(route)
+}
+
+fn valid_sha256(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+fn percent_encode_query_component(value: &str) -> String {
+    let mut encoded = String::with_capacity(value.len());
+    for byte in value.bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~') {
+            encoded.push(byte as char);
+        } else {
+            encoded.push('%');
+            encoded.push_str(&format!("{byte:02X}"));
+        }
+    }
+    encoded
+}
+
+fn parse_invocation_status_data(body: &[u8]) -> Result<Map<String, Value>, ()> {
+    let value: Value = serde_json::from_slice(body).map_err(|_| ())?;
+    let envelope = value.as_object().ok_or(())?;
+    if envelope.len() != 1 {
+        return Err(());
+    }
+    let data = envelope.get("data").and_then(Value::as_object).ok_or(())?;
+    let allowed = [
+        "invocationId",
+        "roomId",
+        "traceId",
+        "targetAgentId",
+        "triggerMessageId",
+        "depth",
+        "status",
+        "failureCode",
+        "finishedAt",
+        "replyMessageId",
+        "replyClientMessageId",
+        "replyDigest",
+    ];
+    if data.keys().any(|key| !allowed.contains(&key.as_str())) {
+        return Err(());
+    }
+    for key in [
+        "invocationId",
+        "roomId",
+        "traceId",
+        "targetAgentId",
+        "triggerMessageId",
+        "status",
+    ] {
+        if data
+            .get(key)
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+            .is_none()
+        {
+            return Err(());
+        }
+    }
+    if data.get("depth").and_then(Value::as_u64).is_none() {
+        return Err(());
+    }
+    for key in [
+        "failureCode",
+        "finishedAt",
+        "replyMessageId",
+        "replyClientMessageId",
+        "replyDigest",
+    ] {
+        if data.get(key).is_some_and(|value| value.as_str().is_none()) {
+            return Err(());
+        }
+    }
+    Ok(data.clone())
+}
+
+fn invocation_status_matches(data: &Map<String, Value>, expected: &Map<String, Value>) -> bool {
+    [
+        "roomId",
+        "invocationId",
+        "traceId",
+        "targetAgentId",
+        "triggerMessageId",
+        "depth",
+    ]
+    .iter()
+    .all(|key| data.get(*key) == expected.get(*key))
+}
+
+fn invocation_status_outcome(
+    outcome: &str,
+    room_id: &str,
+    invocation_id: &str,
+    expected: &Map<String, Value>,
+    generation: u64,
+    proof: Option<Map<String, Value>>,
+) -> GatewayHttpResponse {
+    let mut body = serde_json::json!({
+        "outcome": outcome,
+        "roomId": room_id,
+        "invocationId": invocation_id,
+        "traceId": expected.get("traceId"),
+        "generation": generation,
+    });
+    if let Some(proof) = proof {
+        body["status"] = proof.get("status").cloned().unwrap_or(Value::Null);
+        for key in [
+            "failureCode",
+            "finishedAt",
+            "replyMessageId",
+            "replyClientMessageId",
+            "replyDigest",
+        ] {
+            if let Some(value) = proof.get(key) {
+                body[key] = value.clone();
+            }
+        }
+    }
+    GatewayHttpResponse::Json { status: 200, body }
 }
 
 fn method_allowed(method: &str, route: &Route<'_>) -> bool {
@@ -2181,6 +4731,7 @@ fn method_allowed(method: &str, route: &Route<'_>) -> bool {
             | ("GET", Route::Messages(_))
             | ("GET", Route::Events(_))
             | ("GET", Route::TerminalInvocations(_))
+            | ("GET", Route::InvocationMetadata(_, _))
             | ("POST", Route::Messages(_))
             | ("POST", Route::Agents(_))
             | ("PATCH", Route::Agent(_, _))
@@ -2192,7 +4743,13 @@ fn method_allowed(method: &str, route: &Route<'_>) -> bool {
             | ("POST", Route::InternalFinalize)
             | ("POST", Route::InternalLeaseRelease)
             | ("GET", Route::InternalRoomStatus(_))
+            | ("POST", Route::InternalAgentReadiness(_, _, _))
             | ("POST", Route::InternalInvocation(_, _))
+            | ("POST", Route::InternalInvocationStatus(_, _))
+            | ("POST", Route::InternalExecutionBinding(_))
+            | ("GET", Route::InternalManagementCapabilities)
+            | ("POST", Route::InternalManagementOperation(_))
+            | ("POST", Route::InternalManagementStatus(_))
     )
 }
 
@@ -3065,6 +5622,89 @@ fn public_response(
     })
 }
 
+fn validate_invocation_metadata_response(
+    body: &[u8],
+    expected_room_id: &str,
+    expected_invocation_id: &str,
+) -> Result<Value, ChatroomGatewayError> {
+    let invalid =
+        || ChatroomGatewayError::new(502, "invalid_upstream_response", "上游调用元数据格式不正确");
+    let value = parse_strict_json(body).map_err(|_| invalid())?;
+    let envelope = value.as_object().ok_or_else(invalid)?;
+    if envelope.len() != 1 || !envelope.contains_key("data") {
+        return Err(invalid());
+    }
+    let data = envelope["data"].as_object().ok_or_else(invalid)?;
+    if data.len() != 1 || !data.contains_key("invocation") {
+        return Err(invalid());
+    }
+    let invocation = data["invocation"].as_object().ok_or_else(invalid)?;
+    let required = [
+        "invocationId",
+        "roomId",
+        "traceId",
+        "targetAgentId",
+        "triggerMessageId",
+        "depth",
+        "status",
+    ];
+    let optional = ["failureCode", "finishedAt"];
+    if required.iter().any(|key| !invocation.contains_key(*key))
+        || invocation
+            .keys()
+            .any(|key| !required.contains(&key.as_str()) && !optional.contains(&key.as_str()))
+    {
+        return Err(invalid());
+    }
+    let string_field = |key: &str, max: usize| {
+        invocation
+            .get(key)
+            .and_then(Value::as_str)
+            .filter(|value| valid_invocation_id(value, max))
+    };
+    if string_field("invocationId", 64) != Some(expected_invocation_id)
+        || string_field("roomId", 64) != Some(expected_room_id)
+        || string_field("traceId", 128).is_none()
+        || string_field("targetAgentId", 64).is_none()
+        || string_field("triggerMessageId", 64).is_none()
+        || invocation
+            .get("depth")
+            .and_then(Value::as_u64)
+            .is_none_or(|depth| depth > MAX_SAFE_INTEGER)
+        || !matches!(
+            invocation.get("status").and_then(Value::as_str),
+            Some("created" | "accepted" | "running" | "completed" | "failed" | "rejected")
+        )
+    {
+        return Err(invalid());
+    }
+    if let Some(failure_code) = invocation.get("failureCode") {
+        if !failure_code
+            .as_str()
+            .is_some_and(|value| valid_machine_code(value, 64))
+        {
+            return Err(invalid());
+        }
+    }
+    if let Some(finished_at) = invocation.get("finishedAt") {
+        if !finished_at.as_str().is_some_and(|value| {
+            value.len() <= 64 && chrono::DateTime::parse_from_rfc3339(value).is_ok()
+        }) {
+            return Err(invalid());
+        }
+    }
+    Ok(value)
+}
+
+fn valid_machine_code(value: &str, max: usize) -> bool {
+    !value.is_empty()
+        && value.len() <= max
+        && value.as_bytes()[0].is_ascii_lowercase()
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_')
+}
+
 fn parse_json_response(body: &[u8]) -> Result<Value, ChatroomGatewayError> {
     parse_strict_json(body).map_err(|_| {
         ChatroomGatewayError::new(502, "invalid_upstream_response", "上游响应格式不正确")
@@ -3195,6 +5835,51 @@ fn is_durable_event(event: &ChatroomEvent) -> bool {
 fn invalid_request(message: impl Into<String>) -> ChatroomGatewayError {
     ChatroomGatewayError::new(400, "invalid_chatroom_request", message)
 }
+
+fn management_invalid_request(message: impl Into<String>) -> ChatroomGatewayError {
+    ChatroomGatewayError::new(400, "invalid_request", message)
+}
+
+fn invalid_management_response(message: impl Into<String>) -> ChatroomGatewayError {
+    ChatroomGatewayError::new(502, "invalid_management_receipt", message)
+}
+
+fn management_transport_error(message: String) -> ChatroomGatewayError {
+    ChatroomGatewayError::new(502, "upstream_unavailable", message)
+}
+
+fn parse_management_body(body: &[u8]) -> Result<Value, ChatroomGatewayError> {
+    if body.is_empty() {
+        return Err(management_invalid_request("管理请求体不能为空"));
+    }
+    if body.len() > MAX_MANAGEMENT_BODY_BYTES {
+        return Err(management_invalid_request("管理请求体超过 64 KiB 限制"));
+    }
+    parse_strict_json(body).map_err(|_| management_invalid_request("管理请求体不是有效 JSON"))
+}
+
+fn parse_management_response(body: &[u8]) -> Result<Value, ChatroomGatewayError> {
+    parse_strict_json(body).map_err(|_| invalid_management_response("上游管理响应不是有效 JSON"))
+}
+
+fn management_error_response(response: GatewayTransportResponse) -> GatewayHttpResponse {
+    let body = parse_strict_json(&response.body)
+        .ok()
+        .and_then(crate::chatroom_management::management_error_envelope)
+        .unwrap_or_else(|| {
+            serde_json::json!({
+                "error": {
+                    "code": "invalid_upstream_error",
+                    "message": "上游管理接口返回无法解析的错误响应"
+                }
+            })
+        });
+    GatewayHttpResponse::Json {
+        status: response.status,
+        body,
+    }
+}
+
 fn method_not_allowed() -> ChatroomGatewayError {
     ChatroomGatewayError::new(405, "method_not_allowed", "聊天室请求方法不支持")
 }
@@ -3208,4 +5893,204 @@ pub fn is_chatroom_path(path: &str) -> bool {
 
 pub fn is_chatroom_internal_path(path: &str) -> bool {
     path == CHATROOM_INTERNAL_PREFIX || path.starts_with(&format!("{CHATROOM_INTERNAL_PREFIX}/"))
+}
+
+#[cfg(test)]
+mod legacy_lifecycle_tests {
+    use super::*;
+
+    fn accepted_command() -> ChatroomCommand {
+        ChatroomCommand::AgentAccepted {
+            room_id: "room-1".into(),
+            invocation_id: "inv-1".into(),
+            agent_id: "agent-1".into(),
+            device_id: "device-1".into(),
+        }
+    }
+
+    fn accepted_event() -> ChatroomEvent {
+        ChatroomEvent::AgentAccepted {
+            room_id: "room-1".into(),
+            payload: serde_json::json!({"invocationId":"inv-1"}),
+        }
+    }
+
+    #[test]
+    fn given_reused_request_id_when_old_generation_cancels_then_new_waiter_remains_bound() {
+        let waiters = LegacyLifecycleWaiters::default();
+        let accepted = Mutex::new(HashSet::new());
+        let _old = waiters.register(1, "same", accepted_command()).unwrap();
+        waiters.invalidate_all();
+        let new = waiters.register(2, "same", accepted_command()).unwrap();
+        waiters.cancel(1, "same");
+        assert!(observe_legacy_lifecycle(&waiters, &accepted, 1, &accepted_event()).is_none());
+        assert!(observe_legacy_lifecycle(&waiters, &accepted, 2, &accepted_event()).is_some());
+        assert_eq!(new.recv_timeout(Duration::from_millis(10)), Ok(Ok(None)));
+        assert!(accepted
+            .lock()
+            .unwrap()
+            .contains(&(2, "room-1".into(), "inv-1".into())));
+    }
+
+    #[test]
+    fn given_legacy_accepted_evidence_when_capacity_is_exceeded_then_fail_closed_without_growth() {
+        let mut accepted = HashSet::new();
+        for index in 0..MAX_LEGACY_LIFECYCLE_WAITERS {
+            assert!(remember_legacy_accepted(
+                &mut accepted,
+                7,
+                "room-1",
+                &format!("inv-{index}")
+            ));
+        }
+        assert!(!remember_legacy_accepted(
+            &mut accepted,
+            7,
+            "room-1",
+            "inv-overflow"
+        ));
+        assert_eq!(accepted.len(), MAX_LEGACY_LIFECYCLE_WAITERS);
+        assert!(accepted.contains(&(7, "room-1".into(), "inv-0".into())));
+    }
+
+    #[test]
+    fn given_full_legacy_accepted_cache_when_new_event_arrives_then_waiter_is_not_confirmed() {
+        let waiters = LegacyLifecycleWaiters::default();
+        let accepted = Mutex::new(
+            (0..MAX_LEGACY_LIFECYCLE_WAITERS)
+                .map(|index| (9, "room-1".into(), format!("existing-{index}")))
+                .collect(),
+        );
+        let receiver = waiters.register(9, "new", accepted_command()).unwrap();
+
+        assert!(observe_legacy_lifecycle(&waiters, &accepted, 9, &accepted_event()).is_none());
+        assert_eq!(accepted.lock().unwrap().len(), MAX_LEGACY_LIFECYCLE_WAITERS);
+        assert_eq!(
+            receiver.recv_timeout(Duration::from_millis(10)),
+            Ok(Err(AckError::Full))
+        );
+    }
+
+    #[test]
+    fn given_status_waiter_on_socket_b_when_socket_a_delivers_same_invocation_then_do_not_confirm()
+    {
+        let waiters = LegacyLifecycleWaiters::default();
+        let accepted = Mutex::new(HashSet::new());
+        let digest = reply_digest(&ChatroomReplyDigestInput {
+            client_message_id: "reply-1",
+            content: "done",
+            mention_agent_ids: &[],
+            attachment_ids: &[],
+        });
+        let receiver = waiters
+            .register_status(
+                2,
+                "status-b",
+                "room-1",
+                "inv-1",
+                "completed",
+                "reply-1",
+                &digest,
+                "",
+            )
+            .unwrap();
+        let event = ChatroomEvent::AgentCompleted {
+            room_id: "room-1".into(),
+            payload: serde_json::json!({
+                "invocationId":"inv-1",
+                "content":"done",
+                "mentionAgentIds":[],
+                "attachmentIds":[],
+                "clientMessageId":"reply-1"
+            }),
+        };
+
+        observe_legacy_lifecycle(&waiters, &accepted, 1, &event);
+        assert!(matches!(
+            receiver.try_recv(),
+            Err(std::sync::mpsc::TryRecvError::Empty)
+        ));
+        observe_legacy_lifecycle(&waiters, &accepted, 2, &event);
+        assert_eq!(
+            receiver.recv_timeout(Duration::from_millis(10)),
+            Ok(Ok(Some(LegacyTerminalProof::Completed {
+                reply_client_message_id: "reply-1".into(),
+                reply_digest: digest,
+            })))
+        );
+    }
+
+    #[test]
+    fn given_legacy_terminal_event_when_result_identity_or_failure_code_differs_then_reject() {
+        let completed = ChatroomCommand::AgentEvent {
+            room_id: "room-1".into(),
+            invocation_id: "inv-1".into(),
+            event: AgentEventPayload::Completed {
+                content: "done".into(),
+                mention_agent_ids: vec!["agent-1".into()],
+                attachment_ids: vec![],
+                client_message_id: "reply-1".into(),
+            },
+        };
+        assert!(matches!(
+            lifecycle_event_match(
+                &LegacyLifecycleExpectation::Command(completed.clone()),
+                &ChatroomEvent::AgentCompleted {
+                    room_id: "room-1".into(),
+                    payload: serde_json::json!({"invocationId":"inv-1","content":"done","mentionAgentIds":["agent-1"],"attachmentIds":[],"clientMessageId":"reply-1"}),
+                }
+            ),
+            Some(Ok(Some(LegacyTerminalProof::Completed {
+                reply_client_message_id,
+                reply_digest,
+            }))) if reply_client_message_id == "reply-1" && reply_digest.len() == 64
+        ));
+        assert!(matches!(
+            lifecycle_event_match(
+                &LegacyLifecycleExpectation::Command(completed),
+                &ChatroomEvent::AgentCompleted {
+                    room_id: "room-1".into(),
+                    payload: serde_json::json!({"invocationId":"inv-1","content":"different","mentionAgentIds":["agent-1"],"attachmentIds":[],"clientMessageId":"reply-1"}),
+                }
+            ),
+            Some(Err(AckError::Rejected(code))) if code == "result_mismatch"
+        ));
+
+        let failed = ChatroomCommand::AgentEvent {
+            room_id: "room-1".into(),
+            invocation_id: "inv-1".into(),
+            event: AgentEventPayload::Failed {
+                code: "agent_offline".into(),
+                message: "offline".into(),
+            },
+        };
+        assert!(matches!(
+            lifecycle_event_match(
+                &LegacyLifecycleExpectation::Command(failed.clone()),
+                &ChatroomEvent::AgentFailed {
+                    room_id: "room-1".into(),
+                    payload: serde_json::json!({"invocationId":"inv-1","failureCode":"different"}),
+                }
+            ),
+            Some(Err(AckError::Rejected(code))) if code == "result_mismatch"
+        ));
+        let invalid_failure = ChatroomCommand::AgentEvent {
+            room_id: "room-1".into(),
+            invocation_id: "inv-1".into(),
+            event: AgentEventPayload::Failed {
+                code: "unknown_failure".into(),
+                message: "offline".into(),
+            },
+        };
+        assert!(matches!(
+            lifecycle_event_match(
+                &LegacyLifecycleExpectation::Command(invalid_failure),
+                &ChatroomEvent::AgentFailed {
+                    room_id: "room-1".into(),
+                    payload: serde_json::json!({"invocationId":"inv-1","failureCode":"unknown_failure"}),
+                }
+            ),
+            Some(Err(AckError::Rejected(code))) if code == "result_mismatch"
+        ));
+    }
 }

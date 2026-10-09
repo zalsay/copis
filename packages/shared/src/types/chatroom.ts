@@ -17,7 +17,76 @@ export const CHATROOM_MAX_ATTACHMENT_IDS = 20
 export type ChatRoomRole = 'host' | 'member'
 export type ChatRoomStatus = 'active' | 'archived' | 'deleting' | 'deleted'
 export type ChatRoomPresence = 'online' | 'busy' | 'offline' | 'disabled'
+export type ChatRoomCapability = 'agent-ready-v1' | 'invocation-ack-v1' | 'agent-delta-frame-id-v1'
+export type AgentAvailability = 'preparing' | 'online' | 'busy' | 'offline' | 'disabled' | 'configuration_error'
 export type ChatRoomConnectionStatus = 'connecting' | 'connected' | 'reconnecting' | 'offline' | 'auth_expired'
+
+export type ChatRoomReadyCommand = {
+  type: 'agent.ready' | 'agent.unready'
+  roomId: string
+  payload: { requestId: string; roomAgentId: string }
+}
+
+export type ChatRoomCommandAck = {
+  type: 'command.ack'
+  roomId: string
+  payload: {
+    requestId: string
+    command: string
+    ok: boolean
+    invocationId?: string
+    status?: string
+    errorCode?: string
+  }
+}
+
+const CHATROOM_CAPABILITIES = new Set<ChatRoomCapability>([
+  'agent-ready-v1',
+  'invocation-ack-v1',
+  'agent-delta-frame-id-v1',
+])
+
+/** 校验 ready 命令；认证主体由服务端连接上下文提供，禁止由 payload 指定。 */
+export function parseChatRoomReadyCommand(value: unknown): ChatRoomReadyCommand | undefined {
+  if (!isRecord(value) || !hasExactKeys(value, ['type', 'roomId', 'payload'])) return undefined
+  if (value.type !== 'agent.ready' && value.type !== 'agent.unready') return undefined
+  if (!isChatRoomWireId(value.roomId, 64) || !isRecord(value.payload) || !hasExactKeys(value.payload, ['requestId', 'roomAgentId'])) return undefined
+  if (!isChatRoomWireId(value.payload.requestId, 128) || !isChatRoomWireId(value.payload.roomAgentId, 64)) return undefined
+  return value as unknown as ChatRoomReadyCommand
+}
+
+/** 未知能力不会激活；旧服务器 404 应由 HTTP 调用方按 legacy 单独处理。 */
+export function parseChatRoomCapabilities(value: unknown): ChatRoomCapability[] | undefined {
+  if (!isRecord(value) || !hasExactKeys(value, ['capabilities']) || !Array.isArray(value.capabilities)) return undefined
+  const enabled = new Set<ChatRoomCapability>()
+  for (const capability of value.capabilities) {
+    if (typeof capability === 'string' && CHATROOM_CAPABILITIES.has(capability as ChatRoomCapability)) {
+      enabled.add(capability as ChatRoomCapability)
+    } else if (typeof capability !== 'string') return undefined
+  }
+  return [...enabled]
+}
+
+/** 私有 ACK 不属于可广播的 ChatRoomEventEnvelope。 */
+export function parseChatRoomCommandAck(value: unknown, expectedRoomId?: string): ChatRoomCommandAck | undefined {
+  if (!isRecord(value) || !hasExactKeys(value, ['type', 'roomId', 'payload']) || value.type !== 'command.ack') return undefined
+  if (!isChatRoomWireId(value.roomId, 64) || (expectedRoomId !== undefined && value.roomId !== expectedRoomId)) return undefined
+  const payload = value.payload
+  if (!isRecord(payload)) return undefined
+  const allowed = ['requestId', 'command', 'ok', 'invocationId', 'status', 'errorCode']
+  if (!Reflect.ownKeys(payload).every((key) => typeof key === 'string' && allowed.includes(key))) return undefined
+  const allowedCommands = ['agent.ready', 'agent.unready', 'agent.accepted', 'agent.running', 'agent.delta', 'agent.completed', 'agent.failed']
+  if (!hasRequiredKeys(payload, ['requestId', 'command', 'ok']) || !isChatRoomWireId(payload.requestId, 128) || typeof payload.command !== 'string' || !allowedCommands.includes(payload.command) || typeof payload.ok !== 'boolean') return undefined
+  if (payload.invocationId !== undefined && !isChatRoomWireId(payload.invocationId, 64)) return undefined
+  if (payload.status !== undefined && (typeof payload.status !== 'string' || !['created', 'accepted', 'running', 'completed', 'failed', 'rejected'].includes(payload.status))) return undefined
+  if (payload.errorCode !== undefined && !isChatRoomWireId(payload.errorCode, 64)) return undefined
+  return value as unknown as ChatRoomCommandAck
+}
+
+function isChatRoomWireId(value: unknown, maxBytes: number): value is string {
+  if (typeof value !== 'string' || value.trim() !== value || value.length === 0 || new TextEncoder().encode(value).length > maxBytes) return false
+  return !/[\s\u0000-\u001f\u007f\u0080-\u009f/?#\\]/u.test(value)
+}
 export type ChatRoomAttachmentPhase =
   | 'waiting_authorization'
   | 'uploading'
@@ -69,9 +138,24 @@ export interface ChatRoomAgent {
   displayName: string
   avatar?: string
   status: ChatRoomPresence
+  /** 服务端派生的运行就绪状态；不从成员在线状态推断。 */
+  availability?: AgentAvailability
   busy: boolean
   memoryShared: boolean
   skillsShared: boolean
+}
+
+/** 成员可读的 invocation 元数据，仅用于按精确调用 ID 归属运行状态。 */
+export interface ChatRoomInvocationMetadata {
+  invocationId: string
+  roomId: string
+  traceId: string
+  targetAgentId: string
+  triggerMessageId: string
+  depth: number
+  status: ChatRoomInvocationStatus
+  failureCode?: string
+  finishedAt?: string | number
 }
 
 /** 服务端消息 DTO；trace/depth 只允许作为服务端响应的一部分出现。 */
@@ -364,6 +448,7 @@ export interface ChatRoomAgentLocalView {
   skillSharingEnabled: boolean
   skillSnapshotDigest?: string
   archived: boolean
+  localAvailability?: AgentAvailability
 }
 
 /** Renderer 可见的聊天室脱敏视图。 */
@@ -408,20 +493,98 @@ export interface ChatRoomAgentRuntimeContext {
 }
 
 export interface ChatRoomRustApi {
-  reportAccepted(input: { invocationId: string }): Promise<void>
-  reportRunning(input: { invocationId: string }): Promise<void>
+  reportAccepted(input: { invocationId: string }, options?: { signal?: AbortSignal }): Promise<ChatRoomLifecycleResult>
+  reportRunning(input: { invocationId: string }, options?: { signal?: AbortSignal }): Promise<ChatRoomLifecycleResult>
   reportDelta(input: { invocationId: string; delta: string }): Promise<void>
-  reportCompleted(input: { invocationId: string; output: ChatRoomAgentOutput }, options?: { signal?: AbortSignal }): Promise<void>
+  reportCompleted(input: { invocationId: string; output: ChatRoomAgentOutput }, options?: { signal?: AbortSignal }): Promise<ChatRoomLifecycleResult>
   reportFailed(input: {
     invocationId: string
     code: ChatRoomInvocationFailureCode
     message: string
-  }): Promise<void>
+  }, options?: { signal?: AbortSignal }): Promise<ChatRoomLifecycleResult>
+  queryInvocationStatus(input: ChatRoomInvocationStatusQuery, options?: { signal?: AbortSignal }): Promise<ChatRoomInvocationStatusResult>
   releaseAgentLeases(input: {
     roomAgentIds: string[]
     reason: 'logout' | 'gateway_disconnected' | 'app_quit'
   }): Promise<void>
 }
+
+/** Main-only lifecycle receipt. This type is never part of an IPC/Renderer DTO. */
+interface ChatRoomLifecycleResultBase {
+  roomId: string
+  invocationId: string
+  command: 'agent.accepted' | 'agent.running' | 'agent.completed' | 'agent.failed'
+  status: 'accepted' | 'running' | 'completed' | 'failed'
+  generation: number
+}
+
+/** Native 已匹配到的 legacy terminal event 结果；Main-only，不能进入 IPC/Renderer DTO。 */
+export type ChatRoomLegacyTerminalProof =
+  | { kind: 'matched-server-event-v1'; replyClientMessageId: string; replyDigest: string }
+  | { kind: 'matched-server-event-v1'; failureCode: ChatRoomInvocationFailureCode }
+
+export type ChatRoomLifecycleResult =
+  | (ChatRoomLifecycleResultBase & {
+      outcome: 'confirmed'
+      mode: 'invocation-ack-v1'
+      source: 'private-ack'
+      confirmed: true
+      requestId: string
+    })
+  | (ChatRoomLifecycleResultBase & {
+      outcome: 'confirmed'
+      mode: 'legacy'
+      source: 'server-event'
+      command: 'agent.accepted'
+      status: 'accepted' | 'running'
+    })
+  | (ChatRoomLifecycleResultBase & {
+      outcome: 'confirmed'
+      mode: 'legacy'
+      source: 'server-event'
+      command: 'agent.completed'
+      status: 'completed'
+      terminalProof: Extract<ChatRoomLegacyTerminalProof, { replyClientMessageId: string }>
+    })
+  | (ChatRoomLifecycleResultBase & {
+      outcome: 'confirmed'
+      mode: 'legacy'
+      source: 'server-event'
+      command: 'agent.failed'
+      status: 'failed'
+      terminalProof: Extract<ChatRoomLegacyTerminalProof, { failureCode: ChatRoomInvocationFailureCode }>
+    })
+  | (ChatRoomLifecycleResultBase & {
+      outcome: 'advisory'
+      mode: 'legacy'
+      source: 'accepted-event+local-advisory'
+      command: 'agent.running'
+      status: 'running'
+    })
+
+/** Main-only query contract constructed exclusively from the local persisted invocation/result record. */
+export interface ChatRoomInvocationStatusQuery {
+  roomId: string
+  invocationId: string
+  deviceId: string
+  traceId: string
+  targetAgentId: string
+  triggerMessageId: string
+  depth: number
+  expectedStatus: 'completed' | 'failed'
+  failureCode: ChatRoomInvocationFailureCode | ''
+  clientMessageId: string
+  replyDigest: string
+}
+
+/** Main-only status proof; Unknown/Rejected are not terminal confirmations. */
+export type ChatRoomInvocationStatusResult =
+  | { outcome: 'Confirmed'; roomId: string; invocationId: string; traceId: string; status: 'completed'; generation: number; finishedAt: string; replyMessageId: string; replyClientMessageId: string; replyDigest: string }
+  | { outcome: 'Confirmed'; roomId: string; invocationId: string; traceId: string; status: 'failed'; generation: number; finishedAt: string; failureCode: ChatRoomInvocationFailureCode }
+  | { outcome: 'Confirmed'; roomId: string; invocationId: string; traceId: string; status: 'completed'; generation: number; mode: 'legacy'; source: 'server-event'; terminalProof: Extract<ChatRoomLegacyTerminalProof, { replyClientMessageId: string }> }
+  | { outcome: 'Confirmed'; roomId: string; invocationId: string; traceId: string; status: 'failed'; generation: number; mode: 'legacy'; source: 'server-event'; terminalProof: Extract<ChatRoomLegacyTerminalProof, { failureCode: ChatRoomInvocationFailureCode }> }
+  | { outcome: 'Unknown'; roomId: string; invocationId: string; traceId: string; generation: number }
+  | { outcome: 'Rejected'; roomId: string; invocationId: string; traceId: string; generation: number }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return false

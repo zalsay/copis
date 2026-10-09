@@ -15,12 +15,14 @@ const {
   getChatRoomsRootPath,
 } = await import('./config-paths')
 const { ChatRoomWorkspaceStore } = await import('./chatroom-workspace-store')
+const { computeChatRoomReplyDigest } = await import('./chatroom-reply-digest')
 import type {
   ChatRoomAgentLocalConfig,
   ChatRoomInvocationRecord,
   ChatRoomLocalIdentity,
   ProvisionChatRoomAgentInput,
 } from '@copis/shared'
+import type { ChatRoomPendingResultInput } from './chatroom-workspace-store'
 
 const now = 1_700_000_000_000
 const DAY = 24 * 60 * 60 * 1000
@@ -60,6 +62,33 @@ function provision(store: InstanceType<typeof ChatRoomWorkspaceStore>, input: Pa
   return store.provisionAgent(identity, makeInput(input))
 }
 
+type CompletedPendingResultInput = Extract<ChatRoomPendingResultInput, { expectedStatus: 'completed' }>
+
+function makePendingResult(
+  index = 0,
+  overrides: Partial<Omit<CompletedPendingResultInput, 'expectedStatus' | 'output' | 'replyDigest'>>
+    & Partial<Pick<CompletedPendingResultInput, 'output' | 'replyDigest'>> = {},
+): CompletedPendingResultInput {
+  const clientMessageId = overrides.clientMessageId ?? `reply-client-${index}`
+  const output = { text: `已净化回复 ${index}`, attachmentIds: [], mentionedAgentIds: [] }
+  return {
+    hostUserId: identity.hostUserId,
+    deviceId: identity.deviceId,
+    roomId: 'room-1',
+    invocationId: `inv-pending-${index}`,
+    traceId: `trace-pending-${index}`,
+    targetAgentId: 'agent-1',
+    triggerMessageId: `trigger-pending-${index}`,
+    depth: 0,
+    expectedStatus: 'completed',
+    clientMessageId,
+    output,
+    replyDigest: computeChatRoomReplyDigest({ clientMessageId, ...output }),
+    createdAt: now,
+    ...overrides,
+  }
+}
+
 beforeEach(() => {
   rmSync(testHome, { recursive: true, force: true })
   mkdirSync(testHome, { recursive: true })
@@ -70,6 +99,180 @@ afterEach(() => {
 })
 
 describe('聊天室本地工作区存储', () => {
+  test('pending 结果在独立 store 实例中可恢复且保留同一回复', () => {
+    const store = makeStore()
+    const saved = provision(store)
+    const record = makePendingResult(0, { roomId: saved.roomId, targetAgentId: saved.agents[0]!.roomAgentId })
+    const persisted = store.savePendingResult(record)
+
+    const restartedStore = makeStore()
+    expect(restartedStore.listPendingResults(saved.roomId)).toEqual([persisted])
+    expect(lstatSync(join(getChatRoomPath(saved.roomId), 'pending-results.json')).mode & 0o777).toBe(0o600)
+  })
+
+  test('失败候选仅持久化固定 failure code，不夹带生成输出', () => {
+    const store = makeStore()
+    const saved = provision(store)
+    const record = {
+      hostUserId: identity.hostUserId,
+      deviceId: identity.deviceId,
+      roomId: saved.roomId,
+      invocationId: 'inv-failed-pending',
+      traceId: 'trace-failed-pending',
+      targetAgentId: saved.agents[0]!.roomAgentId,
+      triggerMessageId: 'trigger-failed-pending',
+      depth: 0,
+      clientMessageId: 'reply-failed-pending',
+      createdAt: now,
+      expectedStatus: 'failed' as const,
+      failureCode: 'internal_error' as const,
+    }
+
+    const persisted = store.savePendingResult(record)
+    expect(persisted).toMatchObject(record)
+    expect(persisted).not.toHaveProperty('output')
+    expect(persisted).not.toHaveProperty('replyDigest')
+  })
+
+  test('同一 invocation 的相同结果幂等，冲突结果不能覆盖旧回复', () => {
+    const store = makeStore()
+    const saved = provision(store)
+    const original = makePendingResult(0, { targetAgentId: saved.agents[0]!.roomAgentId })
+    const persisted = store.savePendingResult(original)
+
+    expect(store.savePendingResult(original)).toEqual(persisted)
+    expect(() => store.savePendingResult(makePendingResult(0, {
+      targetAgentId: saved.agents[0]!.roomAgentId,
+      output: { text: '不同回复', attachmentIds: [], mentionedAgentIds: [] },
+      replyDigest: computeChatRoomReplyDigest({ clientMessageId: original.clientMessageId, text: '不同回复', attachmentIds: [], mentionedAgentIds: [] }),
+    }))).toThrow('pending_result_conflict')
+    expect(store.listPendingResults(saved.roomId)).toEqual([persisted])
+  })
+
+  test('同一用户消息发给两个 Agent 时分别保留两份 pending 回复', () => {
+    const store = makeStore()
+    provision(store, { displayName: 'Agent A' })
+    const room = provision(store, { displayName: 'Agent B' })
+    const [agentA, agentB] = room.agents
+    const clientMessageId = 'shared-user-trigger-1'
+    const first = makePendingResult(1, {
+      targetAgentId: agentA!.roomAgentId,
+      triggerMessageId: clientMessageId,
+      clientMessageId,
+    })
+    const second = makePendingResult(2, {
+      targetAgentId: agentB!.roomAgentId,
+      triggerMessageId: clientMessageId,
+      clientMessageId,
+    })
+
+    const firstSaved = store.savePendingResult(first)
+    const secondSaved = store.savePendingResult(second)
+    expect(secondSaved.invocationId).not.toBe(firstSaved.invocationId)
+    expect(store.listPendingResults(room.roomId)).toEqual([firstSaved, secondSaved])
+    expect(makeStore().listPendingResults(room.roomId)).toEqual([firstSaved, secondSaved])
+  })
+
+  test('同一 Agent 的同一 clientMessageId 不能被另一 invocation 占用', () => {
+    const store = makeStore()
+    const room = provision(store)
+    const targetAgentId = room.agents[0]!.roomAgentId
+    const original = store.savePendingResult(makePendingResult(1, {
+      targetAgentId,
+      triggerMessageId: 'shared-user-trigger-1',
+      clientMessageId: 'shared-user-trigger-1',
+    }))
+
+    expect(() => store.savePendingResult(makePendingResult(2, {
+      targetAgentId,
+      triggerMessageId: 'shared-user-trigger-1',
+      clientMessageId: 'shared-user-trigger-1',
+    }))).toThrow('pending_result_conflict')
+    expect(store.listPendingResults(room.roomId)).toEqual([original])
+  })
+
+  test('精确记录 compare-and-delete 不会让旧 revision 删除重建的结果', () => {
+    const store = makeStore()
+    const saved = provision(store)
+    const input = makePendingResult(0, { targetAgentId: saved.agents[0]!.roomAgentId })
+    const oldRecord = store.savePendingResult(input)
+
+    expect(store.removePendingResultIfUnchanged(oldRecord)).toBe(true)
+    const replacement = store.savePendingResult(input)
+    expect(replacement.recordRevision).not.toBe(oldRecord.recordRevision)
+    expect(store.removePendingResultIfUnchanged(oldRecord)).toBe(false)
+    expect(store.listPendingResults(saved.roomId)).toEqual([replacement])
+  })
+
+  test('pending 记录满额后拒绝新回复且不自动淘汰唯一结果', () => {
+    const store = makeStore()
+    const saved = provision(store)
+    const records = Array.from({ length: 32 }, (_, index) => store.savePendingResult(makePendingResult(index, {
+      targetAgentId: saved.agents[0]!.roomAgentId,
+    })))
+
+    expect(() => store.savePendingResult(makePendingResult(32, { targetAgentId: saved.agents[0]!.roomAgentId })))
+      .toThrow('pending_results_full')
+    expect(store.listPendingResults(saved.roomId)).toEqual(records)
+  })
+
+  test('错误账户不能读取其他 host 的 pending 回复', () => {
+    const store = makeStore()
+    const saved = provision(store)
+    store.savePendingResult(makePendingResult(0, { targetAgentId: saved.agents[0]!.roomAgentId }))
+    const otherAccount = new ChatRoomWorkspaceStore({ identity: { hostUserId: 'host-2', deviceId: identity.deviceId }, now: () => now })
+
+    expect(() => otherAccount.listPendingResults(saved.roomId)).toThrow('identity_mismatch')
+  })
+
+  test('摘要不匹配的输出与单文件超限内容均拒绝读取或写入', () => {
+    const store = makeStore()
+    const saved = provision(store)
+    const original = store.savePendingResult(makePendingResult(0, { targetAgentId: saved.agents[0]!.roomAgentId }))
+    expect(() => store.savePendingResult(makePendingResult(1, {
+      targetAgentId: saved.agents[0]!.roomAgentId,
+      replyDigest: 'b'.repeat(64),
+    }))).toThrow('invalid_pending_result_digest')
+    expect(store.listPendingResults(saved.roomId)).toEqual([original])
+
+    const pendingPath = join(getChatRoomPath(saved.roomId), 'pending-results.json')
+    writeFileSync(pendingPath, Buffer.alloc(3 * 1024 * 1024 + 1, 0x20))
+    expect(() => store.listPendingResults(saved.roomId)).toThrow('pending_results_unrecoverable')
+  })
+
+  test('pending JSON symlink 与损坏内容均 fail closed', () => {
+    const store = makeStore()
+    const saved = provision(store)
+    const pendingPath = join(getChatRoomPath(saved.roomId), 'pending-results.json')
+    const outsidePath = join(testHome, 'outside-pending.json')
+    writeFileSync(outsidePath, 'untouched')
+    symlinkSync(outsidePath, pendingPath)
+    expect(() => store.listPendingResults(saved.roomId)).toThrow('pending_results_path_not_file')
+    expect(() => store.savePendingResult(makePendingResult(0, { targetAgentId: saved.agents[0]!.roomAgentId })))
+      .toThrow('pending_results_path_not_file')
+    expect(readFileSync(outsidePath, 'utf8')).toBe('untouched')
+
+    rmSync(pendingPath)
+    writeFileSync(pendingPath, '{broken')
+    expect(() => store.listPendingResults(saved.roomId)).toThrow('pending_results_unrecoverable')
+  })
+
+  test('超出单条 UTF-8 内容上限时不修改已有结果', () => {
+    const store = makeStore()
+    const saved = provision(store)
+    const original = store.savePendingResult(makePendingResult(0, { targetAgentId: saved.agents[0]!.roomAgentId }))
+    const text = '界'.repeat(100_000)
+    const output = { text, attachmentIds: [], mentionedAgentIds: [] }
+    const tooLarge = makePendingResult(1, {
+      targetAgentId: saved.agents[0]!.roomAgentId,
+      output,
+      replyDigest: 'a'.repeat(64),
+    })
+
+    expect(() => store.savePendingResult(tooLarge)).toThrow('pending_result_too_large')
+    expect(store.listPendingResults(saved.roomId)).toEqual([original])
+  })
+
   test('恢复租约时跳过单个损坏的 room.json，不阻止其他房间', () => {
     const store = makeStore()
     provision(store, { roomId: 'room-broken' })
@@ -127,6 +330,21 @@ describe('聊天室本地工作区存储', () => {
     expect(existsSync(getChatRoomAgentInboxPath('room-1', roomAgentId))).toBe(true)
     expect(existsSync(join(testHome, '.copis', 'agent-sessions.json'))).toBe(false)
     expect(lstatSync(getChatRoomConfigPath('room-1')).mode & 0o777).toBe(0o600)
+  })
+
+  test('Given a journal plans room creation time When the first Agent is persisted Then retain that immutable createdAt', () => {
+    const store = makeStore()
+    const roomCreatedAt = now - 1234
+    const saved = (store.provisionAgent as any)(identity, makeInput({ roomId: 'room-planned-time' }), 'server-agent-1', { roomCreatedAt })
+    expect(saved.createdAt).toBe(roomCreatedAt)
+    expect(store.read('room-planned-time')?.createdAt).toBe(roomCreatedAt)
+  })
+
+  test('Given a room already exists When an operation supplies a different immutable createdAt Then reject instead of replacing its identity', () => {
+    const store = makeStore()
+    const room = provision(store, { roomId: 'room-identity' })
+    expect(() => (store.provisionAgent as any)(identity, makeInput({ roomId: 'room-identity', displayName: 'Agent B' }), 'server-agent-2', { roomCreatedAt: room.createdAt + 1 })).toThrow('management_operation_room_identity_mismatch')
+    expect(store.read('room-identity')?.createdAt).toBe(room.createdAt)
   })
 
   test('room 已有 3 个 Agent 时拒绝第 4 个且配置不变', () => {

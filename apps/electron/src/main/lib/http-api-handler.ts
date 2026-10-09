@@ -71,7 +71,9 @@ import type {
   WorkingReceiveChannel,
   WorkingAuthState,
   ChatRoomAgentInvocation,
+  ChatRoomInvocationFailureCode,
 } from '@copis/shared'
+import type { ChatRoomGatewayOrigin, ChatRoomTrustedFailureResult } from './chatroom-execution-types'
 import { fileService } from './file-service'
 import { getAgentWorkspace, getAgentWorkspaceWritableRoot } from './agent-workspace-manager'
 import { broadcastChanged as broadcastAutomationsChanged } from './automation-scheduler'
@@ -143,12 +145,16 @@ export interface HttpApiDependencies {
   /** Rust bridge dispatch 使用的主进程专家团队入口。 */
   dispatchExpertTeam?: (snapshot: ExpertTeamRunSnapshot, workspaceRoot: string) => Promise<ExpertTeamRunResult>
   /** Rust bridge dispatch 使用的主进程聊天室入口。 */
-  handleChatRoomInvocation?: (input: ChatRoomAgentInvocation) => Promise<'accepted' | 'duplicate'>
+  handleChatRoomInvocation?: (input: ChatRoomAgentInvocation, origin?: ChatRoomGatewayOrigin) => Promise<'accepted' | 'duplicate'>
+  /** 当前认证 Gateway socket 的服务端 agent.failed terminal proof。 */
+  handleChatRoomServerFailure?: (input: { roomId: string; invocationId: string; failureCode: ChatRoomInvocationFailureCode; origin: ChatRoomGatewayOrigin }) => Promise<ChatRoomTrustedFailureResult>
   /** Rust bridge 断开通知使用的聊天室清理入口。 */
   handleChatRoomGatewayDisconnected?: () => Promise<void>
   stopChatRoomAgents?: (reason: 'logout') => Promise<void>
   resumeChatRoomAgentsAfterAuthentication?: () => Promise<void>
   handleAgentPermission?: (input: { sessionId: string; requestId: string; toolName: string; toolInput: Record<string, unknown>; description?: string }) => Promise<{ behavior: 'allow' | 'deny'; message?: string }>
+  /** 测试可替换 Main prepare 边界；生产请求默认使用可信运行准备器。 */
+  prepareAgentRpcRun?: typeof prepareAgentRpcRun
 }
 
 export interface BrowserAgentToolHttpApi {
@@ -535,8 +541,18 @@ async function readJsonBody(request: HttpApiRequest): Promise<unknown> {
 }
 
 type ChatRoomCoordinatorFacade = {
-  handleInvocation(input: ChatRoomAgentInvocation): Promise<'accepted' | 'duplicate'>
+  handleInvocation(input: ChatRoomAgentInvocation, origin?: ChatRoomGatewayOrigin): Promise<'accepted' | 'duplicate'>
+  handleTrustedServerFailure(input: { roomId: string; invocationId: string; failureCode: ChatRoomInvocationFailureCode; origin: ChatRoomGatewayOrigin }): Promise<ChatRoomTrustedFailureResult>
   handleGatewayDisconnected(): Promise<void>
+}
+
+function parseChatRoomGatewayOrigin(value: unknown): ChatRoomGatewayOrigin | undefined {
+  if (!isRecord(value)) return undefined
+  const keys = Reflect.ownKeys(value).sort()
+  if (keys.length !== 3 || keys.join(',') !== 'authEpoch,clientGeneration,socketGeneration') return undefined
+  if (![value.clientGeneration, value.socketGeneration].every((item) => typeof item === 'number' && Number.isSafeInteger(item) && item > 0)) return undefined
+  if (typeof value.authEpoch !== 'number' || !Number.isSafeInteger(value.authEpoch) || value.authEpoch < 0) return undefined
+  return { clientGeneration: value.clientGeneration as number, socketGeneration: value.socketGeneration as number, authEpoch: value.authEpoch }
 }
 
 interface ChatRoomCoordinatorModule {
@@ -571,6 +587,30 @@ function isExactDisconnectedBody(value: unknown): boolean {
     && value.reason === 'realtime_disconnected'
 }
 
+const CHATROOM_FAILURE_CODES = new Set<ChatRoomInvocationFailureCode>([
+  'room_not_found', 'room_archived', 'not_room_member', 'share_code_invalid', 'share_code_rate_limited',
+  'agent_limit_reached', 'agent_offline', 'agent_busy', 'invocation_duplicate', 'invocation_depth_exceeded',
+  'host_approval_timeout', 'host_approval_denied', 'attachment_not_ready', 'attachment_forbidden',
+  'realtime_reconnecting', 'gateway_disconnected', 'app_quit', 'invalid_invocation', 'invalid_output',
+  'room_agent_not_found', 'internal_error',
+])
+
+function isTrustedServerFailureBody(value: unknown): value is {
+  event: 'agent.failed'; roomId: string; invocationId: string; failureCode: string
+  clientGeneration: number; socketGeneration: number; authEpoch: number
+} {
+  if (!isRecord(value)) return false
+  const keys = Reflect.ownKeys(value).sort()
+  return keys.length === 7
+    && keys.join(',') === 'authEpoch,clientGeneration,event,failureCode,invocationId,roomId,socketGeneration'
+    && value.event === 'agent.failed'
+    && typeof value.roomId === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(value.roomId)
+    && typeof value.invocationId === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(value.invocationId)
+    && typeof value.failureCode === 'string' && /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(value.failureCode)
+    && [value.clientGeneration, value.socketGeneration].every((item) => typeof item === 'number' && Number.isSafeInteger(item) && item > 0)
+    && typeof value.authEpoch === 'number' && Number.isSafeInteger(value.authEpoch) && value.authEpoch >= 0
+}
+
 async function handleChatRoomInternalRequest(
   request: HttpApiRequest,
   path: string,
@@ -578,7 +618,8 @@ async function handleChatRoomInternalRequest(
 ): Promise<HttpApiResponse> {
   const isInvocation = path === '/api/internal/chatrooms/invocations'
   const isDisconnected = path === '/api/internal/chatrooms/disconnected'
-  if (!isInvocation && !isDisconnected) {
+  const isServerFailure = path === '/api/internal/chatrooms/server-failure'
+  if (!isInvocation && !isDisconnected && !isServerFailure) {
     throw new HttpApiRequestError('HTTP API 路径不存在', 404, 'not_found')
   }
   if (request.method !== 'POST') {
@@ -586,6 +627,22 @@ async function handleChatRoomInternalRequest(
   }
 
   const body = await readJsonBody(request)
+  if (isServerFailure) {
+    if (!isTrustedServerFailureBody(body)) throw new HttpApiRequestError('聊天室服务端终态参数不正确', 400, 'invalid_chatroom_server_failure')
+    let result: ChatRoomTrustedFailureResult
+    const failureCode = CHATROOM_FAILURE_CODES.has(body.failureCode as ChatRoomInvocationFailureCode)
+      ? body.failureCode as ChatRoomInvocationFailureCode
+      : 'internal_error'
+    try {
+      result = dependencies.handleChatRoomServerFailure
+        ? await dependencies.handleChatRoomServerFailure({ roomId: body.roomId, invocationId: body.invocationId, failureCode, origin: { clientGeneration: body.clientGeneration, socketGeneration: body.socketGeneration, authEpoch: body.authEpoch } })
+        : await (await getDefaultChatRoomCoordinator()).handleTrustedServerFailure({ roomId: body.roomId, invocationId: body.invocationId, failureCode, origin: { clientGeneration: body.clientGeneration, socketGeneration: body.socketGeneration, authEpoch: body.authEpoch } })
+    } catch (error) {
+      throwChatRoomCoordinatorFailure(error)
+    }
+    if (result === 'retry') throw new HttpApiRequestError('聊天室 Native owner stop 或终态提交尚未确认', 503, 'chatroom_execution_handoff_unknown')
+    return { status: 200, body: { status: result === 'handled' ? 'stopped' : 'ignored' } }
+  }
   if (isDisconnected) {
     if (!isExactDisconnectedBody(body)) {
       throw new HttpApiRequestError('聊天室断开通知参数不正确', 400, 'invalid_chatroom_disconnect')
@@ -612,13 +669,27 @@ async function handleChatRoomInternalRequest(
     return { status: 204 }
   }
 
-  if (!isChatRoomAgentInvocation(body)) {
+  let invocation: unknown = body
+  let gatewayOrigin: ChatRoomGatewayOrigin | undefined
+  if (isRecord(body) && Reflect.ownKeys(body).length === 2 && Reflect.ownKeys(body).every((key) => key === 'invocation' || key === 'gatewayOrigin')) {
+    invocation = body.invocation
+    gatewayOrigin = parseChatRoomGatewayOrigin(body.gatewayOrigin)
+    if (!gatewayOrigin) throw new HttpApiRequestError('聊天室来源代际不正确', 400, 'invalid_chatroom_origin')
+  }
+  if (!isChatRoomAgentInvocation(invocation)) {
     throw new HttpApiRequestError('聊天室调用参数不正确', 400, 'invalid_chatroom_invocation')
+  }
+  if (!gatewayOrigin) {
+    throw new HttpApiRequestError(
+      '当前 Copis Rust 运行时不支持可信聊天室来源校验，请更新 Copis 后重试',
+      400,
+      'invalid_chatroom_origin',
+    )
   }
   let result: 'accepted' | 'duplicate'
   if (dependencies.handleChatRoomInvocation) {
     try {
-      result = await dependencies.handleChatRoomInvocation(body)
+      result = await dependencies.handleChatRoomInvocation(invocation, gatewayOrigin)
     } catch (error) {
       throwChatRoomCoordinatorFailure(error)
     }
@@ -630,7 +701,7 @@ async function handleChatRoomInternalRequest(
       throw new HttpApiRequestError('聊天室协调器不可用', 503, 'chatroom_coordinator_unavailable')
     }
     try {
-      result = await coordinator.handleInvocation(body)
+      result = await coordinator.handleInvocation(invocation, gatewayOrigin)
     } catch (error) {
       throwChatRoomCoordinatorFailure(error)
     }
@@ -1093,7 +1164,15 @@ async function handleAgentRpcInternalRequest(
   }
 
   if (action === 'prepare') {
-    return { status: 200, body: await prepareAgentRpcRun(parseAgentRpcInput(bodyRecord)) }
+    const hasTrustedRunId = Object.prototype.hasOwnProperty.call(bodyRecord, '_copisTrustedRunId')
+    const rawTrustedRunId = bodyRecord._copisTrustedRunId
+    if (hasTrustedRunId && (typeof rawTrustedRunId !== 'string' || !rawTrustedRunId.trim())) {
+      throw new HttpApiRequestError('聊天室运行 run ID 不正确', 400, 'invalid_chatroom_run_id')
+    }
+    const trustedRunId = hasTrustedRunId ? rawTrustedRunId as string : undefined
+    const inputRecord = { ...bodyRecord }
+    delete inputRecord._copisTrustedRunId
+    return { status: 200, body: await (dependencies.prepareAgentRpcRun ?? prepareAgentRpcRun)(parseAgentRpcInput(inputRecord), trustedRunId) }
   }
 
   if (action === 'queue') {
@@ -1472,10 +1551,11 @@ export async function handleHttpApiRequest(
       throw new HttpApiRequestError('HTTP API 路径不存在', 404, 'not_found')
     }
 
-    // Rust bridge 只允许两个无 query、无 trailing slash 的精确路径。
+    // Rust bridge 只允许明确列出的无 query、无 trailing slash 精确路径。
     if (url.search === '' && request.path === url.pathname && (
       url.pathname === '/api/internal/chatrooms/invocations'
       || url.pathname === '/api/internal/chatrooms/disconnected'
+      || url.pathname === '/api/internal/chatrooms/server-failure'
     )) {
       return await handleChatRoomInternalRequest(request, url.pathname, dependencies)
     }

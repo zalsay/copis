@@ -4,6 +4,116 @@ import { chatRoomApplyEventAtom, chatRoomRoomsAtom } from '../atoms/chatroom-ato
 import { ChatRoomSseClient, parseChatRoomSseFrame } from './chatroom-sse'
 const response = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status })
 describe('chatRoomSse', () => {
+  test('SSE 解析保留 agent.delta payload 的公开 frameId', () => {
+    const frameId = '0123456789abcdef0123456789abcdef'
+    const parsed = parseChatRoomSseFrame(`data: ${JSON.stringify({ type: 'agent.delta', roomId: 'r1', payload: { invocationId: 'i1', frameId, delta: '哈' } })}\n\n`)
+
+    expect(parsed?.type).toBe('agent.delta')
+    expect((parsed?.payload as { frameId?: string }).frameId).toBe(frameId)
+  })
+
+  test('snapshot latestSeq 在新 SSE 连接间保留为房间 cursor，不从零回放且不丢失后续事件', async () => {
+    const requests: string[] = []
+    const events: Array<{ type: string; seq?: number; latestSeq?: number }> = []
+    let sseConnections = 0
+    let releaseSecondFrame!: () => void
+    const secondFrameGate = new Promise<void>((resolve) => { releaseSecondFrame = resolve })
+    const client = new ChatRoomSseClient({ baseUrl: 'http://test', fetchImpl: async (url) => {
+      const path = String(url)
+      requests.push(path)
+      if (path.includes('/invocations/terminal?')) return response({ invocations: [], nextCursor: null })
+      if (path.includes('/events?afterSeq=0')) {
+        releaseSecondFrame()
+        return response({ events: Array.from({ length: 10 }, (_, index) => ({ eventType: 'room.updated', roomId: 'r1', seq: index + 1, payload: { room: { name: `历史 ${index + 1}` } } })) })
+      }
+      if (path.includes('/events?afterSeq=10')) { releaseSecondFrame(); return response({ events: [] }) }
+      if (path.includes('/events?afterSeq=')) return response({ events: [] })
+      sseConnections += 1
+      const frame = sseConnections === 1
+        ? 'data: {"type":"room.snapshot","roomId":"r1","latestSeq":10,"payload":{"room":{"roomId":"r1","name":"同步房间"},"members":[],"agents":[]}}\n\n'
+        : 'data: {"type":"message.created","roomId":"r1","seq":11,"payload":{"messageId":"m11","text":"snapshot 后的新消息"}}\n\n'
+      return new Response(new ReadableStream<Uint8Array>({
+        start(controller) {
+          if (sseConnections === 1) {
+            controller.enqueue(new TextEncoder().encode(frame))
+            controller.close()
+          } else {
+            void secondFrameGate.then(() => {
+              controller.enqueue(new TextEncoder().encode(frame))
+              controller.close()
+            })
+          }
+        },
+      }), { headers: { 'Content-Type': 'text/event-stream' } })
+    } })
+    client.onEvent((event) => {
+      events.push({ type: event.type, seq: event.seq, latestSeq: event.latestSeq })
+    })
+    client.setRooms(['r1'])
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const deadline = setTimeout(() => reject(new Error('snapshot 后的连续事件未送达')), 1500)
+        const off = client.onEvent((event) => {
+          if (event.seq === 11) { clearTimeout(deadline); off(); resolve() }
+        })
+      })
+      await new Promise((resolve) => setTimeout(resolve, 0))
+      expect(events[0]).toEqual({ type: 'room.snapshot', seq: undefined, latestSeq: 10 })
+      expect(events.filter((event) => event.seq === 11)).toEqual([{ type: 'message.created', seq: 11, latestSeq: undefined }])
+      expect(sseConnections).toBeGreaterThanOrEqual(2)
+      expect(requests.some((url) => url.includes('/events?afterSeq=0'))).toBe(false)
+      expect(requests.some((url) => url.includes('/events?afterSeq=10'))).toBe(true)
+    } finally { client.close() }
+  })
+
+  test('snapshot latestSeq 必须是非负安全整数，零合法且无效版本不解析', () => {
+    const frame = (latestSeq: string): string => `data: {"type":"room.snapshot","roomId":"r1","latestSeq":${latestSeq},"payload":{}}\n\n`
+    expect(parseChatRoomSseFrame(frame('0'))?.latestSeq).toBe(0)
+    expect(parseChatRoomSseFrame(frame('-1'))).toBeUndefined()
+    expect(parseChatRoomSseFrame(frame('1.5'))).toBeUndefined()
+    expect(parseChatRoomSseFrame(frame('9007199254740992'))).toBeUndefined()
+    expect(parseChatRoomSseFrame('data: {"type":"room.snapshot","roomId":"r1","payload":{}}\n\n')).toBeUndefined()
+  })
+
+  test('不同房间的 snapshot cursor 相互隔离并允许各自下一条持久事件', async () => {
+    const requests: string[] = []
+    const events: Array<{ roomId?: string; type: string; seq?: number; latestSeq?: number }> = []
+    const frames = [
+      { type: 'room.snapshot', roomId: 'r1', latestSeq: 100, payload: { room: { roomId: 'r1', name: '房间一' }, members: [], agents: [] } },
+      { type: 'room.snapshot', roomId: 'r2', latestSeq: 3, payload: { room: { roomId: 'r2', name: '房间二' }, members: [], agents: [] } },
+      { type: 'message.created', roomId: 'r1', seq: 101, payload: { messageId: 'm-r1', text: '一房间的新消息' } },
+      { type: 'message.created', roomId: 'r2', seq: 4, payload: { messageId: 'm-r2', text: '二房间的新消息' } },
+    ].map((event) => `data: ${JSON.stringify(event)}\n\n`).join('')
+    const client = new ChatRoomSseClient({ baseUrl: 'http://test', fetchImpl: async (url) => {
+      const path = String(url)
+      requests.push(path)
+      if (path.includes('/invocations/terminal?')) return response({ invocations: [], nextCursor: null })
+      if (path.includes('/events?afterSeq=0')) {
+        const roomId = path.includes('/rooms/r1/') ? 'r1' : 'r2'
+        const max = roomId === 'r1' ? 100 : 3
+        return response({ events: Array.from({ length: max }, (_, index) => ({ eventType: 'room.updated', roomId, seq: index + 1, payload: {} })) })
+      }
+      if (path.includes('/events?afterSeq=')) return response({ events: [] })
+      return new Response(new ReadableStream<Uint8Array>({ start(controller) { controller.enqueue(new TextEncoder().encode(frames)) } }), { headers: { 'Content-Type': 'text/event-stream' } })
+    } })
+    client.onEvent((event) => events.push({ roomId: event.roomId, type: event.type, seq: event.seq, latestSeq: event.latestSeq }))
+    client.setRooms(['r1', 'r2'])
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const deadline = setTimeout(() => reject(new Error('两个房间各自的后续事件未全部送达')), 800)
+        const poll = (): void => {
+          if (events.some((event) => event.roomId === 'r1' && event.seq === 101)
+            && events.some((event) => event.roomId === 'r2' && event.seq === 4)) { clearTimeout(deadline); resolve(); return }
+          setTimeout(poll, 5)
+        }
+        poll()
+      })
+      expect(events.filter((event) => event.type === 'room.snapshot').map((event) => [event.roomId, event.latestSeq])).toEqual([['r1', 100], ['r2', 3]])
+      expect(events.filter((event) => event.seq === 101 || event.seq === 4).map((event) => [event.roomId, event.seq])).toEqual([['r1', 101], ['r2', 4]])
+      expect(requests.some((url) => url.includes('/events?afterSeq=0'))).toBe(false)
+    } finally { client.close() }
+  })
+
   test('浏览器原生 fetch 要求 global 接收者时仍能建立房间 SSE 与终态补拉', async () => {
     const statuses: string[] = []
     const fetchImpl = function (this: unknown, url: RequestInfo | URL): Promise<Response> {

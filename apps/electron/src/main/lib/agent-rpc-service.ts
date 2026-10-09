@@ -43,6 +43,7 @@ import { getWorkingCustomModelRuntime, getWorkingModelCatalogOwnerId } from './w
 import {
   appendSDKMessages,
   createAgentSession,
+  hasAgentSessionStorageOverride,
   getAgentSessionMeta,
   getAgentSessionSDKMessages,
   resolveAgentCwd,
@@ -67,7 +68,7 @@ import {
   listAgentWorkspacesByUpdatedAt,
 } from './agent-workspace-manager'
 import { getAgentSessionWorkspacePath, getAgentWorkspacePath, getDefaultSkillsDir, getSdkConfigDir, getWorkspaceSkillsDir } from './config-paths'
-import { buildDynamicContext, buildSystemPrompt } from './agent-prompt-builder'
+import { buildChatRoomPublicAgentRosterPrompt, buildDynamicContext, buildSystemPrompt } from './agent-prompt-builder'
 import {
   HttpExpertTeamContextReader,
   resolveExpertTeamPromptContext,
@@ -115,9 +116,8 @@ import {
   shouldCaptureRpcRun,
 } from './agent-rpc-memory'
 import { filterAttachedPaths } from './attached-paths'
-import { getTrustedAgentExternalSource } from './agent-rpc-source-context'
-import { getTrustedAgentRuntimeContext } from './agent-rpc-runtime-context'
-import type { ChatRoomAgentRuntimeContext } from '@copis/shared'
+import { getTrustedAgentExternalSource, hasTrustedAgentRpcRun } from './agent-rpc-source-context'
+import { getTrustedAgentRuntimeContext, getTrustedAgentRuntimeGuard, type TrustedChatRoomAgentRuntimeContext } from './agent-rpc-runtime-context'
 import type {
   AgentRpcWorkerFrame,
   PiWorkerFileAccessPolicy,
@@ -359,7 +359,7 @@ function buildRustFileAccessPolicy(input: {
   permissionMode: CopisPermissionMode | 'default'
   advancedAuthorization: boolean
   isAppConnector?: boolean
-  chatroomRuntimeContext?: ChatRoomAgentRuntimeContext
+  chatroomRuntimeContext?: TrustedChatRoomAgentRuntimeContext
 }): PiWorkerFileAccessPolicy {
   if (input.chatroomRuntimeContext) {
     const execution = input.chatroomRuntimeContext.executionWorkspace
@@ -560,12 +560,48 @@ async function resolveWorkerCredentials(channelId: string, provider: string): Pr
   return { apiKey: await resolveChannelRuntimeApiKey(channelId) }
 }
 
-export async function prepareAgentRpcRun(input: AgentSendInput): Promise<PiWorkerRunConfig> {
+export async function prepareAgentRpcRun(input: AgentSendInput, trustedRunId?: string): Promise<PiWorkerRunConfig> {
+  if (trustedRunId !== undefined && !trustedRunId.trim()) {
+    throw new Error('聊天室运行 run ID 不正确')
+  }
+  const fallbackSource = trustedRunId === undefined
+    ? getTrustedAgentExternalSource(input.sessionId)
+    : undefined
+  const trustedSource = trustedRunId === undefined
+    ? fallbackSource
+    : getTrustedAgentExternalSource(input.sessionId, trustedRunId)
+  const chatroomRuntimeContext = getTrustedAgentRuntimeContext(input.sessionId, trustedRunId)
+  if (trustedRunId === undefined && (fallbackSource === 'chatroom'
+    || chatroomRuntimeContext !== undefined
+    || hasAgentSessionStorageOverride(input.sessionId))) {
+    throw new Error('聊天室运行缺少精确 run ID')
+  }
+  if (trustedRunId !== undefined && !hasTrustedAgentRpcRun(input.sessionId, trustedRunId)) {
+    throw new Error('Agent RPC run ID 不可信、已撤销或已结束')
+  }
+  if (trustedRunId !== undefined && (trustedSource === 'chatroom' || chatroomRuntimeContext !== undefined)
+    && (trustedSource !== 'chatroom' || !chatroomRuntimeContext)) {
+    throw new Error('聊天室运行 run ID 不可信、已撤销或已被替代')
+  }
+  const trustedRunGuard = trustedRunId
+    ? getTrustedAgentRuntimeGuard(input.sessionId, trustedRunId)
+    : undefined
+  const isTrustedRunCurrent = async () => {
+    if (trustedRunId === undefined) return trustedSource !== 'chatroom' && chatroomRuntimeContext === undefined
+    if (!hasTrustedAgentRpcRun(input.sessionId, trustedRunId)) return false
+    if (trustedSource !== 'chatroom' && chatroomRuntimeContext === undefined) return true
+    if (!trustedRunGuard
+      || getTrustedAgentExternalSource(input.sessionId, trustedRunId) !== 'chatroom'
+      || getTrustedAgentRuntimeContext(input.sessionId, trustedRunId) !== chatroomRuntimeContext) return false
+    try { return await trustedRunGuard() } catch { return false }
+  }
+  const assertTrustedRunCurrent = async () => {
+    if (!await isTrustedRunCurrent()) throw new Error('聊天室运行已取消、身份已变化或已被新运行替代')
+  }
+  await assertTrustedRunCurrent()
   const session = getAgentSessionMeta(input.sessionId)
   if (!session) throw new Error(`Agent 会话不存在: ${input.sessionId}`)
 
-  const trustedSource = getTrustedAgentExternalSource(input.sessionId)
-  const chatroomRuntimeContext = getTrustedAgentRuntimeContext(input.sessionId)
   if (chatroomRuntimeContext && trustedSource !== 'chatroom') {
     throw new Error('trustedRuntimeContext 仅允许聊天室来源使用')
   }
@@ -641,6 +677,7 @@ export async function prepareAgentRpcRun(input: AgentSendInput): Promise<PiWorke
   const credentials = customModelRuntime
     ? { apiKey: customModelRuntime.apiKey }
     : await resolveWorkerCredentials(channelId, channel.provider)
+  await assertTrustedRunCurrent()
   const internalToken = isCopisWorkingChannelId(channelId)
     ? getHttpApiInternalToken() ?? undefined
     : undefined
@@ -687,6 +724,7 @@ export async function prepareAgentRpcRun(input: AgentSendInput): Promise<PiWorke
   const directories = isChatroomRun ? [] : uniqueDirectories(input, session, workspace, isAppConnector)
   const isCustomModel = Boolean(customModelRuntime) || isWorkingCustomModelChannelId(channelId)
   const proxyUrl = isCustomModel ? await getEffectiveProxyUrl() : undefined
+  await assertTrustedRunCurrent()
   const runtimeEnv = buildRuntimeEnv(settings, proxyUrl, workspace, workspaceSlug, isCustomModel, isChatroomRun ? chatroomRuntimeContext.executionWorkspace.root : undefined)
   const compactRequest = input.userMessage.trim() === '/compact'
   const mentionedToolsPrompt = isChatroomRun ? undefined : buildMentionedToolsPrompt(input.mentionedSkills, input.mentionedMcpServers)
@@ -723,6 +761,7 @@ export async function prepareAgentRpcRun(input: AgentSendInput): Promise<PiWorke
       userMessage: enrichedUserMessage,
       policy: memoryPolicy,
     })
+  await assertTrustedRunCurrent()
   appendSDKMessages(input.sessionId, [buildUserMessage(input, startedAt)])
   const prompt = compactRequest
     ? '/compact'
@@ -740,12 +779,13 @@ export async function prepareAgentRpcRun(input: AgentSendInput): Promise<PiWorke
       : undefined)
     : compactRequest
       ? undefined
-    : !isChatroomRun && (input.triggeredBy ?? 'user') === 'user'
+      : !isChatroomRun && (input.triggeredBy ?? 'user') === 'user'
         ? await resolveExpertTeamPromptContext({
           workspace,
           reader: new HttpExpertTeamContextReader(),
         })
         : undefined
+  await assertTrustedRunCurrent()
   const systemPrompt = buildSystemPrompt({
     agentRuntime: 'pi',
     workspaceName: workspace.name,
@@ -774,7 +814,9 @@ export async function prepareAgentRpcRun(input: AgentSendInput): Promise<PiWorke
         browserAdvancedAuthorization,
       }
       : {}),
-  }) + (input.automationContext ? `\n\n## 定时任务执行上下文\n\n${input.automationContext}` : '')
+  }) + (isChatroomRun
+    ? buildChatRoomPublicAgentRosterPrompt(chatroomRuntimeContext.publicAgentRoster ?? [])
+    : '') + (input.automationContext ? `\n\n## 定时任务执行上下文\n\n${input.automationContext}` : '')
 
   const allSkillPaths: string[] = []
   if (workspaceSkillsDir && !allSkillPaths.includes(workspaceSkillsDir)) {
@@ -824,6 +866,7 @@ export async function prepareAgentRpcRun(input: AgentSendInput): Promise<PiWorke
     const status = getCodexAppServerStatus()
     if (!status.running) {
       const started = await startCodexAppServer({ httpApiPort })
+      await assertTrustedRunCurrent()
       codexAppServerPort = started.port ?? DEFAULT_CODEX_PORT
     } else {
       codexAppServerPort = status.port ?? DEFAULT_CODEX_PORT
@@ -889,6 +932,7 @@ export async function prepareAgentRpcRun(input: AgentSendInput): Promise<PiWorke
     workspaceId,
     stoppedByUser: false,
   })
+  await assertTrustedRunCurrent()
   pendingAgentRpcRuns.set(input.sessionId, {
     userMessage: input.userMessage,
     channelId,

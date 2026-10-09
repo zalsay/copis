@@ -138,6 +138,18 @@ pub fn revoke_worker_capability(session_id: &str) {
     WORKER_CAPABILITIES.lock().unwrap().remove(session_id);
 }
 
+pub fn revoke_worker_capability_if(session_id: &str, token: &str) -> bool {
+    let mut capabilities = WORKER_CAPABILITIES.lock().unwrap();
+    if capabilities
+        .get(session_id)
+        .is_some_and(|capability| capability.token == token)
+    {
+        capabilities.remove(session_id);
+        return true;
+    }
+    false
+}
+
 pub struct WorkerAutomationContext {
     pub triggered_by: String,
     pub channel_id: String,

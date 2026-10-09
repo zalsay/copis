@@ -29,6 +29,11 @@ export interface AgentRpcGatewayOptions {
   fetchImpl?: FetchImplementation
 }
 
+export interface AgentRpcRunOptions {
+  signal?: AbortSignal
+  trustedRunId?: string
+}
+
 function resolveBaseUrl(value: string | undefined): string {
   if (value?.trim()) return value.replace(/\/$/, '')
   const port = resolveCopisHttpApiPort({
@@ -113,14 +118,18 @@ export class AgentRpcGateway {
     throw new Error('Pi Worker 列表响应不正确')
   }
 
-  async run(input: AgentSendInput, callbacks: AgentRpcGatewayCallbacks): Promise<void> {
+  async run(input: AgentSendInput, callbacks: AgentRpcGatewayCallbacks, options: AgentRpcRunOptions = {}): Promise<void> {
     try {
       const response = await this.fetchImpl(
         `${this.baseUrl}/api/agent/sessions/${encodeURIComponent(input.sessionId)}/messages`,
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },
-          body: JSON.stringify(input),
+          body: JSON.stringify({
+            ...input,
+            ...(options.trustedRunId ? { _copisTrustedRunId: options.trustedRunId } : {}),
+          }),
+          ...(options.signal ? { signal: options.signal } : {}),
         },
       )
       if (!response.ok) throw new Error(await readErrorMessage(response))
@@ -179,10 +188,14 @@ export class AgentRpcGateway {
     throw new Error('Agent queue 响应不正确')
   }
 
-  async stop(sessionId: string): Promise<void> {
+  async stop(sessionId: string, trustedRunId?: string): Promise<void> {
     const response = await this.fetchImpl(
       `${this.baseUrl}/api/agent/sessions/${encodeURIComponent(sessionId)}/stop`,
-      { method: 'POST', headers: { Accept: 'application/json' } },
+      {
+        method: 'POST',
+        headers: { Accept: 'application/json', ...(trustedRunId ? { 'Content-Type': 'application/json' } : {}) },
+        ...(trustedRunId ? { body: JSON.stringify({ _copisTrustedRunId: trustedRunId }) } : {}),
+      },
     )
     if (!response.ok) throw new Error(await readErrorMessage(response))
   }

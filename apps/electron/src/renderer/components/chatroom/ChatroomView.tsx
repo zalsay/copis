@@ -1,27 +1,33 @@
 import * as React from 'react'
-import { useAtom, useAtomValue, useSetAtom } from 'jotai'
+import { useAtomValue, useSetAtom, useStore } from 'jotai'
 import { Copy, Users } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { chatRoomApi, ChatRoomApiError, type ChatRoomApi } from '@/lib/chatroom-api'
 import {
   chatRoomActiveRoomIdAtom,
   chatRoomConnectionStatusAtom,
+  chatRoomDataRevisionsAtom,
   chatRoomDeletedRoomIdsAtom,
   chatRoomDetailsAtom,
   chatRoomHydrateMessagesAtom,
   chatRoomInvocationsAtom,
+  chatRoomLifecycleGenerationsAtom,
   chatRoomMarkReadAtom,
   chatRoomMessagesAtom,
+  chatRoomProvisionPlansAtom,
   chatRoomRemoveRoomAtom,
+  chatRoomApplyRoomDetailAtom,
   chatRoomRoomsAtom,
   chatRoomSendStatesAtom,
 } from '@/atoms/chatroom-atoms'
 import { activeTabIdAtom, closeChatRoomTab, tabsAtom } from '@/atoms/tab-atoms'
-import { workingAuthStateAtom } from '@/atoms/working-atoms'
+import { workingAuthLifecycleEpochAtom, workingAuthStateAtom } from '@/atoms/working-atoms'
 import { ChatroomComposer } from './ChatroomComposer'
 import { ChatroomMembersPanel } from './ChatroomMembersPanel'
 import { ChatroomAgentProvisionDialog } from './ChatroomAgentProvisionDialog'
 import { ChatroomAgentActivity, getPendingChatRoomInvocations } from './ChatroomAgentActivity'
+import { getChatRoomConnectionLabel } from './ChatroomSidebarRow'
+import { getChatRoomAccountKey } from './ChatroomSseInitializer'
 import type { ChatRoomAgent, ChatRoomAttachment, ChatRoomInvocation, ChatRoomMember, ChatRoomMessage, ChatRoomSummary } from '@copis/shared'
 
 export interface ChatroomViewProps { roomId: string }
@@ -85,10 +91,13 @@ export async function loadChatRoomViewData(roomId: string, api: Pick<ChatRoomApi
   return { detail, history, attachments }
 }
 
-export async function deleteChatRoomAndClose(input: { roomId: string; deleteRoom: () => Promise<void>; removeRoom: (roomId: string) => void; tabs: Parameters<typeof closeChatRoomTab>[0]; activeTabId: string | null; setTabs: (tabs: Parameters<typeof closeChatRoomTab>[0]) => void; setActiveTabId: (activeTabId: string | null) => void }): Promise<void> {
+export async function deleteChatRoomAndClose(input: { roomId: string; deleteRoom: () => Promise<void>; removeRoom: (roomId: string) => void; tabs?: Parameters<typeof closeChatRoomTab>[0]; activeTabId?: string | null; getTabs?: () => Parameters<typeof closeChatRoomTab>[0]; getActiveTabId?: () => string | null; isCurrent?: () => boolean; setTabs: (tabs: Parameters<typeof closeChatRoomTab>[0]) => void; setActiveTabId: (activeTabId: string | null) => void }): Promise<void> {
   await input.deleteRoom()
+  if (input.isCurrent && !input.isCurrent()) return
   input.removeRoom(input.roomId)
-  const next = closeChatRoomTab(input.tabs, input.activeTabId, input.roomId)
+  const tabs = input.getTabs?.() ?? input.tabs ?? []
+  const activeTabId = input.getActiveTabId?.() ?? input.activeTabId ?? null
+  const next = closeChatRoomTab(tabs, activeTabId, input.roomId)
   input.setTabs(next.tabs)
   input.setActiveTabId(next.activeTabId)
 }
@@ -96,19 +105,26 @@ export async function deleteChatRoomAndClose(input: { roomId: string; deleteRoom
 export function ChatroomView({ roomId }: ChatroomViewProps): React.ReactElement {
   const rooms = useAtomValue(chatRoomRoomsAtom)
   const authState = useAtomValue(workingAuthStateAtom)
+  const authEpoch = useAtomValue(workingAuthLifecycleEpochAtom)
+  const store = useStore()
+  const viewLifecycleGenerationRef = React.useRef(0)
+  const detailRefreshGenerationRef = React.useRef(0)
+  const mountedRef = React.useRef(true)
+  const roomIdRef = React.useRef(roomId)
+  roomIdRef.current = roomId
+  const accountKey = getChatRoomAccountKey(authState)
   const sendStates = useAtomValue(chatRoomSendStatesAtom)
   const deletedRoomIds = useAtomValue(chatRoomDeletedRoomIdsAtom)
+  const provisionPlan = useAtomValue(chatRoomProvisionPlansAtom).get(roomId)
   const status = useAtomValue(chatRoomConnectionStatusAtom).get(roomId) ?? rooms.find((r) => r.roomId === roomId)?.connectionStatus ?? 'offline'
   const messages = useAtomValue(chatRoomMessagesAtom).get(roomId) ?? []
   const invocations = [...(useAtomValue(chatRoomInvocationsAtom).get(roomId)?.values() ?? [])]
   const detailsRaw = useAtomValue(chatRoomDetailsAtom)[roomId] as Details | undefined
-  const setDetails = useSetAtom(chatRoomDetailsAtom)
+  const applyRoomDetail = useSetAtom(chatRoomApplyRoomDetailAtom)
   const hydrateMessages = useSetAtom(chatRoomHydrateMessagesAtom)
   const setActive = useSetAtom(chatRoomActiveRoomIdAtom)
   const removeRoom = useSetAtom(chatRoomRemoveRoomAtom)
   const markRead = useSetAtom(chatRoomMarkReadAtom)
-  const [tabs, setTabs] = useAtom(tabsAtom)
-  const [activeTabId, setActiveTabId] = useAtom(activeTabIdAtom)
   const deletedRoomIdsRef = React.useRef(deletedRoomIds)
   deletedRoomIdsRef.current = deletedRoomIds
   const room = detailsRaw?.room ?? rooms.find((item) => item.roomId === roomId) ?? { roomId, name: '聊天室', role: 'member', status: 'active', memberCount: 0, unreadCount: 0, connectionStatus: status }
@@ -118,12 +134,87 @@ export function ChatroomView({ roomId }: ChatroomViewProps): React.ReactElement 
   const [actionError, setActionError] = React.useState('')
   const roomWasRemoved = deletedRoomIds.has(roomId)
   React.useEffect(() => { setActive(roomId); const seq = messages.at(-1)?.seq ?? 0; markRead(roomId); if (seq > 0) void chatRoomApi.markRead(roomId, seq).catch(() => undefined); return () => { setActive(undefined) } }, [roomId, messages, setActive, markRead])
-  React.useEffect(() => { if (roomWasRemoved) return; let alive = true; void loadChatRoomViewData(roomId).then(({ detail, history, attachments: nextAttachments }) => { if (!alive || deletedRoomIdsRef.current.has(roomId)) return; setDetails((current) => ({ ...current, [roomId]: detail })); hydrateMessages({ roomId, messages: history.messages, cursor: history.cursor }); setAttachments(nextAttachments) }).catch((error) => { if (alive && !deletedRoomIdsRef.current.has(roomId)) console.warn('[聊天室] 加载失败:', error) }); return () => { alive = false } }, [roomId, roomWasRemoved, setDetails, hydrateMessages])
+  React.useEffect(() => {
+    mountedRef.current = true
+    return () => { mountedRef.current = false; viewLifecycleGenerationRef.current += 1; detailRefreshGenerationRef.current += 1 }
+  }, [])
+  React.useEffect(() => {
+    if (roomWasRemoved) { setAttachments([]); return undefined }
+    const generation = ++viewLifecycleGenerationRef.current
+    const detailRefreshGeneration = detailRefreshGenerationRef.current
+    const requestedRoomId = roomId
+    const requestedAccountKey = accountKey
+    const requestedAuthEpoch = authEpoch
+    const requestedRoomGeneration = store.get(chatRoomLifecycleGenerationsAtom).get(requestedRoomId) ?? 0
+    const requestedDataRevision = store.get(chatRoomDataRevisionsAtom).get(requestedRoomId) ?? 0
+    let active = true
+    const isCurrent = (): boolean => active && mountedRef.current
+      && generation === viewLifecycleGenerationRef.current
+      && roomIdRef.current === requestedRoomId
+      && getChatRoomAccountKey(store.get(workingAuthStateAtom)) === requestedAccountKey
+      && store.get(workingAuthLifecycleEpochAtom) === requestedAuthEpoch
+      && (store.get(chatRoomLifecycleGenerationsAtom).get(requestedRoomId) ?? 0) === requestedRoomGeneration
+      && !deletedRoomIdsRef.current.has(requestedRoomId)
+    setAttachments([])
+    void loadChatRoomViewData(requestedRoomId).then(({ detail, history, attachments: nextAttachments }) => {
+      if (!isCurrent()) return
+      if (detailRefreshGeneration === detailRefreshGenerationRef.current) applyRoomDetail({ roomId: requestedRoomId, detail, expectedRevision: requestedDataRevision })
+      hydrateMessages({ roomId: requestedRoomId, messages: history.messages, cursor: history.cursor })
+      setAttachments(nextAttachments)
+    }).catch((error) => { if (isCurrent()) console.warn('[聊天室] 加载失败：', error) })
+    return () => { active = false }
+  }, [accountKey, authEpoch, roomId, roomWasRemoved, applyRoomDetail, hydrateMessages, store])
   const details = detailsRaw ?? { room, members: [], agents: [] }
   const memberCount = getChatRoomMemberCount(room, detailsRaw)
   const download = async (attachmentId: string): Promise<void> => { const transferId = crypto.randomUUID(); try { await window.electronAPI.chatrooms.startDownload({ transferId, roomId, attachmentId, target: 'user' }) } catch (error) { console.warn('[聊天室] 下载失败:', error) } }
-  const reloadRoom = (): void => { void chatRoomApi.getRoom(roomId).then((detail) => { if (!deletedRoomIdsRef.current.has(roomId)) setDetails((current) => ({ ...current, [roomId]: detail })) }).catch((error) => { if (!deletedRoomIdsRef.current.has(roomId)) setActionError(error instanceof Error ? error.message : '聊天室刷新失败') }) }
-  const handleDelete = async (): Promise<void> => { setActionError(''); try { await deleteChatRoomAndClose({ roomId, deleteRoom: () => chatRoomApi.deleteRoom(roomId), removeRoom: (deletedRoomId) => { deletedRoomIdsRef.current = new Set(deletedRoomIdsRef.current).add(deletedRoomId); removeRoom(deletedRoomId) }, tabs, activeTabId, setTabs, setActiveTabId }) } catch (error) { setActionError(error instanceof Error ? error.message : '删除聊天室失败') } }
+  const reloadRoom = (): void => {
+    const generation = viewLifecycleGenerationRef.current
+    const refreshGeneration = ++detailRefreshGenerationRef.current
+    const requestedRoomId = roomId
+    const requestedAccountKey = getChatRoomAccountKey(store.get(workingAuthStateAtom))
+    const requestedAuthEpoch = store.get(workingAuthLifecycleEpochAtom)
+    const requestedRoomGeneration = store.get(chatRoomLifecycleGenerationsAtom).get(requestedRoomId) ?? 0
+    const requestedDataRevision = store.get(chatRoomDataRevisionsAtom).get(requestedRoomId) ?? 0
+    void chatRoomApi.getRoom(requestedRoomId).then((detail) => {
+      if (!mountedRef.current || generation !== viewLifecycleGenerationRef.current || refreshGeneration !== detailRefreshGenerationRef.current || roomIdRef.current !== requestedRoomId || getChatRoomAccountKey(store.get(workingAuthStateAtom)) !== requestedAccountKey || store.get(workingAuthLifecycleEpochAtom) !== requestedAuthEpoch || (store.get(chatRoomLifecycleGenerationsAtom).get(requestedRoomId) ?? 0) !== requestedRoomGeneration || deletedRoomIdsRef.current.has(requestedRoomId)) return
+      applyRoomDetail({ roomId: requestedRoomId, detail, expectedRevision: requestedDataRevision })
+    }).catch((error) => {
+      if (mountedRef.current && generation === viewLifecycleGenerationRef.current && refreshGeneration === detailRefreshGenerationRef.current && roomIdRef.current === requestedRoomId && getChatRoomAccountKey(store.get(workingAuthStateAtom)) === requestedAccountKey && store.get(workingAuthLifecycleEpochAtom) === requestedAuthEpoch && !deletedRoomIdsRef.current.has(requestedRoomId)) setActionError(error instanceof Error ? error.message : '聊天室刷新失败')
+    })
+  }
+  const changeRoomArchiveState = async (): Promise<void> => {
+    const requestedAccountKey = getChatRoomAccountKey(store.get(workingAuthStateAtom))
+    const requestedAuthEpoch = store.get(workingAuthLifecycleEpochAtom)
+    const requestedViewGeneration = viewLifecycleGenerationRef.current
+    const requestedRoomGeneration = store.get(chatRoomLifecycleGenerationsAtom).get(roomId) ?? 0
+    const stillCurrent = (): boolean => mountedRef.current && roomIdRef.current === roomId && requestedViewGeneration === viewLifecycleGenerationRef.current
+      && requestedAccountKey === getChatRoomAccountKey(store.get(workingAuthStateAtom)) && requestedAuthEpoch === store.get(workingAuthLifecycleEpochAtom)
+      && requestedRoomGeneration === (store.get(chatRoomLifecycleGenerationsAtom).get(roomId) ?? 0)
+    try {
+      await (room.status === 'archived' ? chatRoomApi.restoreRoom(roomId) : chatRoomApi.archiveRoom(roomId))
+      if (stillCurrent()) reloadRoom()
+    } catch (error) {
+      if (stillCurrent()) setActionError(error instanceof Error ? error.message : '聊天室操作失败')
+    }
+  }
+  const handleDelete = async (): Promise<void> => {
+    setActionError('')
+    const requestedAccountKey = getChatRoomAccountKey(store.get(workingAuthStateAtom))
+    const requestedAuthEpoch = store.get(workingAuthLifecycleEpochAtom)
+    const requestedRoomGeneration = store.get(chatRoomLifecycleGenerationsAtom).get(roomId) ?? 0
+    try {
+      await deleteChatRoomAndClose({
+        roomId,
+        deleteRoom: () => chatRoomApi.deleteRoom(roomId),
+        removeRoom: (deletedRoomId) => { deletedRoomIdsRef.current = new Set(deletedRoomIdsRef.current).add(deletedRoomId); removeRoom(deletedRoomId) },
+        getTabs: () => store.get(tabsAtom), getActiveTabId: () => store.get(activeTabIdAtom),
+        isCurrent: () => requestedAccountKey === getChatRoomAccountKey(store.get(workingAuthStateAtom))
+          && requestedAuthEpoch === store.get(workingAuthLifecycleEpochAtom)
+          && requestedRoomGeneration === (store.get(chatRoomLifecycleGenerationsAtom).get(roomId) ?? 0),
+        setTabs: (value) => store.set(tabsAtom, value), setActiveTabId: (value) => store.set(activeTabIdAtom, value),
+      })
+    } catch (error) { if (mountedRef.current && roomIdRef.current === roomId && requestedAuthEpoch === store.get(workingAuthLifecycleEpochAtom) && requestedAccountKey === getChatRoomAccountKey(store.get(workingAuthStateAtom))) setActionError(error instanceof Error ? error.message : '删除聊天室失败') }
+  }
   if (deletedRoomIds.has(roomId)) return <div className="flex h-full items-center justify-center text-sm text-muted-foreground">聊天室已删除</div>
   const currentUserId = authState?.user?.id === undefined && authState?.user?.userId === undefined ? undefined : String(authState.user?.id ?? authState.user?.userId)
   const hostRole = getChatRoomHostRole(room, authState?.authenticated ? currentUserId : undefined)
@@ -137,13 +228,13 @@ export function ChatroomView({ roomId }: ChatroomViewProps): React.ReactElement 
         <div className="mt-1 flex items-center gap-3 text-[11px] text-muted-foreground">
           <span>成员 {memberCount}</span>
           {room.shareCode && <button type="button" aria-label="复制分享码" className="inline-flex items-center gap-1 hover:text-foreground" onClick={() => void navigator.clipboard?.writeText(room.shareCode!)}>分享码 {room.shareCode}<Copy className="size-3" /></button>}
-          <span role="status">{status === 'connected' ? '已连接' : status === 'reconnecting' ? '重连中' : status === 'auth_expired' ? '登录已过期' : '离线'}</span>
+          <span role="status">{getChatRoomConnectionLabel(status)}</span>
         </div>
       </div>
       <div className="flex items-center gap-1">
         {hostRole === 'host' && <>
-          <button type="button" aria-label="添加 Agent" disabled={room.status !== 'active' || details.agents.length >= 3} onClick={() => setShowProvision(true)} className="rounded-lg px-2 py-1 text-xs hover:bg-muted disabled:opacity-50">添加 Agent</button>
-          <button type="button" aria-label={room.status === 'archived' ? '恢复聊天室' : '归档聊天室'} onClick={() => void (room.status === 'archived' ? chatRoomApi.restoreRoom(roomId) : chatRoomApi.archiveRoom(roomId)).then(reloadRoom).catch((error) => setActionError(error instanceof Error ? error.message : '聊天室操作失败'))} className="rounded-lg px-2 py-1 text-xs hover:bg-muted">{room.status === 'archived' ? '恢复' : '归档'}</button>
+          <button type="button" aria-label={provisionPlan ? '继续配置 Agent' : '添加 Agent'} disabled={room.status !== 'active' || (!provisionPlan && details.agents.length >= 3)} onClick={() => setShowProvision(true)} className="rounded-lg px-2 py-1 text-xs hover:bg-muted disabled:opacity-50">{provisionPlan ? `继续配置 ${provisionPlan.completed}/${provisionPlan.agents.length}` : '添加 Agent'}</button>
+          <button type="button" aria-label={room.status === 'archived' ? '恢复聊天室' : '归档聊天室'} onClick={() => void changeRoomArchiveState()} className="rounded-lg px-2 py-1 text-xs hover:bg-muted">{room.status === 'archived' ? '恢复' : '归档'}</button>
           <button type="button" aria-label="删除聊天室" onClick={() => void handleDelete()} className="rounded-lg px-2 py-1 text-xs text-destructive hover:bg-muted">删除</button>
         </>}
         <button type="button" aria-label="显示成员" onClick={() => setShowMembers((value) => !value)} className="rounded-lg p-2 hover:bg-muted"><Users className="size-4" /></button>
@@ -154,7 +245,7 @@ export function ChatroomView({ roomId }: ChatroomViewProps): React.ReactElement 
         <div className="flex min-h-0 flex-1 flex-col overflow-y-auto scrollbar-none p-4 space-y-3">
           {status !== 'connected' && (
             <div role="status" className="rounded-lg bg-muted/50 px-3 py-2 text-xs text-muted-foreground">
-              {status === 'reconnecting' ? '实时连接重连中' : status === 'auth_expired' ? '登录已过期' : '聊天室离线'}
+              {status === 'connecting' ? '实时连接建立中' : status === 'reconnecting' ? '实时连接重连中' : status === 'auth_expired' ? '登录已过期' : '聊天室离线'}
             </div>
           )}
           {[...invocations, ...pendingInvocations].filter((invocation) => invocation.targetAgentId).map((invocation) => (

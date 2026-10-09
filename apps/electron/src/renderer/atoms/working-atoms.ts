@@ -1,10 +1,30 @@
-import { atom } from 'jotai'
+import { atom, type SetStateAction } from 'jotai'
 import type { WorkingAuthState, WorkingClientConfig, WorkingEvent, WorkingSessionSummary, WorkingVipStatus } from '@copis/shared'
 import { agentWorkspacesAtom } from './agent-atoms'
 import { EMPTY_WORKING_PAYMENT_STATE, workingPaymentStateAtom } from './working-payment-atoms'
 
-/** 主窗口认证状态；认证凭证仍只由主进程持有。 */
-export const workingAuthStateAtom = atom<WorkingAuthState | null>(null)
+/** 认证生命周期代次；账号身份每次改变都会递增，拒绝 A→B→A 的迟到回包。 */
+export const workingAuthLifecycleEpochAtom = atom(0)
+const workingAuthStateValueAtom = atom<WorkingAuthState | null>(null)
+
+function getWorkingAuthIdentity(state: WorkingAuthState | null): string {
+  if (!state?.authenticated) return 'anonymous'
+  const accountId = state.user?.id ?? state.user?.userId
+  return `${state.backendUrl}:${accountId === undefined || accountId === null ? 'authenticated' : String(accountId)}`
+}
+
+/** 主窗口认证状态；保持常规 Jotai 值/updater 写入 API，并在身份变化处原子递增生命周期。 */
+export const workingAuthStateAtom = atom(
+  (get) => get(workingAuthStateValueAtom),
+  (get, set, update: SetStateAction<WorkingAuthState | null>) => {
+    const current = get(workingAuthStateValueAtom)
+    const next = typeof update === 'function' ? update(current) : update
+    if (getWorkingAuthIdentity(current) !== getWorkingAuthIdentity(next)) {
+      set(workingAuthLifecycleEpochAtom, (epoch) => epoch + 1)
+    }
+    set(workingAuthStateValueAtom, next)
+  },
+)
 
 export interface WorkingHistorySelection {
   session: WorkingSessionSummary

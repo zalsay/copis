@@ -125,6 +125,18 @@ impl WorkingModelProxy {
         self.capabilities.lock().unwrap().remove(session_id);
     }
 
+    pub fn revoke_if(&self, session_id: &str, capability: &str) -> bool {
+        let mut capabilities = self.capabilities.lock().unwrap();
+        if capabilities
+            .get(session_id)
+            .is_some_and(|stored| stored.capability.capability == capability)
+        {
+            capabilities.remove(session_id);
+            return true;
+        }
+        false
+    }
+
     pub fn proxy_with_capability(
         &self,
         capability: &str,

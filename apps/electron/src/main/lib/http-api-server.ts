@@ -1,7 +1,7 @@
 import { app } from 'electron'
 import { randomBytes } from 'node:crypto'
 import { execFileSync, spawn, type ChildProcessWithoutNullStreams, type SpawnOptions } from 'node:child_process'
-import { chmodSync, existsSync, mkdirSync, realpathSync, statSync } from 'node:fs'
+import { accessSync, chmodSync, constants, existsSync, mkdirSync, realpathSync, statSync } from 'node:fs'
 import { createInterface, type Interface } from 'node:readline'
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import {
@@ -114,10 +114,21 @@ export interface PaymentWorkspaceRuntime {
   COPIS_PAYMENT_HOME_ROOT: string
 }
 
+export type PiWorkerRuntimeAvailability =
+  | { available: true; kind: PiWorkerLaunch['kind'] }
+  | { available: false; reason: 'pi_worker_process_unavailable' | 'pi_worker_entry_missing' | 'pi_worker_entry_unavailable' | 'pi_worker_runtime_missing' | 'pi_worker_runtime_unavailable' }
+
+export interface PiWorkerFileAccess {
+  isUsableFile(path: string, executable: boolean): boolean
+}
+
 interface ManagedProcess {
   child: ChildProcessWithoutNullStreams
   lineReader?: Interface
   internalToken: string
+  workerLaunch?: PiWorkerLaunch
+  workerRuntime?: PiWorkerRuntime
+  packaged: boolean
 }
 
 interface RustBridgeRequest {
@@ -129,6 +140,7 @@ interface RustBridgeRequest {
 
 let httpApiProcess: ChildProcessWithoutNullStreams | null = null
 let httpApiInternalToken: string | null = null
+let activeManagedProcess: ManagedProcess | undefined
 let stopping = false
 let responseWriteChain = Promise.resolve()
 export type HttpApiServerExitReason = 'error' | 'unexpected_exit'
@@ -143,6 +155,20 @@ function notifyHttpApiServerExit(reason: HttpApiServerExitReason): void {
   for (const listener of [...exitListeners]) {
     try { listener(reason) } catch (error) { console.warn('[HTTP API] 退出监听器执行失败:', error) }
   }
+}
+
+function activateManagedProcess(managed: ManagedProcess): void {
+  httpApiProcess = managed.child
+  httpApiInternalToken = managed.internalToken
+  activeManagedProcess = managed
+}
+
+function clearActiveManagedProcess(expectedChild: ChildProcessWithoutNullStreams): boolean {
+  if (httpApiProcess !== expectedChild) return false
+  httpApiProcess = null
+  httpApiInternalToken = null
+  activeManagedProcess = undefined
+  return true
 }
 
 function encodeHex(value: string): string {
@@ -353,6 +379,44 @@ function resolvePiRpcWorkerRuntime(workerLaunch: PiWorkerLaunch | undefined): Pi
     isPackaged: app.isPackaged,
     bunPath: getSystemBunPath() ?? getVendorBunPath() ?? undefined,
   })
+}
+
+/** 只检查 Rust 将使用的 Pi Worker 入口与 runtime，不启动 Worker。 */
+export function classifyPiWorkerAvailability(
+  workerLaunch: PiWorkerLaunch | undefined,
+  workerRuntime: PiWorkerRuntime | undefined,
+  isPackaged: boolean,
+  fileAccess: PiWorkerFileAccess = { isUsableFile: defaultPiWorkerFileAccess },
+): PiWorkerRuntimeAvailability {
+  if (!workerLaunch) return { available: false, reason: 'pi_worker_entry_missing' }
+  if (!fileAccess.isUsableFile(workerLaunch.path, workerLaunch.kind === 'executable')) {
+    return { available: false, reason: 'pi_worker_entry_unavailable' }
+  }
+  if (workerLaunch.kind === 'executable') return { available: true, kind: 'executable' }
+  // Packaged Rust receives COPIS_PI_RPC_COMPILED_RUNTIME=1 and requires a self-contained executable;
+  // it cannot launch a bare script even if a developer happens to have a system Bun installed.
+  if (isPackaged || !workerRuntime) return { available: false, reason: 'pi_worker_runtime_missing' }
+  if (!fileAccess.isUsableFile(workerRuntime.path, true)) {
+    return { available: false, reason: 'pi_worker_runtime_unavailable' }
+  }
+  return { available: true, kind: 'script' }
+}
+
+function defaultPiWorkerFileAccess(path: string, executable: boolean): boolean {
+  try {
+    if (!statSync(path).isFile()) return false
+    accessSync(path, constants.R_OK | (executable ? constants.X_OK : 0))
+    return true
+  } catch { return false }
+}
+
+/** 查询当前活动 Rust 进程实际持有的 Worker launch/runtime；不重新解析可能不同的默认候选。 */
+export function getPiWorkerRuntimeAvailability(): PiWorkerRuntimeAvailability {
+  const managed = activeManagedProcess
+  if (!managed || httpApiProcess !== managed.child || managed.child.killed) {
+    return { available: false, reason: 'pi_worker_process_unavailable' }
+  }
+  return classifyPiWorkerAvailability(managed.workerLaunch, managed.workerRuntime, managed.packaged)
 }
 
 function parseBridgeRequest(line: string): RustBridgeRequest | undefined {
@@ -578,25 +642,26 @@ function spawnManagedProcess(
   })
 
   child.once('error', (error) => {
-    if (httpApiProcess === child) {
-      httpApiProcess = null
-      httpApiInternalToken = null
+    if (clearActiveManagedProcess(child)) {
       if (!stopping) console.error('[HTTP API] Rust 进程错误:', error.message)
       if (!stopping) notifyHttpApiServerExit('error')
     }
   })
   child.once('exit', (code, signal) => {
     lineReader?.close()
-    if (httpApiProcess !== child) return
-    httpApiProcess = null
-    httpApiInternalToken = null
+    if (!clearActiveManagedProcess(child)) return
     if (!stopping) {
       console.error(`[HTTP API] Rust 进程退出（code=${code ?? 'null'}, signal=${signal ?? 'none'}）`)
       notifyHttpApiServerExit('unexpected_exit')
     }
   })
 
-  return { child, internalToken, ...(lineReader ? { lineReader } : {}) }
+  return {
+    child, internalToken, packaged: app.isPackaged,
+    ...(workerLaunch ? { workerLaunch } : {}),
+    ...(workerRuntime ? { workerRuntime } : {}),
+    ...(lineReader ? { lineReader } : {}),
+  }
 }
 
 async function resolveHttpApiBackend(
@@ -739,20 +804,20 @@ export function startHttpApiServer(options: HttpApiServerOptions = {}): void {
     return
   }
 
-  const workerLaunch = resolvePiRpcWorkerLaunch(options)
-  if (!workerLaunch) {
-    console.warn('[HTTP API] 找不到 Pi RPC Worker，将暂时只提供非 Agent HTTP API。请重新构建 Copis 运行时。')
-  } else if (workerLaunch.kind === 'script' && !app.isPackaged && !resolvePiRpcWorkerRuntime(workerLaunch)) {
-    console.warn('[HTTP API] 开发模式找不到 Bun runtime，Agent Worker 暂不可用。请先安装 Bun 或配置 vendor/bun。')
-  }
-
   stopping = false
   responseWriteChain = Promise.resolve()
   const managed = spawnManagedProcess(binaryPath, options.port ?? HTTP_API_PORT, options, true)
   if (!managed) return
-  httpApiProcess = managed.child
-  httpApiInternalToken = managed.internalToken
-  console.log(`[HTTP API] Rust 服务已启动：http://${HTTP_API_HOST}:${options.port ?? HTTP_API_PORT}${workerLaunch ? `，Pi Worker: ${workerLaunch.path}` : ''}`)
+  activateManagedProcess(managed)
+  const workerAvailability = classifyPiWorkerAvailability(managed.workerLaunch, managed.workerRuntime, managed.packaged)
+  if (!workerAvailability.available && workerAvailability.reason === 'pi_worker_entry_missing') {
+    console.warn('[HTTP API] 找不到 Pi RPC Worker，将暂时只提供非 Agent HTTP API。请重新构建 Copis 运行时。')
+  } else if (!workerAvailability.available && workerAvailability.reason.startsWith('pi_worker_runtime_')) {
+    console.warn('[HTTP API] Pi Worker runtime 暂不可用；Agent Worker 将保持离线。请检查当前 Copis runtime。')
+  } else if (!workerAvailability.available) {
+    console.warn('[HTTP API] Pi Worker 入口不可用；Agent Worker 将保持离线。请重新构建 Copis 运行时。')
+  }
+  console.log(`[HTTP API] Rust 服务已启动：http://${HTTP_API_HOST}:${options.port ?? HTTP_API_PORT}${managed.workerLaunch ? `，Pi Worker: ${managed.workerLaunch.path}` : ''}`)
 }
 
 export async function updateHttpApiServer(options: HttpApiServerOptions = {}): Promise<boolean> {
@@ -787,8 +852,7 @@ export async function updateHttpApiServer(options: HttpApiServerOptions = {}): P
 
   const oldProcess = httpApiProcess
   if (oldProcess) {
-    httpApiProcess = null
-    httpApiInternalToken = null
+    clearActiveManagedProcess(oldProcess)
     await stopManagedProcess(oldProcess, runtimeOptions.stopTimeoutMs)
   }
 
@@ -805,8 +869,7 @@ export async function updateHttpApiServer(options: HttpApiServerOptions = {}): P
   if (next) {
     // 正式进程启动阶段可能立刻通过 stdio 请求认证存储；先登记进程，
     // 否则 writeBridgeResponse 会把健康检查前到达的响应丢弃。
-    httpApiProcess = next.child
-    httpApiInternalToken = next.internalToken
+    activateManagedProcess(next)
   }
   if (next && await waitForHttpApiHealth(formalPort, {
     ...runtimeOptions,
@@ -817,10 +880,7 @@ export async function updateHttpApiServer(options: HttpApiServerOptions = {}): P
   }
 
   if (next) {
-    if (httpApiProcess === next.child) {
-      httpApiProcess = null
-      httpApiInternalToken = null
-    }
+    clearActiveManagedProcess(next.child)
     await stopManagedProcess(next.child, runtimeOptions.stopTimeoutMs)
   }
   if (previous) {
@@ -959,8 +1019,7 @@ export function stopHttpApiServer(stopTimeoutMs = 1_000): Promise<void> {
   if (!child) return Promise.resolve()
 
   stopping = true
-  httpApiProcess = null
-  httpApiInternalToken = null
+  clearActiveManagedProcess(child)
   return stopManagedProcess(child, stopTimeoutMs).finally(() => {
     stopping = false
   })

@@ -1,22 +1,48 @@
 import { atom } from 'jotai'
-import type { ChatRoomAgent, ChatRoomAttachment, ChatRoomConnectionStatus, ChatRoomEventEnvelope, ChatRoomInvocation, ChatRoomMessage, ChatRoomPermissionRequest, ChatRoomSummary, ChatRoomTransferState } from '@copis/shared'
-import { normalizeChatRoomMessage, type ChatRoomSendResult } from '../lib/chatroom-api'
+import type { ChatRoomAgent, ChatRoomAgentLocalView, ChatRoomAttachment, ChatRoomConnectionStatus, ChatRoomEventEnvelope, ChatRoomInvocation, ChatRoomInvocationMetadata, ChatRoomLocalRoomView, ChatRoomMember, ChatRoomMessage, ChatRoomPermissionRequest, ChatRoomSummary, ChatRoomTransferState, ProvisionChatRoomAgentInput } from '@copis/shared'
+import { normalizeChatRoomAgent, normalizeChatRoomMember, normalizeChatRoomMessage, normalizeChatRoomSummary, type ChatRoomSendResult } from '../lib/chatroom-api'
+import { applyChatRoomDeltaFrame, clearChatRoomDeltaFrames, createChatRoomDeltaFrameState, type ChatRoomDeltaFrameState } from '../lib/chatroom-delta-frames'
 
 export type ChatRoomMessageState = Map<string, ChatRoomMessage[]>
 export type ChatRoomCursorState = Map<string, number>
-export type ChatRoomInvocationState = Map<string, Map<string, ChatRoomInvocation>>
+export type ChatRoomInvocationPreviewPause = 'frame_conflict' | 'frame_capacity'
+export type ChatRoomRendererInvocation = ChatRoomInvocation & { previewPaused?: ChatRoomInvocationPreviewPause }
+export type ChatRoomInvocationState = Map<string, Map<string, ChatRoomRendererInvocation>>
 export type ChatRoomDraftState = Map<string, string>
 export type ChatRoomMentionState = Map<string, string[]>
 export type ChatRoomUnreadState = Map<string, number>
 export type ChatRoomTransferStateMap = Map<string, ChatRoomTransferState>
 export type ChatRoomSendState = { roomId: string; clientMessageId: string; status: 'sending' | 'sent' | 'failed'; content: string; mentionAgentIds: string[]; attachmentIds: string[]; error?: string; startedAt?: number; messageId?: string }
+export interface ChatRoomProvisionPlan {
+  room: ChatRoomSummary
+  agents: Array<Omit<ProvisionChatRoomAgentInput, 'roomId'>>
+  completed: number
+  accountKey: string
+  authEpoch: number
+  operationId: string
+  attemptId: string
+  inFlightIndex?: number
+  inFlightAgentName?: string
+  error?: string
+}
+export type ChatRoomProvisionProgressPayload =
+  | { phase: 'started'; index: number; agentName: string }
+  | { phase: 'progress'; completed: number }
+  | { phase: 'failed'; completed: number; error: string }
+  | { phase: 'finished' }
+export type ChatRoomProvisionProgressUpdate = { roomId: string; accountKey: string; authEpoch: number; operationId: string; attemptId: string } & ChatRoomProvisionProgressPayload
 
 export const chatRoomRoomsAtom = atom<ChatRoomSummary[]>([])
 export const chatRoomDetailsAtom = atom<Record<string, unknown>>( {})
 export const chatRoomMessagesAtom = atom<ChatRoomMessageState>(new Map())
 export const chatRoomCursorsAtom = atom<ChatRoomCursorState>(new Map())
+/** 已应用的房间状态版本，用于拒绝晚到的 HTTP 详情。 */
+export const chatRoomDataRevisionsAtom = atom<Map<string, number>>(new Map())
+/** 删除/重新加入时递增，隔离旧 room 生命周期中的异步回执。 */
+export const chatRoomLifecycleGenerationsAtom = atom<Map<string, number>>(new Map())
 export const chatRoomConnectionStatusAtom = atom<Map<string, ChatRoomConnectionStatus>>(new Map())
 export const chatRoomInvocationsAtom = atom<ChatRoomInvocationState>(new Map())
+export const chatRoomDeltaFramesAtom = atom<ChatRoomDeltaFrameState>(createChatRoomDeltaFrameState())
 export const chatRoomTransfersAtom = atom<ChatRoomTransferStateMap>(new Map())
 export const chatRoomDraftsAtom = atom<ChatRoomDraftState>(new Map())
 export const chatRoomMentionAgentIdsAtom = atom<ChatRoomMentionState>(new Map())
@@ -25,6 +51,48 @@ export const chatRoomSendStatesAtom = atom<Map<string, ChatRoomSendState>>(new M
 /** 已删除房间的本地墓碑，阻止迟到的 HTTP/SSE 结果重新写回状态。 */
 export const chatRoomDeletedRoomIdsAtom = atom<Set<string>>(new Set<string>())
 export const chatRoomPermissionRequestsAtom = atom<Map<string, ChatRoomPermissionRequest>>(new Map())
+export const chatRoomLocalRoomsAtom = atom<Map<string, ChatRoomLocalRoomView>>(new Map())
+export const chatRoomLocalRoomRevisionsAtom = atom<Map<string, number>>(new Map())
+export const chatRoomProvisionPlansAtom = atom<Map<string, ChatRoomProvisionPlan>>(new Map())
+export const chatRoomApplyLocalRoomConfigAtom = atom(null, (get, set, input: { room: ChatRoomLocalRoomView; expectedRevision?: number }) => {
+  const revision = get(chatRoomLocalRoomRevisionsAtom).get(input.room.roomId) ?? 0
+  if (input.expectedRevision !== undefined && input.expectedRevision !== revision) return
+  set(chatRoomLocalRoomsAtom, (items) => new Map(items).set(input.room.roomId, input.room))
+  set(chatRoomLocalRoomRevisionsAtom, (items) => new Map(items).set(input.room.roomId, revision + 1))
+})
+export const chatRoomSetProvisionPlanAtom = atom(null, (_get, set, plan: ChatRoomProvisionPlan) => set(chatRoomProvisionPlansAtom, (current) => new Map(current).set(plan.room.roomId, plan)))
+export const chatRoomClearProvisionPlanAtom = atom(null, (_get, set, roomId: string) => set(chatRoomProvisionPlansAtom, (current) => { const next = new Map(current); next.delete(roomId); return next }))
+export const chatRoomClearStaleProvisionPlansAtom = atom(null, (_get, set, authEpoch: number) => set(chatRoomProvisionPlansAtom, (current) => new Map([...current].filter(([, plan]) => plan.authEpoch === authEpoch))))
+export const chatRoomApplyProvisionProgressAtom = atom(null, (get, set, update: ChatRoomProvisionProgressUpdate) => {
+  const current = get(chatRoomProvisionPlansAtom).get(update.roomId)
+  if (!current || current.accountKey !== update.accountKey || current.authEpoch !== update.authEpoch || current.operationId !== update.operationId || current.attemptId !== update.attemptId) return
+  if (update.phase === 'finished') {
+    if (current.completed < current.agents.length) return
+    set(chatRoomClearProvisionPlanAtom, update.roomId)
+    return
+  }
+  const next: ChatRoomProvisionPlan = { ...current }
+  if (update.phase === 'started') {
+    next.inFlightIndex = update.index
+    next.inFlightAgentName = update.agentName
+    delete next.error
+  } else {
+    next.completed = update.completed
+    delete next.inFlightIndex
+    delete next.inFlightAgentName
+    if (update.phase === 'failed') next.error = update.error
+    else delete next.error
+  }
+  set(chatRoomProvisionPlansAtom, (plans) => new Map(plans).set(update.roomId, next))
+})
+export const chatRoomUpdateLocalAgentAtom = atom(null, (get, set, input: { roomId: string; agent: ChatRoomAgentLocalView; expectedRevision?: number }) => {
+  const room = get(chatRoomLocalRoomsAtom).get(input.roomId)
+  if (!room) return
+  const revision = get(chatRoomLocalRoomRevisionsAtom).get(input.roomId) ?? 0
+  if (input.expectedRevision !== undefined && revision !== input.expectedRevision) return
+  set(chatRoomLocalRoomsAtom, (current) => new Map(current).set(input.roomId, { ...room, agents: room.agents.map((agent) => agent.roomAgentId === input.agent.roomAgentId ? input.agent : agent) }))
+  set(chatRoomLocalRoomRevisionsAtom, (current) => new Map(current).set(input.roomId, revision + 1))
+})
 
 /** 超时只记录本地未确认结果，不改变服务端调用；迟到的真实结果仍有优先权。 */
 export const chatRoomExpirePendingInvocationAtom = atom(null, (get, set, pending: ChatRoomInvocation) => {
@@ -95,8 +163,11 @@ export const chatRoomResetStateAtom = atom(null, (_get, set) => {
   set(chatRoomDetailsAtom, {})
   set(chatRoomMessagesAtom, new Map())
   set(chatRoomCursorsAtom, new Map())
+  set(chatRoomDataRevisionsAtom, new Map())
+  set(chatRoomLifecycleGenerationsAtom, new Map())
   set(chatRoomConnectionStatusAtom, new Map())
   set(chatRoomInvocationsAtom, new Map())
+  set(chatRoomDeltaFramesAtom, createChatRoomDeltaFrameState())
   set(chatRoomTransfersAtom, new Map())
   set(chatRoomDraftsAtom, new Map())
   set(chatRoomMentionAgentIdsAtom, new Map())
@@ -104,19 +175,28 @@ export const chatRoomResetStateAtom = atom(null, (_get, set) => {
   set(chatRoomSendStatesAtom, new Map())
   set(chatRoomDeletedRoomIdsAtom, new Set())
   set(chatRoomPermissionRequestsAtom, new Map())
+  set(chatRoomLocalRoomsAtom, new Map())
+  set(chatRoomLocalRoomRevisionsAtom, new Map())
+  set(chatRoomProvisionPlansAtom, new Map())
   set(chatRoomActiveRoomIdAtom, undefined)
 })
 export const chatRoomRemoveRoomAtom = atom(null, (get, set, roomId: string) => {
   const removeKey = <T>(current: Map<string, T>): Map<string, T> => { const next = new Map(current); next.delete(roomId); return next }
   set(chatRoomRoomsAtom, (current) => current.filter((room) => room.roomId !== roomId))
   set(chatRoomDetailsAtom, (current) => { const next = { ...current }; delete next[roomId]; return next })
+  set(chatRoomLocalRoomsAtom, (current) => { const next = new Map(current); next.delete(roomId); return next })
+  set(chatRoomLocalRoomRevisionsAtom, (current) => { const next = new Map(current); next.delete(roomId); return next })
+  set(chatRoomProvisionPlansAtom, (current) => { const next = new Map(current); next.delete(roomId); return next })
   set(chatRoomMessagesAtom, removeKey)
   set(chatRoomCursorsAtom, removeKey)
+  set(chatRoomDataRevisionsAtom, (current) => new Map(current).set(roomId, (current.get(roomId) ?? 0) + 1))
+  set(chatRoomLifecycleGenerationsAtom, (current) => new Map(current).set(roomId, (current.get(roomId) ?? 0) + 1))
   set(chatRoomConnectionStatusAtom, removeKey)
   set(chatRoomUnreadCountsAtom, removeKey)
   set(chatRoomDraftsAtom, removeKey)
   set(chatRoomMentionAgentIdsAtom, removeKey)
   set(chatRoomInvocationsAtom, removeKey)
+  set(chatRoomDeltaFramesAtom, (current) => clearChatRoomDeltaFrames(current, { roomId }))
   set(chatRoomTransfersAtom, (current) => new Map([...current].filter(([, state]) => state.roomId !== roomId)))
   set(chatRoomSendStatesAtom, (current) => new Map([...current].filter(([, state]) => state.roomId !== roomId)))
   set(chatRoomPermissionRequestsAtom, (current) => new Map([...current].filter(([, request]) => request.roomId !== roomId)))
@@ -125,9 +205,55 @@ export const chatRoomRemoveRoomAtom = atom(null, (get, set, roomId: string) => {
 })
 export const chatRoomRejoinRoomAtom = atom(null, (_get, set, room: ChatRoomSummary) => {
   set(chatRoomDeletedRoomIdsAtom, (current) => { const next = new Set(current); next.delete(room.roomId); return next })
+  set(chatRoomDataRevisionsAtom, (current) => new Map(current).set(room.roomId, (current.get(room.roomId) ?? 0) + 1))
+  set(chatRoomLifecycleGenerationsAtom, (current) => new Map(current).set(room.roomId, (current.get(room.roomId) ?? 0) + 1))
+  set(chatRoomDeltaFramesAtom, (current) => clearChatRoomDeltaFrames(current, { roomId: room.roomId }))
   set(chatRoomRoomsAtom, (current) => [...current.filter((item) => item.roomId !== room.roomId), room])
 })
+export const chatRoomApplyRoomDetailAtom = atom(null, (get, set, input: { roomId: string; detail: { room: ChatRoomSummary; members: ChatRoomMember[]; agents: ChatRoomAgent[] }; expectedRevision?: number }) => {
+  if (get(chatRoomDeletedRoomIdsAtom).has(input.roomId)) return
+  if (input.expectedRevision !== undefined && (get(chatRoomDataRevisionsAtom).get(input.roomId) ?? 0) !== input.expectedRevision) return
+  set(chatRoomDetailsAtom, (current) => ({ ...current, [input.roomId]: input.detail }))
+})
 export const chatRoomClearPermissionRequestAtom = atom(null, (get, set, requestId: string) => { const next = new Map(get(chatRoomPermissionRequestsAtom)); next.delete(requestId); set(chatRoomPermissionRequestsAtom, next) })
+/** 公开 metadata 是身份/状态快照，不是 delta；独立合并以免伪造或要求文本帧。 */
+export const chatRoomApplyInvocationMetadataAtom = atom(null, (get, set, metadata: ChatRoomInvocationMetadata) => {
+  const { roomId, invocationId } = metadata
+  if (!roomId || !invocationId || get(chatRoomDeletedRoomIdsAtom).has(roomId)) return
+  const current = get(chatRoomInvocationsAtom)
+  const currentRoom = current.get(roomId) ?? new Map<string, ChatRoomRendererInvocation>()
+  const old = currentRoom.get(invocationId)
+  if ((old?.targetAgentId && old.targetAgentId !== metadata.targetAgentId)
+    || (old?.triggerMessageId && old.triggerMessageId !== metadata.triggerMessageId)) return
+
+  const terminalStatuses = ['completed', 'failed', 'rejected']
+  const oldIsTerminal = old !== undefined && terminalStatuses.includes(old.status)
+  const incomingIsTerminal = terminalStatuses.includes(metadata.status)
+  if (oldIsTerminal && incomingIsTerminal && metadata.status !== old.status) return
+
+  const olderPhase = (old?.status === 'running' && ['created', 'accepted'].includes(metadata.status))
+    || (old?.status === 'accepted' && metadata.status === 'created')
+  const status = oldIsTerminal || olderPhase ? old!.status : metadata.status
+  const terminal = terminalStatuses.includes(status)
+  const room = new Map(currentRoom)
+  clearLocalInvocationTimeout(room, metadata.targetAgentId, metadata.triggerMessageId)
+  const failureCode = metadata.failureCode ?? old?.failureCode
+  room.set(invocationId, {
+    ...(old ?? {}),
+    invocationId,
+    roomId,
+    traceId: metadata.traceId || old?.traceId || '',
+    targetAgentId: metadata.targetAgentId || old?.targetAgentId || '',
+    triggerMessageId: metadata.triggerMessageId || old?.triggerMessageId || '',
+    depth: metadata.depth,
+    status,
+    startedAt: old?.startedAt ?? Date.now(),
+    ...(failureCode !== undefined ? { failureCode } : {}),
+    ...(terminal ? { previewPaused: undefined } : old?.previewPaused ? { previewPaused: old.previewPaused } : {}),
+  })
+  set(chatRoomInvocationsAtom, new Map(current).set(roomId, room))
+  if (terminal) set(chatRoomDeltaFramesAtom, (frames) => clearChatRoomDeltaFrames(frames, { roomId, invocationId }))
+})
 export const chatRoomApplyEventAtom = atom(null, (get, set, event: ChatRoomEventEnvelope) => {
   const roomId = event.roomId; if (!roomId) return
   if (get(chatRoomDeletedRoomIdsAtom).has(roomId)) return
@@ -135,28 +261,99 @@ export const chatRoomApplyEventAtom = atom(null, (get, set, event: ChatRoomEvent
     set(chatRoomRemoveRoomAtom, roomId)
     return
   }
+  const currentCursor = get(chatRoomCursorsAtom).get(roomId) ?? 0
+  if (event.type === 'room.snapshot') {
+    if (!Number.isSafeInteger(event.latestSeq) || event.latestSeq! < 0) return
+    const latestSeq = event.latestSeq!
+    if (latestSeq < currentCursor) return
+    const payload = (typeof event.payload === 'object' && event.payload !== null ? event.payload : {}) as Record<string, unknown>
+    const current = get(chatRoomDetailsAtom)[roomId] as { room?: ChatRoomSummary } | undefined
+    const summary = current?.room ?? get(chatRoomRoomsAtom).find((room) => room.roomId === roomId)
+    const roomValue = payload.room && typeof payload.room === 'object' ? payload.room as Record<string, unknown> : payload
+    const room = normalizeChatRoomSummary({ ...summary, ...roomValue, roomId })
+    const detail = {
+      room,
+      members: Array.isArray(payload.members) ? payload.members.map(normalizeChatRoomMember) : [],
+      agents: Array.isArray(payload.agents) ? payload.agents.map(normalizeChatRoomAgent) : [],
+    }
+    set(chatRoomDetailsAtom, (items) => ({ ...items, [roomId]: detail }))
+    set(chatRoomRoomsAtom, (rooms) => rooms.map((item) => item.roomId === roomId ? room : item))
+    set(chatRoomCursorsAtom, (items) => new Map(items).set(roomId, Math.max(items.get(roomId) ?? 0, latestSeq)))
+    set(chatRoomDataRevisionsAtom, (items) => new Map(items).set(roomId, (items.get(roomId) ?? 0) + 1))
+    return
+  }
+  if (event.seq !== undefined && event.seq <= currentCursor) return
   const payload = (typeof event.payload === 'object' && event.payload !== null ? event.payload : {}) as Record<string, unknown>
+  if (event.type === 'room.updated') {
+    const current = (get(chatRoomDetailsAtom)[roomId] as { room?: ChatRoomSummary } | undefined)?.room
+      ?? get(chatRoomRoomsAtom).find((room) => room.roomId === roomId)
+    const roomValue = payload.room && typeof payload.room === 'object' ? payload.room as Record<string, unknown> : payload
+    const room = normalizeChatRoomSummary({ ...current, ...roomValue, roomId })
+    set(chatRoomRoomsAtom, (rooms) => rooms.map((item) => item.roomId === roomId ? room : item))
+    set(chatRoomDetailsAtom, (details) => ({ ...details, [roomId]: { ...((details[roomId] as Record<string, unknown> | undefined) ?? {}), room } }))
+  }
   const presence = event.type === 'agent.presence_changed' ? payload.status : event.type === 'agent.offline' ? 'offline' : event.type === 'agent.busy' ? 'busy' : event.type === 'agent.disabled' ? 'disabled' : undefined
-  if (typeof presence === 'string' && ['online', 'offline', 'busy', 'disabled'].includes(presence)) {
+  if (event.type === 'agent.updated') {
+    const incomingAgent = normalizeChatRoomAgent(payload)
+    if (incomingAgent.agentId) set(chatRoomDetailsAtom, (current) => {
+      const detail = current[roomId] as { agents?: ChatRoomAgent[] } | undefined
+      if (!Array.isArray(detail?.agents)) return current
+      const existing = detail.agents.find((agent) => agent.agentId === incomingAgent.agentId)
+      const agents = detail.agents.filter((agent) => agent.agentId !== incomingAgent.agentId)
+      if (payload.removed !== true) agents.push(normalizeChatRoomAgent({ ...existing, ...payload, agentId: incomingAgent.agentId }))
+      return { ...current, [roomId]: { ...detail, agents } }
+    })
+  } else if (event.type === 'agent.removed') {
+    const agentId = typeof payload.agentId === 'string' ? payload.agentId : typeof payload.roomAgentId === 'string' ? payload.roomAgentId : undefined
+    if (agentId) set(chatRoomDetailsAtom, (current) => {
+      const detail = current[roomId] as { agents?: ChatRoomAgent[] } | undefined
+      return Array.isArray(detail?.agents) ? { ...current, [roomId]: { ...detail, agents: detail.agents.filter((agent) => agent.agentId !== agentId) } } : current
+    })
+  } else if (event.type === 'member.removed') {
+    const userId = typeof payload.userId === 'string' ? payload.userId : typeof payload.memberId === 'string' ? payload.memberId : undefined
+    if (userId) set(chatRoomDetailsAtom, (current) => {
+      const detail = current[roomId] as { members?: ChatRoomMember[] } | undefined
+      return Array.isArray(detail?.members) ? { ...current, [roomId]: { ...detail, members: detail.members.filter((member) => member.userId !== userId) } } : current
+    })
+  } else if (event.type === 'member.presence_changed') {
+    const userId = payload.userId ?? payload.memberId
+    const nextPresence = payload.presence ?? payload.status
+    if (typeof userId === 'string' && ['online', 'busy', 'offline', 'disabled'].includes(String(nextPresence))) set(chatRoomDetailsAtom, (current) => {
+      const detail = current[roomId] as { members?: ChatRoomMember[] } | undefined
+      return Array.isArray(detail?.members) ? { ...current, [roomId]: { ...detail, members: detail.members.map((member) => member.userId === userId ? { ...member, presence: nextPresence as ChatRoomMember['presence'] } : member) } } : current
+    })
+  } else if (typeof presence === 'string' && ['online', 'offline', 'busy', 'disabled'].includes(presence)) {
     const agentId = payload.roomAgentId ?? payload.agentId
     set(chatRoomDetailsAtom, (current) => {
       const detail = current[roomId] as { agents?: ChatRoomAgent[] } | undefined
       if (!Array.isArray(detail?.agents)) return current
-      return { ...current, [roomId]: { ...detail, agents: detail.agents.map((agent) => agent.agentId === agentId ? { ...agent, status: presence as ChatRoomAgent['status'], busy: presence === 'busy' } : agent) } }
+      return { ...current, [roomId]: { ...detail, agents: detail.agents.map((agent) => {
+        if (agent.agentId !== agentId) return agent
+        const runtimeStatus = presence === 'online' && (agent.availability === 'busy' || agent.busy) ? 'busy' : presence as ChatRoomAgent['status']
+        const availability = event.type === 'agent.busy' ? 'busy' : event.type === 'agent.offline' ? 'offline' : event.type === 'agent.disabled' ? 'disabled' : agent.availability
+        return { ...agent, status: runtimeStatus, busy: runtimeStatus === 'busy', ...(availability ? { availability } : {}) }
+      }) } }
     })
   }
   if (event.seq !== undefined) set(chatRoomCursorsAtom, (current) => new Map(current).set(roomId, Math.max(current.get(roomId) ?? 0, event.seq!)))
+  set(chatRoomDataRevisionsAtom, (current) => new Map(current).set(roomId, (current.get(roomId) ?? 0) + 1))
   if (event.type === 'message.created') {
     const message = normalizeChatRoomMessage(payload, { roomId, seq: event.seq })
     if (message.senderType === 'agent' && message.parentMessageId) {
+      const currentFrames = get(chatRoomDeltaFramesAtom)
+      let nextFrames = currentFrames
       set(chatRoomInvocationsAtom, (current) => {
         const room = new Map(current.get(roomId) ?? [])
         clearLocalInvocationTimeout(room, message.senderId, message.parentMessageId!)
         for (const [id, invocation] of room) {
-          if (invocation.targetAgentId === message.senderId && invocation.triggerMessageId === message.parentMessageId && ['created', 'accepted', 'running'].includes(invocation.status)) room.set(id, { ...invocation, status: 'completed' })
+          if (invocation.targetAgentId === message.senderId && invocation.triggerMessageId === message.parentMessageId && ['created', 'accepted', 'running'].includes(invocation.status)) {
+            room.set(id, { ...invocation, status: 'completed', previewPaused: undefined })
+            nextFrames = clearChatRoomDeltaFrames(nextFrames, { roomId, invocationId: id })
+          }
         }
         return new Map(current).set(roomId, room)
       })
+      if (nextFrames !== currentFrames) set(chatRoomDeltaFramesAtom, nextFrames)
     }
     let added = false
     set(chatRoomMessagesAtom, (current) => {
@@ -181,33 +378,64 @@ export const chatRoomApplyEventAtom = atom(null, (get, set, event: ChatRoomEvent
   } else if (['agent.invocation', 'agent.accepted', 'agent.delta', 'agent.completed', 'agent.failed'].includes(event.type)) {
     const invocationId = typeof payload.invocationId === 'string' ? payload.invocationId : undefined
     if (!invocationId) return
-    set(chatRoomInvocationsAtom, (current) => {
-      const next = new Map(current)
-      const room = new Map(current.get(roomId) ?? [])
-      const old = room.get(invocationId)
-      clearLocalInvocationTimeout(room, typeof payload.targetAgentId === 'string' ? payload.targetAgentId : old?.targetAgentId ?? '', typeof payload.triggerMessageId === 'string' ? payload.triggerMessageId : old?.triggerMessageId ?? '', typeof payload.clientMessageId === 'string' ? payload.clientMessageId : undefined)
-      const oldIsTerminal = old?.status === 'completed' || old?.status === 'failed' || old?.status === 'rejected'
-      const incomingStatus = event.type === 'agent.invocation' ? 'created' : event.type === 'agent.accepted' ? 'accepted' : event.type === 'agent.delta' ? 'running' : event.type === 'agent.completed' ? 'completed' : 'failed'
-      if (oldIsTerminal && ['completed', 'failed'].includes(incomingStatus) && incomingStatus !== old.status) return current
-      const olderPhase = (old?.status === 'running' && ['created', 'accepted'].includes(incomingStatus)) || (old?.status === 'accepted' && incomingStatus === 'created')
-      const status = oldIsTerminal || olderPhase ? old!.status : incomingStatus
-      room.set(invocationId, {
-        ...(old ?? {}),
-        invocationId,
-        roomId,
-        traceId: typeof payload.traceId === 'string' ? payload.traceId : old?.traceId ?? '',
-        targetAgentId: typeof payload.targetAgentId === 'string' ? payload.targetAgentId : old?.targetAgentId ?? '',
-        triggerMessageId: typeof payload.triggerMessageId === 'string' ? payload.triggerMessageId : old?.triggerMessageId ?? '',
-        depth: typeof payload.depth === 'number' ? payload.depth : old?.depth ?? 0,
-        status,
-        startedAt: old?.startedAt ?? Date.now(),
-        ...(event.type === 'agent.delta' && !oldIsTerminal && typeof payload.delta === 'string' ? { delta: `${old?.delta ?? ''}${payload.delta}` } : {}),
-        ...(!oldIsTerminal && typeof payload.failureCode === 'string' ? { failureCode: payload.failureCode } : {}),
-        ...(typeof payload.message === 'string' ? { errorMessage: payload.message } : {}),
-      })
-      next.set(roomId, room)
-      return next
+    const currentInvocations = get(chatRoomInvocationsAtom)
+    const currentRoom = currentInvocations.get(roomId) ?? new Map<string, ChatRoomRendererInvocation>()
+    const old = currentRoom.get(invocationId)
+    const oldIsTerminal = old?.status === 'completed' || old?.status === 'failed' || old?.status === 'rejected'
+    const incomingStatus = event.type === 'agent.invocation' ? 'created' : event.type === 'agent.accepted' ? 'accepted' : event.type === 'agent.delta' ? 'running' : event.type === 'agent.completed' ? 'completed' : 'failed'
+    if (event.type === 'agent.delta' && oldIsTerminal) return
+    if (oldIsTerminal && ['completed', 'failed'].includes(incomingStatus) && incomingStatus !== old.status) return
+
+    let deltaToAppend: string | undefined
+    let previewPaused = old?.previewPaused
+    let frameState: ChatRoomDeltaFrameState | undefined
+    if (event.type === 'agent.delta') {
+      if (old?.previewPaused || typeof payload.delta !== 'string') return
+      if (Object.prototype.hasOwnProperty.call(payload, 'frameId')) {
+        const applied = applyChatRoomDeltaFrame(get(chatRoomDeltaFramesAtom), {
+          roomId,
+          invocationId,
+          frameId: payload.frameId,
+          delta: payload.delta,
+        })
+        if (applied.decision === 'append') {
+          frameState = applied.state
+          deltaToAppend = payload.delta
+        } else if (applied.decision === 'conflict') previewPaused = 'frame_conflict'
+        else if (applied.decision === 'capacity') previewPaused = 'frame_capacity'
+        else if (applied.decision === 'invalid') return
+        else return
+      } else {
+        // 旧协议没有帧身份，只能保留线上的到达顺序。
+        deltaToAppend = payload.delta
+      }
+    }
+
+    const room = new Map(currentRoom)
+    clearLocalInvocationTimeout(room, typeof payload.targetAgentId === 'string' ? payload.targetAgentId : old?.targetAgentId ?? '', typeof payload.triggerMessageId === 'string' ? payload.triggerMessageId : old?.triggerMessageId ?? '', typeof payload.clientMessageId === 'string' ? payload.clientMessageId : undefined)
+    const olderPhase = (old?.status === 'running' && ['created', 'accepted'].includes(incomingStatus)) || (old?.status === 'accepted' && incomingStatus === 'created')
+    const preserveStatusForPreviewPause = event.type === 'agent.delta' && previewPaused !== undefined
+    const status = oldIsTerminal || olderPhase || preserveStatusForPreviewPause ? old?.status ?? incomingStatus : incomingStatus
+    room.set(invocationId, {
+      ...(old ?? {}),
+      invocationId,
+      roomId,
+      traceId: typeof payload.traceId === 'string' ? payload.traceId : old?.traceId ?? '',
+      targetAgentId: typeof payload.targetAgentId === 'string' ? payload.targetAgentId : old?.targetAgentId ?? '',
+      triggerMessageId: typeof payload.triggerMessageId === 'string' ? payload.triggerMessageId : old?.triggerMessageId ?? '',
+      depth: typeof payload.depth === 'number' ? payload.depth : old?.depth ?? 0,
+      status,
+      startedAt: old?.startedAt ?? Date.now(),
+      ...(deltaToAppend !== undefined ? { delta: `${old?.delta ?? ''}${deltaToAppend}` } : {}),
+      ...(event.type === 'agent.completed' || event.type === 'agent.failed' ? { previewPaused: undefined } : previewPaused ? { previewPaused } : {}),
+      ...(!oldIsTerminal && typeof payload.failureCode === 'string' ? { failureCode: payload.failureCode } : {}),
+      ...(typeof payload.message === 'string' ? { errorMessage: payload.message } : {}),
     })
+    set(chatRoomInvocationsAtom, new Map(currentInvocations).set(roomId, room))
+    if (frameState) set(chatRoomDeltaFramesAtom, frameState)
+    if (event.type === 'agent.completed' || event.type === 'agent.failed') {
+      set(chatRoomDeltaFramesAtom, (current) => clearChatRoomDeltaFrames(current, { roomId, invocationId }))
+    }
   }
 })
 export const chatRoomSetDraftAtom = atom(null, (_get, set, input: { roomId: string; value: string }) => set(chatRoomDraftsAtom, (current) => new Map(current).set(input.roomId, input.value)))

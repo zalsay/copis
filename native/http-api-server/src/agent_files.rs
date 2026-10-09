@@ -163,6 +163,28 @@ impl AgentFilePolicyStore {
         self.policies.lock().unwrap().remove(session_id);
     }
 
+    pub fn remove_if_worker_token(&self, session_id: &str, worker_token: &str) -> bool {
+        let mut policies = self.policies.lock().unwrap();
+        let removed = if policies
+            .get(session_id)
+            .is_some_and(|policy| policy.worker_token == worker_token)
+        {
+            policies.remove(session_id);
+            true
+        } else {
+            false
+        };
+        removed
+    }
+
+    pub fn contains_worker_token(&self, session_id: &str, worker_token: &str) -> bool {
+        self.policies
+            .lock()
+            .unwrap()
+            .get(session_id)
+            .is_some_and(|policy| policy.worker_token == worker_token)
+    }
+
     #[cfg(test)]
     pub fn contains(&self, session_id: &str) -> bool {
         self.policies.lock().unwrap().contains_key(session_id)
@@ -214,6 +236,25 @@ impl AgentFilePolicyStore {
         worker_token: &str,
         body: &[u8],
     ) -> Result<Value, AgentFileError> {
+        self.handle_shell_with_worker_token_internal(worker_token, body, None)
+    }
+
+    #[cfg(test)]
+    fn handle_shell_with_worker_token_and_process(
+        &self,
+        worker_token: &str,
+        body: &[u8],
+        process: Command,
+    ) -> Result<Value, AgentFileError> {
+        self.handle_shell_with_worker_token_internal(worker_token, body, Some(process))
+    }
+
+    fn handle_shell_with_worker_token_internal(
+        &self,
+        worker_token: &str,
+        body: &[u8],
+        process: Option<Command>,
+    ) -> Result<Value, AgentFileError> {
         let request: ShellRequest = serde_json::from_slice(body)
             .map_err(|_| AgentFileError::bad_request("命令请求体不是有效的 JSON"))?;
         if request.session_id.trim().is_empty()
@@ -234,7 +275,13 @@ impl AgentFilePolicyStore {
             .ok_or_else(|| {
                 AgentFileError::forbidden("agent_policy_not_found", "Agent 文件权限策略不存在")
             })?;
-        policy.execute_project_command(&request)
+        if policy.chatroom_profile {
+            return Err(AgentFileError::forbidden(
+                "chatroom_shell_not_allowed",
+                "聊天室 Agent 暂不支持项目 Shell 命令",
+            ));
+        }
+        policy.execute_project_command(&request, process)
     }
 
     fn ensure_worker_token(
@@ -440,11 +487,27 @@ impl AgentFilePolicyStore {
 }
 
 impl FileAccessPolicy {
-    fn execute_project_command(&self, request: &ShellRequest) -> Result<Value, AgentFileError> {
+    fn execute_project_command(
+        &self,
+        request: &ShellRequest,
+        process_override: Option<Command>,
+    ) -> Result<Value, AgentFileError> {
+        if self.chatroom_profile {
+            return Err(AgentFileError::forbidden(
+                "chatroom_shell_not_allowed",
+                "聊天室 Agent 暂不支持项目 Shell 命令",
+            ));
+        }
         if self.permission_mode == "plan" {
             return Err(AgentFileError::forbidden(
                 "plan_command_not_allowed",
                 "计划模式下不能执行项目命令",
+            ));
+        }
+        if self.chatroom_profile {
+            return Err(AgentFileError::forbidden(
+                "chatroom_shell_not_allowed",
+                "聊天室 Agent 暂不支持项目 Shell 命令",
             ));
         }
         if !self.advanced_authorization && requires_advanced_authorization(&request.command) {
@@ -474,7 +537,24 @@ impl FileAccessPolicy {
                 "命令 timeoutMs 必须在 1 到 600000 之间",
             ));
         }
-        run_project_command(&request.command, &cwd, Duration::from_millis(timeout_ms))
+        let mut process = process_override.unwrap_or_else(|| {
+            if cfg!(windows) {
+                let mut process = Command::new("cmd");
+                process.args(["/C", &request.command]);
+                process
+            } else {
+                let mut process = Command::new("/bin/sh");
+                process.args(["-c", &request.command]);
+                process
+            }
+        });
+        process
+            .current_dir(&cwd)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        configure_project_command_environment(&mut process);
+        run_project_command(process, &cwd, Duration::from_millis(timeout_ms))
     }
 
     fn validate_read_only_command_paths(&self, command: &str) -> Result<(), AgentFileError> {
@@ -979,19 +1059,10 @@ fn curl_option_reads_or_writes_files(_option: &str, value: &str) -> bool {
 }
 
 fn run_project_command(
-    command: &str,
+    mut process: Command,
     cwd: &Path,
     timeout: Duration,
 ) -> Result<Value, AgentFileError> {
-    let mut process = if cfg!(windows) {
-        let mut command_process = Command::new("cmd");
-        command_process.args(["/C", command]);
-        command_process
-    } else {
-        let mut command_process = Command::new("/bin/sh");
-        command_process.args(["-c", command]);
-        command_process
-    };
     process
         .current_dir(cwd)
         .stdin(Stdio::null())

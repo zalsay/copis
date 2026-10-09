@@ -1,3 +1,4 @@
+use super::super::chatroom_execution::{ChatroomExecutionBinding, ChatroomOrigin};
 use super::{
     configure_payment_worker_capability, configure_worker_file_capability,
     is_copis_working_channel_id, is_supported_permission_mode_for_profile,
@@ -6,8 +7,83 @@ use super::{
     PiWorkerManager, PiWorkerRunState, PiWorkerStatusSnapshot, WorkerLaunch,
 };
 use serde_json::json;
+use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
+use std::sync::{
+    atomic::{AtomicUsize, Ordering},
+    mpsc, Arc,
+};
+use std::thread;
+use std::time::{Duration, Instant};
+
+static NEXT_FAKE_WORKER_DIR: AtomicUsize = AtomicUsize::new(0);
+
+#[cfg(unix)]
+fn fake_worker_root() -> PathBuf {
+    let root = std::env::temp_dir().join(format!(
+        "copis-pi-fake-worker-{}-{}",
+        std::process::id(),
+        NEXT_FAKE_WORKER_DIR.fetch_add(1, Ordering::Relaxed),
+    ));
+    fs::create_dir_all(&root).unwrap();
+    root
+}
+
+#[cfg(unix)]
+fn fake_worker_config(
+    session_id: &str,
+    root: &std::path::Path,
+    padding_bytes: usize,
+) -> serde_json::Value {
+    json!({
+        "sessionId": session_id,
+        "padding": "x".repeat(padding_bytes),
+        "query": {
+            "sessionId": session_id,
+            "cwd": root,
+            "channelId": "fake-provider",
+            "model": "no-model-call",
+            "permissionMode": "bypassPermissions",
+            "triggeredBy": "user",
+            "automationEnabled": true,
+            "capabilityProfile": "chatroom",
+            "useRustFileApi": true,
+            "fileAccessPolicy": {
+                "readRoots": [root],
+                "readFiles": [],
+                "writeRoots": [root],
+                "permissionMode": "bypassPermissions"
+            }
+        }
+    })
+}
+
+#[cfg(unix)]
+fn fake_ordinary_worker_config(session_id: &str, root: &std::path::Path) -> serde_json::Value {
+    let mut config = fake_worker_config(session_id, root, 0);
+    config["query"]
+        .as_object_mut()
+        .unwrap()
+        .remove("capabilityProfile");
+    config
+}
+
+#[cfg(unix)]
+fn fake_sleep_launch() -> WorkerLaunch {
+    WorkerLaunch {
+        program: PathBuf::from("/bin/sleep"),
+        args: vec!["30".to_string()],
+    }
+}
+
+#[cfg(unix)]
+fn fake_short_nonreader_launch() -> WorkerLaunch {
+    WorkerLaunch {
+        program: PathBuf::from("/bin/sleep"),
+        args: vec!["0.8".to_string()],
+    }
+}
 
 #[test]
 fn chatroom_default_permission_mode_is_main_only() {
@@ -20,6 +96,447 @@ fn chatroom_default_permission_mode_is_main_only() {
         Some("user")
     ));
     assert!(!is_supported_permission_mode_for_profile("default", None));
+}
+
+#[test]
+fn chatroom_stop_cancels_startup_reserved_before_prepare_returns() {
+    let manager = Arc::new(PiWorkerManager::new());
+    let reservation = manager.reserve_startup("prepare-session").unwrap();
+    let (prepared_tx, prepared_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    let start_manager = Arc::clone(&manager);
+    let late_reservation = reservation.clone();
+
+    let late_start = thread::spawn(move || {
+        prepared_tx.send(()).unwrap();
+        release_rx.recv().unwrap();
+        start_manager.start_reserved(&late_reservation, json!({}))
+    });
+
+    prepared_rx.recv().unwrap();
+    assert!(manager.stop("prepare-session").unwrap());
+    release_tx.send(()).unwrap();
+    let start_result = late_start.join().unwrap();
+
+    let error = match start_result {
+        Ok(_) => panic!("已撤销的 prepare 不得启动 Worker"),
+        Err(error) => error,
+    };
+    assert!(error.contains("startup 已取消"));
+    assert!(!manager.is_active("prepare-session"));
+    let replacement = manager.reserve_startup("prepare-session").unwrap();
+    manager.abandon_startup(&reservation);
+    assert!(manager.start_reserved(&reservation, json!({})).is_err());
+    assert!(manager.startup_is_current(&replacement));
+    manager.abandon_startup(&replacement);
+}
+
+#[test]
+fn stop_all_cancels_only_the_current_bounded_pending_startups() {
+    let manager = PiWorkerManager::new();
+    let first = manager.reserve_startup("session-a").unwrap();
+    let second = manager.reserve_startup("session-b").unwrap();
+
+    assert_eq!(manager.stop_all().unwrap(), 2);
+    assert!(manager.start_reserved(&first, json!({})).is_err());
+    assert!(manager.start_reserved(&second, json!({})).is_err());
+    assert_eq!(manager.stop_all().unwrap(), 0);
+}
+
+#[test]
+fn pending_startup_reservations_are_bounded() {
+    let manager = PiWorkerManager::new();
+    let reservations = (0..32)
+        .map(|index| manager.reserve_startup(&format!("session-{index}")))
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+
+    assert!(manager.reserve_startup("overflow-session").is_err());
+    for reservation in reservations {
+        manager.abandon_startup(&reservation);
+    }
+    assert!(manager.reserve_startup("after-release").is_ok());
+}
+
+#[test]
+fn reserve_startup_rejects_session_with_active_worker_before_resource_setup() {
+    let manager = PiWorkerManager::new();
+    manager.worker_statuses.lock().unwrap().insert(
+        "active-session".to_string(),
+        PiWorkerStatusSnapshot {
+            session_id: "active-session".to_string(),
+            state: PiWorkerRunState::Running,
+            permission_mode: "bypassPermissions".to_string(),
+        },
+    );
+
+    assert!(manager.reserve_startup("active-session").is_err());
+    assert!(manager
+        .startup_reservations
+        .lock()
+        .unwrap()
+        .by_session
+        .is_empty());
+}
+
+#[cfg(unix)]
+#[test]
+fn stale_a_stop_and_finish_cannot_revoke_or_remove_same_session_worker_b() {
+    let manager = PiWorkerManager::new();
+    let root = fake_worker_root();
+    let session_id = "same-session-a-b";
+    let reservation_a = manager
+        .reserve_startup_for(session_id, Some("run-a".to_string()))
+        .unwrap();
+    let run_a = manager
+        .start_reserved_with_launch(
+            &reservation_a,
+            fake_ordinary_worker_config(session_id, &root),
+            Some(fake_sleep_launch()),
+        )
+        .unwrap();
+    let file_token_a = run_a.control.file_api_token.clone();
+    let worker_token_a = run_a.control.worker_capability_token.clone().unwrap();
+    assert!(manager
+        .reserve_startup_for(session_id, Some("duplicate-run".to_string()))
+        .is_err());
+    assert!(manager
+        .file_policies
+        .contains_worker_token(session_id, &file_token_a));
+    assert!(
+        super::super::automation::worker_automation_context(session_id, &worker_token_a).is_ok()
+    );
+
+    let stopped_a = manager.stop_owned(session_id, Some("run-a")).unwrap();
+    let active_after_stop_a = manager.is_active(session_id);
+    let file_a_revoked = !manager
+        .file_policies
+        .contains_worker_token(session_id, &file_token_a);
+    let automation_a_revoked =
+        super::super::automation::worker_automation_context(session_id, &worker_token_a).is_err();
+
+    let reservation_b = manager
+        .reserve_startup_for(session_id, Some("run-b".to_string()))
+        .unwrap();
+    let run_b = manager
+        .start_reserved_with_launch(
+            &reservation_b,
+            fake_ordinary_worker_config(session_id, &root),
+            Some(fake_sleep_launch()),
+        )
+        .unwrap();
+    let file_token_b = run_b.control.file_api_token.clone();
+    let worker_token_b = run_b.control.worker_capability_token.clone().unwrap();
+    assert_ne!(file_token_a, file_token_b);
+    assert_ne!(worker_token_a, worker_token_b);
+
+    let stale_stop_a = !manager.stop_owned(session_id, Some("run-a")).unwrap();
+    manager.finish(run_a);
+
+    let active_after_finish_a = manager.is_active(session_id);
+    let file_b_retained = manager
+        .file_policies
+        .contains_worker_token(session_id, &file_token_b);
+    let automation_b_retained =
+        super::super::automation::worker_automation_context(session_id, &worker_token_b).is_ok();
+
+    let stopped_b = manager.stop_owned(session_id, Some("run-b")).unwrap();
+    let file_b_revoked = !manager
+        .file_policies
+        .contains_worker_token(session_id, &file_token_b);
+    let automation_b_revoked =
+        super::super::automation::worker_automation_context(session_id, &worker_token_b).is_err();
+    manager.finish(run_b);
+    fs::remove_dir_all(root).unwrap();
+
+    assert!(stopped_a);
+    assert!(!active_after_stop_a);
+    assert!(file_a_revoked && automation_a_revoked);
+    assert!(stale_stop_a);
+    assert!(active_after_finish_a);
+    assert!(file_b_retained && automation_b_retained);
+    assert!(stopped_b);
+    assert!(file_b_revoked && automation_b_revoked);
+}
+
+#[cfg(unix)]
+#[test]
+fn trusted_chatroom_revocation_retires_only_exact_fake_child_and_file_capability() {
+    let manager = PiWorkerManager::new();
+    let registry = manager.chatroom_execution_registry();
+    let root = fake_worker_root();
+    let origin = ChatroomOrigin {
+        client_generation: 7,
+        socket_generation: 11,
+        auth_epoch: 0,
+    };
+    let binding_for =
+        |room: &str, invocation: &str, session: &str, run: &str| ChatroomExecutionBinding {
+            room_id: room.into(),
+            invocation_id: invocation.into(),
+            target_agent_id: "agent-a".into(),
+            session_id: session.into(),
+            worker_run_id: run.into(),
+            origin,
+        };
+    let binding_a = binding_for("room-a", "inv-a", "session-a", "run-a");
+    let binding_b = binding_for("room-b", "inv-b", "session-b", "run-b");
+    assert!(registry.record_source("room-a", "inv-a", "agent-a", origin));
+    assert!(registry.record_source("room-b", "inv-b", "agent-a", origin));
+    assert!(registry.bind(binding_a.clone()));
+    assert!(registry.bind(binding_b.clone()));
+    let reservation_a = manager
+        .reserve_startup_for("session-a", Some("run-a".into()))
+        .unwrap();
+    let reservation_b = manager
+        .reserve_startup_for("session-b", Some("run-b".into()))
+        .unwrap();
+    let run_a = manager
+        .start_reserved_with_fake_worker(&reservation_a, fake_worker_config("session-a", &root, 0))
+        .unwrap();
+    let run_b = manager
+        .start_reserved_with_fake_worker(&reservation_b, fake_worker_config("session-b", &root, 0))
+        .unwrap();
+    let file_a = run_a.control.file_api_token.clone();
+    let file_b = run_b.control.file_api_token.clone();
+    assert!(manager
+        .file_policies()
+        .contains_worker_token("session-a", &file_a));
+    assert!(manager
+        .file_policies()
+        .contains_worker_token("session-b", &file_b));
+
+    let revoked = registry.revoke_invocation("room-a", "inv-a").unwrap();
+    assert_eq!(revoked, binding_a);
+    assert!(manager.revoke_chatroom_binding(&revoked).unwrap());
+    let child_a_exited = run_a
+        .control
+        .child
+        .lock()
+        .unwrap()
+        .try_wait()
+        .unwrap()
+        .is_some();
+    let only_a_token_revoked = !manager
+        .file_policies()
+        .contains_worker_token("session-a", &file_a);
+    let b_kept = manager.is_active("session-b")
+        && manager
+            .file_policies()
+            .contains_worker_token("session-b", &file_b);
+    assert!(!registry
+        .with_live_binding("room-a", "inv-a", "session-a", "run-a", || true)
+        .is_some());
+
+    manager.finish(run_a);
+    assert!(manager.stop_owned("session-b", Some("run-b")).unwrap());
+    manager.finish(run_b);
+    fs::remove_dir_all(root).unwrap();
+    assert!(child_a_exited && only_a_token_revoked && b_kept);
+}
+
+#[cfg(unix)]
+#[test]
+fn trusted_chatroom_revoke_before_prepare_return_cannot_reserve_or_start_late_child() {
+    let manager = PiWorkerManager::new();
+    let registry = manager.chatroom_execution_registry();
+    let root = fake_worker_root();
+    let origin = ChatroomOrigin {
+        client_generation: 2,
+        socket_generation: 5,
+        auth_epoch: 1,
+    };
+    let binding = ChatroomExecutionBinding {
+        room_id: "room-a".into(),
+        invocation_id: "inv-a".into(),
+        target_agent_id: "agent-a".into(),
+        session_id: "session-a".into(),
+        worker_run_id: "run-a".into(),
+        origin,
+    };
+    assert!(registry.record_source("room-a", "inv-a", "agent-a", origin));
+    assert!(registry.bind(binding.clone()));
+    let reservation = manager
+        .reserve_startup_for("session-a", Some("run-a".into()))
+        .unwrap();
+    let revoked = registry.revoke_invocation("room-a", "inv-a").unwrap();
+    assert!(manager.revoke_chatroom_binding(&revoked).unwrap());
+    let late_start = manager
+        .start_reserved_with_fake_worker(&reservation, fake_worker_config("session-a", &root, 0));
+    fs::remove_dir_all(root).unwrap();
+    assert!(late_start.is_err());
+    assert!(!manager.is_active("session-a"));
+}
+
+#[cfg(unix)]
+#[test]
+fn completed_chatroom_release_frees_capacity_but_late_a_prepare_cannot_start_or_replace_b() {
+    let manager = PiWorkerManager::new();
+    let registry = manager.chatroom_execution_registry();
+    let root = fake_worker_root();
+    let origin_a = ChatroomOrigin {
+        client_generation: 1,
+        socket_generation: 2,
+        auth_epoch: 0,
+    };
+    let binding_a = ChatroomExecutionBinding {
+        room_id: "room-a".into(),
+        invocation_id: "inv-a".into(),
+        target_agent_id: "agent-a".into(),
+        session_id: "shared-session".into(),
+        worker_run_id: "run-a".into(),
+        origin: origin_a,
+    };
+    assert!(registry.record_source("room-a", "inv-a", "agent-a", origin_a));
+    assert!(registry.bind(binding_a.clone()));
+    let reservation_a = manager
+        .reserve_startup_for("shared-session", Some("run-a".into()))
+        .unwrap();
+    assert!(registry.release(&binding_a));
+    let late_a = manager.start_reserved_with_fake_worker(
+        &reservation_a,
+        fake_worker_config("shared-session", &root, 0),
+    );
+    let late_a_rejected = match late_a {
+        Ok(run) => {
+            let _ = manager.stop_owned("shared-session", Some("run-a"));
+            manager.finish(run);
+            false
+        }
+        Err(_) => true,
+    };
+    manager.abandon_startup(&reservation_a);
+
+    let origin_b = ChatroomOrigin {
+        client_generation: 1,
+        socket_generation: 3,
+        auth_epoch: 0,
+    };
+    let binding_b = ChatroomExecutionBinding {
+        room_id: "room-b".into(),
+        invocation_id: "inv-b".into(),
+        target_agent_id: "agent-b".into(),
+        session_id: "shared-session".into(),
+        worker_run_id: "run-b".into(),
+        origin: origin_b,
+    };
+    assert!(registry.record_source("room-b", "inv-b", "agent-b", origin_b));
+    assert!(registry.bind(binding_b.clone()));
+    let reservation_b = manager
+        .reserve_startup_for("shared-session", Some("run-b".into()))
+        .unwrap();
+    let run_b = manager
+        .start_reserved_with_fake_worker(
+            &reservation_b,
+            fake_worker_config("shared-session", &root, 0),
+        )
+        .unwrap();
+    assert!(
+        !registry.release(&binding_a),
+        "迟到 A release must not clear B"
+    );
+    assert!(manager.is_active("shared-session"));
+    assert!(registry.binding("room-b", "inv-b").is_some());
+    assert!(manager.stop_owned("shared-session", Some("run-b")).unwrap());
+    manager.finish(run_b);
+    fs::remove_dir_all(root).unwrap();
+    assert!(
+        late_a_rejected,
+        "released binding cannot be resurrected by a late prepare result"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn stop_of_nonreading_worker_does_not_wait_for_pipe_write_or_block_other_session() {
+    let manager = Arc::new(PiWorkerManager::new());
+    let root = fake_worker_root();
+    let session_b = "small-worker-b";
+    let reservation_b = manager
+        .reserve_startup_for(session_b, Some("run-b".to_string()))
+        .unwrap();
+    let run_b = manager
+        .start_reserved_with_launch(
+            &reservation_b,
+            fake_ordinary_worker_config(session_b, &root),
+            Some(fake_sleep_launch()),
+        )
+        .unwrap();
+
+    let session_a = "large-nonreader-a";
+    let reservation_a = manager
+        .reserve_startup_for(session_a, Some("large-run-a".to_string()))
+        .unwrap();
+    let start_manager = Arc::clone(&manager);
+    let mut large_config = fake_ordinary_worker_config(session_a, &root);
+    large_config["padding"] = json!("x".repeat(2 * 1024 * 1024));
+    let (result_tx, result_rx) = mpsc::channel();
+    let start_a = thread::spawn(move || {
+        let result = start_manager.start_reserved_with_launch(
+            &reservation_a,
+            large_config,
+            Some(fake_short_nonreader_launch()),
+        );
+        result_tx.send(result).unwrap();
+    });
+
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while !manager.is_active(session_a) && Instant::now() < deadline {
+        thread::yield_now();
+    }
+    assert!(
+        manager.is_active(session_a),
+        "fake Worker 未完成 active owner 登记"
+    );
+    thread::sleep(Duration::from_millis(50));
+    assert!(
+        matches!(result_rx.try_recv(), Err(mpsc::TryRecvError::Empty)),
+        "大配置 pipe 应阻塞于不读取 stdin 的 fake Worker"
+    );
+
+    let stop_started = Instant::now();
+    assert!(manager.stop_owned(session_b, Some("run-b")).unwrap());
+    let stop_elapsed = stop_started.elapsed();
+    let active_a_after_other_session_stop = manager.is_active(session_a);
+    assert!(!manager.is_active(session_b));
+
+    start_a.join().unwrap();
+    match result_rx.recv_timeout(Duration::from_secs(1)).unwrap() {
+        Ok(run) => manager.finish(run),
+        Err(_) => {}
+    }
+    assert!(
+        stop_elapsed < Duration::from_millis(400),
+        "其它 session 的 stop 被 A 的 pipe write 阻塞: {stop_elapsed:?}"
+    );
+    assert!(active_a_after_other_session_stop);
+    assert!(!manager.is_active(session_a));
+    manager.finish(run_b);
+    assert!(!manager.is_active(session_a));
+    assert!(!manager.is_active(session_b));
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn ordinary_worker_stop_keeps_graceful_stop_command_while_chatroom_owner_stop_is_fenced() {
+    let manager = PiWorkerManager::new();
+    let root = fake_worker_root();
+    let session = "ordinary-graceful-stop";
+    let reservation = manager
+        .reserve_startup_for(session, Some("main-generated-ordinary-run".to_string()))
+        .unwrap();
+    let run = manager
+        .start_reserved_with_fake_worker(&reservation, fake_ordinary_worker_config(session, &root))
+        .unwrap();
+    assert!(manager.stop(session).unwrap());
+    assert!(
+        manager.is_active(session),
+        "ordinary stop retains the worker slot until SSE completion/finish"
+    );
+    manager.finish(run);
+    assert!(!manager.is_active(session));
+    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]

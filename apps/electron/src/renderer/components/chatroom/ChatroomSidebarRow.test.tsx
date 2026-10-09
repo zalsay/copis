@@ -18,10 +18,41 @@ afterEach(async () => { if (root) await act(async () => root?.unmount()); root =
 const room: ChatRoomSummary = { roomId: 'room-1', name: '协作室', role: 'member', hostUserId: '7', status: 'active', memberCount: 2, unreadCount: 0, connectionStatus: 'connected' }
 
 describe('聊天室侧栏列表项', () => {
-  test('房间摘要离线但实时连接已建立时，侧栏显示已连接', async () => {
+  test('房间摘要离线但实时连接已建立时，标题右侧显示已连接状态图标且无未读副标题', async () => {
     root = createRoot(document.getElementById('root')!)
     await act(async () => root?.render(<ChatroomSidebarRow room={{ ...room, connectionStatus: 'offline' }} connectionStatus="connected" action="delete" busy={false} onOpen={() => undefined} onRequestClose={() => undefined} />))
-    expect(document.querySelector('.copis-working-chatroom-copy small')?.textContent).toBe('已连接')
+    const statusWrap = document.querySelector('.copis-working-chatroom-status')
+    expect(statusWrap?.getAttribute('role')).toBe('img')
+    expect(statusWrap?.getAttribute('aria-label')).toBe('已连接')
+    expect(statusWrap?.getAttribute('title')).toBe('已连接')
+    expect(statusWrap?.querySelector('.copis-working-chatroom-status-icon')).not.toBeNull()
+    expect(document.querySelector('.copis-working-chatroom-title')?.contains(statusWrap!)).toBe(true)
+    expect(document.querySelector('.copis-working-chatroom-copy small')).toBeNull()
+  })
+
+  test('未读消息数量作为独立副标题显示', async () => {
+    root = createRoot(document.getElementById('root')!)
+    await act(async () => root?.render(<ChatroomSidebarRow room={{ ...room, unreadCount: 3 }} connectionStatus="connected" action="delete" busy={false} onOpen={() => undefined} onRequestClose={() => undefined} />))
+    expect(document.querySelector('.copis-working-chatroom-copy small')?.textContent).toBe('3 条未读')
+    expect(document.querySelector('.copis-working-chatroom-status')?.getAttribute('aria-label')).toBe('已连接')
+  })
+
+  test('五种连接状态均提供对应的可访问名称和状态图标', async () => {
+    root = createRoot(document.getElementById('root')!)
+    for (const [status, label] of [
+      ['connected', '已连接'],
+      ['connecting', '连接中'],
+      ['reconnecting', '重连中'],
+      ['auth_expired', '登录已过期'],
+      ['offline', '离线'],
+    ] as const) {
+      await act(async () => root?.render(<ChatroomSidebarRow room={{ ...room, connectionStatus: status }} action="delete" busy={false} onOpen={() => undefined} onRequestClose={() => undefined} />))
+      const statusWrap = document.querySelector('.copis-working-chatroom-status')
+      expect(statusWrap?.getAttribute('role')).toBe('img')
+      expect(statusWrap?.getAttribute('aria-label')).toBe(label)
+      expect(statusWrap?.getAttribute('title')).toBe(label)
+      expect(statusWrap?.querySelector('.copis-working-chatroom-status-icon')).not.toBeNull()
+    }
   })
   test('右侧关闭按钮独立于打开按钮，点击删除不打开房间', async () => {
     const calls: string[] = []

@@ -1,4 +1,4 @@
-import type { ChatRoomAgent, ChatRoomAgentLocalView, ChatRoomAttachment, ChatRoomCreateInput, ChatRoomEventEnvelope, ChatRoomInvocation, ChatRoomJoinInput, ChatRoomMember, ChatRoomMessage, ChatRoomSendMessageInput, ChatRoomSummary, ProvisionChatRoomAgentInput } from '@copis/shared'
+import type { AgentAvailability, ChatRoomAgent, ChatRoomAgentLocalView, ChatRoomAttachment, ChatRoomCreateInput, ChatRoomEventEnvelope, ChatRoomInvocation, ChatRoomInvocationMetadata, ChatRoomJoinInput, ChatRoomMember, ChatRoomMessage, ChatRoomSendMessageInput, ChatRoomSummary, ProvisionChatRoomAgentInput } from '@copis/shared'
 import { normalizeChatRoomShareCode } from '@copis/shared'
 import { RENDERER_HTTP_API_BASE_URL } from './http-api-base-url'
 import { withHttpApiWebToken } from './http-api-web-token'
@@ -25,6 +25,7 @@ export interface ChatRoomProvisionProgress {
 }
 
 export interface ChatRoomCreateOptions {
+  onProvisionStart?: (progress: ChatRoomProvisionProgress) => void
   onProvisionProgress?: (progress: ChatRoomProvisionProgress) => void
   operation?: 'create' | 'add'
 }
@@ -39,6 +40,7 @@ export async function provisionChatRoomAgents(
   if (!provision || agents.length === 0) return
   options.onProvisionProgress?.({ completed: 0, total: agents.length, agentName: '' })
   for (const [index, agent] of agents.entries()) {
+    options.onProvisionStart?.({ completed: index, total: agents.length, agentName: agent.displayName })
     try {
       await provision({ roomId: room.roomId, ...agent })
       options.onProvisionProgress?.({ completed: index + 1, total: agents.length, agentName: agent.displayName })
@@ -57,15 +59,37 @@ const num = (v: unknown, fallback = 0): number => typeof v === 'number' && Numbe
 const array = (v: unknown): unknown[] => Array.isArray(v) ? v : []
 const pick = (o: RecordValue, ...keys: string[]): unknown => keys.map((key) => o[key]).find((v) => v !== undefined)
 
-function normalizeSummary(value: unknown): ChatRoomSummary {
+export function normalizeChatRoomSummary(value: unknown): ChatRoomSummary {
   const o = record(value)
   const roomId = text(pick(o, 'roomId', 'room_id', 'id'))
   const hostUserId = pick(o, 'hostUserId', 'host_user_id')
   if (!roomId.trim()) throw new ChatRoomApiError('聊天室响应缺少房间 ID', 502, 'invalid_room_response')
   return { roomId, name: text(o.name), role: o.role === 'host' ? 'host' : 'member', ...(typeof hostUserId === 'string' || typeof hostUserId === 'number' ? { hostUserId: String(hostUserId) } : {}), status: ['active', 'archived', 'deleting', 'deleted'].includes(text(o.status)) ? o.status as ChatRoomSummary['status'] : 'active', ...(typeof pick(o, 'shareCode', 'share_code') === 'string' ? { shareCode: text(pick(o, 'shareCode', 'share_code')) } : {}), memberCount: num(pick(o, 'memberCount', 'member_count')), unreadCount: num(pick(o, 'unreadCount', 'unread_count')), connectionStatus: ['connecting', 'connected', 'reconnecting', 'offline', 'auth_expired'].includes(text(pick(o, 'connectionStatus', 'connection_status'))) ? pick(o, 'connectionStatus', 'connection_status') as ChatRoomSummary['connectionStatus'] : 'offline' }
 }
-function normalizeMember(value: unknown): ChatRoomMember { const o = record(value); return { userId: text(pick(o, 'userId', 'user_id', 'id')), displayName: text(pick(o, 'displayName', 'display_name', 'name')), ...(typeof o.avatar === 'string' ? { avatar: o.avatar } : {}), role: o.role === 'host' ? 'host' : 'member', presence: ['online', 'busy', 'offline', 'disabled'].includes(text(o.presence)) ? o.presence as ChatRoomMember['presence'] : 'offline' } }
-function normalizeAgent(value: unknown): ChatRoomAgent { const o = record(value); return { agentId: text(pick(o, 'roomAgentId', 'agentId', 'agent_id', 'id')), displayName: text(pick(o, 'displayName', 'display_name', 'name')), ...(typeof o.avatar === 'string' ? { avatar: o.avatar } : {}), status: ['online', 'busy', 'offline', 'disabled'].includes(text(o.status)) ? o.status as ChatRoomAgent['status'] : 'offline', busy: bool(o.busy), memoryShared: bool(pick(o, 'memoryShared', 'memory_shared')), skillsShared: bool(pick(o, 'skillsShared', 'skills_shared')) } }
+export function normalizeChatRoomMember(value: unknown): ChatRoomMember { const o = record(value); return { userId: text(pick(o, 'userId', 'user_id', 'id')), displayName: text(pick(o, 'displayName', 'display_name', 'name')), ...(typeof o.avatar === 'string' ? { avatar: o.avatar } : {}), role: o.role === 'host' ? 'host' : 'member', presence: ['online', 'busy', 'offline', 'disabled'].includes(text(o.presence)) ? o.presence as ChatRoomMember['presence'] : 'offline' } }
+export function normalizeChatRoomAgent(value: unknown): ChatRoomAgent { const o = record(value); const availability = ['preparing', 'online', 'busy', 'offline', 'disabled', 'configuration_error'].includes(text(o.availability)) ? o.availability as AgentAvailability : undefined; return { agentId: text(pick(o, 'roomAgentId', 'agentId', 'agent_id', 'id')), displayName: text(pick(o, 'displayName', 'display_name', 'name')), ...(typeof o.avatar === 'string' ? { avatar: o.avatar } : {}), status: ['online', 'busy', 'offline', 'disabled'].includes(text(o.status)) ? o.status as ChatRoomAgent['status'] : 'offline', ...(availability ? { availability } : {}), busy: bool(o.busy), memoryShared: bool(pick(o, 'memoryShared', 'memory_shared')), skillsShared: bool(pick(o, 'skillsShared', 'skills_shared')) } }
+
+function normalizeInvocationMetadata(value: unknown, roomId: string, invocationId: string): ChatRoomInvocationMetadata {
+  const item = record(record(value).invocation ?? value)
+  const status = text(item.status)
+  if (item.roomId !== roomId || item.invocationId !== invocationId || !text(item.traceId) || !text(item.targetAgentId) || !text(item.triggerMessageId)
+    || !Number.isSafeInteger(item.depth) || (item.depth as number) < 0 || !['created', 'accepted', 'running', 'completed', 'failed', 'rejected'].includes(status)
+    || (item.failureCode !== undefined && typeof item.failureCode !== 'string')
+    || (item.finishedAt !== undefined && typeof item.finishedAt !== 'string' && typeof item.finishedAt !== 'number')) {
+    throw new ChatRoomApiError('聊天室调用元数据无效', 502, 'invalid_invocation_metadata')
+  }
+  return {
+    invocationId,
+    roomId,
+    traceId: item.traceId as string,
+    targetAgentId: item.targetAgentId as string,
+    triggerMessageId: item.triggerMessageId as string,
+    depth: item.depth as number,
+    status: status as ChatRoomInvocationMetadata['status'],
+    ...(typeof item.failureCode === 'string' ? { failureCode: item.failureCode } : {}),
+    ...(typeof item.finishedAt === 'string' || typeof item.finishedAt === 'number' ? { finishedAt: item.finishedAt } : {}),
+  }
+}
 export function normalizeChatRoomMessage(value: unknown, defaults: { roomId?: string; seq?: number } = {}): ChatRoomMessage {
   const o = record(record(value).message ?? value)
   const sender = record(o.sender)
@@ -94,6 +118,7 @@ function normalizeAttachment(value: unknown): ChatRoomAttachment { const o = rec
 export interface ChatRoomApi {
   listRooms(): Promise<ChatRoomSummary[]>
   getRoom(roomId: string): Promise<{ room: ChatRoomSummary; members: ChatRoomMember[]; agents: ChatRoomAgent[] }>
+  getInvocationMetadata(roomId: string, invocationId: string, options?: { signal?: AbortSignal }): Promise<ChatRoomInvocationMetadata>
   createRoom(input: ChatRoomCreateInput, selectedAgents?: Array<Pick<ChatRoomAgentLocalView, 'sourceWorkspaceId' | 'displayName' | 'channelId' | 'modelId' | 'contextMessageCount' | 'memorySharingEnabled' | 'skillSharingEnabled'>>, options?: ChatRoomCreateOptions): Promise<ChatRoomSummary>
   joinRoom(input: ChatRoomJoinInput): Promise<ChatRoomSummary>
   getMessages(roomId: string, options?: { beforeSeq?: number; limit?: number }): Promise<{ messages: ChatRoomMessage[]; cursor?: number }>
@@ -141,14 +166,15 @@ export function createChatRoomApi(options: { fetchImpl?: FetchLike; baseUrl?: st
   }
   const json = (value: unknown): string => JSON.stringify(value)
   return {
-    listRooms: () => request('/api/chatrooms/v2/rooms', {}, (v) => array(record(v).rooms ?? v).map(normalizeSummary)),
-    getRoom: (roomId) => !roomId.trim() ? Promise.reject(new ChatRoomApiError('聊天室 ID 不能为空', 400, 'invalid_room_id')) : request(`/api/chatrooms/v2/rooms/${encodeURIComponent(roomId)}`, {}, (v) => { const o = record(v); return { room: normalizeSummary(o.room ?? v), members: array(o.members).map(normalizeMember), agents: array(o.agents).map(normalizeAgent) } }),
-    createRoom: async (input, selectedAgents = [], options = {}) => { const shareCode = normalizeChatRoomShareCode(input.shareCode); if (!shareCode) throw new ChatRoomApiError('分享码必须是4位字母或数字', 400, 'invalid_share_code'); const room = await request('/api/chatrooms/v2/rooms', { method: 'POST', body: json({ name: input.name, shareCode }) }, (v) => normalizeSummary(record(v).room ?? v)); await provisionChatRoomAgents(room, selectedAgents.slice(0, 3), options); return room },
-    joinRoom: (input) => { const shareCode = normalizeChatRoomShareCode(input.shareCode); if (!shareCode) return Promise.reject(new ChatRoomApiError('分享码必须是4位字母或数字', 400, 'invalid_share_code')); return request('/api/chatrooms/v2/join', { method: 'POST', body: json({ shareCode }) }, (v) => normalizeSummary(record(v).room ?? v)) },
+    listRooms: () => request('/api/chatrooms/v2/rooms', {}, (v) => array(record(v).rooms ?? v).map(normalizeChatRoomSummary)),
+    getRoom: (roomId) => !roomId.trim() ? Promise.reject(new ChatRoomApiError('聊天室 ID 不能为空', 400, 'invalid_room_id')) : request(`/api/chatrooms/v2/rooms/${encodeURIComponent(roomId)}`, {}, (v) => { const o = record(v); return { room: normalizeChatRoomSummary(o.room ?? v), members: array(o.members).map(normalizeChatRoomMember), agents: array(o.agents).map(normalizeChatRoomAgent) } }),
+    getInvocationMetadata: (roomId, invocationId, options = {}) => request(`/api/chatrooms/v2/rooms/${encodeURIComponent(roomId)}/invocations/${encodeURIComponent(invocationId)}/metadata`, { signal: options.signal }, (value) => normalizeInvocationMetadata(value, roomId, invocationId)),
+    createRoom: async (input, selectedAgents = [], options = {}) => { const shareCode = normalizeChatRoomShareCode(input.shareCode); if (!shareCode) throw new ChatRoomApiError('分享码必须是4位字母或数字', 400, 'invalid_share_code'); const room = await request('/api/chatrooms/v2/rooms', { method: 'POST', body: json({ name: input.name, shareCode }) }, (v) => normalizeChatRoomSummary(record(v).room ?? v)); await provisionChatRoomAgents(room, selectedAgents.slice(0, 3), options); return room },
+    joinRoom: (input) => { const shareCode = normalizeChatRoomShareCode(input.shareCode); if (!shareCode) return Promise.reject(new ChatRoomApiError('分享码必须是4位字母或数字', 400, 'invalid_share_code')); return request('/api/chatrooms/v2/join', { method: 'POST', body: json({ shareCode }) }, (v) => normalizeChatRoomSummary(record(v).room ?? v)) },
     getMessages: (roomId, options = {}) => { const qs = new URLSearchParams(); if (options.beforeSeq !== undefined) qs.set('beforeSeq', String(options.beforeSeq)); if (options.limit !== undefined) qs.set('limit', String(options.limit)); return request(`/api/chatrooms/v2/rooms/${encodeURIComponent(roomId)}/messages${qs.size ? `?${qs}` : ''}`, {}, (v) => { const o = record(v); return { messages: array(o.messages ?? o.data ?? v).map((message) => normalizeChatRoomMessage(message, { roomId })), ...(typeof o.cursor === 'number' ? { cursor: o.cursor } : {}) } }) },
     sendMessage: (input) => request(`/api/chatrooms/v2/rooms/${encodeURIComponent(input.roomId)}/messages`, { method: 'POST', body: json({ content: input.content, mentionAgentIds: input.mentionAgentIds, attachmentIds: input.attachmentIds, clientMessageId: input.clientMessageId ?? crypto.randomUUID() }) }, (v) => normalizeSendResult(v, input.roomId)),
     markRead: (roomId, seq) => request(`/api/chatrooms/v2/rooms/${encodeURIComponent(roomId)}/read`, { method: 'PATCH', body: json({ seq }) }, () => undefined),
-    listAgents: (roomId) => request(`/api/chatrooms/v2/rooms/${encodeURIComponent(roomId)}/agents`, {}, (v) => array(record(v).agents ?? v).map(normalizeAgent)),
+    listAgents: (roomId) => request(`/api/chatrooms/v2/rooms/${encodeURIComponent(roomId)}/agents`, {}, (v) => array(record(v).agents ?? v).map(normalizeChatRoomAgent)),
     listAttachments: (roomId) => request(`/api/chatrooms/v2/rooms/${encodeURIComponent(roomId)}/attachments`, {}, (v) => array(record(v).attachments ?? v).map(normalizeAttachment)),
     archiveRoom: (roomId) => request(`/api/chatrooms/v2/rooms/${encodeURIComponent(roomId)}/archive`, { method: 'POST' }, () => undefined),
     restoreRoom: (roomId) => request(`/api/chatrooms/v2/rooms/${encodeURIComponent(roomId)}/restore`, { method: 'POST' }, () => undefined),

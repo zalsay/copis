@@ -37,7 +37,9 @@ function assertMainSender(event: IpcMainInvokeEvent, getWindow: typeof getMainWi
   }
 }
 
-function toAgentView(agent: ChatRoomAgentLocalConfig): ChatRoomAgentLocalView {
+const LOCAL_AVAILABILITY_VALUES = new Set(['preparing', 'online', 'busy', 'offline', 'disabled', 'configuration_error'])
+
+function toAgentView(agent: ChatRoomAgentLocalConfig, localAvailability?: string): ChatRoomAgentLocalView {
   return {
     roomAgentId: agent.roomAgentId,
     displayName: agent.displayName,
@@ -49,11 +51,17 @@ function toAgentView(agent: ChatRoomAgentLocalConfig): ChatRoomAgentLocalView {
     skillSharingEnabled: agent.skillSharingEnabled,
     ...(agent.skillSnapshotDigest === undefined ? {} : { skillSnapshotDigest: agent.skillSnapshotDigest }),
     archived: agent.archivedAt !== undefined,
+    ...(agent.archivedAt !== undefined || !localAvailability || !LOCAL_AVAILABILITY_VALUES.has(localAvailability)
+      ? {} : { localAvailability: localAvailability as ChatRoomAgentLocalView['localAvailability'] }),
   }
 }
 
-function toRoomView(room: ChatRoomLocalRoomConfig): ChatRoomLocalRoomView {
-  return { roomId: room.roomId, agents: room.agents.map(toAgentView), updatedAt: room.updatedAt }
+function toRoomView(room: ChatRoomLocalRoomConfig, coordinator?: ChatRoomAgentCoordinatorFacade): ChatRoomLocalRoomView {
+  return {
+    roomId: room.roomId,
+    agents: room.agents.map((agent) => toAgentView(agent, coordinator?.getAgentRuntimeReadiness?.(room.roomId, agent.roomAgentId)?.availability)),
+    updatedAt: room.updatedAt,
+  }
 }
 
 function requireResponse(value: unknown): asserts value is ChatRoomPermissionResponse {
@@ -200,8 +208,16 @@ export function registerChatRoomIpcHandlers(options: RegisterChatRoomIpcOptions 
   })
   invoke(CHATROOM_IPC_CHANNELS.LIST_LOCAL_ROOMS, (event) => {
     assertMainSender(event, getWindow)
-    const rooms = getCoordinator().listLocalRooms?.() ?? []
-    return rooms.map(toRoomView)
+    const coordinator = getCoordinator()
+    return (async () => {
+      const generation = coordinator.getLocalReadinessGeneration?.()
+      if (generation === undefined) return []
+      const rooms = await coordinator.listCurrentIdentityLocalRooms?.() ?? []
+      let currentCoordinator: ChatRoomAgentCoordinatorFacade
+      try { currentCoordinator = getCoordinator() } catch { return [] }
+      if (currentCoordinator !== coordinator || !coordinator.isLocalReadinessGenerationCurrent?.(generation)) return []
+      return rooms.map((room) => toRoomView(room, coordinator))
+    })()
   })
   invoke(CHATROOM_IPC_CHANNELS.PROVISION_AGENT, async (event, value) => {
     assertMainSender(event, getWindow)
@@ -250,23 +266,54 @@ export function registerChatRoomIpcHandlers(options: RegisterChatRoomIpcOptions 
     await cosService.cancel(value)
   })
   let detachPushListeners: (() => void) | undefined
+  let activeCoordinator: ChatRoomAgentCoordinatorFacade | undefined
+  let pushGeneration = 0
   const attachPushListeners = (coordinator: ChatRoomAgentCoordinatorFacade | undefined): void => {
+    const generation = ++pushGeneration
     detachPushListeners?.()
     detachPushListeners = undefined
+    activeCoordinator = coordinator
     if (!coordinator) return
     let attached = true
+    const roomPushTokens = new Map<string, number>()
+    const isCurrent = () => attached && generation === pushGeneration && activeCoordinator === coordinator
+    const pushCurrentRoom = async (roomId: string, pushToken: number): Promise<void> => {
+      const readinessGeneration = coordinator.getLocalReadinessGeneration?.()
+      if (readinessGeneration === undefined) return
+      const rooms = await coordinator.listCurrentIdentityLocalRooms?.() ?? []
+      if (!isCurrent() || roomPushTokens.get(roomId) !== pushToken) return
+      let currentCoordinator: ChatRoomAgentCoordinatorFacade | undefined
+      try { currentCoordinator = getCoordinator() } catch { return }
+      if (!isCurrent() || currentCoordinator !== coordinator
+        || roomPushTokens.get(roomId) !== pushToken
+        || !coordinator.isLocalReadinessGenerationCurrent?.(readinessGeneration)) return
+      const room = rooms.find((candidate) => candidate.roomId === roomId)
+      const win = getWindow()
+      if (room && win && !win.isDestroyed() && !win.webContents.isDestroyed()) {
+        win.webContents.send(CHATROOM_IPC_CHANNELS.LOCAL_CONFIG_CHANGED, toRoomView(room, coordinator))
+      }
+    }
+    const requestRoomPush = (roomId: string): void => {
+      if (!isCurrent()) return
+      const pushToken = (roomPushTokens.get(roomId) ?? 0) + 1
+      roomPushTokens.set(roomId, pushToken)
+      void pushCurrentRoom(roomId, pushToken).catch(() => {})
+    }
     const detachPermission = coordinator.onPermissionRequested?.((request) => {
-    if (!attached) return
+    if (!isCurrent()) return
     const win = getWindow()
     const safeRequest = toChatRoomPermissionRequestView(request)
     if (safeRequest && win && !win.isDestroyed() && !win.webContents.isDestroyed()) win.webContents.send(CHATROOM_IPC_CHANNELS.PERMISSION_REQUESTED, safeRequest)
     })
     const detachConfig = coordinator.onLocalConfigChanged?.((room) => {
-    if (!attached) return
-    const win = getWindow()
-    if (win && !win.isDestroyed() && !win.webContents.isDestroyed()) win.webContents.send(CHATROOM_IPC_CHANNELS.LOCAL_CONFIG_CHANGED, toRoomView(room))
+      if (!isCurrent()) return
+      requestRoomPush(room.roomId)
     })
-    detachPushListeners = () => { attached = false; detachPermission?.(); detachConfig?.() }
+    const detachReadiness = coordinator.onAgentRuntimeReadinessChanged?.((state) => {
+      if (!isCurrent()) return
+      requestRoomPush(state.roomId)
+    })
+    detachPushListeners = () => { attached = false; detachPermission?.(); detachConfig?.(); detachReadiness?.() }
   }
   onChatRoomAgentCoordinatorRegistered(attachPushListeners)
 }

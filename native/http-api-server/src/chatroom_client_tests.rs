@@ -1,8 +1,8 @@
 use super::auth_session::{AuthError, AuthSession, AuthStorage, PersistedAuth};
 use super::chatroom_client::{
-    decode_message, websocket_connect_config, BackoffWaiter, ChatroomClient, ChatroomClientError,
-    ChatroomClientEvent, ChatroomHostResolver, ChatroomSocket, ChatroomSocketConnector,
-    TungsteniteConnector,
+    decode_message, decode_socket_frame, websocket_connect_config, BackoffWaiter, ChatroomClient,
+    ChatroomClientError, ChatroomClientEvent, ChatroomHostResolver, ChatroomSocket,
+    ChatroomSocketConnector, TungsteniteConnector,
 };
 use super::chatroom_protocol::{ChatroomCommand, ChatroomEvent, RoomCursor};
 use super::edu_api_client::{
@@ -92,7 +92,16 @@ struct FakeSocket {
     received: Mutex<VecDeque<Result<ChatroomEvent, ChatroomClientError>>>,
     receive_release: Mutex<Option<mpsc::Receiver<()>>>,
     receive_started: Mutex<Option<mpsc::Sender<()>>>,
+    receive_count: AtomicUsize,
+    receive_gate: Mutex<Option<ReceiveSequenceGate>>,
     sent: Mutex<Vec<ChatroomCommand>>,
+    on_non_subscribe_send: Mutex<Option<mpsc::Sender<()>>>,
+    ack_frame: Mutex<Option<super::chatroom_protocol::PrivateCommandAck>>,
+    ack_ok: AtomicBool,
+    ack_room_override: Mutex<Option<String>>,
+    ack_command_override: Mutex<Option<String>>,
+    ack_invocation_override: Mutex<Option<String>>,
+    reject_after_close: AtomicBool,
     on_subscribe: Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
     closed: AtomicBool,
     send_count: AtomicUsize,
@@ -102,13 +111,28 @@ struct FakeSocket {
     ordinary_send_count: AtomicUsize,
 }
 
+struct ReceiveSequenceGate {
+    call_at: usize,
+    observed: mpsc::Sender<()>,
+    release: mpsc::Receiver<()>,
+}
+
 impl FakeSocket {
     fn new(events: Vec<Result<ChatroomEvent, ChatroomClientError>>) -> Arc<Self> {
         Arc::new(Self {
             received: Mutex::new(events.into()),
             receive_release: Mutex::new(None),
             receive_started: Mutex::new(None),
+            receive_count: AtomicUsize::new(0),
+            receive_gate: Mutex::new(None),
             sent: Mutex::new(Vec::new()),
+            on_non_subscribe_send: Mutex::new(None),
+            ack_frame: Mutex::new(None),
+            ack_ok: AtomicBool::new(true),
+            ack_room_override: Mutex::new(None),
+            ack_command_override: Mutex::new(None),
+            ack_invocation_override: Mutex::new(None),
+            reject_after_close: AtomicBool::new(false),
             on_subscribe: Mutex::new(None),
             closed: AtomicBool::new(false),
             send_count: AtomicUsize::new(0),
@@ -122,6 +146,17 @@ impl FakeSocket {
     fn gated_disconnect() -> (Arc<Self>, mpsc::Sender<()>) {
         let (socket, _started, release) = Self::gated_disconnect_with_start();
         (socket, release)
+    }
+
+    fn gate_receive_call(&self, call_at: usize) -> (mpsc::Receiver<()>, mpsc::Sender<()>) {
+        let (observed, observed_rx) = mpsc::channel();
+        let (release, release_rx) = mpsc::channel();
+        *self.receive_gate.lock().unwrap() = Some(ReceiveSequenceGate {
+            call_at,
+            observed,
+            release: release_rx,
+        });
+        (observed_rx, release)
     }
 
     fn gated_disconnect_with_start() -> (Arc<Self>, mpsc::Receiver<()>, mpsc::Sender<()>) {
@@ -160,10 +195,24 @@ impl FakeSocket {
     fn on_subscribe(socket: &Arc<Self>, callback: Arc<dyn Fn() + Send + Sync>) {
         *socket.on_subscribe.lock().unwrap() = Some(callback);
     }
+
+    fn observe_non_subscribe_send(&self) -> mpsc::Receiver<()> {
+        let (sender, receiver) = mpsc::channel();
+        *self.on_non_subscribe_send.lock().unwrap() = Some(sender);
+        receiver
+    }
+
+    fn close_during_test(&self) {
+        self.reject_after_close.store(true, Ordering::SeqCst);
+        self.closed.store(true, Ordering::SeqCst);
+    }
 }
 
 impl ChatroomSocket for Arc<FakeSocket> {
     fn send_json(&mut self, command: &ChatroomCommand) -> Result<(), ChatroomClientError> {
+        if self.reject_after_close.load(Ordering::SeqCst) && self.closed.load(Ordering::SeqCst) {
+            return Err(ChatroomClientError::new("disconnected", "测试断开连接"));
+        }
         let send_number = self.send_count.fetch_add(1, Ordering::SeqCst) + 1;
         if self.fail_on_send.load(Ordering::SeqCst) == send_number {
             return Err(ChatroomClientError::new("send_failed", "测试写入失败"));
@@ -181,6 +230,69 @@ impl ChatroomSocket for Arc<FakeSocket> {
             }
         }
         self.sent.lock().unwrap().push(command.clone());
+        if !matches!(command, ChatroomCommand::Subscribe { .. }) {
+            if let Some(observer) = self.on_non_subscribe_send.lock().unwrap().as_ref() {
+                let _ = observer.send(());
+            }
+        }
+        if let ChatroomCommand::ConfirmedLifecycle {
+            request_id,
+            command,
+        } = command
+        {
+            let (room_id, command_name, invocation_id) = match command.as_ref() {
+                ChatroomCommand::Ready { room_id, .. } => (room_id.clone(), "agent.ready", None),
+                ChatroomCommand::Unready { room_id, .. } => {
+                    (room_id.clone(), "agent.unready", None)
+                }
+                ChatroomCommand::AgentAccepted {
+                    room_id,
+                    invocation_id,
+                    ..
+                } => (
+                    room_id.clone(),
+                    "agent.accepted",
+                    Some(invocation_id.clone()),
+                ),
+                ChatroomCommand::AgentEvent {
+                    room_id,
+                    invocation_id,
+                    event,
+                } => (
+                    room_id.clone(),
+                    match event {
+                        super::chatroom_protocol::AgentEventPayload::Delta { .. } => "agent.delta",
+                        super::chatroom_protocol::AgentEventPayload::Completed { .. } => {
+                            "agent.completed"
+                        }
+                        super::chatroom_protocol::AgentEventPayload::Failed { .. } => {
+                            "agent.failed"
+                        }
+                    },
+                    Some(invocation_id.clone()),
+                ),
+                _ => unreachable!(),
+            };
+            let mut ack = super::chatroom_protocol::PrivateCommandAck {
+                room_id,
+                request_id: request_id.clone(),
+                command: command_name.into(),
+                ok: self.ack_ok.load(Ordering::SeqCst),
+                invocation_id,
+                status: Some("accepted".into()),
+                error_code: (!self.ack_ok.load(Ordering::SeqCst)).then(|| "forbidden".into()),
+            };
+            if let Some(room_id) = self.ack_room_override.lock().unwrap().clone() {
+                ack.room_id = room_id;
+            }
+            if let Some(command) = self.ack_command_override.lock().unwrap().clone() {
+                ack.command = command;
+            }
+            if let Some(invocation_id) = self.ack_invocation_override.lock().unwrap().clone() {
+                ack.invocation_id = Some(invocation_id);
+            }
+            *self.ack_frame.lock().unwrap() = Some(ack);
+        }
         if matches!(command, ChatroomCommand::Subscribe { .. }) {
             if let Some(callback) = self.on_subscribe.lock().unwrap().clone() {
                 callback();
@@ -190,6 +302,21 @@ impl ChatroomSocket for Arc<FakeSocket> {
     }
 
     fn receive_json(&mut self) -> Result<ChatroomEvent, ChatroomClientError> {
+        let call = self.receive_count.fetch_add(1, Ordering::SeqCst) + 1;
+        let gate = {
+            let mut gate = self.receive_gate.lock().unwrap();
+            if gate.as_ref().is_some_and(|value| value.call_at == call) {
+                gate.take()
+            } else {
+                None
+            }
+        };
+        if let Some(gate) = gate {
+            let _ = gate.observed.send(());
+            gate.release
+                .recv_timeout(Duration::from_secs(1))
+                .expect("测试 receive gate 未释放");
+        }
         if let Some(started) = self.receive_started.lock().unwrap().take() {
             let _ = started.send(());
         }
@@ -203,6 +330,16 @@ impl ChatroomSocket for Arc<FakeSocket> {
             .unwrap()
             .pop_front()
             .unwrap_or_else(|| Err(ChatroomClientError::new("read_timeout", "测试读取超时")))
+    }
+
+    fn receive_frame(
+        &mut self,
+    ) -> Result<super::chatroom_client::ChatroomSocketFrame, ChatroomClientError> {
+        if let Some(ack) = self.ack_frame.lock().unwrap().take() {
+            return Ok(super::chatroom_client::ChatroomSocketFrame::PrivateAck(ack));
+        }
+        self.receive_json()
+            .map(super::chatroom_client::ChatroomSocketFrame::Event)
     }
 
     fn close(&mut self) {
@@ -352,6 +489,7 @@ fn subscribe() -> ChatroomCommand {
             after_seq: 0,
         }],
         device_id: "device-1".into(),
+        capabilities: None,
     }
 }
 
@@ -662,11 +800,18 @@ fn given_unavailable_after_temporary_refresh_failure_when_command_arrives_then_r
 #[test]
 fn given_socket_event_when_reader_receives_then_emit_structured_event_without_jwt() {
     let storage = Arc::new(MemoryStorage::default());
-    let socket = FakeSocket::new(vec![Ok(ChatroomEvent::MessageCreated {
-        room_id: "room-1".into(),
-        seq: 2,
-        payload: json!({"messageId":"m-1"}),
-    })]);
+    let socket = FakeSocket::new(vec![
+        Ok(ChatroomEvent::RoomSnapshot {
+            room_id: "room-1".into(),
+            latest_seq: 1,
+            payload: json!({"messages": []}),
+        }),
+        Ok(ChatroomEvent::MessageCreated {
+            room_id: "room-1".into(),
+            seq: 2,
+            payload: json!({"messageId":"m-1"}),
+        }),
+    ]);
     let connector = FakeConnector::new(vec![ConnectResult::Socket(socket)]);
     let (events, receiver) = mpsc::channel();
     let client = ChatroomClient::new(
@@ -683,12 +828,18 @@ fn given_socket_event_when_reader_receives_then_emit_structured_event_without_jw
     client.start();
     client.command(subscribe()).unwrap();
     let event = receive_until(&receiver, |event| {
-        matches!(event, ChatroomClientEvent::EventAt { .. })
+        matches!(
+            event,
+            ChatroomClientEvent::SocketEventAt {
+                event: ChatroomEvent::MessageCreated { seq: 2, .. },
+                ..
+            }
+        )
     });
     let encoded = serde_json::to_string(&event).unwrap();
     assert!(matches!(
         event,
-        ChatroomClientEvent::EventAt {
+        ChatroomClientEvent::SocketEventAt {
             event: ChatroomEvent::MessageCreated { seq: 2, .. },
             ..
         }
@@ -987,6 +1138,7 @@ fn given_pause_after_unavailable_generation_check_then_close_command_is_discarde
         .recv_timeout(Duration::from_millis(500))
         .expect("unavailable 命令未到达 apply gate");
     client.pause();
+    assert_eq!(client.selected_capabilities(), (0, Vec::new()));
     release.send(()).unwrap();
     std::thread::sleep(Duration::from_millis(20));
     client.resume();
@@ -1514,6 +1666,7 @@ fn given_subscription_change_when_connected_then_reconnect_with_only_new_initial
                 },
             ],
             device_id: "device-1".into(),
+            capabilities: None,
         })
         .unwrap();
     receive_until(&receiver, |event| {
@@ -1638,6 +1791,7 @@ fn given_pause_and_resume_during_connect_when_socket_is_rejected_then_worker_res
                 after_seq: 0,
             }],
             device_id: "device-2".into(),
+            capabilities: None,
         })
         .unwrap();
     assert!(receiver
@@ -1652,7 +1806,7 @@ fn given_pause_and_resume_during_connect_when_socket_is_rejected_then_worker_res
     let second_sent = second.sent.lock().unwrap();
     assert_eq!(second_sent.len(), 1);
     assert!(
-        matches!(&second_sent[0], ChatroomCommand::Subscribe { rooms, device_id } if rooms[0].room_id == "room-2" && device_id == "device-2")
+        matches!(&second_sent[0], ChatroomCommand::Subscribe { rooms, device_id, .. } if rooms[0].room_id == "room-2" && device_id == "device-2")
     );
     client.shutdown();
 }
@@ -2116,5 +2270,1835 @@ fn given_temporary_refresh_failure_then_successful_socket_then_two_401s_then_exp
     );
     assert_eq!(transport.calls.load(Ordering::SeqCst), 2);
     assert_eq!(connector.authorizations.lock().unwrap().len(), 4);
+    client.shutdown();
+}
+
+#[test]
+fn given_private_command_ack_frame_when_decoding_socket_frame_then_keep_it_out_of_public_events() {
+    let ack = r#"{"type":"command.ack","roomId":"room-1","payload":{"requestId":"req-1","command":"agent.completed","ok":true,"invocationId":"inv-1","status":"completed"}}"#;
+    let frame = decode_socket_frame(Message::Text(ack.to_string().into()))
+        .unwrap()
+        .unwrap();
+    assert!(
+        matches!(frame, super::chatroom_client::ChatroomSocketFrame::PrivateAck(value)
+        if value.request_id == "req-1" && value.status.as_deref() == Some("completed"))
+    );
+
+    let event = r#"{"type":"room.snapshot","roomId":"room-1","latestSeq":0,"payload":{}}"#;
+    let frame = decode_socket_frame(Message::Text(event.to_string().into()))
+        .unwrap()
+        .unwrap();
+    assert!(matches!(
+        frame,
+        super::chatroom_client::ChatroomSocketFrame::EventWithRawJsonBytes {
+            raw_json_bytes,
+            ..
+        } if raw_json_bytes == event.len()
+    ));
+}
+
+#[test]
+fn given_live_socket_when_lifecycle_command_requests_confirmation_then_reader_resolves_private_ack()
+{
+    let socket = FakeSocket::new(Vec::new());
+    let connector = FakeConnector::new(vec![ConnectResult::Socket(socket.clone())]);
+    let (events, receiver) = mpsc::channel();
+    let client = Arc::new(ChatroomClient::new(
+        auth(
+            Arc::new(RefreshTransport {
+                calls: AtomicUsize::new(0),
+            }),
+            Arc::new(MemoryStorage::default()),
+        ),
+        "wss://edu.example/ws".into(),
+        connector,
+        events,
+    ));
+    client.start();
+    client.command(subscribe()).unwrap();
+    receive_until(&receiver, |event| {
+        matches!(event, ChatroomClientEvent::ConnectedAt { .. })
+    });
+    let confirmed = client
+        .request_and_confirm(
+            ChatroomCommand::Ready {
+                room_id: "room-1".into(),
+                request_id: "req-live".into(),
+                room_agent_id: "agent-1".into(),
+            },
+            "room-1",
+            "req-live",
+            "agent.ready",
+            None,
+        )
+        .unwrap();
+    assert_eq!(confirmed.status.as_deref(), Some("accepted"));
+    assert!(
+        matches!(socket.sent.lock().unwrap().last(), Some(ChatroomCommand::ConfirmedLifecycle { request_id, .. }) if request_id == "req-live")
+    );
+    client.shutdown();
+}
+
+#[test]
+fn given_capability_request_when_initial_snapshot_echoes_intersection_then_select_only_that_intersection(
+) {
+    let snapshot = ChatroomEvent::RoomSnapshot {
+        room_id: "room-1".into(),
+        latest_seq: 0,
+        payload: json!({"capabilities": ["agent-ready-v1", "invocation-ack-v1", "future-v9"]}),
+    };
+    let later_snapshot = ChatroomEvent::RoomSnapshot {
+        room_id: "room-1".into(),
+        latest_seq: 1,
+        payload: json!({}),
+    };
+    let second_initial_snapshot = ChatroomEvent::RoomSnapshot {
+        room_id: "room-2".into(),
+        latest_seq: 0,
+        payload: json!({"capabilities": ["agent-ready-v1", "invocation-ack-v1"]}),
+    };
+    let socket = FakeSocket::new(vec![
+        Ok(snapshot),
+        Ok(second_initial_snapshot),
+        Ok(later_snapshot),
+    ]);
+    let connector = FakeConnector::new(vec![ConnectResult::Socket(socket)]);
+    let (events, receiver) = mpsc::channel();
+    let client = ChatroomClient::new(
+        auth(
+            Arc::new(RefreshTransport {
+                calls: AtomicUsize::new(0),
+            }),
+            Arc::new(MemoryStorage::default()),
+        ),
+        "wss://edu.example/ws".into(),
+        connector,
+        events,
+    );
+    client.start();
+    client
+        .command(ChatroomCommand::Subscribe {
+            rooms: vec![
+                RoomCursor {
+                    room_id: "room-1".into(),
+                    after_seq: 0,
+                },
+                RoomCursor {
+                    room_id: "room-2".into(),
+                    after_seq: 0,
+                },
+            ],
+            device_id: "device-1".into(),
+            capabilities: Some(vec![
+                super::chatroom_protocol::ChatroomCapability::AgentReadyV1,
+            ]),
+        })
+        .unwrap();
+    let event = receive_until(&receiver, |event| {
+        matches!(
+            event,
+            ChatroomClientEvent::SocketEventAt {
+                event: ChatroomEvent::RoomSnapshot { latest_seq: 0, .. },
+                ..
+            }
+        )
+    });
+    let generation = match event {
+        ChatroomClientEvent::SocketEventAt { generation, .. } => generation,
+        _ => unreachable!(),
+    };
+    let deadline = Instant::now() + Duration::from_secs(1);
+    while Instant::now() < deadline && client.selected_capabilities().1.is_empty() {
+        thread::yield_now();
+    }
+    assert_eq!(
+        client.selected_capabilities(),
+        (
+            generation.max(1),
+            vec![super::chatroom_protocol::ChatroomCapability::AgentReadyV1]
+        )
+    );
+    receive_until(
+        &receiver,
+        |event| matches!(event, ChatroomClientEvent::SocketEventAt { event: ChatroomEvent::RoomSnapshot { room_id, .. }, .. } if room_id == "room-2"),
+    );
+    assert_eq!(
+        client.selected_capabilities().1,
+        vec![super::chatroom_protocol::ChatroomCapability::AgentReadyV1]
+    );
+    receive_until(&receiver, |event| {
+        matches!(
+            event,
+            ChatroomClientEvent::SocketEventAt {
+                event: ChatroomEvent::RoomSnapshot { latest_seq: 1, .. },
+                ..
+            }
+        )
+    });
+    assert_eq!(
+        client.selected_capabilities().1,
+        vec![super::chatroom_protocol::ChatroomCapability::AgentReadyV1]
+    );
+    client.shutdown();
+}
+
+#[test]
+fn given_multiple_room_snapshots_when_first_arrives_then_selection_waits_for_consistent_complete_set(
+) {
+    for second_payload in [
+        json!({}),
+        json!({"capabilities": ["agent-ready-v1"]}),
+        json!({"capabilities": ["agent-ready-v1", "invocation-ack-v1"]}),
+    ] {
+        let socket = FakeSocket::new(vec![
+            Ok(ChatroomEvent::RoomSnapshot {
+                room_id: "room-1".into(),
+                latest_seq: 0,
+                payload: json!({"capabilities": ["agent-ready-v1", "invocation-ack-v1"]}),
+            }),
+            Ok(ChatroomEvent::RoomSnapshot {
+                room_id: "room-2".into(),
+                latest_seq: 0,
+                payload: second_payload.clone(),
+            }),
+        ]);
+        let (second_receive_started, release_second) = socket.gate_receive_call(2);
+        let connector = FakeConnector::new(vec![ConnectResult::Socket(socket.clone())]);
+        let (events, receiver) = mpsc::channel();
+        let client = ChatroomClient::new(
+            auth(
+                Arc::new(RefreshTransport {
+                    calls: AtomicUsize::new(0),
+                }),
+                Arc::new(MemoryStorage::default()),
+            ),
+            "wss://edu.example/ws".into(),
+            connector,
+            events,
+        );
+        client.start();
+        client
+            .command(ChatroomCommand::Subscribe {
+                rooms: vec![
+                    RoomCursor {
+                        room_id: "room-1".into(),
+                        after_seq: 0,
+                    },
+                    RoomCursor {
+                        room_id: "room-2".into(),
+                        after_seq: 0,
+                    },
+                ],
+                device_id: "device-1".into(),
+                capabilities: Some(vec![
+                    super::chatroom_protocol::ChatroomCapability::AgentReadyV1,
+                    super::chatroom_protocol::ChatroomCapability::InvocationAckV1,
+                ]),
+            })
+            .unwrap();
+        second_receive_started
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap();
+        let generation = client.active_socket_generation();
+        assert_ne!(generation, 0);
+        let capabilities_before_second_snapshot = client.selected_capabilities();
+        release_second.send(()).unwrap();
+        assert_eq!(
+            capabilities_before_second_snapshot,
+            (generation, Vec::new())
+        );
+        let consistent_capabilities = second_payload
+            .get("capabilities")
+            .is_some_and(|value| value == &json!(["agent-ready-v1", "invocation-ack-v1"]));
+        if consistent_capabilities {
+            receive_until(
+                &receiver,
+                |event| matches!(event, ChatroomClientEvent::SocketEventAt { event: ChatroomEvent::RoomSnapshot { room_id, .. }, .. } if room_id == "room-2"),
+            );
+            assert_eq!(
+                client.selected_capabilities(),
+                (
+                    generation,
+                    vec![
+                        super::chatroom_protocol::ChatroomCapability::AgentReadyV1,
+                        super::chatroom_protocol::ChatroomCapability::InvocationAckV1,
+                    ]
+                )
+            );
+        } else {
+            let deadline = Instant::now() + Duration::from_millis(500);
+            while !socket.closed.load(Ordering::SeqCst) && Instant::now() < deadline {
+                thread::yield_now();
+            }
+            let closed_before_shutdown = socket.closed.load(Ordering::SeqCst);
+            let observed = receiver.try_iter().collect::<Vec<_>>();
+            assert!(closed_before_shutdown, "能力集合不一致必须关闭当前 socket");
+            assert_eq!(client.selected_capabilities(), (generation, Vec::new()));
+            assert!(
+                !observed.iter().any(|event| matches!(
+                    event,
+                    ChatroomClientEvent::SocketEventAt {
+                        event: ChatroomEvent::RoomSnapshot { room_id, .. },
+                        ..
+                    } if room_id == "room-2"
+                )),
+                "能力不一致的初始 snapshot 不得释放"
+            );
+            assert!(observed
+                .iter()
+                .any(|event| matches!(event, ChatroomClientEvent::Disconnected)));
+        }
+        client.shutdown();
+    }
+}
+
+#[test]
+fn given_multiroom_handshake_when_delta_and_terminal_arrive_before_last_snapshot_then_flush_fifo_after_snapshot(
+) {
+    let socket = FakeSocket::new(vec![
+        Ok(ChatroomEvent::RoomSnapshot {
+            room_id: "room-1".into(),
+            latest_seq: 0,
+            payload: json!({"capabilities": [
+                "agent-ready-v1",
+                "invocation-ack-v1",
+                "agent-delta-frame-id-v1",
+            ]}),
+        }),
+        Ok(ChatroomEvent::AgentDelta {
+            room_id: "room-1".into(),
+            payload: json!({
+                "invocationId": "inv-1",
+                "delta": "片段",
+                "frameId": "0123456789abcdef0123456789abcdef",
+            }),
+        }),
+        Ok(ChatroomEvent::AgentCompleted {
+            room_id: "room-1".into(),
+            payload: json!({
+                "invocationId": "inv-1",
+                "content": "完成",
+                "mentionAgentIds": [],
+                "attachmentIds": [],
+                "clientMessageId": "message-1",
+            }),
+        }),
+        Ok(ChatroomEvent::RoomSnapshot {
+            room_id: "room-2".into(),
+            latest_seq: 0,
+            payload: json!({"capabilities": [
+                "agent-ready-v1",
+                "invocation-ack-v1",
+                "agent-delta-frame-id-v1",
+            ]}),
+        }),
+    ]);
+    let (last_snapshot_started, release_last_snapshot) = socket.gate_receive_call(4);
+    let connector = FakeConnector::new(vec![ConnectResult::Socket(socket)]);
+    let (events, receiver) = mpsc::channel();
+    let client = ChatroomClient::new(
+        auth(
+            Arc::new(RefreshTransport {
+                calls: AtomicUsize::new(0),
+            }),
+            Arc::new(MemoryStorage::default()),
+        ),
+        "wss://edu.example/ws".into(),
+        connector,
+        events,
+    );
+    client.start();
+    client
+        .command(ChatroomCommand::Subscribe {
+            rooms: vec![
+                RoomCursor {
+                    room_id: "room-1".into(),
+                    after_seq: 0,
+                },
+                RoomCursor {
+                    room_id: "room-2".into(),
+                    after_seq: 0,
+                },
+            ],
+            device_id: "device-1".into(),
+            capabilities: Some(vec![
+                super::chatroom_protocol::ChatroomCapability::AgentReadyV1,
+                super::chatroom_protocol::ChatroomCapability::InvocationAckV1,
+                super::chatroom_protocol::ChatroomCapability::AgentDeltaFrameIdV1,
+            ]),
+        })
+        .unwrap();
+
+    last_snapshot_started
+        .recv_timeout(Duration::from_secs(1))
+        .expect("应在第二个初始 snapshot 前停住");
+    let before_selection = receiver.try_iter().collect::<Vec<_>>();
+    let generation = client.active_socket_generation();
+    assert_eq!(
+        client.selected_capabilities(),
+        (generation, Vec::new()),
+        "HTTP 广告与单个 room snapshot 都不能提前选择 socket 能力"
+    );
+    release_last_snapshot.send(()).unwrap();
+    assert!(before_selection.iter().any(|event| matches!(
+        event,
+        ChatroomClientEvent::SocketEventAt {
+            event: ChatroomEvent::RoomSnapshot { room_id, .. },
+            ..
+        } if room_id == "room-1"
+    )));
+    assert!(!before_selection.iter().any(|event| matches!(
+        event,
+        ChatroomClientEvent::SocketEventAt {
+            event: ChatroomEvent::AgentDelta { .. } | ChatroomEvent::AgentCompleted { .. },
+            ..
+        }
+    )));
+    let mut observed = Vec::new();
+    while observed.len() < 3 {
+        let event = receiver
+            .recv_timeout(Duration::from_secs(1))
+            .expect("一致 snapshot 后应释放缓冲事件");
+        if let ChatroomClientEvent::SocketEventAt { event, .. } = event {
+            observed.push(event);
+        }
+    }
+    assert!(matches!(
+        &observed[0],
+        ChatroomEvent::RoomSnapshot { room_id, .. } if room_id == "room-2"
+    ));
+    assert!(matches!(
+        &observed[1],
+        ChatroomEvent::AgentDelta { payload, .. }
+            if payload.get("frameId").and_then(serde_json::Value::as_str)
+                == Some("0123456789abcdef0123456789abcdef")
+    ));
+    assert!(matches!(
+        &observed[2],
+        ChatroomEvent::AgentCompleted { payload, .. }
+            if payload.get("invocationId").and_then(serde_json::Value::as_str) == Some("inv-1")
+    ));
+    assert_eq!(
+        client.selected_capabilities().1,
+        vec![
+            super::chatroom_protocol::ChatroomCapability::AgentReadyV1,
+            super::chatroom_protocol::ChatroomCapability::InvocationAckV1,
+            super::chatroom_protocol::ChatroomCapability::AgentDeltaFrameIdV1,
+        ]
+    );
+    client.shutdown();
+}
+
+#[test]
+fn given_selected_delta_frame_identity_when_mixed_frames_arrive_then_preserve_legacy_duplicates_and_final_reply(
+) {
+    let frame_a = "0123456789abcdef0123456789abcdef";
+    let frame_b = "fedcba9876543210fedcba9876543210";
+    let socket = FakeSocket::new(vec![
+        Ok(ChatroomEvent::RoomSnapshot {
+            room_id: "room-1".into(),
+            latest_seq: 0,
+            payload: json!({"capabilities": [
+                "agent-ready-v1",
+                "invocation-ack-v1",
+                "agent-delta-frame-id-v1",
+            ]}),
+        }),
+        Ok(ChatroomEvent::AgentDelta {
+            room_id: "room-1".into(),
+            payload: json!({"invocationId":"inv-1","delta":"same","frameId":frame_a}),
+        }),
+        Ok(ChatroomEvent::AgentDelta {
+            room_id: "room-1".into(),
+            payload: json!({"invocationId":"inv-1","delta":"same","frameId":frame_a}),
+        }),
+        Ok(ChatroomEvent::AgentDelta {
+            room_id: "room-1".into(),
+            payload: json!({"invocationId":"inv-1","delta":"same","frameId":frame_b}),
+        }),
+        Ok(ChatroomEvent::AgentDelta {
+            room_id: "room-1".into(),
+            payload: json!({"invocationId":"inv-1","delta":"same"}),
+        }),
+        Ok(ChatroomEvent::AgentCompleted {
+            room_id: "room-1".into(),
+            payload: json!({"invocationId":"inv-1","content":"full reply","mentionAgentIds":[],"attachmentIds":[],"clientMessageId":"reply-1"}),
+        }),
+    ]);
+    let connector = FakeConnector::new(vec![ConnectResult::Socket(socket.clone())]);
+    let (events, receiver) = mpsc::channel();
+    let client = ChatroomClient::new(
+        auth(
+            Arc::new(RefreshTransport {
+                calls: AtomicUsize::new(0),
+            }),
+            Arc::new(MemoryStorage::default()),
+        ),
+        "wss://edu.example/ws".into(),
+        connector,
+        events,
+    );
+    client.start();
+    client
+        .command(ChatroomCommand::Subscribe {
+            rooms: vec![RoomCursor {
+                room_id: "room-1".into(),
+                after_seq: 0,
+            }],
+            device_id: "device-1".into(),
+            capabilities: Some(vec![
+                super::chatroom_protocol::ChatroomCapability::AgentReadyV1,
+                super::chatroom_protocol::ChatroomCapability::InvocationAckV1,
+                super::chatroom_protocol::ChatroomCapability::AgentDeltaFrameIdV1,
+            ]),
+        })
+        .unwrap();
+
+    let mut observed = Vec::new();
+    while observed.len() < 6 {
+        if let ChatroomClientEvent::SocketEventAt { event, .. } =
+            receiver.recv_timeout(Duration::from_secs(1)).unwrap()
+        {
+            observed.push(event);
+        }
+    }
+    assert_eq!(
+        client.selected_capabilities().1,
+        vec![
+            super::chatroom_protocol::ChatroomCapability::AgentReadyV1,
+            super::chatroom_protocol::ChatroomCapability::InvocationAckV1,
+            super::chatroom_protocol::ChatroomCapability::AgentDeltaFrameIdV1,
+        ]
+    );
+    let deltas = observed
+        .iter()
+        .filter_map(|event| match event {
+            ChatroomEvent::AgentDelta { payload, .. } => Some(payload),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        deltas.len(),
+        4,
+        "Native receiver preserves frames for Renderer identity handling"
+    );
+    assert_eq!(deltas[0]["frameId"], frame_a);
+    assert_eq!(deltas[1]["frameId"], frame_a);
+    assert_eq!(deltas[2]["frameId"], frame_b);
+    assert!(
+        deltas[3].get("frameId").is_none(),
+        "legacy wire shape stays identifiable"
+    );
+    assert!(
+        matches!(&observed[5], ChatroomEvent::AgentCompleted { payload, .. } if payload["content"] == "full reply")
+    );
+    let sent = socket.sent.lock().unwrap();
+    assert_eq!(sent.len(), 1);
+    assert!(matches!(
+        sent.first(),
+        Some(ChatroomCommand::Subscribe { .. })
+    ));
+    assert!(!sent
+        .iter()
+        .any(|command| matches!(command, ChatroomCommand::ConfirmedLifecycle { .. })));
+    drop(sent);
+    client.shutdown();
+}
+
+#[test]
+fn given_mismatching_multiroom_snapshot_when_delta_is_buffered_then_close_without_releasing_it() {
+    let socket = FakeSocket::new(vec![
+        Ok(ChatroomEvent::RoomSnapshot {
+            room_id: "room-1".into(),
+            latest_seq: 0,
+            payload: json!({"capabilities": ["agent-delta-frame-id-v1"]}),
+        }),
+        Ok(ChatroomEvent::AgentDelta {
+            room_id: "room-1".into(),
+            payload: json!({
+                "invocationId": "inv-1",
+                "delta": "part",
+                "frameId": "0123456789abcdef0123456789abcdef",
+            }),
+        }),
+        Ok(ChatroomEvent::RoomSnapshot {
+            room_id: "room-2".into(),
+            latest_seq: 0,
+            payload: json!({"capabilities": []}),
+        }),
+    ]);
+    let connector = FakeConnector::new(vec![ConnectResult::Socket(socket.clone())]);
+    let (events, receiver) = mpsc::channel();
+    let client = ChatroomClient::new_with_backoff(
+        auth(
+            Arc::new(RefreshTransport {
+                calls: AtomicUsize::new(0),
+            }),
+            Arc::new(MemoryStorage::default()),
+        ),
+        "wss://edu.example/ws".into(),
+        connector,
+        events,
+        FakeBackoff::new(),
+    );
+    client.start();
+    client
+        .command(ChatroomCommand::Subscribe {
+            rooms: vec![
+                RoomCursor {
+                    room_id: "room-1".into(),
+                    after_seq: 0,
+                },
+                RoomCursor {
+                    room_id: "room-2".into(),
+                    after_seq: 0,
+                },
+            ],
+            device_id: "device-1".into(),
+            capabilities: Some(vec![
+                super::chatroom_protocol::ChatroomCapability::AgentDeltaFrameIdV1,
+            ]),
+        })
+        .unwrap();
+
+    let deadline = Instant::now() + Duration::from_millis(500);
+    while !socket.closed.load(Ordering::SeqCst) && Instant::now() < deadline {
+        thread::yield_now();
+    }
+    let closed_before_shutdown = socket.closed.load(Ordering::SeqCst);
+    let observed = receiver.try_iter().collect::<Vec<_>>();
+    client.shutdown();
+    assert!(closed_before_shutdown, "能力回显不一致必须关闭当前 socket");
+    assert!(
+        !observed.iter().any(|event| matches!(
+            event,
+            ChatroomClientEvent::SocketEventAt {
+                event: ChatroomEvent::RoomSnapshot { room_id, .. },
+                ..
+            } if room_id == "room-2"
+        )),
+        "导致能力不一致的初始 snapshot 不得释放"
+    );
+    assert!(!observed.iter().any(|event| matches!(
+        event,
+        ChatroomClientEvent::SocketEventAt {
+            event: ChatroomEvent::AgentDelta { .. },
+            ..
+        }
+    )));
+}
+
+#[test]
+fn given_invalid_initial_snapshot_capabilities_when_delta_is_buffered_then_close_without_releasing_it(
+) {
+    let socket = FakeSocket::new(vec![
+        Ok(ChatroomEvent::RoomSnapshot {
+            room_id: "room-1".into(),
+            latest_seq: 0,
+            payload: json!({"capabilities": ["agent-delta-frame-id-v1"]}),
+        }),
+        Ok(ChatroomEvent::AgentDelta {
+            room_id: "room-1".into(),
+            payload: json!({
+                "invocationId": "inv-1",
+                "delta": "part",
+                "frameId": "0123456789abcdef0123456789abcdef",
+            }),
+        }),
+        Ok(ChatroomEvent::RoomSnapshot {
+            room_id: "room-2".into(),
+            latest_seq: 0,
+            payload: json!({"capabilities": null}),
+        }),
+    ]);
+    let connector = FakeConnector::new(vec![ConnectResult::Socket(socket.clone())]);
+    let (events, receiver) = mpsc::channel();
+    let client = ChatroomClient::new_with_backoff(
+        auth(
+            Arc::new(RefreshTransport {
+                calls: AtomicUsize::new(0),
+            }),
+            Arc::new(MemoryStorage::default()),
+        ),
+        "wss://edu.example/ws".into(),
+        connector,
+        events,
+        FakeBackoff::new(),
+    );
+    client.start();
+    client
+        .command(ChatroomCommand::Subscribe {
+            rooms: vec![
+                RoomCursor {
+                    room_id: "room-1".into(),
+                    after_seq: 0,
+                },
+                RoomCursor {
+                    room_id: "room-2".into(),
+                    after_seq: 0,
+                },
+            ],
+            device_id: "device-1".into(),
+            capabilities: Some(vec![
+                super::chatroom_protocol::ChatroomCapability::AgentDeltaFrameIdV1,
+            ]),
+        })
+        .unwrap();
+
+    let deadline = Instant::now() + Duration::from_millis(500);
+    while !socket.closed.load(Ordering::SeqCst) && Instant::now() < deadline {
+        thread::yield_now();
+    }
+    let closed_before_shutdown = socket.closed.load(Ordering::SeqCst);
+    let observed = receiver.try_iter().collect::<Vec<_>>();
+    client.shutdown();
+    assert!(closed_before_shutdown, "非法能力快照必须关闭当前 socket");
+    assert!(
+        !observed.iter().any(|event| matches!(
+            event,
+            ChatroomClientEvent::SocketEventAt {
+                event: ChatroomEvent::RoomSnapshot { room_id, .. },
+                ..
+            } if room_id == "room-2"
+        )),
+        "包含非法能力的初始 snapshot 不得释放"
+    );
+    assert!(!observed.iter().any(|event| matches!(
+        event,
+        ChatroomClientEvent::SocketEventAt {
+            event: ChatroomEvent::AgentDelta { .. },
+            ..
+        }
+    )));
+}
+
+#[test]
+fn given_unknown_room_snapshot_while_initial_snapshot_gate_pending_then_close_without_releasing_it_or_buffered_delta(
+) {
+    let socket = FakeSocket::new(vec![
+        Ok(ChatroomEvent::RoomSnapshot {
+            room_id: "room-1".into(),
+            latest_seq: 0,
+            payload: json!({"capabilities": ["agent-delta-frame-id-v1"]}),
+        }),
+        Ok(ChatroomEvent::AgentDelta {
+            room_id: "room-1".into(),
+            payload: json!({
+                "invocationId": "inv-1",
+                "delta": "part",
+                "frameId": "0123456789abcdef0123456789abcdef",
+            }),
+        }),
+        Ok(ChatroomEvent::RoomSnapshot {
+            room_id: "room-outside-subscription".into(),
+            latest_seq: 0,
+            payload: json!({"capabilities": ["agent-delta-frame-id-v1"]}),
+        }),
+    ]);
+    let connector = FakeConnector::new(vec![ConnectResult::Socket(socket.clone())]);
+    let (events, receiver) = mpsc::channel();
+    let client = ChatroomClient::new_with_backoff(
+        auth(
+            Arc::new(RefreshTransport {
+                calls: AtomicUsize::new(0),
+            }),
+            Arc::new(MemoryStorage::default()),
+        ),
+        "wss://edu.example/ws".into(),
+        connector,
+        events,
+        FakeBackoff::new(),
+    );
+    client.start();
+    client
+        .command(ChatroomCommand::Subscribe {
+            rooms: vec![
+                RoomCursor {
+                    room_id: "room-1".into(),
+                    after_seq: 0,
+                },
+                RoomCursor {
+                    room_id: "room-2".into(),
+                    after_seq: 0,
+                },
+            ],
+            device_id: "device-1".into(),
+            capabilities: Some(vec![
+                super::chatroom_protocol::ChatroomCapability::AgentDeltaFrameIdV1,
+            ]),
+        })
+        .unwrap();
+
+    let deadline = Instant::now() + Duration::from_millis(500);
+    while !socket.closed.load(Ordering::SeqCst) && Instant::now() < deadline {
+        thread::yield_now();
+    }
+    let closed_before_shutdown = socket.closed.load(Ordering::SeqCst);
+    let observed = receiver.try_iter().collect::<Vec<_>>();
+    client.shutdown();
+    assert!(
+        closed_before_shutdown,
+        "待握手期间收到订阅外房间 snapshot 必须关闭当前 socket"
+    );
+    assert!(observed
+        .iter()
+        .any(|event| matches!(event, ChatroomClientEvent::Disconnected)));
+    assert!(
+        !observed.iter().any(|event| matches!(
+            event,
+            ChatroomClientEvent::SocketEventAt {
+                event: ChatroomEvent::RoomSnapshot { room_id, .. },
+                ..
+            } if room_id == "room-outside-subscription"
+        )),
+        "订阅外房间的初始 snapshot 不得释放"
+    );
+    assert!(
+        !observed.iter().any(|event| matches!(
+            event,
+            ChatroomClientEvent::SocketEventAt {
+                event: ChatroomEvent::AgentDelta { .. },
+                ..
+            }
+        )),
+        "握手失败时不得释放缓存中的 delta"
+    );
+}
+
+#[test]
+fn given_invalid_or_mismatching_duplicate_snapshot_while_initial_gate_pending_then_close_without_releasing_it_or_delta(
+) {
+    for duplicate_payload in [
+        json!({"capabilities": ["future-capability-v9"]}),
+        json!({"capabilities": []}),
+    ] {
+        let socket = FakeSocket::new(vec![
+            Ok(ChatroomEvent::RoomSnapshot {
+                room_id: "room-1".into(),
+                latest_seq: 0,
+                payload: json!({"capabilities": ["agent-delta-frame-id-v1"]}),
+            }),
+            Ok(ChatroomEvent::AgentDelta {
+                room_id: "room-1".into(),
+                payload: json!({
+                    "invocationId": "inv-1",
+                    "delta": "part",
+                    "frameId": "0123456789abcdef0123456789abcdef",
+                }),
+            }),
+            Ok(ChatroomEvent::RoomSnapshot {
+                room_id: "room-1".into(),
+                latest_seq: 1,
+                payload: duplicate_payload,
+            }),
+            Ok(ChatroomEvent::RoomSnapshot {
+                room_id: "room-2".into(),
+                latest_seq: 0,
+                payload: json!({"capabilities": ["agent-delta-frame-id-v1"]}),
+            }),
+        ]);
+        let connector = FakeConnector::new(vec![ConnectResult::Socket(socket.clone())]);
+        let (events, receiver) = mpsc::channel();
+        let client = ChatroomClient::new_with_backoff(
+            auth(
+                Arc::new(RefreshTransport {
+                    calls: AtomicUsize::new(0),
+                }),
+                Arc::new(MemoryStorage::default()),
+            ),
+            "wss://edu.example/ws".into(),
+            connector,
+            events,
+            FakeBackoff::new(),
+        );
+        client.start();
+        client
+            .command(ChatroomCommand::Subscribe {
+                rooms: vec![
+                    RoomCursor {
+                        room_id: "room-1".into(),
+                        after_seq: 0,
+                    },
+                    RoomCursor {
+                        room_id: "room-2".into(),
+                        after_seq: 0,
+                    },
+                ],
+                device_id: "device-1".into(),
+                capabilities: Some(vec![
+                    super::chatroom_protocol::ChatroomCapability::AgentDeltaFrameIdV1,
+                ]),
+            })
+            .unwrap();
+
+        let deadline = Instant::now() + Duration::from_millis(500);
+        while !socket.closed.load(Ordering::SeqCst) && Instant::now() < deadline {
+            thread::yield_now();
+        }
+        let closed_before_shutdown = socket.closed.load(Ordering::SeqCst);
+        let observed = receiver.try_iter().collect::<Vec<_>>();
+        client.shutdown();
+        assert!(
+            closed_before_shutdown,
+            "初始握手期间重复 snapshot 的能力非法或不一致必须关闭 socket"
+        );
+        assert_eq!(client.selected_capabilities().1, Vec::new());
+        assert!(observed
+            .iter()
+            .any(|event| matches!(event, ChatroomClientEvent::Disconnected)));
+        assert!(
+            !observed.iter().any(|event| matches!(
+                event,
+                ChatroomClientEvent::SocketEventAt {
+                    event: ChatroomEvent::RoomSnapshot { room_id, latest_seq: 1, .. },
+                    ..
+                } if room_id == "room-1"
+            )),
+            "能力非法或不一致的重复 snapshot 不得释放"
+        );
+        assert!(
+            !observed.iter().any(|event| matches!(
+                event,
+                ChatroomClientEvent::SocketEventAt {
+                    event: ChatroomEvent::AgentDelta { .. },
+                    ..
+                }
+            )),
+            "重复 snapshot 握手失败时不得释放缓存 delta"
+        );
+    }
+}
+
+#[test]
+fn given_same_capability_duplicate_snapshot_while_initial_gate_pending_then_keep_legacy_delivery() {
+    let socket = FakeSocket::new(vec![
+        Ok(ChatroomEvent::RoomSnapshot {
+            room_id: "room-1".into(),
+            latest_seq: 0,
+            payload: json!({"capabilities": ["agent-delta-frame-id-v1"]}),
+        }),
+        Ok(ChatroomEvent::RoomSnapshot {
+            room_id: "room-1".into(),
+            latest_seq: 1,
+            payload: json!({"capabilities": ["agent-delta-frame-id-v1"]}),
+        }),
+        Ok(ChatroomEvent::RoomSnapshot {
+            room_id: "room-2".into(),
+            latest_seq: 0,
+            payload: json!({"capabilities": ["agent-delta-frame-id-v1"]}),
+        }),
+    ]);
+    let (third_receive_started, release_third) = socket.gate_receive_call(3);
+    let connector = FakeConnector::new(vec![ConnectResult::Socket(socket.clone())]);
+    let (events, receiver) = mpsc::channel();
+    let client = ChatroomClient::new_with_backoff(
+        auth(
+            Arc::new(RefreshTransport {
+                calls: AtomicUsize::new(0),
+            }),
+            Arc::new(MemoryStorage::default()),
+        ),
+        "wss://edu.example/ws".into(),
+        connector,
+        events,
+        FakeBackoff::new(),
+    );
+    client.start();
+    client
+        .command(ChatroomCommand::Subscribe {
+            rooms: vec![
+                RoomCursor {
+                    room_id: "room-1".into(),
+                    after_seq: 0,
+                },
+                RoomCursor {
+                    room_id: "room-2".into(),
+                    after_seq: 0,
+                },
+            ],
+            device_id: "device-1".into(),
+            capabilities: Some(vec![
+                super::chatroom_protocol::ChatroomCapability::AgentDeltaFrameIdV1,
+            ]),
+        })
+        .unwrap();
+
+    third_receive_started
+        .recv_timeout(Duration::from_secs(1))
+        .unwrap();
+    assert!(
+        !socket.closed.load(Ordering::SeqCst),
+        "一致能力的重复 snapshot 不应关闭连接"
+    );
+    assert_eq!(client.selected_capabilities().1, Vec::new());
+    assert!(
+        receiver.try_iter().any(|event| matches!(
+            event,
+            ChatroomClientEvent::SocketEventAt {
+                event: ChatroomEvent::RoomSnapshot { room_id, latest_seq: 1, .. },
+                ..
+            } if room_id == "room-1"
+        )),
+        "能力一致的重复 snapshot 仍可在握手完成前释放"
+    );
+
+    release_third.send(()).unwrap();
+    receive_until(&receiver, |event| {
+        matches!(
+            event,
+            ChatroomClientEvent::SocketEventAt {
+                event: ChatroomEvent::RoomSnapshot { room_id, .. },
+                ..
+            } if room_id == "room-2"
+        )
+    });
+    assert_eq!(
+        client.selected_capabilities().1,
+        vec![super::chatroom_protocol::ChatroomCapability::AgentDeltaFrameIdV1]
+    );
+    client.shutdown();
+}
+
+#[test]
+fn given_generation_replacement_during_multiroom_handshake_when_new_socket_selects_then_never_flush_old_delta(
+) {
+    let socket_a = FakeSocket::new(vec![
+        Ok(ChatroomEvent::RoomSnapshot {
+            room_id: "room-1".into(),
+            latest_seq: 0,
+            payload: json!({"capabilities": ["agent-delta-frame-id-v1"]}),
+        }),
+        Ok(ChatroomEvent::AgentDelta {
+            room_id: "room-1".into(),
+            payload: json!({
+                "invocationId": "old-invocation",
+                "delta": "old",
+                "frameId": "0123456789abcdef0123456789abcdef",
+            }),
+        }),
+    ]);
+    let (old_socket_read_started, release_old_socket) = socket_a.gate_receive_call(3);
+    let socket_b = FakeSocket::new(vec![Ok(ChatroomEvent::RoomSnapshot {
+        room_id: "room-3".into(),
+        latest_seq: 0,
+        payload: json!({"capabilities": ["agent-delta-frame-id-v1"]}),
+    })]);
+    let connector = FakeConnector::new(vec![
+        ConnectResult::Socket(socket_a),
+        ConnectResult::Socket(socket_b),
+    ]);
+    let (events, receiver) = mpsc::channel();
+    let client = ChatroomClient::new(
+        auth(
+            Arc::new(RefreshTransport {
+                calls: AtomicUsize::new(0),
+            }),
+            Arc::new(MemoryStorage::default()),
+        ),
+        "wss://edu.example/ws".into(),
+        connector,
+        events,
+    );
+    client.start();
+    client
+        .command(ChatroomCommand::Subscribe {
+            rooms: vec![
+                RoomCursor {
+                    room_id: "room-1".into(),
+                    after_seq: 0,
+                },
+                RoomCursor {
+                    room_id: "room-2".into(),
+                    after_seq: 0,
+                },
+            ],
+            device_id: "device-1".into(),
+            capabilities: Some(vec![
+                super::chatroom_protocol::ChatroomCapability::AgentDeltaFrameIdV1,
+            ]),
+        })
+        .unwrap();
+    old_socket_read_started
+        .recv_timeout(Duration::from_secs(1))
+        .expect("socket A 应在初始 snapshot 未收齐时等待");
+    let before_replacement = receiver.try_iter().collect::<Vec<_>>();
+    assert!(!before_replacement.iter().any(|event| matches!(
+        event,
+        ChatroomClientEvent::SocketEventAt {
+            event: ChatroomEvent::AgentDelta { .. },
+            ..
+        }
+    )));
+
+    client
+        .command(ChatroomCommand::Subscribe {
+            rooms: vec![RoomCursor {
+                room_id: "room-3".into(),
+                after_seq: 0,
+            }],
+            device_id: "device-1".into(),
+            capabilities: Some(vec![
+                super::chatroom_protocol::ChatroomCapability::AgentDeltaFrameIdV1,
+            ]),
+        })
+        .unwrap();
+    release_old_socket.send(()).unwrap();
+    let second_snapshot = receive_until(&receiver, |event| {
+        matches!(
+            event,
+            ChatroomClientEvent::SocketEventAt {
+                socket_generation: 2,
+                event: ChatroomEvent::RoomSnapshot { room_id, .. },
+                ..
+            } if room_id == "room-3"
+        )
+    });
+    assert!(matches!(
+        second_snapshot,
+        ChatroomClientEvent::SocketEventAt { .. }
+    ));
+    assert_eq!(
+        client.selected_capabilities(),
+        (
+            2,
+            vec![super::chatroom_protocol::ChatroomCapability::AgentDeltaFrameIdV1]
+        )
+    );
+    let remaining = receiver.try_iter().collect::<Vec<_>>();
+    assert!(!remaining.iter().any(|event| matches!(
+        event,
+        ChatroomClientEvent::SocketEventAt {
+            event: ChatroomEvent::AgentDelta { payload, .. },
+            ..
+        } if payload.get("invocationId").and_then(serde_json::Value::as_str) == Some("old-invocation")
+    )));
+    client.shutdown();
+}
+
+#[test]
+fn given_handshake_event_buffer_overflow_when_more_than_256_events_arrive_then_close_without_flush()
+{
+    let mut frames = vec![Ok(ChatroomEvent::RoomSnapshot {
+        room_id: "room-1".into(),
+        latest_seq: 0,
+        payload: json!({"capabilities": []}),
+    })];
+    frames.extend((0..257).map(|index| {
+        Ok(ChatroomEvent::AgentDelta {
+            room_id: "room-1".into(),
+            payload: json!({
+                "invocationId": "inv-1",
+                "delta": index.to_string(),
+            }),
+        })
+    }));
+    frames.push(Ok(ChatroomEvent::RoomSnapshot {
+        room_id: "room-2".into(),
+        latest_seq: 0,
+        payload: json!({"capabilities": []}),
+    }));
+    let socket = FakeSocket::new(frames);
+    let connector = FakeConnector::new(vec![ConnectResult::Socket(socket.clone())]);
+    let (events, receiver) = mpsc::channel();
+    let client = ChatroomClient::new_with_backoff(
+        auth(
+            Arc::new(RefreshTransport {
+                calls: AtomicUsize::new(0),
+            }),
+            Arc::new(MemoryStorage::default()),
+        ),
+        "wss://edu.example/ws".into(),
+        connector,
+        events,
+        FakeBackoff::new(),
+    );
+    client.start();
+    client
+        .command(ChatroomCommand::Subscribe {
+            rooms: vec![
+                RoomCursor {
+                    room_id: "room-1".into(),
+                    after_seq: 0,
+                },
+                RoomCursor {
+                    room_id: "room-2".into(),
+                    after_seq: 0,
+                },
+            ],
+            device_id: "device-1".into(),
+            capabilities: None,
+        })
+        .unwrap();
+
+    let deadline = Instant::now() + Duration::from_millis(500);
+    while !socket.closed.load(Ordering::SeqCst) && Instant::now() < deadline {
+        thread::yield_now();
+    }
+    let closed_before_shutdown = socket.closed.load(Ordering::SeqCst);
+    let observed = receiver.try_iter().collect::<Vec<_>>();
+    client.shutdown();
+    assert!(
+        closed_before_shutdown,
+        "缓冲达到事件数量上限时必须关闭 socket"
+    );
+    assert!(!observed.iter().any(|event| matches!(
+        event,
+        ChatroomClientEvent::SocketEventAt {
+            event: ChatroomEvent::AgentDelta { .. },
+            ..
+        }
+    )));
+}
+
+#[test]
+fn given_handshake_raw_json_buffer_overflow_when_bytes_exceed_one_mib_then_close_without_flush() {
+    let large_delta = "x".repeat(64_000);
+    let mut frames = vec![Ok(ChatroomEvent::RoomSnapshot {
+        room_id: "room-1".into(),
+        latest_seq: 0,
+        payload: json!({"capabilities": []}),
+    })];
+    frames.extend((0..17).map(|_| {
+        Ok(ChatroomEvent::AgentDelta {
+            room_id: "room-1".into(),
+            payload: json!({
+                "invocationId": "inv-1",
+                "delta": large_delta.clone(),
+            }),
+        })
+    }));
+    frames.push(Ok(ChatroomEvent::RoomSnapshot {
+        room_id: "room-2".into(),
+        latest_seq: 0,
+        payload: json!({"capabilities": []}),
+    }));
+    let socket = FakeSocket::new(frames);
+    let connector = FakeConnector::new(vec![ConnectResult::Socket(socket.clone())]);
+    let (events, receiver) = mpsc::channel();
+    let client = ChatroomClient::new_with_backoff(
+        auth(
+            Arc::new(RefreshTransport {
+                calls: AtomicUsize::new(0),
+            }),
+            Arc::new(MemoryStorage::default()),
+        ),
+        "wss://edu.example/ws".into(),
+        connector,
+        events,
+        FakeBackoff::new(),
+    );
+    client.start();
+    client
+        .command(ChatroomCommand::Subscribe {
+            rooms: vec![
+                RoomCursor {
+                    room_id: "room-1".into(),
+                    after_seq: 0,
+                },
+                RoomCursor {
+                    room_id: "room-2".into(),
+                    after_seq: 0,
+                },
+            ],
+            device_id: "device-1".into(),
+            capabilities: None,
+        })
+        .unwrap();
+
+    let deadline = Instant::now() + Duration::from_millis(500);
+    while !socket.closed.load(Ordering::SeqCst) && Instant::now() < deadline {
+        thread::yield_now();
+    }
+    let closed_before_shutdown = socket.closed.load(Ordering::SeqCst);
+    let observed = receiver.try_iter().collect::<Vec<_>>();
+    client.shutdown();
+    assert!(closed_before_shutdown, "缓冲超过一 MiB 时必须关闭 socket");
+    assert!(!observed.iter().any(|event| matches!(
+        event,
+        ChatroomClientEvent::SocketEventAt {
+            event: ChatroomEvent::AgentDelta { .. },
+            ..
+        }
+    )));
+}
+
+#[test]
+fn given_legacy_multroom_snapshots_without_capabilities_when_delta_waits_then_release_after_all_snapshots(
+) {
+    let socket = FakeSocket::new(vec![
+        Ok(ChatroomEvent::RoomSnapshot {
+            room_id: "room-1".into(),
+            latest_seq: 0,
+            payload: json!({"messages": []}),
+        }),
+        Ok(ChatroomEvent::AgentDelta {
+            room_id: "room-1".into(),
+            payload: json!({"invocationId": "inv-1", "delta": "legacy"}),
+        }),
+        Ok(ChatroomEvent::RoomSnapshot {
+            room_id: "room-2".into(),
+            latest_seq: 0,
+            payload: json!({"messages": []}),
+        }),
+    ]);
+    let (last_snapshot_started, release_last_snapshot) = socket.gate_receive_call(3);
+    let connector = FakeConnector::new(vec![ConnectResult::Socket(socket)]);
+    let (events, receiver) = mpsc::channel();
+    let client = ChatroomClient::new(
+        auth(
+            Arc::new(RefreshTransport {
+                calls: AtomicUsize::new(0),
+            }),
+            Arc::new(MemoryStorage::default()),
+        ),
+        "wss://edu.example/ws".into(),
+        connector,
+        events,
+    );
+    client.start();
+    client
+        .command(ChatroomCommand::Subscribe {
+            rooms: vec![
+                RoomCursor {
+                    room_id: "room-1".into(),
+                    after_seq: 0,
+                },
+                RoomCursor {
+                    room_id: "room-2".into(),
+                    after_seq: 0,
+                },
+            ],
+            device_id: "device-1".into(),
+            capabilities: None,
+        })
+        .unwrap();
+
+    last_snapshot_started
+        .recv_timeout(Duration::from_secs(1))
+        .expect("应在 legacy 第二个初始 snapshot 前停住");
+    let before_selection = receiver.try_iter().collect::<Vec<_>>();
+    release_last_snapshot.send(()).unwrap();
+    assert!(!before_selection.iter().any(|event| matches!(
+        event,
+        ChatroomClientEvent::SocketEventAt {
+            event: ChatroomEvent::AgentDelta { .. },
+            ..
+        }
+    )));
+    let second_snapshot = receive_until(&receiver, |event| {
+        matches!(
+            event,
+            ChatroomClientEvent::SocketEventAt {
+                event: ChatroomEvent::RoomSnapshot { room_id, .. },
+                ..
+            } if room_id == "room-2"
+        )
+    });
+    let legacy_delta = receiver
+        .recv_timeout(Duration::from_secs(1))
+        .expect("legacy delta 应在所有初始 snapshot 后释放");
+    assert!(matches!(
+        second_snapshot,
+        ChatroomClientEvent::SocketEventAt { .. }
+    ));
+    assert!(matches!(
+        legacy_delta,
+        ChatroomClientEvent::SocketEventAt {
+            event: ChatroomEvent::AgentDelta { payload, .. },
+            ..
+        } if payload.get("delta").and_then(serde_json::Value::as_str) == Some("legacy")
+            && payload.get("frameId").is_none()
+    ));
+    assert!(client.selected_capabilities().1.is_empty());
+    client.shutdown();
+}
+
+#[test]
+fn given_legacy_initial_snapshot_without_capabilities_then_selected_set_is_empty_for_current_socket(
+) {
+    let socket = FakeSocket::new(vec![Ok(ChatroomEvent::RoomSnapshot {
+        room_id: "room-1".into(),
+        latest_seq: 0,
+        payload: json!({"messages": []}),
+    })]);
+    let connector = FakeConnector::new(vec![ConnectResult::Socket(socket)]);
+    let (events, receiver) = mpsc::channel();
+    let client = ChatroomClient::new(
+        auth(
+            Arc::new(RefreshTransport {
+                calls: AtomicUsize::new(0),
+            }),
+            Arc::new(MemoryStorage::default()),
+        ),
+        "wss://edu.example/ws".into(),
+        connector,
+        events,
+    );
+    client.start();
+    client
+        .command(ChatroomCommand::Subscribe {
+            rooms: vec![RoomCursor {
+                room_id: "room-1".into(),
+                after_seq: 0,
+            }],
+            device_id: "device-1".into(),
+            capabilities: Some(vec![
+                super::chatroom_protocol::ChatroomCapability::AgentReadyV1,
+            ]),
+        })
+        .unwrap();
+    receive_until(&receiver, |event| {
+        matches!(
+            event,
+            ChatroomClientEvent::SocketEventAt {
+                event: ChatroomEvent::RoomSnapshot { .. },
+                ..
+            }
+        )
+    });
+    let generation = client.active_socket_generation();
+    assert_ne!(generation, 0);
+    assert_eq!(client.selected_capabilities(), (generation, Vec::new()));
+    client.shutdown();
+}
+
+#[test]
+fn given_automatic_reconnect_when_socket_b_snapshot_arrives_then_old_snapshot_capabilities_are_not_retained(
+) {
+    let old_snapshot = ChatroomEvent::RoomSnapshot {
+        room_id: "room-1".into(),
+        latest_seq: 0,
+        payload: json!({"capabilities": ["agent-ready-v1"]}),
+    };
+    let late_old_snapshot = ChatroomEvent::RoomSnapshot {
+        room_id: "room-1".into(),
+        latest_seq: 1,
+        payload: json!({"capabilities": ["agent-ready-v1"]}),
+    };
+    let socket_a = FakeSocket::new(vec![
+        Ok(old_snapshot),
+        Err(ChatroomClientError::new("disconnected", "socket A closed")),
+        Ok(late_old_snapshot),
+    ]);
+    let socket_b = FakeSocket::new(vec![Ok(ChatroomEvent::RoomSnapshot {
+        room_id: "room-1".into(),
+        latest_seq: 0,
+        payload: json!({"capabilities": ["invocation-ack-v1"]}),
+    })]);
+    let connector = FakeConnector::new(vec![
+        ConnectResult::Socket(socket_a),
+        ConnectResult::Socket(socket_b),
+    ]);
+    let (events, receiver) = mpsc::channel();
+    let client = ChatroomClient::new_with_backoff(
+        auth(
+            Arc::new(RefreshTransport {
+                calls: AtomicUsize::new(0),
+            }),
+            Arc::new(MemoryStorage::default()),
+        ),
+        "wss://edu.example/ws".into(),
+        connector,
+        events,
+        FakeBackoff::new(),
+    );
+    client.start();
+    client
+        .command(ChatroomCommand::Subscribe {
+            rooms: vec![RoomCursor {
+                room_id: "room-1".into(),
+                after_seq: 0,
+            }],
+            device_id: "device-1".into(),
+            capabilities: Some(vec![
+                super::chatroom_protocol::ChatroomCapability::AgentReadyV1,
+                super::chatroom_protocol::ChatroomCapability::InvocationAckV1,
+            ]),
+        })
+        .unwrap();
+    receive_until(&receiver, |event| {
+        matches!(event, ChatroomClientEvent::ConnectedAt { .. })
+    });
+    let deadline = Instant::now() + Duration::from_secs(1);
+    while Instant::now() < deadline && client.active_socket_generation() != 2 {
+        thread::yield_now();
+    }
+    assert_eq!(client.active_socket_generation(), 2);
+    let deadline = Instant::now() + Duration::from_secs(1);
+    while Instant::now() < deadline && client.selected_capabilities().1.is_empty() {
+        thread::yield_now();
+    }
+    assert_eq!(
+        client.selected_capabilities(),
+        (
+            2,
+            vec![super::chatroom_protocol::ChatroomCapability::InvocationAckV1]
+        )
+    );
+    let socket_events = std::iter::from_fn(|| receiver.try_recv().ok())
+        .filter_map(|event| match event {
+            ChatroomClientEvent::SocketEventAt {
+                generation,
+                socket_generation,
+                event: ChatroomEvent::RoomSnapshot { latest_seq: 0, .. },
+            } => Some((generation, socket_generation)),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert!(socket_events.iter().any(|(_, socket)| *socket == 1));
+    assert!(socket_events.iter().any(|(_, socket)| *socket == 2));
+    assert!(socket_events
+        .iter()
+        .all(|(connection, _)| *connection == socket_events[0].0));
+    client.shutdown();
+}
+
+#[test]
+fn given_ack_waiter_times_out_while_drain_is_gated_then_release_does_not_send_lifecycle() {
+    let socket = FakeSocket::new(Vec::new());
+    let connector = FakeConnector::new(vec![ConnectResult::Socket(socket.clone())]);
+    let (events, receiver) = mpsc::channel();
+    let client = Arc::new(ChatroomClient::new(
+        auth(
+            Arc::new(RefreshTransport {
+                calls: AtomicUsize::new(0),
+            }),
+            Arc::new(MemoryStorage::default()),
+        ),
+        "wss://edu.example/ws".into(),
+        connector,
+        events,
+    ));
+    client.start();
+    client.command(subscribe()).unwrap();
+    receive_until(&receiver, |event| {
+        matches!(event, ChatroomClientEvent::ConnectedAt { .. })
+    });
+    let (loaded, release) = client.gate_connected_command_apply();
+    let waiter_client = client.clone();
+    let waiter = thread::spawn(move || {
+        waiter_client.request_and_confirm_with_timeout(
+            ChatroomCommand::Ready {
+                room_id: "room-1".into(),
+                request_id: "req-timeout-gate".into(),
+                room_agent_id: "agent-1".into(),
+            },
+            "room-1",
+            "req-timeout-gate",
+            "agent.ready",
+            None,
+            Duration::from_millis(30),
+        )
+    });
+    loaded.recv_timeout(Duration::from_secs(1)).unwrap();
+    assert!(matches!(
+        waiter.join().unwrap(),
+        Err(super::chatroom_ack::AckError::Timeout)
+    ));
+    let ordinary_sent = socket.observe_non_subscribe_send();
+    release.send(()).unwrap();
+    client
+        .command(ChatroomCommand::CursorAck {
+            room_id: "room-1".into(),
+            seq: 1,
+        })
+        .unwrap();
+    ordinary_sent.recv_timeout(Duration::from_secs(1)).unwrap();
+    assert!(!socket
+        .sent
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|command| matches!(command, ChatroomCommand::ConfirmedLifecycle { .. })));
+    client.shutdown();
+}
+
+#[test]
+fn given_socket_a_pauses_after_lifecycle_enqueue_then_same_id_on_socket_b_never_replays_a() {
+    let socket_a = FakeSocket::new(Vec::new());
+    let socket_b = FakeSocket::new(Vec::new());
+    let connector = FakeConnector::new(vec![
+        ConnectResult::Socket(socket_a.clone()),
+        ConnectResult::Socket(socket_b.clone()),
+    ]);
+    let (events, receiver) = mpsc::channel();
+    let client = Arc::new(ChatroomClient::new(
+        auth(
+            Arc::new(RefreshTransport {
+                calls: AtomicUsize::new(0),
+            }),
+            Arc::new(MemoryStorage::default()),
+        ),
+        "wss://edu.example/ws".into(),
+        connector,
+        events,
+    ));
+    client.start();
+    client.command(subscribe()).unwrap();
+    receive_until(&receiver, |event| {
+        matches!(event, ChatroomClientEvent::ConnectedAt { .. })
+    });
+    let (loaded, release) = client.gate_connected_command_apply();
+    let waiter_client = client.clone();
+    let waiter = thread::spawn(move || {
+        waiter_client.request_and_confirm_with_timeout(
+            ChatroomCommand::Ready {
+                room_id: "room-1".into(),
+                request_id: "reuse".into(),
+                room_agent_id: "agent-1".into(),
+            },
+            "room-1",
+            "reuse",
+            "agent.ready",
+            None,
+            Duration::from_secs(1),
+        )
+    });
+    loaded.recv_timeout(Duration::from_secs(1)).unwrap();
+    client.pause();
+    release.send(()).unwrap();
+    assert!(matches!(
+        waiter.join().unwrap(),
+        Err(super::chatroom_ack::AckError::Disconnected)
+    ));
+    receive_until(&receiver, |event| {
+        matches!(event, ChatroomClientEvent::Disconnected)
+    });
+    client.resume();
+    client.command(subscribe()).unwrap();
+    receive_until(&receiver, |event| {
+        matches!(event, ChatroomClientEvent::ConnectedAt { .. })
+    });
+    assert_eq!(
+        client.selected_capabilities().0,
+        client.active_socket_generation()
+    );
+    let confirmed = client
+        .request_and_confirm_with_timeout(
+            ChatroomCommand::Ready {
+                room_id: "room-1".into(),
+                request_id: "reuse".into(),
+                room_agent_id: "agent-1".into(),
+            },
+            "room-1",
+            "reuse",
+            "agent.ready",
+            None,
+            Duration::from_secs(1),
+        )
+        .unwrap();
+    assert_eq!(confirmed.generation, client.active_socket_generation());
+    assert!(!socket_a
+        .sent
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|command| matches!(command, ChatroomCommand::ConfirmedLifecycle { .. })));
+    assert_eq!(
+        socket_b
+            .sent
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|command| matches!(command, ChatroomCommand::ConfirmedLifecycle { .. }))
+            .count(),
+        1
+    );
+    client.shutdown();
+}
+
+#[test]
+fn given_socket_a_disconnects_before_drain_then_reconnect_b_never_sends_a_lifecycle_command() {
+    let socket_a = FakeSocket::new(Vec::new());
+    socket_a.reject_after_close.store(true, Ordering::SeqCst);
+    let socket_b = FakeSocket::new(Vec::new());
+    let connector = FakeConnector::new(vec![
+        ConnectResult::Socket(socket_a.clone()),
+        ConnectResult::Socket(socket_b.clone()),
+    ]);
+    let (events, receiver) = mpsc::channel();
+    let client = Arc::new(ChatroomClient::new_with_backoff(
+        auth(
+            Arc::new(RefreshTransport {
+                calls: AtomicUsize::new(0),
+            }),
+            Arc::new(MemoryStorage::default()),
+        ),
+        "wss://edu.example/ws".into(),
+        connector,
+        events,
+        FakeBackoff::new(),
+    ));
+    client.start();
+    client.command(subscribe()).unwrap();
+    receive_until(&receiver, |event| {
+        matches!(event, ChatroomClientEvent::ConnectedAt { .. })
+    });
+    let pause_epoch = client.pause_generation();
+    let (loaded, release) = client.gate_connected_command_apply();
+    let waiter_client = client.clone();
+    let waiter = thread::spawn(move || {
+        waiter_client.request_and_confirm_with_timeout(
+            ChatroomCommand::Ready {
+                room_id: "room-1".into(),
+                request_id: "offline-id".into(),
+                room_agent_id: "agent-1".into(),
+            },
+            "room-1",
+            "offline-id",
+            "agent.ready",
+            None,
+            Duration::from_secs(1),
+        )
+    });
+    loaded.recv_timeout(Duration::from_secs(1)).unwrap();
+    socket_a.close_during_test();
+    release.send(()).unwrap();
+    assert!(matches!(
+        waiter.join().unwrap(),
+        Err(super::chatroom_ack::AckError::Disconnected)
+    ));
+    receive_until(&receiver, |event| {
+        matches!(event, ChatroomClientEvent::ConnectedAt { .. })
+    });
+    assert_eq!(pause_epoch, client.pause_generation());
+    assert_eq!(client.active_socket_generation(), 2);
+    assert!(!socket_b
+        .sent
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|command| matches!(command, ChatroomCommand::ConfirmedLifecycle { .. })));
+    client.shutdown();
+}
+
+#[test]
+fn given_worker_receives_negative_ack_then_returns_rejection_and_mismatched_ack_fields_timeout() {
+    let socket = FakeSocket::new(Vec::new());
+    socket.ack_ok.store(false, Ordering::SeqCst);
+    let connector = FakeConnector::new(vec![ConnectResult::Socket(socket)]);
+    let (events, receiver) = mpsc::channel();
+    let client = ChatroomClient::new(
+        auth(
+            Arc::new(RefreshTransport {
+                calls: AtomicUsize::new(0),
+            }),
+            Arc::new(MemoryStorage::default()),
+        ),
+        "wss://edu.example/ws".into(),
+        connector,
+        events,
+    );
+    client.start();
+    client.command(subscribe()).unwrap();
+    receive_until(&receiver, |event| {
+        matches!(event, ChatroomClientEvent::ConnectedAt { .. })
+    });
+    assert!(matches!(client.request_and_confirm_with_timeout(
+        ChatroomCommand::Ready { room_id: "room-1".into(), request_id: "negative".into(), room_agent_id: "agent-1".into() },
+        "room-1", "negative", "agent.ready", None, Duration::from_millis(100),
+    ), Err(super::chatroom_ack::AckError::Rejected(code)) if code == "forbidden"));
+    client.shutdown();
+
+    for mismatch in ["room", "command", "invocation"] {
+        let socket = FakeSocket::new(Vec::new());
+        match mismatch {
+            "room" => *socket.ack_room_override.lock().unwrap() = Some("room-2".into()),
+            "command" => *socket.ack_command_override.lock().unwrap() = Some("agent.failed".into()),
+            _ => *socket.ack_invocation_override.lock().unwrap() = Some("inv-2".into()),
+        }
+        let connector = FakeConnector::new(vec![ConnectResult::Socket(socket)]);
+        let (events, receiver) = mpsc::channel();
+        let client = ChatroomClient::new(
+            auth(
+                Arc::new(RefreshTransport {
+                    calls: AtomicUsize::new(0),
+                }),
+                Arc::new(MemoryStorage::default()),
+            ),
+            "wss://edu.example/ws".into(),
+            connector,
+            events,
+        );
+        client.start();
+        client.command(subscribe()).unwrap();
+        receive_until(&receiver, |event| {
+            matches!(event, ChatroomClientEvent::ConnectedAt { .. })
+        });
+        let command = ChatroomCommand::AgentAccepted {
+            room_id: "room-1".into(),
+            invocation_id: "inv-1".into(),
+            agent_id: "agent-1".into(),
+            device_id: "device-1".into(),
+        };
+        assert!(matches!(
+            client.request_and_confirm_with_timeout(
+                command,
+                "room-1",
+                "mismatch",
+                "agent.accepted",
+                Some("inv-1"),
+                Duration::from_millis(25)
+            ),
+            Err(super::chatroom_ack::AckError::Timeout)
+        ));
+        assert_eq!(client.pending_ack_count(), 0);
+        client.shutdown();
+    }
+}
+
+#[test]
+fn given_multiple_pending_ack_waiters_when_socket_disconnects_then_all_return_disconnected() {
+    let (socket, started, release) = FakeSocket::gated_disconnect_with_start();
+    let connector = FakeConnector::new(vec![ConnectResult::Socket(socket)]);
+    let (events, receiver) = mpsc::channel();
+    let client = Arc::new(ChatroomClient::new_with_backoff(
+        auth(
+            Arc::new(RefreshTransport {
+                calls: AtomicUsize::new(0),
+            }),
+            Arc::new(MemoryStorage::default()),
+        ),
+        "wss://edu.example/ws".into(),
+        connector,
+        events,
+        FakeBackoff::new(),
+    ));
+    client.start();
+    client.command(subscribe()).unwrap();
+    receive_until(&receiver, |event| {
+        matches!(event, ChatroomClientEvent::ConnectedAt { .. })
+    });
+    started.recv_timeout(Duration::from_secs(1)).unwrap();
+    let requests = ["waiter-1", "waiter-2"].map(|request_id| {
+        let client = client.clone();
+        thread::spawn(move || {
+            client.request_and_confirm_with_timeout(
+                ChatroomCommand::Ready {
+                    room_id: "room-1".into(),
+                    request_id: request_id.into(),
+                    room_agent_id: "agent-1".into(),
+                },
+                "room-1",
+                request_id,
+                "agent.ready",
+                None,
+                Duration::from_secs(1),
+            )
+        })
+    });
+    let deadline = Instant::now() + Duration::from_secs(1);
+    while Instant::now() < deadline && client.pending_ack_count() != 2 {
+        thread::yield_now();
+    }
+    assert_eq!(client.pending_ack_count(), 2);
+    release.send(()).unwrap();
+    for request in requests {
+        assert!(matches!(
+            request.join().unwrap(),
+            Err(super::chatroom_ack::AckError::Disconnected)
+        ));
+    }
+    assert_eq!(client.pending_ack_count(), 0);
     client.shutdown();
 }
