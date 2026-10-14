@@ -11,7 +11,9 @@ use super::chatroom_protocol::{
     reply_digest, ChatroomCapability, ChatroomCommand, ChatroomEvent, ChatroomProtocolOptions,
     ChatroomReplyDigestInput, CosAction, PrivateCommandAck,
 };
-use super::edu_api_client::{EduApiClient, EduApiError, EduApiRequest, EduApiResponse};
+use super::edu_api_client::{
+    EduApiClient, EduApiError, EduApiRequest, EduApiResponse, EduApiTransport,
+};
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs;
@@ -118,6 +120,7 @@ struct FakeTransport {
     request_errors: Mutex<Vec<String>>,
     request_gate: Mutex<Option<(mpsc::Sender<()>, mpsc::Receiver<()>)>>,
     room_check_status: Mutex<HashMap<String, u16>>,
+    room_check_bodies: Mutex<HashMap<String, Vec<u8>>>,
     room_check_gate: Mutex<Option<(mpsc::Sender<()>, mpsc::Receiver<()>)>>,
     capability_request_count: AtomicUsize,
     capability_gates: Mutex<HashMap<usize, (mpsc::Sender<()>, mpsc::Receiver<()>)>>,
@@ -141,6 +144,13 @@ impl FakeTransport {
             .lock()
             .unwrap()
             .insert(room_id.into(), status);
+    }
+
+    fn set_room_check_body(&self, room_id: &str, body: Value) {
+        self.room_check_bodies
+            .lock()
+            .unwrap()
+            .insert(room_id.into(), body.to_string().into_bytes());
     }
 
     fn gate_next_room_check(&self) -> (mpsc::Receiver<()>, mpsc::Sender<()>) {
@@ -205,7 +215,12 @@ impl GatewayTransport for FakeTransport {
                 return Ok(GatewayTransportResponse {
                     status,
                     body: if status == 200 {
-                        json!({"data":{"room":{"roomId":room_id,"status":"active"},"members":[],"agents":[]}}).to_string().into_bytes()
+                        self.room_check_bodies
+                            .lock()
+                            .unwrap()
+                            .get(room_id)
+                            .cloned()
+                            .unwrap_or_else(|| json!({"data":{"room":{"roomId":room_id,"status":"active"},"members":[],"agents":[]}}).to_string().into_bytes())
                     } else {
                         json!({"error":{"code":"not_found"}})
                             .to_string()
@@ -2914,6 +2929,554 @@ fn given_missing_room_when_sse_subscribes_then_report_it_without_poisoning_valid
 }
 
 #[test]
+fn given_cached_offline_snapshot_when_sse_precheck_returns_fresh_online_detail_then_send_fresh_agent_projection(
+) {
+    let transport = Arc::new(FakeTransport::default());
+    transport.set_room_check_body(
+        "room-1",
+        json!({
+            "data": {
+                "room": {"roomId": "room-1", "status": "active"},
+                "members": [],
+                "agents": [{
+                    "roomAgentId": "agent-1",
+                    "displayName": "Grok",
+                    "status": "online",
+                    "availability": "online",
+                    "memoryShared": true,
+                    "skillsShared": false,
+                    "localPath": "/Users/secret/project"
+                }]
+            }
+        }),
+    );
+    let gateway = gateway(transport, Arc::new(FakeBridge::default()));
+    gateway.publish_event_for_test(ChatroomEvent::RoomSnapshot {
+        room_id: "room-1".into(),
+        latest_seq: 8,
+        payload: json!({
+            "room": {"roomId": "room-1", "status": "active"},
+            "members": [],
+            "agents": [{
+                "roomAgentId": "agent-1",
+                "displayName": "Grok",
+                "status": "offline",
+                "availability": "offline"
+            }]
+        }),
+    });
+
+    let subscription = gateway.subscribe_sse(vec!["room-1".into()]).unwrap();
+    let snapshot = subscription
+        .receiver
+        .recv_timeout(Duration::from_millis(100))
+        .unwrap();
+    assert_eq!(snapshot["type"], "room.snapshot");
+    assert_eq!(snapshot["latestSeq"], 8);
+    assert_eq!(snapshot["payload"]["agents"][0]["status"], "online");
+    assert_eq!(snapshot["payload"]["agents"][0]["availability"], "online");
+    assert_eq!(snapshot["payload"]["agents"][0]["memoryShared"], true);
+    assert!(snapshot["payload"]["agents"][0].get("localPath").is_none());
+}
+
+#[test]
+fn given_fresh_room_projection_when_agent_states_are_not_ready_then_preserve_authoritative_availability(
+) {
+    let transport = Arc::new(FakeTransport::default());
+    transport.set_room_check_body(
+        "room-1",
+        json!({
+            "data": {
+                "room": {"roomId": "room-1", "status": "active"},
+                "members": [],
+                "agents": [
+                    {"roomAgentId":"agent-preparing","status":"online","availability":"preparing"},
+                    {"roomAgentId":"agent-config","status":"offline","availability":"configuration_error"},
+                    {"roomAgentId":"agent-disabled","status":"disabled","availability":"disabled"},
+                    {"roomAgentId":"agent-offline","status":"offline","availability":"offline"}
+                ]
+            }
+        }),
+    );
+    let gateway = gateway(transport, Arc::new(FakeBridge::default()));
+    gateway.publish_event_for_test(ChatroomEvent::RoomSnapshot {
+        room_id: "room-1".into(),
+        latest_seq: 8,
+        payload: json!({"room":{"roomId":"room-1"},"members":[],"agents":[]}),
+    });
+
+    let subscription = gateway.subscribe_sse(vec!["room-1".into()]).unwrap();
+    let snapshot = subscription
+        .receiver
+        .recv_timeout(Duration::from_millis(100))
+        .unwrap();
+    let agents = snapshot["payload"]["agents"].as_array().unwrap();
+    assert_eq!(agents[0]["availability"], "preparing");
+    assert_eq!(agents[1]["availability"], "configuration_error");
+    assert_eq!(agents[2]["status"], "disabled");
+    assert_eq!(agents[3]["status"], "offline");
+}
+
+#[test]
+fn given_fresh_offline_detail_when_cache_is_online_then_sse_does_not_replay_stale_online_state() {
+    let transport = Arc::new(FakeTransport::default());
+    transport.set_room_check_body(
+        "room-1",
+        json!({"data":{"room":{"roomId":"room-1","status":"active"},"members":[],"agents":[{"roomAgentId":"agent-1","status":"offline","availability":"offline"}]}}),
+    );
+    let gateway = gateway(transport, Arc::new(FakeBridge::default()));
+    gateway.publish_event_for_test(ChatroomEvent::RoomSnapshot {
+        room_id: "room-1".into(),
+        latest_seq: 8,
+        payload: json!({"room":{"roomId":"room-1"},"members":[],"agents":[{"roomAgentId":"agent-1","status":"online","availability":"online"}]}),
+    });
+
+    let subscription = gateway.subscribe_sse(vec!["room-1".into()]).unwrap();
+    let snapshot = subscription
+        .receiver
+        .recv_timeout(Duration::from_millis(100))
+        .unwrap();
+    assert_eq!(snapshot["payload"]["agents"][0]["status"], "offline");
+    assert_eq!(snapshot["payload"]["agents"][0]["availability"], "offline");
+}
+
+#[test]
+fn given_unrelated_member_presence_during_room_detail_check_then_keep_fresh_agent_projection() {
+    let transport = Arc::new(FakeTransport::default());
+    transport.set_room_check_body(
+        "room-1",
+        json!({"data":{"room":{"roomId":"room-1","status":"active"},"members":[],"agents":[{"roomAgentId":"agent-1","status":"online","availability":"online"}]}}),
+    );
+    let (check_started, release_check) = transport.gate_next_room_check();
+    let gateway = gateway(transport, Arc::new(FakeBridge::default()));
+    gateway.publish_event_for_test(ChatroomEvent::RoomSnapshot {
+        room_id: "room-1".into(),
+        latest_seq: 8,
+        payload: json!({"room":{"roomId":"room-1"},"members":[],"agents":[{"roomAgentId":"agent-1","status":"offline","availability":"offline"}]}),
+    });
+
+    let subscribing_gateway = gateway.clone();
+    let subscribing =
+        thread::spawn(move || subscribing_gateway.subscribe_sse(vec!["room-1".into()]));
+    check_started.recv_timeout(Duration::from_secs(1)).unwrap();
+    gateway.publish_event_for_test(ChatroomEvent::MemberPresenceChanged {
+        room_id: "room-1".into(),
+        payload: json!({"userId":"member-1","status":"online","online":true}),
+    });
+    release_check.send(()).unwrap();
+
+    let subscription = subscribing.join().unwrap().unwrap();
+    let snapshot = subscription
+        .receiver
+        .recv_timeout(Duration::from_millis(100))
+        .unwrap();
+    assert_eq!(snapshot["payload"]["agents"][0]["status"], "online");
+    assert_eq!(snapshot["payload"]["agents"][0]["availability"], "online");
+}
+
+#[test]
+fn given_plain_online_presence_for_modern_nonready_agent_then_do_not_upgrade_readiness() {
+    let transport = Arc::new(FakeTransport::default());
+    transport.set_room_check_body(
+        "room-1",
+        json!({"data":{"room":{"roomId":"room-1","status":"active"},"members":[],"agents":[{"roomAgentId":"agent-1","status":"online","availability":"online"}]}}),
+    );
+    let (check_started, release_check) = transport.gate_next_room_check();
+    let gateway = gateway(transport, Arc::new(FakeBridge::default()));
+    gateway.publish_event_for_test(ChatroomEvent::RoomSnapshot {
+        room_id: "room-1".into(),
+        latest_seq: 8,
+        payload: json!({"room":{"roomId":"room-1"},"members":[],"agents":[{"roomAgentId":"agent-1","status":"offline","availability":"preparing"}]}),
+    });
+
+    let subscribing_gateway = gateway.clone();
+    let subscribing =
+        thread::spawn(move || subscribing_gateway.subscribe_sse(vec!["room-1".into()]));
+    check_started.recv_timeout(Duration::from_secs(1)).unwrap();
+    gateway.publish_event_for_test(ChatroomEvent::AgentPresenceChanged {
+        room_id: "room-1".into(),
+        payload: json!({"roomAgentId":"agent-1","status":"online","online":true}),
+    });
+    release_check.send(()).unwrap();
+
+    let subscription = subscribing.join().unwrap().unwrap();
+    let snapshot = subscription
+        .receiver
+        .recv_timeout(Duration::from_millis(100))
+        .unwrap();
+    assert_eq!(snapshot["payload"]["agents"][0]["status"], "offline");
+    assert_eq!(
+        snapshot["payload"]["agents"][0]["availability"],
+        "preparing"
+    );
+}
+
+fn snapshot_after_inflight_agent_presence(cached: &str, ws_status: &str) -> Value {
+    let transport = Arc::new(FakeTransport::default());
+    transport.set_room_check_body(
+        "room-1",
+        json!({"data":{"room":{"roomId":"room-1","status":"active"},"members":[],"agents":[{"roomAgentId":"agent-1","status":cached,"availability":cached}]}}),
+    );
+    let (check_started, release_check) = transport.gate_next_room_check();
+    let gateway = gateway(transport, Arc::new(FakeBridge::default()));
+    gateway.publish_event_for_test(ChatroomEvent::RoomSnapshot {
+        room_id: "room-1".into(),
+        latest_seq: 8,
+        payload: json!({"room":{"roomId":"room-1"},"members":[],"agents":[{"roomAgentId":"agent-1","status":cached,"availability":cached}]}),
+    });
+
+    let subscribing_gateway = gateway.clone();
+    let subscribing =
+        thread::spawn(move || subscribing_gateway.subscribe_sse(vec!["room-1".into()]));
+    check_started.recv_timeout(Duration::from_secs(1)).unwrap();
+    gateway.publish_event_for_test(ChatroomEvent::AgentPresenceChanged {
+        room_id: "room-1".into(),
+        payload: json!({"roomAgentId":"agent-1","status":ws_status,"online":ws_status == "online"}),
+    });
+    release_check.send(()).unwrap();
+
+    let subscription = subscribing.join().unwrap().unwrap();
+    subscription
+        .receiver
+        .recv_timeout(Duration::from_millis(100))
+        .unwrap()
+}
+
+#[test]
+fn given_cached_and_http_online_then_newer_ws_offline_then_emit_offline_initial_snapshot() {
+    let snapshot = snapshot_after_inflight_agent_presence("online", "offline");
+    assert_eq!(snapshot["latestSeq"], 8);
+    assert_eq!(snapshot["payload"]["agents"][0]["status"], "offline");
+    assert_eq!(snapshot["payload"]["agents"][0]["availability"], "offline");
+}
+
+#[test]
+fn given_cached_and_http_offline_then_newer_ws_online_then_emit_online_initial_snapshot() {
+    let snapshot = snapshot_after_inflight_agent_presence("offline", "online");
+    assert_eq!(snapshot["latestSeq"], 8);
+    assert_eq!(snapshot["payload"]["agents"][0]["status"], "online");
+    assert_eq!(snapshot["payload"]["agents"][0]["availability"], "online");
+}
+
+fn snapshot_after_inflight_persistent_agent_event(
+    cached_status: &str,
+    http_status: &str,
+    event: ChatroomEvent,
+) -> Value {
+    let transport = Arc::new(FakeTransport::default());
+    transport.set_room_check_body(
+        "room-1",
+        json!({"data":{"room":{"roomId":"room-1","status":"active"},"members":[],"agents":[{"roomAgentId":"agent-1","displayName":"HTTP","status":http_status,"availability":http_status}]}}),
+    );
+    let (check_started, release_check) = transport.gate_next_room_check();
+    let gateway = gateway(transport, Arc::new(FakeBridge::default()));
+    gateway.publish_event_for_test(ChatroomEvent::RoomSnapshot {
+        room_id: "room-1".into(),
+        latest_seq: 8,
+        payload: json!({"room":{"roomId":"room-1"},"members":[],"agents":[{"roomAgentId":"agent-1","displayName":"Cached","status":cached_status,"availability":cached_status}]}),
+    });
+    gateway.set_room_cursor_for_test("room-1", 8);
+
+    let subscribing_gateway = gateway.clone();
+    let subscribing =
+        thread::spawn(move || subscribing_gateway.subscribe_sse(vec!["room-1".into()]));
+    check_started.recv_timeout(Duration::from_secs(1)).unwrap();
+    gateway.publish_event_for_test(event);
+    release_check.send(()).unwrap();
+
+    let subscription = subscribing.join().unwrap().unwrap();
+    subscription
+        .receiver
+        .recv_timeout(Duration::from_millis(100))
+        .unwrap()
+}
+
+#[test]
+fn given_http_online_then_contiguous_agent_offline_commits_during_detail_check_then_emit_offline_snapshot(
+) {
+    let snapshot = snapshot_after_inflight_persistent_agent_event(
+        "online",
+        "online",
+        ChatroomEvent::AgentOffline {
+            room_id: "room-1".into(),
+            seq: 9,
+            payload: json!({"roomAgentId":"agent-1","reason":"client_release"}),
+        },
+    );
+    assert_eq!(snapshot["latestSeq"], 8);
+    assert_eq!(snapshot["payload"]["agents"][0]["status"], "offline");
+    assert_eq!(snapshot["payload"]["agents"][0]["availability"], "offline");
+}
+
+#[test]
+fn given_http_offline_then_contiguous_agent_updated_online_commits_during_detail_check_then_keep_updated_projection(
+) {
+    let snapshot = snapshot_after_inflight_persistent_agent_event(
+        "offline",
+        "offline",
+        ChatroomEvent::AgentUpdated {
+            room_id: "room-1".into(),
+            seq: 9,
+            payload: json!({"roomAgentId":"agent-1","displayName":"Updated","status":"online","availability":"online"}),
+        },
+    );
+    assert_eq!(snapshot["latestSeq"], 8);
+    assert_eq!(snapshot["payload"]["agents"][0]["status"], "online");
+    assert_eq!(snapshot["payload"]["agents"][0]["displayName"], "Updated");
+}
+
+#[test]
+fn given_new_agent_updated_commits_during_detail_check_then_include_sanitized_agent_in_initial_snapshot(
+) {
+    let transport = Arc::new(FakeTransport::default());
+    transport.set_room_check_body(
+        "room-1",
+        json!({"data":{"room":{"roomId":"room-1","status":"active"},"members":[],"agents":[{"roomAgentId":"agent-existing","displayName":"Existing","status":"online","availability":"online"}]}}),
+    );
+    let (check_started, release_check) = transport.gate_next_room_check();
+    let gateway = gateway(transport, Arc::new(FakeBridge::default()));
+    gateway.publish_event_for_test(ChatroomEvent::RoomSnapshot {
+        room_id: "room-1".into(),
+        latest_seq: 8,
+        payload: json!({"room":{"roomId":"room-1"},"members":[],"agents":[{"roomAgentId":"agent-existing","displayName":"Existing","status":"online","availability":"online"}]}),
+    });
+    gateway.set_room_cursor_for_test("room-1", 8);
+
+    let subscribing_gateway = gateway.clone();
+    let subscribing =
+        thread::spawn(move || subscribing_gateway.subscribe_sse(vec!["room-1".into()]));
+    check_started.recv_timeout(Duration::from_secs(1)).unwrap();
+    gateway.publish_event_for_test(ChatroomEvent::AgentUpdated {
+        room_id: "room-1".into(),
+        seq: 9,
+        payload: json!({"roomAgentId":"agent-new","displayName":"New Agent","status":"online","availability":"online","localPath":"/private/agent","secret":"hidden"}),
+    });
+    release_check.send(()).unwrap();
+
+    let subscription = subscribing.join().unwrap().unwrap();
+    let snapshot = subscription
+        .receiver
+        .recv_timeout(Duration::from_millis(100))
+        .unwrap();
+    let agents = snapshot["payload"]["agents"].as_array().unwrap();
+    assert_eq!(agents.len(), 2);
+    let added = agents
+        .iter()
+        .find(|agent| agent["roomAgentId"] == "agent-new")
+        .unwrap();
+    assert_eq!(added["displayName"], "New Agent");
+    assert_eq!(added["status"], "online");
+    assert!(added.get("localPath").is_none());
+    assert!(added.get("secret").is_none());
+}
+
+#[test]
+fn given_agent_updated_removed_true_commits_during_detail_check_then_remove_only_that_agent() {
+    let transport = Arc::new(FakeTransport::default());
+    let detail = json!({"data":{"room":{"roomId":"room-1","status":"active"},"members":[],"agents":[{"roomAgentId":"agent-a","status":"online"},{"roomAgentId":"agent-b","status":"online"}]}});
+    transport.set_room_check_body("room-1", detail);
+    let (check_started, release_check) = transport.gate_next_room_check();
+    let gateway = gateway(transport, Arc::new(FakeBridge::default()));
+    gateway.publish_event_for_test(ChatroomEvent::RoomSnapshot {
+        room_id: "room-1".into(),
+        latest_seq: 8,
+        payload: json!({"room":{"roomId":"room-1"},"members":[],"agents":[{"roomAgentId":"agent-a","status":"online"},{"roomAgentId":"agent-b","status":"online"}]}),
+    });
+    gateway.set_room_cursor_for_test("room-1", 8);
+
+    let subscribing_gateway = gateway.clone();
+    let subscribing =
+        thread::spawn(move || subscribing_gateway.subscribe_sse(vec!["room-1".into()]));
+    check_started.recv_timeout(Duration::from_secs(1)).unwrap();
+    gateway.publish_event_for_test(ChatroomEvent::AgentUpdated {
+        room_id: "room-1".into(),
+        seq: 9,
+        payload: json!({"roomAgentId":"agent-a","removed":true}),
+    });
+    release_check.send(()).unwrap();
+
+    let subscription = subscribing.join().unwrap().unwrap();
+    let snapshot = subscription
+        .receiver
+        .recv_timeout(Duration::from_millis(100))
+        .unwrap();
+    let agents = snapshot["payload"]["agents"].as_array().unwrap();
+    assert_eq!(agents.len(), 1);
+    assert_eq!(agents[0]["roomAgentId"], "agent-b");
+}
+
+#[test]
+fn given_contiguous_agent_busy_or_disabled_event_then_emit_its_authoritative_projection() {
+    let cases = [
+        (
+            ChatroomEvent::AgentBusy {
+                room_id: "room-1".into(),
+                seq: 9,
+                payload: json!({"roomAgentId":"agent-1","reason":"agent_busy"}),
+            },
+            "busy",
+        ),
+        (
+            ChatroomEvent::AgentDisabled {
+                room_id: "room-1".into(),
+                seq: 9,
+                payload: json!({"roomAgentId":"agent-1","reason":"agent_disabled"}),
+            },
+            "disabled",
+        ),
+    ];
+    for (event, expected) in cases {
+        let snapshot = snapshot_after_inflight_persistent_agent_event("online", "online", event);
+        assert_eq!(snapshot["payload"]["agents"][0]["status"], expected);
+        assert_eq!(snapshot["payload"]["agents"][0]["availability"], expected);
+    }
+}
+
+#[test]
+fn given_offline_event_for_unknown_agent_during_detail_check_then_do_not_create_agent() {
+    let snapshot = snapshot_after_inflight_persistent_agent_event(
+        "online",
+        "online",
+        ChatroomEvent::AgentOffline {
+            room_id: "room-1".into(),
+            seq: 9,
+            payload: json!({"roomAgentId":"unknown-agent","reason":"client_release"}),
+        },
+    );
+    let agents = snapshot["payload"]["agents"].as_array().unwrap();
+    assert_eq!(agents.len(), 1);
+    assert_eq!(agents[0]["roomAgentId"], "agent-1");
+}
+
+#[test]
+fn given_persistent_agent_updated_plain_online_for_preparing_agent_then_preserve_not_ready_state() {
+    let transport = Arc::new(FakeTransport::default());
+    transport.set_room_check_body(
+        "room-1",
+        json!({"data":{"room":{"roomId":"room-1","status":"active"},"members":[],"agents":[{"roomAgentId":"agent-1","status":"online","availability":"preparing"}]}}),
+    );
+    let (check_started, release_check) = transport.gate_next_room_check();
+    let gateway = gateway(transport, Arc::new(FakeBridge::default()));
+    gateway.publish_event_for_test(ChatroomEvent::RoomSnapshot {
+        room_id: "room-1".into(),
+        latest_seq: 8,
+        payload: json!({"room":{"roomId":"room-1"},"members":[],"agents":[{"roomAgentId":"agent-1","displayName":"Cached","status":"offline","availability":"preparing"}]}),
+    });
+    gateway.set_room_cursor_for_test("room-1", 8);
+
+    let subscribing_gateway = gateway.clone();
+    let subscribing =
+        thread::spawn(move || subscribing_gateway.subscribe_sse(vec!["room-1".into()]));
+    check_started.recv_timeout(Duration::from_secs(1)).unwrap();
+    gateway.publish_event_for_test(ChatroomEvent::AgentUpdated {
+        room_id: "room-1".into(),
+        seq: 9,
+        payload: json!({"roomAgentId":"agent-1","displayName":"Updated","status":"online"}),
+    });
+    release_check.send(()).unwrap();
+
+    let subscription = subscribing.join().unwrap().unwrap();
+    let snapshot = subscription
+        .receiver
+        .recv_timeout(Duration::from_millis(100))
+        .unwrap();
+    assert_eq!(snapshot["payload"]["agents"][0]["status"], "offline");
+    assert_eq!(
+        snapshot["payload"]["agents"][0]["availability"],
+        "preparing"
+    );
+    assert_eq!(snapshot["payload"]["agents"][0]["displayName"], "Updated");
+}
+
+#[test]
+fn given_out_of_order_agent_offline_event_is_buffered_then_do_not_change_current_projection() {
+    let transport = Arc::new(FakeTransport::default());
+    let gateway = gateway(transport, Arc::new(FakeBridge::default()));
+    gateway.publish_event_for_test(ChatroomEvent::RoomSnapshot {
+        room_id: "room-1".into(),
+        latest_seq: 8,
+        payload: json!({"room":{"roomId":"room-1"},"members":[],"agents":[{"roomAgentId":"agent-1","status":"online","availability":"online"}]}),
+    });
+    gateway.set_room_cursor_for_test("room-1", 8);
+
+    gateway.publish_event_for_test(ChatroomEvent::AgentOffline {
+        room_id: "room-1".into(),
+        seq: 10,
+        payload: json!({"roomAgentId":"agent-1","reason":"client_release"}),
+    });
+
+    let snapshot = gateway.room_snapshot_for_test("room-1").unwrap();
+    assert_eq!(
+        super::chatroom_protocol::public_event(&snapshot)["payload"]["agents"][0]["status"],
+        "online"
+    );
+    assert_eq!(gateway.room_cursor_for_test("room-1"), Some(8));
+    assert_eq!(gateway.buffered_count_for_test("room-1"), 1);
+}
+
+#[test]
+fn given_new_ws_snapshot_during_room_detail_request_then_keep_its_cursor_and_agent_projection() {
+    let transport = Arc::new(FakeTransport::default());
+    transport.set_room_check_body(
+        "room-1",
+        json!({"data":{"room":{"roomId":"room-1","status":"active"},"members":[],"agents":[{"roomAgentId":"agent-1","status":"online","availability":"online"}]}}),
+    );
+    let (check_started, release_check) = transport.gate_next_room_check();
+    let gateway = gateway(transport, Arc::new(FakeBridge::default()));
+    gateway.publish_event_for_test(ChatroomEvent::RoomSnapshot {
+        room_id: "room-1".into(),
+        latest_seq: 8,
+        payload: json!({"room":{"roomId":"room-1"},"members":[],"agents":[{"roomAgentId":"agent-1","status":"offline","availability":"offline"}]}),
+    });
+
+    let subscribing_gateway = gateway.clone();
+    let subscribing =
+        thread::spawn(move || subscribing_gateway.subscribe_sse(vec!["room-1".into()]));
+    check_started.recv_timeout(Duration::from_secs(1)).unwrap();
+    gateway.publish_event_for_test(ChatroomEvent::RoomSnapshot {
+        room_id: "room-1".into(),
+        latest_seq: 9,
+        payload: json!({"room":{"roomId":"room-1"},"members":[],"agents":[{"roomAgentId":"agent-1","status":"offline","availability":"offline"}]}),
+    });
+    release_check.send(()).unwrap();
+
+    let subscription = subscribing.join().unwrap().unwrap();
+    let snapshot = subscription
+        .receiver
+        .recv_timeout(Duration::from_millis(100))
+        .unwrap();
+    assert_eq!(snapshot["latestSeq"], 9);
+    assert_eq!(snapshot["payload"]["agents"][0]["status"], "offline");
+}
+
+#[test]
+fn given_auth_epoch_changes_during_room_detail_check_then_reject_subscription_without_injecting_snapshot(
+) {
+    let transport = Arc::new(FakeTransport::default());
+    transport.set_room_check_body(
+        "room-1",
+        json!({"data":{"room":{"roomId":"room-1","status":"active"},"members":[],"agents":[{"roomAgentId":"agent-1","status":"online","availability":"online"}]}}),
+    );
+    let (check_started, release_check) = transport.gate_next_room_check();
+    let gateway = gateway(transport, Arc::new(FakeBridge::default()));
+    gateway.publish_event_for_test(ChatroomEvent::RoomSnapshot {
+        room_id: "room-1".into(),
+        latest_seq: 8,
+        payload: json!({"room":{"roomId":"room-1"},"members":[],"agents":[{"roomAgentId":"agent-1","status":"offline","availability":"offline"}]}),
+    });
+
+    let subscribing_gateway = gateway.clone();
+    let subscribing =
+        thread::spawn(move || subscribing_gateway.subscribe_sse(vec!["room-1".into()]));
+    check_started.recv_timeout(Duration::from_secs(1)).unwrap();
+    gateway.shutdown_connection();
+    release_check.send(()).unwrap();
+
+    assert!(matches!(subscribing.join().unwrap(), Err(error) if error.status == 401));
+    assert_eq!(gateway.subscriber_count_for_test(), 0);
+}
+
+#[test]
 fn given_valid_and_missing_rooms_when_sse_subscribes_then_keep_valid_room_live() {
     let transport = Arc::new(FakeTransport::default());
     transport.set_room_check_status("missing-room", 404);
@@ -3837,6 +4400,64 @@ fn given_trusted_socket_invocation_when_forwarded_then_main_envelope_keeps_ingre
     assert_eq!(envelope["gatewayOrigin"]["clientGeneration"], 31);
     assert_eq!(envelope["gatewayOrigin"]["socketGeneration"], 41);
     assert_eq!(envelope["gatewayOrigin"]["authEpoch"], 0);
+    gateway.shutdown();
+}
+
+#[test]
+fn given_first_client_generation_zero_invocation_when_main_binds_owner_then_native_accepts_exact_origin(
+) {
+    let bridge = Arc::new(FakeBridge::default());
+    let gateway = gateway(Arc::new(FakeTransport::default()), bridge.clone());
+    let workers = Arc::new(super::pi_rpc::PiWorkerManager::new());
+    gateway.attach_execution_runtime(workers.chatroom_execution_registry(), Arc::clone(&workers));
+    gateway.set_current_socket_generations_for_test(0, 1);
+    gateway.set_room_cursor_for_test("room-1", 0);
+    gateway.publish_event_for_test(ChatroomEvent::RoomSnapshot {
+        room_id: "room-1".into(),
+        latest_seq: 0,
+        payload: serde_json::json!({"capabilities":["agent-ready-v1"]}),
+    });
+    gateway.start_task_pool_for_test();
+    gateway.handle_socket_event_for_test(0, 1, ChatroomEvent::AgentInvocation {
+        room_id: "room-1".into(),
+        payload: serde_json::json!({
+            "invocationId":"first-origin-inv", "traceId":"first-origin-trace", "targetAgentId":"agent-a",
+            "triggerMessageId":"first-origin-msg", "depth":0,
+            "sender":{"type":"user","id":"host","displayName":"用户"},
+            "messages":[{"messageId":"first-origin-msg","sender":{"type":"user","id":"host","displayName":"用户"},"text":"hello","createdAt":1}],
+            "receivedAt":2
+        }),
+    });
+    let deadline = Instant::now() + Duration::from_secs(1);
+    while bridge.invocations.lock().unwrap().is_empty() && Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(2));
+    }
+    let envelope: Value = serde_json::from_slice(&bridge.invocations.lock().unwrap()[0]).unwrap();
+    assert_eq!(envelope["gatewayOrigin"]["clientGeneration"], 0);
+    assert_eq!(envelope["gatewayOrigin"]["socketGeneration"], 1);
+
+    let bind_body = serde_json::json!({
+        "roomId":"room-1", "invocationId":"first-origin-inv", "targetAgentId":"agent-a",
+        "sessionId":"first-origin-session", "workerRunId":"first-origin-run",
+        "origin":{"clientGeneration":0,"socketGeneration":1,"authEpoch":0}
+    })
+    .to_string();
+    let response = gateway
+        .handle_http(
+            "POST",
+            "/api/internal/chatrooms/execution-bindings/bind",
+            &HashMap::new(),
+            bind_body.as_bytes(),
+        )
+        .unwrap();
+    assert!(matches!(
+        response,
+        GatewayHttpResponse::Json { status: 200, .. }
+    ));
+    assert!(workers
+        .chatroom_execution_registry()
+        .binding("room-1", "first-origin-inv")
+        .is_some());
     gateway.shutdown();
 }
 
@@ -6217,6 +6838,127 @@ fn given_internal_room_status_when_snapshot_is_missing_then_report_trusted_capab
 }
 
 #[test]
+fn given_go_snapshot_history_and_recovery_events_when_gateway_processes_them_then_room_status_and_sse_remain_responsive(
+) {
+    let gateway = gateway(
+        Arc::new(FakeTransport::default()),
+        Arc::new(FakeBridge::default()),
+    );
+    let subscription = gateway.subscribe_sse(vec!["room-1".into()]).unwrap();
+    let client_generation = gateway.pause_generation_for_test();
+    let socket_generation = 41;
+    gateway.set_current_socket_generations_for_test(client_generation, socket_generation);
+    gateway.handle_client_event_for_test(
+        super::chatroom_client::ChatroomClientEvent::ConnectedAt {
+            generation: client_generation,
+        },
+    );
+
+    let (processed, processed_rx) = mpsc::channel();
+    let event_gateway = Arc::clone(&gateway);
+    thread::spawn(move || {
+        for raw in [
+            br#"{"type":"room.snapshot","roomId":"room-1","latestSeq":0,"payload":{"room":{"roomId":"room-1","nextSeq":2},"members":[],"agents":[{"roomAgentId":"agent-1","memoryShared":false,"skillsShared":true}]}}"#.as_slice(),
+            br#"{"type":"agent.updated","roomId":"room-1","seq":1,"payload":{"roomId":"room-1","roomAgentId":"agent-1","displayName":"Agent","status":"offline","memoryShared":false,"skillsShared":true}}"#.as_slice(),
+            br#"{"type":"room.recovery_ready","roomId":"room-1","payload":{}}"#.as_slice(),
+            br#"{"type":"message.created","roomId":"room-1","seq":2,"payload":{"messageId":"message-1","content":"connected"}}"#.as_slice(),
+        ] {
+            let event = super::chatroom_protocol::parse_event(raw).unwrap();
+            event_gateway.handle_socket_event_for_test(
+                client_generation,
+                socket_generation,
+                event,
+            );
+        }
+        let _ = processed.send(());
+    });
+    processed_rx
+        .recv_timeout(Duration::from_secs(1))
+        .expect("snapshot/history/recovery event path must release auth_boundary");
+
+    let GatewayHttpResponse::Json { body, .. } = gateway
+        .handle_http(
+            "GET",
+            "/api/internal/chatrooms/rooms/room-1/status",
+            &HashMap::new(),
+            &[],
+        )
+        .expect("room status should not block after snapshot/history processing")
+    else {
+        panic!("typed room status response expected");
+    };
+    assert_eq!(body["snapshotReady"], true);
+    assert_eq!(body["socketGeneration"], socket_generation);
+
+    let mut events = Vec::new();
+    for _ in 0..5 {
+        events.push(
+            subscription
+                .receiver
+                .recv_timeout(Duration::from_millis(250))
+                .expect("SSE should receive connected, snapshot, history and recovery events"),
+        );
+    }
+    let room_events = events
+        .into_iter()
+        .filter(|event| event["type"] != "local.status")
+        .collect::<Vec<_>>();
+    assert_eq!(
+        room_events
+            .iter()
+            .map(|event| event["type"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        [
+            "room.snapshot",
+            "agent.updated",
+            "room.recovery_ready",
+            "message.created"
+        ]
+    );
+    assert_eq!(
+        room_events[0]["payload"]["agents"][0]["memoryShared"],
+        false
+    );
+    assert_eq!(room_events[1]["payload"]["skillsShared"], true);
+}
+
+#[test]
+fn given_started_gateway_when_offline_history_event_cleans_lease_then_release_auth_boundary() {
+    let gateway = gateway(
+        Arc::new(FakeTransport::default()),
+        Arc::new(FakeBridge::default()),
+    );
+    let client_generation = gateway.pause_generation_for_test();
+    let socket_generation = 73;
+    gateway.set_current_socket_generations_for_test(client_generation, socket_generation);
+    gateway.set_started_for_test(true);
+    gateway.set_room_cursor_for_test("room-1", 0);
+    gateway.register_lease_for_test("room-1", "agent-1", "device-1");
+
+    let (finished, finished_rx) = mpsc::channel();
+    let event_gateway = Arc::clone(&gateway);
+    thread::spawn(move || {
+        event_gateway.handle_socket_event_for_test(
+            client_generation,
+            socket_generation,
+            ChatroomEvent::AgentOffline {
+                room_id: "room-1".into(),
+                seq: 1,
+                payload: json!({"roomAgentId":"agent-1"}),
+            },
+        );
+        let _ = finished.send(());
+    });
+
+    assert!(
+        finished_rx.recv_timeout(Duration::from_secs(1)).is_ok(),
+        "offline history event must not reacquire auth_boundary while holding it"
+    );
+    assert_eq!(gateway.lease_count_for_test(), 0);
+    assert_eq!(gateway.room_cursor_for_test("room-1"), Some(1));
+}
+
+#[test]
 fn given_ready_and_ack_capabilities_when_ready_is_requested_then_require_current_private_ack() {
     let transport = Arc::new(FakeTransport::default());
     for _ in 0..2 {
@@ -7244,6 +7986,64 @@ fn given_unknown_management_receipt_when_status_is_queried_then_keep_404_context
     assert_eq!(body["error"]["code"], "management_operation_not_found");
     assert_eq!(body["error"]["context"]["operation"], "lookup");
     assert!(gateway.has_lease_for_test("room-1", "agent-1"));
+}
+
+struct NestedManagementNotFoundEduTransport;
+
+impl EduApiTransport for NestedManagementNotFoundEduTransport {
+    fn send(&self, _request: EduApiRequest) -> Result<EduApiResponse, EduApiError> {
+        Ok(EduApiResponse {
+            status: 404,
+            headers: Vec::new(),
+            body: json!({
+                "error": {
+                    "code": "management_operation_not_found",
+                    "message": "没有该回执"
+                }
+            })
+            .to_string()
+            .into_bytes(),
+        })
+    }
+}
+
+#[test]
+fn given_nested_edu_api_management_not_found_when_gateway_queries_status_then_preserve_contract_code(
+) {
+    let edu = Arc::new(
+        EduApiClient::new(
+            "https://test.invalid/module/edu-api",
+            Arc::new(NestedManagementNotFoundEduTransport),
+            4,
+        )
+        .unwrap(),
+    );
+    let auth = Arc::new(AuthSession::new(edu, Arc::new(AuthenticatedTestStorage)).unwrap());
+    let gateway = ChatroomGateway::new(
+        auth,
+        "https://test.invalid/module/edu-api".into(),
+        Arc::new(FakeConnector),
+        Arc::new(FakeBridge::default()),
+        "123e4567-e89b-42d3-a456-426614174000".into(),
+        ChatroomProtocolOptions::default(),
+    )
+    .unwrap();
+    let body = br#"{"operationId":"43d51f60-215e-45d4-9462-2d9a22562282","deviceId":"123e4567-e89b-42d3-a456-426614174000"}"#;
+
+    let result = gateway
+        .handle_http(
+            "POST",
+            "/api/internal/chatrooms/rooms/room-1/agent-management/operations/status",
+            &HashMap::new(),
+            body,
+        )
+        .unwrap();
+
+    let GatewayHttpResponse::Json { status, body } = result else {
+        panic!("管理状态查询必须保持 JSON 错误响应");
+    };
+    assert_eq!(status, 404);
+    assert_eq!(body["code"], "management_operation_not_found");
 }
 
 #[test]

@@ -200,6 +200,7 @@ impl Drop for AuthOperationPermit {
 
 struct RefreshState {
     active: bool,
+    generation: u64,
     waiters: usize,
     result: Option<Result<String, AuthError>>,
 }
@@ -217,6 +218,9 @@ pub struct AuthSession {
     oidc_client: Option<Arc<EduApiClient>>,
     storage: Arc<dyn AuthStorage>,
     auth: Mutex<Option<PersistedAuth>>,
+    // 只在认证 Mutex 下读取/推进，隔离旧登录的业务请求；不会写入持久化认证格式。
+    auth_generation: AtomicU64,
+    auth_storage_gate: Mutex<()>,
     pending_oidc: Mutex<Option<PendingOidcAuthorization>>,
     operation_gate: Arc<AuthOperationGate>,
     refresh_state: Mutex<RefreshState>,
@@ -245,12 +249,15 @@ impl AuthSession {
             oidc_client,
             storage,
             auth: Mutex::new(persisted),
+            auth_generation: AtomicU64::new(0),
+            auth_storage_gate: Mutex::new(()),
             pending_oidc: Mutex::new(None),
             operation_gate: Arc::new(AuthOperationGate {
                 active: Mutex::new(HashSet::new()),
             }),
             refresh_state: Mutex::new(RefreshState {
                 active: false,
+                generation: 0,
                 waiters: 0,
                 result: None,
             }),
@@ -353,6 +360,7 @@ impl AuthSession {
     }
 
     pub fn complete_oidc(&self, target: &str) -> Result<WorkingAuthState, AuthError> {
+        let previous_auth = self.auth.lock().unwrap().clone();
         eprintln!(
             "[HTTP API][OIDC] 回调开始 path={} has_code={} has_state={} has_error={}",
             target.split('?').next().unwrap_or(target),
@@ -422,28 +430,28 @@ impl AuthSession {
             persisted.refresh_token.is_some(),
             persisted.expires_at.is_some()
         );
-        if let Err(error) = self.storage.save(&persisted) {
+        if let Err(error) = self.save_auth_snapshot(&persisted, &previous_auth, false) {
             eprintln!("[HTTP API][OIDC] 首次保存认证记录失败: {}", error);
             return Err(error);
         }
         eprintln!("[HTTP API][OIDC] 首次保存认证记录成功");
-        *self.auth.lock().unwrap() = Some(persisted.clone());
         self.notify_auth_state_changed(true);
         if let Ok(current_user) = self.authenticated_request("GET", "/api/users/me", None) {
             if let Ok(payload) = parse_json_response(&current_user, "当前用户响应") {
+                let previous = persisted.clone();
                 persisted.user = Some(sanitize_user(&unwrap_data(&payload)));
-                if let Err(error) = self.storage.save(&persisted) {
+                if let Err(error) = self.save_auth_snapshot(&persisted, &Some(previous), false) {
                     eprintln!("[HTTP API][OIDC] 保存用户信息失败: {}", error);
                     return Err(error);
                 }
                 eprintln!("[HTTP API][OIDC] 保存用户信息成功");
-                *self.auth.lock().unwrap() = Some(persisted);
             }
         }
         Ok(self.auth_state())
     }
     pub fn login(&self, input: LoginInput) -> Result<WorkingAuthState, AuthError> {
         let _permit = self.operation_gate.try_acquire(AuthOperation::Login)?;
+        let previous_auth = self.auth.lock().unwrap().clone();
         let email = validate_field(input.email, "邮箱", 320)?;
         let password = validate_field(input.password, "密码", 1024)?;
         let response = self.request_public(
@@ -469,21 +477,20 @@ impl AuthSession {
             user,
             expires_at,
         };
-        self.storage.save(&persisted)?;
-        *self.auth.lock().unwrap() = Some(persisted.clone());
+        self.save_auth_snapshot(&persisted, &previous_auth, false)?;
         self.notify_auth_state_changed(true);
 
         if persisted.user.is_none() {
             match self.authenticated_request("GET", "/api/users/me", None) {
                 Ok(current_user) => {
                     if let Ok(payload) = parse_json_response(&current_user, "当前用户响应") {
+                        let previous = persisted.clone();
                         persisted.user = Some(sanitize_user(&unwrap_data(&payload)));
-                        self.storage.save(&persisted)?;
-                        *self.auth.lock().unwrap() = Some(persisted);
+                        self.save_auth_snapshot(&persisted, &Some(previous), false)?;
                     }
                 }
                 Err(error @ AuthError::Upstream { status: 401, .. }) => {
-                    self.clear_after_auth_failure();
+                    let _ = self.clear_auth_snapshot(Some(&persisted));
                     return Err(error);
                 }
                 Err(_) => {}
@@ -563,30 +570,43 @@ impl AuthSession {
     }
 
     pub fn refresh_single_flight(&self) -> Result<String, AuthError> {
+        let (_, generation) = self.auth_snapshot_for_generation(None)?;
+        self.refresh_for_generation(generation)
+    }
+
+    fn refresh_for_generation(&self, generation: u64) -> Result<String, AuthError> {
         let mut state = self.refresh_state.lock().unwrap();
+        self.auth_snapshot_for_generation(Some(generation))?;
         if state.active {
+            // 只允许同一登录共享刷新结果，避免新账号复用旧账号的 token。
+            if state.generation != generation {
+                return Err(AuthError::Busy);
+            }
+            if self.auth_storage_gate.try_lock().is_err() {
+                return Err(AuthError::Busy);
+            }
             state.waiters += 1;
             while state.active {
                 state = self.refresh_wakeup.wait(state).unwrap();
             }
             state.waiters -= 1;
+            self.auth_snapshot_for_generation(Some(generation))?;
             return state
                 .result
                 .clone()
                 .unwrap_or(Err(AuthError::RefreshFailed));
         }
-        let refresh_token = self
-            .auth
-            .lock()
-            .unwrap()
-            .as_ref()
-            .and_then(|auth| auth.refresh_token.clone())
-            .ok_or(AuthError::NotAuthenticated)?;
+        if self.auth_storage_gate.try_lock().is_err() {
+            return Err(AuthError::Busy);
+        }
+        let (auth, _) = self.auth_snapshot_for_generation(Some(generation))?;
+        let refresh_token = auth.refresh_token.ok_or(AuthError::NotAuthenticated)?;
         state.active = true;
+        state.generation = generation;
         state.result = None;
         drop(state);
 
-        let result = self.perform_refresh(&refresh_token);
+        let result = self.perform_refresh(&refresh_token, generation);
         let mut state = self.refresh_state.lock().unwrap();
         state.active = false;
         state.result = Some(result.clone());
@@ -600,8 +620,7 @@ impl AuthSession {
     }
 
     pub fn logout(&self) -> Result<(), AuthError> {
-        self.clear_local_auth();
-        self.storage.clear()
+        self.clear_auth_snapshot(None).map(|_| ())
     }
 
     pub fn authenticated_request(
@@ -620,16 +639,26 @@ impl AuthSession {
         body: Option<String>,
         headers: Vec<(String, String)>,
     ) -> Result<EduApiResponse, AuthError> {
-        let token = self.current_access_token()?;
-        match self.request_with_token(method, path, body.clone(), Some(token), headers.clone()) {
+        let (auth, generation) = self.auth_snapshot_for_generation(None)?;
+        let result = self.request_with_token(
+            method,
+            path,
+            body.clone(),
+            Some(auth.access_token),
+            headers.clone(),
+        );
+        self.auth_snapshot_for_generation(Some(generation))?;
+        match result {
             Ok(response) => Ok(response),
-            Err(error @ AuthError::Upstream { status: 401, .. }) => {
-                let token = self.refresh_single_flight()?;
-                match self.request_with_token(method, path, body, Some(token), headers) {
+            Err(AuthError::Upstream { status: 401, .. }) => {
+                let token = self.refresh_for_generation(generation)?;
+                self.auth_snapshot_for_generation(Some(generation))?;
+                let replay = self.request_with_token(method, path, body, Some(token), headers);
+                self.auth_snapshot_for_generation(Some(generation))?;
+                match replay {
                     Ok(response) => Ok(response),
                     Err(replayed @ AuthError::Upstream { status: 401, .. }) => {
-                        self.clear_after_auth_failure();
-                        let _ = error;
+                        let _ = self.clear_auth_snapshot_for_generation(None, Some(generation));
                         Err(replayed)
                     }
                     Err(error) => Err(error),
@@ -637,6 +666,18 @@ impl AuthSession {
             }
             Err(error) => Err(error),
         }
+    }
+
+    fn auth_snapshot_for_generation(
+        &self,
+        expected: Option<u64>,
+    ) -> Result<(PersistedAuth, u64), AuthError> {
+        let auth = self.auth.lock().unwrap();
+        let generation = self.auth_generation.load(Ordering::Relaxed);
+        if expected.is_some_and(|expected| expected != generation) {
+            return Err(AuthError::NotAuthenticated);
+        }
+        Ok((auth.clone().ok_or(AuthError::NotAuthenticated)?, generation))
     }
 
     pub(crate) fn current_access_token(&self) -> Result<String, AuthError> {
@@ -715,14 +756,12 @@ impl AuthSession {
         client.request(request).map_err(map_edu_error)
     }
 
-    fn perform_refresh(&self, refresh_token: &str) -> Result<String, AuthError> {
-        let provider = self
-            .auth
-            .lock()
-            .unwrap()
-            .as_ref()
-            .map(|auth| auth.provider.clone())
-            .ok_or(AuthError::NotAuthenticated)?;
+    fn perform_refresh(&self, refresh_token: &str, generation: u64) -> Result<String, AuthError> {
+        let (previous, _) = self.auth_snapshot_for_generation(Some(generation))?;
+        if previous.refresh_token.as_deref() != Some(refresh_token) {
+            return Err(AuthError::NotAuthenticated);
+        }
+        let provider = previous.provider.clone();
         let response = if provider == "oidc" {
             let client = self
                 .oidc_client
@@ -749,8 +788,11 @@ impl AuthSession {
         let response = match response {
             Ok(response) => response,
             Err(error) => {
-                if matches!(error, AuthError::Upstream { status: 401, .. }) {
-                    self.clear_after_auth_failure();
+                if matches!(&error, AuthError::Upstream { status: 400, code, .. } if code == "invalid_grant")
+                {
+                    self.clear_after_refresh_failure(&previous, generation);
+                } else if matches!(error, AuthError::Upstream { status: 401, .. }) {
+                    self.clear_after_refresh_failure(&previous, generation);
                 }
                 return Err(error);
             }
@@ -758,38 +800,169 @@ impl AuthSession {
         let payload = unwrap_data(&parse_json_response(&response, "刷新响应")?);
         let access_token = first_string(&payload, &["token", "access_token", "accessToken"])
             .ok_or_else(|| AuthError::InvalidResponse("刷新响应缺少 token".to_string()))?;
-        let mut auth = self.auth.lock().unwrap();
-        let previous = auth.clone().ok_or(AuthError::NotAuthenticated)?;
+        let (current, _) = self.auth_snapshot_for_generation(Some(generation))?;
+        if !same_auth_identity(&current, &previous) {
+            return Err(AuthError::NotAuthenticated);
+        }
         let next = PersistedAuth {
             access_token: access_token.clone(),
             refresh_token: first_string(&payload, &["refresh_token", "refreshToken"])
-                .or(previous.refresh_token),
+                .or(previous.refresh_token.clone()),
             provider,
-            user: previous.user,
+            user: current.user,
             expires_at: payload
                 .get("expires_in")
                 .and_then(Value::as_u64)
                 .map(|value| now_secs().saturating_add(value))
                 .or_else(|| jwt_expiry(&access_token)),
         };
-        self.storage.save(&next)?;
-        *auth = Some(next);
-        drop(auth);
+        self.save_auth_snapshot_for_generation(&next, &Some(previous), true, Some(generation))?;
         self.notify_auth_state_changed(true);
         Ok(access_token)
     }
 
-    fn clear_after_auth_failure(&self) {
-        self.clear_local_auth();
-        if self.storage.clear().is_err() {
+    fn clear_after_refresh_failure(&self, expected: &PersistedAuth, generation: u64) {
+        if self
+            .clear_auth_snapshot_for_generation(Some(expected), Some(generation))
+            .is_err()
+        {
             eprintln!("[HTTP API][认证] 自动清理认证存储失败");
         }
     }
 
-    fn clear_local_auth(&self) {
-        *self.auth.lock().unwrap() = None;
-        self.notify_auth_state_changed(false);
+    fn save_auth_snapshot(
+        &self,
+        next: &PersistedAuth,
+        expected: &Option<PersistedAuth>,
+        preserve_current_user: bool,
+    ) -> Result<(), AuthError> {
+        self.save_auth_snapshot_for_generation(next, expected, preserve_current_user, None)
     }
+
+    fn save_auth_snapshot_for_generation(
+        &self,
+        next: &PersistedAuth,
+        expected: &Option<PersistedAuth>,
+        preserve_current_user: bool,
+        expected_generation: Option<u64>,
+    ) -> Result<(), AuthError> {
+        let _storage_guard = self.auth_storage_gate.lock().unwrap();
+        let (previous, persisted) = {
+            let mut auth = self.auth.lock().unwrap();
+            if !same_optional_auth(&auth, expected)
+                || expected_generation.is_some_and(|generation| {
+                    generation != self.auth_generation.load(Ordering::Relaxed)
+                })
+            {
+                return Err(AuthError::NotAuthenticated);
+            }
+            let previous = auth.clone();
+            let mut persisted = next.clone();
+            if preserve_current_user {
+                if let (Some(expected), Some(current)) = (expected, auth.as_ref()) {
+                    if next.access_token != expected.access_token
+                        && same_auth_identity(current, expected)
+                    {
+                        persisted.user = current.user.clone();
+                    }
+                }
+            }
+            // 同账号资料更新和 token 刷新保留代次；切换凭据使所有旧业务请求失效。
+            if !preserve_current_user && !same_optional_auth(&Some(persisted.clone()), &previous) {
+                self.auth_generation.fetch_add(1, Ordering::Relaxed);
+            }
+            *auth = Some(persisted.clone());
+            (previous, persisted)
+        };
+
+        if let Err(error) = self.storage.save(&persisted) {
+            let mut auth = self.auth.lock().unwrap();
+            if auth
+                .as_ref()
+                .map(|current| same_auth_identity(current, &persisted))
+                .unwrap_or(false)
+            {
+                // 回滚凭据也是登录边界，撤销暂存账号期间发出的业务请求。
+                if !same_optional_auth(&auth, &previous) {
+                    self.auth_generation.fetch_add(1, Ordering::Relaxed);
+                }
+                *auth = previous;
+            }
+            return Err(error);
+        }
+        Ok(())
+    }
+
+    #[cfg(test)]
+    pub(super) fn save_auth_snapshot_for_test(
+        &self,
+        next: &PersistedAuth,
+        expected: &Option<PersistedAuth>,
+    ) -> Result<(), AuthError> {
+        self.save_auth_snapshot(next, expected, false)
+    }
+
+    fn clear_auth_snapshot(&self, expected: Option<&PersistedAuth>) -> Result<bool, AuthError> {
+        self.clear_auth_snapshot_for_generation(expected, None)
+    }
+
+    fn clear_auth_snapshot_for_generation(
+        &self,
+        expected: Option<&PersistedAuth>,
+        expected_generation: Option<u64>,
+    ) -> Result<bool, AuthError> {
+        let _storage_guard = self.auth_storage_gate.lock().unwrap();
+        {
+            let mut auth = self.auth.lock().unwrap();
+            if expected_generation.is_some_and(|generation| {
+                generation != self.auth_generation.load(Ordering::Relaxed)
+            }) {
+                return Ok(false);
+            }
+            if !expected
+                .map(|expected| {
+                    auth.as_ref()
+                        .map(|current| same_auth_identity(current, expected))
+                        .unwrap_or(false)
+                })
+                .unwrap_or(true)
+            {
+                return Ok(false);
+            }
+            self.auth_generation.fetch_add(1, Ordering::Relaxed);
+            *auth = None;
+        }
+
+        let storage_result = self.storage.clear();
+        self.notify_auth_state_changed(false);
+        storage_result.map(|()| true)
+    }
+}
+
+fn same_auth_identity(left: &PersistedAuth, right: &PersistedAuth) -> bool {
+    let left_owner = left.user.as_ref().and_then(auth_user_identity);
+    let right_owner = right.user.as_ref().and_then(auth_user_identity);
+    left.access_token == right.access_token
+        && left.refresh_token == right.refresh_token
+        && left.provider == right.provider
+        && left_owner
+            .zip(right_owner)
+            .map(|(left, right)| left == right)
+            .unwrap_or(true)
+}
+
+fn same_optional_auth(left: &Option<PersistedAuth>, right: &Option<PersistedAuth>) -> bool {
+    match (left, right) {
+        (Some(left), Some(right)) => same_auth_identity(left, right),
+        (None, None) => true,
+        _ => false,
+    }
+}
+
+fn auth_user_identity(user: &Value) -> Option<&Value> {
+    ["ID", "id", "user_id", "sub"]
+        .iter()
+        .find_map(|key| user.get(key).filter(|value| !value.is_null()))
 }
 
 pub fn working_oidc_redirect_uri() -> String {

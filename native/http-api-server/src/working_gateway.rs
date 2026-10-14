@@ -61,6 +61,7 @@ pub fn is_working_gateway_path(path: &str) -> bool {
     ]
     .iter()
     .any(|prefix| path == *prefix || path.starts_with(&format!("{}/", prefix)))
+        || path == "/api/working/diamond-redemptions/redeem"
 }
 
 pub fn is_working_oauth_callback_path(path: &str) -> bool {
@@ -326,6 +327,26 @@ pub fn handle_working_gateway_request(
             ));
         }
         _ => {}
+    }
+
+    if path == "/api/working/diamond-redemptions/redeem" {
+        require_method(method, "POST")?;
+        let input = parse_body(body)?;
+        let code = input
+            .get("code")
+            .and_then(Value::as_str)
+            .ok_or_else(|| GatewayError::new(400, "invalid_request", "兑换码不正确"))?
+            .trim()
+            .to_uppercase();
+        if code.is_empty() || code.chars().count() > 32 || code.chars().any(char::is_control) {
+            return Err(GatewayError::new(400, "invalid_request", "兑换码不正确"));
+        }
+        return remote_json(
+            gateway,
+            method,
+            "/api/diamond-redemptions/redeem",
+            Some(serde_json::json!({ "code": code })),
+        );
     }
 
     if resource == "sessions" && segments.len() == 5 && segments[4] == "history" {

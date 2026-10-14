@@ -187,6 +187,117 @@ fn preserves_upstream_status_code_and_response_body() {
 }
 
 #[test]
+fn parses_standard_oauth_error_code_and_description() {
+    let response = EduApiResponse {
+        status: 400,
+        headers: Vec::new(),
+        body:
+            br#"{"error":"invalid_grant","error_description":"Refresh token is no longer valid"}"#
+                .to_vec(),
+    };
+    let client = client(Arc::new(RecordingTransport::new(response)), 2);
+
+    let error = client.request(request("POST", "/oauth/token")).unwrap_err();
+
+    assert!(matches!(
+        error,
+        EduApiError::Upstream { status: 400, code, message, .. }
+            if code == "invalid_grant" && message == "Refresh token is no longer valid"
+    ));
+}
+
+#[test]
+fn does_not_use_an_arbitrary_upstream_error_message_as_the_error_code() {
+    let response = EduApiResponse {
+        status: 502,
+        headers: Vec::new(),
+        body: br#"{"error":"working image generation failed","detail":"image request failed"}"#
+            .to_vec(),
+    };
+    let client = client(Arc::new(RecordingTransport::new(response)), 2);
+
+    let error = client
+        .request(request("POST", "/api/working/image"))
+        .unwrap_err();
+
+    assert!(matches!(
+        error,
+        EduApiError::Upstream { status: 502, code, message, .. }
+            if code == "upstream_error" && message == "working image generation failed: image request failed"
+    ));
+}
+
+#[test]
+fn preserves_nested_management_error_codes_without_reclassifying_generic_not_found() {
+    for (body, expected) in [
+        (
+            br#"{"error":{"code":"management_operation_not_found","message":"receipt missing"}}"#
+                .as_slice(),
+            "management_operation_not_found",
+        ),
+        (
+            br#"{"error":{"code":"management_operation_conflict","message":"conflict"}}"#
+                .as_slice(),
+            "management_operation_conflict",
+        ),
+        (
+            br#"{"error":{"code":"not_found","message":"ordinary resource missing"}}"#.as_slice(),
+            "not_found",
+        ),
+    ] {
+        let response = EduApiResponse {
+            status: 404,
+            headers: Vec::new(),
+            body: body.to_vec(),
+        };
+        let client = client(Arc::new(RecordingTransport::new(response)), 2);
+
+        let error = client.request(request("GET", "/api/test")).unwrap_err();
+
+        assert!(matches!(
+            error,
+            EduApiError::Upstream { status: 404, code, .. } if code == expected
+        ));
+    }
+}
+
+#[test]
+fn prefers_top_level_code_and_falls_back_for_malformed_nested_codes() {
+    for (body, expected) in [
+        (
+            br#"{"code":"top_level_code","error":{"code":"nested_code"}}"#.as_slice(),
+            "top_level_code",
+        ),
+        (
+            br#"{"error":{"code":"   ","message":"invalid blank code"}}"#.as_slice(),
+            "not_found",
+        ),
+        (
+            br#"{"error":{"code":42,"message":"invalid numeric code"}}"#.as_slice(),
+            "not_found",
+        ),
+        (
+            br#"{"error":{"code":"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"}}"#.as_slice(),
+            "not_found",
+        ),
+    ] {
+        let response = EduApiResponse {
+            status: 404,
+            headers: Vec::new(),
+            body: body.to_vec(),
+        };
+        let client = client(Arc::new(RecordingTransport::new(response)), 2);
+
+        let error = client.request(request("GET", "/api/test")).unwrap_err();
+
+        assert!(matches!(
+            error,
+            EduApiError::Upstream { status: 404, code, .. } if code == expected
+        ));
+    }
+}
+
+#[test]
 fn rejects_absolute_paths_header_injection_and_invalid_path_characters() {
     let transport = Arc::new(RecordingTransport::new(ok_response()));
     let client = client(transport, 2);

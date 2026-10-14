@@ -596,6 +596,56 @@ fn given_empty_room_snapshot_from_go_omitempty_when_parsing_then_latest_seq_is_z
 }
 
 #[test]
+fn given_go_room_replay_with_agent_share_flags_when_parsing_and_projecting_then_preserve_flags() {
+    let snapshot = parse_event(br#"{"type":"room.snapshot","roomId":"room-1","latestSeq":0,"payload":{"room":{"roomId":"room-1","nextSeq":2},"members":[],"agents":[{"roomAgentId":"agent-1","memoryShared":false,"skillsShared":true}]}}"#)
+        .expect("Go snapshot agent share flags are public booleans");
+    let agent_update = parse_event(br#"{"type":"agent.updated","roomId":"room-1","seq":1,"payload":{"roomId":"room-1","roomAgentId":"agent-1","displayName":"Agent","status":"offline","memoryShared":false,"skillsShared":true}}"#)
+        .expect("Go history replay agent share flags are public booleans");
+    let recovery_ready =
+        parse_event(br#"{"type":"room.recovery_ready","roomId":"room-1","payload":{}}"#)
+            .expect("recovery marker should follow the replay");
+
+    let public_snapshot = public_event(&snapshot);
+    let public_update = public_event(&agent_update);
+    assert_eq!(
+        public_snapshot["payload"]["agents"][0]["memoryShared"],
+        false
+    );
+    assert_eq!(
+        public_snapshot["payload"]["agents"][0]["skillsShared"],
+        true
+    );
+    assert_eq!(public_update["payload"]["memoryShared"], false);
+    assert_eq!(public_update["payload"]["skillsShared"], true);
+    assert_eq!(public_event(&recovery_ready)["type"], "room.recovery_ready");
+}
+
+#[test]
+fn given_agent_share_flags_outside_public_agent_context_or_not_boolean_then_reject() {
+    for input in [
+        br#"{"type":"message.created","roomId":"room-1","seq":1,"payload":{"memoryShared":false}}"#.as_slice(),
+        br#"{"type":"agent.updated","roomId":"room-1","seq":1,"payload":{"nested":{"memoryShared":false}}}"#.as_slice(),
+        br#"{"type":"agent.updated","roomId":"room-1","seq":1,"payload":{"memoryShared":"false"}}"#.as_slice(),
+        br#"{"type":"agent.updated","roomId":"room-1","seq":1,"payload":{"memory":{"content":"private"}}}"#.as_slice(),
+        br#"{"type":"agent.updated","roomId":"room-1","seq":1,"payload":{"skills":{"content":"private"}}}"#.as_slice(),
+        br#"{"type":"agent.updated","roomId":"room-1","seq":1,"payload":{"accessToken":"secret"}}"#.as_slice(),
+        br#"{"type":"agent.updated","roomId":"room-1","seq":1,"payload":{"configPath":"/tmp/private"}}"#.as_slice(),
+        br#"{"type":"room.snapshot","roomId":"room-1","payload":{"room":{"memoryShared":false},"members":[],"agents":[]}}"#.as_slice(),
+        br#"{"type":"room.snapshot","roomId":"room-1","payload":{"secret":"hello","agents":[]}}"#.as_slice(),
+        br#"{"type":"room.snapshot","roomId":"room-1","payload":{"memoryShared":true,"agents":[]}}"#.as_slice(),
+        br#"{"type":"room.snapshot","roomId":"room-1","payload":{"skillsShared":false,"agents":[]}}"#.as_slice(),
+        br#"{"type":"room.snapshot","roomId":"room-1","payload":{"room":{},"members":[],"agents":[{"memoryShared":0}]}}"#.as_slice(),
+        br#"{"type":"room.snapshot","roomId":"room-1","payload":{"room":{},"members":[],"agents":[{"nested":{"skillsShared":true}}]}}"#.as_slice(),
+    ] {
+        assert!(
+            parse_event(input).is_err(),
+            "accepted invalid share flag placement/type: {}",
+            String::from_utf8_lossy(input)
+        );
+    }
+}
+
+#[test]
 fn given_public_message_with_attachment_ids_when_sanitizing_then_keep_ids_and_remove_secrets() {
     let event = ChatroomEvent::MessageCreated {
         room_id: "room-1".into(),

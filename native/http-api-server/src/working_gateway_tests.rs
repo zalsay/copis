@@ -838,3 +838,355 @@ fn forwards_browser_sync_request_with_token() {
     assert_eq!(sync_request.method, "POST");
     assert_eq!(sync_request.access_token.as_deref(), Some("access-token"));
 }
+
+#[test]
+fn browser_sync_refreshes_expired_token_once_and_replays_the_same_changes() {
+    let transport = Arc::new(QueueTransport::new(vec![
+        response(
+            200,
+            json!({"token":"old-access","refresh_token":"old-refresh","user":{"id":7}}),
+        ),
+        response(401, json!({"error":"Invalid or expired token"})),
+        response(
+            200,
+            json!({"token":"new-access","refresh_token":"new-refresh"}),
+        ),
+        response(
+            200,
+            json!({"data":{"serverCursor":105,"serverChanges":{"groups":[],"bookmarks":[],"pageProfiles":[]}}}),
+        ),
+    ]));
+    let gateway = gateway(transport.clone());
+    handle_working_gateway_request(
+        &gateway,
+        "POST",
+        "/api/working/login",
+        Some(r#"{"email":"user@example.com","password":"password"}"#),
+    )
+    .unwrap();
+    let body = json!({
+        "clientDeviceId": "device-1",
+        "clientCursor": 100,
+        "changes": {
+            "groups": [],
+            "bookmarks": [{"id":"bookmark-1","title":"本地收藏","url":"https://local.example.com/","createdAt":1,"updatedAt":2,"version":1,"isDeleted":false}],
+            "pageProfiles": []
+        }
+    })
+    .to_string();
+
+    let result =
+        handle_working_gateway_request(&gateway, "POST", "/api/working/browser/sync", Some(&body))
+            .unwrap();
+
+    assert_eq!(result.status, 200);
+    assert_eq!(result.body.unwrap()["serverCursor"], 105);
+    let state =
+        handle_working_gateway_request(&gateway, "GET", "/api/working/auth-state", None).unwrap();
+    assert_eq!(state.body.unwrap()["authenticated"], true);
+    let requests = transport.requests.lock().unwrap();
+    assert_eq!(
+        requests
+            .iter()
+            .map(|request| request.path.as_str())
+            .collect::<Vec<_>>(),
+        vec![
+            "/api/auth/login",
+            "/api/working/browser/sync",
+            "/api/auth/refresh",
+            "/api/working/browser/sync"
+        ]
+    );
+    assert_eq!(requests[1].access_token.as_deref(), Some("old-access"));
+    assert_eq!(requests[3].access_token.as_deref(), Some("new-access"));
+    assert_eq!(requests[1].body.as_deref(), Some(body.as_str()));
+    assert_eq!(requests[3].body, requests[1].body);
+}
+
+#[test]
+fn browser_sync_stops_after_replayed_token_is_rejected_and_requires_login() {
+    let transport = Arc::new(QueueTransport::new(vec![
+        response(
+            200,
+            json!({"token":"old-access","refresh_token":"old-refresh","user":{"id":7}}),
+        ),
+        response(401, json!({"error":"Invalid or expired token"})),
+        response(
+            200,
+            json!({"token":"new-access","refresh_token":"new-refresh"}),
+        ),
+        response(401, json!({"error":"Invalid or expired token"})),
+    ]));
+    let gateway = gateway(transport.clone());
+    handle_working_gateway_request(
+        &gateway,
+        "POST",
+        "/api/working/login",
+        Some(r#"{"email":"user@example.com","password":"password"}"#),
+    )
+    .unwrap();
+    let body = json!({
+        "clientDeviceId": "device-1",
+        "clientCursor": 100,
+        "changes": {"groups": [], "bookmarks": [], "pageProfiles": []}
+    })
+    .to_string();
+
+    let error =
+        handle_working_gateway_request(&gateway, "POST", "/api/working/browser/sync", Some(&body))
+            .unwrap_err();
+
+    assert_eq!(error.status, 401);
+    assert_eq!(error.code, "unauthorized");
+    let state =
+        handle_working_gateway_request(&gateway, "GET", "/api/working/auth-state", None).unwrap();
+    assert_eq!(state.body.unwrap()["authenticated"], false);
+    let requests = transport.requests.lock().unwrap();
+    assert_eq!(requests.len(), 4);
+    assert_eq!(requests[2].path, "/api/auth/refresh");
+    assert_eq!(requests[1].body.as_deref(), Some(body.as_str()));
+    assert_eq!(requests[3].body, requests[1].body);
+}
+
+#[test]
+fn diamond_redemption_gateway_recognizes_only_the_exact_route() {
+    assert!(super::working_gateway::is_working_gateway_path(
+        "/api/working/diamond-redemptions/redeem"
+    ));
+    assert!(!super::working_gateway::is_working_gateway_path(
+        "/api/working/diamond-redemptions/redeem/extra"
+    ));
+    assert!(!super::working_gateway::is_working_gateway_path(
+        "/api/working/diamond-redemptions/other"
+    ));
+}
+
+#[test]
+fn authenticated_diamond_redemption_trims_and_uppercases_code_and_unwraps_data() {
+    let transport = Arc::new(QueueTransport::new(vec![
+        response(200, json!({"token":"access-token","user_id":7})),
+        response(200, json!({"data":{"diamonds":100,"balance_after":48.36}})),
+    ]));
+    let gateway = gateway(transport.clone());
+    handle_working_gateway_request(
+        &gateway,
+        "POST",
+        "/api/working/login",
+        Some(r#"{"email":"user@example.com","password":"password"}"#),
+    )
+    .unwrap();
+
+    let result = handle_working_gateway_request(
+        &gateway,
+        "POST",
+        "/api/working/diamond-redemptions/redeem",
+        Some(r#"{"code":"  abcdefghijklmnopqrstuvwxyzabcdef  "}"#),
+    )
+    .unwrap();
+
+    assert_eq!(result.status, 200);
+    assert_eq!(
+        result.body.unwrap(),
+        json!({"diamonds":100,"balance_after":48.36})
+    );
+    let requests = transport.requests.lock().unwrap();
+    assert_eq!(requests.len(), 2);
+    assert_eq!(requests[1].method, "POST");
+    assert_eq!(requests[1].path, "/api/diamond-redemptions/redeem");
+    assert_eq!(
+        requests[1].body.as_deref(),
+        Some(r#"{"code":"ABCDEFGHIJKLMNOPQRSTUVWXYZABCDEF"}"#)
+    );
+}
+
+#[test]
+fn diamond_redemption_rejects_invalid_codes_without_calling_upstream() {
+    let transport = Arc::new(QueueTransport::new(vec![response(
+        200,
+        json!({"token":"access-token","user_id":7}),
+    )]));
+    let gateway = gateway(transport.clone());
+    handle_working_gateway_request(
+        &gateway,
+        "POST",
+        "/api/working/login",
+        Some(r#"{"email":"user@example.com","password":"password"}"#),
+    )
+    .unwrap();
+
+    for body in [
+        r#"{"code":""}"#,
+        r#"{"code":"   "}"#,
+        r#"{"code":123}"#,
+        r#"{"code":"123456789012345678901234567890123"}"#,
+    ] {
+        let error = handle_working_gateway_request(
+            &gateway,
+            "POST",
+            "/api/working/diamond-redemptions/redeem",
+            Some(body),
+        )
+        .unwrap_err();
+        assert_eq!(error.status, 400, "body={body}");
+    }
+
+    assert_eq!(transport.requests.lock().unwrap().len(), 1);
+}
+
+#[test]
+fn anonymous_diamond_redemption_returns_unauthorized_without_upstream_request() {
+    let transport = Arc::new(QueueTransport::new(Vec::new()));
+    let gateway = gateway(transport.clone());
+
+    let error = handle_working_gateway_request(
+        &gateway,
+        "POST",
+        "/api/working/diamond-redemptions/redeem",
+        Some(r#"{"code":"ABCD-1234"}"#),
+    )
+    .unwrap_err();
+
+    assert_eq!(error.status, 401);
+    assert_eq!(error.code, "unauthorized");
+    assert!(transport.requests.lock().unwrap().is_empty());
+}
+
+#[test]
+fn diamond_redemption_preserves_upstream_conflict_status_and_message() {
+    let transport = Arc::new(QueueTransport::new(vec![
+        response(200, json!({"token":"access-token","user_id":7})),
+        response(
+            409,
+            json!({"error":{"code":"diamond_code_already_used"},"message":"该兑换码已使用"}),
+        ),
+    ]));
+    let gateway = gateway(transport);
+    handle_working_gateway_request(
+        &gateway,
+        "POST",
+        "/api/working/login",
+        Some(r#"{"email":"user@example.com","password":"password"}"#),
+    )
+    .unwrap();
+
+    let error = handle_working_gateway_request(
+        &gateway,
+        "POST",
+        "/api/working/diamond-redemptions/redeem",
+        Some(r#"{"code":"USED-CODE"}"#),
+    )
+    .unwrap_err();
+
+    assert_eq!(error.status, 409);
+    assert_eq!(error.code, "diamond_code_already_used");
+    assert_eq!(error.message, "该兑换码已使用");
+}
+
+#[test]
+fn diamond_redemption_refreshes_once_and_replays_the_same_request() {
+    let transport = Arc::new(QueueTransport::new(vec![
+        response(
+            200,
+            json!({"token":"old-access","refresh_token":"old-refresh","user":{"id":7}}),
+        ),
+        response(401, json!({"error":"Invalid or expired token"})),
+        response(
+            200,
+            json!({"token":"new-access","refresh_token":"new-refresh"}),
+        ),
+        response(200, json!({"data":{"diamonds":100,"balance_after":48.36}})),
+    ]));
+    let gateway = gateway(transport.clone());
+    handle_working_gateway_request(
+        &gateway,
+        "POST",
+        "/api/working/login",
+        Some(r#"{"email":"user@example.com","password":"password"}"#),
+    )
+    .unwrap();
+    let body = r#"{"code":"ABCD-1234"}"#;
+
+    let result = handle_working_gateway_request(
+        &gateway,
+        "POST",
+        "/api/working/diamond-redemptions/redeem",
+        Some(body),
+    )
+    .unwrap();
+
+    assert_eq!(result.status, 200);
+    let requests = transport.requests.lock().unwrap();
+    assert_eq!(
+        requests
+            .iter()
+            .map(|request| request.path.as_str())
+            .collect::<Vec<_>>(),
+        vec![
+            "/api/auth/login",
+            "/api/diamond-redemptions/redeem",
+            "/api/auth/refresh",
+            "/api/diamond-redemptions/redeem",
+        ]
+    );
+    assert_eq!(requests[1].access_token.as_deref(), Some("old-access"));
+    assert_eq!(requests[3].access_token.as_deref(), Some("new-access"));
+    assert_eq!(requests[1].method, "POST");
+    assert_eq!(requests[3].method, "POST");
+    assert_eq!(requests[1].body.as_deref(), Some(body));
+    assert_eq!(requests[3].body.as_deref(), Some(body));
+}
+
+#[test]
+fn diamond_redemption_route_rejects_other_methods_and_subpaths() {
+    let transport = Arc::new(QueueTransport::new(Vec::new()));
+    let gateway = gateway(transport.clone());
+
+    let method_error = handle_working_gateway_request(
+        &gateway,
+        "GET",
+        "/api/working/diamond-redemptions/redeem",
+        None,
+    )
+    .unwrap_err();
+    assert_eq!(method_error.status, 405);
+
+    for path in [
+        "/api/working/diamond-redemptions/redeem/extra",
+        "/api/working/diamond-redemptions/redeem/",
+        "/api/working/diamond-redemptions/%72edeem",
+    ] {
+        let path_error =
+            handle_working_gateway_request(&gateway, "POST", path, Some(r#"{"code":"ABCD-1234"}"#))
+                .unwrap_err();
+        assert_eq!(path_error.status, 404, "path={path}");
+    }
+    assert!(transport.requests.lock().unwrap().is_empty());
+}
+
+#[test]
+fn diamond_redemption_rejects_code_longer_than_32_after_uppercase_normalization() {
+    let transport = Arc::new(QueueTransport::new(vec![response(
+        200,
+        json!({"token":"access-token","user_id":7}),
+    )]));
+    let gateway = gateway(transport.clone());
+    handle_working_gateway_request(
+        &gateway,
+        "POST",
+        "/api/working/login",
+        Some(r#"{"email":"user@example.com","password":"password"}"#),
+    )
+    .unwrap();
+
+    let body = json!({"code":"ß".repeat(32)}).to_string();
+    let error = handle_working_gateway_request(
+        &gateway,
+        "POST",
+        "/api/working/diamond-redemptions/redeem",
+        Some(&body),
+    )
+    .unwrap_err();
+
+    assert_eq!(error.status, 400);
+    assert_eq!(transport.requests.lock().unwrap().len(), 1);
+}
