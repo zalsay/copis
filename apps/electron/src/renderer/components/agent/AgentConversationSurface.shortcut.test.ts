@@ -35,6 +35,11 @@ test('Given AI浏览器中的紧凑 Composer When 渲染工具栏 Then 保留高
   expect(advancedAuthorizationStart).toBeGreaterThan(compactConditionEnd)
 })
 
+test('Given 会话授权状态尚未加载 When 渲染 Composer Then 不把缺失状态误显示为已授权', () => {
+  expect(source).toContain('sessionMeta?.advancedAuthorization === true')
+  expect(source).toContain('高级授权已开启：非计划模式下允许所有命令和 AI浏览器全部页面操作')
+})
+
 test('Given AgentConversationSurface When 渲染 Composer Then 绑定 inputHistory 并支持记录输入历史', () => {
   expect(source).toContain('composerInputHistory')
   expect(source).toContain('inputHistory={composerInputHistory}')

@@ -9,6 +9,9 @@ let service: typeof import('./web-project-association-service')
 mock.module('./config-paths', () => ({
   getWebProjectAssociationsPath: () => associationsPath,
 }))
+mock.module('./web-sync-account-storage', () => ({
+  getWebProjectAssociationsStoragePath: () => associationsPath,
+}))
 
 mock.module('./agent-workspace-manager', () => ({
   getAgentWorkspace: (id: string) => id === 'workspace-default' || id === 'workspace-other'

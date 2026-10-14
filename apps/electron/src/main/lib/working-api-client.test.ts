@@ -64,6 +64,44 @@ describe('Copis Rust Working facade', () => {
     expect(client.getCachedUser()).toEqual(expect.objectContaining({ id: 'B', email: 'b@example.com' }))
   })
 
+  test('迟到的 auth-state A 响应不能覆盖已切换到的 B', async () => {
+    let resolveResponse!: (response: Response) => void
+    let markStarted!: () => void
+    const started = new Promise<void>((resolve) => { markStarted = resolve })
+    const client = createClient(async () => new Promise<Response>((resolve) => {
+      resolveResponse = resolve
+      markStarted()
+    }))
+    client.setAuthenticatedUserFromRust({ id: 'A' })
+
+    const stateRequest = client.getAuthState()
+    await started
+    client.setAuthenticatedUserFromRust({ id: 'B' })
+    resolveResponse(jsonResponse({ authenticated: true, user: { id: 'A' } }))
+
+    await expect(stateRequest).resolves.toEqual({ authenticated: true, user: expect.objectContaining({ id: 'B' }) })
+    expect(client.getCachedUser()).toEqual(expect.objectContaining({ id: 'B' }))
+  })
+
+  test('迟到的 logout 完成不能清除并发登录的新账号缓存', async () => {
+    let resolveResponse!: (response: Response) => void
+    let markStarted!: () => void
+    const started = new Promise<void>((resolve) => { markStarted = resolve })
+    const client = createClient(async () => new Promise<Response>((resolve) => {
+      resolveResponse = resolve
+      markStarted()
+    }))
+    client.setAuthenticatedUserFromRust({ id: 'A' })
+
+    const logoutRequest = client.logout()
+    await started
+    client.setAuthenticatedUserFromRust({ id: 'B' })
+    resolveResponse(jsonResponse({ authenticated: false, user: null }))
+    await logoutRequest
+
+    expect(client.getCachedUser()).toEqual(expect.objectContaining({ id: 'B' }))
+  })
+
   test('登录只请求本机 Rust，并且不把 access token 写入 Electron facade', async () => {
     const calls: Array<{ url: string; init?: RequestInit }> = []
     const client = createClient(async (url, init) => {
@@ -202,6 +240,120 @@ describe('Copis Rust Working facade', () => {
       status: 410,
       code: 'rust_auth_session_owned',
     })
+  })
+
+  test('浏览器云同步先验证账号隔离能力，旧网关不接收同步 payload', async () => {
+    const calls: Array<{ url: string; method: string }> = []
+    const client = createClient(async (url, init) => {
+      calls.push({ url, method: init?.method ?? 'GET' })
+      return jsonResponse({ error: 'not found', code: 'not_found' }, 404)
+    })
+
+    await expect(client.syncBrowserData({
+      clientDeviceId: 'device',
+      clientCursor: 0,
+      expectedUserId: 'user-1',
+      changes: { groups: [], bookmarks: [], pageProfiles: [] },
+    })).rejects.toMatchObject({
+      code: 'browser_sync_capability_required',
+      message: '请更新浏览器云同步所需的本地服务',
+    })
+    expect(calls).toHaveLength(1)
+    expect(calls[0]?.url).toEndWith('/api/working/browser/sync/capabilities')
+  })
+
+  test('Given 本地已声明账号隔离同步能力 When 云端同步接口返回 404 Then 显示云端接口未提供且保留稳定错误码', async () => {
+    const calls: Array<{ url: string; method: string }> = []
+    const client = createClient(async (url, init) => {
+      calls.push({ url, method: init?.method ?? 'GET' })
+      if (url.endsWith('/api/working/browser/sync/capabilities')) {
+        return jsonResponse({ accountBoundSync: true, protocolVersion: 1 })
+      }
+      return jsonResponse({ error: 'not found', code: 'not_found' }, 404)
+    })
+
+    await expect(client.syncBrowserData({
+      clientDeviceId: 'device',
+      clientCursor: 0,
+      expectedUserId: 'user-1',
+      changes: { groups: [], bookmarks: [], pageProfiles: [] },
+    })).rejects.toMatchObject({
+      status: 404,
+      code: 'browser_sync_endpoint_unavailable',
+      message: '云端尚未提供浏览器同步接口',
+    })
+    expect(calls.map(({ method }) => method)).toEqual(['GET', 'POST'])
+    expect(calls[1]?.url).toEndWith('/api/working/browser/sync')
+  })
+
+  const browserSyncPostFailures = [
+    { label: '401 认证失败', status: 401, code: 'unauthorized', message: 'Working 账号认证失败' },
+    { label: '409 账号冲突', status: 409, code: 'browser_sync_user_mismatch', message: '浏览器同步账号与当前账号不一致' },
+    { label: '500 服务错误', status: 500, code: 'internal_error', message: '云端同步服务暂时不可用' },
+  ] as const
+
+  for (const failure of browserSyncPostFailures) {
+    test(`Given 本地能力检查通过且云端返回 ${failure.label} When 浏览器数据同步 Then 原样保留错误且不重放请求`, async () => {
+      const calls: Array<{ url: string; method: string }> = []
+      const client = createClient(async (url, init) => {
+        calls.push({ url, method: init?.method ?? 'GET' })
+        if (url.endsWith('/api/working/browser/sync/capabilities')) {
+          return jsonResponse({ accountBoundSync: true, protocolVersion: 1 })
+        }
+        return jsonResponse({ error: failure.message, code: failure.code }, failure.status)
+      })
+
+      await expect(client.syncBrowserData({
+        clientDeviceId: 'device',
+        clientCursor: 0,
+        expectedUserId: 'user-1',
+        changes: { groups: [], bookmarks: [], pageProfiles: [] },
+      })).rejects.toMatchObject({
+        status: failure.status,
+        code: failure.code,
+        message: failure.message,
+      })
+      expect(calls.map(({ method }) => method)).toEqual(['GET', 'POST'])
+      expect(calls[1]?.url).toEndWith('/api/working/browser/sync')
+    })
+  }
+
+  test('浏览器同步能力检查网络错误保留真实错误，且不发送同步 payload', async () => {
+    const calls: string[] = []
+    const client = createClient(async (url) => {
+      calls.push(url)
+      throw new Error('network down')
+    })
+
+    await expect(client.syncBrowserData({
+      clientDeviceId: 'device',
+      clientCursor: 0,
+      expectedUserId: 'user-1',
+      changes: { groups: [], bookmarks: [], pageProfiles: [] },
+    })).rejects.toMatchObject({ code: 'network_error' })
+    expect(calls).toHaveLength(1)
+  })
+
+  test('浏览器同步携带预期用户并在网关确认能力后才 POST', async () => {
+    const calls: Array<{ url: string; method: string; body?: string }> = []
+    const client = createClient(async (url, init) => {
+      calls.push({ url, method: init?.method ?? 'GET', body: typeof init?.body === 'string' ? init.body : undefined })
+      if (url.endsWith('/api/working/browser/sync/capabilities')) {
+        return jsonResponse({ accountBoundSync: true, protocolVersion: 1 })
+      }
+      return jsonResponse({ serverCursor: 12, serverChanges: { groups: [], bookmarks: [], pageProfiles: [] } })
+    })
+
+    const response = await client.syncBrowserData({
+      clientDeviceId: 'device',
+      clientCursor: 11,
+      expectedUserId: 'user-1',
+      changes: { groups: [], bookmarks: [], pageProfiles: [] },
+    })
+
+    expect(response.serverCursor).toBe(12)
+    expect(calls.map(({ method }) => method)).toEqual(['GET', 'POST'])
+    expect(JSON.parse(calls[1]!.body!).expectedUserId).toBe('user-1')
   })
 
   test('远端 URL 只能作为显式测试注入，默认 facade 始终指向本机 Rust', () => {

@@ -13,6 +13,10 @@ mock.module('./config-paths', () => ({
   getWebPageProfilesPath: () => profilesPath,
   getWebProjectAssociationsPath: () => legacyPath,
 }))
+mock.module('./web-sync-account-storage', () => ({
+  getWebPageProfilesStoragePath: () => profilesPath,
+  getWebProjectAssociationsStoragePath: () => legacyPath,
+}))
 
 const service = await import('./web-page-profile-service')
 

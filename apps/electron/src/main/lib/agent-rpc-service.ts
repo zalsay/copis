@@ -689,6 +689,10 @@ export async function prepareAgentRpcRun(input: AgentSendInput, trustedRunId?: s
   const browserBinding = isChatroomRun ? undefined : getBrowserAgentContext(input.sessionId)
   const browserTab = browserBinding ? getWebTabState(browserBinding.tabId) : undefined
   const hasBrowserContext = Boolean(browserBinding && browserTab)
+  const isUserMainSession = !isChatroomRun
+    && (input.triggeredBy ?? 'user') === 'user'
+    && !session.sourceAutomationId
+    && !session.sourceDelegationId
   console.info('[AI浏览器][prepareAgentRpcRun] 检查页签上下文与绑定状态', {
     sessionId: input.sessionId,
     hasBrowserBinding: Boolean(browserBinding),
@@ -699,7 +703,7 @@ export async function prepareAgentRpcRun(input: AgentSendInput, trustedRunId?: s
     hasBrowserContext,
     targetTabIdForCapability: (browserBinding && browserTab ? browserBinding.tabId : undefined),
   })
-  const browserAdvancedAuthorization = !isChatroomRun && (input.triggeredBy ?? 'user') === 'user'
+  const browserAdvancedAuthorization = isUserMainSession
     && isBrowserPageAdvancedAuthorizationEnabled(input.sessionId)
   const effectivePermissionMode = isChatroomRun
     ? 'bypassPermissions' as CopisPermissionMode
@@ -741,7 +745,7 @@ export async function prepareAgentRpcRun(input: AgentSendInput, trustedRunId?: s
     workspaceWriteRoot,
     additionalDirectories: directories,
     permissionMode: queryPermissionMode,
-    advancedAuthorization: !isChatroomRun && session.advancedAuthorization === true,
+    advancedAuthorization: isUserMainSession && session.advancedAuthorization === true,
     isAppConnector,
     ...(isChatroomRun ? { chatroomRuntimeContext } : {}),
   })
@@ -787,13 +791,14 @@ export async function prepareAgentRpcRun(input: AgentSendInput, trustedRunId?: s
         : undefined
   await assertTrustedRunCurrent()
   const systemPrompt = buildSystemPrompt({
-    agentRuntime: 'pi',
+    agentRuntime: session.agentRuntime ?? 'pi',
     workspaceName: workspace.name,
     workspaceSlug: isChatroomRun ? undefined : memoryWorkspaceSlug,
     sessionId: input.sessionId,
     agentCwd,
     workspaceWriteRoot,
     permissionMode: effectivePermissionMode,
+    composerAdvancedAuthorization: isUserMainSession && session.advancedAuthorization === true,
     collaborationAvailable: false,
     // 与 Pi 内置工具保持一致：只有用户主会话可使用专家团队，委派/自动化会话只执行成员或任务本身。
     expertTeamAvailable: !isChatroomRun && (input.triggeredBy ?? 'user') === 'user' && Boolean(workspaceId && workspaceSlug),
@@ -887,6 +892,7 @@ export async function prepareAgentRpcRun(input: AgentSendInput, trustedRunId?: s
     channelName: channel.name,
     ...(maxTurns !== undefined ? { maxTurns } : {}),
     permissionMode: queryPermissionMode,
+    advancedAuthorization: isUserMainSession && session.advancedAuthorization === true,
     systemPrompt,
     ...(existingSdkSessionId ? { resumeSessionId: existingSdkSessionId } : {}),
     piAgentDir: isChatroomRun ? chatroomRuntimeContext.executionWorkspace.sessionRoot : getSdkConfigDir(),
@@ -901,10 +907,12 @@ export async function prepareAgentRpcRun(input: AgentSendInput, trustedRunId?: s
     ...(!isChatroomRun && workspace?.id ? { workspaceId: workspace.id } : {}),
     ...(!isChatroomRun && session.sourceAutomationId ? { sourceAutomationId: session.sourceAutomationId } : {}),
     automationEnabled: !isChatroomRun && isBuiltinMcpUserEnabled('automation'),
-    imageGenerationEnabled: !isChatroomRun && Boolean(
-      isBuiltinMcpUserEnabled('nano-banana')
-      || input.mentionedMcpServers?.includes('copis_image')
-      || input.mentionedMcpServers?.includes('nano-banana')
+    // 默认图片工具与内置图片 Skill 对齐；plan 模式不因默认分支新增副作用能力。
+    imageGenerationEnabled: !isChatroomRun && (!isSessionProfessional || queryPermissionMode !== 'plan') && (
+      (isUserMainSession && trustedSource === undefined && queryPermissionMode !== 'plan')
+      || isBuiltinMcpUserEnabled('nano-banana')
+      || input.mentionedMcpServers?.includes('copis_image') === true
+      || input.mentionedMcpServers?.includes('nano-banana') === true
     ),
     memoryPolicy,
     ...(proxyUrl ? { proxyUrl } : {}),

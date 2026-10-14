@@ -11,6 +11,7 @@ mock.module('./config-paths', () => ({
   ...actualConfigPaths,
   getWebBookmarksPath: () => bookmarksPath,
 }))
+mock.module('./web-sync-account-storage', () => ({ getWebBookmarksStoragePath: () => bookmarksPath }))
 
 const service = await import('./web-bookmark-service')
 

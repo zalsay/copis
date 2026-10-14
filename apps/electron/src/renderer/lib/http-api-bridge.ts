@@ -334,15 +334,19 @@ function createWebSyncFallback() {
     syncNow: () =>
       Promise.resolve({
         deviceId: '',
+        accountId: null,
+        status: 'error' as const,
         serverCursor: 0,
         lastSyncedAt: 0,
         isSyncing: false,
         hasLocalChanges: false,
-        lastSyncError: null,
+        lastSyncError: '浏览器数据云同步仅支持桌面应用',
       }),
     getState: () =>
       Promise.resolve({
         deviceId: '',
+        accountId: null,
+        status: 'idle' as const,
         serverCursor: 0,
         lastSyncedAt: 0,
         isSyncing: false,

@@ -16,7 +16,10 @@ import type {
   WebPageProfileChange,
   WebPageProfilesSnapshot,
 } from '@copis/shared'
-import { getWebPageProfilesPath, getWebProjectAssociationsPath } from './config-paths'
+import {
+  getWebPageProfilesStoragePath,
+  getWebProjectAssociationsStoragePath,
+} from './web-sync-account-storage'
 
 const profileChangeListeners = new Set<() => void>()
 
@@ -107,7 +110,7 @@ function isProfile(value: unknown): value is WebPageProfile {
 }
 
 function readLegacyAssociations(): WebPageProfile[] {
-  const legacyPath = getWebProjectAssociationsPath()
+  const legacyPath = getWebProjectAssociationsStoragePath()
   if (!existsSync(legacyPath)) return []
 
   try {
@@ -147,7 +150,7 @@ function readLegacyAssociations(): WebPageProfile[] {
 }
 
 function readSnapshot(): WebPageProfilesSnapshot {
-  const path = getWebPageProfilesPath()
+  const path = getWebPageProfilesStoragePath()
   if (!existsSync(path)) {
     // 自动兼容并迁移旧版 web-project-associations.json
     const legacy = readLegacyAssociations()
@@ -222,7 +225,7 @@ function readSnapshot(): WebPageProfilesSnapshot {
 }
 
 function writeSnapshot(snapshot: WebPageProfilesSnapshot, notify = true): WebPageProfilesSnapshot {
-  const path = getWebPageProfilesPath()
+  const path = getWebPageProfilesStoragePath()
   mkdirSync(dirname(path), { recursive: true })
   const tempPath = `${path}.${process.pid}.${Date.now()}.tmp`
   writeFileSync(tempPath, `${JSON.stringify(snapshot, null, 2)}\n`, 'utf-8')

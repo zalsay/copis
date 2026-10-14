@@ -3,6 +3,7 @@ import { WORKING_IPC_CHANNELS, type WorkingLoginInput, type WorkingRegisterInput
 import { getWorkingApiClient } from '../lib/working-api-service'
 import { getDshCordisStatus, reloadDshCordisPlugins } from '../lib/dsh-cordis-service'
 import { getWorkingModelCatalogAccess } from '../lib/working-model-catalog-access'
+import { getWebSyncCoordinator } from '../lib/web-sync-coordinator'
 
 export interface WorkingAccountIpcOptions {
   stopChatRoomAgents?: (reason: 'logout') => Promise<void>
@@ -10,14 +11,25 @@ export interface WorkingAccountIpcOptions {
 }
 
 export function registerWorkingAccountIpcHandlers(options: WorkingAccountIpcOptions = {}): void {
+  const webSyncCoordinator = getWebSyncCoordinator()
+  const client = getWorkingApiClient()
+  const cachedUser = client.getCachedUser()
+  webSyncCoordinator.setAuthState({
+    authenticated: cachedUser !== null,
+    user: cachedUser,
+    backendUrl: client.baseUrl,
+  })
+
   ipcMain.handle(WORKING_IPC_CHANNELS.GET_CONFIG, async () => ({
     backendUrl: getWorkingApiClient().baseUrl,
   }))
 
   ipcMain.handle(WORKING_IPC_CHANNELS.GET_AUTH_STATE, async () => {
     const client = getWorkingApiClient()
+    const authGeneration = webSyncCoordinator.getAuthGeneration()
     const previousAccess = JSON.stringify(getWorkingModelCatalogAccess())
     const state = await client.getAuthState()
+    webSyncCoordinator.setAuthStateIfCurrent({ ...state, backendUrl: client.baseUrl }, authGeneration)
     if (getDshCordisStatus().running && previousAccess !== JSON.stringify(getWorkingModelCatalogAccess())) {
       await reloadDshCordisPlugins({ startIfNeeded: false })
     }
@@ -33,7 +45,9 @@ export function registerWorkingAccountIpcHandlers(options: WorkingAccountIpcOpti
     }
     const client = getWorkingApiClient()
     await client.login(input)
+    const authGeneration = webSyncCoordinator.getAuthGeneration()
     const state = await client.getAuthState()
+    webSyncCoordinator.setAuthStateIfCurrent({ ...state, backendUrl: client.baseUrl }, authGeneration)
     await options.resumeChatRoomAgentsAfterAuthentication?.()
     if (getDshCordisStatus().running) await reloadDshCordisPlugins({ startIfNeeded: false })
     return {
@@ -44,7 +58,13 @@ export function registerWorkingAccountIpcHandlers(options: WorkingAccountIpcOpti
 
   ipcMain.handle(WORKING_IPC_CHANNELS.LOGIN_OIDC, async () => {
     const client = getWorkingApiClient()
+    const authGeneration = webSyncCoordinator.getAuthGeneration()
     const result = await client.loginWithOAuth((url) => shell.openExternal(url))
+    webSyncCoordinator.setAuthStateIfCurrent({
+      authenticated: true,
+      user: result.user ?? client.getCachedUser(),
+      backendUrl: client.baseUrl,
+    }, authGeneration)
     await options.resumeChatRoomAgentsAfterAuthentication?.()
     if (getDshCordisStatus().running) await reloadDshCordisPlugins({ startIfNeeded: false })
     return {
@@ -84,15 +104,27 @@ export function registerWorkingAccountIpcHandlers(options: WorkingAccountIpcOpti
 
   ipcMain.handle(WORKING_IPC_CHANNELS.LOGOUT, async () => {
     const client = getWorkingApiClient()
+    const authGeneration = webSyncCoordinator.getAuthGeneration()
     if (options.stopChatRoomAgents) await options.stopChatRoomAgents('logout')
-    await client.logout()
+    if (webSyncCoordinator.getAuthGeneration() !== authGeneration) {
+      const currentUser = client.getCachedUser()
+      return { authenticated: currentUser !== null, user: currentUser, backendUrl: client.baseUrl }
+    }
+    try {
+      await client.logout()
+    } finally {
+      webSyncCoordinator.setAuthStateIfCurrent({ authenticated: false, user: null, backendUrl: client.baseUrl }, authGeneration)
+    }
     if (getDshCordisStatus().running) await reloadDshCordisPlugins({ startIfNeeded: false })
     return { authenticated: false, user: null, backendUrl: client.baseUrl }
   })
 
   ipcMain.handle(WORKING_IPC_CHANNELS.GET_CURRENT_USER, async () => {
+    const authGeneration = webSyncCoordinator.getAuthGeneration()
     const previousAccess = JSON.stringify(getWorkingModelCatalogAccess())
-    const user = await getWorkingApiClient().getCurrentUser()
+    const client = getWorkingApiClient()
+    const user = await client.getCurrentUser()
+    webSyncCoordinator.setAuthStateIfCurrent({ authenticated: true, user, backendUrl: client.baseUrl }, authGeneration)
     if (getDshCordisStatus().running && previousAccess !== JSON.stringify(getWorkingModelCatalogAccess())) {
       await reloadDshCordisPlugins({ startIfNeeded: false })
     }

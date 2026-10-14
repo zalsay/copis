@@ -50,6 +50,7 @@ interface AgentWorkspacesIndex {
 }
 
 const INDEX_VERSION = 3
+export const INVESTMENT_WORKSPACE_SLUG = 'investment'
 const WINDOWS_RESERVED_SLUGS = new Set([
   'con',
   'prn',
@@ -121,7 +122,13 @@ function migrateIndex(index: AgentWorkspacesIndex): void {
         delete workspace.allowWorkspaceWrite
         continue
       }
-      workspace.projectPath = join(sourceRoot, COPIS_PROJECT_DIR)
+      if (isInvestmentWorkspace(workspace)) {
+        if (!workspace.projectPath || isInvestmentDefaultProjectPath(workspace, workspace.projectPath, sourceRoot)) {
+          workspace.projectPath = sourceRoot
+        }
+      } else {
+        workspace.projectPath = join(sourceRoot, COPIS_PROJECT_DIR)
+      }
       delete workspace.allowWorkspaceWrite
     }
   }
@@ -315,6 +322,34 @@ export function getAgentWorkspaceReadableRoots(
 
 /** 工作区内用户项目的固定目录名称。 */
 export const COPIS_PROJECT_DIR = 'project'
+const INVESTMENT_WORKSPACE_NAME = '我的投资'
+
+function isInvestmentWorkspace(workspace: Pick<AgentWorkspace, 'slug' | 'name'>): boolean {
+  return workspace.slug === INVESTMENT_WORKSPACE_SLUG || workspace.name === INVESTMENT_WORKSPACE_NAME
+}
+
+function isInvestmentDefaultProjectPath(
+  workspace: Pick<AgentWorkspace, 'slug' | 'projectRootPath'>,
+  projectPath: string | undefined,
+  sourceRoot: string,
+): boolean {
+  if (!projectPath) return true
+
+  const defaultRoots = new Set([
+    resolve(sourceRoot),
+    resolve(getDefaultProjectRootPath(), 'Investment'),
+    resolve(resolveWorkspaceFilesDir(workspace.slug)),
+  ])
+  if (workspace.projectRootPath) defaultRoots.add(resolve(workspace.projectRootPath))
+
+  const defaultPaths = [...defaultRoots].flatMap((root) => [
+    root,
+    join(root, COPIS_PROJECT_DIR),
+    join(root, COPIS_WORKSPACE_WRITE_DIR, COPIS_PROJECT_DIR),
+  ])
+  const normalizedProjectPath = resolve(projectPath)
+  return defaultPaths.some((path) => resolve(path) === normalizedProjectPath)
+}
 
 /**
  * 返回工作区内用户项目的开发根。
@@ -325,6 +360,12 @@ export const COPIS_PROJECT_DIR = 'project'
 export function getAgentWorkspaceProjectPath(
   workspace: Pick<AgentWorkspace, 'slug' | 'projectRootPath' | 'projectPath'>,
 ): string {
+  if (workspace.slug === INVESTMENT_WORKSPACE_SLUG) {
+    const sourceRoot = getAgentWorkspaceSourceRoot(workspace)
+    if (isInvestmentDefaultProjectPath(workspace, workspace.projectPath, sourceRoot)) {
+      return resolve(sourceRoot)
+    }
+  }
   if (workspace.projectPath) return resolve(workspace.projectPath)
   if (workspace.projectRootPath) {
     return join(resolve(workspace.projectRootPath), COPIS_PROJECT_DIR)
@@ -359,6 +400,9 @@ const BROWSER_WORKFLOWS_DIR = 'browser-workflows'
 export function getAgentWorkspaceCopisPath(
   workspace: Pick<AgentWorkspace, 'slug' | 'projectRootPath'>,
 ): string {
+  if (workspace.slug === INVESTMENT_WORKSPACE_SLUG) {
+    return resolve(getAgentWorkspaceSourceRoot(workspace))
+  }
   return join(getAgentWorkspaceSourceRoot(workspace), COPIS_WORKSPACE_WRITE_DIR)
 }
 
@@ -497,6 +541,34 @@ function removeEmptyDirectory(path: string, workspaceLabel: string): void {
     rmdirSync(path)
   } catch (error) {
     console.warn(`[Agent 工作区] 清理空旧项目目录失败，保留原目录 (${workspaceLabel}): ${path}`, error)
+  }
+}
+
+/** 只清理 investment 的空旧目录；rmdir 非递归，目录含任意用户数据时会原样保留。 */
+function removeEmptyInvestmentLegacyDirectories(sourceRoot: string): void {
+  const legacyProjectPath = join(sourceRoot, COPIS_PROJECT_DIR)
+  const legacyCopisPath = join(sourceRoot, COPIS_WORKSPACE_WRITE_DIR)
+  const legacyCopisProjectPath = join(legacyCopisPath, COPIS_PROJECT_DIR)
+
+  if (isSymlinkEntry(sourceRoot) || !isDirectoryEntry(sourceRoot)) return
+
+  if (!isSymlinkEntry(legacyCopisPath) && isDirectoryEntry(legacyCopisPath)) {
+    try {
+      if (isDirectoryEntry(legacyCopisProjectPath) && readdirSync(legacyCopisProjectPath).length === 0) {
+        removeEmptyDirectory(legacyCopisProjectPath, INVESTMENT_WORKSPACE_SLUG)
+      }
+      if (readdirSync(legacyCopisPath).length === 0) removeEmptyDirectory(legacyCopisPath, INVESTMENT_WORKSPACE_SLUG)
+    } catch (error) {
+      console.warn(`[Agent 工作区] 检查 investment 旧目录失败，保留原目录: ${legacyCopisPath}`, error)
+    }
+  }
+
+  if (isDirectoryEntry(legacyProjectPath)) {
+    try {
+      if (readdirSync(legacyProjectPath).length === 0) removeEmptyDirectory(legacyProjectPath, INVESTMENT_WORKSPACE_SLUG)
+    } catch (error) {
+      console.warn(`[Agent 工作区] 检查 investment 旧目录失败，保留原目录: ${legacyProjectPath}`, error)
+    }
   }
 }
 
@@ -660,6 +732,11 @@ export function migrateLegacyAgentWorkspaceProjectDirectories(): void {
         console.warn(`[Agent 工作区] 托管工作区来源根越界，跳过 (${workspace.slug}): ${sourceRoot}`)
         continue
       }
+      if (isInvestmentWorkspace(workspace)) {
+        removeEmptyInvestmentLegacyDirectories(sourceRoot)
+        // Investment 根现在是 Agent 工作目录；根级与旧 copis/.context 都属于用户内容。
+        continue
+      }
       migrateLegacyProjectDirectory(sourceRoot, workspace.slug)
       removeLegacyRootContextDirectory(sourceRoot, workspace.slug)
       if (workspace.projectPath) {
@@ -675,6 +752,10 @@ export function migrateLegacyAgentWorkspaceProjectDirectories(): void {
 export function getAgentWorkspaceContextDir(
   workspace: Pick<AgentWorkspace, 'slug' | 'projectRootPath' | 'projectPath'>,
 ): string {
+  if (workspace.slug === INVESTMENT_WORKSPACE_SLUG) {
+    const legacyContextDir = join(getAgentWorkspaceSourceRoot(workspace), COPIS_WORKSPACE_WRITE_DIR, '.context')
+    if (isDirectoryEntry(legacyContextDir)) return legacyContextDir
+  }
   return join(getAgentWorkspaceWritableRoot(workspace), '.context')
 }
 
@@ -687,10 +768,10 @@ export function ensureAgentWorkspaceContextDir(
   }
 
   // 兼容性清理：根目录直接存在的 .context 属于旧版残留，需自动清理（长期上下文位于 copis/.context）
-  if (workspace.projectRootPath) {
+  if (workspace.projectRootPath && workspace.slug !== INVESTMENT_WORKSPACE_SLUG) {
     removeLegacyRootContextDirectory(workspace.projectRootPath, workspace.slug)
   }
-  if (workspace.projectPath) {
+  if (workspace.projectPath && workspace.slug !== INVESTMENT_WORKSPACE_SLUG) {
     removeLegacyRootContextDirectory(workspace.projectPath, workspace.slug)
   }
 
@@ -930,8 +1011,6 @@ export function deleteAgentWorkspace(id: string): void {
   console.log(`[Agent 工作区] 已删除工作区: ${removed.name} (slug: ${removed.slug})`)
 }
 
-export const INVESTMENT_WORKSPACE_SLUG = 'investment'
-
 /** 确保默认工作区的本地根目录存在且可读取。 */
 function ensureDefaultProjectRootPath(): string {
   const projectRootPath = getDefaultProjectRootPath()
@@ -1030,10 +1109,10 @@ export function ensureInvestmentWorkspace(): AgentWorkspace {
     const projectRootPath = ensureInvestmentProjectRootPath()
     investmentWs = {
       id: randomUUID(),
-      name: '我的投资',
+      name: INVESTMENT_WORKSPACE_NAME,
       slug: INVESTMENT_WORKSPACE_SLUG,
       projectRootPath,
-      projectPath: join(projectRootPath, COPIS_PROJECT_DIR),
+      projectPath: projectRootPath,
       createdAt: now,
       updatedAt: now,
     }
@@ -1049,8 +1128,8 @@ export function ensureInvestmentWorkspace(): AgentWorkspace {
   } else {
     let needsWrite = false
 
-    if (investmentWs.name !== '我的投资') {
-      investmentWs.name = '我的投资'
+    if (investmentWs.name !== INVESTMENT_WORKSPACE_NAME) {
+      investmentWs.name = INVESTMENT_WORKSPACE_NAME
       needsWrite = true
     }
 
@@ -1061,15 +1140,17 @@ export function ensureInvestmentWorkspace(): AgentWorkspace {
 
     if (!investmentWs.projectRootPath) {
       investmentWs.projectRootPath = ensureInvestmentProjectRootPath()
-      investmentWs.projectPath = join(investmentWs.projectRootPath, COPIS_PROJECT_DIR)
       needsWrite = true
     }
 
-    if (!investmentWs.projectPath) {
-      investmentWs.projectPath = join(investmentWs.projectRootPath, COPIS_PROJECT_DIR)
-      needsWrite = true
+    if (isInvestmentDefaultProjectPath(investmentWs, investmentWs.projectPath, investmentWs.projectRootPath)) {
+      if (investmentWs.projectPath !== investmentWs.projectRootPath) {
+        investmentWs.projectPath = investmentWs.projectRootPath
+        needsWrite = true
+      }
     }
 
+    removeEmptyInvestmentLegacyDirectories(investmentWs.projectRootPath)
     ensureAgentWorkspaceWritableRoot(investmentWs)
 
     if (needsWrite) {

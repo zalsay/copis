@@ -64,6 +64,25 @@ describe('浏览器地址栏视觉契约', () => {
     expect(surfaceSource).toContain('<TooltipContent side="top" sideOffset={8} avoidCollisions={false}>{label}</TooltipContent>')
     expect(surfaceSource).not.toContain('<TooltipContent side="bottom">{label}</TooltipContent>')
   })
+
+  test('Given 网页工具栏 When 渲染同步按钮 Then 位于表单外且在 Copis logo 之后、实时同传之前独立显示', () => {
+    const syncButtonSource = readFileSync(join(import.meta.dir, 'WebSyncStatusButton.tsx'), 'utf8')
+    const addressFormStartIndex = surfaceSource.indexOf('<form className="ml-1 flex min-w-0 flex-1 items-center"')
+    const addressFormEndIndex = surfaceSource.indexOf('</form>', addressFormStartIndex)
+    const copisLogoIndex = surfaceSource.indexOf('src={CopisAgentLogo}')
+    const copisToolbarEndIndex = surfaceSource.indexOf(') : null}', copisLogoIndex)
+    const syncButtonIndex = surfaceSource.indexOf('<WebSyncStatusButton />')
+    const liveTranslateIndex = surfaceSource.indexOf('label={liveTranslateActive')
+    const syncInstances = surfaceSource.match(/<WebSyncStatusButton\s*\/>/g) ?? []
+
+    expect(syncInstances).toHaveLength(1)
+    expect(addressFormEndIndex).toBeGreaterThan(addressFormStartIndex)
+    expect(syncButtonIndex).toBeGreaterThan(addressFormEndIndex)
+    expect(copisToolbarEndIndex).toBeGreaterThan(copisLogoIndex)
+    expect(syncButtonIndex).toBeGreaterThan(copisToolbarEndIndex)
+    expect(liveTranslateIndex).toBeGreaterThan(syncButtonIndex)
+    expect(syncButtonSource).toContain('<TooltipContent side="top" sideOffset={8} avoidCollisions={false}')
+    expect(syncButtonSource).toContain('aria-label={presentation.label}')
+    expect(syncButtonSource).toContain('if (compact) return button')
+  })
 })
-
-

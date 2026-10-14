@@ -1,6 +1,7 @@
-import { existsSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { dirname } from 'node:path'
 import type { SaveWebPageProjectAssociationInput, WebPageProjectAssociation } from '@copis/shared'
-import { getWebProjectAssociationsPath } from './config-paths'
+import { getWebProjectAssociationsStoragePath } from './web-sync-account-storage'
 import { getAgentWorkspace } from './agent-workspace-manager'
 
 interface StoredAssociations {
@@ -27,7 +28,7 @@ function normalizeHttpUrl(value: string): string {
 }
 
 function readAssociations(): WebPageProjectAssociation[] {
-  const path = getWebProjectAssociationsPath()
+  const path = getWebProjectAssociationsStoragePath()
   if (!existsSync(path)) return []
 
   try {
@@ -45,7 +46,8 @@ function readAssociations(): WebPageProjectAssociation[] {
 }
 
 function writeAssociations(associations: WebPageProjectAssociation[]): void {
-  const path = getWebProjectAssociationsPath()
+  const path = getWebProjectAssociationsStoragePath()
+  mkdirSync(dirname(path), { recursive: true })
   const tempPath = `${path}.${process.pid}.${Date.now()}.tmp`
   const payload: StoredAssociations = { associations }
   writeFileSync(tempPath, `${JSON.stringify(payload, null, 2)}\n`, 'utf-8')

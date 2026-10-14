@@ -178,7 +178,7 @@
   },
   "copis": {
     "platformVersions": {
-      "darwin-arm64": "0.0.93",
+      "darwin-arm64": "0.0.96",
       "darwin-x64": "0.0.82",
       "win32-x64": "0.0.95",
       "linux-x64": "0.0.82"

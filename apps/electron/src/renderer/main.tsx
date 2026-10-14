@@ -95,7 +95,9 @@ import { agentToolsAtom } from './atoms/agent-tool-atoms'
 import { feishuBotStatesAtom } from './atoms/feishu-atoms'
 import { dingtalkBotStatesAtom } from './atoms/dingtalk-atoms'
 import { channelsAtom, channelsLoadedAtom, selectedModelAtom } from './atoms/model-atoms'
-import { webSyncStateAtom } from './atoms/web-sync'
+import { webPageProfilesAtom, webSyncStateAtom } from './atoms/web-sync'
+import { webBookmarksAtom, webBookmarkGroupsAtom } from './atoms/web-bookmarks'
+import { subscribeWebSync } from './lib/web-sync-subscription'
 import { appModeAtom, normalizeAppMode } from './atoms/app-mode'
 import { activeViewAtom } from './atoms/active-view'
 import {
@@ -1087,19 +1089,21 @@ function WebSyncInitializer(): null {
   const store = useStore()
 
   useEffect(() => {
-    window.electronAPI.webSync?.getState?.()
-      .then((state) => {
-        if (state) store.set(webSyncStateAtom, state)
-      })
-      .catch((err: unknown) => console.error('[WebSyncInitializer] 获取初始同步状态失败:', err))
-
-    const cleanup = window.electronAPI.webSync?.onStateChanged?.((nextState) => {
-      store.set(webSyncStateAtom, nextState)
+    const api = window.electronAPI
+    if (!api.webSync) return
+    return subscribeWebSync({
+      getState: () => api.webSync.getState(),
+      onStateChanged: (listener) => api.webSync.onStateChanged(listener),
+      listBookmarks: () => api.webTabs.bookmarksList(),
+      listProfiles: () => api.webSync.listProfiles(),
+    }, {
+      onState: (state) => store.set(webSyncStateAtom, state),
+      onBookmarks: (snapshot) => {
+        store.set(webBookmarksAtom, snapshot.bookmarks)
+        store.set(webBookmarkGroupsAtom, snapshot.groups)
+      },
+      onProfiles: (snapshot) => store.set(webPageProfilesAtom, snapshot.profiles),
     })
-
-    return () => {
-      cleanup?.()
-    }
   }, [store])
 
   return null

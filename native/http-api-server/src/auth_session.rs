@@ -103,6 +103,11 @@ pub enum AuthError {
     RefreshFailed,
 }
 
+pub(crate) enum UserBoundRequestError {
+    Authentication(AuthError),
+    UserMismatch,
+}
+
 impl fmt::Debug for AuthError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -445,6 +450,7 @@ impl AuthSession {
                     return Err(error);
                 }
                 eprintln!("[HTTP API][OIDC] 保存用户信息成功");
+                self.notify_auth_state_changed(true);
             }
         }
         Ok(self.auth_state())
@@ -487,6 +493,7 @@ impl AuthSession {
                         let previous = persisted.clone();
                         persisted.user = Some(sanitize_user(&unwrap_data(&payload)));
                         self.save_auth_snapshot(&persisted, &Some(previous), false)?;
+                        self.notify_auth_state_changed(true);
                     }
                 }
                 Err(error @ AuthError::Upstream { status: 401, .. }) => {
@@ -619,6 +626,11 @@ impl AuthSession {
         self.refresh_state.lock().unwrap().waiters
     }
 
+    #[cfg(test)]
+    pub fn refresh_active_for_test(&self) -> bool {
+        self.refresh_state.lock().unwrap().active
+    }
+
     pub fn logout(&self) -> Result<(), AuthError> {
         self.clear_auth_snapshot(None).map(|_| ())
     }
@@ -678,6 +690,34 @@ impl AuthSession {
             return Err(AuthError::NotAuthenticated);
         }
         Ok((auth.clone().ok_or(AuthError::NotAuthenticated)?, generation))
+    }
+
+    pub(crate) fn authenticated_request_for_user(
+        &self,
+        expected_user_id: &str,
+        method: &str,
+        path: &str,
+        body: Option<String>,
+    ) -> Result<EduApiResponse, UserBoundRequestError> {
+        let token = {
+            let auth = self.auth.lock().unwrap();
+            let auth = auth.as_ref().ok_or(UserBoundRequestError::Authentication(
+                AuthError::NotAuthenticated,
+            ))?;
+            let current_user_id = auth
+                .user
+                .as_ref()
+                .and_then(user_identifier)
+                .ok_or(UserBoundRequestError::UserMismatch)?;
+            if current_user_id != expected_user_id {
+                return Err(UserBoundRequestError::UserMismatch);
+            }
+            auth.access_token.clone()
+        };
+
+        // 浏览器同步不刷新重放：账号可能已切换，重放会把旧 payload 交给新账号。
+        self.request_with_token(method, path, body, Some(token), Vec::new())
+            .map_err(UserBoundRequestError::Authentication)
     }
 
     pub(crate) fn current_access_token(&self) -> Result<String, AuthError> {
@@ -1170,6 +1210,16 @@ fn sanitize_user(value: &Value) -> Value {
         sanitized.insert(key.clone(), value.clone());
     }
     Value::Object(sanitized)
+}
+
+fn user_identifier(user: &Value) -> Option<String> {
+    ["ID", "id", "user_id", "userId"]
+        .iter()
+        .find_map(|key| match user.get(*key)? {
+            Value::String(value) if !value.trim().is_empty() => Some(value.trim().to_string()),
+            Value::Number(value) => Some(value.to_string()),
+            _ => None,
+        })
 }
 
 fn jwt_expiry(token: &str) -> Option<u64> {
