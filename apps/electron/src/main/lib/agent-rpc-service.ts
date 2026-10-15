@@ -755,6 +755,18 @@ export async function prepareAgentRpcRun(input: AgentSendInput, trustedRunId?: s
   const memoryPolicy: MemoryPolicy = isChatroomRun
     ? (chatroomRuntimeContext.memorySource ? 'visible' : 'off')
     : workspace.memoryPolicy ?? settings.defaultMemoryPolicy ?? 'writable'
+  const imageCapability = await resolvePiImageInputCapability(channel.provider, modelId)
+  const chromeDesktopControl = issueChromeDesktopWorkerCapability({
+    sessionId: input.sessionId,
+    triggeredBy: input.triggeredBy,
+    isChatroomRun,
+    isAutomationRun: input.triggeredBy === 'automation' || Boolean(input.automationContext),
+    isDelegationRun: input.triggeredBy === 'delegation',
+    isRemoteBotRun: false,
+    isPaymentRun: false,
+    isSessionProfessional,
+    imageInputSupported: imageCapability === 'supported',
+  })
   const dynamicContext = buildDynamicContext({
     workspaceName: workspace.name,
     workspaceSlug: isChatroomRun ? undefined : memoryWorkspaceSlug,
@@ -808,6 +820,7 @@ export async function prepareAgentRpcRun(input: AgentSendInput, trustedRunId?: s
     workingMode,
     memoryPolicy,
     allWorkspacesAccess: isAppConnector,
+    chromeDesktopControlAvailable: Boolean(chromeDesktopControl),
     ...(session.expertTeamSession ? { expertTeamSession: session.expertTeamSession } : {}),
     ...(session.expertTeamSetup ? { expertTeamSetup: true } : {}),
     ...(expertTeamContext ? { expertTeamContext } : {}),
@@ -857,15 +870,6 @@ export async function prepareAgentRpcRun(input: AgentSendInput, trustedRunId?: s
     ...(browserBinding && browserTab ? { tabId: browserBinding.tabId } : {}),
     triggeredBy: input.triggeredBy ?? 'user',
   })
-  const imageCapability = await resolvePiImageInputCapability(channel.provider, modelId)
-  const isEligibleForChromeDesktop = !isChatroomRun && !isSessionProfessional && input.triggeredBy !== 'automation' && input.triggeredBy !== 'delegation'
-  const chromeDesktopControl = isEligibleForChromeDesktop ? issueChromeDesktopWorkerCapability({
-    sessionId: input.sessionId,
-    isChatroomRun,
-    isAutomationRun: input.triggeredBy === 'automation',
-    isDelegationRun: input.triggeredBy === 'delegation',
-    imageInputSupported: imageCapability === 'supported',
-  }) : undefined
   let codexAppServerPort: number | undefined
   if (isSessionProfessional) {
     let httpApiPort: number | undefined
@@ -1122,17 +1126,36 @@ export function finalizeAgentRpcRun(input: {
   stoppedByUser: boolean
   resultSubtype?: string
   resultErrors?: string[]
+  chromeDesktopCapabilityToken?: string
+  browserCapabilityToken?: string
 }): AgentRpcCompletionResult {
   const pending = pendingAgentRpcRuns.get(input.sessionId)
+  const chromeDesktopToken = input.chromeDesktopCapabilityToken ?? pending?.chromeDesktopCapabilityToken
+  const browserToken = input.browserCapabilityToken ?? pending?.browserCapabilityToken
+
+  const isStaleRun = Boolean(
+    input.chromeDesktopCapabilityToken &&
+    pending?.chromeDesktopCapabilityToken &&
+    input.chromeDesktopCapabilityToken !== pending.chromeDesktopCapabilityToken
+  )
+
   console.info('[AI浏览器][finalizeAgentRpcRun] 本轮 Run 结束，准备撤销 capability', {
     sessionId: input.sessionId,
     stoppedByUser: input.stoppedByUser,
     resultSubtype: input.resultSubtype,
-    tokenFingerprint: pending?.browserCapabilityToken ? shortLogId(pending.browserCapabilityToken) : undefined,
+    tokenFingerprint: browserToken ? shortLogId(browserToken) : undefined,
+    isStaleRun,
   })
-  revokeBrowserAgentWorkerCapability(input.sessionId, pending?.browserCapabilityToken)
-  revokeChromeDesktopWorkerCapability(input.sessionId, pending?.chromeDesktopCapabilityToken)
-  chromeDesktopService.releaseSessionControl(input.sessionId)
+
+  revokeBrowserAgentWorkerCapability(input.sessionId, browserToken)
+  revokeChromeDesktopWorkerCapability(input.sessionId, chromeDesktopToken)
+  chromeDesktopService.releaseSessionControl(input.sessionId, chromeDesktopToken)
+
+  if (isStaleRun) {
+    console.warn('[agent-rpc-service] 忽略迟到的旧 run finalize 对 pendingAgentRpcRuns 的清理与状态覆盖')
+    return { session: getAgentSessionMeta(input.sessionId) }
+  }
+
   const current = getAgentSessionMeta(input.sessionId)
   if (!current) {
     pendingAgentRpcRuns.delete(input.sessionId)

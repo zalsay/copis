@@ -1389,6 +1389,22 @@ export class AgentOrchestrator {
         }
       }
 
+      // 10.5 解析 Chrome 桌面控制 capability（仅限 macOS、用户交互、非自动化/远程/聊天室，且模型支持图片）
+      const isAutomationRun = Boolean(automationContext) || input.triggeredBy === 'automation'
+      const isRemoteBotRun = isAppConnector || trustedSource === 'feishu' || trustedSource === 'wechat' || trustedSource === 'dingtalk'
+      const imageCap = await resolvePiImageInputCapability(channel.provider, selectedModelId)
+      chromeDesktopControl = issueChromeDesktopWorkerCapability({
+        sessionId,
+        triggeredBy: input.triggeredBy,
+        isChatroomRun,
+        isAutomationRun,
+        isDelegationRun: input.triggeredBy === 'delegation',
+        isRemoteBotRun,
+        isPaymentRun: false,
+        isSessionProfessional: false,
+        imageInputSupported: imageCap === 'supported',
+      })
+
       // 11. 构建动态上下文和最终 prompt
       const dynamicCtx = buildDynamicContext({
         workspaceName: workspace?.name,
@@ -1804,6 +1820,7 @@ export class AgentOrchestrator {
         workingMode,
         memoryPolicy,
         allWorkspacesAccess: isAppConnector,
+        chromeDesktopControlAvailable: Boolean(chromeDesktopControl),
         ...(sessionMeta?.expertTeamSession ? { expertTeamSession: sessionMeta.expertTeamSession } : {}),
         ...(sessionMeta?.expertTeamSetup ? { expertTeamSetup: true } : {}),
         ...(expertTeamContext ? { expertTeamContext } : {}),
@@ -1923,14 +1940,6 @@ export class AgentOrchestrator {
           }
         }
       }
-
-      const isEligibleForChromeDesktop = !isChatroomRun
-      const imageCap = await resolvePiImageInputCapability(channel.provider, selectedModelId)
-      chromeDesktopControl = isEligibleForChromeDesktop ? issueChromeDesktopWorkerCapability({
-        sessionId,
-        isChatroomRun,
-        imageInputSupported: imageCap === 'supported',
-      }) : undefined
 
       const queryOptions: PiAgentQueryOptions = {
         agentRuntime,
@@ -2801,7 +2810,7 @@ export class AgentOrchestrator {
       exitPlanService.clearSessionPending(sessionId)
       if (chromeDesktopControl) {
         revokeChromeDesktopWorkerCapability(sessionId, chromeDesktopControl.token)
-        chromeDesktopService.releaseSessionControl(sessionId)
+        chromeDesktopService.releaseSessionControl(sessionId, chromeDesktopControl.token)
       }
     }
   }

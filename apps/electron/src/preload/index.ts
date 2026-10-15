@@ -252,8 +252,8 @@ export interface ElectronAPI {
     stopControl: (sessionId?: string) => Promise<void>
     getState: () => Promise<ChromeDesktopSessionState | null>
     onStateChanged: (callback: (state: ChromeDesktopSessionState) => void) => () => void
-    onRequestFrame: (callback: (req: { controlId: string; geometryVersion: number }) => void) => () => void
-    sendFrameResponse: (res: { controlId: string; width: number; height: number; capturedAt: number; data: string; error?: string }) => void
+    onRequestFrame: (callback: (req: { controlId: string; requestId: string; geometryVersion: number }) => void) => () => void
+    sendFrameResponse: (res: { controlId: string; requestId: string; width: number; height: number; capturedAt: number; data: string; error?: string }) => void
     sendStreamError: (error: { reason: ChromeDesktopErrorCode; message: string }) => void
   }
   // ===== 运行时相关 =====
@@ -3053,14 +3053,14 @@ const electronAPI: ElectronAPI = {
         ipcRenderer.removeListener(CHROME_DESKTOP_IPC_CHANNELS.STATE_CHANGED, listener)
       }
     },
-    onRequestFrame: (callback: (req: { controlId: string; geometryVersion: number }) => void): (() => void) => {
-      const listener = (_: any, req: { controlId: string; geometryVersion: number }) => callback(req)
+    onRequestFrame: (callback: (req: { controlId: string; requestId: string; geometryVersion: number }) => void): (() => void) => {
+      const listener = (_: any, req: { controlId: string; requestId: string; geometryVersion: number }) => callback(req)
       ipcRenderer.on(CHROME_DESKTOP_IPC_CHANNELS.REQUEST_FRAME, listener)
       return () => {
         ipcRenderer.removeListener(CHROME_DESKTOP_IPC_CHANNELS.REQUEST_FRAME, listener)
       }
     },
-    sendFrameResponse: (res: { controlId: string; width: number; height: number; capturedAt: number; data: string; error?: string }): void => {
+    sendFrameResponse: (res: { controlId: string; requestId: string; width: number; height: number; capturedAt: number; data: string; error?: string }): void => {
       ipcRenderer.send(CHROME_DESKTOP_IPC_CHANNELS.FRAME_RESPONSE, res)
     },
     sendStreamError: (error: { reason: ChromeDesktopErrorCode; message: string }): void => {

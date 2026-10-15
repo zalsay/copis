@@ -208,6 +208,7 @@ function installVoiceDictationMediaPermissions(win: BrowserWindow): void {
   voiceSession.setPermissionRequestHandler((webContents, permission, callback, details) => {
     if (webContents.id !== win.webContents.id) {
       callback(false)
+      return
     }
 
     if ((permission as string) === 'display-capture') {
@@ -236,7 +237,7 @@ function installVoiceDictationMediaPermissions(win: BrowserWindow): void {
 
   if (typeof (voiceSession as any).setDisplayMediaRequestHandler === 'function') {
     ;(voiceSession as any).setDisplayMediaRequestHandler(async (request: any, callback: any) => {
-      if (request.frame?.parent !== null || request.webContents?.id !== win.webContents.id) {
+      if (!validateDisplayMediaFrame(request.frame, win.webContents.id)) {
         callback({})
         return
       }
@@ -250,8 +251,7 @@ function installVoiceDictationMediaPermissions(win: BrowserWindow): void {
       try {
         const { desktopCapturer } = require('electron')
         const sources = await desktopCapturer.getSources({ types: ['window'] })
-        const targetStr = String(pendingTarget.windowId)
-        const matched = sources.find((s: any) => s.id === `window:${targetStr}:0` || s.id.includes(targetStr))
+        const matched = matchDesktopCaptureWindowSource(sources, pendingTarget.windowId)
         if (matched) {
           callback({ video: matched })
         } else {
@@ -262,6 +262,26 @@ function installVoiceDictationMediaPermissions(win: BrowserWindow): void {
       }
     })
   }
+}
+
+/** 校验 DisplayMedia 请求是否来自受信任的主窗口顶层 frame */
+export function validateDisplayMediaFrame(frame: any, expectedWebContentsId: number): boolean {
+  if (!frame || frame.parent !== null) return false
+  const wcId = frame.webContents?.id ?? frame.webContentsId
+  return wcId === expectedWebContentsId
+}
+
+/** 精确匹配 windowId 的 desktopCapturer source，格式为 window:<windowId>:<subId> */
+export function matchDesktopCaptureWindowSource<T extends { id: string }>(
+  sources: T[],
+  targetWindowId: number,
+): T | null {
+  const targetStr = String(targetWindowId)
+  return sources.find((s) => {
+    if (typeof s.id !== 'string' || !s.id.startsWith('window:')) return false
+    const parts = s.id.split(':')
+    return parts[1] === targetStr
+  }) ?? null
 }
 
 function isTrustedVoiceDictationUrl(rawUrl: string | undefined): boolean {

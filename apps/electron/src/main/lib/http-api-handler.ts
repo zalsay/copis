@@ -1242,6 +1242,12 @@ async function handleAgentRpcInternalRequest(
     const resultErrors = Array.isArray(bodyRecord.resultErrors)
       ? bodyRecord.resultErrors.filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
       : undefined
+    const chromeDesktopCapabilityToken = typeof bodyRecord.chromeDesktopCapabilityToken === 'string'
+      ? bodyRecord.chromeDesktopCapabilityToken
+      : undefined
+    const browserCapabilityToken = typeof bodyRecord.browserCapabilityToken === 'string'
+      ? bodyRecord.browserCapabilityToken
+      : undefined
     return {
       status: 200,
       body: finalizeAgentRpcRun({
@@ -1249,6 +1255,8 @@ async function handleAgentRpcInternalRequest(
         stoppedByUser: bodyRecord.stoppedByUser,
         ...(resultSubtype ? { resultSubtype } : {}),
         ...(resultErrors && resultErrors.length > 0 ? { resultErrors } : {}),
+        ...(chromeDesktopCapabilityToken ? { chromeDesktopCapabilityToken } : {}),
+        ...(browserCapabilityToken ? { browserCapabilityToken } : {}),
       }),
     }
   }

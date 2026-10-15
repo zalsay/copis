@@ -12,11 +12,71 @@ import {
 } from '@copis/shared'
 import { chromeDesktopService } from '../lib/chrome-desktop-service'
 
-let pendingFrameCapture: {
+export interface PendingFrameCaptureRecord {
+  controlId: string
+  requestId: string
+  webContentsId: number
   resolve: (res: { width: number; height: number; capturedAt: number; data: string }) => void
   reject: (err: any) => void
   timer: ReturnType<typeof setTimeout>
-} | null = null
+}
+
+let frameRequestSeq = 0
+let pendingFrameCapture: PendingFrameCaptureRecord | null = null
+
+export function getPendingFrameCapture(): PendingFrameCaptureRecord | null {
+  return pendingFrameCapture
+}
+
+export function setPendingFrameCaptureForTest(record: PendingFrameCaptureRecord | null): void {
+  pendingFrameCapture = record
+}
+
+export function handleFrameResponsePayload(
+  senderWebContentsId: number,
+  res: {
+    controlId: string
+    requestId: string
+    width: number
+    height: number
+    capturedAt: number
+    data: string
+    error?: string
+  },
+): boolean {
+  if (!pendingFrameCapture) {
+    console.warn(`[ChromeDesktop:IPC] 收到迟到帧回传 (当前无等待请求): controlId=${res.controlId}, requestId=${res.requestId}`)
+    return false
+  }
+
+  if (
+    pendingFrameCapture.controlId !== res.controlId ||
+    pendingFrameCapture.requestId !== res.requestId ||
+    pendingFrameCapture.webContentsId !== senderWebContentsId
+  ) {
+    console.warn(
+      `[ChromeDesktop:IPC] 丢弃不匹配的帧回传: 期望(controlId=${pendingFrameCapture.controlId}, reqId=${pendingFrameCapture.requestId}, wcId=${pendingFrameCapture.webContentsId}), ` +
+      `收到(controlId=${res.controlId}, reqId=${res.requestId}, wcId=${senderWebContentsId})`,
+    )
+    return false
+  }
+
+  clearTimeout(pendingFrameCapture.timer)
+  const cur = pendingFrameCapture
+  pendingFrameCapture = null
+
+  if (res.error) {
+    cur.reject(new Error(res.error))
+  } else {
+    cur.resolve({
+      width: res.width,
+      height: res.height,
+      capturedAt: res.capturedAt,
+      data: res.data,
+    })
+  }
+  return true
+}
 
 export function registerChromeDesktopIpcHandlers(): void {
   // 绑定状态广播给渲染进程
@@ -44,15 +104,27 @@ export function registerChromeDesktopIpcHandlers(): void {
         return reject(new Error('CHROME_CAPTURE_FAILED: 主窗口不可用'))
       }
 
+      const requestId = `req_${++frameRequestSeq}_${Date.now()}`
       const timer = setTimeout(() => {
-        if (pendingFrameCapture) {
+        if (pendingFrameCapture && pendingFrameCapture.requestId === requestId) {
           pendingFrameCapture = null
           reject(new Error('CHROME_CAPTURE_FAILED: 渲染进程截帧超时 (2s)'))
         }
       }, 2000)
 
-      pendingFrameCapture = { resolve, reject, timer }
-      mainWin.webContents.send(CHROME_DESKTOP_IPC_CHANNELS.REQUEST_FRAME, req)
+      pendingFrameCapture = {
+        controlId: req.controlId,
+        requestId,
+        webContentsId: mainWin.webContents.id,
+        resolve,
+        reject,
+        timer,
+      }
+      mainWin.webContents.send(CHROME_DESKTOP_IPC_CHANNELS.REQUEST_FRAME, {
+        controlId: req.controlId,
+        requestId,
+        geometryVersion: req.geometryVersion,
+      })
     })
   })
 
@@ -114,9 +186,10 @@ export function registerChromeDesktopIpcHandlers(): void {
   ipcMain.on(
     CHROME_DESKTOP_IPC_CHANNELS.FRAME_RESPONSE,
     (
-      _,
+      event,
       res: {
         controlId: string
+        requestId: string
         width: number
         height: number
         capturedAt: number
@@ -124,21 +197,7 @@ export function registerChromeDesktopIpcHandlers(): void {
         error?: string
       },
     ) => {
-      if (!pendingFrameCapture) return
-      clearTimeout(pendingFrameCapture.timer)
-      const cur = pendingFrameCapture
-      pendingFrameCapture = null
-
-      if (res.error) {
-        cur.reject(new Error(res.error))
-      } else {
-        cur.resolve({
-          width: res.width,
-          height: res.height,
-          capturedAt: res.capturedAt,
-          data: res.data,
-        })
-      }
+      handleFrameResponsePayload(event.sender.id, res)
     },
   )
 

@@ -11,7 +11,7 @@
  * - 依赖可注入以供 BDD 自动化测试
  */
 
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import type {
   ChromeDesktopAllowedKey,
   ChromeDesktopBounds,
@@ -35,6 +35,16 @@ import {
   type IChromeDesktopHelperClient,
 } from './chrome-desktop-helper-client'
 
+export const MAX_ACTION_HISTORY_SIZE = 50
+export const ACTION_HISTORY_TTL_MS = 5 * 60 * 1000
+
+interface CachedActionEntry {
+  toolName: ChromeDesktopToolName
+  inputHash: string
+  response: ChromeDesktopToolResponse
+  timestamp: number
+}
+
 export interface FrameCaptureRequest {
   controlId: string
   geometryVersion: number
@@ -54,11 +64,13 @@ export interface ChromeDesktopServiceDependencies {
   unregisterGlobalShortcut?: (shortcut: string) => void
   setBackgroundThrottling?: (enabled: boolean) => void
   onStateChanged?: (state: ChromeDesktopSessionState) => void
+  getScreenAccessStatus?: () => boolean
 }
 
 interface ActiveControlRecord {
   controlId: string
   sessionId: string
+  capabilityToken?: string
   runGeneration: number
   state: ChromeDesktopState
   createdAt: number
@@ -80,11 +92,12 @@ export class ChromeDesktopService {
   private registerShortcutFn: (shortcut: string, callback: () => void) => boolean
   private unregisterShortcutFn: (shortcut: string) => void
   private setThrottlingFn: (enabled: boolean) => void
+  private getScreenAccessStatusFn: () => boolean
   private stateChangedListener?: (state: ChromeDesktopSessionState) => void
 
   private activeControl: ActiveControlRecord | null = null
   private nextRunGeneration = 1
-  private actionHistory = new Map<string, ChromeDesktopToolResponse>()
+  private actionHistory = new Map<string, CachedActionEntry>()
 
   constructor(deps?: ChromeDesktopServiceDependencies) {
     this.helper = deps?.helperClient ?? new ChromeDesktopHelperClient()
@@ -92,6 +105,7 @@ export class ChromeDesktopService {
     this.registerShortcutFn = deps?.registerGlobalShortcut ?? this.defaultRegisterShortcut
     this.unregisterShortcutFn = deps?.unregisterGlobalShortcut ?? this.defaultUnregisterShortcut
     this.setThrottlingFn = deps?.setBackgroundThrottling ?? this.defaultSetBackgroundThrottling
+    this.getScreenAccessStatusFn = deps?.getScreenAccessStatus ?? this.defaultGetScreenAccessStatus
     this.stateChangedListener = deps?.onStateChanged
   }
 
@@ -118,15 +132,25 @@ export class ChromeDesktopService {
     }
   }
 
+  private defaultGetScreenAccessStatus(): boolean {
+    if (process.versions?.electron) {
+      try {
+        const { systemPreferences } = require('electron')
+        return systemPreferences.getMediaAccessStatus('screen') === 'granted'
+      } catch {
+        return false
+      }
+    }
+    return false
+  }
+
   private defaultSetBackgroundThrottling(enabled: boolean): void {
     if (process.versions?.electron) {
       try {
-        const { BrowserWindow } = require('electron')
-        const allWindows = BrowserWindow.getAllWindows()
-        for (const win of allWindows) {
-          if (!win.isDestroyed()) {
-            win.webContents?.setBackgroundThrottling(enabled)
-          }
+        const { getMainWindow } = require('../index')
+        const mainWindow = getMainWindow?.()
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents?.setBackgroundThrottling(enabled)
         }
       } catch {
         // ignore
@@ -192,10 +216,11 @@ export class ChromeDesktopService {
     }
 
     try {
+      const screenRecording = this.getScreenAccessStatusFn()
       const perms = await this.helper.checkPermissions()
       return {
         supported: true,
-        screenRecordingGranted: perms.screenRecording,
+        screenRecordingGranted: screenRecording,
         accessibilityGranted: perms.accessibility,
         visionModelSupported: true,
         shortcut: CHROME_DESKTOP_DEFAULT_SHORTCUT,
@@ -219,33 +244,96 @@ export class ChromeDesktopService {
     return this.helper.listWindows()
   }
 
+  private getActionCacheKey(sessionId: string, controlId: string | undefined, toolCallId: string): string {
+    return `${sessionId}:${controlId ?? ''}:${toolCallId}`
+  }
+
+  private computeInputHash(input: Record<string, unknown> | undefined): string {
+    try {
+      return createHash('sha256').update(JSON.stringify(input ?? {})).digest('hex')
+    } catch {
+      return ''
+    }
+  }
+
+  private setCachedAction(
+    sessionId: string,
+    controlId: string | undefined,
+    toolCallId: string,
+    toolName: ChromeDesktopToolName,
+    inputHash: string,
+    response: ChromeDesktopToolResponse,
+  ): void {
+    const key = this.getActionCacheKey(sessionId, controlId, toolCallId)
+
+    // 容量上限：超额时先淘汰最旧项 (FIFO)
+    if (this.actionHistory.size >= MAX_ACTION_HISTORY_SIZE) {
+      const oldestKey = this.actionHistory.keys().next().value
+      if (oldestKey) {
+        this.actionHistory.delete(oldestKey)
+      }
+    }
+
+    // 对于 Observe，不保存大图 base64 进持久缓存，仅存短回执
+    let sanitizedResponse = response
+    if (response.kind === 'image') {
+      sanitizedResponse = {
+        kind: 'image',
+        frame: response.frame,
+        image: {
+          mimeType: 'image/jpeg',
+          data: '', // 去大图 base64，避免内存常驻
+        },
+      }
+    }
+
+    this.actionHistory.set(key, {
+      toolName,
+      inputHash,
+      response: sanitizedResponse,
+      timestamp: Date.now(),
+    })
+  }
+
   /**
    * 处理 Agent Worker 发起的工具请求
    */
   async handleToolRequest(request: ChromeDesktopToolRequest): Promise<ChromeDesktopToolResponse> {
-    const { sessionId, toolCallId, toolName, toolInput } = request
+    const { sessionId, capabilityToken, toolCallId, toolName, toolInput } = request
 
-    // 幂等去重检查：同 toolCallId 且非 Start 直接返回历史结果
+    const inputHash = this.computeInputHash(toolInput)
+    const currentControlId = this.activeControl?.controlId
+    const cacheKey = this.getActionCacheKey(sessionId, currentControlId, toolCallId)
+
+    // 幂等去重检查：同 key 且非 Start
     if (toolName !== 'ChromeDesktopStart') {
-      const cached = this.actionHistory.get(toolCallId)
-      if (cached) return cached
+      const cached = this.actionHistory.get(cacheKey)
+      if (cached) {
+        if (Date.now() - cached.timestamp <= ACTION_HISTORY_TTL_MS) {
+          if (cached.inputHash === inputHash) {
+            return cached.response
+          }
+          throw new Error('CHROME_TOOL_CALL_COLLISION: 同一 toolCallId 提交了不同的输入参数')
+        }
+        this.actionHistory.delete(cacheKey)
+      }
     }
 
     switch (toolName) {
       case 'ChromeDesktopStart':
-        return this.handleStart(sessionId, toolCallId)
+        return this.handleStart(sessionId, toolCallId, capabilityToken)
       case 'ChromeDesktopObserve':
-        return this.handleObserve(sessionId, toolCallId, toolInput)
+        return this.handleObserve(sessionId, toolCallId, toolInput, capabilityToken)
       case 'ChromeDesktopClick':
-        return this.handleClick(sessionId, toolCallId, toolInput)
+        return this.handleClick(sessionId, toolCallId, toolInput, capabilityToken)
       case 'ChromeDesktopScroll':
-        return this.handleScroll(sessionId, toolCallId, toolInput)
+        return this.handleScroll(sessionId, toolCallId, toolInput, capabilityToken)
       case 'ChromeDesktopType':
-        return this.handleType(sessionId, toolCallId, toolInput)
+        return this.handleType(sessionId, toolCallId, toolInput, capabilityToken)
       case 'ChromeDesktopPress':
-        return this.handlePress(sessionId, toolCallId, toolInput)
+        return this.handlePress(sessionId, toolCallId, toolInput, capabilityToken)
       case 'ChromeDesktopStop':
-        return this.handleStop(sessionId, toolCallId, toolInput)
+        return this.handleStop(sessionId, toolCallId, toolInput, capabilityToken)
       default:
         throw new Error(`不支持的工具: ${toolName}`)
     }
@@ -254,7 +342,7 @@ export class ChromeDesktopService {
   /**
    * ChromeDesktopStart
    */
-  private async handleStart(sessionId: string, toolCallId: string): Promise<ChromeDesktopToolResponse> {
+  private async handleStart(sessionId: string, toolCallId: string, capabilityToken?: string): Promise<ChromeDesktopToolResponse> {
     // 检查是否有其他会话正在占用
     if (this.activeControl && this.activeControl.sessionId !== sessionId && this.activeControl.state !== 'stopped' && this.activeControl.state !== 'error') {
       return {
@@ -266,7 +354,7 @@ export class ChromeDesktopService {
       }
     }
 
-    // 同一会话的轮询
+    // 同一会话且同一 toolCallId 的轮询
     if (this.activeControl && this.activeControl.sessionId === sessionId && this.activeControl.toolCallId === toolCallId) {
       const record = this.activeControl
       if (record.state === 'active') {
@@ -310,6 +398,7 @@ export class ChromeDesktopService {
     const record: ActiveControlRecord = {
       controlId,
       sessionId,
+      capabilityToken,
       runGeneration: generation,
       state: 'awaiting_user',
       createdAt: Date.now(),
@@ -452,8 +541,8 @@ export class ChromeDesktopService {
   /**
    * ChromeDesktopObserve
    */
-  private async handleObserve(sessionId: string, toolCallId: string, input: Record<string, unknown>): Promise<ChromeDesktopToolResponse> {
-    const record = this.validateActiveControl(sessionId, input.controlId as string)
+  private async handleObserve(sessionId: string, toolCallId: string, input: Record<string, unknown>, capabilityToken?: string): Promise<ChromeDesktopToolResponse> {
+    const record = this.validateActiveControl(sessionId, input.controlId as string, capabilityToken)
 
     // 校验前台目标
     const targetCheck = await this.helper.checkTarget(record.targetWindow!.windowId, record.targetWindow!.pid)
@@ -509,7 +598,7 @@ export class ChromeDesktopService {
       },
     }
 
-    this.actionHistory.set(toolCallId, response)
+    this.setCachedAction(sessionId, record.controlId, toolCallId, 'ChromeDesktopObserve', this.computeInputHash(input), response)
     return response
   }
 
@@ -520,13 +609,14 @@ export class ChromeDesktopService {
     sessionId: string,
     toolCallId: string,
     input: Record<string, unknown>,
+    capabilityToken?: string,
   ): Promise<{
     record: ActiveControlRecord
     bounds: ChromeDesktopBounds
     screenX?: number
     screenY?: number
   }> {
-    const record = this.validateActiveControl(sessionId, input.controlId as string)
+    const record = this.validateActiveControl(sessionId, input.controlId as string, capabilityToken)
 
     // 串行守卫：同一时刻最多一个输入动作在途
     if (record.inFlightAction) {
@@ -590,8 +680,8 @@ export class ChromeDesktopService {
   /**
    * ChromeDesktopClick
    */
-  private async handleClick(sessionId: string, toolCallId: string, input: Record<string, unknown>): Promise<ChromeDesktopToolResponse> {
-    const { record, screenX, screenY } = await this.prepareAction(sessionId, toolCallId, input)
+  private async handleClick(sessionId: string, toolCallId: string, input: Record<string, unknown>, capabilityToken?: string): Promise<ChromeDesktopToolResponse> {
+    const { record, screenX, screenY } = await this.prepareAction(sessionId, toolCallId, input, capabilityToken)
     const clickCount = input.clickCount === 2 ? 2 : 1
 
     record.inFlightAction = true
@@ -617,7 +707,7 @@ export class ChromeDesktopService {
           targetWindowId: record.targetWindow!.windowId,
         },
       }
-      this.actionHistory.set(toolCallId, response)
+      this.setCachedAction(sessionId, record.controlId, toolCallId, 'ChromeDesktopClick', this.computeInputHash(input), response)
       return response
     } catch (e: any) {
       if (e.message?.includes('timeout') || e.message?.includes('超时')) {
@@ -633,13 +723,13 @@ export class ChromeDesktopService {
   /**
    * ChromeDesktopScroll
    */
-  private async handleScroll(sessionId: string, toolCallId: string, input: Record<string, unknown>): Promise<ChromeDesktopToolResponse> {
+  private async handleScroll(sessionId: string, toolCallId: string, input: Record<string, unknown>, capabilityToken?: string): Promise<ChromeDesktopToolResponse> {
     const deltaY = Number(input.deltaY)
     if (!Number.isInteger(deltaY) || deltaY < -1200 || deltaY > 1200 || deltaY === 0) {
       throw new Error('deltaY 必须为 [-1200, 1200] 区间内非零整数')
     }
 
-    const { record, screenX, screenY } = await this.prepareAction(sessionId, toolCallId, input)
+    const { record, screenX, screenY } = await this.prepareAction(sessionId, toolCallId, input, capabilityToken)
 
     record.inFlightAction = true
     try {
@@ -663,7 +753,7 @@ export class ChromeDesktopService {
           deltaY,
         },
       }
-      this.actionHistory.set(toolCallId, response)
+      this.setCachedAction(sessionId, record.controlId, toolCallId, 'ChromeDesktopScroll', this.computeInputHash(input), response)
       return response
     } catch (e: any) {
       if (e.message?.includes('timeout') || e.message?.includes('超时')) {
@@ -679,7 +769,7 @@ export class ChromeDesktopService {
   /**
    * ChromeDesktopType
    */
-  private async handleType(sessionId: string, toolCallId: string, input: Record<string, unknown>): Promise<ChromeDesktopToolResponse> {
+  private async handleType(sessionId: string, toolCallId: string, input: Record<string, unknown>, capabilityToken?: string): Promise<ChromeDesktopToolResponse> {
     const text = String(input.text ?? '')
     if (!text || text.length > 4096) {
       throw new Error('text 长度必须在 1-4096 之间')
@@ -689,7 +779,7 @@ export class ChromeDesktopService {
       throw new Error('text 包含不合法的控制字符')
     }
 
-    const { record } = await this.prepareAction(sessionId, toolCallId, input)
+    const { record } = await this.prepareAction(sessionId, toolCallId, input, capabilityToken)
 
     record.inFlightAction = true
     try {
@@ -711,7 +801,7 @@ export class ChromeDesktopService {
           characterCount: text.length,
         },
       }
-      this.actionHistory.set(toolCallId, response)
+      this.setCachedAction(sessionId, record.controlId, toolCallId, 'ChromeDesktopType', this.computeInputHash(input), response)
       return response
     } catch (e: any) {
       if (e.message?.includes('timeout') || e.message?.includes('超时')) {
@@ -727,13 +817,13 @@ export class ChromeDesktopService {
   /**
    * ChromeDesktopPress
    */
-  private async handlePress(sessionId: string, toolCallId: string, input: Record<string, unknown>): Promise<ChromeDesktopToolResponse> {
+  private async handlePress(sessionId: string, toolCallId: string, input: Record<string, unknown>, capabilityToken?: string): Promise<ChromeDesktopToolResponse> {
     const key = input.key as ChromeDesktopAllowedKey
     if (!CHROME_DESKTOP_ALLOWED_KEYS.includes(key)) {
       throw new Error(`不允许的按键: ${key}`)
     }
 
-    const { record } = await this.prepareAction(sessionId, toolCallId, input)
+    const { record } = await this.prepareAction(sessionId, toolCallId, input, capabilityToken)
 
     record.inFlightAction = true
     try {
@@ -755,7 +845,7 @@ export class ChromeDesktopService {
           key,
         },
       }
-      this.actionHistory.set(toolCallId, response)
+      this.setCachedAction(sessionId, record.controlId, toolCallId, 'ChromeDesktopPress', this.computeInputHash(input), response)
       return response
     } catch (e: any) {
       if (e.message?.includes('timeout') || e.message?.includes('超时')) {
@@ -771,10 +861,12 @@ export class ChromeDesktopService {
   /**
    * ChromeDesktopStop
    */
-  private async handleStop(sessionId: string, toolCallId: string, input: Record<string, unknown>): Promise<ChromeDesktopToolResponse> {
+  private async handleStop(sessionId: string, toolCallId: string, input: Record<string, unknown>, capabilityToken?: string): Promise<ChromeDesktopToolResponse> {
     const controlId = input.controlId as string | undefined
     if (this.activeControl && (!controlId || this.activeControl.controlId === controlId)) {
-      this.releaseCurrentControl(true)
+      if (!capabilityToken || !this.activeControl.capabilityToken || this.activeControl.capabilityToken === capabilityToken) {
+        this.releaseCurrentControl(true)
+      }
     }
 
     const response: ChromeDesktopToolResponse = {
@@ -784,20 +876,24 @@ export class ChromeDesktopService {
         status: 'stopped',
       },
     }
-    this.actionHistory.set(toolCallId, response)
+    this.setCachedAction(sessionId, controlId, toolCallId, 'ChromeDesktopStop', this.computeInputHash(input), response)
     return response
   }
 
   /**
    * 校验当前活跃会话与状态
    */
-  private validateActiveControl(sessionId: string, controlId?: string): ActiveControlRecord {
+  private validateActiveControl(sessionId: string, controlId?: string, capabilityToken?: string): ActiveControlRecord {
     if (!this.activeControl || this.activeControl.sessionId !== sessionId) {
       throw new Error('CHROME_CAPABILITY_STALE: 无活跃的 Chrome 控制任务')
     }
 
     if (controlId && this.activeControl.controlId !== controlId) {
       throw new Error('CHROME_CAPABILITY_STALE: controlId 不匹配')
+    }
+
+    if (capabilityToken && this.activeControl.capabilityToken && this.activeControl.capabilityToken !== capabilityToken) {
+      throw new Error('CHROME_CAPABILITY_STALE: capabilityToken 不匹配')
     }
 
     if (this.activeControl.state !== 'active') {
@@ -811,6 +907,7 @@ export class ChromeDesktopService {
     record.state = 'paused'
     record.pauseReason = reason
     record.errorMessage = message
+    this.helper.cancel().catch(() => {})
     this.unregisterShortcutFn(record.shortcut)
     this.setThrottlingFn(true)
     this.broadcastState()
@@ -820,6 +917,7 @@ export class ChromeDesktopService {
     record.state = 'error'
     record.pauseReason = error
     record.errorMessage = message
+    this.helper.cancel().catch(() => {})
     this.unregisterShortcutFn(record.shortcut)
     this.setThrottlingFn(true)
     this.broadcastState()
@@ -829,7 +927,10 @@ export class ChromeDesktopService {
    * 释放当前控制并清理全部资源
    */
   releaseCurrentControl(resetStateToStopped = true): void {
-    if (!this.activeControl) return
+    if (!this.activeControl) {
+      this.actionHistory.clear()
+      return
+    }
 
     const record = this.activeControl
     this.nextRunGeneration++
@@ -837,6 +938,7 @@ export class ChromeDesktopService {
     this.helper.cancel().catch(() => {})
     this.unregisterShortcutFn(record.shortcut)
     this.setThrottlingFn(true)
+    this.actionHistory.clear()
 
     if (resetStateToStopped) {
       record.state = 'stopped'
@@ -847,11 +949,30 @@ export class ChromeDesktopService {
 
   /**
    * 当指定会话结束或切出时调用
+   * 支持传入 capabilityToken / controlId 进行代次绑定，防止旧 run 迟到释放破坏新控制
    */
-  releaseSessionControl(sessionId: string): void {
-    if (this.activeControl && this.activeControl.sessionId === sessionId) {
-      this.releaseCurrentControl(true)
+  releaseSessionControl(sessionId: string, capabilityToken?: string, controlId?: string): void {
+    if (!this.activeControl || this.activeControl.sessionId !== sessionId) {
+      return
     }
+
+    if (capabilityToken && this.activeControl.capabilityToken && this.activeControl.capabilityToken !== capabilityToken) {
+      console.warn('[ChromeDesktopService] 忽略迟到的释放请求: capabilityToken 与当前控制不匹配', {
+        expected: this.activeControl.capabilityToken,
+        received: capabilityToken,
+      })
+      return
+    }
+
+    if (controlId && this.activeControl.controlId !== controlId) {
+      console.warn('[ChromeDesktopService] 忽略迟到的释放请求: controlId 与当前控制不匹配', {
+        expected: this.activeControl.controlId,
+        received: controlId,
+      })
+      return
+    }
+
+    this.releaseCurrentControl(true)
   }
 }
 

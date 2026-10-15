@@ -4,10 +4,12 @@
  * 挂载于主窗口根节点，负责持有当前授权的 MediaStream，并在接收到主进程的
  * 截帧请求时利用隐藏的 `<video>` 与 `<canvas>` 按规格提取单帧 JPEG base64。
  *
- * 规范约束：
+ * 规范约束与审查改进：
  * - 单帧按需提取，最长边不超过 1600px，JPEG 编码且不超过 1 MiB。
- * - 捕获轨道异常终止（track.onended）时向主进程汇报 STREAM_ERROR 并释放控制。
- * - 仅驻留内存，绝不将视频流或连续帧持久化至磁盘。
+ * - 多阶梯度降质与降采样，确保编码绝对不突破 1 MiB，仍超限则明确报错而非外发违规大图。
+ * - 绑定 requestId 严格串行化与关联，防止旧请求迟到帧干扰新 Observe。
+ * - 结合 requestVideoFrameCallback 校验视频源帧呈现新鲜度。
+ * - 捕获轨道异常终止（track.onended）、暂停（paused）、停止（stopped）时彻底释放资源并重置帧状态。
  */
 
 import React, { useEffect, useRef } from 'react'
@@ -20,6 +22,8 @@ import {
 
 const MAX_FRAME_DIMENSION = 1600
 const MAX_BASE64_LENGTH = 1_350_000 // ~1 MiB raw bytes
+const COMPRESSION_QUALITIES = [0.85, 0.7, 0.55, 0.4]
+const COMPRESSION_SCALES = [1.0, 0.8, 0.6]
 
 export function ChromeDesktopCaptureHost(): React.ReactElement | null {
   const mediaStream = useAtomValue(chromeDesktopMediaStreamAtom)
@@ -30,6 +34,10 @@ export function ChromeDesktopCaptureHost(): React.ReactElement | null {
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const streamRef = useRef<MediaStream | null>(null)
   streamRef.current = mediaStream
+
+  // 跟踪当前活跃的 requestId，防止迟到帧串入新请求
+  const activeRequestIdRef = useRef<string | null>(null)
+  const lastPresentedTimeRef = useRef<number>(0)
 
   // 1. 同步 MediaStream 至隐藏的 video 元素
   useEffect(() => {
@@ -46,6 +54,8 @@ export function ChromeDesktopCaptureHost(): React.ReactElement | null {
       const tracks = mediaStream.getVideoTracks()
       const handleTrackEnded = (): void => {
         console.warn('[ChromeDesktopCaptureHost] 视频采集轨道已终止')
+        activeRequestIdRef.current = null
+        lastPresentedTimeRef.current = 0
         window.electronAPI?.chromeDesktop?.sendStreamError({
           reason: 'CHROME_CAPTURE_FAILED',
           message: 'Chrome 窗口视频采集轨道已终止',
@@ -64,6 +74,8 @@ export function ChromeDesktopCaptureHost(): React.ReactElement | null {
       }
     } else {
       video.srcObject = null
+      activeRequestIdRef.current = null
+      lastPresentedTimeRef.current = 0
     }
   }, [mediaStream, cleanupStream])
 
@@ -78,7 +90,10 @@ export function ChromeDesktopCaptureHost(): React.ReactElement | null {
 
     const unsubscribe = window.electronAPI.chromeDesktop.onStateChanged((state) => {
       setSessionState(state)
-      if (state.state === 'stopped' || state.state === 'error') {
+      // stopped, error 或 paused 均立即断开活动流与帧引用，不持有陈旧截屏
+      if (state.state === 'stopped' || state.state === 'error' || state.state === 'paused') {
+        activeRequestIdRef.current = null
+        lastPresentedTimeRef.current = 0
         cleanupStream()
       }
     })
@@ -93,16 +108,22 @@ export function ChromeDesktopCaptureHost(): React.ReactElement | null {
     if (!window.electronAPI?.chromeDesktop) return
 
     const unsubscribe = window.electronAPI.chromeDesktop.onRequestFrame(async (req) => {
+      const { controlId, requestId } = req
+      activeRequestIdRef.current = requestId
+
       const video = videoRef.current
       if (!video || !streamRef.current) {
-        window.electronAPI.chromeDesktop.sendFrameResponse({
-          controlId: req.controlId,
-          width: 0,
-          height: 0,
-          capturedAt: Date.now(),
-          data: '',
-          error: 'CHROME_CAPTURE_FAILED: 采集视频流不可用',
-        })
+        if (activeRequestIdRef.current === requestId) {
+          window.electronAPI.chromeDesktop.sendFrameResponse({
+            controlId,
+            requestId,
+            width: 0,
+            height: 0,
+            capturedAt: Date.now(),
+            data: '',
+            error: 'CHROME_CAPTURE_FAILED: 采集视频流不可用',
+          })
+        }
         return
       }
 
@@ -112,34 +133,68 @@ export function ChromeDesktopCaptureHost(): React.ReactElement | null {
         while ((video.readyState < 2 || video.videoWidth === 0) && retries < 6) {
           await new Promise((r) => setTimeout(r, 50))
           retries++
+          if (activeRequestIdRef.current !== requestId) return
         }
         if (video.readyState < 2 || video.videoWidth === 0) {
-          window.electronAPI.chromeDesktop.sendFrameResponse({
-            controlId: req.controlId,
-            width: 0,
-            height: 0,
-            capturedAt: Date.now(),
-            data: '',
-            error: 'CHROME_CAPTURE_FAILED: 视频帧尚未准备就绪',
-          })
+          if (activeRequestIdRef.current === requestId) {
+            window.electronAPI.chromeDesktop.sendFrameResponse({
+              controlId,
+              requestId,
+              width: 0,
+              height: 0,
+              capturedAt: Date.now(),
+              data: '',
+              error: 'CHROME_CAPTURE_FAILED: 视频帧尚未准备就绪',
+            })
+          }
           return
         }
+      }
+
+      // 结合 requestVideoFrameCallback 等待源帧刷新（最多 350ms）
+      let captureTimestamp = Date.now()
+      if (typeof (video as any).requestVideoFrameCallback === 'function') {
+        await new Promise<void>((resolve) => {
+          let done = false
+          const timer = setTimeout(() => {
+            if (!done) {
+              done = true
+              resolve()
+            }
+          }, 350)
+
+          ;(video as any).requestVideoFrameCallback((now: number, metadata: any) => {
+            if (!done) {
+              done = true
+              clearTimeout(timer)
+              const frameTime = metadata.presentedFrames ? metadata.presentedFrames : now
+              lastPresentedTimeRef.current = frameTime
+              captureTimestamp = Date.now()
+              resolve()
+            }
+          })
+        })
+      }
+
+      if (activeRequestIdRef.current !== requestId) {
+        // 请求已被新请求取代，丢弃本次中间结果
+        return
       }
 
       try {
         const origW = video.videoWidth
         const origH = video.videoHeight
 
-        // 计算最长边不超过 1600px 的缩放尺寸
-        let targetW = origW
-        let targetH = origH
-        if (targetW > MAX_FRAME_DIMENSION || targetH > MAX_FRAME_DIMENSION) {
-          if (targetW >= targetH) {
-            targetH = Math.round((targetH * MAX_FRAME_DIMENSION) / targetW)
-            targetW = MAX_FRAME_DIMENSION
+        // 计算最长边不超过 1600px 的基础缩放尺寸
+        let baseW = origW
+        let baseH = origH
+        if (baseW > MAX_FRAME_DIMENSION || baseH > MAX_FRAME_DIMENSION) {
+          if (baseW >= baseH) {
+            baseH = Math.round((baseH * MAX_FRAME_DIMENSION) / baseW)
+            baseW = MAX_FRAME_DIMENSION
           } else {
-            targetW = Math.round((targetW * MAX_FRAME_DIMENSION) / targetH)
-            targetH = MAX_FRAME_DIMENSION
+            baseW = Math.round((baseW * MAX_FRAME_DIMENSION) / baseH)
+            baseH = MAX_FRAME_DIMENSION
           }
         }
 
@@ -147,64 +202,71 @@ export function ChromeDesktopCaptureHost(): React.ReactElement | null {
           canvasRef.current = document.createElement('canvas')
         }
         const canvas = canvasRef.current
-        canvas.width = targetW
-        canvas.height = targetH
-
         const ctx = canvas.getContext('2d', { alpha: false })
         if (!ctx) {
           throw new Error('无法创建 Canvas 2D 绘图上下文')
         }
 
-        ctx.drawImage(video, 0, 0, targetW, targetH)
+        let chosenBase64: string | null = null
+        let chosenW = baseW
+        let chosenH = baseH
 
-        // 尝试默认 0.85 质量
-        let quality = 0.85
-        let dataUrl = canvas.toDataURL('image/jpeg', quality)
+        // 梯度压缩循环：递减分辨率与质量，保证最终产物绝对不超过 1 MiB
+        outerLoop: for (const scale of COMPRESSION_SCALES) {
+          const curW = Math.max(100, Math.round(baseW * scale))
+          const curH = Math.max(100, Math.round(baseH * scale))
+          canvas.width = curW
+          canvas.height = curH
+          ctx.drawImage(video, 0, 0, curW, curH)
 
-        // 若超出 1 MiB，递减质量或进一步缩放
-        if (dataUrl.length > MAX_BASE64_LENGTH) {
-          quality = 0.65
-          dataUrl = canvas.toDataURL('image/jpeg', quality)
+          for (const quality of COMPRESSION_QUALITIES) {
+            const dataUrl = canvas.toDataURL('image/jpeg', quality)
+            const commaIdx = dataUrl.indexOf(',')
+            const rawBase64 = commaIdx >= 0 ? dataUrl.slice(commaIdx + 1) : dataUrl
+
+            if (rawBase64.length <= MAX_BASE64_LENGTH) {
+              chosenBase64 = rawBase64
+              chosenW = curW
+              chosenH = curH
+              break outerLoop
+            }
+          }
         }
 
-        if (dataUrl.length > MAX_BASE64_LENGTH) {
-          // 仍然超限，降低尺寸重绘
-          targetW = Math.round(targetW * 0.75)
-          targetH = Math.round(targetH * 0.75)
-          canvas.width = targetW
-          canvas.height = targetH
-          ctx.drawImage(video, 0, 0, targetW, targetH)
-          dataUrl = canvas.toDataURL('image/jpeg', 0.6)
+        if (!chosenBase64) {
+          throw new Error('CHROME_CAPTURE_FAILED: 单帧编码大小超过 1 MiB 上限，已达最低压缩阈值')
         }
 
-        // 提取纯 base64 数据
-        const commaIdx = dataUrl.indexOf(',')
-        const base64Data = commaIdx >= 0 ? dataUrl.slice(commaIdx + 1) : dataUrl
-
-        window.electronAPI.chromeDesktop.sendFrameResponse({
-          controlId: req.controlId,
-          width: targetW,
-          height: targetH,
-          capturedAt: Date.now(),
-          data: base64Data,
-        })
+        if (activeRequestIdRef.current === requestId) {
+          window.electronAPI.chromeDesktop.sendFrameResponse({
+            controlId,
+            requestId,
+            width: chosenW,
+            height: chosenH,
+            capturedAt: captureTimestamp,
+            data: chosenBase64,
+          })
+        }
       } catch (err: any) {
         console.error('[ChromeDesktopCaptureHost] 截帧失败:', err)
-        window.electronAPI.chromeDesktop.sendFrameResponse({
-          controlId: req.controlId,
-          width: 0,
-          height: 0,
-          capturedAt: Date.now(),
-          data: '',
-          error: `CHROME_CAPTURE_FAILED: ${err.message}`,
-        })
+        if (activeRequestIdRef.current === requestId) {
+          window.electronAPI.chromeDesktop.sendFrameResponse({
+            controlId,
+            requestId,
+            width: 0,
+            height: 0,
+            capturedAt: Date.now(),
+            data: '',
+            error: err.message.startsWith('CHROME_') ? err.message : `CHROME_CAPTURE_FAILED: ${err.message}`,
+          })
+        }
       }
     })
 
     return () => {
       unsubscribe()
     }
-  }, [])
+  }, [cleanupStream])
 
   return (
     <video

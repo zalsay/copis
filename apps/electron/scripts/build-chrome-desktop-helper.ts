@@ -1,11 +1,11 @@
 #!/usr/bin/env bun
 /**
  * 编译 macOS Chrome Desktop Helper 原生二进制。
- * 
+ *
  * 仅在 macOS (darwin) 下编译：
  * - 源码：apps/electron/native/chrome-desktop-helper/main.swift
  * - 产物：apps/electron/resources/bin/{platform}-{arch}/chrome-desktop-helper
- * 
+ *
  * 非 macOS 环境自动跳过。
  */
 import { spawnSync } from 'node:child_process'

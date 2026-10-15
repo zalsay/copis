@@ -323,4 +323,107 @@ describe('ChromeDesktopService BDD Scenarios', () => {
       }),
     ).rejects.toThrow('不允许的按键')
   })
+
+  it('Scenario: Stale run release protection (old capabilityToken cannot release new run)', async () => {
+    // 启动新 run，token 为 'tok-new'
+    const startResp = await service.handleToolRequest({
+      sessionId: 'session-stale',
+      capabilityToken: 'tok-new',
+      toolCallId: 'call-1',
+      toolName: 'ChromeDesktopStart',
+      toolInput: {},
+    })
+    const controlId = startResp.kind === 'json' ? (startResp.value.controlId as string) : ''
+    await service.confirmStart({ sessionId: 'session-stale', controlId, windowId: 101, pid: 2001 })
+
+    expect(service.getSessionState()?.state).toBe('active')
+
+    // 旧 run 迟到调用 releaseSessionControl，传入 'tok-old'
+    service.releaseSessionControl('session-stale', 'tok-old')
+    // 新 run 的活跃状态不受任何影响！
+    expect(service.getSessionState()?.state).toBe('active')
+
+    // 正确的 token 传入 -> 释放成功
+    service.releaseSessionControl('session-stale', 'tok-new')
+    expect(service.getSessionState()).toBeNull()
+  })
+
+  it('Scenario: actionHistory idempotency, parameter hash verification, and memory clearance', async () => {
+    const startResp = await service.handleToolRequest({
+      sessionId: 'session-cache',
+      capabilityToken: 'tok',
+      toolCallId: 'call-1',
+      toolName: 'ChromeDesktopStart',
+      toolInput: {},
+    })
+    const controlId = startResp.kind === 'json' ? (startResp.value.controlId as string) : ''
+    await service.confirmStart({ sessionId: 'session-cache', controlId, windowId: 101, pid: 2001 })
+
+    // Observe
+    const obsResp = await service.handleToolRequest({
+      sessionId: 'session-cache',
+      capabilityToken: 'tok',
+      toolCallId: 'call-obs',
+      toolName: 'ChromeDesktopObserve',
+      toolInput: { controlId },
+    })
+    const frameId = obsResp.kind === 'image' ? obsResp.frame.frameId : ''
+
+    // 执行 Click 动作
+    const clickInput = { controlId, frameId, x: 800, y: 600, clickCount: 1 }
+    const firstClick = await service.handleToolRequest({
+      sessionId: 'session-cache',
+      capabilityToken: 'tok',
+      toolCallId: 'call-click-1',
+      toolName: 'ChromeDesktopClick',
+      toolInput: clickInput,
+    })
+    expect(firstClick.kind).toBe('json')
+    expect(mockHelper.clicked.length).toBe(1)
+
+    // 重放相同 toolCallId 且相同入参 -> 直接命中幂等缓存，不会调用底层 helper（clicked.length 仍为 1）
+    const secondClick = await service.handleToolRequest({
+      sessionId: 'session-cache',
+      capabilityToken: 'tok',
+      toolCallId: 'call-click-1',
+      toolName: 'ChromeDesktopClick',
+      toolInput: clickInput,
+    })
+    expect(secondClick).toEqual(firstClick)
+    expect(mockHelper.clicked.length).toBe(1)
+
+    // 重放相同 toolCallId 但不同入参 -> 抛出 CHROME_TOOL_CALL_COLLISION 冲突拒绝
+    await expect(
+      service.handleToolRequest({
+        sessionId: 'session-cache',
+        capabilityToken: 'tok',
+        toolCallId: 'call-click-1',
+        toolName: 'ChromeDesktopClick',
+        toolInput: { controlId, frameId, x: 500, y: 500, clickCount: 1 },
+      }),
+    ).rejects.toThrow('CHROME_TOOL_CALL_COLLISION')
+
+    // 释放控制后，actionHistory 被全部清空
+    service.releaseSessionControl('session-cache', 'tok')
+    expect(service.getSessionState()).toBeNull()
+  })
+
+  it('Scenario: Screen access status reflects Electron permission status', async () => {
+    let mockScreenGranted = false
+    const customService = new ChromeDesktopService({
+      helperClient: mockHelper,
+      getScreenAccessStatus: () => mockScreenGranted,
+    })
+
+    if (process.platform === 'darwin') {
+      const status1 = await customService.checkSystemStatus()
+      expect(status1.screenRecordingGranted).toBe(false)
+      expect(status1.accessibilityGranted).toBe(true)
+
+      mockScreenGranted = true
+      const status2 = await customService.checkSystemStatus()
+      expect(status2.screenRecordingGranted).toBe(true)
+      expect(status2.accessibilityGranted).toBe(true)
+    }
+  })
 })

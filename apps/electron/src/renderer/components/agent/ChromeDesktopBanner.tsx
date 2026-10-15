@@ -90,7 +90,7 @@ export function ChromeDesktopBanner({ sessionId }: ChromeDesktopBannerProps): Re
   useEffect(() => {
     const video = previewVideoRef.current
     if (!video) return
-    if (mediaStream && (state === 'active' || state === 'starting' || state === 'paused')) {
+    if (mediaStream && (state === 'active' || state === 'starting')) {
       video.srcObject = mediaStream
       video.play().catch((err) => {
         console.warn('[ChromeDesktopBanner] 预览视频播放失败:', err)
@@ -382,7 +382,7 @@ export function ChromeDesktopBanner({ sessionId }: ChromeDesktopBannerProps): Re
               </Button>
             </div>
             <p className="text-[11px] text-muted-foreground">
-              提示：请将目标 Chrome 窗口切回前台，或点击“结束控制”退出本次桌面控制。
+              本次控制已安全暂停并释放输入与采集流。如需继续，请点击“结束控制”后重新授权启动。
             </p>
           </div>
         )}
