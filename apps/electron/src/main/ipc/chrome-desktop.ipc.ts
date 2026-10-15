@@ -16,7 +16,15 @@ export interface PendingFrameCaptureRecord {
   controlId: string
   requestId: string
   webContentsId: number
-  resolve: (res: { width: number; height: number; capturedAt: number; data: string }) => void
+  resolve: (res: {
+    width: number
+    height: number
+    capturedAt: number
+    data: string
+    presentedFrames?: number
+    mediaTime?: number
+    encodedAt?: number
+  }) => void
   reject: (err: any) => void
   timer: ReturnType<typeof setTimeout>
 }
@@ -42,6 +50,9 @@ export function handleFrameResponsePayload(
     capturedAt: number
     data: string
     error?: string
+    presentedFrames?: number
+    mediaTime?: number
+    encodedAt?: number
   },
 ): boolean {
   if (!pendingFrameCapture) {
@@ -73,6 +84,9 @@ export function handleFrameResponsePayload(
       height: res.height,
       capturedAt: res.capturedAt,
       data: res.data,
+      ...(res.presentedFrames !== undefined ? { presentedFrames: res.presentedFrames } : {}),
+      ...(res.mediaTime !== undefined ? { mediaTime: res.mediaTime } : {}),
+      ...(res.encodedAt !== undefined ? { encodedAt: res.encodedAt } : {}),
     })
   }
   return true

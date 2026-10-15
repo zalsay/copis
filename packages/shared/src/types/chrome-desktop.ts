@@ -89,6 +89,9 @@ export interface ChromeDesktopFrameMeta {
   height: number
   capturedAt: number
   geometryVersion: number
+  presentedFrames?: number
+  mediaTime?: number
+  encodedAt?: number
 }
 
 export interface ChromeDesktopFrameResult {

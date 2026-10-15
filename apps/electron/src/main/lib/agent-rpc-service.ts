@@ -135,7 +135,7 @@ import { AGENT_RPC_FORBIDDEN_INPUT_FIELDS } from './agent-rpc-protocol'
 
 const DEFAULT_PI_MODEL_ID = 'claude-sonnet-5'
 
-interface PendingAgentRpcRun {
+export interface PendingAgentRpcRun {
   readonly userMessage: string
   readonly channelId: string
   readonly modelId: string
@@ -186,6 +186,10 @@ export interface PreparedAutomationRpcRun {
 const pendingAgentRpcRuns = new Map<string, PendingAgentRpcRun>()
 const rpcMemoryAutoCapture = new MemoryAutoCapture()
 const rpcMemoryMaintenance = sharedMemoryMaintenanceService
+
+export function getPendingAgentRpcRun(sessionId: string): PendingAgentRpcRun | undefined {
+  return pendingAgentRpcRuns.get(sessionId)
+}
 
 export { registerTrustedAgentExternalSource } from './agent-rpc-source-context'
 
@@ -756,14 +760,34 @@ export async function prepareAgentRpcRun(input: AgentSendInput, trustedRunId?: s
     ? (chatroomRuntimeContext.memorySource ? 'visible' : 'off')
     : workspace.memoryPolicy ?? settings.defaultMemoryPolicy ?? 'writable'
   const imageCapability = await resolvePiImageInputCapability(channel.provider, modelId)
+  const isRemoteBotRun = Boolean(
+    isAppConnector
+    || trustedSource === 'feishu'
+    || trustedSource === 'wechat'
+    || trustedSource === 'dingtalk'
+    || trustedSource === 'bridge'
+    || session.source === 'feishu'
+    || session.source === 'wechat'
+    || session.source === 'dingtalk'
+    || session.source === 'bridge'
+    || session.feishuDedicated
+    || session.wechatDedicated
+    || session.dingtalkDedicated
+  )
+  const isPaymentRun = Boolean(
+    input.mentionedSkills?.some(skill => skill === 'alipay-payment-skill' || skill === 'alipay-authenticate-wallet')
+    || input.userMessage?.includes('<copis_diamond_purchase>')
+    || input.userMessage?.includes('<copis_vip_upgrade>')
+    || input.userMessage?.includes('alipay-payment-skill')
+  )
   const chromeDesktopControl = issueChromeDesktopWorkerCapability({
     sessionId: input.sessionId,
     triggeredBy: input.triggeredBy,
     isChatroomRun,
     isAutomationRun: input.triggeredBy === 'automation' || Boolean(input.automationContext),
     isDelegationRun: input.triggeredBy === 'delegation',
-    isRemoteBotRun: false,
-    isPaymentRun: false,
+    isRemoteBotRun,
+    isPaymentRun,
     isSessionProfessional,
     imageInputSupported: imageCapability === 'supported',
   })
@@ -1130,29 +1154,47 @@ export function finalizeAgentRpcRun(input: {
   browserCapabilityToken?: string
 }): AgentRpcCompletionResult {
   const pending = pendingAgentRpcRuns.get(input.sessionId)
-  const chromeDesktopToken = input.chromeDesktopCapabilityToken ?? pending?.chromeDesktopCapabilityToken
-  const browserToken = input.browserCapabilityToken ?? pending?.browserCapabilityToken
-
-  const isStaleRun = Boolean(
-    input.chromeDesktopCapabilityToken &&
-    pending?.chromeDesktopCapabilityToken &&
-    input.chromeDesktopCapabilityToken !== pending.chromeDesktopCapabilityToken
+  const hasPendingChromeControl = Boolean(pending?.chromeDesktopCapabilityToken)
+  const isChromeStale = Boolean(
+    (input.chromeDesktopCapabilityToken && pending?.chromeDesktopCapabilityToken && input.chromeDesktopCapabilityToken !== pending.chromeDesktopCapabilityToken)
+    || (hasPendingChromeControl && !input.chromeDesktopCapabilityToken)
   )
+  const isBrowserStale = Boolean(
+    input.browserCapabilityToken &&
+    pending?.browserCapabilityToken &&
+    input.browserCapabilityToken !== pending.browserCapabilityToken
+  )
+  const isStaleRun = isChromeStale || isBrowserStale
+
+  // 严格保守策略：仅当完成帧显式携带不可伪造的 token 且确属本会话时，才释放 Chrome 控制；
+  // 绝不使用 pendingToken 充当缺失 token 的替身，防止迟到的旧完成帧释放当前活跃的控制实例。
+  const chromeDesktopToken = input.chromeDesktopCapabilityToken
+  const browserToken = input.browserCapabilityToken ?? (isStaleRun ? undefined : pending?.browserCapabilityToken)
 
   console.info('[AI浏览器][finalizeAgentRpcRun] 本轮 Run 结束，准备撤销 capability', {
     sessionId: input.sessionId,
     stoppedByUser: input.stoppedByUser,
     resultSubtype: input.resultSubtype,
     tokenFingerprint: browserToken ? shortLogId(browserToken) : undefined,
+    chromeTokenFingerprint: chromeDesktopToken ? shortLogId(chromeDesktopToken) : undefined,
     isStaleRun,
   })
 
-  revokeBrowserAgentWorkerCapability(input.sessionId, browserToken)
-  revokeChromeDesktopWorkerCapability(input.sessionId, chromeDesktopToken)
-  chromeDesktopService.releaseSessionControl(input.sessionId, chromeDesktopToken)
+  if (browserToken) {
+    revokeBrowserAgentWorkerCapability(input.sessionId, browserToken)
+  }
+  if (chromeDesktopToken) {
+    revokeChromeDesktopWorkerCapability(input.sessionId, chromeDesktopToken)
+    chromeDesktopService.releaseSessionControl(input.sessionId, chromeDesktopToken)
+  }
 
   if (isStaleRun) {
-    console.warn('[agent-rpc-service] 忽略迟到的旧 run finalize 对 pendingAgentRpcRuns 的清理与状态覆盖')
+    console.warn('[agent-rpc-service] 忽略迟到的旧 run finalize 对 pendingAgentRpcRuns 的清理与状态覆盖', {
+      sessionId: input.sessionId,
+      hasPendingChromeControl,
+      incomingChromeToken: input.chromeDesktopCapabilityToken ? shortLogId(input.chromeDesktopCapabilityToken) : undefined,
+      pendingChromeToken: pending?.chromeDesktopCapabilityToken ? shortLogId(pending.chromeDesktopCapabilityToken) : undefined,
+    })
     return { session: getAgentSessionMeta(input.sessionId) }
   }
 

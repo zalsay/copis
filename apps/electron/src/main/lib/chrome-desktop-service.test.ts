@@ -426,4 +426,120 @@ describe('ChromeDesktopService BDD Scenarios', () => {
       expect(status2.accessibilityGranted).toBe(true)
     }
   })
+
+  it('Scenario: Observe idempotent retry returns full image data, not empty base64, and becomes CHROME_ACTION_UNCERTAIN after action', async () => {
+    const startResp = await service.handleToolRequest({
+      sessionId: 'session-obs-retry',
+      capabilityToken: 'tok-obs',
+      toolCallId: 'call-start',
+      toolName: 'ChromeDesktopStart',
+      toolInput: {},
+    })
+    const controlId = startResp.kind === 'json' ? (startResp.value.controlId as string) : ''
+    await service.confirmStart({ sessionId: 'session-obs-retry', controlId, windowId: 101, pid: 2001 })
+
+    // 第一次 Observe
+    const obsResp1 = await service.handleToolRequest({
+      sessionId: 'session-obs-retry',
+      capabilityToken: 'tok-obs',
+      toolCallId: 'call-obs-retry',
+      toolName: 'ChromeDesktopObserve',
+      toolInput: { controlId },
+    })
+    expect(obsResp1.kind).toBe('image')
+    if (obsResp1.kind === 'image') {
+      expect(obsResp1.image.data).toBe('fake-base64-image-jpeg')
+      expect(obsResp1.image.data.length).toBeGreaterThan(0)
+    }
+
+    // 立即重试同一 toolCallId -> 返回相同的完整有效图片，绝不返回空 data: ''
+    const obsResp2 = await service.handleToolRequest({
+      sessionId: 'session-obs-retry',
+      capabilityToken: 'tok-obs',
+      toolCallId: 'call-obs-retry',
+      toolName: 'ChromeDesktopObserve',
+      toolInput: { controlId },
+    })
+    expect(obsResp2).toEqual(obsResp1)
+    if (obsResp2.kind === 'image') {
+      expect(obsResp2.image.data).toBe('fake-base64-image-jpeg')
+    }
+
+    // 重试相同 toolCallId 但篡改入参 -> CHROME_TOOL_CALL_COLLISION
+    await expect(
+      service.handleToolRequest({
+        sessionId: 'session-obs-retry',
+        capabilityToken: 'tok-obs',
+        toolCallId: 'call-obs-retry',
+        toolName: 'ChromeDesktopObserve',
+        toolInput: { controlId: 'different-control-id' },
+      }),
+    ).rejects.toThrow('CHROME_TOOL_CALL_COLLISION')
+
+    // 执行动作消耗当前帧
+    const frameId = obsResp1.kind === 'image' ? obsResp1.frame.frameId : ''
+    await service.handleToolRequest({
+      sessionId: 'session-obs-retry',
+      capabilityToken: 'tok-obs',
+      toolCallId: 'call-click-after-obs',
+      toolName: 'ChromeDesktopClick',
+      toolInput: { controlId, frameId, x: 500, y: 500 },
+    })
+
+    // 动作执行后，再次请求之前的 Observe toolCallId -> 报错 CHROME_ACTION_UNCERTAIN，指示 Agent 重新 Observe
+    await expect(
+      service.handleToolRequest({
+        sessionId: 'session-obs-retry',
+        capabilityToken: 'tok-obs',
+        toolCallId: 'call-obs-retry',
+        toolName: 'ChromeDesktopObserve',
+        toolInput: { controlId },
+      }),
+    ).rejects.toThrow('CHROME_ACTION_UNCERTAIN')
+
+    service.releaseSessionControl('session-obs-retry', 'tok-obs')
+  })
+
+  it('Scenario: ChromeDesktopStart polling with mismatched capabilityToken returns CHROME_CAPABILITY_STALE', async () => {
+    // 首次 Start，携带 token 'tok-gen1'
+    const start1 = await service.handleToolRequest({
+      sessionId: 'session-poll-stale',
+      capabilityToken: 'tok-gen1',
+      toolCallId: 'call-poll-start',
+      toolName: 'ChromeDesktopStart',
+      toolInput: {},
+    })
+    expect(start1.kind).toBe('json')
+    if (start1.kind === 'json') {
+      expect(start1.value.status).toBe('awaiting_user')
+    }
+
+    // 相同 session + 相同 toolCallId 轮询，携带匹配的 token -> 返回当前状态
+    const pollOk = await service.handleToolRequest({
+      sessionId: 'session-poll-stale',
+      capabilityToken: 'tok-gen1',
+      toolCallId: 'call-poll-start',
+      toolName: 'ChromeDesktopStart',
+      toolInput: {},
+    })
+    expect(pollOk.kind).toBe('json')
+    if (pollOk.kind === 'json') {
+      expect(pollOk.value.status).toBe('awaiting_user')
+    }
+
+    // 相同 session + 相同 toolCallId 轮询，但携带不匹配的过期 token 'tok-stale' -> 返回 CHROME_CAPABILITY_STALE
+    const pollStale = await service.handleToolRequest({
+      sessionId: 'session-poll-stale',
+      capabilityToken: 'tok-stale',
+      toolCallId: 'call-poll-start',
+      toolName: 'ChromeDesktopStart',
+      toolInput: {},
+    })
+    expect(pollStale.kind).toBe('json')
+    if (pollStale.kind === 'json') {
+      expect(pollStale.value.error).toBe('CHROME_CAPABILITY_STALE')
+    }
+
+    service.releaseSessionControl('session-poll-stale', 'tok-gen1')
+  })
 })

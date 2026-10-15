@@ -1391,7 +1391,16 @@ export class AgentOrchestrator {
 
       // 10.5 解析 Chrome 桌面控制 capability（仅限 macOS、用户交互、非自动化/远程/聊天室，且模型支持图片）
       const isAutomationRun = Boolean(automationContext) || input.triggeredBy === 'automation'
-      const isRemoteBotRun = isAppConnector || trustedSource === 'feishu' || trustedSource === 'wechat' || trustedSource === 'dingtalk'
+      const isRemoteBotRun = Boolean(
+        isAppConnector
+        || isAppConnectorSession(sessionMeta, trustedSource)
+      )
+      const isPaymentRun = Boolean(
+        mentionedSkills?.some(skill => skill === 'alipay-payment-skill' || skill === 'alipay-authenticate-wallet')
+        || userMessage?.includes('<copis_diamond_purchase>')
+        || userMessage?.includes('<copis_vip_upgrade>')
+        || userMessage?.includes('alipay-payment-skill')
+      )
       const imageCap = await resolvePiImageInputCapability(channel.provider, selectedModelId)
       chromeDesktopControl = issueChromeDesktopWorkerCapability({
         sessionId,
@@ -1400,7 +1409,7 @@ export class AgentOrchestrator {
         isAutomationRun,
         isDelegationRun: input.triggeredBy === 'delegation',
         isRemoteBotRun,
-        isPaymentRun: false,
+        isPaymentRun,
         isSessionProfessional: false,
         imageInputSupported: imageCap === 'supported',
       })

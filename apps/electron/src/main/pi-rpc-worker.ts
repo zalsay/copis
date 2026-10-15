@@ -230,6 +230,8 @@ async function runWorker(config: PiWorkerRunConfig): Promise<void> {
     if (!resultSubtype) resultSubtype = run.stopped ? 'aborted' : 'error_during_execution'
     if (!resultErrors) resultErrors = [message]
   } finally {
+    const chromeDesktopCapabilityToken = config.query.chromeDesktopControl?.token
+    const browserCapabilityToken = config.query.browserPageControl?.token ?? browserPageControl?.token
     await writeFrame({
       type: 'complete',
       sessionId: config.sessionId,
@@ -237,6 +239,8 @@ async function runWorker(config: PiWorkerRunConfig): Promise<void> {
       startedAt: runStartedAt,
       ...(resultSubtype ? { resultSubtype } : {}),
       ...(resultErrors && resultErrors.length > 0 ? { resultErrors } : {}),
+      ...(chromeDesktopCapabilityToken ? { chromeDesktopCapabilityToken } : {}),
+      ...(browserCapabilityToken ? { browserCapabilityToken } : {}),
     })
     await flushOutput()
     adapter.dispose()

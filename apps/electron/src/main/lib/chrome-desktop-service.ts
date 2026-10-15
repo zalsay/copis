@@ -55,6 +55,9 @@ export type FrameCapturer = (req: FrameCaptureRequest) => Promise<{
   height: number
   capturedAt: number
   data: string
+  presentedFrames?: number
+  mediaTime?: number
+  encodedAt?: number
 }>
 
 export interface ChromeDesktopServiceDependencies {
@@ -84,6 +87,13 @@ interface ActiveControlRecord {
   errorMessage?: string
   shortcut: string
   pollResolvers: Map<string, (resp: ChromeDesktopToolResponse) => void>
+  seenObserveToolCallIds: Set<string>
+  latestObservedFrame?: {
+    toolCallId: string
+    inputHash: string
+    response: ChromeDesktopToolResponse
+    timestamp: number
+  }
 }
 
 export class ChromeDesktopService {
@@ -264,6 +274,23 @@ export class ChromeDesktopService {
     inputHash: string,
     response: ChromeDesktopToolResponse,
   ): void {
+    if (toolName === 'ChromeDesktopObserve') {
+      // P1-4: Observe 独立维护单帧缓存，绝不把空 base64 作为成功结果返回；
+      // 该单帧缓存绑定在 activeControl 生命周期上，发生其他动作或 control 释放时立即销毁
+      if (this.activeControl) {
+        this.activeControl.seenObserveToolCallIds.add(toolCallId)
+        if (response.kind === 'image') {
+          this.activeControl.latestObservedFrame = {
+            toolCallId,
+            inputHash,
+            response,
+            timestamp: Date.now(),
+          }
+        }
+      }
+      return
+    }
+
     const key = this.getActionCacheKey(sessionId, controlId, toolCallId)
 
     // 容量上限：超额时先淘汰最旧项 (FIFO)
@@ -274,23 +301,10 @@ export class ChromeDesktopService {
       }
     }
 
-    // 对于 Observe，不保存大图 base64 进持久缓存，仅存短回执
-    let sanitizedResponse = response
-    if (response.kind === 'image') {
-      sanitizedResponse = {
-        kind: 'image',
-        frame: response.frame,
-        image: {
-          mimeType: 'image/jpeg',
-          data: '', // 去大图 base64，避免内存常驻
-        },
-      }
-    }
-
     this.actionHistory.set(key, {
       toolName,
       inputHash,
-      response: sanitizedResponse,
+      response,
       timestamp: Date.now(),
     })
   }
@@ -305,8 +319,24 @@ export class ChromeDesktopService {
     const currentControlId = this.activeControl?.controlId
     const cacheKey = this.getActionCacheKey(sessionId, currentControlId, toolCallId)
 
-    // 幂等去重检查：同 key 且非 Start
-    if (toolName !== 'ChromeDesktopStart') {
+    // 幂等去重检查：
+    if (toolName === 'ChromeDesktopObserve') {
+      const record = this.activeControl
+      if (record) {
+        const cachedFrame = record.latestObservedFrame
+        if (cachedFrame && cachedFrame.toolCallId === toolCallId) {
+          if (Date.now() - cachedFrame.timestamp <= ACTION_HISTORY_TTL_MS) {
+            if (cachedFrame.inputHash === inputHash) {
+              return cachedFrame.response
+            }
+            throw new Error('CHROME_TOOL_CALL_COLLISION: 同一 toolCallId 提交了不同的输入参数')
+          }
+        } else if (record.seenObserveToolCallIds.has(toolCallId)) {
+          // 该 toolCallId 之前已观察过，但帧已失效或被后续动作冲刷
+          throw new Error('CHROME_ACTION_UNCERTAIN: Observe 动作帧已失效，请重新发起 Observe')
+        }
+      }
+    } else if (toolName !== 'ChromeDesktopStart') {
       const cached = this.actionHistory.get(cacheKey)
       if (cached) {
         if (Date.now() - cached.timestamp <= ACTION_HISTORY_TTL_MS) {
@@ -357,6 +387,15 @@ export class ChromeDesktopService {
     // 同一会话且同一 toolCallId 的轮询
     if (this.activeControl && this.activeControl.sessionId === sessionId && this.activeControl.toolCallId === toolCallId) {
       const record = this.activeControl
+      if (record.capabilityToken && (!capabilityToken || record.capabilityToken !== capabilityToken)) {
+        return {
+          kind: 'json',
+          value: {
+            error: 'CHROME_CAPABILITY_STALE',
+            message: '当前 Start 请求携带的 capability token 与控制实例不匹配',
+          },
+        }
+      }
       if (record.state === 'active') {
         return {
           kind: 'json',
@@ -410,6 +449,7 @@ export class ChromeDesktopService {
       inFlightAction: false,
       shortcut: CHROME_DESKTOP_DEFAULT_SHORTCUT,
       pollResolvers: new Map(),
+      seenObserveToolCallIds: new Set(),
     }
 
     this.activeControl = record
@@ -586,6 +626,9 @@ export class ChromeDesktopService {
       height: captured.height,
       capturedAt: captured.capturedAt,
       geometryVersion: record.geometryVersion,
+      ...(captured.presentedFrames !== undefined ? { presentedFrames: captured.presentedFrames } : {}),
+      ...(captured.mediaTime !== undefined ? { mediaTime: captured.mediaTime } : {}),
+      ...(captured.encodedAt !== undefined ? { encodedAt: captured.encodedAt } : {}),
     }
     record.frameConsumed = false
 
@@ -631,6 +674,9 @@ export class ChromeDesktopService {
     if (record.frameConsumed) {
       throw new Error('CHROME_FRAME_STALE: 该帧已被消费，必须重新 Observe')
     }
+
+    // 动作执行会改变目标界面，立即使前一个 Observe 单帧缓存失效
+    record.latestObservedFrame = undefined
 
     // 检查帧时间（30 秒内有效）
     if (Date.now() - record.latestFrame.capturedAt > 30_000) {

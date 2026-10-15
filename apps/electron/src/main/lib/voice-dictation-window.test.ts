@@ -47,11 +47,13 @@ mock.module('../index', () => ({
 describe('voice-dictation-window desktop capture validation', () => {
   let validateDisplayMediaFrame: typeof import('./voice-dictation-window').validateDisplayMediaFrame
   let matchDesktopCaptureWindowSource: typeof import('./voice-dictation-window').matchDesktopCaptureWindowSource
+  let handleDisplayMediaRequest: typeof import('./voice-dictation-window').handleDisplayMediaRequest
 
   beforeAll(async () => {
     const mod = await import('./voice-dictation-window')
     validateDisplayMediaFrame = mod.validateDisplayMediaFrame
     matchDesktopCaptureWindowSource = mod.matchDesktopCaptureWindowSource
+    handleDisplayMediaRequest = mod.handleDisplayMediaRequest
   })
 
   describe('validateDisplayMediaFrame', () => {
@@ -136,6 +138,69 @@ describe('voice-dictation-window desktop capture validation', () => {
 
       const matched = matchDesktopCaptureWindowSource(sources, 123)
       expect(matched).toBeNull()
+    })
+  })
+
+  describe('handleDisplayMediaRequest', () => {
+    it('calls callback({}) when frame validation fails', async () => {
+      let callbackResult: any = null
+      await handleDisplayMediaRequest(
+        { frame: { parent: { id: 1 }, webContents: { id: 10 } } },
+        10,
+        { windowId: 123 },
+        async () => [{ id: 'window:123:0' }],
+        (res) => { callbackResult = res },
+      )
+      expect(callbackResult).toEqual({})
+    })
+
+    it('calls callback({}) when pending capture target is null', async () => {
+      let callbackResult: any = null
+      await handleDisplayMediaRequest(
+        { frame: { parent: null, webContents: { id: 10 } } },
+        10,
+        null,
+        async () => [{ id: 'window:123:0' }],
+        (res) => { callbackResult = res },
+      )
+      expect(callbackResult).toEqual({})
+    })
+
+    it('calls callback({}) when no matching window source is found', async () => {
+      let callbackResult: any = null
+      await handleDisplayMediaRequest(
+        { frame: { parent: null, webContents: { id: 10 } } },
+        10,
+        { windowId: 123 },
+        async () => [{ id: 'window:999:0' }, { id: 'screen:123:0' }],
+        (res) => { callbackResult = res },
+      )
+      expect(callbackResult).toEqual({})
+    })
+
+    it('calls callback({}) when getSources throws an error', async () => {
+      let callbackResult: any = null
+      await handleDisplayMediaRequest(
+        { frame: { parent: null, webContents: { id: 10 } } },
+        10,
+        { windowId: 123 },
+        async () => { throw new Error('OS screen capture error') },
+        (res) => { callbackResult = res },
+      )
+      expect(callbackResult).toEqual({})
+    })
+
+    it('calls callback({ video: matched }) when exact matching window source is found', async () => {
+      let callbackResult: any = null
+      const targetSource = { id: 'window:123:0', name: 'Google Chrome' }
+      await handleDisplayMediaRequest(
+        { frame: { parent: null, webContents: { id: 10 } } },
+        10,
+        { windowId: 123 },
+        async () => [{ id: 'window:12:0' }, targetSource],
+        (res) => { callbackResult = res },
+      )
+      expect(callbackResult).toEqual({ video: targetSource })
     })
   })
 })

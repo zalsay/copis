@@ -4257,6 +4257,12 @@ pub(crate) fn finalize_worker_run(
                 .collect(),
         );
     }
+    if let Some(token) = frame.get("chromeDesktopCapabilityToken").and_then(Value::as_str) {
+        body["chromeDesktopCapabilityToken"] = Value::String(token.to_string());
+    }
+    if let Some(token) = frame.get("browserCapabilityToken").and_then(Value::as_str) {
+        body["browserCapabilityToken"] = Value::String(token.to_string());
+    }
     let body =
         serde_json::to_vec(&body).map_err(|error| format!("Agent 完成帧序列化失败: {}", error))?;
     let response = send_internal_request(bridge, "/api/internal/agent/complete", body)?;

@@ -237,30 +237,52 @@ function installVoiceDictationMediaPermissions(win: BrowserWindow): void {
 
   if (typeof (voiceSession as any).setDisplayMediaRequestHandler === 'function') {
     ;(voiceSession as any).setDisplayMediaRequestHandler(async (request: any, callback: any) => {
-      if (!validateDisplayMediaFrame(request.frame, win.webContents.id)) {
-        callback({})
-        return
-      }
-
       const pendingTarget = chromeDesktopService.getPendingCaptureTarget()
-      if (!pendingTarget) {
-        callback({})
-        return
-      }
-
-      try {
-        const { desktopCapturer } = require('electron')
-        const sources = await desktopCapturer.getSources({ types: ['window'] })
-        const matched = matchDesktopCaptureWindowSource(sources, pendingTarget.windowId)
-        if (matched) {
-          callback({ video: matched })
-        } else {
-          callback({})
-        }
-      } catch {
-        callback({})
-      }
+      await handleDisplayMediaRequest(
+        request,
+        win.webContents.id,
+        pendingTarget,
+        () => {
+          const { desktopCapturer } = require('electron')
+          return desktopCapturer.getSources({ types: ['window'] })
+        },
+        callback,
+      )
     })
+  }
+}
+
+/**
+ * 处理 DisplayMedia 请求，严格校验顶层 frame 与 pending capture target 匹配，
+ * 失败分支调用 callback({}) 触发 Chromium NotAllowedError 拒绝。
+ */
+export async function handleDisplayMediaRequest(
+  request: any,
+  expectedWebContentsId: number,
+  pendingTarget: { windowId: number } | null,
+  getSources: () => Promise<Array<{ id: string; [key: string]: any }>>,
+  callback: (streams: { video?: any }) => void,
+): Promise<void> {
+  if (!validateDisplayMediaFrame(request?.frame, expectedWebContentsId)) {
+    callback({})
+    return
+  }
+
+  if (!pendingTarget) {
+    callback({})
+    return
+  }
+
+  try {
+    const sources = await getSources()
+    const matched = matchDesktopCaptureWindowSource(sources, pendingTarget.windowId)
+    if (matched) {
+      callback({ video: matched })
+    } else {
+      callback({})
+    }
+  } catch {
+    callback({})
   }
 }
 

@@ -35,9 +35,9 @@ export function ChromeDesktopCaptureHost(): React.ReactElement | null {
   const streamRef = useRef<MediaStream | null>(null)
   streamRef.current = mediaStream
 
-  // 跟踪当前活跃的 requestId，防止迟到帧串入新请求
+  // 跟踪当前活跃的 requestId，以及上一帧已呈现序号
   const activeRequestIdRef = useRef<string | null>(null)
-  const lastPresentedTimeRef = useRef<number>(0)
+  const lastPresentedFramesRef = useRef<number>(-1)
 
   // 1. 同步 MediaStream 至隐藏的 video 元素
   useEffect(() => {
@@ -55,7 +55,7 @@ export function ChromeDesktopCaptureHost(): React.ReactElement | null {
       const handleTrackEnded = (): void => {
         console.warn('[ChromeDesktopCaptureHost] 视频采集轨道已终止')
         activeRequestIdRef.current = null
-        lastPresentedTimeRef.current = 0
+        lastPresentedFramesRef.current = -1
         window.electronAPI?.chromeDesktop?.sendStreamError({
           reason: 'CHROME_CAPTURE_FAILED',
           message: 'Chrome 窗口视频采集轨道已终止',
@@ -75,7 +75,7 @@ export function ChromeDesktopCaptureHost(): React.ReactElement | null {
     } else {
       video.srcObject = null
       activeRequestIdRef.current = null
-      lastPresentedTimeRef.current = 0
+      lastPresentedFramesRef.current = -1
     }
   }, [mediaStream, cleanupStream])
 
@@ -93,7 +93,7 @@ export function ChromeDesktopCaptureHost(): React.ReactElement | null {
       // stopped, error 或 paused 均立即断开活动流与帧引用，不持有陈旧截屏
       if (state.state === 'stopped' || state.state === 'error' || state.state === 'paused') {
         activeRequestIdRef.current = null
-        lastPresentedTimeRef.current = 0
+        lastPresentedFramesRef.current = -1
         cleanupStream()
       }
     })
@@ -110,6 +110,7 @@ export function ChromeDesktopCaptureHost(): React.ReactElement | null {
     const unsubscribe = window.electronAPI.chromeDesktop.onRequestFrame(async (req) => {
       const { controlId, requestId } = req
       activeRequestIdRef.current = requestId
+      const prevPresentedFrames = lastPresentedFramesRef.current
 
       const video = videoRef.current
       if (!video || !streamRef.current) {
@@ -152,28 +153,69 @@ export function ChromeDesktopCaptureHost(): React.ReactElement | null {
       }
 
       // 结合 requestVideoFrameCallback 等待源帧刷新（最多 350ms）
+      let sourcePresentedFrames: number | undefined
+      let sourceMediaTime: number | undefined
       let captureTimestamp = Date.now()
+
       if (typeof (video as any).requestVideoFrameCallback === 'function') {
-        await new Promise<void>((resolve) => {
+        const rvfcResult = await new Promise<{ ok: boolean; presentedFrames?: number; mediaTime?: number }>((resolve) => {
           let done = false
+          let callbackHandle: number | null = null
+
           const timer = setTimeout(() => {
             if (!done) {
               done = true
-              resolve()
+              if (callbackHandle !== null && typeof (video as any).cancelVideoFrameCallback === 'function') {
+                ;(video as any).cancelVideoFrameCallback(callbackHandle)
+              }
+              resolve({ ok: false })
             }
           }, 350)
 
-          ;(video as any).requestVideoFrameCallback((now: number, metadata: any) => {
-            if (!done) {
+          const onFrame = (now: number, metadata: any) => {
+            if (done) return
+            const presented = typeof metadata?.presentedFrames === 'number' ? metadata.presentedFrames : -1
+            if (prevPresentedFrames < 0 || presented > prevPresentedFrames) {
               done = true
               clearTimeout(timer)
-              const frameTime = metadata.presentedFrames ? metadata.presentedFrames : now
-              lastPresentedTimeRef.current = frameTime
-              captureTimestamp = Date.now()
-              resolve()
+              if (presented >= 0) {
+                lastPresentedFramesRef.current = presented
+              }
+              resolve({
+                ok: true,
+                presentedFrames: presented >= 0 ? presented : undefined,
+                mediaTime: typeof metadata?.mediaTime === 'number' ? metadata.mediaTime : undefined,
+              })
+            } else {
+              callbackHandle = (video as any).requestVideoFrameCallback(onFrame)
             }
-          })
+          }
+
+          callbackHandle = (video as any).requestVideoFrameCallback(onFrame)
         })
+
+        if (!rvfcResult.ok) {
+          const errorMsg = prevPresentedFrames >= 0
+            ? 'CHROME_FRAME_STALE: 画面未更新 (350ms 内无新帧呈现)'
+            : 'CHROME_CAPTURE_FAILED: 等待首帧呈现超时 (350ms)'
+
+          if (activeRequestIdRef.current === requestId) {
+            window.electronAPI.chromeDesktop.sendFrameResponse({
+              controlId,
+              requestId,
+              width: 0,
+              height: 0,
+              capturedAt: Date.now(),
+              data: '',
+              error: errorMsg,
+            })
+          }
+          return
+        }
+
+        sourcePresentedFrames = rvfcResult.presentedFrames
+        sourceMediaTime = rvfcResult.mediaTime
+        captureTimestamp = Date.now()
       }
 
       if (activeRequestIdRef.current !== requestId) {
@@ -237,6 +279,7 @@ export function ChromeDesktopCaptureHost(): React.ReactElement | null {
           throw new Error('CHROME_CAPTURE_FAILED: 单帧编码大小超过 1 MiB 上限，已达最低压缩阈值')
         }
 
+        const encodedAt = Date.now()
         if (activeRequestIdRef.current === requestId) {
           window.electronAPI.chromeDesktop.sendFrameResponse({
             controlId,
@@ -245,6 +288,9 @@ export function ChromeDesktopCaptureHost(): React.ReactElement | null {
             height: chosenH,
             capturedAt: captureTimestamp,
             data: chosenBase64,
+            presentedFrames: sourcePresentedFrames,
+            mediaTime: sourceMediaTime,
+            encodedAt,
           })
         }
       } catch (err: any) {

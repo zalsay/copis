@@ -85,6 +85,10 @@ mock.module('./agent-session-manager', () => ({
     if (sessionId === rpcSession.id) return rpcSession
     if (sessionId === 'automation-session-1') return { ...rpcSession, id: 'automation-session-1' }
     if (sessionId === 'codex-session-1') return { ...rpcSession, id: 'codex-session-1', agentRuntime: 'codex' }
+    if (sessionId === 'feishu-session-1') return { ...rpcSession, id: 'feishu-session-1', source: 'feishu', feishuDedicated: true }
+    if (sessionId === 'wechat-session-1') return { ...rpcSession, id: 'wechat-session-1', source: 'wechat', wechatDedicated: true }
+    if (sessionId === 'dingtalk-session-1') return { ...rpcSession, id: 'dingtalk-session-1', source: 'dingtalk', dingtalkDedicated: true }
+    if (sessionId === 'bridge-session-1') return { ...rpcSession, id: 'bridge-session-1', source: 'bridge' }
     return undefined
   },
   getAgentSessionSDKMessages: () => persistedRpcMessages,
@@ -351,9 +355,25 @@ mock.module('electron', () => ({
     isPackaged: false,
     getPath: () => { electronGetPathCalls++; throw new Error('RPC fixture must not access Electron user paths') },
   },
-  BrowserWindow: Object.assign(class {}, { getAllWindows: () => [] }),
-  clipboard: {},
+  BrowserWindow: Object.assign(class {}, { getAllWindows: () => [], fromWebContents: () => null }),
+  clipboard: {
+    readText: () => '',
+    writeText: () => {},
+  },
   dialog: {},
+  ipcMain: {
+    handle: () => {},
+    on: () => {},
+  },
+  desktopCapturer: {
+    getSources: async () => [],
+  },
+  systemPreferences: {
+    getMediaAccessStatus: () => 'granted',
+  },
+  screen: {
+    getPrimaryDisplay: () => ({ workArea: { x: 0, y: 0, width: 1920, height: 1080 } }),
+  },
   nativeImage: { createFromPath: () => ({}) },
   nativeTheme: {},
   powerMonitor: {},
@@ -1464,5 +1484,107 @@ describe('Browser Agent RPC 准备', () => {
     } as unknown as SDKMessage
 
     expect(shouldPersistAgentRpcMessage(finalAssistant)).toBe(true)
+  })
+
+  test('Given Feishu / WeChat / DingTalk / Bridge 远程会话 When prepareAgentRpcRun Then 绝不签发 chromeDesktopControl 且系统提示词不包含 Chrome 章节', async () => {
+    const { prepareAgentRpcRun } = await import('./agent-rpc-service')
+
+    for (const sessionId of ['feishu-session-1', 'wechat-session-1', 'dingtalk-session-1', 'bridge-session-1']) {
+      const run = await prepareAgentRpcRun({
+        sessionId,
+        userMessage: '帮我打开网页',
+        channelId: 'channel-1',
+        modelId: rpcSession.modelId,
+        agentRuntime: 'pi',
+      })
+      expect(run.query.chromeDesktopControl).toBeUndefined()
+      expect(run.query.systemPrompt).not.toContain('macOS 本机 Chrome 桌面视觉自动化')
+    }
+  })
+
+  test('Given 支付流程消息或引用支付 Skill When prepareAgentRpcRun Then 绝不签发 chromeDesktopControl 且系统提示词不包含 Chrome 章节', async () => {
+    const { prepareAgentRpcRun } = await import('./agent-rpc-service')
+
+    // 1. 包含 <copis_diamond_purchase>
+    const run1 = await prepareAgentRpcRun({
+      sessionId: rpcSession.id,
+      userMessage: '我已确认套餐 <copis_diamond_purchase>套餐 ID: diamond-1</copis_diamond_purchase>',
+      channelId: 'channel-1',
+      modelId: rpcSession.modelId,
+      agentRuntime: 'pi',
+    })
+    expect(run1.query.chromeDesktopControl).toBeUndefined()
+    expect(run1.query.systemPrompt).not.toContain('macOS 本机 Chrome 桌面视觉自动化')
+
+    // 2. 包含 <copis_vip_upgrade>
+    const run2 = await prepareAgentRpcRun({
+      sessionId: rpcSession.id,
+      userMessage: '升级 VIP <copis_vip_upgrade></copis_vip_upgrade>',
+      channelId: 'channel-1',
+      modelId: rpcSession.modelId,
+      agentRuntime: 'pi',
+    })
+    expect(run2.query.chromeDesktopControl).toBeUndefined()
+    expect(run2.query.systemPrompt).not.toContain('macOS 本机 Chrome 桌面视觉自动化')
+
+    // 3. mentionedSkills 包含 alipay-payment-skill
+    const run3 = await prepareAgentRpcRun({
+      sessionId: rpcSession.id,
+      userMessage: '开始充值',
+      channelId: 'channel-1',
+      modelId: rpcSession.modelId,
+      agentRuntime: 'pi',
+      mentionedSkills: ['alipay-payment-skill'],
+    })
+    expect(run3.query.chromeDesktopControl).toBeUndefined()
+    expect(run3.query.systemPrompt).not.toContain('macOS 本机 Chrome 桌面视觉自动化')
+  })
+
+  test('Given 当前 pending run 持有 Chrome control When finalize 缺少 token Then 保守保护当前控制不被释放', async () => {
+    const { finalizeAgentRpcRun, prepareAgentRpcRun, getPendingAgentRpcRun } = await import('./agent-rpc-service')
+    const { chromeDesktopService } = await import('./chrome-desktop-service')
+
+    // 模拟运行准备
+    const run = await prepareAgentRpcRun({
+      sessionId: rpcSession.id,
+      userMessage: '用户主窗口普通请求',
+      channelId: 'channel-1',
+      modelId: rpcSession.modelId,
+      agentRuntime: 'pi',
+    })
+
+    const token = run.query.chromeDesktopControl?.token
+    if (process.platform === 'darwin' && token) {
+      // 启动并确认一个活跃 control
+      const startResp = await chromeDesktopService.handleToolRequest({
+        sessionId: rpcSession.id,
+        capabilityToken: token,
+        toolCallId: 'start-call',
+        toolName: 'ChromeDesktopStart',
+        toolInput: {},
+      })
+      const controlId = startResp.kind === 'json' ? (startResp.value.controlId as string) : ''
+      await chromeDesktopService.confirmStart({ sessionId: rpcSession.id, controlId, windowId: 101, pid: 2001 })
+      expect(chromeDesktopService.getSessionState()?.state).toBe('active')
+
+      // 旧 run 完成帧迟到：未携带 chromeDesktopCapabilityToken
+      finalizeAgentRpcRun({
+        sessionId: rpcSession.id,
+        stoppedByUser: false,
+      })
+
+      // 当前活跃控制绝不能被释放！
+      expect(chromeDesktopService.getSessionState()?.state).toBe('active')
+      expect(getPendingAgentRpcRun(rpcSession.id)?.chromeDesktopCapabilityToken).toBe(token)
+
+      // 携带正确 token 完成 -> 正确释放
+      finalizeAgentRpcRun({
+        sessionId: rpcSession.id,
+        stoppedByUser: false,
+        chromeDesktopCapabilityToken: token,
+      })
+      expect(chromeDesktopService.getSessionState()).toBeNull()
+      expect(getPendingAgentRpcRun(rpcSession.id)).toBeUndefined()
+    }
   })
 })
