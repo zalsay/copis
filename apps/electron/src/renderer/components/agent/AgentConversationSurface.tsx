@@ -27,6 +27,8 @@ import { PermissionBanner } from './PermissionBanner'
 import { PermissionModeSelector } from './PermissionModeSelector'
 import { AskUserBanner } from './AskUserBanner'
 import { ExitPlanModeBanner } from './ExitPlanModeBanner'
+import { ChromeDesktopBanner } from './ChromeDesktopBanner'
+import { chromeDesktopSessionStateAtom } from '@/atoms/chrome-desktop-atoms'
 import { NextStepsChips } from './NextStepsChips'
 import { NewSessionFeatureChips, type CopisFeatureItem } from './NewSessionFeatureChips'
 import { extractLatestAssistantNextSteps, type NextStepSuggestion } from './next-steps-parser'
@@ -2617,10 +2619,14 @@ export function AgentConversationSurface({
   const allAskUserRequests = useAtomValue(allPendingAskUserRequestsAtom)
   const allPermissionRequests = useAtomValue(allPendingPermissionRequestsAtom)
   const allExitPlanRequests = useAtomValue(allPendingExitPlanRequestsAtom)
+  const chromeDesktopState = useAtomValue(chromeDesktopSessionStateAtom)
   const hasExitPlanBanner = shouldShowExitPlanBanner(variant, allExitPlanRequests.get(sessionId)?.length ?? 0)
+  const isChromeDesktopAwaitingUser =
+    chromeDesktopState?.sessionId === sessionId && chromeDesktopState.state === 'awaiting_user'
   const hasBannerOverlay =
     (allAskUserRequests.get(sessionId)?.length ?? 0) > 0 ||
-    hasExitPlanBanner
+    hasExitPlanBanner ||
+    isChromeDesktopAwaitingUser
   const hasBlockingRequests = hasBannerOverlay || (allPermissionRequests.get(sessionId)?.length ?? 0) > 0
   const canSendQueuedNow = messagesLoaded && (streaming || !messagesRefreshing) && !!agentChannelId && hasAvailableModel && !hasBlockingRequests
   const autoSendingQueuedRef = React.useRef(false)
@@ -3059,6 +3065,9 @@ export function AgentConversationSurface({
 
         {/* ExitPlanMode 计划审批横幅；AI浏览器不参与 Copis 计划审批。 */}
         {hasExitPlanBanner && <ExitPlanModeBanner sessionId={sessionId} />}
+
+        {/* ChromeDesktop 桌面控制横幅 */}
+        <ChromeDesktopBanner sessionId={sessionId} />
 
         {/* 输入区域 — 交互横幅显示时隐藏，由横幅替代 */}
         {!hasBannerOverlay && !hideComposer && (

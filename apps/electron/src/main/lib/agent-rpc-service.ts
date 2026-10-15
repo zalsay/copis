@@ -100,6 +100,12 @@ import {
   issueBrowserAgentWorkerCapability,
   revokeBrowserAgentWorkerCapability,
 } from './browser-agent-worker-capability'
+import {
+  issueChromeDesktopWorkerCapability,
+  revokeChromeDesktopWorkerCapability,
+} from './chrome-desktop-capability'
+import { chromeDesktopService } from './chrome-desktop-service'
+import { resolvePiImageInputCapability } from './adapters/pi-model-registry'
 import { redactLogOrigin, shortLogId } from './bridge-log-redaction'
 import { createFallbackTitle } from './title-generation'
 import { isVisibleRunMessage } from './agent-run-message-visibility'
@@ -145,6 +151,7 @@ interface PendingAgentRpcRun {
   readonly triggeredBy?: AgentSendInput['triggeredBy']
   readonly compactRequest: boolean
   readonly browserCapabilityToken?: string
+  readonly chromeDesktopCapabilityToken?: string
 }
 
 export interface AgentRpcInputRecord {
@@ -850,6 +857,15 @@ export async function prepareAgentRpcRun(input: AgentSendInput, trustedRunId?: s
     ...(browserBinding && browserTab ? { tabId: browserBinding.tabId } : {}),
     triggeredBy: input.triggeredBy ?? 'user',
   })
+  const imageCapability = await resolvePiImageInputCapability(channel.provider, modelId)
+  const isEligibleForChromeDesktop = !isChatroomRun && !isSessionProfessional && input.triggeredBy !== 'automation' && input.triggeredBy !== 'delegation'
+  const chromeDesktopControl = isEligibleForChromeDesktop ? issueChromeDesktopWorkerCapability({
+    sessionId: input.sessionId,
+    isChatroomRun,
+    isAutomationRun: input.triggeredBy === 'automation',
+    isDelegationRun: input.triggeredBy === 'delegation',
+    imageInputSupported: imageCapability === 'supported',
+  }) : undefined
   let codexAppServerPort: number | undefined
   if (isSessionProfessional) {
     let httpApiPort: number | undefined
@@ -921,6 +937,7 @@ export async function prepareAgentRpcRun(input: AgentSendInput, trustedRunId?: s
     retryRunStartedAt: startedAt,
     ...(fileAccessPolicy ? { fileAccessPolicy, useRustFileApi: true } : {}),
     ...(browserPageControl ? { browserPageControl } : {}),
+    ...(chromeDesktopControl ? { chromeDesktopControl } : {}),
     triggeredBy: input.triggeredBy ?? 'user',
   }
 
@@ -948,6 +965,7 @@ export async function prepareAgentRpcRun(input: AgentSendInput, trustedRunId?: s
     ...(input.triggeredBy ? { triggeredBy: input.triggeredBy } : {}),
     compactRequest,
     ...(browserPageControl ? { browserCapabilityToken: browserPageControl.token } : {}),
+    ...(chromeDesktopControl ? { chromeDesktopCapabilityToken: chromeDesktopControl.token } : {}),
   })
   return { sessionId: input.sessionId, query }
 }
@@ -1113,6 +1131,8 @@ export function finalizeAgentRpcRun(input: {
     tokenFingerprint: pending?.browserCapabilityToken ? shortLogId(pending.browserCapabilityToken) : undefined,
   })
   revokeBrowserAgentWorkerCapability(input.sessionId, pending?.browserCapabilityToken)
+  revokeChromeDesktopWorkerCapability(input.sessionId, pending?.chromeDesktopCapabilityToken)
+  chromeDesktopService.releaseSessionControl(input.sessionId)
   const current = getAgentSessionMeta(input.sessionId)
   if (!current) {
     pendingAgentRpcRuns.delete(input.sessionId)

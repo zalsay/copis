@@ -26,6 +26,7 @@ import type {
   SDKMessage,
   SDKUserMessageInput,
   TypedError,
+  PiWorkerChromeDesktopCapability,
 } from '@copis/shared'
 import {
   calculatePiAutoCompactionReserveTokens,
@@ -69,6 +70,7 @@ import { createCopisResourceLoaderOptions } from './pi-resource-loader-overrides
 import { createCodexFastModeExtension, withCodexFastModeServiceTier } from './pi-codex-request-settings'
 import { createOpenAIReasoningRequestExtension } from './pi-openai-reasoning-request-settings'
 import { buildPiBrowserAgentTools } from './pi-browser-agent-tools'
+import { buildPiChromeDesktopTools } from './pi-chrome-desktop-tools'
 import { buildPiAutomationTools } from './pi-automation-tools'
 import { buildPiAlipayBotTools } from './pi-alipay-bot-tool'
 import { buildPiAgentMailTools } from './pi-agent-mail-tool'
@@ -199,6 +201,8 @@ export interface PiAgentQueryOptions extends AgentQueryInput {
   browserPageControl?: PiWorkerBrowserCapability
   /** Rust 在启动 Pi Worker 后签发的定时任务 capability。 */
   automationControl?: PiWorkerAutomationCapability
+  /** Chrome 桌面控制 Worker 的短期 capability；缺失时不得注册任何 Chrome 桌面工具。 */
+  chromeDesktopControl?: PiWorkerChromeDesktopCapability
   /** 是否启用 Copis 图片生成（generate_image）工具。 */
   imageGenerationEnabled?: boolean
 }
@@ -1334,7 +1338,7 @@ export function buildBuiltinToolDefinitions(
   cwd: string,
   canUseTool: PiAgentQueryOptions['canUseTool'],
   runtimeEnv: AgentRuntimeEnv | undefined,
-  options: Pick<PiAgentQueryOptions, 'sessionId' | 'useRustFileApi' | 'browserPageControl' | 'automationControl' | 'workspaceSlug' | 'memoryWorkspaceSlug' | 'memoryPolicy' | 'imageGenerationEnabled' | 'capabilityProfile'>,
+  options: Pick<PiAgentQueryOptions, 'sessionId' | 'useRustFileApi' | 'browserPageControl' | 'automationControl' | 'chromeDesktopControl' | 'workspaceSlug' | 'memoryWorkspaceSlug' | 'memoryPolicy' | 'imageGenerationEnabled' | 'capabilityProfile'>,
 ): ToolDefinition[] {
   const rustFileTools = options.useRustFileApi
     ? createRustFileToolOperations({ sessionId: options.sessionId })
@@ -1382,6 +1386,12 @@ export function buildBuiltinToolDefinitions(
       : []),
     ...(options.capabilityProfile !== 'chatroom' && options.automationControl
       ? buildPiAutomationTools(sdk, { sessionId: options.sessionId, capability: options.automationControl })
+      : []),
+    ...(options.capabilityProfile !== 'chatroom' && options.chromeDesktopControl
+      ? buildPiChromeDesktopTools(sdk, {
+        sessionId: options.sessionId,
+        capability: options.chromeDesktopControl,
+      })
       : []),
     ...(options.capabilityProfile !== 'chatroom' ? buildPiAlipayBotTools(sdk, { sessionId: options.sessionId }) : []),
     ...(options.capabilityProfile !== 'chatroom' ? buildPiAgentMailTools(sdk, { sessionId: options.sessionId }) : []),

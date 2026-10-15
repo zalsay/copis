@@ -45,6 +45,7 @@ import {
   type ProviderType,
   COPIS_WORKING_EXPERT_MODEL_ID,
   workingModeToModelId,
+  type PiWorkerChromeDesktopCapability,
 } from '@copis/shared'
 import {
   COPIS_DEFAULT_PERMISSION_MODE,
@@ -104,7 +105,12 @@ import { resolveDshNode } from './dsh-runtime'
 import { getHttpApiInternalToken } from './http-api-server'
 import { isVisibleRunMessage } from './agent-run-message-visibility'
 import { resolvePiThinkingLevel } from './agent-thinking-level'
-import { resolvePiReasoningCapability } from './adapters/pi-model-registry'
+import { resolvePiReasoningCapability, resolvePiImageInputCapability } from './adapters/pi-model-registry'
+import {
+  issueChromeDesktopWorkerCapability,
+  revokeChromeDesktopWorkerCapability,
+} from './chrome-desktop-capability'
+import { chromeDesktopService } from './chrome-desktop-service'
 import { generateCodexTitle } from './adapters/pi-codex-title-generator'
 import { createFallbackTitle, cleanUserMessageForTitle, sanitizeGeneratedTitle, TITLE_PROMPT } from './title-generation'
 import { filterAttachedPaths, getAttachedFileDirectories } from './attached-paths'
@@ -885,6 +891,7 @@ export class AgentOrchestrator {
     const browserContext = isChatroomRun ? undefined : getBrowserAgentContext(sessionId)
     const hasBrowserContext = browserContext !== undefined
     const effectiveSkillMentions = isChatroomRun ? undefined : resolveBrowserAgentSkillMentions(mentionedSkills, hasBrowserContext)
+    let chromeDesktopControl: PiWorkerChromeDesktopCapability | undefined
 
     // 兼容旧会话和非 UI 触发路径：首次运行时把实际使用的模式补回会话索引。
     if (sessionMeta && workingMode !== undefined && sessionMeta.workingMode !== workingMode) {
@@ -1917,6 +1924,14 @@ export class AgentOrchestrator {
         }
       }
 
+      const isEligibleForChromeDesktop = !isChatroomRun
+      const imageCap = await resolvePiImageInputCapability(channel.provider, selectedModelId)
+      chromeDesktopControl = isEligibleForChromeDesktop ? issueChromeDesktopWorkerCapability({
+        sessionId,
+        isChatroomRun,
+        imageInputSupported: imageCap === 'supported',
+      }) : undefined
+
       const queryOptions: PiAgentQueryOptions = {
         agentRuntime,
         sessionId,
@@ -1931,6 +1946,7 @@ export class AgentOrchestrator {
         proxyUrl,
         runtimeEnv,
         ...(maxTurns != null && { maxTurns }),
+        ...(chromeDesktopControl ? { chromeDesktopControl } : {}),
         permissionMode: isChatroomRun ? 'default' : initialPermissionMode,
         canUseTool,
         systemPrompt: systemPromptAppend + buildPiAdditionalDirectoriesPrompt(
@@ -2783,6 +2799,10 @@ export class AgentOrchestrator {
       // askUserService 不在 turn 结束时清理——AskUserQuestion 的生命周期由用户交互决定，
       // 仅在会话真正删除时（DELETE_SESSION IPC）才清理。
       exitPlanService.clearSessionPending(sessionId)
+      if (chromeDesktopControl) {
+        revokeChromeDesktopWorkerCapability(sessionId, chromeDesktopControl.token)
+        chromeDesktopService.releaseSessionControl(sessionId)
+      }
     }
   }
 
@@ -2793,6 +2813,7 @@ export class AgentOrchestrator {
    * 再调用 adapter.abort() 中止底层 SDK 进程。
    */
   stop(sessionId: string): void {
+    chromeDesktopService.releaseSessionControl(sessionId)
     this.activeSessions.delete(sessionId)
     this.sessionPermissionModes.delete(sessionId)
     this.stoppedBySessions.add(sessionId)

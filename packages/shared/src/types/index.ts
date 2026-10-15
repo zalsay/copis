@@ -84,3 +84,6 @@ export * from './web-password'
 
 // 多人聊天室与本地 Agent 协调器共享契约
 export * from './chatroom'
+
+// macOS 本机 Chrome 桌面视觉自动化类型与 IPC 通道
+export * from './chrome-desktop'

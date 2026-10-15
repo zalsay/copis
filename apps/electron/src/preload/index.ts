@@ -6,7 +6,7 @@
  */
 
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
-import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, ATTACHMENT_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, FUNCTIONAL_MODULE_IPC_CHANNELS, PROXY_IPC_CHANNELS, AGENT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, WECHAT_IPC_CHANNELS, AGENT_MAIL_IPC_CHANNELS, AUTOMATION_IPC_CHANNELS, PLANNING_IPC_CHANNELS, WORKING_IPC_CHANNELS, WEB_IPC_CHANNELS, WEB_PASSWORD_IPC_CHANNELS, WEB_SYNC_IPC_CHANNELS, BROWSER_WORKFLOW_IPC_CHANNELS, MEMORY_IPC_CHANNELS, FUND_STOCK_IPC_CHANNELS, DSH_CORDIS_IPC_CHANNELS, CHATROOM_IPC_CHANNELS, type ChatRoomElectronAPI } from '@copis/shared'
+import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, ATTACHMENT_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, FUNCTIONAL_MODULE_IPC_CHANNELS, PROXY_IPC_CHANNELS, AGENT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, WECHAT_IPC_CHANNELS, AGENT_MAIL_IPC_CHANNELS, AUTOMATION_IPC_CHANNELS, PLANNING_IPC_CHANNELS, WORKING_IPC_CHANNELS, WEB_IPC_CHANNELS, WEB_PASSWORD_IPC_CHANNELS, WEB_SYNC_IPC_CHANNELS, BROWSER_WORKFLOW_IPC_CHANNELS, MEMORY_IPC_CHANNELS, FUND_STOCK_IPC_CHANNELS, DSH_CORDIS_IPC_CHANNELS, CHATROOM_IPC_CHANNELS, CHROME_DESKTOP_IPC_CHANNELS, type ChromeDesktopSystemStatus, type ChromeDesktopWindowInfo, type ChromeDesktopErrorCode, type ChromeDesktopSessionState, type ChatRoomElectronAPI } from '@copis/shared'
 import { USER_PROFILE_IPC_CHANNELS, SETTINGS_IPC_CHANNELS, SCRATCH_PAD_IPC_CHANNELS, APP_ICON_IPC_CHANNELS, DOCK_BADGE_IPC_CHANNELS, STORAGE_IPC_CHANNELS, CODEX_IPC_CHANNELS, type CodexAppServerStatus, type CodexCliStatus } from '../types'
 import { agentHttpStreamClient } from '../renderer/lib/agent-http-stream'
 import { setHttpApiWebToken } from '../renderer/lib/http-api-web-token'
@@ -244,6 +244,18 @@ import { QUICK_TASK_IPC_CHANNELS, TRAY_IPC_CHANNELS, VOICE_DICTATION_IPC_CHANNEL
  */
 export interface ElectronAPI {
   chatrooms: ChatRoomElectronAPI
+  chromeDesktop: {
+    checkStatus: () => Promise<ChromeDesktopSystemStatus>
+    listWindows: () => Promise<ChromeDesktopWindowInfo[]>
+    prepareCapture: (params: { sessionId: string; controlId: string; windowId: number; pid: number }) => Promise<{ ok: boolean; error?: ChromeDesktopErrorCode; message?: string }>
+    confirmStart: (params: { sessionId: string; controlId: string; windowId: number; pid: number }) => Promise<{ ok: boolean; error?: ChromeDesktopErrorCode; message?: string }>
+    stopControl: (sessionId?: string) => Promise<void>
+    getState: () => Promise<ChromeDesktopSessionState | null>
+    onStateChanged: (callback: (state: ChromeDesktopSessionState) => void) => () => void
+    onRequestFrame: (callback: (req: { controlId: string; geometryVersion: number }) => void) => () => void
+    sendFrameResponse: (res: { controlId: string; width: number; height: number; capturedAt: number; data: string; error?: string }) => void
+    sendStreamError: (error: { reason: ChromeDesktopErrorCode; message: string }) => void
+  }
   // ===== 运行时相关 =====
 
   /**
@@ -3019,6 +3031,40 @@ const electronAPI: ElectronAPI = {
       return () => {
         ipcRenderer.removeListener(DSH_CORDIS_IPC_CHANNELS.CLIENT_EVENT, listener)
       }
+    },
+  },
+  chromeDesktop: {
+    checkStatus: (): Promise<ChromeDesktopSystemStatus> =>
+      ipcRenderer.invoke(CHROME_DESKTOP_IPC_CHANNELS.CHECK_STATUS),
+    listWindows: (): Promise<ChromeDesktopWindowInfo[]> =>
+      ipcRenderer.invoke(CHROME_DESKTOP_IPC_CHANNELS.LIST_WINDOWS),
+    prepareCapture: (params: { sessionId: string; controlId: string; windowId: number; pid: number }): Promise<{ ok: boolean; error?: ChromeDesktopErrorCode; message?: string }> =>
+      ipcRenderer.invoke(CHROME_DESKTOP_IPC_CHANNELS.PREPARE_CAPTURE, params),
+    confirmStart: (params: { sessionId: string; controlId: string; windowId: number; pid: number }): Promise<{ ok: boolean; error?: ChromeDesktopErrorCode; message?: string }> =>
+      ipcRenderer.invoke(CHROME_DESKTOP_IPC_CHANNELS.CONFIRM_START, params),
+    stopControl: (sessionId?: string): Promise<void> =>
+      ipcRenderer.invoke(CHROME_DESKTOP_IPC_CHANNELS.STOP_CONTROL, sessionId),
+    getState: (): Promise<ChromeDesktopSessionState | null> =>
+      ipcRenderer.invoke(CHROME_DESKTOP_IPC_CHANNELS.GET_STATE),
+    onStateChanged: (callback: (state: ChromeDesktopSessionState) => void): (() => void) => {
+      const listener = (_: any, state: ChromeDesktopSessionState) => callback(state)
+      ipcRenderer.on(CHROME_DESKTOP_IPC_CHANNELS.STATE_CHANGED, listener)
+      return () => {
+        ipcRenderer.removeListener(CHROME_DESKTOP_IPC_CHANNELS.STATE_CHANGED, listener)
+      }
+    },
+    onRequestFrame: (callback: (req: { controlId: string; geometryVersion: number }) => void): (() => void) => {
+      const listener = (_: any, req: { controlId: string; geometryVersion: number }) => callback(req)
+      ipcRenderer.on(CHROME_DESKTOP_IPC_CHANNELS.REQUEST_FRAME, listener)
+      return () => {
+        ipcRenderer.removeListener(CHROME_DESKTOP_IPC_CHANNELS.REQUEST_FRAME, listener)
+      }
+    },
+    sendFrameResponse: (res: { controlId: string; width: number; height: number; capturedAt: number; data: string; error?: string }): void => {
+      ipcRenderer.send(CHROME_DESKTOP_IPC_CHANNELS.FRAME_RESPONSE, res)
+    },
+    sendStreamError: (error: { reason: ChromeDesktopErrorCode; message: string }): void => {
+      ipcRenderer.send(CHROME_DESKTOP_IPC_CHANNELS.STREAM_ERROR, error)
     },
   },
 }

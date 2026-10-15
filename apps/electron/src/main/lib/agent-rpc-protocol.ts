@@ -8,7 +8,11 @@ import type {
   ProviderType,
   SDKMessage,
   XaiOAuthCredentials,
+  PiWorkerChromeDesktopCapability,
+  ChromeDesktopToolRequest,
+  ChromeDesktopToolName,
 } from '@copis/shared'
+import { CHROME_DESKTOP_ENDPOINT } from '@copis/shared'
 import type { AgentRuntimeEnv } from './agent-runtime-env'
 
 export interface PiWorkerQueryConfig {
@@ -61,6 +65,7 @@ export interface PiWorkerQueryConfig {
   useRustFileApi?: boolean
   browserPageControl?: PiWorkerBrowserCapability
   automationControl?: PiWorkerAutomationCapability
+  chromeDesktopControl?: PiWorkerChromeDesktopCapability
   triggeredBy?: 'user' | 'automation' | 'delegation'
   workspaceId?: string
   sourceAutomationId?: string
@@ -286,6 +291,47 @@ export function parsePiWorkerAutomationCapability(value: unknown): PiWorkerAutom
   return { endpoint: value.endpoint, token: value.token }
 }
 
+export function parsePiWorkerChromeDesktopCapability(value: unknown): PiWorkerChromeDesktopCapability | undefined {
+  if (!isPlainRecord(value)) return undefined
+  const keys = Object.keys(value).sort()
+  if (keys.length !== 2 || keys[0] !== 'endpoint' || keys[1] !== 'token') return undefined
+  if (value.endpoint !== CHROME_DESKTOP_ENDPOINT || !isBoundedNonBlankString(value.token)) return undefined
+  return { endpoint: value.endpoint as typeof CHROME_DESKTOP_ENDPOINT, token: value.token }
+}
+
+const CHROME_DESKTOP_TOOL_NAME_SET = new Set<string>([
+  'ChromeDesktopStart',
+  'ChromeDesktopObserve',
+  'ChromeDesktopClick',
+  'ChromeDesktopScroll',
+  'ChromeDesktopType',
+  'ChromeDesktopPress',
+  'ChromeDesktopStop',
+])
+
+export function parseChromeDesktopToolRequest(value: unknown): ChromeDesktopToolRequest | undefined {
+  if (!isPlainRecord(value)) return undefined
+  const keys = Object.keys(value).sort()
+  if (keys.join(',') !== 'capabilityToken,sessionId,toolCallId,toolInput,toolName') return undefined
+  if (
+    !isBoundedNonBlankString(value.sessionId)
+    || !isBoundedNonBlankString(value.capabilityToken)
+    || !isBoundedNonBlankString(value.toolCallId)
+    || typeof value.toolName !== 'string'
+    || !CHROME_DESKTOP_TOOL_NAME_SET.has(value.toolName)
+    || !isPlainRecord(value.toolInput)
+  ) {
+    return undefined
+  }
+  return {
+    sessionId: value.sessionId,
+    capabilityToken: value.capabilityToken,
+    toolCallId: value.toolCallId,
+    toolName: value.toolName as ChromeDesktopToolName,
+    toolInput: value.toolInput,
+  }
+}
+
 export function parseBrowserAgentToolRequest(value: unknown): BrowserAgentToolRequest | undefined {
   if (!isPlainRecord(value)) return undefined
   const keys = Object.keys(value).sort()
@@ -367,6 +413,7 @@ export function parseWorkerCommand(line: string): AgentRpcWorkerCommand | undefi
     if (config.query.sessionId !== config.sessionId) return undefined
     if (config.query.browserPageControl !== undefined && !parsePiWorkerBrowserCapability(config.query.browserPageControl)) return undefined
     if (config.query.automationControl !== undefined && !parsePiWorkerAutomationCapability(config.query.automationControl)) return undefined
+    if (config.query.chromeDesktopControl !== undefined && !parsePiWorkerChromeDesktopCapability(config.query.chromeDesktopControl)) return undefined
   }
   return parsed as unknown as AgentRpcWorkerCommand
 }

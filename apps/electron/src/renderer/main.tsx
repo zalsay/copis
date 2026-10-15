@@ -113,6 +113,7 @@ import type { WorkspaceCapabilities } from '@copis/shared'
 import { showCapabilityChangeToasts } from './lib/capabilities-toast'
 import { GlobalShortcuts } from './components/shortcuts/GlobalShortcuts'
 import { VoiceDictationApp } from './components/voice-dictation/VoiceDictationApp'
+import { ChromeDesktopCaptureHost } from './components/agent/ChromeDesktopCaptureHost'
 import { TabSwitcher } from './components/tabs/TabSwitcher'
 import { getEnabledAgentChannelIds } from './lib/agent-channel-selection'
 import { WindowControls } from './components/WindowControls'
@@ -1335,6 +1336,7 @@ if (isQuickTaskWindow) {
       <TabStatePersistenceInitializer />
       <WindowControls quitApp />
       <VoiceDictationApp embedded />
+      <ChromeDesktopCaptureHost />
       <GlobalShortcuts />
       <TabSwitcher />
       <App />

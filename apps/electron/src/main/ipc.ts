@@ -58,6 +58,7 @@ import { registerAgentMailIpcHandlers } from './ipc/agent-mail.ipc'
 import { registerStorageIpcHandlers } from './ipc/storage.ipc'
 import { registerMigrationIpcHandlers } from './ipc/migration.ipc'
 import { registerPlanningIpcHandlers } from './ipc/planning.ipc'
+import { registerChromeDesktopIpcHandlers } from './ipc/chrome-desktop.ipc'
 import { registerAutomationIpcHandlers } from './ipc/automation.ipc'
 import { registerMemoryIngestionIpcHandlers } from './ipc/memory-ingestion.ipc'
 import { registerTradingIpcHandlers } from './ipc/trading.ipc'
@@ -170,6 +171,8 @@ export function registerIpcHandlers(): void {
   registerWechatIpcHandlers()
 
   registerAgentMailIpcHandlers()
+
+  registerChromeDesktopIpcHandlers()
 
   console.log('[IPC] IPC 处理器注册完成')
 

@@ -19,8 +19,9 @@ import {
   prepareAgentRpcRun,
   prepareAutomationRpcRun,
 } from './agent-rpc-service'
-import { parseBrowserAgentToolRequest, parseWorkerFrame } from './agent-rpc-protocol'
+import { parseBrowserAgentToolRequest, parseChromeDesktopToolRequest, parseWorkerFrame } from './agent-rpc-protocol'
 import type { AgentRpcWorkerFrame, BrowserAgentToolRequest } from './agent-rpc-protocol'
+import { validateChromeDesktopWorkerCapability } from './chrome-desktop-capability'
 import type { BrowserAgentToolResult } from './browser-agent-tool-service'
 import { redactSensitiveLogValue, shortLogId } from './bridge-log-redaction'
 import type { AppSettings } from '../../types'
@@ -1159,6 +1160,33 @@ async function handleAgentRpcInternalRequest(
         failureKind,
         error: redactSensitiveLogValue(error),
       })
+      throw error
+    }
+  }
+
+  if (action === 'chrome-desktop-tool') {
+    const input = parseChromeDesktopToolRequest(bodyRecord)
+    if (!input) {
+      console.warn('[ChromeDesktop][HTTP] 参数校验拒绝', {
+        toolName: bodyRecord.toolName,
+      })
+      throw new HttpApiRequestError('Chrome 桌面工具参数不正确', 400, 'invalid_chrome_desktop_tool_request')
+    }
+
+    const valid = validateChromeDesktopWorkerCapability(input.sessionId, input.capabilityToken)
+    if (!valid) {
+      console.warn('[ChromeDesktop][HTTP] capability token 校验拒绝', {
+        sessionId: shortLogId(input.sessionId),
+      })
+      throw new HttpApiRequestError('Chrome 桌面工具权限无效或已过期', 403, 'invalid_capability_token')
+    }
+
+    try {
+      const { chromeDesktopService } = await import('./chrome-desktop-service')
+      const result = await chromeDesktopService.handleToolRequest(input)
+      return { status: 200, body: result }
+    } catch (error: any) {
+      console.error('[ChromeDesktop][HTTP] 执行失败:', error)
       throw error
     }
   }

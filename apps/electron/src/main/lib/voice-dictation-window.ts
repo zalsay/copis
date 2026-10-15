@@ -12,6 +12,7 @@ import { getSettings } from './settings-service'
 import { captureVoiceDictationTarget } from './text-output-service'
 import { getMainWindow } from '../index'
 import { httpApiPortArgument, httpApiWebTokenArgument } from './http-api-web-token'
+import { chromeDesktopService } from './chrome-desktop-service'
 
 const INDICATOR_WIDTH = 360
 const INDICATOR_HEIGHT = 110
@@ -194,17 +195,30 @@ function installVoiceDictationMediaPermissions(win: BrowserWindow): void {
 
   voiceSession.setPermissionCheckHandler((webContents, permission, requestingOrigin, details) => {
     if (webContents?.id !== win.webContents.id) return false
+    const url = details.requestingUrl ?? details.securityOrigin ?? webContents?.getURL() ?? requestingOrigin
+
+    if ((permission as string) === 'display-capture') {
+      return isTrustedVoiceDictationUrl(url) && chromeDesktopService.hasPendingCapture()
+    }
+
     if (permission !== 'media' || details.mediaType === 'video') return false
-    return isTrustedVoiceDictationUrl(
-      details.requestingUrl ??
-      details.securityOrigin ??
-      webContents?.getURL() ??
-      requestingOrigin,
-    )
+    return isTrustedVoiceDictationUrl(url)
   })
 
   voiceSession.setPermissionRequestHandler((webContents, permission, callback, details) => {
-    if (webContents.id !== win.webContents.id || permission !== 'media') {
+    if (webContents.id !== win.webContents.id) {
+      callback(false)
+    }
+
+    if ((permission as string) === 'display-capture') {
+      const isTrustedRequest = isTrustedVoiceDictationUrl(
+        (details as any).requestingUrl ?? (details as any).securityOrigin ?? webContents.getURL(),
+      )
+      callback(isTrustedRequest && chromeDesktopService.hasPendingCapture())
+      return
+    }
+
+    if (permission !== 'media') {
       callback(false)
       return
     }
@@ -219,6 +233,35 @@ function installVoiceDictationMediaPermissions(win: BrowserWindow): void {
 
     callback(isTrustedRequest && !requestsVideo)
   })
+
+  if (typeof (voiceSession as any).setDisplayMediaRequestHandler === 'function') {
+    ;(voiceSession as any).setDisplayMediaRequestHandler(async (request: any, callback: any) => {
+      if (request.frame?.parent !== null || request.webContents?.id !== win.webContents.id) {
+        callback({})
+        return
+      }
+
+      const pendingTarget = chromeDesktopService.getPendingCaptureTarget()
+      if (!pendingTarget) {
+        callback({})
+        return
+      }
+
+      try {
+        const { desktopCapturer } = require('electron')
+        const sources = await desktopCapturer.getSources({ types: ['window'] })
+        const targetStr = String(pendingTarget.windowId)
+        const matched = sources.find((s: any) => s.id === `window:${targetStr}:0` || s.id.includes(targetStr))
+        if (matched) {
+          callback({ video: matched })
+        } else {
+          callback({})
+        }
+      } catch {
+        callback({})
+      }
+    })
+  }
 }
 
 function isTrustedVoiceDictationUrl(rawUrl: string | undefined): boolean {
