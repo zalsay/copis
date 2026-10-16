@@ -1595,6 +1595,12 @@ export class AgentOrchestrator {
       // 动态 canUseTool：每次调用读取当前权限模式，支持运行中切换
       const canUseTool = async (toolName: string, input: Record<string, unknown>, options: CanUseToolOptions): Promise<PermissionResult> => {
         const currentMode = getPermissionMode()
+        const currentSession = getAgentSessionMeta(sessionId)
+        const advancedAuthorization = !isChatroomRun
+          && (runTriggeredBy ?? 'user') === 'user'
+          && !currentSession?.sourceAutomationId
+          && !currentSession?.sourceDelegationId
+          && currentSession?.advancedAuthorization === true
 
         // ── 参数校验守卫（所有模式、所有工具，优先于权限检查） ──
         const validationFailure = validateToolInput(toolName, input)
@@ -1603,10 +1609,9 @@ export class AgentOrchestrator {
           return validationFailure
         }
 
-        // ── Composer 高级授权：Git/SSH/curl/Python 命令必须开启后才允许执行 ──
+        // ── Composer 高级授权：未开启时保留受保护命令限制 ──
         if (toolName === 'Bash') {
           const command = typeof input.command === 'string' ? input.command : ''
-          const advancedAuthorization = !isChatroomRun && getAgentSessionMeta(sessionId)?.advancedAuthorization === true
           if (isAdvancedAuthorizationCommand(command) && !advancedAuthorization) {
             return {
               behavior: 'deny' as const,
@@ -1662,7 +1667,7 @@ export class AgentOrchestrator {
             return { behavior: 'deny' as const, message: restrictedWriteDeniedMessage }
           }
         }
-        if (workspaceWriteRestricted && toolName === 'Bash') {
+        if (workspaceWriteRestricted && toolName === 'Bash' && !advancedAuthorization) {
           const command = typeof input.command === 'string' ? input.command : ''
           if (!isBashCommandReadOnly(command)) {
             return { behavior: 'deny' as const, message: `${restrictedWriteDeniedMessage} Bash 写操作请改用 Write/Edit 写入 project/ 或 copis/。` }

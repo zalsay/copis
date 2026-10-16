@@ -355,6 +355,8 @@ test('Given chatroom capability profile When building RPC worker tools Then paym
   expect(names).not.toContain('BrowserPageObserve')
   expect(names).not.toContain('AutomationRun')
   expect(names).not.toContain('generate_image')
+  expect(names).not.toContain('get_image_task')
+  expect(names).not.toContain('list_image_tasks')
   expect(names).not.toContain('AlipayBot')
   expect(names).not.toContain('AgentMail')
   expect(names).not.toContain('WorkingPayment')

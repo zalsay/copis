@@ -485,13 +485,12 @@ function taskId(task: Record<string, unknown>): string | undefined {
   return typeof task.task_id === 'string' && task.task_id.trim() ? task.task_id.trim() : undefined
 }
 
-export function buildPiImageGenerationTools(
-  sdk: PiSdk,
+export function createImageGenerationToolDefinitions(
   options: PiImageGenerationToolOptions,
 ): ToolDefinition[] {
   const client = new PiImageGenerationToolClient(options)
 
-  const definition = sdk.defineTool({
+  const definition: ToolDefinition = {
     name: 'generate_image',
     label: 'Copis 图片生成',
     description: `基于 Copis 后端（edu-api）的图片生成服务生成图片，计费由后端完成。
@@ -536,9 +535,9 @@ export function buildPiImageGenerationTools(
         details: { generatedAttachments: result.meta },
       } as unknown as AgentToolResult<unknown>
     },
-  }) as unknown as ToolDefinition
+  }
 
-  const queryDefinition = sdk.defineTool({
+  const queryDefinition: ToolDefinition = {
     name: 'get_image_task',
     label: '查询图片任务',
     description: '按 task_id 查询已提交图片任务。完成后下载并展示图片；未完成返回状态。不重新生成或扣费。超时后使用此工具恢复。',
@@ -549,8 +548,8 @@ export function buildPiImageGenerationTools(
       if (result.base64) content.push({ type: 'image', data: result.base64, mimeType: result.mediaType })
       return { content, details: { generatedAttachments: result.meta } }
     },
-  }) as unknown as ToolDefinition
-  const listDefinition = sdk.defineTool({
+  }
+  const listDefinition: ToolDefinition = {
     name: 'list_image_tasks',
     label: '图片任务列表',
     description: '查找当前登录账号最近 100 个本地图片任务的 task_id，可按 session_id 筛选。列表状态是本地快照，使用 get_image_task 查询最新状态并取回图片。',
@@ -559,6 +558,13 @@ export function buildPiImageGenerationTools(
       const payload = await client.listTasks((params as { session_id?: string }).session_id, signal)
       return { content: [{ type: 'text' as const, text: JSON.stringify(payload) }], details: {} }
     },
-  }) as unknown as ToolDefinition
+  }
   return [definition, queryDefinition, listDefinition].map(tool => ({ ...tool, executionMode: 'sequential' as const }))
+}
+
+export function buildPiImageGenerationTools(
+  sdk: PiSdk,
+  options: PiImageGenerationToolOptions,
+): ToolDefinition[] {
+  return createImageGenerationToolDefinitions(options).map(tool => sdk.defineTool(tool))
 }

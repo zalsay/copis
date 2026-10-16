@@ -169,7 +169,16 @@ fn auth_state_observer_runs_after_login_publishes_in_memory_auth() {
     let auth_weak = Arc::downgrade(&auth);
     auth.set_auth_state_observer(Arc::new(move |authenticated| {
         assert!(authenticated);
-        assert!(auth_weak.upgrade().unwrap().auth_state().authenticated);
+        let state = auth_weak.upgrade().unwrap().auth_state();
+        assert!(state.authenticated);
+        assert_eq!(
+            state
+                .user
+                .as_ref()
+                .and_then(|user| user.get("id"))
+                .and_then(Value::as_i64),
+            Some(7)
+        );
         observed_clone.store(true, Ordering::Release);
     }));
 
@@ -179,23 +188,29 @@ fn auth_state_observer_runs_after_login_publishes_in_memory_auth() {
 }
 
 #[test]
-fn login_profile_enrichment_notifies_auth_observer_only_once() {
+fn login_profile_enrichment_notifies_after_each_committed_user_state() {
     let transport = Arc::new(QueueTransport::new(vec![
         response(200, json!({"token":"access-token"})),
         response(200, json!({"data":{"id":7,"email":"user@example.com"}})),
     ]));
     let storage = Arc::new(MemoryStorage::default());
-    let auth = session(transport, storage);
-    let notifications = Arc::new(AtomicUsize::new(0));
+    let auth = Arc::new(session(transport, storage));
+    let notifications = Arc::new(Mutex::new(Vec::new()));
     let notifications_clone = Arc::clone(&notifications);
+    let auth_weak = Arc::downgrade(&auth);
     auth.set_auth_state_observer(Arc::new(move |authenticated| {
         assert!(authenticated);
-        notifications_clone.fetch_add(1, Ordering::SeqCst);
+        let state = auth_weak.upgrade().unwrap().auth_state();
+        assert!(state.authenticated);
+        notifications_clone
+            .lock()
+            .unwrap()
+            .push(state.user.as_ref().and_then(|user| user.get("id")).cloned());
     }));
 
     auth.login(login_input()).unwrap();
 
-    assert_eq!(notifications.load(Ordering::SeqCst), 1);
+    assert_eq!(*notifications.lock().unwrap(), vec![None, Some(json!(7))]);
 }
 
 #[test]
@@ -399,8 +414,24 @@ fn oidc_authorization_uses_rust_state_pkce_and_never_exposes_tokens() {
     let client =
         Arc::new(EduApiClient::new("https://auth.example/module/auth", transport, 8).unwrap());
     let storage = Arc::new(MemoryStorage::default());
-    let auth =
-        AuthSession::new_with_oidc(Arc::clone(&client), storage.clone(), Some(client)).unwrap();
+    let auth = Arc::new(
+        AuthSession::new_with_oidc(Arc::clone(&client), storage.clone(), Some(client)).unwrap(),
+    );
+    let observed_emails = Arc::new(Mutex::new(Vec::new()));
+    let observed_emails_clone = Arc::clone(&observed_emails);
+    let auth_weak = Arc::downgrade(&auth);
+    auth.set_auth_state_observer(Arc::new(move |authenticated| {
+        let state = auth_weak.upgrade().unwrap().auth_state();
+        assert_eq!(state.authenticated, authenticated);
+        observed_emails_clone.lock().unwrap().push(
+            state
+                .user
+                .as_ref()
+                .and_then(|user| user.get("email"))
+                .and_then(Value::as_str)
+                .map(str::to_string),
+        );
+    }));
 
     let authorization_url = auth
         .start_oidc("http://127.0.0.1:51730/api/working/oauth/callback")
@@ -433,6 +464,10 @@ fn oidc_authorization_uses_rust_state_pkce_and_never_exposes_tokens() {
             .and_then(|user| user.get("email"))
             .and_then(Value::as_str),
         Some("oidc@example.com")
+    );
+    assert_eq!(
+        *observed_emails.lock().unwrap(),
+        vec![None, Some("oidc@example.com".to_string())]
     );
     assert!(!serde_json::to_string(&auth_state)
         .unwrap()
@@ -483,10 +518,22 @@ fn oidc_refresh_uses_oauth_token_endpoint_and_rotates_refresh_token() {
         user: Some(json!({"id": 7})),
         expires_at: Some(4_000_000_000),
     });
-    let auth =
-        AuthSession::new_with_oidc(legacy_client, storage.clone(), Some(oidc_client)).unwrap();
+    let auth = Arc::new(
+        AuthSession::new_with_oidc(legacy_client, storage.clone(), Some(oidc_client)).unwrap(),
+    );
+    let notifications = Arc::new(AtomicUsize::new(0));
+    let notifications_clone = Arc::clone(&notifications);
+    let auth_weak = Arc::downgrade(&auth);
+    auth.set_auth_state_observer(Arc::new(move |authenticated| {
+        assert!(authenticated);
+        let auth = auth_weak.upgrade().unwrap();
+        assert!(!auth.refresh_active_for_test());
+        assert!(auth.auth_state().authenticated);
+        notifications_clone.fetch_add(1, Ordering::SeqCst);
+    }));
 
     assert_eq!(auth.refresh_single_flight().unwrap(), "oidc-rotated-access");
+    assert_eq!(notifications.load(Ordering::SeqCst), 1);
     assert!(legacy_transport.requests.lock().unwrap().is_empty());
     let requests = oidc_transport.requests.lock().unwrap();
     assert_eq!(requests.len(), 1);

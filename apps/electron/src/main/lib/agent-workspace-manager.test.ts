@@ -64,6 +64,34 @@ function writeWorkspaceSkill(workspaceSlug: string, skillSlug: string, name: str
   writeFileSync(join(skillDir, 'SKILL.md'), `---\nname: ${name}\n---\n`, 'utf-8')
 }
 
+function clearInvestmentRoot(): string {
+  const root = join(tempHome, 'Documents', 'Copis', 'Investment')
+  rmSync(root, { recursive: true, force: true })
+  mkdirSync(root, { recursive: true })
+  return realpathSync(root)
+}
+
+function writeInvestmentWorkspaceIndex(
+  projectRootPath: string,
+  projectPath: string | undefined,
+  version = 3,
+): void {
+  const workspace = {
+    id: 'investment-workspace-id',
+    name: '我的投资',
+    slug: 'investment',
+    projectRootPath,
+    ...(projectPath ? { projectPath } : {}),
+    createdAt: 1,
+    updatedAt: 1,
+  }
+  writeFileSync(
+    configPaths.getAgentWorkspacesIndexPath(),
+    JSON.stringify({ version, workspaces: [workspace] }),
+    'utf-8',
+  )
+}
+
 describe('Agent 工作区 MCP 配置', () => {
   test('Given 工作区 MCP 包含内置保留名 When 归一化配置 Then 剔除冲突项并保留普通服务器', () => {
     const normalized = manager.normalizeWorkspaceMcpConfig({
@@ -192,16 +220,103 @@ describe('项目术语迁移', () => {
   })
 
   test('Given 新安装 When 调用 ensureInvestmentWorkspace Then 创建「我的投资」固定工作区且绑定 Investment 根目录', () => {
+    const expectedProjectRootPath = clearInvestmentRoot()
     const workspace = manager.ensureInvestmentWorkspace()
-    const expectedProjectRootPath = realpathSync(join(tempHome, 'Documents', 'Copis', 'Investment'))
+    const repeatedWorkspace = manager.ensureInvestmentWorkspace()
+    const contextDir = manager.ensureAgentWorkspaceContextDir(workspace)
 
     expect(workspace.name).toBe('我的投资')
     expect(workspace.slug).toBe('investment')
-    expect(workspace.projectRootPath).toBe(expectedProjectRootPath)
-    expect(workspace.projectPath).toBe(join(expectedProjectRootPath, 'project'))
+    expect(workspace.projectRootPath).toBe(realpathSync(expectedProjectRootPath))
+    expect(workspace.projectPath).toBe(expectedProjectRootPath)
+    expect(repeatedWorkspace.id).toBe(workspace.id)
     expect(existsSync(workspace.projectRootPath!)).toBe(true)
-    expect(existsSync(workspace.projectPath!)).toBe(true)
-    expect(manager.getAgentWorkspaceWritableRoot(workspace)).toBe(join(expectedProjectRootPath, 'copis'))
+    expect(existsSync(join(expectedProjectRootPath, 'project'))).toBe(false)
+    expect(existsSync(join(expectedProjectRootPath, 'copis'))).toBe(false)
+    expect(manager.getProjectFilesPath(workspace.slug)).toBe(expectedProjectRootPath)
+    expect(manager.getAgentWorkspaceWritableRoot(workspace)).toBe(expectedProjectRootPath)
+    expect(manager.getAgentWorkspaceCopisPath(workspace)).toBe(expectedProjectRootPath)
+    expect(contextDir).toBe(join(expectedProjectRootPath, '.context'))
+    expect(existsSync(contextDir!)).toBe(true)
+  })
+
+  test('Given 索引保存旧默认 project 路径且旧目录为空 When 初始化投资工作区 Then 归一化到根并仅移除空旧目录', () => {
+    const projectRootPath = clearInvestmentRoot()
+    const oldProjectPath = join(projectRootPath, 'project')
+    const oldCopisProjectPath = join(projectRootPath, 'copis', 'project')
+    mkdirSync(oldProjectPath, { recursive: true })
+    mkdirSync(oldCopisProjectPath, { recursive: true })
+    writeInvestmentWorkspaceIndex(projectRootPath, oldProjectPath, 2)
+
+    const workspace = manager.ensureInvestmentWorkspace()
+    const persisted = JSON.parse(readFileSync(configPaths.getAgentWorkspacesIndexPath(), 'utf-8')) as {
+      workspaces: Array<{ projectPath?: string }>
+    }
+
+    expect(workspace.projectPath).toBe(projectRootPath)
+    expect(persisted.workspaces[0]?.projectPath).toBe(projectRootPath)
+    expect(manager.getProjectFilesPath(workspace.slug)).toBe(projectRootPath)
+    expect(existsSync(oldProjectPath)).toBe(false)
+    expect(existsSync(oldCopisProjectPath)).toBe(false)
+    expect(existsSync(join(projectRootPath, 'copis'))).toBe(false)
+  })
+
+  test('Given investment copis 是指向外部的符号链接 When 初始化旧目录清理 Then 不移除链接目标中的空目录', () => {
+    const projectRootPath = clearInvestmentRoot()
+    const outsideRoot = join(tempHome, 'investment-symlink-target')
+    const outsideProjectPath = join(outsideRoot, 'project')
+    mkdirSync(outsideProjectPath, { recursive: true })
+    mkdirSync(projectRootPath, { recursive: true })
+    symlinkSync(outsideRoot, join(projectRootPath, 'copis'), 'dir')
+    writeInvestmentWorkspaceIndex(projectRootPath, join(projectRootPath, 'project'))
+
+    manager.ensureInvestmentWorkspace()
+    manager.migrateLegacyAgentWorkspaceProjectDirectories()
+
+    expect(existsSync(join(projectRootPath, 'copis'))).toBe(true)
+    expect(existsSync(outsideProjectPath)).toBe(true)
+  })
+
+  test('Given investment 自定义 projectPath 且旧 copis/project 有用户数据 When 归一化与旧目录迁移 Then 保留自定义路径和全部旧数据', () => {
+    const projectRootPath = clearInvestmentRoot()
+    const customProjectPath = join(tempHome, 'my-investment-projects')
+    const legacyProjectPath = join(projectRootPath, 'project')
+    const legacyCopisProjectPath = join(projectRootPath, 'copis', 'project')
+    const legacyContextPath = join(projectRootPath, 'copis', '.context')
+    const rootContextPath = join(projectRootPath, '.context')
+    mkdirSync(legacyProjectPath, { recursive: true })
+    mkdirSync(legacyCopisProjectPath, { recursive: true })
+    mkdirSync(legacyContextPath, { recursive: true })
+    mkdirSync(rootContextPath, { recursive: true })
+    writeFileSync(join(legacyProjectPath, 'saved-project.txt'), 'project data', 'utf-8')
+    writeFileSync(join(legacyCopisProjectPath, 'saved-copis-project.txt'), 'copis project data', 'utf-8')
+    writeFileSync(join(legacyContextPath, 'memory.md'), 'old copis context', 'utf-8')
+    writeFileSync(join(rootContextPath, 'root-memory.md'), 'root context', 'utf-8')
+    writeInvestmentWorkspaceIndex(projectRootPath, customProjectPath)
+
+    const workspace = manager.ensureInvestmentWorkspace()
+    const contextDir = manager.ensureAgentWorkspaceContextDir(workspace)
+    manager.migrateLegacyAgentWorkspaceProjectDirectories()
+
+    expect(workspace.projectPath).toBe(customProjectPath)
+    expect(manager.getProjectFilesPath(workspace.slug)).toBe(customProjectPath)
+    expect(readFileSync(join(legacyProjectPath, 'saved-project.txt'), 'utf-8')).toBe('project data')
+    expect(readFileSync(join(legacyCopisProjectPath, 'saved-copis-project.txt'), 'utf-8')).toBe('copis project data')
+    expect(readFileSync(join(legacyContextPath, 'memory.md'), 'utf-8')).toBe('old copis context')
+    expect(readFileSync(join(rootContextPath, 'root-memory.md'), 'utf-8')).toBe('root context')
+    expect(contextDir).toBe(legacyContextPath)
+  })
+
+  test('Given investment 在 v2 索引中保存显式自定义 projectPath When 升级并初始化 Then 不覆盖用户路径', () => {
+    const projectRootPath = clearInvestmentRoot()
+    const customProjectPath = join(tempHome, 'custom-investment-output')
+    writeInvestmentWorkspaceIndex(projectRootPath, customProjectPath, 2)
+
+    const workspace = manager.ensureInvestmentWorkspace()
+
+    expect(workspace.projectPath).toBe(customProjectPath)
+    expect(manager.getProjectFilesPath(workspace.slug)).toBe(customProjectPath)
+    expect(existsSync(customProjectPath)).toBe(true)
   })
 
   test('Given 「我的投资」工作区 When 尝试删除 Then 抛出系统固定工作区不能删除错误', () => {

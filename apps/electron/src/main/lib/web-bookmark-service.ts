@@ -17,7 +17,7 @@ import type {
   WebBookmarkGroupChange,
   WebBookmarkChange,
 } from '@copis/shared'
-import { getWebBookmarksPath } from './config-paths'
+import { getWebBookmarksStoragePath } from './web-sync-account-storage'
 
 const bookmarkChangeListeners = new Set<() => void>()
 
@@ -136,7 +136,7 @@ function readBookmarks(value: unknown, groups: WebBookmarkGroup[]): WebBookmark[
 }
 
 function readSnapshot(): WebBookmarksSnapshot {
-  const filePath = getWebBookmarksPath()
+  const filePath = getWebBookmarksStoragePath()
   if (!existsSync(filePath)) return emptySnapshot()
 
   try {
@@ -152,7 +152,7 @@ function readSnapshot(): WebBookmarksSnapshot {
 }
 
 function writeSnapshot(snapshot: WebBookmarksSnapshot, notify = true): WebBookmarksSnapshot {
-  const filePath = getWebBookmarksPath()
+  const filePath = getWebBookmarksStoragePath()
   mkdirSync(dirname(filePath), { recursive: true })
   try {
     writeFileSync(filePath, JSON.stringify(snapshot, null, 2), 'utf-8')

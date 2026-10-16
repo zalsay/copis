@@ -30,6 +30,8 @@ export interface PiWorkerQueryConfig {
   maxTurns?: number
   /** Main-only SDK default mode; never accepted from renderer DTOs. */
   permissionMode: CopisPermissionMode | 'default'
+  /** Main-only Composer authorization; restricted to the user-owned session. */
+  advancedAuthorization?: boolean
   systemPrompt: string
   resumeSessionId?: string
   piAgentDir: string
@@ -131,6 +133,7 @@ export interface PiWorkerRunConfig {
 /** Renderer/HTTP 输入禁止携带的主进程能力字段；可信聊天室上下文只存在 Main registry。 */
 export const AGENT_RPC_FORBIDDEN_INPUT_FIELDS = [
   '_copisTrustedRunId',
+  'advancedAuthorization',
   'runtimeContext',
   'capabilityProfile',
   'memoryWorkspaceSlug',
