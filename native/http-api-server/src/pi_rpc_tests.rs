@@ -864,3 +864,289 @@ fn given_completed_assistant_event_when_normalizing_then_preserves_without_parti
 
     assert!(frame["payload"]["message"].get("_partial").is_none());
 }
+
+struct PaymentModelAuthStorage;
+
+impl crate::auth_session::AuthStorage for PaymentModelAuthStorage {
+    fn load(
+        &self,
+    ) -> Result<Option<crate::auth_session::PersistedAuth>, crate::auth_session::AuthError> {
+        Ok(Some(crate::auth_session::PersistedAuth {
+            access_token: "payment-model-access".to_string(),
+            refresh_token: Some("payment-model-refresh".to_string()),
+            provider: "legacy".to_string(),
+            user: Some(json!({"ID": 7})),
+            expires_at: Some(4_000_000_000),
+        }))
+    }
+
+    fn save(
+        &self,
+        _auth: &crate::auth_session::PersistedAuth,
+    ) -> Result<(), crate::auth_session::AuthError> {
+        Ok(())
+    }
+
+    fn clear(&self) -> Result<(), crate::auth_session::AuthError> {
+        Ok(())
+    }
+}
+
+#[derive(Default)]
+struct PaymentModelAuthTransport {
+    calls: std::sync::Mutex<Vec<crate::edu_api_client::EduApiRequest>>,
+}
+
+impl crate::edu_api_client::EduApiTransport for PaymentModelAuthTransport {
+    fn send(
+        &self,
+        request: crate::edu_api_client::EduApiRequest,
+    ) -> Result<crate::edu_api_client::EduApiResponse, crate::edu_api_client::EduApiError> {
+        let body = match request.path.as_str() {
+            "/api/internal/working-desktop/payment-capabilities" => {
+                br#"{"data":{"capability":"wdpc_payment_model_test"}}"#.to_vec()
+            }
+            "/api/auth/refresh" => {
+                br#"{"token":"payment-model-refreshed","refresh_token":"payment-model-refresh"}"#
+                    .to_vec()
+            }
+            _ => br#"{"id":"response-payment","usage":{"input_tokens":10,"output_tokens":5}}"#
+                .to_vec(),
+        };
+        self.calls.lock().unwrap().push(request);
+        Ok(crate::edu_api_client::EduApiResponse {
+            status: 200,
+            headers: vec![("content-type".to_string(), "application/json".to_string())],
+            body,
+        })
+    }
+}
+
+fn payment_model_fixture(
+    model_base_url: Option<&str>,
+) -> (PiWorkerManager, Arc<PaymentModelAuthTransport>) {
+    let transport = Arc::new(PaymentModelAuthTransport::default());
+    let client = Arc::new(
+        crate::edu_api_client::EduApiClient::new(
+            "https://payment-model.example.test",
+            transport.clone(),
+            4,
+        )
+        .unwrap(),
+    );
+    let auth = Arc::new(
+        crate::auth_session::AuthSession::new(client, Arc::new(PaymentModelAuthStorage)).unwrap(),
+    );
+    let proxy = match model_base_url {
+        Some(base) => crate::working_model_proxy::WorkingModelProxy::with_model_client(
+            auth,
+            crate::model_request_client::ModelRequestClient::new(base, 5).unwrap(),
+        ),
+        None => crate::working_model_proxy::WorkingModelProxy::new(auth).unwrap(),
+    };
+    let manager = PiWorkerManager::new();
+    manager.set_working_model_proxy(Arc::new(proxy));
+    (manager, transport)
+}
+
+#[test]
+fn given_payment_conversation_when_preparing_model_then_server_grant_stays_out_of_worker_config() {
+    for flow in ["diamond", "vip"] {
+        let (base_url, probe) = payment_model_probe_server(true);
+        let (manager, transport) = payment_model_fixture(Some(&base_url));
+        let mut config = json!({"query": {
+            "channelId": "copis-working", "model": "fast", "workingPaymentFlow": flow
+        }});
+
+        let capability = manager
+            .prepare_working_model_config("payment-conversation", &mut config)
+            .unwrap()
+            .unwrap();
+        let response = manager
+            .working_model_request(
+                "payment-conversation",
+                &capability.capability,
+                br#"{"model":"fast"}"#,
+            )
+            .unwrap();
+
+        assert_eq!(response.status, 200);
+        assert!(capability.capability.starts_with("cwm_pay_"));
+        assert_eq!(capability.capability.len(), 72);
+        probe.join().unwrap();
+        assert!(!config.to_string().contains("wdpc_payment_model_test"));
+        let calls = transport.calls.lock().unwrap();
+        assert_eq!(calls.len(), 2);
+        assert_eq!(
+            calls[0].path,
+            "/api/internal/working-desktop/payment-capabilities"
+        );
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(calls[0].body.as_ref().unwrap()).unwrap(),
+            json!({"flow_kind": flow})
+        );
+        assert!(calls[1].headers.contains(&(
+            "X-Working-Model-Source-Type".to_string(),
+            "copis-payment-model".to_string()
+        )));
+        assert!(calls[1].headers.contains(&(
+            "X-Working-Payment-Capability".to_string(),
+            "wdpc_payment_model_test".to_string()
+        )));
+    }
+}
+
+#[test]
+fn given_invalid_payment_flow_or_model_when_preparing_worker_then_reject_before_authorizing() {
+    for (flow, channel, model) in [
+        ("other", "copis-working", "fast"),
+        ("diamond", "custom-provider", "fast"),
+        ("diamond", "copis-working", "expert"),
+    ] {
+        let (manager, transport) = payment_model_fixture(None);
+        let mut config = json!({"query": {
+            "channelId": channel, "model": model, "workingPaymentFlow": flow
+        }});
+
+        assert!(manager
+            .prepare_working_model_config("payment-conversation", &mut config)
+            .is_err());
+        assert!(transport.calls.lock().unwrap().is_empty());
+    }
+}
+
+fn payment_model_probe_server(supported: bool) -> (String, thread::JoinHandle<()>) {
+    use std::io::{Read, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let server = thread::spawn(move || {
+        let (mut socket, _) = listener.accept().unwrap();
+        socket
+            .set_read_timeout(Some(Duration::from_secs(3)))
+            .unwrap();
+        let mut header = Vec::new();
+        let mut byte = [0u8; 1];
+        while !header.ends_with(b"\r\n\r\n") {
+            socket.read_exact(&mut byte).unwrap();
+            header.push(byte[0]);
+        }
+        assert!(String::from_utf8(header)
+            .unwrap()
+            .starts_with("GET /config?alias=fast HTTP/1.1"));
+        let body = json!({"data":{"alias":"fast"},"capabilities":{"copis_payment_billing_exempt":supported}}).to_string();
+        write!(socket, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", body.len(), body).unwrap();
+    });
+    (base, server)
+}
+
+#[test]
+fn given_old_model_service_when_starting_payment_conversation_then_never_fall_back_to_billing() {
+    let (base, probe) = payment_model_probe_server(false);
+    let (manager, transport) = payment_model_fixture(Some(&base));
+    let mut config = json!({"query": {
+        "channelId": "copis-working", "model": "fast", "workingPaymentFlow": "diamond"
+    }});
+
+    let result = manager.prepare_working_model_config("payment-conversation", &mut config);
+
+    assert!(result.is_err());
+    probe.join().unwrap();
+    assert!(transport.calls.lock().unwrap().is_empty());
+}
+
+#[test]
+fn given_payment_model_stream_when_access_token_refreshes_then_exemption_and_idempotency_are_preserved(
+) {
+    use std::io::{Read, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let server = thread::spawn(move || {
+        let mut requests = Vec::new();
+        for (status, content_type, body) in [
+            ("200 OK", "application/json", r#"{"capabilities":{"copis_payment_billing_exempt":true}}"#),
+            ("401 Unauthorized", "application/json", r#"{"error":"expired"}"#),
+            ("200 OK", "text/event-stream", "event: response.completed\ndata: {\"response\":{\"id\":\"payment-response\",\"usage\":{\"input_tokens\":5,\"output_tokens\":2}}}\n\n"),
+        ] {
+            let (mut socket, _) = listener.accept().unwrap();
+            socket.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+            let mut header = Vec::new();
+            let mut byte = [0u8; 1];
+            while !header.ends_with(b"\r\n\r\n") {
+                socket.read_exact(&mut byte).unwrap();
+                header.push(byte[0]);
+            }
+            let header = String::from_utf8(header).unwrap();
+            let length = header.lines().find_map(|line| {
+                let (name, value) = line.split_once(':')?;
+                name.eq_ignore_ascii_case("content-length").then(|| value.trim().parse::<usize>().unwrap())
+            }).unwrap_or(0);
+            let mut payload = vec![0u8; length];
+            socket.read_exact(&mut payload).unwrap();
+            requests.push(header.to_lowercase());
+            write!(socket, "HTTP/1.1 {}\r\nContent-Type: {}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", status, content_type, body.len(), body).unwrap();
+        }
+        requests
+    });
+    let (manager, transport) = payment_model_fixture(Some(&base));
+    let mut config = json!({"query": {
+        "channelId": "copis-working", "model": "fast", "workingPaymentFlow": "diamond"
+    }});
+    let capability = manager
+        .prepare_working_model_config("payment-stream", &mut config)
+        .unwrap()
+        .unwrap();
+
+    let mut response = manager
+        .working_model_stream_request(
+            Some(&capability.capability),
+            false,
+            br#"{"model":"fast","stream":true}"#,
+            Some("payment-request-00000001"),
+        )
+        .unwrap();
+    let mut body = String::new();
+    response.body.read_to_string(&mut body).unwrap();
+
+    assert_eq!(response.status, 200);
+    assert!(body.contains("payment-response"));
+    let requests = server.join().unwrap();
+    assert!(requests[0].starts_with("get /config?alias=fast "));
+    for request in &requests[1..] {
+        assert!(request.starts_with("post /v1/responses "));
+        assert!(request.contains("x-working-model-source-type: copis-payment-model\r\n"));
+        assert!(request.contains("x-working-payment-capability: wdpc_payment_model_test\r\n"));
+        assert!(request.contains("idempotency-key: payment-request-00000001\r\n"));
+    }
+    assert!(requests[1].contains("authorization: bearer payment-model-access\r\n"));
+    assert!(requests[2].contains("authorization: bearer payment-model-refreshed\r\n"));
+    assert_eq!(transport.calls.lock().unwrap().len(), 2);
+}
+
+#[test]
+fn given_normal_conversation_with_payment_text_when_requesting_model_then_billing_source_is_unchanged(
+) {
+    let (manager, transport) = payment_model_fixture(None);
+    let mut config = json!({"query": {"channelId":"copis-working","model":"fast"}});
+    let capability = manager
+        .prepare_working_model_config("normal-conversation", &mut config)
+        .unwrap()
+        .unwrap();
+
+    manager
+        .working_model_request(
+            "normal-conversation",
+            &capability.capability,
+            r#"{"model":"fast","input":"购买钻石","workingPaymentFlow":"diamond"}"#.as_bytes(),
+        )
+        .unwrap();
+
+    let calls = transport.calls.lock().unwrap();
+    assert_eq!(calls.len(), 1);
+    assert_eq!(
+        calls[0].headers,
+        vec![(
+            "X-Working-Model-Source-Type".to_string(),
+            "copis-agent-model".to_string()
+        )]
+    );
+}

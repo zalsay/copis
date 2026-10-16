@@ -1,7 +1,7 @@
 use crate::agent_files::tokens_equal;
 use crate::auth_session::{AuthError, AuthSession};
 use crate::model_request_client::{ModelRequestClient, ModelRequestError, ModelRequestResponse};
-use serde_json::Value;
+use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::io::Read;
 use std::sync::{Arc, Mutex};
@@ -47,6 +47,7 @@ pub enum WorkingModelError {
 
 struct StoredCapability {
     capability: WorkingModelCapability,
+    payment_capability: Option<String>,
 }
 
 struct StoredDshCapability {
@@ -103,9 +104,74 @@ impl WorkingModelProxy {
         session_id: &str,
         model_id: &str,
     ) -> Result<WorkingModelCapability, WorkingModelError> {
+        self.issue_with_payment(session_id, model_id, None)
+    }
+
+    /// 免扣费授权由服务端签发，只保存在 Rust 内存中，不交给 Worker 或模型。
+    pub fn issue_payment(
+        &self,
+        session_id: &str,
+        model_id: &str,
+        flow_kind: &str,
+    ) -> Result<WorkingModelCapability, WorkingModelError> {
+        validate_identifier(session_id, "session_id", 512)?;
+        if model_id != "fast" || !matches!(flow_kind, "diamond" | "vip") {
+            return Err(WorkingModelError::InvalidRequest(
+                "支付会话仅支持内置快速模型和有效支付流程".to_string(),
+            ));
+        }
+        let config = self.model_json_get("/config?alias=fast")?;
+        if config
+            .get("capabilities")
+            .and_then(|value| value.get("copis_payment_billing_exempt"))
+            != Some(&Value::Bool(true))
+        {
+            return Err(WorkingModelError::InvalidRequest(
+                "充值免扣费服务尚未就绪，请更新服务后重试".to_string(),
+            ));
+        }
+        let response = self
+            .auth
+            .authenticated_request(
+                "POST",
+                "/api/internal/working-desktop/payment-capabilities",
+                Some(json!({"flow_kind": flow_kind}).to_string()),
+            )
+            .map_err(map_auth_error)?;
+        let payload: Value = serde_json::from_slice(&response.body)
+            .map_err(|_| WorkingModelError::InvalidResponse)?;
+        let payment_capability = payload
+            .get("data")
+            .unwrap_or(&payload)
+            .get("capability")
+            .and_then(Value::as_str)
+            .filter(|token| {
+                token.starts_with("wdpc_")
+                    && token.len() <= 512
+                    && token
+                        .bytes()
+                        .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-')
+            })
+            .ok_or(WorkingModelError::InvalidResponse)?
+            .to_string();
+        self.issue_with_payment(session_id, model_id, Some(payment_capability))
+    }
+
+    fn issue_with_payment(
+        &self,
+        session_id: &str,
+        model_id: &str,
+        payment_capability: Option<String>,
+    ) -> Result<WorkingModelCapability, WorkingModelError> {
         validate_identifier(session_id, "session_id", 512)?;
         validate_identifier(model_id, "model_id", 256)?;
         let capability = generate_capability()?;
+        // Worker 据此识别已获免扣费授权的新 Rust 模块；旧模块不能静默退回普通计费。
+        let capability = if payment_capability.is_some() {
+            format!("cwm_pay_{}", capability)
+        } else {
+            capability
+        };
         let value = WorkingModelCapability {
             capability,
             session_id: session_id.to_string(),
@@ -116,6 +182,7 @@ impl WorkingModelProxy {
             session_id.to_string(),
             StoredCapability {
                 capability: value.clone(),
+                payment_capability,
             },
         );
         Ok(value)
@@ -152,7 +219,7 @@ impl WorkingModelProxy {
         if let Some(reasoning_effort) = dsh_reasoning_effort {
             validate_model_request(request_body)?;
             let request_body = inject_reasoning_effort(request_body, reasoning_effort.as_deref())?;
-            return self.forward(&request_body, None);
+            return self.forward(&request_body, None, None);
         }
         let session_id = {
             let capabilities = self.capabilities.lock().unwrap();
@@ -171,7 +238,7 @@ impl WorkingModelProxy {
         request_body: &[u8],
     ) -> Result<WorkingModelResponse, WorkingModelError> {
         validate_model_request(request_body)?;
-        self.forward(request_body, None)
+        self.forward(request_body, None, None)
     }
 
     pub fn proxy(
@@ -180,25 +247,9 @@ impl WorkingModelProxy {
         capability: &str,
         request_body: &[u8],
     ) -> Result<WorkingModelResponse, WorkingModelError> {
-        let model_id = validate_model_request(request_body)?;
-        let stored = self
-            .capabilities
-            .lock()
-            .unwrap()
-            .get(session_id)
-            .map(|value| value.capability.clone())
-            .ok_or(WorkingModelError::Unauthorized)?;
-        if !tokens_equal(&stored.capability, capability) {
-            return Err(WorkingModelError::CapabilityMismatch);
-        }
-        if stored.expires_at <= now_secs() {
-            return Err(WorkingModelError::CapabilityExpired);
-        }
-        if stored.model_id != model_id {
-            return Err(WorkingModelError::CapabilityMismatch);
-        }
-
-        self.forward(request_body, None)
+        let payment_capability =
+            self.validate_capability_request(session_id, capability, request_body)?;
+        self.forward(request_body, None, payment_capability.as_deref())
     }
 
     pub fn proxy_stream_with_capability(
@@ -217,7 +268,7 @@ impl WorkingModelProxy {
         if let Some(reasoning_effort) = dsh_reasoning_effort {
             validate_model_request(request_body)?;
             let request_body = inject_reasoning_effort(request_body, reasoning_effort.as_deref())?;
-            return self.open_stream(&request_body, idempotency_key);
+            return self.open_stream(&request_body, idempotency_key, None);
         }
         let session_id = {
             let capabilities = self.capabilities.lock().unwrap();
@@ -227,8 +278,9 @@ impl WorkingModelProxy {
                 .map(|stored| stored.capability.session_id.clone())
                 .ok_or(WorkingModelError::Unauthorized)?
         };
-        self.validate_capability_request(&session_id, capability, request_body)?;
-        self.open_stream(request_body, idempotency_key)
+        let payment_capability =
+            self.validate_capability_request(&session_id, capability, request_body)?;
+        self.open_stream(request_body, idempotency_key, payment_capability.as_deref())
     }
 
     pub fn proxy_stream_internal(
@@ -237,7 +289,7 @@ impl WorkingModelProxy {
         idempotency_key: Option<&str>,
     ) -> Result<WorkingModelStreamResponse, WorkingModelError> {
         validate_model_request(request_body)?;
-        self.open_stream(request_body, idempotency_key)
+        self.open_stream(request_body, idempotency_key, None)
     }
 
     pub fn model_json_get(&self, path: &str) -> Result<Value, WorkingModelError> {
@@ -279,14 +331,14 @@ impl WorkingModelProxy {
         session_id: &str,
         capability: &str,
         request_body: &[u8],
-    ) -> Result<(), WorkingModelError> {
+    ) -> Result<Option<String>, WorkingModelError> {
         let model_id = validate_model_request(request_body)?;
-        let stored = self
+        let (stored, payment_capability) = self
             .capabilities
             .lock()
             .unwrap()
             .get(session_id)
-            .map(|value| value.capability.clone())
+            .map(|value| (value.capability.clone(), value.payment_capability.clone()))
             .ok_or(WorkingModelError::Unauthorized)?;
         if !tokens_equal(&stored.capability, capability) || stored.model_id != model_id {
             return Err(WorkingModelError::CapabilityMismatch);
@@ -294,21 +346,16 @@ impl WorkingModelProxy {
         if stored.expires_at <= now_secs() {
             return Err(WorkingModelError::CapabilityExpired);
         }
-        Ok(())
+        Ok(payment_capability)
     }
 
     fn forward(
         &self,
         request_body: &[u8],
         idempotency_key: Option<&str>,
+        payment_capability: Option<&str>,
     ) -> Result<WorkingModelResponse, WorkingModelError> {
-        let mut headers = vec![(
-            "X-Working-Model-Source-Type".to_string(),
-            "copis-agent-model".to_string(),
-        )];
-        if let Some(key) = idempotency_key {
-            headers.push(("Idempotency-Key".to_string(), key.to_string()));
-        }
+        let headers = model_request_headers(idempotency_key, payment_capability);
         let response = self
             .auth
             .authenticated_request_with_headers(
@@ -334,16 +381,17 @@ impl WorkingModelProxy {
         &self,
         request_body: &[u8],
         supplied_key: Option<&str>,
+        payment_capability: Option<&str>,
     ) -> Result<WorkingModelStreamResponse, WorkingModelError> {
         let idempotency_key = supplied_key
             .map(str::to_string)
             .unwrap_or_else(generate_idempotency_key);
         validate_idempotency_key(&idempotency_key)?;
         let body = String::from_utf8_lossy(request_body).into_owned();
-        let response = self.open_with_current_token(&body, &idempotency_key)?;
+        let response = self.open_with_current_token(&body, &idempotency_key, payment_capability)?;
         let response = if response.status == 401 {
             let token = self.auth.refresh_single_flight().map_err(map_auth_error)?;
-            self.open_with_token(&body, &token, &idempotency_key)?
+            self.open_with_token(&body, &token, &idempotency_key, payment_capability)?
         } else {
             response
         };
@@ -363,9 +411,10 @@ impl WorkingModelProxy {
         &self,
         body: &str,
         key: &str,
+        payment_capability: Option<&str>,
     ) -> Result<ModelRequestResponse, WorkingModelError> {
         let token = self.auth.current_access_token().map_err(map_auth_error)?;
-        self.open_with_token(body, &token, key)
+        self.open_with_token(body, &token, key, payment_capability)
     }
 
     fn open_with_token(
@@ -373,6 +422,7 @@ impl WorkingModelProxy {
         body: &str,
         token: &str,
         key: &str,
+        payment_capability: Option<&str>,
     ) -> Result<ModelRequestResponse, WorkingModelError> {
         self.model_client
             .open(
@@ -380,16 +430,35 @@ impl WorkingModelProxy {
                 "/v1/responses",
                 body,
                 token,
-                vec![
-                    (
-                        "X-Working-Model-Source-Type".to_string(),
-                        "copis-agent-model".to_string(),
-                    ),
-                    ("Idempotency-Key".to_string(), key.to_string()),
-                ],
+                model_request_headers(Some(key), payment_capability),
             )
             .map_err(map_model_error)
     }
+}
+
+fn model_request_headers(
+    idempotency_key: Option<&str>,
+    payment_capability: Option<&str>,
+) -> Vec<(String, String)> {
+    let source = if payment_capability.is_some() {
+        "copis-payment-model"
+    } else {
+        "copis-agent-model"
+    };
+    let mut headers = vec![(
+        "X-Working-Model-Source-Type".to_string(),
+        source.to_string(),
+    )];
+    if let Some(capability) = payment_capability {
+        headers.push((
+            "X-Working-Payment-Capability".to_string(),
+            capability.to_string(),
+        ));
+    }
+    if let Some(key) = idempotency_key {
+        headers.push(("Idempotency-Key".to_string(), key.to_string()));
+    }
+    headers
 }
 
 fn generate_idempotency_key() -> String {
@@ -487,9 +556,12 @@ fn validate_model_request(request_body: &[u8]) -> Result<String, WorkingModelErr
         .ok_or_else(|| WorkingModelError::InvalidRequest("模型请求缺少 model".to_string()))
 }
 
-fn map_auth_error(error: AuthError) -> WorkingModelError {
+pub(super) fn map_auth_error(error: AuthError) -> WorkingModelError {
     match error {
         AuthError::NotAuthenticated | AuthError::RefreshFailed => WorkingModelError::Unauthorized,
+        AuthError::Upstream {
+            status: 400, code, ..
+        } if code == "invalid_grant" => WorkingModelError::Unauthorized,
         AuthError::Upstream {
             status,
             code,

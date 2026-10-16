@@ -56,7 +56,7 @@ impl ChatroomExecutionRegistry {
         target_agent_id: &str,
         origin: ChatroomOrigin,
     ) -> bool {
-        if origin.client_generation == 0 || origin.socket_generation == 0 {
+        if origin.socket_generation == 0 {
             return false;
         }
         let key = SourceKey {

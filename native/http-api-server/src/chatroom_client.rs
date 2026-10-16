@@ -1305,8 +1305,8 @@ fn run_worker(
                             socket.close();
                             return;
                         }
-                        let changes_subscription =
-                            is_subscription_command && previous_subscription != subscription;
+                        let changes_subscription = is_subscription_command
+                            && subscription_identity_changed(&previous_subscription, &subscription);
                         if changes_subscription {
                             reconnect = true;
                             break;
@@ -1478,7 +1478,13 @@ fn run_worker(
                     refresh.failed = false;
                     continue;
                 }
-                Err(_) => {
+                Err(error) => {
+                    let code = match error.code.as_str() {
+                        "protocol_invalid" | "payload_too_large" | "sensitive_field"
+                        | "unknown_event" | "disconnected" | "socket_error" => error.code.as_str(),
+                        _ => "realtime_receive_failed",
+                    };
+                    emit_status(&events, code, "聊天室实时连接读取失败");
                     socket.close();
                     emit_disconnected(&events);
                     retry_after_failure(
@@ -1631,6 +1637,31 @@ fn pause_after_unavailable_status(gate: &Arc<Mutex<Option<UnavailableStatusGate>
 
 fn emit_disconnected(events: &mpsc::Sender<ChatroomClientEvent>) {
     let _ = events.send(ChatroomClientEvent::Disconnected);
+}
+
+fn subscription_identity_changed(
+    previous: &Option<(Vec<RoomCursor>, String, Option<Vec<ChatroomCapability>>)>,
+    current: &Option<(Vec<RoomCursor>, String, Option<Vec<ChatroomCapability>>)>,
+) -> bool {
+    match (previous, current) {
+        (
+            Some((previous_rooms, previous_device, previous_capabilities)),
+            Some((rooms, device, capabilities)),
+        ) => {
+            previous_device != device
+                || previous_capabilities != capabilities
+                || previous_rooms
+                    .iter()
+                    .map(|room| room.room_id.as_str())
+                    .collect::<HashSet<_>>()
+                    != rooms
+                        .iter()
+                        .map(|room| room.room_id.as_str())
+                        .collect::<HashSet<_>>()
+        }
+        (None, None) => false,
+        _ => true,
+    }
 }
 
 fn emit_status(events: &mpsc::Sender<ChatroomClientEvent>, code: &str, message: &str) {

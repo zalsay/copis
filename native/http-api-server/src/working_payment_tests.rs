@@ -66,6 +66,67 @@ fn parses_all_working_payment_routes() {
     .is_err());
 }
 
+struct CurrentUserBackend(Value);
+
+impl WorkingBackend for CurrentUserBackend {
+    fn request(
+        &self,
+        method: &str,
+        path: &str,
+        body: Option<&str>,
+    ) -> Result<Value, SkillMarketError> {
+        assert_eq!(method, "GET");
+        assert_eq!(path, "/api/users/me");
+        assert!(body.is_none());
+        Ok(json!({"data": self.0.clone()}))
+    }
+}
+
+#[test]
+fn given_current_user_with_uppercase_id_when_resolving_payment_account_then_identity_is_available() {
+    for key in ["ID", "id", "userId", "user_id"] {
+        for id in [json!(7), json!("7")] {
+            let user = json!({key: id});
+            let state = SkillMarketState::production(Arc::new(CurrentUserBackend(user)));
+
+            let account_key = state.ensure_payment_account_key().unwrap();
+
+            assert_eq!(
+                account_key,
+                crate::skill_market::stable_payment_account_key("7")
+            );
+        }
+    }
+}
+
+#[test]
+fn given_missing_user_identity_when_creating_order_then_payment_worker_is_not_started() {
+    let state = SkillMarketState::production(Arc::new(CurrentUserBackend(json!({
+        "Email": "user@example.test"
+    }))));
+    let payment_state = WorkingPaymentState::new();
+    let fixture = PaymentWorkspaceFixture::new();
+    let worker = FakePaymentWorker::new(Vec::new());
+
+    let error = handle_request(
+        &state,
+        &payment_state,
+        &worker,
+        &fixture.workspace,
+        "POST",
+        "/api/working/diamond-purchases",
+        br#"{"package_id":7}"#,
+    )
+    .err()
+    .expect("缺少用户身份时必须拒绝创建订单");
+
+    assert_eq!(error.status, 409);
+    assert_eq!(error.code, "desktop_payment_identity_missing");
+    assert!(state.payment_account_key().is_none());
+    assert!(worker.calls.lock().unwrap().is_empty());
+    assert!(payment_state.payment_ids().is_empty());
+}
+
 #[test]
 fn payment_account_key_remains_stable_when_auth_state_refreshes() {
     let state = SkillMarketState::new(Some("access-token-1".to_string()));

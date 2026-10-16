@@ -24,6 +24,7 @@ let browserContext: { tabId: string } | undefined
 let appConnectorWorkspaces: AgentWorkspace[] = []
 let resolveRuntimeApiKey: () => Promise<string> = async () => 'api-key'
 let imageMcpEnabledForRpcTest = false
+
 const customModelChannelId = 'copis-custom-custom-model'
 const fixtureRoot = mkdtempSync(join(tmpdir(), 'copis-agent-rpc-test-'))
 const fixturePathCalls: string[] = []

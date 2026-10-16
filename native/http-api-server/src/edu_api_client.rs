@@ -528,6 +528,14 @@ fn public_error_code(status: u16, body: &[u8]) -> String {
                 .get("code")
                 .and_then(Value::as_str)
                 .map(str::to_string)
+                .or_else(|| {
+                    value
+                        .get("error")
+                        .and_then(|error| error.get("code"))
+                        .and_then(Value::as_str)
+                        .map(str::to_string)
+                })
+                .or_else(|| oauth_error_code(&value))
         })
         .filter(|code| !code.trim().is_empty() && code.len() <= 96)
         .unwrap_or_else(|| match status {
@@ -538,6 +546,28 @@ fn public_error_code(status: u16, body: &[u8]) -> String {
             500..=599 => "upstream_error".to_string(),
             _ => "upstream_request_failed".to_string(),
         })
+}
+
+fn oauth_error_code(value: &Value) -> Option<String> {
+    let error = value.get("error")?.as_str()?.trim();
+    let has_description = value
+        .get("error_description")
+        .and_then(Value::as_str)
+        .map(|description| !description.trim().is_empty())
+        .unwrap_or(false);
+    let is_known_oauth_code = matches!(
+        error,
+        "invalid_request"
+            | "invalid_client"
+            | "invalid_grant"
+            | "unauthorized_client"
+            | "unsupported_grant_type"
+            | "invalid_scope"
+            | "server_error"
+            | "temporarily_unavailable"
+            | "invalid_token"
+    );
+    (has_description || is_known_oauth_code).then(|| error.to_string())
 }
 
 fn public_error_message(status: u16, body: &[u8]) -> String {
@@ -553,6 +583,12 @@ fn public_error_message(status: u16, body: &[u8]) -> String {
                 .get("message")
                 .and_then(Value::as_str)
                 .map(str::to_string)
+                .or_else(|| {
+                    value
+                        .get("error_description")
+                        .and_then(Value::as_str)
+                        .map(str::to_string)
+                })
                 .or_else(|| {
                     value.get("error").and_then(|err| {
                         if let Some(s) = err.as_str() {

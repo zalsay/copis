@@ -569,7 +569,17 @@ impl PiWorkerManager {
             .get("channelId")
             .and_then(Value::as_str)
             .unwrap_or_default();
+        let payment_flow = match query.get("workingPaymentFlow") {
+            None | Some(Value::Null) => None,
+            Some(Value::String(flow)) if matches!(flow.as_str(), "diamond" | "vip") => {
+                Some(flow.as_str())
+            }
+            _ => return Err("支付会话类型不正确".to_string()),
+        };
         if !is_copis_working_channel_id(channel_id) {
+            if payment_flow.is_some() {
+                return Err("支付会话必须使用 Copis 内置快速模型".to_string());
+            }
             return Ok(None);
         }
         let model_id = query
@@ -583,9 +593,11 @@ impl PiWorkerManager {
             .unwrap()
             .clone()
             .ok_or_else(|| "Working 模型代理尚未初始化".to_string())?;
-        let capability = proxy
-            .issue(session_id, model_id)
-            .map_err(|error| format!("Working 模型 capability 创建失败: {}", error))?;
+        let capability = match payment_flow {
+            Some(flow) => proxy.issue_payment(session_id, model_id, flow),
+            None => proxy.issue(session_id, model_id),
+        }
+        .map_err(|error| format!("Working 模型 capability 创建失败: {}", error))?;
         query.insert(
             "apiKey".to_string(),
             Value::String(capability.capability.clone()),

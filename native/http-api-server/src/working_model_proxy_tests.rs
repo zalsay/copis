@@ -31,6 +31,18 @@ struct FixedTransport {
     calls: Mutex<Vec<EduApiRequest>>,
 }
 
+struct InvalidGrantTransport;
+
+impl EduApiTransport for InvalidGrantTransport {
+    fn send(&self, _request: EduApiRequest) -> Result<EduApiResponse, EduApiError> {
+        Ok(EduApiResponse {
+            status: 400,
+            headers: Vec::new(),
+            body: br#"{"error":"invalid_grant","error_description":"refresh expired"}"#.to_vec(),
+        })
+    }
+}
+
 impl EduApiTransport for FixedTransport {
     fn send(&self, request: EduApiRequest) -> Result<EduApiResponse, EduApiError> {
         self.calls.lock().unwrap().push(request.clone_for_test());
@@ -240,6 +252,97 @@ fn model_proxy_keeps_sse_order_and_uses_auth_session_token() {
         ),]
     );
     assert_eq!(calls.len(), 2);
+}
+
+#[test]
+fn invalid_refresh_grant_maps_to_login_required_not_model_bad_request() {
+    let error =
+        super::working_model_proxy::map_auth_error(super::auth_session::AuthError::Upstream {
+            status: 400,
+            code: "invalid_grant".to_string(),
+            message: "refresh token expired".to_string(),
+        });
+
+    assert_eq!(error, WorkingModelError::Unauthorized);
+}
+
+#[test]
+fn invalid_refresh_grant_returns_login_required_without_replaying_model_request() {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let model_server = std::thread::spawn(move || {
+        let (mut socket, _) = listener.accept().unwrap();
+        socket
+            .set_read_timeout(Some(std::time::Duration::from_secs(3)))
+            .unwrap();
+        let mut headers = Vec::new();
+        while !headers.ends_with(b"\r\n\r\n") {
+            let mut byte = [0];
+            socket.read_exact(&mut byte).unwrap();
+            headers.push(byte[0]);
+        }
+        let headers = String::from_utf8(headers).unwrap();
+        let length: usize = headers
+            .lines()
+            .filter_map(|line| line.split_once(':'))
+            .find(|(name, _)| name.eq_ignore_ascii_case("content-length"))
+            .unwrap()
+            .1
+            .trim()
+            .parse()
+            .unwrap();
+        let mut body = vec![0; length];
+        socket.read_exact(&mut body).unwrap();
+        let response_body = br#"{"error":"unauthorized"}"#;
+        write!(
+            socket,
+            "HTTP/1.1 401 Unauthorized\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            response_body.len()
+        )
+        .unwrap();
+        socket.write_all(response_body).unwrap();
+        headers
+    });
+
+    let legacy_transport = Arc::new(FixedTransport {
+        calls: Mutex::new(Vec::new()),
+    });
+    let legacy_client =
+        Arc::new(EduApiClient::new("https://edu.example", legacy_transport, 4).unwrap());
+    let oidc_client = Arc::new(
+        EduApiClient::new("https://auth.example", Arc::new(InvalidGrantTransport), 4).unwrap(),
+    );
+    let storage = Arc::new(MemoryStorage::default());
+    *storage.value.lock().unwrap() = Some(PersistedAuth {
+        access_token: "old-access".to_string(),
+        refresh_token: Some("old-refresh".to_string()),
+        provider: "oidc".to_string(),
+        user: Some(json!({"id": 7})),
+        expires_at: None,
+    });
+    let auth = Arc::new(
+        AuthSession::new_with_oidc(legacy_client, storage.clone(), Some(oidc_client)).unwrap(),
+    );
+    let model_client = crate::model_request_client::ModelRequestClient::new(
+        &format!("http://{addr}/model-request"),
+        5,
+    )
+    .unwrap();
+    let proxy = WorkingModelProxy::with_model_client(auth.clone(), model_client);
+
+    let result = proxy.proxy_stream_internal(
+        br#"{"model":"fast","input":"hello"}"#,
+        Some("stable-request-key-1234"),
+    );
+    assert!(matches!(result, Err(WorkingModelError::Unauthorized)));
+    let request_headers = model_server.join().unwrap();
+
+    assert!(request_headers.starts_with("POST /model-request/v1/responses HTTP/1.1"));
+    assert!(!auth.auth_state().authenticated);
+    assert!(storage.value.lock().unwrap().is_none());
 }
 
 #[test]

@@ -834,6 +834,7 @@ struct Subscriber {
 
 struct RoomState {
     last_contiguous_seq: u64,
+    agent_presence_revision: u64,
     subscribed: bool,
     snapshot_ready: bool,
     gap_recovery: bool,
@@ -846,6 +847,7 @@ impl RoomState {
     fn new() -> Self {
         Self {
             last_contiguous_seq: 0,
+            agent_presence_revision: 0,
             subscribed: false,
             snapshot_ready: false,
             gap_recovery: false,
@@ -853,6 +855,207 @@ impl RoomState {
             snapshot: None,
             buffered: BTreeMap::new(),
         }
+    }
+}
+
+fn apply_agent_presence_to_snapshot(snapshot: &mut ChatroomEvent, event_payload: &Value) -> bool {
+    let Some(agent_id) = event_payload
+        .get("roomAgentId")
+        .or_else(|| event_payload.get("agentId"))
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+    else {
+        return false;
+    };
+    let ChatroomEvent::RoomSnapshot {
+        payload: snapshot_payload,
+        ..
+    } = snapshot
+    else {
+        return false;
+    };
+    let Some(agent) = snapshot_payload
+        .get_mut("agents")
+        .and_then(Value::as_array_mut)
+        .and_then(|agents| {
+            agents.iter_mut().find(|agent| {
+                agent
+                    .get("roomAgentId")
+                    .or_else(|| agent.get("agentId"))
+                    .and_then(Value::as_str)
+                    == Some(agent_id)
+            })
+        })
+        .and_then(Value::as_object_mut)
+    else {
+        return false;
+    };
+    apply_agent_presence_to_agent(agent, event_payload)
+}
+
+fn apply_agent_presence_to_agent(
+    agent: &mut serde_json::Map<String, Value>,
+    event_payload: &Value,
+) -> bool {
+    let status = event_payload
+        .get("status")
+        .and_then(Value::as_str)
+        .filter(|status| matches!(*status, "online" | "offline" | "busy" | "disabled"));
+    let availability = event_payload
+        .get("availability")
+        .and_then(Value::as_str)
+        .filter(|availability| {
+            matches!(
+                *availability,
+                "preparing" | "online" | "busy" | "offline" | "disabled" | "configuration_error"
+            )
+        });
+    let status = status.or_else(|| {
+        event_payload
+            .get("online")
+            .and_then(Value::as_bool)
+            .map(|online| if online { "online" } else { "offline" })
+    });
+    if status.is_none() && availability.is_none() {
+        return false;
+    }
+
+    if let Some(availability) = availability {
+        agent.insert(
+            "availability".into(),
+            Value::String(availability.to_string()),
+        );
+        if let Some(status) = status.filter(|status| {
+            !matches!(availability, "preparing" | "configuration_error") || *status != "online"
+        }) {
+            agent.insert("status".into(), Value::String(status.to_string()));
+        }
+    } else if let Some(status) = status {
+        let current_availability = agent
+            .get("availability")
+            .and_then(Value::as_str)
+            .map(str::to_string);
+        if current_availability.as_deref().is_some_and(|current| {
+            matches!(
+                current,
+                "preparing" | "configuration_error" | "busy" | "disabled"
+            )
+        }) {
+            return true;
+        }
+        agent.insert("status".into(), Value::String(status.to_string()));
+        if current_availability
+            .as_deref()
+            .is_some_and(|current| matches!(current, "online" | "offline"))
+        {
+            agent.insert("availability".into(), Value::String(status.to_string()));
+        }
+    }
+    for field in ["busy", "online"] {
+        if let Some(value) = event_payload.get(field).and_then(Value::as_bool) {
+            agent.insert(field.into(), Value::Bool(value));
+        }
+    }
+    true
+}
+
+fn apply_persistent_agent_event_to_snapshot(
+    snapshot: &mut ChatroomEvent,
+    event: &ChatroomEvent,
+) -> bool {
+    let (event_payload, forced_availability) = match event {
+        ChatroomEvent::AgentUpdated { payload, .. } => (payload, None),
+        ChatroomEvent::AgentOffline { payload, .. } => (payload, Some("offline")),
+        ChatroomEvent::AgentBusy { payload, .. } => (payload, Some("busy")),
+        ChatroomEvent::AgentDisabled { payload, .. } => (payload, Some("disabled")),
+        _ => return false,
+    };
+    let Some(agent_id) = event_payload
+        .get("roomAgentId")
+        .or_else(|| event_payload.get("agentId"))
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+    else {
+        return false;
+    };
+    let ChatroomEvent::RoomSnapshot {
+        payload: snapshot_payload,
+        ..
+    } = snapshot
+    else {
+        return false;
+    };
+    let Some(agents) = snapshot_payload
+        .get_mut("agents")
+        .and_then(Value::as_array_mut)
+    else {
+        return false;
+    };
+
+    if forced_availability.is_none() && event_payload.get("removed") == Some(&Value::Bool(true)) {
+        let previous_len = agents.len();
+        agents.retain(|agent| {
+            agent
+                .get("roomAgentId")
+                .or_else(|| agent.get("agentId"))
+                .and_then(Value::as_str)
+                != Some(agent_id)
+        });
+        return agents.len() != previous_len;
+    }
+
+    let agent_index = agents.iter().position(|agent| {
+        agent
+            .get("roomAgentId")
+            .or_else(|| agent.get("agentId"))
+            .and_then(Value::as_str)
+            == Some(agent_id)
+    });
+    if agent_index.is_none() {
+        let Some(public_payload) = matches!(event, ChatroomEvent::AgentUpdated { .. })
+            .then(|| crate::chatroom_protocol::public_event(event)["payload"].clone())
+        else {
+            return false;
+        };
+        let Some(mut new_agent) = public_payload.as_object().cloned() else {
+            return false;
+        };
+        new_agent.remove("removed");
+        apply_agent_presence_to_agent(&mut new_agent, &public_payload);
+        agents.push(Value::Object(new_agent));
+        return true;
+    }
+    let agent = agents[agent_index.unwrap()]
+        .as_object_mut()
+        .expect("Agent snapshot array entries are objects");
+
+    if let Some(availability) = forced_availability {
+        let mut forced = serde_json::Map::new();
+        forced.insert("roomAgentId".into(), Value::String(agent_id.into()));
+        forced.insert("status".into(), Value::String(availability.into()));
+        forced.insert("availability".into(), Value::String(availability.into()));
+        forced.insert("busy".into(), Value::Bool(availability == "busy"));
+        apply_agent_presence_to_agent(agent, &Value::Object(forced))
+    } else {
+        let public_payload = crate::chatroom_protocol::public_event(event)["payload"].clone();
+        apply_agent_presence_to_agent(agent, &public_payload);
+        if let Some(fields) = public_payload.as_object() {
+            for (field, value) in fields {
+                if !matches!(
+                    field.as_str(),
+                    "roomAgentId"
+                        | "agentId"
+                        | "status"
+                        | "availability"
+                        | "online"
+                        | "busy"
+                        | "removed"
+                ) {
+                    agent.insert(field.clone(), value.clone());
+                }
+            }
+        }
+        true
     }
 }
 
@@ -1227,6 +1430,11 @@ impl ChatroomGateway {
         self.client
             .set_active_socket_generation_for_test(socket_generation);
         self.connection_paused.store(false, Ordering::Release);
+    }
+
+    #[cfg(test)]
+    pub(super) fn set_started_for_test(&self, started: bool) {
+        self.started.store(started, Ordering::Release);
     }
 
     #[cfg(test)]
@@ -3099,7 +3307,6 @@ impl ChatroomGateway {
             client_generation: origin_value
                 .get("clientGeneration")
                 .and_then(Value::as_u64)
-                .filter(|value| *value > 0)
                 .ok_or_else(|| invalid_request("clientGeneration 不正确"))?,
             socket_generation: origin_value
                 .get("socketGeneration")
@@ -3168,10 +3375,35 @@ impl ChatroomGateway {
         }
         let mut rooms = HashSet::new();
         let mut rejected_rooms = Vec::new();
+        let mut verified_snapshots = HashMap::new();
         for room_id in requested_rooms {
+            let (cached_snapshot, last_contiguous_seq, agent_presence_revision) = self
+                .rooms
+                .lock()
+                .unwrap()
+                .get(&room_id)
+                .map(|state| {
+                    (
+                        state.snapshot.clone(),
+                        state.last_contiguous_seq,
+                        state.agent_presence_revision,
+                    )
+                })
+                .unwrap_or((None, 0, 0));
             match self.verify_sse_room(&room_id) {
-                Ok(()) => {
-                    rooms.insert(room_id);
+                Ok(fresh_payload) => {
+                    rooms.insert(room_id.clone());
+                    if let Some(fresh_payload) = fresh_payload {
+                        verified_snapshots.insert(
+                            room_id,
+                            (
+                                cached_snapshot,
+                                last_contiguous_seq,
+                                agent_presence_revision,
+                                fresh_payload,
+                            ),
+                        );
+                    }
                 }
                 Err(error) if error.status == 403 || error.status == 404 => {
                     rejected_rooms.push(ChatroomEvent::LocalStatus {
@@ -3227,7 +3459,33 @@ impl ChatroomGateway {
                 let state = states.entry(room_id.clone()).or_insert_with(RoomState::new);
                 state.subscribed = true;
                 if let Some(snapshot) = state.snapshot.clone() {
-                    initial.push(snapshot);
+                    let fresh_snapshot = verified_snapshots.get(room_id).and_then(
+                        |(
+                            cached_snapshot,
+                            last_contiguous_seq,
+                            agent_presence_revision,
+                            payload,
+                        )| {
+                            (cached_snapshot.as_ref() == Some(&snapshot)
+                                && *last_contiguous_seq == state.last_contiguous_seq
+                                && *agent_presence_revision == state.agent_presence_revision)
+                                .then(|| {
+                                    let latest_seq = match &snapshot {
+                                        ChatroomEvent::RoomSnapshot { latest_seq, .. } => {
+                                            *latest_seq
+                                        }
+                                        _ => return None,
+                                    };
+                                    Some(ChatroomEvent::RoomSnapshot {
+                                        room_id: room_id.clone(),
+                                        latest_seq,
+                                        payload: payload.clone(),
+                                    })
+                                })
+                                .flatten()
+                        },
+                    );
+                    initial.push(fresh_snapshot.unwrap_or(snapshot));
                 }
                 if state.gap_recovery {
                     initial.push(ChatroomEvent::LocalStatus {
@@ -3276,7 +3534,7 @@ impl ChatroomGateway {
         })
     }
 
-    fn verify_sse_room(&self, room_id: &str) -> Result<(), ChatroomGatewayError> {
+    fn verify_sse_room(&self, room_id: &str) -> Result<Option<Value>, ChatroomGatewayError> {
         let path = format!("{CHATROOM_HTTP_PREFIX}/rooms/{room_id}");
         let response = self.transport.request("GET", &path, None).map_err(|_| {
             ChatroomGatewayError::new(502, "upstream_unavailable", "聊天室服务暂不可用")
@@ -3317,7 +3575,26 @@ impl ChatroomGateway {
                 "聊天室已关闭",
             ));
         }
-        Ok(())
+        let Some(data) = value.get("data").and_then(Value::as_object) else {
+            return Ok(None);
+        };
+        let Some(room) = data.get("room").filter(|room| room.is_object()) else {
+            return Ok(None);
+        };
+        let Some(members) = data.get("members").filter(|members| members.is_array()) else {
+            return Ok(None);
+        };
+        let Some(agents) = data.get("agents").filter(|agents| agents.is_array()) else {
+            return Ok(None);
+        };
+        let payload = serde_json::json!({"room": room, "members": members, "agents": agents});
+        let event = ChatroomEvent::RoomSnapshot {
+            room_id: room_id.to_string(),
+            latest_seq: 0,
+            payload,
+        };
+        let public = crate::chatroom_protocol::public_event(&event);
+        Ok(public.get("payload").cloned())
     }
 
     fn schedule_inaccessible_prune(&self) {
@@ -3444,12 +3721,30 @@ impl ChatroomGateway {
             self.publish_persistent(event, seq);
             return;
         }
-        if let ChatroomEvent::RoomSnapshot { room_id, .. } = &event {
+        if let Some(room_id) = event.room_id() {
             let mut states = self.rooms.lock().unwrap();
-            let state = states.entry(room_id.clone()).or_insert_with(RoomState::new);
-            state.subscribed = true;
-            state.snapshot_ready = true;
-            state.snapshot = Some(event.clone());
+            let state = states
+                .entry(room_id.to_string())
+                .or_insert_with(RoomState::new);
+            match &event {
+                ChatroomEvent::RoomSnapshot { .. } => {
+                    state.agent_presence_revision = state.agent_presence_revision.saturating_add(1);
+                    state.subscribed = true;
+                    state.snapshot_ready = true;
+                    state.snapshot = Some(event.clone());
+                }
+                ChatroomEvent::AgentPresenceChanged { payload, .. } => {
+                    if state
+                        .snapshot
+                        .as_mut()
+                        .is_some_and(|snapshot| apply_agent_presence_to_snapshot(snapshot, payload))
+                    {
+                        state.agent_presence_revision =
+                            state.agent_presence_revision.saturating_add(1);
+                    }
+                }
+                _ => {}
+            }
         }
         self.broadcast(&event);
     }
@@ -3619,6 +3914,25 @@ impl ChatroomGateway {
     }
 
     fn commit_event(&self, event: ChatroomEvent) {
+        if let Some(room_id) = event.room_id() {
+            if matches!(
+                event,
+                ChatroomEvent::AgentUpdated { .. }
+                    | ChatroomEvent::AgentOffline { .. }
+                    | ChatroomEvent::AgentBusy { .. }
+                    | ChatroomEvent::AgentDisabled { .. }
+            ) {
+                let mut states = self.rooms.lock().unwrap();
+                if let Some(state) = states.get_mut(room_id) {
+                    if state.snapshot.as_mut().is_some_and(|snapshot| {
+                        apply_persistent_agent_event_to_snapshot(snapshot, &event)
+                    }) {
+                        state.agent_presence_revision =
+                            state.agent_presence_revision.saturating_add(1);
+                    }
+                }
+            }
+        }
         self.cleanup_lease_for_event(&event);
         self.broadcast(&event);
         if let (Some(room_id), Some(seq)) = (event.room_id(), event.seq()) {
@@ -4194,7 +4508,6 @@ impl ChatroomGateway {
             .lock()
             .unwrap()
             .remove(&(room_id.to_string(), agent_id.to_string()));
-        self.refresh_subscription_snapshot();
     }
 
     fn remove_room_subscription(&self, room_id: &str) {

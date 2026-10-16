@@ -1256,7 +1256,7 @@ pub fn parse_event(bytes: &[u8]) -> Result<ChatroomEvent, ProtocolError> {
     if typ != "room.snapshot" && latest.is_some() {
         return Err(invalid("only snapshot may carry latestSeq"));
     }
-    if contains_sensitive(&payload) {
+    if contains_sensitive_event_payload(typ, &payload) {
         return Err(ProtocolError::new(
             "sensitive_field",
             "event payload contains an internal field",
@@ -1553,7 +1553,7 @@ pub fn public_event(event: &ChatroomEvent) -> Value {
             ..
         } => {
             result.insert("latestSeq".into(), Value::from(*latest_seq));
-            result.insert("payload".into(), clean(payload));
+            result.insert("payload".into(), sanitize_room_snapshot_payload(payload));
         }
         ChatroomEvent::LocalStatus { code, message, .. } => {
             result.insert("code".into(), Value::String(code.clone()));
@@ -1585,7 +1585,12 @@ pub fn public_event(event: &ChatroomEvent) -> Value {
                 | ChatroomEvent::AgentFailed { payload, .. } => payload,
                 _ => unreachable!(),
             };
-            result.insert("payload".into(), clean(payload));
+            let public_payload = if matches!(event, ChatroomEvent::AgentUpdated { .. }) {
+                sanitize_agent_share_object(payload)
+            } else {
+                clean(payload)
+            };
+            result.insert("payload".into(), public_payload);
         }
     }
     Value::Object(result)
@@ -1604,6 +1609,51 @@ pub fn sanitize_public(value: &Value) -> Value {
         _ => value.clone(),
     }
 }
+
+fn sanitize_room_snapshot_payload(payload: &Value) -> Value {
+    let Some(object) = payload.as_object() else {
+        return sanitize_public(payload);
+    };
+    Value::Object(
+        object
+            .iter()
+            .filter(|(key, _)| !forbidden(key))
+            .map(|(key, value)| {
+                let clean = if key == "agents" {
+                    match value {
+                        Value::Array(agents) => {
+                            Value::Array(agents.iter().map(sanitize_agent_share_object).collect())
+                        }
+                        _ => sanitize_public(value),
+                    }
+                } else {
+                    sanitize_public(value)
+                };
+                (key.clone(), clean)
+            })
+            .collect(),
+    )
+}
+
+fn sanitize_agent_share_object(value: &Value) -> Value {
+    let Some(object) = value.as_object() else {
+        return sanitize_public(value);
+    };
+    Value::Object(
+        object
+            .iter()
+            .filter(|(key, value)| {
+                (is_agent_share_flag(key) && value.is_boolean()) || !forbidden(key)
+            })
+            .map(|(key, value)| (key.clone(), sanitize_public(value)))
+            .collect(),
+    )
+}
+
+fn is_agent_share_flag(key: &str) -> bool {
+    matches!(key, "memoryShared" | "skillsShared")
+}
+
 fn forbidden(key: &str) -> bool {
     let key = key.to_ascii_lowercase().replace(['_', '-'], "");
     [
@@ -1667,6 +1717,41 @@ fn contains_sensitive(value: &Value) -> bool {
         Value::String(value) => sensitive_scalar(value),
         _ => false,
     }
+}
+
+fn contains_sensitive_event_payload(event_type: &str, payload: &Value) -> bool {
+    match event_type {
+        "agent.updated" => contains_sensitive_agent_object(payload),
+        "room.snapshot" => {
+            let Some(object) = payload.as_object() else {
+                return contains_sensitive(payload);
+            };
+            object.iter().any(|(key, value)| {
+                if key == "agents" {
+                    match value {
+                        Value::Array(agents) => agents.iter().any(contains_sensitive_agent_object),
+                        _ => contains_sensitive(value),
+                    }
+                } else {
+                    forbidden(key) || contains_sensitive(value)
+                }
+            })
+        }
+        _ => contains_sensitive(payload),
+    }
+}
+
+fn contains_sensitive_agent_object(value: &Value) -> bool {
+    let Some(object) = value.as_object() else {
+        return contains_sensitive(value);
+    };
+    object.iter().any(|(key, value)| {
+        if is_agent_share_flag(key) {
+            !value.is_boolean()
+        } else {
+            forbidden(key) || contains_sensitive(value)
+        }
+    })
 }
 
 struct ValueSeed;

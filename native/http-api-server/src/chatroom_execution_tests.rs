@@ -37,6 +37,21 @@ fn source_must_be_recorded_before_exact_idempotent_execution_binding() {
 }
 
 #[test]
+fn first_client_generation_zero_is_valid_for_source_and_exact_execution_binding() {
+    let registry = ChatroomExecutionRegistry::default();
+    let first_origin = origin(0, 1, 0);
+    let mut owner = binding(first_origin, "run-first-origin");
+    owner.room_id = "room-a".into();
+    owner.invocation_id = "inv-first-origin".into();
+
+    assert!(registry.record_source("room-a", "inv-first-origin", "agent-a", first_origin));
+    assert!(registry.bind(owner.clone()));
+    assert_eq!(registry.binding("room-a", "inv-first-origin"), Some(owner));
+    assert!(!registry.record_source("room-a", "inv-first-origin", "agent-a", first_origin));
+    assert!(!registry.record_source("room-b", "inv-zero-socket", "agent-a", origin(0, 0, 0)));
+}
+
+#[test]
 fn revoke_before_start_blocks_late_start_and_old_release_cannot_clear_new_owner() {
     let registry = ChatroomExecutionRegistry::default();
     let a = origin(1, 2, 3);

@@ -165,7 +165,7 @@ impl SkillMarketState {
             return Ok(account_key);
         }
         let user = self.request_data("GET", "/api/users/me", None)?;
-        let user_id = string_value(&user, &["id", "userId", "user_id"]).ok_or_else(|| {
+        let user_id = string_value(&user, &["id", "ID", "userId", "user_id"]).ok_or_else(|| {
             SkillMarketError::new(
                 409,
                 "desktop_payment_identity_missing",

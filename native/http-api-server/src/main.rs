@@ -574,6 +574,7 @@ impl VipPaymentRefresher for AuthVipPaymentRefresher {
             .get("userId")
             .or_else(|| value.get("user_id"))
             .or_else(|| value.get("id"))
+            .or_else(|| value.get("ID"))
             .and_then(|value| {
                 value
                     .as_str()
@@ -3422,8 +3423,8 @@ fn send_working_model_error(
         WorkingModelError::InvalidRequest(message) => (400, "invalid_request".to_string(), message),
         WorkingModelError::Unauthorized => (
             401,
-            "unauthorized".to_string(),
-            "请先登录 Copis Working".to_string(),
+            "working_auth_required".to_string(),
+            "Copis Working 登录已失效，请重新登录后继续。".to_string(),
         ),
         WorkingModelError::CapabilityExpired => (
             401,
