@@ -9,6 +9,7 @@
  */
 
 import React, { useEffect, useState, useRef } from 'react'
+import { useStore } from 'jotai'
 import { useAtom, useAtomValue, useSetAtom } from 'jotai'
 import {
   Monitor,
@@ -33,6 +34,10 @@ import {
 import {
   chromeDesktopSessionStateAtom,
   chromeDesktopMediaStreamAtom,
+  chromeDesktopMediaStreamControlAtom,
+  chromeDesktopCaptureAttemptAtom,
+  reserveChromeDesktopCaptureAtom,
+  commitChromeDesktopCaptureAtom,
   chromeDesktopAvailableWindowsAtom,
   chromeDesktopSelectedWindowIdAtom,
   chromeDesktopSystemStatusAtom,
@@ -40,9 +45,10 @@ import {
   chromeDesktopErrorAtom,
   fetchChromeDesktopStatusAtom,
   fetchChromeDesktopWindowsAtom,
-  cleanupChromeDesktopStreamAtom,
   stopChromeDesktopControlAtom,
 } from '@/atoms/chrome-desktop-atoms'
+import { openChromeDesktopPreviewTabAtom } from '@/atoms/chrome-desktop-preview-tabs'
+import { isChromeDesktopTab, tabsAtom } from '@/atoms/tab-atoms'
 import type { ChromeDesktopErrorCode } from '@copis/shared'
 
 interface ChromeDesktopBannerProps {
@@ -67,7 +73,9 @@ function formatPauseReason(reason?: ChromeDesktopErrorCode): string {
 
 export function ChromeDesktopBanner({ sessionId }: ChromeDesktopBannerProps): React.ReactElement | null {
   const sessionState = useAtomValue(chromeDesktopSessionStateAtom)
-  const [mediaStream, setMediaStream] = useAtom(chromeDesktopMediaStreamAtom)
+  const store = useStore()
+  const mediaStream = useAtomValue(chromeDesktopMediaStreamAtom)
+  const mediaStreamControlId = useAtomValue(chromeDesktopMediaStreamControlAtom)
   const availableWindows = useAtomValue(chromeDesktopAvailableWindowsAtom)
   const [selectedWindowId, setSelectedWindowId] = useAtom(chromeDesktopSelectedWindowIdAtom)
   const systemStatus = useAtomValue(chromeDesktopSystemStatusAtom)
@@ -76,29 +84,63 @@ export function ChromeDesktopBanner({ sessionId }: ChromeDesktopBannerProps): Re
 
   const fetchStatus = useSetAtom(fetchChromeDesktopStatusAtom)
   const fetchWindows = useSetAtom(fetchChromeDesktopWindowsAtom)
-  const cleanupStream = useSetAtom(cleanupChromeDesktopStreamAtom)
+  const reserveCapture = useSetAtom(reserveChromeDesktopCaptureAtom)
+  const commitCapture = useSetAtom(commitChromeDesktopCaptureAtom)
   const stopControl = useSetAtom(stopChromeDesktopControlAtom)
+  const openPreviewTab = useSetAtom(openChromeDesktopPreviewTabAtom)
+  const currentCaptureAttempt = useAtomValue(chromeDesktopCaptureAttemptAtom)
+  const currentCaptureAttemptRef = useRef(currentCaptureAttempt)
+  currentCaptureAttemptRef.current = currentCaptureAttempt
 
   const [refreshingWindows, setRefreshingWindows] = useState(false)
   const previewVideoRef = useRef<HTMLVideoElement | null>(null)
+  const mountedControlRef = useRef<{ sessionId: string; controlId: string } | null>(null)
+  const unmountTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const previousControlRef = useRef<{ sessionId: string; controlId: string } | null>(null)
+  mountedControlRef.current = sessionState?.sessionId === sessionId ? { sessionId, controlId: sessionState.controlId } : null
 
   // 校验当前会话是否属于该控制任务
   const isCurrentSession = sessionState?.sessionId === sessionId
   const state = isCurrentSession ? sessionState?.state : null
+  const currentMediaStream = mediaStreamControlId === sessionState?.controlId ? mediaStream : null
 
   // 绑定实时预览视频流
   useEffect(() => {
     const video = previewVideoRef.current
     if (!video) return
-    if (mediaStream && (state === 'active' || state === 'starting')) {
-      video.srcObject = mediaStream
+    if (currentMediaStream && (state === 'active' || state === 'starting')) {
+      video.srcObject = currentMediaStream
       video.play().catch((err) => {
         console.warn('[ChromeDesktopBanner] 预览视频播放失败:', err)
       })
     } else {
       video.srcObject = null
     }
-  }, [mediaStream, state])
+  }, [currentMediaStream, state])
+
+  // control 更替或 Banner 卸载时，只停止 effect 创建时归属的旧 control。
+  useEffect(() => {
+    const control = sessionState?.sessionId === sessionId
+      ? { sessionId, controlId: sessionState.controlId }
+      : null
+    const previous = previousControlRef.current
+    if (previous && (previous.sessionId !== control?.sessionId || previous.controlId !== control?.controlId)) {
+      void stopControl(previous)
+    }
+    previousControlRef.current = control
+    if (unmountTimerRef.current !== null) clearTimeout(unmountTimerRef.current)
+    return () => {
+      unmountTimerRef.current = setTimeout(() => {
+        if (!control) return
+        // 切到 Chrome 主 Tab 会卸载 AgentView，但控制会话仍由主 Tab 持有。
+        // 只有没有对应预览 Tab 时才把卸载视为离开任务并停止控制。
+        const hasChromePreviewTab = store.get(tabsAtom).some(
+          (tab) => isChromeDesktopTab(tab) && tab.controlId === control.controlId,
+        )
+        if (!hasChromePreviewTab) void stopControl(control)
+      }, 0)
+    }
+  }, [sessionId, sessionState?.sessionId, sessionState?.controlId, stopControl, store])
 
   // 当进入 awaiting_user 状态时，自动拉取权限与窗口列表
   useEffect(() => {
@@ -134,9 +176,12 @@ export function ChromeDesktopBanner({ sessionId }: ChromeDesktopBannerProps): Re
       return
     }
 
-    setIsStarting(true)
+    const attempt = reserveCapture(sessionState.controlId)
+    if (attempt === null) return
+    const control = { sessionId, controlId: sessionState.controlId }
     setLocalError(null)
 
+    let pendingStream: MediaStream | null = null
     try {
       // 1. 预先向主进程登记待授权窗口
       const prep = await window.electronAPI.chromeDesktop.prepareCapture({
@@ -148,15 +193,20 @@ export function ChromeDesktopBanner({ sessionId }: ChromeDesktopBannerProps): Re
       if (!prep.ok) {
         throw new Error(prep.message || '准备采集目标失败')
       }
+      if (attempt !== currentCaptureAttemptRef.current) return
 
       // 2. 真实用户点击发起屏幕媒体捕获
       const stream = await navigator.mediaDevices.getDisplayMedia({
         video: { frameRate: { ideal: 10, max: 15 } },
         audio: false,
       })
+      pendingStream = stream
 
-      // 3. 将 MediaStream 存入 Jotai 状态供 CaptureHost 提取帧
-      setMediaStream(stream)
+      // 授权等待期间 control 被停止/切换时，丢弃并释放迟到的流。
+      if (store.get(chromeDesktopCaptureAttemptAtom) !== attempt || store.get(chromeDesktopSessionStateAtom)?.controlId !== control.controlId) {
+        stream.getTracks().forEach((track) => track.stop())
+        return
+      }
 
       // 4. 确认启动控制
       const res = await window.electronAPI.chromeDesktop.confirmStart({
@@ -169,30 +219,50 @@ export function ChromeDesktopBanner({ sessionId }: ChromeDesktopBannerProps): Re
       if (!res.ok) {
         throw new Error(res.message || '激活 Chrome 窗口控制失败')
       }
+      if (store.get(chromeDesktopCaptureAttemptAtom) !== attempt || store.get(chromeDesktopSessionStateAtom)?.controlId !== control.controlId) {
+        stream.getTracks().forEach((track) => track.stop())
+        return
+      }
+      // 仅在服务端确认成功后发布流，避免全局宿主将授权中的 control 当成活动控制。
+      if (!commitCapture({ attempt, controlId: control.controlId, stream })) return
     } catch (err: any) {
+      if (attempt !== currentCaptureAttemptRef.current) {
+        pendingStream?.getTracks().forEach((track) => track.stop())
+        return
+      }
+      pendingStream?.getTracks().forEach((track) => track.stop())
       console.error('[ChromeDesktopBanner] 启动控制失败:', err)
       setLocalError(err.message || '启动控制失败')
-      cleanupStream()
-      await stopControl(sessionId)
+      await stopControl(control)
     } finally {
-      setIsStarting(false)
+      if (attempt === currentCaptureAttemptRef.current) setIsStarting(false)
     }
   }
 
   /** 停止控制 */
   const handleStop = async (): Promise<void> => {
-    await stopControl(sessionId)
+    if (sessionState) await stopControl({ sessionId, controlId: sessionState.controlId })
+  }
+
+  /** 在顶部主 Tab 栏打开完整 Chrome 预览，复用当前已经授权的 MediaStream。 */
+  const handleOpenPreviewTab = (): void => {
+    if (!sessionState || !currentMediaStream) return
+    openPreviewTab({
+      sessionId,
+      controlId: sessionState.controlId,
+      title: `Chrome：${sessionState.targetWindow?.title || '窗口预览'}`,
+    })
   }
 
   return (
-    <div className="mx-auto w-full max-w-[760px] px-2.5 pb-2.5 md:px-[18px] md:pb-[18px]">
+    <div className="ml-8 mr-auto w-[calc(100%-2rem)] max-w-[560px] px-2.5 pb-2 md:pb-2">
       <div className="overflow-hidden rounded-xl border border-border/80 bg-card p-4 shadow-lg backdrop-blur-sm transition-all duration-200">
         {/* ===== 1. 待用户授权与选窗状态 (awaiting_user) ===== */}
         {state === 'awaiting_user' && (
           <div className="flex flex-col gap-3.5">
             <div className="flex items-start justify-between gap-3">
-              <div className="flex items-center gap-2.5">
-                <div className="flex size-9 items-center justify-center rounded-lg bg-primary/10 text-primary">
+              <div className="flex min-w-0 flex-1 items-center gap-2.5">
+                <div className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
                   <Monitor className="size-5" />
                 </div>
                 <div>
@@ -204,7 +274,7 @@ export function ChromeDesktopBanner({ sessionId }: ChromeDesktopBannerProps): Re
                   </p>
                 </div>
               </div>
-              <Badge variant="outline" className="border-amber-500/40 text-amber-500 text-[11px] font-normal">
+              <Badge variant="outline" className="min-w-[76px] shrink-0 justify-center whitespace-nowrap border-amber-500/40 text-amber-500 text-[11px] font-normal">
                 等待授权
               </Badge>
             </div>
@@ -303,7 +373,7 @@ export function ChromeDesktopBanner({ sessionId }: ChromeDesktopBannerProps): Re
                   disabled={isStarting || availableWindows.length === 0 || !selectedWindowId}
                 >
                   <Play className="size-3.5" />
-                  {isStarting ? '正在启动...' : '开始控制'}
+                  {isStarting ? '正在启动...' : '开始观察'}
                 </Button>
               </div>
             </div>
@@ -320,7 +390,7 @@ export function ChromeDesktopBanner({ sessionId }: ChromeDesktopBannerProps): Re
                   <span className="relative inline-flex size-2.5 rounded-full bg-emerald-500" />
                 </span>
                 <span className="text-xs font-medium text-foreground">
-                  正在控制 Chrome：
+                  {sessionState.mode === 'observe' ? '已连接 Chrome，可观察页面：' : '正在控制 Chrome：'}
                   <span className="ml-1 text-muted-foreground font-normal">
                     {sessionState.targetWindow?.title || 'Google Chrome 窗口'}
                   </span>
@@ -343,16 +413,26 @@ export function ChromeDesktopBanner({ sessionId }: ChromeDesktopBannerProps): Re
             </div>
 
             {/* 低延迟预览 */}
-            {mediaStream && (
-              <div className="relative overflow-hidden rounded-lg border border-border/60 bg-black/5 dark:bg-black/30">
+            {currentMediaStream && (
+              <button
+                type="button"
+                className="group relative flex w-full cursor-pointer justify-center overflow-hidden rounded-lg border border-border/60 bg-black/5 p-1.5 text-left transition-colors hover:border-primary/60 dark:bg-black/30"
+                onClick={handleOpenPreviewTab}
+                aria-label="在顶部主 Tab 中打开完整 Chrome 预览"
+                title="点击在顶部主 Tab 中打开完整预览"
+              >
                 <video
                   ref={previewVideoRef}
                   autoPlay
                   playsInline
                   muted
-                  className="max-h-[160px] w-full object-contain"
+                  className="h-auto max-h-[120px] max-w-[420px] w-auto object-contain"
                 />
-              </div>
+                <span className="pointer-events-none absolute inset-x-0 bottom-1 mx-auto w-fit rounded bg-black/65 px-2 py-0.5 text-[10px] text-white/90 opacity-0 transition-opacity group-hover:opacity-100">
+                  点击在顶部 Tab 中完整打开
+                </span>
+                <ExternalLink className="pointer-events-none absolute right-2 top-2 size-3.5 text-white/80 opacity-0 transition-opacity group-hover:opacity-100" />
+              </button>
             )}
           </div>
         )}

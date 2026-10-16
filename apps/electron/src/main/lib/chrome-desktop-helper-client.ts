@@ -26,6 +26,7 @@ export interface IChromeDesktopHelperClient {
   checkPermissions(): Promise<HelperPermissionsResult>
   listWindows(): Promise<ChromeDesktopWindowInfo[]>
   activateWindow(windowId: number, pid: number): Promise<{ ok: boolean; bounds?: ChromeDesktopBounds; error?: string }>
+  getWindowBounds(windowId: number, pid: number): Promise<{ ok: boolean; bounds?: ChromeDesktopBounds; error?: string }>
   checkTarget(windowId: number, pid: number): Promise<{ ok: boolean; bounds?: ChromeDesktopBounds; error?: string }>
   click(windowId: number, pid: number, screenX: number, screenY: number, clickCount?: number): Promise<{ ok: boolean; error?: string }>
   scroll(windowId: number, pid: number, screenX: number, screenY: number, deltaY: number): Promise<{ ok: boolean; error?: string }>
@@ -95,7 +96,7 @@ export class ChromeDesktopHelperClient implements IChromeDesktopHelperClient {
   private lineBuffer = ''
   private helperPath: string | null = null
 
-  constructor(helperPathOverride?: string) {
+  constructor(helperPathOverride?: string, private readonly commandTimeoutMs = 5000) {
     this.helperPath = helperPathOverride ?? resolveHelperBinaryPath()
   }
 
@@ -114,10 +115,11 @@ export class ChromeDesktopHelperClient implements IChromeDesktopHelperClient {
     })
 
     this.childProcess = child
+    this.lineBuffer = ''
 
     child.stdout?.setEncoding('utf8')
     child.stdout?.on('data', (chunk: string) => {
-      this.handleStdout(chunk)
+      if (this.childProcess === child) this.handleStdout(chunk)
     })
 
     child.stderr?.setEncoding('utf8')
@@ -128,14 +130,20 @@ export class ChromeDesktopHelperClient implements IChromeDesktopHelperClient {
 
     child.on('exit', (code, signal) => {
       console.log(`[ChromeDesktopHelper] 进程退出 code=${code} signal=${signal}`)
-      this.cleanupPending(new Error(`Helper 进程已退出 (code: ${code}, signal: ${signal})`))
-      this.childProcess = null
+      if (this.childProcess === child) {
+        this.cleanupPending(new Error(`Helper 进程已退出 (code: ${code}, signal: ${signal})`))
+        this.childProcess = null
+        this.lineBuffer = ''
+      }
     })
 
     child.on('error', (err) => {
       console.error('[ChromeDesktopHelper] 进程错误:', err)
-      this.cleanupPending(err)
-      this.childProcess = null
+      if (this.childProcess === child) {
+        this.cleanupPending(err)
+        this.childProcess = null
+        this.lineBuffer = ''
+      }
     })
   }
 
@@ -146,8 +154,10 @@ export class ChromeDesktopHelperClient implements IChromeDesktopHelperClient {
     } catch {
       // ignore
     }
-    this.childProcess.kill('SIGTERM')
+    const child = this.childProcess
+    child.kill('SIGTERM')
     this.childProcess = null
+    this.lineBuffer = ''
     this.cleanupPending(new Error('Helper 进程已手动终止'))
   }
 
@@ -191,9 +201,11 @@ export class ChromeDesktopHelperClient implements IChromeDesktopHelperClient {
       }
 
       const id = `req_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
+      const child = this.childProcess
       const timer = setTimeout(() => {
         this.pendingRequests.delete(id)
         reject(new Error(`Helper 命令超时 (${action}, ${timeoutMs}ms)`))
+        if (this.childProcess === child) this.stop()
       }, timeoutMs)
 
       this.pendingRequests.set(id, { resolve, reject, timer })
@@ -221,13 +233,18 @@ export class ChromeDesktopHelperClient implements IChromeDesktopHelperClient {
 
   async listWindows(): Promise<ChromeDesktopWindowInfo[]> {
     await this.start()
-    const res = await this.sendCommand<{ ok: boolean; windows?: ChromeDesktopWindowInfo[] }>('list_windows')
+    const res = await this.sendCommand<{ ok: boolean; windows?: ChromeDesktopWindowInfo[] }>('list_windows', {}, this.commandTimeoutMs)
     return res.windows ?? []
   }
 
   async activateWindow(windowId: number, pid: number): Promise<{ ok: boolean; bounds?: ChromeDesktopBounds; error?: string }> {
     await this.start()
     return this.sendCommand('activate_window', { windowId, pid })
+  }
+
+  async getWindowBounds(windowId: number, pid: number): Promise<{ ok: boolean; bounds?: ChromeDesktopBounds; error?: string }> {
+    await this.start()
+    return this.sendCommand('get_window_bounds', { windowId, pid })
   }
 
   async checkTarget(windowId: number, pid: number): Promise<{ ok: boolean; bounds?: ChromeDesktopBounds; error?: string }> {
@@ -260,7 +277,8 @@ export class ChromeDesktopHelperClient implements IChromeDesktopHelperClient {
     try {
       await this.sendCommand('cancel', {}, 1000)
     } catch {
-      // ignore
+      // 无法确认 helper 已处理取消时必须终止进程，防止后台操作继续投递输入。
+      this.stop()
     }
   }
 }

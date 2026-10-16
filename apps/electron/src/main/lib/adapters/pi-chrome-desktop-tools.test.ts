@@ -65,6 +65,11 @@ describe('pi-chrome-desktop-tools', () => {
     const second = res.content[1]
     expect(first?.type).toBe('text')
     expect((first as any)?.text).toContain('untrusted_chrome_frame')
+    expect((first as any)?.text).toContain('30 秒')
+    expect((first as any)?.text).toContain('CHROME_FRAME_STALE')
+    expect((first as any)?.text).toContain('无需重新授权')
+    expect((first as any)?.text).toContain('根据实际错误')
+    expect((first as any)?.text).not.toContain('应说明模型响应耗时过长')
     expect(second?.type).toBe('image')
     expect((second as any)?.data).toBe('test-jpeg-base64')
     expect(res.details).toBeDefined()

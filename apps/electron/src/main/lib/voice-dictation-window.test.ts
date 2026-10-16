@@ -1,6 +1,9 @@
 import { describe, expect, it, mock, beforeAll } from 'bun:test'
 
 mock.module('electron', () => ({
+  webContents: {
+    fromFrame: (frame: any) => frame.routingId === 900 ? { id: 10 } : frame.webContents,
+  },
   app: {
     isPackaged: false,
     getPath: () => '/tmp',
@@ -47,7 +50,7 @@ mock.module('../index', () => ({
 describe('voice-dictation-window desktop capture validation', () => {
   let validateDisplayMediaFrame: typeof import('./voice-dictation-window').validateDisplayMediaFrame
   let matchDesktopCaptureWindowSource: typeof import('./voice-dictation-window').matchDesktopCaptureWindowSource
-  let handleDisplayMediaRequest: typeof import('./voice-dictation-window').handleDisplayMediaRequest
+  let handleDisplayMediaRequest: any
 
   beforeAll(async () => {
     const mod = await import('./voice-dictation-window')
@@ -86,13 +89,29 @@ describe('voice-dictation-window desktop capture validation', () => {
       expect(validateDisplayMediaFrame(topFrameValid, 10)).toBe(true)
     })
 
-    it('supports frame with webContentsId property', () => {
+    it('rejects invented webContentsId without an Electron frame owner', () => {
       const frameWithId = {
         parent: null,
         webContentsId: 10,
       }
-      expect(validateDisplayMediaFrame(frameWithId, 10)).toBe(true)
+      expect(validateDisplayMediaFrame(frameWithId, 10)).toBe(false)
     })
+  })
+
+  it('Given Electron WebFrameMain has no webContents field When fromFrame resolves owner Then accepts the main frame', () => {
+    expect(validateDisplayMediaFrame({ parent: null, processId: 4, routingId: 900 }, 10)).toBe(true)
+  })
+
+  it('Given source enumeration awaits When user cancels Then do not grant the late capture', async () => {
+    let current = true
+    let result: unknown
+    await handleDisplayMediaRequest(
+      { frame: { parent: null, webContents: { id: 10 } } }, 10, { windowId: 123 },
+      async () => { current = false; return [{ id: 'window:123:0' }] },
+      (streams: any) => { result = streams },
+      () => current,
+    )
+    expect(result).toBeNull()
   })
 
   describe('matchDesktopCaptureWindowSource', () => {
@@ -142,52 +161,52 @@ describe('voice-dictation-window desktop capture validation', () => {
   })
 
   describe('handleDisplayMediaRequest', () => {
-    it('calls callback({}) when frame validation fails', async () => {
+    it('calls callback(null) when frame validation fails', async () => {
       let callbackResult: any = null
       await handleDisplayMediaRequest(
         { frame: { parent: { id: 1 }, webContents: { id: 10 } } },
         10,
         { windowId: 123 },
         async () => [{ id: 'window:123:0' }],
-        (res) => { callbackResult = res },
+        (res: any) => { callbackResult = res },
       )
-      expect(callbackResult).toEqual({})
+      expect(callbackResult).toBeNull()
     })
 
-    it('calls callback({}) when pending capture target is null', async () => {
+    it('calls callback(null) when pending capture target is null', async () => {
       let callbackResult: any = null
       await handleDisplayMediaRequest(
         { frame: { parent: null, webContents: { id: 10 } } },
         10,
         null,
         async () => [{ id: 'window:123:0' }],
-        (res) => { callbackResult = res },
+        (res: any) => { callbackResult = res },
       )
-      expect(callbackResult).toEqual({})
+      expect(callbackResult).toBeNull()
     })
 
-    it('calls callback({}) when no matching window source is found', async () => {
+    it('calls callback(null) when no matching window source is found', async () => {
       let callbackResult: any = null
       await handleDisplayMediaRequest(
         { frame: { parent: null, webContents: { id: 10 } } },
         10,
         { windowId: 123 },
         async () => [{ id: 'window:999:0' }, { id: 'screen:123:0' }],
-        (res) => { callbackResult = res },
+        (res: any) => { callbackResult = res },
       )
-      expect(callbackResult).toEqual({})
+      expect(callbackResult).toBeNull()
     })
 
-    it('calls callback({}) when getSources throws an error', async () => {
+    it('calls callback(null) when getSources throws an error', async () => {
       let callbackResult: any = null
       await handleDisplayMediaRequest(
         { frame: { parent: null, webContents: { id: 10 } } },
         10,
         { windowId: 123 },
         async () => { throw new Error('OS screen capture error') },
-        (res) => { callbackResult = res },
+        (res: any) => { callbackResult = res },
       )
-      expect(callbackResult).toEqual({})
+      expect(callbackResult).toBeNull()
     })
 
     it('calls callback({ video: matched }) when exact matching window source is found', async () => {
@@ -198,7 +217,7 @@ describe('voice-dictation-window desktop capture validation', () => {
         10,
         { windowId: 123 },
         async () => [{ id: 'window:12:0' }, targetSource],
-        (res) => { callbackResult = res },
+        (res: any) => { callbackResult = res },
       )
       expect(callbackResult).toEqual({ video: targetSource })
     })

@@ -2,7 +2,7 @@
  * Tab Atoms — 当前工作区入口状态管理
  *
  * 顶部只保留当前会话入口；会话恢复与导航交给左侧列表。
- * 顶部标签只承载 Agent 会话、文件预览和临时教程页。
+ * 顶部标签承载 Agent 会话、文件预览、Chrome 桌面预览和临时教程页。
  */
 
 import { atom } from 'jotai'
@@ -18,7 +18,8 @@ import type { PreviewFile } from './preview-atoms'
 // ===== 类型定义 =====
 
 /** 标签页类型（Settings 不作为 Tab，保留独立视图） */
-export type TabType = 'agent' | 'preview' | 'tutorial'
+export type TabType = 'agent' | 'preview' | 'chrome-desktop' | 'tutorial'
+export type OpenTabType = Exclude<TabType, 'chrome-desktop'>
 
 /** 旧版本 Scratch Tab 的固定 ID，仅用于过滤历史持久化状态。 */
 const LEGACY_SCRATCH_PAD_ID = '__scratch-pad__'
@@ -40,6 +41,8 @@ export interface SessionTabItem {
   sessionId: string
   /** 标签页显示标题 */
   title: string
+  /** Chrome 桌面预览对应的控制会话 ID，仅 chrome-desktop Tab 使用。 */
+  controlId?: string
 }
 export interface ChatRoomTabItem { id: string; type: 'chatroom'; roomId: string; title: string }
 export type TabItem = SessionTabItem | ChatRoomTabItem
@@ -175,6 +178,12 @@ export function createPreviewTabId(sessionId: string): string {
   return `${PREVIEW_TAB_PREFIX}${sessionId}`
 }
 
+const CHROME_DESKTOP_TAB_PREFIX = '__chrome-desktop-preview__:'
+
+export function createChromeDesktopTabId(controlId: string): string {
+  return `${CHROME_DESKTOP_TAB_PREFIX}${controlId}`
+}
+
 export function getFileBaseName(filePath: string): string {
   return filePath.split(/[\\/]/).filter(Boolean).pop() || filePath
 }
@@ -187,12 +196,24 @@ export function isPreviewTab(tab: TabItem): tab is SessionTabItem & { type: 'pre
   return tab.type === 'preview' || tab.id.startsWith(PREVIEW_TAB_PREFIX)
 }
 
+export function isChromeDesktopTab(
+  tab: TabItem,
+): tab is SessionTabItem & { type: 'chrome-desktop'; controlId: string } {
+  return tab.type === 'chrome-desktop' && typeof tab.controlId === 'string'
+}
+
 function isSessionTab(tab: TabItem): tab is SessionTabItem {
   return tab.type === 'agent'
 }
 
 function getPersistentTabs(tabs: TabItem[]): TabItem[] {
-  return tabs.filter((tab) => tab.id !== LEGACY_SCRATCH_PAD_ID && tab.type !== 'tutorial' && tab.type !== 'chatroom' && !isPreviewTab(tab))
+  return tabs.filter((tab) => (
+    tab.id !== LEGACY_SCRATCH_PAD_ID
+    && tab.type !== 'tutorial'
+    && tab.type !== 'chatroom'
+    && !isPreviewTab(tab)
+    && !isChromeDesktopTab(tab)
+  ))
 }
 
 function isPersistedAgentTab(value: unknown): value is SessionTabItem {
@@ -237,7 +258,7 @@ export function getPersistableTabState(
  *  restore 提示存在时，切回带预览的会话会一并重建其预览 Tab 并回到上次视图。 */
 export function openTab(
   tabs: TabItem[],
-  item: { type: Exclude<TabType, 'chatroom'>; sessionId: string; title: string },
+  item: { type: OpenTabType; sessionId: string; title: string },
   restore?: OpenTabRestore,
 ): { tabs: TabItem[]; activeTabId: string } {
   if (item.type === 'tutorial') {
@@ -298,6 +319,30 @@ export function openTab(
   }
 }
 
+/** 打开或聚焦当前 Agent 会话的 Chrome 桌面预览 Tab。 */
+export function openChromeDesktopTab(
+  tabs: TabItem[],
+  item: { sessionId: string; controlId: string; title: string },
+): { tabs: TabItem[]; activeTabId: string } {
+  const existing = tabs.find((tab) => isChromeDesktopTab(tab) && tab.controlId === item.controlId)
+  if (existing) return { tabs, activeTabId: existing.id }
+
+  // 一个应用同时只允许一个 Chrome 控制会话，切换控制会话时清掉旧预览入口。
+  const tabsWithoutChromePreview = tabs.filter((tab) => !isChromeDesktopTab(tab))
+  const previewTab: SessionTabItem = {
+    id: createChromeDesktopTabId(item.controlId),
+    type: 'chrome-desktop',
+    sessionId: item.sessionId,
+    title: item.title,
+    controlId: item.controlId,
+  }
+
+  return {
+    tabs: [...tabsWithoutChromePreview, previewTab],
+    activeTabId: previewTab.id,
+  }
+}
+
 /** 打开独立聊天室标签；不会替换现有 Agent、预览或教程标签。 */
 export function openChatRoomTab(
   tabs: TabItem[],
@@ -350,13 +395,19 @@ export function closeTab(
   const tabIndex = tabs.findIndex((t) => t.id === tabId)
   if (tabIndex === -1) return { tabs, activeTabId }
   const closingTab = tabs[tabIndex]!
-  const boundPreviewId = isSessionTab(closingTab) ? createPreviewTabId(closingTab.sessionId) : null
+  const boundPreviewIds = isSessionTab(closingTab)
+    ? new Set(
+        tabs
+          .filter((tab) => tab.type !== 'chatroom' && tab.sessionId === closingTab.sessionId && (isPreviewTab(tab) || isChromeDesktopTab(tab)))
+          .map((tab) => tab.id),
+      )
+    : new Set<string>()
 
-  const newTabs = tabs.filter((t) => t.id !== tabId && (!boundPreviewId || t.id !== boundPreviewId))
+  const newTabs = tabs.filter((t) => t.id !== tabId && !boundPreviewIds.has(t.id))
 
   // 如果关闭的是当前激活的标签，切换到相邻标签
   let newActiveTabId = activeTabId
-  if (activeTabId === tabId || (boundPreviewId !== null && activeTabId === boundPreviewId)) {
+  if (activeTabId === tabId || boundPreviewIds.has(activeTabId ?? '')) {
     if (newTabs.length > 0) {
       const nextIndex = Math.min(tabIndex, newTabs.length - 1)
       newActiveTabId = newTabs[nextIndex]!.id

@@ -64,7 +64,10 @@ export function isAgentSessionActiveForCompletion({
 
   const activeTab = activeTabId ? tabs.find((tab) => tab.id === activeTabId) : null
   if (activeTab) {
-    return (activeTab.type === 'agent' || activeTab.type === 'preview') && activeTab.sessionId === sessionId
+    return (
+      (activeTab.type === 'agent' || activeTab.type === 'preview' || activeTab.type === 'chrome-desktop')
+      && activeTab.sessionId === sessionId
+    )
   }
 
   return currentAgentSessionId === sessionId

@@ -26,10 +26,20 @@ describe('ChromeDesktopHelperClient', () => {
       const windows = await client.listWindows()
       expect(Array.isArray(windows)).toBe(true)
 
-      await client.cancel()
     } finally {
       client.stop()
     }
+  })
+
+  it('Given stdin EOF When the main RunLoop is running Then helper exits without an orphan process', async () => {
+    if (process.platform !== 'darwin') return
+    const { spawnSync } = await import('node:child_process')
+    const binary = resolveHelperBinaryPath({ isPackaged: false })
+    if (!binary) throw new Error('Chrome helper 尚未构建')
+    const result = spawnSync(binary, [], { input: '', encoding: 'utf8', timeout: 2000 })
+    expect(result.error).toBeUndefined()
+    expect(result.status).toBe(0)
+    expect(result.stderr).toContain('stdin EOF')
   })
 
   it('Scenario: Asynchronous cancellation during long operation resolves cancel immediately and returns CHROME_CANCELLED for in-flight command', async () => {
@@ -100,5 +110,55 @@ describe('ChromeDesktopHelperClient', () => {
         unlinkSync(tmpScript)
       } catch {}
     }
+  })
+
+  it('Given helper command stalls When deadline expires Then terminate the owned process', async () => {
+    const { mkdtempSync, writeFileSync, existsSync, rmSync } = await import('node:fs')
+    const { tmpdir } = await import('node:os')
+    const { join } = await import('node:path')
+    const directory = mkdtempSync(join(tmpdir(), 'copis-helper-timeout-'))
+    const path = join(directory, 'helper.js')
+    writeFileSync(path, `#!${process.execPath}
+process.on('SIGTERM', () => process.exit(0))
+process.stdin.on('data', () => {})
+`, { mode: 0o755 })
+    const client = new ChromeDesktopHelperClient(path, 80)
+    try {
+      await expect(client.listWindows()).rejects.toThrow('超时')
+      await expect(client.start()).resolves.toBeUndefined()
+    } finally { client.stop(); rmSync(directory, {recursive:true, force:true}) }
+  })
+
+  it('Given an old child exits after restart Then keep the replacement helper usable', async () => {
+    const { mkdtempSync, writeFileSync, existsSync, rmSync } = await import('node:fs')
+    const { tmpdir } = await import('node:os')
+    const { join } = await import('node:path')
+    const directory = mkdtempSync(join(tmpdir(), 'copis-helper-restart-'))
+    const path = join(directory, 'helper.js')
+    const marker = join(directory, 'started')
+    const exited = join(directory, 'old-exited')
+    writeFileSync(path, `#!${process.execPath}
+const fs=require('fs'); const first=!fs.existsSync(${JSON.stringify(marker)});
+fs.writeFileSync(${JSON.stringify(marker)},'ready');
+process.on('SIGTERM',()=>setTimeout(()=>{fs.writeFileSync(${JSON.stringify(exited)},'done');process.exit(0)},200));
+if(first) setInterval(()=>{},1000);
+require('readline').createInterface({input:process.stdin}).on('line',line=>{
+  const command=JSON.parse(line);
+  const reply=()=>process.stdout.write(JSON.stringify({id:command.id,ok:true,accessibility:true,windows:[]})+'\\n');
+  if(command.action==='list_windows' && !first) setTimeout(reply,400); else reply()
+});
+`, {mode:0o755})
+    const client=new ChromeDesktopHelperClient(path)
+    try {
+      await client.checkPermissions()
+      client.stop()
+      await client.checkPermissions()
+      const pending = client.listWindows()
+      const result = pending.then((windows) => ({ windows }), (error: Error) => ({ error: error.message }))
+      const deadline=Date.now()+2000
+      while(!existsSync(exited) && Date.now()<deadline) await Bun.sleep(10)
+      expect(existsSync(exited)).toBe(true)
+      expect(await result).toEqual({ windows: [] })
+    } finally { client.stop(); await Bun.sleep(250); rmSync(directory,{recursive:true,force:true}) }
   })
 })

@@ -249,12 +249,12 @@ export interface ElectronAPI {
     listWindows: () => Promise<ChromeDesktopWindowInfo[]>
     prepareCapture: (params: { sessionId: string; controlId: string; windowId: number; pid: number }) => Promise<{ ok: boolean; error?: ChromeDesktopErrorCode; message?: string }>
     confirmStart: (params: { sessionId: string; controlId: string; windowId: number; pid: number }) => Promise<{ ok: boolean; error?: ChromeDesktopErrorCode; message?: string }>
-    stopControl: (sessionId?: string) => Promise<void>
+    stopControl: (input: { sessionId: string; controlId: string }) => Promise<void>
     getState: () => Promise<ChromeDesktopSessionState | null>
     onStateChanged: (callback: (state: ChromeDesktopSessionState) => void) => () => void
     onRequestFrame: (callback: (req: { controlId: string; requestId: string; geometryVersion: number }) => void) => () => void
     sendFrameResponse: (res: { controlId: string; requestId: string; width: number; height: number; capturedAt: number; data: string; error?: string; presentedFrames?: number; mediaTime?: number; encodedAt?: number }) => void
-    sendStreamError: (error: { reason: ChromeDesktopErrorCode; message: string }) => void
+    sendStreamError: (error: { controlId: string; reason: ChromeDesktopErrorCode; message: string }) => void
   }
   // ===== 运行时相关 =====
 
@@ -3042,8 +3042,8 @@ const electronAPI: ElectronAPI = {
       ipcRenderer.invoke(CHROME_DESKTOP_IPC_CHANNELS.PREPARE_CAPTURE, params),
     confirmStart: (params: { sessionId: string; controlId: string; windowId: number; pid: number }): Promise<{ ok: boolean; error?: ChromeDesktopErrorCode; message?: string }> =>
       ipcRenderer.invoke(CHROME_DESKTOP_IPC_CHANNELS.CONFIRM_START, params),
-    stopControl: (sessionId?: string): Promise<void> =>
-      ipcRenderer.invoke(CHROME_DESKTOP_IPC_CHANNELS.STOP_CONTROL, sessionId),
+    stopControl: (input: { sessionId: string; controlId: string }): Promise<void> =>
+      ipcRenderer.invoke(CHROME_DESKTOP_IPC_CHANNELS.STOP_CONTROL, input),
     getState: (): Promise<ChromeDesktopSessionState | null> =>
       ipcRenderer.invoke(CHROME_DESKTOP_IPC_CHANNELS.GET_STATE),
     onStateChanged: (callback: (state: ChromeDesktopSessionState) => void): (() => void) => {
@@ -3063,7 +3063,7 @@ const electronAPI: ElectronAPI = {
     sendFrameResponse: (res: { controlId: string; requestId: string; width: number; height: number; capturedAt: number; data: string; error?: string; presentedFrames?: number; mediaTime?: number; encodedAt?: number }): void => {
       ipcRenderer.send(CHROME_DESKTOP_IPC_CHANNELS.FRAME_RESPONSE, res)
     },
-    sendStreamError: (error: { reason: ChromeDesktopErrorCode; message: string }): void => {
+    sendStreamError: (error: { controlId: string; reason: ChromeDesktopErrorCode; message: string }): void => {
       ipcRenderer.send(CHROME_DESKTOP_IPC_CHANNELS.STREAM_ERROR, error)
     },
   },

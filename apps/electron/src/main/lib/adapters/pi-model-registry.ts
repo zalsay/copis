@@ -463,6 +463,9 @@ export async function resolvePiImageInputCapability(
 ): Promise<'supported' | 'unsupported' | 'unknown'> {
   const resolvedModelId = stripAgentContextSuffix(modelId)
   if (!resolvedModelId) return 'unknown'
+  // 内置 Working DeepSeek Flash 在 buildModel 中显式声明为多模态，Pi catalog
+  // 可能仍保留旧的 text-only 元数据，能力判断必须与实际注册保持一致。
+  if (resolvedModelId === COPIS_WORKING_DEEPSEEK_FAST_MODEL_ID) return 'supported'
   const catalogModel = await findPiCatalogModel(provider, resolvedModelId)
   if (!catalogModel) return 'unknown'
   return catalogModel.input.includes('image') ? 'supported' : 'unsupported'

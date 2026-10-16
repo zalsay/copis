@@ -18,6 +18,35 @@ export const chromeDesktopSessionStateAtom = atom<ChromeDesktopSessionState | nu
 
 /** 当前用于预览与截图的 MediaStream（仅存在于内存，生命周期受控） */
 export const chromeDesktopMediaStreamAtom = atom<MediaStream | null>(null)
+/** MediaStream 所属 control，防止迟到授权/清理跨控制覆盖。 */
+export const chromeDesktopMediaStreamControlAtom = atom<string | null>(null)
+/** 每次授权尝试及显式停止都递增，用于隔离 await 中的旧请求。 */
+export const chromeDesktopCaptureAttemptAtom = atom(0)
+const chromeDesktopCaptureAttemptControlAtom = atom<string | null>(null)
+
+/** 建立一代新的用户授权尝试。 */
+export const reserveChromeDesktopCaptureAtom = atom(null, (get, set, controlId: string) => {
+  if (get(chromeDesktopIsStartingAtom) && get(chromeDesktopCaptureAttemptControlAtom) === controlId) return null
+  const attempt = get(chromeDesktopCaptureAttemptAtom) + 1
+  set(chromeDesktopCaptureAttemptAtom, attempt)
+  set(chromeDesktopCaptureAttemptControlAtom, controlId)
+  set(chromeDesktopIsStartingAtom, true)
+  return attempt
+})
+
+/** 仅提交仍有效的授权结果；失效回包立即释放自身流。 */
+export const commitChromeDesktopCaptureAtom = atom(
+  null,
+  (get, set, input: { attempt: number; controlId: string; stream: MediaStream }) => {
+    if (get(chromeDesktopCaptureAttemptAtom) !== input.attempt || get(chromeDesktopCaptureAttemptControlAtom) !== input.controlId) {
+      input.stream.getTracks().forEach((track) => track.stop())
+      return false
+    }
+    set(chromeDesktopMediaStreamAtom, input.stream)
+    set(chromeDesktopMediaStreamControlAtom, input.controlId)
+    return true
+  },
+)
 
 /** 可选的本机 Chrome 窗口列表 */
 export const chromeDesktopAvailableWindowsAtom = atom<ChromeDesktopWindowInfo[]>([])
@@ -74,9 +103,12 @@ export const fetchChromeDesktopWindowsAtom = atom(null, async (get, set) => {
 })
 
 /** 清理并停止 MediaStream 轨道 */
-export const cleanupChromeDesktopStreamAtom = atom(null, (get, set) => {
+export const cleanupChromeDesktopStreamAtom = atom(null, (get, set, expected?: MediaStream | string) => {
   const stream = get(chromeDesktopMediaStreamAtom)
-  if (stream) {
+  const matchesExpected = !expected || (typeof expected === 'string'
+    ? get(chromeDesktopMediaStreamControlAtom) === expected
+    : expected === stream)
+  if (stream && matchesExpected) {
     stream.getTracks().forEach((track) => {
       try {
         track.stop()
@@ -85,18 +117,24 @@ export const cleanupChromeDesktopStreamAtom = atom(null, (get, set) => {
       }
     })
     set(chromeDesktopMediaStreamAtom, null)
+    set(chromeDesktopMediaStreamControlAtom, null)
   }
 })
 
 /** 停止控制 */
 export const stopChromeDesktopControlAtom = atom(
   null,
-  async (get, set, sessionId?: string) => {
-    set(chromeDesktopIsStartingAtom, false)
-    set(cleanupChromeDesktopStreamAtom)
-    if (!window.electronAPI?.chromeDesktop) return
+  async (get, set, control?: { sessionId: string; controlId: string }) => {
+    const streamControlId = get(chromeDesktopMediaStreamControlAtom)
+    if (!control || get(chromeDesktopCaptureAttemptControlAtom) === control.controlId) {
+      set(chromeDesktopCaptureAttemptAtom, get(chromeDesktopCaptureAttemptAtom) + 1)
+      set(chromeDesktopCaptureAttemptControlAtom, null)
+      set(chromeDesktopIsStartingAtom, false)
+    }
+    if (!control || streamControlId === control.controlId) set(cleanupChromeDesktopStreamAtom)
+    if (!window.electronAPI?.chromeDesktop || !control) return
     try {
-      await window.electronAPI.chromeDesktop.stopControl(sessionId)
+      await window.electronAPI.chromeDesktop.stopControl(control)
     } catch (err) {
       console.error('[ChromeDesktop] 停止控制失败:', err)
     }

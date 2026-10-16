@@ -633,9 +633,9 @@ async function bootstrap(): Promise<void> {
 
   // 预创建快速任务窗口（隐藏状态，首次唤起秒开）
   safeRun('createQuickTaskWindow', createQuickTaskWindow)
-  if (getSettings().voiceDictation?.enabled === true) {
-    safeRun('createVoiceDictationWindow', createVoiceDictationWindow)
-  }
+  // Chrome Desktop 依赖主窗口的 display media handler，与语音听写开关无关。
+  // 只安装权限/采集路由，不会在语音功能关闭时启动录音。
+  safeRun('createVoiceDictationWindow', createVoiceDictationWindow)
 
   // 飞书实时同步开启时，默认阻止系统自动休眠，保证远程群内继续可用。
   safeRun('syncFeishuSyncSleepBlocker', () => syncFeishuSyncSleepBlocker(getSettings()))

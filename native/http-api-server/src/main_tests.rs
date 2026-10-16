@@ -2433,3 +2433,24 @@ fn parses_worker_jsonl_frames_without_accepting_non_objects() {
     assert!(parse_worker_frame("[]").is_none());
     assert!(parse_worker_frame("not-json").is_none());
 }
+
+#[test]
+fn given_worker_exits_without_complete_then_synthesized_frame_keeps_chrome_capability_identity() {
+    let config = serde_json::json!({
+        "query": {
+            "chromeDesktopControl": {
+                "endpoint": "/api/internal/agent/chrome-desktop-tool",
+                "token": "cdc-issued-for-this-run",
+            }
+        }
+    });
+
+    let frame = super::worker_exit_complete_frame("session-a", &config);
+
+    assert_eq!(frame["type"], "complete");
+    assert_eq!(frame["sessionId"], "session-a");
+    assert_eq!(
+        frame["chromeDesktopCapabilityToken"],
+        "cdc-issued-for-this-run"
+    );
+}

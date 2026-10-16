@@ -1,5 +1,13 @@
 import { describe, expect, test } from 'bun:test'
-import { closeChatRoomTab, getPersistableTabState, openChatRoomTab, openTab, resolveRenderedTabId } from './tab-atoms'
+import {
+  closeChatRoomTab,
+  closeTab,
+  getPersistableTabState,
+  openChatRoomTab,
+  openChromeDesktopTab,
+  openTab,
+  resolveRenderedTabId,
+} from './tab-atoms'
 import type { TabItem } from './tab-atoms'
 
 describe('会话入口持久化', () => {
@@ -85,5 +93,79 @@ describe('会话入口持久化', () => {
     const result = closeChatRoomTab(tabs, first.activeTabId, 'room-1')
     expect(result.tabs.map((tab) => tab.id)).toEqual(['agent-1', 'chatroom:room-2'])
     expect(result.activeTabId).toBe('chatroom:room-2')
+  })
+
+  test('Given Agent 已打开 When 打开 Chrome 预览 Then 在同一主 Tab 栏追加并激活 Chrome Tab', () => {
+    const agent: TabItem = { id: 'agent-1', type: 'agent', sessionId: 'agent-1', title: 'Agent' }
+    const result = openChromeDesktopTab([agent], {
+      sessionId: 'agent-1',
+      controlId: 'control-1',
+      title: 'Chrome：Example Domain',
+    })
+
+    expect(result).toEqual({
+      tabs: [
+        agent,
+        {
+          id: '__chrome-desktop-preview__:control-1',
+          type: 'chrome-desktop',
+          sessionId: 'agent-1',
+          title: 'Chrome：Example Domain',
+          controlId: 'control-1',
+        },
+      ],
+      activeTabId: '__chrome-desktop-preview__:control-1',
+    })
+  })
+
+  test('Given Chrome 预览已打开 When 重复点击小预览 Then 复用原 Tab 不重复采集', () => {
+    const first = openChromeDesktopTab(
+      [{ id: 'agent-1', type: 'agent', sessionId: 'agent-1', title: 'Agent' }],
+      { sessionId: 'agent-1', controlId: 'control-1', title: 'Chrome：Example Domain' },
+    )
+    const second = openChromeDesktopTab(first.tabs, {
+      sessionId: 'agent-1',
+      controlId: 'control-1',
+      title: 'Chrome：Example Domain（更新）',
+    })
+
+    expect(second.tabs).toBe(first.tabs)
+    expect(second.activeTabId).toBe(first.activeTabId)
+  })
+
+  test('Given Chrome 预览 Tab When 生成持久化状态 Then 仅持久化所属 Agent Tab', () => {
+    const result = openChromeDesktopTab(
+      [{ id: 'agent-1', type: 'agent', sessionId: 'agent-1', title: 'Agent' }],
+      { sessionId: 'agent-1', controlId: 'control-1', title: 'Chrome：Example Domain' },
+    )
+
+    expect(getPersistableTabState(result.tabs, result.activeTabId)).toEqual({
+      tabs: [{ id: 'agent-1', type: 'agent', sessionId: 'agent-1', title: 'Agent' }],
+      activeTabId: 'agent-1',
+    })
+  })
+
+  test('Given Chrome 预览 Tab 已激活 When 关闭 Tab Then 只关闭预览并回到 Agent', () => {
+    const result = openChromeDesktopTab(
+      [{ id: 'agent-1', type: 'agent', sessionId: 'agent-1', title: 'Agent' }],
+      { sessionId: 'agent-1', controlId: 'control-1', title: 'Chrome：Example Domain' },
+    )
+
+    expect(closeTab(result.tabs, result.activeTabId, result.activeTabId)).toEqual({
+      tabs: [{ id: 'agent-1', type: 'agent', sessionId: 'agent-1', title: 'Agent' }],
+      activeTabId: 'agent-1',
+    })
+  })
+
+  test('Given Agent 及 Chrome 预览 Tab When 关闭 Agent Then 一并移除所属预览入口', () => {
+    const result = openChromeDesktopTab(
+      [{ id: 'agent-1', type: 'agent', sessionId: 'agent-1', title: 'Agent' }],
+      { sessionId: 'agent-1', controlId: 'control-1', title: 'Chrome：Example Domain' },
+    )
+
+    expect(closeTab(result.tabs, result.activeTabId, 'agent-1')).toEqual({
+      tabs: [],
+      activeTabId: null,
+    })
   })
 })

@@ -10,16 +10,22 @@ mock.module('electron', () => ({
     getAllWindows: () => [],
     fromWebContents: () => null,
   },
+  powerMonitor: { on: () => {} },
+  net: {},
+  Menu: { setApplicationMenu: () => {} },
+  nativeImage: {},
+  nativeTheme: { on: () => {} },
+  protocol: { handle: () => {} },
+  shell: { openExternal: async () => {} },
+  dialog: {},
   ipcMain: {
     handle: () => {},
     on: () => {},
   },
-  dialog: {},
   clipboard: {
     readText: () => '',
     writeText: () => {},
   },
-  nativeImage: {},
   screen: {
     getPrimaryDisplay: () => ({ workArea: { x: 0, y: 0, width: 1920, height: 1080 } }),
   },
@@ -31,12 +37,6 @@ mock.module('electron', () => ({
   },
   systemPreferences: {
     getMediaAccessStatus: () => 'granted',
-  },
-  shell: {
-    openExternal: async () => {},
-  },
-  nativeTheme: {
-    on: () => {},
   },
 }))
 

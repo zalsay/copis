@@ -5,7 +5,7 @@
  * 外部应用前台时，显示无焦点、无转写文本的轻量状态条，避免用户失去听写反馈。
  */
 
-import { app, BrowserWindow, screen, type BrowserWindowConstructorOptions } from 'electron'
+import { app, BrowserWindow, screen, webContents, type BrowserWindowConstructorOptions } from 'electron'
 import { join } from 'node:path'
 import { VOICE_DICTATION_IPC_CHANNELS } from '../../types'
 import { getSettings } from './settings-service'
@@ -247,6 +247,10 @@ function installVoiceDictationMediaPermissions(win: BrowserWindow): void {
           return desktopCapturer.getSources({ types: ['window'] })
         },
         callback,
+        () => {
+          const current = chromeDesktopService.getPendingCaptureTarget()
+          return Boolean(current && pendingTarget && current.controlId === pendingTarget.controlId && current.windowId === pendingTarget.windowId && current.pid === pendingTarget.pid)
+        },
       )
     })
   }
@@ -254,43 +258,47 @@ function installVoiceDictationMediaPermissions(win: BrowserWindow): void {
 
 /**
  * 处理 DisplayMedia 请求，严格校验顶层 frame 与 pending capture target 匹配，
- * 失败分支调用 callback({}) 触发 Chromium NotAllowedError 拒绝。
+ * 失败分支调用 callback(null) 触发 Chromium NotAllowedError 拒绝。
  */
 export async function handleDisplayMediaRequest(
   request: any,
   expectedWebContentsId: number,
   pendingTarget: { windowId: number } | null,
   getSources: () => Promise<Array<{ id: string; [key: string]: any }>>,
-  callback: (streams: { video?: any }) => void,
+  callback: (streams: { video?: any } | null) => void,
+  isCurrent: () => boolean = () => true,
 ): Promise<void> {
   if (!validateDisplayMediaFrame(request?.frame, expectedWebContentsId)) {
-    callback({})
+    callback(null)
     return
   }
 
-  if (!pendingTarget) {
-    callback({})
+  if (!pendingTarget || !isCurrent()) {
+    callback(null)
     return
   }
 
   try {
     const sources = await getSources()
     const matched = matchDesktopCaptureWindowSource(sources, pendingTarget.windowId)
-    if (matched) {
+    if (matched && isCurrent() && validateDisplayMediaFrame(request?.frame, expectedWebContentsId)) {
       callback({ video: matched })
     } else {
-      callback({})
+      callback(null)
     }
   } catch {
-    callback({})
+    callback(null)
   }
 }
 
 /** 校验 DisplayMedia 请求是否来自受信任的主窗口顶层 frame */
 export function validateDisplayMediaFrame(frame: any, expectedWebContentsId: number): boolean {
   if (!frame || frame.parent !== null) return false
-  const wcId = frame.webContents?.id ?? frame.webContentsId
-  return wcId === expectedWebContentsId
+  try {
+    return webContents.fromFrame(frame)?.id === expectedWebContentsId
+  } catch {
+    return false
+  }
 }
 
 /** 精确匹配 windowId 的 desktopCapturer source，格式为 window:<windowId>:<subId> */

@@ -12,7 +12,7 @@ import {
   openTab,
   buildOpenTabRestore,
   sessionViewStateMapAtom,
-  type TabType,
+  type OpenTabType,
 } from '@/atoms/tab-atoms'
 import { previewFileMapAtom } from '@/atoms/preview-atoms'
 import { appModeAtom } from '@/atoms/app-mode'
@@ -27,7 +27,7 @@ import {
 import { workingSettingsOpenAtom } from '@/atoms/working-atoms'
 import { professionalModeAtom } from '@/atoms/professional-mode-atoms'
 
-type OpenSessionFn = (type: TabType, sessionId: string, title: string) => void
+type OpenSessionFn = (type: OpenTabType, sessionId: string, title: string) => void
 
 export function useOpenSession(): OpenSessionFn {
   const store = useStore()
@@ -44,7 +44,7 @@ export function useOpenSession(): OpenSessionFn {
   const setWorkingSettingsOpen = useSetAtom(workingSettingsOpenAtom)
 
   return React.useCallback(
-    (type: TabType, sessionId: string, title: string): void => {
+    (type: OpenTabType, sessionId: string, title: string): void => {
       setWorkingSettingsOpen(false)
 
       // 切回 agent 会话时，若该会话上次开着预览 Tab 则一并重建并回到上次视图

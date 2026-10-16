@@ -9,6 +9,7 @@ import {
   buildModel,
   buildPiRequestHeaders,
   getWorkingCustomResponsesThinkingLevelMap,
+  resolvePiImageInputCapability,
 } from './pi-model-registry'
 
 describe('Pi 模型请求头（Working 计费来源）', () => {
@@ -77,4 +78,8 @@ describe('Pi 模型请求头（Working 计费来源）', () => {
 
     expect(model.input).toEqual(['text', 'image'])
   })
+  test('Given 内置 DeepSeek v4 Flash When 判断 Agent 图片能力 Then 返回 supported 与实际注册一致', async () => {
+    await expect(resolvePiImageInputCapability('openai-responses', COPIS_WORKING_DEEPSEEK_FAST_MODEL_ID)).resolves.toBe('supported')
+  })
+
 })

@@ -3884,6 +3884,7 @@ fn handle_agent_stream(
         }
     };
 
+    let synthesized_complete_frame = worker_exit_complete_frame(&session_id, &config);
     let mut worker = match workers.start_reserved(&reservation, config) {
         Ok(worker) => worker,
         Err(error) => {
@@ -3996,15 +3997,11 @@ fn handle_agent_stream(
             "sessionId": session_id,
             "error": "Pi worker 已提前退出",
         });
-        let complete_frame = json!({
-            "type": "complete",
-            "sessionId": session_id,
-            "stoppedByUser": false,
-            "resultSubtype": "error_during_execution",
-            "resultErrors": ["Pi worker 已提前退出"],
-        });
         let _ = send_sse_frame(stream, &error_frame);
-        let _ = send_sse_frame(stream, &complete_frame);
+        if let Err(error) = finalize_worker_run(&bridge, &synthesized_complete_frame) {
+            eprintln!("[HTTP API] Agent 异常退出完成状态持久化失败: {}", error);
+        }
+        let _ = send_sse_frame(stream, &synthesized_complete_frame);
     }
     workers.finish(worker);
 }
@@ -4229,6 +4226,25 @@ pub(crate) fn persist_worker_frame(
     ensure_internal_success(send_internal_request(bridge, target, body)?)
 }
 
+fn worker_exit_complete_frame(session_id: &str, config: &Value) -> Value {
+    let mut frame = json!({
+        "type": "complete",
+        "sessionId": session_id,
+        "stoppedByUser": false,
+        "resultSubtype": "error_during_execution",
+        "resultErrors": ["Pi worker 已提前退出"],
+    });
+    if let Some(token) = config
+        .get("query")
+        .and_then(|query| query.get("chromeDesktopControl"))
+        .and_then(|capability| capability.get("token"))
+        .and_then(Value::as_str)
+    {
+        frame["chromeDesktopCapabilityToken"] = Value::String(token.to_string());
+    }
+    frame
+}
+
 pub(crate) fn finalize_worker_run(
     bridge: &Arc<Bridge>,
     frame: &Value,
@@ -4257,7 +4273,10 @@ pub(crate) fn finalize_worker_run(
                 .collect(),
         );
     }
-    if let Some(token) = frame.get("chromeDesktopCapabilityToken").and_then(Value::as_str) {
+    if let Some(token) = frame
+        .get("chromeDesktopCapabilityToken")
+        .and_then(Value::as_str)
+    {
         body["chromeDesktopCapabilityToken"] = Value::String(token.to_string());
     }
     if let Some(token) = frame.get("browserCapabilityToken").and_then(Value::as_str) {

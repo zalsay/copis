@@ -2621,13 +2621,12 @@ export function AgentConversationSurface({
   const allExitPlanRequests = useAtomValue(allPendingExitPlanRequestsAtom)
   const chromeDesktopState = useAtomValue(chromeDesktopSessionStateAtom)
   const hasExitPlanBanner = shouldShowExitPlanBanner(variant, allExitPlanRequests.get(sessionId)?.length ?? 0)
-  const isChromeDesktopAwaitingUser =
-    chromeDesktopState?.sessionId === sessionId && chromeDesktopState.state === 'awaiting_user'
+  const isChromeDesktopBusy = chromeDesktopState?.sessionId === sessionId
+    && ['awaiting_user', 'starting', 'active', 'paused', 'error'].includes(chromeDesktopState.state)
   const hasBannerOverlay =
     (allAskUserRequests.get(sessionId)?.length ?? 0) > 0 ||
-    hasExitPlanBanner ||
-    isChromeDesktopAwaitingUser
-  const hasBlockingRequests = hasBannerOverlay || (allPermissionRequests.get(sessionId)?.length ?? 0) > 0
+    hasExitPlanBanner
+  const hasBlockingRequests = hasBannerOverlay || isChromeDesktopBusy || (allPermissionRequests.get(sessionId)?.length ?? 0) > 0
   const canSendQueuedNow = messagesLoaded && (streaming || !messagesRefreshing) && !!agentChannelId && hasAvailableModel && !hasBlockingRequests
   const autoSendingQueuedRef = React.useRef(false)
   const queuedSendInFlightRef = React.useRef(false)
@@ -3032,6 +3031,7 @@ export function AgentConversationSurface({
             </div>
           )
         ) : (
+          <div className="relative flex min-h-0 flex-1 flex-col">
           <AgentMessages
             sessionId={sessionId}
             sessionModelId={agentModelId || undefined}
@@ -3054,6 +3054,8 @@ export function AgentConversationSurface({
             allowAgentQuestion={!compact}
             showHeader={!compact}
           />
+          <ChromeDesktopBanner sessionId={sessionId} />
+          </div>
         )}
 
         {/* 权限请求横幅 */}
@@ -3066,8 +3068,6 @@ export function AgentConversationSurface({
         {/* ExitPlanMode 计划审批横幅；AI浏览器不参与 Copis 计划审批。 */}
         {hasExitPlanBanner && <ExitPlanModeBanner sessionId={sessionId} />}
 
-        {/* ChromeDesktop 桌面控制横幅 */}
-        <ChromeDesktopBanner sessionId={sessionId} />
 
         {/* 输入区域 — 交互横幅显示时隐藏，由横幅替代 */}
         {!hasBannerOverlay && !hideComposer && (

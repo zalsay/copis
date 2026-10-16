@@ -2,7 +2,7 @@
  * Chrome Desktop 桌面视觉自动化 IPC 处理器
  */
 
-import { ipcMain, BrowserWindow } from 'electron'
+import { BrowserWindow, ipcMain, powerMonitor, type IpcMainEvent, type IpcMainInvokeEvent } from 'electron'
 import {
   CHROME_DESKTOP_IPC_CHANNELS,
   type ChromeDesktopErrorCode,
@@ -92,16 +92,66 @@ export function handleFrameResponsePayload(
   return true
 }
 
+function isMainRendererWindow(win: BrowserWindow): boolean {
+  if (win.isDestroyed()) return false
+  const url = win.webContents.mainFrame?.url ?? win.webContents.getURL?.() ?? ''
+  if (!url) return false
+  try {
+    return new URL(url).searchParams.get('window') === null
+  } catch {
+    return false
+  }
+}
+
+function resolveMainWindow(): BrowserWindow | null {
+  return BrowserWindow.getAllWindows().find((win) => isMainRendererWindow(win)) ?? null
+}
+
+function requireMainSender(event: IpcMainEvent | IpcMainInvokeEvent): void {
+  const win = resolveMainWindow()
+  if (!win || event.sender.id !== win.webContents.id || event.senderFrame !== win.webContents.mainFrame) {
+    throw new Error('CHROME_UNSUPPORTED_CONTEXT: 仅允许主窗口顶层调用')
+  }
+}
+
+function requireControlInput(input: unknown): asserts input is { sessionId: string; controlId: string } {
+  if (!input || typeof input !== 'object' || !('sessionId' in input) || typeof input.sessionId !== 'string' || !input.sessionId || !('controlId' in input) || typeof input.controlId !== 'string' || !input.controlId) {
+    throw new Error('CHROME_CAPABILITY_STALE: 缺少控制标识')
+  }
+}
+
+function cancelPendingFrame(): void {
+  const pending = pendingFrameCapture
+  if (!pending) return
+  pendingFrameCapture = null
+  clearTimeout(pending.timer)
+  pending.reject(new Error('CHROME_CANCELLED: 本次采集已结束'))
+}
+
 export function registerChromeDesktopIpcHandlers(): void {
-  // 绑定状态广播给渲染进程
+  // 原生窗口不保证按创建顺序排列，采集只绑定主窗口。
+  const watched = new WeakSet<object>()
+  const watchWindow = () => {
+    const win = resolveMainWindow()
+    if (!win || watched.has(win)) return
+    watched.add(win)
+    const stop = () => { chromeDesktopService.releaseCurrentControl(true); cancelPendingFrame() }
+    win.on('minimize', stop)
+    win.on('closed', stop)
+    win.webContents.on('render-process-gone', stop)
+    win.webContents.on('did-start-navigation', (_event, _url, _isInPlace, isMainFrame) => {
+      if (isMainFrame) stop()
+    })
+  }
   chromeDesktopService.setStateChangedListener((state: ChromeDesktopSessionState) => {
-    const allWins = BrowserWindow.getAllWindows()
-    for (const win of allWins) {
-      if (!win.isDestroyed()) {
-        win.webContents.send(CHROME_DESKTOP_IPC_CHANNELS.STATE_CHANGED, state)
-      }
-    }
+    watchWindow()
+    if (['paused', 'stopped', 'error'].includes(state.state)) cancelPendingFrame()
+    const win = resolveMainWindow()
+    if (win) win.webContents.send(CHROME_DESKTOP_IPC_CHANNELS.STATE_CHANGED, state)
   })
+  const releaseForPowerState = () => { chromeDesktopService.releaseCurrentControl(true); cancelPendingFrame() }
+  powerMonitor.on('lock-screen', releaseForPowerState)
+  powerMonitor.on('suspend', releaseForPowerState)
 
   // 绑定单帧图片提取处理器
   chromeDesktopService.setFrameCapturer((req) => {
@@ -112,9 +162,8 @@ export function registerChromeDesktopIpcHandlers(): void {
         pendingFrameCapture = null
       }
 
-      const allWins = BrowserWindow.getAllWindows()
-      const mainWin = allWins.find((w) => !w.isDestroyed())
-      if (!mainWin) {
+      const mainWin = resolveMainWindow()
+      if (!mainWin || mainWin.isDestroyed()) {
         return reject(new Error('CHROME_CAPTURE_FAILED: 主窗口不可用'))
       }
 
@@ -146,14 +195,16 @@ export function registerChromeDesktopIpcHandlers(): void {
 
   ipcMain.handle(
     CHROME_DESKTOP_IPC_CHANNELS.CHECK_STATUS,
-    async (): Promise<ChromeDesktopSystemStatus> => {
+    async (event): Promise<ChromeDesktopSystemStatus> => {
+      requireMainSender(event)
       return chromeDesktopService.checkSystemStatus()
     },
   )
 
   ipcMain.handle(
     CHROME_DESKTOP_IPC_CHANNELS.LIST_WINDOWS,
-    async (): Promise<ChromeDesktopWindowInfo[]> => {
+    async (event): Promise<ChromeDesktopWindowInfo[]> => {
+      requireMainSender(event)
       return chromeDesktopService.listWindows()
     },
   )
@@ -161,9 +212,12 @@ export function registerChromeDesktopIpcHandlers(): void {
   ipcMain.handle(
     CHROME_DESKTOP_IPC_CHANNELS.PREPARE_CAPTURE,
     async (
-      _,
+      event,
       params: { sessionId: string; controlId: string; windowId: number; pid: number },
     ): Promise<{ ok: boolean; error?: ChromeDesktopErrorCode; message?: string }> => {
+      requireMainSender(event)
+      requireControlInput(params)
+      if (!Number.isSafeInteger(params.windowId) || params.windowId <= 0 || !Number.isSafeInteger(params.pid) || params.pid <= 0) throw new Error('窗口参数不合法')
       return chromeDesktopService.prepareCapture(params)
     },
   )
@@ -171,27 +225,29 @@ export function registerChromeDesktopIpcHandlers(): void {
   ipcMain.handle(
     CHROME_DESKTOP_IPC_CHANNELS.CONFIRM_START,
     async (
-      _,
+      event,
       params: { sessionId: string; controlId: string; windowId: number; pid: number },
     ): Promise<{ ok: boolean; error?: ChromeDesktopErrorCode; message?: string }> => {
+      requireMainSender(event)
+      requireControlInput(params)
+      if (!Number.isSafeInteger(params.windowId) || params.windowId <= 0 || !Number.isSafeInteger(params.pid) || params.pid <= 0) throw new Error('窗口参数不合法')
       return chromeDesktopService.confirmStart(params)
     },
   )
 
   ipcMain.handle(
     CHROME_DESKTOP_IPC_CHANNELS.STOP_CONTROL,
-    async (_, sessionId?: string): Promise<void> => {
-      if (sessionId) {
-        chromeDesktopService.releaseSessionControl(sessionId)
-      } else {
-        chromeDesktopService.releaseCurrentControl(true)
-      }
+    async (event, input: { sessionId: string; controlId: string }): Promise<void> => {
+      requireMainSender(event)
+      requireControlInput(input)
+      chromeDesktopService.releaseSessionControl(input.sessionId, undefined, input.controlId)
     },
   )
 
   ipcMain.handle(
     CHROME_DESKTOP_IPC_CHANNELS.GET_STATE,
-    async (): Promise<ChromeDesktopSessionState | null> => {
+    async (event): Promise<ChromeDesktopSessionState | null> => {
+      requireMainSender(event)
       return chromeDesktopService.getSessionState()
     },
   )
@@ -211,15 +267,18 @@ export function registerChromeDesktopIpcHandlers(): void {
         error?: string
       },
     ) => {
+      try { requireMainSender(event) } catch { return }
       handleFrameResponsePayload(event.sender.id, res)
     },
   )
 
   ipcMain.on(
     CHROME_DESKTOP_IPC_CHANNELS.STREAM_ERROR,
-    (_, error: { reason: ChromeDesktopErrorCode; message: string }) => {
-      console.warn('[ChromeDesktop:IPC] 渲染进程上报采集流错误:', error)
-      chromeDesktopService.releaseCurrentControl(true)
+    (event, error: { controlId: string; reason: ChromeDesktopErrorCode; message: string }) => {
+      try { requireMainSender(event) } catch { return }
+      const state = chromeDesktopService.getSessionState()
+      if (!error || !state || state.controlId !== error.controlId) return
+      chromeDesktopService.releaseSessionControl(state.sessionId, undefined, error.controlId)
     },
   )
 }

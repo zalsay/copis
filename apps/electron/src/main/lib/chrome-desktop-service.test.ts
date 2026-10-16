@@ -19,6 +19,8 @@ class MockHelperClient implements IChromeDesktopHelperClient {
   public pressedKeys: string[] = []
   public scrolledDeltaY: number[] = []
   public cancelled = false
+  public activateCalls = 0
+  public boundsCalls = 0
 
   isAvailable(): boolean {
     return true
@@ -33,7 +35,12 @@ class MockHelperClient implements IChromeDesktopHelperClient {
       { windowId: 101, pid: 2001, title: 'Google Chrome', bounds: { ...this.currentBounds } },
     ]
   }
+  async getWindowBounds(windowId: number, pid: number) {
+    this.boundsCalls++
+    return { ok: true, bounds: { ...this.currentBounds } }
+  }
   async activateWindow(windowId: number, pid: number) {
+    this.activateCalls++
     return { ok: true, bounds: { ...this.currentBounds } }
   }
   async checkTarget(windowId: number, pid: number) {
@@ -206,6 +213,48 @@ describe('ChromeDesktopService BDD Scenarios', () => {
         toolInput: { controlId, frameId, x: 800, y: 600 },
       }),
     ).rejects.toThrow('CHROME_FRAME_STALE')
+  })
+
+  it('Scenario: Start confirms capture in observe mode without foreground activation', async () => {
+    const startResp = await service.handleToolRequest({
+      sessionId: 'session-observe', capabilityToken: 'tok-observe', toolCallId: 'start-observe',
+      toolName: 'ChromeDesktopStart', toolInput: {},
+    })
+    const controlId = startResp.kind === 'json' ? String(startResp.value.controlId) : ''
+    const confirm = await service.confirmStart({ sessionId: 'session-observe', controlId, windowId: 101, pid: 2001 })
+    expect(confirm.ok).toBe(true)
+    expect(mockHelper.activateCalls).toBe(0)
+    expect(service.getSessionState()?.mode).toBe('observe')
+
+    mockHelper.focusLost = true
+    const observed = await service.handleToolRequest({
+      sessionId: 'session-observe', capabilityToken: 'tok-observe', toolCallId: 'observe-background',
+      toolName: 'ChromeDesktopObserve', toolInput: { controlId },
+    })
+    expect(observed.kind).toBe('image')
+    expect(mockHelper.boundsCalls).toBeGreaterThan(0)
+    service.releaseCurrentControl()
+  })
+
+  it('Scenario: First input action activates the target window on demand', async () => {
+    const startResp = await service.handleToolRequest({
+      sessionId: 'session-input', capabilityToken: 'tok-input', toolCallId: 'start-input',
+      toolName: 'ChromeDesktopStart', toolInput: {},
+    })
+    const controlId = startResp.kind === 'json' ? String(startResp.value.controlId) : ''
+    await service.confirmStart({ sessionId: 'session-input', controlId, windowId: 101, pid: 2001 })
+    const observed = await service.handleToolRequest({
+      sessionId: 'session-input', capabilityToken: 'tok-input', toolCallId: 'observe-input',
+      toolName: 'ChromeDesktopObserve', toolInput: { controlId },
+    })
+    const frameId = observed.kind === 'image' ? observed.frame.frameId : ''
+    await service.handleToolRequest({
+      sessionId: 'session-input', capabilityToken: 'tok-input', toolCallId: 'click-input',
+      toolName: 'ChromeDesktopClick', toolInput: { controlId, frameId, x: 10, y: 10 },
+    })
+    expect(mockHelper.activateCalls).toBe(1)
+    expect(service.getSessionState()?.mode).toBe('control')
+    service.releaseCurrentControl()
   })
 
   it('Scenario: Focus lost immediately stops input and enters paused', async () => {
@@ -474,7 +523,7 @@ describe('ChromeDesktopService BDD Scenarios', () => {
         toolName: 'ChromeDesktopObserve',
         toolInput: { controlId: 'different-control-id' },
       }),
-    ).rejects.toThrow('CHROME_TOOL_CALL_COLLISION')
+    ).rejects.toThrow('CHROME_CAPABILITY_STALE')
 
     // 执行动作消耗当前帧
     const frameId = obsResp1.kind === 'image' ? obsResp1.frame.frameId : ''

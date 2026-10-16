@@ -15,6 +15,7 @@ import { PreviewTabContent } from '@/components/diff/PreviewTabContent'
 import { MarkdownToc } from '@/components/diff/MarkdownToc'
 import { TabErrorBoundary } from './TabErrorBoundary'
 import { ChatroomView } from '@/components/chatroom/ChatroomView'
+import { ChromeDesktopPreviewTab } from '@/components/agent/ChromeDesktopPreviewTab'
 
 export interface TabContentProps {
   tabId: string
@@ -46,6 +47,19 @@ export function TabContent({ tabId }: TabContentProps): React.ReactElement {
       <TabErrorBoundary key={tab.id} sessionId={tab.sessionId}>
         <PreviewTabContent sessionId={tab.sessionId} />
       </TabErrorBoundary>
+    )
+  }
+
+  if (tab.type === 'chrome-desktop') {
+    if (!tab.controlId) {
+      return <div className="flex h-full items-center justify-center text-sm text-muted-foreground">Chrome 预览已失效</div>
+    }
+    return (
+      <ChromeDesktopPreviewTab
+        sessionId={tab.sessionId}
+        controlId={tab.controlId}
+        title={tab.title}
+      />
     )
   }
 

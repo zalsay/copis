@@ -41,26 +41,24 @@ func sendResponse(id: String, ok: Bool, data: [String: Any]? = nil, error: Strin
 }
 
 // MARK: - State & Cancellation
-var isCancelled = false
+var cancellationGeneration: UInt64 = 0
 let stateLock = NSLock()
 
-func checkAndResetCancel() -> Bool {
+func currentCancellationGeneration() -> UInt64 {
     stateLock.lock()
     defer { stateLock.unlock() }
-    let val = isCancelled
-    isCancelled = false
-    return val
+    return cancellationGeneration
 }
 
-func checkCancelled() -> Bool {
+func checkCancelled(since generation: UInt64) -> Bool {
     stateLock.lock()
     defer { stateLock.unlock() }
-    return isCancelled
+    return cancellationGeneration != generation
 }
 
 func setCancelled() {
     stateLock.lock()
-    isCancelled = true
+    cancellationGeneration &+= 1
     stateLock.unlock()
 
     // Release any lingering mouse / modifier keys immediately
@@ -77,13 +75,28 @@ func setCancelled() {
 // MARK: - Chrome Target Verification
 let chromeBundleId = "com.google.Chrome"
 
+// AppKit 应用状态依赖主 RunLoop，查询和激活统一回到主线程。
+let desktopWorkspace = NSWorkspace.shared
+
+func onMainThread<T>(_ operation: () -> T) -> T {
+    if Thread.isMainThread { return operation() }
+    return DispatchQueue.main.sync(execute: operation)
+}
+
+// 使用 NSWorkspace 跟踪的应用实例，避免临时 PID 对象的身份信息尚未就绪。
+// 调用方均通过 onMainThread 访问 AppKit 状态。
+func chromeApplication(pid: pid_t) -> NSRunningApplication? {
+    return desktopWorkspace.runningApplications.first {
+        $0.processIdentifier == pid && $0.bundleIdentifier == chromeBundleId && !$0.isTerminated
+    }
+}
+
 func isChromeProcess(pid: pid_t) -> Bool {
-    guard let app = NSRunningApplication(processIdentifier: pid) else { return false }
-    return app.bundleIdentifier == chromeBundleId
+    return onMainThread { chromeApplication(pid: pid) != nil }
 }
 
 func getFrontmostApplicationPid() -> pid_t? {
-    return NSWorkspace.shared.frontmostApplication?.processIdentifier
+    return onMainThread { desktopWorkspace.frontmostApplication?.processIdentifier }
 }
 
 func getWindowInfo(windowId: CGWindowID, pid: pid_t) -> [String: Any]? {
@@ -119,6 +132,27 @@ func getWindowInfo(windowId: CGWindowID, pid: pid_t) -> [String: Any]? {
     return nil
 }
 
+func getFocusedWindowId(pid: pid_t) -> CGWindowID? {
+    var focusedWindow: CFTypeRef?
+    guard AXUIElementCopyAttributeValue(
+        AXUIElementCreateApplication(pid), kAXFocusedWindowAttribute as CFString, &focusedWindow
+    ) == .success,
+          let window = focusedWindow,
+          CFGetTypeID(window) == AXUIElementGetTypeID() else { return nil }
+    var windowId: CGWindowID = 0
+    guard _AXUIElementGetWindow(window as! AXUIElement, &windowId) == .success, windowId > 0 else { return nil }
+    return windowId
+}
+
+func logFocusDiagnostics(windowId: CGWindowID, pid: pid_t) {
+    let focusedPid = getFrontmostApplicationPid() ?? -1
+    let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
+    let top = windows.filter { ($0[kCGWindowLayer as String] as? Int) == 0 }.prefix(3)
+        .map { "\($0[kCGWindowOwnerPID as String] ?? -1):\($0[kCGWindowNumber as String] ?? -1)" }.joined(separator: ",")
+    let focusedWindowId = getFocusedWindowId(pid: pid) ?? 0
+    logDiag("焦点诊断 target=\(pid):\(windowId) focusedPid=\(focusedPid) focusedWindow=\(focusedWindowId) topWindows=\(top)")
+}
+
 func verifyTargetInForeground(windowId: CGWindowID, pid: pid_t) -> (ok: Bool, bounds: [String: Any]?, error: String?) {
     guard isChromeProcess(pid: pid) else {
         return (false, nil, "CHROME_WINDOW_UNAVAILABLE")
@@ -132,7 +166,26 @@ func verifyTargetInForeground(windowId: CGWindowID, pid: pid_t) -> (ok: Bool, bo
         return (false, nil, "CHROME_WINDOW_UNAVAILABLE")
     }
 
+    // 显示层级不等于键盘焦点：共享指示条等非激活窗口可能排在页面上方。
+    // 只接受前台 Chrome 进程中真正获得焦点的、用户已授权的窗口。
+    guard getFocusedWindowId(pid: pid) == windowId else {
+        return (false, nil, "CHROME_FOCUS_LOST")
+    }
+
     return (true, bounds, nil)
+}
+
+func waitForTargetInForeground(windowId: CGWindowID, pid: pid_t, generation: UInt64, timeoutMs: useconds_t = 1_000_000) -> (ok: Bool, bounds: [String: Any]?, error: String?) {
+    let deadline = Date().addingTimeInterval(Double(timeoutMs) / 1_000_000.0)
+    var lastStatus = verifyTargetInForeground(windowId: windowId, pid: pid)
+    while !lastStatus.ok && Date() < deadline {
+        if checkCancelled(since: generation) {
+            return (false, nil, "CHROME_CANCELLED")
+        }
+        usleep(50_000)
+        lastStatus = verifyTargetInForeground(windowId: windowId, pid: pid)
+    }
+    return lastStatus
 }
 
 func listChromeWindows() -> [[String: Any]] {
@@ -184,9 +237,9 @@ func _AXUIElementGetWindow(_ element: AXUIElement, _ identifier: UnsafeMutablePo
 
 func activateWindow(windowId: CGWindowID, pid: pid_t) -> Bool {
     guard isChromeProcess(pid: pid) else { return false }
-    guard let app = NSRunningApplication(processIdentifier: pid) else { return false }
-
-    let activated = app.activate(options: [.activateIgnoringOtherApps])
+    let activated = onMainThread {
+        chromeApplication(pid: pid)?.activate(options: [.activateIgnoringOtherApps]) ?? false
+    }
     if !activated {
         return false
     }
@@ -201,8 +254,13 @@ func activateWindow(windowId: CGWindowID, pid: pid_t) -> Bool {
         for axWin in axWindows {
             var idRef: CGWindowID = 0
             if _AXUIElementGetWindow(axWin, &idRef) == .success && idRef == windowId {
+                // Chrome 同一进程可能有多个窗口；仅 raise 不一定改变 focused/main window。
+                // 先设置应用焦点窗口和窗口 main 属性，再执行 raise，确保后续 CGEvent
+                // 投递到用户实际选中的窗口。
+                AXUIElementSetAttributeValue(axApp, kAXFocusedWindowAttribute as CFString, axWin)
+                AXUIElementSetAttributeValue(axWin, kAXMainAttribute as CFString, kCFBooleanTrue)
                 AXUIElementPerformAction(axWin, kAXRaiseAction as CFString)
-                usleep(40_000)
+                usleep(100_000)
                 return true
             }
         }
@@ -236,12 +294,12 @@ let keyMapping: [String: (CGKeyCode, CGEventFlags)] = [
     "Alt+ArrowRight": (124, [.maskAlternate])
 ]
 
-func performPress(key: String) -> Bool {
+func performPress(key: String, generation: UInt64) -> Bool {
     guard let (keyCode, flags) = keyMapping[key] else {
         return false
     }
 
-    if checkCancelled() { return false }
+    if checkCancelled(since: generation) { return false }
 
     let source = CGEventSource(stateID: .combinedSessionState)
     guard let downEvent = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: true),
@@ -258,11 +316,11 @@ func performPress(key: String) -> Bool {
     return true
 }
 
-func performType(text: String) -> Bool {
+func performType(text: String, windowId: CGWindowID, pid: pid_t, generation: UInt64) -> Bool {
     let source = CGEventSource(stateID: .combinedSessionState)
 
     for char in text {
-        if checkCancelled() { return false }
+        if checkCancelled(since: generation) || !verifyTargetInForeground(windowId: windowId, pid: pid).ok { return false }
 
         var utf16Chars = Array(char.utf16)
         guard let down = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: true),
@@ -282,8 +340,22 @@ func performType(text: String) -> Bool {
     return true
 }
 
-func performClick(screenX: Double, screenY: Double, clickCount: Int) -> Bool {
-    if checkCancelled() { return false }
+func targetReceivesPointer(windowId: CGWindowID, pid: pid_t, x: Double, y: Double) -> Bool {
+    var hit: AXUIElement?
+    guard AXUIElementCopyElementAtPosition(AXUIElementCreateSystemWide(), Float(x), Float(y), &hit) == .success,
+          let element = hit else { return false }
+    var ownerPid: pid_t = 0
+    guard AXUIElementGetPid(element, &ownerPid) == .success, ownerPid == pid else { return false }
+    var windowValue: CFTypeRef?
+    guard AXUIElementCopyAttributeValue(element, kAXWindowAttribute as CFString, &windowValue) == .success,
+          let window = windowValue,
+          CFGetTypeID(window) == AXUIElementGetTypeID() else { return false }
+    var hitWindowId: CGWindowID = 0
+    return _AXUIElementGetWindow(window as! AXUIElement, &hitWindowId) == .success && hitWindowId == windowId
+}
+
+func performClick(screenX: Double, screenY: Double, clickCount: Int, windowId: CGWindowID, pid: pid_t, generation: UInt64) -> Bool {
+    if checkCancelled(since: generation) || !verifyTargetInForeground(windowId: windowId, pid: pid).ok { return false }
 
     let point = CGPoint(x: screenX, y: screenY)
     let source = CGEventSource(stateID: .combinedSessionState)
@@ -297,7 +369,7 @@ func performClick(screenX: Double, screenY: Double, clickCount: Int) -> Bool {
 
     let count = max(1, min(clickCount, 2))
     for i in 1...count {
-        if checkCancelled() { return false }
+        if checkCancelled(since: generation) || !verifyTargetInForeground(windowId: windowId, pid: pid).ok { return false }
 
         guard let down = CGEvent(mouseEventSource: source, mouseType: .leftMouseDown, mouseCursorPosition: point, mouseButton: .left),
               let up = CGEvent(mouseEventSource: source, mouseType: .leftMouseUp, mouseCursorPosition: point, mouseButton: .left) else {
@@ -316,8 +388,8 @@ func performClick(screenX: Double, screenY: Double, clickCount: Int) -> Bool {
     return true
 }
 
-func performScroll(screenX: Double, screenY: Double, deltaY: Int) -> Bool {
-    if checkCancelled() { return false }
+func performScroll(screenX: Double, screenY: Double, deltaY: Int, windowId: CGWindowID, pid: pid_t, generation: UInt64) -> Bool {
+    if checkCancelled(since: generation) || !verifyTargetInForeground(windowId: windowId, pid: pid).ok { return false }
 
     let point = CGPoint(x: screenX, y: screenY)
     let source = CGEventSource(stateID: .combinedSessionState)
@@ -327,7 +399,7 @@ func performScroll(screenX: Double, screenY: Double, deltaY: Int) -> Bool {
         usleep(5_000)
     }
 
-    if checkCancelled() { return false }
+    if checkCancelled(since: generation) || !verifyTargetInForeground(windowId: windowId, pid: pid).ok || !targetReceivesPointer(windowId: windowId, pid: pid, x: screenX, y: screenY) { return false }
 
     // Spec: deltaY > 0 scrolls down
     guard let scrollEvent = CGEvent(scrollWheelEvent2Source: source, units: .pixel, wheelCount: 1, wheel1: Int32(-deltaY), wheel2: 0, wheel3: 0) else {
@@ -355,53 +427,81 @@ let actionQueue = DispatchQueue(label: "com.copis.chrome-desktop-helper.actions"
 // MARK: - Main Loop (stdin processing)
 logDiag("Started, awaiting JSON commands.")
 
-while let line = readLine(strippingNewline: true) {
-    let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
-    if trimmed.isEmpty { continue }
+// 读取管道不能阻塞 AppKit 主线程，否则常驻进程一直看到旧的前台应用。
+DispatchQueue.global(qos: .userInitiated).async {
+    while let line = readLine(strippingNewline: true) {
+        let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty { continue }
 
-    guard let data = trimmed.data(using: .utf8),
-          let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-          let id = json["id"] as? String,
-          let action = json["action"] as? String else {
-        logDiag("Invalid JSON format")
-        continue
-    }
+        guard let data = trimmed.data(using: .utf8),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let id = json["id"] as? String,
+              let action = json["action"] as? String else {
+            logDiag("Invalid JSON format")
+            continue
+        }
 
-    // Cancel and Exit are handled immediately on the main reading thread without waiting for actionQueue
-    if action == "cancel" {
-        setCancelled()
-        sendResponse(id: id, ok: true, data: ["status": "cancelled"])
-        continue
-    }
+        // Cancel and Exit are handled immediately on the main reading thread without waiting for actionQueue
+        if action == "cancel" {
+            setCancelled()
+            sendResponse(id: id, ok: true, data: ["status": "cancelled"])
+            continue
+        }
 
-    if action == "exit" {
-        setCancelled()
-        sendResponse(id: id, ok: true)
-        exit(0)
-    }
+        if action == "exit" {
+            setCancelled()
+            sendResponse(id: id, ok: true)
+            exit(0)
+        }
 
-    // Enqueue input and querying actions to the serial action queue
-    actionQueue.async {
-        switch action {
-        case "check_permissions":
-            let accessibilityGranted = AXIsProcessTrusted()
-            var screenRecordingGranted = false
-            if #available(macOS 10.15, *) {
-                screenRecordingGranted = CGPreflightScreenCaptureAccess()
-            } else {
-                screenRecordingGranted = true
+        // 每条操作绑定入队时的取消代次，取消前排队的命令不会在取消后复活。
+        let generation = currentCancellationGeneration()
+        actionQueue.async {
+            if checkCancelled(since: generation) {
+                sendResponse(id: id, ok: false, error: "CHROME_CANCELLED")
+                return
             }
-            sendResponse(id: id, ok: true, data: [
-                "accessibility": accessibilityGranted,
-                "screenRecording": screenRecordingGranted,
-                "helperPath": CommandLine.arguments[0]
-            ])
+            switch action {
+            case "check_permissions":
+                let accessibilityGranted = AXIsProcessTrusted()
+                var screenRecordingGranted = false
+                if #available(macOS 10.15, *) {
+                    screenRecordingGranted = CGPreflightScreenCaptureAccess()
+                } else {
+                    screenRecordingGranted = true
+                }
+                sendResponse(id: id, ok: true, data: [
+                    "accessibility": accessibilityGranted,
+                    "screenRecording": screenRecordingGranted,
+                    "helperPath": CommandLine.arguments[0]
+                ])
 
-        case "list_windows":
-            let windows = listChromeWindows()
-            sendResponse(id: id, ok: true, data: ["windows": windows])
+            case "list_windows":
+                let windows = listChromeWindows()
+                sendResponse(id: id, ok: true, data: ["windows": windows])
 
-        case "activate_window":
+            case "activate_window":
+                guard let windowIdNum = json["windowId"] as? Int,
+                      let pidNum = json["pid"] as? Int else {
+                    sendResponse(id: id, ok: false, error: "INVALID_PARAMETERS")
+                    return
+                }
+                let winId = CGWindowID(windowIdNum)
+                let pid = pid_t(pidNum)
+                let activated = activateWindow(windowId: winId, pid: pid)
+                if !activated {
+                    sendResponse(id: id, ok: false, error: "CHROME_WINDOW_UNAVAILABLE")
+                    return
+                }
+                let status = waitForTargetInForeground(windowId: winId, pid: pid, generation: generation)
+                if !status.ok {
+                    logFocusDiagnostics(windowId: winId, pid: pid)
+                    sendResponse(id: id, ok: false, error: status.error ?? "CHROME_WINDOW_UNAVAILABLE")
+                } else {
+                    sendResponse(id: id, ok: true, data: ["bounds": status.bounds ?? [:]])
+                }
+
+            case "get_window_bounds":
             guard let windowIdNum = json["windowId"] as? Int,
                   let pidNum = json["pid"] as? Int else {
                 sendResponse(id: id, ok: false, error: "INVALID_PARAMETERS")
@@ -409,130 +509,125 @@ while let line = readLine(strippingNewline: true) {
             }
             let winId = CGWindowID(windowIdNum)
             let pid = pid_t(pidNum)
-            let activated = activateWindow(windowId: winId, pid: pid)
-            if !activated {
-                sendResponse(id: id, ok: false, error: "CHROME_WINDOW_UNAVAILABLE")
-                return
-            }
-            let status = verifyTargetInForeground(windowId: winId, pid: pid)
-            if !status.ok {
-                sendResponse(id: id, ok: false, error: status.error ?? "CHROME_WINDOW_UNAVAILABLE")
+            if let bounds = getWindowInfo(windowId: winId, pid: pid) {
+                sendResponse(id: id, ok: true, data: ["bounds": bounds])
             } else {
-                sendResponse(id: id, ok: true, data: ["bounds": status.bounds ?? [:]])
+                sendResponse(id: id, ok: false, error: "CHROME_WINDOW_UNAVAILABLE")
             }
 
         case "check_target":
-            guard let windowIdNum = json["windowId"] as? Int,
-                  let pidNum = json["pid"] as? Int else {
-                sendResponse(id: id, ok: false, error: "INVALID_PARAMETERS")
-                return
-            }
-            let winId = CGWindowID(windowIdNum)
-            let pid = pid_t(pidNum)
-            let status = verifyTargetInForeground(windowId: winId, pid: pid)
-            if status.ok {
-                sendResponse(id: id, ok: true, data: ["bounds": status.bounds ?? [:]])
-            } else {
-                sendResponse(id: id, ok: false, error: status.error ?? "CHROME_FOCUS_LOST")
-            }
+                guard let windowIdNum = json["windowId"] as? Int,
+                      let pidNum = json["pid"] as? Int else {
+                    sendResponse(id: id, ok: false, error: "INVALID_PARAMETERS")
+                    return
+                }
+                let winId = CGWindowID(windowIdNum)
+                let pid = pid_t(pidNum)
+                let status = verifyTargetInForeground(windowId: winId, pid: pid)
+                if status.ok {
+                    sendResponse(id: id, ok: true, data: ["bounds": status.bounds ?? [:]])
+                } else {
+                    logFocusDiagnostics(windowId: winId, pid: pid)
+                    sendResponse(id: id, ok: false, error: status.error ?? "CHROME_FOCUS_LOST")
+                }
 
-        case "click":
-            _ = checkAndResetCancel()
-            guard let windowIdNum = json["windowId"] as? Int,
-                  let pidNum = json["pid"] as? Int,
-                  let screenX = json["screenX"] as? Double,
-                  let screenY = json["screenY"] as? Double else {
-                sendResponse(id: id, ok: false, error: "INVALID_PARAMETERS")
-                return
-            }
-            let clickCount = (json["clickCount"] as? Int) ?? 1
-            let winId = CGWindowID(windowIdNum)
-            let pid = pid_t(pidNum)
-            let status = verifyTargetInForeground(windowId: winId, pid: pid)
-            guard status.ok else {
-                sendResponse(id: id, ok: false, error: status.error ?? "CHROME_FOCUS_LOST")
-                return
-            }
-            let success = performClick(screenX: screenX, screenY: screenY, clickCount: clickCount)
-            if success {
-                sendResponse(id: id, ok: true)
-            } else {
-                sendResponse(id: id, ok: false, error: checkCancelled() ? "CHROME_CANCELLED" : "CHROME_HELPER_FAILED")
-            }
+            case "click":
+                guard let windowIdNum = json["windowId"] as? Int,
+                      let pidNum = json["pid"] as? Int,
+                      let screenX = json["screenX"] as? Double,
+                      let screenY = json["screenY"] as? Double else {
+                    sendResponse(id: id, ok: false, error: "INVALID_PARAMETERS")
+                    return
+                }
+                let clickCount = (json["clickCount"] as? Int) ?? 1
+                let winId = CGWindowID(windowIdNum)
+                let pid = pid_t(pidNum)
+                let status = verifyTargetInForeground(windowId: winId, pid: pid)
+                guard status.ok else {
+                    sendResponse(id: id, ok: false, error: status.error ?? "CHROME_FOCUS_LOST")
+                    return
+                }
+                let success = performClick(screenX: screenX, screenY: screenY, clickCount: clickCount, windowId: winId, pid: pid, generation: generation)
+                if success {
+                    sendResponse(id: id, ok: true)
+                } else {
+                    sendResponse(id: id, ok: false, error: checkCancelled(since: generation) ? "CHROME_CANCELLED" : "CHROME_HELPER_FAILED")
+                }
 
-        case "scroll":
-            _ = checkAndResetCancel()
-            guard let windowIdNum = json["windowId"] as? Int,
-                  let pidNum = json["pid"] as? Int,
-                  let screenX = json["screenX"] as? Double,
-                  let screenY = json["screenY"] as? Double,
-                  let deltaY = json["deltaY"] as? Int else {
-                sendResponse(id: id, ok: false, error: "INVALID_PARAMETERS")
-                return
-            }
-            let winId = CGWindowID(windowIdNum)
-            let pid = pid_t(pidNum)
-            let status = verifyTargetInForeground(windowId: winId, pid: pid)
-            guard status.ok else {
-                sendResponse(id: id, ok: false, error: status.error ?? "CHROME_FOCUS_LOST")
-                return
-            }
-            let success = performScroll(screenX: screenX, screenY: screenY, deltaY: deltaY)
-            if success {
-                sendResponse(id: id, ok: true)
-            } else {
-                sendResponse(id: id, ok: false, error: checkCancelled() ? "CHROME_CANCELLED" : "CHROME_HELPER_FAILED")
-            }
+            case "scroll":
+                guard let windowIdNum = json["windowId"] as? Int,
+                      let pidNum = json["pid"] as? Int,
+                      let screenX = json["screenX"] as? Double,
+                      let screenY = json["screenY"] as? Double,
+                      let deltaY = json["deltaY"] as? Int else {
+                    sendResponse(id: id, ok: false, error: "INVALID_PARAMETERS")
+                    return
+                }
+                let winId = CGWindowID(windowIdNum)
+                let pid = pid_t(pidNum)
+                let status = verifyTargetInForeground(windowId: winId, pid: pid)
+                guard status.ok else {
+                    sendResponse(id: id, ok: false, error: status.error ?? "CHROME_FOCUS_LOST")
+                    return
+                }
+                let success = performScroll(screenX: screenX, screenY: screenY, deltaY: deltaY, windowId: winId, pid: pid, generation: generation)
+                if success {
+                    sendResponse(id: id, ok: true)
+                } else {
+                    sendResponse(id: id, ok: false, error: checkCancelled(since: generation) ? "CHROME_CANCELLED" : "CHROME_HELPER_FAILED")
+                }
 
-        case "type":
-            _ = checkAndResetCancel()
-            guard let windowIdNum = json["windowId"] as? Int,
-                  let pidNum = json["pid"] as? Int,
-                  let text = json["text"] as? String else {
-                sendResponse(id: id, ok: false, error: "INVALID_PARAMETERS")
-                return
-            }
-            let winId = CGWindowID(windowIdNum)
-            let pid = pid_t(pidNum)
-            let status = verifyTargetInForeground(windowId: winId, pid: pid)
-            guard status.ok else {
-                sendResponse(id: id, ok: false, error: status.error ?? "CHROME_FOCUS_LOST")
-                return
-            }
-            let success = performType(text: text)
-            if success {
-                sendResponse(id: id, ok: true)
-            } else {
-                sendResponse(id: id, ok: false, error: "CHROME_CANCELLED")
-            }
+            case "type":
+                guard let windowIdNum = json["windowId"] as? Int,
+                      let pidNum = json["pid"] as? Int,
+                      let text = json["text"] as? String else {
+                    sendResponse(id: id, ok: false, error: "INVALID_PARAMETERS")
+                    return
+                }
+                let winId = CGWindowID(windowIdNum)
+                let pid = pid_t(pidNum)
+                let status = verifyTargetInForeground(windowId: winId, pid: pid)
+                guard status.ok else {
+                    sendResponse(id: id, ok: false, error: status.error ?? "CHROME_FOCUS_LOST")
+                    return
+                }
+                let success = performType(text: text, windowId: winId, pid: pid, generation: generation)
+                if success {
+                    sendResponse(id: id, ok: true)
+                } else {
+                    sendResponse(id: id, ok: false, error: "CHROME_CANCELLED")
+                }
 
-        case "press":
-            _ = checkAndResetCancel()
-            guard let windowIdNum = json["windowId"] as? Int,
-                  let pidNum = json["pid"] as? Int,
-                  let key = json["key"] as? String else {
-                sendResponse(id: id, ok: false, error: "INVALID_PARAMETERS")
-                return
-            }
-            let winId = CGWindowID(windowIdNum)
-            let pid = pid_t(pidNum)
-            let status = verifyTargetInForeground(windowId: winId, pid: pid)
-            guard status.ok else {
-                sendResponse(id: id, ok: false, error: status.error ?? "CHROME_FOCUS_LOST")
-                return
-            }
-            let success = performPress(key: key)
-            if success {
-                sendResponse(id: id, ok: true)
-            } else {
-                sendResponse(id: id, ok: false, error: checkCancelled() ? "CHROME_CANCELLED" : "INVALID_KEY")
-            }
+            case "press":
+                guard let windowIdNum = json["windowId"] as? Int,
+                      let pidNum = json["pid"] as? Int,
+                      let key = json["key"] as? String else {
+                    sendResponse(id: id, ok: false, error: "INVALID_PARAMETERS")
+                    return
+                }
+                let winId = CGWindowID(windowIdNum)
+                let pid = pid_t(pidNum)
+                let status = verifyTargetInForeground(windowId: winId, pid: pid)
+                guard status.ok else {
+                    sendResponse(id: id, ok: false, error: status.error ?? "CHROME_FOCUS_LOST")
+                    return
+                }
+                let success = performPress(key: key, generation: generation)
+                if success {
+                    sendResponse(id: id, ok: true)
+                } else {
+                    sendResponse(id: id, ok: false, error: checkCancelled(since: generation) ? "CHROME_CANCELLED" : "INVALID_KEY")
+                }
 
-        default:
-            sendResponse(id: id, ok: false, error: "UNKNOWN_ACTION")
+            default:
+                sendResponse(id: id, ok: false, error: "UNKNOWN_ACTION")
+            }
         }
     }
+
+    logDiag("stdin EOF reached, helper exiting.")
+    exit(0)
 }
 
-logDiag("stdin EOF reached, helper exiting.")
-exit(0)
+RunLoop.main.add(Port(), forMode: .default)
+RunLoop.main.run()

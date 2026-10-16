@@ -9,7 +9,7 @@
 import * as React from 'react'
 import { createPortal } from 'react-dom'
 import { useAtomValue } from 'jotai'
-import { FileText, X, Clock, GitBranch } from 'lucide-react'
+import { FileText, X, Clock, GitBranch, Monitor } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import type { TabType, TabMinimapItem } from '@/atoms/tab-atoms'
 import type { SessionIndicatorStatus } from '@/atoms/agent-atoms'
@@ -133,6 +133,9 @@ export function TabBarItem({
       >
         {type === 'preview' && !isNarrow && (
           <FileText className="size-3.5 shrink-0 text-muted-foreground" />
+        )}
+        {type === 'chrome-desktop' && !isNarrow && (
+          <Monitor className="size-3.5 shrink-0 text-primary" />
         )}
 
         {/* 标题（窄状态下隐藏，用 spacer 撑开让关闭按钮靠右） */}

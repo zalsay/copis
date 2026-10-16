@@ -20,6 +20,7 @@ import type {
   ChromeDesktopFrameResult,
   ChromeDesktopSessionState,
   ChromeDesktopState,
+  ChromeDesktopMode,
   ChromeDesktopSystemStatus,
   ChromeDesktopToolName,
   ChromeDesktopToolRequest,
@@ -76,6 +77,7 @@ interface ActiveControlRecord {
   capabilityToken?: string
   runGeneration: number
   state: ChromeDesktopState
+  mode: ChromeDesktopMode
   createdAt: number
   toolCallId?: string
   targetWindow: ChromeDesktopWindowInfo | null
@@ -86,7 +88,7 @@ interface ActiveControlRecord {
   pauseReason?: ChromeDesktopErrorCode
   errorMessage?: string
   shortcut: string
-  pollResolvers: Map<string, (resp: ChromeDesktopToolResponse) => void>
+  authorizationTimer?: ReturnType<typeof setTimeout>
   seenObserveToolCallIds: Set<string>
   latestObservedFrame?: {
     toolCallId: string
@@ -177,11 +179,18 @@ export class ChromeDesktopService {
   }
 
   private broadcastState(): void {
-    if (!this.stateChangedListener) return
     const snapshot = this.getSessionState()
-    if (snapshot) {
-      this.stateChangedListener(snapshot)
-    }
+    if (!snapshot) return
+    // 不记录截图、窗口标题、输入文字或 capability token，仅记录状态和阶段耗时。
+    console.info('[ChromeDesktopService] 控制状态更新', {
+      controlId: snapshot.controlId,
+      state: snapshot.state,
+      mode: snapshot.mode,
+      reason: snapshot.pauseReason,
+      elapsedMs: Date.now() - snapshot.createdAt,
+      windowId: snapshot.targetWindow?.windowId ?? null,
+    })
+    this.stateChangedListener?.(snapshot)
   }
 
   getSessionState(): ChromeDesktopSessionState | null {
@@ -190,6 +199,7 @@ export class ChromeDesktopService {
       controlId: this.activeControl.controlId,
       sessionId: this.activeControl.sessionId,
       state: this.activeControl.state,
+      mode: this.activeControl.mode,
       targetWindow: this.activeControl.targetWindow,
       pauseReason: this.activeControl.pauseReason,
       errorMessage: this.activeControl.errorMessage,
@@ -198,13 +208,13 @@ export class ChromeDesktopService {
     }
   }
 
-  getPendingCaptureTarget(): { windowId: number; pid: number } | null {
+  getPendingCaptureTarget(): { controlId: string; windowId: number; pid: number } | null {
     if (!this.activeControl) return null
     if (this.activeControl.state !== 'starting' && this.activeControl.state !== 'awaiting_user') {
       return null
     }
     return this.activeControl.targetWindow
-      ? { windowId: this.activeControl.targetWindow.windowId, pid: this.activeControl.targetWindow.pid }
+      ? { controlId: this.activeControl.controlId, windowId: this.activeControl.targetWindow.windowId, pid: this.activeControl.targetWindow.pid }
       : null
   }
 
@@ -315,6 +325,10 @@ export class ChromeDesktopService {
   async handleToolRequest(request: ChromeDesktopToolRequest): Promise<ChromeDesktopToolResponse> {
     const { sessionId, capabilityToken, toolCallId, toolName, toolInput } = request
 
+    // 缓存不是授权来源，重放前也必须核对所属控制实例。
+    if (toolName !== 'ChromeDesktopStart' && toolName !== 'ChromeDesktopStop') {
+      this.validateActiveControl(sessionId, toolInput.controlId as string, capabilityToken)
+    }
     const inputHash = this.computeInputHash(toolInput)
     const currentControlId = this.activeControl?.controlId
     const cacheKey = this.getActionCacheKey(sessionId, currentControlId, toolCallId)
@@ -325,7 +339,7 @@ export class ChromeDesktopService {
       if (record) {
         const cachedFrame = record.latestObservedFrame
         if (cachedFrame && cachedFrame.toolCallId === toolCallId) {
-          if (Date.now() - cachedFrame.timestamp <= ACTION_HISTORY_TTL_MS) {
+          if (Date.now() - cachedFrame.timestamp <= 30_000) {
             if (cachedFrame.inputHash === inputHash) {
               return cachedFrame.response
             }
@@ -340,7 +354,7 @@ export class ChromeDesktopService {
       const cached = this.actionHistory.get(cacheKey)
       if (cached) {
         if (Date.now() - cached.timestamp <= ACTION_HISTORY_TTL_MS) {
-          if (cached.inputHash === inputHash) {
+          if (cached.toolName === toolName && cached.inputHash === inputHash) {
             return cached.response
           }
           throw new Error('CHROME_TOOL_CALL_COLLISION: 同一 toolCallId 提交了不同的输入参数')
@@ -374,7 +388,7 @@ export class ChromeDesktopService {
    */
   private async handleStart(sessionId: string, toolCallId: string, capabilityToken?: string): Promise<ChromeDesktopToolResponse> {
     // 检查是否有其他会话正在占用
-    if (this.activeControl && this.activeControl.sessionId !== sessionId && this.activeControl.state !== 'stopped' && this.activeControl.state !== 'error') {
+    if (this.activeControl && this.activeControl.sessionId !== sessionId && !['stopped', 'error', 'paused'].includes(this.activeControl.state)) {
       return {
         kind: 'json',
         value: {
@@ -413,7 +427,8 @@ export class ChromeDesktopService {
           value: {
             status: record.state,
             controlId: record.controlId,
-            error: record.pauseReason ?? record.errorMessage ?? 'CHROME_CANCELLED',
+            error: record.pauseReason ?? 'CHROME_CANCELLED',
+            message: record.errorMessage,
           },
         }
       }
@@ -440,6 +455,7 @@ export class ChromeDesktopService {
       capabilityToken,
       runGeneration: generation,
       state: 'awaiting_user',
+      mode: 'observe',
       createdAt: Date.now(),
       toolCallId,
       targetWindow: null,
@@ -448,7 +464,6 @@ export class ChromeDesktopService {
       frameConsumed: false,
       inFlightAction: false,
       shortcut: CHROME_DESKTOP_DEFAULT_SHORTCUT,
-      pollResolvers: new Map(),
       seenObserveToolCallIds: new Set(),
     }
 
@@ -456,11 +471,12 @@ export class ChromeDesktopService {
     this.broadcastState()
 
     // 120 秒超时兜底
-    setTimeout(() => {
+    record.authorizationTimer = setTimeout(() => {
       if (this.activeControl === record && record.state === 'awaiting_user') {
         this.transitionToError(record, 'CHROME_CANCELLED', '等待用户授权超时 (120s)')
       }
     }, 120_000)
+    record.authorizationTimer.unref?.()
 
     return {
       kind: 'json',
@@ -495,6 +511,11 @@ export class ChromeDesktopService {
       title: '',
       bounds: { x: 0, y: 0, width: 0, height: 0 },
     }
+    console.info('[ChromeDesktopService] 用户已选择采集目标，等待媒体采集确认', {
+      controlId: record.controlId,
+      windowId: params.windowId,
+      elapsedMs: Date.now() - record.createdAt,
+    })
     return { ok: true }
   }
 
@@ -523,7 +544,7 @@ export class ChromeDesktopService {
       bounds: { x: 0, y: 0, width: 0, height: 0 },
     }
 
-    // 注册全局紧急停止快捷键
+    // 注册全局紧急停止快捷键；观察模式也需要它来结束采集。
     const shortcutSuccess = this.registerShortcutFn(record.shortcut, () => {
       this.handleEmergencyStop()
     })
@@ -539,28 +560,30 @@ export class ChromeDesktopService {
     record.state = 'starting'
     this.broadcastState()
 
-    // 激活目标 Chrome 窗口
     try {
-      const activateRes = await this.helper.activateWindow(params.windowId, params.pid)
-      if (!activateRes.ok || !activateRes.bounds) {
-        this.transitionToError(record, 'CHROME_WINDOW_UNAVAILABLE', activateRes.error ?? '无法激活目标 Chrome 窗口')
-        return { ok: false, error: 'CHROME_WINDOW_UNAVAILABLE', message: '目标窗口不可用' }
+      const boundsResult = await this.helper.getWindowBounds(params.windowId, params.pid)
+      this.assertCurrentRecord(record, 'starting')
+      if (!boundsResult.ok || !boundsResult.bounds) {
+        const message = `目标窗口不可用${boundsResult.error ? `：${boundsResult.error}` : ''}`
+        this.transitionToError(record, 'CHROME_WINDOW_UNAVAILABLE', message)
+        return { ok: false, error: 'CHROME_WINDOW_UNAVAILABLE', message }
       }
-
       record.targetWindow = {
         windowId: params.windowId,
         pid: params.pid,
-        title: '',
-        bounds: activateRes.bounds,
+        title: record.targetWindow?.title ?? '',
+        bounds: boundsResult.bounds,
       }
-
-      // 关闭主窗口后台节流
+      clearTimeout(record.authorizationTimer)
+      record.mode = 'observe'
       this.setThrottlingFn(false)
-
       record.state = 'active'
       this.broadcastState()
       return { ok: true }
     } catch (e: any) {
+      if (this.activeControl !== record || record.state !== 'starting') {
+        return { ok: false, error: 'CHROME_CAPABILITY_STALE', message: '控制已结束' }
+      }
       this.transitionToError(record, 'CHROME_HELPER_FAILED', e.message)
       return { ok: false, error: 'CHROME_HELPER_FAILED', message: e.message }
     }
@@ -584,65 +607,85 @@ export class ChromeDesktopService {
   private async handleObserve(sessionId: string, toolCallId: string, input: Record<string, unknown>, capabilityToken?: string): Promise<ChromeDesktopToolResponse> {
     const record = this.validateActiveControl(sessionId, input.controlId as string, capabilityToken)
 
-    // 校验前台目标
-    const targetCheck = await this.helper.checkTarget(record.targetWindow!.windowId, record.targetWindow!.pid)
-    if (!targetCheck.ok || !targetCheck.bounds) {
-      this.transitionToPaused(record, 'CHROME_FOCUS_LOST', 'Chrome 窗口失去焦点或已关闭')
-      throw new Error('CHROME_FOCUS_LOST')
+    if (record.inFlightAction) throw new Error('CHROME_BUSY: 已有操作正在执行')
+    record.inFlightAction = true
+    record.latestFrame = null
+    record.latestObservedFrame = undefined
+    try {
+      const targetCheck = await this.helper.getWindowBounds(record.targetWindow!.windowId, record.targetWindow!.pid)
+      this.assertCurrentRecord(record)
+      if (!targetCheck.ok || !targetCheck.bounds) {
+        this.transitionToPaused(record, 'CHROME_FOCUS_LOST', 'Chrome 窗口失去焦点或已关闭')
+        throw new Error('CHROME_FOCUS_LOST')
+      }
+
+      // 更新最新几何位置
+      record.targetWindow!.bounds = targetCheck.bounds
+
+      if (!this.captureFrameFn) {
+        throw new Error('未注册帧捕获处理器')
+      }
+
+      // 请求一帧（最长 2 秒）
+      const capturePromise = this.captureFrameFn({
+        controlId: record.controlId,
+        geometryVersion: record.geometryVersion,
+      })
+
+      let frameTimer: ReturnType<typeof setTimeout> | undefined
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        frameTimer = setTimeout(() => reject(new Error('CHROME_CAPTURE_FAILED: 帧捕获超时 (2s)')), 2000)
+      })
+
+      const captured = await Promise.race([capturePromise, timeoutPromise]).finally(() => clearTimeout(frameTimer))
+      this.assertCurrentRecord(record)
+
+      if (!Number.isInteger(captured.width) || !Number.isInteger(captured.height) || captured.width <= 0 || captured.height <= 0 || Math.max(captured.width, captured.height) > 1600 || !captured.data || captured.data.length > 1_398_104) {
+        throw new Error('CHROME_CAPTURE_FAILED: 图片尺寸或内容不合法')
+      }
+
+      // 校验抓取时间戳是否在 2 秒内
+      const age = Date.now() - captured.capturedAt
+      if (age > 2000 || age < 0) {
+        throw new Error('CHROME_FRAME_STALE: 采集帧已过期，请重试 ChromeDesktopObserve，无需重新授权')
+      }
+
+      const frameId = `frm_${randomUUID().replace(/-/g, '').slice(0, 16)}`
+      record.geometryVersion += 1
+      record.latestFrame = {
+        controlId: record.controlId,
+        frameId,
+        width: captured.width,
+        height: captured.height,
+        capturedAt: captured.capturedAt,
+        geometryVersion: record.geometryVersion,
+        ...(captured.presentedFrames !== undefined ? { presentedFrames: captured.presentedFrames } : {}),
+        ...(captured.mediaTime !== undefined ? { mediaTime: captured.mediaTime } : {}),
+        ...(captured.encodedAt !== undefined ? { encodedAt: captured.encodedAt } : {}),
+      }
+      record.frameConsumed = false
+
+      const response: ChromeDesktopToolResponse = {
+        kind: 'image',
+        frame: record.latestFrame,
+        image: {
+          mimeType: 'image/jpeg',
+          data: captured.data,
+        },
+      }
+
+      this.setCachedAction(sessionId, record.controlId, toolCallId, 'ChromeDesktopObserve', this.computeInputHash(input), response)
+      return response
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '取帧失败'
+      // 暂时没有新帧不等于授权失效；旧帧在 Observe 开始时已清空，重试不会绕过新鲜度校验。
+      if (this.activeControl === record && record.state === 'active' && !message.startsWith('CHROME_FRAME_STALE')) {
+        this.transitionToPaused(record, 'CHROME_CAPTURE_FAILED', message)
+      }
+      throw error
+    } finally {
+      record.inFlightAction = false
     }
-
-    // 更新最新几何位置
-    record.targetWindow!.bounds = targetCheck.bounds
-
-    if (!this.captureFrameFn) {
-      throw new Error('未注册帧捕获处理器')
-    }
-
-    // 请求一帧（最长 2 秒）
-    const capturePromise = this.captureFrameFn({
-      controlId: record.controlId,
-      geometryVersion: record.geometryVersion,
-    })
-
-    const timeoutPromise = new Promise<never>((_, reject) => {
-      setTimeout(() => reject(new Error('CHROME_CAPTURE_FAILED: 帧捕获超时 (2s)')), 2000)
-    })
-
-    const captured = await Promise.race([capturePromise, timeoutPromise])
-
-    // 校验抓取时间戳是否在 2 秒内
-    const age = Date.now() - captured.capturedAt
-    if (age > 2000 || age < 0) {
-      this.transitionToPaused(record, 'CHROME_FRAME_STALE', '采集帧已过期')
-      throw new Error('CHROME_FRAME_STALE')
-    }
-
-    const frameId = `frm_${randomUUID().replace(/-/g, '').slice(0, 16)}`
-    record.geometryVersion += 1
-    record.latestFrame = {
-      controlId: record.controlId,
-      frameId,
-      width: captured.width,
-      height: captured.height,
-      capturedAt: captured.capturedAt,
-      geometryVersion: record.geometryVersion,
-      ...(captured.presentedFrames !== undefined ? { presentedFrames: captured.presentedFrames } : {}),
-      ...(captured.mediaTime !== undefined ? { mediaTime: captured.mediaTime } : {}),
-      ...(captured.encodedAt !== undefined ? { encodedAt: captured.encodedAt } : {}),
-    }
-    record.frameConsumed = false
-
-    const response: ChromeDesktopToolResponse = {
-      kind: 'image',
-      frame: record.latestFrame,
-      image: {
-        mimeType: 'image/jpeg',
-        data: captured.data,
-      },
-    }
-
-    this.setCachedAction(sessionId, record.controlId, toolCallId, 'ChromeDesktopObserve', this.computeInputHash(input), response)
-    return response
   }
 
   /**
@@ -675,58 +718,83 @@ export class ChromeDesktopService {
       throw new Error('CHROME_FRAME_STALE: 该帧已被消费，必须重新 Observe')
     }
 
-    // 动作执行会改变目标界面，立即使前一个 Observe 单帧缓存失效
-    record.latestObservedFrame = undefined
+    record.inFlightAction = true
+    try {
+      // 动作执行会改变目标界面，立即使前一个 Observe 单帧缓存失效
+      record.latestObservedFrame = undefined
 
-    // 检查帧时间（30 秒内有效）
-    if (Date.now() - record.latestFrame.capturedAt > 30_000) {
-      this.transitionToPaused(record, 'CHROME_FRAME_STALE', '观察截图已超过 30 秒有效时限')
-      throw new Error('CHROME_FRAME_STALE')
-    }
-
-    // 检查前台目标与几何是否一致
-    const targetCheck = await this.helper.checkTarget(record.targetWindow!.windowId, record.targetWindow!.pid)
-    if (!targetCheck.ok || !targetCheck.bounds) {
-      this.transitionToPaused(record, 'CHROME_FOCUS_LOST', '前台应用不是目标 Chrome 窗口')
-      throw new Error('CHROME_FOCUS_LOST')
-    }
-
-    const bounds = targetCheck.bounds
-    // 检查几何变化（位置或尺寸改变）
-    const prevBounds = record.targetWindow!.bounds
-    if (
-      Math.abs(bounds.x - prevBounds.x) > 2 ||
-      Math.abs(bounds.y - prevBounds.y) > 2 ||
-      Math.abs(bounds.width - prevBounds.width) > 2 ||
-      Math.abs(bounds.height - prevBounds.height) > 2
-    ) {
-      this.transitionToPaused(record, 'CHROME_GEOMETRY_CHANGED', 'Chrome 窗口位置或大小发生改变')
-      throw new Error('CHROME_GEOMETRY_CHANGED')
-    }
-
-    // 消费当前帧
-    record.frameConsumed = true
-
-    let screenX: number | undefined
-    let screenY: number | undefined
-
-    if (typeof input.x === 'number' && typeof input.y === 'number') {
-      const x = Math.round(input.x)
-      const y = Math.round(input.y)
-      if (x < 0 || x > record.latestFrame.width || y < 0 || y > record.latestFrame.height) {
-        throw new Error('坐标超出截图范围')
+      // 检查帧时间（30 秒内有效）
+      const frameAgeMs = Date.now() - record.latestFrame.capturedAt
+      if (frameAgeMs > 30_000) {
+        // 截图过期只撤销旧帧的输入资格，不撤销已授予的窗口观察权限。
+        // 模型推理较慢时可重新 Observe 恢复，不能因此进入 paused 并强制用户再次授权。
+        record.latestFrame = null
+        console.warn('[ChromeDesktopService] 拒绝过期截图动作，保留观察连接', {
+          controlId: record.controlId, frameAgeMs,
+        })
+        throw new Error('CHROME_FRAME_STALE: 观察截图已超过 30 秒，未发送任何输入。请重新调用 ChromeDesktopObserve 获取新帧，无需重新授权')
       }
-      screenX = bounds.x + (x / record.latestFrame.width) * bounds.width
-      screenY = bounds.y + (y / record.latestFrame.height) * bounds.height
-    }
 
-    return { record, bounds, screenX, screenY }
+      // 真正输入前才激活 Chrome，观察模式不会抢占前台。
+      if (record.mode !== 'control') {
+        const activated = await this.helper.activateWindow(record.targetWindow!.windowId, record.targetWindow!.pid)
+        this.assertCurrentRecord(record)
+        if (!activated.ok || !activated.bounds) {
+          throw new Error(activated.error ?? 'CHROME_FOCUS_LOST')
+        }
+        record.mode = 'control'
+        record.targetWindow!.bounds = activated.bounds
+        this.broadcastState()
+      }
+
+      // 检查前台目标与几何是否一致
+      const targetCheck = await this.helper.checkTarget(record.targetWindow!.windowId, record.targetWindow!.pid)
+      this.assertCurrentRecord(record)
+      if (!targetCheck.ok || !targetCheck.bounds) {
+        this.transitionToPaused(record, 'CHROME_FOCUS_LOST', '前台应用不是目标 Chrome 窗口')
+        throw new Error('CHROME_FOCUS_LOST')
+      }
+
+      const bounds = targetCheck.bounds
+      // 检查几何变化（位置或尺寸改变）
+      const prevBounds = record.targetWindow!.bounds
+      if (
+        Math.abs(bounds.x - prevBounds.x) > 2 ||
+        Math.abs(bounds.y - prevBounds.y) > 2 ||
+        Math.abs(bounds.width - prevBounds.width) > 2 ||
+        Math.abs(bounds.height - prevBounds.height) > 2
+      ) {
+        this.transitionToPaused(record, 'CHROME_GEOMETRY_CHANGED', 'Chrome 窗口位置或大小发生改变')
+        throw new Error('CHROME_GEOMETRY_CHANGED')
+      }
+
+
+      let screenX: number | undefined
+      let screenY: number | undefined
+
+      if (typeof input.x === 'number' && typeof input.y === 'number') {
+        const x = input.x
+        const y = input.y
+        if (!Number.isInteger(x) || !Number.isInteger(y) || x < 0 || x >= record.latestFrame.width || y < 0 || y >= record.latestFrame.height) {
+          throw new Error('坐标超出截图范围')
+        }
+        screenX = bounds.x + (x / record.latestFrame.width) * bounds.width
+        screenY = bounds.y + (y / record.latestFrame.height) * bounds.height
+      }
+
+      record.frameConsumed = true
+      return { record, bounds, screenX, screenY }
+    } catch (error) {
+      record.inFlightAction = false
+      throw error
+    }
   }
 
   /**
    * ChromeDesktopClick
    */
   private async handleClick(sessionId: string, toolCallId: string, input: Record<string, unknown>, capabilityToken?: string): Promise<ChromeDesktopToolResponse> {
+    if (!Number.isInteger(input.x) || !Number.isInteger(input.y)) throw new Error('图片坐标必须为整数')
     const { record, screenX, screenY } = await this.prepareAction(sessionId, toolCallId, input, capabilityToken)
     const clickCount = input.clickCount === 2 ? 2 : 1
 
@@ -739,6 +807,8 @@ export class ChromeDesktopService {
         screenY!,
         clickCount,
       )
+
+      this.assertCurrentRecord(record)
 
       if (!res.ok) {
         throw new Error(res.error ?? 'CHROME_HELPER_FAILED')
@@ -775,6 +845,7 @@ export class ChromeDesktopService {
       throw new Error('deltaY 必须为 [-1200, 1200] 区间内非零整数')
     }
 
+    if (!Number.isInteger(input.x) || !Number.isInteger(input.y)) throw new Error('图片坐标必须为整数')
     const { record, screenX, screenY } = await this.prepareAction(sessionId, toolCallId, input, capabilityToken)
 
     record.inFlightAction = true
@@ -786,6 +857,8 @@ export class ChromeDesktopService {
         screenY!,
         deltaY,
       )
+
+      this.assertCurrentRecord(record)
 
       if (!res.ok) {
         throw new Error(res.error ?? 'CHROME_HELPER_FAILED')
@@ -816,12 +889,12 @@ export class ChromeDesktopService {
    * ChromeDesktopType
    */
   private async handleType(sessionId: string, toolCallId: string, input: Record<string, unknown>, capabilityToken?: string): Promise<ChromeDesktopToolResponse> {
-    const text = String(input.text ?? '')
-    if (!text || text.length > 4096) {
+    const text = input.text
+    if (typeof text !== 'string' || !text || [...text].length > 4096) {
       throw new Error('text 长度必须在 1-4096 之间')
     }
     // 拒绝控制字符（允许常见非控制文本）
-    if (/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/.test(text)) {
+    if (/[\u0000-\u001F\u007F-\u009F]/.test(text)) {
       throw new Error('text 包含不合法的控制字符')
     }
 
@@ -835,6 +908,8 @@ export class ChromeDesktopService {
         text,
       )
 
+      this.assertCurrentRecord(record)
+
       if (!res.ok) {
         throw new Error(res.error ?? 'CHROME_HELPER_FAILED')
       }
@@ -844,7 +919,7 @@ export class ChromeDesktopService {
         value: {
           ok: true,
           action: 'type',
-          characterCount: text.length,
+          characterCount: [...text].length,
         },
       }
       this.setCachedAction(sessionId, record.controlId, toolCallId, 'ChromeDesktopType', this.computeInputHash(input), response)
@@ -879,6 +954,8 @@ export class ChromeDesktopService {
         key,
       )
 
+      this.assertCurrentRecord(record)
+
       if (!res.ok) {
         throw new Error(res.error ?? 'CHROME_HELPER_FAILED')
       }
@@ -909,7 +986,7 @@ export class ChromeDesktopService {
    */
   private async handleStop(sessionId: string, toolCallId: string, input: Record<string, unknown>, capabilityToken?: string): Promise<ChromeDesktopToolResponse> {
     const controlId = input.controlId as string | undefined
-    if (this.activeControl && (!controlId || this.activeControl.controlId === controlId)) {
+    if (this.activeControl?.sessionId === sessionId && controlId && this.activeControl.controlId === controlId) {
       if (!capabilityToken || !this.activeControl.capabilityToken || this.activeControl.capabilityToken === capabilityToken) {
         this.releaseCurrentControl(true)
       }
@@ -934,7 +1011,7 @@ export class ChromeDesktopService {
       throw new Error('CHROME_CAPABILITY_STALE: 无活跃的 Chrome 控制任务')
     }
 
-    if (controlId && this.activeControl.controlId !== controlId) {
+    if (!controlId || this.activeControl.controlId !== controlId) {
       throw new Error('CHROME_CAPABILITY_STALE: controlId 不匹配')
     }
 
@@ -949,7 +1026,23 @@ export class ChromeDesktopService {
     return this.activeControl
   }
 
+  private assertCurrentRecord(record: ActiveControlRecord, state: ChromeDesktopState = 'active'): void {
+    if (this.activeControl !== record || record.state !== state) {
+      throw new Error('CHROME_CAPABILITY_STALE: 控制已取消或切换')
+    }
+  }
+
+  private clearControlFrames(record: ActiveControlRecord): void {
+    clearTimeout(record.authorizationTimer)
+    record.latestFrame = null
+    record.latestObservedFrame = undefined
+    record.seenObserveToolCallIds.clear()
+    this.actionHistory.clear()
+  }
+
   private transitionToPaused(record: ActiveControlRecord, reason: ChromeDesktopErrorCode, message: string): void {
+    if (this.activeControl !== record) return
+    this.clearControlFrames(record)
     record.state = 'paused'
     record.pauseReason = reason
     record.errorMessage = message
@@ -960,6 +1053,8 @@ export class ChromeDesktopService {
   }
 
   private transitionToError(record: ActiveControlRecord, error: ChromeDesktopErrorCode, message: string): void {
+    if (this.activeControl !== record) return
+    this.clearControlFrames(record)
     record.state = 'error'
     record.pauseReason = error
     record.errorMessage = message
@@ -980,6 +1075,7 @@ export class ChromeDesktopService {
 
     const record = this.activeControl
     this.nextRunGeneration++
+    this.clearControlFrames(record)
 
     this.helper.cancel().catch(() => {})
     this.unregisterShortcutFn(record.shortcut)
@@ -1004,8 +1100,7 @@ export class ChromeDesktopService {
 
     if (capabilityToken && this.activeControl.capabilityToken && this.activeControl.capabilityToken !== capabilityToken) {
       console.warn('[ChromeDesktopService] 忽略迟到的释放请求: capabilityToken 与当前控制不匹配', {
-        expected: this.activeControl.capabilityToken,
-        received: capabilityToken,
+        sessionId,
       })
       return
     }

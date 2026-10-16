@@ -49,6 +49,8 @@ export type ChromeDesktopErrorCode =
   | 'CHROME_CANCELLED'
   | 'CHROME_CAPABILITY_STALE'
 
+export type ChromeDesktopMode = 'observe' | 'control'
+
 export type ChromeDesktopState =
   | 'idle'
   | 'awaiting_user'
@@ -123,6 +125,7 @@ export interface ChromeDesktopSessionState {
   controlId: string
   sessionId: string
   state: ChromeDesktopState
+  mode?: ChromeDesktopMode
   targetWindow: ChromeDesktopWindowInfo | null
   pauseReason?: ChromeDesktopErrorCode
   errorMessage?: string

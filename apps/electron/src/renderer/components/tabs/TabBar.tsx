@@ -114,7 +114,7 @@ export function TabBar(): React.ReactElement {
     const tab = tabs.find((t) => t.id === tabId)
     if (!tab) return
 
-    if (tab.type === 'agent' || tab.type === 'preview') {
+    if (tab.type === 'agent' || tab.type === 'preview' || tab.type === 'chrome-desktop') {
       const session = validAgentSessions.find((s) => s.id === tab.sessionId)
       if (session?.mode === 'creation' || session?.agentRuntime === 'dsh') {
         setAppMode('creation')

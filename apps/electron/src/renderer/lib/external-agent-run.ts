@@ -3,9 +3,10 @@ import type { AgentStreamState } from '@/atoms/agent-atoms'
 
 export interface ExternalAgentRunTab {
   id: string
-  type: 'agent' | 'preview' | 'tutorial'
+  type: 'agent' | 'preview' | 'chrome-desktop' | 'tutorial'
   sessionId: string
   title: string
+  controlId?: string
 }
 
 export interface ExternalAgentRunActivationInput {
