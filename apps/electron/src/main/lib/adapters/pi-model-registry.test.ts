@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import {
   COPIS_WORKING_MODEL_SOURCE_TYPE_HEADER,
+  COPIS_WORKING_CHANNEL_ID,
   COPIS_WORKING_MODEL_SOURCE_TYPE_COPIS_AGENT,
   COPIS_WORKING_DEEPSEEK_CHANNEL_ID,
   COPIS_WORKING_DEEPSEEK_FAST_MODEL_ID,
@@ -82,4 +83,39 @@ describe('Pi 模型请求头（Working 计费来源）', () => {
     await expect(resolvePiImageInputCapability('openai-responses', COPIS_WORKING_DEEPSEEK_FAST_MODEL_ID)).resolves.toBe('supported')
   })
 
+})
+
+
+describe('内置 GPT 别名图片能力', () => {
+  for (const modelId of ['fast', 'export', 'fast[1m]', 'export[1m]']) {
+    test(`Given Copis 内置 ${modelId} When 判断图片能力 Then 明确 supported`, async () => {
+      await expect(resolvePiImageInputCapability('openai-responses', modelId, COPIS_WORKING_CHANNEL_ID))
+        .resolves.toBe('supported')
+    })
+  }
+
+  for (const modelId of ['fast', 'export']) {
+    test(`Given 内置 GPT ${modelId} When Worker 注册模型 Then 图片输入能力与主进程一致`, async () => {
+      let registered: { input: string[] } | undefined
+      const sdk = { ModelRuntime: { create: async () => ({
+        registerProvider: (_name: string, provider: { models: { input: string[] }[] }) => {
+          registered = provider.models[0]
+        },
+        getModel: () => registered,
+      }) } }
+      const { model } = await buildModel(sdk as never, {
+        sessionId: `gpt-alias-${modelId}`, channelId: COPIS_WORKING_CHANNEL_ID,
+        model: modelId, provider: 'openai-responses', apiKey: 'fixture-token',
+        baseUrl: 'http://127.0.0.1:51730/api/internal/working-model/v1',
+        prompt: '读取图片', systemPrompt: 'fixture', permissionMode: 'bypassPermissions',
+        piAgentDir: '/tmp/pi', piSessionDir: '/tmp/pi/sessions',
+      })
+      expect(model.input).toEqual(['text', 'image'])
+    })
+  }
+
+  test('Given 普通渠道的同名 fast 别名或未知模型 When 判断图片能力 Then 不继承 Copis GPT 别名声明', async () => {
+    await expect(resolvePiImageInputCapability('openai-responses', 'fast', 'custom-channel')).resolves.toBe('unknown')
+    await expect(resolvePiImageInputCapability('openai-responses', 'unknown-vision-fixture', COPIS_WORKING_CHANNEL_ID)).resolves.toBe('unknown')
+  })
 })

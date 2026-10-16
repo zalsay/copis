@@ -762,7 +762,7 @@ export async function prepareAgentRpcRun(input: AgentSendInput, trustedRunId?: s
   const memoryPolicy: MemoryPolicy = isChatroomRun
     ? (chatroomRuntimeContext.memorySource ? 'visible' : 'off')
     : workspace.memoryPolicy ?? settings.defaultMemoryPolicy ?? 'writable'
-  const imageCapability = await resolvePiImageInputCapability(channel.provider, modelId)
+  const imageCapability = await resolvePiImageInputCapability(channel.provider, modelId, channelId)
   const isRemoteBotRun = Boolean(
     isAppConnector
     || trustedSource === 'feishu'

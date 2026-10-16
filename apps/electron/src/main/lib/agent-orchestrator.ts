@@ -1401,7 +1401,7 @@ export class AgentOrchestrator {
         || userMessage?.includes('<copis_vip_upgrade>')
         || userMessage?.includes('alipay-payment-skill')
       )
-      const imageCap = await resolvePiImageInputCapability(channel.provider, selectedModelId)
+      const imageCap = await resolvePiImageInputCapability(channel.provider, selectedModelId, channelId)
       chromeDesktopControl = issueChromeDesktopWorkerCapability({
         sessionId,
         triggeredBy: input.triggeredBy,

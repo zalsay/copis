@@ -20,6 +20,7 @@ import { copyFileSync, existsSync, mkdirSync, rmSync, statSync, unlinkSync } fro
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { createCompiledRuntimeArgs, resolveCompiledRuntimeAssets } from './compiled-runtime-build'
+import { verifyCompiledPiWorker } from './pi-worker-build-smoke'
 import {
   resolveCompiledRuntimeBinaryName,
   resolveCompiledRuntimeDirectoryName,
@@ -127,15 +128,8 @@ try {
   if (smoke.error || smoke.status !== 0) {
     fail(`编译产物无法执行 --help: ${smoke.error?.message ?? `exit ${smoke.status ?? 'unknown'}`}`)
   }
-  const workerSmoke = spawnSync(outFile, ['__pi-worker'], {
-    cwd: repoRoot,
-    input: '{"type":"run","requestId":"__smoke__","config":{"sessionId":"__smoke__","query":{"sessionId":"__smoke__","useRustFileApi":true}}}\n',
-    encoding: 'utf8',
-    windowsHide: true,
-  })
-  if (workerSmoke.error || (workerSmoke.stderr && workerSmoke.stderr.includes('error:'))) {
-    fail(`编译产物无法正常启动 __pi-worker: ${workerSmoke.error?.message ?? workerSmoke.stderr}`)
-  }
+  await verifyCompiledPiWorker(outFile)
+  console.log('[build:cli] 自包含 Pi Worker 工具注册检查通过（7 个 Chrome Desktop 工具）')
   for (const asset of resolveCompiledRuntimeAssets({ photonWasmSource, outDir: targetDir })) {
     copyFileSync(asset.source, asset.destination)
   }

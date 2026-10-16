@@ -61,6 +61,7 @@ export interface VisualDistributionBuildStep {
 }
 
 const VISUAL_DISTRIBUTION_BUILD_STEPS: readonly VisualDistributionBuildStep[] = [
+  { name: '构建 DSH 插件', command: 'build:dsh-creation-web', label: '构建 DSH 插件' },
   { name: '构建主进程', command: 'build:main', label: '构建主进程 (esbuild)' },
   { name: '构建 Preload', command: 'build:preload', label: '构建 Preload (esbuild)' },
   {
@@ -68,9 +69,15 @@ const VISUAL_DISTRIBUTION_BUILD_STEPS: readonly VisualDistributionBuildStep[] = 
     command: 'build:web-javascript-prompt-preload',
     label: '构建 Prompt Preload (esbuild)',
   },
+  { name: '构建 DSH Preload', command: 'build:dsh-bridge-preload', label: '构建 DSH Preload (esbuild)' },
+  { name: '构建 Pi Worker', command: 'build:agent-rpc-worker', label: '构建 Pi Worker (esbuild)' },
   { name: '构建渲染进程', command: 'build:renderer', label: '构建渲染进程 (Vite)' },
   { name: '编译 copis CLI', command: 'build:cli', label: '编译 copis CLI (bun --compile)' },
+  // build:cli 会清理平台 bin 目录，原生 Helper 必须在它之后重建。
+  { name: '编译 Chrome Helper', command: 'build:chrome-desktop-helper', label: '编译 Chrome Desktop Helper (Swift)' },
+  { name: '复制 Pi 扩展', command: 'copy:pi-extensions', label: '复制 Pi 扩展及依赖' },
   { name: '复制资源文件', command: 'build:resources', label: '复制资源文件' },
+  { name: '同步生产依赖', command: 'sync:runtime-deps', label: '同步主进程 external 依赖' },
   { name: 'Electron Builder', command: 'electron-builder', label: 'Electron Builder 打包' },
 ]
 
@@ -209,7 +216,7 @@ function parseArgs(args: string[] = process.argv.slice(2)): DistOptions {
 }
 
 function getElectronBuilderArgs(opts: DistOptions, arch: string): string[] {
-  const builderArgs = ['electron-builder', `--${opts.platform}`]
+  const builderArgs = [`--${opts.platform}`]
 
   // 只构建当前架构
   if (opts.currentArch) {
@@ -247,7 +254,7 @@ function runVisualDistributionBuildStep(
     builderEnv['DEBUG'] = 'electron-builder,electron-builder:*'
   }
 
-  return runner(buildStep.name, 'bunx', getElectronBuilderArgs(opts, arch), {
+  return runner(buildStep.name, 'bun', ['scripts/package-electron-builder.ts', ...getElectronBuilderArgs(opts, arch)], {
     verbose: true, // 打包步骤始终显示输出
     env: builderEnv,
   })

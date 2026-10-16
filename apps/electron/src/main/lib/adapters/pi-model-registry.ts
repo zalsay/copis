@@ -23,6 +23,9 @@ import {
   COPIS_WORKING_MODEL_SOURCE_TYPE_COPIS_AGENT,
   isCopisWorkingChannelId,
   isWorkingCustomModelChannelId,
+  COPIS_WORKING_CHANNEL_ID,
+  COPIS_WORKING_FAST_MODEL_ID,
+  COPIS_WORKING_EXPERT_MODEL_ID,
   COPIS_WORKING_DEEPSEEK_CHANNEL_ID,
   COPIS_WORKING_DEEPSEEK_FAST_MODEL_ID,
 } from '@copis/shared'
@@ -453,6 +456,12 @@ async function findPiCatalogModel(provider: ProviderType, modelId: string): Prom
   return undefined
 }
 
+/** 内置 Working 的 fast/export 是支持图片的 GPT 路由，不能按未知 catalog 别名处理。 */
+function isWorkingGptVisionAlias(channelId: string | undefined, modelId: string | undefined): boolean {
+  return channelId === COPIS_WORKING_CHANNEL_ID
+    && (modelId === COPIS_WORKING_FAST_MODEL_ID || modelId === COPIS_WORKING_EXPERT_MODEL_ID)
+}
+
 /**
  * 解析模型图片输入能力。未知模型保持 unknown，由调用方决定是否保守拒绝。
  * 视觉助手等会产生数据外发的功能必须仅接受 confirmed supported。
@@ -460,9 +469,11 @@ async function findPiCatalogModel(provider: ProviderType, modelId: string): Prom
 export async function resolvePiImageInputCapability(
   provider: ProviderType,
   modelId: string | undefined,
+  channelId?: string,
 ): Promise<'supported' | 'unsupported' | 'unknown'> {
   const resolvedModelId = stripAgentContextSuffix(modelId)
   if (!resolvedModelId) return 'unknown'
+  if (isWorkingGptVisionAlias(channelId, resolvedModelId)) return 'supported'
   // 内置 Working DeepSeek Flash 在 buildModel 中显式声明为多模态，Pi catalog
   // 可能仍保留旧的 text-only 元数据，能力判断必须与实际注册保持一致。
   if (resolvedModelId === COPIS_WORKING_DEEPSEEK_FAST_MODEL_ID) return 'supported'
@@ -727,8 +738,9 @@ export async function buildModel(sdk: PiSdk, input: PiAgentQueryOptions) {
   const modelDefaults = await resolvePiModelDefaults({ ...input, model: resolvedModelId })
   // Pi SDK 目录中的同名条目尚未声明视觉能力；内置 Working 路由已支持该能力，需在注册时显式保留。
   if (
-    input.channelId === COPIS_WORKING_DEEPSEEK_CHANNEL_ID
-    && resolvedModelId === COPIS_WORKING_DEEPSEEK_FAST_MODEL_ID
+    isWorkingGptVisionAlias(input.channelId, resolvedModelId)
+    || (input.channelId === COPIS_WORKING_DEEPSEEK_CHANNEL_ID
+      && resolvedModelId === COPIS_WORKING_DEEPSEEK_FAST_MODEL_ID)
   ) {
     modelDefaults.input = ['text', 'image']
   }

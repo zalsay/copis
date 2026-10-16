@@ -1,22 +1,38 @@
 import { describe, expect, test } from 'bun:test'
 
 const dist = await import('./dist')
+const packageJson = await Bun.file(new URL('../package.json', import.meta.url)).json() as { scripts: Record<string, string> }
 
 describe('visual distribution build plan', () => {
+  test('Given visual/fast/debug 发布 When 对比标准 build Then 必须包含全部构建步骤并在编译 CLI 后重建 Chrome Helper', () => {
+    const standard = packageJson.scripts.build.split(' && ').map(step => step.replace(/^bun run /, ''))
+    for (const variant of ['visual', 'fast', 'debug'] as const) {
+      const commands = dist.getVisualDistributionBuildPlan(variant).map(step => step.command)
+      expect(commands).toEqual([...standard, 'sync:runtime-deps', 'electron-builder'])
+      expect(commands.indexOf('build:chrome-desktop-helper')).toBeGreaterThan(commands.indexOf('build:cli'))
+    }
+  })
+
   test('all visual variants build both preloads before renderer and electron-builder', () => {
     const plan = dist.createVisualDistributionBuildPlan()
 
     expect(plan.map((step) => step.command)).toEqual([
+      'build:dsh-creation-web',
       'build:main',
       'build:preload',
       'build:web-javascript-prompt-preload',
+      'build:dsh-bridge-preload',
+      'build:agent-rpc-worker',
       'build:renderer',
       'build:cli',
+      'build:chrome-desktop-helper',
+      'copy:pi-extensions',
       'build:resources',
+      'sync:runtime-deps',
       'electron-builder',
     ])
 
-    for (const variant of ['visual', 'fast', 'debug']) {
+    for (const variant of ['visual', 'fast', 'debug'] as const) {
       expect(dist.getVisualDistributionBuildPlan(variant)).toEqual(plan)
     }
 
@@ -31,12 +47,18 @@ describe('visual distribution build plan', () => {
 
 describe('visual distribution direct run', () => {
   const expectedBuildCommands = [
+    'build:dsh-creation-web',
     'build:main',
     'build:preload',
     'build:web-javascript-prompt-preload',
+    'build:dsh-bridge-preload',
+    'build:agent-rpc-worker',
     'build:renderer',
     'build:cli',
+    'build:chrome-desktop-helper',
+    'copy:pi-extensions',
     'build:resources',
+    'sync:runtime-deps',
     'electron-builder',
   ]
 
@@ -48,7 +70,7 @@ describe('visual distribution direct run', () => {
       const invocation = [command, ...commandArgs].join(' ')
       calls.push(invocation)
       verboseModes.push(options.verbose)
-      if (command === 'bunx') builderEnv = options.env
+      if (commandArgs[0] === 'scripts/package-electron-builder.ts') builderEnv = options.env
       return {
         name,
         duration: 0,
@@ -97,11 +119,19 @@ describe('visual distribution direct run', () => {
     })
   }
 
+  for (const command of ['build:chrome-desktop-helper', 'copy:pi-extensions', 'sync:runtime-deps']) {
+    test(`Given ${command} 失败 When 发布 Then 不进入 electron-builder`, () => {
+      const { calls, results } = runDirect(['--current-arch', '--dmg'], command)
+      expect(results.at(-1)?.success).toBe(false)
+      expect(calls.some(call => call.includes('scripts/package-electron-builder.ts'))).toBe(false)
+    })
+  }
+
   test('a normal preload failure stops before renderer and electron-builder', () => {
     const { calls, results } = runDirect([], 'build:preload')
 
     expect(results.at(-1)?.success).toBe(false)
-    expect(calls).toHaveLength(2)
+    expect(calls).toHaveLength(3)
     expect(calls.at(-1)).toContain('build:preload')
   })
 
@@ -109,7 +139,7 @@ describe('visual distribution direct run', () => {
     const { calls, results } = runDirect([], 'build:web-javascript-prompt-preload')
 
     expect(results.at(-1)?.success).toBe(false)
-    expect(calls).toHaveLength(3)
+    expect(calls).toHaveLength(4)
     expect(calls.at(-1)).toContain('build:web-javascript-prompt-preload')
   })
 })

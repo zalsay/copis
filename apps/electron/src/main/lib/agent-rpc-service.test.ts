@@ -29,6 +29,7 @@ const customModelChannelId = 'copis-custom-custom-model'
 const fixtureRoot = mkdtempSync(join(tmpdir(), 'copis-agent-rpc-test-'))
 const fixturePathCalls: string[] = []
 let electronGetPathCalls = 0
+let packagedRpcFixture = false
 const memoryContextRequests: Array<{ workspaceSlug?: string; query: string; maxChars: number }> = []
 const preparedChatroomRuns: unknown[] = []
 const capturedChatroomGatewayInputs: unknown[] = []
@@ -367,7 +368,7 @@ mock.module('./web-tab-manager', () => ({
 
 mock.module('electron', () => ({
   app: {
-    isPackaged: false,
+    get isPackaged() { return packagedRpcFixture },
     getPath: () => { electronGetPathCalls++; throw new Error('RPC fixture must not access Electron user paths') },
   },
   BrowserWindow: Object.assign(class {}, { getAllWindows: () => [], fromWebContents: () => null }),
@@ -1816,6 +1817,46 @@ describe('Browser Agent RPC 准备', () => {
 
     expect(shouldPersistAgentRpcMessage(finalAssistant)).toBe(true)
   })
+
+  for (const packaged of [false, true]) {
+    test.skipIf(process.platform !== 'darwin')(`Given isPackaged=${packaged} 的普通本机 Pi 会话 When 图片模型已确认支持 Then Worker 配置包含 Chrome capability 和工具提示`, async () => {
+      const { prepareAgentRpcRun } = await import('./agent-rpc-service')
+      const previousResourcesPath = Object.getOwnPropertyDescriptor(process, 'resourcesPath')
+      Object.defineProperty(process, 'resourcesPath', { configurable: true, value: fixturePath('packaged-resources') })
+      packagedRpcFixture = packaged
+      try {
+        const run = await prepareAgentRpcRun({
+          sessionId: rpcSession.id, userMessage: '查看本机 Chrome 页面',
+          channelId: 'channel-1', modelId: 'deepseek-v4-flash', agentRuntime: 'pi',
+        })
+        expect(run.query.chromeDesktopControl).toEqual({
+          endpoint: '/api/internal/agent/chrome-desktop-tool', token: expect.any(String),
+        })
+        expect(run.query.systemPrompt).toContain('ChromeDesktopStart')
+
+        for (const modelId of ['fast', 'export']) {
+          const builtin = await prepareAgentRpcRun({
+            sessionId: rpcSession.id, userMessage: '查看本机 Chrome 页面',
+            channelId: 'copis-working', modelId, agentRuntime: 'pi',
+          })
+          expect(builtin.query.chromeDesktopControl).toEqual({
+            endpoint: '/api/internal/agent/chrome-desktop-tool', token: expect.any(String),
+          })
+          expect(builtin.query.systemPrompt).toContain('ChromeDesktopStart')
+        }
+
+        const unknown = await prepareAgentRpcRun({
+          sessionId: rpcSession.id, userMessage: '查看本机 Chrome 页面',
+          channelId: 'channel-1', modelId: 'unknown-packaged-fixture-model', agentRuntime: 'pi',
+        })
+        expect(unknown.query.chromeDesktopControl).toBeUndefined()
+      } finally {
+        packagedRpcFixture = false
+        if (previousResourcesPath) Object.defineProperty(process, 'resourcesPath', previousResourcesPath)
+        else Reflect.deleteProperty(process, 'resourcesPath')
+      }
+    })
+  }
 
   test('Given Feishu / WeChat / DingTalk / Bridge 远程会话 When prepareAgentRpcRun Then 绝不签发 chromeDesktopControl 且系统提示词不包含 Chrome 章节', async () => {
     const { prepareAgentRpcRun } = await import('./agent-rpc-service')
