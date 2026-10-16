@@ -5,7 +5,7 @@
  * - 全局唯一占用管控，禁止跨会话并发
  * - 内存状态机管理：idle, awaiting_user, starting, active, paused, stopping, stopped, error
  * - Start 授权等待、轮询去重与 120 秒超时兜底
- * - 几何版本追踪与帧新鲜度校验（Observe 2s / 动作 30s 且一次动作消耗一帧）
+ * - 几何版本追踪与帧校验（Observe 2s / 同一观察帧支持多次输入，不限制模型推理耗时）
  * - 焦点丢失与几何改变时立即停止新输入并进入 paused
  * - 全局紧急停止快捷键集成
  * - 依赖可注入以供 BDD 自动化测试
@@ -30,6 +30,7 @@ import type {
 import {
   CHROME_DESKTOP_ALLOWED_KEYS,
   CHROME_DESKTOP_DEFAULT_SHORTCUT,
+  isRecoverableChromeDesktopPauseReason,
 } from '@copis/shared'
 import {
   ChromeDesktopHelperClient,
@@ -83,7 +84,6 @@ interface ActiveControlRecord {
   targetWindow: ChromeDesktopWindowInfo | null
   geometryVersion: number
   latestFrame: ChromeDesktopFrameMeta | null
-  frameConsumed: boolean
   inFlightAction: boolean
   pauseReason?: ChromeDesktopErrorCode
   errorMessage?: string
@@ -398,6 +398,50 @@ export class ChromeDesktopService {
       }
     }
 
+    // 普通 Agent turn 结束后控制权会保留；同一会话下一轮 Start 直接复用当前 control。
+    if (this.activeControl && this.activeControl.sessionId === sessionId) {
+      if (this.activeControl.capabilityToken && this.activeControl.capabilityToken !== capabilityToken) {
+        return { kind: 'json', value: { error: 'CHROME_CAPABILITY_STALE', message: '当前 Start 请求携带的 capability token 与控制实例不匹配' } }
+      }
+      if (this.activeControl.state === 'active') {
+        return {
+          kind: 'json',
+          value: {
+            status: 'active',
+            controlId: this.activeControl.controlId,
+            targetWindow: this.activeControl.targetWindow,
+            shortcut: this.activeControl.shortcut,
+          },
+        }
+      }
+      if (this.activeControl.state === 'awaiting_user' || this.activeControl.state === 'starting') {
+        return { kind: 'json', value: { status: this.activeControl.state, controlId: this.activeControl.controlId } }
+      }
+    }
+
+    // 焦点/几何变化造成的 paused 仍属于同一次授权，新的 Start 不应再次等待用户选择窗口。
+    if (
+      this.activeControl
+      && this.activeControl.sessionId === sessionId
+      && isRecoverableChromeDesktopPauseReason(this.activeControl.pauseReason)
+    ) {
+      if (this.activeControl.capabilityToken && this.activeControl.capabilityToken !== capabilityToken) {
+        return { kind: 'json', value: { error: 'CHROME_CAPABILITY_STALE', message: '当前 Start 请求携带的 capability token 与控制实例不匹配' } }
+      }
+      if (!this.resumeRecoverableControl(this.activeControl)) {
+        return { kind: 'json', value: { status: 'error', controlId: this.activeControl.controlId, error: this.activeControl.pauseReason ?? 'CHROME_STOP_SHORTCUT_UNAVAILABLE', message: this.activeControl.errorMessage } }
+      }
+      return {
+        kind: 'json',
+        value: {
+          status: 'active',
+          controlId: this.activeControl.controlId,
+          targetWindow: this.activeControl.targetWindow,
+          shortcut: this.activeControl.shortcut,
+        },
+      }
+    }
+
     // 同一会话且同一 toolCallId 的轮询
     if (this.activeControl && this.activeControl.sessionId === sessionId && this.activeControl.toolCallId === toolCallId) {
       const record = this.activeControl
@@ -461,7 +505,6 @@ export class ChromeDesktopService {
       targetWindow: null,
       geometryVersion: 1,
       latestFrame: null,
-      frameConsumed: false,
       inFlightAction: false,
       shortcut: CHROME_DESKTOP_DEFAULT_SHORTCUT,
       seenObserveToolCallIds: new Set(),
@@ -663,7 +706,6 @@ export class ChromeDesktopService {
         ...(captured.mediaTime !== undefined ? { mediaTime: captured.mediaTime } : {}),
         ...(captured.encodedAt !== undefined ? { encodedAt: captured.encodedAt } : {}),
       }
-      record.frameConsumed = false
 
       const response: ChromeDesktopToolResponse = {
         kind: 'image',
@@ -714,26 +756,12 @@ export class ChromeDesktopService {
       throw new Error('CHROME_FRAME_STALE: 提供的 frameId 与最新观察帧不符')
     }
 
-    if (record.frameConsumed) {
-      throw new Error('CHROME_FRAME_STALE: 该帧已被消费，必须重新 Observe')
-    }
-
     record.inFlightAction = true
     try {
-      // 动作执行会改变目标界面，立即使前一个 Observe 单帧缓存失效
+      // 输入后不再把旧 Observe 响应重放成新观察结果；frameId 本身仍可复用于后续输入。
       record.latestObservedFrame = undefined
 
-      // 检查帧时间（30 秒内有效）
-      const frameAgeMs = Date.now() - record.latestFrame.capturedAt
-      if (frameAgeMs > 30_000) {
-        // 截图过期只撤销旧帧的输入资格，不撤销已授予的窗口观察权限。
-        // 模型推理较慢时可重新 Observe 恢复，不能因此进入 paused 并强制用户再次授权。
-        record.latestFrame = null
-        console.warn('[ChromeDesktopService] 拒绝过期截图动作，保留观察连接', {
-          controlId: record.controlId, frameAgeMs,
-        })
-        throw new Error('CHROME_FRAME_STALE: 观察截图已超过 30 秒，未发送任何输入。请重新调用 ChromeDesktopObserve 获取新帧，无需重新授权')
-      }
+      // frameId 是可复用的截图坐标参考，不是一次性令牌，也不按模型推理耗时失效。
 
       // 真正输入前才激活 Chrome，观察模式不会抢占前台。
       if (record.mode !== 'control') {
@@ -782,7 +810,6 @@ export class ChromeDesktopService {
         screenY = bounds.y + (y / record.latestFrame.height) * bounds.height
       }
 
-      record.frameConsumed = true
       return { record, bounds, screenX, screenY }
     } catch (error) {
       record.inFlightAction = false
@@ -1019,6 +1046,12 @@ export class ChromeDesktopService {
       throw new Error('CHROME_CAPABILITY_STALE: capabilityToken 不匹配')
     }
 
+    if (isRecoverableChromeDesktopPauseReason(this.activeControl.pauseReason)) {
+      if (!this.resumeRecoverableControl(this.activeControl)) {
+        throw new Error('CHROME_CAPABILITY_STALE: 无法恢复已授权的 Chrome 控制')
+      }
+    }
+
     if (this.activeControl.state !== 'active') {
       throw new Error(`CHROME_CAPABILITY_STALE: 当前控制处于 ${this.activeControl.state} 状态`)
     }
@@ -1038,6 +1071,27 @@ export class ChromeDesktopService {
     record.latestObservedFrame = undefined
     record.seenObserveToolCallIds.clear()
     this.actionHistory.clear()
+  }
+
+  /** 恢复焦点/几何暂停的同一授权，不重新申请屏幕采集。 */
+  private resumeRecoverableControl(record: ActiveControlRecord): boolean {
+    if (this.activeControl !== record || record.state !== 'paused' || !isRecoverableChromeDesktopPauseReason(record.pauseReason)) {
+      return record.state === 'active'
+    }
+
+    const shortcutSuccess = this.registerShortcutFn(record.shortcut, () => this.handleEmergencyStop())
+    if (!shortcutSuccess) {
+      this.transitionToError(record, 'CHROME_STOP_SHORTCUT_UNAVAILABLE', '无法恢复全局停止快捷键，可能被占用')
+      return false
+    }
+
+    record.state = 'active'
+    record.mode = 'observe'
+    record.pauseReason = undefined
+    record.errorMessage = undefined
+    this.setThrottlingFn(false)
+    this.broadcastState()
+    return true
   }
 
   private transitionToPaused(record: ActiveControlRecord, reason: ChromeDesktopErrorCode, message: string): void {

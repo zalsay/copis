@@ -136,7 +136,31 @@ describe('ChromeDesktopService BDD Scenarios', () => {
     }
   })
 
-  it('Scenario: Full control lifecycle (Start -> User Confirm -> Observe -> Click -> Next action requires Observe)', async () => {
+  it('Given 同一会话上一轮已经授权并处于 active When 下一轮使用新的 Start toolCallId Then 复用原 control 不再次等待授权', async () => {
+    const first = await service.handleToolRequest({
+      sessionId: 'session-reuse',
+      capabilityToken: 'tok-reuse',
+      toolCallId: 'start-first-turn',
+      toolName: 'ChromeDesktopStart',
+      toolInput: {},
+    })
+    const controlId = first.kind === 'json' ? String(first.value.controlId) : ''
+    await service.confirmStart({ sessionId: 'session-reuse', controlId, windowId: 101, pid: 2001 })
+
+    const second = await service.handleToolRequest({
+      sessionId: 'session-reuse',
+      capabilityToken: 'tok-reuse',
+      toolCallId: 'start-second-turn',
+      toolName: 'ChromeDesktopStart',
+      toolInput: {},
+    })
+
+    expect(second).toMatchObject({ kind: 'json', value: { status: 'active', controlId } })
+    expect(mockHelper.activateCalls).toBe(0)
+    service.releaseCurrentControl()
+  })
+
+  it('Given 已授权并观察 Chrome When 连续使用同一帧点击 Then 每个独立工具调用都可执行', async () => {
     // 1. Start
     const startResp = await service.handleToolRequest({
       sessionId: 'session-1',
@@ -203,16 +227,16 @@ describe('ChromeDesktopService BDD Scenarios', () => {
     expect(firstClicked?.x).toBe(500)
     expect(firstClicked?.y).toBe(400)
 
-    // 6. Same frameId CANNOT be used again without a new Observe
-    expect(
-      service.handleToolRequest({
+    // 同一帧可用于连续输入；不同的 toolCallId 表示独立操作。
+    const repeatClick = await service.handleToolRequest({
         sessionId: 'session-1',
         capabilityToken: 'tok-1',
         toolCallId: 'call-click-2',
         toolName: 'ChromeDesktopClick',
         toolInput: { controlId, frameId, x: 800, y: 600 },
-      }),
-    ).rejects.toThrow('CHROME_FRAME_STALE')
+      })
+    expect(repeatClick).toMatchObject({ kind: 'json', value: { ok: true } })
+    expect(mockHelper.clicked).toHaveLength(2)
   })
 
   it('Scenario: Start confirms capture in observe mode without foreground activation', async () => {
@@ -257,7 +281,7 @@ describe('ChromeDesktopService BDD Scenarios', () => {
     service.releaseCurrentControl()
   })
 
-  it('Scenario: Focus lost immediately stops input and enters paused', async () => {
+  it('Scenario: Focus lost pauses input but keeps authorization and resumes without another confirm', async () => {
     // 启动并激活
     const startResp = await service.handleToolRequest({
       sessionId: 'session-focus',
@@ -296,6 +320,29 @@ describe('ChromeDesktopService BDD Scenarios', () => {
     expect(service.getSessionState()?.state).toBe('paused')
     expect(service.getSessionState()?.pauseReason).toBe('CHROME_FOCUS_LOST')
     expect(throttlingState).toBe(true) // 恢复节流
+
+    // 用户没有重新授权；下一次 Start/Observe 应复用同一 control。
+    mockHelper.focusLost = false
+    const resumedStart = await service.handleToolRequest({
+      sessionId: 'session-focus',
+      capabilityToken: 'tok',
+      toolCallId: 'call-1',
+      toolName: 'ChromeDesktopStart',
+      toolInput: {},
+    })
+    expect(resumedStart).toMatchObject({ kind: 'json', value: { status: 'active', controlId } })
+    expect(service.getSessionState()?.state).toBe('active')
+    expect(throttlingState).toBe(false)
+
+    const resumedObserve = await service.handleToolRequest({
+      sessionId: 'session-focus',
+      capabilityToken: 'tok',
+      toolCallId: 'call-obs-after-focus',
+      toolName: 'ChromeDesktopObserve',
+      toolInput: { controlId },
+    })
+    expect(resumedObserve.kind).toBe('image')
+    expect(mockHelper.activateCalls).toBe(1)
   })
 
   it('Scenario: Emergency stop shortcut cancels input and cleans up', async () => {
@@ -525,7 +572,7 @@ describe('ChromeDesktopService BDD Scenarios', () => {
       }),
     ).rejects.toThrow('CHROME_CAPABILITY_STALE')
 
-    // 执行动作消耗当前帧
+    // 执行动作使 Observe 响应缓存过时，但不限制该 frameId 的重复使用
     const frameId = obsResp1.kind === 'image' ? obsResp1.frame.frameId : ''
     await service.handleToolRequest({
       sessionId: 'session-obs-retry',

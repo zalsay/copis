@@ -1,5 +1,12 @@
 import { describe, expect, test } from 'bun:test'
-import { applyAgentEvent, clearAgentStreamError, isRetryEventForCurrentStream, type AgentStreamState } from './agent-atoms'
+import { createStore } from 'jotai'
+import type { ChromeDesktopSessionState } from '@copis/shared'
+import {
+  applyAgentEvent, clearAgentStreamError, isRetryEventForCurrentStream, type AgentStreamState,
+  allPendingAskUserRequestsAtom, allPendingExitPlanRequestsAtom, allPendingPermissionRequestsAtom,
+  currentAgentSessionIdAtom, dockBadgeCountAtom, unviewedCompletedSessionIdsAtom,
+} from './agent-atoms'
+import { chromeDesktopSessionStateAtom } from './chrome-desktop-atoms'
 
 function createStreamState(overrides: Partial<AgentStreamState> = {}): AgentStreamState {
   return {
@@ -285,5 +292,78 @@ describe('Agent 流式错误状态', () => {
     const errors = new Map([['failed-session', '认证失败']])
 
     expect(clearAgentStreamError(errors, 'retried-session')).toBe(errors)
+  })
+})
+
+
+describe('Chrome 授权 Dock 角标', () => {
+  const awaitingAuthorization: ChromeDesktopSessionState = {
+    sessionId: 'chrome-session', controlId: 'chrome-control', state: 'awaiting_user', mode: 'observe',
+    targetWindow: null, shortcut: 'Control+Option+Command+.', createdAt: 0,
+  }
+
+  test('Given 无其他提醒且当前在其他会话 When Chrome 等待授权 Then Dock 角标增加一项并随状态变化自动同步', () => {
+    const store = createStore()
+    store.set(currentAgentSessionIdAtom, 'other-session')
+    expect(store.get(dockBadgeCountAtom)).toBe(0)
+    const updates: number[] = []
+    const unsubscribe = store.sub(dockBadgeCountAtom, () => updates.push(store.get(dockBadgeCountAtom)))
+    try {
+      store.set(chromeDesktopSessionStateAtom, awaitingAuthorization)
+      expect(store.get(dockBadgeCountAtom)).toBe(1)
+      store.set(chromeDesktopSessionStateAtom, { ...awaitingAuthorization, state: 'active' })
+      expect(updates).toEqual([1, 0])
+    } finally {
+      unsubscribe()
+    }
+  })
+
+  for (const state of ['idle', 'starting', 'active', 'paused', 'stopping', 'stopped', 'error'] as const) {
+    test(`Given Chrome 正在等待授权 When 状态变为 ${state} Then 清除本次授权角标`, () => {
+      const store = createStore()
+      store.set(chromeDesktopSessionStateAtom, awaitingAuthorization)
+      expect(store.get(dockBadgeCountAtom)).toBe(1)
+      store.set(chromeDesktopSessionStateAtom, { ...awaitingAuthorization, state })
+      expect(store.get(dockBadgeCountAtom)).toBe(0)
+    })
+  }
+
+  test('Given 授权状态重复广播或新控制替代旧控制 When 仍在等待授权 Then 不重复累加角标', () => {
+    const store = createStore()
+    store.set(chromeDesktopSessionStateAtom, awaitingAuthorization)
+    store.set(chromeDesktopSessionStateAtom, { ...awaitingAuthorization })
+    store.set(chromeDesktopSessionStateAtom, { ...awaitingAuthorization, controlId: 'replacement-control' })
+    expect(store.get(dockBadgeCountAtom)).toBe(1)
+    store.set(chromeDesktopSessionStateAtom, null)
+    expect(store.get(dockBadgeCountAtom)).toBe(0)
+  })
+
+  test('Given 原有完成、权限、问答和计划提醒 When Chrome 授权完成 Then 只移除 Chrome 一项而不清空其他角标', () => {
+    const store = createStore()
+    store.set(unviewedCompletedSessionIdsAtom, new Set(['completed-1', 'completed-2']))
+    store.set(allPendingPermissionRequestsAtom, new Map([['pending-session', [{
+      requestId: 'permission-1', sessionId: 'pending-session', toolName: 'Write', toolInput: {},
+      description: '测试审批', dangerLevel: 'normal' as const,
+    }]]]))
+    store.set(allPendingAskUserRequestsAtom, new Map([['pending-session', [{
+      requestId: 'ask-1', sessionId: 'pending-session', questions: [], toolInput: {},
+    }]]]))
+    store.set(allPendingExitPlanRequestsAtom, new Map([['pending-session', [{
+      requestId: 'plan-1', sessionId: 'pending-session', allowedPrompts: [], toolInput: {},
+    }]]]))
+    expect(store.get(dockBadgeCountAtom)).toBe(5)
+    store.set(chromeDesktopSessionStateAtom, awaitingAuthorization)
+    expect(store.get(dockBadgeCountAtom)).toBe(6)
+    store.set(chromeDesktopSessionStateAtom, { ...awaitingAuthorization, state: 'active' })
+    expect(store.get(dockBadgeCountAtom)).toBe(5)
+  })
+
+  test('Given Chrome 正在等待授权 When 用户查看会话并清除完成提醒 Then 待确认授权的角标仍保留', () => {
+    const store = createStore()
+    store.set(unviewedCompletedSessionIdsAtom, new Set(['chrome-session']))
+    store.set(chromeDesktopSessionStateAtom, awaitingAuthorization)
+    expect(store.get(dockBadgeCountAtom)).toBe(2)
+    store.set(unviewedCompletedSessionIdsAtom, new Set())
+    expect(store.get(dockBadgeCountAtom)).toBe(1)
   })
 })

@@ -49,6 +49,13 @@ export type ChromeDesktopErrorCode =
   | 'CHROME_CANCELLED'
   | 'CHROME_CAPABILITY_STALE'
 
+/** 焦点或窗口几何变化只暂停输入，已授权的采集会话可以继续恢复。 */
+export function isRecoverableChromeDesktopPauseReason(
+  reason?: ChromeDesktopErrorCode,
+): boolean {
+  return reason === 'CHROME_FOCUS_LOST' || reason === 'CHROME_GEOMETRY_CHANGED'
+}
+
 export type ChromeDesktopMode = 'observe' | 'control'
 
 export type ChromeDesktopState =

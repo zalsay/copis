@@ -12,6 +12,7 @@ import { COPIS_DEFAULT_PERMISSION_MODE } from '@copis/shared'
 import { calculateDockBadgeCount, countPendingRequests } from '@/lib/dock-badge-count'
 import type { AgentQueuedMessage } from '@/lib/agent-message-queue'
 import { sanitizeAgentSessions } from '@/lib/agent-session-list'
+import { chromeDesktopSessionStateAtom } from './chrome-desktop-atoms'
 
 /** 活动状态 */
 export type ActivityStatus = 'pending' | 'running' | 'completed' | 'error' | 'backgrounded'
@@ -671,9 +672,11 @@ function getStableIndicatorMap(entries: Array<[string, SessionIndicatorStatus]>)
 
 /** Dock/Launcher 角标数量：未查看完成会话 + 待处理阻塞请求 */
 export const dockBadgeCountAtom = atom<number>((get) => {
+  // Chrome 选窗确认不经过通用权限队列，但同样需要用户审批。
+  const pendingChromeAuthorizationCount = get(chromeDesktopSessionStateAtom)?.state === 'awaiting_user' ? 1 : 0
   return calculateDockBadgeCount({
     unviewedCompletedCount: get(unviewedCompletedSessionIdsAtom).size,
-    pendingPermissionCount: countPendingRequests(get(allPendingPermissionRequestsAtom)),
+    pendingPermissionCount: countPendingRequests(get(allPendingPermissionRequestsAtom)) + pendingChromeAuthorizationCount,
     pendingAskUserCount: countPendingRequests(get(allPendingAskUserRequestsAtom)),
     pendingExitPlanCount: countPendingRequests(get(allPendingExitPlanRequestsAtom)),
   })

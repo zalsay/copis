@@ -49,7 +49,7 @@ import {
 } from '@/atoms/chrome-desktop-atoms'
 import { openChromeDesktopPreviewTabAtom } from '@/atoms/chrome-desktop-preview-tabs'
 import { isChromeDesktopTab, tabsAtom } from '@/atoms/tab-atoms'
-import type { ChromeDesktopErrorCode } from '@copis/shared'
+import { isRecoverableChromeDesktopPauseReason, type ChromeDesktopErrorCode } from '@copis/shared'
 
 interface ChromeDesktopBannerProps {
   sessionId: string
@@ -445,7 +445,9 @@ export function ChromeDesktopBanner({ sessionId }: ChromeDesktopBannerProps): Re
                 <AlertTriangle className="size-4 text-amber-500 shrink-0" />
                 <div>
                   <h4 className="text-xs font-semibold text-foreground">
-                    Chrome 桌面控制已暂停
+                    {isRecoverableChromeDesktopPauseReason(sessionState.pauseReason)
+                      ? 'Chrome 桌面控制已暂停，授权仍保留'
+                      : 'Chrome 桌面控制已暂停'}
                   </h4>
                   <p className="text-xs text-muted-foreground">
                     {formatPauseReason(sessionState.pauseReason)}
@@ -462,7 +464,9 @@ export function ChromeDesktopBanner({ sessionId }: ChromeDesktopBannerProps): Re
               </Button>
             </div>
             <p className="text-[11px] text-muted-foreground">
-              本次控制已安全暂停并释放输入与采集流。如需继续，请点击“结束控制”后重新授权启动。
+              {isRecoverableChromeDesktopPauseReason(sessionState.pauseReason)
+                ? '目标窗口重新可用后，下一次观察或输入会自动恢复，无需再次授权。'
+                : '本次控制已安全暂停并释放输入与采集流。如需继续，请点击“结束控制”后重新授权启动。'}
             </p>
           </div>
         )}

@@ -93,6 +93,7 @@ import {
   normalizePermissionInput,
   restorePiInput,
   sanitizeSessionMessagesForTurn,
+  sanitizeChromeDesktopImagesForContext,
 } from './pi-message-adapter'
 import { DEFAULT_CONTEXT_WINDOW, buildModel } from './pi-model-registry'
 import { createPartialMessageCoalescer, type PartialMessageCoalescer } from './pi-streaming-control'
@@ -1611,6 +1612,7 @@ export class PiAgentAdapter implements AgentProviderAdapter {
       })
       session.agent.toolExecution = 'sequential'
       session.agent.state.messages = sanitizeSessionMessagesForTurn(session.agent.state.messages)
+      session.agent.transformContext = async (messages) => sanitizeChromeDesktopImagesForContext(messages)
       if (piAi && input.codexFastMode && input.provider === 'openai-codex' && isCodexFastModeSupportedModel(input.model)) {
         // Pi 的通用 streamSimple 会丢弃 provider 专属 serviceTier；这里直接走
         // provider stream，确保 request body 与 usage.cost 都使用 priority tier。

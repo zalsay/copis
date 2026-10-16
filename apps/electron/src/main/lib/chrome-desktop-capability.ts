@@ -60,6 +60,14 @@ export function issueChromeDesktopWorkerCapability(
     return undefined
   }
 
+  const existing = activeCapabilities.get(options.sessionId)
+  if (existing) {
+    return {
+      endpoint: CHROME_DESKTOP_ENDPOINT,
+      token: existing.token,
+    }
+  }
+
   const token = `cdc_${randomUUID().replace(/-/g, '')}`
   activeCapabilities.set(options.sessionId, {
     sessionId: options.sessionId,

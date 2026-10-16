@@ -153,6 +153,64 @@ function contentToText(content: unknown): string {
   return ''
 }
 
+const CHROME_DESKTOP_FRAME_MARKER = 'Chrome Desktop Frame untrusted_chrome_frame'
+const CHROME_DESKTOP_HISTORY_IMAGE_PLACEHOLDER = '[Chrome Desktop 历史截图已省略；需要当前画面时请重新调用 ChromeDesktopObserve。]'
+
+/**
+ * 压缩送往模型的 Chrome 截图历史。
+ *
+ * ChromeDesktopObserve 的图片只对当前决策有价值；如果把每次 Observe 的
+ * base64 都带入下一轮，Pi 会把整条 transcript 的图片再次提交给上游。
+ * 保留最后一张供当前轮继续判断，旧图替换为文本占位；普通用户图片和
+ * 其他工具返回的图片不属于本策略。
+ */
+export function sanitizeChromeDesktopImagesForContext(
+  messages: AgentMessage[],
+  keepLatest = 1,
+): AgentMessage[] {
+  const chromeImagePositions: Array<{ messageIndex: number; blockIndex: number }> = []
+
+  messages.forEach((message, messageIndex) => {
+    if (!message || typeof message !== 'object' || !('role' in message) || message.role !== 'toolResult') return
+    const content = (message as { content?: unknown }).content
+    if (!Array.isArray(content)) return
+    const isChromeFrame = content.some((block) => {
+      if (!block || typeof block !== 'object') return false
+      const text = (block as { type?: string; text?: unknown }).text
+      return (block as { type?: string }).type === 'text'
+        && typeof text === 'string'
+        && text.includes(CHROME_DESKTOP_FRAME_MARKER)
+    })
+    if (!isChromeFrame) return
+
+    content.forEach((block, blockIndex) => {
+      if (block && typeof block === 'object' && (block as { type?: string }).type === 'image') {
+        chromeImagePositions.push({ messageIndex, blockIndex })
+      }
+    })
+  })
+
+  const keepPositions = new Set(
+    chromeImagePositions.slice(Math.max(0, chromeImagePositions.length - Math.max(0, keepLatest)))
+      .map(({ messageIndex, blockIndex }) => `${messageIndex}:${blockIndex}`),
+  )
+
+  if (keepPositions.size === chromeImagePositions.length) return messages
+
+  return messages.map((message, messageIndex) => {
+    if (!message || typeof message !== 'object' || !('role' in message) || message.role !== 'toolResult') return message
+    const content = (message as { content?: unknown }).content
+    if (!Array.isArray(content)) return message
+    const nextContent = content.map((block, blockIndex) => {
+      const key = `${messageIndex}:${blockIndex}`
+      if (!chromeImagePositions.some((position) => `${position.messageIndex}:${position.blockIndex}` === key)) return block
+      if (keepPositions.has(key)) return block
+      return { type: 'text', text: CHROME_DESKTOP_HISTORY_IMAGE_PLACEHOLDER }
+    })
+    return { ...message, content: nextContent } as AgentMessage
+  })
+}
+
 export function isAssistantPiMessage(message: AgentMessage): message is AssistantMessage {
   return !!message && typeof message === 'object' && 'role' in message && message.role === 'assistant'
 }
@@ -411,7 +469,10 @@ export function convertResultMessage(
     { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
   )
   const lastAssistant = assistants[assistants.length - 1]
-  const assistantError = lastAssistant?.stopReason === 'error' ? lastAssistant.errorMessage : undefined
+  // Pi 在重试耗尽、请求超时或取消时可能使用 stopReason="aborted"，但仍把
+  // 上游真实错误放在 errorMessage。只看 error 会把这类失败误报成 success。
+  const hasTerminalError = lastAssistant?.stopReason === 'error' || lastAssistant?.stopReason === 'aborted'
+  const assistantError = hasTerminalError ? lastAssistant?.errorMessage?.trim() || undefined : undefined
   const terminalReason = override?.terminalReason ?? (lastAssistant?.stopReason === 'length' ? 'max_tokens' : 'completed')
   return {
     type: 'result',

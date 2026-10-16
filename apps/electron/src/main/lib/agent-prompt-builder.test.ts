@@ -56,6 +56,19 @@ function buildPrompt(agentCwd: string, memoryPolicy?: 'off' | 'visible' | 'writa
 }
 
 describe('项目与会话工作台提示词', () => {
+  test.skipIf(process.platform !== 'darwin')('Given 本机 Chrome 视觉工具可用 When 构建系统提示词 Then 允许同帧连续操作而非一帧一动', () => {
+    const prompt = buildSystemPrompt({
+      agentRuntime: 'pi', sessionId: 'chrome-reusable-frame',
+      permissionMode: 'bypassPermissions', chromeDesktopControlAvailable: true,
+    })
+    expect(prompt).toContain('同一 frameId 可重复使用')
+    expect(prompt).toContain('同一会话已有有效 control 时直接复用')
+    expect(prompt).toContain('普通任务完成后保留控制权')
+    expect(prompt).not.toContain('每次输入动作前必须调用')
+    expect(prompt).not.toContain('一个 frameId 只能被一个动作消费')
+    expect(prompt).not.toContain('严格遵循“观察 → 一个动作 → 再观察”')
+  })
+
   test('Given trusted chatroom source and runtime context When 构建系统提示词 Then injects strict structured output instruction', () => {
     const sessionId = 'chatroom-prompt-gated'
     const releaseSource = registerTrustedAgentExternalSource(sessionId, 'chatroom')

@@ -2822,10 +2822,8 @@ export class AgentOrchestrator {
       // askUserService 不在 turn 结束时清理——AskUserQuestion 的生命周期由用户交互决定，
       // 仅在会话真正删除时（DELETE_SESSION IPC）才清理。
       exitPlanService.clearSessionPending(sessionId)
-      if (chromeDesktopControl) {
-        revokeChromeDesktopWorkerCapability(sessionId, chromeDesktopControl.token)
-        chromeDesktopService.releaseSessionControl(sessionId, chromeDesktopControl.token)
-      }
+      // Chrome Desktop 授权跨普通 Agent turn 保留；用户明确停止会话时由 stop()
+      // 释放 control，避免每轮完成后下一轮又弹出授权窗口。
     }
   }
 
@@ -2836,6 +2834,7 @@ export class AgentOrchestrator {
    * 再调用 adapter.abort() 中止底层 SDK 进程。
    */
   stop(sessionId: string): void {
+    revokeChromeDesktopWorkerCapability(sessionId)
     chromeDesktopService.releaseSessionControl(sessionId)
     this.activeSessions.delete(sessionId)
     this.sessionPermissionModes.delete(sessionId)

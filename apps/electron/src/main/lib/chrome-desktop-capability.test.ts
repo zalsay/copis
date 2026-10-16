@@ -83,6 +83,14 @@ describe('chrome-desktop-capability matrix and lifecycle', () => {
       expect(cap?.endpoint).toBe('/api/internal/agent/chrome-desktop-tool')
       expect(cap?.token.startsWith('cdc_')).toBe(true)
 
+      const second = issueChromeDesktopWorkerCapability({
+        sessionId: 'sess-123',
+        platform: 'darwin',
+        triggeredBy: 'user',
+        imageInputSupported: true,
+      })
+      expect(second?.token).toBe(cap?.token)
+
       // 正确校验
       expect(validateChromeDesktopWorkerCapability('sess-123', cap!.token)).toBe(true)
       // 错误会话校验失败

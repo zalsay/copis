@@ -49,34 +49,101 @@ function fixture() {
 }
 
 describe('Chrome desktop 取消与可信边界', () => {
-  for (const ageMs of [38_000, 108_000]) {
-    test(`Given 截图已过期 ${ageMs / 1000} 秒 When 尝试输入 Then 拒绝旧坐标但保留授权并可重新观察`, async () => {
-      const f = fixture()
-      const { controlId, confirm } = await f.begin()
-      await confirm()
-      const frameId = await f.observe(controlId)
-      const cancellationsBefore = f.cancellations
-      const now = Date.now()
-      const clock = spyOn(Date, 'now').mockReturnValue(now + ageMs)
-      try {
-        await expect(f.call('ChromeDesktopClick', 'stale-click', { controlId, frameId, x: 10, y: 10 }))
-          .rejects.toThrow('CHROME_FRAME_STALE')
-        expect(f.clicks).toBe(0)
-        expect(f.cancellations).toBe(cancellationsBefore)
-        expect(f.service.getSessionState()?.state).toBe('active')
-        expect(f.service.getSessionState()?.mode).toBe('observe')
+  const actions: Array<{
+    tool: ChromeDesktopToolName
+    method: 'click' | 'scroll' | 'type' | 'press'
+    input: Record<string, unknown>
+  }> = [
+    { tool: 'ChromeDesktopClick', method: 'click', input: { x: 10, y: 10 } },
+    { tool: 'ChromeDesktopScroll', method: 'scroll', input: { x: 10, y: 10, deltaY: 100 } },
+    { tool: 'ChromeDesktopType', method: 'type', input: { text: '测试输入' } },
+    { tool: 'ChromeDesktopPress', method: 'press', input: { key: 'Cmd+L' } },
+  ]
 
-        const freshFrameId = await f.observe(controlId, 'observe-fresh')
-        expect(freshFrameId).not.toBe(frameId)
-        const response = await f.call('ChromeDesktopClick', 'fresh-click', { controlId, frameId: freshFrameId, x: 10, y: 10 })
-        expect(response).toMatchObject({ kind: 'json', value: { ok: true } })
-        expect(f.clicks).toBe(1)
-      } finally {
-        clock.mockRestore()
-        f.service.releaseCurrentControl()
-      }
-    })
+  for (const ageMs of [38_000, 108_000, 600_000]) {
+    for (const { tool, method, input } of actions) {
+      test(`Given 观察后模型耗时 ${ageMs / 1000} 秒 When ${tool} 复用同一帧 Then 不受时间或使用次数限制`, async () => {
+        const f = fixture()
+        const { controlId, confirm } = await f.begin()
+        await confirm()
+        const frameId = await f.observe(controlId)
+        const inputSpy = spyOn(f.helper, method)
+        const cancellationsBefore = f.cancellations
+        const clock = spyOn(Date, 'now').mockReturnValue(Date.now() + ageMs)
+        try {
+          const response = await f.call(tool, 'delayed-input', { ...input, controlId, frameId })
+          expect(response).toMatchObject({ kind: 'json', value: { ok: true } })
+          expect(inputSpy).toHaveBeenCalledTimes(1)
+          expect(f.cancellations).toBe(cancellationsBefore)
+          expect(f.service.getSessionState()?.state).toBe('active')
+
+          const reused = await f.call(tool, 'reused-frame-input', { ...input, controlId, frameId })
+          expect(reused).toMatchObject({ kind: 'json', value: { ok: true } })
+          expect(inputSpy).toHaveBeenCalledTimes(2)
+
+          const freshFrameId = await f.observe(controlId, 'observe-fresh')
+          const next = await f.call(tool, 'fresh-input', { ...input, controlId, frameId: freshFrameId })
+          expect(next).toMatchObject({ kind: 'json', value: { ok: true } })
+          expect(inputSpy).toHaveBeenCalledTimes(3)
+        } finally {
+          clock.mockRestore()
+          inputSpy.mockRestore()
+          f.service.releaseCurrentControl()
+        }
+      })
+    }
   }
+
+  test('Given 同一观察帧 When 连续发送快捷键、文本、点击和滚动 Then 无需在每次操作间重新 Observe', async () => {
+    const f = fixture()
+    const { controlId, confirm } = await f.begin()
+    await confirm()
+    const frameId = await f.observe(controlId)
+    const pressed = spyOn(f.helper, 'press')
+    const typed = spyOn(f.helper, 'type')
+    const scrolled = spyOn(f.helper, 'scroll')
+    try {
+      const sequence: Array<{ tool: ChromeDesktopToolName; input: Record<string, unknown> }> = [
+        { tool: 'ChromeDesktopPress', input: { key: 'Cmd+L' } },
+        { tool: 'ChromeDesktopType', input: { text: 'https://example.com' } },
+        { tool: 'ChromeDesktopPress', input: { key: 'Enter' } },
+        { tool: 'ChromeDesktopClick', input: { x: 10, y: 10 } },
+        { tool: 'ChromeDesktopClick', input: { x: 20, y: 20 } },
+        { tool: 'ChromeDesktopScroll', input: { x: 20, y: 20, deltaY: 100 } },
+      ]
+      for (const [index, { tool, input }] of sequence.entries()) {
+        const response = await f.call(tool, `sequence-${index}`, { ...input, controlId, frameId })
+        expect(response).toMatchObject({ kind: 'json', value: { ok: true } })
+      }
+      expect(pressed).toHaveBeenCalledTimes(2)
+      expect(typed).toHaveBeenCalledTimes(1)
+      expect(scrolled).toHaveBeenCalledTimes(1)
+      expect(f.clicks).toBe(2)
+    } finally {
+      pressed.mockRestore()
+      typed.mockRestore()
+      scrolled.mockRestore()
+      f.service.releaseCurrentControl()
+    }
+  })
+
+  test('Given 新 Observe 已替换旧帧 When 旧 frameId 用于输入 Then 即使没有时间期限也不得复用旧帧', async () => {
+    const f = fixture()
+    const { controlId, confirm } = await f.begin()
+    await confirm()
+    try {
+      const oldFrameId = await f.observe(controlId, 'observe-old')
+      const latestFrameId = await f.observe(controlId, 'observe-latest')
+      await expect(f.call('ChromeDesktopClick', 'old-frame-click', { controlId, frameId: oldFrameId, x: 10, y: 10 }))
+        .rejects.toThrow('CHROME_FRAME_STALE')
+      expect(f.clicks).toBe(0)
+      const response = await f.call('ChromeDesktopClick', 'latest-frame-click', { controlId, frameId: latestFrameId, x: 10, y: 10 })
+      expect(response).toMatchObject({ kind: 'json', value: { ok: true } })
+      expect(f.clicks).toBe(1)
+    } finally {
+      f.service.releaseCurrentControl()
+    }
+  })
 
   for (const captureFailure of ['expired', 'static']) {
     test(`Given ${captureFailure} 观察帧 When Observe 拒绝该帧 Then 保留连接但不允许复用旧输入帧`, async () => {

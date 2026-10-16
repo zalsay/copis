@@ -102,7 +102,6 @@ import {
 } from './browser-agent-worker-capability'
 import {
   issueChromeDesktopWorkerCapability,
-  revokeChromeDesktopWorkerCapability,
 } from './chrome-desktop-capability'
 import { chromeDesktopService } from './chrome-desktop-service'
 import { resolvePiImageInputCapability } from './adapters/pi-model-registry'
@@ -1191,10 +1190,8 @@ export function finalizeAgentRpcRun(input: {
   if (browserToken) {
     revokeBrowserAgentWorkerCapability(input.sessionId, browserToken)
   }
-  if (chromeDesktopToken) {
-    revokeChromeDesktopWorkerCapability(input.sessionId, chromeDesktopToken)
-    chromeDesktopService.releaseSessionControl(input.sessionId, chromeDesktopToken)
-  }
+  // Chrome Desktop control 跨普通 Agent turn 保留。只有用户明确停止会话，
+  // 或 ChromeDesktopStop 工具主动释放时，才结束该控制能力。
 
   if (isStaleRun) {
     console.warn('[agent-rpc-service] 忽略迟到的旧 run finalize 对 pendingAgentRpcRuns 的清理与状态覆盖', {

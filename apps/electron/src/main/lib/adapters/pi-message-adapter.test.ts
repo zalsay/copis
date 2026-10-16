@@ -7,6 +7,7 @@ import {
   getPiAssistantErrorDetails,
   hasPiAssistantTextContent,
   sanitizeSessionMessagesForTurn,
+  sanitizeChromeDesktopImagesForContext,
   stripPiAssistantError,
 } from './pi-message-adapter'
 
@@ -126,14 +127,54 @@ describe('convertPiMessage', () => {
     const partialStop = convertResultMessage([{
       role: 'assistant', content: [], stopReason: 'stop', errorMessage: providerError,
     } as unknown as AssistantMessage], 'session-1') as { subtype?: string; errors?: string[] }
+    const abortedError = convertResultMessage([{
+      role: 'assistant', content: [], stopReason: 'aborted', errorMessage: providerError,
+    } as unknown as AssistantMessage], 'session-1') as { subtype?: string; errors?: string[] }
     const terminalError = convertResultMessage([{
       role: 'assistant', content: [], stopReason: 'error', errorMessage: providerError,
     } as unknown as AssistantMessage], 'session-1') as { subtype?: string; errors?: string[] }
 
+    expect(abortedError.subtype).toBe('error_during_execution')
+    expect(abortedError.errors).toEqual([providerError])
     expect(partialStop.subtype).toBe('success')
     expect(partialStop.errors).toBeUndefined()
     expect(terminalError.subtype).toBe('error_during_execution')
     expect(terminalError.errors).toEqual([providerError])
+  })
+})
+
+describe('Chrome Desktop 历史截图上下文清理', () => {
+  test('保留最新一张 Chrome 截图，替换旧截图，不影响用户图片', () => {
+    const messages = [
+      { role: 'user', content: [{ type: 'image', data: 'user-image', mimeType: 'image/png' }] },
+      ...['frame-1', 'frame-2', 'frame-3'].map((id) => ({
+        role: 'toolResult',
+        toolCallId: id,
+        toolName: 'ChromeDesktopObserve',
+        content: [
+          { type: 'text', text: `[Chrome Desktop Frame untrusted_chrome_frame] frameId=${id}` },
+          { type: 'image', data: id, mimeType: 'image/jpeg' },
+        ],
+      })),
+    ]
+
+    const sanitized = sanitizeChromeDesktopImagesForContext(messages as any)
+    expect((sanitized[0] as any).content[0].data).toBe('user-image')
+    expect((sanitized[1] as any).content[1].text).toContain('历史截图已省略')
+    expect((sanitized[2] as any).content[1].text).toContain('历史截图已省略')
+    expect((sanitized[3] as any).content[1].data).toBe('frame-3')
+  })
+
+  test('只清理 Chrome Desktop 标记的 tool result，普通工具图片保持不变', () => {
+    const messages = [{
+      role: 'toolResult',
+      toolCallId: 'image-tool',
+      toolName: 'image_tool',
+      content: [{ type: 'image', data: 'keep-me', mimeType: 'image/png' }],
+    }]
+
+    const sanitized = sanitizeChromeDesktopImagesForContext(messages as any)
+    expect((sanitized[0] as any).content[0].data).toBe('keep-me')
   })
 })
 

@@ -24,6 +24,13 @@ describe('pi-chrome-desktop-tools', () => {
     expect(names).toContain('ChromeDesktopPress')
     expect(names).toContain('ChromeDesktopStop')
 
+    const descriptions = JSON.stringify(tools.map(tool => tool.description))
+    expect(descriptions).not.toContain('消耗该 frameId')
+    expect(descriptions).not.toContain('后续操作前必须重新 Observe')
+    expect(descriptions).toContain('可重复使用')
+    expect(descriptions).toContain('已有控制权时直接复用')
+    expect(descriptions).toContain('普通任务完成后不要自动调用')
+
     for (const tool of tools) {
       expect((tool as any).executionMode).toBe('sequential')
     }
@@ -65,7 +72,11 @@ describe('pi-chrome-desktop-tools', () => {
     const second = res.content[1]
     expect(first?.type).toBe('text')
     expect((first as any)?.text).toContain('untrusted_chrome_frame')
-    expect((first as any)?.text).toContain('30 秒')
+    expect((first as any)?.text).not.toContain('30 秒')
+    expect((first as any)?.text).toContain('无固定时间有效期')
+    expect((first as any)?.text).toContain('同一 frameId 可重复使用')
+    expect((first as any)?.text).not.toContain('未消费')
+    expect((first as any)?.text).not.toContain('每帧仅供一次输入')
     expect((first as any)?.text).toContain('CHROME_FRAME_STALE')
     expect((first as any)?.text).toContain('无需重新授权')
     expect((first as any)?.text).toContain('根据实际错误')

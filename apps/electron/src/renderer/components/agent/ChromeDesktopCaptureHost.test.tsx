@@ -236,6 +236,24 @@ describe('ChromeDesktopCaptureHost requestVideoFrameCallback 序列与静止检�
     expect(store.get(chromeDesktopSessionStateAtom)?.controlId).toBe('ctrl-2')
   })
 
+  test('Given Chrome 失去焦点 When 主进程广播可恢复暂停 Then 保留已授权采集流；真正采集失败才释放', async () => {
+    const store = createStore()
+    const stop = mock(() => {})
+    const track = { addEventListener: () => {}, removeEventListener: () => {}, stop }
+    const stream = { getVideoTracks: () => [track], getTracks: () => [track] } as unknown as MediaStream
+    store.set(chromeDesktopMediaStreamAtom, stream)
+    store.set(chromeDesktopMediaStreamControlAtom, 'ctrl-1')
+    store.set(chromeDesktopSessionStateAtom, currentState)
+    root = createRoot(document.getElementById('root')!)
+    await act(async () => root?.render(<Provider store={store}><ChromeDesktopCaptureHost /></Provider>))
+
+    await act(async () => stateChangedCallback!({ ...currentState, state: 'paused', pauseReason: 'CHROME_FOCUS_LOST' }))
+    expect(stop).not.toHaveBeenCalled()
+
+    await act(async () => stateChangedCallback!({ ...currentState, state: 'paused', pauseReason: 'CHROME_CAPTURE_FAILED' }))
+    expect(stop).toHaveBeenCalledTimes(1)
+  })
+
   test('track ended 上报绑定产生该 stream 的 controlId', async () => {
     const store = createStore()
     let ended: (() => void) | undefined

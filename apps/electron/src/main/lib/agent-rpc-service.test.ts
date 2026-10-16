@@ -1871,7 +1871,7 @@ describe('Browser Agent RPC 准备', () => {
     expect(run3.query.systemPrompt).not.toContain('macOS 本机 Chrome 桌面视觉自动化')
   })
 
-  test('Given 当前 pending run 持有 Chrome control When finalize 缺少 token Then 保守保护当前控制不被释放', async () => {
+  test('Given 当前 pending run 持有 Chrome control When Agent turn finalize Then 保留 Chrome 控制供下一轮复用', async () => {
     const { finalizeAgentRpcRun, prepareAgentRpcRun, getPendingAgentRpcRun } = await import('./agent-rpc-service')
     const { chromeDesktopService } = await import('./chrome-desktop-service')
 
@@ -1898,24 +1898,23 @@ describe('Browser Agent RPC 准备', () => {
       await chromeDesktopService.confirmStart({ sessionId: rpcSession.id, controlId, windowId: 101, pid: 2001 })
       expect(chromeDesktopService.getSessionState()?.state).toBe('active')
 
-      // 旧 run 完成帧迟到：未携带 chromeDesktopCapabilityToken
+      // 本轮结束不携带 token：控制仍保留，避免下一轮重新授权。
       finalizeAgentRpcRun({
         sessionId: rpcSession.id,
         stoppedByUser: false,
       })
-
-      // 当前活跃控制绝不能被释放！
       expect(chromeDesktopService.getSessionState()?.state).toBe('active')
       expect(getPendingAgentRpcRun(rpcSession.id)?.chromeDesktopCapabilityToken).toBe(token)
 
-      // 携带正确 token 完成 -> 正确释放
+      // 即使完成帧携带 token，普通 turn finalize 也不释放 Chrome 控制。
       finalizeAgentRpcRun({
         sessionId: rpcSession.id,
         stoppedByUser: false,
         chromeDesktopCapabilityToken: token,
       })
-      expect(chromeDesktopService.getSessionState()).toBeNull()
+      expect(chromeDesktopService.getSessionState()?.state).toBe('active')
       expect(getPendingAgentRpcRun(rpcSession.id)).toBeUndefined()
+      chromeDesktopService.releaseCurrentControl()
     }
   })
 })

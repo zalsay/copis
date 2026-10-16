@@ -9,11 +9,12 @@
  * - 多阶梯度降质与降采样，确保编码绝对不突破 1 MiB，仍超限则明确报错而非外发违规大图。
  * - 绑定 requestId 严格串行化与关联，防止旧请求迟到帧干扰新 Observe。
  * - 结合 requestVideoFrameCallback 校验视频源帧呈现新鲜度。
- * - 捕获轨道异常终止（track.onended）、暂停（paused）、停止（stopped）时彻底释放资源并重置帧状态。
+ * - 捕获轨道异常终止、不可恢复暂停或停止时释放资源；焦点/几何暂停保留已授权流并等待恢复。
  */
 
 import React, { useEffect, useRef } from 'react'
 import { useAtomValue, useSetAtom } from 'jotai'
+import { isRecoverableChromeDesktopPauseReason } from '@copis/shared'
 import {
   chromeDesktopMediaStreamAtom,
   chromeDesktopMediaStreamControlAtom,
@@ -110,10 +111,11 @@ export function ChromeDesktopCaptureHost(): React.ReactElement | null {
     const unsubscribe = window.electronAPI.chromeDesktop.onStateChanged((state) => {
       receivedBroadcast = true
       setSessionState(state)
-      // stopped, error 或 paused 均立即断开活动流与帧引用，不持有陈旧截屏
+      // 终止/错误或不可恢复的 paused 才释放 MediaStream；焦点/几何暂停保留已授权流，等待自动恢复。
       const owner = latestControlRef.current
       const replaced = owner && (owner.sessionId !== state.sessionId || owner.controlId !== state.controlId)
-      if (state.state === 'stopped' || state.state === 'error' || state.state === 'paused' || replaced) {
+      const unrecoverablePause = state.state === 'paused' && !isRecoverableChromeDesktopPauseReason(state.pauseReason)
+      if (state.state === 'stopped' || state.state === 'error' || unrecoverablePause || replaced) {
         activeRequestIdRef.current = null
         lastPresentedFramesRef.current = -1
         const streamOwner = latestStreamControlIdRef.current
