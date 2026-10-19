@@ -329,6 +329,7 @@ describeUnixIntegration('Chrome 组件：连接、原生帧和取消 BDD', () =>
     })
   }
 
+  // 本场景串行启动多个独立 CLI；冷启动预算独立于单条命令超时和取消断言。
   test('Given active 更新 When 已连接输入与新连接 Then 旧连接固定路径、新连接采用新版本', async () => {
     const f = await fixture()
     await f.client.checkPermissions()
@@ -345,7 +346,7 @@ describeUnixIntegration('Chrome 组件：连接、原生帧和取消 BDD', () =>
     await f.client.connectWindow(42, 123)
     expect((await f.events(third)).map(e => e.action)).toEqual(['permissions', 'windows', 'connect'])
     expect((await f.events(third))[0]!.runtime).not.toBe(oldRuntime)
-  })
+  }, 15_000)
 
   test('Given 两个 main 客户端 When 同版本连接 Then runtime 隔离且停止不互相影响', async () => {
     const f = await fixture()

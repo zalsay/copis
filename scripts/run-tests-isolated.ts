@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 
 import { resolve } from 'node:path'
+import { shouldRunRepositoryTest } from './test-file-discovery'
 
 const repoRoot = resolve(import.meta.dir, '..')
 const testPatterns = [
@@ -15,7 +16,7 @@ const testPatterns = [
 async function scanTestFiles(pattern: string): Promise<string[]> {
   const files: string[] = []
   for await (const file of new Bun.Glob(pattern).scan({ cwd: repoRoot, onlyFiles: true })) {
-    if (file.startsWith('node_modules/') || file.includes('/node_modules/') || file.includes('/dist/')) continue
+    if (!shouldRunRepositoryTest(file)) continue
     files.push(file)
   }
   return files
