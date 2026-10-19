@@ -2,6 +2,8 @@
 
 独立的 macOS Chrome 桌面自动化功能包，使用 Rust + Swift。其他 Agent 只需能执行命令并读取本地图片，无需启动 Copis 或安装 Node/Bun。第一版支持 macOS 14+ 和 Google Chrome 正式版。
 
+其他 Agent 的安装定位、调用流程、图像接入、错误恢复和 Python 示例见 [Agent 接入指南](docs/AGENT-INTEGRATION.md)（源码目录入口；独立功能包中对应 `source/docs/AGENT-INTEGRATION.md`）。
+
 ## 构建与安装
 
 开发机器需要 Rust 1.89+ 和 Xcode Command Line Tools；分发包的使用者不需要编译环境。
