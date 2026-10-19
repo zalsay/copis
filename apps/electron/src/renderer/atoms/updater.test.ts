@@ -41,4 +41,3 @@ describe('关于/更新导航提醒', () => {
     expect(store.get(hasUpdateAtom)).toBe(true)
   })
 })
-
