@@ -79,11 +79,12 @@ final class ChromeInput {
         guard let source = CGEventSource(stateID: .privateState) else { throw eventFailure() }
         func verify(pointer: CGPoint? = nil) throws {
             try cancellation.check(generation)
-            try desktop.verifyFocus(target, expected: bounds)
             if let point = pointer {
                 try desktop.verifyPointer(point, target: target, expected: bounds)
                 try desktop.verifyGeometry(target, expected: bounds)
             }
+            // 可能耗时的遮挡/几何查询完成后，最后复核精确窗口焦点再提交输入。
+            try desktop.verifyFocus(target, expected: bounds)
             try cancellation.check(generation)
         }
         func pair(_ down: CGEvent?, _ up: CGEvent?, pointer: CGPoint? = nil) throws {

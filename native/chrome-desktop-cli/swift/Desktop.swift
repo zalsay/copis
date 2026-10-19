@@ -7,6 +7,14 @@ func onMain<T>(_ operation: () throws -> T) rethrows -> T {
     return try DispatchQueue.main.sync(execute: operation)
 }
 
+// AX/CG 查询之间焦点可能变化；两次 requireTargetFocus 都必须对 PID/窗口不匹配抛错。
+func verifyStableWindowFocus<Window>(requireTargetFocus: () throws -> Window,
+                                     verifyGeometry: (Window) throws -> Void) rethrows {
+    let focused = try requireTargetFocus()
+    try verifyGeometry(focused)
+    _ = try requireTargetFocus()
+}
+
 struct ChromeWindow {
     let target: TargetWindow
     let title: String
@@ -153,30 +161,40 @@ final class ChromeDesktop {
         }
     }
 
+    private func focusedWindow(_ target: TargetWindow, app: AXUIElement) throws -> AXUIElement {
+        let frontPID = onMain { NSWorkspace.shared.frontmostApplication?.processIdentifier }
+        guard frontPID == target.pid else {
+            throw HelperFailure(code: "FOCUS_LOST", message: "目标 Chrome 窗口未持有真实焦点，未发送输入")
+        }
+        // 系统级 AXFocusedApplication 可能返回 noValue；以 AXFrontmost 独立核实前台归属。
+        // 仍须取得成功响应和严格布尔类型，不能把查询失败或缺值当成已聚焦。
+        var frontmost: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(app, kAXFrontmostAttribute as CFString, &frontmost) == .success,
+              let frontmost, CFGetTypeID(frontmost) == CFBooleanGetTypeID() else {
+            throw HelperFailure(code: "FOCUS_UNVERIFIED", message: "无法确认 Chrome 的辅助功能前台状态")
+        }
+        let axFrontmost = frontmost as! CFBoolean
+        guard CFBooleanGetValue(axFrontmost) else {
+            throw HelperFailure(code: "FOCUS_LOST", message: "Chrome 已失去辅助功能前台状态，未发送输入")
+        }
+        // 最后读取精确窗口，不能把同一 Chrome 中另一个窗口的焦点当成目标焦点。
+        guard let focused = elementAttribute(app, kAXFocusedWindowAttribute), identifier(focused) == target.windowId else {
+            throw HelperFailure(code: "FOCUS_LOST", message: "目标 Chrome 窗口未持有真实焦点，未发送输入")
+        }
+        return focused
+    }
+
     func verifyFocus(_ target: TargetWindow, expected: WindowBounds) throws {
         try requireInputPermission()
         try verifyGeometry(target, expected: expected)
-        let frontPID = onMain { NSWorkspace.shared.frontmostApplication?.processIdentifier }
         let app = axApplication(target.pid)
-        guard frontPID == target.pid,
-              let focused = elementAttribute(app, kAXFocusedWindowAttribute), identifier(focused) == target.windowId else {
-            throw HelperFailure(code: "FOCUS_LOST", message: "目标 Chrome 窗口未持有真实焦点，未发送输入")
-        }
-        // 系统级 AX 焦点也必须属于同一进程，不能只相信 NSWorkspace 的前台进程。
-        let system = AXUIElementCreateSystemWide()
-        AXUIElementSetMessagingTimeout(system, 0.35)
-        guard let focusedApp = elementAttribute(system, kAXFocusedApplicationAttribute) else {
-            throw HelperFailure(code: "FOCUS_UNVERIFIED", message: "无法确认系统辅助功能焦点")
-        }
-        var focusedPID: pid_t = 0
-        guard AXUIElementGetPid(focusedApp, &focusedPID) == .success, focusedPID == target.pid,
-              let focusedWindow = elementAttribute(focusedApp, kAXFocusedWindowAttribute),
-              identifier(focusedWindow) == target.windowId else {
-            throw HelperFailure(code: "FOCUS_LOST", message: "系统辅助功能焦点不在目标窗口，未发送输入")
-        }
-        try verifyAXGeometry(focusedWindow, expected: expected)
-        // AX 查询可能耗时，查询后再读一次 CG 几何，防止期间发生拖动/缩放。
-        try verifyGeometry(target, expected: expected)
+        try verifyStableWindowFocus(requireTargetFocus: {
+            try self.focusedWindow(target, app: app)
+        }, verifyGeometry: { focused in
+            try self.verifyAXGeometry(focused, expected: expected)
+            // AX 查询可能耗时，查询后再读 CG 几何，防止期间发生拖动/缩放。
+            try self.verifyGeometry(target, expected: expected)
+        })
     }
 
     func activate(_ target: TargetWindow, expected: WindowBounds, cancellation: InputCancellation, generation: UInt64) throws {
@@ -206,13 +224,16 @@ final class ChromeDesktop {
         }
         // AX setter 成功不等于焦点已经切换；以真实焦点轮询结果为准，且等待有上限。
         let deadline = ProcessInfo.processInfo.systemUptime + 1.5
+        var lastFailure: HelperFailure?
         repeat {
             try cancellation.check(generation)
             do { try verifyFocus(target, expected: expected); return }
-            catch let failure as HelperFailure where failure.code == "FOCUS_LOST" || failure.code == "FOCUS_UNVERIFIED" { }
+            catch let failure as HelperFailure where failure.code == "FOCUS_LOST" || failure.code == "FOCUS_UNVERIFIED" {
+                lastFailure = failure
+            }
             Thread.sleep(forTimeInterval: 0.025)
         } while ProcessInfo.processInfo.systemUptime < deadline
-        throw HelperFailure(code: "FOCUS_UNVERIFIED", message: "激活后仍无法确认目标窗口焦点，未发送输入")
+        throw HelperFailure(code: "FOCUS_UNVERIFIED", message: "激活后仍无法确认目标窗口焦点：\(lastFailure?.message ?? "未取得焦点状态")")
     }
 
     func verifyPointer(_ point: CGPoint, target: TargetWindow, expected: WindowBounds) throws {

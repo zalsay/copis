@@ -9,7 +9,7 @@
 | `cargo clippy --locked --all-targets -- -D warnings` | 通过 |
 | `./build.sh debug` / `./build.sh` | 均通过，最终保留 release 功能包 |
 | Swift helper / 纯回归程序双架构 `-O -warnings-as-errors` 编译 | arm64、x86_64 的 macOS 14 target 均通过；仅 ARM 本机运行 |
-| `tests/native-smoke.sh` | 144 项无副作用协议检查 + 3 项纯 fake effect BDD 回归通过 |
+| `tests/native-smoke.sh` | 144 项无副作用协议检查 + 3 项纯 fake effect + 6 项焦点 BDD 回归通过 |
 | 纯 fake effect 回归重复测试 | 30 次 / 90 个场景通过（Swift worker 验证） |
 | CLI 忙碌 / 紧急停止回归重复测试 | 修复测试就绪竞争后，连续 30 次通过 |
 | 并行全套稳定性复跑 | helper 初始化独立计时后，worker 连续 3 轮、每轮 27 项通过 |
@@ -28,9 +28,9 @@ Rust 回归覆盖帧反复使用、1970 时间戳的帧仍可输入、非最新�
 
 ## 未验收范围
 
-- 真实 Chrome 截图内容、Retina/多屏幕映射和真实鼠标键盘输入尚未执行，需要用户确认后进行。
+- v0.1.1 已在用户授权下执行真实键盘导航与焦点回归，详见 [FOCUS-VERIFICATION.md](FOCUS-VERIFICATION.md)。真实鼠标点击、截图内容及 Retina/多屏幕映射尚未验收。
 - Intel 为交叉编译验证，没有 Intel 实机运行结果。
 - 本地 ad-hoc 签名不等于 Developer ID 公证分发；系统 TCC 权限是否延续取决于安装路径和代码身份。
 - `_AXUIElementGetWindow` 非公开系统符号；若未来不可用，工具会拒绝输入，不猜测其他窗口。
 - cancel 不能撤回已提交给系统的操作；异常 helper 在 250ms 内未 ACK 时仍会强杀，不能承诺其完成了 held 释放。
-- 变更留在隔离 worktree 的 `codex/chrome-desktop-cli` 分支；本次未提交、合并或推送。
+- 本地修复在隔离 worktree 开发并整合到 main；尚未推送 GitHub 或发布 COS。

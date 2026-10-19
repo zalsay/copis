@@ -29,4 +29,4 @@ Electron 主进程中的轻量 component client 将工具动作映射为 copis-c
 
 ## 验证与本机状态
 
-验证明细见 COMPONENT-VERIFICATION.md。内置工具已完整委派组件，旧 helper 与 renderer 帧 IPC 已移除。本机正式配置目录中的 chrome-desktop-cli v0.1.0 已按受管流程安装激活；只读权限和列窗验证通过，验证后台进程已停止。未发布线上归档或 manifest；默认开发/应用构建不捆绑该组件。
+验证明细见 COMPONENT-VERIFICATION.md。内置工具已完整委派组件，旧 helper 与 renderer 帧 IPC 已移除。本机正式配置目录中的 chrome-desktop-cli v0.1.1 已按受管流程安装激活；权限、列窗及真实键盘导航至小红书创作平台验证通过，验证后台进程已停止。焦点修复与实测见 FOCUS-VERIFICATION.md。未发布线上归档或 manifest；默认开发/应用构建不捆绑该组件。

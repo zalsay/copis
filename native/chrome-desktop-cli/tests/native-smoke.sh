@@ -35,6 +35,9 @@ for source in "$root"/swift/*.swift; do
 done
 swiftc -O -target "${arch}-apple-macosx14.0" "${library_sources[@]}" \
   "$root/tests/cancellation/main.swift" -o "$scratch/cancellation-tests"
+swiftc -O -target "${arch}-apple-macosx14.0" "${library_sources[@]}" \
+  "$root/tests/focus-validation/main.swift" -o "$scratch/focus-validation-tests"
+"$scratch/focus-validation-tests"
 /usr/bin/python3 - "$helper" "$scratch/cancellation-tests" <<'PY'
 import json
 import os
