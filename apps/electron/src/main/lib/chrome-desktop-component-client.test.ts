@@ -233,7 +233,8 @@ describeUnixIntegration('Chrome 组件：受管模块与 CLI 协议 BDD', () => 
     await rejectsCode(client.checkPermissions(), 'CHROME_ACTION_UNCERTAIN')
     await f.configure({ failAction: 'permissions', exitCode: 1, raw: '', stderr: 'secret-token 用户输入文本 native-connection' })
     let message = ''
-    try { await client.checkPermissions() } catch (error) { message = (error as Error).message }
+    // 500ms 只属于上面的超时场景，错误脱敏须使用正常客户端，避免把冷启动当作错误响应。
+    try { await f.client.checkPermissions() } catch (error) { message = (error as Error).message }
     expect(message).toContain('CHROME_HELPER_FAILED:')
     expect(message).not.toMatch(/secret-token|用户输入文本|native-connection/)
   })
