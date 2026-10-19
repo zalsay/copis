@@ -1,17 +1,20 @@
 import * as React from 'react'
-import { useAtom, useAtomValue, useSetAtom } from 'jotai'
+import { useAtom, useAtomValue, useSetAtom, useStore } from 'jotai'
 import { AlertCircle, CheckCircle2, Download, ExternalLink, Loader2, PackageCheck, RefreshCw } from 'lucide-react'
 import type { FunctionalModuleProgressPayload, FunctionalModuleStatus } from '@copis/shared'
 import { COPIS_OFFICIAL_URL } from '../functional-modules/functional-module-startup-ui'
 import {
   functionalModuleBusyAtom,
+  functionalModuleCheckingAllAtom,
   functionalModuleProgressAtom,
   functionalModuleStatusesAtom,
 } from '@/atoms/functional-modules'
+import { detectIsMac } from '@/lib/platform'
 import { SettingsCard } from './primitives'
 import { Button } from '@/components/ui/button'
 import {
   createEmptyFunctionalModuleStatus,
+  getVisibleFunctionalModuleDefinitions,
   FUNCTIONAL_MODULE_DEFINITIONS,
   getFunctionalModuleProgressText,
   getFunctionalModuleStateText,
@@ -19,6 +22,8 @@ import {
 } from './functional-module-ui'
 
 export function FunctionalModulesCard(): React.ReactElement {
+  const store = useStore()
+  const [checkingAll, setCheckingAll] = useAtom(functionalModuleCheckingAllAtom)
   const [statuses, setStatuses] = useAtom(functionalModuleStatusesAtom)
   const progresses = useAtomValue(functionalModuleProgressAtom)
   const [busy, setBusy] = useAtom(functionalModuleBusyAtom)
@@ -34,11 +39,7 @@ export function FunctionalModulesCard(): React.ReactElement {
       try {
         const modules = await window.electronAPI.listFunctionalModules()
         if (!active) return
-        setStatuses((current) => {
-          const next = { ...current }
-          for (const module of modules) next[module.name] = module
-          return next
-        })
+        setStatuses(Object.fromEntries(modules.map((module) => [module.name, module])))
       } catch (error) {
         console.error('[功能模块] 读取状态失败:', error)
       }
@@ -89,22 +90,51 @@ export function FunctionalModulesCard(): React.ReactElement {
     }
   }, [setBusy, setProgress, statuses, updateStatus])
 
-  const requiredInstalled = FUNCTIONAL_MODULE_DEFINITIONS
+  const definitions = getVisibleFunctionalModuleDefinitions(statuses, detectIsMac())
+  const requiredInstalled = definitions
     .filter((definition) => definition.required)
     .every((definition) => statuses[definition.name]?.installed === true)
 
+  const runCheckAll = React.useCallback(async (): Promise<void> => {
+    if (store.get(functionalModuleCheckingAllAtom)) return
+    setCheckingAll(true)
+    try {
+      await Promise.all(definitions
+        .filter((definition) => busy[definition.name] !== true)
+        .map((definition) => runCheck(definition)))
+    } finally {
+      setCheckingAll(false)
+    }
+  }, [busy, definitions, runCheck, setCheckingAll, store])
+
   return (
     <SettingsCard>
-      <div className="flex items-center justify-between border-b p-4">
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b p-4">
         <div className="flex items-center gap-2">
           <PackageCheck className="h-4 w-4 text-muted-foreground" />
           <h3 className="text-sm font-medium">本地能力</h3>
         </div>
-        <CheckCircle2 className={`h-4 w-4 ${requiredInstalled ? 'text-green-600' : 'text-muted-foreground'}`} />
+        <div className="flex items-center gap-3">
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-7 text-xs"
+            onClick={() => void runCheckAll()}
+            disabled={checkingAll}
+          >
+            {checkingAll ? (
+              <Loader2 className="mr-1.5 h-3 w-3 animate-spin" />
+            ) : (
+              <RefreshCw className="mr-1.5 h-3 w-3" />
+            )}
+            检查全部组件更新
+          </Button>
+          <CheckCircle2 className={`h-4 w-4 ${requiredInstalled ? 'text-green-600' : 'text-muted-foreground'}`} />
+        </div>
       </div>
 
       <div className="space-y-3 p-4">
-        {FUNCTIONAL_MODULE_DEFINITIONS.map((definition) => {
+        {definitions.map((definition) => {
           const status = statuses[definition.name] ?? createEmptyFunctionalModuleStatus(definition)
           const progress = progresses[definition.name]
           const isBusy = busy[definition.name] === true

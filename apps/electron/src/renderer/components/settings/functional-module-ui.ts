@@ -9,6 +9,7 @@ export interface FunctionalModuleDefinition {
   displayName: string
   description: string
   required: boolean
+  platform?: 'darwin'
 }
 
 export const FUNCTIONAL_MODULE_DEFINITIONS: readonly FunctionalModuleDefinition[] = [
@@ -66,7 +67,24 @@ export const FUNCTIONAL_MODULE_DEFINITIONS: readonly FunctionalModuleDefinition[
     description: '为 Copis 提供专业模式智能体运行时与核心执行环境',
     required: false,
   },
+  {
+    name: 'chrome-desktop-cli',
+    displayName: 'Chrome 桌面自动化',
+    description: '在 macOS 中观察本机 Chrome 窗口并执行点击与输入',
+    required: false,
+    platform: 'darwin',
+  },
 ]
+
+/** 平台专用模块以主进程返回的状态为准，避免展示当前平台不可用的能力。 */
+export function getVisibleFunctionalModuleDefinitions(
+  statuses: Partial<Record<FunctionalModuleName, FunctionalModuleStatus>>,
+  isMac: boolean,
+): readonly FunctionalModuleDefinition[] {
+  return FUNCTIONAL_MODULE_DEFINITIONS.filter(definition => (
+    definition.platform !== 'darwin' || (isMac && statuses[definition.name] !== undefined)
+  ))
+}
 
 export function createEmptyFunctionalModuleStatus(
   definition: FunctionalModuleDefinition,

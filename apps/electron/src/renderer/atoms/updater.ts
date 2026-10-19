@@ -6,6 +6,7 @@
  */
 
 import { atom } from 'jotai'
+import { functionalModuleStatusesAtom } from './functional-modules'
 
 /** 下载进度 */
 export interface DownloadProgress {
@@ -40,7 +41,11 @@ export const appInfoAtom = atom<AppInfo | null>(null)
 /** 是否有可用更新（包含已下载完成） */
 export const hasUpdateAtom = atom((get) => {
   const { status } = get(updateStatusAtom)
-  return status === 'available' || status === 'downloading' || status === 'downloaded'
+  const hasAppUpdate = status === 'available' || status === 'downloading' || status === 'downloaded'
+  const hasModuleUpdate = Object.values(get(functionalModuleStatusesAtom)).some((module) => (
+    module?.updateAvailable && (module.installed || module.required)
+  ))
+  return hasAppUpdate || hasModuleUpdate
 })
 
 /** updater 是否可用 */

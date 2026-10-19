@@ -147,6 +147,8 @@ export interface ChromeDesktopSystemStatus {
   visionModelSupported: boolean
   shortcut: string
   shortcutAvailable: boolean
+  /** 当前已准备的 Chrome 原生组件版本。 */
+  componentVersion?: string
   error?: string
 }
 
@@ -158,7 +160,30 @@ export const CHROME_DESKTOP_IPC_CHANNELS = {
   STOP_CONTROL: 'chrome-desktop:stop-control',
   GET_STATE: 'chrome-desktop:get-state',
   STATE_CHANGED: 'chrome-desktop:state-changed',
-  REQUEST_FRAME: 'chrome-desktop:request-frame',
-  FRAME_RESPONSE: 'chrome-desktop:frame-response',
-  STREAM_ERROR: 'chrome-desktop:stream-error',
 } as const
+
+/** 组件安装前与执行前使用同一协议契约；新协议不能静默替换当前可运行版本。 */
+export interface ChromeDesktopComponentMetadata {
+  name: 'chrome-desktop-cli'
+  version: string
+  platform: 'darwin'
+  arch: 'arm64' | 'x64'
+  protocolVersion: 1
+  entrypoint: 'copis-chrome'
+  helper: 'copis-chrome-helper'
+}
+
+export function isChromeDesktopComponentMetadata(
+  value: unknown,
+  expected: { version: string; arch: string },
+): value is ChromeDesktopComponentMetadata {
+  if (!value || typeof value !== 'object' || Array.isArray(value) || !expected.version || !['arm64', 'x64'].includes(expected.arch)) return false
+  const metadata = value as Record<string, unknown>
+  return metadata.name === 'chrome-desktop-cli'
+    && metadata.version === expected.version
+    && metadata.platform === 'darwin'
+    && metadata.arch === expected.arch
+    && metadata.protocolVersion === 1
+    && metadata.entrypoint === 'copis-chrome'
+    && metadata.helper === 'copis-chrome-helper'
+}

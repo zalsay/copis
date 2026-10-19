@@ -76,3 +76,6 @@ pnpm-workspace.yaml
 .agents/
 skills-lock.json
 .tmp/
+
+# Chrome 独立功能模块发布归档
+apps/electron/resources/chrome-desktop-cli/

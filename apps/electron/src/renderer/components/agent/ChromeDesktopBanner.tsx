@@ -9,13 +9,11 @@
  */
 
 import React, { useEffect, useState, useRef } from 'react'
-import { useStore } from 'jotai'
-import { useAtom, useAtomValue, useSetAtom } from 'jotai'
+import { useAtom, useAtomValue, useSetAtom, useStore } from 'jotai'
 import {
   Monitor,
   RefreshCw,
   AlertTriangle,
-  CheckCircle2,
   XCircle,
   ShieldAlert,
   Square,
@@ -49,7 +47,21 @@ import {
 } from '@/atoms/chrome-desktop-atoms'
 import { openChromeDesktopPreviewTabAtom } from '@/atoms/chrome-desktop-preview-tabs'
 import { isChromeDesktopTab, tabsAtom } from '@/atoms/tab-atoms'
+import { workingSettingsOpenAtom, workingSettingsSectionAtom } from '@/atoms/working-atoms'
 import { isRecoverableChromeDesktopPauseReason, type ChromeDesktopErrorCode } from '@copis/shared'
+
+/** 预览尽力启动；原生 Observe 和输入不依赖此视频流。 */
+async function requestPreviewStream(): Promise<MediaStream | null> {
+  try {
+    return await navigator.mediaDevices.getDisplayMedia({
+      video: { frameRate: { ideal: 10, max: 15 } },
+      audio: false,
+    })
+  } catch (error) {
+    console.warn('[ChromeDesktopBanner] 实时预览暂不可用:', error instanceof Error ? error.message : String(error))
+    return null
+  }
+}
 
 interface ChromeDesktopBannerProps {
   sessionId: string
@@ -88,16 +100,13 @@ export function ChromeDesktopBanner({ sessionId }: ChromeDesktopBannerProps): Re
   const commitCapture = useSetAtom(commitChromeDesktopCaptureAtom)
   const stopControl = useSetAtom(stopChromeDesktopControlAtom)
   const openPreviewTab = useSetAtom(openChromeDesktopPreviewTabAtom)
-  const currentCaptureAttempt = useAtomValue(chromeDesktopCaptureAttemptAtom)
-  const currentCaptureAttemptRef = useRef(currentCaptureAttempt)
-  currentCaptureAttemptRef.current = currentCaptureAttempt
+  const setSettingsSection = useSetAtom(workingSettingsSectionAtom)
+  const setSettingsOpen = useSetAtom(workingSettingsOpenAtom)
 
   const [refreshingWindows, setRefreshingWindows] = useState(false)
   const previewVideoRef = useRef<HTMLVideoElement | null>(null)
-  const mountedControlRef = useRef<{ sessionId: string; controlId: string } | null>(null)
   const unmountTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const previousControlRef = useRef<{ sessionId: string; controlId: string } | null>(null)
-  mountedControlRef.current = sessionState?.sessionId === sessionId ? { sessionId, controlId: sessionState.controlId } : null
 
   // 校验当前会话是否属于该控制任务
   const isCurrentSession = sessionState?.sessionId === sessionId
@@ -158,16 +167,34 @@ export function ChromeDesktopBanner({ sessionId }: ChromeDesktopBannerProps): Re
   const handleRefreshWindows = async (): Promise<void> => {
     setRefreshingWindows(true)
     try {
-      await fetchWindows()
+      await Promise.all([fetchStatus(), fetchWindows()])
     } finally {
       setRefreshingWindows(false)
     }
   }
 
-  /**
-   * 用户真实点击“开始控制”
-   * 必须直接在用户点击回调中调用 navigator.mediaDevices.getDisplayMedia
-   */
+  /** await 期间停止或换窗后，旧预览不能覆盖当前控制。 */
+  const isCurrentCapture = (attempt: number, controlId: string): boolean => {
+    const current = store.get(chromeDesktopSessionStateAtom)
+    return store.get(chromeDesktopCaptureAttemptAtom) === attempt
+      && current?.sessionId === sessionId
+      && current.controlId === controlId
+      && !['idle', 'stopping', 'stopped', 'error'].includes(current.state)
+      && (current.state !== 'paused' || isRecoverableChromeDesktopPauseReason(current.pauseReason))
+  }
+
+  /** 流可以晚于原生连接完成；停止或切换后的迟到流只释放自身。 */
+  const capturePreview = async (attempt: number, controlId: string): Promise<void> => {
+    const stream = await requestPreviewStream()
+    if (!stream) return
+    if (!isCurrentCapture(attempt, controlId)) {
+      stream.getTracks().forEach((track) => track.stop())
+      return
+    }
+    commitCapture({ attempt, controlId, stream })
+  }
+
+  /** 用户真实点击确认：绑定窗口后发起预览，同时立即建立原生连接。 */
   const handleConfirmStart = async (): Promise<void> => {
     if (isStarting || !sessionState) return
     const selected = availableWindows.find((w) => w.windowId === selectedWindowId)
@@ -181,7 +208,6 @@ export function ChromeDesktopBanner({ sessionId }: ChromeDesktopBannerProps): Re
     const control = { sessionId, controlId: sessionState.controlId }
     setLocalError(null)
 
-    let pendingStream: MediaStream | null = null
     try {
       // 1. 预先向主进程登记待授权窗口
       const prep = await window.electronAPI.chromeDesktop.prepareCapture({
@@ -193,22 +219,12 @@ export function ChromeDesktopBanner({ sessionId }: ChromeDesktopBannerProps): Re
       if (!prep.ok) {
         throw new Error(prep.message || '准备采集目标失败')
       }
-      if (attempt !== currentCaptureAttemptRef.current) return
+      if (!isCurrentCapture(attempt, control.controlId)) return
 
-      // 2. 真实用户点击发起屏幕媒体捕获
-      const stream = await navigator.mediaDevices.getDisplayMedia({
-        video: { frameRate: { ideal: 10, max: 15 } },
-        audio: false,
-      })
-      pendingStream = stream
+      // getDisplayMedia 可能长时间等待系统响应；原生连接不能等待预览结果。
+      void capturePreview(attempt, control.controlId)
 
-      // 授权等待期间 control 被停止/切换时，丢弃并释放迟到的流。
-      if (store.get(chromeDesktopCaptureAttemptAtom) !== attempt || store.get(chromeDesktopSessionStateAtom)?.controlId !== control.controlId) {
-        stream.getTracks().forEach((track) => track.stop())
-        return
-      }
-
-      // 4. 确认启动控制
+      // 先触发预览请求，再确认原生连接；预览异常只在自己的 Promise 中处理。
       const res = await window.electronAPI.chromeDesktop.confirmStart({
         sessionId,
         controlId: sessionState.controlId,
@@ -219,23 +235,26 @@ export function ChromeDesktopBanner({ sessionId }: ChromeDesktopBannerProps): Re
       if (!res.ok) {
         throw new Error(res.message || '激活 Chrome 窗口控制失败')
       }
-      if (store.get(chromeDesktopCaptureAttemptAtom) !== attempt || store.get(chromeDesktopSessionStateAtom)?.controlId !== control.controlId) {
-        stream.getTracks().forEach((track) => track.stop())
-        return
-      }
-      // 仅在服务端确认成功后发布流，避免全局宿主将授权中的 control 当成活动控制。
-      if (!commitCapture({ attempt, controlId: control.controlId, stream })) return
     } catch (err: any) {
-      if (attempt !== currentCaptureAttemptRef.current) {
-        pendingStream?.getTracks().forEach((track) => track.stop())
-        return
-      }
-      pendingStream?.getTracks().forEach((track) => track.stop())
+      if (!isCurrentCapture(attempt, control.controlId)) return
       console.error('[ChromeDesktopBanner] 启动控制失败:', err)
       setLocalError(err.message || '启动控制失败')
       await stopControl(control)
     } finally {
-      if (attempt === currentCaptureAttemptRef.current) setIsStarting(false)
+      if (attempt === store.get(chromeDesktopCaptureAttemptAtom)) setIsStarting(false)
+    }
+  }
+
+  /** 重试只更新预览，不重新确认或中断已有的原生连接。 */
+  const handleRetryPreview = async (): Promise<void> => {
+    if (state !== 'active' || !sessionState) return
+    const controlId = sessionState.controlId
+    const attempt = reserveCapture(controlId)
+    if (attempt === null) return
+    try {
+      await capturePreview(attempt, controlId)
+    } finally {
+      if (attempt === store.get(chromeDesktopCaptureAttemptAtom)) setIsStarting(false)
     }
   }
 
@@ -279,8 +298,34 @@ export function ChromeDesktopBanner({ sessionId }: ChromeDesktopBannerProps): Re
               </Badge>
             </div>
 
-            {/* 权限缺失警示 */}
-            {systemStatus && (!systemStatus.screenRecordingGranted || !systemStatus.accessibilityGranted) && (
+            {systemStatus && (systemStatus.supported === false || systemStatus.error) && (
+              <div role="alert" className="flex flex-col gap-1.5 rounded-lg border border-destructive/30 bg-destructive/10 p-2.5 text-xs text-destructive">
+                <div className="flex items-center gap-1.5 font-medium">
+                  <AlertTriangle className="size-4 shrink-0" />
+                  <span>{systemStatus.supported ? 'Chrome 桌面自动化状态检查提示' : 'Chrome 桌面自动化组件暂不可用'}</span>
+                </div>
+                {systemStatus.error && <p className="break-words pl-5">{systemStatus.error}</p>}
+                {!systemStatus.supported && (
+                  <div className="flex flex-wrap items-center gap-2 pl-5 text-muted-foreground">
+                    <span>请前往「设置 → 关于/更新 → 本地能力」安装或重试“Chrome 桌面自动化”组件，完成后点击“刷新列表”。</span>
+                    <Button
+                      variant="link"
+                      size="sm"
+                      className="h-auto p-0 text-xs"
+                      onClick={() => {
+                        setSettingsSection('about')
+                        setSettingsOpen(true)
+                      }}
+                    >
+                      打开关于/更新
+                    </Button>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* 只有组件可用时，权限标志才代表实际的系统授权状态。 */}
+            {systemStatus?.supported === true && (!systemStatus.screenRecordingGranted || !systemStatus.accessibilityGranted) && (
               <div className="flex flex-col gap-1.5 rounded-lg border border-amber-500/30 bg-amber-500/10 p-2.5 text-xs text-amber-600 dark:text-amber-400">
                 <div className="flex items-center gap-1.5 font-medium">
                   <ShieldAlert className="size-4 shrink-0" />
@@ -288,12 +333,12 @@ export function ChromeDesktopBanner({ sessionId }: ChromeDesktopBannerProps): Re
                 </div>
                 {!systemStatus.screenRecordingGranted && (
                   <p className="pl-5 text-muted-foreground">
-                    • 屏幕录制权限未授予：请在 macOS「系统设置 → 隐私与安全性 → 屏幕录制」中允许 Copis。
+                    • 屏幕录制权限未授予：请在 macOS「系统设置 → 隐私与安全性 → 屏幕录制」中允许 Chrome 桌面自动化组件（授权项以 macOS 实际显示的名称为准）。
                   </p>
                 )}
                 {!systemStatus.accessibilityGranted && (
                   <p className="pl-5 text-muted-foreground">
-                    • 辅助功能权限未授予：请在 macOS「系统设置 → 隐私与安全性 → 辅助功能」中允许 Chrome Desktop Helper。
+                    • 辅助功能权限未授予：请在 macOS「系统设置 → 隐私与安全性 → 辅助功能」中允许 Chrome 桌面自动化组件（授权项以 macOS 实际显示的名称为准）。
                   </p>
                 )}
               </div>
@@ -317,7 +362,9 @@ export function ChromeDesktopBanner({ sessionId }: ChromeDesktopBannerProps): Re
 
               {availableWindows.length === 0 ? (
                 <div className="rounded-md border border-dashed border-border/80 bg-muted/40 p-3 text-center text-xs text-muted-foreground">
-                  未检测到运行中的 Google Chrome 窗口。请先在 macOS 中启动 Chrome 并打开目标网页，然后点击“刷新列表”。
+                  {systemStatus?.supported === false
+                    ? '组件准备完成后，请点击“刷新列表”获取可用的 Chrome 窗口。'
+                    : '未检测到运行中的 Google Chrome 窗口。请先在 macOS 中启动 Chrome 并打开目标网页，然后点击“刷新列表”。'}
                 </div>
               ) : (
                 <Select
@@ -411,6 +458,22 @@ export function ChromeDesktopBanner({ sessionId }: ChromeDesktopBannerProps): Re
                 </Button>
               </div>
             </div>
+
+            {!currentMediaStream && (
+              <div className="flex items-center justify-between gap-3 rounded-lg bg-muted/40 p-2.5 text-xs text-muted-foreground">
+                <span>{state === 'starting' ? '正在连接 Chrome，预览暂不可用。' : '已连接，可观察页面。预览暂不可用，不影响 Agent 观察与输入。'}</span>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-7 shrink-0 gap-1 text-xs"
+                  onClick={handleRetryPreview}
+                  disabled={isStarting || state !== 'active'}
+                >
+                  <RefreshCw className={`size-3 ${isStarting ? 'animate-spin' : ''}`} />
+                  {isStarting ? '正在重试...' : '重试预览'}
+                </Button>
+              </div>
+            )}
 
             {/* 低延迟预览 */}
             {currentMediaStream && (

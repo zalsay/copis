@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
-import { createReadStream, existsSync } from 'node:fs'
-import { mkdir, open, rename, rm, stat } from 'node:fs/promises'
-import { join } from 'node:path'
+import { constants, createReadStream, existsSync } from 'node:fs'
+import { chmod, lstat, mkdir, open, rename, rm, stat } from 'node:fs/promises'
+import { dirname, join } from 'node:path'
 import type {
   FunctionalModuleArchitecture,
   FunctionalModuleArtifact,
@@ -11,6 +11,7 @@ import type {
   FunctionalModuleProgressPayload,
   FunctionalModuleStatus,
 } from '@copis/shared'
+import { isChromeDesktopComponentMetadata } from '@copis/shared'
 import { getFunctionalModulesDir } from './config-paths'
 import { getFunctionalModuleManifestUrl, parseFunctionalModuleManifest } from './functional-module-manifest'
 import {
@@ -26,6 +27,7 @@ interface FunctionalModuleDefinition {
   name: FunctionalModuleName
   displayName: string
   required: boolean
+  platforms?: readonly FunctionalModulePlatform[]
 }
 
 const MODULE_DEFINITIONS: readonly FunctionalModuleDefinition[] = [
@@ -37,6 +39,7 @@ const MODULE_DEFINITIONS: readonly FunctionalModuleDefinition[] = [
   { name: 'python-runtime', displayName: 'Python 3.12 运行环境', required: true },
   { name: 'agently-cli', displayName: 'Agent QQ 邮箱 CLI', required: false },
   { name: 'dsh', displayName: '创造模式', required: false },
+  { name: 'chrome-desktop-cli', displayName: 'Chrome 桌面自动化', required: false, platforms: ['darwin'] },
   { name: 'codex-cli', displayName: '专业模式', required: false },
 ]
 
@@ -51,7 +54,7 @@ export interface FunctionalModuleManagerOptions {
   platform?: FunctionalModulePlatform
   arch?: FunctionalModuleArchitecture
   clientVersion?: string
-  /** DSH 是独立创造模式运行时，检查其版本时不受 Copis 主程序最低版本门槛影响。 */
+  /** DSH 和 Chrome 组件默认按独立契约检查更新；显式 true 时仍检查主程序最低版本。 */
   checkClientVersion?: boolean
   fetchImpl?: FunctionalModuleFetch
   onProgress?: (payload: FunctionalModuleProgressPayload) => void
@@ -93,8 +96,11 @@ export async function fetchFunctionalModuleManifest(
   )
 }
 
-export function getFunctionalModuleStatuses(rootDir = getFunctionalModulesDir()): FunctionalModuleStatus[] {
-  return MODULE_DEFINITIONS.map((definition) => getFunctionalModuleStatus(definition.name, rootDir))
+export function getFunctionalModuleStatuses(
+  rootDir = getFunctionalModulesDir(),
+  platform: FunctionalModulePlatform = normalizePlatform(process.platform),
+): FunctionalModuleStatus[] {
+  return MODULE_DEFINITIONS.filter(definition => !definition.platforms || definition.platforms.includes(platform)).map((definition) => getFunctionalModuleStatus(definition.name, rootDir))
 }
 
 export function getFunctionalModuleStatus(
@@ -158,25 +164,40 @@ export async function resolveFunctionalModuleArtifact(
   options: FunctionalModuleManagerOptions = {},
 ): Promise<FunctionalModuleArtifact> {
   const definition = getModuleDefinition(name)
+  assertModulePlatform(definition, options.platform ?? normalizePlatform(process.platform))
   if (options.artifactOverride) {
     if (options.artifactOverride.name !== name) {
       throw new Error(`功能模块 manifest 与目标不匹配: ${name}`)
     }
-    return ensureRequiredArtifact(definition, options.artifactOverride)
+    return ensureRequiredArtifact(definition, options.artifactOverride, options.arch ?? normalizeArchitecture(process.arch))
   }
-  // 创造模式由 DSH artifact 自身的版本和校验和决定是否更新，不能用 Copis 主程序门槛拦截。
-  const checkClientVersion = options.checkClientVersion ?? name !== 'dsh'
+  // DSH 和 Chrome 组件使用独立版本/协议，不默认受全平台主程序版本门槛拦截。
+  const checkClientVersion = options.checkClientVersion ?? (name !== 'dsh' && name !== 'chrome-desktop-cli')
   const artifact = (await fetchFunctionalModuleManifest({ ...options, checkClientVersion })).find((item) => item.name === name)
   if (!artifact) throw new Error(`当前平台没有功能模块: ${name}`)
-  return ensureRequiredArtifact(definition, artifact)
+  return ensureRequiredArtifact(definition, artifact, options.arch ?? normalizeArchitecture(process.arch))
+}
+
+function assertModulePlatform(definition: FunctionalModuleDefinition, platform: FunctionalModulePlatform): void {
+  if (definition.platforms && !definition.platforms.includes(platform)) {
+    throw new Error(`${definition.name} 仅支持 macOS (darwin)，不支持 ${platform}`)
+  }
 }
 
 function ensureRequiredArtifact(
   definition: FunctionalModuleDefinition,
   artifact: FunctionalModuleArtifact,
+  arch: FunctionalModuleArchitecture,
 ): FunctionalModuleArtifact {
   if (definition.required && !artifact.required) {
     throw new Error(`${definition.displayName} 必须是必选模块`)
+  }
+  if (definition.name === 'chrome-desktop-cli') {
+    const entrypoint = `copis-chrome-${artifact.version}-darwin-${arch}/copis-chrome`
+    if (artifact.platform !== 'darwin' || artifact.arch !== arch || artifact.required
+      || artifact.format !== 'tar.gz' || artifact.entrypoint !== entrypoint) {
+      throw new Error('Chrome 模块必须使用对应版本和架构的 macOS 可选归档与顶层入口')
+    }
   }
   return artifact
 }
@@ -186,6 +207,7 @@ export async function installFunctionalModule(
   options: FunctionalModuleManagerOptions = {},
 ): Promise<FunctionalModuleStatus> {
   const definition = getModuleDefinition(input.name)
+  assertModulePlatform(definition, options.platform ?? normalizePlatform(process.platform))
   const rootDir = options.rootDir ?? getFunctionalModulesDir()
   const key = `${rootDir}:${input.name}`
   const existing = activeInstalls.get(key)
@@ -205,6 +227,7 @@ export async function prepareFunctionalModule(
   options: FunctionalModuleManagerOptions = {},
 ): Promise<PreparedFunctionalModule> {
   const definition = getModuleDefinition(input.name)
+  assertModulePlatform(definition, options.platform ?? normalizePlatform(process.platform))
   const rootDir = options.rootDir ?? getFunctionalModulesDir()
   const key = `${rootDir}:${input.name}`
   const existing = activePrepares.get(key)
@@ -223,6 +246,7 @@ export async function activatePreparedFunctionalModule(
   prepared: PreparedFunctionalModule,
   rootDir = getFunctionalModulesDir(),
 ): Promise<FunctionalModuleStatus> {
+  await validateChromeDesktopModule(prepared)
   const paths = getFunctionalModulePaths(rootDir)
   await activateFunctionalModule(paths, prepared.packageInfo, prepared.versionDir)
   return statusWithArtifact(getFunctionalModuleStatus(prepared.artifact.name, rootDir), prepared.artifact)
@@ -252,7 +276,7 @@ async function installFunctionalModuleInner(
 
     const prepared = await prepareFunctionalModuleInner(input, options, definition, emit, artifact)
     emit({ phase: 'activate', detail: `正在启用 ${definition.displayName}`, progress: 0.94, version: artifact.version })
-    await activateFunctionalModule(paths, prepared.packageInfo, prepared.versionDir)
+    await activatePreparedFunctionalModule(prepared, rootDir)
     emit({ phase: 'done', detail: `${definition.displayName} v${artifact.version} 已就绪`, progress: 1, version: artifact.version })
     return statusWithArtifact(getFunctionalModuleStatus(input.name, rootDir), artifact)
   } catch (error) {
@@ -305,10 +329,59 @@ async function prepareFunctionalModuleInner(
     emitProgress({ phase: 'install', detail: `正在安装 ${definition.displayName}`, progress: 0.84, version: artifact.version })
     await cacheFunctionalModule(paths, packageInfo, artifactPath)
     const versionDir = await assembleFunctionalModule(paths, packageInfo)
-    return { artifact, packageInfo, versionDir }
+    const prepared = { artifact, packageInfo, versionDir }
+    await validateChromeDesktopModule(prepared)
+    return prepared
   } catch (error) {
     throw new Error(`准备${definition.displayName}失败: ${toErrorMessage(error)}`, { cause: error })
   }
+}
+
+/** prepare 与激活分别校验，避免准备后的 metadata 损坏被写入 active 指针。 */
+async function validateChromeDesktopModule(prepared: PreparedFunctionalModule): Promise<void> {
+  const { artifact, packageInfo, versionDir } = prepared
+  if (artifact.name !== 'chrome-desktop-cli' && packageInfo.name !== 'chrome-desktop-cli') return
+  if (artifact.name !== packageInfo.name || artifact.version !== packageInfo.version || artifact.entrypoint !== packageInfo.entrypoint) {
+    throw new Error('Chrome 模块元数据与待激活版本不一致')
+  }
+  ensureRequiredArtifact(getModuleDefinition('chrome-desktop-cli'), artifact, artifact.arch)
+  const componentDir = dirname(join(versionDir, packageInfo.entrypoint))
+  const metadataPath = join(componentDir, 'module.json')
+  const limit = 64 * 1024
+  let metadata: unknown
+  try {
+    const before = await lstat(metadataPath)
+    if (!before.isFile() || before.nlink !== 1 || before.size <= 0 || before.size > limit) {
+      throw new Error('module.json 必须是 64 KiB 内的普通文件')
+    }
+    const handle = await open(metadataPath, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK)
+    try {
+      const opened = await handle.stat()
+      if (!opened.isFile() || opened.nlink !== 1 || opened.dev !== before.dev || opened.ino !== before.ino || opened.size !== before.size) {
+        throw new Error('module.json 在打开时发生变化')
+      }
+      const buffer = Buffer.alloc(limit + 1)
+      let length = 0
+      while (length < buffer.length) {
+        const { bytesRead } = await handle.read(buffer, length, buffer.length - length, null)
+        if (!bytesRead) break
+        length += bytesRead
+      }
+      if (!length || length > limit) throw new Error('module.json 超过读取上限或内容为空')
+      metadata = JSON.parse(buffer.subarray(0, length).toString('utf8'))
+    } finally {
+      await handle.close()
+    }
+  } catch (error) {
+    throw new Error('Chrome 模块元数据读取失败或不是有效 JSON', { cause: error })
+  }
+  if (!isChromeDesktopComponentMetadata(metadata, { version: packageInfo.version, arch: artifact.arch })) {
+    throw new Error('Chrome 模块元数据的名称、版本、平台、架构、协议或入口不匹配')
+  }
+  const helperPath = join(componentDir, metadata.helper)
+  if (!(await lstat(helperPath)).isFile()) throw new Error('Chrome 模块 helper 必须是普通文件')
+  // store 只为入口和 bin/ 文件设置权限；元数据通过后才允许修改同级 helper 的执行位。
+  await chmod(helperPath, 0o755)
 }
 
 async function downloadFunctionalModule(

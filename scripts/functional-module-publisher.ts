@@ -441,7 +441,7 @@ function validateManifestUploadArtifact(name: string, value: unknown): void {
   if (typeof value.sha256 !== 'string' || !/^[a-f0-9]{64}$/i.test(value.sha256)) {
     throw new Error(`发布 manifest 模块 sha256 不合法: ${name}`)
   }
-  if (!Number.isSafeInteger(value.size) || value.size < 0) {
+  if (typeof value.size !== 'number' || !Number.isSafeInteger(value.size) || value.size < 0) {
     throw new Error(`发布 manifest 模块 size 不合法: ${name}`)
   }
   if (value.format !== 'binary' && value.format !== 'tar.gz') {

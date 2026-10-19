@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { FunctionalModuleStatus } from '@copis/shared'
+import * as moduleUi from './functional-module-ui'
 import {
   FUNCTIONAL_MODULE_DEFINITIONS,
   createEmptyFunctionalModuleStatus,
@@ -21,6 +22,7 @@ describe('功能模块设置页模型', () => {
       'agently-cli',
       'dsh',
       'codex-cli',
+      'chrome-desktop-cli',
     ])
     expect(FUNCTIONAL_MODULE_DEFINITIONS.find((item) => item.name === 'node-runtime')?.required).toBe(true)
     expect(FUNCTIONAL_MODULE_DEFINITIONS.find((item) => item.name === 'rust-http-api')?.required).toBe(true)
@@ -41,6 +43,7 @@ describe('功能模块设置页模型', () => {
       'Agent QQ 邮箱 CLI',
       '创造模式',
       '专业模式',
+      'Chrome 桌面自动化',
     ])
     expect(FUNCTIONAL_MODULE_DEFINITIONS.every((item) => !/Rust|HTTP|API|Electron/.test(`${item.displayName} ${item.description}`))).toBe(true)
   })
@@ -82,5 +85,21 @@ describe('功能模块设置页模型', () => {
     expect(cardSource).toContain("status.error?.includes('版本过低')")
     expect(cardSource).toContain('COPIS_OFFICIAL_URL')
     expect(cardSource).toContain('打开官网')
+  })
+})
+
+describe('Chrome 功能模块平台可见性', () => {
+  test('Given Chrome 组件定义 When 查看模块属性 Then 是 macOS 可选模块', () => {
+    expect(FUNCTIONAL_MODULE_DEFINITIONS.find(item => item.name === 'chrome-desktop-cli')).toMatchObject({
+      displayName: 'Chrome 桌面自动化', required: false, platform: 'darwin',
+    })
+  })
+
+  test('Given 主进程按平台返回状态 When 生成设置列表 Then 只在 macOS 且主进程提供 Chrome 状态时展示', () => {
+    expect(typeof moduleUi.getVisibleFunctionalModuleDefinitions).toBe('function')
+    const chrome = createEmptyFunctionalModuleStatus(FUNCTIONAL_MODULE_DEFINITIONS.find(item => item.name === 'chrome-desktop-cli')!)
+    expect(moduleUi.getVisibleFunctionalModuleDefinitions({ 'chrome-desktop-cli': chrome }, true).map(item => item.name)).toContain('chrome-desktop-cli')
+    expect(moduleUi.getVisibleFunctionalModuleDefinitions({}, true).map(item => item.name)).not.toContain('chrome-desktop-cli')
+    expect(moduleUi.getVisibleFunctionalModuleDefinitions({ 'chrome-desktop-cli': chrome }, false).map(item => item.name)).not.toContain('chrome-desktop-cli')
   })
 })

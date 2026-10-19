@@ -74,7 +74,6 @@ const VISUAL_DISTRIBUTION_BUILD_STEPS: readonly VisualDistributionBuildStep[] = 
   { name: '构建渲染进程', command: 'build:renderer', label: '构建渲染进程 (Vite)' },
   { name: '编译 copis CLI', command: 'build:cli', label: '编译 copis CLI (bun --compile)' },
   // build:cli 会清理平台 bin 目录，原生 Helper 必须在它之后重建。
-  { name: '编译 Chrome Helper', command: 'build:chrome-desktop-helper', label: '编译 Chrome Desktop Helper (Swift)' },
   { name: '复制 Pi 扩展', command: 'copy:pi-extensions', label: '复制 Pi 扩展及依赖' },
   { name: '复制资源文件', command: 'build:resources', label: '复制资源文件' },
   { name: '同步生产依赖', command: 'sync:runtime-deps', label: '同步主进程 external 依赖' },

@@ -24,6 +24,8 @@ import {
   type FunctionalModuleCosSdkClient,
 } from './functional-module-cos-client'
 import { mergeFunctionalModuleManifests } from './functional-module-manifest-merge'
+import { chromeDesktopEntrypoint, validateChromeDesktopArchive } from './prepare-chrome-desktop-module'
+import { getChromeCliOption } from './chrome-cli-options'
 import { resolveFunctionalModulePrefix } from './functional-module-prefix'
 import {
   applyFunctionalModuleVersionLocks,
@@ -58,8 +60,12 @@ async function main(): Promise<void> {
   const agentlyCliOnly = hasFlag('--agently-cli') || process.env.COPIS_AGENTLY_CLI_ONLY === '1'
   const dshOnly = hasFlag('--dsh') || process.env.COPIS_DSH_ONLY === '1'
   const codexCliOnly = hasFlag('--codex-cli') || process.env.COPIS_CODEX_CLI_ONLY === '1'
-  if (Number(rustOnly) + Number(officeCliOnly) + Number(nodeRuntimeOnly) + Number(alipayBotOnly) + Number(playwrightCoreOnly) + Number(pythonRuntimeOnly) + Number(agentlyCliOnly) + Number(dshOnly) + Number(codexCliOnly) > 1) {
-    throw new Error('--rust、--officecli、--node-runtime、--alipay-bot、--playwright-core、--python-runtime、--agently-cli、--dsh 与 --codex-cli 不能同时使用')
+  const chromeDesktopCliOnly = hasFlag('--chrome-cli') || hasFlag('--chrome-desktop-cli') || process.env.COPIS_CHROME_DESKTOP_CLI_ONLY === '1'
+  const platform = parsePlatform(getOption('--platform') ?? process.env.COPIS_MODULE_PLATFORM ?? process.platform)
+  const arch = parseArchitecture(getOption('--arch') ?? process.env.COPIS_MODULE_ARCH ?? process.arch)
+  if (chromeDesktopCliOnly && platform !== 'darwin') throw new Error('chrome-desktop-cli 仅支持 macOS (darwin)')
+  if (Number(rustOnly) + Number(officeCliOnly) + Number(nodeRuntimeOnly) + Number(alipayBotOnly) + Number(playwrightCoreOnly) + Number(pythonRuntimeOnly) + Number(agentlyCliOnly) + Number(dshOnly) + Number(codexCliOnly) + Number(chromeDesktopCliOnly) > 1) {
+    throw new Error('--rust、--officecli、--node-runtime、--alipay-bot、--playwright-core、--python-runtime、--agently-cli、--dsh、--codex-cli 与 --chrome-desktop-cli 不能同时使用')
   }
 
   const secretId = requiredEnv('COS_SECRET_ID')
@@ -71,8 +77,6 @@ async function main(): Promise<void> {
   const publicBaseUrl = requiredOption('--public-base-url', 'COS_PUBLIC_BASE_URL')
   const channel = getOption('--channel') ?? process.env.COPIS_MODULE_CHANNEL?.trim() ?? 'stable'
   const version = getOption('--version') ?? process.env.COPIS_MODULE_VERSION?.trim() ?? packageMetadata.version
-  const platform = parsePlatform(getOption('--platform') ?? process.env.COPIS_MODULE_PLATFORM ?? process.platform)
-  const arch = parseArchitecture(getOption('--arch') ?? process.env.COPIS_MODULE_ARCH ?? process.arch)
   const prefix = resolveFunctionalModulePrefix({
     cliPrefix: getOption('--prefix'),
     objectPrefixPath: process.env.OBJECT_PREFIX_PATH,
@@ -106,44 +110,44 @@ async function main(): Promise<void> {
     await publishFunctionalModuleManifest(manifestEntry, client)
     console.log(`[publish:functional-modules] 已覆盖发布 manifest: ${manifestEntry.key}`)
   } else {
-    const rustBinary = officeCliOnly || nodeRuntimeOnly || alipayBotOnly || playwrightCoreOnly || pythonRuntimeOnly || agentlyCliOnly || dshOnly || codexCliOnly
+    const rustBinary = officeCliOnly || nodeRuntimeOnly || alipayBotOnly || playwrightCoreOnly || pythonRuntimeOnly || agentlyCliOnly || dshOnly || codexCliOnly || chromeDesktopCliOnly
       ? ''
       : getOption('--rust-binary')
         ?? process.env.COPIS_RUST_HTTP_API_BINARY?.trim()
         ?? join(repoRoot, 'native/http-api-server/target/release', binaryName('copis-http-api-server', platform))
-    const officeCliBinary = rustOnly || nodeRuntimeOnly || alipayBotOnly || playwrightCoreOnly || pythonRuntimeOnly || agentlyCliOnly || dshOnly || codexCliOnly
+    const officeCliBinary = rustOnly || nodeRuntimeOnly || alipayBotOnly || playwrightCoreOnly || pythonRuntimeOnly || agentlyCliOnly || dshOnly || codexCliOnly || chromeDesktopCliOnly
       ? undefined
       : getOption('--officecli-binary')
         ?? process.env.COPIS_OFFICECLI_BINARY?.trim()
         ?? join(electronDir, 'resources/bin', binaryName('officecli', platform))
     const nodeRuntimeArchive = rustOnly || officeCliOnly || alipayBotOnly || playwrightCoreOnly
-      || pythonRuntimeOnly || agentlyCliOnly || dshOnly || codexCliOnly
+      || pythonRuntimeOnly || agentlyCliOnly || dshOnly || codexCliOnly || chromeDesktopCliOnly
       ? undefined
       : getOption('--node-runtime-archive')
         ?? process.env.COPIS_NODE_RUNTIME_ARCHIVE?.trim()
         ?? join(electronDir, 'resources/node-runtime', `${platform}-${arch}.tar.gz`)
     const alipayBotArchive = rustOnly || officeCliOnly || nodeRuntimeOnly || playwrightCoreOnly
-      || pythonRuntimeOnly || agentlyCliOnly || dshOnly || codexCliOnly
+      || pythonRuntimeOnly || agentlyCliOnly || dshOnly || codexCliOnly || chromeDesktopCliOnly
       ? undefined
       : getOption('--alipay-bot-archive')
         ?? process.env.COPIS_ALIPAY_BOT_ARCHIVE?.trim()
         ?? join(electronDir, 'resources/alipay-bot', `${platform}-${arch}.tar.gz`)
-    const pythonRuntimeArchive = rustOnly || officeCliOnly || nodeRuntimeOnly || alipayBotOnly || playwrightCoreOnly || agentlyCliOnly || dshOnly || codexCliOnly
+    const pythonRuntimeArchive = rustOnly || officeCliOnly || nodeRuntimeOnly || alipayBotOnly || playwrightCoreOnly || agentlyCliOnly || dshOnly || codexCliOnly || chromeDesktopCliOnly
       ? undefined
       : getOption('--python-runtime-archive')
       ?? process.env.COPIS_PYTHON_RUNTIME_ARCHIVE?.trim()
       ?? join(electronDir, 'resources/python-runtime', `${platform}-${arch}.tar.gz`)
-    const agentlyCliArchive = rustOnly || officeCliOnly || nodeRuntimeOnly || alipayBotOnly || playwrightCoreOnly || pythonRuntimeOnly || dshOnly || codexCliOnly
+    const agentlyCliArchive = rustOnly || officeCliOnly || nodeRuntimeOnly || alipayBotOnly || playwrightCoreOnly || pythonRuntimeOnly || dshOnly || codexCliOnly || chromeDesktopCliOnly
       ? undefined
       : getOption('--agently-cli-archive')
         ?? process.env.COPIS_AGENTLY_CLI_ARCHIVE?.trim()
         ?? join(electronDir, 'resources/agently-cli', `${platform}-${arch}.tar.gz`)
-    const dshArchive = rustOnly || officeCliOnly || nodeRuntimeOnly || alipayBotOnly || playwrightCoreOnly || pythonRuntimeOnly || agentlyCliOnly || codexCliOnly
+    const dshArchive = rustOnly || officeCliOnly || nodeRuntimeOnly || alipayBotOnly || playwrightCoreOnly || pythonRuntimeOnly || agentlyCliOnly || codexCliOnly || chromeDesktopCliOnly
       ? undefined
       : getOption('--dsh-archive')
         ?? process.env.COPIS_DSH_ARCHIVE?.trim()
         ?? join(electronDir, 'resources/dsh', `${platform}-${arch}.tar.gz`)
-    const codexCliArchive = rustOnly || officeCliOnly || nodeRuntimeOnly || alipayBotOnly || playwrightCoreOnly || pythonRuntimeOnly || agentlyCliOnly || dshOnly
+    const codexCliArchive = rustOnly || officeCliOnly || nodeRuntimeOnly || alipayBotOnly || playwrightCoreOnly || pythonRuntimeOnly || agentlyCliOnly || dshOnly || chromeDesktopCliOnly
       ? undefined
       : getOption('--codex-cli-archive')
         ?? process.env.COPIS_CODEX_CLI_ARCHIVE?.trim()
@@ -158,6 +162,7 @@ async function main(): Promise<void> {
       agentlyCliOnly,
       dshOnly,
       codexCliOnly,
+      chromeDesktopCliOnly,
       rustBinary,
       rustVersion: getOption('--rust-version') ?? process.env.COPIS_RUST_HTTP_API_VERSION?.trim() ?? version,
       officeCliBinary,
@@ -184,6 +189,10 @@ async function main(): Promise<void> {
       dshVersion: getOption('--dsh-version')
         ?? process.env.COPIS_DSH_VERSION?.trim()
         ?? version,
+      chromeDesktopCliArchive: getChromeCliOption('archive')
+        ?? process.env.COPIS_CHROME_DESKTOP_CLI_ARCHIVE?.trim()
+        ?? join(electronDir, 'resources/chrome-desktop-cli', `${platform}-${arch}.tar.gz`),
+      chromeDesktopCliVersion: versionLocks['chrome-desktop-cli'],
       codexCliArchive,
       codexCliVersion: getOption('--codex-cli-version')
         ?? process.env.COPIS_CODEX_CLI_VERSION?.trim()
@@ -191,6 +200,11 @@ async function main(): Promise<void> {
       platform,
       arch,
     }), versionLocks)
+    const requestedChromeVersion = getChromeCliOption('version') ?? process.env.COPIS_CHROME_DESKTOP_CLI_VERSION
+    if (modules.some(module => module.module === 'chrome-desktop-cli') && requestedChromeVersion && requestedChromeVersion !== versionLocks['chrome-desktop-cli']) throw new Error(`Chrome 模块版本必须与版本锁一致: ${versionLocks['chrome-desktop-cli']}`)
+    for (const module of modules) {
+      if (module.module === 'chrome-desktop-cli') validateChromeDesktopArchive(module.binaryPath, module.platform, module.arch, module.version)
+    }
     const releaseInput = {
       channel,
       clientMinVersion: getOption('--client-min-version')
@@ -215,6 +229,7 @@ async function main(): Promise<void> {
       agentlyCliOnly,
       dshOnly,
       codexCliOnly,
+      chromeDesktopCliOnly,
       platform,
       arch,
     })
@@ -573,6 +588,7 @@ interface SingleModuleReleaseValidationOptions {
   agentlyCliOnly?: boolean
   dshOnly?: boolean
   codexCliOnly?: boolean
+  chromeDesktopCliOnly?: boolean
   platform: FunctionalModulePlatform
   arch: FunctionalModuleArchitecture
 }
@@ -592,6 +608,7 @@ export function validateExistingModulesForSingleModuleRelease(
     agentlyCliOnly = false,
     dshOnly = false,
     codexCliOnly = false,
+    chromeDesktopCliOnly = false,
     platform,
     arch,
   } = options
@@ -662,7 +679,7 @@ export function validateExistingModulesForSingleModuleRelease(
     requireExistingPythonRuntime(manifest, platform, arch)
     return
   }
-  if (codexCliOnly) {
+  if (codexCliOnly || chromeDesktopCliOnly) {
     requireExistingRustApi(manifest, platform, arch)
     requireExistingOfficeCli(manifest, platform, arch)
     requireExistingNodeRuntime(manifest, platform, arch)
@@ -683,6 +700,7 @@ interface FunctionalModuleBinaryInputOptions {
   agentlyCliOnly?: boolean
   dshOnly?: boolean
   codexCliOnly?: boolean
+  chromeDesktopCliOnly?: boolean
   rustBinary: string
   rustVersion: string
   officeCliBinary?: string
@@ -699,6 +717,8 @@ interface FunctionalModuleBinaryInputOptions {
   agentlyCliVersion?: string
   dshArchive?: string
   dshVersion?: string
+  chromeDesktopCliArchive?: string
+  chromeDesktopCliVersion?: string
   codexCliArchive?: string
   codexCliVersion?: string
   platform: FunctionalModulePlatform
@@ -716,11 +736,13 @@ export function buildFunctionalModuleBinaryInputs(
   const agentlyCliOnly = input.agentlyCliOnly ?? false
   const dshOnly = input.dshOnly ?? false
   const codexCliOnly = input.codexCliOnly ?? false
-  if (Number(input.rustOnly) + Number(officeCliOnly) + Number(nodeRuntimeOnly) + Number(alipayBotOnly) + Number(playwrightCoreOnly) + Number(pythonRuntimeOnly) + Number(agentlyCliOnly) + Number(dshOnly) + Number(codexCliOnly) > 1) {
-    throw new Error('--rust、--officecli、--node-runtime、--alipay-bot、--playwright-core、--python-runtime、--agently-cli、--dsh 与 --codex-cli 不能同时使用')
+  const chromeDesktopCliOnly = input.chromeDesktopCliOnly ?? false
+  if (chromeDesktopCliOnly && input.platform !== 'darwin') throw new Error('chrome-desktop-cli 仅支持 macOS (darwin)')
+  if (Number(input.rustOnly) + Number(officeCliOnly) + Number(nodeRuntimeOnly) + Number(alipayBotOnly) + Number(playwrightCoreOnly) + Number(pythonRuntimeOnly) + Number(agentlyCliOnly) + Number(dshOnly) + Number(codexCliOnly) + Number(chromeDesktopCliOnly) > 1) {
+    throw new Error('--rust、--officecli、--node-runtime、--alipay-bot、--playwright-core、--python-runtime、--agently-cli、--dsh、--codex-cli 与 --chrome-desktop-cli 不能同时使用')
   }
   const modules: FunctionalModuleBinaryInput[] = []
-  if (!officeCliOnly && !nodeRuntimeOnly && !alipayBotOnly && !playwrightCoreOnly && !pythonRuntimeOnly && !agentlyCliOnly && !dshOnly && !codexCliOnly) {
+  if (!officeCliOnly && !nodeRuntimeOnly && !alipayBotOnly && !playwrightCoreOnly && !pythonRuntimeOnly && !agentlyCliOnly && !dshOnly && !codexCliOnly && !chromeDesktopCliOnly) {
     modules.push({
       module: 'rust-http-api',
       version: input.rustVersion,
@@ -730,7 +752,7 @@ export function buildFunctionalModuleBinaryInputs(
       required: true,
     })
   }
-  if (!input.rustOnly && !nodeRuntimeOnly && !alipayBotOnly && !playwrightCoreOnly && !pythonRuntimeOnly && !agentlyCliOnly && !dshOnly && !codexCliOnly) {
+  if (!input.rustOnly && !nodeRuntimeOnly && !alipayBotOnly && !playwrightCoreOnly && !pythonRuntimeOnly && !agentlyCliOnly && !dshOnly && !codexCliOnly && !chromeDesktopCliOnly) {
     if (!input.officeCliBinary) throw new Error('正常发布或 OfficeCLI-only 发布需要提供 OfficeCLI 二进制路径')
     modules.push({
       module: 'officecli',
@@ -741,7 +763,7 @@ export function buildFunctionalModuleBinaryInputs(
       required: true,
     })
   }
-  if (!input.rustOnly && !officeCliOnly && !alipayBotOnly && !playwrightCoreOnly && !pythonRuntimeOnly && !agentlyCliOnly && !dshOnly && !codexCliOnly) {
+  if (!input.rustOnly && !officeCliOnly && !alipayBotOnly && !playwrightCoreOnly && !pythonRuntimeOnly && !agentlyCliOnly && !dshOnly && !codexCliOnly && !chromeDesktopCliOnly) {
     if (!input.nodeRuntimeArchive) throw new Error('正常发布或 Node.js runtime-only 发布需要提供 Node.js runtime 归档')
     modules.push({
       module: 'node-runtime',
@@ -754,7 +776,7 @@ export function buildFunctionalModuleBinaryInputs(
       required: true,
     })
   }
-  if (!input.rustOnly && !officeCliOnly && !nodeRuntimeOnly && !playwrightCoreOnly && !pythonRuntimeOnly && !agentlyCliOnly && !dshOnly && !codexCliOnly) {
+  if (!input.rustOnly && !officeCliOnly && !nodeRuntimeOnly && !playwrightCoreOnly && !pythonRuntimeOnly && !agentlyCliOnly && !dshOnly && !codexCliOnly && !chromeDesktopCliOnly) {
     if (!input.alipayBotArchive) throw new Error('正常发布或支付宝智能体 CLI-only 发布需要提供 alipay-bot 归档')
     modules.push({
       module: 'alipay-bot',
@@ -767,7 +789,7 @@ export function buildFunctionalModuleBinaryInputs(
       required: true,
     })
   }
-  if (!input.rustOnly && !officeCliOnly && !nodeRuntimeOnly && !alipayBotOnly && !pythonRuntimeOnly && !agentlyCliOnly && !dshOnly && !codexCliOnly) {
+  if (!input.rustOnly && !officeCliOnly && !nodeRuntimeOnly && !alipayBotOnly && !pythonRuntimeOnly && !agentlyCliOnly && !dshOnly && !codexCliOnly && !chromeDesktopCliOnly) {
     if (!input.playwrightCoreArchive) throw new Error('正常发布或 Playwright-only 发布需要提供 playwright-core 归档')
     modules.push({
       module: 'playwright-core',
@@ -780,7 +802,7 @@ export function buildFunctionalModuleBinaryInputs(
       required: true,
     })
   }
-  if (!input.rustOnly && !officeCliOnly && !nodeRuntimeOnly && !alipayBotOnly && !playwrightCoreOnly && !agentlyCliOnly && !dshOnly && !codexCliOnly) {
+  if (!input.rustOnly && !officeCliOnly && !nodeRuntimeOnly && !alipayBotOnly && !playwrightCoreOnly && !agentlyCliOnly && !dshOnly && !codexCliOnly && !chromeDesktopCliOnly) {
     if (!input.pythonRuntimeArchive) throw new Error('正常发布或 Python runtime-only 发布需要提供 Python runtime 归档')
     modules.push({
       module: 'python-runtime',
@@ -793,7 +815,7 @@ export function buildFunctionalModuleBinaryInputs(
       required: true,
     })
   }
-  if (!input.rustOnly && !officeCliOnly && !nodeRuntimeOnly && !alipayBotOnly && !playwrightCoreOnly && !pythonRuntimeOnly && !dshOnly && !codexCliOnly) {
+  if (!input.rustOnly && !officeCliOnly && !nodeRuntimeOnly && !alipayBotOnly && !playwrightCoreOnly && !pythonRuntimeOnly && !dshOnly && !codexCliOnly && !chromeDesktopCliOnly) {
     if (!input.agentlyCliArchive) throw new Error('正常发布或 Agent QQ 邮箱 CLI-only 发布需要提供 agently-cli 归档')
     modules.push({
       module: 'agently-cli',
@@ -806,7 +828,7 @@ export function buildFunctionalModuleBinaryInputs(
       required: false,
     })
   }
-  if (!input.rustOnly && !officeCliOnly && !nodeRuntimeOnly && !alipayBotOnly && !playwrightCoreOnly && !pythonRuntimeOnly && !agentlyCliOnly && !codexCliOnly) {
+  if (!input.rustOnly && !officeCliOnly && !nodeRuntimeOnly && !alipayBotOnly && !playwrightCoreOnly && !pythonRuntimeOnly && !agentlyCliOnly && !codexCliOnly && !chromeDesktopCliOnly) {
     if (!input.dshArchive) throw new Error('正常发布或 dsh-only 发布需要提供 dsh 归档')
     modules.push({
       module: 'dsh',
@@ -819,7 +841,7 @@ export function buildFunctionalModuleBinaryInputs(
       required: false,
     })
   }
-  if (!input.rustOnly && !officeCliOnly && !nodeRuntimeOnly && !alipayBotOnly && !playwrightCoreOnly && !pythonRuntimeOnly && !agentlyCliOnly && !dshOnly) {
+  if (!input.rustOnly && !officeCliOnly && !nodeRuntimeOnly && !alipayBotOnly && !playwrightCoreOnly && !pythonRuntimeOnly && !agentlyCliOnly && !dshOnly && !chromeDesktopCliOnly) {
     if (codexCliOnly && !input.codexCliArchive) {
       throw new Error('专业模式 (codex-cli)-only 发布需要提供 codex-cli 归档')
     }
@@ -835,6 +857,20 @@ export function buildFunctionalModuleBinaryInputs(
         required: false,
       })
     }
+  }
+  if (input.platform === 'darwin' && !input.rustOnly && !officeCliOnly && !nodeRuntimeOnly && !alipayBotOnly && !playwrightCoreOnly && !pythonRuntimeOnly && !agentlyCliOnly && !dshOnly && !codexCliOnly) {
+    if (!input.chromeDesktopCliArchive) throw new Error('macOS 全量或 Chrome-only 发布需要提供 chrome-desktop-cli 归档')
+    const version = input.chromeDesktopCliVersion ?? loadFunctionalModuleVersionLocks()['chrome-desktop-cli']
+    modules.push({
+      module: 'chrome-desktop-cli',
+      version,
+      platform: input.platform,
+      arch: input.arch,
+      binaryPath: input.chromeDesktopCliArchive,
+      format: 'tar.gz',
+      entrypoint: chromeDesktopEntrypoint(version, input.arch),
+      required: false,
+    })
   }
   return modules
 }

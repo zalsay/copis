@@ -39,6 +39,7 @@ files:
   # 排除 build:resources 脚本拷到 dist/resources 的副本（electron-builder 已通过
   # buildResources 从 resources/ 直接使用 icon/plist，避免产物里重复打包一份）
   - "!dist/resources/**"
+  - "!resources/chrome-desktop-cli/**"
   - package.json
   # Pi runtime 作为主进程 external 运行。打包前 sync:runtime-deps 会
   # 将 external 依赖闭包同步到 apps/electron/node_modules。
@@ -80,6 +81,10 @@ extraResources:
       - "**/*"
       - "!copis-http-api-server"
       - "!copis-http-api-server.exe"
+      # Chrome 组件只经功能模块发布；同时排除旧构建遗留的 helper。
+      - "!**/chrome-desktop-helper"
+      - "!**/copis-chrome"
+      - "!**/copis-chrome-helper"
   # 默认 Skills 模板（首次启动时同步到 ~/.copis/default-skills/）
   - from: default-skills
     to: default-skills

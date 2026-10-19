@@ -740,6 +740,11 @@ app.on('before-quit', (event) => {
     if (!piWorkerStopInProgress) {
       piWorkerStopInProgress = true
       void (async () => {
+        // 独立 Chrome 组件包含后台进程；在主进程退出前等待其停止，避免留下屏幕采集和输入资源。
+        try {
+          const { chromeDesktopService } = await import('./lib/chrome-desktop-service')
+          await chromeDesktopService.shutdown()
+        } catch { console.warn('[退出] Chrome 组件清理失败，继续停止其他服务') }
         await runChatRoomQuitCleanup({
           stopChatRooms: async () => {
             try {

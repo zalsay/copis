@@ -250,7 +250,7 @@ describe('COS 功能模块统一管理', () => {
   test('模块状态注册表包含全部模块且必要模块正确标记', () => {
     const statuses = getFunctionalModuleStatuses(createRoot())
 
-    expect(statuses.map((item) => item.name)).toEqual(['node-runtime', 'rust-http-api', 'officecli', 'alipay-bot', 'playwright-core', 'python-runtime', 'agently-cli', 'dsh', 'codex-cli'])
+    expect(statuses.map((item) => item.name)).toEqual(['node-runtime', 'rust-http-api', 'officecli', 'alipay-bot', 'playwright-core', 'python-runtime', 'agently-cli', 'dsh', ...(process.platform === 'darwin' ? ['chrome-desktop-cli'] : []), 'codex-cli'])
     expect(statuses.find((item) => item.name === 'node-runtime')?.required).toBe(true)
     expect(statuses.find((item) => item.name === 'rust-http-api')?.required).toBe(true)
     expect(statuses.find((item) => item.name === 'officecli')?.required).toBe(true)

@@ -29,7 +29,7 @@ describe('chrome-desktop shared types and constants', () => {
     const uniqueValues = new Set(values)
     expect(uniqueValues.size).toBe(values.length)
     expect(CHROME_DESKTOP_IPC_CHANNELS.CHECK_STATUS).toBe('chrome-desktop:check-status')
-    expect(CHROME_DESKTOP_IPC_CHANNELS.REQUEST_FRAME).toBe('chrome-desktop:request-frame')
+    expect(Object.keys(CHROME_DESKTOP_IPC_CHANNELS)).not.toContain('REQUEST_FRAME')
   })
 
   it('verifies state and error code types compile cleanly', () => {

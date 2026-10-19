@@ -12,6 +12,9 @@ export const functionalModuleProgressAtom = atom<Partial<Record<FunctionalModule
 
 export const functionalModuleBusyAtom = atom<Partial<Record<FunctionalModuleName, boolean>>>({})
 
+/** 批量检查跨设置页挂载周期保留，避免离开后重进重复发起检查。 */
+export const functionalModuleCheckingAllAtom = atom(false)
+
 export type FunctionalModuleStartupState = Omit<FunctionalModuleStartupProgressPayload, 'error'> & {
   error: string | null
 }

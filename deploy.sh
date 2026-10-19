@@ -58,6 +58,7 @@ PYTHON_RUNTIME_ONLY="${COPIS_PYTHON_RUNTIME_ONLY:-0}"
 AGENTLY_CLI_ONLY="${COPIS_AGENTLY_CLI_ONLY:-0}"
 DSH_ONLY="${COPIS_DSH_ONLY:-0}"
 CODEX_CLI_ONLY="${COPIS_CODEX_CLI_ONLY:-0}"
+CHROME_DESKTOP_CLI_ONLY="${COPIS_CHROME_DESKTOP_CLI_ONLY:-0}"
 PLATFORM="${COPIS_MODULE_PLATFORM:-}"
 ARCH="${COPIS_MODULE_ARCH:-}"
 CHANNEL="${COPIS_MODULE_CHANNEL:-stable}"
@@ -84,6 +85,10 @@ DSH_VERSION="${COPIS_DSH_VERSION:-}"
 CODEX_CLI_ARCHIVE="${COPIS_CODEX_CLI_ARCHIVE:-}"
 CODEX_CLI_VERSION="${COPIS_CODEX_CLI_VERSION:-}"
 CODEX_CLI_BINARY="${COPIS_CODEX_CLI_BINARY:-}"
+CHROME_DESKTOP_CLI_ARCHIVE="${COPIS_CHROME_DESKTOP_CLI_ARCHIVE:-}"
+CHROME_DESKTOP_CLI_VERSION="${COPIS_CHROME_DESKTOP_CLI_VERSION:-}"
+CHROME_CLI_ARCHIVE_ARG_SEEN=0
+CHROME_CLI_VERSION_ARG_SEEN=0
 
 fail() {
   echo "[Copis] $*" >&2
@@ -99,7 +104,7 @@ show_help() {
 
 选项：
   --skip-install       跳过 bun install --frozen-lockfile
-  --install            强制执行 bun install --frozen-lockfile（覆盖 --rust 默认跳过）
+  --install            强制执行 bun install --frozen-lockfile（覆盖 --rust / --chrome-cli 默认跳过）
   --build-app          同时构建当前平台 Electron 应用包
   --skip-rust-build    使用已有 Rust 二进制
   --rust               只发布 Rust HTTP API（默认启用 --skip-install）；每次自动递增 rust-http-api 版本，并校验 COS 中已有其他必要模块
@@ -111,6 +116,10 @@ show_help() {
   --agently-cli        只发布 Agent QQ 邮箱 CLI，保留 COS 中已有其他必要模块
   --dsh                只发布 dsh 运行环境，保留 COS 中已有其他必要模块
   --codex-cli          只发布专业模式 (codex-cli) 运行环境，保留 COS 中已有其他必要模块
+  --chrome-cli          从源码重新构建并上传 macOS Chrome 组件（默认跳过 JS 依赖安装）
+  --chrome-cli-archive <path> 校验并发布指定归档，不执行源码构建
+  --chrome-cli-version <version> 必须与独立版本锁一致
+  --chrome-desktop-cli / --chrome-desktop-cli-archive / --chrome-desktop-cli-version 保持兼容
   --skip-publish       只构建二进制，不发布 COS
   --platform <name>    win32、darwin 或 linux
   --arch <name>        x64 或 arm64
@@ -184,6 +193,27 @@ while [[ $# -gt 0 ]]; do
       ;;
     --dsh)
       DSH_ONLY=1
+      ;;
+    --chrome-cli|--chrome-desktop-cli)
+      CHROME_DESKTOP_CLI_ONLY=1
+      ;;
+    --chrome-cli-archive|--chrome-desktop-cli-archive)
+      require_value "$1" "${2:-}"
+      if [[ "$CHROME_CLI_ARCHIVE_ARG_SEEN" == '1' && "$CHROME_DESKTOP_CLI_ARCHIVE" != "$2" ]]; then
+        fail 'Chrome archive 短/长参数的值存在冲突。'
+      fi
+      CHROME_CLI_ARCHIVE_ARG_SEEN=1
+      CHROME_DESKTOP_CLI_ARCHIVE="$2"
+      shift
+      ;;
+    --chrome-cli-version|--chrome-desktop-cli-version)
+      require_value "$1" "${2:-}"
+      if [[ "$CHROME_CLI_VERSION_ARG_SEEN" == '1' && "$CHROME_DESKTOP_CLI_VERSION" != "$2" ]]; then
+        fail 'Chrome version 短/长参数的值存在冲突。'
+      fi
+      CHROME_CLI_VERSION_ARG_SEEN=1
+      CHROME_DESKTOP_CLI_VERSION="$2"
+      shift
       ;;
     --codex-cli)
       CODEX_CLI_ONLY=1
@@ -330,13 +360,15 @@ done
 if [[ -z "$SKIP_INSTALL" ]]; then
   if [[ "$RUST_ONLY" == '1' ]]; then
     SKIP_INSTALL=1
+  elif [[ "$CHROME_DESKTOP_CLI_ONLY" == '1' ]]; then
+    SKIP_INSTALL=1
   else
     SKIP_INSTALL=0
   fi
 fi
 
-if [[ $((RUST_ONLY + OFFICECLI_ONLY + NODE_RUNTIME_ONLY + ALIPAY_BOT_ONLY + PLAYWRIGHT_CORE_ONLY + PYTHON_RUNTIME_ONLY + AGENTLY_CLI_ONLY + DSH_ONLY + CODEX_CLI_ONLY)) -gt 1 ]]; then
-  fail '--rust、--officecli、--node-runtime、--alipay-bot、--playwright-core、--python-runtime、--agently-cli、--dsh 与 --codex-cli 不能同时使用。'
+if [[ $((RUST_ONLY + OFFICECLI_ONLY + NODE_RUNTIME_ONLY + ALIPAY_BOT_ONLY + PLAYWRIGHT_CORE_ONLY + PYTHON_RUNTIME_ONLY + AGENTLY_CLI_ONLY + DSH_ONLY + CODEX_CLI_ONLY + CHROME_DESKTOP_CLI_ONLY)) -gt 1 ]]; then
+  fail '--rust、--officecli、--node-runtime、--alipay-bot、--playwright-core、--python-runtime、--agently-cli、--dsh、--codex-cli 与 --chrome-cli 不能同时使用（--chrome-desktop-cli 为兼容别名）。'
 fi
 
 if ! command -v bun >/dev/null 2>&1; then
@@ -388,6 +420,10 @@ case "$ARCH" in
     fail "不支持的功能模块架构：$ARCH"
     ;;
 esac
+
+if [[ "$CHROME_DESKTOP_CLI_ONLY" == '1' && "$PLATFORM" != 'darwin' ]]; then
+  fail 'chrome-desktop-cli 仅支持 macOS (darwin)，Windows/Linux 不支持该单模块发布。'
+fi
 
 if [[ -z "$CHANNEL" ]]; then
   fail '发布 channel 不能为空。'
@@ -530,7 +566,7 @@ else
   DEFAULT_RUST_BINARY="$ROOT_DIR/native/http-api-server/target/release/copis-http-api-server"
 fi
 
-if [[ "$OFFICECLI_ONLY" != '1' && "$NODE_RUNTIME_ONLY" != '1' && "$ALIPAY_BOT_ONLY" != '1' && "$PLAYWRIGHT_CORE_ONLY" != '1' && "$PYTHON_RUNTIME_ONLY" != '1' && "$AGENTLY_CLI_ONLY" != '1' && "$DSH_ONLY" != '1' && "$CODEX_CLI_ONLY" != '1' && "$SKIP_RUST_BUILD" -eq 0 ]]; then
+if [[ "$OFFICECLI_ONLY" != '1' && "$NODE_RUNTIME_ONLY" != '1' && "$ALIPAY_BOT_ONLY" != '1' && "$PLAYWRIGHT_CORE_ONLY" != '1' && "$PYTHON_RUNTIME_ONLY" != '1' && "$AGENTLY_CLI_ONLY" != '1' && "$DSH_ONLY" != '1' && "$CODEX_CLI_ONLY" != '1' && "$SKIP_RUST_BUILD" -eq 0 && "$CHROME_DESKTOP_CLI_ONLY" != '1' ]]; then
   if [[ "$PLATFORM" != "$CURRENT_PLATFORM" || "$ARCH" != "$CURRENT_ARCH" ]]; then
     fail 'deploy.sh 默认只能在当前平台和架构编译 Rust API；跨平台产物请传入 --skip-rust-build 和 --rust-binary。'
   fi
@@ -538,7 +574,7 @@ if [[ "$OFFICECLI_ONLY" != '1' && "$NODE_RUNTIME_ONLY" != '1' && "$ALIPAY_BOT_ON
   run_bun "$APP_DIR" 'Rust HTTP API 构建失败' run build:http-api-server
 fi
 
-if [[ "$OFFICECLI_ONLY" != '1' && "$NODE_RUNTIME_ONLY" != '1' && "$ALIPAY_BOT_ONLY" != '1' && "$PLAYWRIGHT_CORE_ONLY" != '1' && "$PYTHON_RUNTIME_ONLY" != '1' && "$AGENTLY_CLI_ONLY" != '1' && "$DSH_ONLY" != '1' && "$CODEX_CLI_ONLY" != '1' ]]; then
+if [[ "$OFFICECLI_ONLY" != '1' && "$NODE_RUNTIME_ONLY" != '1' && "$ALIPAY_BOT_ONLY" != '1' && "$PLAYWRIGHT_CORE_ONLY" != '1' && "$PYTHON_RUNTIME_ONLY" != '1' && "$AGENTLY_CLI_ONLY" != '1' && "$DSH_ONLY" != '1' && "$CODEX_CLI_ONLY" != '1' && "$CHROME_DESKTOP_CLI_ONLY" != '1' ]]; then
   if [[ -n "$RUST_BINARY" && "$RUST_BINARY" != /* ]]; then
     RUST_BINARY="$ROOT_DIR/$RUST_BINARY"
   fi
@@ -549,7 +585,7 @@ if [[ "$OFFICECLI_ONLY" != '1' && "$NODE_RUNTIME_ONLY" != '1' && "$ALIPAY_BOT_ON
   RUST_BINARY="$(cd "$(dirname "$RUST_BINARY")" && pwd)/$(basename "$RUST_BINARY")"
 fi
 
-if [[ "$RUST_ONLY" != '1' && "$NODE_RUNTIME_ONLY" != '1' && "$ALIPAY_BOT_ONLY" != '1' && "$PLAYWRIGHT_CORE_ONLY" != '1' && "$PYTHON_RUNTIME_ONLY" != '1' && "$AGENTLY_CLI_ONLY" != '1' && "$DSH_ONLY" != '1' && "$CODEX_CLI_ONLY" != '1' ]]; then
+if [[ "$RUST_ONLY" != '1' && "$NODE_RUNTIME_ONLY" != '1' && "$ALIPAY_BOT_ONLY" != '1' && "$PLAYWRIGHT_CORE_ONLY" != '1' && "$PYTHON_RUNTIME_ONLY" != '1' && "$AGENTLY_CLI_ONLY" != '1' && "$DSH_ONLY" != '1' && "$CODEX_CLI_ONLY" != '1' && "$CHROME_DESKTOP_CLI_ONLY" != '1' ]]; then
   if [[ -n "$OFFICECLI_BINARY" && "$OFFICECLI_BINARY" != /* ]]; then
     OFFICECLI_BINARY="$ROOT_DIR/$OFFICECLI_BINARY"
   fi
@@ -578,7 +614,7 @@ if [[ "$RUST_ONLY" != '1' && "$NODE_RUNTIME_ONLY" != '1' && "$ALIPAY_BOT_ONLY" !
   OFFICECLI_VERSION="${OFFICECLI_VERSION:-$(read_officecli_version "$OFFICECLI_BINARY")}"
 fi
 
-if [[ "$RUST_ONLY" != '1' && "$OFFICECLI_ONLY" != '1' && "$ALIPAY_BOT_ONLY" != '1' && "$PLAYWRIGHT_CORE_ONLY" != '1' && "$PYTHON_RUNTIME_ONLY" != '1' && "$AGENTLY_CLI_ONLY" != '1' && "$DSH_ONLY" != '1' && "$CODEX_CLI_ONLY" != '1' ]]; then
+if [[ "$RUST_ONLY" != '1' && "$OFFICECLI_ONLY" != '1' && "$ALIPAY_BOT_ONLY" != '1' && "$PLAYWRIGHT_CORE_ONLY" != '1' && "$PYTHON_RUNTIME_ONLY" != '1' && "$AGENTLY_CLI_ONLY" != '1' && "$DSH_ONLY" != '1' && "$CODEX_CLI_ONLY" != '1' && "$CHROME_DESKTOP_CLI_ONLY" != '1' ]]; then
   if [[ "$PLATFORM" != "$CURRENT_PLATFORM" || "$ARCH" != "$CURRENT_ARCH" ]]; then
     fail 'Node.js runtime 必须在目标平台和架构构建，跨平台请传入 --node-runtime-archive。'
   fi
@@ -595,7 +631,7 @@ if [[ "$RUST_ONLY" != '1' && "$OFFICECLI_ONLY" != '1' && "$ALIPAY_BOT_ONLY" != '
   NODE_RUNTIME_VERSION="${NODE_RUNTIME_VERSION:-$VERSION}"
 fi
 
-if [[ "$RUST_ONLY" != '1' && "$OFFICECLI_ONLY" != '1' && "$NODE_RUNTIME_ONLY" != '1' && "$PLAYWRIGHT_CORE_ONLY" != '1' && "$PYTHON_RUNTIME_ONLY" != '1' && "$AGENTLY_CLI_ONLY" != '1' && "$DSH_ONLY" != '1' && "$CODEX_CLI_ONLY" != '1' ]]; then
+if [[ "$RUST_ONLY" != '1' && "$OFFICECLI_ONLY" != '1' && "$NODE_RUNTIME_ONLY" != '1' && "$PLAYWRIGHT_CORE_ONLY" != '1' && "$PYTHON_RUNTIME_ONLY" != '1' && "$AGENTLY_CLI_ONLY" != '1' && "$DSH_ONLY" != '1' && "$CODEX_CLI_ONLY" != '1' && "$CHROME_DESKTOP_CLI_ONLY" != '1' ]]; then
   if [[ -n "$ALIPAY_BOT_ARCHIVE" && "$ALIPAY_BOT_ARCHIVE" != /* ]]; then
     ALIPAY_BOT_ARCHIVE="$ROOT_DIR/$ALIPAY_BOT_ARCHIVE"
   fi
@@ -619,7 +655,7 @@ if [[ "$RUST_ONLY" != '1' && "$OFFICECLI_ONLY" != '1' && "$NODE_RUNTIME_ONLY" !=
   ALIPAY_BOT_VERSION="${ALIPAY_BOT_VERSION:-$(read_alipay_bot_version "$ALIPAY_BOT_ARCHIVE")}"
 fi
 
-if [[ "$RUST_ONLY" != '1' && "$OFFICECLI_ONLY" != '1' && "$NODE_RUNTIME_ONLY" != '1' && "$ALIPAY_BOT_ONLY" != '1' && "$PYTHON_RUNTIME_ONLY" != '1' && "$AGENTLY_CLI_ONLY" != '1' && "$DSH_ONLY" != '1' && "$CODEX_CLI_ONLY" != '1' ]]; then
+if [[ "$RUST_ONLY" != '1' && "$OFFICECLI_ONLY" != '1' && "$NODE_RUNTIME_ONLY" != '1' && "$ALIPAY_BOT_ONLY" != '1' && "$PYTHON_RUNTIME_ONLY" != '1' && "$AGENTLY_CLI_ONLY" != '1' && "$DSH_ONLY" != '1' && "$CODEX_CLI_ONLY" != '1' && "$CHROME_DESKTOP_CLI_ONLY" != '1' ]]; then
   if [[ -n "$PLAYWRIGHT_CORE_ARCHIVE" && "$PLAYWRIGHT_CORE_ARCHIVE" != /* ]]; then
     PLAYWRIGHT_CORE_ARCHIVE="$ROOT_DIR/$PLAYWRIGHT_CORE_ARCHIVE"
   fi
@@ -635,7 +671,7 @@ if [[ "$RUST_ONLY" != '1' && "$OFFICECLI_ONLY" != '1' && "$NODE_RUNTIME_ONLY" !=
   PLAYWRIGHT_CORE_VERSION="${PLAYWRIGHT_CORE_VERSION:-1.62.1}"
 fi
 
-if [[ "$RUST_ONLY" != '1' && "$OFFICECLI_ONLY" != '1' && "$NODE_RUNTIME_ONLY" != '1' && "$ALIPAY_BOT_ONLY" != '1' && "$PLAYWRIGHT_CORE_ONLY" != '1' && "$AGENTLY_CLI_ONLY" != '1' && "$DSH_ONLY" != '1' && "$CODEX_CLI_ONLY" != '1' ]]; then
+if [[ "$RUST_ONLY" != '1' && "$OFFICECLI_ONLY" != '1' && "$NODE_RUNTIME_ONLY" != '1' && "$ALIPAY_BOT_ONLY" != '1' && "$PLAYWRIGHT_CORE_ONLY" != '1' && "$AGENTLY_CLI_ONLY" != '1' && "$DSH_ONLY" != '1' && "$CODEX_CLI_ONLY" != '1' && "$CHROME_DESKTOP_CLI_ONLY" != '1' ]]; then
   if [[ -n "$PYTHON_RUNTIME_ARCHIVE" && "$PYTHON_RUNTIME_ARCHIVE" != /* ]]; then
     PYTHON_RUNTIME_ARCHIVE="$ROOT_DIR/$PYTHON_RUNTIME_ARCHIVE"
   fi
@@ -651,7 +687,7 @@ if [[ "$RUST_ONLY" != '1' && "$OFFICECLI_ONLY" != '1' && "$NODE_RUNTIME_ONLY" !=
   PYTHON_RUNTIME_VERSION="${PYTHON_RUNTIME_VERSION:-3.12.14}"
 fi
 
-if [[ "$RUST_ONLY" != '1' && "$OFFICECLI_ONLY" != '1' && "$NODE_RUNTIME_ONLY" != '1' && "$ALIPAY_BOT_ONLY" != '1' && "$PLAYWRIGHT_CORE_ONLY" != '1' && "$PYTHON_RUNTIME_ONLY" != '1' && "$DSH_ONLY" != '1' && "$CODEX_CLI_ONLY" != '1' ]]; then
+if [[ "$RUST_ONLY" != '1' && "$OFFICECLI_ONLY" != '1' && "$NODE_RUNTIME_ONLY" != '1' && "$ALIPAY_BOT_ONLY" != '1' && "$PLAYWRIGHT_CORE_ONLY" != '1' && "$PYTHON_RUNTIME_ONLY" != '1' && "$DSH_ONLY" != '1' && "$CODEX_CLI_ONLY" != '1' && "$CHROME_DESKTOP_CLI_ONLY" != '1' ]]; then
   if [[ -n "$AGENTLY_CLI_ARCHIVE" && "$AGENTLY_CLI_ARCHIVE" != /* ]]; then
     AGENTLY_CLI_ARCHIVE="$ROOT_DIR/$AGENTLY_CLI_ARCHIVE"
   fi
@@ -673,7 +709,7 @@ if [[ "$RUST_ONLY" != '1' && "$OFFICECLI_ONLY" != '1' && "$NODE_RUNTIME_ONLY" !=
   AGENTLY_CLI_VERSION="${AGENTLY_CLI_VERSION:-$(read_agently_cli_version "$AGENTLY_CLI_ARCHIVE")}"
 fi
 
-if [[ "$RUST_ONLY" != '1' && "$OFFICECLI_ONLY" != '1' && "$NODE_RUNTIME_ONLY" != '1' && "$ALIPAY_BOT_ONLY" != '1' && "$PLAYWRIGHT_CORE_ONLY" != '1' && "$PYTHON_RUNTIME_ONLY" != '1' && "$AGENTLY_CLI_ONLY" != '1' && "$CODEX_CLI_ONLY" != '1' ]]; then
+if [[ "$RUST_ONLY" != '1' && "$OFFICECLI_ONLY" != '1' && "$NODE_RUNTIME_ONLY" != '1' && "$ALIPAY_BOT_ONLY" != '1' && "$PLAYWRIGHT_CORE_ONLY" != '1' && "$PYTHON_RUNTIME_ONLY" != '1' && "$AGENTLY_CLI_ONLY" != '1' && "$CODEX_CLI_ONLY" != '1' && "$CHROME_DESKTOP_CLI_ONLY" != '1' ]]; then
   if [[ -n "$DSH_ARCHIVE" && "$DSH_ARCHIVE" != /* ]]; then
     DSH_ARCHIVE="$ROOT_DIR/$DSH_ARCHIVE"
   fi
@@ -695,7 +731,7 @@ if [[ "$RUST_ONLY" != '1' && "$OFFICECLI_ONLY" != '1' && "$NODE_RUNTIME_ONLY" !=
   DSH_VERSION="${DSH_VERSION:-$(read_dsh_version "$DSH_ARCHIVE")}"
 fi
 
-if [[ "$RUST_ONLY" != '1' && "$OFFICECLI_ONLY" != '1' && "$NODE_RUNTIME_ONLY" != '1' && "$ALIPAY_BOT_ONLY" != '1' && "$PLAYWRIGHT_CORE_ONLY" != '1' && "$PYTHON_RUNTIME_ONLY" != '1' && "$AGENTLY_CLI_ONLY" != '1' && "$DSH_ONLY" != '1' ]]; then
+if [[ "$RUST_ONLY" != '1' && "$OFFICECLI_ONLY" != '1' && "$NODE_RUNTIME_ONLY" != '1' && "$ALIPAY_BOT_ONLY" != '1' && "$PLAYWRIGHT_CORE_ONLY" != '1' && "$PYTHON_RUNTIME_ONLY" != '1' && "$AGENTLY_CLI_ONLY" != '1' && "$DSH_ONLY" != '1' && "$CHROME_DESKTOP_CLI_ONLY" != '1' ]]; then
   if [[ -n "$CODEX_CLI_ARCHIVE" && "$CODEX_CLI_ARCHIVE" != /* ]]; then
     CODEX_CLI_ARCHIVE="$ROOT_DIR/$CODEX_CLI_ARCHIVE"
   fi
@@ -715,6 +751,24 @@ if [[ "$RUST_ONLY" != '1' && "$OFFICECLI_ONLY" != '1' && "$NODE_RUNTIME_ONLY" !=
     fail "未找到专业模式核心组件 (codex-cli) 归档：$CODEX_CLI_ARCHIVE"
   fi
   CODEX_CLI_VERSION="${CODEX_CLI_VERSION:-0.154.0}"
+fi
+
+if [[ "$PLATFORM" == 'darwin' && "$RUST_ONLY" != '1' && "$OFFICECLI_ONLY" != '1' && "$NODE_RUNTIME_ONLY" != '1' && "$ALIPAY_BOT_ONLY" != '1' && "$PLAYWRIGHT_CORE_ONLY" != '1' && "$PYTHON_RUNTIME_ONLY" != '1' && "$AGENTLY_CLI_ONLY" != '1' && "$DSH_ONLY" != '1' && "$CODEX_CLI_ONLY" != '1' ]]; then
+  CHROME_MODULE_OUTPUT="$APP_DIR/resources/chrome-desktop-cli/$PLATFORM-$ARCH.tar.gz"
+  CHROME_PREPARE_ARGS=(--platform "$PLATFORM" --arch "$ARCH" --output "$CHROME_MODULE_OUTPUT")
+  if [[ -n "$CHROME_DESKTOP_CLI_ARCHIVE" ]]; then
+    if [[ "$CHROME_DESKTOP_CLI_ARCHIVE" != /* ]]; then
+      CHROME_DESKTOP_CLI_ARCHIVE="$ROOT_DIR/$CHROME_DESKTOP_CLI_ARCHIVE"
+    fi
+    CHROME_PREPARE_ARGS+=(--archive "$CHROME_DESKTOP_CLI_ARCHIVE")
+  elif [[ "$PLATFORM" != "$CURRENT_PLATFORM" || "$ARCH" != "$CURRENT_ARCH" ]]; then
+    fail 'Chrome 桌面控制必须在本机 macOS 平台和架构准备，其他目标请提供 --chrome-desktop-cli-archive。'
+  fi
+  if [[ -n "$CHROME_DESKTOP_CLI_VERSION" ]]; then
+    CHROME_PREPARE_ARGS+=(--version "$CHROME_DESKTOP_CLI_VERSION")
+  fi
+  run_bun "$ROOT_DIR" 'Chrome 桌面控制功能模块准备失败' run prepare:chrome-desktop-cli-module -- "${CHROME_PREPARE_ARGS[@]}"
+  CHROME_DESKTOP_CLI_ARCHIVE="$CHROME_MODULE_OUTPUT"
 fi
 
 if [[ "$BUILD_APP" -eq 1 ]]; then
@@ -745,32 +799,41 @@ if [[ "$SKIP_PUBLISH" -eq 0 ]]; then
     --public-base-url "$PUBLIC_BASE_URL"
   )
   MANIFEST_OUTPUT="$APP_DIR/dist/functional-modules/manifest.json"
-  if [[ "$OFFICECLI_ONLY" != '1' && "$NODE_RUNTIME_ONLY" != '1' && "$ALIPAY_BOT_ONLY" != '1' && "$PLAYWRIGHT_CORE_ONLY" != '1' && "$PYTHON_RUNTIME_ONLY" != '1' && "$AGENTLY_CLI_ONLY" != '1' && "$DSH_ONLY" != '1' && "$CODEX_CLI_ONLY" != '1' ]]; then
+  if [[ "$OFFICECLI_ONLY" != '1' && "$NODE_RUNTIME_ONLY" != '1' && "$ALIPAY_BOT_ONLY" != '1' && "$PLAYWRIGHT_CORE_ONLY" != '1' && "$PYTHON_RUNTIME_ONLY" != '1' && "$AGENTLY_CLI_ONLY" != '1' && "$DSH_ONLY" != '1' && "$CODEX_CLI_ONLY" != '1' && "$CHROME_DESKTOP_CLI_ONLY" != '1' ]]; then
     RELEASE_ARGS+=(--rust-binary "$RUST_BINARY")
   fi
-  if [[ "$RUST_ONLY" != '1' && "$NODE_RUNTIME_ONLY" != '1' && "$ALIPAY_BOT_ONLY" != '1' && "$PLAYWRIGHT_CORE_ONLY" != '1' && "$PYTHON_RUNTIME_ONLY" != '1' && "$AGENTLY_CLI_ONLY" != '1' && "$DSH_ONLY" != '1' && "$CODEX_CLI_ONLY" != '1' ]]; then
+  if [[ "$RUST_ONLY" != '1' && "$NODE_RUNTIME_ONLY" != '1' && "$ALIPAY_BOT_ONLY" != '1' && "$PLAYWRIGHT_CORE_ONLY" != '1' && "$PYTHON_RUNTIME_ONLY" != '1' && "$AGENTLY_CLI_ONLY" != '1' && "$DSH_ONLY" != '1' && "$CODEX_CLI_ONLY" != '1' && "$CHROME_DESKTOP_CLI_ONLY" != '1' ]]; then
     RELEASE_ARGS+=(--officecli-binary "$OFFICECLI_BINARY" --officecli-version "$OFFICECLI_VERSION")
   fi
-  if [[ "$RUST_ONLY" != '1' && "$OFFICECLI_ONLY" != '1' && "$ALIPAY_BOT_ONLY" != '1' && "$PLAYWRIGHT_CORE_ONLY" != '1' && "$PYTHON_RUNTIME_ONLY" != '1' && "$AGENTLY_CLI_ONLY" != '1' && "$DSH_ONLY" != '1' && "$CODEX_CLI_ONLY" != '1' ]]; then
+  if [[ "$RUST_ONLY" != '1' && "$OFFICECLI_ONLY" != '1' && "$ALIPAY_BOT_ONLY" != '1' && "$PLAYWRIGHT_CORE_ONLY" != '1' && "$PYTHON_RUNTIME_ONLY" != '1' && "$AGENTLY_CLI_ONLY" != '1' && "$DSH_ONLY" != '1' && "$CODEX_CLI_ONLY" != '1' && "$CHROME_DESKTOP_CLI_ONLY" != '1' ]]; then
     RELEASE_ARGS+=(--node-runtime-archive "$NODE_RUNTIME_ARCHIVE" --node-runtime-version "$NODE_RUNTIME_VERSION")
   fi
-  if [[ "$RUST_ONLY" != '1' && "$OFFICECLI_ONLY" != '1' && "$NODE_RUNTIME_ONLY" != '1' && "$PLAYWRIGHT_CORE_ONLY" != '1' && "$PYTHON_RUNTIME_ONLY" != '1' && "$AGENTLY_CLI_ONLY" != '1' && "$DSH_ONLY" != '1' && "$CODEX_CLI_ONLY" != '1' ]]; then
+  if [[ "$RUST_ONLY" != '1' && "$OFFICECLI_ONLY" != '1' && "$NODE_RUNTIME_ONLY" != '1' && "$PLAYWRIGHT_CORE_ONLY" != '1' && "$PYTHON_RUNTIME_ONLY" != '1' && "$AGENTLY_CLI_ONLY" != '1' && "$DSH_ONLY" != '1' && "$CODEX_CLI_ONLY" != '1' && "$CHROME_DESKTOP_CLI_ONLY" != '1' ]]; then
     RELEASE_ARGS+=(--alipay-bot-archive "$ALIPAY_BOT_ARCHIVE" --alipay-bot-version "$ALIPAY_BOT_VERSION")
   fi
-  if [[ "$RUST_ONLY" != '1' && "$OFFICECLI_ONLY" != '1' && "$NODE_RUNTIME_ONLY" != '1' && "$ALIPAY_BOT_ONLY" != '1' && "$PYTHON_RUNTIME_ONLY" != '1' && "$AGENTLY_CLI_ONLY" != '1' && "$DSH_ONLY" != '1' && "$CODEX_CLI_ONLY" != '1' ]]; then
+  if [[ "$RUST_ONLY" != '1' && "$OFFICECLI_ONLY" != '1' && "$NODE_RUNTIME_ONLY" != '1' && "$ALIPAY_BOT_ONLY" != '1' && "$PYTHON_RUNTIME_ONLY" != '1' && "$AGENTLY_CLI_ONLY" != '1' && "$DSH_ONLY" != '1' && "$CODEX_CLI_ONLY" != '1' && "$CHROME_DESKTOP_CLI_ONLY" != '1' ]]; then
     RELEASE_ARGS+=(--playwright-core-archive "$PLAYWRIGHT_CORE_ARCHIVE" --playwright-core-version "$PLAYWRIGHT_CORE_VERSION")
   fi
-  if [[ "$RUST_ONLY" != '1' && "$OFFICECLI_ONLY" != '1' && "$NODE_RUNTIME_ONLY" != '1' && "$ALIPAY_BOT_ONLY" != '1' && "$PLAYWRIGHT_CORE_ONLY" != '1' && "$AGENTLY_CLI_ONLY" != '1' && "$DSH_ONLY" != '1' && "$CODEX_CLI_ONLY" != '1' ]]; then
+  if [[ "$RUST_ONLY" != '1' && "$OFFICECLI_ONLY" != '1' && "$NODE_RUNTIME_ONLY" != '1' && "$ALIPAY_BOT_ONLY" != '1' && "$PLAYWRIGHT_CORE_ONLY" != '1' && "$AGENTLY_CLI_ONLY" != '1' && "$DSH_ONLY" != '1' && "$CODEX_CLI_ONLY" != '1' && "$CHROME_DESKTOP_CLI_ONLY" != '1' ]]; then
     RELEASE_ARGS+=(--python-runtime-archive "$PYTHON_RUNTIME_ARCHIVE" --python-runtime-version "$PYTHON_RUNTIME_VERSION")
   fi
-  if [[ "$RUST_ONLY" != '1' && "$OFFICECLI_ONLY" != '1' && "$NODE_RUNTIME_ONLY" != '1' && "$ALIPAY_BOT_ONLY" != '1' && "$PLAYWRIGHT_CORE_ONLY" != '1' && "$PYTHON_RUNTIME_ONLY" != '1' && "$DSH_ONLY" != '1' && "$CODEX_CLI_ONLY" != '1' ]]; then
+  if [[ "$RUST_ONLY" != '1' && "$OFFICECLI_ONLY" != '1' && "$NODE_RUNTIME_ONLY" != '1' && "$ALIPAY_BOT_ONLY" != '1' && "$PLAYWRIGHT_CORE_ONLY" != '1' && "$PYTHON_RUNTIME_ONLY" != '1' && "$DSH_ONLY" != '1' && "$CODEX_CLI_ONLY" != '1' && "$CHROME_DESKTOP_CLI_ONLY" != '1' ]]; then
     RELEASE_ARGS+=(--agently-cli-archive "$AGENTLY_CLI_ARCHIVE" --agently-cli-version "$AGENTLY_CLI_VERSION")
   fi
-  if [[ "$RUST_ONLY" != '1' && "$OFFICECLI_ONLY" != '1' && "$NODE_RUNTIME_ONLY" != '1' && "$ALIPAY_BOT_ONLY" != '1' && "$PLAYWRIGHT_CORE_ONLY" != '1' && "$PYTHON_RUNTIME_ONLY" != '1' && "$AGENTLY_CLI_ONLY" != '1' && "$CODEX_CLI_ONLY" != '1' ]]; then
+  if [[ "$RUST_ONLY" != '1' && "$OFFICECLI_ONLY" != '1' && "$NODE_RUNTIME_ONLY" != '1' && "$ALIPAY_BOT_ONLY" != '1' && "$PLAYWRIGHT_CORE_ONLY" != '1' && "$PYTHON_RUNTIME_ONLY" != '1' && "$AGENTLY_CLI_ONLY" != '1' && "$CODEX_CLI_ONLY" != '1' && "$CHROME_DESKTOP_CLI_ONLY" != '1' ]]; then
     RELEASE_ARGS+=(--dsh-archive "$DSH_ARCHIVE" --dsh-version "$DSH_VERSION")
   fi
-  if [[ "$RUST_ONLY" != '1' && "$OFFICECLI_ONLY" != '1' && "$NODE_RUNTIME_ONLY" != '1' && "$ALIPAY_BOT_ONLY" != '1' && "$PLAYWRIGHT_CORE_ONLY" != '1' && "$PYTHON_RUNTIME_ONLY" != '1' && "$AGENTLY_CLI_ONLY" != '1' && "$DSH_ONLY" != '1' ]]; then
+  if [[ "$RUST_ONLY" != '1' && "$OFFICECLI_ONLY" != '1' && "$NODE_RUNTIME_ONLY" != '1' && "$ALIPAY_BOT_ONLY" != '1' && "$PLAYWRIGHT_CORE_ONLY" != '1' && "$PYTHON_RUNTIME_ONLY" != '1' && "$AGENTLY_CLI_ONLY" != '1' && "$DSH_ONLY" != '1' && "$CHROME_DESKTOP_CLI_ONLY" != '1' ]]; then
     RELEASE_ARGS+=(--codex-cli-archive "$CODEX_CLI_ARCHIVE" --codex-cli-version "$CODEX_CLI_VERSION")
+  fi
+  if [[ "$PLATFORM" == 'darwin' && "$RUST_ONLY" != '1' && "$OFFICECLI_ONLY" != '1' && "$NODE_RUNTIME_ONLY" != '1' && "$ALIPAY_BOT_ONLY" != '1' && "$PLAYWRIGHT_CORE_ONLY" != '1' && "$PYTHON_RUNTIME_ONLY" != '1' && "$AGENTLY_CLI_ONLY" != '1' && "$DSH_ONLY" != '1' && "$CODEX_CLI_ONLY" != '1' ]]; then
+    RELEASE_ARGS+=(--chrome-desktop-cli-archive "$CHROME_DESKTOP_CLI_ARCHIVE")
+    if [[ -n "$CHROME_DESKTOP_CLI_VERSION" ]]; then
+      RELEASE_ARGS+=(--chrome-desktop-cli-version "$CHROME_DESKTOP_CLI_VERSION")
+    fi
+  fi
+  if [[ "$CHROME_DESKTOP_CLI_ONLY" == '1' ]]; then
+    RELEASE_ARGS+=(--chrome-desktop-cli)
   fi
   if [[ -n "$OBJECT_PREFIX_PATH" ]]; then
     RELEASE_ARGS+=(--prefix "$OBJECT_PREFIX_PATH")

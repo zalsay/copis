@@ -1,15 +1,6 @@
 /**
- * ChromeDesktopCaptureHost — 全局 Chrome 窗口采集宿主
- *
- * 挂载于主窗口根节点，负责持有当前授权的 MediaStream，并在接收到主进程的
- * 截帧请求时利用隐藏的 `<video>` 与 `<canvas>` 按规格提取单帧 JPEG base64。
- *
- * 规范约束与审查改进：
- * - 单帧按需提取，最长边不超过 1600px，JPEG 编码且不超过 1 MiB。
- * - 多阶梯度降质与降采样，确保编码绝对不突破 1 MiB，仍超限则明确报错而非外发违规大图。
- * - 绑定 requestId 严格串行化与关联，防止旧请求迟到帧干扰新 Observe。
- * - 结合 requestVideoFrameCallback 校验视频源帧呈现新鲜度。
- * - 捕获轨道异常终止、不可恢复暂停或停止时释放资源；焦点/几何暂停保留已授权流并等待恢复。
+ * 全局 Chrome 预览宿主：监听原生控制状态并管理预览流的生命周期。
+ * Agent Observe 与输入由原生组件负责，预览结束不代表原生窗口失效。
  */
 
 import React, { useEffect, useRef } from 'react'
@@ -24,11 +15,6 @@ import {
 } from '@/atoms/chrome-desktop-atoms'
 import { syncChromeDesktopSessionStateAtom } from '@/atoms/chrome-desktop-preview-tabs'
 
-const MAX_FRAME_DIMENSION = 1600
-const MAX_BASE64_LENGTH = 1_350_000 // ~1 MiB raw bytes
-const COMPRESSION_QUALITIES = [0.85, 0.7, 0.55, 0.4]
-const COMPRESSION_SCALES = [1.0, 0.8, 0.6]
-
 export function ChromeDesktopCaptureHost(): React.ReactElement | null {
   const mediaStream = useAtomValue(chromeDesktopMediaStreamAtom)
   const mediaStreamControlId = useAtomValue(chromeDesktopMediaStreamControlAtom)
@@ -37,20 +23,14 @@ export function ChromeDesktopCaptureHost(): React.ReactElement | null {
   const stopControl = useSetAtom(stopChromeDesktopControlAtom)
 
   const videoRef = useRef<HTMLVideoElement | null>(null)
-  const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const streamRef = useRef<MediaStream | null>(null)
   streamRef.current = mediaStream
 
-  // 跟踪当前活跃的 requestId，以及上一帧已呈现序号
-  const activeRequestIdRef = useRef<string | null>(null)
-  const lastPresentedFramesRef = useRef<number>(-1)
-  const controlRef = useRef<{ sessionId: string; controlId: string } | null>(null)
   const sessionState = useAtomValue(chromeDesktopSessionStateAtom)
-  controlRef.current = sessionState ? { sessionId: sessionState.sessionId, controlId: sessionState.controlId } : null
+  const latestControlRef = useRef<{ sessionId: string; controlId: string } | null>(null)
+  latestControlRef.current = sessionState ? { sessionId: sessionState.sessionId, controlId: sessionState.controlId } : null
   const latestStreamControlIdRef = useRef<string | null>(mediaStreamControlId)
   latestStreamControlIdRef.current = mediaStreamControlId
-  const latestControlRef = useRef(controlRef.current)
-  latestControlRef.current = controlRef.current
   const unmountTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   // 1. 同步 MediaStream 至隐藏的 video 元素
@@ -67,17 +47,8 @@ export function ChromeDesktopCaptureHost(): React.ReactElement | null {
       // 监听 track ended 事件（例如用户在系统层面关闭共享或窗口被销毁）
       const tracks = mediaStream.getVideoTracks()
       const handleTrackEnded = (): void => {
-        console.warn('[ChromeDesktopCaptureHost] 视频采集轨道已终止')
-        activeRequestIdRef.current = null
-        lastPresentedFramesRef.current = -1
-        if (latestStreamControlIdRef.current === mediaStreamControlId) {
-          window.electronAPI?.chromeDesktop?.sendStreamError({
-            controlId: mediaStreamControlId!,
-            reason: 'CHROME_CAPTURE_FAILED',
-            message: 'Chrome 窗口视频采集轨道已终止',
-          })
-          cleanupStream(mediaStream)
-        }
+        console.warn('[ChromeDesktopCaptureHost] 预览轨道已终止，原生连接继续保留')
+        cleanupStream(mediaStream)
       }
 
       tracks.forEach((track) => {
@@ -91,8 +62,6 @@ export function ChromeDesktopCaptureHost(): React.ReactElement | null {
       }
     } else {
       video.srcObject = null
-      activeRequestIdRef.current = null
-      lastPresentedFramesRef.current = -1
     }
   }, [mediaStream, mediaStreamControlId, cleanupStream])
 
@@ -116,8 +85,6 @@ export function ChromeDesktopCaptureHost(): React.ReactElement | null {
       const replaced = owner && (owner.sessionId !== state.sessionId || owner.controlId !== state.controlId)
       const unrecoverablePause = state.state === 'paused' && !isRecoverableChromeDesktopPauseReason(state.pauseReason)
       if (state.state === 'stopped' || state.state === 'error' || unrecoverablePause || replaced) {
-        activeRequestIdRef.current = null
-        lastPresentedFramesRef.current = -1
         const streamOwner = latestStreamControlIdRef.current
         if (streamOwner && (streamOwner === state.controlId || (replaced && streamOwner === owner?.controlId))) {
           cleanupStream(streamOwner)
@@ -137,226 +104,6 @@ export function ChromeDesktopCaptureHost(): React.ReactElement | null {
       }, 0)
     }
   }, [setSessionState, cleanupStream, stopControl])
-
-  // 3. 监听截帧请求 (REQUEST_FRAME)
-  useEffect(() => {
-    if (!window.electronAPI?.chromeDesktop) return
-
-    const unsubscribe = window.electronAPI.chromeDesktop.onRequestFrame(async (req) => {
-      const { controlId, requestId } = req
-      const requestKey = `${controlId}:${requestId}`
-      activeRequestIdRef.current = requestKey
-      const prevPresentedFrames = lastPresentedFramesRef.current
-
-      const video = videoRef.current
-      if (!video || !streamRef.current || latestStreamControlIdRef.current !== controlId || latestControlRef.current?.controlId !== controlId) {
-        if (activeRequestIdRef.current === requestKey) {
-          window.electronAPI.chromeDesktop.sendFrameResponse({
-            controlId,
-            requestId,
-            width: 0,
-            height: 0,
-            capturedAt: Date.now(),
-            data: '',
-            error: 'CHROME_CAPTURE_FAILED: 采集视频流不可用或已属于其他 control',
-          })
-        }
-        return
-      }
-
-      // 等待视频元数据就绪（最多 300ms）
-      if (video.readyState < 2 || video.videoWidth === 0 || video.videoHeight === 0) {
-        let retries = 0
-        while ((video.readyState < 2 || video.videoWidth === 0) && retries < 6) {
-          await new Promise((r) => setTimeout(r, 50))
-          retries++
-          if (activeRequestIdRef.current !== requestKey) return
-        }
-        if (video.readyState < 2 || video.videoWidth === 0) {
-          if (activeRequestIdRef.current === requestKey) {
-            window.electronAPI.chromeDesktop.sendFrameResponse({
-              controlId,
-              requestId,
-              width: 0,
-              height: 0,
-              capturedAt: Date.now(),
-              data: '',
-              error: 'CHROME_CAPTURE_FAILED: 视频帧尚未准备就绪',
-            })
-          }
-          return
-        }
-      }
-
-      // 结合 requestVideoFrameCallback 等待源帧刷新（最多 350ms）
-      let sourcePresentedFrames: number | undefined
-      let sourceMediaTime: number | undefined
-      let captureTimestamp = Date.now()
-
-      if (typeof (video as any).requestVideoFrameCallback !== 'function') {
-        window.electronAPI.chromeDesktop.sendFrameResponse({
-          controlId, requestId, width: 0, height: 0, capturedAt: Date.now(), data: '',
-          error: 'CHROME_CAPTURE_FAILED: 浏览器不支持 requestVideoFrameCallback，无法确认新帧',
-        })
-        return
-      }
-
-      {
-        const rvfcResult = await new Promise<{ ok: boolean; presentedFrames?: number; mediaTime?: number }>((resolve) => {
-          let done = false
-          let callbackHandle: number | null = null
-
-          const timer = setTimeout(() => {
-            if (!done) {
-              done = true
-              if (callbackHandle !== null && typeof (video as any).cancelVideoFrameCallback === 'function') {
-                ;(video as any).cancelVideoFrameCallback(callbackHandle)
-              }
-              resolve({ ok: false })
-            }
-          }, 350)
-
-          const onFrame = (now: number, metadata: any) => {
-            if (done) return
-            const presented = typeof metadata?.presentedFrames === 'number' ? metadata.presentedFrames : -1
-            if (prevPresentedFrames < 0 || presented > prevPresentedFrames) {
-              done = true
-              clearTimeout(timer)
-              if (presented >= 0) {
-                lastPresentedFramesRef.current = presented
-              }
-              resolve({
-                ok: true,
-                presentedFrames: presented >= 0 ? presented : undefined,
-                mediaTime: typeof metadata?.mediaTime === 'number' ? metadata.mediaTime : undefined,
-              })
-            } else {
-              callbackHandle = (video as any).requestVideoFrameCallback(onFrame)
-            }
-          }
-
-          callbackHandle = (video as any).requestVideoFrameCallback(onFrame)
-        })
-
-        if (!rvfcResult.ok) {
-          const errorMsg = prevPresentedFrames >= 0
-            ? 'CHROME_FRAME_STALE: 画面未更新 (350ms 内无新帧呈现)'
-            : 'CHROME_CAPTURE_FAILED: 等待首帧呈现超时 (350ms)'
-
-          if (activeRequestIdRef.current === requestKey) {
-            window.electronAPI.chromeDesktop.sendFrameResponse({
-              controlId,
-              requestId,
-              width: 0,
-              height: 0,
-              capturedAt: Date.now(),
-              data: '',
-              error: errorMsg,
-            })
-          }
-          return
-        }
-
-        sourcePresentedFrames = rvfcResult.presentedFrames
-        sourceMediaTime = rvfcResult.mediaTime
-        captureTimestamp = Date.now()
-      }
-
-      if (activeRequestIdRef.current !== requestKey) {
-        // 请求已被新请求取代，丢弃本次中间结果
-        return
-      }
-
-      try {
-        const origW = video.videoWidth
-        const origH = video.videoHeight
-
-        // 计算最长边不超过 1600px 的基础缩放尺寸
-        let baseW = origW
-        let baseH = origH
-        if (baseW > MAX_FRAME_DIMENSION || baseH > MAX_FRAME_DIMENSION) {
-          if (baseW >= baseH) {
-            baseH = Math.round((baseH * MAX_FRAME_DIMENSION) / baseW)
-            baseW = MAX_FRAME_DIMENSION
-          } else {
-            baseW = Math.round((baseW * MAX_FRAME_DIMENSION) / baseH)
-            baseH = MAX_FRAME_DIMENSION
-          }
-        }
-
-        if (!canvasRef.current) {
-          canvasRef.current = document.createElement('canvas')
-        }
-        const canvas = canvasRef.current
-        const ctx = canvas.getContext('2d', { alpha: false })
-        if (!ctx) {
-          throw new Error('无法创建 Canvas 2D 绘图上下文')
-        }
-
-        let chosenBase64: string | null = null
-        let chosenW = baseW
-        let chosenH = baseH
-
-        // 梯度压缩循环：递减分辨率与质量，保证最终产物绝对不超过 1 MiB
-        outerLoop: for (const scale of COMPRESSION_SCALES) {
-          const curW = Math.max(100, Math.round(baseW * scale))
-          const curH = Math.max(100, Math.round(baseH * scale))
-          canvas.width = curW
-          canvas.height = curH
-          ctx.drawImage(video, 0, 0, curW, curH)
-
-          for (const quality of COMPRESSION_QUALITIES) {
-            const dataUrl = canvas.toDataURL('image/jpeg', quality)
-            const commaIdx = dataUrl.indexOf(',')
-            const rawBase64 = commaIdx >= 0 ? dataUrl.slice(commaIdx + 1) : dataUrl
-
-            if (rawBase64.length <= MAX_BASE64_LENGTH) {
-              chosenBase64 = rawBase64
-              chosenW = curW
-              chosenH = curH
-              break outerLoop
-            }
-          }
-        }
-
-        if (!chosenBase64) {
-          throw new Error('CHROME_CAPTURE_FAILED: 单帧编码大小超过 1 MiB 上限，已达最低压缩阈值')
-        }
-
-        const encodedAt = Date.now()
-        if (activeRequestIdRef.current === requestKey) {
-          window.electronAPI.chromeDesktop.sendFrameResponse({
-            controlId,
-            requestId,
-            width: chosenW,
-            height: chosenH,
-            capturedAt: captureTimestamp,
-            data: chosenBase64,
-            presentedFrames: sourcePresentedFrames,
-            mediaTime: sourceMediaTime,
-            encodedAt,
-          })
-        }
-      } catch (err: any) {
-        console.error('[ChromeDesktopCaptureHost] 截帧失败:', err)
-        if (activeRequestIdRef.current === requestKey) {
-          window.electronAPI.chromeDesktop.sendFrameResponse({
-            controlId,
-            requestId,
-            width: 0,
-            height: 0,
-            capturedAt: Date.now(),
-            data: '',
-            error: err.message.startsWith('CHROME_') ? err.message : `CHROME_CAPTURE_FAILED: ${err.message}`,
-          })
-        }
-      }
-    })
-
-    return () => {
-      unsubscribe()
-    }
-  }, [cleanupStream, mediaStreamControlId])
 
   return (
     <video

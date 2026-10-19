@@ -16,7 +16,7 @@ import type {
 /** 当前活动的 Chrome 控制会话状态（来自主进程广播） */
 export const chromeDesktopSessionStateAtom = atom<ChromeDesktopSessionState | null>(null)
 
-/** 当前用于预览与截图的 MediaStream（仅存在于内存，生命周期受控） */
+/** 当前仅用于实时预览的 MediaStream（仅存在于内存，生命周期受控） */
 export const chromeDesktopMediaStreamAtom = atom<MediaStream | null>(null)
 /** MediaStream 所属 control，防止迟到授权/清理跨控制覆盖。 */
 export const chromeDesktopMediaStreamControlAtom = atom<string | null>(null)

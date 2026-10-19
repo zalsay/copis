@@ -5,7 +5,7 @@ import { resolve } from 'node:path'
 import type { FunctionalModuleManifest, FunctionalModuleName, FunctionalModulePlatform, FunctionalModuleArchitecture } from '@copis/shared'
 import type { FunctionalModuleBinaryInput } from './functional-module-publisher'
 
-const LOCKED_MODULES = ['node-runtime', 'python-runtime', 'alipay-bot', 'playwright-core', 'agently-cli', 'dsh', 'codex-cli'] as const
+const LOCKED_MODULES = ['node-runtime', 'python-runtime', 'alipay-bot', 'playwright-core', 'agently-cli', 'dsh', 'codex-cli', 'chrome-desktop-cli'] as const
 type LockedModuleName = (typeof LOCKED_MODULES)[number]
 
 export interface FunctionalModuleVersionLocks {
@@ -16,6 +16,7 @@ export interface FunctionalModuleVersionLocks {
   'agently-cli': string
   'dsh': string
   'codex-cli': string
+  'chrome-desktop-cli': string
 }
 
 export const DEFAULT_FUNCTIONAL_MODULE_VERSIONS_PATH = resolve(
@@ -41,6 +42,7 @@ export function loadFunctionalModuleVersionLocks(
     'playwright-core': validateVersion(value['playwright-core'], 'playwright-core', path),
     'agently-cli': validateVersion(value['agently-cli'], 'agently-cli', path),
     'dsh': validateVersion(value['dsh'], 'dsh', path),
+    'chrome-desktop-cli': validateVersion(value['chrome-desktop-cli'], 'chrome-desktop-cli', path),
     'codex-cli': validateVersion(value['codex-cli'], 'codex-cli', path),
   }
 }
@@ -50,10 +52,15 @@ export function applyFunctionalModuleVersionLocks(
   modules: readonly FunctionalModuleBinaryInput[],
   locks: FunctionalModuleVersionLocks,
 ): FunctionalModuleBinaryInput[] {
-  return modules.map((module) => isLockedModule(module.module)
-    ? { ...module, version: locks[module.module] }
-    : module,
-  )
+  return modules.map((module) => {
+    if (!isLockedModule(module.module)) return module
+    const version = locks[module.module]
+    const locked = { ...module, version }
+    if (module.module === 'chrome-desktop-cli') {
+      locked.entrypoint = `copis-chrome-${version}-darwin-${module.arch}/copis-chrome`
+    }
+    return locked
+  })
 }
 
 /**
@@ -72,6 +79,8 @@ export function excludeUnchangedLockedModules(
     if (!isLockedModule(module.module)) return true
     const publishedArtifact = existingModules?.[module.module]
     const publishedVersion = publishedArtifact?.version
+    // Chrome 顶层目录包含独立版本；远端更新版本的不同入口不能触发回退发布。
+    if (module.module === 'chrome-desktop-cli' && publishedVersion && compareStableVersions(locks[module.module], publishedVersion) < 0) return false
     if (publishedArtifact && compareModuleContract(module, publishedArtifact) !== 0) return true
     return !publishedVersion || compareStableVersions(locks[module.module], publishedVersion) > 0
   })

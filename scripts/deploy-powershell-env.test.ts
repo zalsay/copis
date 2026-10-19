@@ -54,3 +54,30 @@ describe('Windows 部署入口的 .env 加载', () => {
     expect(deployScript).toContain('elseif (-not $hasExplicitSkipInstall -and $RustOnly)')
   })
 })
+
+test('Given PowerShell 发布 Chrome 模块 When 非 macOS 目标 Then 在构建前明确拒绝并保留 archive/version 转发', () => {
+  const guard = "if ($ChromeDesktopCliOnly -and $Platform -ne 'darwin')"
+  expect(deployScript).toContain('[switch]$ChromeDesktopCliOnly')
+  expect(deployScript).toContain(guard)
+  expect(deployScript.indexOf(guard)).toBeLessThan(deployScript.indexOf("@('run', 'build:http-api-server')"))
+  expect(deployScript).toContain("'COPIS_CHROME_DESKTOP_CLI_ARCHIVE'")
+  expect(deployScript).toContain("'COPIS_CHROME_DESKTOP_CLI_VERSION'")
+  expect(deployScript).toContain("@('--chrome-desktop-cli-archive', $ChromeDesktopCliArchive)")
+  expect(deployScript).toContain("@('--chrome-desktop-cli-version', $ChromeDesktopCliVersion)")
+  expect(deployScript).toContain("$Platform -eq 'darwin' -and -not $RustOnly")
+  expect(deployScript).toContain('prepare:chrome-desktop-cli-module')
+  expect(deployScript).not.toContain('swiftc')
+})
+
+test('Given --chrome-cli短入口 When PowerShell解析 Then 与旧别名及可选归档/版本保持同一模块', () => {
+  expect(deployScript).toContain("[Alias('chrome-cli', 'chrome-desktop-cli')]")
+  expect(deployScript).toContain("'--chrome-cli' { $ChromeDesktopCliOnly = $true }")
+  expect(deployScript).toContain("'--chrome-cli-archive' {")
+  expect(deployScript).toContain('$ChromeDesktopCliArchive = Resolve-ChromeCliArgument')
+  expect(deployScript).toContain("'--chrome-cli-version' {")
+  expect(deployScript).toContain('$ChromeDesktopCliVersion = Resolve-ChromeCliArgument')
+  expect(deployScript).toContain("$PSBoundParameters.ContainsKey('ChromeDesktopCliArchive')")
+  expect(deployScript).toContain('$Specified -and $Current -cne $Incoming')
+  expect(deployScript).toContain('elseif (-not $hasExplicitSkipInstall -and $ChromeDesktopCliOnly)')
+  expect(deployScript).toContain('从源码重新构建并上传')
+})

@@ -7,8 +7,7 @@ const mainFrame = { url: 'file:///copis/index.html' }
 const mainContents = { id: 1, mainFrame, getURL: () => 'file:///copis/index.html', send: mock(() => {}), on: mock(() => {}) }
 const mainWindow = { isDestroyed: () => false, webContents: mainContents, on: mock(() => {}) }
 let broadcaster: (state: any) => void
-let capture: (request: any) => Promise<any>
-const release = mock(() => {})
+const release = mock((..._args: unknown[]) => {})
 let state = { sessionId: 'A', controlId: 'control-new', state: 'active' }
 mock.module('electron', () => ({
   BrowserWindow: { getAllWindows: () => [{ isDestroyed: () => false, webContents: { id: 99, send: mock(() => {}) } }, mainWindow] },
@@ -28,11 +27,11 @@ mock.module('electron', () => ({
 }))
 mock.module('../lib/chrome-desktop-service', () => ({ chromeDesktopService: {
   setStateChangedListener: (listener: typeof broadcaster) => { broadcaster = listener },
-  setFrameCapturer: (fn: typeof capture) => { capture = fn },
   getSessionState: () => state,
   checkSystemStatus: async () => ({}), listWindows: async () => [],
   prepareCapture: () => ({ ok: true }), confirmStart: async () => ({ ok: true }),
   releaseSessionControl: release, releaseCurrentControl: release,
+  stopSessionControl: async (sessionId: string, controlId: string) => release(sessionId, undefined, controlId),
 } }))
 const { registerChromeDesktopIpcHandlers } = await import('./chrome-desktop.ipc')
 registerChromeDesktopIpcHandlers()
@@ -45,23 +44,15 @@ test('Given 其他窗口或子 frame When 准备/确认/停止/读取 Then 拒�
   }
 })
 
-test('Given 多窗口顺序并非主窗口优先 When 请求帧 Then 只发给可信主窗口', async () => {
-  const pending = capture({ controlId: 'control-new', geometryVersion: 1 })
-  expect(mainContents.send).toHaveBeenCalledWith(CHANNELS.REQUEST_FRAME, expect.objectContaining({ controlId: 'control-new' }))
-  const request = (mainContents.send.mock.calls as any[]).at(-1)![1] as any
-  listeners.get(CHANNELS.FRAME_RESPONSE)!(event, { controlId: 'control-new', requestId: request.requestId, width: 100, height: 100, capturedAt: Date.now(), data: '/9j/AA==' })
-  await pending
+test('Given 多窗口顺序并非主窗口优先 When 广播状态 Then 只发给可信主窗口', () => {
+  const snapshot = { sessionId: 'A', controlId: 'control-new', state: 'active' }
+  broadcaster(snapshot)
+  expect(mainContents.send).toHaveBeenCalledWith(CHANNELS.STATE_CHANGED, snapshot)
 })
 
-test('Given 旧流错误回报 When 新控制已运行 Then 不释放新控制', () => {
-  release.mockClear()
-  listeners.get(CHANNELS.STREAM_ERROR)!(event, { controlId: 'control-old', reason: 'CHROME_CAPTURE_FAILED', message: '旧流已结束' })
-  expect(release).not.toHaveBeenCalled()
-})
-
-test('Given 其他 Renderer 发出停止错误事件 Then 无权释放控制', () => {
-  release.mockClear()
-  listeners.get(CHANNELS.STREAM_ERROR)!({ sender: { id: 99 }, senderFrame: mainFrame }, { controlId: 'control-new', reason: 'CHROME_CAPTURE_FAILED', message: '伪造' })
+test('Given 原生组件已连接 When renderer旧图像或stream-error事件到达 Then 没有可撤销连接的监听器', () => {
+  expect(listeners.has('chrome-desktop:frame-response')).toBe(false)
+  expect(listeners.has('chrome-desktop:stream-error')).toBe(false)
   expect(release).not.toHaveBeenCalled()
 })
 

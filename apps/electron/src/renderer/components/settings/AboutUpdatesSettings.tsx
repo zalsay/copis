@@ -46,7 +46,7 @@ export function AboutUpdatesSettings(): React.ReactElement {
     <div className="space-y-6">
       <SettingsSection
         title="Copis 桌面端"
-        description="查看当前主程序版本，并检查、下载和安装应用更新。"
+        description="主程序和本地能力组件统一在此管理，可查看版本并检查、下载或安装更新。"
       >
         <SettingsCard>
           <div className="flex flex-col gap-4 p-4 sm:flex-row sm:items-center sm:justify-between">
@@ -134,7 +134,7 @@ export function AboutUpdatesSettings(): React.ReactElement {
 
       <SettingsSection
         title="本地能力"
-        description="Copis 独立安装和更新的运行时模块，可按模块检查更新、下载或安装。"
+        description="管理 Copis 本地能力组件，支持单项或批量检查更新，并按需安装或升级。"
       >
         <FunctionalModulesCard />
       </SettingsSection>

@@ -3,6 +3,8 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import type { FunctionalModuleArchitecture, FunctionalModuleClientUpdate, FunctionalModulePlatform } from '@copis/shared'
 import { buildFunctionalModuleRelease, type FunctionalModuleBinaryInput } from './functional-module-publisher'
+import { chromeDesktopEntrypoint, validateChromeDesktopArchive } from './prepare-chrome-desktop-module'
+import { getChromeCliOption } from './chrome-cli-options'
 import { resolveFunctionalModulePrefix } from './functional-module-prefix'
 import { applyFunctionalModuleVersionLocks, loadFunctionalModuleVersionLocks } from './functional-module-version-lock'
 
@@ -14,8 +16,8 @@ const repoRoot = resolve(import.meta.dir, '..')
 const electronDir = join(repoRoot, 'apps/electron')
 const packageMetadata = JSON.parse(readFileSync(join(electronDir, 'package.json'), 'utf8')) as PackageMetadata
 
-const platform = parsePlatform(process.env.COPIS_MODULE_PLATFORM ?? process.platform)
-const arch = parseArchitecture(process.env.COPIS_MODULE_ARCH ?? process.arch)
+const platform = parsePlatform(getOption('--platform') ?? process.env.COPIS_MODULE_PLATFORM ?? process.platform)
+const arch = parseArchitecture(getOption('--arch') ?? process.env.COPIS_MODULE_ARCH ?? process.arch)
 const version = getOption('--version') ?? process.env.COPIS_MODULE_VERSION ?? packageMetadata.version
 const channel = getOption('--channel') ?? process.env.COPIS_MODULE_CHANNEL ?? 'stable'
 const publicBaseUrl = getOption('--public-base-url') ?? process.env.COS_PUBLIC_BASE_URL
@@ -28,8 +30,10 @@ const pythonRuntimeOnly = hasFlag('--python-runtime') || process.env.COPIS_PYTHO
 const agentlyCliOnly = hasFlag('--agently-cli') || process.env.COPIS_AGENTLY_CLI_ONLY === '1'
 const dshOnly = hasFlag('--dsh') || process.env.COPIS_DSH_ONLY === '1'
 const codexCliOnly = hasFlag('--codex-cli') || process.env.COPIS_CODEX_CLI_ONLY === '1'
-if (Number(rustOnly) + Number(officeCliOnly) + Number(nodeRuntimeOnly) + Number(alipayBotOnly) + Number(playwrightCoreOnly) + Number(pythonRuntimeOnly) + Number(agentlyCliOnly) + Number(dshOnly) + Number(codexCliOnly) > 1) {
-  throw new Error('--rust、--officecli、--node-runtime、--alipay-bot、--playwright-core、--python-runtime、--agently-cli、--dsh 与 --codex-cli 不能同时使用')
+const chromeDesktopCliOnly = hasFlag('--chrome-cli') || hasFlag('--chrome-desktop-cli') || process.env.COPIS_CHROME_DESKTOP_CLI_ONLY === '1'
+if (chromeDesktopCliOnly && platform !== 'darwin') throw new Error('chrome-desktop-cli 仅支持 macOS (darwin)')
+if (Number(rustOnly) + Number(officeCliOnly) + Number(nodeRuntimeOnly) + Number(alipayBotOnly) + Number(playwrightCoreOnly) + Number(pythonRuntimeOnly) + Number(agentlyCliOnly) + Number(dshOnly) + Number(codexCliOnly) + Number(chromeDesktopCliOnly) > 1) {
+  throw new Error('--rust、--officecli、--node-runtime、--alipay-bot、--playwright-core、--python-runtime、--agently-cli、--dsh、--codex-cli 与 --chrome-desktop-cli 不能同时使用')
 }
 const prefix = resolveFunctionalModulePrefix({
   cliPrefix: getOption('--prefix'),
@@ -46,7 +50,7 @@ if (!publicBaseUrl) throw new Error('缺少 COS_PUBLIC_BASE_URL 或 --public-bas
 
 const modules: FunctionalModuleBinaryInput[] = []
 
-if (!officeCliOnly && !nodeRuntimeOnly && !alipayBotOnly && !playwrightCoreOnly && !pythonRuntimeOnly && !agentlyCliOnly && !dshOnly && !codexCliOnly) {
+if (!officeCliOnly && !nodeRuntimeOnly && !alipayBotOnly && !playwrightCoreOnly && !pythonRuntimeOnly && !agentlyCliOnly && !dshOnly && !codexCliOnly && !chromeDesktopCliOnly) {
   const rustBinary = getOption('--rust-binary')
     ?? process.env.COPIS_RUST_HTTP_API_BINARY
     ?? join(repoRoot, 'native/http-api-server/target/release', binaryName('copis-http-api-server', platform))
@@ -60,7 +64,7 @@ if (!officeCliOnly && !nodeRuntimeOnly && !alipayBotOnly && !playwrightCoreOnly 
   })
 }
 
-if (!rustOnly && !nodeRuntimeOnly && !alipayBotOnly && !playwrightCoreOnly && !pythonRuntimeOnly && !agentlyCliOnly && !dshOnly && !codexCliOnly) {
+if (!rustOnly && !nodeRuntimeOnly && !alipayBotOnly && !playwrightCoreOnly && !pythonRuntimeOnly && !agentlyCliOnly && !dshOnly && !codexCliOnly && !chromeDesktopCliOnly) {
   const officeCliBinary = getOption('--officecli-binary')
     ?? process.env.COPIS_OFFICECLI_BINARY
     ?? join(electronDir, 'resources/bin', binaryName('officecli', platform))
@@ -74,7 +78,7 @@ if (!rustOnly && !nodeRuntimeOnly && !alipayBotOnly && !playwrightCoreOnly && !p
   })
 }
 
-if (!rustOnly && !officeCliOnly && !alipayBotOnly && !playwrightCoreOnly && !pythonRuntimeOnly && !agentlyCliOnly && !dshOnly && !codexCliOnly) {
+if (!rustOnly && !officeCliOnly && !alipayBotOnly && !playwrightCoreOnly && !pythonRuntimeOnly && !agentlyCliOnly && !dshOnly && !codexCliOnly && !chromeDesktopCliOnly) {
   const nodeRuntimeArchive = getOption('--node-runtime-archive')
     ?? process.env.COPIS_NODE_RUNTIME_ARCHIVE
     ?? join(electronDir, 'resources/node-runtime', `${platform}-${arch}.tar.gz`)
@@ -90,7 +94,7 @@ if (!rustOnly && !officeCliOnly && !alipayBotOnly && !playwrightCoreOnly && !pyt
   })
 }
 
-if (!rustOnly && !officeCliOnly && !nodeRuntimeOnly && !playwrightCoreOnly && !pythonRuntimeOnly && !agentlyCliOnly && !dshOnly && !codexCliOnly) {
+if (!rustOnly && !officeCliOnly && !nodeRuntimeOnly && !playwrightCoreOnly && !pythonRuntimeOnly && !agentlyCliOnly && !dshOnly && !codexCliOnly && !chromeDesktopCliOnly) {
   const alipayBotArchive = getOption('--alipay-bot-archive')
     ?? process.env.COPIS_ALIPAY_BOT_ARCHIVE
     ?? join(electronDir, 'resources/alipay-bot', `${platform}-${arch}.tar.gz`)
@@ -106,7 +110,7 @@ if (!rustOnly && !officeCliOnly && !nodeRuntimeOnly && !playwrightCoreOnly && !p
   })
 }
 
-if (!rustOnly && !officeCliOnly && !nodeRuntimeOnly && !alipayBotOnly && !pythonRuntimeOnly && !agentlyCliOnly && !dshOnly && !codexCliOnly) {
+if (!rustOnly && !officeCliOnly && !nodeRuntimeOnly && !alipayBotOnly && !pythonRuntimeOnly && !agentlyCliOnly && !dshOnly && !codexCliOnly && !chromeDesktopCliOnly) {
   const playwrightCoreArchive = getOption('--playwright-core-archive')
     ?? process.env.COPIS_PLAYWRIGHT_CORE_ARCHIVE
     ?? join(electronDir, 'resources/playwright-core/playwright-core.tar.gz')
@@ -122,7 +126,7 @@ if (!rustOnly && !officeCliOnly && !nodeRuntimeOnly && !alipayBotOnly && !python
   })
 }
 
-if (!rustOnly && !officeCliOnly && !nodeRuntimeOnly && !alipayBotOnly && !playwrightCoreOnly && !agentlyCliOnly && !dshOnly && !codexCliOnly) {
+if (!rustOnly && !officeCliOnly && !nodeRuntimeOnly && !alipayBotOnly && !playwrightCoreOnly && !agentlyCliOnly && !dshOnly && !codexCliOnly && !chromeDesktopCliOnly) {
   const pythonRuntimeArchive = getOption('--python-runtime-archive')
     ?? process.env.COPIS_PYTHON_RUNTIME_ARCHIVE
     ?? join(electronDir, 'resources/python-runtime', `${platform}-${arch}.tar.gz`)
@@ -138,7 +142,7 @@ if (!rustOnly && !officeCliOnly && !nodeRuntimeOnly && !alipayBotOnly && !playwr
   })
 }
 
-if (!rustOnly && !officeCliOnly && !nodeRuntimeOnly && !alipayBotOnly && !playwrightCoreOnly && !pythonRuntimeOnly && !dshOnly && !codexCliOnly) {
+if (!rustOnly && !officeCliOnly && !nodeRuntimeOnly && !alipayBotOnly && !playwrightCoreOnly && !pythonRuntimeOnly && !dshOnly && !codexCliOnly && !chromeDesktopCliOnly) {
   const agentlyCliArchive = getOption('--agently-cli-archive')
     ?? process.env.COPIS_AGENTLY_CLI_ARCHIVE
     ?? join(electronDir, 'resources/agently-cli', `${platform}-${arch}.tar.gz`)
@@ -154,7 +158,7 @@ if (!rustOnly && !officeCliOnly && !nodeRuntimeOnly && !alipayBotOnly && !playwr
   })
 }
 
-if (!rustOnly && !officeCliOnly && !nodeRuntimeOnly && !alipayBotOnly && !playwrightCoreOnly && !pythonRuntimeOnly && !agentlyCliOnly && !codexCliOnly) {
+if (!rustOnly && !officeCliOnly && !nodeRuntimeOnly && !alipayBotOnly && !playwrightCoreOnly && !pythonRuntimeOnly && !agentlyCliOnly && !codexCliOnly && !chromeDesktopCliOnly) {
   const dshArchive = getOption('--dsh-archive')
     ?? process.env.COPIS_DSH_ARCHIVE
     ?? join(electronDir, 'resources/dsh', `${platform}-${arch}.tar.gz`)
@@ -170,7 +174,7 @@ if (!rustOnly && !officeCliOnly && !nodeRuntimeOnly && !alipayBotOnly && !playwr
   })
 }
 
-if (!rustOnly && !officeCliOnly && !nodeRuntimeOnly && !alipayBotOnly && !playwrightCoreOnly && !pythonRuntimeOnly && !agentlyCliOnly && !dshOnly) {
+if (!rustOnly && !officeCliOnly && !nodeRuntimeOnly && !alipayBotOnly && !playwrightCoreOnly && !pythonRuntimeOnly && !agentlyCliOnly && !dshOnly && !chromeDesktopCliOnly) {
   const codexCliArchive = getOption('--codex-cli-archive')
     ?? process.env.COPIS_CODEX_CLI_ARCHIVE
     ?? join(electronDir, 'resources/codex-cli', `${platform}-${arch}.tar.gz`)
@@ -182,6 +186,26 @@ if (!rustOnly && !officeCliOnly && !nodeRuntimeOnly && !alipayBotOnly && !playwr
     binaryPath: codexCliArchive,
     format: 'tar.gz',
     entrypoint: `bin/${platform === 'win32' ? 'codex.exe' : 'codex'}`,
+    required: false,
+  })
+}
+
+const chromeVersion = loadFunctionalModuleVersionLocks()['chrome-desktop-cli']
+const requestedChromeVersion = getChromeCliOption('version') ?? process.env.COPIS_CHROME_DESKTOP_CLI_VERSION
+if (platform === 'darwin' && !rustOnly && !officeCliOnly && !nodeRuntimeOnly && !alipayBotOnly && !playwrightCoreOnly && !pythonRuntimeOnly && !agentlyCliOnly && !dshOnly && !codexCliOnly) {
+  if (requestedChromeVersion && requestedChromeVersion !== chromeVersion) throw new Error(`Chrome 模块版本必须与版本锁一致: ${chromeVersion}`)
+  const archive = getChromeCliOption('archive')
+    ?? process.env.COPIS_CHROME_DESKTOP_CLI_ARCHIVE
+    ?? join(electronDir, 'resources/chrome-desktop-cli', `${platform}-${arch}.tar.gz`)
+  validateChromeDesktopArchive(archive, platform, arch, chromeVersion)
+  modules.push({
+    module: 'chrome-desktop-cli',
+    version: chromeVersion,
+    platform,
+    arch,
+    binaryPath: archive,
+    format: 'tar.gz',
+    entrypoint: chromeDesktopEntrypoint(chromeVersion, arch),
     required: false,
   })
 }

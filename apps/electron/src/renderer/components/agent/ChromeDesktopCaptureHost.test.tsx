@@ -3,6 +3,7 @@ import { parseHTML } from 'linkedom'
 import * as React from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { Provider, createStore } from 'jotai'
+import type { ChromeDesktopSessionState } from '@copis/shared'
 import {
   chromeDesktopMediaStreamAtom, chromeDesktopMediaStreamControlAtom, chromeDesktopSessionStateAtom,
 } from '@/atoms/chrome-desktop-atoms'
@@ -11,260 +12,146 @@ import { openChromeDesktopPreviewTabAtom } from '@/atoms/chrome-desktop-preview-
 import { ChromeDesktopCaptureHost } from './ChromeDesktopCaptureHost'
 
 const act = (React as typeof React & { act: typeof import('react-dom/test-utils').act }).act
+const initialState: ChromeDesktopSessionState = {
+  controlId: 'ctrl-1', sessionId: 'session-1', state: 'active', mode: 'observe', targetWindow: null, shortcut: '', createdAt: 0,
+}
+const globals = { window: globalThis.window, document: globalThis.document, navigator: globalThis.navigator }
 let root: Root | null = null
+let stateChanged: (state: ChromeDesktopSessionState) => void
+let store: ReturnType<typeof createStore>
+let api: ReturnType<typeof createApi>
 
-describe('ChromeDesktopCaptureHost requestVideoFrameCallback 序列与静止检测', () => {
-  let currentState: any = null
-  let stateChangedCallback: ((state: any) => void) | null = null
-  let frameRequestCallback: ((req: { controlId: string; requestId: string; geometryVersion: number }) => void) | null = null
-  let sendFrameResponseCalls: any[] = []
-  let sendStreamErrorCalls: any[] = []
-  let rVfcCallbacks: Array<(now: number, meta: any) => void> = []
+function createApi() {
+  return {
+    getState: mock(async (): Promise<ChromeDesktopSessionState | null> => initialState),
+    stopControl: mock(async (_input: unknown) => {}),
+    onStateChanged: mock((cb: typeof stateChanged) => { stateChanged = cb; return mock(() => {}) }),
+    onRequestFrame: mock((_cb: unknown) => mock(() => {})),
+    sendFrameResponse: mock((_response: unknown) => {}),
+    sendStreamError: mock((_error: unknown) => {}),
+  }
+}
 
-  beforeEach(() => {
-    const parsed = parseHTML('<html><body><div id="root"></div></body></html>')
-    currentState = { controlId: 'ctrl-1', sessionId: 'session-1', state: 'active', targetWindow: null, shortcut: '', createdAt: 0 }
-    sendFrameResponseCalls = []
-    sendStreamErrorCalls = []
-    rVfcCallbacks = []
-    frameRequestCallback = null
-    stateChangedCallback = null
+beforeEach(() => {
+  const { window } = parseHTML('<html><body><div id="root"></div></body></html>')
+  Object.assign(globalThis, { window, document: window.document, navigator: window.navigator, IS_REACT_ACT_ENVIRONMENT: true })
+  ;(window.HTMLElement.prototype as any).play = async () => {}
+  api = createApi()
+  window.electronAPI = { chromeDesktop: api } as any
+  store = createStore()
+  store.set(chromeDesktopSessionStateAtom, initialState)
+})
 
-    // Mock HTMLCanvasElement.getContext and toDataURL
-    parsed.window.HTMLCanvasElement.prototype.getContext = () => ({
-      drawImage: () => {},
-    }) as any
-    parsed.window.HTMLCanvasElement.prototype.toDataURL = () => 'data:image/jpeg;base64,mockJpegData'
+afterEach(async () => {
+  await act(async () => { root?.unmount() })
+  root = null
+  await new Promise(resolve => setTimeout(resolve, 5))
+  Object.assign(globalThis, globals)
+})
 
-    // Mock video element methods
-    let handleSeq = 0
-    const activeCallbacks = new Map<number, (now: number, meta: any) => void>()
-    const mockPlay = async () => {}
-    const mockRvfc = (cb: any) => {
-      const handle = ++handleSeq
-      activeCallbacks.set(handle, cb)
-      rVfcCallbacks.push(cb)
-      return handle
-    }
-    const mockCancelRvfc = (handle: number) => {
-      const cb = activeCallbacks.get(handle)
-      if (cb) {
-        activeCallbacks.delete(handle)
-        rVfcCallbacks = rVfcCallbacks.filter((c) => c !== cb)
-      }
-    }
+async function renderHost() {
+  root = createRoot(document.getElementById('root')!)
+  await act(async () => { root?.render(<Provider store={store}><ChromeDesktopCaptureHost /></Provider>) })
+}
 
-    if (parsed.window.HTMLVideoElement) {
-      parsed.window.HTMLVideoElement.prototype.play = mockPlay
-      ;(parsed.window.HTMLVideoElement.prototype as any).requestVideoFrameCallback = mockRvfc
-      ;(parsed.window.HTMLVideoElement.prototype as any).cancelVideoFrameCallback = mockCancelRvfc
-    }
-    if (parsed.window.HTMLMediaElement) {
-      parsed.window.HTMLMediaElement.prototype.play = mockPlay
-      ;(parsed.window.HTMLMediaElement.prototype as any).requestVideoFrameCallback = mockRvfc
-      ;(parsed.window.HTMLMediaElement.prototype as any).cancelVideoFrameCallback = mockCancelRvfc
-    }
-    ;(parsed.window.HTMLElement.prototype as any).play = mockPlay
-    ;(parsed.window.HTMLElement.prototype as any).requestVideoFrameCallback = mockRvfc
-    ;(parsed.window.HTMLElement.prototype as any).cancelVideoFrameCallback = mockCancelRvfc
+function installPreview(controlId = 'ctrl-1') {
+  let ended!: () => void
+  const stop = mock(() => {})
+  const removeEventListener = mock((_event: string, _callback: () => void) => {})
+  const track = { stop, addEventListener: (_event: string, callback: () => void) => { ended = callback }, removeEventListener }
+  const stream = { getTracks: () => [track], getVideoTracks: () => [track] } as unknown as MediaStream
+  store.set(chromeDesktopMediaStreamAtom, stream)
+  store.set(chromeDesktopMediaStreamControlAtom, controlId)
+  return { stream, stop, removeEventListener, end: () => ended() }
+}
 
-    Object.assign(globalThis, {
-      window: parsed.window,
-      document: parsed.window.document,
-      navigator: parsed.window.navigator,
-      HTMLVideoElement: parsed.window.HTMLVideoElement,
-      HTMLCanvasElement: parsed.window.HTMLCanvasElement,
-      IS_REACT_ACT_ENVIRONMENT: true,
-    })
-
-    Object.assign(parsed.window, {
-      setTimeout,
-      clearTimeout,
-      setInterval,
-      clearInterval,
-      electronAPI: {
-        chromeDesktop: {
-          getState: mock(async () => currentState),
-          stopControl: mock(async (_input: any) => {}),
-          onStateChanged: mock((cb: any) => { stateChangedCallback = cb; return () => { stateChangedCallback = null } }),
-          onRequestFrame: mock((cb: any) => {
-            frameRequestCallback = cb
-            return () => {}
-          }),
-          sendFrameResponse: mock((res: any) => {
-            sendFrameResponseCalls.push(res)
-          }),
-          sendStreamError: mock((err: any) => {
-            sendStreamErrorCalls.push(err)
-          }),
-        },
-      },
-    })
+describe('ChromeDesktopCaptureHost 只维护预览与原生状态', () => {
+  test('Given 原生负责 Observe When 全局宿主挂载 Then 不订阅 renderer 截帧或发送图片', async () => {
+    installPreview()
+    await renderHost()
+    expect(api.onRequestFrame).not.toHaveBeenCalled()
+    expect(api.sendFrameResponse).not.toHaveBeenCalled()
+    expect(document.querySelector('canvas')).toBeNull()
   })
 
-  afterEach(async () => {
-    if (root) {
-      await act(async () => {
-        root?.unmount()
-      })
-    }
-    root = null
+  test('Given 预览轨道结束 When 收到 ended Then 只清理流且原生连接保持 active', async () => {
+    const preview = installPreview()
+    await renderHost()
+    await act(async () => { preview.end() })
+    expect(store.get(chromeDesktopMediaStreamAtom)).toBeNull()
+    expect(store.get(chromeDesktopMediaStreamControlAtom)).toBeNull()
+    expect(preview.stop).toHaveBeenCalledTimes(1)
+    expect(preview.removeEventListener).toHaveBeenCalled()
+    expect(store.get(chromeDesktopSessionStateAtom)?.state).toBe('active')
+    expect(api.sendStreamError).not.toHaveBeenCalled()
+    expect(api.stopControl).not.toHaveBeenCalled()
   })
 
-  test('首次 Observe 获得新帧；静止时再次 Observe 返回 CHROME_FRAME_STALE；画面更新后再次 Observe 成功', async () => {
-    const store = createStore()
-    const mockTrack = {
-      stop: () => {},
-      addEventListener: () => {},
-      removeEventListener: () => {},
-    }
-    const mockStream = {
-      getVideoTracks: () => [mockTrack],
-      getTracks: () => [mockTrack],
-    } as unknown as MediaStream
-
-    store.set(chromeDesktopMediaStreamAtom, mockStream)
-    store.set(chromeDesktopMediaStreamControlAtom, 'ctrl-1')
-    store.set(chromeDesktopSessionStateAtom, currentState)
-
-    root = createRoot(document.getElementById('root')!)
+  test('Given 旧流的 ended 迟到 When 已换成另一个 control 的预览 Then 不清理新流且不上报连接失败', async () => {
+    const oldPreview = installPreview()
+    await renderHost()
+    let newPreview!: ReturnType<typeof installPreview>
     await act(async () => {
-      root?.render(
-        <Provider store={store}>
-          <ChromeDesktopCaptureHost />
-        </Provider>,
-      )
+      newPreview = installPreview('ctrl-2')
+      oldPreview.end()
     })
-
-    expect(frameRequestCallback).not.toBeNull()
-
-    const videoElement = document.querySelector('video') as HTMLVideoElement
-    expect(videoElement).not.toBeNull()
-    Object.defineProperty(videoElement, 'readyState', { value: 4, configurable: true })
-    Object.defineProperty(videoElement, 'videoWidth', { value: 1280, configurable: true })
-    Object.defineProperty(videoElement, 'videoHeight', { value: 720, configurable: true })
-
-    // 1. 发起第 1 次 Observe 请求
-    await act(async () => {
-      frameRequestCallback!({ controlId: 'ctrl-1', requestId: 'req-1', geometryVersion: 1 })
-    })
-
-    expect(rVfcCallbacks.length).toBe(1)
-    // 触发 rVFC 呈现第 1 帧
-    await act(async () => {
-      const cb = rVfcCallbacks.shift()!
-      cb(100, { presentedFrames: 1, mediaTime: 0.016 })
-      await new Promise((r) => setTimeout(r, 10))
-    })
-
-    expect(sendFrameResponseCalls.length).toBe(1)
-    expect(sendFrameResponseCalls[0].requestId).toBe('req-1')
-    expect(sendFrameResponseCalls[0].error).toBeUndefined()
-    expect(sendFrameResponseCalls[0].presentedFrames).toBe(1)
-    expect(sendFrameResponseCalls[0].mediaTime).toBe(0.016)
-    expect(typeof sendFrameResponseCalls[0].encodedAt).toBe('number')
-    expect(sendFrameResponseCalls[0].data).toBe('mockJpegData')
-
-    // 2. 发起第 2 次 Observe 请求（此时视频画面静止，无新源帧呈现）
-    await act(async () => {
-      frameRequestCallback!({ controlId: 'ctrl-1', requestId: 'req-2', geometryVersion: 2 })
-    })
-
-    expect(rVfcCallbacks.length).toBe(1)
-    // 画面静止：即使 rVFC 触发，presentedFrames 仍为 1（<= 上一帧序号 1）
-    await act(async () => {
-      const cb = rVfcCallbacks.shift()!
-      cb(200, { presentedFrames: 1, mediaTime: 0.016 })
-      // 等待 360ms 触发 350ms 超时
-      await new Promise((r) => setTimeout(r, 360))
-    })
-
-    expect(sendFrameResponseCalls.length).toBe(2)
-    expect(sendFrameResponseCalls[1].requestId).toBe('req-2')
-    // 必须返回明确的 CHROME_FRAME_STALE，绝不能用旧帧充数
-    expect(sendFrameResponseCalls[1].error).toContain('CHROME_FRAME_STALE')
-    expect(sendFrameResponseCalls[1].data).toBe('')
-
-    // 3. 发起第 3 次 Observe 请求（画面发生更新，呈现第 2 帧）
-    await act(async () => {
-      frameRequestCallback!({ controlId: 'ctrl-1', requestId: 'req-3', geometryVersion: 3 })
-    })
-
-    expect(rVfcCallbacks.length).toBe(1)
-    await act(async () => {
-      const cb = rVfcCallbacks.shift()!
-      cb(400, { presentedFrames: 2, mediaTime: 0.033 })
-      await new Promise((r) => setTimeout(r, 10))
-    })
-
-    expect(sendFrameResponseCalls.length).toBe(3)
-    expect(sendFrameResponseCalls[2].requestId).toBe('req-3')
-    expect(sendFrameResponseCalls[2].error).toBeUndefined()
-    expect(sendFrameResponseCalls[2].presentedFrames).toBe(2)
-    expect(sendFrameResponseCalls[2].mediaTime).toBe(0.033)
-  })
-
-  test('requestVideoFrameCallback 不可用时明确失败，不将旧画面当作新帧', async () => {
-    const store = createStore()
-    const track = { addEventListener: () => {}, removeEventListener: () => {}, stop: () => {} }
-    store.set(chromeDesktopMediaStreamAtom, { getVideoTracks: () => [track], getTracks: () => [track] } as unknown as MediaStream)
-    store.set(chromeDesktopMediaStreamControlAtom, 'ctrl-1')
-    store.set(chromeDesktopSessionStateAtom, currentState)
-    root = createRoot(document.getElementById('root')!)
-    await act(async () => root?.render(<Provider store={store}><ChromeDesktopCaptureHost /></Provider>))
-    const video = document.querySelector('video') as any
-    Object.defineProperty(video, 'readyState', { value: 4, configurable: true })
-    Object.defineProperty(video, 'videoWidth', { value: 1280, configurable: true })
-    Object.defineProperty(video, 'videoHeight', { value: 720, configurable: true })
-    video.requestVideoFrameCallback = undefined
-
-    await act(async () => frameRequestCallback!({ controlId: 'ctrl-1', requestId: 'req-no-rvfc', geometryVersion: 1 }))
-    expect(sendFrameResponseCalls).toHaveLength(1)
-    expect(sendFrameResponseCalls[0].error).toContain('不支持 requestVideoFrameCallback')
-    expect(sendFrameResponseCalls[0].data).toBe('')
+    expect(store.get(chromeDesktopMediaStreamAtom)).toBe(newPreview.stream)
+    expect(newPreview.stop).not.toHaveBeenCalled()
+    expect(api.sendStreamError).not.toHaveBeenCalled()
   })
 
   test('Given 旧 Chrome 预览 Tab 正在展示 When 主进程广播同会话重新授权 Then 全局宿主切回 Agent 展示授权入口', async () => {
-    const store = createStore()
     store.set(tabsAtom, [{ id: 'session-1', type: 'agent', sessionId: 'session-1', title: 'Agent' }])
     store.set(openChromeDesktopPreviewTabAtom, { sessionId: 'session-1', controlId: 'ctrl-1', title: 'Chrome' })
-    root = createRoot(document.getElementById('root')!)
-    await act(async () => root?.render(<Provider store={store}><ChromeDesktopCaptureHost /></Provider>))
-    expect(store.get(activeTabIdAtom)).toBe('__chrome-desktop-preview__:ctrl-1')
-    await act(async () => stateChangedCallback!({ ...currentState, controlId: 'ctrl-2', state: 'awaiting_user' }))
+    await renderHost()
+    await act(async () => { stateChanged({ ...initialState, controlId: 'ctrl-2', state: 'awaiting_user' }) })
     expect(store.get(activeTabIdAtom)).toBe('session-1')
     expect(store.get(chromeDesktopSessionStateAtom)?.controlId).toBe('ctrl-2')
   })
 
-  test('Given Chrome 失去焦点 When 主进程广播可恢复暂停 Then 保留已授权采集流；真正采集失败才释放', async () => {
-    const store = createStore()
-    const stop = mock(() => {})
-    const track = { addEventListener: () => {}, removeEventListener: () => {}, stop }
-    const stream = { getVideoTracks: () => [track], getTracks: () => [track] } as unknown as MediaStream
-    store.set(chromeDesktopMediaStreamAtom, stream)
-    store.set(chromeDesktopMediaStreamControlAtom, 'ctrl-1')
-    store.set(chromeDesktopSessionStateAtom, currentState)
-    root = createRoot(document.getElementById('root')!)
-    await act(async () => root?.render(<Provider store={store}><ChromeDesktopCaptureHost /></Provider>))
-
-    await act(async () => stateChangedCallback!({ ...currentState, state: 'paused', pauseReason: 'CHROME_FOCUS_LOST' }))
-    expect(stop).not.toHaveBeenCalled()
-
-    await act(async () => stateChangedCallback!({ ...currentState, state: 'paused', pauseReason: 'CHROME_CAPTURE_FAILED' }))
-    expect(stop).toHaveBeenCalledTimes(1)
+  test('Given Chrome 焦点暂停 When 主进程广播可恢复状态 Then 保留预览；原生报告不可恢复失败才释放', async () => {
+    const preview = installPreview()
+    await renderHost()
+    await act(async () => { stateChanged({ ...initialState, state: 'paused', pauseReason: 'CHROME_FOCUS_LOST' }) })
+    expect(preview.stop).not.toHaveBeenCalled()
+    await act(async () => { stateChanged({ ...initialState, state: 'paused', pauseReason: 'CHROME_CAPTURE_FAILED' }) })
+    expect(preview.stop).toHaveBeenCalledTimes(1)
   })
 
-  test('track ended 上报绑定产生该 stream 的 controlId', async () => {
-    const store = createStore()
-    let ended: (() => void) | undefined
-    const track = { addEventListener: (_: string, cb: () => void) => { ended = cb }, removeEventListener: () => {}, stop: () => {} }
-    store.set(chromeDesktopMediaStreamAtom, { getVideoTracks: () => [track], getTracks: () => [track] } as unknown as MediaStream)
-    store.set(chromeDesktopMediaStreamControlAtom, 'ctrl-1')
-    store.set(chromeDesktopSessionStateAtom, currentState)
-    root = createRoot(document.getElementById('root')!)
-    await act(async () => root?.render(<Provider store={store}><ChromeDesktopCaptureHost /></Provider>))
-    await act(async () => ended?.())
-    expect(sendStreamErrorCalls[0]).toMatchObject({ controlId: 'ctrl-1', reason: 'CHROME_CAPTURE_FAILED' })
+  test('Given 正在使用预览 When 原生停止或切换 control Then 释放原来的流', async () => {
+    const preview = installPreview()
+    await renderHost()
+    await act(async () => { stateChanged({ ...initialState, controlId: 'ctrl-2', state: 'awaiting_user' }) })
+    expect(preview.stop).toHaveBeenCalledTimes(1)
+    expect(store.get(chromeDesktopMediaStreamAtom)).toBeNull()
+  })
+
+  test('Given getState 快照迟到 When 已收到新状态广播 Then 保持较新的原生状态', async () => {
+    let resolveState!: (state: ChromeDesktopSessionState) => void
+    api.getState.mockImplementation(() => new Promise(resolve => { resolveState = resolve }))
+    await renderHost()
+    await act(async () => { stateChanged({ ...initialState, state: 'stopped' }); resolveState(initialState) })
+    expect(store.get(chromeDesktopSessionStateAtom)?.state).toBe('stopped')
+  })
+
+  test('Given 应用宿主持有原生连接和预览 When 真正卸载 Then 停止连接并清理流', async () => {
+    const preview = installPreview()
+    await renderHost()
+    await act(async () => { root?.unmount() })
+    root = null
+    await new Promise(resolve => setTimeout(resolve, 5))
+    expect(preview.stop).toHaveBeenCalledTimes(1)
+    expect(api.stopControl).toHaveBeenCalledWith({ sessionId: 'session-1', controlId: 'ctrl-1' })
+  })
+
+  test('Given preload 已删除所有截帧接口 When 宿主挂载并收到状态 Then 仍同步原生控制状态', async () => {
+    window.electronAPI = { chromeDesktop: {
+      getState: api.getState, onStateChanged: api.onStateChanged, stopControl: api.stopControl,
+    } } as any
+    await renderHost()
+    await act(async () => { stateChanged({ ...initialState, state: 'paused', pauseReason: 'CHROME_FOCUS_LOST' }) })
+    expect(store.get(chromeDesktopSessionStateAtom)?.state).toBe('paused')
+    expect(api.stopControl).not.toHaveBeenCalled()
   })
 
 })

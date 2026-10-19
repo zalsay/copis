@@ -4,12 +4,12 @@ const dist = await import('./dist')
 const packageJson = await Bun.file(new URL('../package.json', import.meta.url)).json() as { scripts: Record<string, string> }
 
 describe('visual distribution build plan', () => {
-  test('Given visual/fast/debug 发布 When 对比标准 build Then 必须包含全部构建步骤并在编译 CLI 后重建 Chrome Helper', () => {
+  test('Given visual/fast/debug 发布 When 对比标准 build Then 必须包含全部构建步骤且无需编译 Chrome 独立模块', () => {
     const standard = packageJson.scripts.build.split(' && ').map(step => step.replace(/^bun run /, ''))
     for (const variant of ['visual', 'fast', 'debug'] as const) {
       const commands = dist.getVisualDistributionBuildPlan(variant).map(step => step.command)
       expect(commands).toEqual([...standard, 'sync:runtime-deps', 'electron-builder'])
-      expect(commands.indexOf('build:chrome-desktop-helper')).toBeGreaterThan(commands.indexOf('build:cli'))
+      expect(commands).not.toContain('build:chrome-desktop-helper')
     }
   })
 
@@ -25,7 +25,6 @@ describe('visual distribution build plan', () => {
       'build:agent-rpc-worker',
       'build:renderer',
       'build:cli',
-      'build:chrome-desktop-helper',
       'copy:pi-extensions',
       'build:resources',
       'sync:runtime-deps',
@@ -55,7 +54,6 @@ describe('visual distribution direct run', () => {
     'build:agent-rpc-worker',
     'build:renderer',
     'build:cli',
-    'build:chrome-desktop-helper',
     'copy:pi-extensions',
     'build:resources',
     'sync:runtime-deps',
@@ -119,7 +117,7 @@ describe('visual distribution direct run', () => {
     })
   }
 
-  for (const command of ['build:chrome-desktop-helper', 'copy:pi-extensions', 'sync:runtime-deps']) {
+  for (const command of ['copy:pi-extensions', 'sync:runtime-deps']) {
     test(`Given ${command} 失败 When 发布 Then 不进入 electron-builder`, () => {
       const { calls, results } = runDirect(['--current-arch', '--dmg'], command)
       expect(results.at(-1)?.success).toBe(false)

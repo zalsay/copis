@@ -1,0 +1,125 @@
+use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
+use std::fmt;
+use std::io::{BufRead, Read};
+
+pub const PROTOCOL_VERSION: u32 = 1;
+pub const MAX_MESSAGE_BYTES: usize = 64 * 1024;
+pub type Result<T> = std::result::Result<T, Error>;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Error {
+    pub code: String,
+    pub message: String,
+}
+impl Error {
+    pub fn new(code: &str, message: &str) -> Self {
+        Self {
+            code: code.into(),
+            message: message.into(),
+        }
+    }
+    pub fn invalid(message: &str) -> Self {
+        Self::new("INVALID_ARGUMENT", message)
+    }
+    pub fn io(context: &str, error: std::io::Error) -> Self {
+        Self::new("IO_ERROR", &format!("{context}: {error}"))
+    }
+}
+impl fmt::Display for Error {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "{}: {}", self.code, self.message)
+    }
+}
+impl std::error::Error for Error {}
+
+pub fn response(result: Result<Value>) -> Value {
+    match result {
+        Ok(Value::Object(mut data)) => {
+            data.insert("protocolVersion".into(), json!(PROTOCOL_VERSION));
+            data.insert("ok".into(), json!(true));
+            Value::Object(data)
+        }
+        Ok(_) => response(Err(Error::new("PROTOCOL_ERROR", "响应必须是 JSON 对象"))),
+        Err(error) => json!({"protocolVersion":PROTOCOL_VERSION,"ok":false,"error":error}),
+    }
+}
+
+pub fn random_id() -> Result<String> {
+    let mut bytes = [0_u8; 16];
+    std::fs::File::open("/dev/urandom")
+        .and_then(|mut file| file.read_exact(&mut bytes))
+        .map_err(|error| Error::io("无法读取系统随机源", error))?;
+    Ok(bytes.iter().map(|b| format!("{b:02x}")).collect())
+}
+
+/// 协议行有限长，不能先无界 read_line 再检查长度。
+pub fn read_message(reader: &mut impl BufRead) -> Result<Option<Value>> {
+    let mut line = Vec::new();
+    loop {
+        let buffer = reader
+            .fill_buf()
+            .map_err(|e| Error::io("读取协议失败", e))?;
+        if buffer.is_empty() {
+            return if line.is_empty() {
+                Ok(None)
+            } else {
+                Err(Error::new("PROTOCOL_ERROR", "协议行缺少换行符"))
+            };
+        }
+        let end = buffer.iter().position(|byte| *byte == b'\n');
+        let count = end.map_or(buffer.len(), |index| index + 1);
+        if line.len() + count > MAX_MESSAGE_BYTES {
+            return Err(Error::new("MESSAGE_TOO_LARGE", "协议消息超过 64KiB"));
+        }
+        line.extend_from_slice(&buffer[..count]);
+        reader.consume(count);
+        if end.is_some() {
+            return serde_json::from_slice(&line)
+                .map(Some)
+                .map_err(|_| Error::new("PROTOCOL_ERROR", "协议消息不是有效 JSON"));
+        }
+    }
+}
+
+pub fn string<'a>(value: &'a Value, key: &str) -> Result<&'a str> {
+    value
+        .get(key)
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| Error::invalid(&format!("缺少有效的 {key}")))
+}
+pub fn integer(value: &Value, key: &str) -> Result<i64> {
+    value
+        .get(key)
+        .and_then(Value::as_i64)
+        .ok_or_else(|| Error::invalid(&format!("{key} 必须为整数")))
+}
+pub fn fields(value: &Value, allowed: &[&str]) -> Result<()> {
+    let object = value
+        .as_object()
+        .ok_or_else(|| Error::invalid("请求必须为对象"))?;
+    if object.keys().any(|name| !allowed.contains(&name.as_str())) {
+        return Err(Error::invalid("请求包含未支持的字段"));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn oversized_or_unterminated_protocol_is_rejected() {
+        assert_eq!(
+            read_message(&mut std::io::Cursor::new(vec![b' '; MAX_MESSAGE_BYTES + 1]))
+                .unwrap_err()
+                .code,
+            "MESSAGE_TOO_LARGE"
+        );
+        assert!(read_message(&mut std::io::Cursor::new(b"{}")).is_err());
+        assert_eq!(
+            read_message(&mut std::io::Cursor::new(b"{}\n")).unwrap(),
+            Some(json!({}))
+        );
+    }
+}
