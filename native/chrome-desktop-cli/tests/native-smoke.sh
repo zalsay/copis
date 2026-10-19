@@ -38,6 +38,9 @@ swiftc -O -target "${arch}-apple-macosx14.0" "${library_sources[@]}" \
 swiftc -O -target "${arch}-apple-macosx14.0" "${library_sources[@]}" \
   "$root/tests/focus-validation/main.swift" -o "$scratch/focus-validation-tests"
 "$scratch/focus-validation-tests"
+swiftc -O -target "${arch}-apple-macosx14.0" "${library_sources[@]}" \
+  "$root/tests/toast-layout/main.swift" -o "$scratch/toast-layout-tests"
+"$scratch/toast-layout-tests"
 /usr/bin/python3 - "$helper" "$scratch/cancellation-tests" <<'PY'
 import json
 import os

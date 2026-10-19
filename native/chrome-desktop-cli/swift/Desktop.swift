@@ -31,6 +31,7 @@ func axWindowID(_ element: AXUIElement, _ identifier: UnsafeMutablePointer<CGWin
 
 final class ChromeDesktop {
     private let bundleID = "com.google.Chrome"
+    private let operationToast = ChromeControlToast()
 
     func permissions(request: Bool) -> [String: Any] {
         if request {
@@ -203,6 +204,7 @@ final class ChromeDesktop {
         try verifyGeometry(target, expected: expected)
         let app = axApplication(target.pid)
         let window = try targetAXWindow(target, app: app)
+        let restoringFocus = (try? focusedWindow(target, app: app)) == nil
         try cancellation.check(generation)
         let activated = try onMain {
             let targetApplication = application(pid: target.pid)
@@ -227,7 +229,15 @@ final class ChromeDesktop {
         var lastFailure: HelperFailure?
         repeat {
             try cancellation.check(generation)
-            do { try verifyFocus(target, expected: expected); return }
+            do {
+                try verifyFocus(target, expected: expected)
+                if restoringFocus {
+                    try onMain {
+                        try operationToast.show(over: expected, targetPID: target.pid, cancellation: cancellation, generation: generation)
+                    }
+                }
+                return
+            }
             catch let failure as HelperFailure where failure.code == "FOCUS_LOST" || failure.code == "FOCUS_UNVERIFIED" {
                 lastFailure = failure
             }
@@ -238,6 +248,7 @@ final class ChromeDesktop {
 
     func verifyPointer(_ point: CGPoint, target: TargetWindow, expected: WindowBounds) throws {
         guard expected.contains(point) else { throw HelperFailure.invalidArgument }
+        onMain { operationToast.dismissIfCovering(point) }
         // CG 按由前至后的顺序检查遮挡，连同非普通窗口/其他应用的浮层一起处理。
         var foundTarget = false
         for info in windowList() {

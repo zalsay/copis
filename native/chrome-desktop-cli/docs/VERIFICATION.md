@@ -9,7 +9,7 @@
 | `cargo clippy --locked --all-targets -- -D warnings` | 通过 |
 | `./build.sh debug` / `./build.sh` | 均通过，最终保留 release 功能包 |
 | Swift helper / 纯回归程序双架构 `-O -warnings-as-errors` 编译 | arm64、x86_64 的 macOS 14 target 均通过；仅 ARM 本机运行 |
-| `tests/native-smoke.sh` | 144 项无副作用协议检查 + 3 项纯 fake effect + 6 项焦点 BDD 回归通过 |
+| `tests/native-smoke.sh` | 144 项无副作用协议检查 + 3 项纯 fake effect + 6 项焦点 + 7 项 toast 布局 BDD 回归通过 |
 | 纯 fake effect 回归重复测试 | 30 次 / 90 个场景通过（Swift worker 验证） |
 | CLI 忙碌 / 紧急停止回归重复测试 | 修复测试就绪竞争后，连续 30 次通过 |
 | 并行全套稳定性复跑 | helper 初始化独立计时后，worker 连续 3 轮、每轮 27 项通过 |
@@ -34,3 +34,7 @@ Rust 回归覆盖帧反复使用、1970 时间戳的帧仍可输入、非最新�
 - `_AXUIElementGetWindow` 非公开系统符号；若未来不可用，工具会拒绝输入，不猜测其他窗口。
 - cancel 不能撤回已提交给系统的操作；异常 helper 在 250ms 内未 ACK 时仍会强杀，不能承诺其完成了 held 释放。
 - 本地修复在隔离 worktree 开发并整合到 main；尚未推送 GitHub 或发布 COS。
+
+## v0.1.2 原生操作提示
+
+新增原生顶部提示及显式 AppKit 回归；受管 CLI 真实验证只读不提示、恢复前台后显示、连续输入不刷新计时与停止清理。详见 [TOAST-VERIFICATION.md](TOAST-VERIFICATION.md)。实际视觉仍由用户确认。

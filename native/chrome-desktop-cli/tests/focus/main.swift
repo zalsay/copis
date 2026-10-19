@@ -9,7 +9,7 @@ guard CommandLine.arguments.count == 3,
     fputs("用法：focus-tests <Chrome 窗口 ID> <用于失焦验证的其他应用 PID>\n", stderr)
     exit(2)
 }
-_ = NSApplication.shared.setActivationPolicy(.prohibited)
+_ = NSApplication.shared.setActivationPolicy(.accessory)
 let desktop = ChromeDesktop()
 
 func require(_ value: Bool, _ message: String) throws {

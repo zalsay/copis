@@ -11,7 +11,7 @@ if CommandLine.arguments.count != 1 {
     writer.failure(id: "", HelperFailure(code: "INVALID_ARGUMENT", message: "原生 helper 仅接受 stdin JSONL，不接受命令行参数"))
     exit(1)
 }
-_ = NSApplication.shared.setActivationPolicy(.prohibited)
+_ = NSApplication.shared.setActivationPolicy(.accessory)
 let desktop = ChromeDesktop()
 let capture = ChromeCapture(desktop: desktop, cancellation: cancellation)
 let input = ChromeInput(desktop: desktop, cancellation: cancellation)
