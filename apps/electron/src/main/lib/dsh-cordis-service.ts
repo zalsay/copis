@@ -258,6 +258,7 @@ function ensureCopisCreationWebPatch(patchFile: string, pluginDir: string | null
 
   upsertPatchItem(items, { id: 'llm-deepseek', disabled: true })
   upsertPatchItem(items, { id: 'ui-brand-official', disabled: true })
+  upsertPatchItem(items, { id: 'session-log-download', disabled: true })
 
   if (pluginDir) {
     // Windows 上 Cordis 的 ESM Loader 不能直接导入 C:\ 路径；必须使用 file URL。
@@ -742,6 +743,8 @@ async function doStartDshCordisServer(options: {
   )
   patchDshDetailsPanelFilePreviewRuntime(join(dshCmd, '..', '..', 'runtime'))
   patchDshSidebarRuntime(join(dshCmd, '..', '..', 'runtime'))
+  patchDshSidebarRuntime(join(dshHomeDir, 'profiles'))
+  patchDshSidebarRuntime(join(dshHomeDir, 'profiles', profile))
   registerDshCordisWebSessionHeaders()
 
   // 1. 端口冲突检测、自动回避与已有 DSH 实例自动复用

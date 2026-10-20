@@ -1013,3 +1013,22 @@ export function getAutomationsPath(): string {
 export function getPlanningDatabasePath(): string {
   return join(getConfigDir(), 'planning.db')
 }
+
+/** 获取 DSH（创造模式）本地群聊数据根目录。 */
+export function getDshGroupChatsDir(): string {
+  const dir = join(getConfigDir(), 'dsh-group-chats')
+  if (!existsSync(dir)) {
+    mkdirSync(dir, { recursive: true })
+  }
+  return dir
+}
+
+/** 获取特定 DSH 群聊目录。 */
+export function getDshGroupChatDir(groupId: string): string {
+  const dir = join(getDshGroupChatsDir(), groupId)
+  if (!existsSync(dir)) {
+    mkdirSync(dir, { recursive: true })
+  }
+  return dir
+}
+

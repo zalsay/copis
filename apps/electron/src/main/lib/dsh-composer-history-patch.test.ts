@@ -50,4 +50,11 @@ test('Given 已打补丁或不匹配的 bundle When 应用补丁 Then 幂等或�
   const patched = patchDshComposerHistorySource(source)
   expect(patchDshComposerHistorySource(patched)).toBe(patched)
   expect(() => patchDshComposerHistorySource('unknown')).toThrow()
+
+  // 验证 0.2.1-rc.2 的 submit(mode = "queue", source) 签名
+  const source021 = source.replace('submit(mode = "queue")', 'submit(mode = "queue", source)')
+  const patched021 = patchDshComposerHistorySource(source021)
+  expect(patched021).toContain('submit(mode = "queue", source) {')
+  expect(patched021).toContain('SessionInputShell.copisLastComposerInput')
+  expect(patchDshComposerHistorySource(patched021)).toBe(patched021)
 })

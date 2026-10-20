@@ -34,21 +34,21 @@ export {
 }
 
 export const DSH_PACKAGE = '@deepseek-ai/dsh'
-export const DSH_PACKAGE_VERSION = '0.1.2-rc.1'
-export const DSH_VERSION = '0.1.3'
-export const DSH_INTEGRITY = 'sha512-RPq48TzxvwpdT9/7W1tbhZDBMmeK+bxDrX9cqQC27Wx/LqtgJF8PSa3b3xriU8oxtvhwYmk21w2cej3uMQrnVA=='
+export const DSH_PACKAGE_VERSION = '0.2.1-rc.2'
+export const DSH_VERSION = '0.2.1'
+export const DSH_INTEGRITY = 'sha512-tvY+yhfKRifthbqPe/OK0AYxM5ZkvqfYq/jMYgJcEUxiRRL1Vwra3Ti5TB6AXgSWQdiPHYh/Vp6SJa9yHwMNuw=='
 export const DSH_ENTRYPOINT = 'bin/dsh'
 const DSH_RUNTIME_ENTRYPOINT = 'node_modules/@deepseek-ai/dsh/lib/bin.js'
 const DSH_MODEL_SELECTION_CLIENT_ENTRYPOINT = 'node_modules/@deepseek-ai/dsh-client-ui-model-selection/lib/client.js'
 export const DSH_CHAT_CLIENT_ENTRYPOINT = 'node_modules/@deepseek-ai/dsh-client-ui-chat/lib/client.js'
 export const DSH_CORDIS_CLIENT_ENTRYPOINT = 'node_modules/@deepseek-ai/dsh-client-ui-cordis/lib/client.js'
 
-const DSH_MODEL_SELECT_MODEL_LABEL_PATTERN = /^([\t ]*)const modelLabel = waiting \? t\("trigger\.loading"\) : currentChoice\?\.model\.name \?\? \(state\.current === null \? t\("trigger\.fallback"\) : `\$\{state\.current\.provider\}\/\$\{state\.current\.model\}`\);$/gm
+const DSH_MODEL_SELECT_MODEL_LABEL_PATTERN = /^([\t ]*)const modelLabel = waiting \? t\("trigger\.loading"\) : currentChoice\?\.model\.name \?\? (?:\(state\.current === null \? t\("trigger\.fallback"\) : `\$\{state\.current\.provider\}\/\$\{state\.current\.model\}`\)|t\("trigger\.fallback"\));$/gm
 const DSH_MODEL_SELECT_TRIGGER_LABEL_PATTERN = /^([\t ]*)const triggerLabel = effortLabel === void 0 \? modelLabel : `\$\{modelLabel\} · \$\{effortLabel\}`;$/gm
 const DSH_MODEL_SELECT_TRIGGER_MODEL_LABEL = `const triggerModelLabel = currentChoice === void 0 ? modelLabel : \`${'${currentChoice.group.name} · ${currentChoice.model.name.replace(/\\s*[（(][^（）()]*[）)]\\s*$/u, "")}'}\`;`
 const DSH_MODEL_SELECT_TRIGGER_LABEL_REPLACEMENT = 'const triggerLabel = triggerModelLabel;'
 
-const DSH_MODEL_SELECT_TRIGGER_CHILD_PATTERN = /(className: ModelSelect_module_css_default\.triggerLabel,\s+children:\s*)(?:modelLabel|triggerModelLabel)/g
+const DSH_MODEL_SELECT_TRIGGER_CHILD_PATTERN = /(className: ModelSelect_module_css_default\.triggerLabel,\s+children:\s*)(?:modelLabel|triggerModelLabel|currentChoice === void 0 \? modelLabel : renderModelLabel\(currentChoice\.group\.provider, currentChoice\.model, "trigger", true\))/g
 const DSH_MODEL_SELECT_TRIGGER_EFFORT_PATTERN = /\s*effortLabel !== void 0 && \(0, react_jsx_runtime\.jsx\)\("span", \{\s*className: ModelSelect_module_css_default\.triggerEffort,\s*children: effortLabel\s*\}\),/g
 
 interface PreparedDshModuleMetadata {

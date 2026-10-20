@@ -42,6 +42,7 @@ import { KnowledgeView } from '@/components/knowledge/KnowledgeView'
 import { ExpertTeamView } from '@/components/expert-team/ExpertTeamView'
 import { AgentSkillsView } from '@/components/agent-skills/AgentSkillsView'
 import { FundStockTerminalView } from '@/components/trading/FundStockTerminalView'
+import { DshGroupChatView } from '@/components/dsh-group-chat/DshGroupChatView'
 import { CopisWorkingSettingsPanel } from '@/components/app-shell/CopisWorkingSettingsPanel'
 import { cn } from '@/lib/utils'
 import type { DshClientEvent } from '@copis/shared'
@@ -54,6 +55,7 @@ type CreationSubView =
   | 'expert-team'
   | 'agent-skills'
   | 'fund-stock'
+  | 'group-chat'
   | 'settings'
   | null
 
@@ -635,6 +637,8 @@ export function CopisCreationWebView(): React.ReactElement {
                 <AgentSkillsView />
               ) : creationSubView === 'fund-stock' ? (
                 <FundStockTerminalView />
+              ) : creationSubView === 'group-chat' ? (
+                <DshGroupChatView onClose={closeSubView} />
               ) : creationSubView === 'settings' ? (
                 <CopisWorkingSettingsPanel onClose={closeSubView} />
               ) : null}

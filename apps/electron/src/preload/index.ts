@@ -6,7 +6,7 @@
  */
 
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
-import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, ATTACHMENT_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, FUNCTIONAL_MODULE_IPC_CHANNELS, PROXY_IPC_CHANNELS, AGENT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, WECHAT_IPC_CHANNELS, AGENT_MAIL_IPC_CHANNELS, AUTOMATION_IPC_CHANNELS, PLANNING_IPC_CHANNELS, WORKING_IPC_CHANNELS, WEB_IPC_CHANNELS, WEB_PASSWORD_IPC_CHANNELS, WEB_SYNC_IPC_CHANNELS, BROWSER_WORKFLOW_IPC_CHANNELS, MEMORY_IPC_CHANNELS, FUND_STOCK_IPC_CHANNELS, DSH_CORDIS_IPC_CHANNELS, CHATROOM_IPC_CHANNELS, CHROME_DESKTOP_IPC_CHANNELS, type ChromeDesktopSystemStatus, type ChromeDesktopWindowInfo, type ChromeDesktopErrorCode, type ChromeDesktopSessionState, type ChatRoomElectronAPI } from '@copis/shared'
+import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, ATTACHMENT_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, FUNCTIONAL_MODULE_IPC_CHANNELS, PROXY_IPC_CHANNELS, AGENT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, WECHAT_IPC_CHANNELS, AGENT_MAIL_IPC_CHANNELS, AUTOMATION_IPC_CHANNELS, PLANNING_IPC_CHANNELS, WORKING_IPC_CHANNELS, WEB_IPC_CHANNELS, WEB_PASSWORD_IPC_CHANNELS, WEB_SYNC_IPC_CHANNELS, BROWSER_WORKFLOW_IPC_CHANNELS, MEMORY_IPC_CHANNELS, FUND_STOCK_IPC_CHANNELS, DSH_CORDIS_IPC_CHANNELS, DSH_GROUP_CHAT_IPC_CHANNELS, CHATROOM_IPC_CHANNELS, CHROME_DESKTOP_IPC_CHANNELS, type ChromeDesktopSystemStatus, type ChromeDesktopWindowInfo, type ChromeDesktopErrorCode, type ChromeDesktopSessionState, type ChatRoomElectronAPI, type DshGroupChatSummary, type DshGroupChatDetail, type DshGroupChatMessage, type DshGroupTaskBoard, type DshGroupInvocation, type DshCreateGroupInput, type DshUpdateGroupInput, type DshPostMessageInput, type DshCreateTaskInput, type DshUpdateTaskInput, type DshDecomposeTaskInput, type DshGroupChatAgent, type DshGroupChatRealtimeEvent, type DshCreationWorkspace } from '@copis/shared'
 import { USER_PROFILE_IPC_CHANNELS, SETTINGS_IPC_CHANNELS, SCRATCH_PAD_IPC_CHANNELS, APP_ICON_IPC_CHANNELS, DOCK_BADGE_IPC_CHANNELS, STORAGE_IPC_CHANNELS, CODEX_IPC_CHANNELS, type CodexAppServerStatus, type CodexCliStatus } from '../types'
 import { agentHttpStreamClient } from '../renderer/lib/agent-http-stream'
 import { setHttpApiWebToken } from '../renderer/lib/http-api-web-token'
@@ -1381,6 +1381,30 @@ export interface ElectronAPI {
     updateViewBounds: (bounds: DshViewBounds, url?: string) => Promise<boolean>
     dispatchToClient: (payload: unknown) => Promise<boolean>
     onClientEvent: (callback: (event: DshClientEvent) => void) => () => void
+  }
+
+  // ===== DSH 创造模式 多智能体群聊协作 =====
+  dshGroupChat: {
+    listCreationWorkspaces: () => Promise<DshCreationWorkspace[]>
+    listGroups: () => Promise<DshGroupChatSummary[]>
+    getGroup: (groupId: string) => Promise<DshGroupChatDetail | null>
+    createGroup: (input: DshCreateGroupInput) => Promise<DshGroupChatDetail>
+    updateGroup: (input: DshUpdateGroupInput) => Promise<DshGroupChatDetail | null>
+    deleteGroup: (groupId: string) => Promise<boolean>
+    addAgent: (groupId: string, agent: Omit<DshGroupChatAgent, 'addedAt'>) => Promise<DshGroupChatDetail | null>
+    removeAgent: (groupId: string, agentId: string) => Promise<DshGroupChatDetail | null>
+    updateAgentResponsibility: (groupId: string, agentId: string, responsibility: string) => Promise<DshGroupChatDetail | null>
+    getMessages: (groupId: string, limit?: number, beforeSeq?: number) => Promise<DshGroupChatMessage[]>
+    postMessage: (input: DshPostMessageInput) => Promise<DshGroupChatMessage>
+    markRead: (groupId: string, readSeq: number) => Promise<boolean>
+    getTasks: (groupId: string) => Promise<DshGroupTaskBoard>
+    createTask: (input: DshCreateTaskInput) => Promise<DshGroupTaskBoard>
+    updateTask: (input: DshUpdateTaskInput) => Promise<DshGroupTaskBoard>
+    decomposeTasks: (input: DshDecomposeTaskInput) => Promise<DshGroupTaskBoard>
+    archiveTask: (groupId: string, taskId: string) => Promise<DshGroupTaskBoard>
+    getInvocation: (groupId: string, invocationId: string) => Promise<DshGroupInvocation | null>
+    stopInvocation: (groupId: string, invocationId: string) => Promise<boolean>
+    onEventStream: (callback: (event: DshGroupChatRealtimeEvent) => void) => () => void
   }
 }
 
@@ -3027,6 +3051,53 @@ const electronAPI: ElectronAPI = {
       ipcRenderer.on(DSH_CORDIS_IPC_CHANNELS.CLIENT_EVENT, listener)
       return () => {
         ipcRenderer.removeListener(DSH_CORDIS_IPC_CHANNELS.CLIENT_EVENT, listener)
+      }
+    },
+  },
+  dshGroupChat: {
+    listCreationWorkspaces: (): Promise<DshCreationWorkspace[]> =>
+      ipcRenderer.invoke(DSH_GROUP_CHAT_IPC_CHANNELS.LIST_CREATION_WORKSPACES),
+    listGroups: (): Promise<DshGroupChatSummary[]> =>
+      ipcRenderer.invoke(DSH_GROUP_CHAT_IPC_CHANNELS.LIST_GROUPS),
+    getGroup: (groupId: string): Promise<DshGroupChatDetail | null> =>
+      ipcRenderer.invoke(DSH_GROUP_CHAT_IPC_CHANNELS.GET_GROUP, groupId),
+    createGroup: (input: DshCreateGroupInput): Promise<DshGroupChatDetail> =>
+      ipcRenderer.invoke(DSH_GROUP_CHAT_IPC_CHANNELS.CREATE_GROUP, input),
+    updateGroup: (input: DshUpdateGroupInput): Promise<DshGroupChatDetail | null> =>
+      ipcRenderer.invoke(DSH_GROUP_CHAT_IPC_CHANNELS.UPDATE_GROUP, input),
+    deleteGroup: (groupId: string): Promise<boolean> =>
+      ipcRenderer.invoke(DSH_GROUP_CHAT_IPC_CHANNELS.DELETE_GROUP, groupId),
+    addAgent: (groupId: string, agent: Omit<DshGroupChatAgent, 'addedAt'>): Promise<DshGroupChatDetail | null> =>
+      ipcRenderer.invoke(DSH_GROUP_CHAT_IPC_CHANNELS.ADD_AGENT, groupId, agent),
+    removeAgent: (groupId: string, agentId: string): Promise<DshGroupChatDetail | null> =>
+      ipcRenderer.invoke(DSH_GROUP_CHAT_IPC_CHANNELS.REMOVE_AGENT, groupId, agentId),
+    updateAgentResponsibility: (groupId: string, agentId: string, responsibility: string): Promise<DshGroupChatDetail | null> =>
+      ipcRenderer.invoke(DSH_GROUP_CHAT_IPC_CHANNELS.UPDATE_AGENT_RESPONSIBILITY, groupId, agentId, responsibility),
+    getMessages: (groupId: string, limit?: number, beforeSeq?: number): Promise<DshGroupChatMessage[]> =>
+      ipcRenderer.invoke(DSH_GROUP_CHAT_IPC_CHANNELS.GET_MESSAGES, groupId, limit, beforeSeq),
+    postMessage: (input: DshPostMessageInput): Promise<DshGroupChatMessage> =>
+      ipcRenderer.invoke(DSH_GROUP_CHAT_IPC_CHANNELS.POST_MESSAGE, input),
+    markRead: (groupId: string, readSeq: number): Promise<boolean> =>
+      ipcRenderer.invoke(DSH_GROUP_CHAT_IPC_CHANNELS.MARK_READ, groupId, readSeq),
+    getTasks: (groupId: string): Promise<DshGroupTaskBoard> =>
+      ipcRenderer.invoke(DSH_GROUP_CHAT_IPC_CHANNELS.GET_TASKS, groupId),
+    createTask: (input: DshCreateTaskInput): Promise<DshGroupTaskBoard> =>
+      ipcRenderer.invoke(DSH_GROUP_CHAT_IPC_CHANNELS.CREATE_TASK, input),
+    updateTask: (input: DshUpdateTaskInput): Promise<DshGroupTaskBoard> =>
+      ipcRenderer.invoke(DSH_GROUP_CHAT_IPC_CHANNELS.UPDATE_TASK, input),
+    decomposeTasks: (input: DshDecomposeTaskInput): Promise<DshGroupTaskBoard> =>
+      ipcRenderer.invoke(DSH_GROUP_CHAT_IPC_CHANNELS.DECOMPOSE_TASKS, input),
+    archiveTask: (groupId: string, taskId: string): Promise<DshGroupTaskBoard> =>
+      ipcRenderer.invoke(DSH_GROUP_CHAT_IPC_CHANNELS.ARCHIVE_TASK, groupId, taskId),
+    getInvocation: (groupId: string, invocationId: string): Promise<DshGroupInvocation | null> =>
+      ipcRenderer.invoke(DSH_GROUP_CHAT_IPC_CHANNELS.GET_INVOCATION, groupId, invocationId),
+    stopInvocation: (groupId: string, invocationId: string): Promise<boolean> =>
+      ipcRenderer.invoke(DSH_GROUP_CHAT_IPC_CHANNELS.STOP_INVOCATION, groupId, invocationId),
+    onEventStream: (callback: (event: DshGroupChatRealtimeEvent) => void): (() => void) => {
+      const listener = (_: any, event: DshGroupChatRealtimeEvent) => callback(event)
+      ipcRenderer.on(DSH_GROUP_CHAT_IPC_CHANNELS.EVENT_STREAM, listener)
+      return () => {
+        ipcRenderer.removeListener(DSH_GROUP_CHAT_IPC_CHANNELS.EVENT_STREAM, listener)
       }
     },
   },

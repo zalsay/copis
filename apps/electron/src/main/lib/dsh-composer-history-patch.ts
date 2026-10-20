@@ -7,9 +7,13 @@ const MARKER = 'static copisLastComposerInput = "";'
 /** 补丁直接调用 DSH 输入模型的 setDraft，保留 Lexical 的文本状态和撤销语义。 */
 export function patchDshComposerHistorySource(source: string): string {
   if (source.includes(MARKER)) return source
+  const submitAnchor = source.includes('submit(mode = "queue", source) {')
+    ? 'submit(mode = "queue", source) {'
+    : 'submit(mode = "queue") {'
+
   const replacements: Array<[string, string]> = [
     ['var SessionInputShell = class {', `var SessionInputShell = class {\n${MARKER}`],
-    ['submit(mode = "queue") {', `submit(mode = "queue") {
+    [submitAnchor, `${submitAnchor}
       if ((this.snapshot.phase === "plain" || this.snapshot.phase === "claimed") && this.projection.clipboardText.trim()) {
         SessionInputShell.copisLastComposerInput = this.projection.clipboardText;
       }`],

@@ -63,6 +63,7 @@ import { registerAutomationIpcHandlers } from './ipc/automation.ipc'
 import { registerMemoryIngestionIpcHandlers } from './ipc/memory-ingestion.ipc'
 import { registerTradingIpcHandlers } from './ipc/trading.ipc'
 import { registerDshIpcHandlers } from './ipc/dsh.ipc'
+import { registerDshGroupChatIpcHandlers } from './ipc/dsh-group-chat.ipc'
 import { registerCodexIpcHandlers } from './ipc/codex.ipc'
 import { registerChatRoomIpcHandlers } from './ipc/chatrooms.ipc'
 
@@ -202,6 +203,8 @@ export function registerIpcHandlers(): void {
   registerTradingIpcHandlers()
 
   registerDshIpcHandlers()
+
+  registerDshGroupChatIpcHandlers()
 
   registerCodexIpcHandlers()
 }

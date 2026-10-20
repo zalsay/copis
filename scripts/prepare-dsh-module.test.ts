@@ -80,13 +80,13 @@ describe('dsh 运行环境功能模块准备', () => {
 
   test('使用官方 npm 包并固定版本与入口', () => {
     expect(DSH_PACKAGE).toBe('@deepseek-ai/dsh')
-    expect(DSH_PACKAGE_VERSION).toBe('0.1.2-rc.1')
-    expect(DSH_VERSION).toBe('0.1.3')
+    expect(DSH_PACKAGE_VERSION).toBe('0.2.1-rc.2')
+    expect(DSH_VERSION).toBe('0.2.1')
     expect(DSH_ENTRYPOINT).toBe('bin/dsh')
-    expect(DSH_INTEGRITY).toMatch(/^sha512-/)
+    expect(DSH_INTEGRITY).toBe('sha512-tvY+yhfKRifthbqPe/OK0AYxM5ZkvqfYq/jMYgJcEUxiRRL1Vwra3Ti5TB6AXgSWQdiPHYh/Vp6SJa9yHwMNuw==')
   })
 
-  test('Composer 触发器显示 Provider 与不含括号说明的模型名', () => {
+  test('Composer 触发器显示 Provider 与不含括号说明的模型名 (兼容 0.1.2 与 0.2.1-rc.2)', () => {
     const patched = patchDshComposerModelSelectionSource(MODEL_SELECT_SOURCE)
 
     expect(patched).toContain('const triggerModelLabel = currentChoice === void 0 ? modelLabel : `${currentChoice.group.name} · ${currentChoice.model.name.replace(/\\s*[（(][^（）()]*[）)]\\s*$/u, "")}`')
@@ -94,6 +94,30 @@ describe('dsh 运行环境功能模块准备', () => {
     expect(patched).toContain('children: triggerModelLabel')
     expect(patched).toContain('className: ModelSelect_module_css_default.cellValue,\n  children: modelLabel')
     expect(patched).not.toContain('className: ModelSelect_module_css_default.triggerEffort')
+
+    // 针对 0.2.1-rc.2 的测试
+    const MODEL_SELECT_SOURCE_021 = `
+const waiting = currentChoice === void 0 && state.status === "loading";
+const modelLabel = waiting ? t("trigger.loading") : currentChoice?.model.name ?? t("trigger.fallback");
+const triggerLabel = effortLabel === void 0 ? modelLabel : \`\${modelLabel} · \${effortLabel}\`;
+(0, react_jsx_runtime.jsx)("span", {
+  className: ModelSelect_module_css_default.triggerLabel,
+  children: currentChoice === void 0 ? modelLabel : renderModelLabel(currentChoice.group.provider, currentChoice.model, "trigger", true)
+});
+effortLabel !== void 0 && (0, react_jsx_runtime.jsx)("span", {
+  className: ModelSelect_module_css_default.triggerEffort,
+  children: effortLabel
+}),
+(0, react_jsx_runtime.jsx)("span", {
+  className: ModelSelect_module_css_default.cellValue,
+  children: currentChoice === void 0 ? modelLabel : renderModelLabel(currentChoice.group.provider, currentChoice.model, "menu", true)
+});
+`
+    const patched021 = patchDshComposerModelSelectionSource(MODEL_SELECT_SOURCE_021)
+    expect(patched021).toContain('const triggerModelLabel = currentChoice === void 0 ? modelLabel : `${currentChoice.group.name} · ${currentChoice.model.name.replace(/\\s*[（(][^（）()]*[）)]\\s*$/u, "")}`')
+    expect(patched021).toContain('const triggerLabel = triggerModelLabel;')
+    expect(patched021).toContain('children: triggerModelLabel')
+    expect(patched021).not.toContain('className: ModelSelect_module_css_default.triggerEffort')
   })
 
   test('Composer 补丁拒绝不匹配的官方 bundle', () => {

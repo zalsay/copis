@@ -2,6 +2,7 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 const CLIENT_ENTRY = 'node_modules/@deepseek-ai/dsh-client-ui-sidebar/lib/client.js'
+const DIRECTORY_PICKER_ENTRY = 'node_modules/@deepseek-ai/dsh-client-ui-directory-picker-native/lib/client.js'
 
 /**
  * 修改 DSH 侧边栏菜单项样式：
@@ -45,6 +46,16 @@ export function patchDshSidebarSource(source: string): string {
   // 确保侧边栏底部 footArea 移除意见反馈菜单项（已移入设置菜单）
   source = source.replace(
     /(?:wide\s*\?\s*)?\(0,\s*react_jsx_runtime\.jsx\)\(CopisMenuItem,\s*\{\s*label:\s*"意见反馈"[\s\S]*?\}\)\s*:\s*\(0,\s*react_jsx_runtime\.jsx\)\(CopisRailItem,\s*\{\s*label:\s*"意见反馈"[\s\S]*?\}\),?\s*/g,
+    '',
+  )
+
+  // 确保移除 DSH 原生侧栏中硬编码的静态菜单容器（已由 copis-creation-web 独立插件接管，避免重复渲染）
+  source = source.replace(
+    /(?:wide\s*&&\s*)?\(0,\s*react_jsx_runtime\.jsxs?\)\("div",\s*\{\s*className:\s*"copis-menu-section"[\s\S]*?children:\s*\[[\s\S]*?\]\s*\}\),?\s*/g,
+    '',
+  )
+  source = source.replace(
+    /(?:!wide\s*&&\s*)?\(0,\s*react_jsx_runtime\.jsxs?\)\("div",\s*\{\s*className:\s*"copis-rail-menu-section"[\s\S]*?children:\s*\[[\s\S]*?\]\s*\}\),?\s*/g,
     '',
   )
 
@@ -94,8 +105,42 @@ export function patchDshSidebarSource(source: string): string {
   return source
 }
 
-/** 构建期及已安装模块启动前共用；确保 DSH 侧边栏菜单样式与 Agent 模式保持一致。 */
+/**
+ * 修复 DSH 原生工作区添加流程插槽注入：
+ * 原官方代码将 sidebar.workspaces.directoryFlow 嵌套在 conversation.hero.workspace.directoryFlow 内部注入，
+ * 导致用户一旦离开欢迎屏或切换子视图，sidebar.workspaces.directoryFlow 便随 hero 销毁，侧栏“+”添加按钮消失。
+ * 此补丁将两者独立平级注册，确保无论何时侧栏添加工作区按钮均持久存在。
+ */
+export function patchDshDirectoryPickerSource(source: string): string {
+  const originalPattern = /ctx\.slots\.inject\(\s*["']conversation\.hero\.workspace\.directoryFlow["']\s*,\s*\(\)\s*=>\s*ctx\.slots\.inject\(\s*["']sidebar\.workspaces\.directoryFlow["']\s*,\s*function\*\s*\(\)\s*\{[\s\S]*?\}\)\s*\);?/
+  const replacement = `ctx.slots.inject("conversation.hero.workspace.directoryFlow", function* () {
+				yield ctx.slots.register({
+					name: "conversation.hero.workspace.directoryFlow",
+					inject: injected
+				}, NativeDirectoryFlow);
+			});
+			ctx.slots.inject("sidebar.workspaces.directoryFlow", function* () {
+				yield ctx.slots.register({
+					name: "sidebar.workspaces.directoryFlow",
+					inject: injected
+				}, NativeDirectoryFlow);
+			});`
+  return source.replace(originalPattern, replacement)
+}
+
+/** 修复原生目录选择器运行时，使侧栏添加按钮常驻 */
+export function patchDshDirectoryPickerRuntime(runtimeRoot: string): boolean {
+  const entrypoint = join(runtimeRoot, DIRECTORY_PICKER_ENTRY)
+  if (!existsSync(entrypoint)) return false
+  const source = readFileSync(entrypoint, 'utf8')
+  const patched = patchDshDirectoryPickerSource(source)
+  if (source !== patched) writeFileSync(entrypoint, patched, 'utf8')
+  return true
+}
+
+/** 构建期及已安装模块启动前共用；确保 DSH 侧边栏菜单样式与 Agent 模式保持一致，并确保工作区添加按钮常驻。 */
 export function patchDshSidebarRuntime(runtimeRoot: string): boolean {
+  patchDshDirectoryPickerRuntime(runtimeRoot)
   const entrypoint = join(runtimeRoot, CLIENT_ENTRY)
   if (!existsSync(entrypoint)) return false
   const source = readFileSync(entrypoint, 'utf8')
